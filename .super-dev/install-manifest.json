@@ -1,0 +1,75 @@
+{
+  "targets": {
+    "claude": {
+      "family": "claude",
+      "host": "claude",
+      "installed_at": "2026-04-23T08:22:06.090766+00:00",
+      "paths": [],
+      "scopes": {
+        "global": false,
+        "project": false,
+        "runtime": false
+      }
+    },
+    "claude-code": {
+      "family": "claude",
+      "host": "claude-code",
+      "installed_at": "2026-04-23T08:22:06.051860+00:00",
+      "paths": [
+        "E:\\code\\work\\open-opscli\\.claude-plugin\\marketplace.json",
+        "E:\\code\\work\\open-opscli\\.claude\\CLAUDE.md",
+        "E:\\code\\work\\open-opscli\\.claude\\agents\\super-dev.md",
+        "E:\\code\\work\\open-opscli\\.claude\\commands\\super-dev-seeai.md",
+        "E:\\code\\work\\open-opscli\\.claude\\commands\\super-dev.md",
+        "E:\\code\\work\\open-opscli\\.claude\\settings.local.json",
+        "E:\\code\\work\\open-opscli\\.claude\\skills\\super-dev-seeai\\SKILL.md",
+        "E:\\code\\work\\open-opscli\\.claude\\skills\\super-dev\\SKILL.md",
+        "E:\\code\\work\\open-opscli\\CLAUDE.md",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-claude\\.claude-plugin\\plugin.json",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-claude\\README.md",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-claude\\skills\\super-dev-seeai\\SKILL.md",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-claude\\skills\\super-dev\\SKILL.md"
+      ],
+      "scopes": {
+        "global": false,
+        "project": true,
+        "runtime": false
+      }
+    },
+    "codex": {
+      "family": "codex",
+      "host": "codex",
+      "installed_at": "2026-04-23T08:22:06.121877+00:00",
+      "paths": [
+        "E:\\code\\work\\open-opscli\\AGENTS.md"
+      ],
+      "scopes": {
+        "global": false,
+        "project": true,
+        "runtime": false
+      }
+    },
+    "codex-cli": {
+      "family": "codex",
+      "host": "codex-cli",
+      "installed_at": "2026-04-23T08:22:06.084776+00:00",
+      "paths": [
+        "E:\\code\\work\\open-opscli\\.agents\\plugins\\marketplace.json",
+        "E:\\code\\work\\open-opscli\\.agents\\skills\\super-dev-seeai\\SKILL.md",
+        "E:\\code\\work\\open-opscli\\.agents\\skills\\super-dev\\SKILL.md",
+        "E:\\code\\work\\open-opscli\\AGENTS.md",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-codex\\.codex-plugin\\plugin.json",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-codex\\README.md",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-codex\\skills\\super-dev-seeai\\SKILL.md",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-codex\\skills\\super-dev\\SKILL.md"
+      ],
+      "scopes": {
+        "global": false,
+        "project": true,
+        "runtime": false
+      }
+    }
+  },
+  "updated_at": "2026-04-23T08:22:06.122108+00:00",
+  "version": 1
+}

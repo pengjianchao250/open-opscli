@@ -1,0 +1,48 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,re,json; c=sys.stdin.read(); d=json.loads(c); ti=d.get('tool_input',{}); p=ti.get('file_path',''); ext=p.rsplit('.',1)[-1] if '.' in p else ''; content=ti.get('content','') or ti.get('new_string','') or ''; found=re.findall(r'[\\u2600-\\u27BF\\U0001F300-\\U0001FAFF]', content) if ext in ('tsx','ts','jsx','js','vue','svelte') else []; unique=list(dict.fromkeys(found))[:5]; print(json.dumps({'decision':'block','reason':'Super Dev: emoji ' + ' '.join(unique) + ' found in .' + ext + ' file — use icon library instead'} if unique else {}))\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Grep|Glob|LS|mcp__acp__Read|mcp__acp__Grep|mcp__acp__Glob|mcp__acp__LS",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"$(cat <<'PY'\nimport fnmatch\nimport json\nimport os\nimport sys\n\ndata = json.loads(sys.stdin.read())\ntool_input = data.get(\"tool_input\", {})\nif not isinstance(tool_input, dict):\n    tool_input = {}\n\nvalues: list[str] = []\nfor key in (\"file_path\", \"path\", \"directory\", \"cwd\", \"pattern\", \"glob\"):\n    value = tool_input.get(key)\n    if value:\n        values.append(str(value))\n\nfor key in (\"paths\", \"file_paths\"):\n    value = tool_input.get(key)\n    if isinstance(value, list):\n        values.extend(str(item) for item in value if item)\n\nhome = os.path.expanduser(\"~\").replace(\"\\\\\", \"/\").rstrip(\"/\")\nsafe_suffixes = (\".example\", \".sample\", \".template\", \".dist\", \".md\")\nsensitive_rules = (\n    f\"{home}/.ssh/*\",\n    f\"{home}/.aws/*\",\n    f\"{home}/.kube/*\",\n    f\"{home}/.gnupg/*\",\n    f\"{home}/.docker/*\",\n    f\"{home}/.config/gcloud/*\",\n    f\"{home}/.config/gh/*\",\n    f\"{home}/.config/sops/*\",\n    f\"{home}/.npmrc\",\n    f\"{home}/.pypirc\",\n    f\"{home}/.netrc\",\n    f\"{home}/.git-credentials\",\n    f\"{home}/.codex/auth.json\",\n    f\"{home}/.claude.json\",\n    \"*/.env\",\n    \"*/.env.*\",\n    \"*/.envrc\",\n    \"*/secrets/*\",\n    \"*/credentials/*\",\n    \"*/id_rsa\",\n    \"*/id_dsa\",\n    \"*/id_ecdsa\",\n    \"*/id_ed25519\",\n    \"*.pem\",\n    \"*.p12\",\n    \"*.pfx\",\n    \"*.key\",\n    \"*/auth.json\",\n    \"*/credentials.json\",\n)\nconfig_like_secret_dirs = (\"/.aws/\", \"/.kube/\", \"/.docker/\", \"/.config/gcloud/\", \"/.config/sops/\")\n\nmatched: list[str] = []\nfor raw in values:\n    candidate = os.path.expanduser(str(raw)).replace(\"\\\\\", \"/\").rstrip(\"/\")\n    base = os.path.basename(candidate).lower()\n    if not candidate or candidate.lower().endswith(safe_suffixes):\n        continue\n    if any(fnmatch.fnmatch(candidate, rule) for rule in sensitive_rules):\n        matched.append(candidate)\n        continue\n    if base in {\"credentials\", \"config\", \"config.json\"} and any(\n        segment in candidate.lower() for segment in config_like_secret_dirs\n    ):\n        matched.append(candidate)\n\nmatched = list(dict.fromkeys(matched))[:3]\nif matched:\n    print(\n        json.dumps(\n            {\n                \"decision\": \"block\",\n                \"reason\": \"Super Dev: blocked read/glob/grep on sensitive secret location(s): \"\n                + \", \".join(matched),\n            }\n        )\n    )\nelse:\n    print(\"{}\")\nPY\n)\" ",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"$(cat <<'PY'\nimport json\nimport re\nimport sys\n\ndata = json.loads(sys.stdin.read())\ntool_input = data.get(\"tool_input\", {})\nif not isinstance(tool_input, dict):\n    tool_input = {}\n\ncommand = str(tool_input.get(\"command\", \"\") or \"\")\nlower = command.lower().replace(\"\\\\\", \"/\")\nread_op = re.search(r\"(^|[;&|()\\s])(cat|less|more|head|tail|grep|rg|sed|awk|find|ls|tree|bat|nl)\\b\", lower)\ntransform_op = re.search(\n    r\"(^|[;&|()\\s])(cp|mv|tar|zip|unzip|gzip|base64|xxd|openssl|scp|rsync)\\b\",\n    lower,\n)\nenv_secret_op = re.search(\n    r\"(^|[;&|()\\s])(printenv|env|echo|export|python|python3|node|ruby|perl|curl|wget|nc|ncat|ssh|scp|rsync)\\b\",\n    lower,\n)\nsensitive_markers = (\n    \"~/.ssh\",\n    \"/.ssh/\",\n    \"~/.aws\",\n    \"/.aws/\",\n    \"~/.kube\",\n    \"/.kube/\",\n    \"~/.docker\",\n    \"/.docker/\",\n    \"~/.gnupg\",\n    \"/.gnupg/\",\n    \"~/.config/gcloud\",\n    \"/.config/gcloud/\",\n    \"~/.config/sops\",\n    \"/.config/sops/\",\n    \".npmrc\",\n    \".pypirc\",\n    \".netrc\",\n    \".git-credentials\",\n    \".codex/auth.json\",\n    \".claude.json\",\n    \"/.env\",\n    \" secrets/\",\n    \" credentials/\",\n    \"id_rsa\",\n    \"id_dsa\",\n    \"id_ecdsa\",\n    \"id_ed25519\",\n    \".pem\",\n    \".p12\",\n    \".pfx\",\n    \".key\",\n    \"auth.json\",\n    \"credentials.json\",\n)\nenv_secret_markers = (\n    \"openai_api_key\",\n    \"anthropic_api_key\",\n    \"gemini_api_key\",\n    \"google_api_key\",\n    \"google_application_credentials\",\n    \"azure_openai_api_key\",\n    \"aws_access_key_id\",\n    \"aws_secret_access_key\",\n    \"aws_session_token\",\n    \"gh_token\",\n    \"github_token\",\n    \"gitlab_token\",\n    \"slack_bot_token\",\n    \"notion_api_key\",\n    \"linear_api_key\",\n    \"figma_api_key\",\n    \"huggingface_token\",\n    \"hf_token\",\n    \"sentry_auth_token\",\n    \"vercel_token\",\n    \"cloudflare_api_token\",\n    \"tavily_api_key\",\n)\nmatched = [marker for marker in sensitive_markers if marker in lower][:3]\nif (read_op or transform_op) and matched:\n    print(\n        json.dumps(\n            {\n                \"decision\": \"block\",\n                \"reason\": \"Super Dev: blocked bash command that accesses sensitive secret location(s): \"\n                + \", \".join(matched),\n            }\n        )\n    )\nelse:\n    env_matches = [marker for marker in env_secret_markers if marker in lower][:3]\n    if env_secret_op and env_matches:\n        print(\n            json.dumps(\n                {\n                    \"decision\": \"block\",\n                    \"reason\": \"Super Dev: blocked bash command that prints, exports, or transmits sensitive environment variable(s): \"\n                    + \", \".join(env_matches),\n                }\n            )\n        )\n    else:\n        print(\"{}\")\nPY\n)\" ",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,json; d=json.loads(sys.stdin.read()); cmd=d.get('tool_input',{}).get('command',''); print(json.dumps({'notify':'Super Dev: confirm output matches architecture docs'} if 'npm run' in cmd or 'pytest' in cmd else {}))\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

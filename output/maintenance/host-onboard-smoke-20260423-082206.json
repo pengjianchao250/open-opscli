@@ -1,0 +1,467 @@
+{
+  "generated_at": "2026-04-23T08:22:06.123182+00:00",
+  "project_dir": "E:\\code\\work\\open-opscli",
+  "status": "ok",
+  "install_scope": "project-only",
+  "framework_playbook": {},
+  "targets": [
+    {
+      "target": "claude-code",
+      "host_name": "Claude Code",
+      "status": "ready",
+      "include_user_surfaces": false,
+      "standard_flow_first_prompt": "/super-dev 你的需求",
+      "competition_flow_first_prompt": "/super-dev-seeai 比赛需求",
+      "post_onboard_self_check": [
+        "Claude Code 接入后先确认入口可用: /super-dev 你的需求 / /super-dev-seeai 比赛需求",
+        "Claude Code 接入后再确认 SEEAI 项目补充面已写入: .claude/commands/super-dev-seeai.md / .claude/skills/super-dev-seeai/SKILL.md",
+        "Claude Code 接入后再确认 SEEAI 用户级补充面已写入: ~/.claude/skills/super-dev-seeai/SKILL.md"
+      ],
+      "official_workflow_checks": [
+        "确认 Claude Code 按 official-skill 官方协议面真实加载 Super Dev，而不是只检测到文件存在。",
+        "确认官方接入面真实生效: 项目侧 CLAUDE.md / .claude/CLAUDE.md / .claude/skills/super-dev/SKILL.md；用户侧 ~/.claude/skills/super-dev/SKILL.md / ~/.claude/agents/super-dev.md",
+        "如启用当前增强接入面，再确认: 项目侧 .claude/settings.json / .claude/settings.local.json；用户侧 ~/.claude/CLAUDE.md / ~/.claude/settings.json",
+        "确认 SEEAI 项目补充面真实生效: .claude/commands/super-dev-seeai.md / .claude/skills/super-dev-seeai/SKILL.md",
+        "确认 SEEAI 用户级补充面真实生效: ~/.claude/skills/super-dev-seeai/SKILL.md",
+        "确认当前 Claude Code 会话真实读取 CLAUDE.md、.claude/CLAUDE.md、可选 .claude/settings*.json、.claude/skills 与 .claude/agents，而不是只把文件写进仓库。"
+      ],
+      "official_pass_criteria": [
+        "Claude Code 官方工作流面、入口链、恢复链与 SEEAI 补充面均已真人验收通过。",
+        "确认 Claude Code 按 official-skill 官方协议面真实加载 Super Dev，而不是只检测到文件存在。",
+        "确认官方接入面真实生效: 项目侧 CLAUDE.md / .claude/CLAUDE.md / .claude/skills/super-dev/SKILL.md；用户侧 ~/.claude/skills/super-dev/SKILL.md / ~/.claude/agents/super-dev.md",
+        "如启用当前增强接入面，再确认: 项目侧 .claude/settings.json / .claude/settings.local.json；用户侧 ~/.claude/CLAUDE.md / ~/.claude/settings.json"
+      ],
+      "start_playbook": [
+        "起手建议: 优先在当前 Claude Code 会话里直接用 /super-dev，不要先退回普通聊天交代背景。",
+        "避免动作: 不要先手写一串 spec / quality / release 命令来替代宿主入口。"
+      ],
+      "resume_guidance": [
+        "优先入口: /super-dev 你的需求 / /super-dev-seeai 比赛需求",
+        "原生恢复: /super-dev 继续当前流程 / 回当前 Claude Code 会话继续",
+        "优先沿用当前宿主会话恢复，不要先走新的普通聊天入口。"
+      ],
+      "repair_playbook": "",
+      "managed_competition_project_surfaces": [
+        ".claude/commands/super-dev-seeai.md",
+        ".claude/skills/super-dev-seeai/SKILL.md",
+        "plugins/super-dev-claude/skills/super-dev-seeai/SKILL.md"
+      ],
+      "managed_competition_user_surfaces": [
+        "~/.claude/skills/super-dev-seeai/SKILL.md"
+      ],
+      "framework_playbook": {},
+      "manifest_paths": [
+        "E:\\code\\work\\open-opscli\\.claude-plugin\\marketplace.json",
+        "E:\\code\\work\\open-opscli\\.claude\\CLAUDE.md",
+        "E:\\code\\work\\open-opscli\\.claude\\agents\\super-dev.md",
+        "E:\\code\\work\\open-opscli\\.claude\\commands\\super-dev-seeai.md",
+        "E:\\code\\work\\open-opscli\\.claude\\commands\\super-dev.md",
+        "E:\\code\\work\\open-opscli\\.claude\\settings.local.json",
+        "E:\\code\\work\\open-opscli\\.claude\\skills\\super-dev-seeai\\SKILL.md",
+        "E:\\code\\work\\open-opscli\\.claude\\skills\\super-dev\\SKILL.md",
+        "E:\\code\\work\\open-opscli\\CLAUDE.md",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-claude\\.claude-plugin\\plugin.json",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-claude\\README.md",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-claude\\skills\\super-dev-seeai\\SKILL.md",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-claude\\skills\\super-dev\\SKILL.md"
+      ],
+      "contract_failures": [],
+      "auto_repair_actions": {},
+      "adaptation_contract": {
+        "score": 100,
+        "level": "elite",
+        "summary": "claude-code 宿主适配成熟度 100/100（elite），协议面、触发面、恢复面、比赛面和官方文档验证已统一建模。",
+        "official_alignment": {
+          "status": "official_documented",
+          "label": "官方明确",
+          "summary": "当前宿主协议已按官方说明收敛。",
+          "protocol_mode": "official-skill",
+          "protocol_summary": "官方 CLAUDE.md + settings + project/user skills + subagents",
+          "docs_verified": true,
+          "official_reference_count": 5
+        },
+        "official_surface_count": 6,
+        "flow_probe_enabled": true,
+        "supports_slash": true,
+        "supports_slash_entry": true,
+        "dimensions": {
+          "official_protocol": {
+            "status": "ready",
+            "evidence": [
+              "官方 CLAUDE.md + settings + project/user skills + subagents",
+              "official surfaces: 6"
+            ],
+            "gaps": []
+          },
+          "entry_experience": {
+            "status": "ready",
+            "evidence": [
+              "在 Claude Code 当前项目会话里优先使用 `/super-dev <需求描述>`；底层由项目根 `CLAUDE.md`、项目级 `.claude/CLAUDE.md`、可选 `.claude/settings*.json`、项目/用户 `.claude/skills/` 与项目/用户 `.claude/agents/` 驱动，`.claude/commands/` 只作为兼容增强面保留。",
+              "entry variants: 2",
+              "supports slash entry"
+            ],
+            "gaps": []
+          },
+          "continuity": {
+            "status": "ready",
+            "evidence": [
+              "Claude Code 标准流恢复验收",
+              "smoke steps: 2"
+            ],
+            "gaps": []
+          },
+          "competition": {
+            "status": "ready",
+            "evidence": [
+              "competition smoke steps: 2",
+              "competition evidence sections: 4"
+            ],
+            "gaps": []
+          },
+          "docs": {
+            "status": "ready",
+            "evidence": [
+              "https://docs.anthropic.com/en/docs/claude-code/slash-commands",
+              "official references: 5"
+            ],
+            "gaps": []
+          }
+        }
+      }
+    },
+    {
+      "target": "codex-cli",
+      "host_name": "Codex CLI",
+      "status": "ready",
+      "include_user_surfaces": false,
+      "standard_flow_first_prompt": "$super-dev",
+      "competition_flow_first_prompt": "$super-dev-seeai",
+      "post_onboard_self_check": [
+        "Codex CLI 接入后先确认入口可用: $super-dev / super-dev: 你的需求",
+        "Codex CLI 接入后再确认 SEEAI 项目补充面已写入: .agents/skills/super-dev-seeai/SKILL.md / plugins/super-dev-codex/skills/super-dev-seeai/SKILL.md",
+        "Codex CLI 接入后再确认 SEEAI 用户级补充面已写入: ~/.agents/skills/super-dev-seeai/SKILL.md"
+      ],
+      "official_workflow_checks": [
+        "确认 Codex CLI 按 official-skill 官方协议面真实加载 Super Dev，而不是只检测到文件存在。",
+        "确认官方接入面真实生效: 项目侧 AGENTS.md / .agents/skills/super-dev/SKILL.md；用户侧 ~/.agents/skills/super-dev/SKILL.md",
+        "如启用当前增强接入面，再确认: 项目侧 .agents/plugins/marketplace.json / plugins/super-dev-codex/.codex-plugin/plugin.json；用户侧 ~/.codex/AGENTS.md",
+        "确认 SEEAI 项目补充面真实生效: .agents/skills/super-dev-seeai/SKILL.md / plugins/super-dev-codex/skills/super-dev-seeai/SKILL.md",
+        "确认 SEEAI 用户级补充面真实生效: ~/.agents/skills/super-dev-seeai/SKILL.md",
+        "确认当前 Codex CLI 会话里的 $super-dev 真实可用，并已读取仓库 AGENTS 与 Skills。"
+      ],
+      "official_pass_criteria": [
+        "Codex CLI 官方工作流面、入口链、恢复链与 SEEAI 补充面均已真人验收通过。",
+        "确认 Codex CLI 按 official-skill 官方协议面真实加载 Super Dev，而不是只检测到文件存在。",
+        "确认官方接入面真实生效: 项目侧 AGENTS.md / .agents/skills/super-dev/SKILL.md；用户侧 ~/.agents/skills/super-dev/SKILL.md",
+        "如启用当前增强接入面，再确认: 项目侧 .agents/plugins/marketplace.json / plugins/super-dev-codex/.codex-plugin/plugin.json；用户侧 ~/.codex/AGENTS.md"
+      ],
+      "start_playbook": [
+        "起手建议: 在 Codex CLI 里优先显式输入 $super-dev，不要先把 App/Desktop 的 / 列表入口和 CLI 混成一个宿主。",
+        "避免动作: 不要一上来先跑一串 release / proof-pack / quality 命令。"
+      ],
+      "resume_guidance": [
+        "优先入口: $super-dev / super-dev: 你的需求",
+        "原生恢复: $super-dev / super-dev: 继续当前流程",
+        "优先沿用当前 Skill / session 入口，不要先退回普通聊天。"
+      ],
+      "repair_playbook": "",
+      "managed_competition_project_surfaces": [
+        ".agents/skills/super-dev-seeai/SKILL.md",
+        "plugins/super-dev-codex/skills/super-dev-seeai/SKILL.md"
+      ],
+      "managed_competition_user_surfaces": [
+        "~/.agents/skills/super-dev-seeai/SKILL.md"
+      ],
+      "framework_playbook": {},
+      "manifest_paths": [
+        "E:\\code\\work\\open-opscli\\.agents\\plugins\\marketplace.json",
+        "E:\\code\\work\\open-opscli\\.agents\\skills\\super-dev-seeai\\SKILL.md",
+        "E:\\code\\work\\open-opscli\\.agents\\skills\\super-dev\\SKILL.md",
+        "E:\\code\\work\\open-opscli\\AGENTS.md",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-codex\\.codex-plugin\\plugin.json",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-codex\\README.md",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-codex\\skills\\super-dev-seeai\\SKILL.md",
+        "E:\\code\\work\\open-opscli\\plugins\\super-dev-codex\\skills\\super-dev\\SKILL.md"
+      ],
+      "contract_failures": [],
+      "auto_repair_actions": {},
+      "adaptation_contract": {
+        "score": 100,
+        "level": "elite",
+        "summary": "codex-cli 宿主适配成熟度 100/100（elite），协议面、触发面、恢复面、比赛面和官方文档验证已统一建模。",
+        "official_alignment": {
+          "status": "official_documented",
+          "label": "官方明确",
+          "summary": "当前宿主协议已按官方说明收敛。",
+          "protocol_mode": "official-skill",
+          "protocol_summary": "官方 AGENTS.md + Skills + CLI $skill entry",
+          "docs_verified": true,
+          "official_reference_count": 4
+        },
+        "official_surface_count": 3,
+        "flow_probe_enabled": true,
+        "supports_slash": false,
+        "supports_slash_entry": false,
+        "dimensions": {
+          "official_protocol": {
+            "status": "ready",
+            "evidence": [
+              "官方 AGENTS.md + Skills + CLI $skill entry",
+              "official surfaces: 3"
+            ],
+            "gaps": []
+          },
+          "entry_experience": {
+            "status": "ready",
+            "evidence": [
+              "Codex CLI 优先显式输入 `$super-dev`；回退可用 `super-dev: <需求描述>` 作为 AGENTS 驱动的自然语言入口。",
+              "entry variants: 2",
+              "text-first trigger"
+            ],
+            "gaps": []
+          },
+          "continuity": {
+            "status": "ready",
+            "evidence": [
+              "Codex CLI 双入口同流程验收",
+              "smoke steps: 4"
+            ],
+            "gaps": []
+          },
+          "competition": {
+            "status": "ready",
+            "evidence": [
+              "competition smoke steps: 4",
+              "competition evidence sections: 4"
+            ],
+            "gaps": []
+          },
+          "docs": {
+            "status": "ready",
+            "evidence": [
+              "https://developers.openai.com/codex/cli",
+              "official references: 4"
+            ],
+            "gaps": []
+          }
+        }
+      }
+    },
+    {
+      "target": "claude",
+      "host_name": "Claude",
+      "status": "ready",
+      "include_user_surfaces": false,
+      "standard_flow_first_prompt": "super-dev: 你的需求",
+      "competition_flow_first_prompt": "super-dev-seeai: 比赛需求",
+      "post_onboard_self_check": [
+        "Claude 接入后先确认入口可用: super-dev: 你的需求 / super-dev-seeai: 比赛需求",
+        "确认 Claude 按 official-projects 官方协议面真实加载 Super Dev，而不是只检测到文件存在。",
+        "Claude 接入后再确认恢复链可用: 回当前 Claude Project 会话继续 / super-dev: 继续当前流程"
+      ],
+      "official_workflow_checks": [
+        "确认 Claude 按 official-projects 官方协议面真实加载 Super Dev，而不是只检测到文件存在。",
+        "确认当前 Claude Project 真实挂上 Project Instructions、Project Knowledge 与需要的 extensions / MCP。"
+      ],
+      "official_pass_criteria": [
+        "Claude 官方工作流面、入口链和恢复链均已真人验收通过。",
+        "确认 Claude 按 official-projects 官方协议面真实加载 Super Dev，而不是只检测到文件存在。",
+        "确认当前 Claude Project 真实挂上 Project Instructions、Project Knowledge 与需要的 extensions / MCP。"
+      ],
+      "start_playbook": [
+        "起手建议: 先在当前 Claude Project 里挂好 instructions / knowledge，再直接用 super-dev:。",
+        "避免动作: 不要把 Claude Desktop 当成有稳定仓库级 dotfile 注入的 CLI 宿主。"
+      ],
+      "resume_guidance": [
+        "优先入口: super-dev: 你的需求 / super-dev-seeai: 比赛需求",
+        "原生恢复: 回当前 Claude Project 会话继续 / super-dev: 继续当前流程",
+        "优先沿用当前任务线程，不要重新开一个新的任务流。"
+      ],
+      "repair_playbook": "",
+      "managed_competition_project_surfaces": [],
+      "managed_competition_user_surfaces": [],
+      "framework_playbook": {},
+      "manifest_paths": [],
+      "contract_failures": [],
+      "auto_repair_actions": {},
+      "adaptation_contract": {
+        "score": 88,
+        "level": "strong",
+        "summary": "claude 宿主适配成熟度 88/100（strong），协议面、触发面、恢复面、比赛面和官方文档验证已统一建模。",
+        "official_alignment": {
+          "status": "official_documented",
+          "label": "官方明确",
+          "summary": "当前宿主协议已按官方说明收敛。",
+          "protocol_mode": "official-projects",
+          "protocol_summary": "官方 Projects + project instructions + project knowledge + desktop extensions/MCP",
+          "docs_verified": true,
+          "official_reference_count": 3
+        },
+        "official_surface_count": 0,
+        "flow_probe_enabled": true,
+        "supports_slash": false,
+        "supports_slash_entry": false,
+        "dimensions": {
+          "official_protocol": {
+            "status": "partial",
+            "evidence": [
+              "官方 Projects + project instructions + project knowledge + desktop extensions/MCP",
+              "official surfaces: 0"
+            ],
+            "gaps": [
+              "official host surfaces not fully closed"
+            ]
+          },
+          "entry_experience": {
+            "status": "ready",
+            "evidence": [
+              "在 Claude Desktop 当前 Project 中直接说 `super-dev: <需求描述>`；比赛模式说 `super-dev-seeai: <比赛需求>`。",
+              "entry variants: 1",
+              "text-first trigger"
+            ],
+            "gaps": []
+          },
+          "continuity": {
+            "status": "ready",
+            "evidence": [
+              "Claude 标准流恢复验收",
+              "smoke steps: 3"
+            ],
+            "gaps": []
+          },
+          "competition": {
+            "status": "ready",
+            "evidence": [
+              "competition smoke steps: 3",
+              "competition evidence sections: 4"
+            ],
+            "gaps": []
+          },
+          "docs": {
+            "status": "ready",
+            "evidence": [
+              "https://support.anthropic.com/en/articles/9487310-what-are-projects",
+              "official references: 3"
+            ],
+            "gaps": []
+          }
+        }
+      }
+    },
+    {
+      "target": "codex",
+      "host_name": "Codex",
+      "status": "ready",
+      "include_user_surfaces": false,
+      "standard_flow_first_prompt": "/super-dev 你的需求",
+      "competition_flow_first_prompt": "/super-dev-seeai 比赛需求",
+      "post_onboard_self_check": [
+        "Codex 接入后先确认入口可用: /super-dev 你的需求 / super-dev: 你的需求",
+        "Codex 接入后再确认 SEEAI 项目补充面已写入: .agents/skills/super-dev-seeai/SKILL.md / plugins/super-dev-codex/skills/super-dev-seeai/SKILL.md",
+        "Codex 接入后再确认 SEEAI 用户级补充面已写入: ~/.agents/skills/super-dev-seeai/SKILL.md"
+      ],
+      "official_workflow_checks": [
+        "确认 Codex 按 official-skill 官方协议面真实加载 Super Dev，而不是只检测到文件存在。",
+        "确认官方接入面真实生效: 项目侧 AGENTS.md / .agents/skills/super-dev/SKILL.md；用户侧 ~/.agents/skills/super-dev/SKILL.md",
+        "如启用当前增强接入面，再确认: 项目侧 .agents/plugins/marketplace.json / plugins/super-dev-codex/.codex-plugin/plugin.json；用户侧 ~/.codex/AGENTS.md",
+        "确认 SEEAI 项目补充面真实生效: .agents/skills/super-dev-seeai/SKILL.md / plugins/super-dev-codex/skills/super-dev-seeai/SKILL.md",
+        "确认 SEEAI 用户级补充面真实生效: ~/.agents/skills/super-dev-seeai/SKILL.md",
+        "确认 Codex App/Desktop 的 / 列表 super-dev 真实可用，并已读取仓库 AGENTS 与 Skills。"
+      ],
+      "official_pass_criteria": [
+        "Codex 官方工作流面、入口链、恢复链与 SEEAI 补充面均已真人验收通过。",
+        "确认 Codex 按 official-skill 官方协议面真实加载 Super Dev，而不是只检测到文件存在。",
+        "确认官方接入面真实生效: 项目侧 AGENTS.md / .agents/skills/super-dev/SKILL.md；用户侧 ~/.agents/skills/super-dev/SKILL.md",
+        "如启用当前增强接入面，再确认: 项目侧 .agents/plugins/marketplace.json / plugins/super-dev-codex/.codex-plugin/plugin.json；用户侧 ~/.codex/AGENTS.md"
+      ],
+      "start_playbook": [
+        "起手建议: App/Desktop 优先从 / 列表里的 super-dev 进入，不要先退回普通聊天。",
+        "避免动作: 不要把桌面端入口和 CLI 的 $super-dev 混成同一个宿主。"
+      ],
+      "resume_guidance": [
+        "优先入口: /super-dev 你的需求 / super-dev: 你的需求",
+        "原生恢复: /super-dev 继续当前流程 / 回当前 Codex 会话继续",
+        "优先沿用当前 Skill / session 入口，不要先退回普通聊天。"
+      ],
+      "repair_playbook": "",
+      "managed_competition_project_surfaces": [
+        ".agents/skills/super-dev-seeai/SKILL.md",
+        "plugins/super-dev-codex/skills/super-dev-seeai/SKILL.md"
+      ],
+      "managed_competition_user_surfaces": [
+        "~/.agents/skills/super-dev-seeai/SKILL.md"
+      ],
+      "framework_playbook": {},
+      "manifest_paths": [
+        "E:\\code\\work\\open-opscli\\AGENTS.md"
+      ],
+      "contract_failures": [],
+      "auto_repair_actions": {},
+      "adaptation_contract": {
+        "score": 100,
+        "level": "elite",
+        "summary": "codex 宿主适配成熟度 100/100（elite），协议面、触发面、恢复面、比赛面和官方文档验证已统一建模。",
+        "official_alignment": {
+          "status": "official_documented",
+          "label": "官方明确",
+          "summary": "当前宿主协议已按官方说明收敛。",
+          "protocol_mode": "official-skill",
+          "protocol_summary": "官方 AGENTS.md + Skills + App/Desktop enabled Skill entry",
+          "docs_verified": true,
+          "official_reference_count": 4
+        },
+        "official_surface_count": 3,
+        "flow_probe_enabled": true,
+        "supports_slash": false,
+        "supports_slash_entry": true,
+        "dimensions": {
+          "official_protocol": {
+            "status": "ready",
+            "evidence": [
+              "官方 AGENTS.md + Skills + App/Desktop enabled Skill entry",
+              "official surfaces: 3"
+            ],
+            "gaps": []
+          },
+          "entry_experience": {
+            "status": "ready",
+            "evidence": [
+              "Codex App/Desktop 优先从 `/` 列表选择 `super-dev`；自然语言回退入口是 `super-dev: <需求描述>`。",
+              "entry variants: 2",
+              "supports slash entry"
+            ],
+            "gaps": []
+          },
+          "continuity": {
+            "status": "ready",
+            "evidence": [
+              "Codex App/Desktop 双入口同流程验收",
+              "smoke steps: 5"
+            ],
+            "gaps": []
+          },
+          "competition": {
+            "status": "ready",
+            "evidence": [
+              "competition smoke steps: 5",
+              "competition evidence sections: 4"
+            ],
+            "gaps": []
+          },
+          "docs": {
+            "status": "ready",
+            "evidence": [
+              "https://developers.openai.com/codex/cli",
+              "official references: 4"
+            ],
+            "gaps": []
+          }
+        }
+      }
+    }
+  ],
+  "report_files": {
+    "json": "E:\\code\\work\\open-opscli\\output\\maintenance\\host-onboard-smoke-20260423-082206.json",
+    "markdown": "E:\\code\\work\\open-opscli\\output\\maintenance\\host-onboard-smoke-20260423-082206.md"
+  }
+}

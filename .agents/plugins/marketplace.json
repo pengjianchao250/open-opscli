@@ -1,0 +1,27 @@
+{
+  "name": "super-dev-local",
+  "interface": {
+    "displayName": "Super Dev Local Plugins"
+  },
+  "plugins": [
+    {
+      "name": "super-dev-codex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/super-dev-codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
+
+## Super Dev System Flow Contract
+- SUPER_DEV_FLOW_CONTRACT_V1
+- PHASE_CHAIN: research>docs>docs_confirm>spec>frontend>preview_confirm>backend>quality>delivery
+- DOC_CONFIRM_GATE: required
+- PREVIEW_CONFIRM_GATE: required
+- HOST_PARITY: required
