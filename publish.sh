@@ -40,7 +40,7 @@ esac
 NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
 
 echo -e "\n${BOLD}======================================${RESET}"
-echo -e "${BOLD} opscli 发布脚本${RESET}"
+echo -e "${BOLD} aukeys-opscli 发布脚本${RESET}"
 echo -e "${BOLD}======================================${RESET}"
 echo -e "  当前版本：${YELLOW}${CURRENT_VERSION}${RESET}"
 echo -e "  新版本  ：${GREEN}${NEW_VERSION}${RESET}  (${BUMP_TYPE})"
@@ -83,12 +83,12 @@ success "校验通过"
 info "Step 6/7  上传到 PyPI..."
 twine upload dist/*
 success "上传完成！"
-echo -e "  查看地址：${BLUE}https://pypi.org/project/opscli/${NEW_VERSION}/${RESET}"
+echo -e "  查看地址：${BLUE}https://pypi.org/project/aukeys-opscli/${NEW_VERSION}/${RESET}"
 
 # ── Step 7: 完成提示 ──────────────────────────────────────
 echo ""
 info "Step 7/7  安装验证命令（可选，手动执行）："
-echo "    pip install opscli==${NEW_VERSION}"
+echo "    pip install aukeys-opscli==${NEW_VERSION}"
 echo "   opscli version"
 echo ""
-success "全部完成 opscli v${NEW_VERSION} 已发布到 PyPI 🎉"
+success "全部完成 aukeys-opscli v${NEW_VERSION} 已发布到 PyPI 🎉"

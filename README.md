@@ -87,10 +87,10 @@ graph TB
 
 ```bash
 # 从 PyPI 安装（正式环境）
-pip install opscli
+pip install aukeys-opscli
 
 # 如需 Amazon 抓取能力，补装 Playwright 依赖
-pip install "opscli[amazon]"
+pip install "aukeys-opscli[amazon]"
 playwright install chromium
 
 # 从 TestPyPI 安装（测试环境）
@@ -98,7 +98,7 @@ playwright install chromium
 pip install \
     --index-url https://test.pypi.org/simple/ \
     --extra-index-url https://pypi.org/simple/ \
-    opscli
+    aukeys-opscli
 
 # 从源码开发模式安装
 git clone <repo-url> opscli
@@ -109,6 +109,8 @@ pip install -e .
 pip install -e ".[amazon]"
 playwright install chromium
 ```
+
+> 发行包名为 `aukeys-opscli`，安装后仍使用 `opscli` 作为命令入口。
 
 ---
 
@@ -675,10 +677,10 @@ twine upload dist/*
 pip install \
     --index-url https://test.pypi.org/simple/ \
     --extra-index-url https://pypi.org/simple/ \
-    opscli==0.0.2
+    aukeys-opscli==0.0.2
 
 # 错误：只用 TestPyPI 做索引源，可能安装到旧版本
-pip install -i https://test.pypi.org/simple/ opscli
+pip install -i https://test.pypi.org/simple/ aukeys-opscli
 ```
 
 验证安装：
