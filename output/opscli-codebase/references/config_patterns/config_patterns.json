@@ -1,0 +1,156 @@
+{
+  "total_files": 6,
+  "total_settings": 11,
+  "detected_patterns": {},
+  "config_files": [
+    {
+      "file_path": "/Users/mask/python3/opscli/opscli/config.py",
+      "relative_path": "config.py",
+      "type": "python",
+      "purpose": "general_configuration",
+      "patterns": [],
+      "settings_count": 0,
+      "settings": [],
+      "parse_errors": []
+    },
+    {
+      "file_path": "/Users/mask/python3/opscli/opscli/auth/config.py",
+      "relative_path": "auth/config.py",
+      "type": "python",
+      "purpose": "general_configuration",
+      "patterns": [],
+      "settings_count": 3,
+      "settings": [
+        {
+          "key": "DEFAULTS",
+          "value": {
+            "ops_url": "https://ops.aukeys.com/api",
+            "ops_system_url": "https://ops.aukeys.com",
+            "ops_token_endpoint": "/api/v1/auth/cli-token",
+            "polaris_system_url": "https://bi.aukeys.com",
+            "polaris_token_endpoint": "/api/auth/cli-token"
+          },
+          "type": "object",
+          "env_var": null,
+          "description": ""
+        },
+        {
+          "key": "section",
+          "value": "systems",
+          "type": "string",
+          "env_var": null,
+          "description": ""
+        },
+        {
+          "key": "result",
+          "value": {},
+          "type": "object",
+          "env_var": null,
+          "description": ""
+        }
+      ],
+      "parse_errors": []
+    },
+    {
+      "file_path": "/Users/mask/python3/opscli/opscli/skills/templates/ops-auth/data/VERSION.json",
+      "relative_path": "skills/templates/ops-auth/data/VERSION.json",
+      "type": "json",
+      "purpose": "general_configuration",
+      "patterns": [],
+      "settings_count": 2,
+      "settings": [
+        {
+          "key": "name",
+          "value": "ops-auth",
+          "type": "string",
+          "env_var": null,
+          "description": ""
+        },
+        {
+          "key": "version",
+          "value": "v1.0.0",
+          "type": "string",
+          "env_var": null,
+          "description": ""
+        }
+      ],
+      "parse_errors": []
+    },
+    {
+      "file_path": "/Users/mask/python3/opscli/opscli/skills/templates/ops-skills/data/VERSION.json",
+      "relative_path": "skills/templates/ops-skills/data/VERSION.json",
+      "type": "json",
+      "purpose": "general_configuration",
+      "patterns": [],
+      "settings_count": 2,
+      "settings": [
+        {
+          "key": "name",
+          "value": "ops-skills",
+          "type": "string",
+          "env_var": null,
+          "description": ""
+        },
+        {
+          "key": "version",
+          "value": "v1.0.0",
+          "type": "string",
+          "env_var": null,
+          "description": ""
+        }
+      ],
+      "parse_errors": []
+    },
+    {
+      "file_path": "/Users/mask/python3/opscli/opscli/skills/templates/ops-dataset-query/data/VERSION.json",
+      "relative_path": "skills/templates/ops-dataset-query/data/VERSION.json",
+      "type": "json",
+      "purpose": "general_configuration",
+      "patterns": [],
+      "settings_count": 2,
+      "settings": [
+        {
+          "key": "name",
+          "value": "ops-dataset-query",
+          "type": "string",
+          "env_var": null,
+          "description": ""
+        },
+        {
+          "key": "version",
+          "value": "v0.0.0",
+          "type": "string",
+          "env_var": null,
+          "description": ""
+        }
+      ],
+      "parse_errors": []
+    },
+    {
+      "file_path": "/Users/mask/python3/opscli/opscli/skills/templates/ops-dataset-query/data/query_metadata.json",
+      "relative_path": "skills/templates/ops-dataset-query/data/query_metadata.json",
+      "type": "json",
+      "purpose": "general_configuration",
+      "patterns": [],
+      "settings_count": 2,
+      "settings": [
+        {
+          "key": "datasets",
+          "value": [],
+          "type": "array",
+          "env_var": null,
+          "description": ""
+        },
+        {
+          "key": "fields",
+          "value": [],
+          "type": "array",
+          "env_var": null,
+          "description": ""
+        }
+      ],
+      "parse_errors": []
+    }
+  ],
+  "errors": []
+}

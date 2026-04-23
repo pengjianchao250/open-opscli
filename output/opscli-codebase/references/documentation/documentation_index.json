@@ -1,0 +1,415 @@
+{
+  "total_files": 3,
+  "categories": {
+    "templates": [
+      "skills/templates/ops-auth/SKILL.md",
+      "skills/templates/ops-dataset-query/SKILL.md",
+      "skills/templates/ops-skills/SKILL.md"
+    ]
+  },
+  "files": [
+    {
+      "path": "skills/templates/ops-auth/SKILL.md",
+      "filename": "SKILL.md",
+      "category": "templates",
+      "size_bytes": 3448,
+      "title": "ops-auth",
+      "structure": {
+        "title": "ops-auth",
+        "headers": [
+          {
+            "level": 1,
+            "text": "ops-auth",
+            "line": 1
+          },
+          {
+            "level": 2,
+            "text": "\u4f7f\u7528\u539f\u5219",
+            "line": 5
+          },
+          {
+            "level": 2,
+            "text": "\u5185\u7f6e\u7cfb\u7edf",
+            "line": 11
+          },
+          {
+            "level": 2,
+            "text": "\u547d\u4ee4\u53c2\u8003",
+            "line": 20
+          },
+          {
+            "level": 3,
+            "text": "`opscli auth login`",
+            "line": 22
+          },
+          {
+            "level": 3,
+            "text": "`opscli auth logout`",
+            "line": 32
+          },
+          {
+            "level": 3,
+            "text": "`opscli auth doctor`",
+            "line": 42
+          },
+          {
+            "level": 3,
+            "text": "`opscli auth token status`",
+            "line": 52
+          },
+          {
+            "level": 3,
+            "text": "`opscli auth token get -s <alias>`",
+            "line": 62
+          },
+          {
+            "level": 3,
+            "text": "`opscli auth token check -s <alias>`",
+            "line": 81
+          },
+          {
+            "level": 3,
+            "text": "`opscli auth token refresh`",
+            "line": 97
+          },
+          {
+            "level": 3,
+            "text": "`opscli auth system list`",
+            "line": 117
+          },
+          {
+            "level": 3,
+            "text": "`opscli auth system sync`",
+            "line": 127
+          },
+          {
+            "level": 3,
+            "text": "`opscli auth system add`",
+            "line": 137
+          },
+          {
+            "level": 3,
+            "text": "`opscli auth system remove`",
+            "line": 154
+          },
+          {
+            "level": 2,
+            "text": "\u5178\u578b\u5de5\u4f5c\u6d41",
+            "line": 169
+          }
+        ],
+        "code_blocks": [
+          {
+            "language": "bash",
+            "code": "opscli auth login"
+          },
+          {
+            "language": "bash",
+            "code": "opscli auth logout"
+          },
+          {
+            "language": "bash",
+            "code": "opscli auth doctor"
+          },
+          {
+            "language": "bash",
+            "code": "opscli auth token status"
+          },
+          {
+            "language": "text",
+            "code": "\u9009\u9879\uff1a\n  -s, --system TEXT   \u7cfb\u7edf\u522b\u540d\uff08\u5fc5\u586b\uff0c\u5982 ops\u3001polaris\uff09"
+          },
+          {
+            "language": "bash",
+            "code": "# \u83b7\u53d6 ops \u7cfb\u7edf Token\nopscli auth token get -s ops\n\n# \u83b7\u53d6 polaris \u7cfb\u7edf Token\nopscli auth token get -s polaris"
+          },
+          {
+            "language": "text",
+            "code": "\u9009\u9879\uff1a\n  -s, --system TEXT   \u7cfb\u7edf\u522b\u540d\uff08\u5fc5\u586b\uff09"
+          },
+          {
+            "language": "bash",
+            "code": "opscli auth token check -s ops\nopscli auth token check -s polaris"
+          },
+          {
+            "language": "text",
+            "code": "\u9009\u9879\uff1a\n  -s, --system TEXT   \u6307\u5b9a\u5355\u4e2a\u7cfb\u7edf\u522b\u540d\n  --all               \u5237\u65b0\u6240\u6709\u5df2\u767b\u5f55\u7cfb\u7edf\u7684 Token"
+          },
+          {
+            "language": "bash",
+            "code": "# \u5237\u65b0\u5355\u4e2a\u7cfb\u7edf\nopscli auth token refresh -s ops\n\n# \u5237\u65b0\u6240\u6709\u7cfb\u7edf\nopscli auth token refresh --all"
+          },
+          {
+            "language": "bash",
+            "code": "opscli auth system list"
+          },
+          {
+            "language": "bash",
+            "code": "opscli auth system sync"
+          },
+          {
+            "language": "text",
+            "code": "\u9009\u9879\uff1a\n  --alias TEXT   \u7cfb\u7edf\u522b\u540d\uff08\u5fc5\u586b\uff0c\u7528\u4e8e -s \u53c2\u6570\uff09\n  --url   TEXT   \u7cfb\u7edf base URL\uff08\u5fc5\u586b\uff09\n  --key   TEXT   \u5b58\u50a8\u952e\uff0c\u9ed8\u8ba4\u7531 alias \u751f\u6210\uff08\u53ef\u9009\uff09"
+          },
+          {
+            "language": "bash",
+            "code": "opscli auth system add --alias my-ops --url https://ops-staging.aukeys.com"
+          },
+          {
+            "language": "text",
+            "code": "\u9009\u9879\uff1a\n  --alias TEXT   \u7cfb\u7edf\u522b\u540d\uff08\u5fc5\u586b\uff09"
+          },
+          {
+            "language": "bash",
+            "code": "opscli auth system remove --alias my-ops"
+          },
+          {
+            "language": "bash",
+            "code": "# 1. \u9996\u6b21\u767b\u5f55\nopscli auth login\n\n# 2. \u786e\u8ba4\u767b\u5f55\u72b6\u6001\nopscli auth token status\n\n# 3. \u83b7\u53d6 Token \u7528\u4e8e\u540e\u7eed\u64cd\u4f5c\nopscli auth token get -s ops\n\n# 4. Token \u5373\u5c06\u8fc7\u671f\u65f6\u4e3b\u52a8\u5237\u65b0\nopscli auth token refresh -s ops\n\n# 5. \u6392\u67e5\u95ee\u9898\nopscli auth doctor"
+          }
+        ],
+        "tables": 1,
+        "images": 0,
+        "links": 0,
+        "word_count": 59,
+        "line_count": 187
+      },
+      "summary": "**ops-auth**\nSections: \u4f7f\u7528\u539f\u5219, \u5185\u7f6e\u7cfb\u7edf, \u547d\u4ee4\u53c2\u8003, `opscli auth login`, `opscli auth logout`\n\u7ba1\u7406 Aukeys \u5185\u90e8\u7cfb\u7edf\u7684 OAuth2 \u767b\u5f55\u6388\u6743\u4e0e JWT Token\uff0c\u6240\u6709\u64cd\u4f5c\u901a\u8fc7 `opscli auth` \u5b50\u547d\u4ee4\u6267\u884c\u3002\n(59 words, 17 code blocks)",
+      "content": null,
+      "_enhanced": true,
+      "parsed_data": {
+        "tables": 1,
+        "cross_references": 0,
+        "code_blocks": 17,
+        "images": 0,
+        "quality_scores": {
+          "avg_code_quality": 6.764705882352941
+        }
+      }
+    },
+    {
+      "path": "skills/templates/ops-dataset-query/SKILL.md",
+      "filename": "SKILL.md",
+      "category": "templates",
+      "size_bytes": 4413,
+      "title": "ops-dataset-query",
+      "structure": {
+        "title": "ops-dataset-query",
+        "headers": [
+          {
+            "level": 1,
+            "text": "ops-dataset-query",
+            "line": 1
+          },
+          {
+            "level": 2,
+            "text": "\u4f7f\u7528\u539f\u5219",
+            "line": 5
+          },
+          {
+            "level": 2,
+            "text": "\u672c\u5730\u6570\u636e\u6587\u4ef6",
+            "line": 11
+          },
+          {
+            "level": 2,
+            "text": "\u547d\u4ee4\u53c2\u8003",
+            "line": 22
+          },
+          {
+            "level": 3,
+            "text": "`opscli query metadata`",
+            "line": 24
+          },
+          {
+            "level": 3,
+            "text": "`opscli query build`",
+            "line": 46
+          },
+          {
+            "level": 3,
+            "text": "`opscli query run`",
+            "line": 91
+          },
+          {
+            "level": 3,
+            "text": "`opscli skills upgrade ops-dataset-query`",
+            "line": 107
+          },
+          {
+            "level": 2,
+            "text": "\u5178\u578b\u5de5\u4f5c\u6d41",
+            "line": 130
+          }
+        ],
+        "code_blocks": [
+          {
+            "language": "text",
+            "code": "\u9009\u9879\uff1a\n  --dataset TEXT      dataset_alias\uff08\u4e0e --table-id \u4e8c\u9009\u4e00\uff09\n  --table-id INTEGER  table_id\uff08\u4e0e --dataset \u4e8c\u9009\u4e00\uff09\n  --skills-dir TEXT   \u6307\u5b9a Skill \u76ee\u5f55\uff08\u8986\u76d6\u9ed8\u8ba4\u68c0\u6d4b\u8def\u5f84\uff09\n  --pretty            \u683c\u5f0f\u5316 JSON \u8f93\u51fa"
+          },
+          {
+            "language": "bash",
+            "code": "# \u6309 alias \u8bfb\u53d6\nopscli query metadata --dataset sales_order_d --pretty\n\n# \u6309 table_id \u8bfb\u53d6\nopscli query metadata --table-id 123 --pretty"
+          },
+          {
+            "language": "text",
+            "code": "\u9009\u9879\uff1a\n  --dataset TEXT      dataset_alias\n  --table-id INTEGER  table_id\n  --dimension TEXT    \u7ef4\u5ea6\u5b9a\u4e49\uff1afield_name[:alias]\uff0c\u53ef\u91cd\u590d\n  --metric TEXT       \u6307\u6807\u5b9a\u4e49\uff1afield_name:aggregation[:alias]\uff0c\u53ef\u91cd\u590d\n  --where TEXT        \u7b5b\u9009\u6761\u4ef6\uff1afield|operator|value_json\uff0c\u53ef\u91cd\u590d\n  --where-json TEXT   where \u6761\u4ef6 JSON \u5b57\u7b26\u4e32\uff08\u4e0e --where \u4e92\u65a5\uff09\n  --where-file TEXT   where \u6761\u4ef6 JSON \u6587\u4ef6\u8def\u5f84\uff08\u4e0e --where \u4e92\u65a5\uff09\n  --order-by TEXT     \u6392\u5e8f\u5b9a\u4e49\uff1aexpr[:asc|desc]\uff0c\u53ef\u91cd\u590d\n  --limit INTEGER     \u8fd4\u56de\u884c\u6570\uff0c\u9ed8\u8ba4 20\n  --offset INTEGER    \u5206\u9875\u504f\u79fb\uff0c\u9ed8\u8ba4 0\n  --output TEXT       \u5c06\u6784\u9020\u7684 payload \u5199\u5165\u6307\u5b9a\u6587\u4ef6\n  --run               \u6784\u9020\u540e\u7acb\u5373\u6267\u884c\u67e5\u8be2\uff08\u4e0d\u5199\u6587\u4ef6\uff09\n  --skills-dir TEXT   \u6307\u5b9a Skill \u76ee\u5f55\n  --pretty            \u683c\u5f0f\u5316 JSON \u8f93\u51fa"
+          },
+          {
+            "language": "bash",
+            "code": "# \u6784\u9020 payload \u5e76\u5199\u5165\u6587\u4ef6\nopscli query build \\\n  --dataset sales_order_d \\\n  --dimension date_id \\\n  --dimension country_id:country \\\n  --metric order_cost:sum:total_cost \\\n  --where \"date_id|gte|\\\"2024-01-01\\\"\" \\\n  --order-by total_cost:desc \\\n  --limit 50 \\\n  --output /tmp/query.json \\\n  --pretty\n\n# \u6784\u9020\u540e\u76f4\u63a5\u6267\u884c\uff08\u7b49\u4ef7\u4e8e build + run\uff09\nopscli query build \\\n  --dataset sales_order_d \\\n  --dimension date_id \\\n  --metric order_cost:sum \\\n  --run --pretty"
+          },
+          {
+            "language": "text",
+            "code": "\u9009\u9879\uff1a\n  --payload TEXT   \u67e5\u8be2 JSON \u6587\u4ef6\u8def\u5f84\uff08\u5fc5\u586b\uff09\n  --pretty         \u683c\u5f0f\u5316 JSON \u8f93\u51fa"
+          },
+          {
+            "language": "bash",
+            "code": "opscli query run --payload /tmp/query.json --pretty"
+          },
+          {
+            "language": "text",
+            "code": "\u9009\u9879\uff1a\n  --force    \u5f3a\u5236\u91cd\u65b0\u62c9\u53d6\uff0c\u5373\u4f7f\u7248\u672c\u53f7\u4e0e\u8fdc\u7aef\u4e00\u81f4\n  --pretty   \u683c\u5f0f\u5316 JSON \u8f93\u51fa"
+          },
+          {
+            "language": "bash",
+            "code": "# \u68c0\u67e5\u662f\u5426\u6709\u66f4\u65b0\uff08\u901a\u8fc7 status \u547d\u4ee4\uff09\nopscli skills status --pretty\n\n# \u5347\u7ea7\u5230\u6700\u65b0\u7248\u672c\nopscli skills upgrade ops-dataset-query\n\n# \u5f3a\u5236\u91cd\u65b0\u62c9\u53d6\u6240\u6709\u6570\u636e\nopscli skills upgrade ops-dataset-query --force"
+          },
+          {
+            "language": "bash",
+            "code": "# 1. \u67e5\u770b\u6570\u636e\u96c6\u5143\u6570\u636e\uff0c\u4e86\u89e3\u53ef\u7528\u5b57\u6bb5\nopscli query metadata --dataset sales_order_d --pretty\n\n# 2. \u6784\u9020\u67e5\u8be2 payload\nopscli query build \\\n  --dataset sales_order_d \\\n  --dimension date_id \\\n  --metric order_cost:sum:total_cost \\\n  --limit 30 \\\n  --output /tmp/query.json\n\n# 3. \u6267\u884c\u67e5\u8be2\nopscli query run --payload /tmp/query.json --pretty\n\n# 4. \u6216\u8005\u4e00\u6b65\u5b8c\u6210\u6784\u9020 + \u6267\u884c\nopscli query build --dataset sales_order_d --dimension date_id --metric order_cost:sum --run --pretty\n\n# 5. \u672c\u5730\u6570\u636e\u8fc7\u671f\u65f6\u5347\u7ea7\nopscli skills upgrade ops-dataset-query"
+          }
+        ],
+        "tables": 1,
+        "images": 0,
+        "links": 0,
+        "word_count": 30,
+        "line_count": 153
+      },
+      "summary": "**ops-dataset-query**\nSections: \u4f7f\u7528\u539f\u5219, \u672c\u5730\u6570\u636e\u6587\u4ef6, \u547d\u4ee4\u53c2\u8003, `opscli query metadata`, `opscli query build`\n\u4f7f\u7528\u672c\u5730\u7f13\u5b58\u7684\u6570\u636e\u96c6\u4e0e\u5b57\u6bb5\u7d22\u5f15\u8f85\u52a9\u68c0\u7d22\u53ef\u7528\u6570\u636e\u96c6\u3001\u7ef4\u5ea6\u548c\u6307\u6807\uff0c\u901a\u8fc7 `opscli query` \u6267\u884c\u6570\u636e\u67e5\u8be2\uff0c\u901a\u8fc7 `opscli skills upgrade` \u62c9\u53d6\u8fdc\u7aef\u6700\u65b0\u6570\u636e\u3002\n(30 words, 9 code blocks)",
+      "content": null,
+      "_enhanced": true,
+      "parsed_data": {
+        "tables": 1,
+        "cross_references": 0,
+        "code_blocks": 9,
+        "images": 0,
+        "quality_scores": {
+          "avg_code_quality": 7.722222222222222
+        }
+      }
+    },
+    {
+      "path": "skills/templates/ops-skills/SKILL.md",
+      "filename": "SKILL.md",
+      "category": "templates",
+      "size_bytes": 3524,
+      "title": "ops-skills",
+      "structure": {
+        "title": "ops-skills",
+        "headers": [
+          {
+            "level": 1,
+            "text": "ops-skills",
+            "line": 1
+          },
+          {
+            "level": 2,
+            "text": "\u4f7f\u7528\u539f\u5219",
+            "line": 5
+          },
+          {
+            "level": 2,
+            "text": "\u5185\u7f6e\u53ef\u5b89\u88c5 Skill",
+            "line": 10
+          },
+          {
+            "level": 2,
+            "text": "\u547d\u4ee4\u53c2\u8003",
+            "line": 20
+          },
+          {
+            "level": 3,
+            "text": "`opscli skills list`",
+            "line": 22
+          },
+          {
+            "level": 3,
+            "text": "`opscli skills status`",
+            "line": 39
+          },
+          {
+            "level": 3,
+            "text": "`opscli skills install <name>`",
+            "line": 56
+          },
+          {
+            "level": 3,
+            "text": "`opscli skills upgrade [name]`",
+            "line": 94
+          },
+          {
+            "level": 2,
+            "text": "\u5178\u578b\u5de5\u4f5c\u6d41",
+            "line": 121
+          }
+        ],
+        "code_blocks": [
+          {
+            "language": "text",
+            "code": "\u9009\u9879\uff1a\n  --skills-dir TEXT   \u6307\u5b9a\u626b\u63cf\u76ee\u5f55\uff08\u8986\u76d6\u9ed8\u8ba4\u68c0\u6d4b\u8def\u5f84\uff09\n  --pretty            \u683c\u5f0f\u5316 JSON \u8f93\u51fa"
+          },
+          {
+            "language": "bash",
+            "code": "opscli skills list\nopscli skills list --pretty"
+          },
+          {
+            "language": "text",
+            "code": "\u9009\u9879\uff1a\n  --skills-dir TEXT   \u6307\u5b9a\u626b\u63cf\u76ee\u5f55\n  --pretty            \u683c\u5f0f\u5316 JSON \u8f93\u51fa"
+          },
+          {
+            "language": "bash",
+            "code": "opscli skills status\nopscli skills status --pretty"
+          },
+          {
+            "language": "text",
+            "code": "\u53c2\u6570\uff1a\n  name                Skill \u540d\u79f0\uff08\u5fc5\u586b\uff09\n\n\u9009\u9879\uff1a\n  --runtime TEXT      \u76ee\u6807\u8fd0\u884c\u65f6\uff1aclaude\u3001openclaw\u3001all\uff0c\u6216\u9017\u53f7\u5206\u9694\u591a\u4e2a\u503c\n  --skills-dir TEXT   \u6307\u5b9a\u5b89\u88c5\u76ee\u5f55\uff08\u8df3\u8fc7\u81ea\u52a8\u68c0\u6d4b\uff09\n  --force             \u8986\u76d6\u5df2\u5b58\u5728\u7684\u5b89\u88c5\n  --pretty            \u683c\u5f0f\u5316 JSON \u8f93\u51fa"
+          },
+          {
+            "language": "bash",
+            "code": "# \u5b89\u88c5\uff08\u81ea\u52a8\u68c0\u6d4b\u8fd0\u884c\u65f6\uff09\nopscli skills install ops-auth\nopscli skills install ops-dataset-query\nopscli skills install ops-skills\n\n# \u6307\u5b9a\u8fd0\u884c\u65f6\u5b89\u88c5\nopscli skills install ops-auth --runtime claude\nopscli skills install ops-auth --runtime openclaw\nopscli skills install ops-auth --runtime claude,openclaw\n\n# \u540c\u65f6\u5b89\u88c5\u5230\u6240\u6709\u8fd0\u884c\u65f6\nopscli skills install ops-auth --runtime all\n\n# \u8986\u76d6\u5df2\u5b58\u5728\u7684\u5b89\u88c5\nopscli skills install ops-dataset-query --force\n\n# \u5b89\u88c5\u5230\u6307\u5b9a\u76ee\u5f55\nopscli skills install ops-auth --skills-dir /path/to/skills"
+          },
+          {
+            "language": "text",
+            "code": "\u53c2\u6570\uff1a\n  name                Skill \u540d\u79f0\uff08\u53ef\u9009\uff0c\u9ed8\u8ba4 ops-dataset-query\uff09\n\n\u9009\u9879\uff1a\n  --skills-dir TEXT   \u6307\u5b9a\u626b\u63cf\u76ee\u5f55\n  --force             \u5f3a\u5236\u91cd\u65b0\u62c9\u53d6\uff0c\u5373\u4f7f\u7248\u672c\u53f7\u76f8\u540c\n  --pretty            \u683c\u5f0f\u5316 JSON \u8f93\u51fa"
+          },
+          {
+            "language": "bash",
+            "code": "# \u5347\u7ea7 ops-dataset-query\uff08\u9ed8\u8ba4\uff09\nopscli skills upgrade\n\n# \u663e\u5f0f\u6307\u5b9a\u540d\u79f0\nopscli skills upgrade ops-dataset-query\n\n# \u5f3a\u5236\u91cd\u65b0\u62c9\u53d6\u8fdc\u7aef\u6570\u636e\nopscli skills upgrade ops-dataset-query --force"
+          },
+          {
+            "language": "bash",
+            "code": "# 1. \u67e5\u770b\u5f53\u524d\u5b89\u88c5\u72b6\u6001\nopscli skills list --pretty\n\n# 2. \u5b89\u88c5\u6240\u6709\u5e38\u7528 Skill\nopscli skills install ops-auth\nopscli skills install ops-dataset-query\nopscli skills install ops-skills\n\n# 3. \u68c0\u67e5\u662f\u5426\u6709\u53ef\u7528\u66f4\u65b0\nopscli skills status --pretty\n\n# 4. \u5347\u7ea7\u6709\u66f4\u65b0\u7684 Skill\nopscli skills upgrade ops-dataset-query"
+          }
+        ],
+        "tables": 1,
+        "images": 0,
+        "links": 0,
+        "word_count": 30,
+        "line_count": 138
+      },
+      "summary": "**ops-skills**\nSections: \u4f7f\u7528\u539f\u5219, \u5185\u7f6e\u53ef\u5b89\u88c5 Skill, \u547d\u4ee4\u53c2\u8003, `opscli skills list`, `opscli skills status`\n\u7ba1\u7406 Claude Code / OpenClaw \u4e2d\u5df2\u5b89\u88c5\u7684 Skill \u751f\u547d\u5468\u671f\uff0c\u6240\u6709\u64cd\u4f5c\u901a\u8fc7 `opscli skills` \u5b50\u547d\u4ee4\u6267\u884c\u3002\n(30 words, 9 code blocks)",
+      "content": null,
+      "_enhanced": true,
+      "parsed_data": {
+        "tables": 1,
+        "cross_references": 0,
+        "code_blocks": 9,
+        "images": 0,
+        "quality_scores": {
+          "avg_code_quality": 8.055555555555555
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "success": true,
+  "command": "amazon search",
+  "data": {
+    "keyword": "usb c cable",
+    "zip_code": "10001",
+    "count": 5,
+    "results": [
+      {
+        "asin": "B09LCJPZ1P",
+        "keyword": "usb c cable",
+        "zip_code": "10001",
+        "rank": 1,
+        "title": "Anker USB C to USB C Cable, 2-Pack 6 FT (1.8 m) Type C 100W Charger Cord, Fast Charging for iPhone 17 Series, MacBook Pro 2020, Pixel, and More (Black, Not for Video Output)",
+        "price_text": "$12.99",
+        "price_amount": 12.99,
+        "rating_text": "4.8 out of 5 stars",
+        "rating_value": 4.8,
+        "review_count_text": "4.8 out of 5 stars",
+        "review_count_value": 4,
+        "is_best_seller": false
+      },
+      {
+        "asin": "B09N94MZG9",
+        "keyword": "usb c cable",
+        "zip_code": "10001",
+        "rank": 2,
+        "title": "UGREEN USB C to USB C Cable, 100W 2-Pack USB C Charger Cable for iPhone 17/17 Air/17 Pro/17 Pro Max/16, MacBook Pro, iPad Pro, Dell XPS, Samsung Galaxy S25/S24/S23 Ultra, Switch, Pixel, 3.3FT Black",
+        "price_text": "$9.99",
+        "price_amount": 9.99,
+        "rating_text": "4.8 out of 5 stars",
+        "rating_value": 4.8,
+        "review_count_text": "4.8 out of 5 stars",
+        "review_count_value": 4,
+        "is_best_seller": false
+      },
+      {
+        "asin": "B086ZGKYH8",
+        "keyword": "usb c cable",
+        "zip_code": "10001",
+        "rank": 3,
+        "title": "UGREEN USB B to USB C 6 FT Printer Cable, Nylon USB B to C Cord for MacBook Pro/Air, MIDI Cable Compatible with Yamaha Piano Keyboard, DAC, DJ Controller for iPad",
+        "price_text": "$8.49",
+        "price_amount": 8.49,
+        "rating_text": "4.8 out of 5 stars",
+        "rating_value": 4.8,
+        "review_count_text": "4.8 out of 5 stars",
+        "review_count_value": 4,
+        "is_best_seller": false
+      },
+      {
+        "asin": "B098JYVQNT",
+        "keyword": "usb c cable",
+        "zip_code": "10001",
+        "rank": 4,
+        "title": "MINLU Dual USB C 4 in 1 Multi Charging Cable for Multiple Devieces,Braided Tangle-Free Dual Type C/Lightning/Micro Ports,Universal Travel Car Charger for iPhone Series,Galaxy,Android,iPad,PS-2Pack,4Ft",
+        "price_text": "$22.99",
+        "price_amount": 22.99,
+        "rating_text": "5.0 out of 5 stars",
+        "rating_value": 5.0,
+        "review_count_text": "5.0 out of 5 stars",
+        "review_count_value": 5,
+        "is_best_seller": false
+      },
+      {
+        "asin": "B0DCH5B2HF",
+        "keyword": "usb c cable",
+        "zip_code": "10001",
+        "rank": 5,
+        "title": "Apple 240W USB-C to USB-C Woven Charge Cable (2 m): Fast and Convenient Charging",
+        "price_text": "$24.00",
+        "price_amount": 24.0,
+        "rating_text": "4.8 out of 5 stars",
+        "rating_value": 4.8,
+        "review_count_text": "4.8 out of 5 stars",
+        "review_count_value": 4,
+        "is_best_seller": false
+      }
+    ]
+  },
+  "error": null
+}

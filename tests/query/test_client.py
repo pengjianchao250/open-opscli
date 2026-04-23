@@ -1,0 +1,78 @@
+import json
+
+import httpx
+import pytest
+
+from opscli.query.client import QueryClient
+from opscli.query.exceptions import BadRemoteJsonError, RemoteBusinessError
+
+
+class DummyAuthClient:
+    def build_request_auth(self, alias: str) -> tuple[dict[str, str], dict[str, str]]:
+        assert alias == "ops"
+        return (
+            {"Authorization": "Bearer jwt-token"},
+            {
+                "polarisUserToken": "session-123",
+                "opscliDeviceCode": "dc-abc",
+            },
+        )
+
+
+def test_cli_query_sends_auth_headers_and_cookies(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, cookies=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        captured["cookies"] = cookies
+        captured["timeout"] = timeout
+        return httpx.Response(
+            200,
+            json={"rows": [], "meta": {"rowCount": 0}},
+        )
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.post", fake_post)
+    client = QueryClient(auth_client=DummyAuthClient())
+    payload = {"tableId": 1103, "query": {"select": []}}
+
+    result = client.cli_query(payload)
+
+    assert captured["url"].endswith("/v1/data-metrics/cli-query")
+    assert captured["headers"]["Authorization"] == "Bearer jwt-token"
+    assert captured["cookies"]["polarisUserToken"] == "session-123"
+    assert captured["cookies"]["opscliDeviceCode"] == "dc-abc"
+    assert captured["timeout"] == 30
+    assert result["meta"]["rowCount"] == 0
+
+
+def test_cli_query_raises_business_error(monkeypatch):
+    def fake_post(url, json=None, headers=None, cookies=None, timeout=None):
+        return httpx.Response(200, json={"code": 403, "msg": "无该数据集访问权限"})
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.post", fake_post)
+    client = QueryClient(auth_client=DummyAuthClient())
+
+    with pytest.raises(RemoteBusinessError) as exc_info:
+        client.cli_query({"tableId": 1103, "query": {"select": []}})
+
+    assert exc_info.value.business_code == 403
+    assert str(exc_info.value) == "无该数据集访问权限"
+
+
+def test_cli_query_raises_when_remote_json_invalid(monkeypatch):
+    class DummyResponse:
+        status_code = 200
+
+        def json(self):
+            raise json.JSONDecodeError("bad", "x", 0)
+
+    def fake_post(url, json=None, headers=None, cookies=None, timeout=None):
+        return DummyResponse()
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.post", fake_post)
+    client = QueryClient(auth_client=DummyAuthClient())
+
+    with pytest.raises(BadRemoteJsonError):
+        client.cli_query({"tableId": 1103, "query": {"select": []}})

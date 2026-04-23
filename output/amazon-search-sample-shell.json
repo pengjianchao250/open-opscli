@@ -1,0 +1,54 @@
+{
+  "success": true,
+  "command": "amazon search",
+  "data": {
+    "keyword": "usb c cable",
+    "zip_code": "10001",
+    "count": 3,
+    "results": [
+      {
+        "asin": "B09LCJPZ1P",
+        "keyword": "usb c cable",
+        "zip_code": "10001",
+        "rank": 1,
+        "title": "Anker USB C to USB C Cable, 2-Pack 6 FT (1.8 m) Type C 100W Charger Cord, Fast Charging for iPhone 17 Series, MacBook Pro 2020, Pixel, and More (Black, Not for Video Output)",
+        "price_text": "$12.99",
+        "price_amount": 12.99,
+        "rating_text": "4.8 out of 5 stars",
+        "rating_value": 4.8,
+        "review_count_text": "(29.8K)",
+        "review_count_value": 29800,
+        "is_best_seller": false
+      },
+      {
+        "asin": "B09N94MZG9",
+        "keyword": "usb c cable",
+        "zip_code": "10001",
+        "rank": 2,
+        "title": "UGREEN USB C to USB C Cable, 100W 2-Pack USB C Charger Cable for iPhone 17/17 Air/17 Pro/17 Pro Max/16, MacBook Pro, iPad Pro, Dell XPS, Samsung Galaxy S25/S24/S23 Ultra, Switch, Pixel, 3.3FT Black",
+        "price_text": "$9.99",
+        "price_amount": 9.99,
+        "rating_text": "4.8 out of 5 stars",
+        "rating_value": 4.8,
+        "review_count_text": "(30.5K)",
+        "review_count_value": 30500,
+        "is_best_seller": false
+      },
+      {
+        "asin": "B086ZGKYH8",
+        "keyword": "usb c cable",
+        "zip_code": "10001",
+        "rank": 3,
+        "title": "UGREEN USB B to USB C 6 FT Printer Cable, Nylon USB B to C Cord for MacBook Pro/Air, MIDI Cable Compatible with Yamaha Piano Keyboard, DAC, DJ Controller for iPad",
+        "price_text": "$8.49",
+        "price_amount": 8.49,
+        "rating_text": "4.8 out of 5 stars",
+        "rating_value": 4.8,
+        "review_count_text": "(11.1K)",
+        "review_count_value": 11100,
+        "is_best_seller": false
+      }
+    ]
+  },
+  "error": null
+}
