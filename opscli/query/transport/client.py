@@ -15,6 +15,22 @@ class QueryClient:
         self.auth_client = auth_client or AuthClient()
         self.ops_url = OPS_URL.rstrip("/")
 
+    def fetch_chart_queries(self, chart_uuid: str) -> list[dict]:
+        """通过 chart_uuid 获取图表的查询结构列表。"""
+        headers, cookies = self.auth_client.build_request_auth("ops")
+        response = httpx.get(
+            f"{self.ops_url}/v1/data-metrics/cli-query/latest-request-data",
+            params={"chart_uuid": chart_uuid},
+            headers=headers,
+            cookies=cookies,
+            timeout=20,
+        )
+        payload = self._parse_response(response)
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise BadRemoteJsonError("远端返回的 chart query 数据结构不是数组")
+        return data
+
     def cli_query(self, payload: dict) -> dict:
         """转发查询请求到 auto-scheduler 的 cli-query 接口。"""
         headers, cookies = self.auth_client.build_request_auth("ops")

@@ -33,6 +33,7 @@ Aukeys 运营 CLI 工具集
 - **元数据读取**：支持按 `dataset_alias` 或 `table_id` 读取 query metadata
 - **查询构造**：支持通过维度、指标、筛选、排序等参数生成标准 query payload
 - **即时执行**：支持直接转发 payload 到远端查询服务
+- **图表查询**：通过 `chart_uuid` 获取图表查询结构，支持多 query 并行执行与结果合并
 - **JSON 优先输出**：默认适合 Skill 和脚本消费
 
 ### amazon 模块
@@ -275,6 +276,7 @@ graph LR
     Query --- query_metadata["metadata"]
     Query --- query_build["build"]
     Query --- query_run["run"]
+    Query --- query_chart["chart --uuid"]
 
     Skills --- skills_list["list"]
     Skills --- skills_install["install <name>"]
@@ -768,6 +770,45 @@ app.add_typer({module_name}_app, name="{module_name}")
 
 新模块配置统一存放在 `~/.config/opscli/` 下，通过 `opscli.config.CONFIG_DIR` 获取。
 
+## 图表查询
+
+### `opscli query chart` - 通过 chart_uuid 获取查询结构并执行
+
+```bash
+# 仅查看图表查询结构
+opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --pretty
+
+# 获取并执行所有查询（多 query 结果自动合并）
+opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --pretty
+
+# 仅生成 SQL，不执行
+opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --dry-run --pretty
+```
+
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| `--uuid` | 是 | 图表 UUID |
+| `--run` | 否 | 获取后立即执行所有查询 |
+| `--dry-run` | 否 | 仅生成 SQL（需配合 `--run`） |
+| `--pretty` | 否 | 格式化 JSON 输出 |
+
+**返回结构（--run 时）**：
+
+```json
+{
+  "chart_uuid": "xxx",
+  "queries": [
+    {"index": 0, "table_id": 1, "data_source": "doris", "result": {...}, "error": null}
+  ],
+  "merged": {
+    "rows": [{"_query_index": 0, ...}],
+    "meta": {"rowCount": 150, "queryCount": 3, "successCount": 3}
+  }
+}
+```
+
+> 每个 query 独立执行，失败不影响其他 query；合并结果中每行附加 `_query_index` 标识来源。
+
 ## Skills 使用
 
 ### `opscli skills list`
@@ -807,7 +848,7 @@ opscli skills status --pretty
 
 ### `opscli skills upgrade`
 
-从远端拉取最新的 `ops-dataset-query` 数据文件。
+从远端拉取最新的 `ops-dataset-query` 数据文件。远端数据只拉取一次，自动分发写入到所有检测到的安装目录。
 
 ```bash
 opscli skills upgrade
@@ -815,6 +856,8 @@ opscli skills upgrade ops-dataset-query
 opscli skills upgrade ops-dataset-query --force
 opscli skills upgrade ops-dataset-query --pretty
 ```
+
+> **优化说明**：`upgrade` 会检测所有安装目录（如 `~/.claude/skills`、`~/.openclaw/skills` 等），但远端数据仅拉取一次，再原子替换到所有目录，避免重复请求。
 
 ### `ops-dataset-query` 典型工作流
 

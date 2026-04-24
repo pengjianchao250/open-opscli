@@ -54,6 +54,7 @@ opscli auth token status
 - 字段搜索结果已按相关性排序（精确匹配 > 子串匹配 > 关键词匹配）
 - `opscli query build` 适合常见聚合查询（select / groupBy / where / having / orderBy / limit / offset / dryRun）
 - `opscli query run` 适合透传完整高级 payload（`innerWhere`、`joins`、`dataComparison`、`translate` 等复杂场景）
+- `opscli query chart` 适合通过图表 ID 直接获取查询结构并执行，支持多 query 自动合并
 - 所有查询工作流都必须以前置的 `ops-auth` 登录检测作为起点
 
 ### 【强制】比较类查询优先级规则
@@ -272,6 +273,59 @@ opscli query build \
 
 ---
 
+### `opscli query chart`
+
+通过 `chart_uuid` 获取图表的查询结构，可选立即执行所有查询并合并输出。
+
+```
+选项：
+  --uuid TEXT      图表 UUID（必填）
+  --run            获取后立即执行所有查询并合并输出
+  --dry-run        仅生成 SQL，不执行查询（需配合 --run）
+  --pretty         格式化 JSON 输出
+```
+
+```bash
+# 仅查看图表查询结构
+opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --pretty
+
+# 获取并执行所有查询（多 query 结果自动合并）
+opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --pretty
+
+# 仅生成 SQL，不执行
+opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --dry-run --pretty
+```
+
+**说明**：
+- 后端返回的 chart query 已包含 `tableId`，无需本地 metadata 转换
+- 一个图表可能包含多个 query（如主查询 + 下钻 + 汇总），`--run` 时依次执行
+- 每个 query 独立执行，失败时记录错误但不中断其余 query
+- 合并结果中每行数据附加 `_query_index` 字段标识来源 query 序号
+
+**返回结构（--run 时）**：
+
+```json
+{
+  "chart_uuid": "32f660fd-f62a-45c4-a443-e21f2edb0779",
+  "queries": [
+    {
+      "index": 0,
+      "table_id": 1,
+      "data_source": "doris_analytics",
+      "payload": {...},
+      "result": {...},
+      "error": null
+    }
+  ],
+  "merged": {
+    "rows": [{"_query_index": 0, ...}],
+    "meta": {"rowCount": 150, "queryCount": 3, "successCount": 3}
+  }
+}
+```
+
+---
+
 ### `opscli query run`
 
 执行查询，将 payload 文件转发到服务端。
@@ -306,6 +360,8 @@ opscli query run --payload /tmp/query.json --pretty
 ### `opscli skills upgrade ops-dataset-query`
 
 从运营系统后端拉取最新字段数据，原子替换本地 `data/` 目录。
+
+**优化说明**：远端数据只拉取一次，自动分发写入到所有检测到的安装目录（如 `~/.claude/skills`、`~/.openclaw/skills` 等），避免重复请求。
 
 ```
 选项：
@@ -737,6 +793,23 @@ opscli query run --payload /tmp/moy_query.json --pretty
 #    price_pct  = 环比变化率（小数，×100 得百分比）
 #    当期实际值 = price_prev + price_diff
 ```
+
+### 通过图表 ID 直接查询
+
+```bash
+# 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
+opscli auth token status
+
+# 1. 通过 chart_uuid 获取图表查询结构并执行
+opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --pretty
+
+# 2. 仅查看查询结构，不执行
+opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --pretty
+```
+
+> 图表查询会自动处理多 query 场景（主查询 + 下钻 + 汇总），结果自动合并输出。
+
+---
 
 ### 环比查询（dataComparison，推荐首选）
 

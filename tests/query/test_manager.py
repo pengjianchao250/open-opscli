@@ -493,3 +493,113 @@ def test_build_and_run_uses_built_payload(tmp_path, monkeypatch):
 
     assert called["payload"] == result["payload"]
     assert result["result"]["meta"]["rowCount"] == 1
+
+
+# ── chart query 测试 ──────────────────────────────────────────────────
+
+def test_build_payload_from_chart_query_converts_structure():
+    manager = QueryManager()
+    chart_item = {
+        "query": {
+            "from": {"alias": "ds_xxx", "database": ""},
+            "select": [{"expr": "ds_xxx.date_id", "alias": "f_date"}],
+            "where": {"operator": "AND", "conditions": []},
+            "limit": 100,
+        },
+        "dataSource": "doris_analytics",
+        "tableId": 1103,
+    }
+
+    payload = manager.build_payload_from_chart_query(chart_item)
+
+    assert payload["tableId"] == 1103
+    assert "from" not in payload["query"]
+    assert payload["query"]["select"] == [{"expr": "ds_xxx.date_id", "alias": "f_date"}]
+    assert payload["query"]["limit"] == 100
+
+
+def test_build_payload_from_chart_query_raises_when_table_id_missing():
+    manager = QueryManager()
+
+    with pytest.raises(InvalidPayloadError):
+        manager.build_payload_from_chart_query({"query": {"select": []}})
+
+
+def test_run_chart_queries_executes_all_and_merges_results(monkeypatch):
+    manager = QueryManager()
+    chart_items = [
+        {"query": {"select": [{"expr": "a", "alias": "f1"}]}, "dataSource": "doris", "tableId": 1},
+        {"query": {"select": [{"expr": "b", "alias": "f2"}]}, "dataSource": "doris", "tableId": 2},
+    ]
+
+    def fake_fetch(uuid):
+        return chart_items
+
+    def fake_cli_query(payload):
+        table_id = payload["tableId"]
+        return {"rows": [{"v": table_id}], "meta": {"rowCount": 1}}
+
+    monkeypatch.setattr(manager.client, "fetch_chart_queries", fake_fetch)
+    monkeypatch.setattr(manager.client, "cli_query", fake_cli_query)
+
+    result = manager.run_chart_queries("chart-123")
+
+    assert result["chart_uuid"] == "chart-123"
+    assert len(result["queries"]) == 2
+    assert result["queries"][0]["result"]["rows"][0]["v"] == 1
+    assert result["queries"][1]["result"]["rows"][0]["v"] == 2
+    # merged
+    assert len(result["merged"]["rows"]) == 2
+    assert result["merged"]["rows"][0]["_query_index"] == 0
+    assert result["merged"]["rows"][1]["_query_index"] == 1
+    assert result["merged"]["meta"]["rowCount"] == 2
+    assert result["merged"]["meta"]["successCount"] == 2
+
+
+def test_run_chart_queries_continues_on_single_failure(monkeypatch):
+    manager = QueryManager()
+    chart_items = [
+        {"query": {"select": []}, "dataSource": "doris", "tableId": 1},
+        {"query": {"select": []}, "dataSource": "doris", "tableId": 2},
+    ]
+
+    def fake_fetch(uuid):
+        return chart_items
+
+    def fake_cli_query(payload):
+        if payload["tableId"] == 1:
+            raise ValueError(" simulated failure")
+        return {"rows": [{"ok": True}], "meta": {"rowCount": 1}}
+
+    monkeypatch.setattr(manager.client, "fetch_chart_queries", fake_fetch)
+    monkeypatch.setattr(manager.client, "cli_query", fake_cli_query)
+
+    result = manager.run_chart_queries("chart-456")
+
+    assert result["queries"][0]["error"] is not None
+    assert result["queries"][1]["result"] is not None
+    assert result["merged"]["meta"]["successCount"] == 1
+    assert len(result["merged"]["rows"]) == 1
+
+
+def test_run_chart_queries_supports_dry_run(monkeypatch):
+    manager = QueryManager()
+    chart_items = [
+        {"query": {"select": []}, "dataSource": "doris", "tableId": 1},
+    ]
+
+    called = {}
+
+    def fake_fetch(uuid):
+        return chart_items
+
+    def fake_cli_query(payload):
+        called["dry_run"] = payload.get("dryRun")
+        return {"rows": [], "meta": {"rowCount": 0}}
+
+    monkeypatch.setattr(manager.client, "fetch_chart_queries", fake_fetch)
+    monkeypatch.setattr(manager.client, "cli_query", fake_cli_query)
+
+    manager.run_chart_queries("chart-789", dry_run=True)
+
+    assert called["dry_run"] is True
