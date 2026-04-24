@@ -8,6 +8,7 @@
 系统合并优先级：local/ops_sync > builtin（同别名时用户配置覆盖内置）。
 """
 import json
+import stat
 from pathlib import Path
 from opscli.auth.exceptions import SystemNotFoundError
 
@@ -24,6 +25,8 @@ class SystemRegistry:
         from opscli.config import CONFIG_DIR
         base = Path(base_dir or CONFIG_DIR)
         base.mkdir(parents=True, exist_ok=True)
+        if base_dir is not None:
+            base.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
         self._path = base / "systems.json"
         # 内置系统以 alias 为 key 构建字典，方便快速查找和去重
         self._builtin = {s["alias"]: s for s in (builtin_systems or [])}
@@ -35,6 +38,7 @@ class SystemRegistry:
     def _save(self, systems: list):
         """将系统列表持久化到 systems.json。"""
         self._path.write_text(json.dumps(systems, ensure_ascii=False, indent=2))
+        self._path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
     def list_all(self) -> list:
         """返回所有系统（内置 + 用户配置），同别名时用户配置覆盖内置。"""

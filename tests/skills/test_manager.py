@@ -14,7 +14,23 @@ def test_install_dataset_fields_template(tmp_path: Path):
     )
 
     assert result.name == "ops-dataset-query"
-    assert result.to_dict()["version"] == "v0.0.0"
+    assert result.to_dict()["version"] == "v0.0.1"
+    installed_path = Path(result.to_dict()["installed_paths"][0]["path"])
+    assert (installed_path / "SKILL.md").exists()
+    assert (installed_path / "SKILL_MCP.md").exists()
+    assert (installed_path / "data" / "VERSION.json").exists()
+
+
+def test_install_ops_mcp_template(tmp_path: Path):
+    manager = SkillsManager()
+    result = manager.install(
+        "ops-mcp",
+        skills_dir=str(tmp_path / "skills"),
+        force=False,
+    )
+
+    assert result.name == "ops-mcp"
+    assert result.to_dict()["version"] == "v0.0.1"
     installed_path = Path(result.to_dict()["installed_paths"][0]["path"])
     assert (installed_path / "SKILL.md").exists()
     assert (installed_path / "data" / "VERSION.json").exists()
@@ -29,7 +45,7 @@ def test_install_ops_amazon_template(tmp_path: Path):
     )
 
     assert result.name == "ops-amazon"
-    assert result.to_dict()["version"] == "v0.1.0"
+    assert result.to_dict()["version"] == "v0.0.1"
     installed_path = Path(result.to_dict()["installed_paths"][0]["path"])
     assert (installed_path / "SKILL.md").exists()
     assert (installed_path / "data" / "VERSION.json").exists()

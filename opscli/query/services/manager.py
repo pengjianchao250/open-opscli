@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from opscli.auth import AuthClient
 from opscli.query.domain.exceptions import DatasetNotFoundError, InvalidPayloadError, QueryMetadataNotReadyError
 from opscli.query.domain.models import QueryMetadataResult
 from opscli.query.transport.client import QueryClient
@@ -26,9 +27,9 @@ SELECT_ALIAS_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 class QueryManager:
     """协调本地 metadata 与远端 query 执行。"""
 
-    def __init__(self) -> None:
+    def __init__(self, auth_client: AuthClient | None = None) -> None:
         self.detector = SkillDetector()
-        self.client = QueryClient()
+        self.client = QueryClient(auth_client=auth_client)
         self.template_dir = Path(__file__).resolve().parent.parent.parent / "skills" / "templates" / "ops-dataset-query" / "data"
 
     def metadata(

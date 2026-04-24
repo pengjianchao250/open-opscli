@@ -33,6 +33,46 @@ class DeviceFlow:
         resp.raise_for_status()
         return resp.json()
 
+    def poll_once(self, device_code: str, timeout: int = 10) -> dict:
+        """单次查询设备授权状态，不主动 sleep 或循环等待。
+
+        MCP Tool 场景需要由 AI Agent 控制轮询节奏，不能复用 `poll()` 的长时间
+        阻塞逻辑。本方法只发起一次 HTTP 请求；授权成功时保存 session，其他状态
+        原样返回给调用方继续判断。
+
+        Args:
+            device_code: 设备码，由 request_device_code() 返回
+            timeout: 单次 HTTP 请求超时时间，默认 10 秒，最大建议 30 秒
+
+        Returns:
+            dict: 后端返回的授权状态；authorized 时包含 session 信息
+
+        Raises:
+            DeviceFlowExpiredError: 设备码超时
+            DeviceFlowDeniedError: 用户在浏览器中拒绝授权
+        """
+        resp = httpx.get(
+            f"{self._url}/v1/cli/device/poll",
+            params={"device_code": device_code},
+            timeout=max(1, min(int(timeout), 30)),
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        status = body.get("status")
+        if status == "authorized":
+            # 授权成功后立即落库，确保后续 MCP Tool 能直接读取隔离凭证目录
+            self._store.save_session(
+                body["session_id"],
+                body.get("email", ""),
+                body.get("expires_at", ""),
+                device_code=device_code,
+            )
+        elif status == "expired":
+            raise DeviceFlowExpiredError("设备码已超时，请重新运行: opscli auth login")
+        elif status == "denied":
+            raise DeviceFlowDeniedError("用户拒绝授权")
+        return body
+
     def poll(self, device_code: str, interval: int = 3, max_wait: int = 300) -> dict:
         """轮询后端等待用户完成授权。
 
@@ -55,26 +95,9 @@ class DeviceFlow:
         while elapsed < max_wait:
             time.sleep(interval)
             elapsed += interval
-            resp = httpx.get(
-                f"{self._url}/v1/cli/device/poll",
-                params={"device_code": device_code},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            body = resp.json()
+            body = self.poll_once(device_code, timeout=10)
             status = body.get("status")
             if status == "authorized":
-                # 授权成功，保存 session 到本地凭证存储
-                self._store.save_session(
-                    body["session_id"],
-                    body.get("email", ""),
-                    body.get("expires_at", ""),
-                    device_code=device_code,
-                )
                 return body
-            elif status == "expired":
-                raise DeviceFlowExpiredError("设备码已超时，请重新运行: opscli auth login")
-            elif status == "denied":
-                raise DeviceFlowDeniedError("用户拒绝授权")
         # 超过最大等待时间仍未授权
         raise DeviceFlowExpiredError("等待超时，请重新运行: opscli auth login")

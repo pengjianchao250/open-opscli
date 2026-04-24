@@ -1,6 +1,6 @@
 [project]
 name = "aukeys-opscli"
-version = "0.0.8"
+version = "0.1.0"
 description = "Aukeys 运营 CLI 工具集"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,6 +16,9 @@ dependencies = [
 amazon = [
     "playwright>=1.44",
 ]
+mcp = [
+    "fastmcp>=2.0",
+]
 dev = [
     "pytest>=8",
     "respx>=0.21",
@@ -23,6 +26,7 @@ dev = [
 
 [project.scripts]
 opscli = "opscli.cli:app"
+opscli-mcp = "opscli.mcp.server:run"
 
 [build-system]
 requires = ["hatchling"]
