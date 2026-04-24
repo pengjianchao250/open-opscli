@@ -1,7 +1,7 @@
 ---
 name: ops-dataset-query
 description: 使用本地缓存的数据集与字段索引辅助检索和查询
-version: v0.0.0
+version: v0.0.2
 ---
 
 # ops-dataset-query
@@ -11,6 +11,32 @@ version: v0.0.0
 ---
 
 ## 调用前置要求
+
+> **【强制】每次调用 `ops-dataset-query` 前，必须先检测是否已授权登录；禁止默认假设用户已经登录。**
+
+- 进入本 Skill 后，第一步先执行 `opscli auth token status`
+- 若命令失败，或输出中出现“未登录 / 未授权 / Token 过期 / expired / 401”等状态，必须立即调用 `ops-auth` Skill
+- 若是“未登录 / 未授权 / 401”等状态，在 `ops-auth` 中执行 `opscli auth login` 完成授权登录
+- 若是 JWT Token 过期，优先执行 `opscli auth token refresh`（例如 `opscli auth token refresh --all` 或 `opscli auth token refresh -s ops`）；刷新失败或仍异常时，再执行 `opscli auth login`
+- 登录或刷新后重新执行 `opscli auth token status`
+- 只有认证状态确认正常后，才允许继续读取本地索引、执行 `opscli query metadata`、`build`、`run`、`opscli skills upgrade ops-dataset-query`
+- 即使当前动作只是本地字段搜索或本地 metadata 辅助，也必须先完成这一轮登录检测
+
+**标准前置流程：**
+
+```bash
+# 1. 先检查是否已登录
+opscli auth token status
+
+# 2. 如 JWT Token 已过期，先刷新
+opscli auth token refresh --all
+
+# 3. 如未登录、未授权、刷新失败或状态仍异常，立即调用 ops-auth Skill 处理
+opscli auth login
+
+# 4. 登录后再次确认
+opscli auth token status
+```
 
 > **【强制】使用本 Skill 前，必须先阅读 `references/数据查询服务开发说明文档.md`**
 
@@ -28,6 +54,7 @@ version: v0.0.0
 - 字段搜索结果已按相关性排序（精确匹配 > 子串匹配 > 关键词匹配）
 - `opscli query build` 适合常见聚合查询（select / groupBy / where / having / orderBy / limit / offset / dryRun）
 - `opscli query run` 适合透传完整高级 payload（`innerWhere`、`joins`、`dataComparison`、`translate` 等复杂场景）
+- 所有查询工作流都必须以前置的 `ops-auth` 登录检测作为起点
 
 ### 【强制】比较类查询优先级规则
 
@@ -114,6 +141,37 @@ opscli query metadata --table-id 123 --pretty
 - `order_id:count_distinct:uv` → 去重计数
 
 > 完整聚合函数列表见 `references/数据查询服务开发说明文档.md` 第八章。
+
+**公式指标特殊规则**
+- 如果字段 metadata 中包含 `formula_config` / `summary_expression` / `detail_expression`，该指标应按公式字段处理。
+- 手写 payload 时，聚合 / 分组查询应直接使用完整公式表达式结构，不额外传 `aggregation`：
+
+```json
+{
+  "expr": "ROUND(SUM(dsp)/SUM(price), 4)",
+  "alias": "f_yZZfW7cNu8nYMGCS"
+}
+```
+
+- 如果使用 `opscli query build`，仍然可以传 `global_alias|verbose_name:aggregation[:alias]`，CLI 会根据 metadata 自动展开为完整表达式 payload。
+- 明细查询：使用 `detail_expression`
+- 聚合 / 分组查询：使用 `summary_expression`
+- 如果公式字段继续写成 `field_name + aggregation`，容易出现二次聚合或语义错误
+
+**常见易错对照**
+- 普通求和指标：`price:sum` 或手写 `{ "expr": "ds_xxx.price", "alias": "f_price", "aggregation": "SUM" }`
+- 公式占比指标：手写 `{ "expr": "ROUND(SUM(dsp)/SUM(price), 4)", "alias": "f_yZZfW7cNu8nYMGCS" }`
+- 公式平均指标：手写 `{ "expr": "ROUND(SUM(original_price) / SUM(order_qty), 4)", "alias": "f_xxx_avg_price" }`
+- 错误写法：`sell_qty_days:sum`、`avg_original_price_cny:sum` 这类公式字段继续套普通聚合
+
+**查询前 checklist**
+- 先看字段 metadata 里是否有 `has_formula_config = 1`
+- 如果有，再检查是否提供了 `summary_expression` 和 / 或 `detail_expression`
+- 明细查询优先使用 `detail_expression`
+- 聚合 / 分组查询优先使用 `summary_expression`
+- 手写 payload 时，公式字段不要再额外传 `aggregation`
+- 使用 `opscli query build` 时，可以继续传字段标识，CLI 会按 metadata 自动展开
+- 如果字段同时没有 `summary_expression`、`detail_expression`，不要直接猜写法，应回到 metadata 或服务端字段定义确认
 
 **where**：`field|operator|value_json`（完整操作符列表见引用文档第五章）
 
@@ -551,7 +609,8 @@ for dept, c in cur.items():
 |------|---------|
 | 本地数据为空 | `opscli skills upgrade ops-dataset-query` |
 | dataset_alias 不存在 | 检查拼写或 `opscli skills upgrade` 同步最新数据集 |
-| 未登录 / Token 过期 | `opscli auth login` 重新登录 |
+| 未登录 | 调用 `ops-auth` Skill，并执行 `opscli auth login` |
+| Token 过期 | 调用 `ops-auth` Skill，优先执行 `opscli auth token refresh --all`；刷新失败或仍异常时再执行 `opscli auth login` |
 | opscli 未找到 | 激活虚拟环境或设置 `OPSCLI_BIN` |
 | 远端 manifest 不存在 | 检查网络和 ops 服务地址配置 |
 | payload 文件不存在 | 先 `opscli query build --output` 生成 |
@@ -595,6 +654,9 @@ python3 -c "import json; print(json.load(open('/tmp/result.json'))['data']['resu
 ### 探索数据集 → 构造 → 执行
 
 ```bash
+# 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
+opscli auth token status
+
 # 1. 通过本地索引确认数据集和字段名
 # 2. 查看完整 metadata
 opscli query metadata --dataset sales_order_d --pretty
@@ -612,6 +674,9 @@ opscli query build \
 ### 手写高级 payload → 执行
 
 ```bash
+# 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
+opscli auth token status
+
 # 1. 按引用文档规范手写 payload（含 innerWhere / dataComparison 等）
 # 2. 执行
 opscli query run --payload /tmp/advanced_query.json --pretty
@@ -620,6 +685,9 @@ opscli query run --payload /tmp/advanced_query.json --pretty
 ### 环比查询（MOY 月环比，当前推荐方案）
 
 ```bash
+# 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
+opscli auth token status
+
 # 1. 手写含 comparison 字段的 payload，覆盖当期 + 对比期的 WHERE 范围
 cat > /tmp/moy_query.json << 'EOF'
 {
@@ -671,6 +739,9 @@ opscli query run --payload /tmp/moy_query.json --pretty
 ### 环比查询（dataComparison，推荐首选）
 
 ```bash
+# 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
+opscli auth token status
+
 # dataComparison payload 结构（服务端一次 SQL，推荐优先使用）
 cat > /tmp/dc_query.json << 'EOF'
 {
@@ -705,6 +776,9 @@ EOF
 ### 数据更新 → 重新查询
 
 ```bash
+# 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
+opscli auth token status
+
 opscli skills status --pretty
 opscli skills upgrade ops-dataset-query
 opscli query metadata --dataset sales_order_d --pretty
@@ -715,6 +789,9 @@ opscli query metadata --dataset sales_order_d --pretty
 ## 安装与管理
 
 ```bash
+# 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
+opscli auth token status
+
 opscli skills install ops-dataset-query            # 安装
 opscli skills install ops-dataset-query --force     # 强制重装
 opscli skills status --pretty                       # 查看版本

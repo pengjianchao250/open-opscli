@@ -1,7 +1,7 @@
 ---
 name: ops-skills
 description: 管理 AI 工具中已安装的 Skill 生命周期
-version: v1.0.0
+version: v1.0.2
 ---
 
 # ops-skills
@@ -23,6 +23,36 @@ version: v1.0.0
 
 ---
 
+## 强制认证门禁
+
+> **【强制】每次调用 `ops-skills` 前，必须先检测是否已授权登录；禁止默认假设用户已经登录。**
+
+- 进入本 Skill 后，第一步先执行 `opscli auth token status`
+- 若命令失败，或输出中出现“未登录 / 未授权 / Token 过期 / expired / 401”等状态，必须立即切换到 `ops-auth` Skill
+- 若是“未登录 / 未授权 / 401”等状态，在 `ops-auth` 中执行 `opscli auth login` 完成授权登录
+- 若是 JWT Token 过期，优先执行 `opscli auth token refresh`（例如 `opscli auth token refresh --all` 或 `opscli auth token refresh -s ops`）；刷新失败或仍异常时，再执行 `opscli auth login`
+- 必要时执行 `opscli auth token check -s ops` 或 `opscli auth doctor` 做确认
+- 只有认证检查通过后，才允许继续执行 `opscli skills list`、`install`、`status`、`upgrade` 等后续动作
+- 即使当前任务看起来只涉及本地安装或本地列表，也必须先完成这一轮登录检测
+
+**标准前置流程：**
+
+```bash
+# 1. 先检查是否已登录
+opscli auth token status
+
+# 2. 如 JWT Token 已过期，先刷新
+opscli auth token refresh --all
+
+# 3. 如未登录、未授权、刷新失败或状态仍异常，立即调用 ops-auth Skill 处理
+opscli auth login
+
+# 4. 登录后再次确认
+opscli auth token status
+```
+
+---
+
 ## 使用原则
 
 - **全局路径优先**：安装目标由 opscli 自动检测全局 Skills 路径（如 `~/.claude/skills/`、`~/.openclaw/skills/` 等），也可通过 `--runtime` 或 `--skills-dir` 显式指定
@@ -30,6 +60,7 @@ version: v1.0.0
 - **升级范围**：只有 `ops-dataset-query` 支持远端数据升级；`ops-auth` 和 `ops-skills` 为本地静态 Skill，无需升级
 - **幂等安装**：默认不覆盖已存在的安装，需要 `--force` 才会覆盖
 - **原子升级**：升级过程先下载到临时目录，验证完成后再替换，避免升级中途失败导致数据损坏
+- **认证前置**：所有 `ops-skills` 工作流默认依赖 `ops-auth` 完成登录检测；未完成认证前，不得直接执行后续命令
 
 ---
 
@@ -320,16 +351,19 @@ opscli skills upgrade --force --pretty
 在新机器或新用户目录中，首次配置所有 Skill：
 
 ```bash
-# 1. 确认 opscli 已正常安装
+# 1. 先检查认证状态；如未登录则调用 ops-auth 完成登录
+opscli auth token status
+
+# 2. 确认 opscli 已正常安装
 opscli --version
 
-# 2. 通过 TUI 交互模式，勾选并批量安装全部 Skills
+# 3. 通过 TUI 交互模式，勾选并批量安装全部 Skills
 opscli skills install
 
-# 3. 验证安装结果
+# 4. 验证安装结果
 opscli skills list --pretty
 
-# 4. 检查版本状态
+# 5. 检查版本状态
 opscli skills status --pretty
 ```
 
@@ -338,13 +372,16 @@ opscli skills status --pretty
 定期检查并更新 Skills，确保数据集查询功能使用最新字段索引：
 
 ```bash
-# 1. 检查所有 Skill 的版本状态
+# 1. 先检查认证状态；如未登录则调用 ops-auth 完成登录
+opscli auth token status
+
+# 2. 检查所有 Skill 的版本状态
 opscli skills status --pretty
 
-# 2. 如果 ops-dataset-query 有新版本，执行升级
+# 3. 如果 ops-dataset-query 有新版本，执行升级
 opscli skills upgrade ops-dataset-query
 
-# 3. 验证升级后的版本
+# 4. 验证升级后的版本
 opscli skills list --pretty
 ```
 
@@ -353,15 +390,18 @@ opscli skills list --pretty
 同时使用多种 AI 工具（如 Claude Code + OpenClaw）时：
 
 ```bash
-# 安装所有 Skill 到全部已检测运行时
+# 1. 先检查认证状态；如未登录则调用 ops-auth 完成登录
+opscli auth token status
+
+# 2. 安装所有 Skill 到全部已检测运行时
 opscli skills install --runtime all
 
-# 或分开安装到指定运行时
+# 3. 或分开安装到指定运行时
 opscli skills install ops-auth --runtime claude,openclaw
 opscli skills install ops-dataset-query --runtime claude,openclaw
 opscli skills install ops-skills --runtime claude,openclaw
 
-# 验证各运行时均已安装
+# 4. 验证各运行时均已安装
 opscli skills list --pretty
 ```
 
@@ -370,12 +410,15 @@ opscli skills list --pretty
 当 Skill 文件损坏或需要回退到内置版本时：
 
 ```bash
-# 强制覆盖安装（重置为内置模板版本）
+# 1. 先检查认证状态；如未登录则调用 ops-auth 完成登录
+opscli auth token status
+
+# 2. 强制覆盖安装（重置为内置模板版本）
 opscli skills install ops-auth --force
 opscli skills install ops-dataset-query --force
 opscli skills install ops-skills --force
 
-# 如需同时重置远端数据，再执行升级
+# 3. 如需同时重置远端数据，再执行升级
 opscli skills upgrade ops-dataset-query --force
 ```
 
@@ -384,14 +427,17 @@ opscli skills upgrade ops-dataset-query --force
 在自动化脚本或 CI 环境中，指定明确路径跳过交互：
 
 ```bash
-# 指定运行时跳过自动检测
+# 1. 先检查认证状态；如未登录则调用 ops-auth 完成登录
+opscli auth token status
+
+# 2. 指定运行时跳过自动检测
 opscli skills install ops-auth --runtime claude --force
 
-# 或直接指定目标目录
+# 3. 或直接指定目标目录
 opscli skills install ops-auth --skills-dir ~/.claude/skills/ --force
 opscli skills install ops-dataset-query --skills-dir ~/.claude/skills/ --force
 
-# 输出 JSON 便于脚本解析
+# 4. 输出 JSON 便于脚本解析
 opscli skills list --skills-dir ~/.claude/skills/
 ```
 
@@ -440,7 +486,7 @@ opscli skills install ops-auth --force
 
 **解决**：
 ```bash
-# 1. 检查 auth 状态，确认已登录
+# 1. 先调用 ops-auth Skill，检查 auth 状态
 opscli auth token status
 
 # 2. 检查网络连通性
@@ -458,10 +504,12 @@ opscli skills upgrade ops-dataset-query
 
 **解决**：
 ```bash
-# 刷新 Token
+# 先调用 ops-auth Skill 处理认证
+
+# JWT Token 过期时优先刷新
 opscli auth token refresh --all
 
-# 或重新登录
+# 若刷新失败或仍异常，再重新登录
 opscli auth login
 
 # 再执行升级
@@ -492,3 +540,4 @@ opscli skills upgrade ops-dataset-query
 2. **升级不影响认证**：`ops-dataset-query` 升级的是字段元数据，不会清除已登录的凭证
 3. **多运行时独立管理**：每个运行时（claude/openclaw/codex/opencode）的 Skills 目录相互独立，安装和升级互不影响
 4. **全局 vs 项目级**：Skills 安装在全局路径（`~/`），对该用户下所有项目生效，无需在每个项目中单独安装
+5. **不得跳过登录检测**：即使当前任务只做本地 Skill 安装或列表，也必须先走 `ops-auth` 约定的认证检测流程
