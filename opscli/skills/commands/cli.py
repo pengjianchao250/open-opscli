@@ -367,9 +367,18 @@ def upgrade(
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """升级 Skill 到远端最新版本。"""
+    # 进度输出到 stderr，不干扰 stdout 的 JSON 结果
+    _progress = Console(stderr=True)
+
+    def on_step(msg: str) -> None:
+        """将升级各阶段进度打印到 stderr。"""
+        _progress.print(f"  [dim]{msg}[/dim]")
+
     manager = SkillsManager()
     try:
-        result = manager.upgrade(name=name, skills_dir=skills_dir, force=force)
+        _progress.print(f"[bold]正在升级 {name}...[/bold]")
+        result = manager.upgrade(name=name, skills_dir=skills_dir, force=force, on_step=on_step)
+        _progress.print("[bold green]升级完成[/bold green]\n")
         payload = {
             "success": True,
             "command": "skills upgrade",
@@ -377,6 +386,7 @@ def upgrade(
             "error": None,
         }
     except Exception as exc:
+        _progress.print(f"[bold red]升级失败[/bold red]\n")
         payload = {
             "success": False,
             "command": "skills upgrade",
