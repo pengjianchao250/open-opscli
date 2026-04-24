@@ -75,18 +75,27 @@ class SkillDetector:
             # 遍历子目录，按名称排序保证输出稳定
             for skill_dir in sorted(p for p in base_dir.iterdir() if p.is_dir()):
                 version_file = skill_dir / "data" / "VERSION.json"
-                if not version_file.exists():
-                    continue
-                try:
-                    payload = json.loads(version_file.read_text(encoding="utf-8"))
-                except Exception:
+                data_dir = skill_dir / "data"
+                if version_file.exists():
+                    # 正常情况：data/VERSION.json 存在，读取版本号
+                    try:
+                        payload = json.loads(version_file.read_text(encoding="utf-8"))
+                    except Exception:
+                        continue
+                    version = str(payload.get("version", "unknown"))
+                elif data_dir.exists():
+                    # 兜底情况：data/ 目录存在但缺少 VERSION.json（安装后从未升级过），
+                    # 视为未初始化安装，版本设为 v0.0.0，升级时会自动补全所有数据文件
+                    version = "v0.0.0"
+                else:
+                    # data/ 目录不存在，不是合法的 Skill 目录
                     continue
                 # 根据路径推断运行时类型
                 runtime = self._infer_runtime(skill_dir)
                 records.append(
                     SkillRecord(
                         name=skill_dir.name,
-                        version=str(payload.get("version", "unknown")),
+                        version=version,
                         runtime=runtime,
                         root=skill_dir,
                         version_file=version_file,

@@ -61,7 +61,7 @@ Token 管理内置双层并发保护，无需调用方额外处理并发：
 
 | 别名 | System Key | URL | 用途 |
 |------|-----------|-----|------|
-| `ops` | ops | https://ops.aukeys.com | 运营系统，数据查询、Skill 升级等 |
+| `ops` | ops | https://https://ops.api.qa.aukeyit.com | 运营系统，数据查询、Skill 升级等 |
 | `polaris` | polaris_sys | https://bi.aukeys.com | 刊登系统 |
 
 ---
@@ -165,7 +165,7 @@ result = client.check_token("ops")
 
 **输出示例**：
 ```
-请在浏览器打开： https://ops.aukeys.com/device
+请在浏览器打开： https://https://ops.api.qa.aukeyit.com/device
 输入验证码：   ABCD-1234
 等待授权中...（300 秒内完成）
 ✓ 授权成功！账号：user@aukeys.com
@@ -297,7 +297,7 @@ opscli auth token refresh --all
 **输出示例**：
 ```
 别名      System Key    URL                             来源
-ops       ops           https://ops.aukeys.com          builtin
+ops       ops           https://https://ops.api.qa.aukeyit.com          builtin
 polaris   polaris_sys   https://bi.aukeys.com           builtin
 my-ops    my_ops        https://ops-staging.aukeys.com  local
 ```
@@ -373,7 +373,7 @@ opscli auth doctor
 ```bash
 # 获取 Token 并传递给 curl
 TOKEN=$(opscli auth token get -s ops)
-curl -H "Authorization: Bearer $TOKEN" https://ops.aukeys.com/api/v1/data
+curl -H "Authorization: Bearer $TOKEN" https://https://ops.api.qa.aukeyit.com/api/v1/data
 
 # 先检查再使用（避免过期）
 opscli auth token check -s ops && TOKEN=$(opscli auth token get -s ops)

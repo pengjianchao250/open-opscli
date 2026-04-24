@@ -197,7 +197,7 @@ store = CredentialStore()
 ### 【铁律9】内置系统（ops/polaris）不可在代码中被删除
 
 `auth/config.py` 的 `get_builtin_systems()` 定义了两个内置系统，这是产品功能约定：
-- `ops`：运营系统（ops.aukeys.com）
+- `ops`：运营系统（https://ops.api.qa.aukeyit.com）
 - `polaris`：刊登系统（bi.aukeys.com）
 
 内置系统在 `system_registry.py` 中有保护逻辑（`remove()` 会拒绝删除 builtin 系统），不可绕过此保护。

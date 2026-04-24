@@ -17,7 +17,7 @@ class DeviceFlow:
     def __init__(self, ops_url: str, store):
         """
         Args:
-            ops_url: 运营系统后端地址（如 https://ops.aukeys.com）
+            ops_url: 运营系统后端地址（如 https://https://ops.api.qa.aukeyit.com）
             store: CredentialStore 实例，用于授权成功后持久化 session
         """
         self._url = ops_url.rstrip("/")

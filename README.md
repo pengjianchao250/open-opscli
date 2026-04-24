@@ -66,7 +66,7 @@ graph TB
     end
 
     subgraph 业务系统
-        OpsAPI["ops 运营系统<br/>ops.aukeys.com"]
+        OpsAPI["ops 运营系统<br/>https://ops.api.qa.aukeyit.com"]
         PolarisAPI["polaris 刊登系统<br/>bi.aukeys.com"]
     end
 
@@ -361,14 +361,14 @@ opscli auth token get -s polaris
 # Shell 脚本中获取 token 并调用 API
 TOKEN=$(opscli auth token get -s ops)
 curl -s -H "Authorization: Bearer $TOKEN" \
-    "https://ops.aukeys.com/api/v1/some-endpoint"
+    "https://https://ops.api.qa.aukeyit.com/api/v1/some-endpoint"
 
 # Python 脚本中调用
 python3 -c "
 import httpx
 from opscli import AuthClient
 token = AuthClient().get_token('ops')
-resp = httpx.get('https://ops.aukeys.com/api/v1/resource',
+resp = httpx.get('https://https://ops.api.qa.aukeyit.com/api/v1/resource',
                   headers={'Authorization': f'Bearer {token}'})
 print(resp.json())
 "
@@ -502,7 +502,7 @@ if not client.is_authenticated():
 # 获取统一认证参数并调用业务 API
 headers, cookies = client.build_request_auth("ops")
 resp = httpx.get(
-    "https://ops.aukeys.com/api/v1/operation-reminder/list",
+    "https://https://ops.api.qa.aukeyit.com/api/v1/operation-reminder/list",
     headers=headers,
     cookies=cookies,
 )
@@ -845,8 +845,8 @@ opscli query metadata --dataset sales_order_d
 
 ```ini
 [systems]
-ops_url = https://ops.aukeys.com/api
-ops_system_url = https://ops.aukeys.com
+ops_url = https://https://ops.api.qa.aukeyit.com/api
+ops_system_url = https://https://ops.api.qa.aukeyit.com
 ops_token_endpoint = /api/v1/auth/cli-token
 ```
 
