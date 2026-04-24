@@ -132,13 +132,15 @@ opscli query metadata --table-id 123 --pretty
 #### 参数格式
 
 **dimension**：`field_name|global_alias|verbose_name[:alias]`
-- `date_id` → 按 date_id 分组
-- `date_id:日期` → 按 date_id 分组，列名改为"日期"
+- `date_id` → 按 date_id 分组，默认优先使用字段的 `global_alias` 作为输出列名
+- `date_id:f_date_id` → 按 date_id 分组，列名改为 `f_date_id`
 
 **metric**：`field_name|global_alias|verbose_name:aggregation[:alias]`
 - `order_cost:sum` → 求和
 - `order_cost:sum:total_cost` → 求和，列名改为 total_cost
 - `order_id:count_distinct:uv` → 去重计数
+
+> `select.alias` 不支持中文；如果不显式传 alias，`opscli query build` 会优先使用字段 metadata 中的 `global_alias`，没有时再回退到 `field_name`。
 
 > 完整聚合函数列表见 `references/数据查询服务开发说明文档.md` 第八章。
 
@@ -157,6 +159,7 @@ opscli query metadata --table-id 123 --pretty
 - 明细查询：使用 `detail_expression`
 - 聚合 / 分组查询：使用 `summary_expression`
 - 如果公式字段继续写成 `field_name + aggregation`，容易出现二次聚合或语义错误
+- 显式传 alias 时，只允许英文、数字和下划线，且不能以数字开头；中文 alias 会被拒绝
 
 **常见易错对照**
 - 普通求和指标：`price:sum` 或手写 `{ "expr": "ds_xxx.price", "alias": "f_price", "aggregation": "SUM" }`

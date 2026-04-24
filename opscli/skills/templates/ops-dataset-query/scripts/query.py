@@ -116,8 +116,16 @@ def main() -> None:
     build = subparsers.add_parser("build")
     build.add_argument("--dataset", help="dataset_alias")
     build.add_argument("--table-id", type=int, help="table_id")
-    build.add_argument("--dimension", action="append", help="维度定义：field_name|global_alias|verbose_name[:alias]")
-    build.add_argument("--metric", action="append", help="指标定义：field_name|global_alias|verbose_name:aggregation[:alias]")
+    build.add_argument(
+        "--dimension",
+        action="append",
+        help="维度定义：field_name|global_alias|verbose_name[:alias]；alias 仅支持英文/数字/下划线，省略时默认优先使用 global_alias",
+    )
+    build.add_argument(
+        "--metric",
+        action="append",
+        help="指标定义：field_name|global_alias|verbose_name:aggregation[:alias]；alias 仅支持英文/数字/下划线，省略时默认优先使用 global_alias",
+    )
     build.add_argument("--where", action="append", help="筛选条件：field|operator|value_json，可重复")
     build.add_argument("--where-json", help="where JSON 字符串")
     build.add_argument("--where-file", help="where JSON 文件路径")

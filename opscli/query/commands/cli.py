@@ -87,8 +87,16 @@ def run(
 def build(
     dataset: str | None = typer.Option(None, "--dataset", help="dataset_alias"),
     table_id: int | None = typer.Option(None, "--table-id", help="table_id"),
-    dimension: list[str] | None = typer.Option(None, "--dimension", help="维度定义：field_name|global_alias|verbose_name[:alias]"),
-    metric: list[str] | None = typer.Option(None, "--metric", help="指标定义：field_name|global_alias|verbose_name:aggregation[:alias]"),
+    dimension: list[str] | None = typer.Option(
+        None,
+        "--dimension",
+        help="维度定义：field_name|global_alias|verbose_name[:alias]；alias 仅支持英文/数字/下划线，省略时默认优先使用 global_alias",
+    ),
+    metric: list[str] | None = typer.Option(
+        None,
+        "--metric",
+        help="指标定义：field_name|global_alias|verbose_name:aggregation[:alias]；alias 仅支持英文/数字/下划线，省略时默认优先使用 global_alias",
+    ),
     where: list[str] | None = typer.Option(None, "--where", help="筛选条件：field|operator|value_json，可重复"),
     where_json: str | None = typer.Option(None, "--where-json", help="where JSON 字符串"),
     where_file: str | None = typer.Option(None, "--where-file", help="where JSON 文件路径"),
