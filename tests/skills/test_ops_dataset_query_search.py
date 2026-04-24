@@ -47,6 +47,36 @@ def test_search_rows_prefers_field_name_match():
     assert result[0]["field_name"] == "order_cost"
 
 
+def test_search_rows_supports_global_alias_match():
+    core = _load_module("dataset_fields_core_alias_test", SCRIPT_DIR / "core.py")
+
+    rows = [
+        {
+            "dataset_alias": "sales_order_d",
+            "dataset_name": "销售订单",
+            "field_name": "order_cost",
+            "verbose_name": "订单成本",
+            "global_alias": "ga_order_cost",
+            "keywords": "成本 order cost",
+            "description": "成本字段",
+        },
+        {
+            "dataset_alias": "sales_order_d",
+            "dataset_name": "销售订单",
+            "field_name": "supplier_price",
+            "verbose_name": "供应商价格",
+            "global_alias": "ga_supplier_price",
+            "keywords": "订单成本参考值",
+            "description": "价格字段",
+        },
+    ]
+
+    result = core.search_rows(rows, "ga_order_cost", limit=5)
+
+    assert len(result) == 2
+    assert result[0]["global_alias"] == "ga_order_cost"
+
+
 def test_filter_rows_by_dataset():
     core = _load_module("dataset_fields_core_filter_test", SCRIPT_DIR / "core.py")
 
@@ -70,9 +100,9 @@ def test_search_cli_supports_dataset_and_limit(tmp_path, monkeypatch, capsys):
     (data_dir / "dataset_fields.csv").write_text(
         "\n".join(
             [
-                "dataset_alias,dataset_name,field_name,verbose_name,keywords,description",
-                "sales_order_d,销售订单,order_cost,订单成本,cost 订单成本,成本字段",
-                "inventory_d,库存,stock_qty,库存数量,stock qty,库存字段",
+                "dataset_alias,dataset_name,field_name,verbose_name,global_alias,keywords,description",
+                "sales_order_d,销售订单,order_cost,订单成本,ga_order_cost,cost 订单成本,成本字段",
+                "inventory_d,库存,stock_qty,库存数量,ga_stock_qty,stock qty,库存字段",
             ]
         ),
         encoding="utf-8",

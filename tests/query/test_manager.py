@@ -139,6 +139,95 @@ def test_build_constructs_payload_from_dimension_metric_and_where(tmp_path, monk
     }
 
 
+def test_build_defaults_alias_to_global_alias_and_supports_verbose_name(tmp_path, monkeypatch):
+    manager = QueryManager()
+    skill_root = tmp_path / ".claude" / "skills" / "ops-dataset-query"
+    data_dir = skill_root / "data"
+    data_dir.mkdir(parents=True)
+    payload = {
+        "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
+        "fields": [
+            {
+                "table_id": 1103,
+                "field_name": "country_name",
+                "verbose_name": "国家",
+                "field_type": "dimension",
+                "global_alias": "ga_country_name",
+            },
+            {
+                "table_id": 1103,
+                "field_name": "price",
+                "verbose_name": "销售额",
+                "field_type": "metric",
+                "global_alias": "ga_price",
+            },
+        ],
+    }
+    (data_dir / "query_metadata.json").write_text(json.dumps(payload), encoding="utf-8")
+    record = SkillRecord(
+        name="ops-dataset-query",
+        version="v0.1.0",
+        runtime="claude",
+        root=skill_root,
+        version_file=data_dir / "VERSION.json",
+    )
+    monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+
+    result = manager.build(
+        dataset_alias="ds_xxx",
+        dimensions=["国家"],
+        metrics=["ga_price:sum"],
+    )
+
+    assert result["payload"]["query"]["select"] == [
+        {"expr": "ds_xxx.country_name", "alias": "ga_country_name"},
+        {"expr": "ds_xxx.price", "alias": "ga_price", "aggregation": "SUM"},
+    ]
+    assert result["payload"]["query"]["groupBy"] == ["ga_country_name"]
+
+
+def test_build_uses_summary_expression_for_formula_metric(tmp_path, monkeypatch):
+    manager = QueryManager()
+    skill_root = tmp_path / ".claude" / "skills" / "ops-dataset-query"
+    data_dir = skill_root / "data"
+    data_dir.mkdir(parents=True)
+    payload = {
+        "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
+        "fields": [
+            {
+                "table_id": 1103,
+                "field_name": "days_on_hand",
+                "field_type": "metric",
+                "global_alias": "ga_days_on_hand",
+                "summary_expression": "ROUND(30 / (SUM(total_sell_qty) / SUM(sell_avg_qty)))",
+                "detail_expression": "ROUND(30 / (total_sell_qty / sell_avg_qty))",
+                "has_formula_config": 1,
+            },
+        ],
+    }
+    (data_dir / "query_metadata.json").write_text(json.dumps(payload), encoding="utf-8")
+    record = SkillRecord(
+        name="ops-dataset-query",
+        version="v0.1.0",
+        runtime="claude",
+        root=skill_root,
+        version_file=data_dir / "VERSION.json",
+    )
+    monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+
+    result = manager.build(
+        dataset_alias="ds_xxx",
+        metrics=["ga_days_on_hand:sum"],
+    )
+
+    assert result["payload"]["query"]["select"] == [
+        {
+            "expr": "ROUND(30 / (SUM(total_sell_qty) / SUM(sell_avg_qty)))",
+            "alias": "ga_days_on_hand",
+        }
+    ]
+
+
 def test_build_supports_having_and_dry_run(tmp_path, monkeypatch):
     manager = QueryManager()
     skill_root = tmp_path / ".claude" / "skills" / "ops-dataset-query"
@@ -323,6 +412,55 @@ def test_build_raises_when_field_missing(tmp_path, monkeypatch):
 
     with pytest.raises(InvalidPayloadError):
         manager.build(dataset_alias="ds_xxx", dimensions=["missing_field"])
+
+
+def test_build_rejects_non_ascii_alias(tmp_path, monkeypatch):
+    manager = QueryManager()
+    skill_root = tmp_path / ".claude" / "skills" / "ops-dataset-query"
+    data_dir = skill_root / "data"
+    data_dir.mkdir(parents=True)
+    payload = {
+        "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
+        "fields": [{"table_id": 1103, "field_name": "date_id", "field_type": "dimension", "global_alias": "ga_date_id"}],
+    }
+    (data_dir / "query_metadata.json").write_text(json.dumps(payload), encoding="utf-8")
+    record = SkillRecord(
+        name="ops-dataset-query",
+        version="v0.1.0",
+        runtime="claude",
+        root=skill_root,
+        version_file=data_dir / "VERSION.json",
+    )
+    monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+
+    with pytest.raises(InvalidPayloadError):
+        manager.build(dataset_alias="ds_xxx", dimensions=["date_id:日期"])
+
+
+def test_build_rejects_ambiguous_verbose_name(tmp_path, monkeypatch):
+    manager = QueryManager()
+    skill_root = tmp_path / ".claude" / "skills" / "ops-dataset-query"
+    data_dir = skill_root / "data"
+    data_dir.mkdir(parents=True)
+    payload = {
+        "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
+        "fields": [
+            {"table_id": 1103, "field_name": "country_name", "verbose_name": "名称", "field_type": "dimension", "global_alias": "ga_country_name"},
+            {"table_id": 1103, "field_name": "dept_name", "verbose_name": "名称", "field_type": "dimension", "global_alias": "ga_dept_name"},
+        ],
+    }
+    (data_dir / "query_metadata.json").write_text(json.dumps(payload), encoding="utf-8")
+    record = SkillRecord(
+        name="ops-dataset-query",
+        version="v0.1.0",
+        runtime="claude",
+        root=skill_root,
+        version_file=data_dir / "VERSION.json",
+    )
+    monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+
+    with pytest.raises(InvalidPayloadError):
+        manager.build(dataset_alias="ds_xxx", dimensions=["名称"])
 
 
 def test_build_and_run_uses_built_payload(tmp_path, monkeypatch):

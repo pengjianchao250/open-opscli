@@ -39,7 +39,7 @@ version: v0.0.0
 | ② 次优 | 按时间粒度分组的趋势环比/同比 | `MOY` 高级计算（服务端窗口函数，一次 SQL） |
 | ③ 兜底 | ①② 均因工具限制无法使用时 | 多次 `opscli query run` + 客户端合并 |
 
-> ⚠️ **已知限制**：`dataComparison` 已在 opscli `query build` 中通过 `--data-comparison` 参数支持，但 Python 查询服务的 Pydantic 模型尚未接受此字段（报 `Extra inputs are not permitted`）。待后端修复后，`dataComparison` 将恢复为首选。`comparison`（MOY/ACC/PPT）写在 `select` 字段内部可正常透传。
+> `comparison`（MOY/ACC/PPT）写在 `select` 字段内部可正常透传。
 
 ---
 
@@ -48,7 +48,7 @@ version: v0.0.0
 | 文件 | 内容 | 说明 |
 |------|------|------|
 | `data/VERSION.json` | 版本号 | `{"name": "ops-dataset-query", "version": "v1.x.x"}` |
-| `data/dataset_fields.csv` | 字段明细 | dataset_alias、field_name、verbose_name、field_type、is_dttm、description、keywords 等 |
+| `data/dataset_fields.csv` | 字段明细 | dataset_alias、field_name、verbose_name、global_alias、field_type、formula_config、detail_expression、summary_expression 等 |
 | `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_type、dataset_category、description、keywords 等 |
 | `data/query_metadata.json` | 查询元数据 | 字段类型映射、可用聚合方式等 |
 
@@ -85,8 +85,8 @@ opscli query metadata --table-id 123 --pretty
 选项：
   --dataset TEXT      dataset_alias（与 --table-id 二选一）
   --table-id INTEGER  table_id
-  --dimension TEXT    维度：field_name[:alias]，可重复
-  --metric TEXT       指标：field_name:aggregation[:alias]，可重复
+  --dimension TEXT    维度：field_name|global_alias|verbose_name[:alias]，可重复
+  --metric TEXT       指标：field_name|global_alias|verbose_name:aggregation[:alias]，可重复
   --where TEXT        筛选：field|operator|value_json，可重复
   --where-json TEXT   where 条件 JSON 字符串（与 --where 互斥）
   --where-file TEXT   where 条件 JSON 文件路径（与 --where 互斥）
@@ -104,11 +104,11 @@ opscli query metadata --table-id 123 --pretty
 
 #### 参数格式
 
-**dimension**：`field_name[:alias]`
+**dimension**：`field_name|global_alias|verbose_name[:alias]`
 - `date_id` → 按 date_id 分组
 - `date_id:日期` → 按 date_id 分组，列名改为"日期"
 
-**metric**：`field_name:aggregation[:alias]`
+**metric**：`field_name|global_alias|verbose_name:aggregation[:alias]`
 - `order_cost:sum` → 求和
 - `order_cost:sum:total_cost` → 求和，列名改为 total_cost
 - `order_id:count_distinct:uv` → 去重计数
@@ -315,7 +315,7 @@ opscli skills upgrade ops-dataset-query --force
 ├── YES → 需要按时间粒度（日/月）分组展示趋势？
 │         ├── YES → 使用 MOY 高级计算（comparison 写在 select 字段内）
 │         └── NO  → 需要当期 vs 对比期汇总对比？
-│                   ├── YES → 优先 dataComparison（当前 opscli v0.0.4 有 bug，降级用 MOY）
+│                   ├── YES → 使用 dataComparison（服务端一次 SQL，推荐首选）
 │                   └── NO  → 普通聚合 opscli query build
 └── NO  → 普通聚合 opscli query build
 ```
@@ -367,7 +367,6 @@ opscli skills upgrade ops-dataset-query --force
 }
 ```
 
-> ⚠️ **已知限制**：opscli 已支持通过 `--data-comparison` 参数构造此结构，但 Python 查询服务的 Pydantic 模型尚未接受 `dataComparison` 字段（报 `Extra inputs are not permitted`）。待后端服务修复后此方案方可使用。临时降级使用 MOY（见下节）。
 
 **适用场景**：当期（如本月 1-22 日） vs 对比期（如上月同期 1-22 日）的汇总数据对比，**同期天数对等**，适合月度/季度环比汇总看板。
 
@@ -559,6 +558,38 @@ for dept, c in cur.items():
 
 ---
 
+## AI Agent 使用规范
+
+### 【禁止】用管道截断 opscli 输出后再解析 JSON
+
+> ⚠️ **典型错误**：将 `opscli query ... --run --pretty` 通过 `| head -N` 截断后，尝试解析输出为 JSON，必然报 `JSONDecodeError`。
+
+**错误原因**：`| head -N` 在读取 N 行后关闭管道，opscli 进程输出被强制截断，JSON 结构不完整。Claude Code 的 persisted-output 临时文件同样只是截断预览，**不可作为 JSON 解析源**。
+
+**禁止写法**：
+```bash
+# ❌ 错误：head 截断了 JSON，无法解析
+opscli query build ... --run --pretty 2>&1 | head -80
+
+# ❌ 错误：读取 persisted-output 临时文件（内容截断，JSON 不完整）
+with open('/path/to/tool-results/xxxxx.txt') as f:
+    data = json.load(f)
+```
+
+**正确写法**：始终将完整输出重定向到临时文件，再读取解析：
+```bash
+# ✅ 正确：完整输出到文件
+opscli query build ... --run --pretty > /tmp/result.json
+
+# ✅ 或使用 --output 参数
+opscli query build ... --output /tmp/result.json --run
+
+# ✅ Python 解析时从临时文件读取
+python3 -c "import json; print(json.load(open('/tmp/result.json'))['data']['result']['meta'])"
+```
+
+---
+
 ## 典型工作流
 
 ### 探索数据集 → 构造 → 执行
@@ -637,10 +668,10 @@ opscli query run --payload /tmp/moy_query.json --pretty
 #    当期实际值 = price_prev + price_diff
 ```
 
-### 环比查询（dataComparison，待 opscli 修复后使用）
+### 环比查询（dataComparison，推荐首选）
 
 ```bash
-# dataComparison 正确 payload 结构（当前 opscli v0.0.4 暂不支持，留存备用）
+# dataComparison payload 结构（服务端一次 SQL，推荐优先使用）
 cat > /tmp/dc_query.json << 'EOF'
 {
   "tableId": 1104,

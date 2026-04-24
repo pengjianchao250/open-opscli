@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,8 +16,11 @@ from opscli.skills.discovery.detector import SkillDetector
 @dataclass
 class _FieldSpec:
     field_name: str
-    alias: str
+    alias: str | None
     aggregation: str | None = None
+
+
+SELECT_ALIAS_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class QueryManager:
@@ -107,34 +111,31 @@ class QueryManager:
             cwd=cwd,
         )
         dataset = metadata.dataset
-        field_index = {
-            str(item.get("field_name")): item
-            for item in metadata.fields
-            if item.get("field_name")
-        }
 
         select_items: list[dict] = []
         group_by: list[str] = []
 
         for spec in dimensions or []:
             item = self._parse_dimension_spec(spec)
-            self._ensure_field_exists(field_index, item.field_name)
+            resolved = self._resolve_field(metadata.fields, item.field_name, field_type="dimension")
+            output_alias = self._resolve_output_alias(item.alias, resolved)
             select_items.append(
                 {
-                    "expr": f"{dataset['dataset_alias']}.{item.field_name}",
-                    "alias": item.alias,
+                    "expr": f"{dataset['dataset_alias']}.{resolved['field_name']}",
+                    "alias": output_alias,
                 }
             )
-            group_by.append(item.alias)
+            group_by.append(output_alias)
 
         for spec in metrics or []:
             item = self._parse_metric_spec(spec)
-            self._ensure_field_exists(field_index, item.field_name)
+            resolved = self._resolve_field(metadata.fields, item.field_name, field_type="metric")
+            output_alias = self._resolve_output_alias(item.alias, resolved)
             select_row = {
-                "expr": f"{dataset['dataset_alias']}.{item.field_name}",
-                "alias": item.alias,
+                "expr": self._resolve_metric_expr(str(dataset["dataset_alias"]), resolved),
+                "alias": output_alias,
             }
-            if item.aggregation:
+            if item.aggregation and select_row["expr"] == f"{dataset['dataset_alias']}.{resolved['field_name']}":
                 select_row["aggregation"] = item.aggregation
             select_items.append(select_row)
 
@@ -254,7 +255,7 @@ class QueryManager:
         """解析维度定义：field_name[:alias]。"""
         parts = [item.strip() for item in raw.split(":")]
         if len(parts) == 1 and parts[0]:
-            return _FieldSpec(field_name=parts[0], alias=parts[0])
+            return _FieldSpec(field_name=parts[0], alias=None)
         if len(parts) == 2 and parts[0] and parts[1]:
             return _FieldSpec(field_name=parts[0], alias=parts[1])
         raise InvalidPayloadError(f"无效的 --dimension 定义: {raw}")
@@ -263,7 +264,7 @@ class QueryManager:
         """解析指标定义：field_name:aggregation[:alias]。"""
         parts = [item.strip() for item in raw.split(":")]
         if len(parts) == 2 and parts[0] and parts[1]:
-            return _FieldSpec(field_name=parts[0], aggregation=parts[1].upper(), alias=parts[0])
+            return _FieldSpec(field_name=parts[0], aggregation=parts[1].upper(), alias=None)
         if len(parts) == 3 and parts[0] and parts[1] and parts[2]:
             return _FieldSpec(field_name=parts[0], aggregation=parts[1].upper(), alias=parts[2])
         raise InvalidPayloadError(f"无效的 --metric 定义: {raw}")
@@ -367,7 +368,64 @@ class QueryManager:
             )
         return result
 
-    def _ensure_field_exists(self, field_index: dict[str, dict], field_name: str) -> None:
-        """校验字段存在于 metadata 中。"""
-        if field_name not in field_index:
-            raise InvalidPayloadError(f"字段不存在于当前数据集 metadata 中: {field_name}")
+    def _resolve_field(self, fields: list[dict], identifier: str, *, field_type: str) -> dict:
+        """按 global_alias > field_name > verbose_name 解析字段。"""
+        normalized = identifier.strip().lower()
+        if not normalized:
+            raise InvalidPayloadError("字段标识不能为空")
+
+        global_alias_matches: list[dict] = []
+        field_name_matches: list[dict] = []
+        verbose_name_matches: list[dict] = []
+
+        for item in fields:
+            current_type = str(item.get("field_type") or "").strip().lower()
+            if current_type and current_type != field_type:
+                continue
+
+            global_alias = str(item.get("global_alias") or "").strip().lower()
+            field_name = str(item.get("field_name") or "").strip().lower()
+            verbose_name = str(item.get("verbose_name") or "").strip().lower()
+
+            if global_alias and global_alias == normalized:
+                global_alias_matches.append(item)
+            if field_name and field_name == normalized:
+                field_name_matches.append(item)
+            if verbose_name and verbose_name == normalized:
+                verbose_name_matches.append(item)
+
+        for key, matches in (
+            ("global_alias", global_alias_matches),
+            ("field_name", field_name_matches),
+            ("verbose_name", verbose_name_matches),
+        ):
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                raise InvalidPayloadError(
+                    f"字段标识存在歧义（{key} 命中多条）: {identifier}，请改用 global_alias 或 field_name"
+                )
+
+        raise InvalidPayloadError(f"字段不存在于当前数据集 metadata 中: {identifier}")
+
+    def _resolve_output_alias(self, alias: str | None, field: dict) -> str:
+        """校验显式 alias，或默认回退到 global_alias。"""
+        if alias:
+            if not SELECT_ALIAS_PATTERN.match(alias):
+                raise InvalidPayloadError(
+                    "select alias 仅支持英文、数字和下划线，且不能以数字开头；"
+                    "建议省略 alias 自动使用 global_alias"
+                )
+            return alias
+
+        fallback = str(field.get("global_alias") or "").strip() or str(field.get("field_name") or "").strip()
+        if not fallback:
+            raise InvalidPayloadError("字段缺少可用 alias，请检查 query metadata")
+        return fallback
+
+    def _resolve_metric_expr(self, dataset_alias: str, field: dict) -> str:
+        """指标字段优先使用汇总公式，否则回退到原始字段。"""
+        summary_expression = str(field.get("summary_expression") or "").strip()
+        if summary_expression:
+            return summary_expression
+        return f"{dataset_alias}.{field['field_name']}"

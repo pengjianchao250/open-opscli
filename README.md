@@ -3,6 +3,8 @@
 Aukeys 运营 CLI 工具集
 
 > 当前模块：auth（认证授权）、query（数据查询）、skills（Skill 生命周期管理）、amazon（Amazon 数据采集）；后续可扩展更多模块（deploy、notify 等）
+>
+> 说明：本文档中涉及 `aukeys-opscli[amazon]`、`opscli-core`、独立模块包、动态插件化等内容，部分属于预留设计或未来演进方向。**截至当前仓库版本，请以单包 `aukeys-opscli` + 仓库内静态注册模块为准，不要将这些内容视为已落地的发布承诺。**
 
 ## 功能概述
 
@@ -89,9 +91,9 @@ graph TB
 # 从 PyPI 安装（正式环境）
 pip install aukeys-opscli
 
-# 如需 Amazon 抓取能力，补装 Playwright 依赖
-pip install "aukeys-opscli[amazon]"
-playwright install chromium
+# 以下 extra 安装写法来自预留拆分设计，当前不作为正式发布承诺
+# pip install "aukeys-opscli[amazon]"
+# playwright install chromium
 
 # 从 TestPyPI 安装（测试环境）
 # ⚠️ 必须加 --extra-index-url，否则依赖解析会失败回退到旧版本
@@ -105,12 +107,14 @@ git clone <repo-url> opscli
 cd opscli
 pip install -e .
 
-# 如需 Amazon 抓取能力
-pip install -e ".[amazon]"
-playwright install chromium
+# 以下 extra 安装写法来自预留拆分设计，当前不作为正式发布承诺
+# pip install -e ".[amazon]"
+# playwright install chromium
 ```
 
 > 发行包名为 `aukeys-opscli`，安装后仍使用 `opscli` 作为命令入口。
+>
+> 当前现状说明：仓库代码仍按单包方式维护与发布，文档中若出现 extras、拆包或插件化表述，请优先按“设计预留”理解。
 
 ---
 
@@ -850,11 +854,12 @@ ops_token_endpoint = /api/v1/auth/cli-token
 
 ## Amazon 使用
 
-`amazon` 模块依赖 Playwright 浏览器环境。首次使用前请确保已经执行：
+`amazon` 模块依赖 Playwright 浏览器环境。下面这组 `pip install "opscli[amazon]"` 文案来自早期预留设计，**当前不应作为正式安装说明**；如果后续要恢复为正式能力，请以实际发布说明为准。
 
 ```bash
-pip install "opscli[amazon]"
-playwright install chromium
+# 预留设计示例，当前不作为正式发布承诺
+# pip install "opscli[amazon]"
+# playwright install chromium
 ```
 
 ### `opscli amazon scrape`

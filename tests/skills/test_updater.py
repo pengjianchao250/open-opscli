@@ -46,7 +46,7 @@ def test_upgrade_ops_dataset_query_writes_files(tmp_path: Path, monkeypatch):
 
     def fake_get(endpoint: str):
         if endpoint == updater.FIELDS_ENDPOINT:
-            return DummyResponse("field_header\nfield_value\n")
+            return DummyResponse("field_header,global_alias\nfield_value,ga_field_value\n")
         if endpoint == updater.DATASETS_ENDPOINT:
             return DummyResponse("dataset_header\ndataset_value\n")
         if endpoint == updater.QUERY_METADATA_ENDPOINT:
@@ -60,7 +60,7 @@ def test_upgrade_ops_dataset_query_writes_files(tmp_path: Path, monkeypatch):
     assert result.updated is True
     assert result.to_version == "v1.0.0"
     assert '"version": "v1.0.0"' in (data_dir / "VERSION.json").read_text(encoding="utf-8")
-    assert "field_value" in (data_dir / "dataset_fields.csv").read_text(encoding="utf-8")
+    assert "ga_field_value" in (data_dir / "dataset_fields.csv").read_text(encoding="utf-8")
     assert "dataset_value" in (data_dir / "datasets.csv").read_text(encoding="utf-8")
     assert '"table_id": 1' in (data_dir / "query_metadata.json").read_text(encoding="utf-8")
 

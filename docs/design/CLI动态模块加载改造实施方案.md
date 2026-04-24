@@ -4,6 +4,8 @@
 >
 > 文档状态：实施方案
 > 创建时间：2026-04-23
+>
+> 重要说明：本文是动态模块加载的**预留实施方案**。截至当前仓库版本，`entry_points("opscli.modules")` 动态注册、外部模块加载器等能力**尚未实现**；当前 CLI 仍以 [`opscli/cli.py`](/Users/mask/python3/opscli/opscli/cli.py:1) 中的静态 `add_typer(...)` 注册为准。
 
 ---
 
@@ -460,4 +462,3 @@ tests/test_module_cli.py
 3. 先接入外部模块加载器，但不急着加 `module` 管理命令
 
 这样风险最小，而且最容易验证方向是否正确。
-

@@ -96,6 +96,7 @@ def _score_row(row: dict, keyword: str, tokens: list[str]) -> int:
     """为单行结果打分。"""
     field_name = str(row.get("field_name", "")).lower()
     verbose_name = str(row.get("verbose_name", "")).lower()
+    global_alias = str(row.get("global_alias", "")).lower()
     keywords = str(row.get("keywords", "")).lower()
     description = str(row.get("description", "")).lower()
     dataset_alias = str(row.get("dataset_alias", "")).lower()
@@ -107,6 +108,8 @@ def _score_row(row: dict, keyword: str, tokens: list[str]) -> int:
     # 精确/短字段优先
     if keyword == field_name:
         score += 120
+    if keyword == global_alias:
+        score += 115
     if keyword == verbose_name:
         score += 100
     if keyword == dataset_alias:
@@ -115,6 +118,8 @@ def _score_row(row: dict, keyword: str, tokens: list[str]) -> int:
     # 连续子串匹配
     if keyword in field_name:
         score += 60
+    if keyword in global_alias:
+        score += 55
     if keyword in verbose_name:
         score += 45
     if keyword in keywords:
@@ -126,6 +131,7 @@ def _score_row(row: dict, keyword: str, tokens: list[str]) -> int:
 
     # token 逐项匹配
     score += _token_match_score(field_name, tokens, 16)
+    score += _token_match_score(global_alias, tokens, 14)
     score += _token_match_score(verbose_name, tokens, 12)
     score += _token_match_score(keywords, tokens, 9)
     score += _token_match_score(dataset_name, tokens, 6)
