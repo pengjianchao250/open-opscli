@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
+from opscli.config import CONFIG_DIR
 from opscli.skills.discovery.detector import SkillDetector
 from opscli.skills.domain.exceptions import error_to_dict
 from opscli.skills.domain.models import (
@@ -26,10 +28,12 @@ from opscli.skills.sync.updater import SkillsUpdater
 class SkillsManager:
     """Skill 管理器，协调检测器和更新器完成 Skill 生命周期管理。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, registry_path: Path | None = None) -> None:
         self.detector = SkillDetector()             # 负责 Skill 发现
         self.updater = SkillsUpdater()              # 负责远端数据拉取和升级
         self.templates_dir = Path(__file__).parent.parent / "templates"  # 内置 Skill 模板目录
+        # 注册表路径：默认使用全局 CONFIG_DIR，测试时可注入临时路径实现隔离
+        self._custom_registry_path = registry_path
 
     def list_templates(self) -> list[dict]:
         """扫描内置模板目录，返回可安装的 Skill 列表。
@@ -143,6 +147,8 @@ class SkillsManager:
                 replaced = True
 
             shutil.copytree(template_dir, target_dir)
+            # 记录本次安装到注册表，供 upgrade 无 --skills-dir 时自动定位
+            self._record_install(skill_name, target_dir, target_runtime)
             installs.append(
                 SkillInstallResult(
                     name=skill_name,
@@ -220,6 +226,11 @@ class SkillsManager:
         """
         records = self.list_skills(skills_dir=skills_dir, cwd=cwd)
         targets = [item for item in records if item.name == name]
+
+        # 若未指定 skills_dir，从注册表补充可能安装到自定义目录的记录
+        if not skills_dir:
+            targets = self._merge_registry_targets(name, targets)
+
         if not targets:
             raise ValueError(f"未找到已安装 Skill: {name}")
         if name != "ops-dataset-query":
@@ -245,6 +256,106 @@ class SkillsManager:
         version_file = target_dir / "data" / "VERSION.json"
         payload = json.loads(version_file.read_text(encoding="utf-8"))
         return str(payload.get("version", "unknown"))
+
+    @property
+    def _registry_path(self) -> Path:
+        """安装注册表文件路径，默认为 ~/.config/opscli/installed_skills.json。
+
+        构造时传入 registry_path 可覆盖，用于测试隔离。
+        """
+        return self._custom_registry_path if self._custom_registry_path is not None else CONFIG_DIR / "installed_skills.json"
+
+    def _read_registry(self) -> dict:
+        """读取安装注册表，文件不存在或解析失败时返回空字典。"""
+        if not self._registry_path.exists():
+            return {}
+        try:
+            return json.loads(self._registry_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _write_registry(self, data: dict) -> None:
+        """将注册表数据写入文件，确保父目录存在。"""
+        self._registry_path.parent.mkdir(parents=True, exist_ok=True)
+        self._registry_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _record_install(self, skill_name: str, target_dir: Path, runtime: str) -> None:
+        """在注册表中写入一条安装记录。
+
+        同一 skill 可安装到多个目录，每个目录保留独立记录。
+        若同路径已有记录则更新 installed_at，避免重复追加。
+        写入失败时静默忽略，不影响 install 主流程。
+        """
+        try:
+            registry = self._read_registry()
+            entries: list[dict] = registry.setdefault(skill_name, [])
+            target_str = str(target_dir)
+            now = datetime.now(timezone.utc).isoformat()
+
+            # 查找同路径的已有记录并更新，否则追加新条目
+            for entry in entries:
+                if entry.get("target_dir") == target_str:
+                    entry["installed_at"] = now
+                    entry["runtime"] = runtime
+                    break
+            else:
+                entries.append({"target_dir": target_str, "runtime": runtime, "installed_at": now})
+
+            self._write_registry(registry)
+        except Exception:
+            # 注册表写入失败不应阻断安装流程
+            pass
+
+    def _merge_registry_targets(self, skill_name: str, existing: list[SkillRecord]) -> list[SkillRecord]:
+        """将注册表中的安装路径合并到已发现记录列表（去重）。
+
+        用于 upgrade 时补充通过 --skills-dir 安装到自定义目录的 Skill，
+        这些目录不在 SkillDetector 的扫描范围内。
+
+        Args:
+            skill_name: Skill 名称
+            existing: 文件系统扫描已发现的记录列表
+        Returns:
+            合并后的记录列表，新增条目附加在末尾
+        """
+        registry = self._read_registry()
+        entries = registry.get(skill_name, [])
+        if not entries:
+            return existing
+
+        # 已发现的路径集合，用于去重
+        existing_paths = {str(r.root) for r in existing}
+        merged = list(existing)
+
+        for entry in entries:
+            target_dir_str = entry.get("target_dir", "")
+            if not target_dir_str or target_dir_str in existing_paths:
+                continue
+            target_dir = Path(target_dir_str)
+            version_file = target_dir / "data" / "VERSION.json"
+            # 验证目录和 VERSION.json 仍然存在（防止目录被手动删除）
+            if not target_dir.exists() or not version_file.exists():
+                continue
+            try:
+                payload = json.loads(version_file.read_text(encoding="utf-8"))
+                version = str(payload.get("version", "v0.0.0"))
+            except Exception:
+                continue
+            merged.append(
+                SkillRecord(
+                    name=skill_name,
+                    version=version,
+                    runtime=entry.get("runtime", "claude"),
+                    root=target_dir,
+                    version_file=version_file,
+                )
+            )
+            existing_paths.add(target_dir_str)
+
+        return merged
 
     def _summarize_installed_skills(self, records: list[dict]) -> list[dict]:
         """按 skill 名称聚合安装记录，生成稳定的对外 JSON 结构。"""

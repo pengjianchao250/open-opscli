@@ -65,6 +65,56 @@ def test_upgrade_ops_dataset_query_writes_files(tmp_path: Path, monkeypatch):
     assert '"table_id": 1' in (data_dir / "query_metadata.json").read_text(encoding="utf-8")
 
 
+def test_upgrade_same_version_also_updates(tmp_path: Path, monkeypatch):
+    """同版本号也执行覆盖更新：数据集权限是动态的，不应受版本号限制。"""
+    skill_root = tmp_path / "ops-dataset-query"
+    data_dir = skill_root / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text('{"name":"ops-dataset-query","version":"v1.0.0"}', encoding="utf-8")
+    (data_dir / "dataset_fields.csv").write_text("old\n", encoding="utf-8")
+    (data_dir / "datasets.csv").write_text("old\n", encoding="utf-8")
+    (data_dir / "query_metadata.json").write_text('{"datasets":[],"fields":[]}', encoding="utf-8")
+
+    record = SkillRecord(
+        name="ops-dataset-query",
+        version="v1.0.0",
+        runtime="claude",
+        root=skill_root,
+        version_file=data_dir / "VERSION.json",
+    )
+    updater = SkillsUpdater()
+
+    # 远端版本号相同
+    monkeypatch.setattr(updater, "fetch_manifest", lambda skill_name: {"version": "v1.0.0"})
+
+    class DummyResponse:
+        def __init__(self, text: str = "", data: dict | None = None):
+            self.text = text
+            self._data = data or {}
+
+        def json(self):
+            return self._data
+
+    def fake_get(endpoint: str):
+        if endpoint == updater.FIELDS_ENDPOINT:
+            return DummyResponse("new_field,new_alias\n")
+        if endpoint == updater.DATASETS_ENDPOINT:
+            return DummyResponse("new_dataset\n")
+        if endpoint == updater.QUERY_METADATA_ENDPOINT:
+            return DummyResponse(data={"data": {"datasets": [{"table_id": 999}], "fields": [{"field_name": "new_field"}]}})
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(updater, "_get", fake_get)
+
+    result = updater.upgrade_ops_dataset_query(record)
+
+    assert result.updated is True
+    assert result.from_version == "v1.0.0"
+    assert result.to_version == "v1.0.0"
+    assert "new_field" in (data_dir / "dataset_fields.csv").read_text(encoding="utf-8")
+    assert '"table_id": 999' in (data_dir / "query_metadata.json").read_text(encoding="utf-8")
+
+
 def test_get_wraps_404_as_human_error(monkeypatch):
     updater = SkillsUpdater()
 

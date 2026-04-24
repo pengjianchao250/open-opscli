@@ -50,7 +50,13 @@ class QueryManager:
 
         matched = None
         if dataset_alias:
-            matched = next((item for item in datasets if item.get("dataset_alias") == dataset_alias), None)
+            # 优先匹配 dataset_alias（全局唯一标识），其次匹配 dataset_name（业务名）
+            matched = next(
+                (item for item in datasets
+                 if item.get("dataset_alias") == dataset_alias
+                 or item.get("dataset_name") == dataset_alias),
+                None,
+            )
         elif table_id is not None:
             matched = next((item for item in datasets if int(item.get("table_id", -1)) == int(table_id)), None)
 
@@ -140,12 +146,20 @@ class QueryManager:
                 select_row["aggregation"] = item.aggregation
             select_items.append(select_row)
 
+        # 构建 select → alias 映射，用于 order-by 表达式解析
+        alias_map: dict[str, str] = {}
+        for item in select_items:
+            alias_map[item["alias"]] = item["alias"]
+            # 从 expr 中提取 field_name（如 ds_xxx.price → price）
+            if "." in item["expr"]:
+                alias_map[item["expr"].rsplit(".", 1)[-1]] = item["alias"]
+
         payload = {
             "tableId": int(dataset["table_id"]),
             "query": {
                 "select": select_items,
                 "groupBy": group_by,
-                "orderBy": self._build_order_by(order_by or []),
+                "orderBy": self._build_order_by(order_by or [], alias_map=alias_map),
                 "limit": limit,
                 "offset": offset,
             },
@@ -270,21 +284,26 @@ class QueryManager:
             return _FieldSpec(field_name=parts[0], aggregation=parts[1].upper(), alias=parts[2])
         raise InvalidPayloadError(f"无效的 --metric 定义: {raw}")
 
-    def _build_order_by(self, items: list[str]) -> list[dict]:
-        """解析排序定义：expr[:asc|desc]。"""
+    def _build_order_by(self, items: list[str], *, alias_map: dict[str, str] | None = None) -> list[dict]:
+        """解析排序定义：expr[:asc|desc]，自动映射到 select 输出别名。"""
+        alias_map = alias_map or {}
         result: list[dict] = []
         for raw in items:
             parts = [item.strip() for item in raw.split(":")]
             if len(parts) == 1 and parts[0]:
-                result.append({"expr": parts[0], "desc": False})
-                continue
-            if len(parts) == 2 and parts[0] and parts[1]:
-                direction = parts[1].lower()
-                if direction not in ("asc", "desc"):
+                expr = parts[0]
+                direction = False
+            elif len(parts) == 2 and parts[0] and parts[1]:
+                expr = parts[0]
+                direction_val = parts[1].lower()
+                if direction_val not in ("asc", "desc"):
                     raise InvalidPayloadError(f"无效的 --order-by 排序方向: {raw}")
-                result.append({"expr": parts[0], "desc": direction == "desc"})
-                continue
-            raise InvalidPayloadError(f"无效的 --order-by 定义: {raw}")
+                direction = direction_val == "desc"
+            else:
+                raise InvalidPayloadError(f"无效的 --order-by 定义: {raw}")
+            # 自动映射到 select 输出别名
+            resolved_expr = alias_map.get(expr, expr)
+            result.append({"expr": resolved_expr, "desc": direction})
         return result
 
     def _load_where_clause(
@@ -370,7 +389,13 @@ class QueryManager:
         return result
 
     def _resolve_field(self, fields: list[dict], identifier: str, *, field_type: str) -> dict:
-        """按 global_alias > field_name > verbose_name 解析字段。"""
+        """按 global_alias > field_name > verbose_name 解析字段。
+
+        当同一标识命中多条记录时，自动筛选最可能的原始字段（非 copy/衍生）：
+        - global_alias 优先级：无 _数字 后缀 > 有后缀
+        - field_name 优先级：verbose_name 最短（原始字段无 _copy 后缀）> 较长
+        - verbose_name 优先级：精确匹配 > 包含匹配
+        """
         normalized = identifier.strip().lower()
         if not normalized:
             raise InvalidPayloadError("字段标识不能为空")
@@ -403,11 +428,38 @@ class QueryManager:
             if len(matches) == 1:
                 return matches[0]
             if len(matches) > 1:
+                # field_name 完全一致 → 同一字段的 copy 衍生记录，自动筛选原始字段
+                if key == "field_name" or all(
+                    m.get("field_name") == matches[0].get("field_name") for m in matches
+                ):
+                    return self._pick_primary_field(matches, identifier)
                 raise InvalidPayloadError(
                     f"字段标识存在歧义（{key} 命中多条）: {identifier}，请改用 global_alias 或 field_name"
                 )
 
         raise InvalidPayloadError(f"字段不存在于当前数据集 metadata 中: {identifier}")
+
+    @staticmethod
+    def _pick_primary_field(matches: list[dict], identifier: str) -> dict:
+        """从多条匹配记录中筛选最可能的原始字段。
+
+        评分规则（从高到低）：
+        1. global_alias 无 _数字 后缀（衍生字段会带 _数字 后缀）
+        2. verbose_name 最短（原始字段无 _copy 等后缀）
+        3. global_alias 最短
+        """
+        def _score(item: dict) -> tuple:
+            alias = str(item.get("global_alias") or "")
+            vname = str(item.get("verbose_name") or "")
+
+            # global_alias 是否有 _数字 后缀（衍生字段标志）
+            has_derived_suffix = 1 if re.search(r"_\d+$", alias) else 0
+
+            # 先按衍生标记排序（0=原始优先），再按 verbose_name 长度，最后按 alias 长度
+            return (has_derived_suffix, len(vname), len(alias))
+
+        sorted_matches = sorted(matches, key=_score)
+        return sorted_matches[0]
 
     def _resolve_output_alias(self, alias: str | None, field: dict) -> str:
         """校验显式 alias，或默认回退到 global_alias。"""

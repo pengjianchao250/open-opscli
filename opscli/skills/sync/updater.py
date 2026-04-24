@@ -105,19 +105,8 @@ class SkillsUpdater:
 
         remote_version = str(manifest.get("version", "v0.0.0"))
         current_version = record.version
-        needs_update = force or self.compare_versions(current_version, remote_version) < 0
-
-        # 版本一致且未强制更新，直接返回
-        if not needs_update:
-            return SkillUpgradeResult(
-                name=record.name,
-                from_version=current_version,
-                to_version=current_version,
-                runtime=record.runtime,
-                target_dir=record.root,
-                updated=False,
-                field_count=self._extract_field_count(manifest=manifest),
-            )
+        # 始终执行更新：数据集权限是动态的，不依赖版本号变化
+        needs_update = force or self.compare_versions(current_version, remote_version) <= 0
 
         # 拉取所有远端数据文件
         fields_csv = self._get(self.FIELDS_ENDPOINT).text

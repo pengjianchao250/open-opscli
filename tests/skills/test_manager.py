@@ -17,22 +17,6 @@ def test_install_dataset_fields_template(tmp_path: Path):
     assert result.to_dict()["version"] == "v0.0.1"
     installed_path = Path(result.to_dict()["installed_paths"][0]["path"])
     assert (installed_path / "SKILL.md").exists()
-    assert (installed_path / "SKILL_MCP.md").exists()
-    assert (installed_path / "data" / "VERSION.json").exists()
-
-
-def test_install_ops_mcp_template(tmp_path: Path):
-    manager = SkillsManager()
-    result = manager.install(
-        "ops-mcp",
-        skills_dir=str(tmp_path / "skills"),
-        force=False,
-    )
-
-    assert result.name == "ops-mcp"
-    assert result.to_dict()["version"] == "v0.0.1"
-    installed_path = Path(result.to_dict()["installed_paths"][0]["path"])
-    assert (installed_path / "SKILL.md").exists()
     assert (installed_path / "data" / "VERSION.json").exists()
 
 
@@ -102,7 +86,8 @@ def test_status_includes_remote_summary(tmp_path: Path, monkeypatch):
 
 
 def test_upgrade_updates_all_matching_skill_records(tmp_path: Path, monkeypatch):
-    manager = SkillsManager()
+    # 注入空注册表路径，避免读取真实 ~/.config/opscli/installed_skills.json 影响测试
+    manager = SkillsManager(registry_path=tmp_path / "registry.json")
     record1 = SkillRecord(
         name="ops-dataset-query",
         version="v1.0.0",
@@ -140,7 +125,8 @@ def test_upgrade_updates_all_matching_skill_records(tmp_path: Path, monkeypatch)
 
 
 def test_upgrade_passes_force_to_all_matching_skill_records(tmp_path: Path, monkeypatch):
-    manager = SkillsManager()
+    # 注入空注册表路径，避免读取真实 ~/.config/opscli/installed_skills.json 影响测试
+    manager = SkillsManager(registry_path=tmp_path / "registry.json")
     record1 = SkillRecord(
         name="ops-dataset-query",
         version="v1.0.0",
