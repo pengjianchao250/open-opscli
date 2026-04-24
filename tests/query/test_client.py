@@ -76,3 +76,43 @@ def test_cli_query_raises_when_remote_json_invalid(monkeypatch):
 
     with pytest.raises(BadRemoteJsonError):
         client.cli_query({"tableId": 1103, "query": {"select": []}})
+
+
+def test_fetch_chart_queries_sends_get_request(monkeypatch):
+    captured = {}
+
+    def fake_get(url, params=None, headers=None, cookies=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = params
+        captured["headers"] = headers
+        captured["cookies"] = cookies
+        return httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "data": [
+                    {"query": {"select": []}, "dataSource": "doris", "tableId": 1}
+                ],
+            },
+        )
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.get", fake_get)
+    client = QueryClient(auth_client=DummyAuthClient())
+
+    result = client.fetch_chart_queries("chart-123")
+
+    assert captured["url"].endswith("/api/v1/data-metrics/cli-query/latest-request-data")
+    assert captured["params"] == {"chart_uuid": "chart-123"}
+    assert len(result) == 1
+    assert result[0]["tableId"] == 1
+
+
+def test_fetch_chart_queries_raises_when_data_not_list(monkeypatch):
+    def fake_get(url, params=None, headers=None, cookies=None, timeout=None):
+        return httpx.Response(200, json={"code": 200, "data": {"unexpected": "dict"}})
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.get", fake_get)
+    client = QueryClient(auth_client=DummyAuthClient())
+
+    with pytest.raises(BadRemoteJsonError):
+        client.fetch_chart_queries("chart-123")

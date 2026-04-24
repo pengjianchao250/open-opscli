@@ -188,3 +188,60 @@ def test_build_run_uses_build_and_run(monkeypatch):
     assert payload["command"] == "query build-and-run"
     assert payload["data"]["result"]["meta"]["rowCount"] == 0
     assert manager.called_with["dataset_alias"] == "ds_xxx"
+
+
+# ── chart CLI 测试 ────────────────────────────────────────────────────
+
+def test_chart_outputs_queries_without_run(monkeypatch):
+    class DummyManager:
+        def fetch_chart_queries(self, chart_uuid):
+            return [{"query": {"select": []}, "tableId": 1}]
+
+    monkeypatch.setattr("opscli.query.commands.cli.QueryManager", DummyManager)
+
+    result = runner.invoke(app, ["chart", "--uuid", "chart-123"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["success"] is True
+    assert payload["command"] == "query chart"
+    assert payload["data"]["chart_uuid"] == "chart-123"
+    assert len(payload["data"]["queries"]) == 1
+
+
+def test_chart_run_outputs_merged_results(monkeypatch):
+    class DummyManager:
+        def run_chart_queries(self, chart_uuid, dry_run=False):
+            return {
+                "chart_uuid": chart_uuid,
+                "queries": [],
+                "merged": {"rows": [], "meta": {"rowCount": 0, "queryCount": 0, "successCount": 0}},
+            }
+
+    monkeypatch.setattr("opscli.query.commands.cli.QueryManager", DummyManager)
+
+    result = runner.invoke(app, ["chart", "--uuid", "chart-456", "--run"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["success"] is True
+    assert payload["command"] == "query chart-run"
+    assert payload["data"]["merged"]["meta"]["rowCount"] == 0
+
+
+def test_chart_dry_run_passes_flag(monkeypatch):
+    class DummyManager:
+        def __init__(self):
+            self.dry_run = None
+
+        def run_chart_queries(self, chart_uuid, dry_run=False):
+            self.dry_run = dry_run
+            return {"chart_uuid": chart_uuid, "queries": [], "merged": {"rows": [], "meta": {}}}
+
+    manager = DummyManager()
+    monkeypatch.setattr("opscli.query.commands.cli.QueryManager", lambda: manager)
+
+    result = runner.invoke(app, ["chart", "--uuid", "chart-789", "--run", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert manager.dry_run is True

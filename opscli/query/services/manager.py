@@ -206,6 +206,141 @@ class QueryManager:
             "result": query_result,
         }
 
+    # ── chart query 支持 ──────────────────────────────────────────────
+
+    def fetch_chart_queries(self, chart_uuid: str) -> list[dict]:
+        """通过 chart_uuid 从远端获取图表的查询结构列表。"""
+        return self.client.fetch_chart_queries(chart_uuid)
+
+    def build_payload_from_chart_query(self, chart_item: dict) -> dict:
+        """将后端返回的 chart query 结构转换为 cli_query 可用 payload。
+
+        输入结构：
+            {
+                "query": {"from": {...}, "select": [...], ...},
+                "dataSource": "doris_analytics",
+                "tableId": 1
+            }
+
+        输出结构：
+            {"tableId": 1, "query": {"select": [...], ...}}
+
+        自动剔除 query.from 字段，因为 cli_query 通过 tableId 定位数据集。
+        """
+        table_id = chart_item.get("tableId")
+        if table_id is None:
+            raise InvalidPayloadError("chart query 缺少 tableId")
+
+        query = chart_item.get("query") or {}
+        if not isinstance(query, dict):
+            raise InvalidPayloadError("chart query 的 query 字段必须是对象")
+
+        # 构造标准 cli_query payload：复制 query 内容并移除 from
+        payload_query = dict(query)
+        payload_query.pop("from", None)
+
+        return {
+            "tableId": int(table_id),
+            "query": payload_query,
+        }
+
+    def run_chart_queries(
+        self,
+        chart_uuid: str,
+        *,
+        dry_run: bool = False,
+    ) -> dict:
+        """获取图表查询结构 → 执行所有 query → 合并输出结果。
+
+        每个 query 独立执行，失败时记录错误但不中断后续 query。
+        最终返回包含各 query 结果及合并视图的字典。
+
+        Returns:
+            {
+                "chart_uuid": "xxx",
+                "queries": [
+                    {
+                        "index": 0,
+                        "table_id": 1,
+                        "data_source": "doris_analytics",
+                        "payload": {...},
+                        "result": {...},          # 成功时
+                        "error": {...},           # 失败时
+                    }
+                ],
+                "merged": {
+                    "rows": [...],                # 所有 rows 扁平合并（加 _query_index）
+                    "meta": {"rowCount": 150, "queryCount": 3, "successCount": 3},
+                },
+            }
+        """
+        chart_items = self.fetch_chart_queries(chart_uuid)
+
+        queries: list[dict] = []
+        all_rows: list[dict] = []
+        total_row_count = 0
+        success_count = 0
+
+        for idx, item in enumerate(chart_items):
+            table_id = item.get("tableId")
+            data_source = item.get("dataSource")
+
+            try:
+                payload = self.build_payload_from_chart_query(item)
+            except Exception as exc:
+                queries.append({
+                    "index": idx,
+                    "table_id": table_id,
+                    "data_source": data_source,
+                    "payload": None,
+                    "result": None,
+                    "error": {"code": "INVALID_PAYLOAD", "message": str(exc)},
+                })
+                continue
+
+            if dry_run:
+                payload["dryRun"] = True
+
+            try:
+                result = self.client.cli_query(payload)
+                queries.append({
+                    "index": idx,
+                    "table_id": table_id,
+                    "data_source": data_source,
+                    "payload": payload,
+                    "result": result,
+                    "error": None,
+                })
+
+                rows = result.get("rows") or []
+                for row in rows:
+                    all_rows.append({"_query_index": idx, **row})
+                total_row_count += result.get("meta", {}).get("rowCount", len(rows))
+                success_count += 1
+            except Exception as exc:
+                error = exc.to_dict() if hasattr(exc, "to_dict") else {"code": "QUERY_ERROR", "message": str(exc)}
+                queries.append({
+                    "index": idx,
+                    "table_id": table_id,
+                    "data_source": data_source,
+                    "payload": payload,
+                    "result": None,
+                    "error": error,
+                })
+
+        return {
+            "chart_uuid": chart_uuid,
+            "queries": queries,
+            "merged": {
+                "rows": all_rows,
+                "meta": {
+                    "rowCount": total_row_count,
+                    "queryCount": len(chart_items),
+                    "successCount": success_count,
+                },
+            },
+        }
+
     def _build_data_comparison(self, raw: str, *, dataset_alias: str) -> dict:
         """解析 dataComparison 定义：field,start_date,end_date。
 

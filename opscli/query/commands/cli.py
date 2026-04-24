@@ -83,6 +83,42 @@ def run(
     _emit(payload, pretty)
 
 
+@app.command("chart")
+def chart(
+    uuid: str = typer.Option(..., "--uuid", help="图表 UUID（chart_uuid）"),
+    run: bool = typer.Option(False, "--run", help="获取后立即执行所有查询并合并输出"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="仅生成 SQL，不执行查询"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """通过 chart_uuid 获取图表查询结构，可选立即执行。"""
+    manager = QueryManager()
+    try:
+        if run or dry_run:
+            result = manager.run_chart_queries(chart_uuid=uuid, dry_run=dry_run)
+            payload = {
+                "success": True,
+                "command": "query chart-run",
+                "data": result,
+                "error": None,
+            }
+        else:
+            chart_items = manager.fetch_chart_queries(uuid)
+            payload = {
+                "success": True,
+                "command": "query chart",
+                "data": {
+                    "chart_uuid": uuid,
+                    "queries": chart_items,
+                },
+                "error": None,
+            }
+    except Exception as exc:
+        _emit(_error_payload("query chart", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
 @app.command("build")
 def build(
     dataset: str | None = typer.Option(None, "--dataset", help="dataset_alias"),

@@ -2,7 +2,7 @@
 
 本文档基于当前仓库代码整理，覆盖 `opscli` 顶级命令、全部子命令、参数说明与常见使用示例。
 
-- 代码基线：`aukeys-opscli` `0.0.7`
+- 代码基线：`aukeys-opscli` `0.0.10`
 - 命令入口：`opscli`
 - 主要来源：
   - `opscli/cli.py`
@@ -38,7 +38,8 @@ opscli
 ├── query
 │   ├── metadata
 │   ├── run
-│   └── build
+│   ├── build
+│   └── chart
 └── skills
     ├── list
     ├── install
@@ -556,6 +557,81 @@ opscli query run --payload payload.json
 opscli query run --payload ./tmp/sales_query.json --pretty
 ```
 
+### 6.4 `opscli query chart`
+
+通过 `chart_uuid` 获取图表的查询结构，可选立即执行所有查询并合并输出。
+
+**用法**
+
+```bash
+opscli query chart --uuid <chart_uuid> [--run] [--dry-run] [--pretty]
+```
+
+**参数**
+
+| 参数 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--uuid` | 是 | - | 图表 UUID（chart_uuid） |
+| `--run` | 否 | `false` | 获取后立即执行所有查询并合并输出 |
+| `--dry-run` | 否 | `false` | 仅生成 SQL，不执行查询（需配合 `--run`） |
+| `--pretty` | 否 | `false` | 美化 JSON 输出 |
+
+**说明**
+
+- 不传 `--run` 时，仅返回图表的查询结构（可能包含多个 query）。
+- 传 `--run` 时，依次执行图表下的所有 query，并自动合并结果。
+- 每个 query 独立执行，某个 query 失败不会中断其余 query。
+- 合并结果中，每行数据会附加 `_query_index` 字段标识来源 query 序号。
+- 后端返回的 chart query 已包含 `tableId`，无需本地 metadata 转换。
+
+**示例**
+
+仅查看图表查询结构：
+
+```bash
+opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --pretty
+```
+
+获取并执行所有查询：
+
+```bash
+opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --pretty
+```
+
+仅生成 SQL 不执行：
+
+```bash
+opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --dry-run --pretty
+```
+
+**返回结构（--run 时）**
+
+```json
+{
+  "success": true,
+  "command": "query chart-run",
+  "data": {
+    "chart_uuid": "32f660fd-f62a-45c4-a443-e21f2edb0779",
+    "queries": [
+      {
+        "index": 0,
+        "table_id": 1,
+        "data_source": "doris_analytics",
+        "payload": {...},
+        "result": {...},
+        "error": null
+      }
+    ],
+    "merged": {
+      "rows": [{"_query_index": 0, ...}],
+      "meta": {"rowCount": 150, "queryCount": 3, "successCount": 3}
+    }
+  }
+}
+```
+
+---
+
 ### 6.3 `opscli query build`
 
 基于简化参数构造标准 query payload；也可以直接执行。
@@ -872,5 +948,5 @@ opscli skills upgrade ops-dataset-query --pretty
 | Token | `opscli auth token status`、`get`、`check`、`refresh` |
 | 系统管理 | `opscli auth system list`、`sync`、`add`、`remove` |
 | Amazon | `opscli amazon scrape`、`payload`、`search`、`schema`、`history` |
-| 查询 | `opscli query metadata`、`run`、`build` |
+| 查询 | `opscli query metadata`、`run`、`build`、`chart` |
 | Skills | `opscli skills list`、`install`、`status`、`upgrade` |
