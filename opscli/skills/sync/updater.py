@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -86,36 +87,81 @@ class SkillsUpdater:
             return 1
         return 0
 
-    def upgrade_ops_dataset_query(self, record: SkillRecord, force: bool = False) -> SkillUpgradeResult:
-        """执行 ops-dataset-query Skill 的数据升级。
-
-        流程：
-        1. 拉取远端 manifest 获取最新版本号
-        2. 对比本地版本，判断是否需要更新
-        3. 如需更新，拉取所有数据文件（CSV + JSON）
-        4. 先写入临时目录，再原子替换到目标目录，避免中途失败导致数据损坏
+    def fetch_upgrade_data(self, skill_name: str, on_step: Callable[[str], None] | None = None) -> dict:
+        """从远端拉取 Skill 升级所需的全部数据，仅执行一次。
 
         Args:
-            record: 本地已安装的 Skill 记录
-            force: 为 True 时即使版本号相同也强制更新
+            skill_name: Skill 名称（当前仅支持 ops-dataset-query）
+            on_step: 可选进度回调
+
+        Returns:
+            包含 manifest / fields_csv / datasets_csv / query_metadata / field_count 的字典
         """
-        manifest = self.fetch_manifest(record.name)
+        def _step(msg: str) -> None:
+            if on_step:
+                on_step(msg)
+
+        _step("检查远端版本...")
+        manifest = self.fetch_manifest(skill_name)
         if not manifest:
             raise ValueError("远端 manifest 不存在")
 
-        remote_version = str(manifest.get("version", "v0.0.0"))
-        current_version = record.version
-        # 始终执行更新：数据集权限是动态的，不依赖版本号变化
-        needs_update = force or self.compare_versions(current_version, remote_version) <= 0
-
-        # 拉取所有远端数据文件
+        _step("拉取字段数据...")
         fields_csv = self._get(self.FIELDS_ENDPOINT).text
+        _step("拉取数据集列表...")
         datasets_csv = self._get(self.DATASETS_ENDPOINT).text
+        _step("拉取查询元数据...")
         query_metadata = self._parse_json_response(
             self._get(self.QUERY_METADATA_ENDPOINT),
             endpoint=self.QUERY_METADATA_ENDPOINT,
         )
         field_count = self._extract_field_count(query_metadata=query_metadata, manifest=manifest)
+
+        return {
+            "manifest": manifest,
+            "fields_csv": fields_csv,
+            "datasets_csv": datasets_csv,
+            "query_metadata": query_metadata,
+            "field_count": field_count,
+        }
+
+    def apply_upgrade_data(
+        self,
+        record: SkillRecord,
+        data: dict,
+        force: bool = False,
+        on_step: Callable[[str], None] | None = None,
+    ) -> SkillUpgradeResult:
+        """将已拉取的远端数据写入指定 Skill 目录。
+
+        采用"先写临时目录、再原子替换"的策略，确保更新失败不会损坏已有数据。
+
+        Args:
+            record: 本地已安装的 Skill 记录
+            data: fetch_upgrade_data() 返回的数据字典
+            force: 为 True 时即使版本号相同也强制更新
+            on_step: 可选进度回调
+        """
+        def _step(msg: str) -> None:
+            if on_step:
+                on_step(msg)
+
+        manifest = data["manifest"]
+        remote_version = str(manifest.get("version", "v0.0.0"))
+        current_version = record.version
+        # 始终执行更新：数据集权限是动态的，不依赖版本号变化
+        needs_update = force or self.compare_versions(current_version, remote_version) <= 0
+
+        if not needs_update:
+            return SkillUpgradeResult(
+                name=record.name,
+                from_version=current_version,
+                to_version=remote_version,
+                runtime=record.runtime,
+                target_dir=record.root,
+                updated=False,
+                field_count=data.get("field_count", 0),
+            )
 
         data_dir = record.root / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -123,10 +169,10 @@ class SkillsUpdater:
         # 先写入临时目录，再原子替换，确保更新过程安全
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            (tmp_path / "dataset_fields.csv").write_text(fields_csv, encoding="utf-8")
-            (tmp_path / "datasets.csv").write_text(datasets_csv, encoding="utf-8")
+            (tmp_path / "dataset_fields.csv").write_text(data["fields_csv"], encoding="utf-8")
+            (tmp_path / "datasets.csv").write_text(data["datasets_csv"], encoding="utf-8")
             (tmp_path / "query_metadata.json").write_text(
-                json.dumps(query_metadata.get("data"), ensure_ascii=False, indent=2),
+                json.dumps(data["query_metadata"].get("data"), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             (tmp_path / "VERSION.json").write_text(
@@ -152,8 +198,30 @@ class SkillsUpdater:
             runtime=record.runtime,
             target_dir=record.root,
             updated=True,
-            field_count=field_count,
+            field_count=data.get("field_count", 0),
         )
+
+    def upgrade_ops_dataset_query(
+        self,
+        record: SkillRecord,
+        force: bool = False,
+        on_step: Callable[[str], None] | None = None,
+    ) -> SkillUpgradeResult:
+        """执行 ops-dataset-query Skill 的数据升级（单次完整流程，向后兼容）。
+
+        流程：
+        1. 拉取远端 manifest 获取最新版本号
+        2. 对比本地版本，判断是否需要更新
+        3. 如需更新，拉取所有数据文件（CSV + JSON）
+        4. 先写入临时目录，再原子替换到目标目录，避免中途失败导致数据损坏
+
+        Args:
+            record: 本地已安装的 Skill 记录
+            force: 为 True 时即使版本号相同也强制更新
+            on_step: 可选进度回调，每个阶段开始时调用，参数为描述字符串
+        """
+        data = self.fetch_upgrade_data(record.name, on_step=on_step)
+        return self.apply_upgrade_data(record, data, force=force, on_step=on_step)
 
     def _extract_field_count(
         self,

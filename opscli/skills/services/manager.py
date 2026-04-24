@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -212,6 +213,7 @@ class SkillsManager:
         skills_dir: str | None = None,
         cwd: Path | None = None,
         force: bool = False,
+        on_step: Callable[[str], None] | None = None,
     ) -> SkillBatchUpgradeResult:
         """升级指定 Skill 到最新版本。
 
@@ -223,6 +225,7 @@ class SkillsManager:
             skills_dir: 指定扫描目录
             cwd: 当前工作目录
             force: 是否强制升级（即使版本号相同也重新拉取）
+            on_step: 可选进度回调，每个阶段开始时调用，参数为描述字符串
         """
         records = self.list_skills(skills_dir=skills_dir, cwd=cwd)
         targets = [item for item in records if item.name == name]
@@ -236,10 +239,17 @@ class SkillsManager:
         if name != "ops-dataset-query":
             raise ValueError(f"暂不支持升级 Skill: {name}")
 
-        results = [
-            self.updater.upgrade_ops_dataset_query(target, force=force)
-            for target in targets
-        ]
+        # 远端数据对所有本地安装实例完全相同，只拉取一次，再分发写入各目录
+        upgrade_data = self.updater.fetch_upgrade_data(name, on_step=on_step)
+
+        if on_step:
+            dir_count = len(targets)
+            on_step(f"写入本地文件到 {dir_count} 个目录..." if dir_count > 1 else "写入本地文件...")
+
+        results = []
+        for target in targets:
+            results.append(self.updater.apply_upgrade_data(target, upgrade_data, force=force, on_step=None))
+
         return SkillBatchUpgradeResult(name=name, results=results)
 
     def _normalize_runtime_arg(self, runtime: str | list[str] | None) -> list[str] | None:
@@ -314,6 +324,7 @@ class SkillsManager:
 
         用于 upgrade 时补充通过 --skills-dir 安装到自定义目录的 Skill，
         这些目录不在 SkillDetector 的扫描范围内。
+        同时自动清理注册表中目录已不存在的过期条目。
 
         Args:
             skill_name: Skill 名称
@@ -329,8 +340,9 @@ class SkillsManager:
         # 已发现的路径集合，用于去重
         existing_paths = {str(r.root) for r in existing}
         merged = list(existing)
+        stale_indices: list[int] = []
 
-        for entry in entries:
+        for i, entry in enumerate(entries):
             target_dir_str = entry.get("target_dir", "")
             if not target_dir_str or target_dir_str in existing_paths:
                 continue
@@ -338,6 +350,7 @@ class SkillsManager:
             version_file = target_dir / "data" / "VERSION.json"
             # 验证目录和 VERSION.json 仍然存在（防止目录被手动删除）
             if not target_dir.exists() or not version_file.exists():
+                stale_indices.append(i)
                 continue
             try:
                 payload = json.loads(version_file.read_text(encoding="utf-8"))
@@ -354,6 +367,14 @@ class SkillsManager:
                 )
             )
             existing_paths.add(target_dir_str)
+
+        # 自动清理注册表中目录已不存在的过期条目，避免反复累积
+        if stale_indices:
+            registry[skill_name] = [e for j, e in enumerate(entries) if j not in stale_indices]
+            try:
+                self._write_registry(registry)
+            except Exception:
+                pass
 
         return merged
 

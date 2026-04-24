@@ -6,7 +6,7 @@ from opscli.skills.manager import SkillsManager
 
 
 def test_install_dataset_fields_template(tmp_path: Path):
-    manager = SkillsManager()
+    manager = SkillsManager(registry_path=tmp_path / "registry.json")
     result = manager.install(
         "ops-dataset-query",
         skills_dir=str(tmp_path / "skills"),
@@ -21,7 +21,7 @@ def test_install_dataset_fields_template(tmp_path: Path):
 
 
 def test_install_ops_amazon_template(tmp_path: Path):
-    manager = SkillsManager()
+    manager = SkillsManager(registry_path=tmp_path / "registry.json")
     result = manager.install(
         "ops-amazon",
         skills_dir=str(tmp_path / "skills"),
@@ -36,7 +36,7 @@ def test_install_ops_amazon_template(tmp_path: Path):
 
 
 def test_install_dataset_fields_template_to_multiple_runtimes(tmp_path: Path):
-    manager = SkillsManager()
+    manager = SkillsManager(registry_path=tmp_path / "registry.json")
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".openclaw").mkdir()
 
@@ -107,7 +107,7 @@ def test_upgrade_updates_all_matching_skill_records(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(
         manager.updater,
         "upgrade_ops_dataset_query",
-        lambda record, force=False: SkillUpgradeResult(
+        lambda record, force=False, on_step=None: SkillUpgradeResult(
             name=record.name,
             from_version="v1.0.0",
             to_version="v1.1.0",
@@ -145,7 +145,12 @@ def test_upgrade_passes_force_to_all_matching_skill_records(tmp_path: Path, monk
 
     monkeypatch.setattr(manager, "list_skills", lambda **kwargs: [record1, record2])
 
-    def fake_upgrade(record, force=False):
+    fake_data = {"manifest": {"version": "v1.0.0"}, "fields_csv": "", "datasets_csv": "", "query_metadata": {}, "field_count": 0}
+
+    def fake_fetch(skill_name, on_step=None):
+        return fake_data
+
+    def fake_apply(record, data, force=False, on_step=None):
         called_force.append(force)
         return SkillUpgradeResult(
             name=record.name,
@@ -156,7 +161,8 @@ def test_upgrade_passes_force_to_all_matching_skill_records(tmp_path: Path, monk
             updated=True,
         )
 
-    monkeypatch.setattr(manager.updater, "upgrade_ops_dataset_query", fake_upgrade)
+    monkeypatch.setattr(manager.updater, "fetch_upgrade_data", fake_fetch)
+    monkeypatch.setattr(manager.updater, "apply_upgrade_data", fake_apply)
 
     manager.upgrade(name="ops-dataset-query", cwd=tmp_path, force=True)
 

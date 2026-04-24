@@ -197,11 +197,12 @@ def test_upgrade_force_passes_flag_to_manager(monkeypatch):
     result = runner.invoke(app, ["upgrade", "ops-dataset-query", "--force"])
 
     assert result.exit_code == 0
-    assert manager.called_with == {
-        "name": "ops-dataset-query",
-        "skills_dir": None,
-        "force": True,
-    }
+    called = manager.called_with
+    assert called is not None
+    assert called["name"] == "ops-dataset-query"
+    assert called["skills_dir"] is None
+    assert called["force"] is True
+    assert callable(called["on_step"])
 
 
 def test_status_outputs_json(monkeypatch):
