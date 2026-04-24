@@ -326,6 +326,135 @@ opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --dry-run -
 
 ---
 
+#### Chart 查询字段别名映射与转换
+
+Chart 查询返回的数据结构使用**数据集别名**和**字段别名**，需要通过本地 metadata 映射为可读的业务名称：
+
+| 返回结构位置 | 别名类型 | 示例值 | 含义 |
+|-------------|---------|--------|------|
+| `query.from.alias` | 数据集别名（dataset_alias） | `ds_d35ac6f3910c` | 指向本地 metadata 中的数据集 |
+| `query.select[].alias` | 字段别名（global_alias） | `f_520fb9a831ccd52a` | 指向本地 metadata 中的字段定义 |
+| `query.select[].expr` | 完整字段表达式 | `ds_xxx.dept_name` | 实际 SQL 中使用的字段 |
+
+**别名映射流程**：
+
+```bash
+# 1. 通过数据集别名获取 metadata（得到 table_id 和字段定义）
+opscli query metadata --dataset ds_d35ac6f3910c --pretty
+
+# 2. metadata 返回的字段列表中，通过 global_alias 匹配找到对应字段
+#    如 global_alias="f_520fb9a831ccd52a" 对应 field_name="dept_name", verbose_name="部门名称"
+
+# 3. 将查询结果中的列名（global_alias）替换为可读的业务名称（verbose_name）
+```
+
+**实际映射示例**：
+
+Chart 返回的 select 结构：
+```json
+[
+  {"expr": "ds_d35ac6f3910c.dept_name",  "alias": "f_520fb9a831ccd52a"},
+  {"expr": "ds_d35ac6f3910c.order_qty",  "alias": "f_9064850a20e4d581", "aggregation": "SUM"}
+]
+```
+
+通过 `opscli query metadata --dataset ds_d35ac6f3910c` 获取字段映射：
+
+| global_alias | field_name | verbose_name | field_type |
+|-------------|-----------|-------------|-----------|
+| `f_520fb9a831ccd52a` | `dept_name` | `部门名称` | dimension |
+| `f_9064850a20e4d581` | `order_qty` | `订单数量` | metric |
+
+查询结果列名转换：
+```json
+// 原始结果（列名为 global_alias）
+{"f_520fb9a831ccd52a": "项目二部", "f_9064850a20e4d581": "1500"}
+
+// 转换后（列名为 verbose_name 或 field_name）
+{"部门名称": "项目二部", "订单数量": "1500"}
+```
+
+**重要提示**：
+- `query.from.alias` 是数据集别名，不是表名；需要通过它获取 metadata 才能定位字段含义
+- `select[].alias` 是全局唯一字段标识（global_alias），不是业务名称；展示时应转换为 `verbose_name`
+- 如果同一图表包含多个 query（如下钻），每个 query 的 `from.alias` 可能相同（同一数据集），但 `select` 的字段组合不同
+- 聚合查询的结果列名是 global_alias，需要额外步骤映射为可读名称
+
+#### 使用本地脚本自动映射
+
+Skill 目录下提供 `scripts/chart_map.py` 脚本，**直接使用本地 CSV 资源**进行字段别名映射，无需调用远端接口。
+
+**数据目录自动发现机制**：
+脚本会按以下优先级自动扫描 `ops-dataset-query/data/` 目录，**不固定写死路径**：
+
+1. `--data-dir` 显式指定（最高优先级）
+2. `--skills-dir` 显式指定安装根目录
+3. 环境变量 `OPSCLI_SKILLS_DIR`
+4. 当前目录下的 `.claude/skills`
+5. `~/.claude/skills`
+6. `~/.openclaw/skills`
+7. `~/.codex/skills`
+8. `~/.config/opencode/skills`
+9. 脚本自身所在目录的相对路径（回退）
+
+```bash
+# 通过 chart_uuid 获取并自动映射（调用 opscli 获取结构，本地 CSV 解析字段）
+cd ~/.claude/skills/ops-dataset-query/scripts
+python chart_map.py --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --pretty
+
+# 映射到 field_name（英文字段名）
+python chart_map.py --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --map-to field_name --pretty
+
+# 对已保存的 chart 结果文件进行映射
+python chart_map.py --input /tmp/chart_result.json --pretty
+
+# 显式指定 Skill 安装目录（当安装在非标准位置时）
+python chart_map.py --uuid xxx --skills-dir ~/.openclaw/skills --pretty
+
+# 直接指定数据目录（最高优先级）
+python chart_map.py --uuid xxx --data-dir /path/to/ops-dataset-query/data --pretty
+```
+
+**脚本说明**：
+- 自动读取本地 `data/datasets.csv` 和 `data/dataset_fields.csv`
+- 构建数据集索引和字段索引，通过 `(dataset_alias, global_alias)` 复合键快速定位
+- 为每个 chart query 添加 `_mapping` 字段，包含数据集信息和字段映射关系
+- 支持 `--map-to verbose_name`（默认，中文业务名）或 `--map-to field_name`（英文字段名）
+
+**映射输出示例**：
+
+```json
+{
+  "query": {...},
+  "dataSource": "doris_analytics",
+  "tableId": 1,
+  "_mapping": {
+    "dataset_alias": "ds_d35ac6f3910c",
+    "dataset_info": {
+      "table_id": "1",
+      "dataset_name": "order_sale_trend_adv_traffic_inv_set",
+      "dataset_alias": "ds_d35ac6f3910c"
+    },
+    "field_mappings": [
+      {
+        "alias": "f_520fb9a831ccd52a",
+        "expr": "ds_d35ac6f3910c.dept_name",
+        "mapped_name": "部门名称",
+        "field_info": {
+          "field_name": "dept_name",
+          "verbose_name": "部门名称",
+          "global_alias": "f_520fb9a831ccd52a",
+          "field_type": "dimension",
+          "data_type": "STRING"
+        }
+      }
+    ]
+  }
+}
+```
+
+---
+
 ### `opscli query run`
 
 执行查询，将 payload 文件转发到服务端。
