@@ -76,7 +76,7 @@ opscli auth token status
 |------|------|------|
 | `data/VERSION.json` | 版本号 | `{"name": "ops-dataset-query", "version": "v1.x.x"}` |
 | `data/dataset_fields.csv` | 字段明细 | dataset_alias、field_name、verbose_name、global_alias、field_type、formula_config、detail_expression、summary_expression 等 |
-| `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_type、dataset_category、description、keywords 等 |
+| `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_type、dataset_category、data_source、main_dttm_col、inner_where_enabled、cache_timeout、description |
 | `data/query_metadata.json` | 查询元数据 | 字段类型映射、可用聚合方式等 |
 
 CSV 各列详细说明见 `references/数据查询服务开发说明文档.md` 附录。
@@ -329,7 +329,7 @@ opscli skills upgrade ops-dataset-query --force
 
 ## 字段搜索（本地索引）
 
-本 Skill 内置本地字段索引，可用于辅助确认 `dataset_alias`、`field_name`、`verbose_name`、`keywords`。
+本 Skill 内置本地字段索引，可用于辅助确认 `dataset_alias`、`field_name`、`verbose_name`。
 
 **推荐流程**：本地索引确认字段名 → `opscli query metadata` 查看完整 metadata → `opscli query build` 或手写 payload + `opscli query run`
 
@@ -342,7 +342,6 @@ opscli skills upgrade ops-dataset-query --force
 | `field_name` 子串匹配 | 60 |
 | `verbose_name` 子串匹配 | 45 |
 | `dataset_alias` 精确匹配 | 40 |
-| `keywords` 子串匹配 | 35 |
 | `description` 子串匹配 | 10 |
 
 ---

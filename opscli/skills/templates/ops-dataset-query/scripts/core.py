@@ -57,7 +57,6 @@ def search_rows(rows: list[dict], keyword: str, limit: int = 10) -> list[dict]:
     排序策略使用简单加权打分，优先匹配：
     - `field_name`
     - `verbose_name`
-    - `keywords`
     - `description`
     - 其他整行内容
     """
@@ -97,7 +96,6 @@ def _score_row(row: dict, keyword: str, tokens: list[str]) -> int:
     field_name = str(row.get("field_name", "")).lower()
     verbose_name = str(row.get("verbose_name", "")).lower()
     global_alias = str(row.get("global_alias", "")).lower()
-    keywords = str(row.get("keywords", "")).lower()
     description = str(row.get("description", "")).lower()
     dataset_alias = str(row.get("dataset_alias", "")).lower()
     dataset_name = str(row.get("dataset_name", "")).lower()
@@ -122,8 +120,6 @@ def _score_row(row: dict, keyword: str, tokens: list[str]) -> int:
         score += 55
     if keyword in verbose_name:
         score += 45
-    if keyword in keywords:
-        score += 35
     if keyword in dataset_name:
         score += 20
     if keyword in description:
@@ -133,7 +129,6 @@ def _score_row(row: dict, keyword: str, tokens: list[str]) -> int:
     score += _token_match_score(field_name, tokens, 16)
     score += _token_match_score(global_alias, tokens, 14)
     score += _token_match_score(verbose_name, tokens, 12)
-    score += _token_match_score(keywords, tokens, 9)
     score += _token_match_score(dataset_name, tokens, 6)
     score += _token_match_score(description, tokens, 4)
     score += _token_match_score(fulltext, tokens, 2)
