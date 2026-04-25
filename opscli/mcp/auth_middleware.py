@@ -15,13 +15,10 @@
 from __future__ import annotations
 
 import urllib.parse
-from typing import Any, Awaitable, Callable
+from typing import Any
 
-# ASGI type aliases
-Scope = dict
-Receive = Callable[[], Awaitable[dict]]
-Send = Callable[[dict], Awaitable[None]]
-ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
+# 直接使用 Starlette 官方类型，消除中间件接口与 Starlette 的类型不兼容问题
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 class ApiKeyAuthMiddleware:
@@ -61,7 +58,7 @@ class ApiKeyAuthMiddleware:
         token = self._extract_token(scope)
         if token != self._api_key:
             try:
-                await self._send_401(scope, send)
+                await self._send_401(scope, send)  # type: ignore[arg-type]
             except RuntimeError:
                 # 服务关闭期间连接已断开，忽略发送 401 时的 ASGI 状态错误
                 pass
@@ -74,7 +71,8 @@ class ApiKeyAuthMiddleware:
         response_started = False
         response_complete = False
 
-        async def tracking_send(message: dict) -> None:
+        # tracking_send 参数类型与 Starlette Send 保持一致（MutableMapping）
+        async def tracking_send(message: Any) -> None:
             nonlocal response_started, response_complete
             if message["type"] == "http.response.start":
                 response_started = True
@@ -85,7 +83,7 @@ class ApiKeyAuthMiddleware:
             await send(message)
 
         try:
-            await self.app(scope, receive, tracking_send)
+            await self.app(scope, receive, tracking_send)  # type: ignore[arg-type]
         except RuntimeError as exc:
             # SSE 长连接在关闭时序中，starlette 错误处理器会尝试在已开始的
             # 流式响应上再次发送 http.response.start，uvicorn 状态机会拒绝并
@@ -103,7 +101,7 @@ class ApiKeyAuthMiddleware:
                     # 连接已断开或事件循环正在关闭时，补发可能失败，忽略即可
                     pass
 
-    async def _send_401(self, scope: Scope, send: Send) -> None:
+    async def _send_401(self, _scope: Scope, send: Send) -> None:
         await send({
             "type": "http.response.start",
             "status": 401,
