@@ -15,7 +15,7 @@ from __future__ import annotations
 from .helpers import _err, _ok
 
 
-def skills_list(skills_dir: str | None = None) -> dict:
+async def skills_list(skills_dir: str | None = None) -> dict:
     """列出当前环境中已安装的所有 Skill。
 
     Args:
@@ -30,7 +30,7 @@ def skills_list(skills_dir: str | None = None) -> dict:
         return _err(exc)
 
 
-def skills_status(skills_dir: str | None = None) -> dict:
+async def skills_status(skills_dir: str | None = None) -> dict:
     """查询 Skill 安装状态，包含本地版本与远端最新版本对比。
 
     Args:
@@ -44,7 +44,7 @@ def skills_status(skills_dir: str | None = None) -> dict:
         return _err(exc)
 
 
-def skills_install(
+async def skills_install(
     name: str,
     skills_dir: str | None = None,
     runtime: str | None = None,
@@ -72,7 +72,7 @@ def skills_install(
         return _err(exc)
 
 
-def skills_upgrade(
+async def skills_upgrade(
     name: str = "ops-dataset-query",
     skills_dir: str | None = None,
     force: bool = False,

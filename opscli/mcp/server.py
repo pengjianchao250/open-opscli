@@ -65,6 +65,20 @@ _chatgpt_tools.register(mcp)
 _query_tools.register(mcp)
 _skills_tools.register(mcp)
 
+# amazon 工具依赖可选扩展 playwright，未安装时跳过注册不影响其他工具
+try:
+    from opscli.mcp.tools import amazon as _amazon_tools
+
+    _amazon_tools.register(mcp)
+except (ImportError, ModuleNotFoundError):
+    # playwright 或 opscli[amazon] 未安装，amazon_* 工具不可用
+    import sys
+    print(
+        "[opscli-mcp] amazon 工具未加载：缺少 playwright 依赖。\n"
+        "             安装命令：pip install 'opscli[amazon]' && playwright install chromium",
+        file=sys.stderr,
+    )
+
 
 # ── API Key 管理（HTTP 模式使用）─────────────────────────────────────
 
