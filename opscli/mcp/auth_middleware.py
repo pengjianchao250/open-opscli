@@ -60,10 +60,48 @@ class ApiKeyAuthMiddleware:
 
         token = self._extract_token(scope)
         if token != self._api_key:
-            await self._send_401(scope, send)
+            try:
+                await self._send_401(scope, send)
+            except RuntimeError:
+                # 服务关闭期间连接已断开，忽略发送 401 时的 ASGI 状态错误
+                pass
             return
 
-        await self.app(scope, receive, send)
+        # 追踪响应状态：SSE 是长连接流式响应，关闭时 fastmcp 内部会吞掉
+        # CancelledError 后正常返回，但不会发送终止帧，导致 uvicorn 记录
+        # "ASGI callable returned without completing response" 错误。
+        # 通过包装 send 追踪状态，在 finally 中补发终止帧来消除该错误。
+        response_started = False
+        response_complete = False
+
+        async def tracking_send(message: dict) -> None:
+            nonlocal response_started, response_complete
+            if message["type"] == "http.response.start":
+                response_started = True
+            elif message["type"] == "http.response.body":
+                # more_body 缺省为 False 表示响应已结束
+                if not message.get("more_body", False):
+                    response_complete = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracking_send)
+        except RuntimeError as exc:
+            # SSE 长连接在关闭时序中，starlette 错误处理器会尝试在已开始的
+            # 流式响应上再次发送 http.response.start，uvicorn 状态机会拒绝并
+            # 抛出此错误。这是正常关闭时序问题，不需要向上传播。
+            if "Expected ASGI message" not in str(exc):
+                raise
+        finally:
+            # fastmcp 吞掉 CancelledError 后正常返回时，SSE 流没有发终止帧。
+            # 补发一个空的终止帧，让 uvicorn 状态机认为响应已正常完成，
+            # 从而消除 "ASGI callable returned without completing response" 日志。
+            if response_started and not response_complete:
+                try:
+                    await send({"type": "http.response.body", "body": b"", "more_body": False})
+                except BaseException:
+                    # 连接已断开或事件循环正在关闭时，补发可能失败，忽略即可
+                    pass
 
     async def _send_401(self, scope: Scope, send: Send) -> None:
         await send({

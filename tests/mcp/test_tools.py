@@ -5,7 +5,8 @@ import respx
 from fastmcp import Client
 
 from opscli.mcp.context import configure_multi_user
-from opscli.mcp.server import auth_login_poll, mcp
+from opscli.mcp.server import mcp
+from opscli.mcp.tools.auth import auth_login_poll
 
 
 def _run(coro):
