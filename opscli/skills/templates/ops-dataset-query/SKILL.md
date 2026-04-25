@@ -405,8 +405,14 @@ python chart_map.py --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --pretty
 # 映射到 field_name（英文字段名）
 python chart_map.py --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --map-to field_name --pretty
 
+# 获取并执行图表查询，同时映射结果行数据的列名
+python chart_map.py --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --map-results --pretty
+
 # 对已保存的 chart 结果文件进行映射
 python chart_map.py --input /tmp/chart_result.json --pretty
+
+# 对已保存的 chart run 结果映射结果行列名
+python chart_map.py --input /tmp/chart_result.json --map-results --pretty
 
 # 显式指定 Skill 安装目录（当安装在非标准位置时）
 python chart_map.py --uuid xxx --skills-dir ~/.openclaw/skills --pretty
@@ -420,6 +426,16 @@ python chart_map.py --uuid xxx --data-dir /path/to/ops-dataset-query/data --pret
 - 构建数据集索引和字段索引，通过 `(dataset_alias, global_alias)` 复合键快速定位
 - 为每个 chart query 添加 `_mapping` 字段，包含数据集信息和字段映射关系
 - 支持 `--map-to verbose_name`（默认，中文业务名）或 `--map-to field_name`（英文字段名）
+- `--run`：自动通过 opscli 执行图表查询（需配合 `--uuid`）
+- `--map-results`：将查询结果行数据中的 `global_alias` 列名也映射为可读名称，输出到 `mapped_results` 字段
+- `--no-auto-upgrade`：禁用自动升级兜底（默认启用）
+
+**自动升级兜底机制**：
+当本地 CSV 数据无法匹配 chart 中的数据集或字段别名时（通常因为本地数据过期），脚本会自动：
+1. 检测所有字段的 `field_info` 是否为空
+2. 如果全部为空，自动调用 `opscli skills upgrade ops-dataset-query --force` 拉取最新远端数据
+3. 重新加载本地索引并重新执行映射
+4. 仅自动升级一次，避免无限循环
 
 **映射输出示例**：
 
@@ -453,9 +469,94 @@ python chart_map.py --uuid xxx --data-dir /path/to/ops-dataset-query/data --pret
 }
 ```
 
----
+#### 使用 chart_analyze.py 自动异常检测
 
-### `opscli query run`
+Skill 目录下提供 `scripts/chart_analyze.py` 脚本，自动获取图表数据、映射字段别名、检测业务角色，执行 5 类异常规则并输出结构化 JSON 报告。
+
+```bash
+cd ~/.claude/skills/ops-dataset-query/scripts
+
+# 通过 chart_uuid 获取并自动分析（推荐）
+python chart_analyze.py --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --pretty
+
+# 分析已保存的 chart run 结果
+python chart_analyze.py --input /tmp/chart_result.json --pretty
+
+# 附带 dataComparison 环比数据（增强趋势异常检测）
+python chart_analyze.py --input /tmp/chart_result.json --dc-input /tmp/dc_result.json --pretty
+```
+
+**异常检测规则**：
+
+| 规则 | 条件 | 严重度 |
+|------|------|--------|
+| `negative_margin` | 毛利率 < -20% | critical |
+| `negative_margin` | 毛利率 < 0% | warning |
+| `profit_drop` | 毛利环比下降 > 30%（需 `--dc-input`） | warning |
+| `revenue_cliff` | 原价金额环比下降 > 20%（需 `--dc-input`） | warning |
+| `ad_roi_decline` | 广告费上升 + 毛利下降（需 `--dc-input`） | warning |
+| `zero_orders` | 当期订单量归零，对比期 > 0（需 `--dc-input`） | info |
+
+**字段业务角色自动检测**：
+脚本通过字段的 `verbose_name` / `field_name` 与预定义关键词模式匹配，自动识别以下角色：
+- `revenue`（原价/金额）→ 用于毛利率计算、营收异常检测
+- `profit`（毛利/利润）→ 用于亏损检测、利润趋势分析
+- `ad_cost`（广告/推广）→ 用于广告 ROI 恶化检测
+- `quantity`（订单量/数量）→ 用于订单归零检测
+
+**自动升级兜底机制**：
+与 `chart_map.py` 一致，当本地 CSV 无法匹配字段别名时，脚本会自动调用 `opscli skills upgrade ops-dataset-query --force` 更新本地数据后重试。可通过 `--no-auto-upgrade` 禁用。
+
+**输出结构**：
+
+```json
+{
+  "success": true,
+  "data": {
+    "chart_uuid": "32f660fd-...",
+    "period": {"start": "2026-04-01", "end": "2026-04-24"},
+    "summary": {
+      "total_rows": 22,
+      "dimensions": ["部门名称", "渠道名称"],
+      "metrics": ["订单数量", "原价金额", "毛利润", "广告费"],
+      "anomaly_count": 9,
+      "anomaly_by_severity": {"critical": 3, "warning": 5, "info": 1}
+    },
+    "anomalies": [
+      {
+        "type": "negative_margin",
+        "severity": "critical",
+        "dimensions": {"部门名称": "项目二部", "渠道名称": "傲彼瑞-tiktok"},
+        "details": "毛利率 -15.9%，当期毛利 -109,334",
+        "metric_values": {"毛利润": -109334.13, "原价金额": 686956.81}
+      }
+    ],
+    "findings": [
+      "整体毛利率 5.91%（总原价 17,197,075，总毛利 1,017,027）",
+      "9 个渠道毛利为负（亏损运营）"
+    ]
+  }
+}
+```
+
+**典型工作流（图表异常分析）**：
+
+```bash
+# 0. 检查认证
+opscli auth token status
+
+# 1. 通过 UUID 获取图表数据并分析当期异常
+python chart_analyze.py --uuid <chart_uuid> --pretty
+
+# 2. 如需环比趋势分析，先构造 dataComparison 查询
+opscli query build --table-id <id> --dimension <dims> --metric <metrics> \
+  --data-comparison "date_id,2026-03-01,2026-03-24" \
+  --where "date_id|gte|\"2026-04-01\"" --where "date_id|lte|\"2026-04-24\"" \
+  --output /tmp/dc.json --run --pretty > /tmp/dc_output.json
+
+# 3. 合并分析当期 + 环比
+python chart_analyze.py --uuid <chart_uuid> --dc-input /tmp/dc_output.json --pretty
+```
 
 执行查询，将 payload 文件转发到服务端。
 
@@ -796,6 +897,7 @@ for dept, c in cur.items():
 |------|---------|
 | 本地数据为空 | `opscli skills upgrade ops-dataset-query` |
 | dataset_alias 不存在 | 检查拼写或 `opscli skills upgrade` 同步最新数据集 |
+| 字段映射全部失败（`mapped_name` 等于 `global_alias`） | 脚本会自动 upgrade 重试；手动执行 `opscli skills upgrade ops-dataset-query --force` |
 | 未登录 | 调用 `ops-auth` Skill，并执行 `opscli auth login` |
 | Token 过期 | 调用 `ops-auth` Skill，优先执行 `opscli auth token refresh --all`；刷新失败或仍异常时再执行 `opscli auth login` |
 | opscli 未找到 | 激活虚拟环境或设置 `OPSCLI_BIN` |

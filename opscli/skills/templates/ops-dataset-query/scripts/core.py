@@ -139,3 +139,60 @@ def _score_row(row: dict, keyword: str, tokens: list[str]) -> int:
 def _token_match_score(text: str, tokens: list[str], weight: int) -> int:
     """计算 token 命中的加权分数。"""
     return sum(weight for token in tokens if token in text)
+
+
+# ---------------------------------------------------------------------------
+# 通用数据类型转换与格式化工具
+# ---------------------------------------------------------------------------
+
+def to_float(v) -> float:
+    """安全转换查询结果值为 float。
+
+    查询结果中的数值字段可能是 int / float / str / None，
+    统一转为 float 避免 TypeError。空字符串和 None 返回 0.0。
+
+    Args:
+        v: 待转换的值
+
+    Returns:
+        float 类型的数值
+    """
+    if v is None or v == "":
+        return 0.0
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def safe_pct(cur: float, prev: float) -> float | None:
+    """计算环比变化率（百分比小数形式）。
+
+    分母为 0 时：cur 也为 0 返回 None（无变化），cur 不为 0 返回 float('inf')。
+
+    Args:
+        cur: 当期值
+        prev: 对比期值
+
+    Returns:
+        变化率（如 -0.15 表示 -15%），或 None / float('inf')
+    """
+    if prev == 0:
+        return None if cur == 0 else float("inf")
+    return (cur - prev) / abs(prev)
+
+
+def format_pct(value: float | None) -> str:
+    """将 safe_pct 返回的变化率格式化为可读字符串。
+
+    Args:
+        value: safe_pct 的返回值
+
+    Returns:
+        格式化字符串，如 "+12.34%" / "-7.89%" / "N/A" / "+∞"
+    """
+    if value is None:
+        return "N/A"
+    if value == float("inf"):
+        return "+∞"
+    return f"{value * 100:+.2f}%"
