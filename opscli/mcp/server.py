@@ -1,37 +1,43 @@
 """opscli MCP Server 入口。
 
 基于 fastmcp 将 opscli 核心能力暴露为 MCP Tools。
-默认使用 stdio transport，兼容 Claude Desktop / Claude Code 本地接入。
+**无状态设计**：服务器不保存任何用户 OAuth 凭证，所有认证信息由调用方传入。
+
+典型授权流程：
+    1. auth_login_start() → 返回 verification_url + user_code + device_code
+    2. 用户在浏览器中打开 URL 并输入 user_code
+    3. auth_login_poll(device_code) → 返回 {status: "authorized", session_id, ...}
+    4. 调用方保存 session_id 到本地
+    5. 后续 tool 调用传入 session_id（和可选的 jwt）
 
 启动方式：
     opscli-mcp
     opscli-mcp --transport sse --port 8765
-    OPSCLI_MCP_API_KEY=opscli-mcp-xxx opscli-mcp --multi-user
-    opscli-mcp --transport sse --port 8765 --multi-user --require-auth
 """
 
 from __future__ import annotations
 
+import base64
+import json
+import secrets
+import stat
+import string
 import sys
-import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import httpx
 from fastmcp import Context, FastMCP
 
-from opscli.mcp.auth_middleware import MCPApiKeyAuthProvider, MCPAuthMiddleware
-from opscli.mcp.context import configure_multi_user, get_credential_dir
-
-
 mcp = FastMCP(
     name="opscli",
     instructions=(
-        "Aukeys 运营 CLI 工具集 MCP 接口。\n"
-        "提供数据查询（query_*）、认证（auth_*）和 Skill 管理（skills_*）能力。\n"
-        "支持单用户本地凭证模式，也支持 --multi-user 多用户隔离模式。"
+        "Aukeys 运营 CLI 工具集 MCP 接口（无状态模式）。\n"
+        "服务器不保存用户凭证，所有认证信息（session_id / jwt）由调用方传入。\n"
+        "典型流程：auth_login_start → 浏览器授权 → auth_login_poll → "
+        "保存返回的 session_id → 后续 tool 调用传入 session_id（和可选的 jwt）。"
     ),
-    middleware=[MCPAuthMiddleware()],
 )
 
 
@@ -50,48 +56,51 @@ def _err(exc: Exception) -> dict:
     return {"success": False, "data": None, "error": error}
 
 
-async def _auth_client(ctx: Context | None = None):
-    """按当前 MCP 上下文创建 AuthClient。"""
+def _auth_client() -> Any:
+    """创建 AuthClient（无状态，不读取本地凭证目录）。"""
     from opscli.auth import AuthClient
 
-    return AuthClient(base_dir=await get_credential_dir(ctx))
+    return AuthClient()
 
 
-async def _query_manager(ctx: Context | None = None):
-    """按当前 MCP 上下文创建 QueryManager。"""
+def _query_manager(jwt: str | None = None, session_id: str | None = None) -> Any:
+    """创建 QueryManager，支持外部传入凭证。"""
     from opscli.query.services.manager import QueryManager
 
-    return QueryManager(auth_client=await _auth_client(ctx))
+    return QueryManager(auth_client=_auth_client(), jwt=jwt, session_id=session_id)
 
 
-async def _registry(ctx: Context | None = None):
-    """按当前 MCP 上下文创建系统注册表。"""
+def _registry() -> Any:
+    """创建系统注册表。"""
     from opscli.auth import BUILTIN_SYSTEMS
     from opscli.auth.core.system_registry import SystemRegistry
 
-    return SystemRegistry(
-        base_dir=await get_credential_dir(ctx),
-        builtin_systems=BUILTIN_SYSTEMS,
-    )
+    return SystemRegistry(builtin_systems=BUILTIN_SYSTEMS)
 
 
-async def _credential_store(ctx: Context | None = None):
-    """按当前 MCP 上下文创建凭证存储。"""
-    from opscli.auth.storage.credential_store import CredentialStore
+def _decode_jwt_payload(jwt: str) -> dict:
+    """解析 JWT payload（不验证签名），用于本地检查有效期。"""
+    parts = jwt.split(".")
+    if len(parts) != 3:
+        raise ValueError("非法 JWT 格式")
+    payload = parts[1]
+    padding = 4 - len(payload) % 4
+    if padding != 4:
+        payload += "=" * padding
+    return json.loads(base64.urlsafe_b64decode(payload))
 
-    return CredentialStore(base_dir=await get_credential_dir(ctx))
 
+# ── query tools ──────────────────────────────────────────────────
 
 @mcp.tool()
 async def query_metadata(
     dataset: str | None = None,
     table_id: int | None = None,
     skills_dir: str | None = None,
-    ctx: Context | None = None,
 ) -> dict:
-    """查询指定数据集的 metadata（维度/指标字段列表）。"""
+    """查询指定数据集的 metadata（维度/指标字段列表）。不需要认证。"""
     try:
-        result = (await _query_manager(ctx)).metadata(
+        result = _query_manager().metadata(
             dataset_alias=dataset,
             table_id=table_id,
             skills_dir=skills_dir,
@@ -117,11 +126,10 @@ async def query_build(
     data_comparison: str | None = None,
     output_path: str | None = None,
     skills_dir: str | None = None,
-    ctx: Context | None = None,
 ) -> dict:
-    """基于简化参数构造标准 query payload（不执行查询）。"""
+    """基于简化参数构造标准 query payload（不执行查询）。不需要认证。"""
     try:
-        result = (await _query_manager(ctx)).build(
+        result = _query_manager().build(
             dataset_alias=dataset,
             table_id=table_id,
             dimensions=dimensions,
@@ -143,10 +151,16 @@ async def query_build(
 
 
 @mcp.tool()
-async def query_run(payload_path: str, ctx: Context | None = None) -> dict:
+async def query_run(
+    payload_path: str,
+    session_id: str | None = None,
+    jwt: str | None = None,
+) -> dict:
     """读取本地 payload JSON 文件并转发至服务端执行查询。"""
+    if not session_id:
+        return _err(ValueError("无状态模式下必须提供 session_id"))
     try:
-        result = (await _query_manager(ctx)).run(payload_path=payload_path)
+        result = _query_manager(jwt=jwt, session_id=session_id).run(payload_path=payload_path)
         return _ok(result)
     except Exception as exc:
         return _err(exc)
@@ -167,11 +181,14 @@ async def query_build_and_run(
     dry_run: bool = False,
     data_comparison: str | None = None,
     skills_dir: str | None = None,
-    ctx: Context | None = None,
+    session_id: str | None = None,
+    jwt: str | None = None,
 ) -> dict:
     """构造 query payload 并立即执行，一步返回数据结果。"""
+    if not session_id:
+        return _err(ValueError("无状态模式下必须提供 session_id"))
     try:
-        result = (await _query_manager(ctx)).build_and_run(
+        result = _query_manager(jwt=jwt, session_id=session_id).build_and_run(
             dataset_alias=dataset,
             table_id=table_id,
             dimensions=dimensions,
@@ -191,96 +208,109 @@ async def query_build_and_run(
         return _err(exc)
 
 
+# ── auth tools ───────────────────────────────────────────────────
+
 @mcp.tool()
-async def auth_login_start(ctx: Context | None = None) -> dict:
+async def auth_login_start() -> dict:
     """发起 Device Flow 登录第一步，返回验证 URL、用户码和设备码。"""
     from opscli.auth import OPS_URL
     from opscli.auth.core.device_flow import DeviceFlow
 
     try:
-        flow = DeviceFlow(ops_url=OPS_URL, store=await _credential_store(ctx))
+        flow = DeviceFlow(ops_url=OPS_URL, store=None)  # 无状态模式不保存
         return _ok(flow.request_device_code())
     except Exception as exc:
         return _err(exc)
 
 
 @mcp.tool()
-async def auth_login_poll(
-    device_code: str,
-    timeout: int = 10,
-    ctx: Context | None = None,
-) -> dict:
-    """单次轮询 Device Flow 授权状态，不进行长时间阻塞。"""
+async def auth_login_poll(device_code: str, timeout: int = 10) -> dict:
+    """单次轮询 Device Flow 授权状态。
+
+    授权成功后返回 session_id，调用方需自行保存到本地。
+    服务器不保存任何凭证。
+    """
     from opscli.auth import OPS_URL
     from opscli.auth.core.device_flow import DeviceFlow
 
     try:
-        flow = DeviceFlow(ops_url=OPS_URL, store=await _credential_store(ctx))
+        flow = DeviceFlow(ops_url=OPS_URL, store=None)  # 无状态模式不保存
         result = flow.poll_once(device_code, timeout=timeout)
-        if result.get("status") == "authorized":
-            try:
-                await _sync_systems_after_login(ctx)
-            except Exception:
-                pass
         return _ok(result)
     except Exception as exc:
         return _err(exc)
 
 
 @mcp.tool()
-async def auth_logout(ctx: Context | None = None) -> dict:
-    """清除当前用户的本地凭证。"""
+async def auth_get_token(system: str = "ops", session_id: str | None = None) -> dict:
+    """获取指定系统的有效 JWT。
+
+    无状态模式下必须提供 session_id，服务器会直接向后端请求 JWT，不读取本地存储。
+    """
+    if not session_id:
+        return _err(ValueError("无状态模式下必须提供 session_id"))
     try:
-        (await _credential_store(ctx)).clear()
-        return _ok({"message": "已退出，本地凭证已清除"})
+        jwt = _auth_client().get_token_by_session(session_id, system)
+        return _ok(jwt)
     except Exception as exc:
         return _err(exc)
 
 
 @mcp.tool()
-async def auth_get_token(system: str = "ops", ctx: Context | None = None) -> dict:
-    """获取指定系统的有效 JWT（过期时自动刷新）。"""
+async def auth_check_token(jwt: str | None = None) -> dict:
+    """检测 JWT 有效性及剩余有效时间（秒）。纯本地解析，不向后端发请求。"""
+    if not jwt:
+        return _ok({"valid": False, "expires_in": 0})
     try:
-        return _ok((await _auth_client(ctx)).get_token(system))
+        payload = _decode_jwt_payload(jwt)
+        exp = payload.get("exp")
+        if not exp:
+            return _ok({"valid": False, "expires_in": 0})
+        remaining = int(exp - datetime.now(timezone.utc).timestamp())
+        return _ok({"valid": remaining > 0, "expires_in": max(0, remaining)})
     except Exception as exc:
         return _err(exc)
 
 
 @mcp.tool()
-async def auth_check_token(system: str = "ops", ctx: Context | None = None) -> dict:
-    """检测指定系统的 Token 有效性及剩余有效时间。"""
+async def auth_is_authenticated(session_id: str | None = None) -> dict:
+    """检查 session_id 是否有效（尝试用其获取 JWT）。"""
+    if not session_id:
+        return _ok(False)
     try:
-        return _ok((await _auth_client(ctx)).check_token(system))
-    except Exception as exc:
-        return _err(exc)
+        _auth_client().get_token_by_session(session_id, "ops")
+        return _ok(True)
+    except Exception:
+        return _ok(False)
 
 
 @mcp.tool()
-async def auth_is_authenticated(ctx: Context | None = None) -> dict:
-    """检查当前是否已登录。"""
+async def auth_token_refresh(system: str = "__all__", session_id: str | None = None) -> dict:
+    """刷新指定系统 JWT。必须有 session_id。"""
+    if not session_id:
+        return _err(ValueError("无状态模式下必须提供 session_id"))
     try:
-        return _ok((await _auth_client(ctx)).is_authenticated())
-    except Exception as exc:
-        return _err(exc)
-
-
-@mcp.tool()
-async def auth_token_refresh(system: str = "__all__", ctx: Context | None = None) -> dict:
-    """刷新指定系统 JWT，system='__all__' 时刷新全部系统。"""
-    try:
-        client = await _auth_client(ctx)
+        client = _auth_client()
         if system == "__all__":
-            return _ok(client._tm.refresh_all())
-        return _ok(client.refresh_token(system))
+            results = {}
+            for sys in client._registry.list_all():
+                try:
+                    jwt = client.get_token_by_session(session_id, sys["alias"])
+                    results[sys["alias"]] = {"jwt": jwt, "ok": True}
+                except Exception as e:
+                    results[sys["alias"]] = {"ok": False, "error": str(e)}
+            return _ok(results)
+        jwt = client.get_token_by_session(session_id, system)
+        return _ok({"jwt": jwt})
     except Exception as exc:
         return _err(exc)
 
 
 @mcp.tool()
-async def auth_system_list(ctx: Context | None = None) -> dict:
-    """列出所有已注册系统（builtin / local / ops_sync）。"""
+async def auth_system_list() -> dict:
+    """列出所有已注册系统（builtin / local / ops_sync）。不需要认证。"""
     try:
-        return _ok((await _registry(ctx)).list_all())
+        return _ok(_registry().list_all())
     except Exception as exc:
         return _err(exc)
 
@@ -291,11 +321,10 @@ async def auth_system_add(
     url: str,
     key: str | None = None,
     token_endpoint: str = "/api/auth/cli-token",
-    ctx: Context | None = None,
 ) -> dict:
-    """添加或更新用户自定义系统。"""
+    """添加或更新用户自定义系统。不需要认证。"""
     try:
-        registry = await _registry(ctx)
+        registry = _registry()
         system_key = key or alias.replace(" ", "_").lower()
         registry.add_local(alias, system_key, url, token_endpoint=token_endpoint)
         return _ok({"alias": alias, "system_key": system_key, "url": url})
@@ -304,40 +333,57 @@ async def auth_system_add(
 
 
 @mcp.tool()
-async def auth_system_remove(alias: str, ctx: Context | None = None) -> dict:
-    """移除用户自定义系统；内置系统不可删除。"""
+async def auth_system_remove(alias: str) -> dict:
+    """移除用户自定义系统；内置系统不可删除。不需要认证。"""
     try:
-        (await _registry(ctx)).remove(alias)
+        _registry().remove(alias)
         return _ok({"removed": alias})
     except Exception as exc:
         return _err(exc)
 
 
 @mcp.tool()
-async def auth_system_sync(ctx: Context | None = None) -> dict:
-    """从 ops 后端同步系统列表。"""
+async def auth_system_sync(session_id: str | None = None) -> dict:
+    """从 ops 后端同步系统列表。需要 session_id。"""
+    if not session_id:
+        return _err(ValueError("无状态模式下必须提供 session_id"))
     try:
-        return _ok(await _sync_systems_after_login(ctx))
+        return _ok(await _sync_systems_after_login(session_id))
     except Exception as exc:
         return _err(exc)
 
 
 @mcp.tool()
-async def auth_build_request_auth(system: str = "ops", ctx: Context | None = None) -> dict:
+async def auth_build_request_auth(
+    system: str = "ops",
+    session_id: str | None = None,
+    jwt: str | None = None,
+) -> dict:
     """构造统一请求认证参数（JWT Bearer + Session Cookie）。"""
+    if not session_id:
+        return _err(ValueError("无状态模式下必须提供 session_id"))
     try:
-        headers, cookies = (await _auth_client(ctx)).build_request_auth(system)
+        headers, cookies = _auth_client().build_request_auth_with_session(
+            session_id, jwt, system
+        )
         return _ok({"headers": headers, "cookies": cookies})
     except Exception as exc:
         return _err(exc)
 
 
 @mcp.tool()
-async def auth_doctor(ctx: Context | None = None) -> dict:
-    """检查登录状态与各系统连通性，返回结构化诊断结果。"""
+async def auth_doctor(session_id: str | None = None) -> dict:
+    """检查 session 有效性与各系统连通性，返回结构化诊断结果。"""
     try:
-        client = await _auth_client(ctx)
+        client = _auth_client()
         checks: list[dict] = []
+        authenticated = False
+        if session_id:
+            try:
+                client.get_token_by_session(session_id, "ops")
+                authenticated = True
+            except Exception:
+                pass
         for system in client._registry.list_all():
             ok = False
             error = None
@@ -354,10 +400,12 @@ async def auth_doctor(ctx: Context | None = None) -> dict:
                     "error": error,
                 }
             )
-        return _ok({"authenticated": client.is_authenticated(), "systems": checks})
+        return _ok({"authenticated": authenticated, "systems": checks})
     except Exception as exc:
         return _err(exc)
 
+
+# ── skills tools ─────────────────────────────────────────────────
 
 @mcp.tool()
 def skills_list(skills_dir: str | None = None) -> dict:
@@ -424,29 +472,53 @@ def skills_upgrade(
         return _err(exc)
 
 
-async def _sync_systems_after_login(ctx: Context | None = None) -> dict:
-    """登录成功后同步 ops 系统列表。"""
+# ── internal helpers ─────────────────────────────────────────────
+
+async def _sync_systems_after_login(session_id: str) -> dict:
+    """使用外部传入的 session_id 同步 ops 系统列表。"""
     from opscli.auth import OPS_URL
 
-    client = await _auth_client(ctx)
     response = httpx.get(
         f"{OPS_URL}/api/v1/cli/systems",
-        headers=client.build_session_headers("ops"),
+        headers={"X-Session-Id": session_id},
         timeout=10,
     )
     response.raise_for_status()
     systems = response.json().get("systems", [])
-    (await _registry(ctx)).sync_from_ops(systems)
+    _registry().sync_from_ops(systems)
     return {"synced": len(systems), "systems": systems}
+
+
+def _generate_api_key() -> str:
+    """生成固定格式的高熵 API Key。"""
+    alphabet = string.ascii_letters + string.digits
+    random_part = "".join(secrets.choice(alphabet) for _ in range(32))
+    return "opscli-mcp-" + random_part
+
+
+def _load_or_create_api_key() -> str:
+    """加载或创建 MCP 服务固定 API Key。
+
+    Key 持久化保存在 ~/.config/opscli/mcp_api_key 中，避免每次重启都更换。
+    首次启动时自动生成并打印，管理员需记录后分发给用户。
+    """
+    from opscli.config import CONFIG_DIR
+
+    key_path = Path(CONFIG_DIR) / "mcp_api_key"
+    if key_path.exists():
+        return key_path.read_text(encoding="utf-8").strip()
+
+    api_key = _generate_api_key()
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.write_text(api_key, encoding="utf-8")
+    key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    return api_key
 
 
 def run() -> None:
     """MCP Server 启动入口，由 pyproject.toml scripts 注册为 opscli-mcp。"""
     transport_val: str | None = None
     kwargs: dict[str, Any] = {}
-    multi_user = False
-    require_auth = False
-    user_store_base_dir: Path | None = None
 
     args = sys.argv[1:]
     i = 0
@@ -460,31 +532,19 @@ def run() -> None:
         elif args[i] == "--host" and i + 1 < len(args):
             kwargs["host"] = args[i + 1]
             i += 2
-        elif args[i] == "--multi-user":
-            multi_user = True
-            i += 1
-        elif args[i] == "--require-auth":
-            require_auth = True
-            i += 1
-        elif args[i] == "--user-store-dir" and i + 1 < len(args):
-            user_store_base_dir = Path(args[i + 1]).expanduser()
-            i += 2
         else:
             i += 1
 
-    configure_multi_user(
-        enabled=multi_user,
-        require_auth=require_auth,
-        base_dir=user_store_base_dir,
-    )
-    if multi_user and require_auth and transport_val is not None:
-        mcp.auth = MCPApiKeyAuthProvider(base_dir=user_store_base_dir)
-    if multi_user and transport_val is None:
-        from opscli.mcp.user_store import MCPUserStore
+    # SSE 模式下自动启用固定 API Key 鉴权
+    if transport_val == "sse":
+        api_key = _load_or_create_api_key()
+        from opscli.mcp.auth_middleware import FixedApiKeyAuthProvider
 
-        api_key = os.getenv("OPSCLI_MCP_API_KEY")
-        if MCPUserStore(base_dir=user_store_base_dir).verify_api_key(api_key) is None:
-            raise SystemExit("stdio 多用户模式需要有效的 OPSCLI_MCP_API_KEY")
+        mcp.auth = FixedApiKeyAuthProvider(api_key)
+        print(f"\n[opscli-mcp] SSE 服务已启用 API Key 鉴权")
+        print(f"[opscli-mcp] API Key: {api_key}\n")
+        print("请将此 Key 配置到客户端 headers: Authorization: Bearer <api_key>\n")
+
     mcp.run(transport=transport_val, **kwargs)  # type: ignore[arg-type]
 
 

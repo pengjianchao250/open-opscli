@@ -14,11 +14,12 @@ from opscli.auth.exceptions import DeviceFlowExpiredError, DeviceFlowDeniedError
 class DeviceFlow:
     """OAuth2 Device Flow 授权器，管理设备码获取与轮询等待。"""
 
-    def __init__(self, ops_url: str, store):
+    def __init__(self, ops_url: str, store=None):
         """
         Args:
-            ops_url: 运营系统后端地址（如 https://https://ops.api.qa.aukeyit.com）
-            store: CredentialStore 实例，用于授权成功后持久化 session
+            ops_url: 运营系统后端地址（如 https://ops.api.qa.aukeyit.com）
+            store: CredentialStore 实例，用于授权成功后持久化 session。
+                   无状态模式（远程 MCP）下可传 None，不保存 session。
         """
         self._url = ops_url.rstrip("/")
         self._store = store
@@ -59,8 +60,8 @@ class DeviceFlow:
         resp.raise_for_status()
         body = resp.json()
         status = body.get("status")
-        if status == "authorized":
-            # 授权成功后立即落库，确保后续 MCP Tool 能直接读取隔离凭证目录
+        if status == "authorized" and self._store is not None:
+            # 授权成功后落库（本地 CLI 模式）；无状态模式（store=None）不保存
             self._store.save_session(
                 body["session_id"],
                 body.get("email", ""),

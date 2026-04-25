@@ -1,48 +1,32 @@
-"""MCP 多用户鉴权中间件。
+"""MCP 鉴权中间件。
 
-FastMCP 的 stdio transport 没有 HTTP Bearer 概念，因此本中间件主要用于
-SSE / HTTP 请求；stdio 场景由 `OPSCLI_MCP_API_KEY` 环境变量在 Tool 执行时兜底。
+无状态模式下服务器不保存用户 OAuth 凭证，但 SSE 连接层通过固定 API Key 进行
+基础访问控制，防止未授权访问。
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
 from fastmcp.server.auth.auth import AccessToken, AuthProvider
-from fastmcp.server.middleware import Middleware, MiddlewareContext
-
-from opscli.mcp.context import get_credential_dir, is_multi_user_enabled
-from opscli.mcp.user_store import MCPUserStore
 
 
-class MCPApiKeyAuthProvider(AuthProvider):
-    """将 opscli MCP API Key 作为 HTTP Bearer Token 校验。"""
+class FixedApiKeyAuthProvider(AuthProvider):
+    """固定 API Key 鉴权提供者。
 
-    def __init__(self, *, base_dir: Path | None = None):
+    所有连接 MCP 服务器的用户共享同一个 API Key，仅用于 SSE 连接层的基础
+    访问控制，不涉及用户身份隔离。实际业务鉴权由调用方传入的 session_id/jwt
+    在后端完成。
+    """
+
+    def __init__(self, api_key: str):
         super().__init__(required_scopes=["opscli:mcp"])
-        self._base_dir = base_dir
+        self._api_key = api_key
 
     async def verify_token(self, token: str) -> AccessToken | None:
-        """校验 Bearer Token，失败时返回 None 触发 HTTP 401。"""
-        user = MCPUserStore(base_dir=self._base_dir).verify_api_key(token)
-        if user is None:
+        """校验 Bearer Token 是否与固定 API Key 匹配。"""
+        if token != self._api_key:
             return None
         return AccessToken(
             token=token,
-            client_id=user.user_id,
+            client_id="default",
             scopes=["opscli:mcp"],
-            claims={"credential_dir": str(user.credential_dir)},
         )
-
-
-class MCPAuthMiddleware(Middleware):
-    """在 Tool 调用前解析并缓存当前用户凭证目录。"""
-
-    async def on_call_tool(self, context: MiddlewareContext[Any], call_next):
-        """Tool 调用前进行多用户鉴权预处理。"""
-        if is_multi_user_enabled() and context.fastmcp_context is not None:
-            # 这里不直接处理 401 响应，错误会交由 FastMCP 统一转换；
-            # Tool 内部也会再次读取 state，保证测试和 stdio 场景一致。
-            await get_credential_dir(context.fastmcp_context)
-        return await call_next(context)
