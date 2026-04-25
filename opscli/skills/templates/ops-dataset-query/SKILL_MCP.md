@@ -24,7 +24,7 @@ description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执
 - **若 `session_id` 过期**：
   1. 调用 `auth_login_start()` 重新发起 Device Flow
   2. 重复上述授权流程
-- 只有认证状态确认正常后，才允许继续执行 `query_metadata`、`query_build`、`query_run`、`query_build_and_run`、`skills_upgrade`
+- 只有认证状态确认正常后，才允许继续执行 `query_metadata`、`query_build`、`query_run`、`query_build_and_run`、`query_chart`、`skills_upgrade`
 
 **标准前置流程（MCP Tool 调用）**：
 
@@ -56,6 +56,7 @@ auth_is_authenticated(session_id="新session_id")
 - 字段搜索结果已按相关性排序（精确匹配 > 子串匹配 > 关键词匹配）
 - `query_build` 适合常见聚合查询（select / groupBy / where / having / orderBy / limit / offset / dryRun）
 - `query_run` 适合透传完整高级 payload（`innerWhere`、`joins`、`dataComparison`、`translate` 等复杂场景）
+- `query_chart` 适合通过图表 UUID 直接获取图表结构或执行图表查询，无需手动构造 payload
 - 所有查询工作流都必须以前置的 `session_id` 有效性检测作为起点
 
 ### 【强制】比较类查询优先级规则
@@ -203,6 +204,65 @@ query_build_and_run(
 ```
 
 > 如果 `jwt` 未提供，服务器会自动用 `session_id` 向后端换取 JWT，无需调用方手动管理。
+
+---
+
+### `query_chart`
+
+通过 `chart_uuid` 获取图表查询结构，可选立即执行所有查询并合并输出结果。**需要认证**。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `chart_uuid` | string | **是** | 图表 UUID（如 `4NQ5f66sU9`） |
+| `run` | boolean | 否 | 获取后立即执行所有查询并合并输出，默认 `false` |
+| `dry_run` | boolean | 否 | 仅生成 SQL，不执行查询，默认 `false` |
+| `session_id` | string | **是** | 用户授权后获得的 session_id |
+| `jwt` | string | 否 | JWT，不传则自动用 session_id 换取 |
+
+**仅获取图表结构**：
+```python
+query_chart(
+    chart_uuid="4NQ5f66sU9",
+    session_id="860b0636485b5188a2b9b4ed5210e736"
+)
+# → {chart_uuid: "4NQ5f66sU9", queries: [...]}
+```
+
+**获取并执行查询**：
+```python
+query_chart(
+    chart_uuid="4NQ5f66sU9",
+    run=True,
+    session_id="860b0636485b5188a2b9b4ed5210e736"
+)
+```
+
+**返回结构**（`run=True` 时）：
+```python
+{
+    "chart_uuid": "4NQ5f66sU9",
+    "queries": [
+        {
+            "index": 0,
+            "table_id": 1,
+            "data_source": "doris_analytics",
+            "payload": {...},      # 构造的查询 payload
+            "result": {...},       # 成功时的查询结果
+            "error": {...},        # 失败时的错误信息
+        }
+    ],
+    "merged": {
+        "rows": [...],             # 所有 rows 扁平合并（加 _query_index）
+        "meta": {
+            "rowCount": 150,
+            "queryCount": 3,
+            "successCount": 3
+        }
+    }
+}
+```
+
+> 当图表包含多个 query 时，每个 query 独立执行，失败时记录错误但不中断后续 query。
 
 ---
 
@@ -356,6 +416,8 @@ result_prev = query_build_and_run(
 | 未登录 / session 无效 | 调用 `ops-auth` Skill，执行 `auth_login_start()` → 浏览器授权 → `auth_login_poll()` |
 | Token 过期 | `auth_token_refresh(session_id)`；如 session 也过期则重新 Device Flow 授权 |
 | payload 文件不存在 | 先 `query_build` 生成 |
+| chart_uuid 不存在或已删除 | 确认图表 ID 正确，或检查该图表是否有访问权限 |
+| 图表查询执行失败 | 查看返回的 `error` 字段获取具体错误信息，常见原因：数据集权限不足、字段已变更 |
 
 ---
 
@@ -433,6 +495,26 @@ skills_upgrade(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencod
 
 # 3. 重新查询
 query_metadata(dataset="sales_order_d", skills_dir="/Users/mask/.config/opencode/skills")
+```
+
+### 图表查询（通过 chart_uuid）
+
+```python
+# 0. 先检查 session
+auth_is_authenticated(session_id="xxx")
+
+# 1. 获取图表结构
+query_chart(
+    chart_uuid="4NQ5f66sU9",
+    session_id="860b0636485b5188a2b9b4ed5210e736"
+)
+
+# 2. 获取并执行图表查询
+query_chart(
+    chart_uuid="4NQ5f66sU9",
+    run=True,
+    session_id="860b0636485b5188a2b9b4ed5210e736"
+)
 ```
 
 ---

@@ -208,6 +208,35 @@ async def query_build_and_run(
         return _err(exc)
 
 
+@mcp.tool()
+async def query_chart(
+    chart_uuid: str,
+    run: bool = False,
+    dry_run: bool = False,
+    session_id: str | None = None,
+    jwt: str | None = None,
+) -> dict:
+    """通过 chart_uuid 获取图表查询结构，可选立即执行所有查询。
+
+    无状态模式下必须提供 session_id，服务器会向后端请求图表数据。
+    """
+    if not session_id:
+        return _err(ValueError("无状态模式下必须提供 session_id"))
+    manager = _query_manager(jwt=jwt, session_id=session_id)
+    try:
+        if run or dry_run:
+            result = manager.run_chart_queries(chart_uuid=chart_uuid, dry_run=dry_run)
+            return _ok(result)
+        else:
+            chart_items = manager.fetch_chart_queries(chart_uuid)
+            return _ok({
+                "chart_uuid": chart_uuid,
+                "queries": chart_items,
+            })
+    except Exception as exc:
+        return _err(exc)
+
+
 # ── auth tools ───────────────────────────────────────────────────
 
 @mcp.tool()
