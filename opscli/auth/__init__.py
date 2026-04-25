@@ -75,5 +75,25 @@ class AuthClient:
         """强制刷新指定系统 JWT"""
         return self._tm.refresh_token(alias)
 
+    def get_token_by_session(self, session_id: str, alias: str) -> str:
+        """无状态模式：用外部 session_id 直接向后端请求 JWT，不读取本地存储。"""
+        return self._tm.get_token_by_session(session_id, alias)
+
+    def build_request_auth_with_session(
+        self, session_id: str, jwt: str | None = None, alias: str = "ops"
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """无状态模式：用外部传入的 session_id 和 jwt 构造请求头。
+
+        如果 jwt 未提供，会自动用 session_id 向后端换取。
+        """
+        if jwt is None:
+            jwt = self.get_token_by_session(session_id, alias)
+        headers = {"Authorization": f"Bearer {jwt}"}
+        cookies = {"polarisUserToken": session_id}
+        device_code = self.get_device_code()
+        if device_code:
+            cookies["opscliDeviceCode"] = device_code
+        return headers, cookies
+
 
 __all__ = ["AuthClient", "BUILTIN_SYSTEMS", "OPS_URL"]
