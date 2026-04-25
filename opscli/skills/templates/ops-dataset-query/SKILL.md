@@ -324,6 +324,54 @@ opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --dry-run -
 }
 ```
 
+### 【强制】Chart 多查询与小计/总计处理规则
+
+> ⚠️ **核心原则：优先使用服务端返回的小计/总计数据，禁止本地累加计算。**
+
+一个图表可能返回多个 query（通过 `merged.meta.queryCount` 识别），不同 query 的 `groupBy` 维度和 `select` 字段数不同：
+
+| Query 类型 | groupBy 维度 | select 字段数 | 说明 |
+|-----------|-------------|-------------|------|
+| Query 0（明细） | 全部维度（如部门+渠道+国家） | 最多 | 最细粒度的明细数据 |
+| Query 1（小计） | 部分维度（如仅部门） | 较少（缺少非 groupBy 的维度列） | 按更高层级聚合的小计 |
+| Query 2+（总计） | 无（空数组） | 最少（只有指标列） | 全局总计 |
+
+**识别方法**：通过 `query.groupBy` 的长度判断：
+- `groupBy` 与 Query 0 相同 → 明细行
+- `groupBy` 比 Query 0 少 → 小计行（按剩余维度聚合）
+- `groupBy` 为空 → 总计行
+
+**实际示例**（3 个查询的图表）：
+
+```
+Query 0: groupBy=[dept_name, channel_name, country_name]  → 22 行明细
+Query 1: groupBy=[dept_name]                               → 2 行部门小计
+Query 2: groupBy=[]                                        → 1 行总计
+```
+
+**数据展示规范**：
+
+1. **必须遍历所有 queries**，不能只读 `queries[0]`
+2. 小计行/总计行的字段数比明细行少（缺少非 groupBy 的维度列），展示时缺失维度列留空即可
+3. **禁止自行累加明细行来计算小计/总计**，服务端的聚合逻辑可能与简单累加存在差异（如精度、过滤条件）
+4. 展示顺序建议：按部门分组 → 该部门明细行 → 该部门小计 → 下一个部门 → ... → 总计
+
+**错误示例**：
+```python
+# ❌ 错误：只读 Query 0，本地累加计算小计
+detail_rows = queries[0]['result']['data']
+for dept in departments:
+    subtotal = sum(r['profit'] for r in detail_rows if r['dept'] == dept)
+```
+
+**正确示例**：
+```python
+# ✅ 正确：从各 query 的 result 中直接取小计/总计
+detail_rows = queries[0]['result']['data']     # 明细
+subtotal_rows = queries[1]['result']['data']    # 部门小计
+total_rows = queries[2]['result']['data']       # 总计
+```
+
 ---
 
 #### Chart 查询字段别名映射与转换
