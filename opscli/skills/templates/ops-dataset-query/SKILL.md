@@ -324,6 +324,176 @@ opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --dry-run -
 }
 ```
 
+### 【强制】Chart 多查询与小计/总计处理规则
+
+> ⚠️ **核心原则：优先使用服务端返回的小计/总计数据，禁止本地累加计算。**
+
+一个图表可能返回多个 query（通过 `merged.meta.queryCount` 识别），不同 query 的 `groupBy` 维度和 `select` 字段数不同：
+
+| Query 类型 | groupBy 维度 | select 字段数 | 说明 |
+|-----------|-------------|-------------|------|
+| Query 0（明细） | 全部维度（如部门+渠道+国家） | 最多 | 最细粒度的明细数据 |
+| Query 1（小计） | 部分维度（如仅部门） | 较少（缺少非 groupBy 的维度列） | 按更高层级聚合的小计 |
+| Query 2+（总计） | 无（空数组） | 最少（只有指标列） | 全局总计 |
+
+**识别方法**：通过 `query.groupBy` 的长度判断：
+- `groupBy` 与 Query 0 相同 → 明细行
+- `groupBy` 比 Query 0 少 → 小计行（按剩余维度聚合）
+- `groupBy` 为空 → 总计行
+
+**实际示例**（3 个查询的图表）：
+
+```
+Query 0: groupBy=[dept_name, channel_name, country_name]  → 22 行明细
+Query 1: groupBy=[dept_name]                               → 2 行部门小计
+Query 2: groupBy=[]                                        → 1 行总计
+```
+
+**数据展示规范**：
+
+1. **必须遍历所有 queries**，不能只读 `queries[0]`
+2. 小计行/总计行的字段数比明细行少（缺少非 groupBy 的维度列），展示时缺失维度列留空即可
+3. **禁止自行累加明细行来计算小计/总计**，服务端的聚合逻辑可能与简单累加存在差异（如精度、过滤条件）
+4. 展示顺序建议：按部门分组 → 该部门明细行 → 该部门小计 → 下一个部门 → ... → 总计
+
+**错误示例**：
+```python
+# ❌ 错误：只读 Query 0，本地累加计算小计
+detail_rows = queries[0]['result']['data']
+for dept in departments:
+    subtotal = sum(r['profit'] for r in detail_rows if r['dept'] == dept)
+```
+
+**正确示例**：
+```python
+# ✅ 正确：从各 query 的 result 中直接取小计/总计
+detail_rows = queries[0]['result']['data']     # 明细
+subtotal_rows = queries[1]['result']['data']    # 部门小计
+total_rows = queries[2]['result']['data']       # 总计
+```
+
+---
+
+### 【强制】Chart 数据展示与 Excel 输出规范
+
+> ⚠️ **核心原则：默认展示全部字段；小计/总计行必须出现在同一张表中，数据取自服务端返回，禁止本地累加。**
+
+#### 一、字段展示规范
+
+1. **默认展示所有字段**：Chart 查询返回的所有维度和指标列必须全部展示，不可省略任何字段
+2. **字段别名映射优先级**：
+   - 先用 `chart_map.py --map-results` 自动映射
+   - 若 `chart_map.py` 映射不完整（部分字段 `mapped_name` 仍为 `global_alias`），则手动补充映射：
+     - 从 `payload.query.select[].expr` 提取 `field_name`（如 `ds_xxx.dept_name` → `dept_name`）
+     - 用本地 `data/dataset_fields.csv` 按 `field_name` 查找 `verbose_name`
+3. **百分比指标格式化**：毛利率、占比等公式指标服务端返回值为小数（如 `-0.2039` 表示 -20.39%），展示时需 ×100 并保留两位小数，无数据时显示 `-`
+
+#### 二、多查询合并展示规范
+
+**必须将明细、小计、总计合并为一张统一的 Markdown 表格**，不可分成多张独立的表：
+
+| 展示区域 | 行来源 | 维度列 | 指标列 |
+|---------|--------|-------|--------|
+| 明细行（前 N 行） | `queries[0].result.data` | 全部填充 | 全部填充 |
+| 小计行 | `queries[1+].result.data`（groupBy 长度 < Q0） | 仅填充 groupBy 包含的维度，其余留空 | 全部填充 |
+| 总计行（最后一行） | `queries[last].result.data`（groupBy 为空） | 全部留空 | 全部填充 |
+
+**小计行标注**：在"产品名称"或其他可辨识维度列中标注 `**小计**`，总计行标注 `**总计**`，用加粗区分。
+
+**合并展示示例**：
+
+```markdown
+| 日期 | 渠道 | 销售小组 | 产品名称 | 毛利率 | SP广告费占比 |
+| --- | --- | --- | --- | --- | --- |
+| 2026-04-01 | wayfair-莱沃 | 清货组 | ON ST-105玄关桌黑色 | -10.42% | 1.07% |
+| 2026-04-01 | wayfair-莱沃 | 清货组 | ON TVS-104电视柜橡木色 | -23.29% | 0.68% |
+| 2026-04-01 | | | **小计** | **-20.39%** | **0.83%** |
+| | | | **总计** | **6.29%** | **7.87%** |
+```
+
+#### 三、Excel 透视表输出规范
+
+当用户需要导出 Excel 时，遵循以下规范：
+
+**Sheet 结构**：
+
+| Sheet 名称 | 内容 | 行数 |
+|------------|------|------|
+| 透视表主表 | 明细 + 小计 + 总计合并展示 | 所有 query 合计行数 |
+| 可选附加 Sheet | 成本结构占比 / 同环比分析等 | 按需 |
+
+**Excel 格式要求**：
+
+1. **表头**：蓝色背景（`4472C4`）白色粗体字，冻结首行
+2. **明细行**：常规格式，数值列使用千分位数字格式（`#,##0.00`），百分比列使用百分比格式（`0.00%`）
+3. **小计行**：灰色背景（`D9E2F3`），粗体字
+4. **总计行**：深蓝背景（`4472C4`）白色粗体字
+5. **负毛利率**：红色字体（`FF0000`）标注亏损
+6. **列宽自适应**：根据内容最大宽度自动调整（建议最大 50 字符）
+7. **小计/总计数据来源**：必须直接从 `queries[1+].result.data` 读取，维度列缺失时留空
+
+**使用 `excel_export.py` 导出 Excel**：
+
+Skill 目录下提供 `scripts/excel_export.py`，封装了完整的透视表 Excel 导出逻辑（字段别名自动映射、明细/小计/总计合并、负值标红、列宽自适应），直接调用即可。
+
+**前置依赖**：`pip install openpyxl`
+
+```bash
+cd ~/.claude/skills/ops-dataset-query/scripts
+
+# 从已保存的 chart run 结果导出
+python excel_export.py --input /tmp/chart_result.json --output /tmp/output.xlsx
+
+# 通过 UUID 直接获取并导出（自动调用 opscli 执行查询）
+python excel_export.py --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --output /tmp/output.xlsx
+
+# 自定义 Sheet 名称
+python excel_export.py --input /tmp/chart_result.json --output /tmp/output.xlsx --sheet-name 销售数据
+
+# 安装在非标准路径时，指定 Skill 根目录
+python excel_export.py --input /tmp/chart_result.json --output /tmp/output.xlsx --skills-dir ~/.openclaw/skills
+```
+
+**输出（stdout JSON）**：
+
+```json
+{
+  "success": true,
+  "output": "/tmp/output.xlsx",
+  "rows": 25,
+  "columns": ["部门名称", "渠道名称", "原价金额", "毛利润", "毛利率"],
+  "chart_uuid": "32f660fd-f62a-45c4-a443-e21f2edb0779"
+}
+```
+
+#### 四、Chart 查询完整工作流
+
+```
+用户请求查询图表
+  │
+  ├── 1. opscli auth token status（前置认证检查）
+  │
+  ├── 2. opscli query chart --uuid <id> --run --pretty > /tmp/chart_<uuid>.json
+  │
+  ├── 3. 分析查询结构
+  │     ├── queries 数量（判断是否有小计/总计）
+  │     ├── 每个 query 的 groupBy（识别明细/小计/总计）
+  │     └── select 字段列表（确定维度和指标）
+  │
+  ├── 4. 字段别名映射
+  │     ├── chart_map.py --input /tmp/chart_<uuid>.json --map-results --pretty
+  │     ├── 若映射不完整：从 select[].expr 提取 field_name
+  │     └── 查 dataset_fields.csv 补充 verbose_name
+  │
+  ├── 5. 生成合并 Markdown 表格（明细 + 小计 + 总计）
+  │     ├── 小计行：维度列按 groupBy 填充，其余留空，标注"小计"
+  │     ├── 总计行：维度列全部留空，标注"总计"
+  │     └── 百分比指标 ×100 格式化
+  │
+  └── 6. 用户要求 Excel 时
+        └── python excel_export.py --input /tmp/chart_<uuid>.json --output /tmp/output.xlsx
+```
+
 ---
 
 #### Chart 查询字段别名映射与转换

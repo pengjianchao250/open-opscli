@@ -139,7 +139,7 @@ class SkillDetector:
             for runtime in preferred_runtimes:
                 normalized = runtime.strip().lower()
                 if normalized == "all":
-                    return self.detect_available_install_targets(cwd=current)
+                    return self.detect_all_install_targets()
                 _, path = self.detect_install_target(cwd=current, preferred_runtime=normalized)
                 targets.append((normalized, path))
             return self._dedupe_targets(targets)
@@ -196,6 +196,22 @@ class SkillDetector:
             targets.append(("opencode", self._opencode_skills_dir()))
 
         return self._dedupe_targets(targets)
+
+    def detect_all_install_targets(self) -> list[tuple[str, Path]]:
+        """返回全部支持运行时的全局安装目录。
+
+        `--runtime all` 的语义是强制覆盖四类 AI 工具的全局 Skills 目录，
+        不依赖当前机器是否已检测到对应命令或配置目录。
+        """
+        home = Path.home()
+        return self._dedupe_targets(
+            [
+                ("claude", home / ".claude" / "skills"),
+                ("openclaw", home / ".openclaw" / "skills"),
+                ("codex", home / ".codex" / "skills"),
+                ("opencode", self._opencode_skills_dir()),
+            ]
+        )
 
     def _opencode_config_dir(self) -> Path:
         """返回 OpenCode 的配置根目录（跨平台）。"""

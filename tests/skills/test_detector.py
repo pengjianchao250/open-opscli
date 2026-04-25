@@ -19,3 +19,15 @@ def test_discover_skills_from_explicit_dir(tmp_path: Path):
     assert records[0].name == "ops-dataset-query"
     assert records[0].version == "v1.2.3"
 
+
+def test_runtime_all_targets_all_supported_global_dirs(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    targets = SkillDetector().detect_install_targets(preferred_runtimes=["all"])
+
+    assert targets == [
+        ("claude", tmp_path / ".claude" / "skills"),
+        ("openclaw", tmp_path / ".openclaw" / "skills"),
+        ("codex", tmp_path / ".codex" / "skills"),
+        ("opencode", tmp_path / ".config" / "opencode" / "skills"),
+    ]

@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from opscli.auth import AuthClient
 from opscli.query.domain.exceptions import DatasetNotFoundError, InvalidPayloadError, QueryMetadataNotReadyError
 from opscli.query.domain.models import QueryMetadataResult
 from opscli.query.transport.client import QueryClient
@@ -24,11 +25,20 @@ SELECT_ALIAS_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class QueryManager:
-    """协调本地 metadata 与远端 query 执行。"""
+    """协调本地 metadata 与远端 query 执行。
 
-    def __init__(self) -> None:
+    支持无状态模式：通过外部传入的 jwt 和 session_id 构造 QueryClient，
+    不依赖本地 CredentialStore。适用于远程共享 MCP 服务器场景。
+    """
+
+    def __init__(
+        self,
+        auth_client: AuthClient | None = None,
+        jwt: str | None = None,
+        session_id: str | None = None,
+    ) -> None:
         self.detector = SkillDetector()
-        self.client = QueryClient()
+        self.client = QueryClient(auth_client=auth_client, jwt=jwt, session_id=session_id)
         self.template_dir = Path(__file__).resolve().parent.parent.parent / "skills" / "templates" / "ops-dataset-query" / "data"
 
     def metadata(

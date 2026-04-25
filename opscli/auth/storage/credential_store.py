@@ -57,6 +57,8 @@ class CredentialStore:
         from opscli.config import CONFIG_DIR
         self._dir = Path(base_dir or CONFIG_DIR)
         self._dir.mkdir(parents=True, exist_ok=True)
+        if base_dir is not None:
+            self._dir.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
         self._path = self._dir / "credentials.bin"
         self._crypto = Crypto(self._dir / ".key")
 

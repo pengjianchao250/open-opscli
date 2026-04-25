@@ -27,6 +27,33 @@ def test_request_device_code(flow):
 
 
 @respx.mock
+def test_poll_once_pending_does_not_save_session(flow):
+    respx.get(f"{OPS}/v1/cli/device/poll").mock(
+        return_value=httpx.Response(200, json={"status": "pending", "interval": 1})
+    )
+
+    r = flow.poll_once("dc-abc", timeout=1)
+
+    assert r["status"] == "pending"
+    assert flow._store.load() is None
+
+
+@respx.mock
+def test_poll_once_authorized_saves_session(flow):
+    respx.get(f"{OPS}/v1/cli/device/poll").mock(return_value=httpx.Response(200, json={
+        "status": "authorized",
+        "session_id": "uuid-yyyy",
+        "email": "user@example.com",
+        "expires_at": "2099-01-01T00:00:00Z",
+    }))
+
+    r = flow.poll_once("dc-abc", timeout=1)
+
+    assert r["status"] == "authorized"
+    assert flow._store.load()["session_id"] == "uuid-yyyy"
+
+
+@respx.mock
 def test_poll_success(flow):
     respx.get(f"{OPS}/v1/cli/device/poll").mock(return_value=httpx.Response(200, json={
         "status": "authorized",

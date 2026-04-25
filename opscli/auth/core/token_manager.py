@@ -165,3 +165,34 @@ class TokenManager:
             except Exception as e:
                 results[sys["alias"]] = f"失败: {e}"
         return results
+
+    def get_token_by_session(self, session_id: str, alias: str) -> str:
+        """无状态模式：使用外部传入的 session_id 直接向后端请求 JWT。
+
+        不读取本地 CredentialStore，也不保存返回的 JWT。
+        适用于远程共享 MCP 服务器场景，由调用方自行管理凭证。
+
+        Args:
+            session_id: 用户登录后获得的 session_id
+            alias: 系统别名（如 ops、polaris）
+
+        Returns:
+            JWT 字符串
+
+        Raises:
+            TokenFetchError: 后端请求失败
+        """
+        sys = self._registry.get(alias)
+        try:
+            resp = httpx.post(
+                f"{sys['url']}{sys['token_endpoint']}",
+                json={"session_id": session_id},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            return body["jwt"]
+        except httpx.HTTPStatusError as e:
+            raise TokenFetchError(f"获取 {alias} JWT 失败: {e.response.status_code}")
+        except Exception as e:
+            raise TokenFetchError(f"获取 {alias} JWT 异常: {e}")
