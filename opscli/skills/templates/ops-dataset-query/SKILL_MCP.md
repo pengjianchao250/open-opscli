@@ -10,6 +10,33 @@ description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执
 
 ---
 
+## ChatGPT / OpenAI 兼容工具
+
+本 Skill 同时提供 OpenAI [Company Knowledge](https://openai.com/index/introducing-company-knowledge/) 标准工具，无需认证即可搜索本地数据知识库：
+
+| 工具 | 用途 | 参数 | 返回 |
+|------|------|------|------|
+| `search` | 搜索数据集和字段 | `query: str` | `{"results": [{"id", "title", "url"}]}` |
+| `fetch` | 获取详细信息 | `id: str` | `{"id", "title", "text", "url", "metadata"}` |
+
+**使用场景**：
+- ChatGPT 用户通过自然语言搜索可用数据集
+- Deep Research 引用本地数据作为知识源
+- 无需 Device Flow 即可浏览数据字典
+
+**search 示例**：
+```python
+search(query="订单")  # 返回所有与"订单"相关的数据集和字段
+```
+
+**fetch 示例**：
+```python
+fetch(id="dataset:sales_order_d")  # 返回该数据集的详细 metadata
+fetch(id="field:sales_order_d.order_cost")  # 返回该字段的详细信息
+```
+
+---
+
 ## 调用前置要求
 
 > **【强制】每次调用 `query_*` 前，必须先确认已提供有效 `session_id`；禁止默认假设用户已经登录。**

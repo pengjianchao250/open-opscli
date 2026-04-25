@@ -143,6 +143,54 @@ mcp-inspector --port 5173
 
 ---
 
+## ChatGPT / OpenAI 兼容模式
+
+opscli MCP 服务器已实现 OpenAI [Company Knowledge](https://openai.com/index/introducing-company-knowledge/) 和 [Deep Research](https://platform.openai.com/docs/mcp) 兼容的两个标准工具：
+
+| 工具 | 说明 | 是否需要认证 |
+|------|------|------------|
+| `search` | 在本地数据集和字段索引中搜索 | 否（本地数据） |
+| `fetch` | 获取指定数据集/字段的详细信息 | 否（本地数据） |
+
+**search** 返回格式（Company Knowledge 标准）：
+```json
+{
+  "results": [
+    {"id": "dataset:alias", "title": "数据集名称", "url": "opscli://dataset/alias"},
+    {"id": "field:dataset.field", "title": "字段显示名", "url": "opscli://field/dataset.field"}
+  ]
+}
+```
+
+**fetch** 返回格式（Company Knowledge 标准）：
+```json
+{
+  "id": "dataset:alias",
+  "title": "数据集名称",
+  "text": "数据集描述...",
+  "url": "opscli://dataset/alias",
+  "metadata": {"type": "dataset", "dimensions_count": 10, "metrics_count": 5}
+}
+```
+
+### 在 ChatGPT 中连接
+
+1. 部署 MCP 服务器到公网 HTTPS 端点（ChatGPT 要求 HTTPS）
+2. 在 ChatGPT 开发者模式中创建 Connector，填写 SSE URL：
+   ```
+   https://your-domain.com/sse
+   ```
+3. ChatGPT 会自动识别 `search` 和 `fetch` 工具，将其纳入 Company Knowledge 源
+
+### 工具注解（Annotations）
+
+两个工具均标记为只读（`readOnlyHint: true`），符合 Company Knowledge 对安全性的要求：
+- `readOnlyHint: true` — 仅检索信息，不修改数据
+- `openWorldHint: false` — 仅影响 bounded target（本地数据集索引）
+- `destructiveHint: false` — 无删除或不可逆副作用
+
+---
+
 ## 授权流程（Device Flow）
 
 无状态模式下，服务器不保存用户凭证。**每次调用需要认证的 Tool 时，必须传入 `session_id`**（和可选的 `jwt`）。

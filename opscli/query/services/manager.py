@@ -41,6 +41,33 @@ class QueryManager:
         self.client = QueryClient(auth_client=auth_client, jwt=jwt, session_id=session_id)
         self.template_dir = Path(__file__).resolve().parent.parent.parent / "skills" / "templates" / "ops-dataset-query" / "data"
 
+    def list_datasets(self, *, skills_dir: str | None = None, cwd: Path | None = None) -> list[dict]:
+        """列出所有可用的数据集（从本地 query_metadata.json 读取）。"""
+        payload = self._load_query_metadata(skills_dir=skills_dir, cwd=cwd)
+        return payload.get("datasets") or []
+
+    def list_fields(self, *, dataset_alias: str | None = None, table_id: int | None = None, skills_dir: str | None = None, cwd: Path | None = None) -> list[dict]:
+        """列出所有可用的字段，或指定数据集的字段（从本地 query_metadata.json 读取）。"""
+        payload = self._load_query_metadata(skills_dir=skills_dir, cwd=cwd)
+        fields = payload.get("fields") or []
+
+        if dataset_alias or table_id is not None:
+            datasets = payload.get("datasets") or []
+            matched = None
+            if dataset_alias:
+                matched = next(
+                    (item for item in datasets if item.get("dataset_alias") == dataset_alias or item.get("dataset_name") == dataset_alias),
+                    None,
+                )
+            elif table_id is not None:
+                matched = next((item for item in datasets if int(item.get("table_id", -1)) == int(table_id)), None)
+
+            if matched:
+                target_table_id = int(matched.get("table_id", -1))
+                fields = [f for f in fields if int(f.get("table_id", -1)) == target_table_id]
+
+        return fields
+
     def metadata(
         self,
         *,
