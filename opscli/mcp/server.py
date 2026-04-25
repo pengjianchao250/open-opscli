@@ -538,12 +538,19 @@ def run() -> None:
     # SSE 模式下自动启用固定 API Key 鉴权
     if transport_val == "sse":
         api_key = _load_or_create_api_key()
-        from opscli.mcp.auth_middleware import FixedApiKeyAuthProvider
+        from opscli.mcp.auth_middleware import ApiKeyAuthMiddleware
+        from starlette.middleware import Middleware
 
-        mcp.auth = FixedApiKeyAuthProvider(api_key)
+        # 不再使用 FastMCP 内置 AuthProvider，统一由自定义中间件处理
+        # 同时支持 Header (Authorization: Bearer) 和 Query Param (?api_key=)
+        kwargs["middleware"] = [
+            Middleware(ApiKeyAuthMiddleware, api_key=api_key),
+        ]
         print(f"\n[opscli-mcp] SSE 服务已启用 API Key 鉴权")
         print(f"[opscli-mcp] API Key: {api_key}\n")
-        print("请将此 Key 配置到客户端 headers: Authorization: Bearer <api_key>\n")
+        print("支持两种方式传入 API Key：")
+        print("  1. HTTP Header: Authorization: Bearer <api_key>")
+        print("  2. URL Query:   ?api_key=<api_key>\n")
 
     mcp.run(transport=transport_val, **kwargs)  # type: ignore[arg-type]
 

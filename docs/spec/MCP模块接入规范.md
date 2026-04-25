@@ -18,10 +18,14 @@
 ### 1.2 安全分层
 
 ```
-API Key（SSE headers）        → 谁可以连接 MCP 服务器
-    session_id（Tool 参数）    → 谁可以发起后端请求
-        JWT（向后端换取）      → 后端最终鉴权
+API Key（SSE headers / query param）  → 谁可以连接 MCP 服务器
+    session_id（Tool 参数）            → 谁可以发起后端请求
+        JWT（向后端换取）              → 后端最终鉴权
 ```
+
+**SSE 连接层鉴权**：支持两种方式传入 API Key
+1. `Authorization: Bearer <api_key>`（推荐，所有 MCP 客户端通用）
+2. `?api_key=<api_key>`（兼容模式，适用于不支持自定义 headers 的客户端）
 
 ---
 

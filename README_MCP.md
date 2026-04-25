@@ -49,7 +49,9 @@ opscli-mcp --transport sse --host 127.0.0.1 --port 8765
 [opscli-mcp] SSE 服务已启用 API Key 鉴权
 [opscli-mcp] API Key: opscli-mcp-H0BWl9L8PC84OSBMRzGW1psUJ0L2aaqd
 
-请将此 Key 配置到客户端 headers: Authorization: Bearer <api_key>
+支持两种方式传入 API Key：
+  1. HTTP Header: Authorization: Bearer <api_key>
+  2. URL Query:   ?api_key=<api_key>
 ```
 
 **首次启动时自动生成**，API Key 持久化保存在：
@@ -109,8 +111,17 @@ nohup opscli-mcp --transport sse --host 127.0.0.1 --port 8765 > /tmp/opscli-mcp-
 ```
 
 > `headers.Authorization` 中的 `opscli-mcp-xxx` 替换为服务器实际生成的 API Key。
-
-### Inspector 调试
+>
+> **Query 方式**（兼容模式）：如果客户端不支持自定义 headers，可将 API Key 放在 URL 中：
+> ```json
+> {
+>   "url": "http://127.0.0.1:8765/sse?api_key=opscli-mcp-xxx"
+> }
+> ```
+>
+> ⚠️ **注意**：标准 MCP SSE 客户端在建立 SSE 连接后，会通过独立的 HTTP POST 发送消息。
+> 部分客户端不会自动将 query param 带到 POST 请求中，导致消息发送 401。
+> **推荐优先使用 Header 方式**，Query 方式主要用于浏览器直接访问或特殊客户端场景。
 
 安装 Inspector（仅需一次）：
 
