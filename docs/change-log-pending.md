@@ -1,102 +1,76 @@
-# 变更记录 - 2026-04-24
+# 待归档变更记录
 
-## 本次变更
+## 2026-04-27 opscli - 新增 chart_analyze_mcp.py
 
-### 1. opscli/query 新增 chart query 支持
+**变更原因**：为 ops-dataset-query Skill 新增 MCP 无状态模式的图表异常检测脚本，原 `chart_analyze.py` 依赖 `opscli` CLI（subprocess），无法在纯 MCP 环境中使用。
 
-**改动原因**：
-用户需要通过 chart_uuid 直接获取图表查询结构并执行查询，替代手动构建 payload 的繁琐流程。
+**改动点**：
+- 新增 `opscli/skills/templates/ops-dataset-query/scripts/chart_analyze_mcp.py`
+- 移除所有 `subprocess` 调用 `opscli` 的逻辑
+- 数据获取改为纯文件输入（`--input` / `--dc-input`），由 MCP Agent 预先通过 `query_chart` / `query_build_and_run` Tool 获取后传入
+- 移除自动 `upgrade` 兜底，改为返回错误并提示调用 MCP `skills_upgrade`
+- 文件头部添加详细 MCP 调用指南注释（含前置 session 检查、Tool 调用示例、dataComparison 用法）
+- 核心异常检测逻辑（5 类规则）与 `chart_analyze.py` 完全一致
 
-**改动类名/方法名**：
-- QueryClient.fetch_chart_queries()
-- QueryManager.fetch_chart_queries()
-- QueryManager.build_payload_from_chart_query()
-- QueryManager.run_chart_queries()
+**验证结果**：`python -m py_compile` 语法检查通过
 
-**改动范围**：
-- opscli/query/transport/client.py — 新增 fetch_chart_queries()
-- opscli/query/services/manager.py — 新增 chart query 业务方法
-- opscli/query/commands/cli.py — 新增 chart 子命令
-- tests/query/test_client.py — 新增 2 个测试
-- tests/query/test_manager.py — 新增 5 个测试
-- tests/query/test_cli.py — 新增 3 个测试
+**影响范围**：不影响现有 `chart_analyze.py`，为 MCP 环境提供独立入口
 
-**具体做了什么**：
-1. QueryClient 新增 GET /api/v1/data-metrics/cli-query/latest-request-data 请求封装
-2. QueryManager 新增 build_payload_from_chart_query() 将后端返回的 chart query 结构（含 tableId/query/dataSource）转换为标准 cli_query payload
-3. QueryManager 新增 run_chart_queries() 执行图表所有 query 并合并结果（每个 query 独立执行，失败不影响其他）
-4. CLI 新增 `opscli query chart --uuid <uuid> [--run] [--dry-run]` 命令
-5. 结果合并策略：所有 rows 扁平合并，每行添加 _query_index 标识来源
-
-**验证结果**：
-全部 123 个 tests 通过（新增 10 个 chart query 相关测试）
-
-**影响范围**：
-- query 模块新增功能，不影响现有 metadata/build/run/build_and_run 逻辑
-- 向后兼容
-
-**回滚方式**：
-- git revert 本次提交的 client.py / manager.py / cli.py / test_*.py 改动
-
-### 2. 版本号一致性修复
-
-**改动原因**：
-test_version_consistency.py 测试失败，pyproject.toml version=0.0.10 与 opscli/version.py FALLBACK_VERSION=0.0.7-dev 不一致
-
-**改动文件**：opscli/version.py
-
-**具体做了什么**：
-FALLBACK_VERSION 从 "0.0.7-dev" 更新为 "0.0.10-dev"
-
-**验证结果**：
-test_version_consistency.py 测试通过
-
-**回滚方式**：
-- git revert 版本号修改
-
-### 3. chart query URL 路径修复（404 问题）
-
-**改动原因**：
-执行 `opscli query chart --uuid xxx` 返回 404。OPS_URL 配置已包含 `/api` 后缀（`https://ops.api.qa.aukeyit.com/api`），但 fetch_chart_queries() 路径写了 `/api/v1/...`，导致实际请求 URL 为 `.../api/api/v1/...`。
-
-**改动文件**：opscli/query/transport/client.py
-
-**具体做了什么**：
-`fetch_chart_queries()` 中 URL 从 `{ops_url}/api/v1/...` 修正为 `{ops_url}/v1/...`，与其他接口（cli_query、skills updater 等）保持一致。
-
-**验证结果**：
-全部 query tests 通过
-
-**回滚方式**：
-- git revert client.py 修改
+**回滚方式**：删除 `chart_analyze_mcp.py` 即可
 
 ---
 
-**状态**: 已记录（MCP 工具暂不可用，使用文件兜底）
-**项目**: opscli
-**阶段**: 已完成
+## 2026-04-27 opscli - 新增 chart_map_mcp.py / excel_export_mcp.py / query_mcp.py / updater_mcp.py
+
+**变更原因**：为 ops-dataset-query Skill 的 4 个核心脚本创建 MCP 无状态模式版本，原脚本均依赖 opscli CLI（subprocess 或直接导入内部模块），无法在纯 MCP 环境中使用。
+
+### chart_map_mcp.py
+- 新增 `opscli/skills/templates/ops-dataset-query/scripts/chart_map_mcp.py`
+- 移除 `subprocess` 调用 `opscli query chart`（原 `--uuid`/`--run` 参数）
+- 移除 `_try_upgrade()` 自动升级逻辑，映射失败时提示调用 MCP `skills_upgrade`
+- 数据入口改为纯 `--input` 文件（由 MCP `query_chart` 获取后保存）
+- 保留核心映射函数：`discover_data_dir`、`load_local_index`、`map_chart_queries`、`map_query_results`
+
+### excel_export_mcp.py
+- 新增 `opscli/skills/templates/ops-dataset-query/scripts/excel_export_mcp.py`
+- 不再从 `chart_analyze.py` 导入 CLI 函数（`_check_mapping_hit`、`_try_upgrade`、`load_chart_data`）
+- 自行实现文件版 `load_chart_data()` 和 `_check_mapping_hit()`
+- 移除 `--uuid` 和 `--no-auto-upgrade` 参数
+- 保留 Excel 导出核心逻辑：样式、行列类型判断、百分比列识别、列宽自适应
+
+### query_mcp.py
+- 新增 `opscli/skills/templates/ops-dataset-query/scripts/query_mcp.py`
+- 原 `query.py` 为纯 opscli 转发脚本（`subprocess` 调用 CLI），MCP 模式下无直接价值
+- 改造为**本地 Payload 构造器**：使用本地 CSV 索引实现字段别名解析（`global_alias > field_name > verbose_name`），构造标准 query payload JSON
+- 支持 `build` 子命令（dimensions/metrics/where/order_by/limit/offset/data_comparison）和 `metadata` 子命令
+- 输出 payload JSON 文件，供 MCP `query_run` Tool 使用
+- 实现字段歧义自动消歧（`_pick_primary_field`，优先选取原始字段）
+
+### updater_mcp.py
+- 新增 `opscli/skills/templates/ops-dataset-query/scripts/updater_mcp.py`
+- 移除对 `opscli.skills.models.SkillRecord` 和 `opscli.skills.updater.SkillsUpdater` 的依赖
+- 改为仅检查本地 `VERSION.json` 和数据文件（`datasets.csv`、`dataset_fields.csv`、`query_metadata.json`）完整性的轻量脚本
+- 更新操作提示通过 MCP `skills_upgrade` Tool 执行
+
+**验证结果**：`python -m py_compile` 语法检查全部通过（4/4）
+
+**影响范围**：不影响现有 CLI 版本脚本，为 MCP 环境提供独立入口
+
+**回滚方式**：删除 4 个 `*_mcp.py` 文件即可
 
 ---
-## [2026-04-26] scripts_mcp 目录创建
 
-[CHANGE_REASON] 将 ops-dataset-query Skill 的辅助脚本改造为 MCP 无状态模式，去除 subprocess 对 opscli CLI 的依赖，支持通过 session_id/jwt 参数传入认证信息。
+## 2026-04-27 opscli - 更新 SKILL_MCP.md 文档
 
-[CHANGE_CLASS] 无（新建脚本目录）
+**变更原因**：将新增的 5 个 MCP 版本脚本（`query_mcp.py`、`chart_map_mcp.py`、`chart_analyze_mcp.py`、`excel_export_mcp.py`、`updater_mcp.py`）的调用方式及用法补充到 SKILL_MCP.md 中，方便 MCP Agent 查阅。
 
-[CHANGE_SCOPE]
-- 新建：opscli/skills/templates/ops-dataset-query/scripts_mcp/（7 个文件）
-  - core.py, search_mcp.py, updater_mcp.py, query_mcp.py
-  - chart_map_mcp.py, chart_analyze_mcp.py, excel_export_mcp.py
-- 更新：opscli/skills/templates/ops-dataset-query/SKILL_MCP.md
+**改动点**：
+- 在 `opscli/skills/templates/ops-dataset-query/SKILL_MCP.md` 的"辅助脚本"章节中新增"MCP 环境辅助脚本"小节
+- 每个脚本包含：功能说明、用法示例、输入来源（对应哪个 MCP Tool）、输出格式
+- `query_mcp.py` 单独说明与 `query_run` Tool 的配合使用流程
+- `chart_analyze_mcp.py` 包含 5 类异常检测规则速查表
+- `excel_export_mcp.py` 包含格式规范说明
 
-[CHANGE_ACTION]
-- subprocess CLI 调用 → asyncio.run(opscli.mcp.tools.query.*) 异步函数直调
-- subprocess skills upgrade → asyncio.run(skills_upgrade(...))
-- 所有脚本新增 --session-id / --jwt 参数支持无状态认证
-- SKILL_MCP.md 新增「本地辅助脚本（MCP 模式）」章节
+**影响范围**：仅文档更新，不影响代码
 
-[VALIDATION] python -m py_compile 全部通过；--help 验证正常
-
-[IMPACT] 仅新增 scripts_mcp/ 目录，不影响现有 scripts/ 和其他模块
-
-[ROLLBACK] 删除 scripts_mcp/ 目录即可回滚
+**回滚方式**：回退 SKILL_MCP.md 修改即可
