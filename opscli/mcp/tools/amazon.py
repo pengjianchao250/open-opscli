@@ -17,7 +17,7 @@
 
 依赖：
     amazon 工具依赖可选扩展 playwright，未安装时 server.py 中会跳过注册。
-    安装命令：pip install 'opscli[amazon]' && playwright install chromium
+    安装命令：pip install opscli && playwright install chromium
 
 所有工具函数定义在模块级，可直接导入调用（测试友好）。
 调用 register(mcp) 将以上工具批量注册到指定 MCP 实例。

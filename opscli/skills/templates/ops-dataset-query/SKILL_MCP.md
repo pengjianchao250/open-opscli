@@ -67,11 +67,11 @@ auth_login_poll(device_code="xxx")     # 轮询直到 authorized，获取新 ses
 auth_is_authenticated(session_id="新session_id")
 ```
 
-> **【强制】使用本 Skill 前，必须先阅读 `references/数据查询服务开发说明文档.md`**
+> **【强制】使用本 Skill 前，必须先阅读 `references/data-query-service-dev-guide.md`**
 
 - 若需求涉及 `innerWhere`、子查询数据集、`translate`、`dataComparison`、高级计算（`MOY` / `ACC` / `PPT`）、权限占位符、小计/总计、交叉表/透视表、多次查询等场景，**必须**回到该引用文档逐节核对后再生成 payload
 - WHERE 操作符完整列表、聚合函数完整列表、请求体完整结构均在引用文档中，本文件不再赘述
-- 若引用文档与仓库原文冲突，以仓库原文 `docs/design/数据查询服务开发说明文档.md` 为准
+- 若引用文档与仓库原文冲突，以仓库原文 `docs/design/data-query-service-dev-guide.md` 为准
 
 ---
 
@@ -109,7 +109,76 @@ auth_is_authenticated(session_id="新session_id")
 | `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_type、dataset_category、data_source、main_dttm_col、inner_where_enabled、cache_timeout、description |
 | `data/query_metadata.json` | 查询元数据 | 字段类型映射、可用聚合方式等 |
 
-CSV 各列详细说明见 `references/数据查询服务开发说明文档.md` 附录。
+CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
+
+---
+
+## 辅助脚本（优先使用）
+
+以下脚本位于 `scripts/` 目录，**不依赖 opscli，可直接运行**，是操作本地数据的首选工具。
+
+### `search.py` — 本地字段搜索
+
+命令行关键词搜索本地字段索引，支持按数据集过滤和限制返回数量。
+
+**用法**：
+```bash
+python scripts/search.py <keyword> [--dataset <dataset_alias>] [-n <limit>]
+```
+
+**示例**：
+```bash
+# 搜索含 "price" 的字段
+python scripts/search.py price
+
+# 在指定数据集内搜索
+python scripts/search.py price --dataset sales_order_d
+
+# 限制返回 5 条
+python scripts/search.py price -n 5
+```
+
+**输出**：JSON 数组，每项包含字段完整信息（dataset_alias、field_name、verbose_name、global_alias、field_type 等）。
+
+---
+
+### `core.py` — 底层工具函数库
+
+提供 CSV 加载、行过滤、搜索打分、数值转换与格式化等基础能力，仅依赖 Python 标准库。
+
+**核心函数**：
+
+| 函数 | 参数 | 返回值 | 说明 |
+|------|------|--------|------|
+| `load_csv_rows(path)` | `Path` | `list[dict]` | 加载 CSV 为字典列表（utf-8-sig 编码，兼容 BOM） |
+| `filter_rows_by_dataset(rows, dataset)` | `list[dict]`, `str \| None` | `list[dict]` | 按 dataset_alias 过滤行 |
+| `search_rows(rows, keyword, limit=10)` | `list[dict]`, `str`, `int` | `list[dict]` | 按关键词搜索并返回相关性排序结果 |
+| `to_float(v)` | `Any` | `float` | 安全转换查询结果为 float，失败返回 0.0 |
+| `safe_pct(cur, prev)` | `float`, `float` | `float \| None` | 计算环比变化率（小数形式），除零保护 |
+| `format_pct(value)` | `float \| None` | `str` | 格式化变化率为可读字符串，如 "+12.34%" / "N/A" |
+
+**使用方式**：作为模块导入
+```python
+from pathlib import Path
+from scripts.core import load_csv_rows, search_rows, to_float, safe_pct, format_pct
+
+# 加载本地字段索引
+rows = load_csv_rows(Path("data/dataset_fields.csv"))
+
+# 搜索字段
+results = search_rows(rows, "order_price", limit=10)
+
+# 数值转换与环比计算
+current = to_float("1234.56")
+previous = to_float("1000.00")
+pct = safe_pct(current, previous)      # 0.23456
+print(format_pct(pct))                 # +23.46%
+```
+
+**特点**：
+- 无任何外部依赖，标准库即可运行
+- `search_rows` 采用加权打分排序：精确匹配 > 子串匹配 > token 匹配
+- `to_float` / `safe_pct` / `format_pct` 专用于处理查询结果中的数值与百分比计算
 
 ---
 
@@ -170,7 +239,7 @@ query_build(
 )
 ```
 
-> 完整聚合函数列表见 `references/数据查询服务开发说明文档.md` 第八章。
+> 完整聚合函数列表见 `references/data-query-service-dev-guide.md` 第八章。
 
 **公式指标特殊规则**：
 - 如果字段 metadata 中包含 `formula_config` / `summary_expression` / `detail_expression`，该指标应按公式字段处理
@@ -586,9 +655,11 @@ skills_upgrade(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencod
 
 ---
 
+
+
 ## 高级查询说明
 
-详细规则见 `references/数据查询服务开发说明文档.md`，核心章节：
+详细规则见 `references/data-query-service-dev-guide.md`，核心章节：
 
 | 场景 | 参考章节 |
 |------|---------|

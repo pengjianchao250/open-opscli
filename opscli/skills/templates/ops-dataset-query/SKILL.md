@@ -38,11 +38,11 @@ opscli auth login
 opscli auth token status
 ```
 
-> **【强制】使用本 Skill 前，必须先阅读 `references/数据查询服务开发说明文档.md`**
+> **【强制】使用本 Skill 前，必须先阅读 `references/data-query-service-dev-guide.md`**
 
 - 若需求涉及 `innerWhere`、子查询数据集、`translate`、`dataComparison`、高级计算（`MOY` / `ACC` / `PPT`）、权限占位符、小计/总计、交叉表/透视表、多次查询等场景，**必须**回到该引用文档逐节核对后再生成 payload
 - WHERE 操作符完整列表、聚合函数完整列表、请求体完整结构均在引用文档中，本文件不再赘述
-- 若引用文档与仓库原文冲突，以仓库原文 `docs/query/数据查询服务开发说明文档.md` 为准
+- 若引用文档与仓库原文冲突，以仓库原文 `docs/query/data-query-service-dev-guide.md` 为准
 
 ---
 
@@ -80,7 +80,7 @@ opscli auth token status
 | `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_type、dataset_category、data_source、main_dttm_col、inner_where_enabled、cache_timeout、description |
 | `data/query_metadata.json` | 查询元数据 | 字段类型映射、可用聚合方式等 |
 
-CSV 各列详细说明见 `references/数据查询服务开发说明文档.md` 附录。
+CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 
 ---
 
@@ -143,7 +143,7 @@ opscli query metadata --table-id 123 --pretty
 
 > `select.alias` 不支持中文；如果不显式传 alias，`opscli query build` 会优先使用字段 metadata 中的 `global_alias`，没有时再回退到 `field_name`。
 
-> 完整聚合函数列表见 `references/数据查询服务开发说明文档.md` 第八章。
+> 完整聚合函数列表见 `references/data-query-service-dev-guide.md` 第八章。
 
 **公式指标特殊规则**
 - 如果字段 metadata 中包含 `formula_config` / `summary_expression` / `detail_expression`，该指标应按公式字段处理。
@@ -804,7 +804,7 @@ opscli skills upgrade ops-dataset-query --force
 
 ## 高级查询说明
 
-详细规则见 `references/数据查询服务开发说明文档.md`，核心章节：
+详细规则见 `references/data-query-service-dev-guide.md`，核心章节：
 
 | 场景 | 参考章节 |
 |------|---------|

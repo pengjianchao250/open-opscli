@@ -56,14 +56,14 @@ opscli auth token status
 首次使用前请确认本地已安装 Amazon 抓取依赖：
 
 ```bash
-pip install "opscli[amazon]"
+pip install opscli
 playwright install chromium
 ```
 
 如果是源码开发环境：
 
 ```bash
-pip install -e ".[amazon]"
+pip install -e .
 playwright install chromium
 ```
 

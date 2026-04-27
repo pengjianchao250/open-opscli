@@ -75,3 +75,28 @@ test_version_consistency.py 测试通过
 **状态**: 已记录（MCP 工具暂不可用，使用文件兜底）
 **项目**: opscli
 **阶段**: 已完成
+
+---
+## [2026-04-26] scripts_mcp 目录创建
+
+[CHANGE_REASON] 将 ops-dataset-query Skill 的辅助脚本改造为 MCP 无状态模式，去除 subprocess 对 opscli CLI 的依赖，支持通过 session_id/jwt 参数传入认证信息。
+
+[CHANGE_CLASS] 无（新建脚本目录）
+
+[CHANGE_SCOPE]
+- 新建：opscli/skills/templates/ops-dataset-query/scripts_mcp/（7 个文件）
+  - core.py, search_mcp.py, updater_mcp.py, query_mcp.py
+  - chart_map_mcp.py, chart_analyze_mcp.py, excel_export_mcp.py
+- 更新：opscli/skills/templates/ops-dataset-query/SKILL_MCP.md
+
+[CHANGE_ACTION]
+- subprocess CLI 调用 → asyncio.run(opscli.mcp.tools.query.*) 异步函数直调
+- subprocess skills upgrade → asyncio.run(skills_upgrade(...))
+- 所有脚本新增 --session-id / --jwt 参数支持无状态认证
+- SKILL_MCP.md 新增「本地辅助脚本（MCP 模式）」章节
+
+[VALIDATION] python -m py_compile 全部通过；--help 验证正常
+
+[IMPACT] 仅新增 scripts_mcp/ 目录，不影响现有 scripts/ 和其他模块
+
+[ROLLBACK] 删除 scripts_mcp/ 目录即可回滚

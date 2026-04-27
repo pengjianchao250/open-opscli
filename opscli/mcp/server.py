@@ -75,7 +75,7 @@ except (ImportError, ModuleNotFoundError):
     import sys
     print(
         "[opscli-mcp] amazon 工具未加载：缺少 playwright 依赖。\n"
-        "             安装命令：pip install 'opscli[amazon]' && playwright install chromium",
+        "             安装命令：pip install opscli && playwright install chromium",
         file=sys.stderr,
     )
 
