@@ -59,8 +59,11 @@ def _auth_client() -> Any:
 def _get_session_id(system: str = "ops", provided: str | None = None) -> str | None:
     """获取 session_id：优先使用调用方传入的，否则尝试从本地加载。
 
+    2025-04-27 重构后统一从 CredentialStore（经内存缓存）读取全局 session，
+    与 CLI 模式共用同一套加密存储，实现登录态互通。
+
     Args:
-        system:   目标系统别名（默认 "ops"）
+        system:   目标系统别名（默认 "ops"），当前仅保留接口兼容
         provided: 调用方显式传入的 session_id（优先级最高）
 
     Returns:
@@ -68,15 +71,17 @@ def _get_session_id(system: str = "ops", provided: str | None = None) -> str | N
     """
     if provided:
         return provided
-    from opscli.mcp.session_store import get_session
+    from opscli.mcp.credential_cache import get_credential_cache
 
-    return get_session(system)
+    return get_credential_cache().get_session_id()
 
 
 def _get_jwt(system: str = "ops", provided: str | None = None) -> str | None:
     """获取 JWT：优先使用调用方传入的，否则尝试从本地加载（含过期检查）。
 
-    本地缓存的 JWT 如果已过期，会自动清除并返回 None，触发重新换取。
+    2025-04-27 重构后统一从 CredentialStore（经内存缓存）读取，
+    与 CLI 模式共用加密存储。本地缓存的 JWT 如果已过期，会自动
+    清除并返回 None，触发重新换取。
 
     Args:
         system:   目标系统别名（默认 "ops"）
@@ -87,16 +92,23 @@ def _get_jwt(system: str = "ops", provided: str | None = None) -> str | None:
     """
     if provided:
         return provided
-    from opscli.mcp.session_store import get_jwt, is_jwt_valid_locally
+    from opscli.mcp.credential_cache import get_credential_cache
+    from opscli.auth.storage.credential_store import CredentialStore
 
-    jwt = get_jwt(system)
-    if jwt and is_jwt_valid_locally(jwt):
-        return jwt
-    # 已过期则清除本地缓存
+    cache = get_credential_cache()
+    jwt = cache.get_jwt(system)
     if jwt:
-        from opscli.mcp.session_store import clear_jwt
+        return jwt
 
-        clear_jwt(system)
+    # 缓存未命中（可能 CLI 新登录或缓存过期）：直接从存储读取并刷新缓存
+    cache.invalidate()
+    jwt = cache.get_jwt(system)
+    if jwt:
+        return jwt
+
+    # 存储中已过期：清除
+    CredentialStore().remove_token(system)
+    cache.invalidate()
     return None
 
 

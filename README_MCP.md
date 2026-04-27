@@ -28,9 +28,9 @@
 ## 安装依赖
 
 ```bash
-pip install "aukeys-opscli[mcp]"
+pip install aukeys-opscli
 # 或本地开发环境
-uv pip install -e ".[mcp]"
+uv pip install -e .
 ```
 
 ---

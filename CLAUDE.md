@@ -31,6 +31,19 @@ opscli/
 │   └── storage/
 │       ├── credential_store.py  # Keychain 优先 / AES-256-GCM 兜底
 │       └── crypto.py            # AES-256-GCM 加密工具
+├── mcp/                     # MCP 子模块（Model Context Protocol 服务）
+│   ├── __init__.py
+│   ├── server.py            # FastMCP 实例，注册所有 MCP Tools
+│   ├── auth_middleware.py   # SSE/HTTP 连接层 API Key 鉴权
+│   ├── credential_cache.py  # 内存凭证缓存（避免高频 AES 解密）
+│   ├── session_store.py     # ⚠️ 已废弃，兼容包装层（v0.0.5+）
+│   ├── user_store.py        # 多用户 API Key 注册表（团队共享场景）
+│   ├── cli.py               # MCP 管理 CLI（opscli mcp user *）
+│   └── tools/               # MCP Tools 注册
+│       ├── helpers.py       # 共享辅助函数（_get_session_id / _get_jwt）
+│       ├── auth.py          # auth_* 工具集（13 个）
+│       ├── query.py         # query_* 工具集
+│       └── skills.py        # skills_* 工具集
 ├── query/                   # query 子模块（数据查询）
 │   ├── __init__.py
 │   ├── cli.py               # query 子命令（metadata/run/build）
@@ -93,6 +106,9 @@ opscli skills
 | auth 服务地址 | `opscli/auth/config.py`（DEFAULTS + load_config） |
 | Token 管理 | `opscli/auth/core/token_manager.py` |
 | 凭证存储 | `opscli/auth/storage/credential_store.py` |
+| MCP 服务入口 | `opscli/mcp/server.py`（FastMCP 实例） |
+| MCP 凭证缓存 | `opscli/mcp/credential_cache.py`（McpCredentialCache） |
+| MCP auth 工具 | `opscli/mcp/tools/auth.py`（auth_* 工具集） |
 | query 业务编排 | `opscli/query/manager.py`（QueryManager） |
 | query HTTP 转发 | `opscli/query/client.py`（QueryClient） |
 | Skill 管理协调 | `opscli/skills/manager.py`（SkillsManager） |
@@ -194,7 +210,30 @@ store = CredentialStore()
 
 网络请求使用 `respx` 进行 mock，不可发起真实 HTTP 请求。
 
-### 【铁律9】内置系统（ops/polaris）不可在代码中被删除
+### 【铁律9】CLI 与 MCP 的凭证存储必须统一（CredentialStore）
+
+2025-04-27 重构后，CLI 模式和 MCP 模式**共用同一套 CredentialStore**，禁止在 MCP 中引入独立的明文存储：
+
+- **唯一存储层**：`opscli/auth/storage/credential_store.py`（Keychain / AES-256-GCM）
+- **MCP 读路径**：通过 `McpCredentialCache` 内存缓存读取，避免高频 AES 解密
+- **MCP 写路径**：登录/刷新/登出等操作统一写入 `CredentialStore`，写后调用 `invalidate_credential_cache()` 刷新缓存
+- **`mcp_sessions.json` 已废弃**：`opscli/mcp/session_store.py` 仅保留兼容包装层，内部转发到 `CredentialStore`
+
+**正确示例**（MCP auth tool 保存 session）：
+```python
+from opscli.auth.storage.credential_store import CredentialStore
+from opscli.mcp.credential_cache import invalidate_credential_cache
+
+CredentialStore().save_session(session_id, email, expires_at)
+invalidate_credential_cache()  # 刷新内存缓存
+```
+
+**禁止行为**：
+- ❌ 在 MCP 中直接读写 `mcp_sessions.json`
+- ❌ 为 MCP 引入新的独立存储文件
+- ❌ 绕过 `CredentialStore` 自行管理凭证
+
+### 【铁律10】内置系统（ops/polaris）不可在代码中被删除
 
 `auth/config.py` 的 `get_builtin_systems()` 定义了两个内置系统，这是产品功能约定：
 - `ops`：运营系统（https://ops.api.qa.aukeyit.com）
@@ -202,7 +241,7 @@ store = CredentialStore()
 
 内置系统在 `system_registry.py` 中有保护逻辑（`remove()` 会拒绝删除 builtin 系统），不可绕过此保护。
 
-### 【铁律10】Skills 禁止直连后端 API，所有操作必须经由 opscli 模块转发
+### 【铁律11】Skills 禁止直连后端 API，所有操作必须经由 opscli 模块转发
 
 涉及数据查询、认证、元数据获取等能力时，**Skill 脚本不能直接调用**后端 HTTP API，必须统一通过 `opscli` 的正式命令入口执行。
 
@@ -220,7 +259,7 @@ store = CredentialStore()
 4. 认证、参数校验、payload 组装、错误映射统一由 `opscli` 负责
 5. 后端新增接口时，默认先补 `opscli` 对应入口，再让 Skill 消费
 
-### 【铁律11】Skill 命名必须使用 `ops-` 前缀
+### 【铁律12】Skill 命名必须使用 `ops-` 前缀
 
 所有内置 Skill（`opscli/skills/templates/` 下的子目录）命名必须以 `ops-` 开头：
 
@@ -235,7 +274,7 @@ store = CredentialStore()
 - 新增 Skill 时若不带 `ops-` 前缀，视为命名不合规，必须改名后再合入
 - 安装命令示例：`opscli skills install ops-auth`
 
-### 【铁律12】新增 Skill 必须遵循完整接入规范
+### 【铁律13】新增 Skill 必须遵循完整接入规范
 
 新增 Skill 时，根据是否需要远端升级分两条路径：
 
@@ -272,7 +311,7 @@ store = CredentialStore()
 - 必须包含"典型工作流"章节
 - 格式参照 `ops-auth/SKILL.md` 或 `ops-dataset-query/SKILL.md`
 
-### 【铁律13】依赖版本约束不加不必要的上限
+### 【铁律14】依赖版本约束不加不必要的上限
 
 `pyproject.toml` 中的依赖版本约束只设下限，**不加上限**，除非有明确的 API 不兼容证据：
 
@@ -287,7 +326,7 @@ store = CredentialStore()
 
 **教训**：`cryptography>=38,<42` 曾导致 pip 强制降级系统已有的 v46，破坏同环境中其他包（`opscli`）。上限约束应在有明确 breaking change 时才添加，并在注释中说明原因和对应 issue。
 
-### 【铁律14】文档必须按类型分类存放，文件名必须使用中文
+### 【铁律15】文档必须按类型分类存放，文件名必须使用中文
 
 所有项目文档必须遵循以下规范：
 
@@ -308,7 +347,7 @@ store = CredentialStore()
 3. 同一类型的文档放入同一目录，不可散落
 4. 方案类文档如涉及多阶段，可加阶段后缀（如"取数底座**一期**开发计划"）
 
-### 【铁律15】所有代码必须有中文注释，重要业务逻辑必须全面注释
+### 【铁律16】所有代码必须有中文注释，重要业务逻辑必须全面注释
 
 编写或修改任何 Python 代码时，必须遵循以下注释规范：
 

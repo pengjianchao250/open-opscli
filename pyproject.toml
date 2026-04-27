@@ -11,7 +11,7 @@ dependencies = [
     "rich>=13",
     "keyring>=25",
     "fastmcp>=2.0",
-    "playwright>=2.0",
+    "playwright>=1.44",
 ]
 
 [project.optional-dependencies]
