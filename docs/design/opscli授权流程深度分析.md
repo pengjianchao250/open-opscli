@@ -297,7 +297,7 @@ flowchart TD
         D1 --> E1[256-bit 密钥<br/>.key 文件]
     end
 
-    subgraph MCP凭证存储（重构后）
+    subgraph MCP凭证存储
         A2[McpCredentialCache] --> B2[内存缓存<br/>0.45 µs/读]
         B2 --> C2[CredentialStore.load<br/>启动时加载]
         C2 --> D2[AES-256-GCM<br/>credentials.bin]

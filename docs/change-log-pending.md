@@ -74,3 +74,41 @@
 **影响范围**：仅文档更新，不影响代码
 
 **回滚方式**：回退 SKILL_MCP.md 修改即可
+
+---
+
+## 2026-04-27 opscli - 新增 ops-skills/SKILL_MCP.md
+
+**变更原因**：`ops-skills` 虽然不需要 `*_mcp.py` 脚本（核心功能本身就是 MCP Tool），但缺少 MCP 模式下的使用文档，导致 MCP Agent 无法了解 `skills_list`、`skills_install`、`skills_status`、`skills_upgrade` 四个 Tool 的参数格式和返回结构。
+
+**改动点**：
+- 新增 `opscli/skills/templates/ops-skills/SKILL_MCP.md`
+- 包含完整的 4 个 MCP Tool 参数表：
+  - `skills_list`：本地扫描，无需认证
+  - `skills_status`：含远端版本对比
+  - `skills_install`：纯本地模板安装
+  - `skills_upgrade`：仅支持 `ops-dataset-query` 远端升级
+- 提供典型工作流（全新环境初始化、日常版本维护、指定路径安装、强制重置）
+- 明确认证说明：`skills_list`/`skills_install` 纯本地操作无需认证；`skills_status`/`skills_upgrade` 远端调用由服务器端内部处理
+
+**影响范围**：仅文档新增，不影响代码
+
+**回滚方式**：删除 SKILL_MCP.md 即可
+
+---
+
+## 2026-04-27 opscli - 新增 MCP 工具使用手册
+
+**变更原因**：CLI 命令用例手册 (`opscli命令用例手册.md`) 无法直接指导 MCP 环境下的 Tool 调用，需要一份对应的 MCP Tool 使用手册，覆盖全部 4 个模块（auth / amazon / query / skills）共 24+ 个 Tool 的参数、返回结构和示例。
+
+**改动点**：
+- 新增 `docs/guide/MCP工具使用手册.md`
+- 结构与 CLI 手册一一对应，但使用 Python 函数调用风格展示参数
+- 每个 Tool 包含：参数表、返回示例、调用示例
+- 包含认证状态速查表（哪些 Tool 需要认证、认证方式）
+- 包含 CLI → MCP Tool 的映射对照表（快速索引）
+- 覆盖 CLI 手册中所有 8 个常见组合用例的 MCP 版本
+
+**影响范围**：仅文档新增，不影响代码
+
+**回滚方式**：删除 `docs/guide/MCP工具使用手册.md` 即可
