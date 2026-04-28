@@ -153,6 +153,24 @@ class CredentialStore:
         }
         self._save(data)
 
+    def remove_token(self, system_key: str) -> bool:
+        """移除指定系统的 JWT 缓存。
+
+        Args:
+            system_key: 系统唯一键
+
+        Returns:
+            是否成功移除（token 存在且已删除）
+        """
+        data = self.load() or {}
+        tokens = data.get("tokens", {})
+        if system_key in tokens:
+            del tokens[system_key]
+            data["tokens"] = tokens
+            self._save(data)
+            return True
+        return False
+
     def clear(self):
         # 清除 Keychain
         if self._use_keyring:

@@ -182,6 +182,204 @@ print(format_pct(pct))                 # +23.46%
 
 ---
 
+### MCP 环境辅助脚本（无状态模式，不依赖 opscli）
+
+以下脚本位于 `scripts/` 目录，**专为 MCP 无状态模式设计**，零 opscli 依赖，仅通过文件输入/输出与 MCP Tool 配合。
+
+#### `query_mcp.py` — 本地 Payload 构造器
+
+使用本地 CSV 索引将简化参数转换为标准 query payload JSON 文件，供 `query_run` 使用。
+
+**特点**：
+- 字段别名解析（`global_alias > field_name > verbose_name`）
+- 字段歧义自动消歧（优先选取原始字段）
+- 支持 `data_comparison` 自动构造 `dataComparison` 对象
+
+**子命令**：
+
+```bash
+# build：构造 payload 并写入 JSON 文件
+python scripts/query_mcp.py build \
+  --dataset sales_order_d \
+  --dimension date_id \
+  --metric "order_cost:sum:total_cost" \
+  --where "date_id|>=|\"2024-01-01\"" \
+  --order-by "total_cost:desc" \
+  --output /tmp/query.json
+
+# 附带 dataComparison 环比
+python scripts/query_mcp.py build \
+  --dataset sales_order_d \
+  --dimension dept_name \
+  --metric "price:sum:total_price" \
+  --where "date_id|>=|\"2026-04-01\"" \
+  --data-comparison "date_id,2026-03-01,2026-03-22" \
+  --output /tmp/query.json
+
+# metadata：查看本地数据集 metadata（无需认证）
+python scripts/query_mcp.py metadata --dataset sales_order_d --pretty
+```
+
+**输出**（`build` 成功时）：
+```json
+{
+  "success": true,
+  "data": {
+    "output": "/tmp/query.json",
+    "payload": {
+      "tableId": 1,
+      "query": {
+        "select": [...],
+        "groupBy": [...],
+        "where": {...},
+        "orderBy": [...],
+        "limit": 20,
+        "offset": 0
+      }
+    }
+  }
+}
+```
+
+**配合 MCP Tool 使用**：
+```python
+# 1. 先用 query_mcp.py 构造 payload JSON（无需认证）
+# 2. 再通过 query_run 执行查询（需要认证）
+query_run(
+    payload_path="/tmp/query.json",
+    session_id="860b0636485b5188a2b9b4ed5210e736"
+)
+```
+
+---
+
+#### `chart_map_mcp.py` — chart 字段映射
+
+将 MCP `query_chart` 返回的 chart 结果中的 `global_alias` 映射为可读的 `verbose_name` / `field_name`。
+
+**用法**：
+```bash
+# 仅映射查询结构
+python scripts/chart_map_mcp.py --input /tmp/chart_result.json --pretty
+
+# 映射查询结构 + 结果行数据列名
+python scripts/chart_map_mcp.py --input /tmp/chart_result.json --map-results --pretty
+
+# 映射为 field_name
+python scripts/chart_map_mcp.py --input /tmp/chart_result.json --map-to field_name --pretty
+```
+
+**输入来源**：先通过 MCP `query_chart` 获取并保存为 JSON：
+```python
+query_chart(
+    chart_uuid="4NQ5f66sU9",
+    run=True,
+    session_id="860b0636485b5188a2b9b4ed5210e736"
+)
+# → 保存到 /tmp/chart_result.json
+```
+
+**输出**：每条 query 添加 `_mapping` 字段，包含 `dataset_alias`、`dataset_info`、`field_mappings`（含 `alias`、`expr`、`mapped_name`、`field_info`）。
+
+---
+
+#### `chart_analyze_mcp.py` — 图表异常检测
+
+对 chart 查询结果执行 5 类异常规则检测，输出结构化 JSON 报告。
+
+**用法**：
+```bash
+# 仅分析当期数据
+python scripts/chart_analyze_mcp.py --input /tmp/chart_result.json --pretty
+
+# 附带 dataComparison 环比数据（增强趋势检测）
+python scripts/chart_analyze_mcp.py \
+  --input /tmp/chart_result.json \
+  --dc-input /tmp/dc_result.json \
+  --pretty
+```
+
+**输入来源**：
+- `--input`：MCP `query_chart(chart_uuid="...", run=True)` 结果
+- `--dc-input`：MCP `query_build_and_run(..., data_comparison="...")` 结果
+
+**检测规则**：
+| 规则 | 触发条件 |
+|------|---------|
+| `negative_margin` | 毛利率 < 0 |
+| `profit_drop` | 毛利环比下降 > 30% |
+| `revenue_cliff` | 原价金额环比下降 > 20% |
+| `ad_roi_decline` | 广告费上升 + 毛利下降 |
+| `zero_orders` | 当期订单量归零（对比期 > 0） |
+
+**输出**：包含 `summary`（汇总统计）、`anomalies`（异常列表，按 severity 排序）、`findings`（人类可读关键发现）。
+
+---
+
+#### `excel_export_mcp.py` — 图表数据 Excel 导出
+
+从 chart 查询结果中提取明细、小计、总计数据，按透视表格式写入 Excel。
+
+**前置依赖**：`pip install openpyxl`
+
+**用法**：
+```bash
+python scripts/excel_export_mcp.py \
+  --input /tmp/chart_result.json \
+  --output /tmp/output.xlsx \
+  --sheet-name 销售数据
+```
+
+**格式规范**：
+- 表头：蓝色背景（4472C4）白色粗体字，冻结首行
+- 明细行：数值列千分位格式，百分比列 0.00% 格式
+- 小计行：灰色背景（D9E2F3），粗体字
+- 总计行：深蓝背景白色粗体字
+- 负值：红色字体（FF0000）
+- 列宽：自适应（最大 50 字符）
+
+**输出**：
+```json
+{
+  "success": true,
+  "output": "/tmp/output.xlsx",
+  "rows": 150,
+  "columns": ["日期", "部门", "销售额", "订单量"]
+}
+```
+
+---
+
+#### `updater_mcp.py` — 本地状态检查
+
+检查本地数据文件完整性，更新操作需通过 MCP `skills_upgrade` 执行。
+
+**用法**：
+```bash
+python scripts/updater_mcp.py --check --pretty
+```
+
+**输出**：
+```json
+{
+  "success": true,
+  "data": {
+    "data_dir": "/Users/mask/.config/opencode/skills/ops-dataset-query/data",
+    "version": "v1.2.3",
+    "healthy": true,
+    "files": {
+      "VERSION.json": {"exists": true, "version": "v1.2.3"},
+      "datasets.csv": {"exists": true, "size": 12345},
+      "dataset_fields.csv": {"exists": true, "size": 67890},
+      "query_metadata.json": {"exists": true, "size": 4567}
+    }
+  },
+  "mcp_hint": "如需更新，调用 skills_upgrade(name='ops-dataset-query')"
+}
+```
+
+---
+
 ## MCP Tool 调用参考
 
 ### `query_metadata`

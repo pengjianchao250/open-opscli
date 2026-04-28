@@ -447,13 +447,25 @@ class QueryManager:
         raise InvalidPayloadError(f"无效的 --dimension 定义: {raw}")
 
     def _parse_metric_spec(self, raw: str) -> _FieldSpec:
-        """解析指标定义：field_name:aggregation[:alias]。"""
+        """解析指标定义：field_name[:aggregation[:alias]]。
+
+        支持三种格式：
+        - field_name                    公式字段（has_formula_config=1），由 _resolve_metric_expr 自动使用 summary_expression
+        - field_name:aggregation        普通聚合字段
+        - field_name:aggregation:alias  普通聚合字段 + 自定义别名
+        - field_name::alias             公式字段 + 自定义别名（aggregation 留空）
+        """
         parts = [item.strip() for item in raw.split(":")]
+        # 仅有字段名：公式字段，aggregation=None 由 _resolve_metric_expr 处理
+        if len(parts) == 1 and parts[0]:
+            return _FieldSpec(field_name=parts[0], aggregation=None, alias=None)
         if len(parts) == 2 and parts[0] and parts[1]:
             return _FieldSpec(field_name=parts[0], aggregation=parts[1].upper(), alias=None)
-        if len(parts) == 3 and parts[0] and parts[1] and parts[2]:
-            return _FieldSpec(field_name=parts[0], aggregation=parts[1].upper(), alias=parts[2])
-        raise InvalidPayloadError(f"无效的 --metric 定义: {raw}")
+        if len(parts) == 3 and parts[0] and parts[2]:
+            # 第二段为空时表示公式字段 + 自定义别名（如 gross_profit_percent::gpp）
+            agg = parts[1].upper() if parts[1] else None
+            return _FieldSpec(field_name=parts[0], aggregation=agg, alias=parts[2])
+        raise InvalidPayloadError(f"无效的 --metric 定义: {raw}，格式: field_name[:aggregation[:alias]]")
 
     def _build_order_by(self, items: list[str], *, alias_map: dict[str, str] | None = None) -> list[dict]:
         """解析排序定义：expr[:asc|desc]，自动映射到 select 输出别名。"""
@@ -511,8 +523,25 @@ class QueryManager:
             raise InvalidPayloadError("where 必须是 JSON 对象")
         return payload
 
+    # 操作符标准化映射：将 Python/SQL 风格符号转换为服务端语义操作符
+    _WHERE_OP_MAP: dict[str, str] = {
+        ">=": "gte",
+        "<=": "lte",
+        ">": "gt",
+        "<": "lt",
+        "=": "eq",
+        "==": "eq",
+        "!=": "neq",
+        "<>": "neq",
+    }
+
     def _parse_where_condition(self, raw: str, *, dataset_alias: str) -> dict:
-        """解析 where 简写条件：field|operator|value_json。"""
+        """解析 where 简写条件：field|operator|value_json。
+
+        操作符支持两种写法：
+        - 语义操作符（服务端原生）：between, eq, neq, gt, gte, lt, lte, in
+        - 符号操作符（自动转换）：>=, <=, >, <, =, ==, !=, <>
+        """
         parts = raw.split("|", 2)
         if len(parts) != 3:
             raise InvalidPayloadError(f"无效的 --where 定义: {raw}")
@@ -520,6 +549,9 @@ class QueryManager:
         field, operator, value_raw = (item.strip() for item in parts)
         if not field or not operator or not value_raw:
             raise InvalidPayloadError(f"无效的 --where 定义: {raw}")
+
+        # 将符号操作符标准化为服务端语义操作符
+        operator = self._WHERE_OP_MAP.get(operator, operator)
 
         expr = field if "." in field else f"{dataset_alias}.{field}"
         try:

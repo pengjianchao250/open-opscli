@@ -73,6 +73,23 @@ http://127.0.0.1:8765/sse
 Authorization: Bearer opscli-mcp-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
+## 登录与 Session 互通
+
+MCP 的授权流程与 CLI **共用同一套 CredentialStore**，登录后 CLI 立即可用：
+
+```
+auth_login_start() → 返回 {verification_url, user_code, device_code}
+  → 用户在浏览器打开 URL 并输入 user_code
+  → auth_login_poll(device_code) → 返回 {status: "authorized", session_id}
+  → session_id 自动保存到 CredentialStore（与 CLI 共用）
+  → 后续 Tool 调用可直接读取，无需重复登录
+```
+
+**与 CLI 的区别**：
+- CLI：`opscli auth login` 阻塞式单命令完成全流程
+- MCP：`auth_login_start` + `auth_login_poll` 分步非阻塞调用
+- 两者底层存储统一，登录态完全互通
+
 ## 故障排查
 
 - `opscli mcp user list --pretty`：确认用户是否存在。

@@ -47,6 +47,15 @@ Token 管理内置双层并发保护，无需调用方额外处理并发：
 1. **macOS Keychain**（优先，服务名：`opscli-auth`）
 2. **AES-256-GCM 加密文件**（兜底，路径：`~/.config/opscli/credentials.bin`）
 
+### CLI 与 MCP 登录态互通
+
+2025-04-27 重构后，CLI 模式和 MCP 模式**共用同一套加密凭证存储**（CredentialStore）：
+
+- CLI 执行 `opscli auth login` 后，MCP 的 `auth_get_token` 可直接使用，无需重复登录
+- MCP 的 `auth_login_poll` 成功后，CLI 的 `opscli auth token get` 可直接使用
+- 所有凭证统一存储在 `~/.config/opscli/credentials.bin`（AES-256-GCM 加密）
+- `~/.config/opscli/mcp_sessions.json` 已废弃并删除
+
 ### 系统类型
 
 | 类型 | 来源 | 是否可删除 |
@@ -432,10 +441,11 @@ token = client.get_token("ops")
 ```
 ~/.config/opscli/
 ├── config.ini         # 可选，覆盖服务地址（ops_url 等）
-├── credentials.bin    # AES-256-GCM 加密凭证（Keychain 不可用时）
+├── credentials.bin    # AES-256-GCM 加密凭证（CLI 与 MCP 共用）
 ├── .key               # 256-bit 加密密钥，权限 600
 ├── systems.json       # 用户自定义 + ops_sync 系统列表
-└── .lock_<key>        # 跨进程文件锁（运行时临时文件）
+├── .lock_<key>        # 跨进程文件锁（运行时临时文件）
+└── mcp_sessions.json  # ⚠️ 已废弃（v0.0.5+），数据已迁移到 credentials.bin
 ```
 
 **覆盖服务地址示例**（开发调试用）：
