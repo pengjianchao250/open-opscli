@@ -2,7 +2,7 @@
 
 Aukeys 运营 CLI 工具集
 
-> 当前模块：auth（认证授权）、query（数据查询）、skills（Skill 生命周期管理）、amazon（Amazon 数据采集）；后续可扩展更多模块（deploy、notify 等）
+> 当前模块：auth（认证授权）、query（数据查询）、skills（Skill 生命周期管理）、amazon（Amazon 数据采集）、seller-sprite（卖家精灵关键词与 Listing 分析材料采集）；后续可扩展更多模块（deploy、notify 等）
 >
 > 说明：本文档中涉及 `aukeys-opscli[amazon]`、`opscli-core`、独立模块包、动态插件化等内容，部分属于预留设计或未来演进方向。**截至当前仓库版本，请以单包 `aukeys-opscli` + 仓库内静态注册模块为准，不要将这些内容视为已落地的发布承诺。**
 
@@ -42,6 +42,13 @@ Aukeys 运营 CLI 工具集
 - **搜索结果抓取**：抓取关键词搜索结果页，沉淀竞品结果集
 - **标准 payload 预留**：输出未来提交给 ops API 的标准请求体
 - **本地历史存档**：商品抓取结果可落本地 JSONL，便于趋势分析和后续补数
+
+### seller-sprite 模块
+
+- **关键词材料采集**：围绕显式关键词采集卖家精灵高频词和关键词挖掘数据
+- **Listing 分析证据**：围绕 ASIN 和关键词保存接口 JSON、截图、HTML、Markdown 与标准化结果
+- **默认 50 条**：关键词挖掘默认采集 50 条，支持通过 `--limit` 控制
+- **验证码预留**：一期检测并留痕验证码，后续可接入超级鹰图形验证码 provider
 
 ---
 
@@ -149,7 +156,20 @@ opscli amazon payload --asin B09LCJPZ1P --pretty
 # 9. 抓取 Amazon 搜索结果
 opscli amazon search --keyword "usb c cable" --limit 5 --pretty
 
-# 10. 退出登录
+# 10. 查看卖家精灵字段契约
+opscli seller-sprite schema --pretty
+
+# 11. 保存卖家精灵命名账号（密码通过终端隐藏输入）
+opscli seller-sprite account save --name default --username <USERNAME>
+
+# 12. 采集卖家精灵关键词材料；未登录时使用命名账号在同一窗口登录后继续采集
+opscli seller-sprite collect --keyword bed --account default --site us --period 30d --limit 50 --output-dir ./seller_sprite_runs --pretty
+
+# 13. 手动登录和状态检查仍可用于调试
+opscli seller-sprite login
+opscli seller-sprite login-status --output-dir ./seller_sprite_runs --pretty
+
+# 14. 退出登录
 opscli auth logout
 ```
 

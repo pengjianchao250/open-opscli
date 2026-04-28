@@ -7,6 +7,7 @@ from opscli.amazon.cli import app as amazon_app
 from opscli.auth.cli import app as auth_app
 from opscli.mcp.cli import app as mcp_app
 from opscli.query.cli import app as query_app
+from opscli.seller_sprite.cli import app as seller_sprite_app
 from opscli.skills.cli import app as skills_app
 from opscli.version import get_version
 
@@ -26,6 +27,7 @@ app.add_typer(amazon_app, name="amazon")
 app.add_typer(query_app, name="query")
 app.add_typer(skills_app, name="skills")
 app.add_typer(mcp_app, name="mcp")
+app.add_typer(seller_sprite_app, name="seller-sprite")
 
 
 @app.callback()
