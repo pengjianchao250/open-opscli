@@ -259,7 +259,49 @@ invalidate_credential_cache()  # 刷新内存缓存
 4. 认证、参数校验、payload 组装、错误映射统一由 `opscli` 负责
 5. 后端新增接口时，默认先补 `opscli` 对应入口，再让 Skill 消费
 
-### 【铁律12】Skill 命名必须使用 `ops-` 前缀
+### 【铁律12】Skill 文档和脚本中的查询 Payload 禁止手写 `userEmail`、`from.table`、`from.permission`
+
+涉及数据查询的 Skill 文档（`reference/*.md`、`SKILL.md`）和脚本，**禁止**手写以下字段：
+
+| 禁止手写字段 | 原因 | 正确做法 |
+|-------------|------|---------|
+| `userEmail` | 涉及当前登录用户隐私 | 由 `opscli query build` 自动填充 |
+| `query.from.table` | 包含子查询 SQL 和权限占位符，手写易错 | 由 `opscli query build` 根据数据集 metadata 自动生成 |
+| `query.from.permission` | 涉及权限维度配置，不同数据集不同 | 由 `opscli query build` 根据数据集 metadata 自动生成 |
+| `query.from.database` | 通常为空字符串，无需关注 | 由 `opscli query build` 自动填充 |
+
+**正确示例**（Skill 文档中只写业务关心的部分）：
+
+```json
+{
+  "dataSource": "doris_analytics",
+  "query": {
+    "from": {
+      "alias": "ds_d35ac6f3910c"
+      // table、permission、database 由 opscli query build 自动生成
+    },
+    "select": [...],
+    "where": {...}
+  }
+}
+```
+
+**禁止示例**：
+
+```json
+{
+  "userEmail": "user@example.com",              // ❌ 禁止手写
+  "query": {
+    "from": {
+      "table": "(SELECT ... IN({permission_placeholder_1}))",  // ❌ 禁止手写
+      "alias": "ds_xxx",
+      "permission": ["channel_uuid", "listing_uuid"]           // ❌ 禁止手写
+    }
+  }
+}
+```
+
+### 【铁律13】Skill 命名必须使用 `ops-` 前缀
 
 所有内置 Skill（`opscli/skills/templates/` 下的子目录）命名必须以 `ops-` 开头：
 
@@ -274,7 +316,7 @@ invalidate_credential_cache()  # 刷新内存缓存
 - 新增 Skill 时若不带 `ops-` 前缀，视为命名不合规，必须改名后再合入
 - 安装命令示例：`opscli skills install ops-auth`
 
-### 【铁律13】新增 Skill 必须遵循完整接入规范
+### 【铁律14】新增 Skill 必须遵循完整接入规范
 
 新增 Skill 时，根据是否需要远端升级分两条路径：
 
@@ -311,7 +353,7 @@ invalidate_credential_cache()  # 刷新内存缓存
 - 必须包含"典型工作流"章节
 - 格式参照 `ops-auth/SKILL.md` 或 `ops-dataset-query/SKILL.md`
 
-### 【铁律14】依赖版本约束不加不必要的上限
+### 【铁律15】依赖版本约束不加不必要的上限
 
 `pyproject.toml` 中的依赖版本约束只设下限，**不加上限**，除非有明确的 API 不兼容证据：
 
@@ -326,7 +368,7 @@ invalidate_credential_cache()  # 刷新内存缓存
 
 **教训**：`cryptography>=38,<42` 曾导致 pip 强制降级系统已有的 v46，破坏同环境中其他包（`opscli`）。上限约束应在有明确 breaking change 时才添加，并在注释中说明原因和对应 issue。
 
-### 【铁律15】文档必须按类型分类存放，文件名必须使用中文
+### 【铁律16】文档必须按类型分类存放，文件名必须使用中文
 
 所有项目文档必须遵循以下规范：
 
@@ -347,7 +389,7 @@ invalidate_credential_cache()  # 刷新内存缓存
 3. 同一类型的文档放入同一目录，不可散落
 4. 方案类文档如涉及多阶段，可加阶段后缀（如"取数底座**一期**开发计划"）
 
-### 【铁律16】所有代码必须有中文注释，重要业务逻辑必须全面注释
+### 【铁律17】所有代码必须有中文注释，重要业务逻辑必须全面注释
 
 编写或修改任何 Python 代码时，必须遵循以下注释规范：
 
@@ -459,7 +501,7 @@ twine upload dist/*                          # 正式发布
 
 ## 文档位置
 
-> 文档按类型分类存放，所有文档必须使用中文名称。详见【铁律14】。
+> 文档按类型分类存放，所有文档必须使用中文名称。详见【铁律16】。
 
 ### 目录结构
 
