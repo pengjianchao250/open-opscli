@@ -1,5 +1,72 @@
 # ops-amazon-rufus Research
 
+## 2026-04-29 复刻扩展端 Rufus 行为研究
+
+### 本轮需求
+
+让 `opscli amazon-rufus get <asin> <country>` 尽量复刻扩展端 `AsinRufusDialog` 的“使用问题获取 Rufus 回答”行为，优先对齐请求参数，而不是改变命令形态或引入新的产品能力。
+
+### 扩展端关键实现结论
+
+参考路径：
+
+- `E:/code/work/extension/frontend/packages/extensions/src/content/features/amazon/components/FloatMenu/AsinRufusDialog/composables/useAsinRufusQuery.ts`
+- `E:/code/work/extension/frontend/packages/extensions/src/content/features/amazon/components/FloatMenu/AsinRufusDialog/composables/createAsinRufusRunner.ts`
+- `E:/code/work/extension/frontend/packages/extensions/src/shared/api/rufus.ts`
+
+扩展端请求模型：
+
+1. 从已拦截记录中选择同 ASIN 的 `/rufus/cl/streaming` seed request。
+2. 用 seed request 的 `requestBody` 作为基础 payload。
+3. 替换 `queryContext.query` 为当前问题。
+4. 显式补齐 `queryContext.actionType = "SEARCH"` 与 `queryContext.qis = "NileCLTextInput"`。
+5. 显式补齐 `pageContext.originPageType = "DETAIL_PAGE"`。
+6. 将 `pageContext.targetPageMetadata` 与 `pageContext.originPageMetadata` 中的 `ASIN` 对齐到目标 ASIN；不存在则追加。
+7. 显式设置 `bottomSheetContext.previousTurnsBottomSheetSize = "expanded"`。
+8. 显式设置 `impressionsContext.FIRST_TIME_USER_MESSAGE_SEEN_STATUS = "SEEN"`。
+9. 请求 URL 以真实 `requestUrl/pageUrl` 的 origin 为基础重建 `/rufus/cl/streaming`，并设置：
+   - `tabId`
+   - `programId = "NILE_CLASSIC:desktop-cl"`
+   - `ref = "nl_cl_dsk_csq"`
+10. 请求 headers 近似完整复用拦截 headers，并使用浏览器凭证上下文。
+
+### 当前 CLI 行为差距
+
+参考路径：
+
+- `opscli/amazon_rufus/services/replay.py`
+- `opscli/amazon_rufus/services/browser.py`
+- `opscli/amazon_rufus/services/manager.py`
+
+当前 CLI 已具备 seed 捕获与页面内 fetch 重放能力，但参数对齐不足：
+
+1. `build_payload()` 只替换 `queryContext.query`。
+2. 不补 `actionType`、`qis`、`pageContext.originPageType`。
+3. 不修正 `targetPageMetadata/originPageMetadata` 中的 ASIN。
+4. 不补 `bottomSheetContext` 与 `impressionsContext`。
+5. 重放 URL 直接使用 `seed.request_url`，不保证 `programId/ref` 存在。
+6. headers 仅保留 `anti-csrftoken-a2z`、`content-type`、`x-amz-is-papyrus`，比扩展端更保守。
+7. CLI 会把上一题解析出的 `threadId` 注入后续题，扩展端当前主流程没有动态传入该上下文；这是 CLI 已有增强，但可能影响“逐题独立复刻”的一致性。
+
+### 外部信息约束
+
+Amazon 官方对 Rufus 的公开定位是“购物助手”，能力包括回答商品问题、做推荐与辅助比较；这与扩展端围绕商品详情页上下文构造请求的做法一致。公开资料没有提供 `/rufus/cl/streaming` 私有接口契约，因此本需求应以内部扩展端实现作为参数基准，不应臆造未观察到的新字段。
+
+官方资料：
+
+- https://www.aboutamazon.com/news/retail/amazon-rufus
+- https://advertising.amazon.com/library/guides/getting-started-with-rufus
+- https://sell.amazon.com/blog/amazon-rufus
+
+### 研究结论
+
+本轮应采用“最小参数对齐”方案：
+
+1. 在 CLI payload 构造层复刻扩展端 `buildPayloadFromRecord()` 的字段修正规则。
+2. 在 CLI URL 构造层保证 `tabId/programId/ref` 与扩展端一致。
+3. headers 先保持当前 allowlist，避免浏览器禁止脚本设置的 header 导致请求失败；如实测缺 header，再按 allowlist 扩展。
+4. 保留 CLI 现有 `threadId` 串联能力，但把 `threadState` 补齐为扩展端默认值 `THREAD_STATE_UNKNOWN`，并在后续 Spec 中明确是否提供开关控制独立问答。
+
 ## 研究目标
 
 为 `opscli` 增加一条新的 Amazon Rufus 能力链路，满足以下目标：

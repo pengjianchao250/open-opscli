@@ -1,5 +1,134 @@
 # ops-amazon-rufus Architecture
 
+## 2026-04-29 架构增量：UTF-8 运行环境与答案文本投影
+
+### 设计原则
+
+本轮变更调整 CLI 成功输出契约：`amazon-rufus get` 执行完成后不输出完整 JSON，只输出 `answers[].text`。
+
+### UTF-8 运行契约
+
+Windows PowerShell 运行示例必须在同一进程环境中设置：
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli amazon-rufus get B0B1MLVMY5 US --skills-dir ".agents/skills" --new-chrome
+```
+
+说明：
+
+1. `PYTHONUTF8=1` 强制 Python 使用 UTF-8 模式，降低 Windows 默认代码页导致的乱码风险。
+2. `PYTHONIOENCODING=utf-8` 约束标准输入输出编码，保证 JSON 中中文答案可被 Agent 正确解析。
+3. 该环境变量只作用于当前命令会话，不修改系统级环境变量。
+
+### 输出分层契约
+
+1. CLI 层：成功时只输出 `answers[].text`。
+2. Service 层：仍可保留完整数据结构用于内部编排。
+3. 用户展示层：只展示答案文本，不展示完整 JSON、`seed_request`、`upload_payload` 或 headers。
+
+### 文本投影规则
+
+伪代码：
+
+```python
+answers = data.get("answers", [])
+texts = [answer.get("text", "").strip() for answer in answers if answer.get("text", "").strip()]
+print("\n\n".join(texts))
+```
+
+失败处理：
+
+1. 出现异常时输出稳定 JSON 错误结构。
+2. 单题无 `text` 且 `isSuccess=false` 时，展示该题失败摘要。
+3. 不把解析失败时的原始 JSON 直接贴给最终用户，除非用户明确要求排障。
+
+### 代码实现边界
+
+本变更移除 `--answers-text` 参数需求，成功路径默认执行文本投影输出。错误路径保留稳定 JSON 错误结构，便于排障。
+
+## 2026-04-29 架构增量：Rufus 请求参数对齐
+
+### 设计原则
+
+本轮变更只触及 Rufus replay 请求构造，不改变 CLI 命令树、题库加载、浏览器 attach、SSE 解析与输出协议。实现应遵循 KISS/YAGNI：复刻扩展端已验证字段，不新增未观察到的私有参数。
+
+### 推荐模块边界
+
+1. `RufusReplayService.build_payload()` 负责 body 对齐：
+   - 解析 seed body。
+   - 替换问题。
+   - 补齐 query/page/bottomSheet/impressions/history 字段。
+   - 接收 `asin` 参数以修正 metadata。
+2. 新增或内聚一个 URL 构造方法，例如 `RufusReplayService.build_replay_url()`：
+   - 基于 `seed.request_url`。
+   - 保留原始 origin/path 与已有 query。
+   - 补齐 `tabId`、`programId`、`ref`。
+3. `replay_with_page()` 只负责组装 payload、URL、headers 并执行页面上下文 fetch。
+4. `BrowserAttachService` 继续只负责捕获 seed request，不承担 payload 复刻逻辑。
+5. `RufusManager` 继续负责业务编排，不下沉具体 Rufus 参数。
+
+### 请求 body 契约
+
+目标 payload 以 seed body 为基础，确保以下字段：
+
+```json
+{
+  "queryContext": {
+    "query": "当前题目",
+    "actionType": "SEARCH",
+    "qis": "NileCLTextInput"
+  },
+  "pageContext": {
+    "originPageType": "DETAIL_PAGE",
+    "targetPageMetadata": [{ "type": "ASIN", "value": "B0TEST1234" }],
+    "originPageMetadata": [{ "type": "ASIN", "value": "B0TEST1234" }]
+  },
+  "bottomSheetContext": {
+    "previousTurnsBottomSheetSize": "expanded"
+  },
+  "impressionsContext": {
+    "FIRST_TIME_USER_MESSAGE_SEEN_STATUS": "SEEN"
+  }
+}
+```
+
+当存在上一题 `threadId` 时追加：
+
+```json
+{
+  "historyThreadContext": {
+    "threadId": "上一题返回的 threadId",
+    "threadState": "THREAD_STATE_UNKNOWN"
+  }
+}
+```
+
+### 请求 URL 契约
+
+URL 构造规则：
+
+1. 优先解析 `seed.request_url`。
+2. 保留 `https://<amazon-marketplace>/rufus/cl/streaming`。
+3. `tabId` 优先使用 `seed.tab_id`，缺失时保留 URL 既有值。
+4. `programId` 缺失时设置为 `NILE_CLASSIC:desktop-cl`。
+5. `ref` 缺失时设置为 `nl_cl_dsk_csq`。
+
+### Headers 策略
+
+当前 CLI 在页面上下文内执行 fetch，仍应使用 allowlist：
+
+- `anti-csrftoken-a2z`
+- `content-type`
+- `x-amz-is-papyrus`
+
+不建议本轮直接复用扩展端完整 headers，因为浏览器脚本环境禁止设置部分安全 header，且 cookie/凭证由页面上下文自然携带。若后续实测 Amazon 站点需要更多 header，再通过最小 allowlist 扩展。
+
+### 测试策略
+
+1. `build_payload` 测试：seed body 为空、字段类型异常、已有 metadata、缺失 metadata、带 threadId。
+2. `build_replay_url` 测试：URL 已有参数、URL 缺 `programId/ref`、`seed.tab_id` 覆盖 URL tabId。
+3. `replay_with_page` 测试：传入页面 evaluate 的 `url/body/headers` 符合契约。
+
 ## 架构目标
 
 以最小侵入方式为 `opscli` 增加一条新的 Rufus 运行链路，同时遵守现有项目分层：

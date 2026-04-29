@@ -1,12 +1,89 @@
 # ops-amazon-rufus UIUX
 
+## 2026-04-29 体验增量：UTF-8 与答案纯文本输出
+
+### 体验目标
+
+用户通过 Skill 获取 Rufus 结果时，不需要阅读完整 JSON。CLI 应在 UTF-8 环境运行，并仅把 `answers[].text` 作为最终答案输出。
+
+### 终端运行体验
+
+推荐 PowerShell 命令：
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli amazon-rufus get B0B1MLVMY5 US --skills-dir ".agents/skills" --new-chrome
+```
+
+该写法只影响当前命令进程，符合最小侵入原则，不要求用户修改系统环境变量。
+
+### 最终回复体验
+
+最终回复只输出答案文本：
+
+```text
+第一题 Rufus 回答文本。
+
+第二题 Rufus 回答文本。
+```
+
+不应展示：
+
+1. 完整 JSON。
+2. `seed_request`。
+3. `upload_payload`。
+4. request headers、cookie 或调试字段。
+
+### 与 CLI JSON 的关系
+
+CLI 的 JSON 输出仍是内部机器协议，用于稳定解析 `answers[].text`。Skill 使用者和 Agent 不应把该 JSON 直接作为最终结果回复给用户，除非用户明确要求查看原始结果或排障。
+
+## 2026-04-29 体验增量：参数对齐不改变用户心智
+
+### 体验目标
+
+本轮是底层请求复刻，不应让用户学习新命令。用户仍只需要执行：
+
+```bash
+opscli amazon-rufus get B0TEST1234 US
+```
+
+### 用户可感知收益
+
+1. Rufus 回答更贴近扩展端结果。
+2. 商品详情页上下文更稳定，减少回答偏离目标 ASIN 的概率。
+3. 跨站点请求参数更一致，减少因缺少 `programId/ref` 导致的不确定行为。
+4. CLI 机器输出结构保持不变，脚本调用方无需适配。
+
+### 文案与输出约束
+
+1. 不新增“复刻模式”文案，避免暴露内部实现细节。
+2. 若后续新增 debug 输出，只能在调试字段展示 `replay_url` 与 `payload_fields` 摘要，不输出完整 cookie 或敏感 header。
+3. Skill 最终回复只展示答案文本，seed/request 细节仅保留在 CLI JSON 中用于排障。
+
+### CLI 使用体验不变项
+
+1. 命令入口不变：`opscli amazon-rufus get <asin> <country>`。
+2. Chrome 前置条件不变：复用已登录 Amazon 的本地调试 Chrome。
+3. 题库来源不变：`ops-amazon-rufus/data/question_templates.json`。
+4. 输出主字段不变：`success`、`command`、`data`、`error`。
+
+### UI/图标/设计系统锁定
+
+本需求无图形 UI 实现。若后续需要图形页面，必须先在本文件追加并冻结以下内容后才能编码：
+
+1. 图标库：Lucide、Heroicons 或 Tabler 之一。
+2. 字体系统：明确字体族、字号阶梯与行高。
+3. design token system：颜色、间距、圆角、阴影。
+4. 组件生态：现有前端组件库或明确替代方案。
+5. 页面骨架：信息架构与状态流。
+
 ## 文档目标
 
 本需求没有新增图形页面，本文件定义的是：
 
 - CLI 交互体验
 - Skill 使用体验
-- 输出 JSON 的可读性
+- 答案文本的可读性
 - 错误提示与排障路径
 
 目标是让使用者在终端里完成一次稳定、可理解、可复用的 Rufus 获取流程。
@@ -42,17 +119,15 @@ opscli amazon-rufus get <asin> <country>
 2. 用户需先登录 Amazon
 3. 需先安装并升级 `ops-amazon-rufus`
 
-### 3. 输出先给结果，再给上下文
+### 3. 输出先给答案，再留上下文
 
-成功输出的阅读顺序应为：
+Skill 最终回复的阅读顺序应为：
 
-1. 目标 ASIN / 国家
-2. 逐题答案摘要
-3. 详细 answer 结构
-4. seed request 摘要
-5. upload payload
+1. 第一题答案文本
+2. 第二题答案文本
+3. 后续题目答案文本
 
-不应一开始就把低层 request 细节堆满屏幕。
+低层 request 细节只留在 CLI JSON 中，默认不展示给最终用户。
 
 ---
 
@@ -62,8 +137,8 @@ opscli amazon-rufus get <asin> <country>
 
 沿用当前项目风格：
 
-- 统一 JSON 输出
-- 支持 `--pretty`
+- CLI 统一 JSON 输出，Skill 最终只展示答案文本
+- 成功时只输出答案文本，错误时返回稳定结构
 - 错误返回稳定结构
 
 ### 推荐帮助文案
@@ -76,9 +151,9 @@ opscli amazon-rufus get <asin> <country>
 ### 推荐参数设计
 
 ```text
-opscli amazon-rufus get B0ABC12345 US --pretty
+opscli amazon-rufus get B0ABC12345 US
 opscli amazon-rufus get B0ABC12345 DE --cdp-url http://127.0.0.1:9222
-opscli amazon-rufus get B0ABC12345 US --new-chrome --pretty
+opscli amazon-rufus get B0ABC12345 US --new-chrome
 opscli amazon-rufus get B0ABC12345 JP --launch-if-needed --chrome-path "C:/Program Files/Google/Chrome/Application/chrome.exe"
 ```
 
@@ -94,7 +169,7 @@ Start-Process chrome.exe -ArgumentList '--remote-debugging-port=9222 --user-data
 
 ### 紧凑输出
 
-默认输出适合脚本消费：
+CLI 默认输出适合脚本和 Agent 解析：
 
 ```json
 {
@@ -109,20 +184,21 @@ Start-Process chrome.exe -ArgumentList '--remote-debugging-port=9222 --user-data
 }
 ```
 
-### 美化输出
+### Skill 最终输出
 
-`--pretty` 面向人工阅读，应保证顶层字段稳定：
+Agent 解析 CLI JSON 后，只向最终用户输出：
 
-- `asin`
-- `country`
-- `page_url`
-- `template_version`
-- `answers`
-- `upload_payload`
+```text
+第一题答案文本。
+
+第二题答案文本。
+```
+
+不得直接展示 `seed_request`、`upload_payload` 或完整 JSON。
 
 ### 答案项体验
 
-每题至少展示：
+CLI JSON 中每题至少保留：
 
 - `template_id`
 - `question`
@@ -214,25 +290,25 @@ opscli skills upgrade ops-amazon-rufus
 "C:/Program Files/Google/Chrome/Application/chrome.exe" --remote-debugging-port=9222
 
 # 4. 或让命令先新开 Chrome 调试窗口
-opscli amazon-rufus get B0ABC12345 US --new-chrome --pretty
+opscli amazon-rufus get B0ABC12345 US --new-chrome
 
 # 5. 登录 Amazon 后执行
-opscli amazon-rufus get B0ABC12345 US --pretty
+opscli amazon-rufus get B0ABC12345 US
 ```
 
 ---
 
 ## 数据输出体验
 
-### 上传 payload 的展示策略
+### 上传 payload 的解析策略
 
-因为本期不真正上传，`upload_payload` 应作为“可选附带信息”，而不是主视觉焦点。
+因为本期不真正上传，`upload_payload` 只作为 CLI JSON 内部字段，不作为 Skill 最终回复内容。
 
 建议：
 
-- 默认输出包含 `upload_payload`
-- 通过 `--no-upload-payload` 可隐藏
-- 在 `--pretty` 模式中放在 `answers` 之后
+- CLI 默认可继续包含 `upload_payload`
+- Agent 最终回复必须隐藏 `upload_payload`
+- 用户明确要求排障时，才可提示其查看原始 JSON
 - 若后续查看源码，应能看到注释态的上传调用代码，便于对照未来接入点
 
 ### 输出文件体验
@@ -263,6 +339,6 @@ opscli amazon-rufus get B0ABC12345 US --pretty
 - 把复杂流程压缩成一条稳定命令
 - 让前置依赖足够显式
 - 让错误信息足够明确
-- 让输出 JSON 同时适合脚本与人工阅读
+- 让 CLI JSON 适合脚本解析，最终回复适合人工阅读
 
 只要这四点做对，`ops-amazon-rufus` 的首版体验就是合格的。

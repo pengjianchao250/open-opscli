@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
-from typing import Any
+from typing import Any, Callable
 
 from opscli.amazon_rufus.domain.exceptions import ChromeCdpUnavailableError, SeedRequestNotCapturedError
 from opscli.amazon_rufus.domain.models import SeedRequestRecord
@@ -17,6 +17,7 @@ class BrowserAttachService:
     DEFAULT_NEW_CHROME_ARGUMENTS = (
         "--remote-debugging-port=9222 "
         '--user-data-dir="E:\\chrome-profiles\\opscli-rufus" '
+        "--auto-open-devtools-for-tabs "
         "--no-first-run "
         "--no-default-browser-check"
     )
@@ -33,6 +34,8 @@ class BrowserAttachService:
         cdp_url: str,
         timeout_seconds: int,
         new_chrome: bool = False,
+        keep_chrome_open: bool = False,
+        on_captured: Callable[[Any, SeedRequestRecord], None] | None = None,
     ) -> SeedRequestRecord:
         """捕获首个 Rufus streaming 请求。"""
         if new_chrome:
@@ -51,36 +54,55 @@ class BrowserAttachService:
                 browser = playwright.chromium.connect_over_cdp(cdp_url)
             except Exception as exc:
                 raise ChromeCdpUnavailableError(f"无法连接 Chrome CDP: {cdp_url}") from exc
-            context = browser.contexts[0] if browser.contexts else browser.new_context()
-            page = context.new_page()
-            page.bring_to_front()
-            self.current_page = page
+            try:
+                context = browser.contexts[0] if browser.contexts else browser.new_context()
+                page = context.new_page()
+                page.bring_to_front()
+                self.current_page = page
 
-            def on_request(request: Any) -> None:
-                if "/rufus/cl/streaming" not in request.url or captured:
-                    return
-                body = request.post_data or "{}"
-                captured.append(
-                    SeedRequestRecord(
-                        request_url=request.url,
-                        request_headers=dict(request.headers),
-                        request_body=body,
-                        page_url=page.url or page_url,
-                        tab_id=self._extract_tab_id(request.url, body),
-                        asin=asin.strip().upper(),
-                        country=country.strip().upper(),
-                        captured_at=int(time.time() * 1000),
+                def on_request(request: Any) -> None:
+                    if "/rufus/cl/streaming" not in request.url or captured:
+                        return
+                    body = request.post_data or "{}"
+                    captured.append(
+                        SeedRequestRecord(
+                            request_url=request.url,
+                            request_headers=dict(request.headers),
+                            request_body=body,
+                            page_url=page.url or page_url,
+                            tab_id=self._extract_tab_id(request.url, body),
+                            asin=asin.strip().upper(),
+                            country=country.strip().upper(),
+                            captured_at=int(time.time() * 1000),
+                        )
                     )
-                )
 
-            page.on("request", on_request)
-            page.goto(page_url, wait_until="domcontentloaded", timeout=deadline_ms)
-            page.wait_for_timeout(min(deadline_ms, 1000))
-            if not captured:
-                raise SeedRequestNotCapturedError(
-                    f"未捕获 /rufus/cl/streaming，请确认已登录 Amazon 且站点支持 Rufus: {page_url}"
-                )
-            return captured[0]
+                page.on("request", on_request)
+                page.goto(page_url, wait_until="domcontentloaded", timeout=deadline_ms)
+                page.wait_for_timeout(min(deadline_ms, 1000))
+                if not captured:
+                    raise SeedRequestNotCapturedError(
+                        f"未捕获 /rufus/cl/streaming，请确认已登录 Amazon 且站点支持 Rufus: {page_url}"
+                    )
+                seed = captured[0]
+                if on_captured:
+                    on_captured(page, seed)
+                return seed
+            finally:
+                # 仅关闭由本命令新开的调试 Chrome，避免影响用户已有浏览器。
+                if new_chrome and not keep_chrome_open:
+                    self._close_new_chrome(browser)
+
+    def _close_new_chrome(self, browser: Any) -> None:
+        """通过 CDP 关闭本次新开的 Chrome。"""
+        try:
+            session = browser.new_browser_cdp_session()
+            session.send("Browser.close")
+            return
+        except Exception:
+            close = getattr(browser, "close", None)
+            if callable(close):
+                close()
 
     def _start_new_chrome(self) -> None:
         """新开一个固定 profile 的 Chrome 调试窗口。"""
@@ -98,7 +120,7 @@ class BrowserAttachService:
                 "无法启动 Chrome 调试窗口，请手动执行："
                 "Start-Process chrome.exe -ArgumentList "
                 "'--remote-debugging-port=9222 --user-data-dir=\"E:\\chrome-profiles\\opscli-rufus\" "
-                "--no-first-run --no-default-browser-check'"
+                "--auto-open-devtools-for-tabs --no-first-run --no-default-browser-check'"
             ) from exc
 
     def _wait_for_cdp(self, cdp_url: str, *, timeout_seconds: int) -> None:

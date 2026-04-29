@@ -33,6 +33,7 @@ class RufusManager:
         skills_dir: str | None = None,
         cdp_url: str = "http://127.0.0.1:9222",
         new_chrome: bool = False,
+        keep_chrome_open: bool = False,
         chrome_path: str | None = None,
         launch_if_needed: bool = False,
         timeout_seconds: int = 90,
@@ -46,18 +47,24 @@ class RufusManager:
         templates = bank.load_templates()
         questions = [question.text for template in templates for question in template.questions if question.text]
         page_url = build_product_url(normalized_asin, normalized_country)
+        answers: list[AnswerData] = []
+
+        def replay_before_browser_closes(page, seed) -> None:
+            # Playwright 页面只能在 sync_playwright 上下文关闭前使用。
+            if hasattr(self.replay, "replay_with_page"):
+                answers.extend(self.replay.replay_with_page(page, seed, questions))
+
         seed = self.browser.capture_seed_request(
             asin=normalized_asin,
             country=normalized_country,
             page_url=page_url,
             cdp_url=cdp_url,
             new_chrome=new_chrome,
+            keep_chrome_open=keep_chrome_open,
             timeout_seconds=timeout_seconds,
+            on_captured=replay_before_browser_closes,
         )
-        page = getattr(self.browser, "current_page", None)
-        if page is not None and hasattr(self.replay, "replay_with_page"):
-            answers: list[AnswerData] = self.replay.replay_with_page(page, seed, questions)
-        else:
+        if not answers:
             answers = self.replay.replay(seed, questions)
         data = {
             "asin": normalized_asin,

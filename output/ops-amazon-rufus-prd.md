@@ -1,5 +1,79 @@
 # ops-amazon-rufus PRD
 
+## 2026-04-29 变更需求：Skill 运行 UTF-8 与答案纯文本输出
+
+### 背景
+
+`ops-amazon-rufus` 面向 AI Agent 和运营同学使用，Rufus 回答包含中文、特殊符号和 Amazon 商品文本。若命令未在 UTF-8 环境下运行，Windows PowerShell 可能出现乱码；同时 Agent 使用场景只需要最终回答文本，不需要把完整 JSON 暴露给用户。
+
+### 目标
+
+1. Skill 文档中的所有运行示例必须显式使用 UTF-8 环境变量。
+2. 命令执行完成后，Skill 面向用户的最终输出只返回 `answers[].text` 内容。
+3. 原始 JSON 仅作为本地解析中间结果，不作为最终回复直接输出。
+4. 不改变 `opscli amazon-rufus get <asin> <country>` 的核心运行链路。
+
+### 非目标
+
+1. 不移除 CLI 内部结构化 JSON 能力，避免破坏脚本与测试兼容性。
+2. 不新增上传、批量调度或远端 API 调用能力。
+3. 不在 Skill 层直接调用后端接口。
+
+### 功能需求
+
+1. PowerShell 示例必须在同一命令会话中设置 `$env:PYTHONUTF8 = "1"` 与 `$env:PYTHONIOENCODING = "utf-8"`。
+2. `amazon-rufus get` 成功时只输出 `answers[].text`。
+3. 当存在多条答案时，最终回复按题库顺序输出每条非空 `text`，用空行分隔。
+4. 当某题 `text` 为空但 `isSuccess` 为 `false` 时，最终回复应输出该题失败信息摘要，避免静默丢失。
+5. 最终用户回复不得包含 `seed_request`、`upload_payload`、请求头或完整 JSON。
+
+### 验收标准
+
+1. `ops-amazon-rufus` 的 `SKILL.md` 和 `README.md` 均包含 UTF-8 运行示例。
+2. 文档明确要求最终只向用户输出 `answers[].text`。
+3. 原有 CLI JSON 契约在架构文档中被标记为内部解析契约，而不是 Skill 最终展示契约。
+
+## 2026-04-29 变更需求：复刻扩展端 Rufus 请求行为
+
+### 背景
+
+当前 `amazon-rufus` CLI 已能捕获 Rufus seed request 并逐题重放，但请求参数比扩展端 `AsinRufusDialog` 少。为提升回答成功率、上下文准确性和跨站点一致性，需要让 CLI 尽量复刻扩展端的请求构造行为。
+
+### 目标
+
+1. CLI 使用题库问题获取 Rufus 回答时，请求 body 字段与扩展端保持一致。
+2. CLI 重放 URL 显式携带扩展端使用的 `tabId/programId/ref` 参数。
+3. 保持现有命令入口、输出结构和题库加载方式不变，降低升级风险。
+4. 不引入上传、远端 API、GUI 或新命令。
+
+### 非目标
+
+1. 不复制扩展端表单驱动的 `keyword/persona/optimizeAsin` 动态问题生成逻辑。
+2. 不把浏览器所有 request headers 无差别注入页面内 fetch。
+3. 不改变 `opscli amazon-rufus get <asin> <country>` 的用户交互路径。
+4. 不在文档确认前创建 `.super-dev/changes/*` 或开始编码。
+
+### 功能需求
+
+1. Payload 构造必须基于 seed body 深拷贝，避免污染原始记录。
+2. 每题必须替换 `queryContext.query`。
+3. 每题必须设置 `queryContext.actionType = "SEARCH"`。
+4. 每题必须设置 `queryContext.qis = "NileCLTextInput"`。
+5. 每题必须设置 `pageContext.originPageType = "DETAIL_PAGE"`。
+6. 每题必须确保 `pageContext.targetPageMetadata` 中存在 `{ type: "ASIN", value: <目标 ASIN> }`。
+7. 每题必须确保 `pageContext.originPageMetadata` 中存在 `{ type: "ASIN", value: <目标 ASIN> }`。
+8. 每题必须设置 `bottomSheetContext.previousTurnsBottomSheetSize = "expanded"`。
+9. 每题必须设置 `impressionsContext.FIRST_TIME_USER_MESSAGE_SEEN_STATUS = "SEEN"`。
+10. 当沿用上一题 `threadId` 时，`historyThreadContext` 必须包含 `threadId` 与 `threadState`，其中 `threadState` 默认 `THREAD_STATE_UNKNOWN`。
+11. 重放 URL 必须保留 seed origin/path，并确保 query 参数包含 `tabId`、`programId=NILE_CLASSIC:desktop-cl`、`ref=nl_cl_dsk_csq`。
+
+### 验收标准
+
+1. 单元测试覆盖 body 补字段、ASIN metadata 覆盖/追加、URL query 参数补齐。
+2. 原有 `amazon-rufus` 测试继续通过。
+3. CLI 输出结构不破坏既有字段：`asin`、`country`、`page_url`、`question_count`、`answers`、`seed_request`、`upload_payload`。
+4. 新实现保持 KISS：请求复刻逻辑集中在 replay/service 层，不分散到 CLI 层。
+
 ## 需求概述
 
 新增一套 Amazon Rufus CLI 与 Skill 能力，支持用户基于已登录的本地 Chrome 会话，对指定 ASIN 自动发起题库问题并返回结构化答案。
@@ -45,7 +119,7 @@
 1. 用户执行 `opscli amazon-rufus get <asin> <country>` 时，能够在本地已登录 Chrome 上跑通完整流程。
 2. 命令能捕获一个有效 seed request，并用它重放题库问题。
 3. 至少能正确解析出每题的最终回答文本和结构化 answer 数据。
-4. 命令输出中包含：
+4. CLI 原始 JSON 中包含以下内部解析字段，Skill 最终回复只展示 `answers[].text`：
    - 请求上下文摘要
    - 逐题答案
    - 标准上传 payload
@@ -120,7 +194,7 @@ opscli amazon-rufus get <asin> <country> \
 - `--timeout`
   - 可选，单题最大等待秒数
 - `--pretty`
-  - 可选，格式化 JSON 输出
+  - 保留参数但不改变成功输出口径；成功时仍只输出 `answers[].text`
 - `--output`
   - 可选，将最终结果写入文件
 - `--no-upload-payload`
@@ -229,9 +303,9 @@ seed request 至少需要提取：
 - `requestBody` 允许使用 CLI 自己的业务字段，只要求外层 record 结构一致
 - 真实上传请求代码需要在实现中存在，但默认以注释状态保留，不参与一期运行
 
-### FR-8 命令输出
+### FR-8 命令输出与 Skill 展示
 
-命令成功时返回 JSON，至少包含：
+CLI 命令成功时只输出 `answers[].text`。内部数据结构仍至少包含：
 
 - `asin`
 - `country`
@@ -241,6 +315,8 @@ seed request 至少需要提取：
 - `answers`
 - `upload_payload`
 - `captured_at`
+
+Skill/Agent 面向最终用户展示时，必须从上述 JSON 中提取 `answers[].text`，并且只输出答案文本。
 
 ---
 

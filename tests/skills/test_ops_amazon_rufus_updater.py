@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
 from opscli.skills.manager import SkillsManager
 from opscli.skills.models import SkillRecord, SkillUpgradeResult
@@ -82,6 +83,38 @@ def test_upgrade_ops_amazon_rufus_writes_merged_question_templates(tmp_path: Pat
     assert not (data_dir / "runner_config.json").exists()
     assert not (data_dir / "marketplaces.json").exists()
     assert not (data_dir / "questions").exists()
+
+
+def test_upgrade_ops_amazon_rufus_rejects_empty_question_templates(tmp_path: Path, monkeypatch):
+    skill_root = tmp_path / "ops-amazon-rufus"
+    data_dir = skill_root / "data"
+    data_dir.mkdir(parents=True)
+
+    record = SkillRecord(
+        name="ops-amazon-rufus",
+        version="v0.0.0",
+        runtime="codex",
+        root=skill_root,
+        version_file=data_dir / "VERSION.json",
+    )
+    updater = SkillsUpdater()
+
+    def fake_httpx_get(url, timeout=None, follow_redirects=None):
+        # 远端返回空题库时不能覆盖本地有效数据。
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            json={"code": 200, "data": {"items": []}, "msg": "success"},
+        )
+
+    monkeypatch.setattr("opscli.skills.sync.updater.httpx.get", fake_httpx_get)
+
+    from opscli.skills.domain.exceptions import SkillRemoteError
+
+    with pytest.raises(SkillRemoteError) as exc:
+        updater.upgrade_ops_amazon_rufus(record)
+
+    assert "Rufus 默认题库为空" in str(exc.value)
 
 
 def test_upgrade_dispatches_ops_amazon_rufus(tmp_path: Path, monkeypatch):

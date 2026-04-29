@@ -178,6 +178,12 @@ class SkillsUpdater:
                 "Rufus 默认题库接口返回格式异常",
                 endpoint=self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT,
             )
+        question_count = sum(len(item.get("questions", [])) for item in data["items"] if isinstance(item, dict))
+        if question_count == 0:
+            raise SkillRemoteError(
+                "Rufus 默认题库为空，已取消本地题库更新",
+                endpoint=self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT,
+            )
 
         current_version = record.version
         remote_version = "v0.0.1"
@@ -205,7 +211,7 @@ class SkillsUpdater:
             runtime=record.runtime,
             target_dir=record.root,
             updated=True,
-            field_count=sum(len(item.get("questions", [])) for item in data["items"] if isinstance(item, dict)),
+            field_count=question_count,
         )
 
 

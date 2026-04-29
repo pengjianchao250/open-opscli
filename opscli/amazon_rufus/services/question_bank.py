@@ -28,7 +28,11 @@ class QuestionBankService:
         items = payload.get("items")
         if not isinstance(items, list):
             raise QuestionBankNotReadyError("题库格式错误：缺少 items 列表")
-        return [self._parse_template(item) for item in items]
+        templates = [self._parse_template(item) for item in items]
+        question_count = sum(len(template.questions) for template in templates)
+        if question_count == 0:
+            raise QuestionBankNotReadyError("题库为空，请执行 `opscli skills upgrade ops-amazon-rufus` 同步默认题库")
+        return templates
 
     def _resolve_question_templates_path(self) -> Path:
         """解析题库文件路径。"""
