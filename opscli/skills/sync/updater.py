@@ -1,4 +1,4 @@
-"""Skill 远端数据更新器。
+﻿"""Skill 远端数据更新器。
 
 负责从运营系统后端拉取最新的 ops-dataset-query 数据，
 通过"先写临时目录、再原子替换"的策略安全地更新本地 Skill 数据文件。
@@ -30,6 +30,7 @@ class SkillsUpdater:
     FIELDS_ENDPOINT = "/v1/data-metrics/datasets/skill/export"              # 字段数据导出
     DATASETS_ENDPOINT = "/v1/data-metrics/datasets/skill/export-datasets"   # 数据集导出
     QUERY_METADATA_ENDPOINT = "/v1/data-metrics/datasets/query-metadata"    # 查询元数据
+    RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT = "http://127.0.0.1:8000/api/opencalw/default-question-templates"  # Rufus 默认题库
 
     def build_remote_summary(self, skill_name: str) -> dict:
         """构建远端状态摘要，供 `skills status` 与调试输出复用。"""
@@ -166,6 +167,70 @@ class SkillsUpdater:
             field_count=field_count,
         )
 
+
+    def upgrade_ops_amazon_rufus(self, record: SkillRecord, force: bool = False) -> SkillUpgradeResult:
+        """执行 ops-amazon-rufus 默认题库升级。"""
+        response = self._get_rufus_default_question_templates()
+        payload = self._parse_json_response(response, endpoint=self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT)
+        data = payload.get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+            raise SkillRemoteError(
+                "Rufus 默认题库接口返回格式异常",
+                endpoint=self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT,
+            )
+
+        current_version = record.version
+        remote_version = "v0.0.1"
+        data_dir = record.root / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        # 仅写入合并题库与版本文件，不创建 runner_config / marketplaces / questions。
+        with TemporaryDirectory(dir=data_dir) as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            (tmp_path / "question_templates.json").write_text(
+                json.dumps({"items": data["items"]}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (tmp_path / "VERSION.json").write_text(
+                json.dumps({"name": record.name, "version": remote_version}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            for filename in ["question_templates.json", "VERSION.json"]:
+                (tmp_path / filename).replace(data_dir / filename)
+
+        return SkillUpgradeResult(
+            name=record.name,
+            from_version=current_version,
+            to_version=remote_version,
+            runtime=record.runtime,
+            target_dir=record.root,
+            updated=True,
+            field_count=sum(len(item.get("questions", [])) for item in data["items"] if isinstance(item, dict)),
+        )
+
+
+    def _get_rufus_default_question_templates(self) -> httpx.Response:
+        """请求 Rufus 默认题库接口；该本地接口不依赖 ops 登录态。"""
+        try:
+            response = httpx.get(
+                self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT,
+                timeout=20,
+                follow_redirects=True,
+            )
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as exc:
+            raise SkillRemoteError(
+                self._format_http_error(self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT, exc.response.status_code),
+                endpoint=self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT,
+                status_code=exc.response.status_code,
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise SkillRemoteError(
+                f"请求 Rufus 默认题库接口失败: {exc}",
+                endpoint=self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT,
+            ) from exc
+
     def _extract_field_count(
         self,
         *,
@@ -272,3 +337,7 @@ class SkillsUpdater:
         if code == 422:
             return f"远端 Skill 接口参数校验失败: {message or endpoint}"
         return f"远端 Skill 接口返回业务错误（code={code}）: {message or endpoint}"
+
+
+
+
