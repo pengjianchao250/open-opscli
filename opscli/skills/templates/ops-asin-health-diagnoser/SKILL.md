@@ -1,59 +1,123 @@
 ---
 name: ops-asin-health-diagnoser
-description: Diagnoses Amazon ASIN health by calculating composite scores from gross_profit_percent, convert_percent, ads_acos, refund_percent, inventory_turnaround_days, and star rating using internal operational data. Use when evaluating product performance, identifying underperforming ASINs, prioritizing operational interventions, or preparing weekly review reports.
+description: 通过使用内部运营数据计算gross_profit_percent、convert_percent、ads_acos、refund_percent、inventory_turnaround_days 和星级的综合分数来诊断 Amazon ASIN 运行状况。在评估产品性能、识别表现不佳的 ASIN、确定运营干预的优先顺序或准备每周审核报告时使用。
 ---
 
-# ASIN Health Diagnoser
+# ASIN 健康诊断器
 
-Calculates a composite health score (0-100) for Amazon ASINs using internal operational data from opscli datasets.
+使用 opscli 数据集中的内部运营数据计算 Amazon ASIN 的综合运行状况评分 (0-100)。
 
-## Capabilities
+## 强制认证与环境门禁
 
-- Single ASIN deep diagnosis with 6 core metrics
-- Batch ASIN health ranking and filtering
-- Department/team-level health overview
-- Prioritized action recommendations with expected impact
-- Support for custom weights and thresholds
+进入本 Skill 后，必须先完成环境与认证检查；检查通过前，禁止直接开始抓取、查询、运行脚本或读取数据样本。
 
-## Health Score Formula
+强制顺序如下：
+
+1. 检测是否安装 `aukeys-opscli` Python 发行包
+2. 检测 `opscli` 命令是否可执行
+3. 检测 `opscli query --help` 是否成功，用于确认查询能力可用
+4. 检测当前是否已完成授权登录
+5. 只有 `dist_ok=true`、`opscli_ok=true`、`query_ok=true`、`auth_ok=true` 时，才允许继续本 Skill
+6. 任一检查失败，都必须立即停止当前 Skill，先使用 `ops-auth` 完成登录，或先安装 `aukeys-opscli`
+
+推荐检测脚本：
+
+```bash
+python - <<'PY'
+from importlib import metadata
+import json
+import shutil
+import subprocess
+
+dist_ok = False
+opscli_ok = False
+query_ok = False
+auth_ok = False
+
+try:
+    metadata.version("aukeys-opscli")
+    dist_ok = True
+except metadata.PackageNotFoundError:
+    pass
+
+opscli_ok = shutil.which("opscli") is not None
+if opscli_ok:
+    query_ok = subprocess.run(
+        ["opscli", "query", "--help"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
+
+if dist_ok:
+    try:
+        from opscli import AuthClient
+        auth_ok = AuthClient().is_authenticated()
+    except Exception:
+        auth_ok = False
+
+print(json.dumps({
+    "dist_ok": dist_ok,
+    "opscli_ok": opscli_ok,
+    "query_ok": query_ok,
+    "auth_ok": auth_ok,
+    "ready": dist_ok and opscli_ok and query_ok and auth_ok,
+}, ensure_ascii=False))
+PY
+```
+
+禁止事项：
+
+- 禁止跳过认证检查，直接执行 `opscli query build`、`opscli query run` 或任意抓取命令
+- 禁止在未登录状态下直接运行本 Skill 的分析脚本
+- 禁止手写、复用或拼接过期 Token 绕过 `ops-auth`
+
+## 能力范围
+
+- 单一ASIN深度诊断6大核心指标
+- 批量ASIN健康度排名和过滤
+- 部门/团队级别的健康概览
+- 具有预期影响的优先行动建议
+- 支持自定义权重和阈值
+
+## 健康评分公式
 
 ```
-Score = w1 * normalize(gross_profit_percent) +
-        w2 * normalize(convert_percent) +
-        w3 * normalize(1 - ads_acos) +
-        w4 * normalize(1 - refund_percent) +
-        w5 * normalize(1 / inventory_days) +
-        w6 * normalize(star / 5)
+分数 = w1 * 标准化(gross_profit_percent) +
+        w2 * 标准化(convert_percent) +
+        w3 * 标准化(1 - ads_acos) +
+        w4 * 标准化(1 - 退款率) +
+        w5 * 标准化(1 / 库存天数) +
+        w6 * 标准化（星号 / 5）
 ```
 
-Default weights: `[0.30, 0.20, 0.20, 0.15, 0.10, 0.05]`
+默认权重：`[0.30, 0.20, 0.20, 0.15, 0.10, 0.05]`
 
-## Threshold Reference
+## 阈值参考
 
 > **字段映射说明**：数据集 `ds_d35ac6f3910c` 中的 `sell_qty_days` 字段对应本 Skill 中的 `inventory_days` 指标，`ads_acos` 对应 `ads_acos`，`convert_percent` 对应转化率字段。
 
-| Metric | Dataset Field | Healthy | Warning | Critical |
+| 指标 | 数据集字段 | 健康 | 预警 | 严重 |
 |--------|---------|---------|----------|
-| gross_profit_percent | > 20% | 10-20% | < 10% |
-| convert_percent | > 10% | 5-10% | < 5% |
-| ads_acos | < 20% | 20-30% | > 30% |
-| refund_percent | < 5% | 5-10% | > 10% |
-| inventory_days | < 45 | 45-90 | > 90 |
-| star | > 4.3 | 4.0-4.3 | < 4.0 |
+|毛利率 | > 20% | 10-20% | < 10% |
+|转化率 | > 10% | 5-10% | < 5% |
+|广告 ACOS | < 20% | 20-30% | > 30% |
+|退款率 | < 5% | 5-10% | > 10% |
+|库存天数 | < 45 | 45-90 | 45-90 > 90 |
+|星级| > 4.3 | 4.0-4.3 | < 4.0 |
 
-## Input Format
+## 输入格式
 
-- Single ASIN: `"B08XXXXXX"`
-- Multiple ASINs: `"B08XXXXXX, B09YYYYYY"`
-- Team filter: `"team_name = 'Kitchen-Team-A'"`
-- Date range: `"last 30 days"`, `"2025-01-01 to 2025-01-31"`
+- 单个 ASIN：`"B08XXXXXX"`
+- 多个 ASIN：`"B08XXXXXX, B09YYYYYY"`
+- 团队过滤器：`"team_name = 'Kitchen-Team-A'"`
+- 日期范围：`"last 30 days"`、`"2025-01-01 to 2025-01-31"`
 
-## Output Format
+## 输出格式
 
-For each ASIN:
+对于每个 ASIN：
 
 ```
-【ASIN】B08XXXXXX（Product Name）
+【ASIN】B08XXXXXX（产品名称）
 【健康度评分】72/100（良好）
 【分项指标】
   ├─ 毛利率：18.5% ⚠️（预警，目标>20%）
@@ -69,18 +133,18 @@ For each ASIN:
 【数据时间】2025-01-01 ~ 2025-01-31
 ```
 
-## Scripts
+## 脚本
 
-- `scripts/calculate_health_score.py`: Calculates composite health score from JSON input
+- `scripts/calculate_health_score.py`：根据 JSON 输入计算综合健康评分
 
-## How to Use
+## 使用方式
 
-### Step 1: Query Data
+### 第一步：查询数据
 
-Use opscli query commands to fetch ASIN metrics:
+使用 opscli 查询命令获取 ASIN 指标：
 
 ```bash
-# Build query payload
+# 构建查询负载
 opscli query build \
   --dataset ds_d35ac6f3910c \
   --dimension asin --dimension product_name \
@@ -88,20 +152,20 @@ opscli query build \
   --metric ads_acos --metric refund_percent --metric sell_qty_days \
   --output payload.json
 
-# Run query
+# 运行查询
 opscli query run --payload payload.json
 ```
 
-### Step 2: Run Diagnosis
+### 第二步：执行诊断
 
 ```bash
 echo '{"asin": "B08XXXXXX", "metrics": {...}}' | python scripts/calculate_health_score.py
 ```
 
-## Best Practices
+## 最佳实践
 
-1. Always compare against team/category averages, not just absolute thresholds
-2. When star rating is missing, exclude it from calculation and note the gap
-3. For new products (< 30 days), use relaxed thresholds
-4. Flag any ASIN with multiple Critical metrics for immediate attention
-5. Use `opscli query build` to construct payloads instead of writing SQL manually
+1. 始终与团队/类别平均值进行比较，而不仅仅是绝对阈值
+2. 当星级缺失时，将其排除在计算之外并记下差距
+3. 对于新产品（< 30 天），使用宽松的阈值
+4. 标记具有多个关键指标的任何 ASIN，以便立即引起注意
+5. 使用 `opscli query build` 构造 payload，而不是手写 SQL

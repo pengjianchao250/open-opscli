@@ -1,4 +1,4 @@
-# ASIN Health Diagnoser — 数据集字段映射
+# ASIN 健康诊断数据集字段映射
 
 ## 主数据集：order_sale_trend_adv_traffic_inv_set (ds_d35ac6f3910c)
 

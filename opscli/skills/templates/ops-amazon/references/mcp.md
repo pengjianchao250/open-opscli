@@ -1,10 +1,4 @@
----
-name: ops-amazon
-mcp-version: v1.0.0
-description: 使用 opscli MCP 工具抓取 Amazon 商品页和搜索结果，并输出用于 ops API 与数据表设计的标准样本
----
-
-# ops-amazon (MCP 无状态模式)
+# ops-amazon (MCP 参考文档)
 
 使用 MCP Tool `amazon_*` 抓取 Amazon 商品页快照、搜索结果页样本和预留给 ops API 的标准 payload。
 
@@ -334,7 +328,7 @@ amazon_history(asin="B09LCJPZ1P")
 
 ## 本地配置文件
 
-```
+```text
 ~/.config/opscli/
 ├── config.ini         # 可选，覆盖服务地址（ops_url 等）
 ├── systems.json       # 用户自定义 + ops_sync 系统列表

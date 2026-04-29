@@ -112,3 +112,63 @@
 **影响范围**：仅文档新增，不影响代码
 
 **回滚方式**：删除 `docs/guide/MCP工具使用手册.md` 即可
+
+---
+
+## 2026-04-29 opscli/skills - Skills 深度审查修复（16 项）
+
+**变更原因**：对已开发完成的 9 个 Skills 进行全面深度审查，发现 7 项必须修复问题 + 6 项建议修复 + 3 项可选优化，逐一修复确保代码质量和安全性。
+
+**改动点**：
+
+### 🔴 必须修复（7 项）
+1. **permission 格式错误**：5 个 reference 文件中 `"permission": ["{permission}"]` 改为 `"permission": "{permission}"`（字符串而非数组）
+   - `ops-competitive-intelligence-analyst/reference/dataset_fields_mapping.md`
+   - `ops-refund-priority-matrix/reference/dataset_fields_mapping.md`
+   - `ops-perspective-builder/reference/dataset_fields_mapping.md`
+   - `ops-profit-structure-analyzer/reference/dataset_fields_mapping.md`
+   - `ops-cross-border-product-selector/reference/dataset_fields_mapping.md`
+2. **透视模板缺失**：`build_perspective_config.py` 补充 4 个缺失模板（`ad_type_comparison`、`device_traffic`、`promotion_effectiveness`、`inventory_structure`）及对应触发词
+3. **四行动策略硬编码**：`competitive_analysis.py` 的 `analyze_four_actions()` 将硬编码的保温杯建议改为基于品类数据和定位分析动态生成
+4. **毛利润可能为负**：`analyze_cost_structure.py` 的 `gross_profit = 1.0 - total_cost` 改为 `max(0.0, min(1.0, 1.0 - total_cost))`
+5. **重复 import**：`calculate_roas_acos.py` 删除 `if __name__` 块中重复的 `from typing import Optional`
+6. **预估成本硬编码**：`product_selector.py` 的 `price * 0.35` 改为可配置参数 `DEFAULT_COST_RATIO` + 支持 `item.estimated_cost` 和 `internal_capability.cost_ratio`
+
+### 🟡 建议修复（6 项）
+7. **字段映射声明**：`ops-asin-health-diagnoser/SKILL.md` 阈值表添加 `sell_qty_days → inventory_days` 字段映射说明
+8. **参数类型标注错误**：`product_selector.py` 的 `classify_quadrant` 参数 `sentiment_score` 从 `Optional[str]` 改为 `Optional[float]`
+9. **硬编码日期**：`generate_replenishment_plan.py` 新增 `reference_date` 参数，默认 `datetime.now()`，支持测试和回测
+10. **description 混合语言**：`ops-profit-structure-analyzer` 和 `ops-refund-priority-matrix` 的 frontmatter description 改为纯英文
+11. **错误输出方向**：`calculate_health_score.py` 错误信息同时输出到 stdout 和 stderr
+12. **SKILL.md 标题风格**：统一 3 个标题为 `# 英文标题` + 中文副标题格式
+
+### 新增铁律
+13. **CLAUDE.md 新增【铁律18】**：代码修改后必须更新变更记录文件 `docs/change-log-pending.md`
+
+**验证结果**：所有 14 个脚本通过 `echo '{}' | python script.py` 基础测试，关键脚本（health_score、cost_structure、roas_acos、perspective_builder、competitive_analysis、product_selector）通过正常数据测试
+
+**影响范围**：仅影响 Skills 模板的脚本和文档，不影响 opscli 核心功能（auth/query/mcp）
+
+**回滚方式**：`git checkout -- opscli/skills/templates/ CLAUDE.md docs/change-log-pending.md`
+
+---
+
+## 2026-04-29 CLAUDE.md - 整合 Andrej Karpathy 编码行为准则为铁律19-22
+
+**变更原因**：将 https://github.com/forrestchang/andrej-karpathy-skills/blob/main/CLAUDE.md 中 4 条编码行为准则翻译为中文，以【铁律19~22】形式追加到项目 CLAUDE.md 的铁律章节，与项目现有铁律风格保持一致。
+
+**改动点**：
+- CLAUDE.md 新增 4 条铁律：
+  - 【铁律19】编码前先思考，不假设、不掩盖困惑（原文：Think Before Coding）
+  - 【铁律20】极简优先，只写解决问题所需的最少代码（原文：Simplicity First）
+  - 【铁律21】精确变更，只改必须改的（原文：Surgical Changes）
+  - 【铁律22】目标导向执行，定义成功标准并验证闭环（原文：Goal-Driven Execution）
+- 原则：忠于原文核心精神，中文表达贴合项目铁律风格（禁止行为列表 + 判断标准）
+
+**验证结果**：4 条铁律内容对照原文无遗漏，中文表达通顺
+
+**影响范围**：仅影响 CLAUDE.md 文档，不影响代码
+
+**回滚方式**：删除 CLAUDE.md 中【铁律19】至【铁律22】段落
+
+---
