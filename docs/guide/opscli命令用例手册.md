@@ -39,7 +39,8 @@ opscli
 │   ├── metadata
 │   ├── run
 │   ├── build
-│   └── chart
+│   ├── chart
+│   └── chart-doc
 └── skills
     ├── list
     ├── install
@@ -632,6 +633,66 @@ opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --dry-run -
 
 ---
 
+---
+
+### 6.5 `opscli query chart-doc`
+
+通过 `chart_uuid` 生成图表 API 调用 Markdown 文档，包含查询结构、字段映射、过滤规则与样例。
+
+**用法**
+
+```bash
+opscli query chart-doc --uuid <chart_uuid> [--output <file>] [--pretty]
+```
+
+**参数**
+
+| 参数 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--uuid` | 是 | - | 图表 UUID（chart_uuid） |
+| `--output` | 否 | - | 将 Markdown 文档写入指定文件路径 |
+| `--pretty` | 否 | `false` | 美化 JSON 输出 |
+
+**说明**
+
+- 该命令通过 `chart_uuid` 获取图表的查询结构，自动生成一份完整 Markdown 文档。
+- 生成的文档包含七大章节：使用方式、关键术语、图表概览、API 调用流程、字段明细表、过滤规则、查询拆解与样例。
+- 使用 `--output` 可将 Markdown 内容直接写入文件，方便保存和分发。
+
+**示例**
+
+生成文档并在终端查看：
+
+```bash
+opscli query chart-doc --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --pretty
+```
+
+将文档写入文件：
+
+```bash
+opscli query chart-doc --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --output chart-doc.md --pretty
+```
+
+**返回结构**
+
+```json
+{
+  "success": true,
+  "command": "query chart-doc",
+  "data": {
+    "chart_uuid": "32f660fd-f62a-45c4-a443-e21f2edb0779",
+    "markdown": "# 图表查询 API 开发文档\n...",
+    "query_count": 3,
+    "dataset_aliases": ["sales_order_d"],
+    "dataset_count": 1,
+    "output_path": "/path/to/chart-doc.md"
+  },
+  "error": null
+}
+```
+
+---
+
 ### 6.3 `opscli query build`
 
 基于简化参数构造标准 query payload；也可以直接执行。
@@ -948,5 +1009,5 @@ opscli skills upgrade ops-dataset-query --pretty
 | Token | `opscli auth token status`、`get`、`check`、`refresh` |
 | 系统管理 | `opscli auth system list`、`sync`、`add`、`remove` |
 | Amazon | `opscli amazon scrape`、`payload`、`search`、`schema`、`history` |
-| 查询 | `opscli query metadata`、`run`、`build`、`chart` |
+| 查询 | `opscli query metadata`、`run`、`build`、`chart`、`chart-doc` |
 | Skills | `opscli skills list`、`install`、`status`、`upgrade` |

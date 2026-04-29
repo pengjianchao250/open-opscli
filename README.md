@@ -809,6 +809,42 @@ opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --dry-run -
 
 > 每个 query 独立执行，失败不影响其他 query；合并结果中每行附加 `_query_index` 标识来源。
 
+### `opscli query chart-doc` - 通过 chart_uuid 生成图表 API 调用 Markdown 文档
+
+```bash
+# 生成图表 API 调用文档
+opscli query chart-doc --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --pretty
+
+# 将 Markdown 文档写入指定文件
+opscli query chart-doc --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --output chart-doc.md --pretty
+```
+
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| `--uuid` | 是 | 图表 UUID（chart_uuid） |
+| `--output` | 否 | 将 Markdown 文档写入指定文件路径 |
+| `--pretty` | 否 | 格式化 JSON 输出 |
+
+**返回结构**：
+
+```json
+{
+  "success": true,
+  "command": "query chart-doc",
+  "data": {
+    "chart_uuid": "32f660fd-f62a-45c4-a443-e21f2edb0779",
+    "markdown": "# 图表查询 API 开发文档\n...",
+    "query_count": 3,
+    "dataset_aliases": ["sales_order_d"],
+    "dataset_count": 1,
+    "output_path": "/path/to/chart-doc.md"
+  },
+  "error": null
+}
+```
+
+> 生成的 Markdown 文档包含七大章节：使用方式、关键术语、图表概览、API 调用流程、字段明细表、过滤规则、查询拆解与样例。
+
 ## Skills 使用
 
 ### `opscli skills list`

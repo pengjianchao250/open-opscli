@@ -6,6 +6,7 @@
 - query_run             — 读取本地 payload 文件并执行查询
 - query_build_and_run   — 构造 payload 并立即执行，一步返回结果
 - query_chart           — 通过 chart_uuid 获取/执行图表查询
+- query_chart_doc       — 通过 chart_uuid 生成图表 API 调用 Markdown 文档
 
 所有工具函数定义在模块级，可直接导入调用（测试友好）。
 调用 register(mcp) 将以上工具批量注册到指定 MCP 实例。
@@ -224,6 +225,45 @@ async def query_chart(
         return _err(exc)
 
 
+async def query_chart_doc(
+    chart_uuid: str,
+    output_path: str | None = None,
+    session_id: str | None = None,
+    jwt: str | None = None,
+) -> dict:
+    """通过 chart_uuid 生成图表 API 调用 Markdown 文档，包含查询结构、字段映射、过滤规则与样例。
+
+    生成的文档包含七大章节：使用方式、关键术语、图表概览、API 调用流程、
+    字段明细表、过滤规则、查询拆解与样例。适合 Skill / AI Agent 消费。
+
+    如果未提供 session_id / jwt，会自动尝试从本地加载已保存的凭据。
+
+    Args:
+        chart_uuid:  图表唯一标识
+        output_path: 可选，将 Markdown 写入指定文件路径
+        session_id:  可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
+        jwt:         可选，已有 JWT（为空则自动加载本地缓存的）
+    """
+    from opscli.mcp.tools.helpers import _get_auth_pair
+
+    sid, jw = _get_auth_pair("ops", session_id, jwt)
+    if not sid:
+        return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"))
+    manager = _query_manager(jwt=jw, session_id=sid)
+    try:
+        result = manager.generate_chart_doc(chart_uuid=chart_uuid)
+        if output_path:
+            from pathlib import Path
+
+            p = Path(output_path).expanduser()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(result["markdown"], encoding="utf-8")
+            result["output_path"] = str(p)
+        return _ok(result)
+    except Exception as exc:
+        return _err(exc)
+
+
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS = [
     query_metadata,
@@ -231,6 +271,7 @@ _ALL_TOOLS = [
     query_run,
     query_build_and_run,
     query_chart,
+    query_chart_doc,
 ]
 
 
