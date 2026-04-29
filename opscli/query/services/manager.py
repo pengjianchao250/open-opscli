@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from opscli.auth import AuthClient
@@ -249,6 +250,10 @@ class QueryManager:
         """通过 chart_uuid 从远端获取图表的查询结构列表。"""
         return self.client.fetch_chart_queries(chart_uuid)
 
+    def fetch_chart_bundle(self, chart_uuid: str) -> dict:
+        """通过 chart_uuid 从远端获取图表查询 bundle。"""
+        return self.client.fetch_chart_bundle(chart_uuid)
+
     def build_payload_from_chart_query(self, chart_item: dict) -> dict:
         """将后端返回的 chart query 结构转换为 cli_query 可用 payload。
 
@@ -321,6 +326,8 @@ class QueryManager:
         for idx, item in enumerate(chart_items):
             table_id = item.get("tableId")
             data_source = item.get("dataSource")
+            filterable_fields = item.get("filterable_fields", [])
+            query_structure = item.get("query", {})
 
             try:
                 payload = self.build_payload_from_chart_query(item)
@@ -329,6 +336,8 @@ class QueryManager:
                     "index": idx,
                     "table_id": table_id,
                     "data_source": data_source,
+                    "filterable_fields": filterable_fields,
+                    "query_structure": query_structure,
                     "payload": None,
                     "result": None,
                     "error": {"code": "INVALID_PAYLOAD", "message": str(exc)},
@@ -344,6 +353,8 @@ class QueryManager:
                     "index": idx,
                     "table_id": table_id,
                     "data_source": data_source,
+                    "filterable_fields": filterable_fields,
+                    "query_structure": query_structure,
                     "payload": payload,
                     "result": result,
                     "error": None,
@@ -360,6 +371,8 @@ class QueryManager:
                     "index": idx,
                     "table_id": table_id,
                     "data_source": data_source,
+                    "filterable_fields": filterable_fields,
+                    "query_structure": query_structure,
                     "payload": payload,
                     "result": None,
                     "error": error,
@@ -377,6 +390,464 @@ class QueryManager:
                 },
             },
         }
+
+    def generate_chart_doc(self, chart_uuid: str) -> dict:
+        """生成更适合 Skill / AI 消费的图表查询文档。"""
+        chart_bundle = self.fetch_chart_bundle(chart_uuid)
+        chart_items = chart_bundle.get("queries") or []
+        datasets = chart_bundle.get("datasets") or []
+
+        if not chart_items:
+            raise InvalidPayloadError("该图表暂无查询结构数据")
+
+        generated_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+        dataset_aliases = sorted({
+            self._extract_chart_dataset_alias(item)
+            for item in chart_items
+            if self._extract_chart_dataset_alias(item)
+        })
+
+        md_lines: list[str] = []
+        md_lines.append("# 图表查询 API 开发文档")
+        md_lines.append("")
+        md_lines.append("> 目标：为 Skill / AI Agent 提供当前图表查询结构、字段映射关系、过滤能力和可直接执行的请求样例。")
+        md_lines.append("")
+        md_lines.append(f"- **图表 UUID**: `{chart_uuid}`")
+        md_lines.append(f"- **文档生成时间**: `{generated_at}`")
+        md_lines.append(f"- **查询数量**: `{len(chart_items)}`")
+        md_lines.append(f"- **涉及数据集**: {', '.join(f'`{alias}`' for alias in dataset_aliases) if dataset_aliases else '无'}")
+        md_lines.append("")
+        md_lines.append("---")
+        md_lines.append("")
+
+        md_lines.append("## 一、使用方式")
+        md_lines.append("")
+        md_lines.append("1. 用 `GET /v1/data-metrics/cli-query/latest-request-data` 获取图表当前最新一组查询快照。")
+        md_lines.append("2. 从返回结果读取 `datasets` 公共字段信息，以及每个 Query 的 `query` / `field_mappings`。")
+        md_lines.append("3. 执行查询时，使用 `POST /v1/data-metrics/cli-query`，请求体只传 `tableId + query (+ dataComparison)`。")
+        md_lines.append("4. Skill 开发时，优先使用本文中的 `origin_name` 构造过滤条件，使用 `global_alias` / `query_alias` 对齐结果列名。")
+        md_lines.append("")
+
+        md_lines.append("## 二、关键术语")
+        md_lines.append("")
+        md_lines.append("| 术语 | 含义 | 典型用途 |")
+        md_lines.append("|------|------|----------|")
+        md_lines.append("| `query_alias` | 当前 Query 中 `select.alias` 使用的输出列别名 | 对齐查询结果列名、`groupBy`、`orderBy` |")
+        md_lines.append("| `field_name` | 统一字段映射表中的字段名 | 业务识别、脚本内字段归类 |")
+        md_lines.append("| `origin_name` | 字段原始引用名，通常为 `dataset_alias.column_name` | 构造 `where` / `dataComparison.field` |")
+        md_lines.append("| `global_alias` | 字段统一全局别名 | 与图表配置、查询结果做稳定映射 |")
+        md_lines.append("| `field_type` | `dimension` 或 `metric` | 决定字段角色与用法 |")
+        md_lines.append("")
+
+        md_lines.append("## 三、图表总览")
+        md_lines.append("")
+        md_lines.append("| Query | dataset_alias | tableId | dataSource | SELECT | GROUP BY | ORDER BY | 可过滤字段 |")
+        md_lines.append("|------|---------------|---------|------------|--------|----------|----------|------------|")
+        for idx, item in enumerate(chart_items, 1):
+            query = item.get("query", {}) or {}
+            dataset_alias = self._extract_chart_dataset_alias(item)
+            md_lines.append(
+                f"| Q{idx} | `{dataset_alias or '-'}` | `{item.get('tableId', '-')}` | "
+                f"`{item.get('dataSource', '-')}` | `{len(query.get('select', []) or [])}` | "
+                f"`{len(query.get('groupBy', []) or [])}` | `{len(query.get('orderBy', []) or [])}` | "
+                f"`{len(item.get('filterable_fields', []) or [])}` |"
+            )
+        md_lines.append("")
+
+        md_lines.append("## 四、接口调用顺序")
+        md_lines.append("")
+        md_lines.append("### 4.1 获取图表查询快照")
+        md_lines.append("")
+        md_lines.append("```http")
+        md_lines.append(f"GET /v1/data-metrics/cli-query/latest-request-data?chart_uuid={chart_uuid}")
+        md_lines.append("Authorization: Bearer <your_jwt_token>")
+        md_lines.append("```")
+        md_lines.append("")
+        md_lines.append("返回重点字段：")
+        md_lines.append("")
+        md_lines.append("| 字段 | 说明 |")
+        md_lines.append("|------|------|")
+        md_lines.append("| `tableId` | 执行查询时使用的目标数据集 ID |")
+        md_lines.append("| `datasets[].fields` | 数据集级字段信息总表，适合做字段语义理解 |")
+        md_lines.append("| `datasets[].filterable_fields` | 数据集级可过滤字段清单 |")
+        md_lines.append("| `queries[].query` | 原始图表查询结构快照 |")
+        md_lines.append("| `queries[].field_mappings` | 当前 Query 实际涉及字段的映射结果 |")
+        md_lines.append("")
+        md_lines.append("### 4.2 执行数据查询")
+        md_lines.append("")
+        md_lines.append("```http")
+        md_lines.append("POST /v1/data-metrics/cli-query")
+        md_lines.append("Content-Type: application/json")
+        md_lines.append("Authorization: Bearer <your_jwt_token>")
+        md_lines.append("```")
+        md_lines.append("")
+        md_lines.append("请求体只需要 `tableId + query (+ dataComparison)`，不要再传原始 `query.from.table` 和 `query.from.permission`。")
+        md_lines.append("")
+
+        md_lines.append("## 五、数据集字段信息表")
+        md_lines.append("")
+        for idx, dataset in enumerate(datasets, 1):
+            if not isinstance(dataset, dict):
+                continue
+            dataset_alias = str(dataset.get("dataset_alias") or "").strip() or "-"
+            md_lines.append(f"### Dataset {idx}: `{dataset_alias}`")
+            md_lines.append("")
+            md_lines.append("| 属性 | 值 |")
+            md_lines.append("|------|-----|")
+            md_lines.append(f"| tableId | `{dataset.get('tableId', '-')}` |")
+            md_lines.append(f"| dataSource | `{dataset.get('dataSource', '-')}` |")
+            md_lines.append(f"| 字段数量 | `{len(dataset.get('fields') or [])}` |")
+            md_lines.append(f"| 可过滤字段数量 | `{len(dataset.get('filterable_fields') or [])}` |")
+            md_lines.append("")
+
+            fields = dataset.get("fields") or []
+            if fields:
+                md_lines.append("#### 5.1 字段信息总表")
+                md_lines.append("")
+                md_lines.append("| verbose_name | field_type | field_name | origin_name | global_alias | query_aliases | aggregations | sources |")
+                md_lines.append("|--------------|------------|------------|-------------|--------------|---------------|--------------|---------|")
+                for field in fields:
+                    if not isinstance(field, dict):
+                        continue
+                    query_aliases = ", ".join(f"`{item}`" for item in (field.get("query_aliases") or []) if item) or "-"
+                    aggregations = ", ".join(f"`{item}`" for item in (field.get("aggregations") or []) if item) or "-"
+                    sources = ", ".join(f"`{item}`" for item in (field.get("sources") or []) if item) or "-"
+                    md_lines.append(
+                        f"| {field.get('verbose_name') or '-'} | `{field.get('field_type') or '-'}` | "
+                        f"`{field.get('field_name') or '-'}` | `{field.get('origin_name') or '-'}` | "
+                        f"`{field.get('global_alias') or '-'}` | {query_aliases} | {aggregations} | {sources} |"
+                    )
+                md_lines.append("")
+
+            filterable_fields = dataset.get("filterable_fields") or []
+            if filterable_fields:
+                md_lines.append("#### 5.2 可过滤字段总表")
+                md_lines.append("")
+                md_lines.append("| column_name | verbose_name | source_column_name | 建议 field 写法 |")
+                md_lines.append("|-------------|--------------|--------------------|-----------------|")
+                for field in filterable_fields:
+                    if not isinstance(field, dict):
+                        continue
+                    column_name = field.get("column_name") or "-"
+                    verbose_name = field.get("verbose_name") or "-"
+                    source_name = field.get("source_column_name") or "-"
+                    suggested = f"{dataset_alias}.{column_name}" if dataset_alias != "-" and column_name != "-" else "-"
+                    md_lines.append(f"| `{column_name}` | {verbose_name} | `{source_name}` | `{suggested}` |")
+                md_lines.append("")
+            md_lines.append("---")
+            md_lines.append("")
+
+        md_lines.append("## 六、WHERE / HAVING 规则")
+        md_lines.append("")
+        md_lines.append("### 6.1 支持的操作符")
+        md_lines.append("")
+        md_lines.append("| 操作符 | 含义 | value 类型 |")
+        md_lines.append("|--------|------|-----------|")
+        md_lines.append("| `eq` | 等于 | string / number |")
+        md_lines.append("| `ne` | 不等于 | string / number |")
+        md_lines.append("| `gt` | 大于 | number |")
+        md_lines.append("| `gte` | 大于等于 | number |")
+        md_lines.append("| `lt` | 小于 | number |")
+        md_lines.append("| `lte` | 小于等于 | number |")
+        md_lines.append("| `in` | 在列表中 | array |")
+        md_lines.append("| `not_in` | 不在列表中 | array |")
+        md_lines.append("| `between` | 介于两者之间 | [min, max] |")
+        md_lines.append("| `like` | 模糊匹配 | string (含 % 通配符) |")
+        md_lines.append("| `is_null` | 为空 | 无需 value |")
+        md_lines.append("| `is_not_null` | 不为空 | 无需 value |")
+        md_lines.append("")
+        md_lines.append("### 6.2 条件构造示例")
+        md_lines.append("")
+        md_lines.append("```json")
+        sample_where = {
+            "operator": "AND",
+            "conditions": [
+                {
+                    "field": "ds_xxx.date_id",
+                    "operator": "between",
+                    "value": ["2026-03-13", "2026-04-11"],
+                },
+                {
+                    "field": "ds_xxx.platform_name",
+                    "operator": "in",
+                    "value": ["Amazon", "eBay"],
+                },
+            ],
+        }
+        md_lines.append(json.dumps(sample_where, ensure_ascii=False, indent=2))
+        md_lines.append("```")
+        md_lines.append("")
+        md_lines.append("> `field` 应优先使用 `field_mappings` 中的 `origin_name`，格式通常为 `ds_xxx.column_name`。")
+        md_lines.append("")
+
+        md_lines.append("## 七、Query 逐条拆解")
+        md_lines.append("")
+        # 建立 dataset 索引，便于为每个 query 快速找到对应的 fields
+        dataset_field_index: dict[tuple[str, int | None, str], list[dict]] = {}
+        for ds in datasets:
+            if not isinstance(ds, dict):
+                continue
+            key = (
+                str(ds.get("dataset_alias") or ""),
+                ds.get("tableId") if isinstance(ds.get("tableId"), int) else None,
+                str(ds.get("dataSource") or ""),
+            )
+            dataset_field_index[key] = ds.get("fields") or []
+
+        for idx, item in enumerate(chart_items, 1):
+            query = item.get("query", {}) or {}
+            dataset_alias = self._extract_chart_dataset_alias(item)
+            table_id = item.get("tableId") if isinstance(item.get("tableId"), int) else None
+            data_source = str(item.get("dataSource") or "")
+            dataset_fields = dataset_field_index.get((dataset_alias, table_id, data_source))
+            select_field_mappings, condition_field_mappings = self._split_chart_field_mappings(item, dataset_fields=dataset_fields)
+            group_by_labels = self._resolve_group_labels(query.get("groupBy", []) or [], select_field_mappings)
+            payload_example = self.build_payload_from_chart_query(item)
+
+            md_lines.append(f"### Query {idx}")
+            md_lines.append("")
+            md_lines.append("| 属性 | 值 |")
+            md_lines.append("|------|-----|")
+            md_lines.append(f"| dataset_alias | `{dataset_alias or '-'}` |")
+            md_lines.append(f"| tableId | `{item.get('tableId', '-')}` |")
+            md_lines.append(f"| dataSource | `{item.get('dataSource', '-')}` |")
+            md_lines.append(f"| SELECT 数量 | `{len(query.get('select', []) or [])}` |")
+            md_lines.append(f"| GROUP BY | {', '.join(f'`{name}`' for name in group_by_labels) if group_by_labels else '无'} |")
+            md_lines.append(f"| ORDER BY | `{len(query.get('orderBy', []) or [])}` |")
+            md_lines.append("")
+
+            md_lines.append("#### 7.1 输出字段映射")
+            md_lines.append("")
+            if select_field_mappings:
+                md_lines.append("| query_alias | aggregation | verbose_name | field_type | field_name | origin_name | global_alias | expr |")
+                md_lines.append("|-------------|-------------|--------------|------------|------------|-------------|--------------|------|")
+                for mapping in select_field_mappings:
+                    md_lines.append(
+                        f"| `{mapping.get('query_alias') or '-'}` | `{mapping.get('aggregation') or '-'}` | "
+                        f"{mapping.get('verbose_name') or '-'} | `{mapping.get('field_type') or '-'}` | "
+                        f"`{mapping.get('field_name') or '-'}` | `{mapping.get('origin_name') or '-'}` | "
+                        f"`{mapping.get('global_alias') or '-'}` | `{mapping.get('query_expr') or '-'}` |"
+                    )
+            else:
+                md_lines.append("当前 Query 未返回可解析的输出字段映射。")
+            md_lines.append("")
+
+            md_lines.append("#### 7.2 条件字段映射")
+            md_lines.append("")
+            if condition_field_mappings:
+                md_lines.append("| source | query_field | verbose_name | field_type | field_name | origin_name | global_alias |")
+                md_lines.append("|--------|-------------|--------------|------------|------------|-------------|--------------|")
+                for mapping in condition_field_mappings:
+                    md_lines.append(
+                        f"| `{mapping.get('source') or '-'}` | `{mapping.get('query_field') or mapping.get('query_expr') or '-'}` | "
+                        f"{mapping.get('verbose_name') or '-'} | `{mapping.get('field_type') or '-'}` | "
+                        f"`{mapping.get('field_name') or '-'}` | `{mapping.get('origin_name') or '-'}` | "
+                        f"`{mapping.get('global_alias') or '-'}` |"
+                    )
+            else:
+                md_lines.append("当前 Query 未声明额外条件字段映射。")
+            md_lines.append("")
+
+            md_lines.append("#### 7.3 可过滤字段")
+            md_lines.append("")
+            filterable = item.get("filterable_fields", []) or []
+            if filterable:
+                md_lines.append("| column_name | verbose_name | source_column_name | 建议 field 写法 |")
+                md_lines.append("|-------------|--------------|--------------------|-----------------|")
+                for field in filterable:
+                    column_name = field.get("column_name") or "-"
+                    verbose_name = field.get("verbose_name") or "-"
+                    source_name = field.get("source_column_name") or "-"
+                    suggested = f"{dataset_alias}.{column_name}" if dataset_alias and column_name != "-" else "-"
+                    md_lines.append(f"| `{column_name}` | {verbose_name} | `{source_name}` | `{suggested}` |")
+            else:
+                md_lines.append("当前数据集没有返回 `filterable_fields` 配置。")
+            md_lines.append("")
+
+            md_lines.append("#### 7.4 查询条件结构")
+            md_lines.append("")
+            if query.get("where"):
+                md_lines.append("**where**")
+                md_lines.append("")
+                md_lines.append("```json")
+                md_lines.append(json.dumps(query.get("where"), ensure_ascii=False, indent=2))
+                md_lines.append("```")
+                md_lines.append("")
+            if query.get("innerWhere"):
+                md_lines.append("**innerWhere**")
+                md_lines.append("")
+                md_lines.append("```json")
+                md_lines.append(json.dumps(query.get("innerWhere"), ensure_ascii=False, indent=2))
+                md_lines.append("```")
+                md_lines.append("")
+            if item.get("dataComparison"):
+                md_lines.append("**dataComparison**")
+                md_lines.append("")
+                md_lines.append("```json")
+                md_lines.append(json.dumps(item.get("dataComparison"), ensure_ascii=False, indent=2))
+                md_lines.append("```")
+                md_lines.append("")
+
+            md_lines.append("#### 7.5 可直接执行的 Payload")
+            md_lines.append("")
+            md_lines.append("```json")
+            md_lines.append(json.dumps(payload_example, ensure_ascii=False, indent=2))
+            md_lines.append("```")
+            md_lines.append("")
+            md_lines.append("---")
+            md_lines.append("")
+
+        md_lines.append("*文档由 `opscli query chart-doc` 自动生成。*")
+
+        return {
+            "chart_uuid": chart_uuid,
+            "markdown": "\n".join(md_lines),
+            "query_count": len(chart_items),
+            "dataset_aliases": dataset_aliases,
+            "dataset_count": len(datasets),
+        }
+
+    def _extract_chart_dataset_alias(self, chart_item: dict) -> str:
+        """提取 chart item 中的数据集别名。"""
+        query = chart_item.get("query", {}) or {}
+        from_block = query.get("from", {})
+        if isinstance(from_block, dict):
+            alias = str(from_block.get("alias") or "").strip()
+            if alias:
+                return alias
+        for item in query.get("select", []) or []:
+            expr = str(item.get("expr") or "").strip()
+            if "." in expr:
+                return expr.split(".", 1)[0]
+        return ""
+
+    def _split_chart_field_mappings(self, chart_item: dict, dataset_fields: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
+        """拆分输出字段映射与条件字段映射。"""
+        raw_mappings = chart_item.get("field_mappings") or []
+        normalized = [self._normalize_chart_field_mapping(item) for item in raw_mappings if isinstance(item, dict)]
+        if not normalized:
+            normalized = self._fallback_chart_field_mappings(chart_item, dataset_fields=dataset_fields)
+        select_mappings = [item for item in normalized if item.get("source") == "select"]
+        condition_mappings = [item for item in normalized if item.get("source") != "select"]
+        return select_mappings, condition_mappings
+
+    def _normalize_chart_field_mapping(self, mapping: dict) -> dict:
+        """统一 field_mappings 输出结构。"""
+        return {
+            "source": str(mapping.get("source") or "").strip() or "unknown",
+            "query_alias": str(mapping.get("query_alias") or mapping.get("alias") or "").strip() or None,
+            "query_expr": str(mapping.get("query_expr") or mapping.get("expr") or "").strip() or None,
+            "query_field": str(mapping.get("query_field") or mapping.get("field") or "").strip() or None,
+            "aggregation": str(mapping.get("aggregation") or "").strip() or None,
+            "field_type": str(mapping.get("field_type") or "").strip() or None,
+            "verbose_name": str(mapping.get("verbose_name") or "").strip() or None,
+            "field_name": str(mapping.get("field_name") or "").strip() or None,
+            "origin_name": str(mapping.get("origin_name") or "").strip() or None,
+            "global_alias": str(mapping.get("global_alias") or "").strip() or None,
+        }
+
+    def _fallback_chart_field_mappings(self, chart_item: dict, dataset_fields: list[dict] | None = None) -> list[dict]:
+        """在服务端未返回 field_mappings 时，基于 query 结构做最小回退。"""
+        query = chart_item.get("query", {}) or {}
+        fallback: list[dict] = []
+        for select_item in query.get("select", []) or []:
+            expr = str(select_item.get("expr") or "").strip()
+            # 从 expr（如 ds_xxx.column_name）提取 origin_name 和 field_name
+            origin_name = expr if "." in expr else None
+            field_name = expr.rsplit(".", 1)[1] if "." in expr else None
+            mapping = {
+                "source": "select",
+                "query_alias": str(select_item.get("alias") or "").strip() or None,
+                "query_expr": expr or None,
+                "query_field": None,
+                "aggregation": str(select_item.get("aggregation") or "").strip() or None,
+                "field_type": None,
+                "verbose_name": None,
+                "field_name": field_name,
+                "origin_name": origin_name,
+                "global_alias": str(select_item.get("alias") or "").strip() or None,
+            }
+            if dataset_fields:
+                self.client._enrich_query_field_ref(mapping, dataset_fields)
+            fallback.append(mapping)
+        for source, field_name in self._fallback_condition_field_refs(chart_item):
+            # 从条件字段引用（如 ds_xxx.column_name）提取 field_name
+            col_name = field_name.rsplit(".", 1)[1] if "." in field_name else field_name
+            mapping = {
+                "source": source,
+                "query_alias": None,
+                "query_expr": None,
+                "query_field": field_name,
+                "aggregation": None,
+                "field_type": None,
+                "verbose_name": None,
+                "field_name": col_name,
+                "origin_name": field_name,
+                "global_alias": None,
+            }
+            if dataset_fields:
+                self.client._enrich_query_field_ref(mapping, dataset_fields)
+            fallback.append(mapping)
+        return fallback
+
+    def _fallback_condition_field_refs(self, chart_item: dict) -> list[tuple[str, str]]:
+        """提取 where / innerWhere / dataComparison 中的字段引用。"""
+        refs: list[tuple[str, str]] = []
+        query = chart_item.get("query", {}) or {}
+
+        def visit(node: object, source: str) -> None:
+            if not isinstance(node, dict):
+                return
+            field = str(node.get("field") or "").strip()
+            if field:
+                refs.append((source, field))
+            conditions = node.get("conditions")
+            if isinstance(conditions, list):
+                for child in conditions:
+                    visit(child, source)
+
+        visit(query.get("where"), "where")
+        inner_where = query.get("innerWhere")
+        if isinstance(inner_where, list):
+            for idx, node in enumerate(inner_where):
+                visit(node, f"innerWhere[{idx}]")
+
+        data_comparison = chart_item.get("dataComparison")
+        if isinstance(data_comparison, dict):
+            field = str(data_comparison.get("field") or "").strip()
+            if field:
+                refs.append(("dataComparison", field))
+
+        deduped: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for item in refs:
+            if item in seen:
+                continue
+            seen.add(item)
+            deduped.append(item)
+        return deduped
+
+    def _resolve_group_labels(self, group_by: list[object], select_mappings: list[dict]) -> list[str]:
+        """将 groupBy alias 映射为更易读的字段标签。"""
+        alias_map: dict[str, str] = {}
+        for mapping in select_mappings:
+            alias = mapping.get("query_alias")
+            if not alias:
+                continue
+            alias_map[str(alias)] = str(
+                mapping.get("verbose_name")
+                or mapping.get("field_name")
+                or mapping.get("origin_name")
+                or alias
+            )
+
+        labels: list[str] = []
+        for item in group_by:
+            key = str(item).strip()
+            if not key:
+                continue
+            labels.append(alias_map.get(key, key))
+        return labels
 
     def _build_data_comparison(self, raw: str, *, dataset_alias: str) -> dict:
         """解析 dataComparison 定义：field,start_date,end_date。

@@ -146,16 +146,18 @@ def load_chart_data(uuid_str: str | None, input_path: str | None) -> tuple[list[
         # 兼容 opscli 输出包装格式和直接 data 数组
         if isinstance(content, dict) and "data" in content:
             data = content["data"]
-            if "queries" in data:
+            if isinstance(data, dict) and "queries" in data:
                 # chart run 输出格式
                 queries = data["queries"]
                 chart_uuid = data.get("chart_uuid")
                 merged = data.get("merged")
                 return queries, chart_uuid, merged
-            elif "result" in data:
+            elif isinstance(data, dict) and "result" in data:
                 # 普通 query build --run 输出格式
                 rows = data["result"].get("data", [])
                 return [{"index": 0, "result": data["result"]}], None, {"rows": rows}
+        elif isinstance(content, dict) and "queries" in content:
+            return content["queries"], content.get("chart_uuid"), content.get("merged")
         elif isinstance(content, list):
             # 直接是 queries 数组
             return content, None, None

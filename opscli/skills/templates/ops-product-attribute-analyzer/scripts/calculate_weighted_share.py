@@ -4,128 +4,60 @@ Script Name: calculate_weighted_share.py
 Description: 计算单个维度的销售加权市场份额
 Author: opscli Team
 Date: 2026-04-28
+
+输入：JSON（通过 --input 文件路径或 stdin 传入）
+输出：JSON（加权份额计算结果）
+
+CLI 模式：直接输出结果
+MCP 模式：请使用 calculate_weighted_share_mcp.py（输出带 success 包裹）
 """
 
-import sys
+from __future__ import annotations
+
+import argparse
 import json
-from typing import Dict, Any, List, Optional
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from core import calculate_weighted_share
 
 
-def calculate_weighted_share(
-    dimension: str,
-    data: List[Dict[str, Any]],
-    weight_field: str = "order_qty",
-    count_field: str = "asin"
-) -> Dict[str, Any]:
-    """
-    计算指定维度的销售加权市场份额。
+def main() -> None:
+    parser = argparse.ArgumentParser(description="加权份额计算（CLI 模式）")
+    parser.add_argument("--input", "-i", help="输入 JSON 文件路径（默认从 stdin 读取）")
+    parser.add_argument("--pretty", action="store_true", help="格式化 JSON 输出")
+    args = parser.parse_args()
 
-    算法说明：
-    1. 按 dimension 字段分组汇总 weight_field（默认 order_qty）
-    2. 计算每个分组的销量占总销量的比例（market share）
-    3. 计算每个分组的 ASIN 数量（count_field）
-    4. 计算 sales_per_unit = 分组销量 / 分组 ASIN 数
-
-    Args:
-        dimension: 分析维度字段名，如 "development_type"
-        data: 原始数据行列表，每行包含 dimension、weight_field、count_field 等字段
-        weight_field: 权重字段名，默认 "order_qty"
-        count_field: 计数维度字段名，默认 "asin"
-
-    Returns:
-        包含维度、总权重、总条数、各分组份额等信息的字典
-    """
-    if not data:
-        return {
-            "dimension": dimension,
-            "total_weight": 0,
-            "total_count": 0,
-            "shares": [],
-            "status": "warning",
-            "message": "输入数据为空"
-        }
-
-    # 按维度字段分组聚合
-    groups: Dict[str, Dict[str, Any]] = {}
-    for row in data:
-        key = str(row.get(dimension, "Unknown"))
-        weight = float(row.get(weight_field, 0) or 0)
-        # count_field 支持去重计数：如果 row 里有 count_field 则用该值，否则每行计 1
-        count_val = int(row.get(count_field, 1) or 1)
-
-        if key not in groups:
-            groups[key] = {"weight": 0.0, "count": 0}
-        groups[key]["weight"] += weight
-        groups[key]["count"] += count_val
-
-    total_weight = sum(g["weight"] for g in groups.values())
-    total_count = sum(g["count"] for g in groups.values())
-
-    if total_weight == 0:
-        return {
-            "dimension": dimension,
-            "total_weight": 0,
-            "total_count": total_count,
-            "shares": [],
-            "status": "warning",
-            "message": "总销量为 0，无法计算份额"
-        }
-
-    shares = []
-    for key, agg in groups.items():
-        share = agg["weight"] / total_weight if total_weight > 0 else 0.0
-        avg_per_unit = agg["weight"] / agg["count"] if agg["count"] > 0 else 0.0
-        shares.append({
-            "value": key,
-            "weight": round(agg["weight"], 2),
-            "count": agg["count"],
-            "share": round(share, 4),
-            "avg_per_unit": round(avg_per_unit, 2)
-        })
-
-    # 按 share 降序排列
-    shares.sort(key=lambda x: x["share"], reverse=True)
-
-    return {
-        "dimension": dimension,
-        "total_weight": round(total_weight, 2),
-        "total_count": total_count,
-        "shares": shares,
-        "status": "success"
-    }
-
-
-def main():
-    """主执行函数，从标准输入读取 JSON 并输出计算结果。"""
     try:
-        input_data = json.loads(sys.stdin.read())
+        if args.input:
+            raw = Path(args.input).read_text(encoding="utf-8")
+        else:
+            raw = sys.stdin.read()
 
-        # 校验必填字段
-        if "dimension" not in input_data:
+        if not raw.strip():
+            result = {"status": "error", "message": "输入为空"}
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            sys.exit(1)
+
+        params = json.loads(raw)
+
+        if "dimension" not in params:
             raise ValueError("Missing required field: dimension")
-        if "data" not in input_data:
+        if "data" not in params:
             raise ValueError("Missing required field: data")
 
-        dimension = input_data["dimension"]
-        data = input_data["data"]
-        weight_field = input_data.get("weight_field", "order_qty")
-        count_field = input_data.get("count_field", "asin")
+        result = calculate_weighted_share(
+            params["dimension"], params["data"],
+            params.get("weight_field", "order_qty"), params.get("count_field", "asin")
+        )
+        indent = 2 if args.pretty else None
+        print(json.dumps(result, indent=indent, ensure_ascii=False))
 
-        result = calculate_weighted_share(dimension, data, weight_field, count_field)
-
-        # 输出 JSON 结果
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    except ValueError as e:
-        error_result = {"status": "error", "error_type": "ValueError", "message": str(e)}
+    except (ValueError, json.JSONDecodeError) as e:
+        error_result = {"status": "error", "error_type": type(e).__name__, "message": str(e)}
         print(json.dumps(error_result, indent=2, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
-
-    except json.JSONDecodeError as e:
-        error_result = {"status": "error", "error_type": "JSONDecodeError", "message": str(e)}
-        print(json.dumps(error_result, indent=2, ensure_ascii=False), file=sys.stderr)
-        sys.exit(1)
-
     except Exception as e:
         error_result = {"status": "error", "error_type": type(e).__name__, "message": str(e)}
         print(json.dumps(error_result, indent=2, ensure_ascii=False), file=sys.stderr)

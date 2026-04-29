@@ -107,7 +107,70 @@ def test_fetch_chart_queries_sends_get_request(monkeypatch):
     assert result[0]["tableId"] == 1
 
 
-def test_fetch_chart_queries_raises_when_data_not_list(monkeypatch):
+def test_fetch_chart_bundle_supports_new_structured_response(monkeypatch):
+    def fake_get(url, params=None, headers=None, cookies=None, timeout=None):
+        return httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "data": {
+                    "chart_uuid": "chart-123",
+                    "request_id": "req-1",
+                    "datasets": [
+                        {
+                            "dataset_alias": "ds_sales",
+                            "tableId": 3,
+                            "dataSource": "doris_analytics",
+                            "filterable_fields": [{"column_name": "date_id", "verbose_name": "日期", "source_column_name": None}],
+                            "fields": [
+                                {
+                                    "field_type": "dimension",
+                                    "verbose_name": "日期",
+                                    "field_name": "date_id",
+                                    "origin_name": "ds_sales.date_id",
+                                    "global_alias": "f_date_id",
+                                    "query_aliases": [],
+                                    "aggregations": [],
+                                    "sources": ["where"],
+                                }
+                            ],
+                        }
+                    ],
+                    "queries": [
+                        {
+                            "query_index": 0,
+                            "dataset_alias": "ds_sales",
+                            "tableId": 3,
+                            "dataSource": "doris_analytics",
+                            "query": {"select": []},
+                            "field_refs": {
+                                "select": [],
+                                "conditions": [
+                                    {
+                                        "source": "where",
+                                        "query_field": "ds_sales.date_id",
+                                        "global_alias": "f_date_id",
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                },
+            },
+        )
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.get", fake_get)
+    client = QueryClient(auth_client=DummyAuthClient())
+
+    bundle = client.fetch_chart_bundle("chart-123")
+
+    assert bundle["chart_uuid"] == "chart-123"
+    assert len(bundle["datasets"]) == 1
+    assert bundle["queries"][0]["filterable_fields"][0]["column_name"] == "date_id"
+    assert bundle["queries"][0]["field_mappings"][0]["verbose_name"] == "日期"
+
+
+def test_fetch_chart_queries_raises_when_data_invalid(monkeypatch):
     def fake_get(url, params=None, headers=None, cookies=None, timeout=None):
         return httpx.Response(200, json={"code": 200, "data": {"unexpected": "dict"}})
 

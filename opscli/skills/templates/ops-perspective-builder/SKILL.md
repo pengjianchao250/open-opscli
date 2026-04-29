@@ -1,38 +1,46 @@
 ---
 name: ops-perspective-builder
-description: 从多个数据集中自动选择维度、指标和过滤条件，构建 BI 透视表和图表配置，输出可直接用于 Superset/Metabase 的配置方案。适用于创建运营看板、设计下钻分析视图、配置周报、构建销售趋势透视或利润结构拆解视图。
+description: 从多个数据集中自动选择维度、指标和过滤条件，构建 BI 透视表和图表配置，输出可直接用于 Superset/Metabase 的配置方案。支持 CLI 模式和 MCP 模式。
+version: v0.1.0
 ---
 
 # 透视视图构建助手
 
-运营透视图构建助手：根据用户选择的分析主题和数据集，自动构建 BI 透视图的维度、指标、过滤条件配置方案，输出可直接在 BI 工具中执行的配置清单。
+根据用户选择的分析主题和数据集，自动构建 BI 透视图的维度、指标、过滤条件配置方案。 支持 CLI 模式和 MCP 无状态模式。
 
-## 强制认证与环境门禁
+---
 
-进入本 Skill 后，必须先完成环境与认证检查；检查通过前，禁止直接开始抓取、查询、运行脚本或读取数据样本。
+## 何时使用本 Skill
 
-强制顺序如下：
+- 需要创建运营看板
+- 需要设计下钻分析视图
+- 需要配置周报
+- 需要构建销售趋势透视或利润结构拆解视图
 
-1. 检测是否安装 `aukeys-opscli` Python 发行包
-2. 检测 `opscli` 命令是否可执行
-3. 检测 `opscli query --help` 是否成功，用于确认查询能力可用
-4. 检测当前是否已完成授权登录
-5. 只有 `dist_ok=true`、`opscli_ok=true`、`query_ok=true`、`auth_ok=true` 时，才允许继续本 Skill
-6. 任一检查失败，都必须立即停止当前 Skill，先使用 `ops-auth` 完成登录，或先安装 `aukeys-opscli`
+---
+
+## 运行模式判断
+
+进入本 Skill 后，先判断当前环境使用哪种模式。
+
+优先级如下：
+
+1. 如果用户明确要求使用 CLI 或 MCP，直接遵循用户指定
+2. 否则先检测是否安装了 `aukeys-opscli` Python 发行包
+3. 再检测 `opscli` 命令是否可执行
+4. 如果以上检测通过，读取 `references/cli.md`
+5. 如果任一检测失败，读取 `references/mcp.md`
 
 推荐检测脚本：
 
 ```bash
 python - <<'PY'
 from importlib import metadata
-import json
 import shutil
 import subprocess
 
 dist_ok = False
 opscli_ok = False
-query_ok = False
-auth_ok = False
 
 try:
     metadata.version("aukeys-opscli")
@@ -42,218 +50,125 @@ except metadata.PackageNotFoundError:
 
 opscli_ok = shutil.which("opscli") is not None
 if opscli_ok:
-    query_ok = subprocess.run(
+    opscli_ok = subprocess.run(
         ["opscli", "query", "--help"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     ).returncode == 0
 
-if dist_ok:
-    try:
-        from opscli import AuthClient
-        auth_ok = AuthClient().is_authenticated()
-    except Exception:
-        auth_ok = False
-
-print(json.dumps({
+print({
     "dist_ok": dist_ok,
     "opscli_ok": opscli_ok,
-    "query_ok": query_ok,
-    "auth_ok": auth_ok,
-    "ready": dist_ok and opscli_ok and query_ok and auth_ok,
-}, ensure_ascii=False))
+    "mode": "cli" if dist_ok and opscli_ok else "mcp",
+})
 PY
+```
+
+---
+
+## 阅读入口
+
+- CLI 模式：继续阅读 `references/cli.md`
+- MCP 模式：继续阅读 `references/mcp.md`
+- 无论哪种模式，都需要参考 `references/dataset_fields_mapping.md`
+- 复杂查询场景需同步参考 `references/data-query-service-dev-guide.md`
+
+---
+
+## 使用原则
+
+- 所有远端查询动作必须统一走选定模式下的正式查询入口，禁止直接调用后端 HTTP 接口
+- 认证检查仍然是强制门禁，具体流程以对应 reference 文档为准
+- 分析计算核心逻辑在 `scripts/core.py`（通用），CLI 和 MCP 脚本分别复用核心逻辑
+- 字段搜索、payload 构造、数据查询都以对应模式文档和 `references/data-query-service-dev-guide.md` 为准
+- 涉及环比、同比、趋势对比时，优先使用服务端能力，不要默认降级为多次查询后本地拼接
+
+---
+
+## 强制认证与环境门禁
+
+进入本 Skill 后，必须先完成环境与认证检查；检查通过前，禁止直接开始抓取、查询、运行脚本或读取数据样本。
+
+**CLI 模式**标准前置流程：
+
+```bash
+# 1. 先检查是否已登录
+opscli auth token status
+
+# 2. 如 JWT Token 已过期，先刷新
+opscli auth token refresh --all
+
+# 3. 如未登录、未授权、刷新失败或状态仍异常，立即调用 ops-auth Skill 处理
+opscli auth login
+
+# 4. 登录后再次确认
+opscli auth token status
+```
+
+**MCP 模式**标准前置流程：
+
+```python
+# 1. 先检查 session 是否有效
+auth_is_authenticated(session_id="xxx")
+
+# 2. 如 session_id 缺失或过期，重新 Device Flow 授权
+auth_login_start()                     # 获取 device_code / user_code
+auth_login_poll(device_code="xxx")     # 轮询直到 authorized，获取新 session_id
+
+# 3. 登录后再次确认
+auth_is_authenticated(session_id="新session_id")
 ```
 
 禁止事项：
 
-- 禁止跳过认证检查，直接执行 `opscli query build`、`opscli query run` 或任意抓取命令
-- 禁止在未登录状态下直接运行本 Skill 的分析脚本
-- 禁止手写、复用或拼接过期 Token 绕过 `ops-auth`
+- 禁止跳过认证检查，直接执行查询或分析脚本
+- 禁止在未登录状态下直接运行本 Skill 的任何脚本
+- 禁止手写、复用或拼接过期 Token 绕过认证
+
+---
 
 ## 能力范围
 
-- **标准透视图配置**：12 个内置标准透视图模板，覆盖销售、广告、库存、退款等核心运营场景
-- **自定义透视图设计**：从零开始设计自定义透视图，支持任意维度组合
-- **维度与指标推荐**：基于分析目标智能推荐维度和指标
-- **下钻路径设计**：设计从集团到 ASIN 的多级下钻路径
-- **过滤条件与阈值配置**：配置过滤条件和阈值高亮规则
-- **跨数据集 Join 建议**：跨数据集分析时推荐 Join Key 和关联方案
+- 标准透视图配置：12 个内置标准透视图模板
+- 自定义透视图设计：从零开始设计自定义透视图
+- 维度与指标推荐：基于分析目标智能推荐
+- 下钻路径设计：设计从集团到 ASIN 的多级下钻
+- 过滤条件与阈值配置：配置过滤条件和阈值高亮规则
+- 跨数据集 Join 建议：跨数据集分析时推荐 Join Key 和关联方案
 
-## 工作流模式
+---
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   四阶段工作流                           │
-├─────────────────────────────────────────────────────────────┤
-│ 阶段 1：需求分析                                │
-│   ├── 理解分析目标（销售趋势/利润结构/广告效率等）              │
-│   ├── 识别相关数据集（从 41 个可用数据集中筛选）                │
-│   ├── 确定行维度、列维度、下钻维度                             │
-│   └── 选择指标和聚合方式                                       │
-│                                                              │
-│ 阶段 2：配置设计                                │
-│   ├── 将维度映射到数据集字段                                   │
-│   ├── 设计指标计算（SUM/AVG/COUNT/公式）                       │
-│   ├── 配置过滤条件和阈值                                       │
-│   └── 选择合适图表类型                                         │
-│                                                              │
-│ 阶段 3：校验                                          │
-│   ├── 验证字段存在于目标数据集                                  │
-│   ├── 检查跨数据集 Join Key 兼容性                             │
-│   ├── 验证公式语法正确性                                       │
-│   └── 审查输出格式                                             │
-│                                                              │
-│ 阶段 4：结果生成                                   │
-│   ├── 生成 JSON/YAML 配置                                      │
-│   ├── 提供 SQL 查询模板                                        │
-│   └── 包含 BI 工具导入说明                                     │
-└─────────────────────────────────────────────────────────────┘
-```
+## 数据集
 
-## 决策树：选择哪种透视图？
+| 数据集 | dataset_alias | 用途 |
+|--------|--------------|------|
+| ds_d35ac6f3910c | `主数据集（销售、毛利、退款等）` | 主数据集 |
+| ds_0759e20F0DrG | `广告活动数据集（子查询）` | 广告活动数据集 |
+| ds_fE0flP7WonsJ | `SP 广告类型数据集` | SP 广告类型数据集 |
+| ds_97zj6R0KDKpB | `库存周转数据集` | 库存周转数据集 |
+| ds_pdTYjvLRCadv | `竞品 Listing 快照数据集` | 竞品 Listing 快照 |
+| ds_y5EoxUyLf6Aq | `退款数据集` | 退款数据集 |
+| ds_xsTOkHIpr3ad | `搜索词数据集` | 搜索词数据集 |
+| ds_8f24440d149b | `产品属性标签数据集` | 产品属性标签 |
 
-```
-你的分析目标是什么？
-├── 销售/利润总览
-│   ├── 时间趋势 → 透视图 1（销售趋势多维透视）
-│   └── 成本拆解 → 透视图 2（利润结构拆解）
-├── 广告
-│   ├── 活动诊断 → 透视图 4（广告效率多维分析）
-│   └── 类型对比 → 透视图 5（广告类型对比）
-├── 流量/转化
-│   ├── 漏斗分析 → 透视图 6（流量与转化漏斗）
-│   └── 设备拆分 → 透视图 7（设备流量拆分）
-├── 库存
-│   ├── 周转健康度 → 透视图 8（库存周转健康）
-│   └── 结构分布 → 透视图 9（库存结构分布）
-├── 运营
-│   ├── 退款质量 → 透视图 3（退款与售后）
-│   ├── 促销 ROI → 透视图 10（促销效果）
-│   └── 团队排行 → 透视图 11（组织绩效排名）
-└── 产品
-    └── 健康诊断 → 透视图 12（ASIN 健康分）
-```
+详细字段映射见 `references/dataset_fields_mapping.md`。
 
-## 12 个标准透视图
-
-| # | 透视图名称 | 数据集 | 图表类型 | 复杂度 |
-|---|-----------------|---------|-----------|------------|
-| 1 | 销售趋势多维透视 | `order_sale_trend_adv_traffic_inv_set` (`ds_d35ac6f3910c`) | Pivot + Line | P0 |
-| 2 | 利润结构拆解 | `order_sale_trend_adv_traffic_inv_set` (`ds_d35ac6f3910c`) | Pivot + Stacked Bar | P0 |
-| 3 | 退款与售后 | `order_sale_trend_*` + `custom_refund_place_set` | Pivot + Heatmap | P1 |
-| 4 | 广告效率多维分析 | `advertising_list_set` + `custom_type_*` | Pivot + Combo | P0 |
-| 5 | 广告类型对比 | `custom_sp/sd/sb_ads_set` | Pivot + Bar | P2 |
-| 6 | 流量与转化漏斗 | `custom_asin_sales_traffic_set` + `order_sale_trend_*` | Pivot + Funnel | P1 |
-| 7 | 设备流量拆分 | `custom_type_asin_sales_traffic` | Pivot + Pie/Donut | P3 |
-| 8 | 库存周转健康 | `custom_inventory_turnover_wk_set` (`ds_97zj6R0KDKpB`) | Pivot + Heatmap | P1 |
-| 9 | 库存结构分布 | `order_sale_trend_adv_traffic_inv_set` (`ds_d35ac6f3910c`) | Pivot + Stacked Area | P3 |
-| 10 | 促销效果 | `custom_merge_deals` + `order_sale_trend_*` | Pivot + Timeline | P2 |
-| 11 | 组织绩效排名 | `order_sale_trend_adv_traffic_inv_set` (`ds_d35ac6f3910c`) | Pivot + Bar | P2 |
-| 12 | ASIN 健康分 | `order_sale_trend_*` + `custom_crawler_listing_snapshot` (`ds_pdTYjvLRCadv`) | Pivot + Radar/Scatter | P3 |
-
-## 输入格式
-
-```json
-{
-  "goal": "分析销售趋势",
-  "scope": "team_name = 'Kitchen-Team-A'",
-  "time_range": "last_90_days",
-  "dimensions": ["date_id", "dept_name", "platform_name", "country_name"],
-  "metrics": ["original_price", "orders", "gross_profit"],
-  "chart_type": "line_chart",
-  "drill_down": true
-}
-```
-
-## 输出格式
-
-```json
-{
-  "perspective_name": "销售趋势多维透视",
-  "datasets": ["ds_d35ac6f3910c"],
-  "row_dimensions": [
-    {"field": "date_id", "aggregation": "DATE_TRUNC('week', date_id)", "alias": "周"},
-    {"field": "dept_name", "alias": "部门"},
-    {"field": "large_team_name", "alias": "大组"}
-  ],
-  "column_dimensions": [
-    {"field": "platform_name", "alias": "平台"},
-    {"field": "country_name", "alias": "国家"}
-  ],
-  "drill_dimensions": [
-    {"field": "team_name", "alias": "销售小组"},
-    {"field": "asin", "alias": "ASIN"}
-  ],
-  "metrics": [
-    {"field": "original_price", "aggregation": "SUM", "alias": "销售额", "format": "$#,##0"},
-    {"field": "orders", "aggregation": "SUM", "alias": "订单数"},
-    {"field": "order_qty", "aggregation": "SUM", "alias": "销量"}
-  ],
-  "derived_metrics": [
-    {"formula": "SUM(original_price) / SUM(orders)", "alias": "客单价", "format": "$#,##0.00"},
-    {"formula": "(SUM(original_price) - LAG(SUM(original_price))) / LAG(SUM(original_price))", "alias": "环比增长率", "format": "0.00%"}
-  ],
-  "filters": [
-    {"field": "date_id", "operator": "between", "value": "last_90_days"},
-    {"field": "level_name", "operator": "in", "value": ["A", "B"]}
-  ],
-  "chart_config": {
-    "primary_chart": "pivot_table",
-    "secondary_chart": "line_chart",
-    "x_axis": "date_id",
-    "y_axis": "original_price",
-    "series": "platform_name"
-  },
-  "thresholds": [
-    {"field": "gross_profit_percent", "condition": "< 0.10", "format": "red_background"}
-  ],
-  "query_payload": {
-    "dataset": "ds_d35ac6f3910c",
-    "dimensions": ["date_id", "dept_name", "large_team_name", "platform_name", "country_name"],
-    "metrics": ["original_price", "orders", "order_qty"],
-    "filters": {
-      "date_range": ["last_90_days"],
-      "level_name": ["A", "B"]
-    }
-  },
-  "sql_template": "SELECT ...",
-  "setup_instructions": "在 Superset 中导入配置..."
-}
-```
+---
 
 ## 脚本
 
-| 脚本 | 用途 | 输入 | 输出 |
-|--------|---------|-------|--------|
-| `scripts/build_perspective_config.py` | 根据用户输入生成完整透视图配置 JSON | `goal`, `scope`, `time_range`, `dimensions`, `metrics` | 完整配置 JSON |
+| 脚本 | 模式 | 说明 |
+|------|------|------|
+| `scripts/build_perspective_config.py` | CLI | 根据用户输入生成完整透视图配置 JSON |
+| `scripts/build_perspective_config_mcp.py` | MCP | 生成透视图配置 JSON（无 opscli 依赖） |
+| `scripts/core.py` | 通用 | 透视图模板和核心构建逻辑 |
 
-### 脚本使用方式
-
-```bash
-# 生成透视图配置
-cat <<'EOF' | python opscli/skills/templates/ops-perspective-builder/scripts/build_perspective_config.py
-{
-  "goal": "销售趋势分析",
-  "scope": "dept_name = 'Kitchen'",
-  "time_range": "last_90_days",
-  "dimensions": ["date_id", "dept_name", "platform_name"],
-  "metrics": ["original_price", "orders"],
-  "chart_type": "line_chart"
-}
-EOF
-```
 
 ## 最佳实践
 
-1. **优先使用 `order_sale_trend_adv_traffic_inv_set` (`ds_d35ac6f3910c`)** 进行跨域分析，该数据集覆盖销售、广告、流量、库存四大领域
-2. **使用 `date_id` 作为主要时间维度**，支持日/周/月多级聚合
-3. **至少包含一个组织维度**（dept_name / large_team_name / team_name）用于下钻
-4. **为关键指标添加阈值高亮**，如毛利率低于 10% 标红
-5. **跨数据集分析前先验证 Join Key**，确保字段类型和值域兼容
-6. **公式指标必须使用完整表达式格式**，禁止同时传 `aggregation` 导致二次聚合
-
-## 参考文档
-
-- `reference/perspective_catalog.md` — 12 个标准透视图详细目录
-- `reference/dataset_fields_mapping.md` — 数据集字段映射与 payload 模板
+1. **优先使用 `ds_d35ac6f3910c`** 进行跨域分析
+2. **使用 `date_id` 作为主要时间维度**
+3. **至少包含一个组织维度**用于下钻
+4. **为关键指标添加阈值高亮**
+5. **跨数据集分析前先验证 Join Key**
+6. **公式指标必须使用完整表达式格式**

@@ -1,7 +1,8 @@
 """chart query 字段映射脚本。
 
-通过 chart_uuid 获取查询结构后，使用本地 CSV 资源进行字段别名映射，
-将 global_alias 转换为可读的 verbose_name / field_name。
+通过 chart_uuid 获取查询结构后，优先使用服务端返回的字段语义信息，
+并在必要时回退到本地 CSV 资源进行字段别名映射，
+将 global_alias / query_alias 转换为可读的 verbose_name / field_name。
 
 用法：
     # 仅映射查询结构（默认行为）
@@ -147,6 +148,42 @@ def _extract_dataset_alias_from_expr(expr: str) -> str:
     return ""
 
 
+def _extract_server_select_mapping_index(item: dict) -> tuple[dict[str, dict], dict[str, dict]]:
+    """从服务端返回中提取 select 字段映射索引。"""
+    by_alias: dict[str, dict] = {}
+    by_expr: dict[str, dict] = {}
+    for mapping in item.get("field_mappings", []) or []:
+        if not isinstance(mapping, dict):
+            continue
+        if mapping.get("source") != "select":
+            continue
+        query_alias = str(mapping.get("query_alias") or mapping.get("alias") or "").strip()
+        query_expr = str(mapping.get("query_expr") or mapping.get("expr") or "").strip()
+        if query_alias:
+            by_alias[query_alias] = mapping
+        if query_expr:
+            by_expr[query_expr] = mapping
+    return by_alias, by_expr
+
+
+def _build_field_info(
+    dataset_alias: str,
+    query_alias: str,
+    server_mapping: dict | None,
+    local_field_info: dict | None,
+) -> dict:
+    """合并服务端 field_mappings 与本地 CSV 字段信息。"""
+    field_info = dict(local_field_info or {})
+    if server_mapping:
+        for key in ("field_name", "verbose_name", "global_alias", "field_type", "origin_name"):
+            value = server_mapping.get(key)
+            if value:
+                field_info[key] = value
+    field_info.setdefault("query_alias", query_alias)
+    field_info.setdefault("dataset_alias", dataset_alias)
+    return field_info
+
+
 def map_chart_queries(chart_data: list[dict], dataset_index: dict, field_index: dict, *, map_to: str = "verbose_name") -> list[dict]:
     """为 chart query 的每个字段添加映射信息。
 
@@ -177,17 +214,27 @@ def map_chart_queries(chart_data: list[dict], dataset_index: dict, field_index: 
 
         # 数据集映射
         dataset_info = resolve_dataset_alias(dataset_index, dataset_alias)
+        server_by_alias, server_by_expr = _extract_server_select_mapping_index(item)
 
         # 字段映射
         field_mappings = []
         for sel in select_items:
             g_alias = sel.get("alias", "")
-            field_info = resolve_field_alias(field_index, dataset_alias, g_alias)
+            expr = sel.get("expr", "")
+            server_mapping = server_by_alias.get(g_alias) or server_by_expr.get(expr)
+            local_lookup_alias = str((server_mapping or {}).get("global_alias") or g_alias)
+            local_field_info = resolve_field_alias(field_index, dataset_alias, local_lookup_alias)
+            field_info = _build_field_info(dataset_alias, g_alias, server_mapping, local_field_info)
+            mapped_name = field_info.get(map_to, g_alias) if field_info else g_alias
             mapping = {
                 "alias": g_alias,
-                "expr": sel.get("expr", ""),
-                "mapped_name": field_info.get(map_to, g_alias) if field_info else g_alias,
+                "expr": expr,
+                "mapped_name": mapped_name,
                 "field_info": field_info or {},
+                "query_alias": g_alias,
+                "global_alias": field_info.get("global_alias") if field_info else None,
+                "origin_name": field_info.get("origin_name") if field_info else None,
+                "aggregation": sel.get("aggregation") or (server_mapping or {}).get("aggregation"),
             }
             field_mappings.append(mapping)
 
@@ -203,7 +250,7 @@ def map_chart_queries(chart_data: list[dict], dataset_index: dict, field_index: 
     return result
 
 
-def map_query_results(results: list[dict], field_index: dict, dataset_alias: str, *, map_to: str = "verbose_name") -> list[dict]:
+def map_query_results(results: list[dict], mapped_query: dict, field_index: dict, dataset_alias: str, *, map_to: str = "verbose_name") -> list[dict]:
     """将查询结果中的 global_alias 列名替换为可读名称。
 
     Args:
@@ -215,11 +262,23 @@ def map_query_results(results: list[dict], field_index: dict, dataset_alias: str
     Returns:
         列名已替换的结果数组
     """
+    alias_map: dict[str, str] = {}
+    for mapping in mapped_query.get("_mapping", {}).get("field_mappings", []):
+        if not isinstance(mapping, dict):
+            continue
+        alias = str(mapping.get("alias", "")).strip()
+        mapped_name = str(mapping.get("mapped_name", "")).strip()
+        if alias and mapped_name and mapped_name != alias:
+            alias_map[alias] = mapped_name
+
     mapped_results = []
     for row in results:
         mapped_row = dict(row)
         for key in list(mapped_row.keys()):
             if key.startswith("_"):  # 保留内部字段
+                continue
+            if key in alias_map:
+                mapped_row[alias_map[key]] = mapped_row.pop(key)
                 continue
             field_info = resolve_field_alias(field_index, dataset_alias, key)
             if field_info:
@@ -349,13 +408,17 @@ def main() -> None:
         # 支持多种输入格式
         if isinstance(content, dict) and "data" in content:
             data = content["data"]
-            if "queries" in data:
+            if isinstance(data, dict) and "queries" in data:
                 # chart run 输出格式
                 chart_data = data["queries"]
                 raw_response = data
-            elif "result" in data:
+            elif isinstance(data, dict) and "result" in data:
                 # 普通 query build --run 输出格式（非 chart），只做结构映射
                 chart_data = [data]
+        elif isinstance(content, dict) and "queries" in content:
+            # 直接保存的 chart bundle
+            chart_data = content["queries"]
+            raw_response = content
         elif isinstance(content, list):
             chart_data = content
 
@@ -387,7 +450,7 @@ def main() -> None:
                 rows = original["result"].get("data", [])
                 if rows:
                     mq["mapped_results"] = map_query_results(
-                        rows, field_index, dataset_alias, map_to=args.map_to
+                        rows, mq, field_index, dataset_alias, map_to=args.map_to
                     )
 
     # 输出

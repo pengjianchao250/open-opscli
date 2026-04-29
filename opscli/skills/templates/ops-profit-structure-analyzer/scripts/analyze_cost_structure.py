@@ -3,398 +3,58 @@
 """
 成本结构拆解与四行动策略生成脚本
 
-功能：
-  1. 接收成本结构 JSON 数据（通过 stdin）
-  2. 计算各项成本与基准的偏离度
-  3. 应用 Eliminate/Reduce/Raise/Create 四行动框架生成策略
-  4. 输出结构化 JSON（含偏离度分级、策略列表、预期效果）
+功能：拆解成本结构、计算偏离度、生成四行动策略
+输入：JSON（通过 --input 文件路径或 stdin 传入）
+输出：JSON（分析结果）
 
-使用方式：
-  cat input.json | python analyze_cost_structure.py
-  echo '{"target":...}' | python analyze_cost_structure.py
+CLI 模式：直接输出分析结果
+MCP 模式：请使用 analyze_cost_structure_mcp.py（输出带 success 包裹）
 """
 
+from __future__ import annotations
+
+import argparse
 import json
 import sys
-import traceback
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from core import analyze_cost_structure
 
 
-# ============================================================
-# 常量定义
-# ============================================================
+def main() -> None:
+    parser = argparse.ArgumentParser(description="成本结构分析（CLI 模式）")
+    parser.add_argument("--input", "-i", help="输入 JSON 文件路径（默认从 stdin 读取）")
+    parser.add_argument("--pretty", action="store_true", help="格式化 JSON 输出")
+    args = parser.parse_args()
 
-# 成本项中文映射
-COST_ITEM_LABELS = {
-    "purchase_cost_percent": "采购成本",
-    "first_leg_percent": "头程运费",
-    "freight_percent": "运费",
-    "storage_charges_percent": "仓租",
-    "advertising_fee_percent": "广告费",
-    "fee_percent": "平台手续费",
-    "tax_fee_percent": "税金",
-    "fixed_cost_percent": "固定成本",
-    "refund_percent": "退款占比",
-    "compensate_percent": "赔偿占比",
-}
-
-# 固定成本项（不可优化）
-FIXED_COST_ITEMS = {"fee_percent", "tax_fee_percent", "fixed_cost_percent"}
-
-# 四行动映射规则
-ACTION_MAP = {
-    "refund_percent": "eliminate",
-    "compensate_percent": "eliminate",
-    "storage_charges_percent": "eliminate",
-    "advertising_fee_percent": "reduce",
-    "purchase_cost_percent": "reduce",
-    "first_leg_percent": "reduce",
-    "freight_percent": "reduce",
-}
-
-# 内部默认基准值（百分比，0~1）
-DEFAULT_BENCHMARK = {
-    "purchase_cost_percent": 0.25,
-    "first_leg_percent": 0.065,
-    "freight_percent": 0.05,
-    "storage_charges_percent": 0.04,
-    "advertising_fee_percent": 0.18,
-    "fee_percent": 0.15,
-    "tax_fee_percent": 0.08,
-    "fixed_cost_percent": 0.03,
-    "refund_percent": 0.035,
-    "compensate_percent": 0.005,
-}
-
-# 偏离度分级阈值
-SEVERITY_THRESHOLDS = {
-    "critical": 0.05,   # > 5% 为严重
-    "warning": 0.02,    # > 2% 为警告
-}
-
-
-# ============================================================
-# 核心函数
-# ============================================================
-
-def calculate_deviation(current: float, benchmark: float) -> Dict[str, Any]:
-    """
-    计算偏离度并分级
-
-    Args:
-        current: 当前值（百分比，0~1）
-        benchmark: 基准值（百分比，0~1）
-
-    Returns:
-        dict: 包含 deviation（偏离值）、severity（分级）、direction（方向）
-    """
-    deviation = current - benchmark
-    abs_dev = abs(deviation)
-
-    if abs_dev > SEVERITY_THRESHOLDS["critical"]:
-        severity = "critical"
-    elif abs_dev > SEVERITY_THRESHOLDS["warning"]:
-        severity = "warning"
-    else:
-        severity = "normal"
-
-    direction = "higher" if deviation > 0 else "lower" if deviation < 0 else "equal"
-
-    return {
-        "deviation": round(deviation, 4),
-        "abs_deviation": round(abs_dev, 4),
-        "severity": severity,
-        "direction": direction,
-    }
-
-
-def classify_action(cost_item: str, deviation_info: Dict[str, Any]) -> str:
-    """
-    将成本项映射到四行动框架
-
-    Args:
-        cost_item: 成本项字段名
-        deviation_info: 偏离度信息
-
-    Returns:
-        str: 行动类别（eliminate / reduce / raise / create / fixed / normal）
-    """
-    # 固定成本项不可优化
-    if cost_item in FIXED_COST_ITEMS:
-        return "fixed"
-
-    # 若偏离度为 normal 且无基准偏离，不生成行动
-    if deviation_info["severity"] == "normal":
-        return "normal"
-
-    # 对于成本项，当前值低于基准意味着成本更低，是优势项，不需要优化
-    if deviation_info["direction"] == "lower":
-        return "normal"
-
-    # 从映射表获取行动类别
-    action = ACTION_MAP.get(cost_item, "review")
-
-    return action
-
-
-def generate_action_suggestions(
-    cost_item: str,
-    current: float,
-    benchmark: float,
-    deviation: float,
-    severity: str,
-    action_category: str,
-    sales_amount: float,
-) -> Optional[str]:
-    """
-    根据成本项和偏离度生成具体的行动建议文本
-
-    Args:
-        cost_item: 成本项字段名
-        current: 当前值
-        benchmark: 基准值
-        deviation: 偏离值
-        severity: 偏离分级
-        action_category: 行动类别
-        sales_amount: 销售额，用于计算节省金额
-
-    Returns:
-        str 或 None: 行动建议文本
-    """
-    if action_category in ("fixed", "normal"):
-        return None
-
-    label = COST_ITEM_LABELS.get(cost_item, cost_item)
-    saving = round(deviation * sales_amount)
-
-    # Eliminate 类建议
-    if action_category == "eliminate":
-        if cost_item == "refund_percent":
-            return (
-                f"修复导致高退款率的质量问题，将退款占比从 {current*100:.1f}% 降至 {benchmark*100:.1f}% "
-                f"（预计月节省 ${saving:,}）"
-            )
-        elif cost_item == "compensate_percent":
-            return (
-                f"排查赔偿根因，降低赔偿占比从 {current*100:.1f}% 至 {benchmark*100:.1f}% "
-                f"（预计月节省 ${saving:,}）"
-            )
-        elif cost_item == "storage_charges_percent":
-            return (
-                f"清理库龄 > 90 天的滞销库存，降低仓租占比从 {current*100:.1f}% 至 {benchmark*100:.1f}% "
-                f"（预计月节省 ${saving:,}）"
-            )
-
-    # Reduce 类建议
-    elif action_category == "reduce":
-        if cost_item == "purchase_cost_percent":
-            return (
-                f"与供应商谈判或替换供应商，降低采购成本占比从 {current*100:.1f}% 至 {benchmark*100:.1f}% "
-                f"（预计月节省 ${saving:,}）"
-            )
-        elif cost_item == "first_leg_percent":
-            return (
-                f"整合货量或更换货代，降低头程运费占比从 {current*100:.1f}% 至 {benchmark*100:.1f}% "
-                f"（预计月节省 ${saving:,}）"
-            )
-        elif cost_item == "freight_percent":
-            return (
-                f"合并发货或谈判运费折扣，降低运费占比从 {current*100:.1f}% 至 {benchmark*100:.1f}% "
-                f"（预计月节省 ${saving:,}）"
-            )
-        elif cost_item == "advertising_fee_percent":
-            return (
-                f"优化广告关键词和 ACOS，降低广告费占比从 {current*100:.1f}% 至 {benchmark*100:.1f}% "
-                f"（预计月节省 ${saving:,}）"
-            )
-
-    # 通用兜底建议
-    return (
-        f"优化 {label}，从 {current*100:.1f}% 降至 {benchmark*100:.1f}% "
-        f"（预计月节省 ${saving:,}）"
-    )
-
-
-def calculate_expected_impact(
-    deviations: List[Dict[str, Any]],
-    current_gross_profit: float,
-    sales_amount: float,
-) -> Dict[str, Any]:
-    """
-    计算执行策略后的预期效果
-
-    Args:
-        deviations: 偏离度列表
-        current_gross_profit: 当前毛利率
-        sales_amount: 销售额
-
-    Returns:
-        dict: 预期效果（当前毛利率、目标毛利率区间、月度价值）
-    """
-    # 计算可优化的总偏离度（仅取偏离度为正的项，即成本过高）
-    total_savable = sum(
-        d["deviation"] for d in deviations
-        if d["action_category"] not in ("fixed", "normal") and d["deviation"] > 0
-    )
-
-    # 目标毛利率：当前 + 可优化偏离度（保守估计 70% 达成率）
-    target_margin_low = current_gross_profit + total_savable * 0.5
-    target_margin_high = current_gross_profit + total_savable * 0.8
-
-    # 月度价值（按保守估计）
-    monthly_value = round(total_savable * sales_amount * 0.5)
-
-    return {
-        "current_margin": round(current_gross_profit, 4),
-        "target_margin_low": round(max(0, target_margin_low), 4),
-        "target_margin_high": round(max(0, target_margin_high), 4),
-        "monthly_value": monthly_value,
-    }
-
-
-def analyze_cost_structure(data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    核心分析函数：拆解成本结构并生成四行动策略
-
-    Args:
-        data: 输入 JSON 字典
-
-    Returns:
-        dict: 分析结果 JSON
-    """
-    # 提取输入数据
-    target = data.get("target", {})
-    period = data.get("period", {})
-    cost_structure = data.get("cost_structure", {})
-    benchmark = data.get("benchmark", DEFAULT_BENCHMARK)
-    sales_amount = data.get("sales_amount", 0)
-
-    target_type = target.get("type", "unknown")
-    target_value = target.get("value", "unknown")
-    target_name = target.get("name", target_value)
-
-    # 计算毛利率（销售额 - 所有成本项之和），限制在 [0, 1] 范围内
-    total_cost = sum(cost_structure.get(k, 0) for k in COST_ITEM_LABELS.keys())
-    gross_profit = max(0.0, min(1.0, 1.0 - total_cost))
-
-    # 计算各项偏离度
-    deviations = []
-    four_actions = {
-        "eliminate": [],
-        "reduce": [],
-        "raise": [],
-        "create": [],
-    }
-
-    for cost_item in COST_ITEM_LABELS.keys():
-        current = cost_structure.get(cost_item, 0)
-        bench = benchmark.get(cost_item, DEFAULT_BENCHMARK.get(cost_item, 0))
-
-        dev_info = calculate_deviation(current, bench)
-        action_category = classify_action(cost_item, dev_info)
-
-        deviation_record = {
-            "item": cost_item,
-            "item_cn": COST_ITEM_LABELS.get(cost_item, cost_item),
-            "current": round(current, 4),
-            "benchmark": round(bench, 4),
-            "deviation": dev_info["deviation"],
-            "abs_deviation": dev_info["abs_deviation"],
-            "severity": dev_info["severity"],
-            "direction": dev_info["direction"],
-            "action_category": action_category,
-        }
-
-        # 生成行动建议（仅对有偏离且可优化的项）
-        if action_category not in ("fixed", "normal"):
-            suggestion = generate_action_suggestions(
-                cost_item,
-                current,
-                bench,
-                dev_info["deviation"],
-                dev_info["severity"],
-                action_category,
-                sales_amount,
-            )
-            if suggestion:
-                deviation_record["suggestion"] = suggestion
-                four_actions[action_category].append(suggestion)
-
-        deviations.append(deviation_record)
-
-    # 按偏离度绝对值排序（降序）
-    deviations.sort(key=lambda x: x["abs_deviation"], reverse=True)
-
-    # 计算预期效果
-    expected_impact = calculate_expected_impact(deviations, gross_profit, sales_amount)
-
-    # 构建输出
-    period_str = f"{period.get('start', 'N/A')} ~ {period.get('end', 'N/A')}"
-
-    return {
-        "target": target_value,
-        "target_name": target_name,
-        "target_type": target_type,
-        "gross_profit_percent": round(gross_profit, 4),
-        "period": period_str,
-        "sales_amount": sales_amount,
-        "deviations": deviations,
-        "four_actions": four_actions,
-        "expected_impact": expected_impact,
-        "data_completeness": round(total_cost, 4),
-        "status": "success",
-    }
-
-
-# ============================================================
-# 主入口
-# ============================================================
-
-def main():
-    """主函数：读取 stdin JSON，执行分析，输出 JSON"""
     try:
-        # 从 stdin 读取输入
-        input_text = sys.stdin.read().strip()
-        if not input_text:
-            print(json.dumps({
-                "error": "缺少输入数据，请通过 stdin 传入 JSON",
-                "usage": "cat input.json | python analyze_cost_structure.py",
-                "status": "error"
-            }, ensure_ascii=False, indent=2))
+        if args.input:
+            raw = Path(args.input).read_text(encoding="utf-8")
+        else:
+            raw = sys.stdin.read()
+
+        if not raw.strip():
+            result = {"status": "error", "message": "缺少输入数据"}
+            print(json.dumps(result, ensure_ascii=False, indent=2))
             sys.exit(1)
 
-        # 解析 JSON
-        try:
-            data = json.loads(input_text)
-        except json.JSONDecodeError as e:
-            print(json.dumps({
-                "error": f"JSON 解析失败: {str(e)}",
-                "status": "error"
-            }, ensure_ascii=False, indent=2))
-            sys.exit(1)
+        data = json.loads(raw)
 
-        # 校验必要字段
         if "cost_structure" not in data:
-            print(json.dumps({
-                "error": "缺少必要字段: cost_structure",
-                "status": "error"
-            }, ensure_ascii=False, indent=2))
-            sys.exit(1)
+            raise ValueError("Missing required field: cost_structure")
 
-        # 执行分析
         result = analyze_cost_structure(data)
+        indent = 2 if args.pretty else None
+        print(json.dumps(result, indent=indent, ensure_ascii=False))
 
-        # 输出结果
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-
+    except (ValueError, json.JSONDecodeError) as e:
+        error_result = {"status": "error", "error_type": type(e).__name__, "message": str(e)}
+        print(json.dumps(error_result, indent=2, ensure_ascii=False), file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
-        # 捕获所有未处理异常，输出结构化错误信息
-        error_info = {
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-            "status": "error"
-        }
-        print(json.dumps(error_info, ensure_ascii=False, indent=2))
+        error_result = {"status": "error", "error_type": type(e).__name__, "message": str(e)}
+        print(json.dumps(error_result, indent=2, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
 
 

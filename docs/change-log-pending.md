@@ -172,3 +172,43 @@
 **回滚方式**：删除 CLAUDE.md 中【铁律19】至【铁律22】段落
 
 ---
+
+## 2026-04-29 auto-scheduler + opscli - 图表查询接口增加过滤字段及新增 chart-doc 指令
+
+**变更原因**：
+1. 服务端 `latest-request-data` 接口需要返回当前图表数据集支持的过滤条件字段，供 opscli 侧了解可用 WHERE 条件
+2. opscli 侧需要在图表查询结果中透传过滤字段信息
+3. 新增 `opscli query chart-doc` 指令，支持通过 chart_uuid 自动生成完整 API 调用 Markdown 文档
+
+**改动点**：
+
+### 服务端（auto-scheduler）
+- 修改 `vendor/aukey/data-metrics/src/Http/Controllers/CliQueryApiController.php`
+  - 引入 `Aukey\DataMetrics\Models\SelectColumnRelation`
+  - `latestRequestData` 方法新增逻辑：通过 `query.from.alias` → `dm_tables.dataset_alias` → `dm_select_column_relations.dataset_alias` 查询启用的过滤字段
+  - 返回结构扩展：每个 query item 新增 `filterable_fields` 字段（含 `column_name`、`verbose_name`、`source_column_name`）
+  - 按 `dataset_alias` 缓存避免重复查询
+
+### opscli 侧
+- 修改 `opscli/query/services/manager.py`
+  - `run_chart_queries` 方法透传 `filterable_fields` 和 `query_structure` 到每个 query 结果中
+  - 新增 `generate_chart_doc(chart_uuid)` 方法：生成完整 Markdown 文档，含数据集概览、过滤字段表、查询结构说明、API 调用顺序、Payload 示例、WHERE 条件构建指南
+  - 示例中敏感字段（`table`/`permission`）使用占位符，不返回 `userEmail`
+- 修改 `opscli/query/commands/cli.py`
+  - 新增 `chart-doc` 子命令：`opscli query chart-doc --uuid <chart_uuid> [--output <file>] [--pretty]`
+  - 支持将 Markdown 文档直接写入文件
+
+**验证结果**：
+- `python -m py_compile opscli/query/services/manager.py opscli/query/commands/cli.py` 语法检查通过
+- 服务端 PHP 文件未引入语法错误（新增 import + 扩展已有循环逻辑）
+
+**影响范围**：
+- 服务端 `latest-request-data` 接口返回结构向后兼容扩展（新增字段）
+- opscli `query chart` 和 `query chart-run` 返回的每个 query 中新增 `filterable_fields` 和 `query_structure`
+- 新增 `query chart-doc` 命令，不影响现有命令
+
+**回滚方式**：
+- 服务端：回退 `CliQueryApiController.php` 的 `latestRequestData` 方法修改
+- opscli：回退 `manager.py` 中 `run_chart_queries` 和 `generate_chart_doc`，回退 `cli.py` 中 `chart_doc` 命令
+
+---

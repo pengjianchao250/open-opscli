@@ -277,6 +277,11 @@ opscli query build \
 
 通过 `chart_uuid` 获取图表的查询结构，可选立即执行所有查询并合并输出。
 
+**推荐心智模型**：
+- `datasets`：公共元数据层，沉淀数据集、字段目录、可过滤字段
+- `queries`：执行层，沉淀每条 query 的 `query/payload/result`
+- 优先使用服务端返回的字段语义信息；本地 `dataset_fields.csv` 仅作兜底
+
 ```
 选项：
   --uuid TEXT      图表 UUID（必填）
@@ -297,10 +302,47 @@ opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --dry-run -
 ```
 
 **说明**：
+- 后端返回的 chart bundle 已包含 `datasets[].fields`、`datasets[].filterable_fields`
+- 每条 query 会补充字段引用信息，Skill 应优先读取服务端字段语义，避免重复本地推断
 - 后端返回的 chart query 已包含 `tableId`，无需本地 metadata 转换
 - 一个图表可能包含多个 query（如主查询 + 下钻 + 汇总），`--run` 时依次执行
 - 每个 query 独立执行，失败时记录错误但不中断其余 query
 - 合并结果中每行数据附加 `_query_index` 字段标识来源 query 序号
+
+**返回结构（仅结构模式）**：
+
+```json
+{
+  "chart_uuid": "32f660fd-f62a-45c4-a443-e21f2edb0779",
+  "datasets": [
+    {
+      "dataset_alias": "ds_d35ac6f3910c",
+      "tableId": 1,
+      "dataSource": "doris_analytics",
+      "filterable_fields": [...],
+      "fields": [
+        {
+          "field_type": "dimension",
+          "verbose_name": "部门名称",
+          "field_name": "dept_name",
+          "origin_name": "ds_d35ac6f3910c.dept_name",
+          "global_alias": "f_520fb9a831ccd52a"
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "query_index": 0,
+      "dataset_alias": "ds_d35ac6f3910c",
+      "tableId": 1,
+      "dataSource": "doris_analytics",
+      "query": {...},
+      "field_mappings": [...]
+    }
+  ]
+}
+```
 
 **返回结构（--run 时）**：
 
@@ -476,14 +518,15 @@ python excel_export.py --input /tmp/chart_result.json --output /tmp/output.xlsx 
   ├── 2. opscli query chart --uuid <id> --run --pretty > /tmp/chart_<uuid>.json
   │
   ├── 3. 分析查询结构
+  │     ├── datasets（字段目录、可过滤字段、字段语义）
   │     ├── queries 数量（判断是否有小计/总计）
   │     ├── 每个 query 的 groupBy（识别明细/小计/总计）
   │     └── select 字段列表（确定维度和指标）
   │
   ├── 4. 字段别名映射
   │     ├── chart_map.py --input /tmp/chart_<uuid>.json --map-results --pretty
-  │     ├── 若映射不完整：从 select[].expr 提取 field_name
-  │     └── 查 dataset_fields.csv 补充 verbose_name
+  │     ├── 优先读取服务端 field_mappings / datasets[].fields
+  │     └── 仅在映射缺失时查 dataset_fields.csv 补充 verbose_name
   │
   ├── 5. 生成合并 Markdown 表格（明细 + 小计 + 总计）
   │     ├── 小计行：维度列按 groupBy 填充，其余留空，标注"小计"
@@ -498,24 +541,24 @@ python excel_export.py --input /tmp/chart_result.json --output /tmp/output.xlsx 
 
 #### Chart 查询字段别名映射与转换
 
-Chart 查询返回的数据结构使用**数据集别名**和**字段别名**，需要通过本地 metadata 映射为可读的业务名称：
+Chart 查询返回的数据结构使用**数据集别名**和**字段别名**，现在推荐优先使用服务端返回的字段语义信息，再在缺失时回退到本地 metadata：
 
 | 返回结构位置 | 别名类型 | 示例值 | 含义 |
 |-------------|---------|--------|------|
-| `query.from.alias` | 数据集别名（dataset_alias） | `ds_d35ac6f3910c` | 指向本地 metadata 中的数据集 |
-| `query.select[].alias` | 字段别名（global_alias） | `f_520fb9a831ccd52a` | 指向本地 metadata 中的字段定义 |
+| `datasets[].dataset_alias` / `query.from.alias` | 数据集别名（dataset_alias） | `ds_d35ac6f3910c` | 指向当前 query 所属数据集 |
+| `datasets[].fields[].global_alias` | 字段别名（global_alias） | `f_520fb9a831ccd52a` | 服务端维护的统一字段别名 |
+| `query.select[].alias` | 查询字段别名（query_alias） | `f_520fb9a831ccd52a` | 当前 query select 输出列名 |
 | `query.select[].expr` | 完整字段表达式 | `ds_xxx.dept_name` | 实际 SQL 中使用的字段 |
 
 **别名映射流程**：
 
 ```bash
-# 1. 通过数据集别名获取 metadata（得到 table_id 和字段定义）
-opscli query metadata --dataset ds_d35ac6f3910c --pretty
-
-# 2. metadata 返回的字段列表中，通过 global_alias 匹配找到对应字段
-#    如 global_alias="f_520fb9a831ccd52a" 对应 field_name="dept_name", verbose_name="部门名称"
-
-# 3. 将查询结果中的列名（global_alias）替换为可读的业务名称（verbose_name）
+# 1. 优先读取 chart 返回的 datasets[].fields / queries[].field_mappings
+#    直接获得 verbose_name / field_name / origin_name / global_alias
+#
+# 2. 如果 chart 结构里字段语义不完整，再通过本地 metadata 或 dataset_fields.csv 补齐
+#
+# 3. 将查询结果中的列名（query_alias / global_alias）替换为可读的业务名称（verbose_name）
 ```
 
 **实际映射示例**：
@@ -1208,7 +1251,7 @@ opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --pretty
 opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --pretty
 ```
 
-> 图表查询会自动处理多 query 场景（主查询 + 下钻 + 汇总），结果自动合并输出。
+> 图表查询会自动处理多 query 场景（主查询 + 下钻 + 汇总），结构模式返回 `datasets + queries`，执行模式会在此基础上补充 `result/merged`。
 
 ---
 

@@ -603,3 +603,175 @@ def test_run_chart_queries_supports_dry_run(monkeypatch):
     manager.run_chart_queries("chart-789", dry_run=True)
 
     assert called["dry_run"] is True
+
+
+def test_generate_chart_doc_uses_server_field_mappings(monkeypatch):
+    manager = QueryManager()
+    bundle = {
+        "chart_uuid": "chart-123",
+        "request_id": "req-1",
+        "datasets": [
+            {
+                "dataset_alias": "ds_sales",
+                "tableId": 3,
+                "dataSource": "doris_analytics",
+                "filterable_fields": [
+                    {
+                        "column_name": "date_id",
+                        "verbose_name": "日期",
+                        "source_column_name": "date_id",
+                    }
+                ],
+                "fields": [
+                    {
+                        "field_type": "dimension",
+                        "verbose_name": "渠道",
+                        "field_name": "channel_name",
+                        "origin_name": "ds_sales.channel_name",
+                        "global_alias": "ga_channel_name",
+                        "query_aliases": ["f_channel"],
+                        "aggregations": [],
+                        "sources": ["select"],
+                    },
+                    {
+                        "field_type": "metric",
+                        "verbose_name": "订单量",
+                        "field_name": "order_qty",
+                        "origin_name": "ds_sales.order_qty",
+                        "global_alias": "ga_order_qty",
+                        "query_aliases": ["f_order_qty"],
+                        "aggregations": ["SUM"],
+                        "sources": ["select"],
+                    },
+                    {
+                        "field_type": "dimension",
+                        "verbose_name": "日期",
+                        "field_name": "date_id",
+                        "origin_name": "ds_sales.date_id",
+                        "global_alias": "ga_date_id",
+                        "query_aliases": [],
+                        "aggregations": [],
+                        "sources": ["where"],
+                    },
+                ],
+            }
+        ],
+        "queries": [
+            {
+                "query_index": 0,
+                "dataset_alias": "ds_sales",
+                "tableId": 3,
+                "dataSource": "doris_analytics",
+                "query": {
+                    "from": {"alias": "ds_sales", "database": ""},
+                    "select": [
+                        {"expr": "ds_sales.channel_name", "alias": "f_channel"},
+                        {"expr": "ds_sales.order_qty", "alias": "f_order_qty", "aggregation": "SUM"},
+                    ],
+                    "where": {
+                        "operator": "AND",
+                        "conditions": [
+                            {"field": "ds_sales.date_id", "operator": "between", "value": ["2026-04-01", "2026-04-30"]},
+                        ],
+                    },
+                    "groupBy": ["f_channel"],
+                    "orderBy": [],
+                    "limit": 1000,
+                    "offset": 0,
+                },
+                "filterable_fields": [
+                    {
+                        "column_name": "date_id",
+                        "verbose_name": "日期",
+                        "source_column_name": "date_id",
+                    }
+                ],
+                "field_mappings": [
+                    {
+                        "source": "select",
+                        "query_alias": "f_channel",
+                        "query_expr": "ds_sales.channel_name",
+                        "field_type": "dimension",
+                        "verbose_name": "渠道",
+                        "field_name": "channel_name",
+                        "origin_name": "ds_sales.channel_name",
+                        "global_alias": "ga_channel_name",
+                    },
+                    {
+                        "source": "select",
+                        "query_alias": "f_order_qty",
+                        "query_expr": "ds_sales.order_qty",
+                        "aggregation": "SUM",
+                        "field_type": "metric",
+                        "verbose_name": "订单量",
+                        "field_name": "order_qty",
+                        "origin_name": "ds_sales.order_qty",
+                        "global_alias": "ga_order_qty",
+                    },
+                    {
+                        "source": "where",
+                        "query_field": "ds_sales.date_id",
+                        "field_type": "dimension",
+                        "verbose_name": "日期",
+                        "field_name": "date_id",
+                        "origin_name": "ds_sales.date_id",
+                        "global_alias": "ga_date_id",
+                    },
+                ],
+            }
+        ],
+    }
+
+    monkeypatch.setattr(manager.client, "fetch_chart_bundle", lambda uuid: bundle)
+
+    result = manager.generate_chart_doc("chart-123")
+    markdown = result["markdown"]
+
+    assert result["dataset_aliases"] == ["ds_sales"]
+    assert result["dataset_count"] == 1
+    assert "## 五、数据集字段信息表" in markdown
+    assert "#### 5.1 字段信息总表" in markdown
+    assert "| 订单量 | `metric` | `order_qty` | `ds_sales.order_qty` | `ga_order_qty` | `f_order_qty` | `SUM` | `select` |" in markdown
+    assert "## 七、Query 逐条拆解" in markdown
+    assert "#### 7.1 输出字段映射" in markdown
+    assert "| `f_order_qty` | `SUM` | 订单量 | `metric` | `order_qty` | `ds_sales.order_qty` | `ga_order_qty` | `ds_sales.order_qty` |" in markdown
+    assert "| `where` | `ds_sales.date_id` | 日期 | `dimension` | `date_id` | `ds_sales.date_id` | `ga_date_id` |" in markdown
+    assert "| `date_id` | 日期 | `date_id` | `ds_sales.date_id` |" in markdown
+
+
+def test_generate_chart_doc_falls_back_when_field_mappings_missing(monkeypatch):
+    manager = QueryManager()
+    bundle = {
+        "chart_uuid": "chart-456",
+        "request_id": "req-2",
+        "datasets": [],
+        "queries": [
+            {
+                "query": {
+                    "from": {"alias": "ds_sales", "database": ""},
+                    "select": [
+                        {"expr": "ds_sales.channel_name", "alias": "f_channel"},
+                    ],
+                    "where": {
+                        "operator": "AND",
+                        "conditions": [
+                            {"field": "ds_sales.date_id", "operator": "eq", "value": "2026-04-29"},
+                        ],
+                    },
+                    "groupBy": ["f_channel"],
+                    "orderBy": [],
+                },
+                "dataSource": "doris_analytics",
+                "tableId": 3,
+            }
+        ],
+    }
+
+    monkeypatch.setattr(manager.client, "fetch_chart_bundle", lambda uuid: bundle)
+
+    result = manager.generate_chart_doc("chart-456")
+    markdown = result["markdown"]
+
+    assert "当前数据集没有返回 `filterable_fields` 配置。" in markdown
+    assert "| `f_channel` | `-` | - | `-` | `-` | `-` | `f_channel` | `ds_sales.channel_name` |" in markdown
+    assert "| `where` | `ds_sales.date_id` | - | `-` | `-` | `ds_sales.date_id` | `-` |" in markdown

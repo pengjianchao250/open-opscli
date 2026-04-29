@@ -81,3 +81,4 @@ PY
 - 认证检查仍然是强制门禁，具体流程以对应 reference 文档为准
 - 字段搜索、payload 构造、图表查询、数据更新都以对应模式文档和 `references/data-query-service-dev-guide.md` 为准
 - 涉及环比、同比、趋势对比时，优先使用服务端能力，不要默认降级为多次查询后本地拼接
+- 处理 chart 查询时，优先采用服务端返回的 `datasets + queries` 双层结构：`datasets` 负责公共字段语义，`queries` 负责执行结构；本地 CSV 仅作字段映射兜底

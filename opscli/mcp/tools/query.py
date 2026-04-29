@@ -218,8 +218,8 @@ async def query_chart(
             return _ok(result)
         else:
             # 仅获取图表查询结构，不执行
-            chart_items = manager.fetch_chart_queries(chart_uuid)
-            return _ok({"chart_uuid": chart_uuid, "queries": chart_items})
+            chart_bundle = manager.fetch_chart_bundle(chart_uuid)
+            return _ok(chart_bundle)
     except Exception as exc:
         return _err(exc)
 

@@ -102,18 +102,47 @@ def chart(
                 "error": None,
             }
         else:
-            chart_items = manager.fetch_chart_queries(uuid)
+            chart_bundle = manager.fetch_chart_bundle(uuid)
             payload = {
                 "success": True,
                 "command": "query chart",
-                "data": {
-                    "chart_uuid": uuid,
-                    "queries": chart_items,
-                },
+                "data": chart_bundle,
                 "error": None,
             }
     except Exception as exc:
         _emit(_error_payload("query chart", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
+@app.command("chart-doc")
+def chart_doc(
+    uuid: str = typer.Option(..., "--uuid", help="图表 UUID（chart_uuid）"),
+    output: str | None = typer.Option(None, "--output", help="将 Markdown 文档写入指定文件路径"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON 包装体"),
+):
+    """通过 chart_uuid 生成图表 API 调用 Markdown 文档。"""
+    manager = QueryManager()
+    try:
+        result = manager.generate_chart_doc(chart_uuid=uuid)
+
+        # 如果指定了输出文件，将 Markdown 写入文件
+        if output:
+            from pathlib import Path
+            output_path = Path(output).expanduser()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(result["markdown"], encoding="utf-8")
+            result["output_path"] = str(output_path)
+
+        payload = {
+            "success": True,
+            "command": "query chart-doc",
+            "data": result,
+            "error": None,
+        }
+    except Exception as exc:
+        _emit(_error_payload("query chart-doc", exc), pretty)
         raise typer.Exit(1)
 
     _emit(payload, pretty)

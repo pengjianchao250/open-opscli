@@ -194,8 +194,13 @@ def test_build_run_uses_build_and_run(monkeypatch):
 
 def test_chart_outputs_queries_without_run(monkeypatch):
     class DummyManager:
-        def fetch_chart_queries(self, chart_uuid):
-            return [{"query": {"select": []}, "tableId": 1}]
+        def fetch_chart_bundle(self, chart_uuid):
+            return {
+                "chart_uuid": chart_uuid,
+                "request_id": "req-1",
+                "datasets": [{"dataset_alias": "ds_xxx", "tableId": 1, "dataSource": "doris", "fields": [], "filterable_fields": []}],
+                "queries": [{"query": {"select": []}, "tableId": 1}],
+            }
 
     monkeypatch.setattr("opscli.query.commands.cli.QueryManager", DummyManager)
 
@@ -206,6 +211,7 @@ def test_chart_outputs_queries_without_run(monkeypatch):
     assert payload["success"] is True
     assert payload["command"] == "query chart"
     assert payload["data"]["chart_uuid"] == "chart-123"
+    assert len(payload["data"]["datasets"]) == 1
     assert len(payload["data"]["queries"]) == 1
 
 

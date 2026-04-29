@@ -255,7 +255,7 @@ query_run(
 
 #### `chart_map_mcp.py` — chart 字段映射
 
-将 MCP `query_chart` 返回的 chart 结果中的 `global_alias` 映射为可读的 `verbose_name` / `field_name`。
+将 MCP `query_chart` 返回的 chart 结果中的 `global_alias` / `query_alias` 映射为可读的 `verbose_name` / `field_name`。
 
 **用法**：
 ```bash
@@ -279,7 +279,7 @@ query_chart(
 # → 保存到 /tmp/chart_result.json
 ```
 
-**输出**：每条 query 添加 `_mapping` 字段，包含 `dataset_alias`、`dataset_info`、`field_mappings`（含 `alias`、`expr`、`mapped_name`、`field_info`）。
+**输出**：每条 query 添加 `_mapping` 字段，包含 `dataset_alias`、`dataset_info`、`field_mappings`（含 `alias`、`expr`、`mapped_name`、`field_info`）。映射时优先使用服务端返回的字段语义，本地 CSV 仅在缺失时兜底。
 
 ---
 
@@ -519,7 +519,7 @@ query_chart(
     chart_uuid="4NQ5f66sU9",
     session_id="860b0636485b5188a2b9b4ed5210e736"
 )
-# → {chart_uuid: "4NQ5f66sU9", queries: [...]}
+# → {chart_uuid: "4NQ5f66sU9", datasets: [...], queries: [...]}
 ```
 
 **获取并执行查询**：
@@ -529,6 +529,32 @@ query_chart(
     run=True,
     session_id="860b0636485b5188a2b9b4ed5210e736"
 )
+```
+
+**返回结构**（`run=False` 时）：
+```python
+{
+    "chart_uuid": "4NQ5f66sU9",
+    "datasets": [
+        {
+            "dataset_alias": "ds_xxx",
+            "tableId": 1,
+            "dataSource": "doris_analytics",
+            "filterable_fields": [...],
+            "fields": [...],
+        }
+    ],
+    "queries": [
+        {
+            "query_index": 0,
+            "dataset_alias": "ds_xxx",
+            "tableId": 1,
+            "dataSource": "doris_analytics",
+            "query": {...},
+            "field_mappings": [...],
+        }
+    ]
+}
 ```
 
 **返回结构**（`run=True` 时）：
@@ -556,6 +582,8 @@ query_chart(
 }
 ```
 
+> 推荐把 `datasets` 视为公共字段语义层，把 `queries` 视为执行层；Skill 应优先消费服务端字段语义，避免重复做本地推断。
+>
 > 当图表包含多个 query 时，每个 query 独立执行，失败时记录错误但不中断后续 query。
 
 ---
