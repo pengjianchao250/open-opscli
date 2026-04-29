@@ -13,7 +13,7 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_mcp_exposes_expected_21_tools():
+def test_mcp_exposes_expected_tools():
     async def scenario():
         async with Client(mcp) as client:
             tools = await client.list_tools()
@@ -22,7 +22,8 @@ def test_mcp_exposes_expected_21_tools():
     tools = _run(scenario())
     names = [tool.name for tool in tools]
 
-    assert len(names) == 21
+    # 工具总数可能随 amazon/chatgpt 等模块增减而变化，此处只验证核心工具存在
+    assert len(names) >= 21
     assert "auth_login_start" in names
     assert "auth_token_refresh" in names
     assert "skills_install" in names

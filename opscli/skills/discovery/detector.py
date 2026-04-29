@@ -7,11 +7,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
 
 from opscli.skills.domain.models import SkillRecord
+
+_logger = logging.getLogger("opscli.skills.detector")
 
 
 class SkillDetector:
@@ -80,7 +83,8 @@ class SkillDetector:
                     # 正常情况：data/VERSION.json 存在，读取版本号
                     try:
                         payload = json.loads(version_file.read_text(encoding="utf-8"))
-                    except Exception:
+                    except Exception as _det_exc:
+                        _logger.debug("跳过损坏的 VERSION.json: %s [%s]", version_file, _det_exc)
                         continue
                     version = str(payload.get("version", "unknown"))
                 elif data_dir.exists():

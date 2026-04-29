@@ -32,6 +32,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 import stat
 import string
@@ -42,6 +43,8 @@ from typing import Any
 
 import anyio
 from fastmcp import FastMCP
+
+_logger = logging.getLogger("opscli.mcp")
 
 # ── MCP 实例（全局唯一，工具注册后由 run() 启动）──────────────────
 mcp = FastMCP(
@@ -72,12 +75,7 @@ try:
     _amazon_tools.register(mcp)
 except (ImportError, ModuleNotFoundError):
     # playwright 或 opscli[amazon] 未安装，amazon_* 工具不可用
-    import sys
-    print(
-        "[opscli-mcp] amazon 工具未加载：缺少 playwright 依赖。\n"
-        "             安装命令：pip install opscli && playwright install chromium",
-        file=sys.stderr,
-    )
+    _logger.info("amazon 工具未加载：缺少 playwright 依赖，安装命令：pip install opscli[amazon] && playwright install chromium")
 
 
 # ── API Key 管理（HTTP 模式使用）─────────────────────────────────────
@@ -90,9 +88,8 @@ def _generate_api_key() -> str:
     Returns:
         高熵 API Key 字符串
     """
-    alphabet = string.ascii_letters + string.digits
-    random_part = "".join(secrets.choice(alphabet) for _ in range(32))
-    return "opscli-mcp-" + random_part
+    from opscli.mcp.user_store import generate_api_key
+    return generate_api_key()
 
 
 def _load_or_create_api_key() -> str:

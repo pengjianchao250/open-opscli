@@ -1,6 +1,6 @@
 [project]
 name = "aukeys-opscli"
-version = "0.0.23"
+version = "0.0.24"
 description = "Aukeys 运营 CLI 工具集"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -11,10 +11,12 @@ dependencies = [
     "rich>=13",
     "keyring>=25",
     "fastmcp>=2.0",
-    "playwright>=1.44",
 ]
 
 [project.optional-dependencies]
+amazon = [
+    "playwright>=1.44",
+]
 dev = [
     "pytest>=8",
     "respx>=0.21",

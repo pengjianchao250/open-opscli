@@ -88,8 +88,9 @@ def login():
             )
             if resp.status_code == 200:
                 _registry().sync_from_ops(resp.json().get("systems", []))
-        except Exception:
-            pass
+        except Exception as _sync_exc:
+            import logging
+            logging.getLogger("opscli.auth").debug("登录后系统列表同步失败（不影响登录）: %s", _sync_exc)
         console.print(f"[green]✓ 授权成功！账号：{result.get('email', '')}[/green]")
     except (DeviceFlowExpiredError, DeviceFlowDeniedError) as e:
         console.print(f"[red]✗ {e}[/red]")

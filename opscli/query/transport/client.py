@@ -6,6 +6,7 @@ import httpx
 
 from opscli.auth import AuthClient, OPS_URL
 from opscli.query.domain.exceptions import BadRemoteJsonError, RemoteBusinessError, RemoteHttpError
+from opscli.shared.http import parse_remote_response
 
 
 class QueryClient:
@@ -52,7 +53,12 @@ class QueryClient:
             cookies=cookies,
             timeout=20,
         )
-        payload = self._parse_response(response)
+        payload = parse_remote_response(
+            response,
+            http_error_cls=RemoteHttpError,
+            business_error_cls=RemoteBusinessError,
+            bad_json_error_cls=BadRemoteJsonError,
+        )
         data = payload.get("data")
         if not isinstance(data, list):
             raise BadRemoteJsonError("远端返回的 chart query 数据结构不是数组")
@@ -68,33 +74,9 @@ class QueryClient:
             cookies=cookies,
             timeout=30,
         )
-        return self._parse_response(response)
-
-    def _parse_response(self, response: httpx.Response) -> dict:
-        """统一解析 HTTP 响应，识别业务层错误。"""
-        try:
-            payload = response.json()
-        except Exception as exc:
-            raise BadRemoteJsonError("远端返回了无法解析的 JSON") from exc
-
-        if response.status_code >= 400:
-            message = self._extract_message(payload) or f"远端请求失败，HTTP {response.status_code}"
-            raise RemoteHttpError(response.status_code, message)
-
-        if isinstance(payload, dict):
-            business_code = payload.get("code")
-            if business_code not in (None, 0, 200):
-                message = self._extract_message(payload) or "远端业务执行失败"
-                raise RemoteBusinessError(business_code, message)
-
-        if not isinstance(payload, dict):
-            raise BadRemoteJsonError("远端返回结构不是 JSON 对象")
-        return payload
-
-    def _extract_message(self, payload: dict) -> str | None:
-        """从远端返回中提取最有价值的错误信息。"""
-        for key in ("msg", "message", "error"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return None
+        return parse_remote_response(
+            response,
+            http_error_cls=RemoteHttpError,
+            business_error_cls=RemoteBusinessError,
+            bad_json_error_cls=BadRemoteJsonError,
+        )

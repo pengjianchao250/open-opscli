@@ -11,6 +11,7 @@ from opscli.amazon.domain.exceptions import BadRemoteJsonError, RemoteBusinessEr
 from opscli.amazon.domain.models import AmazonProductSnapshot
 from opscli.auth import AuthClient, OPS_URL
 from opscli.auth.config import get_amazon_submit_endpoint
+from opscli.shared.http import parse_remote_response
 
 
 class AmazonOpsClient:
@@ -45,33 +46,9 @@ class AmazonOpsClient:
             cookies=cookies,
             timeout=10,
         )
-        return self._parse_response(response)
-
-    def _parse_response(self, response: httpx.Response) -> dict:
-        """统一解析远端响应。"""
-        try:
-            payload = response.json()
-        except Exception as exc:
-            raise BadRemoteJsonError("远端返回了无法解析的 JSON") from exc
-
-        if response.status_code >= 400:
-            message = self._extract_message(payload) or f"远端请求失败，HTTP {response.status_code}"
-            raise RemoteHttpError(response.status_code, message)
-
-        if isinstance(payload, dict):
-            business_code = payload.get("code")
-            if business_code not in (None, 0, 200):
-                message = self._extract_message(payload) or "远端业务执行失败"
-                raise RemoteBusinessError(business_code, message)
-
-        if not isinstance(payload, dict):
-            raise BadRemoteJsonError("远端返回结构不是 JSON 对象")
-        return payload
-
-    def _extract_message(self, payload: dict) -> str | None:
-        """从远端返回中提取错误信息。"""
-        for key in ("msg", "message", "error"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return None
+        return parse_remote_response(
+            response,
+            http_error_cls=RemoteHttpError,
+            business_error_cls=RemoteBusinessError,
+            bad_json_error_cls=BadRemoteJsonError,
+        )

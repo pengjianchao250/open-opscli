@@ -30,7 +30,9 @@ Default weights: `[0.30, 0.20, 0.20, 0.15, 0.10, 0.05]`
 
 ## Threshold Reference
 
-| Metric | Healthy | Warning | Critical |
+> **字段映射说明**：数据集 `ds_d35ac6f3910c` 中的 `sell_qty_days` 字段对应本 Skill 中的 `inventory_days` 指标，`ads_acos` 对应 `ads_acos`，`convert_percent` 对应转化率字段。
+
+| Metric | Dataset Field | Healthy | Warning | Critical |
 |--------|---------|---------|----------|
 | gross_profit_percent | > 20% | 10-20% | < 10% |
 | convert_percent | > 10% | 5-10% | < 5% |

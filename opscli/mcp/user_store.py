@@ -31,6 +31,20 @@ API_KEY_PREFIX = "opscli-mcp-"
 API_KEY_RANDOM_LENGTH = 32
 
 
+def generate_api_key() -> str:
+    """生成固定格式的高熵 API Key（模块级公共接口）。
+
+    格式：opscli-mcp-<32位随机字母数字>
+    供 server.py 和 MCPUserStore 共用，避免重复实现。
+
+    Returns:
+        高熵 API Key 字符串
+    """
+    alphabet = ascii_letters + digits
+    random_part = "".join(secrets.choice(alphabet) for _ in range(API_KEY_RANDOM_LENGTH))
+    return API_KEY_PREFIX + random_part
+
+
 @dataclass(frozen=True)
 class MCPUser:
     """MCP 用户记录，包含凭证隔离目录。"""
@@ -227,7 +241,5 @@ class MCPUserStore:
                 return user_id
 
     def _new_api_key(self) -> str:
-        """生成固定前缀的高熵 API Key。"""
-        alphabet = ascii_letters + digits
-        random_part = "".join(secrets.choice(alphabet) for _ in range(API_KEY_RANDOM_LENGTH))
-        return API_KEY_PREFIX + random_part
+        """生成固定前缀的高熵 API Key（委托给模块级 generate_api_key）。"""
+        return generate_api_key()

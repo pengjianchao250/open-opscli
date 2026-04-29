@@ -278,17 +278,20 @@ def main():
 
     except ValueError as e:
         error_result = {"status": "error", "error_type": "ValueError", "message": str(e)}
-        print(json.dumps(error_result, indent=2), file=sys.stderr)
+        print(json.dumps(error_result, indent=2, ensure_ascii=False))
+        print(json.dumps(error_result, indent=2, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
 
     except json.JSONDecodeError as e:
         error_result = {"status": "error", "error_type": "JSONDecodeError", "message": str(e)}
-        print(json.dumps(error_result, indent=2), file=sys.stderr)
+        print(json.dumps(error_result, indent=2, ensure_ascii=False))
+        print(json.dumps(error_result, indent=2, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
 
     except Exception as e:
         error_result = {"status": "error", "error_type": type(e).__name__, "message": str(e)}
-        print(json.dumps(error_result, indent=2), file=sys.stderr)
+        print(json.dumps(error_result, indent=2, ensure_ascii=False))
+        print(json.dumps(error_result, indent=2, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
 
 

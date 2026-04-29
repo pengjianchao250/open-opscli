@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -24,6 +25,8 @@ from opscli.skills.domain.models import (
     runtime_to_tool_name,
 )
 from opscli.skills.sync.updater import SkillsUpdater
+
+_logger = logging.getLogger("opscli.skills")
 
 
 class SkillsManager:
@@ -315,9 +318,9 @@ class SkillsManager:
                 entries.append({"target_dir": target_str, "runtime": runtime, "installed_at": now})
 
             self._write_registry(registry)
-        except Exception:
-            # 注册表写入失败不应阻断安装流程
-            pass
+        except Exception as _reg_exc:
+            # 注册表写入失败不应阻断安装流程，但记录警告
+            _logger.warning("注册表写入失败（不影响安装）: %s", _reg_exc)
 
     def _merge_registry_targets(self, skill_name: str, existing: list[SkillRecord]) -> list[SkillRecord]:
         """将注册表中的安装路径合并到已发现记录列表（去重）。
@@ -373,8 +376,8 @@ class SkillsManager:
             registry[skill_name] = [e for j, e in enumerate(entries) if j not in stale_indices]
             try:
                 self._write_registry(registry)
-            except Exception:
-                pass
+            except Exception as _reg_exc:
+                _logger.warning("注册表清理写入失败: %s", _reg_exc)
 
         return merged
 

@@ -2,21 +2,13 @@
 
 from __future__ import annotations
 
+from opscli.shared.exceptions import RemoteError
 
-class QueryError(Exception):
+
+class QueryError(RemoteError):
     """query 模块统一异常基类。"""
 
     code = "QUERY_ERROR"
-
-    def __init__(self, message: str):
-        super().__init__(message)
-        self.message = message
-
-    def to_dict(self) -> dict:
-        return {
-            "code": self.code,
-            "message": self.message,
-        }
 
 
 class InvalidPayloadError(QueryError):

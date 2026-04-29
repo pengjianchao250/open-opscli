@@ -20,12 +20,15 @@
 }
 """
 import json
+import logging
 import time
 import stat
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from cryptography.exceptions import InvalidTag
 from opscli.auth.storage.crypto import Crypto
+
+_logger = logging.getLogger("opscli.auth.storage")
 
 try:
     import keyring
@@ -81,8 +84,8 @@ class CredentialStore:
                     return json.loads(raw)
             except keyring.errors.NoKeyringError:
                 pass
-            except Exception:
-                pass
+            except Exception as _kr_exc:
+                _logger.debug("Keychain 读取失败，降级到文件存储: %s", _kr_exc)
 
         # 兜底：从加密文件读取
         if not self._path.exists():
@@ -104,10 +107,8 @@ class CredentialStore:
                 return
             except keyring.errors.NoKeyringError:
                 pass
-            except Exception:
-                pass
-
-        # 兜底：写入加密文件
+            except Exception as _kr_exc:
+                _logger.debug("Keychain 写入失败，降级到文件存储: %s", _kr_exc)
         self._path.write_bytes(self._crypto.encrypt(raw))
         self._path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
@@ -176,8 +177,8 @@ class CredentialStore:
         if self._use_keyring:
             try:
                 keyring.delete_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT)
-            except Exception:
-                pass
+            except Exception as _kr_exc:
+                _logger.debug("Keychain 清除失败（可能无存储记录）: %s", _kr_exc)
         # 清除加密文件
         if self._path.exists():
             self._path.unlink()

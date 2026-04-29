@@ -9,6 +9,8 @@ Token 生命周期三态：valid / needs_refresh / expired
 刷新阈值 REFRESH_THRESHOLD = 300s（距过期 5 分钟内触发）。
 """
 import httpx
+import logging
+import os
 import threading
 from datetime import datetime, timezone, timedelta
 from opscli.auth.exceptions import NotAuthenticatedError, TokenFetchError
@@ -18,6 +20,8 @@ try:
     _FCNTL_AVAILABLE = True
 except ImportError:
     _FCNTL_AVAILABLE = False  # Windows 不支持 fcntl
+
+_logger = logging.getLogger("opscli.auth.token")
 
 # 进程内线程锁：key = system_key
 _thread_locks: dict[str, threading.Lock] = {}
@@ -30,8 +34,9 @@ def _get_thread_lock(key: str) -> threading.Lock:
             _thread_locks[key] = threading.Lock()
         return _thread_locks[key]
 
-REFRESH_THRESHOLD = 300   # 距过期 5 分钟内触发刷新（原 30 分钟过于保守）
-MAX_JWT_TTL = 86400       # JWT 最大有效期 24 小时（86400 秒）
+# 刷新阈值和最大 TTL 可通过环境变量覆盖，便于运维调优
+REFRESH_THRESHOLD = int(os.environ.get("OPSCLI_REFRESH_THRESHOLD", "300"))
+MAX_JWT_TTL = int(os.environ.get("OPSCLI_MAX_JWT_TTL", "86400"))
 
 
 class TokenManager:
