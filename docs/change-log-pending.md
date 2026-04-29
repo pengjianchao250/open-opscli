@@ -1,5 +1,41 @@
 # 待归档变更记录
 
+## 2026-04-29 opscli - 实现 Skill 委托模式，防止 AI 猜测字段名
+
+**变更原因**：测试调用记录显示，AI 在执行数据集查询时经常直接猜测字段名（如 `ds_pdTYjvLRCadv.asin`），导致 `INVALID_PAYLOAD` 错误。需要显式声明业务逻辑层 Skill 应将数据查询工作委托给 `ops-dataset-query` Skill，由其负责字段发现、metadata 验证和 payload 构造。
+
+**改动点**：
+- 为 9 个数据查询类 Skill 的 `SKILL.md` 添加"## 技能委托声明"部分
+  - ops-asin-health-diagnoser（之前已完成）
+  - ops-competitive-intelligence-analyst
+  - ops-cross-border-product-selector
+  - ops-advertising-efficiency-optimizer
+  - ops-inventory-health-monitor
+  - ops-product-attribute-analyzer
+  - ops-perspective-builder
+  - ops-profit-structure-analyzer
+  - ops-refund-priority-matrix
+- 每个委托声明包含：
+  - 责任边界表（数据查询层 → ops-dataset-query，业务逻辑层 → 当前 Skill）
+  - 委托触发规则表（5 场景，标注 ✅ 必须委托 / ❌ 可直接执行）
+  - 委托调用方式示例（→ 调用 / ← 返回）
+  - 反例警告（禁止直接猜测字段名）
+- 插入位置统一为"阅读入口"和"使用原则"之间
+
+**验证结果**：
+- `grep -l "## 技能委托声明" opscli/skills/templates/ops-*/SKILL.md | wc -l` 返回 9
+- 所有 9 个数据查询类 Skill 已包含完整委托声明
+
+**影响范围**：
+- AI Agent 在调用这些 Skill 时，会优先切换到 ops-dataset-query 进行字段发现
+- 减少 INVALID_PAYLOAD 错误，避免额外的往返修复
+- 不影响 CLI 模式用户直接使用 opscli query 命令
+
+**回滚方式**：
+- 删除各 SKILL.md 中"## 技能委托声明"部分（从 `---` 到下一个 `---`）
+
+---
+
 ## 2026-04-27 opscli - 新增 chart_analyze_mcp.py
 
 **变更原因**：为 ops-dataset-query Skill 新增 MCP 无状态模式的图表异常检测脚本，原 `chart_analyze.py` 依赖 `opscli` CLI（subprocess），无法在纯 MCP 环境中使用。
@@ -211,4 +247,37 @@
 - 服务端：回退 `CliQueryApiController.php` 的 `latestRequestData` 方法修改
 - opscli：回退 `manager.py` 中 `run_chart_queries` 和 `generate_chart_doc`，回退 `cli.py` 中 `chart_doc` 命令
 
+---
+
+## 2026-04-29 query - 优化 chart-doc 生成文档结构
+
+**变更原因**：生成的文档存在三个缺陷：可过滤字段在多 Query 时重复渲染浪费 token；7.1 字段映射表列数达 8 列宽表 AI 不友好；缺少字段命名约定说明导致 AI 无法处理边界场景
+**改动点**：
+1. `opscli/query/services/manager.py - generate_chart_doc`：
+   - §2 新增"字段命名约定"小节（§2.2），说明 query_alias / global_alias / origin_name / expr 的格式规律、生成方式和使用场景，及公式字段边界说明
+   - §7.1 输出字段映射由 1 张 8 列宽表拆分为 2 张 4 列表（表A字段语义 + 表B字段引用），以 field_name 作连接键，expr 列去掉并在表B注释中说明
+   - §7.3 可过滤字段新增去重逻辑：对比当前 Query 与所属数据集（§5.2）的 filterable_fields 集合，完全相同时只输出一行引用语句，不同才完整渲染
+2. `tests/query/test_manager.py`：更新两个受影响的测试断言匹配新双表格式和去重引用格式
+**验证结果**：pytest tests/query/ 39 passed
+**影响范围**：opscli query chart-doc 命令输出的 Markdown 文档结构；不影响 API 调用逻辑
+**回滚方式**：git revert 此次改动，恢复 manager.py 和 test_manager.py 对应段落
+---
+
+## 2026-04-29 skills/templates - 精简所有 Skill 的 references 文档
+
+**变更原因**：`data-query-service-dev-guide.md`（1173行）在 9 个业务 Skill 中存在完全相同的 10 份副本，占每个 Skill 文档总量的 60-75%；其中大量章节（多次查询、MOY/ACC/PPT、缓存、PHP 伪代码）对 Skill 执行无用，造成 AI 上下文浪费和维护困难
+
+**改动点**：
+1. 新建 `query-essential-guide.md`（149行）：从完整 dev-guide 中提取 Skill 真正需要的内容（WHERE 操作符、SELECT 格式、日期规范、dataComparison、错误码），复制到 9 个业务 Skill 的 references/
+2. 删除 9 个业务 Skill 中的 `data-query-service-dev-guide.md`，保留 `ops-dataset-query/references/` 中的唯一完整版
+3. 精简 `ops-asin-health-diagnoser/references/dataset_fields_mapping.md`（134行→65行）：去掉静态 payload 模板，保留数据集索引 + 核心字段业务语义 + chart-doc 使用指引
+4. 更新 9 个 Skill 的 `SKILL.md`、`references/cli.md`、`references/mcp.md` 中的文件名引用（data-query-service-dev-guide → query-essential-guide）
+
+**验证结果**：
+- dev-guide 残留检查通过（9 个业务 Skill 均已删除）
+- query-essential-guide 分布：9 个 Skill 均已到位
+- 各 Skill 文档总行数：平均从 ~1800 行降至 ~737 行，减少约 59%
+
+**影响范围**：所有业务类 Skill 的 references 目录结构；ops-dataset-query 不受影响
+**回滚方式**：从 ops-dataset-query/references/data-query-service-dev-guide.md 重新 cp 到各 Skill，删除 query-essential-guide.md，恢复文件名引用
 ---

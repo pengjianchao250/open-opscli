@@ -428,7 +428,9 @@ class QueryManager:
         md_lines.append("4. Skill 开发时，优先使用本文中的 `origin_name` 构造过滤条件，使用 `global_alias` / `query_alias` 对齐结果列名。")
         md_lines.append("")
 
-        md_lines.append("## 二、关键术语")
+        md_lines.append("## 二、关键术语与命名约定")
+        md_lines.append("")
+        md_lines.append("### 2.1 术语说明")
         md_lines.append("")
         md_lines.append("| 术语 | 含义 | 典型用途 |")
         md_lines.append("|------|------|----------|")
@@ -437,6 +439,18 @@ class QueryManager:
         md_lines.append("| `origin_name` | 字段原始引用名，通常为 `dataset_alias.column_name` | 构造 `where` / `dataComparison.field` |")
         md_lines.append("| `global_alias` | 字段统一全局别名 | 与图表配置、查询结果做稳定映射 |")
         md_lines.append("| `field_type` | `dimension` 或 `metric` | 决定字段角色与用法 |")
+        md_lines.append("")
+        md_lines.append("### 2.2 字段命名约定")
+        md_lines.append("")
+        md_lines.append("| 别名类型 | 格式规律 | 生成方式 | 使用场景 |")
+        md_lines.append("|----------|----------|----------|----------|")
+        md_lines.append("| `query_alias` | `f_[16位16进制]`，如 `f_9064850a20e4d581` | 系统自动生成，**禁止手写** | `select.alias`、`groupBy`、`orderBy` 中引用字段 |")
+        md_lines.append("| `global_alias` | `f_[20位字母数字]`，如 `f_WfKn5Dex0mqGINtDlWx` | 系统自动生成，跨 Query 保持稳定 | 字段身份识别，与图表配置做稳定映射 |")
+        md_lines.append("| `origin_name` | `{dataset_alias}.{column_name}` | 由数据集别名 + 列名拼接 | `where.field`、`dataComparison.field` 的值 |")
+        md_lines.append("| `expr`（select） | 通常等于 `origin_name`；公式字段时为完整 SQL 表达式 | 来自图表配置 | `select.expr`，直接传入查询服务 |")
+        md_lines.append("")
+        md_lines.append("> **边界场景**：当字段的 `expr` 与 `origin_name` 不同时（即公式字段），构造 select 时必须使用 `expr` 原值，")
+        md_lines.append("> 且不得再传 `aggregation`（公式内已内置聚合逻辑）。")
         md_lines.append("")
 
         md_lines.append("## 三、图表总览")
@@ -582,8 +596,10 @@ class QueryManager:
 
         md_lines.append("## 七、Query 逐条拆解")
         md_lines.append("")
-        # 建立 dataset 索引，便于为每个 query 快速找到对应的 fields
+        # 建立 dataset 索引，便于为每个 query 快速找到对应的 fields 和 filterable_fields
         dataset_field_index: dict[tuple[str, int | None, str], list[dict]] = {}
+        # dataset_filterable_index: key → frozenset of column_names，用于 7.3 节去重判断
+        dataset_filterable_index: dict[tuple[str, int | None, str], frozenset[str]] = {}
         for ds in datasets:
             if not isinstance(ds, dict):
                 continue
@@ -593,6 +609,12 @@ class QueryManager:
                 str(ds.get("dataSource") or ""),
             )
             dataset_field_index[key] = ds.get("fields") or []
+            # 将数据集级可过滤字段的 column_name 集合存入索引，供后续去重比对
+            dataset_filterable_index[key] = frozenset(
+                str(f.get("column_name") or "")
+                for f in (ds.get("filterable_fields") or [])
+                if isinstance(f, dict) and f.get("column_name")
+            )
 
         for idx, item in enumerate(chart_items, 1):
             query = item.get("query", {}) or {}
@@ -619,14 +641,34 @@ class QueryManager:
             md_lines.append("#### 7.1 输出字段映射")
             md_lines.append("")
             if select_field_mappings:
-                md_lines.append("| query_alias | aggregation | verbose_name | field_type | field_name | origin_name | global_alias | expr |")
-                md_lines.append("|-------------|-------------|--------------|------------|------------|-------------|--------------|------|")
+                # 表 A：字段语义（AI 读取，4列）
+                md_lines.append("**表A — 字段语义**（用于理解字段业务含义）")
+                md_lines.append("")
+                md_lines.append("| verbose_name | field_type | aggregation | field_name |")
+                md_lines.append("|--------------|------------|-------------|------------|")
                 for mapping in select_field_mappings:
                     md_lines.append(
-                        f"| `{mapping.get('query_alias') or '-'}` | `{mapping.get('aggregation') or '-'}` | "
-                        f"{mapping.get('verbose_name') or '-'} | `{mapping.get('field_type') or '-'}` | "
-                        f"`{mapping.get('field_name') or '-'}` | `{mapping.get('origin_name') or '-'}` | "
-                        f"`{mapping.get('global_alias') or '-'}` | `{mapping.get('query_expr') or '-'}` |"
+                        f"| {mapping.get('verbose_name') or '-'} | `{mapping.get('field_type') or '-'}` | "
+                        f"`{mapping.get('aggregation') or '-'}` | `{mapping.get('field_name') or '-'}` |"
+                    )
+                md_lines.append("")
+                # 表 B：字段引用（AI 构造查询，4列）
+                # expr 通常等于 origin_name，仅公式字段时不同；
+                # 当 expr != origin_name 时在 select.expr 中必须使用 expr 原值
+                md_lines.append("**表B — 字段引用**（用于构造 select / groupBy / where）")
+                md_lines.append("")
+                md_lines.append("| field_name | query_alias | origin_name | global_alias |")
+                md_lines.append("|------------|-------------|-------------|--------------|")
+                for mapping in select_field_mappings:
+                    expr = mapping.get("query_expr") or ""
+                    origin = mapping.get("origin_name") or ""
+                    # 当 expr 与 origin_name 不同（公式字段）时标注差异
+                    origin_cell = f"`{origin}`" if origin else "-"
+                    if expr and expr != origin:
+                        origin_cell = f"`{origin}` ⚠️ expr=`{expr}`"
+                    md_lines.append(
+                        f"| `{mapping.get('field_name') or '-'}` | `{mapping.get('query_alias') or '-'}` | "
+                        f"{origin_cell} | `{mapping.get('global_alias') or '-'}` |"
                     )
             else:
                 md_lines.append("当前 Query 未返回可解析的输出字段映射。")
@@ -652,14 +694,28 @@ class QueryManager:
             md_lines.append("")
             filterable = item.get("filterable_fields", []) or []
             if filterable:
-                md_lines.append("| column_name | verbose_name | source_column_name | 建议 field 写法 |")
-                md_lines.append("|-------------|--------------|--------------------|-----------------|")
-                for field in filterable:
-                    column_name = field.get("column_name") or "-"
-                    verbose_name = field.get("verbose_name") or "-"
-                    source_name = field.get("source_column_name") or "-"
-                    suggested = f"{dataset_alias}.{column_name}" if dataset_alias and column_name != "-" else "-"
-                    md_lines.append(f"| `{column_name}` | {verbose_name} | `{source_name}` | `{suggested}` |")
+                # 比较当前 Query 的过滤字段集合与数据集级别（第五章 §5.2）是否完全相同
+                # 若相同则只引用，避免重复渲染浪费 token
+                ds_key = (dataset_alias, table_id, data_source)
+                ds_filterable_set = dataset_filterable_index.get(ds_key, frozenset())
+                query_filterable_set = frozenset(
+                    str(f.get("column_name") or "")
+                    for f in filterable
+                    if isinstance(f, dict) and f.get("column_name")
+                )
+                if query_filterable_set == ds_filterable_set and ds_filterable_set:
+                    # 与数据集级可过滤字段完全相同，直接引用第五章，不重复渲染
+                    md_lines.append(f"> 可过滤字段与数据集 `{dataset_alias}` 完全相同，见第五章 §5.2，共 {len(filterable)} 个字段。")
+                else:
+                    # 与数据集级不同（或无法比对），完整渲染本 Query 的过滤字段
+                    md_lines.append("| column_name | verbose_name | source_column_name | 建议 field 写法 |")
+                    md_lines.append("|-------------|--------------|--------------------|-----------------|")
+                    for field in filterable:
+                        column_name = field.get("column_name") or "-"
+                        verbose_name = field.get("verbose_name") or "-"
+                        source_name = field.get("source_column_name") or "-"
+                        suggested = f"{dataset_alias}.{column_name}" if dataset_alias and column_name != "-" else "-"
+                        md_lines.append(f"| `{column_name}` | {verbose_name} | `{source_name}` | `{suggested}` |")
             else:
                 md_lines.append("当前数据集没有返回 `filterable_fields` 配置。")
             md_lines.append("")

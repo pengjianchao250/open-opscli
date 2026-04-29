@@ -60,8 +60,10 @@ def _tui_select_skills(manager: SkillsManager) -> list[str]:
     if not templates:
         raise ValueError("未找到任何内置 Skill 模板")
 
+    # 根据总数动态计算序号列宽，避免两位数以上被截断
+    idx_width = max(3, len(str(len(templates))) + 2)
     table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
-    table.add_column("#", style="bold yellow", width=3)
+    table.add_column("#", style="bold yellow", width=idx_width)
     table.add_column("名称", style="green", min_width=20)
     table.add_column("版本", style="dim", width=8)
     table.add_column("说明")
@@ -91,8 +93,9 @@ def _tui_select_targets(manager: SkillsManager) -> list[tuple[str, Path]] | None
     if not targets:
         return None
 
+    idx_width = max(3, len(str(len(targets))) + 2)
     table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
-    table.add_column("#", style="bold yellow", width=3)
+    table.add_column("#", style="bold yellow", width=idx_width)
     table.add_column("工具", style="green", min_width=14)
     table.add_column("安装路径", style="dim")
     for idx, (runtime, path) in enumerate(targets, start=1):

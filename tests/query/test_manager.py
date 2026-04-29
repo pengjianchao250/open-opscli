@@ -734,9 +734,15 @@ def test_generate_chart_doc_uses_server_field_mappings(monkeypatch):
     assert "| 订单量 | `metric` | `order_qty` | `ds_sales.order_qty` | `ga_order_qty` | `f_order_qty` | `SUM` | `select` |" in markdown
     assert "## 七、Query 逐条拆解" in markdown
     assert "#### 7.1 输出字段映射" in markdown
-    assert "| `f_order_qty` | `SUM` | 订单量 | `metric` | `order_qty` | `ds_sales.order_qty` | `ga_order_qty` | `ds_sales.order_qty` |" in markdown
+    # 7.1 拆分为两张 4 列表：表A（语义）和表B（引用）
+    assert "**表A — 字段语义**" in markdown
+    assert "| 订单量 | `metric` | `SUM` | `order_qty` |" in markdown
+    assert "**表B — 字段引用**" in markdown
+    assert "| `order_qty` | `f_order_qty` | `ds_sales.order_qty` | `ga_order_qty` |" in markdown
+    # 7.2 条件字段映射格式不变
     assert "| `where` | `ds_sales.date_id` | 日期 | `dimension` | `date_id` | `ds_sales.date_id` | `ga_date_id` |" in markdown
-    assert "| `date_id` | 日期 | `date_id` | `ds_sales.date_id` |" in markdown
+    # 7.3 可过滤字段与数据集相同时改为引用第五章，不重复渲染完整表格
+    assert "可过滤字段与数据集 `ds_sales` 完全相同，见第五章 §5.2，共 1 个字段。" in markdown
 
 
 def test_generate_chart_doc_falls_back_when_field_mappings_missing(monkeypatch):
@@ -773,5 +779,10 @@ def test_generate_chart_doc_falls_back_when_field_mappings_missing(monkeypatch):
     markdown = result["markdown"]
 
     assert "当前数据集没有返回 `filterable_fields` 配置。" in markdown
-    assert "| `f_channel` | `-` | - | `-` | `-` | `-` | `f_channel` | `ds_sales.channel_name` |" in markdown
-    assert "| `where` | `ds_sales.date_id` | - | `-` | `-` | `ds_sales.date_id` | `-` |" in markdown
+    # 7.1 fallback 也使用新双表格式：表A 语义列，表B 引用列
+    assert "**表A — 字段语义**" in markdown
+    assert "| - | `-` | `-` | `channel_name` |" in markdown
+    assert "**表B — 字段引用**" in markdown
+    assert "| `channel_name` | `f_channel` | `ds_sales.channel_name` | `f_channel` |" in markdown
+    # 7.2 条件字段映射：fallback 时 field_name 从 origin_name 末段提取（date_id），不为 -
+    assert "| `where` | `ds_sales.date_id` | - | `-` | `date_id` | `ds_sales.date_id` | `-` |" in markdown
