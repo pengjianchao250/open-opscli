@@ -4,6 +4,32 @@
 
 ## 常用命令
 
+### PowerShell UTF-8 前缀
+
+PowerShell 下执行任何 `opscli amazon-rufus` 或 `opscli skills upgrade ops-amazon-rufus` 命令前，只需在同一命令行设置 UTF-8 环境，避免状态提示或错误信息乱码。完整 Rufus 答案报告不依赖终端历史，命令成功后会写入运行目录下的 `output/amazon-rufus`：
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8";
+```
+
+### 前置条件：登录对应国家站点
+
+使用 Rufus 获取前，必须先在对应国家站点登录 Amazon 账户。不同国家站点的登录态相互独立，例如 `US` 对应 `amazon.com`，`DE` 对应 `amazon.de`。
+
+推荐先执行初始化命令，让 opscli 使用与 Rufus 获取相同的固定 Chrome profile 打开对应站点：
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli amazon-rufus init US
+```
+
+命令打开页面后会输出：
+
+```text
+请在新窗口中登录亚马逊
+```
+
+请在新窗口中完成登录，再执行 `amazon-rufus get`。切换国家时，应先执行对应国家的初始化命令并确认该站点已登录。
+
 ### 启动 Chrome 调试窗口
 
 ```powershell
@@ -24,6 +50,14 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon op
 
 ### 执行 Rufus 获取
 
+首次使用或切换国家后，先初始化并登录对应站点：
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli amazon-rufus init US
+```
+
+确认新窗口已登录 Amazon 后，再执行获取命令：
+
 ```powershell
 $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli amazon-rufus get B0B1MLVMY5 US --skills-dir ".agents/skills" --new-chrome
 ```
@@ -36,13 +70,13 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon op
 
 ## 输出要求
 
-命令执行完成后只输出：
+命令执行成功后，stdout 只输出报告保存路径：
 
 ```text
-data.answers[].text
+Rufus 答案报告已保存：output/amazon-rufus/B0B1MLVMY5-20260430-101530.md
 ```
 
-多条回答按题库顺序输出，并用空行分隔。不得输出 `seed_request`、`upload_payload`、headers 或完整原始 JSON。
+完整答案报告写入运行目录下的 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md`。文件名中的时间精确到秒，文件内容按题库顺序输出格式化答案报告。不得输出 `seed_request`、`upload_payload`、headers 或完整原始 JSON。
 
 
 ## `amazon-rufus get` 执行流程
@@ -72,9 +106,9 @@ flowchart TD
     P --> Q[解析 SSE 响应]
     Q --> R[提取 text html threadId 等结果]
     R --> S[构造 answers 与 upload_payload]
-    S --> T[CLI 输出 JSON]
-    T --> T1[Agent 提取 answers.text]
-    T1 --> T2[最终只输出答案文本]
+    S --> T[格式化答案报告]
+    T --> T1[写入 output/amazon-rufus/ASIN-时间.md]
+    T1 --> T2[CLI 输出报告保存路径]
     T2 --> U{是否为 --new-chrome 且未传 --keep-chrome-open}
     U -- 是 --> U1[关闭本次新开的 Chrome 窗口]
     U -- 否 --> U2[保留 Chrome 状态]
@@ -105,12 +139,12 @@ sequenceDiagram
     Replay->>Parser: parse(raw_text)
     Parser-->>Replay: AnswerData
     Replay-->>CLI: answers[]
-    CLI-->>User: 仅展示 answers.text
+    CLI-->>User: 输出报告文件路径
 ```
 
 ## 关键文件
 
-- `opscli/amazon_rufus/commands/cli.py`：CLI 参数解析与 JSON 输出。
+- `opscli/amazon_rufus/commands/cli.py`：CLI 参数解析、报告文件写入与错误 JSON 输出。
 - `opscli/amazon_rufus/services/manager.py`：编排题库、浏览器捕获、Rufus 重放与输出结构。
 - `opscli/amazon_rufus/services/question_bank.py`：读取 `.agents/skills/ops-amazon-rufus/data/question_templates.json`。
 - `opscli/amazon_rufus/services/browser.py`：启动或连接 Chrome，并捕获 Rufus seed request。
@@ -120,8 +154,11 @@ sequenceDiagram
 ## 注意事项
 
 - `amazon-rufus get` 只读取本地题库，不会自动升级题库。
-- PowerShell 下运行命令必须设置 `$env:PYTHONUTF8 = "1"` 与 `$env:PYTHONIOENCODING = "utf-8"`，避免中文答案乱码。
-- Agent 执行完成后只向用户输出 `answers.text`，不输出完整 JSON。
+- 使用本 Skill 前必须先登录对应国家站点的 Amazon 账户。
+- `amazon-rufus init <country>` 会打开对应国家站点，并提示 `请在新窗口中登录亚马逊`。
+- 不同国家站点登录态可能独立，切换国家时需要确认目标站点已登录。
+- PowerShell 下运行命令建议先设置 `$env:PYTHONUTF8 = "1"` 与 `$env:PYTHONIOENCODING = "utf-8"`，避免状态提示和错误信息乱码。
+- Agent 执行完成后只向用户输出报告文件路径，完整报告读取 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md`，不输出完整 JSON。
 - 题库升级需要单独执行 `opscli skills upgrade ops-amazon-rufus --skills-dir ".agents/skills"`。
 - `--new-chrome` 会启动固定用户目录的 Chrome 调试窗口，命令完成后默认关闭该窗口。
 - `--keep-chrome-open` 仅配合 `--new-chrome` 使用，表示命令完成后保留本次新开的 Chrome 窗口。

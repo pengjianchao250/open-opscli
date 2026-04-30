@@ -1,4 +1,5 @@
 ﻿import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -17,6 +18,13 @@ from opscli.amazon_rufus.services.replay import RufusReplayService
 
 
 runner = CliRunner()
+
+
+def _read_single_rufus_report(tmp_path: Path) -> tuple[Path, str]:
+    """读取单次 CLI 测试生成的 Rufus 报告文件。"""
+    report_files = list((tmp_path / "output" / "amazon-rufus").glob("*.md"))
+    assert len(report_files) == 1
+    return report_files[0], report_files[0].read_text(encoding="utf-8")
 
 
 def test_country_map_resolves_us_product_url():
@@ -226,6 +234,132 @@ def test_parser_extracts_asin_faceout_list_and_footer_cards():
             "description": "温控稳定，适合手冲咖啡。",
         }
     ]
+
+
+def test_answer_report_formatter_prefers_structured_blocks_and_related_sections():
+    from opscli.amazon_rufus.services.answer_report_formatter import AnswerReportFormatter
+
+    report = AnswerReportFormatter().format_data(
+        {
+            "asin": "B0TEST1234",
+            "country": "US",
+            "page_url": "https://www.amazon.com/dp/B0TEST1234",
+            "answers": [
+                {
+                    "text": "fallback text should not appear",
+                    "isSuccess": True,
+                    "productLinks": [
+                        {
+                            "asin": "B0LINK1234",
+                            "title": "相关商品",
+                            "href": "https://www.amazon.com/dp/B0LINK1234",
+                        }
+                    ],
+                    "blocks": [
+                        {"type": "heading", "text": "标题", "level": 2},
+                        {"type": "paragraph", "text": "段落"},
+                        {"type": "list_item", "text": "要点 1"},
+                        {"type": "list_item", "text": "要点 2"},
+                        {"type": "table_row", "text": "A | B", "cells": ["A", "B"]},
+                        {"type": "table_row", "text": "1 | 2", "cells": ["1", "2"]},
+                    ],
+                    "recommendedAsins": [
+                        {
+                            "asin": "B0REC12345",
+                            "title": "推荐商品",
+                            "href": "https://www.amazon.com/dp/B0REC12345",
+                            "source": "AsinFaceoutList",
+                            "description": "推荐原因",
+                        }
+                    ],
+                    "summaryText": "总结文本",
+                }
+            ],
+            "upload_payload": {
+                "records": [
+                    {
+                        "questions": [
+                            {
+                                "question": "这个商品怎么样？",
+                                "capturedAt": 1710000000000,
+                            }
+                        ]
+                    }
+                ]
+            },
+            "seed_request": {"request_url": "hidden"},
+        }
+    )
+
+    assert report == "\n".join(
+        [
+            "## 第 1 题：这个商品怎么样？",
+            "",
+            "### 相关产品",
+            "",
+            "- B0LINK1234 - 相关商品",
+            "  https://www.amazon.com/dp/B0LINK1234",
+            "",
+            "### 答案",
+            "",
+            "#### 标题",
+            "",
+            "段落",
+            "",
+            "- 要点 1",
+            "- 要点 2",
+            "",
+            "| A | B |",
+            "| --- | --- |",
+            "| 1 | 2 |",
+            "",
+            "### 推荐 ASIN",
+            "",
+            "- B0REC12345 - 推荐商品 (AsinFaceoutList)",
+            "  https://www.amazon.com/dp/B0REC12345",
+            "  推荐原因",
+            "",
+            "### 总结",
+            "",
+            "总结文本",
+        ]
+    )
+    assert "fallback text should not appear" not in report
+    assert "seed_request" not in report
+
+
+def test_answer_report_formatter_falls_back_to_markdown_text():
+    from opscli.amazon_rufus.services.answer_report_formatter import AnswerReportFormatter
+
+    report = AnswerReportFormatter().format_data(
+        {
+            "answers": [
+                {
+                    "text": "\n".join(
+                        [
+                            "# 标题",
+                            "段落一",
+                            "- 要点 1",
+                            "  续行",
+                            "- 要点 2",
+                            "",
+                            "| A | B |",
+                            "| --- | --- |",
+                            "| 1 | 2 |",
+                            "| 3 | 4 |",
+                        ]
+                    ),
+                    "isSuccess": True,
+                }
+            ]
+        }
+    )
+
+    assert "## 第 1 题：第 1 题" in report
+    assert "# 标题" in report
+    assert "- 要点 1 续行" in report
+    assert "| A | B |" in report
+    assert "| 3 | 4 |" in report
 
 
 def test_manager_builds_upload_payload_with_questions(tmp_path: Path):
@@ -539,7 +673,73 @@ def test_new_chrome_arguments_open_devtools_for_tabs():
     assert "--auto-open-devtools-for-tabs" in BrowserAttachService.DEFAULT_NEW_CHROME_ARGUMENTS
 
 
-def test_cli_get_outputs_manager_result(monkeypatch):
+def test_browser_open_marketplace_for_login_opens_site_and_keeps_browser(monkeypatch):
+    calls = []
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "about:blank"
+            self.brought_to_front = False
+
+        def goto(self, url, wait_until, timeout):
+            self.url = url
+            calls.append(("goto", url, wait_until, timeout))
+
+        def bring_to_front(self):
+            self.brought_to_front = True
+            calls.append(("front", None))
+
+    fake_page = FakePage()
+
+    class FakeContext:
+        def new_page(self):
+            return fake_page
+
+    class FakeBrowser:
+        contexts = [FakeContext()]
+
+        def close(self):
+            calls.append(("close", None))
+
+    class FakeChromium:
+        def connect_over_cdp(self, cdp_url):
+            calls.append(("connect", cdp_url))
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
+    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+
+    service = BrowserAttachService()
+    monkeypatch.setattr(service, "_start_new_chrome", lambda: calls.append(("start", None)))
+    monkeypatch.setattr(service, "_wait_for_cdp", lambda cdp_url, timeout_seconds: calls.append(("wait", cdp_url)))
+
+    service.open_marketplace_for_login(
+        marketplace_url="https://www.amazon.de",
+        cdp_url="http://127.0.0.1:9222",
+        timeout_seconds=30,
+    )
+
+    assert calls == [
+        ("start", None),
+        ("wait", "http://127.0.0.1:9222"),
+        ("connect", "http://127.0.0.1:9222"),
+        ("goto", "https://www.amazon.de", "domcontentloaded", 30000),
+        ("front", None),
+    ]
+    assert service.current_page is fake_page
+
+
+def test_cli_get_writes_manager_result_to_report_file(monkeypatch, tmp_path: Path):
     captured = {}
 
     class DummyManager:
@@ -554,54 +754,91 @@ def test_cli_get_outputs_manager_result(monkeypatch):
             }
 
     monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["get", "B0TEST1234", "US"])
+    report_path, report_text = _read_single_rufus_report(tmp_path)
 
     assert result.exit_code == 0
-    assert result.stdout == "默认答案\n"
+    assert re.fullmatch(r"B0TEST1234-\d{8}-\d{6}\.md", report_path.name)
+    assert report_path.parent == tmp_path / "output" / "amazon-rufus"
+    assert report_text == "## 第 1 题：第 1 题\n\n### 答案\n\n默认答案"
+    assert "Rufus 答案报告已保存：" in result.stdout
+    assert (Path("output") / "amazon-rufus" / report_path.name).as_posix() in result.stdout
+    assert "默认答案" not in result.stdout
     assert "seed_request" not in result.stdout
     assert "upload_payload" not in result.stdout
     assert captured["new_chrome"] is False
 
 
-def test_cli_get_can_output_answers_text_only(monkeypatch):
+def test_cli_get_writes_frontend_like_answer_report(monkeypatch, tmp_path: Path):
     class DummyManager:
         def get(self, **kwargs):
             return {
                 "asin": kwargs["asin"],
                 "country": kwargs["country"],
                 "answers": [
-                    {"text": "第一条答案", "isSuccess": True},
+                    {
+                        "text": "fallback",
+                        "isSuccess": True,
+                        "blocks": [
+                            {"type": "heading", "text": "回答标题", "level": 2},
+                            {"type": "paragraph", "text": "第一条答案"},
+                        ],
+                        "summaryText": "总结",
+                    },
                     {"text": "第二条答案", "isSuccess": True},
                 ],
                 "seed_request": {"request_url": "hidden"},
-                "upload_payload": {"records": []},
+                "upload_payload": {
+                    "records": [
+                        {
+                            "questions": [
+                                {"question": "问题一", "capturedAt": 1},
+                                {"question": "问题二", "capturedAt": 2},
+                            ]
+                        }
+                    ]
+                },
             }
 
     monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["get", "B0TEST1234", "US"])
+    _, report_text = _read_single_rufus_report(tmp_path)
 
     assert result.exit_code == 0
-    assert result.stdout == "第一条答案\n\n第二条答案\n"
+    assert "## 第 1 题：问题一" in report_text
+    assert "#### 回答标题" in report_text
+    assert "第一条答案" in report_text
+    assert "### 总结" in report_text
+    assert "## 第 2 题：问题二" in report_text
+    assert "第二条答案" in report_text
+    assert "fallback" not in report_text
+    assert "第一条答案" not in result.stdout
     assert "seed_request" not in result.stdout
     assert "upload_payload" not in result.stdout
 
 
-def test_cli_get_answers_text_reports_failed_empty_answer(monkeypatch):
+def test_cli_get_answer_report_reports_failed_empty_answer(monkeypatch, tmp_path: Path):
     class DummyManager:
         def get(self, **kwargs):
             return {"asin": kwargs["asin"], "country": kwargs["country"], "answers": [{"text": "", "isSuccess": False}]}
 
     monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["get", "B0TEST1234", "US"])
+    _, report_text = _read_single_rufus_report(tmp_path)
 
     assert result.exit_code == 0
-    assert result.stdout == "第 1 题未获取到答案\n"
+    assert "## 第 1 题：第 1 题" in report_text
+    assert "第 1 题未获取到答案" in report_text
+    assert "第 1 题未获取到答案" not in result.stdout
 
 
-def test_cli_get_passes_new_chrome(monkeypatch):
+def test_cli_get_passes_new_chrome(monkeypatch, tmp_path: Path):
     captured = {}
 
     class DummyManager:
@@ -610,6 +847,7 @@ def test_cli_get_passes_new_chrome(monkeypatch):
             return {"asin": kwargs["asin"], "country": kwargs["country"], "answers": []}
 
     monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["get", "B0TEST1234", "US", "--new-chrome"])
 
@@ -618,7 +856,7 @@ def test_cli_get_passes_new_chrome(monkeypatch):
     assert captured["keep_chrome_open"] is False
 
 
-def test_cli_get_passes_keep_chrome_open(monkeypatch):
+def test_cli_get_passes_keep_chrome_open(monkeypatch, tmp_path: Path):
     captured = {}
 
     class DummyManager:
@@ -627,12 +865,53 @@ def test_cli_get_passes_keep_chrome_open(monkeypatch):
             return {"asin": kwargs["asin"], "country": kwargs["country"], "answers": []}
 
     monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["get", "B0TEST1234", "US", "--new-chrome", "--keep-chrome-open"])
 
     assert result.exit_code == 0
     assert captured["new_chrome"] is True
     assert captured["keep_chrome_open"] is True
+
+
+def test_cli_init_outputs_login_prompt(monkeypatch):
+    captured = {}
+
+    class DummyManager:
+        def init(self, **kwargs):
+            captured.update(kwargs)
+            return {"country": "US", "url": "https://www.amazon.com"}
+
+    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+
+    result = runner.invoke(app, ["init", "US"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "请在新窗口中登录亚马逊\n"
+    assert captured == {
+        "country": "US",
+        "cdp_url": "http://127.0.0.1:9222",
+        "timeout_seconds": 30,
+    }
+
+
+def test_manager_init_opens_country_marketplace():
+    captured = {}
+
+    class FakeBrowser:
+        def open_marketplace_for_login(self, **kwargs):
+            captured.update(kwargs)
+
+    manager = RufusManager(browser=FakeBrowser())
+
+    result = manager.init(country="DE", cdp_url="http://127.0.0.1:9333", timeout_seconds=12)
+
+    assert result == {"country": "DE", "url": "https://www.amazon.de"}
+    assert captured == {
+        "marketplace_url": "https://www.amazon.de",
+        "cdp_url": "http://127.0.0.1:9333",
+        "timeout_seconds": 12,
+    }
 
 
 def test_manager_get_uses_question_bank_browser_and_replay():
@@ -667,6 +946,7 @@ def test_manager_get_uses_question_bank_browser_and_replay():
 
     assert result["answers"][0]["text"] == "answer:问题1"
     assert result["question_count"] == 1
+    assert result["questions"] == ["问题1"]
     assert result["upload_payload"]["records"][0]["questions"][0]["question"] == "问题1"
     assert fake_browser.kwargs["new_chrome"] is True
     assert fake_browser.kwargs["keep_chrome_open"] is False

@@ -1,10 +1,169 @@
 # ops-amazon-rufus Architecture
 
-## 2026-04-29 架构增量：UTF-8 运行环境与答案文本投影
+## 2026-04-30 架构增量：前端渲染对齐答案输出
 
 ### 设计原则
 
-本轮变更调整 CLI 成功输出契约：`amazon-rufus get` 执行完成后不输出完整 JSON，只输出 `answers[].text`。
+本轮变更只处理 CLI 成功输出展示，不改变 Rufus 原始解析结构。formatter 必须参考前端 `asinRufusView` 的渲染规则，使用完整 `data` 生成确定性文本报告，不能总结、删减或改写业务内容。
+
+### 模块边界
+
+新增文件：
+
+```text
+opscli/amazon_rufus/services/answer_report_formatter.py
+```
+
+职责：
+
+1. 接收 `RufusManager.get()` 返回的完整 `data`。
+2. 读取 `answers[]`、`upload_payload.records[0].questions[]`、`asin`、`country`、`page_url`。
+3. 按前端 section/card 结构输出问题、相关产品、正文、推荐 ASIN、总结。
+4. 优先消费 `answer.blocks`，缺失时回退解析 `answer.text`。
+5. 返回完整格式化字符串。
+
+推荐类：
+
+```python
+class AnswerReportFormatter:
+    def format_data(self, data: dict) -> str:
+        ...
+```
+
+CLI 层改造：
+
+1. `commands/cli.py` 的 `_emit_answers_text()` 改为 `_emit_answer_report()`，并调用 `AnswerReportFormatter.format_data(data)`。
+2. `_emit_answer_report()` 不再直接输出完整报告，而是写入运行目录下的 `output/amazon-rufus`。
+3. 文件名使用 `<ASIN>-YYYYMMDD-HHMMSS.md`，时间精确到秒。
+4. 成功时 stdout 只输出报告保存路径。
+5. `get` 命令不新增可配置文件输出参数。
+
+不改动：
+
+1. `RufusParserService` 不做展示格式化。
+2. `RufusManager.get()` 返回结构不变。
+3. `AnswerData.to_dict()` 不变。
+4. `upload_payload` 构造不变。
+
+### 前端对齐数据模型
+
+参考前端：
+
+- `AsinRufusSectionCard.vue`
+- `AsinRufusAnswerBlocks.vue`
+- `utils/asinRufus/answerBlocks.ts`
+- `utils/asinRufus/toSections.ts`
+- `api/types/intercept.ts`
+
+CLI formatter 的 section 组装规则：
+
+1. `answers = data.get("answers", [])`。
+2. `questions` 优先从 `data["questions"]` 读取；若不存在，从 `data["upload_payload"]["records"][0]["questions"]` 读取；仍不存在时使用 `第 N 题`。
+3. `answer.isSuccess is False` 或 `answer.text` 以 `【失败】` 开头时标记为失败。
+4. 输出顺序沿用答案数组顺序，不在 CLI 展示层重新排序；题库顺序由 `QuestionBankService` 和 `RufusManager` 保证。
+
+### 正文 block 渲染算法
+
+推荐实现步骤：
+
+1. `_build_answer_blocks(text, structured_blocks)` 对齐前端 `buildAsinRufusAnswerBlocks()`。
+2. 若 `structured_blocks` 非空：
+   - `heading` 输出 Markdown 标题，level 限制在 1-6。
+   - `paragraph` 输出普通段落。
+   - 连续 `list_item` 合并为 `- item` 列表。
+   - 连续 `table_row` 合并为 Markdown 表格，优先使用 `cells`，缺失时解析 `text` 中的 `|`。
+3. 若 `structured_blocks` 为空：
+   - 标准化换行。
+   - 支持 Markdown heading。
+   - 支持 `-/*/•` 与 `1.` / `1)` 列表。
+   - 缩进行并入上一条列表项。
+   - 只有存在 delimiter 行时才识别 Markdown 表格。
+4. 输出前压缩多余空行，但不主动删减正文。
+
+该算法不尝试把退化表格自动重建为 Markdown 表格。原因是 Rufus 文本来源复杂，自动推断列数容易误伤正文。若后续需要表格重建，应基于 parser 的结构化 blocks 做增量设计，而不是在纯文本层猜测。
+
+### 文件输出边界
+
+终端截断不是 CLI 进程完全可控的问题。本轮通过默认文件落地规避 stdout 长文本承载风险，但不新增分页器、剪贴板中转或交互式分段输出。
+
+实现约束：
+
+1. 输出目录固定为 `Path.cwd() / "output" / "amazon-rufus"`。
+2. 文件写入使用 UTF-8。
+3. stdout 不输出完整答案报告，只输出保存路径提示。
+4. 错误路径继续使用稳定 JSON 结构，不写报告文件。
+5. formatter 仍负责报告文本生成，CLI 层只负责文件命名、目录创建、写入和提示。
+
+### 测试策略
+
+1. formatter 单元测试：
+   - 对齐前端 `answerBlocks.test.ts`：结构化 blocks 优先、text fallback、无 delimiter 不识别表格、空文本无 blocks。
+   - 渲染 `productLinks`、`recommendedAsins`、`summaryText`。
+   - 保留原文内容不主动删减。
+   - 失败空答案输出稳定提示。
+2. CLI 测试：
+   - 默认生成 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md`。
+   - stdout 只输出保存路径提示。
+   - 不存在可配置文件输出参数。
+   - 不泄露 `seed_request` 与 `upload_payload`。
+3. 回归测试：
+   - 现有 `amazon_rufus` 测试继续通过。
+
+## 2026-04-29 架构增量：init 登录初始化命令
+
+### 设计原则
+
+本轮新增 `amazon-rufus init <country>`，目标是为后续 `get` 准备同一个独立 Chrome profile 的 Amazon 登录态。实现必须复用现有浏览器打开机制，避免复制启动参数或新增独立 profile。
+
+### 模块边界
+
+1. `commands/cli.py` 增加 `init` Typer 子命令，只负责参数解析、调用 Manager、输出提示与错误结构。
+2. `RufusManager` 增加 `init(country, cdp_url=...)` 方法，只编排国家解析与浏览器初始化。
+3. `BrowserAttachService` 增加登录初始化专用方法，例如 `open_marketplace_for_login()`。
+4. `country_map.py` 继续作为国家到 Amazon 站点的唯一映射来源。
+
+### 浏览器复用契约
+
+`init` 必须复用 `BrowserAttachService.DEFAULT_NEW_CHROME_ARGUMENTS`：
+
+```text
+--remote-debugging-port=9222 --user-data-dir="E:\chrome-profiles\opscli-rufus" --auto-open-devtools-for-tabs --no-first-run --no-default-browser-check
+```
+
+实现要求：
+
+1. 启动 Chrome 的底层方法与 `get --new-chrome` 保持一致。
+2. 等待 CDP 可用后连接浏览器。
+3. 创建或复用 context，打开对应国家 Amazon 首页。
+4. 调用 `page.bring_to_front()` 让登录窗口可见。
+5. 方法返回后不关闭浏览器。
+
+### CLI 输出契约
+
+成功输出固定文案：
+
+```text
+请在新窗口中登录亚马逊
+```
+
+错误输出继续使用现有 `_error_payload("amazon-rufus init", exc)` 稳定结构。
+
+### 职责隔离
+
+`init` 不依赖题库服务和 replay 服务，避免初始化命令引入采集副作用。该设计符合 KISS/YAGNI：只打开登录窗口，不做任何 Rufus 私有接口操作。
+
+### 测试策略
+
+1. CLI help 测试：`amazon-rufus init --help` 可见国家参数。
+2. Manager 测试：`init("US")` 解析到 `https://www.amazon.com` 并调用浏览器服务。
+3. Browser 测试：模拟 Playwright/CDP，验证打开 URL、前置窗口、且不调用关闭逻辑。
+4. 错误测试：不支持国家时返回稳定错误结构。
+
+## 2026-04-29 架构增量：UTF-8 运行环境与答案报告投影
+
+### 设计原则
+
+本轮变更调整 CLI 成功输出契约：`amazon-rufus get` 执行完成后不输出完整 JSON，只输出格式化答案报告的保存路径。
 
 ### UTF-8 运行契约
 
@@ -17,23 +176,22 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon op
 说明：
 
 1. `PYTHONUTF8=1` 强制 Python 使用 UTF-8 模式，降低 Windows 默认代码页导致的乱码风险。
-2. `PYTHONIOENCODING=utf-8` 约束标准输入输出编码，保证 JSON 中中文答案可被 Agent 正确解析。
+2. `PYTHONIOENCODING=utf-8` 约束标准输入输出编码，保证中文保存路径和错误信息可被 Agent 正确读取。
 3. 该环境变量只作用于当前命令会话，不修改系统级环境变量。
 
 ### 输出分层契约
 
-1. CLI 层：成功时只输出 `answers[].text`。
+1. CLI 层：成功时只输出格式化答案报告保存路径。
 2. Service 层：仍可保留完整数据结构用于内部编排。
-3. 用户展示层：只展示答案文本，不展示完整 JSON、`seed_request`、`upload_payload` 或 headers。
+3. 用户展示层：只展示报告保存路径，不展示完整 JSON、`seed_request`、`upload_payload` 或 headers。
 
-### 文本投影规则
+### 报告投影规则
 
 伪代码：
 
 ```python
-answers = data.get("answers", [])
-texts = [answer.get("text", "").strip() for answer in answers if answer.get("text", "").strip()]
-print("\n\n".join(texts))
+report = AnswerReportFormatter().format_data(data)
+print(report)
 ```
 
 失败处理：
@@ -44,7 +202,7 @@ print("\n\n".join(texts))
 
 ### 代码实现边界
 
-本变更移除 `--answers-text` 参数需求，成功路径默认执行文本投影输出。错误路径保留稳定 JSON 错误结构，便于排障。
+本变更移除 `--answers-text` 参数需求，成功路径默认执行报告投影、文件写入并输出保存路径。错误路径保留稳定 JSON 错误结构，便于排障。
 
 ## 2026-04-29 架构增量：Rufus 请求参数对齐
 
@@ -133,7 +291,7 @@ URL 构造规则：
 
 以最小侵入方式为 `opscli` 增加一条新的 Rufus 运行链路，同时遵守现有项目分层：
 
-- CLI 层只做参数解析与 JSON 输出
+- CLI 层只做参数解析、成功报告文件写入与错误 JSON 输出
 - Service 层负责业务编排
 - Transport 层负责远端接口
 - Skill 远端升级数据与运行时解耦
@@ -204,7 +362,7 @@ opscli amazon-rufus
 
 - 参数解析
 - 调用 `RufusManager.get()`
-- 统一 JSON 输出
+- 成功时输出格式化答案报告保存路径，错误时返回稳定 JSON 结构
 - 错误映射为稳定结构
 
 CLI 不直接：
@@ -580,7 +738,7 @@ http://127.0.0.1:8000/api/opencalw/default-question-templates
 
 - mock Playwright browser / page / request
 - mock `skills upgrade` 后的数据目录
-- 验证 `opscli amazon-rufus get` 的 JSON 输出结构
+- 验证 `opscli amazon-rufus get` 的内部数据结构与格式化报告文件输出
 
 ### 不做真实依赖
 

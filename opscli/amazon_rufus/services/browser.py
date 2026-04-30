@@ -25,6 +25,33 @@ class BrowserAttachService:
     def __init__(self) -> None:
         self.current_page = None  # 保存页面句柄供后续 Rufus replay 复用
 
+    def open_marketplace_for_login(
+        self,
+        *,
+        marketplace_url: str,
+        cdp_url: str,
+        timeout_seconds: int = 30,
+    ) -> None:
+        """打开国家站点登录窗口并保留浏览器。"""
+        self._start_new_chrome()
+        self._wait_for_cdp(cdp_url, timeout_seconds=5)
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            raise ChromeCdpUnavailableError("缺少 Playwright，请安装 `opscli[amazon]`") from exc
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.connect_over_cdp(cdp_url)
+            except Exception as exc:
+                raise ChromeCdpUnavailableError(f"无法连接 Chrome CDP: {cdp_url}") from exc
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = context.new_page()
+            page.goto(marketplace_url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
+            page.bring_to_front()
+            self.current_page = page
+
     def capture_seed_request(
         self,
         *,

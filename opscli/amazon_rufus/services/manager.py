@@ -25,6 +25,22 @@ class RufusManager:
         self.browser = browser or BrowserAttachService()
         self.replay = replay or RufusReplayService()
 
+    def init(
+        self,
+        *,
+        country: str,
+        cdp_url: str = "http://127.0.0.1:9222",
+        timeout_seconds: int = 30,
+    ) -> dict:
+        """打开对应国家站点，供用户登录 Amazon。"""
+        marketplace = resolve_marketplace(country)
+        self.browser.open_marketplace_for_login(
+            marketplace_url=marketplace.base_url,
+            cdp_url=cdp_url,
+            timeout_seconds=timeout_seconds,
+        )
+        return {"country": marketplace.country, "url": marketplace.base_url}
+
     def get(
         self,
         *,
@@ -71,6 +87,7 @@ class RufusManager:
             "country": normalized_country,
             "page_url": page_url,
             "question_count": len(questions),
+            "questions": questions,
             "answers": [answer.to_dict() for answer in answers],
             "seed_request": seed.to_dict(),
         }

@@ -1,5 +1,174 @@
 # ops-amazon-rufus Research
 
+## 2026-04-30 新增输出落地文件研究
+
+### 触发背景
+
+用户在实际运行 `amazon-rufus get` 时已尝试扩大 PowerShell `RawUI.BufferSize`，但长报告仍可能被 IDE 终端、宿主工具返回长度或 Agent 输出窗口截断。该问题不属于 Rufus parser 或 formatter 主动删减，而是 stdout 展示链路的承载边界。
+
+### 本地链路观察
+
+当前实现中，`commands/cli.py` 成功路径通过 `AnswerReportFormatter().format_data(data)` 生成完整报告，然后直接 `typer.echo()` 到 stdout。该链路有两个问题：
+
+1. 报告内容仍完整存在于 CLI 进程内，但 stdout 消费方可能截断。
+2. Agent 执行 CLI 后只能读取工具返回文本，无法保证拿到完整 stdout 历史。
+
+### 结论
+
+本轮应把成功报告从 stdout 改为运行时文件落地：
+
+1. 输出目录固定为当前运行目录下的 `output/amazon-rufus`。
+2. 文件名使用 `<ASIN>-YYYYMMDD-HHMMSS.md`，时间精确到秒。
+3. 文件内容仍是现有 formatter 生成的 Markdown-like 答案报告。
+4. stdout 只输出保存路径和状态，不再承载完整报告正文。
+5. 不新增可配置 `--output` 参数，避免扩大命令心智负担。
+
+该方案符合 KISS/YAGNI：保留现有 formatter，新增最小文件写入边界；不引入分页器、剪贴板、临时文件清理协议或交互式查看器。
+
+## 2026-04-30 新增前端渲染对齐输出格式化研究
+
+### 本轮需求
+
+用户提供 `output/1.txt` 作为 `opscli amazon-rufus get` 的终端输出样例，并要求参考 `E:\code\work\operation-frontend - 1\packages\operation-frontend-core\src\project\tools\components\asinRufusView` 中的前端渲染方式，对 CLI 输出数据进行格式化。若需要其他参数，可参考 CLI 输出前拿到的全量数据结构。
+
+样例文件使用 UTF-8 读取后有 1024 行，首行从 `4. 易用性` 开始，说明当前可见内容本身已经不是完整回答开头；同时存在以下可读性问题：
+
+1. 连续空行过多，很多段落被拉开成“单行文本 + 多个空行”。
+2. 表格内容退化为一列一行，例如“问题 / 影响 / 严重程度”和具体值被拆散；前端已有结构化表格渲染模型可参考。
+3. 项目符号存在独立成行的情况，例如 `•` 单独一行，真正内容在下一行；前端已有 list block 合并模型可参考。
+4. 当前 CLI 已隐藏 `seed_request` 与 `upload_payload`，但 `_emit_answers_text()` 只是 `strip()` 后拼接文本，没有格式化边界。
+5. 终端滚动缓冲或宿主输出窗口导致的截断属于运行环境限制，本轮不处理。
+
+### 当前 CLI 代码结论
+
+相关路径：
+
+- `opscli/amazon_rufus/commands/cli.py`
+- `opscli/amazon_rufus/services/parser.py`
+- `opscli/amazon_rufus/domain/models.py`
+- `tests/amazon_rufus/test_core.py`
+
+当前输出链路：
+
+1. `RufusParserService.parse()` 从 SSE 中产出 `AnswerData.text`。
+2. `RufusManager.get()` 将 `AnswerData` 转为 `answers[]`。
+3. CLI `_emit_answers_text()` 遍历 `answers[]`，直接输出每个 `text.strip()`。
+
+因此本轮格式化不应放进 parser。parser 的职责是还原 Rufus 原始回答；格式化属于 CLI 展示层，应新增独立 report formatter，读取 CLI 输出前的完整 `data`，避免污染内部结构化数据和上传 payload。
+
+### 前端渲染结论
+
+参考路径：
+
+- `AsinRufusDetailBody.vue`
+- `AsinRufusSectionCard.vue`
+- `AsinRufusAnswerBlocks.vue`
+- `utils/asinRufus/answerBlocks.ts`
+- `utils/asinRufus/toSections.ts`
+- `api/types/intercept.ts`
+
+前端渲染的数据模型：
+
+1. `AnswerData` 包含 `text`、`summaryText`、`productLinks`、`recommendedAsins`、`blocks`、`isSuccess`。
+2. `AnswerBlockData` 支持 `heading`、`paragraph`、`list_item`、`table_row`，其中 `table_row` 可带 `cells`。
+3. `AsinRufusSectionCard` 的展示顺序是：
+   - 相关产品 `productLinks`
+   - 答案正文 `AsinRufusAnswerBlocks`
+   - 推荐 ASIN `recommendedAsins`
+   - 总结 `summaryText`
+4. `AsinRufusAnswerBlocks` 优先消费结构化 `blocks`；缺失时才解析 `text`。
+5. `answerBlocks.ts` 的回退解析支持：
+   - Markdown 标题 `#`
+   - 无序列表 `-/*/•`
+   - 有序列表 `1.` / `1)`
+   - Markdown 表格，且必须存在 delimiter 行才识别为表格
+   - 缩进行作为上一条列表项的续行
+6. `toSections.ts` 会按 `sort`、`questionId`、`question` 排序，并对失败答案做 status 识别；CLI 当前没有前端完整 record detail，但可用 `data.answers[]` 和 `data.upload_payload.records[0].questions[]` 形成近似 section。
+
+### 外部资料结论
+
+1. Python 标准库 `textwrap` 提供换行、填充、缩进等文本处理能力；其中 `shorten()` 会折叠并截断文本，不适合本需求。参考：https://docs.python.org/3/library/textwrap.html
+2. AWS CLI 将机器可读 JSON 与用户可读 text/table 输出区分，说明 CLI 可以为人工阅读单独设计展示层。参考：https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-output-format.html
+3. Typer 官方测试建议使用 `CliRunner` 校验 stdout/stderr，可用于新增格式化输出回归测试。参考：https://typer.tiangolo.com/tutorial/testing/
+
+### 方案判断
+
+采用“前端渲染对齐的确定性文本报告”方案：
+
+1. 不使用 LLM 对答案二次总结或改写，避免改变 Rufus 原意。
+2. 不使用会主动丢弃内容的 `textwrap.shorten()`、`max_lines` 或固定行数限制。
+3. 新增 formatter 读取完整 `data`，而不是只读取 `answers[].text`。
+4. 输出按“问题 section”组织，展示问题标题、相关产品、正文、推荐 ASIN、总结。
+5. 正文渲染优先使用 `answer.blocks`，按前端 block 模型输出 heading/list/table/text；缺失时再按 `answer.text` 解析 Markdown-like 文本。
+6. 表格只在结构化 `table_row` 或标准 Markdown 表格中渲染，不猜测 `output/1.txt` 这种已退化的一列文本为表格，避免误伤正文。
+7. CLI 默认将格式化文本写入 `output/amazon-rufus` 报告文件，不新增可配置文件输出参数。
+8. 终端滚动缓冲或宿主输出窗口造成的截断通过文件落地规避，不再由 stdout 承载完整报告。
+9. `--pretty` 继续只影响错误 JSON，不参与成功答案格式化。
+
+### 研究结论
+
+本轮不应修改 Rufus replay、parser、题库或上传 payload。最小可维护实现是新增展示层 report formatter，并让 `amazon-rufus get` 的成功输出传入完整 `data` 调用它。这样符合 KISS/YAGNI：复用前端已验证的数据展示规则，只解决 CLI stdout 可读性问题，不引入额外输出通道、GUI、分页器默认行为或新的业务协议。
+
+## 2026-04-29 新增 init 命令研究
+
+### 本轮需求
+
+为 `opscli amazon-rufus` 增加初始化命令：
+
+```bash
+opscli amazon-rufus init <country>
+```
+
+命令接收一个“国家”参数，使用与现有 `get --new-chrome` 相同的 Chrome 打开方式，打开对应国家站点的 Amazon 首页，提示用户“请在新窗口中登录亚马逊”，随后结束命令。
+
+### 现有流程复用点
+
+参考路径：
+
+- `opscli/amazon_rufus/services/browser.py`
+- `opscli/amazon_rufus/runtime/country_map.py`
+- `opscli/amazon_rufus/services/manager.py`
+- `opscli/amazon_rufus/commands/cli.py`
+
+现有 `get` 链路已经具备以下可复用能力：
+
+1. `BrowserAttachService.DEFAULT_NEW_CHROME_ARGUMENTS` 定义固定 Chrome 调试 profile 与端口。
+2. `BrowserAttachService._start_new_chrome()` 通过 PowerShell `Start-Process chrome.exe` 打开独立 Chrome 窗口。
+3. `BrowserAttachService._wait_for_cdp()` 等待 `http://127.0.0.1:9222/json/version` 可用。
+4. `resolve_marketplace(country)` 将 `US/UK/DE/JP` 映射到对应 Amazon 站点。
+5. `get --new-chrome` 已使用独立 profile，适合承载用户 Amazon 登录态。
+
+### 差距分析
+
+`get` 当前会立即访问商品详情页并捕获 `/rufus/cl/streaming`，适合执行采集；但首次使用者需要先在相同 Chrome profile 中完成 Amazon 登录。若直接执行 `get`，用户常见失败点是：
+
+- Chrome 未登录 Amazon。
+- 新开的 `E:\chrome-profiles\opscli-rufus` profile 与用户默认 Chrome 登录态隔离。
+- 用户不知道应该登录哪个国家站点。
+
+因此 `init` 应作为低风险准备命令，只打开站点并保留窗口，不捕获 Rufus 请求、不读取题库、不执行 replay。
+
+### 外部信息约束
+
+Amazon Rufus 是 Amazon 购物体验中的 AI 购物助手，登录态与站点地域会影响用户能否看到完整购物上下文与个性化能力。公开资料只描述 Rufus 的产品能力，不提供私有 `/rufus/cl/streaming` 接口契约，因此本轮仍应复用现有浏览器 profile 与站点映射，不新增未验证的接口参数。
+
+参考资料：
+
+- https://www.aboutamazon.com/news/retail/amazon-rufus
+- https://advertising.amazon.com/library/guides/getting-started-with-rufus
+- https://sell.amazon.com/blog/amazon-rufus
+
+### 研究结论
+
+本轮采用“浏览器初始化最小闭环”方案：
+
+1. 新增 `opscli amazon-rufus init <country>`。
+2. 国家解析复用 `resolve_marketplace(country)`，打开该国家 Amazon 首页。
+3. Chrome 打开方式复用 `BrowserAttachService` 中 `get --new-chrome` 使用的固定调试 profile 与 CDP 等待逻辑。
+4. 命令打开页面后输出提示：`请在新窗口中登录亚马逊`。
+5. 命令结束时不关闭 Chrome，确保登录态写入固定 profile，供后续 `get --new-chrome` 或同 CDP profile 使用。
+6. 不读取题库、不捕获 seed request、不执行 Rufus replay，避免初始化命令承担采集职责。
+
 ## 2026-04-29 复刻扩展端 Rufus 行为研究
 
 ### 本轮需求

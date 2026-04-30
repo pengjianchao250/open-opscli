@@ -1,10 +1,114 @@
 # ops-amazon-rufus UIUX
 
-## 2026-04-29 体验增量：UTF-8 与答案纯文本输出
+## 2026-04-30 体验增量：参考前端渲染的格式化答案输出
 
 ### 体验目标
 
-用户通过 Skill 获取 Rufus 结果时，不需要阅读完整 JSON。CLI 应在 UTF-8 环境运行，并仅把 `answers[].text` 作为最终答案输出。
+`amazon-rufus get` 的成功输出应参考前端 `asinRufusView` 的卡片信息层级，而不是把 Rufus 流式还原后的松散文本原样抛给终端。用户看到的内容应满足：
+
+1. 段落之间最多一个空行。
+2. 每个问题是一段独立 section。
+3. 相关产品、答案正文、推荐 ASIN、总结按前端顺序展示。
+4. 正文优先使用结构化 blocks，支持 heading、list、table。
+5. 默认将完整报告写入 `output/amazon-rufus`，避免终端或 Agent 输出窗口截断正文。
+
+### 默认终端体验
+
+命令：
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli amazon-rufus get B0B1MLVMY5 US --skills-dir ".agents/skills" --new-chrome
+```
+
+stdout 只输出保存路径：
+
+```text
+Rufus 答案报告已保存：output/amazon-rufus/B0B1MLVMY5-20260430-101530.md
+```
+
+文件内容为参考前端卡片结构的纯文本报告：
+
+```text
+## 第 1 题：分析该商品的优势与缺陷
+
+### 答案
+
+#### Aiheal 的劣势与问题（致命缺陷）
+
+- 保温功能残缺：96°C以上无法保温
+- 可靠性风险：部分用户反馈突然停止工作、Hold功能失效、按钮故障
+
+| 问题 | 影响 | 严重程度 |
+| --- | --- | --- |
+| 96°C以上无法保温 | 205°F咖啡按 HOLD 键无反应 | 致命 |
+
+### 推荐 ASIN
+
+- B0ABC12345 - 竞品电热水壶 (AsinFaceoutList)
+
+### 总结
+
+Rufus 总结文本。
+```
+
+说明：formatter 只在 `answer.blocks` 或标准 Markdown 表格中输出表格；对于 `output/1.txt` 这种已退化的一列文本，不强行猜测列结构，避免误改 Rufus 原文。
+
+### 文案边界
+
+1. 默认不输出“格式化规则说明”，避免干扰用户阅读答案。
+2. 默认不输出内部 JSON。
+3. 默认只提示保存路径，不把完整答案报告刷到 stdout。
+4. 错误仍使用稳定 JSON 结构，便于脚本排障。
+
+## 2026-04-29 体验增量：init 登录初始化
+
+### 体验目标
+
+`init` 是用户首次使用 Rufus 采集前的准备命令。它应把“打开正确国家站点”和“使用正确 Chrome profile 登录”这两件事合并成一个明确动作，降低后续 `get` 因未登录导致失败的概率。
+
+### 推荐使用路径
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli amazon-rufus init US
+```
+
+命令执行后：
+
+```text
+请在新窗口中登录亚马逊
+```
+
+用户完成登录后，再执行：
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli amazon-rufus get B0B1MLVMY5 US --skills-dir ".agents/skills" --new-chrome
+```
+
+### 文案规范
+
+成功文案必须短、明确、可执行：
+
+```text
+请在新窗口中登录亚马逊
+```
+
+不输出浏览器调试参数、profile 路径或内部 CDP 细节，除非发生错误。
+
+### 失败体验
+
+1. 国家不支持：提示支持的国家列表。
+2. Chrome 启动失败：复用现有 Chrome 启动失败排障文案。
+3. CDP 不可用：提示检查 `http://127.0.0.1:9222` 或重新执行命令。
+
+### 体验边界
+
+`init` 不展示题库信息、不输出 JSON 成功结构、不引导用户输入 ASIN。用户只需要关注一件事：在新开的 Amazon 窗口中完成登录。
+
+## 2026-04-29 体验增量：UTF-8 与答案报告输出
+
+### 体验目标
+
+用户通过 Skill 获取 Rufus 结果时，不需要阅读完整 JSON。CLI 应在 UTF-8 环境运行，并仅把格式化答案报告作为最终答案输出。
 
 ### 终端运行体验
 
@@ -18,12 +122,14 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon op
 
 ### 最终回复体验
 
-最终回复只输出答案文本：
+最终回复只输出答案报告：
 
 ```text
-第一题 Rufus 回答文本。
+## 第 1 题：问题文本
 
-第二题 Rufus 回答文本。
+### 答案
+
+Rufus 回答文本。
 ```
 
 不应展示：
@@ -33,9 +139,9 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon op
 3. `upload_payload`。
 4. request headers、cookie 或调试字段。
 
-### 与 CLI JSON 的关系
+### 与内部全量数据的关系
 
-CLI 的 JSON 输出仍是内部机器协议，用于稳定解析 `answers[].text`。Skill 使用者和 Agent 不应把该 JSON 直接作为最终结果回复给用户，除非用户明确要求查看原始结果或排障。
+CLI 的全量数据仍是内部机器协议，用于稳定生成格式化答案报告。Skill 使用者和 Agent 不应把内部数据直接作为最终结果回复给用户，除非用户明确要求查看原始结果或排障。
 
 ## 2026-04-29 体验增量：参数对齐不改变用户心智
 
@@ -58,14 +164,14 @@ opscli amazon-rufus get B0TEST1234 US
 
 1. 不新增“复刻模式”文案，避免暴露内部实现细节。
 2. 若后续新增 debug 输出，只能在调试字段展示 `replay_url` 与 `payload_fields` 摘要，不输出完整 cookie 或敏感 header。
-3. Skill 最终回复只展示答案文本，seed/request 细节仅保留在 CLI JSON 中用于排障。
+3. Skill 最终回复只展示格式化答案报告，seed/request 细节仅保留在内部数据中用于排障。
 
 ### CLI 使用体验不变项
 
 1. 命令入口不变：`opscli amazon-rufus get <asin> <country>`。
 2. Chrome 前置条件不变：复用已登录 Amazon 的本地调试 Chrome。
 3. 题库来源不变：`ops-amazon-rufus/data/question_templates.json`。
-4. 输出主字段不变：`success`、`command`、`data`、`error`。
+4. 内部数据字段不变：`asin`、`country`、`page_url`、`answers`、`seed_request`、`upload_payload`。
 
 ### UI/图标/设计系统锁定
 
@@ -116,8 +222,10 @@ opscli amazon-rufus get <asin> <country>
 因此 `SKILL.md` 和错误信息都必须显式强调：
 
 1. Chrome 需开启 remote debugging
-2. 用户需先登录 Amazon
-3. 需先安装并升级 `ops-amazon-rufus`
+2. 用户需先登录目标国家站点的 Amazon 账户
+3. 不同国家站点登录态可能独立，切换国家时需重新确认登录状态
+4. 需先安装并升级 `ops-amazon-rufus`
+5. 推荐通过 `opscli amazon-rufus init <country>` 打开登录窗口
 
 ### 3. 输出先给答案，再留上下文
 
@@ -127,7 +235,7 @@ Skill 最终回复的阅读顺序应为：
 2. 第二题答案文本
 3. 后续题目答案文本
 
-低层 request 细节只留在 CLI JSON 中，默认不展示给最终用户。
+低层 request 细节只留在内部数据中，默认不展示给最终用户。
 
 ---
 
@@ -137,8 +245,8 @@ Skill 最终回复的阅读顺序应为：
 
 沿用当前项目风格：
 
-- CLI 统一 JSON 输出，Skill 最终只展示答案文本
-- 成功时只输出答案文本，错误时返回稳定结构
+- CLI 成功时输出格式化答案报告保存路径，Skill 最终也只展示该路径
+- 成功时不输出内部 JSON，错误时返回稳定结构
 - 错误返回稳定结构
 
 ### 推荐帮助文案
@@ -167,38 +275,35 @@ Start-Process chrome.exe -ArgumentList '--remote-debugging-port=9222 --user-data
 
 ## 成功输出体验
 
-### 紧凑输出
+### 格式化报告输出
 
-CLI 默认输出适合脚本和 Agent 解析：
+CLI 默认输出适合人工和 Agent 阅读的格式化报告：
 
-```json
-{
-  "success": true,
-  "command": "rufus get",
-  "data": {
-    "asin": "B0ABC12345",
-    "country": "US",
-    "answers": [...]
-  },
-  "error": null
-}
+```text
+## 第 1 题：问题文本
+
+### 答案
+
+Rufus 回答文本。
 ```
 
 ### Skill 最终输出
 
-Agent 解析 CLI JSON 后，只向最终用户输出：
+Agent 直接复用 CLI stdout 中的格式化报告：
 
 ```text
-第一题答案文本。
+## 第 1 题：问题文本
 
-第二题答案文本。
+### 答案
+
+Rufus 回答文本。
 ```
 
 不得直接展示 `seed_request`、`upload_payload` 或完整 JSON。
 
 ### 答案项体验
 
-CLI JSON 中每题至少保留：
+内部数据中每题至少保留：
 
 - `template_id`
 - `question`
@@ -264,7 +369,8 @@ CLI JSON 中每题至少保留：
 
 - 一打开就知道这个 Skill 是干什么的
 - 明确依赖 `opscli amazon-rufus get`
-- 明确说明 Chrome 前置条件
+- 明确说明 Chrome 与国家站点登录前置条件
+- 明确说明 `opscli amazon-rufus init <country>` 是登录初始化命令
 - 给出完整示例
 - 给出常见错误排查
 
@@ -286,14 +392,14 @@ opscli skills install ops-amazon-rufus
 # 2. 升级题库
 opscli skills upgrade ops-amazon-rufus
 
-# 3. 启动 Chrome（remote debugging）
-"C:/Program Files/Google/Chrome/Application/chrome.exe" --remote-debugging-port=9222
+# 3. 打开对应国家站点登录窗口
+opscli amazon-rufus init US
 
-# 4. 或让命令先新开 Chrome 调试窗口
+# 4. 在新窗口中登录亚马逊
+# 命令提示：请在新窗口中登录亚马逊
+
+# 5. 登录完成后执行 Rufus 获取
 opscli amazon-rufus get B0ABC12345 US --new-chrome
-
-# 5. 登录 Amazon 后执行
-opscli amazon-rufus get B0ABC12345 US
 ```
 
 ---
@@ -302,7 +408,7 @@ opscli amazon-rufus get B0ABC12345 US
 
 ### 上传 payload 的解析策略
 
-因为本期不真正上传，`upload_payload` 只作为 CLI JSON 内部字段，不作为 Skill 最终回复内容。
+因为本期不真正上传，`upload_payload` 只作为 CLI 内部字段，不作为 Skill 最终回复内容。
 
 建议：
 
@@ -310,16 +416,6 @@ opscli amazon-rufus get B0ABC12345 US
 - Agent 最终回复必须隐藏 `upload_payload`
 - 用户明确要求排障时，才可提示其查看原始 JSON
 - 若后续查看源码，应能看到注释态的上传调用代码，便于对照未来接入点
-
-### 输出文件体验
-
-若指定 `--output`：
-
-- 命令行仍输出简要成功 JSON
-- 详细结果写入文件
-- 返回结果里附带 `output` 路径
-
----
 
 ## 视觉与文案风格
 
@@ -339,6 +435,6 @@ opscli amazon-rufus get B0ABC12345 US
 - 把复杂流程压缩成一条稳定命令
 - 让前置依赖足够显式
 - 让错误信息足够明确
-- 让 CLI JSON 适合脚本解析，最终回复适合人工阅读
+- 让内部数据适合脚本和排障解析，最终回复适合人工阅读
 
 只要这四点做对，`ops-amazon-rufus` 的首版体验就是合格的。

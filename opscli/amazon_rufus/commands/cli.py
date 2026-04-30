@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
+from pathlib import Path
 
 import typer
 
 from opscli.amazon_rufus.domain.exceptions import RufusError
+from opscli.amazon_rufus.services.answer_report_formatter import AnswerReportFormatter
 from opscli.amazon_rufus.services.manager import RufusManager
 
 app = typer.Typer(help="Amazon Rufus 自动问答采集")
@@ -25,17 +28,27 @@ def _emit(payload: dict, pretty: bool) -> None:
         typer.echo(json.dumps(payload, ensure_ascii=False))
 
 
-def _emit_answers_text(data: dict) -> None:
-    """只输出 Rufus 回答文本。"""
-    lines: list[str] = []
-    for index, answer in enumerate(data.get("answers", []), start=1):
-        text = str(answer.get("text") or "").strip()
-        if text:
-            lines.append(text)
-            continue
-        if answer.get("isSuccess") is False:
-            lines.append(f"第 {index} 题未获取到答案")
-    typer.echo("\n\n".join(lines))
+def _emit_answer_report(data: dict) -> None:
+    """将前端风格的 Rufus 答案报告写入运行目录。"""
+    report_text = AnswerReportFormatter().format_data(data)
+    report_path = _write_answer_report(data, report_text)
+    typer.echo(f"Rufus 答案报告已保存：{report_path.as_posix()}")
+
+
+def _write_answer_report(data: dict, report_text: str) -> Path:
+    """写入 Rufus 答案报告并返回面向用户的相对路径。"""
+    output_dir = Path("output") / "amazon-rufus"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_path = output_dir / _build_answer_report_filename(data)
+    report_path.write_text(report_text, encoding="utf-8")
+    return report_path
+
+
+def _build_answer_report_filename(data: dict) -> str:
+    """按 ASIN 与秒级运行时间生成稳定报告文件名。"""
+    asin = str(data.get("asin") or "UNKNOWN").strip().upper() or "UNKNOWN"
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{asin}-{timestamp}.md"
 
 
 def _error_payload(command: str, exc: Exception) -> dict:
@@ -79,5 +92,22 @@ def get(
     except Exception as exc:
         _emit(_error_payload("amazon-rufus get", exc), pretty)
         raise typer.Exit(1)
-    _emit_answers_text(data)
+    _emit_answer_report(data)
+
+
+@app.command("init")
+def init(
+    country: str = typer.Argument(..., help="国家名，如 US、UK、DE、JP"),
+    cdp_url: str = typer.Option("http://127.0.0.1:9222", "--cdp-url", help="Chrome DevTools 地址"),
+    timeout_seconds: int = typer.Option(30, "--timeout", min=1, help="等待超时秒数"),
+    pretty: bool = typer.Option(False, "--pretty", help="错误时格式化输出"),
+):
+    """打开对应国家站点，供用户登录 Amazon。"""
+    manager = RufusManager()
+    try:
+        manager.init(country=country, cdp_url=cdp_url, timeout_seconds=timeout_seconds)
+    except Exception as exc:
+        _emit(_error_payload("amazon-rufus init", exc), pretty)
+        raise typer.Exit(1)
+    typer.echo("请在新窗口中登录亚马逊")
 

@@ -1,15 +1,188 @@
 # ops-amazon-rufus PRD
 
-## 2026-04-29 变更需求：Skill 运行 UTF-8 与答案纯文本输出
+## 2026-04-30 变更需求：参考前端渲染的答案格式化
 
 ### 背景
 
-`ops-amazon-rufus` 面向 AI Agent 和运营同学使用，Rufus 回答包含中文、特殊符号和 Amazon 商品文本。若命令未在 UTF-8 环境下运行，Windows PowerShell 可能出现乱码；同时 Agent 使用场景只需要最终回答文本，不需要把完整 JSON 暴露给用户。
+`amazon-rufus get` 目前成功时只输出 `answers[].text`，但输出文本来自 Rufus 流式内容还原，存在大量空行、项目符号拆行和结构化信息缺失问题。用户要求参考 operation-frontend 中 `asinRufusView` 的渲染方式，用 CLI 输出前拿到的全量数据对结果进行格式化。
+
+### 目标
+
+1. CLI 成功时默认将 Rufus 答案报告写入运行目录下的 `output/amazon-rufus`。
+2. 输出格式参考前端 `AsinRufusSectionCard` 与 `AsinRufusAnswerBlocks` 的展示顺序。
+3. 优先使用 `answer.blocks`、`productLinks`、`recommendedAsins`、`summaryText` 等结构化字段，而不是只输出 `answer.text`。
+4. 格式化过程不得截断、总结、改写 Rufus 原文。
+5. stdout 只输出报告保存路径，不再承载完整报告正文。
+
+### 非目标
+
+1. 不修改 Rufus 请求、题库、SSE 解析或上传 payload 结构。
+2. 不引入 GUI、Web 页面或默认分页器。
+3. 不把原始 `seed_request`、headers、cookie 或 `upload_payload` 输出给最终用户。
+4. 不使用 LLM 对答案二次润色，避免改变业务含义。
+5. 不新增可配置文件输出参数；本轮固定使用运行目录下的 `output/amazon-rufus`。
+6. 不实现分页器、剪贴板中转或交互式查看器。
+7. 不尝试把已退化的一列文本强行猜测成表格。
+
+### 功能需求
+
+#### FR-FMT-1 默认报告式输出
+
+`opscli amazon-rufus get <asin> <country>` 成功时，必须生成格式化后的答案报告文件。
+
+文件路径规则：
+
+1. 输出目录：`Path.cwd() / "output" / "amazon-rufus"`。
+2. 文件名：`<ASIN>-YYYYMMDD-HHMMSS.md`。
+3. `ASIN` 使用 manager 返回的标准化大写 ASIN。
+4. 时间使用命令运行时本地时间，精确到秒。
+5. stdout 输出保存路径提示，不输出完整报告正文。
+
+每个问题按 section 输出：
+
+1. 标题：`## 第 N 题：<question>`。
+2. 相关产品：来自 `answer.productLinks`。
+3. 答案正文：来自 `answer.blocks` 或 `answer.text`。
+4. 推荐 ASIN：来自 `answer.recommendedAsins`。
+5. 总结：来自 `answer.summaryText`。
+6. 单题失败且文本为空时，继续输出 `第 N 题未获取到答案`。
+
+#### FR-FMT-2 前端 block 模型对齐
+
+正文渲染必须参考前端 `buildAsinRufusAnswerBlocks()`：
+
+1. 优先消费 `answer.blocks`。
+2. 支持 `heading`、`paragraph`、`list_item`、`table_row`。
+3. 连续 `list_item` 合并为列表输出。
+4. 连续 `table_row` 合并为 Markdown 表格输出，第一行作为表头，后续行作为表体。
+5. 缺少 `blocks` 时回退解析 `answer.text`，支持 Markdown 标题、列表和带 delimiter 的 Markdown 表格。
+6. 不满足表格条件的管道文本保持普通段落。
+
+#### FR-FMT-3 原文保留
+
+格式化器不得使用会主动丢弃内容的行数限制、字符数限制或摘要逻辑。只要 Rufus 返回了文本，CLI 展示层不得主动删减。
+
+#### FR-FMT-4 输出安全边界
+
+格式化输出不得包含：
+
+1. `seed_request`
+2. `upload_payload`
+3. 请求头
+4. cookie
+5. 原始完整 JSON
+
+#### FR-FMT-5 文件落地边界
+
+文件写入必须满足：
+
+1. 自动创建 `output/amazon-rufus` 目录。
+2. 使用 UTF-8 编码写入报告，保证中文答案可读。
+3. 成功路径不再把完整报告写入 stdout。
+4. 如果 formatter 返回空字符串，仍写入空报告文件并输出路径，保持成功链路可追踪。
+5. 错误路径维持现有 JSON 错误输出，不生成报告文件。
+
+### 验收标准
+
+1. 用前端 `answerBlocks.test.ts` 的样例构造 Python formatter 测试，验证 heading、paragraph、list、table 输出一致。
+2. `answer.blocks` 存在时优先使用结构化 blocks，不直接输出 fallback text。
+3. `productLinks`、`recommendedAsins`、`summaryText` 按前端顺序展示。
+4. 成功执行后在运行目录的 `output/amazon-rufus` 生成 `<ASIN>-YYYYMMDD-HHMMSS.md`。
+5. 现有隐藏 `seed_request` 与 `upload_payload` 的测试继续通过。
+6. stdout 只包含保存路径提示，不包含报告正文、`seed_request` 或 `upload_payload`。
+7. `tests/amazon_rufus/test_core.py` 新增 CLI 与 formatter 回归测试。
+
+## 2026-04-29 变更需求：新增 init 登录初始化命令
+
+### 背景
+
+`amazon-rufus get` 使用独立 Chrome profile 打开 Amazon 商品页并复用浏览器登录态。首次使用时，用户需要先在该 profile 中登录 Amazon，否则 `get` 可能无法捕获 Rufus 请求或无法获得完整站点能力。
+
+### 用户故事
+
+作为运营或采集执行者，我希望先运行一条初始化命令打开对应国家的 Amazon 站点，并在新窗口中完成登录，从而让后续 `amazon-rufus get` 复用相同浏览器 profile 执行 Rufus 问答。
+
+### 命令定义
+
+```bash
+opscli amazon-rufus init <country>
+```
+
+参数：
+
+- `country`：国家名，沿用现有 `US/UK/DE/JP` 站点映射。
+
+示例：
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli amazon-rufus init US
+```
+
+### 功能需求
+
+#### FR-INIT-1 国家站点解析
+
+系统必须复用现有国家站点映射，将 `country` 解析为对应 Amazon 首页：
+
+- `US -> https://www.amazon.com`
+- `UK -> https://www.amazon.co.uk`
+- `DE -> https://www.amazon.de`
+- `JP -> https://www.amazon.co.jp`
+
+不支持的国家必须返回现有稳定错误结构，并提示支持范围。
+
+#### FR-INIT-2 浏览器打开方式
+
+系统必须使用与现有 Rufus 获取流程相同的 Chrome 打开方式：
+
+- 使用固定 remote debugging 端口 `9222`。
+- 使用固定独立 profile `E:\chrome-profiles\opscli-rufus`。
+- 通过 Playwright CDP 连接该 Chrome。
+- 打开解析出的 Amazon 首页。
+
+#### FR-INIT-3 用户提示
+
+页面打开后，命令必须输出：
+
+```text
+请在新窗口中登录亚马逊
+```
+
+随后命令结束。
+
+#### FR-INIT-4 窗口保留
+
+`init` 命令结束时不得关闭新打开的 Chrome 窗口，以便用户继续完成登录，并让登录态写入固定 profile。
+
+#### FR-INIT-5 职责边界
+
+`init` 命令不得执行以下动作：
+
+- 不读取 Rufus 题库。
+- 不访问商品详情页。
+- 不捕获 `/rufus/cl/streaming`。
+- 不重放 Rufus 请求。
+- 不构造上传 payload。
+
+### 验收标准
+
+1. `opscli amazon-rufus init --help` 可见。
+2. `opscli amazon-rufus init US` 会打开 `https://www.amazon.com`。
+3. `opscli amazon-rufus init DE` 会打开 `https://www.amazon.de`。
+4. 成功打开后 CLI 输出 `请在新窗口中登录亚马逊`。
+5. 命令结束后 Chrome 窗口保持打开。
+6. 不支持的国家返回明确错误，不打开错误站点。
+
+## 2026-04-29 变更需求：Skill 运行 UTF-8 与答案报告输出
+
+### 背景
+
+`ops-amazon-rufus` 面向 AI Agent 和运营同学使用，Rufus 回答包含中文、特殊符号和 Amazon 商品文本。若命令未在 UTF-8 环境下运行，Windows PowerShell 可能出现乱码；同时 Agent 使用场景只需要最终格式化报告，不需要把完整 JSON 暴露给用户。
 
 ### 目标
 
 1. Skill 文档中的所有运行示例必须显式使用 UTF-8 环境变量。
-2. 命令执行完成后，Skill 面向用户的最终输出只返回 `answers[].text` 内容。
+2. 命令执行完成后，Skill 面向用户的最终输出返回报告保存路径，完整报告文件按前端渲染规则生成。
 3. 原始 JSON 仅作为本地解析中间结果，不作为最终回复直接输出。
 4. 不改变 `opscli amazon-rufus get <asin> <country>` 的核心运行链路。
 
@@ -22,16 +195,16 @@
 ### 功能需求
 
 1. PowerShell 示例必须在同一命令会话中设置 `$env:PYTHONUTF8 = "1"` 与 `$env:PYTHONIOENCODING = "utf-8"`。
-2. `amazon-rufus get` 成功时只输出 `answers[].text`。
-3. 当存在多条答案时，最终回复按题库顺序输出每条非空 `text`，用空行分隔。
-4. 当某题 `text` 为空但 `isSuccess` 为 `false` 时，最终回复应输出该题失败信息摘要，避免静默丢失。
+2. `amazon-rufus get` 成功时只输出报告保存路径。
+3. 当存在多条答案时，报告文件按题库顺序输出每个问题 section。
+4. 当某题 `text` 为空但 `isSuccess` 为 `false` 时，报告文件应输出该题失败信息摘要，避免静默丢失。
 5. 最终用户回复不得包含 `seed_request`、`upload_payload`、请求头或完整 JSON。
 
 ### 验收标准
 
 1. `ops-amazon-rufus` 的 `SKILL.md` 和 `README.md` 均包含 UTF-8 运行示例。
-2. 文档明确要求最终只向用户输出 `answers[].text`。
-3. 原有 CLI JSON 契约在架构文档中被标记为内部解析契约，而不是 Skill 最终展示契约。
+2. 文档明确要求最终只向用户输出报告保存路径。
+3. 原有 CLI 全量数据契约在架构文档中被标记为内部解析契约，而不是 Skill 最终展示契约。
 
 ## 2026-04-29 变更需求：复刻扩展端 Rufus 请求行为
 
@@ -119,7 +292,7 @@
 1. 用户执行 `opscli amazon-rufus get <asin> <country>` 时，能够在本地已登录 Chrome 上跑通完整流程。
 2. 命令能捕获一个有效 seed request，并用它重放题库问题。
 3. 至少能正确解析出每题的最终回答文本和结构化 answer 数据。
-4. CLI 原始 JSON 中包含以下内部解析字段，Skill 最终回复只展示 `answers[].text`：
+4. CLI 内部全量数据中包含以下解析字段，Skill 最终回复只展示格式化答案报告：
    - 请求上下文摘要
    - 逐题答案
    - 标准上传 payload
@@ -171,7 +344,6 @@ opscli amazon-rufus get <asin> <country> \
   [--skills-dir <dir>] \
   [--timeout 90] \
   [--pretty] \
-  [--output <file>] \
   [--no-upload-payload]
 ```
 
@@ -194,9 +366,7 @@ opscli amazon-rufus get <asin> <country> \
 - `--timeout`
   - 可选，单题最大等待秒数
 - `--pretty`
-  - 保留参数但不改变成功输出口径；成功时仍只输出 `answers[].text`
-- `--output`
-  - 可选，将最终结果写入文件
+  - 保留参数但不改变成功输出口径；成功时仍只输出报告保存路径
 - `--no-upload-payload`
   - 可选，仅返回答案，不输出上传 payload
 
@@ -305,7 +475,7 @@ seed request 至少需要提取：
 
 ### FR-8 命令输出与 Skill 展示
 
-CLI 命令成功时只输出 `answers[].text`。内部数据结构仍至少包含：
+CLI 命令成功时只输出格式化答案报告保存路径。内部数据结构仍至少包含：
 
 - `asin`
 - `country`
@@ -316,7 +486,7 @@ CLI 命令成功时只输出 `answers[].text`。内部数据结构仍至少包�
 - `upload_payload`
 - `captured_at`
 
-Skill/Agent 面向最终用户展示时，必须从上述 JSON 中提取 `answers[].text`，并且只输出答案文本。
+Skill/Agent 面向最终用户展示时，必须输出报告文件路径；完整报告基于上述全量数据生成，并且不得输出内部 JSON。
 
 ---
 
@@ -397,6 +567,8 @@ ops-amazon-rufus/
 `SKILL.md` 必须描述：
 
 - 前置条件：Chrome、Amazon 登录、Skill 升级
+- 登录前置条件必须明确到国家站点维度：不同国家站点 Amazon 账户登录态可能独立，执行 `get <asin> <country>` 前必须确认该 `country` 对应站点已登录
+- 初始化登录命令：`opscli amazon-rufus init <country>`，并说明命令会打开对应国家站点且提示 `请在新窗口中登录亚马逊`
 - `opscli amazon-rufus get` 的使用方式
 - 常见错误排查
 - 典型工作流
