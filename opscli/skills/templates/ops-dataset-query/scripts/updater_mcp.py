@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from chart_map import discover_data_dir
+from core import discover_data_dir
 
 
 def check_local_data(data_dir: Path) -> dict:

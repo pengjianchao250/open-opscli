@@ -1,7 +1,7 @@
 ---
 name: ops-dataset-query
 description: 根据当前环境自动选择 CLI 或 MCP 方式查询本地数据集索引并执行数据查询
-version: v0.0.5
+version: see data/VERSION.json
 ---
 
 # ops-dataset-query
@@ -59,6 +59,7 @@ version: v0.0.5
 - 所有远端查询动作必须统一走选定模式下的正式查询入口，禁止直接调用后端 HTTP 接口
 - 认证检查仍然是强制门禁，具体流程以对应 reference 文档为准
 - 查询前优先检查目标 `dataset_alias`、`field_name`、`global_alias`、`verbose_name` 是否存在于本地索引或 metadata；不要先猜字段再直接构造 payload
+- **【强制】本地搜索结果为空时，必须先升级再重试**：无论搜索的是数据集还是字段，只要返回空列表 `[]`，立即执行升级命令后重新搜索一次，不要直接告知用户"找不到"
 - 如果字段或数据集不存在，优先执行当前模式下的 Skill 升级，再重新检查一次
 - CLI 模式使用 `opscli skills upgrade ops-dataset-query`；MCP 模式使用 `skills_upgrade(name="ops-dataset-query")`
 - 升级后若字段仍不存在，应明确告知用户当前本地索引和 metadata 中没有该字段，不要伪造字段名继续查询

@@ -36,7 +36,8 @@ opscli MCP Tools
 │   ├── query_build
 │   ├── query_run
 │   ├── query_build_and_run
-│   └── query_chart
+│   ├── query_chart
+│   └── query_chart_doc
 └── skills
     ├── skills_list
     ├── skills_install
@@ -844,6 +845,61 @@ query_chart(
 
 ---
 
+### 5.6 `query_chart_doc`
+
+通过 `chart_uuid` 生成图表 API 调用 Markdown 文档，包含查询结构、字段映射、过滤规则与样例。**需要认证**。
+
+文档包含七大章节：使用方式、关键术语、图表概览、API 调用流程、字段明细表、过滤规则、查询拆解与样例。适合 Skill / AI Agent 直接消费。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `chart_uuid` | string | 是 | 图表唯一标识 |
+| `output_path` | string | 否 | 将 Markdown 写入指定文件路径 |
+| `session_id` | string | 否 | OAuth 授权后的 Session ID（为空则自动加载本地保存的） |
+| `jwt` | string | 否 | 已有 JWT（为空则自动加载本地缓存的） |
+
+**返回**
+
+```json
+{
+  "success": true,
+  "data": {
+    "chart_uuid": "jSNuhm54uY",
+    "markdown": "# 图表查询 API 开发文档\n...",
+    "query_count": 3,
+    "dataset_aliases": ["sales_order_d"],
+    "dataset_count": 1,
+    "output_path": "/tmp/chart_api_doc.md"
+  },
+  "error": null
+}
+```
+
+**示例**
+
+生成文档（Markdown 在返回数据中）：
+
+```python
+query_chart_doc(
+    chart_uuid="jSNuhm54uY",
+    session_id="860b0636485b5188a2b9b4ed5210e736"
+)
+```
+
+生成文档并写入本地文件：
+
+```python
+query_chart_doc(
+    chart_uuid="jSNuhm54uY",
+    output_path="/tmp/chart_api_doc.md",
+    session_id="860b0636485b5188a2b9b4ed5210e736"
+)
+```
+
+---
+
 ## 6. Skill 模块 `skills_*`
 
 用于扫描已安装 Skill、安装内置模板、查看状态、升级远端版本。
@@ -1055,6 +1111,7 @@ result = query_chart(
 | `query_build_and_run` | **是** | 可传 session_id / jwt |
 | `query_chart`（run=False） | 否 | - |
 | `query_chart`（run=True） | **是** | 可传 session_id / jwt |
+| `query_chart_doc` | **是** | 可传 session_id / jwt |
 | `skills_list` | 否 | - |
 | `skills_install` | 否 | - |
 | `skills_status` | 服务端自动 | 涉及远端 API |
@@ -1088,6 +1145,7 @@ result = query_chart(
 | 查询 | `query_run` | `opscli query run` |
 | 查询 | `query_build_and_run` | `opscli query build --run` |
 | 查询 | `query_chart` | `opscli query chart` |
+| 查询 | `query_chart_doc` | `opscli query chart-doc` |
 | Skills | `skills_list` | `opscli skills list` |
 | Skills | `skills_install` | `opscli skills install` |
 | Skills | `skills_status` | `opscli skills status` |

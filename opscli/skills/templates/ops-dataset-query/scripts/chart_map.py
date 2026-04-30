@@ -25,117 +25,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from core import load_csv_rows
-
-
-def discover_data_dir(skills_dir: str | None = None) -> Path | None:
-    """自动发现 ops-dataset-query 的数据目录。
-
-    扫描优先级（与 opscli SkillDetector 保持一致）：
-    1. 显式指定的 skills_dir
-    2. 环境变量 OPSCLI_SKILLS_DIR
-    3. 当前目录下的 .claude/skills
-    4. 用户主目录下的 .claude/skills
-    5. 用户主目录下的 .openclaw/skills
-    6. 用户主目录下的 .codex/skills
-    7. 用户主目录下的 .config/opencode/skills
-    8. 脚本自身所在目录的相对路径（回退，用于开发/模板场景）
-
-    Returns:
-        第一个找到的 data/ 目录路径，或 None
-    """
-    candidates: list[Path] = []
-
-    if skills_dir:
-        candidates.append(Path(skills_dir).expanduser())
-
-    env_dir = os.getenv("OPSCLI_SKILLS_DIR")
-    if env_dir:
-        candidates.append(Path(env_dir).expanduser())
-
-    home = Path.home()
-    current = Path.cwd()
-    candidates.extend([
-        current / ".claude" / "skills",
-        home / ".claude" / "skills",
-        home / ".openclaw" / "skills",
-        home / ".codex" / "skills",
-        home / ".config" / "opencode" / "skills",
-    ])
-
-    # 检查每个候选目录下是否存在 ops-dataset-query/data/dataset_fields.csv
-    for base_dir in candidates:
-        data_dir = base_dir / "ops-dataset-query" / "data"
-        if (data_dir / "dataset_fields.csv").exists():
-            return data_dir
-
-    # 回退：脚本自身所在目录的相对路径
-    fallback = Path(__file__).resolve().parent.parent / "data"
-    if (fallback / "dataset_fields.csv").exists():
-        return fallback
-
-    return None
-
-
-def load_local_index(data_dir: Path) -> tuple[dict, dict]:
-    """加载本地 CSV，构建数据集和字段的索引。
-
-    Returns:
-        (dataset_index, field_index)
-        - dataset_index: {dataset_alias: {"table_id": ..., "dataset_name": ...}}
-        - field_index: {(dataset_alias, global_alias): {"field_name": ..., "verbose_name": ...}}
-    """
-    datasets = load_csv_rows(data_dir / "datasets.csv")
-    fields = load_csv_rows(data_dir / "dataset_fields.csv")
-
-    dataset_index: dict[str, dict] = {}
-    for row in datasets:
-        alias = str(row.get("dataset_alias", "")).strip()
-        if alias:
-            dataset_index[alias] = {
-                "table_id": row.get("table_id", ""),
-                "dataset_name": row.get("dataset_name", ""),
-                "dataset_alias": alias,
-            }
-
-    field_index: dict[tuple[str, str], dict] = {}
-    for row in fields:
-        ds_alias = str(row.get("dataset_alias", "")).strip()
-        g_alias = str(row.get("global_alias", "")).strip()
-        if ds_alias and g_alias:
-            field_index[(ds_alias, g_alias)] = {
-                "field_name": row.get("field_name", ""),
-                "verbose_name": row.get("verbose_name", ""),
-                "global_alias": g_alias,
-                "field_type": row.get("field_type", ""),
-                "data_type": row.get("data_type", ""),
-            }
-
-    return dataset_index, field_index
-
-
-def resolve_dataset_alias(dataset_index: dict, alias: str) -> dict | None:
-    """通过数据集别名查找数据集信息。"""
-    return dataset_index.get(alias)
-
-
-def resolve_field_alias(field_index: dict, dataset_alias: str, global_alias: str) -> dict | None:
-    """通过数据集别名 + 字段别名查找字段信息。
-
-    当 dataset_alias 为空时，遍历所有数据集尝试匹配。
-    """
-    if dataset_alias:
-        return field_index.get((dataset_alias, global_alias))
-    # dataset_alias 为空时，尝试所有数据集
-    for (ds, ga), info in field_index.items():
-        if ga == global_alias:
-            return info
-    return None
+from core import (
+    check_mapping_hit,
+    discover_data_dir,
+    load_local_index,
+    resolve_dataset_alias,
+    resolve_field_alias,
+    try_upgrade,
+)
 
 
 def _extract_dataset_alias_from_expr(expr: str) -> str:
@@ -255,6 +156,7 @@ def map_query_results(results: list[dict], mapped_query: dict, field_index: dict
 
     Args:
         results: chart run 返回的 rows 数组
+        mapped_query: 含 _mapping 的映射结果
         field_index: 字段索引
         dataset_alias: 数据集别名
         map_to: 映射目标字段
@@ -289,50 +191,6 @@ def map_query_results(results: list[dict], mapped_query: dict, field_index: dict
     return mapped_results
 
 
-def _try_upgrade(data_dir: Path) -> bool:
-    """调用 opscli skills upgrade 更新本地数据。
-
-    当本地索引无法匹配字段时，可能是本地数据过期或未同步，
-    通过 upgrade 拉取最新远端数据后再重试。
-
-    Args:
-        data_dir: 当前数据目录路径
-
-    Returns:
-        True 表示升级成功，False 表示升级失败
-    """
-    import subprocess
-    print("[chart_map] 本地字段映射未命中，尝试 opscli skills upgrade 更新数据...", file=sys.stderr)
-    result = subprocess.run(
-        ["opscli", "skills", "upgrade", "ops-dataset-query", "--force"],
-        capture_output=True, text=True, check=False,
-    )
-    if result.returncode != 0:
-        print(f"[chart_map] upgrade 失败: {result.stderr}", file=sys.stderr)
-        return False
-    print("[chart_map] upgrade 成功，重新加载本地索引", file=sys.stderr)
-    return True
-
-
-def _check_mapping_hit(mapped: list[dict]) -> bool:
-    """检查映射结果中是否有任意字段命中了本地索引。
-
-    至少有一个 field_info 非空（包含 field_name / verbose_name 等）才算命中。
-
-    Args:
-        mapped: map_chart_queries 的返回结果
-
-    Returns:
-        True 表示至少有一个字段映射成功
-    """
-    for item in mapped:
-        for fm in item.get("_mapping", {}).get("field_mappings", []):
-            fi = fm.get("field_info", {})
-            if fi and fi.get("field_name"):
-                return True
-    return False
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="chart query 字段映射工具")
     parser.add_argument("--uuid", help="图表 UUID，直接调用 opscli 获取")
@@ -360,7 +218,10 @@ def main() -> None:
         discovered = discover_data_dir(skills_dir=args.skills_dir)
         if discovered is None:
             # 尝试自动升级安装
-            if not args.no_auto_upgrade and _try_upgrade(Path.home() / ".claude" / "skills" / "ops-dataset-query" / "data"):
+            if not args.no_auto_upgrade and try_upgrade(
+                Path.home() / ".claude" / "skills" / "ops-dataset-query" / "data",
+                caller="chart_map",
+            ):
                 discovered = discover_data_dir(skills_dir=args.skills_dir)
             if discovered is None:
                 print(
@@ -426,8 +287,8 @@ def main() -> None:
     mapped = map_chart_queries(chart_data, dataset_index, field_index, map_to=args.map_to)
 
     # 自动升级兜底：如果所有字段都没映射成功，尝试 upgrade 后重试
-    if not args.no_auto_upgrade and not _check_mapping_hit(mapped):
-        if _try_upgrade(data_dir):
+    if not args.no_auto_upgrade and not check_mapping_hit(mapped):
+        if try_upgrade(data_dir, caller="chart_map"):
             # 重新加载索引并重新映射
             dataset_index, field_index = load_local_index(data_dir)
             mapped = map_chart_queries(chart_data, dataset_index, field_index, map_to=args.map_to)

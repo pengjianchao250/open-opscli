@@ -51,7 +51,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from chart_map import discover_data_dir, load_local_index
+from core import discover_data_dir, load_local_index
 
 
 class PayloadError(Exception):
@@ -410,7 +410,7 @@ def _load_where_clause(
         conditions = []
         for raw in where_conditions:
             conditions.append(_parse_where_condition(raw, dataset_alias=dataset_alias))
-        return {"logic": "AND", "conditions": conditions}
+        return {"operator": "AND", "conditions": conditions}
 
     return None
 

@@ -37,9 +37,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from chart_map import discover_data_dir, load_local_index, map_chart_queries
-from chart_analyze import _check_mapping_hit, _try_upgrade, load_chart_data
-from core import to_float
+from chart_map import map_chart_queries
+from chart_analyze import load_chart_data
+from core import (
+    check_mapping_hit,
+    discover_data_dir,
+    load_local_index,
+    to_float,
+    try_upgrade,
+)
 
 # ---------------------------------------------------------------------------
 # 百分比列检测关键词
@@ -359,7 +365,7 @@ def main() -> None:
         discovered = discover_data_dir(skills_dir=args.skills_dir)
         if discovered is None:
             # 未找到数据目录，尝试自动升级兜底
-            if not args.no_auto_upgrade and _try_upgrade(
+            if not args.no_auto_upgrade and try_upgrade(
                 Path.home() / ".claude" / "skills" / "ops-dataset-query" / "data"
             ):
                 discovered = discover_data_dir(skills_dir=args.skills_dir)
@@ -393,9 +399,9 @@ def main() -> None:
     mapped_queries = map_chart_queries(queries, dataset_index, field_index)
 
     # 字段映射全部失败时，尝试自动升级本地索引并重试一次
-    if not args.no_auto_upgrade and not _check_mapping_hit(mapped_queries):
+    if not args.no_auto_upgrade and not check_mapping_hit(mapped_queries):
         print("[excel_export] 字段映射未命中，尝试 opscli skills upgrade 更新数据...", file=sys.stderr)
-        if _try_upgrade(data_dir):
+        if try_upgrade(data_dir):
             dataset_index, field_index = load_local_index(data_dir)
             mapped_queries = map_chart_queries(queries, dataset_index, field_index)
 

@@ -70,12 +70,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from chart_map import (
-    discover_data_dir,
-    load_local_index,
-    map_chart_queries,
-)
-from core import format_pct, safe_pct, to_float
+from chart_map import map_chart_queries
+from core import discover_data_dir, format_pct, load_local_index, safe_pct, to_float
 
 # ---------------------------------------------------------------------------
 # 异常检测阈值（常量，便于统一调整）

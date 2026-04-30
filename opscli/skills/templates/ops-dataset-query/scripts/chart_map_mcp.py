@@ -49,114 +49,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from core import load_csv_rows
-
-
-def discover_data_dir(skills_dir: str | None = None) -> Path | None:
-    """自动发现 ops-dataset-query 的数据目录。
-
-    扫描优先级（与 opscli SkillDetector 保持一致）：
-    1. 显式指定的 skills_dir
-    2. 环境变量 OPSCLI_SKILLS_DIR
-    3. 当前目录下的 .claude/skills
-    4. 用户主目录下的 .claude/skills
-    5. 用户主目录下的 .openclaw/skills
-    6. 用户主目录下的 .codex/skills
-    7. 用户主目录下的 .config/opencode/skills
-    8. 脚本自身所在目录的相对路径（回退，用于开发/模板场景）
-
-    Returns:
-        第一个找到的 data/ 目录路径，或 None
-    """
-    candidates: list[Path] = []
-
-    if skills_dir:
-        candidates.append(Path(skills_dir).expanduser())
-
-    env_dir = os.getenv("OPSCLI_SKILLS_DIR")
-    if env_dir:
-        candidates.append(Path(env_dir).expanduser())
-
-    home = Path.home()
-    current = Path.cwd()
-    candidates.extend([
-        current / ".claude" / "skills",
-        home / ".claude" / "skills",
-        home / ".openclaw" / "skills",
-        home / ".codex" / "skills",
-        home / ".config" / "opencode" / "skills",
-    ])
-
-    for base_dir in candidates:
-        data_dir = base_dir / "ops-dataset-query" / "data"
-        if (data_dir / "dataset_fields.csv").exists():
-            return data_dir
-
-    fallback = Path(__file__).resolve().parent.parent / "data"
-    if (fallback / "dataset_fields.csv").exists():
-        return fallback
-
-    return None
-
-
-def load_local_index(data_dir: Path) -> tuple[dict, dict]:
-    """加载本地 CSV，构建数据集和字段的索引。
-
-    Returns:
-        (dataset_index, field_index)
-        - dataset_index: {dataset_alias: {"table_id": ..., "dataset_name": ...}}
-        - field_index: {(dataset_alias, global_alias): {"field_name": ..., "verbose_name": ...}}
-    """
-    datasets = load_csv_rows(data_dir / "datasets.csv")
-    fields = load_csv_rows(data_dir / "dataset_fields.csv")
-
-    dataset_index: dict[str, dict] = {}
-    for row in datasets:
-        alias = str(row.get("dataset_alias", "")).strip()
-        if alias:
-            dataset_index[alias] = {
-                "table_id": row.get("table_id", ""),
-                "dataset_name": row.get("dataset_name", ""),
-                "dataset_alias": alias,
-            }
-
-    field_index: dict[tuple[str, str], dict] = {}
-    for row in fields:
-        ds_alias = str(row.get("dataset_alias", "")).strip()
-        g_alias = str(row.get("global_alias", "")).strip()
-        if ds_alias and g_alias:
-            field_index[(ds_alias, g_alias)] = {
-                "field_name": row.get("field_name", ""),
-                "verbose_name": row.get("verbose_name", ""),
-                "global_alias": g_alias,
-                "field_type": row.get("field_type", ""),
-                "data_type": row.get("data_type", ""),
-            }
-
-    return dataset_index, field_index
-
-
-def resolve_dataset_alias(dataset_index: dict, alias: str) -> dict | None:
-    """通过数据集别名查找数据集信息。"""
-    return dataset_index.get(alias)
-
-
-def resolve_field_alias(field_index: dict, dataset_alias: str, global_alias: str) -> dict | None:
-    """通过数据集别名 + 字段别名查找字段信息。
-
-    当 dataset_alias 为空时，遍历所有数据集尝试匹配。
-    """
-    if dataset_alias:
-        return field_index.get((dataset_alias, global_alias))
-    for (ds, ga), info in field_index.items():
-        if ga == global_alias:
-            return info
-    return None
+from core import discover_data_dir, load_local_index, resolve_dataset_alias, resolve_field_alias
 
 
 def _extract_dataset_alias_from_expr(expr: str) -> str:

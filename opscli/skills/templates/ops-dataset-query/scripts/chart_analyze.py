@@ -30,12 +30,16 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from chart_map import (
+from chart_map import map_chart_queries
+from core import (
+    check_mapping_hit,
     discover_data_dir,
+    format_pct,
     load_local_index,
-    map_chart_queries,
+    safe_pct,
+    to_float,
+    try_upgrade,
 )
-from core import format_pct, safe_pct, to_float
 
 # ---------------------------------------------------------------------------
 # 异常检测阈值（常量，便于统一调整）
@@ -567,49 +571,6 @@ def generate_report(
 # ---------------------------------------------------------------------------
 
 
-def _try_upgrade(data_dir: Path) -> bool:
-    """调用 opscli skills upgrade 更新本地数据。
-
-    当本地索引无法匹配字段时，可能是本地数据过期或未同步，
-    通过 upgrade 拉取最新远端数据后再重试。
-
-    Args:
-        data_dir: 当前数据目录路径
-
-    Returns:
-        True 表示升级成功，False 表示升级失败
-    """
-    print("[chart_analyze] 本地字段映射未命中，尝试 opscli skills upgrade 更新数据...", file=sys.stderr)
-    result = subprocess.run(
-        ["opscli", "skills", "upgrade", "ops-dataset-query", "--force"],
-        capture_output=True, text=True, check=False,
-    )
-    if result.returncode != 0:
-        print(f"[chart_analyze] upgrade 失败: {result.stderr}", file=sys.stderr)
-        return False
-    print("[chart_analyze] upgrade 成功，重新加载本地索引", file=sys.stderr)
-    return True
-
-
-def _check_mapping_hit(mapped_queries: list[dict]) -> bool:
-    """检查映射结果中是否有任意字段命中了本地索引。
-
-    至少有一个 field_info 非空（包含 field_name / verbose_name 等）才算命中。
-
-    Args:
-        mapped_queries: map_chart_queries 的返回结果
-
-    Returns:
-        True 表示至少有一个字段映射成功
-    """
-    for q in mapped_queries:
-        for fm in q.get("_mapping", {}).get("field_mappings", []):
-            fi = fm.get("field_info", {})
-            if fi and fi.get("field_name"):
-                return True
-    return False
-
-
 def main() -> None:
     """脚本入口。"""
     parser = argparse.ArgumentParser(description="图表数据异常检测工具")
@@ -633,8 +594,9 @@ def main() -> None:
         discovered = discover_data_dir(skills_dir=args.skills_dir)
         if discovered is None:
             # 尝试自动升级安装
-            if not args.no_auto_upgrade and _try_upgrade(
-                Path.home() / ".claude" / "skills" / "ops-dataset-query" / "data"
+            if not args.no_auto_upgrade and try_upgrade(
+                Path.home() / ".claude" / "skills" / "ops-dataset-query" / "data",
+                caller="chart_analyze",
             ):
                 discovered = discover_data_dir(skills_dir=args.skills_dir)
             if discovered is None:
@@ -671,8 +633,8 @@ def main() -> None:
             mq["result"] = queries[i]["result"]
 
     # 自动升级兜底：如果所有字段都没映射成功，尝试 upgrade 后重试
-    if not args.no_auto_upgrade and not _check_mapping_hit(mapped_queries):
-        if _try_upgrade(data_dir):
+    if not args.no_auto_upgrade and not check_mapping_hit(mapped_queries):
+        if try_upgrade(data_dir, caller="chart_analyze"):
             # 重新加载索引并重新映射
             dataset_index, field_index = load_local_index(data_dir)
             mapped_queries = map_chart_queries(queries, dataset_index, field_index)

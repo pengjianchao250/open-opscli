@@ -1,6 +1,5 @@
 ---
 name: ops-dataset-query
-mcp-version: v1.0.1
 description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执行数据查询（无状态模式）
 ---
 
@@ -90,7 +89,7 @@ auth_is_authenticated(session_id="新session_id")
 
 ## 【强制】字段存在性检查
 
-> 在 MCP 模式下，构造任何 query 参数前，必须先确认目标数据集和字段真实存在；字段不存在时，优先升级本地 Skill 数据，再重新检查。
+> 在 MCP 模式下，构造任何 query 参数前，必须先确认目标数据集和字段真实存在；**搜索结果为空时，必须先升级再重试**。
 
 标准顺序：
 
@@ -100,6 +99,23 @@ auth_is_authenticated(session_id="新session_id")
 4. 如果数据集或字段不存在，立即执行 `skills_upgrade(name="ops-dataset-query")`
 5. 升级后重新执行字段检查
 6. 若升级后仍不存在，明确告知用户当前本地索引和 metadata 中没有该字段，不要猜字段名继续查
+
+**【强制】搜索结果为空时的处理流程**：
+
+> 当 `search()` 返回空列表时，不要直接告知用户"找不到"，必须先升级本地数据再重试。
+
+```python
+# 搜索返回空结果时
+search(query="广告")
+# 返回: {"results": []}
+
+# 立即升级本地数据
+skills_upgrade(name="ops-dataset-query")
+
+# 升级后重新搜索
+search(query="广告")
+# 如果仍然为空，再告知用户
+```
 
 推荐检查方式：
 
@@ -656,32 +672,15 @@ auth_token_refresh(system="ops", session_id="860b0636485b5188a2b9b4ed5210e736")
 
 ## 数据对比与高级计算
 
-### 方案选择决策流程
+> 完整的数据对比与高级计算参考（dataComparison / MOY / ACC / PPT / 决策流程 / payload 结构）
+> 请参见 **`references/query-patterns.md`**。
 
-```
-用户需要比较两个时间段的数据？
-├── YES → 需要按时间粒度（日/月）分组展示趋势？
-│         ├── YES → 使用 MOY 高级计算（comparison 写在 select 字段内）
-│         └── NO  → 需要当期 vs 对比期汇总对比？
-│                   ├── YES → 使用 dataComparison（服务端一次 SQL，推荐首选）
-│                   └── NO  → 普通聚合 query_build_and_run
-└── NO  → 普通聚合 query_build_and_run
-```
+**使用建议**：
+- 普通聚合优先使用 `query_build_and_run`
+- 涉及高级场景时，先阅读 `references/query-patterns.md` 和 `references/data-query-service-dev-guide.md`，再手写 payload + `query_run`
 
-### dataComparison 数据对比
+### dataComparison MCP 调用示例
 
-> 服务端将当期和对比期合并为**一次 SQL**（条件聚合），每个度量字段自动裂变为 4 个字段。
-
-**字段裂变规则**（以别名 `total_price` 为例）：
-
-| 裂变字段 | 含义 |
-|---------|------|
-| `total_price` | 当期值 |
-| `last_total_price` | 对比期值 |
-| `diff_total_price` | 绝对差值（当期 - 对比期） |
-| `pct_total_price` | 变化率（差值 / ABS(对比期)），上期为 0 时返回 null |
-
-**调用示例**：
 ```python
 query_build_and_run(
     table_id=1104,
@@ -693,53 +692,7 @@ query_build_and_run(
 )
 ```
 
-**适用场景**：当期（如本月 1-22 日） vs 对比期（如上月同期 1-22 日）的汇总数据对比，**同期天数对等**。
-
----
-
-### MOY 同环比（高级计算）
-
-> 服务端通过窗口函数 `LAG()` 计算，**`comparison` 字段写在 `select` 内部**。
-
-**前提条件**：`groupBy` 中**必须同时包含日期维度和其他业务维度**。
-
-**type 枚举速查**：
-
-| 类型 | `type` 值 | groupBy 日期格式 |
-|------|-----------|----------------|
-| 月环比 | `MOM_MONTH` | `DATE_FORMAT(ds_xxx.date_id, '%Y-%m')` |
-| 日环比 | `MOM_DAY` | `DATE_FORMAT(ds_xxx.date_id, '%Y-%m-%d')` |
-| 周环比 | `MOM_WEEK` | `DATE_FORMAT(ds_xxx.date_id, '%x-%v')` |
-| 月同比 | `YOY_MONTH` | `DATE_FORMAT(ds_xxx.date_id, '%Y-%m-%d')` |
-| 年同比 | `YOY_YEAR` | `DATE_FORMAT(ds_xxx.date_id, '%Y-%m-%d')` |
-
-**`cacl_type` 字段语义**：
-
-| `cacl_type` | 字段值含义 | 说明 |
-|-------------|-----------|------|
-| `ORIGINAL` | **上期值（LAG）** | 不是当期原始值！是前一期的聚合结果 |
-| `COMPARE` | 当期 − 上期 | 正数=增长，负数=下滑 |
-| `PERCENT` | (当期 − 上期) / ABS(上期) | 环比变化率，上期为 0 时返回 null |
-
-> 💡 当期实际值 = `ORIGINAL 字段值` + `COMPARE 字段值`
-
-**适用场景**：按月/日/周分组的趋势图、时序对比。注意 MOY 用整个历史周期做 LAG，与 `dataComparison` 的同期对比不同。
-
----
-
-### ACC 累加计算
-
-> 按时间序列滚动累计（Running Total），适合 YTD 累计销售额等场景。
-
----
-
-### PPT 占比计算
-
-> 当前维度指标值 ÷ 全局总量，适合各部门销售额占比等场景。
-
----
-
-### 降级方案：多次查询客户端合并
+### 降级方案：多次查询客户端合并（MCP 示例）
 
 > **仅在 dataComparison 和 MOY 均无法满足需求时使用**。
 
@@ -924,18 +877,8 @@ skills_upgrade(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencod
 
 ## 高级查询说明
 
-详细规则见 `references/data-query-service-dev-guide.md`，核心章节：
-
-| 场景 | 参考章节 |
-|------|---------|
-| innerWhere、子查询数据集 | 第三章 数据集类型详解 |
-| WHERE 操作符、嵌套条件、translate | 第五章 WHERE 条件构建指南 |
-| dataComparison 数据对比 | 第六章 |
-| 多次查询（交叉表/透视表/堆叠图） | 第七章 |
-| SELECT 字段、聚合函数、高级计算(MOY/ACC/PPT) | 第八章 |
-| 权限占位符 | 第四章 |
-| 分页与排序 | 第九章 |
+> 完整的高级查询章节索引和数据对比参考请参见 **`references/query-patterns.md`**。
 
 **使用建议**：
 - 普通聚合优先使用 `query_build_and_run`
-- 涉及上述高级场景时，先阅读引用文档，再手写 payload + `query_run`
+- 涉及高级场景时，先阅读 `references/query-patterns.md` 和 `references/data-query-service-dev-guide.md`，再手写 payload + `query_run`
