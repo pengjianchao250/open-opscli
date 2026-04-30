@@ -1,5 +1,23 @@
 # 待归档变更记录
 
+## 2026-04-30 ops-dataset-query - P0/P1 修复 + 搜索空结果强制升级
+
+**变更原因**：ops-dataset-query Skill 存在 10 项问题（P0-P3），包括 __pycache__ 泄漏、版本号不统一、where 字段名错误、函数重复定义、文档重复、搜索空结果无升级兜底等。用户反馈搜索"广告"返回空 `[]` 后 AI 直接放弃，未触发 upgrade。
+
+**改动点**：
+1. P0-1: 新增 `.gitignore`（__pycache__/*.pyc/*.pyo/.DS_Store）
+2. P0-2: SKILL.md 版本号改为 `see data/VERSION.json`，cli.md/mcp.md 移除硬编码版本
+3. P0-3: `query_mcp.py` 修复 `"logic": "AND"` → `"operator": "AND"`
+4. P1-1: 8 个脚本的重复函数（discover_data_dir/load_local_index/resolve_dataset_alias/resolve_field_alias/try_upgrade/check_mapping_hit）统一提取到 `core.py`
+5. P1-2: 新建 `references/query-patterns.md`（225行），cli.md 和 mcp.md 的重复高级计算章节改为引用（净减 ~290 行）
+6. P2: SKILL.md/cli.md/mcp.md 增加"搜索结果为空时必须先 upgrade 再重试"的强制规则和示例
+
+**验证结果**：8 个脚本 `import` 全部通过，无循环依赖
+**影响范围**：ops-dataset-query Skill 的所有脚本和参考文档
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/`
+
+---
+
 ## 2026-04-29 opscli - 实现 Skill 委托模式，防止 AI 猜测字段名
 
 **变更原因**：测试调用记录显示，AI 在执行数据集查询时经常直接猜测字段名（如 `ds_pdTYjvLRCadv.asin`），导致 `INVALID_PAYLOAD` 错误。需要显式声明业务逻辑层 Skill 应将数据查询工作委托给 `ops-dataset-query` Skill，由其负责字段发现、metadata 验证和 payload 构造。
