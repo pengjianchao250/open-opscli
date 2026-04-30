@@ -1,7 +1,7 @@
 ---
 name: ops-skills
 description: 管理 AI 工具中已安装的 Skill 生命周期
-version: v1.0.2
+version: v1.0.4
 ---
 
 # ops-skills
@@ -20,6 +20,28 @@ version: v1.0.2
 - **升级**：拉取远端最新数据，原子替换本地文件，确保数据不中断
 
 所有操作均通过 `opscli skills` 子命令完成，Skill 脚本本身不直接调用任何后端 HTTP API。
+
+---
+
+## 运行模式判断
+
+进入本 Skill 后，不要为模式判断额外运行检测脚本，直接按下面规则判断。
+
+优先级如下：
+
+1. 如果用户明确要求使用 CLI，直接遵循用户指定
+2. 默认使用 CLI，并继续执行本文件中的 `opscli skills` 正式命令流程
+3. 如果一开始按 CLI 执行首个正式命令就失败（例如 `opscli skills ...` 不可用、当前宿主不适合跑本地命令），由于当前没有 MCP 版本，直接回退为帮助用户安装 `aukeys-opscli`
+
+建议提问方式：
+
+- `当前 CLI 入口不可用。你希望我先安装 aukeys-opscli，再继续处理这个 Skill 吗？`
+
+简化原则：
+
+- `ops-skills` 当前只提供 CLI 入口，不提供 MCP 版本
+- 不单独检查发行包、命令路径、子命令 help；用“首次正式调用是否可执行”作为唯一验证
+- CLI 首次正式调用失败后，直接回退为帮助用户安装 `aukeys-opscli`
 
 ---
 
