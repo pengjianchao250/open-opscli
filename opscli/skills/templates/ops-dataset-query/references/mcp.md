@@ -1,6 +1,6 @@
 ---
 name: ops-dataset-query
-mcp-version: v1.0.0
+mcp-version: v1.0.1
 description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执行数据查询（无状态模式）
 ---
 
@@ -79,12 +79,51 @@ auth_is_authenticated(session_id="新session_id")
 
 - 本 Skill 只负责本地字段搜索、缓存读取和辅助构造查询参数
 - 所有远端查询动作必须通过 MCP Tool 执行，**禁止直接调用后端 HTTP 接口**
-- 本地数据过期时，先执行 `skills_upgrade(name="ops-dataset-query")` 再重试查询
+- 本地数据过期或字段不存在时，先执行 `skills_upgrade(name="ops-dataset-query")` 再重试查询
 - 字段搜索结果已按相关性排序（精确匹配 > 子串匹配 > 关键词匹配）
 - `query_build` 适合常见聚合查询（select / groupBy / where / having / orderBy / limit / offset / dryRun）
 - `query_run` 适合透传完整高级 payload（`innerWhere`、`joins`、`dataComparison`、`translate` 等复杂场景）
 - `query_chart` 适合通过图表 UUID 直接获取图表结构或执行图表查询，无需手动构造 payload
 - 所有查询工作流都必须以前置的 `session_id` 有效性检测作为起点
+
+---
+
+## 【强制】字段存在性检查
+
+> 在 MCP 模式下，构造任何 query 参数前，必须先确认目标数据集和字段真实存在；字段不存在时，优先升级本地 Skill 数据，再重新检查。
+
+标准顺序：
+
+1. 先用本地索引或知识工具确认目标 `dataset_alias`
+2. 再确认目标字段是否存在于本地字段索引
+3. 如需进一步确认公式字段、聚合方式、表达式结构，再调用 `query_metadata(dataset=...)`
+4. 如果数据集或字段不存在，立即执行 `skills_upgrade(name="ops-dataset-query")`
+5. 升级后重新执行字段检查
+6. 若升级后仍不存在，明确告知用户当前本地索引和 metadata 中没有该字段，不要猜字段名继续查
+
+推荐检查方式：
+
+```python
+# 1. 先确认数据集或字段是否存在
+search(query="sales_order_d")
+search(query="order_cost")
+
+# 2. 读取详细字段信息
+fetch(id="field:sales_order_d.order_cost")
+
+# 3. 再看完整 metadata
+query_metadata(dataset="sales_order_d")
+
+# 4. 字段不存在时先升级
+skills_upgrade(name="ops-dataset-query")
+```
+
+判断原则：
+
+- `search` / `fetch` / 本地脚本结果里都找不到目标字段时，不要直接构造 payload
+- 优先接受这几类命中：`field_name`、`global_alias`、`verbose_name`
+- 公式字段必须额外看 `query_metadata`，不能只看索引名称就推断表达式
+- `query_metadata` 与本地索引同时都缺失时，才可判定当前 Skill 数据未覆盖或字段确实不可用
 
 ### 【强制】比较类查询优先级规则
 

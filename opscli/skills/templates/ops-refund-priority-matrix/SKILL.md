@@ -1,7 +1,7 @@
 ---
 name: ops-refund-priority-matrix
 description: 分析退款数据和运营建议，将问题划分为 Critical/Important/Nice-to-have 三档优先级，并输出按 ROI 排序的改进动作清单。支持 CLI 模式和 MCP 模式。
-version: v0.1.0
+version: v0.1.1
 ---
 
 # 退款优先级矩阵
@@ -22,48 +22,27 @@ version: v0.1.0
 
 ## 运行模式判断
 
-进入本 Skill 后，先判断当前环境使用哪种模式。
+进入本 Skill 后，不要为模式判断额外运行检测脚本，直接按下面规则判断。
 
 优先级如下：
 
 1. 如果用户明确要求使用 CLI 或 MCP，直接遵循用户指定
-2. 否则先检测是否安装了 `aukeys-opscli` Python 发行包
-3. 再检测 `opscli` 命令是否可执行
-4. 如果以上检测通过，读取 `references/cli.md`
-5. 如果任一检测失败，读取 `references/mcp.md`
+2. 如果当前就在 `opscli` 项目、本地终端可直接执行正式命令，默认使用 CLI，并读取 `references/cli.md`
+3. 如果当前任务本身就是基于 MCP Tool 协作，或明显无法直接走本地 CLI，再读取 `references/mcp.md`
+4. 如果一开始按 CLI 执行首个正式命令就失败（例如 `opscli query ...` 不可用、当前宿主不适合跑本地命令），直接切换到 MCP 版本，并读取 `references/mcp.md`
+5. 如果 MCP 版本也不可用（例如当前没有可用 MCP 服务、查询工具未注册、调用宿主不支持 MCP），再回退为帮助用户安装 `aukeys-opscli`
 
-推荐检测脚本：
+建议提问方式：
 
-```bash
-python - <<'PY'
-from importlib import metadata
-import shutil
-import subprocess
+- `当前 CLI 与 MCP 入口都不可用。你希望我先帮你安装 aukeys-opscli，再继续处理吗？`
 
-dist_ok = False
-opscli_ok = False
+简化原则：
 
-try:
-    metadata.version("aukeys-opscli")
-    dist_ok = True
-except metadata.PackageNotFoundError:
-    pass
-
-opscli_ok = shutil.which("opscli") is not None
-if opscli_ok:
-    opscli_ok = subprocess.run(
-        ["opscli", "query", "--help"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode == 0
-
-print({
-    "dist_ok": dist_ok,
-    "opscli_ok": opscli_ok,
-    "mode": "cli" if dist_ok and opscli_ok else "mcp",
-})
-PY
-```
+- 默认优先 CLI，因为它是 `opscli` 模块的正式入口，最贴近真实交付路径
+- 不单独检查发行包、命令路径、子命令 help；用“首次正式调用是否可执行”作为唯一验证
+- 一旦 CLI 和 MCP 都可行，优先保持单一路径，不要来回切换
+- CLI 首次正式调用失败后，直接切到 MCP，不额外询问
+- 只有在 MCP 版本也不可用时，才回退为帮助用户安装 `aukeys-opscli`
 
 ---
 

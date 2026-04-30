@@ -1,12 +1,32 @@
 ---
 name: ops-mcp
 description: 管理 opscli MCP Server 启动、用户和接入配置
-version: v0.0.1
+version: v0.0.2
 ---
 
 # ops-mcp
 
 管理 opscli MCP Server 的启动方式、多用户 API Key 和 AI 工具接入配置。所有管理动作通过 `opscli mcp` 与 `opscli-mcp` 命令完成。
+
+## 运行模式判断
+
+进入本 Skill 后，不要为模式判断额外运行检测脚本，直接按下面规则判断。
+
+优先级如下：
+
+1. 如果用户明确要求使用 CLI，直接遵循用户指定
+2. 默认使用 CLI，并继续执行本文件中的 `opscli mcp` 和 `opscli-mcp` 正式命令流程
+3. 如果一开始按 CLI 执行首个正式命令就失败（例如 `opscli mcp ...` 或 `opscli-mcp ...` 不可用、当前宿主不适合跑本地命令），由于当前没有 MCP 版本，直接回退为帮助用户安装 `aukeys-opscli`
+
+建议提问方式：
+
+- `当前 CLI 入口不可用。你希望我先安装 aukeys-opscli，再继续处理这个 Skill 吗？`
+
+简化原则：
+
+- `ops-mcp` 当前只提供 CLI 入口，不提供 MCP 版本
+- 不单独检查发行包、命令路径、子命令 help；用“首次正式调用是否可执行”作为唯一验证
+- CLI 首次正式调用失败后，直接回退为帮助用户安装 `aukeys-opscli`
 
 ## 启动服务
 

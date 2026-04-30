@@ -1,7 +1,7 @@
 ---
 name: ops-dataset-query
 description: 使用本地缓存的数据集与字段索引辅助检索和查询
-version: v0.0.2
+version: v0.0.3
 ---
 
 # ops-dataset-query
@@ -50,12 +50,50 @@ opscli auth token status
 
 - 本 Skill 只负责本地字段搜索、缓存读取和辅助构造查询参数
 - 所有远端查询动作必须通过 `opscli query` 执行，**禁止直接调用后端 HTTP 接口**
-- 本地数据过期时，先执行 `opscli skills upgrade ops-dataset-query` 再重试查询
+- 本地数据过期或字段不存在时，先执行 `opscli skills upgrade ops-dataset-query` 再重试查询
 - 字段搜索结果已按相关性排序（精确匹配 > 子串匹配 > 关键词匹配）
 - `opscli query build` 适合常见聚合查询（select / groupBy / where / having / orderBy / limit / offset / dryRun）
 - `opscli query run` 适合透传完整高级 payload（`innerWhere`、`joins`、`dataComparison`、`translate` 等复杂场景）
 - `opscli query chart` 适合通过图表 ID 直接获取查询结构并执行，支持多 query 自动合并
 - 所有查询工作流都必须以前置的 `ops-auth` 登录检测作为起点
+
+---
+
+## 【强制】字段存在性检查
+
+> 在 CLI 模式下，构造任何 query 参数前，必须先确认目标数据集和字段真实存在；字段不存在时，优先升级本地 Skill 数据，再重新检查。
+
+标准顺序：
+
+1. 先确认目标 `dataset_alias` 是否存在于 `data/datasets.csv`
+2. 再确认目标字段是否存在于 `data/dataset_fields.csv`
+3. 如需进一步确认公式字段、聚合方式、表达式结构，再执行 `opscli query metadata --dataset <dataset_alias> --pretty`
+4. 如果数据集或字段不存在，立即执行 `opscli skills upgrade ops-dataset-query`
+5. 升级后重新执行字段检查
+6. 若升级后仍不存在，明确告知用户当前本地索引和 metadata 中没有该字段，不要猜字段名继续查
+
+推荐检查方式：
+
+```bash
+# 1. 先确认数据集
+python scripts/search.py sales_order_d -n 20
+
+# 2. 在指定数据集内确认字段
+python scripts/search.py order_cost --dataset sales_order_d -n 20
+
+# 3. 再看完整 metadata
+opscli query metadata --dataset sales_order_d --pretty
+
+# 4. 字段不存在时先升级
+opscli skills upgrade ops-dataset-query
+```
+
+判断原则：
+
+- `dataset_fields.csv` 里找不到目标字段时，不要直接写 payload
+- 优先接受这几类命中：`field_name`、`global_alias`、`verbose_name`
+- 公式字段必须额外看 metadata，不能只看 CSV 名称就推断表达式
+- `query_metadata` 与本地 CSV 同时都缺失时，才可判定当前 Skill 数据未覆盖或字段确实不可用
 
 ### 【强制】比较类查询优先级规则
 
