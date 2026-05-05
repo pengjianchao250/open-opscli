@@ -31,8 +31,11 @@ opscli = "opscli.cli:app"
 opscli-mcp = "opscli.mcp.server:run"
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+# 切换为 setuptools + Cython，支持编译二进制 wheel
+requires = ["setuptools>=68", "wheel", "cython>=3"]
+build-backend = "setuptools.build_meta"
 
-[tool.hatch.build.targets.wheel]
-packages = ["opscli"]
+[tool.setuptools.packages.find]
+# setuptools 自动发现所有子包
+where = ["."]
+include = ["opscli*"]
