@@ -28,7 +28,7 @@ jobs:
           python-version: "3.11"
 
       - name: Build wheels (cibuildwheel)
-        uses: pypa/cibuildwheel@v2.19.0
+        uses: pypa/cibuildwheel@v2.21.3
         env:
           # 覆盖 Python 3.10 ~ 3.13，与 pyproject.toml 的 requires-python>=3.10 对应
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
