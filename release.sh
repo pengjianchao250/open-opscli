@@ -38,8 +38,11 @@ git pull origin master
 # ── 第二步：更新版本号（用 Python 保证跨平台兼容）────────
 echo "✏️  [2/4] 更新版本号为 $VERSION ..."
 
-python3 - <<PYEOF
-import re
+python3 - "$VERSION" <<'PYEOF'
+import re, sys
+
+# shell 通过 argv[1] 传入版本号，避免 heredoc 变量展开问题
+VERSION = sys.argv[1]
 
 # 更新 pyproject.toml 中的 version 字段
 with open("pyproject.toml", "r") as f:
