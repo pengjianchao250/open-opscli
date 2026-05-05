@@ -55,10 +55,12 @@ jobs:
 
   # ──────────────────────────────────────────────────────────
   # 构建 sdist（仅含 __init__.py + 模板数据，不含业务源码）
+  # continue-on-error: true —— sdist 失败不阻塞三平台 wheel 的发版
   # ──────────────────────────────────────────────────────────
   build_sdist:
     name: Build source distribution
     runs-on: ubuntu-latest
+    continue-on-error: true   # sdist 非关键路径，失败不影响 wheel 发布
     steps:
       - uses: actions/checkout@v4
 
@@ -82,10 +84,14 @@ jobs:
 
   # ──────────────────────────────────────────────────────────
   # 汇总所有产物并发布到正式 PyPI
+  # 只要三平台 wheel 全部成功即可发布，sdist 失败或取消不阻塞
   # ──────────────────────────────────────────────────────────
   publish:
     name: Publish to PyPI
-    needs: [build_wheels, build_sdist]   # 必须等待所有构建成功
+    needs: [build_wheels, build_sdist]
+    # build_wheels 全部成功 且 未被取消 即触发发布
+    # build_sdist 使用 continue-on-error，其 result 为 success/failure 均不影响此条件
+    if: ${{ !cancelled() && needs.build_wheels.result == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -96,11 +102,13 @@ jobs:
           merge-multiple: true
           path: dist/
 
-      - name: Download sdist artifact
+      - name: Download sdist artifact (optional)
+        # sdist 可能因 build_sdist 失败而不存在，ignore-not-found 避免发布中断
         uses: actions/download-artifact@v4
         with:
           name: sdist
           path: dist/
+        continue-on-error: true
 
       - name: List dist contents
         run: ls -lh dist/
