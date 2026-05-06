@@ -119,10 +119,8 @@ jobs:
         run: ls -lh dist/
 
       - name: Publish to PyPI
-        # 锁定 v1.8.14：使用 API Token 认证；verify-metadata=false 跳过本地 twine 检查
-        # 原因：setuptools>=69 生成 Metadata-Version 2.4，而 v1.8.14 捆绑的 twine 5.0.0
-        # 只支持到 2.3，本地校验误报 Name/Version 缺失；PyPI 服务端本身支持 2.4，可直接上传
-        uses: pypa/gh-action-pypi-publish@v1.8.14
+        # v1.9.0：捆绑 twine>=5.1.0，支持 Metadata-Version 2.4（setuptools>=69 的产物）
+        # OIDC 在此版本为可选，password 指定后直接走 API Token 路径
+        uses: pypa/gh-action-pypi-publish@v1.9.0
         with:
           password: ${{ secrets.PIPY_OPEN_OPSCLI }}
-          verify-metadata: false
