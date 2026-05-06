@@ -28,13 +28,20 @@ class BuildPyExcludeSource(build_py):
     满足铁律3（两种导入方式须同时可用）。
     """
 
+    # 不编译、需保留源码的文件名集合（Typer/FastMCP 依赖运行时反射）
+    _KEEP_SOURCE = {"__init__", "cli", "server"}
+    # 不编译、需保留源码的目录路径片段
+    _KEEP_SOURCE_DIRS = {"mcp/tools"}
+
     def find_package_modules(self, package, package_dir):
         modules = super().find_package_modules(package, package_dir)
-        # 只保留 __init__ 模块；其余 .py 已由 Cython 编译为 .so/.pyd
+        # 保留 __init__.py + 所有不参与 Cython 编译的纯 Python 文件
+        # 其余 .py 已由 Cython 编译为 .so/.pyd，从 wheel 中排除源码
         return [
             (pkg, mod, filepath)
             for pkg, mod, filepath in modules
-            if mod == "__init__"
+            if mod in self._KEEP_SOURCE
+            or any(d in filepath.replace(os.sep, "/") for d in self._KEEP_SOURCE_DIRS)
         ]
 
 
@@ -58,6 +65,16 @@ def get_extensions():
 
         # 排除 skills/templates 下的独立脚本（安装后供用户直接运行，不作为模块导入）
         if "opscli/skills/templates/" in f_unix:
+            continue
+
+        # 排除所有 cli.py —— Typer 依赖 inspect.signature() 解析参数默认值，
+        # Cython 编译后 cyfunction 丢失签名信息，导致 typer.Option() 无法被正确识别
+        if os.path.basename(f) == "cli.py":
+            continue
+
+        # 排除 MCP server 和 tools —— FastMCP 用 Pydantic TypeAdapter 解析函数类型注解，
+        # Cython 编译后 cyfunction 无法被 Pydantic 生成 schema，导致启动报错
+        if "opscli/mcp/server.py" in f_unix or "opscli/mcp/tools/" in f_unix:
             continue
 
         # 路径转模块名：opscli/auth/cli.py → opscli.auth.cli
