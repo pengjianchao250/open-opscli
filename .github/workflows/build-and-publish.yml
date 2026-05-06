@@ -121,7 +121,7 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          # PYPI_API_TOKEN 需在 GitHub 仓库 Settings → Secrets 中配置
+          # user=__token__ + password 强制走 API Token 路径，跳过 Trusted Publishing（OIDC）
+          user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
-          # 禁用 Trusted Publishing（OIDC attestations），强制使用 API Token
           attestations: false
