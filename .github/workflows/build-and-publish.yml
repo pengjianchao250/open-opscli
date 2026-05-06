@@ -123,3 +123,5 @@ jobs:
         with:
           # PYPI_API_TOKEN 需在 GitHub 仓库 Settings → Secrets 中配置
           password: ${{ secrets.PYPI_API_TOKEN }}
+          # 禁用 Trusted Publishing（OIDC attestations），强制使用 API Token
+          attestations: false
