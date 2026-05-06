@@ -3,6 +3,11 @@ dist/
 build/
 *.egg-info/
 
+# Cython 编译产物
+opscli/**/*.c
+opscli/**/*.so
+opscli/**/*.pyd
+
 # Python 缓存
 __pycache__/
 *.pyc

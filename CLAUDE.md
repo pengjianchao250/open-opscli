@@ -521,8 +521,11 @@ with self._thread_lock:
 cd /Users/mask/python3/opscli
 uv venv
 source .venv/bin/activate
-uv pip install -e ".[dev]"
+SKIP_CYTHON=1 uv pip install -e ".[dev]"
 ```
+
+> **说明**：`SKIP_CYTHON=1` 跳过 Cython 编译，本地开发以纯 Python 模式安装，秒装且方便调试。
+> 生产构建（`python -m build` / GitHub Actions）不设置此变量，会正常编译为 `.so` 二进制。
 
 ### 验证安装
 

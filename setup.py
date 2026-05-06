@@ -12,6 +12,10 @@ from setuptools.command.build_py import build_py
 from Cython.Build import cythonize
 from setuptools.extension import Extension
 
+# 本地开发时设置 SKIP_CYTHON=1 跳过 Cython 编译，加速安装
+# 用法：SKIP_CYTHON=1 pip install -e .
+_SKIP_CYTHON = os.environ.get("SKIP_CYTHON", "").strip() in ("1", "true", "yes")
+
 
 def _read_version():
     """从 pyproject.toml 读取版本号，保证 setup.py 与 pyproject.toml 单一来源同步。"""
@@ -48,10 +52,17 @@ class BuildPyExcludeSource(build_py):
 def get_extensions():
     """收集所有需要 Cython 编译的 .py 文件。
 
+    当环境变量 SKIP_CYTHON=1 时返回空列表，跳过编译（本地开发用）。
+    生产构建（GitHub Actions）不设置此变量，正常编译。
+
     排除规则：
     - __init__.py：保留为纯 Python，保证包结构和双路径导入（铁律3）
     - skills/templates/**：Skill 独立脚本，面向用户安装后直接使用，不应编译
+    - cli.py：Typer 依赖运行时签名反射，Cython 编译后会破坏
+    - mcp/server.py / mcp/tools/*.py：FastMCP 依赖类型注解反射
     """
+    if _SKIP_CYTHON:
+        return []
     py_files = glob.glob("opscli/**/*.py", recursive=True)
     extensions = []
 
@@ -85,8 +96,9 @@ def get_extensions():
         extensions,
         compiler_directives={
             "language_level": "3",
-            "boundscheck": False,   # 关闭边界检查，提升性能
-            "wraparound": False,    # 关闭负索引包装，提升性能
+            # 不设置 boundscheck/wraparound，保留 Python 默认安全检查
+            # 这两个指令曾导致 Segmentation Fault：关闭越界检查后，
+            # list[越界索引] / list[-1] 不抛 IndexError 而是直接访问非法内存
         },
         nthreads=4,
     )
@@ -105,5 +117,6 @@ setup(
             "skills/templates/**/**/*",
         ],
     },
-    cmdclass={"build_py": BuildPyExcludeSource},
+    # 跳过编译时使用默认 build_py，正常打包所有 .py 源码
+    cmdclass={} if _SKIP_CYTHON else {"build_py": BuildPyExcludeSource},
 )
