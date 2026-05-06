@@ -118,9 +118,15 @@ jobs:
       - name: List dist contents
         run: ls -lh dist/
 
-      - name: Publish to PyPI
-        # v1.9.0：捆绑 twine>=5.1.0，支持 Metadata-Version 2.4（setuptools>=69 的产物）
-        # OIDC 在此版本为可选，password 指定后直接走 API Token 路径
-        uses: pypa/gh-action-pypi-publish@v1.9.0
+      - name: Set up Python for publish
+        uses: actions/setup-python@v5
         with:
-          password: ${{ secrets.PIPY_OPEN_OPSCLI }}
+          python-version: "3.11"
+
+      - name: Publish to PyPI
+        # 直接用最新 twine 上传，彻底绕开 action 内置的旧版 twine（不支持 Metadata-Version 2.4）
+        run: |
+          pip install --quiet twine
+          twine upload dist/* --username __token__ --password "$PYPI_TOKEN" --skip-existing
+        env:
+          PYPI_TOKEN: ${{ secrets.PIPY_OPEN_OPSCLI }}
