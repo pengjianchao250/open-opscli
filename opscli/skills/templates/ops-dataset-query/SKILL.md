@@ -13,10 +13,11 @@ version: see data/VERSION.json
 ## 何时使用本 Skill
 
 - 需要搜索可用数据集、维度、指标和字段别名
-- 需要构造常见聚合查询或高级 payload
-- 需要执行 `dataComparison`、`MOY`、`ACC`、`PPT` 等复杂查询
+- 需要执行普通聚合查询、数据对比（环比/同比）、MOY 趋势分析
 - 需要通过图表 ID 或 chart UUID 直接获取查询结构
 - 需要刷新本地缓存的数据集索引和查询元数据
+
+> **简化接口优先**：普通聚合、数据对比、MOY 趋势、子查询等场景，优先使用简化接口（`opscli query simple` / `query_simple`），服务端自动处理 `innerWhere`、`translate`、`MOY` 展开等技术细节。仅当简化接口不满足需求时，才手写完整 payload。
 
 ---
 
@@ -48,14 +49,17 @@ version: see data/VERSION.json
 
 ## 阅读入口
 
+- **简化接口说明**：`references/simple-query-guide.md`（推荐优先阅读）
 - CLI 模式：继续阅读 `references/cli.md`
 - MCP 模式：继续阅读 `references/mcp.md`
-- 无论哪种模式，遇到复杂查询都必须同步参考 `references/data-query-service-dev-guide.md`
+- 完整 query payload 规范：`references/data-query-service-dev-guide.md`（仅当简化接口不满足需求时参考）
 
 ---
 
 ## 使用原则
 
+- **简化接口优先**：普通聚合、数据对比、MOY 趋势、子查询等场景，优先使用简化接口（`opscli query simple` / `query_simple`），参数结构见 `references/simple-query-guide.md`
+- 仅当简化接口不满足需求时（如复杂的 `joins`、`union`、自定义子查询），才手写完整 query payload + `opscli query run` / `query_run`
 - 所有远端查询动作必须统一走选定模式下的正式查询入口，禁止直接调用后端 HTTP 接口
 - 认证检查仍然是强制门禁，具体流程以对应 reference 文档为准
 - 查询前优先检查目标 `dataset_alias`、`field_name`、`global_alias`、`verbose_name` 是否存在于本地索引或 metadata；不要先猜字段再直接构造 payload
@@ -63,6 +67,5 @@ version: see data/VERSION.json
 - 如果字段或数据集不存在，优先执行当前模式下的 Skill 升级，再重新检查一次
 - CLI 模式使用 `opscli skills upgrade ops-dataset-query`；MCP 模式使用 `skills_upgrade(name="ops-dataset-query")`
 - 升级后若字段仍不存在，应明确告知用户当前本地索引和 metadata 中没有该字段，不要伪造字段名继续查询
-- 字段搜索、payload 构造、图表查询、数据更新都以对应模式文档和 `references/data-query-service-dev-guide.md` 为准
 - 涉及环比、同比、趋势对比时，优先使用服务端能力，不要默认降级为多次查询后本地拼接
 - 处理 chart 查询时，优先采用服务端返回的 `datasets + queries` 双层结构：`datasets` 负责公共字段语义，`queries` 负责执行结构；本地 CSV 仅作字段映射兜底

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import typer
 
@@ -208,6 +209,66 @@ def build(
         }
     except Exception as exc:
         _emit(_error_payload("query build-and-run" if run else "query build", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
+@app.command("simple")
+def simple(
+    table_id: int = typer.Option(..., "--table-id", help="数据集 ID"),
+    payload_file: str | None = typer.Option(None, "--payload", help="简化查询 JSON 文件路径（与 --json 二选一）"),
+    payload_json: str | None = typer.Option(None, "--json", help="简化查询 JSON 字符串（与 --payload 二选一）"),
+    output: str | None = typer.Option(None, "--output", help="将 payload 写入指定文件"),
+    run: bool = typer.Option(False, "--run", help="构造后立即执行查询"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """基于简化参数构造 simple query payload 并可选执行。"""
+    manager = QueryManager()
+    try:
+        if payload_file and payload_json:
+            raise InvalidPayloadError("--payload 和 --json 只能使用一种")
+
+        simple_params: dict = {}
+        if payload_file:
+            pf = Path(payload_file).expanduser()
+            if not pf.exists():
+                raise InvalidPayloadError(f"payload 文件不存在: {pf}")
+            simple_params = json.loads(pf.read_text(encoding="utf-8"))
+        elif payload_json:
+            simple_params = json.loads(payload_json)
+
+        kwargs: dict[str, object] = {"table_id": table_id}
+
+        key_map = {
+            "dimensions": "dimensions",
+            "metrics": "metrics",
+            "filters": "filters",
+            "dataComparison": "data_comparison",
+            "orderBy": "order_by",
+        }
+        for key, kwarg_key in key_map.items():
+            if key in simple_params:
+                kwargs[kwarg_key] = simple_params[key]
+
+        if "limit" in simple_params:
+            kwargs["limit"] = simple_params["limit"]
+        if "offset" in simple_params:
+            kwargs["offset"] = simple_params["offset"]
+        if "dryRun" in simple_params:
+            kwargs["dry_run"] = simple_params["dryRun"]
+        if output:
+            kwargs["output_path"] = output
+
+        result = manager.build_simple_and_run(**kwargs) if run else manager.build_simple(**kwargs)
+        payload = {
+            "success": True,
+            "command": "query simple-run" if run else "query simple",
+            "data": result,
+            "error": None,
+        }
+    except Exception as exc:
+        _emit(_error_payload("query simple-run" if run else "query simple", exc), pretty)
         raise typer.Exit(1)
 
     _emit(payload, pretty)

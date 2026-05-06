@@ -244,6 +244,74 @@ class QueryManager:
             "result": query_result,
         }
 
+    # ── 简化查询支持（Simple Query API）────────────────────────────────
+
+    def build_simple(
+        self,
+        *,
+        table_id: int,
+        dimensions: list[dict] | None = None,
+        metrics: list[dict] | None = None,
+        filters: list[dict] | None = None,
+        data_comparison: dict | None = None,
+        order_by: list[dict] | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        dry_run: bool = False,
+        output_path: str | None = None,
+    ) -> dict:
+        """基于简化参数构造标准 simple query payload。
+
+        参数格式：
+        - dimensions: [{"field": "ds_xxx.dept_name", "alias": "f_xxx"}, ...]
+        - metrics: [{"field": "ds_xxx.price", "aggregation": "SUM", "alias": "f_xxx"}, ...]
+        - filters: [{"field": "ds_xxx.platform_name", "operator": "in", "value": ["Amazon"]}, ...]
+        - data_comparison: {"field": "ds_xxx.date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"}
+        - order_by: [{"field": "f_xxx", "desc": true}, ...]
+        """
+        if not dimensions and not metrics:
+            raise InvalidPayloadError("至少需要提供一个 dimension 或 metric")
+
+        payload: dict[str, object] = {
+            "tableId": table_id,
+        }
+
+        if dimensions:
+            payload["dimensions"] = dimensions
+        if metrics:
+            payload["metrics"] = metrics
+        if filters:
+            payload["filters"] = filters
+        if data_comparison:
+            payload["dataComparison"] = data_comparison
+        if order_by:
+            payload["orderBy"] = order_by
+
+        payload["limit"] = limit
+        payload["offset"] = offset
+
+        if dry_run:
+            payload["dryRun"] = True
+
+        if output_path:
+            output_file = Path(output_path).expanduser()
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        return {
+            "payload": payload,
+            "output": str(Path(output_path).expanduser()) if output_path else None,
+        }
+
+    def build_simple_and_run(self, **kwargs) -> dict:
+        """先构造简化 payload，再立即执行查询。"""
+        build_result = self.build_simple(**kwargs)
+        query_result = self.client.cli_simple_query(build_result["payload"])
+        return {
+            **build_result,
+            "result": query_result,
+        }
+
     # ── chart query 支持 ──────────────────────────────────────────────
 
     def fetch_chart_queries(self, chart_uuid: str) -> list[dict]:

@@ -5,6 +5,7 @@
 - query_build           — 构造标准 query payload（不执行）
 - query_run             — 读取本地 payload 文件并执行查询
 - query_build_and_run   — 构造 payload 并立即执行，一步返回结果
+- query_simple          — 基于简化参数直接执行查询（推荐优先使用）
 - query_chart           — 通过 chart_uuid 获取/执行图表查询
 - query_chart_doc       — 通过 chart_uuid 生成图表 API 调用 Markdown 文档
 
@@ -89,6 +90,62 @@ async def query_build(
             dry_run=dry_run,
             data_comparison=data_comparison,
             output_path=output_path,
+            skills_dir=skills_dir,
+        )
+        return _ok(result)
+    except Exception as exc:
+        return _err(exc)
+
+
+async def query_simple(
+    table_id: int,
+    dimensions: list[dict] | None = None,
+    metrics: list[dict] | None = None,
+    filters: list[dict] | None = None,
+    data_comparison: dict | None = None,
+    order_by: list[dict] | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    dry_run: bool = False,
+    skills_dir: str | None = None,
+    session_id: str | None = None,
+    jwt: str | None = None,
+) -> dict:
+    """基于简化参数直接执行查询。服务端自动处理 innerWhere、translate、MOY 展开等技术细节。
+
+    推荐优先使用本工具替代 query_build_and_run，无需理解 innerWhere、translate、
+    cacl_type 等复杂概念，仅需 7 个纯业务参数即可完成聚合、对比、趋势分析。
+
+    Args:
+        table_id:        数据集 ID（必填）
+        dimensions:      维度列表，如 [{"field": "ds_xxx.dept_name", "alias": "f_dept"}]
+        metrics:         指标列表，如 [{"field": "ds_xxx.price", "aggregation": "SUM", "alias": "f_price"}]
+        filters:         过滤条件，如 [{"field": "ds_xxx.platform_name", "operator": "in", "value": ["Amazon"]}]
+        data_comparison: 数据对比，如 {"field": "ds_xxx.date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"}
+        order_by:        排序规则，如 [{"field": "f_price", "desc": True}]
+        limit:           返回行数限制（默认 20）
+        offset:          分页偏移（默认 0）
+        dry_run:         是否仅验证不执行
+        skills_dir:      可选，自定义 Skills 目录
+        session_id:      可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
+        jwt:             可选，已有 JWT（为空则自动加载本地缓存的）
+    """
+    from opscli.mcp.tools.helpers import _get_auth_pair
+
+    sid, jw = _get_auth_pair("ops", session_id, jwt)
+    if not sid:
+        return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"))
+    try:
+        result = _query_manager(jwt=jw, session_id=sid).build_simple_and_run(
+            table_id=table_id,
+            dimensions=dimensions,
+            metrics=metrics,
+            filters=filters,
+            data_comparison=data_comparison,
+            order_by=order_by,
+            limit=limit,
+            offset=offset,
+            dry_run=dry_run,
             skills_dir=skills_dir,
         )
         return _ok(result)
@@ -267,6 +324,7 @@ async def query_chart_doc(
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS = [
     query_metadata,
+    query_simple,
     query_build,
     query_run,
     query_build_and_run,

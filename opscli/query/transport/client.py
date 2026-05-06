@@ -288,3 +288,20 @@ class QueryClient:
             business_error_cls=RemoteBusinessError,
             bad_json_error_cls=BadRemoteJsonError,
         )
+
+    def cli_simple_query(self, payload: dict) -> dict:
+        """转发简化查询请求到 auto-scheduler 的 cli-query/simple 接口。"""
+        headers, cookies = self._get_auth("ops")
+        response = httpx.post(
+            f"{self.ops_url}/v1/data-metrics/cli-query/simple",
+            json=payload,
+            headers=headers,
+            cookies=cookies,
+            timeout=30,
+        )
+        return parse_remote_response(
+            response,
+            http_error_cls=RemoteHttpError,
+            business_error_cls=RemoteBusinessError,
+            bad_json_error_cls=BadRemoteJsonError,
+        )

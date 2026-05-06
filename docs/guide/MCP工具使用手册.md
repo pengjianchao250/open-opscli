@@ -33,6 +33,7 @@ opscli MCP Tools
 │   └── amazon_history
 ├── query
 │   ├── query_metadata
+│   ├── query_simple
 │   ├── query_build
 │   ├── query_run
 │   ├── query_build_and_run
@@ -657,7 +658,74 @@ query_metadata(dataset="sales_order_d", skills_dir="/Users/mask/.config/opencode
 
 ---
 
-### 5.2 `query_build`
+### 5.2 `query_simple`
+
+基于简化参数直接执行查询。服务端自动处理 `innerWhere`、`translate`、`MOY` 展开等技术细节。**需要认证**。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `table_id` | integer | **是** | - | 数据集 ID |
+| `dimensions` | list[dict] | 否 | - | 维度列表，`{"field": "ds_xxx.name", "alias": "f_xxx", "format": "..."}` |
+| `metrics` | list[dict] | 否 | - | 指标列表，`{"field": "...", "aggregation": "SUM", "alias": "...", "comparison": "MOY"}` |
+| `filters` | list[dict] | 否 | - | 过滤条件，`{"field": "...", "operator": "in", "value": [...]}` |
+| `data_comparison` | dict | 否 | - | 数据对比，`{"field": "...", "startDate": "...", "endDate": "..."}` |
+| `order_by` | list[dict] | 否 | - | 排序规则，`{"field": "f_xxx", "desc": true}` |
+| `limit` | integer | 否 | 20 | 返回行数限制 |
+| `offset` | integer | 否 | 0 | 分页偏移 |
+| `dry_run` | boolean | 否 | false | 是否仅验证不执行 |
+| `skills_dir` | string | 否 | - | 自定义 Skills 目录 |
+| `session_id` | string | 否 | - | OAuth Session ID |
+| `jwt` | string | 否 | - | JWT Token |
+
+**调用示例**
+
+```python
+# 普通聚合查询
+query_simple(
+    table_id=1,
+    dimensions=[{"field": "dept_name", "alias": "f_dept"}],
+    metrics=[{"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"}],
+    filters=[{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}],
+    limit=10,
+    session_id="xxx"
+)
+
+# 数据对比（环比）
+query_simple(
+    table_id=1,
+    dimensions=[{"field": "dept_name", "alias": "f_dept"}],
+    metrics=[{"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"}],
+    filters=[{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}],
+    data_comparison={"field": "date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"},
+    limit=10,
+    session_id="xxx"
+)
+
+# MOY 月环比趋势
+query_simple(
+    table_id=1,
+    dimensions=[
+        {"field": "dept_name", "alias": "f_dept"},
+        {"field": "date_id", "alias": "f_month", "format": "%Y-%m"}
+    ],
+    metrics=[
+        {"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"},
+        {"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_moy", "comparison": "MOY", "moyType": "MOM_MONTH"}
+    ],
+    filters=[{"field": "date_id", "operator": "between", "value": ["2026-03-01", "2026-04-22"]}],
+    order_by=[{"field": "f_month", "desc": True}],
+    limit=20,
+    session_id="xxx"
+)
+```
+
+> 完整简化参数说明见 `opscli/skills/templates/ops-dataset-query/references/simple-query-guide.md`。
+
+---
+
+### 5.3 `query_build`
 
 基于简化参数构造标准 query payload（不执行查询）。**不需要认证**。
 
@@ -710,7 +778,7 @@ query_build(
 
 ---
 
-### 5.3 `query_run`
+### 5.4 `query_run`
 
 读取本地 payload JSON 文件并转发至服务端执行查询。
 
@@ -734,7 +802,7 @@ query_run(
 
 ---
 
-### 5.4 `query_build_and_run`
+### 5.5 `query_build_and_run`
 
 构造 query payload 并立即执行，一步返回数据结果。
 
@@ -768,7 +836,7 @@ query_build_and_run(
 
 ---
 
-### 5.5 `query_chart`
+### 5.6 `query_chart`
 
 通过 `chart_uuid` 获取图表查询结构，可选立即执行所有查询。
 
@@ -845,7 +913,7 @@ query_chart(
 
 ---
 
-### 5.6 `query_chart_doc`
+### 5.7 `query_chart_doc`
 
 通过 `chart_uuid` 生成图表 API 调用 Markdown 文档，包含查询结构、字段映射、过滤规则与样例。**需要认证**。
 
@@ -1106,6 +1174,7 @@ result = query_chart(
 | `amazon_schema` | 否 | - |
 | `amazon_history` | 否 | - |
 | `query_metadata` | 否 | - |
+| `query_simple` | **是** | 可传 session_id / jwt |
 | `query_build` | 否 | - |
 | `query_run` | **是** | 可传 session_id / jwt |
 | `query_build_and_run` | **是** | 可传 session_id / jwt |
@@ -1141,6 +1210,7 @@ result = query_chart(
 | Amazon | `amazon_schema` | `opscli amazon schema` |
 | Amazon | `amazon_history` | `opscli amazon history` |
 | 查询 | `query_metadata` | `opscli query metadata` |
+| 查询 | `query_simple` | `opscli query simple` |
 | 查询 | `query_build` | `opscli query build` |
 | 查询 | `query_run` | `opscli query run` |
 | 查询 | `query_build_and_run` | `opscli query build --run` |

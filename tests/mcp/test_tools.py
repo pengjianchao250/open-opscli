@@ -27,6 +27,7 @@ def test_mcp_exposes_expected_tools():
     assert "auth_login_start" in names
     assert "auth_token_refresh" in names
     assert "skills_install" in names
+    assert "query_simple" in names
     assert "query_chart" in names
     assert "mcp_user_list" not in names
 

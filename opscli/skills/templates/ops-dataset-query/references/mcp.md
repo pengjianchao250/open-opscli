@@ -5,7 +5,7 @@ description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执
 
 # ops-dataset-query (MCP 无状态模式)
 
-使用 MCP Tool 查询本地缓存的数据集与字段索引，通过 `query_build_and_run`、`query_run` 等 Tool 执行数据查询。**无状态模式**：服务器不保存用户 OAuth 凭证，所有认证信息由调用方传入。
+使用 MCP Tool 查询本地缓存的数据集与字段索引，通过 `query_simple`、`query_build_and_run`、`query_run` 等 Tool 执行数据查询。**无状态模式**：服务器不保存用户 OAuth 凭证，所有认证信息由调用方传入。
 
 ---
 
@@ -50,7 +50,7 @@ fetch(id="field:sales_order_d.order_cost")  # 返回该字段的详细信息
 - **若 `session_id` 过期**：
   1. 调用 `auth_login_start()` 重新发起 Device Flow
   2. 重复上述授权流程
-- 只有认证状态确认正常后，才允许继续执行 `query_metadata`、`query_build`、`query_run`、`query_build_and_run`、`query_chart`、`skills_upgrade`
+- 只有认证状态确认正常后，才允许继续执行 `query_metadata`、`query_simple`、`query_build`、`query_run`、`query_build_and_run`、`query_chart`、`skills_upgrade`
 
 **标准前置流程（MCP Tool 调用）**：
 
@@ -80,8 +80,9 @@ auth_is_authenticated(session_id="新session_id")
 - 所有远端查询动作必须通过 MCP Tool 执行，**禁止直接调用后端 HTTP 接口**
 - 本地数据过期或字段不存在时，先执行 `skills_upgrade(name="ops-dataset-query")` 再重试查询
 - 字段搜索结果已按相关性排序（精确匹配 > 子串匹配 > 关键词匹配）
-- `query_build` 适合常见聚合查询（select / groupBy / where / having / orderBy / limit / offset / dryRun）
-- `query_run` 适合透传完整高级 payload（`innerWhere`、`joins`、`dataComparison`、`translate` 等复杂场景）
+- **`query_simple` 优先**：普通聚合、数据对比、MOY 趋势、子查询等场景，优先使用简化接口（详见 `references/simple-query-guide.md`）
+- `query_build` 适合基于 `--dimension`/`--metric` 参数快速构造标准 query payload
+- `query_run` 适合透传完整高级 payload（仅当简化接口不满足需求时使用）
 - `query_chart` 适合通过图表 UUID 直接获取图表结构或执行图表查询，无需手动构造 payload
 - 所有查询工作流都必须以前置的 `session_id` 有效性检测作为起点
 
@@ -508,9 +509,43 @@ query_build(
 
 ---
 
+### `query_simple`（推荐优先使用）
+
+基于简化参数直接执行查询。服务端自动处理 `innerWhere`、`translate`、`MOY` 展开等技术细节。**需要认证**。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `table_id` | integer | **是** | 数据集 ID |
+| `dimensions` | list[dict] | 否 | 维度列表，`{"field": "dept_name", "alias": "f_xxx", "format": "..."}` |
+| `metrics` | list[dict] | 否 | 指标列表，`{"field": "...", "aggregation": "SUM", "alias": "...", "comparison": "MOY"}` |
+| `filters` | list[dict] | 否 | 过滤条件，`{"field": "...", "operator": "in", "value": [...]}` |
+| `data_comparison` | dict | 否 | 数据对比，`{"field": "...", "startDate": "...", "endDate": "..."}` |
+| `order_by` | list[dict] | 否 | 排序，`{"field": "f_xxx", "desc": true}` |
+| `limit` | integer | 否 | 返回行数上限，默认 20 |
+| `offset` | integer | 否 | 偏移量，默认 0 |
+| `session_id` | string | **是** | 用户授权后获得的 session_id |
+| `jwt` | string | 否 | JWT，不传则自动用 session_id 换取 |
+| `skills_dir` | string | 否 | 指定 Skill 安装根目录 |
+
+**调用示例**：
+```python
+query_simple(
+    table_id=1,
+    dimensions=[{"field": "dept_name", "alias": "f_dept"}],
+    metrics=[{"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"}],
+    filters=[{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}],
+    limit=10,
+    session_id="860b0636485b5188a2b9b4ed5210e736"
+)
+```
+
+**简化参数结构**详见 `references/simple-query-guide.md`。
+
+---
+
 ### `query_run`
 
-读取本地 payload JSON 文件并转发至服务端执行查询。**需要认证**。
+读取本地 payload JSON 文件并转发至服务端执行查询。仅当简化接口无法满足需求时使用。**需要认证**。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -672,46 +707,70 @@ auth_token_refresh(system="ops", session_id="860b0636485b5188a2b9b4ed5210e736")
 
 ## 数据对比与高级计算
 
-> 完整的数据对比与高级计算参考（dataComparison / MOY / ACC / PPT / 决策流程 / payload 结构）
-> 请参见 **`references/query-patterns.md`**。
+**使用优先级**：
+1. **`query_simple`**（推荐）：普通聚合、数据对比、MOY 趋势、子查询等场景
+2. **`query_build_and_run`**：基于 `dimensions`/`metrics` 参数快速构造标准 query payload
+3. **`query_run`**：仅当简化接口无法满足需求时，手写完整 payload 透传
 
-**使用建议**：
-- 普通聚合优先使用 `query_build_and_run`
-- 涉及高级场景时，先阅读 `references/query-patterns.md` 和 `references/data-query-service-dev-guide.md`，再手写 payload + `query_run`
+> 简化接口完整说明见 **`references/simple-query-guide.md`**。
+> 完整 query payload 规范（innerWhere / translate / 权限占位符等）见 **`references/data-query-service-dev-guide.md`**。
 
-### dataComparison MCP 调用示例
+### dataComparison 简化调用示例
 
 ```python
-query_build_and_run(
-    table_id=1104,
-    dimensions=["dept_name"],
-    metrics=["price:sum:total_price", "order_qty:sum:total_qty"],
-    where_conditions=["date_id|>=|\"2026-04-01\""],
-    data_comparison="date_id,2026-03-01,2026-03-22",
+query_simple(
+    table_id=1,
+    dimensions=[{"field": "dept_name", "alias": "f_dept"}],
+    metrics=[{"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"}],
+    filters=[{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}],
+    data_comparison={"field": "date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"},
+    limit=10,
     session_id="860b0636485b5188a2b9b4ed5210e736"
 )
+# 返回列：f_dept, f_fee_sum, last_f_fee_sum, diff_f_fee_sum, pct_f_fee_sum
+```
+
+### MOY 月环比简化调用示例
+
+```python
+query_simple(
+    table_id=1,
+    dimensions=[
+        {"field": "dept_name", "alias": "f_dept"},
+        {"field": "date_id", "alias": "f_month", "format": "%Y-%m"}
+    ],
+    metrics=[
+        {"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"},
+        {"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_moy", "comparison": "MOY", "moyType": "MOM_MONTH"}
+    ],
+    filters=[{"field": "date_id", "operator": "between", "value": ["2026-03-01", "2026-04-22"]}],
+    order_by=[{"field": "f_month", "desc": True}],
+    limit=20,
+    session_id="860b0636485b5188a2b9b4ed5210e736"
+)
+# 返回列：f_dept, f_month, f_fee_sum, f_fee_moy_prev, f_fee_moy_diff, f_fee_moy_pct
 ```
 
 ### 降级方案：多次查询客户端合并（MCP 示例）
 
-> **仅在 dataComparison 和 MOY 均无法满足需求时使用**。
+> **仅在简化接口和 dataComparison 均无法满足需求时使用**。
 
 ```python
 # 当期查询
-result_cur = query_build_and_run(
-    table_id=1104,
-    dimensions=["dept_name"],
-    metrics=["price:sum:total_price"],
-    where_conditions=["date_id|>=|\"2026-04-01\"", "date_id|<=|\"2026-04-22\""],
+result_cur = query_simple(
+    table_id=1,
+    dimensions=[{"field": "dept_name", "alias": "f_dept"}],
+    metrics=[{"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee"}],
+    filters=[{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}],
     session_id="860b0636485b5188a2b9b4ed5210e736"
 )
 
 # 对比期查询
-result_prev = query_build_and_run(
-    table_id=1104,
-    dimensions=["dept_name"],
-    metrics=["price:sum:total_price"],
-    where_conditions=["date_id|>=|\"2026-03-01\"", "date_id|<=|\"2026-03-22\""],
+result_prev = query_simple(
+    table_id=1,
+    dimensions=[{"field": "dept_name", "alias": "f_dept"}],
+    metrics=[{"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee"}],
+    filters=[{"field": "date_id", "operator": "between", "value": ["2026-03-01", "2026-03-22"]}],
     session_id="860b0636485b5188a2b9b4ed5210e736"
 )
 
@@ -737,7 +796,7 @@ result_prev = query_build_and_run(
 
 ## 典型工作流
 
-### 探索数据集 → 构造 → 执行
+### 探索数据集 → 构造 → 执行（简化接口）
 
 ```python
 # 0. 先检查 session；如无效则重新 Device Flow 授权
@@ -747,26 +806,28 @@ auth_is_authenticated(session_id="xxx")
 # 2. 查看完整 metadata
 query_metadata(dataset="sales_order_d", skills_dir="/Users/mask/.config/opencode/skills")
 
-# 3. 构造并执行
-query_build_and_run(
-    dataset="sales_order_d",
-    dimensions=["date_id"],
-    metrics=["order_cost:sum:total_cost"],
-    where_conditions=["date_id|>=|\"2024-01-01\""],
-    order_by=["total_cost:desc"],
+# 3. 使用简化接口构造并执行
+query_simple(
+    table_id=1,
+    dimensions=[{"field": "date_id", "alias": "f_date"}],
+    metrics=[{"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"}],
+    filters=[{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}],
+    order_by=[{"field": "f_fee_sum", "desc": True}],
     limit=50,
     session_id="860b0636485b5188a2b9b4ed5210e736",
     skills_dir="/Users/mask/.config/opencode/skills"
 )
 ```
 
-### 手写高级 payload → 执行
+### 手写高级 payload → 执行（备用）
+
+> 仅当简化接口无法满足需求时使用（如复杂的 `joins`、`union`、自定义子查询等）。
 
 ```python
 # 0. 先检查 session
 auth_is_authenticated(session_id="xxx")
 
-# 1. 按引用文档规范手写 payload（含 innerWhere / dataComparison 等）
+# 1. 按 data-query-service-dev-guide.md 规范手写完整 payload
 #    保存到 /tmp/advanced_query.json
 
 # 2. 执行
@@ -776,23 +837,23 @@ query_run(
 )
 ```
 
-### 环比查询（dataComparison，推荐首选）
+### 环比查询（dataComparison — 简化接口）
 
 ```python
 # 0. 先检查 session
 auth_is_authenticated(session_id="xxx")
 
-# 1. 构造并执行 dataComparison 查询
-query_build_and_run(
-    table_id=1104,
-    dimensions=["dept_name"],
-    metrics=["price:sum:total_price", "order_qty:sum:total_qty"],
-    where_conditions=["date_id|>=|\"2026-04-01\""],
-    data_comparison="date_id,2026-03-01,2026-03-22",
-    session_id="860b0636485b5188a2b9b4ed5210e736",
-    skills_dir="/Users/mask/.config/opencode/skills"
+# 1. 使用简化接口执行 dataComparison 查询
+query_simple(
+    table_id=1,
+    dimensions=[{"field": "dept_name", "alias": "f_dept"}],
+    metrics=[{"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"}],
+    filters=[{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}],
+    data_comparison={"field": "date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"},
+    limit=10,
+    session_id="860b0636485b5188a2b9b4ed5210e736"
 )
-# 响应自动包含：total_price / last_total_price / diff_total_price / pct_total_price
+# 返回列：f_dept, f_fee_sum, last_f_fee_sum, diff_f_fee_sum, pct_f_fee_sum
 ```
 
 ### 数据更新 → 重新查询
@@ -858,7 +919,7 @@ skills_upgrade(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencod
 
 本 Skill 内置本地字段索引，可用于辅助确认 `dataset_alias`、`field_name`、`verbose_name`。
 
-**推荐流程**：本地索引确认字段名 → `query_metadata` 查看完整 metadata → `query_build_and_run` 或手写 payload + `query_run`
+**推荐流程**：本地索引确认字段名 → `query_metadata` 查看完整 metadata → **`query_simple`**（优先）或 `query_build_and_run` / 手写 payload + `query_run`
 
 **搜索排序策略（相关性从高到低）：**
 
@@ -877,8 +938,10 @@ skills_upgrade(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencod
 
 ## 高级查询说明
 
-> 完整的高级查询章节索引和数据对比参考请参见 **`references/query-patterns.md`**。
+**使用优先级**：
+1. **`query_simple`**（推荐）：普通聚合、数据对比、MOY 趋势、子查询等场景，服务端自动处理技术细节
+2. **`query_build_and_run`**：基于 `dimensions`/`metrics` 参数快速构造标准 query payload
+3. **`query_run`**：仅当简化接口无法满足需求时，手写完整 payload 透传
 
-**使用建议**：
-- 普通聚合优先使用 `query_build_and_run`
-- 涉及高级场景时，先阅读 `references/query-patterns.md` 和 `references/data-query-service-dev-guide.md`，再手写 payload + `query_run`
+> 简化接口完整说明见 **`references/simple-query-guide.md`**。
+> 完整 query payload 规范（innerWhere / translate / 权限占位符等）见 **`references/data-query-service-dev-guide.md`**。

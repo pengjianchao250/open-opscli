@@ -51,8 +51,9 @@ opscli auth token status
 - 所有远端查询动作必须通过 `opscli query` 执行，**禁止直接调用后端 HTTP 接口**
 - 本地数据过期或字段不存在时，先执行 `opscli skills upgrade ops-dataset-query` 再重试查询
 - 字段搜索结果已按相关性排序（精确匹配 > 子串匹配 > 关键词匹配）
-- `opscli query build` 适合常见聚合查询（select / groupBy / where / having / orderBy / limit / offset / dryRun）
-- `opscli query run` 适合透传完整高级 payload（`innerWhere`、`joins`、`dataComparison`、`translate` 等复杂场景）
+- **`opscli query simple` 优先**：普通聚合、数据对比、MOY 趋势、子查询等场景，优先使用简化接口（详见 `references/simple-query-guide.md`）
+- `opscli query build` 适合基于 `--dimension`/`--metric` 参数快速构造标准 query payload
+- `opscli query run` 适合透传完整高级 payload（仅当简化接口不满足需求时使用）
 - `opscli query chart` 适合通过图表 ID 直接获取查询结构并执行，支持多 query 自动合并
 - 所有查询工作流都必须以前置的 `ops-auth` 登录检测作为起点
 
@@ -379,7 +380,7 @@ opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --dry-run -
           "field_type": "dimension",
           "verbose_name": "部门名称",
           "field_name": "dept_name",
-          "origin_name": "ds_d35ac6f3910c.dept_name",
+          "origin_name": "dept_name",
           "global_alias": "f_520fb9a831ccd52a"
         }
       ]
@@ -620,8 +621,8 @@ Chart 查询返回的数据结构使用**数据集别名**和**字段别名**，
 Chart 返回的 select 结构：
 ```json
 [
-  {"expr": "ds_d35ac6f3910c.dept_name",  "alias": "f_520fb9a831ccd52a"},
-  {"expr": "ds_d35ac6f3910c.order_qty",  "alias": "f_9064850a20e4d581", "aggregation": "SUM"}
+  {"expr": "dept_name",  "alias": "f_520fb9a831ccd52a"},
+  {"expr": "order_qty",  "alias": "f_9064850a20e4d581", "aggregation": "SUM"}
 ]
 ```
 
@@ -721,7 +722,7 @@ python chart_map.py --uuid xxx --data-dir /path/to/ops-dataset-query/data --pret
     "field_mappings": [
       {
         "alias": "f_520fb9a831ccd52a",
-        "expr": "ds_d35ac6f3910c.dept_name",
+        "expr": "dept_name",
         "mapped_name": "部门名称",
         "field_info": {
           "field_name": "dept_name",
@@ -825,7 +826,39 @@ opscli query build --table-id <id> --dimension <dims> --metric <metrics> \
 python chart_analyze.py --uuid <chart_uuid> --dc-input /tmp/dc_output.json --pretty
 ```
 
-执行查询，将 payload 文件转发到服务端。
+### `opscli query simple`（推荐优先使用）
+
+基于简化参数构造并执行查询。服务端自动处理 `innerWhere`、`translate`、`MOY` 展开等技术细节。
+
+```
+选项：
+  --table-id INTEGER   数据集 ID（必填）
+  --payload TEXT       简化查询 JSON 文件路径（与 --json 二选一）
+  --json TEXT          简化查询 JSON 字符串（与 --payload 二选一）
+  --output TEXT        将 payload 写入指定文件
+  --run                构造后立即执行查询
+  --pretty             格式化 JSON 输出
+```
+
+```bash
+# 构造并执行简化查询
+opscli query simple --table-id 1 \
+  --json '{"dimensions":[{"field":"dept_name","alias":"f_dept"}],"metrics":[{"field":"fi_first_leg_trailer_fee","aggregation":"SUM","alias":"f_fee_sum"}],"filters":[{"field":"date_id","operator":"between","value":["2026-04-01","2026-04-22"]}],"limit":10}' \
+  --run --pretty
+
+# 带数据对比
+opscli query simple --table-id 1 \
+  --payload /tmp/simple.json \
+  --run --pretty
+```
+
+**简化参数结构**详见 `references/simple-query-guide.md`。
+
+---
+
+### `opscli query run`
+
+透传完整 query payload 执行查询。仅当简化接口无法满足需求时使用。
 
 ```
 选项：
@@ -901,12 +934,13 @@ opscli skills upgrade ops-dataset-query --force
 
 ## 高级查询说明
 
-> 完整的数据对比与高级计算参考（dataComparison / MOY / ACC / PPT / 决策流程 / payload 结构）
-> 请参见 **`references/query-patterns.md`**。
+**使用优先级**：
+1. **`opscli query simple`**（推荐）：普通聚合、数据对比、MOY 趋势、子查询等场景，服务端自动处理技术细节
+2. **`opscli query build`**：基于 `--dimension`/`--metric` 参数快速构造标准 query payload
+3. **`opscli query run`**：仅当简化接口无法满足需求时，手写完整 payload 透传
 
-**使用建议**：
-- 普通聚合优先使用 `opscli query build`
-- 涉及高级场景时，先阅读 `references/query-patterns.md` 和 `references/data-query-service-dev-guide.md`，再手写 payload + `opscli query run`
+> 简化接口完整说明见 **`references/simple-query-guide.md`**。
+> 完整 query payload 规范（innerWhere / translate / 权限占位符等）见 **`references/data-query-service-dev-guide.md`**。
 
 ---
 
@@ -995,90 +1029,70 @@ python3 -c "import json; print(json.load(open('/tmp/result.json'))['data']['resu
 
 ## 典型工作流
 
-### 探索数据集 → 构造 → 执行
+### 探索数据集 → 构造 → 执行（简化接口，推荐）
 
 ```bash
 # 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
 opscli auth token status
 
 # 1. 通过本地索引确认数据集和字段名
-# 2. 查看完整 metadata
+# 2. 查看完整 metadata（获取 table_id 和字段信息）
 opscli query metadata --dataset sales_order_d --pretty
-# 3. 构造并执行
-opscli query build \
-  --dataset sales_order_d \
-  --dimension date_id \
-  --metric order_cost:sum:total_cost \
-  --where "date_id|gte|\"2024-01-01\"" \
-  --order-by total_cost:desc \
-  --limit 50 \
+# 3. 使用简化接口构造并执行
+opscli query simple \
+  --table-id 1 \
+  --json '{
+    "dimensions": [{"field": "date_id", "alias": "f_date"}],
+    "metrics": [{"field": "order_cost", "aggregation": "SUM", "alias": "f_total_cost"}],
+    "filters": [{"field": "date_id", "operator": "between", "value": ["2024-01-01", "2024-12-31"]}],
+    "orderBy": [{"field": "f_total_cost", "desc": true}],
+    "limit": 50
+  }' \
   --run --pretty
 ```
 
-### 手写高级 payload → 执行
+### 手写高级 payload → 执行（备用）
+
+> 仅当简化接口无法满足需求时使用（如复杂的 `joins`、`union`、自定义子查询等）。
 
 ```bash
 # 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
 opscli auth token status
 
-# 1. 按引用文档规范手写 payload（含 innerWhere / dataComparison 等）
+# 1. 按 data-query-service-dev-guide.md 规范手写完整 payload
 # 2. 执行
 opscli query run --payload /tmp/advanced_query.json --pretty
 ```
 
-### 环比查询（MOY 月环比，当前推荐方案）
+### 环比查询（MOY 月环比 — 简化接口）
 
 ```bash
 # 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
 opscli auth token status
 
-# 1. 手写含 comparison 字段的 payload，覆盖当期 + 对比期的 WHERE 范围
-cat > /tmp/moy_query.json << 'EOF'
-{
-  "tableId": 1104,
-  "query": {
-    "select": [
-      {"expr": "ds_xxx.dept_name", "alias": "dept_name"},
-      {"expr": "DATE_FORMAT(ds_xxx.date_id, '%Y-%m')", "alias": "month"},
-      {
-        "expr": "ds_xxx.price", "alias": "price_prev",
-        "comparison": "MOY",
-        "params": {"date": "DATE_FORMAT(ds_xxx.date_id, '%Y-%m')", "dim": ["dept_name"], "type": "MOM_MONTH", "cacl_type": "ORIGINAL", "aggregation": "SUM"}
-      },
-      {
-        "expr": "ds_xxx.price", "alias": "price_diff",
-        "comparison": "MOY",
-        "params": {"date": "DATE_FORMAT(ds_xxx.date_id, '%Y-%m')", "dim": ["dept_name"], "type": "MOM_MONTH", "cacl_type": "COMPARE", "aggregation": "SUM"}
-      },
-      {
-        "expr": "ds_xxx.price", "alias": "price_pct",
-        "comparison": "MOY",
-        "params": {"date": "DATE_FORMAT(ds_xxx.date_id, '%Y-%m')", "dim": ["dept_name"], "type": "MOM_MONTH", "cacl_type": "PERCENT", "aggregation": "SUM"}
-      }
+# 1. 使用简化接口执行 MOY 查询（1 行 metrics 声明，服务端自动展开为 3 列）
+opscli query simple --table-id 1 \
+  --json '{
+    "dimensions": [
+      {"field": "dept_name", "alias": "f_dept"},
+      {"field": "date_id", "alias": "f_month", "format": "%Y-%m"}
     ],
-    "groupBy": ["dept_name", "month"],
-    "where": {
-      "operator": "AND",
-      "conditions": [
-        {"field": "ds_xxx.date_id", "operator": "gte", "value": "2026-03-01"},
-        {"field": "ds_xxx.date_id", "operator": "lte", "value": "2026-04-22"}
-      ]
-    },
-    "orderBy": [{"expr": "month", "desc": true}, {"expr": "price_diff", "desc": true}],
-    "limit": 100, "offset": 0
-  }
-}
-EOF
+    "metrics": [
+      {"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"},
+      {"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_moy", "comparison": "MOY", "moyType": "MOM_MONTH"}
+    ],
+    "filters": [
+      {"field": "date_id", "operator": "between", "value": ["2026-03-01", "2026-04-22"]}
+    ],
+    "orderBy": [{"field": "f_month", "desc": true}],
+    "limit": 20
+  }' \
+  --run --pretty
 
-# 2. 执行查询
-opscli query run --payload /tmp/moy_query.json --pretty
-
-# 3. 结果说明：
-#    price_prev = 上月销售额（LAG值）
-#    price_diff = 本月增减额（当期 - 上期）
-#    price_pct  = 环比变化率（小数，×100 得百分比）
-#    当期实际值 = price_prev + price_diff
+# 返回列：f_dept, f_month, f_fee_sum, f_fee_moy_prev, f_fee_moy_diff, f_fee_moy_pct
 ```
+
+> 完整简化参数说明见 `references/simple-query-guide.md`。
 
 ### 通过图表 ID 直接查询
 
@@ -1097,42 +1111,27 @@ opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --pretty
 
 ---
 
-### 环比查询（dataComparison，推荐首选）
+### 环比查询（dataComparison — 简化接口）
 
 ```bash
 # 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
 opscli auth token status
 
-# dataComparison payload 结构（服务端一次 SQL，推荐优先使用）
-cat > /tmp/dc_query.json << 'EOF'
-{
-  "tableId": 1104,
-  "query": {
-    "select": [
-      {"expr": "ds_xxx.dept_name", "alias": "dept_name"},
-      {"expr": "ds_xxx.price", "alias": "total_price", "aggregation": "SUM"}
-    ],
-    "groupBy": ["dept_name"],
-    "where": {
-      "operator": "AND",
-      "conditions": [
-        {"field": "ds_xxx.date_id", "operator": "gte", "value": "2026-04-01"},
-        {"field": "ds_xxx.date_id", "operator": "lte", "value": "2026-04-22"}
-      ]
-    },
-    "orderBy": [{"expr": "total_price", "desc": true}],
-    "limit": 50, "offset": 0
-  },
-  "dataComparison": {
-    "switch": true,
-    "field": "ds_xxx.date_id",
-    "startDate": "2026-03-01",
-    "endDate": "2026-03-22"
-  }
-}
-EOF
-# 响应自动包含：total_price / last_total_price / diff_total_price / pct_total_price
+# 使用简化接口执行 dataComparison 查询
+opscli query simple --table-id 1 \
+  --json '{
+    "dimensions": [{"field": "dept_name", "alias": "f_dept"}],
+    "metrics": [{"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"}],
+    "filters": [{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}],
+    "dataComparison": {"field": "date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"},
+    "limit": 10
+  }' \
+  --run --pretty
+
+# 返回列：f_dept, f_fee_sum, last_f_fee_sum, diff_f_fee_sum, pct_f_fee_sum
 ```
+
+> 完整简化参数说明见 `references/simple-query-guide.md`。
 
 ### 数据更新 → 重新查询
 
