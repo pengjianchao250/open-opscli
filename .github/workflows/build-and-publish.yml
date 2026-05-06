@@ -94,9 +94,9 @@ jobs:
   publish:
     name: Publish to PyPI
     needs: [build_wheels, build_sdist]
-    # build_wheels 全部成功 且 未被取消 即触发发布
-    # build_sdist 使用 continue-on-error，其 result 为 success/failure 均不影响此条件
-    if: ${{ !cancelled() && needs.build_wheels.result == 'success' }}
+    # 只要 build_wheels 未被整体取消即触发发布（允许个别平台 runner 获取失败）
+    # twine 使用 --skip-existing，ubuntu 等平台恢复后重跑可自动补充 wheel
+    if: ${{ !cancelled() && needs.build_wheels.result != 'cancelled' }}
     runs-on: ubuntu-latest
 
     steps:
