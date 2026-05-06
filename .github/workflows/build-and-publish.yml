@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false   # 一个平台失败不影响其他平台继续构建
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-22.04, windows-latest, macos-latest]
 
     steps:
       - name: Checkout source
@@ -64,7 +64,7 @@ jobs:
   # ──────────────────────────────────────────────────────────
   build_sdist:
     name: Build source distribution
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     continue-on-error: true   # sdist 非关键路径，失败不影响 wheel 发布
     steps:
       - uses: actions/checkout@v4
@@ -97,7 +97,7 @@ jobs:
     # 只要 build_wheels 未被整体取消即触发发布（允许个别平台 runner 获取失败）
     # twine 使用 --skip-existing，ubuntu 等平台恢复后重跑可自动补充 wheel
     if: ${{ !cancelled() && needs.build_wheels.result != 'cancelled' }}
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
 
     steps:
       - name: Download all wheel artifacts
