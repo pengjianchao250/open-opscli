@@ -5,11 +5,20 @@
 """
 
 import os
+import re
 import glob
 from setuptools import setup, find_packages
 from setuptools.command.build_py import build_py
 from Cython.Build import cythonize
 from setuptools.extension import Extension
+
+
+def _read_version():
+    """从 pyproject.toml 读取版本号，保证 setup.py 与 pyproject.toml 单一来源同步。"""
+    with open("pyproject.toml", encoding="utf-8") as f:
+        content = f.read()
+    m = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
+    return m.group(1) if m else "0.0.0"
 
 
 class BuildPyExcludeSource(build_py):
@@ -67,6 +76,8 @@ def get_extensions():
 
 
 setup(
+    name="aukeys-opscli",        # 与 pyproject.toml [project].name 一致
+    version=_read_version(),     # 动态读取，保证单一来源
     ext_modules=get_extensions(),
     packages=find_packages(),
     package_data={
