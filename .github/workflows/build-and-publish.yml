@@ -119,9 +119,7 @@ jobs:
         run: ls -lh dist/
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        # 锁定 v1.8.14：该版本使用 API Token 认证，不涉及 OIDC / Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@v1.8.14
         with:
-          # user=__token__ + password 强制走 API Token 路径，跳过 Trusted Publishing（OIDC）
-          user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
-          attestations: false
