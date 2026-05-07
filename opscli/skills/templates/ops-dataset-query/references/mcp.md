@@ -38,10 +38,10 @@ fetch(id="field:sales_order_d.order_cost")  # 返回该字段的详细信息
 
 ## 调用前置要求
 
-> **认证按动作触发**：本地知识检索不要求登录；涉及远端查询执行、图表运行或升级时，必须确认有效 `session_id`。
+> **认证按动作触发**：本地知识检索不要求登录；涉及远端 catalog、查询执行、图表运行或升级时，必须确认有效 `session_id`。
 
-- 本地只读动作可直接执行：`search`、`fetch`、`query_catalog`、`query_metadata`
-- 远端动作前先调用 `auth_is_authenticated(session_id)` 检测 session 有效性：`query_simple`、`query_build_and_run`、`query_run`、`query_chart(run=True)`、`skills_upgrade`
+- 本地只读动作可直接执行：`search`、`fetch`、`query_catalog(source="local")`、`query_metadata`
+- 远端动作前先调用 `auth_is_authenticated(session_id)` 检测 session 有效性：`query_catalog()`、`query_simple`、`query_build_and_run`、`query_run`、`query_chart(run=True)`、`skills_upgrade`
 - 若返回 `false` 或报错，说明 `session_id` 缺失或已过期
 - **若 `session_id` 缺失**：
   1. 调用 `auth_login_start()` 获取 `verification_url` + `user_code`
@@ -471,15 +471,21 @@ query_metadata(table_id=123, skills_dir="/Users/mask/.config/opencode/skills")
 
 ### `query_catalog`
 
-读取本地数据集业务语义索引（dataset catalog）。**不需要认证**。用于自然语言需求匹配 intents 后选出候选数据集。
+读取数据集业务语义索引（dataset catalog）。默认远端优先，远端失败时回退本地缓存；用于自然语言需求匹配 intents 后选出候选数据集。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `skills_dir` | string | 否 | 指定 Skill 安装根目录 |
+| `source` | string | 否 | 数据来源：`remote`（默认）或 `local` |
+| `fallback_local` | boolean | 否 | source=remote 时，远端失败是否回退本地缓存，默认 true |
+| `session_id` | string | 否 | OAuth 授权后的 Session ID |
+| `jwt` | string | 否 | 已有 JWT |
 
 **调用示例**：
 ```python
 query_catalog()
+query_catalog(source="local")
+query_catalog(source="remote", fallback_local=False)
 query_catalog(skills_dir="/Users/mask/.config/opencode/skills")
 ```
 

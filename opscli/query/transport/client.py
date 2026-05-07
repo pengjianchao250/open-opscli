@@ -66,6 +66,24 @@ class QueryClient:
             return self._normalize_chart_bundle(chart_uuid, data)
         raise BadRemoteJsonError("远端返回的 chart query 数据结构既不是数组也不是对象")
 
+    def fetch_dataset_catalog(self) -> dict:
+        """从远端拉取数据集业务语义索引。"""
+        headers, cookies = self._get_auth("ops")
+        response = httpx.get(
+            f"{self.ops_url}/v1/data-metrics/datasets/skill/catalog",
+            headers=headers,
+            cookies=cookies,
+            timeout=20,
+        )
+        payload = parse_remote_response(
+            response,
+            http_error_cls=RemoteHttpError,
+            business_error_cls=RemoteBusinessError,
+            bad_json_error_cls=BadRemoteJsonError,
+        )
+        data = payload.get("data")
+        return data if isinstance(data, dict) else {}
+
     def fetch_chart_queries(self, chart_uuid: str) -> list[dict]:
         """通过 chart_uuid 获取图表的查询结构列表。"""
         bundle = self.fetch_chart_bundle(chart_uuid)

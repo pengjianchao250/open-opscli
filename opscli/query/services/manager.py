@@ -1039,12 +1039,34 @@ class QueryManager:
         *,
         skills_dir: str | None = None,
         cwd: Path | None = None,
+        source: str = "remote",
+        fallback_local: bool = True,
     ) -> dict:
-        """读取本地 dataset catalog（AI 业务语义索引）。
+        """读取 dataset catalog（AI 业务语义索引）。
 
         返回完整的 catalog JSON 结构，包含 version、intent_count、intents、query_strategy。
-        不需要认证，纯本地只读。
+        默认远端优先，远端失败时可回退本地缓存；source="local" 时纯本地只读。
         """
+        normalized_source = source.strip().lower()
+        if normalized_source not in {"remote", "local"}:
+            raise InvalidPayloadError("--source 仅支持 remote 或 local")
+        if normalized_source == "local":
+            return self._load_dataset_catalog(skills_dir=skills_dir, cwd=cwd)
+
+        try:
+            return self.client.fetch_dataset_catalog()
+        except Exception:
+            if fallback_local:
+                return self._load_dataset_catalog(skills_dir=skills_dir, cwd=cwd)
+            raise
+
+    def local_catalog(
+        self,
+        *,
+        skills_dir: str | None = None,
+        cwd: Path | None = None,
+    ) -> dict:
+        """读取本地 dataset catalog（兼容旧调用语义）。"""
         return self._load_dataset_catalog(skills_dir=skills_dir, cwd=cwd)
 
     def _load_dataset_catalog(self, *, skills_dir: str | None, cwd: Path | None) -> dict:

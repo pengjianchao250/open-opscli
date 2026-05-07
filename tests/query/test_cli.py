@@ -51,6 +51,32 @@ def test_run_outputs_doc_aligned_json(monkeypatch, tmp_path):
     assert payload["data"]["meta"]["rowCount"] == 1
 
 
+def test_catalog_passes_source_and_fallback_options(monkeypatch):
+    class DummyManager:
+        def __init__(self):
+            self.called_with = None
+
+        def catalog(self, **kwargs):
+            self.called_with = kwargs
+            return {"version": "remote", "intent_count": 1, "intents": []}
+
+    manager = DummyManager()
+    monkeypatch.setattr("opscli.query.commands.cli.QueryManager", lambda: manager)
+
+    result = runner.invoke(app, ["catalog", "--source", "remote", "--no-fallback-local", "--skills-dir", "/tmp/skills"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["success"] is True
+    assert payload["command"] == "query catalog"
+    assert payload["data"]["version"] == "remote"
+    assert manager.called_with == {
+        "skills_dir": "/tmp/skills",
+        "source": "remote",
+        "fallback_local": False,
+    }
+
+
 def test_run_outputs_query_error_payload(monkeypatch, tmp_path):
     payload_file = tmp_path / "payload.json"
     payload_file.write_text("{}", encoding="utf-8")

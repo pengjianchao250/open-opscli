@@ -668,7 +668,7 @@ query_metadata(dataset="sales_order_d", skills_dir="/Users/mask/.config/opencode
 
 ### 5.2 `query_catalog`
 
-读取本地数据集业务语义索引（dataset catalog）。**不需要认证**。
+读取数据集业务语义索引（dataset catalog）。默认远端优先，远端失败时回退本地缓存。
 
 返回完整的 catalog JSON 结构，包含 version、intent_count、intents 数组和 query_strategy。用于自然语言需求匹配 intents 后选出候选数据集。
 
@@ -677,11 +677,17 @@ query_metadata(dataset="sales_order_d", skills_dir="/Users/mask/.config/opencode
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `skills_dir` | string | 否 | 自定义 Skills 目录（用于读取本地缓存 catalog） |
+| `source` | string | 否 | 数据来源：remote（默认）或 local |
+| `fallback_local` | boolean | 否 | source=remote 时，远端失败是否回退本地缓存 |
+| `session_id` | string | 否 | OAuth Session ID |
+| `jwt` | string | 否 | JWT Token |
 
 **示例**
 
 ```python
 query_catalog()
+query_catalog(source="local")
+query_catalog(source="remote", fallback_local=False)
 query_catalog(skills_dir="/Users/mask/.config/opencode/skills")
 ```
 

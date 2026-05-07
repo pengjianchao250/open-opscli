@@ -1,5 +1,36 @@
 # 待归档变更记录
 
+## 2026-05-07 docs/guide — 更新 CLI 和 MCP 两份使用手册至 v0.0.35
+
+**变更原因**：两份手册（`opscli命令用例手册.md` 和 `MCP工具使用手册.md`）停留在 v0.0.10，项目已迭代至 v0.0.35，缺少 seller-sprite 模块、mcp user 命令组、query catalog/simple 子命令、search/fetch MCP 工具等大量新增内容，需要全量更新以保持文档与代码一致。
+
+**改动点**：
+
+### opscli命令用例手册.md
+1. 版本号从 `0.0.10` 更新为 `0.0.35`
+2. 命令总览树新增 `seller-sprite`（含 account 子命令组）、`mcp user` 子命令组、`query catalog`/`query simple` 子命令
+3. 新增第 6.2 节 `query catalog` 命令（读取业务语义索引）
+4. 新增第 6.5 节 `query simple` 命令（基于 JSON 文件/字符串的简化查询）
+5. 新增第 8 节 `seller-sprite` 模块完整文档（collect、frequency、keyword-mining、keyword-reverse、archive、login、login-status、schema、account save/list/delete，共 11 个子命令）
+6. 新增第 9 节 `mcp` 管理模块（user list/add/remove/rotate，共 4 个子命令）
+7. Skills 模板表从 4 个更新为 9 个
+8. 新增组合用例：卖家精灵完整采集流程（10.5）、MCP 用户管理（10.6）
+9. 快速索引表同步更新
+
+### MCP工具使用手册.md
+1. 版本号从 `0.0.10` 更新为 `0.0.35`
+2. Tool 总览树新增 `query_catalog`、knowledge 分支（search/fetch）
+3. 新增第 5.2 节 `query_catalog` 工具（读取业务语义索引）
+4. 新增第 8 节 Knowledge 模块（ChatGPT/OpenAI 兼容的 `search` 和 `fetch` 工具，遵循 Company Knowledge 标准格式）
+5. 新增组合用例：使用业务语义索引定位数据集（7.6）、使用 search/fetch 搜索数据集（7.7）
+6. 认证状态速查表新增 `query_catalog`、`search`、`fetch` 三个工具
+7. 快速索引表新增 `query_catalog`、`search`、`fetch` 映射
+
+**验证结果**：文档变更，无代码修改，无需测试
+**影响范围**：两份使用指南文档，不影响代码功能
+**回滚方式**：git checkout -- `docs/guide/MCP工具使用手册.md` `docs/guide/opscli命令用例手册.md`
+---
+
 ## 2026-05-07 ops-dataset-query 文档 — 补充 payload 互斥与 select 结构说明
 
 **变更原因**：AI 在实际调用中频繁出现两类错误：(1) `opscli query simple` 同时传 `--payload` 和 `--json` 导致 CLI 报错；(2) 手写 `query run` payload 使用 `global_alias` 作为 key 而非 `expr`/`alias`，导致服务端 422 校验失败

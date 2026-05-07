@@ -49,6 +49,10 @@ def build_command(args: argparse.Namespace) -> list[str]:
     command = [*build_opscli_prefix(), "query", args.command]
 
     if args.command == "catalog":
+        if args.source:
+            command.extend(["--source", args.source])
+        if not args.fallback_local:
+            command.append("--no-fallback-local")
         if args.skills_dir:
             command.extend(["--skills-dir", args.skills_dir])
     elif args.command == "metadata":
@@ -137,6 +141,9 @@ def main() -> None:
     metadata.add_argument("--pretty", action="store_true", help="格式化输出")
 
     catalog = subparsers.add_parser("catalog")
+    catalog.add_argument("--source", default="remote", choices=["remote", "local"], help="数据来源")
+    catalog.add_argument("--no-fallback-local", dest="fallback_local", action="store_false", help="远端失败时不回退本地缓存")
+    catalog.set_defaults(fallback_local=True)
     catalog.add_argument("--skills-dir", help="指定 Skill 目录")
     catalog.add_argument("--pretty", action="store_true", help="格式化输出")
 

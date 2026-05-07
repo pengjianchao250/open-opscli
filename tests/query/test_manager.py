@@ -56,6 +56,81 @@ def test_metadata_raises_when_dataset_missing(tmp_path, monkeypatch):
         manager.metadata(dataset_alias="missing_ds")
 
 
+def test_catalog_defaults_to_remote(monkeypatch):
+    manager = QueryManager()
+    called = {}
+
+    def fake_fetch_dataset_catalog():
+        called["remote"] = True
+        return {"version": "remote", "intent_count": 1, "intents": [{"intent_code": "sales"}]}
+
+    monkeypatch.setattr(manager.client, "fetch_dataset_catalog", fake_fetch_dataset_catalog)
+
+    result = manager.catalog()
+
+    assert called["remote"] is True
+    assert result["version"] == "remote"
+
+
+def test_catalog_can_force_local(tmp_path, monkeypatch):
+    manager = QueryManager()
+    skill_root = tmp_path / ".claude" / "skills" / "ops-dataset-query"
+    data_dir = skill_root / "data"
+    data_dir.mkdir(parents=True)
+    local_payload = {"version": "local", "intent_count": 0, "intents": []}
+    (data_dir / "dataset_catalog.json").write_text(json.dumps(local_payload), encoding="utf-8")
+    record = SkillRecord(
+        name="ops-dataset-query",
+        version="v0.1.0",
+        runtime="claude",
+        root=skill_root,
+        version_file=data_dir / "VERSION.json",
+    )
+    monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_dataset_catalog", lambda: pytest.fail("remote should not be called"))
+
+    result = manager.catalog(source="local")
+
+    assert result == local_payload
+
+
+def test_catalog_falls_back_to_local_when_remote_fails(tmp_path, monkeypatch):
+    manager = QueryManager()
+    skill_root = tmp_path / ".claude" / "skills" / "ops-dataset-query"
+    data_dir = skill_root / "data"
+    data_dir.mkdir(parents=True)
+    local_payload = {"version": "local", "intent_count": 0, "intents": []}
+    (data_dir / "dataset_catalog.json").write_text(json.dumps(local_payload), encoding="utf-8")
+    record = SkillRecord(
+        name="ops-dataset-query",
+        version="v0.1.0",
+        runtime="claude",
+        root=skill_root,
+        version_file=data_dir / "VERSION.json",
+    )
+    monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_dataset_catalog", lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+
+    result = manager.catalog()
+
+    assert result == local_payload
+
+
+def test_catalog_can_disable_local_fallback(monkeypatch):
+    manager = QueryManager()
+    monkeypatch.setattr(manager.client, "fetch_dataset_catalog", lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+
+    with pytest.raises(RuntimeError, match="remote down"):
+        manager.catalog(fallback_local=False)
+
+
+def test_catalog_rejects_invalid_source():
+    manager = QueryManager()
+
+    with pytest.raises(InvalidPayloadError):
+        manager.catalog(source="server")
+
+
 def test_run_validates_required_payload_structure(tmp_path):
     manager = QueryManager()
     payload_file = tmp_path / "payload.json"

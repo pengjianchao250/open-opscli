@@ -64,13 +64,19 @@ def metadata(
 
 @app.command("catalog")
 def catalog(
+    source: str = typer.Option("remote", "--source", help="数据来源: remote 或 local"),
+    fallback_local: bool = typer.Option(True, "--fallback-local/--no-fallback-local", help="远端失败时回退本地缓存"),
     skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 目录"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
-    """读取本地数据集业务语义索引（dataset catalog）。不需要认证。"""
+    """读取数据集业务语义索引（dataset catalog）。默认远端优先。"""
     manager = QueryManager()
     try:
-        result = manager.catalog(skills_dir=skills_dir)
+        result = manager.catalog(
+            skills_dir=skills_dir,
+            source=source,
+            fallback_local=fallback_local,
+        )
         payload = {
             "success": True,
             "command": "query catalog",

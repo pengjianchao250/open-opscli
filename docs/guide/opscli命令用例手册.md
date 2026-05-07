@@ -561,18 +561,20 @@ opscli query metadata --dataset sales_order_d --skills-dir ~/.claude/skills --pr
 
 ### 6.2 `opscli query catalog`
 
-读取本地数据集业务语义索引（dataset catalog）。不需要认证。
+读取数据集业务语义索引（dataset catalog）。默认远端优先，远端失败时回退本地缓存。
 
 **用法**
 
 ```bash
-opscli query catalog [--skills-dir <dir>] [--pretty]
+opscli query catalog [--source remote|local] [--no-fallback-local] [--skills-dir <dir>] [--pretty]
 ```
 
 **参数**
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
+| `--source` | 否 | 数据来源：remote（默认）或 local |
+| `--fallback-local / --no-fallback-local` | 否 | 远端失败时是否回退本地缓存 |
 | `--skills-dir` | 否 | 指定 Skill 目录 |
 | `--pretty` | 否 | 美化 JSON 输出 |
 
@@ -585,6 +587,8 @@ opscli query catalog [--skills-dir <dir>] [--pretty]
 
 ```bash
 opscli query catalog --pretty
+opscli query catalog --source local --pretty
+opscli query catalog --source remote --no-fallback-local --pretty
 opscli query catalog --skills-dir ~/.claude/skills --pretty
 ```
 

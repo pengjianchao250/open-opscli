@@ -256,6 +256,8 @@ def test_query_script_builds_catalog_command(monkeypatch):
 
     class Args:
         command = "catalog"
+        source = "local"
+        fallback_local = False
         skills_dir = "/tmp/skills"
         pretty = True
 
@@ -265,6 +267,9 @@ def test_query_script_builds_catalog_command(monkeypatch):
         "opscli",
         "query",
         "catalog",
+        "--source",
+        "local",
+        "--no-fallback-local",
         "--skills-dir",
         "/tmp/skills",
         "--pretty",

@@ -11,10 +11,10 @@ description: 使用本地缓存的数据集与字段索引辅助检索和查询�
 
 ## 调用前置要求
 
-> **认证按动作触发**：本地只读检索不要求登录；涉及远端执行或升级时，必须先检测是否已授权登录。
+> **认证按动作触发**：本地只读检索不要求登录；涉及远端 catalog、远端执行或升级时，必须先检测是否已授权登录。
 
-- 本地只读动作可直接执行：`python scripts/search.py`、`opscli query catalog`、`opscli query metadata`
-- 远端动作前先执行 `opscli auth token status`：`opscli query simple --run`、`opscli query build --run`、`opscli query run`、`opscli query chart --run`、`opscli skills upgrade ops-dataset-query`
+- 本地只读动作可直接执行：`python scripts/search.py`、`opscli query catalog --source local`、`opscli query metadata`
+- 远端动作前先执行 `opscli auth token status`：`opscli query catalog`、`opscli query simple --run`、`opscli query build --run`、`opscli query run`、`opscli query chart --run`、`opscli skills upgrade ops-dataset-query`
 - 若状态中出现“未登录 / 未授权 / Token 过期 / expired / 401”，必须立即调用 `ops-auth` Skill
 - 若是“未登录 / 未授权 / 401”，在 `ops-auth` 中执行 `opscli auth login`
 - 若是 JWT Token 过期，优先执行 `opscli auth token refresh --all` 或 `opscli auth token refresh -s ops`；刷新失败再执行 `opscli auth login`
@@ -162,10 +162,13 @@ opscli query metadata --table-id 123 --pretty
 
 ### `opscli query catalog`
 
-读取本地数据集业务语义索引（dataset catalog）。**不需要认证**，纯本地只读。用于自然语言需求匹配 intents 后选出候选数据集。
+读取数据集业务语义索引（dataset catalog）。默认远端优先，远端失败时回退本地缓存；用于自然语言需求匹配 intents 后选出候选数据集。
 
 ```
 选项：
+  --source TEXT       数据来源：remote（默认）或 local
+  --fallback-local / --no-fallback-local
+                      远端失败时是否回退本地缓存
   --skills-dir TEXT   指定 Skill 目录
   --pretty            格式化 JSON 输出
 ```
@@ -173,6 +176,12 @@ opscli query metadata --table-id 123 --pretty
 ```bash
 # 读取完整 catalog
 opscli query catalog --pretty
+
+# 只读取本地缓存
+opscli query catalog --source local --pretty
+
+# 只允许远端，失败直接报错
+opscli query catalog --source remote --no-fallback-local --pretty
 
 # 指定 Skill 目录
 opscli query catalog --skills-dir ~/.claude/skills --pretty

@@ -107,6 +107,47 @@ def test_fetch_chart_queries_sends_get_request(monkeypatch):
     assert result[0]["tableId"] == 1
 
 
+def test_fetch_dataset_catalog_sends_get_request(monkeypatch):
+    captured = {}
+
+    def fake_get(url, params=None, headers=None, cookies=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = params
+        captured["headers"] = headers
+        captured["cookies"] = cookies
+        captured["timeout"] = timeout
+        return httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "data": {"version": "v1.0.0", "intent_count": 1, "intents": [{"intent_code": "sales"}]},
+            },
+        )
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.get", fake_get)
+    client = QueryClient(auth_client=DummyAuthClient())
+
+    result = client.fetch_dataset_catalog()
+
+    assert captured["url"].endswith("/v1/data-metrics/datasets/skill/catalog")
+    assert captured["params"] is None
+    assert captured["headers"]["Authorization"] == "Bearer jwt-token"
+    assert captured["cookies"]["polarisUserToken"] == "session-123"
+    assert captured["timeout"] == 20
+    assert result["intent_count"] == 1
+
+
+def test_fetch_dataset_catalog_raises_business_error(monkeypatch):
+    def fake_get(url, params=None, headers=None, cookies=None, timeout=None):
+        return httpx.Response(200, json={"code": 403, "msg": "无 catalog 访问权限"})
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.get", fake_get)
+    client = QueryClient(auth_client=DummyAuthClient())
+
+    with pytest.raises(RemoteBusinessError):
+        client.fetch_dataset_catalog()
+
+
 def test_fetch_chart_bundle_supports_new_structured_response(monkeypatch):
     def fake_get(url, params=None, headers=None, cookies=None, timeout=None):
         return httpx.Response(
