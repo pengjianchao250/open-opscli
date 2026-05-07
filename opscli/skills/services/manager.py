@@ -1,4 +1,4 @@
-"""Skill 生命周期管理器。
+﻿"""Skill 生命周期管理器。
 
 提供 Skill 的安装、列表查询、状态检查、升级等核心业务逻辑。
 是 CLI 层（cli.py）和底层组件（detector/updater）之间的中间协调层。
@@ -220,7 +220,7 @@ class SkillsManager:
     ) -> SkillBatchUpgradeResult:
         """升级指定 Skill 到最新版本。
 
-        当前仅支持 ops-dataset-query 的升级。会先查找本地已安装的记录，
+        当前支持 ops-dataset-query 与 ops-amazon-rufus。会先查找本地已安装的记录，
         再委托给 SkillsUpdater 执行实际的远端数据拉取和文件替换。
 
         Args:
@@ -239,7 +239,17 @@ class SkillsManager:
 
         if not targets:
             raise ValueError(f"未找到已安装 Skill: {name}")
-        if name != "ops-dataset-query":
+        if name == "ops-dataset-query":
+            results = [
+                self.updater.upgrade_ops_dataset_query(target, force=force)
+                for target in targets
+            ]
+        elif name == "ops-amazon-rufus":
+            results = [
+                self.updater.upgrade_ops_amazon_rufus(target, force=force)
+                for target in targets
+            ]
+        else:
             raise ValueError(f"暂不支持升级 Skill: {name}")
 
         # 远端数据对所有本地安装实例完全相同，只拉取一次，再分发写入各目录
@@ -409,3 +419,5 @@ class SkillsManager:
             )
 
         return list(grouped.values())
+
+
