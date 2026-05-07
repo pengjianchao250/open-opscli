@@ -35,6 +35,29 @@ opscli seller-sprite account save --name default --username <USERNAME>
 - 密码通过终端隐藏输入，不写入命令参数
 - 密码保存到系统凭据管理器，账号元数据保存到本机 opscli 配置目录
 
+### 查看命名账号
+
+```bash
+opscli seller-sprite account list --pretty
+```
+
+适用场景：
+
+- 采集前确认本机有哪些可用账号别名
+- 排查 `--account <NAME>` 指向的账号是否存在
+- 只返回账号别名和用户名，不返回密码
+
+### 删除命名账号
+
+```bash
+opscli seller-sprite account delete --name default --pretty
+```
+
+适用场景：
+
+- 账号已失效或需要重新保存
+- 清理本机保存的卖家精灵账号元数据和系统凭据
+
 ### 建立登录态
 
 ```bash
@@ -120,6 +143,23 @@ opscli seller-sprite collect --keyword bed --account default --trend-limit 5 --t
 - 采集搜索趋势、Google Trends、ABA集中度、PPC竞价、市场分析 5 个子 tab
 - 每个子 tab 保存截图、HTML、Markdown 和切换期间捕获到的卖家精灵 JSON 响应
 
+`--trend-tabs` 可选值：
+
+| 值 | 含义 |
+| --- | --- |
+| `all` | 采集全部 5 个 tab，默认值 |
+| `search` | 搜索趋势 |
+| `google` | Google Trends |
+| `aba` | ABA 集中度 |
+| `ppc` | PPC 竞价 |
+| `market` | 市场分析 |
+
+可用英文逗号组合多个 tab，例如：
+
+```bash
+opscli seller-sprite keyword-mining --keyword bed --trend-limit 3 --trend-tabs search,ppc --output-dir ./seller_sprite_runs --pretty
+```
+
 ### 页面归档
 
 ```bash
@@ -144,6 +184,24 @@ opscli seller-sprite schema --pretty
 
 ---
 
+## 参数边界
+
+| 参数 | 适用命令 | 默认值 | 边界 |
+| --- | --- | --- | --- |
+| `--asin` | `collect`、`keyword-reverse` | `null` | 支持 10 位 ASIN 或包含 ASIN 的 Amazon 商品链接；`keyword-reverse` 必填 |
+| `--keyword` | `collect`、`frequency`、`keyword-mining` | 无 | 必填，必须由用户显式提供 |
+| `--site` | 采集命令 | `us` | 站点代码；当前内置 `us`、`jp`、`uk`、`de`、`fr`、`it`、`es`、`ca`、`mx`、`in`、`br`、`au`、`ae` |
+| `--period` | 采集命令 | `30d` | 传卖家精灵支持的时间窗口，例如 `30d` 或 `2026-03` |
+| `--limit` | `collect`、`keyword-mining`、`keyword-reverse` | `50` | `1-200` |
+| `--frequency-phrase-count` | `collect`、`frequency` | `1` | `1-10` |
+| `--trend-limit` | `collect`、`keyword-mining`、`keyword-reverse` | `0` | `0-50`，且不能超过 `--limit` |
+| `--trend-tabs` | `collect`、`keyword-mining`、`keyword-reverse` | `all` | `all` 或 `search,google,aba,ppc,market` 的逗号组合 |
+| `--archive/--no-archive` | 采集命令 | `--archive` | 是否归档截图、HTML、Markdown 和接口响应 |
+| `--output-dir` | 采集与归档命令 | 当前目录下 `seller_sprite_runs` | 可传相对或绝对路径 |
+| `--account` | `collect`、`keyword-reverse` | `null` | 指向 `account save` 保存的账号别名 |
+
+---
+
 ## 输出读取
 
 不指定 `--output-dir` 时，采集产物默认写入当前命令执行目录下的 `seller_sprite_runs/seller-sprite-<run_id>`。指定 `--output-dir` 时，产物写入 `<output-dir>/seller-sprite-<run_id>`。命令返回的 `data.archive_manifest.root_dir` 是本次采集目录。Agent 后续应优先读取：
@@ -154,11 +212,74 @@ opscli seller-sprite schema --pretty
 - 页面 Markdown
 - 页面截图路径
 
+### `result.json` 关键字段
+
+| 字段 | 含义 |
+| --- | --- |
+| `asin` | 本次关联的 ASIN，`keyword-reverse` 必有 |
+| `keyword` | 本次显式关键词，`collect`、`frequency`、`keyword-mining` 必有 |
+| `site` / `period` / `limit` | 本次采集站点、时间窗口和条数 |
+| `frequency_terms` | 高频词结果；反查命令中复用该结构保存反查高频词 |
+| `keyword_items` | 关键词挖掘标准化结果 |
+| `reverse_keyword_items` | ASIN 流量词反查标准化结果 |
+| `keyword_trends` | 关键词列表接口中的趋势数据 |
+| `trend_details` | 历史走势弹窗的 tab 截图、HTML、Markdown 和响应索引 |
+| `competitor_asins` | 关键词挖掘结果中的关联竞品 ASIN |
+| `product_info` | 关键词反查采集到的产品基础信息 |
+| `variation_asins` | 关键词反查采集到的变体 ASIN |
+| `reverse_stats` | 关键词反查统计信息 |
+| `market_summary` | 给 Agent 快速读取的市场摘要 |
+| `archive_manifest` | 本次归档索引、验证码标记、缺失区块和错误列表 |
+
+### `manifest.json` 关键字段
+
+| 字段 | 含义 | 处理方式 |
+| --- | --- | --- |
+| `root_dir` | 本次采集目录 | 后续读取文件时以此为根目录 |
+| `files` | 截图、HTML、Markdown、接口 JSON 的文件索引 | 优先读取接口 JSON，其次读取 Markdown，截图作为证据 |
+| `captcha_required` | 是否检测到验证码 | 为 `true` 时停止分析，让用户先处理登录或验证码 |
+| `missing_sections` | 本次未采到的区块 | 汇报缺失项，不基于缺失数据下结论 |
+| `errors` | 采集过程中记录的错误 | 汇报错误信息并停止依赖对应区块 |
+
+### 错误输出
+
+命令失败时返回：
+
+```json
+{
+  "success": false,
+  "command": "seller-sprite <command>",
+  "data": null,
+  "error": {
+    "code": "SELLER_SPRITE_ERROR",
+    "message": "..."
+  }
+}
+```
+
+Agent 必须先检查 `success`。如果 `success=false`，不要继续读取旧目录或编造结果，应直接向用户汇报 `error.message`。
+
+---
+
+## 和分析 Skill 的衔接
+
+`ops-seller-sprite` 只负责采集和证据归档。用户要求 Listing 表达与一致性优化分析时，应在采集完成后把 `result.json`、`manifest.json`、页面 Markdown 和截图路径交给 `ops-amazon-listing-analysis` 的输出约束使用。
+
+分析输出仍只能覆盖：
+
+- 问题定位
+- 优化方向
+- 修改示例
+
+不能因为采集到了卖家精灵数据就输出完整可上线 Listing 文案。
+
 ---
 
 ## 当前边界
 
 - 不自动根据 ASIN 推导关键词
 - 不自动识别验证码
+- 不绕过 `opscli seller-sprite` 直接请求卖家精灵接口
+- 不从卖家精灵 AI 报告复用成品分析结论
 - 不自动生成完整 Listing 上线文案
 - 不自动刊登或替换 Listing
