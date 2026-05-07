@@ -36,6 +36,10 @@ class SellerSpriteScraper:
         "es": "西班牙站",
         "ca": "加拿大站",
         "mx": "墨西哥站",
+        "in": "印度站",
+        "br": "巴西站",
+        "au": "澳洲站",
+        "ae": "阿联酋",
     }
     PERIOD_LABELS = {
         "30d": "最近30天",
@@ -471,28 +475,21 @@ class SellerSpriteScraper:
     async def _select_site(self, page, site: str) -> None:
         """按站点代码切换卖家精灵站点下拉。"""
         target_label = self.SITE_LABELS.get(site.lower(), site)
-        await self._select_dropdown_by_text(page, list(self.SITE_LABELS.values()), target_label)
+        await self._select_element_dropdown(
+            page,
+            ".el-input-group__prepend .el-select:not(.date-select) .el-input",
+            target_label,
+        )
 
     async def _select_period(self, page, period: str) -> None:
         """按时间窗口切换卖家精灵时间下拉。"""
         target_label = self.PERIOD_LABELS.get(period.lower(), period)
-        month_labels = [f"{year}-{month:02d}" for year in range(2020, 2031) for month in range(1, 13)]
-        await self._select_dropdown_by_text(page, ["最近30天", *month_labels], target_label)
+        await self._select_element_dropdown(page, ".el-input-group__prepend .date-select .el-input", target_label)
 
-    async def _select_dropdown_by_text(self, page, current_labels: list[str], target_label: str) -> None:
-        """通过已选中文案打开下拉并点击目标文案。"""
-        if await page.get_by_text(target_label, exact=True).first.is_visible(timeout=500):
-            return
-        trigger = None
-        for label in current_labels:
-            locator = page.get_by_text(label, exact=True).first
-            if await locator.is_visible(timeout=500):
-                trigger = locator
-                break
-        if trigger is None:
-            return
-        await trigger.click()
-        option = page.locator(".el-select-dropdown__item:visible").filter(has_text=target_label).last
+    async def _select_element_dropdown(self, page, trigger_selector: str, target_label: str) -> None:
+        """打开指定 ElementUI 下拉并点击目标文案。"""
+        await page.locator(trigger_selector).first.click(timeout=10000)
+        option = page.locator(".el-select-dropdown__item:visible").filter(has_text=target_label).first
         await option.click(timeout=10000)
         await page.wait_for_timeout(500)
 

@@ -1,9 +1,10 @@
-"""opscli 顶级 CLI 入口。
+﻿"""opscli 顶级 CLI 入口。
 
 基于 Typer 框架，注册所有子模块命令组（auth、skills 等）。
 """
 import typer
 from opscli.amazon.cli import app as amazon_app
+from opscli.amazon_rufus.cli import app as amazon_rufus_app
 from opscli.auth.cli import app as auth_app
 from opscli.mcp.cli import app as mcp_app
 from opscli.query.cli import app as query_app
@@ -24,6 +25,7 @@ app = typer.Typer(help="Aukeys 运营 CLI 工具集")
 # 模块注册：每新增一个子模块只需在此追加一行（铁律1）
 app.add_typer(auth_app, name="auth")
 app.add_typer(amazon_app, name="amazon")
+app.add_typer(amazon_rufus_app, name="amazon-rufus")
 app.add_typer(query_app, name="query")
 app.add_typer(skills_app, name="skills")
 app.add_typer(mcp_app, name="mcp")

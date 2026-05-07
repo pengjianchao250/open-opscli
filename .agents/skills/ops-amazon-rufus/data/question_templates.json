@@ -1,0 +1,102 @@
+{
+  "items": [
+    {
+      "id": 56,
+      "description": "产品核心定位",
+      "preferred_version_index": 0,
+      "questions": [
+        {
+          "id": 3172,
+          "text": "我想了解这款产品{{asin}}的产品核心定位是什么？主要适用于哪些用户与场景？另外不太合适的用户人员及理由？",
+          "position": 1
+        }
+      ],
+      "created_at": "2026-04-28T09:25:05",
+      "updated_at": "2026-04-29T08:40:13"
+    },
+    {
+      "id": 57,
+      "description": "自相矛盾的内容",
+      "preferred_version_index": 0,
+      "questions": [
+        {
+          "id": 3173,
+          "text": "帮我快速检查一下{{asin}}的商品图片信息和商品描述是否存在自相矛盾的内容。",
+          "position": 1
+        }
+      ],
+      "created_at": "2026-04-29T08:40:22",
+      "updated_at": "2026-04-29T08:40:32"
+    },
+    {
+      "id": 58,
+      "description": "关注的要点",
+      "preferred_version_index": 0,
+      "questions": [
+        {
+          "id": 3174,
+          "text": "作为此类产品的核心消费者，在购买此类产品时应该最关注的哪些要点？你认为这款产品{{asin}}符合吗，麻烦做出对比表提供给我参考。",
+          "position": 1
+        }
+      ],
+      "created_at": "2026-04-29T08:40:42",
+      "updated_at": "2026-04-29T08:40:52"
+    },
+    {
+      "id": 59,
+      "description": "推荐",
+      "preferred_version_index": 0,
+      "questions": [
+        {
+          "id": 3175,
+          "text": "那这款产品{{asin}}拿到当前的排名，是你认为值得推荐还是不推荐？你是基于什么理由做出这样的信息呈现给我？",
+          "position": 1
+        }
+      ],
+      "created_at": "2026-04-29T08:41:04",
+      "updated_at": "2026-04-29T08:41:12"
+    },
+    {
+      "id": 60,
+      "description": "分析市场定位",
+      "preferred_version_index": 0,
+      "questions": [
+        {
+          "id": 3176,
+          "text": "作为此类产品的核心消费者，在购买此类产品时可以给我分析市场定位与价格竞争力吗？这款产品{{asin}}的价值感受是怎样？有哪些优势、劣势和问题？",
+          "position": 1
+        }
+      ],
+      "created_at": "2026-04-29T08:41:17",
+      "updated_at": "2026-04-29T08:41:26"
+    },
+    {
+      "id": 61,
+      "description": "表达优化",
+      "preferred_version_index": 0,
+      "questions": [
+        {
+          "id": 3177,
+          "text": "这个产品{{asin}}对商品信息做怎么的表达优化，会提高此类产品的核心消费者的购买意欲呢？提高消费者决策路径和转化？此类产品在市场主流方案的共同卖点与表达方式是怎样呢？",
+          "position": 1
+        }
+      ],
+      "created_at": "2026-04-29T08:41:31",
+      "updated_at": "2026-04-29T08:41:40"
+    },
+    {
+      "id": 62,
+      "description": "差异",
+      "preferred_version_index": 0,
+      "questions": [
+        {
+          "id": 3178,
+          "text": "这款产品{{asin}}和市场主流有什么差异和没覆盖到位的地方？需要加强什么才能更吸引到我这类核心消费者，建议要优化哪些图片和文案信息？",
+          "position": 1
+        }
+      ],
+      "created_at": "2026-04-29T08:41:46",
+      "updated_at": "2026-04-29T08:41:53"
+    }
+  ]
+}

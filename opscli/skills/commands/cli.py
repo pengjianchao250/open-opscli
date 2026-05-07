@@ -27,6 +27,13 @@ _TOOL_LABELS = {
     "opencode": "OpenCode",
 }
 
+_AMAZON_RUFUS_SKILL_NAME = "ops-amazon-rufus"
+_AMAZON_RUFUS_NEXT_STEPS = [
+    "使用前必须先登录对应国家站点的 Amazon 账户。",
+    "请先执行 opscli amazon-rufus init <country>，在新窗口完成登录。",
+    "登录后再执行 opscli amazon-rufus get <asin> <country> --new-chrome。",
+]
+
 
 def _emit(payload: dict, pretty: bool) -> None:
     """统一的 JSON 输出函数，控制是否美化格式。"""
@@ -34,6 +41,16 @@ def _emit(payload: dict, pretty: bool) -> None:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         typer.echo(json.dumps(payload, ensure_ascii=False))
+
+
+def _with_post_install_guidance(data: dict, skill_name: str) -> dict:
+    """为特定 Skill 追加安装后指引，避免污染通用安装模型。"""
+    if skill_name != _AMAZON_RUFUS_SKILL_NAME:
+        return data
+    guided = dict(data)
+    guided["requires_amazon_login"] = True
+    guided["next_steps"] = list(_AMAZON_RUFUS_NEXT_STEPS)
+    return guided
 
 
 def _parse_multiselect(answer: str, total: int) -> list[int]:
@@ -201,7 +218,7 @@ def install_skill(
         payload = {
             "success": True,
             "command": "skills install",
-            "data": result.to_dict(),
+            "data": _with_post_install_guidance(result.to_dict(), name),
             "error": None,
         }
     except Exception as exc:
@@ -275,7 +292,7 @@ def _install_interactive(
                         runtime=target_runtime,
                         force=force,
                     )
-                    all_results.append(result.to_dict())
+                    all_results.append(_with_post_install_guidance(result.to_dict(), skill_name))
                     for install in result.installs:
                         _print_install_line(install)
                 except Exception as exc:
@@ -286,7 +303,7 @@ def _install_interactive(
             # 未检测到任何全局工具：交由 manager 使用默认逻辑
             try:
                 result = manager.install(skill_name, force=force)
-                all_results.append(result.to_dict())
+                all_results.append(_with_post_install_guidance(result.to_dict(), skill_name))
                 for install in result.installs:
                     _print_install_line(install)
             except Exception as exc:
