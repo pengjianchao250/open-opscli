@@ -11,20 +11,19 @@ description: 使用本地缓存的数据集与字段索引辅助检索和查询�
 
 ## 调用前置要求
 
-> **【强制】每次调用 `ops-dataset-query` 前，必须先检测是否已授权登录；禁止默认假设用户已经登录。**
+> **认证按动作触发**：本地只读检索不要求登录；涉及远端执行或升级时，必须先检测是否已授权登录。
 
-- 进入本 Skill 后，第一步先执行 `opscli auth token status`
-- 若命令失败，或输出中出现“未登录 / 未授权 / Token 过期 / expired / 401”等状态，必须立即调用 `ops-auth` Skill
-- 若是“未登录 / 未授权 / 401”等状态，在 `ops-auth` 中执行 `opscli auth login` 完成授权登录
-- 若是 JWT Token 过期，优先执行 `opscli auth token refresh`（例如 `opscli auth token refresh --all` 或 `opscli auth token refresh -s ops`）；刷新失败或仍异常时，再执行 `opscli auth login`
-- 登录或刷新后重新执行 `opscli auth token status`
-- 只有认证状态确认正常后，才允许继续读取本地索引、执行 `opscli query metadata`、`build`、`run`、`opscli skills upgrade ops-dataset-query`
-- 即使当前动作只是本地字段搜索或本地 metadata 辅助，也必须先完成这一轮登录检测
+- 本地只读动作可直接执行：`python scripts/search.py`、`opscli query catalog`、`opscli query metadata`
+- 远端动作前先执行 `opscli auth token status`：`opscli query simple --run`、`opscli query build --run`、`opscli query run`、`opscli query chart --run`、`opscli skills upgrade ops-dataset-query`
+- 若状态中出现“未登录 / 未授权 / Token 过期 / expired / 401”，必须立即调用 `ops-auth` Skill
+- 若是“未登录 / 未授权 / 401”，在 `ops-auth` 中执行 `opscli auth login`
+- 若是 JWT Token 过期，优先执行 `opscli auth token refresh --all` 或 `opscli auth token refresh -s ops`；刷新失败再执行 `opscli auth login`
+- 登录或刷新后重新执行 `opscli auth token status`，确认正常后再继续远端动作
 
 **标准前置流程：**
 
 ```bash
-# 1. 先检查是否已登录
+# 仅在远端执行或升级前检查是否已登录
 opscli auth token status
 
 # 2. 如 JWT Token 已过期，先刷新
@@ -61,27 +60,27 @@ opscli auth token status
 
 ## 【强制】字段存在性检查
 
-> 在 CLI 模式下，构造任何 query 参数前，必须先确认目标数据集和字段真实存在；**搜索结果为空时，必须先升级再重试**。
+> 在 CLI 模式下，构造任何 query 参数前，必须先确认目标数据集和字段真实存在；**搜索结果为空时，先判断本地数据是否已初始化，再决定是否升级**。
 
 标准顺序：
 
 1. 先确认目标 `dataset_alias` 是否存在于 `data/datasets.csv`
 2. 再确认目标字段是否存在于 `data/dataset_fields.csv`
 3. 如需进一步确认公式字段、聚合方式、表达式结构，再执行 `opscli query metadata --dataset <dataset_alias> --pretty`
-4. 如果数据集或字段不存在，立即执行 `opscli skills upgrade ops-dataset-query`
+4. 如果数据集或字段不存在，先检查本地数据是否为空/placeholder；为空时执行 `opscli skills upgrade ops-dataset-query`
 5. 升级后重新执行字段检查
 6. 若升级后仍不存在，明确告知用户当前本地索引和 metadata 中没有该字段，不要猜字段名继续查
 
 **【强制】搜索结果为空时的处理流程**：
 
-> 当 `python scripts/search.py` 返回空列表 `[]` 时，不要直接告知用户"找不到"，必须先升级本地数据再重试。
+> 当 `python scripts/search.py` 返回空列表 `[]` 时，不要直接告知用户"找不到"。先确认本地数据是否为空/placeholder；为空时升级本地数据再重试。
 
 ```bash
 # 搜索返回空结果时
 python scripts/search.py "广告" -n 20
 # 输出: []
 
-# 立即升级本地数据
+# 如果本地数据为空/placeholder，升级本地数据
 opscli skills upgrade ops-dataset-query
 
 # 升级后重新搜索
@@ -101,7 +100,7 @@ python scripts/search.py order_cost --dataset sales_order_d -n 20
 # 3. 再看完整 metadata
 opscli query metadata --dataset sales_order_d --pretty
 
-# 4. 字段不存在时先升级
+# 4. 字段不存在且本地数据为空/placeholder 时先升级
 opscli skills upgrade ops-dataset-query
 ```
 

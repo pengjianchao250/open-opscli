@@ -24,6 +24,7 @@ MCP 使用指南
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from pathlib import Path
@@ -44,44 +45,116 @@ def check_local_data(data_dir: Path) -> dict:
     version_file = data_dir / "VERSION.json"
     datasets_file = data_dir / "datasets.csv"
     fields_file = data_dir / "dataset_fields.csv"
+    catalog_file = data_dir / "dataset_catalog.json"
     metadata_file = data_dir / "query_metadata.json"
 
     version = "unknown"
+    data_state = "unknown"
     if version_file.exists():
         try:
             payload = json.loads(version_file.read_text(encoding="utf-8"))
             version = str(payload.get("version", "unknown"))
+            data_state = str(payload.get("data_state", "ready"))
         except Exception:
             version = "invalid"
+            data_state = "invalid"
+
+    datasets_csv_count = _count_csv_rows(datasets_file)
+    fields_csv_count = _count_csv_rows(fields_file)
+    catalog_payload = _load_json_object(catalog_file)
+    metadata_payload = _load_json_object(metadata_file)
+    catalog_intent_count = _catalog_intent_count(catalog_payload)
+    metadata_dataset_count = _metadata_list_count(metadata_payload, "datasets")
+    metadata_field_count = _metadata_list_count(metadata_payload, "fields")
 
     files_status = {
         "VERSION.json": {
             "exists": version_file.exists(),
             "version": version,
+            "data_state": data_state,
         },
         "datasets.csv": {
             "exists": datasets_file.exists(),
             "size": datasets_file.stat().st_size if datasets_file.exists() else 0,
+            "row_count": datasets_csv_count,
         },
         "dataset_fields.csv": {
             "exists": fields_file.exists(),
             "size": fields_file.stat().st_size if fields_file.exists() else 0,
+            "row_count": fields_csv_count,
+        },
+        "dataset_catalog.json": {
+            "exists": catalog_file.exists(),
+            "size": catalog_file.stat().st_size if catalog_file.exists() else 0,
+            "intent_count": catalog_intent_count,
         },
         "query_metadata.json": {
             "exists": metadata_file.exists(),
             "size": metadata_file.stat().st_size if metadata_file.exists() else 0,
+            "dataset_count": metadata_dataset_count,
+            "field_count": metadata_field_count,
         },
     }
 
     all_exist = all(f["exists"] for f in files_status.values())
-    healthy = all_exist and version not in ("invalid", "unknown")
+    initialized = (
+        data_state != "placeholder"
+        and datasets_csv_count > 0
+        and fields_csv_count > 0
+        and metadata_dataset_count > 0
+        and metadata_field_count > 0
+    )
+    healthy = all_exist and version not in ("invalid", "unknown") and initialized
 
     return {
         "data_dir": str(data_dir),
         "version": version,
+        "data_state": "ready" if initialized else "placeholder_or_empty",
         "healthy": healthy,
+        "summary": {
+            "datasets_csv_count": datasets_csv_count,
+            "fields_csv_count": fields_csv_count,
+            "catalog_intent_count": catalog_intent_count,
+            "metadata_dataset_count": metadata_dataset_count,
+            "metadata_field_count": metadata_field_count,
+        },
         "files": files_status,
     }
+
+
+def _count_csv_rows(path: Path) -> int:
+    """返回 CSV 数据行数，不含表头；文件缺失或损坏时返回 0。"""
+    if not path.exists():
+        return 0
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            return sum(1 for _ in csv.DictReader(handle))
+    except Exception:
+        return 0
+
+
+def _load_json_object(path: Path) -> dict:
+    """加载 JSON 对象；文件缺失、损坏或非对象时返回空对象。"""
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _catalog_intent_count(payload: dict) -> int:
+    intents = payload.get("intents")
+    if isinstance(intents, list):
+        return len(intents)
+    count = payload.get("intent_count")
+    return int(count) if isinstance(count, int) else 0
+
+
+def _metadata_list_count(payload: dict, key: str) -> int:
+    items = payload.get(key)
+    return len(items) if isinstance(items, list) else 0
 
 
 def main() -> None:

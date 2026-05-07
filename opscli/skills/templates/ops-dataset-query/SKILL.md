@@ -27,18 +27,19 @@ version: see data/VERSION.json
 
 进入本 Skill 后，不要为模式判断额外运行检测脚本，直接按下面规则判断。
 
-> **【强制】快速判断规则**：
-> - 当前工作目录包含 `opscli/` 源码（即 opscli 项目本身） → **必须用 CLI**
-> - 当前环境可直接执行 `opscli` 命令（终端 / Claude Code） → **优先用 CLI**
-> - 仅当无法执行本地命令时（如 ChatGPT / 纯 MCP 宿主） → 用 MCP
+> **快速判断规则**：
+> - 用户明确指定 CLI 或 MCP 时，直接遵循用户指定
+> - 当前任务是本地交付验证、脚本调试、CLI 行为确认时，优先用 CLI
+> - 当前宿主已提供 MCP Tool，且任务是结构化查询或连接器协作时，优先用 MCP
+> - 同一轮任务选定一种模式后保持一致，只有首个正式调用失败时才切换
 
 优先级如下：
 
 1. 用户明确指定 → 直接遵循
-2. **当前在 `opscli` 项目目录下** → **必须使用 CLI**，读取 `references/cli.md`
-3. 当前终端可执行 `opscli` 命令 → 默认使用 CLI，读取 `references/cli.md`
-4. 当前任务基于 MCP Tool 协作，或宿主无法执行本地命令 → 使用 MCP，读取 `references/mcp.md`
-5. CLI 首次调用失败 → 直接切到 MCP，读取 `references/mcp.md`
+2. 本地 CLI 验证 / opscli 项目开发 / shell 可执行交付命令 → 使用 CLI，读取 `references/cli.md`
+3. MCP Tool 协作 / ChatGPT Connector / 无法执行本地命令 → 使用 MCP，读取 `references/mcp.md`
+4. CLI 首次正式调用失败 → 切到 MCP，读取 `references/mcp.md`
+5. MCP 首次正式调用失败且 CLI 可用 → 切到 CLI，读取 `references/cli.md`
 6. MCP 也不可用 → 帮助用户安装 `aukeys-opscli`
 
 建议提问方式：
@@ -47,8 +48,8 @@ version: see data/VERSION.json
 
 简化原则：
 
-- **默认优先 CLI**，它是 `opscli` 模块的正式入口，最贴近真实交付路径
-- **在 opscli 项目目录下禁止走 MCP**，因为 CLI 一定可用且参数处理更完整
+- 本地交付和脚本验证默认优先 CLI，它是 `opscli` 模块的正式入口
+- Connector / MCP 宿主默认优先 MCP，避免为了查询再绕回本地 shell
 - 不单独检查发行包、命令路径、子命令 help；用”首次正式调用是否可执行”作为唯一验证
 - 一旦 CLI 和 MCP 都可行，优先保持单一路径，不要来回切换
 - CLI 首次正式调用失败后，直接切到 MCP，不额外询问
@@ -70,10 +71,10 @@ version: see data/VERSION.json
 - **简化接口优先**：普通聚合、数据对比、MOY 趋势、子查询等场景，优先使用简化接口（`opscli query simple` / `query_simple`），参数结构见 `references/simple-query-guide.md`
 - 仅当简化接口不满足需求时（如复杂的 `joins`、`union`、自定义子查询），才手写完整 query payload + `opscli query run` / `query_run`
 - 所有远端查询动作必须统一走选定模式下的正式查询入口，禁止直接调用后端 HTTP 接口
-- 认证检查仍然是强制门禁，具体流程以对应 reference 文档为准
+- 认证检查按动作触发：本地只读检索（`catalog` / `metadata` / `search` / `fetch`）不要求登录；远端执行、图表运行和 Skill 升级前必须确认认证
 - 用户未指定 dataset 时，优先使用 `opscli query catalog`（CLI）或 `query_catalog`（MCP）读取 dataset catalog 的 `intents` 选择候选数据集；catalog 为空或缺失时，回退到 `datasets.csv` + `dataset_fields.csv` 关键词检索
 - 查询前优先检查目标 `dataset_alias`、`field_name`、`global_alias`、`verbose_name` 是否存在于本地索引或 metadata；不要先猜字段再直接构造 payload
-- **【强制】本地搜索结果为空时，必须先升级再重试**：无论搜索的是数据集还是字段，只要返回空列表 `[]`，立即执行升级命令后重新搜索一次，不要直接告知用户"找不到"
+- **【强制】本地搜索结果为空时，必须先确认数据是否已初始化**：若 `updater_mcp.py --check`、`opscli skills status` 或本地文件统计显示数据为空/placeholder，先升级再重试；若数据已初始化但搜索为空，再告知用户当前索引未覆盖
 - 如果字段或数据集不存在，优先执行当前模式下的 Skill 升级，再重新检查一次
 - CLI 模式使用 `opscli skills upgrade ops-dataset-query`；MCP 模式使用 `skills_upgrade(name="ops-dataset-query")`
 - 升级后若字段仍不存在，应明确告知用户当前本地索引和 metadata 中没有该字段，不要伪造字段名继续查询

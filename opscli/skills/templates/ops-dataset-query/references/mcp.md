@@ -38,9 +38,10 @@ fetch(id="field:sales_order_d.order_cost")  # 返回该字段的详细信息
 
 ## 调用前置要求
 
-> **【强制】每次调用 `query_*` 前，必须先确认已提供有效 `session_id`；禁止默认假设用户已经登录。**
+> **认证按动作触发**：本地知识检索不要求登录；涉及远端查询执行、图表运行或升级时，必须确认有效 `session_id`。
 
-- 进入本 Skill 后，第一步先调用 `auth_is_authenticated(session_id)` 检测 session 有效性
+- 本地只读动作可直接执行：`search`、`fetch`、`query_catalog`、`query_metadata`
+- 远端动作前先调用 `auth_is_authenticated(session_id)` 检测 session 有效性：`query_simple`、`query_build_and_run`、`query_run`、`query_chart(run=True)`、`skills_upgrade`
 - 若返回 `false` 或报错，说明 `session_id` 缺失或已过期
 - **若 `session_id` 缺失**：
   1. 调用 `auth_login_start()` 获取 `verification_url` + `user_code`
@@ -50,7 +51,7 @@ fetch(id="field:sales_order_d.order_cost")  # 返回该字段的详细信息
 - **若 `session_id` 过期**：
   1. 调用 `auth_login_start()` 重新发起 Device Flow
   2. 重复上述授权流程
-- 只有认证状态确认正常后，才允许继续执行 `query_metadata`、`query_simple`、`query_build`、`query_run`、`query_build_and_run`、`query_chart`、`skills_upgrade`
+- 只有认证状态确认正常后，才允许继续执行远端动作
 
 **标准前置流程（MCP Tool 调用）**：
 
@@ -90,27 +91,27 @@ auth_is_authenticated(session_id="新session_id")
 
 ## 【强制】字段存在性检查
 
-> 在 MCP 模式下，构造任何 query 参数前，必须先确认目标数据集和字段真实存在；**搜索结果为空时，必须先升级再重试**。
+> 在 MCP 模式下，构造任何 query 参数前，必须先确认目标数据集和字段真实存在；**搜索结果为空时，先判断本地数据是否已初始化，再决定是否升级**。
 
 标准顺序：
 
 1. 先用本地索引或知识工具确认目标 `dataset_alias`
 2. 再确认目标字段是否存在于本地字段索引
 3. 如需进一步确认公式字段、聚合方式、表达式结构，再调用 `query_metadata(dataset=...)`
-4. 如果数据集或字段不存在，立即执行 `skills_upgrade(name="ops-dataset-query")`
+4. 如果数据集或字段不存在，先检查本地数据是否为空/placeholder；为空时执行 `skills_upgrade(name="ops-dataset-query")`
 5. 升级后重新执行字段检查
 6. 若升级后仍不存在，明确告知用户当前本地索引和 metadata 中没有该字段，不要猜字段名继续查
 
 **【强制】搜索结果为空时的处理流程**：
 
-> 当 `search()` 返回空列表时，不要直接告知用户"找不到"，必须先升级本地数据再重试。
+> 当 `search()` 返回空列表时，不要直接告知用户"找不到"。先确认本地数据是否为空/placeholder；为空时升级本地数据再重试。
 
 ```python
 # 搜索返回空结果时
 search(query="广告")
 # 返回: {"results": []}
 
-# 立即升级本地数据
+# 如果本地数据为空/placeholder，立即升级本地数据
 skills_upgrade(name="ops-dataset-query")
 
 # 升级后重新搜索
@@ -423,17 +424,28 @@ python scripts/updater_mcp.py --check --pretty
   "data": {
     "data_dir": "/Users/mask/.config/opencode/skills/ops-dataset-query/data",
     "version": "v1.2.3",
+    "data_state": "ready",
     "healthy": true,
+    "summary": {
+      "datasets_csv_count": 12,
+      "fields_csv_count": 345,
+      "catalog_intent_count": 20,
+      "metadata_dataset_count": 12,
+      "metadata_field_count": 345
+    },
     "files": {
-      "VERSION.json": {"exists": true, "version": "v1.2.3"},
-      "datasets.csv": {"exists": true, "size": 12345},
-      "dataset_fields.csv": {"exists": true, "size": 67890},
-      "query_metadata.json": {"exists": true, "size": 4567}
+      "VERSION.json": {"exists": true, "version": "v1.2.3", "data_state": "ready"},
+      "datasets.csv": {"exists": true, "size": 12345, "row_count": 12},
+      "dataset_fields.csv": {"exists": true, "size": 67890, "row_count": 345},
+      "dataset_catalog.json": {"exists": true, "size": 2345, "intent_count": 20},
+      "query_metadata.json": {"exists": true, "size": 4567, "dataset_count": 12, "field_count": 345}
     }
   },
   "mcp_hint": "如需更新，调用 skills_upgrade(name='ops-dataset-query')"
 }
 ```
+
+`healthy=false` 且 `data_state=placeholder_or_empty` 表示当前只有模板占位数据，应先调用 `skills_upgrade(name="ops-dataset-query")` 后再重试搜索或查询。
 
 ---
 

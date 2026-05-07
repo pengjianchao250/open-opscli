@@ -249,6 +249,125 @@ def test_query_script_builds_run_command(monkeypatch):
     ]
 
 
+def test_query_script_builds_catalog_command(monkeypatch):
+    query_script = _load_module("dataset_fields_query_catalog_test", SCRIPT_DIR / "query.py")
+
+    monkeypatch.setattr(query_script, "build_opscli_prefix", lambda: ["opscli"])
+
+    class Args:
+        command = "catalog"
+        skills_dir = "/tmp/skills"
+        pretty = True
+
+    command = query_script.build_command(Args())
+
+    assert command == [
+        "opscli",
+        "query",
+        "catalog",
+        "--skills-dir",
+        "/tmp/skills",
+        "--pretty",
+    ]
+
+
+def test_query_script_builds_simple_command(monkeypatch):
+    query_script = _load_module("dataset_fields_query_simple_test", SCRIPT_DIR / "query.py")
+
+    monkeypatch.setattr(query_script, "build_opscli_prefix", lambda: ["opscli"])
+
+    class Args:
+        command = "simple"
+        table_id = 1
+        payload = None
+        payload_json = '{"dimensions":[]}'
+        output = "/tmp/simple.json"
+        run = True
+        pretty = True
+
+    command = query_script.build_command(Args())
+
+    assert command == [
+        "opscli",
+        "query",
+        "simple",
+        "--table-id",
+        "1",
+        "--json",
+        '{"dimensions":[]}',
+        "--output",
+        "/tmp/simple.json",
+        "--run",
+        "--pretty",
+    ]
+
+
+def test_query_script_rejects_simple_payload_and_json(monkeypatch, capsys):
+    query_script = _load_module("dataset_fields_query_simple_conflict_test", SCRIPT_DIR / "query.py")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "query.py",
+            "simple",
+            "--table-id",
+            "1",
+            "--payload",
+            "/tmp/simple.json",
+            "--json",
+            "{}",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        query_script.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exc_info.value.code == 1
+    assert payload["success"] is False
+    assert "--payload 和 --json" in payload["error"]
+
+
+def test_query_script_builds_chart_commands(monkeypatch):
+    query_script = _load_module("dataset_fields_query_chart_test", SCRIPT_DIR / "query.py")
+
+    monkeypatch.setattr(query_script, "build_opscli_prefix", lambda: ["opscli"])
+
+    class ChartArgs:
+        command = "chart"
+        uuid = "chart-123"
+        run = True
+        dry_run = True
+        pretty = True
+
+    class ChartDocArgs:
+        command = "chart-doc"
+        uuid = "chart-123"
+        output = "/tmp/chart.md"
+        pretty = False
+
+    assert query_script.build_command(ChartArgs()) == [
+        "opscli",
+        "query",
+        "chart",
+        "--uuid",
+        "chart-123",
+        "--run",
+        "--dry-run",
+        "--pretty",
+    ]
+    assert query_script.build_command(ChartDocArgs()) == [
+        "opscli",
+        "query",
+        "chart-doc",
+        "--uuid",
+        "chart-123",
+        "--output",
+        "/tmp/chart.md",
+    ]
+
+
 def test_query_script_builds_build_command(monkeypatch):
     query_script = _load_module("dataset_fields_query_build_test", SCRIPT_DIR / "query.py")
 
@@ -321,3 +440,58 @@ def test_query_script_emits_error_when_opscli_missing(monkeypatch, capsys):
     assert exc_info.value.code == 1
     assert payload["success"] is False
     assert "未找到 opscli" in payload["error"]
+
+
+def test_updater_mcp_marks_placeholder_data_unhealthy(tmp_path):
+    updater_mcp = _load_module("dataset_fields_updater_mcp_test", SCRIPT_DIR / "updater_mcp.py")
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        '{"name":"ops-dataset-query","version":"v0.0.1","data_state":"placeholder"}',
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text("table_id,dataset_alias\n", encoding="utf-8")
+    (data_dir / "dataset_fields.csv").write_text("dataset_alias,field_name\n", encoding="utf-8")
+    (data_dir / "dataset_catalog.json").write_text(
+        '{"version":"v0.0.0","intent_count":0,"intents":[],"query_strategy":{}}',
+        encoding="utf-8",
+    )
+    (data_dir / "query_metadata.json").write_text('{"datasets":[],"fields":[]}', encoding="utf-8")
+
+    status = updater_mcp.check_local_data(data_dir)
+
+    assert status["healthy"] is False
+    assert status["data_state"] == "placeholder_or_empty"
+    assert status["summary"]["datasets_csv_count"] == 0
+    assert status["summary"]["fields_csv_count"] == 0
+
+
+def test_updater_mcp_marks_populated_data_healthy(tmp_path):
+    updater_mcp = _load_module("dataset_fields_updater_mcp_ready_test", SCRIPT_DIR / "updater_mcp.py")
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        '{"name":"ops-dataset-query","version":"v1.0.0"}',
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text("table_id,dataset_alias\n1,sales_order_d\n", encoding="utf-8")
+    (data_dir / "dataset_fields.csv").write_text(
+        "dataset_alias,field_name\nsales_order_d,order_cost\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_catalog.json").write_text(
+        '{"version":"v1.0.0","intents":[{"dataset_alias":"sales_order_d"}]}',
+        encoding="utf-8",
+    )
+    (data_dir / "query_metadata.json").write_text(
+        '{"datasets":[{"table_id":1}],"fields":[{"table_id":1,"field_name":"order_cost"}]}',
+        encoding="utf-8",
+    )
+
+    status = updater_mcp.check_local_data(data_dir)
+
+    assert status["healthy"] is True
+    assert status["data_state"] == "ready"
+    assert status["summary"]["metadata_field_count"] == 1

@@ -2,7 +2,7 @@
 
 本文档对应 `opscli` CLI 命令用例手册的 MCP 版本，覆盖全部 MCP Tool 的调用方式、参数说明与常见使用示例。
 
-- 代码基线：`aukeys-opscli` `0.0.10`
+- 代码基线：`aukeys-opscli` `0.0.35`
 - 入口方式：MCP Tool 调用（Python 函数风格）
 
 ---
@@ -33,17 +33,21 @@ opscli MCP Tools
 │   └── amazon_history
 ├── query
 │   ├── query_metadata
+│   ├── query_catalog
 │   ├── query_simple
 │   ├── query_build
 │   ├── query_run
 │   ├── query_build_and_run
 │   ├── query_chart
 │   └── query_chart_doc
-└── skills
-    ├── skills_list
-    ├── skills_install
-    ├── skills_status
-    └── skills_upgrade
+├── skills
+│   ├── skills_list
+│   ├── skills_install
+│   ├── skills_status
+│   └── skills_upgrade
+└── knowledge (ChatGPT / OpenAI 兼容)
+    ├── search
+    └── fetch
 ```
 
 ---
@@ -71,6 +75,8 @@ opscli MCP Tools
   "error": "错误描述"
 }
 ```
+
+> **例外**：`search` 和 `fetch` 工具遵循 OpenAI Company Knowledge 标准格式，不使用上述结构（详见第 8 章）。
 
 ### 2.2 认证说明
 
@@ -464,7 +470,9 @@ auth_build_request_auth(system="ops", session_id="860b0636485b5188a2b9b4ed5210e7
 
 用于 Amazon 商品抓取、本地历史保存、标准 payload 构造和搜索结果抓取。
 
-> 前置依赖：`pip install opscli && playwright install chromium`
+> 前置依赖：`pip install opscli[amazon] && playwright install chromium`
+>
+> amazon 工具组仅在 `playwright` 已安装时才会注册到 MCP Server。
 
 ### 4.1 `amazon_scrape`
 
@@ -658,7 +666,28 @@ query_metadata(dataset="sales_order_d", skills_dir="/Users/mask/.config/opencode
 
 ---
 
-### 5.2 `query_simple`
+### 5.2 `query_catalog`
+
+读取本地数据集业务语义索引（dataset catalog）。**不需要认证**。
+
+返回完整的 catalog JSON 结构，包含 version、intent_count、intents 数组和 query_strategy。用于自然语言需求匹配 intents 后选出候选数据集。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `skills_dir` | string | 否 | 自定义 Skills 目录（用于读取本地缓存 catalog） |
+
+**示例**
+
+```python
+query_catalog()
+query_catalog(skills_dir="/Users/mask/.config/opencode/skills")
+```
+
+---
+
+### 5.3 `query_simple`
 
 基于简化参数直接执行查询。服务端自动处理 `innerWhere`、`translate`、`MOY` 展开等技术细节。**需要认证**。
 
@@ -725,7 +754,7 @@ query_simple(
 
 ---
 
-### 5.3 `query_build`
+### 5.4 `query_build`
 
 基于简化参数构造标准 query payload（不执行查询）。**不需要认证**。
 
@@ -778,7 +807,7 @@ query_build(
 
 ---
 
-### 5.4 `query_run`
+### 5.5 `query_run`
 
 读取本地 payload JSON 文件并转发至服务端执行查询。
 
@@ -802,7 +831,7 @@ query_run(
 
 ---
 
-### 5.5 `query_build_and_run`
+### 5.6 `query_build_and_run`
 
 构造 query payload 并立即执行，一步返回数据结果。
 
@@ -836,7 +865,7 @@ query_build_and_run(
 
 ---
 
-### 5.6 `query_chart`
+### 5.7 `query_chart`
 
 通过 `chart_uuid` 获取图表查询结构，可选立即执行所有查询。
 
@@ -913,7 +942,7 @@ query_chart(
 
 ---
 
-### 5.7 `query_chart_doc`
+### 5.8 `query_chart_doc`
 
 通过 `chart_uuid` 生成图表 API 调用 Markdown 文档，包含查询结构、字段映射、过滤规则与样例。**需要认证**。
 
@@ -1064,11 +1093,11 @@ skills_upgrade(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencod
 ```python
 # 1. 发起 Device Flow
 auth_login_start()
-# → 获取 verification_url 和 user_code，提示用户浏览器授权
+# -> 获取 verification_url 和 user_code，提示用户浏览器授权
 
 # 2. 轮询授权状态
 auth_login_poll(device_code="abc123")
-# → 获取 session_id，保存到对话上下文
+# -> 获取 session_id，保存到对话上下文
 
 # 3. 安装 ops-dataset-query Skill
 skills_install(name="ops-dataset-query")
@@ -1137,7 +1166,7 @@ result = query_chart(
 )
 
 # 2. 保存结果到文件（供本地脚本处理）
-# → 保存到 /tmp/chart_result.json
+# -> 保存到 /tmp/chart_result.json
 
 # 3. 使用本地脚本进行字段映射
 # python scripts/chart_map_mcp.py --input /tmp/chart_result.json --pretty
@@ -1149,9 +1178,117 @@ result = query_chart(
 # python scripts/excel_export_mcp.py --input /tmp/chart_result.json --output /tmp/output.xlsx
 ```
 
+### 7.6 使用业务语义索引定位数据集
+
+```python
+# 1. 读取 catalog（业务语义索引）
+query_catalog()
+
+# 2. 根据 catalog 中的 intents 匹配用户需求，确定 dataset_alias 和 table_id
+
+# 3. 获取 metadata 确认字段
+query_metadata(dataset="sales_order_d")
+
+# 4. 使用 query_simple 执行查询
+query_simple(
+    table_id=1,
+    dimensions=[{"field": "dept_name", "alias": "f_dept"}],
+    metrics=[{"field": "gmv", "aggregation": "SUM", "alias": "f_gmv"}],
+    limit=20
+)
+```
+
+### 7.7 使用 search/fetch 搜索数据集（OpenAI 兼容）
+
+```python
+# 1. 搜索数据集和字段
+search(query="销售订单")
+
+# 2. 获取数据集详细信息
+fetch(id="dataset:sales_order_d")
+
+# 3. 获取字段详细信息
+fetch(id="field:sales_order_d.gmv")
+```
+
 ---
 
-## 8. 认证状态速查
+## 8. Knowledge 模块（ChatGPT / OpenAI 兼容）
+
+为兼容 OpenAI Company Knowledge、Deep Research 和 MCP Connectors 而实现的标准工具。
+
+> 这两个工具遵循 OpenAI Company Knowledge 标准格式，不使用 `success/data/error` 统一结构。
+
+### 8.1 `search`
+
+在本地数据集和字段索引中搜索，返回匹配结果列表。**不需要认证**。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `query` | string | 是 | 搜索关键词（自然语言或字段名/数据集名） |
+
+**返回**
+
+```json
+{
+  "results": [
+    {"id": "dataset:sales_order_d", "title": "销售订单日报", "url": "opscli://dataset/sales_order_d"},
+    {"id": "field:sales_order_d.gmv", "title": "GMV", "url": "opscli://field/sales_order_d.gmv"},
+    ...
+  ]
+}
+```
+
+**示例**
+
+```python
+search(query="销售订单")
+search(query="gmv")
+search(query="退款 退货")
+```
+
+---
+
+### 8.2 `fetch`
+
+获取指定数据集或字段的详细信息。**不需要认证**。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | string | 是 | 资源唯一标识（由 `search` 工具返回的 `id` 字段），格式：`dataset:{alias}` 或 `field:{dataset.field_name}` |
+
+**返回**
+
+```json
+{
+  "id": "dataset:sales_order_d",
+  "title": "销售订单日报",
+  "text": "数据集: sales_order_d\n维度字段 (15个): date_id (日期), ...\n指标字段 (8个): gmv (GMV), ...",
+  "url": "opscli://dataset/sales_order_d",
+  "metadata": {
+    "type": "dataset",
+    "table_id": 1,
+    "dataset_type": "table",
+    "dimensions_count": 15,
+    "metrics_count": 8
+  }
+}
+```
+
+**示例**
+
+```python
+fetch(id="dataset:sales_order_d")
+fetch(id="field:sales_order_d.gmv")
+```
+
+---
+
+## 9. 认证状态速查
 
 | Tool | 需要认证 | 认证方式 |
 |------|---------|---------|
@@ -1174,6 +1311,7 @@ result = query_chart(
 | `amazon_schema` | 否 | - |
 | `amazon_history` | 否 | - |
 | `query_metadata` | 否 | - |
+| `query_catalog` | 否 | - |
 | `query_simple` | **是** | 可传 session_id / jwt |
 | `query_build` | 否 | - |
 | `query_run` | **是** | 可传 session_id / jwt |
@@ -1185,10 +1323,12 @@ result = query_chart(
 | `skills_install` | 否 | - |
 | `skills_status` | 服务端自动 | 涉及远端 API |
 | `skills_upgrade` | 服务端自动 | 涉及远端 API |
+| `search` | 否 | - |
+| `fetch` | 否 | - |
 
 ---
 
-## 9. 快速索引
+## 10. 快速索引
 
 | 模块 | Tool | 对应 CLI 命令 |
 |------|------|--------------|
@@ -1210,6 +1350,7 @@ result = query_chart(
 | Amazon | `amazon_schema` | `opscli amazon schema` |
 | Amazon | `amazon_history` | `opscli amazon history` |
 | 查询 | `query_metadata` | `opscli query metadata` |
+| 查询 | `query_catalog` | `opscli query catalog` |
 | 查询 | `query_simple` | `opscli query simple` |
 | 查询 | `query_build` | `opscli query build` |
 | 查询 | `query_run` | `opscli query run` |
@@ -1220,3 +1361,5 @@ result = query_chart(
 | Skills | `skills_install` | `opscli skills install` |
 | Skills | `skills_status` | `opscli skills status` |
 | Skills | `skills_upgrade` | `opscli skills upgrade` |
+| Knowledge | `search` | （CLI 无直接对应） |
+| Knowledge | `fetch` | （CLI 无直接对应） |

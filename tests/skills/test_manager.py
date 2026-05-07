@@ -104,10 +104,20 @@ def test_upgrade_updates_all_matching_skill_records(tmp_path: Path, monkeypatch)
     )
 
     monkeypatch.setattr(manager, "list_skills", lambda **kwargs: [record1, record2])
+    fake_data = {
+        "manifest": {"version": "v1.1.0"},
+        "fields_csv": "",
+        "datasets_csv": "",
+        "dataset_catalog": {},
+        "query_metadata": {},
+        "field_count": 0,
+    }
+
+    monkeypatch.setattr(manager.updater, "fetch_upgrade_data", lambda name, on_step=None: fake_data)
     monkeypatch.setattr(
         manager.updater,
-        "upgrade_ops_dataset_query",
-        lambda record, force=False, on_step=None: SkillUpgradeResult(
+        "apply_upgrade_data",
+        lambda record, data, force=False, on_step=None: SkillUpgradeResult(
             name=record.name,
             from_version="v1.0.0",
             to_version="v1.1.0",

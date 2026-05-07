@@ -6,7 +6,7 @@ DEFAULTS = {
     "ops_url": "https://ops.api.qa.aukeyit.com/api",
     "ops_system_url": "https://ops.api.qa.aukeyit.com",
     "ops_token_endpoint": "/api/v1/auth/cli-token",
-    "polaris_system_url": "https://bi.api.test.aukeyit.com",
+    "polaris_system_url": "https://biapi.qa.aukeyit.com/",
     "polaris_token_endpoint": "/api/auth/cli-token",
     "amazon_submit_endpoint": "",
 }
