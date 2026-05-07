@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-05-07 auth/cli - token status 增加 session_id 显示
+
+**变更原因**：用户需要在 `opscli auth token status` 中看到 session_id，方便排查和 MCP 连接时确认当前会话。
+**改动点**：`opscli/auth/cli.py` 的 `status()` 函数，在 email 和 session_expires_at 之间增加 `Session ID` 行输出。
+**验证结果**：`session_id` 已在 `CredentialStore.load()` 返回数据中存在，直接读取即可。
+**影响范围**：仅影响 `opscli auth token status` 的终端输出，增加一行信息。
+**回滚方式**：删除新增的 `console.print(f"Session ID：{data.get('session_id', 'N/A')}")` 行。
+---
+
 ## 2026-05-07 docs/guide — 更新 CLI 和 MCP 两份使用手册至 v0.0.35
 
 **变更原因**：两份手册（`opscli命令用例手册.md` 和 `MCP工具使用手册.md`）停留在 v0.0.10，项目已迭代至 v0.0.35，缺少 seller-sprite 模块、mcp user 命令组、query catalog/simple 子命令、search/fetch MCP 工具等大量新增内容，需要全量更新以保持文档与代码一致。

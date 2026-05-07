@@ -113,6 +113,7 @@ def status():
         console.print("[yellow]未登录[/yellow]")
         return
     console.print(f"[green]已登录[/green]  {data.get('email', '')}")
+    console.print(f"Session ID：{data.get('session_id', 'N/A')}")
     console.print(f"Session 过期：{data.get('session_expires_at', 'N/A')}\n")
     t = Table("别名", "系统", "Token 状态", "剩余时间(s)")
     for s in c._registry.list_all():
