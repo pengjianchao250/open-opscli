@@ -131,6 +131,7 @@ opscli skills upgrade ops-dataset-query
 | 文件 | 内容 | 说明 |
 |------|------|------|
 | `data/VERSION.json` | 版本号 | `{"name": "ops-dataset-query", "version": "v1.x.x"}` |
+| `data/dataset_catalog.json` | 业务语义索引 | version、intent_count、intents（使用案例/关键词/场景/优先级/数据集映射）、query_strategy |
 | `data/dataset_fields.csv` | 字段明细 | dataset_alias、field_name、verbose_name、global_alias、field_type、formula_config、detail_expression、summary_expression 等 |
 | `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_type、dataset_category、data_source、main_dttm_col、inner_where_enabled、cache_timeout、description |
 | `data/query_metadata.json` | 查询元数据 | 字段类型映射、可用聚合方式等 |
@@ -156,6 +157,50 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 ```bash
 opscli query metadata --dataset sales_order_d --pretty
 opscli query metadata --table-id 123 --pretty
+```
+
+---
+
+### `opscli query catalog`
+
+读取本地数据集业务语义索引（dataset catalog）。**不需要认证**，纯本地只读。用于自然语言需求匹配 intents 后选出候选数据集。
+
+```
+选项：
+  --skills-dir TEXT   指定 Skill 目录
+  --pretty            格式化 JSON 输出
+```
+
+```bash
+# 读取完整 catalog
+opscli query catalog --pretty
+
+# 指定 Skill 目录
+opscli query catalog --skills-dir ~/.claude/skills --pretty
+```
+
+**返回结构**：
+
+```json
+{
+  "success": true,
+  "command": "query catalog",
+  "data": {
+    "version": "v1.0.0",
+    "intent_count": 15,
+    "intents": [
+      {
+        "use_case": "销售订单分析",
+        "keywords": ["订单", "销售额", "出库"],
+        "scenario": "查看某时段内的销售订单汇总数据",
+        "priority": 1,
+        "dataset_alias": "sales_order_d"
+      }
+    ],
+    "query_strategy": {}
+  },
+  "error": null
+}
 ```
 
 ---

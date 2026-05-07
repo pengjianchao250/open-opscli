@@ -1032,6 +1032,48 @@ class QueryManager:
             return fallback
         raise QueryMetadataNotReadyError("本地未找到 query_metadata.json，请先安装并升级 ops-dataset-query")
 
+    # ── dataset catalog（AI 业务语义索引）────────────────────────────
+
+    def catalog(
+        self,
+        *,
+        skills_dir: str | None = None,
+        cwd: Path | None = None,
+    ) -> dict:
+        """读取本地 dataset catalog（AI 业务语义索引）。
+
+        返回完整的 catalog JSON 结构，包含 version、intent_count、intents、query_strategy。
+        不需要认证，纯本地只读。
+        """
+        return self._load_dataset_catalog(skills_dir=skills_dir, cwd=cwd)
+
+    def _load_dataset_catalog(self, *, skills_dir: str | None, cwd: Path | None) -> dict:
+        """从已安装 Skill 或内置模板中读取 dataset_catalog.json。"""
+        catalog_file = self._resolve_catalog_file(skills_dir=skills_dir, cwd=cwd)
+        try:
+            payload = json.loads(catalog_file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise QueryMetadataNotReadyError(f"dataset catalog 读取失败: {catalog_file}") from exc
+
+        if not isinstance(payload, dict):
+            raise QueryMetadataNotReadyError(f"dataset catalog 结构非法: {catalog_file}")
+        return payload
+
+    def _resolve_catalog_file(self, *, skills_dir: str | None, cwd: Path | None) -> Path:
+        """优先使用已安装 Skill 的 catalog 文件，否则回退到内置模板。"""
+        records = self.detector.discover(skills_dir=skills_dir, cwd=cwd)
+        for record in records:
+            if record.name != "ops-dataset-query":
+                continue
+            catalog_file = record.root / "data" / "dataset_catalog.json"
+            if catalog_file.exists():
+                return catalog_file
+
+        fallback = self.template_dir / "dataset_catalog.json"
+        if fallback.exists():
+            return fallback
+        raise QueryMetadataNotReadyError("本地未找到 dataset_catalog.json，请先安装并升级 ops-dataset-query")
+
     def _parse_dimension_spec(self, raw: str) -> _FieldSpec:
         """解析维度定义：field_name[:alias]。"""
         parts = [item.strip() for item in raw.split(":")]

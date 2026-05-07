@@ -62,6 +62,28 @@ def metadata(
     _emit(payload, pretty)
 
 
+@app.command("catalog")
+def catalog(
+    skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 目录"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """读取本地数据集业务语义索引（dataset catalog）。不需要认证。"""
+    manager = QueryManager()
+    try:
+        result = manager.catalog(skills_dir=skills_dir)
+        payload = {
+            "success": True,
+            "command": "query catalog",
+            "data": result,
+            "error": None,
+        }
+    except Exception as exc:
+        _emit(_error_payload("query catalog", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
 @app.command("run")
 def run(
     payload_path: str = typer.Option(..., "--payload", help="查询 JSON 文件路径"),

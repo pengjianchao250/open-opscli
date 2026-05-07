@@ -2,6 +2,7 @@
 
 将 opscli query 子模块的核心能力暴露为 MCP 工具：
 - query_metadata        — 查询数据集 metadata（维度/指标字段）
+- query_catalog         — 读取数据集业务语义索引（自然语言匹配数据集）
 - query_build           — 构造标准 query payload（不执行）
 - query_run             — 读取本地 payload 文件并执行查询
 - query_build_and_run   — 构造 payload 并立即执行，一步返回结果
@@ -37,6 +38,26 @@ async def query_metadata(
             skills_dir=skills_dir,
         )
         return _ok(result.to_dict())
+    except Exception as exc:
+        return _err(exc)
+
+
+async def query_catalog(
+    skills_dir: str | None = None,
+) -> dict:
+    """读取本地数据集业务语义索引（dataset catalog）。不需要认证。
+
+    返回完整的 catalog JSON 结构，包含 version、intent_count、intents 数组和 query_strategy。
+    用于自然语言需求匹配 intents 后选出候选数据集。
+
+    Args:
+        skills_dir: 可选，自定义 Skills 目录（用于读取本地缓存 catalog）
+    """
+    try:
+        result = _query_manager().catalog(
+            skills_dir=skills_dir,
+        )
+        return _ok(result)
     except Exception as exc:
         return _err(exc)
 
@@ -324,6 +345,7 @@ async def query_chart_doc(
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS = [
     query_metadata,
+    query_catalog,
     query_simple,
     query_build,
     query_run,
