@@ -1,5 +1,30 @@
 # 待归档变更记录
 
+## 2026-05-07 ops-dataset-query 文档 — 补充 payload 互斥与 select 结构说明
+
+**变更原因**：AI 在实际调用中频繁出现两类错误：(1) `opscli query simple` 同时传 `--payload` 和 `--json` 导致 CLI 报错；(2) 手写 `query run` payload 使用 `global_alias` 作为 key 而非 `expr`/`alias`，导致服务端 422 校验失败
+**改动点**：
+1. `references/cli.md` — `opscli query simple` 章节增加 `--payload`/`--json` 互斥警告框和错误示例
+2. `references/cli.md` — `opscli query run` 章节增加 `query.select` 必填字段说明（`expr` + `alias`），含正确和错误对比示例
+3. `references/mcp.md` — `query_run` 章节增加同样的 `select` 结构要求说明
+**验证结果**：文档变更，无代码修改，无需测试
+**影响范围**：ops-dataset-query Skill 的 CLI 和 MCP 参考文档
+**回滚方式**：git revert 对应 commit
+---
+
+## 2026-05-07 MCP query/search — 4 项调用异常修复
+
+**变更原因**：基于实际调用记录分析，发现 4 个影响数据查询体验的问题：query_simple 因透传 skills_dir 导致 TypeError；search 工具多词搜索命中率极低；where_conditions 格式文档缺失导致 AI 连续试错；CLI 优先级提示不够强
+**改动点**：
+1. `opscli/mcp/tools/query.py` — query_simple 调用 build_simple_and_run 时剔除 skills_dir 参数（build_simple 不接受此参数）
+2. `opscli/mcp/tools/chatgpt.py` — search 工具新增 _tokenize_query 分词函数，_score_dataset_match / _score_field_match 支持多 token 逐词匹配累加分数
+3. `opscli/mcp/tools/query.py` — query_build 和 query_build_and_run 的 docstring 补充 where_conditions 格式说明（field|operator|value_json）和示例
+4. `opscli/skills/templates/ops-dataset-query/SKILL.md` — 运行模式判断增加"opscli 项目目录下必须用 CLI"的强制规则
+**验证结果**：146 个测试通过（1 个已有的认证依赖测试失败，与本次无关）；多词搜索验证 "Amazon 销售额 广告花费" 可匹配到 verbose_name 含"广告花费"的字段（分数 50，原来为 0）
+**影响范围**：MCP query_simple / search / query_build_and_run 工具；ops-dataset-query SKILL.md
+**回滚方式**：git revert 对应 commit
+---
+
 ## 2026-04-30 ops-dataset-query - P0/P1 修复 + 搜索空结果强制升级
 
 **变更原因**：ops-dataset-query Skill 存在 10 项问题（P0-P3），包括 __pycache__ 泄漏、版本号不统一、where 字段名错误、函数重复定义、文档重复、搜索空结果无升级兜底等。用户反馈搜索"广告"返回空 `[]` 后 AI 直接放弃，未触发 upgrade。

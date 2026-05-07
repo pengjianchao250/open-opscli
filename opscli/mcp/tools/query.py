@@ -81,18 +81,22 @@ async def query_build(
     """基于简化参数构造标准 query payload（不执行查询）。不需要认证。
 
     Args:
-        dataset:           数据集别名
-        table_id:          数据表 ID
-        dimensions:        维度字段列表
-        metrics:           指标字段列表
-        where_conditions:  过滤条件列表（字符串格式）
+        dataset:           数据集别名（与 table_id 二选一）
+        table_id:          数据表 ID（与 dataset 二选一）
+        dimensions:        维度字段列表，格式 field_name[:alias]，如 ["date_id", "country_id:country"]
+        metrics:           指标字段列表，格式 field_name:aggregation[:alias]，如 ["price:SUM:f_price"]
+        where_conditions:  过滤条件列表，格式 field|operator|value_json（管道符分隔），如：
+                           - ["platform_name|=|\"Amazon\""]
+                           - ["date_id|>=|\"2026-01-01\"", "date_id|<=|\"2026-01-31\""]
+                           操作符支持: =, !=, >, >=, <, <=, in, not in
+                           value 部分为 JSON 编码值（字符串需转义引号，数组用 [...]）
         where_json:        过滤条件 JSON 字符串（与 where_conditions 二选一）
-        order_by:          排序字段列表
-        having_conditions: HAVING 过滤条件列表
+        order_by:          排序字段列表，格式 expr[:asc|desc]，如 ["f_price:desc"]
+        having_conditions: HAVING 过滤条件列表，格式同 where_conditions
         limit:             返回行数限制（默认 20）
         offset:            分页偏移（默认 0）
         dry_run:           是否仅验证不执行
-        data_comparison:   数据对比类型
+        data_comparison:   数据对比，格式 field,start_date,end_date，如 "date_id,2026-03-01,2026-03-22"
         output_path:       可选，将 payload 写入指定文件路径
         skills_dir:        可选，自定义 Skills 目录
     """
@@ -157,6 +161,7 @@ async def query_simple(
     if not sid:
         return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"))
     try:
+        # 注意：build_simple() 不接受 skills_dir，simple 查询由服务端处理，无需本地 metadata
         result = _query_manager(jwt=jw, session_id=sid).build_simple_and_run(
             table_id=table_id,
             dimensions=dimensions,
@@ -167,7 +172,6 @@ async def query_simple(
             limit=limit,
             offset=offset,
             dry_run=dry_run,
-            skills_dir=skills_dir,
         )
         return _ok(result)
     except Exception as exc:
@@ -224,18 +228,22 @@ async def query_build_and_run(
     如果未提供 session_id / jwt，会自动尝试从本地加载已保存的凭据。
 
     Args:
-        dataset:           数据集别名
-        table_id:          数据表 ID
-        dimensions:        维度字段列表
-        metrics:           指标字段列表
-        where_conditions:  过滤条件列表
-        where_json:        过滤条件 JSON 字符串
-        order_by:          排序字段列表
-        having_conditions: HAVING 过滤条件列表
+        dataset:           数据集别名（与 table_id 二选一）
+        table_id:          数据表 ID（与 dataset 二选一）
+        dimensions:        维度字段列表，格式 field_name[:alias]，如 ["date_id", "country_id:country"]
+        metrics:           指标字段列表，格式 field_name:aggregation[:alias]，如 ["price:SUM:f_price"]
+        where_conditions:  过滤条件列表，格式 field|operator|value_json（管道符分隔），如：
+                           - ["platform_name|=|\"Amazon\""]
+                           - ["date_id|>=|\"2026-01-01\"", "date_id|<=|\"2026-01-31\""]
+                           操作符支持: =, !=, >, >=, <, <=, in, not in
+                           value 部分为 JSON 编码值（字符串需转义引号，数组用 [...]）
+        where_json:        过滤条件 JSON 字符串（与 where_conditions 二选一）
+        order_by:          排序字段列表，格式 expr[:asc|desc]，如 ["f_price:desc"]
+        having_conditions: HAVING 过滤条件列表，格式同 where_conditions
         limit:             返回行数限制（默认 20）
         offset:            分页偏移（默认 0）
         dry_run:           是否仅验证不执行
-        data_comparison:   数据对比类型
+        data_comparison:   数据对比，格式 field,start_date,end_date，如 "date_id,2026-03-01,2026-03-22"
         skills_dir:        可选，自定义 Skills 目录
         session_id:        可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:               可选，已有 JWT（为空则自动加载本地缓存的）

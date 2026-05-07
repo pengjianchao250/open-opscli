@@ -885,15 +885,26 @@ python chart_analyze.py --uuid <chart_uuid> --dc-input /tmp/dc_output.json --pre
   --pretty             格式化 JSON 输出
 ```
 
+> **【强制】`--payload` 与 `--json` 互斥**：两者只能使用其中一个，不可同时传入。
+> - `--payload`：从文件读取 JSON（适合复杂/多行查询）
+> - `--json`：直接传入 JSON 字符串（适合简单查询）
+> - 同时传入时 CLI 会报错
+
 ```bash
-# 构造并执行简化查询
+# ✅ 正确：使用 --json 内联传入
 opscli query simple --table-id 1 \
   --json '{"dimensions":[{"field":"dept_name","alias":"f_dept"}],"metrics":[{"field":"fi_first_leg_trailer_fee","aggregation":"SUM","alias":"f_fee_sum"}],"filters":[{"field":"date_id","operator":"between","value":["2026-04-01","2026-04-22"]}],"limit":10}' \
   --run --pretty
 
-# 带数据对比
+# ✅ 正确：使用 --payload 从文件读取
 opscli query simple --table-id 1 \
   --payload /tmp/simple.json \
+  --run --pretty
+
+# ❌ 错误：--payload 和 --json 不可同时使用
+opscli query simple --table-id 1 \
+  --payload /tmp/simple.json \
+  --json '{"dimensions":[...]}' \
   --run --pretty
 ```
 
@@ -914,6 +925,38 @@ opscli query simple --table-id 1 \
 ```bash
 opscli query run --payload /tmp/query.json --pretty
 ```
+
+> **【强制】手写 payload 的 `query.select` 结构要求**
+>
+> 服务端校验规则（`CliQueryApiController`）：`query.select.*.expr` 和 `query.select.*.alias` 为**必填字段**。
+>
+> - `expr`：字段表达式，格式为 `数据集别名.字段名`（如 `ds_d35ac6f3910c.dept_name`），或完整公式
+> - `alias`：输出列名，建议使用 `global_alias`（如 `f_520fb9a831ccd52a`）或自定义英文标识
+> - `aggregation`：聚合方式（如 `SUM`、`COUNT`），指标字段需提供，维度字段不传
+>
+> **正确的 select 结构**：
+> ```json
+> "select": [
+>   {"expr": "ds_d35ac6f3910c.dept_name", "alias": "f_520fb9a831ccd52a"},
+>   {"expr": "ds_d35ac6f3910c.order_cost", "alias": "f_total_cost", "aggregation": "SUM"}
+> ]
+> ```
+>
+> **错误示例（会导致 422 校验失败）**：
+> ```json
+> // ❌ 错误：使用 global_alias 作为 key，缺少 expr
+> "select": [
+>   {"global_alias": "f_520fb9a831ccd52a"},
+>   {"global_alias": "f_total_cost", "aggregation": "SUM"}
+> ]
+>
+> // ❌ 错误：缺少 alias
+> "select": [
+>   {"expr": "ds_d35ac6f3910c.dept_name"}
+> ]
+> ```
+>
+> **建议**：优先使用 `opscli query build` 自动构造 payload，避免手写出错。
 
 **输出格式：**
 

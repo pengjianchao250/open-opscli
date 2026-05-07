@@ -104,13 +104,30 @@ async def search(query: str) -> dict:
         return {"results": []}
 
 
+def _tokenize_query(query: str) -> list[str]:
+    """将查询字符串拆分为独立 token，支持空格和逗号分隔。
+
+    返回去重后的非空 token 列表（全小写）。
+    """
+    tokens = []
+    for part in query.replace(",", " ").replace("，", " ").split():
+        t = part.strip().lower()
+        if t and t not in tokens:
+            tokens.append(t)
+    return tokens
+
+
 def _score_dataset_match(ds: dict, query: str) -> int:
-    """计算数据集与查询关键词的匹配分数。"""
+    """计算数据集与查询关键词的匹配分数。
+
+    支持多词查询：先用整句匹配，再按 token 逐词匹配并累加分数。
+    """
     q = query.lower()
     alias = (ds.get("dataset_alias") or "").lower()
     name = (ds.get("dataset_name") or "").lower()
     desc = (ds.get("description") or "").lower()
 
+    # 整句精确/子串匹配（高优先级）
     if alias == q:
         return 120
     if name == q:
@@ -121,11 +138,28 @@ def _score_dataset_match(ds: dict, query: str) -> int:
         return 45
     if q in desc:
         return 10
-    return 0
+
+    # 多 token 逐词匹配：每个 token 独立计分后累加
+    tokens = _tokenize_query(query)
+    if len(tokens) <= 1:
+        return 0
+
+    total = 0
+    for token in tokens:
+        if token in alias:
+            total += 30
+        elif token in name:
+            total += 22
+        elif token in desc:
+            total += 5
+    return total
 
 
 def _score_field_match(f: dict, query: str) -> int:
-    """计算字段与查询关键词的匹配分数。"""
+    """计算字段与查询关键词的匹配分数。
+
+    支持多词查询：先用整句匹配，再按 token 逐词匹配并累加分数。
+    """
     q = query.lower()
     field_name = (f.get("field_name") or "").lower()
     verbose = (f.get("verbose_name") or "").lower()
@@ -133,6 +167,7 @@ def _score_field_match(f: dict, query: str) -> int:
     dataset = (f.get("dataset_alias") or "").lower()
     desc = (f.get("description") or "").lower()
 
+    # 整句精确/子串匹配（高优先级）
     if field_name == q:
         return 120
     if verbose == q:
@@ -149,7 +184,27 @@ def _score_field_match(f: dict, query: str) -> int:
         return 35
     if q in desc:
         return 10
-    return 0
+
+    # 多 token 逐词匹配：每个 token 独立计分后累加
+    tokens = _tokenize_query(query)
+    if len(tokens) <= 1:
+        return 0
+
+    total = 0
+    for token in tokens:
+        if token == field_name:
+            total += 60
+        elif token == verbose:
+            total += 50
+        elif token in field_name:
+            total += 30
+        elif token in verbose:
+            total += 22
+        elif token in g_alias:
+            total += 17
+        elif token in desc:
+            total += 5
+    return total
 
 
 # ── fetch ────────────────────────────────────────────────────────

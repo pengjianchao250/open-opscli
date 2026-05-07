@@ -27,13 +27,19 @@ version: see data/VERSION.json
 
 进入本 Skill 后，不要为模式判断额外运行检测脚本，直接按下面规则判断。
 
+> **【强制】快速判断规则**：
+> - 当前工作目录包含 `opscli/` 源码（即 opscli 项目本身） → **必须用 CLI**
+> - 当前环境可直接执行 `opscli` 命令（终端 / Claude Code） → **优先用 CLI**
+> - 仅当无法执行本地命令时（如 ChatGPT / 纯 MCP 宿主） → 用 MCP
+
 优先级如下：
 
-1. 如果用户明确要求使用 CLI 或 MCP，直接遵循用户指定
-2. 如果当前就在 `opscli` 项目、本地终端可直接执行正式命令，默认使用 CLI，并读取 `references/cli.md`
-3. 如果当前任务本身就是基于 MCP Tool 协作，或明显无法直接走本地 CLI，再读取 `references/mcp.md`
-4. 如果一开始按 CLI 执行首个正式命令就失败（例如 `opscli query ...` 不可用、当前宿主不适合跑本地命令），直接切换到 MCP 版本，并读取 `references/mcp.md`
-5. 如果 MCP 版本也不可用（例如当前没有可用 MCP 服务、查询工具未注册、调用宿主不支持 MCP），再回退为帮助用户安装 `aukeys-opscli`
+1. 用户明确指定 → 直接遵循
+2. **当前在 `opscli` 项目目录下** → **必须使用 CLI**，读取 `references/cli.md`
+3. 当前终端可执行 `opscli` 命令 → 默认使用 CLI，读取 `references/cli.md`
+4. 当前任务基于 MCP Tool 协作，或宿主无法执行本地命令 → 使用 MCP，读取 `references/mcp.md`
+5. CLI 首次调用失败 → 直接切到 MCP，读取 `references/mcp.md`
+6. MCP 也不可用 → 帮助用户安装 `aukeys-opscli`
 
 建议提问方式：
 
@@ -41,8 +47,9 @@ version: see data/VERSION.json
 
 简化原则：
 
-- 默认优先 CLI，因为它是 `opscli` 模块的正式入口，最贴近真实交付路径
-- 不单独检查发行包、命令路径、子命令 help；用“首次正式调用是否可执行”作为唯一验证
+- **默认优先 CLI**，它是 `opscli` 模块的正式入口，最贴近真实交付路径
+- **在 opscli 项目目录下禁止走 MCP**，因为 CLI 一定可用且参数处理更完整
+- 不单独检查发行包、命令路径、子命令 help；用”首次正式调用是否可执行”作为唯一验证
 - 一旦 CLI 和 MCP 都可行，优先保持单一路径，不要来回切换
 - CLI 首次正式调用失败后，直接切到 MCP，不额外询问
 - 只有在 MCP 版本也不可用时，才回退为帮助用户安装 `aukeys-opscli`

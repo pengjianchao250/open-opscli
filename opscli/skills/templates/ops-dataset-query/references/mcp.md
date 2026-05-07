@@ -591,6 +591,19 @@ query_simple(
 | `session_id` | string | **是** | 用户授权后获得的 session_id |
 | `jwt` | string | 否 | JWT，不传则自动用 session_id 换取 |
 
+> **【强制】手写 payload 的 `query.select` 结构要求**
+>
+> 服务端校验规则：`query.select.*.expr` 和 `query.select.*.alias` 为**必填字段**。
+>
+> - `expr`：字段表达式，格式为 `数据集别名.字段名`（如 `ds_d35ac6f3910c.dept_name`），或完整公式
+> - `alias`：输出列名，建议使用 `global_alias`（如 `f_520fb9a831ccd52a`）或自定义英文标识
+> - `aggregation`：聚合方式（如 `SUM`、`COUNT`），指标字段需提供，维度字段不传
+>
+> **正确**：`{"expr": "ds_xxx.dept_name", "alias": "f_dept"}`
+> **错误**：`{"global_alias": "f_dept"}` — 缺少 `expr`，会导致 422
+>
+> **建议**：优先使用 `query_build_and_run` 或 `query_simple` 自动构造 payload，避免手写出错。
+
 **调用示例**：
 ```python
 query_run(
