@@ -8,7 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from opscli.amazon_rufus.cli import app
-from opscli.amazon_rufus.domain.exceptions import QuestionBankNotReadyError, UnsupportedMarketplaceError
+from opscli.amazon_rufus.domain.exceptions import QuestionBankNotReadyError, SeedRequestNotCapturedError, UnsupportedMarketplaceError
 from opscli.amazon_rufus.runtime.country_map import build_product_url, resolve_marketplace
 from opscli.amazon_rufus.services.browser import BrowserAttachService
 from opscli.amazon_rufus.services.manager import RufusManager
@@ -362,6 +362,56 @@ def test_answer_report_formatter_falls_back_to_markdown_text():
     assert "| 3 | 4 |" in report
 
 
+def test_answer_report_formatter_falls_back_to_text_when_raw_blocks_are_unrenderable():
+    from opscli.amazon_rufus.services.answer_report_formatter import AnswerReportFormatter
+
+    report = AnswerReportFormatter().format_data(
+        {
+            "answers": [
+                {
+                    "text": "正文文本",
+                    "isSuccess": True,
+                    # Rufus 原始 UI tree 不应阻止 text 回退渲染。
+                    "blocks": [{"type": "container", "children": [{"type": "text", "children": "正文文本"}]}],
+                    "summaryText": "总结文本",
+                }
+            ]
+        }
+    )
+
+    assert "正文文本" in report
+    assert "第 1 题未获取到答案" not in report
+    assert "### 总结" in report
+    assert "总结文本" in report
+
+
+def test_answer_report_formatter_omits_missing_answer_when_summary_exists():
+    from opscli.amazon_rufus.services.answer_report_formatter import AnswerReportFormatter
+
+    report = AnswerReportFormatter().format_data(
+        {
+            "answers": [
+                {
+                    "text": "",
+                    "isSuccess": False,
+                    # 已有总结时，报告不再额外输出空答案提示。
+                    "summaryText": "总结文本",
+                }
+            ]
+        }
+    )
+
+    assert report == "\n".join(
+        [
+            "## 第 1 题：第 1 题",
+            "",
+            "### 总结",
+            "",
+            "总结文本",
+        ]
+    )
+
+
 def test_manager_builds_upload_payload_with_questions(tmp_path: Path):
     manager = RufusManager()
     questions = ["问题0", "问题1"]
@@ -525,6 +575,64 @@ def test_browser_capture_starts_new_chrome_before_connecting(monkeypatch):
         ("wait", "http://127.0.0.1:9222"),
         ("connect", "http://127.0.0.1:9222"),
     ]
+
+
+def test_browser_capture_failure_guides_user_to_init(monkeypatch):
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = "about:blank"
+
+        def on(self, event, handler):
+            return None
+
+        def goto(self, url, wait_until, timeout):
+            self.url = url
+
+        def wait_for_timeout(self, timeout):
+            return None
+
+        def bring_to_front(self):
+            return None
+
+    class FakeContext:
+        def new_page(self):
+            return FakePage()
+
+    class FakeBrowser:
+        contexts = [FakeContext()]
+
+    class FakeChromium:
+        def connect_over_cdp(self, cdp_url):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
+    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+
+    service = BrowserAttachService()
+
+    with pytest.raises(SeedRequestNotCapturedError) as exc_info:
+        service.capture_seed_request(
+            asin="B0TEST1234",
+            country="US",
+            page_url="https://www.amazon.com/dp/B0TEST1234",
+            cdp_url="http://127.0.0.1:9222",
+            timeout_seconds=1,
+        )
+
+    message = str(exc_info.value)
+    assert "未捕获 /rufus/cl/streaming" in message
+    assert "opscli amazon-rufus init US" in message
+    assert "https://www.amazon.com/dp/B0TEST1234" in message
 
 
 def test_browser_capture_closes_new_chrome_by_default(monkeypatch):

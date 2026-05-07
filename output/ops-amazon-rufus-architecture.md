@@ -1,5 +1,142 @@
 # ops-amazon-rufus Architecture
 
+## 2026-05-07 架构增量：登录前置提示与 streaming 捕获失败指引
+
+### 设计原则
+
+本轮只调整用户提示与错误映射，不改变 Amazon 登录态的来源。Amazon 登录仍发生在固定 Chrome profile 中，`opscli` 只负责打开登录窗口和给出下一步指引。
+
+设计取舍：
+
+1. 安装提示放在 `skills install` 的成功 payload 内，而不是额外打印 JSON 外文本。
+2. 未捕获 streaming 继续使用 `SeedRequestNotCapturedError`，只增强 message。
+3. 不新增新的认证模块，不保存 Amazon 账号，不读取 cookie。
+4. 不改变 `RufusManager.get()` 的返回结构和报告生成链路。
+
+### Skills 安装输出边界
+
+推荐在 `opscli/skills/commands/cli.py` 中增加一个私有 helper，专门给安装结果追加 Skill 专属提示：
+
+```python
+def _with_post_install_guidance(data: dict, skill_name: str) -> dict:
+    ...
+```
+
+职责：
+
+1. 接收 `result.to_dict()` 之后的普通 dict。
+2. 当 `skill_name == "ops-amazon-rufus"` 时，返回包含 `requires_amazon_login` 与 `next_steps` 的新 dict。
+3. 其他 Skill 原样返回，避免影响通用安装模型。
+4. helper 只处理展示数据，不参与复制模板、版本读取或安装目标检测。
+
+推荐输出结构：
+
+```json
+{
+  "name": "ops-amazon-rufus",
+  "version": "v0.0.0",
+  "installed_paths": [
+    {
+      "tool": "codex",
+      "path": ".agents/skills/ops-amazon-rufus",
+      "replaced": false
+    }
+  ],
+  "requires_amazon_login": true,
+  "next_steps": [
+    "使用前必须先登录对应国家站点的 Amazon 账户。",
+    "请先执行 opscli amazon-rufus init <country>，在新窗口完成登录。",
+    "登录后再执行 opscli amazon-rufus get <asin> <country> --new-chrome。"
+  ]
+}
+```
+
+### 非交互安装接入点
+
+`install_skill()` 当前成功路径：
+
+```python
+result = manager.install(...)
+payload = {
+    "success": True,
+    "command": "skills install",
+    "data": result.to_dict(),
+    "error": None,
+}
+```
+
+推荐改为：
+
+```python
+data = _with_post_install_guidance(result.to_dict(), name)
+payload = {
+    "success": True,
+    "command": "skills install",
+    "data": data,
+    "error": None,
+}
+```
+
+这样保持顶层 payload 不变，也不污染 `SkillBatchInstallResult` 领域模型。该设计符合单一职责：Manager 负责安装，CLI 展示层负责安装后的用户指引。
+
+### 交互安装接入点
+
+`_install_interactive()` 中所有 `all_results.append(result.to_dict())` 应改为同一 helper：
+
+```python
+all_results.append(_with_post_install_guidance(result.to_dict(), skill_name))
+```
+
+这样交互安装与单 Skill 安装的最终 JSON 一致。Rich 进度输出是否增加人类可读提示不是本轮必要项；若实现阶段增加，也必须保持最终 JSON 可解析。
+
+### streaming 捕获失败接入点
+
+当前 `BrowserAttachService.capture_seed_request()` 已接收 `country` 参数，并在未捕获请求时抛出：
+
+```python
+SeedRequestNotCapturedError(...)
+```
+
+推荐只替换错误 message：
+
+```python
+raise SeedRequestNotCapturedError(
+    "未捕获 /rufus/cl/streaming。"
+    f"请先执行 opscli amazon-rufus init {country.strip().upper()}，"
+    "并在新窗口登录 Amazon 后重试；"
+    f"同时确认目标站点支持 Rufus: {page_url}"
+)
+```
+
+保留点：
+
+1. 错误类型仍是 `SeedRequestNotCapturedError`。
+2. 错误码仍是 `SEED_REQUEST_NOT_CAPTURED`。
+3. CLI `_error_payload()` 不需要新增分支。
+4. `--pretty` 仍只影响 JSON 缩进。
+
+### 测试策略
+
+新增或调整测试：
+
+1. `tests/skills/test_cli.py`
+   - 安装 `ops-amazon-rufus` 时，断言 `payload["data"]["requires_amazon_login"] is True`。
+   - 断言 `payload["data"]["next_steps"]` 中包含 `opscli amazon-rufus init <country>`。
+   - 安装其他 Skill 时，断言不包含 `requires_amazon_login`。
+2. `tests/amazon_rufus/test_core.py`
+   - 构造未捕获 streaming 的路径，断言错误码为 `SEED_REQUEST_NOT_CAPTURED`。
+   - 断言错误信息包含 `opscli amazon-rufus init US`。
+   - 断言错误路径不生成报告文件。
+3. 回归测试
+   - 现有 `skills`、`amazon_rufus` 测试继续通过。
+
+### 风险控制
+
+1. 不修改 `SkillBatchInstallResult.to_dict()`，降低对所有 Skill 的影响面。
+2. 不在非交互安装输出 JSON 外增加散文本，避免破坏自动化脚本。
+3. 不改变异常 code，避免破坏现有错误解析方。
+4. 不新增自动登录行为，避免触碰 Amazon 账号安全和浏览器凭证边界。
+
 ## 2026-04-30 架构增量：前端渲染对齐答案输出
 
 ### 设计原则

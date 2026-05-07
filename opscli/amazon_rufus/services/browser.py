@@ -108,8 +108,12 @@ class BrowserAttachService:
                 page.goto(page_url, wait_until="domcontentloaded", timeout=deadline_ms)
                 page.wait_for_timeout(min(deadline_ms, 1000))
                 if not captured:
+                    normalized_country = country.strip().upper()
                     raise SeedRequestNotCapturedError(
-                        f"未捕获 /rufus/cl/streaming，请确认已登录 Amazon 且站点支持 Rufus: {page_url}"
+                        "未捕获 /rufus/cl/streaming。"
+                        f"请先执行 opscli amazon-rufus init {normalized_country}，"
+                        "并在新窗口登录 Amazon 后重试；"
+                        f"同时确认目标站点支持 Rufus: {page_url}"
                     )
                 seed = captured[0]
                 if on_captured:

@@ -69,15 +69,16 @@ class AnswerReportFormatter:
         if product_links:
             lines.extend(["", "### 相关产品", "", *product_links])
 
-        lines.extend(["", "### 答案", ""])
+        summary_text = str(answer_data.get("summaryText") or "").strip()
         body_lines = self._format_answer_body(index, answer_data)
-        lines.extend(body_lines or [f"第 {index} 题未获取到答案"])
+        if body_lines or not summary_text:
+            lines.extend(["", "### 答案", ""])
+            lines.extend(body_lines or [f"第 {index} 题未获取到答案"])
 
         recommended = self._format_recommended_asins(answer_data.get("recommendedAsins"))
         if recommended:
             lines.extend(["", "### 推荐 ASIN", "", *recommended])
 
-        summary_text = str(answer_data.get("summaryText") or "").strip()
         if summary_text:
             lines.extend(["", "### 总结", "", summary_text])
         return "\n".join(lines)
@@ -86,7 +87,7 @@ class AnswerReportFormatter:
         """按前端 block 模型格式化答案正文。"""
         text = str(answer.get("text") or "").strip()
         if answer.get("isSuccess") is False and not text:
-            return [f"第 {index} 题未获取到答案"]
+            return []
         blocks = self._build_answer_blocks(text, answer.get("blocks"))
         return self._render_blocks(blocks)
 
@@ -128,12 +129,11 @@ class AnswerReportFormatter:
         return lines
 
     def _build_answer_blocks(self, text: str, structured_blocks: Any) -> list[dict]:
-        """优先使用结构化 blocks，缺失时回退解析文本。"""
+        """优先使用结构化 blocks，不可渲染时回退解析文本。"""
         if isinstance(structured_blocks, list) and structured_blocks:
             blocks = self._build_structured_answer_blocks(structured_blocks)
             if blocks:
                 return blocks
-            return []
         if not text:
             return []
         fallback_blocks = self._build_text_fallback_blocks(text)

@@ -1,7 +1,6 @@
 ---
 name: ops-amazon-rufus
-description: Amazon Rufus 默认题库数据与使用说明
-version: v0.0.1
+description: Amazon Rufus 默认题库数据、最新报告获取与报告格式化规范。用于执行 opscli amazon-rufus get、回答 ASIN/Rufus 商品问题、读取或格式化 output/amazon-rufus/*.md 报告。
 ---
 
 # ops-amazon-rufus
@@ -40,6 +39,12 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon op
 4. 在新窗口中登录对应国家站点的 Amazon 账户
 5. 执行：`opscli amazon-rufus get B0TEST1234 US --new-chrome`
 
+## 最新数据优先
+
+当用户询问 ASIN 的 Rufus 分析、商品判断、报告内容或要求输出报告时，默认必须重新执行 `opscli amazon-rufus get <asin> <country>` 获取最新数据，不得直接使用 `output/amazon-rufus` 下的历史报告作答。
+
+只有在用户明确要求“历史数据”“已有报告”“指定文件路径”“不要重新获取”时，才读取历史报告或指定文件。若用户未提供 ASIN 或国家站点，先补齐必要参数；不要用历史报告替代最新获取。
+
 PowerShell 下执行 `opscli` 命令前必须在当前命令会话设置 UTF-8 环境：
 
 ```powershell
@@ -65,3 +70,9 @@ Start-Process chrome.exe -ArgumentList '--remote-debugging-port=9222 --user-data
 ## 数据文件
 
 - `data/question_templates.json`：合并模板与题目的默认题库
+
+## 报告格式化
+
+每次生成或输出 `output/amazon-rufus/*.md` 报告后，都必须读取 `references/rufus-report-formatting.md`，并在同目录额外写出格式化后的 Markdown 文档。格式化必须完整保留 Rufus 原始输出内容，只做 Markdown 标题、列表、表格、代码块、引用块、空行与缩进等格式化处理。
+
+回复用户时同时给出原始报告路径和格式化报告路径；除非用户只要求排障，不输出 `seed_request`、`upload_payload`、headers 或原始 JSON。

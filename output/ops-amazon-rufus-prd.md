@@ -1,5 +1,115 @@
 # ops-amazon-rufus PRD
 
+## 2026-05-07 变更需求：登录前置提示与 streaming 捕获失败指引
+
+### 背景
+
+`ops-amazon-rufus` 依赖浏览器中的 Amazon 登录态。虽然 Skill 文档已经说明需要先登录对应国家站点，但用户在安装 Skill 后仍可能直接执行 `get`，并在没有捕获到 `/rufus/cl/streaming` 时不知道下一步该执行什么命令。
+
+本轮目标是把“需要先登录 Amazon”和“未捕获 streaming 后执行 init”变成 CLI 稳定契约，而不是只存在于文档或经验中。
+
+### 目标
+
+1. 安装 `ops-amazon-rufus` 后，安装结果必须提示使用前需要登录 Amazon。
+2. 安装提示必须给出 `opscli amazon-rufus init <country>` 作为登录初始化命令。
+3. `amazon-rufus get` 未捕获 `/rufus/cl/streaming` 时，错误信息必须让用户执行 `init` 登录后重试。
+4. 保持现有成功 JSON 和错误 JSON 顶层结构稳定。
+5. 不新增 Amazon 凭证管理能力，不在 CLI 内保存 Amazon 账号信息。
+
+### 非目标
+
+1. 不自动登录 Amazon。
+2. 不自动调用 `amazon-rufus init`。
+3. 不检测或展示 Amazon 用户身份。
+4. 不改变题库升级、Rufus replay、报告格式化和上传 payload。
+5. 不对其他 Skill 增加 Rufus 专属安装提示。
+6. 不在非交互安装成功输出中追加 JSON 之外的散文本。
+
+### 功能需求
+
+#### FR-LOGIN-1 安装后登录前置提示
+
+当用户执行以下命令并成功安装 `ops-amazon-rufus`：
+
+```bash
+opscli skills install ops-amazon-rufus
+```
+
+安装结果的 `data` 必须包含登录前置提示，建议字段：
+
+```json
+{
+  "requires_amazon_login": true,
+  "next_steps": [
+    "使用前必须先登录对应国家站点的 Amazon 账户。",
+    "请先执行 opscli amazon-rufus init <country>，在新窗口完成登录。",
+    "登录后再执行 opscli amazon-rufus get <asin> <country> --new-chrome。"
+  ]
+}
+```
+
+约束：
+
+1. 仅 `ops-amazon-rufus` 安装结果增加这些字段。
+2. 其他 Skill 的安装输出保持原有字段。
+3. 非交互安装 stdout 仍是单个 JSON payload，避免破坏脚本解析。
+4. `--pretty` 只影响 JSON 缩进，不改变字段含义。
+5. 安装失败时不输出登录提示，只输出原有错误结构。
+
+#### FR-LOGIN-2 交互安装结果一致
+
+当用户通过交互安装流程安装 `ops-amazon-rufus` 时，最终 JSON 结果中同样必须包含登录提示字段。若交互流程已有 Rich 文本进度输出，最终 payload 仍必须携带机器可读 `requires_amazon_login` 与 `next_steps`。
+
+#### FR-STREAM-1 未捕获 streaming 的错误指引
+
+当 `amazon-rufus get` 在等待期内没有捕获 `/rufus/cl/streaming` 请求时，系统必须返回稳定错误结构：
+
+```json
+{
+  "success": false,
+  "command": "amazon-rufus get",
+  "data": null,
+  "error": {
+    "code": "SEED_REQUEST_NOT_CAPTURED",
+    "message": "..."
+  }
+}
+```
+
+`message` 必须包含：
+
+1. 未捕获 `/rufus/cl/streaming`。
+2. 请执行 `opscli amazon-rufus init <country>`。
+3. 在新窗口登录 Amazon 后重试。
+4. 目标站点可能不支持 Rufus。
+5. 当前商品页 URL，便于排障。
+
+推荐文案：
+
+```text
+未捕获 /rufus/cl/streaming。请先执行 opscli amazon-rufus init US，并在新窗口登录 Amazon 后重试；同时确认目标站点支持 Rufus: https://www.amazon.com/dp/B0TEST1234
+```
+
+#### FR-STREAM-2 错误路径不生成报告
+
+未捕获 streaming 属于采集失败，必须保持现有错误路径行为：
+
+1. 退出码为 `1`。
+2. 不生成 `output/amazon-rufus/*.md` 报告文件。
+3. 不输出 `seed_request`、headers、cookie 或原始 JSON。
+4. `--pretty` 只格式化错误 JSON。
+
+### 验收标准
+
+1. `opscli skills install ops-amazon-rufus` 成功输出中包含 `data.requires_amazon_login = true`。
+2. `data.next_steps` 至少包含 `opscli amazon-rufus init <country>`。
+3. `opscli skills install ops-dataset-query` 输出不包含 `requires_amazon_login`。
+4. 交互安装 `ops-amazon-rufus` 的最终 JSON 中包含同样的登录提示字段。
+5. `SeedRequestNotCapturedError` 的错误 message 包含 `opscli amazon-rufus init US`。
+6. `amazon-rufus get` 未捕获 streaming 时返回 `SEED_REQUEST_NOT_CAPTURED`，退出码为 `1`。
+7. 未捕获 streaming 时不生成答案报告文件。
+8. 原有 `amazon_rufus` 与 `skills` 测试继续通过。
+
 ## 2026-04-30 变更需求：参考前端渲染的答案格式化
 
 ### 背景

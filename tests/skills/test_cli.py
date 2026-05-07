@@ -69,6 +69,70 @@ def test_install_outputs_doc_aligned_json(monkeypatch):
     assert payload["command"] == "skills install"
     assert payload["data"]["version"] == "v0.0.0"
     assert payload["data"]["installed_paths"][0]["tool"] == "claude-code"
+    assert "requires_amazon_login" not in payload["data"]
+
+
+def test_install_ops_amazon_rufus_outputs_login_guidance(monkeypatch):
+    class DummyInstallResult:
+        def to_dict(self):
+            return {
+                "name": "ops-amazon-rufus",
+                "version": "v0.0.0",
+                "installed_paths": [
+                    {
+                        "tool": "codex",
+                        "path": "/tmp/.agents/skills/ops-amazon-rufus",
+                    }
+                ],
+            }
+
+    class DummyManager:
+        def install(self, *args, **kwargs):
+            return DummyInstallResult()
+
+    monkeypatch.setattr("opscli.skills.commands.cli.SkillsManager", lambda: DummyManager())
+
+    result = runner.invoke(app, ["install", "ops-amazon-rufus"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["requires_amazon_login"] is True
+    assert any("opscli amazon-rufus init <country>" in step for step in payload["data"]["next_steps"])
+
+
+def test_interactive_install_ops_amazon_rufus_outputs_login_guidance(monkeypatch):
+    class DummyInstallResult:
+        installs = []
+
+        def to_dict(self):
+            return {
+                "name": "ops-amazon-rufus",
+                "version": "v0.0.0",
+                "installed_paths": [
+                    {
+                        "tool": "codex",
+                        "path": "/tmp/.agents/skills/ops-amazon-rufus",
+                    }
+                ],
+            }
+
+    class DummyManager:
+        detector = None
+
+        def install(self, *args, **kwargs):
+            return DummyInstallResult()
+
+    monkeypatch.setattr("opscli.skills.commands.cli.SkillsManager", lambda: DummyManager())
+    monkeypatch.setattr("opscli.skills.commands.cli._tui_select_skills", lambda manager: ["ops-amazon-rufus"])
+    monkeypatch.setattr("opscli.skills.commands.cli._tui_select_targets", lambda manager: None)
+
+    result = runner.invoke(app, ["install"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout.splitlines()[-1])
+    installed = payload["data"]["results"][0]
+    assert installed["requires_amazon_login"] is True
+    assert any("opscli amazon-rufus init <country>" in step for step in installed["next_steps"])
 
 
 def test_install_prompts_and_defaults_to_all_detected_targets(monkeypatch):

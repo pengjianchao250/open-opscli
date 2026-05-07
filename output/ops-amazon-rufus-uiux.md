@@ -1,5 +1,117 @@
 # ops-amazon-rufus UIUX
 
+## 2026-05-07 体验增量：登录前置提示与 init 指引
+
+### 体验目标
+
+用户安装 `ops-amazon-rufus` 后，应立即知道该 Skill 不是纯离线题库工具，而是依赖对应国家站点的 Amazon 浏览器登录态。用户在未登录时执行 `get`，也必须直接看到下一步命令，而不是只看到“未捕获请求”。
+
+### 安装成功体验
+
+命令：
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli skills install ops-amazon-rufus --skills-dir ".agents/skills" --pretty
+```
+
+成功输出仍是 JSON，推荐形态：
+
+```json
+{
+  "success": true,
+  "command": "skills install",
+  "data": {
+    "name": "ops-amazon-rufus",
+    "version": "v0.0.0",
+    "installed_paths": [
+      {
+        "tool": "custom",
+        "path": ".agents/skills/ops-amazon-rufus",
+        "replaced": false
+      }
+    ],
+    "requires_amazon_login": true,
+    "next_steps": [
+      "使用前必须先登录对应国家站点的 Amazon 账户。",
+      "请先执行 opscli amazon-rufus init <country>，在新窗口完成登录。",
+      "登录后再执行 opscli amazon-rufus get <asin> <country> --new-chrome。"
+    ]
+  },
+  "error": null
+}
+```
+
+体验约束：
+
+1. 非交互安装不输出 JSON 之外的散文本。
+2. 文案必须包含明确命令 `opscli amazon-rufus init <country>`。
+3. 文案不展示 Chrome profile、CDP URL 或 cookie 细节。
+4. 其他 Skill 的安装输出不出现 Amazon 登录提示。
+
+### 未捕获 streaming 的失败体验
+
+用户未登录、登录到错误国家站点、目标站点不支持 Rufus，或页面没有触发 Rufus 请求时，`get` 可能无法捕获 `/rufus/cl/streaming`。
+
+错误输出仍是稳定 JSON：
+
+```json
+{
+  "success": false,
+  "command": "amazon-rufus get",
+  "data": null,
+  "error": {
+    "code": "SEED_REQUEST_NOT_CAPTURED",
+    "message": "未捕获 /rufus/cl/streaming。请先执行 opscli amazon-rufus init US，并在新窗口登录 Amazon 后重试；同时确认目标站点支持 Rufus: https://www.amazon.com/dp/B0TEST1234"
+  }
+}
+```
+
+### 文案规范
+
+错误文案必须按以下顺序组织：
+
+1. 先说明失败点：未捕获 `/rufus/cl/streaming`。
+2. 再给下一步：执行 `opscli amazon-rufus init <country>`。
+3. 再说明动作：在新窗口登录 Amazon 后重试。
+4. 最后保留排障上下文：目标站点可能不支持 Rufus，以及当前商品页 URL。
+
+推荐文案：
+
+```text
+未捕获 /rufus/cl/streaming。请先执行 opscli amazon-rufus init US，并在新窗口登录 Amazon 后重试；同时确认目标站点支持 Rufus: https://www.amazon.com/dp/B0TEST1234
+```
+
+不推荐文案：
+
+```text
+未捕获请求，请确认环境后重试
+```
+
+原因：没有说明下一步命令，用户仍需猜测应该启动哪个登录流程。
+
+### 与既有 init 体验的关系
+
+`init` 成功文案仍保持：
+
+```text
+请在新窗口中登录亚马逊
+```
+
+本轮不是替换 `init`，而是让安装后和失败后都指向它。这样用户路径变成：
+
+1. 安装 Skill 后看到需要登录。
+2. 执行 `opscli amazon-rufus init US`。
+3. 在新窗口完成 Amazon 登录。
+4. 执行 `opscli amazon-rufus get <asin> US --new-chrome`。
+5. 成功时只看到报告保存路径。
+
+### 体验边界
+
+1. 不在错误中输出 headers、cookie、seed request 或 upload payload。
+2. 不要求用户理解 CDP 和 Chrome profile。
+3. 不将 Amazon 登录态抽象为 `opscli auth login`，避免与 opscli 内部认证体系混淆。
+4. 不承诺 `init` 后一定能捕获 Rufus；目标站点是否支持 Rufus仍由 Amazon 页面决定。
+
 ## 2026-04-30 体验增量：参考前端渲染的格式化答案输出
 
 ### 体验目标

@@ -1,5 +1,65 @@
 # ops-amazon-rufus Research
 
+## 2026-05-07 登录前置提示与 streaming 捕获失败研究
+
+### 本轮需求
+
+用户要求为 `ops-amazon-rufus` 增加两处登录引导：
+
+1. 安装 `ops-amazon-rufus` 后，提示用户该 Skill 需要先登录 Amazon 才能使用。
+2. 获取 Rufus 答案时，如果 Python 采集脚本没有拦截到 `/rufus/cl/streaming` 请求，必须报错，并明确让用户执行 `opscli amazon-rufus init <country>` 去登录 Amazon。
+
+### 本地链路观察
+
+相关路径：
+
+- `opscli/skills/commands/cli.py`
+- `opscli/skills/services/manager.py`
+- `opscli/skills/domain/models.py`
+- `opscli/amazon_rufus/services/browser.py`
+- `opscli/amazon_rufus/domain/exceptions.py`
+- `.agents/skills/ops-amazon-rufus/SKILL.md`
+- `opscli/skills/templates/ops-amazon-rufus/README.md`
+
+当前行为：
+
+1. `opscli skills install <name>` 成功后输出稳定 JSON：`success`、`command`、`data`、`error`。
+2. `SkillBatchInstallResult.to_dict()` 只包含 `name`、`version`、`installed_paths`，没有 Skill 专属安装后提示。
+3. `ops-amazon-rufus` 的 Skill 文档已经说明使用前必须登录对应国家站点，并推荐 `opscli amazon-rufus init <country>`。
+4. `BrowserAttachService.capture_seed_request()` 未捕获 `/rufus/cl/streaming` 时抛出 `SeedRequestNotCapturedError`。
+5. 现有错误码为 `SEED_REQUEST_NOT_CAPTURED`，错误信息只提示“请确认已登录 Amazon 且站点支持 Rufus”，没有明确给出下一条命令。
+
+### 外部资料结论
+
+同类 CLI 对登录前置条件的处理有三个可借鉴点：
+
+1. GitHub CLI 把认证作为显式命令 `gh auth login`，并在文档中说明认证完成后凭证会写入系统凭证存储或回退文件。参考：https://cli.github.com/manual/gh_auth_login
+2. Stripe CLI 安装文档在安装步骤后紧接着要求执行 `stripe login`，并输出浏览器确认链接和 pairing code。参考：https://docs.stripe.com/stripe-cli/install
+3. AWS CLI 的 `configure` 命令在首次配置时提示用户输入凭证，同时文档也提示可通过 `aws login` 使用 Console session 传递临时凭证。参考：https://docs.aws.amazon.com/cli/latest/reference/configure/
+4. Amazon 官方说明 Rufus 可在 Amazon Shopping app 和 desktop 上使用，并依赖 Amazon 购物页面中的 Rufus 入口。参考：https://www.aboutamazon.com/news/retail/how-to-use-amazon-rufus
+
+这些产品共同特点是：登录不是隐式失败后让用户猜，而是通过安装后文档、专门命令或失败提示给出明确下一步。`ops-amazon-rufus` 因依赖浏览器页面登录态，不应尝试在 CLI 内保存 Amazon 凭证；正确路径是把登录动作显式收敛到 `amazon-rufus init <country>`。
+
+### 方案判断
+
+采用“安装结果内嵌 next steps + 捕获失败明确 init 指令”的最小方案：
+
+1. `skills install ops-amazon-rufus` 成功时，在 JSON `data` 中增加 Amazon 登录前置提示和下一步命令。
+2. 非交互安装不额外输出 JSON 之外的散文本，避免破坏脚本解析。
+3. 交互安装可以复用同一份 `data` 结构；是否额外打印人类可读行由实现阶段再按现有 TUI 输出风格最小处理。
+4. 其他 Skill 的安装输出不增加 Rufus 专属字段。
+5. `SeedRequestNotCapturedError` 的 message 明确包含 `opscli amazon-rufus init <country>`。
+6. 不做自动登录、不自动打开 `init`、不检测 Amazon 用户身份、不读取或保存 Amazon 凭证。
+
+### 研究结论
+
+本轮应只改两个用户可见边界：
+
+1. 安装成功后的 `ops-amazon-rufus` 专属 `next_steps`。
+2. 未捕获 `/rufus/cl/streaming` 时的错误文案。
+
+不应改变 `get` 的核心采集链路、题库读取、Rufus replay、报告格式化或上传 payload。该方案符合 KISS/YAGNI：把失败后的“下一步”从隐含经验变成稳定契约，不扩展认证体系。
+
 ## 2026-04-30 新增输出落地文件研究
 
 ### 触发背景
