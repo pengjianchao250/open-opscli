@@ -22,12 +22,6 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8";
 $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli amazon-rufus init US
 ```
 
-命令打开页面后会输出：
-
-```text
-请在新窗口中登录亚马逊
-```
-
 请在新窗口中完成登录，再执行 `amazon-rufus get`。切换国家时，应先执行对应国家的初始化命令并确认该站点已登录。
 
 ### 启动 Chrome 调试窗口
@@ -49,13 +43,6 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon op
 ```
 
 ### 执行 Rufus 获取
-
-首次使用或切换国家后，先初始化并登录对应站点：
-
-```powershell
-$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli amazon-rufus init US
-```
-
 确认新窗口已登录 Amazon 后，再执行获取命令：
 
 ```powershell
@@ -63,10 +50,6 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon op
 ```
 
 `--new-chrome` 默认会在命令输出结果后通过 CDP `Browser.close` 关闭本次新开的 Chrome 调试窗口。若需要保留窗口用于继续调试或复用登录态，追加：
-
-```powershell
-$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; uv run --extra amazon opscli amazon-rufus get B0B1MLVMY5 US --skills-dir ".agents/skills" --new-chrome --keep-chrome-open
-```
 
 ## 输出要求
 
