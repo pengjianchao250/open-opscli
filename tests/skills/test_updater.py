@@ -23,6 +23,7 @@ def test_upgrade_ops_dataset_query_writes_files(tmp_path: Path, monkeypatch):
     (data_dir / "VERSION.json").write_text('{"name":"ops-dataset-query","version":"v0.0.0"}', encoding="utf-8")
     (data_dir / "dataset_fields.csv").write_text("a\n", encoding="utf-8")
     (data_dir / "datasets.csv").write_text("b\n", encoding="utf-8")
+    (data_dir / "dataset_catalog.json").write_text("{}", encoding="utf-8")
     (data_dir / "query_metadata.json").write_text('{"datasets":[],"fields":[]}', encoding="utf-8")
 
     record = SkillRecord(
@@ -49,6 +50,8 @@ def test_upgrade_ops_dataset_query_writes_files(tmp_path: Path, monkeypatch):
             return DummyResponse("field_header,global_alias\nfield_value,ga_field_value\n")
         if endpoint == updater.DATASETS_ENDPOINT:
             return DummyResponse("dataset_header\ndataset_value\n")
+        if endpoint == updater.CATALOG_ENDPOINT:
+            return DummyResponse(data={"data": {"intent_count": 1, "intents": [{"table_id": 1, "keywords": ["销售额"]}]}})
         if endpoint == updater.QUERY_METADATA_ENDPOINT:
             return DummyResponse(data={"data": {"datasets": [{"table_id": 1}], "fields": [{"field_name": "price"}]}})
         raise AssertionError(endpoint)
@@ -62,6 +65,7 @@ def test_upgrade_ops_dataset_query_writes_files(tmp_path: Path, monkeypatch):
     assert '"version": "v1.0.0"' in (data_dir / "VERSION.json").read_text(encoding="utf-8")
     assert "ga_field_value" in (data_dir / "dataset_fields.csv").read_text(encoding="utf-8")
     assert "dataset_value" in (data_dir / "datasets.csv").read_text(encoding="utf-8")
+    assert "销售额" in (data_dir / "dataset_catalog.json").read_text(encoding="utf-8")
     assert '"table_id": 1' in (data_dir / "query_metadata.json").read_text(encoding="utf-8")
 
 
@@ -73,6 +77,7 @@ def test_upgrade_same_version_also_updates(tmp_path: Path, monkeypatch):
     (data_dir / "VERSION.json").write_text('{"name":"ops-dataset-query","version":"v1.0.0"}', encoding="utf-8")
     (data_dir / "dataset_fields.csv").write_text("old\n", encoding="utf-8")
     (data_dir / "datasets.csv").write_text("old\n", encoding="utf-8")
+    (data_dir / "dataset_catalog.json").write_text("{}", encoding="utf-8")
     (data_dir / "query_metadata.json").write_text('{"datasets":[],"fields":[]}', encoding="utf-8")
 
     record = SkillRecord(
@@ -100,6 +105,8 @@ def test_upgrade_same_version_also_updates(tmp_path: Path, monkeypatch):
             return DummyResponse("new_field,new_alias\n")
         if endpoint == updater.DATASETS_ENDPOINT:
             return DummyResponse("new_dataset\n")
+        if endpoint == updater.CATALOG_ENDPOINT:
+            return DummyResponse(data={"data": {"intent_count": 1, "intents": [{"table_id": 999, "keywords": ["sales"]}]}})
         if endpoint == updater.QUERY_METADATA_ENDPOINT:
             return DummyResponse(data={"data": {"datasets": [{"table_id": 999}], "fields": [{"field_name": "new_field"}]}})
         raise AssertionError(endpoint)
@@ -112,6 +119,7 @@ def test_upgrade_same_version_also_updates(tmp_path: Path, monkeypatch):
     assert result.from_version == "v1.0.0"
     assert result.to_version == "v1.0.0"
     assert "new_field" in (data_dir / "dataset_fields.csv").read_text(encoding="utf-8")
+    assert "sales" in (data_dir / "dataset_catalog.json").read_text(encoding="utf-8")
     assert '"table_id": 999' in (data_dir / "query_metadata.json").read_text(encoding="utf-8")
 
 
@@ -139,6 +147,20 @@ def test_get_wraps_404_as_human_error(monkeypatch):
 
     assert "未部署" in str(exc.value)
     assert updater.MANIFEST_ENDPOINT in str(exc.value)
+
+
+def test_fetch_dataset_catalog_tolerates_missing_endpoint(monkeypatch):
+    updater = SkillsUpdater()
+
+    def fake_get(endpoint: str):
+        raise SkillRemoteError("未部署", endpoint=endpoint, status_code=404)
+
+    monkeypatch.setattr(updater, "_get", fake_get)
+
+    catalog = updater.fetch_dataset_catalog()
+
+    assert catalog["intents"] == []
+    assert catalog["intent_count"] == 0
 
 
 def test_get_sends_unified_auth_headers_and_cookies(monkeypatch):

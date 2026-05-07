@@ -7,7 +7,7 @@ from pathlib import Path
 
 import typer
 
-from opscli.query.domain.exceptions import QueryError
+from opscli.query.domain.exceptions import InvalidPayloadError, QueryError
 from opscli.query.services.manager import QueryManager
 
 app = typer.Typer(help="数据查询入口，统一转发远端查询请求")

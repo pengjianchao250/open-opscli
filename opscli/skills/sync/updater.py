@@ -30,6 +30,7 @@ class SkillsUpdater:
     MANIFEST_ENDPOINT = "/v1/data-metrics/datasets/skill/manifest"          # 版本清单
     FIELDS_ENDPOINT = "/v1/data-metrics/datasets/skill/export"              # 字段数据导出
     DATASETS_ENDPOINT = "/v1/data-metrics/datasets/skill/export-datasets"   # 数据集导出
+    CATALOG_ENDPOINT = "/v1/data-metrics/datasets/skill/catalog"            # AI 业务语义索引
     QUERY_METADATA_ENDPOINT = "/v1/data-metrics/datasets/query-metadata"    # 查询元数据
 
     def build_remote_summary(self, skill_name: str) -> dict:
@@ -95,7 +96,7 @@ class SkillsUpdater:
             on_step: 可选进度回调
 
         Returns:
-            包含 manifest / fields_csv / datasets_csv / query_metadata / field_count 的字典
+            包含 manifest / fields_csv / datasets_csv / dataset_catalog / query_metadata / field_count 的字典
         """
         def _step(msg: str) -> None:
             if on_step:
@@ -110,6 +111,8 @@ class SkillsUpdater:
         fields_csv = self._get(self.FIELDS_ENDPOINT).text
         _step("拉取数据集列表...")
         datasets_csv = self._get(self.DATASETS_ENDPOINT).text
+        _step("拉取数据集业务索引...")
+        dataset_catalog = self.fetch_dataset_catalog()
         _step("拉取查询元数据...")
         query_metadata = self._parse_json_response(
             self._get(self.QUERY_METADATA_ENDPOINT),
@@ -121,9 +124,34 @@ class SkillsUpdater:
             "manifest": manifest,
             "fields_csv": fields_csv,
             "datasets_csv": datasets_csv,
+            "dataset_catalog": dataset_catalog,
             "query_metadata": query_metadata,
             "field_count": field_count,
         }
+
+    def fetch_dataset_catalog(self) -> dict:
+        """拉取 AI 业务语义索引。
+
+        旧版后端可能尚未部署 catalog 接口；此时不阻断 CSV 和 metadata 升级，
+        而是写入空索引，保持客户端向后兼容。
+        """
+        try:
+            payload = self._parse_json_response(
+                self._get(self.CATALOG_ENDPOINT),
+                endpoint=self.CATALOG_ENDPOINT,
+            )
+        except SkillRemoteError as exc:
+            if exc.status_code == 404:
+                return {
+                    "version": "v0.0.0",
+                    "intent_count": 0,
+                    "intents": [],
+                    "query_strategy": {},
+                }
+            raise
+
+        data = payload.get("data")
+        return data if isinstance(data, dict) else {}
 
     def apply_upgrade_data(
         self,
@@ -171,6 +199,10 @@ class SkillsUpdater:
             tmp_path = Path(tmp_dir)
             (tmp_path / "dataset_fields.csv").write_text(data["fields_csv"], encoding="utf-8")
             (tmp_path / "datasets.csv").write_text(data["datasets_csv"], encoding="utf-8")
+            (tmp_path / "dataset_catalog.json").write_text(
+                json.dumps(data.get("dataset_catalog") or {}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
             (tmp_path / "query_metadata.json").write_text(
                 json.dumps(data["query_metadata"].get("data"), ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -188,7 +220,7 @@ class SkillsUpdater:
             )
 
             # 原子替换：Path.replace() 在同文件系统上是原子操作
-            for filename in ["dataset_fields.csv", "datasets.csv", "query_metadata.json", "VERSION.json"]:
+            for filename in ["dataset_fields.csv", "datasets.csv", "dataset_catalog.json", "query_metadata.json", "VERSION.json"]:
                 (tmp_path / filename).replace(data_dir / filename)
 
         return SkillUpgradeResult(
