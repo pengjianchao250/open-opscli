@@ -575,7 +575,7 @@ query_build(
 | `dimensions` | list[dict] | 否 | 维度列表，`{"field": "dept_name", "alias": "f_xxx", "format": "..."}` |
 | `metrics` | list[dict] | 否 | 指标列表，`{"field": "...", "aggregation": "SUM", "alias": "...", "comparison": "MOY"}` |
 | `filters` | list[dict] | 否 | 过滤条件，`{"field": "...", "operator": "in", "value": [...]}` |
-| `data_comparison` | dict | 否 | 数据对比，`{"field": "...", "startDate": "...", "endDate": "..."}` |
+| `data_comparison` | dict | 否 | 数据对比的对比周期，`{"field": "...", "startDate": "...", "endDate": "..."}`；启用时必须同时用 `filters` 传主周期日期 |
 | `order_by` | list[dict] | 否 | 排序，`{"field": "f_xxx", "desc": true}` |
 | `limit` | integer | 否 | 返回行数上限，默认 20 |
 | `offset` | integer | 否 | 偏移量，默认 0 |
@@ -784,6 +784,8 @@ auth_token_refresh(system="ops", session_id="860b0636485b5188a2b9b4ed5210e736")
 > 简化接口完整说明见 **`references/simple-query-guide.md`**。
 > 完整 query payload 规范（innerWhere / translate / 权限占位符等）见 **`references/data-query-service-dev-guide.md`**。
 
+`data_comparison` 不是独立日期过滤器。使用它时，`filters` 必须表示当前主查询周期，`data_comparison` 表示对比周期。不要只传 `data_comparison`；若 `query_simple` 返回 `QS-EXE-005 missing ')' at '{'` 等 SQL 解析错误，先补上主周期日期 `filters` 后重试，仍失败再降级为纯 `filters` 查询。
+
 ### dataComparison 简化调用示例
 
 ```python
@@ -791,6 +793,7 @@ query_simple(
     table_id=1,
     dimensions=[{"field": "dept_name", "alias": "f_dept"}],
     metrics=[{"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"}],
+    # 主周期放 filters；对比周期放 data_comparison
     filters=[{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}],
     data_comparison={"field": "date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"},
     limit=10,
@@ -917,6 +920,7 @@ query_simple(
     table_id=1,
     dimensions=[{"field": "dept_name", "alias": "f_dept"}],
     metrics=[{"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"}],
+    # 主周期放 filters；对比周期放 data_comparison
     filters=[{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}],
     data_comparison={"field": "date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"},
     limit=10,

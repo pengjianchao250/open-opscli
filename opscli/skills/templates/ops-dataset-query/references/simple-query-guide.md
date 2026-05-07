@@ -37,6 +37,29 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 
 > 不需要理解的概念（服务端自动处理）：`innerWhere`、`translate`、`from`、`field_name` vs `bc.` 前缀、`cacl_type`、`params.dim/date`
 
+### 时间范围与 dataComparison 规则
+
+- 普通时间范围查询：只传 `filters`，用日期字段限定主查询周期。
+- 环比、同比、上期对比等汇总对比：必须同时传 `filters` 与 `dataComparison`。
+- `filters` 表示当前主查询周期；`dataComparison` 只表示对比周期。
+- 不要只传 `dataComparison`。缺少主周期日期 `filters` 时，服务端可能生成非法 SQL，并返回类似 `QS-EXE-005 missing ')' at '{'` 的解析错误。
+
+推荐模板：
+
+```json
+{
+  "filters": [
+    {"field": "ds_xxx.date_id", "operator": ">=", "value": "主周期开始日期"},
+    {"field": "ds_xxx.date_id", "operator": "<=", "value": "主周期结束日期"}
+  ],
+  "dataComparison": {
+    "field": "ds_xxx.date_id",
+    "startDate": "对比周期开始日期",
+    "endDate": "对比周期结束日期"
+  }
+}
+```
+
 ---
 
 ## 参数详解
@@ -223,6 +246,7 @@ query_simple(
 | 无数据集权限 | 403 | 确认用户有该数据集访问权限 |
 | 缺少必填 alias | 400 | dimension / metric 必须提供 `alias` |
 | 不支持 comparison 类型 | 400 | 仅支持 `MOY`、`ACC`、`PPT` |
+| `dataComparison` SQL 解析错误 | `QS-EXE-005` 等 | 先检查是否缺少主周期日期 `filters`；缺少时补上当前周期日期过滤后重试，仍失败再降级为纯 `filters` 查询 |
 
 ---
 

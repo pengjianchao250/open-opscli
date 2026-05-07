@@ -78,5 +78,7 @@ version: see data/VERSION.json
 - 如果字段或数据集不存在，优先执行当前模式下的 Skill 升级，再重新检查一次
 - CLI 模式使用 `opscli skills upgrade ops-dataset-query`；MCP 模式使用 `skills_upgrade(name="ops-dataset-query")`
 - 升级后若字段仍不存在，应明确告知用户当前本地索引和 metadata 中没有该字段，不要伪造字段名继续查询
-- 涉及环比、同比、趋势对比时，优先使用服务端能力，不要默认降级为多次查询后本地拼接
+- 涉及环比、同比、上期对比等汇总对比时，优先使用服务端 `dataComparison` 能力；**必须同时传主周期日期 `filters` + 对比周期 `dataComparison`**，不能只传 `dataComparison`
+- 普通时间范围查询只用 `filters`；只有需要对比时才同时使用 `filters` 与 `dataComparison`
+- 如果 `query_simple` / `opscli query simple` 携带 `dataComparison` 后出现 SQL 解析错误（如 `QS-EXE-005 missing ')' at '{'`），先检查是否缺少主周期日期 `filters`；缺少时自动补上当前周期 `>=`、`<=` 或 `between` 日期过滤后重试，仍失败再降级为纯 `filters` 查询或多次查询本地合并
 - 处理 chart 查询时，优先采用服务端返回的 `datasets + queries` 双层结构：`datasets` 负责公共字段语义，`queries` 负责执行结构；本地 CSV 仅作字段映射兜底

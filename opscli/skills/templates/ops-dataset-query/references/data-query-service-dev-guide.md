@@ -560,6 +560,8 @@ WHERE 条件支持任意层级的树形嵌套，节点分为两类：
 
 当 `dataComparison.switch = true` 时，Python 服务不会执行两次独立查询，而是将当期和对比期的数据**合并到一次 SQL** 中执行。
 
+**强制约束**：开启 `dataComparison` 时，请求必须同时包含主查询周期的日期过滤条件。主周期来自 `query.where` / 简化接口 `filters`，对比周期来自 `dataComparison.startDate` 和 `dataComparison.endDate`。不要只传 `dataComparison`；缺少主周期日期过滤时，SQL 改写可能无法正确生成当期条件，并报 `QS-EXE-005 missing ')' at '{'` 等解析错误。
+
 核心机制是通过条件聚合（Conditional Aggregation）实现：
 
 ```sql

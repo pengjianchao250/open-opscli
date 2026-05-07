@@ -121,6 +121,8 @@ opscli skills upgrade ops-dataset-query
 | ② 次优 | 按时间粒度分组的趋势环比/同比 | `MOY` 高级计算（服务端窗口函数，一次 SQL） |
 | ③ 兜底 | ①② 均因工具限制无法使用时 | 多次 `opscli query run` + 客户端合并 |
 
+`dataComparison` 不是独立日期过滤器。使用 `--data-comparison` 时，必须同时用 `--where` 传入当前主查询周期的日期条件；`--data-comparison` 只表示对比周期。不要只传 `--data-comparison`，否则可能触发 `QS-EXE-005 missing ')' at '{'` 等 SQL 解析错误。若已报错，先补上主周期日期 `--where` 后重试，仍失败再降级为纯日期 `--where` 查询。
+
 > `comparison`（MOY/ACC/PPT）写在 `select` 字段内部可正常透传。
 
 ---
@@ -368,6 +370,7 @@ opscli query build \
   --dry-run --run --pretty
 
 # 带数据对比（环比上月同期）
+# 主周期通过 --where 表示，对比周期通过 --data-comparison 表示
 opscli query build \
   --table-id 1104 \
   --dimension dept_name \
