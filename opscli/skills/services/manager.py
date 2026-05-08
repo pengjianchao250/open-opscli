@@ -24,6 +24,7 @@ from opscli.skills.domain.models import (
     SkillUpgradeResult,
     runtime_to_tool_name,
 )
+from opscli.skills.packaging import get_builtin_templates_dir
 from opscli.skills.sync.updater import SkillsUpdater
 
 _logger = logging.getLogger("opscli.skills")
@@ -35,7 +36,7 @@ class SkillsManager:
     def __init__(self, *, registry_path: Path | None = None) -> None:
         self.detector = SkillDetector()             # 负责 Skill 发现
         self.updater = SkillsUpdater()              # 负责远端数据拉取和升级
-        self.templates_dir = Path(__file__).parent.parent / "templates"  # 内置 Skill 模板目录
+        self.templates_dir = get_builtin_templates_dir()  # 内置 Skill 模板目录
         # 注册表路径：默认使用全局 CONFIG_DIR，测试时可注入临时路径实现隔离
         self._custom_registry_path = registry_path
 
@@ -126,7 +127,7 @@ class SkillsManager:
         """
         template_dir = self.templates_dir / skill_name
         if not template_dir.exists():
-            raise ValueError(f"不支持的内置 Skill: {skill_name}")
+            raise ValueError(f"当前发行包未包含内置 Skill: {skill_name}")
 
         current = cwd or Path.cwd()
         if skills_dir:
@@ -239,17 +240,7 @@ class SkillsManager:
 
         if not targets:
             raise ValueError(f"未找到已安装 Skill: {name}")
-        if name == "ops-dataset-query":
-            results = [
-                self.updater.upgrade_ops_dataset_query(target, force=force)
-                for target in targets
-            ]
-        elif name == "ops-amazon-rufus":
-            results = [
-                self.updater.upgrade_ops_amazon_rufus(target, force=force)
-                for target in targets
-            ]
-        else:
+        if name not in {"ops-dataset-query", "ops-amazon-rufus"}:
             raise ValueError(f"暂不支持升级 Skill: {name}")
 
         # 远端数据对所有本地安装实例完全相同，只拉取一次，再分发写入各目录
@@ -419,5 +410,3 @@ class SkillsManager:
             )
 
         return list(grouped.values())
-
-

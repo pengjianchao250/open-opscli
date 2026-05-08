@@ -7,14 +7,29 @@
 import os
 import re
 import glob
+import importlib.util
+from pathlib import Path
 from setuptools import setup, find_packages
 from setuptools.command.build_py import build_py
+from setuptools.command.sdist import sdist
 from Cython.Build import cythonize
 from setuptools.extension import Extension
 
 # 本地开发时设置 SKIP_CYTHON=1 跳过 Cython 编译，加速安装
 # 用法：SKIP_CYTHON=1 pip install -e .
 _SKIP_CYTHON = os.environ.get("SKIP_CYTHON", "").strip() in ("1", "true", "yes")
+_REPO_ROOT = Path(__file__).resolve().parent
+_PACKAGING_MODULE = _REPO_ROOT / "opscli" / "skills" / "packaging.py"
+
+
+def _load_skill_packaging():
+    """加载 Skill 发版准入工具，避免 setup 阶段触发 opscli 包导入链。"""
+    spec = importlib.util.spec_from_file_location("_opscli_skill_packaging", _PACKAGING_MODULE)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"无法加载 Skill 发版准入模块: {_PACKAGING_MODULE}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _read_version():
@@ -25,7 +40,25 @@ def _read_version():
     return m.group(1) if m else "0.0.0"
 
 
-class BuildPyExcludeSource(build_py):
+class BuildPyPruneSkillTemplates(build_py):
+    """按 OPSCLI_SKILL_PROFILE 裁剪 wheel 中的 Skill 模板。"""
+
+    def run(self):
+        super().run()
+        packaging = _load_skill_packaging()
+        profile = packaging.current_profile()
+        templates_dir = Path(self.build_lib) / "opscli" / "skills" / "templates"
+        kept = packaging.prune_templates_dir(
+            templates_dir,
+            profile=profile,
+            artifact="wheel",
+            manifest_templates_dir=_REPO_ROOT / "opscli" / "skills" / "templates",
+        )
+        if profile not in {"dev", "internal"}:
+            print(f"Skill templates profile={profile} artifact=wheel kept={','.join(kept)}")
+
+
+class BuildPyExcludeSource(BuildPyPruneSkillTemplates):
     """自定义 build_py：只保留 __init__.py，其余 .py 由 Cython .so/.pyd 替代。
 
     这样 wheel 中不含可读源码，但包结构（__init__.py）仍然完整，
@@ -47,6 +80,24 @@ class BuildPyExcludeSource(build_py):
             if mod in self._KEEP_SOURCE
             or any(d in filepath.replace(os.sep, "/") for d in self._KEEP_SOURCE_DIRS)
         ]
+
+
+class SdistPruneSkillTemplates(sdist):
+    """按 OPSCLI_SKILL_PROFILE 裁剪 sdist 中的 Skill 模板。"""
+
+    def make_release_tree(self, base_dir, files):
+        super().make_release_tree(base_dir, files)
+        packaging = _load_skill_packaging()
+        profile = packaging.current_profile()
+        templates_dir = Path(base_dir) / "opscli" / "skills" / "templates"
+        kept = packaging.prune_templates_dir(
+            templates_dir,
+            profile=profile,
+            artifact="sdist",
+            manifest_templates_dir=_REPO_ROOT / "opscli" / "skills" / "templates",
+        )
+        if profile not in {"dev", "internal"}:
+            print(f"Skill templates profile={profile} artifact=sdist kept={','.join(kept)}")
 
 
 def get_extensions():
@@ -117,6 +168,18 @@ setup(
             "skills/templates/**/**/*",
         ],
     },
-    # 跳过编译时使用默认 build_py，正常打包所有 .py 源码
-    cmdclass={} if _SKIP_CYTHON else {"build_py": BuildPyExcludeSource},
+    exclude_package_data={
+        "opscli": [
+            "skills/templates/.DS_Store",
+            "skills/templates/**/.DS_Store",
+            "skills/templates/**/*.pyc",
+            "skills/templates/**/*.pyo",
+            "skills/templates/**/__pycache__/*",
+        ],
+    },
+    # 跳过 Cython 时仍保留 Skill 模板裁剪逻辑；正常发版同时排除业务源码。
+    cmdclass={
+        "build_py": BuildPyPruneSkillTemplates if _SKIP_CYTHON else BuildPyExcludeSource,
+        "sdist": SdistPruneSkillTemplates,
+    },
 )

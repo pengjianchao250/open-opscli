@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from opscli.skills.packaging import get_builtin_templates_dir
+
 # runtime → 配置文件名映射
 RUNTIME_CONFIG_FILES: dict[str, str] = {
     "claude": "CLAUDE.md",
@@ -40,8 +42,7 @@ class RuleInjector:
         if templates_dir is not None:
             self.templates_dir = templates_dir
         else:
-            # 默认从本文件位置向上推导到 templates 目录
-            self.templates_dir = Path(__file__).parent.parent / "templates"
+            self.templates_dir = get_builtin_templates_dir()
 
     def inject(self, target_runtime: str, target_skills_dir: Path) -> Path | None:
         """向编辑器配置文件追加反馈铁律。

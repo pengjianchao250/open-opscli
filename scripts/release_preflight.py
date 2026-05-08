@@ -47,7 +47,33 @@ def build_artifacts() -> None:
     if DIST_DIR.exists():
         shutil.rmtree(DIST_DIR)
     run([sys.executable, "-m", "pip", "install", "build"])
-    run([sys.executable, "-m", "build"])
+    env = os.environ.copy()
+    env.setdefault("OPSCLI_SKILL_PROFILE", "python-release")
+    run([sys.executable, "-m", "build"], env=env)
+    run(
+        [
+            sys.executable,
+            "scripts/check_skill_release_manifest.py",
+            "--profile",
+            env["OPSCLI_SKILL_PROFILE"],
+            "--artifact",
+            "wheel",
+            "--dist",
+            "dist/*.whl",
+        ]
+    )
+    run(
+        [
+            sys.executable,
+            "scripts/check_skill_release_manifest.py",
+            "--profile",
+            env["OPSCLI_SKILL_PROFILE"],
+            "--artifact",
+            "sdist",
+            "--dist",
+            "dist/*.tar.gz",
+        ]
+    )
 
 
 def latest_wheel() -> Path:

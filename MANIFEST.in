@@ -6,9 +6,10 @@ include README.md
 # 保留所有 __init__.py（从源码构建时 Cython 需要包结构）
 recursive-include opscli __init__.py
 
-# Skill 模板数据原样保留（非编译对象，用户安装后直接使用）
-recursive-include opscli/skills/templates *
-
 # 明确排除业务 .py 源码（__init__.py 已由上方规则单独保留）
 recursive-exclude opscli *.py
 recursive-include opscli __init__.py
+
+# Skill 模板数据原样保留（非编译对象，用户安装后直接使用）
+recursive-include opscli/skills/templates *
+recursive-exclude opscli/skills/templates __pycache__ *.pyc *.pyo .DS_Store

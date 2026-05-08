@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "default": {
+    "source": false,
+    "wheel": false,
+    "binary": false,
+    "binary_full": false
+  },
+  "skills": {
+    "ops-amazon": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "ops",
+      "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
+    },
+    "ops-amazon-listing-analysis": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "experimental",
+      "reason": "Listing 分析口径仍处于内部验证阶段，暂不进入公开发版产物"
+    },
+    "ops-amazon-rufus": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "ops",
+      "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
+    },
+    "ops-asin-health-diagnoser": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "强依赖内部数据口径和健康诊断阈值，暂不随公开产物发版"
+    },
+    "ops-auth": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "core",
+      "reason": "认证基础能力，所有发行形态都需要"
+    },
+    "ops-dataset-query": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "core",
+      "reason": "现阶段保留的数据查询核心 Skill，直接发版和二进制发版均需要"
+    },
+    "ops-feedback": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "会注入工具侧规则，内部治理属性较强，暂不随公开产物发版"
+    },
+    "ops-mcp": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "core",
+      "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
+    },
+    "ops-product-attribute-analyzer": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "强依赖内部属性体系和数据口径，暂不随公开产物发版"
+    },
+    "ops-seller-sprite": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "experimental",
+      "reason": "依赖浏览器自动化和外部站点登录态，暂不进入公开发版产物"
+    },
+    "ops-skills": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "core",
+      "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
+    }
+  }
+}

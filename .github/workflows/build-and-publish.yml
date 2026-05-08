@@ -47,9 +47,19 @@ jobs:
           # 构建前安装 Cython 和 setuptools（编译依赖）
           CIBW_BEFORE_BUILD: "pip install cython>=3 setuptools>=68 wheel"
 
+          # 发版时按 python-release profile 裁剪内置 Skill 模板
+          CIBW_ENVIRONMENT: "OPSCLI_SKILL_PROFILE=python-release"
+
           # 简单冒烟测试：确认包可导入
           CIBW_TEST_COMMAND: >
             python -c "import opscli; from opscli import AuthClient; print('import ok')"
+
+      - name: Check wheel Skill templates
+        run: >
+          python scripts/check_skill_release_manifest.py
+          --profile python-release
+          --artifact wheel
+          --dist "wheelhouse/*.whl"
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
@@ -78,7 +88,14 @@ jobs:
         run: pip install build cython>=3 setuptools>=68
 
       - name: Build sdist
-        run: python -m build --sdist
+        run: OPSCLI_SKILL_PROFILE=python-release python -m build --sdist
+
+      - name: Check sdist Skill templates
+        run: >
+          python scripts/check_skill_release_manifest.py
+          --profile python-release
+          --artifact sdist
+          --dist "dist/*.tar.gz"
 
       - name: Upload sdist artifact
         uses: actions/upload-artifact@v4
