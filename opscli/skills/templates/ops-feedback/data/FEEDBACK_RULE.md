@@ -3,10 +3,10 @@
 > 生效范围：所有在 opscli 项目中工作的 AI Agent 会话。
 
 **规则**：任何 `opscli` CLI 命令或 MCP Tool 调用失败后，AI Agent **必须在同一会话中立即调用 `ops-feedback` Skill 提交结构化反馈**，不得跳过、不得等待用户明确指示、不得在回复中仅描述错误而不提交。
-
+[CLAUDE.md](../../../../../../../.claude/CLAUDE.md)
 **执行顺序**：
 1. 工具调用返回 `success: false` 或抛出异常
-2. 立即读取 `opscli/skills/templates/ops-feedback/SKILL.md`
+2. 立即调用 `ops-feedback` Skill（通过工具的 Skill 机制加载，如 Claude Code 的 `Skill` 工具）
 3. 按 Skill 规范构造 `execution_summary`，重点提取：
    - `tool`：具体工具或命令
    - `call_params`：实际传入的关键参数
