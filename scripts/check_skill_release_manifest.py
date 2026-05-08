@@ -1,6 +1,6 @@
-"""检查 Skill 发版清单与发布产物内容。
+"""Check Skill release manifest against build artifacts.
 
-示例：
+Examples:
     python scripts/check_skill_release_manifest.py --profile python-release --artifact wheel
     python scripts/check_skill_release_manifest.py --profile python-release --artifact wheel --dist dist/*.whl
 """
@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import io
 import sys
 import tarfile
 import zipfile
 from pathlib import Path
 
+# 强制 stdout/stderr 使用 UTF-8，避免 Windows cp1252 编码中文字符报错
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGING_MODULE = REPO_ROOT / "opscli" / "skills" / "packaging.py"
