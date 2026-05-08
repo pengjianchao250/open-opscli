@@ -66,13 +66,40 @@ version: see data/VERSION.json
 
 ---
 
+## 【强制】意图分析流程（数据集选择）
+
+> 当用户给出自然语言需求、没有明确指定 dataset 时，**必须**按以下流程选择数据集，禁止跳过远程 catalog 直接用本地搜索猜测。
+
+**标准流程**：
+
+1. **远程 catalog 优先**：调用 `opscli query catalog --pretty`（CLI）或 `query_catalog()`（MCP），读取远端最新的 `intents` 列表
+2. **意图匹配**：将用户需求与 `intents` 中的 `use_cases`、`keywords`、`scenario_description` 逐条匹配，按 `priority` 选择最佳候选数据集
+3. **获取 table_id 和 default_filters**：从命中的 intent 中提取 `table_id`、`dataset_alias`、`default_filters`、`comparison_strategy` 等参数
+4. **字段校验**：用本地 `data/dataset_fields.csv` 或 `query_metadata` 校验目标字段是否存在
+5. **构造查询**：基于 catalog 提供的 `table_id`、`default_filters`、`comparison_strategy` 构造查询
+
+**降级规则**：
+
+| 优先级 | 场景 | 动作 |
+|--------|------|------|
+| 1（最优） | 远程 catalog 可用 | 直接使用远端 `intents` 匹配 |
+| 2（回退） | 远程 catalog 失败且 `fallback_local=true` | 自动回退本地缓存 `data/dataset_catalog.json` |
+| 3（兜底） | catalog 为空或 intents 无法匹配 | 回退到 `search`（MCP）/ `search.py`（CLI）+ `datasets.csv` 关键词检索 |
+
+**禁止行为**：
+- 跳过远程 catalog，直接用本地 `search.py` / `search` 工具猜测数据集
+- 忽略 catalog 中的 `default_filters`（如 `platform_name in ["Amazon"]`），导致查询无结果
+- 忽略 catalog 中的 `comparison_strategy`，未按推荐策略构造对比查询
+
+---
+
 ## 使用原则
 
 - **简化接口优先**：普通聚合、数据对比、MOY 趋势、子查询等场景，优先使用简化接口（`opscli query simple` / `query_simple`），参数结构见 `references/simple-query-guide.md`
 - 仅当简化接口不满足需求时（如复杂的 `joins`、`union`、自定义子查询），才手写完整 query payload + `opscli query run` / `query_run`
 - 所有远端查询动作必须统一走选定模式下的正式查询入口，禁止直接调用后端 HTTP 接口
 - 认证检查按动作触发：本地只读检索（`catalog --source local` / `query_catalog(source="local")` / `metadata` / `search` / `fetch`）不要求登录；默认远端 catalog、远端执行、图表运行和 Skill 升级前必须确认认证
-- 用户未指定 dataset 时，优先使用 `opscli query catalog`（CLI）或 `query_catalog`（MCP）读取 dataset catalog 的 `intents` 选择候选数据集；catalog 为空或缺失时，回退到 `datasets.csv` + `dataset_fields.csv` 关键词检索
+- **【强制】意图分析必须远程 catalog 优先**：用户未指定 dataset 时，必须先调用远程 catalog 匹配 intents；仅当 catalog 不可用或 intents 无法匹配时，才回退到本地关键词检索
 - 查询前优先检查目标 `dataset_alias`、`field_name`、`global_alias`、`verbose_name` 是否存在于本地索引或 metadata；不要先猜字段再直接构造 payload
 - **【强制】本地搜索结果为空时，必须先确认数据是否已初始化**：若 `updater_mcp.py --check`、`opscli skills status` 或本地文件统计显示数据为空/placeholder，先升级再重试；若数据已初始化但搜索为空，再告知用户当前索引未覆盖
 - 如果字段或数据集不存在，优先执行当前模式下的 Skill 升级，再重新检查一次

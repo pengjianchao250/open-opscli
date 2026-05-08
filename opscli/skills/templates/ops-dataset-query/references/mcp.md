@@ -868,15 +868,55 @@ result_prev = query_simple(
 
 ## 典型工作流
 
-### 探索数据集 → 构造 → 执行（简化接口）
+### 意图分析 → 数据集选择 → 构造 → 执行（推荐）
+
+> **【强制】用户未指定 dataset 时，必须从远程 catalog 意图匹配开始，禁止跳过直接用本地搜索猜测。**
 
 ```python
 # 0. 先检查 session；如无效则重新 Device Flow 授权
 auth_is_authenticated(session_id="xxx")
 
-# 1. 通过本地索引确认数据集和字段名
+# 1.【强制】远程 catalog 意图分析（默认远端优先，失败自动回退本地缓存）
+query_catalog()
+# 从返回的 intents 中匹配用户需求：
+#   - 比对 use_cases / keywords / scenario_description
+#   - 按 priority 选择最佳候选
+#   - 提取 table_id、dataset_alias、default_filters、comparison_strategy
+
+# 2. 用本地索引校验目标字段
+search(query="<field_name>")
+# 或查看完整 metadata
+query_metadata(dataset="<dataset_alias>")
+
+# 3. 基于 catalog 提供的 table_id + default_filters + comparison_strategy 构造查询
+query_simple(
+    table_id=<table_id>,  # 从 catalog intent 获取
+    dimensions=[...],
+    metrics=[...],
+    filters=[...],  # 合并 default_filters + 用户指定的日期/维度过滤
+    limit=50,
+    session_id="xxx"
+)
+```
+
+**意图匹配示例**：
+
+用户说"查广告数据" → catalog 返回 `intent_code: instant_advertising_analysis`：
+- `table_id: 15`，`dataset_alias: ds_0759e20F0DrG`
+- `default_filters: [{"field": "amazon_cat", "value": "Amazon", "operator": "="}]`
+- `comparison_strategy: {"trend_compare": "MOM", "summary_compare": "dataComparison"}`
+
+→ 直接用 `table_id=15` + `platform_name in ["Amazon"]` 构造查询，无需猜测数据集。
+
+### 探索数据集 → 构造 → 执行（已知数据集时）
+
+```python
+# 0. 先检查 session；如无效则重新 Device Flow 授权
+auth_is_authenticated(session_id="xxx")
+
+# 1. 通过本地索引确认字段名
 # 2. 查看完整 metadata
-query_metadata(dataset="sales_order_d", skills_dir="/Users/mask/.config/opencode/skills")
+query_metadata(dataset="sales_order_d")
 
 # 3. 使用简化接口构造并执行
 query_simple(
@@ -886,8 +926,7 @@ query_simple(
     filters=[{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}],
     order_by=[{"field": "f_fee_sum", "desc": True}],
     limit=50,
-    session_id="860b0636485b5188a2b9b4ed5210e736",
-    skills_dir="/Users/mask/.config/opencode/skills"
+    session_id="xxx"
 )
 ```
 
