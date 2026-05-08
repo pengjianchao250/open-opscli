@@ -2,7 +2,7 @@
 
 本文档基于当前仓库代码整理，覆盖 `opscli` 顶级命令、全部子命令、参数说明与常见使用示例。
 
-- 代码基线：`aukeys-opscli` `0.0.35`
+- 代码基线：`aukeys-opscli` `0.0.37`
 - 命令入口：`opscli`
 - 主要来源：
   - `opscli/cli.py`
@@ -37,6 +37,10 @@ opscli
 │   ├── search
 │   ├── schema
 │   └── history
+├── feedback
+│   ├── schema
+│   ├── submit
+│   └── detail
 ├── query
 │   ├── metadata
 │   ├── catalog
@@ -92,6 +96,7 @@ opscli
 | `query` | 标准 JSON |
 | `skills` | 标准 JSON；交互安装时会先显示 TUI 选择界面 |
 | `seller-sprite` | 标准 JSON |
+| `feedback` | 标准 JSON |
 | `mcp` | 标准 JSON |
 
 ### 2.3 通用约定
@@ -1432,9 +1437,132 @@ opscli mcp user rotate --id <user_id> [--config-dir <dir>] [--pretty]
 opscli mcp user rotate --id abc123 --pretty
 ```
 
-## 10. 常见组合用例
+## 10. 反馈模块 `opscli feedback`
 
-### 10.1 首次完成认证并查询数据
+用于提交结构化用户反馈和查询反馈详情。反馈数据保存到 `polaris_ops_metrics.dm_user_feedbacks`。
+
+> 前置条件：需先执行 `opscli auth login` 完成认证。
+
+### 自动触发规则
+
+当 AI Agent（Codex）调用 CLI 命令失败时，根据 AGENTS.md 铁律，**必须**立即自动提交反馈：
+
+1. CLI 命令返回非 0 退出码或错误 JSON
+2. 从错误输出提取 `code` 和 `message`
+3. 调用 `opscli feedback submit` 提交，execution_summary 中记录失败的命令和参数
+4. 将 `feedback_uuid` 返回给用户，然后继续处理原任务
+
+### 10.1 `opscli feedback schema`
+
+输出反馈 payload 的 schema 定义。
+
+**用法**
+
+```bash
+opscli feedback schema [--pretty]
+```
+
+**参数**
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--pretty` | 否 | 美化 JSON 输出 |
+
+**示例**
+
+```bash
+opscli feedback schema --pretty
+```
+
+### 10.2 `opscli feedback submit`
+
+提交用户反馈。
+
+**用法**
+
+```bash
+opscli feedback submit --file <file> [--pretty]
+opscli feedback submit --type <type> --title <title> --content <content> [选项...] [--pretty]
+```
+
+**参数**
+
+| 参数 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--file` | 否 | - | 完整反馈 JSON 文件路径（与字段参数互斥） |
+| `--type` / `--feedback-type` | 条件 | - | 反馈类型：`bug`/`feature`/`data_issue`/`ux`/`docs`/`other` |
+| `--title` | 条件 | - | 反馈标题，最多 200 字符 |
+| `--content` | 条件 | - | 反馈正文 |
+| `--severity` | 否 | `medium` | 严重度：`low`/`medium`/`high`/`critical` |
+| `--source` | 否 | `cli` | 来源：`cli`/`mcp`/`skill`/`api` |
+| `--payload` | 否 | - | 原始结构化反馈 JSON 字符串 |
+| `--payload-file` | 否 | - | 原始结构化反馈 JSON 文件 |
+| `--context` | 否 | - | 执行上下文 JSON 字符串 |
+| `--context-file` | 否 | - | 执行上下文 JSON 文件 |
+| `--execution-summary` | 否 | - | 执行总结 JSON 字符串 |
+| `--execution-summary-file` | 否 | - | 执行总结 JSON 文件 |
+| `--attachments` | 否 | - | 附件引用 JSON 数组字符串 |
+| `--attachments-file` | 否 | - | 附件引用 JSON 数组文件 |
+| `--skill-name` | 否 | - | Skill 名称 |
+| `--skill-version` | 否 | - | Skill 版本 |
+| `--command-name` | 否 | - | CLI 命令名称 |
+| `--mcp-tool-name` | 否 | - | MCP Tool 名称 |
+| `--client-name` | 否 | `opscli` | 客户端名称 |
+| `--system` | 否 | `ops` | 系统别名 |
+| `--pretty` | 否 | `false` | 美化 JSON 输出 |
+
+**说明**
+
+- `--file` 与字段参数（`--type`、`--title`、`--content` 等）只能使用一种。
+- 传 `--file` 时，文件内容必须是完整的 JSON 对象，包含所有必要字段。
+- `execution_summary` 中的 `failed_calls` 若存在，每项必须包含 `tool` 和 `error_message`。
+
+**示例**
+
+通过文件提交：
+
+```bash
+opscli feedback submit --file feedback.json --pretty
+```
+
+通过字段提交：
+
+```bash
+opscli feedback submit \
+  --type bug \
+  --severity medium \
+  --title "query simple 返回字段缺失" \
+  --content "执行后字段为空" \
+  --execution-summary-file summary.json \
+  --pretty
+```
+
+### 10.3 `opscli feedback detail`
+
+按 `feedback_uuid` 查询当前用户反馈详情。
+
+**用法**
+
+```bash
+opscli feedback detail --uuid <feedback_uuid> [--pretty]
+```
+
+**参数**
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--uuid` / `--feedback-uuid` | 是 | 反馈 UUID |
+| `--pretty` | 否 | 美化 JSON 输出 |
+
+**示例**
+
+```bash
+opscli feedback detail --uuid xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx --pretty
+```
+
+## 11. 常见组合用例
+
+### 11.1 首次完成认证并查询数据
 
 ```bash
 opscli auth login
@@ -1444,7 +1572,7 @@ opscli query build --dataset sales_order_d --dimension date_id --metric gmv:sum 
 opscli query run --payload payload.json --pretty
 ```
 
-### 10.2 检查并刷新某个系统的 Token
+### 11.2 检查并刷新某个系统的 Token
 
 ```bash
 opscli auth token status
@@ -1453,7 +1581,7 @@ opscli auth token refresh -s ops
 opscli auth token get -s ops
 ```
 
-### 10.3 抓取 Amazon 商品并查看历史
+### 11.3 抓取 Amazon 商品并查看历史
 
 ```bash
 opscli amazon scrape --asin B09LCJPZ1P --include-raw --pretty
@@ -1461,7 +1589,7 @@ opscli amazon payload --asin B09LCJPZ1P --pretty
 opscli amazon history --asin B09LCJPZ1P --pretty
 ```
 
-### 10.4 检查 Skill 是否有更新
+### 11.4 检查 Skill 是否有更新
 
 ```bash
 opscli skills list --pretty
@@ -1469,7 +1597,7 @@ opscli skills status --pretty
 opscli skills upgrade ops-dataset-query --pretty
 ```
 
-### 10.5 卖家精灵完整采集流程
+### 11.5 卖家精灵完整采集流程
 
 ```bash
 # 1. 保存账号（仅首次）
@@ -1485,7 +1613,7 @@ opscli seller-sprite collect --keyword "usb c cable" --limit 100 --account defau
 opscli seller-sprite keyword-reverse --asin B09LCJPZ1P --account default --pretty
 ```
 
-### 10.6 MCP 用户管理
+### 11.6 MCP 用户管理
 
 ```bash
 # 1. 添加用户
@@ -1501,7 +1629,44 @@ opscli mcp user rotate --id abc123 --pretty
 opscli mcp user remove --id abc123 --pretty
 ```
 
-## 11. 快速索引
+### 11.7 提交工具调用失败的结构化反馈
+
+```bash
+# 1. 查看 schema
+opscli feedback schema --pretty
+
+# 2. 构造 feedback.json
+cat > feedback.json << 'EOF'
+{
+  "source": "cli",
+  "feedback_type": "bug",
+  "severity": "medium",
+  "title": "ops-dataset-query simple 字段不存在",
+  "content": "使用 simple 查询时字段 original_price 无法识别，已改用 build 完成。",
+  "execution_summary": {
+    "summary": "本次通过 ops-dataset-query 查询数据，simple 接口因字段识别失败，最终改用 build。",
+    "failed_calls": [
+      {
+        "tool": "Bash → opscli query simple --table-id 1 --json '...' --run --pretty",
+        "call_params": {"table_id": 1, "metrics": [{"field": "original_price", "aggregation": "SUM"}]},
+        "error_message": "REMOTE_BUSINESS_ERROR: 字段不存在: original_price",
+        "reason": "简化接口的 field 参数传了 field_name，但服务端未能识别。",
+        "fix_suggestion": "改用 opscli query build 的 --dimension/--metric 参数形式。"
+      }
+    ],
+    "final_resolution": "已通过 build 查询完成任务。"
+  }
+}
+EOF
+
+# 3. 提交反馈
+opscli feedback submit --file feedback.json --pretty
+
+# 4. 查询反馈详情
+opscli feedback detail --uuid <feedback_uuid> --pretty
+```
+
+## 12. 快速索引
 
 | 模块 | 命令 |
 | --- | --- |
@@ -1511,6 +1676,7 @@ opscli mcp user remove --id abc123 --pretty
 | 系统管理 | `opscli auth system list`、`sync`、`add`、`remove` |
 | Amazon | `opscli amazon scrape`、`payload`、`search`、`schema`、`history` |
 | 查询 | `opscli query metadata`、`catalog`、`run`、`build`、`simple`、`chart`、`chart-doc` |
+| 反馈 | `opscli feedback schema`、`submit`、`detail` |
 | Skills | `opscli skills list`、`install`、`status`、`upgrade` |
 | 卖家精灵 | `opscli seller-sprite collect`、`frequency`、`keyword-mining`、`keyword-reverse`、`archive`、`login`、`login-status`、`schema` |
 | 卖家精灵账号 | `opscli seller-sprite account save`、`list`、`delete` |

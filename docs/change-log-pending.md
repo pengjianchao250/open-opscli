@@ -1,5 +1,122 @@
 # 待归档变更记录
 
+## 2026-05-07 opscli - skills install 自动向编辑器配置文件注入反馈铁律
+
+**变更原因**：用户期望 `opscli skills install` 安装 ops-feedback Skill 时，能自动在对应编辑器（Claude Code / Codex / OpenCode / OpenClaw）的配置文件中追加【铁律】工具调用失败自动反馈，实现零配置启用。
+
+**改动点**：
+
+### 1. 新增 RuleInjector 模块
+- `opscli/skills/services/rule_injector.py` — 铁律注入器
+  - `RuleInjector` 类：负责向编辑器配置文件追加铁律
+  - 支持 runtime → 配置文件名映射（claude→CLAUDE.md，codex/opencode/openclaw→AGENTS.md）
+  - 配置文件放在 **skills 目录的父目录**（与 skills 同级），如 `~/.claude/skills/` → `~/.claude/CLAUDE.md`
+  - 幂等检测：通过 `RULE_MARKER` 注释避免重复注入
+  - 铁律内容来源：优先读取 `ops-feedback/data/FEEDBACK_RULE.md`，文件不存在时回退内置硬编码
+  - 未知 runtime / 自定义目录（--skills-dir）时**安全跳过**
+
+### 2. 提取铁律内容到 Skill 模板
+- `opscli/skills/templates/ops-feedback/data/FEEDBACK_RULE.md` — 独立铁律 Markdown 文件
+  - 内容与 AGENTS.md 中的全局铁律保持一致
+  - 作为 RuleInjector 的单一来源，后续更新只需改此文件
+
+### 3. CLI 层统一注入铁律（重构）
+- `opscli/skills/commands/cli.py`
+  - 新增 `_inject_rules_for_installs()` 辅助函数：对安装结果按 `(runtime, skills_parent)` 去重后统一注入
+  - 单 Skill 安装（`install_skill`）：安装成功后调用 `_inject_rules_for_installs(result.installs)`
+  - 批量交互安装（`_install_interactive`）：收集所有 `all_installs`，循环结束后统一注入一次
+  - 注入提示打印：`⚙ 已追加反馈铁律到 {path}`
+
+### 4. 修改 SkillsManager（移除注入逻辑）
+- `opscli/skills/services/manager.py`
+  - 移除 `install()` 方法内部的 RuleInjector 调用
+  - 保持 `SkillBatchInstallResult` 简洁，不再填充 `injected_configs`
+
+### 5. 保留数据模型字段
+- `opscli/skills/domain/models.py`
+  - `SkillBatchInstallResult.injected_configs` 保留但不再由 manager 填充，供后续扩展使用
+
+**验证结果**：
+- Python 编译检查：rule_injector.py、manager.py、domain/models.py、commands/cli.py 全部通过
+- RuleInjector 功能测试：
+  - claude runtime → 生成 `~/.claude/CLAUDE.md`，包含铁律和 RULE_MARKER
+  - codex runtime → 生成 `~/.codex/AGENTS.md`，包含铁律
+  - opencode runtime → 生成 `AGENTS.md`
+  - 未知 runtime → 安全返回 None
+  - 幂等测试：同一目录第二次注入返回相同路径，不重复追加
+  - 铁律内容测试：生成文件中包含 "工具调用失败自动反馈"
+- CLI 层去重测试：3 个安装结果指向 2 个编辑器目录（2 个 claude + 1 个 codex），正确去重后只注入 2 次
+
+**影响范围**：
+- `opscli skills install` 现在会自动为检测到的编辑器注入反馈铁律
+- 用户安装 ops-feedback 后，对应编辑器（Codex/Claude）会话中工具失败会自动触发反馈提交
+- 不影响 --skills-dir 自定义目录安装场景
+- Windows/macOS/Linux 跨平台兼容（使用 Path 对象，无硬编码路径分隔符）
+
+**回滚方式**：
+- 删除 RuleInjector 模块和 FEEDBACK_RULE.md
+- 回退 manager.py 的 install 方法
+- 回退 domain/models.py 和 commands/cli.py
+
+---
+
+## 2026-05-07 opscli - 增强 ops-feedback 自动触发机制
+
+**变更原因**：用户期望 AI Agent（Codex）在调用 opscli 工具失败时能自动触发 ops-feedback Skill 提交反馈，无需等待用户指示。
+
+**改动点**：
+
+### 1. AGENTS.md 新增全局铁律
+- 新增 【铁律】工具调用失败自动反馈
+- 明确 Codex 在工具调用失败后必须立即调用 ops-feedback 提交结构化反馈
+- 规定执行顺序（读取 SKILL.md → 构造 execution_summary → 调用 feedback_submit → 返回 feedback_uuid）
+- 定义例外情况（认证类错误、用户主动取消、5 分钟内已提交过）
+
+### 2. MCP helpers.py 增强 _err 响应
+- `_err()` 增加可选参数：`tool`、`call_params`、`auto_feedback`
+- 默认 `auto_feedback=True`，所有工具调用失败自动在响应中附加 `feedback` 草案字段
+- 新增 `_draft_feedback()` 辅助函数，从异常上下文自动构造 feedback payload：
+  - `feedback_type`: bug
+  - `severity`: medium
+  - `source`: mcp
+  - `execution_summary`: 含 failed_calls（tool、call_params、error_message）
+- 保持向后兼容：原有 `_err(exc)` 调用无需修改
+
+### 3. ops-feedback SKILL.md 增加自动触发规则
+- 新增 "自动触发规则（Agent 工具调用失败后）" 章节
+- 明确触发条件（success=false、未捕获异常、非 0 退出码、特定错误码）
+- 明确不触发情况（认证流程、KeyboardInterrupt、5 分钟内重复）
+- 提供完整的触发流程（检查 feedback 字段 → 补充 title/content → 调用 feedback_submit → 返回 uuid）
+- 提供 execution_summary 构造模板
+
+### 4. ops-feedback references/mcp.md 增加自动触发示例
+- 新增 "自动触发（Agent 工具调用失败后）" 章节
+- 提供从错误响应提取 feedback 草案并提交的代码示例
+
+### 5. 两份使用手册更新
+- `opscli命令用例手册.md`：反馈模块增加自动触发规则说明
+- `MCP工具使用手册.md`：反馈模块增加自动触发说明
+
+**验证结果**：
+- Python 编译检查：`helpers.py` 通过
+- `_err` 向后兼容测试：原有 `_err(ValueError('测试'))` 正常返回且包含 feedback 字段
+- `auto_feedback=False` 测试：认证类错误可关闭自动反馈
+- `_err(tool='...', call_params={...})` 测试：正确构造包含 tool 和 call_params 的 feedback 草案
+- 手册章节号连续验证：opscli命令用例手册.md（1-12）、MCP工具使用手册.md（1-11）
+
+**影响范围**：
+- 所有 MCP Tool 的错误响应现在默认包含 feedback 草案
+- AGENTS.md 铁律对所有在 opscli 项目中工作的 Codex 会话生效
+- ops-feedback Skill 增加自动触发语义，AI Agent 加载后会在工具失败后自动执行
+
+**回滚方式**：
+- AGENTS.md：删除新增铁律段落
+- helpers.py：回退 `_err` 和 `_draft_feedback` 到原有实现
+- SKILL.md：删除 "自动触发规则" 章节
+- references/mcp.md：删除 "自动触发" 章节
+
+---
+
 ## 2026-05-07 auth/cli - token status 增加 session_id 显示
 
 **变更原因**：用户需要在 `opscli auth token status` 中看到 session_id，方便排查和 MCP 连接时确认当前会话。
@@ -344,6 +461,64 @@
 **验证结果**：pytest tests/query/ 39 passed
 **影响范围**：opscli query chart-doc 命令输出的 Markdown 文档结构；不影响 API 调用逻辑
 **回滚方式**：git revert 此次改动，恢复 manager.py 和 test_manager.py 对应段落
+---
+
+## 2026-05-07 opscli + data-metrics - 新增用户反馈模块（ops-feedback）
+
+**变更原因**：用户需要一套完整的用户反馈收集机制，覆盖 CLI、MCP 和 Skill 三层。特别是 Skill/CLI/MCP 执行失败后，必须能沉淀结构化复盘信息（工具、调用参数、报错信息、原因、修复建议），保存到 polaris_ops_metrics.dm_user_feedbacks 表。
+
+**改动点**：
+
+### 服务端（auto-scheduler/vendor/aukey/data-metrics）
+1. 新增迁移 `src/database/migrations/2026_05_07_000002_create_dm_user_feedbacks_table.php`：创建 `dm_user_feedbacks` 表，含 feedback_uuid、source、feedback_type、severity、title、content、payload、context、execution_summary、failed_call_count、attachments、status、user_id 等字段及 5 个索引
+2. 新增 ORM `src/Models/UserFeedback.php`：继承 BaseModel， casts JSON 字段，提供 `toApiArray()` 方法
+3. 新增 Service `src/Services/UserFeedbackService.php`：`submitForUser()` 自动计算 failed_call_count，从 UserOrm 取 email；`findByUuidForUser()` 按用户隔离查询
+4. 新增 Controller `src/Http/Controllers/UserFeedbackApiController.php`：POST submit + GET detail，含完整 Validator 校验（feedback_type/severity/source 枚举、title<=200、failed_calls.*.tool/error_message 必填）
+5. 修改 `src/Http/routes.php`：在 `api/v1/data-metrics` JWT 认证组注册 feedback 路由（避开 RoutePermission 中间件）
+
+### opscli 侧
+1. 新增 `opscli/feedback/` 完整模块：
+   - `domain/models.py` — FEEDBACK_TYPES、SEVERITIES、SOURCES、FEEDBACK_SCHEMA
+   - `domain/exceptions.py` — FeedbackError / InvalidPayloadError / RemoteHttpError / RemoteBusinessError / BadRemoteJsonError
+   - `transport/client.py` — FeedbackClient，封装 submit/detail 的 HTTP 请求和认证
+   - `services/manager.py` — FeedbackManager，负责 payload 构建、字段校验、execution_summary.failed_calls 边界检查
+   - `commands/cli.py` — `feedback schema/submit/detail` 三个子命令，支持 --file/--payload-file/--context-file/--execution-summary-file/--attachments-file 文件输入方式
+   - `cli.py` — 兼容导出
+2. 修改 `opscli/cli.py`：注册 `feedback_app`
+3. 新增 MCP 工具 `opscli/mcp/tools/feedback.py`：`feedback_submit` + `feedback_detail`，支持 session_id/jwt 认证透传
+4. 修改 `opscli/mcp/server.py`：导入并注册 `_feedback_tools`
+
+### Skill 模板
+新增 `opscli/skills/templates/ops-feedback/`：
+- `SKILL.md` — 运行模式判断、提交前强制总结规范（failed_calls 必须含 tool/call_params/error_message/reason/fix_suggestion）
+- `references/cli.md` — CLI 提交/查询/schema 示例
+- `references/mcp.md` — MCP Tool 调用示例
+- `data/VERSION.json` — v1.0.0
+
+**验证结果**：
+- PHP 语法检查：迁移、Model、Service、Controller、routes 全部 `No syntax errors detected`
+- Python 编译检查：`opscli/feedback/`、`opscli/mcp/tools/feedback.py`、`opscli/cli.py`、`opscli/mcp/server.py` 全部通过
+- CLI 功能验证（Typer CliRunner）：
+  - `feedback schema --pretty` 正常输出 schema
+  - `feedback --help` 显示 schema/submit/detail 三个命令
+  - `feedback submit --type bug --title t` 正确拦截“缺少 content”
+  - `feedback submit --type invalid --title t --content c` 正确拦截“feedback_type 必须是...”
+  - `feedback submit --file feedback.json --pretty` 文件提交模式正常构造 payload（服务端未部署返回 404，属于预期）
+  - `feedback detail --uuid ''` 正确拦截“feedback_uuid 不能为空”
+- FeedbackManager 边界校验：超长 title（201 字符）拦截、failed_calls 缺少 tool/error_message 拦截、空 failed_calls 正常通过
+- MCP 工具注册验证：`register(mock_mcp)` 后 `await mock_mcp.list_tools()` 成功列出 `feedback_submit`、`feedback_detail`
+- 服务端迁移状态：`php artisan migrate:status` 正确识别 `2026_05_07_000002_create_dm_user_feedbacks_table` 为 Pending
+
+**影响范围**：
+- 新增独立 feedback 领域，不影响现有 auth/query/amazon/skills/mcp 功能
+- 服务端新增一张表和一组接口，仅用于反馈收集
+- Skill 层新增 ops-feedback 模板，供 AI Agent 使用
+
+**回滚方式**：
+- 服务端：删除 migration + Model + Service + Controller，回退 routes.php
+- opscli：删除 `opscli/feedback/` 目录、`opscli/mcp/tools/feedback.py`，回退 `opscli/cli.py` 和 `opscli/mcp/server.py` 的导入/注册行
+- Skill：删除 `opscli/skills/templates/ops-feedback/`
+
 ---
 
 ## 2026-04-29 skills/templates - 精简所有 Skill 的 references 文档

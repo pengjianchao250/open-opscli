@@ -60,11 +60,13 @@ mcp = FastMCP(
 # ── 工具注册（按领域分模块，各模块暴露 register(mcp) 函数）─────────
 from opscli.mcp.tools import auth as _auth_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
+from opscli.mcp.tools import feedback as _feedback_tools
 from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import skills as _skills_tools
 
 _auth_tools.register(mcp)
 _chatgpt_tools.register(mcp)
+_feedback_tools.register(mcp)
 _query_tools.register(mcp)
 _skills_tools.register(mcp)
 

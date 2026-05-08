@@ -68,6 +68,11 @@ class SkillBatchInstallResult:
 
     name: str
     installs: list[SkillInstallResult]
+    injected_configs: list[Path] = None  # 已注入铁律的配置文件路径列表
+
+    def __post_init__(self):
+        if self.injected_configs is None:
+            self.injected_configs = []
 
     def to_dict(self) -> dict:
         return {
@@ -81,6 +86,7 @@ class SkillBatchInstallResult:
                 }
                 for item in self.installs
             ],
+            "injected_configs": [str(p) for p in self.injected_configs],
         }
 
 

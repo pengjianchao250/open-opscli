@@ -23,24 +23,92 @@ def _ok(data: Any) -> dict:
     return {"success": True, "data": data, "error": None}
 
 
-def _err(exc: Exception) -> dict:
+def _err(
+    exc: Exception,
+    *,
+    tool: str | None = None,
+    call_params: dict | None = None,
+    auto_feedback: bool = True,
+) -> dict:
     """统一失败响应结构，保留异常类型信息。
 
     优先调用异常上的 to_dict()（自定义业务异常），
     否则回退到 {code: ClassName, message: str}。
 
+    当 auto_feedback=True 时，返回结构中包含 `feedback` 草案字段，
+    供 AI Agent 在工具调用失败后自动调用 feedback_submit。
+
     Args:
         exc: 捕获到的异常
+        tool: 可选，当前失败的工具名称或命令，例如 "MCP → query_simple(...)"
+        call_params: 可选，实际传入的关键参数，用于构造 execution_summary
+        auto_feedback: 是否自动生成 feedback 草案，默认 True
 
     Returns:
-        {"success": False, "data": None, "error": {...}}
+        {"success": False, "data": None, "error": {...}, "feedback": {...}}
     """
     to_dict = getattr(exc, "to_dict", None)
     if callable(to_dict):
         error = to_dict()
     else:
         error = {"code": type(exc).__name__, "message": str(exc)}
-    return {"success": False, "data": None, "error": error}
+
+    result: dict[str, Any] = {"success": False, "data": None, "error": error}
+
+    if auto_feedback:
+        result["feedback"] = _draft_feedback(tool=tool, call_params=call_params, error=error)
+
+    return result
+
+
+def _draft_feedback(
+    tool: str | None = None,
+    call_params: dict | None = None,
+    error: dict | None = None,
+) -> dict:
+    """从失败上下文自动构造 feedback 草案。
+
+    返回的 payload 可直接传给 feedback_submit，AI Agent 只需补充 title 和 content。
+
+    Args:
+        tool: 失败的工具或命令
+        call_params: 调用参数
+        error: _err 生成的 error dict
+
+    Returns:
+        包含 feedback_type、severity、execution_summary 的草案 dict
+    """
+    error_message = ""
+    if error:
+        code = error.get("code", "")
+        message = error.get("message", "")
+        if code and message:
+            error_message = f"{code}: {message}"
+        else:
+            error_message = message or str(code)
+
+    failed_call: dict[str, Any] = {
+        "tool": tool or "MCP Tool",
+        "error_message": error_message or "未知错误",
+    }
+    if call_params:
+        failed_call["call_params"] = call_params
+
+    return {
+        "feedback_type": "bug",
+        "severity": "medium",
+        "source": "mcp",
+        "execution_summary": {
+            "summary": "MCP Tool 调用失败，自动构造反馈草案。",
+            "failed_calls": [failed_call],
+            "successful_calls": [],
+            "final_resolution": "待补充：请检查调用参数或重试。",
+        },
+        "_hint": (
+            "此草案由 MCP Server 自动生成。AI Agent 应调用 feedback_submit "
+            "提交反馈，并补充 title 和 content 后提交。"
+        ),
+    }
 
 
 def _auth_client() -> Any:

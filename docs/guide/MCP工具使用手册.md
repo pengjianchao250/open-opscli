@@ -2,7 +2,7 @@
 
 本文档对应 `opscli` CLI 命令用例手册的 MCP 版本，覆盖全部 MCP Tool 的调用方式、参数说明与常见使用示例。
 
-- 代码基线：`aukeys-opscli` `0.0.35`
+- 代码基线：`aukeys-opscli` `0.0.37`
 - 入口方式：MCP Tool 调用（Python 函数风格）
 
 ---
@@ -40,6 +40,9 @@ opscli MCP Tools
 │   ├── query_build_and_run
 │   ├── query_chart
 │   └── query_chart_doc
+├── feedback
+│   ├── feedback_submit
+│   └── feedback_detail
 ├── skills
 │   ├── skills_list
 │   ├── skills_install
@@ -1003,7 +1006,87 @@ query_chart_doc(
 
 ---
 
-## 6. Skill 模块 `skills_*`
+## 6. 反馈模块 `feedback_*`
+
+用于提交结构化用户反馈和查询反馈详情。反馈数据保存到 `polaris_ops_metrics.dm_user_feedbacks`。
+
+> **自动触发**：当 AI Agent（Codex）调用 MCP Tool 失败时，根据 AGENTS.md 铁律，**必须**立即自动提交反馈。错误响应中包含 `_err` 自动生成的 `feedback` 草案字段，可直接复用。
+
+### 6.1 `feedback_submit`
+
+提交用户反馈。**需要认证**。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `feedback_type` | string | **是** | - | `bug`/`feature`/`data_issue`/`ux`/`docs`/`other` |
+| `title` | string | **是** | - | 反馈标题，最多 200 字符 |
+| `content` | string | **是** | - | 反馈正文 |
+| `severity` | string | 否 | `"medium"` | `low`/`medium`/`high`/`critical` |
+| `source` | string | 否 | `"mcp"` | `cli`/`mcp`/`skill`/`api` |
+| `payload` | dict | 否 | - | 原始结构化反馈内容 |
+| `context` | dict | 否 | - | 执行上下文 |
+| `execution_summary` | dict | 否 | - | 执行总结，含 `failed_calls` |
+| `attachments` | list[dict] | 否 | - | 附件引用 |
+| `skill_name` | string | 否 | - | Skill 名称 |
+| `skill_version` | string | 否 | - | Skill 版本 |
+| `command_name` | string | 否 | - | CLI 命令名称 |
+| `mcp_tool_name` | string | 否 | - | MCP Tool 名称 |
+| `session_id` | string | 否 | - | OAuth Session ID |
+| `jwt` | string | 否 | - | JWT Token |
+
+**说明**
+
+- `execution_summary` 若包含 `failed_calls`，每项必须包含 `tool` 和 `error_message`。
+- `failed_calls` 用于记录失败工具调用的复盘信息，推荐包含：`tool`、`call_params`、`error_message`、`reason`、`fix_suggestion`。
+
+**示例**
+
+```python
+feedback_submit(
+    feedback_type="bug",
+    title="query simple 字段不存在",
+    content="使用 simple 查询时字段 original_price 无法识别，已改用 build 完成。",
+    execution_summary={
+        "summary": "本次通过 ops-dataset-query 查询数据，simple 接口因字段识别失败，最终改用 build。",
+        "failed_calls": [
+            {
+                "tool": "MCP → query_simple(table_id=1, metrics=[...])",
+                "call_params": {"table_id": 1, "metrics": [{"field": "original_price", "aggregation": "SUM"}]},
+                "error_message": "REMOTE_BUSINESS_ERROR: 字段不存在: original_price",
+                "reason": "简化接口的 field 参数传了 field_name，但服务端未能识别。",
+                "fix_suggestion": "改用 opscli query build 的 --dimension/--metric 参数形式。"
+            }
+        ],
+        "final_resolution": "已通过 build 查询完成任务。"
+    }
+)
+```
+
+---
+
+### 6.2 `feedback_detail`
+
+按 `feedback_uuid` 查询当前用户提交的反馈详情。**需要认证**。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `feedback_uuid` | string | **是** | `feedback_submit` 返回的 UUID |
+| `session_id` | string | 否 | OAuth Session ID |
+| `jwt` | string | 否 | JWT Token |
+
+**示例**
+
+```python
+feedback_detail(feedback_uuid="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+```
+
+---
+
+## 7. Skill 模块 `skills_*`
 
 用于扫描已安装 Skill、安装内置模板、查看状态、升级远端版本。
 
@@ -1092,9 +1175,9 @@ skills_upgrade(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencod
 
 ---
 
-## 7. 常见组合用例
+## 8. 常见组合用例
 
-### 7.1 首次完成认证并查询数据
+### 8.1 首次完成认证并查询数据
 
 ```python
 # 1. 发起 Device Flow
@@ -1120,7 +1203,7 @@ query_build_and_run(
 )
 ```
 
-### 7.2 检查并刷新某个系统的 Token
+### 8.2 检查并刷新某个系统的 Token
 
 ```python
 # 1. 检查 session 有效性
@@ -1136,7 +1219,7 @@ auth_token_refresh(system="ops")
 auth_get_token(system="ops")
 ```
 
-### 7.3 抓取 Amazon 商品并查看历史
+### 8.3 抓取 Amazon 商品并查看历史
 
 ```python
 # 1. 抓取商品
@@ -1149,7 +1232,7 @@ amazon_payload(asin="B09LCJPZ1P")
 amazon_history(asin="B09LCJPZ1P")
 ```
 
-### 7.4 检查 Skill 是否有更新
+### 8.4 检查 Skill 是否有更新
 
 ```python
 # 1. 列出已安装 Skill
@@ -1162,7 +1245,7 @@ skills_status()
 skills_upgrade(name="ops-dataset-query")
 ```
 
-### 7.5 图表查询与异常检测
+### 8.5 图表查询与异常检测
 
 ```python
 # 1. 获取并执行图表查询
@@ -1184,7 +1267,7 @@ result = query_chart(
 # python scripts/excel_export_mcp.py --input /tmp/chart_result.json --output /tmp/output.xlsx
 ```
 
-### 7.6 使用业务语义索引定位数据集
+### 8.6 使用业务语义索引定位数据集
 
 ```python
 # 1. 读取 catalog（业务语义索引）
@@ -1204,7 +1287,7 @@ query_simple(
 )
 ```
 
-### 7.7 使用 search/fetch 搜索数据集（OpenAI 兼容）
+### 8.7 使用 search/fetch 搜索数据集（OpenAI 兼容）
 
 ```python
 # 1. 搜索数据集和字段
@@ -1219,7 +1302,7 @@ fetch(id="field:sales_order_d.gmv")
 
 ---
 
-## 8. Knowledge 模块（ChatGPT / OpenAI 兼容）
+## 9. Knowledge 模块（ChatGPT / OpenAI 兼容）
 
 为兼容 OpenAI Company Knowledge、Deep Research 和 MCP Connectors 而实现的标准工具。
 
@@ -1294,7 +1377,37 @@ fetch(id="field:sales_order_d.gmv")
 
 ---
 
-## 9. 认证状态速查
+### 8.8 提交工具调用失败的结构化反馈
+
+```python
+# 1. 提交反馈（包含 execution_summary）
+result = feedback_submit(
+    feedback_type="bug",
+    title="query simple 字段不存在",
+    content="使用 simple 查询时字段 original_price 无法识别。",
+    execution_summary={
+        "summary": "ops-dataset-query 查询失败复盘",
+        "failed_calls": [
+            {
+                "tool": "MCP → query_simple(table_id=1, metrics=[...])",
+                "call_params": {"table_id": 1, "metrics": [{"field": "original_price", "aggregation": "SUM"}]},
+                "error_message": "REMOTE_BUSINESS_ERROR: 字段不存在: original_price",
+                "reason": "field 参数传了 field_name，服务端未能识别。",
+                "fix_suggestion": "改用 query_build_and_run 自动完成字段映射。"
+            }
+        ],
+        "final_resolution": "已改用 query_build_and_run 完成查询。"
+    }
+)
+# -> 保存 feedback_uuid
+
+# 2. 查询反馈详情
+feedback_detail(feedback_uuid=result["data"]["feedback_uuid"])
+```
+
+---
+
+## 10. 认证状态速查
 
 | Tool | 需要认证 | 认证方式 |
 |------|---------|---------|
@@ -1325,6 +1438,8 @@ fetch(id="field:sales_order_d.gmv")
 | `query_chart`（run=False） | 否 | - |
 | `query_chart`（run=True） | **是** | 可传 session_id / jwt |
 | `query_chart_doc` | **是** | 可传 session_id / jwt |
+| `feedback_submit` | **是** | 可传 session_id / jwt |
+| `feedback_detail` | **是** | 可传 session_id / jwt |
 | `skills_list` | 否 | - |
 | `skills_install` | 否 | - |
 | `skills_status` | 服务端自动 | 涉及远端 API |
@@ -1334,7 +1449,7 @@ fetch(id="field:sales_order_d.gmv")
 
 ---
 
-## 10. 快速索引
+## 11. 快速索引
 
 | 模块 | Tool | 对应 CLI 命令 |
 |------|------|--------------|
@@ -1363,6 +1478,8 @@ fetch(id="field:sales_order_d.gmv")
 | 查询 | `query_build_and_run` | `opscli query build --run` |
 | 查询 | `query_chart` | `opscli query chart` |
 | 查询 | `query_chart_doc` | `opscli query chart-doc` |
+| 反馈 | `feedback_submit` | `opscli feedback submit` |
+| 反馈 | `feedback_detail` | `opscli feedback detail` |
 | Skills | `skills_list` | `opscli skills list` |
 | Skills | `skills_install` | `opscli skills install` |
 | Skills | `skills_status` | `opscli skills status` |

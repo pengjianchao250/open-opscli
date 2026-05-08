@@ -16,6 +16,7 @@ from rich.table import Table
 
 from opscli.skills.domain.exceptions import error_to_dict
 from opscli.skills.services.manager import SkillsManager
+from opscli.skills.services.rule_injector import RuleInjector
 
 app = typer.Typer(help="Skill 生命周期管理")
 _console = Console()
@@ -215,6 +216,10 @@ def install_skill(
             runtime=resolved_runtime,
             force=force,
         )
+        # CLI 层统一注入铁律：仅安装 ops-feedback 时触发
+        if name == "ops-feedback" and not skills_dir:
+            _inject_rules_for_installs(result.installs)
+
         payload = {
             "success": True,
             "command": "skills install",
@@ -279,6 +284,7 @@ def _install_interactive(
     # Step 3：批量安装（skill × target 二重循环）
     _console.print()
     all_results: list[dict] = []
+    all_installs: list[object] = []  # 收集所有安装结果用于统一注入铁律
     errors: list[str] = []
 
     for skill_name in skill_names:
@@ -293,6 +299,7 @@ def _install_interactive(
                         force=force,
                     )
                     all_results.append(_with_post_install_guidance(result.to_dict(), skill_name))
+                    all_installs.extend(result.installs)
                     for install in result.installs:
                         _print_install_line(install)
                 except Exception as exc:
@@ -304,11 +311,16 @@ def _install_interactive(
             try:
                 result = manager.install(skill_name, force=force)
                 all_results.append(_with_post_install_guidance(result.to_dict(), skill_name))
+                all_installs.extend(result.installs)
                 for install in result.installs:
                     _print_install_line(install)
             except Exception as exc:
                 errors.append(f"{skill_name}: {exc}")
                 _console.print(f"  [red]✗[/red] [bold]{skill_name}[/bold] [red]{exc}[/red]")
+
+    # 批量安装结束后：如果安装了 ops-feedback，统一注入铁律（去重）
+    if "ops-feedback" in skill_names and not skills_dir and all_installs:
+        _inject_rules_for_installs(all_installs)
 
     _console.print()
     if errors:
@@ -349,6 +361,31 @@ def _print_install_line(install: object) -> None:
         f"[dim]{version}[/dim] → [cyan]{tool_label}[/cyan] "
         f"[dim]({target_dir})[/dim]"
     )
+
+
+def _inject_rules_for_installs(installs: list[object]) -> None:
+    """对安装结果涉及的编辑器目录统一注入反馈铁律。
+
+    按 (runtime, skills_dir) 去重，避免同一编辑器目录重复注入。
+    注入成功后打印提示信息。
+    """
+    injector = RuleInjector()
+    seen: set[tuple[str, str]] = set()
+    for install in installs:
+        runtime = getattr(install, "runtime", "")
+        target_dir = getattr(install, "target_dir", None)
+        if not runtime or not target_dir:
+            continue
+        skills_parent = Path(target_dir).parent
+        key = (runtime, str(skills_parent))
+        if key in seen:
+            continue
+        seen.add(key)
+        config_path = injector.inject(runtime, skills_parent)
+        if config_path:
+            _console.print(
+                f"  [dim]⚙ 已追加反馈铁律到 {config_path}[/dim]"
+            )
 
 
 @app.command("status")
