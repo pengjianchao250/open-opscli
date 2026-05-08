@@ -75,8 +75,9 @@ version: see data/VERSION.json
 1. **远程 catalog 优先**：调用 `opscli query catalog --pretty`（CLI）或 `query_catalog()`（MCP），读取远端最新的 `intents` 列表
 2. **意图匹配**：将用户需求与 `intents` 中的 `use_cases`、`keywords`、`scenario_description` 逐条匹配，按 `priority` 选择最佳候选数据集
 3. **获取 table_id 和 default_filters**：从命中的 intent 中提取 `table_id`、`dataset_alias`、`default_filters`、`comparison_strategy` 等参数
-4. **字段校验**：用本地 `data/dataset_fields.csv` 或 `query_metadata` 校验目标字段是否存在
-5. **构造查询**：基于 catalog 提供的 `table_id`、`default_filters`、`comparison_strategy` 构造查询
+4. **验证 default_filters（强制）**：catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某数据集的 `default_filters` 时，必须先发一个轻量探查查询（不带 `default_filters`，仅带日期范围 + 1 个指标 SUM，limit=1）确认数据集有数据；再加上 `default_filters` 重试；若加上后返回 0 行，则去掉该 `default_filters` 继续查询，并在结果中告知用户已跳过不可用的默认过滤条件
+5. **字段校验**：用本地 `data/dataset_fields.csv` 或 `query_metadata` 校验目标字段是否存在
+6. **构造查询**：基于 catalog 提供的 `table_id`、验证通过的 `default_filters`、`comparison_strategy` 构造查询
 
 **降级规则**：
 
@@ -88,7 +89,7 @@ version: see data/VERSION.json
 
 **禁止行为**：
 - 跳过远程 catalog，直接用本地 `search.py` / `search` 工具猜测数据集
-- 忽略 catalog 中的 `default_filters`（如 `platform_name in ["Amazon"]`），导致查询无结果
+- **盲信** catalog 的 `default_filters` 而不做验证——`default_filters` 可能因数据源变更、字段值不一致等原因导致查询返回 0 行
 - 忽略 catalog 中的 `comparison_strategy`，未按推荐策略构造对比查询
 
 ---
@@ -108,4 +109,6 @@ version: see data/VERSION.json
 - 涉及环比、同比、上期对比等汇总对比时，优先使用服务端 `dataComparison` 能力；**必须同时传主周期日期 `filters` + 对比周期 `dataComparison`**，不能只传 `dataComparison`
 - 普通时间范围查询只用 `filters`；只有需要对比时才同时使用 `filters` 与 `dataComparison`
 - 如果 `query_simple` / `opscli query simple` 携带 `dataComparison` 后出现 SQL 解析错误（如 `QS-EXE-005 missing ')' at '{'`），先检查是否缺少主周期日期 `filters`；缺少时自动补上当前周期 `>=`、`<=` 或 `between` 日期过滤后重试，仍失败再降级为纯 `filters` 查询或多次查询本地合并
+- **子查询数据集（`inner_where_enabled=true`）已支持 `dataComparison`**：使用方式与普通数据集一致，必须同时传主周期 `filters` 和 `dataComparison`。若极端情况下仍未返回 `last_*`、`diff_*`、`pct_*` 对比字段，可降级为"分别查询两个周期 + 本地合并计算环比"策略
+- **【已知限制】子查询数据集必须至少包含一个业务过滤条件**：`inner_where_enabled=true` 的数据集在无任何业务 `filters` 时，`innerWhere` 占位符无法填充，会导致 `QS-EXE-005` SQL 解析错误。查询此类数据集时，必须至少传入一个日期范围过滤条件
 - 处理 chart 查询时，优先采用服务端返回的 `datasets + queries` 双层结构：`datasets` 负责公共字段语义，`queries` 负责执行结构；本地 CSV 仅作字段映射兜底

@@ -68,30 +68,84 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 
 ```json
 [
-    {"field": "dept_name", "alias": "f_dept"},
-    {"field": "date_id", "alias": "f_month", "format": "%Y-%m"}
-  ],
-  "metrics": [
-    {"field": "price", "aggregation": "SUM", "alias": "f_price_sum"},
-    {"field": "price", "aggregation": "SUM", "alias": "f_price_moy", "comparison": "MOY", "moyType": "MOM_MONTH"}
-  ],
-  "filters": [
-    {"field": "platform_name", "operator": "in", "value": ["Amazon"]},
-    {"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}
-  ],
-  "dataComparison": {
-    "field": "date_id",
-    "startDate": "2026-03-01",
-    "endDate": "2026-03-22"
-  },
-  "orderBy": [
-    {"field": "f_price_sum", "desc": true}
+  {"field": "dept_name", "alias": "f_dept"},
+  {"field": "date_id", "alias": "f_month", "format": "%Y-%m"}
+]
+```
+
+- `field`：字段的 origin_name（不含数据集前缀，服务端自动拼接）
+- `alias`：返回结果中的列名（建议使用 global_alias）
+- `format`（可选）：日期格式化，如 `%Y-%m` 按月分组
+
+### metrics — 指标
+
+```json
+[
+  {"field": "price", "aggregation": "SUM", "alias": "f_price_sum"},
+  {"field": "price", "aggregation": "SUM", "alias": "f_price_moy", "comparison": "MOY", "moyType": "MOM_MONTH"}
+]
+```
+
+- `aggregation`：聚合方式（`SUM`、`COUNT`、`AVG`、`MAX`、`MIN`）
+- `comparison`（可选）：`MOY`（月环比/年同比趋势）、`ACC`（累计）、`PPT`（百分点）
+- `moyType`（可选）：`MOM_MONTH`（月环比）、`YOY_YEAR`（年同比）
+
+### filters — 过滤条件
+
+```json
+[
+  {"field": "platform_name", "operator": "in", "value": ["Amazon"]},
+  {"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}
+]
+```
+
+- `operator`：`=`、`!=`、`>`、`>=`、`<`、`<=`、`in`、`not in`、`between`
+- 子查询数据集中，服务端自动将业务条件放入 `innerWhere`，日期条件放入外层 `where`
+
+### dataComparison — 数据对比
+
+```json
+{
+  "field": "date_id",
+  "startDate": "2026-03-01",
+  "endDate": "2026-03-22"
+}
+```
+
+- 必须同时传 `filters` 中的主周期日期，否则报 `QS-EXE-005`
+- 返回字段：`last_{alias}`（上期值）、`diff_{alias}`（差值）、`pct_{alias}`（环比百分比）
+
+### orderBy — 排序
+
+```json
+[
+  {"field": "f_price_sum", "desc": true}
+]
+```
+
+- `field`：使用 metric/dimension 的 `alias`
+- `desc`：`true` 降序，`false` 升序
+
+---
+
+## 完整示例
+
+### 示例 1：普通聚合查询
+
+```json
+{
+  "tableId": 1,
+  "dimensions": [
+    {"field": "dept_name", "alias": "f_dept"}
   ],
   "metrics": [
     {"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"}
   ],
   "filters": [
     {"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}
+  ],
+  "orderBy": [
+    {"field": "f_fee_sum", "desc": true}
   ],
   "limit": 10
 }
@@ -179,6 +233,35 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 
 ---
 
+## 子查询数据集注意事项（inner_where_enabled=true）
+
+子查询类型数据集（如 `table_id=15` 广告数据集）有以下特殊约束：
+
+### 1. 必须至少包含一个日期过滤条件
+
+子查询数据集的 SQL 模板包含 `innerWhere` 占位符，当 `filters` 完全为空时，占位符无法填充，服务端会生成非法 SQL 并返回 `QS-EXE-005` 错误。
+
+**最低要求**：至少传入一个日期范围过滤条件（`date_id >= xxx` 或 `date_id between [xxx, yyy]`）。
+
+```json
+// 错误：无任何 filters，会导致 QS-EXE-005
+{"tableId": 15, "dimensions": [...], "metrics": [...], "filters": []}
+
+// 正确：至少带日期过滤
+{"tableId": 15, "dimensions": [...], "metrics": [...],
+ "filters": [{"field": "date_id", "operator": "between", "value": ["2026-02-01", "2026-02-28"]}]}
+```
+
+### 2. dataComparison 已支持子查询数据集
+
+子查询数据集现已支持 `dataComparison`，服务端会正确返回 `last_*`、`diff_*`、`pct_*` 对比字段。使用方式与普通数据集一致，必须同时传主周期 `filters` 和 `dataComparison`。
+
+### 3. catalog default_filters 需验证
+
+catalog 中 `default_filters`（如 `amazon_cat=Amazon`）可能与实际数据不匹配。首次使用时应先不带 `default_filters` 探查数据是否存在，确认后再决定是否加上。若加上后返回 0 行，则去掉继续查询。
+
+---
+
 ## CLI 调用方式
 
 ```bash
@@ -247,6 +330,9 @@ query_simple(
 | 缺少必填 alias | 400 | dimension / metric 必须提供 `alias` |
 | 不支持 comparison 类型 | 400 | 仅支持 `MOY`、`ACC`、`PPT` |
 | `dataComparison` SQL 解析错误 | `QS-EXE-005` 等 | 先检查是否缺少主周期日期 `filters`；缺少时补上当前周期日期过滤后重试，仍失败再降级为纯 `filters` 查询 |
+| 子查询数据集无 filters | `QS-EXE-005` | `inner_where_enabled=true` 的数据集必须至少传一个日期过滤条件，否则 innerWhere 占位符无法填充 |
+| `dataComparison` 未返回对比字段 | 无错误码 | 子查询数据集已支持 `dataComparison`；若仍未返回对比字段，降级为分别查询两个周期后本地合并计算 |
+| catalog `default_filters` 返回 0 行 | 无错误码 | `default_filters` 可能与实际数据不匹配，去掉后重试 |
 
 ---
 
