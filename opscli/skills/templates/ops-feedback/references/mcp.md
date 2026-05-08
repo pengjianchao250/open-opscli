@@ -13,9 +13,12 @@ description: 通过 MCP Tool 提交和查询结构化用户反馈
 ### 触发流程
 
 1. 检查错误响应中的 `feedback` 字段（由 `_err` 自动生成）
-2. 补充 `title` 和 `content`
-3. 调用 `feedback_submit`
-4. 返回 `feedback_uuid` 并继续处理原任务
+2. 补充 `title`、`content`、`reason`、`fix_suggestion`，并确认 `call_params` 已保留
+3. 删除 `_hint` 等非提交字段
+4. 调用 `feedback_submit`
+5. 返回 `feedback_uuid` 并继续处理原任务
+
+不要对 `feedback_submit` / `feedback_detail` 自身失败继续自动提交反馈。
 
 ### 示例：自动触发
 
@@ -26,6 +29,10 @@ result = query_simple(table_id=1, metrics=[...])
 
 # 自动提取 feedback 草案并补充后提交
 feedback = result["feedback"]
+feedback.pop("_hint", None)
+failed_call = feedback["execution_summary"]["failed_calls"][0]
+failed_call["reason"] = "推测：字段名未匹配到服务端 metadata。"
+failed_call["fix_suggestion"] = "改用 metadata 中的完整字段名，或先调用 query_metadata 校验字段。"
 feedback_submit(
     feedback_type=feedback["feedback_type"],
     title="query_simple 字段不存在",

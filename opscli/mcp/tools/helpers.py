@@ -89,10 +89,11 @@ def _draft_feedback(
 
     failed_call: dict[str, Any] = {
         "tool": tool or "MCP Tool",
+        "call_params": call_params or {},
         "error_message": error_message or "未知错误",
+        "reason": "待补充：请基于错误响应、metadata 或接口规则分析原因；不确定时标注为推测。",
+        "fix_suggestion": "待补充：请记录已采用的修复方式，或给出下一步建议。",
     }
-    if call_params:
-        failed_call["call_params"] = call_params
 
     return {
         "feedback_type": "bug",

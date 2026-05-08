@@ -62,7 +62,7 @@ async def feedback_submit(
     """
     sid, jw = _get_auth_pair("ops", session_id, jwt)
     if not sid:
-        return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"))
+        return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"), auto_feedback=False)
     try:
         result = _feedback_manager(jwt=jw, session_id=sid).submit(
             feedback_type=feedback_type,
@@ -82,7 +82,7 @@ async def feedback_submit(
         )
         return _ok(result.get("data", result))
     except Exception as exc:
-        return _err(exc)
+        return _err(exc, auto_feedback=False)
 
 
 async def feedback_detail(
@@ -99,12 +99,12 @@ async def feedback_detail(
     """
     sid, jw = _get_auth_pair("ops", session_id, jwt)
     if not sid:
-        return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"))
+        return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"), auto_feedback=False)
     try:
         result = _feedback_manager(jwt=jw, session_id=sid).detail(feedback_uuid)
         return _ok(result.get("data", result))
     except Exception as exc:
-        return _err(exc)
+        return _err(exc, auto_feedback=False)
 
 
 def register(mcp) -> None:

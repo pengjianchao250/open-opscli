@@ -1,7 +1,6 @@
 ---
 name: ops-feedback
-description: 根据当前环境自动选择 CLI 或 MCP 方式提交 Aukeys opscli、MCP、Skill 使用反馈，并保存结构化执行总结
-version: see data/VERSION.json
+description: Use when submitting or querying Aukeys opscli feedback, or when an opscli CLI/MCP call fails unexpectedly and needs a structured execution summary.
 ---
 
 # ops-feedback
@@ -23,7 +22,7 @@ version: see data/VERSION.json
 
 ## 自动触发规则（Agent 工具调用失败后）
 
-当 AI Agent（Codex / OpenCode）调用任何 `opscli` MCP Tool 失败时，**必须**按以下流程自动触发反馈提交：
+当 AI Agent（Codex / Claude Code / OpenCode）调用 `opscli` CLI 命令或 `opscli` MCP Tool 失败时，**必须**按以下流程自动触发反馈提交：
 
 ### 触发条件
 
@@ -36,25 +35,30 @@ version: see data/VERSION.json
 ### 不触发的情况
 
 - `auth_login_start`、`auth_login_poll` 等认证流程中的预期未授权状态
+- `feedback_submit`、`feedback_detail`、`opscli feedback submit/detail` 自身失败，避免递归反馈
 - 用户主动取消（`KeyboardInterrupt`）
 - 同一失败在 5 分钟内已提交过反馈
 
 ### 触发流程
 
-1. **检查错误响应中的 `feedback` 字段**：MCP `_err` 响应现在包含自动生成的 `feedback` 草案，优先使用该草案
-2. **补充必要字段**：
+1. **检查错误响应中的 `feedback` 字段**：MCP `_err` 响应可能包含自动生成的 `feedback` 草案，优先以该草案为基底
+2. **计算本次失败指纹并去重**：使用 `{source}:{tool}:{error.code}:{error.message}:{关键参数JSON}` 作为同会话去重指纹；5 分钟内已提交过则复用上次 `feedback_uuid`，不重复提交
+3. **补充并校验必要字段**：
    - `title`：简短描述失败，如 `"query_simple 字段不存在"`
    - `content`：详细描述失败场景和现象
+   - `execution_summary.failed_calls[0].call_params`：实际传入的关键参数；没有参数也写 `{}`
    - `execution_summary.failed_calls[0].reason`：基于上下文推断原因
    - `execution_summary.failed_calls[0].fix_suggestion`：修复建议或下一步
-3. **调用反馈提交**：
+4. **调用反馈提交**：
    - MCP 环境：`feedback_submit(feedback_type="bug", title="...", content="...", execution_summary={...})`
    - CLI 环境：`opscli feedback submit --type bug --title "..." --content "..." --execution-summary-file summary.json`
-4. **返回 feedback_uuid 给用户**，并继续处理原任务
+5. **返回 feedback_uuid 给用户**，并继续处理原任务
+
+如果反馈提交自身失败，只向用户说明反馈提交失败和原始错误，不要再次调用本 Skill 提交“反馈失败”的反馈。
 
 ### 从错误响应构造 execution_summary
 
-如果错误响应中包含 `feedback` 草案，直接复用其 `execution_summary`。否则按以下模板构造：
+如果错误响应中包含 `feedback` 草案，必须先补齐并校验其 `execution_summary` 后再提交。否则按以下模板构造：
 
 ```json
 {
@@ -82,11 +86,12 @@ version: see data/VERSION.json
 优先级如下：
 
 1. 如果用户明确要求 CLI 或 MCP，直接遵循用户指定
-2. 本地终端可执行交付命令、当前就在 `opscli` 项目、需要验证 CLI 行为时，默认使用 CLI，并读取 `references/cli.md`
-3. 当前任务本身基于 MCP Tool 协作，或明显无法直接走本地 CLI 时，使用 MCP，并读取 `references/mcp.md`
-4. CLI 首次正式调用失败，切换到 MCP
-5. MCP 首次正式调用失败且 CLI 可用，切换到 CLI
-6. CLI 与 MCP 都不可用时，提示用户先安装或配置 `aukeys-opscli`
+2. 原始失败来自 MCP Tool 时，优先使用 MCP，并读取 `references/mcp.md`
+3. 原始失败来自 CLI 命令时，优先使用 CLI，并读取 `references/cli.md`
+4. 本地终端可执行交付命令、当前就在 `opscli` 项目、需要验证 CLI 行为时，默认使用 CLI，并读取 `references/cli.md`
+5. 当前任务本身基于 MCP Tool 协作，或明显无法直接走本地 CLI 时，使用 MCP，并读取 `references/mcp.md`
+6. 首选通道提交失败时，只允许切换另一个通道重试一次；重试仍失败则停止，不再递归提交反馈
+7. CLI 与 MCP 都不可用时，提示用户先安装或配置 `aukeys-opscli`
 
 ---
 
@@ -145,6 +150,7 @@ version: see data/VERSION.json
 
 - 所有反馈提交必须走 `opscli feedback submit` 或 `feedback_submit`，禁止直接拼接后端 HTTP 请求
 - 提交内容必须是结构化 JSON，不要只写一句自然语言描述
+- 使用错误响应中的 `feedback` 草案时，必须删除 `_hint` 等非提交字段
 - 失败复盘必须优先保留原始错误信息，再写分析和建议
 - 不要在反馈中写入密码、Token、Cookie、私钥等敏感信息
 - 附件只保存引用信息，不上传大文件

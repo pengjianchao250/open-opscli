@@ -56,12 +56,12 @@
       "reason": "现阶段保留的数据查询核心 Skill，直接发版和二进制发版均需要"
     },
     "ops-feedback": {
-      "source": false,
-      "wheel": false,
-      "binary": false,
-      "binary_full": false,
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
       "tier": "internal",
-      "reason": "会注入工具侧规则，内部治理属性较强，暂不随公开产物发版"
+      "reason": "会注入工具侧规则，内部治理属性较强"
     },
     "ops-mcp": {
       "source": false,

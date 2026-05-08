@@ -1,5 +1,5 @@
 {
-  "version": "v1.0.0",
-  "updated_at": "2026-05-07",
-  "notes": "新增 ops-feedback Skill，支持 CLI/MCP 提交结构化用户反馈和执行总结。"
+  "version": "v1.0.1",
+  "updated_at": "2026-05-08",
+  "notes": "优化 ops-feedback Skill：补充防递归反馈规则、草案字段校验、同会话去重说明，并移除注入规则中的本地配置链接。"
 }
