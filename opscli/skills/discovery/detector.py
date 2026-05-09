@@ -174,7 +174,7 @@ class SkillDetector:
         Claude Code   ~/.claude/skills/         %USERPROFILE%/.claude/skills/
         OpenClaw      ~/.openclaw/skills/        %USERPROFILE%/.openclaw/skills/
         Codex CLI     ~/.codex/skills/           %USERPROFILE%/.codex/skills/
-        OpenCode      ~/.config/opencode/skills/ %LOCALAPPDATA%/opencode/skills/
+        OpenCode      ~/.config/opencode/skills/ %USERPROFILE%/.config/opencode/skills/
 
         检测条件：配置目录存在 或 对应命令可用（which）。
         返回 [(runtime, skills_dir), ...] 列表，按检测顺序排列，已去重。
@@ -194,7 +194,7 @@ class SkillDetector:
         if (home / ".codex").exists() or shutil.which("codex") is not None:
             targets.append(("codex", home / ".codex" / "skills"))
 
-        # OpenCode：~/.config/opencode/（macOS/Linux）或 %LOCALAPPDATA%\opencode\（Windows）存在，或 `which opencode` 可用
+        # OpenCode：~/.config/opencode/（所有平台统一）存在，或 `which opencode` 可用
         opencode_config = self._opencode_config_dir()
         if opencode_config.exists() or shutil.which("opencode") is not None:
             targets.append(("opencode", self._opencode_skills_dir()))
@@ -218,10 +218,7 @@ class SkillDetector:
         )
 
     def _opencode_config_dir(self) -> Path:
-        """返回 OpenCode 的配置根目录（跨平台）。"""
-        if os.name == "nt":
-            localappdata = os.environ.get("LOCALAPPDATA", "")
-            return Path(localappdata) / "opencode" if localappdata else Path.home() / ".config" / "opencode"
+        """返回 OpenCode 的配置根目录（所有平台统一为 ~/.config/opencode/）。"""
         return Path.home() / ".config" / "opencode"
 
     def _opencode_skills_dir(self) -> Path:
