@@ -1,1 +1,1 @@
-﻿table_id,dataset_alias,dataset_name,dataset_type,dataset_category,data_source,main_dttm_col,inner_where_enabled,cache_timeout,description
+﻿table_id,dataset_alias,dataset_name,inner_where_enabled,description

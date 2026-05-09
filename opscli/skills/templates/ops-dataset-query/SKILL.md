@@ -1,12 +1,12 @@
 ---
 name: ops-dataset-query
-description: 根据当前环境自动选择 CLI 或 MCP 方式查询本地数据集索引并执行数据查询
-version: see data/VERSION.json
+description: 使用本地缓存的数据集与字段索引辅助检索和查询（CLI / MCP 自动适配）。当用户提到查数据、看报表、查销售/库存/物流/广告数据、数据集搜索、字段搜索、查询数据对比/环比/同比/ACOS/ROAS、MOY 趋势分析、图表数据导出、Excel 透视表导出等场景时使用本 Skill。即使用户没有明确说"数据集查询"，只要涉及从运营系统取数、按维度聚合指标、对比两个时间段数据的场景，都应优先考虑本 Skill。
+version: v0.0.1
 ---
 
 # ops-dataset-query
 
-用于检索本地缓存的数据集、字段和查询元数据，并通过正式查询入口执行数据查询、图表查询和数据更新。
+用于检索本地缓存的数据集、字段和查询元数据，并通过正式查询入口执行数据查询。
 
 ---
 
@@ -17,41 +17,29 @@ version: see data/VERSION.json
 - 需要通过图表 ID 或 chart UUID 直接获取查询结构
 - 需要刷新本地缓存的数据集索引和查询元数据
 
-> **简化接口优先**：普通聚合、数据对比、MOY 趋势、子查询等场景，优先使用简化接口（`opscli query simple` / `query_simple`），服务端自动处理 `innerWhere`、`translate`、`MOY` 展开等技术细节。仅当简化接口不满足需求时，才手写完整 payload。
->
-> **Catalog 优先选数据集**：当用户只给出自然语言需求、没有指定 dataset 时，优先使用 `opscli query catalog`（CLI）或 `query_catalog`（MCP）读取 dataset catalog 的 `intents`；catalog 默认远端优先并在失败时回退本地缓存，需要离线时显式使用 `--source local` / `source="local"`。按使用案例、关键词、场景描述和优先级选择候选数据集后，再读取本地 `data/dataset_fields.csv` / `query_metadata.json` 校验字段是否存在并构造查询。仅当本地 CSV/JSON 数据为空时，才回退调用 `opscli query metadata`（CLI）或 `query_metadata`（MCP）获取字段信息。
-
 ---
 
 ## 运行模式判断
 
 进入本 Skill 后，不要为模式判断额外运行检测脚本，直接按下面规则判断。
 
-> **快速判断规则**：
-> - 用户明确指定 CLI 或 MCP 时，直接遵循用户指定
-> - 当前任务是本地交付验证、脚本调试、CLI 行为确认时，优先用 CLI
-> - 当前宿主已提供 MCP Tool，且任务是结构化查询或连接器协作时，优先用 MCP
-> - 同一轮任务选定一种模式后保持一致，只有首个正式调用失败时才切换
+> **默认原则：CLI 优先。** 当 CLI 和 MCP 都可用时，优先使用 CLI，因为 CLI 是 `opscli` 模块的正式入口，功能最完整、错误信息最直接。
 
 优先级如下：
 
-1. 用户明确指定 → 直接遵循
-2. 本地 CLI 验证 / opscli 项目开发 / shell 可执行交付命令 → 使用 CLI，读取 `references/cli.md`
-3. MCP Tool 协作 / ChatGPT Connector / 无法执行本地命令 → 使用 MCP，读取 `references/mcp.md`
+1. 用户明确指定 CLI 或 MCP 时 → 直接遵循用户指定
+2. CLI 和 MCP 都可用 → **使用 CLI**，读取 `references/cli.md`
+3. 仅 MCP 可用（ChatGPT Connector、无本地 shell）→ 使用 MCP，读取 `references/mcp.md`
 4. CLI 首次正式调用失败 → 切到 MCP，读取 `references/mcp.md`
 5. MCP 首次正式调用失败且 CLI 可用 → 切到 CLI，读取 `references/cli.md`
-6. MCP 也不可用 → 帮助用户安装 `aukeys-opscli`
-
-建议提问方式：
-
-- `当前 CLI 与 MCP 入口都不可用。你希望我先帮你安装 aukeys-opscli，再继续处理吗？`
+6. CLI 和 MCP 都不可用 → 帮助用户安装 `aukeys-opscli`
 
 简化原则：
 
-- 本地交付和脚本验证默认优先 CLI，它是 `opscli` 模块的正式入口
-- Connector / MCP 宿主默认优先 MCP，避免为了查询再绕回本地 shell
-- 不单独检查发行包、命令路径、子命令 help；用”首次正式调用是否可执行”作为唯一验证
-- 一旦 CLI 和 MCP 都可行，优先保持单一路径，不要来回切换
+- **CLI 默认优先**，它是 `opscli` 模块的正式入口，功能最全、调试最方便
+- 只有在无法执行本地命令的宿主环境（如 ChatGPT Connector）才默认走 MCP
+- 不单独检查发行包、命令路径、子命令 help；用"首次正式调用是否可执行"作为唯一验证
+- 一轮任务选定一种模式后保持一致，不要来回切换
 - CLI 首次正式调用失败后，直接切到 MCP，不额外询问
 - 只有在 MCP 版本也不可用时，才回退为帮助用户安装 `aukeys-opscli`
 
@@ -59,56 +47,87 @@ version: see data/VERSION.json
 
 ## 阅读入口
 
-- **简化接口说明**：`references/simple-query-guide.md`（推荐优先阅读）
-- CLI 模式：继续阅读 `references/cli.md`
-- MCP 模式：继续阅读 `references/mcp.md`
-- 完整 query payload 规范：`references/data-query-service-dev-guide.md`（仅当简化接口不满足需求时参考）
+根据选定的运行模式，阅读对应文件：
+
+- **CLI 模式**：继续阅读 `references/cli.md`
+- **MCP 模式**：继续阅读 `references/mcp.md`
+
+> 两个模式文件都遵循统一的文档引用规则：
+> 1. **必须优先阅读** `references/simple-query-guide.md`
+> 2. **只有多次查询失败时**，才尝试阅读 `references/data-query-service-dev-guide.md`
+> 3. **涉及 `innerWhere` 的数据集（子查询数据集）不允许使用复杂版手写 payload**，只能用简化接口（`opscli query simple` / `query_simple`）
+
+> **⚠️ 参数命名约定（MCP 模式必读）**
+>
+> MCP Tool 参数使用 **snake_case**（如 `table_id`、`data_comparison`、`order_by`），JSON payload 字段使用 **camelCase**（如 `tableId`、`dataComparison`、`orderBy`）。
+>
+> 在 MCP 调用时传 camelCase 参数会导致 `Unexpected keyword argument` 错误。详见 `references/simple-query-guide.md` 和各模式指南的参数表。
 
 ---
 
-## 【强制】意图分析流程（数据集选择）
+## 【通用铁律】
 
-> 当用户给出自然语言需求、没有明确指定 dataset 时，**必须**按以下流程选择数据集，禁止跳过远程 catalog 直接用本地搜索猜测。
+### 铁律一：简化接口优先
 
-**标准流程**：
+普通聚合、数据对比、MOY 趋势、子查询等场景，**必须优先使用简化接口**（`opscli query simple` / `query_simple`）。仅当简化接口不满足需求时，才手写完整 payload。
 
-1. **远程 catalog 优先**：调用 `opscli query catalog --pretty`（CLI）或 `query_catalog()`（MCP），读取远端最新的 `intents` 列表
-2. **意图匹配**：将用户需求与 `intents` 中的 `use_cases`、`keywords`、`scenario_description` 逐条匹配，按 `priority` 选择最佳候选数据集
-3. **获取 table_id 和 default_filters**：从命中的 intent 中提取 `table_id`、`dataset_alias`、`default_filters`、`comparison_strategy` 等参数
-4. **验证 default_filters（强制）**：catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某数据集的 `default_filters` 时，必须先发一个轻量探查查询（不带 `default_filters`，仅带日期范围 + 1 个指标 SUM，limit=1）确认数据集有数据；再加上 `default_filters` 重试；若加上后返回 0 行，则去掉该 `default_filters` 继续查询，并在结果中告知用户已跳过不可用的默认过滤条件
-5. **字段校验**：用本地 `data/dataset_fields.csv` 或 `query_metadata` 校验目标字段是否存在
-6. **构造查询**：基于 catalog 提供的 `table_id`、验证通过的 `default_filters`、`comparison_strategy` 构造查询
+### 铁律二：禁止绕过正式入口
 
-**降级规则**：
+所有远端查询动作必须统一走选定模式下的正式查询入口，**禁止直接调用后端 HTTP 接口**。
 
-| 优先级 | 场景 | 动作 |
-|--------|------|------|
-| 1（最优） | 远程 catalog 可用 | 直接使用远端 `intents` 匹配 |
-| 2（回退） | 远程 catalog 失败且 `fallback_local=true` | 自动回退本地缓存 `data/dataset_catalog.json` |
-| 3（兜底） | catalog 为空或 intents 无法匹配 | 回退到 `search`（MCP）/ `search.py`（CLI）+ `datasets.csv` 关键词检索 |
+### 铁律三：Catalog 优先选数据集
 
-**禁止行为**：
-- 跳过远程 catalog，直接用本地 `search.py` / `search` 工具猜测数据集
-- **盲信** catalog 的 `default_filters` 而不做验证——`default_filters` 可能因数据源变更、字段值不一致等原因导致查询返回 0 行
-- 忽略 catalog 中的 `comparison_strategy`，未按推荐策略构造对比查询
+当用户只给出自然语言需求、没有指定 dataset 时，**优先使用远端 catalog 的 `intents`** 匹配数据集；仅当 catalog 不可用或 intents 无法匹配时，才回退到本地关键词检索。
+
+### 铁律四：子查询数据集强制简化接口
+
+涉及 `innerWhere` 的数据集（子查询类型，`inner_where_enabled=true`），**只允许使用简化接口**，禁止手写完整 query payload + `opscli query run` / `query_run`。
+
+### 铁律五：字段存在性校验
+
+构造任何 query 参数前，**必须先确认目标数据集和字段真实存在**；搜索结果为空时，先判断本地数据是否已初始化，再决定是否升级。
+
+### 铁律六：认证按需触发
+
+本地只读检索不要求登录；涉及远端 catalog、远端执行、图表运行和 Skill 升级前必须确认认证状态。
+
+### 铁律七：dataComparison 必须同时传主周期
+
+涉及环比、同比、上期对比等汇总对比时，**必须同时传主周期日期 `filters` + 对比周期 `dataComparison`**，不能只传 `dataComparison`。
+
+### 铁律八：default_filters 必须验证
+
+catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某数据集的 `default_filters` 时，必须先轻量探查验证；若加上后返回 0 行，则去掉该 `default_filters` 继续查询，并告知用户已跳过不可用的默认过滤条件。
+
+### 铁律九：公式字段禁止套用普通聚合
+
+字段 metadata 中标记了 `formula_config` / `summary_expression` / `detail_expression` 的公式字段，**禁止使用 SUM/COUNT/AVG 等普通聚合函数**。公式字段的聚合逻辑已内置在表达式中，再套聚合会导致二次聚合的语义错误（例如把每行的 ACOS 百分比加在一起，而非计算整体 ACOS）。
+
+- 聚合/分组查询：使用 `summary_expression`，不额外传 `aggregation`
+- 明细查询：使用 `detail_expression`
+- 简化接口中遇到公式字段：**不加 `aggregation` 参数**，让服务端直接使用公式表达式
+
+### 铁律十：本地数据初始化检查
+
+`data/VERSION.json` 的 `data_state` 为 `placeholder` 时，表示本地数据为空模板（如 `datasets.csv` 只有表头无数据行）。此时任何字段搜索都会返回空结果，无法完成铁律三（Catalog 优先）和铁律五（字段存在性校验）。
+
+**处理规则**：在执行任何需要本地数据索引的操作前，必须先检查 `data/VERSION.json` 的 `data_state` 字段：
+
+- `data_state` 为 `placeholder` 或 `empty` → 先执行 `opscli skills upgrade ops-dataset-query`（CLI）或 `skills_upgrade(name="ops-dataset-query")`（MCP）拉取远端数据，然后再执行搜索/查询
+- `data_state` 为 `ready` → 正常使用本地索引
 
 ---
 
-## 使用原则
+## 各模式详细文档
 
-- **简化接口优先**：普通聚合、数据对比、MOY 趋势、子查询等场景，优先使用简化接口（`opscli query simple` / `query_simple`），参数结构见 `references/simple-query-guide.md`
-- 仅当简化接口不满足需求时（如复杂的 `joins`、`union`、自定义子查询），才手写完整 query payload + `opscli query run` / `query_run`
-- 所有远端查询动作必须统一走选定模式下的正式查询入口，禁止直接调用后端 HTTP 接口
-- 认证检查按动作触发：本地只读检索（`catalog --source local` / `query_catalog(source="local")` / `metadata` / `search` / `fetch`）不要求登录；默认远端 catalog、远端执行、图表运行和 Skill 升级前必须确认认证
-- **【强制】意图分析必须远程 catalog 优先**：用户未指定 dataset 时，必须先调用远程 catalog 匹配 intents；仅当 catalog 不可用或 intents 无法匹配时，才回退到本地关键词检索
-- 查询前优先检查目标 `dataset_alias`、`field_name`、`global_alias`、`verbose_name` 是否存在于本地索引或 metadata；不要先猜字段再直接构造 payload
-- **【强制】本地搜索结果为空时，必须先确认数据是否已初始化**：若 `updater_mcp.py --check`、`opscli skills status` 或本地文件统计显示数据为空/placeholder，先升级再重试；若数据已初始化但搜索为空，再告知用户当前索引未覆盖
-- 如果字段或数据集不存在，优先执行当前模式下的 Skill 升级，再重新检查一次
-- CLI 模式使用 `opscli skills upgrade ops-dataset-query`；MCP 模式使用 `skills_upgrade(name="ops-dataset-query")`
-- 升级后若字段仍不存在，应明确告知用户当前本地索引和 metadata 中没有该字段，不要伪造字段名继续查询
-- 涉及环比、同比、上期对比等汇总对比时，优先使用服务端 `dataComparison` 能力；**必须同时传主周期日期 `filters` + 对比周期 `dataComparison`**，不能只传 `dataComparison`
-- 普通时间范围查询只用 `filters`；只有需要对比时才同时使用 `filters` 与 `dataComparison`
-- 如果 `query_simple` / `opscli query simple` 携带 `dataComparison` 后出现 SQL 解析错误（如 `QS-EXE-005 missing ')' at '{'`），先检查是否缺少主周期日期 `filters`；缺少时自动补上当前周期 `>=`、`<=` 或 `between` 日期过滤后重试，仍失败再降级为纯 `filters` 查询或多次查询本地合并
-- **子查询数据集（`inner_where_enabled=true`）已支持 `dataComparison`**：使用方式与普通数据集一致，必须同时传主周期 `filters` 和 `dataComparison`。若极端情况下仍未返回 `last_*`、`diff_*`、`pct_*` 对比字段，可降级为"分别查询两个周期 + 本地合并计算环比"策略
-- **【已知限制】子查询数据集必须至少包含一个业务过滤条件**：`inner_where_enabled=true` 的数据集在无任何业务 `filters` 时，`innerWhere` 占位符无法填充，会导致 `QS-EXE-005` SQL 解析错误。查询此类数据集时，必须至少传入一个日期范围过滤条件
-- 处理 chart 查询时，优先采用服务端返回的 `datasets + queries` 双层结构：`datasets` 负责公共字段语义，`queries` 负责执行结构；本地 CSV 仅作字段映射兜底
+| 模式 | 文件路径 | 说明 |
+|------|---------|------|
+| CLI 模式索引 | `references/cli.md` | 前置要求、使用原则、字段检查、错误处理、工作流索引 |
+| CLI 简易版 | `references/cli-simple-guide.md` | `opscli query simple`、`opscli query build` 详解 |
+| CLI 完整版 | `references/cli-advanced-guide.md` | `opscli query run`、`opscli query chart`、降级方案 |
+| MCP 模式索引 | `references/mcp.md` | 前置要求、使用原则、字段检查、辅助脚本、错误处理 |
+| MCP 简易版 | `references/mcp-simple-guide.md` | `query_simple`、`query_build_and_run` 详解 |
+| MCP 完整版 | `references/mcp-advanced-guide.md` | `query_run`、`query_chart`、降级方案 |
+| 简化接口参数规范 | `references/simple-query-guide.md` | **优先阅读** — 通用简化参数结构 |
+| 完整 query payload 规范 | `references/data-query-service-dev-guide.md` | 多次失败时参考 |
+| 数据对比与高级计算参考 | `references/query-patterns.md` | CLI / MCP 共享 |

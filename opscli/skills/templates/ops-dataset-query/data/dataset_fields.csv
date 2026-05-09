@@ -1,1 +1,1 @@
-dataset_alias,dataset_name,dataset_type,dataset_category,field_name,verbose_name,global_alias,field_type,data_type,is_dttm,is_restricted,expression,expression_raw,formula_config,detail_expression,summary_expression,has_formula_config,description,keywords
+dataset_alias,field_name,verbose_name,global_alias,field_type,summary_expression,detail_expression,description

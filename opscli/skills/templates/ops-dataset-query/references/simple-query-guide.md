@@ -25,15 +25,27 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 
 ## 7 个核心概念
 
-| 概念 | 说明 | 必填 |
-|------|------|------|
-| `tableId` | 数据集 ID | 是 |
-| `dimensions` | 维度字段列表（分组依据） | 否 |
-| `metrics` | 指标字段列表（聚合计算） | 否 |
-| `filters` | 过滤条件（统一列表，不分 where/innerWhere） | 否 |
-| `dataComparison` | 数据对比（环比/同比） | 否 |
-| `orderBy` | 排序规则 | 否 |
-| `limit` / `offset` | 分页 | 否（默认 limit=20） |
+> **⚠️ 参数命名约定（重要）**
+>
+> 本文档中的示例涉及两种不同的参数命名风格，**务必严格区分**：
+>
+> | 场景 | 命名风格 | 示例 |
+> |------|---------|------|
+> | JSON payload（发给后端 API 的数据） | **camelCase** | `tableId`、`dataComparison`、`orderBy` |
+> | MCP Tool 函数调用参数 | **snake_case** | `table_id`、`data_comparison`、`order_by` |
+> | CLI 命令行参数 | **kebab-case** | `--table-id`、`--data-comparison`、`--order-by` |
+>
+> **常见错误**：在 MCP 调用 `query_simple(tableId=15, ...)` → 报错 `Unexpected keyword argument`。**正确写法**：`query_simple(table_id=15, ...)`。
+
+| 概念 | JSON payload 字段名 | MCP 参数名 | 说明 | 必填 |
+|------|---------------------|-----------|------|------|
+| 数据集 ID | `tableId` | `table_id` | 数据集 ID | 是 |
+| 维度字段列表 | `dimensions` | `dimensions` | 分组依据 | 否 |
+| 指标字段列表 | `metrics` | `metrics` | 聚合计算 | 否 |
+| 过滤条件 | `filters` | `filters` | 统一列表 | 否 |
+| 数据对比 | `dataComparison` | `data_comparison` | 环比/同比 | 否 |
+| 排序规则 | `orderBy` | `order_by` | 排序 | 否 |
+| 分页 | `limit` / `offset` | `limit` / `offset` | 分页 | 否（默认 limit=20） |
 
 > 不需要理解的概念（服务端自动处理）：`innerWhere`、`translate`、`from`、`field_name` vs `bc.` 前缀、`cacl_type`、`params.dim/date`
 
@@ -86,9 +98,16 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 ]
 ```
 
-- `aggregation`：聚合方式（`SUM`、`COUNT`、`AVG`、`MAX`、`MIN`）
+- `aggregation`：聚合方式（`SUM`、`COUNT`、`AVG`、`MAX`、`MIN`）。**注意：公式字段不要传此参数，见下方警告**
 - `comparison`（可选）：`MOY`（月环比/年同比趋势）、`ACC`（累计）、`PPT`（百分点）
 - `moyType`（可选）：`MOM_MONTH`（月环比）、`YOY_YEAR`（年同比）
+
+> ⚠️ **公式字段警告**：如果字段的 metadata 中包含 `formula_config` 或 `summary_expression`（如 ACOS、ROAS、平均单价等比率/占比指标），**不要传 `aggregation`**。公式字段的聚合逻辑已内置在表达式中，再传 `aggregation`（如 SUM）会导致二次聚合，产生错误的语义结果（例如把每行的 ACOS 百分比加在一起，而非计算整体 ACOS）。
+>
+> **公式字段的正确处理方式**：
+> - 聚合/分组查询：使用 `summary_expression` 作为 `field`，不传 `aggregation`
+> - 明细查询：使用 `detail_expression` 作为 `field`，不传 `aggregation`
+> - 简化接口中：直接用字段名传 `field`，不传 `aggregation`，服务端会自动识别公式字段并使用正确的表达式
 
 ### filters — 过滤条件
 
@@ -283,8 +302,11 @@ opscli query simple --table-id 1 \
 
 ## MCP 调用方式
 
+> **注意**：MCP Tool 参数使用 **snake_case** 命名（如 `table_id`、`data_comparison`、`order_by`），不是 JSON payload 的 camelCase（如 `tableId`、`dataComparison`、`orderBy`）。
+
 ```python
-# 构造并执行简化查询
+# 注意：MCP 参数用 snake_case，不是 camelCase！
+# table_id（不是 tableId），data_comparison（不是 dataComparison）
 query_simple(
     table_id=1,
     dimensions=[{"field": "dept_name", "alias": "f_dept"}],

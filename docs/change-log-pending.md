@@ -1,5 +1,45 @@
 # 待归档变更记录
 
+## 2026-05-09 ops-dataset-query - 精简 CSV 和 API 字段，减少 AI 上下文消耗
+
+**变更原因**：`dataset_fields.csv`（19 字段）和 `datasets.csv`（10 字段）字段过多，浪费 AI 上下文 token；`/api/v1/data-metrics/datasets/query-metadata` API 响应也包含大量冗余字段。
+
+**改动点**：
+
+### 字段精简对照表
+
+**dataset_fields.csv（19→8 字段）**：
+- 保留：`dataset_alias`, `field_name`, `verbose_name`, `global_alias`, `field_type`, `summary_expression`, `detail_expression`, `description`
+- 删除：`dataset_name`, `dataset_type`, `dataset_category`, `data_type`, `is_dttm`, `is_restricted`, `expression`, `expression_raw`, `formula_config`, `has_formula_config`, `keywords`
+
+**datasets.csv（10→5 字段）**：
+- 保留：`table_id`, `dataset_alias`, `dataset_name`, `inner_where_enabled`, `description`
+- 删除：`dataset_type`, `dataset_category`, `data_source`, `main_dttm_col`, `cache_timeout`
+
+### 修改的文件
+
+1. **PHP 服务端** `DatasetSkillService.php`：
+   - `createFieldExportResponseForUser()` CSV 表头 19→8 字段
+   - `toFieldExportRow()` 输出行 19→8 字段
+   - `createDatasetExportResponseForUser()` CSV 表头 10→5 字段
+   - `toDatasetExportRow()` 输出行 10→5 字段
+   - `buildQueryMetadataForUser()` 改用 `Arr::only()` 仅返回必要字段
+
+2. **Python 客户端** `core.py`：
+   - `load_local_index()` 移除 `data_type`、`dataset_name` 字段（仅存储从未有效读取）
+
+3. **CSV 占位文件**：
+   - `data/dataset_fields.csv` 更新表头为 8 字段
+   - `data/datasets.csv` 更新表头为 5 字段
+
+**验证结果**：需发布新版本后通过 `opscli skills upgrade` 验证 CSV 下载和 API 响应
+
+**影响范围**：ops-dataset-query Skill 的数据同步、搜索、查询全链路
+
+**回滚方式**：恢复上述 5 个文件的旧字段列表
+
+---
+
 ## 2026-05-07 opscli - skills install 自动向编辑器配置文件注入反馈铁律
 
 **变更原因**：用户期望 `opscli skills install` 安装 ops-feedback Skill 时，能自动在对应编辑器（Claude Code / Codex / OpenCode / OpenClaw）的配置文件中追加【铁律】工具调用失败自动反馈，实现零配置启用。
@@ -538,4 +578,40 @@
 
 **影响范围**：所有业务类 Skill 的 references 目录结构；ops-dataset-query 不受影响
 **回滚方式**：从 ops-dataset-query/references/data-query-service-dev-guide.md 重新 cp 到各 Skill，删除 query-essential-guide.md，恢复文件名引用
+---
+
+## 2026-05-09 MCP context - 修复 SSE 模式下 API Key 丢失导致凭证跨会话不可见
+
+**变更原因**：MCP SSE 模式下，ASGI 中间件设置的 `mcp_request_ctx` contextvar 在 SSE 长连接→anyio task group→tool handler 的传播链中丢失，导致 `get_current_api_key()` 返回 None，凭证写入 Keychain 而非 API Key 隔离目录，后续会话无法发现已保存的凭证。
+
+**改动点**：
+- `opscli/mcp/context.py`：`get_current_api_key()`、`get_current_user_id()`、`get_current_user_email()` 增加降级路径，当自定义 `mcp_request_ctx` 为 None 时，从 MCP 框架的 `request_ctx`（在 `_handle_request` 中可靠设置）读取 POST 请求 scope 中的值
+
+**验证结果**：`tests/mcp/test_context.py` 全部通过；语法编译通过
+
+**影响范围**：仅影响 MCP SSE 模式下的 API Key 获取路径，CLI 模式不受影响
+
+**回滚方式**：移除 `context.py` 中的降级读取逻辑和 `_get_scope_from_mcp_request_ctx()` 辅助函数
+
+---
+
+## 2026-05-09 auth device_flow - 修复 ChatGPT 轮询卡死问题
+
+**变更原因**：ChatGPT 使用 `auth_login_poll` 时，若后端返回非 200（如 WAF 拦截 "Unusual activity has been detected"），`poll_once` 调用 `raise_for_status()` 抛出通用异常，MCP tool 返回模糊错误信息，ChatGPT 持续重试导致轮询卡死。
+
+**改动点**：
+1. `opscli/auth/core/device_flow.py`：
+   - `poll_once` 捕获 `httpx.TimeoutException` 和 `httpx.ConnectError`，返回结构化错误 dict
+   - 非 200 响应不再 `raise_for_status()`，改为返回含 `retryable` 标志的错误 dict（429/5xx 可重试，其余不可重试）
+   - 新增 `_extract_error_message()` 静态方法，解析 JSON/text/HTML 格式的错误消息
+2. `opscli/mcp/tools/auth.py`：
+   - `auth_login_poll` 处理 `status: "error"` 结果时直接透传（含 `retryable` 标志）
+   - 更新 docstring 文档所有 status 值和 `retryable` 语义
+
+**验证结果**：`tests/auth/test_device_flow.py` 8 passed；`tests/mcp/test_tools.py` 3 passed；语法编译通过
+
+**影响范围**：仅影响 `auth_login_poll` MCP tool 和 `DeviceFlow.poll_once` 方法的错误处理路径，正常授权流程不变
+
+**回滚方式**：回退 `device_flow.py` 的 `poll_once` 方法（恢复 `raise_for_status()`），回退 `auth.py` 的 `auth_login_poll`（移除 error 状态透传）
+
 ---
