@@ -50,6 +50,13 @@ class DeviceFlow:
         阻塞逻辑。本方法只发起一次 HTTP 请求；授权成功时保存 session，其他状态
         原样返回给调用方继续判断。
 
+        返回结构中包含 status 字段，调用方根据 status 判断后续行为：
+        - "authorized": 授权成功，包含 session 信息
+        - "pending": 等待用户授权中，可继续轮询
+        - "expired": 设备码超时，不可重试
+        - "denied": 用户拒绝授权，不可重试
+        - "error": 后端返回非 2xx 或网络异常，通常不可重试
+
         Args:
             device_code: 设备码，由 request_device_code() 返回
             timeout: 单次 HTTP 请求超时时间，默认 10 秒，最大建议 30 秒
@@ -61,13 +68,32 @@ class DeviceFlow:
             DeviceFlowExpiredError: 设备码超时
             DeviceFlowDeniedError: 用户在浏览器中拒绝授权
         """
-        resp = httpx.get(
-            f"{self._url}/v1/cli/device/poll",
-            params={"device_code": device_code},
-            headers=self._headers,
-            timeout=max(1, min(int(timeout), 30)),
-        )
-        resp.raise_for_status()
+        try:
+            resp = httpx.get(
+                f"{self._url}/v1/cli/device/poll",
+                params={"device_code": device_code},
+                headers=self._headers,
+                timeout=max(1, min(int(timeout), 30)),
+            )
+        except httpx.TimeoutException:
+            # 网络超时：可重试
+            return {"status": "error", "error": "请求超时，请稍后重试", "retryable": True}
+        except httpx.ConnectError as exc:
+            # 连接失败：不可重试（服务不可达）
+            return {"status": "error", "error": f"无法连接后端服务: {exc}", "retryable": False}
+
+        # 非 2xx 响应：尝试解析响应体中的错误信息
+        if resp.status_code != 200:
+            error_msg = self._extract_error_message(resp)
+            # 429（频率限制）和 5xx（服务端故障）可短暂重试，其他状态码不可重试
+            retryable = resp.status_code == 429 or resp.status_code >= 500
+            return {
+                "status": "error",
+                "error": error_msg,
+                "http_status": resp.status_code,
+                "retryable": retryable,
+            }
+
         body = resp.json()
         status = body.get("status")
         if status == "authorized" and self._store is not None:
@@ -83,6 +109,33 @@ class DeviceFlow:
         elif status == "denied":
             raise DeviceFlowDeniedError("用户拒绝授权")
         return body
+
+    @staticmethod
+    def _extract_error_message(resp: httpx.Response) -> str:
+        """从 HTTP 错误响应中提取可读的错误信息。
+
+        优先解析 JSON 响应体（后端标准格式），
+        回退到纯文本响应体，最后使用 HTTP 状态码。
+
+        Args:
+            resp: httpx 响应对象
+
+        Returns:
+            人类可读的错误信息字符串
+        """
+        try:
+            data = resp.json()
+            # 后端标准格式：{"message": "..."} 或 {"error": "..."}
+            msg = data.get("message") or data.get("error") or data.get("msg")
+            if msg:
+                return str(msg)
+        except Exception:
+            pass
+        # 回退到纯文本响应体（如 WAF/CDN 拦截页面的文本片段）
+        text = resp.text.strip()
+        if text and len(text) < 500:
+            return text
+        return f"HTTP {resp.status_code}"
 
     def poll(self, device_code: str, interval: int = 3, max_wait: int = 300) -> dict:
         """轮询后端等待用户完成授权。

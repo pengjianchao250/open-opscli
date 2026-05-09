@@ -94,6 +94,15 @@ async def auth_login_poll(device_code: str, timeout: int = 10) -> dict:
     授权成功后自动将 session_id 保存到本地凭证存储（CredentialStore）。
     在 HTTP/SSE 多用户模式下，按当前 API Key 隔离存储，避免用户间串用 session。
 
+    返回结构中 data.status 字段指示当前状态：
+    - "authorized": 授权成功，凭证已保存，流程结束
+    - "pending":    用户尚未完成授权，可继续轮询（建议间隔 3-5 秒）
+    - "error":      后端返回错误（如频率限制、WAF 拦截），检查 data.retryable 决定是否重试
+    - "expired":    设备码已过期，需重新调用 auth_login_start
+    - "denied":     用户拒绝授权，流程终止
+
+    当 data.retryable 为 false 时，AI Agent 不应继续轮询，应将错误信息展示给用户。
+
     Args:
         device_code: auth_login_start 返回的设备码
         timeout:     单次轮询超时秒数（默认 10s）
@@ -109,6 +118,11 @@ async def auth_login_poll(device_code: str, timeout: int = 10) -> dict:
             headers=_get_mcp_request_headers(),
         )
         result = flow.poll_once(device_code, timeout=timeout)
+
+        # poll_once 返回 error 状态时直接透传（包含 retryable 标志）
+        if isinstance(result, dict) and result.get("status") == "error":
+            return _ok(result)
+
         # 授权成功时自动持久化保存 session_id（按 API Key 隔离）
         if isinstance(result, dict) and result.get("status") == "authorized":
             session_id = result.get("session_id")
