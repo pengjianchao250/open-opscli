@@ -8,9 +8,9 @@
 
 ### 字段精简对照表
 
-**dataset_fields.csv（19→8 字段）**：
-- 保留：`dataset_alias`, `field_name`, `verbose_name`, `global_alias`, `field_type`, `summary_expression`, `detail_expression`, `description`
-- 删除：`dataset_name`, `dataset_type`, `dataset_category`, `data_type`, `is_dttm`, `is_restricted`, `expression`, `expression_raw`, `formula_config`, `has_formula_config`, `keywords`
+**dataset_fields.csv（19→9 字段）**：
+- 保留：`dataset_alias`, `dataset_name`, `field_name`, `verbose_name`, `global_alias`, `field_type`, `summary_expression`, `detail_expression`, `description`
+- 删除：`dataset_type`, `dataset_category`, `data_type`, `is_dttm`, `is_restricted`, `expression`, `expression_raw`, `formula_config`, `has_formula_config`, `keywords`
 
 **datasets.csv（10→5 字段）**：
 - 保留：`table_id`, `dataset_alias`, `dataset_name`, `inner_where_enabled`, `description`
@@ -19,17 +19,17 @@
 ### 修改的文件
 
 1. **PHP 服务端** `DatasetSkillService.php`：
-   - `createFieldExportResponseForUser()` CSV 表头 19→8 字段
-   - `toFieldExportRow()` 输出行 19→8 字段
+   - `createFieldExportResponseForUser()` CSV 表头 19→9 字段
+   - `toFieldExportRow()` 输出行 19→9 字段
    - `createDatasetExportResponseForUser()` CSV 表头 10→5 字段
    - `toDatasetExportRow()` 输出行 10→5 字段
    - `buildQueryMetadataForUser()` 改用 `Arr::only()` 仅返回必要字段
 
 2. **Python 客户端** `core.py`：
-   - `load_local_index()` 移除 `data_type`、`dataset_name` 字段（仅存储从未有效读取）
+   - `load_local_index()` 移除 `data_type` 字段（仅存储从未有效读取）
 
 3. **CSV 占位文件**：
-   - `data/dataset_fields.csv` 更新表头为 8 字段
+   - `data/dataset_fields.csv` 更新表头为 9 字段
    - `data/datasets.csv` 更新表头为 5 字段
 
 **验证结果**：需发布新版本后通过 `opscli skills upgrade` 验证 CSV 下载和 API 响应
