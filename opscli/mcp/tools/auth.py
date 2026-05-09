@@ -28,10 +28,42 @@ from .helpers import (
     _auth_client,
     _decode_jwt_payload,
     _err,
+    _get_credential_dir,
     _ok,
     _registry,
     _sync_systems_after_login,
 )
+
+
+def _get_isolated_store():
+    """获取当前请求对应的隔离 CredentialStore 实例。
+
+    在 HTTP/SSE 多用户模式下，按 API Key 隔离存储。
+    stdio 模式下使用默认路径。
+
+    Returns:
+        CredentialStore 实例
+    """
+    from opscli.auth.storage.credential_store import CredentialStore
+
+    cred_dir = _get_credential_dir()
+    if cred_dir:
+        return CredentialStore(base_dir=cred_dir)
+    return CredentialStore()
+
+
+def _get_mcp_request_headers() -> dict | None:
+    """获取当前 MCP 请求中的 API Key，用于向后端透传。
+
+    Returns:
+        包含 X-MCP-API-Key 的请求头字典，或 None（stdio 模式无上下文）
+    """
+    from opscli.mcp.context import get_current_api_key
+
+    api_key = get_current_api_key()
+    if api_key:
+        return {"X-MCP-API-Key": api_key}
+    return None
 
 
 async def auth_login_start() -> dict:
@@ -45,7 +77,12 @@ async def auth_login_start() -> dict:
 
     try:
         # 无状态模式：store=None 不保存凭证，凭证由调用方管理
-        flow = DeviceFlow(ops_url=OPS_URL, store=None)
+        # 向后端透传当前 API Key，便于 OPS 记录追踪
+        flow = DeviceFlow(
+            ops_url=OPS_URL,
+            store=None,
+            headers=_get_mcp_request_headers(),
+        )
         return _ok(flow.request_device_code())
     except Exception as exc:
         return _err(exc)
@@ -54,8 +91,8 @@ async def auth_login_start() -> dict:
 async def auth_login_poll(device_code: str, timeout: int = 10) -> dict:
     """单次轮询 Device Flow 授权状态。
 
-    授权成功后自动将 session_id 保存到本地凭证存储（CredentialStore），
-    与 CLI 模式共用加密存储，实现登录态互通。
+    授权成功后自动将 session_id 保存到本地凭证存储（CredentialStore）。
+    在 HTTP/SSE 多用户模式下，按当前 API Key 隔离存储，避免用户间串用 session。
 
     Args:
         device_code: auth_login_start 返回的设备码
@@ -63,21 +100,26 @@ async def auth_login_poll(device_code: str, timeout: int = 10) -> dict:
     """
     from opscli.auth import OPS_URL
     from opscli.auth.core.device_flow import DeviceFlow
-    from opscli.auth.storage.credential_store import CredentialStore
 
     try:
-        flow = DeviceFlow(ops_url=OPS_URL, store=None)
+        # 向后端透传当前 API Key，便于 OPS 记录追踪
+        flow = DeviceFlow(
+            ops_url=OPS_URL,
+            store=None,
+            headers=_get_mcp_request_headers(),
+        )
         result = flow.poll_once(device_code, timeout=timeout)
-        # 授权成功时自动持久化保存 session_id（统一写入 CredentialStore）
+        # 授权成功时自动持久化保存 session_id（按 API Key 隔离）
         if isinstance(result, dict) and result.get("status") == "authorized":
             session_id = result.get("session_id")
             email = result.get("email", "")
             expires_at = result.get("expires_at", "")
             if session_id:
-                CredentialStore().save_session(session_id, email, expires_at)
+                store = _get_isolated_store()
+                store.save_session(session_id, email, expires_at)
                 # 刷新内存缓存，确保后续 Tool 调用立即可见
                 from opscli.mcp.credential_cache import invalidate_credential_cache
-                invalidate_credential_cache()
+                invalidate_credential_cache(base_dir=_get_credential_dir())
                 result["saved_locally"] = True
         return _ok(result)
     except Exception as exc:
@@ -88,14 +130,13 @@ async def auth_get_token(system: str = "ops", session_id: str | None = None) -> 
     """获取指定系统的有效 JWT。
 
     优先使用调用方传入的 session_id，其次尝试从本地加载。
-    成功获取 JWT 后自动保存到 CredentialStore，与 CLI 共用加密存储。
+    成功获取 JWT 后自动保存到 CredentialStore（按 API Key 隔离）。
 
     Args:
         system:     系统别名（默认 "ops"）
         session_id: 可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
     """
     from opscli.mcp.tools.helpers import _get_session_id
-    from opscli.auth.storage.credential_store import CredentialStore
 
     sid = _get_session_id(system, session_id)
     if not sid:
@@ -112,10 +153,11 @@ async def auth_get_token(system: str = "ops", session_id: str | None = None) -> 
                 expires_in = 7200
         except Exception:
             expires_in = 7200
-        # 统一保存到 CredentialStore（与 CLI 共用）
-        CredentialStore().save_token(system, jwt, expires_in)
+        # 保存到隔离的 CredentialStore
+        store = _get_isolated_store()
+        store.save_token(system, jwt, expires_in)
         from opscli.mcp.credential_cache import invalidate_credential_cache
-        invalidate_credential_cache()
+        invalidate_credential_cache(base_dir=_get_credential_dir())
         return _ok({"jwt": jwt, "source": "remote", "cached": True})
     except Exception as exc:
         return _err(exc)
@@ -124,17 +166,16 @@ async def auth_get_token(system: str = "ops", session_id: str | None = None) -> 
 async def auth_check_token(jwt: str | None = None, system: str = "ops") -> dict:
     """检测 JWT 有效性及剩余有效时间（秒）。纯本地解析，不向后端发请求。
 
-    如果未提供 jwt，会自动检查本地 CredentialStore 缓存的 JWT。
+    如果未提供 jwt，会自动检查本地 CredentialStore 缓存的 JWT（按 API Key 隔离）。
 
     Args:
         jwt:    可选，待检测的 JWT 字符串（为空则检查本地缓存）
         system: 系统别名（默认 "ops"，用于定位本地缓存的 JWT）
     """
-    from opscli.auth.storage.credential_store import CredentialStore
-
     target_jwt = jwt
     if not target_jwt:
-        data = CredentialStore().load() or {}
+        store = _get_isolated_store()
+        data = store.load() or {}
         td = data.get("tokens", {}).get(system)
         if td:
             target_jwt = td.get("jwt")
@@ -149,9 +190,10 @@ async def auth_check_token(jwt: str | None = None, system: str = "ops") -> dict:
         valid = remaining > 0
         if not valid and not jwt:
             # 本地缓存已过期，自动清除
-            CredentialStore().remove_token(system)
+            store = _get_isolated_store()
+            store.remove_token(system)
             from opscli.mcp.credential_cache import invalidate_credential_cache
-            invalidate_credential_cache()
+            invalidate_credential_cache(base_dir=_get_credential_dir())
         return _ok({
             "valid": valid,
             "expires_in": max(0, remaining),
@@ -182,17 +224,15 @@ async def auth_is_authenticated(session_id: str | None = None) -> dict:
 
 
 async def auth_token_refresh(system: str = "__all__", session_id: str | None = None) -> dict:
-    """刷新指定系统 JWT 并保存到 CredentialStore。
+    """刷新指定系统 JWT 并保存到 CredentialStore（按 API Key 隔离）。
 
     优先使用调用方传入的 session_id，其次尝试从本地加载。
-    保存后 CLI 模式可直接复用该 JWT，无需重复换取。
 
     Args:
         system:     系统别名，"__all__" 表示刷新所有系统
         session_id: 可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
     """
     from opscli.mcp.tools.helpers import _get_session_id
-    from opscli.auth.storage.credential_store import CredentialStore
 
     sid = _get_session_id("ops", session_id)
     if not sid:
@@ -201,7 +241,7 @@ async def auth_token_refresh(system: str = "__all__", session_id: str | None = N
         client = _auth_client()
 
         def _save_jwt(alias: str, jwt: str) -> None:
-            """解析过期时间并保存到 CredentialStore。"""
+            """解析过期时间并保存到隔离的 CredentialStore。"""
             try:
                 payload = _decode_jwt_payload(jwt)
                 exp = payload.get("exp")
@@ -211,9 +251,10 @@ async def auth_token_refresh(system: str = "__all__", session_id: str | None = N
                     expires_in = 7200
             except Exception:
                 expires_in = 7200
-            CredentialStore().save_token(alias, jwt, expires_in)
+            store = _get_isolated_store()
+            store.save_token(alias, jwt, expires_in)
             from opscli.mcp.credential_cache import invalidate_credential_cache
-            invalidate_credential_cache()
+            invalidate_credential_cache(base_dir=_get_credential_dir())
 
         if system == "__all__":
             results = {}
@@ -328,22 +369,20 @@ async def auth_build_request_auth(
 async def auth_logout(system: str = "__all__") -> dict:
     """清除本地保存的 session 和 JWT（退出登录）。
 
-    统一操作 CredentialStore，清除后 CLI 与 MCP 同时失效。
+    按 API Key 隔离清除凭证，不影响其他用户的凭证。
     仅删除本地凭证，不影响后端 session 状态。
 
     Args:
         system: 系统别名，"__all__" 表示清除所有系统
     """
-    from opscli.auth.storage.credential_store import CredentialStore
-
     try:
-        store = CredentialStore()
+        store = _get_isolated_store()
         if system == "__all__":
             store.clear()
         else:
             store.remove_token(system)
         from opscli.mcp.credential_cache import invalidate_credential_cache
-        invalidate_credential_cache()
+        invalidate_credential_cache(base_dir=_get_credential_dir())
         return _ok({"cleared": system})
     except Exception as exc:
         return _err(exc)
@@ -352,7 +391,7 @@ async def auth_logout(system: str = "__all__") -> dict:
 async def auth_doctor(session_id: str | None = None) -> dict:
     """检查 session 有效性与各系统连通性，返回结构化诊断结果。
 
-    如果未提供 session_id，会自动尝试从本地 CredentialStore 加载已保存的 session。
+    如果未提供 session_id，会自动尝试从本地加载已保存的 session（按 API Key 隔离）。
 
     Args:
         session_id: 可选，提供后额外检测 session 是否已认证（为空则自动加载本地保存的）
@@ -360,7 +399,6 @@ async def auth_doctor(session_id: str | None = None) -> dict:
     try:
         client = _auth_client()
         from opscli.mcp.tools.helpers import _get_session_id
-        from opscli.auth.storage.credential_store import CredentialStore
 
         sid = _get_session_id("ops", session_id)
         checks: list[dict] = []
@@ -389,8 +427,9 @@ async def auth_doctor(session_id: str | None = None) -> dict:
                     "error": error,
                 }
             )
-        # 从 CredentialStore 读取本地凭证概览（与 CLI 共用存储）
-        store_data = CredentialStore().load() or {}
+        # 从隔离的 CredentialStore 读取本地凭证概览
+        store = _get_isolated_store()
+        store_data = store.load() or {}
         local_sessions = {
             "email": store_data.get("email"),
             "session_id_present": bool(store_data.get("session_id")),

@@ -1,27 +1,53 @@
-# opscli MCP Server（无状态模式）
+# opscli MCP Server
 
 将 opscli 核心能力以 [Model Context Protocol (MCP)](https://modelcontextprotocol.io) 的形式暴露，AI Agent 可直接调用，无需通过 CLI subprocess。
 
 **关键特性**：
-- **无状态设计**：服务器不保存任何用户 OAuth 凭证（session_id / jwt），所有认证信息由调用方传入
-- **固定 API Key**：SSE 连接层通过自动生成的固定 API Key 进行访问控制
+- **OPS 管控的 API Key**：每个用户拥有独立的 API Key，由 OPS 后端生成、校验和管理
+- **凭证物理隔离**：按 API Key SHA256 哈希隔离凭证存储，彻底杜绝用户间 session 串用
+- **自动远程校验**：HTTP/SSE 模式默认自动连接 OPS 后端校验 API Key，无需手动配置地址
+- **无状态设计**：服务器本身不保存 OAuth 凭证，所有认证信息由调用方传入或在隔离目录中暂存
 - **按需授权**：调用敏感 Tool 时自动触发 Device Flow，用户在浏览器完成授权
 
 ---
 
 ## 架构概览
 
+### 多用户模式（推荐，生产环境）
+
 ```
-用户 OpenCode / AI Agent
-  → headers: Authorization: Bearer opscli-mcp-xxx  （API Key，控制谁可连服务器）
-    → MCP 服务器（无状态，不保存 OAuth 凭证）
-      → Tool 参数: session_id + jwt（可选）  （控制谁可访问后端数据）
-        → 后端 ops / polaris（最终鉴权）
+用户 A（OpenCode / AI Agent）
+  → headers: Authorization: Bearer mcp_usr_a_xxx...  （A 的独立 API Key）
+    → MCP 服务器
+      → 远程校验：调用 OPS /v1/mcp/verify-key 确认 Key 有效
+        → 校验通过 → 将 API Key 注入请求上下文
+          → 凭证操作：读写 ~/.config/opscli/credentials_by_key/<hash_a>/
+            → Tool 参数: session_id + jwt（可选）
+              → 后端 ops / polaris（最终鉴权）
+
+用户 B（OpenCode / AI Agent）
+  → headers: Authorization: Bearer mcp_usr_b_xxx...  （B 的独立 API Key）
+    → MCP 服务器
+      → 远程校验：同上
+        → 校验通过 → 凭证操作：读写 ~/.config/opscli/credentials_by_key/<hash_b>/
+          → 与 A 的凭证物理隔离，互不干扰
+```
+
+### 单用户模式（向后兼容）
+
+```
+用户（OpenCode / AI Agent）
+  → headers: Authorization: Bearer opscli-mcp-xxx  （服务器自动生成的固定 Key）
+    → MCP 服务器（固定 Key 比对，无远程校验）
+      → 凭证操作：读写 ~/.config/opscli/credentials.bin
 ```
 
 **安全分层**：
-1. **API Key**：控制谁能连接到 MCP 服务器（由服务器自动生成，管理员分发给用户）
-2. **session_id / JWT**：控制谁能访问后端业务数据（由用户通过 Device Flow 授权获得）
+1. **API Key**（连接鉴权）：控制谁能连接到 MCP 服务器
+   - 多用户模式：由 OPS 后端生成，每个用户独立，支持过期/禁用/轮换
+   - 单用户模式：服务器自动生成固定 Key，管理员分发给用户
+2. **session_id / JWT**（业务鉴权）：控制谁能访问后端业务数据，通过 Device Flow 授权获得
+3. **凭证隔离**：多用户模式下按 API Key 哈希将凭证存储到独立目录，物理隔离
 
 ---
 
@@ -37,7 +63,47 @@ uv pip install -e .
 
 ## 启动 MCP 服务器
 
-### SSE 模式（推荐，用于 OpenCode / Inspector）
+### 多用户模式（推荐，生产环境）
+
+HTTP/SSE 模式默认启用 OPS 远程校验，从 `config.ini` 自动读取 `ops_system_url`：
+
+```bash
+opscli-mcp --transport both --port 8765
+```
+
+启动后自动输出：
+
+```
+[opscli-mcp] 服务已启动（模式：both）
+[opscli-mcp] 远程校验模式：http://ops.cm/v1/mcp/verify-key
+[opscli-mcp] 每个用户需使用独立的 API Key（由 OPS 后端生成）
+
+鉴权方式（选其一）：
+  Authorization: Bearer <your-api-key>
+  ?api_key=<your-api-key>
+
+SSE 端点（兼容 Cursor / Claude Desktop 等）：
+  http://0.0.0.0:8765/sse
+  http://0.0.0.0:8765/messages/  （SSE 消息投递）
+
+Streamable HTTP 端点（ChatGPT / OpenAI Apps SDK 推荐）：
+  http://0.0.0.0:8765/mcp
+```
+
+**如需覆盖默认校验地址**：
+```bash
+opscli-mcp --transport both --port 8765 \
+  --auth-verify-url https://custom-domain.com/v1/mcp/verify-key
+```
+
+**后台运行**：
+```bash
+nohup opscli-mcp --transport both --port 8765 > /tmp/opscli-mcp.log 2>&1 &
+```
+
+### 单用户模式（向后兼容，开发测试）
+
+不配置 `ops_system_url` 或显式不提供 `--auth-verify-url` 且无法从 `config.ini` 读取时，自动回退到单用户固定 API Key 模式：
 
 ```bash
 opscli-mcp --transport sse --host 127.0.0.1 --port 8765
@@ -46,28 +112,14 @@ opscli-mcp --transport sse --host 127.0.0.1 --port 8765
 启动后会在控制台输出自动生成的 API Key：
 
 ```
-[opscli-mcp] SSE 服务已启用 API Key 鉴权
-[opscli-mcp] API Key: opscli-mcp-H0BWl9L8PC84OSBMRzGW1psUJ0L2aaqd
-
-支持两种方式传入 API Key：
-  1. HTTP Header: Authorization: Bearer <api_key>
-  2. URL Query:   ?api_key=<api_key>
+[opscli-mcp] 服务已启动（模式：sse）
+[opscli-mcp] 固定 API Key: opscli-mcp-H0BWl9L8PC84OSBMRzGW1psUJ0L2aaqd
 ```
 
-**首次启动时自动生成**，API Key 持久化保存在：
-```
-~/.config/opscli/mcp_api_key
-```
-
+- 首次启动时自动生成，持久化保存在 `~/.config/opscli/mcp_api_key`
 - 重启后自动复用同一 API Key
 - 文件权限 `600`（仅所有者可读写）
 - 删除该文件后下次启动会重新生成
-
-**后台运行**：
-
-```bash
-nohup opscli-mcp --transport sse --host 127.0.0.1 --port 8765 > /tmp/opscli-mcp-sse.log 2>&1 &
-```
 
 ### stdio 模式（Claude Desktop）
 
@@ -89,11 +141,99 @@ nohup opscli-mcp --transport sse --host 127.0.0.1 --port 8765 > /tmp/opscli-mcp-
 
 ---
 
+## OPS 后端 API Key 管理
+
+### 生成 API Key
+
+用户登录 OPS 后调用（需 JWT）：
+
+```http
+POST /v1/mcp-api-keys
+Content-Type: application/json
+Authorization: Bearer <jwt>
+
+{
+  "name": "我的 OpenCode Key",
+  "expires_in_days": 90
+}
+```
+
+**返回（明文 Key 仅展示一次）**：
+```json
+{
+  "success": true,
+  "data": {
+    "api_key": "mcp_usr_a1b2c3d4e5f6...",
+    "name": "我的 OpenCode Key",
+    "expires_at": "2026-08-07T12:00:00Z",
+    "warning": "API Key 仅展示一次，请妥善保存。"
+  }
+}
+```
+
+### 管理 API Key
+
+| 操作 | 路由 | 说明 |
+|------|------|------|
+| 列表 | `GET /v1/mcp-api-keys` | 查看当前用户的所有 Key |
+| 删除 | `DELETE /v1/mcp-api-keys/{id}` | 删除指定 Key |
+| 启用/禁用 | `POST /v1/mcp-api-keys/{id}/toggle` | 切换 Key 状态 |
+| 轮换 | `POST /v1/mcp-api-keys/{id}/rotate` | 删除旧 Key，生成新 Key |
+
+### 校验接口（供 MCP Server 调用）
+
+```http
+GET /v1/mcp/verify-key?api_key=mcp_usr_xxx...
+X-MCP-API-Key: mcp_usr_xxx...
+```
+
+**返回**：
+```json
+{
+  "valid": true,
+  "user_id": 101,
+  "email": "user@example.com",
+  "name": "张三"
+}
+```
+
+---
+
 ## 客户端连接配置
 
-### OpenCode
+### OpenCode（多用户模式）
 
 编辑 `~/.config/opencode/opencode.json`：
+
+```json
+{
+  "mcp": {
+    "opscli": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8765/sse",
+      "headers": {
+        "Authorization": "Bearer mcp_usr_a1b2c3d4e5f6..."
+      },
+      "enabled": true
+    }
+  }
+}
+```
+
+> 每个用户需要使用 **自己独立的 API Key**（从 OPS 后端生成）。
+>
+> **Query 方式**（兼容模式）：如果客户端不支持自定义 headers：
+> ```json
+> {
+>   "url": "http://127.0.0.1:8765/sse?api_key=mcp_usr_xxx..."
+> }
+> ```
+>
+> ⚠️ **注意**：标准 MCP SSE 客户端在建立 SSE 连接后，会通过独立的 HTTP POST 发送消息。
+> 部分客户端不会自动将 query param 带到 POST 请求中，导致消息发送 401。
+> **推荐优先使用 Header 方式**，Query 方式主要用于浏览器直接访问或特殊客户端场景。
+
+### OpenCode（单用户模式，向后兼容）
 
 ```json
 {
@@ -110,18 +250,7 @@ nohup opscli-mcp --transport sse --host 127.0.0.1 --port 8765 > /tmp/opscli-mcp-
 }
 ```
 
-> `headers.Authorization` 中的 `opscli-mcp-xxx` 替换为服务器实际生成的 API Key。
->
-> **Query 方式**（兼容模式）：如果客户端不支持自定义 headers，可将 API Key 放在 URL 中：
-> ```json
-> {
->   "url": "http://127.0.0.1:8765/sse?api_key=opscli-mcp-xxx"
-> }
-> ```
->
-> ⚠️ **注意**：标准 MCP SSE 客户端在建立 SSE 连接后，会通过独立的 HTTP POST 发送消息。
-> 部分客户端不会自动将 query param 带到 POST 请求中，导致消息发送 401。
-> **推荐优先使用 Header 方式**，Query 方式主要用于浏览器直接访问或特殊客户端场景。
+### Inspector 调试
 
 安装 Inspector（仅需一次）：
 
@@ -138,7 +267,7 @@ mcp-inspector --port 5173
 在浏览器打开输出的链接：
 - Transport 选 **SSE**
 - URL 填 `http://127.0.0.1:8765/sse`
-- Headers 填 `{"Authorization": "Bearer opscli-mcp-xxx"}`
+- Headers 填 `{"Authorization": "Bearer mcp_usr_xxx..."}`（多用户）或固定 Key（单用户）
 - 点击 Connect 即可交互调用所有 Tools
 
 ---
@@ -193,13 +322,13 @@ opscli MCP 服务器已实现 OpenAI [Company Knowledge](https://openai.com/inde
 
 ## 授权流程（Device Flow）
 
-无状态模式下，服务器不保存用户凭证。**每次调用需要认证的 Tool 时，必须传入 `session_id`**（和可选的 `jwt`）。
+MCP Server 不保存用户 OAuth 凭证到全局位置，而是按 API Key 隔离存储。**每次调用需要认证的 Tool 时，优先传入 `session_id`**（和可选的 `jwt`）。
 
 ### 典型授权流程
 
 ```text
 1. 用户首次调用 query_build_and_run(...)
-   → 错误："无状态模式下必须提供 session_id"
+   → 错误："无 session_id：请完成授权登录"
 
 2. AI 自动调用 auth_login_start()
    → 返回 {verification_url, user_code, device_code, interval}
@@ -208,6 +337,7 @@ opscli MCP 服务器已实现 OpenAI [Company Knowledge](https://openai.com/inde
 
 4. AI 按 interval 轮询 auth_login_poll(device_code)
    → 返回 {status: "authorized", session_id, email, expires_at}
+   → MCP Server 按当前 API Key 隔离保存 session
 
 5. AI 将 session_id 保存到当前对话上下文
 
@@ -215,10 +345,44 @@ opscli MCP 服务器已实现 OpenAI [Company Knowledge](https://openai.com/inde
    → 成功返回数据
 ```
 
+### 同一用户换设备
+
+由于凭证按 API Key 隔离存储在 MCP Server 本地，**同一 API Key 换设备、换浏览器、清缓存后无需重新授权**：
+
+```text
+设备 A：授权 → session 保存到 credentials_by_key/<hash>/
+设备 B：同一 API Key → 直接读取 credentials_by_key/<hash>/ → 无需重新授权
+```
+
 ### 凭证刷新
 
 - **JWT 即将过期**：AI 调用 `auth_token_refresh(session_id)` 自动换取新 JWT
 - **session_id 过期**：返回 `NOT_AUTHENTICATED` 错误，AI 提示用户重新执行 Device Flow 授权
+
+---
+
+## 凭证存储路径
+
+### 多用户模式
+
+```
+~/.config/opscli/
+├── credentials_by_key/
+│   ├── a1b2c3d4e5f6.../     ← API Key "mcp_usr_a" 的 SHA256 哈希
+│   │   └── credentials.bin  ← 用户 A 的 session + JWT（AES-256-GCM 加密）
+│   ├── b2c3d4e5f6a7.../     ← API Key "mcp_usr_b" 的 SHA256 哈希
+│   │   └── credentials.bin  ← 用户 B 的 session + JWT
+│   └── ...
+└── mcp_api_key              ← 单用户模式下的固定 Key（多用户模式下不使用）
+```
+
+### 单用户模式（向后兼容）
+
+```
+~/.config/opscli/
+├── credentials.bin          ← 所有用户共享（已废弃，仅 stdio/单用户模式保留）
+└── mcp_api_key              ← 固定 API Key
+```
 
 ---
 
@@ -387,7 +551,7 @@ query_chart_doc(
 
 #### `auth_login_poll`
 
-单次轮询 Device Flow 授权状态。服务器不保存 session，授权成功后直接返回 session_id。
+单次轮询 Device Flow 授权状态。授权成功后按当前 API Key 隔离保存 session。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -396,7 +560,7 @@ query_chart_doc(
 
 **状态说明**：
 - `pending`：等待用户授权
-- `authorized`：授权成功，返回 `session_id` / `email` / `expires_at`
+- `authorized`：授权成功，返回 `session_id` / `email` / `expires_at`，**并隔离保存**
 - `expired`：设备码超时
 - `denied`：用户拒绝授权
 
@@ -404,7 +568,7 @@ query_chart_doc(
 
 #### `auth_get_token`
 
-获取指定系统的有效 JWT。**无状态模式下必须传入 `session_id`**，服务器直接用其向后端请求 JWT，不读取本地存储。
+获取指定系统的有效 JWT。**必须传入 `session_id`**，服务器直接用其向后端请求 JWT。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -441,7 +605,7 @@ query_chart_doc(
 
 #### `auth_token_refresh`
 
-刷新指定系统 JWT。必须有 `session_id`。
+刷新指定系统 JWT。必须有 `session_id`。刷新后的 JWT 按 API Key 隔离保存。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -497,9 +661,19 @@ query_chart_doc(
 
 ---
 
+#### `auth_logout`
+
+清除当前 API Key 隔离目录下的 session 和 JWT（退出登录）。**不影响其他用户的凭证**。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `system` | string | `"__all__"` | `"__all__"` 清除所有系统，或指定系统别名 |
+
+---
+
 #### `auth_doctor`
 
-检查 session 有效性与各系统连通性，返回结构化诊断结果。
+检查 session 有效性与各系统连通性，返回结构化诊断结果（按 API Key 隔离读取凭证概览）。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -611,7 +785,7 @@ import json
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 
-API_KEY = "opscli-mcp-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+API_KEY = "mcp_usr_a1b2c3d4e5f6..."  # 从 OPS 后端生成
 HEADERS = {"Authorization": f"Bearer {API_KEY}"}
 
 async def main():
@@ -637,12 +811,20 @@ asyncio.run(main())
 
 ```
 opscli/mcp/
-├── __init__.py          # 模块标识
-├── auth_middleware.py   # SSE 层固定 API Key 鉴权
-├── cli.py               # opscli mcp user 命令（遗留兼容）
-├── context.py           # 无状态模式空兼容
-├── server.py            # FastMCP Server 定义，注册所有 Tools（无状态）
-└── user_store.py        # MCP 用户注册表（遗留兼容）
+├── __init__.py              # 模块标识
+├── auth_middleware.py       # SSE/HTTP 层 API Key 鉴权（固定 Key / 远程校验）
+├── cli.py                   # opscli mcp user 命令（遗留兼容）
+├── context.py               # contextvars 请求上下文（API Key / user_id / email）
+├── credential_cache.py      # 凭证内存缓存（支持多用户隔离）
+├── key_based_storage.py     # API Key 哈希目录映射（凭证物理隔离）
+├── server.py                # FastMCP Server 定义，注册所有 Tools
+├── user_store.py            # MCP 用户注册表（遗留兼容）
+└── tools/
+    ├── helpers.py            # 共享辅助函数（按 API Key 隔离读取凭证）
+    ├── auth.py               # 认证工具（隔离保存 session / JWT）
+    ├── query.py              # 数据查询工具
+    ├── skills.py             # Skill 管理工具
+    └── ...
 ```
 
 启动入口由 `pyproject.toml` 的 `[project.scripts]` 注册：
@@ -650,3 +832,33 @@ opscli/mcp/
 ```toml
 opscli-mcp = "opscli.mcp.server:run"
 ```
+
+---
+
+## 常见问题
+
+### Q1: 为什么 HTTP/SSE 模式下默认启用远程校验？
+
+原设计使用固定 API Key + 共享 `credentials.bin`，在多用户共享同一 MCP Server 时会导致严重的 session 串用安全问题（后登录的用户直接复用前一个用户的 session）。多用户模式下每个用户拥有独立的 API Key，凭证按 Key 哈希物理隔离，彻底杜绝串用。
+
+### Q2: stdio 模式会被影响吗？
+
+不会。stdio 模式（如 Claude Desktop）没有 HTTP 层，不经过 `ApiKeyAuthMiddleware`，也不存在多用户共享问题，保持原有行为不变。
+
+### Q3: 同一 API Key 换设备需要重新授权吗？
+
+不需要。凭证存储在 MCP Server 本地（按 API Key 隔离的目录中），不是存在用户的浏览器里。同一 API Key 在任意设备、任意浏览器访问时，都会读取同一个隔离目录中的 session。
+
+### Q4: API Key 泄露了怎么办？
+
+在 OPS 后端立即禁用或删除该 Key：
+```http
+POST /v1/mcp-api-keys/{id}/toggle   # 禁用
+DELETE /v1/mcp-api-keys/{id}        # 删除
+```
+
+MCP Server 的远程校验会立即拒绝该 Key 的后续请求。同时建议轮换 Key（生成新 Key）。
+
+### Q5: 如何回退到单用户固定 API Key 模式？
+
+确保 `config.ini` 中没有配置 `ops_system_url`（或配置为无效地址），且启动时不提供 `--auth-verify-url`，服务器会自动回退到单用户模式，生成并使用固定 API Key。

@@ -5,6 +5,8 @@
 2. 用户在浏览器中打开验证 URL 并输入验证码
 3. CLI 以固定间隔轮询后端，等待用户完成授权
 4. 授权成功后自动保存 session 到本地凭证存储
+
+支持自定义请求头，用于 MCP Server 向后端透传 API Key 等追踪信息。
 """
 import time
 import httpx
@@ -14,15 +16,18 @@ from opscli.auth.exceptions import DeviceFlowExpiredError, DeviceFlowDeniedError
 class DeviceFlow:
     """OAuth2 Device Flow 授权器，管理设备码获取与轮询等待。"""
 
-    def __init__(self, ops_url: str, store=None):
+    def __init__(self, ops_url: str, store=None, headers: dict | None = None):
         """
         Args:
             ops_url: 运营系统后端地址（如 https://ops.api.qa.aukeyit.com）
             store: CredentialStore 实例，用于授权成功后持久化 session。
                    无状态模式（远程 MCP）下可传 None，不保存 session。
+            headers: 可选，每次向后端发请求时附加的 HTTP 请求头。
+                     用于 MCP Server 向后端透传 API Key（X-MCP-API-Key）。
         """
         self._url = ops_url.rstrip("/")
         self._store = store
+        self._headers = headers or {}
 
     def request_device_code(self) -> dict:
         """向后端请求设备码和验证信息。
@@ -30,7 +35,11 @@ class DeviceFlow:
         Returns:
             dict: 包含 device_code、user_code、verification_url、expires_in 等字段
         """
-        resp = httpx.post(f"{self._url}/v1/cli/device/code", timeout=10)
+        resp = httpx.post(
+            f"{self._url}/v1/cli/device/code",
+            headers=self._headers,
+            timeout=10,
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -55,6 +64,7 @@ class DeviceFlow:
         resp = httpx.get(
             f"{self._url}/v1/cli/device/poll",
             params={"device_code": device_code},
+            headers=self._headers,
             timeout=max(1, min(int(timeout), 30)),
         )
         resp.raise_for_status()

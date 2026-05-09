@@ -3,6 +3,18 @@
 基于 fastmcp 将 opscli 核心能力暴露为 MCP Tools。
 **无状态设计**：服务器不保存任何用户 OAuth 凭证，所有认证信息由调用方传入。
 
+支持两种 API Key 鉴权模式：
+1. 固定 API Key 模式（单用户/向后兼容）：
+   - 使用 --transport sse/http/both 启动
+   - 服务器自动生成并持久化一个固定 API Key
+   - 所有连接者共享同一个 Key
+
+2. 远程校验模式（多用户/OPS 管控）：
+   - 使用 --transport sse/http/both --auth-verify-url <url> 启动
+   - 每个用户拥有独立的 API Key（由 OPS 后端生成和管理）
+   - MCP Server 通过远程调用 OPS 后端校验 API Key 有效性
+   - 按 API Key 隔离凭证存储，解决用户间 session 串用问题
+
 典型授权流程：
     1. auth_login_start() → 返回 verification_url + user_code + device_code
     2. 用户在浏览器中打开 URL 并输入 user_code
@@ -16,11 +28,12 @@
     - tools/query.py    — 数据查询工具（query_*）
     - tools/skills.py   — Skill 管理工具（skills_*）
 
-启动方式：
+    启动方式：
     opscli-mcp                                    # stdio 模式（默认）
     opscli-mcp --transport sse --port 8765        # 仅 /sse 端点
     opscli-mcp --transport http --port 8765       # 仅 /mcp 端点（Streamable HTTP）
-    opscli-mcp --transport both --port 8765       # /sse + /mcp 双端点（推荐远程部署）
+    opscli-mcp --transport both --port 8765       # /sse + /mcp 双端点（自动远程校验）
+    opscli-mcp --transport both --auth-verify-url https://custom.com/v1/mcp/verify-key
 
 传输协议说明：
     - sse:   旧式 SSE 传输，在 GET /sse 建立事件流，POST /messages/ 投递消息
@@ -50,8 +63,8 @@ _logger = logging.getLogger("opscli.mcp")
 mcp = FastMCP(
     name="opscli",
     instructions=(
-        "Aukeys 运营 CLI 工具集 MCP 接口（无状态模式）。\n"
-        "服务器不保存用户凭证，所有认证信息（session_id / jwt）由调用方传入。\n"
+        "Aukeys 运营 CLI 工具集 MCP 接口。\n"
+        "服务器按 API Key 隔离用户凭证（远程校验模式下）。\n"
         "典型流程：auth_login_start → 浏览器授权 → auth_login_poll → "
         "保存返回的 session_id → 后续 tool 调用传入 session_id（和可选的 jwt）。"
     ),
@@ -120,7 +133,11 @@ def _load_or_create_api_key() -> str:
 
 # ── 双端点组合应用构建 ───────────────────────────────────────────────
 
-def _build_dual_endpoint_app(api_key: str) -> Any:
+def _build_dual_endpoint_app(
+    *,
+    api_key: str | None = None,
+    auth_verify_url: str | None = None,
+) -> Any:
     """构建同时暴露 /sse 和 /mcp 两个端点的组合 ASGI 应用。
 
     端点说明：
@@ -134,7 +151,9 @@ def _build_dual_endpoint_app(api_key: str) -> Any:
         只会初始化一次 MCP 服务器，引用归零时统一清理。
 
     Args:
-        api_key: 鉴权用的 API Key，中间件会同时检查 Header 和 Query Param。
+        api_key: 固定 API Key（单用户模式，向后兼容）
+        auth_verify_url: OPS 后端校验地址（多用户模式），
+                         如 https://ops.example.com/v1/mcp/verify-key
 
     Returns:
         包裹了 ApiKeyAuthMiddleware 的 ASGI 应用。
@@ -164,27 +183,45 @@ def _build_dual_endpoint_app(api_key: str) -> Any:
 
     # 用 API Key 鉴权中间件统一包裹整个合并应用
     # 支持 Authorization: Bearer <key> 和 ?api_key=<key> 两种传入方式
-    return ApiKeyAuthMiddleware(combined, api_key=api_key)
+    return ApiKeyAuthMiddleware(
+        combined,
+        api_key=api_key,
+        auth_verify_url=auth_verify_url,
+    )
 
 
-def _print_http_startup_banner(api_key: str, host: str, port: int, mode: str) -> None:
+def _print_http_startup_banner(
+    host: str,
+    port: int,
+    mode: str,
+    *,
+    api_key: str | None = None,
+    auth_verify_url: str | None = None,
+) -> None:
     """打印 HTTP 模式启动信息。
 
     Args:
-        api_key: 当前使用的 API Key
-        host:    监听地址
-        port:    监听端口
-        mode:    "sse" | "http" | "both"
+        host: 监听地址
+        port: 监听端口
+        mode: "sse" | "http" | "both"
+        api_key: 固定 API Key（单用户模式）
+        auth_verify_url: 远程校验地址（多用户模式）
     """
     base_url = f"https://<your-domain>"  # 实际部署时替换为公网域名
     local_url = f"http://{host}:{port}"
 
     print(f"\n[opscli-mcp] 服务已启动（模式：{mode}）")
-    print(f"[opscli-mcp] API Key: {api_key}")
+
+    if auth_verify_url:
+        print(f"[opscli-mcp] 远程校验模式：{auth_verify_url}")
+        print(f"[opscli-mcp] 每个用户需使用独立的 API Key（由 OPS 后端生成）")
+    elif api_key:
+        print(f"[opscli-mcp] 固定 API Key: {api_key}")
+
     print()
     print("鉴权方式（选其一）：")
-    print(f"  Authorization: Bearer {api_key}")
-    print(f"  ?api_key={api_key}")
+    print(f"  Authorization: Bearer <your-api-key>")
+    print(f"  ?api_key=<your-api-key>")
     print()
 
     if mode in ("sse", "both"):
@@ -212,16 +249,28 @@ def run() -> None:
         --transport stdio|sse|http|both  传输协议（默认 stdio）
         --port <int>                     HTTP 模式监听端口（默认 8765）
         --host <str>                     HTTP 模式监听地址（默认 0.0.0.0）
+        --auth-verify-url <url>          自定义 API Key 校验地址（可选）
 
     transport 取值说明：
         stdio  — 标准输入输出（本地 AI 工具集成，默认值）
         sse    — 仅 /sse 端点（SSE 传输，兼容旧客户端）
         http   — 仅 /mcp 端点（Streamable HTTP，ChatGPT 推荐）
         both   — /sse + /mcp 双端点（推荐远程部署方式）
+
+    远程校验说明：
+        HTTP/SSE 模式默认启用 OPS 远程校验（从 config.ini 读取 ops_url）。
+        如需覆盖，使用 --auth-verify-url 指定自定义地址。
+
+    启动示例：
+        opscli-mcp --transport both --port 8765          # 自动远程校验
+        opscli-mcp --transport both --auth-verify-url https://custom.com/v1/mcp/verify-key
     """
+    from opscli.auth.config import get_ops_url
+
     transport_val: str | None = None
     host = "0.0.0.0"
     port = 8765
+    auth_verify_url: str | None = None
 
     # 手动解析命令行参数（避免引入额外依赖）
     args = sys.argv[1:]
@@ -236,6 +285,9 @@ def run() -> None:
         elif args[i] == "--host" and i + 1 < len(args):
             host = args[i + 1]
             i += 2
+        elif args[i] == "--auth-verify-url" and i + 1 < len(args):
+            auth_verify_url = args[i + 1]
+            i += 2
         else:
             i += 1
 
@@ -245,19 +297,45 @@ def run() -> None:
 
         from opscli.mcp.auth_middleware import ApiKeyAuthMiddleware
 
-        api_key = _load_or_create_api_key()
-        _print_http_startup_banner(api_key, host, port, mode=transport_val)
+        # 自动设置默认远程校验地址（从 config.ini 读取 ops_url，已包含 /api 前缀）
+        if not auth_verify_url:
+            try:
+                ops_base = get_ops_url().rstrip("/")
+                auth_verify_url = f"{ops_base}/v1/mcp/verify-key"
+            except Exception as exc:
+                _logger.warning("无法从 config.ini 读取 ops_url: %s", exc)
+
+        # 多用户模式：使用远程校验；单用户模式：使用固定 API Key
+        if auth_verify_url:
+            api_key = None
+            _print_http_startup_banner(
+                host, port, mode=transport_val,
+                auth_verify_url=auth_verify_url,
+            )
+        else:
+            api_key = _load_or_create_api_key()
+            _print_http_startup_banner(
+                host, port, mode=transport_val,
+                api_key=api_key,
+            )
 
         if transport_val == "both":
             # 同时暴露 /sse（SSE）和 /mcp（Streamable HTTP）
-            asgi_app = _build_dual_endpoint_app(api_key)
+            asgi_app = _build_dual_endpoint_app(
+                api_key=api_key,
+                auth_verify_url=auth_verify_url,
+            )
         else:
             # 单端点模式：sse 或 http（streamable-http）
             # 通过 FastMCP.http_app() 创建子应用后包裹鉴权中间件
             transport_name = "sse" if transport_val == "sse" else "streamable-http"
             path = "/sse" if transport_val == "sse" else "/mcp"
             sub_app = mcp.http_app(path=path, transport=transport_name)
-            asgi_app = ApiKeyAuthMiddleware(sub_app, api_key=api_key)
+            asgi_app = ApiKeyAuthMiddleware(
+                sub_app,
+                api_key=api_key,
+                auth_verify_url=auth_verify_url,
+            )
 
         async def _serve() -> None:
             config = uvicorn.Config(

@@ -31,6 +31,14 @@ def get_ops_url() -> str:
     return load_config()["ops_url"]
 
 
+def get_ops_system_url() -> str:
+    """获取 ops 系统基础 URL（不含 /api 前缀）。
+
+    用于拼接 MCP API Key 校验地址等非 /api 路径的端点。
+    """
+    return load_config()["ops_system_url"]
+
+
 def get_builtin_systems() -> list[dict]:
     cfg = load_config()
     return [

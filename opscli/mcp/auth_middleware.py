@@ -1,9 +1,13 @@
 """MCP 鉴权中间件。
 
-无状态模式下服务器不保存用户 OAuth 凭证，但 SSE 连接层通过固定 API Key 进行
+无状态模式下服务器不保存用户 OAuth 凭证，但 SSE 连接层通过 API Key 进行
 基础访问控制，防止未授权访问。
 
-支持两种鉴权方式：
+支持两种工作模式：
+1. 固定 API Key 模式（单用户/向后兼容）：直接比对本地存储的 API Key
+2. 远程校验模式（多用户）：通过 --auth-verify-url 调用 OPS 后端校验 API Key
+
+鉴权方式：
 1. HTTP Header: `Authorization: Bearer <api_key>`
 2. URL Query: `?api_key=<api_key>` (兼容部分仅支持 query 的客户端)
 
@@ -14,23 +18,51 @@
 
 from __future__ import annotations
 
+import logging
 import urllib.parse
 from typing import Any
 
 # 直接使用 Starlette 官方类型，消除中间件接口与 Starlette 的类型不兼容问题
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+_logger = logging.getLogger("opscli.mcp")
+
 
 class ApiKeyAuthMiddleware:
     """ASGI 中间件：统一校验 API Key（支持 Header 和 Query Param 两种方式）。
+
+    支持两种工作模式：
+    - 固定 API Key 模式：直接比对本地 api_key 参数
+    - 远程校验模式：通过 auth_verify_url 调用 OPS 后端校验
 
     优先检查 Query Param，未找到则检查 Authorization Header。
     校验失败返回 401，不继续向下传递请求。
     """
 
-    def __init__(self, app: ASGIApp, api_key: str):
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        api_key: str | None = None,
+        auth_verify_url: str | None = None,
+    ):
+        """
+        Args:
+            app: ASGI 应用
+            api_key: 固定 API Key（单用户模式，向后兼容）
+            auth_verify_url: OPS 后端校验地址（多用户模式），
+                             如 https://ops.example.com/v1/mcp/verify-key
+        """
         self.app = app
         self._api_key = api_key
+        self._auth_verify_url = auth_verify_url
+
+        if auth_verify_url:
+            _logger.info("MCP Server 运行在远程校验模式，校验地址: %s", auth_verify_url)
+        elif api_key:
+            _logger.info("MCP Server 运行在固定 API Key 模式")
+        else:
+            _logger.warning("MCP Server 未配置任何 API Key 鉴权！")
 
     def _extract_token(self, scope: Scope) -> str | None:
         """从 Query Param 或 Header 中提取 API Key。"""
@@ -56,52 +88,97 @@ class ApiKeyAuthMiddleware:
             return
 
         token = self._extract_token(scope)
-        if token != self._api_key:
-            try:
-                await self._send_401(scope, send)  # type: ignore[arg-type]
-            except RuntimeError:
-                # 服务关闭期间连接已断开，忽略发送 401 时的 ASGI 状态错误
-                pass
+
+        # ── 校验逻辑 ────────────────────────────────────────────────
+        if self._auth_verify_url:
+            # 远程校验模式
+            user_info = await self._verify_remote(token)
+            if not user_info:
+                await self._send_401(scope, send, reason="invalid_api_key")
+                return
+            # 将用户信息注入 scope，供后续 Tool 函数读取
+            scope["mcp_api_key"] = token
+            scope["mcp_user_id"] = user_info.get("user_id")
+            scope["mcp_user_email"] = user_info.get("email")
+        elif self._api_key and token == self._api_key:
+            # 固定 API Key 模式（向后兼容）
+            scope["mcp_api_key"] = token
+        else:
+            await self._send_401(scope, send, reason="invalid_api_key")
             return
 
-        # 追踪响应状态：SSE 是长连接流式响应，关闭时 fastmcp 内部会吞掉
-        # CancelledError 后正常返回，但不会发送终止帧，导致 uvicorn 记录
-        # "ASGI callable returned without completing response" 错误。
-        # 通过包装 send 追踪状态，在 finally 中补发终止帧来消除该错误。
+        # ── 请求上下文注入（关键：将 API Key 注入 contextvar）────────
+        from opscli.mcp.context import mcp_request_ctx
+
+        ctx_token = mcp_request_ctx.set({
+            "api_key": token,
+            "user_id": scope.get("mcp_user_id"),
+            "email": scope.get("mcp_user_email"),
+        })
+
+        # ── SSE 响应追踪（消除 uvicorn 错误日志）──────────────────────
         response_started = False
         response_complete = False
 
-        # tracking_send 参数类型与 Starlette Send 保持一致（MutableMapping）
         async def tracking_send(message: Any) -> None:
             nonlocal response_started, response_complete
             if message["type"] == "http.response.start":
                 response_started = True
             elif message["type"] == "http.response.body":
-                # more_body 缺省为 False 表示响应已结束
                 if not message.get("more_body", False):
                     response_complete = True
             await send(message)
 
         try:
-            await self.app(scope, receive, tracking_send)  # type: ignore[arg-type]
+            await self.app(scope, receive, tracking_send)
         except RuntimeError as exc:
-            # SSE 长连接在关闭时序中，starlette 错误处理器会尝试在已开始的
-            # 流式响应上再次发送 http.response.start，uvicorn 状态机会拒绝并
-            # 抛出此错误。这是正常关闭时序问题，不需要向上传播。
             if "Expected ASGI message" not in str(exc):
                 raise
         finally:
-            # fastmcp 吞掉 CancelledError 后正常返回时，SSE 流没有发终止帧。
-            # 补发一个空的终止帧，让 uvicorn 状态机认为响应已正常完成，
-            # 从而消除 "ASGI callable returned without completing response" 日志。
+            # 重置 contextvar，避免污染其他请求
+            mcp_request_ctx.reset(ctx_token)
+
             if response_started and not response_complete:
                 try:
                     await send({"type": "http.response.body", "body": b"", "more_body": False})
                 except BaseException:
-                    # 连接已断开或事件循环正在关闭时，补发可能失败，忽略即可
                     pass
 
-    async def _send_401(self, _scope: Scope, send: Send) -> None:
+    async def _verify_remote(self, api_key: str | None) -> dict | None:
+        """调用 OPS 后端远程校验 API Key。
+
+        将 API Key 同时作为 query param 和 header 传参，
+        兼容后端不同接入方式。
+
+        Args:
+            api_key: 待校验的明文 API Key
+
+        Returns:
+            校验通过时返回 OPS 后端响应的 user 信息 dict
+            校验失败时返回 None
+        """
+        if not api_key or not self._auth_verify_url:
+            return None
+        try:
+            import httpx
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    self._auth_verify_url,
+                    params={"api_key": api_key},
+                    headers={"X-MCP-API-Key": api_key},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("valid"):
+                        return data
+        except Exception as exc:
+            _logger.warning("远程校验 API Key 失败: %s", exc)
+        return None
+
+    async def _send_401(self, _scope: Scope, send: Send, reason: str = "invalid_api_key") -> None:
+        body = f'{{"error":"Unauthorized","message":"Invalid or missing API Key","reason":"{reason}"}}'
         await send({
             "type": "http.response.start",
             "status": 401,
@@ -112,7 +189,7 @@ class ApiKeyAuthMiddleware:
         })
         await send({
             "type": "http.response.body",
-            "body": b'{"error":"Unauthorized","message":"Invalid or missing API Key"}',
+            "body": body.encode("utf-8"),
         })
 
 

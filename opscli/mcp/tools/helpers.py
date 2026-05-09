@@ -2,12 +2,16 @@
 
 提供统一响应结构（_ok / _err）和各业务对象工厂函数，
 避免在 auth / query / skills 各工具模块中重复实现。
+
+2025-05-09 改造：支持按 API Key 隔离凭证存储，解决多用户共享 MCP Server
+时的 session 串用问题。
 """
 
 from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 from typing import Any
 
 
@@ -112,6 +116,41 @@ def _draft_feedback(
     }
 
 
+def _get_credential_dir() -> Path | None:
+    """获取当前请求对应的凭证隔离目录。
+
+    在 HTTP/SSE 多用户模式下，根据当前请求的 API Key 生成独立目录。
+    stdio 模式下返回 None，使用默认路径（与 CLI 互通）。
+
+    Returns:
+        隔离目录的 Path 对象，或 None（stdio 模式）
+    """
+    from opscli.mcp.context import get_current_api_key
+    from opscli.mcp.key_based_storage import get_credential_dir_for_key
+    from opscli.config import CONFIG_DIR
+
+    api_key = get_current_api_key()
+    if not api_key:
+        return None  # stdio 模式或无上下文，使用默认路径
+
+    base_root = Path(CONFIG_DIR) / "credentials_by_key"
+    return get_credential_dir_for_key(api_key, base_root)
+
+
+def _get_isolated_credential_cache(cred_dir: Path | None):
+    """获取隔离的凭证缓存实例。
+
+    Args:
+        cred_dir: 隔离目录路径，None 时使用默认路径
+
+    Returns:
+        McpCredentialCache 实例
+    """
+    from opscli.mcp.credential_cache import get_credential_cache
+
+    return get_credential_cache(base_dir=cred_dir)
+
+
 def _auth_client() -> Any:
     """创建 AuthClient 实例（无状态，不读取本地凭证目录）。
 
@@ -128,8 +167,10 @@ def _auth_client() -> Any:
 def _get_session_id(system: str = "ops", provided: str | None = None) -> str | None:
     """获取 session_id：优先使用调用方传入的，否则尝试从本地加载。
 
-    2025-04-27 重构后统一从 CredentialStore（经内存缓存）读取全局 session，
-    与 CLI 模式共用同一套加密存储，实现登录态互通。
+    在 HTTP/SSE 多用户模式下，按当前请求的 API Key 隔离读取凭证，
+    避免不同用户共享同一个 session。
+
+    stdio 模式下与 CLI 共用同一套加密存储，实现登录态互通。
 
     Args:
         system:   目标系统别名（默认 "ops"），当前仅保留接口兼容
@@ -140,17 +181,16 @@ def _get_session_id(system: str = "ops", provided: str | None = None) -> str | N
     """
     if provided:
         return provided
-    from opscli.mcp.credential_cache import get_credential_cache
 
-    return get_credential_cache().get_session_id()
+    cred_dir = _get_credential_dir()
+    cache = _get_isolated_credential_cache(cred_dir)
+    return cache.get_session_id()
 
 
 def _get_jwt(system: str = "ops", provided: str | None = None) -> str | None:
     """获取 JWT：优先使用调用方传入的，否则尝试从本地加载（含过期检查）。
 
-    2025-04-27 重构后统一从 CredentialStore（经内存缓存）读取，
-    与 CLI 模式共用加密存储。本地缓存的 JWT 如果已过期，会自动
-    清除并返回 None，触发重新换取。
+    在 HTTP/SSE 多用户模式下，按当前请求的 API Key 隔离读取凭证。
 
     Args:
         system:   目标系统别名（默认 "ops"）
@@ -161,10 +201,10 @@ def _get_jwt(system: str = "ops", provided: str | None = None) -> str | None:
     """
     if provided:
         return provided
-    from opscli.mcp.credential_cache import get_credential_cache
-    from opscli.auth.storage.credential_store import CredentialStore
 
-    cache = get_credential_cache()
+    cred_dir = _get_credential_dir()
+    cache = _get_isolated_credential_cache(cred_dir)
+
     jwt = cache.get_jwt(system)
     if jwt:
         return jwt
@@ -176,8 +216,16 @@ def _get_jwt(system: str = "ops", provided: str | None = None) -> str | None:
         return jwt
 
     # 存储中已过期：清除
-    CredentialStore().remove_token(system)
-    cache.invalidate()
+    from opscli.auth.storage.credential_store import CredentialStore
+    from opscli.mcp.credential_cache import invalidate_credential_cache
+
+    if cred_dir:
+        CredentialStore(base_dir=cred_dir).remove_token(system)
+        invalidate_credential_cache(base_dir=cred_dir)
+    else:
+        CredentialStore().remove_token(system)
+        invalidate_credential_cache()
+
     return None
 
 
@@ -190,6 +238,8 @@ def _get_auth_pair(
 
     优先使用调用方传入的，其次从本地加载。
     JWT 会检查本地缓存是否过期，过期则自动清除。
+
+    在 HTTP/SSE 多用户模式下，按当前 API Key 隔离读取凭证。
 
     Args:
         system:           目标系统别名（默认 "ops"）
