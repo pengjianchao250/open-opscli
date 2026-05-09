@@ -56,6 +56,68 @@ opscli query simple --table-id 1 \
 
 ---
 
+## 公式字段（Formula Field）处理规则
+
+当 metric 字段的 metadata 中包含 `summary_expression` 或 `detail_expression` 时（如 ACOS、ROAS、平均单价等比率 / 占比指标），在 `metrics` JSON 中需额外传入 `expr` 字段，指定服务端使用的完整公式表达式。
+
+**选择规则**：
+- **默认**（聚合 / 分组查询）：使用字段 metadata 中的 `summary_expression` 值
+- **明细 / 详情查询**（用户提到"明细"、"详情"、"每一行"、"行级"等关键词时）：使用 `detail_expression` 值
+
+**操作步骤**：
+1. 先执行 `opscli query metadata --dataset <alias> --pretty` 获取字段 metadata，读取目标字段的 `summary_expression` 或 `detail_expression` 值
+2. 将对应表达式字符串赋给 metric 对象的 `expr` 字段
+3. `aggregation`、`alias` 等字段照常传入；服务端识别到 `expr` 后以 `expr` 为准
+
+**示例**（含公式字段 `acos`，默认聚合查询）：
+
+```bash
+opscli query simple --table-id 15 \
+  --json '{
+    "dimensions": [{"field": "dev_team_name", "alias": "f_team"}],
+    "metrics": [
+      {"field": "sp_total_spend_cny", "aggregation": "SUM", "alias": "f_sp_spend"},
+      {
+        "field": "acos",
+        "aggregation": "SUM",
+        "alias": "f_acos",
+        "expr": "ROUND(total_spend_cny / sales_cny, 4)"
+      }
+    ],
+    "filters": [
+      {"field": "platform_name", "operator": "=", "value": "Amazon"},
+      {"field": "date_id", "operator": "between", "value": ["2026-04-10", "2026-05-09"]}
+    ],
+    "orderBy": [{"field": "f_sp_spend", "desc": true}],
+    "limit": 200
+  }' \
+  --run --pretty
+```
+
+**明细查询示例**（用户提到"明细"时，改用 `detail_expression`）：
+
+```bash
+opscli query simple --table-id 15 \
+  --json '{
+    "metrics": [
+      {
+        "field": "days_on_hand",
+        "alias": "f_days_on_hand",
+        "expr": "ROUND(30 / (total_sell_qty / sell_avg_qty))"
+      }
+    ],
+    "filters": [
+      {"field": "date_id", "operator": "between", "value": ["2026-04-10", "2026-05-09"]}
+    ],
+    "limit": 50
+  }' \
+  --run --pretty
+```
+
+> ⚠️ **不传 `expr` 时的行为**：服务端仍会尝试自动识别公式字段并使用正确表达式，但显式传 `expr` 可以确保语义准确、避免版本差异导致的行为不一致。
+
+---
+
 ## 典型工作流（简易版）
 
 ### 探索数据集 → 构造 → 执行（已知数据集时）
