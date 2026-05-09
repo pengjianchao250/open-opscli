@@ -119,3 +119,72 @@ def test_auth_client_get_session_uses_public_token_manager_api(tmp_path):
         assert client.get_session("ops") == "uuid-public"
 
     mocked.assert_called_once()
+
+
+def test_fetch_token_forwards_mcp_api_key_when_context_present(store, reg, monkeypatch):
+    """MCP 上下文存在时，_fetch_token 应透传 X-MCP-API-Key。"""
+    from opscli.mcp.context import mcp_request_ctx
+    import httpx
+
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["headers"] = headers
+        req = httpx.Request("POST", url)
+        return httpx.Response(200, json={"jwt": "jwt-from-mcp", "expires_in": 7200}, request=req)
+
+    monkeypatch.setattr("opscli.auth.core.token_manager.httpx.post", fake_post)
+    tm = TokenManager(store=store, registry=reg)
+
+    token = mcp_request_ctx.set({"api_key": "mcp_key_token"})
+    try:
+        result = tm._fetch_token("ops", "https://ops.example.com", "/v1/auth/cli-token")
+        assert result == "jwt-from-mcp"
+        assert captured["headers"] is not None
+        assert captured["headers"]["X-MCP-API-Key"] == "mcp_key_token"
+    finally:
+        mcp_request_ctx.reset(token)
+
+
+def test_fetch_token_no_mcp_header_when_context_absent(store, reg, monkeypatch):
+    """无 MCP 上下文时，_fetch_token 不应附加 X-MCP-API-Key。"""
+    import httpx
+
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["headers"] = headers
+        req = httpx.Request("POST", url)
+        return httpx.Response(200, json={"jwt": "jwt-normal", "expires_in": 7200}, request=req)
+
+    monkeypatch.setattr("opscli.auth.core.token_manager.httpx.post", fake_post)
+    tm = TokenManager(store=store, registry=reg)
+
+    result = tm._fetch_token("ops", "https://ops.example.com", "/v1/auth/cli-token")
+    assert result == "jwt-normal"
+    # headers or None 会传入 None
+    assert captured["headers"] is None or "X-MCP-API-Key" not in captured["headers"]
+
+
+def test_get_token_by_session_forwards_mcp_api_key(store, reg, monkeypatch):
+    """get_token_by_session 应透传 X-MCP-API-Key。"""
+    from opscli.mcp.context import mcp_request_ctx
+    import httpx
+
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["headers"] = headers
+        req = httpx.Request("POST", url)
+        return httpx.Response(200, json={"jwt": "jwt-by-session", "expires_in": 7200}, request=req)
+
+    monkeypatch.setattr("opscli.auth.core.token_manager.httpx.post", fake_post)
+    tm = TokenManager(store=store, registry=reg)
+
+    token = mcp_request_ctx.set({"api_key": "mcp_key_session"})
+    try:
+        result = tm.get_token_by_session("session-abc", "ops")
+        assert result == "jwt-by-session"
+        assert captured["headers"]["X-MCP-API-Key"] == "mcp_key_session"
+    finally:
+        mcp_request_ctx.reset(token)

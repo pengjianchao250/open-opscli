@@ -108,3 +108,44 @@ def test_submit_snapshot_raises_when_remote_json_invalid(monkeypatch):
 
     with pytest.raises(BadRemoteJsonError):
         client.submit_snapshot(_sample_snapshot())
+
+
+def test_submit_snapshot_forwards_mcp_api_key_when_context_present(monkeypatch):
+    """MCP 上下文存在时，请求头应透传 X-MCP-API-Key。"""
+    from opscli.mcp.context import mcp_request_ctx
+
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, cookies=None, timeout=None):
+        captured["headers"] = headers
+        return httpx.Response(200, json={"code": 200, "message": "ok"})
+
+    monkeypatch.setattr("opscli.amazon.transport.client.httpx.post", fake_post)
+    monkeypatch.setattr("opscli.amazon.transport.client.get_amazon_submit_endpoint", lambda: "/v1/amazon/collect")
+
+    client = AmazonOpsClient(auth_client=DummyAuthClient())
+
+    token = mcp_request_ctx.set({"api_key": "mcp_key_789"})
+    try:
+        client.submit_snapshot(_sample_snapshot())
+        assert captured["headers"]["X-MCP-API-Key"] == "mcp_key_789"
+        assert captured["headers"]["Authorization"] == "Bearer jwt-token"
+    finally:
+        mcp_request_ctx.reset(token)
+
+
+def test_submit_snapshot_no_mcp_header_when_context_absent(monkeypatch):
+    """无 MCP 上下文时，不应附加 X-MCP-API-Key。"""
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, cookies=None, timeout=None):
+        captured["headers"] = headers
+        return httpx.Response(200, json={"code": 200, "message": "ok"})
+
+    monkeypatch.setattr("opscli.amazon.transport.client.httpx.post", fake_post)
+    monkeypatch.setattr("opscli.amazon.transport.client.get_amazon_submit_endpoint", lambda: "/v1/amazon/collect")
+
+    client = AmazonOpsClient(auth_client=DummyAuthClient())
+
+    client.submit_snapshot(_sample_snapshot())
+    assert "X-MCP-API-Key" not in captured["headers"]

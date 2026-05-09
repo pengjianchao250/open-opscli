@@ -11,6 +11,7 @@ from opscli.amazon.domain.exceptions import BadRemoteJsonError, RemoteBusinessEr
 from opscli.amazon.domain.models import AmazonProductSnapshot
 from opscli.auth import AuthClient, OPS_URL
 from opscli.auth.config import get_amazon_submit_endpoint
+from opscli.mcp.context import get_mcp_request_headers
 from opscli.shared.http import parse_remote_response
 
 
@@ -36,6 +37,7 @@ class AmazonOpsClient:
             raise SubmissionConfigError("提交 endpoint 必须以 / 开头，并相对 OPS_URL 解析")
 
         headers, cookies = self.auth_client.build_request_auth("ops")
+        headers.update(get_mcp_request_headers())
         response = httpx.post(
             f"{self.ops_url}{submit_endpoint}",
             json={

@@ -23,6 +23,21 @@ except ImportError:
 
 _logger = logging.getLogger("opscli.auth.token")
 
+
+def _get_mcp_api_key_header() -> dict[str, str]:
+    """获取 MCP API Key 请求头（仅在 HTTP/SSE 模式下有效）。
+
+    CLI（stdio）模式下 get_current_api_key() 返回 None，不会附加 header。
+    """
+    try:
+        from opscli.mcp.context import get_current_api_key
+        api_key = get_current_api_key()
+        if api_key:
+            return {"X-MCP-API-Key": api_key}
+    except Exception:
+        pass
+    return {}
+
 # 进程内线程锁：key = system_key
 _thread_locks: dict[str, threading.Lock] = {}
 _thread_locks_mutex = threading.Lock()
@@ -92,10 +107,12 @@ class TokenManager:
     def _fetch_token(self, system_key: str, url: str, endpoint: str) -> str:
         """向后端请求新的 JWT 并保存到凭证存储。"""
         session_id = self.get_session_id()
+        headers = _get_mcp_api_key_header()
         try:
             resp = httpx.post(
                 f"{url}{endpoint}",
                 json={"session_id": session_id},
+                headers=headers or None,
                 timeout=10,
             )
             resp.raise_for_status()
@@ -188,10 +205,12 @@ class TokenManager:
             TokenFetchError: 后端请求失败
         """
         sys = self._registry.get(alias)
+        headers = _get_mcp_api_key_header()
         try:
             resp = httpx.post(
                 f"{sys['url']}{sys['token_endpoint']}",
                 json={"session_id": session_id},
+                headers=headers or None,
                 timeout=10,
             )
             resp.raise_for_status()

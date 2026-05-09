@@ -80,3 +80,45 @@ def test_poll_denied_raises(flow):
         return_value=httpx.Response(200, json={"status": "denied"}))
     with pytest.raises(DeviceFlowDeniedError):
         flow.poll("dc-abc", interval=0)
+
+
+@respx.mock
+def test_request_device_code_forwards_extra_headers(tmp_path):
+    """DeviceFlow 构造函数传入的 headers 应透传到后端请求。"""
+    from opscli.auth.storage.credential_store import CredentialStore
+
+    route = respx.post(f"{OPS}/v1/cli/device/code").mock(return_value=httpx.Response(200, json={
+        "device_code": "dc-abc",
+        "user_code": "ABCD-1234",
+        "verification_url": f"{OPS}/cli-auth",
+        "expires_in": 300,
+        "interval": 1,
+    }))
+
+    flow = DeviceFlow(
+        ops_url=OPS,
+        store=CredentialStore(base_dir=tmp_path),
+        headers={"X-MCP-API-Key": "mcp_key_device"},
+    )
+    flow.request_device_code()
+
+    assert route.calls.last.request.headers["X-MCP-API-Key"] == "mcp_key_device"
+
+
+@respx.mock
+def test_poll_once_forwards_extra_headers(tmp_path):
+    """poll_once 应透传构造函数传入的 headers。"""
+    from opscli.auth.storage.credential_store import CredentialStore
+
+    route = respx.get(f"{OPS}/v1/cli/device/poll").mock(
+        return_value=httpx.Response(200, json={"status": "pending", "interval": 1})
+    )
+
+    flow = DeviceFlow(
+        ops_url=OPS,
+        store=CredentialStore(base_dir=tmp_path),
+        headers={"X-MCP-API-Key": "mcp_key_poll"},
+    )
+    flow.poll_once("dc-abc", timeout=1)
+
+    assert route.calls.last.request.headers["X-MCP-API-Key"] == "mcp_key_poll"

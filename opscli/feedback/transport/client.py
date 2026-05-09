@@ -6,6 +6,7 @@ import httpx
 
 from opscli.auth import AuthClient, OPS_URL
 from opscli.feedback.domain.exceptions import BadRemoteJsonError, RemoteBusinessError, RemoteHttpError
+from opscli.mcp.context import get_mcp_request_headers
 from opscli.shared.http import parse_remote_response
 
 
@@ -28,8 +29,12 @@ class FeedbackClient:
             jwt = self.jwt
             if not jwt:
                 jwt = self.auth_client.get_token_by_session(self.session_id, alias)
-            return {"Authorization": f"Bearer {jwt}"}, {"polarisUserToken": self.session_id}
-        return self.auth_client.build_request_auth(alias)
+            headers = {"Authorization": f"Bearer {jwt}"}
+            headers.update(get_mcp_request_headers())
+            return headers, {"polarisUserToken": self.session_id}
+        headers, cookies = self.auth_client.build_request_auth(alias)
+        headers.update(get_mcp_request_headers())
+        return headers, cookies
 
     def submit(self, payload: dict) -> dict:
         """提交用户反馈。"""

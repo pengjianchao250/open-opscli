@@ -220,3 +220,40 @@ def test_fetch_chart_queries_raises_when_data_invalid(monkeypatch):
 
     with pytest.raises(BadRemoteJsonError):
         client.fetch_chart_queries("chart-123")
+
+
+def test_cli_query_forwards_mcp_api_key_when_context_present(monkeypatch):
+    """MCP 上下文存在时，请求头应透传 X-MCP-API-Key。"""
+    from opscli.mcp.context import mcp_request_ctx
+
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, cookies=None, timeout=None):
+        captured["headers"] = headers
+        return httpx.Response(200, json={"rows": [], "meta": {"rowCount": 0}})
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.post", fake_post)
+    client = QueryClient(auth_client=DummyAuthClient())
+
+    token = mcp_request_ctx.set({"api_key": "mcp_key_123"})
+    try:
+        client.cli_query({"tableId": 1, "query": {"select": []}})
+        assert captured["headers"]["X-MCP-API-Key"] == "mcp_key_123"
+        assert captured["headers"]["Authorization"] == "Bearer jwt-token"
+    finally:
+        mcp_request_ctx.reset(token)
+
+
+def test_cli_query_no_mcp_header_when_context_absent(monkeypatch):
+    """无 MCP 上下文时，不应附加 X-MCP-API-Key。"""
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, cookies=None, timeout=None):
+        captured["headers"] = headers
+        return httpx.Response(200, json={"rows": [], "meta": {"rowCount": 0}})
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.post", fake_post)
+    client = QueryClient(auth_client=DummyAuthClient())
+
+    client.cli_query({"tableId": 1, "query": {"select": []}})
+    assert "X-MCP-API-Key" not in captured["headers"]

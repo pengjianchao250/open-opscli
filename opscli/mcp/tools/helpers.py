@@ -319,10 +319,14 @@ async def _sync_systems_after_login(session_id: str) -> dict:
     import httpx
 
     from opscli.auth import OPS_URL
+    from opscli.mcp.context import get_mcp_request_headers
+
+    headers = {"X-Session-Id": session_id}
+    headers.update(get_mcp_request_headers())
 
     response = httpx.get(
         f"{OPS_URL}/api/v1/cli/systems",
-        headers={"X-Session-Id": session_id},
+        headers=headers,
         timeout=10,
     )
     response.raise_for_status()

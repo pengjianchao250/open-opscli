@@ -349,6 +349,8 @@ class SkillsUpdater:
 
         自动带上 ops 系统的统一认证参数用于鉴权。
         """
+        from opscli.mcp.context import get_mcp_request_headers
+
         auth_client = AuthClient()
         try:
             headers, cookies = auth_client.build_request_auth("ops")
@@ -357,6 +359,8 @@ class SkillsUpdater:
                 "未登录 ops，请先执行 `opscli auth login`",
                 endpoint=endpoint,
             ) from exc
+
+        headers.update(get_mcp_request_headers())
 
         try:
             response = httpx.get(

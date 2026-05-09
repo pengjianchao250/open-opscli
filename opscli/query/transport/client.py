@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 
 from opscli.auth import AuthClient, OPS_URL
+from opscli.mcp.context import get_mcp_request_headers
 from opscli.query.domain.exceptions import BadRemoteJsonError, RemoteBusinessError, RemoteHttpError
 from opscli.shared.http import parse_remote_response
 
@@ -39,9 +40,12 @@ class QueryClient:
                 # 无状态模式：用 session_id 实时向后端换取 JWT
                 jwt = self.auth_client.get_token_by_session(self.session_id, alias)
             headers = {"Authorization": f"Bearer {jwt}"}
+            headers.update(get_mcp_request_headers())
             cookies = {"polarisUserToken": self.session_id}
             return headers, cookies
-        return self.auth_client.build_request_auth(alias)
+        headers, cookies = self.auth_client.build_request_auth(alias)
+        headers.update(get_mcp_request_headers())
+        return headers, cookies
 
     def fetch_chart_bundle(self, chart_uuid: str) -> dict:
         """通过 chart_uuid 获取图表查询结构，兼容新旧两种返回格式。"""

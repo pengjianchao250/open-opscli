@@ -195,6 +195,60 @@ def test_get_sends_unified_auth_headers_and_cookies(monkeypatch):
     assert captured["follow_redirects"] is True
 
 
+def test_get_forwards_mcp_api_key_when_context_present(monkeypatch):
+    """MCP 上下文存在时，请求头应透传 X-MCP-API-Key。"""
+    from opscli.mcp.context import mcp_request_ctx
+
+    captured = {}
+
+    monkeypatch.setattr(
+        "opscli.skills.sync.updater.AuthClient.build_request_auth",
+        lambda self, alias: (
+            {"Authorization": "Bearer token"},
+            {"polarisUserToken": "session-123"},
+        ),
+    )
+
+    def fake_get(url, headers=None, cookies=None, timeout=None, follow_redirects=None):
+        captured["headers"] = headers
+        return httpx.Response(200, request=httpx.Request("GET", url), json={"code": 200, "data": {}})
+
+    monkeypatch.setattr("opscli.skills.sync.updater.httpx.get", fake_get)
+
+    updater = SkillsUpdater()
+
+    token = mcp_request_ctx.set({"api_key": "mcp_key_abc"})
+    try:
+        updater._get(updater.MANIFEST_ENDPOINT)
+        assert captured["headers"]["X-MCP-API-Key"] == "mcp_key_abc"
+        assert captured["headers"]["Authorization"] == "Bearer token"
+    finally:
+        mcp_request_ctx.reset(token)
+
+
+def test_get_no_mcp_header_when_context_absent(monkeypatch):
+    """无 MCP 上下文时，不应附加 X-MCP-API-Key。"""
+    captured = {}
+
+    monkeypatch.setattr(
+        "opscli.skills.sync.updater.AuthClient.build_request_auth",
+        lambda self, alias: (
+            {"Authorization": "Bearer token"},
+            {"polarisUserToken": "session-123"},
+        ),
+    )
+
+    def fake_get(url, headers=None, cookies=None, timeout=None, follow_redirects=None):
+        captured["headers"] = headers
+        return httpx.Response(200, request=httpx.Request("GET", url), json={"code": 200, "data": {}})
+
+    monkeypatch.setattr("opscli.skills.sync.updater.httpx.get", fake_get)
+
+    updater = SkillsUpdater()
+    updater._get(updater.MANIFEST_ENDPOINT)
+    assert "X-MCP-API-Key" not in captured["headers"]
+
+
 def test_parse_json_response_rejects_invalid_payload():
     updater = SkillsUpdater()
     request = httpx.Request("GET", "https://example.com")
