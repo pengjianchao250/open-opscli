@@ -20,9 +20,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import httpx
+from mcp.types import ToolAnnotations
 
 from .helpers import (
     _auth_client,
@@ -88,10 +90,10 @@ async def auth_login_start() -> dict:
         return _err(exc)
 
 
-async def auth_login_poll(device_code: str, timeout: int = 10) -> dict:
+async def auth_login_poll(device_code: str, timeout: int = 5) -> dict:
     """单次轮询 Device Flow 授权状态。
 
-    授权成功后自动将 session_id 保存到本地凭证存储（CredentialStore）。
+    授权成功后自动将 session_id 保存到MCP服务器中凭证存储（CredentialStore）。
     在 HTTP/SSE 多用户模式下，按当前 API Key 隔离存储，避免用户间串用 session。
 
     返回结构中 data.status 字段指示当前状态：
@@ -105,7 +107,7 @@ async def auth_login_poll(device_code: str, timeout: int = 10) -> dict:
 
     Args:
         device_code: auth_login_start 返回的设备码
-        timeout:     单次轮询超时秒数（默认 10s）
+        timeout:     单次轮询超时秒数（默认 5s）
     """
     from opscli.auth import OPS_URL
     from opscli.auth.core.device_flow import DeviceFlow
@@ -117,7 +119,8 @@ async def auth_login_poll(device_code: str, timeout: int = 10) -> dict:
             store=None,
             headers=_get_mcp_request_headers(),
         )
-        result = flow.poll_once(device_code, timeout=timeout)
+        # poll_once 内部使用同步 httpx，请放到线程中执行，避免阻塞 MCP 事件循环。
+        result = await asyncio.to_thread(flow.poll_once, device_code, timeout=timeout)
 
         # poll_once 返回 error 状态时直接透传（包含 retryable 标志）
         if isinstance(result, dict) and result.get("status") == "error":
@@ -459,21 +462,41 @@ async def auth_doctor(session_id: str | None = None) -> dict:
         return _err(exc)
 
 
+# ── 工具注解（供 ChatGPT/OpenAI 判断工具副作用）─────────────────────
+_AUTH_READ_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    openWorldHint=False,
+    destructiveHint=False,
+)
+
+_AUTH_WRITE_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    openWorldHint=False,
+    destructiveHint=False,
+)
+
+_AUTH_DESTRUCTIVE_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    openWorldHint=False,
+    destructiveHint=True,
+)
+
+
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS = [
-    auth_login_start,
-    auth_login_poll,
-    auth_get_token,
-    auth_check_token,
-    auth_is_authenticated,
-    auth_token_refresh,
-    auth_system_list,
-    auth_system_add,
-    auth_system_remove,
-    auth_system_sync,
-    auth_build_request_auth,
-    auth_logout,
-    auth_doctor,
+    (auth_login_start, _AUTH_WRITE_ANNOTATIONS),
+    (auth_login_poll, _AUTH_WRITE_ANNOTATIONS),
+    (auth_get_token, _AUTH_WRITE_ANNOTATIONS),
+    (auth_check_token, _AUTH_READ_ANNOTATIONS),
+    (auth_is_authenticated, _AUTH_READ_ANNOTATIONS),
+    (auth_token_refresh, _AUTH_WRITE_ANNOTATIONS),
+    (auth_system_list, _AUTH_READ_ANNOTATIONS),
+    (auth_system_add, _AUTH_WRITE_ANNOTATIONS),
+    (auth_system_remove, _AUTH_DESTRUCTIVE_ANNOTATIONS),
+    (auth_system_sync, _AUTH_WRITE_ANNOTATIONS),
+    (auth_build_request_auth, _AUTH_READ_ANNOTATIONS),
+    (auth_logout, _AUTH_DESTRUCTIVE_ANNOTATIONS),
+    (auth_doctor, _AUTH_READ_ANNOTATIONS),
 ]
 
 
@@ -483,5 +506,5 @@ def register(mcp) -> None:
     Args:
         mcp: FastMCP 实例，由 server.py 统一创建并传入
     """
-    for fn in _ALL_TOOLS:
-        mcp.tool()(fn)
+    for fn, annotations in _ALL_TOOLS:
+        mcp.tool(annotations=annotations)(fn)

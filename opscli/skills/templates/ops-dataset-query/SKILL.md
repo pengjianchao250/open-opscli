@@ -53,9 +53,10 @@ version: v0.0.1
 - **MCP 模式**：继续阅读 `references/mcp.md`
 
 > 两个模式文件都遵循统一的文档引用规则：
-> 1. **必须优先阅读** `references/simple-query-guide.md`
-> 2. **只有多次查询失败时**，才尝试阅读 `references/data-query-service-dev-guide.md`
-> 3. **涉及 `innerWhere` 的数据集（子查询数据集）不允许使用复杂版手写 payload**，只能用简化接口（`opscli query simple` / `query_simple`）
+> 1. **必须优先阅读** `references/rules.md`（**查询前必须**，意图澄清规则）
+> 2. **必须优先阅读** `references/simple-query-guide.md`
+> 3. **只有多次查询失败时**，才尝试阅读 `references/data-query-service-dev-guide.md`
+> 4. **涉及 `innerWhere` 的数据集（子查询数据集）不允许使用复杂版手写 payload**，只能用简化接口（`opscli query simple` / `query_simple`）
 
 > **⚠️ 参数命名约定（MCP 模式必读）**
 >
@@ -116,12 +117,17 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 - `data_state` 为 `placeholder` 或 `empty` → 先执行 `opscli skills upgrade ops-dataset-query`（CLI）或 `skills_upgrade(name="ops-dataset-query")`（MCP）拉取远端数据，然后再执行搜索/查询
 - `data_state` 为 `ready` → 正常使用本地索引
 
+### 铁律十一：查询前必须执行意图澄清检查
+
+构造任何查询参数前，**必须先阅读 `references/rules.md`**，按"第九章 查询前自检清单"逐项检查用户输入是否存在语义歧义。规则文件中列出的所有歧义场景（人员身份、SKU 类型、币种、时间范围等），若触发则 **必须先通过 AskUserQuestion 向用户澄清**，禁止猜测后直接查询。
+
 ---
 
 ## 各模式详细文档
 
 | 模式 | 文件路径 | 说明 |
 |------|---------|------|
+| **意图澄清规则** | `references/rules.md` | **查询前必须阅读** — 人员/时间/SKU 等语义歧义澄清规则 |
 | CLI 模式索引 | `references/cli.md` | 前置要求、使用原则、字段检查、错误处理、工作流索引 |
 | CLI 简易版 | `references/cli-simple-guide.md` | `opscli query simple`、`opscli query build` 详解 |
 | CLI 完整版 | `references/cli-advanced-guide.md` | `opscli query run`、`opscli query chart`、降级方案 |

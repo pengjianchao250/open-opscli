@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import urllib.parse
 from typing import Any
 
@@ -26,6 +27,12 @@ from typing import Any
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 _logger = logging.getLogger("opscli.mcp")
+
+# 远程 API Key 校验缓存时间：缩短轮询链路耗时，同时保留较快的吊销生效窗口。
+_VERIFY_CACHE_TTL_SECONDS = 60
+
+# API Key 校验请求超时：不能接近 ChatGPT 外层 MCP 调用超时，否则工具尚未执行就会失败。
+_VERIFY_REQUEST_TIMEOUT_SECONDS = 3
 
 
 class ApiKeyAuthMiddleware:
@@ -56,6 +63,7 @@ class ApiKeyAuthMiddleware:
         self.app = app
         self._api_key = api_key
         self._auth_verify_url = auth_verify_url
+        self._verify_cache: dict[str, tuple[float, dict]] = {}
 
         if auth_verify_url:
             _logger.info("MCP Server 运行在远程校验模式，校验地址: %s", auth_verify_url)
@@ -159,6 +167,11 @@ class ApiKeyAuthMiddleware:
         """
         if not api_key or not self._auth_verify_url:
             return None
+        now = time.time()
+        cached = self._verify_cache.get(api_key)
+        if cached and cached[0] > now:
+            # 同一 API Key 在短时间内会连续轮询，直接复用校验结果降低整体延迟。
+            return cached[1]
         try:
             import httpx
 
@@ -167,11 +180,15 @@ class ApiKeyAuthMiddleware:
                     self._auth_verify_url,
                     params={"api_key": api_key},
                     headers={"X-MCP-API-Key": api_key},
-                    timeout=10,
+                    timeout=_VERIFY_REQUEST_TIMEOUT_SECONDS,
                 )
                 if resp.status_code == 200:
                     data = resp.json()
                     if data.get("valid"):
+                        self._verify_cache[api_key] = (
+                            now + _VERIFY_CACHE_TTL_SECONDS,
+                            data,
+                        )
                         return data
         except Exception as exc:
             _logger.warning("远程校验 API Key 失败: %s", exc)

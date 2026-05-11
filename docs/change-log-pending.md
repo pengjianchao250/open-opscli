@@ -618,3 +618,17 @@
 **回滚方式**：回退 `device_flow.py` 的 `poll_once` 方法（恢复 `raise_for_status()`），回退 `auth.py` 的 `auth_login_poll`（移除 error 状态透传）
 
 ---
+
+## 2026-05-11 mcp auth - 优化 ChatGPT 授权轮询超时
+
+**变更原因**：ChatGPT 通过远程 MCP 调用 `auth_login_poll` 时存在外层工具超时，原实现单次后端轮询和 API Key 远程校验都可能各自等待 10 秒，导致工具尚未返回就被 ChatGPT 判定超时。
+
+**改动点**：`opscli/mcp/tools/auth.py` 将 `auth_login_poll` 默认超时降为 5 秒，并通过 `asyncio.to_thread()` 执行同步 `poll_once`，避免阻塞 MCP 事件循环；同文件为 auth 工具补齐 `ToolAnnotations`。`opscli/mcp/auth_middleware.py` 为远程 API Key 校验增加 60 秒短缓存，并将单次校验超时降为 3 秒。
+
+**验证结果**：已执行 `.venv/bin/python -m pytest tests/auth/test_device_flow.py tests/mcp/test_tools.py tests/mcp/test_auth_middleware.py tests/mcp/test_multi_user_isolation.py -v`，15 passed。
+
+**影响范围**：影响远程 MCP HTTP/SSE 模式下 auth 工具调用，尤其是 ChatGPT 授权轮询链路；CLI 登录流程不受影响。
+
+**回滚方式**：回退 `opscli/mcp/tools/auth.py` 中 `auth_login_poll` 的默认超时、`asyncio.to_thread()` 调用和 annotations 注册；回退 `opscli/mcp/auth_middleware.py` 中的校验缓存与超时常量。
+
+---

@@ -43,6 +43,21 @@ def test_context_parameter_is_not_exposed_in_tool_schema():
         assert "ctx" not in properties
 
 
+def test_auth_login_poll_has_write_annotations():
+    """auth_login_poll 会保存凭证，应声明为非只读但非破坏性工具。"""
+    async def scenario():
+        async with Client(mcp) as client:
+            tools = await client.list_tools()
+            return next(tool for tool in tools if tool.name == "auth_login_poll")
+
+    tool = _run(scenario())
+
+    assert tool.annotations is not None
+    assert tool.annotations.readOnlyHint is False
+    assert tool.annotations.openWorldHint is False
+    assert tool.annotations.destructiveHint is False
+
+
 @respx.mock
 def test_auth_login_poll_pending_returns_without_saving(monkeypatch):
     monkeypatch.setattr("opscli.auth.OPS_URL", "https://ops.example.com")
