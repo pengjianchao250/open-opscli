@@ -224,6 +224,7 @@ def load_local_index(data_dir: Path) -> tuple[dict, dict]:
                 "table_id": row.get("table_id", ""),
                 "dataset_name": row.get("dataset_name", ""),
                 "dataset_alias": alias,
+                "remarks": row.get("remarks", ""),
             }
 
     field_index: dict[tuple[str, str], dict] = {}
@@ -236,6 +237,7 @@ def load_local_index(data_dir: Path) -> tuple[dict, dict]:
                 "verbose_name": row.get("verbose_name", ""),
                 "global_alias": g_alias,
                 "field_type": row.get("field_type", ""),
+                "remarks": row.get("remarks", ""),
             }
 
     return dataset_index, field_index
