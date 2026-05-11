@@ -2,7 +2,7 @@
 
 将 opscli auth 子模块的核心能力暴露为 MCP 工具（无状态设计）：
 - auth_login_start      — 发起 Device Flow 登录第一步
-- auth_login_poll       — 单次轮询授权状态
+- auth_login_poll       — 获取授权状态
 - auth_get_token        — 获取指定系统 JWT
 - auth_check_token      — 检测 JWT 有效性（纯本地）
 - auth_is_authenticated — 检查 session_id 是否有效
@@ -72,7 +72,7 @@ async def auth_login_start() -> dict:
     """发起 Device Flow 登录第一步，返回验证 URL、用户码和设备码。
 
     调用后引导用户在浏览器中打开 verification_url 并输入 user_code，
-    再调用 auth_login_poll 轮询授权结果。
+    再调用 auth_login_poll 获取授权结果。
     """
     from opscli.auth import OPS_URL
     from opscli.auth.core.device_flow import DeviceFlow
@@ -91,9 +91,9 @@ async def auth_login_start() -> dict:
 
 
 async def auth_login_poll(device_code: str, timeout: int = 5) -> dict:
-    """单次轮询 Device Flow 授权状态。
+    """获取 Device Flow 授权状态。
 
-    授权成功后自动将 session_id 保存到MCP服务器中凭证存储（CredentialStore）。
+    授权成功后自动将 session_id 保存到MCP服务器中凭证存储
     在 HTTP/SSE 多用户模式下，按当前 API Key 隔离存储，避免用户间串用 session。
 
     返回结构中 data.status 字段指示当前状态：
@@ -485,7 +485,8 @@ _AUTH_DESTRUCTIVE_ANNOTATIONS = ToolAnnotations(
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS = [
     (auth_login_start, _AUTH_WRITE_ANNOTATIONS),
-    (auth_login_poll, _AUTH_WRITE_ANNOTATIONS),
+    # poll 是"读取授权状态"操作，标记为只读避免 ChatGPT 等客户端弹确认框
+    (auth_login_poll, _AUTH_READ_ANNOTATIONS),
     (auth_get_token, _AUTH_WRITE_ANNOTATIONS),
     (auth_check_token, _AUTH_READ_ANNOTATIONS),
     (auth_is_authenticated, _AUTH_READ_ANNOTATIONS),
