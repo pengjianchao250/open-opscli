@@ -83,11 +83,23 @@ success "版本号已更新"
 # ── Step 3: 清理旧产物 ────────────────────────────────────
 info "Step 3/7  清理旧构建产物..."
 rm -rf dist/ build/ *.egg-info/
+if [[ "$TARGET" == "test" ]]; then
+    # 清理 Cython 编译产物，避免 .c 文件干扰纯 Python 构建
+    find opscli -name '*.c' -not -path '*/templates/*' -delete 2>/dev/null
+    find opscli -name '*.so' -not -path '*/templates/*' -delete 2>/dev/null
+fi
 success "清理完成"
 
 # ── Step 4: 构建 ──────────────────────────────────────────
-info "Step 4/7  构建包..."
-python3 -m build
+if [[ "$TARGET" == "test" ]]; then
+    info "Step 4/7  构建纯 Python 包（跳过 Cython 编译）..."
+    # --sdist --wheel：分别独立从源码构建，避免默认的 "wheel from sdist" 模式
+    # 默认模式会先打 sdist 再从 sdist 构建 wheel，导致 Cython 产物干扰文件发现
+    SKIP_CYTHON=1 python3 -m build --sdist --wheel
+else
+    info "Step 4/7  构建包（含 Cython 编译）..."
+    python3 -m build
+fi
 success "构建完成"
 echo "  生成文件："
 ls dist/ | sed 's/^/    /'
