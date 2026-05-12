@@ -38,11 +38,12 @@ jobs:
           # 内置版本字典将 cp314 标记为 prerelease，不加此标志会被静默跳过（同 cp313 的历史问题）
           CIBW_PRERELEASE_PYTHONS: "1"
 
-          # Linux：跳过 32 位和 Alpine(musl) 版本
-          CIBW_SKIP: "*-manylinux_i686 *-musllinux*"
+          # Linux：跳过 32 位、ARM64(aarch64) 和 Alpine(musl) 版本
+          # aarch64 需要 QEMU 模拟，x86_64 runner 上会 exec format error
+          CIBW_SKIP: "*-manylinux_i686 *-manylinux_aarch64 *-musllinux*"
 
           # Linux：同时编译 x86_64 和 ARM64 (aarch64)
-          CIBW_ARCHS_LINUX: "x86_64 aarch64"
+          CIBW_ARCHS_LINUX: "x86_64"
 
           # macOS：同时编译 Intel (x86_64) 和 Apple Silicon (arm64)
           CIBW_ARCHS_MACOS: "x86_64 arm64"
