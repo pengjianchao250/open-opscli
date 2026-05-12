@@ -21,10 +21,15 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 
 import httpx
 from mcp.types import ToolAnnotations
+
+# 按 API Key 隔离的待处理登录流缓存（device_code 存服务端，不暴露给客户端）
+# 避免 device_code 出现在 ChatGPT 等客户端的上下文中，防止触发凭证确认弹框
+_pending_flows: dict[str | None, dict] = {}
 
 from .helpers import (
     _auth_client,
@@ -69,13 +74,16 @@ def _get_mcp_request_headers() -> dict | None:
 
 
 async def auth_login_start() -> dict:
-    """发起 Device Flow 登录第一步，返回验证 URL、用户码和设备码。
+    """发起 Device Flow 登录第一步，返回验证 URL 和用户码。
 
     调用后引导用户在浏览器中打开 verification_url 并输入 user_code，
-    再调用 auth_login_poll 获取授权结果。
+    再调用 auth_login_poll（无需参数）获取授权结果。
+
+    device_code 由服务端缓存，不会暴露给客户端，避免触发 ChatGPT 等平台的凭证确认弹框。
     """
     from opscli.auth import OPS_URL
     from opscli.auth.core.device_flow import DeviceFlow
+    from opscli.mcp.context import get_current_api_key
 
     try:
         # 无状态模式：store=None 不保存凭证，凭证由调用方管理
@@ -85,16 +93,31 @@ async def auth_login_start() -> dict:
             store=None,
             headers=_get_mcp_request_headers(),
         )
-        return _ok(flow.request_device_code())
+        data = flow.request_device_code()
+
+        # 将 device_code 存入服务端缓存，按 API Key 隔离
+        # 不返回 device_code 给客户端，防止触发 ChatGPT 等平台的凭证确认弹框
+        api_key = get_current_api_key()
+        _pending_flows[api_key] = {
+            "device_code": data["device_code"],
+            "expires_at": time.time() + data.get("expires_in", 300),
+        }
+
+        # 只返回用户需要的信息，不暴露 device_code
+        return _ok({
+            "user_code": data.get("user_code"),
+            "verification_url": data.get("verification_url"),
+            "expires_in": data.get("expires_in", 300),
+        })
     except Exception as exc:
         return _err(exc)
 
 
-async def auth_login_poll(device_code: str, timeout: int = 5) -> dict:
+async def auth_login_poll(timeout: int = 30) -> dict:
     """获取 Device Flow 授权状态。
 
-    授权成功后自动将 session_id 保存到MCP服务器中凭证存储
-    在 HTTP/SSE 多用户模式下，按当前 API Key 隔离存储，避免用户间串用 session。
+    device_code 由服务端自动管理（auth_login_start 时已缓存），无需传入任何参数。
+    授权成功后自动将 session_id 保存到 MCP 凭证存储，在 HTTP/SSE 多用户模式下按 API Key 隔离。
 
     返回结构中 data.status 字段指示当前状态：
     - "authorized": 授权成功，凭证已保存，流程结束
@@ -106,11 +129,22 @@ async def auth_login_poll(device_code: str, timeout: int = 5) -> dict:
     当 data.retryable 为 false 时，AI Agent 不应继续轮询，应将错误信息展示给用户。
 
     Args:
-        device_code: auth_login_start 返回的设备码
-        timeout:     单次轮询超时秒数（默认 5s）
+        timeout: 单次轮询超时秒数（默认 30s）
     """
     from opscli.auth import OPS_URL
     from opscli.auth.core.device_flow import DeviceFlow
+    from opscli.mcp.context import get_current_api_key
+
+    # 从服务端缓存取出 device_code，不依赖客户端传入
+    api_key = get_current_api_key()
+    pending = _pending_flows.get(api_key)
+    if not pending:
+        return _err(ValueError("没有待处理的登录流，请先调用 auth_login_start"))
+    if time.time() > pending["expires_at"]:
+        _pending_flows.pop(api_key, None)
+        return _err(ValueError("登录流已过期，请重新调用 auth_login_start"))
+
+    device_code = pending["device_code"]
 
     try:
         # 向后端透传当前 API Key，便于 OPS 记录追踪
@@ -126,8 +160,14 @@ async def auth_login_poll(device_code: str, timeout: int = 5) -> dict:
         if isinstance(result, dict) and result.get("status") == "error":
             return _ok(result)
 
+        status = result.get("status") if isinstance(result, dict) else None
+
+        # 终态（成功/过期/拒绝）时清理服务端缓存
+        if status in ("authorized", "expired", "denied"):
+            _pending_flows.pop(api_key, None)
+
         # 授权成功时自动持久化保存 session_id（按 API Key 隔离）
-        if isinstance(result, dict) and result.get("status") == "authorized":
+        if status == "authorized":
             session_id = result.get("session_id")
             email = result.get("email", "")
             expires_at = result.get("expires_at", "")

@@ -73,7 +73,13 @@ class ApiKeyAuthMiddleware:
             _logger.warning("MCP Server 未配置任何 API Key 鉴权！")
 
     def _extract_token(self, scope: Scope) -> str | None:
-        """从 Query Param 或 Header 中提取 API Key。"""
+        """从 Query Param 或 Header 中提取 API Key。
+
+        支持以下提取顺序：
+        1. Query Param: ?api_key=<key>
+        2. Authorization Header: Authorization: Bearer <key>
+        3. X-MCP-Proxy-Auth Header: X-MCP-Proxy-Auth: Bearer <key>（MCP Inspector 代理使用）
+        """
         # 1. 先检查 query param
         query_string = scope.get("query_string", b"").decode("utf-8")
         if query_string:
@@ -82,16 +88,32 @@ class ApiKeyAuthMiddleware:
             if api_keys:
                 return api_keys[0]
 
-        # 2. 再检查 Authorization header
+        # 2. 检查 Authorization header
         for name, value in scope.get("headers", []):
             if name.lower() == b"authorization":
                 auth = value.decode("utf-8", errors="replace")
                 if auth.lower().startswith("bearer "):
                     return auth[7:].strip()
+
+        # 3. 检查 X-MCP-Proxy-Auth header（MCP Inspector 通过代理时使用）
+        for name, value in scope.get("headers", []):
+            if name.lower() == b"x-mcp-proxy-auth":
+                auth = value.decode("utf-8", errors="replace")
+                if auth.lower().startswith("bearer "):
+                    return auth[7:].strip()
+
         return None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # SSE 消息投递路径（/messages/）跳过 API Key 鉴权：
+        # session_id 由 GET /sse 连接建立时服务端生成并返回，只有已通过鉴权的客户端才持有，
+        # 因此 session_id 本身就是认证凭证，不需要额外 API Key。
+        path = scope.get("path", "")
+        if path.startswith("/messages/"):
             await self.app(scope, receive, send)
             return
 
