@@ -146,10 +146,43 @@ async def query_build(
         return _err(exc)
 
 
+def _normalize_dimension(item: str | dict) -> dict:
+    """将字符串或 dict 格式的维度统一转为 dict。
+
+    字符串格式：field_name[:alias]
+    如 "dept_name" → {"field": "dept_name"}
+       "dept_name:f_dept" → {"field": "dept_name", "alias": "f_dept"}
+    """
+    if isinstance(item, dict):
+        return item
+    parts = item.split(":", 1)
+    if len(parts) == 2:
+        return {"field": parts[0], "alias": parts[1]}
+    return {"field": parts[0]}
+
+
+def _normalize_metric(item: str | dict) -> dict:
+    """将字符串或 dict 格式的指标统一转为 dict。
+
+    字符串格式：field_name:aggregation[:alias]
+    如 "amount:SUM" → {"field": "amount", "aggregation": "SUM"}
+       "price:SUM:f_price" → {"field": "price", "aggregation": "SUM", "alias": "f_price"}
+    """
+    if isinstance(item, dict):
+        return item
+    parts = item.split(":", 2)
+    result: dict[str, str] = {"field": parts[0]}
+    if len(parts) >= 2:
+        result["aggregation"] = parts[1]
+    if len(parts) >= 3:
+        result["alias"] = parts[2]
+    return result
+
+
 async def query_simple(
     table_id: int,
-    dimensions: list[dict] | None = None,
-    metrics: list[dict] | None = None,
+    dimensions: list[str | dict] | None = None,
+    metrics: list[str | dict] | None = None,
     filters: list[dict] | None = None,
     data_comparison: dict | None = None,
     order_by: list[dict] | None = None,
@@ -165,10 +198,18 @@ async def query_simple(
     推荐优先使用本工具替代 query_build_and_run，无需理解 innerWhere、translate、
     cacl_type 等复杂概念，仅需 7 个纯业务参数即可完成聚合、对比、趋势分析。
 
+    dimensions 和 metrics 支持两种传入格式：
+    - 字符串格式（兼容 query_build 习惯）：
+      dimensions: ["dept_name", "date_id:f_date"]
+      metrics:    ["amount:SUM", "price:SUM:f_price"]
+    - Dict 格式（结构化）：
+      dimensions: [{"field": "ds_xxx.dept_name", "alias": "f_dept"}]
+      metrics:    [{"field": "ds_xxx.price", "aggregation": "SUM", "alias": "f_price"}]
+
     Args:
         table_id:        数据集 ID（必填）
-        dimensions:      维度列表，如 [{"field": "ds_xxx.dept_name", "alias": "f_dept"}]
-        metrics:         指标列表，如 [{"field": "ds_xxx.price", "aggregation": "SUM", "alias": "f_price"}]
+        dimensions:      维度列表
+        metrics:         指标列表
         filters:         过滤条件，如 [{"field": "ds_xxx.platform_name", "operator": "in", "value": ["Amazon"]}]
         data_comparison: 数据对比，如 {"field": "ds_xxx.date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"}
         order_by:        排序规则，如 [{"field": "f_price", "desc": True}]
@@ -185,11 +226,15 @@ async def query_simple(
     if not sid:
         return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"))
     try:
+        # 自动归一化：将字符串格式转为 dict 格式
+        norm_dimensions = [_normalize_dimension(d) for d in dimensions] if dimensions else None
+        norm_metrics = [_normalize_metric(m) for m in metrics] if metrics else None
+
         # 注意：build_simple() 不接受 skills_dir，simple 查询由服务端处理，无需本地 metadata
         result = _query_manager(jwt=jw, session_id=sid).build_simple_and_run(
             table_id=table_id,
-            dimensions=dimensions,
-            metrics=metrics,
+            dimensions=norm_dimensions,
+            metrics=norm_metrics,
             filters=filters,
             data_comparison=data_comparison,
             order_by=order_by,

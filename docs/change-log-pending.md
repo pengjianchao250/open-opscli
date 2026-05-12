@@ -1,5 +1,23 @@
 # 待归档变更记录
 
+## 2026-05-12 query_simple MCP 工具 - dimensions/metrics 兼容字符串格式
+
+**变更原因**：上游 Agent 调用 `query_simple` MCP Tool 时传入字符串格式的 dimensions（`'dept_name'`）和 metrics（`'amount:SUM'`），但 Pydantic 模型定义为 `list[dict]`，导致校验失败报 `ValidationError`。
+
+**改动点**：
+- `opscli/mcp/tools/query.py`：
+  - 新增 `_normalize_dimension()`：将字符串 `"dept_name:f_dept"` 转为 `{"field": "dept_name", "alias": "f_dept"}`
+  - 新增 `_normalize_metric()`：将字符串 `"price:SUM:f_price"` 转为 `{"field": "price", "aggregation": "SUM", "alias": "f_price"}`
+  - `query_simple` 的 `dimensions`/`metrics` 类型从 `list[dict]` 改为 `list[str | dict]`，传入后自动归一化
+  - 更新 docstring 说明两种传入格式
+
+**验证结果**：归一化函数单元测试通过（字符串/dict/多段格式全部正确）；57 个 query 测试全部通过；25 个 MCP 测试通过（2 个预存失败与本次无关）
+
+**影响范围**：仅影响 `query_simple` MCP Tool 的 dimensions/metrics 参数格式兼容性，向后兼容（dict 格式继续正常工作）
+
+**回滚方式**：恢复 `query_simple` 参数类型为 `list[dict]`，删除 `_normalize_dimension`/`_normalize_metric` 函数
+---
+
 ## 2026-05-12 MCP 一步登录 - 新增 auth_mcp_login
 
 **变更原因**：MCP 模式下旧登录流程需要浏览器介入和多次轮询，AI Agent 无法自主完成。利用 X-MCP-API-Key 已绑定用户身份，实现无浏览器一步登录。
