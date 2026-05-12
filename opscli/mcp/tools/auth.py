@@ -1,8 +1,7 @@
 """Auth 工具模块。
 
 将 opscli auth 子模块的核心能力暴露为 MCP 工具（无状态设计）：
-- auth_login_start      — 发起 Device Flow 登录第一步
-- auth_login_poll       — 获取授权状态
+- auth_mcp_login        — MCP 模式一步登录（无需浏览器，API Key 即身份）
 - auth_get_token        — 获取指定系统 JWT
 - auth_check_token      — 检测 JWT 有效性（纯本地）
 - auth_is_authenticated — 检查 session_id 是否有效
@@ -12,7 +11,11 @@
 - auth_system_remove    — 移除用户自定义系统
 - auth_system_sync      — 从 ops 同步系统列表
 - auth_build_request_auth — 构造请求认证参数
+- auth_logout           — 退出登录，清除本地凭证
 - auth_doctor           — 诊断 session 有效性与系统连通性
+
+注意：auth_login_start / auth_login_poll 仅供 CLI 模式（opscli auth login）使用，
+      不注册到 MCP 工具集；MCP 模式请使用 auth_mcp_login。
 
 所有工具函数定义在模块级，可直接导入调用（测试友好）。
 调用 register(mcp) 将以上工具批量注册到指定 MCP 实例。
@@ -65,6 +68,109 @@ def _get_mcp_request_headers() -> dict | None:
     if api_key:
         return {"X-MCP-API-Key": api_key}
     return None
+
+
+async def auth_mcp_login(agent_name: str | None = None) -> dict:
+    """MCP 模式专用一步登录，无需浏览器交互。
+
+    利用当前 MCP 连接的 X-MCP-API-Key 直接完成身份绑定和 Session 创建，
+    整个流程全自动，AI Agent 无需引导用户打开任何链接或输入验证码。
+
+    流程：
+    1. 向 OPS 后端申请 device_code / user_code（建立审计记录）
+    2. 携带 X-MCP-API-Key + device_code + user_code 调用 /v1/mcp/auth/login
+       → 后端校验 API Key 身份后直接创建 session 并绑定设备码
+    3. 保存 session 到本地 CredentialStore（按 API Key 隔离，与 auth_login_poll 路径相同）
+
+    Args:
+        agent_name: 可选，当前 AI Agent 名称（如 "Claude Code"、"Cursor"）。
+                    传入后写入服务端 session 记录，便于多 Agent 环境下追溯登录来源。
+
+    Returns:
+        成功：{ success: True, data: { status, session_id, email, expires_at,
+                                       agent_name, saved_locally } }
+        失败：{ success: False, error: { code, message } }
+    """
+    from opscli.auth import OPS_URL
+    from opscli.auth.core.device_flow import DeviceFlow
+
+    import httpx
+
+    mcp_headers = _get_mcp_request_headers()
+    if not mcp_headers:
+        # stdio 模式下无 API Key 上下文，无法使用一步登录
+        return _err(
+            ValueError(
+                "auth_mcp_login 仅适用于 HTTP/SSE 模式（需携带 X-MCP-API-Key）。"
+                "stdio 模式请使用 auth_login_start + auth_login_poll 完成授权。"
+            )
+        )
+
+    # ── Step 1：申请 device_code / user_code ────────────────────────────
+    try:
+        flow = DeviceFlow(ops_url=OPS_URL, store=None, headers=mcp_headers)
+        code_resp = await asyncio.to_thread(flow.request_device_code)
+    except Exception as exc:
+        return _err(exc)
+
+    device_code = code_resp.get("device_code")
+    user_code = code_resp.get("user_code")
+    if not device_code or not user_code:
+        return _err(ValueError(f"device/code 响应缺少必要字段：{code_resp}"))
+
+    # ── Step 2：携带 API Key 调用新接口完成身份绑定 ──────────────────────
+    login_url = f"{OPS_URL.rstrip('/')}/v1/mcp/auth/login"
+    payload: dict = {"device_code": device_code, "user_code": user_code}
+    if agent_name:
+        payload["agent_name"] = agent_name.strip()[:128]
+
+    try:
+        resp = await asyncio.to_thread(
+            lambda: httpx.post(
+                login_url,
+                json=payload,
+                headers=mcp_headers,
+                timeout=10,
+            )
+        )
+    except httpx.TimeoutException:
+        return _err(ValueError("调用 /v1/mcp/auth/login 超时，请稍后重试"))
+    except httpx.ConnectError as exc:
+        return _err(ValueError(f"无法连接 OPS 后端: {exc}"))
+
+    if resp.status_code != 200:
+        # 解析后端错误响应
+        try:
+            err_body = resp.json()
+            err_msg = err_body.get("message") or err_body.get("error") or f"HTTP {resp.status_code}"
+        except Exception:
+            err_msg = f"HTTP {resp.status_code}"
+        return _err(
+            ValueError(err_msg),
+            tool="auth_mcp_login → POST /v1/mcp/auth/login",
+            call_params={"device_code": device_code[:8] + "...", "user_code": user_code},
+        )
+
+    result = resp.json()
+
+    # ── Step 3：保存 session（与 auth_login_poll 授权成功路径完全相同）───
+    session_id = result.get("session_id")
+    email = result.get("email", "")
+    expires_at = result.get("expires_at", "")
+
+    if session_id:
+        try:
+            store = _get_isolated_store()
+            store.save_session(session_id, email, expires_at)
+            from opscli.mcp.credential_cache import invalidate_credential_cache
+            invalidate_credential_cache(base_dir=_get_credential_dir())
+            result["saved_locally"] = True
+        except Exception as exc:
+            # 本地保存失败不阻断返回，但标注未保存
+            result["saved_locally"] = False
+            result["save_error"] = str(exc)
+
+    return _ok(result)
 
 
 async def auth_login_start() -> dict:
@@ -475,19 +581,23 @@ async def auth_doctor(session_id: str | None = None) -> dict:
 
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS = [
-    auth_login_start,
-    auth_login_poll,
+    # MCP 模式登录（HTTP/SSE，无需浏览器）
+    auth_mcp_login,
+    # Token 管理
     auth_get_token,
     auth_check_token,
     auth_is_authenticated,
     auth_token_refresh,
+    # 系统管理
     auth_system_list,
     auth_system_add,
     auth_system_remove,
     auth_system_sync,
+    # 请求构造 / 运维
     auth_build_request_auth,
     auth_logout,
     auth_doctor,
+    # 注意：auth_login_start / auth_login_poll 不注册到 MCP，仅供 CLI 使用
 ]
 
 

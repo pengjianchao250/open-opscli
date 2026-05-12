@@ -1,5 +1,18 @@
 # 待归档变更记录
 
+## 2026-05-12 MCP 一步登录 - 新增 auth_mcp_login
+
+**变更原因**：MCP 模式下旧登录流程需要浏览器介入和多次轮询，AI Agent 无法自主完成。利用 X-MCP-API-Key 已绑定用户身份，实现无浏览器一步登录。
+**改动点**：
+- 新增 `app/Http/Controllers/Api/McpAuthController.php`：`POST /v1/mcp/auth/login` 接口，联合校验 device_code + user_code + API Key，事务写入 session
+- 修改 `routes/api.php`：在 `/v1/mcp` 公开路由组追加新路由，新增 `McpAuthController` import
+- 新增 `database/migrations/2026_05_12_000001_add_agent_name_to_shared_login_sessions_table.php`：`shared_login_sessions` 表新增 `agent_name varchar(128) NULL` 字段
+- 修改 `opscli/mcp/tools/auth.py`：新增 `auth_mcp_login(agent_name)` 函数；`_ALL_TOOLS` 移除 `auth_login_start`/`auth_login_poll`，加入 `auth_mcp_login`；更新模块 docstring
+**验证结果**：`python3 -m py_compile opscli/mcp/tools/auth.py` 通过
+**影响范围**：MCP 工具集登录入口变更；CLI `opscli auth login` 不受影响
+**回滚方式**：删除 `McpAuthController.php`，回滚 `routes/api.php` import 和路由行，回滚 `_ALL_TOOLS` 改动，执行 migration rollback
+---
+
 ## 2026-05-12 源码目录清理 - 删除 Cython 编译产物
 
 **变更原因**：源码目录 `opscli/opscli/` 下残留了大量 Cython 编译生成的 `.c` 和 `.so` 文件，影响源码阅读和 git 状态。
