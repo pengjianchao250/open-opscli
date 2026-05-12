@@ -75,10 +75,15 @@ python3 -c "import twine"   2>/dev/null || { warn "正在安装 twine..."; pip i
 success "工具检查通过"
 
 # ── Step 2: 更新版本号 ────────────────────────────────────
-info "Step 2/7  更新 pyproject.toml 版本号 → ${NEW_VERSION}..."
+VERSION_PY="opscli/version.py"
+info "Step 2/7  更新版本号 → ${NEW_VERSION}..."
+# 更新 pyproject.toml
 sed -i.bak "s/^version = \"${CURRENT_VERSION}\"/version = \"${NEW_VERSION}\"/" "$PYPROJECT"
 rm -f "${PYPROJECT}.bak"
-success "版本号已更新"
+# 同步更新 version.py 的 FALLBACK_VERSION
+sed -i.bak "s/^FALLBACK_VERSION = \".*\"/FALLBACK_VERSION = \"${NEW_VERSION}-dev\"/" "$VERSION_PY"
+rm -f "${VERSION_PY}.bak"
+success "pyproject.toml + version.py 版本号已更新"
 
 # ── Step 3: 清理旧产物 ────────────────────────────────────
 info "Step 3/7  清理旧构建产物..."
