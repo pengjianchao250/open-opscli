@@ -28,6 +28,13 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 _logger = logging.getLogger("opscli.mcp")
 
+# 客户端断连异常类型集合：SSE 场景下客户端断连属于正常行为，需统一捕获避免日志噪音
+try:
+    from starlette.requests import ClientDisconnect as _StarletteClientDisconnect
+    _CLIENT_DISCONNECT_ERRORS: tuple[type[BaseException], ...] = (_StarletteClientDisconnect,)
+except ImportError:
+    _CLIENT_DISCONNECT_ERRORS = ()
+
 # 远程 API Key 校验缓存时间：缩短轮询链路耗时，同时保留较快的吊销生效窗口。
 _VERIFY_CACHE_TTL_SECONDS = 60
 
@@ -114,7 +121,11 @@ class ApiKeyAuthMiddleware:
         # 因此 session_id 本身就是认证凭证，不需要额外 API Key。
         path = scope.get("path", "")
         if path.startswith("/messages/"):
-            await self.app(scope, receive, send)
+            try:
+                await self.app(scope, receive, send)
+            except _CLIENT_DISCONNECT_ERRORS:
+                # SSE 场景下客户端断连是正常行为，静默处理避免日志噪音
+                _logger.debug("客户端在 POST /messages/ 时断开连接，已忽略")
             return
 
         token = self._extract_token(scope)
@@ -161,6 +172,9 @@ class ApiKeyAuthMiddleware:
 
         try:
             await self.app(scope, receive, tracking_send)
+        except _CLIENT_DISCONNECT_ERRORS:
+            # SSE 长连接场景下客户端断连是正常行为，静默处理
+            _logger.debug("客户端断开连接: %s", path)
         except RuntimeError as exc:
             if "Expected ASGI message" not in str(exc):
                 raise
