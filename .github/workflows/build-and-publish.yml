@@ -41,6 +41,9 @@ jobs:
           # Linux：跳过 32 位和 Alpine(musl) 版本
           CIBW_SKIP: "*-manylinux_i686 *-musllinux*"
 
+          # Linux：同时编译 x86_64 和 ARM64 (aarch64)
+          CIBW_ARCHS_LINUX: "x86_64 aarch64"
+
           # macOS：同时编译 Intel (x86_64) 和 Apple Silicon (arm64)
           CIBW_ARCHS_MACOS: "x86_64 arm64"
 
