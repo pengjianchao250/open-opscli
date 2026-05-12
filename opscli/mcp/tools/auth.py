@@ -93,7 +93,7 @@ async def auth_login_start() -> dict:
             store=None,
             headers=_get_mcp_request_headers(),
         )
-        data = flow.request_device_code()
+        data = await asyncio.to_thread(flow.request_device_code)
 
         # 将 device_code 存入服务端缓存，按 API Key 隔离
         # 不返回 device_code 给客户端，防止触发 ChatGPT 等平台的凭证确认弹框
@@ -113,23 +113,35 @@ async def auth_login_start() -> dict:
         return _err(exc)
 
 
-async def auth_login_poll(timeout: int = 30) -> dict:
-    """获取 Device Flow 授权状态。
+async def auth_login_poll(timeout: int = 5) -> dict:
+    """单次请求检查 Device Flow 授权状态
 
     device_code 由服务端自动管理（auth_login_start 时已缓存），无需传入任何参数。
     授权成功后自动将 session_id 保存到 MCP 凭证存储，在 HTTP/SSE 多用户模式下按 API Key 隔离。
 
-    返回结构中 data.status 字段指示当前状态：
-    - "authorized": 授权成功，凭证已保存，流程结束
-    - "pending":    用户尚未完成授权，可继续轮询（建议间隔 3-5 秒）
-    - "error":      后端返回错误（如频率限制、WAF 拦截），检查 data.retryable 决定是否重试
-    - "expired":    设备码已过期，需重新调用 auth_login_start
-    - "denied":     用户拒绝授权，流程终止
+    ⚠️ 重要：本工具只做单次状态检查，AI Agent 需要自行控制轮询节奏和终止条件：
 
-    当 data.retryable 为 false 时，AI Agent 不应继续轮询，应将错误信息展示给用户。
+    轮询约束（AI Agent 必须遵守）：
+    - 最大轮询次数：不超过 20 次（约 2-3 分钟）
+    - 轮询间隔：3-5 秒
+    - 超过最大次数仍未成功 → 停止轮询，告知用户"授权等待超时，请重新运行 auth_login_start 并尽快完成浏览器授权"
 
     Args:
-        timeout: 单次轮询超时秒数（默认 30s）
+        timeout: HTTP 请求超时秒数（默认 30s），不是轮询等待时长。后端接口通常 1-2 秒内返回
+
+    返回结构中 data.status 字段指示当前状态及 AI Agent 必须执行的动作：
+
+    ┌──────────────┬──────────────────────────────────────────────────┐
+    │ status       │ AI Agent 动作                                    │
+    ├──────────────┼──────────────────────────────────────────────────┤
+    │ "authorized" │ ✅ 授权成功，凭证已保存，流程结束，告知用户已登录  │
+    │ "pending"    │ 🔄 用户尚未完成授权，等待 3-5 秒后再次调用本工具   │
+    │ "error"      │ ⚠️ 检查 data.retryable：true → 等待后重试；      │
+    │              │    false → 停止轮询，将 data.error 展示给用户      │
+    │ "expired"    │ ❌ 设备码已过期，停止轮询，引导用户重新调用         │
+    │              │    auth_login_start                               │
+    │ "denied"     │ ❌ 用户拒绝授权，停止轮询，告知用户已取消           │
+    └──────────────┴──────────────────────────────────────────────────┘
     """
     from opscli.auth import OPS_URL
     from opscli.auth.core.device_flow import DeviceFlow
