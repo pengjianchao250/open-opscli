@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # 一键升级版本号并发布到 PyPI
 # 用法：
-#   ./publish.sh patch     # 0.3.0 → 0.3.1（Bug 修复）
-#   ./publish.sh minor     # 0.3.0 → 0.4.0（新功能）
-#   ./publish.sh major     # 0.3.0 → 1.0.0（破坏性变更）
-#   ./publish.sh           # 默认 patch
+#   ./publish.sh patch          # 0.3.0 → 0.3.1，发布到 TestPyPI（默认）
+#   ./publish.sh minor          # 0.3.0 → 0.4.0，发布到 TestPyPI（默认）
+#   ./publish.sh major          # 0.3.0 → 1.0.0，发布到 TestPyPI（默认）
+#   ./publish.sh patch test     # 显式指定 TestPyPI
+#   ./publish.sh patch prod     # 发布到正式 PyPI（需二次确认）
+#   ./publish.sh                # 默认 patch + TestPyPI
 
 set -euo pipefail
 
 PYPROJECT="pyproject.toml"
 BUMP_TYPE="${1:-patch}"
+TARGET="${2:-test}"
 
 # ── 颜色输出 ──────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -22,7 +25,9 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; exit 1; }
 
 # ── 参数校验 ──────────────────────────────────────────────
 [[ "$BUMP_TYPE" =~ ^(patch|minor|major)$ ]] \
-    || error "参数必须是 patch / minor / major，当前：$BUMP_TYPE"
+    || error "第一个参数必须是 patch / minor / major，当前：$BUMP_TYPE"
+[[ "$TARGET" =~ ^(test|prod)$ ]] \
+    || error "第二个参数必须是 test / prod，当前：$TARGET"
 
 # ── 读取当前版本 ──────────────────────────────────────────
 CURRENT_VERSION=$(grep -m1 '^version = ' "$PYPROJECT" | sed 's/version = "\(.*\)"/\1/')
@@ -44,10 +49,23 @@ echo -e "${BOLD} aukeys-opscli 发布脚本${RESET}"
 echo -e "${BOLD}======================================${RESET}"
 echo -e "  当前版本：${YELLOW}${CURRENT_VERSION}${RESET}"
 echo -e "  新版本  ：${GREEN}${NEW_VERSION}${RESET}  (${BUMP_TYPE})"
+if [[ "$TARGET" == "prod" ]]; then
+    echo -e "  发布目标：${RED}正式 PyPI${RESET}"
+else
+    echo -e "  发布目标：${BLUE}TestPyPI${RESET}"
+fi
 echo -e "${BOLD}======================================${RESET}\n"
 
 read -rp "确认发布？[y/N] " CONFIRM
 [[ "$CONFIRM" =~ ^[Yy]$ ]] || { warn "已取消"; exit 0; }
+
+# 正式 PyPI 二次确认，防止误操作
+if [[ "$TARGET" == "prod" ]]; then
+    echo ""
+    warn "即将发布到 ${RED}正式 PyPI${RESET}，此操作不可撤销！"
+    read -rp "再次确认发布到正式 PyPI？[y/N] " CONFIRM2
+    [[ "$CONFIRM2" =~ ^[Yy]$ ]] || { warn "已取消"; exit 0; }
+fi
 
 # ── Step 1: 检查工具 ──────────────────────────────────────
 info "Step 1/7  检查依赖工具..."
@@ -80,15 +98,30 @@ twine check dist/*
 success "校验通过"
 
 # ── Step 6: 上传到 PyPI ───────────────────────────────────
-info "Step 6/7  上传到 PyPI..."
-twine upload dist/*
-success "上传完成！"
-echo -e "  查看地址：${BLUE}https://pypi.org/project/aukeys-opscli/${NEW_VERSION}/${RESET}"
+if [[ "$TARGET" == "prod" ]]; then
+    info "Step 6/7  上传到正式 PyPI..."
+    twine upload dist/*
+    success "上传完成！"
+    echo -e "  查看地址：${BLUE}https://pypi.org/project/aukeys-opscli/${NEW_VERSION}/${RESET}"
+else
+    info "Step 6/7  上传到 TestPyPI..."
+    twine upload --repository testpypi dist/*
+    success "上传完成！"
+    echo -e "  查看地址：${BLUE}https://test.pypi.org/project/aukeys-opscli/${NEW_VERSION}/${RESET}"
+fi
 
 # ── Step 7: 完成提示 ──────────────────────────────────────
 echo ""
 info "Step 7/7  安装验证命令（可选，手动执行）："
-echo "    pip install aukeys-opscli==${NEW_VERSION}"
-echo "   opscli version"
+if [[ "$TARGET" == "prod" ]]; then
+    echo "    pip install aukeys-opscli==${NEW_VERSION}"
+else
+    echo "    pip install -i https://test.pypi.org/simple/ aukeys-opscli==${NEW_VERSION}"
+fi
+echo "    opscli --version"
 echo ""
-success "全部完成 aukeys-opscli v${NEW_VERSION} 已发布到 PyPI 🎉"
+if [[ "$TARGET" == "prod" ]]; then
+    success "全部完成 aukeys-opscli v${NEW_VERSION} 已发布到正式 PyPI"
+else
+    success "全部完成 aukeys-opscli v${NEW_VERSION} 已发布到 TestPyPI"
+fi

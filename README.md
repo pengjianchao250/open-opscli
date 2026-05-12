@@ -674,24 +674,32 @@ polaris_token_endpoint = /api/auth/cli-token
 
 详见 [打包发布指南](docs/opscli-publish-guide.md)。
 
-### 版本更新流程
+### 一键发布（推荐）
+
+使用 `publish.sh` 脚本自动完成版本号升级、构建、校验和上传：
+
+```bash
+# 默认发布到 TestPyPI（patch 升版）
+./publish.sh
+
+# 指定升版类型，发布到 TestPyPI
+./publish.sh patch          # 0.0.53 → 0.0.54
+./publish.sh minor          # 0.0.53 → 0.1.0
+./publish.sh major          # 0.0.53 → 1.0.0
+
+# 发布到正式 PyPI（需二次确认）
+./publish.sh patch prod
+```
+
+### 手动发布
 
 ```bash
 # 1. 修改 pyproject.toml 中的 version 字段
-#    version = "0.0.2"
-
-# 2. 清理旧产物并构建
-rm -rf dist/ build/
-python -m build
-
-# 3. 校验包
+# 2. 构建并上传
+rm -rf dist/ build/ && python -m build
 twine check dist/*
-
-# 4. 发布到 TestPyPI 验证
-twine upload --repository testpypi dist/*
-
-# 5. 验证通过后发布到正式 PyPI
-twine upload dist/*
+twine upload --repository testpypi dist/*   # TestPyPI
+twine upload dist/*                          # 正式 PyPI
 ```
 
 ### TestPyPI 安装验证
@@ -699,13 +707,19 @@ twine upload dist/*
 > **重要**：TestPyPI 上缺少部分依赖包（如 cryptography、httpx 等），安装时必须加 `--extra-index-url` 指向正式 PyPI，否则 pip 解析依赖失败后会回退到旧版本。
 
 ```bash
-# 正确：指定额外索引源拉依赖
+# 从 TestPyPI 安装（指定版本号）
 pip install \
     --index-url https://test.pypi.org/simple/ \
     --extra-index-url https://pypi.org/simple/ \
-    aukeys-opscli==0.0.2
+    aukeys-opscli==<版本号>
 
-# 错误：只用 TestPyPI 做索引源，可能安装到旧版本
+# 从 TestPyPI 安装（最新版）
+pip install \
+    --index-url https://test.pypi.org/simple/ \
+    --extra-index-url https://pypi.org/simple/ \
+    aukeys-opscli
+
+# ❌ 错误：只用 TestPyPI 做索引源，依赖解析会失败或回退到旧版本
 pip install -i https://test.pypi.org/simple/ aukeys-opscli
 ```
 
