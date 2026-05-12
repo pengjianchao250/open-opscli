@@ -43,23 +43,8 @@ def test_context_parameter_is_not_exposed_in_tool_schema():
         assert "ctx" not in properties
 
 
-def test_auth_login_poll_has_read_annotations():
-    """auth_login_poll 不接收凭证参数，应声明为只读工具避免 ChatGPT 等客户端弹确认框。"""
-    async def scenario():
-        async with Client(mcp) as client:
-            tools = await client.list_tools()
-            return next(tool for tool in tools if tool.name == "auth_login_poll")
-
-    tool = _run(scenario())
-
-    assert tool.annotations is not None
-    assert tool.annotations.readOnlyHint is True
-    assert tool.annotations.openWorldHint is False
-    assert tool.annotations.destructiveHint is False
-
-
-def test_auth_login_poll_has_no_device_code_param():
-    """auth_login_poll 不再暴露 device_code 参数，device_code 由服务端缓存管理。"""
+def test_auth_login_poll_has_device_code_param():
+    """auth_login_poll 必须暴露 device_code 参数，由客户端传入。"""
     async def scenario():
         async with Client(mcp) as client:
             tools = await client.list_tools()
@@ -67,25 +52,18 @@ def test_auth_login_poll_has_no_device_code_param():
 
     tool = _run(scenario())
     properties = (tool.inputSchema or {}).get("properties", {})
-    assert "device_code" not in properties
+    assert "device_code" in properties
 
 
 @respx.mock
 def test_auth_login_poll_pending_returns_without_saving(monkeypatch):
-    import opscli.mcp.tools.auth as auth_module
-
     monkeypatch.setattr("opscli.auth.OPS_URL", "https://ops.example.com")
     monkeypatch.setattr("opscli.mcp.server.OPS_URL", "https://ops.example.com", raising=False)
-    # 注入服务端缓存的 device_code（模拟 auth_login_start 已执行）
-    monkeypatch.setitem(auth_module._pending_flows, None, {
-        "device_code": "dc-abc",
-        "expires_at": 9999999999,
-    })
     respx.get("https://ops.example.com/v1/cli/device/poll").mock(
         return_value=httpx.Response(200, json={"status": "pending"})
     )
 
-    result = _run(auth_login_poll(timeout=1))
+    result = _run(auth_login_poll("dc-abc", timeout=1))
 
     assert result["success"] is True
     assert result["data"]["status"] == "pending"
