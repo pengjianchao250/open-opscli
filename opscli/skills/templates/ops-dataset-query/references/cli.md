@@ -72,9 +72,9 @@ opscli auth token status
 
 标准顺序：
 
-1. 先确认目标 `dataset_alias` 是否存在于 `data/datasets.csv`
+1. 先确认目标 `dataset_alias` 是否存在于 `data/datasets.csv`，或用 `opscli query metadata`（无参数）查看数据集列表
 2. 再确认目标字段是否存在于 `data/dataset_fields.csv`
-3. 如需进一步确认公式字段、聚合方式、表达式结构，再执行 `opscli query metadata --dataset <dataset_alias> --pretty`
+3. 如需获取**最新**字段信息（含公式字段、聚合方式、表达式结构），执行 `opscli query metadata --dataset <dataset_alias> --pretty`（远端优先，自动回退本地）
 4. 如果数据集或字段不存在，先检查本地数据是否为空/placeholder；为空时执行 `opscli skills upgrade ops-dataset-query`
 5. 升级后重新执行字段检查
 6. 若升级后仍不存在，明确告知用户当前本地索引和 metadata 中没有该字段，不要猜字段名继续查
@@ -155,7 +155,14 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 
 ### `opscli query metadata`
 
-读取指定数据集的 query metadata（字段定义、可用聚合方式等）。
+读取数据集的 query metadata（字段定义、可用聚合方式等）。
+
+**两种用法**：
+
+| 用法 | 行为 | 认证 |
+|------|------|------|
+| 无参数 `opscli query metadata` | **远端优先**返回数据集列表（不含字段），远端失败回退本地缓存 | 远端时需要 |
+| 指定数据集 `--dataset <alias>` 或 `--table-id <id>` | **远端优先**拉取最新字段信息，远端失败自动回退本地缓存 | 远端时需要 |
 
 ```
 选项：
@@ -166,6 +173,10 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 ```
 
 ```bash
+# 查看所有可用数据集列表（远端优先，自动回退本地）
+opscli query metadata --pretty
+
+# 获取指定数据集的最新字段信息（远端优先）
 opscli query metadata --dataset sales_order_d --pretty
 opscli query metadata --table-id 123 --pretty
 ```
@@ -280,8 +291,9 @@ opscli query catalog --skills-dir ~/.claude/skills --pretty
 | 场景 | 解决方法 |
 |------|---------|
 | 本地数据为空 | `opscli skills upgrade ops-dataset-query` |
-| dataset_alias 不存在 | 检查拼写或 `opscli skills upgrade` 同步最新数据集 |
-| 字段映射全部失败（`mapped_name` 等于 `global_alias`） | 脚本会自动 upgrade 重试；手动执行 `opscli skills upgrade ops-dataset-query --force` |
+| dataset_alias 不存在 | 先 `opscli query metadata` 查看可用数据集列表；确认拼写或 `opscli skills upgrade` 同步最新数据集 |
+| 字段映射全部失败（`mapped_name` 等于 `global_alias`） | 先 `opscli query metadata --dataset <alias>` 远端获取最新字段；仍失败则 `opscli skills upgrade ops-dataset-query --force` |
+| 仅需确认单个数据集字段 | `opscli query metadata --dataset <alias>` 按需远端查询，无需全量升级 |
 | 未登录 | 调用 `ops-auth` Skill，并执行 `opscli auth login` |
 | Token 过期 | 调用 `ops-auth` Skill，优先执行 `opscli auth token refresh --all`；刷新失败或仍异常时再执行 `opscli auth login` |
 | opscli 未找到 | 激活虚拟环境或设置 `OPSCLI_BIN` |

@@ -88,6 +88,28 @@ class QueryClient:
         data = payload.get("data")
         return data if isinstance(data, dict) else {}
 
+    def fetch_query_metadata(self) -> dict:
+        """从远端拉取最新的数据集与字段元数据。
+
+        调用 GET /v1/data-metrics/datasets/query-metadata，
+        返回 {"datasets": [...], "fields": [...]} 结构。
+        """
+        headers, cookies = self._get_auth("ops")
+        response = httpx.get(
+            f"{self.ops_url}/v1/data-metrics/datasets/query-metadata",
+            headers=headers,
+            cookies=cookies,
+            timeout=20,
+        )
+        payload = parse_remote_response(
+            response,
+            http_error_cls=RemoteHttpError,
+            business_error_cls=RemoteBusinessError,
+            bad_json_error_cls=BadRemoteJsonError,
+        )
+        data = payload.get("data")
+        return data if isinstance(data, dict) else {}
+
     def fetch_chart_queries(self, chart_uuid: str) -> list[dict]:
         """通过 chart_uuid 获取图表的查询结构列表。"""
         bundle = self.fetch_chart_bundle(chart_uuid)

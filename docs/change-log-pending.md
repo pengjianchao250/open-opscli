@@ -1,5 +1,45 @@
 # 待归档变更记录
 
+## 2026-05-12 opscli query metadata - 优化为远端优先获取最新字段
+
+**变更原因**：`opscli query metadata` 之前仅从本地缓存读取，未指定参数时返回所有字段（数据量大且不是用户需要的），指定参数时也没有获取远端最新数据。用户需要：(1) 无参数时只返回数据集列表；(2) 有参数时从远端拉取最新字段信息。
+
+**改动点**：
+- `opscli/query/transport/client.py`：新增 `fetch_query_metadata()` 方法，调用 `GET /v1/data-metrics/datasets/query-metadata` 获取远端最新 datasets + fields
+- `opscli/query/services/manager.py`：重写 `metadata()` 方法
+  - 无参数 → 仅返回本地数据集列表（`fields=[]`，`all_datasets=[...]`）
+  - 有参数 → 优先调用 `fetch_query_metadata()` 远端获取，失败回退本地
+- `opscli/query/commands/cli.py`：更新 hint 提示词，无参数时提示使用 --dataset/--table-id，远端失败时提示执行 upgrade
+- `tests/query/test_client.py`：新增 `test_fetch_query_metadata_sends_get_request`
+- `tests/query/test_manager.py`：新增 3 个 metadata 测试（无参数/远端成功/远端回退），所有 build 测试补充 fetch_query_metadata mock
+- `tests/query/test_cli.py`：新增 2 个 CLI hint 测试，修复 DummyResult 缺少 source 属性
+
+**验证结果**：55 个 query 测试全部通过（+5 个新增），全量 246 测试仅 2 个预存失败（ops-amazon-rufus / version_consistency）
+
+**影响范围**：`opscli query metadata` 命令行为变更，`QueryManager.metadata()` 返回值结构不变（向后兼容 `QueryMetadataResult`），`build()` 内部调用 metadata 时也会触发远端请求（有本地回退兜底）
+
+**回滚方式**：`git revert` 对应 commit，恢复 `metadata()` 为纯本地读取逻辑
+
+---
+
+## 2026-05-12 ops-dataset-query - scripts 重构瘦身，消除 ~950 行重复代码
+
+**变更原因**：`chart_analyze.py`/`chart_analyze_mcp.py`（~700 行重复）和 `excel_export.py`/`excel_export_mcp.py`（~250 行重复）存在大量 CLI/MCP 双版本代码重复，维护成本和出错风险高。
+
+**改动点**：
+- 新建 `chart_analyze_core.py`（455 行）— 提取异常检测引擎（ROLE_PATTERNS、detect_field_role、build_alias_map、detect_anomalies_current/trend、generate_report 等）
+- 新建 `excel_export_core.py`（298 行）— 提取 Excel 导出引擎（样式常量、_build_col_layout、_get_row_type、export_to_excel 等）
+- `chart_analyze.py`：665→134 行，删除检测引擎代码，改为从 chart_analyze_core + chart_data_loader + chart_map_core 导入
+- `chart_analyze_mcp.py`：660→171 行，同上，另删除私有 _check_mapping_hit/load_chart_data，改为从 core/chart_data_loader 导入
+- `excel_export.py`：425→134 行，修复 load_chart_data 导入源（从 chart_analyze → chart_data_loader），导出逻辑改为从 excel_export_core 导入
+- `excel_export_mcp.py`：370→137 行，删除私有 _load_chart_data_from_file/_check_mapping_hit，改为从共用模块导入
+
+**验证结果**：10 个脚本 import 全部通过；4 个入口脚本 --help 正常；110 个 pytest 中 109 通过（1 个失败为 ops-amazon-rufus 远端 manifest 不可达，与本次无关）
+
+**影响范围**：ops-dataset-query Skill 的 scripts/ 目录。CLI 和 MCP 模式的 chart_analyze、excel_export 功能行为不变。
+
+**回滚方式**：git checkout 重构前 commit（bd18b88）即可还原
+
 ## 2026-05-09 ops-dataset-query - 精简 CSV 和 API 字段，减少 AI 上下文消耗
 
 **变更原因**：`dataset_fields.csv`（19 字段）和 `datasets.csv`（10 字段）字段过多，浪费 AI 上下文 token；`/api/v1/data-metrics/datasets/query-metadata` API 响应也包含大量冗余字段。

@@ -23,16 +23,27 @@ async def query_metadata(
     dataset: str | None = None,
     table_id: int | None = None,
     skills_dir: str | None = None,
+    session_id: str | None = None,
+    jwt: str | None = None,
 ) -> dict:
-    """查询指定数据集的 metadata（维度/指标字段列表）。不需要认证。
+    """查询指定数据集的 metadata（维度/指标字段列表）。
+
+    指定 dataset 或 table_id 时，优先从远端拉取最新字段信息；
+    远端失败则回退到本地缓存。未指定任何参数时返回本地数据集列表。
+    远端查询需要认证，未提供 session_id/jwt 时自动从本地加载。
 
     Args:
         dataset:    数据集别名（与 table_id 二选一）
         table_id:   数据表 ID（与 dataset 二选一）
         skills_dir: 可选，自定义 Skills 目录（用于读取本地缓存 metadata）
+        session_id: 可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
+        jwt:        可选，已有 JWT（为空则自动加载本地缓存的）
     """
+    from opscli.mcp.tools.helpers import _get_auth_pair
+
+    sid, jw = _get_auth_pair("ops", session_id, jwt)
     try:
-        result = _query_manager().metadata(
+        result = _query_manager(jwt=jw, session_id=sid).metadata(
             dataset_alias=dataset,
             table_id=table_id,
             skills_dir=skills_dir,

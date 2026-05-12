@@ -7,18 +7,11 @@ from opscli.query.manager import QueryManager
 from opscli.skills.models import SkillRecord
 
 
-def test_metadata_reads_from_installed_dataset_fields(tmp_path, monkeypatch):
-    manager = QueryManager()
+def _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload):
+    """辅助函数：设置本地 metadata 并让远端调用失败回退到本地。"""
     skill_root = tmp_path / ".claude" / "skills" / "ops-dataset-query"
     data_dir = skill_root / "data"
     data_dir.mkdir(parents=True)
-    payload = {
-        "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
-        "fields": [
-            {"table_id": 1103, "field_name": "date_id"},
-            {"table_id": 1104, "field_name": "country_name"},
-        ],
-    }
     (data_dir / "query_metadata.json").write_text(json.dumps(payload), encoding="utf-8")
     record = SkillRecord(
         name="ops-dataset-query",
@@ -28,6 +21,21 @@ def test_metadata_reads_from_installed_dataset_fields(tmp_path, monkeypatch):
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    # 模拟远端不可用，回退到本地
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+
+
+def test_metadata_reads_from_installed_dataset_fields(tmp_path, monkeypatch):
+    manager = QueryManager()
+    payload = {
+        "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
+        "fields": [
+            {"table_id": 1103, "field_name": "date_id"},
+            {"table_id": 1104, "field_name": "country_name"},
+        ],
+    }
+    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
 
     result = manager.metadata(dataset_alias="ds_xxx")
 
@@ -38,22 +46,89 @@ def test_metadata_reads_from_installed_dataset_fields(tmp_path, monkeypatch):
 
 def test_metadata_raises_when_dataset_missing(tmp_path, monkeypatch):
     manager = QueryManager()
-    skill_root = tmp_path / ".claude" / "skills" / "ops-dataset-query"
-    data_dir = skill_root / "data"
-    data_dir.mkdir(parents=True)
     payload = {"datasets": [], "fields": []}
-    (data_dir / "query_metadata.json").write_text(json.dumps(payload), encoding="utf-8")
-    record = SkillRecord(
-        name="ops-dataset-query",
-        version="v0.1.0",
-        runtime="claude",
-        root=skill_root,
-        version_file=data_dir / "VERSION.json",
-    )
-    monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
 
     with pytest.raises(DatasetNotFoundError):
         manager.metadata(dataset_alias="missing_ds")
+
+
+def test_metadata_no_args_returns_all_datasets(tmp_path, monkeypatch):
+    """未指定 --dataset / --table-id 时，远端优先返回所有数据集列表，不含字段。"""
+    manager = QueryManager()
+    remote_data = {
+        "datasets": [
+            {"table_id": 1103, "dataset_alias": "ds_sales", "dataset_name": "销售数据"},
+            {"table_id": 1104, "dataset_alias": "ds_inventory", "dataset_name": "库存数据"},
+        ],
+        "fields": [
+            {"table_id": 1103, "field_name": "date_id"},
+            {"table_id": 1104, "field_name": "sku"},
+        ],
+    }
+    monkeypatch.setattr(manager.client, "fetch_query_metadata", lambda: remote_data)
+
+    result = manager.metadata()
+
+    assert result.dataset == {}
+    assert result.fields == []
+    assert result.source == "remote"
+    assert result.all_datasets == remote_data["datasets"]
+
+
+def test_metadata_no_args_falls_back_to_local(monkeypatch, tmp_path):
+    """未指定参数时远端失败，回退到本地缓存的数据集列表。"""
+    manager = QueryManager()
+    payload = {
+        "datasets": [
+            {"table_id": 1103, "dataset_alias": "ds_sales", "dataset_name": "销售数据"},
+        ],
+        "fields": [],
+    }
+    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
+
+    result = manager.metadata()
+
+    assert result.dataset == {}
+    assert result.fields == []
+    assert result.source == "local"
+    assert result.all_datasets == payload["datasets"]
+
+
+def test_metadata_with_args_fetches_from_remote(monkeypatch):
+    """指定了 --dataset 或 --table-id 时，优先从远端获取最新字段信息。"""
+    manager = QueryManager()
+    remote_data = {
+        "datasets": [{"table_id": 1103, "dataset_alias": "ds_sales"}],
+        "fields": [
+            {"table_id": 1103, "field_name": "date_id"},
+            {"table_id": 1103, "field_name": "revenue"},
+        ],
+    }
+    monkeypatch.setattr(manager.client, "fetch_query_metadata", lambda: remote_data)
+
+    result = manager.metadata(dataset_alias="ds_sales")
+
+    assert result.dataset["table_id"] == 1103
+    assert result.fields == remote_data["fields"]
+    assert result.source == "remote"
+    assert result.all_datasets is None
+
+
+def test_metadata_with_args_falls_back_to_local(monkeypatch, tmp_path):
+    """远端失败时回退到本地缓存。"""
+    manager = QueryManager()
+    payload = {
+        "datasets": [{"table_id": 1103, "dataset_alias": "ds_sales"}],
+        "fields": [{"table_id": 1103, "field_name": "date_id"}],
+    }
+    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
+
+    result = manager.metadata(table_id=1103)
+
+    assert result.dataset["table_id"] == 1103
+    assert result.fields == payload["fields"]
+    assert result.source == "local"
 
 
 def test_catalog_defaults_to_remote(monkeypatch):
@@ -180,6 +255,8 @@ def test_build_constructs_payload_from_dimension_metric_and_where(tmp_path, monk
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     result = manager.build(
         dataset_alias="ds_xxx",
@@ -247,6 +324,8 @@ def test_build_defaults_alias_to_global_alias_and_supports_verbose_name(tmp_path
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     result = manager.build(
         dataset_alias="ds_xxx",
@@ -289,6 +368,8 @@ def test_build_uses_summary_expression_for_formula_metric(tmp_path, monkeypatch)
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     result = manager.build(
         dataset_alias="ds_xxx",
@@ -324,6 +405,8 @@ def test_build_supports_having_and_dry_run(tmp_path, monkeypatch):
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     result = manager.build(
         dataset_alias="ds_xxx",
@@ -361,6 +444,8 @@ def test_build_constructs_where_from_repeated_short_flags(tmp_path, monkeypatch)
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     result = manager.build(
         dataset_alias="ds_xxx",
@@ -399,6 +484,8 @@ def test_build_rejects_multiple_where_sources(tmp_path, monkeypatch):
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     with pytest.raises(InvalidPayloadError):
         manager.build(
@@ -427,6 +514,8 @@ def test_build_rejects_invalid_having(tmp_path, monkeypatch):
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     with pytest.raises(InvalidPayloadError):
         manager.build(
@@ -454,6 +543,8 @@ def test_build_writes_output_file(tmp_path, monkeypatch):
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
     output_file = tmp_path / "payloads" / "query.json"
 
     result = manager.build(
@@ -484,6 +575,8 @@ def test_build_raises_when_field_missing(tmp_path, monkeypatch):
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     with pytest.raises(InvalidPayloadError):
         manager.build(dataset_alias="ds_xxx", dimensions=["missing_field"])
@@ -507,6 +600,8 @@ def test_build_rejects_non_ascii_alias(tmp_path, monkeypatch):
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     with pytest.raises(InvalidPayloadError):
         manager.build(dataset_alias="ds_xxx", dimensions=["date_id:日期"])
@@ -533,6 +628,8 @@ def test_build_rejects_ambiguous_verbose_name(tmp_path, monkeypatch):
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     with pytest.raises(InvalidPayloadError):
         manager.build(dataset_alias="ds_xxx", dimensions=["名称"])
@@ -556,6 +653,8 @@ def test_build_and_run_uses_built_payload(tmp_path, monkeypatch):
         version_file=data_dir / "VERSION.json",
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
+    monkeypatch.setattr(manager.client, "fetch_query_metadata",
+                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
     called = {}
 
     def fake_cli_query(request_payload):

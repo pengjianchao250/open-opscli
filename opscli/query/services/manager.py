@@ -77,17 +77,32 @@ class QueryManager:
         skills_dir: str | None = None,
         cwd: Path | None = None,
     ) -> QueryMetadataResult:
-        """按数据集别名或 table_id 查询本地 query metadata。"""
+        """按数据集别名或 table_id 查询 query metadata。
+
+        始终远端优先拉取最新数据，远端失败则回退到本地缓存。
+        未指定 --dataset / --table-id 时返回所有数据集列表（不含字段），
+        指定了筛选条件时返回匹配的数据集及其字段。
+        """
+        # 远端优先，统一拉取最新数据
+        source = "remote"
+        try:
+            remote_data = self.client.fetch_query_metadata()
+            datasets = remote_data.get("datasets") or []
+            fields = remote_data.get("fields") or []
+        except Exception:
+            # 远端失败时回退到本地缓存
+            payload = self._load_query_metadata(skills_dir=skills_dir, cwd=cwd)
+            datasets = payload.get("datasets") or []
+            fields = payload.get("fields") or []
+            source = "local"
+
+        # 未指定筛选条件 → 返回所有数据集列表，不含字段
         if not dataset_alias and table_id is None:
-            raise InvalidPayloadError("必须提供 --dataset 或 --table-id")
+            return QueryMetadataResult(dataset={}, fields=[], source=source, all_datasets=datasets)
 
-        payload = self._load_query_metadata(skills_dir=skills_dir, cwd=cwd)
-        datasets = payload.get("datasets") or []
-        fields = payload.get("fields") or []
-
+        # 指定了数据集 → 按条件匹配
         matched = None
         if dataset_alias:
-            # 优先匹配 dataset_alias（全局唯一标识），其次匹配 dataset_name（业务名）
             matched = next(
                 (item for item in datasets
                  if item.get("dataset_alias") == dataset_alias
@@ -101,11 +116,12 @@ class QueryManager:
             needle = dataset_alias if dataset_alias else str(table_id)
             raise DatasetNotFoundError(f"未找到目标数据集: {needle}")
 
+        # 筛选该数据集对应的字段
         matched_fields = [
             item for item in fields
             if int(item.get("table_id", -1)) == int(matched.get("table_id", -1))
         ]
-        return QueryMetadataResult(dataset=matched, fields=matched_fields, source="local")
+        return QueryMetadataResult(dataset=matched, fields=matched_fields, source=source)
 
     def run(self, *, payload_path: str) -> dict:
         """读取本地 payload 文件并转发执行查询。"""

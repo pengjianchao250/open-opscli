@@ -55,6 +55,14 @@ def metadata(
             "data": result.to_dict(),
             "error": None,
         }
+        # 未指定数据集时，提示如何获取具体数据集的字段信息
+        if not dataset and table_id is None:
+            if result.source == "remote":
+                payload["hint"] = "以上为远端最新数据集列表。如需查看特定数据集的最新字段信息，请使用 --dataset <alias> 或 --table-id <id> 指定数据集"
+            else:
+                payload["hint"] = "远端获取失败，已回退到本地缓存的数据集列表。如需更新本地数据，请执行 opscli skills upgrade ops-dataset-query"
+        elif result.source == "local":
+            payload["hint"] = "远端获取失败，已回退到本地缓存数据。如需更新本地数据，请执行 opscli skills upgrade ops-dataset-query"
     except Exception as exc:
         _emit(_error_payload("query metadata", exc), pretty)
         raise typer.Exit(1)

@@ -36,7 +36,8 @@ description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执
 
 > **认证按动作触发**：本地知识检索不要求登录；涉及远端 catalog、查询执行、图表运行或升级时，必须确认有效 `session_id`。
 
-- 本地只读动作可直接执行：`search`、`fetch`、`query_catalog(source="local")`、`query_metadata`
+- 本地只读动作可直接执行：`search`、`fetch`、`query_catalog(source="local")`
+- `query_metadata` 远端优先，远端失败自动回退本地（无需额外检查）
 - 远端动作前先调用 `auth_is_authenticated(session_id)` 检测 session 有效性：`query_catalog()`、`query_simple`、`query_build_and_run`、`query_run`、`query_chart(run=True)`、`skills_upgrade`
 - 若返回 `false` 或报错，说明 `session_id` 缺失或已过期
 - **若 `session_id` 缺失/过期**：
@@ -77,11 +78,12 @@ auth_is_authenticated(session_id="xxx")
 
 **标准顺序**：
 1. 用 `search(query="...")` 或 `fetch(id="...")` 确认目标 `dataset_alias` 和字段
-2. 如需进一步确认公式字段、聚合方式，再调用 `query_metadata(dataset=...)`
-3. 如果数据集或字段不存在，先检查本地数据是否为空/placeholder
-4. 为空时执行 `skills_upgrade(name="ops-dataset-query")`
-5. 升级后重新执行字段检查
-6. 若升级后仍不存在，明确告知用户当前本地索引和 metadata 中没有该字段，不要猜字段名继续查
+2. 用 `query_metadata()`（无参数）查看可用数据集列表
+3. 如需获取**最新**字段信息（含公式字段、聚合方式），调用 `query_metadata(dataset="<alias>")`（远端优先，自动回退本地）
+4. 如果数据集或字段不存在，先检查本地数据是否为空/placeholder
+5. 为空时执行 `skills_upgrade(name="ops-dataset-query")`
+6. 升级后重新执行字段检查
+7. 若升级后仍不存在，明确告知用户当前本地索引和 metadata 中没有该字段，不要猜字段名继续查
 
 **【强制】搜索结果为空时的处理流程**：
 > 当 `search()` 返回空列表时，不要直接告知用户"找不到"。先确认本地数据是否为空/placeholder；为空时升级本地数据再重试。
@@ -142,7 +144,7 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 
 | Tool | 用途 | 认证要求 | 详细文档 |
 |------|------|---------|---------|
-| `query_metadata` | 读取指定数据集的 query metadata（字段定义、可用聚合方式） | 不需要 | `references/mcp-advanced-guide.md` |
+| `query_metadata` | 读取数据集 metadata。无参数返回数据集列表；指定参数时远端优先获取最新字段 | 远端时需要 | `references/mcp-advanced-guide.md` |
 | `query_catalog` | 读取数据集业务语义索引（intents 匹配） | 远端时需要 | `references/mcp-advanced-guide.md` |
 
 ---
@@ -196,8 +198,9 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 | 场景 | 解决方法 |
 |------|---------|
 | 本地数据为空 | `skills_upgrade(name="ops-dataset-query")` |
-| dataset_alias 不存在 | 检查拼写或 `skills_upgrade` 同步最新数据集 |
-| 字段映射全部失败 | `skills_upgrade(name="ops-dataset-query", force=True)` |
+| dataset_alias 不存在 | 先 `query_metadata()` 查看可用数据集列表；确认拼写或 `skills_upgrade` 同步最新数据集 |
+| 字段映射全部失败 | 先 `query_metadata(dataset="<alias>")` 远端获取最新字段；仍失败则 `skills_upgrade(name="ops-dataset-query", force=True)` |
+| 仅需确认单个数据集字段 | `query_metadata(dataset="<alias>")` 按需远端查询，无需全量升级 |
 | 未登录 / session 无效 | `auth_login_start()` → 浏览器授权 → `auth_login_poll()` |
 | Token 过期 | `auth_token_refresh(session_id)`；如 session 也过期则重新 Device Flow 授权 |
 | payload 文件不存在 | 先 `query_build` 生成 |

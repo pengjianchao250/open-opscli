@@ -12,10 +12,14 @@ class QueryMetadataResult:
     dataset: dict
     fields: list[dict]
     source: str
+    all_datasets: list[dict] | None = None
 
     def to_dict(self) -> dict:
-        return {
+        result: dict = {
             "dataset": self.dataset,
             "fields": self.fields,
             "source": self.source,
         }
+        if self.all_datasets is not None:
+            result["all_datasets"] = self.all_datasets
+        return result

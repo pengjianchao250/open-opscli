@@ -10,11 +10,13 @@ runner = CliRunner()
 
 def test_metadata_outputs_doc_aligned_json(monkeypatch):
     class DummyResult:
+        source = "remote"
+
         def to_dict(self):
             return {
                 "dataset": {"table_id": 1103, "dataset_alias": "ds_xxx"},
                 "fields": [{"field_name": "date_id"}],
-                "source": "local",
+                "source": self.source,
             }
 
     class DummyManager:
@@ -30,6 +32,96 @@ def test_metadata_outputs_doc_aligned_json(monkeypatch):
     assert payload["success"] is True
     assert payload["command"] == "query metadata"
     assert payload["data"]["dataset"]["table_id"] == 1103
+
+
+def test_metadata_no_args_outputs_hint(monkeypatch):
+    """未指定 --dataset / --table-id 时，远端优先返回数据集列表并附带 hint。"""
+    class DummyResult:
+        source = "remote"
+
+        def to_dict(self):
+            return {
+                "dataset": {},
+                "fields": [],
+                "source": self.source,
+                "all_datasets": [
+                    {"table_id": 1103, "dataset_alias": "ds_sales", "dataset_name": "销售数据"},
+                ],
+            }
+
+    class DummyManager:
+        def metadata(self, **kwargs):
+            return DummyResult()
+
+    monkeypatch.setattr("opscli.query.commands.cli.QueryManager", lambda: DummyManager())
+
+    result = runner.invoke(app, ["metadata"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["success"] is True
+    assert payload["command"] == "query metadata"
+    assert payload["data"]["all_datasets"] == [{"table_id": 1103, "dataset_alias": "ds_sales", "dataset_name": "销售数据"}]
+    assert "hint" in payload
+    assert "远端最新数据集列表" in payload["hint"]
+
+
+def test_metadata_no_args_local_fallback_hint(monkeypatch):
+    """未指定参数时远端失败，回退到本地缓存并附带升级提示。"""
+    class DummyResult:
+        source = "local"
+
+        def to_dict(self):
+            return {
+                "dataset": {},
+                "fields": [],
+                "source": self.source,
+                "all_datasets": [
+                    {"table_id": 1103, "dataset_alias": "ds_sales", "dataset_name": "销售数据"},
+                ],
+            }
+
+    class DummyManager:
+        def metadata(self, **kwargs):
+            return DummyResult()
+
+    monkeypatch.setattr("opscli.query.commands.cli.QueryManager", lambda: DummyManager())
+
+    result = runner.invoke(app, ["metadata"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["success"] is True
+    assert "hint" in payload
+    assert "远端获取失败" in payload["hint"]
+    assert "回退到本地缓存" in payload["hint"]
+
+
+def test_metadata_local_fallback_adds_hint(monkeypatch):
+    """指定数据集但远端失败回退到本地时，附带升级提示。"""
+    class DummyResult:
+        source = "local"
+
+        def to_dict(self):
+            return {
+                "dataset": {"table_id": 1103, "dataset_alias": "ds_xxx"},
+                "fields": [{"field_name": "date_id"}],
+                "source": self.source,
+            }
+
+    class DummyManager:
+        def metadata(self, **kwargs):
+            return DummyResult()
+
+    monkeypatch.setattr("opscli.query.commands.cli.QueryManager", lambda: DummyManager())
+
+    result = runner.invoke(app, ["metadata", "--dataset", "ds_xxx"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["success"] is True
+    assert "hint" in payload
+    assert "远端获取失败" in payload["hint"]
 
 
 def test_run_outputs_doc_aligned_json(monkeypatch, tmp_path):
