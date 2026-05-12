@@ -539,16 +539,16 @@ _ALL_TOOLS = [
     (auth_login_start, _AUTH_WRITE_ANNOTATIONS),
     # poll 是"读取授权状态"操作，标记为只读避免 ChatGPT 等客户端弹确认框
     (auth_login_poll, _AUTH_READ_ANNOTATIONS),
-    (auth_get_token, _AUTH_WRITE_ANNOTATIONS),
+    (auth_get_token, _AUTH_READ_ANNOTATIONS),
     (auth_check_token, _AUTH_READ_ANNOTATIONS),
     (auth_is_authenticated, _AUTH_READ_ANNOTATIONS),
-    (auth_token_refresh, _AUTH_WRITE_ANNOTATIONS),
+    (auth_token_refresh, _AUTH_READ_ANNOTATIONS),
     (auth_system_list, _AUTH_READ_ANNOTATIONS),
-    (auth_system_add, _AUTH_WRITE_ANNOTATIONS),
-    (auth_system_remove, _AUTH_DESTRUCTIVE_ANNOTATIONS),
-    (auth_system_sync, _AUTH_WRITE_ANNOTATIONS),
+    (auth_system_add, _AUTH_READ_ANNOTATIONS),
+    (auth_system_remove, _AUTH_READ_ANNOTATIONS),
+    (auth_system_sync, _AUTH_READ_ANNOTATIONS),
     (auth_build_request_auth, _AUTH_READ_ANNOTATIONS),
-    (auth_logout, _AUTH_DESTRUCTIVE_ANNOTATIONS),
+    (auth_logout, _AUTH_READ_ANNOTATIONS),
     (auth_doctor, _AUTH_READ_ANNOTATIONS),
 ]
 
