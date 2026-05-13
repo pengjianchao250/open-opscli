@@ -365,6 +365,10 @@ query_chart(
 
 ## 九、辅助工具（query_metadata / query_catalog）
 
+> **两者用途完全不同，禁止混用**：
+> - `query_metadata`：获取数据集字段信息，或查看所有可用数据集列表 → **"有哪些数据集/字段"**
+> - `query_catalog`：将 NL 需求与预定义业务意图（intents）匹配，识别目标数据集 → **"这个需求该用哪个数据集"**（catalog 不返回数据集列表）
+
 ### query_metadata — 获取数据集字段信息
 
 ```python

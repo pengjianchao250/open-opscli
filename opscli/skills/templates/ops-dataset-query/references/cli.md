@@ -140,7 +140,7 @@ opscli skills upgrade ops-dataset-query
 | 文件 | 内容 | 说明 |
 |------|------|------|
 | `data/VERSION.json` | 版本号 | `{"name": "ops-dataset-query", "version": "v1.x.x"}` |
-| `data/dataset_catalog.json` | 业务语义索引 | version、intent_count、intents（使用案例/关键词/场景/优先级/数据集映射）、query_strategy |
+| `data/dataset_catalog.json` | **预定义业务意图集合**（非数据集列表） | version、intent_count、intents（使用案例/关键词/场景/优先级/数据集映射）、query_strategy |
 | `data/dataset_fields.csv` | 字段明细 | dataset_alias、field_name、verbose_name、global_alias、field_type、formula_config、detail_expression、summary_expression 等 |
 | `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_type、dataset_category、data_source、main_dttm_col、inner_where_enabled、cache_timeout、description |
 | `data/query_metadata.json` | 查询元数据 | 字段类型映射、可用聚合方式等 |
@@ -185,7 +185,9 @@ opscli query metadata --table-id 123 --pretty
 
 ### `opscli query catalog`
 
-读取数据集业务语义索引（dataset catalog）。默认远端优先，远端失败时回退本地缓存；用于自然语言需求匹配 intents 后选出候选数据集。
+> ⚠️ **catalog ≠ 数据集列表**：catalog 返回的是预定义业务意图集合（intents），不是数据集清单。需要查看所有可用数据集请用 `opscli query metadata`（无参数）。
+
+读取预定义业务意图索引。默认远端优先，远端失败时回退本地缓存；专用于将自然语言需求与 intents 匹配，从而识别目标数据集、推荐 default_filters 和 comparison_strategy。
 
 ```
 选项：

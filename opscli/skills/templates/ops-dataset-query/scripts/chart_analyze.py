@@ -63,10 +63,7 @@ def main() -> None:
         discovered = discover_data_dir(skills_dir=args.skills_dir)
         if discovered is None:
             # 尝试自动升级安装
-            if not args.no_auto_upgrade and try_upgrade(
-                Path.home() / ".claude" / "skills" / "ops-dataset-query" / "data",
-                caller="chart_analyze",
-            ):
+            if not args.no_auto_upgrade and try_upgrade(caller="chart_analyze"):
                 discovered = discover_data_dir(skills_dir=args.skills_dir)
             if discovered is None:
                 print(

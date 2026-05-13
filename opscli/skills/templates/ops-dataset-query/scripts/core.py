@@ -267,14 +267,14 @@ def resolve_field_alias(field_index: dict, dataset_alias: str, global_alias: str
 # ---------------------------------------------------------------------------
 
 
-def try_upgrade(data_dir: Path, *, caller: str = "core") -> bool:
+def try_upgrade(data_dir: Path | None = None, *, caller: str = "core") -> bool:
     """调用 opscli skills upgrade 更新本地数据。
 
     当本地索引无法匹配字段时，可能是本地数据过期或未同步，
     通过 upgrade 拉取最新远端数据后再重试。
 
     Args:
-        data_dir: 当前数据目录路径
+        data_dir: 保留参数（未使用），调用方可传入 data_dir 方便将来扩展
         caller: 调用来源标识（日志前缀）
 
     Returns:

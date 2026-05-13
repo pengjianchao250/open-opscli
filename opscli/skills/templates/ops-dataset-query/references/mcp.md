@@ -113,7 +113,7 @@ auth_is_authenticated(session_id="xxx")
 | 文件 | 内容 | 说明 |
 |------|------|------|
 | `data/VERSION.json` | 版本号 | `{"name": "ops-dataset-query", "version": "v1.x.x"}` |
-| `data/dataset_catalog.json` | 业务语义索引 | version、intent_count、intents、query_strategy |
+| `data/dataset_catalog.json` | **预定义业务意图集合**（非数据集列表） | version、intent_count、intents、query_strategy |
 | `data/dataset_fields.csv` | 字段明细 | dataset_alias、field_name、verbose_name、global_alias、field_type、formula_config 等 |
 | `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_type、inner_where_enabled 等 |
 | `data/query_metadata.json` | 查询元数据 | 字段类型映射、可用聚合方式等 |
@@ -144,8 +144,8 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 
 | Tool | 用途 | 认证要求 | 详细文档 |
 |------|------|---------|---------|
-| `query_metadata` | 读取数据集 metadata。无参数返回数据集列表；指定参数时远端优先获取最新字段 | 远端时需要 | `references/mcp-advanced-guide.md` |
-| `query_catalog` | 读取数据集业务语义索引（intents 匹配） | 远端时需要 | `references/mcp-advanced-guide.md` |
+| `query_metadata` | 读取数据集 metadata。**无参数返回数据集列表**；指定参数时远端优先获取最新字段 | 远端时需要 | `references/mcp-advanced-guide.md` |
+| `query_catalog` | 将 NL 需求与**预定义业务意图（intents）匹配**，识别目标数据集（**非数据集列表**，查数据集列表请用 `query_metadata`） | 远端时需要 | `references/mcp-advanced-guide.md` |
 
 ---
 

@@ -76,9 +76,11 @@ version: v0.0.1
 
 所有远端查询动作必须统一走选定模式下的正式查询入口，**禁止直接调用后端 HTTP 接口**。
 
-### 铁律三：Catalog 优先选数据集
+### 铁律三：Catalog 意图匹配 → 确定数据集
 
-当用户只给出自然语言需求、没有指定 dataset 时，**优先使用远端 catalog 的 `intents`** 匹配数据集；仅当 catalog 不可用或 intents 无法匹配时，才回退到本地关键词检索。
+> ⚠️ **catalog ≠ 数据集列表**：catalog 只包含预定义业务意图（intents），不返回数据集列表。需要查看所有可用数据集请用 `opscli query metadata`（CLI）或 `query_metadata()`（MCP）。
+
+当用户只给出自然语言需求、没有指定 dataset 时，**优先使用远端 catalog 的 `intents`** 做意图匹配，从中识别最匹配的数据集别名；仅当 catalog 不可用或 intents 无法匹配时，才回退到本地关键词检索。
 
 ### 铁律四：子查询数据集强制简化接口
 

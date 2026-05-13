@@ -74,9 +74,7 @@ def main() -> None:
         discovered = discover_data_dir(skills_dir=args.skills_dir)
         if discovered is None:
             # 未找到数据目录，尝试自动升级兜底
-            if not args.no_auto_upgrade and try_upgrade(
-                Path.home() / ".claude" / "skills" / "ops-dataset-query" / "data"
-            ):
+            if not args.no_auto_upgrade and try_upgrade():
                 discovered = discover_data_dir(skills_dir=args.skills_dir)
             if discovered is None:
                 err = {
