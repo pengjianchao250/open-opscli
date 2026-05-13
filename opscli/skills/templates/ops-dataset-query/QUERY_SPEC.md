@@ -11,7 +11,7 @@
 
 | # | 铁律 | 核心要点 |
 |---|------|---------|
-| 1 | **认证前置** | 远端查询前必须确认 session_id 有效，无效则重新授权 |
+| 1 | **认证前置** | 远端查询前必须确认已登录；HTTP/SSE 模式用 `auth_mcp_login()` 一步登录；session_id 可不传（自动加载） |
 | 2 | **工具优先级** | `query_simple` > `query_build_and_run` > `query_build`+`query_run`；禁止跳级 |
 | 3 | **innerWhere 禁用** | `inner_where_enabled=true` 的数据集禁止使用 `query_run`，必须用 `query_simple` |
 | 4 | **公式字段禁止聚合** | 含 `summary_expression` 的字段（ACOS/ROAS 等）禁止额外传 `aggregation` |
@@ -26,29 +26,28 @@
 
 ## 二、认证前置流程
 
-> **规则**：`query_build` 和 `query_catalog(source="local")` 不需要认证；所有远端查询必须先确认 session_id 有效。
+> **规则**：`query_build` 和 `query_catalog(source="local")` 不需要认证；所有远端查询必须先确认已登录。
+> **重要**：所有需要认证的工具均支持 **自动加载本地凭证**，已登录过的会话无需重复传入 `session_id`。
+
+### 方式 A（推荐）：auth_mcp_login 一步登录
+
+> 适用于 **HTTP/SSE 模式**（Claude Code、Cursor 等 MCP 客户端）。
+> API Key 即身份，全程自动，**无需浏览器交互，无需 user_code**。
+
+```python
+# 调用一次即完成登录，凭证自动保存（按 API Key + Agent 名称双维度隔离）
+result = auth_mcp_login()
+# 成功返回：{ success: True, data: { status, session_id, email, expires_at, saved_locally } }
+# 后续所有工具调用无需再传 session_id，自动从本地加载
+```
 
 ### 标准认证检查
 
 ```python
-# 检查 session 有效性
-auth_is_authenticated(session_id="<已保存的 session_id>")
-# 返回 true → 继续查询
-# 返回 false 或报错 → 执行 Device Flow 授权
-```
-
-### Device Flow 授权流程
-
-```python
-# 步骤 1：启动授权
-result = auth_login_start()
-# → {"verification_url": "...", "user_code": "XXXX-XXXX", "device_code": "...", "interval": 5}
-
-# 步骤 2：提示用户在浏览器打开 verification_url 并输入 user_code
-
-# 步骤 3：按 interval 秒轮询，直到 status=authorized
-result = auth_login_poll(device_code="<上一步的 device_code>")
-# → {"status": "authorized", "session_id": "860b0636..."} 后保存 session_id
+# 检查是否已登录（session_id 可不传，自动从本地加载）
+auth_is_authenticated()
+# 返回 authenticated=true → 继续查询
+# 返回 authenticated=false → 执行 auth_mcp_login（HTTP/SSE）或 Device Flow（stdio）
 ```
 
 ### 认证要求速查
@@ -58,12 +57,15 @@ result = auth_login_poll(device_code="<上一步的 device_code>")
 | `query_build` | ❌ 不需要 |
 | `query_catalog(source="local")` | ❌ 不需要 |
 | `query_metadata`（无参数，本地列表） | ❌ 不需要 |
-| `query_metadata(dataset="xxx")`（远端获取字段） | ✅ 建议提供 |
-| `query_catalog()`（远端，默认） | ✅ 建议提供 |
-| `query_simple` | ✅ 必须 |
-| `query_build_and_run` | ✅ 必须 |
-| `query_run` | ✅ 必须 |
-| `query_chart(run=True)` | ✅ 必须 |
+| `query_metadata(dataset="xxx")`（远端获取字段） | 自动加载（建议登录后调用） |
+| `query_catalog()`（远端，默认） | 自动加载（建议登录后调用） |
+| `query_simple` | 自动加载（未登录时报错） |
+| `query_build_and_run` | 自动加载（未登录时报错） |
+| `query_run` | 自动加载（未登录时报错） |
+| `query_chart(run=True)` | 自动加载（未登录时报错） |
+
+> **说明**：所有工具的 `session_id` 参数均为**可选**。未传时自动从本地 CredentialStore 加载已保存的凭证。
+> 首次使用或凭证失效时，运行 `auth_mcp_login()`（HTTP/SSE 模式）或 Device Flow 完成登录即可。
 
 ---
 
@@ -109,7 +111,7 @@ result = auth_login_poll(device_code="<上一步的 device_code>")
 | `order_by` | list[dict] | 否 | 排序 |
 | `limit` | integer | 否 | 默认 20 |
 | `offset` | integer | 否 | 默认 0 |
-| `session_id` | string | **是** | OAuth 授权后的 session_id |
+| `session_id` | string | 否 | 可选，不传时自动从本地凭证加载 |
 
 > ⚠️ MCP 参数用 `snake_case`：`table_id` ✅，`tableId` ❌ → 报 `Unexpected keyword argument`
 
@@ -227,7 +229,7 @@ query_build_and_run(
     where_conditions=["date_id|>=|\"2026-01-01\"", "platform|=|\"Amazon\""],
     order_by=["f_price:desc"],
     limit=50,
-    session_id="860b0636485b5188a2b9b4ed5210e736"
+    # session_id 可不传，自动从本地凭证加载
 )
 ```
 
@@ -584,8 +586,8 @@ for ds in result["data"]["datasets"]:
 | 子查询数据集无 filters | `QS-EXE-005` | 至少加一个日期过滤条件 |
 | 手写 payload 缺 expr | 422 Unprocessable Entity | `query.select.*.expr` 和 `alias` 均为必填 |
 | dataset_alias 不存在 | 查询报错 / 返回空 | 先 `query_metadata()` 查看所有可用数据集 |
-| session 无效 | auth 报错 | `auth_login_start()` → Device Flow 授权 |
-| Token 过期 | 401 Unauthorized | `auth_token_refresh(session_id=...)` |
+| 未登录 / 本地无凭证 | auth 报错 / authenticated=false | HTTP/SSE：`auth_mcp_login()`；stdio：Device Flow |
+| Token 过期 | 401 Unauthorized | `auth_token_refresh()` 刷新（session_id 可不传） |
 | chart_uuid 不存在 | 404 | 确认图表 ID 正确，检查访问权限 |
 | MCP 参数用了 camelCase | `Unexpected keyword argument` | 改用 snake_case：`table_id` 而非 `tableId` |
 | catalog default_filters 返回 0 行 | 无错误码 | 去掉 default_filters 后重试 |
@@ -700,8 +702,8 @@ for ds in result["data"]["datasets"]:
 ## 十七、查询前自检清单
 
 ```
-□ 认证：session_id 是否有效？（auth_is_authenticated）
-□ 认证：session_id 是否有效？（auth_is_authenticated）
+□ 认证：是否已登录？（auth_is_authenticated，不传 session_id 自动检查本地凭证）
+□ 认证：未登录时 → HTTP/SSE 模式执行 auth_mcp_login()；stdio 模式执行 Device Flow
 □ 时间：日期范围是否明确？近 N 天是否用 N-1 推算起始日期？"最近一个月"是否已澄清？
 □ 月份天数：跨月对比时天数是否对等？本月前N天 vs 上月完整月 → 澄清
 □ 数据集：是否唯一确认？（query_catalog 意图匹配 → 用户确认）
@@ -728,15 +730,17 @@ for ds in result["data"]["datasets"]:
 ### 工作流 A：已知数据集，直接查询
 
 ```
-1. auth_is_authenticated(session_id)
-   → 无效：Device Flow 授权
+1. auth_is_authenticated()                      # session_id 不传，自动检查本地凭证
+   → authenticated=false：
+       HTTP/SSE 模式 → auth_mcp_login()         # 一步登录，自动保存凭证
+       stdio 模式    → auth_login_start() + auth_login_poll()
 
 2. query_metadata(dataset="<alias>")
    → 确认目标字段存在
    → 检查是否为公式字段（summary_expression 非空）
    → 确认 inner_where_enabled
 
-3. query_simple(...) 执行查询
+3. query_simple(...) 执行查询                   # session_id 可不传，自动加载
 
 4. 输出结果（使用 verbose_name 作为列名）
 ```
@@ -744,7 +748,8 @@ for ds in result["data"]["datasets"]:
 ### 工作流 B：用户未指定数据集
 
 ```
-1. auth_is_authenticated(session_id)
+1. auth_is_authenticated()                      # 自动检查本地凭证
+   → authenticated=false → 先完成登录（见工作流 A 步骤 1）
 
 2. query_catalog() 做意图匹配
    → 匹配到多个：列出候选，等用户选择
@@ -752,22 +757,23 @@ for ds in result["data"]["datasets"]:
 
 3. query_metadata(dataset="<确认的 alias>") 校验目标字段
 
-4. query_simple(...) 执行查询
+4. query_simple(...) 执行查询                   # session_id 可不传，自动加载
 ```
 
 ### 工作流 C：图表数据分析
 
 ```
-1. auth_is_authenticated(session_id)
+1. auth_is_authenticated()                      # 自动检查本地凭证
+   → authenticated=false → 先完成登录
 
-2. query_chart(chart_uuid="...", run=True, session_id="...")
+2. query_chart(chart_uuid="...", run=True)      # session_id 可不传，自动加载
    → 获取图表所有子查询结果
 
 3. 分析 merged.rows 中的数据
    → 注意 _query_index 字段区分多个子查询
 
 4.（可选）需要环比时：
-   query_simple(..., data_comparison={...}, session_id="...")
+   query_simple(..., data_comparison={...})     # session_id 可不传，自动加载
    → 对比当期与上期数据
 ```
 

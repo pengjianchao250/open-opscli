@@ -1,5 +1,35 @@
 # 待归档变更记录
 
+## 2026-05-13 mcp/tools/query.py - 优化 AI agent 查询前置检查引导
+
+**变更原因**：AI agent 调用查询工具时，只有查询出错后才去读 query_spec 规范，未能提前检测 Skill 安装状态并按规范执行
+**改动点**：`opscli/mcp/tools/query.py` 各查询工具的 docstring
+**具体改动**：
+- `query_spec` docstring：明确调用条件为"未安装 Skill 时使用"，并说明 AI agent 应先通过 `skills_status / skills_list` 检测安装状态再决定是否调用
+- `query_simple`、`query_run`、`query_build_and_run`、`query_chart` docstring：将"首次使用提示"升级为"前置检查（必须执行）"，明确两步流程：先检测 Skill → 已安装读 Skill 目录文档，未安装调 query_spec()
+- 同步更新模块顶部注释中 query_spec 的描述
+**验证结果**：docstring 语义清晰，符合铁律要求，无运行时代码改动，无需测试
+**影响范围**：MCP 工具描述（AI agent 决策路径），不影响实际查询逻辑
+**回滚方式**：还原 query.py 对应 docstring 文本即可
+---
+
+## 2026-05-13 QUERY_SPEC.md - 更新 MCP 授权方式为 auth_mcp_login
+
+**变更原因**：MCP 授权方式已从 Device Flow（需浏览器）升级为 `auth_mcp_login` 一步登录（HTTP/SSE 模式，全自动），文档未同步
+**改动点**：`opscli/skills/templates/ops-dataset-query/QUERY_SPEC.md`
+- 第一章铁律1：更新认证描述，注明 session_id 可自动加载
+- 第二章：新增推荐方式 `auth_mcp_login`（一步登录），Device Flow 降为回退方式（仅 stdio 模式）；新增"自动加载本地凭证"说明
+- 第四章 query_simple 参数表：session_id 由"必须"改为"可选，不传时自动加载"
+- 第十四章错误处理：session 无效处理改为按模式分流（HTTP/SSE → auth_mcp_login；stdio → Device Flow）；auth_token_refresh 去掉 session_id 必传说明
+- 第十七章自检清单：认证项改为"自动检查本地凭证"
+- 第十八章工作流 A/B/C：认证步骤全部更新，query 调用注明 session_id 可不传
+- query_build_and_run 示例：移除硬编码 session_id
+
+**验证结果**：文档内容与 auth.py 的实现对齐，auth_mcp_login 为首推，Device Flow 为回退
+**影响范围**：AI Agent 读取此规范文档时的授权行为
+**回滚方式**：git checkout 还原该文件
+---
+
 ## 2026-05-12 query_simple MCP 工具 - dimensions/metrics 兼容字符串格式
 
 **变更原因**：上游 Agent 调用 `query_simple` MCP Tool 时传入字符串格式的 dimensions（`'dept_name'`）和 metrics（`'amount:SUM'`），但 Pydantic 模型定义为 `list[dict]`，导致校验失败报 `ValidationError`。

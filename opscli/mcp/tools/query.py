@@ -1,7 +1,7 @@
 """Query 工具模块。
 
 将 opscli query 子模块的核心能力暴露为 MCP 工具：
-- query_spec            — 读取查询规范文档（仅在未安装 ops-dataset-query Skill 时调用）
+- query_spec            — ！！！【重要】读取查询规范文档（仅在未安装 ops-dataset-query Skill 时调用）
 - query_metadata        — 查询数据集 metadata（维度/指标字段）
 - query_catalog         — 读取数据集业务语义索引（自然语言匹配数据集）
 - query_build           — 构造标准 query payload（不执行）
