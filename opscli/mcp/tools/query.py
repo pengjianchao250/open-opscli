@@ -1,6 +1,7 @@
 """Query 工具模块。
 
 将 opscli query 子模块的核心能力暴露为 MCP 工具：
+- query_spec            — 读取查询规范文档（仅在未安装 ops-dataset-query Skill 时调用）
 - query_metadata        — 查询数据集 metadata（维度/指标字段）
 - query_catalog         — 读取数据集业务语义索引（自然语言匹配数据集）
 - query_build           — 构造标准 query payload（不执行）
@@ -17,6 +18,52 @@
 from __future__ import annotations
 
 from .helpers import _err, _ok, _query_manager
+
+
+async def query_spec() -> dict:
+    """读取 ops-dataset-query 查询规范文档（QUERY_SPEC.md）。
+
+    【调用条件】仅在当前环境**未安装** ops-dataset-query Skill 时才需要调用本工具。
+    AI Agent 应自行检测当前环境，已安装该 Skill 时优先使用 Skill 目录内更完整的文档。
+
+    规范内容包括：
+    - 10 条核心铁律（认证、优先级、innerWhere、公式字段、dataComparison 等）
+    - 各查询工具（query_simple / query_build_and_run / query_run / query_chart）的参数规范与示例
+    - 字段歧义澄清规则（数据集选择、公式字段、币种、人员歧义等）
+    - 常见错误处理速查
+    - 典型工作流（直接查询 / 意图匹配 / 图表分析 / 数据更新）
+
+    规范文档内嵌在 MCP 服务器包中，适用于未安装 ops-dataset-query Skill 的环境。
+
+    Returns:
+        {"success": true, "data": {"spec": "<Markdown 文档内容>", "source": "<文件路径>"}}
+        或 {"success": false, "error": "<错误原因>"}
+    """
+    from pathlib import Path
+
+    # 规范文档内嵌在 opscli 包的模板目录中
+    # Path(__file__) = opscli/mcp/tools/query.py
+    # parents[2]     = opscli/（包根目录）
+    spec_path = (
+        Path(__file__).resolve().parents[2]
+        / "skills"
+        / "templates"
+        / "ops-dataset-query"
+        / "QUERY_SPEC.md"
+    )
+
+    if not spec_path.exists():
+        return _err(
+            FileNotFoundError(
+                f"规范文档不存在：{spec_path}。请检查 opscli 安装是否完整。"
+            )
+        )
+
+    try:
+        content = spec_path.read_text(encoding="utf-8")
+        return _ok({"spec": content, "source": str(spec_path)})
+    except Exception as exc:
+        return _err(exc)
 
 
 async def query_metadata(
@@ -195,6 +242,9 @@ async def query_simple(
 ) -> dict:
     """基于简化参数直接执行查询。服务端自动处理 innerWhere、translate、MOY 展开等技术细节。
 
+    【首次使用提示】首次执行查询前，请先调用 query_spec() 阅读完整查询规范，
+    了解铁律、公式字段处理、innerWhere 限制、dataComparison 用法等关键规则。
+
     推荐优先使用本工具替代 query_build_and_run，无需理解 innerWhere、translate、
     cacl_type 等复杂概念，仅需 7 个纯业务参数即可完成聚合、对比、趋势分析。
 
@@ -254,6 +304,9 @@ async def query_run(
 ) -> dict:
     """读取本地 payload JSON 文件并转发至服务端执行查询。
 
+    【首次使用提示】首次执行查询前，请先调用 query_spec() 阅读完整查询规范，
+    了解手写 payload 的必填字段（expr + alias）以及 innerWhere 数据集的禁用限制。
+
     如果未提供 session_id / jwt，会自动尝试从本地加载已保存的凭据。
 
     Args:
@@ -293,6 +346,8 @@ async def query_build_and_run(
     jwt: str | None = None,
 ) -> dict:
     """构造 query payload 并立即执行，一步返回数据结果。
+
+    【首次使用提示】首次执行查询前，请先调用 query_spec() 阅读完整查询规范。
 
     如果未提供 session_id / jwt，会自动尝试从本地加载已保存的凭据。
 
@@ -421,6 +476,7 @@ async def query_chart_doc(
 
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS = [
+    query_spec,
     query_metadata,
     query_catalog,
     query_simple,

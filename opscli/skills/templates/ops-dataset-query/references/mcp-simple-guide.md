@@ -155,8 +155,7 @@ query_build_and_run(
     metrics=["sales:SUM"],
     where_conditions=["date_id|>=|\"2026-01-01\""],
     limit=50,
-    session_id="860b0636485b5188a2b9b4ed5210e736",
-    skills_dir="/Users/mask/.config/opencode/skills"
+    session_id="860b0636485b5188a2b9b4ed5210e736"
 )
 ```
 

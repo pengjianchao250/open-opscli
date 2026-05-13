@@ -12,7 +12,7 @@ MCP 使用指南
 
 【更新数据】
 本脚本不执行更新，更新请通过 MCP Tool：
-    skills_upgrade(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencode/skills")
+    skills_upgrade(name="ops-dataset-query")
 
 ================================================================================
 

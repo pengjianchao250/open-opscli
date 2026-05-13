@@ -249,17 +249,17 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 # 0. 先检查 session（skills_install / skills_upgrade 需要认证）
 auth_is_authenticated(session_id="xxx")
 
-# 安装
-skills_install(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencode/skills")
+# 安装（skills_dir 可选，未指定时自动发现 ~/.claude/skills 等标准路径）
+skills_install(name="ops-dataset-query")
 
 # 强制重装
-skills_install(name="ops-dataset-query", force=True, skills_dir="/Users/mask/.config/opencode/skills")
+skills_install(name="ops-dataset-query", force=True)
 
 # 查看版本
-skills_status(skills_dir="/Users/mask/.config/opencode/skills")
+skills_status()
 
 # 升级
-skills_upgrade(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencode/skills")
+skills_upgrade(name="ops-dataset-query")
 ```
 
 ---

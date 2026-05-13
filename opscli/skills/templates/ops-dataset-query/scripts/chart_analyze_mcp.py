@@ -40,7 +40,7 @@ MCP 使用指南（供 AI Agent 参考）
 【本地数据缺失时】
 如脚本报错提示字段映射失败，先调用 MCP skills_upgrade Tool 更新本地索引：
 
-    skills_upgrade(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencode/skills")
+    skills_upgrade(name="ops-dataset-query")
 
 ================================================================================
 

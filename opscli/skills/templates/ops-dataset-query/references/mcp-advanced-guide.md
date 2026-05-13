@@ -55,8 +55,7 @@ query_build(
     where_conditions=["date_id|>=|\"2024-01-01\""],
     order_by=["total_cost:desc"],
     limit=50,
-    output_path="/tmp/query.json",
-    skills_dir="/Users/mask/.config/opencode/skills"
+    output_path="/tmp/query.json"
 )
 ```
 
@@ -213,7 +212,7 @@ query_chart(
 **调用示例**：
 ```python
 query_metadata(dataset="sales_order_d")
-query_metadata(table_id=123, skills_dir="/Users/mask/.config/opencode/skills")
+query_metadata(table_id=123)
 ```
 
 ---
@@ -235,7 +234,6 @@ query_metadata(table_id=123, skills_dir="/Users/mask/.config/opencode/skills")
 query_catalog()
 query_catalog(source="local")
 query_catalog(source="remote", fallback_local=False)
-query_catalog(skills_dir="/Users/mask/.config/opencode/skills")
 ```
 
 **返回结构**：
@@ -443,7 +441,7 @@ python scripts/updater_mcp.py --check --pretty
 {
   "success": true,
   "data": {
-    "data_dir": "/Users/mask/.config/opencode/skills/ops-dataset-query/data",
+    "data_dir": "~/.claude/skills/ops-dataset-query/data",
     "version": "v1.2.3",
     "data_state": "ready",
     "healthy": true,
