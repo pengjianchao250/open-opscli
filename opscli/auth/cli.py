@@ -79,8 +79,8 @@ def login():
         webbrowser.open(f"{code['verification_url']}?code={code['user_code']}")
         result = flow.poll(code["device_code"], interval=code.get("interval", 3))
         # 登录成功后自动同步系统列表，免去用户手动运行 opscli auth system sync
+        client = _client()
         try:
-            client = _client()
             resp = httpx.get(
                 f"{OPS_URL}/v1/cli/systems",
                 headers=client.build_session_headers("ops"),
@@ -91,6 +91,14 @@ def login():
         except Exception as _sync_exc:
             import logging
             logging.getLogger("opscli.auth").debug("登录后系统列表同步失败（不影响登录）: %s", _sync_exc)
+        # 系统同步完成后，使用 session_id 预刷新所有系统 Token，后续命令可直接使用缓存
+        try:
+            refresh_results = client._tm.refresh_all()
+            import logging
+            logging.getLogger("opscli.auth").debug("登录后 Token 预刷新结果: %s", refresh_results)
+        except Exception as _refresh_exc:
+            import logging
+            logging.getLogger("opscli.auth").debug("登录后 Token 预刷新失败（不影响登录）: %s", _refresh_exc)
         console.print(f"[green]✓ 授权成功！账号：{result.get('email', '')}[/green]")
     except (DeviceFlowExpiredError, DeviceFlowDeniedError) as e:
         console.print(f"[red]✗ {e}[/red]")
