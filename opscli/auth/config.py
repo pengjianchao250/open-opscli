@@ -3,8 +3,8 @@ from opscli.config import CONFIG_DIR
 
 # 默认配置（生产环境）
 DEFAULTS = {
-    "ops_url": "https://ops.api.xenkee.com/api",
-    "ops_system_url": "https://ops.api.xenkee.com",
+    "ops_url": "https://ops.api.qa.aukeyit.com/api",
+    "ops_system_url": "https://ops.api.qa.aukeyit.com",
     "ops_token_endpoint": "/api/v1/auth/cli-token",
     "polaris_system_url": "https://bi.api.xenkee.com",
     "polaris_token_endpoint": "/api/auth/cli-token",

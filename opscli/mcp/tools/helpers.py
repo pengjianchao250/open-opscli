@@ -119,13 +119,16 @@ def _draft_feedback(
 def _get_credential_dir() -> Path | None:
     """获取当前请求对应的凭证隔离目录。
 
-    在 HTTP/SSE 多用户模式下，根据当前请求的 API Key 生成独立目录。
-    stdio 模式下返回 None，使用默认路径（与 CLI 互通）。
+    隔离维度：API Key + clientInfo.name（Agent 工具名称）
+    - HTTP/SSE 模式：自动从 MCP initialize 握手读取 Agent 名称，联合计算隔离目录，
+      使同一 API Key 在不同 Agent 工具（Claude Code / Cursor 等）下各自独立
+    - stdio 模式（api_key=None）：返回 None，使用默认路径（与 CLI 共享）
+    - clientInfo 不存在时：退回纯 API Key 隔离（向后兼容旧目录）
 
     Returns:
         隔离目录的 Path 对象，或 None（stdio 模式）
     """
-    from opscli.mcp.context import get_current_api_key
+    from opscli.mcp.context import get_current_api_key, get_current_client_name
     from opscli.mcp.key_based_storage import get_credential_dir_for_key
     from opscli.config import CONFIG_DIR
 
@@ -133,8 +136,11 @@ def _get_credential_dir() -> Path | None:
     if not api_key:
         return None  # stdio 模式或无上下文，使用默认路径
 
+    # 自动读取 Agent 名称（来自 MCP initialize 握手的 clientInfo.name）
+    # None 时退回纯 api_key 哈希，向后兼容旧目录结构
+    agent_name = get_current_client_name()
     base_root = Path(CONFIG_DIR) / "credentials_by_key"
-    return get_credential_dir_for_key(api_key, base_root)
+    return get_credential_dir_for_key(api_key, base_root, agent_name=agent_name)
 
 
 def _get_isolated_credential_cache(cred_dir: Path | None):

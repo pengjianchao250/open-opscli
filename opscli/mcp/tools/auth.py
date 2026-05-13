@@ -1,21 +1,28 @@
 """Auth 工具模块。
 
 将 opscli auth 子模块的核心能力暴露为 MCP 工具（无状态设计）：
-- auth_mcp_login        — MCP 模式一步登录（无需浏览器，API Key 即身份）
+
+登录方式（二选一）：
+- auth_mcp_login        — 推荐：HTTP/SSE 模式一步登录（API Key 即身份，无需浏览器交互）
+- auth_login_start      — 回退：发起 Device Flow 第一步（返回 verification_url + user_code）
+- auth_login_poll       — 回退：轮询 Device Flow 授权结果（配合 auth_login_start 使用）
+
+Token 管理：
 - auth_get_token        — 获取指定系统 JWT
 - auth_check_token      — 检测 JWT 有效性（纯本地）
 - auth_is_authenticated — 检查 session_id 是否有效
 - auth_token_refresh    — 刷新 JWT
+
+系统管理：
 - auth_system_list      — 列出所有已注册系统
 - auth_system_add       — 添加用户自定义系统
 - auth_system_remove    — 移除用户自定义系统
 - auth_system_sync      — 从 ops 同步系统列表
+
+其他：
 - auth_build_request_auth — 构造请求认证参数
 - auth_logout           — 退出登录，清除本地凭证
 - auth_doctor           — 诊断 session 有效性与系统连通性
-
-注意：auth_login_start / auth_login_poll 仅供 CLI 模式（opscli auth login）使用，
-      不注册到 MCP 工具集；MCP 模式请使用 auth_mcp_login。
 
 所有工具函数定义在模块级，可直接导入调用（测试友好）。
 调用 register(mcp) 将以上工具批量注册到指定 MCP 实例。
@@ -76,15 +83,22 @@ async def auth_mcp_login(agent_name: str | None = None) -> dict:
     利用当前 MCP 连接的 X-MCP-API-Key 直接完成身份绑定和 Session 创建，
     整个流程全自动，AI Agent 无需引导用户打开任何链接或输入验证码。
 
+    凭证隔离：
+        服务端自动从 MCP initialize 握手（clientInfo.name）识别当前 Agent 工具，
+        与 API Key 联合计算凭证目录，无需调用方传参。
+        同一 API Key 在 Claude Code、Cursor 等不同工具中各自独立存储凭证。
+
     流程：
     1. 向 OPS 后端申请 device_code / user_code（建立审计记录）
     2. 携带 X-MCP-API-Key + device_code + user_code 调用 /v1/mcp/auth/login
        → 后端校验 API Key 身份后直接创建 session 并绑定设备码
-    3. 保存 session 到本地 CredentialStore（按 API Key 隔离，与 auth_login_poll 路径相同）
+    3. 保存 session 到本地 CredentialStore（按 API Key + Agent 名称双维度隔离）
 
     Args:
-        agent_name: 可选，当前 AI Agent 名称（如 "Claude Code"、"Cursor"）。
-                    传入后写入服务端 session 记录，便于多 Agent 环境下追溯登录来源。
+        agent_name: 可选，显式指定 Agent 名称（如 "Claude Code"、"Cursor"）。
+                    不传时自动从 MCP initialize 握手的 clientInfo.name 读取。
+                    该值仅用于写入后端审计记录（cli_device_codes.agent_name），
+                    不影响凭证目录隔离（隔离由 clientInfo.name 自动驱动）。
 
     Returns:
         成功：{ success: True, data: { status, session_id, email, expires_at,
@@ -93,6 +107,7 @@ async def auth_mcp_login(agent_name: str | None = None) -> dict:
     """
     from opscli.auth import OPS_URL
     from opscli.auth.core.device_flow import DeviceFlow
+    from opscli.mcp.context import get_current_client_name
 
     import httpx
 
@@ -105,6 +120,9 @@ async def auth_mcp_login(agent_name: str | None = None) -> dict:
                 "stdio 模式请使用 auth_login_start + auth_login_poll 完成授权。"
             )
         )
+
+    # 审计用 Agent 名称：显式传参优先，其次自动从 clientInfo.name 读取
+    effective_agent_name = agent_name or get_current_client_name()
 
     # ── Step 1：申请 device_code / user_code ────────────────────────────
     try:
@@ -121,8 +139,8 @@ async def auth_mcp_login(agent_name: str | None = None) -> dict:
     # ── Step 2：携带 API Key 调用新接口完成身份绑定 ──────────────────────
     login_url = f"{OPS_URL.rstrip('/')}/v1/mcp/auth/login"
     payload: dict = {"device_code": device_code, "user_code": user_code}
-    if agent_name:
-        payload["agent_name"] = agent_name.strip()[:128]
+    if effective_agent_name:
+        payload["agent_name"] = effective_agent_name.strip()[:128]
 
     try:
         resp = await asyncio.to_thread(
@@ -176,8 +194,10 @@ async def auth_mcp_login(agent_name: str | None = None) -> dict:
 async def auth_login_start() -> dict:
     """发起 Device Flow 登录第一步，返回验证 URL、用户码和设备码。
 
-    调用后引导用户在浏览器中打开 verification_url 并输入 user_code，
-    再调用 auth_login_poll 传入 device_code 获取授权结果。
+    当 auth_mcp_login 后端接口不可用时，使用此工具发起 Device Flow 授权：
+    1. 调用本工具获取 verification_url、user_code、device_code
+    2. 引导用户在浏览器中打开 verification_url 并输入 user_code
+    3. 调用 auth_login_poll(device_code) 轮询授权结果
     """
     from opscli.auth import OPS_URL
     from opscli.auth.core.device_flow import DeviceFlow
@@ -581,8 +601,9 @@ async def auth_doctor(session_id: str | None = None) -> dict:
 
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS = [
-    # MCP 模式登录（HTTP/SSE，无需浏览器）
+    # 登录方式 A（推荐）：HTTP/SSE 模式一步登录，API Key 即身份，无需浏览器
     auth_mcp_login,
+    # 登录方式 B（回退）：auth_login_start / auth_login_poll 暂不注册，预留后续版本
     # Token 管理
     auth_get_token,
     auth_check_token,
@@ -597,7 +618,6 @@ _ALL_TOOLS = [
     auth_build_request_auth,
     auth_logout,
     auth_doctor,
-    # 注意：auth_login_start / auth_login_poll 不注册到 MCP，仅供 CLI 使用
 ]
 
 

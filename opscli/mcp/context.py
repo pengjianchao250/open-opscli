@@ -125,6 +125,33 @@ def get_current_user_email() -> str | None:
     return None
 
 
+def get_current_client_name() -> str | None:
+    """从 MCP initialize 握手中读取客户端 Agent 名称（clientInfo.name）。
+
+    MCP 协议规定客户端连接时必须发送 initialize 请求，其中包含
+    clientInfo: { name, version }。ServerSession 将其存储在 client_params 中，
+    _handle_request 将 session 注入 request_ctx，因此在任意 Tool 调用期间可靠读取。
+
+    与 get_current_api_key() 的双重读取策略不同：clientInfo 来自 session 级别，
+    在 SSE 和 Streamable HTTP 两种模式下 request_ctx.session 始终可靠，
+    无需降级路径。
+
+    Returns:
+        标准化后的客户端名称（lowercase+strip），或 None（未初始化 / 获取失败）
+    """
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+        rc = request_ctx.get()
+        if rc and rc.session and rc.session.client_params:
+            client_info = rc.session.client_params.clientInfo
+            if client_info and client_info.name:
+                # 标准化：lowercase + strip，保证同一 Agent 不同版本映射到同一目录
+                return client_info.name.strip().lower()[:64]
+    except (LookupError, ImportError, AttributeError, Exception):
+        pass
+    return None
+
+
 def get_mcp_request_headers() -> dict[str, str]:
     """获取 MCP API Key 透传请求头（HTTP/SSE 模式下有效）。
 
