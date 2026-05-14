@@ -1,5 +1,20 @@
 # 待归档变更记录
 
+## 2026-05-14 auth/config.py - 新增 polaris_enabled 配置参数
+
+**变更原因**：正式发版中 polaris 系统暂时不参与授权请求和 Token 刷新，需通过配置参数控制，避免登录后预刷新和 refresh_all 触发 polaris 网络请求。
+**改动点**：`opscli/auth/config.py`
+**具体改动**：
+- `DEFAULTS` 新增 `polaris_enabled: "false"` 键，**默认禁用**（正式发版）
+- `get_builtin_systems()` 重构为先构建 ops 条目，再根据 `polaris_enabled` 决定是否追加 polaris 条目
+- 需要启用时在 `~/.config/opscli/config.ini [systems]` 写入 `polaris_enabled = true`
+
+**验证结果**：改动逻辑正确，不影响 ops 系统任何行为；polaris_enabled=false 时 list_all()/refresh_all()/doctor 均不含 polaris
+**影响范围**：仅影响 `get_builtin_systems()` 返回值，下游 SystemRegistry、TokenManager.refresh_all、CLI status/doctor 均自动生效
+**回滚方式**：恢复 `get_builtin_systems()` 原始实现（无条件返回 ops+polaris），删除 `DEFAULTS` 中的 `polaris_enabled` 键
+
+---
+
 ## 2026-05-14 QUERY_SPEC.md + SKILL.md - 补充 payload / execution_summary 完整字段
 
 **变更原因**：原反馈示例中 `execution_summary` 结构过于简陋，缺少 `payload`、`failed_calls`、`successful_calls`、`final_resolution` 等关键字段，与后端 `dm_user_feedbacks` 表结构不匹配，导致反馈内容无法有效用于问题追踪和根因分析。
