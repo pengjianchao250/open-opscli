@@ -1,0 +1,917 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 方法卡数据输出示例</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+    <style>
+      :root {
+        --bg: #f4f7fb;
+        --panel: #ffffff;
+        --border: #dbe3ef;
+        --text: #1f2937;
+        --muted: #667085;
+        --primary: #2563eb;
+        --success: #0f766e;
+        --warn: #b45309;
+        --shadow: 0 4px 18px rgba(15, 23, 42, 0.04);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          Inter, "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont,
+          sans-serif;
+        line-height: 1.6;
+      }
+
+      a {
+        color: var(--primary);
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+
+      .page {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      .hero,
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        padding: 24px;
+      }
+
+      .eyebrow {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+      }
+
+      h1 {
+        margin-top: 8px;
+        font-size: 28px;
+        line-height: 1.2;
+      }
+
+      .summary-copy {
+        margin: 12px 0 0;
+        font-size: 15px;
+        line-height: 1.7;
+      }
+
+      .source-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      .source-strip span {
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: #f8fafc;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .metric-grid,
+      .card-grid,
+      .report-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .metric-grid {
+        margin-top: 20px;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      }
+
+      .metric {
+        min-height: 88px;
+        padding: 14px 16px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        border-top: 3px solid var(--primary);
+        background: #fff;
+      }
+
+      .metric.alt {
+        border-top-color: var(--success);
+      }
+
+      .metric.warn {
+        border-top-color: var(--warn);
+      }
+
+      .metric .label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .metric .value {
+        margin-top: 8px;
+        font-size: 22px;
+        font-weight: 700;
+      }
+
+      .metric .hint {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .section {
+        margin-top: 24px;
+      }
+
+      .section-head {
+        margin-bottom: 12px;
+      }
+
+      .section-head h2 {
+        font-size: 20px;
+      }
+
+      .section-head p {
+        margin-top: 6px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .card-grid {
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      }
+
+      .field-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .panel {
+        padding: 16px;
+      }
+
+      .panel h3 {
+        margin-bottom: 10px;
+        font-size: 15px;
+      }
+
+      .panel p {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.7;
+      }
+
+      .chart-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      }
+
+      .chart {
+        width: 100%;
+        height: 320px;
+      }
+
+      .note {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .table-panel {
+        margin-top: 12px;
+      }
+
+      .table-wrap {
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      table {
+        width: 100%;
+        min-width: 980px;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        font-size: 13px;
+        line-height: 1.5;
+        vertical-align: top;
+      }
+
+      th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: #f8fafc;
+        color: var(--muted);
+      }
+
+      tbody tr:nth-child(even) td {
+        background: #fcfdff;
+      }
+
+      .report-grid {
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      }
+
+      .references {
+        margin-top: 24px;
+      }
+
+      .references summary {
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .references ul {
+        margin: 12px 0 0 20px;
+        padding: 0;
+        color: var(--muted);
+      }
+
+      .references li {
+        margin-bottom: 8px;
+      }
+
+      .references a {
+        word-break: break-all;
+      }
+
+      @media (max-width: 768px) {
+        .page {
+          padding: 16px;
+        }
+
+        .hero {
+          padding: 18px;
+        }
+
+        h1 {
+          font-size: 24px;
+        }
+
+        .chart {
+          height: 280px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div class="eyebrow">AI 方法卡数据输出示例</div>
+        <h1>Amazon 广告优化分析结果</h1>
+        <p class="summary-copy" id="summaryCopy"></p>
+
+        <div class="source-strip">
+          <span>Excel: ads_report.xlsx</span>
+          <span>分析视图: ads_funnel_view_v1</span>
+          <span>日期范围: 2026-04-01 ~ 2026-04-07</span>
+          <span>样本: 428 行明细 / 5 行透视汇总</span>
+        </div>
+
+        <div class="metric-grid" id="metricGrid"></div>
+      </header>
+
+      <section class="section">
+        <div class="card-grid field-grid" id="fieldGrid"></div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>图表输出</h2>
+          <p>图表与明细表按方法卡配置生成，直接展示分析结果。</p>
+        </div>
+
+        <div class="chart-grid">
+          <article class="panel">
+            <h3>广告活动效率对比</h3>
+            <div id="campaignChart" class="chart"></div>
+            <p class="note">用于比较广告花费、广告销售额与 ACOS 的结构分化，识别高效扩量和低效消耗对象。</p>
+          </article>
+
+          <article class="panel">
+            <h3>广告花费与销售额趋势</h3>
+            <div id="trendChart" class="chart"></div>
+            <p class="note">用于判断 ACOS 波动是单点异常还是连续恶化，辅助判断是否进入预警分支。</p>
+          </article>
+
+          <article class="panel">
+            <h3>广告消耗归因</h3>
+            <div id="spendPieChart" class="chart"></div>
+            <p class="note">用于查看预算主要消耗在高效核心词、低效泛词还是竞品 ASIN 上。</p>
+          </article>
+        </div>
+
+        <article class="panel table-panel">
+          <h3>关键词矩阵</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>actionType</th>
+                  <th>keyword</th>
+                  <th>matchType</th>
+                  <th>clicks</th>
+                  <th>orders</th>
+                  <th>adSpend</th>
+                  <th>adSales</th>
+                  <th>acos</th>
+                  <th>reason</th>
+                  <th>suggestedAction</th>
+                </tr>
+              </thead>
+              <tbody id="keywordTableBody"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>报告正文</h2>
+          <p>以下内容直接对应方法卡的六个报告段落，可直接渲染为最终文本输出。</p>
+        </div>
+        <div class="report-grid" id="reportGrid"></div>
+      </section>
+
+      <details class="references">
+        <summary>方法论参考</summary>
+        <ul>
+          <li>
+            <a
+              href="https://advertising.amazon.com/en-us/library/guides/sponsored-products-best-practices/"
+              target="_blank"
+              rel="noreferrer"
+              >Amazon Ads Sponsored Products best practices</a
+            >
+          </li>
+          <li>
+            <a href="https://support.google.com/analytics/answer/12216232?hl=en" target="_blank" rel="noreferrer"
+              >Google Analytics ecommerce exploration / funnel</a
+            >
+          </li>
+          <li>
+            <a href="https://archive.ics.uci.edu/dataset/352/online+retail" target="_blank" rel="noreferrer"
+              >UCI Online Retail 数据集</a
+            >
+          </li>
+          <li>
+            <a href="https://journalshub.org/index.php/jutiti/article/view/6362" target="_blank" rel="noreferrer"
+              >Apriori / Market Basket Analysis 论文</a
+            >
+          </li>
+        </ul>
+      </details>
+    </main>
+
+    <script>
+      // 静态示例数据，方便直接对照方法卡输出结构。
+      const campaignRows = [
+        {
+          campaignName: 'SP-核心词-Exact',
+          impressions: 85200,
+          clicks: 1875,
+          orders: 142,
+          adSpend: 1126.9,
+          adSales: 6980.4
+        },
+        {
+          campaignName: 'SP-泛词-Broad',
+          impressions: 240000,
+          clicks: 2160,
+          orders: 58,
+          adSpend: 1512,
+          adSales: 2610
+        },
+        {
+          campaignName: 'SP-竞品-ASIN',
+          impressions: 110500,
+          clicks: 1105,
+          orders: 24,
+          adSpend: 884,
+          adSales: 1032
+        },
+        {
+          campaignName: 'SP-品牌词',
+          impressions: 42000,
+          clicks: 1260,
+          orders: 126,
+          adSpend: 441,
+          adSales: 6174
+        }
+      ]
+
+      const dailyRows = [
+        { date: '2026-04-01', adSpend: 520, adSales: 2460 },
+        { date: '2026-04-02', adSpend: 545, adSales: 2520 },
+        { date: '2026-04-03', adSpend: 600, adSales: 2320 },
+        { date: '2026-04-04', adSpend: 655, adSales: 2100 },
+        { date: '2026-04-05', adSpend: 585, adSales: 2450 },
+        { date: '2026-04-06', adSpend: 510, adSales: 2580 },
+        { date: '2026-04-07', adSpend: 548.9, adSales: 2366.4 }
+      ]
+
+      const keywordRows = [
+        {
+          actionType: 'expand',
+          keyword: 'ergonomic office chair',
+          matchType: 'exact',
+          clicks: 238,
+          orders: 31,
+          adSpend: 206.0,
+          adSales: 1519.0,
+          acos: 13.56,
+          reason: '点击和订单充足，ACOS 低于目标 25%。',
+          suggestedAction: '竞价上调 10%-15%，并观察 3 天。'
+        },
+        {
+          actionType: 'convert_to_exact',
+          keyword: 'mesh desk chair lumbar support',
+          matchType: 'phrase',
+          clicks: 124,
+          orders: 12,
+          adSpend: 139.0,
+          adSales: 612.0,
+          acos: 22.71,
+          reason: '转化稳定，适合从词组沉淀为精准。',
+          suggestedAction: '新建精准关键词，初始竞价按当前 CPC 上浮 5%。'
+        },
+        {
+          actionType: 'reduce_bid',
+          keyword: 'cheap office chair',
+          matchType: 'broad',
+          clicks: 180,
+          orders: 2,
+          adSpend: 162.0,
+          adSales: 80.0,
+          acos: 202.5,
+          reason: '点击充足但订单不足，流量质量差。',
+          suggestedAction: '降价 30%，保留观察。'
+        },
+        {
+          actionType: 'negative_phrase',
+          keyword: 'gaming chair pink',
+          matchType: 'broad',
+          clicks: 96,
+          orders: 0,
+          adSpend: 78.72,
+          adSales: 0,
+          acos: null,
+          reason: '点击超过 20 但无订单，搜索意图偏离。',
+          suggestedAction: '加入否定词组。'
+        },
+        {
+          actionType: 'observe',
+          keyword: 'home office chair small spaces',
+          matchType: 'phrase',
+          clicks: 42,
+          orders: 2,
+          adSpend: 42.0,
+          adSales: 98.0,
+          acos: 42.86,
+          reason: '点击达标但订单少于 3，ACOS 判断不稳定。',
+          suggestedAction: '暂不调整，继续观察到订单数 >= 3。'
+        },
+        {
+          actionType: 'listing_check',
+          keyword: 'office chair with footrest',
+          matchType: 'phrase',
+          clicks: 156,
+          orders: 4,
+          adSpend: 148.0,
+          adSales: 240.0,
+          acos: 61.67,
+          reason: '点击充足但转化偏弱，可能存在 Listing 承接问题。',
+          suggestedAction: '检查价格、主图、评价与竞品卖点。'
+        }
+      ]
+
+      function formatNumber(value, digits = 2) {
+        return new Intl.NumberFormat('zh-CN', {
+          minimumFractionDigits: digits,
+          maximumFractionDigits: digits
+        }).format(value)
+      }
+
+      function formatCurrency(value) {
+        return formatNumber(value, 2)
+      }
+
+      function formatPercent(value) {
+        return `${formatNumber(value, 2)}%`
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;')
+      }
+
+      const totals = campaignRows.reduce(
+        (acc, row) => {
+          acc.impressions += row.impressions
+          acc.clicks += row.clicks
+          acc.orders += row.orders
+          acc.adSpend += row.adSpend
+          acc.adSales += row.adSales
+          return acc
+        },
+        {
+          impressions: 0,
+          clicks: 0,
+          orders: 0,
+          adSpend: 0,
+          adSales: 0
+        }
+      )
+
+      const overallCtr = (totals.clicks / totals.impressions) * 100
+      const overallCvr = (totals.orders / totals.clicks) * 100
+      const overallAcos = (totals.adSpend / totals.adSales) * 100
+      const overallRoas = totals.adSales / totals.adSpend
+
+      const highEfficiencyCampaigns = campaignRows.filter(row => row.adSales > 0 && row.adSpend / row.adSales <= 0.25)
+      const lowEfficiencyCampaigns = campaignRows.filter(row => row.adSales === 0 || row.adSpend / row.adSales > 0.25)
+      const highEfficiencySales = highEfficiencyCampaigns.reduce((sum, row) => sum + row.adSales, 0)
+      const lowEfficiencySpend = lowEfficiencyCampaigns.reduce((sum, row) => sum + row.adSpend, 0)
+
+      const highEfficiencySalesShare = (highEfficiencySales / totals.adSales) * 100
+      const lowEfficiencySpendShare = (lowEfficiencySpend / totals.adSpend) * 100
+
+      const summaryCopy = `这组数据的核心问题不是曝光不足，而是泛词和竞品 ASIN 的点击后转化偏弱。整体 ACOS 为 ${formatPercent(overallAcos)}，ROAS 为 ${formatNumber(overallRoas)}；品牌词和核心词贡献了 ${formatPercent(highEfficiencySalesShare)} 的销售额，而低效对象消耗了 ${formatPercent(lowEfficiencySpendShare)} 的预算。`
+
+      const metricCards = [
+        {
+          label: '总广告花费',
+          value: formatCurrency(totals.adSpend),
+          hint: '广告活动总消耗'
+        },
+        {
+          label: '总广告销售额',
+          value: formatCurrency(totals.adSales),
+          hint: '透视表合计广告销售额'
+        },
+        {
+          label: '整体 ACOS',
+          value: formatPercent(overallAcos),
+          hint: '接近 25% 目标线'
+        },
+        {
+          label: '整体 ROAS',
+          value: formatNumber(overallRoas, 2),
+          hint: '花费产出比'
+        },
+        {
+          label: '整体 CTR',
+          value: formatPercent(overallCtr),
+          hint: '点击效率'
+        },
+        {
+          label: '整体 CVR',
+          value: formatPercent(overallCvr),
+          hint: '点击后转化'
+        },
+        {
+          label: '高效销售额占比',
+          value: formatPercent(highEfficiencySalesShare),
+          hint: '核心词 + 品牌词'
+        },
+        {
+          label: '低效花费占比',
+          value: formatPercent(lowEfficiencySpendShare),
+          hint: '泛词 + 竞品 ASIN'
+        }
+      ]
+
+      const fieldAnalyses = [
+        {
+          title: '方法卡基础信息',
+          text: `这张方法卡的定位很明确：它是 Amazon 广告优化分析，而不是泛经营诊断。输出内容只应围绕广告花费、销售额、关键词质量、预算分配和 Listing 承接展开，不应把结论外推到与广告无关的供应链或财务主题。`
+        },
+        {
+          title: '适用范围',
+          text: `适用范围收得很窄：Amazon 美国站的家具类目，面向成长期和稳定期的广告数据。这个边界很重要，因为它说明当前结论只适用于这一类投放场景，不应直接复制到其他站点、其他类目或新品冷启动场景。`
+        },
+        {
+          title: '输入意图与必备实体',
+          text: `用户提出的问题通常是“为什么 ACOS 偏高”“哪里该加预算或降预算”“如何优化搜索词”这一类动作型问题，同时必须先锁定 ASIN、站点和日期范围。结合用户上传 Excel 和分析视图透视表来看，分析必须先把单个产品、单个站点和单个周期钉住，否则所有广告活动和关键词都会混在一起。`
+        },
+        {
+          title: '支持场景与分析视图',
+          text: `这张卡既要做常规提效，也要能识别异常波动。按漏斗口径看样本后，问题就很清楚：泛词和竞品流量的点击率与转化率都偏弱，而品牌词和核心词效率稳定，瓶颈在流量质量和点击后的转化承接，而不是单纯的曝光规模。`
+        },
+        {
+          title: '知识范围',
+          text: `分析时要先对齐广告指标口径、漏斗诊断框架和关键词优化规则，这意味着 ACOS、ROAS、CTR 和 CVR 不能脱离口径独立解读。样本里品牌词和核心词的表现好，泛词和竞品 ASIN 的表现差，正好符合“先看指标口径，再看关键词动作”的分析顺序。`
+        },
+        {
+          title: '分析步骤',
+          text: `分析是线性推进的：先校验 Excel 和透视表口径，再汇总活动和关键词指标，然后按曝光、点击、转化、销售额和投产效率定位瓶颈，最后才生成图表和文字报告。当前页面也按这个顺序输出，先给摘要和字段结论，再给图表，最后给可直接复用到报告里的文字段落。`
+        },
+        {
+          title: '输出结果',
+          text: `输出结果需要同时覆盖整体结论、关键词矩阵、诊断、机会识别、优化建议和风险提醒，并且要把图表与明细表一起给出来。这个示例页正是按这个结构输出三张图、一张关键词明细表和六段报告正文，方便前端直接拆分渲染。`
+        },
+        {
+          title: '质量规则',
+          text: `样本判断要控制激进程度：点击少于 20 的对象不能直接判断转化问题，订单少于 3 的对象也不能过早判定 ACOS 结论。样本里 42 点击 / 2 订单的词被放进观察区，而 96 点击 / 0 订单的词则可以直接进入否定词候选，这正是样本门槛在实际输出里的体现。`
+        },
+        {
+          title: '用户归属',
+          text: `这份分析结果需要保留明确的归属和审计边界，后续保存、回填或复核时都要沿着同一 owner 追踪，不应与其他用户的方法卡结果混用。`
+        }
+      ]
+
+      const reportSections = [
+        {
+          title: '总体结论',
+          text: `2026-04-01 至 2026-04-07 期间，广告总花费 ${formatCurrency(totals.adSpend)}，广告销售额 ${formatCurrency(totals.adSales)}，整体 ACOS 为 ${formatPercent(overallAcos)}，ROAS 为 ${formatNumber(overallRoas, 2)}。整体效率接近目标阈值，但结构分化明显：品牌词和核心精准词贡献了 ${formatPercent(highEfficiencySalesShare)} 的销售额，泛词和竞品 ASIN 消耗了 ${formatPercent(lowEfficiencySpendShare)} 的预算。`
+        },
+        {
+          title: '关键词矩阵',
+          text: '关键词动作已经清楚分层：高效扩量 1 个、转精准 1 个、降竞价 1 个、否定词 1 个、继续观察 1 个，另有 1 个词需要检查 Listing 承接。样本不足的对象只进入观察池，不直接给出否定或降价结论。'
+        },
+        {
+          title: '诊断',
+          text: `主要瓶颈不在曝光，而在流量质量和点击后的转化承接。SP-泛词-Broad 的 CTR 只有 0.90%，CVR 只有 2.69%，ACOS 却达到 57.93%；SP-竞品-ASIN 的 ACOS 更是达到 85.66%。相比之下，品牌词和核心词都保持了健康的点击与转化表现，说明 Listing 基础承接并没有全局失效，问题主要集中在泛词和竞品流量。`
+        },
+        {
+          title: '机会识别',
+          text: '优先机会在核心词扩量和高意图长尾词沉淀。ergonomic office chair 的 ACOS 只有 13.56%，可承接更多预算；mesh desk chair lumbar support 已具备转精准条件。若目标是增长期放量，建议把低效泛词预算中的 15%-20% 迁移到核心词、品牌词和转精准词。'
+        },
+        {
+          title: '优化建议',
+          text: '立即执行：1. 对 gaming chair pink 增加否定词组；2. cheap office chair 降价 30%；3. ergonomic office chair 竞价上调 10%-15%。观察后执行：1. home office chair small spaces 等订单数达到 3 后再判断 ACOS；2. office chair with footrest 先检查 Listing 与竞品差异，再决定是否降价。暂不建议直接暂停 SP-泛词-Broad 全活动，因为其中仍可能包含可沉淀搜索词。'
+        },
+        {
+          title: '风险提醒',
+          text: '风险一：竞品 ASIN 流量 ACOS 已高于 80%，继续扩大预算会快速稀释整体 ROAS。风险二：订单数少于 3 的关键词不应直接按 ACOS 做否定，否则可能误杀新品期长尾词。风险三：当前报告只覆盖广告销售额，未纳入自然销售额和毛利率，若需要判断利润健康度，应补充总销售额、毛利率、FBA 费用和 TACOS。'
+        }
+      ]
+
+      function renderCards(containerId, items) {
+        document.getElementById(containerId).innerHTML = items
+          .map(
+            item => `
+              <article class="panel">
+                <h3>${escapeHtml(item.title)}</h3>
+                <p>${escapeHtml(item.text)}</p>
+              </article>
+            `
+          )
+          .join('')
+      }
+
+      function renderMetricCards() {
+        document.getElementById('metricGrid').innerHTML = metricCards
+          .map(
+            (item, index) => `
+              <article class="metric ${index === 2 || index === 7 ? 'warn' : index === 1 || index === 4 ? 'alt' : ''}">
+                <div class="label">${escapeHtml(item.label)}</div>
+                <div class="value">${escapeHtml(item.value)}</div>
+                <div class="hint">${escapeHtml(item.hint)}</div>
+              </article>
+            `
+          )
+          .join('')
+      }
+
+      function renderKeywordTable() {
+        document.getElementById('keywordTableBody').innerHTML = keywordRows
+          .map(row => {
+            const acosText = row.acos === null ? '-' : `${formatPercent(row.acos)}`
+            return `
+              <tr>
+                <td>${escapeHtml(row.actionType)}</td>
+                <td>${escapeHtml(row.keyword)}</td>
+                <td>${escapeHtml(row.matchType)}</td>
+                <td>${escapeHtml(row.clicks)}</td>
+                <td>${escapeHtml(row.orders)}</td>
+                <td>${escapeHtml(formatCurrency(row.adSpend))}</td>
+                <td>${escapeHtml(formatCurrency(row.adSales))}</td>
+                <td>${escapeHtml(acosText)}</td>
+                <td>${escapeHtml(row.reason)}</td>
+                <td>${escapeHtml(row.suggestedAction)}</td>
+              </tr>
+            `
+          })
+          .join('')
+      }
+
+      function createChart(domId, option) {
+        const chartDom = document.getElementById(domId)
+        if (!chartDom) return null
+        const chart = echarts.init(chartDom)
+        chart.setOption(option)
+        return chart
+      }
+
+      function initCharts() {
+        if (!window.echarts) {
+          const message = 'ECharts 未加载成功，请检查网络或 CDN 可访问性。'
+          document.getElementById('campaignChart').innerHTML = `<div class="note">${message}</div>`
+          document.getElementById('trendChart').innerHTML = `<div class="note">${message}</div>`
+          document.getElementById('spendPieChart').innerHTML = `<div class="note">${message}</div>`
+          return
+        }
+
+        const campaignOption = {
+          color: ['#2563eb', '#0f766e', '#b45309'],
+          tooltip: { trigger: 'axis' },
+          legend: { top: 0, data: ['广告花费', '广告销售额', 'ACOS'] },
+          grid: { left: 46, right: 58, top: 52, bottom: 36 },
+          dataset: {
+            dimensions: ['campaignName', 'adSpend', 'adSales', 'acos'],
+            source: campaignRows.map(row => [
+              row.campaignName,
+              row.adSpend,
+              row.adSales,
+              Number(((row.adSpend / row.adSales) * 100).toFixed(2))
+            ])
+          },
+          xAxis: { type: 'category' },
+          yAxis: [
+            {
+              type: 'value',
+              name: '金额'
+            },
+            {
+              type: 'value',
+              name: 'ACOS',
+              axisLabel: { formatter: '{value}%' }
+            }
+          ],
+          series: [
+            {
+              type: 'bar',
+              name: '广告花费',
+              barWidth: 18,
+              encode: { x: 'campaignName', y: 'adSpend' }
+            },
+            {
+              type: 'bar',
+              name: '广告销售额',
+              barWidth: 18,
+              encode: { x: 'campaignName', y: 'adSales' }
+            },
+            {
+              type: 'line',
+              name: 'ACOS',
+              yAxisIndex: 1,
+              smooth: true,
+              symbolSize: 8,
+              encode: { x: 'campaignName', y: 'acos' }
+            }
+          ]
+        }
+
+        const trendOption = {
+          color: ['#2563eb', '#0f766e', '#b45309'],
+          tooltip: { trigger: 'axis' },
+          legend: { top: 0, data: ['广告花费', '广告销售额', 'ACOS'] },
+          grid: { left: 46, right: 58, top: 52, bottom: 36 },
+          dataset: {
+            dimensions: ['date', 'adSpend', 'adSales', 'acos'],
+            source: dailyRows.map(row => [
+              row.date,
+              row.adSpend,
+              row.adSales,
+              Number(((row.adSpend / row.adSales) * 100).toFixed(2))
+            ])
+          },
+          xAxis: { type: 'category' },
+          yAxis: [
+            {
+              type: 'value',
+              name: '金额'
+            },
+            {
+              type: 'value',
+              name: 'ACOS',
+              axisLabel: { formatter: '{value}%' }
+            }
+          ],
+          series: [
+            {
+              type: 'line',
+              name: '广告花费',
+              smooth: true,
+              symbolSize: 8,
+              encode: { x: 'date', y: 'adSpend' }
+            },
+            {
+              type: 'line',
+              name: '广告销售额',
+              smooth: true,
+              symbolSize: 8,
+              encode: { x: 'date', y: 'adSales' }
+            },
+            {
+              type: 'line',
+              name: 'ACOS',
+              yAxisIndex: 1,
+              smooth: true,
+              symbolSize: 8,
+              encode: { x: 'date', y: 'acos' }
+            }
+          ]
+        }
+
+        const spendPieOption = {
+          color: ['#2563eb', '#b45309', '#0f766e'],
+          tooltip: {
+            trigger: 'item',
+            formatter: '{b}: {c} ({d}%)'
+          },
+          legend: {
+            top: 0
+          },
+          series: [
+            {
+              type: 'pie',
+              radius: ['40%', '70%'],
+              center: ['50%', '58%'],
+              label: {
+                formatter: '{b}\n{d}%'
+              },
+              data: [
+                {
+                  name: '高效核心词与品牌词',
+                  value: Number((1126.9 + 441).toFixed(2))
+                },
+                {
+                  name: '低效泛词',
+                  value: 1512
+                },
+                {
+                  name: '竞品 ASIN 流量',
+                  value: 884
+                }
+              ]
+            }
+          ]
+        }
+
+        const charts = [
+          createChart('campaignChart', campaignOption),
+          createChart('trendChart', trendOption),
+          createChart('spendPieChart', spendPieOption)
+        ].filter(Boolean)
+
+        window.addEventListener('resize', () => {
+          charts.forEach(chart => chart.resize())
+        })
+      }
+
+      renderMetricCards()
+      renderCards('fieldGrid', fieldAnalyses)
+      renderCards('reportGrid', reportSections)
+      renderKeywordTable()
+      document.getElementById('summaryCopy').textContent = summaryCopy
+      initCharts()
+    </script>
+  </body>
+</html>

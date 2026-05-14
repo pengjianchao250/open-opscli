@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SPU 已售天数分析报告</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+    <style>
+      :root {
+        --bg: #f5f7fb;
+        --panel: #ffffff;
+        --border: #d9e2ef;
+        --text: #1f2937;
+        --muted: #64748b;
+        --primary: #2563eb;
+        --success: #0f766e;
+        --warn: #b45309;
+        --shadow: 0 4px 18px rgba(15, 23, 42, 0.05);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        line-height: 1.6;
+      }
+      .page { max-width: 1280px; margin: 0 auto; padding: 24px; }
+      .hero, .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); }
+      .hero { padding: 24px; }
+      .eyebrow { color: var(--muted); font-size: 12px; letter-spacing: 0; text-transform: uppercase; }
+      h1, h2, h3 { margin: 0; }
+      h1 { margin-top: 8px; font-size: 28px; line-height: 1.2; }
+      h2 { font-size: 20px; }
+      h3 { font-size: 15px; margin-bottom: 10px; }
+      p { margin: 0; }
+      .summary-copy { margin-top: 12px; max-width: 940px; font-size: 15px; line-height: 1.75; }
+      .source-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+      .source-strip span { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: #f8fafc; color: var(--muted); font-size: 12px; }
+      .metric-grid, .card-grid, .chart-grid { display: grid; gap: 12px; }
+      .metric-grid { margin-top: 20px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+      .metric { min-height: 88px; padding: 14px 16px; border: 1px solid var(--border); border-top: 3px solid var(--primary); border-radius: 8px; background: #fff; }
+      .metric.alt { border-top-color: var(--success); }
+      .metric.warn { border-top-color: var(--warn); }
+      .metric .label { color: var(--muted); font-size: 12px; }
+      .metric .value { margin-top: 8px; font-size: 22px; font-weight: 700; }
+      .metric .hint { margin-top: 6px; color: var(--muted); font-size: 12px; }
+      .section { margin-top: 24px; }
+      .section-head { margin-bottom: 12px; }
+      .section-head p { margin-top: 6px; color: var(--muted); font-size: 13px; }
+      .card-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+      .panel { padding: 16px; }
+      .panel p, .panel li { font-size: 14px; line-height: 1.75; }
+      .chart-grid { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+      .chart { width: 100%; height: 320px; }
+      .note { margin-top: 8px; color: var(--muted); font-size: 12px; }
+      .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+      table { width: 100%; min-width: 880px; border-collapse: collapse; }
+      th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: 13px; }
+      th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: var(--muted); }
+      tbody tr:nth-child(even) td { background: #fcfdff; }
+      ul { margin: 0; padding-left: 18px; }
+      .warning { border-left: 4px solid var(--warn); }
+      @media (max-width: 768px) {
+        .page { padding: 16px; }
+        .hero { padding: 18px; }
+        h1 { font-size: 24px; }
+        .chart { height: 280px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div class="eyebrow">AI 方法卡本地报告 / SPU Sold Days</div>
+        <h1>SPU 已售天数分析报告</h1>
+        <p class="summary-copy">本次 Excel 共 175 行、2 个字段，只能支持 SPU 已售天数维度分析。已售天数平均值为 633.35 天，中位数为 309.0 天，P95 为 1891.8 天；平均值显著高于中位数，说明少数超长周期 SPU 拉高了整体水平。</p>
+        <div class="source-strip">
+          <span>Excel: 交叉表-1778233062511.xlsx</span>
+          <span>Sheet: sheet1</span>
+          <span>生成时间: 2026-05-12 14:32:12</span>
+          <span>方法卡状态: 后端详情未取得</span>
+          <span>反馈: d1d57e6a-dcbe-4ec7-9e73-93eb9a47b094</span>
+        </div>
+        <div class="metric-grid"><article class="metric "><div class="label">样本行数</div><div class="value">175</div><div class="hint">Excel 数据行数</div></article>
+<article class="metric alt"><div class="label">字段数</div><div class="value">2</div><div class="hint">SPU / 已售天数</div></article>
+<article class="metric "><div class="label">平均已售天数</div><div class="value">633.35</div><div class="hint">受极端值影响较大</div></article>
+<article class="metric alt"><div class="label">中位数</div><div class="value">309.0</div><div class="hint">更接近典型 SPU</div></article>
+<article class="metric warn"><div class="label">P95</div><div class="value">1891.8</div><div class="hint">长周期阈值参考</div></article>
+<article class="metric warn"><div class="label">&gt;1095天</div><div class="value">23 个</div><div class="hint">三年以上样本</div></article>
+<article class="metric "><div class="label">&lt;=30天</div><div class="value">9 个</div><div class="hint">新品/异常候选</div></article>
+<article class="metric warn"><div class="label">0天样本</div><div class="value">1 个</div><div class="hint">需核对来源</div></article></div>
+      </header>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>关键发现</h2>
+          <p>结论只基于 Excel 中的 SPU 和已售天数字段。</p>
+        </div>
+        <div class="card-grid"><article class="panel"><h3>周期分布以一年内样本为主</h3><p>181-365 天区间有 56 个 SPU，占 32.00%；366-730 天区间有 41 个 SPU，占 23.43%。这两个区间合计 55.43%，说明当前样本主体是已经经过一定销售验证的成熟或准成熟商品。</p></article>
+<article class="panel"><h3>新品与零天样本占比不高但需要单独看</h3><p>已售天数小于等于 30 天的 SPU 有 9 个，占 5.14%，其中 BSB-235 为 0 天。该类样本不适合直接与成熟款比较，应进入新品或数据校验清单。</p></article>
+<article class="panel"><h3>超长周期 SPU 对均值影响明显</h3><p>大于 1095 天的 SPU 有 23 个，占 13.14%。其中 BSB-008 达到 11646 天，TV-002 达到 8861 天，建议核对这些极端值是否符合业务口径，避免影响平均周期判断。</p></article>
+<article class="panel"><h3>SPU 前缀存在结构差异</h3><p>BSB 前缀数量最多，共 36 个；CW 前缀 13 个，平均已售天数 1247.23 天、中位数 1122 天，成熟度明显更高。前缀只能作为编码分组线索，不能直接等同于品类结论。</p></article></div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>图表输出</h2>
+          <p>用于快速查看周期分布、超长周期 SPU 和主要前缀结构。</p>
+        </div>
+        <div class="chart-grid">
+          <article class="panel">
+            <h3>已售天数分布</h3>
+            <div id="binChart" class="chart"></div>
+            <p class="note">按生命周期区间聚合 SPU 数量。</p>
+          </article>
+          <article class="panel">
+            <h3>Top 10 超长周期 SPU</h3>
+            <div id="topChart" class="chart"></div>
+            <p class="note">用于识别对均值影响最大的 SPU。</p>
+          </article>
+          <article class="panel">
+            <h3>主要前缀平均已售天数</h3>
+            <div id="prefixChart" class="chart"></div>
+            <p class="note">前缀仅作编码分组参考，不等同于业务品类。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>分布明细</h2>
+          <p>每个区间列出前 12 个样本，便于回到源表核对。</p>
+        </div>
+        <article class="panel">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>区间</th><th>SPU 数</th><th>占比</th><th>样例 SPU</th><th>解读</th></tr></thead>
+              <tbody><tr><td>0天</td><td>1</td><td>0.57%</td><td>BSB-235</td><td>需核对是否新品未售、统计口径缺失或数据异常。</td></tr>
+<tr><td>1-30天</td><td>8</td><td>4.57%</td><td>BKC-114, HB-118, HB-116, PB-102, TV-147, BKC-116, BSB-207, BSB-241</td><td>新品或刚进入销售周期，适合做新品冷启动跟踪。</td></tr>
+<tr><td>31-90天</td><td>12</td><td>6.86%</td><td>CW-184, BTS-102, WC-108, COT-126, COT-143, TV-151, BVS-131, SOC-149</td><td>早期验证阶段，重点看是否形成稳定动销。</td></tr>
+<tr><td>91-180天</td><td>25</td><td>14.29%</td><td>BSB-217, SS-103, SF-005, BSB-143, HOD-123, HB-107, CW-186, BSB-184</td><td>成长期，适合对比运营动作后周期变化。</td></tr>
+<tr><td>181-365天</td><td>56</td><td>32.0%</td><td>BSB-131, CWSC-106, MT-110, DRS-114, COT-124, DRS-113, TV-146, HT-104</td><td>一年内稳定运营样本，是本数据的主力区间。</td></tr>
+<tr><td>366-730天</td><td>41</td><td>23.43%</td><td>BSB-112, ST-108, BSB-167, TV-103, HO-001, PA-004, COT-123, SCSC-005</td><td>较成熟商品，需要关注生命周期和更新节奏。</td></tr>
+<tr><td>731-1095天</td><td>9</td><td>5.14%</td><td>ST-104, COT-111, TV-101, PA-103, BKC-101, BSB-142, PA-105, TV-112</td><td>长周期商品，适合沉淀常青款与维护策略。</td></tr>
+<tr><td>&gt;1095天</td><td>23</td><td>13.14%</td><td>BSB-008, WC-101, CW-001, KD-101, RC-010, CW-006, BSB-004, HB-102</td><td>三年以上超长周期，需区分常青款和历史遗留款。</td></tr></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>重点清单</h2>
+          <p>包含超长周期、短周期和前缀聚合三类视图。</p>
+        </div>
+        <div class="card-grid">
+          <article class="panel">
+            <h3>Top 10 已售天数最高</h3>
+            <div class="table-wrap">
+              <table><thead><tr><th>SPU</th><th>前缀</th><th>已售天数</th></tr></thead><tbody><tr><td>BSB-008</td><td>BSB</td><td>11,646</td></tr>
+<tr><td>TV-002</td><td>TV</td><td>8,861</td></tr>
+<tr><td>HB-103</td><td>HB</td><td>4,690</td></tr>
+<tr><td>CW-006</td><td>CW</td><td>3,854</td></tr>
+<tr><td>BSB-004</td><td>BSB</td><td>3,643</td></tr>
+<tr><td>CW-003</td><td>CW</td><td>2,800</td></tr>
+<tr><td>HB-102</td><td>HB</td><td>2,320</td></tr>
+<tr><td>CW-009</td><td>CW</td><td>2,068</td></tr>
+<tr><td>CW-010</td><td>CW</td><td>1,924</td></tr>
+<tr><td>COT-103</td><td>COT</td><td>1,878</td></tr></tbody></table>
+            </div>
+          </article>
+          <article class="panel">
+            <h3>Bottom 15 已售天数最低</h3>
+            <div class="table-wrap">
+              <table><thead><tr><th>SPU</th><th>前缀</th><th>已售天数</th></tr></thead><tbody><tr><td>BSB-235</td><td>BSB</td><td>0</td></tr>
+<tr><td>BKC-114</td><td>BKC</td><td>2</td></tr>
+<tr><td>TV-147</td><td>TV</td><td>9</td></tr>
+<tr><td>BSB-207</td><td>BSB</td><td>16</td></tr>
+<tr><td>BSB-241</td><td>BSB</td><td>16</td></tr>
+<tr><td>HB-118</td><td>HB</td><td>18</td></tr>
+<tr><td>HB-116</td><td>HB</td><td>22</td></tr>
+<tr><td>BKC-116</td><td>BKC</td><td>29</td></tr>
+<tr><td>PB-102</td><td>PB</td><td>29</td></tr>
+<tr><td>CW-184</td><td>CW</td><td>32</td></tr>
+<tr><td>SKS-008</td><td>SKS</td><td>38</td></tr>
+<tr><td>BSB-230</td><td>BSB</td><td>40</td></tr>
+<tr><td>COT-126</td><td>COT</td><td>44</td></tr>
+<tr><td>SOC-149</td><td>SOC</td><td>49</td></tr>
+<tr><td>BTS-102</td><td>BTS</td><td>55</td></tr></tbody></table>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>前缀聚合</h2>
+          <p>按 SPU `-` 前的编码聚合，优先展示样本数最多的 12 个前缀。</p>
+        </div>
+        <article class="panel">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>前缀</th><th>数量</th><th>平均天数</th><th>中位数</th><th>最大值</th><th>最小值</th></tr></thead>
+              <tbody><tr><td>BSB</td><td>36</td><td>706.67</td><td>279.5</td><td>11,646</td><td>0</td></tr>
+<tr><td>COT</td><td>14</td><td>614.07</td><td>538.5</td><td>1,878</td><td>44</td></tr>
+<tr><td>CW</td><td>13</td><td>1247.23</td><td>1122.0</td><td>3,854</td><td>32</td></tr>
+<tr><td>TV</td><td>12</td><td>1061.25</td><td>293.5</td><td>8,861</td><td>9</td></tr>
+<tr><td>PA</td><td>9</td><td>699.33</td><td>615.0</td><td>1,439</td><td>194</td></tr>
+<tr><td>HOD</td><td>8</td><td>316.75</td><td>307.5</td><td>553</td><td>93</td></tr>
+<tr><td>HB</td><td>7</td><td>1187.0</td><td>266.0</td><td>4,690</td><td>18</td></tr>
+<tr><td>DRS</td><td>6</td><td>341.83</td><td>296.0</td><td>502</td><td>234</td></tr>
+<tr><td>ST</td><td>5</td><td>530.6</td><td>589.0</td><td>779</td><td>275</td></tr>
+<tr><td>WC</td><td>5</td><td>510.2</td><td>196.0</td><td>1,701</td><td>90</td></tr>
+<tr><td>SOC</td><td>5</td><td>218.8</td><td>208.0</td><td>355</td><td>49</td></tr>
+<tr><td>CL</td><td>4</td><td>537.75</td><td>467.0</td><td>1,113</td><td>104</td></tr></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="section">
+        <div class="card-grid">
+          <article class="panel">
+            <h3>建议动作</h3>
+            <ul><li>先清理 SPU 首尾空格，当前发现 2 条原始 SPU 带外部空格，避免后续关联主数据时匹配失败。</li>
+<li>对 BSB-235 等 0 天样本做来源核验，确认是新品、未动销，还是 Excel 导出缺失。</li>
+<li>把 &lt;=30 天、31-90 天、181-365 天、&gt;1095 天四类样本拆开看，避免用同一运营标准评估全部 SPU。</li>
+<li>对 &gt;1095 天的超长周期 SPU 先核对生命周期状态，再判断是常青款、历史遗留款还是口径异常。</li></ul>
+          </article>
+          <article class="panel warning">
+            <h3>质量校验与限制</h3>
+            <ul><li>后端方法卡列表接口 `opscli methods-card list` 返回 REMOTE_HTTP_ERROR 404，本报告未取得真实后端方法卡详情。</li>
+<li>Excel 只有 `SPU` 和 `已售天数` 两个字段，无法分析销量、销售额、库存、利润、广告、转化或站点差异。</li>
+<li>SPU 前缀仅按编码拆分，不代表已确认的业务品类。</li></ul>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      // 图表数据由本次 Excel 统计生成，未使用示例中的虚构业务指标。
+      const chartData = {"bins": [{"range": "0天", "count": 1, "share": 0.57, "note": "需核对是否新品未售、统计口径缺失或数据异常。", "spus": ["BSB-235"]}, {"range": "1-30天", "count": 8, "share": 4.57, "note": "新品或刚进入销售周期，适合做新品冷启动跟踪。", "spus": ["BKC-114", "HB-118", "HB-116", "PB-102", "TV-147", "BKC-116", "BSB-207", "BSB-241"]}, {"range": "31-90天", "count": 12, "share": 6.86, "note": "早期验证阶段，重点看是否形成稳定动销。", "spus": ["CW-184", "BTS-102", "WC-108", "COT-126", "COT-143", "TV-151", "BVS-131", "SOC-149", "BSB-230", "DTS-118", "SKS-008", "COT-144"]}, {"range": "91-180天", "count": 25, "share": 14.29, "note": "成长期，适合对比运营动作后周期变化。", "spus": ["BSB-217", "SS-103", "SF-005", "BSB-143", "HOD-123", "HB-107", "CW-186", "BSB-184", "ETBC-112", "BSB-139", "BSB-201", "WC-107"]}, {"range": "181-365天", "count": 56, "share": 32.0, "note": "一年内稳定运营样本，是本数据的主力区间。", "spus": ["BSB-131", "CWSC-106", "MT-110", "DRS-114", "COT-124", "DRS-113", "TV-146", "HT-104", "SOC-121", "HOD-114", "BSB-148", "CW-108"]}, {"range": "366-730天", "count": 41, "share": 23.43, "note": "较成熟商品，需要关注生命周期和更新节奏。", "spus": ["BSB-112", "ST-108", "BSB-167", "TV-103", "HO-001", "PA-004", "COT-123", "SCSC-005", "PA-008", "CL-001", "MT-108", "SMS-003"]}, {"range": "731-1095天", "count": 9, "share": 5.14, "note": "长周期商品，适合沉淀常青款与维护策略。", "spus": ["ST-104", "COT-111", "TV-101", "PA-103", "BKC-101", "BSB-142", "PA-105", "TV-112", "HB-101"]}, {"range": ">1095天", "count": 23, "share": 13.14, "note": "三年以上超长周期，需区分常青款和历史遗留款。", "spus": ["BSB-008", "WC-101", "CW-001", "KD-101", "RC-010", "CW-006", "BSB-004", "HB-102", "CL-101", "CW-003", "CW-008", "HB-103"]}], "top10": [{"spu": "BSB-008", "days": 11646.0}, {"spu": "TV-002", "days": 8861.0}, {"spu": "HB-103", "days": 4690.0}, {"spu": "CW-006", "days": 3854.0}, {"spu": "BSB-004", "days": 3643.0}, {"spu": "CW-003", "days": 2800.0}, {"spu": "HB-102", "days": 2320.0}, {"spu": "CW-009", "days": 2068.0}, {"spu": "CW-010", "days": 1924.0}, {"spu": "COT-103", "days": 1878.0}], "prefixTop12": [{"prefix": "BSB", "count": 36, "avg_days": 706.67, "median_days": 279.5, "max_days": 11646.0, "min_days": 0.0}, {"prefix": "COT", "count": 14, "avg_days": 614.07, "median_days": 538.5, "max_days": 1878.0, "min_days": 44.0}, {"prefix": "CW", "count": 13, "avg_days": 1247.23, "median_days": 1122.0, "max_days": 3854.0, "min_days": 32.0}, {"prefix": "TV", "count": 12, "avg_days": 1061.25, "median_days": 293.5, "max_days": 8861.0, "min_days": 9.0}, {"prefix": "PA", "count": 9, "avg_days": 699.33, "median_days": 615.0, "max_days": 1439.0, "min_days": 194.0}, {"prefix": "HOD", "count": 8, "avg_days": 316.75, "median_days": 307.5, "max_days": 553.0, "min_days": 93.0}, {"prefix": "HB", "count": 7, "avg_days": 1187.0, "median_days": 266.0, "max_days": 4690.0, "min_days": 18.0}, {"prefix": "DRS", "count": 6, "avg_days": 341.83, "median_days": 296.0, "max_days": 502.0, "min_days": 234.0}, {"prefix": "ST", "count": 5, "avg_days": 530.6, "median_days": 589.0, "max_days": 779.0, "min_days": 275.0}, {"prefix": "WC", "count": 5, "avg_days": 510.2, "median_days": 196.0, "max_days": 1701.0, "min_days": 90.0}, {"prefix": "SOC", "count": 5, "avg_days": 218.8, "median_days": 208.0, "max_days": 355.0, "min_days": 49.0}, {"prefix": "CL", "count": 4, "avg_days": 537.75, "median_days": 467.0, "max_days": 1113.0, "min_days": 104.0}]};
+
+      function renderFallback(id, text) {
+        const node = document.getElementById(id);
+        if (node) node.innerHTML = `<p class="note">${text}</p>`;
+      }
+
+      function initCharts() {
+        if (!window.echarts) {
+          renderFallback('binChart', 'ECharts 未加载成功，请直接查看下方明细表。');
+          renderFallback('topChart', 'ECharts 未加载成功，请直接查看下方明细表。');
+          renderFallback('prefixChart', 'ECharts 未加载成功，请直接查看下方明细表。');
+          return;
+        }
+        const charts = [];
+        const binChart = echarts.init(document.getElementById('binChart'));
+        binChart.setOption({
+          color: ['#2563eb'],
+          tooltip: { trigger: 'axis' },
+          grid: { left: 42, right: 20, top: 30, bottom: 56 },
+          xAxis: { type: 'category', data: chartData.bins.map(item => item.range), axisLabel: { rotate: 30 } },
+          yAxis: { type: 'value', name: 'SPU数' },
+          series: [{ type: 'bar', barWidth: 24, data: chartData.bins.map(item => item.count) }]
+        });
+        charts.push(binChart);
+
+        const topChart = echarts.init(document.getElementById('topChart'));
+        topChart.setOption({
+          color: ['#b45309'],
+          tooltip: { trigger: 'axis' },
+          grid: { left: 86, right: 24, top: 20, bottom: 26 },
+          xAxis: { type: 'value', name: '天' },
+          yAxis: { type: 'category', data: chartData.top10.map(item => item.spu).reverse() },
+          series: [{ type: 'bar', data: chartData.top10.map(item => item.days).reverse() }]
+        });
+        charts.push(topChart);
+
+        const prefixChart = echarts.init(document.getElementById('prefixChart'));
+        prefixChart.setOption({
+          color: ['#0f766e'],
+          tooltip: { trigger: 'axis' },
+          grid: { left: 54, right: 20, top: 30, bottom: 50 },
+          xAxis: { type: 'category', data: chartData.prefixTop12.map(item => item.prefix), axisLabel: { rotate: 30 } },
+          yAxis: { type: 'value', name: '平均天数' },
+          series: [{ type: 'bar', barWidth: 20, data: chartData.prefixTop12.map(item => item.avg_days) }]
+        });
+        charts.push(prefixChart);
+
+        window.addEventListener('resize', () => charts.forEach(chart => chart.resize()));
+      }
+
+      initCharts();
+    </script>
+  </body>
+</html>

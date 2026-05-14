@@ -64,6 +64,7 @@ def _error_payload(command: str, exc: Exception) -> dict:
 def get(
     asin: str = typer.Argument(..., help="目标 ASIN"),
     country: str = typer.Argument(..., help="国家名，如 US、UK、DE、JP"),
+    question: str | None = typer.Option(None, "--question", help="指定单题 Rufus 问题，传入后跳过默认题库"),
     skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 根目录"),
     cdp_url: str = typer.Option("http://127.0.0.1:9222", "--cdp-url", help="Chrome DevTools 地址"),
     new_chrome: bool = typer.Option(False, "--new-chrome", help="先新开 Chrome 调试窗口再连接"),
@@ -80,6 +81,7 @@ def get(
         data = manager.get(
             asin=asin,
             country=country,
+            question=question,
             skills_dir=skills_dir,
             cdp_url=cdp_url,
             new_chrome=new_chrome,

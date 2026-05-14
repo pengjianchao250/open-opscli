@@ -229,6 +229,48 @@
 
 ---
 
+## 2026-05-11 methods-card - 新增方法卡 Skill 与分析工作流
+
+**变更原因**：需要将 `methods card` Skill 从认证门禁扩展为可执行分析流程：用登录态获取方法卡列表/详情，结合本地 Excel 数据和方法卡规范生成 HTML 报告。
+
+**改动点**：
+- 新增 Super Dev 变更包 `.super-dev/changes/ops-methods-card/`
+- 新增 `opscli/methods_card/` 模块，提供 `opscli methods-card list/detail`
+- 在 `opscli/cli.py` 注册 `methods-card` 顶级命令
+- 新增 `tests/skills/test_manager.py` 安装测试，锁定 `ops-methods-card` 模板必须能走现有安装链路
+- 新增 `tests/methods_card/` 客户端和 CLI 测试
+- 新增 `tests/skills/test_ops_methods_card_xlsx_preview.py`，锁定 Excel 预览脚本输出
+- 新增 `opscli/skills/templates/ops-methods-card/SKILL.md` 和 `data/VERSION.json`
+- 将方法卡静态说明移入 `opscli/skills/templates/ops-methods-card/references/`，并把输出示例 HTML 一并收口到 reference 层
+- 新增 `references/执行流程.md`、`references/方法卡接口.md`
+- 新增 `scripts/xlsx_preview.py`，用标准库解析本地 `.xlsx` 为 JSON 摘要
+- `xlsx_preview.py` 显式使用 UTF-8 输出，避免 Windows 管道捕获中文路径时解码失败
+- 更新 `opscli/skills/templates/manifest.json`，声明 `ops-methods-card` 但不纳入公开发版产物
+- 更新 `SKILL.md`，补充认证、选卡、详情、Excel 读取和 HTML 保存流程
+- 将 `SKILL.md` frontmatter `description` 改为中文，并明确 HTML 报告需参考 `references/卡片输出示例.html`
+- `SkillsManager.install()` 安装模板时忽略 `__pycache__`、`*.pyc`、`*.pyo`，避免将本地验证缓存复制到项目 Skill
+
+**验证结果**：
+- RED：`.venv/Scripts/python.exe -m pytest tests/skills/test_manager.py::test_install_ops_methods_card_template -q` 因模板缺失失败
+- GREEN：同一目标测试通过，`1 passed`
+- MethodsCard RED：`tests/methods_card/*` 初次运行因 `opscli.methods_card` 模块缺失失败
+- MethodsCard GREEN：`tests/methods_card/test_client.py tests/methods_card/test_cli.py` 通过，`5 passed`
+- Excel 预览：`tests/skills/test_ops_methods_card_xlsx_preview.py` 通过，`1 passed`
+- Skill 校验：设置 UTF-8 后 `quick_validate.py opscli/skills/templates/ops-methods-card` 通过
+- Manifest 校验：`validate_release_manifest(Path("opscli/skills/templates"))` 输出 `OK`
+- 模板发现：`SkillsManager().list_templates()` 可发现 `ops-methods-card`
+- Diff 检查：`git diff --check` 退出码 0，仅有 CRLF 工作区提示
+- 最终统一验证：目标 pytest `7 passed`；Skill 快速校验通过；manifest 校验输出 `OK`；`compileall` 通过；`git diff --check` 退出码 0
+- 文档补充验证：中文 description 调整后，`quick_validate.py opscli/skills/templates/ops-methods-card` 通过；`git diff --check` 通过
+- 项目安装验证：`opscli skills install ops-methods-card --skills-dir ".agents/skills"` 成功；`skills list --skills-dir ".agents/skills"` 可发现 `ops-methods-card`
+- 已知环境噪音：`uv run pytest ...` 被 `uv.lock` 中 `playwright` 缺少 `source` 字段阻断；`.venv` 全量 `test_manager.py` 和 `test_packaging.py` 分别仍有既有 Windows 路径分隔断言失败
+
+**影响范围**：新增只读 methods-card CLI；不影响 auth/query/amazon 业务逻辑。Skill 增加本地 Excel 预览和 HTML 报告生成流程。
+
+**回滚方式**：删除 `.super-dev/changes/ops-methods-card/`、`opscli/methods_card/`、`tests/methods_card/`、`opscli/skills/templates/ops-methods-card/`，回退 `opscli/cli.py` 注册行和 `tests/skills/test_manager.py` 新增测试，并从 `manifest.json` 移除 `ops-methods-card`
+
+---
+
 ## 2026-05-07 opscli - skills install 自动向编辑器配置文件注入反馈铁律
 
 **变更原因**：用户期望 `opscli skills install` 安装 ops-feedback Skill 时，能自动在对应编辑器（Claude Code / Codex / OpenCode / OpenClaw）的配置文件中追加【铁律】工具调用失败自动反馈，实现零配置启用。
@@ -816,5 +858,43 @@
 **影响范围**：影响远程 MCP HTTP/SSE 模式下 auth 工具调用，尤其是 ChatGPT 授权轮询链路；CLI 登录流程不受影响。
 
 **回滚方式**：回退 `opscli/mcp/tools/auth.py` 中 `auth_login_poll` 的默认超时、`asyncio.to_thread()` 调用和 annotations 注册；回退 `opscli/mcp/auth_middleware.py` 中的校验缓存与超时常量。
+## 2026-05-14 Amazon Rufus - 补齐 get 单题 question 参数
+
+**变更原因**：`ops-amazon-rufus` Skill/README 已说明 `opscli amazon-rufus get --question` 单题模式，但 CLI 与 Manager 未实现该参数，导致 Agent 按文档调用时报 `No such option: --question`。
+
+**改动点**：
+- `opscli/amazon_rufus/commands/cli.py`：为 `get` 命令增加 `--question` 参数，并透传到 `RufusManager.get`
+- `opscli/amazon_rufus/services/manager.py`：新增单题模式问题解析，传入 `question` 时跳过题库读取；未传时保留默认题库模式
+- `opscli/amazon_rufus/domain/exceptions.py`：新增 `InvalidQuestionError`，用于空白问题的稳定错误码
+- `tests/amazon_rufus/test_core.py`：补充 CLI 参数透传、单题跳过题库、空白问题拒绝的回归测试
+
+**验证结果**：
+- 定向 TDD 验证：`uv run pytest "tests/amazon_rufus/test_core.py" -k "question_to_manager or single_question_without_loading_bank or rejects_blank_question" -q` 为 3 passed
+- 完整 Amazon Rufus 测试：`uv run pytest "tests/amazon_rufus/test_core.py" -q` 为 41 passed
+- CLI 参数验证：`uv run --extra amazon opscli amazon-rufus get --help` 已展示 `--question`
+
+**影响范围**：仅影响 `opscli amazon-rufus get` 的问题来源选择；未传 `--question` 时继续读取本地题库。
+
+**回滚方式**：回退上述 4 个文件中本次新增的 `question` 参数、`_resolve_questions` 分支、`InvalidQuestionError` 和对应测试。
+
+---
+
+## 2026-05-14 ops-amazon-rufus Skill - 增加拒答后中文改写规则
+
+**变更原因**：`ops-amazon-rufus` 已要求拒答后改写并重试，但未明确约束重试问题语言，可能在英文原问题或英文站点场景下生成英文改写问题。
+
+**改动点**：
+- `.agents/skills/ops-amazon-rufus/SKILL.md`：在拒答处理规则中增加“改写后的问题必须使用中文”。
+- `opscli/skills/templates/ops-amazon-rufus/SKILL.md`：同步模板级 Skill 规则，保证后续安装/升级后仍保留约束。
+- `opscli/skills/templates/ops-amazon-rufus/README.md`：同步拒答处理说明与流程图文案。
+- `.super-dev/changes/amazon-rufus-question-refusal-routing/`：补充 proposal 与 tasks 中的中文改写约束。
+
+**验证结果**：
+- 静态红测确认变更前 skill 文档未包含中文改写约束。
+- 静态绿测通过：项目级 skill、模板 skill、README、proposal 和 tasks 均已覆盖中文改写规则。
+
+**影响范围**：仅影响 `ops-amazon-rufus` Skill 执行规范和模板文档；不改变 `opscli amazon-rufus get` 的代码行为。
+
+**回滚方式**：回退上述 5 个文件中新增的中文改写规则文本，并恢复 README 流程图节点文案。
 
 ---

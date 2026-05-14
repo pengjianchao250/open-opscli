@@ -31,6 +31,12 @@ class QuestionBankNotReadyError(RufusError):
     code = "QUESTION_BANK_NOT_READY"
 
 
+class InvalidQuestionError(RufusError):
+    """用户传入的问题参数无效。"""
+
+    code = "INVALID_QUESTION"
+
+
 class RufusReplayError(RufusError):
     """Rufus 重放失败。"""
 

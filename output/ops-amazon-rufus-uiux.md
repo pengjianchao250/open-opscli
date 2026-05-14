@@ -1,5 +1,220 @@
 # ops-amazon-rufus UIUX
 
+## 2026-05-14 体验增量：拒答后自动改写问题
+
+### 体验目标
+
+用户不应该只得到“Rufus 拒绝回答”的终态结果。系统应先识别拒答，再把原问题改写成更中性、仍保留原语义、且不超过 180 字的问题，并最多自动重试 3 次。
+
+本轮新增体验约束：拒答后自动生成的重试问题必须是中文。即使用户原问题是英文或中英混合，报告中展示的改写后问题也应为中文。
+
+### 用户可感知行为
+
+用户仍执行原命令：
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:SKIP_CYTHON = "1"; uv run --extra amazon opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" --new-chrome --question "这个商品适合送礼吗？"
+```
+
+若第一次答案拒答，报告中展示：
+
+```text
+## 第 1 题：这个商品适合送礼吗？
+
+已检测到首次回答拒答，已在保持原语义的前提下改写问题并重试。
+改写后问题：基于商品页面和公开评价，分析该商品是否适合送礼，并说明理由
+
+### 答案
+
+Rufus 最终回答文本。
+```
+
+用户不需要手工复制拒答内容再改问法。
+
+### 改写文案体验
+
+改写问题应满足：
+
+1. 不超过 180 字。
+2. 保留原问题的核心对象与分析维度。
+3. 使用中文表达。
+4. 使用中性、可回答的表达。
+5. 不新增用户没有要求的维度。
+
+例如：
+
+```text
+原问题：这个商品是不是很垃圾，差评是不是说明不能买？
+改写后：基于商品页面和公开评价，分析该商品的主要差评风险、购买顾虑和适用场景，并给出客观判断
+```
+
+英文原问题也必须转成中文重试问题：
+
+```text
+原问题：Is this product safe for kids and worth buying?
+改写后：基于商品页面和公开评价，分析该商品是否适合儿童使用、主要风险点和购买价值
+```
+
+### 失败体验
+
+如果 3 次改写重试后仍然拒答，报告应明确说明已经达到重试上限：
+
+```text
+已检测到首次回答拒答，已改写问题并重试 3 次；重试后仍未获得有效回答。
+```
+
+该状态不应继续自动改写第 4 次，避免用户等待不可控的多轮尝试。
+
+### 与空白问题的关系
+
+空白 `--question` 仍是输入错误，应直接返回 `INVALID_RUFUS_QUESTION`。拒答处理发生在 Rufus 已经返回答案之后，用户体验上属于“回答质量补救”，不是“参数校验”。
+
+### Agent 回复规范
+
+Agent 回复用户时只给报告路径和必要摘要。发生拒答改写时，可以说明“已自动改写并重试”，但不要输出 seed request、headers、cookie 或完整 JSON。
+
+## 2026-05-14 体验增量：题库模式与单题模式并存
+
+### 体验目标
+
+用户获取 Rufus 答案时，应能根据意图选择合适路径：
+
+1. 想看默认分析：不传问题，使用题库模式。
+2. 已有明确问题：传入 `--question`，只获取该问题答案。
+
+这能减少不必要的题库执行时间，也避免 Agent 在用户已经问得很具体时输出一整份默认报告。
+
+### 推荐命令
+
+单题模式：
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:SKIP_CYTHON = "1"; uv run --extra amazon opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" --new-chrome --question "这个商品适合送礼吗？"
+```
+
+题库模式：
+
+```powershell
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:SKIP_CYTHON = "1"; uv run --extra amazon opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" --new-chrome
+```
+
+### Agent 选择规则
+
+Skill 执行时按以下规则判断：
+
+1. 用户消息中包含明确的 Rufus 问题，例如“这个商品适合送礼吗”“差评风险是什么”，优先使用 `--question`。
+2. 用户只提供 ASIN 和国家，或要求“默认报告”“完整分析”“跑题库”，使用题库模式。
+3. 用户要求多个问题时，本轮不走多个 `--question`；先提示当前 CLI 单题模式一次只支持一个问题，或按题库模式执行。
+4. 单题模式仍需要对应国家站点 Amazon 登录；未登录时仍引导执行 `opscli amazon-rufus init <country>`。
+
+### 成功输出体验
+
+两种模式成功时都只输出报告路径：
+
+```text
+Rufus 答案报告已保存：output/amazon-rufus/B0TEST1234-20260514-153000.md
+```
+
+单题报告标题直接使用用户传入的问题：
+
+```text
+## 第 1 题：这个商品适合送礼吗？
+
+### 答案
+
+Rufus 回答文本。
+```
+
+题库报告继续按模板顺序输出多个问题 section。
+
+### 失败体验
+
+显式传入空问题时，不回退到题库模式，而是返回明确错误：
+
+```json
+{
+  "success": false,
+  "command": "amazon-rufus get",
+  "data": null,
+  "error": {
+    "code": "INVALID_RUFUS_QUESTION",
+    "message": "--question 不能为空"
+  }
+}
+```
+
+这样可以避免用户以为 CLI 回答了指定问题，实际却跑了默认题库。
+
+### UI/图标/设计系统锁定
+
+本轮没有图形 UI 实现，不涉及图标库、字体系统、design token 或组件生态变更。CLI 文案必须继续保持简洁、明确、可执行。
+
+## 2026-05-14 体验增量：问题模板 reference 独立化
+
+### 体验目标
+
+用户阅读 `ops-amazon-rufus` 文档时，应能清晰区分两类任务：
+
+1. 获取 Rufus 回答：登录 Amazon、同步题库、执行 `amazon-rufus get`、查看报告。
+2. 管理问题模板：查看默认题库、创建模板、保存问题、修改或删除模板。
+
+本轮将第二类任务独立到 `references/question-templates.md`，避免用户在执行回答获取时被管理端接口干扰。
+
+### 阅读路径
+
+推荐文档入口：
+
+```text
+README.md / SKILL.md
+  -> 常用命令与 Rufus 获取流程
+  -> references/question-templates.md
+     -> 问题模板获取与保存接口
+  -> references/rufus-report-formatting.md
+     -> 报告格式化规范
+```
+
+### 新 reference 体验规范
+
+`references/question-templates.md` 应采用资源文档风格：
+
+1. 先说明适用范围：只处理问题模板，不处理 Rufus 回答。
+2. 再给出数据模型：模板、问题、本地题库文件。
+3. 再给出接口表：获取、创建、保存、追加、更新、删除。
+4. 最后给保存工作流：新增模板、追加问题、整体覆盖、修改单题。
+
+文档不应使用“获取回答”“登录 Amazon”“seed request”“报告”等章节标题。
+
+### 保存接口的用户心智
+
+用户只需要理解两种保存方式：
+
+1. 新增模板：先创建描述，再追加问题。
+2. 保存问题：可以整体覆盖，也可以追加或单题修改。
+
+推荐文案：
+
+```text
+新增模板只创建模板描述；问题内容通过 questions 接口单独保存。
+```
+
+该文案能避免用户误以为 `POST /question-templates` 同时保存问题列表。
+
+### CLI / Skill 主流程不变
+
+普通 Rufus 获取用户仍按以下路径使用：
+
+```powershell
+opscli skills upgrade ops-amazon-rufus --skills-dir ".agents/skills"
+opscli amazon-rufus init US
+opscli amazon-rufus get B0B1MLVMY5 US --skills-dir ".agents/skills" --new-chrome
+```
+
+主流程文档中只保留“题库接口详见 reference”的跳转，不展示管理端保存接口。
+
+### UI/图标/设计系统锁定
+
+本轮没有图形 UI 实现，不涉及图标库、字体系统、design token 或组件生态变更。若后续要在 CLI 外新增问题模板管理页面，必须重新更新本文件并冻结对应 UI 方案后再编码。
+
 ## 2026-05-07 体验增量：登录前置提示与 init 指引
 
 ### 体验目标

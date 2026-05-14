@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from opscli.amazon_rufus.domain.exceptions import InvalidQuestionError
 from opscli.amazon_rufus.domain.models import AnswerData
 from opscli.amazon_rufus.runtime.country_map import build_product_url, resolve_marketplace
 from opscli.amazon_rufus.services.browser import BrowserAttachService
@@ -46,6 +47,7 @@ class RufusManager:
         *,
         asin: str,
         country: str,
+        question: str | None = None,
         skills_dir: str | None = None,
         cdp_url: str = "http://127.0.0.1:9222",
         new_chrome: bool = False,
@@ -59,9 +61,7 @@ class RufusManager:
         normalized_asin = asin.strip().upper()
         normalized_country = country.strip().upper()
         resolve_marketplace(normalized_country)
-        bank = self.question_bank or QuestionBankService(skills_dir=skills_dir)
-        templates = bank.load_templates()
-        questions = [question.text for template in templates for question in template.questions if question.text]
+        questions = self._resolve_questions(question=question, skills_dir=skills_dir)
         page_url = build_product_url(normalized_asin, normalized_country)
         answers: list[AnswerData] = []
 
@@ -103,6 +103,17 @@ class RufusManager:
                 captured_at=seed.captured_at,
             )
         return data
+
+    def _resolve_questions(self, *, question: str | None, skills_dir: str | None) -> list[str]:
+        """根据单题参数或本地题库生成本次 Rufus 问题列表。"""
+        if question is not None:
+            normalized_question = question.strip()
+            if not normalized_question:
+                raise InvalidQuestionError("question 不能为空")
+            return [normalized_question]
+        bank = self.question_bank or QuestionBankService(skills_dir=skills_dir)
+        templates = bank.load_templates()
+        return [item.text for template in templates for item in template.questions if item.text]
 
     def build_upload_payload(
         self,

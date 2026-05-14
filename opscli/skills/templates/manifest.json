@@ -71,6 +71,14 @@
       "tier": "core",
       "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
     },
+    "ops-methods-card": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "methods card Skill 依赖内部方法卡接口和示例 Excel，当前作为内部模板暂不随公开产物发版"
+    },
     "ops-product-attribute-analyzer": {
       "source": false,
       "wheel": false,

@@ -1,0 +1,45 @@
+{
+  "source": "cli",
+  "feedback_type": "bug",
+  "severity": "high",
+  "title": "ops-methods-card 列表接口返回 404",
+  "content": "执行 ops-methods-card 分析流程时，认证已成功，但调用 opscli methods-card list 获取方法卡列表返回 REMOTE_HTTP_ERROR 404，请求的资源不存在，导致无法按后端方法卡详情继续分析。",
+  "payload": {
+    "expected": "返回可用方法卡列表，用于选择卡片并获取详情。",
+    "actual": "CLI 返回 success=false，错误码 REMOTE_HTTP_ERROR，status_code=404。"
+  },
+  "context": {
+    "skill_name": "ops-methods-card",
+    "command_name": "opscli methods-card list",
+    "client_name": "opscli"
+  },
+  "execution_summary": {
+    "summary": "调用 opscli methods-card list 获取方法卡列表失败，已按项目规范自动提交反馈。",
+    "failed_calls": [
+      {
+        "tool": "PowerShell -> opscli methods-card list",
+        "call_params": {
+          "keyword": null,
+          "page": null,
+          "per_page": null,
+          "pretty": false
+        },
+        "error_message": "REMOTE_HTTP_ERROR: 请求的资源不存在 (status_code=404)",
+        "reason": "推测当前 ops 后端环境未部署或未注册方法卡列表接口，或 CLI 使用的接口路径与后端当前路由不一致；认证状态已成功，不属于未登录问题。",
+        "fix_suggestion": "请核对 opscli methods-card list 使用的后端接口路径和当前环境路由；必要时将 CLI 路由与后端实际 /api/v1/ai/method-card 接口保持一致。"
+      }
+    ],
+    "successful_calls": [
+      {
+        "tool": "PowerShell -> opscli auth login",
+        "result": "授权成功，账号 zhengmiaoting@aukeys.com。"
+      },
+      {
+        "tool": "PowerShell -> opscli auth token status",
+        "result": "已登录，Session 有效。"
+      }
+    ],
+    "final_resolution": "已生成结构化反馈，等待 feedback submit 返回 feedback_uuid；原分析任务暂无法通过后端方法卡列表继续。"
+  },
+  "attachments": []
+}

@@ -1,5 +1,333 @@
 # ops-amazon-rufus PRD
 
+## 2026-05-14 变更需求：拒答检测与 180 字内问题改写
+
+### 背景
+
+用户进一步明确：本轮不是只处理 `--question` 为空的问题，而是需要对 Rufus 返回的答案进行分析。如果答案属于拒绝回答，系统应在保持原有语义的前提下修改问题，并把改写后的问题限制在 180 字以内，然后重新获取答案。
+
+2026-05-14 用户新增约束：拒答后重新生成的问题必须是中文。该约束对单题模式和题库模式都生效。
+
+### 目标
+
+1. 对每个 Rufus 答案执行拒答检测。
+2. 当答案被判定为拒答时，自动生成 180 字以内的语义等价问题。
+3. 改写后的重试问题必须使用中文。
+4. 用改写后的问题最多重试 3 次；加上原问题首次执行，单题最多 4 次尝试，避免无限循环。
+5. 单题模式和题库模式都支持拒答重试。
+6. 报告和结构化数据中保留拒答改写的审计信息。
+
+### 非目标
+
+1. 不引入外部 LLM 或远端改写 API。
+2. 不做无限多轮自动改写。
+3. 不把普通超时、空答案或网络失败直接当作拒答。
+4. 不修改题库源文件；题库问题被改写只影响本次运行。
+5. 不输出 seed request、headers、cookie 或内部原始 JSON。
+
+### 功能需求
+
+#### FR-REFUSAL-1 答案拒答检测
+
+每次 `RufusParserService.parse()` 产出 `AnswerData` 后，系统必须分析回答内容是否拒答。
+
+检测范围：
+
+1. `answer.text`
+2. `answer.summaryText`
+3. 可转为文本的 `answer.blocks`
+
+拒答特征包括但不限于：
+
+- “我无法回答”
+- “不能提供”
+- “无法提供”
+- “不方便回答”
+- “I can't answer”
+- “I cannot answer”
+- “I'm unable to”
+- “not able to assist”
+
+#### FR-REFUSAL-2 拒答后改写问题
+
+当答案被判定为拒答时，系统必须基于原问题生成一个改写问题。
+
+改写约束：
+
+1. 保持原有语义，不改变商品对象、分析维度或用户意图。
+2. 改写后问题不超过 180 字。
+3. 改写后问题必须使用中文；原问题为英文或中英混合时，应转写为自然中文问句。
+4. 使用更中性、面向公开商品信息的表达。
+5. 不添加用户没有提出的新分析维度。
+
+#### FR-REFUSAL-3 最多 3 次重试
+
+每个问题最多自动改写并重试 3 次：
+
+1. 第一次使用原问题。
+2. 若某次答案拒答，则在保持原语义的前提下生成新的 180 字以内问题并重试。
+3. 最多执行 3 次改写重试；加上原问题首次执行，`attemptCount` 最大为 4。
+4. 若 3 次改写重试后仍拒答，保留最后一次答案，并标记“已改写 3 次后仍拒答”。
+
+#### FR-REFUSAL-4 结构化输出元信息
+
+当发生拒答检测或改写时，答案结构中必须包含审计字段：
+
+```json
+{
+  "refusalDetected": true,
+  "refusalRetryApplied": true,
+  "originalQuestion": "原问题",
+  "rewrittenQuestion": "改写后问题",
+  "attemptCount": 4
+}
+```
+
+未发生拒答时可省略这些字段或显式置为 false，但实现必须保持现有 `AnswerData` 基础字段兼容。
+
+#### FR-REFUSAL-5 报告展示
+
+报告默认展示最终答案。若发生拒答改写，应在对应题目前展示简短说明：
+
+```text
+已检测到首次回答拒答，已在保持原语义的前提下改写问题并重试。
+改写后问题：基于商品页面和公开评价，分析该商品是否适合送礼，并说明理由
+```
+
+报告不展示完整首次拒答原文，除非用户明确要求排障。
+
+#### FR-REFUSAL-6 与问题来源兼容
+
+拒答处理必须同时适用于：
+
+1. `--question` 单题模式。
+2. 本地题库模式。
+
+题库模式下，改写只影响本次运行，不写回 `.agents/skills/ops-amazon-rufus/data/question_templates.json`。
+
+### 验收标准
+
+1. 构造包含拒答短语的 Rufus answer，系统能识别为拒答。
+2. 拒答后生成的改写问题不超过 180 字。
+3. 拒答后生成的改写问题必须为中文。
+4. 改写问题保留原问题核心语义。
+5. 拒答后最多重试 3 次，不发生无限循环。
+6. 3 次改写重试后仍拒答时，报告和数据能体现“已改写 3 次后仍拒答”。
+7. 题库模式与 `--question` 模式都覆盖拒答重试测试。
+8. 空白 `--question` 仍作为输入校验返回 `INVALID_RUFUS_QUESTION`，但不与拒答检测混淆。
+
+## 2026-05-14 变更需求：CLI 传入问题与题库双模式
+
+### 背景
+
+当前 `opscli amazon-rufus get <asin> <country>` 只能读取本地默认题库并逐题获取 Rufus 答案。用户现在希望支持第二种方式：调用 CLI 时直接传入一个问题，让 Rufus 只回答该问题。这样 Agent 在用户已经给出明确问题时，不需要先跑完整题库，也不需要依赖题库是否已同步。
+
+### 目标
+
+1. 保留现有题库模式：未传问题时继续读取 `ops-amazon-rufus/data/question_templates.json`。
+2. 新增单题模式：传入 `--question "<问题>"` 时只执行该问题。
+3. 单题模式复用现有浏览器、seed request、replay、parser、报告落地和错误结构。
+4. Skill 文档同步更新，让 Agent 能按用户意图选择题库模式或单题模式。
+5. 不改变 `opscli amazon-rufus get <asin> <country>` 的既有默认行为。
+
+### 非目标
+
+1. 不新增 `ask`、`question` 等新子命令。
+2. 不支持一次传入多个临时问题。
+3. 不把临时问题写入 `question_templates.json`。
+4. 不新增题库保存能力；题库保存仍属于问题模板管理域。
+5. 不改变 Rufus replay 参数、SSE 解析或报告格式化规则。
+
+### 功能需求
+
+#### FR-QUESTION-1 新增 `--question` 选项
+
+`amazon-rufus get` 新增可选参数：
+
+```powershell
+opscli amazon-rufus get B0TEST1234 US --question "这个商品适合送礼吗？" --new-chrome
+```
+
+参数规则：
+
+1. `--question` 为字符串选项。
+2. 参数值去除首尾空白后作为唯一问题。
+3. 问题文本包含空格或标点时，用户应使用引号包裹。
+4. `--question` 不影响 `asin`、`country` 两个位置参数。
+
+#### FR-QUESTION-2 单题模式跳过题库读取
+
+当传入有效 `--question` 时，`RufusManager.get()` 必须直接使用该问题构造问题列表：
+
+```python
+questions = [question.strip()]
+question_source = "cli"
+```
+
+单题模式不得调用 `QuestionBankService.load_templates()`，因此不会因为本地题库缺失或为空而失败。
+
+#### FR-QUESTION-3 默认题库模式保持不变
+
+当未传 `--question` 时，系统必须保持现有行为：
+
+1. 读取本地 `ops-amazon-rufus/data/question_templates.json`。
+2. 按模板和 `questions[].position` 生成问题列表。
+3. 题库缺失或为空时继续返回 `QUESTION_BANK_NOT_READY`。
+4. 输出报告仍按题库问题顺序生成。
+
+#### FR-QUESTION-4 空问题校验
+
+当用户显式传入空问题或全空白问题时，系统必须返回稳定错误，不得静默回退题库模式。
+
+推荐错误：
+
+```json
+{
+  "code": "INVALID_RUFUS_QUESTION",
+  "message": "--question 不能为空"
+}
+```
+
+#### FR-QUESTION-5 输出数据标识来源
+
+Manager 返回数据中应增加轻量来源字段：
+
+```json
+{
+  "question_source": "cli"
+}
+```
+
+取值：
+
+- `cli`：问题来自 `--question`。
+- `template`：问题来自本地题库。
+
+现有 `questions` 字段保持为字符串列表，保证 `AnswerReportFormatter` 继续复用。
+
+#### FR-QUESTION-6 Skill 同步修改
+
+`opscli/skills/templates/ops-amazon-rufus/SKILL.md` 和 `README.md` 必须同步描述两种工作流：
+
+1. 有明确问题：优先执行 `--question` 单题模式。
+2. 无明确问题或用户要求完整默认分析：执行题库模式。
+
+Skill 文档必须强调：单题模式仍需要 Amazon 登录和 seed request 捕获，但不要求先升级题库。
+
+### 验收标准
+
+1. `opscli amazon-rufus get --help` 展示 `--question`。
+2. 传入 `--question "问题"` 时，manager 使用单题列表，且不读取题库。
+3. 未传 `--question` 时，现有题库模式测试继续通过。
+4. 显式空白 `--question` 返回 `INVALID_RUFUS_QUESTION`。
+5. 单题模式生成的报告标题包含用户传入的问题。
+6. 单题模式 stdout 仍只输出 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md` 保存路径。
+7. `SKILL.md` 和 `README.md` 均包含单题模式示例和题库模式选择规则。
+
+## 2026-05-14 变更需求：问题模板 reference 拆分与保存接口文档
+
+### 背景
+
+当前 `ops-amazon-rufus` 的文档结构把问题模板升级说明、Rufus 回答获取、登录前置、答案格式化混在同一条阅读路径里。用户希望把“问题模板”单独拆成一个 `references` 文档，后续只保留问题模板相关内容，并补充“保存模板”的接口调用说明。
+
+前端真实入口已经表明问题模板是独立管理域：
+
+- `opencalw-management/index.vue` 只负责页面壳和 tab。
+- `QuestionTemplatesTab.vue` 负责模板列表、新增、编辑、删除、问题列表管理。
+- `QuestionTemplateDescriptionDialog.vue` 负责模板保存。
+- `QuestionTemplateQuestionsDialog.vue` 负责问题保存、追加、修改、删除、清空。
+
+### 目标
+
+1. 将问题模板相关说明从 `ops-amazon-rufus` 主使用流中拆出，形成独立 reference。
+2. 新 reference 只保留问题模板相关内容，不再混入 `amazon-rufus get` 回答流程。
+3. 在 reference 中同时写清楚“获取默认模板”和“保存管理端模板”的接口。
+4. 保留当前 `amazon-rufus get` 与答案格式化文档不变的职责边界。
+5. 不新增 CLI 运行时功能，只做文档与引用结构调整。
+
+### 非目标
+
+1. 不新增 `amazon-rufus` 新命令。
+2. 不修改 Rufus 采集、重放、解析或报告格式化逻辑。
+3. 不把管理端模板保存接口接到 `opscli` 运行链路。
+4. 不把问题模板 reference 写成答案报告格式化文档。
+5. 不要求用户理解前端实现细节，只输出可执行的接口说明。
+
+### 功能需求
+
+#### FR-QT-1 独立 reference 文件
+
+新增一个仅服务问题模板的 reference 文档，建议路径：
+
+`opscli/skills/templates/ops-amazon-rufus/references/question-templates.md`
+
+该文档应只包含：
+
+- 问题模板数据结构
+- 获取默认题库接口
+- 模板管理接口
+- 问题列表保存接口
+- 保存工作流
+- 本地 `question_templates.json` 与远端接口的关系
+
+#### FR-QT-2 主文档只保留跳转
+
+`README.md` 与 `SKILL.md` 中与题库相关的说明只保留最小入口：
+
+- `opscli skills install ops-amazon-rufus`
+- `opscli skills upgrade ops-amazon-rufus`
+- 链接到 `references/question-templates.md`
+
+不再把管理端模板接口细节写进回答获取流程。
+
+#### FR-QT-3 获取接口文档
+
+reference 必须说明默认题库来源：
+
+- `GET /opencalw/default-question-templates`
+
+并写清楚本地同步结果落盘到：
+
+- `.agents/skills/ops-amazon-rufus/data/question_templates.json`
+
+#### FR-QT-4 保存接口文档
+
+reference 必须补全保存相关接口：
+
+- `POST /admin/opencalw/question-templates`
+- `PATCH /admin/opencalw/question-templates/{templateId}`
+- `PUT /admin/opencalw/question-templates/{templateId}/questions`
+- `PUT /admin/opencalw/question-templates/{templateId}/questions/append`
+- `PUT /admin/opencalw/question-templates/{templateId}/questions/{questionId}`
+- `DELETE /admin/opencalw/question-templates/{templateId}`
+- `DELETE /admin/opencalw/question-templates/{templateId}/questions/{questionId}`
+
+#### FR-QT-5 保存工作流
+
+reference 需要按前端交互顺序描述：
+
+1. 新增模板只提交 `description`。
+2. 修改模板描述只提交 `description`。
+3. 新增问题通过 `append` 接口追加。
+4. 整体保存问题列表通过 `PUT .../questions` 覆盖写入。
+5. 单题修改与删除分别走单题接口。
+
+#### FR-QT-6 数据格式说明
+
+文档必须明确：
+
+1. 前端使用 camelCase 类型名。
+2. 实际请求/响应经 `extensionInterceptors` 转换后，wire JSON 与本地 `question_templates.json` 仍按 snake_case 文档化。
+3. `question_templates.json` 继续作为 Skill 远端升级结果，不是运行时生成报告。
+
+### 验收标准
+
+1. 能在 `ops-amazon-rufus` 文档树中找到独立的 `question-templates` reference。
+2. `README.md` / `SKILL.md` 不再把题库接口和 Rufus 回答流程混在一起。
+3. reference 中同时覆盖获取与保存接口。
+4. reference 中明确本地题库文件与远端接口的关系。
+5. 不改动现有 `amazon-rufus get` 用户流程和答案报告文档。
+
 ## 2026-05-07 变更需求：登录前置提示与 streaming 捕获失败指引
 
 ### 背景

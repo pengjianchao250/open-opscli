@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from opscli.skills.exceptions import SkillRemoteError
@@ -33,6 +34,25 @@ def test_install_ops_amazon_template(tmp_path: Path):
     installed_path = Path(result.to_dict()["installed_paths"][0]["path"])
     assert (installed_path / "SKILL.md").exists()
     assert (installed_path / "data" / "VERSION.json").exists()
+
+
+def test_install_ops_methods_card_template(tmp_path: Path):
+    """确认 methods card Skill 模板能走现有安装链路。"""
+    manager = SkillsManager(registry_path=tmp_path / "registry.json")
+
+    result = manager.install(
+        "ops-methods-card",
+        skills_dir=str(tmp_path / "skills"),
+    )
+
+    installed_path = Path(result.to_dict()["installed_paths"][0]["path"])
+    version_payload = json.loads((installed_path / "data" / "VERSION.json").read_text(encoding="utf-8"))
+    assert (installed_path / "SKILL.md").exists()
+    assert version_payload["name"] == "ops-methods-card"
+    assert not any(
+        "__pycache__" in item.parts or item.suffix in {".pyc", ".pyo"}
+        for item in installed_path.rglob("*")
+    )
 
 
 def test_install_dataset_fields_template_to_multiple_runtimes(tmp_path: Path):

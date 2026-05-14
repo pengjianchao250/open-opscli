@@ -1,5 +1,454 @@
 # ops-amazon-rufus Architecture
 
+## 2026-05-14 架构增量：拒答检测与问题改写
+
+### 设计原则
+
+拒答检测属于“单题执行结果处理”，不属于 CLI 参数校验。实现应放在 replay 服务附近，确保 `--question` 单题模式和题库模式走同一套逻辑。
+
+设计取舍：
+
+1. 每题最多 3 次改写重试；加上原问题首次执行，单题最多 4 次尝试，防止不可控循环。
+2. 改写只影响本次运行，不写回题库文件。
+3. 拒答检测和问题改写拆成独立服务，避免污染 parser 与 formatter。
+4. 改写后的重试问题必须是中文，避免 Agent 在英文站点或英文原问题场景下生成英文重试问题。
+5. 不引入外部模型依赖，首版使用保守规则识别拒答，并用规则化模板做中性改写。
+
+### 新增服务边界
+
+推荐新增文件：
+
+```text
+opscli/amazon_rufus/services/question_refusal.py
+```
+
+推荐类：
+
+```python
+class QuestionRefusalService:
+    """识别 Rufus 拒答并生成受限改写问题。"""
+
+    MAX_REWRITTEN_QUESTION_LENGTH = 180
+    MAX_REFUSAL_RETRIES = 3
+
+    def is_refusal(self, answer: AnswerData) -> bool:
+        ...
+
+    def rewrite_question(self, question: str) -> str:
+        ...
+```
+
+职责：
+
+1. `is_refusal()` 只判断答案内容，不访问浏览器或题库。
+2. `rewrite_question()` 保持原问题核心语义，输出不超过 180 字。
+3. `rewrite_question()` 输出必须为中文；原问题为英文或中英混合时，应先保留核心业务词，再转写为自然中文。
+4. 改写时压缩空白、去掉重复礼貌词和绝对化措辞，转换为面向公开商品信息的中性问法。
+5. 若改写后仍超过 180 字，继续按句子边界和修饰语压缩，最终保证不超过 180 字。
+
+### Replay 接入点
+
+`RufusReplayService.replay_with_page()` 当前逐题执行：
+
+```text
+build_payload -> fetch -> parse -> append answer
+```
+
+推荐改为：
+
+```text
+build_payload(current_question)
+  -> fetch
+  -> parse
+  -> is_refusal(answer)
+    -> 否：返回 answer
+    -> 是且 retry_count < 3：rewrite_question(original_question, last_question)
+       -> 使用改写问题继续重试
+    -> 是且 retry_count == 3：返回带拒答改写元信息的最终 answer
+```
+
+线程上下文策略：
+
+1. 首次问题返回拒答时，不应把拒答产生的 `threadId` 注入改写问题，避免后续回答继续受拒答上下文影响。
+2. 改写重试成功后，才把最终成功结果的 `threadId` 作为后续题目的上下文。
+3. 若 3 次改写重试后仍拒答，则按现有失败/答案保留逻辑处理，并记录 `attemptCount = 4`。
+
+### AnswerData 扩展
+
+推荐在 `AnswerData` 上增加可选字段，并在 `to_dict()` 中输出前端兼容 camelCase：
+
+```python
+refusal_detected: bool = False
+refusal_retry_applied: bool = False
+original_question: str | None = None
+rewritten_question: str | None = None
+attempt_count: int = 1
+```
+
+输出示例：
+
+```json
+{
+  "text": "最终答案",
+  "isSuccess": true,
+  "refusalDetected": true,
+  "refusalRetryApplied": true,
+  "originalQuestion": "这个商品适合送礼吗？",
+  "rewrittenQuestion": "基于商品页面和公开评价，分析该商品是否适合送礼，并说明理由",
+  "attemptCount": 4
+}
+```
+
+### 报告格式化接入
+
+`AnswerReportFormatter` 读取 `refusalRetryApplied` 和 `rewrittenQuestion`：
+
+1. section 标题仍优先展示原题，避免用户丢失原始意图。
+2. 标题下方增加短说明和改写后问题。
+3. 正文展示最终答案，不默认输出首次拒答原文。
+
+推荐格式：
+
+```text
+## 第 1 题：这个商品适合送礼吗？
+
+已检测到首次回答拒答，已在保持原语义的前提下改写问题并重试。
+改写后问题：基于商品页面和公开评价，分析该商品是否适合送礼，并说明理由
+
+### 答案
+...
+```
+
+### 与 `--question` 的关系
+
+空白 `--question` 仍在 manager 的问题来源解析阶段提前失败，错误码为 `INVALID_RUFUS_QUESTION`。拒答检测发生在问题已成功发送并解析出 Rufus 答案之后，两者不要混在同一个分支里。
+
+### 测试策略
+
+新增测试：
+
+1. `QuestionRefusalService.is_refusal()` 覆盖中文、英文拒答短语和非拒答正常答案。
+2. `rewrite_question()` 输出不超过 180 字，并保留核心业务词。
+3. `rewrite_question()` 在英文或中英混合原问题场景下仍输出中文问题。
+4. `replay_with_page()` 首次拒答时继续改写重试，最多额外执行 3 次 fetch。
+5. 首次拒答、任一改写重试成功时，最终 `AnswerData` 包含改写元信息。
+6. 原问题加 3 次改写都拒答时，不继续第 5 次请求。
+7. formatter 在发生改写时展示改写说明，但不输出首次拒答全文。
+
+## 2026-05-14 架构增量：CLI 问题参数与题库双模式
+
+### 设计原则
+
+本轮只在问题来源选择层增加一个分支。Rufus replay、浏览器捕获、SSE 解析、报告格式化和上传 payload 继续复用现有链路。
+
+设计取舍：
+
+1. 使用 `--question` 选项，不新增第三个位置参数，避免破坏 `get <asin> <country>` 的既有命令心智。
+2. 单题模式跳过题库读取，降低“临时问一句”对 Skill 题库同步的依赖。
+3. 题库模式保持默认行为，兼容已有 Agent 工作流和测试。
+4. 不提前支持多个 `--question`，避免引入排序、报告命名和重复问题处理的新规则。
+
+### CLI 层变更
+
+`opscli/amazon_rufus/commands/cli.py` 的 `get()` 增加选项：
+
+```python
+question: str | None = typer.Option(None, "--question", help="直接传入单个 Rufus 问题，传入后跳过默认题库")
+```
+
+调用 manager 时透传：
+
+```python
+data = manager.get(
+    asin=asin,
+    country=country,
+    question=question,
+    ...
+)
+```
+
+CLI 层仍只负责参数解析、错误 JSON 输出和报告文件写入，不直接选择题库或单题逻辑。
+
+### Manager 层变更
+
+`RufusManager.get()` 增加参数：
+
+```python
+question: str | None = None
+```
+
+推荐新增私有方法集中处理问题来源：
+
+```python
+def _resolve_questions(self, *, question: str | None, skills_dir: str | None) -> tuple[list[str], str]:
+    ...
+```
+
+职责：
+
+1. `question is not None` 时进入单题模式。
+2. 单题模式去除首尾空白；为空则抛出 `InvalidRufusQuestionError`。
+3. 单题模式返回 `([normalized_question], "cli")`，不实例化或调用 `QuestionBankService`。
+4. 未传 `question` 时进入题库模式，复用当前 `QuestionBankService.load_templates()` 逻辑，返回 `(questions, "template")`。
+
+Manager 返回结构增加：
+
+```json
+{
+  "question_source": "cli"
+}
+```
+
+其余字段保持不变：
+
+- `asin`
+- `country`
+- `page_url`
+- `question_count`
+- `questions`
+- `answers`
+- `seed_request`
+- `upload_payload`
+
+### 错误模型
+
+新增异常类：
+
+```python
+class InvalidRufusQuestionError(RufusError):
+    """Rufus 问题参数无效。"""
+
+    code = "INVALID_RUFUS_QUESTION"
+```
+
+错误触发条件：
+
+1. 用户显式传入 `--question ""`。
+2. 用户显式传入全空白字符串。
+
+该错误由现有 `_error_payload()` 自动转为稳定 JSON，不需要新增 CLI 特殊分支。
+
+### 数据流
+
+题库模式：
+
+```text
+get asin country
+  -> _resolve_questions(question=None)
+  -> QuestionBankService.load_templates()
+  -> questions[]
+  -> capture_seed_request()
+  -> replay_with_page(page, seed, questions)
+  -> report
+```
+
+单题模式：
+
+```text
+get asin country --question "问题"
+  -> _resolve_questions(question="问题")
+  -> questions=["问题"]
+  -> capture_seed_request()
+  -> replay_with_page(page, seed, questions)
+  -> report
+```
+
+### Skill 文档边界
+
+`SKILL.md` 应增加“问题来源选择”规则：
+
+1. 用户给出明确 Rufus 问题时，使用单题模式：
+
+```powershell
+uv run --extra amazon opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" --new-chrome --question "这个商品适合送礼吗？"
+```
+
+2. 用户只给 ASIN、要求默认 Rufus 分析、或要求完整题库报告时，使用题库模式：
+
+```powershell
+uv run --extra amazon opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" --new-chrome
+```
+
+3. 单题模式仍需先执行 `amazon-rufus init <country>` 完成对应国家站点登录。
+4. 单题模式不要求先执行 `opscli skills upgrade ops-amazon-rufus`，但安装 Skill 仍用于让 Agent 获得使用规范和参考文档。
+
+### 测试策略
+
+新增或调整测试：
+
+1. `tests/amazon_rufus/test_core.py`
+   - CLI `get --question "问题"` 透传 `question` 到 manager。
+   - 单题模式 manager 不调用 `QuestionBankService.load_templates()`。
+   - 单题模式结果 `questions == ["问题"]`，`question_source == "cli"`。
+   - 单题模式报告标题包含传入问题。
+   - 空白 `--question` 返回 `INVALID_RUFUS_QUESTION`。
+2. 回归测试
+   - 现有题库模式测试继续通过。
+   - 现有 formatter、replay、browser 测试不需要因本轮变更调整底层预期。
+
+## 2026-05-14 架构增量：问题模板 reference 与保存接口文档
+
+### 设计原则
+
+本轮只调整 Skill 文档结构，不改运行链路。问题模板管理是独立资源域，应从 `amazon-rufus get` 的回答获取流程中拆出，避免文档读者误以为模板保存会在回答获取时自动发生。
+
+设计取舍：
+
+1. 新增 reference 文件，而不是继续扩写 `README.md` 或 `SKILL.md`。
+2. reference 只写问题模板；报告格式化继续留在 `references/rufus-report-formatting.md`。
+3. 管理端保存接口先文档化，不新增 CLI 子命令。
+4. 若后续需要让 CLI 保存模板，应新增正式 opscli 命令入口，不能让 Skill 脚本直接调用后端接口。
+
+### 文档文件边界
+
+推荐落点：
+
+```text
+opscli/skills/templates/ops-amazon-rufus/
+├── README.md
+├── SKILL.md
+├── data/
+│   ├── VERSION.json
+│   └── question_templates.json
+└── references/
+    ├── question-templates.md
+    └── rufus-report-formatting.md
+```
+
+职责：
+
+| 文件 | 职责 |
+|---|---|
+| `README.md` | Skill 使用总览、登录、升级、执行 `amazon-rufus get` |
+| `SKILL.md` | Agent 执行规范、最新数据优先、最终报告输出边界 |
+| `references/question-templates.md` | 问题模板获取与保存接口调用说明 |
+| `references/rufus-report-formatting.md` | Rufus 答案报告格式化规范 |
+| `data/question_templates.json` | `skills upgrade` 后的本地默认题库数据 |
+
+### 新 reference 推荐结构
+
+`references/question-templates.md` 建议结构：
+
+```markdown
+# Rufus 问题模板接口调用说明
+
+## 适用范围
+## 认证与基础路径
+## 数据模型
+## 获取默认题库
+## 管理端模板接口
+## 保存模板工作流
+## 本地题库文件
+## 注意事项
+```
+
+约束：
+
+1. 不写 `amazon-rufus init/get` 的完整命令流程。
+2. 不写报告格式化规则。
+3. 不写 seed request、Chrome CDP、Rufus replay 细节。
+4. 不输出真实 token、cookie 或生产环境敏感数据。
+
+### 接口契约
+
+#### 默认题库读取
+
+用于 `opscli skills upgrade ops-amazon-rufus` 同步默认题库：
+
+```http
+GET /opencalw/default-question-templates
+```
+
+响应数据：
+
+```json
+{
+  "items": [
+    {
+      "id": 56,
+      "description": "默认模板",
+      "preferred_version_index": 0,
+      "questions": [
+        {
+          "id": 3172,
+          "text": "问题文本",
+          "position": 1
+        }
+      ],
+      "created_at": "2026-04-28T09:25:05",
+      "updated_at": "2026-04-28T09:25:12"
+    }
+  ]
+}
+```
+
+#### 模板管理
+
+| 能力 | 方法 | 路径 | 请求体 | 响应 |
+|---|---|---|---|---|
+| 列出模板 | `GET` | `/admin/opencalw/question-templates` | 无 | `{ "items": [...] }` |
+| 获取详情 | `GET` | `/admin/opencalw/question-templates/{templateId}` | 无 | 模板详情 |
+| 新增模板 | `POST` | `/admin/opencalw/question-templates` | `{ "description": "..." }` | 模板详情 |
+| 修改描述 | `PATCH` | `/admin/opencalw/question-templates/{templateId}` | `{ "description": "..." }` | 模板详情 |
+| 删除模板 | `DELETE` | `/admin/opencalw/question-templates/{templateId}` | 无 | `{ "deleted": true }` |
+
+#### 问题列表管理
+
+| 能力 | 方法 | 路径 | 请求体 | 响应 |
+|---|---|---|---|---|
+| 整体保存问题列表 | `PUT` | `/admin/opencalw/question-templates/{templateId}/questions` | `{ "questions": ["Q1", "Q2"] }` | `{ "template_id": 12, "questions_count": 2, "updated_at": "..." }` |
+| 追加问题 | `PUT` | `/admin/opencalw/question-templates/{templateId}/questions/append` | `{ "questions": ["Q3"] }` | `{ "template_id": 12, "inserted": 1, "skipped": 0, "total": 3, "updated_at": "..." }` |
+| 修改单题 | `PUT` | `/admin/opencalw/question-templates/{templateId}/questions/{questionId}` | `{ "text": "..." }` | 问题详情 |
+| 删除单题 | `DELETE` | `/admin/opencalw/question-templates/{templateId}/questions/{questionId}` | 无 | `{ "deleted": true }` |
+
+### 数据命名约束
+
+前端源码中类型采用 camelCase：
+
+- `preferredVersionIndex`
+- `questionsCount`
+- `createdAt`
+- `updatedAt`
+
+但 `extensionInterceptors.ts` 会自动转换请求与响应数据。因此 reference 应以 wire JSON / 本地文件为准使用 snake_case：
+
+- `preferred_version_index`
+- `questions_count`
+- `created_at`
+- `updated_at`
+- `template_id`
+
+`QuestionBankService` 当前也按 `preferred_version_index`、`created_at`、`updated_at` 读取本地 `question_templates.json`，因此文档不应改成纯前端 camelCase。
+
+### 保存工作流
+
+新增模板并配置问题的最小调用顺序：
+
+1. `POST /admin/opencalw/question-templates` 创建模板，拿到 `id`。
+2. `PUT /admin/opencalw/question-templates/{id}/questions/append` 追加一个或多个问题。
+3. 如需覆盖整个问题列表，使用 `PUT /admin/opencalw/question-templates/{id}/questions`。
+4. 如需改描述，使用 `PATCH /admin/opencalw/question-templates/{id}`。
+5. 如需改单个问题，使用 `PUT /admin/opencalw/question-templates/{id}/questions/{questionId}`。
+
+### 主文档更新边界
+
+`README.md` 和 `SKILL.md` 只做链接化收敛：
+
+```markdown
+问题模板接口和本地题库文件说明见 references/question-templates.md。
+```
+
+保留 `opscli skills upgrade ops-amazon-rufus` 命令示例，因为这是普通用户同步默认题库的入口；但不在主文档展开保存接口详情。
+
+### 测试与验证策略
+
+文档阶段验证：
+
+1. 回读 `references/question-templates.md`，确认不包含 `amazon-rufus get` 回答流程。
+2. 回读 `README.md` 和 `SKILL.md`，确认只保留 reference 跳转与必要升级命令。
+3. 用 `rg -n "question-templates|default-question-templates|questions/append"` 检查接口路径均被文档覆盖。
+4. 不运行 `opscli skills upgrade`，避免本轮文档拆分触发远端请求。
+
 ## 2026-05-07 架构增量：登录前置提示与 streaming 捕获失败指引
 
 ### 设计原则

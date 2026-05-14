@@ -1,5 +1,200 @@
 # ops-amazon-rufus Research
 
+## 2026-05-14 Rufus 拒答检测与问题改写研究
+
+### 本轮反馈
+
+用户补充说明：本轮不只是校验空白问题，还要在拿到 Rufus 答案后分析答案是否属于拒绝回答。如果被拒绝回答，需要在保持原有语义的前提下修改问题，并且改写后的问题限制在 180 字以内。
+
+2026-05-14 新增约束：用户进一步要求 `ops-amazon-rufus` Skill 在拒答后重新生成问题时，改写后的问题必须使用中文。该规则应作为 Skill 执行规范中的硬约束，而不是仅作为示例文案。
+
+### 本地链路观察
+
+当前最合适的接入点不是 CLI 参数解析层，而是 Rufus replay 后的答案解析层：
+
+1. `RufusReplayService.replay_with_page()` 已经逐题调用 `page.evaluate()` 并把 SSE 文本交给 `RufusParserService.parse()`。
+2. `RufusParserService.parse()` 返回 `AnswerData`，包含 `text`、`summaryText`、`blocks`、`isSuccess` 和 `threadId`。
+3. `AnswerReportFormatter` 基于 `answers[]` 和 `questions[]` 输出报告标题和正文。
+4. 因此拒答检测应在每次 `AnswerData` 生成后执行：先判断回答是否拒答，再决定是否改写问题并重试。
+5. 单题模式与题库模式都应走同一套拒答处理，避免只有 `--question` 才具备重试能力。
+
+### 拒答判断结论
+
+首版采用保守启发式，不引入外部模型依赖：
+
+1. 检测范围包括 `answer.text`、`answer.summaryText` 和可转文本的 `answer.blocks`。
+2. 命中明确拒答短语时判定为拒答，例如“我无法回答”“不能提供”“无法提供”“不方便回答”“I can't answer”“I cannot answer”“I'm unable to”“not able to assist”。
+3. 不把普通失败、超时、空答案直接等同于拒答；这些仍按现有失败逻辑处理。
+4. 检测逻辑应集中在独立服务中，例如 `QuestionRefusalService`，避免把字符串规则散落在 replay 或 formatter 中。
+
+### 问题改写结论
+
+首版改写策略应满足四个约束：
+
+1. 保持原问题的业务语义，不改变目标 ASIN、比较对象、评价维度或用户意图。
+2. 改写后问题长度限制在 180 字以内；建议按 Python `len()` 对去空白后的 Unicode 字符串计数。
+3. 改写后的问题必须使用中文，即使原问题包含英文，也应在保留商品对象、比较对象和分析维度的前提下转写为中文问句。
+4. 每个问题最多自动改写并重试 3 次；加上原问题首次执行，单题最多 4 次尝试，避免 Rufus 连续拒答时陷入无限循环或生成大量不可控请求。
+
+推荐改写原则：
+
+1. 去掉容易触发拒答的命令式或敏感化表达，例如“必须”“保证”“是否违规”等绝对化措辞。
+2. 保留核心对象和分析维度，例如“适合送礼”“差评风险”“广告投放价值”。
+3. 改成面向商品公开信息的中性问法，例如“基于商品页面和公开评价，分析该商品是否适合送礼，并说明理由”。
+4. 如果原问题是英文或中英混合，应将核心意图翻译/转写为自然中文，避免直接生成英文重试问题。
+5. 如果改写结果仍超过 180 字，优先压缩修饰语和重复背景，而不是截断核心业务词。
+
+### 2026-05-14 外部资料补充
+
+Amazon 官方资料说明 Rufus/Alexa for Shopping 的核心场景是回答商品问题、基于商品页面、评论、社区问答和目录信息辅助购买决策。该定位支持本轮采用“中文、中性、基于商品页面和公开评价”的改写方向。
+
+官方资料同时显示 Amazon 已在 2026-05-13 将 Rufus 重新命名为 Alexa for Shopping。当前仓库中的 CLI、Skill、模块名仍为 `ops-amazon-rufus`，本轮仅增加拒答后中文改写规则，不做命名迁移，避免扩大影响面。
+
+参考：
+
+- https://www.aboutamazon.com/news/retail/how-to-use-amazon-rufus
+- https://www.aboutamazon.com/news/retail/amazon-agentic-ai-gen-ai-shopping/
+- https://www.aboutamazon.com/news/retail/alexa-for-shopping-ai-assistant
+
+### 方案判断
+
+采用“拒答检测 + 语义改写 + 最多 3 次重试”的最小方案：
+
+1. 空白 `--question` 仍应提前报错，但这只是输入校验，不是本轮核心。
+2. 每个问题先按原文执行一次。
+3. 若回答被判定为拒答，则生成 180 字以内的改写问题，并立即用同一 seed/page 上下文重试；最多重试 3 次。
+4. 若 3 次改写重试后仍拒答，则保留最后一次结果，并在结构化数据与报告中标记“已改写 3 次后仍拒答”。
+5. 输出数据增加拒答与改写元信息，例如 `refusalDetected`、`refusalRetryApplied`、`originalQuestion`、`rewrittenQuestion`、`attemptCount`。
+6. 报告中默认展示最终答案；发生改写时补充一行改写说明，不展示完整内部请求或 seed 数据。
+
+该方案符合 KISS/YAGNI：不新增多轮自我优化、不引入外部 LLM、不改变 Chrome/seed/replay 主链路，只在单题执行的结果判定后增加一次可审计的重试。
+
+## 2026-05-14 CLI 传入问题与题库双模式研究
+
+### 本轮需求
+
+用户要求修改 `amazon-rufus` CLI 和 `ops-amazon-rufus` Skill：获取 Rufus 答案需要支持两种方式。
+
+1. 题库模式：继续读取 `ops-amazon-rufus/data/question_templates.json`，按模板问题逐题获取答案。
+2. 单题模式：调用 CLI 时直接传入一个问题，只获取该问题对应的 Rufus 答案。
+
+Skill 文档也要同步调整，避免 Agent 在用户已经给出明确问题时仍强制跑完整题库。
+
+### 本地链路观察
+
+当前代码路径：
+
+- `opscli/amazon_rufus/commands/cli.py`
+- `opscli/amazon_rufus/services/manager.py`
+- `opscli/amazon_rufus/services/question_bank.py`
+- `opscli/amazon_rufus/services/replay.py`
+- `opscli/skills/templates/ops-amazon-rufus/SKILL.md`
+- `opscli/skills/templates/ops-amazon-rufus/README.md`
+
+现状结论：
+
+1. CLI `get` 只有必填位置参数 `asin`、`country`，没有问题参数。
+2. `RufusManager.get()` 总是通过 `QuestionBankService.load_templates()` 读取题库，再把模板问题扁平化成 `questions`。
+3. 题库文件缺失或为空会抛出 `QuestionBankNotReadyError`，因此当前即使用户只想问一个问题，也必须先安装并升级题库。
+4. `RufusReplayService.replay_with_page()` 已经接收 `questions: list[str]`，底层重放链路天然支持传入任意问题列表。
+5. `AnswerReportFormatter` 从 `data["questions"]` 或 `upload_payload.records[0].questions` 提取题目标题，因此只要 `data["questions"]` 是单题列表，报告天然可以复用。
+6. 现有测试已覆盖 CLI 写报告、manager 编排、replay 请求构造和 formatter 标题提取；本轮应补充单题模式测试，而不是重写底层 replay。
+
+### 外部资料结论
+
+Typer 官方文档说明，可选 CLI argument 会在 help 中显示为带方括号的位置参数；这适合兼容式扩展，但带空格的问题文本必须整体加引号，且会改变 `get <asin> <country>` 后续位置参数语义。参考：https://typer.tiangolo.com/tutorial/arguments/optional/
+
+Typer 官方参数参考说明，CLI option 可以通过 `--name` 这类显式别名接收值，且 options 通常可省略；这更适合新增 `--question`，因为它不会改变既有两个位置参数的心智。参考：https://typer.tiangolo.com/reference/parameters/
+
+Typer 还支持多次传入同一个 option 并获得 `list[str]`，说明后续如果要支持多条临时问题，可以扩展为多个 `--question`，但本轮用户只要求“传入参数问题”这一种直接问答方式，不应提前实现多题参数。参考：https://typer.tiangolo.com/tutorial/multiple-values/multiple-options/
+
+### 方案判断
+
+采用“显式 `--question` 单题模式 + 默认题库模式”的最小方案：
+
+1. CLI 增加 `--question` 选项，而不是新增第三个位置参数。
+2. 未传 `--question` 时保持现有题库模式，继续要求本地题库就绪。
+3. 传入 `--question` 且去空白后非空时，跳过 `QuestionBankService.load_templates()`，直接使用 `[question]` 作为问题列表。
+4. 单题模式仍复用 Chrome attach、seed request 捕获、Rufus replay、答案解析、报告落地和 `upload_payload` 构造。
+5. 空字符串或全空白 `--question` 应视为无效输入，返回稳定错误；不应回退到题库模式，避免用户误以为执行了指定问题。
+6. `data` 中增加轻量字段标识来源，例如 `question_source: "template" | "cli"`，便于报告与排障理解；现有字段 `questions` 保持不变。
+7. Skill 文档同步为：用户提供明确问题时执行 `opscli amazon-rufus get <asin> <country> --question "<问题>" --new-chrome`；用户要求默认 Rufus 分析或未给问题时执行题库模式。
+
+该方案符合 KISS/YAGNI：不新增命令、不新增问题文件、不引入多题临时参数、不改 replay 协议，只在 manager 的问题来源选择处增加一个清晰分支。
+
+## 2026-05-14 问题模板 reference 拆分与保存接口研究
+
+### 本轮需求
+
+用户要求修改 `amazon-rufus` 相关 CLI / Skill 文档结构：
+
+1. 将问题模板的获取拆到独立 `references` 文档中，不再和 Rufus 回答获取流程写在一起。
+2. 独立 reference 文件后续只承载问题模板相关内容。
+3. 问题模板能力不止获取，还应覆盖保存能力。
+4. 保存接口参考 `E:/code/work/workspace-op/operation-frontend/packages/operation-frontend-core/src/pages/tools/index/opencalw-management/index.vue` 间接挂载的管理页调用链。
+
+### 本地链路观察
+
+当前 `ops-amazon-rufus` Skill 目录只有一个报告格式化 reference：
+
+- `opscli/skills/templates/ops-amazon-rufus/README.md`
+- `opscli/skills/templates/ops-amazon-rufus/SKILL.md`
+- `opscli/skills/templates/ops-amazon-rufus/references/rufus-report-formatting.md`
+- `opscli/skills/templates/ops-amazon-rufus/data/question_templates.json`
+
+现状问题：
+
+1. `README.md` 与 `SKILL.md` 主要服务 `amazon-rufus init/get` 使用流程，问题模板升级说明混在回答获取流程里。
+2. `references/rufus-report-formatting.md` 已经是答案报告格式化规范，不应承载题库接口。
+3. `QuestionBankService` 只读取 `.agents/skills/ops-amazon-rufus/data/question_templates.json`，不负责远端保存。
+4. `SkillsUpdater.upgrade_ops_amazon_rufus()` 当前只调用默认题库读取接口，将返回的 `items` 写入本地 `question_templates.json`。
+5. 内置模板 `data/question_templates.json` 现在是空 `items`，真实题库依赖 `opscli skills upgrade ops-amazon-rufus` 同步。
+
+前端真实调用链：
+
+1. `opencalw-management/index.vue` 只挂载 `QuestionTemplatesTab` 和 `ConfigTab`，默认激活 `question-templates`。
+2. `QuestionTemplatesTab.vue` 负责列表刷新、新增模板、修改描述、配置问题列表、删除模板。
+3. `QuestionTemplateDescriptionDialog.vue` 调用创建与更新模板描述 mutation。
+4. `QuestionTemplateQuestionsDialog.vue` 调用追加问题、整体保存问题列表、单题更新、单题删除。
+5. `project/tools/api/modules/opencalw.ts` 是接口定义源头；`project/tools/services/opencalw.ts` 只是在 Vue Query 层封装缓存失效。
+
+前端接口清单：
+
+| 能力 | 方法 | 路径 | 请求体 |
+|---|---|---|---|
+| 列出模板 | `GET` | `/admin/opencalw/question-templates` | 无 |
+| 获取模板详情 | `GET` | `/admin/opencalw/question-templates/{templateId}` | 无 |
+| 新增模板 | `POST` | `/admin/opencalw/question-templates` | `{ "description": "..." }` |
+| 修改模板描述 | `PATCH` | `/admin/opencalw/question-templates/{templateId}` | `{ "description": "..." }` |
+| 删除模板 | `DELETE` | `/admin/opencalw/question-templates/{templateId}` | 无 |
+| 整体保存问题列表 | `PUT` | `/admin/opencalw/question-templates/{templateId}/questions` | `{ "questions": ["..."] }` |
+| 追加问题 | `PUT` | `/admin/opencalw/question-templates/{templateId}/questions/append` | `{ "questions": ["..."] }` |
+| 修改单题 | `PUT` | `/admin/opencalw/question-templates/{templateId}/questions/{questionId}` | `{ "text": "..." }` |
+| 删除单题 | `DELETE` | `/admin/opencalw/question-templates/{templateId}/questions/{questionId}` | 无 |
+| 获取默认题库 | `GET` | `/opencalw/default-question-templates` | 无 |
+
+`extensionInterceptors.ts` 会在请求前将 data/params 转为 snake_case，并在响应后将 `data` 转为 camelCase。因此前端类型是 `preferredVersionIndex`、`questionsCount`、`createdAt`、`updatedAt`，但本地题库文件与后端 wire JSON 应继续按 snake_case 文档化，例如 `preferred_version_index`、`questions_count`、`created_at`、`updated_at`。
+
+### 外部资料结论
+
+同类 API 文档有两个可借鉴点：
+
+1. GitHub REST 的 repository contents 文档按资源聚合 get / create-or-update / delete 操作，并为每个操作列出 path、参数、状态码和示例；这适合本轮把“问题模板”作为独立资源 reference 维护。参考：https://docs.github.com/en/rest/repos/contents?apiVersion=2022-11-28
+2. OpenAPI / Swagger 支持用 tags 对 operations 分组，Swagger UI 会按 tag 展示操作；这说明“问题模板”应作为独立文档分组，而不是混在 `amazon-rufus get` 回答流程里。参考：https://swagger.io/docs/specification/v3_0/grouping-operations-with-tags/
+
+### 方案判断
+
+采用“新增独立 reference，现有主文档只保留跳转”的最小方案：
+
+1. 新增 `opscli/skills/templates/ops-amazon-rufus/references/question-templates.md`。
+2. 新文件只写问题模板数据模型、获取接口、保存接口、保存工作流、本地题库文件关系和注意事项。
+3. `README.md` 与 `SKILL.md` 只保留题库升级的简短入口，并链接到 `references/question-templates.md`。
+4. 不把 Rufus 回答获取、Chrome 登录、seed request、报告格式化写入新 reference。
+5. 不新增 CLI 子命令，不改变 `amazon-rufus get` 运行链路。
+6. 不让 Skill 脚本直接调用后端接口；如后续需要命令化保存，应新增正式 `opscli` 命令入口，而不是在 Skill 文档里指导直接 `curl` 生产接口。
+
+该方案符合 KISS/YAGNI：本轮需求是文档结构和接口调用说明，不扩展题库管理运行能力；保存接口先精确文档化，避免把管理端 mutation 误写成回答获取流程的一部分。
+
 ## 2026-05-07 登录前置提示与 streaming 捕获失败研究
 
 ### 本轮需求

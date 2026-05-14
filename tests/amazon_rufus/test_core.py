@@ -8,7 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from opscli.amazon_rufus.cli import app
-from opscli.amazon_rufus.domain.exceptions import QuestionBankNotReadyError, SeedRequestNotCapturedError, UnsupportedMarketplaceError
+from opscli.amazon_rufus.domain.exceptions import InvalidQuestionError, QuestionBankNotReadyError, SeedRequestNotCapturedError, UnsupportedMarketplaceError
 from opscli.amazon_rufus.runtime.country_map import build_product_url, resolve_marketplace
 from opscli.amazon_rufus.services.browser import BrowserAttachService
 from opscli.amazon_rufus.services.manager import RufusManager
@@ -982,6 +982,32 @@ def test_cli_get_passes_keep_chrome_open(monkeypatch, tmp_path: Path):
     assert captured["keep_chrome_open"] is True
 
 
+def test_cli_get_passes_question_to_manager(monkeypatch, tmp_path: Path):
+    captured = {}
+
+    class DummyManager:
+        def get(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "asin": kwargs["asin"],
+                "country": kwargs["country"],
+                "questions": [kwargs["question"]],
+                "answers": [{"text": "单题答案", "isSuccess": True}],
+                "upload_payload": {"records": [{"questions": [{"question": kwargs["question"], "capturedAt": 1}]}]},
+            }
+
+    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["get", "B0TEST1234", "US", "--question", "这个商品是做什么的"])
+    _, report_text = _read_single_rufus_report(tmp_path)
+
+    assert result.exit_code == 0
+    assert captured["question"] == "这个商品是做什么的"
+    assert "## 第 1 题：这个商品是做什么的" in report_text
+    assert "单题答案" in report_text
+
+
 def test_cli_init_outputs_login_prompt(monkeypatch):
     captured = {}
 
@@ -1058,6 +1084,51 @@ def test_manager_get_uses_question_bank_browser_and_replay():
     assert result["upload_payload"]["records"][0]["questions"][0]["question"] == "问题1"
     assert fake_browser.kwargs["new_chrome"] is True
     assert fake_browser.kwargs["keep_chrome_open"] is False
+
+
+def test_manager_get_uses_single_question_without_loading_bank():
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+
+    class ForbiddenQuestionBank:
+        def load_templates(self):
+            raise AssertionError("单题模式不应读取题库")
+
+    class FakeBrowser:
+        def capture_seed_request(self, **kwargs):
+            self.kwargs = kwargs
+            return SeedRequestRecord(
+                request_url="https://www.amazon.com/rufus/cl/streaming",
+                request_headers={},
+                request_body='{"queryContext": {}}',
+                page_url=kwargs["page_url"],
+                tab_id="tab-1",
+                asin=kwargs["asin"],
+                country=kwargs["country"],
+                captured_at=1710000000000,
+            )
+
+    class FakeReplay:
+        def replay(self, seed, questions):
+            return [AnswerData(text=f"answer:{questions[0]}", thread_id="thread-1")]
+
+    fake_browser = FakeBrowser()
+    manager = RufusManager(question_bank=ForbiddenQuestionBank(), browser=fake_browser, replay=FakeReplay())
+
+    result = manager.get(asin="b0test1234", country="US", question="这个商品是做什么的")
+
+    assert result["answers"][0]["text"] == "answer:这个商品是做什么的"
+    assert result["question_count"] == 1
+    assert result["questions"] == ["这个商品是做什么的"]
+    assert result["upload_payload"]["records"][0]["questions"][0]["question"] == "这个商品是做什么的"
+
+
+def test_manager_get_rejects_blank_question():
+    manager = RufusManager()
+
+    with pytest.raises(InvalidQuestionError) as exc:
+        manager.get(asin="B0TEST1234", country="US", question="   ")
+
+    assert "question" in str(exc.value)
 
 
 def test_manager_get_replays_before_playwright_context_closes(monkeypatch):

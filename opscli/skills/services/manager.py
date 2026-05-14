@@ -151,7 +151,12 @@ class SkillsManager:
                 shutil.rmtree(target_dir)
                 replaced = True
 
-            shutil.copytree(template_dir, target_dir)
+            # 安装 Skill 时跳过 Python 运行缓存，避免把本地验证产物复制给 Agent。
+            shutil.copytree(
+                template_dir,
+                target_dir,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+            )
             # 记录本次安装到注册表，供 upgrade 无 --skills-dir 时自动定位
             self._record_install(skill_name, target_dir, target_runtime)
             installs.append(
