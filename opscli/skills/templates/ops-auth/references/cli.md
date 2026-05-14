@@ -60,7 +60,7 @@ Token 管理内置双层并发保护，无需调用方额外处理并发：
 
 | 类型 | 来源 | 是否可删除 |
 |------|------|----------|
-| `builtin` | 内置（ops、polaris） | 否 |
+| `builtin` | 内置（ops） | 否 |
 | `local` | 用户手动添加 | 是 |
 | `ops_sync` | 从 ops 后端同步 | 自动更新 |
 
@@ -70,8 +70,7 @@ Token 管理内置双层并发保护，无需调用方额外处理并发：
 
 | 别名 | System Key | URL | 用途 |
 |------|-----------|-----|------|
-| `ops` | ops | https://https://ops.api.qa.aukeyit.com | 运营系统，数据查询、Skill 升级等 |
-| `polaris` | polaris_sys | https://bi.aukeys.com | 刊登系统 |
+| `ops` | ops | https://ops.api.xenkee.com | 运营系统，数据查询、Skill 升级等 |
 
 ---
 
@@ -95,7 +94,6 @@ opscli auth doctor
 ```bash
 # 获取 JWT（纯文本，适合脚本）
 opscli auth token get -s ops
-opscli auth token get -s polaris
 
 # 赋值给变量（常用模式）
 TOKEN=$(opscli auth token get -s ops)
@@ -211,7 +209,6 @@ opscli auth 环境检查
 
 ✓ 已登录
 ✓ ops 可访问
-✓ polaris 可访问
 ```
 
 ```bash
@@ -229,9 +226,8 @@ opscli auth doctor
 已登录  user@aukeys.com
 Session 过期：2025-04-23T10:00:00
 
-别名     系统          Token 状态   剩余时间(s)
-ops      ops           有效         3542
-polaris  polaris_sys   有效         3500
+别名   系统   Token 状态   剩余时间(s)
+ops    ops    有效         3542
 ```
 
 ```bash
@@ -245,7 +241,7 @@ opscli auth token status
 获取指定系统的 JWT（纯文本输出），适合赋值给变量或传递给其他命令。
 
 **参数**：
-- `-s, --system TEXT`：系统别名（必填，如 ops、polaris）
+- `-s, --system TEXT`：系统别名（必填，如 ops）
 
 **错误场景**：
 - 未登录时输出错误并退出码 1
@@ -257,9 +253,6 @@ opscli auth token get -s ops
 
 # 赋值给变量（推荐脚本用法）
 TOKEN=$(opscli auth token get -s ops)
-
-# 获取 polaris 系统 Token
-opscli auth token get -s polaris
 ```
 
 ---
@@ -274,8 +267,6 @@ opscli auth token get -s polaris
 ```bash
 opscli auth token check -s ops
 # 输出: ✓ 有效  剩余 3500 秒
-
-opscli auth token check -s polaris
 # 若无效: ✗ 已过期或未获取（退出码 1）
 ```
 
@@ -305,10 +296,9 @@ opscli auth token refresh --all
 
 **输出示例**：
 ```
-别名      System Key    URL                             来源
-ops       ops           https://https://ops.api.qa.aukeyit.com          builtin
-polaris   polaris_sys   https://bi.aukeys.com           builtin
-my-ops    my_ops        https://ops-staging.aukeys.com  local
+别名      System Key    URL                              来源
+ops       ops           https://ops.api.xenkee.com       builtin
+my-ops    my_ops        https://ops-staging.aukeys.com   local
 ```
 
 ```bash
@@ -349,12 +339,12 @@ opscli auth system add --alias test-env --url https://test.aukeys.com --key test
 
 ### `opscli auth system remove`
 
-移除手动添加的系统（内置系统 ops / polaris 不可移除）。
+移除手动添加的系统（内置系统 ops 不可移除）。
 
 **参数**：
 - `--alias TEXT`：系统别名（必填）
 
-**注意**：尝试移除内置系统（ops、polaris）会报错并退出。
+**注意**：尝试移除内置系统（ops）会报错并退出。
 
 ```bash
 opscli auth system remove --alias my-ops
@@ -392,18 +382,17 @@ opscli auth token refresh -s ops
 TOKEN=$(opscli auth token get -s ops)
 ```
 
-### 高级：多系统与 Python SDK
+### 高级：Python SDK
 
 ```python
 from opscli import AuthClient
 
 client = AuthClient()
 
-# 为不同系统构建认证参数
+# 构建请求认证参数
 ops_headers, ops_cookies = client.build_request_auth("ops")
-polaris_headers, polaris_cookies = client.build_request_auth("polaris")
 
-# 检查特定系统的 Token 状态
+# 检查 Token 状态
 result = client.check_token("ops")
 if not result["valid"]:
     client.refresh_token("ops")
@@ -456,8 +445,6 @@ token = client.get_token("ops")
 ops_url = http://localhost/api
 ops_system_url = http://ops.cm
 ops_token_endpoint = /api/v1/auth/cli-token
-polaris_system_url = http://po2.cm
-polaris_token_endpoint = /api/auth/cli-token
 ```
 
 ---

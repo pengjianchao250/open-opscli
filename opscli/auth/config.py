@@ -9,6 +9,10 @@ DEFAULTS = {
     "polaris_system_url": "https://bi.api.xenkee.com",
     "polaris_token_endpoint": "/api/auth/cli-token",
     "amazon_submit_endpoint": "",
+    # 控制 polaris 系统是否参与授权请求和 Token 刷新
+    # 默认 false（正式发版中 polaris 暂时不参与）
+    # 需要启用时在 ~/.config/opscli/config.ini [systems] 写入 polaris_enabled = true
+    "polaris_enabled": "false",
 }
 
 CONFIG_PATH = CONFIG_DIR / "config.ini"
@@ -41,7 +45,7 @@ def get_ops_system_url() -> str:
 
 def get_builtin_systems() -> list[dict]:
     cfg = load_config()
-    return [
+    systems = [
         {
             "alias": "ops",
             "system_key": "ops",
@@ -49,14 +53,17 @@ def get_builtin_systems() -> list[dict]:
             "token_endpoint": cfg["ops_token_endpoint"],
             "source": "builtin",
         },
-        {
+    ]
+    # polaris_enabled=false 时跳过，不参与授权请求和 Token 刷新
+    if cfg.get("polaris_enabled", "true").lower() == "true":
+        systems.append({
             "alias": "polaris",
             "system_key": "polaris",
             "url": cfg["polaris_system_url"],
             "token_endpoint": cfg["polaris_token_endpoint"],
             "source": "builtin",
-        },
-    ]
+        })
+    return systems
 
 
 def get_amazon_submit_endpoint() -> str:

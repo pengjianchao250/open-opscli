@@ -62,8 +62,7 @@ description: 通过 MCP Tool 管理 Aukeys 内部系统的 OAuth2 登录授权�
 
 | 别名 | URL | 用途 |
 |------|-----|------|
-| `ops` | https://ops.api.qa.aukeyit.com | 运营系统，数据查询、Skill 升级等 |
-| `polaris` | https://bi.aukeys.com | 刊登系统 |
+| `ops` | https://ops.api.xenkee.com | 运营系统，数据查询、Skill 升级等 |
 
 ---
 
@@ -165,7 +164,7 @@ auth_mcp_login(timeout=180)
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `system` | string | `"ops"` | 系统别名（ops、polaris 等） |
+| `system` | string | `"ops"` | 系统别名（如 ops） |
 | `session_id` | string | 自动读取 | 可选，显式传入时优先使用 |
 
 **返回：** `{ "success": true, "data": "<JWT 字符串>", "error": null }`
@@ -281,7 +280,7 @@ auth_system_add(
 
 ### `auth_system_remove`
 
-移除手动添加的系统（内置系统 ops / polaris 不可移除）。**不需要认证**。
+移除手动添加的系统（内置系统 ops 不可移除）。**不需要认证**。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -331,8 +330,7 @@ auth_doctor()
     "authenticated": true,
     "client_name": "claude-code",
     "systems": [
-      { "alias": "ops", "url": "...", "reachable": true, "error": null },
-      { "alias": "polaris", "url": "...", "reachable": false, "error": "..." }
+      { "alias": "ops", "url": "...", "reachable": true, "error": null }
     ]
   }
 }
@@ -443,8 +441,6 @@ auth_mcp_login()
 ops_url = http://localhost/api
 ops_system_url = http://ops.cm
 ops_token_endpoint = /api/v1/auth/cli-token
-polaris_system_url = http://po2.cm
-polaris_token_endpoint = /api/auth/cli-token
 ```
 
 ---
