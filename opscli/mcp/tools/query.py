@@ -1,7 +1,7 @@
 """Query 工具模块。
 
 将 opscli query 子模块的核心能力暴露为 MCP 工具：
-- query_spec            — ！！！【重要】读取查询规范文档（仅在未安装 ops-dataset-query Skill 时调用）
+- query_spec_must_read  — ！！！【重要】读取查询规范文档（先检测 Skill 状态，未安装或已禁用时必须调用）
 - query_metadata        — 查询数据集 metadata（维度/指标字段）
 - query_catalog         — 读取数据集业务语义索引（自然语言匹配数据集）
 - query_build           — 构造标准 query payload（不执行）
@@ -20,11 +20,20 @@ from __future__ import annotations
 from .helpers import _err, _ok, _query_manager
 
 
-async def query_spec() -> dict:
+async def query_spec_must_read() -> dict:
     """读取 ops-dataset-query 查询规范文档（QUERY_SPEC.md）。
 
-    【调用条件】仅在当前环境**未安装** ops-dataset-query Skill 时才需要调用本工具。
-    AI Agent 应自行检测当前环境，已安装该 Skill 时优先使用 Skill 目录内更完整的文档。
+    【调用前必须完成的检测步骤】
+    1. 调用 skills_list MCP 工具，确认 ops-dataset-query Skill 是否存在且启用（disable != true）
+    2. 如果 Skill 存在且启用 → 优先加载 Skill 目录内的 SKILL.md（文档更完整，含 17+ 规范文件）
+    3. 如果 Skill 不存在 或 disable=true → 必须调用本工具，不可跳过
+
+    【跳过规范的已知风险】
+    - 库存字段误用 SUM 聚合（数据膨胀 2-10 倍）
+    - 公式字段（ACOS/ROAS）二次聚合导致指标失真
+    - dataComparison 缺少主周期导致 QS-EXE-005 报错
+    - innerWhere 数据集误用 query_run 导致查询异常
+    - 字段歧义未澄清导致错误维度/指标
 
     规范内容包括：
     - 10 条核心铁律（认证、优先级、innerWhere、公式字段、dataComparison 等）
@@ -33,7 +42,8 @@ async def query_spec() -> dict:
     - 常见错误处理速查
     - 典型工作流（直接查询 / 意图匹配 / 图表分析 / 数据更新）
 
-    规范文档内嵌在 MCP 服务器包中，适用于未安装 ops-dataset-query Skill 的环境。
+    【完整工作流说明】
+    每次查询的标准流程：检测 Skill 状态 → 读取规范 → 执行查询 → 调用 feedback_submit 提交结果反馈。
 
     Returns:
         {"success": true, "data": {"spec": "<Markdown 文档内容>", "source": "<文件路径>"}}
@@ -242,7 +252,7 @@ async def query_simple(
 ) -> dict:
     """基于简化参数直接执行查询。服务端自动处理 innerWhere、translate、MOY 展开等技术细节。
 
-    【首次使用提示】首次执行查询前，请先调用 query_spec() 阅读完整查询规范，
+    【首次使用提示】首次执行查询前，请先调用 query_spec_must_read() 阅读完整查询规范，
     了解铁律、公式字段处理、innerWhere 限制、dataComparison 用法等关键规则。
 
     推荐优先使用本工具替代 query_build_and_run，无需理解 innerWhere、translate、
@@ -269,6 +279,9 @@ async def query_simple(
         skills_dir:      可选，自定义 Skills 目录
         session_id:      可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:             可选，已有 JWT（为空则自动加载本地缓存的）
+
+    【查询完成后必须执行】
+    每次查询执行完成后（无论成功或失败），必须调用 feedback_submit MCP 工具提交执行结果反馈。
     """
     from opscli.mcp.tools.helpers import _get_auth_pair
 
@@ -304,7 +317,7 @@ async def query_run(
 ) -> dict:
     """读取本地 payload JSON 文件并转发至服务端执行查询。
 
-    【首次使用提示】首次执行查询前，请先调用 query_spec() 阅读完整查询规范，
+    【首次使用提示】首次执行查询前，请先调用 query_spec_must_read() 阅读完整查询规范，
     了解手写 payload 的必填字段（expr + alias）以及 innerWhere 数据集的禁用限制。
 
     如果未提供 session_id / jwt，会自动尝试从本地加载已保存的凭据。
@@ -313,6 +326,9 @@ async def query_run(
         payload_path: 本地 payload JSON 文件路径
         session_id:   可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:          可选，已有 JWT 可直接使用（为空则自动加载本地缓存的）
+
+    【查询完成后必须执行】
+    每次查询执行完成后（无论成功或失败），必须调用 feedback_submit MCP 工具提交执行结果反馈。
     """
     from opscli.mcp.tools.helpers import _get_auth_pair
 
@@ -347,7 +363,7 @@ async def query_build_and_run(
 ) -> dict:
     """构造 query payload 并立即执行，一步返回数据结果。
 
-    【首次使用提示】首次执行查询前，请先调用 query_spec() 阅读完整查询规范。
+    【首次使用提示】首次执行查询前，请先调用 query_spec_must_read() 阅读完整查询规范。
 
     如果未提供 session_id / jwt，会自动尝试从本地加载已保存的凭据。
 
@@ -371,6 +387,9 @@ async def query_build_and_run(
         skills_dir:        可选，自定义 Skills 目录
         session_id:        可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:               可选，已有 JWT（为空则自动加载本地缓存的）
+
+    【查询完成后必须执行】
+    每次查询执行完成后（无论成功或失败），必须调用 feedback_submit MCP 工具提交执行结果反馈。
     """
     from opscli.mcp.tools.helpers import _get_auth_pair
 
@@ -415,6 +434,9 @@ async def query_chart(
         dry_run:    是否仅验证不实际执行（默认 False）
         session_id: 可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:        可选，已有 JWT（为空则自动加载本地缓存的）
+
+    【查询完成后必须执行】
+    每次查询执行完成后（无论成功或失败），必须调用 feedback_submit MCP 工具提交执行结果反馈。
     """
     from opscli.mcp.tools.helpers import _get_auth_pair
 
@@ -476,7 +498,7 @@ async def query_chart_doc(
 
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS = [
-    query_spec,
+    query_spec_must_read,
     query_metadata,
     query_catalog,
     query_simple,

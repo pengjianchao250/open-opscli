@@ -1,7 +1,7 @@
 # ops-dataset-query MCP 查询规范文档
 
 > **AI Agent 必读**：执行任何 `query_*` MCP 工具之前，必须先阅读并理解本文档的全部铁律。
-> 本文档由 `query_spec()` 工具返回，适用于通过 MCP Server 直接调用查询服务的场景。
+> 本文档由 `query_spec_must_read()` 工具返回，适用于通过 MCP Server 直接调用查询服务的场景。
 
 ---
 
@@ -721,6 +721,7 @@ for ds in result["data"]["datasets"]:
 □ 库存查询：指定具体产品查库存 → 默认不加时间聚合，查最新快照
 □ 输出列名：是否使用了原始 verbose_name？禁止意译
 □ catalog default_filters：是否已验证可用（返回 0 行时去掉重试）
+□ 闭环：查询完成后是否已调用 feedbackSubmit 提交结果反馈？
 ```
 
 ---
@@ -743,6 +744,11 @@ for ds in result["data"]["datasets"]:
 3. query_simple(...) 执行查询                   # session_id 可不传，自动加载
 
 4. 输出结果（使用 verbose_name 作为列名）
+
+5. feedbackSubmit 提交查询反馈
+   - feedback_type="bug | feature | data_issue | ux | docs | query_result |other"
+   - title="查询内容简述"
+   - content="结果摘要（行数、关键指标范围）"
 ```
 
 ### 工作流 B：用户未指定数据集
@@ -758,6 +764,8 @@ for ds in result["data"]["datasets"]:
 3. query_metadata(dataset="<确认的 alias>") 校验目标字段
 
 4. query_simple(...) 执行查询                   # session_id 可不传，自动加载
+
+5. feedbackSubmit 提交查询反馈
 ```
 
 ### 工作流 C：图表数据分析
@@ -775,6 +783,8 @@ for ds in result["data"]["datasets"]:
 4.（可选）需要环比时：
    query_simple(..., data_comparison={...})     # session_id 可不传，自动加载
    → 对比当期与上期数据
+
+5. feedbackSubmit 提交查询反馈
 ```
 
 ### 工作流 D：降级方案（dataComparison 和 MOY 均不可用时）
@@ -799,6 +809,8 @@ result_prev = query_simple(
 )
 
 # 在对话中按 f_dept 匹配两组结果，计算差值和变化率
+
+# 5. feedbackSubmit 提交查询反馈
 ```
 
 ---
@@ -837,4 +849,108 @@ result_prev = query_simple(
 
 ---
 
-*本规范文档由 `query_spec()` MCP 工具返回，适用于通过 MCP Server 直接调用查询服务的场景。*
+---
+
+## 二十、查询闭环强制规则
+
+> **铁律**：每次执行 `query_*` 系列工具后，无论查询成功或失败，都必须在后续 3 次工具调用内完成一次 `feedbackSubmit`。
+
+### 强制执行清单（MUST-CHECK）
+
+每次完成查询后，必须依次检查：
+
+```
+□ 步骤1：skillsList（确认技能状态）
+□ 步骤2：query_spec_must_read（读取规范，获取最新规则）
+□ 步骤3：执行查询（query_simple / query_build_and_run / query_chart）
+□ 步骤4：feedbackSubmit 提交结果反馈
+□ 步骤5：确认 feedback 状态为 "new" 或 "submitted"
+```
+
+### 反馈提交参数规范
+
+**成功场景示例**：
+
+```python
+feedbackSubmit(
+    feedback_type="query_result",
+    title="各SKU库存查询 - 即时综合数据集（table_id=1）",
+    content="查询成功，返回 20 行。平台库存 500~2000，海外仓库存 100~800。",
+    source="mcp",
+    payload={
+        "actual": "查询返回 20 行，平台库存 500~2000，海外仓库存 100~800",
+        "expected": "按渠道SKU查询即时库存快照（平台库存/海外仓库存/国内库存/在途库存）"
+    },
+    execution_summary={
+        "summary": "通过 query_simple 查询即时综合数据集（table_id=1），按渠道SKU维度获取库存快照，查询成功。",
+        "successful_calls": [
+            {"tool": "query_simple", "result": "success, 20 rows, 1200ms"}
+        ],
+        "failed_calls": [],
+        "final_resolution": "查询成功，结果已输出给用户。"
+    }
+)
+```
+
+**失败 / 降级场景示例**（`severity="medium"`，失败尤其重要）：
+
+```python
+feedbackSubmit(
+    feedback_type="query_result",
+    severity="medium",
+    title="广告数据-dataComparison对比列缺失（table_id=15）",
+    content="查询返回成功但缺少对比列（last_*/diff_*/pct_*），最终通过两次独立查询手动完成对比。",
+    source="mcp",
+    payload={
+        "actual": "返回结果缺少 last_f_spend/diff_f_spend/pct_f_spend 等对比列",
+        "expected": "query_simple 传入 data_comparison 参数后，返回结果应包含 last_*/diff_*/pct_* 对比列"
+    },
+    execution_summary={
+        "summary": "通过 query_simple 查询 advertising_list_set（table_id=15），使用 dataComparison 参数进行2月 vs 1月对比。dataComparison 参数传入成功但对比列未返回，最终通过两次独立查询手动完成对比分析。",
+        "failed_calls": [
+            {
+                "tool": "query_simple",
+                "reason": "推测：table_id=15 为 sql 类型数据集，dataComparison 逻辑未正确拼接到子查询 SQL 中",
+                "call_params": {
+                    "table_id": 15,
+                    "filters": [{"field": "date_id", "operator": "between", "value": ["2026-02-01", "2026-02-28"]}],
+                    "data_comparison": {"field": "date_id", "startDate": "2026-01-01", "endDate": "2026-01-31"}
+                },
+                "error_message": "无报错，但返回结果缺少 last_*/diff_*/pct_* 对比列",
+                "fix_suggestion": "检查 SimpleQueryBuilder 对 sql 类型数据集的 dataComparison 处理逻辑；临时方案：分别查询两个时间段在客户端合并对比"
+            }
+        ],
+        "successful_calls": [
+            {"tool": "query_simple（2月数据）", "result": "success, 2 rows, 1205ms"},
+            {"tool": "query_simple（1月数据）", "result": "success, 2 rows, 1348ms"}
+        ],
+        "final_resolution": "通过分别查询1月和2月数据，在客户端手动完成环比计算和对比分析。"
+    }
+)
+```
+
+### 违规后果
+
+| 违规行为 | 后果 |
+|---------|------|
+| 查询后未调用 feedbackSubmit | 流程不完整，系统无法记录查询历史 |
+| 连续 3 次查询均未提交反馈 | 视为严重流程违规，需人工审查 |
+
+### 闭环检查点（Post-Hook 自动触发规则）
+
+如果未来 query 工具支持 post-hook 机制，以下规则将自动生效：
+
+```
+query_simple 执行成功            → 自动触发 feedbackSubmit
+                                   参数自动注入：feedback_type=query_result
+                                                source=mcp
+                                                execution_summary 自动从本次查询结果提取
+query_build_and_run 执行成功     → 同上
+query_chart(run=True) 执行成功   → 同上
+```
+
+在 post-hook 机制上线前，AI Agent 必须手动在每次查询完成后调用 `feedbackSubmit`。
+
+---
+
+*本规范文档由 `query_spec_must_read()` MCP 工具返回，适用于通过 MCP Server 直接调用查询服务的场景。*

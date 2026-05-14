@@ -1,5 +1,72 @@
 # 待归档变更记录
 
+## 2026-05-14 QUERY_SPEC.md + SKILL.md - 补充 payload / execution_summary 完整字段
+
+**变更原因**：原反馈示例中 `execution_summary` 结构过于简陋，缺少 `payload`、`failed_calls`、`successful_calls`、`final_resolution` 等关键字段，与后端 `dm_user_feedbacks` 表结构不匹配，导致反馈内容无法有效用于问题追踪和根因分析。
+**改动点**：
+- `opscli/skills/templates/ops-dataset-query/QUERY_SPEC.md`（第二十章 反馈提交参数规范）
+- `opscli/skills/templates/ops-dataset-query/SKILL.md`（查询闭环章节 MCP/CLI 调用方式）
+
+**具体改动**：
+- 两个文件均将单一示例扩展为**成功场景 + 失败/降级场景**两个示例
+- 新增 `payload` 字段（`{"actual": "...", "expected": "..."}`）
+- `execution_summary` 补全为完整结构：`summary` / `failed_calls`（含 tool/reason/call_params/error_message/fix_suggestion）/ `successful_calls` / `final_resolution`
+- 失败场景增加 `severity="medium"` 字段
+- CLI 模式补充 `--payload` 和 `--execution-summary` 参数示例
+
+**验证结果**：QUERY_SPEC.md 命中 25 处、SKILL.md 命中 17 处 payload/execution_summary 相关字段
+**影响范围**：规范文档层，不影响运行时逻辑
+**回滚方式**：恢复为原单一成功示例，移除 payload 字段和 failed_calls 结构
+
+---
+
+## 2026-05-14 skills/templates/ops-dataset-query/QUERY_SPEC.md - 新增查询闭环规则
+
+**变更原因**：规范文档缺少 feedbackSubmit 闭环要求，需与 query.py 工具描述保持一致，同步更新 query_spec 工具名引用。
+**改动点**：`opscli/skills/templates/ops-dataset-query/QUERY_SPEC.md`
+**具体改动**：
+- 文档头 + 页脚：`query_spec()` → `query_spec_must_read()`
+- 第十七章自检清单末尾：追加 `□ 闭环：查询完成后是否已调用 feedbackSubmit 提交结果反馈？`
+- 工作流 A/B/C/D：各追加 `步骤 5 feedbackSubmit 提交查询反馈`；工作流 A 额外包含三个参数说明（feedback_type / title / content）
+- 新增第二十章「查询闭环强制规则」：包含铁律（后续 3 次工具调用内必须完成 feedbackSubmit）、5 步强制执行清单、反馈参数规范代码示例、违规后果表格、Post-Hook 自动触发规则说明
+
+**验证结果**：grep 确认 feedbackSubmit 共 10 处、无旧名 `query_spec()` 残留、第二十章标题正常出现
+**影响范围**：MCP 规范文档层，不影响运行时逻辑
+**回滚方式**：删除第二十章，移除各工作流步骤 5，恢复自检清单最后一行，将工具名引用改回 `query_spec()`
+
+---
+
+## 2026-05-14 mcp/tools/query.py - query_spec 改名并重写描述
+
+**变更原因**：原 `query_spec` 描述以"仅在未安装 Skill 时才需要调用"开头，导致 AI 将其归为"可选参考文档"而跳过，造成库存字段误聚合等已知风险。改名加入强制性词汇，重写描述编码检测逻辑。
+**改动点**：`opscli/mcp/tools/query.py`
+**具体改动**：
+- 函数改名：`query_spec` → `query_spec_must_read`
+- docstring 重写：删除"仅在未安装时调用"限定语；新增「调用前必须完成的检测步骤」章节（三步：调 skills_list 检测 → Skill 启用走 Skill → Skill 不存在或禁用必须调本工具）；新增「跳过规范的已知风险」章节（5 条具体后果）
+- 模块顶部注释工具名同步更新
+- `query_simple`/`query_run`/`query_build_and_run` 中对 `query_spec()` 的引用更新为 `query_spec_must_read()`
+- `_ALL_TOOLS` 列表引用更新
+
+**验证结果**：`grep query_spec opscli/mcp/tools/query.py` 无旧名残留
+**影响范围**：MCP Server 对外暴露的工具名称变更，调用方需更新工具名
+**回滚方式**：将函数名和所有引用改回 `query_spec`，恢复旧 docstring
+
+---
+
+## 2026-05-14 mcp/tools/query.py - 新增查询完成后调用 feedback_submit 提示
+
+**变更原因**：AI 执行完查询后缺乏反馈机制，无法收集执行结果信息；通过在工具描述中加入强制提示，引导 AI 每次查询完成后都调用 feedback_submit MCP 工具。
+**改动点**：`opscli/mcp/tools/query.py`
+**具体改动**：
+- `query_simple`、`query_run`、`query_build_and_run`、`query_chart` 的 docstring 末尾各新增「查询完成后必须执行」章节，说明每次执行完成后（无论成功或失败）必须调用 feedback_submit MCP 工具
+- `query_spec_must_read` 的规范内容中新增「完整工作流说明」，明确标准流程：检测 Skill 状态 → 读取规范 → 执行查询 → 调用 feedback_submit 提交反馈
+
+**验证结果**：grep 确认 5 处提示均已插入（query_spec_must_read 1 处 + 各执行工具 4 处）
+**影响范围**：MCP 工具描述层，不影响运行时逻辑
+**回滚方式**：删除各方法 docstring 中「查询完成后必须执行」和「完整工作流说明」段落
+
+---
+
 ## 2026-05-13 mcp/tools/query.py - 优化 AI agent 查询前置检查引导
 
 **变更原因**：AI agent 调用查询工具时，只有查询出错后才去读 query_spec 规范，未能提前检测 Skill 安装状态并按规范执行
