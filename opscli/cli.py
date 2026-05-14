@@ -8,7 +8,7 @@ from opscli.amazon_rufus.cli import app as amazon_rufus_app
 from opscli.auth.cli import app as auth_app
 from opscli.feedback.cli import app as feedback_app
 from opscli.mcp.cli import app as mcp_app
-from opscli.methods_card.cli import app as methods_card_app
+# from opscli.methods_card.cli import app as methods_card_app
 from opscli.query.cli import app as query_app
 from opscli.seller_sprite.cli import app as seller_sprite_app
 from opscli.skills.cli import app as skills_app
@@ -30,7 +30,7 @@ app.add_typer(amazon_app, name="amazon")
 app.add_typer(amazon_rufus_app, name="amazon-rufus")
 app.add_typer(query_app, name="query")
 app.add_typer(feedback_app, name="feedback")
-app.add_typer(methods_card_app, name="methods-card")
+# app.add_typer(methods_card_app, name="methods-card")
 app.add_typer(skills_app, name="skills")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(seller_sprite_app, name="seller-sprite")
