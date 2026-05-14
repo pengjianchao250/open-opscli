@@ -96,10 +96,10 @@
       "reason": "依赖浏览器自动化和外部站点登录态，暂不进入公开发版产物"
     },
     "ops-skills": {
-      "source": false,
-      "wheel": false,
-      "binary": false,
-      "binary_full": false,
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
       "tier": "core",
       "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
     },
