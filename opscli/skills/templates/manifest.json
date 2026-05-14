@@ -94,6 +94,22 @@
       "binary_full": false,
       "tier": "core",
       "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
+    },
+    "ops-cli-view-data": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-cli-view-runner": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
     }
   }
 }
