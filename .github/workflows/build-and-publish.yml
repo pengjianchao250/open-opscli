@@ -22,6 +22,13 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Set up QEMU (Linux only, for aarch64 cross-build)
+        # 仅 Linux runner 需要 QEMU 模拟 aarch64；Windows/macOS 跳过
+        if: runner.os == 'Linux'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -30,7 +37,7 @@ jobs:
       - name: Build wheels (cibuildwheel)
         uses: pypa/cibuildwheel@v2.21.3
         env:
-          # 覆盖 Python 3.11 ~ 3.14，cp310 暂不构建
+          # 覆盖 Python 3.10 ~ 3.14
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
 
           # 允许构建 prerelease Python 版本
@@ -38,12 +45,11 @@ jobs:
           # 内置版本字典将 cp314 标记为 prerelease，不加此标志会被静默跳过（同 cp313 的历史问题）
           CIBW_PRERELEASE_PYTHONS: "1"
 
-          # Linux：跳过 32 位、ARM64(aarch64) 和 Alpine(musl) 版本
-          # aarch64 需要 QEMU 模拟，x86_64 runner 上会 exec format error
-          CIBW_SKIP: "*-manylinux_i686 *-manylinux_aarch64 *-musllinux*"
+          # Linux：跳过 32 位和 Alpine(musl)；aarch64 通过 QEMU 模拟构建，不再跳过
+          CIBW_SKIP: "*-manylinux_i686 *-musllinux*"
 
-          # Linux：同时编译 x86_64 和 ARM64 (aarch64)
-          CIBW_ARCHS_LINUX: "x86_64"
+          # Linux：同时编译 x86_64 和 aarch64（aarch64 由 QEMU 模拟执行）
+          CIBW_ARCHS_LINUX: "x86_64 aarch64"
 
           # macOS：同时编译 Intel (x86_64) 和 Apple Silicon (arm64)
           CIBW_ARCHS_MACOS: "x86_64 arm64"
