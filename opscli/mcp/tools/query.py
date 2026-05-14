@@ -85,9 +85,18 @@ async def query_metadata(
 ) -> dict:
     """查询指定数据集的 metadata（维度/指标字段列表）。
 
+    【前置条件】调用本工具前，必须已完成登录授权：
+    - 调用 auth_is_authenticated 确认当前登录状态
+    - 若未登录，调用 auth_mcp_login 完成一步登录（无需浏览器交互）
+    - session_id 和 jwt 可留空，工具会自动从本地加载已保存的凭证
+
     指定 dataset 或 table_id 时，优先从远端拉取最新字段信息；
     远端失败则回退到本地缓存。未指定任何参数时返回本地数据集列表。
-    远端查询需要认证，未提供 session_id/jwt 时自动从本地加载。
+
+    【典型工作流】
+    1. 不传任何参数 → 返回本地全部数据集列表，找到目标数据集名称或 table_id
+    2. 传入 dataset 或 table_id → 返回该数据集的完整维度/指标字段列表
+    3. 根据返回的字段信息，再调用 query_simple 执行实际查询
 
     Args:
         dataset:    数据集别名（与 table_id 二选一）
@@ -252,6 +261,15 @@ async def query_simple(
 ) -> dict:
     """基于简化参数直接执行查询。服务端自动处理 innerWhere、translate、MOY 展开等技术细节。
 
+    【前置条件 - 调用本工具前必须完成以下步骤】
+    1. 确认登录状态：调用 auth_is_authenticated 检查是否已登录
+       - 若未登录，调用 auth_mcp_login 完成一步登录（无需浏览器交互）
+    2. 获取可用数据集：调用 query_metadata（不传参数）获取本地数据集列表，确认目标数据集存在
+    3. 获取字段信息：调用 query_metadata（传入 dataset 或 table_id）获取该数据集的维度/指标字段列表
+    4. 根据步骤 3 返回的字段名称，组装 dimensions、metrics、filters 参数后再调用本工具
+
+    跳过上述步骤直接调用将因字段名错误或 table_id 不存在而失败。
+
     【首次使用提示】首次执行查询前，请先调用 query_spec_must_read() 阅读完整查询规范，
     了解铁律、公式字段处理、innerWhere 限制、dataComparison 用法等关键规则。
 
@@ -267,9 +285,9 @@ async def query_simple(
       metrics:    [{"field": "ds_xxx.price", "aggregation": "SUM", "alias": "f_price"}]
 
     Args:
-        table_id:        数据集 ID（必填）
-        dimensions:      维度列表
-        metrics:         指标列表
+        table_id:        数据集 ID（必填，须从 query_metadata 返回结果中获取）
+        dimensions:      维度列表（字段名须从 query_metadata 返回的字段列表中选取）
+        metrics:         指标列表（字段名须从 query_metadata 返回的字段列表中选取）
         filters:         过滤条件，如 [{"field": "ds_xxx.platform_name", "operator": "in", "value": ["Amazon"]}]
         data_comparison: 数据对比，如 {"field": "ds_xxx.date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"}
         order_by:        排序规则，如 [{"field": "f_price", "desc": True}]
