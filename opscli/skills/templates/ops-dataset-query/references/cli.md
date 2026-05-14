@@ -17,7 +17,6 @@ description: 使用本地缓存的数据集与字段索引辅助检索和查询�
 > 2. **CLI 简易版命令详解**：`references/cli-simple-guide.md` — `opscli query simple`
 > 3. **CLI 完整版命令详解**：`references/cli-advanced-guide.md` — `opscli query run`、`opscli query chart`、降级方案
 > 4. **只有多次查询失败时**，才尝试阅读 `references/data-query-service-dev-guide.md`
-> 5. **涉及 `innerWhere` 的数据集（子查询数据集，inner_where_enabled=true）不允许使用 `opscli query run` 手写完整 payload**，只能用 `opscli query simple`
 
 ---
 
@@ -59,7 +58,6 @@ opscli auth token status
 - **`opscli query simple` 优先**：普通聚合、数据对比、MOY 趋势、子查询等场景，优先使用简化接口（详见 `references/simple-query-guide.md` 和 `references/cli-simple-guide.md`）
 - `opscli query build` 适合基于 `--dimension`/`--metric` 参数构造标准完整 query payload（输出完整版结构，详见 `references/cli-advanced-guide.md`）
 - `opscli query run` 适合透传完整手写高级 payload（仅当简化接口和 `query build` 均不满足需求时使用）
-- **`opscli query run` 禁用场景**：涉及 `innerWhere` 的数据集（子查询类型，`inner_where_enabled=true`）**禁止使用** `opscli query run`，只能用 `opscli query simple`
 - `opscli query chart` 适合通过图表 ID 直接获取查询结构并执行，支持多 query 自动合并
 - 所有查询工作流都必须以前置的 `ops-auth` 登录检测作为起点
 - **文档引用顺序**：优先参考 `references/simple-query-guide.md` 和 `references/cli-simple-guide.md`；多次查询失败时才参考 `references/data-query-service-dev-guide.md`
@@ -260,12 +258,11 @@ opscli query catalog --skills-dir ~/.claude/skills --pretty
 1. **优先阅读 `references/simple-query-guide.md`** — 所有普通场景先按简化接口处理
 2. **CLI 命令细节阅读 `references/cli-simple-guide.md`**
 3. **只有多次查询失败时**，才阅读 `references/data-query-service-dev-guide.md` 排查深层问题
-4. **涉及 `innerWhere` 的数据集（子查询类型）禁止使用 `opscli query run`**，无论简化接口是否满足需求，都必须使用 `opscli query simple`
 
 > 简化接口完整说明见 **`references/simple-query-guide.md`**。
 > CLI 简易版命令详解见 **`references/cli-simple-guide.md`**。
 > CLI 完整版命令详解见 **`references/cli-advanced-guide.md`**。
-> 完整 query payload 规范（innerWhere / translate / 权限占位符等）见 **`references/data-query-service-dev-guide.md`**（多次失败时参考）。
+> 完整 query payload 规范（translate / 权限占位符等）见 **`references/data-query-service-dev-guide.md`**（多次失败时参考）。
 
 ---
 

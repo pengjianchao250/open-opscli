@@ -1,5 +1,35 @@
 # 待归档变更记录
 
+## 2026-05-14 ops-dataset-query Skill - 移除 innerWhere 相关描述
+
+**变更原因**：服务端不再接受 `innerWhere` 参数，Skill 文档中所有涉及该参数的描述、铁律、示例需全部清除，避免 AI Agent 错误构造已废弃字段。
+**改动点**：
+- `SKILL.md`：删除铁律四（子查询强制简化接口）及文档入口第4条；铁律五～十二重新编号为四～十一
+- `QUERY_SPEC.md`：删除铁律3（innerWhere禁用）和铁律10（子查询必带日期过滤）；删除整个"十三章 innerWhere 数据集铁律"；更新查询工具选择决策树、query_simple 描述、错误处理表；章节重新编号（原十四～二十→十三～十九）
+- `references/simple-query-guide.md`：删除 intro 中的 innerWhere；删除整个"子查询数据集注意事项"节；更新 filters 映射表和错误处理表
+- `references/cli.md` / `references/mcp.md`：删除文档入口第5条、使用原则中的禁用场景条目、文档引用顺序第4条
+- `references/cli-simple-guide.md` / `references/mcp-simple-guide.md`：更新命令/Tool 说明，删除强制禁用声明
+- `references/cli-advanced-guide.md` / `references/mcp-advanced-guide.md`：删除顶部及工作流中的【强制禁用】声明
+- `references/query-patterns.md`：更新参考章节表（移除 innerWhere 行）
+- `references/data-query-service-dev-guide.md`：删除 payload 完整结构中的 `innerWhere` 字段；重写 3.3 子查询类型节（移除 innerWhere 层级说明和完整示例）；重写 3.4 对比总结表；重写 10.2 PHP 示例代码；删除 10.3 日期条件处理中的 innerWhere 注释
+**验证结果**：对所有 .md 文件执行 grep innerWhere，结果为空，全部清除
+**影响范围**：ops-dataset-query Skill 文档层，不影响运行时查询逻辑；服务端已不接受 innerWhere 参数，文档与后端行为对齐
+**回滚方式**：git checkout 还原 opscli/skills/templates/ops-dataset-query/ 目录下相关文件
+
+---
+
+## 2026-05-14 ops-auth Skill - 移除 polaris 相关内容
+
+**变更原因**：正式发版中 polaris 系统已通过 polaris_enabled=false 禁用，Skill 文档中的 polaris 相关示例和说明不再适用，需同步清理避免误导 AI Agent。
+**改动点**：
+- `opscli/skills/templates/ops-auth/references/cli.md`：删除内置系统表格的 polaris 行、token get/check 示例、doctor 输出示例、token status 输出示例、system list 示例、system remove 说明、Python SDK 高级示例；config.ini 示例移除 polaris 地址配置
+- `opscli/skills/templates/ops-auth/references/mcp.md`：删除内置系统表格的 polaris 行、auth_get_token 参数说明、auth_system_remove 说明、auth_doctor 返回示例；config.ini 示例移除 polaris 地址配置
+**验证结果**：两个文件中 polaris 相关内容已全部清除（仅保留 polarisUserToken cookie 名称，该名称为技术实现细节非系统引用）
+**影响范围**：ops-auth Skill 文档层，不影响运行时逻辑
+**回滚方式**：git checkout 还原两个文件
+
+---
+
 ## 2026-05-14 auth/config.py - 新增 polaris_enabled 配置参数
 
 **变更原因**：正式发版中 polaris 系统暂时不参与授权请求和 Token 刷新，需通过配置参数控制，避免登录后预刷新和 refresh_all 触发 polaris 网络请求。

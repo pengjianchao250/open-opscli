@@ -13,14 +13,12 @@
 |---|------|---------|
 | 1 | **认证前置** | 远端查询前必须确认已登录；HTTP/SSE 模式用 `auth_mcp_login()` 一步登录；session_id 可不传（自动加载） |
 | 2 | **工具优先级** | `query_simple` > `query_build_and_run` > `query_build`+`query_run`；禁止跳级 |
-| 3 | **innerWhere 禁用** | `inner_where_enabled=true` 的数据集禁止使用 `query_run`，必须用 `query_simple` |
-| 4 | **公式字段禁止聚合** | 含 `summary_expression` 的字段（ACOS/ROAS 等）禁止额外传 `aggregation` |
-| 5 | **dataComparison 必带主周期** | 使用数据对比时 `filters` 必须包含当前主周期日期；单独传 `dataComparison` 会报 `QS-EXE-005` |
-| 6 | **先确认字段再构造参数** | 构造任何 query 参数前，先通过 `query_metadata` 确认字段存在 |
-| 7 | **参数命名约定** | MCP 工具参数用 `snake_case`（`table_id`），JSON payload 用 `camelCase`（`tableId`），禁止混用 |
-| 8 | **字段歧义必须澄清** | 用户术语匹配到 ≥2 个字段时，禁止静默选择，必须让用户确认 |
-| 9 | **输出字段名不可改写** | 结果列名必须使用数据集定义的 `verbose_name`，禁止自行意译 |
-| 10 | **子查询数据集必带日期过滤** | `inner_where_enabled=true` 时 `filters` 至少含一个日期条件，否则报 `QS-EXE-005` |
+| 3 | **公式字段禁止聚合** | 含 `summary_expression` 的字段（ACOS/ROAS 等）禁止额外传 `aggregation` |
+| 4 | **dataComparison 必带主周期** | 使用数据对比时 `filters` 必须包含当前主周期日期；单独传 `dataComparison` 会报 `QS-EXE-005` |
+| 5 | **先确认字段再构造参数** | 构造任何 query 参数前，先通过 `query_metadata` 确认字段存在 |
+| 6 | **参数命名约定** | MCP 工具参数用 `snake_case`（`table_id`），JSON payload 用 `camelCase`（`tableId`），禁止混用 |
+| 7 | **字段歧义必须澄清** | 用户术语匹配到 ≥2 个字段时，禁止静默选择，必须让用户确认 |
+| 8 | **输出字段名不可改写** | 结果列名必须使用数据集定义的 `verbose_name`，禁止自行意译 |
 
 ---
 
@@ -77,14 +75,13 @@ auth_is_authenticated()
 ① query_simple           ← 最优先，服务端自动处理所有技术细节
 ② query_build_and_run    ← 次优，CLI 风格字符串参数，构造并执行
 ③ query_build            ← 仅构造 payload（不执行，不需认证）
-④ query_run              ← 最后手段，手写完整 payload（innerWhere 数据集严禁使用）
+④ query_run              ← 最后手段，手写完整 payload
 ```
 
 ### 选择决策
 
 ```
 需要执行查询？
-  ├─ 数据集 inner_where_enabled=true → 必须 query_simple，严禁 query_run
   ├─ 普通聚合 / 环比 / MOY 趋势 → query_simple
   ├─ 需要先查看 payload 结构 → query_build，再 query_run
   └─ 复杂场景（无法用简化参数表达）→ query_build 或手写 payload + query_run
@@ -97,7 +94,7 @@ auth_is_authenticated()
 
 ## 四、query_simple（推荐优先使用）
 
-基于简化参数直接执行查询，服务端自动处理 `innerWhere`、`translate`、`MOY` 展开等所有技术细节。需要认证。
+基于简化参数直接执行查询，服务端自动处理 `translate`、`MOY` 展开等所有技术细节。需要认证。
 
 ### 参数规范
 
@@ -276,8 +273,6 @@ query_build(
 
 ## 七、query_run（手写完整 payload 执行）
 
-> ⚠️ **铁律**：`inner_where_enabled=true` 的数据集**严禁使用** `query_run`，无论需求多复杂都只能用 `query_simple`。
-
 ```python
 # 先用 query_build 生成 payload 文件，再调用 query_run 执行
 query_run(
@@ -382,7 +377,7 @@ query_metadata(dataset="sales_order_d")
 query_metadata(table_id=123)
 ```
 
-返回字段包含：`field_name`、`verbose_name`、`global_alias`、`field_type`、`summary_expression`、`detail_expression`、`formula_config`、`inner_where_enabled`
+返回字段包含：`field_name`、`verbose_name`、`global_alias`、`field_type`、`summary_expression`、`detail_expression`、`formula_config`
 
 > 查询公式字段前必须调用此接口获取 `summary_expression`，不能靠猜测。
 
@@ -432,10 +427,7 @@ query_catalog(source="local")
    → 字段的 summary_expression 非空 → 公式字段，构造时不传 aggregation，传 expr
    → summary_expression 为空 → 普通字段，正常传 aggregation
 
-3. 确认是否为子查询数据集：
-   → inner_where_enabled=true → 使用 query_simple，且 filters 至少含日期条件
-
-4. 字段在 metadata 中不存在时：
+3. 字段在 metadata 中不存在时：
    → 检查 dataset_alias 是否拼写正确
    → 通过 query_metadata() 列出所有可用数据集确认
    → 若字段确实不存在，明确告知用户，禁止猜字段名继续查
@@ -540,50 +532,11 @@ for f in fields:
 
 ---
 
-## 十三、innerWhere 数据集铁律
-
-> **铁律**：`inner_where_enabled=true` 的数据集（子查询类型，如广告数据集）有两条强制规则。
-
-### 规则 1：严禁使用 query_run
-
-```
-inner_where_enabled=true → 只能用 query_simple，严禁 query_run
-原因：子查询 SQL 模板包含 innerWhere 占位符，手写 payload 无法正确填充
-```
-
-### 规则 2：filters 必须包含日期条件
-
-```python
-# ❌ 错误：无任何 filters → QS-EXE-005（innerWhere 占位符无法填充）
-query_simple(table_id=15, dimensions=[...], metrics=[...])
-
-# ✅ 正确：至少传一个日期范围
-query_simple(
-    table_id=15,
-    dimensions=[...],
-    metrics=[...],
-    filters=[{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-30"]}]
-)
-```
-
-### 如何判断数据集是否为子查询类型
-
-```python
-# 查看 query_metadata() 返回的数据集列表
-result = query_metadata()
-for ds in result["data"]["datasets"]:
-    if ds.get("inner_where_enabled"):
-        print(ds["dataset_alias"], "→ 子查询数据集，必须用 query_simple")
-```
-
----
-
-## 十四、错误处理速查
+## 十三、错误处理速查
 
 | 场景 | 错误码/现象 | 解决方式 |
 |------|-----------|---------|
 | 缺少主周期 filters | `QS-EXE-005 missing ')' at '{'` | 补上主周期日期 filters 后重试 |
-| 子查询数据集无 filters | `QS-EXE-005` | 至少加一个日期过滤条件 |
 | 手写 payload 缺 expr | 422 Unprocessable Entity | `query.select.*.expr` 和 `alias` 均为必填 |
 | dataset_alias 不存在 | 查询报错 / 返回空 | 先 `query_metadata()` 查看所有可用数据集 |
 | 未登录 / 本地无凭证 | auth 报错 / authenticated=false | HTTP/SSE：`auth_mcp_login()`；stdio：Device Flow |
@@ -591,11 +544,10 @@ for ds in result["data"]["datasets"]:
 | chart_uuid 不存在 | 404 | 确认图表 ID 正确，检查访问权限 |
 | MCP 参数用了 camelCase | `Unexpected keyword argument` | 改用 snake_case：`table_id` 而非 `tableId` |
 | catalog default_filters 返回 0 行 | 无错误码 | 去掉 default_filters 后重试 |
-| query_run 用于 innerWhere 数据集 | 查询结果异常 / SQL 错误 | 改用 `query_simple` |
 
 ---
 
-## 十五、数据集与字段歧义澄清规则
+## 十四、数据集与字段歧义澄清规则
 
 > **核心原则**：不确定就问，禁止猜测。任何可能产生歧义的情况都必须向用户确认。
 
@@ -606,7 +558,7 @@ for ds in result["data"]["datasets"]:
   先用 query_catalog() 做意图匹配
   匹配到 0 个 → 告知用户，请用户明确指定
   匹配到 1 个 → 告知用户将使用该数据集，确认后执行
-  匹配到 ≥2 个 → 列出所有候选（名称 + 粒度 + 适用场景 + 是否有 innerWhere 约束）让用户选择
+  匹配到 ≥2 个 → 列出所有候选（名称 + 粒度 + 适用场景）让用户选择
 ```
 
 用户明确指定数据集名称时，若在 `query_metadata()` 中模糊匹配到 ≥2 个相似名称，仍需列出让用户确认。
@@ -685,7 +637,7 @@ for ds in result["data"]["datasets"]:
 
 ---
 
-## 十六、输出结果规范
+## 十五、输出结果规范
 
 > **铁律**：输出列名必须使用数据集定义的 `verbose_name`，禁止自行意译或美化。
 
@@ -699,7 +651,7 @@ for ds in result["data"]["datasets"]:
 
 ---
 
-## 十七、查询前自检清单
+## 十六、查询前自检清单
 
 ```
 □ 认证：是否已登录？（auth_is_authenticated，不传 session_id 自动检查本地凭证）
@@ -712,7 +664,6 @@ for ds in result["data"]["datasets"]:
 □ 字段匹配：是否有 ≥2 个精确/模糊匹配 → 禁止静默选择，让用户确认
 □ 字段跨表：同一 field_name 出现在多个数据集 → 澄清口径差异
 □ 公式字段：summary_expression 非空 → 不传 aggregation，传 expr
-□ innerWhere：inner_where_enabled=true → 用 query_simple，且加日期 filters
 □ dataComparison：是否同时带了主周期 filters？
 □ 参数命名：MCP 参数是否用了 snake_case？（table_id 不是 tableId）
 □ 人员/组织歧义：查询含人名/组织名 → 检查是否存在 ≥2 组同概念维度字段
@@ -726,7 +677,7 @@ for ds in result["data"]["datasets"]:
 
 ---
 
-## 十八、典型工作流速查
+## 十七、典型工作流速查
 
 ### 工作流 A：已知数据集，直接查询
 
@@ -815,7 +766,7 @@ result_prev = query_simple(
 
 ---
 
-## 十九、库存数据查询规则
+## 十八、库存数据查询规则
 
 ### 指定产品的库存查询默认不聚合
 
@@ -851,7 +802,7 @@ result_prev = query_simple(
 
 ---
 
-## 二十、查询闭环强制规则
+## 十九、查询闭环强制规则
 
 > **铁律**：每次执行 `query_*` 系列工具后，无论查询成功或失败，都必须在后续 3 次工具调用内完成一次 `feedbackSubmit`。
 

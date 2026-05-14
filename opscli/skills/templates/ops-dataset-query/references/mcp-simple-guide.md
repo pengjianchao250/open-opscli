@@ -15,10 +15,8 @@ description: MCP 模式 — 简易版查询 Tool 详解（query_simple / query_b
 
 ## Tool 说明
 
-- **`query_simple`**（推荐）：基于简化参数直接执行查询。服务端自动处理 `innerWhere`、`translate`、`MOY` 展开等技术细节。
+- **`query_simple`**（推荐）：基于简化参数直接执行查询。服务端自动处理 `translate`、`MOY` 展开等技术细节。
 - **`query_build_and_run`**：基于简化参数构造标准 query payload 并立即执行，一步返回数据结果。输入参数使用 CLI 风格字符串格式。
-
-> **涉及 `innerWhere` 的数据集（子查询类型，`inner_where_enabled=true`）只能使用 `query_simple`**，禁止手写完整 payload。
 
 ---
 
@@ -83,7 +81,7 @@ query_simple(
 
 ## `query_simple`（推荐优先使用）
 
-基于简化参数直接执行查询。服务端自动处理 `innerWhere`、`translate`、`MOY` 展开等技术细节。**需要认证**。
+基于简化参数直接执行查询。服务端自动处理 `translate`、`MOY` 展开等技术细节。**需要认证**。
 
 > **⚠️ 参数命名约定（重要）**
 >

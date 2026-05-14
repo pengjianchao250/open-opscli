@@ -17,7 +17,6 @@ description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执
 > 2. **MCP 简易版 Tool 详解**：`references/mcp-simple-guide.md` — `query_simple`、`query_build_and_run`
 > 3. **MCP 完整版 Tool 详解**：`references/mcp-advanced-guide.md` — `query_build`、`query_run`、`query_chart`、降级方案、MCP 辅助脚本
 > 4. **只有多次查询失败时**，才尝试阅读 `references/data-query-service-dev-guide.md`
-> 5. **涉及 `innerWhere` 的数据集（子查询数据集，inner_where_enabled=true）不允许使用 `query_run` 手写完整 payload**，只能用 `query_simple`
 
 ---
 
@@ -65,7 +64,6 @@ auth_is_authenticated(session_id="xxx")
 - `query_build_and_run` 适合基于简化参数构造标准 query payload 并立即执行（详见 `references/mcp-simple-guide.md`）
 - `query_build` 适合基于简化参数构造标准完整 query payload（输出完整版结构，不执行，详见 `references/mcp-advanced-guide.md`）
 - `query_run` 适合透传完整手写高级 payload（仅当简化接口和 `query_build` 均不满足需求时使用，详见 `references/mcp-advanced-guide.md`）
-- **`query_run` 禁用场景**：涉及 `innerWhere` 的数据集（子查询类型，`inner_where_enabled=true`）**禁止使用** `query_run`，只能用 `query_simple`
 - `query_chart` 适合通过图表 UUID 直接获取图表结构或执行图表查询，无需手动构造 payload（详见 `references/mcp-advanced-guide.md`）
 - 所有查询工作流都必须以前置的 `session_id` 有效性检测作为起点
 - **文档引用顺序**：优先参考 `references/simple-query-guide.md` 和 `references/mcp-simple-guide.md`；多次查询失败时才参考 `references/data-query-service-dev-guide.md`
@@ -173,12 +171,11 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 1. **优先阅读 `references/simple-query-guide.md`** — 所有普通场景先按简化接口处理
 2. **MCP Tool 细节阅读 `references/mcp-simple-guide.md`**
 3. **只有多次查询失败时**，才阅读 `references/data-query-service-dev-guide.md` 排查深层问题
-4. **涉及 `innerWhere` 的数据集（子查询类型）禁止使用 `query_run`**，无论简化接口是否满足需求，都必须使用 `query_simple`
 
 > 简化接口完整说明见 **`references/simple-query-guide.md`**。
 > MCP 简易版 Tool 详解见 **`references/mcp-simple-guide.md`**。
 > MCP 完整版 Tool 详解见 **`references/mcp-advanced-guide.md`**。
-> 完整 query payload 规范（innerWhere / translate / 权限占位符等）见 **`references/data-query-service-dev-guide.md`**（多次失败时参考）。
+> 完整 query payload 规范（translate / 权限占位符等）见 **`references/data-query-service-dev-guide.md`**（多次失败时参考）。
 
 ---
 

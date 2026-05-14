@@ -56,7 +56,6 @@ version: v0.0.1
 > 1. **必须优先阅读** `references/rules.md`（**查询前必须**，意图澄清规则）
 > 2. **必须优先阅读** `references/simple-query-guide.md`
 > 3. **只有多次查询失败时**，才尝试阅读 `references/data-query-service-dev-guide.md`
-> 4. **涉及 `innerWhere` 的数据集（子查询数据集）不允许使用复杂版手写 payload**，只能用简化接口（`opscli query simple` / `query_simple`）
 
 > **⚠️ 参数命名约定（MCP 模式必读）**
 >
@@ -82,27 +81,23 @@ version: v0.0.1
 
 当用户只给出自然语言需求、没有指定 dataset 时，**优先使用远端 catalog 的 `intents`** 做意图匹配，从中识别最匹配的数据集别名；仅当 catalog 不可用或 intents 无法匹配时，才回退到本地关键词检索。
 
-### 铁律四：子查询数据集强制简化接口
-
-涉及 `innerWhere` 的数据集（子查询类型，`inner_where_enabled=true`），**只允许使用简化接口**，禁止手写完整 query payload + `opscli query run` / `query_run`。
-
-### 铁律五：字段存在性校验
+### 铁律四：字段存在性校验
 
 构造任何 query 参数前，**必须先确认目标数据集和字段真实存在**；搜索结果为空时，先判断本地数据是否已初始化，再决定是否升级。
 
-### 铁律六：认证按需触发
+### 铁律五：认证按需触发
 
 本地只读检索不要求登录；涉及远端 catalog、远端执行、图表运行和 Skill 升级前必须确认认证状态。
 
-### 铁律七：dataComparison 必须同时传主周期
+### 铁律六：dataComparison 必须同时传主周期
 
 涉及环比、同比、上期对比等汇总对比时，**必须同时传主周期日期 `filters` + 对比周期 `dataComparison`**，不能只传 `dataComparison`。
 
-### 铁律八：default_filters 必须验证
+### 铁律七：default_filters 必须验证
 
 catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某数据集的 `default_filters` 时，必须先轻量探查验证；若加上后返回 0 行，则去掉该 `default_filters` 继续查询，并告知用户已跳过不可用的默认过滤条件。
 
-### 铁律九：公式字段禁止套用普通聚合
+### 铁律八：公式字段禁止套用普通聚合
 
 字段 metadata 中标记了 `formula_config` / `summary_expression` / `detail_expression` 的公式字段，**禁止使用 SUM/COUNT/AVG 等普通聚合函数**。公式字段的聚合逻辑已内置在表达式中，再套聚合会导致二次聚合的语义错误（例如把每行的 ACOS 百分比加在一起，而非计算整体 ACOS）。
 
@@ -110,9 +105,9 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 - 明细查询：使用 `detail_expression`
 - 简化接口中遇到公式字段：**不加 `aggregation` 参数**，让服务端直接使用公式表达式
 
-### 铁律十：本地数据初始化检查
+### 铁律九：本地数据初始化检查
 
-`data/VERSION.json` 的 `data_state` 为 `placeholder` 时，表示本地数据为空模板（如 `datasets.csv` 只有表头无数据行）。此时任何字段搜索都会返回空结果，无法完成铁律三（Catalog 优先）和铁律五（字段存在性校验）。
+`data/VERSION.json` 的 `data_state` 为 `placeholder` 时，表示本地数据为空模板（如 `datasets.csv` 只有表头无数据行）。此时任何字段搜索都会返回空结果，无法完成铁律三（Catalog 优先）和铁律四（字段存在性校验）。
 
 **处理规则**：在执行任何需要本地数据索引的操作前，必须先检查 `data/VERSION.json` 的 `data_state` 字段：
 
@@ -128,11 +123,11 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 
 > `query metadata` 始终远端优先：无参数时返回远端数据集列表（不含字段），指定 `--dataset` 或 `--table-id` 时返回远端最新字段信息。远端失败自动回退本地缓存。远端查询需要认证（与 catalog 相同）。
 
-### 铁律十一：查询前必须执行意图澄清检查
+### 铁律十：查询前必须执行意图澄清检查
 
 构造任何查询参数前，**必须先阅读 `references/rules.md`**，按"第九章 查询前自检清单"逐项检查用户输入是否存在语义歧义。规则文件中列出的所有歧义场景（人员身份、SKU 类型、币种、时间范围等），若触发则 **必须先通过 AskUserQuestion 向用户澄清**，禁止猜测后直接查询。
 
-### 铁律十二：查询闭环强制反馈
+### 铁律十一：查询闭环强制反馈
 
 每次执行任何查询工具（`opscli query simple` / `query_simple` / `query_build_and_run` / `query_chart` 等）后，**无论成功或失败**，都必须在后续 3 次工具调用内通过 **ops-feedback Skill** 提交一次执行反馈。
 

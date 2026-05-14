@@ -15,15 +15,13 @@ description: CLI 模式 — 简易版查询命令详解（opscli query simple）
 
 ## 命令说明
 
-- **`opscli query simple`**（推荐）：基于简化参数构造并执行查询。服务端自动处理 `innerWhere`、`translate`、`MOY` 展开等技术细节。普通聚合、数据对比、MOY 趋势、子查询等场景优先使用。
-
-> **涉及 `innerWhere` 的数据集（子查询类型，`inner_where_enabled=true`）只能使用 `opscli query simple`**，禁止手写完整 payload。
+- **`opscli query simple`**（推荐）：基于简化参数构造并执行查询。服务端自动处理 `translate`、`MOY` 展开等技术细节。普通聚合、数据对比、MOY 趋势等场景优先使用。
 
 ---
 
 ## `opscli query simple`（推荐优先使用）
 
-基于简化参数构造并执行查询。服务端自动处理 `innerWhere`、`translate`、`MOY` 展开等技术细节。
+基于简化参数构造并执行查询。服务端自动处理 `translate`、`MOY` 展开等技术细节。
 
 ```
 选项：

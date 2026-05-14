@@ -5,7 +5,7 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 
 # 简化查询接口指南
 
-本指南面向 AI Agent / Skill 开发者，介绍如何通过**极简业务语义参数**完成数据查询，无需理解 `innerWhere`、`translate`、`cacl_type` 等技术实现细节。
+本指南面向 AI Agent / Skill 开发者，介绍如何通过**极简业务语义参数**完成数据查询，无需理解 `translate`、`cacl_type` 等技术实现细节。
 
 服务端 `SimpleQueryBuilder` 会自动将这些简化参数转换为完整 Query Payload 并执行。
 
@@ -47,7 +47,7 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 | 排序规则 | `orderBy` | `order_by` | 排序 | 否 |
 | 分页 | `limit` / `offset` | `limit` / `offset` | 分页 | 否（默认 limit=20） |
 
-> 不需要理解的概念（服务端自动处理）：`innerWhere`、`translate`、`from`、`field_name` vs `bc.` 前缀、`cacl_type`、`params.dim/date`
+> 不需要理解的概念（服务端自动处理）：`translate`、`from`、`field_name` vs `bc.` 前缀、`cacl_type`、`params.dim/date`
 
 ### 时间范围与 dataComparison 规则
 
@@ -119,7 +119,6 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 ```
 
 - `operator`：`=`、`!=`、`>`、`>=`、`<`、`<=`、`in`、`not in`、`between`
-- 子查询数据集中，服务端自动将业务条件放入 `innerWhere`，日期条件放入外层 `where`
 
 ### dataComparison — 数据对比
 
@@ -248,34 +247,11 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 }
 ```
 
-> 服务端自动将 `platform_name` 条件放入 `innerWhere[1]`，日期条件放入外层 `where`。
-
 ---
 
-## 子查询数据集注意事项（inner_where_enabled=true）
+## 注意事项
 
-子查询类型数据集（如 `table_id=15` 广告数据集）有以下特殊约束：
-
-### 1. 必须至少包含一个日期过滤条件
-
-子查询数据集的 SQL 模板包含 `innerWhere` 占位符，当 `filters` 完全为空时，占位符无法填充，服务端会生成非法 SQL 并返回 `QS-EXE-005` 错误。
-
-**最低要求**：至少传入一个日期范围过滤条件（`date_id >= xxx` 或 `date_id between [xxx, yyy]`）。
-
-```json
-// 错误：无任何 filters，会导致 QS-EXE-005
-{"tableId": 15, "dimensions": [...], "metrics": [...], "filters": []}
-
-// 正确：至少带日期过滤
-{"tableId": 15, "dimensions": [...], "metrics": [...],
- "filters": [{"field": "date_id", "operator": "between", "value": ["2026-02-01", "2026-02-28"]}]}
-```
-
-### 2. dataComparison 已支持子查询数据集
-
-子查询数据集现已支持 `dataComparison`，服务端会正确返回 `last_*`、`diff_*`、`pct_*` 对比字段。使用方式与普通数据集一致，必须同时传主周期 `filters` 和 `dataComparison`。
-
-### 3. catalog default_filters 需验证
+### catalog default_filters 需验证
 
 catalog 中 `default_filters`（如 `amazon_cat=Amazon`）可能与实际数据不匹配。首次使用时应先不带 `default_filters` 探查数据是否存在，确认后再决定是否加上。若加上后返回 0 行，则去掉继续查询。
 
@@ -327,7 +303,7 @@ query_simple(
 | `dimensions` | `query.select`（无 aggregation 的字段）+ `query.groupBy` |
 | `metrics` | `query.select`（带 aggregation 的字段） |
 | `metrics.comparison=MOY` | 展开为 3 个 `select` 项（`cacl_type`: ORIGINAL/COMPARE/PERCENT） |
-| `filters` | `query.where`（日期条件）+ `query.innerWhere[1]`（业务条件，子查询时） |
+| `filters` | `query.where` |
 | `filters`（含 translate 字段） | 自动添加 `translate` 字段 |
 | `dataComparison` | 顶层 `dataComparison`（`switch: true`） |
 | `orderBy` | `query.orderBy` |
@@ -352,8 +328,7 @@ query_simple(
 | 缺少必填 alias | 400 | dimension / metric 必须提供 `alias` |
 | 不支持 comparison 类型 | 400 | 仅支持 `MOY`、`ACC`、`PPT` |
 | `dataComparison` SQL 解析错误 | `QS-EXE-005` 等 | 先检查是否缺少主周期日期 `filters`；缺少时补上当前周期日期过滤后重试，仍失败再降级为纯 `filters` 查询 |
-| 子查询数据集无 filters | `QS-EXE-005` | `inner_where_enabled=true` 的数据集必须至少传一个日期过滤条件，否则 innerWhere 占位符无法填充 |
-| `dataComparison` 未返回对比字段 | 无错误码 | 子查询数据集已支持 `dataComparison`；若仍未返回对比字段，降级为分别查询两个周期后本地合并计算 |
+| `dataComparison` 未返回对比字段 | 无错误码 | 若未返回对比字段，降级为分别查询两个周期后本地合并计算 |
 | catalog `default_filters` 返回 0 行 | 无错误码 | `default_filters` 可能与实际数据不匹配，去掉后重试 |
 
 ---

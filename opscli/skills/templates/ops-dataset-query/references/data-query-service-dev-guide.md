@@ -131,18 +131,6 @@ Python API 支持两种认证方式（二选一）：
       ]
     },
 
-    // --- innerWhere：子查询内层条件（仅子查询类型使用）---
-    // 数组顺序对应子查询嵌套层级（从外到内）
-    "innerWhere": [
-      {},         // 第一层（最外层子查询），通常为空对象
-      {           // 第二层（最内层原始表），填写业务维度过滤条件
-        "operator": "AND",
-        "conditions": [
-          { "field": "bc.platform_name", "operator": "in", "value": ["Amazon"] }
-        ]
-      }
-    ],
-
     // --- GROUP BY（用 alias 引用）---
     "groupBy": ["f_xxx_alias_1", "f_xxx_alias_2"],
 
@@ -220,16 +208,16 @@ Python API 支持两种认证方式（二选一）：
 
 ## 三、数据集类型详解
 
-数据集类型决定了 `from.table` 的结构，以及过滤条件应放在 `where` 还是 `innerWhere` 中。判断依据是 `from.table` 的内容中是否包含内层 WHERE 占位符。
+数据集类型决定了 `from.table` 的结构。判断依据是 `from.table` 的内容中是否包含内层 WHERE 占位符。
 
 ### 3.1 判断方法
 
 ```
 from.table 中含有 {where_sub_placeholder_N} 或 {and_sub_placeholder_N}
-    → 子查询类型（inner_where_enabled = true）→ 使用 innerWhere
+    → 子查询类型（inner_where_enabled = true）→ 使用简化接口 query_simple
 
 from.table 中只含有 {permission_placeholder_N}，没有上述占位符
-    → 非子查询类型（标准模式）→ 只使用 where
+    → 非子查询类型（标准模式）→ 使用 where
 ```
 
 ### 3.2 非子查询类型（标准模式）
@@ -274,66 +262,14 @@ from.table 中只含有 {permission_placeholder_N}，没有上述占位符
 
 **特征**：`from.table` 是多层嵌套的 SQL 字符串，内部含有以下占位符：
 
-| 占位符 | 说明 | 对应 innerWhere 位置 |
-|--------|------|---------------------|
-| `{where_sub_placeholder_1}` | 第一层子查询的 WHERE 位置（注意：此处 PHP 实际插入的是 `WHERE 条件` 语句） | `innerWhere[0]` |
-| `{and_sub_placeholder_2}` | 第二层 AND 条件位置 | `innerWhere[1]` |
-| `{permission_placeholder_1}` | 权限条件 1（由 `from.permission[0]` 驱动） | 由 Python 服务内部替换 |
-| `{permission_placeholder_2}` | 权限条件 2（由 `from.permission[1]` 驱动） | 由 Python 服务内部替换 |
+| 占位符 | 说明 |
+|--------|------|
+| `{where_sub_placeholder_1}` | 第一层子查询的 WHERE 位置 |
+| `{and_sub_placeholder_2}` | 第二层 AND 条件位置 |
+| `{permission_placeholder_1}` | 权限条件 1（由 `from.permission[0]` 驱动，Python 服务内部替换） |
+| `{permission_placeholder_2}` | 权限条件 2（由 `from.permission[1]` 驱动，Python 服务内部替换） |
 
-**innerWhere 层级对应关系**：
-
-```
-innerWhere[0]  →  对应 {where_sub_placeholder_1}（外层子查询，通常传空 []）
-innerWhere[1]  →  对应 {and_sub_placeholder_2}（内层原始表，填写业务过滤条件）
-```
-
-> 注意：`innerWhere[0]` 即使是外层子查询条件，也通常传空对象 `{}` 或空数组 `[]`，实际业务过滤放在 `innerWhere[1]` 中。
-
-**where 与 innerWhere 同时使用**：
-
-- `where` 中放日期范围条件（translate 字段，如 `date_id between ...`）
-- `innerWhere` 中放各层的业务维度过滤条件
-
-**完整示例**：
-
-```json
-{
-  "query": {
-    "from": {
-      "table": "{table}",
-      "database": "",
-      "alias": "ds_0759e20F0DrG",
-      "permission": ["channel_uuid", "listing_uuid"]
-    },
-    "select": [
-      { "expr": "ds_0759e20F0DrG.platform_name", "alias": "f_dim001" },
-      { "expr": "ds_0759e20F0DrG.ads_spend", "alias": "f_metric001", "aggregation": "SUM" }
-    ],
-    "innerWhere": [
-      [],                            // innerWhere[0]：对应 where_sub_placeholder_1，此处为空
-      {                              // innerWhere[1]：对应 and_sub_placeholder_2，填写业务条件
-        "operator": "AND",
-        "conditions": [
-          { "field": "bc.platform_name", "operator": "in", "value": ["Amazon"] },
-          { "field": "bc.country_name", "operator": "in", "value": ["美国"] }
-        ]
-      }
-    ],
-    "where": {                       // 外层 where：放日期条件（translate 逻辑）
-      "conditions": [
-        { "field": "ds_0759e20F0DrG.date_id", "operator": "between", "value": ["2026-03-13", "2026-04-11"] }
-      ],
-      "operator": "AND"
-    },
-    "groupBy": ["f_dim001"],
-    "limit": 20,
-    "offset": 0
-  },
-  "dataSource": "doris_analytics",
-  "userEmail": "{userEmail}"
-}
-```
+> **子查询类型数据集必须使用简化接口**（`query_simple` / `opscli query simple`），由服务端自动处理过滤条件的注入，禁止手写完整 payload。
 
 ### 3.4 两种类型对比总结
 
@@ -341,8 +277,7 @@ innerWhere[1]  →  对应 {and_sub_placeholder_2}（内层原始表，填写业
 |----------|------------|-----------|
 | from.table 内容 | 普通视图/封装子查询 | 多层嵌套 SQL 含内层占位符 |
 | 内层占位符 | 无 | 含 `{where_sub_placeholder_N}` / `{and_sub_placeholder_N}` |
-| 过滤条件位置 | 全部放 `where` | 维度过滤放 `innerWhere`，日期放 `where` |
-| innerWhere 字段 | 不传 | 必传，数组顺序对应嵌套层级 |
+| 查询方式 | 可手写完整 payload | 必须使用简化接口（服务端自动处理） |
 | database 字段 | 普通表时传库名 | 子查询时传空字符串 `""` |
 
 ---
@@ -1045,16 +980,15 @@ PHP 端生成字段别名的规则如下：
 
 ```php
 // PHP 伪代码示例
-function isInnerWhereEnabled(string $tableSQL): bool {
+function isSubQueryType(string $tableSQL): bool {
     return str_contains($tableSQL, '{where_sub_placeholder_')
         || str_contains($tableSQL, '{and_sub_placeholder_');
 }
 
 // 使用示例
-if (isInnerWhereEnabled($dataset['table'])) {
-    // 子查询类型：过滤条件放 innerWhere，日期放 where
-    $request['query']['innerWhere'] = buildInnerWhere($filters);
-    $request['query']['where'] = buildDateWhere($dateRange);
+if (isSubQueryType($dataset['table'])) {
+    // 子查询类型：必须使用简化接口，由服务端自动处理过滤条件注入
+    // 禁止手写完整 payload，改用 query_simple / opscli query simple
 } else {
     // 非子查询类型：所有条件放 where
     $request['query']['where'] = buildWhere($filters, $dateRange);
@@ -1068,8 +1002,6 @@ if (isInnerWhereEnabled($dataset['table'])) {
 | 非子查询类型 | `where.conditions` 中 | `数据集别名.date_id` |
 | 子查询类型（inner_where_enabled）| `where.conditions` 中（translate 逻辑处理）| `数据集别名.date_id` |
 | dataComparison 开启后 | Python 自动扩展 WHERE 日期范围为 `当期 OR 对比期` 的并集 | 无需 PHP 手动处理 |
-
-> 子查询类型的 `innerWhere` 中**不放**日期条件，日期通过外层 `where` 的 translate 逻辑注入，Python 服务会自动将其转换为内层的日期过滤。
 
 ### 10.4 错误处理
 

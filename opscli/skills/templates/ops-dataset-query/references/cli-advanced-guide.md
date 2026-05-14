@@ -10,8 +10,6 @@ description: CLI 模式 — 完整版查询命令详解（opscli query build / o
 > **阅读前提**：确保已阅读 `references/simple-query-guide.md` 和 `references/cli-simple-guide.md`，确认简化接口确实无法满足需求。
 >
 > **文档引用顺序**：本文档配合 `references/data-query-service-dev-guide.md` 使用（多次失败时参考）。
->
-> **【强制禁用】涉及 `innerWhere` 的数据集（子查询类型，`inner_where_enabled=true`）禁止使用 `opscli query run`，无论需求多复杂都只能使用 `opscli query simple`。**
 
 ---
 
@@ -666,8 +664,6 @@ for dept, c in cur.items():
 ### 手写高级 payload → 执行（备用）
 
 > 仅当简化接口无法满足需求时使用（如复杂的 `joins`、`union`、自定义子查询等）。
->
-> **【强制禁用】涉及 `innerWhere` 的数据集（子查询类型，`inner_where_enabled=true`）禁止使用 `opscli query run`，无论需求多复杂都只能使用 `opscli query simple`。**
 
 ```bash
 # 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录

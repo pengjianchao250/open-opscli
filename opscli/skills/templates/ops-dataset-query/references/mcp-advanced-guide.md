@@ -10,8 +10,6 @@ description: MCP 模式 — 完整版查询 Tool 详解（query_build / query_ru
 > **阅读前提**：确保已阅读 `references/simple-query-guide.md` 和 `references/mcp-simple-guide.md`，确认简化接口确实无法满足需求。
 >
 > **文档引用顺序**：本文档配合 `references/data-query-service-dev-guide.md` 使用（多次失败时参考）。
->
-> **【强制禁用】涉及 `innerWhere` 的数据集（子查询类型，`inner_where_enabled=true`）禁止使用 `query_run`，无论需求多复杂都只能使用 `query_simple`。**
 
 ---
 
@@ -502,8 +500,6 @@ result_prev = query_simple(
 ### 手写高级 payload → 执行（备用）
 
 > 仅当简化接口无法满足需求时使用（如复杂的 `joins`、`union`、自定义子查询等）。
->
-> **【强制禁用】涉及 `innerWhere` 的数据集（子查询类型，`inner_where_enabled=true`）禁止使用 `query_run`，无论需求多复杂都只能使用 `query_simple`。**
 
 ```python
 # 0. 先检查 session
