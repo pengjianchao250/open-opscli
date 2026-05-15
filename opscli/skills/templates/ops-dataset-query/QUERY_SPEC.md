@@ -692,7 +692,6 @@ for f in fields:
 2. query_metadata(dataset="<alias>")
    → 确认目标字段存在
    → 检查是否为公式字段（summary_expression 非空）
-   → 确认 inner_where_enabled
 
 3. query_simple(...) 执行查询                   # session_id 可不传，自动加载
 

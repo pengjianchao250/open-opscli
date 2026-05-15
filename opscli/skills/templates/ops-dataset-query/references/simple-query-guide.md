@@ -16,7 +16,6 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 - ✅ 普通聚合查询（按维度分组 + 指标聚合）
 - ✅ 数据对比（环比/同比，dataComparison）
 - ✅ 趋势分析（MOY 月环比/年同比）
-- ✅ 子查询类型数据集（inner_where_enabled=true）
 - ✅ 需要 translate 自动转换的维度过滤
 
 **向后兼容**：完整 query 接口仍然可用，复杂场景可继续手写 payload。

@@ -110,7 +110,7 @@ Python API 支持两种认证方式（二选一）：
       }
     ],
 
-    // --- WHERE 外层条件（非子查询类型用此字段，子查询类型的外层日期条件也在此）---
+    // --- WHERE 外层条件 ---
     "where": {
       "operator": "AND",          // 逻辑操作符：AND | OR
       "conditions": [
@@ -208,21 +208,9 @@ Python API 支持两种认证方式（二选一）：
 
 ## 三、数据集类型详解
 
-数据集类型决定了 `from.table` 的结构。判断依据是 `from.table` 的内容中是否包含内层 WHERE 占位符。
+### 3.2 标准模式
 
-### 3.1 判断方法
-
-```
-from.table 中含有 {where_sub_placeholder_N} 或 {and_sub_placeholder_N}
-    → 子查询类型（inner_where_enabled = true）→ 使用简化接口 query_simple
-
-from.table 中只含有 {permission_placeholder_N}，没有上述占位符
-    → 非子查询类型（标准模式）→ 使用 where
-```
-
-### 3.2 非子查询类型（标准模式）
-
-**特征**：`from.table` 是一个封装好的视图或子查询 SQL，内部仅含权限占位符，**不含** `{where_sub_placeholder_N}` 或 `{and_sub_placeholder_N}`。
+**特征**：`from.table` 是一个封装好的视图或子查询 SQL，内部仅含权限占位符。
 
 **过滤条件**：全部放在外层 `where` 中，包括维度过滤和日期范围过滤。
 
@@ -257,28 +245,6 @@ from.table 中只含有 {permission_placeholder_N}，没有上述占位符
   "userEmail": "{userEmail}"
 }
 ```
-
-### 3.3 子查询类型（inner_where_enabled = true）
-
-**特征**：`from.table` 是多层嵌套的 SQL 字符串，内部含有以下占位符：
-
-| 占位符 | 说明 |
-|--------|------|
-| `{where_sub_placeholder_1}` | 第一层子查询的 WHERE 位置 |
-| `{and_sub_placeholder_2}` | 第二层 AND 条件位置 |
-| `{permission_placeholder_1}` | 权限条件 1（由 `from.permission[0]` 驱动，Python 服务内部替换） |
-| `{permission_placeholder_2}` | 权限条件 2（由 `from.permission[1]` 驱动，Python 服务内部替换） |
-
-> **子查询类型数据集必须使用简化接口**（`query_simple` / `opscli query simple`），由服务端自动处理过滤条件的注入，禁止手写完整 payload。
-
-### 3.4 两种类型对比总结
-
-| 对比维度 | 非子查询类型 | 子查询类型 |
-|----------|------------|-----------|
-| from.table 内容 | 普通视图/封装子查询 | 多层嵌套 SQL 含内层占位符 |
-| 内层占位符 | 无 | 含 `{where_sub_placeholder_N}` / `{and_sub_placeholder_N}` |
-| 查询方式 | 可手写完整 payload | 必须使用简化接口（服务端自动处理） |
-| database 字段 | 普通表时传库名 | 子查询时传空字符串 `""` |
 
 ---
 
@@ -530,10 +496,9 @@ GROUP BY f_dim001
 
 ### 6.3 date 字段填写规则
 
-| 数据集类型 | dataComparison.field 的值 |
-|-----------|--------------------------|
-| 非子查询类型 | `数据集别名.date_id`，如 `ds_6fbfb45edd2a.date_id` |
-| 子查询类型 | 同上，`数据集别名.date_id`（日期过滤通过外层 `where` 的 translate 逻辑处理） |
+| 说明 | dataComparison.field 的值 |
+|------|--------------------------|
+| 所有数据集 | `数据集别名.date_id`，如 `ds_6fbfb45edd2a.date_id` |
 
 ### 6.4 配置完整示例
 
@@ -976,31 +941,11 @@ PHP 端生成字段别名的规则如下：
 
 > 开发时不要在业务逻辑中硬编码 alias 值，应以图表配置的 fieldId 或字段映射关系来识别字段。
 
-### 10.2 子查询类型判断方法
+### 10.2 日期条件处理
 
-```php
-// PHP 伪代码示例
-function isSubQueryType(string $tableSQL): bool {
-    return str_contains($tableSQL, '{where_sub_placeholder_')
-        || str_contains($tableSQL, '{and_sub_placeholder_');
-}
-
-// 使用示例
-if (isSubQueryType($dataset['table'])) {
-    // 子查询类型：必须使用简化接口，由服务端自动处理过滤条件注入
-    // 禁止手写完整 payload，改用 query_simple / opscli query simple
-} else {
-    // 非子查询类型：所有条件放 where
-    $request['query']['where'] = buildWhere($filters, $dateRange);
-}
-```
-
-### 10.3 日期条件处理
-
-| 数据集类型 | 日期条件位置 | 字段格式 |
-|-----------|------------|---------|
-| 非子查询类型 | `where.conditions` 中 | `数据集别名.date_id` |
-| 子查询类型（inner_where_enabled）| `where.conditions` 中（translate 逻辑处理）| `数据集别名.date_id` |
+| 场景 | 日期条件位置 | 字段格式 |
+|------|------------|---------|
+| 普通查询 | `where.conditions` 中 | `数据集别名.date_id` |
 | dataComparison 开启后 | Python 自动扩展 WHERE 日期范围为 `当期 OR 对比期` 的并集 | 无需 PHP 手动处理 |
 
 ### 10.4 错误处理

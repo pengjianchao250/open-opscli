@@ -200,7 +200,11 @@ def detect_anomalies_trend(
     # 从 DC 数据的列名自动推断角色
     # 列名格式: f_xxx, last_f_xxx, diff_f_xxx, pct_f_xxx
     sample = rows[0]
-    dc_aliases = [k for k in sample.keys() if k.startswith("f_") and not k.startswith("last_") and not k.startswith("diff_") and not k.startswith("pct_")]
+    # 通过检测 last_xxx 伴生列反推当期 DC 指标列，不依赖 f_ 前缀命名约定
+    dc_aliases = [
+        k for k in sample
+        if f"last_{k}" in sample and not k.startswith(("last_", "diff_", "pct_"))
+    ]
 
     # 为每个 alias 检测角色
     dc_role_map: dict[str, str] = {}  # alias -> role
@@ -351,11 +355,11 @@ def generate_findings(
 
     # 3. 环比整体趋势（如果有 DC 数据）
     if dc_rows and profit_alias and revenue_alias:
-        # 从 DC 数据计算总体环比
-        dc_revenue_alias = f"f_{revenue_alias}" if f"f_{revenue_alias}" in dc_rows[0] else revenue_alias
-        dc_profit_alias = f"f_{profit_alias}" if f"f_{profit_alias}" in dc_rows[0] else profit_alias
+        # 从 DC 数据计算总体环比（alias_map 中的 key 即为查询别名，直接用于 DC 数据取值）
+        dc_revenue_alias = revenue_alias if revenue_alias in dc_rows[0] else None
+        dc_profit_alias = profit_alias if profit_alias in dc_rows[0] else None
 
-        if dc_revenue_alias in dc_rows[0]:
+        if dc_revenue_alias and dc_profit_alias:
             total_cur_rev = sum(to_float(r.get(dc_revenue_alias)) for r in dc_rows)
             total_prev_rev = sum(to_float(r.get(f"last_{dc_revenue_alias}")) for r in dc_rows)
             total_cur_profit = sum(to_float(r.get(dc_profit_alias)) for r in dc_rows)

@@ -10,9 +10,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
-from core import filter_rows_by_dataset, load_csv_rows, search_rows
+from core import discover_data_dir, filter_rows_by_dataset, load_csv_rows, search_rows
 
 
 def main() -> None:
@@ -23,8 +22,14 @@ def main() -> None:
     parser.add_argument("-n", "--limit", type=int, default=10, help="限制返回条数，默认 10")
     args = parser.parse_args()
 
-    # 数据目录位于脚本上级目录的 data/ 子目录
-    data_dir = Path(__file__).resolve().parent.parent / "data"
+    # 通过 discover_data_dir 自动发现数据目录（支持环境变量和多路径扫描）
+    data_dir = discover_data_dir()
+    if data_dir is None:
+        print(json.dumps(
+            {"error": "未找到本地数据目录，请先执行 opscli skills upgrade ops-dataset-query"},
+            ensure_ascii=False,
+        ))
+        raise SystemExit(1)
     rows = load_csv_rows(data_dir / "dataset_fields.csv")
     filtered_rows = filter_rows_by_dataset(rows, args.dataset)
     matched_rows = search_rows(filtered_rows, args.keyword, limit=args.limit)

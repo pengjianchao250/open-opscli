@@ -289,7 +289,7 @@ ACOS、ROAS 等公式指标在多个数据集中存在，但计算口径不同�
 当用户查询匹配到多个数据集时，**必须列出候选项让用户选择**，不得静默选择第一个。列出时应说明每个数据集的：
 - 数据粒度（按产品/按日期/按广告类型/campaign 层级等）
 - 适用场景（一句话说明）
-- 是否有特殊约束（如 `inner_where_enabled=true` 需日期过滤）
+- 是否有特殊约束（如需日期过滤）
 
 ---
 
@@ -316,7 +316,6 @@ ACOS、ROAS 等公式指标在多个数据集中存在，但计算口径不同�
          → 在 dataset_fields.csv 中搜索 verbose_name/field_name
 □ 【公式字段】是否为公式字段？是 → 禁止加 aggregation
          → 检查 summary_expression / detail_expression 是否非空
-□ 【子查询】目标数据集 inner_where_enabled=true 时，是否至少加了日期过滤？
 □ 【default_filters】catalog 的 default_filters 是否已验证可用？
 □ 【输出字段名】输出结果时，列名和指标名称是否使用了数据集原始字段名？
          → 禁止将"广告费"写成"广告花费"、将"订单量"写成"订单数量"等

@@ -91,7 +91,7 @@ description: 数据对比与高级计算通用参考（CLI / MCP 共享）
 
 | 事项 | 说明 |
 |------|------|
-| 子查询数据集已支持 | `inner_where_enabled=true` 的数据集（如 table_id=15 广告数据集）已支持 `dataComparison`，使用方式与普通数据集一致 |
+| 所有数据集均已支持 | 所有数据集已支持 `dataComparison`，使用方式一致 |
 | 必须同时传主周期 filters | 只传 `dataComparison` 不传日期 `filters` 会导致 SQL 解析错误，始终同时传 `filters`（主周期日期）+ `dataComparison`（对比周期日期） |
 
 **极端降级流程**（仅在服务端未返回对比字段时使用）：
