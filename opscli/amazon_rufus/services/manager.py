@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import json
 
-from opscli.amazon_rufus.domain.exceptions import InvalidQuestionError
+from opscli.amazon_rufus.domain.exceptions import InvalidQuestionError, RufusLoginRequiredError
 from opscli.amazon_rufus.domain.models import AnswerData
 from opscli.amazon_rufus.runtime.country_map import build_product_url, resolve_marketplace
 from opscli.amazon_rufus.services.browser import BrowserAttachService
 from opscli.amazon_rufus.services.question_bank import QuestionBankService
 from opscli.amazon_rufus.services.replay import RufusReplayService
+
+
+# 登录中断提示需与 Skill 文档保持一致，便于 Agent 识别后等待用户继续。
+LOGIN_REQUIRED_MESSAGE = (
+    "未获取到 Rufus 答案，可能 Amazon 未登录。已保留浏览器窗口。"
+    "请在浏览器中完成登录；如果登录完成，请继续告诉我，我会继续执行。"
+)
 
 
 class RufusManager:
@@ -65,10 +72,11 @@ class RufusManager:
         page_url = build_product_url(normalized_asin, normalized_country)
         answers: list[AnswerData] = []
 
-        def replay_before_browser_closes(page, seed) -> None:
+        def replay_before_browser_closes(page, seed) -> bool:
             # Playwright 页面只能在 sync_playwright 上下文关闭前使用。
             if hasattr(self.replay, "replay_with_page"):
                 answers.extend(self.replay.replay_with_page(page, seed, questions))
+            return self._answers_require_login_resume(answers)
 
         seed = self.browser.capture_seed_request(
             asin=normalized_asin,
@@ -82,6 +90,8 @@ class RufusManager:
         )
         if not answers:
             answers = self.replay.replay(seed, questions)
+        if self._answers_require_login_resume(answers):
+            raise RufusLoginRequiredError(LOGIN_REQUIRED_MESSAGE)
         data = {
             "asin": normalized_asin,
             "country": normalized_country,
@@ -114,6 +124,21 @@ class RufusManager:
         bank = self.question_bank or QuestionBankService(skills_dir=skills_dir)
         templates = bank.load_templates()
         return [item.text for template in templates for item in template.questions if item.text]
+
+    def _answers_require_login_resume(self, answers: list[AnswerData]) -> bool:
+        """判断本轮 Rufus 是否没有返回任何可用答案。"""
+        if not answers:
+            return True
+        return all(not self._answer_has_content(answer) for answer in answers)
+
+    def _answer_has_content(self, answer: AnswerData) -> bool:
+        """判断单题答案是否包含可展示内容。"""
+        return bool(
+            answer.text.strip()
+            or answer.html.strip()
+            or answer.summary_text.strip()
+            or answer.blocks
+        )
 
     def build_upload_payload(
         self,

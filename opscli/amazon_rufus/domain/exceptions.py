@@ -37,6 +37,12 @@ class InvalidQuestionError(RufusError):
     code = "INVALID_QUESTION"
 
 
+class RufusLoginRequiredError(RufusError):
+    """Rufus 未返回可用答案，需要用户完成 Amazon 登录后继续。"""
+
+    code = "RUFUS_LOGIN_REQUIRED"
+
+
 class RufusReplayError(RufusError):
     """Rufus 重放失败。"""
 
