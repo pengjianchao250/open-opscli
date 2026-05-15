@@ -342,3 +342,22 @@ query_simple(
 | verbose_name | 中文业务名 | `部门名称` |
 
 > 构造简化参数时，`field` 使用 **origin_name**，`alias` 使用 **global_alias**。
+
+## 字段歧义硬门禁
+
+`opscli query simple` / `query_simple` 在执行前会对以下字段引用做 metadata 校验：
+
+- `dimensions[].field`
+- `metrics[].field`
+- `filters[].field`，包括嵌套 `conditions`
+- `dataComparison.field`
+
+门禁规则：
+
+- 字段必须在当前 `table_id` 对应 metadata 中存在
+- 字段标识命中多个候选时会阻断查询，并返回候选字段；必须改用唯一 `global_alias` 或完整 `field_name`
+- 模糊字段术语命中多个候选时会阻断查询，例如“销售额”“库存”“ACOS”等高频相似词
+- 公式字段含 `summary_expression` / `detail_expression` / `formula_config` 时，禁止再传 `aggregation`
+- 若 `metrics` 显式提供 `expr` 且没有 `field`，视为调用方已使用 metadata 中的公式表达式，跳过字段名解析
+
+建议：当用户使用中文口语化字段名且有歧义时，先通过 `query_metadata(dataset=...)` 或 `opscli query metadata --dataset ...` 展示候选，再让用户确认口径。

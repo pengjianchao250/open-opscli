@@ -275,6 +275,9 @@ class QueryManager:
         offset: int = 0,
         dry_run: bool = False,
         output_path: str | None = None,
+        validate_fields: bool = False,
+        skills_dir: str | None = None,
+        cwd: Path | None = None,
     ) -> dict:
         """基于简化参数构造标准 simple query payload。
 
@@ -287,6 +290,16 @@ class QueryManager:
         """
         if not dimensions and not metrics:
             raise InvalidPayloadError("至少需要提供一个 dimension 或 metric")
+
+        if validate_fields:
+            metadata = self.metadata(table_id=table_id, skills_dir=skills_dir, cwd=cwd)
+            self._validate_simple_fields(
+                metadata.fields,
+                dimensions=dimensions or [],
+                metrics=metrics or [],
+                filters=filters or [],
+                data_comparison=data_comparison,
+            )
 
         payload: dict[str, object] = {
             "tableId": table_id,
@@ -327,6 +340,169 @@ class QueryManager:
             **build_result,
             "result": query_result,
         }
+
+    def _validate_simple_fields(
+        self,
+        fields: list[dict],
+        *,
+        dimensions: list[dict],
+        metrics: list[dict],
+        filters: list[dict],
+        data_comparison: dict | None,
+    ) -> None:
+        """校验 simple query 参数中的字段均能唯一落到当前数据集 metadata。
+
+        simple 查询通常由 Agent 根据自然语言拼装参数；如果字段名相似、
+        中文名重复或过滤字段未经校验，最容易产生“查得到但口径错”的问题。
+        这里在真正执行前做硬门禁：维度、指标、过滤条件和 dataComparison
+        字段都必须在当前 table_id 的 metadata 中唯一命中。
+        """
+        if not fields:
+            raise InvalidPayloadError("当前数据集 metadata 未返回字段，无法执行字段歧义门禁")
+
+        for item in dimensions:
+            field_ref = self._extract_simple_field_ref(item, context="dimension")
+            self._resolve_simple_field(fields, field_ref, field_type="dimension", context="dimension")
+
+        for item in metrics:
+            if isinstance(item, dict) and item.get("expr") and not item.get("field"):
+                continue
+            field_ref = self._extract_simple_field_ref(item, context="metric")
+            resolved = self._resolve_simple_field(fields, field_ref, field_type="metric", context="metric")
+            aggregation = item.get("aggregation") if isinstance(item, dict) else self._extract_simple_metric_aggregation(item)
+            if aggregation and self._field_has_formula(resolved):
+                raise InvalidPayloadError(
+                    f"公式字段禁止额外聚合: {field_ref}。请移除 aggregation，并使用 metadata 中的 summary_expression/expr"
+                )
+
+        for field_ref in self._iter_filter_field_refs(filters):
+            self._resolve_simple_field(fields, field_ref, field_type=None, context="filter")
+
+        if data_comparison:
+            field_ref = data_comparison.get("field")
+            if not field_ref:
+                raise InvalidPayloadError("dataComparison 缺少 field")
+            self._resolve_simple_field(fields, str(field_ref), field_type=None, context="dataComparison")
+
+    @staticmethod
+    def _extract_simple_field_ref(item: dict | str, *, context: str) -> str:
+        if isinstance(item, str):
+            field_ref = item.split(":", 1)[0].strip()
+            if not field_ref:
+                raise InvalidPayloadError(f"{context} 缺少 field")
+            return field_ref
+        field_ref = str(item.get("field") or "").strip()
+        if not field_ref:
+            raise InvalidPayloadError(f"{context} 缺少 field")
+        return field_ref
+
+    @staticmethod
+    def _extract_simple_metric_aggregation(item: str) -> str | None:
+        parts = item.split(":", 2)
+        if len(parts) < 2:
+            return None
+        return parts[1].strip() or None
+
+    @staticmethod
+    def _field_has_formula(field: dict) -> bool:
+        if any(str(field.get(key) or "").strip() for key in ("formula_config", "summary_expression", "detail_expression")):
+            return True
+        flag = str(field.get("has_formula_config") or "").strip().lower()
+        return flag not in ("", "0", "false", "none", "null")
+
+    def _iter_filter_field_refs(self, filters: list[dict]) -> list[str]:
+        refs: list[str] = []
+
+        def walk(node: dict) -> None:
+            if not isinstance(node, dict):
+                return
+            field_ref = node.get("field")
+            if field_ref:
+                refs.append(str(field_ref))
+            for child in node.get("conditions") or []:
+                walk(child)
+
+        for item in filters:
+            walk(item)
+        return refs
+
+    def _resolve_simple_field(
+        self,
+        fields: list[dict],
+        identifier: str,
+        *,
+        field_type: str | None,
+        context: str,
+    ) -> dict:
+        normalized = self._normalize_simple_field_identifier(identifier)
+        if not normalized:
+            raise InvalidPayloadError(f"{context} 字段标识不能为空")
+
+        scoped_fields = []
+        for item in fields:
+            current_type = str(item.get("field_type") or "").strip().lower()
+            if field_type and current_type and current_type != field_type:
+                continue
+            scoped_fields.append(item)
+
+        tiers = (
+            ("global_alias", [item for item in scoped_fields if str(item.get("global_alias") or "").strip().lower() == normalized]),
+            ("field_name", [item for item in scoped_fields if str(item.get("field_name") or "").strip().lower() == normalized]),
+            ("verbose_name", [item for item in scoped_fields if str(item.get("verbose_name") or "").strip().lower() == normalized]),
+        )
+        for key, matches in tiers:
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                raise InvalidPayloadError(
+                    self._format_field_ambiguity_error(context, identifier, key, matches)
+                )
+
+        fuzzy_matches = [
+            item for item in scoped_fields
+            if self._simple_field_fuzzy_match(item, normalized)
+        ]
+        if len(fuzzy_matches) == 1:
+            return fuzzy_matches[0]
+        if len(fuzzy_matches) > 1:
+            raise InvalidPayloadError(
+                self._format_field_ambiguity_error(context, identifier, "fuzzy", fuzzy_matches)
+            )
+
+        raise InvalidPayloadError(f"{context} 字段不存在于当前数据集 metadata 中: {identifier}")
+
+    @staticmethod
+    def _normalize_simple_field_identifier(identifier: str) -> str:
+        value = str(identifier).strip()
+        if "." in value:
+            value = value.rsplit(".", 1)[-1]
+        return value.strip().lower()
+
+    @staticmethod
+    def _simple_field_fuzzy_match(item: dict, normalized: str) -> bool:
+        if len(normalized) < 2:
+            return False
+        field_name = str(item.get("field_name") or "").strip().lower()
+        verbose_name = str(item.get("verbose_name") or "").strip().lower()
+        return bool(
+            (field_name and normalized in field_name)
+            or (verbose_name and normalized in verbose_name)
+        )
+
+    @staticmethod
+    def _format_field_ambiguity_error(context: str, identifier: str, key: str, matches: list[dict]) -> str:
+        candidates = []
+        for item in matches[:8]:
+            candidates.append(
+                f"{item.get('field_name') or '-'} / {item.get('verbose_name') or '-'} / {item.get('global_alias') or '-'}"
+            )
+        suffix = "；候选过多，仅展示前 8 个" if len(matches) > 8 else ""
+        return (
+            f"{context} 字段标识存在歧义（{key} 命中 {len(matches)} 条）: {identifier}。"
+            f"请改用唯一的 global_alias 或完整 field_name。候选: "
+            + "；".join(candidates)
+            + suffix
+        )
 
     # ── chart query 支持 ──────────────────────────────────────────────
 

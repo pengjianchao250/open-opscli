@@ -20,6 +20,8 @@
 | 7 | **字段歧义必须澄清** | 用户术语匹配到 ≥2 个字段时，禁止静默选择，必须让用户确认 |
 | 8 | **输出字段名不可改写** | 结果列名必须使用数据集定义的 `verbose_name`，禁止自行意译 |
 
+> `query_simple` / `opscli query simple` 已内置字段歧义硬门禁：执行前会校验 dimensions、metrics、filters 和 dataComparison 中的字段引用。若字段不存在、模糊术语命中多个候选、或公式字段被额外传入 aggregation，会直接阻断查询并返回候选信息。
+
 ---
 
 ## 二、认证前置流程

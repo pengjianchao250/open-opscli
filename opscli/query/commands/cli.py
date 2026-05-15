@@ -295,6 +295,7 @@ def simple(
             kwargs["dry_run"] = simple_params["dryRun"]
         if output:
             kwargs["output_path"] = output
+        kwargs["validate_fields"] = True
 
         result = manager.build_simple_and_run(**kwargs) if run else manager.build_simple(**kwargs)
         payload = {

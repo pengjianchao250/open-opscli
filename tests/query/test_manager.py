@@ -635,6 +635,93 @@ def test_build_rejects_ambiguous_verbose_name(tmp_path, monkeypatch):
         manager.build(dataset_alias="ds_xxx", dimensions=["名称"])
 
 
+def test_build_simple_validates_all_field_refs(tmp_path, monkeypatch):
+    manager = QueryManager()
+    payload = {
+        "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
+        "fields": [
+            {"table_id": 1103, "field_name": "date_id", "verbose_name": "日期", "field_type": "dimension", "global_alias": "ga_date"},
+            {"table_id": 1103, "field_name": "country_name", "verbose_name": "国家", "field_type": "dimension", "global_alias": "ga_country"},
+            {"table_id": 1103, "field_name": "price", "verbose_name": "销售额", "field_type": "metric", "global_alias": "ga_price"},
+        ],
+    }
+    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
+
+    result = manager.build_simple(
+        table_id=1103,
+        dimensions=[{"field": "ds_xxx.country_name", "alias": "f_country"}],
+        metrics=[{"field": "price", "aggregation": "SUM", "alias": "f_price"}],
+        filters=[{"field": "ds_xxx.date_id", "operator": "between", "value": ["2026-05-01", "2026-05-15"]}],
+        data_comparison={"field": "date_id", "startDate": "2026-04-01", "endDate": "2026-04-15"},
+        validate_fields=True,
+    )
+
+    assert result["payload"]["tableId"] == 1103
+
+
+def test_build_simple_rejects_ambiguous_metric_term(tmp_path, monkeypatch):
+    manager = QueryManager()
+    payload = {
+        "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
+        "fields": [
+            {"table_id": 1103, "field_name": "ads_sales_cny", "verbose_name": "广告销售额", "field_type": "metric", "global_alias": "ga_ads_sales_cny"},
+            {"table_id": 1103, "field_name": "sp_sales_cny", "verbose_name": "SP广告销售额", "field_type": "metric", "global_alias": "ga_sp_sales_cny"},
+        ],
+    }
+    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
+
+    with pytest.raises(InvalidPayloadError, match="metric 字段标识存在歧义"):
+        manager.build_simple(
+            table_id=1103,
+            metrics=[{"field": "销售额", "aggregation": "SUM"}],
+            validate_fields=True,
+        )
+
+
+def test_build_simple_rejects_unknown_filter_field(tmp_path, monkeypatch):
+    manager = QueryManager()
+    payload = {
+        "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
+        "fields": [
+            {"table_id": 1103, "field_name": "price", "verbose_name": "销售额", "field_type": "metric", "global_alias": "ga_price"},
+        ],
+    }
+    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
+
+    with pytest.raises(InvalidPayloadError, match="filter 字段不存在"):
+        manager.build_simple(
+            table_id=1103,
+            metrics=[{"field": "price", "aggregation": "SUM"}],
+            filters=[{"field": "ds_xxx.missing_field", "operator": "=", "value": "x"}],
+            validate_fields=True,
+        )
+
+
+def test_build_simple_rejects_formula_metric_aggregation(tmp_path, monkeypatch):
+    manager = QueryManager()
+    payload = {
+        "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
+        "fields": [
+            {
+                "table_id": 1103,
+                "field_name": "acos",
+                "verbose_name": "ACOS",
+                "field_type": "metric",
+                "global_alias": "ga_acos",
+                "summary_expression": "ROUND(SUM(cost) / SUM(sales), 4)",
+            },
+        ],
+    }
+    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
+
+    with pytest.raises(InvalidPayloadError, match="公式字段禁止额外聚合"):
+        manager.build_simple(
+            table_id=1103,
+            metrics=[{"field": "acos", "aggregation": "SUM"}],
+            validate_fields=True,
+        )
+
+
 def test_build_and_run_uses_built_payload(tmp_path, monkeypatch):
     manager = QueryManager()
     skill_root = tmp_path / ".claude" / "skills" / "ops-dataset-query"

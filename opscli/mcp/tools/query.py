@@ -322,6 +322,8 @@ async def query_simple(
             limit=limit,
             offset=offset,
             dry_run=dry_run,
+            validate_fields=True,
+            skills_dir=skills_dir,
         )
         return _ok(result)
     except Exception as exc:
