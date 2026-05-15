@@ -15,6 +15,7 @@ def runtime_to_tool_name(runtime: str) -> str:
     mapping = {
         "claude": "claude-code",
         "openclaw": "openclaw",
+        "central": "中央存储",   # 无 AI 工具时仅写入中央存储的合成记录
     }
     return mapping.get(runtime, runtime)
 
@@ -46,19 +47,23 @@ class SkillInstallResult:
     """Skill 安装操作的结果。
 
     由 SkillsManager.install() 返回，记录安装目标路径及是否覆盖了已有安装。
+    central_dir / link_method 仅在中央存储模式下有值，旧版复制模式为 None。
     """
 
-    name: str           # Skill 名称
-    runtime: str        # 目标运行时类型
-    target_dir: Path    # 安装目标目录
-    version: str        # 安装后的版本号
-    replaced: bool      # 是否覆盖了已有安装
+    name: str                       # Skill 名称
+    runtime: str                    # 目标运行时类型
+    target_dir: Path                # 链接路径（中央模式）或复制目录（旧模式）
+    version: str                    # 安装后的版本号
+    replaced: bool                  # 是否覆盖了已有安装
+    central_dir: Path | None = None # 中央存储目录（中央模式专属）
+    link_method: str | None = None  # 链接方式：symlink / junction / copy_fallback
 
     def to_dict(self) -> dict:
         """转换为可 JSON 序列化的字典，Path 字段转为字符串。"""
         data = asdict(self)
         data["runtime"] = runtime_to_tool_name(self.runtime)
         data["target_dir"] = str(self.target_dir)
+        data["central_dir"] = str(self.central_dir) if self.central_dir else None
         return data
 
 
@@ -75,14 +80,21 @@ class SkillBatchInstallResult:
             self.injected_configs = []
 
     def to_dict(self) -> dict:
+        # 从第一个有 central_dir 的记录中提取中央路径
+        central_dir = next(
+            (str(item.central_dir) for item in self.installs if item.central_dir),
+            None,
+        )
         return {
             "name": self.name,
             "version": self.installs[0].version if self.installs else "unknown",
+            "central_path": central_dir,
             "installed_paths": [
                 {
                     "tool": runtime_to_tool_name(item.runtime),
                     "path": str(item.target_dir),
                     "replaced": item.replaced,
+                    "link_method": item.link_method,
                 }
                 for item in self.installs
             ],

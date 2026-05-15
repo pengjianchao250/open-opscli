@@ -51,6 +51,7 @@ class SkillDetector:
                 home / ".openclaw" / "skills",
                 home / ".codex" / "skills",
                 self._opencode_skills_dir(),
+                home / ".workbuddy" / "skills",
             ]
         )
 
@@ -119,10 +120,11 @@ class SkillDetector:
         current = cwd or Path.cwd()
         # 显式指定运行时
         runtime_dirs = {
-            "claude":   current / ".claude" / "skills",
-            "openclaw": current / ".openclaw" / "skills",
-            "codex":    current / ".codex" / "skills",
-            "opencode": current / ".opencode" / "skills",
+            "claude":     current / ".claude" / "skills",
+            "openclaw":   current / ".openclaw" / "skills",
+            "codex":      current / ".codex" / "skills",
+            "opencode":   current / ".opencode" / "skills",
+            "workbuddy":  current / ".workbuddy" / "skills",
         }
         if preferred_runtime and preferred_runtime in runtime_dirs:
             return preferred_runtime, runtime_dirs[preferred_runtime]
@@ -199,6 +201,10 @@ class SkillDetector:
         if opencode_config.exists() or shutil.which("opencode") is not None:
             targets.append(("opencode", self._opencode_skills_dir()))
 
+        # WorkBuddy：~/.workbuddy/ 存在 或 `which workbuddy` 可用
+        if (home / ".workbuddy").exists() or shutil.which("workbuddy") is not None:
+            targets.append(("workbuddy", home / ".workbuddy" / "skills"))
+
         return self._dedupe_targets(targets)
 
     def detect_all_install_targets(self) -> list[tuple[str, Path]]:
@@ -210,10 +216,11 @@ class SkillDetector:
         home = Path.home()
         return self._dedupe_targets(
             [
-                ("claude", home / ".claude" / "skills"),
-                ("openclaw", home / ".openclaw" / "skills"),
-                ("codex", home / ".codex" / "skills"),
-                ("opencode", self._opencode_skills_dir()),
+                ("claude",     home / ".claude" / "skills"),
+                ("openclaw",   home / ".openclaw" / "skills"),
+                ("codex",      home / ".codex" / "skills"),
+                ("opencode",   self._opencode_skills_dir()),
+                ("workbuddy",  home / ".workbuddy" / "skills"),
             ]
         )
 
@@ -248,4 +255,6 @@ class SkillDetector:
             return "codex"
         if "opencode" in parts:
             return "opencode"
+        if ".workbuddy" in parts:
+            return "workbuddy"
         return "claude"

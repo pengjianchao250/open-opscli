@@ -15,6 +15,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from opscli.skills.domain.exceptions import error_to_dict
+from opscli.skills.domain.models import runtime_to_tool_name
+from opscli.skills.packaging import get_central_skills_dir
 from opscli.skills.services.manager import SkillsManager
 from opscli.skills.services.rule_injector import RuleInjector
 
@@ -22,10 +24,12 @@ app = typer.Typer(help="Skill 生命周期管理")
 _console = Console()
 
 _TOOL_LABELS = {
-    "claude":   "Claude Code",
-    "openclaw": "OpenClaw",
-    "codex":    "Codex CLI",
-    "opencode": "OpenCode",
+    "claude":    "Claude Code",
+    "openclaw":  "OpenClaw",
+    "codex":     "Codex CLI",
+    "opencode":  "OpenCode",
+    "workbuddy": "WorkBuddy",
+    "central":   "中央存储",
 }
 
 _AMAZON_RUFUS_SKILL_NAME = "ops-amazon-rufus"
@@ -72,8 +76,11 @@ def _parse_multiselect(answer: str, total: int) -> list[int]:
     return indexes or list(range(1, total + 1))
 
 
-def _tui_select_skills(manager: SkillsManager) -> list[str]:
-    """TUI：展示内置 Skill 列表，用户选择要安装哪些。返回选中的 skill 名称列表。"""
+def _tui_select_skills(manager: SkillsManager, *, yes: bool = False) -> list[str]:
+    """TUI：展示内置 Skill 列表，用户选择要安装哪些。返回选中的 skill 名称列表。
+
+    yes=True 时跳过 prompt，直接全选。
+    """
     templates = manager.list_templates()
     if not templates:
         raise ValueError("未找到任何内置 Skill 模板")
@@ -90,6 +97,10 @@ def _tui_select_skills(manager: SkillsManager) -> list[str]:
 
     _console.print(Panel(table, title="[bold]可安装的 Skills[/bold]", border_style="blue"))
 
+    if yes:
+        _console.print("[dim]--yes：自动全选所有 Skills[/dim]")
+        return [tmpl["name"] for tmpl in templates]
+
     answer = typer.prompt(
         "请选择要安装的 Skills（逗号分隔编号，直接回车安装全部）",
         default="",
@@ -99,13 +110,14 @@ def _tui_select_skills(manager: SkillsManager) -> list[str]:
     return [templates[i - 1]["name"] for i in selected_indexes]
 
 
-def _tui_select_targets(manager: SkillsManager) -> list[tuple[str, Path]] | None:
+def _tui_select_targets(manager: SkillsManager, *, yes: bool = False) -> list[tuple[str, Path]] | None:
     """TUI：展示全局检测到的工具列表，用户选择安装到哪些工具。
 
     使用 detect_global_install_targets() 按 ~/.claude/、which claude 等规则检测，
     而非项目级 CWD 目录。
 
     返回选中的 [(runtime, skills_dir), ...] 列表；未检测到任何工具时返回 None。
+    yes=True 时跳过 prompt，直接全选。
     """
     targets = manager.detector.detect_global_install_targets()
     if not targets:
@@ -121,6 +133,10 @@ def _tui_select_targets(manager: SkillsManager) -> list[tuple[str, Path]] | None
         table.add_row(f"[{idx}]", label, str(path))
 
     _console.print(Panel(table, title="[bold]检测到的安装目标[/bold]", border_style="blue"))
+
+    if yes:
+        _console.print("[dim]--yes：自动全选所有安装目标[/dim]")
+        return targets
 
     answer = typer.prompt(
         "请选择安装目标（逗号分隔编号，直接回车安装全部）",
@@ -192,17 +208,19 @@ def install_skill(
     skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定安装目录"),
     runtime: str | None = typer.Option(None, "--runtime", help="claude、openclaw、all，或逗号分隔多个值"),
     force: bool = typer.Option(False, "--force", help="覆盖已存在目录"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认，自动全选所有 Skills 和检测到的 AI 工具"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """从内置模板安装 Skill 到本地目录。
 
     不指定 NAME 时进入 TUI 交互模式，可多选 Skills 和安装目标。
+    加 --yes / -y 可跳过所有确认，直接安装全部 Skills 到所有检测到的工具。
     """
     manager = SkillsManager()
     try:
         if name is None:
             # TUI 模式：交互选择 Skills 和安装目标
-            _install_interactive(manager, skills_dir=skills_dir, runtime=runtime, force=force, pretty=pretty)
+            _install_interactive(manager, skills_dir=skills_dir, runtime=runtime, force=force, yes=yes, pretty=pretty)
             return
         # 单 Skill 安装（原有逻辑）
         resolved_runtime = _resolve_install_runtime(
@@ -245,22 +263,24 @@ def _install_interactive(
     skills_dir: str | None,
     runtime: str | None,
     force: bool,
+    yes: bool,
     pretty: bool,
 ) -> None:
     """TUI 交互安装：选择 Skills → 选择目标工具 → 批量安装。
 
     交互模式默认 force=True（覆盖已有安装），无需手动传 --force。
+    yes=True 时跳过所有 prompt，直接全选 Skills 和全部检测到的工具。
     """
     force = True  # TUI 模式始终覆盖，避免因已安装而中断
     # Step 1：选择要安装的 Skills
     try:
-        skill_names = _tui_select_skills(manager)
+        skill_names = _tui_select_skills(manager, yes=yes)
     except ValueError as exc:
         _console.print(f"[red]错误：{exc}[/red]")
         raise typer.Exit(1)
 
     # Step 2：确定安装目标列表 —— [(runtime, Path), ...]
-    # 优先级：显式 skills_dir > 显式 runtime > TUI 全局检测
+    # 优先级：显式 skills_dir > 显式 runtime > TUI 全局检测（yes 时跳过确认）
     target_pairs: list[tuple[str, Path]] | None = None
     if skills_dir:
         # 用户显式指定目录：安装到唯一路径
@@ -276,47 +296,33 @@ def _install_interactive(
     else:
         # TUI 全局检测：使用 ~/.claude/、~/.openclaw/ 等全局路径
         try:
-            target_pairs = _tui_select_targets(manager)
+            target_pairs = _tui_select_targets(manager, yes=yes)
         except ValueError as exc:
             _console.print(f"[red]错误：{exc}[/red]")
             raise typer.Exit(1)
 
-    # Step 3：批量安装（skill × target 二重循环）
+    # Step 3：批量安装（中央存储 + 链接模式，每个 skill 只调一次 install）
     _console.print()
     all_results: list[dict] = []
     all_installs: list[object] = []  # 收集所有安装结果用于统一注入铁律
     errors: list[str] = []
 
     for skill_name in skill_names:
-        if target_pairs:
-            # 有明确路径：逐目标安装，每次传入显式 skills_dir
-            for target_runtime, target_path in target_pairs:
-                try:
-                    result = manager.install(
-                        skill_name,
-                        skills_dir=str(target_path),
-                        runtime=target_runtime,
-                        force=force,
-                    )
-                    all_results.append(_with_post_install_guidance(result.to_dict(), skill_name))
-                    all_installs.extend(result.installs)
-                    for install in result.installs:
-                        _print_install_line(install)
-                except Exception as exc:
-                    key = f"{skill_name}@{target_path}"
-                    errors.append(f"{key}: {exc}")
-                    _console.print(f"  [red]✗[/red] [bold]{skill_name}[/bold] [red]{exc}[/red]")
-        else:
-            # 未检测到任何全局工具：交由 manager 使用默认逻辑
-            try:
-                result = manager.install(skill_name, force=force)
-                all_results.append(_with_post_install_guidance(result.to_dict(), skill_name))
-                all_installs.extend(result.installs)
-                for install in result.installs:
-                    _print_install_line(install)
-            except Exception as exc:
-                errors.append(f"{skill_name}: {exc}")
-                _console.print(f"  [red]✗[/red] [bold]{skill_name}[/bold] [red]{exc}[/red]")
+        try:
+            # target_pairs 有值时作为 link_targets 传入（中央存储模式）
+            # target_pairs 为 None 时由 manager 自动检测
+            result = manager.install(
+                skill_name,
+                link_targets=target_pairs,
+                force=force,
+            )
+            all_results.append(_with_post_install_guidance(result.to_dict(), skill_name))
+            all_installs.extend(result.installs)
+            for install in result.installs:
+                _print_install_line(install)
+        except Exception as exc:
+            errors.append(f"{skill_name}: {exc}")
+            _console.print(f"  [red]✗[/red] [bold]{skill_name}[/bold] [red]{exc}[/red]")
 
     # 批量安装结束后：如果安装了 ops-feedback，统一注入铁律（去重）
     if "ops-feedback" in skill_names and not skills_dir and all_installs:
@@ -407,6 +413,112 @@ def status(
         payload = {
             "success": False,
             "command": "skills status",
+            "data": None,
+            "error": error_to_dict(exc),
+        }
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
+@app.command("link")
+def link_skill(
+    name: str = typer.Argument(..., help="Skill 名称"),
+    runtime: str | None = typer.Option(None, "--runtime", help="claude、openclaw、all，或逗号分隔多个值"),
+    force: bool = typer.Option(False, "--force", help="覆盖已有链接"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """将中央存储中的 Skill 链接到 AI 工具的 skills 目录。
+
+    适用场景：安装新 AI 工具后，把已有 Skill 接入该工具。
+    """
+    manager = SkillsManager()
+    try:
+        central_skill_dir = get_central_skills_dir() / name
+        if not central_skill_dir.exists():
+            raise ValueError(
+                f"中央存储中未找到 Skill: {name}\n"
+                f"请先执行 opscli skills install {name}"
+            )
+
+        # 解析目标工具列表
+        runtime_list = [r.strip() for r in runtime.split(",") if r.strip()] if runtime else None
+        targets = manager.detector.detect_install_targets(preferred_runtimes=runtime_list)
+
+        version = manager._read_version(central_skill_dir)
+        installs = []
+        for target_runtime, tool_skills_dir in targets:
+            link_result = manager.linker.link(name, central_skill_dir, tool_skills_dir, force=force)
+            manager._record_install(
+                name, link_result.link_path, target_runtime,
+                central_dir=central_skill_dir, link_method=link_result.method,
+            )
+            installs.append({
+                "tool": runtime_to_tool_name(target_runtime),
+                "path": str(link_result.link_path),
+                "method": link_result.method,
+                "replaced": link_result.replaced,
+            })
+            action = "↻" if link_result.replaced else "✓"
+            label = _TOOL_LABELS.get(target_runtime, target_runtime)
+            _console.print(f"  [green]{action}[/green] [bold]{name}[/bold] → [cyan]{label}[/cyan] [dim]({link_result.link_path})[/dim]")
+
+        payload = {
+            "success": True,
+            "command": "skills link",
+            "data": {"name": name, "version": version, "central_path": str(central_skill_dir), "links": installs},
+            "error": None,
+        }
+    except Exception as exc:
+        payload = {
+            "success": False,
+            "command": "skills link",
+            "data": None,
+            "error": error_to_dict(exc),
+        }
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
+@app.command("unlink")
+def unlink_skill(
+    name: str = typer.Argument(..., help="Skill 名称"),
+    runtime: str | None = typer.Option(None, "--runtime", help="指定工具（不指定则移除所有工具的链接）"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """移除 AI 工具 skills 目录中的 Skill 链接（不删除中央存储内容）。"""
+    manager = SkillsManager()
+    try:
+        # 解析目标工具列表
+        runtime_list = [r.strip() for r in runtime.split(",") if r.strip()] if runtime else None
+        targets = manager.detector.detect_install_targets(preferred_runtimes=runtime_list)
+
+        removed = []
+        skipped = []
+        for target_runtime, tool_skills_dir in targets:
+            link_path = tool_skills_dir / name
+            ok = manager.linker.unlink(link_path)
+            label = _TOOL_LABELS.get(target_runtime, target_runtime)
+            if ok:
+                removed.append({"tool": runtime_to_tool_name(target_runtime), "path": str(link_path)})
+                _console.print(f"  [green]✓[/green] 已移除 [bold]{name}[/bold] 的链接（{label}）")
+            else:
+                skipped.append({"tool": runtime_to_tool_name(target_runtime), "path": str(link_path)})
+                _console.print(f"  [dim]- {name} 在 {label} 中不存在，跳过[/dim]")
+
+        payload = {
+            "success": True,
+            "command": "skills unlink",
+            "data": {"name": name, "removed": removed, "skipped": skipped},
+            "error": None,
+        }
+    except Exception as exc:
+        payload = {
+            "success": False,
+            "command": "skills unlink",
             "data": None,
             "error": error_to_dict(exc),
         }

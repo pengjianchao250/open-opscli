@@ -18,6 +18,26 @@ PROFILE_ENV = "OPSCLI_SKILL_PROFILE"
 DEFAULT_PROFILE = "dev"
 RELEASE_PROFILE = "python-release"
 
+
+def get_central_skills_dir() -> Path:
+    """返回跨平台中央 Skills 存储目录。
+
+    macOS / Linux : ~/.opscli/skills/
+    Windows       : %LOCALAPPDATA%\\opscli\\skills\\
+    环境变量 OPSCLI_CENTRAL_SKILLS_DIR 可覆盖（测试隔离用）。
+    """
+    override = os.environ.get("OPSCLI_CENTRAL_SKILLS_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+
+    if sys.platform == "win32":
+        # 优先使用 %LOCALAPPDATA%（避免漫游配置冲突）
+        local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+        base = Path(local_app_data) if local_app_data else Path.home()
+        return base / "opscli" / "skills"
+
+    return Path.home() / ".opscli" / "skills"
+
 _PROFILE_KEYS = {
     "python-release": {
         "sdist": "source",

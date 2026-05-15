@@ -13,6 +13,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+import dataclasses
+
 from opscli.config import CONFIG_DIR
 from opscli.skills.discovery.detector import SkillDetector
 from opscli.skills.domain.exceptions import error_to_dict
@@ -24,7 +26,8 @@ from opscli.skills.domain.models import (
     SkillUpgradeResult,
     runtime_to_tool_name,
 )
-from opscli.skills.packaging import get_builtin_templates_dir
+from opscli.skills.link.linker import SkillsLinker
+from opscli.skills.packaging import get_builtin_templates_dir, get_central_skills_dir
 from opscli.skills.sync.updater import SkillsUpdater
 
 _logger = logging.getLogger("opscli.skills")
@@ -33,12 +36,27 @@ _logger = logging.getLogger("opscli.skills")
 class SkillsManager:
     """Skill 管理器，协调检测器和更新器完成 Skill 生命周期管理。"""
 
-    def __init__(self, *, registry_path: Path | None = None) -> None:
-        self.detector = SkillDetector()             # 负责 Skill 发现
+    def __init__(
+        self,
+        *,
+        registry_path: Path | None = None,
+        central_skills_dir: Path | None = None,
+        detector: SkillDetector | None = None,
+    ) -> None:
+        # 允许外部注入 detector，方便测试时隔离真实全局目录扫描
+        self.detector = detector if detector is not None else SkillDetector()
         self.updater = SkillsUpdater()              # 负责远端数据拉取和升级
+        self.linker = SkillsLinker()                # 负责创建/删除工具链接
         self.templates_dir = get_builtin_templates_dir()  # 内置 Skill 模板目录
         # 注册表路径：默认使用全局 CONFIG_DIR，测试时可注入临时路径实现隔离
         self._custom_registry_path = registry_path
+        # 中央存储根目录：测试时可注入临时路径
+        self._custom_central_skills_dir = central_skills_dir
+
+    @property
+    def _central_skills_dir(self) -> Path:
+        """中央 Skills 存储根目录（~/.opscli/skills 或测试注入路径）。"""
+        return self._custom_central_skills_dir if self._custom_central_skills_dir is not None else get_central_skills_dir()
 
     def list_templates(self) -> list[dict]:
         """扫描内置模板目录，返回可安装的 Skill 列表。
@@ -106,66 +124,169 @@ class SkillsManager:
         skill_name: str,
         *,
         skills_dir: str | None = None,
+        link_targets: list[tuple[str, Path]] | None = None,
         cwd: Path | None = None,
         runtime: str | list[str] | None = None,
         force: bool = False,
     ) -> SkillBatchInstallResult:
-        """从内置模板安装 Skill 到目标目录。
+        """从内置模板安装 Skill。
 
-        流程：
-        1. 检查模板是否存在（只支持内置 Skill）
-        2. 确定安装目标路径（显式指定 或 自动检测）
-        3. 若目标已存在且未指定 force，则报错
-        4. 将模板目录整体复制到目标位置
+        模式 A（旧，向后兼容）：显式传入 skills_dir
+            → 将模板整体复制到 skills_dir/<skill_name>，不使用中央存储。
+
+        模式 B（新，默认）：不传 skills_dir
+            → Step 1: 模板复制到中央存储 (~/.opscli/skills/<skill_name>)
+            → Step 2: 在每个检测到的 AI 工具 skills 目录下创建指向中央存储的链接
+            升级时只需更新中央存储，所有工具链接自动同步。
 
         Args:
             skill_name: 要安装的 Skill 名称（如 "ops-dataset-query"）
-            skills_dir: 显式指定安装根目录
+            skills_dir: 显式指定安装根目录（触发旧复制模式）
+            link_targets: 显式指定链接目标列表 [(runtime, skills_dir), ...]
             cwd: 当前工作目录，用于自动检测安装目标
-            runtime: 运行时类型（claude/openclaw）
-            force: 是否覆盖已存在的安装
+            runtime: 运行时类型（claude/openclaw/all 或逗号分隔）
+            force: 是否覆盖已存在的安装/链接
         """
         template_dir = self.templates_dir / skill_name
         if not template_dir.exists():
             raise ValueError(f"当前发行包未包含内置 Skill: {skill_name}")
 
-        current = cwd or Path.cwd()
+        # 模式 A：显式 skills_dir → 旧复制模式，保持向后兼容
         if skills_dir:
-            targets = [(str(runtime or "custom"), Path(skills_dir).expanduser())]
-        else:
-            runtime_list = self._normalize_runtime_arg(runtime)
-            targets = self.detector.detect_install_targets(
-                cwd=current,
-                preferred_runtimes=runtime_list,
+            return self._install_copy(
+                skill_name,
+                template_dir=template_dir,
+                target_root=Path(skills_dir).expanduser(),
+                runtime=str(runtime or "custom"),
+                force=force,
             )
 
-        installs: list[SkillInstallResult] = []
-        for target_runtime, target_root in targets:
-            target_root.mkdir(parents=True, exist_ok=True)
-            target_dir = target_root / skill_name
+        # 模式 B：中央存储 + 链接
+        return self._install_central(
+            skill_name,
+            template_dir=template_dir,
+            link_targets=link_targets,
+            cwd=cwd,
+            runtime=runtime,
+            force=force,
+        )
 
-            replaced = False
-            if target_dir.exists():
-                if not force:
-                    raise ValueError(f"Skill 已存在: {target_dir}")
-                shutil.rmtree(target_dir)
-                replaced = True
+    def _install_copy(
+        self,
+        skill_name: str,
+        *,
+        template_dir: Path,
+        target_root: Path,
+        runtime: str,
+        force: bool,
+    ) -> SkillBatchInstallResult:
+        """旧复制模式：将模板直接复制到指定目录（兼容 --skills-dir 用法）。"""
+        target_root.mkdir(parents=True, exist_ok=True)
+        target_dir = target_root / skill_name
 
-            # 安装 Skill 时跳过 Python 运行缓存，避免把本地验证产物复制给 Agent。
+        replaced = False
+        if target_dir.exists():
+            if not force:
+                raise ValueError(f"Skill 已存在: {target_dir}")
+            shutil.rmtree(target_dir)
+            replaced = True
+
+        shutil.copytree(
+            template_dir,
+            target_dir,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        )
+        self._record_install(skill_name, target_dir, runtime)
+        return SkillBatchInstallResult(
+            name=skill_name,
+            installs=[
+                SkillInstallResult(
+                    name=skill_name,
+                    runtime=runtime,
+                    target_dir=target_dir,
+                    version=self._read_version(target_dir),
+                    replaced=replaced,
+                    central_dir=None,
+                    link_method=None,
+                )
+            ],
+        )
+
+    def _install_central(
+        self,
+        skill_name: str,
+        *,
+        template_dir: Path,
+        link_targets: list[tuple[str, Path]] | None,
+        cwd: Path | None,
+        runtime: str | list[str] | None,
+        force: bool,
+    ) -> SkillBatchInstallResult:
+        """中央存储模式：复制到 ~/.opscli/skills，再在各工具目录建链接。"""
+        central_skill_dir = self._central_skills_dir / skill_name
+
+        # Step 1：将模板写入中央存储（已存在且非 force 时直接复用）
+        if central_skill_dir.exists():
+            if force:
+                shutil.rmtree(central_skill_dir)
+            # 非 force 时复用已有中央副本，不报错（链接步骤仍会继续）
+        if not central_skill_dir.exists():
+            self._central_skills_dir.mkdir(parents=True, exist_ok=True)
             shutil.copytree(
                 template_dir,
-                target_dir,
+                central_skill_dir,
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
             )
-            # 记录本次安装到注册表，供 upgrade 无 --skills-dir 时自动定位
-            self._record_install(skill_name, target_dir, target_runtime)
+
+        version = self._read_version(central_skill_dir)
+
+        # Step 2：确定链接目标列表
+        if link_targets is not None:
+            targets = link_targets
+        else:
+            current = cwd or Path.cwd()
+            runtime_list = self._normalize_runtime_arg(runtime)
+            targets = self._detect_link_targets(current, runtime_list)
+
+        # Step 3：在各工具目录下创建链接
+        installs: list[SkillInstallResult] = []
+        for target_runtime, tool_skills_dir in targets:
+            link_result = self.linker.link(
+                skill_name,
+                central_skill_dir,
+                tool_skills_dir,
+                force=force,
+            )
+            self._record_install(
+                skill_name,
+                link_result.link_path,
+                target_runtime,
+                central_dir=central_skill_dir,
+                link_method=link_result.method,
+            )
             installs.append(
                 SkillInstallResult(
                     name=skill_name,
                     runtime=target_runtime,
-                    target_dir=target_dir,
-                    version=self._read_version(target_dir),
-                    replaced=replaced,
+                    target_dir=link_result.link_path,
+                    version=version,
+                    replaced=link_result.replaced,
+                    central_dir=central_skill_dir,
+                    link_method=link_result.method,
+                )
+            )
+
+        # 无 AI 工具可链接时：用一条 "central" 记录表示中央存储安装结果
+        if not installs:
+            installs.append(
+                SkillInstallResult(
+                    name=skill_name,
+                    runtime="central",
+                    target_dir=central_skill_dir,
+                    version=version,
+                    replaced=False,
+                    central_dir=central_skill_dir,
+                    link_method=None,
                 )
             )
 
@@ -243,23 +364,96 @@ class SkillsManager:
         if not skills_dir:
             targets = self._merge_registry_targets(name, targets)
 
+        # 无 AI 工具时，检查中央存储是否有该 Skill（直接对中央目录执行升级）
+        if not targets and not skills_dir:
+            central_skill_dir = self._central_skills_dir / name
+            version_file = central_skill_dir / "data" / "VERSION.json"
+            if central_skill_dir.exists() and version_file.exists():
+                try:
+                    payload = json.loads(version_file.read_text(encoding="utf-8"))
+                    version = str(payload.get("version", "v0.0.0"))
+                except Exception:
+                    version = "v0.0.0"
+                targets = [
+                    SkillRecord(
+                        name=name,
+                        version=version,
+                        runtime="central",
+                        root=central_skill_dir,
+                        version_file=version_file,
+                    )
+                ]
+
         if not targets:
-            raise ValueError(f"未找到已安装 Skill: {name}")
+            raise ValueError(f"未找到已安装 Skill: {name}（未检测到 AI 工具，且中央存储中也不存在该 Skill）")
         if name not in {"ops-dataset-query", "ops-amazon-rufus"}:
             raise ValueError(f"暂不支持升级 Skill: {name}")
 
-        # 远端数据对所有本地安装实例完全相同，只拉取一次，再分发写入各目录
+        # ops-amazon-rufus 使用独立升级接口（本地题库，不依赖 ops-dataset-query 的 manifest 体系）
+        if name == "ops-amazon-rufus":
+            results: list[SkillUpgradeResult] = []
+            for t in targets:
+                results.append(self.updater.upgrade_ops_amazon_rufus(t, force=force))
+            return SkillBatchUpgradeResult(name=name, results=results)
+
+        # ops-dataset-query：远端数据对所有本地安装实例完全相同，只拉取一次
         upgrade_data = self.updater.fetch_upgrade_data(name, on_step=on_step)
 
+        # 中央存储模式下，多个工具的链接指向同一目录，按 resolve() 去重避免重复写入
+        real_path_to_result: dict[str, SkillUpgradeResult] = {}
+        deduped: list[SkillRecord] = []
+        for t in targets:
+            real = str(t.root.resolve())
+            if real not in real_path_to_result:
+                deduped.append(t)
+
         if on_step:
-            dir_count = len(targets)
+            dir_count = len(deduped)
             on_step(f"写入本地文件到 {dir_count} 个目录..." if dir_count > 1 else "写入本地文件...")
 
-        results = []
-        for target in targets:
-            results.append(self.updater.apply_upgrade_data(target, upgrade_data, force=force, on_step=None))
+        # 只对去重后的目录执行实际写入
+        for t in deduped:
+            real = str(t.root.resolve())
+            real_path_to_result[real] = self.updater.apply_upgrade_data(t, upgrade_data, force=force, on_step=None)
+
+        # 为所有 targets（含重复链接）生成结果，保持输出结构完整
+        results: list[SkillUpgradeResult] = []
+        for t in targets:
+            real = str(t.root.resolve())
+            base = real_path_to_result[real]
+            results.append(dataclasses.replace(base, runtime=t.runtime, target_dir=t.root))
 
         return SkillBatchUpgradeResult(name=name, results=results)
+
+    def _detect_link_targets(
+        self,
+        cwd: Path,
+        runtime_list: list[str] | None,
+    ) -> list[tuple[str, Path]]:
+        """检测链接目标，不产生虚假回退目标。
+
+        优先级：
+          1. 显式指定 runtime → 按 runtime 解析路径（用户明确知道目标）
+          2. 当前目录下已有 AI 工具配置目录（项目级安装）
+          3. 全局已安装的 AI 工具（检测 ~/.claude/、which claude 等）
+          4. 以上均无 → 返回空列表（仅使用中央存储，不强制创建链接）
+
+        与 detect_install_targets() 的区别：后者在无工具时会回退到
+        (cwd/.claude/skills) 虚假目标，导致创建空目录，本方法避免此问题。
+        """
+        if runtime_list:
+            # 用户显式指定了 runtime，尊重用户意图
+            return self.detector.detect_install_targets(
+                cwd=cwd, preferred_runtimes=runtime_list
+            )
+
+        # 优先检测当前项目目录下的 AI 工具配置
+        project_targets = self.detector.detect_available_install_targets(cwd=cwd)
+        if project_targets:
+            return project_targets
+
+        # 再检测全局安装的 AI 工具
+        return self.detector.detect_global_install_targets()
 
     def _normalize_runtime_arg(self, runtime: str | list[str] | None) -> list[str] | None:
         """统一解析 runtime 参数。"""
@@ -301,11 +495,20 @@ class SkillsManager:
             encoding="utf-8",
         )
 
-    def _record_install(self, skill_name: str, target_dir: Path, runtime: str) -> None:
+    def _record_install(
+        self,
+        skill_name: str,
+        target_dir: Path,
+        runtime: str,
+        *,
+        central_dir: Path | None = None,
+        link_method: str | None = None,
+    ) -> None:
         """在注册表中写入一条安装记录。
 
         同一 skill 可安装到多个目录，每个目录保留独立记录。
         若同路径已有记录则更新 installed_at，避免重复追加。
+        central_dir / link_method 为中央存储模式新增字段，旧模式为 None。
         写入失败时静默忽略，不影响 install 主流程。
         """
         try:
@@ -319,9 +522,22 @@ class SkillsManager:
                 if entry.get("target_dir") == target_str:
                     entry["installed_at"] = now
                     entry["runtime"] = runtime
+                    if central_dir is not None:
+                        entry["central_dir"] = str(central_dir)
+                    if link_method is not None:
+                        entry["link_method"] = link_method
                     break
             else:
-                entries.append({"target_dir": target_str, "runtime": runtime, "installed_at": now})
+                new_entry: dict = {
+                    "target_dir": target_str,
+                    "runtime": runtime,
+                    "installed_at": now,
+                }
+                if central_dir is not None:
+                    new_entry["central_dir"] = str(central_dir)
+                if link_method is not None:
+                    new_entry["link_method"] = link_method
+                entries.append(new_entry)
 
             self._write_registry(registry)
         except Exception as _reg_exc:

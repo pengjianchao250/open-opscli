@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from opscli.skills.exceptions import SkillRemoteError
 from opscli.skills.models import SkillRecord, SkillUpgradeResult
@@ -216,3 +217,80 @@ def test_status_wraps_remote_error(tmp_path: Path, monkeypatch):
         "endpoint": "/manifest",
         "status_code": 401,
     }
+
+
+def test_install_central_no_ai_tools_uses_central_store(tmp_path: Path):
+    """无 AI 工具时，install 应正常写入中央存储，返回 runtime='central'。"""
+    # 注入空 detector（两个检测方法均返回空列表），隔离真实 ~/.claude 等目录
+    mock_detector = MagicMock()
+    mock_detector.detect_available_install_targets.return_value = []
+    mock_detector.detect_global_install_targets.return_value = []
+    # discover 保留真实行为（list_skills 不是本测试关注点，但需要返回可迭代对象）
+    mock_detector.discover.return_value = []
+
+    central = tmp_path / "central"
+    manager = SkillsManager(
+        registry_path=tmp_path / "registry.json",
+        central_skills_dir=central,
+        detector=mock_detector,
+    )
+
+    result = manager.install("ops-dataset-query", cwd=tmp_path, force=False)
+
+    payload = result.to_dict()
+    # 只有一条中央存储记录
+    assert len(payload["installed_paths"]) == 1
+    assert payload["installed_paths"][0]["tool"] == "中央存储"
+    # 中央目录已创建，Skill 文件存在
+    assert (central / "ops-dataset-query" / "data" / "VERSION.json").exists()
+    assert (central / "ops-dataset-query" / "SKILL.md").exists()
+    # central_path 字段指向中央目录
+    assert "ops-dataset-query" in payload["central_path"]
+
+
+def test_upgrade_central_no_ai_tools_reads_central_store(tmp_path: Path, monkeypatch):
+    """无 AI 工具时，upgrade 应从中央存储读取记录并执行升级。"""
+    # 先在中央存储写入一个模拟 Skill 目录
+    central = tmp_path / "central"
+    skill_dir = central / "ops-dataset-query"
+    data_dir = skill_dir / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text('{"version":"v1.0.0"}', encoding="utf-8")
+
+    mock_detector = MagicMock()
+    mock_detector.discover.return_value = []
+
+    manager = SkillsManager(
+        registry_path=tmp_path / "registry.json",
+        central_skills_dir=central,
+        detector=mock_detector,
+    )
+
+    fake_data = {
+        "manifest": {"version": "v1.1.0"},
+        "fields_csv": "",
+        "datasets_csv": "",
+        "dataset_catalog": {},
+        "query_metadata": {},
+        "field_count": 0,
+    }
+    monkeypatch.setattr(manager.updater, "fetch_upgrade_data", lambda name, on_step=None: fake_data)
+    monkeypatch.setattr(
+        manager.updater,
+        "apply_upgrade_data",
+        lambda record, data, force=False, on_step=None: SkillUpgradeResult(
+            name=record.name,
+            from_version="v1.0.0",
+            to_version="v1.1.0",
+            runtime=record.runtime,
+            target_dir=record.root,
+            updated=True,
+        ),
+    )
+
+    result = manager.upgrade(name="ops-dataset-query", cwd=tmp_path)
+
+    payload = result.to_dict()
+    assert len(payload["updated"]) == 1
+    assert payload["updated"][0]["from_version"] == "v1.0.0"
+    assert payload["updated"][0]["to_version"] == "v1.1.0"

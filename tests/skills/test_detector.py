@@ -26,8 +26,9 @@ def test_runtime_all_targets_all_supported_global_dirs(monkeypatch, tmp_path: Pa
     targets = SkillDetector().detect_install_targets(preferred_runtimes=["all"])
 
     assert targets == [
-        ("claude", tmp_path / ".claude" / "skills"),
-        ("openclaw", tmp_path / ".openclaw" / "skills"),
-        ("codex", tmp_path / ".codex" / "skills"),
-        ("opencode", tmp_path / ".config" / "opencode" / "skills"),
+        ("claude",    tmp_path / ".claude" / "skills"),
+        ("openclaw",  tmp_path / ".openclaw" / "skills"),
+        ("codex",     tmp_path / ".codex" / "skills"),
+        ("opencode",  tmp_path / ".config" / "opencode" / "skills"),
+        ("workbuddy", tmp_path / ".workbuddy" / "skills"),
     ]

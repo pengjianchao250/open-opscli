@@ -123,8 +123,8 @@ def test_interactive_install_ops_amazon_rufus_outputs_login_guidance(monkeypatch
             return DummyInstallResult()
 
     monkeypatch.setattr("opscli.skills.commands.cli.SkillsManager", lambda: DummyManager())
-    monkeypatch.setattr("opscli.skills.commands.cli._tui_select_skills", lambda manager: ["ops-amazon-rufus"])
-    monkeypatch.setattr("opscli.skills.commands.cli._tui_select_targets", lambda manager: None)
+    monkeypatch.setattr("opscli.skills.commands.cli._tui_select_skills", lambda manager, yes=False: ["ops-amazon-rufus"])
+    monkeypatch.setattr("opscli.skills.commands.cli._tui_select_targets", lambda manager, yes=False: None)
 
     result = runner.invoke(app, ["install"])
 
