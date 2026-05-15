@@ -62,7 +62,7 @@ class BrowserAttachService:
         timeout_seconds: int,
         new_chrome: bool = False,
         keep_chrome_open: bool = False,
-        on_captured: Callable[[Any, SeedRequestRecord], None] | None = None,
+        on_captured: Callable[[Any, SeedRequestRecord], bool | None] | None = None,
     ) -> SeedRequestRecord:
         """捕获首个 Rufus streaming 请求。"""
         if new_chrome:
@@ -76,6 +76,7 @@ class BrowserAttachService:
 
         deadline_ms = timeout_seconds * 1000
         captured: list[SeedRequestRecord] = []
+        keep_open_after_capture = False
         with sync_playwright() as playwright:
             try:
                 browser = playwright.chromium.connect_over_cdp(cdp_url)
@@ -117,11 +118,12 @@ class BrowserAttachService:
                     )
                 seed = captured[0]
                 if on_captured:
-                    on_captured(page, seed)
+                    # 回放阶段发现用户可能未登录时，需要保留本次新开的 Chrome 供用户登录。
+                    keep_open_after_capture = bool(on_captured(page, seed))
                 return seed
             finally:
                 # 仅关闭由本命令新开的调试 Chrome，避免影响用户已有浏览器。
-                if new_chrome and not keep_chrome_open:
+                if new_chrome and not keep_chrome_open and not keep_open_after_capture:
                     self._close_new_chrome(browser)
 
     def _close_new_chrome(self, browser: Any) -> None:

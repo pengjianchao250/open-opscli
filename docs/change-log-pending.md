@@ -1,5 +1,36 @@
 # 待归档变更记录
 
+## 2026-05-15 ops-amazon-rufus Skill - 登录中断不提交 feedback
+
+**变更原因**：Rufus 采集依赖 Amazon 人工登录态，`RUFUS_LOGIN_REQUIRED` 和登录态导致的 `SEED_REQUEST_NOT_CAPTURED` 是正常交互中断，不应触发项目级失败反馈规则或生成 feedback 文件。
+**改动点**：
+- `opscli/skills/templates/ops-amazon-rufus/SKILL.md`：在登录中断续跑规则中补充 `SEED_REQUEST_NOT_CAPTURED` 登录场景，并明确禁止调用 `ops-feedback`、`opscli feedback submit` 或创建 `output/amazon-rufus/feedback-*.json`。
+- `.agents/skills/ops-amazon-rufus/SKILL.md`：同步当前 Agent 安装副本。
+**验证结果**：使用 `rg` 检查两份 Skill 文档均命中 `SEED_REQUEST_NOT_CAPTURED`、`ops-feedback`、`feedback-*.json` 和登录中断规则。
+**影响范围**：仅影响 `ops-amazon-rufus` Skill 执行规范；不改变 `opscli amazon-rufus get` 代码、错误码或报告生成逻辑。
+**回滚方式**：回退两份 `SKILL.md` 中新增的登录中断 feedback 豁免说明，并移除此变更记录。
+
+---
+
+## 2026-05-15 Amazon Rufus - 无答案时保留浏览器并等待继续
+
+**变更原因**：`ops-amazon-rufus` 在已捕获 Rufus 请求但没有获取到答案时，常见原因是 Amazon 登录态失效；原流程可能继续生成空答案报告，并在 `--new-chrome` 场景关闭浏览器，导致用户无法登录后继续。
+**改动点**：
+- `opscli/amazon_rufus/domain/exceptions.py`：新增 `RufusLoginRequiredError`，稳定错误码为 `RUFUS_LOGIN_REQUIRED`。
+- `opscli/amazon_rufus/services/browser.py`：允许 `on_captured` 回调返回保留窗口信号，登录中断场景不关闭本次新开的 Chrome。
+- `opscli/amazon_rufus/services/manager.py`：新增空答案判定；当所有答案均无可展示内容时抛出登录中断异常。
+- `opscli/skills/templates/ops-amazon-rufus/SKILL.md` 和 `.agents/skills/ops-amazon-rufus/SKILL.md`：新增未获取答案时停止执行、保留浏览器并等待用户说“继续”的规则。
+- `tests/amazon_rufus/test_core.py`：新增 Manager、Browser、CLI 三个回归测试。
+**验证结果**：
+- RED：`uv run pytest "tests/amazon_rufus/test_core.py" -k "login_required or callback_requests or outputs_login_required" -q` 在实现前 3 个新增测试失败，覆盖浏览器关闭、通用错误码和 Manager 未抛错三个缺口。
+- GREEN：`uv run pytest "tests/amazon_rufus/test_core.py" -k "login_required or callback_requests or outputs_login_required" -q` 通过（3 passed）。
+- 回归：`uv run pytest "tests/amazon_rufus/test_core.py" -q` 通过（44 passed）。
+- 文档检查：`rg -n "RUFUS_LOGIN_REQUIRED|继续告诉我|不要关闭浏览器窗口" ...` 命中两份 Skill 文档。
+**影响范围**：影响 `opscli amazon-rufus get` 在已捕获请求但无可用答案时的失败语义；正常有答案报告、未捕获 streaming、题库读取、单题模式和报告格式化不变。
+**回滚方式**：回退上述 Python 文件、两份 Skill 文档、测试文件和 `.super-dev/changes/amazon-rufus-login-resume/`，恢复空答案报告行为和默认关闭 Chrome 逻辑。
+
+---
+
 ## 2026-05-14 ops-dataset-query Skill - 移除 innerWhere 相关描述
 
 **变更原因**：服务端不再接受 `innerWhere` 参数，Skill 文档中所有涉及该参数的描述、铁律、示例需全部清除，避免 AI Agent 错误构造已废弃字段。
@@ -27,6 +58,18 @@
 **验证结果**：两个文件中 polaris 相关内容已全部清除（仅保留 polarisUserToken cookie 名称，该名称为技术实现细节非系统引用）
 **影响范围**：ops-auth Skill 文档层，不影响运行时逻辑
 **回滚方式**：git checkout 还原两个文件
+## 2026-05-15 ops-amazon-rufus Skill - 增强 listing 语义触发
+
+**变更原因**：用户使用“listing”“listing 分析”“listing 优化”等自然语言表达 Rufus 商品页分析意图时，原 Skill 描述未覆盖该触发语义，可能导致 Agent 未加载 `ops-amazon-rufus`。
+**改动点**：
+- `opscli/skills/templates/ops-amazon-rufus/SKILL.md`：frontmatter `description` 增加 Amazon Listing/listing 商品页触发语义，并新增“触发范围”章节。
+- `.agents/skills/ops-amazon-rufus/SKILL.md`：同步当前仓库 Agent 安装副本。
+- `tests/skills/test_manager.py`：新增测试，防止 listing 触发词与 `ops-amazon-listing-analysis` 边界说明丢失。
+- `tests/skills/test_manager.py`：将多运行时安装路径断言改为 `Path(...).as_posix()` 后再匹配，避免 Windows 路径分隔符导致定向验证失败。
+
+**验证结果**：TDD RED：新增测试在实现前失败，失败原因为缺少 `listing` 触发内容；GREEN：`uv run pytest "tests/skills/test_manager.py::test_ops_amazon_rufus_skill_mentions_listing_trigger_scope" -v` 通过；定向回归 `uv run pytest "tests/skills/test_manager.py" "tests/skills/test_cli.py" -v` 通过（21 passed）；`rg` 命中两份 `SKILL.md` 的 listing 触发词与边界说明；`git diff --check` 通过（仅行尾转换 warning）。
+**影响范围**：仅影响 `ops-amazon-rufus` Skill 自动触发说明和测试；不改变 Rufus CLI、题库、浏览器采集、Replay、Parser 或报告输出运行链路。
+**回滚方式**：恢复两份 `SKILL.md` 的原 frontmatter 与正文，删除 `test_ops_amazon_rufus_skill_mentions_listing_trigger_scope` 测试。
 
 ---
 
@@ -941,5 +984,19 @@
 **影响范围**：仅影响 `ops-amazon-rufus` Skill 执行规范和模板文档；不改变 `opscli amazon-rufus get` 的代码行为。
 
 **回滚方式**：回退上述 5 个文件中新增的中文改写规则文本，并恢复 README 流程图节点文案。
+
+---
+
+## 2026-05-15 ops-methods-card Skill - 同步项目级 Skill 模板资源
+
+**变更原因**：项目级 `.agents/skills/ops-methods-card` 与 `opscli/skills/templates/ops-methods-card` 模板目录不一致，缺少最新方法卡参数说明和 Amazon 广告诊断子 Skill 资源。
+
+**改动点**：同步项目级 `ops-methods-card` 的 `SKILL.md`、`references/method-card-parameter-guide.md` 和 `amazon-ads-diagnosis/` 子 Skill 资源；保留项目级旧参考文件与示例 Excel，避免删除历史上下文。
+
+**验证结果**：`PYTHONUTF8=1 python C:/Users/A/.codex/skills/.system/skill-creator/scripts/quick_validate.py .agents/skills/ops-methods-card` 通过；`amazon-ads-diagnosis` 子 Skill 校验通过；`uv run pytest tests/skills/test_ops_methods_card_skill_contract.py tests/skills/test_ops_methods_card_xlsx_preview.py -q` 为 4 passed。
+
+**影响范围**：仅影响项目级 Agent Skill 的 methods card 使用说明、参考资料和 Amazon 广告诊断辅助资源；不改变 `opscli` 运行时代码。
+
+**回滚方式**：回退 `.agents/skills/ops-methods-card/SKILL.md`，删除本次新增的 `.agents/skills/ops-methods-card/references/method-card-parameter-guide.md` 和 `.agents/skills/ops-methods-card/amazon-ads-diagnosis/`。
 
 ---

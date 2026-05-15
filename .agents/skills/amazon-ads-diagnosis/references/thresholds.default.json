@@ -1,0 +1,31 @@
+{
+  "thresholds": {
+    "highAcos": 0.30,
+    "warnAcos": 0.22,
+    "goodAcos": 0.12,
+    "lowCtr": 0.003,
+    "lowCvr": 0.01,
+    "goodCvr": 0.02,
+    "highAdShare": 0.12,
+    "weakMargin": 0.05,
+    "rowSpend": {
+      "channel": 100000,
+      "adType": 50000,
+      "category": 50000,
+      "asin": 10000,
+      "campaign": 10000
+    },
+    "minClicks": {
+      "channel": 5000,
+      "adType": 3000,
+      "category": 2000,
+      "asin": 1000,
+      "campaign": 1000
+    },
+    "minImpressions": {
+      "category": 300000,
+      "asin": 300000,
+      "campaign": 300000
+    }
+  }
+}

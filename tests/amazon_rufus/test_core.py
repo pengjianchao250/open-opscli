@@ -777,6 +777,82 @@ def test_browser_capture_keeps_new_chrome_open_when_requested(monkeypatch):
     assert ("close", None) not in calls
 
 
+def test_browser_capture_keeps_new_chrome_open_when_callback_requests(monkeypatch):
+    calls = []
+
+    class FakeRequest:
+        url = "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
+        post_data = '{"tabId":"tab-1"}'
+        headers = {"content-type": "application/json"}
+
+    class FakePage:
+        url = "about:blank"
+
+        def on(self, event, handler):
+            self.handler = handler
+
+        def goto(self, url, wait_until, timeout):
+            self.url = url
+            self.handler(FakeRequest())
+
+        def wait_for_timeout(self, timeout):
+            return None
+
+        def bring_to_front(self):
+            return None
+
+    class FakeContext:
+        def new_page(self):
+            return FakePage()
+
+    class FakeCdpSession:
+        def send(self, command):
+            calls.append(("cdp", command))
+
+    class FakeBrowser:
+        contexts = [FakeContext()]
+
+        def new_browser_cdp_session(self):
+            return FakeCdpSession()
+
+        def close(self):
+            calls.append(("close", None))
+
+    class FakeChromium:
+        def connect_over_cdp(self, cdp_url):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
+    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+
+    service = BrowserAttachService()
+    monkeypatch.setattr(service, "_start_new_chrome", lambda: None)
+    monkeypatch.setattr(service, "_wait_for_cdp", lambda cdp_url, timeout_seconds: None)
+
+    service.capture_seed_request(
+        asin="B0TEST1234",
+        country="US",
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        cdp_url="http://127.0.0.1:9222",
+        timeout_seconds=1,
+        new_chrome=True,
+        on_captured=lambda page, seed: True,
+    )
+
+    assert ("cdp", "Browser.close") not in calls
+    assert ("close", None) not in calls
+
+
 def test_new_chrome_arguments_open_devtools_for_tabs():
     assert "--auto-open-devtools-for-tabs" in BrowserAttachService.DEFAULT_NEW_CHROME_ARGUMENTS
 
@@ -944,6 +1020,29 @@ def test_cli_get_answer_report_reports_failed_empty_answer(monkeypatch, tmp_path
     assert "## 第 1 题：第 1 题" in report_text
     assert "第 1 题未获取到答案" in report_text
     assert "第 1 题未获取到答案" not in result.stdout
+
+
+def test_cli_get_outputs_login_required_error(monkeypatch, tmp_path: Path):
+    class DummyManager:
+        def get(self, **kwargs):
+            from opscli.amazon_rufus.domain.exceptions import RufusLoginRequiredError
+
+            raise RufusLoginRequiredError(
+                "未获取到 Rufus 答案，可能 Amazon 未登录。已保留浏览器窗口。"
+                "请在浏览器中完成登录；如果登录完成，请继续告诉我，我会继续执行。"
+            )
+
+    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["get", "B0TEST1234", "US"])
+    payload = json.loads(result.stdout)
+
+    assert result.exit_code == 1
+    assert payload["success"] is False
+    assert payload["error"]["code"] == "RUFUS_LOGIN_REQUIRED"
+    assert "如果登录完成，请继续告诉我，我会继续执行" in payload["error"]["message"]
+    assert not (tmp_path / "output" / "amazon-rufus").exists()
 
 
 def test_cli_get_passes_new_chrome(monkeypatch, tmp_path: Path):
@@ -1129,6 +1228,51 @@ def test_manager_get_rejects_blank_question():
         manager.get(asin="B0TEST1234", country="US", question="   ")
 
     assert "question" in str(exc.value)
+
+
+def test_manager_get_raises_login_required_when_answers_are_empty():
+    from opscli.amazon_rufus.domain.exceptions import RufusLoginRequiredError
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+
+    class ForbiddenQuestionBank:
+        def load_templates(self):
+            raise AssertionError("单题模式不应读取题库")
+
+    class FakeBrowser:
+        def __init__(self) -> None:
+            self.keep_open_requested = None
+
+        def capture_seed_request(self, **kwargs):
+            seed = SeedRequestRecord(
+                request_url="https://www.amazon.com/rufus/cl/streaming",
+                request_headers={},
+                request_body='{"queryContext": {}}',
+                page_url=kwargs["page_url"],
+                tab_id="tab-1",
+                asin=kwargs["asin"],
+                country=kwargs["country"],
+                captured_at=1710000000000,
+            )
+            self.keep_open_requested = kwargs["on_captured"]("page", seed)
+            return seed
+
+    class FakeReplay:
+        def replay_with_page(self, page, seed, questions):
+            # 空答案代表 Rufus 没有返回可展示内容，应进入登录中断续跑。
+            return [AnswerData(text="", is_success=False)]
+
+        def replay(self, seed, questions):
+            raise AssertionError("页面内 replay 已返回结果时不应进入 fallback")
+
+    fake_browser = FakeBrowser()
+    manager = RufusManager(question_bank=ForbiddenQuestionBank(), browser=fake_browser, replay=FakeReplay())
+
+    with pytest.raises(RufusLoginRequiredError) as exc:
+        manager.get(asin="B0TEST1234", country="US", question="这个商品是做什么的", new_chrome=True)
+
+    assert exc.value.to_dict()["code"] == "RUFUS_LOGIN_REQUIRED"
+    assert "如果登录完成，请继续告诉我，我会继续执行" in str(exc.value)
+    assert fake_browser.keep_open_requested is True
 
 
 def test_manager_get_replays_before_playwright_context_closes(monkeypatch):

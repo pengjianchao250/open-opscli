@@ -1,11 +1,17 @@
 ---
 name: ops-amazon-rufus
-description: Amazon Rufus 默认题库数据、单题问题获取、拒答改写重试与报告格式化规范。用于执行 opscli amazon-rufus get、通过 --question 回答指定 ASIN/Rufus 商品问题、按默认题库生成报告、读取或格式化 output/amazon-rufus/*.md 报告。
+description: Amazon Rufus 默认题库数据、单题问题获取、拒答改写重试与报告格式化规范。用于执行 opscli amazon-rufus get、通过 --question 回答指定 ASIN/Rufus 商品问题、按默认题库生成报告、读取或格式化 output/amazon-rufus/*.md 报告；当用户提到 Amazon Listing、listing 商品页、listing 分析或 listing 优化，并需要 Rufus 对 ASIN 商品页进行问答、诊断或报告时，也应使用本 Skill。
 ---
 
 # ops-amazon-rufus
 
 提供 `opscli amazon-rufus get <asin> <country>` 所需的默认题库数据，并定义通过 `--question` 直接提问时的执行规则。
+
+## 触发范围
+
+当用户提到 Amazon Listing、listing 商品页、listing 分析或 listing 优化，并且目标是通过 Rufus 对 ASIN 商品页进行问答、诊断、报告或表达风险判断时，使用本 Skill。
+
+如果用户要求基于卖家精灵采集材料、关键词、高频词、PPC/ABA 数据做 Listing 表达与一致性优化，优先使用 `ops-amazon-listing-analysis`，不要用本 Skill 代替。
 
 ## 前置条件
 
@@ -30,6 +36,24 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:SKIP_CYTHON = "1"; 
 ```
 
 请在新窗口中完成对应国家站点的 Amazon 登录，再执行 Rufus 获取命令。
+
+## 未获取答案时的登录中断续跑
+
+调用本 Skill 时，先按正常流程执行 `opscli amazon-rufus get` 获取 Rufus 答案。
+
+如果命令返回 `RUFUS_LOGIN_REQUIRED`，或提示“未获取到 Rufus 答案，可能 Amazon 未登录”，表示可能需要用户在已打开的 Amazon 浏览器窗口中完成登录。此时必须停止当前执行，不要关闭浏览器窗口，不要继续重试。
+
+如果命令返回 `SEED_REQUEST_NOT_CAPTURED`，且错误信息提示先执行 `opscli amazon-rufus init <country>` 或登录 Amazon，也按同一登录中断流程处理。
+
+上述两类登录中断属于 Rufus 人工登录的正常交互流程，不属于工具异常；不要调用 `ops-feedback`，不要执行 `opscli feedback submit`，也不要创建 `output/amazon-rufus/feedback-*.json` 反馈文件。
+
+回复用户：
+
+```text
+未获取到 Rufus 答案，可能 Amazon 未登录。浏览器窗口已保留。请在窗口中完成登录；如果登录完成，请继续告诉我，我会继续执行。
+```
+
+用户说“继续”后，复用上一轮 ASIN、国家站点、`--question` 和 Chrome 参数重新执行同一条 Rufus 获取命令。
 
 ## 使用
 
