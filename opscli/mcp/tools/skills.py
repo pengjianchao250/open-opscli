@@ -99,10 +99,10 @@ async def skills_upgrade(
 
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS = [
-    skills_list,
-    skills_status,
-    skills_install,
-    skills_upgrade,
+    # skills_list,
+    # skills_status,
+    # skills_install,
+    # skills_upgrade,
 ]
 
 

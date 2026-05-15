@@ -611,8 +611,8 @@ _ALL_TOOLS = [
     auth_token_refresh,
     # 系统管理
     auth_system_list,
-    auth_system_add,
-    auth_system_remove,
+    # auth_system_add,
+    # auth_system_remove,
     auth_system_sync,
     # 请求构造 / 运维
     auth_build_request_auth,

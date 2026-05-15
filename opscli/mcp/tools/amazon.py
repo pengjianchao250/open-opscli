@@ -238,11 +238,11 @@ _LOCAL_READ_ANNOTATIONS = ToolAnnotations(
 
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS: list[tuple] = [
-    (amazon_scrape,   _SCRAPE_ANNOTATIONS),
-    (amazon_search,   _SEARCH_ANNOTATIONS),
-    (amazon_history,  _LOCAL_READ_ANNOTATIONS),
-    (amazon_schema,   _LOCAL_READ_ANNOTATIONS),
-    (amazon_payload,  _SCRAPE_ANNOTATIONS),
+    # (amazon_scrape,   _SCRAPE_ANNOTATIONS),
+    # (amazon_search,   _SEARCH_ANNOTATIONS),
+    # (amazon_history,  _LOCAL_READ_ANNOTATIONS),
+    # (amazon_schema,   _LOCAL_READ_ANNOTATIONS),
+    # (amazon_payload,  _SCRAPE_ANNOTATIONS),
 ]
 
 
