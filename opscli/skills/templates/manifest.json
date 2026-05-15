@@ -110,6 +110,14 @@
       "binary_full": false,
       "tier": "internal",
       "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-query-wizard": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "引导式查询向导，面向业务用户，依赖 ops-dataset-query，现阶段内部使用"
     }
   }
 }
