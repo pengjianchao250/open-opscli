@@ -22,12 +22,12 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # - name: Set up QEMU (Linux only, for aarch64 cross-build)
-      #   # 仅 Linux runner 需要 QEMU 模拟 aarch64；Windows/macOS 跳过（暂时关闭 arm64 Linux 构建）
-      #   if: runner.os == 'Linux'
-      #   uses: docker/setup-qemu-action@v3
-      #   with:
-      #     platforms: arm64
+      - name: Set up QEMU (Linux only, for aarch64 cross-build)
+        # 仅 Linux runner 需要 QEMU 模拟 aarch64；Windows/macOS 跳过
+        if: runner.os == 'Linux'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -48,8 +48,8 @@ jobs:
           # Linux：跳过 32 位和 Alpine(musl)；aarch64 通过 QEMU 模拟构建，不再跳过
           CIBW_SKIP: "*-manylinux_i686 *-musllinux*"
 
-          # Linux：暂时关闭 aarch64（QEMU 模拟已禁用），仅构建 x86_64
-          CIBW_ARCHS_LINUX: "x86_64"  # aarch64 暂时关闭
+          # Linux：同时编译 x86_64 和 aarch64（aarch64 由 QEMU 模拟执行）
+          CIBW_ARCHS_LINUX: "x86_64 aarch64"
 
           # macOS：同时编译 Intel (x86_64) 和 Apple Silicon (arm64)
           CIBW_ARCHS_MACOS: "x86_64 arm64"
