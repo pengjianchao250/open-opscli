@@ -163,7 +163,7 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 
 每次执行任何查询工具（`opscli query simple` / `query_simple` / `query_build_and_run` / `query_chart` 等）后，**无论成功或失败**，都必须在后续 3 次工具调用内通过 **ops-feedback Skill** 提交一次执行反馈。
 
-- 反馈类型固定为 `query_result`
+- 反馈类型按结果区分：查询成功（含降级）→ `query_result`；工具报错/执行异常 → `bug`
 - 禁止以"查询失败"为由跳过反馈——失败场景尤其需要提交，便于追踪错误根因
 - 详细调用方式见下方「查询闭环：调用 ops-feedback 提交反馈」章节
 
@@ -188,7 +188,7 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 
 ## 查询闭环：调用 ops-feedback 提交反馈
 
-> **铁律十二的执行入口**：每次查询完成后，通过 `ops-feedback` Skill 提交结果反馈，形成闭环。
+> **铁律十一的执行入口**：每次查询完成后，通过 `ops-feedback` Skill 提交结果反馈，形成闭环。
 
 ### 何时触发
 
@@ -229,11 +229,11 @@ feedback_submit(
 )
 ```
 
-失败 / 降级场景（`severity="medium"`）：
+降级场景 — 查询执行成功但结果不符合预期（`feedback_type="query_result"`）：
 
 ```python
 feedback_submit(
-    feedback_type="query_result",  # 可选：bug/feature/data_issue/ux/docs/query_result/other
+    feedback_type="query_result",  # 工具有返回、无报错，但结果缺失/不符合预期 → query_result
     severity="medium",
     title="广告数据-dataComparison对比列缺失（table_id=15）",
     content="dataComparison 参数传入成功但对比列未返回，最终通过两次独立查询手动完成对比。",
@@ -262,6 +262,36 @@ feedback_submit(
             {"tool": "query_simple（1月数据）", "result": "success, 2 rows, 1348ms"}
         ],
         "final_resolution": "通过分别查询1月和2月数据，在客户端手动完成环比计算和对比分析。"
+    }
+)
+```
+
+工具报错场景 — 查询工具抛出异常/返回 success=false（`feedback_type="bug"`）：
+
+```python
+feedback_submit(
+    feedback_type="bug",  # 工具报错、抛出异常、success=false → bug
+    severity="medium",
+    title="query_simple 查询失败 - QS-EXE-005（table_id=1）",
+    content="缺少主周期 filters 导致 QS-EXE-005 报错，补上日期条件后重试成功。",
+    source="mcp",
+    payload={
+        "actual": "QS-EXE-005 missing ')' at '{'",
+        "expected": "query_simple 正常返回数据"
+    },
+    execution_summary={
+        "summary": "调用 query_simple 时未传主周期日期 filters，触发 QS-EXE-005 SQL 解析错误。",
+        "failed_calls": [
+            {
+                "tool": "query_simple",
+                "call_params": {"table_id": 1, "data_comparison": {"field": "date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"}},
+                "error_message": "QS-EXE-005: missing ')' at '{'",
+                "reason": "缺少主周期日期 filters，dataComparison 单独传入导致 SQL 解析失败",
+                "fix_suggestion": "补上 filters 主周期日期后重试"
+            }
+        ],
+        "successful_calls": [{"tool": "query_simple（补上 filters 后）", "result": "success, 10 rows, 980ms"}],
+        "final_resolution": "补上主周期日期 filters 后重试成功，结果已返回用户。"
     }
 )
 ```
@@ -297,7 +327,7 @@ opscli feedback submit \
 3. 数据集 / 字段确认
 4. 执行查询（query_simple / opscli query simple 等）
 5. 输出结果给用户
-6. 【铁律十二】调用 ops-feedback 提交反馈   ← 不可跳过
+6. 【铁律十一】调用 ops-feedback 提交反馈   ← 不可跳过
 ```
 
 ### ops-feedback Skill 详细用法

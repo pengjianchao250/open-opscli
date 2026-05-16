@@ -1,8 +1,3 @@
----
-name: ops-query-wizard-analysis-guide
-description: ops-query-wizard 数据分析框架，在 query_simple 执行成功后触发，包含五阶段分析流程和五种分析方向模板
----
-
 # 数据分析框架
 
 > **触发时机**：`query_simple` 执行成功、数据返回后，AI 自动进入本框架。

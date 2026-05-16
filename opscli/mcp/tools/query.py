@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from .helpers import _err, _ok, _query_manager
+from .helpers import _err, _ok, _parse_json_arg, _query_manager
 
 
 async def query_spec_must_read() -> dict:
@@ -155,12 +155,12 @@ async def query_catalog(
 async def query_build(
     dataset: str | None = None,
     table_id: int | None = None,
-    dimensions: list[str] | None = None,
-    metrics: list[str] | None = None,
-    where_conditions: list[str] | None = None,
+    dimensions: list[str] | str | None = None,
+    metrics: list[str] | str | None = None,
+    where_conditions: list[str] | str | None = None,
     where_json: str | None = None,
-    order_by: list[str] | None = None,
-    having_conditions: list[str] | None = None,
+    order_by: list[str] | str | None = None,
+    having_conditions: list[str] | str | None = None,
     limit: int = 20,
     offset: int = 0,
     dry_run: bool = False,
@@ -190,6 +190,16 @@ async def query_build(
         output_path:       可选，将 payload 写入指定文件路径
         skills_dir:        可选，自定义 Skills 目录
     """
+    # 容错：AI 有时将 list 参数以 JSON 字符串形式传入，统一解析
+    try:
+        dimensions = _parse_json_arg(dimensions, list)
+        metrics = _parse_json_arg(metrics, list)
+        where_conditions = _parse_json_arg(where_conditions, list)
+        order_by = _parse_json_arg(order_by, list)
+        having_conditions = _parse_json_arg(having_conditions, list)
+    except ValueError as exc:
+        return _err(exc)
+
     try:
         result = _query_manager().build(
             dataset_alias=dataset,
@@ -247,11 +257,11 @@ def _normalize_metric(item: str | dict) -> dict:
 
 async def query_simple(
     table_id: int,
-    dimensions: list[str | dict] | None = None,
-    metrics: list[str | dict] | None = None,
-    filters: list[dict] | None = None,
-    data_comparison: dict | None = None,
-    order_by: list[dict] | None = None,
+    dimensions: list[str | dict] | str | None = None,
+    metrics: list[str | dict] | str | None = None,
+    filters: list[dict] | str | None = None,
+    data_comparison: dict | str | None = None,
+    order_by: list[dict] | str | None = None,
     limit: int = 20,
     offset: int = 0,
     dry_run: bool = False,
@@ -306,6 +316,17 @@ async def query_simple(
     sid, jw = _get_auth_pair("ops", session_id, jwt)
     if not sid:
         return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"))
+
+    # 容错：AI 有时将 list/dict 参数以 JSON 字符串形式传入，统一解析
+    try:
+        dimensions = _parse_json_arg(dimensions, list)
+        metrics = _parse_json_arg(metrics, list)
+        filters = _parse_json_arg(filters, list)
+        data_comparison = _parse_json_arg(data_comparison, dict)
+        order_by = _parse_json_arg(order_by, list)
+    except ValueError as exc:
+        return _err(exc)
+
     try:
         # 自动归一化：将字符串格式转为 dict 格式
         norm_dimensions = [_normalize_dimension(d) for d in dimensions] if dimensions else None
@@ -367,12 +388,12 @@ async def query_run(
 async def query_build_and_run(
     dataset: str | None = None,
     table_id: int | None = None,
-    dimensions: list[str] | None = None,
-    metrics: list[str] | None = None,
-    where_conditions: list[str] | None = None,
+    dimensions: list[str] | str | None = None,
+    metrics: list[str] | str | None = None,
+    where_conditions: list[str] | str | None = None,
     where_json: str | None = None,
-    order_by: list[str] | None = None,
-    having_conditions: list[str] | None = None,
+    order_by: list[str] | str | None = None,
+    having_conditions: list[str] | str | None = None,
     limit: int = 20,
     offset: int = 0,
     dry_run: bool = False,
@@ -416,6 +437,17 @@ async def query_build_and_run(
     sid, jw = _get_auth_pair("ops", session_id, jwt)
     if not sid:
         return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"))
+
+    # 容错：AI 有时将 list 参数以 JSON 字符串形式传入，统一解析
+    try:
+        dimensions = _parse_json_arg(dimensions, list)
+        metrics = _parse_json_arg(metrics, list)
+        where_conditions = _parse_json_arg(where_conditions, list)
+        order_by = _parse_json_arg(order_by, list)
+        having_conditions = _parse_json_arg(having_conditions, list)
+    except ValueError as exc:
+        return _err(exc)
+
     try:
         result = _query_manager(jwt=jw, session_id=sid).build_and_run(
             dataset_alias=dataset,

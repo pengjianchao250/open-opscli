@@ -1,7 +1,6 @@
 ---
 name: ops-query-wizard
 description: 引导式数据查询向导。当业务用户需要查数据但不知道如何构造查询、想一步一步取数、或说"帮我引导查询/查询向导/引导我取数"时使用本 Skill。通过十步对话逐步构建 query_simple 参数，完成后自动进入数据分析框架，形成取数→分析→反馈完整闭环。
-version: v0.1.0
 ---
 
 # ops-query-wizard — 引导式数据查询向导

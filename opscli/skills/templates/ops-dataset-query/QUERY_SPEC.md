@@ -19,6 +19,9 @@
 | 6 | **参数命名约定** | MCP 工具参数用 `snake_case`（`table_id`），JSON payload 用 `camelCase`（`tableId`），禁止混用 |
 | 7 | **字段歧义必须澄清** | 用户术语匹配到 ≥2 个字段时，禁止静默选择，必须让用户确认 |
 | 8 | **输出字段名不可改写** | 结果列名必须使用数据集定义的 `verbose_name`，禁止自行意译 |
+| 9 | **本地数据初始化检查** | `data_state=placeholder` 时本地索引为空模板；执行搜索/查询前必须先 `skills_upgrade`（CLI）或 `skills_upgrade(name="ops-dataset-query")`（MCP）拉取远端数据 |
+| 10 | **查询前意图澄清** | 构造任何查询参数前，必须先按第十四章字段歧义规则逐项检查；时间/人员/产品/币种/数据集存在歧义时，必须向用户确认，禁止猜测 |
+| 11 | **查询闭环强制反馈** | 每次执行查询工具后，无论成功或失败，必须在后续 3 次工具调用内调用 `feedback_submit` 提交反馈；成功/降级 → `query_result`，工具报错 → `bug` |
 
 > `query_simple` / `opscli query simple` 已内置字段歧义硬门禁：执行前会校验 dimensions、metrics、filters 和 dataComparison 中的字段引用。若字段不存在、模糊术语命中多个候选、或公式字段被额外传入 aggregation，会直接阻断查询并返回候选信息。
 

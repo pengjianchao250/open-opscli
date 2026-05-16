@@ -15,6 +15,38 @@ from pathlib import Path
 from typing import Any
 
 
+def _parse_json_arg(value: Any, expected: type) -> Any:
+    """将 AI 调用 MCP 工具时错误传入的 JSON 字符串自动反序列化。
+
+    Claude 等 LLM 在调用 MCP 工具时，有时会将 list/dict 类型参数
+    JSON.stringify() 后以字符串形式传入，导致 Pydantic 验证失败。
+    本函数在函数体内对入参做一次容错解析。
+
+    Args:
+        value:    原始入参（可能是 str、list、dict 或 None）
+        expected: 期望的目标类型（list 或 dict）
+
+    Returns:
+        解析后的 list/dict，或原值（若已是期望类型或为 None）
+
+    Raises:
+        ValueError: 传入字符串但 json.loads 后类型仍不匹配
+    """
+    if value is None or isinstance(value, expected):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"参数无法解析为 {expected.__name__}：{exc}") from exc
+        if not isinstance(parsed, expected):
+            raise ValueError(
+                f"期望 {expected.__name__}，但解析后得到 {type(parsed).__name__}"
+            )
+        return parsed
+    return value
+
+
 def _ok(data: Any) -> dict:
     """统一成功响应结构。
 
@@ -33,6 +65,7 @@ def _err(
     tool: str | None = None,
     call_params: dict | None = None,
     auto_feedback: bool = True,
+    feedback_type: str = "bug",
 ) -> dict:
     """统一失败响应结构，保留异常类型信息。
 
@@ -47,6 +80,7 @@ def _err(
         tool: 可选，当前失败的工具名称或命令，例如 "MCP → query_simple(...)"
         call_params: 可选，实际传入的关键参数，用于构造 execution_summary
         auto_feedback: 是否自动生成 feedback 草案，默认 True
+        feedback_type: 草案的反馈类型，默认 "bug"；查询类失败建议传 "query_result"
 
     Returns:
         {"success": False, "data": None, "error": {...}, "feedback": {...}}
@@ -60,7 +94,9 @@ def _err(
     result: dict[str, Any] = {"success": False, "data": None, "error": error}
 
     if auto_feedback:
-        result["feedback"] = _draft_feedback(tool=tool, call_params=call_params, error=error)
+        result["feedback"] = _draft_feedback(
+            tool=tool, call_params=call_params, error=error, feedback_type=feedback_type
+        )
 
     return result
 
@@ -69,6 +105,7 @@ def _draft_feedback(
     tool: str | None = None,
     call_params: dict | None = None,
     error: dict | None = None,
+    feedback_type: str = "bug",
 ) -> dict:
     """从失败上下文自动构造 feedback 草案。
 
@@ -78,6 +115,7 @@ def _draft_feedback(
         tool: 失败的工具或命令
         call_params: 调用参数
         error: _err 生成的 error dict
+        feedback_type: 反馈类型，默认 "bug"；查询类失败建议传 "query_result"
 
     Returns:
         包含 feedback_type、severity、execution_summary 的草案 dict
@@ -100,7 +138,7 @@ def _draft_feedback(
     }
 
     return {
-        "feedback_type": "bug",
+        "feedback_type": feedback_type,
         "severity": "medium",
         "source": "mcp",
         "execution_summary": {

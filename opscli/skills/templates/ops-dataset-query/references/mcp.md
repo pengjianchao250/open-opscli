@@ -1,11 +1,11 @@
 ---
 name: ops-dataset-query
-description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执行数据查询（无状态模式）
+description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执行数据查询（MCP 模式）
 ---
 
-# ops-dataset-query (MCP 无状态模式)
+# ops-dataset-query (MCP 模式)
 
-使用 MCP Tool 查询本地缓存的数据集与字段索引，通过 `query_simple`、`query_build_and_run`、`query_run` 等 Tool 执行数据查询。**无状态模式**：服务器不保存用户 OAuth 凭证，所有认证信息由调用方传入。
+使用 MCP Tool 查询本地缓存的数据集与字段索引，通过 `query_simple`、`query_build_and_run`、`query_run` 等 Tool 执行数据查询。凭证统一由 `CredentialStore` 管理，HTTP/SSE 模式下调用 `auth_mcp_login()` 一步完成登录，无需手动传递 `session_id`。
 
 ---
 
@@ -33,23 +33,63 @@ description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执
 
 ## 调用前置要求
 
-> **认证按动作触发**：本地知识检索不要求登录；涉及远端 catalog、查询执行、图表运行或升级时，必须确认有效 `session_id`。
+> **认证按动作触发**：本地知识检索不要求登录；涉及远端 catalog、查询执行、图表运行或升级时，必须先完成登录认证。
 
 - 本地只读动作可直接执行：`search`、`fetch`、`query_catalog(source="local")`
 - `query_metadata` 远端优先，远端失败自动回退本地（无需额外检查）
-- 远端动作前先调用 `auth_is_authenticated(session_id)` 检测 session 有效性：`query_catalog()`、`query_simple`、`query_build_and_run`、`query_run`、`query_chart(run=True)`、`skills_upgrade`
-- 若返回 `false` 或报错，说明 `session_id` 缺失或已过期
-- **若 `session_id` 缺失/过期**：
-  1. `auth_login_start()` → 获取 `verification_url` + `user_code`
-  2. 提示用户在浏览器中打开 URL 并输入验证码
-  3. 按 `interval` 轮询 `auth_login_poll(device_code)` 直到 `status=authorized`
-  4. 获取返回的 `session_id`，保存到当前对话上下文
-- 只有认证状态确认正常后，才允许继续执行远端动作
+- 远端动作前先调用 `auth_is_authenticated()`（**不传 session_id，自动从本地凭证加载**）：`query_catalog()`、`query_simple`、`query_build_and_run`、`query_run`、`query_chart(run=True)`、`skills_upgrade`
+- 若返回 `false` 或报错，说明未登录或凭证已过期，按下方模式选择登录方式
 
-**标准前置流程**：
+### 登录方式选择
+
+| 使用场景 | 推荐方式 |
+|---------|---------|
+| Claude Code、Cursor 等 MCP 客户端（HTTP/SSE 模式） | `auth_mcp_login()`（一步完成，无需浏览器） |
+| stdio 模式（无 API Key 环境） | Device Flow：`auth_login_start()` → 浏览器授权 → `auth_login_poll()` |
+
+#### 方式 A（推荐）：HTTP/SSE 模式 — auth_mcp_login 一步登录
+
+> 适用于 Claude Code、Cursor 等通过 HTTP/SSE 连接 MCP Server 的客户端。
+> API Key 即身份，全程自动，**无需浏览器交互，无需 user_code**。
+
 ```python
-auth_is_authenticated(session_id="xxx")
-# 如无效 → auth_login_start() → auth_login_poll(device_code="xxx") → 再次 auth_is_authenticated
+# 调用一次即完成登录，凭证自动保存（按 API Key + Agent 名称双维度隔离）
+result = auth_mcp_login()
+# 成功返回：{ success: True, data: { status, session_id, email, expires_at, saved_locally } }
+# 后续所有工具调用无需再传 session_id，自动从本地加载
+```
+
+#### 方式 B：stdio 模式 — Device Flow 授权
+
+> 适用于无 API Key 的 stdio 连接环境。需要用户在浏览器完成授权。
+
+```python
+# 1. 发起授权，获取验证码和跳转 URL
+result = auth_login_start()
+# 返回：verification_url、user_code、device_code、interval
+
+# 2. 提示用户在浏览器打开 verification_url 并输入 user_code
+
+# 3. 按 interval 间隔轮询，直到 status=authorized
+result = auth_login_poll(device_code="...")
+# 授权成功后，凭证自动保存到本地，后续工具调用无需手动传入 session_id
+```
+
+**标准前置流程（含模式判断）**：
+
+```python
+# 1. 先检查是否已登录（不传 session_id，自动读取本地凭证）
+auth_is_authenticated()
+# → authenticated=true：直接继续
+# → authenticated=false：选择登录方式
+
+# 2a. HTTP/SSE 模式（Claude Code 等）
+auth_mcp_login()
+
+# 2b. stdio 模式
+auth_login_start()  # → 用户浏览器授权 → auth_login_poll(device_code="...")
+
+# 3. 确认登录成功后再执行远端动作
 ```
 
 ---

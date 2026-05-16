@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from .helpers import _auth_client, _err, _get_auth_pair, _ok
+from .helpers import _auth_client, _err, _get_auth_pair, _ok, _parse_json_arg
 
 
 def _feedback_manager(jwt: str | None = None, session_id: str | None = None):
@@ -25,10 +25,10 @@ async def feedback_submit(
     content: str,
     severity: str = "medium",
     source: str = "mcp",
-    payload: dict | None = None,
-    context: dict | None = None,
-    execution_summary: dict | None = None,
-    attachments: list[dict] | None = None,
+    payload: dict | str | None = None,
+    context: dict | str | None = None,
+    execution_summary: dict | str | None = None,
+    attachments: list[dict] | str | None = None,
     skill_name: str | None = None,
     skill_version: str | None = None,
     command_name: str | None = None,
@@ -39,7 +39,7 @@ async def feedback_submit(
     """保存用户反馈的信息，以 JSON 结构提交到 ops。
 
     Args:
-        feedback_type: 反馈类型：bug/feature/data_issue/ux/docs/other
+        feedback_type: 反馈类型：bug/feature/data_issue/ux/docs/query_result/other
         title: 反馈标题，最多 200 字符
         content: 反馈正文
         severity: 严重度：low/medium/high/critical，默认 medium
@@ -63,6 +63,16 @@ async def feedback_submit(
     sid, jw = _get_auth_pair("ops", session_id, jwt)
     if not sid:
         return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"), auto_feedback=False)
+
+    # 容错：AI 有时将 dict/list 参数以 JSON 字符串形式传入，统一解析
+    try:
+        payload = _parse_json_arg(payload, dict)
+        context = _parse_json_arg(context, dict)
+        execution_summary = _parse_json_arg(execution_summary, dict)
+        attachments = _parse_json_arg(attachments, list)
+    except ValueError as exc:
+        return _err(exc, auto_feedback=False)
+
     try:
         result = _feedback_manager(jwt=jw, session_id=sid).submit(
             feedback_type=feedback_type,
@@ -70,10 +80,10 @@ async def feedback_submit(
             content=content,
             severity=severity,
             source=source,
-            payload=payload,
-            context=context,
-            execution_summary=execution_summary,
-            attachments=attachments,
+            payload=payload,  # type: ignore[arg-type]
+            context=context,  # type: ignore[arg-type]
+            execution_summary=execution_summary,  # type: ignore[arg-type]
+            attachments=attachments,  # type: ignore[arg-type]
             client_name="opscli-mcp",
             skill_name=skill_name,
             skill_version=skill_version,
