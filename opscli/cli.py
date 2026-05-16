@@ -44,3 +44,6 @@ def main(
     ),
 ):
     """主回调：为顶级全局选项预留入口。"""
+    # 版本更新检查（仅 CLI 模式，MCP 入口不经过此处）
+    from opscli.shared.update_check import check_and_notify
+    check_and_notify()

@@ -4,4 +4,5 @@
 - shared.exceptions: 远端交互异常基类
 - shared.http: 统一远端 HTTP 响应解析
 - shared.logging: 结构化日志配置
+- shared.update_check: PyPI 版本更新检查（仅 CLI 模式）
 """
