@@ -13,6 +13,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.skill-dev-loop/
 
 # 虚拟环境
 .venv/

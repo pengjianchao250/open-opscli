@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ops Skill Dev Loop Eval Case",
+  "type": "object",
+  "required": ["version", "skill", "evaluation_type", "min_score", "required_skill_files"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "skill": {
+      "type": "string"
+    },
+    "evaluation_type": {
+      "type": "string",
+      "enum": ["static_contract", "agent_trace"]
+    },
+    "min_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "required_skill_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "required_skill_terms": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "required_script_terms": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "agent_prompts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "prompt"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "success_criteria": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

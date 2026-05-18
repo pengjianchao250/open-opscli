@@ -105,3 +105,11 @@ python scripts/run_view.py \
 - 需要本机已登录 `opscli auth`
 - 通过 `/api/v1/ai/cli-view/{id}` 获取视图详情
 - 数据查询与 Excel 导出交给 `ops-cli-view-data`
+
+---
+
+## 本地开发闭环
+
+- 回归契约：`opscli/skills/evals/cases/ops-cli-view-runner.json`
+- 本地执行：`python scripts/skill_dev_loop/run_eval.py --skill ops-cli-view-runner --pretty`
+- 改 `SKILL.md` 或 `scripts/run_view.py` 后先跑本地 eval；低于 `min_score` 时先修契约失败项，再继续迭代。
