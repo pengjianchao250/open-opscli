@@ -18,7 +18,7 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 - ✅ 趋势分析（MOY 月环比/年同比）
 - ✅ 需要 translate 自动转换的维度过滤
 
-**向后兼容**：完整 query 接口仍然可用，复杂场景可继续手写 payload。
+**扩展能力**：图表查询（`query_chart`）支持多 query 自动合并、小计/总计等复杂场景。
 
 ---
 
@@ -295,7 +295,7 @@ query_simple(
 
 ---
 
-## 与完整 Query 的映射关系
+## 服务端内部参数映射
 
 | 简化参数 | 完整 Query 对应 |
 |----------|----------------|
@@ -310,11 +310,10 @@ query_simple(
 
 ---
 
-## 向后兼容说明
+## 扩展能力
 
-- 完整 query 接口（`opscli query run`、`query_run`）仍然可用
-- 简化接口不满足需求时，可手写完整 payload 透传
-- `opscli query build`（基于 `--dimension`/`--metric` 参数）与简化接口并存，按需选择
+- 图表查询（`opscli query chart`、`query_chart`）支持通过图表 UUID 获取查询结构并执行，适用于多 query、小计/总计等复杂场景
+- 简化接口不满足需求时，可使用 `query_build_and_run`（MCP）或 `opscli query chart`（CLI）
 
 ---
 

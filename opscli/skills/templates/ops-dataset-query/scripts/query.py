@@ -8,7 +8,6 @@
 - `python query.py simple --table-id 1 --json '{"dimensions":[]}' --run`
 - `python query.py chart --uuid <chart_uuid> --run`
 - `python query.py chart-doc --uuid <chart_uuid> --output /tmp/chart.md`
-- `python query.py run --payload payload.json`
 """
 
 from __future__ import annotations
@@ -62,8 +61,6 @@ def build_command(args: argparse.Namespace) -> list[str]:
             command.extend(["--table-id", str(args.table_id)])
         if args.skills_dir:
             command.extend(["--skills-dir", args.skills_dir])
-    elif args.command == "run":
-        command.extend(["--payload", args.payload])
     elif args.command == "simple":
         command.extend(["--table-id", str(args.table_id)])
         if args.payload:
@@ -84,30 +81,6 @@ def build_command(args: argparse.Namespace) -> list[str]:
         command.extend(["--uuid", args.uuid])
         if args.output:
             command.extend(["--output", args.output])
-    elif args.command == "build":
-        if args.dataset:
-            command.extend(["--dataset", args.dataset])
-        if args.table_id is not None:
-            command.extend(["--table-id", str(args.table_id)])
-        for item in args.dimension or []:
-            command.extend(["--dimension", item])
-        for item in args.metric or []:
-            command.extend(["--metric", item])
-        for item in args.where or []:
-            command.extend(["--where", item])
-        for item in args.order_by or []:
-            command.extend(["--order-by", item])
-        if args.where_json:
-            command.extend(["--where-json", args.where_json])
-        if args.where_file:
-            command.extend(["--where-file", args.where_file])
-        if args.skills_dir:
-            command.extend(["--skills-dir", args.skills_dir])
-        if args.output:
-            command.extend(["--output", args.output])
-        command.extend(["--limit", str(args.limit), "--offset", str(args.offset)])
-        if args.run:
-            command.append("--run")
 
     if args.pretty:
         command.append("--pretty")
@@ -147,10 +120,6 @@ def main() -> None:
     catalog.add_argument("--skills-dir", help="指定 Skill 目录")
     catalog.add_argument("--pretty", action="store_true", help="格式化输出")
 
-    run = subparsers.add_parser("run")
-    run.add_argument("--payload", required=True, help="查询 payload JSON 文件")
-    run.add_argument("--pretty", action="store_true", help="格式化输出")
-
     simple = subparsers.add_parser("simple")
     simple.add_argument("--table-id", required=True, type=int, help="数据集 ID")
     simple.add_argument("--payload", help="简化查询 JSON 文件路径（与 --json 二选一）")
@@ -169,30 +138,6 @@ def main() -> None:
     chart_doc.add_argument("--uuid", required=True, help="图表 UUID（chart_uuid）")
     chart_doc.add_argument("--output", help="将 Markdown 文档写入指定文件路径")
     chart_doc.add_argument("--pretty", action="store_true", help="格式化输出")
-
-    build = subparsers.add_parser("build")
-    build.add_argument("--dataset", help="dataset_alias")
-    build.add_argument("--table-id", type=int, help="table_id")
-    build.add_argument(
-        "--dimension",
-        action="append",
-        help="维度定义：field_name|global_alias|verbose_name[:alias]；alias 仅支持英文/数字/下划线，省略时默认优先使用 global_alias",
-    )
-    build.add_argument(
-        "--metric",
-        action="append",
-        help="指标定义：field_name|global_alias|verbose_name:aggregation[:alias]；alias 仅支持英文/数字/下划线，省略时默认优先使用 global_alias",
-    )
-    build.add_argument("--where", action="append", help="筛选条件：field|operator|value_json，可重复")
-    build.add_argument("--where-json", help="where JSON 字符串")
-    build.add_argument("--where-file", help="where JSON 文件路径")
-    build.add_argument("--order-by", action="append", help="排序定义：expr[:asc|desc]")
-    build.add_argument("--limit", type=int, default=20, help="limit，默认 20")
-    build.add_argument("--offset", type=int, default=0, help="offset，默认 0")
-    build.add_argument("--skills-dir", help="指定 Skill 目录")
-    build.add_argument("--output", help="将 payload 写入指定文件")
-    build.add_argument("--run", action="store_true", help="构造后立即执行查询")
-    build.add_argument("--pretty", action="store_true", help="格式化输出")
 
     args = parser.parse_args()
 

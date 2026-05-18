@@ -12,7 +12,7 @@
 | # | 铁律 | 核心要点 |
 |---|------|---------|
 | 1 | **认证前置** | 远端查询前必须确认已登录；HTTP/SSE 模式用 `auth_mcp_login()` 一步登录；session_id 可不传（自动加载） |
-| 2 | **工具优先级** | `query_simple` > `query_build_and_run` > `query_build`+`query_run`；禁止跳级 |
+| 2 | **工具优先级** | `query_simple` > `query_build_and_run` > `query_chart`；禁止跳级 |
 | 3 | **公式字段禁止聚合** | 含 `summary_expression` 的字段（ACOS/ROAS 等）禁止额外传 `aggregation` |
 | 4 | **dataComparison 必带主周期** | 使用数据对比时 `filters` 必须包含当前主周期日期；单独传 `dataComparison` 会报 `QS-EXE-005` |
 | 5 | **先确认字段再构造参数** | 构造任何 query 参数前，先通过 `query_metadata` 确认字段存在 |
@@ -29,7 +29,7 @@
 
 ## 二、认证前置流程
 
-> **规则**：`query_build` 和 `query_catalog(source="local")` 不需要认证；所有远端查询必须先确认已登录。
+> **规则**：`query_catalog(source="local")` 不需要认证；所有远端查询必须先确认已登录。
 > **重要**：所有需要认证的工具均支持 **自动加载本地凭证**，已登录过的会话无需重复传入 `session_id`。
 
 ### 方式 A（推荐）：auth_mcp_login 一步登录
@@ -57,14 +57,12 @@ auth_is_authenticated()
 
 | 操作 | 是否需要 session_id |
 |------|-------------------|
-| `query_build` | ❌ 不需要 |
 | `query_catalog(source="local")` | ❌ 不需要 |
 | `query_metadata`（无参数，本地列表） | ❌ 不需要 |
 | `query_metadata(dataset="xxx")`（远端获取字段） | 自动加载（建议登录后调用） |
 | `query_catalog()`（远端，默认） | 自动加载（建议登录后调用） |
 | `query_simple` | 自动加载（未登录时报错） |
 | `query_build_and_run` | 自动加载（未登录时报错） |
-| `query_run` | 自动加载（未登录时报错） |
 | `query_chart(run=True)` | 自动加载（未登录时报错） |
 
 > **说明**：所有工具的 `session_id` 参数均为**可选**。未传时自动从本地 CredentialStore 加载已保存的凭证。
@@ -79,8 +77,7 @@ auth_is_authenticated()
 ```
 ① query_simple           ← 最优先，服务端自动处理所有技术细节
 ② query_build_and_run    ← 次优，CLI 风格字符串参数，构造并执行
-③ query_build            ← 仅构造 payload（不执行，不需认证）
-④ query_run              ← 最后手段，手写完整 payload
+③ query_chart             ← 图表查询结构 + 执行
 ```
 
 ### 选择决策
@@ -88,8 +85,7 @@ auth_is_authenticated()
 ```
 需要执行查询？
   ├─ 普通聚合 / 环比 / MOY 趋势 → query_simple
-  ├─ 需要先查看 payload 结构 → query_build，再 query_run
-  └─ 复杂场景（无法用简化参数表达）→ query_build 或手写 payload + query_run
+  └─ 图表场景 → query_chart
 
 需要图表数据？
   └─ 有 chart_uuid → query_chart(run=True)
@@ -197,7 +193,7 @@ query_simple(
 ### dimensions / metrics 双格式支持
 
 ```python
-# 字符串格式（兼容 query_build 习惯）
+# 字符串格式
 dimensions=["dept_name", "date_id:f_date"]
 metrics=["price:SUM:f_price", "order_id:COUNT_DISTINCT:f_orders"]
 
@@ -255,73 +251,7 @@ query_build_and_run(
 
 ---
 
-## 六、query_build（仅构造 payload，不执行）
-
-不需要认证。用于生成完整的 payload JSON 文件，再交给 `query_run` 执行。
-
-```python
-query_build(
-    table_id=1,
-    dimensions=["date_id", "country_id:country"],
-    metrics=["order_cost:sum:total_cost", "order_id:count_distinct:order_count"],
-    where_conditions=["date_id|>=|\"2024-01-01\""],
-    order_by=["total_cost:desc"],
-    limit=50,
-    output_path="/tmp/query.json"   # 可选，写入文件
-)
-# → 返回 payload 结构，并写入 /tmp/query.json
-```
-
-**公式字段规则**：传 `global_alias` 或 `verbose_name`，Tool 自动根据 metadata 展开为完整公式表达式，无需手动处理。
-
----
-
-## 七、query_run（手写完整 payload 执行）
-
-```python
-# 先用 query_build 生成 payload 文件，再调用 query_run 执行
-query_run(
-    payload_path="/tmp/query.json",
-    session_id="860b0636485b5188a2b9b4ed5210e736"
-)
-```
-
-### 手写 payload 的必填字段
-
-```json
-{
-  "tableId": 1,
-  "query": {
-    "select": [
-      {
-        "expr": "ds_xxx.dept_name",
-        "alias": "f_dept"
-      },
-      {
-        "expr": "ds_xxx.price",
-        "alias": "f_price",
-        "aggregation": "SUM"
-      }
-    ],
-    "groupBy": ["f_dept"],
-    "where": {
-      "operator": "AND",
-      "conditions": [
-        {"field": "ds_xxx.date_id", "operator": "gte", "value": "2026-01-01"}
-      ]
-    },
-    "orderBy": [{"expr": "f_price", "direction": "desc"}],
-    "limit": 20,
-    "offset": 0
-  }
-}
-```
-
-> 常见错误：`{"global_alias": "f_dept"}` 缺少 `expr` 字段 → 422 报错。`expr` 和 `alias` 均为必填。
-
----
-
-## 八、query_chart（图表查询）
+## 六、query_chart（图表查询）
 
 通过图表 UUID 获取图表结构或执行所有子查询。需要认证。
 
@@ -365,7 +295,7 @@ query_chart(
 
 ---
 
-## 九、辅助工具（query_metadata / query_catalog）
+## 七、辅助工具（query_metadata / query_catalog）
 
 > **两者用途完全不同，禁止混用**：
 > - `query_metadata`：获取数据集字段信息，或查看所有可用数据集列表 → **"有哪些数据集/字段"**
@@ -420,7 +350,7 @@ query_catalog(source="local")
 
 ---
 
-## 十、字段确认流程（强制）
+## 八、字段确认流程（强制）
 
 > 构造任何查询参数前必须执行，禁止凭印象直接使用字段名。
 
@@ -440,7 +370,7 @@ query_catalog(source="local")
 
 ---
 
-## 十一、dataComparison 与 MOY 趋势规范
+## 九、dataComparison 与 MOY 趋势规范
 
 ### 比较类查询优先级（强制）
 
@@ -508,7 +438,7 @@ query_simple(
 
 ---
 
-## 十二、公式字段处理铁律
+## 十、公式字段处理铁律
 
 > **铁律**：含 `summary_expression` 或 `formula_config` 的字段（如 ACOS、ROAS、毛利率等），禁止额外传 `aggregation`。
 
@@ -537,12 +467,12 @@ for f in fields:
 
 ---
 
-## 十三、错误处理速查
+## 十一、错误处理速查
 
 | 场景 | 错误码/现象 | 解决方式 |
 |------|-----------|---------|
 | 缺少主周期 filters | `QS-EXE-005 missing ')' at '{'` | 补上主周期日期 filters 后重试 |
-| 手写 payload 缺 expr | 422 Unprocessable Entity | `query.select.*.expr` 和 `alias` 均为必填 |
+| chart 查询 payload 异常 | 422 Unprocessable Entity | 检查返回的 error 字段获取具体原因 |
 | dataset_alias 不存在 | 查询报错 / 返回空 | 先 `query_metadata()` 查看所有可用数据集 |
 | 未登录 / 本地无凭证 | auth 报错 / authenticated=false | HTTP/SSE：`auth_mcp_login()`；stdio：Device Flow |
 | Token 过期 | 401 Unauthorized | `auth_token_refresh()` 刷新（session_id 可不传） |
@@ -552,7 +482,7 @@ for f in fields:
 
 ---
 
-## 十四、数据集与字段歧义澄清规则
+## 十二、数据集与字段歧义澄清规则
 
 > **核心原则**：不确定就问，禁止猜测。任何可能产生歧义的情况都必须向用户确认。
 
@@ -642,7 +572,7 @@ for f in fields:
 
 ---
 
-## 十五、输出结果规范
+## 十三、输出结果规范
 
 > **铁律**：输出列名必须使用数据集定义的 `verbose_name`，禁止自行意译或美化。
 
@@ -656,7 +586,7 @@ for f in fields:
 
 ---
 
-## 十六、查询前自检清单
+## 十四、查询前自检清单
 
 ```
 □ 认证：是否已登录？（auth_is_authenticated，不传 session_id 自动检查本地凭证）
@@ -682,7 +612,7 @@ for f in fields:
 
 ---
 
-## 十七、典型工作流速查
+## 十五、典型工作流速查
 
 ### 工作流 A：已知数据集，直接查询
 
@@ -770,7 +700,7 @@ result_prev = query_simple(
 
 ---
 
-## 十八、库存数据查询规则
+## 十六、库存数据查询规则
 
 ### 指定产品的库存查询默认不聚合
 
@@ -806,7 +736,7 @@ result_prev = query_simple(
 
 ---
 
-## 十九、查询闭环强制规则
+## 十七、查询闭环强制规则
 
 > **铁律**：每次执行 `query_*` 系列工具后，无论查询成功或失败，都必须在后续 3 次工具调用内完成一次 `feedbackSubmit`。
 

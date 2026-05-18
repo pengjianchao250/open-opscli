@@ -14,9 +14,7 @@ description: 使用本地缓存的数据集与字段索引辅助检索和查询�
 > **【强制】文档阅读顺序**
 >
 > 1. **必须优先阅读 `references/simple-query-guide.md`** — 简化接口参数、使用场景、示例
-> 2. **CLI 简易版命令详解**：`references/cli-simple-guide.md` — `opscli query simple`
-> 3. **CLI 完整版命令详解**：`references/cli-advanced-guide.md` — `opscli query run`、`opscli query chart`、降级方案
-> 4. **只有多次查询失败时**，才尝试阅读 `references/data-query-service-dev-guide.md`
+> 2. **CLI 查询命令详解**：`references/cli-simple-guide.md` — `opscli query simple`、`opscli query chart`、辅助脚本
 
 ---
 
@@ -25,7 +23,7 @@ description: 使用本地缓存的数据集与字段索引辅助检索和查询�
 > **认证按动作触发**：本地只读检索不要求登录；涉及远端 catalog、远端执行或升级时，必须先检测是否已授权登录。
 
 - 本地只读动作可直接执行：`python scripts/search.py`、`opscli query catalog --source local`、`opscli query metadata`
-- 远端动作前先执行 `opscli auth token status`：`opscli query catalog`、`opscli query simple --run`、`opscli query build --run`、`opscli query run`、`opscli query chart --run`、`opscli skills upgrade ops-dataset-query`
+- 远端动作前先执行 `opscli auth token status`：`opscli query catalog`、`opscli query simple --run`、`opscli query chart --run`、`opscli skills upgrade ops-dataset-query`
 - 若状态中出现“未登录 / 未授权 / Token 过期 / expired / 401”，必须立即调用 `ops-auth` Skill
 - 若是“未登录 / 未授权 / 401”，在 `ops-auth` 中执行 `opscli auth login`
 - 若是 JWT Token 过期，优先执行 `opscli auth token refresh --all` 或 `opscli auth token refresh -s ops`；刷新失败再执行 `opscli auth login`
@@ -56,11 +54,9 @@ opscli auth token status
 - 本地数据过期或字段不存在时，先执行 `opscli skills upgrade ops-dataset-query` 再重试查询
 - 字段搜索结果已按相关性排序（精确匹配 > 子串匹配 > 关键词匹配）
 - **`opscli query simple` 优先**：普通聚合、数据对比、MOY 趋势、子查询等场景，优先使用简化接口（详见 `references/simple-query-guide.md` 和 `references/cli-simple-guide.md`）
-- `opscli query build` 适合基于 `--dimension`/`--metric` 参数构造标准完整 query payload（输出完整版结构，详见 `references/cli-advanced-guide.md`）
-- `opscli query run` 适合透传完整手写高级 payload（仅当简化接口和 `query build` 均不满足需求时使用）
-- `opscli query chart` 适合通过图表 ID 直接获取查询结构并执行，支持多 query 自动合并
+- `opscli query chart` 适合通过图表 ID 直接获取查询结构并执行，支持多 query 自动合并、小计/总计处理、Excel 导出（详见 `references/cli-simple-guide.md`）
 - 所有查询工作流都必须以前置的 `ops-auth` 登录检测作为起点
-- **文档引用顺序**：优先参考 `references/simple-query-guide.md` 和 `references/cli-simple-guide.md`；多次查询失败时才参考 `references/data-query-service-dev-guide.md`
+- **文档引用顺序**：参考 `references/simple-query-guide.md` 和 `references/cli-simple-guide.md`
 
 ---
 
@@ -125,7 +121,7 @@ opscli skills upgrade ops-dataset-query
 |--------|------|------|
 | ① 最优 | 当期 vs 对比期汇总对比（环比/同比） | `dataComparison`（服务端条件聚合，一次 SQL） |
 | ② 次优 | 按时间粒度分组的趋势环比/同比 | `MOY` 高级计算（服务端窗口函数，一次 SQL） |
-| ③ 兜底 | ①② 均因工具限制无法使用时 | 多次 `opscli query run` + 客户端合并 |
+| ③ 兜底 | ①② 均因工具限制无法使用时 | 多次 `opscli query simple` + 客户端合并 |
 
 `dataComparison` 不是独立日期过滤器。使用 `--data-comparison` 时，必须同时用 `--where` 传入当前主查询周期的日期条件；`--data-comparison` 只表示对比周期。不要只传 `--data-comparison`，否则可能触发 `QS-EXE-005 missing ')' at '{'` 等 SQL 解析错误。若已报错，先补上主周期日期 `--where` 后重试，仍失败再降级为纯日期 `--where` 查询。
 
@@ -143,7 +139,7 @@ opscli skills upgrade ops-dataset-query
 | `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_type、dataset_category、data_source、main_dttm_col、cache_timeout、description |
 | `data/query_metadata.json` | 查询元数据 | 字段类型映射、可用聚合方式等 |
 
-CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
+CSV 各列详细说明见 `references/simple-query-guide.md` 底部附录。
 
 ---
 
@@ -241,9 +237,7 @@ opscli query catalog --skills-dir ~/.claude/skills --pretty
 | 命令 | 类型 | 说明 | 详细文档 |
 |------|------|------|---------|
 | `opscli query simple` | 简易版 | 基于简化参数构造并执行查询（推荐优先使用） | `references/cli-simple-guide.md` |
-| `opscli query build` | 完整版 | 基于简化参数构造标准完整 query payload，可选执行 | `references/cli-advanced-guide.md` |
-| `opscli query run` | 完整版 | 透传完整手写 payload（仅当简化接口和 `build` 均不满足时使用） | `references/cli-advanced-guide.md` |
-| `opscli query chart` | 完整版 | 通过图表 ID 获取查询结构并执行，含多 query/小计总计 | `references/cli-advanced-guide.md` |
+| `opscli query chart` | 图表 | 通过图表 ID 获取查询结构并执行，含多 query/小计总计 | `references/cli-simple-guide.md` |
 
 ---
 
@@ -251,18 +245,16 @@ opscli query catalog --skills-dir ~/.claude/skills --pretty
 
 **使用优先级**：
 1. **`opscli query simple`**（推荐）：普通聚合、数据对比、MOY 趋势、子查询等场景，服务端自动处理技术细节
-2. **`opscli query build`**：基于 `--dimension`/`--metric` 参数快速构造标准 query payload
-3. **`opscli query run`**：仅当简化接口无法满足需求时，手写完整 payload 透传
+2. **`opscli query chart`**：通过图表 ID 获取查询结构并执行，支持多 query 自动合并
 
 **文档引用顺序（强制）**：
 1. **优先阅读 `references/simple-query-guide.md`** — 所有普通场景先按简化接口处理
 2. **CLI 命令细节阅读 `references/cli-simple-guide.md`**
-3. **只有多次查询失败时**，才阅读 `references/data-query-service-dev-guide.md` 排查深层问题
+
 
 > 简化接口完整说明见 **`references/simple-query-guide.md`**。
 > CLI 简易版命令详解见 **`references/cli-simple-guide.md`**。
-> CLI 完整版命令详解见 **`references/cli-advanced-guide.md`**。
-> 完整 query payload 规范（translate / 权限占位符等）见 **`references/data-query-service-dev-guide.md`**（多次失败时参考）。
+> 查询命令详解见 **`references/cli-simple-guide.md`**。
 
 ---
 
@@ -270,7 +262,7 @@ opscli query catalog --skills-dir ~/.claude/skills --pretty
 
 本 Skill 内置本地字段索引，可用于辅助确认 `dataset_alias`、`field_name`、`verbose_name`。
 
-**推荐流程**：本地索引确认字段名 → `opscli query metadata` 查看完整 metadata → `opscli query build` 或手写 payload + `opscli query run`
+**推荐流程**：本地索引确认字段名 → `opscli query metadata` 查看完整 metadata → `opscli query simple` / `opscli query chart`
 
 **搜索排序策略（相关性从高到低）：**
 
@@ -297,7 +289,6 @@ opscli query catalog --skills-dir ~/.claude/skills --pretty
 | Token 过期 | 调用 `ops-auth` Skill，优先执行 `opscli auth token refresh --all`；刷新失败或仍异常时再执行 `opscli auth login` |
 | opscli 未找到 | 激活虚拟环境或设置 `OPSCLI_BIN` |
 | 远端 manifest 不存在 | 检查网络和 ops 服务地址配置 |
-| payload 文件不存在 | 先 `opscli query build --output` 生成 |
 
 ---
 
@@ -312,7 +303,7 @@ opscli query catalog --skills-dir ~/.claude/skills --pretty
 **禁止写法**：
 ```bash
 # 错误：head 截断了 JSON，无法解析
-opscli query build ... --run --pretty 2>&1 | head -80
+opscli query simple ... --run --pretty 2>&1 | head -80
 
 # 错误：读取 persisted-output 临时文件（内容截断，JSON 不完整）
 with open('/path/to/tool-results/xxxxx.txt') as f:
@@ -322,10 +313,10 @@ with open('/path/to/tool-results/xxxxx.txt') as f:
 **正确写法**：始终将完整输出重定向到临时文件，再读取解析：
 ```bash
 # 正确：完整输出到文件
-opscli query build ... --run --pretty > /tmp/result.json
+opscli query simple ... --run --pretty > /tmp/result.json
 
 # 或使用 --output 参数
-opscli query build ... --output /tmp/result.json --run
+opscli query simple ... --output /tmp/result.json --run
 
 # Python 解析时从临时文件读取
 python3 -c "import json; print(json.load(open('/tmp/result.json'))['data']['result']['meta'])"

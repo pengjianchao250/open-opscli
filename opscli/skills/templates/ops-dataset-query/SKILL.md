@@ -55,7 +55,6 @@ version: v0.0.1
 > 两个模式文件都遵循统一的文档引用规则：
 > 1. **必须优先阅读** `references/rules.md`（**查询前必须**，意图澄清规则）
 > 2. **必须优先阅读** `references/simple-query-guide.md`
-> 3. **只有多次查询失败时**，才尝试阅读 `references/data-query-service-dev-guide.md`
 
 > **⚠️ 参数命名约定（MCP 模式必读）**
 >
@@ -101,7 +100,7 @@ version: v0.0.1
 
 ### 铁律一：简化接口优先
 
-普通聚合、数据对比、MOY 趋势、子查询等场景，**必须优先使用简化接口**（`opscli query simple` / `query_simple`）。仅当简化接口不满足需求时，才手写完整 payload。
+普通聚合、数据对比、MOY 趋势、子查询等场景，**必须优先使用简化接口**（`opscli query simple` / `query_simple`）。仅当简化接口不满足需求时，使用 `opscli query chart` / `query_chart`。
 
 ### 铁律二：禁止绕过正式入口
 
@@ -175,14 +174,10 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 |------|---------|------|
 | **意图澄清规则** | `references/rules.md` | **查询前必须阅读** — 人员/时间/SKU 等语义歧义澄清规则 |
 | CLI 模式索引 | `references/cli.md` | 前置要求、使用原则、字段检查、错误处理、工作流索引 |
-| CLI 简易版 | `references/cli-simple-guide.md` | `opscli query simple`、`opscli query build` 详解 |
-| CLI 完整版 | `references/cli-advanced-guide.md` | `opscli query run`、`opscli query chart`、降级方案 |
+| CLI 查询详解 | `references/cli-simple-guide.md` | `opscli query simple`、`opscli query chart`、辅助脚本 |
 | MCP 模式索引 | `references/mcp.md` | 前置要求、使用原则、字段检查、辅助脚本、错误处理 |
-| MCP 简易版 | `references/mcp-simple-guide.md` | `query_simple`、`query_build_and_run` 详解 |
-| MCP 完整版 | `references/mcp-advanced-guide.md` | `query_run`、`query_chart`、降级方案 |
+| MCP 查询详解 | `references/mcp-simple-guide.md` | `query_simple`、`query_build_and_run`、`query_chart`、辅助脚本 |
 | 简化接口参数规范 | `references/simple-query-guide.md` | **优先阅读** — 通用简化参数结构 |
-| 完整 query payload 规范 | `references/data-query-service-dev-guide.md` | 多次失败时参考 |
-| 数据对比与高级计算参考 | `references/query-patterns.md` | CLI / MCP 共享 |
 
 ---
 

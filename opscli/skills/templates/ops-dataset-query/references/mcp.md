@@ -5,7 +5,7 @@ description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执
 
 # ops-dataset-query (MCP 模式)
 
-使用 MCP Tool 查询本地缓存的数据集与字段索引，通过 `query_simple`、`query_build_and_run`、`query_run` 等 Tool 执行数据查询。凭证统一由 `CredentialStore` 管理，HTTP/SSE 模式下调用 `auth_mcp_login()` 一步完成登录，无需手动传递 `session_id`。
+使用 MCP Tool 查询本地缓存的数据集与字段索引，通过 `query_simple`、`query_build_and_run`、`query_chart` 等 Tool 执行数据查询。凭证统一由 `CredentialStore` 管理，HTTP/SSE 模式下调用 `auth_mcp_login()` 一步完成登录，无需手动传递 `session_id`。
 
 ---
 
@@ -15,8 +15,6 @@ description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执
 >
 > 1. **必须优先阅读 `references/simple-query-guide.md`** — 简化接口参数、使用场景、示例
 > 2. **MCP 简易版 Tool 详解**：`references/mcp-simple-guide.md` — `query_simple`、`query_build_and_run`
-> 3. **MCP 完整版 Tool 详解**：`references/mcp-advanced-guide.md` — `query_build`、`query_run`、`query_chart`、降级方案、MCP 辅助脚本
-> 4. **只有多次查询失败时**，才尝试阅读 `references/data-query-service-dev-guide.md`
 
 ---
 
@@ -37,7 +35,7 @@ description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执
 
 - 本地只读动作可直接执行：`search`、`fetch`、`query_catalog(source="local")`
 - `query_metadata` 远端优先，远端失败自动回退本地（无需额外检查）
-- 远端动作前先调用 `auth_is_authenticated()`（**不传 session_id，自动从本地凭证加载**）：`query_catalog()`、`query_simple`、`query_build_and_run`、`query_run`、`query_chart(run=True)`、`skills_upgrade`
+- 远端动作前先调用 `auth_is_authenticated()`（**不传 session_id，自动从本地凭证加载**）：`query_catalog()`、`query_simple`、`query_build_and_run`、`query_chart(run=True)`、`skills_upgrade`
 - 若返回 `false` 或报错，说明未登录或凭证已过期，按下方模式选择登录方式
 
 ### 登录方式选择
@@ -102,11 +100,9 @@ auth_login_start()  # → 用户浏览器授权 → auth_login_poll(device_code=
 - 字段搜索结果已按相关性排序（精确匹配 > 子串匹配 > 关键词匹配）
 - **`query_simple` 优先**：普通聚合、数据对比、MOY 趋势、子查询等场景，优先使用简化接口（详见 `references/simple-query-guide.md` 和 `references/mcp-simple-guide.md`）
 - `query_build_and_run` 适合基于简化参数构造标准 query payload 并立即执行（详见 `references/mcp-simple-guide.md`）
-- `query_build` 适合基于简化参数构造标准完整 query payload（输出完整版结构，不执行，详见 `references/mcp-advanced-guide.md`）
-- `query_run` 适合透传完整手写高级 payload（仅当简化接口和 `query_build` 均不满足需求时使用，详见 `references/mcp-advanced-guide.md`）
-- `query_chart` 适合通过图表 UUID 直接获取图表结构或执行图表查询，无需手动构造 payload（详见 `references/mcp-advanced-guide.md`）
+- `query_chart` 适合通过图表 UUID 直接获取图表结构或执行图表查询，支持多 query 自动合并（详见 `references/mcp-simple-guide.md`）
 - 所有查询工作流都必须以前置的 `session_id` 有效性检测作为起点
-- **文档引用顺序**：优先参考 `references/simple-query-guide.md` 和 `references/mcp-simple-guide.md`；多次查询失败时才参考 `references/data-query-service-dev-guide.md`
+- **文档引用顺序**：参考 `references/simple-query-guide.md` 和 `references/mcp-simple-guide.md`
 
 ---
 
@@ -140,7 +136,7 @@ auth_login_start()  # → 用户浏览器授权 → auth_login_poll(device_code=
 |--------|------|------|
 | ① 最优 | 当期 vs 对比期汇总对比（环比/同比） | `dataComparison`（服务端条件聚合，一次 SQL） |
 | ② 次优 | 按时间粒度分组的趋势环比/同比 | `MOY` 高级计算（服务端窗口函数，一次 SQL） |
-| ③ 兜底 | ①② 均因工具限制无法使用时 | 多次 `query_run` + 客户端合并 |
+| ③ 兜底 | ①② 均因工具限制无法使用时 | 多次 `query_simple` + 客户端合并 |
 
 > `comparison`（MOY/ACC/PPT）写在 `select` 字段内部可正常透传。
 
@@ -156,7 +152,7 @@ auth_login_start()  # → 用户浏览器授权 → auth_login_poll(device_code=
 | `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_type 等 |
 | `data/query_metadata.json` | 查询元数据 | 字段类型映射、可用聚合方式等 |
 
-CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
+CSV 各列详细说明见 `references/simple-query-guide.md` 底部附录。
 
 ---
 
@@ -166,13 +162,12 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 
 | 脚本 | 用途 | 详细文档 |
 |------|------|---------|
-| `search.py` | 本地字段搜索 | `references/mcp-advanced-guide.md` |
-| `core.py` | CSV 加载、搜索打分、数值转换等底层工具函数 | `references/mcp-advanced-guide.md` |
-| `query_mcp.py` | 本地 Payload 构造器（简化参数 → 完整 payload JSON） | `references/mcp-advanced-guide.md` |
-| `chart_map_mcp.py` | chart 字段别名映射 | `references/mcp-advanced-guide.md` |
-| `chart_analyze_mcp.py` | 图表异常检测 | `references/mcp-advanced-guide.md` |
-| `excel_export_mcp.py` | 图表数据 Excel 导出 | `references/mcp-advanced-guide.md` |
-| `updater_mcp.py` | 本地数据状态检查 | `references/mcp-advanced-guide.md` |
+| `search.py` | 本地字段搜索 | `references/mcp-simple-guide.md` |
+| `core.py` | CSV 加载、搜索打分、数值转换等底层工具函数 | `references/mcp-simple-guide.md` |
+| `chart_map_mcp.py` | chart 字段别名映射 | `references/mcp-simple-guide.md` |
+| `chart_analyze_mcp.py` | 图表异常检测 | `references/mcp-simple-guide.md` |
+| `excel_export_mcp.py` | 图表数据 Excel 导出 | `references/mcp-simple-guide.md` |
+| `updater_mcp.py` | 本地数据状态检查 | `references/mcp-simple-guide.md` |
 
 ---
 
@@ -182,8 +177,8 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 
 | Tool | 用途 | 认证要求 | 详细文档 |
 |------|------|---------|---------|
-| `query_metadata` | 读取数据集 metadata。**无参数返回数据集列表**；指定参数时远端优先获取最新字段 | 远端时需要 | `references/mcp-advanced-guide.md` |
-| `query_catalog` | 将 NL 需求与**预定义业务意图（intents）匹配**，识别目标数据集（**非数据集列表**，查数据集列表请用 `query_metadata`） | 远端时需要 | `references/mcp-advanced-guide.md` |
+| `query_metadata` | 读取数据集 metadata。**无参数返回数据集列表**；指定参数时远端优先获取最新字段 | 远端时需要 | `references/mcp-simple-guide.md` |
+| `query_catalog` | 将 NL 需求与**预定义业务意图（intents）匹配**，识别目标数据集（**非数据集列表**，查数据集列表请用 `query_metadata`） | 远端时需要 | `references/mcp-simple-guide.md` |
 
 ---
 
@@ -193,9 +188,7 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 |------|------|------|---------|
 | `query_simple` | 简易版 | 基于简化参数直接执行查询（推荐优先使用） | `references/mcp-simple-guide.md` |
 | `query_build_and_run` | 简易版 | 基于简化参数构造标准 payload 并立即执行 | `references/mcp-simple-guide.md` |
-| `query_build` | 完整版 | 基于简化参数构造标准完整 payload（不执行，不需要认证） | `references/mcp-advanced-guide.md` |
-| `query_run` | 完整版 | 透传完整手写 payload（仅当简化接口和 `build` 均不满足时使用） | `references/mcp-advanced-guide.md` |
-| `query_chart` | 完整版 | 通过图表 UUID 获取结构或执行，含多 query | `references/mcp-advanced-guide.md` |
+| `query_chart` | 图表 | 通过图表 UUID 获取结构或执行，含多 query | `references/mcp-simple-guide.md` |
 
 ---
 
@@ -204,18 +197,15 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 **使用优先级**：
 1. **`query_simple`**（推荐）：普通聚合、数据对比、MOY 趋势、子查询等场景
 2. **`query_build_and_run`**：基于 `dimensions`/`metrics` 等简化参数构造标准 query payload 并立即执行
-3. **`query_build`**：基于简化参数构造标准完整 query payload（不执行，输出完整版结构供 `query_run` 使用）
-4. **`query_run`**：仅当上述均无法满足需求时，手写完整 payload 透传
+3. **`query_chart`**：通过图表 UUID 获取查询结构并执行，支持多 query 自动合并
 
 **文档引用顺序（强制）**：
 1. **优先阅读 `references/simple-query-guide.md`** — 所有普通场景先按简化接口处理
 2. **MCP Tool 细节阅读 `references/mcp-simple-guide.md`**
-3. **只有多次查询失败时**，才阅读 `references/data-query-service-dev-guide.md` 排查深层问题
+
 
 > 简化接口完整说明见 **`references/simple-query-guide.md`**。
 > MCP 简易版 Tool 详解见 **`references/mcp-simple-guide.md`**。
-> MCP 完整版 Tool 详解见 **`references/mcp-advanced-guide.md`**。
-> 完整 query payload 规范（translate / 权限占位符等）见 **`references/data-query-service-dev-guide.md`**（多次失败时参考）。
 
 ---
 
@@ -240,7 +230,6 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
 | 仅需确认单个数据集字段 | `query_metadata(dataset="<alias>")` 按需远端查询，无需全量升级 |
 | 未登录 / session 无效 | `auth_login_start()` → 浏览器授权 → `auth_login_poll()` |
 | Token 过期 | `auth_token_refresh(session_id)`；如 session 也过期则重新 Device Flow 授权 |
-| payload 文件不存在 | 先 `query_build` 生成 |
 | chart_uuid 不存在或已删除 | 确认图表 ID 正确，或检查该图表是否有访问权限 |
 | 图表查询执行失败 | 查看返回的 `error` 字段获取具体错误信息，常见原因：数据集权限不足、字段已变更 |
 
@@ -265,8 +254,8 @@ CSV 各列详细说明见 `references/data-query-service-dev-guide.md` 附录。
    → search(query="<field_name>") 或 query_metadata(dataset="<dataset_alias>")
 
 4. 构造并执行查询
-   → 简易版：query_simple / query_build_and_run（详见 mcp-simple-guide.md）
-   → 完整版：query_build → query_run / query_chart（详见 mcp-advanced-guide.md）
+   → 简化查询：query_simple / query_build_and_run（详见 mcp-simple-guide.md）
+   → 图表查询：query_chart（详见 mcp-simple-guide.md）
 ```
 
 ### 数据更新 → 重新查询
@@ -305,7 +294,7 @@ skills_upgrade(name="ops-dataset-query")
 
 本 Skill 内置本地字段索引，可用于辅助确认 `dataset_alias`、`field_name`、`verbose_name`。
 
-**推荐流程**：本地索引确认字段名 → `query_metadata` 查看完整 metadata → **`query_simple`**（优先）或 `query_build_and_run` / 手写 payload + `query_run`
+**推荐流程**：本地索引确认字段名 → `query_metadata` 查看完整 metadata → **`query_simple`**（优先）或 `query_build_and_run` / `query_chart`
 
 ### `search.py` — 本地字段搜索
 
