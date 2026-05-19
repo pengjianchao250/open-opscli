@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-FEEDBACK_TYPES = ("bug", "feature", "data_issue", "ux", "docs", "other")
+FEEDBACK_TYPES = ("bug", "feature", "data_issue", "ux", "docs", "query_result", "other")
 SEVERITIES = ("low", "medium", "high", "critical")
 SOURCES = ("cli", "mcp", "skill", "api")
 
 FEEDBACK_SCHEMA = {
     "source": "cli|mcp|skill|api",
-    "feedback_type": "bug|feature|data_issue|ux|docs|other",
+    "feedback_type": "bug|feature|data_issue|ux|docs|query_result|other",
     "severity": "low|medium|high|critical",
     "title": "string, required, <=200 chars",
     "content": "string, required",
