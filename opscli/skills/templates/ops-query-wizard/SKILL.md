@@ -110,17 +110,19 @@ description: 引导式数据查询向导。当用户需要获取数据进行分�
 
 ## 标准工作流（层次一/层次二：全新引导或智能触发）
 
+> **交互原则**：每步优先使用 `AskUserQuestion` 工具提供结构化选项卡片，替代纯文本提问。全量列表仍以文本输出（规则要求），选择动作用 `AskUserQuestion`。详见 `references/step-guide.md` 各步骤。
+
 ```
-[Step 1]  需求目标概述          → 提取需求上下文，建立推荐基础
-[Step 2]  选择数据集            → catalog 意图匹配 + 全量列举
-[Step 3]  选择维度字段          → AI 推荐 + 全量列举维度字段
-[Step 4]  选择指标字段          → AI 推荐 + 全量列举指标字段（标注公式字段）
-[Step 5]  筛选条件              → 时间范围（必问）+ 其他维度过滤
-[Step 6]  排序字段              → AI 推荐 + 用户确认
-[Step 7]  获取条数（limit）     → AI 推荐 + 用户确认
-[Step 8]  是否分页              → 按需询问，单页满足时跳过
-[Step 9]  是否需要对比数据      → dataComparison 配置
-[Step 10] 执行查询              → 参数摘要确认 → query_simple → 展示结果
+[Step 1]  需求目标概述          → AskUserQuestion 业务场景模板 + 提取需求上下文
+[Step 2]  选择数据集            → 文本展示全量列表 + AskUserQuestion 推荐项
+[Step 3]  选择维度字段          → 文本展示全量字段 + AskUserQuestion 推荐维度（multiSelect）
+[Step 4]  选择指标字段          → 文本展示全量字段 + AskUserQuestion 推荐指标（multiSelect）
+[Step 5]  筛选条件              → AskUserQuestion 常见时间范围 + 其他过滤（两轮）
+[Step 6]  排序字段              → AskUserQuestion 排序选项
+[Step 7]  获取条数（limit）     → AskUserQuestion 条数选项
+[Step 8]  是否分页              → AskUserQuestion 分页选项（按需触发）
+[Step 9]  是否需要对比数据      → AskUserQuestion 对比方案选项（按需触发）
+[Step 10] 执行查询              → 文本展示参数摘要 + AskUserQuestion 确认/修改
            └── 进入 analysis-guide.md 分析框架
                └── 输出（对话 / Excel / 两者）
                └── ops-feedback 闭环反馈（强制）
