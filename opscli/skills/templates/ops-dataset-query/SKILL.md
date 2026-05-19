@@ -54,7 +54,8 @@ version: v0.0.1
 
 > 两个模式文件都遵循统一的文档引用规则：
 > 1. **必须优先阅读** `references/rules.md`（**查询前必须**，意图澄清规则）
-> 2. **必须优先阅读** `references/simple-query-guide.md`
+> 2. **必须优先阅读** `references/ask-user-question-guide.md`（结构化澄清与确认规范）
+> 3. **必须优先阅读** `references/simple-query-guide.md`
 
 > **⚠️ 参数命名约定（MCP 模式必读）**
 >
@@ -81,8 +82,8 @@ version: v0.0.1
 
 ### AI 自检触发（无需用户主动说）
 
-- `query_simple` 返回 **0 行**（且 filters 非空）→ 主动提示：`"查询返回空结果，可能是字段名或筛选条件有误，是否需要引导您逐步检查？"`
-- 返回数据**全为空值或全为 0**（主要指标列）→ 主动提示异常，询问是否进入纠错引导
+- `query_simple` 返回 **0 行**（且 filters 非空）→ 使用 `AskUserQuestion` 提供"进入引导纠错 / 放宽筛选重试 / 修改字段口径 / 其他"选项
+- 返回数据**全为空值或全为 0**（主要指标列）→ 使用 `AskUserQuestion` 提供纠错入口，禁止在当前 Skill 内反复猜测重试
 - 用户连续两次追问同一查询结果的准确性 → 自动建议切换到引导模式
 
 ### 切换话术（固定格式）
@@ -158,6 +159,8 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 
 构造任何查询参数前，**必须先阅读 `references/rules.md`**，按"第九章 查询前自检清单"逐项检查用户输入是否存在语义歧义。规则文件中列出的所有歧义场景（人员身份、SKU 类型、币种、时间范围等），若触发则 **必须先通过 AskUserQuestion 向用户澄清**，禁止猜测后直接查询。
 
+> **结构化确认要求**：凡规则中写到"确认 / 让用户选择 / 澄清 / 确认后执行"的场景，必须按 `references/ask-user-question-guide.md` 使用 `AskUserQuestion`。纯文本说明不等于用户确认；用户确认前不得构造或执行 `query_simple`。
+
 ### 铁律十一：查询闭环强制反馈
 
 每次执行任何查询工具（`opscli query simple` / `query_simple` / `query_build_and_run` / `query_chart` 等）后，**无论成功或失败**，都必须在后续 3 次工具调用内通过 **ops-feedback Skill** 提交一次执行反馈。
@@ -190,6 +193,7 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 | 模式 | 文件路径 | 说明 |
 |------|---------|------|
 | **意图澄清规则** | `references/rules.md` | **查询前必须阅读** — 人员/时间/SKU 等语义歧义澄清规则 |
+| **结构化提问规范** | `references/ask-user-question-guide.md` | **查询前必须阅读** — AskUserQuestion 使用策略、模板与禁止行为 |
 | CLI 模式索引 | `references/cli.md` | 前置要求、使用原则、字段检查、错误处理、工作流索引 |
 | CLI 查询详解 | `references/cli-simple-guide.md` | `opscli query simple`、`opscli query chart`、辅助脚本 |
 | MCP 模式索引 | `references/mcp.md` | 前置要求、使用原则、字段检查、辅助脚本、错误处理 |

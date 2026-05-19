@@ -13,8 +13,10 @@ description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执
 
 > **【强制】文档阅读顺序**
 >
-> 1. **必须优先阅读 `references/simple-query-guide.md`** — 简化接口参数、使用场景、示例
-> 2. **MCP 简易版 Tool 详解**：`references/mcp-simple-guide.md` — `query_simple`、`query_build_and_run`
+> 1. **必须优先阅读 `references/rules.md`** — 查询前意图澄清规则
+> 2. **必须优先阅读 `references/ask-user-question-guide.md`** — 结构化提问与确认规范
+> 3. **必须优先阅读 `references/simple-query-guide.md`** — 简化接口参数、使用场景、示例
+> 4. **MCP 简易版 Tool 详解**：`references/mcp-simple-guide.md` — `query_simple`、`query_build_and_run`
 
 ---
 
