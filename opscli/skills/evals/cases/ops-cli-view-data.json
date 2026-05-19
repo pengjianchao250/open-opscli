@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "skill": "ops-cli-view-data",
+  "evaluation_type": "static_contract",
+  "min_score": 1.0,
+  "required_skill_files": [
+    "SKILL.md",
+    "data/VERSION.json",
+    "scripts/export_view_data.py"
+  ],
+  "required_skill_terms": [
+    "chart UUID",
+    "--chart-uuid",
+    "--filter-rule",
+    "ops-dataset-query",
+    "field_mappings",
+    "filterable_fields",
+    "Excel",
+    "本地开发闭环"
+  ],
+  "required_script_terms": {
+    "scripts/export_view_data.py": [
+      "--chart-uuid",
+      "--filter-rule",
+      "_find_dataset_query_scripts",
+      "field_mappings",
+      "filterable_fields",
+      "excel_export.py"
+    ]
+  },
+  "agent_prompts": [
+    {
+      "id": "data-export-with-filter-rule",
+      "prompt": "使用 ops-cli-view-data，根据 chart UUID a6104122-3616-46b5-aaac-938861bf3052 和已有 filterRule JSON 导出 Excel。"
+    },
+    {
+      "id": "data-no-runner",
+      "prompt": "我已经有 chart UUID 和 filterRule，只需要查图表数据并导出 Excel，不要重新获取 Analysis View 详情。"
+    }
+  ],
+  "success_criteria": [
+    "只负责 chart 数据查询与 Excel 导出",
+    "不重新解析 Analysis View 运行参数",
+    "优先复用 ops-dataset-query 的 query.py 和 excel_export.py",
+    "把 Analysis View filterRule 注入到底层 query payload"
+  ]
+}

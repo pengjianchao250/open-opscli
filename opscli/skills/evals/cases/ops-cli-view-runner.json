@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "skill": "ops-cli-view-runner",
+  "evaluation_type": "static_contract",
+  "min_score": 1.0,
+  "required_skill_files": [
+    "SKILL.md",
+    "data/VERSION.json",
+    "scripts/run_view.py"
+  ],
+  "required_skill_terms": [
+    "Analysis View ID",
+    "--view-id",
+    "--params",
+    "--params-file",
+    "--allow-empty-params",
+    "needs_input",
+    "missing",
+    "filterRule.rules[]",
+    "ops-cli-view-data",
+    "本地开发闭环"
+  ],
+  "required_script_terms": {
+    "scripts/run_view.py": [
+      "--view-id",
+      "--params",
+      "--params-file",
+      "--allow-empty-params",
+      "_fetch_view_detail",
+      "_find_view_data_script",
+      "needs_input",
+      "missing"
+    ]
+  },
+  "agent_prompts": [
+    {
+      "id": "runner-missing-params",
+      "prompt": "使用 ops-cli-view-runner 运行 Analysis View 10。没有提供运行参数时，先判断缺少哪些参数，不要直接编造参数。"
+    },
+    {
+      "id": "runner-with-params",
+      "prompt": "使用 ops-cli-view-runner 运行 Analysis View 10，参数为 {\"473f5ca149fcdc4a65c8574f6280c78f28e8e4f3\":\"A\"}，导出 Excel。"
+    }
+  ],
+  "success_criteria": [
+    "缺运行参数时返回 needs_input 和 missing 字段",
+    "运行参数 key 使用 missing[].field 或 input_schema.required 字段 ID",
+    "写回 filterRule 时保留运营系统同构结构",
+    "最终数据导出交给 ops-cli-view-data"
+  ]
+}

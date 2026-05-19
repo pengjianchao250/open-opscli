@@ -72,3 +72,11 @@ python scripts/export_view_data.py \
 - 必须已安装 `ops-dataset-query`
 - 远端查询动作由 `ops-dataset-query/scripts/query.py` 转发到正式 `opscli query` 入口
 - Excel 导出由 `ops-dataset-query/scripts/excel_export.py` 完成
+
+---
+
+## 本地开发闭环
+
+- 回归契约：`opscli/skills/evals/cases/ops-cli-view-data.json`
+- 本地执行：`python scripts/skill_dev_loop/run_eval.py --skill ops-cli-view-data --pretty`
+- 改 `SKILL.md` 或 `scripts/export_view_data.py` 后先跑本地 eval；低于 `min_score` 时先修契约失败项，再继续迭代。
