@@ -136,7 +136,7 @@ opscli skills upgrade ops-dataset-query
 | `data/VERSION.json` | 版本号 | `{"name": "ops-dataset-query", "version": "v1.x.x"}` |
 | `data/dataset_catalog.json` | **预定义业务意图集合**（非数据集列表） | version、intent_count、intents（使用案例/关键词/场景/优先级/数据集映射）、query_strategy |
 | `data/dataset_fields.csv` | 字段明细 | dataset_alias、field_name、verbose_name、global_alias、field_type、formula_config、detail_expression、summary_expression 等 |
-| `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_type、dataset_category、data_source、main_dttm_col、cache_timeout、description |
+| `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_category、inner_where_enabled、description、remarks |
 | `data/query_metadata.json` | 查询元数据 | 字段类型映射、可用聚合方式等 |
 
 CSV 各列详细说明见 `references/simple-query-guide.md` 底部附录。
