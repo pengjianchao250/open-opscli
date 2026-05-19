@@ -29,6 +29,7 @@ _TOOL_LABELS = {
     "codex":     "Codex CLI",
     "opencode":  "OpenCode",
     "workbuddy": "WorkBuddy",
+    "trae-cn":   "Trae Solo",
     "central":   "中央存储",
 }
 

@@ -21,12 +21,42 @@
 """
 import json
 import logging
+import threading
 import time
 import stat
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from cryptography.exceptions import InvalidTag
 from opscli.auth.storage.crypto import Crypto
+
+# Keychain 单次操作超时（秒）：超时后自动降级到加密文件，避免命令卡住
+_KEYRING_TIMEOUT = 3
+
+
+def _keyring_call(fn, *args):
+    """在 daemon 线程中执行 keyring 操作，超时后放弃并返回 None。
+
+    keyring.get_password / set_password 在 macOS Keychain 弹框或系统挂起时会无限阻塞。
+    使用 daemon 线程：超时后主线程继续，被放弃的线程不会阻塞进程退出。
+    """
+    result: list = [None]
+    exc: list = [None]
+
+    def _run():
+        try:
+            result[0] = fn(*args)
+        except Exception as e:
+            exc[0] = e
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=_KEYRING_TIMEOUT)
+    if t.is_alive():
+        # 线程仍在运行，说明 Keychain 操作卡住了，放弃并降级
+        return None, "timeout"
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0], "ok"
 
 _logger = logging.getLogger("opscli.auth.storage")
 
@@ -76,11 +106,13 @@ class CredentialStore:
         读取优先级：系统 Keychain > AES-256-GCM 加密文件。
         加密文件解密失败（密钥不匹配）时自动清除损坏文件。
         """
-        # 优先从系统 Keychain 读取
+        # 优先从系统 Keychain 读取，设置超时防止 Keychain 弹框或挂起时命令卡死
         if self._use_keyring:
             try:
-                raw = keyring.get_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT)
-                if raw:
+                raw, _status = _keyring_call(keyring.get_password, _KEYRING_SERVICE, _KEYRING_ACCOUNT)
+                if _status == "timeout":
+                    _logger.debug("Keychain 读取超时（%ds），降级到文件存储", _KEYRING_TIMEOUT)
+                elif raw:
                     return json.loads(raw)
             except keyring.errors.NoKeyringError:
                 pass
@@ -100,11 +132,14 @@ class CredentialStore:
     def _save(self, data: dict):
         """持久化凭证数据，写入 Keychain 或加密文件。"""
         raw = json.dumps(data)
-        # 优先写入系统 Keychain
+        # 优先写入系统 Keychain，设置超时防止挂起
         if self._use_keyring:
             try:
-                keyring.set_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT, raw)
-                return
+                _, _status = _keyring_call(keyring.set_password, _KEYRING_SERVICE, _KEYRING_ACCOUNT, raw)
+                if _status == "timeout":
+                    _logger.debug("Keychain 写入超时（%ds），降级到文件存储", _KEYRING_TIMEOUT)
+                else:
+                    return
             except keyring.errors.NoKeyringError:
                 pass
             except Exception as _kr_exc:

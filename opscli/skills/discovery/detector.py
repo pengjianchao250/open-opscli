@@ -52,6 +52,7 @@ class SkillDetector:
                 home / ".codex" / "skills",
                 self._opencode_skills_dir(),
                 home / ".workbuddy" / "skills",
+                home / ".trae-cn" / "skills",
             ]
         )
 
@@ -125,6 +126,7 @@ class SkillDetector:
             "codex":      current / ".codex" / "skills",
             "opencode":   current / ".opencode" / "skills",
             "workbuddy":  current / ".workbuddy" / "skills",
+            "trae-cn":    current / ".trae-cn" / "skills",
         }
         if preferred_runtime and preferred_runtime in runtime_dirs:
             return preferred_runtime, runtime_dirs[preferred_runtime]
@@ -205,6 +207,10 @@ class SkillDetector:
         if (home / ".workbuddy").exists() or shutil.which("workbuddy") is not None:
             targets.append(("workbuddy", home / ".workbuddy" / "skills"))
 
+        # Trae Solo：~/.trae-cn/ 存在 或 `which trae` 可用（macOS/Linux/Windows 均为用户目录下 .trae-cn）
+        if (home / ".trae-cn").exists() or shutil.which("trae") is not None:
+            targets.append(("trae-cn", home / ".trae-cn" / "skills"))
+
         return self._dedupe_targets(targets)
 
     def detect_all_install_targets(self) -> list[tuple[str, Path]]:
@@ -221,6 +227,7 @@ class SkillDetector:
                 ("codex",      home / ".codex" / "skills"),
                 ("opencode",   self._opencode_skills_dir()),
                 ("workbuddy",  home / ".workbuddy" / "skills"),
+                ("trae-cn",    home / ".trae-cn" / "skills"),
             ]
         )
 
@@ -257,4 +264,6 @@ class SkillDetector:
             return "opencode"
         if ".workbuddy" in parts:
             return "workbuddy"
+        if ".trae-cn" in parts:
+            return "trae-cn"
         return "claude"
