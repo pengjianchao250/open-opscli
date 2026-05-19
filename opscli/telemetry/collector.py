@@ -57,6 +57,7 @@ def build_event(
     error_type: str | None = None,
     user_email: str | None = None,
     skill_name: str | None = None,
+    raw_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """构建标准遥测事件 dict。
 
@@ -69,6 +70,7 @@ def build_event(
         error_type:  异常类名，仅 status=error 时有值
         user_email:  当前登录用户邮箱，未登录时为 None
         skill_name:  调用方 Skill 名称（MCP 环境变量传入）
+        raw_payload: 原始调用参数，CLI 为 {"argv": [...]}, MCP 为 {"params": {...}}
 
     Returns:
         符合后端接口规范的事件 dict
@@ -88,5 +90,6 @@ def build_event(
         "opscli_version": get_version(),
         "os":             sys.platform,
         "skill_name":     skill_name,
+        "raw_payload":    raw_payload,
         "timestamp":      datetime.now(timezone.utc).isoformat(),
     }

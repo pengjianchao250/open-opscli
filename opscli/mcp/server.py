@@ -93,7 +93,11 @@ def _telemetry_wrap(fn):
         start = _time.monotonic()
         try:
             result = await fn(*args, **kwargs)
-            _fire_mcp_event(fn.__name__, status="success", duration_ms=int((_time.monotonic() - start) * 1000))
+            _fire_mcp_event(
+                fn.__name__, status="success",
+                duration_ms=int((_time.monotonic() - start) * 1000),
+                params=kwargs,
+            )
             return result
         except Exception as exc:
             _fire_mcp_event(
@@ -101,13 +105,18 @@ def _telemetry_wrap(fn):
                 status="error",
                 duration_ms=int((_time.monotonic() - start) * 1000),
                 error_type=type(exc).__name__,
+                params=kwargs,
             )
             raise
 
     return _wrapper
 
 
-def _fire_mcp_event(tool_name: str, *, status: str, duration_ms: int, error_type: str | None = None) -> None:
+def _fire_mcp_event(
+    tool_name: str, *, status: str, duration_ms: int,
+    error_type: str | None = None,
+    params: dict | None = None,
+) -> None:
     """异步上报 MCP tool 遥测事件（fire-and-forget）。
 
     Args:
@@ -115,6 +124,7 @@ def _fire_mcp_event(tool_name: str, *, status: str, duration_ms: int, error_type
         status:      "success" 或 "error"
         duration_ms: 耗时毫秒
         error_type:  异常类名（status=error 时有值）
+        params:      tool 调用时传入的参数 dict
     """
     try:
         # 模块名取 tool_name 第一段下划线前的部分，如 query_simple → query
@@ -129,6 +139,7 @@ def _fire_mcp_event(tool_name: str, *, status: str, duration_ms: int, error_type
             status=status,
             duration_ms=duration_ms,
             error_type=error_type,
+            raw_payload={"params": params} if params else None,
         )
         TelemetryReporter.fire(**event)
     except Exception:

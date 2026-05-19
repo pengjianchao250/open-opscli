@@ -70,7 +70,7 @@ def main(
         from opscli.telemetry.collector import build_event, pop_error_type, pop_status
         from opscli.telemetry.reporter import TelemetryReporter
 
-        # sys.argv[1:3] 取命令路径，如 ["query", "run"]，不含参数值
+        # sys.argv[1:] 取完整命令行参数，如 ["query", "run", "--dataset", "xxx"]
         argv = sys.argv[1:]
         command_parts = [p for p in argv[:3] if not p.startswith("-")][:2]
         command = " ".join(command_parts) if command_parts else "(unknown)"
@@ -84,6 +84,7 @@ def main(
             duration_ms=int((time.monotonic() - _start_ms) * 1000),
             error_type=pop_error_type(),
             user_email=_get_current_user_email(),
+            raw_payload={"argv": argv} if argv else None,
         )
         TelemetryReporter.fire(**event)
 
