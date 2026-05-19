@@ -70,24 +70,118 @@ mcp = FastMCP(
     ),
 )
 
-# ── 工具注册（按领域分模块，各模块暴露 register(mcp) 函数）─────────
+# ── 遥测代理（包裹 tool 注册，无侵入采集 MCP Tool 调用数据）──────────
+
+import functools
+import time as _time
+
+
+def _telemetry_wrap(fn):
+    """将 MCP tool 函数包裹遥测装饰器。
+
+    自动记录 tool 名称、耗时、成功/失败状态，
+    命令执行完后异步上报到后端。
+
+    Args:
+        fn: 原始 MCP tool 异步函数
+
+    Returns:
+        包裹了遥测逻辑的新函数（保留原函数签名和文档）
+    """
+    @functools.wraps(fn)
+    async def _wrapper(*args, **kwargs):
+        start = _time.monotonic()
+        try:
+            result = await fn(*args, **kwargs)
+            _fire_mcp_event(fn.__name__, status="success", duration_ms=int((_time.monotonic() - start) * 1000))
+            return result
+        except Exception as exc:
+            _fire_mcp_event(
+                fn.__name__,
+                status="error",
+                duration_ms=int((_time.monotonic() - start) * 1000),
+                error_type=type(exc).__name__,
+            )
+            raise
+
+    return _wrapper
+
+
+def _fire_mcp_event(tool_name: str, *, status: str, duration_ms: int, error_type: str | None = None) -> None:
+    """异步上报 MCP tool 遥测事件（fire-and-forget）。
+
+    Args:
+        tool_name:   MCP tool 函数名，如 "query_simple"
+        status:      "success" 或 "error"
+        duration_ms: 耗时毫秒
+        error_type:  异常类名（status=error 时有值）
+    """
+    try:
+        # 模块名取 tool_name 第一段下划线前的部分，如 query_simple → query
+        module = tool_name.split("_")[0]
+        from opscli.telemetry.collector import build_event
+        from opscli.telemetry.reporter import TelemetryReporter
+
+        event = build_event(
+            event_type="mcp_tool",
+            command=tool_name,
+            module=module,
+            status=status,
+            duration_ms=duration_ms,
+            error_type=error_type,
+        )
+        TelemetryReporter.fire(**event)
+    except Exception:
+        # 遥测自身异常不能影响 MCP 工具的正常返回
+        pass
+
+
+class _TelemetryMcpProxy:
+    """FastMCP 代理，在 tool 注册时自动插入遥测装饰器。
+
+    替换各 register(mcp) 调用中的 mcp 参数，
+    使所有 tool 函数在注册时被 _telemetry_wrap 包裹，
+    无需修改任何 tools/ 模块代码。
+    """
+
+    def __init__(self, real_mcp: FastMCP) -> None:
+        self._real = real_mcp
+
+    def tool(self, *args, **kwargs):
+        """拦截 mcp.tool() 装饰器调用，注册时自动插入遥测包裹。"""
+        real_decorator = self._real.tool(*args, **kwargs)
+
+        def wrap(fn):
+            # 先包裹遥测，再注册到 FastMCP
+            return real_decorator(_telemetry_wrap(fn))
+
+        return wrap
+
+    def __getattr__(self, name: str):
+        """其余属性直接转发到真实 FastMCP 实例。"""
+        return getattr(self._real, name)
+
+
+# ── 工具注册（使用遥测代理，自动包裹所有 tool 函数）──────────────────
+_telemetry_mcp = _TelemetryMcpProxy(mcp)
+
 from opscli.mcp.tools import auth as _auth_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
 from opscli.mcp.tools import feedback as _feedback_tools
 from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import skills as _skills_tools
 
-_auth_tools.register(mcp)
-_chatgpt_tools.register(mcp)
-_feedback_tools.register(mcp)
-_query_tools.register(mcp)
-_skills_tools.register(mcp)
+_auth_tools.register(_telemetry_mcp)
+_chatgpt_tools.register(_telemetry_mcp)
+_feedback_tools.register(_telemetry_mcp)
+_query_tools.register(_telemetry_mcp)
+_skills_tools.register(_telemetry_mcp)
 
 # amazon 工具依赖可选扩展 playwright，未安装时跳过注册不影响其他工具
 try:
     from opscli.mcp.tools import amazon as _amazon_tools
 
-    _amazon_tools.register(mcp)
+    _amazon_tools.register(_telemetry_mcp)
 except (ImportError, ModuleNotFoundError):
     # playwright 或 opscli[amazon] 未安装，amazon_* 工具不可用
     _logger.info("amazon 工具未加载：缺少 playwright 依赖，安装命令：pip install opscli[amazon] && playwright install chromium")
