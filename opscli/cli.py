@@ -58,6 +58,14 @@ def main(
     ),
 ):
     """主回调：为顶级全局选项预留入口，同时注入遥测采集。"""
+    # Windows GBK 编码兜底：防止 Rich 输出 Unicode 字符时崩溃
+    if sys.platform == "win32":
+        for _stream in (sys.stdout, sys.stderr):
+            if hasattr(_stream, "reconfigure"):
+                try:
+                    _stream.reconfigure(errors="replace")
+                except Exception:
+                    pass
     # 版本更新检查（仅 CLI 模式，MCP 入口不经过此处）
     from opscli.shared.update_check import check_and_notify
     check_and_notify()

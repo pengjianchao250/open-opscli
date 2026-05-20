@@ -110,8 +110,8 @@ def get_status(score: float) -> str:
 
 
 def get_status_emoji(status: str) -> str:
-    """获取状态对应的 emoji。"""
-    return {"good": "✅", "warning": "⚠️", "critical": "🔴"}.get(status, "❓")
+    """获取状态对应的标识符号（GBK 兼容）。"""
+    return {"good": "√", "warning": "!", "critical": "X"}.get(status, "?")
 
 
 def calculate_health_score(
@@ -223,7 +223,7 @@ def format_diagnosis(result: dict[str, Any], asin: str, product_name: str, date_
         if metric in ("gross_profit_percent", "convert_percent", "ads_acos", "refund_percent"):
             value_str = f"{value * 100:.1f}%"
         elif metric == "star":
-            value_str = f"{value:.1f}⭐"
+            value_str = f"{value:.1f}"
         else:
             value_str = f"{value:.0f}天"
 

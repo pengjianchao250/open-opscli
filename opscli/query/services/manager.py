@@ -925,7 +925,7 @@ class QueryManager:
                     # 当 expr 与 origin_name 不同（公式字段）时标注差异
                     origin_cell = f"`{origin}`" if origin else "-"
                     if expr and expr != origin:
-                        origin_cell = f"`{origin}` ⚠️ expr=`{expr}`"
+                        origin_cell = f"`{origin}` [!] expr=`{expr}`"
                     md_lines.append(
                         f"| `{mapping.get('field_name') or '-'}` | `{mapping.get('query_alias') or '-'}` | "
                         f"{origin_cell} | `{mapping.get('global_alias') or '-'}` |"

@@ -99,9 +99,9 @@ def login():
         except Exception as _refresh_exc:
             import logging
             logging.getLogger("opscli.auth").debug("登录后 Token 预刷新失败（不影响登录）: %s", _refresh_exc)
-        console.print(f"[green]✓ 授权成功！账号：{result.get('email', '')}[/green]")
+        console.print(f"[green]√ 授权成功！账号：{result.get('email', '')}[/green]")
     except (DeviceFlowExpiredError, DeviceFlowDeniedError) as e:
-        console.print(f"[red]✗ {e}[/red]")
+        console.print(f"[red]× {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -109,7 +109,7 @@ def login():
 def logout():
     """清除本地所有凭证"""
     CredentialStore().clear()
-    console.print("[green]✓ 已退出，本地凭证已清除[/green]")
+    console.print("[green]√ 已退出，本地凭证已清除[/green]")
 
 
 @token_app.command("status")
@@ -161,9 +161,9 @@ def token_check(system: str = typer.Option(..., "--system", "-s")):
     """检测指定系统 JWT 有效性"""
     r = _client().check_token(system)
     if r["valid"]:
-        console.print(f"[green]✓ 有效[/green]  剩余 {r['expires_in']} 秒")
+        console.print(f"[green]√ 有效[/green]  剩余 {r['expires_in']} 秒")
     else:
-        console.print("[red]✗ 已过期或未获取[/red]")
+        console.print("[red]× 已过期或未获取[/red]")
         raise typer.Exit(1)
 
 
@@ -176,14 +176,14 @@ def token_refresh(
     c = _client()
     if all_systems:
         for alias, st in c._tm.refresh_all().items():
-            icon = "[green]✓[/green]" if st == "ok" else "[red]✗[/red]"
+            icon = "[green]√[/green]" if st == "ok" else "[red]×[/red]"
             console.print(f"{icon} {alias}: {st}")
     elif system:
         try:
             c.refresh_token(system)
-            console.print(f"[green]✓ {system} JWT 已刷新[/green]")
+            console.print(f"[green]√ {system} JWT 已刷新[/green]")
         except Exception as e:
-            console.print(f"[red]✗ {e}[/red]")
+            console.print(f"[red]× {e}[/red]")
             raise typer.Exit(1)
     else:
         console.print("[red]请指定 --system 或 --all[/red]")
@@ -217,9 +217,9 @@ def system_sync():
         resp.raise_for_status()
         systems = resp.json().get("systems", [])
         _registry().sync_from_ops(systems)
-        console.print(f"[green]✓ 同步完成，共 {len(systems)} 个系统[/green]")
+        console.print(f"[green]√ 同步完成，共 {len(systems)} 个系统[/green]")
     except Exception as e:
-        console.print(f"[red]✗ 同步失败: {e}[/red]")
+        console.print(f"[red]× 同步失败: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -232,7 +232,7 @@ def system_add(
     """手动添加系统实例（source=local）"""
     system_key = key or alias.replace(" ", "_").lower()
     _registry().add_local(alias, system_key, url)
-    console.print(f"[green]✓ 已添加：{alias}[/green]")
+    console.print(f"[green]√ 已添加：{alias}[/green]")
 
 
 @system_app.command("remove")
@@ -240,7 +240,7 @@ def system_remove(alias: str = typer.Option(..., "--alias")):
     """移除手动添加的系统"""
     try:
         _registry().remove(alias)
-        console.print(f"[green]✓ 已移除：{alias}[/green]")
+        console.print(f"[green]√ 已移除：{alias}[/green]")
     except SystemNotFoundError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
@@ -254,12 +254,12 @@ def doctor():
     c = _client()
     console.print("[bold]opscli auth 环境检查\n[/bold]")
     if c.is_authenticated():
-        console.print("[green]✓ 已登录[/green]")
+        console.print("[green]√ 已登录[/green]")
     else:
-        console.print("[red]✗ 未登录（运行 opscli auth login）[/red]")
+        console.print("[red]× 未登录（运行 opscli auth login）[/red]")
     for s in c._registry.list_all():
         try:
             httpx.get(s["url"], timeout=5)
-            console.print(f"[green]✓ {s['alias']} 可访问[/green]")
+            console.print(f"[green]√ {s['alias']} 可访问[/green]")
         except Exception:
-            console.print(f"[red]✗ {s['alias']} 不可达 ({s['url']})[/red]")
+            console.print(f"[red]× {s['alias']} 不可达 ({s['url']})[/red]")

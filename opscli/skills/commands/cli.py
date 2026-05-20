@@ -323,7 +323,7 @@ def _install_interactive(
                 _print_install_line(install)
         except Exception as exc:
             errors.append(f"{skill_name}: {exc}")
-            _console.print(f"  [red]✗[/red] [bold]{skill_name}[/bold] [red]{exc}[/red]")
+            _console.print(f"  [red]×[/red] [bold]{skill_name}[/bold] [red]{exc}[/red]")
 
     # 批量安装结束后：如果安装了 ops-feedback，统一注入铁律（去重）
     if "ops-feedback" in skill_names and not skills_dir and all_installs:
@@ -357,7 +357,7 @@ def _install_interactive(
 def _print_install_line(install: object) -> None:
     """打印单条安装结果行。"""
     replaced = getattr(install, "replaced", False)
-    status_icon = "↻" if replaced else "✓"
+    status_icon = "↑" if replaced else "√"
     name = getattr(install, "name", "")
     version = getattr(install, "version", "")
     runtime = getattr(install, "runtime", "")
@@ -461,7 +461,7 @@ def link_skill(
                 "method": link_result.method,
                 "replaced": link_result.replaced,
             })
-            action = "↻" if link_result.replaced else "✓"
+            action = "↑" if link_result.replaced else "√"
             label = _TOOL_LABELS.get(target_runtime, target_runtime)
             _console.print(f"  [green]{action}[/green] [bold]{name}[/bold] → [cyan]{label}[/cyan] [dim]({link_result.link_path})[/dim]")
 
@@ -505,7 +505,7 @@ def unlink_skill(
             label = _TOOL_LABELS.get(target_runtime, target_runtime)
             if ok:
                 removed.append({"tool": runtime_to_tool_name(target_runtime), "path": str(link_path)})
-                _console.print(f"  [green]✓[/green] 已移除 [bold]{name}[/bold] 的链接（{label}）")
+                _console.print(f"  [green]√[/green] 已移除 [bold]{name}[/bold] 的链接（{label}）")
             else:
                 skipped.append({"tool": runtime_to_tool_name(target_runtime), "path": str(link_path)})
                 _console.print(f"  [dim]- {name} 在 {label} 中不存在，跳过[/dim]")

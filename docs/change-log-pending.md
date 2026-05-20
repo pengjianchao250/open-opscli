@@ -1,5 +1,19 @@
 # 待归档变更记录
 
+## 2026-05-20 全局 - 修复 Windows GBK 编码崩溃
+
+**变更原因**：`opscli skills install`、`opscli auth doctor`、`opscli auth token refresh --all` 等命令在 Windows PowerShell（GBK 编码）下因输出 `↻` `✓` `✗` `⚠️` `✅` `🔴` `❓` `⭐` 等 Unicode 字符触发 `UnicodeEncodeError` 导致命令崩溃。
+**改动点**：
+- `opscli/skills/commands/cli.py`：`↻` → `↑`，`✓` → `√`，`✗` → `×`
+- `opscli/auth/cli.py`：`✓` → `√`（18 处），`✗` → `×`（8 处）
+- `opscli/query/services/manager.py`：`⚠️` → `[!]`（1 处）
+- `opscli/skills/templates/ops-asin-health-diagnoser/scripts/core.py`：`✅` → `√`，`⚠️` → `!`，`🔴` → `X`，`❓` → `?`，`⭐` 移除
+- `opscli/cli.py`：CLI 入口 `main()` 增加 Windows 编码兜底（`sys.stdout/stderr.reconfigure(errors='replace')`）
+**验证结果**：全面扫描后确认终端输出路径不再有 GBK 不兼容字符
+**影响范围**：所有 CLI 命令和 Skill 脚本的终端状态图标；Windows 用户不再因 GBK 编码崩溃
+**回滚方式**：还原各字符替换，删除 `cli.py` 中 Windows 编码兜底代码块
+---
+
 ## 2026-05-15 ops-amazon-rufus Skill - 登录中断不提交 feedback
 
 **变更原因**：Rufus 采集依赖 Amazon 人工登录态，`RUFUS_LOGIN_REQUIRED` 和登录态导致的 `SEED_REQUEST_NOT_CAPTURED` 是正常交互中断，不应触发项目级失败反馈规则或生成 feedback 文件。
