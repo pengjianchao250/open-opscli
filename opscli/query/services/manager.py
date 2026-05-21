@@ -11,6 +11,7 @@ from pathlib import Path
 from opscli.auth import AuthClient
 from opscli.query.domain.exceptions import DatasetNotFoundError, InvalidPayloadError, QueryMetadataNotReadyError
 from opscli.query.domain.models import QueryMetadataResult
+from opscli.query.services.intent_matcher import match_catalog_intents
 from opscli.query.transport.client import QueryClient
 from opscli.skills.discovery.detector import SkillDetector
 
@@ -1341,6 +1342,27 @@ class QueryManager:
     ) -> dict:
         """读取本地 dataset catalog（兼容旧调用语义）。"""
         return self._load_dataset_catalog(skills_dir=skills_dir, cwd=cwd)
+
+    def intent_match(
+        self,
+        *,
+        query: str,
+        skills_dir: str | None = None,
+        cwd: Path | None = None,
+        source: str = "remote",
+        fallback_local: bool = True,
+    ) -> dict:
+        """按自然语言需求匹配 dataset catalog intents。
+
+        返回匹配候选、是否需要用户确认，以及命中 intent 中携带的业务约束。
+        """
+        catalog = self.catalog(
+            skills_dir=skills_dir,
+            cwd=cwd,
+            source=source,
+            fallback_local=fallback_local,
+        )
+        return match_catalog_intents(catalog, query)
 
     def _load_dataset_catalog(self, *, skills_dir: str | None, cwd: Path | None) -> dict:
         """从已安装 Skill 或内置模板中读取 dataset_catalog.json。"""

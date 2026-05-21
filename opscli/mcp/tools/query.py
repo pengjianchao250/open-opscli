@@ -4,6 +4,7 @@
 - query_spec_must_read  — ！！！【重要】读取查询规范文档（先检测 Skill 状态，未安装或已禁用时必须调用）
 - query_metadata        — 查询数据集 metadata（维度/指标字段）
 - query_catalog         — 读取数据集业务语义索引（自然语言匹配数据集）
+- query_intent_match    — 根据自然语言需求匹配 catalog intents 并返回约束
 - query_build           — 构造标准 query payload（不执行）
 - query_run             — 读取本地 payload 文件并执行查询
 - query_build_and_run   — 构造 payload 并立即执行，一步返回结果
@@ -143,6 +144,44 @@ async def query_catalog(
     sid, jw = _get_auth_pair("ops", session_id, jwt)
     try:
         result = _query_manager(jwt=jw, session_id=sid).catalog(
+            skills_dir=skills_dir,
+            source=source,
+            fallback_local=fallback_local,
+        )
+        return _ok(result)
+    except Exception as exc:
+        return _err(exc)
+
+
+async def query_intent_match(
+    query: str,
+    skills_dir: str | None = None,
+    source: str = "remote",
+    fallback_local: bool = True,
+    session_id: str | None = None,
+    jwt: str | None = None,
+) -> dict:
+    """根据自然语言需求匹配 dataset catalog intents。
+
+    当用户未显式指定 dataset/table_id 时，应先调用本工具。返回的
+    intent_constraints 包含 scenario_description、default_filters、
+    comparison_strategy、recommended_dimensions、recommended_metrics 等业务约束；
+    后续构造查询时必须优先遵循这些约束，再进行字段存在性校验。
+
+    Args:
+        query: 自然语言查询需求
+        skills_dir: 可选，自定义 Skills 目录（用于读取本地缓存 catalog）
+        source: 数据来源，remote（默认）或 local
+        fallback_local: source=remote 时，远端失败是否回退本地缓存
+        session_id: 可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
+        jwt: 可选，已有 JWT（为空则自动加载本地缓存的）
+    """
+    from opscli.mcp.tools.helpers import _get_auth_pair
+
+    sid, jw = _get_auth_pair("ops", session_id, jwt)
+    try:
+        result = _query_manager(jwt=jw, session_id=sid).intent_match(
+            query=query,
             skills_dir=skills_dir,
             source=source,
             fallback_local=fallback_local,
@@ -553,6 +592,7 @@ _ALL_TOOLS = [
     query_spec_must_read,
     query_metadata,
     query_catalog,
+    query_intent_match,
     query_simple,
     query_build,
     query_run,

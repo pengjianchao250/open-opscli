@@ -98,6 +98,36 @@ def catalog(
     _emit(payload, pretty)
 
 
+@app.command("intent")
+def intent(
+    query: str = typer.Option(..., "--query", "-q", help="自然语言查询需求"),
+    source: str = typer.Option("remote", "--source", help="数据来源: remote 或 local"),
+    fallback_local: bool = typer.Option(True, "--fallback-local/--no-fallback-local", help="远端失败时回退本地缓存"),
+    skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 目录"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """将自然语言需求匹配到 dataset catalog intents。"""
+    manager = QueryManager()
+    try:
+        result = manager.intent_match(
+            query=query,
+            skills_dir=skills_dir,
+            source=source,
+            fallback_local=fallback_local,
+        )
+        payload = {
+            "success": True,
+            "command": "query intent",
+            "data": result,
+            "error": None,
+        }
+    except Exception as exc:
+        _emit(_error_payload("query intent", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
 @app.command("run")
 def run(
     payload_path: str = typer.Option(..., "--payload", help="查询 JSON 文件路径"),

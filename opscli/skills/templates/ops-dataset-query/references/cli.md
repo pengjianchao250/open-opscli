@@ -24,8 +24,8 @@ description: 使用本地缓存的数据集与字段索引辅助检索和查询�
 
 > **认证按动作触发**：本地只读检索不要求登录；涉及远端 catalog、远端执行或升级时，必须先检测是否已授权登录。
 
-- 本地只读动作可直接执行：`python scripts/search.py`、`opscli query catalog --source local`、`opscli query metadata`
-- 远端动作前先执行 `opscli auth token status`：`opscli query catalog`、`opscli query simple --run`、`opscli query chart --run`、`opscli skills upgrade ops-dataset-query`
+- 本地只读动作可直接执行：`python scripts/search.py`、`opscli query catalog --source local`、`opscli query intent --source local`、`opscli query metadata`
+- 远端动作前先执行 `opscli auth token status`：`opscli query catalog`、`opscli query intent`、`opscli query simple --run`、`opscli query chart --run`、`opscli skills upgrade ops-dataset-query`
 - 若状态中出现“未登录 / 未授权 / Token 过期 / expired / 401”，必须立即调用 `ops-auth` Skill
 - 若是“未登录 / 未授权 / 401”，在 `ops-auth` 中执行 `opscli auth login`
 - 若是 JWT Token 过期，优先执行 `opscli auth token refresh --all` 或 `opscli auth token refresh -s ops`；刷新失败再执行 `opscli auth login`
@@ -68,7 +68,8 @@ opscli auth token status
 
 标准顺序：
 
-1. 先确认目标 `dataset_alias` 是否存在于 `data/datasets.csv`，或用 `opscli query metadata`（无参数）查看数据集列表
+0. 若用户未显式指定 `dataset_alias/table_id`，必须先执行 `opscli query intent --query "<用户自然语言需求>" --pretty`，按返回的 `intent_constraints` 确认业务口径和查询约束
+1. 已确认目标数据集后，确认目标 `dataset_alias` 是否存在于 `data/datasets.csv`，或用 `opscli query metadata`（无参数）查看数据集列表
 2. 再确认目标字段是否存在于 `data/dataset_fields.csv`
 3. 如需获取**最新**字段信息（含公式字段、聚合方式、表达式结构），执行 `opscli query metadata --dataset <dataset_alias> --pretty`（远端优先，自动回退本地）
 4. 如果数据集或字段不存在，先检查本地数据是否为空/placeholder；为空时执行 `opscli skills upgrade ops-dataset-query`
@@ -95,7 +96,10 @@ python scripts/search.py "广告" -n 20
 推荐检查方式：
 
 ```bash
-# 1. 先确认数据集
+# 0. 用户未指定数据集时，先做意图匹配
+opscli query intent --query "查看库存周转趋势" --pretty
+
+# 1. 意图匹配确认数据集后，再确认数据集
 python scripts/search.py sales_order_d -n 20
 
 # 2. 在指定数据集内确认字段
@@ -275,10 +279,45 @@ opscli query catalog --skills-dir ~/.claude/skills --pretty
 
 ---
 
+### `opscli query intent`
+
+> **强制入口**：用户未指定 dataset/table_id 时，必须先用该命令匹配 catalog intents。返回的 `intent_constraints` 包含 intent 中定义的业务口径、查询规则和约束，后续构造查询时必须优先采用，再进行字段校验。
+
+```
+选项：
+  --query / -q TEXT   自然语言查询需求
+  --source TEXT       数据来源：remote（默认）或 local
+  --fallback-local / --no-fallback-local
+                      远端失败时是否回退本地缓存
+  --skills-dir TEXT   指定 Skill 目录
+  --pretty            格式化 JSON 输出
+```
+
+```bash
+opscli query intent --query "查看库存周转趋势" --pretty
+opscli query intent -q "财务口径销售额月环比" --source local --pretty
+```
+
+返回重点字段：
+
+| 字段 | 说明 |
+|------|------|
+| `matched` | 是否命中 catalog intent |
+| `selected` | 唯一命中时的推荐 intent；多候选时为 `null` |
+| `candidates` | 候选 intent 列表，含 `dataset_alias`、`table_id`、`score`、`matched_terms` |
+| `ask_user_question_required` | 为 `true` 时必须结构化确认候选 |
+| `fallback_required` | 为 `true` 时静默回退本地关键词搜索 |
+| `intent_constraints` | 命中 intent 的 `scenario_description`、`notes`、`default_filters`、`comparison_strategy`、推荐字段和扩展规则 |
+
+**约束优先级**：只要 `intent_constraints` 中包含查询口径、规则或约束，后续构造查询必须优先采用；若与公式字段聚合、dataComparison 主周期、查询组件权限校验等硬性铁律冲突，则硬性铁律优先。
+
+---
+
 ## 查询命令索引
 
 | 命令 | 类型 | 说明 | 详细文档 |
 |------|------|------|---------|
+| `opscli query intent` | 意图匹配 | 将自然语言需求匹配到 catalog intents，并返回 intent 约束 | 本文件 |
 | `opscli query simple` | 简易版 | 基于简化参数构造并执行查询（推荐优先使用） | `references/cli-simple-guide.md` |
 | `opscli query chart` | 图表 | 通过图表 ID 获取查询结构并执行，含多 query/小计总计 | `references/cli-simple-guide.md` |
 

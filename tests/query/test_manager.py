@@ -206,6 +206,96 @@ def test_catalog_rejects_invalid_source():
         manager.catalog(source="server")
 
 
+def test_intent_match_exact_keyword_includes_constraints(monkeypatch):
+    manager = QueryManager()
+    monkeypatch.setattr(
+        manager.client,
+        "fetch_dataset_catalog",
+        lambda: {
+            "version": "remote",
+            "intent_count": 1,
+            "intents": [
+                {
+                    "intent_code": "inventory_turnover_analysis",
+                    "intent_name": "库存周转分析",
+                    "table_id": 40,
+                    "dataset_alias": "ds_inventory",
+                    "dataset_name": "inventory_set",
+                    "keywords": ["库存周转"],
+                    "scenario_description": "查询库存周转时必须使用快照日期 date_id。",
+                    "comparison_strategy": {"summary_compare": "dataComparison"},
+                    "recommended_dimensions": ["date_id"],
+                    "recommended_metrics": ["turnover_days"],
+                    "default_filters": [{"field": "platform", "operator": "=", "value": "Amazon"}],
+                }
+            ],
+        },
+    )
+
+    result = manager.intent_match(query="查看库存周转趋势")
+
+    assert result["matched"] is True
+    assert result["ask_user_question_required"] is False
+    selected = result["selected"]
+    assert selected["dataset_alias"] == "ds_inventory"
+    assert selected["intent_constraints"]["scenario_description"] == "查询库存周转时必须使用快照日期 date_id。"
+    assert selected["intent_constraints"]["comparison_strategy"] == {"summary_compare": "dataComparison"}
+    assert selected["intent_constraints"]["recommended_metrics"] == ["turnover_days"]
+
+
+def test_intent_match_multiple_candidates_requires_confirmation(monkeypatch):
+    manager = QueryManager()
+    monkeypatch.setattr(
+        manager.client,
+        "fetch_dataset_catalog",
+        lambda: {
+            "version": "remote",
+            "intent_count": 2,
+            "intents": [
+                {
+                    "intent_code": "inventory_daily",
+                    "intent_name": "库存周转日报",
+                    "table_id": 40,
+                    "dataset_alias": "ds_inventory_daily",
+                    "keywords": ["库存周转"],
+                    "priority": 1,
+                },
+                {
+                    "intent_code": "inventory_period",
+                    "intent_name": "库存周转期初期末",
+                    "table_id": 39,
+                    "dataset_alias": "ds_inventory_period",
+                    "keywords": ["库存周转"],
+                    "priority": 2,
+                },
+            ],
+        },
+    )
+
+    result = manager.intent_match(query="库存周转")
+
+    assert result["matched"] is True
+    assert result["ask_user_question_required"] is True
+    assert result["selected"] is None
+    assert {item["dataset_alias"] for item in result["candidates"]} == {"ds_inventory_daily", "ds_inventory_period"}
+
+
+def test_intent_match_empty_catalog_requests_fallback(monkeypatch):
+    manager = QueryManager()
+    monkeypatch.setattr(
+        manager.client,
+        "fetch_dataset_catalog",
+        lambda: {"version": "remote", "intent_count": 0, "intents": []},
+    )
+
+    result = manager.intent_match(query="广告 ACOS")
+
+    assert result["matched"] is False
+    assert result["fallback_required"] is True
+    assert result["fallback_reason"] == "empty_catalog"
+    assert result["fallback_query_keywords"]
+
+
 def test_run_validates_required_payload_structure(tmp_path):
     manager = QueryManager()
     payload_file = tmp_path / "payload.json"

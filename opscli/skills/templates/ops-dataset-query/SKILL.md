@@ -111,7 +111,25 @@ version: v1.0.2
 
 > ⚠️ **catalog ≠ 数据集列表**：catalog 只包含预定义业务意图（intents），不返回数据集列表。需要查看所有可用数据集请用 `opscli query metadata`（CLI）或 `query_metadata()`（MCP）。
 
-当用户只给出自然语言需求、没有指定 dataset 时，**优先使用远端 catalog 的 `intents`** 做意图匹配，从中识别最匹配的数据集别名；仅当 catalog 不可用或 intents 无法匹配时，才回退到本地关键词检索。
+当用户只给出自然语言需求、没有指定 dataset 时，**必须先执行意图匹配入口**：
+
+- CLI 模式：`opscli query intent --query "<用户自然语言需求>" --pretty`
+- MCP 模式：`query_intent_match(query="<用户自然语言需求>")`
+
+该入口会读取远端 catalog 的 `intents` 做匹配，从中识别最匹配的数据集别名；仅当 catalog 不可用或 intents 无法匹配时，才回退到本地关键词检索。禁止跳过意图匹配直接使用本地字段搜索猜测数据集。
+
+### 铁律三-A：Intent 规则和约束优先
+
+`query_intent_match` / `opscli query intent` 返回的 `intent_constraints` 是后续构造查询的业务口径输入，优先级高于通用经验推断。
+
+若命中的 intent 在 `scenario_description`、`notes`、`comparison_strategy`、`default_filters`、`recommended_dimensions`、`recommended_metrics`、`rules`、`constraints`、`query_rules` 等字段中设定了相关查询规则或约束，必须优先采用这些规则和约束，再执行 `query_metadata(dataset=...)` 字段存在性校验。
+
+优先级规则：
+
+1. 不违反硬性查询铁律时，优先使用 intent 中定义的业务口径、过滤条件、对比策略和推荐字段
+2. 若 intent 规则与公式字段聚合、dataComparison 主周期、查询组件权限校验等硬性铁律冲突，硬性铁律优先
+3. 若 intent 规则不完整，再回退到 `references/rules.md` 和 metadata 推断
+4. 不能只提取 `dataset_alias/table_id` 后忽略 `intent_constraints`
 
 **Catalog 命中失败的回退规则（铁律）**：
 
@@ -124,7 +142,7 @@ version: v1.0.2
 **回退流程**：
 
 ```
-catalog 意图匹配 → 无命中
+query_intent_match / opscli query intent → 无命中
   ↓ 静默，不向用户提示未命中
 本地关键词搜索：python scripts/search.py "<关键词>" -n 20
   ↓
@@ -280,10 +298,12 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 ```
 1. 意图澄清（读 references/rules.md）
 2. 认证检查
-3. 数据集 / 字段确认
-4. 执行查询（query_simple / opscli query simple 等）
-5. 输出结果给用户
-6. 【铁律十一】调用 ops-feedback 提交反馈   ← 不可跳过
+3. 未指定 dataset/table_id 时执行 query_intent_match / opscli query intent
+4. 按 intent_constraints 确认业务口径和查询约束
+5. query_metadata / 本地索引校验数据集和字段
+6. 执行查询（query_simple / opscli query simple 等）
+7. 输出结果给用户
+8. 【铁律十一】调用 ops-feedback 提交反馈   ← 不可跳过
 ```
 
 ### 反馈规则速查

@@ -169,6 +169,49 @@ def test_catalog_passes_source_and_fallback_options(monkeypatch):
     }
 
 
+def test_intent_passes_query_and_outputs_match(monkeypatch):
+    class DummyManager:
+        def __init__(self):
+            self.called_with = None
+
+        def intent_match(self, **kwargs):
+            self.called_with = kwargs
+            return {
+                "matched": True,
+                "selected": {"dataset_alias": "ds_sales", "intent_constraints": {"scenario_description": "销售规则"}},
+                "candidates": [],
+            }
+
+    manager = DummyManager()
+    monkeypatch.setattr("opscli.query.commands.cli.QueryManager", lambda: manager)
+
+    result = runner.invoke(
+        app,
+        [
+            "intent",
+            "--query",
+            "查看销售趋势",
+            "--source",
+            "local",
+            "--no-fallback-local",
+            "--skills-dir",
+            "/tmp/skills",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["success"] is True
+    assert payload["command"] == "query intent"
+    assert payload["data"]["selected"]["dataset_alias"] == "ds_sales"
+    assert manager.called_with == {
+        "query": "查看销售趋势",
+        "skills_dir": "/tmp/skills",
+        "source": "local",
+        "fallback_local": False,
+    }
+
+
 def test_run_outputs_query_error_payload(monkeypatch, tmp_path):
     payload_file = tmp_path / "payload.json"
     payload_file.write_text("{}", encoding="utf-8")

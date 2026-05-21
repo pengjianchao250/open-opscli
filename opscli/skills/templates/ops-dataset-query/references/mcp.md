@@ -35,9 +35,9 @@ description: 使用 MCP Tool 查询本地缓存的数据集与字段索引，执
 
 > **认证按动作触发**：本地知识检索不要求登录；涉及远端 catalog、查询执行、图表运行或升级时，必须先完成登录认证。
 
-- 本地只读动作可直接执行：`search`、`fetch`、`query_catalog(source="local")`
+- 本地只读动作可直接执行：`search`、`fetch`、`query_catalog(source="local")`、`query_intent_match(source="local")`
 - `query_metadata` 远端优先，远端失败自动回退本地（无需额外检查）
-- 远端动作前先调用 `auth_is_authenticated()`（**不传 session_id，自动从本地凭证加载**）：`query_catalog()`、`query_simple`、`query_build_and_run`、`query_chart(run=True)`、`skills_upgrade`
+- 远端动作前先调用 `auth_is_authenticated()`（**不传 session_id，自动从本地凭证加载**）：`query_catalog()`、`query_intent_match()`、`query_simple`、`query_build_and_run`、`query_chart(run=True)`、`skills_upgrade`
 - 若返回 `false` 或报错，说明未登录或凭证已过期，按下方模式选择登录方式
 
 ### 登录方式选择
@@ -113,7 +113,8 @@ auth_login_start()  # → 用户浏览器授权 → auth_login_poll(device_code=
 > 在 MCP 模式下，构造任何 query 参数前，必须先确认目标数据集和字段真实存在；**搜索结果为空时，先判断本地数据是否已初始化，再决定是否升级**。
 
 **标准顺序**：
-1. 用 `search(query="...")` 或 `fetch(id="...")` 确认目标 `dataset_alias` 和字段
+0. 若用户未显式指定 `dataset_alias/table_id`，必须先调用 `query_intent_match(query="<用户自然语言需求>")`，按返回的 `intent_constraints` 确认业务口径和查询约束
+1. 已确认目标数据集后，用 `search(query="...")` 或 `fetch(id="...")` 确认目标 `dataset_alias` 和字段
 2. 用 `query_metadata()`（无参数）查看可用数据集列表
 3. 如需获取**最新**字段信息（含公式字段、聚合方式），调用 `query_metadata(dataset="<alias>")`（远端优先，自动回退本地）
 4. 如果数据集或字段不存在，先检查本地数据是否为空/placeholder
@@ -182,6 +183,7 @@ CSV 各列详细说明见 `references/simple-query-guide.md` 底部附录。
 |------|------|---------|---------|
 | `query_metadata` | 读取数据集 metadata。**无参数返回数据集列表**（不含 `select_columns`）；指定 `dataset` 参数时远端优先获取最新字段及 `select_columns` 查询组件列表 | 远端时需要 | `references/mcp-simple-guide.md` |
 | `query_catalog` | 将 NL 需求与**预定义业务意图（intents）匹配**，识别目标数据集（**非数据集列表**，查数据集列表请用 `query_metadata`） | 远端时需要 | `references/mcp-simple-guide.md` |
+| `query_intent_match` | 根据自然语言需求匹配 catalog intents，并返回候选数据集、是否需要用户确认、`intent_constraints` 查询规则约束 | 远端时需要 | 本文件 |
 
 ---
 
@@ -248,10 +250,11 @@ CSV 各列详细说明见 `references/simple-query-guide.md` 底部附录。
 1. 检查 session 有效性（auth_is_authenticated）
    → 无效则重新 Device Flow 授权
 
-2. 远程 catalog 意图分析（query_catalog）
+2. 远程 catalog 意图分析（query_intent_match）
    → 从 intents 中匹配 use_cases / keywords / scenario_description
    → 按 priority 选择最佳候选
-   → 提取 table_id、dataset_alias、default_filters、comparison_strategy
+   → 提取 table_id、dataset_alias、intent_constraints
+   → 若 intent_constraints 中有 scenario_description / notes / comparison_strategy / default_filters / recommended 字段 / rules / constraints，后续查询必须优先采用这些规则和约束
 
 3. 用本地索引校验目标字段
    → search(query="<field_name>") 或 query_metadata(dataset="<dataset_alias>")
