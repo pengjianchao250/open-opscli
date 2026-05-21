@@ -121,7 +121,25 @@ class QueryManager:
             item for item in fields
             if int(item.get("table_id", -1)) == int(matched.get("table_id", -1))
         ]
-        return QueryMetadataResult(dataset=matched, fields=matched_fields, source=source)
+
+        # 提取查询组件（select_columns）：远端直接嵌套在 dataset 对象内；
+        # 本地回退时从 dataset_select_columns.csv 按 dataset_alias 读取
+        select_columns = list(matched.get("select_columns") or [])
+        if not select_columns and source == "local":
+            matched_alias = str(matched.get("dataset_alias") or "")
+            if matched_alias:
+                select_columns = self._load_select_columns_from_csv(
+                    dataset_alias=matched_alias,
+                    skills_dir=skills_dir,
+                    cwd=cwd,
+                )
+
+        return QueryMetadataResult(
+            dataset=matched,
+            fields=matched_fields,
+            source=source,
+            select_columns=select_columns,
+        )
 
     def run(self, *, payload_path: str) -> dict:
         """读取本地 payload 文件并转发执行查询。"""
@@ -299,6 +317,7 @@ class QueryManager:
                 metrics=metrics or [],
                 filters=filters or [],
                 data_comparison=data_comparison,
+                select_columns=metadata.select_columns or [],
             )
 
         payload: dict[str, object] = {
@@ -349,16 +368,27 @@ class QueryManager:
         metrics: list[dict],
         filters: list[dict],
         data_comparison: dict | None,
+        select_columns: list[dict] | None = None,
     ) -> None:
         """校验 simple query 参数中的字段均能唯一落到当前数据集 metadata。
 
         simple 查询通常由 Agent 根据自然语言拼装参数；如果字段名相似、
-        中文名重复或过滤字段未经校验，最容易产生“查得到但口径错”的问题。
+        中文名重复或过滤字段未经校验，最容易产生"查得到但口径错"的问题。
         这里在真正执行前做硬门禁：维度、指标、过滤条件和 dataComparison
         字段都必须在当前 table_id 的 metadata 中唯一命中。
+
+        注意：select_columns（查询组件）中的字段即使不在普通 fields 列表中，
+        也是合法的过滤条件，过滤校验时会跳过这些字段的 metadata 强制匹配。
         """
         if not fields:
             raise InvalidPayloadError("当前数据集 metadata 未返回字段，无法执行字段歧义门禁")
+
+        # 构建查询组件字段名集合（用于 filter 白名单跳过）
+        select_column_names: set[str] = set()
+        for sc in (select_columns or []):
+            col = str(sc.get("column_name") or "").strip().lower()
+            if col:
+                select_column_names.add(col)
 
         for item in dimensions:
             field_ref = self._extract_simple_field_ref(item, context="dimension")
@@ -376,6 +406,10 @@ class QueryManager:
                 )
 
         for field_ref in self._iter_filter_field_refs(filters):
+            # 查询组件字段（select_columns）允许作为过滤条件，即使不在普通字段列表中
+            normalized = self._normalize_simple_field_identifier(field_ref)
+            if normalized in select_column_names:
+                continue
             self._resolve_simple_field(fields, field_ref, field_type=None, context="filter")
 
         if data_comparison:
@@ -1196,6 +1230,53 @@ class QueryManager:
             raise InvalidPayloadError("payload 缺少 tableId")
         if "query" not in payload or not isinstance(payload["query"], dict):
             raise InvalidPayloadError("payload 缺少 query 对象")
+
+    def _load_select_columns_from_csv(
+        self,
+        *,
+        dataset_alias: str,
+        skills_dir: str | None,
+        cwd: Path | None,
+    ) -> list[dict]:
+        """从本地 dataset_select_columns.csv 读取指定数据集的查询组件列表。
+
+        用于远端拉取失败、回退本地缓存时补充 select_columns 数据。
+        文件不存在或列为空时静默返回空列表。
+        """
+        import csv
+
+        records = self.detector.discover(skills_dir=skills_dir, cwd=cwd)
+        csv_path: Path | None = None
+        for record in records:
+            if record.name != "ops-dataset-query":
+                continue
+            candidate = record.root / "data" / "dataset_select_columns.csv"
+            if candidate.exists():
+                csv_path = candidate
+                break
+
+        if csv_path is None:
+            candidate = self.template_dir / "dataset_select_columns.csv"
+            if candidate.exists():
+                csv_path = candidate
+
+        if csv_path is None:
+            return []
+
+        try:
+            result: list[dict] = []
+            with csv_path.open(encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get("current_dataset_alias", "").strip() == dataset_alias:
+                        result.append({
+                            "column_name": row.get("column_name", "").strip(),
+                            "verbose_name": row.get("verbose_name", "").strip(),
+                            "component_dataset_alias": row.get("component_dataset_alias", "").strip(),
+                        })
+            return result
+        except Exception:
+            return []
 
     def _load_query_metadata(self, *, skills_dir: str | None, cwd: Path | None) -> dict:
         """从已安装 Skill 或内置模板中读取 query_metadata.json。"""

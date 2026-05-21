@@ -1,5 +1,35 @@
 # 待归档变更记录
 
+## 2026-05-21 ops-dataset-query Skill - 补充 Catalog 命中失败回退规则与库存周转本地意图种子
+
+**变更原因**：本次物控库存周转查询中，远端 catalog 只有1个意图（账单销售趋势），未能命中"库存周转"查询需求。SKILL.md 铁律三对"catalog 未命中时如何回退"的描述不清晰，导致 AI 可能在 catalog 返回少量意图时陷入不确定状态。同时 `data/dataset_catalog.json` 模板种子为空，新用户缺少本地意图 fallback。
+
+**改动点**：
+- `opscli/skills/templates/ops-dataset-query/SKILL.md`：铁律三新增"Catalog 命中失败的回退规则"，明确 intent_count=0 或无匹配时必须立即静默回退到 search.py，不得提示用户或暂停等待
+- `opscli/skills/templates/ops-dataset-query/references/cli.md`：典型工作流新增"Catalog 未命中时的回退工作流"章节，含示例代码和"何时用 catalog vs 本地搜索"对比表
+- `opscli/skills/templates/ops-dataset-query/data/dataset_catalog.json`：从空种子升级为包含2个物控库存周转意图（ds_97zj6R0KDKpB / ds_dI5gNc0YRLrD）的本地 fallback，version 从 v0.0.0 升至 v1.0.1
+
+**验证结果**：`python3 -c "import json; d=json.load(open(...dataset_catalog.json)); print(d['intent_count'])"` 输出 2，intent 字段完整。
+
+**影响范围**：ops-dataset-query Skill 的 AI Agent 行为规范，下次安装/分发模板的新用户可获得本地库存周转意图种子
+
+**回滚方式**：git checkout 还原三个文件
+
+---
+
+## 2026-05-21 ops-dataset-query Skill - 修复 CLI 权限校验文档中的两处错误
+
+**变更原因**：本次物控库存周转查询实际执行过程中，AI 遵循 `references/rules.md` 第12章 CLI 模式步骤时出现两处报错：① `dataset_select_columns.csv` 读取 `KeyError: 'current_dataset_alias'`；② `opscli query simple` 报 `No such option: --dimensions`。
+**改动点**：
+- `references/cli.md`：CSV 读取示例补充 `encoding='utf-8-sig'`，防止 BOM 导致 KeyError
+- `references/rules.md` 第12.3步骤三：CLI 模式示例全部重写，补充"先从 datasets.csv 查整数 table_id"步骤，并改用正确的 `--json` 传参方式替换不存在的 `--dimensions` 参数
+- `references/rules.md` 第12.4示例：CLI 模式权限查询示例同步修正
+- 上述四处修改同时应用于 `opscli/skills/templates/` 和 `~/.claude/skills/` 两个目录
+**验证结果**：本次查询实际执行流程验证可用，修正后的示例代码与实际 CLI 行为一致
+**影响范围**：仅影响 AI Agent 遵循文档执行 CLI 权限校验时的行为，不影响 MCP 模式和实际查询逻辑
+**回滚方式**：还原 `references/cli.md` 和 `references/rules.md` 对应段落至修改前内容
+---
+
 ## 2026-05-20 全局 - 修复 Windows GBK 编码崩溃
 
 **变更原因**：`opscli skills install`、`opscli auth doctor`、`opscli auth token refresh --all` 等命令在 Windows PowerShell（GBK 编码）下因输出 `↻` `✓` `✗` `⚠️` `✅` `🔴` `❓` `⭐` 等 Unicode 字符触发 `UnicodeEncodeError` 导致命令崩溃。

@@ -113,6 +113,26 @@ version: v1.0.2
 
 当用户只给出自然语言需求、没有指定 dataset 时，**优先使用远端 catalog 的 `intents`** 做意图匹配，从中识别最匹配的数据集别名；仅当 catalog 不可用或 intents 无法匹配时，才回退到本地关键词检索。
 
+**Catalog 命中失败的回退规则（铁律）**：
+
+远端 catalog 的意图覆盖有限，维护存在滞后，这属于正常现象。遇到以下任一情况，**必须立即静默回退**到本地关键词搜索，不得向用户提示"catalog 未命中"，不得暂停等待：
+
+- `intent_count` 为 0（空 catalog）
+- 所有 intents 的 `keywords` 均不包含用户查询中的任何关键词
+- `intent_count` < 5 且无任何匹配项
+
+**回退流程**：
+
+```
+catalog 意图匹配 → 无命中
+  ↓ 静默，不向用户提示未命中
+本地关键词搜索：python scripts/search.py "<关键词>" -n 20
+  ↓
+匹配到 1 个数据集 → AskUserQuestion 确认后执行
+匹配到 ≥2 个数据集 → AskUserQuestion 列出候选让用户选择
+匹配到 0 个数据集 → 提示用户无匹配，询问是否查看全量数据集列表（opscli query metadata）
+```
+
 ### 铁律四：字段存在性校验
 
 构造任何 query 参数前，**必须先确认目标数据集和字段真实存在**；搜索结果为空时，先判断本地数据是否已初始化，再决定是否升级。
@@ -168,6 +188,54 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 - 反馈类型按结果区分：查询成功（含降级）→ `query_result`；工具报错/执行异常 → `bug`
 - 禁止以"查询失败"为由跳过反馈——失败场景尤其需要提交，便于追踪错误根因
 - 详细调用方式见下方「查询闭环：调用 ops-feedback 提交反馈」章节
+
+### 铁律十三：查询组件字段必须先校验权限再构造 filter
+
+构造 `filters` 参数前，**必须先获取当前数据集的查询组件列表**，执行两项检查：① 字段合法性扩展，② 枚举权限校验。详细规则见 `references/rules.md` 第十二章。
+
+**两种模式下的查询组件数据来源（必须区分）**：
+
+| 模式 | 获取方式 |
+|------|---------|
+| **CLI 模式** | 读取 `data/dataset_select_columns.csv`，按 `current_dataset_alias` 过滤 |
+| **MCP 模式** | 调用 `query_metadata(dataset="<alias>")`，读取响应中每个 dataset 的 `select_columns` 数组 |
+
+> MCP 模式下 `query_metadata()` 无参数时不含 `select_columns`，**必须加 `dataset` 参数**才能获取到 `select_columns` 列表。
+
+**规则一：查询组件字段是合法筛选条件（扩展字段集）**
+
+查询组件列表中出现的 `column_name`，即使**不在** `dataset_fields.csv`（CLI）或 `query_metadata` 字段列表（MCP）中，也是该数据集的合法 `filters` 条件，可以直接传入查询。
+
+- 不得因字段不在普通字段列表中就拒绝该筛选条件
+- 如用户要用部门筛选广告数据，即使广告数据集没有 `dept_name` 字段，只要查询组件列表有对应记录，就允许传入 `filters`
+
+**规则二：枚举值权限校验（必须在构造 filter 前执行）**
+
+查询组件字段的合法枚举值来自 `component_dataset_alias` 数据集，代表该用户的权限范围。**用户指定该类字段的筛选值前，必须先查询组件数据集验证权限**：
+
+```
+1. 获取查询组件列表 → 找到 column_name 对应的 component_dataset_alias
+   - CLI：dataset_select_columns.csv
+   - MCP：query_metadata(dataset="<alias>") 的 select_columns 数组
+
+2. 查询组件数据集获取合法枚举值
+   - CLI：opscli query simple --table-id <component_dataset_alias> --dimensions <column_name>
+   - MCP：query_simple(table_id="<component_dataset_alias>", dimensions=["<column_name>"])
+
+3. 用户指定的值在列表中 → 有权限，继续构造原始查询
+
+4. 用户指定的值不在列表中 → 无权限：
+   → 告知用户当前账号不包含该值的数据权限
+   → 通过 AskUserQuestion 展示合法值列表，引导用户重新选择
+   → 禁止继续构造或执行原始查询
+```
+
+**禁止行为**：
+- ❌ 忽略查询组件列表，直接凭经验猜测枚举值（如写 `"Amazon"` 或 `"US"`）
+- ❌ 对有 `component_dataset_alias` 的字段使用用户原始输入而不做权限校验
+- ❌ 因字段不在普通字段列表中就拒绝来自查询组件列表的合法筛选条件
+- ❌ 跳过组件数据集查询，直接用用户说的值构造 filter
+- ❌ MCP 模式下用无参数的 `query_metadata()` 来获取 `select_columns`（需要加 `dataset` 参数）
 
 ### 铁律十二：发现新版本提示必须先升级再继续
 

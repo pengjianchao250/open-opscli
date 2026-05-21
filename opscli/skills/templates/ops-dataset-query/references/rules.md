@@ -349,6 +349,12 @@ ACOS、ROAS 等公式指标在多个数据集中存在，但计算口径不同�
          → 在 dataset_fields.csv 中搜索 verbose_name/field_name；多个候选时是否已用 AskUserQuestion 选择
 □ 【公式字段】是否为公式字段？是 → 禁止加 aggregation
          → 检查 summary_expression / detail_expression 是否非空
+□ 【查询组件扩展字段】筛选字段不在普通字段列表但在查询组件列表中？
+         → CLI：检查 dataset_select_columns.csv；MCP：检查 query_metadata(dataset=alias) 的 select_columns
+         → 属于合法筛选条件（见第十二章 12.2），允许作为 filters 使用，不得拒绝
+□ 【查询组件权限校验】filters 中是否存在属于查询组件的字段？
+         → 是 → 先查询 component_dataset_alias 数据集获取合法枚举值列表，确认用户指定的值存在后再查询
+         → 值不在列表中 → 告知无权限，展示合法值列表，用 AskUserQuestion 引导重选
 □ 【default_filters】catalog 的 default_filters 是否已验证可用？
 □ 【参数确认】本次是否使用了推荐值或默认值？如是，执行前是否已用 AskUserQuestion 展示参数摘要并获得确认？
 □ 【输出字段名】输出结果时，列名和指标名称是否使用了数据集原始字段名？
@@ -430,3 +436,135 @@ ACOS、ROAS 等公式指标在多个数据集中存在，但计算口径不同�
 - 库存数据通常是"快照型"数据，而非"流水型"数据
 - 对指定产品查库存的核心需求是"现在还有多少货"，而非历史上各时间点有多少
 - 不加聚合直接查最新快照，避免因时间维度聚合导致结果不直观或数据量过大
+
+---
+
+## 十二、查询组件权限校验规则
+
+### 12.1 什么是查询组件字段
+
+**定义**：每个数据集都可配置若干"查询组件"（Select Column）。这类字段的合法枚举值由 `component_dataset_alias` 数据集动态提供，代表当前用户可使用的权限范围。
+
+**两种模式下的数据来源不同（必须区分）**：
+
+| 模式 | 数据来源 | 说明 |
+|------|---------|------|
+| **CLI 模式** | `data/dataset_select_columns.csv` | 本地缓存的平铺 CSV 文件，需按 `current_dataset_alias` 过滤 |
+| **MCP 模式** | `query_metadata(dataset="<alias>")` 响应中的 `select_columns` 数组 | API 直接返回，每个 dataset 对象内嵌套 `select_columns` 列表 |
+
+**CLI 模式 CSV 结构**：
+
+| 列名 | 含义 |
+|------|------|
+| `current_dataset_alias` | 当前查询的数据集 alias |
+| `column_name` | 查询组件字段名（筛选维度） |
+| `verbose_name` | 中文显示名 |
+| `component_dataset_alias` | 枚举值来源数据集 alias |
+
+**MCP 模式响应结构示例**（`query_metadata` 返回的 `datasets` 列表中每个元素）：
+
+```json
+{
+  "table_id": 1,
+  "dataset_alias": "ds_d35ac6f3910c",
+  "dataset_name": "即时综合数据集",
+  "select_columns": [
+    {
+      "column_name": "platform_name",
+      "verbose_name": "平台",
+      "component_dataset_alias": "ds_3d2714e6d40e"
+    },
+    {
+      "column_name": "dept_name",
+      "verbose_name": "部门",
+      "component_dataset_alias": "ds_1n8a4K0d7yBB"
+    }
+  ]
+}
+```
+
+> **MCP 模式注意**：`query_metadata()` 无参数时只返回数据集列表（不含 `select_columns`）；调用 `query_metadata(dataset="<alias>")` 才能获取包含 `select_columns` 的完整数据集信息。
+
+### 12.2 查询组件字段是合法的筛选条件（扩展字段集规则）
+
+> **核心规则**：`dataset_select_columns.csv` 中出现的 `column_name`，即使该字段**不存在于** `dataset_fields.csv` 的对应数据集字段列表中，也是该数据集的**合法筛选条件**，可以直接作为 `filters` 参数传入查询。
+
+**典型场景**：广告数据集本身没有 `dept_name`（部门名称）字段，但 `dataset_select_columns.csv` 记录了该广告数据集关联了 `dept_name` 查询组件，则 `dept_name` 可以作为广告数据集的筛选条件使用。
+
+**处理规则**：
+- 校验筛选字段是否合法时，必须同时检查 `dataset_fields.csv` **和** `dataset_select_columns.csv`
+- 只要字段出现在 `dataset_select_columns.csv` 中对应数据集（`current_dataset_alias`）的 `column_name` 列，就允许作为 `filters` 使用
+- 不得因字段不在 `dataset_fields.csv` 中就拒绝该筛选条件
+
+### 12.3 权限校验流程（枚举值来源验证）
+
+当用户提供的筛选值涉及查询组件字段时，**必须先验证该值在用户权限范围内**，再构造查询。
+
+**校验步骤**：
+
+```
+第一步：获取当前数据集的查询组件列表
+  - CLI 模式：读取 data/dataset_select_columns.csv，过滤 current_dataset_alias = 当前数据集
+  - MCP 模式：调用 query_metadata(dataset="<alias>")，读取响应中的 select_columns 数组
+  筛选字段（如 platform_name）是否出现在 column_name 列表中？
+  ↓ 否 → 按普通字段处理，跳过权限校验
+  ↓ 是 → 继续以下步骤
+
+第二步：获取 component_dataset_alias（枚举值来源数据集）
+
+第三步：查询 component_dataset_alias 数据集
+  - CLI 模式：
+    ① 先从 datasets.csv 查出 component_dataset_alias 对应的整数 table_id（--table-id 只接受整数，不接受 alias）：
+       python3 -c "
+       import csv
+       with open('data/datasets.csv', encoding='utf-8-sig') as f:
+           rows = list(csv.DictReader(f))
+       row = next((r for r in rows if r['dataset_alias'] == '<component_dataset_alias>'), None)
+       print(row['table_id'] if row else 'NOT FOUND')
+       "
+    ② 用整数 table_id 执行查询（注意：--json 传参，不支持 --dimensions 独立参数）：
+       opscli query simple --table-id <integer_table_id> \
+         --json '{"dimensions":[{"field":"<column_name>","alias":"f_col"}],"limit":100}' \
+         --run --pretty
+  - MCP 模式：query_simple(table_id="<component_dataset_alias>", dimensions=["<column_name>"])
+  不传 filters，目的是获取该用户下的合法枚举值列表
+
+第四步：检查用户指定的筛选值是否在合法值列表中
+  ↓ 在列表中 → 有权限，继续构造原始查询
+  ↓ 不在列表中 → 无权限，执行 12.4 无权限处理流程
+```
+
+### 12.4 无权限时的处理
+
+- **明确告知用户**：该筛选值（如 "Amazon"）在当前账号的权限范围内不存在
+- **展示合法值列表**：即 `component_dataset_alias` 查询返回的枚举值，供用户选择
+- **停止原始查询**：禁止继续构造或执行原始查询
+- **引导用户**：使用 `AskUserQuestion` 让用户从合法值列表中选择，或告知其联系管理员获取权限
+
+**示例流程**：
+
+```
+用户请求：查询 Amazon 平台的广告数据
+
+第一步：读取 dataset_select_columns.csv
+→ ads_dataset 数据集的 platform_name 查询组件，component_dataset_alias = platform_component
+
+第二步：查询 platform_component 数据集获取合法平台列表
+→ CLI 模式：先从 datasets.csv 查出 platform_component 对应的整数 table_id，再执行：
+   opscli query simple --table-id <integer_id> \
+     --json '{"dimensions":[{"field":"platform_name","alias":"f_platform"}],"limit":100}' \
+     --run --pretty
+→ MCP 模式：query_simple(table_id="platform_component", dimensions=["platform_name"])
+→ 返回：["Temu", "TikTok Shop", "Walmart"]
+
+第三步：用户指定 "Amazon" 不在列表中
+→ 无权限，告知用户：当前账号不包含 Amazon 平台的数据权限
+→ 通过 AskUserQuestion 展示可用平台列表，建议选择其一
+→ 停止原查询，等待用户重新确认筛选条件
+```
+
+### 12.5 本章规则与其他规则的优先级
+
+- 本章权限校验优先于字段匹配（第六章）执行 — 即使字段确认无歧义，也必须先过权限校验
+- 本章扩展字段集规则（12.2）与第六章字段存在性校验并列适用 — 两个来源都算合法字段
+- 本章规则不影响 `dataset_fields.csv` 中的维度/指标字段的正常聚合逻辑

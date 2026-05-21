@@ -151,7 +151,8 @@ auth_login_start()  # → 用户浏览器授权 → auth_login_poll(device_code=
 | `data/VERSION.json` | 版本号 | `{"name": "ops-dataset-query", "version": "v1.x.x"}` |
 | `data/dataset_catalog.json` | **预定义业务意图集合**（非数据集列表） | version、intent_count、intents、query_strategy |
 | `data/dataset_fields.csv` | 字段明细 | dataset_alias、field_name、verbose_name、global_alias、field_type、formula_config 等 |
-| `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_category、inner_where_enabled、description、remarks |
+| `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_category、inner_where_enabled、description、remarks、select_column_count、select_column_names |
+| `data/dataset_select_columns.csv` | 查询组件关联（CLI 模式备用） | current_dataset_alias、column_name、verbose_name、component_dataset_alias |
 | `data/query_metadata.json` | 查询元数据 | 字段类型映射、可用聚合方式等 |
 
 CSV 各列详细说明见 `references/simple-query-guide.md` 底部附录。
@@ -179,7 +180,7 @@ CSV 各列详细说明见 `references/simple-query-guide.md` 底部附录。
 
 | Tool | 用途 | 认证要求 | 详细文档 |
 |------|------|---------|---------|
-| `query_metadata` | 读取数据集 metadata。**无参数返回数据集列表**；指定参数时远端优先获取最新字段 | 远端时需要 | `references/mcp-simple-guide.md` |
+| `query_metadata` | 读取数据集 metadata。**无参数返回数据集列表**（不含 `select_columns`）；指定 `dataset` 参数时远端优先获取最新字段及 `select_columns` 查询组件列表 | 远端时需要 | `references/mcp-simple-guide.md` |
 | `query_catalog` | 将 NL 需求与**预定义业务意图（intents）匹配**，识别目标数据集（**非数据集列表**，查数据集列表请用 `query_metadata`） | 远端时需要 | `references/mcp-simple-guide.md` |
 
 ---

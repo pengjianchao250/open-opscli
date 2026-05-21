@@ -138,10 +138,51 @@ opscli skills upgrade ops-dataset-query
 | `data/VERSION.json` | 版本号 | `{"name": "ops-dataset-query", "version": "v1.x.x"}` |
 | `data/dataset_catalog.json` | **预定义业务意图集合**（非数据集列表） | version、intent_count、intents（使用案例/关键词/场景/优先级/数据集映射）、query_strategy |
 | `data/dataset_fields.csv` | 字段明细 | dataset_alias、field_name、verbose_name、global_alias、field_type、formula_config、detail_expression、summary_expression 等 |
-| `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_category、inner_where_enabled、description、remarks |
+| `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_category、inner_where_enabled、description、remarks、select_column_count、select_column_names |
+| `data/dataset_select_columns.csv` | **查询组件关联** | current_dataset_alias、column_name、verbose_name、component_dataset_alias |
 | `data/query_metadata.json` | 查询元数据 | 字段类型映射、可用聚合方式等 |
 
 CSV 各列详细说明见 `references/simple-query-guide.md` 底部附录。
+
+### `data/dataset_select_columns.csv` 使用说明
+
+查询组件关联表描述了每个数据集预配置的**可枚举筛选维度**（select column），以及该维度的枚举值来自哪个数据集。
+
+| 列名 | 含义 |
+|------|------|
+| `current_dataset_alias` | 当前要查询的数据集 alias |
+| `column_name` | 查询组件的字段名（筛选维度） |
+| `verbose_name` | 查询组件的中文显示名 |
+| `component_dataset_alias` | 枚举值来源数据集的 alias（可用此别名查询合法枚举值） |
+
+**典型使用场景**：
+
+```bash
+# 用 Python 读取某数据集的可用查询组件
+# 注意：文件带有 UTF-8 BOM，必须使用 encoding='utf-8-sig'，否则第一列名会多出 \ufeff 导致 KeyError
+python3 -c "
+import csv
+with open('data/dataset_select_columns.csv', encoding='utf-8-sig') as f:
+    rows = list(csv.DictReader(f))
+ds = 'sales_summary'
+cols = [r for r in rows if r['current_dataset_alias'] == ds]
+print(cols)
+"
+# 示例输出：
+# [
+#   {'current_dataset_alias': 'sales_summary', 'column_name': 'platform',
+#    'verbose_name': '平台', 'component_dataset_alias': 'platform_options'},
+#   {'current_dataset_alias': 'sales_summary', 'column_name': 'date_range',
+#    'verbose_name': '日期范围', 'component_dataset_alias': 'date_config'}
+# ]
+```
+
+**构造 filters 时的应用规则**：
+
+1. 构造某数据集的 `filters` 前，先读取 `dataset_select_columns.csv` 确认哪些字段有预配置的枚举值来源
+2. 对于 `column_name` 对应的字段，其合法枚举值来自 `component_dataset_alias` 数据集
+3. 若用户指定的筛选值不在枚举范围，优先用 `component_dataset_alias` 查询合法值集合后再构造 filter
+4. 没有在本文件中出现的字段，按普通字段处理，不做枚举约束
 
 ---
 
@@ -351,6 +392,37 @@ opscli query metadata --dataset <dataset_alias> --pretty
 # 3. 基于 catalog 提供的 table_id + default_filters + comparison_strategy 构造查询
 #    详见 references/cli-simple-guide.md 中的简化接口示例
 ```
+
+### Catalog 未命中时的回退工作流
+
+> 远端 catalog 意图覆盖有限，未命中属正常现象。**静默回退，不提示用户。**
+
+```bash
+# catalog 返回 intent_count=0 或全部 intents 关键词不匹配时：
+
+# 1. 静默进入本地关键词搜索（无需提示用户 catalog 未命中）
+python scripts/search.py "<用户关键词>" -n 20
+
+# 示例：用户查询"物控库存周转 Temu 近30天趋势"
+# catalog intent_count=1，唯一意图为"账单销售趋势"，无匹配
+# → 立即执行：
+python scripts/search.py "库存周转" -n 20
+# 返回2个数据集：ds_97zj6R0KDKpB（物控库存周转）、ds_dI5gNc0YRLrD（物控库存周转期初期末）
+
+# 2. 搜索返回多个候选 → AskUserQuestion 让用户选择
+#    注意：同类业务场景的多数据集通常口径不同，必须澄清后再执行
+
+# 3. 用户选定数据集后 → 检查查询组件（dataset_select_columns.csv）→ 校验 filter 权限 → 执行查询
+```
+
+**何时用本地搜索 vs 何时用 catalog**：
+
+| 场景 | 方式 |
+|------|------|
+| catalog 有匹配 intent | 优先使用 catalog 提供的 table_id + default_filters |
+| catalog 无匹配（intent_count 少 / 关键词不命中） | 立即回退本地 search.py，静默处理 |
+| 用户已明确指定数据集别名 | 跳过 catalog，直接进入字段检查 |
+| 只需确认字段是否存在 | 直接 python scripts/search.py，跳过 catalog |
 
 **意图匹配示例**：
 

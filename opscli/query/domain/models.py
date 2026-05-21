@@ -13,6 +13,7 @@ class QueryMetadataResult:
     fields: list[dict]
     source: str
     all_datasets: list[dict] | None = None
+    select_columns: list[dict] | None = None
 
     def to_dict(self) -> dict:
         result: dict = {
@@ -22,4 +23,6 @@ class QueryMetadataResult:
         }
         if self.all_datasets is not None:
             result["all_datasets"] = self.all_datasets
+        if self.select_columns is not None:
+            result["select_columns"] = self.select_columns
         return result

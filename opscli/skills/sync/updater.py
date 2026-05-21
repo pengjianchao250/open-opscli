@@ -27,11 +27,12 @@ class SkillsUpdater:
     """
 
     # 运营系统后端 API 端点
-    MANIFEST_ENDPOINT = "/v1/data-metrics/datasets/skill/manifest"          # 版本清单
-    FIELDS_ENDPOINT = "/v1/data-metrics/datasets/skill/export"              # 字段数据导出
-    DATASETS_ENDPOINT = "/v1/data-metrics/datasets/skill/export-datasets"   # 数据集导出
-    CATALOG_ENDPOINT = "/v1/data-metrics/datasets/skill/catalog"            # AI 业务语义索引
-    QUERY_METADATA_ENDPOINT = "/v1/data-metrics/datasets/query-metadata"    # 查询元数据
+    MANIFEST_ENDPOINT = "/v1/data-metrics/datasets/skill/manifest"                    # 版本清单
+    FIELDS_ENDPOINT = "/v1/data-metrics/datasets/skill/export"                        # 字段数据导出
+    DATASETS_ENDPOINT = "/v1/data-metrics/datasets/skill/export-datasets"             # 数据集导出
+    SELECT_COLUMNS_ENDPOINT = "/v1/data-metrics/datasets/skill/export-select-columns" # 查询组件关联导出
+    CATALOG_ENDPOINT = "/v1/data-metrics/datasets/skill/catalog"                      # AI 业务语义索引
+    QUERY_METADATA_ENDPOINT = "/v1/data-metrics/datasets/query-metadata"              # 查询元数据
     RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT = "http://127.0.0.1:8000/api/opencalw/default-question-templates"  # Rufus 默认题库
 
     def build_remote_summary(self, skill_name: str) -> dict:
@@ -97,7 +98,7 @@ class SkillsUpdater:
             on_step: 可选进度回调
 
         Returns:
-            包含 manifest / fields_csv / datasets_csv / dataset_catalog / query_metadata / field_count 的字典
+            包含 manifest / fields_csv / datasets_csv / select_columns_csv / dataset_catalog / query_metadata / field_count 的字典
         """
         def _step(msg: str) -> None:
             if on_step:
@@ -112,6 +113,8 @@ class SkillsUpdater:
         fields_csv = self._get(self.FIELDS_ENDPOINT).text
         _step("拉取数据集列表...")
         datasets_csv = self._get(self.DATASETS_ENDPOINT).text
+        _step("拉取查询组件关联数据...")
+        select_columns_csv = self._fetch_select_columns_csv()
         _step("拉取数据集业务索引...")
         dataset_catalog = self.fetch_dataset_catalog()
         _step("拉取查询元数据...")
@@ -125,6 +128,7 @@ class SkillsUpdater:
             "manifest": manifest,
             "fields_csv": fields_csv,
             "datasets_csv": datasets_csv,
+            "select_columns_csv": select_columns_csv,
             "dataset_catalog": dataset_catalog,
             "query_metadata": query_metadata,
             "field_count": field_count,
@@ -200,6 +204,7 @@ class SkillsUpdater:
             tmp_path = Path(tmp_dir)
             (tmp_path / "dataset_fields.csv").write_text(data["fields_csv"], encoding="utf-8")
             (tmp_path / "datasets.csv").write_text(data["datasets_csv"], encoding="utf-8")
+            (tmp_path / "dataset_select_columns.csv").write_text(data["select_columns_csv"], encoding="utf-8")
             (tmp_path / "dataset_catalog.json").write_text(
                 json.dumps(data.get("dataset_catalog") or {}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -221,7 +226,14 @@ class SkillsUpdater:
             )
 
             # 原子替换：Path.replace() 在同文件系统上是原子操作
-            for filename in ["dataset_fields.csv", "datasets.csv", "dataset_catalog.json", "query_metadata.json", "VERSION.json"]:
+            for filename in [
+                "dataset_fields.csv",
+                "datasets.csv",
+                "dataset_select_columns.csv",
+                "dataset_catalog.json",
+                "query_metadata.json",
+                "VERSION.json",
+            ]:
                 (tmp_path / filename).replace(data_dir / filename)
 
         return SkillUpgradeResult(
@@ -302,6 +314,19 @@ class SkillsUpdater:
             field_count=question_count,
         )
 
+
+    def _fetch_select_columns_csv(self) -> str:
+        """拉取查询组件关联 CSV（dataset_select_columns.csv）。
+
+        旧版后端可能尚未部署该接口；此时不阻断升级流程，
+        而是返回仅含表头的空 CSV，保持向后兼容。
+        """
+        try:
+            return self._get(self.SELECT_COLUMNS_ENDPOINT).text
+        except SkillRemoteError as exc:
+            if exc.status_code == 404:
+                return "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n"
+            raise
 
     def _get_rufus_default_question_templates(self) -> httpx.Response:
         """请求 Rufus 默认题库接口；该本地接口不依赖 ops 登录态。"""

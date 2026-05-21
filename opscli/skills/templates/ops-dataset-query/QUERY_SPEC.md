@@ -20,9 +20,10 @@
 | 7 | **字段歧义必须澄清** | 用户术语匹配到 ≥2 个字段时，禁止静默选择，必须让用户确认 |
 | 8 | **输出字段名不可改写** | 结果列名必须使用数据集定义的 `verbose_name`，禁止自行意译 |
 | 9 | **本地数据初始化检查** | `data_state=placeholder` 时本地索引为空模板；执行搜索/查询前必须先 `skills_upgrade`（CLI）或 `skills_upgrade(name="ops-dataset-query")`（MCP）拉取远端数据 |
-| 10 | **查询前意图澄清** | 构造任何查询参数前，必须先按第十四章字段歧义规则逐项检查；时间/人员/产品/币种/数据集存在歧义时，必须向用户确认，禁止猜测 |
+| 10 | **查询前意图澄清** | 构造任何查询参数前，必须先按第十五章字段歧义规则逐项检查；时间/人员/产品/币种/数据集存在歧义时，必须向用户确认，禁止猜测 |
 | 11 | **查询闭环强制反馈** | 每次执行查询工具后，无论成功或失败，必须在后续 3 次工具调用内调用 `feedback_submit` 提交反馈；成功/降级 → `query_result`，工具报错 → `bug` |
 | 12 | **结构化确认优先** | 凡需要确认/澄清/让用户选择的场景，必须按 `references/ask-user-question-guide.md` 使用 AskUserQuestion；纯文本告知不等于用户确认 |
+| 13 | **查询组件权限校验** | 构造 filters 前必须检查 `query_metadata(dataset=alias)` 响应中的 `select_columns`：① 其中的字段即使不在普通字段列表也是合法筛选条件；② 必须查 `component_dataset_alias` 数据集验证枚举值权限，值不存在则无权限，禁止继续查询 |
 
 > `query_simple` / `opscli query simple` 已内置字段歧义硬门禁：执行前会校验 dimensions、metrics、filters 和 dataComparison 中的字段引用。若字段不存在、模糊术语命中多个候选、或公式字段被额外传入 aggregation，会直接阻断查询并返回候选信息。
 
@@ -358,12 +359,18 @@ query_catalog(source="local")
 ```
 1. query_metadata(dataset="<alias>") 确认字段存在及其类型
    → 返回字段列表，确认 field_name / verbose_name / global_alias
+   → 同时返回 select_columns 数组（查询组件列表，见第十三章）
 
 2. 确认是否为公式字段：
    → 字段的 summary_expression 非空 → 公式字段，构造时不传 aggregation，传 expr
    → summary_expression 为空 → 普通字段，正常传 aggregation
 
-3. 字段在 metadata 中不存在时：
+3. 确认筛选字段的合法性（两个来源都要检查）：
+   → 字段在普通字段列表中 → 合法
+   → 字段不在普通字段列表，但在 select_columns 中 → 也合法，属于查询组件扩展字段
+   → 两处都不存在 → 字段不合法，明确告知用户
+
+4. 字段在两处均不存在时：
    → 检查 dataset_alias 是否拼写正确
    → 通过 query_metadata() 列出所有可用数据集确认
    → 若字段确实不存在，明确告知用户，禁止猜字段名继续查
@@ -487,6 +494,7 @@ for f in fields:
 
 > **核心原则**：不确定就问，禁止猜测。任何可能产生歧义的情况都必须向用户确认。
 > **结构化提问**：本章所有"确认"、"让用户选择"、"澄清"动作都必须使用 AskUserQuestion。详细策略见 `references/ask-user-question-guide.md`；纯文本告知不等于用户确认。
+> **查询组件字段歧义**：`select_columns` 中涉及人员、组织、产品等字段时，同样适用本章的歧义澄清规则（见第十三章）。
 
 ### 数据集选择（铁律）
 
@@ -578,7 +586,88 @@ for f in fields:
 
 ---
 
-## 十三、输出结果规范
+## 十三、查询组件字段与权限校验
+
+> **铁律**：`query_metadata(dataset="<alias>")` 返回的 `select_columns` 数组定义了该数据集的查询组件字段。构造 `filters` 时必须先处理两项规则。
+
+### 查询组件数据来源
+
+调用 `query_metadata(dataset="<alias>")` 后，每个数据集对象包含 `select_columns` 数组：
+
+```json
+{
+  "dataset_alias": "ds_d35ac6f3910c",
+  "select_columns": [
+    { "column_name": "platform_name", "verbose_name": "平台",  "component_dataset_alias": "ds_3d2714e6d40e" },
+    { "column_name": "dept_name",     "verbose_name": "部门",  "component_dataset_alias": "ds_1n8a4K0d7yBB" },
+    { "column_name": "team_username", "verbose_name": "销售",  "component_dataset_alias": "ds_d1bf6b0b1723" }
+  ]
+}
+```
+
+> `query_metadata()` 无参数时**不含** `select_columns`；**必须加 `dataset` 参数**才能获取。
+
+### 规则一：查询组件字段是合法筛选条件（扩展字段集）
+
+`select_columns` 中的 `column_name` 即使**不在**普通字段列表（`fields`）中，也是该数据集的合法 `filters` 条件：
+
+```python
+# ✅ 正确：dept_name 来自 select_columns，广告数据集普通字段列表无此字段但仍合法
+query_simple(
+    table_id=15,
+    dimensions=[{"field": "dept_name", "alias": "f_dept"}],
+    filters=[{"field": "dept_name", "operator": "=", "value": "跨境BG"}],
+    ...
+)
+
+# ❌ 错误：仅因字段不在普通字段列表就拒绝，导致漏掉合法查询维度
+```
+
+### 规则二：枚举值权限校验（必须在构造 filter 前执行）
+
+查询组件字段的合法枚举值来自 `component_dataset_alias` 数据集，代表当前用户的权限范围：
+
+```
+第一步：在 select_columns 中查找筛选字段
+  找到 → 获取 component_dataset_alias
+  未找到 → 按普通字段处理，跳过权限校验
+
+第二步：查询 component_dataset_alias 数据集获取合法枚举值
+  query_simple(table_id="<component_dataset_alias>", dimensions=["<column_name>"])
+  不传 filters，获取该用户下的完整合法值列表
+
+第三步：检查用户指定的筛选值
+  值在列表中 → 有权限，继续构造原始查询
+  值不在列表中 → 无权限，执行以下无权限处理
+```
+
+**无权限时的处理**：
+
+```python
+# 场景：用户查询 Amazon 平台的广告数据，但当前账号无 Amazon 权限
+# 第一步：找到 platform_name 对应 component_dataset_alias = "ds_3d2714e6d40e"
+# 第二步：query_simple(table_id="ds_3d2714e6d40e", dimensions=["platform_name"])
+#         → 返回：["Temu", "TikTok Shop", "Walmart"]
+# 第三步："Amazon" 不在列表 → 无权限
+
+# ✅ 正确处理：
+# 1. 告知用户当前账号不包含 Amazon 平台的数据权限
+# 2. 通过 AskUserQuestion 展示合法值列表，引导用户重新选择
+# 3. 禁止继续构造或执行原始查询
+
+# ❌ 错误处理：凭经验直接写 "Amazon" 构造 filter 并执行
+```
+
+### 禁止行为
+
+- ❌ 跳过 `select_columns` 检查，直接凭经验猜测枚举值（如写 `"Amazon"` 或 `"US"`）
+- ❌ 未查 `component_dataset_alias` 就使用用户输入的枚举值
+- ❌ 因字段不在普通字段列表中就拒绝 `select_columns` 的合法筛选条件
+- ❌ 用无参数的 `query_metadata()` 来获取 `select_columns`（无参数不含此字段）
+
+---
+
+## 十四、输出结果规范
 
 > **铁律**：输出列名必须使用数据集定义的 `verbose_name`，禁止自行意译或美化。
 
@@ -592,7 +681,7 @@ for f in fields:
 
 ---
 
-## 十四、查询前自检清单
+## 十五、查询前自检清单
 
 ```
 □ 认证：是否已登录？（auth_is_authenticated，不传 session_id 自动检查本地凭证）
@@ -602,7 +691,13 @@ for f in fields:
 □ 数据集：是否唯一确认？（query_catalog 意图匹配 → AskUserQuestion 确认）
 □ 数据集名称：用户关键词匹配到 ≥2 个相似数据集 → 列出并用 AskUserQuestion 让用户选
 □ 业务领域词：用户只说广告/销售/库存等数据时，是否搜索了数据集列表本身，而不是只靠字段搜索判定唯一？
-□ 字段：是否通过 query_metadata 确认字段存在？
+□ 字段确认：是否通过 query_metadata(dataset="<alias>") 确认字段存在（含 select_columns）？
+□ 查询组件扩展字段：筛选字段不在普通字段列表（fields）但在 select_columns 中？
+         → 属于合法筛选条件（见第十三章），允许作为 filters 使用，不得拒绝
+□ 查询组件权限校验：filters 中是否存在 select_columns 里的字段？
+         → 是 → 先 query_simple(table_id=component_dataset_alias, dimensions=[column_name]) 获取合法枚举值
+         → 用户指定的值在列表中 → 有权限，继续构造查询
+         → 值不在列表中 → 无权限，展示合法值列表，用 AskUserQuestion 引导重选，禁止继续查询
 □ 字段匹配：是否有 ≥2 个精确/模糊匹配 → 禁止静默选择，用 AskUserQuestion 让用户确认
 □ 字段跨表：同一 field_name 出现在多个数据集 → 用 AskUserQuestion 澄清口径差异
 □ 公式字段：summary_expression 非空 → 不传 aggregation，传 expr
@@ -620,7 +715,7 @@ for f in fields:
 
 ---
 
-## 十五、典型工作流速查
+## 十六、典型工作流速查
 
 ### 工作流 A：已知数据集，直接查询
 
@@ -708,7 +803,7 @@ result_prev = query_simple(
 
 ---
 
-## 十六、库存数据查询规则
+## 十七、库存数据查询规则
 
 ### 指定产品的库存查询默认不聚合
 
@@ -744,7 +839,7 @@ result_prev = query_simple(
 
 ---
 
-## 十七、查询闭环强制规则
+## 十八、查询闭环强制规则
 
 > **铁律**：每次执行 `query_*` 系列工具后，无论查询成功或失败，都必须在后续 3 次工具调用内完成一次 `feedbackSubmit`。
 

@@ -1,6 +1,209 @@
 {
-  "version": "v0.0.0",
-  "intent_count": 0,
-  "intents": [],
-  "query_strategy": {}
+  "version": "v1.0.3",
+  "intent_count": 3,
+  "intents": [
+    {
+      "intent_code": "billing_sales_trend",
+      "intent_name": "账单销售趋势分析",
+      "table_id": 2,
+      "dataset_alias": "ds_9e288aa0df06",
+      "dataset_name": "sale_trend_set",
+      "use_cases": [
+        "查看账单口径销售额趋势",
+        "按月份统计销售额和销量",
+        "做财务口径销售数据环比分析"
+      ],
+      "keywords": [
+        "账单销售",
+        "销售趋势",
+        "财务口径",
+        "销售额",
+        "销量",
+        "月环比"
+      ],
+      "scenario_description": "适用于偏财务/账单确认口径的销售趋势查询，和即时销售数据集区分使用。",
+      "priority": 780,
+      "recommended_dimensions": [
+        "date_id",
+        "dept_name",
+        "platform_name",
+        "country_name"
+      ],
+      "recommended_metrics": [
+        "price",
+        "order_qty",
+        "profit",
+        "refund_amount"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "trend_compare": "MOY",
+        "summary_compare": "dataComparison"
+      },
+      "notes": "样例数据：用于验证 catalog 轻量导出链路。",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "inventory_turnover_analysis",
+      "intent_name": "物控库存周转分析",
+      "table_id": 40,
+      "dataset_alias": "ds_97zj6R0KDKpB",
+      "dataset_name": "custom_inventory_turnover_wk_set",
+      "use_cases": [
+        "查看物控库存周转天数趋势",
+        "按平台/品类/SKU分析库存周转",
+        "库存周转数量和金额趋势",
+        "Temu/TikTok等平台库存消化趋势",
+        "库存健康度监控"
+      ],
+      "keywords": [
+        "库存周转",
+        "物控",
+        "周转天数",
+        "周转数量",
+        "周转金额",
+        "库存消化",
+        "库存快照",
+        "FBA库存",
+        "在途库存"
+      ],
+      "scenario_description": "按快照日期查看各平台库存周转指标（天数/数量/金额），适合监控日常库存健康度和平台库存消化趋势",
+      "priority": 1,
+      "default_filters": [],
+      "comparison_strategy": {
+        "trend_compare": "by_date",
+        "summary_compare": "dataComparison"
+      }
+    },
+    {
+      "intent_code": "inventory_turnover_period_analysis",
+      "intent_name": "物控库存周转（期初期末）分析",
+      "table_id": 39,
+      "dataset_alias": "ds_dI5gNc0YRLrD",
+      "dataset_name": "custom_inventory_turnover_wk_cw_set",
+      "use_cases": [
+        "按期初期末平均库存计算周转天数",
+        "财务口径库存周转分析",
+        "MTD销售口径的库存周转率",
+        "周转率环比对比"
+      ],
+      "keywords": [
+        "库存周转",
+        "期初期末",
+        "周转率",
+        "MTD",
+        "财务口径",
+        "平均库存"
+      ],
+      "scenario_description": "使用期初期末平均库存和MTD销售额计算周转天数，适合财务口径分析",
+      "priority": 2,
+      "default_filters": [],
+      "comparison_strategy": {
+        "trend_compare": "by_date",
+        "summary_compare": "dataComparison"
+      }
+    }
+  ],
+  "query_strategy": {
+    "dataset_selection": "先用 intents.keywords/use_cases/scenario_description 匹配用户意图，再按 priority 选择候选数据集",
+    "field_resolution": "使用 catalog 推荐字段作为首选，再读取 dataset_fields.csv/query_metadata.json 校验字段存在性",
+    "default_query_entry": "query_simple",
+    "fallback_query_entry": "query_run"
+  }
 }
