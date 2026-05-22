@@ -1,7 +1,7 @@
 ---
 name: ops-skills
-description: 管理 AI 工具中已安装的 Skill 生命周期，包含技能广场的发布、安装、浏览与评分
-version: v1.4.0
+description: 管理 AI 工具中已安装的 Skill 生命周期，包含技能广场的发布、编辑、安装、浏览与评分
+version: v1.5.0
 ---
 
 # ops-skills
@@ -11,7 +11,7 @@ version: v1.4.0
 包含三大能力域：
 - **本地生命周期**：列表、状态检查、内置模板安装、版本升级
 - **技能广场**：浏览、搜索、查看详情、远程安装（`username@skill_name`）、提交评分
-- **发布管理**：将本地 Skill 发布到广场、下架已发布技能
+- **发布管理**：将本地 Skill 发布到广场、编辑已发布技能元数据与文件、下架已发布技能
 
 ---
 
@@ -24,6 +24,7 @@ version: v1.4.0
 - **版本检查**：对比本地版本与远端最新版本，告知是否需要升级
 - **升级**：拉取远端最新数据，原子替换本地文件，确保数据不中断
 - **广场发布**：将本地 Skill 目录打包 zip 上传到技能广场，支持首次发布与追加新版本
+- **广场编辑**：编辑已发布技能的元数据（标题、简介、标签、分享类型等）及可选的文件重传与版本变更
 - **广场浏览**：查看广场上的公开技能列表、搜索、查看详情与版本历史
 - **评分**：为已安装或使用过的技能提交 1-5 分评价（小数自动向下取整）
 
@@ -443,6 +444,75 @@ pengjianchao@ops-auth
 
 ---
 
+### `opscli skills edit <identifier>`
+
+编辑已发布到广场的技能，支持修改元数据、重新上传文件、变更版本号。
+
+- **仅修改元数据**：不传 `--dir` / `--file` 时，使用 `PUT /v1/skills/{id}` 纯 JSON 更新（速度快）
+- **重传文件 + 可选版本变更**：传 `--dir` 或 `--file` 时，使用 `POST /v1/skills/{id}` multipart/form-data
+
+**版本变更规则：**
+
+| 场景 | 行为 |
+|------|------|
+| 传 `--version`，版本号与当前相同 + 传文件 | OSS 文件覆盖，不新建版本记录 |
+| 传 `--version`，版本号高于当前 | 新建版本记录，广场 latest_version 更新 |
+| 传 `--version`，版本号低于当前 | ❌ 拒绝（400 错误） |
+| 只传文件，不传 `--version` | 以当前最新版本号覆盖 OSS 文件 |
+| 只传 `--version`，不传文件 | 复用当前文件，新建版本记录（版本升级） |
+
+```
+参数：
+  identifier          技能标识符，格式 username@skill_name
+
+选项：
+  --dir / -d TEXT     技能目录（自动打包为 zip 并读取 frontmatter；与 --file 互斥）
+  --file TEXT         直接指定 zip 或 md 文件路径（与 --dir 互斥）
+  --title TEXT        更新标题
+  --desc TEXT         更新详细描述
+  --summary TEXT      更新一句话简介（最多 500 字符）
+  --share-type TEXT   更新分享权限：personal / department / company
+  --tags TEXT         更新标签（逗号分隔）
+  --category INT      更新分类 ID
+  --version TEXT      更新版本号（格式 x.y.z，如 1.2.0）
+  --changelog TEXT    本次版本变更说明
+  --json              输出原始 JSON
+```
+
+**示例：**
+
+```bash
+# ── 仅修改元数据（不上传文件）──────────────────────────────
+# 修改标题和简介
+opscli skills edit pengjianchao@ops-auth --title "Ops 认证授权 v2" --summary "新版登录流程"
+
+# 将分享权限从 personal 改为 company（全员可见）
+opscli skills edit pengjianchao@ops-auth --share-type company
+
+# 更新版本号（复用当前文件，仅创建新版本记录）
+opscli skills edit pengjianchao@ops-auth --version 1.3.0 --changelog "重构登录逻辑"
+
+# ── 重新上传文件 ──────────────────────────────────────────
+# 从目录打包后重传（保持当前版本号，OSS 覆盖）
+opscli skills edit pengjianchao@ops-auth --dir ./ops-auth/
+
+# 从目录打包并同时升级版本号
+opscli skills edit pengjianchao@ops-auth --dir ./ops-auth/ --version 1.4.0 --changelog "修复重大 Bug"
+
+# 直接指定 zip 文件重传
+opscli skills edit pengjianchao@ops-auth --file ./ops-auth-1.4.0.zip --version 1.4.0
+
+# 指定 md 文件重传（单文件技能）
+opscli skills edit pengjianchao@ops-auth --file ./SKILL.md
+
+# JSON 输出（脚本场景）
+opscli skills edit pengjianchao@ops-auth --title "新标题" --json
+```
+
+> **注意**：`--dir` 模式下会自动读取目录中的 `SKILL.md` frontmatter（`title`、`description`、`summary`、`share_type`、`tags`、`category_id`）作为字段默认值；命令行显式传入的参数优先级更高，会覆盖 frontmatter 中的同名字段。
+
+---
+
 ### `opscli skills unpublish <identifier>`
 
 下架已发布的技能（软删除，不影响已安装到本地的用户）。
@@ -822,6 +892,29 @@ opscli skills install ops-skills --force
 # 3. 如需同时重置远端数据，再执行升级
 opscli skills upgrade ops-dataset-query --force
 ```
+
+### 场景八：编辑已发布的技能
+
+修改已发布技能的元数据或上传新文件：
+
+```bash
+# 1. 先检查认证状态
+opscli auth token status
+
+# 2. 仅修改可见范围（从 personal 改为 company）
+opscli skills edit pengjianchao@my-skill --share-type company
+
+# 3. 上传修复后的文件，同时升级版本号
+opscli skills edit pengjianchao@my-skill \
+  --dir ./my-skill/ \
+  --version 1.2.0 \
+  --changelog "修复了 xxx 问题，优化了 yyy 流程"
+
+# 4. 确认广场已更新
+opscli skills marketplace info pengjianchao@my-skill
+```
+
+---
 
 ### 场景七：指定路径安装（CI/脚本环境）
 
