@@ -1,0 +1,57 @@
+"""卖家精灵服务端账号来源。"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
+from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+
+
+@dataclass(frozen=True)
+class SellerSpriteAccount:
+    """服务端本地卖家精灵账号。"""
+
+    name: str
+    username: str
+    password: str
+
+    def to_public_dict(self) -> dict[str, Any]:
+        """返回不包含密码的账号摘要。"""
+        return {
+            "name": self.name,
+            "username": self.username,
+            "has_password": bool(self.password),
+        }
+
+
+class SellerSpriteAccountProvider:
+    """从服务端配置读取卖家精灵账号。"""
+
+    def __init__(self, settings: SellerSpriteSettings | None = None) -> None:
+        self.settings = settings or load_settings()
+
+    def get_default(self) -> SellerSpriteAccount:
+        """读取默认账号。"""
+        if not self.settings.username:
+            raise SellerSpriteConfigError("缺少 OPSCLI_SELLER_SPRITE_USERNAME")
+        if not self.settings.password:
+            raise SellerSpriteConfigError("缺少 OPSCLI_SELLER_SPRITE_PASSWORD")
+        return SellerSpriteAccount(
+            name=self.settings.account_name,
+            username=self.settings.username,
+            password=self.settings.password,
+        )
+
+    def list_public(self) -> list[dict[str, Any]]:
+        """列出可用账号摘要，不返回密码。"""
+        if not self.settings.username:
+            return []
+        return [
+            {
+                "name": self.settings.account_name,
+                "username": self.settings.username,
+                "has_password": bool(self.settings.password),
+            }
+        ]

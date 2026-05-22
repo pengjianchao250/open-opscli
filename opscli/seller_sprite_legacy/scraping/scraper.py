@@ -7,15 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from opscli.config import CONFIG_DIR
-from opscli.seller_sprite.domain.exceptions import (
+from opscli.seller_sprite_legacy.domain.exceptions import (
     SellerSpriteCaptchaRequiredError,
     SellerSpriteDependencyError,
     SellerSpriteLoginRequiredError,
 )
-from opscli.seller_sprite.domain.models import SellerSpriteCollectOptions
-from opscli.seller_sprite.scraping.api_recorder import SellerSpriteApiRecorder
-from opscli.seller_sprite.scraping.archiver import SellerSpriteArchiver
-from opscli.seller_sprite.scraping.captcha import SellerSpriteCaptchaDetector
+from opscli.seller_sprite_legacy.domain.models import SellerSpriteCollectOptions
+from opscli.seller_sprite_legacy.scraping.api_recorder import SellerSpriteApiRecorder
+from opscli.seller_sprite_legacy.scraping.archiver import SellerSpriteArchiver
+from opscli.seller_sprite_legacy.scraping.captcha import SellerSpriteCaptchaDetector
 
 
 class SellerSpriteScraper:

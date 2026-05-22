@@ -7,7 +7,7 @@ import stat
 from pathlib import Path
 
 from opscli.config import CONFIG_DIR
-from opscli.seller_sprite.domain.exceptions import InvalidCollectOptionError, SellerSpriteDependencyError
+from opscli.seller_sprite_legacy.domain.exceptions import InvalidCollectOptionError, SellerSpriteDependencyError
 
 try:
     import keyring

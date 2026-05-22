@@ -1,56 +1,39 @@
-"""卖家精灵模块异常定义。"""
+"""卖家精灵接口直连异常。"""
 
 from __future__ import annotations
 
 
 class SellerSpriteError(Exception):
-    """卖家精灵模块统一异常基类。"""
+    """卖家精灵模块基础异常。"""
 
     code = "SELLER_SPRITE_ERROR"
 
-    def __init__(self, message: str):
+    def to_dict(self) -> dict[str, str]:
+        """转换为 MCP `_err` 可识别的错误结构。"""
+        return {"code": self.code, "message": str(self)}
+
+
+class SellerSpriteConfigError(SellerSpriteError):
+    """卖家精灵配置错误。"""
+
+    code = "SELLER_SPRITE_CONFIG_ERROR"
+
+
+class SellerSpriteApiError(SellerSpriteError):
+    """卖家精灵接口请求错误。"""
+
+    code = "SELLER_SPRITE_API_ERROR"
+
+    def __init__(self, message: str, *, status_code: int | None = None, response_excerpt: str | None = None) -> None:
         super().__init__(message)
-        self.message = message
+        self.status_code = status_code
+        self.response_excerpt = response_excerpt
 
-    def to_dict(self) -> dict:
-        """转换为 CLI 统一错误输出结构。"""
-        return {
-            "code": self.code,
-            "message": self.message,
-        }
-
-
-class InvalidAsinError(SellerSpriteError):
-    """ASIN 参数不合法。"""
-
-    code = "SELLER_SPRITE_INVALID_ASIN"
-
-
-class InvalidCollectOptionError(SellerSpriteError):
-    """采集参数不合法。"""
-
-    code = "SELLER_SPRITE_INVALID_COLLECT_OPTION"
-
-
-class SellerSpriteDependencyError(SellerSpriteError):
-    """采集依赖未安装。"""
-
-    code = "SELLER_SPRITE_DEPENDENCY_ERROR"
-
-
-class SellerSpriteCaptchaRequiredError(SellerSpriteError):
-    """页面触发验证码，需要人工或打码服务处理。"""
-
-    code = "SELLER_SPRITE_CAPTCHA_REQUIRED"
-
-
-class SellerSpriteLoginRequiredError(SellerSpriteError):
-    """页面未登录，需要先建立卖家精灵登录态。"""
-
-    code = "SELLER_SPRITE_LOGIN_REQUIRED"
-
-
-class SellerSpriteResponseError(SellerSpriteError):
-    """卖家精灵接口响应缺失或结构不符合预期。"""
-
-    code = "SELLER_SPRITE_RESPONSE_ERROR"
+    def to_dict(self) -> dict[str, object]:
+        """转换为 MCP `_err` 可识别的错误结构。"""
+        error: dict[str, object] = {"code": self.code, "message": str(self)}
+        if self.status_code is not None:
+            error["status_code"] = self.status_code
+        if self.response_excerpt:
+            error["response_excerpt"] = self.response_excerpt
+        return error

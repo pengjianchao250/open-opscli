@@ -13,7 +13,6 @@ from opscli.feedback.cli import app as feedback_app
 from opscli.mcp.cli import app as mcp_app
 # from opscli.methods_card.cli import app as methods_card_app
 from opscli.query.cli import app as query_app
-from opscli.seller_sprite.cli import app as seller_sprite_app
 from opscli.skills.cli import app as skills_app
 from opscli.version import get_version
 
@@ -36,7 +35,6 @@ app.add_typer(feedback_app, name="feedback")
 # app.add_typer(methods_card_app, name="methods-card")
 app.add_typer(skills_app, name="skills")
 app.add_typer(mcp_app, name="mcp")
-app.add_typer(seller_sprite_app, name="seller-sprite")
 
 
 def _get_current_user_email() -> str | None:
