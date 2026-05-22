@@ -53,7 +53,14 @@ opscli
 │   ├── list
 │   ├── install
 │   ├── status
-│   └── upgrade
+│   ├── upgrade
+│   ├── publish
+│   ├── unpublish
+│   └── marketplace
+│       ├── list
+│       ├── search
+│       ├── info
+│       └── versions
 ├── seller-sprite
 │   ├── collect
 │   ├── frequency
@@ -969,19 +976,19 @@ opscli skills list --skills-dir ~/.claude/skills --pretty
 
 ### 7.3 `opscli skills install`
 
-从内置模板安装 Skill 到本地目录。
+安装 Skill — 支持内置模板和远程技能广场两种来源。
 
 **用法**
 
 ```bash
-opscli skills install [NAME] [--skills-dir <dir>] [--runtime <runtime>] [--force] [--pretty]
+opscli skills install [NAME|IDENTIFIER] [--skills-dir <dir>] [--runtime <runtime>] [--force] [--pretty]
 ```
 
 **参数**
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
-| `NAME` | 否 | Skill 名称；不传时进入交互式安装 |
+| `NAME` / `IDENTIFIER` | 否 | Skill 名称（内置模板）或 `username@skill_name`（广场远程安装）；不传时进入交互式安装 |
 | `--skills-dir` | 否 | 指定安装目录 |
 | `--runtime` | 否 | 指定目标运行时，可传单个或逗号分隔多个值 |
 | `--force` | 否 | 覆盖已存在目录 |
@@ -993,15 +1000,28 @@ opscli skills install [NAME] [--skills-dir <dir>] [--runtime <runtime>] [--force
 - 传 `all` 时，会安装到当前检测到的全部可用运行时目录。
 - 不传 `NAME` 时，命令进入 TUI 交互模式，可多选 Skill 和安装目标。
 
+**远程安装说明**（`username@skill_name` 格式）
+
+1. 从广场获取技能元数据与下载地址
+2. 下载 zip 包并解压到 `~/.opscli/skills/<skill_name>/`
+3. 自动软链接到 `~/.claude/skills/`、`~/.openclaw/skills/` 等全局 AI 工具目录
+4. 回调广场记录安装次数
+
 **示例**
 
 ```bash
+# 安装内置模板
 opscli skills install ops-dataset-query
 opscli skills install ops-dataset-query --skills-dir ~/.claude/skills
 opscli skills install ops-dataset-query --skills-dir ~/.claude/skills --force
 opscli skills install ops-auth --runtime claude
 opscli skills install ops-skills --runtime claude,codex --force
 opscli skills install ops-amazon --runtime all --pretty
+
+# 从技能广场远程安装
+opscli skills install pengjianchao@ops-auth
+opscli skills install pengjianchao@ops-auth --force
+opscli skills install pengjianchao@ops-auth --runtime claude
 ```
 
 交互式安装：
@@ -1067,6 +1087,196 @@ opscli skills upgrade ops-dataset-query
 opscli skills upgrade ops-dataset-query --force
 opscli skills upgrade ops-dataset-query --skills-dir ~/.claude/skills --pretty
 ```
+
+### 7.6 `opscli skills publish`
+
+将本地 Skill 目录打包（zip）发布到技能广场。首次发布自动创建技能，再次发布时追加新版本。
+
+技能目录须包含 `SKILL.md` 和 `data/VERSION.json`。
+
+**用法**
+
+```bash
+opscli skills publish [--dir <dir>] [--title <title>] [--desc <desc>] [--tags <tags>]
+                      [--category <id>] [--changelog <text>] [--json]
+```
+
+**参数**
+
+| 参数 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--dir` / `-d` | 否 | `.`（当前目录） | Skill 目录 |
+| `--title` | 否 | SKILL.md 中的 title | 技能标题 |
+| `--desc` | 否 | SKILL.md 中的 description | 技能简介 |
+| `--tags` | 否 | SKILL.md 中的 tags | 标签，逗号分隔 |
+| `--category` | 否 | SKILL.md 中的 category_id | 分类 ID |
+| `--changelog` | 否 | - | 本次版本变更说明 |
+| `--json` | 否 | `false` | 输出原始 JSON |
+
+**示例**
+
+```bash
+# 发布当前目录下的 Skill
+opscli skills publish
+
+# 指定目录，并附带变更说明
+opscli skills publish --dir ./my-skill --changelog "修复了某个 bug"
+
+# 附带完整元数据
+opscli skills publish --title "我的技能" --desc "技能描述" --tags "ai,ops" --changelog "初始版本"
+
+# JSON 模式输出（适合脚本）
+opscli skills publish --json
+```
+
+---
+
+### 7.7 `opscli skills unpublish`
+
+下架已发布的技能（软删除，不影响已安装到本地的用户）。
+
+**用法**
+
+```bash
+opscli skills unpublish <IDENTIFIER> [--force] [--json]
+```
+
+**参数**
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `IDENTIFIER` | 是 | 技能标识符，格式 `username@skill_name` |
+| `--force` / `-f` | 否 | 跳过交互确认提示 |
+| `--json` | 否 | 输出原始 JSON |
+
+**示例**
+
+```bash
+opscli skills unpublish pengjianchao@ops-auth
+opscli skills unpublish pengjianchao@ops-auth --force
+opscli skills unpublish pengjianchao@ops-auth --json
+```
+
+---
+
+## 7.8 技能广场子命令 `opscli skills marketplace`
+
+浏览和搜索广场上的公开技能。
+
+### `opscli skills marketplace list`
+
+浏览广场技能列表。
+
+**用法**
+
+```bash
+opscli skills marketplace list [--category <id>] [--sort <field>] [--order <asc|desc>]
+                                [--page <n>] [--limit <n>] [--official] [--json]
+```
+
+**参数**
+
+| 参数 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--category` | 否 | - | 按分类 ID 筛选 |
+| `--sort` | 否 | `downloads` | 排序字段：`downloads` / `rating` / `created_at` |
+| `--order` | 否 | `desc` | 排序方向：`asc` / `desc` |
+| `--page` | 否 | `1` | 页码 |
+| `--limit` | 否 | `20` | 每页条数，最大 50 |
+| `--official` | 否 | - | 只显示官方技能 |
+| `--json` | 否 | `false` | 输出原始 JSON |
+
+**示例**
+
+```bash
+opscli skills marketplace list
+opscli skills marketplace list --sort downloads --order desc --limit 10
+opscli skills marketplace list --category 1 --official
+opscli skills marketplace list --json
+```
+
+---
+
+### `opscli skills marketplace search`
+
+按关键词搜索技能广场。
+
+**用法**
+
+```bash
+opscli skills marketplace search <KEYWORD> [--sort <field>] [--page <n>] [--limit <n>] [--json]
+```
+
+**参数**
+
+| 参数 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `KEYWORD` | 是 | - | 搜索关键词 |
+| `--sort` | 否 | `downloads` | 排序字段 |
+| `--page` | 否 | `1` | 页码 |
+| `--limit` | 否 | `20` | 每页条数 |
+| `--json` | 否 | `false` | 输出原始 JSON |
+
+**示例**
+
+```bash
+opscli skills marketplace search ops-auth
+opscli skills marketplace search "数据查询" --limit 5 --json
+```
+
+---
+
+### `opscli skills marketplace info`
+
+查看指定技能的详细信息。
+
+**用法**
+
+```bash
+opscli skills marketplace info <IDENTIFIER> [--json]
+```
+
+**参数**
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `IDENTIFIER` | 是 | 技能标识符，格式 `username@skill_name` |
+| `--json` | 否 | 输出原始 JSON |
+
+**示例**
+
+```bash
+opscli skills marketplace info pengjianchao@ops-auth
+opscli skills marketplace info pengjianchao@ops-auth --json
+```
+
+---
+
+### `opscli skills marketplace versions`
+
+查看指定技能的历史版本列表。
+
+**用法**
+
+```bash
+opscli skills marketplace versions <IDENTIFIER> [--json]
+```
+
+**参数**
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `IDENTIFIER` | 是 | 技能标识符，格式 `username@skill_name` |
+| `--json` | 否 | 输出原始 JSON |
+
+**示例**
+
+```bash
+opscli skills marketplace versions pengjianchao@ops-auth
+opscli skills marketplace versions pengjianchao@ops-auth --json
+```
+
+---
 
 ## 8. 卖家精灵模块 `opscli seller-sprite`
 
@@ -1629,6 +1839,37 @@ opscli mcp user rotate --id abc123 --pretty
 opscli mcp user remove --id abc123 --pretty
 ```
 
+### 11.6 技能广场完整使用流程
+
+```bash
+# 1. 浏览广场技能
+opscli skills marketplace list
+
+# 2. 搜索特定技能
+opscli skills marketplace search ops-auth
+
+# 3. 查看详情与版本历史
+opscli skills marketplace info pengjianchao@ops-auth
+opscli skills marketplace versions pengjianchao@ops-auth
+
+# 4. 远程安装
+opscli skills install pengjianchao@ops-auth
+
+# 5. 强制覆盖安装（升级）
+opscli skills install pengjianchao@ops-auth --force
+
+# 6. 发布自己的技能（先登录）
+cd my-skill/
+opscli skills publish --changelog "初始版本"
+
+# 7. 发布新版本
+# 修改 data/VERSION.json 中的 version 字段后
+opscli skills publish --changelog "修复了 xxx 问题"
+
+# 8. 下架技能
+opscli skills unpublish pengjianchao@my-skill --force
+```
+
 ### 11.7 提交工具调用失败的结构化反馈
 
 ```bash
@@ -1677,7 +1918,8 @@ opscli feedback detail --uuid <feedback_uuid> --pretty
 | Amazon | `opscli amazon scrape`、`payload`、`search`、`schema`、`history` |
 | 查询 | `opscli query metadata`、`catalog`、`run`、`build`、`simple`、`chart`、`chart-doc` |
 | 反馈 | `opscli feedback schema`、`submit`、`detail` |
-| Skills | `opscli skills list`、`install`、`status`、`upgrade` |
+| Skills | `opscli skills list`、`install`、`status`、`upgrade`、`publish`、`unpublish` |
+| 技能广场 | `opscli skills marketplace list`、`search`、`info`、`versions` |
 | 卖家精灵 | `opscli seller-sprite collect`、`frequency`、`keyword-mining`、`keyword-reverse`、`archive`、`login`、`login-status`、`schema` |
 | 卖家精灵账号 | `opscli seller-sprite account save`、`list`、`delete` |
 | MCP 管理 | `opscli mcp user list`、`add`、`remove`、`rotate` |

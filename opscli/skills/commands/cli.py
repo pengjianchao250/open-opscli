@@ -14,13 +14,19 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from opscli.skills.commands.marketplace_cli import app as marketplace_app
+from opscli.skills.commands.publish_cli import publish_skill, unpublish_skill
 from opscli.skills.domain.exceptions import error_to_dict
 from opscli.skills.domain.models import runtime_to_tool_name
+from opscli.skills.marketplace.remote_installer import install_remote_skill
 from opscli.skills.packaging import get_central_skills_dir
 from opscli.skills.services.manager import SkillsManager
 from opscli.skills.services.rule_injector import RuleInjector
 
 app = typer.Typer(help="Skill 生命周期管理")
+app.add_typer(marketplace_app, name="marketplace")
+app.command("publish")(publish_skill)
+app.command("unpublish")(unpublish_skill)
 _console = Console()
 
 _TOOL_LABELS = {
@@ -205,17 +211,21 @@ def list_skills(
 
 @app.command("install")
 def install_skill(
-    name: str | None = typer.Argument(None, help="Skill 名称，不指定则进入交互模式安装全部"),
+    name: str | None = typer.Argument(None, help="Skill 名称或远程标识符（如 pengjianchao@ops-auth）"),
     skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定安装目录"),
     runtime: str | None = typer.Option(None, "--runtime", help="claude、openclaw、all，或逗号分隔多个值"),
     force: bool = typer.Option(False, "--force", help="覆盖已存在目录"),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认，自动全选所有 Skills 和检测到的 AI 工具"),
+    version: str | None = typer.Option(None, "--version", help="安装指定版本（仅远程安装有效）"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
-    """从内置模板安装 Skill 到本地目录。
+    """安装 Skill 到本地目录。
 
-    不指定 NAME 时进入 TUI 交互模式，可多选 Skills 和安装目标。
-    加 --yes / -y 可跳过所有确认，直接安装全部 Skills 到所有检测到的工具。
+    - 不指定 NAME 时进入 TUI 交互模式，可多选 Skills 和安装目标。
+    - NAME 不含 @ 时从内置模板安装（如 ops-auth）。
+    - NAME 含 @ 时从技能广场远程安装（如 pengjianchao@ops-auth）。
+
+    加 --yes / -y 可跳过确认，直接安装全部到所有检测到的工具。
     """
     manager = SkillsManager()
     try:
@@ -223,7 +233,22 @@ def install_skill(
             # TUI 模式：交互选择 Skills 和安装目标
             _install_interactive(manager, skills_dir=skills_dir, runtime=runtime, force=force, yes=yes, pretty=pretty)
             return
-        # 单 Skill 安装（原有逻辑）
+
+        # 远程广场安装（标识符含 @）
+        if "@" in name:
+            payload = install_remote_skill(
+                identifier=name,
+                version=version,
+                skills_dir=skills_dir,
+                runtime=runtime,
+                force=force,
+            )
+            _emit(payload, pretty)
+            if not payload.get("success"):
+                raise typer.Exit(1)
+            return
+
+        # 本地内置模板安装（原有逻辑）
         resolved_runtime = _resolve_install_runtime(
             manager,
             runtime=runtime,
@@ -245,6 +270,8 @@ def install_skill(
             "data": _with_post_install_guidance(result.to_dict(), name),
             "error": None,
         }
+    except typer.Exit:
+        raise
     except Exception as exc:
         payload = {
             "success": False,

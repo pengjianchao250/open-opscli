@@ -21,12 +21,13 @@ Aukeys 运营 CLI 工具集
 
 ### skills 模块
 
-- **Skill 安装**：支持安装内置 `ops-dataset-query` Skill 模板
+- **Skill 安装**：支持安装内置模板（`ops-dataset-query` 等），也支持通过 `username@skill_name` 从技能广场远程安装
 - **Skill 扫描**：自动扫描 `--skills-dir`、`OPSCLI_SKILLS_DIR`、`.claude/skills`、`.openclaw/skills`
 - **Skill 升级**：从远端拉取 `manifest`、字段 CSV、数据集 CSV、查询元数据
 - **统一 JSON 输出**：默认适合脚本消费，`--pretty` 可切换可读格式
 - **数据查询支持**：通过 `opscli skills` 与 `opscli query` 组合完成元数据读取、构造 payload 与远端执行
 - **Amazon Skill 模板**：支持安装 `ops-amazon`，指导 AI 使用 `opscli amazon` 完成抓取和字段取样
+- **技能广场**：通过 `opscli skills marketplace` 子命令浏览、搜索、查看技能详情；支持 `publish` / `unpublish` 将本地 Skill 发布到广场；远程安装时自动解压到 `~/.opscli/skills/` 并软链接到全局 AI 工具目录
 
 ### query 模块
 
@@ -299,9 +300,16 @@ graph LR
     Query --- query_chart["chart --uuid"]
 
     Skills --- skills_list["list"]
-    Skills --- skills_install["install <name>"]
+    Skills --- skills_install["install &lt;name|user@skill&gt;"]
     Skills --- skills_status["status"]
     Skills --- skills_upgrade["upgrade [name]"]
+    Skills --- skills_publish["publish"]
+    Skills --- skills_unpublish["unpublish &lt;identifier&gt;"]
+    Skills --- Marketplace["marketplace"]
+    Marketplace --- mp_list["list"]
+    Marketplace --- mp_search["search &lt;keyword&gt;"]
+    Marketplace --- mp_info["info &lt;user@skill&gt;"]
+    Marketplace --- mp_versions["versions &lt;user@skill&gt;"]
 
     Amazon --- amazon_scrape["scrape --asin"]
     Amazon --- amazon_payload["payload --asin"]
@@ -893,13 +901,25 @@ opscli skills list --skills-dir ~/.claude/skills
 
 ### `opscli skills install`
 
-安装内置 `ops-dataset-query` Skill 模板。
+安装 Skill — 支持内置模板和远程技能广场两种来源。
 
 ```bash
+# 安装内置模板
 opscli skills install ops-dataset-query
 opscli skills install ops-dataset-query --skills-dir ~/.claude/skills
 opscli skills install ops-dataset-query --skills-dir ~/.claude/skills --force
+
+# 从技能广场远程安装（username@skill_name 格式）
+opscli skills install pengjianchao@ops-auth
+opscli skills install pengjianchao@ops-auth --force
+opscli skills install pengjianchao@ops-auth --runtime claude
 ```
+
+远程安装流程：
+1. 从广场获取元数据与下载地址
+2. 下载 zip 包，解压到 `~/.opscli/skills/<skill_name>/`
+3. 自动软链接到 `~/.claude/skills/`、`~/.openclaw/skills/` 等全局 AI 工具目录
+4. 回调广场记录安装次数
 
 ### `opscli skills status`
 
@@ -941,6 +961,108 @@ opscli query metadata --dataset sales_order_d
 opscli query build --dataset sales_order_d --dimension date_id --metric gmv --output payload.json
 opscli query run --payload payload.json
 ```
+
+### `opscli skills publish` - 发布 Skill 到技能广场
+
+将本地 Skill 目录打包（zip）上传至广场。首次发布自动创建，再次发布追加新版本。
+
+```bash
+# 发布当前目录下的 Skill
+opscli skills publish
+
+# 指定目录发布
+opscli skills publish --dir /path/to/my-skill
+
+# 附带变更说明
+opscli skills publish --changelog "修复了某个 bug，新增了某个功能"
+```
+
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| `--dir` / `-d` | 否 | Skill 目录，默认当前目录 |
+| `--title` | 否 | 技能标题（覆盖 SKILL.md frontmatter） |
+| `--desc` | 否 | 技能简介 |
+| `--tags` | 否 | 标签，逗号分隔 |
+| `--category` | 否 | 分类 ID |
+| `--changelog` | 否 | 本次版本变更说明 |
+| `--json` | 否 | 输出原始 JSON |
+
+技能目录须包含 `SKILL.md` 和 `data/VERSION.json`，发布前自动打包整个目录为 zip。
+
+### `opscli skills unpublish` - 下架技能
+
+```bash
+opscli skills unpublish pengjianchao@ops-auth
+opscli skills unpublish pengjianchao@ops-auth --force   # 跳过确认
+```
+
+---
+
+## 技能广场 (Skills Marketplace)
+
+通过 `opscli skills marketplace` 子命令浏览和搜索广场上的公开技能。
+
+### `opscli skills marketplace list` - 浏览技能列表
+
+```bash
+opscli skills marketplace list
+opscli skills marketplace list --sort downloads --order desc
+opscli skills marketplace list --category 1 --limit 10
+opscli skills marketplace list --official
+```
+
+| 参数 | 必需 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--category` | 否 | - | 按分类 ID 筛选 |
+| `--sort` | 否 | `downloads` | 排序字段：`downloads` / `rating` / `created_at` |
+| `--order` | 否 | `desc` | 排序方向：`asc` / `desc` |
+| `--page` | 否 | `1` | 页码 |
+| `--limit` | 否 | `20` | 每页条数 |
+| `--official` | 否 | - | 只显示官方技能 |
+| `--json` | 否 | - | 输出原始 JSON |
+
+### `opscli skills marketplace search <keyword>` - 搜索技能
+
+```bash
+opscli skills marketplace search ops-auth
+opscli skills marketplace search "数据查询" --limit 5
+```
+
+### `opscli skills marketplace info <identifier>` - 查看技能详情
+
+```bash
+opscli skills marketplace info pengjianchao@ops-auth
+opscli skills marketplace info pengjianchao@ops-auth --json
+```
+
+### `opscli skills marketplace versions <identifier>` - 查看版本列表
+
+```bash
+opscli skills marketplace versions pengjianchao@ops-auth
+```
+
+### 技能广场完整使用示例
+
+```bash
+# 1. 浏览广场技能
+opscli skills marketplace list
+
+# 2. 搜索特定技能
+opscli skills marketplace search ops-auth
+
+# 3. 查看详情与版本
+opscli skills marketplace info pengjianchao@ops-auth
+opscli skills marketplace versions pengjianchao@ops-auth
+
+# 4. 远程安装
+opscli skills install pengjianchao@ops-auth
+
+# 5. 发布自己的技能
+cd my-skill/
+opscli skills publish --changelog "初始版本"
+```
+
+---
 
 ### `skills` 联调建议顺序
 

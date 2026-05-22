@@ -683,7 +683,7 @@ query_chart_doc(
 
 ### Skill 管理（skills_*）
 
-Skill 相关 Tool **不需要认证**。
+Skill 相关 Tool **不需要认证**（远程安装需先完成 ops 登录以获取下载授权）。
 
 #### `skills_list`
 
@@ -707,14 +707,16 @@ Skill 相关 Tool **不需要认证**。
 
 #### `skills_install`
 
-从内置模板安装 Skill。
+安装 Skill。支持内置模板（`name` 传技能名）和技能广场远程安装（`name` 传 `username@skill_name` 格式）。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `name` | string | 是 | Skill 名称，如 `ops-auth` |
+| `name` | string | 是 | Skill 名称（如 `ops-auth`）或广场标识符（如 `pengjianchao@ops-auth`） |
 | `skills_dir` | string | 否 | 指定安装目录 |
 | `runtime` | string | 否 | `claude`、`openclaw`、`codex`、`opencode`、`all` |
 | `force` | boolean | 否 | 是否覆盖已有安装 |
+
+远程安装时（`name` 含 `@`），自动解压 zip 到 `~/.opscli/skills/` 并软链接到全局 AI 工具目录。
 
 ---
 
@@ -727,6 +729,63 @@ Skill 相关 Tool **不需要认证**。
 | `name` | string | 否 | 默认 `ops-dataset-query` |
 | `skills_dir` | string | 否 | 指定扫描目录 |
 | `force` | boolean | 否 | 是否强制升级 |
+
+---
+
+#### `skills_marketplace_list`
+
+浏览技能广场列表，支持关键词搜索和分类筛选。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `keyword` | string | 否 | 搜索关键词 |
+| `category_id` | integer | 否 | 按分类 ID 筛选 |
+| `sort` | string | 否 | 排序字段：`downloads`（默认）/ `rating` / `created_at` |
+| `order` | string | 否 | 排序方向：`desc`（默认）/ `asc` |
+| `page` | integer | 否 | 页码，默认 1 |
+| `limit` | integer | 否 | 每页条数，默认 20 |
+
+**返回示例：**
+```json
+{
+  "success": true,
+  "data": {
+    "list": [
+      {
+        "id": 1,
+        "identifier": "pengjianchao@ops-auth",
+        "title": "Ops 认证授权",
+        "description": "...",
+        "install_count": 42,
+        "rating": 4.8
+      }
+    ],
+    "total": 1
+  },
+  "error": null
+}
+```
+
+---
+
+#### `skills_marketplace_info`
+
+获取指定技能的详细信息，包含元数据、版本列表和下载统计。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `identifier` | string | 是 | 技能标识符，格式 `username@skill_name` |
+
+---
+
+#### `skills_record_usage`
+
+记录技能使用事件（异步上报，不阻塞主流程）。
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `skill_name` | string | 是 | Skill 名称 |
+| `event` | string | 否 | 事件类型，默认 `use` |
 
 ---
 
@@ -823,8 +882,7 @@ opscli/mcp/
     ├── helpers.py            # 共享辅助函数（按 API Key 隔离读取凭证）
     ├── auth.py               # 认证工具（隔离保存 session / JWT）
     ├── query.py              # 数据查询工具
-    ├── skills.py             # Skill 管理工具
-    └── ...
+    └── skills.py             # Skill 管理工具（含广场 list/info/record_usage）
 ```
 
 启动入口由 `pyproject.toml` 的 `[project.scripts]` 注册：

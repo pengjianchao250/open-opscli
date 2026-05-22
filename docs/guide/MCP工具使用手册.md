@@ -47,7 +47,10 @@ opscli MCP Tools
 │   ├── skills_list
 │   ├── skills_install
 │   ├── skills_status
-│   └── skills_upgrade
+│   ├── skills_upgrade
+│   ├── skills_marketplace_list
+│   ├── skills_marketplace_info
+│   └── skills_record_usage
 └── knowledge (ChatGPT / OpenAI 兼容)
     ├── search
     └── fetch
@@ -1130,13 +1133,11 @@ skills_status(skills_dir="/Users/mask/.config/opencode/skills")
 
 ### 6.3 `skills_install`
 
-从内置模板安装 Skill。**纯本地操作，不需要认证**。
-
-**参数**
+安装 Skill。支持内置模板和广场远程安装（`name` 传 `username@skill_name` 格式时自动走远程安装流程）。
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `name` | string | 是 | Skill 名称（如 `ops-auth`、`ops-dataset-query`） |
+| `name` | string | 是 | Skill 名称（如 `ops-auth`）或广场标识符（如 `pengjianchao@ops-auth`） |
 | `skills_dir` | string | 否 | 安装到指定目录 |
 | `runtime` | string | 否 | 目标运行时：`claude` / `openclaw` / `codex` / `opencode` |
 | `force` | bool | 否 | 是否覆盖已有安装，默认 `False` |
@@ -1144,10 +1145,16 @@ skills_status(skills_dir="/Users/mask/.config/opencode/skills")
 **示例**
 
 ```python
+# 安装内置模板
 skills_install(name="ops-auth")
 skills_install(name="ops-dataset-query")
 skills_install(name="ops-auth", runtime="claude")
 skills_install(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencode/skills", force=True)
+
+# 从广场远程安装
+skills_install(name="pengjianchao@ops-auth")
+skills_install(name="pengjianchao@ops-auth", force=True)
+skills_install(name="pengjianchao@ops-auth", runtime="claude")
 ```
 
 ---
@@ -1171,6 +1178,98 @@ skills_upgrade()
 skills_upgrade(name="ops-dataset-query")
 skills_upgrade(name="ops-dataset-query", force=True)
 skills_upgrade(name="ops-dataset-query", skills_dir="/Users/mask/.config/opencode/skills")
+```
+
+---
+
+### 6.5 `skills_marketplace_list`
+
+浏览技能广场列表，支持关键词搜索和分类筛选。**不需要认证**。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `keyword` | string | 否 | - | 搜索关键词 |
+| `category_id` | int | 否 | - | 按分类 ID 筛选 |
+| `sort` | string | 否 | `downloads` | 排序字段：`downloads` / `rating` / `created_at` |
+| `order` | string | 否 | `desc` | 排序方向：`asc` / `desc` |
+| `page` | int | 否 | `1` | 页码 |
+| `limit` | int | 否 | `20` | 每页条数 |
+
+**示例**
+
+```python
+# 浏览所有技能
+skills_marketplace_list()
+
+# 按下载量排序，每页10条
+skills_marketplace_list(sort="downloads", order="desc", limit=10)
+
+# 搜索关键词
+skills_marketplace_list(keyword="ops-auth")
+
+# 按分类筛选
+skills_marketplace_list(category_id=1)
+```
+
+---
+
+### 6.6 `skills_marketplace_info`
+
+获取指定技能的详细信息（元数据、版本列表、统计数据）。**不需要认证**。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `identifier` | string | 是 | 技能标识符，格式 `username@skill_name` |
+
+**返回**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "identifier": "pengjianchao@ops-auth",
+    "title": "Ops 认证授权",
+    "description": "...",
+    "latest_version": "1.1.0",
+    "install_count": 42,
+    "usage_count": 100,
+    "versions": [
+      {"version": "1.1.0", "changelog": "...", "created_at": "2026-05-01"}
+    ]
+  },
+  "error": null
+}
+```
+
+**示例**
+
+```python
+skills_marketplace_info(identifier="pengjianchao@ops-auth")
+```
+
+---
+
+### 6.7 `skills_record_usage`
+
+记录 Skill 使用事件（异步队列上报，不阻塞主流程）。**不需要认证**。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `skill_name` | string | 是 | - | Skill 名称 |
+| `event` | string | 否 | `use` | 事件类型 |
+
+**示例**
+
+```python
+skills_record_usage(skill_name="ops-auth")
+skills_record_usage(skill_name="ops-dataset-query", event="use")
 ```
 
 ---
@@ -1243,6 +1342,25 @@ skills_status()
 
 # 3. 执行升级
 skills_upgrade(name="ops-dataset-query")
+```
+
+### 8.5 浏览广场并安装远程技能
+
+```python
+# 1. 浏览广场技能
+skills_marketplace_list(sort="downloads", limit=10)
+
+# 2. 搜索特定技能
+skills_marketplace_list(keyword="ops-auth")
+
+# 3. 查看详情
+skills_marketplace_info(identifier="pengjianchao@ops-auth")
+
+# 4. 远程安装（name 传 username@skill_name 格式）
+skills_install(name="pengjianchao@ops-auth")
+
+# 5. 记录使用
+skills_record_usage(skill_name="ops-auth")
 ```
 
 ### 8.5 图表查询与异常检测
@@ -1441,9 +1559,12 @@ feedback_detail(feedback_uuid=result["data"]["feedback_uuid"])
 | `feedback_submit` | **是** | 可传 session_id / jwt |
 | `feedback_detail` | **是** | 可传 session_id / jwt |
 | `skills_list` | 否 | - |
-| `skills_install` | 否 | - |
+| `skills_install` | 否（内置） / 服务端自动（远程 `@`） | 远程安装需 ops 授权 |
 | `skills_status` | 服务端自动 | 涉及远端 API |
 | `skills_upgrade` | 服务端自动 | 涉及远端 API |
+| `skills_marketplace_list` | 否 | - |
+| `skills_marketplace_info` | 否 | - |
+| `skills_record_usage` | 否 | 异步上报，不阻塞 |
 | `search` | 否 | - |
 | `fetch` | 否 | - |
 
@@ -1484,5 +1605,8 @@ feedback_detail(feedback_uuid=result["data"]["feedback_uuid"])
 | Skills | `skills_install` | `opscli skills install` |
 | Skills | `skills_status` | `opscli skills status` |
 | Skills | `skills_upgrade` | `opscli skills upgrade` |
+| 技能广场 | `skills_marketplace_list` | `opscli skills marketplace list/search` |
+| 技能广场 | `skills_marketplace_info` | `opscli skills marketplace info/versions` |
+| 技能广场 | `skills_record_usage` | （CLI 无直接对应，自动异步触发） |
 | Knowledge | `search` | （CLI 无直接对应） |
 | Knowledge | `fetch` | （CLI 无直接对应） |
