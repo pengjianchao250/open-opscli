@@ -23,6 +23,20 @@ class SkillCategoryInfo:
         )
 
 
+# 分享权限类型常量
+SHARE_TYPE_PERSONAL   = "personal"    # 仅本人可见
+SHARE_TYPE_DEPARTMENT = "department"  # 部门内可见
+SHARE_TYPE_COMPANY    = "company"     # 全员可见
+SHARE_TYPES = (SHARE_TYPE_PERSONAL, SHARE_TYPE_DEPARTMENT, SHARE_TYPE_COMPANY)
+
+# 分享类型显示标签
+_SHARE_TYPE_LABELS: dict[str, str] = {
+    SHARE_TYPE_PERSONAL:   "🔒 个人",
+    SHARE_TYPE_DEPARTMENT: "🏢 部门",
+    SHARE_TYPE_COMPANY:    "🌐 全员",
+}
+
+
 @dataclass
 class SkillItem:
     id: int
@@ -40,6 +54,12 @@ class SkillItem:
     rating_count: int
     status: int
     is_official: bool
+    share_type: str = SHARE_TYPE_PERSONAL   # 分享权限类型，默认个人
+    summary: str = ""                        # 一句话简介
+    # 当前用户安装状态（服务端按登录用户注入）
+    is_installed: bool = False               # 是否已安装过
+    is_latest_version: bool = False          # 已安装版本是否为最新
+    installed_version: str | None = None     # 最后安装的版本号
     category: SkillCategoryInfo | None = None
     tags: list[str] = field(default_factory=list)
     is_favorited: bool = False
@@ -65,6 +85,11 @@ class SkillItem:
             rating_count=d.get("rating_count", 0),
             status=d.get("status", 1),
             is_official=bool(d.get("is_official", False)),
+            share_type=d.get("share_type") or SHARE_TYPE_PERSONAL,
+            summary=d.get("summary") or "",
+            is_installed=bool(d.get("is_installed", False)),
+            is_latest_version=bool(d.get("is_latest_version", False)),
+            installed_version=d.get("installed_version"),
             category=SkillCategoryInfo.from_dict(cat) if isinstance(cat, dict) else None,
             tags=d.get("tags") or [],
             is_favorited=bool(d.get("is_favorited", False)),
@@ -73,11 +98,28 @@ class SkillItem:
         )
 
     @property
-    def short_desc(self) -> str:
-        """截断简介，最多 30 字符。"""
-        if not self.description:
+    def share_type_label(self) -> str:
+        """返回分享类型的可读标签，如 🔒 个人。"""
+        return _SHARE_TYPE_LABELS.get(self.share_type, self.share_type)
+
+    @property
+    def install_badge(self) -> str:
+        """返回安装状态徽标。
+        - 未安装      →  ''
+        - 已安装最新  →  '✓ 已安装'
+        - 有新版可用  →  '↑ 可更新'
+        """
+        if not self.is_installed:
             return ""
-        return self.description[:30] + ("..." if len(self.description) > 30 else "")
+        return "✓ 已安装" if self.is_latest_version else "↑ 可更新"
+
+    @property
+    def short_desc(self) -> str:
+        """优先使用 summary；无则截断 description，最多 30 字符。"""
+        text = self.summary or self.description
+        if not text:
+            return ""
+        return text[:30] + ("..." if len(text) > 30 else "")
 
     @property
     def rating_stars(self) -> str:

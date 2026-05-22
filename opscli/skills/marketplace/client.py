@@ -155,6 +155,41 @@ class MarketplaceClient:
             )
         return _parse(resp, url).get("data", {})
 
+    def full_update_skill(
+        self,
+        skill_id: int,
+        fields: dict[str, Any],
+        skill_file_path: Path | None = None,
+    ) -> dict:
+        """完整编辑已有技能（元数据 + 可选文件重传 + 可选版本变更）。
+
+        对应 POST /v1/skills/{id}（multipart/form-data）。
+        skill_file_path 为 None 时仅更新元数据和/或版本号。
+        """
+        url = f"{self._base}/v1/skills/{skill_id}"
+
+        if skill_file_path is not None:
+            with open(skill_file_path, "rb") as fh:
+                mime = "application/zip" if skill_file_path.suffix.lower() == ".zip" else "text/markdown"
+                files = {"skill_file": (skill_file_path.name, fh, mime)}
+                resp = httpx.post(
+                    url,
+                    headers=self._auth_headers(),
+                    data=fields,
+                    files=files,
+                    timeout=60,
+                )
+        else:
+            # 无文件时仍用 multipart/form-data 以保持接口一致性
+            resp = httpx.post(
+                url,
+                headers=self._auth_headers(),
+                data=fields,
+                timeout=60,
+            )
+
+        return _parse(resp, url).get("data", {})
+
     def delete_skill(self, skill_id: int) -> None:
         url = f"{self._base}/v1/skills/{skill_id}"
         resp = httpx.delete(url, headers=self._auth_headers(), timeout=_TIMEOUT)

@@ -22,7 +22,12 @@ from rich.text import Text
 
 from opscli.skills.domain.exceptions import error_to_dict
 from opscli.skills.marketplace.client import MarketplaceClient
-from opscli.skills.marketplace.models import MarketplaceListResult, SkillItem, SkillVersionInfo
+from opscli.skills.marketplace.models import (
+    SHARE_TYPES,
+    MarketplaceListResult,
+    SkillItem,
+    SkillVersionInfo,
+)
 
 app = typer.Typer(help="技能广场：浏览、搜索、查看远程 Skill")
 _console = Console()
@@ -50,23 +55,21 @@ def _build_list_table(items: list[SkillItem], result: MarketplaceListResult) -> 
         padding=(0, 1),
     )
     table.add_column("标识符",  style="green",      min_width=28)
+    table.add_column("分享",    style="dim",         width=6)
     table.add_column("版本",    style="dim",         width=7)
-    table.add_column("安装",    justify="right",     width=6)
+    table.add_column("已安装",  style="cyan",        width=6)   # 当前用户安装状态
+    table.add_column("安装数",  justify="right",     width=6)
     table.add_column("使用",    justify="right",     width=7)
     table.add_column("评分",    style="yellow",      width=6)
     if wide:
         table.add_column("简介", style="dim", min_width=20)
 
     for item in items:
-        official_mark = " [bold yellow]★[/bold yellow]" if item.is_official else ""
-        identifier_text = Text()
-        identifier_text.append(item.identifier, style="green")
-        if item.is_official:
-            identifier_text.append(" ★", style="bold yellow")
-
         row = [
             item.identifier + (" ★" if item.is_official else ""),
+            item.share_type_label,
             item.latest_version,
+            item.install_badge,          # ✓ 已安装 / ↑ 可更新 / 空
             str(item.install_count),
             str(item.usage_count),
             item.rating_stars,
@@ -85,6 +88,7 @@ def _build_list_table(items: list[SkillItem], result: MarketplaceListResult) -> 
 @app.command("list")
 def list_marketplace(
     category: str | None = typer.Option(None, "--category", help="按分类 slug 筛选（如 auth）"),
+    share_type: str | None = typer.Option(None, "--share-type", help=f"按分享类型筛选：{'/'.join(SHARE_TYPES)}"),
     sort: str = typer.Option("install_count", "--sort", help="排序：install_count/usage_count/rating_avg/new"),
     order: str = typer.Option("desc", "--order", help="asc 或 desc"),
     page: int  = typer.Option(1,  "--page",  help="页码"),
@@ -106,6 +110,11 @@ def list_marketplace(
             pass
     if official:
         params["is_official"] = "true"
+    if share_type:
+        if share_type not in SHARE_TYPES:
+            _console.print(f"[red]错误：share-type 必须为 {'/'.join(SHARE_TYPES)}，收到: {share_type!r}[/red]")
+            raise typer.Exit(1)
+        params["share_type"] = share_type
 
     try:
         client = MarketplaceClient()
@@ -217,9 +226,31 @@ def _print_skill_info(item: SkillItem) -> None:
         f"[dim]标识符  [/dim] {item.identifier}",
         f"[dim]当前版本[/dim] {item.latest_version}",
         f"[dim]分  类  [/dim] {cat_name}",
+        f"[dim]分享权限[/dim] {item.share_type_label}",
         f"[dim]标  签  [/dim] {tags_str}",
         "",
+    ]
+    if item.summary:
+        lines += [
+            f"[dim]一句话  [/dim] {item.summary}",
+            "",
+        ]
+    # 安装状态区块
+    if item.is_installed:
+        if item.is_latest_version:
+            install_status = f"[green]✓ 已安装最新版[/green]  [dim]({item.installed_version})[/dim]"
+        else:
+            install_status = (
+                f"[yellow]↑ 可更新[/yellow]  "
+                f"[dim]已安装 {item.installed_version} → 最新 {item.latest_version}[/dim]"
+            )
+    else:
+        install_status = "[dim]未安装[/dim]"
+
+    lines += [
         f"[dim]简  介  [/dim] {item.description or '（暂无描述）'}",
+        "",
+        f"[dim]安装状态[/dim] {install_status}",
         "",
         f"[dim]安装次数[/dim] {item.install_count}    "
         f"[dim]使用次数[/dim] {item.usage_count}    "

@@ -1,7 +1,7 @@
 ---
 name: ops-skills
 description: 管理 AI 工具中已安装的 Skill 生命周期，包含技能广场的发布、安装、浏览与评分
-version: v1.3.0
+version: v1.4.0
 ---
 
 # ops-skills
@@ -363,18 +363,34 @@ opscli skills upgrade ops-dataset-query --skills-dir ~/.claude/skills/
 选项：
   --dir / -d TEXT     Skill 目录（默认当前目录 .）
   --title TEXT        技能标题（覆盖 SKILL.md frontmatter）
-  --desc TEXT         技能简介
+  --desc TEXT         技能详细描述
+  --summary TEXT      一句话简介（列表页展示，最多500字符；覆盖 frontmatter）
+  --share-type TEXT   分享权限类型：personal（默认）/ department / company
   --tags TEXT         标签，逗号分隔（如 "ai,ops,auth"）
   --category INT      分类 ID
   --changelog TEXT    本次版本变更说明
   --json              输出原始 JSON（适合脚本）
 ```
 
+**分享权限类型说明：**
+
+| 类型 | 含义 |
+|------|------|
+| `personal`   | 🔒 仅发布者本人可见与安装（默认值） |
+| `department` | 🏢 部门内成员可见与安装 |
+| `company`    | 🌐 全员可见与安装 |
+
 **示例：**
 
 ```bash
-# 发布当前目录（读取 SKILL.md frontmatter 作为元数据）
+# 发布当前目录（读取 SKILL.md frontmatter 作为元数据），默认 personal 仅本人可见
 opscli skills publish
+
+# 发布为全员可见
+opscli skills publish --share-type company
+
+# 发布为部门内可见，附加一句话简介
+opscli skills publish --share-type department --summary "部门内共享的数据查询辅助技能"
 
 # 指定目录，附加变更说明
 opscli skills publish --dir ./my-skill --changelog "修复了 xxx 问题"
@@ -383,6 +399,8 @@ opscli skills publish --dir ./my-skill --changelog "修复了 xxx 问题"
 opscli skills publish \
   --title "我的技能" \
   --desc "这是一个示例技能" \
+  --summary "一句话描述：智能数据查询助手" \
+  --share-type company \
   --tags "ai,demo" \
   --changelog "初始版本"
 
@@ -405,10 +423,15 @@ opscli skills publish --json
 ---
 title: Ops 认证授权
 description: 管理 Claude Code 中的 ops/polaris 认证授权流程
+summary: 一键完成 ops/polaris 登录与 Token 管理
+share_type: company
 tags: auth,ops,认证
 category_id: 1
 ---
 ```
+
+> `summary` 字段：一句话简介，在广场列表页优先展示，建议在 20-50 字以内。  
+> `share_type` 字段：`personal`（默认）/ `department` / `company`，控制广场可见范围。
 
 **发布成功后的 identifier：**
 
