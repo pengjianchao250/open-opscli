@@ -196,6 +196,39 @@ class MarketplaceClient:
         _parse(resp, url)
 
     # ──────────────────────────────────────────
+    # 市场同步队列 & 排除名单
+    # ──────────────────────────────────────────
+
+    def get_sync_queue(self) -> list[dict]:
+        """获取待同步列表（服务端安装记录 − 排除名单）。"""
+        url = f"{self._base}/v1/skills/sync/queue"
+        resp = httpx.get(url, headers=self._auth_headers(), timeout=_TIMEOUT)
+        return _parse(resp, url).get("data", [])
+
+    def list_sync_excludes(self) -> list[dict]:
+        """查看当前用户的不同步排除名单。"""
+        url = f"{self._base}/v1/skills/sync/excludes"
+        resp = httpx.get(url, headers=self._auth_headers(), timeout=_TIMEOUT)
+        return _parse(resp, url).get("data", [])
+
+    def add_sync_exclude(self, identifier: str) -> dict:
+        """将指定技能加入不同步排除名单（幂等）。"""
+        url = f"{self._base}/v1/skills/sync/excludes"
+        resp = httpx.post(
+            url,
+            headers=self._auth_headers(),
+            json={"identifier": identifier},
+            timeout=_TIMEOUT,
+        )
+        return _parse(resp, url).get("data", {})
+
+    def remove_sync_exclude(self, skill_id: int) -> None:
+        """将指定技能移出排除名单。"""
+        url = f"{self._base}/v1/skills/sync/excludes/{skill_id}"
+        resp = httpx.delete(url, headers=self._auth_headers(), timeout=_TIMEOUT)
+        _parse(resp, url)
+
+    # ──────────────────────────────────────────
     # 统计回调
     # ──────────────────────────────────────────
 

@@ -85,8 +85,33 @@ def _build_list_table(items: list[SkillItem], result: MarketplaceListResult) -> 
 # list
 # ──────────────────────────────────────────
 
+_SCOPE_CHOICES = ("all", "personal")
+_SUB_CHOICES   = ("mine", "shared_with_me")
+
+# scope 对应的面板标题
+_SCOPE_TITLES: dict[str, str] = {
+    "all":      "Skill 技能广场",
+    "personal": "个人相关技能",
+}
+# sub 对应的标题后缀
+_SUB_TITLES: dict[str, str] = {
+    "mine":           "我创建的",
+    "shared_with_me": "分享给我的",
+}
+
+
 @app.command("list")
 def list_marketplace(
+    scope: str = typer.Option(
+        "all",
+        "--scope",
+        help="范围：all（技能广场，department/company）| personal（个人相关）",
+    ),
+    sub: str | None = typer.Option(
+        None,
+        "--sub",
+        help="personal 范围下的子筛选：mine（我创建的）| shared_with_me（分享给我的）；不传则展示两者",
+    ),
     category: str | None = typer.Option(None, "--category", help="按分类 slug 筛选（如 auth）"),
     share_type: str | None = typer.Option(None, "--share-type", help=f"按分享类型筛选：{'/'.join(SHARE_TYPES)}"),
     sort: str = typer.Option("install_count", "--sort", help="排序：install_count/usage_count/rating_avg/new"),
@@ -96,10 +121,36 @@ def list_marketplace(
     official: bool = typer.Option(False, "--official", help="只看官方技能"),
     json_output: bool = typer.Option(False, "--json", help="输出原始 JSON"),
 ):
-    """浏览技能广场列表。"""
-    params: dict = {"sort": sort, "order": order, "page": page, "limit": limit}
+    """浏览技能列表。
+
+    \b
+    --scope all       技能广场（share_type 为 department / company，默认）
+    --scope personal  个人相关（我创建的 + 分享给我的）
+      --sub mine            仅我创建的
+      --sub shared_with_me  仅分享给我的（他人创建且我安装过）
+    """
+    # ── 参数校验 ────────────────────────────────────────────
+    if scope not in _SCOPE_CHOICES:
+        _console.print(f"[red]错误：--scope 必须为 {'/'.join(_SCOPE_CHOICES)}，收到: {scope!r}[/red]")
+        raise typer.Exit(1)
+
+    if sub is not None:
+        if scope != "personal":
+            _console.print("[red]错误：--sub 仅在 --scope personal 时有效[/red]")
+            raise typer.Exit(1)
+        if sub not in _SUB_CHOICES:
+            _console.print(f"[red]错误：--sub 必须为 {'/'.join(_SUB_CHOICES)}，收到: {sub!r}[/red]")
+            raise typer.Exit(1)
+
+    if share_type and share_type not in SHARE_TYPES:
+        _console.print(f"[red]错误：--share-type 必须为 {'/'.join(SHARE_TYPES)}，收到: {share_type!r}[/red]")
+        raise typer.Exit(1)
+
+    # ── 构建请求参数 ─────────────────────────────────────────
+    params: dict = {"sort": sort, "order": order, "page": page, "limit": limit, "scope": scope}
+    if sub:
+        params["sub"] = sub
     if category:
-        # 先把 slug 转为 category_id
         try:
             cats = MarketplaceClient().get_categories()
             for c in cats:
@@ -111,9 +162,6 @@ def list_marketplace(
     if official:
         params["is_official"] = "true"
     if share_type:
-        if share_type not in SHARE_TYPES:
-            _console.print(f"[red]错误：share-type 必须为 {'/'.join(SHARE_TYPES)}，收到: {share_type!r}[/red]")
-            raise typer.Exit(1)
         params["share_type"] = share_type
 
     try:
@@ -131,11 +179,18 @@ def list_marketplace(
         _emit({"success": True, "command": "skills marketplace list", "data": raw}, json_output)
         return
 
+    # ── 面板标题 ─────────────────────────────────────────────
+    base_title = _SCOPE_TITLES.get(scope, "Skill 列表")
+    if scope == "personal" and sub:
+        base_title += f" — {_SUB_TITLES[sub]}"
+    if category:
+        base_title += f" — {category}"
+
     table = _build_list_table(items, result)
     wide_note = "（简介列在宽度≥120终端显示）" if _terminal_width() < 120 else ""
     _console.print(Panel(
         table,
-        title=f"[bold]Skill 技能广场[/bold]{' — ' + category if category else ''}",
+        title=f"[bold]{base_title}[/bold]",
         border_style="blue",
     ))
     _console.print(

@@ -16,8 +16,10 @@ from rich.table import Table
 
 from opscli.skills.commands.marketplace_cli import app as marketplace_app
 from opscli.skills.commands.publish_cli import publish_skill, unpublish_skill
+from opscli.skills.commands.sync_exclude_cli import app as sync_exclude_app
 from opscli.skills.domain.exceptions import error_to_dict
 from opscli.skills.domain.models import runtime_to_tool_name
+from opscli.skills.marketplace.client import MarketplaceClient
 from opscli.skills.marketplace.remote_installer import install_remote_skill
 from opscli.skills.packaging import get_central_skills_dir
 from opscli.skills.services.manager import SkillsManager
@@ -25,6 +27,7 @@ from opscli.skills.services.rule_injector import RuleInjector
 
 app = typer.Typer(help="Skill 生命周期管理")
 app.add_typer(marketplace_app, name="marketplace")
+app.add_typer(sync_exclude_app, name="sync-exclude")
 app.command("publish")(publish_skill)
 app.command("unpublish")(unpublish_skill)
 _console = Console()
@@ -217,16 +220,37 @@ def install_skill(
     force: bool = typer.Option(False, "--force", help="覆盖已存在目录"),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认，自动全选所有 Skills 和检测到的 AI 工具"),
     version: str | None = typer.Option(None, "--version", help="安装指定版本（仅远程安装有效）"),
+    sync_market: bool = typer.Option(False, "--sync-market", help="从市场安装记录同步：补装缺失 + 升级旧版"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="仅预览同步计划，不实际安装（需配合 --sync-market）"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """安装 Skill 到本地目录。
 
+    \b
     - 不指定 NAME 时进入 TUI 交互模式，可多选 Skills 和安装目标。
     - NAME 不含 @ 时从内置模板安装（如 ops-auth）。
     - NAME 含 @ 时从技能广场远程安装（如 pengjianchao@ops-auth）。
+    - --sync-market 从市场安装记录同步，补装缺失 + 升级旧版（不能与 NAME 同时使用）。
+    - --dry-run 配合 --sync-market 仅预览同步计划，不实际安装。
 
     加 --yes / -y 可跳过确认，直接安装全部到所有检测到的工具。
     """
+    # ── --sync-market 模式 ─────────────────────────────────
+    if sync_market:
+        if name is not None:
+            _console.print("[red]错误：--sync-market 不能与指定 NAME 同时使用[/red]")
+            raise typer.Exit(1)
+        if version is not None:
+            _console.print("[red]错误：--sync-market 模式下版本由市场决定，请勿指定 --version[/red]")
+            raise typer.Exit(1)
+        _install_sync_market(
+            skills_dir=skills_dir,
+            runtime=runtime,
+            dry_run=dry_run,
+            pretty=pretty,
+        )
+        return
+
     manager = SkillsManager()
     try:
         if name is None:
@@ -283,6 +307,107 @@ def install_skill(
         raise typer.Exit(1)
 
     _emit(payload, pretty)
+
+
+def _install_sync_market(
+    *,
+    skills_dir: str | None,
+    runtime: str | None,
+    dry_run: bool,
+    pretty: bool,
+) -> None:
+    """--sync-market 模式：拉取市场同步队列，补装缺失 + 升级旧版。"""
+    from packaging.version import Version, InvalidVersion
+
+    # Step 1：拉取市场待同步列表
+    try:
+        queue = MarketplaceClient().get_sync_queue()
+    except Exception as exc:
+        _emit({"success": False, "command": "skills install --sync-market",
+               "error": error_to_dict(exc)}, pretty)
+        raise typer.Exit(1)
+
+    if not queue:
+        _console.print("[dim]暂无需同步的技能（市场无安装记录，或全部已被加入排除名单）[/dim]")
+        return
+
+    # Step 2：扫描本地已安装版本 {skill_name: version_str}
+    manager = SkillsManager()
+    local_skills: dict[str, str] = {}
+    try:
+        detected = manager.list_skills(skills_dir=skills_dir)
+        for s in detected:
+            local_skills[s.name] = s.version or ""
+    except Exception:
+        pass  # 扫描失败时视为本地全部缺失
+
+    # Step 3：分类（新装 / 升级 / 跳过）
+    to_install: list[dict] = []
+    to_upgrade: list[dict] = []
+    to_skip:    list[dict] = []
+
+    for item in queue:
+        identifier     = item.get("identifier", "")
+        skill_name     = identifier.split("@")[-1] if "@" in identifier else ""
+        market_ver_str = item.get("latest_version", "0.0.0")
+        local_ver_str  = local_skills.get(skill_name, "")
+
+        if not local_ver_str:
+            to_install.append(item)
+            continue
+
+        try:
+            # local version 可能带 v 前缀（如 v1.2.0），先去掉
+            local_v  = Version(local_ver_str.lstrip("v"))
+            market_v = Version(market_ver_str.lstrip("v"))
+        except InvalidVersion:
+            # 无法解析视为"版本未知"，强制重装
+            item["_reinstall"] = True
+            to_upgrade.append(item)
+            continue
+
+        if local_v < market_v:
+            item["_from_version"] = local_ver_str
+            to_upgrade.append(item)
+        else:
+            to_skip.append(item)
+
+    # Step 4：dry-run 预览
+    if dry_run:
+        _print_sync_preview(to_install, to_upgrade, to_skip)
+        return
+
+    # Step 5：实际执行
+    installed_ok:  list[str] = []
+    upgraded_ok:   list[str] = []
+    failed:        list[tuple[str, str]] = []
+
+    for item in to_install + to_upgrade:
+        identifier  = item["identifier"]
+        market_ver  = item.get("latest_version")
+        is_upgrade  = item in to_upgrade
+        try:
+            payload = install_remote_skill(
+                identifier=identifier,
+                version=market_ver,
+                skills_dir=skills_dir,
+                runtime=runtime,
+                force=True,  # 升级时需要 force 覆盖
+            )
+            if payload.get("success"):
+                if is_upgrade:
+                    upgraded_ok.append(
+                        f"{identifier} {item.get('_from_version', '?')} → {market_ver}"
+                    )
+                else:
+                    installed_ok.append(f"{identifier} v{market_ver}")
+            else:
+                err = (payload.get("error") or {}).get("message", "未知错误")
+                failed.append((identifier, err))
+        except Exception as exc:
+            failed.append((identifier, str(exc)))
+
+    _print_sync_result(installed_ok, upgraded_ok, to_skip, failed)
 
 
 def _install_interactive(
@@ -420,6 +545,75 @@ def _inject_rules_for_installs(installs: list[object]) -> None:
             _console.print(
                 f"  [dim]⚙ 已追加反馈铁律到 {config_path}[/dim]"
             )
+
+
+def _print_sync_preview(
+    to_install: list[dict],
+    to_upgrade: list[dict],
+    to_skip: list[dict],
+) -> None:
+    """打印 --dry-run 同步预览表格（不执行实际安装）。"""
+    table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
+    table.add_column("标识符",  style="green", min_width=32)
+    table.add_column("本地版本", style="dim",   width=10)
+    table.add_column("市场版本", style="dim",   width=10)
+    table.add_column("动作",    width=8)
+
+    for item in to_install:
+        table.add_row(
+            item["identifier"],
+            "✗ 未安装",
+            item.get("latest_version", "?"),
+            "[bold blue]🆕 安装[/bold blue]",
+        )
+    for item in to_upgrade:
+        from_ver = item.get("_from_version", "未知")
+        reinstall = item.get("_reinstall", False)
+        table.add_row(
+            item["identifier"],
+            f"[yellow]{from_ver}[/yellow]" if not reinstall else "[red]版本未知[/red]",
+            item.get("latest_version", "?"),
+            "[bold yellow]↑  升级[/bold yellow]",
+        )
+    for item in to_skip:
+        table.add_row(
+            item["identifier"],
+            item.get("latest_version", "?"),
+            item.get("latest_version", "?"),
+            "[dim]✓  跳过[/dim]",
+        )
+
+    total = len(to_install) + len(to_upgrade) + len(to_skip)
+    _console.print(Panel(
+        table,
+        title="[bold]同步预览（--dry-run，未实际安装）[/bold]",
+        border_style="blue",
+    ))
+    _console.print(
+        f"[dim]安装 {len(to_install)} 个 / 升级 {len(to_upgrade)} 个 / 跳过 {len(to_skip)} 个，共 {total} 项[/dim]"
+    )
+
+
+def _print_sync_result(
+    installed_ok: list[str],
+    upgraded_ok: list[str],
+    skipped: list[dict],
+    failed: list[tuple[str, str]],
+) -> None:
+    """打印同步执行结果汇总。"""
+    _console.print("\n[bold green]✅ 同步完成[/bold green]")
+    if installed_ok:
+        items_str = "、".join(installed_ok)
+        _console.print(f"   [blue]🆕 安装[/blue]  {len(installed_ok)} 个：{items_str}")
+    if upgraded_ok:
+        items_str = "、".join(upgraded_ok)
+        _console.print(f"   [yellow]↑  升级[/yellow]  {len(upgraded_ok)} 个：{items_str}")
+    if skipped:
+        _console.print(f"   [dim]✓  跳过[/dim]  {len(skipped)} 个：已是最新版")
+    if failed:
+        _console.print(f"   [red]❌ 失败[/red]  {len(failed)} 个：")
+        for identifier, reason in failed:
+            _console.print(f"      [red]{identifier}[/red]（{reason}，可稍后重试）")
 
 
 @app.command("status")

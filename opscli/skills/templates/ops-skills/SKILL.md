@@ -1,7 +1,7 @@
 ---
 name: ops-skills
 description: 管理 AI 工具中已安装的 Skill 生命周期，包含技能广场的发布、编辑、安装、浏览与评分
-version: v1.5.0
+version: v1.7.0
 ---
 
 # ops-skills
@@ -263,9 +263,11 @@ opscli skills status --skills-dir ~/.claude/skills/
 选项：
   --runtime TEXT      目标运行时：claude / openclaw / codex / opencode / all
                       支持逗号分隔多个值，如 claude,openclaw
-  --version TEXT      指定安装版本（仅远程安装有效）
+  --version TEXT      指定安装版本（仅远程安装有效，--sync-market 模式下不可用）
   --skills-dir TEXT   指定安装目录（跳过自动检测和 --runtime）
   --force             覆盖已存在的安装（默认跳过已安装）
+  --sync-market       从市场安装记录同步：补装缺失 + 升级旧版（不能与 name 同时使用）
+  --dry-run           仅预览同步计划，不实际安装（需配合 --sync-market）
   --pretty            格式化 JSON 输出
 ```
 
@@ -441,6 +443,89 @@ pengjianchao@ops-auth
 ```
 
 其他用户可通过 `opscli skills install pengjianchao@ops-auth` 安装。
+
+---
+
+### `opscli skills install --sync-market`
+
+从技能广场的安装记录同步，自动**补装缺失**和**升级旧版**，过滤排除名单中的技能。
+
+**版本比较规则：**
+
+| 本地状态 | 动作 |
+|---------|------|
+| 本地不存在 | 🆕 安装最新版 |
+| 本地版本 < 市场最新版 | ↑ 升级到最新版 |
+| 本地版本 ≥ 市场最新版 | ✓ 跳过 |
+| 本地存在但无 VERSION.json | ⚠ 强制重装（记录警告） |
+
+```
+选项（配合 --sync-market 使用）：
+  --dry-run           仅预览同步计划，不实际安装
+  --runtime TEXT      安装目标运行时（同普通安装）
+  --skills-dir TEXT   指定安装目录（同普通安装）
+```
+
+**示例：**
+
+```bash
+# 预览同步计划（不实际安装）
+opscli skills install --sync-market --dry-run
+
+# 执行同步（补装 + 升级）
+opscli skills install --sync-market
+
+# 同步到指定运行时
+opscli skills install --sync-market --runtime claude
+```
+
+**预览输出示例（--dry-run）：**
+
+```
+┌─ 同步预览（--dry-run，未实际安装）─────────────────────────────┐
+│ 标识符                      本地版本    市场版本   动作          │
+│ pengjianchao@ops-auth       ✗ 未安装    1.3.0     🆕 安装       │
+│ alice@data-query             1.0.0      1.2.0     ↑  升级       │
+│ bob@amazon-helper            1.1.0      1.1.0     ✓  跳过       │
+└──────────────────────────── 安装 1 个 / 升级 1 个 / 跳过 1 个 ──┘
+```
+
+---
+
+### `opscli skills sync-exclude`
+
+管理"不同步到本地"的技能排除名单。加入排除名单的技能在执行 `--sync-market` 时会被自动跳过。排除名单存储在服务端，多台机器共享。
+
+```
+子命令：
+  add    <identifier>   将指定技能加入排除名单
+  remove <identifier>   将指定技能移出排除名单
+  list                  查看当前排除名单
+```
+
+**示例：**
+
+```bash
+# 将某技能加入排除名单（不再同步到本地）
+opscli skills sync-exclude add alice@data-query
+
+# 移出排除名单（重新纳入同步范围）
+opscli skills sync-exclude remove alice@data-query
+
+# 查看当前排除名单
+opscli skills sync-exclude list
+```
+
+**`list` 输出示例：**
+
+```
+┌─ 同步排除名单 ───────────────────────────────────────────┐
+│ 标识符                    标题              加入时间        │
+│ alice@data-query          数据查询助手      2026-05-20      │
+└──────────────────────────────────────── 共 1 项 ──────────┘
+```
+
+> 排除名单操作幂等：重复 `add` 同一技能不会报错；`remove` 不在名单中的技能会提示"未找到"。
 
 ---
 
@@ -666,33 +751,59 @@ AI 输出：
 
 ### `opscli skills marketplace list`
 
-浏览广场公开技能列表。
+浏览技能列表，支持两大范围（`--scope`）和个人子筛选（`--sub`）。
+
+**范围说明（`--scope`）：**
+
+| 范围 | 含义 |
+|------|------|
+| `all`（默认） | 技能广场——仅展示 `share_type` 为 `department` 或 `company` 的公开技能 |
+| `personal`   | 个人相关——我创建的技能 + 分享给我的技能（绕过广场可见性限制） |
+
+**个人子筛选（`--sub`，仅 `--scope personal` 有效）：**
+
+| 子筛选 | 含义 |
+|--------|------|
+| 不传（默认） | 并集：我创建的 + 分享给我的 |
+| `mine`           | 仅我创建的（`user_id == 当前用户`） |
+| `shared_with_me` | 仅分享给我的（他人创建，且我已安装过） |
 
 ```
 选项：
-  --category INT      按分类 ID 筛选
-  --sort TEXT         排序字段：downloads（默认）/ rating / created_at
-  --order TEXT        排序方向：desc（默认）/ asc
+  --scope TEXT        范围：all（技能广场，默认）/ personal（个人相关）
+  --sub TEXT          personal 子筛选：mine / shared_with_me（仅 --scope personal 有效）
+  --category TEXT     按分类 slug 筛选（如 auth）
+  --share-type TEXT   按分享类型筛选：personal / department / company
+  --sort TEXT         排序：install_count（默认）/ usage_count / rating_avg / new
+  --order TEXT        asc 或 desc（默认 desc）
   --page INT          页码（默认 1）
-  --limit INT         每页条数（默认 20，最大 50）
-  --official          只显示官方技能
+  --limit INT         每页条数（最多 100，默认 20）
+  --official          只看官方技能
   --json              输出原始 JSON
 ```
 
 **示例：**
 
 ```bash
-# 浏览全部技能，按下载量降序
+# ── 技能广场（默认，scope=all）────────────────────────────
+# 浏览全部公开技能
 opscli skills marketplace list
 
 # 按评分排序，每页 10 条
-opscli skills marketplace list --sort rating --limit 10
+opscli skills marketplace list --sort rating_avg --limit 10
 
-# 按分类筛选
-opscli skills marketplace list --category 1
+# 按分类筛选，只看官方技能
+opscli skills marketplace list --category auth --official
 
-# 只看官方技能
-opscli skills marketplace list --official
+# ── 个人相关（scope=personal）────────────────────────────
+# 查看全部个人相关技能（我创建的 + 分享给我的）
+opscli skills marketplace list --scope personal
+
+# 仅查看我自己创建的技能
+opscli skills marketplace list --scope personal --sub mine
+
+# 仅查看他人分享给我（我安装过的他人技能）
+opscli skills marketplace list --scope personal --sub shared_with_me
 ```
 
 ---
@@ -912,6 +1023,29 @@ opscli skills edit pengjianchao@my-skill \
 
 # 4. 确认广场已更新
 opscli skills marketplace info pengjianchao@my-skill
+```
+
+---
+
+### 场景九：同步市场安装记录到本地
+
+换新机器或重装环境后，一键将历史安装过的技能同步回本地：
+
+```bash
+# 1. 先检查认证状态
+opscli auth token status
+
+# 2. 预览同步计划，确认哪些会被安装/升级
+opscli skills install --sync-market --dry-run
+
+# 3. 某些技能不想同步，加入排除名单
+opscli skills sync-exclude add alice@data-query
+
+# 4. 执行同步
+opscli skills install --sync-market
+
+# 5. 验证结果
+opscli skills list --pretty
 ```
 
 ---
