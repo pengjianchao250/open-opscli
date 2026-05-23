@@ -54,13 +54,19 @@ opscli
 │   ├── install
 │   ├── status
 │   ├── upgrade
+│   ├── edit
 │   ├── publish
 │   ├── unpublish
+│   ├── sync-exclude
+│   │   ├── add
+│   │   ├── remove
+│   │   └── list
 │   └── marketplace
 │       ├── list
 │       ├── search
 │       ├── info
-│       └── versions
+│       ├── versions
+│       └── rate
 ├── seller-sprite
 │   ├── collect
 │   ├── frequency
@@ -976,12 +982,13 @@ opscli skills list --skills-dir ~/.claude/skills --pretty
 
 ### 7.3 `opscli skills install`
 
-安装 Skill — 支持内置模板和远程技能广场两种来源。
+安装 Skill — 支持内置模板和远程技能广场两种来源；也可通过 `--sync-market` 将市场安装记录同步到本地。
 
 **用法**
 
 ```bash
-opscli skills install [NAME|IDENTIFIER] [--skills-dir <dir>] [--runtime <runtime>] [--force] [--pretty]
+opscli skills install [NAME|IDENTIFIER] [--skills-dir <dir>] [--runtime <runtime>]
+                      [--force] [--sync-market] [--dry-run] [--pretty]
 ```
 
 **参数**
@@ -992,6 +999,8 @@ opscli skills install [NAME|IDENTIFIER] [--skills-dir <dir>] [--runtime <runtime
 | `--skills-dir` | 否 | 指定安装目录 |
 | `--runtime` | 否 | 指定目标运行时，可传单个或逗号分隔多个值 |
 | `--force` | 否 | 覆盖已存在目录 |
+| `--sync-market` | 否 | 从技能市场同步安装记录：补装本地缺失的技能，升级版本落后的技能；不可与 `NAME` 同时使用 |
+| `--dry-run` | 否 | 预览同步计划，不实际执行安装/升级（需配合 `--sync-market`） |
 | `--pretty` | 否 | 美化 JSON 输出 |
 
 **运行时说明**
@@ -1006,6 +1015,15 @@ opscli skills install [NAME|IDENTIFIER] [--skills-dir <dir>] [--runtime <runtime
 2. 下载 zip 包并解压到 `~/.opscli/skills/<skill_name>/`
 3. 自动软链接到 `~/.claude/skills/`、`~/.openclaw/skills/` 等全局 AI 工具目录
 4. 回调广场记录安装次数
+
+**市场同步说明**（`--sync-market`）
+
+1. 从服务端拉取当前用户的市场安装记录队列（排除同步黑名单中的技能）
+2. 逐项与本地已安装版本对比：
+   - 本地未安装 → 自动补装
+   - 本地版本落后 → 强制升级到市场最新版
+   - 本地版本相同或更新 → 跳过
+3. 配合 `--dry-run` 可仅打印同步计划，不执行任何写操作
 
 **示例**
 
@@ -1022,6 +1040,12 @@ opscli skills install ops-amazon --runtime all --pretty
 opscli skills install pengjianchao@ops-auth
 opscli skills install pengjianchao@ops-auth --force
 opscli skills install pengjianchao@ops-auth --runtime claude
+
+# 市场同步（补装 + 升级）
+opscli skills install --sync-market --pretty
+
+# 预览市场同步计划，不实际执行
+opscli skills install --sync-market --dry-run --pretty
 ```
 
 交互式安装：
@@ -1097,8 +1121,9 @@ opscli skills upgrade ops-dataset-query --skills-dir ~/.claude/skills --pretty
 **用法**
 
 ```bash
-opscli skills publish [--dir <dir>] [--title <title>] [--desc <desc>] [--tags <tags>]
-                      [--category <id>] [--changelog <text>] [--json]
+opscli skills publish [--dir <dir>] [--title <title>] [--summary <summary>]
+                      [--desc <desc>] [--tags <tags>] [--category <id>]
+                      [--share-type <type>] [--changelog <text>] [--json]
 ```
 
 **参数**
@@ -1107,23 +1132,37 @@ opscli skills publish [--dir <dir>] [--title <title>] [--desc <desc>] [--tags <t
 | --- | --- | --- | --- |
 | `--dir` / `-d` | 否 | `.`（当前目录） | Skill 目录 |
 | `--title` | 否 | SKILL.md 中的 title | 技能标题 |
-| `--desc` | 否 | SKILL.md 中的 description | 技能简介 |
+| `--summary` | 否 | SKILL.md 中的 summary | 技能一句话摘要（显示在列表卡片中） |
+| `--desc` | 否 | SKILL.md 中的 description | 技能详细简介 |
 | `--tags` | 否 | SKILL.md 中的 tags | 标签，逗号分隔 |
 | `--category` | 否 | SKILL.md 中的 category_id | 分类 ID |
+| `--share-type` | 否 | `personal` | 分享范围：`personal`（仅自己）/ `department`（部门）/ `company`（全公司） |
 | `--changelog` | 否 | - | 本次版本变更说明 |
 | `--json` | 否 | `false` | 输出原始 JSON |
+
+**share-type 说明**
+
+| 值 | 说明 |
+| --- | --- |
+| `personal` | 仅自己可见（默认），适合私有工作流 |
+| `department` | 部门内可见，适合团队共享 |
+| `company` | 全公司可见，适合推广到广场 |
 
 **示例**
 
 ```bash
-# 发布当前目录下的 Skill
+# 发布当前目录下的 Skill（个人可见）
 opscli skills publish
 
 # 指定目录，并附带变更说明
 opscli skills publish --dir ./my-skill --changelog "修复了某个 bug"
 
-# 附带完整元数据
-opscli skills publish --title "我的技能" --desc "技能描述" --tags "ai,ops" --changelog "初始版本"
+# 附带完整元数据并指定分享范围
+opscli skills publish --title "我的技能" --summary "一句话描述" --desc "技能详细描述" \
+                      --tags "ai,ops" --share-type company --changelog "初始版本"
+
+# 发布为部门共享
+opscli skills publish --share-type department --changelog "v2.0 新功能"
 
 # JSON 模式输出（适合脚本）
 opscli skills publish --json
@@ -1159,18 +1198,156 @@ opscli skills unpublish pengjianchao@ops-auth --json
 
 ---
 
-## 7.8 技能广场子命令 `opscli skills marketplace`
+### 7.8 `opscli skills edit`
+
+在线编辑已发布到广场的技能元数据（标题、摘要、简介、分享范围等），无需重新打包发布。
+
+**用法**
+
+```bash
+opscli skills edit <IDENTIFIER> [--title <title>] [--summary <summary>]
+                   [--desc <desc>] [--tags <tags>] [--category <id>]
+                   [--share-type <type>] [--json]
+```
+
+**参数**
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `IDENTIFIER` | 是 | 技能标识符，格式 `username@skill_name` |
+| `--title` | 否 | 新的技能标题 |
+| `--summary` | 否 | 新的一句话摘要 |
+| `--desc` | 否 | 新的详细简介 |
+| `--tags` | 否 | 新的标签，逗号分隔 |
+| `--category` | 否 | 新的分类 ID |
+| `--share-type` | 否 | 新的分享范围：`personal` / `department` / `company` |
+| `--json` | 否 | 输出原始 JSON |
+
+**说明**
+
+- 只能编辑自己发布的技能，不可编辑他人技能。
+- 只传需要修改的字段，未传字段保持原值不变。
+- 不影响版本历史和已安装用户。
+
+**示例**
+
+```bash
+# 修改技能标题和摘要
+opscli skills edit pengjianchao@ops-auth --title "认证授权管理 v2" --summary "支持多系统 JWT 管理"
+
+# 扩大分享范围
+opscli skills edit pengjianchao@ops-auth --share-type company
+
+# 更新标签
+opscli skills edit pengjianchao@ops-auth --tags "auth,jwt,ops"
+
+# JSON 模式输出
+opscli skills edit pengjianchao@ops-auth --share-type department --json
+```
+
+---
+
+### 7.9 `opscli skills sync-exclude`
+
+管理技能市场同步黑名单。加入黑名单的技能在执行 `opscli skills install --sync-market` 时将被跳过。
+
+#### `opscli skills sync-exclude add`
+
+将指定技能加入不同步排除名单。
+
+**用法**
+
+```bash
+opscli skills sync-exclude add <IDENTIFIER> [--json]
+```
+
+**参数**
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `IDENTIFIER` | 是 | 技能标识符，格式 `username@skill_name` |
+| `--json` | 否 | 输出原始 JSON |
+
+**示例**
+
+```bash
+opscli skills sync-exclude add pengjianchao@ops-auth
+opscli skills sync-exclude add pengjianchao@ops-auth --json
+```
+
+#### `opscli skills sync-exclude remove`
+
+将指定技能移出不同步排除名单。
+
+**用法**
+
+```bash
+opscli skills sync-exclude remove <IDENTIFIER> [--json]
+```
+
+**参数**
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `IDENTIFIER` | 是 | 技能标识符，格式 `username@skill_name` |
+| `--json` | 否 | 输出原始 JSON |
+
+**示例**
+
+```bash
+opscli skills sync-exclude remove pengjianchao@ops-auth
+opscli skills sync-exclude remove pengjianchao@ops-auth --json
+```
+
+#### `opscli skills sync-exclude list`
+
+查看当前不同步排除名单。
+
+**用法**
+
+```bash
+opscli skills sync-exclude list [--json]
+```
+
+**参数**
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--json` | 否 | 输出原始 JSON |
+
+**示例**
+
+```bash
+opscli skills sync-exclude list
+opscli skills sync-exclude list --json
+```
+
+**输出示例（表格模式）**
+
+```
+╭────────────────────────────────────────────────────────────╮
+│                      同步排除名单                          │
+│  标识符                         标题         简介    加入时间 │
+│  pengjianchao@ops-auth          认证授权管理  …      2026-05 │
+╰────────────────────────────────────────────────────────────╯
+共 1 个技能被排除在自动同步之外
+```
+
+---
+
+## 7.10 技能广场子命令 `opscli skills marketplace`
 
 浏览和搜索广场上的公开技能。
 
 ### `opscli skills marketplace list`
 
-浏览广场技能列表。
+浏览广场技能列表，支持按范围（个人 / 广场）、分类、排序等多维过滤。
 
 **用法**
 
 ```bash
-opscli skills marketplace list [--category <id>] [--sort <field>] [--order <asc|desc>]
+opscli skills marketplace list [--scope <personal|all>] [--sub <mine|shared_with_me>]
+                                [--category <id>] [--sort <field>] [--order <asc|desc>]
                                 [--page <n>] [--limit <n>] [--official] [--json]
 ```
 
@@ -1178,6 +1355,8 @@ opscli skills marketplace list [--category <id>] [--sort <field>] [--order <asc|
 
 | 参数 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
+| `--scope` | 否 | - | 查询范围：`personal`（个人相关）/ `all`（技能广场，仅 department + company 共享技能） |
+| `--sub` | 否 | - | `--scope personal` 的子筛选：`mine`（我创建的）/ `shared_with_me`（分享给我的）；不传则同时返回两类 |
 | `--category` | 否 | - | 按分类 ID 筛选 |
 | `--sort` | 否 | `downloads` | 排序字段：`downloads` / `rating` / `created_at` |
 | `--order` | 否 | `desc` | 排序方向：`asc` / `desc` |
@@ -1186,13 +1365,39 @@ opscli skills marketplace list [--category <id>] [--sort <field>] [--order <asc|
 | `--official` | 否 | - | 只显示官方技能 |
 | `--json` | 否 | `false` | 输出原始 JSON |
 
+**scope 与 sub 说明**
+
+| `--scope` | `--sub` | 返回内容 |
+| --- | --- | --- |
+| *(不传)* | *(不传)* | 当前用户可见的全部技能（默认行为，含 visibleTo 过滤） |
+| `personal` | *(不传)* | 我创建的 + 分享给我的（安装过但非本人创建） |
+| `personal` | `mine` | 仅我创建的技能 |
+| `personal` | `shared_with_me` | 仅分享给我的技能（他人创建，我有安装记录） |
+| `all` | *(不传)* | 全广场公开技能（`share_type` 为 department 或 company） |
+
 **示例**
 
 ```bash
+# 默认列表（全部可见技能）
 opscli skills marketplace list
-opscli skills marketplace list --sort downloads --order desc --limit 10
+
+# 查看我的个人技能（我创建的 + 分享给我的）
+opscli skills marketplace list --scope personal
+
+# 只看我自己创建的技能
+opscli skills marketplace list --scope personal --sub mine
+
+# 只看分享给我的技能（他人发布、我已安装）
+opscli skills marketplace list --scope personal --sub shared_with_me
+
+# 浏览全公司广场技能，按下载量降序
+opscli skills marketplace list --scope all --sort downloads --order desc --limit 10
+
+# 按分类 + 只看官方
 opscli skills marketplace list --category 1 --official
-opscli skills marketplace list --json
+
+# JSON 输出
+opscli skills marketplace list --scope personal --json
 ```
 
 ---
@@ -1274,6 +1479,45 @@ opscli skills marketplace versions <IDENTIFIER> [--json]
 ```bash
 opscli skills marketplace versions pengjianchao@ops-auth
 opscli skills marketplace versions pengjianchao@ops-auth --json
+```
+
+---
+
+### `opscli skills marketplace rate`
+
+对已安装的广场技能进行评分（1–5 星）并留下评价文字。
+
+**用法**
+
+```bash
+opscli skills marketplace rate <IDENTIFIER> --score <1-5> [--comment <text>] [--json]
+```
+
+**参数**
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `IDENTIFIER` | 是 | 技能标识符，格式 `username@skill_name` |
+| `--score` | 是 | 评分，整数 1–5 |
+| `--comment` | 否 | 评价文字（可选） |
+| `--json` | 否 | 输出原始 JSON |
+
+**说明**
+
+- 只能对已安装过的技能评分，不能评分自己发布的技能。
+- 同一技能可重复评分，最新评分会覆盖之前的记录。
+
+**示例**
+
+```bash
+# 5 星好评
+opscli skills marketplace rate pengjianchao@ops-auth --score 5
+
+# 带评价文字
+opscli skills marketplace rate pengjianchao@ops-auth --score 4 --comment "功能完善，文档清晰"
+
+# JSON 模式
+opscli skills marketplace rate pengjianchao@ops-auth --score 5 --json
 ```
 
 ---
@@ -1842,32 +2086,90 @@ opscli mcp user remove --id abc123 --pretty
 ### 11.6 技能广场完整使用流程
 
 ```bash
-# 1. 浏览广场技能
-opscli skills marketplace list
+# 1. 浏览广场全量公开技能
+opscli skills marketplace list --scope all
 
-# 2. 搜索特定技能
+# 2. 查看我的个人技能（我创建的 + 分享给我的）
+opscli skills marketplace list --scope personal
+
+# 3. 搜索特定技能
 opscli skills marketplace search ops-auth
 
-# 3. 查看详情与版本历史
+# 4. 查看详情与版本历史
 opscli skills marketplace info pengjianchao@ops-auth
 opscli skills marketplace versions pengjianchao@ops-auth
 
-# 4. 远程安装
+# 5. 远程安装
 opscli skills install pengjianchao@ops-auth
 
-# 5. 强制覆盖安装（升级）
+# 6. 强制覆盖安装（升级）
 opscli skills install pengjianchao@ops-auth --force
 
-# 6. 发布自己的技能（先登录）
-cd my-skill/
-opscli skills publish --changelog "初始版本"
+# 7. 评分
+opscli skills marketplace rate pengjianchao@ops-auth --score 5 --comment "非常好用"
 
-# 7. 发布新版本
+# 8. 发布自己的技能（先登录）
+cd my-skill/
+opscli skills publish --summary "一句话描述" --share-type company --changelog "初始版本"
+
+# 9. 发布新版本
 # 修改 data/VERSION.json 中的 version 字段后
 opscli skills publish --changelog "修复了 xxx 问题"
 
-# 8. 下架技能
+# 10. 编辑元数据（无需重新发布版本）
+opscli skills edit pengjianchao@my-skill --share-type department
+
+# 11. 下架技能
 opscli skills unpublish pengjianchao@my-skill --force
+```
+
+### 11.8 市场同步工作流（多设备 / 换机场景）
+
+当你在新设备上登录，或希望将市场安装记录自动同步到本地时：
+
+```bash
+# 1. 先完成认证登录
+opscli auth login
+
+# 2. 预览同步计划（不实际安装）
+opscli skills install --sync-market --dry-run --pretty
+
+# 3. 确认无误后执行实际同步
+opscli skills install --sync-market --pretty
+
+# 4. 验证本地安装结果
+opscli skills list --pretty
+```
+
+**典型同步输出**
+
+```
+[补装] pengjianchao@ops-amazon        → v1.2.0  ✓
+[升级] pengjianchao@ops-dataset-query   1.0.0 → 1.3.0  ✓
+[跳过] pengjianchao@ops-auth            1.1.0（本地版本 ≥ 市场版本）
+同步完成：2 项变更，1 项跳过
+```
+
+### 11.9 同步黑名单管理
+
+当某些技能不希望被 `--sync-market` 自动安装/升级时，加入排除名单：
+
+```bash
+# 1. 查看当前黑名单
+opscli skills sync-exclude list
+
+# 2. 将技能加入黑名单
+opscli skills sync-exclude add pengjianchao@ops-auth
+
+# 3. 再次同步时该技能会被跳过
+opscli skills install --sync-market --dry-run --pretty
+# 输出示例：[跳过（黑名单）] pengjianchao@ops-auth
+
+# 4. 将技能移出黑名单，重新纳入同步
+opscli skills sync-exclude remove pengjianchao@ops-auth
+
+# 5. 再次同步即可补装
+opscli skills install --sync-market --pretty
 ```
 
 ### 11.7 提交工具调用失败的结构化反馈
@@ -1918,8 +2220,9 @@ opscli feedback detail --uuid <feedback_uuid> --pretty
 | Amazon | `opscli amazon scrape`、`payload`、`search`、`schema`、`history` |
 | 查询 | `opscli query metadata`、`catalog`、`run`、`build`、`simple`、`chart`、`chart-doc` |
 | 反馈 | `opscli feedback schema`、`submit`、`detail` |
-| Skills | `opscli skills list`、`install`、`status`、`upgrade`、`publish`、`unpublish` |
-| 技能广场 | `opscli skills marketplace list`、`search`、`info`、`versions` |
+| Skills | `opscli skills list`、`install [--sync-market] [--dry-run]`、`status`、`upgrade`、`edit`、`publish`、`unpublish` |
+| 同步黑名单 | `opscli skills sync-exclude add`、`remove`、`list` |
+| 技能广场 | `opscli skills marketplace list [--scope] [--sub]`、`search`、`info`、`versions`、`rate` |
 | 卖家精灵 | `opscli seller-sprite collect`、`frequency`、`keyword-mining`、`keyword-reverse`、`archive`、`login`、`login-status`、`schema` |
 | 卖家精灵账号 | `opscli seller-sprite account save`、`list`、`delete` |
 | MCP 管理 | `opscli mcp user list`、`add`、`remove`、`rotate` |
