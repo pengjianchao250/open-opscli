@@ -1,0 +1,4 @@
+interface:
+  display_name: "运营流程共建 Skill"
+  short_description: "先共建业务流程再生成可复用 Skill 草案"
+  default_prompt: "请使用 $ops-experience-to-skill 用中文和运营同事共建流程，先补齐业务 6 维信息，再整理成可复用 Skill 草案。"

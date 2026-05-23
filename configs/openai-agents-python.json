@@ -1,0 +1,22 @@
+{
+  "name": "openai-agents-python",
+  "description": "OpenAI Agents SDK Python Chinese documentation. Capture all documentation pages needed to build production-ready agents: agents, models, tools, handoffs, guardrails, tracing, context, memory, MCP, voice, streaming, multi-agent orchestration, testing, deployment patterns, and examples.",
+  "sources": [
+    {
+      "type": "documentation",
+      "base_url": "https://openai.github.io/openai-agents-python/zh/",
+      "selectors": {
+        "main_content": "article",
+        "title": "h1",
+        "code_blocks": "pre code"
+      },
+      "url_patterns": {
+        "include": [],
+        "exclude": []
+      },
+      "categories": {},
+      "rate_limit": 1.0,
+      "max_pages": null
+    }
+  ]
+}

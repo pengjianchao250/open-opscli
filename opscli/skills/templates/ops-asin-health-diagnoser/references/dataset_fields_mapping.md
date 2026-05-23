@@ -23,7 +23,7 @@
 
 ## 数据查询 Payload 模板
 
-> ⚠️ **构造查询时使用 `opscli query build` 命令自动生成完整 payload**，不要手写 `userEmail`、`from.table`、`from.permission` 等字段，这些由 opscli 自动填充。
+> [!] **构造查询时使用 `opscli query build` 命令自动生成完整 payload**，不要手写 `userEmail`、`from.table`、`from.permission` 等字段，这些由 opscli 自动填充。
 
 ### 主数据集查询（ds_d35ac6f3910c，非子查询类型）
 

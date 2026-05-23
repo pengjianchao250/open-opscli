@@ -84,6 +84,56 @@ opscli auth token status
 
 ---
 
+## 发布版本号铁律
+
+> **【铁律】发布新版 Skill 时，必须先更新 `data/VERSION.json` 中的 `version` 字段，且版本号必须与提交参数（`--version` 或自动生成的版本号）一致。**
+
+### 版本号规则
+
+版本号格式为 `{major}.{minor}.{patch}`，递增规则如下：
+
+| 当前版本 | 动作 | 新版本 |
+|---------|------|--------|
+| `0.0.1` → `0.0.99` | patch 递增 | `0.0.2` → `0.0.100` |
+| `0.0.100` | patch 满 100，minor + 1，patch 归零 | `0.1.0` |
+| `0.1.0` → `0.1.99` | patch 递增 | `0.1.1` → `0.1.100` |
+| `0.1.100` | patch 满 100，minor + 1，patch 归零 | `0.2.0` |
+| `0.99.100` | minor 满 100，major + 1，minor 归零，patch 归零 | `1.0.0` |
+| 依次类推 | — | — |
+
+**核心规则：**
+- **patch** 逢 **100** 进位到 **minor**（`0.0.100` → `0.1.0`）
+- **minor** 逢 **100** 进位到 **major**（`0.100.0` → `1.0.0`）
+- 版本号**从 `0.0.1` 开始**，没有 `0.0.0`
+
+### 强制执行流程
+
+发布或编辑 Skill 新版本时，**必须**按以下步骤操作：
+
+1. **读取当前版本**：读取 `data/VERSION.json` 中的 `version` 字段（如 `"1.7.0"`）
+2. **计算新版本号**：根据变更性质（Bug 修复 / 功能新增 / 重大变更），按上述规则递增版本号
+3. **更新 `data/VERSION.json`**：将 `version` 字段更新为新版本号
+4. **同步更新 `SKILL.md` frontmatter**：将 frontmatter 中的 `version` 字段同步更新为 `v` + 新版本号（如 `v1.8.0`）
+5. **确保一致**：`data/VERSION.json` 的 `version`（无 `v` 前缀）与 `SKILL.md` frontmatter 的 `version`（有 `v` 前缀）必须对应一致
+6. **执行发布命令**：发布时如传 `--version` 参数，参数值必须与 `data/VERSION.json` 中已更新的版本号一致
+
+**版本号一致性检查清单（发布前必检）：**
+
+```
+✓ data/VERSION.json 的 version（如 "1.8.0"，无 v 前缀）
+✓ SKILL.md frontmatter 的 version（如 "v1.8.0"，有 v 前缀）
+✓ --version 参数值（如 "1.8.0"，无 v 前缀，仅 edit 时使用）
+→ 三者对应的数值部分必须完全相同
+```
+
+> ⚠️ **违反此铁律的典型错误**：
+> - 发布时未更新 `VERSION.json`，导致本地版本号与广场版本号不一致
+> - `VERSION.json` 更新了但 `SKILL.md` frontmatter 忘记同步
+> - `--version` 参数与 `VERSION.json` 中的版本号不匹配
+> - 版本号递增未按规则（如 `0.0.99` 直接跳到 `0.1.0` 而非 `0.0.100`）
+
+---
+
 ## 使用原则
 
 - **全局路径优先**：安装目标由 opscli 自动检测全局 Skills 路径（如 `~/.claude/skills/`、`~/.openclaw/skills/` 等），也可通过 `--runtime` 或 `--skills-dir` 显式指定
@@ -957,11 +1007,17 @@ cd my-skill/
 # 3. 确认目录结构完整
 ls SKILL.md data/VERSION.json
 
-# 4. 首次发布
+# 4. 【铁律】发布前必须更新版本号
+#    读取当前 data/VERSION.json 版本号（如 "1.7.0"）
+#    按规则递增（如 "1.7.0" → "1.7.1"，Bug 修复；或 "1.7.0" → "1.8.0"，功能新增）
+#    更新 data/VERSION.json: {"name": "my-skill", "version": "1.8.0"}
+#    同步更新 SKILL.md frontmatter: version: v1.8.0
+
+# 5. 首次发布
 opscli skills publish --changelog "初始版本"
 # 输出：技能已发布，标识符：pengjianchao@my-skill
 
-# 5. 修改内容后发布新版本（先更新 data/VERSION.json 中的 version）
+# 6. 修改内容后发布新版本（确保已按铁律更新版本号）
 opscli skills publish --changelog "修复了 xxx，新增了 yyy"
 ```
 
@@ -1015,13 +1071,18 @@ opscli auth token status
 # 2. 仅修改可见范围（从 personal 改为 company）
 opscli skills edit pengjianchao@my-skill --share-type company
 
-# 3. 上传修复后的文件，同时升级版本号
+# 3. 【铁律】上传修复后的文件前，先更新版本号
+#    更新 data/VERSION.json: {"name": "my-skill", "version": "1.2.0"}
+#    同步更新 SKILL.md frontmatter: version: v1.2.0
+#    确保 --version 参数与 VERSION.json 一致
+
+# 4. 上传修复后的文件，同时升级版本号
 opscli skills edit pengjianchao@my-skill \
   --dir ./my-skill/ \
   --version 1.2.0 \
   --changelog "修复了 xxx 问题，优化了 yyy 流程"
 
-# 4. 确认广场已更新
+# 5. 确认广场已更新
 opscli skills marketplace info pengjianchao@my-skill
 ```
 
@@ -1182,7 +1243,7 @@ opscli skills upgrade ops-dataset-query
 
 ## 注意事项
 
-1. **不修改 VERSION.json**：手动修改版本文件会导致 `status` 命令产生误判，请勿手动编辑
+1. **发布必须更新版本号**：每次发布新版 Skill 时，必须同步更新 `data/VERSION.json` 和 `SKILL.md` frontmatter 中的版本号，详见"发布版本号铁律"章节
 2. **发布时版本号不带 v**：`data/VERSION.json` 中的 `version` 字段写 `"1.1.0"` 而非 `"v1.1.0"`；SKILL.md frontmatter 中的 `version` 字段则带 `v`（如 `v1.1.0`），两者用途不同
 3. **升级不影响认证**：`ops-dataset-query` 升级的是字段元数据，不会清除已登录的凭证
 4. **多运行时独立管理**：每个运行时（claude/openclaw/codex/opencode）的 Skills 目录相互独立，安装和升级互不影响

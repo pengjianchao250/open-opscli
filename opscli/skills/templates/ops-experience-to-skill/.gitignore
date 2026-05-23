@@ -1,0 +1,13 @@
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Local run outputs and temporary artifacts
+runs/
+diary/
+outputs/
+dist/
+tmp/
+*.skill

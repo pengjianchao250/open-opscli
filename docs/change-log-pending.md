@@ -1,5 +1,58 @@
 # 待归档变更记录
 
+## 2026-05-23 ops-experience-to-skill Skill - 强制发布确认门禁 v0.4.3
+
+**变更原因**：优化 ops-asin-health-diagnoser 时未触发发布确认，根因是发布确认逻辑嵌套在步骤 18/24 的大段落中，容易被跳过；且缺少独立收敛步骤确保所有路径都必须经过发布确认。
+**改动点**：
+- 新增 `data/VERSION.json`（`{"name": "ops-experience-to-skill", "version": "0.4.3"}`），补齐铁律14要求
+- 新增步骤 25 作为强制最终收敛点，所有路径（新建/改造/优化）必须经过
+- 步骤 18/24 中的发布段落简化为指向步骤 25 的引用（"必须继续执行步骤 25 的强制发布确认门禁"）
+- 新增独立章节 `## [强制] 技能广场发布确认门禁`，类似 ops-skills 认证门禁风格
+- 步骤 25 包含完整 AskUserQuestion 模板（三选一：全员发布/部门发布/暂不发布）
+- 步骤 25 包含版本号准备流程（新建/改造两条路径）和发布命令
+**验证结果**：文件结构正确，步骤 18/24/25 引用链完整，独立门禁章节位置正确
+**影响范围**：所有通过 ops-experience-to-skill 创建或优化 Skill 的会话
+**回滚方式**：恢复步骤 18/24 中的原始发布段落，删除步骤 25 和独立门禁章节
+---
+
+## 2026-05-23 ops-asin-health-diagnoser Skill - 全面框架重构 v0.2.0
+
+**变更原因**：旧版 SKILL.md 缺少统一框架标准章节，1174 行通用 dev guide 造成巨大上下文负担，CLI/MCP 脚本 90% 代码重复，缺少执行日志和测试机制。
+**改动点**：
+- `SKILL.md`：按统一框架标准重写，增加快速开始、必要参数、日常工作流、默认执行策略、按需加载资料、执行日志与候选提交章节；修复 GBK 不安全字符（输出模板中 ⚠️✅ → [!][OK]）
+- `references/data-query-service-dev-guide.md`：删除（1174 行通用文档）
+- `references/data-recipes.md`：新建，从 dev guide 中精简为 ASIN 诊断专用固化查询 recipe（~120 行）
+- `references/operating-rules.md`：新建，完整判断规则、行动建议矩阵、新品例外、边界条件（从脚本代码和 threshold_reference 提取）
+- `references/testing-benchmark.md`：新建，4 个测试用例（正常/边界/批量/异常）+ 断言 + 基准对比
+- `references/cross-tool-portability.md`：新建，跨工具降级方案和迁移检查清单
+- `references/cli.md`：精简，去除重复认证流程和阈值表（209→98 行）
+- `references/mcp.md`：精简，去除重复认证流程和阈值表（363→95 行）
+- `references/dataset_fields_mapping.md`：修复 GBK 不安全字符
+- `scripts/calculate_health_score.py`：合并 CLI 和 MCP 为统一入口，支持 --weights/--benchmarks/--batch
+- `scripts/calculate_health_score_mcp.py`：删除（已合并到统一入口）
+- `scripts/record_run.py`：新建，执行日志记录脚本
+- `data/VERSION.json`：v0.1.0 → v0.2.0
+**验证结果**：待 smoke 测试验证
+**影响范围**：ops-asin-health-diagnoser Skill 的所有用户；CLI 命令 `calculate_health_score_mcp.py` 不再存在，统一使用 `calculate_health_score.py`
+**回滚方式**：`git checkout HEAD -- opscli/skills/templates/ops-asin-health-diagnoser/`
+---
+
+## 2026-05-23 ops-experience-to-skill Skill - 新增技能广场发布确认步骤
+
+**变更原因**：Skill 创建/优化完成后，用户希望直接发布到技能广场（全员可见），免去手动执行 `opscli skills publish` 的步骤。
+**改动点**：
+- `opscli/skills/templates/ops-experience-to-skill/SKILL.md`：
+  - Step 18（起草 Skill）后新增发布确认：使用 AskUserQuestion 询问"发布到技能广场"或"暂不发布"，选择发布时调用 ops-skills Skill 执行认证门禁 + `opscli skills publish --share-type company`
+  - Step 24（迭代优化）后新增重新发布确认：版本号递增 + 再次发布新版本
+- `opscli/skills/templates/ops-experience-to-skill/scripts/brief_to_skill.py`：
+  - 新增 `import json`
+  - `build_skill_md()` frontmatter 新增 `version: v0.0.1`
+  - `main()` 新增生成 `data/VERSION.json`（`{"name": "<skill_name>", "version": "0.0.1"}`）
+**验证结果**：脚本语法正确，json 模块已导入并用于 VERSION.json 生成；SKILL.md 发布步骤与 ops-skills publish 命令参数一致
+**影响范围**：ops-experience-to-skill 工作流 Step 18 和 Step 24 的后续行为；brief_to_skill.py 生成的 Skill 草案目录结构
+**回滚方式**：删除 SKILL.md 中两段"发布确认"段落；撤销 brief_to_skill.py 的 3 处改动
+---
+
 ## 2026-05-22 ops-dataset-query Skill - 合并 data-fetch-constraints.md 业务规则
 
 **变更原因**：用户提供了 data-fetch-constraints.md（取数约束与已知翻车用例），其中包含大量 ops-dataset-query 缺失的业务层面规则。与现有规则对比后，发现 1 处冲突（时间口径，以 ops-dataset-query 为准）和 18+ 条可新增规则。
