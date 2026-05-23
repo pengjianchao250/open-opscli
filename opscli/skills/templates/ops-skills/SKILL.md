@@ -1,7 +1,7 @@
 ---
 name: ops-skills
 description: 管理 AI 工具中已安装的 Skill 生命周期，包含技能广场的发布、编辑、安装、浏览与评分
-version: v1.7.0
+version: v1.7.1
 ---
 
 # ops-skills
@@ -420,10 +420,12 @@ opscli skills upgrade ops-dataset-query --skills-dir ~/.claude/skills/
   --summary TEXT      一句话简介（列表页展示，最多500字符；覆盖 frontmatter）
   --share-type TEXT   分享权限类型：personal（默认）/ department / company
   --tags TEXT         标签，逗号分隔（如 "ai,ops,auth"）
-  --category INT      分类 ID
+  --category INT      分类 ID（不传时自动匹配最合适的分类）
   --changelog TEXT    本次版本变更说明
   --json              输出原始 JSON（适合脚本）
 ```
+
+> **自动分类匹配**：若未通过 `--category` 或 `SKILL.md frontmatter` 的 `category_id` 指定分类，发布时会自动从广场获取所有分类，并根据技能名称、标题、标签、描述进行关键词匹配，找出得分最高的分类后自动填充，终端会输出 `已自动匹配分类：<name> (id=N, slug=xxx)` 提示。若无任何匹配，则不传分类参数。
 
 **分享权限类型说明：**
 
@@ -608,7 +610,7 @@ opscli skills sync-exclude list
   --summary TEXT      更新一句话简介（最多 500 字符）
   --share-type TEXT   更新分享权限：personal / department / company
   --tags TEXT         更新标签（逗号分隔）
-  --category INT      更新分类 ID
+  --category INT      更新分类 ID（不传时自动匹配最合适的分类）
   --version TEXT      更新版本号（格式 x.y.z，如 1.2.0）
   --changelog TEXT    本次版本变更说明
   --json              输出原始 JSON
@@ -645,6 +647,8 @@ opscli skills edit pengjianchao@ops-auth --title "新标题" --json
 ```
 
 > **注意**：`--dir` 模式下会自动读取目录中的 `SKILL.md` frontmatter（`title`、`description`、`summary`、`share_type`、`tags`、`category_id`）作为字段默认值；命令行显式传入的参数优先级更高，会覆盖 frontmatter 中的同名字段。
+
+> **自动分类匹配**：若未通过 `--category` 或 `frontmatter` 提供分类 ID，edit 命令会自动从广场获取分类列表，根据技能名称及已有元数据做关键词匹配，自动填充最合适的分类。
 
 ---
 
@@ -798,6 +802,40 @@ AI 输出：
 ---
 
 ## 技能广场子命令 `opscli skills marketplace`
+
+### `opscli skills marketplace categories`
+
+查看所有技能分类，返回分类的 **ID、slug 和中文名称**。
+
+> 发布或编辑技能时，若未传 `--category`，opscli 会自动调用此接口并根据技能名/标题/标签/描述进行关键词匹配，找出最合适的分类后自动填充。
+
+```
+选项：
+  --json    输出原始 JSON（适合脚本）
+```
+
+**示例：**
+
+```bash
+# 查看所有分类（富文本表格）
+opscli skills marketplace categories
+
+# JSON 模式（脚本场景）
+opscli skills marketplace categories --json
+```
+
+**典型输出：**
+
+```
+┌─ Skill 技能分类 ──────────────────────────┐
+│ ID   Slug              分类名称            │
+│ 1    auth              认证授权            │
+│ 2    data-query        数据查询            │
+│ 3    ops-tools         运营工具            │
+└──────────────────── 共 3 个分类 ──────────┘
+```
+
+---
 
 ### `opscli skills marketplace list`
 

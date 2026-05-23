@@ -1,11 +1,12 @@
 """Skills Marketplace 子命令组。
 
 提供 opscli skills marketplace 下的广场浏览命令：
-  list      — 浏览广场技能列表
-  search    — 关键词搜索
-  info      — 查看技能详情
-  versions  — 查看版本历史
-  rate      — 提交评分（1-5 分，小数向下取整）
+  categories — 查看所有技能分类
+  list       — 浏览广场技能列表
+  search     — 关键词搜索
+  info       — 查看技能详情
+  versions   — 查看版本历史
+  rate       — 提交评分（1-5 分，小数向下取整）
 """
 
 from __future__ import annotations
@@ -79,6 +80,57 @@ def _build_list_table(items: list[SkillItem], result: MarketplaceListResult) -> 
         table.add_row(*row)
 
     return table
+
+
+# ──────────────────────────────────────────
+# categories
+# ──────────────────────────────────────────
+
+@app.command("categories")
+def list_categories(
+    json_output: bool = typer.Option(False, "--json", help="输出原始 JSON"),
+):
+    """查看所有技能分类（含 ID、slug 和中文名称）。
+
+    发布或搜索技能时可用 slug 筛选：opscli skills marketplace list --category <slug>
+    """
+    command = "skills marketplace categories"
+    try:
+        cats = MarketplaceClient().get_categories()
+    except Exception as exc:
+        _emit({"success": False, "command": command, "error": error_to_dict(exc)}, json_output)
+        raise typer.Exit(1)
+
+    if json_output:
+        _emit({"success": True, "command": command, "data": cats}, json_output)
+        return
+
+    if not cats:
+        _console.print("[yellow]暂无分类数据[/yellow]")
+        return
+
+    table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
+    table.add_column("ID",       style="dim",   width=6)
+    table.add_column("Slug",     style="green", min_width=16)
+    table.add_column("分类名称",               min_width=12)
+
+    for cat in cats:
+        table.add_row(
+            str(cat.get("id", "")),
+            cat.get("slug", ""),
+            cat.get("name", ""),
+        )
+
+    _console.print(Panel(
+        table,
+        title="[bold]Skill 技能分类[/bold]",
+        border_style="blue",
+    ))
+    _console.print(
+        f"[dim]共 {len(cats)} 个分类，"
+        "使用 [bold]--category <slug>[/bold] 筛选技能列表，"
+        "发布时自动匹配最合适的分类[/dim]"
+    )
 
 
 # ──────────────────────────────────────────

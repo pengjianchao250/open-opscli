@@ -27,7 +27,7 @@ Aukeys 运营 CLI 工具集
 - **统一 JSON 输出**：默认适合脚本消费，`--pretty` 可切换可读格式
 - **数据查询支持**：通过 `opscli skills` 与 `opscli query` 组合完成元数据读取、构造 payload 与远端执行
 - **Amazon Skill 模板**：支持安装 `ops-amazon`，指导 AI 使用 `opscli amazon` 完成抓取和字段取样
-- **技能广场**：通过 `opscli skills marketplace` 子命令浏览、搜索、查看技能详情、评分；支持 `publish` / `unpublish` / `edit` 将本地 Skill 发布或编辑元数据；远程安装时自动解压到 `~/.opscli/skills/` 并软链接到全局 AI 工具目录
+- **技能广场**：通过 `opscli skills marketplace` 子命令浏览、搜索、查看技能详情、评分；`marketplace categories` 查看所有分类；支持 `publish` / `unpublish` / `edit` 将本地 Skill 发布或编辑元数据，发布/编辑时若未指定 `--category` 则自动匹配最合适的分类；远程安装时自动解压到 `~/.opscli/skills/` 并软链接到全局 AI 工具目录
 - **市场同步**：`opscli skills install --sync-market` 将市场安装记录一键同步到本地（补装缺失 + 升级旧版），支持 `--dry-run` 预览，通过 `sync-exclude` 子命令管理不同步黑名单
 - **Skill 元数据编辑**：`opscli skills edit` 在线修改已发布技能的标题、摘要、分享范围等，无需重新打包发布
 
@@ -313,6 +313,7 @@ graph LR
     SyncExclude --- se_remove["remove &lt;user@skill&gt;"]
     SyncExclude --- se_list["list"]
     Skills --- Marketplace["marketplace"]
+    Marketplace --- mp_categories["categories"]
     Marketplace --- mp_list["list --scope --sub"]
     Marketplace --- mp_search["search &lt;keyword&gt;"]
     Marketplace --- mp_info["info &lt;user@skill&gt;"]
@@ -1003,7 +1004,7 @@ opscli skills publish --changelog "修复了某个 bug，新增了某个功能"
 | `--summary` | 否 | 一句话摘要，显示在列表卡片 |
 | `--desc` | 否 | 技能详细简介 |
 | `--tags` | 否 | 标签，逗号分隔 |
-| `--category` | 否 | 分类 ID |
+| `--category` | 否 | 分类 ID；未指定时自动根据技能名称/标题/标签关键词匹配最合适的分类 |
 | `--share-type` | 否 | 分享范围：`personal`（默认）/ `department` / `company` |
 | `--changelog` | 否 | 本次版本变更说明 |
 | `--json` | 否 | 输出原始 JSON |
@@ -1022,6 +1023,20 @@ opscli skills unpublish pengjianchao@ops-auth --force   # 跳过确认
 ## 技能广场 (Skills Marketplace)
 
 通过 `opscli skills marketplace` 子命令浏览和搜索广场上的公开技能，支持按范围筛选、评分等操作。
+
+### `opscli skills marketplace categories` - 查看所有技能分类
+
+```bash
+# 富文本表格展示（含 ID、slug、中文名称）
+opscli skills marketplace categories
+
+# JSON 模式
+opscli skills marketplace categories --json
+```
+
+> 发布（`publish`）或编辑（`edit`）技能时，若未传 `--category`，opscli 会自动调用此接口进行关键词匹配，自动填充最合适的分类。
+
+---
 
 ### `opscli skills marketplace list` - 浏览技能列表
 
@@ -1112,33 +1127,38 @@ opscli skills sync-exclude remove pengjianchao@ops-auth
 ### 技能广场完整使用示例
 
 ```bash
-# 1. 浏览广场公开技能
+# 1. 查看所有分类（了解可用分类）
+opscli skills marketplace categories
+
+# 2. 浏览广场公开技能
 opscli skills marketplace list --scope all
 
-# 2. 查看我的个人技能
+# 3. 查看我的个人技能
 opscli skills marketplace list --scope personal
 
-# 3. 搜索特定技能
+# 4. 搜索特定技能
 opscli skills marketplace search ops-auth
 
-# 4. 查看详情与版本
+# 5. 查看详情与版本
 opscli skills marketplace info pengjianchao@ops-auth
 opscli skills marketplace versions pengjianchao@ops-auth
 
-# 5. 远程安装
+# 6. 远程安装
 opscli skills install pengjianchao@ops-auth
 
-# 6. 评分
+# 7. 评分
 opscli skills marketplace rate pengjianchao@ops-auth --score 5
 
-# 7. 发布自己的技能
+# 8. 发布自己的技能
+#    未传 --category 时自动根据技能名称/标题/标签匹配最合适的分类
 cd my-skill/
 opscli skills publish --summary "一句话描述" --share-type company --changelog "初始版本"
 
-# 8. 编辑元数据（无需重新发布版本）
+# 9. 编辑元数据（无需重新发布版本）
+#    未传 --category 时同样会自动匹配分类
 opscli skills edit pengjianchao@my-skill --share-type department
 
-# 9. 市场同步到本地（换机 / 多设备）
+# 10. 市场同步到本地（换机 / 多设备）
 opscli skills install --sync-market --pretty
 ```
 

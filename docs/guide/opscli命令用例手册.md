@@ -62,6 +62,7 @@ opscli
 │   │   ├── remove
 │   │   └── list
 │   └── marketplace
+│       ├── categories
 │       ├── list
 │       ├── search
 │       ├── info
@@ -1135,10 +1136,12 @@ opscli skills publish [--dir <dir>] [--title <title>] [--summary <summary>]
 | `--summary` | 否 | SKILL.md 中的 summary | 技能一句话摘要（显示在列表卡片中） |
 | `--desc` | 否 | SKILL.md 中的 description | 技能详细简介 |
 | `--tags` | 否 | SKILL.md 中的 tags | 标签，逗号分隔 |
-| `--category` | 否 | SKILL.md 中的 category_id | 分类 ID |
+| `--category` | 否 | SKILL.md 中的 category_id；未指定时自动匹配 | 分类 ID |
 | `--share-type` | 否 | `personal` | 分享范围：`personal`（仅自己）/ `department`（部门）/ `company`（全公司） |
 | `--changelog` | 否 | - | 本次版本变更说明 |
 | `--json` | 否 | `false` | 输出原始 JSON |
+
+> **自动分类匹配**：若未通过 `--category` 或 `SKILL.md frontmatter` 的 `category_id` 指定分类，发布时会自动从广场获取所有分类，根据技能名称、标题、标签和描述进行关键词得分匹配，选出最合适的分类后自动填充。终端会显示 `已自动匹配分类：<name>`。若无匹配则不传分类参数。
 
 **share-type 说明**
 
@@ -1219,7 +1222,7 @@ opscli skills edit <IDENTIFIER> [--title <title>] [--summary <summary>]
 | `--summary` | 否 | 新的一句话摘要 |
 | `--desc` | 否 | 新的详细简介 |
 | `--tags` | 否 | 新的标签，逗号分隔 |
-| `--category` | 否 | 新的分类 ID |
+| `--category` | 否 | 新的分类 ID；未指定时自动匹配 |
 | `--share-type` | 否 | 新的分享范围：`personal` / `department` / `company` |
 | `--json` | 否 | 输出原始 JSON |
 
@@ -1228,6 +1231,7 @@ opscli skills edit <IDENTIFIER> [--title <title>] [--summary <summary>]
 - 只能编辑自己发布的技能，不可编辑他人技能。
 - 只传需要修改的字段，未传字段保持原值不变。
 - 不影响版本历史和已安装用户。
+- `--category` 未传时会自动调用分类列表接口，根据技能名称/标题/标签做关键词匹配并自动填充最合适的分类。
 
 **示例**
 
@@ -1338,6 +1342,48 @@ opscli skills sync-exclude list --json
 ## 7.10 技能广场子命令 `opscli skills marketplace`
 
 浏览和搜索广场上的公开技能。
+
+### `opscli skills marketplace categories`
+
+查看所有技能分类，返回每个分类的 **ID、slug 和中文名称**。
+
+> 发布或编辑技能时，若未传 `--category`，opscli 会自动调用此接口并进行关键词匹配，自动填充最合适的分类。
+
+**用法**
+
+```bash
+opscli skills marketplace categories [--json]
+```
+
+**参数**
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--json` | 否 | 输出原始 JSON |
+
+**示例**
+
+```bash
+# 查看所有分类（富文本表格）
+opscli skills marketplace categories
+
+# JSON 模式（脚本场景）
+opscli skills marketplace categories --json
+```
+
+**典型输出（表格模式）：**
+
+```
+┌─ Skill 技能分类 ──────────────────────────┐
+│ ID   Slug              分类名称            │
+│ 1    auth              认证授权            │
+│ 2    data-query        数据查询            │
+│ 3    ops-tools         运营工具            │
+└──────────────────── 共 3 个分类 ──────────┘
+共 3 个分类，使用 --category <slug> 筛选技能列表，发布时自动匹配最合适的分类
+```
+
+---
 
 ### `opscli skills marketplace list`
 
@@ -2108,18 +2154,23 @@ opscli skills install pengjianchao@ops-auth --force
 # 7. 评分
 opscli skills marketplace rate pengjianchao@ops-auth --score 5 --comment "非常好用"
 
-# 8. 发布自己的技能（先登录）
+# 8. 查看所有可用分类（发布前可先了解）
+opscli skills marketplace categories
+
+# 9. 发布自己的技能（先登录）
+#    未传 --category 时会自动从分类列表匹配最合适的分类
 cd my-skill/
 opscli skills publish --summary "一句话描述" --share-type company --changelog "初始版本"
 
-# 9. 发布新版本
+# 10. 发布新版本
 # 修改 data/VERSION.json 中的 version 字段后
 opscli skills publish --changelog "修复了 xxx 问题"
 
-# 10. 编辑元数据（无需重新发布版本）
+# 11. 编辑元数据（无需重新发布版本）
+#     未传 --category 时同样会自动匹配最合适的分类
 opscli skills edit pengjianchao@my-skill --share-type department
 
-# 11. 下架技能
+# 12. 下架技能
 opscli skills unpublish pengjianchao@my-skill --force
 ```
 
@@ -2222,7 +2273,7 @@ opscli feedback detail --uuid <feedback_uuid> --pretty
 | 反馈 | `opscli feedback schema`、`submit`、`detail` |
 | Skills | `opscli skills list`、`install [--sync-market] [--dry-run]`、`status`、`upgrade`、`edit`、`publish`、`unpublish` |
 | 同步黑名单 | `opscli skills sync-exclude add`、`remove`、`list` |
-| 技能广场 | `opscli skills marketplace list [--scope] [--sub]`、`search`、`info`、`versions`、`rate` |
+| 技能广场 | `opscli skills marketplace categories`、`list [--scope] [--sub]`、`search`、`info`、`versions`、`rate` |
 | 卖家精灵 | `opscli seller-sprite collect`、`frequency`、`keyword-mining`、`keyword-reverse`、`archive`、`login`、`login-status`、`schema` |
 | 卖家精灵账号 | `opscli seller-sprite account save`、`list`、`delete` |
 | MCP 管理 | `opscli mcp user list`、`add`、`remove`、`rotate` |

@@ -74,6 +74,66 @@ def _zip_skill_dir(skill_dir: Path, skill_name: str) -> Path:
     return zip_path
 
 
+def _match_best_category(
+    categories: list[dict],
+    skill_name: str,
+    title: str = "",
+    tags: str = "",
+    description: str = "",
+) -> dict | None:
+    """基于技能名/标题/标签/描述关键词匹配最合适的分类，返回得分最高的分类 dict 或 None。
+
+    匹配策略：
+    - 将 skill_name、title、tags、description 拆分为小写关键词
+    - 遍历所有分类，统计关键词与 slug/name 的匹配得分
+    - 直接包含（整体子串）得 2 分，slug 单词粒度子串匹配得 1 分
+    - 得分为 0 时返回 None（无有效匹配）
+    """
+    if not categories:
+        return None
+
+    def tokenize(s: str) -> list[str]:
+        """拆分为小写词列表，去掉常见分隔符。"""
+        return [w.lower() for w in s.replace("-", " ").replace(",", " ").replace("，", " ").split() if w]
+
+    # 构建所有关键词（描述只取前 200 字，避免噪声过多）
+    keywords = (
+        tokenize(skill_name)
+        + tokenize(title)
+        + tokenize(tags)
+        + tokenize(description[:200] if description else "")
+    )
+    if not keywords:
+        return None
+
+    best_cat: dict | None = None
+    best_score = 0
+
+    for cat in categories:
+        slug = (cat.get("slug") or "").lower()
+        name = (cat.get("name") or "").lower()
+        # slug 按 "-" 拆分为单词列表，用于粒度更细的子串匹配
+        slug_words = slug.split("-") if slug else []
+        score = 0
+
+        for kw in keywords:
+            # 整体子串命中 slug 或 name，得 2 分
+            if kw in slug or kw in name:
+                score += 2
+            # 对 slug 的每个分词做子串匹配，得 1 分（避免与上一条重复计分）
+            else:
+                for sw in slug_words:
+                    if sw and (kw == sw or kw in sw or sw in kw):
+                        score += 1
+                        break  # 同一关键词只对该分类得 1 次
+
+        if score > best_score:
+            best_score = score
+            best_cat = cat
+
+    return best_cat if best_score > 0 else None
+
+
 def _parse_skill_md_frontmatter(skill_md: Path) -> dict:
     """解析 SKILL.md 顶部 YAML frontmatter（--- 包裹），返回字段字典。
 
@@ -168,6 +228,28 @@ def publish_skill(
         existing = client.get_my_skill_by_name(skill_name)
     except Exception:
         pass
+
+    # 若未显式传入 category_id，尝试从分类列表中自动匹配最合适的分类
+    if resolved_cat is None:
+        try:
+            all_categories = client.get_categories()
+            matched_cat = _match_best_category(
+                all_categories,
+                skill_name=skill_name,
+                title=resolved_title,
+                tags=resolved_tags,
+                description=resolved_desc,
+            )
+            if matched_cat:
+                resolved_cat = matched_cat["id"]
+                if not json_output:
+                    _console.print(
+                        f"[dim]已自动匹配分类：[bold]{matched_cat.get('name', '')}[/bold] "
+                        f"(id={matched_cat['id']}, slug={matched_cat.get('slug', '')})[/dim]"
+                    )
+        except Exception:
+            # 获取分类失败时静默跳过，不阻断发布主流程
+            pass
 
     # 打包整个目录为 zip
     zip_path: Path | None = None
@@ -370,6 +452,32 @@ def edit_skill(
 
     skill_id = skill_data.get("id")
     current_version = skill_data.get("latest_version", "")
+
+    # 若未显式传入 category_id，尝试自动匹配最合适的分类
+    if category_id is None:
+        try:
+            # 从 API 返回数据或命令行参数提取用于匹配的信息
+            _match_title = title or skill_data.get("title", skill_name_str)
+            _match_tags  = tags or skill_data.get("tags", "")
+            _match_desc  = description or skill_data.get("description", "")
+            all_categories = client.get_categories()
+            matched_cat = _match_best_category(
+                all_categories,
+                skill_name=skill_name_str,
+                title=_match_title,
+                tags=_match_tags,
+                description=_match_desc,
+            )
+            if matched_cat:
+                category_id = matched_cat["id"]
+                if not json_output:
+                    _console.print(
+                        f"[dim]已自动匹配分类：[bold]{matched_cat.get('name', '')}[/bold] "
+                        f"(id={matched_cat['id']}, slug={matched_cat.get('slug', '')})[/dim]"
+                    )
+        except Exception:
+            # 获取分类失败时静默跳过，不阻断编辑主流程
+            pass
 
     # ── 构造请求字段 ─────────────────────────────────
     fields: dict = {}

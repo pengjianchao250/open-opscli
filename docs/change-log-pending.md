@@ -1,5 +1,32 @@
 # 待归档变更记录
 
+## 2026-05-23 文档更新 - categories 命令及自动分类匹配补录
+
+**变更原因**：新增 `marketplace categories` 命令及 publish/edit 自动分类匹配功能后，需同步更新用户文档
+**改动点**：
+- `docs/guide/opscli命令用例手册.md`：命令总览树加入 `categories`；7.10 技能广场新增 `marketplace categories` 命令完整文档；7.6 publish 和 7.8 edit 参数表及说明加入自动分类匹配注释；场景六加入 `categories` 查看步骤；第 12 节快速索引更新
+- `README.md`：mermaid 命令树加入 `mp_categories`；功能概述更新；技能广场章节新增 `categories` 命令文档及说明；`publish` 参数表更新；完整使用示例加入 `categories` 步骤和自动匹配注释
+**验证结果**：文档内容与代码实现一致
+**影响范围**：仅文档，无代码变更
+**回滚方式**：还原两个文档文件到本次改动前版本
+---
+
+## 2026-05-23 skills marketplace - 新增 categories 命令 + 发布/编辑自动分类匹配
+
+**变更原因**：发布/编辑技能时需要手动查询分类 ID 后填 `--category INT`，体验不友好；`marketplace list --category` 过滤功能存在但分类列表无法通过独立命令查看。
+**改动点**：
+- `opscli/skills/commands/marketplace_cli.py`：在 `list` 命令之前新增 `categories` 子命令，调用 `MarketplaceClient.get_categories()` 并以富文本表格展示所有分类（ID/slug/名称），支持 `--json` 输出
+- `opscli/skills/commands/publish_cli.py`：
+  - 新增 `_match_best_category()` 辅助函数：基于关键词评分（slug/name 直接子串命中得 2 分，分词子串命中得 1 分）
+  - `publish_skill()`：当 `resolved_cat` 为 None 时，自动获取分类列表并调用 `_match_best_category()` 自动填充；非 JSON 模式下输出"已自动匹配分类"提示；失败时静默跳过
+  - `edit_skill()`：同上，当 `category_id` 为 None 时自动匹配，信息来源优先用 CLI 参数，兜底从 skill_data 读取
+- `opscli/skills/templates/ops-skills/SKILL.md`：版本从 v1.7.0 升至 v1.7.1，新增 `marketplace categories` 命令文档，`publish`/`edit` 说明中加入自动分类匹配行为注释
+- `opscli/skills/templates/ops-skills/data/VERSION.json`：版本从 1.7.0 升至 1.7.1
+**验证结果**：`opscli skills marketplace categories --help` 正常显示，`opscli skills marketplace --help` 命令列表包含 `categories`；`_match_best_category` 单元测试验证 ops-auth→auth、ops-dataset-query→data-query 正确匹配，my-skill 无匹配返回 None
+**影响范围**：marketplace categories 新命令；publish/edit 当未传 --category 时行为变更（多一次 get_categories 请求 + 静默自动填充分类）
+**回滚方式**：还原 `marketplace_cli.py`、`publish_cli.py`、`ops-skills/SKILL.md`、`ops-skills/data/VERSION.json` 四个文件到本次改动前版本
+---
+
 ## 2026-05-23 skills publish 命令 - 新版本发布补充元数据字段
 
 **变更原因**：新版本发布路径使用 `publish_version`（`POST /v1/skills/{id}/versions`），该 API 只接受 `version`/`changelog`，不接受 `summary`/`title` 等元数据字段，导致广场展示信息在版本更新后不同步。
