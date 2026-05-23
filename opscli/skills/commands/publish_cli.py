@@ -193,14 +193,24 @@ def publish_skill(
             data = client.create_skill(fields, zip_path)
             action = "created"
         else:
-            # 发布新版本
+            # 发布新版本：使用 full_update_skill 同时同步元数据 + 上传文件 + 创建版本
+            # （publish_version 只接受 version/changelog，不接受元数据字段）
             skill_id = existing["id"]
-            fields = {"version": version}
+            fields: dict = {
+                "version":     version,
+                "title":       resolved_title,
+                "description": resolved_desc,
+                "summary":     resolved_summary,
+                "tags":        resolved_tags,
+                "share_type":  resolved_share_type,
+            }
+            if resolved_cat:
+                fields["category_id"] = str(resolved_cat)
             if changelog:
                 fields["changelog"] = changelog
 
-            data = client.publish_version(skill_id, fields, zip_path)
-            # publish_version 只返回版本数据，补充 identifier 从现有记录取
+            data = client.full_update_skill(skill_id, fields, zip_path)
+            # full_update_skill 返回技能数据，补充 identifier
             if "identifier" not in data:
                 data["identifier"] = existing.get("identifier", "")
             action = "version_published"
@@ -242,7 +252,10 @@ def publish_skill(
             f"[green]新版本发布成功！[/green]\n\n"
             f"[dim]标识符  [/dim] {identifier}\n"
             f"[dim]版  本  [/dim] {version}\n"
+            f"[dim]分享权限[/dim] {share_label}\n"
         )
+        if resolved_summary:
+            body += f"[dim]一句话  [/dim] {resolved_summary}\n"
         if changelog:
             body += f"[dim]变更说明[/dim] {changelog}\n"
         _console.print(Panel(

@@ -1,7 +1,7 @@
 ---
 name: ops-asin-health-diagnoser
 description: 诊断 Amazon ASIN 健康度。通过 6 大指标（毛利率、转化率、ACOS、退款率、库存周转、星级）计算综合评分 0-100，识别问题 ASIN 并给出优先行动建议。当用户说"诊断ASIN"、"分析产品表现"、"健康度评分"、"ASIN体检"、"周会报告"时触发。支持 CLI 和 MCP 双模式。
-version: v0.2.0
+version: v0.2.2
 ---
 
 # ASIN 健康诊断器

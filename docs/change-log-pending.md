@@ -1,5 +1,17 @@
 # 待归档变更记录
 
+## 2026-05-23 skills publish 命令 - 新版本发布补充元数据字段
+
+**变更原因**：新版本发布路径使用 `publish_version`（`POST /v1/skills/{id}/versions`），该 API 只接受 `version`/`changelog`，不接受 `summary`/`title` 等元数据字段，导致广场展示信息在版本更新后不同步。
+**改动点**：
+- `opscli/skills/commands/publish_cli.py` 新版本发布路径：从 `client.publish_version()` 切换为 `client.full_update_skill()`（`POST /v1/skills/{id}`），该 API 同时支持元数据更新+文件上传+版本创建
+- `fields` 从只含 `version` 扩展为与首次发布一致的完整元数据（version、title、description、summary、tags、share_type、category_id）
+- 新版本发布成功后的终端输出增加 `分享权限` 和 `一句话` 展示行
+**验证结果**：发布 ops-asin-health-diagnoser v0.2.2，广场返回 `summary` 已正确写入，`latest_version` 正确更新为 0.2.2
+**影响范围**：所有通过 `opscli skills publish` 发布新版本的操作，广场元数据将同步更新
+**回滚方式**：将新版本路径恢复为 `client.publish_version()` + `fields = {"version": version}`
+---
+
 ## 2026-05-23 ops-experience-to-skill Skill - 强制发布确认门禁 v0.4.3
 
 **变更原因**：优化 ops-asin-health-diagnoser 时未触发发布确认，根因是发布确认逻辑嵌套在步骤 18/24 的大段落中，容易被跳过；且缺少独立收敛步骤确保所有路径都必须经过发布确认。
