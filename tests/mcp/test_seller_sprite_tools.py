@@ -69,3 +69,4 @@ def test_seller_sprite_export_returns_export_info(monkeypatch):
 
     assert result["success"] is True
     assert result["data"]["path"] == "/tmp/job-1.xlsx"
+    assert result["data"]["url"].startswith("file://")

@@ -79,6 +79,7 @@ opscli-mcp --transport sse --port 8765
     "export": {
       "path": ".../seller-sprite-keyword-reverse-20260522-153000-a1b2c3.xlsx",
       "filename": "seller-sprite-keyword-reverse-20260522-153000-a1b2c3.xlsx",
+      "url": "file:///.../seller-sprite-keyword-reverse-20260522-153000-a1b2c3.xlsx",
       "format": "xlsx"
     }
   },
@@ -92,7 +93,7 @@ opscli-mcp --transport sse --port 8765
 
 ### `seller_sprite_export`
 
-通过 `job_id` 读取导出文件信息。第一版只返回服务器本地路径，不返回二进制。后续如客户端需要下载，再扩展 base64 或 MCP resource。
+通过 `job_id` 读取导出文件信息。当前返回服务器本地路径和 `file://` 文件链接，不返回二进制。远程公网下载后续可扩展 HTTP 临时链接、base64 或 MCP resource。
 
 ## 场景参数示例
 
@@ -169,7 +170,7 @@ opscli-mcp --transport sse --port 8765
 - 4 个场景分别获取 100 条以内数据。
 - 每个任务目录包含 `params.json`、`raw.json`、`result.json`、`*.xlsx`。
 - `seller_sprite_job_status(job_id)` 能读取行数、路径和导出信息。
-- `seller_sprite_export(job_id)` 返回 XLSX 路径。
+- `seller_sprite_export(job_id)` 返回 XLSX 路径和 `file://` 文件链接。
 - 失败时 MCP 返回 `_err` 结构，并包含状态码或响应摘要。
 
 ## 2026-05-22 本地验证记录

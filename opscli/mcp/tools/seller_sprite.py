@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from .helpers import _err, _ok, _parse_json_arg
@@ -79,6 +80,8 @@ async def seller_sprite_export(job_id: str) -> dict:
         export = status.get("export")
         if not export:
             raise ValueError(f"任务无导出文件：{job_id}")
+        if export.get("path") and not export.get("url"):
+            export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
         return _ok(export)
     except Exception as exc:
         return _err(exc, tool="MCP → seller_sprite_export(...)", call_params={"job_id": job_id})

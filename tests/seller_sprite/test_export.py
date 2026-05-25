@@ -23,6 +23,7 @@ def test_xlsx_export_writes_template_headers_without_notes(tmp_path: Path):
     )
 
     assert result.path == str(output)
+    assert result.url == output.resolve().as_uri()
     assert output.exists()
 
     workbook = load_workbook(output)

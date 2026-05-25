@@ -13,6 +13,7 @@ class SellerSpriteExportResult:
 
     path: str
     filename: str
+    url: str | None = None
     format: str = "xlsx"
     mime_type: str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 

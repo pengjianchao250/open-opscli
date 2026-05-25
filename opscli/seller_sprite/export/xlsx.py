@@ -57,9 +57,11 @@ def export_rows_to_xlsx(
         _add_high_frequency_sheet(workbook, high_frequency_rows)
 
     workbook.save(output_path)
+    resolved_output = output_path.resolve()
     return SellerSpriteExportResult(
-        path=str(output_path),
-        filename=output_path.name,
+        path=str(resolved_output),
+        filename=resolved_output.name,
+        url=resolved_output.as_uri(),
     )
 
 
