@@ -180,12 +180,14 @@ from opscli.mcp.tools import auth as _auth_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
 from opscli.mcp.tools import feedback as _feedback_tools
 from opscli.mcp.tools import query as _query_tools
+from opscli.mcp.tools import seller_sprite as _seller_sprite_tools
 from opscli.mcp.tools import skills as _skills_tools
 
 _auth_tools.register(_telemetry_mcp)
 _chatgpt_tools.register(_telemetry_mcp)
 _feedback_tools.register(_telemetry_mcp)
 _query_tools.register(_telemetry_mcp)
+_seller_sprite_tools.register(_telemetry_mcp)
 _skills_tools.register(_telemetry_mcp)
 
 # amazon 工具依赖可选扩展 playwright，未安装时跳过注册不影响其他工具

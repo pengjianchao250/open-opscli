@@ -8,8 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from opscli.seller_sprite.domain.exceptions import InvalidAsinError, InvalidCollectOptionError, SellerSpriteResponseError
-from opscli.seller_sprite.domain.models import (
+from opscli.seller_sprite_legacy.domain.exceptions import InvalidAsinError, InvalidCollectOptionError, SellerSpriteResponseError
+from opscli.seller_sprite_legacy.domain.models import (
     SellerSpriteArchiveManifest,
     SellerSpriteCollectOptions,
     SellerSpriteCollectResult,
@@ -17,8 +17,8 @@ from opscli.seller_sprite.domain.models import (
     SellerSpriteKeywordItem,
     SellerSpriteReverseKeywordItem,
 )
-from opscli.seller_sprite.scraping.scraper import SellerSpriteScraper
-from opscli.seller_sprite.services.account_store import SellerSpriteAccountStore
+from opscli.seller_sprite_legacy.scraping.scraper import SellerSpriteScraper
+from opscli.seller_sprite_legacy.services.account_store import SellerSpriteAccountStore
 
 
 class SellerSpriteManager:

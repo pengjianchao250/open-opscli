@@ -1,5 +1,5 @@
 {
-  "version": "v1.0.1",
-  "updated_at": "2026-05-08",
-  "notes": "优化 ops-feedback Skill：补充防递归反馈规则、草案字段校验、同会话去重说明，并移除注入规则中的本地配置链接。"
+  "version": "v1.0.2",
+  "updated_at": "2026-05-25",
+  "notes": "收紧 ops-feedback 传参规范：要求 skill_name、skill_version、command_name、mcp_tool_name 使用接口顶层参数传递，并明确 app_version/client_version 由当前 aukeys-opscli 自动写入。"
 }

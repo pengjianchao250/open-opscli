@@ -1,5 +1,22 @@
 # 待归档变更记录
 
+## 2026-05-22 ops-dataset-query Skill - 合并 data-fetch-constraints.md 业务规则
+
+**变更原因**：用户提供了 data-fetch-constraints.md（取数约束与已知翻车用例），其中包含大量 ops-dataset-query 缺失的业务层面规则。与现有规则对比后，发现 1 处冲突（时间口径，以 ops-dataset-query 为准）和 18+ 条可新增规则。
+**改动点**：
+- `references/rules.md`（572→764行）：
+  - 一章末尾：新增 §1.5（缺省值默认执行）、§1.6（上下文继承规则）
+  - 二章末尾：新增 §2.3（team_name/dept_name 独立）、§2.4（店铺/渠道/平台严格区分）
+  - 五章末尾：新增 §5.4（数据集优先级：经营 vs 广告）
+  - 九章自检清单：新增 5 条检查项（取数状态/平台过滤/范围继承/全量展示/self_small_cat）
+  - 新增十三至十八章：取数状态格式、平台过滤强制规则、内部口径常识、部门下钻规则、self_small_cat 限制、典型用例防错补充
+- `SKILL.md`：新增铁律十四（禁止静默截断数据，全量展示优先）
+**验证结果**：grep 确认所有章节标题存在，rules.md 共 764 行，SKILL.md 铁律十四已写入
+**影响范围**：所有通过 ops-dataset-query Skill 发起取数的 AI Agent 会话，行为更贴合 Aukeys 运营业务口径
+**回滚方式**：git revert 对应提交，或手动删除 §1.5/§1.6/§2.3/§2.4/§5.4 和十三~十八章，删除铁律十四
+
+---
+
 ## 2026-05-23 文档更新 - categories 命令及自动分类匹配补录
 
 **变更原因**：新增 `marketplace categories` 命令及 publish/edit 自动分类匹配功能后，需同步更新用户文档

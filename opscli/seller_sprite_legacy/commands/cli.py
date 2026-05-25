@@ -8,10 +8,10 @@ from pathlib import Path
 
 import typer
 
-from opscli.seller_sprite.domain.exceptions import SellerSpriteError
-from opscli.seller_sprite.domain.models import SellerSpriteCollectOptions
-from opscli.seller_sprite.services.account_store import SellerSpriteAccountStore
-from opscli.seller_sprite.services.manager import SellerSpriteManager
+from opscli.seller_sprite_legacy.domain.exceptions import SellerSpriteError
+from opscli.seller_sprite_legacy.domain.models import SellerSpriteCollectOptions
+from opscli.seller_sprite_legacy.services.account_store import SellerSpriteAccountStore
+from opscli.seller_sprite_legacy.services.manager import SellerSpriteManager
 
 app = typer.Typer(help="卖家精灵关键词与 Listing 分析材料采集")
 account_app = typer.Typer(help="管理卖家精灵命名账号")

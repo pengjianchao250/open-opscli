@@ -15,10 +15,21 @@ description: 通过 MCP Tool 提交和查询结构化用户反馈
 1. 检查错误响应中的 `feedback` 字段（由 `_err` 自动生成）
 2. 补充 `title`、`content`、`reason`、`fix_suggestion`，并确认 `call_params` 已保留
 3. 删除 `_hint` 等非提交字段
-4. 调用 `feedback_submit`
+4. 调用 `feedback_submit`，并按接口参数显式传入 `skill_name`、`skill_version`、`mcp_tool_name`
 5. 返回 `feedback_uuid` 并继续处理原任务
 
 不要对 `feedback_submit` / `feedback_detail` 自身失败继续自动提交反馈。
+
+## 参数结构铁律
+
+`feedback_submit` 的结构化字段必须按接口参数传递：
+
+- `skill_name`、`skill_version`、`command_name`、`mcp_tool_name` 是顶层参数，不能只放进 `context`
+- MCP Tool 失败必须传 `mcp_tool_name`
+- 由 Skill 执行过程触发的反馈必须传 `skill_name` 和 `skill_version`
+- `payload`、`context`、`execution_summary` 必须是对象；`attachments` 必须是数组
+- `app_version` 和 `client_version` 不要传；当前 `aukeys-opscli` 会自动写入真实版本
+- `context` 只保存补充上下文，例如 `cwd`、`agent`、`workflow`、`request_id`
 
 ### 示例：自动触发
 
@@ -35,8 +46,17 @@ failed_call["reason"] = "推测：字段名未匹配到服务端 metadata。"
 failed_call["fix_suggestion"] = "改用 metadata 中的完整字段名，或先调用 query_metadata 校验字段。"
 feedback_submit(
     feedback_type=feedback["feedback_type"],
+    severity=feedback.get("severity", "medium"),
+    source="mcp",
     title="query_simple 字段不存在",
     content="调用 query_simple 时服务端返回字段不存在错误",
+    skill_name="ops-dataset-query",
+    skill_version="v1.0.0",
+    mcp_tool_name="query_simple",
+    context={
+        "cwd": "/Users/mask/python3/opscli",
+        "agent": "Codex"
+    },
     execution_summary=feedback["execution_summary"],
 )
 ```
@@ -54,10 +74,17 @@ feedback_submit(
     title="ops-dataset-query simple 字段不存在",
     content="使用 simple 查询时字段 original_price 无法识别，已改用 build 完成。",
     source="mcp",
+    skill_name="ops-dataset-query",
+    skill_version="v1.0.0",
+    mcp_tool_name="query_simple",
+    payload={
+        "expected": "返回原价汇总",
+        "actual": "字段不存在"
+    },
     context={
-        "skill_name": "ops-dataset-query",
-        "mcp_tool_name": "query_simple",
-        "client_name": "opscli-mcp"
+        "cwd": "/Users/mask/python3/opscli",
+        "agent": "Codex",
+        "workflow": "ops-dataset-query"
     },
     execution_summary={
         "summary": "本次通过 ops-dataset-query 查询数据，simple 接口因字段识别失败，最终改用 build。",

@@ -49,12 +49,39 @@ description: Use when submitting or querying Aukeys opscli feedback, or when an 
    - `execution_summary.failed_calls[0].call_params`：实际传入的关键参数；没有参数也写 `{}`
    - `execution_summary.failed_calls[0].reason`：基于上下文推断原因
    - `execution_summary.failed_calls[0].fix_suggestion`：修复建议或下一步
+   - `skill_name`：触发反馈的 Skill 名称；由某个 Skill 执行产生的反馈必须传顶层参数
+   - `skill_version`：触发反馈的 Skill 版本；能从 Skill 的 `VERSION.json`、frontmatter 或已安装记录读取时必须传顶层参数
+   - `command_name` / `mcp_tool_name`：按实际失败入口至少填写一个；CLI 失败填 `command_name`，MCP 失败填 `mcp_tool_name`
 4. **调用反馈提交**：
-   - MCP 环境：`feedback_submit(feedback_type="bug", title="...", content="...", execution_summary={...})`
-   - CLI 环境：`opscli feedback submit --type bug --title "..." --content "..." --execution-summary-file summary.json`
+   - MCP 环境：`feedback_submit(feedback_type="bug", title="...", content="...", skill_name="...", skill_version="...", mcp_tool_name="...", execution_summary={...})`
+   - CLI 环境：`opscli feedback submit --type bug --title "..." --content "..." --skill-name "..." --skill-version "..." --command-name "..." --execution-summary-file summary.json`
 5. **返回 feedback_uuid 给用户**，并继续处理原任务
 
 如果反馈提交自身失败，只向用户说明反馈提交失败和原始错误，不要再次调用本 Skill 提交“反馈失败”的反馈。
+
+### 接口参数规范
+
+所有提交都必须遵循 `opscli feedback` / `feedback_submit` 的接口结构，优先使用顶层参数，不要只把关键字段塞进 `context`。
+
+| 字段 | 要求 |
+|------|------|
+| `feedback_type` | 必填；只能是 `bug` / `feature` / `data_issue` / `ux` / `docs` / `query_result` / `other` |
+| `title` | 必填；不超过 200 字 |
+| `content` | 必填；描述失败场景、用户影响、已采取动作 |
+| `severity` | 必填或使用默认 `medium`；只能是 `low` / `medium` / `high` / `critical` |
+| `source` | 必填或使用通道默认值；CLI 用 `cli`，MCP Tool 用 `mcp`，Skill 主动沉淀用 `skill` |
+| `payload` | 可选；必须是 JSON 对象，保存原始业务输入、期望与实际结果 |
+| `context` | 可选；必须是 JSON 对象，只放补充上下文，例如 `cwd`、`agent`、`workflow`、`request_id` |
+| `execution_summary` | 必填；必须是 JSON 对象，包含 `summary`、`failed_calls`、`successful_calls`、`final_resolution` |
+| `attachments` | 可选；必须是 JSON 数组，只保存文件路径、URL、日志摘要等引用 |
+| `skill_name` | Skill 触发或 Skill 执行失败时必填顶层参数，例如 `ops-dataset-query` |
+| `skill_version` | Skill 触发或 Skill 执行失败时必填顶层参数；未知时先查该 Skill 的 `VERSION.json`，仍未知才写 `unknown` |
+| `command_name` | CLI 失败时必填顶层参数，例如 `opscli query simple` |
+| `mcp_tool_name` | MCP Tool 失败时必填顶层参数，例如 `query_simple` |
+
+`app_version` 和 `client_version` 不要手工传入，不要写入示例文件；它们由当前运行的 `aukeys-opscli` 自动写入，必须以工具实际版本为准。
+
+如果同时写顶层参数和 `context`，顶层参数是接口规范字段；`context` 只能作为补充信息，不能替代 `skill_name`、`skill_version`、`command_name`、`mcp_tool_name`。
 
 ### 从错误响应构造 execution_summary
 
