@@ -87,6 +87,36 @@ def test_manager_writes_job_files_and_xlsx(monkeypatch, tmp_path: Path):
     assert "market" not in DummyApiClient.calls[0]["payload"]
 
 
+def test_manager_writes_json_export(monkeypatch, tmp_path: Path):
+    DummyApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None)
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-reverse",
+                site="JP",
+                period="nearly",
+                params={"asin": "B07YRMT36L"},
+                job_id="job-json-regression",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.export is not None
+    assert result.export.filename == "job-json-regression.json"
+    assert result.export.format == "json"
+    assert result.export.mime_type == "application/json"
+    exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
+    assert exported["job_id"] == "job-json-regression"
+    assert exported["scenario"] == "keyword-reverse"
+    assert exported["row_count"] == 1
+    assert exported["rows"][0]["keywords"] == "flashlight"
+
+
 def test_job_status_reads_existing_result(tmp_path: Path):
     root_dir = tmp_path / "job-1"
     root_dir.mkdir()

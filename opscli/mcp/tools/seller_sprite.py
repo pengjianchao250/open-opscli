@@ -24,11 +24,11 @@ async def seller_sprite_run(
     site: str = "US",
     period: str = "30d",
     page_size: int = 100,
-    export_format: str = "xlsx",
+    export_format: str = "json",
     output_dir: str | None = None,
     job_id: str | None = None,
 ) -> dict:
-    """执行卖家精灵接口场景并导出 XLSX。"""
+    """执行卖家精灵接口场景并导出 JSON/XLSX。"""
     try:
         from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
         from opscli.seller_sprite.services import SellerSpriteApiManager

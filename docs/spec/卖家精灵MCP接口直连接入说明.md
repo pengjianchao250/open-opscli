@@ -61,7 +61,7 @@ opscli-mcp --transport sse --port 8765
 | `site` | 站点，如 `US`、`JP`、`DE` |
 | `period` | 日期，如 `30d`、`nearly`、`2026-03` |
 | `page_size` | 默认 `100` |
-| `export_format` | 默认 `xlsx` |
+| `export_format` | MCP 默认 `json`；可选 `xlsx` / `xls` / `json` |
 | `output_dir` | 可选任务输出目录 |
 | `job_id` | 可选指定任务 ID |
 
@@ -94,6 +94,18 @@ opscli-mcp --transport sse --port 8765
 ### `seller_sprite_export`
 
 通过 `job_id` 读取导出文件信息。当前返回服务器本地路径和 `file://` 文件链接，不返回二进制。远程公网下载后续可扩展 HTTP 临时链接、base64 或 MCP resource。
+
+CLI 调用默认导出 XLSX：
+
+```bash
+opscli seller-sprite run keyword-reverse --site JP --period nearly --params "{\"asin\":\"B07YRMT36L\"}"
+```
+
+CLI 也可导出 JSON：
+
+```bash
+opscli seller-sprite run keyword-reverse --site JP --period nearly --params "{\"asin\":\"B07YRMT36L\"}" --export-format json
+```
 
 ## 场景参数示例
 

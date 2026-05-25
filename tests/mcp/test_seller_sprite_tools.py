@@ -60,6 +60,7 @@ def test_seller_sprite_run_accepts_params_json_string(monkeypatch):
     assert result["data"]["job_id"] == "job-1"
     assert DummyManager.last_request.params == {"asin": "B07YRMT36L"}
     assert DummyManager.last_request.page_size == 100
+    assert DummyManager.last_request.export_format == "json"
 
 
 def test_seller_sprite_export_returns_export_info(monkeypatch):

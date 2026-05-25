@@ -95,8 +95,8 @@ class SellerSpriteApiManager:
 
         rows = _extract_items(main_response)
         high_frequency_rows = _extract_high_frequency_rows(high_frequency_response)
-        export = None
-        if request.export_format == "xlsx":
+        export_format = _normalize_export_format(request.export_format)
+        if export_format == "xlsx":
             export = export_rows_to_xlsx(
                 rows=rows,
                 output_path=root_dir / f"{job_id}.xlsx",
@@ -105,6 +105,17 @@ class SellerSpriteApiManager:
                 period=period,
                 params=request.params,
                 high_frequency_rows=high_frequency_rows,
+            )
+        else:
+            export = _export_rows_to_json(
+                output_path=root_dir / f"{job_id}.json",
+                job_id=job_id,
+                scenario=request.scenario,
+                site=site,
+                period=period,
+                rows=rows,
+                high_frequency_rows=high_frequency_rows,
+                warnings=warnings,
             )
         result = SellerSpriteScenarioResult(
             job_id=job_id,
@@ -178,6 +189,49 @@ def _build_job_id(scenario: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     suffix = uuid4().hex[:6]
     return f"seller-sprite-{scenario}-{timestamp}-{suffix}"
+
+
+def _normalize_export_format(value: str) -> str:
+    text = (value or "json").lower()
+    if text in {"xls", "xlsx"}:
+        return "xlsx"
+    if text == "json":
+        return "json"
+    raise SellerSpriteConfigError(f"不支持的导出格式：{value}")
+
+
+def _export_rows_to_json(
+    *,
+    output_path: Path,
+    job_id: str,
+    scenario: str,
+    site: str,
+    period: str,
+    rows: list[dict[str, Any]],
+    high_frequency_rows: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+):
+    from opscli.seller_sprite.domain.models import SellerSpriteExportResult
+
+    payload = {
+        "job_id": job_id,
+        "scenario": scenario,
+        "site": site,
+        "period": period,
+        "row_count": len(rows),
+        "rows": rows,
+        "high_frequency_rows": high_frequency_rows,
+        "warnings": warnings,
+    }
+    _write_json(output_path, payload)
+    resolved_output = output_path.resolve()
+    return SellerSpriteExportResult(
+        path=str(resolved_output),
+        filename=resolved_output.name,
+        url=resolved_output.as_uri(),
+        format="json",
+        mime_type="application/json",
+    )
 
 
 def _write_json(path: Path, payload: Any) -> None:
