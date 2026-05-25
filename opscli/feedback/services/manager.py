@@ -75,8 +75,9 @@ class FeedbackManager:
         return self.client.submit(request_payload)
 
     def submit_payload(self, payload: dict) -> dict:
-        self.validate_payload(payload)
-        return self.client.submit(payload)
+        request_payload = self.normalize_payload(payload)
+        self.validate_payload(request_payload)
+        return self.client.submit(request_payload)
 
     def detail(self, feedback_uuid: str) -> dict:
         feedback_uuid = feedback_uuid.strip()
@@ -105,9 +106,9 @@ class FeedbackManager:
         command_name: str | None = None,
         mcp_tool_name: str | None = None,
     ) -> dict:
-        version = client_version or get_version()
+        version = get_version()
         ctx = dict(context or {})
-        ctx.setdefault("app_version", app_version or version)
+        ctx["app_version"] = version
         ctx.setdefault("client_name", client_name)
         if command_name:
             ctx.setdefault("command_name", command_name)
@@ -128,7 +129,7 @@ class FeedbackManager:
             "context": ctx,
             "execution_summary": execution_summary,
             "attachments": attachments,
-            "app_version": app_version or version,
+            "app_version": version,
             "system_alias": system_alias,
             "client_name": client_name,
             "client_version": version,
@@ -140,6 +141,31 @@ class FeedbackManager:
         compacted = {key: value for key, value in request_payload.items() if value is not None}
         self.validate_payload(compacted)
         return compacted
+
+    def normalize_payload(self, payload: dict) -> dict:
+        """Normalize externally supplied payloads before validation/submission.
+
+        Version fields are always sourced from the running aukeys-opscli package.
+        Callers may not override them, including in --file mode.
+        """
+        if not isinstance(payload, dict):
+            raise InvalidPayloadError("反馈 payload 必须是 JSON 对象")
+
+        version = get_version()
+        request_payload = dict(payload)
+        context = request_payload.get("context")
+        if context is None:
+            context = {}
+        elif not isinstance(context, dict):
+            raise InvalidPayloadError("context 必须是 JSON 对象")
+        else:
+            context = dict(context)
+
+        context["app_version"] = version
+        request_payload["context"] = context
+        request_payload["app_version"] = version
+        request_payload["client_version"] = version
+        return request_payload
 
     def validate_payload(self, payload: dict) -> None:
         if not isinstance(payload, dict):

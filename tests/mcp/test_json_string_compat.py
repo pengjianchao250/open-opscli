@@ -256,7 +256,7 @@ class TestFeedbackSubmitJsonStringCompat:
 
     def test_execution_summary_as_json_string(self, monkeypatch):
         """execution_summary 以 JSON 字符串传入，应自动解析为 dict。"""
-        monkeypatch.setattr(helpers, "_get_auth_pair", lambda s, sid, jwt: ("sid-1", "jwt-1"))
+        monkeypatch.setattr(feedback_tools, "_get_auth_pair", lambda s, sid, jwt: ("sid-1", "jwt-1"))
         monkeypatch.setattr(
             feedback_tools, "_feedback_manager", lambda jwt=None, session_id=None: self._dummy_cls()
         )
@@ -278,7 +278,7 @@ class TestFeedbackSubmitJsonStringCompat:
 
     def test_native_dict_still_works(self, monkeypatch):
         """正常传入 dict 时不受影响。"""
-        monkeypatch.setattr(helpers, "_get_auth_pair", lambda s, sid, jwt: ("sid-1", "jwt-1"))
+        monkeypatch.setattr(feedback_tools, "_get_auth_pair", lambda s, sid, jwt: ("sid-1", "jwt-1"))
         monkeypatch.setattr(
             feedback_tools, "_feedback_manager", lambda jwt=None, session_id=None: self._dummy_cls()
         )

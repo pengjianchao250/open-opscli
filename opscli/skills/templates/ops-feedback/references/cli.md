@@ -14,6 +14,8 @@ description: 通过 opscli feedback 提交和查询结构化用户反馈
 opscli feedback submit --file feedback.json --pretty
 ```
 
+`feedback.json` 必须遵循接口字段结构：`skill_name`、`skill_version`、`command_name`、`mcp_tool_name` 是顶层字段，不能只写在 `context` 里。`app_version` 和 `client_version` 不要写入文件，当前 `aukeys-opscli` 会自动填入真实版本。
+
 完整 `feedback.json` 示例：
 
 ```json
@@ -27,10 +29,13 @@ opscli feedback submit --file feedback.json --pretty
     "expected": "返回原价汇总",
     "actual": "字段不存在"
   },
+  "skill_name": "ops-dataset-query",
+  "skill_version": "v1.0.0",
+  "command_name": "opscli query simple",
   "context": {
-    "skill_name": "ops-dataset-query",
-    "command_name": "opscli query simple",
-    "client_name": "opscli"
+    "cwd": "/Users/mask/python3/opscli",
+    "agent": "Codex",
+    "workflow": "ops-dataset-query"
   },
   "execution_summary": {
     "summary": "本次通过 ops-dataset-query 查询数据，simple 接口因字段识别失败，最终改用 build。",
@@ -69,7 +74,24 @@ opscli feedback submit \
   --content "使用 simple 查询时字段 original_price 无法识别，已改用 build 完成。" \
   --execution-summary-file summary.json \
   --skill-name ops-dataset-query \
+  --skill-version v1.0.0 \
   --command-name "opscli query simple" \
+  --pretty
+```
+
+如果失败来自 MCP Tool，但当前选择 CLI 通道提交反馈，也要通过 `--mcp-tool-name` 传入实际工具名：
+
+```bash
+opscli feedback submit \
+  --type bug \
+  --severity medium \
+  --source mcp \
+  --title "query_simple 字段不存在" \
+  --content "调用 query_simple 时服务端返回字段不存在错误。" \
+  --execution-summary-file summary.json \
+  --skill-name ops-dataset-query \
+  --skill-version v1.0.0 \
+  --mcp-tool-name query_simple \
   --pretty
 ```
 
@@ -88,5 +110,8 @@ opscli feedback schema --pretty
 ## 注意事项
 
 - 提交前先确认已经完成 `opscli auth login`
+- Skill 相关反馈必须传 `--skill-name` 和 `--skill-version`
+- CLI 失败必须传 `--command-name`；MCP 失败必须传 `--mcp-tool-name`
+- 不要手工传 `app_version`、`client_version`；由当前 `aukeys-opscli` 自动写入
 - `execution_summary.failed_calls[*].call_params` 必须保留具体字段和值
 - 不要提交 Token、Cookie、密码等敏感信息
