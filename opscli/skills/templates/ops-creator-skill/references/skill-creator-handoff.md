@@ -2,7 +2,7 @@
 
 本 Skill 不替代 skill-creator/技能创建器。推荐分工：
 
-- `ops-experience-to-skill`：负责跨境运营访谈、业务 6 维确认、ops 数据方案、测试意图和流程地图。
+- `ops-creator-skill`：负责跨境运营访谈、业务 6 维确认、ops 数据方案、测试意图和流程地图。
 - 当前 AI 工具可用的 `skill-creator` 或同类技能创建能力：负责正式创建或更新 Skill，保证目录结构、frontmatter、资源拆分、界面元数据和校验符合该工具规范。
 
 不要写死某一个平台的内置创建器。在 Codex、Claude、Cursor、Dify、Coze、飞书智能伙伴或公司内部 Agent 中，都按当前环境实际可用的 Skill 创建方式落地。
@@ -46,7 +46,7 @@
 - 默认中文编写 `SKILL.md` 正文、references、输出模板和 UI 文案。
 - YAML/frontmatter `name`、文件夹名、脚本名和字段名保留英文或原文。
 - 使用 progressive disclosure：主 `SKILL.md` 放核心流程，长规则/案例/数据取数/测试放 `references/`。
-- 按 `ops-experience-to-skill` 统一框架生成：主 `SKILL.md` 必须包含快速开始、必要参数、日常工作流、按需加载资料、错误处理、输出规范、执行日志与候选提交；完整业务资料拆到 `references/`。
+- 按 `ops-creator-skill` 统一框架生成：主 `SKILL.md` 必须包含快速开始、必要参数、日常工作流、按需加载资料、错误处理、输出规范、执行日志与候选提交；完整业务资料拆到 `references/`。
 - 内容不减少但默认加载更少：日常执行只加载 `SKILL.md` 和本次必要的 0-2 个 reference；测试、发布、跨工具迁移、错误排查或用户明确要求优化时再加载完整资料。
 - 必须写清默认执行策略：已固化流程默认直接执行，只追问缺失参数；不要在日常执行中重复做取数预检、baseline 测试、发布治理或长篇流程介绍。
 - 涉及 ops 内部数据时，把生成/更新前的取数预检结果放入 reference；日常执行默认使用已验证取数规则，只有字段变化、权限失败、空结果、新场景或用户要求时才重新展开预检。

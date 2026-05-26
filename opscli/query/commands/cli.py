@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import typer
@@ -300,9 +301,28 @@ def simple(
             pf = Path(payload_file).expanduser()
             if not pf.exists():
                 raise InvalidPayloadError(f"payload 文件不存在: {pf}")
-            simple_params = json.loads(pf.read_text(encoding="utf-8"))
+            try:
+                simple_params = json.loads(pf.read_text(encoding="utf-8-sig"))
+            except json.JSONDecodeError as exc:
+                raise InvalidPayloadError(
+                    f"payload 文件 JSON 解析失败: {pf}\n"
+                    f"  错误: {exc}\n"
+                    f"  提示: 检查文件是否为有效 UTF-8 JSON，BOM 头已自动兼容"
+                ) from exc
         elif payload_json:
-            simple_params = json.loads(payload_json)
+            try:
+                simple_params = json.loads(payload_json)
+            except json.JSONDecodeError as exc:
+                hint = ""
+                if payload_json.startswith("{'"):
+                    hint = "\n  提示: 检测到单引号包裹的 JSON，请改用双引号"
+                elif "\\\\" in payload_json and sys.platform == "win32":
+                    hint = (
+                        "\n  提示: Windows PowerShell 中 --json 内联传参容易因引号转义导致 JSON 被破坏"
+                        "\n  建议改用 --payload <文件路径> 传参，并使用 UTF-8 无 BOM 编码保存")
+                raise InvalidPayloadError(
+                    f"JSON 字符串解析失败: {exc}{hint}"
+                ) from exc
 
         kwargs: dict[str, object] = {"table_id": table_id}
 

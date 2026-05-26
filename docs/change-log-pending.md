@@ -56,18 +56,18 @@
 **回滚方式**：将新版本路径恢复为 `client.publish_version()` + `fields = {"version": version}`
 ---
 
-## 2026-05-23 ops-experience-to-skill Skill - 强制发布确认门禁 v0.4.3
+## 2026-05-23 ops-creator-skill Skill - 强制发布确认门禁 v0.4.3
 
 **变更原因**：优化 ops-asin-health-diagnoser 时未触发发布确认，根因是发布确认逻辑嵌套在步骤 18/24 的大段落中，容易被跳过；且缺少独立收敛步骤确保所有路径都必须经过发布确认。
 **改动点**：
-- 新增 `data/VERSION.json`（`{"name": "ops-experience-to-skill", "version": "0.4.3"}`），补齐铁律14要求
+- 新增 `data/VERSION.json`（`{"name": "ops-creator-skill", "version": "0.4.3"}`），补齐铁律14要求
 - 新增步骤 25 作为强制最终收敛点，所有路径（新建/改造/优化）必须经过
 - 步骤 18/24 中的发布段落简化为指向步骤 25 的引用（"必须继续执行步骤 25 的强制发布确认门禁"）
 - 新增独立章节 `## [强制] 技能广场发布确认门禁`，类似 ops-skills 认证门禁风格
 - 步骤 25 包含完整 AskUserQuestion 模板（三选一：全员发布/部门发布/暂不发布）
 - 步骤 25 包含版本号准备流程（新建/改造两条路径）和发布命令
 **验证结果**：文件结构正确，步骤 18/24/25 引用链完整，独立门禁章节位置正确
-**影响范围**：所有通过 ops-experience-to-skill 创建或优化 Skill 的会话
+**影响范围**：所有通过 ops-creator-skill 创建或优化 Skill 的会话
 **回滚方式**：恢复步骤 18/24 中的原始发布段落，删除步骤 25 和独立门禁章节
 ---
 
@@ -93,19 +93,19 @@
 **回滚方式**：`git checkout HEAD -- opscli/skills/templates/ops-asin-health-diagnoser/`
 ---
 
-## 2026-05-23 ops-experience-to-skill Skill - 新增技能广场发布确认步骤
+## 2026-05-23 ops-creator-skill Skill - 新增技能广场发布确认步骤
 
 **变更原因**：Skill 创建/优化完成后，用户希望直接发布到技能广场（全员可见），免去手动执行 `opscli skills publish` 的步骤。
 **改动点**：
-- `opscli/skills/templates/ops-experience-to-skill/SKILL.md`：
+- `opscli/skills/templates/ops-creator-skill/SKILL.md`：
   - Step 18（起草 Skill）后新增发布确认：使用 AskUserQuestion 询问"发布到技能广场"或"暂不发布"，选择发布时调用 ops-skills Skill 执行认证门禁 + `opscli skills publish --share-type company`
   - Step 24（迭代优化）后新增重新发布确认：版本号递增 + 再次发布新版本
-- `opscli/skills/templates/ops-experience-to-skill/scripts/brief_to_skill.py`：
+- `opscli/skills/templates/ops-creator-skill/scripts/brief_to_skill.py`：
   - 新增 `import json`
   - `build_skill_md()` frontmatter 新增 `version: v0.0.1`
   - `main()` 新增生成 `data/VERSION.json`（`{"name": "<skill_name>", "version": "0.0.1"}`）
 **验证结果**：脚本语法正确，json 模块已导入并用于 VERSION.json 生成；SKILL.md 发布步骤与 ops-skills publish 命令参数一致
-**影响范围**：ops-experience-to-skill 工作流 Step 18 和 Step 24 的后续行为；brief_to_skill.py 生成的 Skill 草案目录结构
+**影响范围**：ops-creator-skill 工作流 Step 18 和 Step 24 的后续行为；brief_to_skill.py 生成的 Skill 草案目录结构
 **回滚方式**：删除 SKILL.md 中两段"发布确认"段落；撤销 brief_to_skill.py 的 3 处改动
 ---
 

@@ -115,7 +115,13 @@ class QueryManager:
 
         if matched is None:
             needle = dataset_alias if dataset_alias else str(table_id)
-            raise DatasetNotFoundError(f"未找到目标数据集: {needle}")
+            hint = ""
+            if source == "local":
+                hint = (
+                    "\n  当前使用的是本地缓存数据，可能未同步。"
+                    "\n  请执行 opscli skills upgrade ops-dataset-query 更新缓存后重试"
+                )
+            raise DatasetNotFoundError(f"未找到目标数据集: {needle}{hint}")
 
         # 筛选该数据集对应的字段
         matched_fields = [
@@ -149,7 +155,7 @@ class QueryManager:
             raise InvalidPayloadError(f"payload 文件不存在: {payload_file}")
 
         try:
-            payload = json.loads(payload_file.read_text(encoding="utf-8"))
+            payload = json.loads(payload_file.read_text(encoding="utf-8-sig"))
         except Exception as exc:
             raise InvalidPayloadError(f"payload 不是合法 JSON: {payload_file}") from exc
 
@@ -402,16 +408,24 @@ class QueryManager:
             resolved = self._resolve_simple_field(fields, field_ref, field_type="metric", context="metric")
             aggregation = item.get("aggregation") if isinstance(item, dict) else self._extract_simple_metric_aggregation(item)
             if aggregation and self._field_has_formula(resolved):
+                formula_expr = (
+                    str(resolved.get("summary_expression") or "").strip()
+                    or str(resolved.get("detail_expression") or "").strip()
+                    or "(请执行 opscli query metadata --dataset <别名> 查看完整公式)"
+                )
                 raise InvalidPayloadError(
-                    f"公式字段禁止额外聚合: {field_ref}。请移除 aggregation，并使用 metadata 中的 summary_expression/expr"
+                    f"公式字段禁止额外聚合: {field_ref}"
+                    f"\n  对应公式: {formula_expr}"
+                    f"\n  修复方式: 移除 aggregation，改为在 metric 中传入 expr 字段，值为上述公式表达式"
                 )
 
         for field_ref in self._iter_filter_field_refs(filters):
-            # 查询组件字段（select_columns）允许作为过滤条件，即使不在普通字段列表中
             normalized = self._normalize_simple_field_identifier(field_ref)
             if normalized in select_column_names:
                 continue
             self._resolve_simple_field(fields, field_ref, field_type=None, context="filter")
+
+        self._validate_simple_filter_operators(filters)
 
         if data_comparison:
             field_ref = data_comparison.get("field")
@@ -460,6 +474,29 @@ class QueryManager:
         for item in filters:
             walk(item)
         return refs
+
+    def _validate_simple_filter_operators(self, filters: list[dict]) -> None:
+        valid = self._VALID_FILTER_OPERATORS
+        logical = self._LOGICAL_OPERATORS
+
+        def walk(node: dict) -> None:
+            if not isinstance(node, dict):
+                return
+            op = node.get("operator")
+            if op:
+                op_str = str(op).strip()
+                if op_str in logical:
+                    pass  # AND/OR 逻辑操作符，合法跳过
+                elif op_str not in valid:
+                    raise InvalidPayloadError(
+                        f"无效的过滤操作符: {op}\n"
+                        f"  支持: {', '.join(sorted(valid))}"
+                    )
+            for child in node.get("conditions") or []:
+                walk(child)
+
+        for item in filters:
+            walk(item)
 
     def _resolve_simple_field(
         self,
@@ -1489,6 +1526,14 @@ class QueryManager:
         "<>": "neq",
     }
 
+    _VALID_FILTER_OPERATORS: set[str] = {
+        "eq", "neq", "lt", "lte", "gt", "gte",
+        "in", "not_in", "between", "like", "not_like",
+        "is_null", "is_not_null",
+    }
+
+    _LOGICAL_OPERATORS: set[str] = {"AND", "OR"}
+
     def _parse_where_condition(self, raw: str, *, dataset_alias: str) -> dict:
         """解析 where 简写条件：field|operator|value_json。
 
@@ -1506,6 +1551,10 @@ class QueryManager:
 
         # 将符号操作符标准化为服务端语义操作符
         operator = self._WHERE_OP_MAP.get(operator, operator)
+
+        if operator not in self._VALID_FILTER_OPERATORS:
+            hint = f"  (支持: {', '.join(sorted(self._VALID_FILTER_OPERATORS))})"
+            raise InvalidPayloadError(f"无效的操作符: {operator}{hint}")
 
         expr = field if "." in field else f"{dataset_alias}.{field}"
         try:

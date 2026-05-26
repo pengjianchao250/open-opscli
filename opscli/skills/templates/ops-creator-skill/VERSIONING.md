@@ -40,7 +40,7 @@ git switch -c change/YYYYMMDD-topic
 ```bash
 git status --short
 git add .
-git commit -m "Update ops-experience-to-skill ..."
+git commit -m "Update ops-creator-skill ..."
 ```
 
 如果用户确认它是新的稳定版，再打 tag：

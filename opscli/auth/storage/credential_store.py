@@ -89,6 +89,11 @@ class CredentialStore:
         self._use_keyring = _KEYRING_AVAILABLE and base_dir is None
         from opscli.config import CONFIG_DIR
         self._dir = Path(base_dir or CONFIG_DIR)
+        if self._dir.exists() and not self._dir.is_dir():
+            raise FileExistsError(
+                f"配置文件路径被非目录文件占用: {self._dir}\n"
+                f"请手动删除该文件后重试: rm \"{self._dir}\""
+            )
         self._dir.mkdir(parents=True, exist_ok=True)
         if base_dir is not None:
             self._dir.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)

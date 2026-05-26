@@ -1,6 +1,6 @@
-# AGENTS.md instructions for ops-experience-to-skill
+# AGENTS.md instructions for ops-creator-skill
 
-本目录是 `ops-experience-to-skill` 的本地稳定版本仓库。维护这个 Skill 时遵守：
+本目录是 `ops-creator-skill` 的本地稳定版本仓库。维护这个 Skill 时遵守：
 
 - 修改前先查看 `git status --short` 和 `git log --oneline --decorate -5`。
 - 不要静默覆盖用户已经确认的稳定版本；如果要大改，先说明将基于哪个 tag/commit 修改。

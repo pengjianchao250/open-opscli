@@ -237,7 +237,7 @@ version: v0.0.1
 
 ## 框架合规
 
-本 Skill 按 ops-experience-to-skill 统一框架生成：轻量 `SKILL.md` 负责路由，完整内容保留在 `references/`，稳定重复动作优先脚本化。改造已有 Skill 时，先保留旧版基线，再用同一批输入和数据对比新旧输出。
+本 Skill 按 ops-creator-skill 统一框架生成：轻量 `SKILL.md` 负责路由，完整内容保留在 `references/`，稳定重复动作优先脚本化。改造已有 Skill 时，先保留旧版基线，再用同一批输入和数据对比新旧输出。
 """
 
 

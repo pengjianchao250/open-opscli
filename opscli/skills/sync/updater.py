@@ -225,7 +225,8 @@ class SkillsUpdater:
                 encoding="utf-8",
             )
 
-            # 原子替换：Path.replace() 在同文件系统上是原子操作
+            # 原子替换：Path.replace() 在同文件系统上是原子操作；
+            # 跨盘时回退到复制+删除（Windows TEMP 与目标目录可能在不同盘）
             for filename in [
                 "dataset_fields.csv",
                 "datasets.csv",
@@ -234,7 +235,15 @@ class SkillsUpdater:
                 "query_metadata.json",
                 "VERSION.json",
             ]:
-                (tmp_path / filename).replace(data_dir / filename)
+                src = tmp_path / filename
+                dst = data_dir / filename
+                try:
+                    src.replace(dst)
+                except OSError:
+                    # 跨文件系统回退：先复制再删除
+                    import shutil as _shutil
+                    _shutil.copy2(src, dst)
+                    src.unlink(missing_ok=True)
 
         return SkillUpgradeResult(
             name=record.name,

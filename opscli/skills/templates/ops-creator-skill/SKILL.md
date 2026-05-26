@@ -1,6 +1,6 @@
 ---
-name: ops-experience-to-skill
-description: 通过中文协作访谈，把跨境电商运营同事已经在用的 Amazon/电商工作流程、判断规则、案例、例外、质量标准、内部数据需求、测试评测和迭代优化方案整理成可复用的 Skill/技能包草案；也用于把运营同事已经制作好的旧 Skill 统一调整到 ops-experience-to-skill 规范。核心要求是先问实业务 6 维信息并经用户确认，再按统一框架落地轻量主文件、按需 references、Python 脚本、取数预检、测试基准、执行日志和候选提交治理。
+name: ops-creator-skill
+description: 通过中文协作访谈，把跨境电商运营同事已经在用的 Amazon/电商工作流程、判断规则、案例、例外、质量标准、内部数据需求、测试评测和迭代优化方案整理成可复用的 Skill/技能包草案；也用于把运营同事已经制作好的旧 Skill 统一调整到 ops-creator-skill 规范。核心要求是先问实业务 6 维信息并经用户确认，再按统一框架落地轻量主文件、按需 references、Python 脚本、取数预检、测试基准、执行日志和候选提交治理。
 metadata:
   version: "0.4.3"
   category: operations

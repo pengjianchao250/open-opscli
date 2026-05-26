@@ -1,6 +1,6 @@
 # 已有运营 Skill 归一化流程
 
-当用户说“把已有 Skill 按 ops-experience-to-skill 规范调整”“统一历史 Skill 框架”“优化旧 Skill token 负担”时，使用本流程。
+当用户说“把已有 Skill 按 ops-creator-skill 规范调整”“统一历史 Skill 框架”“优化旧 Skill token 负担”时，使用本流程。
 
 ## 原则
 
