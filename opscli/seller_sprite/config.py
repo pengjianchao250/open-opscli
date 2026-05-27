@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from opscli.config import CONFIG_DIR
 ENV_USERNAME = "OPSCLI_SELLER_SPRITE_USERNAME"
 ENV_PASSWORD = "OPSCLI_SELLER_SPRITE_PASSWORD"
 ENV_ACCOUNT_NAME = "OPSCLI_SELLER_SPRITE_ACCOUNT_NAME"
+ENV_ACCOUNTS = "OPSCLI_SELLER_SPRITE_ACCOUNTS"
 ENV_OUTPUT_DIR = "OPSCLI_SELLER_SPRITE_OUTPUT_DIR"
 ENV_PAGE_SIZE = "OPSCLI_SELLER_SPRITE_PAGE_SIZE"
 
@@ -30,6 +32,7 @@ class SellerSpriteSettings:
     account_name: str = DEFAULT_ACCOUNT_NAME
     username: str | None = None
     password: str | None = None
+    accounts: tuple[dict[str, str], ...] = ()
     output_dir: Path = DEFAULT_OUTPUT_DIR
     page_size: int = DEFAULT_PAGE_SIZE
     default_site: str = DEFAULT_SITE
@@ -41,8 +44,10 @@ class SellerSpriteSettings:
         payload["output_dir"] = str(self.output_dir)
         payload["has_username"] = bool(self.username)
         payload["has_password"] = bool(self.password)
+        payload["account_count"] = len(self.accounts) or int(bool(self.username))
         payload.pop("username", None)
         payload.pop("password", None)
+        payload.pop("accounts", None)
         return payload
 
 
@@ -55,6 +60,7 @@ def load_settings() -> SellerSpriteSettings:
         account_name=values.get(ENV_ACCOUNT_NAME) or DEFAULT_ACCOUNT_NAME,
         username=values.get(ENV_USERNAME) or None,
         password=values.get(ENV_PASSWORD) or None,
+        accounts=_parse_accounts(values.get(ENV_ACCOUNTS)),
         output_dir=output_dir,
         page_size=page_size,
     )
@@ -63,7 +69,7 @@ def load_settings() -> SellerSpriteSettings:
 def _load_env_values() -> dict[str, str]:
     """读取 `.env` 后叠加真实环境变量，真实环境变量优先。"""
     values = _read_dotenv()
-    for key in [ENV_USERNAME, ENV_PASSWORD, ENV_ACCOUNT_NAME, ENV_OUTPUT_DIR, ENV_PAGE_SIZE]:
+    for key in [ENV_USERNAME, ENV_PASSWORD, ENV_ACCOUNT_NAME, ENV_ACCOUNTS, ENV_OUTPUT_DIR, ENV_PAGE_SIZE]:
         value = os.environ.get(key)
         if value:
             values[key] = value
@@ -104,3 +110,27 @@ def _parse_int(value: str | None, default: int) -> int:
     except ValueError:
         return default
     return parsed if parsed > 0 else default
+
+
+def _parse_accounts(value: str | None) -> tuple[dict[str, str], ...]:
+    """解析服务端预配置账号池。"""
+    if not value:
+        return ()
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(payload, list):
+        return ()
+
+    accounts: list[dict[str, str]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        username = str(item.get("username") or "").strip()
+        password = str(item.get("password") or "").strip()
+        if not name or not username or not password:
+            continue
+        accounts.append({"name": name, "username": username, "password": password})
+    return tuple(accounts)
