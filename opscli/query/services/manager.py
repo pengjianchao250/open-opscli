@@ -148,6 +148,10 @@ class QueryManager:
             select_columns=select_columns,
         )
 
+    def user_preferences(self) -> list[dict]:
+        """获取当前用户的图表字段偏好列表（远端实时获取）。"""
+        return self.client.fetch_user_preferences()
+
     def run(self, *, payload_path: str) -> dict:
         """读取本地 payload 文件并转发执行查询。"""
         payload_file = Path(payload_path).expanduser()

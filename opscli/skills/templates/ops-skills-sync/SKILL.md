@@ -1,7 +1,7 @@
 ---
 name: ops-skills-sync
 description: 扫描各 AI 工具（Claude Code、OpenClaw、Codex、OpenCode、WorkBuddy、Trae Solo）中已安装的 Skills，并将其同步到其他 AI 工具。当用户说「把我的 Skills 同步到 Trae」「新装了 OpenClaw，复制 Claude 的技能」「扫描一下哪些工具装了哪些 Skill」时使用。同步操作直接在各工具 skills 目录之间操作，不依赖 opscli install 流程。
-version: v0.1.0
+version: 0.1.0
 ---
 
 # ops-skills-sync

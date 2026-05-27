@@ -11,6 +11,23 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 
 ---
 
+## 字段选择优先级（必读）
+
+执行查询前，选取维度/指标字段时，**必须按以下优先级顺序**判断：
+
+| 优先级 | 来源 | CLI | MCP |
+|--------|------|-----|-----|
+| **1（最高）** | 用户偏好设置 | `opscli query preferences` | `query_preferences()` |
+| **2** | 远端 metadata | `opscli query metadata --dataset xxx` | `query_metadata(dataset=xxx)` |
+| **3（最低）** | 本地缓存 | `opscli query metadata`（无参） | `query_metadata()`（无参） |
+
+**规则**：
+- 偏好数据存在且包含目标数据集 → **直接使用偏好中的 `dimensions`/`metrics` 字段，禁止跳过**
+- 偏好数据为空或不含目标数据集 → 再走远端 metadata
+- 远端失败 → 回退本地缓存
+
+---
+
 ## 何时使用简化接口
 
 - ✅ 普通聚合查询（按维度分组 + 指标聚合）

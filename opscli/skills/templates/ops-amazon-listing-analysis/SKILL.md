@@ -1,7 +1,7 @@
 ---
 name: ops-amazon-listing-analysis
 description: 基于 ASIN 和卖家精灵采集材料，输出 Amazon Listing 表达与一致性优化建议
-version: v0.1.0
+version: 0.1.0
 ---
 
 # ops-amazon-listing-analysis

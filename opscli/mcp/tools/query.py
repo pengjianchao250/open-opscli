@@ -587,6 +587,41 @@ async def query_chart_doc(
         return _err(exc)
 
 
+async def query_preferences(
+    session_id: str | None = None,
+    jwt: str | None = None,
+) -> dict:
+    """查询当前用户的图表字段偏好设置。
+
+    返回当前登录用户已保存的所有图表字段偏好，包含每个数据集的维度和指标列表。
+
+    【字段选择优先级】
+    1. 优先调用本工具获取用户偏好（最高优先级）
+    2. 远端 metadata（query_metadata）
+    3. 本地缓存（最低优先级）
+
+    若偏好数据存在，必须优先使用偏好中的字段，无需再走远端/本地查询。
+
+    Args:
+        session_id: 可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
+        jwt:        可选，已有 JWT（为空则自动加载本地缓存的）
+
+    Returns:
+        {"success": true, "data": [{"table_id": 15, "dataset_alias": "ds_xxx",
+          "dataset_name": "xxx", "description": "xxx",
+          "dimensions": [{"field_name": "...", "verbose_name": "..."}],
+          "metrics": [{"field_name": "...", "verbose_name": "...", "aggregation": {...}}]}]}
+    """
+    from opscli.mcp.tools.helpers import _get_auth_pair
+
+    sid, jw = _get_auth_pair("ops", session_id, jwt)
+    try:
+        result = _query_manager(jwt=jw, session_id=sid).user_preferences()
+        return _ok(result)
+    except Exception as exc:
+        return _err(exc)
+
+
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS = [
     query_spec_must_read,
@@ -599,6 +634,7 @@ _ALL_TOOLS = [
     query_build_and_run,
     query_chart,
     query_chart_doc,
+    query_preferences,
 ]
 
 

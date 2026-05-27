@@ -39,6 +39,27 @@ def _error_payload(command: str, exc: Exception) -> dict:
     }
 
 
+@app.command("preferences")
+def preferences(
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """查询当前用户的图表字段偏好设置（维度/指标）。"""
+    manager = QueryManager()
+    try:
+        result = manager.user_preferences()
+        payload = {
+            "success": True,
+            "command": "query preferences",
+            "data": result,
+            "error": None,
+        }
+    except Exception as exc:
+        _emit(_error_payload("query preferences", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
 @app.command("metadata")
 def metadata(
     dataset: str | None = typer.Option(None, "--dataset", help="dataset_alias"),

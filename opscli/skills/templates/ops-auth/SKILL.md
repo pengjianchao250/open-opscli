@@ -1,7 +1,7 @@
 ---
 name: ops-auth
 description: 根据当前环境自动选择 CLI 或 MCP 方式处理 Aukeys 内部系统认证与 Token 管理
-version: v1.1.0
+version: 1.1.0
 ---
 
 # ops-auth

@@ -117,7 +117,7 @@ metadata:
 
 17. 交给当前 AI 工具可用的 skill-creator/技能创建能力落地。不要把本 Skill 当成完整替代品。本 Skill 负责把已确认的业务 6 维、数据方案、取数预检结果、测试方案、统一框架要求和流程地图整理成结构化 brief；正式创建/更新 Skill 时，按当前环境的 Skill 创建规范处理目录结构、`SKILL.md` frontmatter、progressive disclosure、`references/` / `scripts/` / `assets/` 划分、界面元数据和校验。
 
-18. 起草 Skill。默认中文编写 `SKILL.md` 正文、引用文档、用户提示和输出模板。`SKILL.md` 要简洁、可执行，并优先包含 `快速开始/使用示例`、`必要参数`、`日常工作流`、`默认执行策略`、`按需加载资料`、`错误处理`、`输出规范`。长案例、问题库、字段说明、取数 recipes、取数预检记录、评测用例、跨工具替代方案和输出模板放入 `references/`；稳定重复的格式化、取数后处理、规则计算、报告生成、HTML 渲染和校验动作放入 `scripts/`，脚本语言优先使用 Python。运营类 Skill 默认带执行日志、内测提交门槛和脱敏打包脚本；如果只是个人草稿，可把提交状态标为 `personal_draft`。不要编造阈值、政策或业务规则，缺口标为 `[待确认]`。**草案完成后，必须继续执行步骤 25 的强制发布确认门禁。**
+18. 起草 Skill。默认中文编写 `SKILL.md` 正文、引用文档、用户提示和输出模板。`SKILL.md` 要简洁、可执行，并优先包含 `快速开始/使用示例`、`必要参数`、`日常工作流`、`默认执行策略`、`按需加载资料`、`错误处理`、`输出规范`。长案例、问题库、字段说明、取数 recipes、取数预检记录、评测用例、跨工具替代方案和输出模板放入 `references/`；稳定重复的格式化、取数后处理、规则计算、报告生成、HTML 渲染和校验动作放入 `scripts/`，脚本语言优先使用 Python。运营类 Skill 默认带执行日志、内测提交门槛和脱敏打包脚本；如果只是个人草稿，可把提交状态标为 `personal_draft`。不要编造阈值、政策或业务规则，缺口标为 `[待确认]`。**Skill 文件创建完成后，立即更新版本号（与是否发布无关）：** 确保 `data/VERSION.json` 存在，内容为 `{"name": "<skill-name>", "version": "0.0.1"}`；确保目标 `SKILL.md` frontmatter 包含 `version: "0.0.1"`；两处格式完全一致，均不带 v 前缀。**草案完成且版本号已更新后，继续执行步骤 25（新建 Skill 直接发布，无需询问）。**
 
 19. 设计测试和基准对比。为草案 Skill 创建至少 2-3 个真实测试 prompt，给每个测试写可检查的断言。新建 Skill 的 baseline 是“不使用 Skill”；更新已有 Skill 的 baseline 是旧版本。涉及当前工具专属服务替代时，必须增加“当前工具参照输出 vs 通用替代方案输出”的对比校验。涉及 ops 取数时，测试断言必须覆盖“能构造查询计划、字段存在、过滤条件有效、结果为空时有解释或降级”。改造已有 Skill 时，公共数据集更新、字段修复、依赖升级应先作为共同前置修正同步到新旧对照版本，不作为新版优劣证据。环境允许且用户授权时可用独立 agent 跑 with-skill / baseline；否则用本地模拟和人工审阅做轻量对比。
 
@@ -129,21 +129,31 @@ metadata:
 
 23. 优化上下文负担。内容不减少，但要通过 progressive disclosure 控制默认加载：日常执行只加载 `SKILL.md` 和本次必要的 0-2 个 reference，优先直接运行已固化脚本或已验证取数规则；测试、发布、跨工具迁移、流程解释、错误排查或用户明确要求优化时，再加载完整资料。改造已有 Skill 时，估算旧版和新版常规执行 tokens；新版若高出 25% 以上，必须先压缩主文件、合并重复 reference 或把固定流程脚本化。
 
-24. 迭代优化。根据测试输出、断言结果、执行日志和用户反馈修改 Skill。每轮都记录修改点、提升点、仍未解决的问题。需要持续运行的 Skill，按 `references/self-improvement-loop.md` 记录失败案例和候选改进；只有经过断言复测和人工确认的反复失败，才沉淀为正式规则。直到用户确认满意，或测试反馈不再暴露有意义的问题。**迭代优化完成后，必须继续执行步骤 25 的强制发布确认门禁。**
+24. 迭代优化。根据测试输出、断言结果、执行日志和用户反馈修改 Skill。每轮都记录修改点、提升点、仍未解决的问题。需要持续运行的 Skill，按 `references/self-improvement-loop.md` 记录失败案例和候选改进；只有经过断言复测和人工确认的反复失败，才沉淀为正式规则。直到用户确认满意，或测试反馈不再暴露有意义的问题。**用户确认满意后，立即递增目标 Skill 的版本号（与是否发布无关）：** 读取目标 Skill 的 `data/VERSION.json` 中的当前 `version`，递增 patch 位（如 `0.1.0` → `0.1.1`）；更新 `data/VERSION.json`（无 v 前缀）；同步更新目标 Skill 的 `SKILL.md` frontmatter `version`（无 v 前缀）；两处格式完全一致。**迭代优化完成且版本号已更新后，必须继续执行步骤 25 的强制发布确认门禁。**
 
-25. **[强制] 发布到技能广场确认门禁。** 无论通过哪条路径到达（新建 Skill 草案完成、已有 Skill 改造完成、迭代优化完成、或用户说"好了"/"完成"/"收工"），只要本次会话中创建或修改了 Skill 目录的内容，就**必须**执行此步骤，不得跳过：
+25. **[强制] 发布到技能广场门禁。** 版本号应已在步骤 18（新建）或步骤 24（优化）完成更新。根据本次任务类型，采用不同发布策略：
 
-    使用 `AskUserQuestion` 向用户确认是否发布到技能广场：
+    **A. 新建 Skill（通过步骤 18 完成）**：跳过询问，直接发布到技能广场（全员可见）：
+
+    a. **调用 `ops-skills` Skill**，执行认证门禁（`opscli auth token status`，未登录则调用 `ops-auth`）
+
+    b. **确认版本号已在步骤 18 更新**：`data/VERSION.json` 和目标 `SKILL.md` frontmatter 均为 `0.0.1`，两处一致
+
+    c. **执行发布**：`opscli skills publish --dir <skill-dir> --share-type company --changelog "<变更摘要>"`
+
+    d. **发布成功后**向用户报告：identifier（如 `pengjianchao@ops-xxx`）、版本号、可见范围
+
+    **B. 优化/改造 Skill（通过步骤 24 完成）**：使用 `AskUserQuestion` 向用户确认：
 
     ```
     AskUserQuestion({
       questions: [
         {
-          question: "Skill 工作已完成。是否将「<skill_name>」发布到技能广场？",
+          question: "Skill 优化已完成。是否将「<skill_name>」发布到技能广场？",
           header: "发布确认",
           multiSelect: false,
           options: [
-            { label: "发布到技能广场（全员可见）", description: "调用 ops-skills 完成认证、版本号检查和发布" },
+            { label: "发布到技能广场（全员可见）", description: "调用 ops-skills 完成认证和发布" },
             { label: "发布到技能广场（仅部门可见）", description: "仅部门内成员可见与安装" },
             { label: "暂不发布", description: "稍后用 opscli skills publish 手动发布" }
           ]
@@ -152,14 +162,11 @@ metadata:
     })
     ```
 
-    用户选择"发布到技能广场"时，按以下流程执行：
+    用户选择"发布到技能广场"时：
 
-    a. **调用 `ops-skills` Skill**，先执行认证门禁（`opscli auth token status`，未登录则调用 `ops-auth`）
+    a. **调用 `ops-skills` Skill**，执行认证门禁（`opscli auth token status`，未登录则调用 `ops-auth`）
 
-    b. **版本号准备**（按 ops-skills 版本号铁律）：
-       - 新建 Skill：确认 `data/VERSION.json` 存在（缺失则创建 `{"name": "<skill-name>", "version": "0.0.1"}`），确认 `SKILL.md` frontmatter 包含 `version: v0.0.1`（缺失则补全）
-       - 改造/优化已有 Skill：按铁律递增 `data/VERSION.json` 中的 `version`（如 `0.1.0` → `0.1.1`），同步更新 `SKILL.md` frontmatter 的 `version`（如 `v0.1.1`）
-       - 确保 VERSION.json 的 version（无 v 前缀）与 SKILL.md frontmatter 的 version（有 v 前缀）数值一致
+    b. **确认版本号已在步骤 24 更新**：`data/VERSION.json` 和目标 `SKILL.md` frontmatter 数值一致，均无 v 前缀
 
     c. **执行发布命令**：
        - 全员可见：`opscli skills publish --dir <skill-dir> --share-type company --changelog "<变更摘要>"`
@@ -169,11 +176,19 @@ metadata:
 
     用户选择"暂不发布"时，告知用户：`后续可通过 opscli skills publish --dir <skill-dir> --share-type company --changelog "版本说明" 手动发布`
 
-## [强制] 技能广场发布确认门禁
+## [强制] 技能广场发布门禁
 
-> **【强制】每次创建或优化 Skill 后，必须执行发布确认，不得跳过。**
+> **【强制】每次创建或优化 Skill 后，必须执行版本号更新和发布流程，不得跳过。**
 
-无论本次任务走了哪条路径（新建 Skill / 改造已有 Skill / 迭代优化），只要在本次会话中创建或修改了 Skill 目录中的文件，就必须在工作完成后立即使用 `AskUserQuestion` 向用户确认是否发布到技能广场。
+无论本次任务走了哪条路径，只要在本次会话中创建或修改了 Skill 目录中的文件，就必须：
+
+1. **立即更新版本号**（与是否发布无关）：
+   - 新建 Skill（步骤 18 完成后）：写入 `data/VERSION.json` 和目标 `SKILL.md` frontmatter，版本均为 `0.0.1`，无 v 前缀
+   - 优化 Skill（步骤 24 完成后）：递增 patch 位，同步更新两处，均无 v 前缀
+
+2. **执行发布流程**（步骤 25）：
+   - 新建 Skill：**不询问**，直接调用 `ops-skills` 认证后以 `--share-type company` 发布
+   - 优化 Skill：使用 `AskUserQuestion` 三选一（全员 / 部门 / 暂不发布）
 
 **触发条件（满足任一即执行）：**
 - Skill 草案首次生成完成（步骤 18 结束）
@@ -181,12 +196,11 @@ metadata:
 - 用户明确表示"好了"、"完成"、"收工"、"就这样"等结束信号
 - 本次会话中使用了 Edit/Write 工具修改了目标 Skill 目录中的任何文件
 
-**执行方式：** 参见步骤 25 的详细流程。核心是 `AskUserQuestion` 三选一（全员发布 / 部门发布 / 暂不发布），选择发布时调用 `ops-skills` Skill 完成认证门禁 + 版本号准备 + `opscli skills publish`。
-
 **禁止行为：**
-- 工作完成后直接结束对话，不询问发布意愿
-- 仅在对话文本中口头提及"你可以发布"，不使用 `AskUserQuestion` 工具
-- 假设用户下次会自己发布而跳过确认
+- 工作完成后直接结束对话，不更新版本号
+- 新建 Skill 时用 `AskUserQuestion` 询问是否发布（新建默认直接发布）
+- 优化 Skill 时跳过 `AskUserQuestion` 询问
+- 仅在对话文本中口头提及"你可以发布"，不执行实际发布命令
 
 ## 默认中文规则
 

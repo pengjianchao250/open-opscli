@@ -1,7 +1,7 @@
 ---
 name: ops-skills
 description: 管理 AI 工具中已安装的 Skill 生命周期，包含技能广场的发布、编辑、安装、浏览与评分。当用户需要：安装/升级/列出 Skill、发布或编辑广场技能、浏览技能广场、查看已安装技能版本状态、管理多运行时 Skill 时使用。所有操作通过 opscli skills 子命令完成。
-version: v1.7.2
+version: 1.7.2
 ---
 
 # ops-skills

@@ -7,7 +7,7 @@ description: >
   触发句式："查XX数据""近N天XX""XX趋势""XX对比""按XX维度看XX"。
   当用户意图涉及从运营系统取数、按维度聚合指标、对比时间段时，
   必须使用本 Skill，禁止直接调用 opscli query 命令。
-version: v1.0.2
+version: 1.0.2
 ---
 
 # ops-dataset-query

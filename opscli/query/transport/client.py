@@ -88,6 +88,24 @@ class QueryClient:
         data = payload.get("data")
         return data if isinstance(data, dict) else {}
 
+    def fetch_user_preferences(self) -> list[dict]:
+        """从远端获取当前用户的图表字段偏好列表。"""
+        headers, cookies = self._get_auth("ops")
+        response = httpx.get(
+            f"{self.ops_url}/v1/data-metrics/cli-query/user-preferences",
+            headers=headers,
+            cookies=cookies,
+            timeout=20,
+        )
+        payload = parse_remote_response(
+            response,
+            http_error_cls=RemoteHttpError,
+            business_error_cls=RemoteBusinessError,
+            bad_json_error_cls=BadRemoteJsonError,
+        )
+        data = payload.get("data")
+        return data if isinstance(data, list) else []
+
     def fetch_query_metadata(self) -> dict:
         """从远端拉取最新的数据集与字段元数据。
 
