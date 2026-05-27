@@ -1,5 +1,18 @@
 # 待归档变更记录
 
+## 2026-05-27 ops-creator-skill - 新增技能广场发布门禁章节
+
+**变更原因**：从 skill 定义中提取"发布到技能广场"相关规则，补充到 SKILL.md，确保创建/优化 Skill 后有明确的版本号更新和发布流程。
+**改动点**：
+- `opscli/skills/templates/ops-creator-skill/SKILL.md`：
+  - 新增「技能广场发布门禁」章节（版本号更新规则、新建/优化发布策略、触发条件、禁止行为）
+  - 工作流新增步骤 12「发布门禁」
+  - 完成定义新增版本号更新和发布流程两项检查
+**验证结果**：文件结构完整，新增内容与现有章节无冲突
+**影响范围**：ops-creator-skill 的创建和优化流程
+**回滚方式**：git checkout 还原 SKILL.md
+---
+
 ## 2026-05-22 ops-dataset-query Skill - 合并 data-fetch-constraints.md 业务规则
 
 **变更原因**：用户提供了 data-fetch-constraints.md（取数约束与已知翻车用例），其中包含大量 ops-dataset-query 缺失的业务层面规则。与现有规则对比后，发现 1 处冲突（时间口径，以 ops-dataset-query 为准）和 18+ 条可新增规则。

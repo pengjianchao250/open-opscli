@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 from qualify_candidate import evaluate_candidate
 
 
@@ -184,6 +188,13 @@ def main() -> int:
     write_json(destination / "run-summary.json", run_summary)
     write_json(destination / "safety-check.json", safety)
     write_json(destination / "qualification.json", result)
+    install_note = {
+        "install_shape": "skill_zip",
+        "skill_zip": str(zip_path),
+        "suggested_install_root": "<CODEX_HOME>/skills 或当前 AI 工具的 Skill 根目录",
+        "install_hint": "解压后应得到一个以 skill name 命名的目录，目录内包含 SKILL.md。",
+    }
+    write_json(destination / "install.json", install_note)
 
     response = {
         "success": True,
@@ -191,6 +202,7 @@ def main() -> int:
         "skill_zip": str(zip_path),
         "files_added_to_zip": len(added_files),
         "submission": submission,
+        "install": install_note,
     }
     print(json.dumps(response, ensure_ascii=False, indent=2))
     return 0

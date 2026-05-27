@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shutil
 import sys
@@ -152,7 +151,6 @@ def build_skill_md(name: str, display_name: str, description: str, sections: dic
     return f"""---
 name: {name}
 description: {yaml_quote(description)}
-version: v0.0.1
 ---
 
 # {display_name}
@@ -249,7 +247,7 @@ def build_openai_yaml(name: str, display_name: str, short_description: str) -> s
     return f"""interface:
   display_name: {yaml_quote(display_name)}
   short_description: {yaml_quote(short_description)}
-  default_prompt: {yaml_quote(f"请使用 ${name} 按流程地图运行这个中文运营工作流。")}
+  default_prompt: {yaml_quote(f"请按流程地图运行“{display_name}”这个中文工作流。")}
 
 policy:
   allow_implicit_invocation: true
@@ -347,11 +345,6 @@ def main() -> int:
     (destination / "references").mkdir(parents=True, exist_ok=True)
     (destination / "agents").mkdir(parents=True, exist_ok=True)
     (destination / "scripts").mkdir(parents=True, exist_ok=True)
-    (destination / "data").mkdir(parents=True, exist_ok=True)
-    (destination / "data" / "VERSION.json").write_text(
-        json.dumps({"name": skill_name, "version": "0.0.1"}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
 
     (destination / "SKILL.md").write_text(
         build_skill_md(skill_name, display_name, description, sections),
@@ -369,15 +362,6 @@ def main() -> int:
         encoding="utf-8",
     )
     copy_resource_files(destination)
-    (destination / "CHANGELOG.md").write_text(
-        "# CHANGELOG\n\n"
-        "## 0.1.0 - 草案\n\n"
-        "- 新增：根据运营流程简报生成 Skill 草案。\n"
-        "- 新增：执行日志规范和内测候选提交脚本。\n"
-        "- 测试：待补充 baseline、断言和回归结果。\n"
-        "- 风险：待业务负责人确认规则、数据口径和发布范围。\n",
-        encoding="utf-8",
-    )
 
     print(destination)
     return 0

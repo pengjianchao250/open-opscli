@@ -140,4 +140,17 @@ submitted-skills/
 - 使用 `scripts/qualify_candidate.py` 汇总运行日志并判断候选门槛。
 - 用户确认提交后，使用 `scripts/package_submission.py` 生成脱敏提交包。
 - 未经用户确认，不自动提交 Skill。
+
+## 9. 打包边界
+
+提交包和安装包只放运行所需内容。默认排除：
+
+- `__pycache__/`、`.pyc`、`.pyo`、`.pytest_cache/`
+- `.git/`、`.DS_Store`、`.env`
+- `runs/`、`diary/`、`outputs/`、`dist/`、`tmp/`
+- 维护态文件：`AGENTS.md`、`CHANGELOG.md`、`VERSIONING.md`
+
+如果团队确实需要变更记录，把发布说明放到提交包的 `submission.json`、`run-summary.json` 或 `references/release-plan.md`，不要让运行时 Skill 依赖顶层维护文档。
+
+打包完成后，最终回复必须列出压缩包路径、文件数量、安全检查结论和是否已获得用户确认。
 ```
