@@ -751,6 +751,47 @@ def unlink_skill(
     _emit(payload, pretty)
 
 
+@app.command("report-usage")
+def report_usage(
+    identifier: str = typer.Argument(..., help="Skill 标识符，如 pengjianchao@ops-auth"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """直接上报一次 Skill 使用记录到服务端（不经过本地队列）。
+
+    \b
+    identifier 格式：username@skill_name，如 pengjianchao@ops-auth。
+    """
+    from datetime import datetime, timezone
+
+    from opscli.skills.marketplace.client import MarketplaceClient
+    from opscli.skills.marketplace.usage_reporter import _get_client_id
+
+    record = {
+        "identifier": identifier,
+        "used_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "client_id": _get_client_id(),
+    }
+    try:
+        result = MarketplaceClient().batch_usage([record])
+        payload = {
+            "success": True,
+            "command": "skills report-usage",
+            "data": {"reported": True, "identifier": identifier, "result": result},
+            "error": None,
+        }
+    except Exception as exc:
+        payload = {
+            "success": False,
+            "command": "skills report-usage",
+            "data": {"reported": False, "identifier": identifier},
+            "error": error_to_dict(exc),
+        }
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
 @app.command("upgrade")
 def upgrade(
     name: str = typer.Argument("ops-dataset-query", help="Skill 名称"),
