@@ -172,7 +172,7 @@ result = client.check_token("ops")
 
 **输出示例**：
 ```
-请在浏览器打开： https://https://ops.api.qa.aukeyit.com/device
+请在浏览器打开： https://ops.api.xenkee.com//device
 输入验证码：   ABCD-1234
 等待授权中...（300 秒内完成）
 ✓ 授权成功！账号：user@aukeys.com
@@ -372,7 +372,7 @@ opscli auth doctor
 ```bash
 # 获取 Token 并传递给 curl
 TOKEN=$(opscli auth token get -s ops)
-curl -H "Authorization: Bearer $TOKEN" https://https://ops.api.qa.aukeyit.com/api/v1/data
+curl -H "Authorization: Bearer $TOKEN" https://ops.api.xenkee.com//api/v1/data
 
 # 先检查再使用（避免过期）
 opscli auth token check -s ops && TOKEN=$(opscli auth token get -s ops)
