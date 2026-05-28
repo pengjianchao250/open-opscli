@@ -23,18 +23,20 @@ _TIMEOUT = 30
 _SUCCESS_CODES = frozenset({0, 200, 201, None})
 
 
-def _fields_to_multipart(fields: dict[str, Any]) -> list[tuple[str, str]]:
-    """将字段字典转换为 multipart form-data 元组列表。
+def _fields_to_multipart(fields: dict[str, Any]) -> list[tuple[str, Any]]:
+    """将字段字典转换为适用于 httpx files= 参数的 multipart 文本字段列表。
 
-    列表类型的值（如 dept_ids）会展开为重复键 dept_ids[]，以符合 Laravel 数组参数规范。
+    httpx 0.28+ 不再支持 data=list[tuple]，改用 files= 参数统一承载文本字段和文件。
+    文本字段格式为 (field_name, (None, str_value))，列表类型展开为重复键 field_name[]。
     """
-    result: list[tuple[str, str]] = []
+    result: list[tuple[str, Any]] = []
     for key, value in fields.items():
         if isinstance(value, list):
             for item in value:
-                result.append((f"{key}[]", str(item)))
+                # 列表字段展开为 field_name[]，Laravel 数组参数规范
+                result.append((f"{key}[]", (None, str(item))))
         else:
-            result.append((key, str(value)))
+            result.append((key, (None, str(value))))
     return result
 
 
@@ -145,12 +147,13 @@ class MarketplaceClient:
         url = f"{self._base}/v1/skills"
         with open(skill_file_path, "rb") as fh:
             mime = "application/zip" if skill_file_path.suffix.lower() == ".zip" else "text/markdown"
-            files = {"skill_file": (skill_file_path.name, fh, mime)}
+            # 将文本字段和文件统一放入 files= 参数（httpx 0.28+ 兼容写法）
+            parts = _fields_to_multipart(fields)
+            parts.append(("skill_file", (skill_file_path.name, fh, mime)))
             resp = httpx.post(
                 url,
                 headers=self._auth_headers(),
-                data=_fields_to_multipart(fields),
-                files=files,
+                files=parts,
                 timeout=60,
             )
         return _parse(resp, url).get("data", {})
@@ -160,12 +163,13 @@ class MarketplaceClient:
         url = f"{self._base}/v1/skills/{skill_id}/versions"
         with open(skill_file_path, "rb") as fh:
             mime = "application/zip" if skill_file_path.suffix.lower() == ".zip" else "text/markdown"
-            files = {"skill_file": (skill_file_path.name, fh, mime)}
+            # 将文本字段和文件统一放入 files= 参数（httpx 0.28+ 兼容写法）
+            parts = _fields_to_multipart(fields)
+            parts.append(("skill_file", (skill_file_path.name, fh, mime)))
             resp = httpx.post(
                 url,
                 headers=self._auth_headers(),
-                data=_fields_to_multipart(fields),
-                files=files,
+                files=parts,
                 timeout=60,
             )
         return _parse(resp, url).get("data", {})
@@ -182,17 +186,18 @@ class MarketplaceClient:
         skill_file_path 为 None 时仅更新元数据和/或版本号。
         """
         url = f"{self._base}/v1/skills/{skill_id}"
-        data = _fields_to_multipart(fields)
+        # 所有文本字段转换为 files= 格式（httpx 0.28+ 不再支持 data=list[tuple]）
+        parts = _fields_to_multipart(fields)
 
         if skill_file_path is not None:
             with open(skill_file_path, "rb") as fh:
                 mime = "application/zip" if skill_file_path.suffix.lower() == ".zip" else "text/markdown"
-                files = {"skill_file": (skill_file_path.name, fh, mime)}
+                # 将文件附加到文本字段后，统一用 files= 发送
+                parts.append(("skill_file", (skill_file_path.name, fh, mime)))
                 resp = httpx.post(
                     url,
                     headers=self._auth_headers(),
-                    data=data,
-                    files=files,
+                    files=parts,
                     timeout=60,
                 )
         else:
@@ -200,7 +205,7 @@ class MarketplaceClient:
             resp = httpx.post(
                 url,
                 headers=self._auth_headers(),
-                data=data,
+                files=parts,
                 timeout=60,
             )
 
