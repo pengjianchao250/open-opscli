@@ -15,7 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from opscli.skills.commands.marketplace_cli import app as marketplace_app
-from opscli.skills.commands.publish_cli import publish_skill, unpublish_skill
+from opscli.skills.commands.publish_cli import edit_skill, publish_skill, unpublish_skill
 from opscli.skills.commands.sync_exclude_cli import app as sync_exclude_app
 from opscli.skills.domain.exceptions import error_to_dict
 from opscli.skills.domain.models import runtime_to_tool_name
@@ -29,6 +29,7 @@ app = typer.Typer(help="Skill 生命周期管理")
 app.add_typer(marketplace_app, name="marketplace")
 app.add_typer(sync_exclude_app, name="sync-exclude")
 app.command("publish")(publish_skill)
+app.command("edit")(edit_skill)
 app.command("unpublish")(unpublish_skill)
 _console = Console()
 

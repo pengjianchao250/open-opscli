@@ -176,6 +176,11 @@ def publish_skill(
     tags: str | None = typer.Option(None, "--tags", help="标签，逗号分隔"),
     category_id: int | None = typer.Option(None, "--category", help="分类 ID"),
     changelog: str | None = typer.Option(None, "--changelog", help="本次版本变更说明"),
+    depts: str | None = typer.Option(
+        None, "--depts",
+        help="可见部门，逗号分隔，支持中文名或ID（仅 share-type=department 时生效）。"
+             "不传则默认使用发布者所在全部部门。示例：项目二部,项目六部",
+    ),
     json_output: bool = typer.Option(False, "--json", help="输出原始 JSON"),
 ):
     """发布本地 Skill 到技能广场。
@@ -256,6 +261,9 @@ def publish_skill(
     try:
         zip_path = _zip_skill_dir(resolved_dir, skill_name)
 
+        # 解析部门列表
+        resolved_dept_ids = [d.strip() for d in depts.split(",") if d.strip()] if depts else None
+
         if existing is None:
             # 首次发布
             fields: dict = {
@@ -271,6 +279,8 @@ def publish_skill(
                 fields["category_id"] = str(resolved_cat)
             if changelog:
                 fields["changelog"] = changelog
+            if resolved_dept_ids is not None:
+                fields["dept_ids"] = resolved_dept_ids
 
             data = client.create_skill(fields, zip_path)
             action = "created"
@@ -290,6 +300,8 @@ def publish_skill(
                 fields["category_id"] = str(resolved_cat)
             if changelog:
                 fields["changelog"] = changelog
+            if resolved_dept_ids is not None:
+                fields["dept_ids"] = resolved_dept_ids
 
             data = client.full_update_skill(skill_id, fields, zip_path)
             # full_update_skill 返回技能数据，补充 identifier
@@ -313,6 +325,8 @@ def publish_skill(
     from opscli.skills.marketplace.models import _SHARE_TYPE_LABELS
     share_label = _SHARE_TYPE_LABELS.get(resolved_share_type, resolved_share_type)
 
+    dept_display = ", ".join(resolved_dept_ids) if resolved_dept_ids else ""
+
     if action == "created":
         body = (
             f"[green]技能发布成功！[/green]\n\n"
@@ -322,6 +336,10 @@ def publish_skill(
         )
         if resolved_summary:
             body += f"[dim]一句话  [/dim] {resolved_summary}\n"
+        if resolved_share_type == "department" and dept_display:
+            body += f"[dim]可见部门[/dim] {dept_display}\n"
+        elif resolved_share_type == "department":
+            body += f"[dim]可见部门[/dim] （全部门，由服务端自动确定）\n"
         body += f"\n[dim]安装命令：[/dim] [green]opscli skills install {identifier}[/green]"
         _console.print(Panel(
             body,
@@ -340,6 +358,10 @@ def publish_skill(
             body += f"[dim]一句话  [/dim] {resolved_summary}\n"
         if changelog:
             body += f"[dim]变更说明[/dim] {changelog}\n"
+        if resolved_share_type == "department" and dept_display:
+            body += f"[dim]可见部门[/dim] {dept_display}\n"
+        elif resolved_share_type == "department":
+            body += f"[dim]可见部门[/dim] （全部门，由服务端自动确定）\n"
         _console.print(Panel(
             body,
             title="[bold]技能广场 — 版本发布[/bold]",
@@ -371,6 +393,11 @@ def edit_skill(
     category_id: int | None= typer.Option(None, "--category",    help="分类 ID"),
     version: str | None    = typer.Option(None, "--version",     help="版本号（如 1.2.0；不传则不变）"),
     changelog: str | None  = typer.Option(None, "--changelog",   help="本次版本变更说明"),
+    depts: str | None      = typer.Option(
+        None, "--depts",
+        help="可见部门，逗号分隔，支持中文名或ID（仅 share-type=department 时生效）。"
+             "不传则重置为发布者所在全部部门。示例：项目二部,项目六部",
+    ),
     json_output: bool      = typer.Option(False, "--json",       help="输出原始 JSON"),
 ):
     """编辑已发布的技能信息。
@@ -497,6 +524,9 @@ def edit_skill(
         fields["version"] = version
     if changelog:
         fields["changelog"] = changelog
+    resolved_dept_ids = [d.strip() for d in depts.split(",") if d.strip()] if depts else None
+    if resolved_dept_ids is not None:
+        fields["dept_ids"] = resolved_dept_ids
 
     if not fields and zip_path is None:
         _console.print("[yellow]未指定任何修改内容，操作跳过。[/yellow]")
@@ -527,6 +557,9 @@ def edit_skill(
     lines.append(f"[dim]分享权限[/dim] {share_lbl}")
     if zip_path:
         lines.append(f"[dim]文件    [/dim] 已重新上传 ✓")
+    if new_share == "department":
+        dept_display = ", ".join(resolved_dept_ids) if resolved_dept_ids else "（全部门，由服务端自动确定）"
+        lines.append(f"[dim]可见部门[/dim] {dept_display}")
     _console.print(Panel(
         "\n".join(lines),
         title="[bold]技能广场 — 编辑成功[/bold]",

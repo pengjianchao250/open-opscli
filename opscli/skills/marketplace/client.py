@@ -23,6 +23,21 @@ _TIMEOUT = 30
 _SUCCESS_CODES = frozenset({0, 200, 201, None})
 
 
+def _fields_to_multipart(fields: dict[str, Any]) -> list[tuple[str, str]]:
+    """将字段字典转换为 multipart form-data 元组列表。
+
+    列表类型的值（如 dept_ids）会展开为重复键 dept_ids[]，以符合 Laravel 数组参数规范。
+    """
+    result: list[tuple[str, str]] = []
+    for key, value in fields.items():
+        if isinstance(value, list):
+            for item in value:
+                result.append((f"{key}[]", str(item)))
+        else:
+            result.append((key, str(value)))
+    return result
+
+
 def _parse(response: httpx.Response, endpoint: str) -> dict:
     """统一解析响应：HTTP 错误或业务 code 不在 _SUCCESS_CODES 时抛出 SkillRemoteError。"""
     try:
@@ -134,7 +149,7 @@ class MarketplaceClient:
             resp = httpx.post(
                 url,
                 headers=self._auth_headers(),
-                data=fields,
+                data=_fields_to_multipart(fields),
                 files=files,
                 timeout=60,
             )
@@ -149,7 +164,7 @@ class MarketplaceClient:
             resp = httpx.post(
                 url,
                 headers=self._auth_headers(),
-                data=fields,
+                data=_fields_to_multipart(fields),
                 files=files,
                 timeout=60,
             )
@@ -167,6 +182,7 @@ class MarketplaceClient:
         skill_file_path 为 None 时仅更新元数据和/或版本号。
         """
         url = f"{self._base}/v1/skills/{skill_id}"
+        data = _fields_to_multipart(fields)
 
         if skill_file_path is not None:
             with open(skill_file_path, "rb") as fh:
@@ -175,7 +191,7 @@ class MarketplaceClient:
                 resp = httpx.post(
                     url,
                     headers=self._auth_headers(),
-                    data=fields,
+                    data=data,
                     files=files,
                     timeout=60,
                 )
@@ -184,7 +200,7 @@ class MarketplaceClient:
             resp = httpx.post(
                 url,
                 headers=self._auth_headers(),
-                data=fields,
+                data=data,
                 timeout=60,
             )
 
