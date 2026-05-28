@@ -192,7 +192,9 @@ def _build_job_id(scenario: str) -> str:
 
 
 def _normalize_export_format(value: str) -> str:
-    text = (value or "json").lower()
+    text = (value or "").strip().lower()
+    if not text:
+        raise SellerSpriteConfigError("请指定导出格式：xls 或 json；如需表格导出再使用 xls，避免默认生成过大的文件")
     if text in {"xls", "xlsx"}:
         return "xlsx"
     if text == "json":

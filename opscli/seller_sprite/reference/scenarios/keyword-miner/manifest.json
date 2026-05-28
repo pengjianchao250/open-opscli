@@ -1,0 +1,153 @@
+{
+  "scenario_id": "keyword-miner",
+  "title": "关键词挖掘",
+  "web_route": "/v3/keyword-miner/",
+  "api": {
+    "method": "POST",
+    "endpoint": "/v3/api/keyword-miner",
+    "query_fields": [],
+    "body_fields": [
+      "keyword",
+      "market",
+      "pageNum",
+      "pageSize",
+      "historyDate",
+      "orderBy",
+      "desc",
+      "filterRootWord",
+      "matchType",
+      "amazonChoice",
+      "keywordBidMatchType"
+    ]
+  },
+  "high_frequency_api": {
+    "method": "POST",
+    "endpoint": "/v3/api/keyword-miner/high/frequency-new",
+    "query_fields": [],
+    "body_fields": [
+      "keyword",
+      "market",
+      "pageNum",
+      "pageSize",
+      "historyDate",
+      "orderBy",
+      "desc",
+      "filterRootWord",
+      "matchType",
+      "amazonChoice",
+      "keywordBidMatchType",
+      "groupNum"
+    ],
+    "row_path": "data"
+  },
+  "export_api": {
+    "method": "POST",
+    "endpoint": "/v3/api/keyword-miner/excel/async-new",
+    "query_fields": [],
+    "body_fields": [
+      "keyword",
+      "market",
+      "pageNum",
+      "pageSize",
+      "historyDate",
+      "orderBy",
+      "desc",
+      "filterRootWord",
+      "matchType",
+      "amazonChoice",
+      "keywordBidMatchType",
+      "keywordList",
+      "exportGkImages",
+      "groupNum"
+    ],
+    "response": {
+      "success_code": "OK",
+      "data": null
+    }
+  },
+  "export_status_api": {
+    "method": "GET",
+    "endpoint": "/v2/export-log/flush",
+    "query_fields": ["id"],
+    "response": {
+      "row_path": "data",
+      "status_success": "S",
+      "download_url_field": "path",
+      "filename_field": "filename"
+    }
+  },
+  "download_mark_api": {
+    "method": "GET",
+    "endpoint": "/v2/export-log/{id}/mark-as-downloaded"
+  },
+  "auxiliary_apis": [
+    {
+      "method": "GET",
+      "endpoint": "/v3/api/keyword-miner/history/date/list",
+      "query_fields": ["marketId"],
+      "purpose": "月份选项"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v3/api/keyword-miner/deleted/keyword/list",
+      "query_fields": ["historyDate", "keywordOrAsin", "market", "type"],
+      "purpose": "删除关键词状态"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v3/api/common/keyword/department/list/{marketId}",
+      "purpose": "关键词类目列表"
+    }
+  ],
+  "required_params": ["keyword"],
+  "response": {
+    "row_path": "data.items",
+    "fallback_row_path": "data",
+    "pagination_fields": ["data.page", "data.size", "data.total", "data.took"]
+  },
+  "primary_metrics": [
+    {"title": "相关度", "source": "relevancy"},
+    {"title": "ABA月排名", "source": "searchRank"},
+    {"title": "ABA周排名", "source": "searchWeeklyRank"},
+    {"title": "月搜索量", "source": "searches"},
+    {"title": "月购买量", "source": "purchases"},
+    {"title": "购买率", "source": "purchaseRate"},
+    {"title": "展示量", "source": "impressions"},
+    {"title": "点击量", "source": "clicks"},
+    {"title": "SPR", "source": "spr"},
+    {"title": "标题密度", "source": "titleDensity"},
+    {"title": "商品数", "source": "products"},
+    {"title": "需供比", "source": "supplyDemandRatio"},
+    {"title": "广告竞品数", "source": "adProducts"},
+    {"title": "点击总占比", "source": "monopolyClickRate"},
+    {"title": "转化总占比", "source": "cvsShareRate"},
+    {"title": "PPC竞价", "source": "bid"},
+    {"title": "均价", "source": "avgPrice"},
+    {"title": "评分数", "source": "avgReviews"},
+    {"title": "评分值", "source": "avgRating"}
+  ],
+  "official_template": {
+    "source_workbook_name": "KeywordMining-JP-flashlight-Last-30-days-467502.xlsx",
+    "captured_workbook_name": "KeywordMining-US-phone-stand-Last-30-days-649580.xlsx",
+    "captured_workbook_path": "tmp-validation/seller-sprite-browser-capture/20260528-150402/KeywordMining-US-phone-stand-Last-30-days-649580.xlsx",
+    "captured_download_url": "https://o.sellersprite.com/batch-exports/2026/5/KeywordMining-US-phone-stand-Last-30-days-649580.xlsx",
+    "headers_file": "official-headers.json",
+    "main_sheet_example": "JP-flashlight(100)_",
+    "captured_main_sheet_example": "US-phone stand(50)_",
+    "unique_words_sheet": "Unique Words",
+    "official_notes_sheet": true,
+    "generated_notes_sheet": false,
+    "header_count": 34
+  },
+  "capture_evidence": {
+    "captured_at": "2026-05-28T15:09:08",
+    "capture_dir": "tmp-validation/seller-sprite-browser-capture/20260528-150402",
+    "query_request": "0033-150908-v3-api-keyword-miner.request.json",
+    "query_response": "0033-150908-v3-api-keyword-miner.response.json",
+    "high_frequency_request": "0034-150908-v3-api-keyword-miner-high-frequency-new.request.json",
+    "high_frequency_response": "0034-150908-v3-api-keyword-miner-high-frequency-new.response.json",
+    "export_request": "0036-150912-v3-api-keyword-miner-excel-async-new.request.json",
+    "export_response": "0036-150912-v3-api-keyword-miner-excel-async-new.response.json",
+    "export_status_response": "0041-151204-v2-export-log-flush.response.json"
+  }
+}

@@ -24,7 +24,9 @@ def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
         },
         "lowPrice": input_data.get("lowPrice") or "N",
     }
-    for key in ["keyword", "brand", "sellerName"]:
+    if input_data.get("keywords") or input_data.get("keyword"):
+        payload["keywords"] = input_data.get("keywords") or input_data.get("keyword")
+    for key in ["brand", "sellerName"]:
         if input_data.get(key):
             payload[key] = input_data[key]
     return payload
