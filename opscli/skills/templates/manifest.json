@@ -118,6 +118,22 @@
       "binary_full": true,
       "tier": "internal",
       "reason": "引导式查询向导，面向业务用户，依赖 ops-dataset-query，现阶段内部使用"
+    },
+    "ops-creator-skill": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "新增 Skill，Skill 创建治理工具，依赖内部访谈流程和团队规范，暂不进入公开发版产物"
+    },
+    "ops-skills-sync": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "新增 Skill，跨 AI 工具 Skill 同步，依赖本地各工具路径约定，暂不进入公开发版产物"
     }
   }
 }
