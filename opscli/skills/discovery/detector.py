@@ -160,13 +160,32 @@ class SkillDetector:
         return [(runtime, target)]
 
     def detect_available_install_targets(self, cwd: Path | None = None) -> list[tuple[str, Path]]:
-        """根据当前目录已存在的运行时目录，返回可用目标列表（项目级）。"""
+        """根据当前目录已存在的运行时目录，返回可用目标列表（项目级/全局均适用）。
+
+        当 cwd=Path.home() 时等价于全局检测（remote_installer 场景），
+        因此必须覆盖所有支持的工具，与 detect_global_install_targets 的工具集保持一致。
+        仅检测目录是否存在，不做 which 探测（which 探测由 detect_global_install_targets 负责）。
+        """
         current = cwd or Path.cwd()
         targets: list[tuple[str, Path]] = []
+        # Claude Code：.claude/ 目录存在
         if (current / ".claude").exists():
             targets.append(("claude", current / ".claude" / "skills"))
+        # OpenClaw：.openclaw/ 目录存在
         if (current / ".openclaw").exists():
             targets.append(("openclaw", current / ".openclaw" / "skills"))
+        # Codex CLI：.codex/ 目录存在
+        if (current / ".codex").exists():
+            targets.append(("codex", current / ".codex" / "skills"))
+        # OpenCode：.config/opencode/ 目录存在（所有平台路径统一）
+        if (current / ".config" / "opencode").exists():
+            targets.append(("opencode", current / ".config" / "opencode" / "skills"))
+        # WorkBuddy：.workbuddy/ 目录存在
+        if (current / ".workbuddy").exists():
+            targets.append(("workbuddy", current / ".workbuddy" / "skills"))
+        # Trae Solo：.trae-cn/ 目录存在
+        if (current / ".trae-cn").exists():
+            targets.append(("trae-cn", current / ".trae-cn" / "skills"))
         return self._dedupe_targets(targets)
 
     def detect_global_install_targets(self) -> list[tuple[str, Path]]:

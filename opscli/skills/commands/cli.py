@@ -259,14 +259,14 @@ def install_skill(
             _install_interactive(manager, skills_dir=skills_dir, runtime=runtime, force=force, yes=yes, pretty=pretty)
             return
 
-        # 远程广场安装（标识符含 @）
+        # 远程广场安装（标识符含 @）；远程安装默认直接覆盖，无需 --force
         if "@" in name:
             payload = install_remote_skill(
                 identifier=name,
                 version=version,
                 skills_dir=skills_dir,
                 runtime=runtime,
-                force=force,
+                force=True,
             )
             _emit(payload, pretty)
             if not payload.get("success"):
