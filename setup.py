@@ -109,7 +109,7 @@ def get_extensions():
     排除规则：
     - __init__.py：保留为纯 Python，保证包结构和双路径导入（铁律3）
     - skills/templates/**：Skill 独立脚本，面向用户安装后直接使用，不应编译
-    - cli.py：Typer 依赖运行时签名反射，Cython 编译后会破坏
+    - cli.py / *_cli.py：Typer 依赖运行时签名反射，Cython 编译后会破坏
     - mcp/server.py / mcp/tools/*.py：FastMCP 依赖类型注解反射
     """
     if _SKIP_CYTHON:
@@ -129,9 +129,13 @@ def get_extensions():
         if "opscli/skills/templates/" in f_unix:
             continue
 
-        # 排除所有 cli.py —— Typer 依赖 inspect.signature() 解析参数默认值，
-        # Cython 编译后 cyfunction 丢失签名信息，导致 typer.Option() 无法被正确识别
-        if os.path.basename(f) == "cli.py":
+        # 排除所有 cli.py / *_cli.py —— Typer 依赖 inspect.signature() 解析参数默认值，
+        # Cython 编译后 cyfunction 丢失签名信息，导致 typer.Option() 无法被正确识别。
+        # marketplace_cli.py / publish_cli.py / sync_exclude_cli.py 等子命令文件同理，
+        # 必须一并排除，否则 @app.command() 在模块初始化时抛出：
+        #   TypeError: Expected str, got OptionInfo
+        _basename = os.path.basename(f)
+        if _basename == "cli.py" or _basename.endswith("_cli.py"):
             continue
 
         # 排除 MCP server 和 tools —— FastMCP 用 Pydantic TypeAdapter 解析函数类型注解，
