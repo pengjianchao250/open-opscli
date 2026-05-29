@@ -96,8 +96,13 @@ def install_remote_skill(
     skills_dir: str | None = None,
     runtime: str | None = None,
     force: bool = False,
+    share_code: str | None = None,
 ) -> dict:
-    """安装远程广场技能的完整流程，返回统一 payload dict。"""
+    """安装远程广场技能的完整流程，返回统一 payload dict。
+
+    share_code 不为 None 时，在步骤 1/2/6 中透传给服务端，
+    用于绕过 personal/department 技能的权限校验。
+    """
     command = f"skills install {identifier}"
 
     try:
@@ -107,18 +112,18 @@ def install_remote_skill(
 
     client = MarketplaceClient()
 
-    # Step 1：获取技能元数据
+    # Step 1：获取技能元数据（携带 share_code 时可绕过权限校验）
     try:
-        skill_data = client.get_by_identifier(username, skill_name)
+        skill_data = client.get_by_identifier(username, skill_name, share_code=share_code)
     except Exception as exc:
         return {"success": False, "command": command, "data": None, "error": error_to_dict(exc)}
 
     skill_id = skill_data.get("id")
     target_version = version or skill_data.get("latest_version", "1.0.0")
 
-    # Step 2：获取下载 URL
+    # Step 2：获取下载 URL（携带 share_code 时可绕过权限校验）
     try:
-        download_url = client.get_download_url(skill_id, target_version if version else None)
+        download_url = client.get_download_url(skill_id, target_version if version else None, share_code=share_code)
     except Exception as exc:
         return {"success": False, "command": command, "data": None, "error": error_to_dict(exc)}
 
@@ -190,14 +195,18 @@ def install_remote_skill(
         return {"success": False, "command": command, "data": None, "error": error_to_dict(exc)}
 
     # Step 6：回调后端记录安装（失败不影响安装结果）
+    # 携带 share_code 时服务端会记录 install_source=share_code 并更新 used_count
     try:
-        client.record_install(skill_id, {
+        install_payload: dict = {
             "version":     target_version,
             "runtime":     runtime or "claude",
             "platform":    platform.system().lower(),
             "cli_version": get_version(),
             "client_id":   _get_client_id(),
-        })
+        }
+        if share_code:
+            install_payload["share_code"] = share_code
+        client.record_install(skill_id, install_payload)
     except Exception as exc:
         _logger.debug("安装回调失败（忽略）: %s", exc)
 

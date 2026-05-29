@@ -1,0 +1,712 @@
+openapi: 3.0.3
+info:
+  title: Skills 分享码 API
+  description: |
+    技能广场分享码功能相关接口文档。
+
+    分享码允许 personal/department 类型技能的创建者生成临时访问凭证，
+    持码的任意登录用户可在有效期内绕过部门/个人权限限制安装技能。
+
+    **认证方式**：所有接口均需 JWT Bearer Token（通过 `opscli auth token get -s ops` 获取）
+
+    **新增接口**：
+    - `POST /v1/skills/{id}/share-codes` — 创建分享码（仅技能创建者）
+    - `GET  /v1/skills/{id}/share-codes` — 列出技能的所有分享码（仅技能创建者）
+    - `GET  /v1/skills/share-codes/{code}` — 查询分享码信息（所有登录用户）
+    - `DELETE /v1/skills/share-codes/{code}` — 吊销分享码（仅技能创建者）
+
+    **修改接口**（新增 share_code 参数）：
+    - `GET /v1/skills/by-identifier/{username}/{skillName}?share_code=xxx`
+    - `GET /v1/skills/{id}/download?share_code=xxx`
+    - `GET /v1/skills/{id}/download/{version}?share_code=xxx`
+    - `POST /v1/skills/{id}/installs`（body 新增 share_code 字段）
+  version: "1.0.0"
+
+servers:
+  - url: http://ops.cm/api
+    description: 本地开发环境
+  - url: https://ops.api.xenkee.com/api
+    description: 测试/生产环境
+
+tags:
+  - name: share-codes
+    description: 分享码管理（新增）
+  - name: skills-modified
+    description: 已有接口（新增 share_code 参数）
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 通过 `opscli auth token get -s ops` 获取
+
+  schemas:
+    ShareCodeInfo:
+      type: object
+      description: 分享码公开信息（任何登录用户可查）
+      properties:
+        code:
+          type: string
+          example: "HMGYONTS"
+          description: 8 位大写字母+数字分享码
+        valid:
+          type: boolean
+          example: true
+          description: 是否当前有效（未删除 + 未过期 + 未达使用上限）
+        reason:
+          type: string
+          nullable: true
+          example: null
+          description: 无效时的原因说明，有效时为 null
+          enum: [null, "分享码不存在", "分享码已被吊销", "分享码已过期", "分享码使用次数已达上限"]
+        skill_id:
+          type: integer
+          nullable: true
+          example: 2
+        identifier:
+          type: string
+          nullable: true
+          example: "zhangpeiliang@ops-auth"
+        skill_name:
+          type: string
+          nullable: true
+          example: "ops-auth"
+        title:
+          type: string
+          nullable: true
+          example: "ops-auth 认证授权"
+        latest_version:
+          type: string
+          nullable: true
+          example: "1.1.0"
+        expires_at:
+          type: string
+          nullable: true
+          format: date-time
+          example: "2026-05-29 17:13:24"
+        remaining_seconds:
+          type: integer
+          example: 1785
+          description: 距过期剩余秒数，已过期或不存在时为 0
+        max_uses:
+          type: integer
+          nullable: true
+          example: 5
+          description: 最大使用次数限制，null 表示有效期内无限次
+        used_count:
+          type: integer
+          example: 1
+          description: 累计使用次数
+
+    ShareCodeDetail:
+      type: object
+      description: 分享码详情（创建者视角，含 id/creator_user_id）
+      allOf:
+        - $ref: '#/components/schemas/ShareCodeInfo'
+        - type: object
+          properties:
+            id:
+              type: integer
+              example: 1
+            creator_user_id:
+              type: integer
+              example: 59
+            note:
+              type: string
+              nullable: true
+              example: "验收测试"
+            created_at:
+              type: string
+              format: date-time
+              example: "2026-05-29T08:43:24.000000Z"
+            updated_at:
+              type: string
+              format: date-time
+              example: "2026-05-29T08:43:24.000000Z"
+            deleted_at:
+              type: string
+              format: date-time
+              nullable: true
+              example: null
+
+    ApiSuccess:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 200
+        msg:
+          type: string
+          example: "操作成功"
+        data:
+          type: object
+
+    ApiCreated:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 201
+        msg:
+          type: string
+          example: "创建成功"
+        data:
+          type: object
+
+    ApiError:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 400
+        msg:
+          type: string
+          example: "错误信息"
+        data:
+          type: array
+          items: {}
+
+    ApiValidationError:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 422
+        msg:
+          type: string
+          example: "参数验证失败"
+        data:
+          type: object
+          description: 各字段的错误信息 map
+
+security:
+  - BearerAuth: []
+
+paths:
+  # ──────────────────────────────────────────
+  # 新增接口：分享码管理
+  # ──────────────────────────────────────────
+
+  /v1/skills/{id}/share-codes:
+    post:
+      tags: [share-codes]
+      summary: 创建分享码
+      description: |
+        为指定技能创建一个分享码。
+
+        **权限**：仅技能创建者可调用，其他用户调用返回 403。
+      operationId: createShareCode
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: 技能 ID
+          example: 2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expire_minutes:
+                  type: integer
+                  minimum: 1
+                  maximum: 10080
+                  default: 30
+                  description: 有效期（分钟），最大 7 天（10080 分钟）
+                  example: 30
+                max_uses:
+                  type: integer
+                  nullable: true
+                  minimum: 1
+                  maximum: 100000
+                  default: null
+                  description: 最大使用次数，null 表示有效期内无限次
+                  example: 5
+                note:
+                  type: string
+                  nullable: true
+                  maxLength: 200
+                  description: 创建者备注（可选）
+                  example: "分享给XX同学"
+            examples:
+              default:
+                summary: 默认30分钟无限次
+                value:
+                  expire_minutes: 30
+              limited:
+                summary: 10分钟最多3次
+                value:
+                  expire_minutes: 10
+                  max_uses: 3
+                  note: "临时分享"
+      responses:
+        "201":
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiCreated'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ShareCodeDetail'
+              example:
+                code: 201
+                msg: "创建成功"
+                data:
+                  id: 1
+                  skill_id: 2
+                  code: "HMGYONTS"
+                  creator_user_id: 59
+                  expires_at: "2026-05-29T09:13:24.000000Z"
+                  max_uses: 5
+                  used_count: 0
+                  note: "验收测试"
+                  created_at: "2026-05-29T08:43:24.000000Z"
+                  updated_at: "2026-05-29T08:43:24.000000Z"
+                  deleted_at: null
+                  valid: true
+                  remaining_seconds: 1799
+        "403":
+          description: 无权限（非技能创建者）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                code: 403
+                msg: "无权限操作他人技能的分享码"
+                data: []
+        "422":
+          description: 参数验证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiValidationError'
+
+    get:
+      tags: [share-codes]
+      summary: 列出技能的所有分享码
+      description: |
+        查看指定技能的全部分享码（含已过期/已吊销）。
+
+        **权限**：仅技能创建者可调用。
+      operationId: listShareCodes
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: 技能 ID
+          example: 2
+      responses:
+        "200":
+          description: 分享码列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiSuccess'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ShareCodeDetail'
+              example:
+                code: 200
+                msg: "获取成功"
+                data:
+                  - id: 1
+                    skill_id: 2
+                    code: "HMGYONTS"
+                    creator_user_id: 59
+                    expires_at: "2026-05-29T09:13:24.000000Z"
+                    max_uses: 5
+                    used_count: 1
+                    note: "验收测试"
+                    created_at: "2026-05-29T08:43:24.000000Z"
+                    updated_at: "2026-05-29T08:43:24.000000Z"
+                    deleted_at: null
+                    valid: false
+                    remaining_seconds: 1738
+        "403":
+          description: 无权限
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /v1/skills/share-codes/{code}:
+    get:
+      tags: [share-codes]
+      summary: 查询分享码信息
+      description: |
+        查询分享码的有效性及绑定技能基础信息。
+
+        **权限**：所有登录用户均可查询（不暴露创建者信息）。
+
+        **注意**：即使分享码不存在，也返回 200（`valid=false, reason="分享码不存在"`），便于客户端统一处理。
+      operationId: getShareCodeInfo
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 分享码（大小写不敏感，内部统一转大写）
+          example: "HMGYONTS"
+      responses:
+        "200":
+          description: 分享码信息（valid 字段区分有效/无效）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiSuccess'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ShareCodeInfo'
+              examples:
+                valid:
+                  summary: 有效分享码
+                  value:
+                    code: 200
+                    msg: "操作成功"
+                    data:
+                      code: "HMGYONTS"
+                      valid: true
+                      reason: null
+                      skill_id: 2
+                      identifier: "zhangpeiliang@ops-auth"
+                      skill_name: "ops-auth"
+                      title: "ops-auth 认证授权"
+                      latest_version: "1.1.0"
+                      expires_at: "2026-05-29 17:13:24"
+                      remaining_seconds: 1785
+                      max_uses: 5
+                      used_count: 0
+                revoked:
+                  summary: 已吊销分享码
+                  value:
+                    code: 200
+                    msg: "操作成功"
+                    data:
+                      code: "HMGYONTS"
+                      valid: false
+                      reason: "分享码已被吊销"
+                      skill_id: 2
+                      identifier: "zhangpeiliang@ops-auth"
+                      skill_name: "ops-auth"
+                      title: "ops-auth 认证授权"
+                      latest_version: "1.1.0"
+                      expires_at: "2026-05-29 17:13:24"
+                      remaining_seconds: 1738
+                      max_uses: 5
+                      used_count: 1
+                not_found:
+                  summary: 不存在的分享码
+                  value:
+                    code: 200
+                    msg: "操作成功"
+                    data:
+                      code: "NOTEXIST"
+                      valid: false
+                      reason: "分享码不存在"
+                      skill_id: null
+                      identifier: null
+                      skill_name: null
+                      title: null
+                      expires_at: null
+                      remaining_seconds: 0
+                      max_uses: null
+                      used_count: 0
+
+    delete:
+      tags: [share-codes]
+      summary: 吊销分享码
+      description: |
+        软删除指定分享码，吊销后立即失效，持码用户无法继续使用。
+
+        **权限**：仅分享码的创建者（即技能创建者）可吊销。
+      operationId: revokeShareCode
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 分享码
+          example: "HMGYONTS"
+      responses:
+        "200":
+          description: 吊销成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+              example:
+                code: 200
+                msg: "删除成功"
+                data: null
+        "403":
+          description: 无权限（非创建者）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        "404":
+          description: 分享码不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  # ──────────────────────────────────────────
+  # 修改接口：新增 share_code 参数
+  # ──────────────────────────────────────────
+
+  /v1/skills/by-identifier/{username}/{skillName}:
+    get:
+      tags: [skills-modified]
+      summary: 通过标识符获取技能详情（新增 share_code 参数）
+      description: |
+        原有接口新增可选 `share_code` 查询参数。
+
+        - 不传 `share_code`：走原有权限校验（personal 只有创建者，department 只有同部门）
+        - 传入有效 `share_code`：跳过权限校验，任意登录用户可获取技能详情
+        - 传入无效/过期/已吊销的 `share_code`：返回 403
+      operationId: getSkillByIdentifier
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "zhangpeiliang"
+        - name: skillName
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "ops-auth"
+        - name: share_code
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 分享码，有效时绕过 personal/department 权限限制
+          example: "HMGYONTS"
+      responses:
+        "200":
+          description: 技能详情
+          content:
+            application/json:
+              example:
+                code: 200
+                msg: "操作成功"
+                data:
+                  id: 2
+                  identifier: "zhangpeiliang@ops-auth"
+                  skill_name: "ops-auth"
+                  title: "ops-auth 认证授权"
+                  share_type: "department"
+                  latest_version: "1.1.0"
+        "403":
+          description: 无权限或分享码无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              examples:
+                no_permission:
+                  summary: 无权限访问
+                  value:
+                    code: 403
+                    msg: "无权限访问该技能"
+                    data: []
+                invalid_share_code:
+                  summary: 分享码无效
+                  value:
+                    code: 403
+                    msg: "分享码无效"
+                    data: []
+
+  /v1/skills/{id}/download:
+    get:
+      tags: [skills-modified]
+      summary: 获取最新版本下载 URL（新增 share_code 参数）
+      description: |
+        原有接口新增可选 `share_code` 查询参数，逻辑同 by-identifier 接口。
+      operationId: getSkillDownloadUrl
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          example: 2
+        - name: share_code
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 分享码，有效时绕过 personal/department 权限限制
+          example: "HMGYONTS"
+      responses:
+        "200":
+          description: 下载地址
+          content:
+            application/json:
+              example:
+                code: 200
+                msg: "操作成功"
+                data:
+                  download_url: "https://oss.example.com/skills/xxx/skill.zip"
+        "403":
+          description: 无权限或分享码无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /v1/skills/{id}/download/{version}:
+    get:
+      tags: [skills-modified]
+      summary: 获取指定版本下载 URL（新增 share_code 参数）
+      operationId: getSkillDownloadUrlByVersion
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          example: 2
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 版本号，格式 x.y.z
+          example: "1.1.0"
+        - name: share_code
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 分享码，有效时绕过权限限制
+          example: "HMGYONTS"
+      responses:
+        "200":
+          description: 下载地址
+          content:
+            application/json:
+              example:
+                code: 200
+                msg: "操作成功"
+                data:
+                  download_url: "https://oss.example.com/skills/xxx/1.1.0/skill.zip"
+        "403":
+          description: 无权限或分享码无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        "404":
+          description: 技能或版本不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /v1/skills/{id}/installs:
+    post:
+      tags: [skills-modified]
+      summary: 安装回调（新增 share_code 字段）
+      description: |
+        CLI 安装完成后回调，记录安装统计。
+
+        新增可选 `share_code` 字段：
+        - 不传或为 null：`install_source = normal`
+        - 传入有效分享码：`install_source = share_code`，`share_code_id` 关联对应记录，`used_count +1`
+      operationId: recordInstall
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          example: 2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version:
+                  type: string
+                  example: "1.1.0"
+                runtime:
+                  type: string
+                  example: "claude"
+                  description: AI 工具运行时标识
+                platform:
+                  type: string
+                  example: "darwin"
+                cli_version:
+                  type: string
+                  example: "0.0.81"
+                client_id:
+                  type: string
+                  example: "uuid-xxxx"
+                share_code:
+                  type: string
+                  nullable: true
+                  maxLength: 32
+                  example: "HMGYONTS"
+                  description: 通过分享码安装时传入，记录 install_source=share_code
+            examples:
+              normal:
+                summary: 常规安装
+                value:
+                  version: "1.1.0"
+                  runtime: "claude"
+                  platform: "darwin"
+                  cli_version: "0.0.81"
+                  client_id: "uuid-xxxx"
+              share_code:
+                summary: 分享码安装
+                value:
+                  version: "1.1.0"
+                  runtime: "claude"
+                  platform: "darwin"
+                  cli_version: "0.0.81"
+                  client_id: "uuid-xxxx"
+                  share_code: "HMGYONTS"
+      responses:
+        "200":
+          description: 记录成功
+          content:
+            application/json:
+              example:
+                code: 200
+                msg: "操作成功"
+                data:
+                  recorded: true
+        "422":
+          description: 参数验证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiValidationError'

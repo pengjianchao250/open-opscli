@@ -104,9 +104,15 @@ class MarketplaceClient:
         resp = httpx.get(url, headers=self._auth_headers(), params=params, timeout=_TIMEOUT)
         return _parse(resp, url).get("data", {"list": [], "total": 0})
 
-    def get_by_identifier(self, username: str, skill_name: str) -> dict:
+    def get_by_identifier(self, username: str, skill_name: str, share_code: str | None = None) -> dict:
+        """通过 username@skill_name 获取技能详情。
+
+        share_code 不为 None 时以查询参数传递，服务端校验有效后跳过权限检查，
+        允许无权限用户获取 personal/department 类型技能的元数据。
+        """
         url = f"{self._base}/v1/skills/by-identifier/{username}/{skill_name}"
-        resp = httpx.get(url, headers=self._auth_headers(), timeout=_TIMEOUT)
+        params = {"share_code": share_code} if share_code else {}
+        resp = httpx.get(url, headers=self._auth_headers(), params=params, timeout=_TIMEOUT)
         return _parse(resp, url).get("data", {})
 
     def get_by_id(self, skill_id: int) -> dict:
@@ -123,12 +129,18 @@ class MarketplaceClient:
         resp = httpx.get(url, headers=self._auth_headers(), timeout=_TIMEOUT)
         return _parse(resp, url).get("data", [])
 
-    def get_download_url(self, skill_id: int, version: str | None = None) -> str:
+    def get_download_url(self, skill_id: int, version: str | None = None, share_code: str | None = None) -> str:
+        """获取技能文件下载地址。
+
+        share_code 不为 None 时以查询参数传递，服务端校验有效后跳过权限检查，
+        允许无权限用户获取 personal/department 类型技能的下载链接。
+        """
         if version:
             url = f"{self._base}/v1/skills/{skill_id}/download/{version}"
         else:
             url = f"{self._base}/v1/skills/{skill_id}/download"
-        resp = httpx.get(url, headers=self._auth_headers(), timeout=_TIMEOUT)
+        params = {"share_code": share_code} if share_code else {}
+        resp = httpx.get(url, headers=self._auth_headers(), params=params, timeout=_TIMEOUT)
         data = _parse(resp, url).get("data", {})
         return data.get("download_url", "")
 
@@ -320,3 +332,18 @@ class MarketplaceClient:
             if item.get("skill_name") == skill_name and not item.get("deleted_at"):
                 return item
         return None
+
+    # ──────────────────────────────────────────
+    # 分享码
+    # ──────────────────────────────────────────
+
+    def get_share_code_info(self, code: str) -> dict:
+        """查询分享码公开信息（有效性 + 绑定技能基础信息）。
+
+        任何登录用户均可调用，无需是技能创建者。
+        返回字段包括：code, skill_id, identifier, skill_name, title,
+        valid, expires_at, remaining_seconds, max_uses, used_count。
+        """
+        url = f"{self._base}/v1/skills/share-codes/{code}"
+        resp = httpx.get(url, headers=self._auth_headers(), timeout=_TIMEOUT)
+        return _parse(resp, url).get("data", {})
