@@ -1630,6 +1630,7 @@ def install_skill(
     version: str | None = typer.Option(None, "--version", help="安装指定版本（仅远程安装有效）"),
     sync_market: bool = typer.Option(False, "--sync-market", help="从市场安装记录同步：补装缺失 + 升级旧版"),
     dry_run: bool = typer.Option(False, "--dry-run", help="仅预览同步计划，不实际安装（需配合 --sync-market）"),
+    share_code: str | None = typer.Option(None, "--share-code", help="分享码，绕过 personal/department 权限限制安装广场技能"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """安装 Skill 到本地目录。
@@ -1673,6 +1674,7 @@ def install_skill(
                 skills_dir=skills_dir,
                 runtime=runtime,
                 force=True,
+                share_code=share_code,
             )
             _emit(payload, pretty)
             if not payload.get("success"):

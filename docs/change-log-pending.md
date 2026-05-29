@@ -1,5 +1,46 @@
 # 待归档变更记录
 
+## 2026-05-29 Skills 分享码功能 - 全链路实现
+
+**变更原因**：技能广场中 personal/department 类型的技能只有创建者或同部门成员可安装。需要允许创建者生成临时分享码（默认 30 分钟有效），持码的任意登录用户可绕过权限限制完整安装技能。
+**改动点**：
+- **DB Migration**（`vendor/aukey/data-metrics/src/Database/Migrations/`）：
+  - `2026_05_29_000001_create_dm_skill_share_codes_table.php`：新建 `dm_skill_share_codes` 表（`ops_metrics` 连接），字段含 `code`/`skill_id`/`creator_user_id`/`expires_at`/`max_uses`/`used_count`/`note`/软删除
+  - `2026_05_29_000002_add_share_code_fields_to_dm_skill_installs.php`：为 `dm_skill_installs` 新增 `install_source`（normal|share_code）和 `share_code_id` 字段（`ops_metrics` 连接）
+- **Model**（`vendor/aukey/data-metrics/src/Models/SkillShareCode.php`）：新增，含 `isValid()`/`remainingSeconds()` 方法
+- **Service**（`vendor/aukey/data-metrics/src/Services/SkillMarketplaceService.php`）：
+  - 新增 `createShareCode()`/`listShareCodes()`/`getShareCodeInfo()`/`revokeShareCode()`/`validateShareCode()` 五个方法
+  - `getByIdentifier()`/`getDownloadUrl()` 新增 `$shareCode` 参数，有效码时跳过 `checkSkillVisibility()`
+  - `recordInstall()` 新增 share_code 来源记录逻辑，有码时 `increment('used_count')`
+- **Controller**（`vendor/aukey/data-metrics/src/Http/Controllers/SkillShareCodeController.php`）：新增，含 `store`/`index`/`show`/`destroy` 四个方法
+- **Controller 修改**：`SkillMarketplaceController.showByIdentifier()` 和 `SkillVersionController.download()` 透传 `share_code` 查询参数
+- **Controller 修改**：`SkillStatController.recordInstall()` 新增 `share_code` 字段校验
+- **Routes**（`vendor/aukey/data-metrics/src/Http/routes.php`）：注册四条 share-codes 路由（静态路由置于 `/{id}` 之前防止冲突）
+- **CLI**（`opscli/skills/marketplace/client.py`）：`get_by_identifier()`/`get_download_url()` 新增 `share_code` 参数，新增 `get_share_code_info()` 方法
+- **CLI**（`opscli/skills/marketplace/remote_installer.py`）：`install_remote_skill()` 新增 `share_code` 参数，Steps 1/2/6 透传
+- **CLI**（`opscli/skills/commands/cli.py`）：`install_skill()` 命令新增 `--share-code` 选项
+
+**验证结果**（2026-05-29 本地全链路验收）：
+- Test 1: 查询不存在分享码 → `valid=false, reason="分享码不存在"` √
+- Test 2: 创建分享码（max_uses=5）→ 返回 8 位大写码 `HMGYONTS`，`valid=true` √
+- Test 3: 查询有效分享码 → 返回 `valid=true`，技能基础信息完整 √
+- Test 4: 列出创建者视角分享码 → 正确返回列表含 `valid`/`remaining_seconds` √
+- Test 5: 携带 share_code 获取 by-identifier（department 类型技能）→ 200 返回详情 √
+- Test 6: 携带 share_code 获取 download URL → 200 返回 OSS 下载链接 √
+- Test 7: 安装回调携带 share_code → `recorded=true` √
+- Test 8: 安装回调后 used_count 从 0 变 1 √
+- Test 9: 吊销分享码 → 200 删除成功 √
+- Test 10: 吊销后查询 → `valid=false, reason="分享码已被吊销"` √
+- Test 11: 用已吊销分享码获取技能详情 → 403 拒绝 √
+- Test 12: CLI `--share-code` 参数 → 帮助文档正确显示 √
+
+**影响范围**：skills 广场 personal/department 权限校验链路，`dm_skill_installs` 表新增两列（历史记录默认 `install_source=normal`，无影响）
+**回滚方式**：
+1. `php artisan migrate:rollback --step=2`（回滚两个 Migration）
+2. git checkout 还原 5 个 PHP 文件（Service/Controller/routes）和 3 个 Python 文件（client/remote_installer/cli.py）
+---
+
+
 ## 2026-05-27 ops-creator-skill - 新增技能广场发布门禁章节
 
 **变更原因**：从 skill 定义中提取"发布到技能广场"相关规则，补充到 SKILL.md，确保创建/优化 Skill 后有明确的版本号更新和发布流程。
