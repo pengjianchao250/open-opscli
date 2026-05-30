@@ -55,6 +55,17 @@ SKILL.md frontmatter: "1.7.2"（无 v）
 
 ---
 
+## 发布范围铁律
+
+**发布 Skill 时，禁止主动添加 `--share-type`，除非用户明确指定分享范围。**
+
+- CLI 默认值已为 `personal`（仅本人可见），直接 `opscli skills publish` 即可，无需传参
+- 只有用户明确说"全员"、"公司级"、"部门可见"等时，才加 `--share-type company/department`
+- ❌ 错误：用户只说"帮我发布" → 自行追加 `--share-type company`
+- √ 正确：用户只说"帮我发布" → 执行 `opscli skills publish --changelog "..."` 不加 `--share-type`
+
+---
+
 ## 使用原则
 
 - **安装模式**：
@@ -125,7 +136,7 @@ opscli skills status --pretty     # 检查版本
 
 ```bash
 # 1. 按铁律更新版本号（VERSION.json + SKILL.md frontmatter 同步）
-# 2. 发布（未指定 --share-type 时默认个人可见，如需扩大范围请显式传参）
+# 2. 发布（禁止自行加 --share-type，用户未指定范围时不传该参数，默认个人可见）
 opscli skills publish --changelog "变更说明"
 # 3. 确认
 opscli skills marketplace info pengjianchao@my-skill
