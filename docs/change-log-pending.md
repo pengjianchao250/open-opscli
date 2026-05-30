@@ -1224,3 +1224,14 @@
 **回滚方式**：回退 `.agents/skills/ops-methods-card/SKILL.md`，删除本次新增的 `.agents/skills/ops-methods-card/references/method-card-parameter-guide.md` 和 `.agents/skills/ops-methods-card/amazon-ads-diagnosis/`。
 
 ---
+
+## 2026-05-30 skills/templates/ops-dataset-query - 首次发布到技能广场
+
+**变更原因**：用户要求将 ops-dataset-query Skill 发布到技能广场供全员使用
+**改动点**：
+- `opscli/skills/templates/ops-dataset-query/data/VERSION.json`：版本从 `v0.0.1`（占位符）同步为 `1.0.2`（无 v 前缀，符合铁律）
+- `opscli/skills/templates/ops-dataset-query/SKILL.md` frontmatter：`version: 1.0.2` → `version: v1.0.2`（加 v 前缀，符合铁律）
+**验证结果**：`opscli skills publish --share-type company` 发布成功，标识符 `zhangpeiliang@ops-dataset-query`，版本 1.0.2，分类"数据查询"
+**影响范围**：技能广场全员可见，安装命令 `opscli skills install zhangpeiliang@ops-dataset-query`
+**回滚方式**：`opscli skills unpublish zhangpeiliang@ops-dataset-query`
+---
