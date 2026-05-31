@@ -99,7 +99,7 @@ opscli skills upgrade ops-dataset-query
 
 ```
 data/VERSION.json: "1.8.0"（无 v）
-SKILL.md frontmatter: "v1.8.0"（有 v）
+SKILL.md frontmatter: "1.8.0"（无 v）
 --version 参数: "1.8.0"（无 v，仅 edit 时）
-→ 三者数值部分必须完全相同
+→ 三者必须完全相同，全部不带 v 前缀
 ```

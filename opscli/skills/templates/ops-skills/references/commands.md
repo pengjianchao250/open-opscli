@@ -82,7 +82,7 @@ opscli skills status --skills-dir ~/.claude/skills/
 2. 下载 zip，解压到 `~/.opscli/skills/<name>/`（中央存储）
 3. 软链到 `~/.claude/skills/` 等运行时目录
 4. 回调广场记录安装次数
-5. **强制**：安装成功后触发评分引导（见 评分引导.md）
+5. **强制**：安装成功后触发评分引导（见 [rating-guide.md](rating-guide.md)）
 
 ```
 参数：
@@ -475,17 +475,26 @@ opscli skills marketplace rate pengjianchao@ops-auth 5 --json
 
 ## 运行时全局路径
 
-| 运行时 | 全局 Skills 路径 |
-|--------|----------------|
-| Claude Code | `~/.claude/skills/` |
-| OpenClaw | `~/.openclaw/skills/` |
-| Codex CLI | `~/.codex/skills/` |
-| OpenCode | `~/.opencode/skills/` |
+| 运行时 | 全局 Skills 路径 | 检测条件 |
+|--------|----------------|---------|
+| `claude`    | `~/.claude/skills/`           | `~/.claude/` 存在 或 `which claude` |
+| `openclaw`  | `~/.openclaw/skills/`         | `~/.openclaw/` 存在 或 `which openclaw` |
+| `codex`     | `~/.codex/skills/`            | `~/.codex/` 存在 或 `which codex` |
+| `opencode`  | `~/.config/opencode/skills/`  | `~/.config/opencode/` 存在 或 `which opencode` |
+| `workbuddy` | `~/.workbuddy/skills/`        | `~/.workbuddy/` 存在 或 `which workbuddy` |
+| `trae-cn`   | `~/.trae-cn/skills/`          | `~/.trae-cn/` 存在 或 `which trae` |
 
-**远程安装中央存储：**
+**安装模式说明：**
+
+| 模式 | 触发条件 | 行为 |
+|------|---------|------|
+| 模式 B（默认） | 不传 `--skills-dir` | 复制到中央存储，再软链到各工具目录 |
+| 模式 A（兼容） | 传 `--skills-dir` | 直接复制到指定目录，不经过中央存储 |
+
+**中央存储目录结构（模式 B）：**
 
 ```
-~/.opscli/skills/<skill_name>/    # 中央存储
+~/.opscli/skills/<skill_name>/    # 中央存储（macOS/Linux）
 ├── SKILL.md
 ├── data/VERSION.json
 └── ...
@@ -493,6 +502,8 @@ opscli skills marketplace rate pengjianchao@ops-auth 5 --json
 ~/.claude/skills/<skill_name>     # 软链接 → 中央存储
 ~/.openclaw/skills/<skill_name>   # 软链接 → 中央存储
 ```
+
+> Windows 中央存储路径为 `%LOCALAPPDATA%\opscli\skills\`，可通过环境变量 `OPSCLI_CENTRAL_SKILLS_DIR` 覆盖。
 
 ---
 
