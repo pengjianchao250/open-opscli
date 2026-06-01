@@ -49,7 +49,7 @@ def make_product_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
             "desc": order_desc(input_data.get("orderDesc")),
         },
         "productTags": csv(input_data.get("productTags")),
-        "nodeIdPaths": csv(input_data.get("node") or input_data.get("nodeIdPaths")),
+        "nodeIdPaths": csv(input_data.get("node") or input_data.get("category") or input_data.get("nodeIdPaths")),
         "sellerTypes": csv(input_data.get("sellerTypes")),
         "eligibility": csv(input_data.get("eligibility")),
         "pkgDimensionTypeList": csv(input_data.get("pkgDimensionTypeList")),
@@ -57,6 +57,7 @@ def make_product_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
         "smallAndLight": input_data.get("smallAndLight") or "N",
         "lowPrice": input_data.get("lowPrice") or "N",
     }
+    _append_product_range_filters(payload, input_data)
     for key in ["keyword", "includeBrands", "excludeBrands", "includeSellers", "excludeSellers"]:
         if input_data.get(key):
             payload[key] = input_data[key]
@@ -116,6 +117,47 @@ def make_keyword_reverse_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def make_traffic_source_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造查流量来源 payload。"""
+    month = input_data.get("historyDate") or input_data.get("month") or input_data.get("monthName") or "nearly"
+    return {
+        "keywordOrAsin": _query_text(
+            input_data.get("keywordOrAsin")
+            or input_data.get("keyword")
+            or input_data.get("asin")
+            or input_data.get("asins")
+            or input_data.get("q")
+        ),
+        "market": traffic_source_market(_market(input_data, default="US")),
+        "pageNo": _int(input_data.get("pageNo") or input_data.get("page") or input_data.get("startPage"), 1),
+        "pageSize": _int(input_data.get("pageSize") or input_data.get("size"), 100),
+        "order": _int(input_data.get("order"), 10),
+        "desc": order_desc(input_data.get("desc")),
+        "month": history_date(month),
+    }
+
+
+def make_market_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造选市场表单 payload。"""
+    month = input_data.get("month") or input_data.get("period") or "nearly"
+    payload: dict[str, Any] = {
+        "marketId": str(input_data.get("marketId") or market_research_market_id(_market(input_data, default="US"))),
+        "nodeIdPath": _query_text(input_data.get("nodeIdPath") or input_data.get("node") or input_data.get("category")),
+        "sampleNumber": str(input_data.get("sampleNumber") or 1),
+        "topn": str(input_data.get("topn") or input_data.get("topN") or 10),
+        "newReleaseNum": str(new_release_num(input_data)),
+        "order.field": input_data.get("orderField") or input_data.get("order.field") or "total_sales",
+        "order.desc": str(order_desc(input_data.get("orderDesc") or input_data.get("order.desc"))).lower(),
+        "tab": str(input_data.get("tab") or 1),
+        "monthName": input_data.get("monthName") or month_name(month),
+        "page": str(_int(input_data.get("page") or input_data.get("startPage"), 1)),
+        "size": str(_int(input_data.get("size") or input_data.get("pageSize"), 100)),
+    }
+    if input_data.get("departmentKeyword") or input_data.get("keyword"):
+        payload["departmentKeyword"] = _query_text(input_data.get("departmentKeyword") or input_data.get("keyword"))
+    return payload
+
+
 def build_referer(payload: dict[str, Any], scenario: str) -> str:
     """按场景构造 Web referer。"""
     if scenario == "keyword-miner":
@@ -128,6 +170,16 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
             "badges": ",".join(payload.get("badges") or []),
         }
         return f"https://www.sellersprite.com/v3/keyword-reverse/?{urlencode(query)}"
+    if scenario == "traffic-source":
+        query = {
+            "asin": payload.get("keywordOrAsin") or "",
+            "marketId": traffic_source_market_id(payload.get("market")),
+            "date": payload.get("month") or "",
+        }
+        return f"https://www.sellersprite.com/v3/reversing/sources?{urlencode(query)}"
+    if scenario == "market-research":
+        query = _flatten_query(payload)
+        return f"https://www.sellersprite.com/v2/market-research?{urlencode(query)}"
 
     path = "product-research" if scenario == "product-research" else "competitor-lookup"
     query = _flatten_query(payload)
@@ -137,7 +189,7 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
 def month_name(value: Any) -> str:
     """转换竞品类接口月份字段。"""
     text = str(value)
-    if text in {"nearly", "latest30", "last30"}:
+    if text in {"30d", "nearly", "latest30", "last30"}:
         return "bsr_sales_nearly"
     if text.startswith("bsr_sales_"):
         return text
@@ -147,7 +199,7 @@ def month_name(value: Any) -> str:
 def history_date(value: Any) -> str:
     """转换关键词类接口月份字段。"""
     text = str(value or "")
-    if not text or text in {"nearly", "latest30", "last30", "bsr_sales_nearly"}:
+    if not text or text in {"30d", "nearly", "latest30", "last30", "bsr_sales_nearly"}:
         return ""
     if text.startswith("bsr_sales_monthly_"):
         return text.replace("bsr_sales_monthly_", "")
@@ -171,6 +223,23 @@ def market_id(value: Any) -> int | Any:
     return markets.get(str(value or "").upper(), value)
 
 
+def market_research_market_id(value: Any) -> int | Any:
+    """选市场页面站点代码转 market id。"""
+    markets = {
+        "US": 1,
+        "UK": 3,
+        "DE": 4,
+        "FR": 5,
+        "JP": 6,
+        "CA": 7,
+        "IT": 35691,
+        "ES": 44551,
+        "IN": 44571,
+        "MX": 771770,
+    }
+    return markets.get(str(value or "").upper(), value)
+
+
 def station_from_market_id(value: Any) -> str:
     """卖家精灵 market id 转站点代码。"""
     stations = {
@@ -188,6 +257,41 @@ def station_from_market_id(value: Any) -> str:
     return stations.get(_int(value, 6), str(value))
 
 
+def traffic_source_market(value: Any) -> str:
+    """站点代码转流量来源接口 market。"""
+    markets = {
+        "US": "COM",
+        "UK": "UK",
+        "DE": "DE",
+        "FR": "FR",
+        "JP": "JP",
+        "CA": "CA",
+        "IT": "IT",
+        "ES": "ES",
+        "IN": "IN",
+        "MX": "MX",
+    }
+    return markets.get(str(value or "").upper(), str(value or "COM").upper())
+
+
+def traffic_source_market_id(value: Any) -> int | Any:
+    """流量来源接口 market 转 Web 页面 marketId。"""
+    markets = {
+        "COM": 1,
+        "US": 1,
+        "UK": 3,
+        "DE": 4,
+        "FR": 5,
+        "JP": 6,
+        "CA": 7,
+        "IT": 8,
+        "ES": 9,
+        "IN": 10,
+        "MX": 11,
+    }
+    return markets.get(str(value or "").upper(), value)
+
+
 def csv(value: Any) -> list[str]:
     """逗号分隔参数转列表。"""
     if not value:
@@ -195,6 +299,12 @@ def csv(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def _query_text(value: Any) -> str:
+    if isinstance(value, list):
+        return ",".join(str(item).strip() for item in value if str(item).strip())
+    return str(value or "").strip()
 
 
 def order_desc(value: Any) -> bool:
@@ -215,8 +325,56 @@ def truthy(value: Any, *, default: bool = False) -> bool:
     return str(value).lower() in {"1", "true", "yes", "y"}
 
 
+def new_release_num(input_data: dict[str, Any]) -> int:
+    """解析新品定义月份数。"""
+    value = (
+        input_data.get("newReleaseNum")
+        or input_data.get("newReleaseMonths")
+        or input_data.get("newProductMonths")
+        or input_data.get("newRelease")
+    )
+    if value is None:
+        return 6
+    text = str(value).strip().lower()
+    aliases = {
+        "1": 1,
+        "1m": 1,
+        "one_month": 1,
+        "1个月内上架": 1,
+        "一个月内上架": 1,
+        "3": 3,
+        "3m": 3,
+        "three_months": 3,
+        "3个月内上架": 3,
+        "三个月内上架": 3,
+        "6": 6,
+        "6m": 6,
+        "half_year": 6,
+        "半年内上架": 6,
+    }
+    return aliases.get(text, _int(value, 6))
+
+
 def _market(input_data: dict[str, Any], *, default: str = "DE") -> str:
     return str(input_data.get("market") or input_data.get("site") or default).upper()
+
+
+def _append_product_range_filters(payload: dict[str, Any], input_data: dict[str, Any]) -> None:
+    field_aliases = {
+        "minPrice": ("minPrice", "priceMin"),
+        "maxPrice": ("maxPrice", "priceMax"),
+        "minSales": ("minSales", "salesMin"),
+        "maxSales": ("maxSales", "salesMax"),
+        "minReviews": ("minReviews", "reviewsMin"),
+        "maxReviews": ("maxReviews", "reviewsMax"),
+        "minReviewRating": ("minReviewRating", "ratingMin"),
+        "maxReviewRating": ("maxReviewRating", "ratingMax"),
+    }
+    for target, aliases in field_aliases.items():
+        for alias in aliases:
+            if input_data.get(alias) is not None:
+                payload[target] = str(input_data[alias])
+                break
 
 
 def _int(value: Any, default: int) -> int:

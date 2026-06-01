@@ -112,6 +112,38 @@ class SellerSpriteApiClient:
         )
         return self._parse_json_response(response)
 
+    async def post_form(self, url: str, payload: dict[str, Any], *, referer: str | None = None) -> str:
+        """POST 表单并返回页面文本。"""
+        response = await self._client.post(
+            _absolute_url(url),
+            data=payload,
+            headers={
+                **self._browser_headers(referer=referer),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": BASE_URL,
+            },
+        )
+        if response.status_code >= 400:
+            raise SellerSpriteApiError(
+                "卖家精灵表单请求失败",
+                status_code=response.status_code,
+                response_excerpt=response.text[:1000],
+            )
+        return response.text
+
+    async def get_json(self, url: str, params: dict[str, Any], *, referer: str | None = None) -> dict[str, Any]:
+        """GET JSON 并返回接口 JSON。"""
+        response = await self._client.get(
+            _absolute_url(url),
+            params=params,
+            headers={
+                **self._browser_headers(referer=referer),
+                "Accept": "application/json, text/plain, */*",
+            },
+        )
+        return self._parse_json_response(response)
+
     async def request_json(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
         """发送通用请求并返回接口 JSON。"""
         response = await self._client.request(method, _absolute_url(url), **kwargs)

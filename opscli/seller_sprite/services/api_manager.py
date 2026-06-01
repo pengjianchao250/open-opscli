@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from opscli.seller_sprite.accounts import SellerSpriteAccountProvider
 from opscli.seller_sprite.api.client import SellerSpriteApiClient
+from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.api.scenarios import get_scenario, list_scenarios
 from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
 from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
@@ -60,11 +61,35 @@ class SellerSpriteApiManager:
         warnings: list[dict[str, Any]] = []
         async with SellerSpriteApiClient(account=account) as client:
             login = await client.login()
-            main_response = await client.post_json(
-                scenario.endpoint_for(payload),
-                _main_payload(request.scenario, payload),
-                referer=scenario.build_referer(payload),
-            )
+            if scenario.method == "GET":
+                main_response = await client.get_json(
+                    scenario.endpoint_for(payload),
+                    _main_payload(request.scenario, payload),
+                    referer=scenario.build_referer(payload),
+                )
+            elif scenario.method == "FORM":
+                response_html = await client.post_form(
+                    scenario.endpoint_for(payload),
+                    _main_payload(request.scenario, payload),
+                    referer=scenario.build_referer(payload),
+                )
+                response_html_path = root_dir / "response.html"
+                response_html_path.write_text(response_html, encoding="utf-8")
+                rows = parse_market_research_html(response_html)
+                main_response = {
+                    "code": "OK",
+                    "data": {
+                        "items": rows,
+                    },
+                    "response_html_path": str(response_html_path),
+                    "response_html_length": len(response_html),
+                }
+            else:
+                main_response = await client.post_json(
+                    scenario.endpoint_for(payload),
+                    _main_payload(request.scenario, payload),
+                    referer=scenario.build_referer(payload),
+                )
             high_frequency_response = None
             if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload):
                 try:
@@ -173,6 +198,10 @@ def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
     data = response.get("data") if isinstance(response, dict) else None
     if isinstance(data, dict) and isinstance(data.get("items"), list):
         return [item for item in data["items"] if isinstance(item, dict)]
+    if isinstance(data, dict) and isinstance(data.get("pager"), dict):
+        pager = data["pager"]
+        if isinstance(pager.get("items"), list):
+            return [item for item in pager["items"] if isinstance(item, dict)]
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     return []

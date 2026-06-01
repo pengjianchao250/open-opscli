@@ -10,7 +10,9 @@ from opscli.seller_sprite.api.payloads import (
     make_competitor_payload,
     make_keyword_miner_payload,
     make_keyword_reverse_payload,
+    make_market_research_payload,
     make_product_research_payload,
+    make_traffic_source_payload,
 )
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 
@@ -27,6 +29,7 @@ class SellerSpriteScenario:
     endpoint: str
     required_params: tuple[str, ...]
     payload_builder: PayloadBuilder
+    method: str = "POST"
     high_frequency_endpoint: str | None = None
 
     def to_public_dict(self) -> dict[str, Any]:
@@ -45,6 +48,13 @@ class SellerSpriteScenario:
             "month": params.get("month") or period,
             "size": params.get("size") or page_size,
             "pageSize": params.get("pageSize") or page_size,
+            "keywordOrAsin": (
+                params.get("keywordOrAsin")
+                or params.get("keyword")
+                or params.get("asin")
+                or params.get("asins")
+                or params.get("q")
+            ),
         }
         self._validate_required(merged)
         return self.payload_builder(merged)
@@ -76,7 +86,7 @@ class SellerSpriteScenario:
 SCENARIOS: dict[str, SellerSpriteScenario] = {
     "competitor-lookup": SellerSpriteScenario(
         scenario_id="competitor-lookup",
-        title="竞品查询",
+        title="选竞品",
         endpoint="/v3/api/competing-lookup",
         required_params=(),
         payload_builder=make_competitor_payload,
@@ -103,6 +113,22 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         high_frequency_endpoint="/v3/api/relation/ta/high-frequency-words-new",
         required_params=("asin",),
         payload_builder=make_keyword_reverse_payload,
+    ),
+    "traffic-source": SellerSpriteScenario(
+        scenario_id="traffic-source",
+        title="查流量来源",
+        endpoint="/v3/api/relation/ta/source",
+        method="GET",
+        required_params=("keywordOrAsin",),
+        payload_builder=make_traffic_source_payload,
+    ),
+    "market-research": SellerSpriteScenario(
+        scenario_id="market-research",
+        title="选市场",
+        endpoint="/v2/market-research",
+        method="FORM",
+        required_params=(),
+        payload_builder=make_market_research_payload,
     ),
 }
 

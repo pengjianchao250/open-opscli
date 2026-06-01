@@ -30,10 +30,12 @@ Use these MCP tools:
 
 | Natural language | scenario |
 | --- | --- |
-| 竞品查询 / competitor lookup | `competitor-lookup` |
-| 选竞品 / product research | `product-research` |
+| 选竞品 / competitor lookup | `competitor-lookup` |
+| 选产品 / product research | `product-research` |
 | 关键词挖掘 / keyword mining | `keyword-miner` |
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
+| 查流量来源 / traffic source | `traffic-source` |
+| 选市场 / market research | `market-research` |
 
 ## Call Examples
 
@@ -59,6 +61,30 @@ Use these MCP tools:
     "filterRootWord": 1,
     "amazonChoice": true
   }
+}
+```
+
+```json
+{
+  "scenario": "traffic-source",
+  "site": "US",
+  "period": "nearly",
+  "params": {
+    "keyword": "solar outdoor lights"
+  }
+}
+```
+
+```json
+{
+  "scenario": "market-research",
+  "site": "CA",
+  "period": "nearly",
+  "params": {
+    "departmentKeyword": "Baby Diapers",
+    "newReleaseNum": 3
+  },
+  "export_format": "xlsx"
 }
 ```
 

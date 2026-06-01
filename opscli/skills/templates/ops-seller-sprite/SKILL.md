@@ -1,6 +1,6 @@
 ---
 name: ops-seller-sprite
-description: Use when the user asks to query or export SellerSprite/卖家精灵 data through opscli MCP or CLI, including 竞品查询, 选竞品, 关键词挖掘, 关键词反查, ASIN reverse lookup, keyword mining, product research, competitor lookup, XLS/XLSX export, or JSON export. Prefer MCP tools seller_sprite_scenarios, seller_sprite_run, seller_sprite_job_status, and seller_sprite_export when available; fall back to opscli seller-sprite commands only when MCP tools are unavailable.
+description: Use when the user asks to query or export SellerSprite/卖家精灵 data through opscli MCP or CLI, including 竞品查询, 选竞品, 选产品, 选市场, 查流量来源, 关键词挖掘, 关键词反查, ASIN reverse lookup, keyword mining, product research, market research, traffic source, competitor lookup, XLS/XLSX export, or JSON export. Prefer MCP tools seller_sprite_scenarios, seller_sprite_run, seller_sprite_job_status, and seller_sprite_export when available; fall back to opscli seller-sprite commands only when MCP tools are unavailable.
 ---
 
 # ops-seller-sprite
@@ -23,19 +23,23 @@ MCP default export is `json`. If the user asks for Excel, XLS, XLSX, 表格, or 
 
 | User intent | scenario |
 | --- | --- |
-| 竞品查询, 竞品监控, competitor lookup | `competitor-lookup` |
-| 选竞品, 产品调研, product research | `product-research` |
+| 选竞品, 竞品查询, competitor lookup | `competitor-lookup` |
+| 选产品, 产品筛选, product research | `product-research` |
 | 关键词挖掘, 挖词, keyword mining | `keyword-miner` |
 | 关键词反查, ASIN 反查, reverse ASIN | `keyword-reverse` |
+| 查流量来源, 流量来源, traffic source | `traffic-source` |
+| 选市场, market research | `market-research` |
 
 ## Required Params
 
 | scenario | Required | Common optional params |
 | --- | --- | --- |
 | `competitor-lookup` | none | `keyword`, `brand`, `sellerName`, `asins`, `node` |
-| `product-research` | none | `keyword`, `node`, `includeBrands`, `excludeBrands`, `includeSellers`, `excludeSellers` |
+| `product-research` | none | `node`/`category`, `minPrice`, `maxPrice`, `minSales`, `maxSales`, `minReviews`, `maxReviews`, `minReviewRating`, `maxReviewRating` |
 | `keyword-miner` | `keyword` | `filterRootWord`, `amazonChoice`, `includeHighFrequency` |
 | `keyword-reverse` | `asin` | `amazonChoice`/`ac`, `includeHighFrequency`, `badges` |
+| `traffic-source` | `keywordOrAsin` | `keyword`, `asin`, `asins`, `order`, `desc` |
+| `market-research` | none | `node`/`category`, `departmentKeyword`, `newReleaseNum`/`newReleaseMonths`, `topn` |
 
 Always pass:
 
@@ -83,6 +87,34 @@ Competitor lookup XLSX:
   "period": "2026-04",
   "params": {
     "keyword": "flashlight"
+  },
+  "export_format": "xlsx"
+}
+```
+
+Traffic source JSON:
+
+```json
+{
+  "scenario": "traffic-source",
+  "site": "US",
+  "period": "nearly",
+  "params": {
+    "keyword": "solar outdoor lights"
+  }
+}
+```
+
+Market research XLSX:
+
+```json
+{
+  "scenario": "market-research",
+  "site": "CA",
+  "period": "nearly",
+  "params": {
+    "departmentKeyword": "Baby Diapers",
+    "newReleaseNum": 3
   },
   "export_format": "xlsx"
 }
