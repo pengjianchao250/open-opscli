@@ -33,7 +33,7 @@ def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def make_product_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
-    """构造选竞品 payload。"""
+    """构造选产品 payload。"""
     month = input_data.get("month") or input_data.get("period") or "2026-03"
     payload: dict[str, Any] = {
         "market": _market(input_data, default="JP"),

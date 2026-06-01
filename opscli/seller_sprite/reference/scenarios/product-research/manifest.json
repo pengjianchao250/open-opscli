@@ -1,6 +1,6 @@
 {
   "scenario_id": "product-research",
-  "title": "选竞品",
+  "title": "选产品",
   "web_route": "/v3/product-research",
   "api": {
     "method": "POST",
@@ -78,7 +78,7 @@
     {
       "method": "GET",
       "endpoint": "/v3/api/relation/config/pr",
-      "purpose": "选竞品配置"
+      "purpose": "选产品配置"
     },
     {
       "method": "GET",
@@ -113,7 +113,7 @@
     {
       "method": "GET",
       "endpoint": "/v2/common/remain-export-num/EB3",
-      "purpose": "选竞品剩余导出次数"
+      "purpose": "选产品剩余导出次数"
     }
   ],
   "required_params": [],

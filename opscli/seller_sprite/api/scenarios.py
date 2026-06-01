@@ -83,7 +83,7 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
     ),
     "product-research": SellerSpriteScenario(
         scenario_id="product-research",
-        title="选竞品",
+        title="选产品",
         endpoint="/v3/api/product-research",
         required_params=(),
         payload_builder=make_product_research_payload,
