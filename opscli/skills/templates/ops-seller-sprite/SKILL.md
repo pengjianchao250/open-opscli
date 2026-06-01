@@ -1,23 +1,32 @@
 ---
 name: ops-seller-sprite
-description: Use when the user asks to query or export SellerSprite/卖家精灵 data through opscli MCP or CLI, including 竞品查询, 选竞品, 选产品, 选市场, 查流量来源, 关键词挖掘, 关键词反查, ASIN reverse lookup, keyword mining, product research, market research, traffic source, competitor lookup, XLS/XLSX export, or JSON export. Prefer MCP tools seller_sprite_scenarios, seller_sprite_run, seller_sprite_job_status, and seller_sprite_export when available; fall back to opscli seller-sprite commands only when MCP tools are unavailable.
+description: Use when the user asks to query or export SellerSprite/卖家精灵 data through MCP tools, including 竞品查询, 选竞品, 选产品, 选市场, 查流量来源, 关键词挖掘, 关键词反查, ASIN reverse lookup, keyword mining, product research, market research, traffic source, competitor lookup, XLS/XLSX export, or JSON export.
 ---
 
 # ops-seller-sprite
 
-Use this skill to turn natural-language SellerSprite requests into MCP tool calls or `opscli seller-sprite` commands.
+Use this skill to turn natural-language SellerSprite requests into MCP tool calls. CLI commands are local debug only and must not be presented as the user-facing path.
 
 ## Default Path
 
-Prefer MCP tools:
+Use MCP tools:
 
 1. Call `seller_sprite_scenarios` if the available scenarios or required params are unclear.
 2. Map the user intent to a `scenario`.
 3. Collect missing required params only.
 4. Call `seller_sprite_run`.
 5. If the user asks for the generated file or link, call `seller_sprite_export` with the returned `job_id`.
+6. If MCP tools are unavailable, report that SellerSprite MCP is unavailable instead of falling back to CLI for the user.
 
-MCP default export is `json`. If the user asks for Excel, XLS, XLSX, 表格, or 导出文件, pass `export_format: "xlsx"`.
+MCP default export is `xls`, which the backend writes as an XLSX file. If the user explicitly asks for JSON, pass `export_format: "json"`.
+
+## Missing Params Policy
+
+- Ask only for missing required params.
+- Do not ask for optional params. Omit them and let backend defaults apply unless the user explicitly provides values.
+- If a scenario has no required params, run it with defaults after mapping the intent.
+- Always include known user-provided conditions in `params`; do not invent category node IDs or hidden enum values.
+- If category text maps to multiple possible nodes or no local node ID is available, ask the user to choose or run without the category filter.
 
 ## Intent Map
 
@@ -47,6 +56,28 @@ Always pass:
 - `period`: `30d`, `nearly`, or a month such as `2026-03`.
 - `page_size`: default `100` unless the user requests otherwise.
 
+## Defaults
+
+Top-level defaults:
+
+| Field | Default |
+| --- | --- |
+| `site` | `US` |
+| `period` | `30d` |
+| `page_size` | `100` |
+| `export_format` | `xls` (XLSX file) |
+
+Scenario defaults:
+
+| scenario | Defaults |
+| --- | --- |
+| `competitor-lookup` | `page=1`, `order.field=amz_unit`, `order.desc=true`, `lowPrice=N` |
+| `product-research` | `page=1`, `selectType=2`, `order.field=amz_unit`, `order.desc=true`, `smallAndLight=N`, `lowPrice=N` |
+| `keyword-miner` | `pageNum=1`, `orderBy=5`, `desc=true`, `filterRootWord=0`, `amazonChoice=false`, `includeHighFrequency=true` |
+| `keyword-reverse` | `page=1`, `order=12`, `desc=true`, `ac=false`, `includeHighFrequency=true` |
+| `traffic-source` | `pageNo=1`, `order=10`, `desc=true` |
+| `market-research` | `marketId=US(1)`, `monthName=bsr_sales_nearly`, `sampleNumber=1`, `topn=10`, `newReleaseNum=6`, `order.field=total_sales`, `order.desc=true` |
+
 ## MCP Examples
 
 Keyword reverse XLSX:
@@ -74,7 +105,19 @@ Keyword mining JSON:
     "keyword": "flashlight",
     "filterRootWord": 1,
     "amazonChoice": true
-  }
+  },
+  "export_format": "json"
+}
+```
+
+Default XLSX export:
+
+```json
+{
+  "scenario": "product-research",
+  "site": "US",
+  "period": "30d",
+  "params": {}
 }
 ```
 
@@ -101,7 +144,8 @@ Traffic source JSON:
   "period": "nearly",
   "params": {
     "keyword": "solar outdoor lights"
-  }
+  },
+  "export_format": "json"
 }
 ```
 
@@ -122,9 +166,9 @@ Market research XLSX:
 
 After `seller_sprite_run`, return the `job_id`, row count, export filename, and export URL/path. Do not expose SellerSprite account credentials.
 
-## CLI Fallback
+## Local Debug Only
 
-Use CLI only when MCP tools are unavailable.
+CLI commands are only for local development and debugging. Do not expose CLI as an available user workflow.
 
 List scenarios:
 
