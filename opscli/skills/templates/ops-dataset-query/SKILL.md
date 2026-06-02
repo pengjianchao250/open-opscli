@@ -157,6 +157,27 @@ query_intent_match / opscli query intent → 无命中
 匹配到 0 个数据集 → 提示用户无匹配，询问是否查看全量数据集列表（opscli query metadata）
 ```
 
+### 铁律三-B：Catalog 未命中完整回退链
+
+远端 Catalog 未命中时，按以下顺序回退，**禁止直接跳到 search.py**：
+
+```
+1. 远端 catalog (query_intent_match / opscli query intent) → 命中 → 遵循 intent_constraints
+   ↓ 未命中（静默，不向用户提示）
+2. 本地 intent_taxonomy.yml 关键词匹配：
+   CLI 模式：python scripts/route_intent.py "<用户问题>"
+     → 命中 direct_intent     → 正常路由到 table_id / dataset_alias
+     → 命中 embedded_intent   → 使用 execution_alias 执行，向用户说明口径映射
+     → requires_clarification=true → 先用 AskUserQuestion 澄清，禁止直接执行查询
+   ↓ 未命中（fallback_needed=true）
+3. search.py 本地关键词搜索（现有逻辑）
+   → 匹配到 1 个 → AskUserQuestion 确认后执行
+   → 匹配到 ≥2 个 → AskUserQuestion 列出候选
+   → 匹配到 0 个 → 提示用户无匹配，询问是否查看全量数据集列表（opscli query metadata）
+```
+
+**embedded_intent 执行说明**：若 `routing_status=embedded_intent`，使用 `execution_alias` 和 `table_id` 构造查询，并向用户说明实际使用的数据集及其口径差异（如"即时销售意图实际使用即时综合数据集中的 order_sale_trend_set 销售口径，以订单下单时间统计"）。
+
 ### 铁律四：字段存在性校验
 
 构造任何 query 参数前，**必须先确认目标数据集和字段真实存在**；搜索结果为空时，先判断本地数据是否已初始化，再决定是否升级。
