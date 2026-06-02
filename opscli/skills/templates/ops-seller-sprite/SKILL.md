@@ -1,22 +1,22 @@
 ---
 name: ops-seller-sprite
-description: Use when the user asks to query or export SellerSprite/卖家精灵 data through MCP tools, including 竞品查询, 选竞品, 选产品, 选市场, 查流量来源, 关键词挖掘, 关键词反查, ASIN reverse lookup, keyword mining, product research, market research, traffic source, competitor lookup, XLS/XLSX export, or JSON export.
+description: Use when the user asks to query or export SellerSprite/卖家精灵 data through MCP tools or CLI, including 竞品查询, 选竞品, 选产品, 选市场, 查流量来源, 关键词挖掘, 关键词反查, ASIN reverse lookup, keyword mining, product research, market research, traffic source, competitor lookup, XLS/XLSX export, or JSON export.
 ---
 
 # ops-seller-sprite
 
-Use this skill to turn natural-language SellerSprite requests into MCP tool calls. CLI commands are local debug only and must not be presented as the user-facing path.
+Use this skill to turn natural-language SellerSprite requests into SellerSprite MCP tool calls or CLI commands. Prefer MCP when available; use CLI when MCP tools are unavailable.
 
 ## Default Path
 
-Use MCP tools:
+Prefer MCP tools:
 
 1. Call `seller_sprite_scenarios` if the available scenarios or required params are unclear.
 2. Map the user intent to a `scenario`.
 3. Collect missing required params only.
 4. Call `seller_sprite_run`.
 5. If the user asks for the generated file or link, call `seller_sprite_export` with the returned `job_id`.
-6. If MCP tools are unavailable, report that SellerSprite MCP is unavailable instead of falling back to CLI for the user.
+6. If MCP tools are unavailable, use CLI mode with equivalent scenario, site, period, params, and export format.
 
 MCP default export is `xls`, which the backend writes as an XLSX file. If the user explicitly asks for JSON, pass `export_format: "json"`.
 
@@ -247,9 +247,9 @@ Rules:
 - If row count is 0, say `row_count: 0` and include the parameters used only in a compact inline form.
 - Do not expose SellerSprite account credentials.
 
-## Local Debug Only
+## CLI Fallback
 
-CLI commands are only for local development and debugging. Do not expose CLI as an available user workflow.
+Use CLI mode when MCP tools are unavailable in the current runtime. Keep CLI output user-facing and compact; do not expose raw params or long local paths unless the user asks for debugging details.
 
 List scenarios:
 
@@ -257,16 +257,52 @@ List scenarios:
 opscli seller-sprite scenarios
 ```
 
-Run XLSX export:
+Keyword reverse XLSX:
 
 ```bash
 opscli seller-sprite run keyword-reverse --site JP --period nearly --params "{\"asin\":\"B07YRMT36L\"}" --export-format xlsx
 ```
 
-Run JSON export:
+Keyword mining JSON:
 
 ```bash
-opscli seller-sprite run keyword-miner --site JP --period nearly --params "{\"keyword\":\"flashlight\"}" --export-format json
+opscli seller-sprite run keyword-miner --site JP --period nearly --params "{\"keyword\":\"flashlight\",\"filterRootWord\":1,\"amazonChoice\":true}" --export-format json
+```
+
+Default product research XLSX:
+
+```bash
+opscli seller-sprite run product-research --site US --period 30d --params "{}" --export-format xlsx
+```
+
+Product research with recommendation mode:
+
+```bash
+opscli seller-sprite run product-research --site US --period 30d --params "{\"recommendationMode\":\"精品铺货\"}" --export-format xlsx
+```
+
+Product research with official aliases:
+
+```bash
+opscli seller-sprite run product-research --site US --period 30d --params "{\"minUnits\":300,\"maxRatings\":50,\"availableMonth\":6,\"fulfillment\":[\"FBA\"],\"badgeNR\":true}" --export-format xlsx
+```
+
+Competitor lookup XLSX:
+
+```bash
+opscli seller-sprite run competitor-lookup --site DE --period 2026-04 --params "{\"keyword\":\"flashlight\"}" --export-format xlsx
+```
+
+Traffic source JSON:
+
+```bash
+opscli seller-sprite run traffic-source --site US --period nearly --params "{\"keyword\":\"solar outdoor lights\"}" --export-format json
+```
+
+Market research XLSX:
+
+```bash
+opscli seller-sprite run market-research --site CA --period nearly --params "{\"departmentKeyword\":\"Baby Diapers\",\"newReleaseNum\":3}" --export-format xlsx
 ```
 
 ## Guardrails
