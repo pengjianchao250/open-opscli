@@ -41,16 +41,16 @@ opscli auth login                 # 未登录或刷新失败时登录
 1. 读取 `data/VERSION.json` 中的 `version`（如 `"1.7.1"`）
 2. 按规则递增：patch 逢 100 进 minor，minor 逢 100 进 major（从 `0.0.1` 起）
 3. 更新 `data/VERSION.json`（无 `v` 前缀，如 `"1.7.2"`）
-4. 同步更新 `SKILL.md` frontmatter（有 `v` 前缀，如 `v1.7.2`）
+4. 同步更新 `SKILL.md` frontmatter（无 `v` 前缀，如 `1.7.2`）
 5. `--version` 参数值必须与 `VERSION.json` 一致
 
 **发布前一致性检查：**
 
 ```
 data/VERSION.json: "1.7.2"（无 v）
-SKILL.md frontmatter: "v1.7.2"（有 v）
+SKILL.md frontmatter: "1.7.2"（无 v）
 --version 参数: "1.7.2"（无 v，仅 edit 时）
-→ 三者数值部分必须完全相同
+→ 三者必须完全相同，全部不带 v 前缀
 ```
 
 ---
@@ -68,10 +68,11 @@ SKILL.md frontmatter: "v1.7.2"（有 v）
 
 ## 使用原则
 
-- **全局路径**：安装到 `~/.claude/skills/`、`~/.openclaw/skills/` 等，也可 `--runtime` 或 `--skills-dir` 指定
-- **支持运行时**：`claude` / `openclaw` / `codex` / `opencode`
+- **安装模式**：
+  - 默认（模式 B）：先复制到中央存储 `~/.opscli/skills/<name>/`，再软链到各工具目录
+  - 显式 `--skills-dir`（模式 A）：直接复制到指定目录，不使用中央存储
+- **支持运行时**：`claude` / `openclaw` / `codex` / `opencode` / `workbuddy` / `trae-cn`
 - **幂等安装**：已存在时默认跳过，`--force` 强制覆盖
-- **远程安装中央存储**：解压到 `~/.opscli/skills/<name>/`，软链到各运行时目录
 - **升级范围**：仅 `ops-dataset-query` 支持远端数据升级；`ops-auth` / `ops-skills` 为本地静态 Skill
 
 ---

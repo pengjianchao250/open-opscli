@@ -55,7 +55,7 @@ ls SKILL.md data/VERSION.json     # 确认目录结构完整
 # 读取 data/VERSION.json 当前版本（如 "1.7.0"）
 # 递增版本号（如 Bug 修复 → "1.7.1"，功能新增 → "1.8.0"）
 # 更新 data/VERSION.json: {"name": "my-skill", "version": "1.8.0"}
-# 同步更新 SKILL.md frontmatter: version: v1.8.0
+# 同步更新 SKILL.md frontmatter: version: 1.8.0
 
 opscli skills publish --changelog "初始版本"
 # 输出：技能已发布，标识符：pengjianchao@my-skill
@@ -114,7 +114,7 @@ opscli skills edit pengjianchao@my-skill --share-type company    # 仅修改可�
 
 # 【铁律】上传文件前先更新版本号
 # 更新 data/VERSION.json: {"name": "my-skill", "version": "1.2.0"}
-# 同步更新 SKILL.md frontmatter: version: v1.2.0
+# 同步更新 SKILL.md frontmatter: version: 1.2.0
 
 opscli skills edit pengjianchao@my-skill \
   --dir ./my-skill/ \
