@@ -71,7 +71,7 @@ SKILL.md frontmatter: "1.7.2"（无 v）
 - **安装模式**：
   - 默认（模式 B）：先复制到中央存储 `~/.opscli/skills/<name>/`，再软链到各工具目录
   - 显式 `--skills-dir`（模式 A）：直接复制到指定目录，不使用中央存储
-- **支持运行时**：`claude` / `openclaw` / `codex` / `opencode` / `workbuddy` / `trae-cn`
+- **支持运行时**：`claude` / `openclaw` / `codex` / `opencode` / `workbuddy` / `trae-cn` / `agents`
 - **幂等安装**：已存在时默认跳过，`--force` 强制覆盖
 - **升级范围**：仅 `ops-dataset-query` 支持远端数据升级；`ops-auth` / `ops-skills` 为本地静态 Skill
 
