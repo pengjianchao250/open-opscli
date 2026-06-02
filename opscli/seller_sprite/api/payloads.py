@@ -6,6 +6,114 @@ from typing import Any
 from urllib.parse import urlencode
 
 
+PRODUCT_RESEARCH_RECOMMENDATION_PRESETS: dict[str, dict[str, Any]] = {
+    "低价长尾选品": {
+        "minRanking": "10000",
+        "maxRanking": "50000",
+        "maxSales": "300",
+        "maxPrice": "30",
+        "maxSellers": "1",
+    },
+    "研发新品榜": {
+        "productTags": ["NewRelease"],
+        "sellerTypes": ["FBA", "FBM"],
+        "maxSales": "500",
+    },
+    "潜力单变体": {
+        "putawayMonth": "6",
+        "minTotalUnitsGrowth": "20",
+        "maxVariations": "1",
+    },
+    "销量飙升": {
+        "minSales": "300",
+        "minTotalUnitsGrowth": "10",
+    },
+    "潜力市场": {
+        "putawayMonth": "6",
+        "minTotalUnitsGrowth": "10",
+        "maxSales": "600",
+    },
+    "未被满足的市场": {
+        "sellerTypes": ["FBM"],
+        "minSales": "300",
+        "putawayMonth": "6",
+    },
+    "不压库存的市场": {
+        "minSales": "600",
+        "minSellers": "3",
+        "putawayMonth": "6",
+    },
+    "投机市场": {
+        "minSales": "300",
+        "maxReviews": "50",
+        "putawayMonth": "6",
+    },
+    "高需求低要求市场": {
+        "minRankingCr": "99",
+        "maxReviews": "10",
+        "putawayMonth": "3",
+    },
+    "全品类铺货": {
+        "minRankingCr": "99",
+        "putawayMonth": "3",
+    },
+    "精品铺货": {
+        "minRankingCr": "99",
+        "putawayMonth": "3",
+    },
+    "低价商品": {
+        "eligibility": ["Y"],
+        "maxPrice": "10",
+        "smallAndLight": "lowPrice",
+        "lowPrice": "Y",
+    },
+    "新手推荐": {
+        "sellerTypes": ["FBA"],
+        "minSales": "300",
+        "minTotalUnitsGrowth": "3",
+        "minPrice": "15",
+        "maxPrice": "60",
+        "putawayMonth": "12",
+    },
+}
+
+PRODUCT_RESEARCH_RECOMMENDATION_ALIASES: dict[str, str] = {
+    "low-price-long-tail": "低价长尾选品",
+    "new-product-list": "研发新品榜",
+    "new-release": "研发新品榜",
+    "potential-single-variant": "潜力单变体",
+    "rapid-growth": "销量飙升",
+    "potential": "潜力市场",
+    "improved": "未被满足的市场",
+    "fulfilled": "不压库存的市场",
+    "speculative": "投机市场",
+    "high-demand": "高需求低要求市场",
+    "distribution-categories": "全品类铺货",
+    "competitive-products": "精品铺货",
+    "small-light": "低价商品",
+    "low-price": "低价商品",
+    "newbie-recommend": "新手推荐",
+}
+
+PRODUCT_RESEARCH_OFFICIAL_FIELD_ALIASES: dict[str, str] = {
+    "minUnits": "minSales",
+    "maxUnits": "maxSales",
+    "minRatings": "minReviews",
+    "maxRatings": "maxReviews",
+    "minStar": "minReviewRating",
+    "maxStar": "maxReviewRating",
+    "availableMonth": "putawayMonth",
+    "fulfillment": "sellerTypes",
+    "minVariations": "minVariations",
+    "maxVariations": "maxVariations",
+    "variation": "maxVariations",
+    "minBsr": "minRanking",
+    "maxBsr": "maxRanking",
+    "minSellers": "minSellers",
+    "maxSellers": "maxSellers",
+}
+
+
 def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造竞品查询 payload。"""
     market = _market(input_data)
@@ -34,7 +142,9 @@ def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
 
 def make_product_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造选产品 payload。"""
+    input_data = normalize_product_research_input(input_data)
     month = input_data.get("month") or input_data.get("period") or "2026-03"
+    preset = product_research_recommendation_preset(input_data)
     payload: dict[str, Any] = {
         "market": _market(input_data, default="JP"),
         "page": _int(input_data.get("page") or input_data.get("startPage"), 1),
@@ -48,16 +158,19 @@ def make_product_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
             "field": input_data.get("orderField") or "amz_unit",
             "desc": order_desc(input_data.get("orderDesc")),
         },
-        "productTags": csv(input_data.get("productTags")),
+        "productTags": [],
         "nodeIdPaths": csv(input_data.get("node") or input_data.get("category") or input_data.get("nodeIdPaths")),
-        "sellerTypes": csv(input_data.get("sellerTypes")),
-        "eligibility": csv(input_data.get("eligibility")),
+        "sellerTypes": [],
+        "eligibility": [],
         "pkgDimensionTypeList": csv(input_data.get("pkgDimensionTypeList")),
         "sellerNationList": csv(input_data.get("sellerNationList")),
         "smallAndLight": input_data.get("smallAndLight") or "N",
         "lowPrice": input_data.get("lowPrice") or "N",
     }
+    payload.update(preset)
+    _append_product_list_filters(payload, input_data)
     _append_product_range_filters(payload, input_data)
+    _append_product_extra_filters(payload, input_data)
     for key in ["keyword", "includeBrands", "excludeBrands", "includeSellers", "excludeSellers"]:
         if input_data.get(key):
             payload[key] = input_data[key]
@@ -355,8 +468,44 @@ def new_release_num(input_data: dict[str, Any]) -> int:
     return aliases.get(text, _int(value, 6))
 
 
+def product_research_recommendation_preset(input_data: dict[str, Any]) -> dict[str, Any]:
+    """解析选产品推荐模式并返回对应筛选参数。"""
+    value = (
+        input_data.get("recommendationMode")
+        or input_data.get("recommendMode")
+        or input_data.get("presetMode")
+        or input_data.get("productMode")
+        or input_data.get("mode")
+        or input_data.get("推荐模式")
+    )
+    if not value:
+        return {}
+    text = str(value).strip()
+    mode = PRODUCT_RESEARCH_RECOMMENDATION_ALIASES.get(_preset_key(text), text)
+    preset = PRODUCT_RESEARCH_RECOMMENDATION_PRESETS.get(mode)
+    return dict(preset or {})
+
+
+def normalize_product_research_input(input_data: dict[str, Any]) -> dict[str, Any]:
+    """兼容 SellerSprite 官方开放 API 的选产品入参命名。"""
+    normalized = dict(input_data)
+    for source, target in PRODUCT_RESEARCH_OFFICIAL_FIELD_ALIASES.items():
+        if source in normalized and target not in normalized:
+            normalized[target] = normalized[source]
+    badge_nr = normalized.get("badgeNR")
+    if badge_nr is not None and "productTags" not in normalized and truthy(badge_nr):
+        normalized["productTags"] = ["NewRelease"]
+    return normalized
+
+
 def _market(input_data: dict[str, Any], *, default: str = "DE") -> str:
     return str(input_data.get("market") or input_data.get("site") or default).upper()
+
+
+def _append_product_list_filters(payload: dict[str, Any], input_data: dict[str, Any]) -> None:
+    for key in ["productTags", "sellerTypes", "eligibility"]:
+        if input_data.get(key) is not None:
+            payload[key] = csv(input_data.get(key))
 
 
 def _append_product_range_filters(payload: dict[str, Any], input_data: dict[str, Any]) -> None:
@@ -375,6 +524,28 @@ def _append_product_range_filters(payload: dict[str, Any], input_data: dict[str,
             if input_data.get(alias) is not None:
                 payload[target] = str(input_data[alias])
                 break
+
+
+def _append_product_extra_filters(payload: dict[str, Any], input_data: dict[str, Any]) -> None:
+    for key in [
+        "minRanking",
+        "maxRanking",
+        "minSellers",
+        "maxSellers",
+        "putawayMonth",
+        "minTotalUnitsGrowth",
+        "maxVariations",
+        "minRankingCr",
+        "minVariations",
+        "smallAndLight",
+        "lowPrice",
+    ]:
+        if input_data.get(key) is not None:
+            payload[key] = input_data[key]
+
+
+def _preset_key(value: str) -> str:
+    return value.strip().lower().replace("_", "-").replace(" ", "-")
 
 
 def _int(value: Any, default: int) -> int:

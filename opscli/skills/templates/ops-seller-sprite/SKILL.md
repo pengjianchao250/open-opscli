@@ -22,7 +22,7 @@ MCP default export is `xls`, which the backend writes as an XLSX file. If the us
 
 ## Missing Params Policy
 
-- Ask only for missing required params.
+- Ask only for missing required params, including one-of required groups.
 - Do not ask for optional params. Omit them and let backend defaults apply unless the user explicitly provides values.
 - If a scenario has no required params, run it with defaults after mapping the intent.
 - Always include known user-provided conditions in `params`; do not invent category node IDs or hidden enum values.
@@ -32,7 +32,7 @@ MCP default export is `xls`, which the backend writes as an XLSX file. If the us
 
 | User intent | scenario |
 | --- | --- |
-| 选竞品, 竞品查询, competitor lookup | `competitor-lookup` |
+| 查竞品, 查产品, 选竞品, 竞品查询, competitor lookup | `competitor-lookup` |
 | 选产品, 产品筛选, product research | `product-research` |
 | 关键词挖掘, 挖词, keyword mining | `keyword-miner` |
 | 关键词反查, ASIN 反查, reverse ASIN | `keyword-reverse` |
@@ -43,8 +43,8 @@ MCP default export is `xls`, which the backend writes as an XLSX file. If the us
 
 | scenario | Required | Common optional params |
 | --- | --- | --- |
-| `competitor-lookup` | none | `keyword`, `brand`, `sellerName`, `asins`, `node` |
-| `product-research` | none | `node`/`category`, `minPrice`, `maxPrice`, `minSales`, `maxSales`, `minReviews`, `maxReviews`, `minReviewRating`, `maxReviewRating` |
+| `competitor-lookup` | one of `keyword`, `brand`, `sellerName`, `asins`, product link | `node` |
+| `product-research` | none | `recommendationMode`, `node`/`category`, `minPrice`, `maxPrice`, `minSales`, `maxSales`, `minReviews`, `maxReviews`, `minReviewRating`, `maxReviewRating` |
 | `keyword-miner` | `keyword` | `filterRootWord`, `amazonChoice`, `includeHighFrequency` |
 | `keyword-reverse` | `asin` | `amazonChoice`/`ac`, `includeHighFrequency`, `badges` |
 | `traffic-source` | `keywordOrAsin` | `keyword`, `asin`, `asins`, `order`, `desc` |
@@ -55,6 +55,29 @@ Always pass:
 - `site`: marketplace code such as `US`, `JP`, `DE`, `UK`, `FR`, `IT`, `ES`, `CA`, `IN`, `MX`.
 - `period`: `30d`, `nearly`, or a month such as `2026-03`.
 - `page_size`: default `100` unless the user requests otherwise.
+
+For `competitor-lookup`, product links are accepted as user input, but tool params should pass ASINs: extract the ASIN from Amazon product URLs and set `params.asins`.
+
+For `product-research`, 推荐模式传 `params.recommendationMode`，可用值：
+
+`低价长尾选品`, `研发新品榜`, `潜力单变体`, `销量飙升`, `潜力市场`, `未被满足的市场`, `不压库存的市场`, `投机市场`, `高需求低要求市场`, `全品类铺货`, `精品铺货`, `低价商品`, `新手推荐`.
+
+推荐模式会展开为一组筛选条件；用户同时提供同名筛选条件时，以用户显式条件为准。
+
+`product-research` accepts official SellerSprite API aliases in `params`; they are converted internally:
+
+| Official alias | Internal field |
+| --- | --- |
+| `minUnits` / `maxUnits` | `minSales` / `maxSales` |
+| `minRatings` / `maxRatings` | `minReviews` / `maxReviews` |
+| `minStar` / `maxStar` | `minReviewRating` / `maxReviewRating` |
+| `availableMonth` | `putawayMonth` |
+| `fulfillment` | `sellerTypes` |
+| `badgeNR=true` | `productTags=["NewRelease"]` |
+| `variation` | `maxVariations` |
+| `minBsr` / `maxBsr` | `minRanking` / `maxRanking` |
+
+If both alias and internal field are provided, the internal field wins.
 
 ## Defaults
 
@@ -118,6 +141,36 @@ Default XLSX export:
   "site": "US",
   "period": "30d",
   "params": {}
+}
+```
+
+Product research with recommendation mode:
+
+```json
+{
+  "scenario": "product-research",
+  "site": "US",
+  "period": "30d",
+  "params": {
+    "recommendationMode": "精品铺货"
+  }
+}
+```
+
+Product research with official aliases:
+
+```json
+{
+  "scenario": "product-research",
+  "site": "US",
+  "period": "30d",
+  "params": {
+    "minUnits": 300,
+    "maxRatings": 50,
+    "availableMonth": 6,
+    "fulfillment": ["FBA"],
+    "badgeNR": true
+  }
 }
 ```
 
