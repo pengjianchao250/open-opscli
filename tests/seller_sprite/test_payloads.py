@@ -1,6 +1,11 @@
 import pytest
 
-from opscli.seller_sprite.api.payloads import make_competitor_payload, make_keyword_miner_payload, make_keyword_reverse_payload
+from opscli.seller_sprite.api.payloads import (
+    make_competitor_payload,
+    make_keyword_miner_payload,
+    make_keyword_reverse_payload,
+    make_product_research_payload,
+)
 from opscli.seller_sprite.api.scenarios import get_scenario
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 
@@ -82,6 +87,45 @@ def test_keyword_reverse_payload_keeps_orchestration_fields_for_manager():
     assert payload["limit"] == 100
     assert payload["skip"] == 0
     assert payload["includeHighFrequency"] is True
+
+
+def test_product_research_accepts_recommendation_mode():
+    payload = make_product_research_payload(
+        {
+            "site": "US",
+            "period": "30d",
+            "recommendationMode": "低价商品",
+        }
+    )
+
+    assert payload["market"] == "US"
+    assert payload["monthName"] == "bsr_sales_nearly"
+    assert payload["eligibility"] == ["Y"]
+    assert payload["maxPrice"] == "10"
+    assert payload["smallAndLight"] == "lowPrice"
+    assert payload["lowPrice"] == "Y"
+
+
+def test_product_research_accepts_official_field_aliases():
+    payload = make_product_research_payload(
+        {
+            "site": "US",
+            "period": "30d",
+            "minUnits": 300,
+            "maxRatings": 50,
+            "availableMonth": 6,
+            "fulfillment": ["FBA"],
+            "badgeNR": True,
+            "variation": 1,
+        }
+    )
+
+    assert payload["minSales"] == "300"
+    assert payload["maxReviews"] == "50"
+    assert payload["putawayMonth"] == 6
+    assert payload["sellerTypes"] == ["FBA"]
+    assert payload["productTags"] == ["NewRelease"]
+    assert payload["maxVariations"] == 1
 
 
 def test_required_params_are_validated_before_request():

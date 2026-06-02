@@ -60,43 +60,38 @@ class SellerSpriteApiManager:
         account = self.account_provider.get_default()
         warnings: list[dict[str, Any]] = []
         async with SellerSpriteApiClient(account=account) as client:
-            login = await client.login()
-            if scenario.method == "GET":
-                main_response = await client.get_json(
-                    scenario.endpoint_for(payload),
-                    _main_payload(request.scenario, payload),
-                    referer=scenario.build_referer(payload),
+            login = {"mode": "cached", "cookie_names": client.cookie_names()}
+            if not client.has_cookies():
+                login = await _login_with_account_refresh(
+                    client=client,
+                    account_provider=self.account_provider,
+                    warnings=warnings,
                 )
-            elif scenario.method == "FORM":
-                response_html = await client.post_form(
-                    scenario.endpoint_for(payload),
-                    _main_payload(request.scenario, payload),
+            main_response = await _request_with_session_retry(
+                client=client,
+                warnings=warnings,
+                stage="main",
+                action=lambda: _run_main_request(
+                    client=client,
+                    method=scenario.method,
+                    endpoint=scenario.endpoint_for(payload),
+                    payload=_main_payload(request.scenario, payload),
                     referer=scenario.build_referer(payload),
-                )
-                response_html_path = root_dir / "response.html"
-                response_html_path.write_text(response_html, encoding="utf-8")
-                rows = parse_market_research_html(response_html)
-                main_response = {
-                    "code": "OK",
-                    "data": {
-                        "items": rows,
-                    },
-                    "response_html_path": str(response_html_path),
-                    "response_html_length": len(response_html),
-                }
-            else:
-                main_response = await client.post_json(
-                    scenario.endpoint_for(payload),
-                    _main_payload(request.scenario, payload),
-                    referer=scenario.build_referer(payload),
-                )
+                    root_dir=root_dir,
+                ),
+            )
             high_frequency_response = None
             if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload):
                 try:
-                    high_frequency_response = await client.post_json(
-                        scenario.high_frequency_endpoint_for(payload) or "",
-                        _high_frequency_payload(request.scenario, payload),
-                        referer=scenario.build_referer(payload),
+                    high_frequency_response = await _request_with_session_retry(
+                        client=client,
+                        warnings=warnings,
+                        stage="high_frequency",
+                        action=lambda: client.post_json(
+                            scenario.high_frequency_endpoint_for(payload) or "",
+                            _high_frequency_payload(request.scenario, payload),
+                            referer=scenario.build_referer(payload),
+                        ),
                     )
                 except SellerSpriteApiError as exc:
                     warnings.append(
@@ -172,6 +167,81 @@ class SellerSpriteApiManager:
         if not base_dir.is_absolute():
             base_dir = Path.cwd() / base_dir
         return base_dir.resolve() / job_id
+
+
+async def _run_main_request(
+    *,
+    client: SellerSpriteApiClient,
+    method: str,
+    endpoint: str,
+    payload: dict[str, Any],
+    referer: str,
+    root_dir: Path,
+) -> dict[str, Any]:
+    if method == "GET":
+        return await client.get_json(endpoint, payload, referer=referer)
+    if method == "FORM":
+        response_html = await client.post_form(endpoint, payload, referer=referer)
+        response_html_path = root_dir / "response.html"
+        response_html_path.write_text(response_html, encoding="utf-8")
+        rows = parse_market_research_html(response_html)
+        return {
+            "code": "OK",
+            "data": {
+                "items": rows,
+            },
+            "response_html_path": str(response_html_path),
+            "response_html_length": len(response_html),
+        }
+    return await client.post_json(endpoint, payload, referer=referer)
+
+
+async def _request_with_session_retry(
+    *,
+    client: SellerSpriteApiClient,
+    warnings: list[dict[str, Any]],
+    stage: str,
+    action,
+) -> dict[str, Any]:
+    try:
+        return await action()
+    except SellerSpriteApiError as exc:
+        if not exc.is_session_expired():
+            raise
+        login = await client.login()
+        warnings.append(
+            {
+                "stage": stage,
+                "message": "卖家精灵会话过期，已重新登录并重试一次",
+                "error": exc.to_dict(),
+                "relogin": login,
+            }
+        )
+        return await action()
+
+
+async def _login_with_account_refresh(
+    *,
+    client: SellerSpriteApiClient,
+    account_provider: SellerSpriteAccountProvider,
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    try:
+        return await client.login()
+    except SellerSpriteApiError as exc:
+        refreshed_account = account_provider.get_default(refresh=True)
+        if refreshed_account == client.account:
+            raise
+        warnings.append(
+            {
+                "stage": "login",
+                "message": "卖家精灵登录失败，已刷新集成账号并重试一次",
+                "error": exc.to_dict(),
+                "account": refreshed_account.to_public_dict(),
+            }
+        )
+        client.switch_account(refreshed_account)
+        return await client.login()
 
 
 def _main_payload(scenario: str, payload: dict[str, Any]) -> dict[str, Any]:

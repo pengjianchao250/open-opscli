@@ -21,6 +21,12 @@ Use these MCP tools:
 4. Call `seller_sprite_export` when the user needs the file link.
 5. If MCP tools are unavailable, report that SellerSprite MCP is unavailable. Do not fall back to CLI in user-facing flows.
 
+If `seller_sprite_run` fails with `ERR_GLOBAL_SESSION_EXPIRED` or a message indicating SellerSprite session expiration, retry the same call once after the backend refreshes login. Do not ask the user for SellerSprite credentials.
+
+SellerSprite login is cached by the backend. Do not trigger repeated login manually; normal runs reuse cached cookies and only re-login when the session expires.
+
+SellerSprite integration accounts are cached in the backend process for 10 minutes by default. Session expiration should only trigger SellerSprite re-login with the cached account; refresh integration accounts only when SellerSprite login itself fails.
+
 ## Export Format
 
 - MCP default: `xls`, which the backend writes as an XLSX file.
@@ -191,6 +197,7 @@ Scenario defaults:
 
 For `seller_sprite_run`, read:
 
+- `data.summary`
 - `data.job_id`
 - `data.row_count`
 - `data.export.filename`
@@ -199,3 +206,25 @@ For `seller_sprite_run`, read:
 - `data.export.format`
 
 If `success=false`, report `error.message` and do not reuse stale files.
+
+Keep the final answer short and user-facing. Do not print the full tool call JSON, raw params, or long local paths unless the user explicitly asks for debugging details.
+
+If the tool returns `data.summary`, use that summary as the primary final answer. Do not rewrite it into raw JSON. Only add extra details when the user explicitly asks.
+
+For successful runs, use this shape:
+
+```md
+已按 `site` 做好了 `scenario title`，并导出为 `format`。
+
+结果：
+- `job_id`: xxx
+- `row_count`: 20
+- 导出文件: [filename](url-or-path)
+```
+
+Rules:
+
+- Put only important conditions in the first sentence, such as site, keyword, ASIN, period, or recommendation mode.
+- Prefer filename or link for the export file; avoid showing full local paths as standalone code blocks.
+- If row count is 0, say `row_count: 0` and include the parameters used only in a compact inline form.
+- Do not expose SellerSprite account credentials.
