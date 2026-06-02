@@ -17,6 +17,7 @@ def runtime_to_tool_name(runtime: str) -> str:
         "openclaw": "openclaw",
         "trae-cn": "trae-solo",
         "central": "中央存储",   # 无 AI 工具时仅写入中央存储的合成记录
+        "agents": "agents",
     }
     return mapping.get(runtime, runtime)
 
