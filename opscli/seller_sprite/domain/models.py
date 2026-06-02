@@ -33,7 +33,7 @@ class SellerSpriteScenarioRequest:
     page_size: int = 100
     job_id: str | None = None
     output_dir: str | None = None
-    export_format: str = "xlsx"
+    export_format: str = "xls"
 
     def to_dict(self) -> dict[str, Any]:
         """转换为可序列化字典。"""

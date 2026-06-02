@@ -164,6 +164,8 @@ def _main_sheet_title(*, scenario: str, site: str, period: str, params: dict[str
         title = f"Product-{site.upper()}-{_period_label(period)}"
     elif scenario == "competitor-lookup":
         title = f"Competitor-{site.upper()}-{_period_label(period)}"
+    elif scenario == "market-research":
+        title = f"Market-research-{site.upper()}-{_period_label(period)}"
     else:
         title = scenario
     return _safe_sheet_title(title)

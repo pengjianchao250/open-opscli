@@ -1,0 +1,135 @@
+{
+  "scenario_id": "competitor-lookup",
+  "title": "选竞品",
+  "web_route": "/v3/competitor-lookup",
+  "api": {
+    "method": "POST",
+    "endpoint": "/v3/api/competing-lookup",
+    "query_fields": [],
+    "body_fields": [
+      "market",
+      "monthName",
+      "asins",
+      "keywords",
+      "page",
+      "nodeIdPaths",
+      "symbolFlag",
+      "size",
+      "order",
+      "lowPrice",
+      "keyword",
+      "brand",
+      "sellerName"
+    ],
+    "field_aliases": {
+      "keyword": "keywords"
+    }
+  },
+  "export_api": {
+    "method": "POST",
+    "endpoint": "/v3/api/competing-lookup/export",
+    "query_fields": [],
+    "body_fields": [
+      "market",
+      "monthName",
+      "asins",
+      "keywords",
+      "nodeIdPaths",
+      "symbolFlag",
+      "order",
+      "lowPrice",
+      "mainImage",
+      "exportAsins",
+      "hideSellerInfo"
+    ],
+    "response": {
+      "success_code": "OK",
+      "data": null
+    }
+  },
+  "download_mark_api": {
+    "method": "GET",
+    "endpoint": "/v2/export-log/{id}/mark-as-downloaded"
+  },
+  "auxiliary_apis": [
+    {
+      "method": "GET",
+      "endpoint": "/v3/api/product-research/init",
+      "purpose": "产品类筛选项初始化"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v3/api/relation/config/cl",
+      "purpose": "选竞品配置"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v2/common/available-export-appointment",
+      "purpose": "导出预约状态"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v2/common/remain-export-num/EM3",
+      "purpose": "选竞品剩余导出次数"
+    }
+  ],
+  "required_params": [],
+  "response": {
+    "row_path": "data.items",
+    "fallback_row_path": "data",
+    "pagination_fields": [
+      "data.pages",
+      "data.page",
+      "data.size",
+      "data.total",
+      "data.took",
+      "data.hasNextPage"
+    ],
+    "context_fields": ["data.guestId", "data.url", "data.order", "data.terminal", "data.symbolChecked"]
+  },
+  "primary_metrics": [
+    {"title": "大类BSR", "source": "bsrRank"},
+    {"title": "月销量", "source": "amzUnit"},
+    {"title": "月销量增长率", "source": "totalUnitsGrowth"},
+    {"title": "月销售额", "source": "totalAmount"},
+    {"title": "子体销量", "source": "totalUnits"},
+    {"title": "子体销售额", "source": "subTotalAmount"},
+    {"title": "变体数", "source": "variations"},
+    {"title": "价格", "source": "price"},
+    {"title": "评分数", "source": "reviews"},
+    {"title": "评分", "source": "rating"},
+    {"title": "留评率", "source": "reviewsRate"},
+    {"title": "毛利率", "source": "profit"},
+    {"title": "卖家数", "source": "sellers"},
+    {"title": "LQS", "source": "lqs"}
+  ],
+  "official_template": {
+    "source_workbook_name": "Competitor-US-Last-30-days-442354.xlsx",
+    "captured_workbook_name": "Competitor-US-Last-30-days-650672.xlsx",
+    "captured_workbook_path": "tmp-validation/seller-sprite-browser-capture/20260528-150402/Competitor-US-Last-30-days-650672.xlsx",
+    "captured_download_url": "https://o.sellersprite.com/batch-exports/2026/5/Competitor-US-Last-30-days-650672.xlsx",
+    "headers_file": "official-headers.json",
+    "main_sheet_example": "Competitor-US-Last-30-days",
+    "captured_main_sheet_example": "Competitor-US-Last-30-days",
+    "official_notes_sheet": true,
+    "captured_notes_sheet": "Notes",
+    "generated_notes_sheet": false,
+    "header_count": 64,
+    "captured_header_count": 63,
+    "captured_export_options": {
+      "hideSellerInfo": true,
+      "missing_when_hidden": ["卖家信息"]
+    }
+  },
+  "capture_evidence": {
+    "captured_at": "2026-05-28T15:27:42",
+    "capture_dir": "tmp-validation/seller-sprite-browser-capture/20260528-150402",
+    "query_request": "0106-152742-v3-api-competing-lookup.request.json",
+    "query_response": "0106-152742-v3-api-competing-lookup.response.json",
+    "export_request": "0111-152744-v3-api-competing-lookup-export.request.json",
+    "export_response": "0111-152744-v3-api-competing-lookup-export.response.json",
+    "download_file": "download-0001-Competitor-US-Last-30-days-650672-xlsx",
+    "download_copy": "Competitor-US-Last-30-days-650672.xlsx",
+    "download_mark_response": "0120-153237-v2-export-log-14984892-mark-as-downloaded.response.json"
+  }
+}

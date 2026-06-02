@@ -24,16 +24,34 @@ class SellerSpriteApiError(SellerSpriteError):
 
     code = "SELLER_SPRITE_API_ERROR"
 
-    def __init__(self, message: str, *, status_code: int | None = None, response_excerpt: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        response_excerpt: str | None = None,
+        api_code: str | None = None,
+        api_message: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.response_excerpt = response_excerpt
+        self.api_code = api_code
+        self.api_message = api_message
+
+    def is_session_expired(self) -> bool:
+        """判断是否为卖家精灵会话过期类错误。"""
+        return self.api_code in {"ERR_GLOBAL_SESSION_EXPIRED"}
 
     def to_dict(self) -> dict[str, object]:
         """转换为 MCP `_err` 可识别的错误结构。"""
         error: dict[str, object] = {"code": self.code, "message": str(self)}
         if self.status_code is not None:
             error["status_code"] = self.status_code
+        if self.api_code:
+            error["api_code"] = self.api_code
+        if self.api_message:
+            error["api_message"] = self.api_message
         if self.response_excerpt:
             error["response_excerpt"] = self.response_excerpt
         return error

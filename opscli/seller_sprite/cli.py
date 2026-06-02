@@ -29,7 +29,7 @@ def run_scenario(
     period: str = typer.Option("30d", "--period", help="日期，如 30d、nearly、2026-03"),
     params: str = typer.Option("{}", "--params", help="场景参数 JSON 字符串"),
     page_size: int = typer.Option(100, "--page-size", help="每页数量"),
-    export_format: str = typer.Option("xlsx", "--export-format", help="导出格式：xlsx/xls/json"),
+    export_format: str = typer.Option("xls", "--export-format", help="导出格式：xls/xlsx/json"),
     output_dir: str | None = typer.Option(None, "--output-dir", help="输出目录"),
     job_id: str | None = typer.Option(None, "--job-id", help="指定任务 ID"),
 ) -> None:

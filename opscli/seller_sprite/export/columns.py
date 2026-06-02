@@ -156,12 +156,78 @@ KEYWORD_REVERSE_COLUMNS = [
 ]
 
 
+TRAFFIC_SOURCE_COLUMNS = [
+    ExportColumn("ASIN", "asin"),
+    ExportColumn("标题", "title"),
+    ExportColumn("价格", "price"),
+    ExportColumn("评分", "rating"),
+    ExportColumn("评分数", "reviews"),
+    ExportColumn("变体数", "variations"),
+    ExportColumn("SKU", "sku"),
+    ExportColumn("流量来源", "badgeLabels", transform="listJoin"),
+    ExportColumn("全部流量词", "keywords"),
+    ExportColumn("自然搜索词", "counter.NATURAL_SEARCHING"),
+    ExportColumn("AC推荐词", "counter.AMAZON_CHOICE"),
+    ExportColumn("ER推荐词", "counter.EDITORIAL_RECOMMENDATIONS"),
+    ExportColumn("4星推荐词", "counter.FOUR_STAR"),
+    ExportColumn("HR推荐词", "counter.HIGHLY_RATED"),
+    ExportColumn("SP广告词", "counter.ADS"),
+    ExportColumn("视频广告词", "counter.SPONSOR_VIDEO"),
+    ExportColumn("品牌广告词", "counter.SPONSOR_BRAND"),
+]
+
+
+MARKET_RESEARCH_COLUMNS = [
+    ExportColumn("细分市场", "market"),
+    ExportColumn("细分市场(翻译)", "marketCn"),
+    ExportColumn("市场路径", "marketPath"),
+    ExportColumn("样本数量", "sampleQuantity"),
+    ExportColumn("月总销量", "totalSales"),
+    ExportColumn("月均销量", "avgSales"),
+    ExportColumn("__AVG_REVENUE__", "avgRevenue"),
+    ExportColumn("__AVG_PRICE__", "avgPrice"),
+    ExportColumn("平均评分数", "avgReviews"),
+    ExportColumn("平均星级", "avgRating"),
+    ExportColumn("平均BSR", "avgBsr"),
+    ExportColumn("平均卖家数", "avgSellers"),
+    ExportColumn("卖家类型", "sellerTypes"),
+    ExportColumn("商品集中度", "productConcentration"),
+    ExportColumn("品牌集中度", "brandConcentration"),
+    ExportColumn("卖家集中度", "sellerConcentration"),
+    ExportColumn("商品总数", "totalProducts"),
+    ExportColumn("平均重量", "avgWeight"),
+    ExportColumn("平均体积", "avgVolume"),
+    ExportColumn("平均毛利率", "avgProfit"),
+    ExportColumn("A+占比", "ebcRatio"),
+    ExportColumn("卖家所属地", "sellerNation"),
+    ExportColumn("头部Listing月均销量", "headListingAvgSales"),
+    ExportColumn("垄断度", "monopoly"),
+    ExportColumn("__HEAD_AVG_REVENUE__", "headListingAvgRevenue"),
+    ExportColumn("头部Listing平均BSR", "headListingAvgBsr"),
+    ExportColumn("新品数量", "newCount"),
+    ExportColumn("新品占比", "newRatio"),
+    ExportColumn("新品月均销量", "newAvgSales"),
+    ExportColumn("__NEW_AVG_REVENUE__", "newAvgRevenue"),
+    ExportColumn("__NEW_AVG_PRICE__", "newAvgPrice"),
+    ExportColumn("新品平均评分数", "newAvgReviews"),
+    ExportColumn("新品平均星级", "newAvgRating"),
+    ExportColumn("退货率", "returnRate"),
+    ExportColumn("同类目退货率", "categoryReturnRate"),
+    ExportColumn("搜索购买比", "searchPurchaseRatio"),
+    ExportColumn("同类目搜索购买比", "categorySearchPurchaseRatio"),
+]
+
+
 def columns_for_scenario(scenario: str, site: str) -> list[ExportColumn]:
     """返回场景对应官方模板列。"""
     if scenario == "keyword-miner":
         return KEYWORD_MINER_COLUMNS
     if scenario == "keyword-reverse":
         return KEYWORD_REVERSE_COLUMNS
+    if scenario == "traffic-source":
+        return TRAFFIC_SOURCE_COLUMNS
+    if scenario == "market-research":
+        return _market_research_columns(currency_label(site))
     if scenario in {"competitor-lookup", "product-research"}:
         return _product_columns(currency_label(site))
     return []
@@ -184,4 +250,18 @@ def _product_columns(currency: str) -> list[ExportColumn]:
     return [
         ExportColumn(replacements.get(column.title, column.title), column.source, column.fallback, column.transform)
         for column in PRODUCT_COLUMNS_COMMON
+    ]
+
+
+def _market_research_columns(currency: str) -> list[ExportColumn]:
+    replacements = {
+        "__AVG_REVENUE__": f"月均销售额({currency})",
+        "__AVG_PRICE__": f"平均价格({currency})",
+        "__HEAD_AVG_REVENUE__": f"头部Listing月均销售额({currency})",
+        "__NEW_AVG_REVENUE__": f"新品月均销售额({currency})",
+        "__NEW_AVG_PRICE__": f"新品平均价格({currency})",
+    }
+    return [
+        ExportColumn(replacements.get(column.title, column.title), column.source, column.fallback, column.transform)
+        for column in MARKET_RESEARCH_COLUMNS
     ]
