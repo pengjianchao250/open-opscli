@@ -483,6 +483,12 @@ class QueryManager:
         return refs
 
     def _validate_simple_filter_operators(self, filters: list[dict]) -> None:
+        """校验并标准化 filters 中的 operator 字段。
+
+        支持符号操作符（=, >=, <=, >, <, !=, <>, ==）自动转换为语义操作符，
+        与 query build 的 _WHERE_OP_MAP 行为对齐。就地修改 node 确保后续
+        build_simple 构造 payload 时使用标准化后的值。
+        """
         valid = self._VALID_FILTER_OPERATORS
         logical = self._LOGICAL_OPERATORS
 
@@ -494,11 +500,17 @@ class QueryManager:
                 op_str = str(op).strip()
                 if op_str in logical:
                     pass  # AND/OR 逻辑操作符，合法跳过
-                elif op_str not in valid:
-                    raise InvalidPayloadError(
-                        f"无效的过滤操作符: {op}\n"
-                        f"  支持: {', '.join(sorted(valid))}"
-                    )
+                else:
+                    # 符号操作符自动标准化为语义操作符
+                    normalized = self._WHERE_OP_MAP.get(op_str, op_str)
+                    if normalized != op_str:
+                        node["operator"] = normalized
+                        op_str = normalized
+                    if op_str not in valid:
+                        raise InvalidPayloadError(
+                            f"无效的过滤操作符: {op}\n"
+                            f"  支持: {', '.join(sorted(valid))}"
+                        )
             for child in node.get("conditions") or []:
                 walk(child)
 
