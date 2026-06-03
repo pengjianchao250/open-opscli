@@ -61,7 +61,7 @@ class SellerSpriteApiManager:
         warnings: list[dict[str, Any]] = []
         async with SellerSpriteApiClient(account=account) as client:
             login = {"mode": "cached", "cookie_names": client.cookie_names()}
-            if not client.has_cookies():
+            if not client.has_login_cookies():
                 login = await _login_with_account_refresh(
                     client=client,
                     account_provider=self.account_provider,
@@ -80,6 +80,27 @@ class SellerSpriteApiManager:
                     root_dir=root_dir,
                 ),
             )
+            if _looks_like_guest_limited_response(main_response, page_size=page_size):
+                login = await _login_with_account_refresh(
+                    client=client,
+                    account_provider=self.account_provider,
+                    warnings=warnings,
+                )
+                warnings.append(
+                    {
+                        "stage": "main",
+                        "message": "卖家精灵疑似返回游客限制数据，已登录并重试一次",
+                        "login": login,
+                    }
+                )
+                main_response = await _run_main_request(
+                    client=client,
+                    method=scenario.method,
+                    endpoint=scenario.endpoint_for(payload),
+                    payload=_main_payload(request.scenario, payload),
+                    referer=scenario.build_referer(payload),
+                    root_dir=root_dir,
+                )
             high_frequency_response = None
             if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload):
                 try:
@@ -275,6 +296,27 @@ def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     return []
+
+
+def _looks_like_guest_limited_response(response: dict[str, Any], *, page_size: int) -> bool:
+    if page_size <= 20:
+        return False
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, dict):
+        return False
+    items = data.get("items")
+    if not isinstance(items, list) or len(items) != 20:
+        return False
+    total = _int(data.get("total"), 0)
+    pages = _int(data.get("pages"), 0)
+    size = _int(data.get("size"), 0)
+    return bool(
+        data.get("guestId")
+        or data.get("guestVisited") is True
+        or size == 20
+        or total > 20
+        or pages > 1
+    )
 
 
 def _extract_high_frequency_rows(response: dict[str, Any] | None) -> list[dict[str, Any]]:
