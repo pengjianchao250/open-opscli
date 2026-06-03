@@ -1,6 +1,6 @@
 {
   "scenario_id": "competitor-lookup",
-  "title": "竞品查询",
+  "title": "选竞品",
   "web_route": "/v3/competitor-lookup",
   "api": {
     "method": "POST",
@@ -60,7 +60,7 @@
     {
       "method": "GET",
       "endpoint": "/v3/api/relation/config/cl",
-      "purpose": "竞品查询配置"
+      "purpose": "选竞品配置"
     },
     {
       "method": "GET",
@@ -70,7 +70,7 @@
     {
       "method": "GET",
       "endpoint": "/v2/common/remain-export-num/EM3",
-      "purpose": "竞品查询剩余导出次数"
+      "purpose": "选竞品剩余导出次数"
     }
   ],
   "required_params": [],

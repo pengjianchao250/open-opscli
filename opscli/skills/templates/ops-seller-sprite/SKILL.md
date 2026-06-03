@@ -1,11 +1,11 @@
 ---
 name: ops-seller-sprite
-description: Use when the user asks to query or export SellerSprite/卖家精灵 data through opscli MCP or CLI, including 竞品查询, 选竞品, 关键词挖掘, 关键词反查, ASIN reverse lookup, keyword mining, product research, competitor lookup, XLS/XLSX export, or JSON export. Prefer MCP tools seller_sprite_scenarios, seller_sprite_run, seller_sprite_job_status, and seller_sprite_export when available; fall back to opscli seller-sprite commands only when MCP tools are unavailable.
+description: Use when the user asks to query or export SellerSprite/卖家精灵 data through MCP tools or CLI, including 竞品查询, 选竞品, 选产品, 选市场, 查流量来源, 关键词挖掘, 关键词反查, ASIN reverse lookup, keyword mining, product research, market research, traffic source, competitor lookup, XLS/XLSX export, or JSON export.
 ---
 
 # ops-seller-sprite
 
-Use this skill to turn natural-language SellerSprite requests into MCP tool calls or `opscli seller-sprite` commands.
+Use this skill to turn natural-language SellerSprite requests into SellerSprite MCP tool calls or CLI commands. Prefer MCP when available; use CLI when MCP tools are unavailable.
 
 ## Default Path
 
@@ -16,32 +16,96 @@ Prefer MCP tools:
 3. Collect missing required params only.
 4. Call `seller_sprite_run`.
 5. If the user asks for the generated file or link, call `seller_sprite_export` with the returned `job_id`.
+6. If MCP tools are unavailable, use CLI mode with equivalent scenario, site, period, params, and export format.
 
-MCP default export is `json`. If the user asks for Excel, XLS, XLSX, 表格, or 导出文件, pass `export_format: "xlsx"`.
+MCP default export is `xls`, which the backend writes as an XLSX file. If the user explicitly asks for JSON, pass `export_format: "json"`.
+
+If `seller_sprite_run` fails with `ERR_GLOBAL_SESSION_EXPIRED` or a message indicating SellerSprite session expiration, retry the same call once after the backend refreshes login. Do not ask the user for SellerSprite credentials.
+
+SellerSprite login is cached by the backend. Do not trigger repeated login manually; normal runs reuse cached cookies and only re-login when the session expires.
+
+SellerSprite integration accounts are cached in the backend process for 10 minutes by default. Session expiration should only trigger SellerSprite re-login with the cached account; refresh integration accounts only when SellerSprite login itself fails.
+
+## Missing Params Policy
+
+- Ask only for missing required params, including one-of required groups.
+- Do not ask for optional params. Omit them and let backend defaults apply unless the user explicitly provides values.
+- If a scenario has no required params, run it with defaults after mapping the intent.
+- Always include known user-provided conditions in `params`; do not invent category node IDs or hidden enum values.
+- If category text maps to multiple possible nodes or no local node ID is available, ask the user to choose or run without the category filter.
 
 ## Intent Map
 
 | User intent | scenario |
 | --- | --- |
-| 竞品查询, 竞品监控, competitor lookup | `competitor-lookup` |
-| 选竞品, 产品调研, product research | `product-research` |
+| 查竞品, 查产品, 选竞品, 竞品查询, competitor lookup | `competitor-lookup` |
+| 选产品, 产品筛选, product research | `product-research` |
 | 关键词挖掘, 挖词, keyword mining | `keyword-miner` |
 | 关键词反查, ASIN 反查, reverse ASIN | `keyword-reverse` |
+| 查流量来源, 流量来源, traffic source | `traffic-source` |
+| 选市场, market research | `market-research` |
 
 ## Required Params
 
 | scenario | Required | Common optional params |
 | --- | --- | --- |
-| `competitor-lookup` | none | `keyword`, `brand`, `sellerName`, `asins`, `node` |
-| `product-research` | none | `keyword`, `node`, `includeBrands`, `excludeBrands`, `includeSellers`, `excludeSellers` |
+| `competitor-lookup` | one of `keyword`, `brand`, `sellerName`, `asins`, product link | `node` |
+| `product-research` | none | `recommendationMode`, `node`/`category`, `minPrice`, `maxPrice`, `minSales`, `maxSales`, `minReviews`, `maxReviews`, `minReviewRating`, `maxReviewRating` |
 | `keyword-miner` | `keyword` | `filterRootWord`, `amazonChoice`, `includeHighFrequency` |
 | `keyword-reverse` | `asin` | `amazonChoice`/`ac`, `includeHighFrequency`, `badges` |
+| `traffic-source` | `keywordOrAsin` | `keyword`, `asin`, `asins`, `order`, `desc` |
+| `market-research` | none | `node`/`category`, `departmentKeyword`, `newReleaseNum`/`newReleaseMonths`, `topn` |
 
 Always pass:
 
 - `site`: marketplace code such as `US`, `JP`, `DE`, `UK`, `FR`, `IT`, `ES`, `CA`, `IN`, `MX`.
 - `period`: `30d`, `nearly`, or a month such as `2026-03`.
 - `page_size`: default `100` unless the user requests otherwise.
+
+For `competitor-lookup`, product links are accepted as user input, but tool params should pass ASINs: extract the ASIN from Amazon product URLs and set `params.asins`.
+
+For `product-research`, 推荐模式传 `params.recommendationMode`，可用值：
+
+`低价长尾选品`, `研发新品榜`, `潜力单变体`, `销量飙升`, `潜力市场`, `未被满足的市场`, `不压库存的市场`, `投机市场`, `高需求低要求市场`, `全品类铺货`, `精品铺货`, `低价商品`, `新手推荐`.
+
+推荐模式会展开为一组筛选条件；用户同时提供同名筛选条件时，以用户显式条件为准。
+
+`product-research` accepts official SellerSprite API aliases in `params`; they are converted internally:
+
+| Official alias | Internal field |
+| --- | --- |
+| `minUnits` / `maxUnits` | `minSales` / `maxSales` |
+| `minRatings` / `maxRatings` | `minReviews` / `maxReviews` |
+| `minStar` / `maxStar` | `minReviewRating` / `maxReviewRating` |
+| `availableMonth` | `putawayMonth` |
+| `fulfillment` | `sellerTypes` |
+| `badgeNR=true` | `productTags=["NewRelease"]` |
+| `variation` | `maxVariations` |
+| `minBsr` / `maxBsr` | `minRanking` / `maxRanking` |
+
+If both alias and internal field are provided, the internal field wins.
+
+## Defaults
+
+Top-level defaults:
+
+| Field | Default |
+| --- | --- |
+| `site` | `US` |
+| `period` | `30d` |
+| `page_size` | `100` |
+| `export_format` | `xls` (XLSX file) |
+
+Scenario defaults:
+
+| scenario | Defaults |
+| --- | --- |
+| `competitor-lookup` | `page=1`, `order.field=amz_unit`, `order.desc=true`, `lowPrice=N` |
+| `product-research` | `page=1`, `selectType=2`, `order.field=amz_unit`, `order.desc=true`, `smallAndLight=N`, `lowPrice=N` |
+| `keyword-miner` | `pageNum=1`, `orderBy=5`, `desc=true`, `filterRootWord=0`, `amazonChoice=false`, `includeHighFrequency=true` |
+| `keyword-reverse` | `page=1`, `order=12`, `desc=true`, `ac=false`, `includeHighFrequency=true` |
+| `traffic-source` | `pageNo=1`, `order=10`, `desc=true` |
+| `market-research` | `marketId=US(1)`, `monthName=bsr_sales_nearly`, `sampleNumber=1`, `topn=10`, `newReleaseNum=6`, `order.field=total_sales`, `order.desc=true` |
 
 ## MCP Examples
 
@@ -70,6 +134,48 @@ Keyword mining JSON:
     "keyword": "flashlight",
     "filterRootWord": 1,
     "amazonChoice": true
+  },
+  "export_format": "json"
+}
+```
+
+Default XLSX export:
+
+```json
+{
+  "scenario": "product-research",
+  "site": "US",
+  "period": "30d",
+  "params": {}
+}
+```
+
+Product research with recommendation mode:
+
+```json
+{
+  "scenario": "product-research",
+  "site": "US",
+  "period": "30d",
+  "params": {
+    "recommendationMode": "精品铺货"
+  }
+}
+```
+
+Product research with official aliases:
+
+```json
+{
+  "scenario": "product-research",
+  "site": "US",
+  "period": "30d",
+  "params": {
+    "minUnits": 300,
+    "maxRatings": 50,
+    "availableMonth": 6,
+    "fulfillment": ["FBA"],
+    "badgeNR": true
   }
 }
 ```
@@ -88,11 +194,62 @@ Competitor lookup XLSX:
 }
 ```
 
-After `seller_sprite_run`, return the `job_id`, row count, export filename, and export URL/path. Do not expose SellerSprite account credentials.
+Traffic source JSON:
+
+```json
+{
+  "scenario": "traffic-source",
+  "site": "US",
+  "period": "nearly",
+  "params": {
+    "keyword": "solar outdoor lights"
+  },
+  "export_format": "json"
+}
+```
+
+Market research XLSX:
+
+```json
+{
+  "scenario": "market-research",
+  "site": "CA",
+  "period": "nearly",
+  "params": {
+    "departmentKeyword": "Baby Diapers",
+    "newReleaseNum": 3
+  },
+  "export_format": "xlsx"
+}
+```
+
+## Response Format
+
+Keep the final answer short and user-facing. Do not print the full tool call JSON, raw params, or long local paths unless the user explicitly asks for debugging details.
+
+If `seller_sprite_run`, `seller_sprite_job_status`, or `seller_sprite_export` returns `data.summary`, use that summary as the primary final answer. Do not rewrite it into raw JSON. Only add extra details when the user explicitly asks.
+
+For successful runs, use this shape:
+
+```md
+已按 `site` 做好了 `scenario title`，并导出为 `format`。
+
+结果：
+- `job_id`: xxx
+- `row_count`: 20
+- 导出文件: [filename](url-or-path)
+```
+
+Rules:
+
+- Put only important conditions in the first sentence, such as site, keyword, ASIN, period, or recommendation mode.
+- Prefer filename or link for the export file; avoid showing full local paths as standalone code blocks.
+- If row count is 0, say `row_count: 0` and include the parameters used only in a compact inline form.
+- Do not expose SellerSprite account credentials.
 
 ## CLI Fallback
 
-Use CLI only when MCP tools are unavailable.
+Use CLI mode when MCP tools are unavailable in the current runtime. Keep CLI output user-facing and compact; do not expose raw params or long local paths unless the user asks for debugging details.
 
 List scenarios:
 
@@ -100,16 +257,52 @@ List scenarios:
 opscli seller-sprite scenarios
 ```
 
-Run XLSX export:
+Keyword reverse XLSX:
 
 ```bash
 opscli seller-sprite run keyword-reverse --site JP --period nearly --params "{\"asin\":\"B07YRMT36L\"}" --export-format xlsx
 ```
 
-Run JSON export:
+Keyword mining JSON:
 
 ```bash
-opscli seller-sprite run keyword-miner --site JP --period nearly --params "{\"keyword\":\"flashlight\"}" --export-format json
+opscli seller-sprite run keyword-miner --site JP --period nearly --params "{\"keyword\":\"flashlight\",\"filterRootWord\":1,\"amazonChoice\":true}" --export-format json
+```
+
+Default product research XLSX:
+
+```bash
+opscli seller-sprite run product-research --site US --period 30d --params "{}" --export-format xlsx
+```
+
+Product research with recommendation mode:
+
+```bash
+opscli seller-sprite run product-research --site US --period 30d --params "{\"recommendationMode\":\"精品铺货\"}" --export-format xlsx
+```
+
+Product research with official aliases:
+
+```bash
+opscli seller-sprite run product-research --site US --period 30d --params "{\"minUnits\":300,\"maxRatings\":50,\"availableMonth\":6,\"fulfillment\":[\"FBA\"],\"badgeNR\":true}" --export-format xlsx
+```
+
+Competitor lookup XLSX:
+
+```bash
+opscli seller-sprite run competitor-lookup --site DE --period 2026-04 --params "{\"keyword\":\"flashlight\"}" --export-format xlsx
+```
+
+Traffic source JSON:
+
+```bash
+opscli seller-sprite run traffic-source --site US --period nearly --params "{\"keyword\":\"solar outdoor lights\"}" --export-format json
+```
+
+Market research XLSX:
+
+```bash
+opscli seller-sprite run market-research --site CA --period nearly --params "{\"departmentKeyword\":\"Baby Diapers\",\"newReleaseNum\":3}" --export-format xlsx
 ```
 
 ## Guardrails

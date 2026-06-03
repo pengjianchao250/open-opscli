@@ -1,7 +1,12 @@
 {
   "scenario_id": "product-research",
-  "title": "选竞品",
+  "title": "选产品",
   "web_route": "/v3/product-research",
+  "web_tab": {
+    "body_field": "selectType",
+    "captured_value": "2",
+    "note": "该路由对应选产品场景，抓包接口为 /v3/api/product-research。"
+  },
   "api": {
     "method": "POST",
     "endpoint": "/v3/api/product-research",
@@ -15,6 +20,7 @@
       "selectType",
       "filterSub",
       "weightUnit",
+      "recommendationMode",
       "order",
       "productTags",
       "nodeIdPaths",
@@ -22,8 +28,25 @@
       "eligibility",
       "pkgDimensionTypeList",
       "sellerNationList",
+      "minPrice",
+      "maxPrice",
+      "minSales",
+      "maxSales",
+      "minReviews",
+      "maxReviews",
+      "minReviewRating",
+      "maxReviewRating",
       "smallAndLight",
       "lowPrice",
+      "minRanking",
+      "maxRanking",
+      "minSellers",
+      "maxSellers",
+      "putawayMonth",
+      "minTotalUnitsGrowth",
+      "minVariations",
+      "maxVariations",
+      "minRankingCr",
       "keyword",
       "keywords",
       "includeBrands",
@@ -43,6 +66,7 @@
       "selectType",
       "filterSub",
       "weightUnit",
+      "recommendationMode",
       "order",
       "productTags",
       "nodeIdPaths",
@@ -50,7 +74,25 @@
       "eligibility",
       "pkgDimensionTypeList",
       "sellerNationList",
+      "minPrice",
+      "maxPrice",
+      "minSales",
+      "maxSales",
+      "minReviews",
+      "maxReviews",
+      "minReviewRating",
+      "maxReviewRating",
+      "smallAndLight",
       "lowPrice",
+      "minRanking",
+      "maxRanking",
+      "minSellers",
+      "maxSellers",
+      "putawayMonth",
+      "minTotalUnitsGrowth",
+      "minVariations",
+      "maxVariations",
+      "minRankingCr",
       "mainImage",
       "exportAsins",
       "hideSellerInfo"
@@ -78,7 +120,7 @@
     {
       "method": "GET",
       "endpoint": "/v3/api/relation/config/pr",
-      "purpose": "选竞品配置"
+      "purpose": "选产品配置"
     },
     {
       "method": "GET",
@@ -113,9 +155,108 @@
     {
       "method": "GET",
       "endpoint": "/v2/common/remain-export-num/EB3",
-      "purpose": "选竞品剩余导出次数"
+      "purpose": "选产品剩余导出次数"
     }
   ],
+  "recommendation_modes": {
+    "body_field": "recommendationMode",
+    "type": "string",
+    "description": "选产品页面的推荐模式是单选参数模板，CLI 接收中文模式名后展开为接口筛选条件；显式传入的同名筛选条件优先。",
+    "captured_at": "2026-06-02T09:25:19",
+    "capture_dir": "tmp-validation/seller-sprite-browser-capture/recommend-mode-20260602-092519",
+    "modes": {
+      "低价长尾选品": {
+        "minRanking": "10000",
+        "maxRanking": "50000",
+        "maxSales": "300",
+        "maxPrice": "30",
+        "maxSellers": "1"
+      },
+      "研发新品榜": {
+        "productTags": ["NewRelease"],
+        "sellerTypes": ["FBA", "FBM"],
+        "maxSales": "500"
+      },
+      "潜力单变体": {
+        "putawayMonth": "6",
+        "minTotalUnitsGrowth": "20",
+        "maxVariations": "1"
+      },
+      "销量飙升": {
+        "minSales": "300",
+        "minTotalUnitsGrowth": "10"
+      },
+      "潜力市场": {
+        "putawayMonth": "6",
+        "minTotalUnitsGrowth": "10",
+        "maxSales": "600"
+      },
+      "未被满足的市场": {
+        "sellerTypes": ["FBM"],
+        "minSales": "300",
+        "putawayMonth": "6"
+      },
+      "不压库存的市场": {
+        "minSales": "600",
+        "minSellers": "3",
+        "putawayMonth": "6"
+      },
+      "投机市场": {
+        "minSales": "300",
+        "maxReviews": "50",
+        "putawayMonth": "6"
+      },
+      "高需求低要求市场": {
+        "minRankingCr": "99",
+        "maxReviews": "10",
+        "putawayMonth": "3"
+      },
+      "全品类铺货": {
+        "minRankingCr": "99",
+        "putawayMonth": "3"
+      },
+      "精品铺货": {
+        "minRankingCr": "99",
+        "putawayMonth": "3"
+      },
+      "低价商品": {
+        "eligibility": ["Y"],
+        "maxPrice": "10",
+        "smallAndLight": "lowPrice",
+        "lowPrice": "Y"
+      },
+      "新手推荐": {
+        "sellerTypes": ["FBA"],
+        "minSales": "300",
+        "minTotalUnitsGrowth": "3",
+        "minPrice": "15",
+        "maxPrice": "60",
+        "putawayMonth": "12"
+      }
+    }
+  },
+  "official_field_aliases": {
+    "description": "兼容 SellerSprite 官方开放 API 的选产品入参命名；CLI/MCP 会在请求 Web 接口前转换为当前抓包字段。",
+    "aliases": {
+      "minUnits": "minSales",
+      "maxUnits": "maxSales",
+      "minRatings": "minReviews",
+      "maxRatings": "maxReviews",
+      "minStar": "minReviewRating",
+      "maxStar": "maxReviewRating",
+      "availableMonth": "putawayMonth",
+      "fulfillment": "sellerTypes",
+      "variation": "maxVariations",
+      "minVariations": "minVariations",
+      "maxVariations": "maxVariations",
+      "minBsr": "minRanking",
+      "maxBsr": "maxRanking",
+      "minSellers": "minSellers",
+      "maxSellers": "maxSellers",
+      "badgeNR": "productTags=[\"NewRelease\"]"
+    },
+    "precedence": "如果官方别名和内部字段同时传入，以内部字段为准。"
+  },
   "required_params": [],
   "query_conditions": {
     "category_tree": {

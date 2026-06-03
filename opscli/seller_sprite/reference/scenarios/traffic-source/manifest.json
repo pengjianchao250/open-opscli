@@ -1,0 +1,101 @@
+{
+  "scenario_id": "traffic-source",
+  "title": "查流量来源",
+  "web_route": "/v3/reversing",
+  "web_result_route": "/v3/reversing/sources",
+  "api": {
+    "method": "GET",
+    "endpoint": "/v3/api/relation/ta/source",
+    "query_fields": [
+      "keywordOrAsin",
+      "market",
+      "pageNo",
+      "pageSize",
+      "order",
+      "desc",
+      "month"
+    ],
+    "body_fields": [],
+    "field_aliases": {
+      "keyword": "keywordOrAsin",
+      "asin": "keywordOrAsin",
+      "asins": "keywordOrAsin",
+      "q": "keywordOrAsin"
+    }
+  },
+  "download_capture": {
+    "mode": "browser_blob_download",
+    "captured_url_scheme": "blob",
+    "note": "本次页面导出未触发可复用 JSON 导出接口，Chrome 下载历史记录为 blob URL。"
+  },
+  "auxiliary_apis": [
+    {
+      "method": "GET",
+      "endpoint": "/v3/api/example/SA",
+      "purpose": "页面示例查询条件"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v3/api/relation/config/k",
+      "purpose": "流量分析配置"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v2/common/remain-export-num/EARS",
+      "purpose": "查流量来源剩余导出次数"
+    }
+  ],
+  "required_params": ["keywordOrAsin"],
+  "query_conditions": {
+    "site": {
+      "body_field": "market",
+      "captured_value": "COM",
+      "captured_site": "US"
+    },
+    "keyword_or_asin": {
+      "query_field": "keywordOrAsin",
+      "type": "string",
+      "examples": [
+        "solar outdoor lights",
+        "B075BHK571",
+        "B0016HF5GK,B009ZJ2M7G,B078YZ586K,B088J68TRL,B0CBSZR9NF"
+      ]
+    }
+  },
+  "response": {
+    "row_path": "data.pager.items",
+    "pagination_fields": [
+      "data.pager.pages",
+      "data.pager.page",
+      "data.pager.size",
+      "data.pager.total",
+      "data.pager.took"
+    ]
+  },
+  "primary_metrics": [
+    {"title": "流量词数量", "source": "keywords"},
+    {"title": "自然搜索词", "source": "counter.NATURAL_SEARCHING"},
+    {"title": "SP广告词", "source": "counter.ADS"},
+    {"title": "视频广告词", "source": "counter.SPONSOR_VIDEO"},
+    {"title": "品牌广告词", "source": "counter.SPONSOR_BRAND"},
+    {"title": "AC推荐词", "source": "counter.AMAZON_CHOICE"},
+    {"title": "HR推荐词", "source": "counter.HIGHLY_RATED"}
+  ],
+  "official_template": {
+    "captured_workbook_name": "KeywordCompetitors-US-solar outdoor lights(1369)-Last-30-days.xlsx",
+    "captured_workbook_path": "tmp-validation/seller-sprite-browser-capture/20260601-164627/KeywordCompetitors-US-solar-outdoor-lights.xlsx",
+    "headers_file": "official-headers.json",
+    "captured_main_sheet_example": "US-solar outdoor lights(1369)",
+    "captured_notes_sheet": "Notes",
+    "header_count": 17
+  },
+  "capture_evidence": {
+    "captured_at": "2026-06-01T16:48:57",
+    "capture_dir": "tmp-validation/seller-sprite-browser-capture/20260601-164627",
+    "query_request": "0029-164857-v3-api-relation-ta-source.request.json",
+    "query_response": "0029-164857-v3-api-relation-ta-source.response.json",
+    "remain_export_request": "0030-164911-v2-common-remain-export-num-EARS.request.json",
+    "remain_export_response": "0030-164911-v2-common-remain-export-num-EARS.response.json",
+    "download_file": "download-0001-KeywordCompetitors-US-solar-outdoor-lights-1369--Last-30-days-xlsx"
+  }
+}
