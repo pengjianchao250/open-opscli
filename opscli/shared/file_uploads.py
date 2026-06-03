@@ -80,12 +80,16 @@ class FileUploadClient:
         folder: str | None = None,
         public: str | None = None,
         auth_client: AuthClient | None = None,
+        jwt: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         self.endpoint = endpoint or os.getenv(ENV_FILE_UPLOAD_ENDPOINT) or DEFAULT_ENDPOINT
         self.file_field = file_field or os.getenv(ENV_FILE_UPLOAD_FIELD) or DEFAULT_FILE_FIELD
         self.folder = folder or os.getenv(ENV_FILE_UPLOAD_FOLDER) or DEFAULT_FOLDER
         self.public = public or os.getenv(ENV_FILE_UPLOAD_PUBLIC) or DEFAULT_PUBLIC
         self.auth_client = auth_client or AuthClient()
+        self.jwt = jwt
+        self.session_id = session_id
 
     @property
     def enabled(self) -> bool:
@@ -107,7 +111,7 @@ class FileUploadClient:
         if not file_path.exists():
             raise FileUploadError(f"上传文件不存在：{file_path}")
 
-        headers, cookies = self.auth_client.build_request_auth("ops")
+        headers, cookies = self._get_auth("ops")
         headers.update(get_mcp_request_headers())
         fields: list[tuple[str, Any]] = [
             ("folder", (None, folder or self.folder)),
@@ -133,6 +137,12 @@ class FileUploadClient:
         if not url:
             raise FileUploadBadJsonError("文件上传响应缺少下载链接")
         return FileUploadResult(url=url, raw=payload)
+
+    def _get_auth(self, alias: str) -> tuple[dict[str, str], dict[str, str]]:
+        if self.session_id:
+            jwt = self.jwt or self.auth_client.get_token_by_session(self.session_id, alias)
+            return {"Authorization": f"Bearer {jwt}"}, {"polarisUserToken": self.session_id}
+        return self.auth_client.build_request_auth(alias)
 
 
 def _resolve_endpoint(endpoint: str) -> str:
