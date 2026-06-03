@@ -1,5 +1,19 @@
 # 待归档变更记录
 
+## 2026-06-03 ops-dataset-query 二期服务端 S-5 - 字段语义索引表 + API
+
+**变更原因**：服务端 P1 任务，为 AI 客户端提供"业务用语 → 数据集字段"的映射索引，后续在后台录入数据后可支持语义搜索
+**改动点**：
+- `vendor/aukey/data-metrics/src/database/migrations/2026_06_03_000003_create_dm_field_semantic_index_table.php`：新建迁移，创建 `dm_field_semantic_index` 表（table_id、field_name、field_type、semantic_term、needs_disambiguation、disambiguation_hint、aggregation_hint、status + 3 个索引）
+- `vendor/aukey/data-metrics/src/Services/DatasetSkillService.php`：新增 `buildFieldSemanticIndexForUser()` 方法，按用户权限过滤并返回字段语义索引
+- `vendor/aukey/data-metrics/src/Http/Controllers/DatasetSkillApiController.php`：新增 `exportFieldSemanticIndex()` 方法
+- `vendor/aukey/data-metrics/src/Http/routes.php`：注册 `GET /skill/field-semantic-index` 路由
+**验证结果**：`artisan migrate` 成功（DONE，212ms）；`Schema::hasTable('dm_field_semantic_index')` → PASS；`buildFieldSemanticIndexForUser(1)` → PASS entry_count=0（表为空的预期值）；路由已注册于 routes.php:66
+**影响范围**：data-metrics 包新增 API 端点，向后兼容（表为空时返回空 entries 数组）
+**回滚方式**：`php artisan migrate:rollback --path=vendor/aukey/data-metrics/src/database/migrations/2026_06_03_000003_create_dm_field_semantic_index_table.php`；还原 DatasetSkillService.php、DatasetSkillApiController.php、routes.php 对应修改
+
+---
+
 ## 2026-06-02 ops-dataset-query 二期客户端优化 - 完整落地
 
 **变更原因**：将二期结构化产物（intent_taxonomy、dataset_profiles 等）从草案目录落地到 Skill 模板，新增本地意图路由脚本，使 AI 在远端 Catalog 未命中时能进行四级回退路由而非直接跌落关键词搜索
