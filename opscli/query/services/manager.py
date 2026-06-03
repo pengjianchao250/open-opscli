@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from opscli.auth import AuthClient
 from opscli.query.domain.exceptions import DatasetNotFoundError, InvalidPayloadError, QueryMetadataNotReadyError
@@ -415,15 +418,17 @@ class QueryManager:
             resolved = self._resolve_simple_field(fields, field_ref, field_type="metric", context="metric")
             aggregation = item.get("aggregation") if isinstance(item, dict) else self._extract_simple_metric_aggregation(item)
             if aggregation and self._field_has_formula(resolved):
+                # 公式字段已内置聚合表达式，自动修正：移除 aggregation，填入 expr
                 formula_expr = (
                     str(resolved.get("summary_expression") or "").strip()
                     or str(resolved.get("detail_expression") or "").strip()
-                    or "(请执行 opscli query metadata --dataset <别名> 查看完整公式)"
                 )
-                raise InvalidPayloadError(
-                    f"公式字段禁止额外聚合: {field_ref}"
-                    f"\n  对应公式: {formula_expr}"
-                    f"\n  修复方式: 移除 aggregation，改为在 metric 中传入 expr 字段，值为上述公式表达式"
+                if formula_expr:
+                    item["expr"] = formula_expr
+                item.pop("aggregation", None)
+                logger.info(
+                    "公式字段自动修正: %s 移除 aggregation=%s，%s",
+                    field_ref, aggregation, "填入 expr" if formula_expr else "仅移除 aggregation",
                 )
 
         for field_ref in self._iter_filter_field_refs(filters):
