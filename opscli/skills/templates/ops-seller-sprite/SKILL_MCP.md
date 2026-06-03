@@ -1,12 +1,12 @@
 ---
 name: ops-seller-sprite
 mcp-version: v1.0.0
-description: SellerSprite/卖家精灵 usage guide for querying scenarios and exporting JSON or XLSX files through seller_sprite_* MCP tools or CLI fallback.
+description: SellerSprite/卖家精灵 usage guide for querying scenarios and exporting JSON or XLSX files through seller_sprite_* MCP tools.
 ---
 
 # ops-seller-sprite MCP
 
-Prefer these MCP tools:
+Use these MCP tools:
 
 - `seller_sprite_scenarios`: list available scenarios.
 - `seller_sprite_run`: run a scenario and create an export file.
@@ -19,7 +19,7 @@ Prefer these MCP tools:
 2. Call `seller_sprite_run` with `scenario`, `site`, `period`, `params`, and optionally `export_format`.
 3. Use the returned `data.job_id` for follow-up status/export calls.
 4. Call `seller_sprite_export` when the user needs the file link.
-5. If MCP tools are unavailable, use CLI mode with equivalent scenario, site, period, params, and export format.
+5. If MCP tools are unavailable, report that SellerSprite MCP is unavailable.
 
 If `seller_sprite_run` fails with `ERR_GLOBAL_SESSION_EXPIRED` or a message indicating SellerSprite session expiration, retry the same call once after the backend refreshes login. Do not ask the user for SellerSprite credentials.
 
