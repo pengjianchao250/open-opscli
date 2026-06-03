@@ -16,6 +16,7 @@ from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
 from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, SellerSpriteScenarioResult
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
+from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 
 
 class SellerSpriteApiManager:
@@ -158,6 +159,14 @@ class SellerSpriteApiManager:
                 high_frequency_rows=high_frequency_rows,
                 warnings=warnings,
             )
+        _upload_export_if_enabled(
+            export=export,
+            job_id=job_id,
+            scenario=request.scenario,
+            site=site,
+            period=period,
+            warnings=warnings,
+        )
         result = SellerSpriteScenarioResult(
             job_id=job_id,
             scenario=request.scenario,
@@ -375,6 +384,54 @@ def _export_rows_to_json(
         format="json",
         mime_type="application/json",
     )
+
+
+def _upload_export_if_enabled(
+    *,
+    export,
+    job_id: str,
+    scenario: str,
+    site: str,
+    period: str,
+    warnings: list[dict[str, Any]],
+) -> None:
+    client = FileUploadClient()
+    if not client.enabled:
+        return
+    try:
+        upload = client.upload(
+            export.path,
+            purpose="seller_sprite_export",
+            folder="seller-sprite/exports",
+            public="1",
+            metadata={
+                "job_id": job_id,
+                "scenario": scenario,
+                "site": site,
+                "period": period,
+                "filename": export.filename,
+            },
+        )
+        export.url = upload.url
+    except FileUploadError as exc:
+        warnings.append(
+            {
+                "stage": "file_upload",
+                "message": "导出文件上传失败，已保留服务端本地文件",
+                "error": exc.to_dict(),
+            }
+        )
+    except Exception as exc:
+        warnings.append(
+            {
+                "stage": "file_upload",
+                "message": "导出文件上传失败，已保留服务端本地文件",
+                "error": {
+                    "code": type(exc).__name__,
+                    "message": str(exc),
+                },
+            }
+        )
 
 
 def _write_json(path: Path, payload: Any) -> None:

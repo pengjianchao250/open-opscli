@@ -21,6 +21,13 @@ Use these MCP tools:
 4. Call `seller_sprite_export` when the user needs the file link.
 5. If MCP tools are unavailable, report that SellerSprite MCP is unavailable.
 
+## Authentication
+
+SellerSprite credentials are loaded from the OPS integration account API. The user must have a valid OPS auth session before `seller_sprite_run` can fetch credentials.
+
+- If the user is not authenticated or the tool reports `您已登出` / integration account auth failure, call `auth_mcp_login` first, then retry the SellerSprite request.
+- Do not ask the user for SellerSprite account credentials.
+
 If `seller_sprite_run` fails with `ERR_GLOBAL_SESSION_EXPIRED` or a message indicating SellerSprite session expiration, retry the same call once after the backend refreshes login. Do not ask the user for SellerSprite credentials.
 
 SellerSprite login is cached by the backend. Do not trigger repeated login manually; normal runs reuse cached cookies and only re-login when the session expires.

@@ -20,6 +20,14 @@ Use MCP tools:
 
 MCP default export is `xls`, which the backend writes as an XLSX file. If the user explicitly asks for JSON, pass `export_format: "json"`.
 
+## Authentication
+
+SellerSprite credentials are loaded from the OPS integration account API. The user must have a valid OPS auth session before `seller_sprite_run` can fetch credentials.
+
+- MCP mode: if the user is not authenticated or the tool reports `您已登出` / integration account auth failure, call `auth_mcp_login` first, then retry the SellerSprite request.
+- CLI mode: run `opscli auth login` first, then retry the SellerSprite command.
+- Do not ask the user for SellerSprite account credentials.
+
 If `seller_sprite_run` fails with `ERR_GLOBAL_SESSION_EXPIRED` or a message indicating SellerSprite session expiration, retry the same call once after the backend refreshes login. Do not ask the user for SellerSprite credentials.
 
 SellerSprite login is cached by the backend. Do not trigger repeated login manually; normal runs reuse cached cookies and only re-login when the session expires.

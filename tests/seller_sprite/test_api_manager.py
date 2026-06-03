@@ -39,6 +39,9 @@ class DummyApiClient:
     def has_cookies(self):
         return False
 
+    def has_login_cookies(self):
+        return False
+
     def cookie_names(self):
         return []
 
@@ -73,6 +76,9 @@ class SessionExpiredOnceApiClient(DummyApiClient):
         SessionExpiredOnceApiClient.instance = self
 
     def has_cookies(self):
+        return True
+
+    def has_login_cookies(self):
         return True
 
     def cookie_names(self):
