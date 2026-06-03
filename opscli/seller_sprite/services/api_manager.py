@@ -16,6 +16,7 @@ from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
 from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, SellerSpriteScenarioResult
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
+from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 
 
 class SellerSpriteApiManager:
@@ -61,7 +62,7 @@ class SellerSpriteApiManager:
         warnings: list[dict[str, Any]] = []
         async with SellerSpriteApiClient(account=account) as client:
             login = {"mode": "cached", "cookie_names": client.cookie_names()}
-            if not client.has_cookies():
+            if not client.has_login_cookies():
                 login = await _login_with_account_refresh(
                     client=client,
                     account_provider=self.account_provider,
@@ -80,6 +81,27 @@ class SellerSpriteApiManager:
                     root_dir=root_dir,
                 ),
             )
+            if _looks_like_guest_limited_response(main_response, page_size=page_size):
+                login = await _login_with_account_refresh(
+                    client=client,
+                    account_provider=self.account_provider,
+                    warnings=warnings,
+                )
+                warnings.append(
+                    {
+                        "stage": "main",
+                        "message": "卖家精灵疑似返回游客限制数据，已登录并重试一次",
+                        "login": login,
+                    }
+                )
+                main_response = await _run_main_request(
+                    client=client,
+                    method=scenario.method,
+                    endpoint=scenario.endpoint_for(payload),
+                    payload=_main_payload(request.scenario, payload),
+                    referer=scenario.build_referer(payload),
+                    root_dir=root_dir,
+                )
             high_frequency_response = None
             if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload):
                 try:
@@ -137,6 +159,14 @@ class SellerSpriteApiManager:
                 high_frequency_rows=high_frequency_rows,
                 warnings=warnings,
             )
+        _upload_export_if_enabled(
+            export=export,
+            job_id=job_id,
+            scenario=request.scenario,
+            site=site,
+            period=period,
+            warnings=warnings,
+        )
         result = SellerSpriteScenarioResult(
             job_id=job_id,
             scenario=request.scenario,
@@ -277,6 +307,27 @@ def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _looks_like_guest_limited_response(response: dict[str, Any], *, page_size: int) -> bool:
+    if page_size <= 20:
+        return False
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, dict):
+        return False
+    items = data.get("items")
+    if not isinstance(items, list) or len(items) != 20:
+        return False
+    total = _int(data.get("total"), 0)
+    pages = _int(data.get("pages"), 0)
+    size = _int(data.get("size"), 0)
+    return bool(
+        data.get("guestId")
+        or data.get("guestVisited") is True
+        or size == 20
+        or total > 20
+        or pages > 1
+    )
+
+
 def _extract_high_frequency_rows(response: dict[str, Any] | None) -> list[dict[str, Any]]:
     data = response.get("data") if isinstance(response, dict) else None
     if isinstance(data, list):
@@ -333,6 +384,54 @@ def _export_rows_to_json(
         format="json",
         mime_type="application/json",
     )
+
+
+def _upload_export_if_enabled(
+    *,
+    export,
+    job_id: str,
+    scenario: str,
+    site: str,
+    period: str,
+    warnings: list[dict[str, Any]],
+) -> None:
+    client = FileUploadClient()
+    if not client.enabled:
+        return
+    try:
+        upload = client.upload(
+            export.path,
+            purpose="seller_sprite_export",
+            folder="seller-sprite/exports",
+            public="1",
+            metadata={
+                "job_id": job_id,
+                "scenario": scenario,
+                "site": site,
+                "period": period,
+                "filename": export.filename,
+            },
+        )
+        export.url = upload.url
+    except FileUploadError as exc:
+        warnings.append(
+            {
+                "stage": "file_upload",
+                "message": "导出文件上传失败，已保留服务端本地文件",
+                "error": exc.to_dict(),
+            }
+        )
+    except Exception as exc:
+        warnings.append(
+            {
+                "stage": "file_upload",
+                "message": "导出文件上传失败，已保留服务端本地文件",
+                "error": {
+                    "code": type(exc).__name__,
+                    "message": str(exc),
+                },
+            }
+        )
 
 
 def _write_json(path: Path, payload: Any) -> None:
