@@ -17,6 +17,7 @@ from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerS
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, SellerSpriteScenarioResult
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
+from opscli.shared.integration_accounts import IntegrationAccountClient
 
 
 class SellerSpriteApiManager:
@@ -27,9 +28,16 @@ class SellerSpriteApiManager:
         *,
         settings: SellerSpriteSettings | None = None,
         account_provider: SellerSpriteAccountProvider | None = None,
+        jwt: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         self.settings = settings or load_settings()
-        self.account_provider = account_provider or SellerSpriteAccountProvider(self.settings)
+        self.jwt = jwt
+        self.session_id = session_id
+        self.account_provider = account_provider or SellerSpriteAccountProvider(
+            self.settings,
+            integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
+        )
 
     def scenarios(self) -> list[dict[str, Any]]:
         """列出支持的接口场景。"""
@@ -166,6 +174,8 @@ class SellerSpriteApiManager:
             site=site,
             period=period,
             warnings=warnings,
+            jwt=self.jwt,
+            session_id=self.session_id,
         )
         result = SellerSpriteScenarioResult(
             job_id=job_id,
@@ -394,8 +404,10 @@ def _upload_export_if_enabled(
     site: str,
     period: str,
     warnings: list[dict[str, Any]],
+    jwt: str | None = None,
+    session_id: str | None = None,
 ) -> None:
-    client = FileUploadClient()
+    client = FileUploadClient(jwt=jwt, session_id=session_id)
     if not client.enabled:
         return
     try:
