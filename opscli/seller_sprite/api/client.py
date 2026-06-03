@@ -170,6 +170,11 @@ class SellerSpriteApiClient:
         """判断当前 client 是否已有缓存 cookie。"""
         return bool(self._client.cookies.jar)
 
+    def has_login_cookies(self) -> bool:
+        """判断当前 cookie 是否包含卖家精灵登录态。"""
+        names = set(self.cookie_names())
+        return bool(names & {"rank-login-user", "rank-login-user-info", "Sprite-X-Token"})
+
     def save_cookies(self) -> None:
         """保存当前 cookie 到本地缓存。"""
         cookies = [

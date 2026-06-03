@@ -58,7 +58,10 @@ class SellerSpriteAccountProvider:
             raise SellerSpriteConfigError(f"账号池中不存在默认账号：{self.settings.account_name}")
 
         if self._remote_error:
-            raise SellerSpriteConfigError(f"获取卖家精灵集成账号失败：{self._remote_error}")
+            raise SellerSpriteConfigError(
+                f"获取卖家精灵集成账号失败：{self._remote_error}。"
+                "请先完成 OPS 授权：MCP 模式调用 auth_mcp_login，CLI 模式执行 opscli auth login。"
+            )
         if not self.settings.username:
             raise SellerSpriteConfigError("缺少 OPSCLI_SELLER_SPRITE_USERNAME")
         if not self.settings.password:
