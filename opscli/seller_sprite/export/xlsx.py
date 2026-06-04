@@ -127,6 +127,8 @@ def _apply_transform(value: Any, transform: str | None, row: dict[str, Any], *, 
         return _date_millis(value)
     if transform == "keywordReverseUpdatedTime":
         return _keyword_reverse_updated_time(value, site=site)
+    if transform == "rankPosition":
+        return _rank_position(value)
     if transform == "rankPage":
         return _rank_page(value)
     if transform == "divide10":
@@ -306,6 +308,13 @@ def _rank_page(value: Any) -> str:
     if _is_blank(index) or _is_blank(page_size):
         return f"第{page}页"
     return f"第{page}页,{index}/{page_size}"
+
+
+def _rank_position(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return "前3页无排名" if _is_blank(value) else value
+    position = value.get("position")
+    return "前3页无排名" if _is_blank(position) else position
 
 
 def _seller_nation(value: Any) -> str:
