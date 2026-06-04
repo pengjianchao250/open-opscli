@@ -128,6 +128,70 @@ PRODUCT_RESEARCH_OFFICIAL_FIELD_ALIASES: dict[str, str] = {
     "maxSellers": "maxSellers",
 }
 
+MARKET_RESEARCH_HIDDEN_FIELDS = [
+    "minAvgSales",
+    "maxAvgSales",
+    "minAvgBsr",
+    "maxAvgBsr",
+    "minAvgWeight",
+    "maxAvgWeight",
+    "minHeadListingAvgBsr",
+    "maxHeadListingAvgBsr",
+    "minTotalProducts",
+    "maxTotalProducts",
+    "minAvgRevenue",
+    "maxAvgRevenue",
+    "minAvgPrice",
+    "maxAvgPrice",
+    "minAvgVolume",
+    "maxAvgVolume",
+    "minHeadListingAvgSales",
+    "maxHeadListingAvgSales",
+    "minAvgReviews",
+    "maxAvgReviews",
+    "minAvgRating",
+    "maxAvgRating",
+    "minAvgProfit",
+    "maxAvgProfit",
+    "minHeadListingAvgRevenue",
+    "maxHeadListingAvgRevenue",
+    "minBrands",
+    "maxBrands",
+    "minHeadListingProductCrn",
+    "maxHeadListingProductCrn",
+    "minEbcRatio",
+    "maxEbcRatio",
+    "minAmzRatio",
+    "maxAmzRatio",
+    "minSellers",
+    "maxSellers",
+    "minHeadListingBrandCrn",
+    "maxHeadListingBrandCrn",
+    "minFbaRatio",
+    "maxFbaRatio",
+    "sellerNations",
+    "minAvgSellers",
+    "maxAvgSellers",
+    "minHeadListingSellerCrn",
+    "maxHeadListingSellerCrn",
+    "minFbmRatio",
+    "maxFbmRatio",
+    "minNewRatio",
+    "maxNewRatio",
+    "minNewAvgPrice",
+    "maxNewAvgPrice",
+    "minNewAvgRevenue",
+    "maxNewAvgRevenue",
+    "minNewCount",
+    "maxNewCount",
+    "minNewAvgRating",
+    "maxNewAvgRating",
+    "minNewAvgReviews",
+    "maxNewAvgReviews",
+    "minNewAvgSales",
+    "maxNewAvgSales",
+]
+
 
 def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造竞品查询 payload。"""
@@ -273,21 +337,28 @@ def make_traffic_source_payload(input_data: dict[str, Any]) -> dict[str, Any]:
 def make_market_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造选市场表单 payload。"""
     month = input_data.get("month") or input_data.get("period") or "nearly"
+    topn = input_data.get("topn") or input_data.get("topN") or 10
+    new_release = new_release_num(input_data)
     payload: dict[str, Any] = {
         "marketId": str(input_data.get("marketId") or market_research_market_id(_market(input_data, default="US"))),
         "nodeIdPath": _query_text(input_data.get("nodeIdPath") or input_data.get("node") or input_data.get("category")),
         "sampleNumber": str(input_data.get("sampleNumber") or 1),
-        "topn": str(input_data.get("topn") or input_data.get("topN") or 10),
-        "newReleaseNum": str(new_release_num(input_data)),
+        "topn": str(topn),
+        "newReleaseNum": str(new_release),
         "order.field": input_data.get("orderField") or input_data.get("order.field") or "total_sales",
         "order.desc": str(order_desc(input_data.get("orderDesc") or input_data.get("order.desc"))).lower(),
         "tab": str(input_data.get("tab") or 1),
         "monthName": input_data.get("monthName") or month_name(month),
+        "newReleaseNumSelect": str(input_data.get("newReleaseNumSelect") or new_release),
+        "topNSelect": str(input_data.get("topNSelect") or topn),
         "page": str(_int(input_data.get("page") or input_data.get("startPage"), 1)),
         "size": str(_int(input_data.get("size") or input_data.get("pageSize"), 100)),
     }
     if input_data.get("departmentKeyword") or input_data.get("keyword"):
         payload["departmentKeyword"] = _query_text(input_data.get("departmentKeyword") or input_data.get("keyword"))
+    for field in MARKET_RESEARCH_HIDDEN_FIELDS:
+        if input_data.get(field) is not None:
+            payload[field] = str(input_data[field])
     return payload
 
 
