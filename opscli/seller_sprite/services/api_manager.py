@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -47,12 +48,11 @@ class SellerSpriteApiManager:
     async def run(self, request: SellerSpriteScenarioRequest) -> SellerSpriteScenarioResult:
         """执行一个接口场景。"""
         scenario = get_scenario(request.scenario)
-        job_id = request.job_id or _build_job_id(request.scenario)
-        root_dir = self._build_root_dir(request, job_id)
-        root_dir.mkdir(parents=True, exist_ok=True)
-
         site = (request.site or self.settings.default_site).upper()
         period = request.period or self.settings.default_period
+        job_id = request.job_id or _build_job_id(request, site, period)
+        root_dir = self._build_root_dir(request, job_id)
+        root_dir.mkdir(parents=True, exist_ok=True)
         page_size = request.page_size or self.settings.page_size
         account = self.account_provider.get_default()
         warnings: list[dict[str, Any]] = []
@@ -354,10 +354,110 @@ def _extract_high_frequency_rows(response: dict[str, Any] | None) -> list[dict[s
     return []
 
 
-def _build_job_id(scenario: str) -> str:
+def _build_job_id(request: SellerSpriteScenarioRequest, site: str, period: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     suffix = uuid4().hex[:6]
-    return f"seller-sprite-{scenario}-{timestamp}-{suffix}"
+    service = "SellerSprite"
+    scenario_label = _scenario_label(request.scenario)
+    target_label = _build_target_label(request.scenario, request.params)
+    period_label = _build_period_label(period)
+
+    parts = [service, scenario_label, site]
+    if target_label:
+        parts.append(target_label)
+    if period_label:
+        parts.append(period_label)
+    parts.append(timestamp)
+    parts.append(suffix)
+    return "-".join(parts)
+
+
+def _scenario_label(scenario: str) -> str:
+    labels = {
+        "competitor-lookup": "CompetitorLookup",
+        "product-research": "ProductResearch",
+        "keyword-miner": "KeywordMiner",
+        "keyword-reverse": "ReverseASIN",
+        "traffic-source": "TrafficSource",
+        "market-research": "MarketResearch",
+    }
+    return labels.get(scenario, _camel_case(scenario))
+
+
+def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
+    if not isinstance(params, dict):
+        return ""
+
+    def first_value(value: Any) -> str:
+        if isinstance(value, list) and value:
+            return str(value[0])
+        return str(value) if value is not None else ""
+
+    if scenario == "keyword-reverse":
+        return _sanitize_filename_part(params.get("asin"))
+    if scenario == "keyword-miner":
+        return _sanitize_filename_part(params.get("keyword"))
+    if scenario == "traffic-source":
+        return _sanitize_filename_part(
+            params.get("keywordOrAsin")
+            or params.get("keyword")
+            or params.get("asin")
+            or first_value(params.get("asins"))
+        )
+    if scenario == "competitor-lookup":
+        return _sanitize_filename_part(
+            params.get("asins")
+            or params.get("keyword")
+            or params.get("brand")
+            or params.get("sellerName")
+        )
+    if scenario == "product-research":
+        return _sanitize_filename_part(
+            params.get("recommendationMode")
+            or first_value(params.get("keywords"))
+            or params.get("keyword")
+            or params.get("category")
+            or params.get("node")
+        )
+    if scenario == "market-research":
+        return _sanitize_filename_part(
+            params.get("departmentKeyword")
+            or params.get("category")
+            or params.get("node")
+            or params.get("keyword")
+        )
+
+    return ""
+
+
+def _camel_case(value: str) -> str:
+    parts = re.split(r"[^A-Za-z0-9]+", value)
+    return "".join(part.capitalize() for part in parts if part)
+
+
+def _build_period_label(period: str) -> str:
+    if not period:
+        return ""
+    normalized = period.strip().lower()
+    if normalized == "nearly":
+        return "Nearly"
+    if normalized.endswith("d") and normalized[:-1].isdigit():
+        return f"Last-{int(normalized[:-1])}-days"
+    if re.match(r"^\d{4}-\d{2}$", normalized):
+        return normalized.upper()
+    return _sanitize_filename_part(period)
+
+
+def _sanitize_filename_part(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    text = text.replace(" ", "-")
+    text = re.sub(r"[^A-Za-z0-9\-]+", "-", text)
+    text = re.sub(r"-{2,}", "-", text).strip("-")
+    return text[:64]
 
 
 def _normalize_export_format(value: str) -> str:
