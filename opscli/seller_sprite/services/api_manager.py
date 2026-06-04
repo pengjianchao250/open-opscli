@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from opscli.seller_sprite.accounts import SellerSpriteAccountProvider
+from opscli.seller_sprite.api.categories import SellerSpriteCategoryResolver
 from opscli.seller_sprite.api.client import SellerSpriteApiClient
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.api.scenarios import get_scenario, list_scenarios
@@ -53,19 +54,6 @@ class SellerSpriteApiManager:
         site = (request.site or self.settings.default_site).upper()
         period = request.period or self.settings.default_period
         page_size = request.page_size or self.settings.page_size
-        payload = scenario.build_payload(params=request.params, site=site, period=period, page_size=page_size)
-
-        params_path = root_dir / "params.json"
-        raw_path = root_dir / "raw.json"
-        result_path = root_dir / "result.json"
-        _write_json(
-            params_path,
-            {
-                "request": request.to_dict(),
-                "payload": payload,
-            },
-        )
-
         account = self.account_provider.get_default()
         warnings: list[dict[str, Any]] = []
         async with SellerSpriteApiClient(account=account) as client:
@@ -76,6 +64,31 @@ class SellerSpriteApiManager:
                     account_provider=self.account_provider,
                     warnings=warnings,
                 )
+            category_resolver = SellerSpriteCategoryResolver(client)
+            params = await _request_with_session_retry(
+                client=client,
+                warnings=warnings,
+                stage="category",
+                action=lambda: category_resolver.resolve_params(
+                    params=request.params,
+                    scenario=request.scenario,
+                    site=site,
+                    period=period,
+                ),
+            )
+            payload = scenario.build_payload(params=params, site=site, period=period, page_size=page_size)
+
+            params_path = root_dir / "params.json"
+            raw_path = root_dir / "raw.json"
+            result_path = root_dir / "result.json"
+            _write_json(
+                params_path,
+                {
+                    "request": request.to_dict(),
+                    "resolved_params": params,
+                    "payload": payload,
+                },
+            )
             main_response = await _request_with_session_retry(
                 client=client,
                 warnings=warnings,
@@ -287,16 +300,12 @@ async def _login_with_account_refresh(
 def _main_payload(scenario: str, payload: dict[str, Any]) -> dict[str, Any]:
     """去除仅用于本地编排的字段。"""
     if scenario == "keyword-reverse":
-        return _without(payload, {"market", "includeHighFrequency", "groupNum", "page"})
+        return _without(payload, {"market", "page"})
     return payload
 
 
 def _high_frequency_payload(scenario: str, payload: dict[str, Any]) -> dict[str, Any]:
     """构造高频词接口 payload。"""
-    if scenario == "keyword-reverse":
-        body = _without(payload, {"market", "includeHighFrequency", "groupNum", "page", "limit", "skip"})
-        body["groupNum"] = int(payload.get("groupNum") or 1)
-        return body
     return payload
 
 
