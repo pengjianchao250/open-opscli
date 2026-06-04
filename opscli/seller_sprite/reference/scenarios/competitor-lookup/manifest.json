@@ -97,10 +97,12 @@
     {"title": "变体数", "source": "variations"},
     {"title": "价格", "source": "price"},
     {"title": "评分数", "source": "reviews"},
+    {"title": "月新增评分数", "source": "reviewsIncreasement"},
     {"title": "评分", "source": "rating"},
     {"title": "留评率", "source": "reviewsRate"},
     {"title": "毛利率", "source": "profit"},
     {"title": "卖家数", "source": "sellers"},
+    {"title": "卖家所属地", "source": "sellerDto.nation", "fallback": "sellerNation", "note": "官方导出优先使用 sellerDto.nation；HK 显示为 CN(HK)。"},
     {"title": "LQS", "source": "lqs"}
   ],
   "official_template": {

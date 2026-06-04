@@ -313,8 +313,9 @@
   },
   "primary_metrics": [
     {"title": "大类BSR", "source": "bsrRank"},
+    {"title": "大类BSR增长率", "source": "bsrRankCr", "transform": "percentSuffix"},
     {"title": "月销量", "source": "amzUnit"},
-    {"title": "月销量增长率", "source": "totalUnitsGrowth"},
+    {"title": "月销量增长率", "source": "totalUnitsGrowth", "transform": "percentSuffix"},
     {"title": "月销售额", "source": "totalAmount"},
     {"title": "子体销量", "source": "totalUnits"},
     {"title": "子体销售额", "source": "subTotalAmount"},
@@ -322,8 +323,8 @@
     {"title": "价格", "source": "price"},
     {"title": "评分数", "source": "reviews"},
     {"title": "评分", "source": "rating"},
-    {"title": "留评率", "source": "reviewsRate"},
-    {"title": "毛利率", "source": "profit"},
+    {"title": "留评率", "source": "reviewsRate", "transform": "percentSuffix"},
+    {"title": "毛利率", "source": "profit", "transform": "percentSuffix"},
     {"title": "卖家数", "source": "sellers"},
     {"title": "LQS", "source": "lqs"}
   ],

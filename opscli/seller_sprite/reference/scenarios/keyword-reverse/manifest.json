@@ -77,6 +77,9 @@
     "context_fields": ["data.guestId", "data.station", "data.marketId", "data.website", "data.asin", "data.stats"]
   },
   "primary_metrics": [
+    {"title": "关键词类型", "source": "trafficKeywordTypes", "transform": "trafficKeywordTypeLabels"},
+    {"title": "转化效果", "source": "conversionKeywordTypes", "transform": "conversionKeywordTypeLabels"},
+    {"title": "流量词类型", "source": "badges", "transform": "badgeLabels"},
     {"title": "流量占比", "source": "trafficPercentage"},
     {"title": "预估周曝光量", "source": "calculatedWeeklySearches"},
     {"title": "自然流量占比", "source": "naturalRatio"},

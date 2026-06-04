@@ -16,19 +16,14 @@ Use these MCP tools:
 ## Workflow
 
 1. Call `seller_sprite_scenarios` when scenario names or required params are uncertain.
-2. Call `seller_sprite_run` with `scenario`, `site`, `period`, `params`, and optionally `export_format`.
-3. Use the returned `data.job_id` for follow-up status/export calls.
-4. Call `seller_sprite_export` when the user needs the file link.
-5. If MCP tools are unavailable, report that SellerSprite MCP is unavailable.
+2. If the user intent cannot be mapped to exactly one scenario, ask the user to confirm the scenario before calling `seller_sprite_run`.
+3. If required params are missing or ambiguous, ask the user to provide only those params before calling `seller_sprite_run`.
+4. Call `seller_sprite_run` with `scenario`, `site`, `period`, `params`, and optionally `export_format`.
+5. Use the returned `data.job_id` for follow-up status/export calls.
+6. Call `seller_sprite_export` when the user needs the file link.
+7. If MCP tools are unavailable, report that SellerSprite MCP is unavailable.
 
 ## Authentication
-
-SellerSprite credentials are loaded from the OPS integration account API. The user must have a valid OPS auth session before `seller_sprite_run` can fetch credentials.
-
-- If the user is not authenticated or the tool reports `您已登出` / integration account auth failure, call `auth_mcp_login` first, then retry the SellerSprite request.
-- Do not ask the user for SellerSprite account credentials.
-
-If `seller_sprite_run` fails with `ERR_GLOBAL_SESSION_EXPIRED` or a message indicating SellerSprite session expiration, retry the same call once after the backend refreshes login. Do not ask the user for SellerSprite credentials.
 
 SellerSprite login is cached by the backend. Do not trigger repeated login manually; normal runs reuse cached cookies and only re-login when the session expires.
 
@@ -42,11 +37,24 @@ SellerSprite integration accounts are cached in the backend process for 10 minut
 
 ## Missing Params Policy
 
+- Do not call `seller_sprite_run` when the scenario is unclear or required params are missing.
+- Ask a concise clarification question when the user request is too broad, such as `跑卖家精灵`, `查一下`, `导出数据`, or `看这个产品`, and no scenario can be determined confidently.
+- If multiple scenarios may match the same wording, ask the user to choose. Common ambiguous cases:
+  - `查关键词`: choose `keyword-miner`, `keyword-reverse`, or `traffic-source`.
+  - `查产品`: choose `competitor-lookup` or `product-research`.
+  - `看市场/类目`: choose `market-research` or `product-research`.
 - Ask only for missing required params, including one-of required groups.
 - Do not ask for optional params. Omit them and let backend defaults apply unless the user explicitly provides values.
 - If a scenario has no required params, run it with defaults after mapping the intent.
 - Always include known user-provided conditions in `params`; do not invent category node IDs or hidden enum values.
 - If category text maps to multiple possible nodes or no local node ID is available, ask the user to choose or run without the category filter.
+
+Clarification examples:
+
+- `你想做关键词挖掘、关键词反查，还是查流量来源？`
+- `查竞品需要 keyword、brand、sellerName、asins 或 Amazon 产品链接中的一种，请补充。`
+- `关键词反查需要 ASIN，请提供 ASIN 或 Amazon 产品链接。`
+- `查流量来源需要关键词或 ASIN，请补充。`
 
 ## Scenario Mapping
 
@@ -98,6 +106,16 @@ For `product-research`, 推荐模式传 `params.recommendationMode`，可用值�
 | `minBsr` / `maxBsr` | `minRanking` / `maxRanking` |
 
 If both alias and internal field are provided, the internal field wins.
+
+### Category Params
+
+For `product-research` and `competitor-lookup`, category filters are not free text. The backend request uses `params.node`, `params.category`, or `params.nodeIdPaths`, but the value must be SellerSprite category node ID path, such as `1055398:1063236`.
+
+- Before passing a user-provided category name, look it up in the local category snapshot `opscli/seller_sprite/reference/category-trees/US-bsr_sales_nearly.json` under `categoryIndex`.
+- If the name has one exact match, pass the matched node ID path in `params.category`.
+- If the name has multiple possible matches, ask the user to confirm the full category path.
+- If the name is not found in the snapshot, ask the user to provide a more complete category path or node ID. Do not send the raw text as `nodeIdPaths`.
+- Example: `bath` maps to `1055398:1063236` in the US snapshot. `bed frames` is not present in the current snapshot, so ask for confirmation instead of inventing a node ID.
 
 ## Defaults
 
@@ -234,4 +252,5 @@ Rules:
 - Put only important conditions in the first sentence, such as site, keyword, ASIN, period, or recommendation mode.
 - Prefer filename or link for the export file; avoid showing full local paths as standalone code blocks.
 - If row count is 0, say `row_count: 0` and include the parameters used only in a compact inline form.
+- If row count is 0, ask the user to confirm whether key inputs are correct before retrying. Mention likely mismatches such as marketplace/site vs ASIN region, wrong ASIN, typo in keyword, overly narrow category/filter, or an unsupported month/period. Example: `没有查到数据。请确认站点和 ASIN 是否匹配，比如 US 站不能查询只在 FR 站有效的 ASIN；也可以补充正确站点或 ASIN 后我再查。`
 - Do not expose SellerSprite account credentials.
