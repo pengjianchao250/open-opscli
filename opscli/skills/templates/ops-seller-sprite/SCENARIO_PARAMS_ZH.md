@@ -146,6 +146,47 @@
 - `newReleaseNum` / `newReleaseMonths`：新品月份数
 - `topn`：取 Top N 数据
 
+常用中文字段：
+
+| 中文含义 | params 字段 |
+| --- | --- |
+| 类目 | `node` / `category` / `nodeIdPath` |
+| 市场 / 类目关键词 | `departmentKeyword` |
+| 样本数量 | `sampleNumber` |
+| 头部 Listing 数量 | `topn` / `topNSelect` |
+| 新品定义月份 | `newReleaseNum` / `newReleaseMonths` / `newReleaseNumSelect` |
+| 月均销量 | `minAvgSales` / `maxAvgSales` |
+| 平均 BSR | `minAvgBsr` / `maxAvgBsr` |
+| 平均重量 | `minAvgWeight` / `maxAvgWeight` |
+| 头部 Listing 平均 BSR | `minHeadListingAvgBsr` / `maxHeadListingAvgBsr` |
+| 商品总数 | `minTotalProducts` / `maxTotalProducts` |
+| 月均销售额 | `minAvgRevenue` / `maxAvgRevenue` |
+| 平均价格 | `minAvgPrice` / `maxAvgPrice` |
+| 平均体积 | `minAvgVolume` / `maxAvgVolume` |
+| 头部 Listing 月均销量 | `minHeadListingAvgSales` / `maxHeadListingAvgSales` |
+| 平均评分数 | `minAvgReviews` / `maxAvgReviews` |
+| 平均星级 | `minAvgRating` / `maxAvgRating` |
+| 平均毛利率 | `minAvgProfit` / `maxAvgProfit` |
+| 头部 Listing 月均销售额 | `minHeadListingAvgRevenue` / `maxHeadListingAvgRevenue` |
+| 品牌数量 | `minBrands` / `maxBrands` |
+| 商品集中度 | `minHeadListingProductCrn` / `maxHeadListingProductCrn` |
+| A+ 数量占比 | `minEbcRatio` / `maxEbcRatio` |
+| Amazon 自营占比 | `minAmzRatio` / `maxAmzRatio` |
+| 卖家数量 | `minSellers` / `maxSellers` |
+| 品牌集中度 | `minHeadListingBrandCrn` / `maxHeadListingBrandCrn` |
+| FBA 占比 | `minFbaRatio` / `maxFbaRatio` |
+| 卖家所属地 | `sellerNations` |
+| 平均卖家数 | `minAvgSellers` / `maxAvgSellers` |
+| 卖家集中度 | `minHeadListingSellerCrn` / `maxHeadListingSellerCrn` |
+| FBM 占比 | `minFbmRatio` / `maxFbmRatio` |
+| 新品数量占比 | `minNewRatio` / `maxNewRatio` |
+| 新品平均价格 | `minNewAvgPrice` / `maxNewAvgPrice` |
+| 新品月均销售额 | `minNewAvgRevenue` / `maxNewAvgRevenue` |
+| 新品数量 | `minNewCount` / `maxNewCount` |
+| 新品平均星级 | `minNewAvgRating` / `maxNewAvgRating` |
+| 新品平均评分数 | `minNewAvgReviews` / `maxNewAvgReviews` |
+| 新品月均销量 | `minNewAvgSales` / `maxNewAvgSales` |
+
 ## 类目参数注意
 
 `product-research`、`competitor-lookup` 和 `market-research` 可以直接传自然语言类目，后端会通过卖家精灵类目接口 `/v2/competitor-lookup/nodes` 解析。
