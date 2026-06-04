@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteExportResult
@@ -124,6 +125,10 @@ def _apply_transform(value: Any, transform: str | None, row: dict[str, Any], *, 
         return "" if _is_blank(value) else f"{value}%"
     if transform == "dateMillis":
         return _date_millis(value)
+    if transform == "keywordReverseUpdatedTime":
+        return _keyword_reverse_updated_time(value, site=site)
+    if transform == "rankPage":
+        return _rank_page(value)
     if transform == "divide10":
         return "" if _is_blank(value) else float(value) / 10
     if transform == "sellerNation":
@@ -278,6 +283,29 @@ def _date_millis(value: Any) -> str:
     return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
+def _keyword_reverse_updated_time(value: Any, *, site: str) -> str:
+    if _is_blank(value):
+        return ""
+    timestamp = float(value) / 1000
+    china_time = datetime.fromtimestamp(timestamp, tz=_timezone_for_site("CN"))
+    site_time = datetime.fromtimestamp(timestamp, tz=_timezone_for_site(site))
+    site_label = SITE_TIME_LABELS.get(str(site).upper(), str(site).upper())
+    return f"中{china_time.strftime('%m.%d %H:%M')}\n{site_label}{site_time.strftime('%m.%d %H:%M')}"
+
+
+def _rank_page(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    page = value.get("page")
+    index = value.get("index")
+    page_size = value.get("pageSize")
+    if _is_blank(page):
+        return ""
+    if _is_blank(index) or _is_blank(page_size):
+        return f"第{page}页"
+    return f"第{page}页,{index}/{page_size}"
+
+
 def _seller_nation(value: Any) -> str:
     if _is_blank(value):
         return ""
@@ -292,6 +320,42 @@ def _bid_range(row: dict[str, Any], *, site: str) -> str:
         return "-"
     currency = currency_label(site)
     return f"{currency}{float(bid_min):.2f}-{currency}{float(bid_max):.2f}"
+
+
+SITE_TIME_LABELS = {
+    "US": "美",
+    "JP": "日",
+    "DE": "德",
+    "UK": "英",
+    "FR": "法",
+    "IT": "意",
+    "ES": "西",
+    "CA": "加",
+    "IN": "印",
+    "MX": "墨",
+}
+
+SITE_TIMEZONES = {
+    "CN": ("Asia/Shanghai", timezone(timedelta(hours=8))),
+    "US": ("America/Los_Angeles", timezone(timedelta(hours=-7))),
+    "JP": ("Asia/Tokyo", timezone(timedelta(hours=9))),
+    "DE": ("Europe/Berlin", timezone(timedelta(hours=1))),
+    "UK": ("Europe/London", timezone.utc),
+    "FR": ("Europe/Paris", timezone(timedelta(hours=1))),
+    "IT": ("Europe/Rome", timezone(timedelta(hours=1))),
+    "ES": ("Europe/Madrid", timezone(timedelta(hours=1))),
+    "CA": ("America/Los_Angeles", timezone(timedelta(hours=-7))),
+    "IN": ("Asia/Kolkata", timezone(timedelta(hours=5, minutes=30))),
+    "MX": ("America/Mexico_City", timezone(timedelta(hours=-6))),
+}
+
+
+def _timezone_for_site(site: str):
+    name, fallback = SITE_TIMEZONES.get(str(site).upper(), SITE_TIMEZONES["CN"])
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return fallback
 
 
 def _asin_list(value: Any) -> str:
