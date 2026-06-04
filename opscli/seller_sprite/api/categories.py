@@ -65,6 +65,9 @@ class SellerSpriteCategoryResolver:
 
     async def _resolve_label(self, value: str, *, market: Any, table: str) -> str:
         matches = await self._nodes(market=market, table=table, node_label_path=value)
+        exact_matches = _exact_matches(value, matches)
+        if len(exact_matches) == 1:
+            return exact_matches[0].node_id_path
         if len(matches) != 1:
             _raise_match_error(value, matches, scope="全部类目")
         return matches[0].node_id_path
@@ -133,6 +136,28 @@ def _label(item: dict[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def _exact_matches(value: str, matches: list[CategoryNode]) -> list[CategoryNode]:
+    normalized = _normalize_category_text(value)
+    if not normalized:
+        return []
+    return [
+        node
+        for node in matches
+        if normalized
+        in {
+            _normalize_category_text(node.label_path),
+            _normalize_category_text(node.label),
+        }
+    ]
+
+
+def _normalize_category_text(value: str) -> str:
+    text = str(value or "").strip().replace("：", ":")
+    text = re.sub(r"\s*:\s*", ":", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.casefold()
 
 
 def _raise_match_error(value: str, matches: list[CategoryNode], *, scope: str) -> None:
