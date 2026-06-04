@@ -143,6 +143,8 @@ def _apply_transform(value: Any, transform: str | None, row: dict[str, Any], *, 
         return _list_join(value)
     if transform == "badgeLabels":
         return _enum_list_join(value, BADGE_LABELS)
+    if transform == "trafficSourceLabels":
+        return _enum_list_join(value, TRAFFIC_SOURCE_LABELS)
     if transform == "trafficKeywordTypeLabels":
         return _enum_list_join(value, TRAFFIC_KEYWORD_TYPE_LABELS)
     if transform == "conversionKeywordTypeLabels":
@@ -396,6 +398,15 @@ BADGE_LABELS = {
     "sponsorVideo": "视频广告词",
     "ADS": "SP广告词",
     "ads": "SP广告词",
+}
+
+TRAFFIC_SOURCE_LABELS = {
+    "SEARCH": "自然搜索",
+    "search": "自然搜索",
+    "OFFICIAL": "亚马逊推荐",
+    "official": "亚马逊推荐",
+    "AD": "PPC广告",
+    "ad": "PPC广告",
 }
 
 TRAFFIC_KEYWORD_TYPE_LABELS = {
