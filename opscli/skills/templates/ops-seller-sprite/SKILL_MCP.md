@@ -46,8 +46,9 @@ SellerSprite integration accounts are cached in the backend process for 10 minut
 - Ask only for missing required params, including one-of required groups.
 - Do not ask for optional params. Omit them and let backend defaults apply unless the user explicitly provides values.
 - If a scenario has no required params, run it with defaults after mapping the intent.
-- Always include known user-provided conditions in `params`; do not invent category node IDs or hidden enum values.
-- If category text maps to multiple possible nodes or no local node ID is available, ask the user to choose or run without the category filter.
+- Always include known user-provided conditions in `params`; do not invent hidden enum values.
+- Category text can be passed directly in `params.category` or `params.node`. The backend resolves it through SellerSprite's category API before querying.
+- If SellerSprite returns multiple category matches, stop and ask the user to choose one of the returned full category paths or provide `nodeIdPath`.
 
 Clarification examples:
 
@@ -71,10 +72,10 @@ Clarification examples:
 
 | scenario | Required | Common optional params |
 | --- | --- | --- |
-| `competitor-lookup` | one of `keyword`, `brand`, `sellerName`, `asins`, product link | `node` |
+| `competitor-lookup` | one of `keyword`, `brand`, `sellerName`, `asins`, product link | `node` / `category` |
 | `product-research` | none | `recommendationMode`, `node`/`category`, `minPrice`, `maxPrice`, `minSales`, `maxSales`, `minReviews`, `maxReviews`, `minReviewRating`, `maxReviewRating` |
 | `keyword-miner` | `keyword` | `filterRootWord`, `amazonChoice`, `includeHighFrequency` |
-| `keyword-reverse` | `asin` | `amazonChoice`/`ac`, `includeHighFrequency`, `badges` |
+| `keyword-reverse` | `asin` | `badges` |
 | `traffic-source` | `keywordOrAsin` | `keyword`, `asin`, `asins`, `order`, `desc` |
 | `market-research` | none | `node`/`category`, `departmentKeyword`, `newReleaseNum`/`newReleaseMonths`, `topn` |
 
@@ -109,13 +110,14 @@ If both alias and internal field are provided, the internal field wins.
 
 ### Category Params
 
-For `product-research` and `competitor-lookup`, category filters are not free text. The backend request uses `params.node`, `params.category`, or `params.nodeIdPaths`, but the value must be SellerSprite category node ID path, such as `1055398:1063236`.
+For `product-research`, `competitor-lookup`, and `market-research`, pass category filters through `params.node`, `params.category`, `params.nodeIdPath`, or `params.nodeIdPaths`.
 
-- Before passing a user-provided category name, look it up in the local category snapshot `opscli/seller_sprite/reference/category-trees/US-bsr_sales_nearly.json` under `categoryIndex`.
-- If the name has one exact match, pass the matched node ID path in `params.category`.
-- If the name has multiple possible matches, ask the user to confirm the full category path.
-- If the name is not found in the snapshot, ask the user to provide a more complete category path or node ID. Do not send the raw text as `nodeIdPaths`.
-- Example: `bath` maps to `1055398:1063236` in the US snapshot. `bed frames` is not present in the current snapshot, so ask for confirmation instead of inventing a node ID.
+- The backend calls SellerSprite's category API `/v2/competitor-lookup/nodes` with `marketId`, `table`, and `nodeLabelPath` to resolve category text.
+- You may pass natural language category text, such as `bath`, `bed frames`, or a more complete path.
+- You may also pass a SellerSprite node path directly, such as `1055398:1063236`; numeric paths are used as-is.
+- If the category API returns exactly one match, the backend converts it to `nodeIdPath` before querying.
+- If the category API returns multiple matches, the run fails with candidate `nodeIdPath` and full category paths. Ask the user to choose; do not retry by guessing.
+- If no category is found, ask the user for a more complete category path or a known `nodeIdPath`.
 
 ## Defaults
 
@@ -135,7 +137,7 @@ Scenario defaults:
 | `competitor-lookup` | `page=1`, `order.field=amz_unit`, `order.desc=true`, `lowPrice=N` |
 | `product-research` | `page=1`, `selectType=2`, `order.field=amz_unit`, `order.desc=true`, `smallAndLight=N`, `lowPrice=N` |
 | `keyword-miner` | `pageNum=1`, `orderBy=5`, `desc=true`, `filterRootWord=0`, `amazonChoice=false`, `includeHighFrequency=true` |
-| `keyword-reverse` | `page=1`, `order=12`, `desc=true`, `ac=false`, `includeHighFrequency=true` |
+| `keyword-reverse` | `page=1`, `order=12`, `desc=true` |
 | `traffic-source` | `pageNo=1`, `order=10`, `desc=true` |
 | `market-research` | `marketId=US(1)`, `monthName=bsr_sales_nearly`, `sampleNumber=1`, `topn=10`, `newReleaseNum=6`, `order.field=total_sales`, `order.desc=true` |
 
@@ -199,6 +201,19 @@ Scenario defaults:
   "period": "30d",
   "params": {
     "recommendationMode": "精品铺货"
+  }
+}
+```
+
+```json
+{
+  "scenario": "product-research",
+  "site": "US",
+  "period": "30d",
+  "params": {
+    "category": "bed frames",
+    "minSales": 300,
+    "maxReviews": 50
   }
 }
 ```

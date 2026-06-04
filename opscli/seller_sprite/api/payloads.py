@@ -222,11 +222,8 @@ def make_keyword_reverse_payload(input_data: dict[str, Any]) -> dict[str, Any]:
         "order": _int(input_data.get("order"), 12),
         "desc": order_desc(input_data.get("desc")),
         "exactly": truthy(input_data.get("exactly")),
-        "ac": truthy(input_data.get("ac") or input_data.get("amazonChoice")),
         "keywordBidMatchType": input_data.get("keywordBidMatchType") or "exact",
         "filterDeletedKeywords": truthy(input_data.get("filterDeletedKeywords")),
-        "includeHighFrequency": truthy(input_data.get("includeHighFrequency"), default=True),
-        "groupNum": _int(input_data.get("groupNum"), 1),
     }
 
 

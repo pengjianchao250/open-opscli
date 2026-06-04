@@ -17,7 +17,6 @@
       "order",
       "desc",
       "exactly",
-      "ac",
       "keywordBidMatchType",
       "filterDeletedKeywords"
     ]
@@ -35,7 +34,6 @@
       "order",
       "desc",
       "exactly",
-      "ac",
       "keywordBidMatchType",
       "filterDeletedKeywords",
       "groupNum"
