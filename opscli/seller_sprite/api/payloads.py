@@ -98,17 +98,32 @@ PRODUCT_RESEARCH_RECOMMENDATION_ALIASES: dict[str, str] = {
 PRODUCT_RESEARCH_OFFICIAL_FIELD_ALIASES: dict[str, str] = {
     "minUnits": "minSales",
     "maxUnits": "maxSales",
+    "minRevenue": "minAmount",
+    "maxRevenue": "maxAmount",
+    "minUnitsCr": "minTotalUnitsGrowth",
+    "maxUnitsCr": "maxTotalUnitsGrowth",
     "minRatings": "minReviews",
     "maxRatings": "maxReviews",
+    "minRatingsCv": "minReviewsGrouth",
+    "maxRatingsCv": "maxReviewsGrouth",
     "minStar": "minReviewRating",
     "maxStar": "maxReviewRating",
     "availableMonth": "putawayMonth",
     "fulfillment": "sellerTypes",
+    "dimensionType": "pkgDimensionTypeList",
+    "sellerNation": "sellerNationList",
     "minVariations": "minVariations",
     "maxVariations": "maxVariations",
     "variation": "maxVariations",
     "minBsr": "minRanking",
     "maxBsr": "maxRanking",
+    "minBsrCv": "minRankingCv",
+    "maxBsrCv": "maxRankingCv",
+    "minBsrCr": "minRankingCr",
+    "maxBsrCr": "maxRankingCr",
+    "minLqs": "lqsFrom",
+    "maxLqs": "lqsTo",
+    "excludeKeywords": "outOfKeywords",
     "minSellers": "minSellers",
     "maxSellers": "maxSellers",
 }
@@ -171,7 +186,15 @@ def make_product_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     _append_product_list_filters(payload, input_data)
     _append_product_range_filters(payload, input_data)
     _append_product_extra_filters(payload, input_data)
-    for key in ["keyword", "includeBrands", "excludeBrands", "includeSellers", "excludeSellers"]:
+    for key in [
+        "keyword",
+        "keywords",
+        "includeBrands",
+        "excludeBrands",
+        "includeSellers",
+        "excludeSellers",
+        "outOfKeywords",
+    ]:
         if input_data.get(key):
             payload[key] = input_data[key]
     return payload
@@ -492,6 +515,17 @@ def normalize_product_research_input(input_data: dict[str, Any]) -> dict[str, An
     badge_nr = normalized.get("badgeNR")
     if badge_nr is not None and "productTags" not in normalized and truthy(badge_nr):
         normalized["productTags"] = ["NewRelease"]
+    badge_map = {
+        "badgeBS": "BestSeller",
+        "badgeAC": "AmazonChoice",
+        "badgeNR": "NewRelease",
+    }
+    tags = csv(normalized.get("productTags"))
+    for source, tag in badge_map.items():
+        if truthy(normalized.get(source)) and tag not in tags:
+            tags.append(tag)
+    if tags:
+        normalized["productTags"] = tags
     return normalized
 
 
@@ -511,10 +545,44 @@ def _append_product_range_filters(payload: dict[str, Any], input_data: dict[str,
         "maxPrice": ("maxPrice", "priceMax"),
         "minSales": ("minSales", "salesMin"),
         "maxSales": ("maxSales", "salesMax"),
+        "minAmount": ("minAmount",),
+        "maxAmount": ("maxAmount",),
+        "minAmzUnit": ("minAmzUnit",),
+        "maxAmzUnit": ("maxAmzUnit",),
+        "minTotalUnitsGrowth": ("minTotalUnitsGrowth",),
+        "maxTotalUnitsGrowth": ("maxTotalUnitsGrowth",),
+        "minRanking": ("minRanking",),
+        "maxRanking": ("maxRanking",),
+        "minSubBsrRank": ("minSubBsrRank",),
+        "maxSubBsrRank": ("maxSubBsrRank",),
+        "minRankingCv": ("minRankingCv",),
+        "maxRankingCv": ("maxRankingCv",),
+        "minRankingCr": ("minRankingCr",),
+        "maxRankingCr": ("maxRankingCr",),
+        "minVariations": ("minVariations",),
+        "maxVariations": ("maxVariations",),
+        "minQuestions": ("minQuestions",),
+        "maxQuestions": ("maxQuestions",),
+        "minReviewsGrouth": ("minReviewsGrouth",),
+        "maxReviewsGrouth": ("maxReviewsGrouth",),
+        "minReviewsRate": ("minReviewsRate",),
+        "maxReviewsRate": ("maxReviewsRate",),
+        "minProfit": ("minProfit",),
+        "maxProfit": ("maxProfit",),
+        "lqsFrom": ("lqsFrom",),
+        "lqsTo": ("lqsTo",),
         "minReviews": ("minReviews", "reviewsMin"),
         "maxReviews": ("maxReviews", "reviewsMax"),
         "minReviewRating": ("minReviewRating", "ratingMin"),
         "maxReviewRating": ("maxReviewRating", "ratingMax"),
+        "minFba": ("minFba",),
+        "maxFba": ("maxFba",),
+        "minWeights": ("minWeights",),
+        "maxWeights": ("maxWeights",),
+        "minDeliveryPrice": ("minDeliveryPrice",),
+        "maxDeliveryPrice": ("maxDeliveryPrice",),
+        "minSellers": ("minSellers",),
+        "maxSellers": ("maxSellers",),
     }
     for target, aliases in field_aliases.items():
         for alias in aliases:
@@ -525,17 +593,11 @@ def _append_product_range_filters(payload: dict[str, Any], input_data: dict[str,
 
 def _append_product_extra_filters(payload: dict[str, Any], input_data: dict[str, Any]) -> None:
     for key in [
-        "minRanking",
-        "maxRanking",
-        "minSellers",
-        "maxSellers",
         "putawayMonth",
-        "minTotalUnitsGrowth",
-        "maxVariations",
-        "minRankingCr",
-        "minVariations",
         "smallAndLight",
         "lowPrice",
+        "video",
+        "matchType",
     ]:
         if input_data.get(key) is not None:
             payload[key] = input_data[key]

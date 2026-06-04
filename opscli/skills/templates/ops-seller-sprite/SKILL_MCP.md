@@ -73,7 +73,7 @@ Clarification examples:
 | scenario | Required | Common optional params |
 | --- | --- | --- |
 | `competitor-lookup` | one of `keyword`, `brand`, `sellerName`, `asins`, product link | `node` / `category` |
-| `product-research` | none | `recommendationMode`, `node`/`category`, `minPrice`, `maxPrice`, `minSales`, `maxSales`, `minReviews`, `maxReviews`, `minReviewRating`, `maxReviewRating` |
+| `product-research` | none | `recommendationMode`, `node`/`category`, `minPrice`, `maxPrice`, `minSales`, `maxSales`, `minReviews`, `maxReviews`, `productTags`, `sellerTypes`, `keywords`, `outOfKeywords` |
 | `keyword-miner` | `keyword` | `filterRootWord`, `amazonChoice`, `includeHighFrequency` |
 | `keyword-reverse` | `asin` | `badges` |
 | `traffic-source` | `keywordOrAsin` | `keyword`, `asin`, `asins`, `order`, `desc` |
@@ -93,18 +93,73 @@ For `product-research`, 推荐模式传 `params.recommendationMode`，可用值�
 
 推荐模式会展开为一组筛选条件；用户同时提供同名筛选条件时，以用户显式条件为准。
 
+`product-research` 常用中文字段：
+
+| 中文含义 | params 字段 |
+| --- | --- |
+| 类目 | `node` / `category` / `nodeIdPaths` |
+| 月销量 | `minSales` / `maxSales` |
+| 月销售额 | `minAmount` / `maxAmount` |
+| 子体销量 | `minAmzUnit` / `maxAmzUnit` |
+| 月销量增长率 | `minTotalUnitsGrowth` / `maxTotalUnitsGrowth` |
+| 大类 BSR | `minRanking` / `maxRanking` |
+| 小类 BSR | `minSubBsrRank` / `maxSubBsrRank` |
+| BSR 增长数 | `minRankingCv` / `maxRankingCv` |
+| BSR 增长率 | `minRankingCr` / `maxRankingCr` |
+| 变体数 | `minVariations` / `maxVariations` |
+| Q&A | `minQuestions` / `maxQuestions` |
+| 月评新增 | `minReviewsGrouth` / `maxReviewsGrouth` |
+| 留评率 | `minReviewsRate` / `maxReviewsRate` |
+| 毛利率 | `minProfit` / `maxProfit` |
+| LQS | `lqsFrom` / `lqsTo` |
+| 价格 | `minPrice` / `maxPrice` |
+| 评分数 | `minReviews` / `maxReviews` |
+| 评分 | `minReviewRating` / `maxReviewRating` |
+| FBA 运费 | `minFba` / `maxFba` |
+| 上架时间 | `putawayMonth` |
+| 包装重量 | `minWeights` / `maxWeights`，单位用 `weightUnit` |
+| 买家运费 | `minDeliveryPrice` / `maxDeliveryPrice` |
+| 卖家数 | `minSellers` / `maxSellers` |
+| 卖家所属地 | `sellerNationList` |
+| 包含 / 排除品牌 | `includeBrands` / `excludeBrands` |
+| 包含 / 排除卖家 | `includeSellers` / `excludeSellers` |
+| 包含 / 排除关键词 | `keywords` / `outOfKeywords` |
+
+`product-research` 枚举参数：
+
+- `productTags`：商品标识数组，可用 `BestSeller`、`AmazonChoice`、`NewRelease`
+- `sellerTypes`：配送方式数组，可用 `AMZ`、`FBA`、`FBM`
+- `pkgDimensionTypeList`：包装尺寸分段数组，可用 `SS`、`LS`、`SB`、`LB`、`ELO`、`EL5O`、`EL7O`、`EL15O`、`O`
+- `sellerNationList`：卖家所属地数组，如 `CN`、`US`、`JP`、`GB`、`DE`
+- `video`：主图视频，`Y` 表示含视频，`N` 表示不含视频
+- `lowPrice`：低价商品，`Y` / `N`
+- `smallAndLight`：商品资格，常用 `N` 或 `lowPrice`
+- `filterSub`：是否只看所选子类目排名
+- `matchType`：关键词匹配方式，`0` 模糊匹配，`1` 词组匹配，`2` 精准匹配
+
 `product-research` accepts official SellerSprite API aliases in `params`; they are converted internally:
 
 | Official alias | Internal field |
 | --- | --- |
 | `minUnits` / `maxUnits` | `minSales` / `maxSales` |
+| `minRevenue` / `maxRevenue` | `minAmount` / `maxAmount` |
+| `minUnitsCr` / `maxUnitsCr` | `minTotalUnitsGrowth` / `maxTotalUnitsGrowth` |
 | `minRatings` / `maxRatings` | `minReviews` / `maxReviews` |
+| `minRatingsCv` / `maxRatingsCv` | `minReviewsGrouth` / `maxReviewsGrouth` |
 | `minStar` / `maxStar` | `minReviewRating` / `maxReviewRating` |
 | `availableMonth` | `putawayMonth` |
 | `fulfillment` | `sellerTypes` |
+| `badgeBS=true` | add `BestSeller` to `productTags` |
+| `badgeAC=true` | add `AmazonChoice` to `productTags` |
 | `badgeNR=true` | `productTags=["NewRelease"]` |
 | `variation` | `maxVariations` |
 | `minBsr` / `maxBsr` | `minRanking` / `maxRanking` |
+| `minBsrCv` / `maxBsrCv` | `minRankingCv` / `maxRankingCv` |
+| `minBsrCr` / `maxBsrCr` | `minRankingCr` / `maxRankingCr` |
+| `minLqs` / `maxLqs` | `lqsFrom` / `lqsTo` |
+| `dimensionType` | `pkgDimensionTypeList` |
+| `sellerNation` | `sellerNationList` |
+| `excludeKeywords` | `outOfKeywords` |
 
 If both alias and internal field are provided, the internal field wins.
 
@@ -116,6 +171,7 @@ For `product-research`, `competitor-lookup`, and `market-research`, pass categor
 - You may pass natural language category text, such as `bath`, `bed frames`, or a more complete path.
 - You may also pass a SellerSprite node path directly, such as `1055398:1063236`; numeric paths are used as-is.
 - If the category API returns exactly one match, the backend converts it to `nodeIdPath` before querying.
+- If the category API returns multiple matches but one candidate exactly matches the provided full category path or leaf category name, the backend uses that exact match directly.
 - If the category API returns multiple matches, the run fails with candidate `nodeIdPath` and full category paths. Ask the user to choose; do not retry by guessing.
 - If no category is found, ask the user for a more complete category path or a known `nodeIdPath`.
 

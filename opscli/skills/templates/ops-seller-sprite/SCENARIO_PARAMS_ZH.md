@@ -29,10 +29,51 @@
 
 - `recommendationMode`：推荐模式
 - `node` / `category`：类目名称、完整类目路径或节点 ID 路径
-- `minPrice` / `maxPrice`：最低价 / 最高价
+- `productTags`：商品标识，数组，如 `BestSeller`、`AmazonChoice`、`NewRelease`
+- `sellerTypes`：配送方式，数组，如 `AMZ`、`FBA`、`FBM`
+- `sellerNationList`：卖家所属地，数组，如 `CN`、`US`、`JP`
+- `pkgDimensionTypeList`：包装尺寸分段，数组，如 `SS`、`LS`、`SB`、`LB`、`ELO`、`EL5O`、`EL7O`、`EL15O`、`O`
+- `video`：主图视频，`Y` 表示含视频，`N` 表示不含视频
+- `lowPrice`：低价商品，`Y` / `N`
+- `smallAndLight`：商品资格，常用 `N` 或 `lowPrice`
+- `filterSub`：是否只看所选子类目排名
+- `matchType`：关键词匹配方式，`0` 模糊匹配，`1` 词组匹配，`2` 精准匹配
+
+销售表现：
+
 - `minSales` / `maxSales`：最低月销量 / 最高月销量
+- `minAmount` / `maxAmount`：最低月销售额 / 最高月销售额
+- `minAmzUnit` / `maxAmzUnit`：最低子体销量 / 最高子体销量
+- `minTotalUnitsGrowth` / `maxTotalUnitsGrowth`：最低月销量增长率 / 最高月销量增长率
+- `minRanking` / `maxRanking`：最低大类 BSR / 最高大类 BSR
+- `minSubBsrRank` / `maxSubBsrRank`：最低小类 BSR / 最高小类 BSR
+- `minRankingCv` / `maxRankingCv`：最低 BSR 增长数 / 最高 BSR 增长数
+- `minRankingCr` / `maxRankingCr`：最低 BSR 增长率 / 最高 BSR 增长率
+
+产品信息：
+
+- `minVariations` / `maxVariations`：最低变体数 / 最高变体数
+- `minQuestions` / `maxQuestions`：最低 Q&A / 最高 Q&A
+- `minReviewsGrouth` / `maxReviewsGrouth`：最低月评新增 / 最高月评新增
+- `minReviewsRate` / `maxReviewsRate`：最低留评率 / 最高留评率
+- `minProfit` / `maxProfit`：最低毛利率 / 最高毛利率
+- `lqsFrom` / `lqsTo`：最低 LQS / 最高 LQS
+- `minPrice` / `maxPrice`：最低价 / 最高价
 - `minReviews` / `maxReviews`：最低评分数 / 最高评分数
 - `minReviewRating` / `maxReviewRating`：最低评分 / 最高评分
+- `minFba` / `maxFba`：最低 FBA 运费 / 最高 FBA 运费
+- `putawayMonth`：上架月数，如 `1` 表示近 30 天，`3` 表示近 3 个月，`6` 表示近半年
+- `minWeights` / `maxWeights`：最低包装重量 / 最高包装重量
+- `weightUnit`：重量单位，如 `g`、`kg`、`oz`、`lb`
+- `minDeliveryPrice` / `maxDeliveryPrice`：最低买家运费 / 最高买家运费
+- `minSellers` / `maxSellers`：最低卖家数 / 最高卖家数
+
+竞品筛选：
+
+- `includeBrands` / `excludeBrands`：包含品牌 / 排除品牌
+- `includeSellers` / `excludeSellers`：包含卖家 / 排除卖家
+- `keywords`：包含关键词
+- `outOfKeywords`：排除关键词
 
 推荐模式可选：
 
@@ -41,13 +82,22 @@
 官方别名：
 
 - `minUnits` / `maxUnits`：最低销量 / 最高销量
+- `minRevenue` / `maxRevenue`：最低销售额 / 最高销售额
+- `minUnitsCr` / `maxUnitsCr`：最低销量增长率 / 最高销量增长率
 - `minRatings` / `maxRatings`：最低评分数 / 最高评分数
+- `minRatingsCv` / `maxRatingsCv`：最低月评新增 / 最高月评新增
 - `minStar` / `maxStar`：最低星级 / 最高星级
 - `availableMonth`：上架月数
 - `fulfillment`：配送方式
-- `badgeNR`：新品榜标记
+- `badgeBS` / `badgeAC` / `badgeNR`：Best Seller / Amazon's Choice / New Release 标记
 - `variation`：变体数
 - `minBsr` / `maxBsr`：最低 BSR / 最高 BSR
+- `minBsrCv` / `maxBsrCv`：最低 BSR 增长数 / 最高 BSR 增长数
+- `minBsrCr` / `maxBsrCr`：最低 BSR 增长率 / 最高 BSR 增长率
+- `minLqs` / `maxLqs`：最低 LQS / 最高 LQS
+- `dimensionType`：包装尺寸分段
+- `sellerNation`：卖家所属地
+- `excludeKeywords`：排除关键词
 
 ## 关键词挖掘 `keyword-miner`
 
@@ -102,5 +152,6 @@
 
 - 可传：`bath`、`bed frames`、`Home & Kitchen:Bedding:Bed Skirts`
 - 可传节点路径：`1055398:1063236`
+- 如果接口返回多个候选，但其中有一个候选与输入的完整类目路径或叶子类目名完全匹配，后端会直接使用该候选继续查询。
 - 如果接口返回多个候选，任务会暂停并返回候选 `nodeIdPath` / 完整类目路径，需要用户补充后再查。
 - 不要猜测节点 ID。
