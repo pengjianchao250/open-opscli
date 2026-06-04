@@ -164,7 +164,7 @@ TRAFFIC_SOURCE_COLUMNS = [
     ExportColumn("评分数", "reviews"),
     ExportColumn("变体数", "variations"),
     ExportColumn("SKU", "sku"),
-    ExportColumn("流量来源", "badgeLabels", transform="listJoin"),
+    ExportColumn("流量来源", "badgeLabels", transform="trafficSourceLabels"),
     ExportColumn("全部流量词", "keywords"),
     ExportColumn("自然搜索词", "counter.NATURAL_SEARCHING"),
     ExportColumn("AC推荐词", "counter.AMAZON_CHOICE"),
@@ -220,17 +220,26 @@ MARKET_RESEARCH_COLUMNS = [
 
 def columns_for_scenario(scenario: str, site: str) -> list[ExportColumn]:
     """返回场景对应官方模板列。"""
+    currency = currency_label(site)
     if scenario == "keyword-miner":
-        return KEYWORD_MINER_COLUMNS
+        return _columns_with_currency_titles(
+            KEYWORD_MINER_COLUMNS,
+            currency,
+            {"PPC竞价", "建议竞价范围", "均价"},
+        )
     if scenario == "keyword-reverse":
-        return KEYWORD_REVERSE_COLUMNS
+        return _columns_with_currency_titles(
+            KEYWORD_REVERSE_COLUMNS,
+            currency,
+            {"PPC价格", "建议竞价范围"},
+        )
     if scenario == "traffic-source":
-        return TRAFFIC_SOURCE_COLUMNS
+        return _columns_with_currency_titles(TRAFFIC_SOURCE_COLUMNS, currency, {"价格"})
     if scenario == "market-research":
-        return _market_research_columns(currency_label(site))
+        return _market_research_columns(currency)
     if scenario == "competitor-lookup":
         return _product_columns(
-            currency_label(site),
+            currency,
             swap_unit_columns=True,
             reviews_delta_source="reviewsIncreasement",
             percent_suffix_titles={"留评率", "毛利率"},
@@ -238,7 +247,7 @@ def columns_for_scenario(scenario: str, site: str) -> list[ExportColumn]:
         )
     if scenario == "product-research":
         return _product_columns(
-            currency_label(site),
+            currency,
             percent_suffix_titles={"大类BSR增长率", "月销量增长率", "留评率", "毛利率"},
         )
     return []
@@ -300,6 +309,22 @@ def _product_columns(
             transform = "percentSuffix"
         columns.append(ExportColumn(replacements.get(column.title, column.title), source, fallback, transform))
     return columns
+
+
+def _columns_with_currency_titles(
+    columns: list[ExportColumn],
+    currency: str,
+    titles: set[str],
+) -> list[ExportColumn]:
+    return [
+        ExportColumn(
+            f"{column.title}({currency})" if column.title in titles else column.title,
+            column.source,
+            column.fallback,
+            column.transform,
+        )
+        for column in columns
+    ]
 
 
 def _market_research_columns(currency: str) -> list[ExportColumn]:
