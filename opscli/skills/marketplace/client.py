@@ -45,7 +45,17 @@ def _parse(response: httpx.Response, endpoint: str) -> dict:
     try:
         payload = response.json()
     except Exception as exc:
-        raise SkillRemoteError("远端返回了无法解析的 JSON", endpoint=endpoint) from exc
+        # 记录 HTTP 状态码和响应体前 200 字符，便于排查非 JSON 响应（如 404 HTML 页面）
+        body_preview = response.text[:200] if response.text else "(empty)"
+        _logger.warning(
+            "远端返回非 JSON 响应: endpoint=%s status=%d body=%s",
+            endpoint, response.status_code, body_preview,
+        )
+        raise SkillRemoteError(
+            f"远端返回了无法解析的 JSON (HTTP {response.status_code})",
+            endpoint=endpoint,
+            status_code=response.status_code,
+        ) from exc
 
     if response.status_code >= 400:
         msg = (payload.get("msg") or payload.get("message") or "") if isinstance(payload, dict) else ""
@@ -282,6 +292,7 @@ class MarketplaceClient:
     def batch_usage(self, records: list[dict]) -> dict:
         """批量上报使用记录。"""
         url = f"{self._base}/v1/skills/usages/batch"
+        _logger.debug("批量上报使用记录: url=%s count=%d", url, len(records))
         resp = httpx.post(
             url,
             headers=self._auth_headers(),
