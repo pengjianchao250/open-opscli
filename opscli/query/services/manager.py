@@ -84,10 +84,13 @@ class QueryManager:
         未指定 --dataset / --table-id 时返回所有数据集列表（不含字段），
         指定了筛选条件时返回匹配的数据集及其字段。
         """
-        # 远端优先，统一拉取最新数据
+        # 远端优先，统一拉取最新数据；过滤参数透传给后端按需收敛
         source = "remote"
         try:
-            remote_data = self.client.fetch_query_metadata()
+            remote_data = self.client.fetch_query_metadata(
+                dataset_alias=dataset_alias,
+                table_id=table_id,
+            )
             datasets = remote_data.get("datasets") or []
             fields = remote_data.get("fields") or []
         except Exception:

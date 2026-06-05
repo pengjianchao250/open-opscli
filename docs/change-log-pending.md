@@ -1,5 +1,27 @@
 # 待归档变更记录
 
+## 2026-06-05 query metadata - 把 --dataset / --table-id 参数透传给后端 API
+
+**变更原因**：`opscli query metadata --dataset ds_xxx` 命令此前把参数仅用于本地内存过滤，远端请求拉取全量 datasets+fields，造成网络浪费、opscli 端处理负担线性增长、后端无法做权限层面针对性优化；改造为参数透传，让后端按需返回。
+**改动点**：
+- `opscli/query/transport/client.py`：`fetch_query_metadata()` 增加可选关键字参数 `dataset_alias` / `table_id`，按 snake_case 拼接为 `httpx.get(params=...)`；None 值自动忽略，无参调用 `params=None` 与原行为一致
+- `opscli/query/services/manager.py`：`QueryManager.metadata()` 把 `dataset_alias` / `table_id` 透传给 `self.client.fetch_query_metadata(...)`；保留远端失败回退本地 + 本地过滤的兜底链路
+- `tests/query/test_client.py`：原 `test_fetch_query_metadata_sends_get_request` 增加 `params is None` 断言；新增 3 个带参测试 `test_fetch_query_metadata_with_dataset_alias_param` / `with_table_id_param` / `with_both_params`
+- `tests/query/test_manager.py`：将 15 处 `fetch_query_metadata` mock lambda 改为 `lambda **kw:` 以接受新关键字参数（仅 fetch_query_metadata 的 mock 改动，其他 mock 不变）
+- `auto-scheduler/vendor/aukey/data-metrics/src/Http/Controllers/DatasetSkillApiController.php`：`queryMetadata(Request $request)` 从 `$request->query()` 读取 `dataset_alias` / `table_id` 透传给 service；空串/null 统一归一化为 `null`
+- `auto-scheduler/vendor/aukey/data-metrics/src/Services/DatasetSkillService.php`：`buildQueryMetadataForUser()` 增加 `?string $datasetAlias = null, ?int $tableId = null` 参数；在 `buildExportPayloadForUser()` 权限收敛之后做过滤（datasetAlias 优先于 tableId，按 datasetAlias 或 datasetName 匹配；指定参数时按命中的 table_id 集合收敛 fields）；未传参时保持原行为返回全量
+**验证结果**：
+- 单元测试：`pytest tests/query/test_client.py tests/query/test_manager.py -v` → 53 通过；`pytest tests/query/ -v` → 68 通过，无回归
+- 关键决策：参数命名 snake_case（`dataset_alias` / `table_id`）；裸调用保留原行为（返回全量 datasets 列表不含 fields）；复用现有端点 `GET /v1/data-metrics/datasets/query-metadata`，不开新路由
+- 兼容矩阵：后端先上线 + opscli 旧版本调用 → 后端走原分支返回全量（向后兼容）；opscli 先上线 + 后端旧版本 → 后端忽略未识别 params 返回全量，opscli 本地过滤兜底（向前兼容）
+**影响范围**：opscli CLI `query metadata` 子命令、MCP `query_metadata` 工具、`mcp/tools/chatgpt.py:261/305` 内部调用、后端 `GET /v1/data-metrics/datasets/query-metadata` 接口；现有所有消费方均通过 `Manager.metadata()` 间接受益，零调用方改动
+**回滚方式**：
+1. opscli 侧：还原 `client.py` `fetch_query_metadata()` 签名（去掉 `dataset_alias`/`table_id` 参数和 params 组装）；还原 `manager.py` `metadata()` 调用处去掉关键字参数；还原 `test_client.py` 删除 3 个新增测试并移除 `params is None` 断言；`test_manager.py` 把 `lambda **kw:` 改回 `lambda:`
+2. 后端侧：还原 `DatasetSkillApiController::queryMetadata()` 直接调用 `buildQueryMetadataForUser((int) $userId)`；还原 `DatasetSkillService::buildQueryMetadataForUser()` 签名只保留 `$userId` 并去掉过滤逻辑
+3. 由于双侧改造都保持了向后/向前兼容，单独回滚任一侧都不会破坏对端
+
+---
+
 ## 2026-06-03 ops-dataset-query 二期服务端 S-5 - 字段语义索引表 + API
 
 **变更原因**：服务端 P1 任务，为 AI 客户端提供"业务用语 → 数据集字段"的映射索引，后续在后台录入数据后可支持语义搜索
