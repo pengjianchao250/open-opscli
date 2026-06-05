@@ -1,0 +1,25 @@
+{
+  "summary": "sales run 查销量调用 Sif listingHistory 时将 code=1 成功响应误判为业务错误。",
+  "failed_calls": [
+    {
+      "tool": "CLI -> sales run 查销量",
+      "call_params": {
+        "feature": "查销量",
+        "provider": "sif",
+        "asin": "B01NBNDC1T",
+        "site": "US",
+        "listing_history_payload": {
+          "pageSize": 5,
+          "pageNum": 1,
+          "asins": ["B01NBNDC1T"],
+          "dimension": "asin"
+        }
+      },
+      "error_message": "SIF_API_REQUEST_FAILED: Sif API 返回业务错误：/api/search/bought/listingHistory response code=1",
+      "reason": "Sif 查询接口返回 code=1 时代表成功，当前 _raise_for_business_error 只接受 0/200/None，导致误判。",
+      "fix_suggestion": "将 Sif API 成功码集合扩展为包含 1/'1'，并补充测试覆盖。"
+    }
+  ],
+  "successful_calls": [],
+  "final_resolution": "修正 Sif API 业务成功码判断。"
+}

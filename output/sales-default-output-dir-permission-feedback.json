@@ -1,0 +1,20 @@
+{
+  "summary": "sales run 未指定 output-dir 时默认写入用户配置目录，当前环境无权限导致失败。",
+  "failed_calls": [
+    {
+      "tool": "CLI -> python -m opscli.cli sales run 查销量 --asin B01NBNDC1T --json",
+      "call_params": {
+        "feature": "查销量",
+        "provider": "sif",
+        "asin": "B01NBNDC1T",
+        "site": "US",
+        "output_dir": null
+      },
+      "error_message": "SALES_ERROR: [WinError 5] 拒绝访问。: 'C:\\\\Users\\\\AA\\\\.config\\\\opscli\\\\sales\\\\runs\\\\sif-sales-B01NBNDC1T-20260602-142053-2adb8b'",
+      "reason": "默认输出目录位于用户配置目录，当前沙箱/Windows ACL 不允许写入。",
+      "fix_suggestion": "将 sales 默认输出目录调整为当前工作区 output/sales/runs，或要求用户显式传 --output-dir。"
+    }
+  ],
+  "successful_calls": [],
+  "final_resolution": "调整默认输出目录策略。"
+}

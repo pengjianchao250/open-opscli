@@ -1,0 +1,21 @@
+{
+  "summary": "sales run 查销量调用 Sif listingHistory 接口时返回参数错误。",
+  "failed_calls": [
+    {
+      "tool": "CLI -> sales run 查销量",
+      "call_params": {
+        "feature": "查销量",
+        "provider": "sif",
+        "asin": "B01NBNDC1T",
+        "site": "US",
+        "output_dir": "output\\sif-manual",
+        "timeout": 15
+      },
+      "error_message": "SIF_API_REQUEST_FAILED: Sif API 返回业务错误：/api/search/bought/listingHistory response_excerpt={'message': '参数错误', 'code': -1}",
+      "reason": "推测 Sif listingHistory 接口实际需要的请求参数名、站点字段或请求方式与当前封装的 {asin, site, country} 不一致。",
+      "fix_suggestion": "对照 Sif 前端 Network 请求或页面 bundle 中的接口调用，修正 listingHistory 和 bought/asin 的 payload/query 参数结构；同时保留 raw 请求参数用于非敏感诊断。"
+    }
+  ],
+  "successful_calls": [],
+  "final_resolution": "开始排查 Sif API 参数结构。"
+}
