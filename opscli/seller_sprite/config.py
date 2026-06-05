@@ -17,12 +17,14 @@ ENV_ACCOUNT_NAME = "OPSCLI_SELLER_SPRITE_ACCOUNT_NAME"
 ENV_ACCOUNTS = "OPSCLI_SELLER_SPRITE_ACCOUNTS"
 ENV_OUTPUT_DIR = "OPSCLI_SELLER_SPRITE_OUTPUT_DIR"
 ENV_PAGE_SIZE = "OPSCLI_SELLER_SPRITE_PAGE_SIZE"
+ENV_ACCOUNT_CACHE_TTL_SECONDS = "OPSCLI_SELLER_SPRITE_ACCOUNT_CACHE_TTL_SECONDS"
 
 DEFAULT_ACCOUNT_NAME = "default"
 DEFAULT_PAGE_SIZE = 100
 DEFAULT_SITE = "us"
 DEFAULT_PERIOD = "30d"
 DEFAULT_OUTPUT_DIR = CONFIG_DIR / "seller_sprite" / "api_runs"
+DEFAULT_ACCOUNT_CACHE_TTL_SECONDS = 600
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ class SellerSpriteSettings:
     page_size: int = DEFAULT_PAGE_SIZE
     default_site: str = DEFAULT_SITE
     default_period: str = DEFAULT_PERIOD
+    account_cache_ttl_seconds: int = DEFAULT_ACCOUNT_CACHE_TTL_SECONDS
 
     def to_public_dict(self) -> dict[str, Any]:
         """返回不包含敏感字段的配置摘要。"""
@@ -63,13 +66,25 @@ def load_settings() -> SellerSpriteSettings:
         accounts=_parse_accounts(values.get(ENV_ACCOUNTS)),
         output_dir=output_dir,
         page_size=page_size,
+        account_cache_ttl_seconds=_parse_int(
+            values.get(ENV_ACCOUNT_CACHE_TTL_SECONDS),
+            DEFAULT_ACCOUNT_CACHE_TTL_SECONDS,
+        ),
     )
 
 
 def _load_env_values() -> dict[str, str]:
     """读取 `.env` 后叠加真实环境变量，真实环境变量优先。"""
     values = _read_dotenv()
-    for key in [ENV_USERNAME, ENV_PASSWORD, ENV_ACCOUNT_NAME, ENV_ACCOUNTS, ENV_OUTPUT_DIR, ENV_PAGE_SIZE]:
+    for key in [
+        ENV_USERNAME,
+        ENV_PASSWORD,
+        ENV_ACCOUNT_NAME,
+        ENV_ACCOUNTS,
+        ENV_OUTPUT_DIR,
+        ENV_PAGE_SIZE,
+        ENV_ACCOUNT_CACHE_TTL_SECONDS,
+    ]:
         value = os.environ.get(key)
         if value:
             values[key] = value

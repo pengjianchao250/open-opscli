@@ -1,0 +1,161 @@
+{
+  "scenario_id": "market-research",
+  "title": "选市场",
+  "web_route": "/market-research",
+  "web_legacy_route": "/v2/market-research",
+  "api": {
+    "method": "POST",
+    "endpoint": "/v2/market-research",
+    "content_type": "application/x-www-form-urlencoded",
+    "response_type": "text/html",
+    "form_fields": [
+      "marketId",
+      "nodeIdPath",
+      "departmentKeyword",
+      "sampleNumber",
+      "topn",
+      "newReleaseNum",
+      "order.field",
+      "order.desc",
+      "tab",
+      "monthName",
+      "newReleaseNumSelect",
+      "topNSelect",
+      "minAvgSales",
+      "maxAvgSales",
+      "minAvgBsr",
+      "maxAvgBsr",
+      "minAvgWeight",
+      "maxAvgWeight",
+      "minHeadListingAvgBsr",
+      "maxHeadListingAvgBsr",
+      "minTotalProducts",
+      "maxTotalProducts",
+      "minAvgRevenue",
+      "maxAvgRevenue",
+      "minAvgPrice",
+      "maxAvgPrice",
+      "minAvgVolume",
+      "maxAvgVolume",
+      "minHeadListingAvgSales",
+      "maxHeadListingAvgSales",
+      "minAvgReviews",
+      "maxAvgReviews",
+      "minAvgRating",
+      "maxAvgRating",
+      "minAvgProfit",
+      "maxAvgProfit",
+      "minHeadListingAvgRevenue",
+      "maxHeadListingAvgRevenue",
+      "minBrands",
+      "maxBrands",
+      "minHeadListingProductCrn",
+      "maxHeadListingProductCrn",
+      "minEbcRatio",
+      "maxEbcRatio",
+      "minAmzRatio",
+      "maxAmzRatio",
+      "minSellers",
+      "maxSellers",
+      "minHeadListingBrandCrn",
+      "maxHeadListingBrandCrn",
+      "minFbaRatio",
+      "maxFbaRatio",
+      "sellerNations",
+      "minAvgSellers",
+      "maxAvgSellers",
+      "minHeadListingSellerCrn",
+      "maxHeadListingSellerCrn",
+      "minFbmRatio",
+      "maxFbmRatio",
+      "minNewRatio",
+      "maxNewRatio",
+      "minNewAvgPrice",
+      "maxNewAvgPrice",
+      "minNewAvgRevenue",
+      "maxNewAvgRevenue",
+      "minNewCount",
+      "maxNewCount",
+      "minNewAvgRating",
+      "maxNewAvgRating",
+      "minNewAvgReviews",
+      "maxNewAvgReviews",
+      "minNewAvgSales",
+      "maxNewAvgSales",
+      "page",
+      "size"
+    ],
+    "field_aliases": {
+      "site": "marketId",
+      "period": "monthName",
+      "node": "nodeIdPath",
+      "category": "nodeIdPath",
+      "keyword": "departmentKeyword",
+      "topN": "topn",
+      "newReleaseMonths": "newReleaseNum"
+    }
+  },
+  "export": {
+    "method": "POST",
+    "endpoint": "/v2/market-research/list-export/batch",
+    "content_type": "multipart/form-data",
+    "remain_export_endpoint": "/v2/common/remain-export-num/EMA"
+  },
+  "required_params": [],
+  "query_conditions": {
+    "site": {
+      "body_field": "marketId",
+      "market_ids": {
+        "US": 1,
+        "JP": 6,
+        "UK": 3,
+        "DE": 4,
+        "FR": 5,
+        "IT": 35691,
+        "ES": 44551,
+        "CA": 7,
+        "IN": 44571,
+        "MX": 771770
+      }
+    },
+    "month": {
+      "body_field": "monthName",
+      "examples": [
+        "bsr_sales_nearly",
+        "bsr_sales_monthly_202604"
+      ]
+    },
+    "new_release_definition": {
+      "body_field": "newReleaseNum",
+      "values": {
+        "1": "1个月内上架",
+        "3": "3个月内上架",
+        "6": "半年内上架"
+      }
+    },
+    "category": {
+      "body_field": "nodeIdPath",
+      "search_field": "departmentKeyword",
+      "tree_endpoint": "/v2/competitor-lookup/nodesList"
+    }
+  },
+  "response": {
+    "row_path": "HTML table#table-condition-search tbody",
+    "parser": "opscli.seller_sprite.api.market_research.parse_market_research_html"
+  },
+  "official_template": {
+    "captured_workbook_name": "Market-research(200)-CA-Last-30-days.xlsx",
+    "captured_workbook_path": "tmp-validation/seller-sprite-browser-capture/20260601-164627/Market-research-BabyDiapers-CA-Last-30-days.xlsx",
+    "headers_file": "official-headers.json",
+    "captured_main_sheet_example": "Market-research(200)-CA",
+    "captured_notes_sheet": "Notes",
+    "header_count": 37
+  },
+  "capture_evidence": {
+    "captured_at": "2026-06-01T16:46:27",
+    "capture_dir": "tmp-validation/seller-sprite-browser-capture/20260601-164627",
+    "page_html": "tmp-validation/seller-sprite-market-page/market-research.html",
+    "query_page_response": "tmp-validation/seller-sprite-market-page/post-market.html",
+    "download_file": "download-0004-Market-research-200-BabyDiapers-CA-Last-30-days-xlsx"
+  }
+}

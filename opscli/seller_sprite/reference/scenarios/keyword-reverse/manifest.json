@@ -1,0 +1,132 @@
+{
+  "scenario_id": "keyword-reverse",
+  "title": "关键词反查",
+  "web_route": "/v3/keyword-reverse/",
+  "api": {
+    "method": "POST",
+    "endpoint": "/v3/api/relation/reversing",
+    "query_fields": ["market"],
+    "body_fields": [
+      "asin",
+      "limit",
+      "skip",
+      "month",
+      "badges",
+      "conversionKeywordTypes",
+      "trafficKeywordTypes",
+      "order",
+      "desc",
+      "exactly",
+      "keywordBidMatchType",
+      "filterDeletedKeywords"
+    ]
+  },
+  "high_frequency_api": {
+    "method": "POST",
+    "endpoint": "/v3/api/relation/ta/high-frequency-words-new",
+    "query_fields": ["market"],
+    "body_fields": [
+      "asin",
+      "month",
+      "badges",
+      "conversionKeywordTypes",
+      "trafficKeywordTypes",
+      "order",
+      "desc",
+      "exactly",
+      "keywordBidMatchType",
+      "filterDeletedKeywords",
+      "groupNum"
+    ],
+    "row_path": "data"
+  },
+  "download_capture": {
+    "mode": "browser_blob_download",
+    "captured_url_scheme": "blob",
+    "note": "本次页面下载未触发可复用 JSON 导出接口，Chrome 下载历史记录为 blob URL。"
+  },
+  "auxiliary_apis": [
+    {
+      "method": "GET",
+      "endpoint": "/v3/api/relation/ta/monthly",
+      "query_fields": ["asin", "station", "month"],
+      "response_fields": ["data.monthlyDto", "data.variations"],
+      "purpose": "ASIN月度趋势和变体信息"
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v3/api/relation/stat-keywords",
+      "body_fields": ["asin", "marketId", "month", "forceReStat", "badges", "limit"],
+      "response_fields": ["data.statDto", "data.status", "data.analysisTook"],
+      "purpose": "关键词统计概览"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v3/api/keyword-miner/deleted/keyword/list",
+      "query_fields": ["historyDate", "keywordOrAsin", "market", "type"],
+      "purpose": "删除关键词状态"
+    }
+  ],
+  "required_params": ["asin"],
+  "response": {
+    "row_path": "data.items",
+    "fallback_row_path": "data",
+    "pagination_fields": ["data.total", "data.took"],
+    "context_fields": ["data.guestId", "data.station", "data.marketId", "data.website", "data.asin", "data.stats"]
+  },
+  "primary_metrics": [
+    {"title": "关键词类型", "source": "trafficKeywordTypes", "transform": "trafficKeywordTypeLabels"},
+    {"title": "转化效果", "source": "conversionKeywordTypes", "transform": "conversionKeywordTypeLabels"},
+    {"title": "流量词类型", "source": "badges", "transform": "badgeLabels"},
+    {"title": "流量占比", "source": "trafficPercentage", "transform": "percentage"},
+    {"title": "预估周曝光量", "source": "calculatedWeeklySearches"},
+    {"title": "自然流量占比", "source": "naturalRatio", "transform": "percentage"},
+    {"title": "广告流量占比", "source": "adRatio", "transform": "percentage"},
+    {"title": "自然排名", "source": "rankPosition.position"},
+    {"title": "自然排名页码", "source": "rankPosition", "transform": "rankPage"},
+    {"title": "自然排名更新时间", "source": "rankPosition.updatedTime", "transform": "keywordReverseUpdatedTime"},
+    {"title": "广告排名", "source": "adPosition.position"},
+    {"title": "广告排名页码", "source": "adPosition", "transform": "rankPage"},
+    {"title": "广告排名更新时间", "source": "adPosition.updatedTime", "transform": "keywordReverseUpdatedTime"},
+    {"title": "ABA周排名", "source": "searchesRank"},
+    {"title": "月搜索量", "source": "searches"},
+    {"title": "SPR", "source": "cprExact"},
+    {"title": "标题密度", "source": "titleDensityExact"},
+    {"title": "购买量", "source": "purchases"},
+    {"title": "购买率", "source": "purchaseRate", "transform": "percentage"},
+    {"title": "展示量", "source": "impressions"},
+    {"title": "点击量", "source": "clicks"},
+    {"title": "商品数", "source": "products"},
+    {"title": "需供比", "source": "supplyDemandRatio"},
+    {"title": "近7天广告竞品数", "source": "latest7daysAds"},
+    {"title": "点击总占比", "source": "monopolyClickRate", "transform": "percentage"},
+    {"title": "转化总占比", "source": "top3ConversionRate", "transform": "percentage"},
+    {"title": "PPC价格", "source": "bid"}
+  ],
+  "official_template": {
+    "source_workbook_name": "ReverseASIN-JP-B07YRMT36L-Last-30-days.xlsx",
+    "captured_workbook_name": "ReverseASIN-US-B07Z82895W-Last-30-days-blob.xlsx",
+    "captured_workbook_path": "tmp-validation/seller-sprite-browser-capture/20260528-150402/ReverseASIN-US-B07Z82895W-Last-30-days-blob.xlsx",
+    "headers_file": "official-headers.json",
+    "main_sheet_example": "JP-B07YRMT36L-Keywords(100)_",
+    "captured_main_sheet_example": "US-B07Z82895W-Keywords(1439)_",
+    "unique_words_sheet": "Unique Words",
+    "official_notes_sheet": true,
+    "captured_notes_sheet": "Notes",
+    "generated_notes_sheet": false,
+    "header_count": 31
+  },
+  "capture_evidence": {
+    "captured_at": "2026-05-28T15:19:18",
+    "capture_dir": "tmp-validation/seller-sprite-browser-capture/20260528-150402",
+    "monthly_request": "0065-151915-v3-api-relation-ta-monthly.request.json",
+    "monthly_response": "0065-151915-v3-api-relation-ta-monthly.response.json",
+    "stats_request": "0066-151916-v3-api-relation-stat-keywords.request.json",
+    "stats_response": "0066-151916-v3-api-relation-stat-keywords.response.json",
+    "query_request": "0068-151918-v3-api-relation-reversing.request.json",
+    "query_response": "0068-151918-v3-api-relation-reversing.response.json",
+    "high_frequency_request": "0069-151918-v3-api-relation-ta-high-frequency-words-new.request.json",
+    "high_frequency_response": "0069-151918-v3-api-relation-ta-high-frequency-words-new.response.json",
+    "download_history_url": "blob:https://www.sellersprite.com/bf64858f-116d-4167-b050-79e531dc071c"
+  }
+}

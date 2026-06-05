@@ -4,6 +4,7 @@ from pathlib import Path
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.config import SellerSpriteSettings
+from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
 from opscli.seller_sprite.services import api_manager as api_manager_module
 from opscli.seller_sprite.services.api_manager import SellerSpriteApiManager
@@ -14,7 +15,7 @@ def _run(coro):
 
 
 class DummyAccountProvider:
-    def get_default(self):
+    def get_default(self, *, refresh=False):
         return SellerSpriteAccount(name="default", username="user@example.com", password="secret")
 
 
@@ -23,6 +24,7 @@ class DummyApiClient:
 
     def __init__(self, *, account):
         self.account = account
+        self.login_calls = 0
 
     async def __aenter__(self):
         return self
@@ -31,7 +33,20 @@ class DummyApiClient:
         return None
 
     async def login(self):
+        self.login_calls += 1
         return {"login_status": 302, "login_redirect": True, "cookie_names": ["SESSION"]}
+
+    def has_cookies(self):
+        return False
+
+    def has_login_cookies(self):
+        return False
+
+    def cookie_names(self):
+        return []
+
+    def switch_account(self, account):
+        self.account = account
 
     async def post_json(self, url, payload, *, referer=None):
         self.calls.append({"url": url, "payload": payload, "referer": referer})
@@ -50,6 +65,31 @@ class DummyApiClient:
                 ]
             },
         }
+
+
+class SessionExpiredOnceApiClient(DummyApiClient):
+    instance = None
+
+    def __init__(self, *, account):
+        super().__init__(account=account)
+        self.has_failed = False
+        SessionExpiredOnceApiClient.instance = self
+
+    def has_cookies(self):
+        return True
+
+    def has_login_cookies(self):
+        return True
+
+    def cookie_names(self):
+        return ["SESSION"]
+
+    async def post_json(self, url, payload, *, referer=None):
+        self.calls.append({"url": url, "payload": payload, "referer": referer})
+        if not self.has_failed:
+            self.has_failed = True
+            raise SellerSpriteApiError("session expired", api_code="ERR_GLOBAL_SESSION_EXPIRED")
+        return {"code": "OK", "data": {"items": [{"asin": "B00TEST"}]}}
 
 
 def test_manager_writes_job_files_and_xlsx(monkeypatch, tmp_path: Path):
@@ -85,6 +125,29 @@ def test_manager_writes_job_files_and_xlsx(monkeypatch, tmp_path: Path):
     assert saved["export"]["filename"] == "job-offline-regression.xlsx"
     assert DummyApiClient.calls[0]["payload"]["asin"] == "B07YRMT36L"
     assert "market" not in DummyApiClient.calls[0]["payload"]
+
+
+def test_manager_generates_camel_case_job_id(monkeypatch, tmp_path: Path):
+    DummyApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None)
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-reverse",
+                site="JP",
+                period="nearly",
+                params={"asin": "B07YRMT36L"},
+            )
+        )
+    )
+
+    assert result.export is not None
+    assert result.export.filename.startswith("SellerSprite-ReverseASIN-JP-B07YRMT36L-Nearly-")
+    assert result.export.filename.endswith(".xlsx")
+    assert Path(result.export.path).exists()
 
 
 def test_manager_writes_json_export(monkeypatch, tmp_path: Path):
@@ -127,3 +190,30 @@ def test_job_status_reads_existing_result(tmp_path: Path):
     result = manager.job_status("job-1")
 
     assert result == {"job_id": "job-1", "row_count": 3}
+
+
+def test_manager_relogs_and_retries_when_session_expires(monkeypatch, tmp_path: Path):
+    SessionExpiredOnceApiClient.calls = []
+    SessionExpiredOnceApiClient.instance = None
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", SessionExpiredOnceApiClient)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None)
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="competitor-lookup",
+                site="US",
+                period="30d",
+                params={"keyword": "toy car"},
+                job_id="job-session-retry",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert result.warnings[0]["message"] == "卖家精灵会话过期，已重新登录并重试一次"
+    assert SessionExpiredOnceApiClient.instance is not None
+    assert SessionExpiredOnceApiClient.instance.login_calls == 1
+    assert len(SessionExpiredOnceApiClient.calls) == 2

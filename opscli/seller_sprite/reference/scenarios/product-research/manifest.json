@@ -1,0 +1,400 @@
+{
+  "scenario_id": "product-research",
+  "title": "选产品",
+  "web_route": "/v3/product-research",
+  "web_tab": {
+    "body_field": "selectType",
+    "captured_value": "2",
+    "note": "该路由对应选产品场景，抓包接口为 /v3/api/product-research。"
+  },
+  "api": {
+    "method": "POST",
+    "endpoint": "/v3/api/product-research",
+    "query_fields": [],
+    "body_fields": [
+      "market",
+      "page",
+      "size",
+      "symbolFlag",
+      "monthName",
+      "video",
+      "matchType",
+      "selectType",
+      "filterSub",
+      "weightUnit",
+      "recommendationMode",
+      "order",
+      "productTags",
+      "nodeIdPaths",
+      "sellerTypes",
+      "eligibility",
+      "pkgDimensionTypeList",
+      "sellerNationList",
+      "minPrice",
+      "maxPrice",
+      "minSales",
+      "maxSales",
+      "minAmount",
+      "maxAmount",
+      "minAmzUnit",
+      "maxAmzUnit",
+      "minTotalUnitsGrowth",
+      "maxTotalUnitsGrowth",
+      "minRanking",
+      "maxRanking",
+      "minSubBsrRank",
+      "maxSubBsrRank",
+      "minRankingCv",
+      "maxRankingCv",
+      "minRankingCr",
+      "maxRankingCr",
+      "minVariations",
+      "maxVariations",
+      "minQuestions",
+      "maxQuestions",
+      "minReviewsGrouth",
+      "maxReviewsGrouth",
+      "minReviewsRate",
+      "maxReviewsRate",
+      "minProfit",
+      "maxProfit",
+      "lqsFrom",
+      "lqsTo",
+      "minReviews",
+      "maxReviews",
+      "minReviewRating",
+      "maxReviewRating",
+      "minFba",
+      "maxFba",
+      "minWeights",
+      "maxWeights",
+      "minDeliveryPrice",
+      "maxDeliveryPrice",
+      "smallAndLight",
+      "lowPrice",
+      "minSellers",
+      "maxSellers",
+      "putawayMonth",
+      "keyword",
+      "keywords",
+      "includeBrands",
+      "excludeBrands",
+      "includeSellers",
+      "excludeSellers",
+      "outOfKeywords"
+    ]
+  },
+  "export_api": {
+    "method": "POST",
+    "endpoint": "/v3/api/product-research/export",
+    "query_fields": [],
+    "body_fields": [
+      "market",
+      "symbolFlag",
+      "monthName",
+      "selectType",
+      "filterSub",
+      "weightUnit",
+      "recommendationMode",
+      "order",
+      "productTags",
+      "nodeIdPaths",
+      "sellerTypes",
+      "eligibility",
+      "pkgDimensionTypeList",
+      "sellerNationList",
+      "minPrice",
+      "maxPrice",
+      "minSales",
+      "maxSales",
+      "minReviews",
+      "maxReviews",
+      "minReviewRating",
+      "maxReviewRating",
+      "smallAndLight",
+      "lowPrice",
+      "minRanking",
+      "maxRanking",
+      "minSellers",
+      "maxSellers",
+      "putawayMonth",
+      "minTotalUnitsGrowth",
+      "minVariations",
+      "maxVariations",
+      "minRankingCr",
+      "mainImage",
+      "exportAsins",
+      "hideSellerInfo"
+    ],
+    "response": {
+      "success_code": "OK",
+      "data": null
+    }
+  },
+  "download_mark_api": {
+    "method": "GET",
+    "endpoint": "/v2/export-log/{id}/mark-as-downloaded"
+  },
+  "auxiliary_apis": [
+    {
+      "method": "GET",
+      "endpoint": "/v3/api/product-research/init",
+      "purpose": "产品类筛选项初始化"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v3/api/product-research/support_new_station",
+      "purpose": "支持站点配置"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v3/api/relation/config/pr",
+      "purpose": "选产品配置"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v2/common/query-terms/PR",
+      "query_fields": ["market", "size"],
+      "purpose": "历史查询条件"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v2/competitor-lookup/nodes",
+      "query_fields": ["marketId", "table", "nodeIdPath"],
+      "purpose": "类目树数据；nodeIdPath 为空取根类目，传完整冒号分隔路径取子类目",
+      "response": {
+        "shape": {
+          "parent": "object|null",
+          "code": "OK",
+          "size": "number",
+          "items": "array"
+        },
+        "item_fields": [
+          "id",
+          "label",
+          "nodeLabel",
+          "alias",
+          "products",
+          "nodeLabelLocale",
+          "nodeLabelPathLocale",
+          "children"
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "endpoint": "/v2/common/remain-export-num/EB3",
+      "purpose": "选产品剩余导出次数"
+    }
+  ],
+  "recommendation_modes": {
+    "body_field": "recommendationMode",
+    "type": "string",
+    "description": "选产品页面的推荐模式是单选参数模板，CLI 接收中文模式名后展开为接口筛选条件；显式传入的同名筛选条件优先。",
+    "captured_at": "2026-06-02T09:25:19",
+    "capture_dir": "tmp-validation/seller-sprite-browser-capture/recommend-mode-20260602-092519",
+    "modes": {
+      "低价长尾选品": {
+        "minRanking": "10000",
+        "maxRanking": "50000",
+        "maxSales": "300",
+        "maxPrice": "30",
+        "maxSellers": "1"
+      },
+      "研发新品榜": {
+        "productTags": ["NewRelease"],
+        "sellerTypes": ["FBA", "FBM"],
+        "maxSales": "500"
+      },
+      "潜力单变体": {
+        "putawayMonth": "6",
+        "minTotalUnitsGrowth": "20",
+        "maxVariations": "1"
+      },
+      "销量飙升": {
+        "minSales": "300",
+        "minTotalUnitsGrowth": "10"
+      },
+      "潜力市场": {
+        "putawayMonth": "6",
+        "minTotalUnitsGrowth": "10",
+        "maxSales": "600"
+      },
+      "未被满足的市场": {
+        "sellerTypes": ["FBM"],
+        "minSales": "300",
+        "putawayMonth": "6"
+      },
+      "不压库存的市场": {
+        "minSales": "600",
+        "minSellers": "3",
+        "putawayMonth": "6"
+      },
+      "投机市场": {
+        "minSales": "300",
+        "maxReviews": "50",
+        "putawayMonth": "6"
+      },
+      "高需求低要求市场": {
+        "minRankingCr": "99",
+        "maxReviews": "10",
+        "putawayMonth": "3"
+      },
+      "全品类铺货": {
+        "minRankingCr": "99",
+        "putawayMonth": "3"
+      },
+      "精品铺货": {
+        "minRankingCr": "99",
+        "putawayMonth": "3"
+      },
+      "低价商品": {
+        "eligibility": ["Y"],
+        "maxPrice": "10",
+        "smallAndLight": "lowPrice",
+        "lowPrice": "Y"
+      },
+      "新手推荐": {
+        "sellerTypes": ["FBA"],
+        "minSales": "300",
+        "minTotalUnitsGrowth": "3",
+        "minPrice": "15",
+        "maxPrice": "60",
+        "putawayMonth": "12"
+      }
+    }
+  },
+  "official_field_aliases": {
+    "description": "兼容 SellerSprite 官方开放 API 的选产品入参命名；CLI/MCP 会在请求 Web 接口前转换为当前抓包字段。",
+    "aliases": {
+      "minUnits": "minSales",
+      "maxUnits": "maxSales",
+      "minRatings": "minReviews",
+      "maxRatings": "maxReviews",
+      "minStar": "minReviewRating",
+      "maxStar": "maxReviewRating",
+      "availableMonth": "putawayMonth",
+      "fulfillment": "sellerTypes",
+      "variation": "maxVariations",
+      "minVariations": "minVariations",
+      "maxVariations": "maxVariations",
+      "minBsr": "minRanking",
+      "maxBsr": "maxRanking",
+      "minSellers": "minSellers",
+      "maxSellers": "maxSellers",
+      "badgeNR": "productTags=[\"NewRelease\"]"
+    },
+    "precedence": "如果官方别名和内部字段同时传入，以内部字段为准。"
+  },
+  "required_params": [],
+  "query_conditions": {
+    "category_tree": {
+      "source_api": "/v2/competitor-lookup/nodes",
+      "snapshot_file": "../../category-trees/US-bsr_sales_nearly.json",
+      "request_examples": [
+        {
+          "purpose": "根类目",
+          "query": {
+            "marketId": 1,
+            "table": "bsr_sales_nearly"
+          }
+        },
+        {
+          "purpose": "子类目",
+          "query": {
+            "marketId": 1,
+            "table": "bsr_sales_nearly",
+            "nodeIdPath": "2619525011"
+          }
+        },
+        {
+          "purpose": "多级子类目",
+          "query": {
+            "marketId": 1,
+            "table": "bsr_sales_nearly",
+            "nodeIdPath": "2619525011:3741271"
+          }
+        }
+      ]
+    },
+    "selected_category": {
+      "body_field": "nodeIdPaths",
+      "type": "array<string>",
+      "description": "产品查询和导出接口使用的类目筛选条件，值来自类目树节点 id；可同时传多个节点。",
+      "captured_value": ["2619525011", "15684181"],
+      "captured_labels": ["Appliances", "Automotive"],
+      "note": "本次展开过 Appliances > Dishwashers 子类目树，但最终查询请求体只带了根类目 ID。",
+      "captured_request": "0193-155800-v3-api-product-research.request.json"
+    }
+  },
+  "response": {
+    "row_path": "data.items",
+    "fallback_row_path": "data",
+    "pagination_fields": [
+      "data.pages",
+      "data.page",
+      "data.size",
+      "data.total",
+      "data.took",
+      "data.hasNextPage"
+    ],
+    "context_fields": ["data.guestId", "data.url", "data.order", "data.terminal"]
+  },
+  "primary_metrics": [
+    {"title": "大类BSR", "source": "bsrRank"},
+    {"title": "大类BSR增长率", "source": "bsrRankCr", "transform": "percentSuffix"},
+    {"title": "月销量", "source": "amzUnit"},
+    {"title": "月销量增长率", "source": "totalUnitsGrowth", "transform": "percentSuffix"},
+    {"title": "月销售额", "source": "totalAmount"},
+    {"title": "子体销量", "source": "totalUnits"},
+    {"title": "子体销售额", "source": "subTotalAmount"},
+    {"title": "变体数", "source": "variations"},
+    {"title": "价格", "source": "price"},
+    {"title": "评分数", "source": "reviews"},
+    {"title": "评分", "source": "rating"},
+    {"title": "留评率", "source": "reviewsRate", "transform": "percentSuffix"},
+    {"title": "毛利率", "source": "profit", "transform": "percentSuffix"},
+    {"title": "卖家数", "source": "sellers"},
+    {"title": "LQS", "source": "lqs"}
+  ],
+  "official_template": {
+    "source_workbook_name": "Product-JP-2026.03-458153.xlsx",
+    "captured_workbook_name": "Product-US-Last-30-days-651431.xlsx",
+    "captured_workbook_path": "tmp-validation/seller-sprite-browser-capture/20260528-150402/Product-US-Last-30-days-651431.xlsx",
+    "captured_download_url": "https://o.sellersprite.com/batch-exports/2026/5/Product-US-Last-30-days-651431.xlsx",
+    "headers_file": "official-headers.json",
+    "main_sheet_example": "Product-JP-202603",
+    "captured_main_sheet_example": "Product-US-Last-30-days",
+    "official_notes_sheet": true,
+    "captured_notes_sheet": "Notes",
+    "generated_notes_sheet": false,
+    "header_count": 64,
+    "captured_header_count": 63,
+    "captured_export_options": {
+      "hideSellerInfo": true,
+      "missing_when_hidden": ["卖家信息"]
+    }
+  },
+  "capture_evidence": {
+    "captured_at": "2026-05-28T15:39:52",
+    "capture_dir": "tmp-validation/seller-sprite-browser-capture/20260528-150402",
+    "query_request": "0142-153952-v3-api-product-research.request.json",
+    "query_response": "0142-153952-v3-api-product-research.response.json",
+    "export_request": "0147-153954-v3-api-product-research-export.request.json",
+    "export_response": "0147-153954-v3-api-product-research-export.response.json",
+    "download_file": "download-0002-Product-US-Last-30-days-651431-xlsx",
+    "download_copy": "Product-US-Last-30-days-651431.xlsx",
+    "download_mark_response": "0151-154323-v2-export-log-14985651-mark-as-downloaded.response.json",
+    "category_tree_root_request": "0170-155422-v2-competitor-lookup-nodes.request.json",
+    "category_tree_root_response": "0170-155422-v2-competitor-lookup-nodes.response.json",
+    "category_tree_child_request": "0171-155427-v2-competitor-lookup-nodes.request.json",
+    "category_tree_child_response": "0171-155427-v2-competitor-lookup-nodes.response.json",
+    "category_tree_grandchild_request": "0172-155429-v2-competitor-lookup-nodes.request.json",
+    "category_tree_grandchild_response": "0172-155429-v2-competitor-lookup-nodes.response.json",
+    "category_tree_snapshot": "../../category-trees/US-bsr_sales_nearly.json",
+    "category_tree_latest_request": "0281-165430-v2-competitor-lookup-nodes.request.json",
+    "category_tree_latest_response": "0281-165430-v2-competitor-lookup-nodes.response.json",
+    "category_query_request": "0193-155800-v3-api-product-research.request.json",
+    "category_query_response": "0193-155800-v3-api-product-research.response.json"
+  }
+}

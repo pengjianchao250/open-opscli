@@ -71,15 +71,15 @@ opscli-mcp --transport sse --port 8765
 {
   "success": true,
   "data": {
-    "job_id": "seller-sprite-keyword-reverse-20260522-153000-a1b2c3",
+    "job_id": "SellerSprite-ReverseASIN-JP-B07YRMT36L-Nearly-20260522-153000-a1b2c3",
     "scenario": "keyword-reverse",
     "row_count": 100,
     "raw_path": ".../raw.json",
     "result_path": ".../result.json",
     "export": {
-      "path": ".../seller-sprite-keyword-reverse-20260522-153000-a1b2c3.xlsx",
-      "filename": "seller-sprite-keyword-reverse-20260522-153000-a1b2c3.xlsx",
-      "url": "file:///.../seller-sprite-keyword-reverse-20260522-153000-a1b2c3.xlsx",
+      "path": ".../SellerSprite-ReverseASIN-JP-B07YRMT36L-Nearly-20260522-153000-a1b2c3.xlsx",
+      "filename": "SellerSprite-ReverseASIN-JP-B07YRMT36L-Nearly-20260522-153000-a1b2c3.xlsx",
+      "url": "file:///.../SellerSprite-ReverseASIN-JP-B07YRMT36L-Nearly-20260522-153000-a1b2c3.xlsx",
       "format": "xlsx"
     }
   },
