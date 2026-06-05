@@ -26,6 +26,8 @@ import contextvars
 import logging
 from typing import Any
 
+from opscli.config import __version__
+
 _logger = logging.getLogger("opscli.mcp.context")
 
 # 当前 MCP 请求的上下文变量（由 ApiKeyAuthMiddleware 设置）
@@ -155,15 +157,17 @@ def get_current_client_name() -> str | None:
 def get_mcp_request_headers() -> dict[str, str]:
     """获取 MCP API Key 透传请求头（HTTP/SSE 模式下有效）。
 
-    在 stdio 模式或无上下文时返回空字典，不干扰 CLI 命令执行。
+    在 stdio 模式或无上下文时返回仅包含版本号的字典，不干扰 CLI 命令执行。
 
     Returns:
-        {"X-MCP-API-Key": <key>} 或 {}
+        {"X-MCP-API-Key": <key>, "X-Opscli-Version": <version>} 或
+        {"X-Opscli-Version": <version>}
     """
+    headers: dict[str, str] = {"X-Opscli-Version": __version__}
     try:
         api_key = get_current_api_key()
         if api_key:
-            return {"X-MCP-API-Key": api_key}
+            headers["X-MCP-API-Key"] = api_key
     except Exception:
         pass
-    return {}
+    return headers
