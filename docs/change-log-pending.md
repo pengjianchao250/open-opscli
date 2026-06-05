@@ -9,7 +9,7 @@
 - `tests/query/test_client.py`：原 `test_fetch_query_metadata_sends_get_request` 增加 `params is None` 断言；新增 3 个带参测试 `test_fetch_query_metadata_with_dataset_alias_param` / `with_table_id_param` / `with_both_params`
 - `tests/query/test_manager.py`：将 15 处 `fetch_query_metadata` mock lambda 改为 `lambda **kw:` 以接受新关键字参数（仅 fetch_query_metadata 的 mock 改动，其他 mock 不变）
 - `auto-scheduler/vendor/aukey/data-metrics/src/Http/Controllers/DatasetSkillApiController.php`：`queryMetadata(Request $request)` 从 `$request->query()` 读取 `dataset_alias` / `table_id` 透传给 service；空串/null 统一归一化为 `null`
-- `auto-scheduler/vendor/aukey/data-metrics/src/Services/DatasetSkillService.php`：`buildQueryMetadataForUser()` 增加 `?string $datasetAlias = null, ?int $tableId = null` 参数；在 `buildExportPayloadForUser()` 权限收敛之后做过滤（datasetAlias 优先于 tableId，按 datasetAlias 或 datasetName 匹配；指定参数时按命中的 table_id 集合收敛 fields）；未传参时保持原行为返回全量
+- `auto-scheduler/vendor/aukey/data-metrics/src/Services/DatasetSkillService.php`：`buildQueryMetadataForUser()` 增加 `?string $datasetAlias = null, ?int $tableId = null` 参数；在 `buildExportPayloadForUser()` 权限收敛之后做过滤（datasetAlias 优先于 tableId，按 datasetAlias 或 datasetName 匹配；指定参数时按命中的 table_id 集合收敛 fields）；**未指定过滤参数时显式将 `fields` 置空**（联调时发现：原实现保留 fields 全量返回，违反"裸调用 → 仅 datasets 列表（不带 fields）"的契约，导致单纯探索数据集时传输大量冗余字段）
 **验证结果**：
 - 单元测试：`pytest tests/query/test_client.py tests/query/test_manager.py -v` → 53 通过；`pytest tests/query/ -v` → 68 通过，无回归
 - 关键决策：参数命名 snake_case（`dataset_alias` / `table_id`）；裸调用保留原行为（返回全量 datasets 列表不含 fields）；复用现有端点 `GET /v1/data-metrics/datasets/query-metadata`，不开新路由
