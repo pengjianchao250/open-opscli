@@ -39,6 +39,8 @@ class SellerSpriteCategoryResolver:
         period: str,
     ) -> dict[str, Any]:
         key = _category_key(params)
+        if scenario == "market-research" and key == "category":
+            return params
         if not key:
             return params
 

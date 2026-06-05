@@ -141,8 +141,8 @@
 
 可选：
 
-- `node` / `category`：类目名称、完整类目路径或节点 ID 路径
-- `departmentKeyword`：市场 / 类目关键词
+- `category` / `departmentKeyword`：市场 / 类目关键词，按卖家精灵表单的 `departmentKeyword` 搜索
+- `node` / `nodeIdPath`：精确类目节点路径，仅在已知 SellerSprite nodeIdPath 时使用
 - `newReleaseNum` / `newReleaseMonths`：新品月份数
 - `topn`：取 Top N 数据
 
@@ -150,8 +150,8 @@
 
 | 中文含义 | params 字段 |
 | --- | --- |
-| 类目 | `node` / `category` / `nodeIdPath` |
-| 市场 / 类目关键词 | `departmentKeyword` |
+| 类目关键词搜索 | `category` / `departmentKeyword` |
+| 精确类目节点 | `node` / `nodeIdPath` |
 | 样本数量 | `sampleNumber` |
 | 头部 Listing 数量 | `topn` / `topNSelect` |
 | 新品定义月份 | `newReleaseNum` / `newReleaseMonths` / `newReleaseNumSelect` |
@@ -189,10 +189,12 @@
 
 ## 类目参数注意
 
-`product-research`、`competitor-lookup` 和 `market-research` 可以直接传自然语言类目，后端会通过卖家精灵类目接口 `/v2/competitor-lookup/nodes` 解析。
+`product-research`、`competitor-lookup` 可以直接传自然语言类目，后端会通过卖家精灵类目接口 `/v2/competitor-lookup/nodes` 解析。
 
 - 可传：`bath`、`bed frames`、`Home & Kitchen:Bedding:Bed Skirts`
 - 可传节点路径：`1055398:1063236`
 - 如果接口返回多个候选，但其中有一个候选与输入的完整类目路径或叶子类目名完全匹配，后端会直接使用该候选继续查询。
 - 如果接口返回多个候选，任务会暂停并返回候选 `nodeIdPath` / 完整类目路径，需要用户补充后再查。
 - 不要猜测节点 ID。
+
+`market-research` 的 `category` 不走类目节点解析，会按 `departmentKeyword` 提交，`nodeIdPath` 保持空；只有用户明确提供 SellerSprite 节点路径时才用 `node` / `nodeIdPath` 做精确节点筛选。

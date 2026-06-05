@@ -137,6 +137,21 @@ class SellerSpriteApiClient:
                 "Origin": BASE_URL,
             },
         )
+        if response.status_code in {301, 302, 303} and response.headers.get("location"):
+            response = await self._client.get(
+                _redirect_url(response.headers["location"], payload),
+                headers={
+                    **self._browser_headers(referer=_absolute_url(url)),
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                },
+            )
+        if _looks_like_session_expired_response(response):
+            raise SellerSpriteApiError(
+                "卖家精灵登录态失效",
+                status_code=response.status_code,
+                response_excerpt=response.text[:1000],
+                api_code="ERR_GLOBAL_SESSION_EXPIRED",
+            )
         if response.status_code >= 400:
             raise SellerSpriteApiError(
                 "卖家精灵表单请求失败",
@@ -288,6 +303,16 @@ def _absolute_url(url: str) -> str:
     if url.startswith("http://") or url.startswith("https://"):
         return url
     return f"{BASE_URL}{url if url.startswith('/') else '/' + url}"
+
+
+def _redirect_url(location: str, payload: dict[str, Any]) -> str:
+    """表单 302 后用原查询条件补齐 GET URL。"""
+    if location.startswith(("http://", "https://")):
+        target = httpx.URL(location)
+    else:
+        target = httpx.URL(BASE_URL).join(location)
+    params = {key: str(value) for key, value in payload.items() if value is not None}
+    return str(target.copy_merge_params(params))
 
 
 def _md5(value: str) -> str:

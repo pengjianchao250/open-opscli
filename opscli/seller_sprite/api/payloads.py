@@ -341,7 +341,7 @@ def make_market_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     new_release = new_release_num(input_data)
     payload: dict[str, Any] = {
         "marketId": str(input_data.get("marketId") or market_research_market_id(_market(input_data, default="US"))),
-        "nodeIdPath": _query_text(input_data.get("nodeIdPath") or input_data.get("node") or input_data.get("category")),
+        "nodeIdPath": _query_text(input_data.get("nodeIdPath") or input_data.get("node")),
         "sampleNumber": str(input_data.get("sampleNumber") or 1),
         "topn": str(topn),
         "newReleaseNum": str(new_release),
@@ -354,11 +354,12 @@ def make_market_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
         "page": str(_int(input_data.get("page") or input_data.get("startPage"), 1)),
         "size": str(_int(input_data.get("size") or input_data.get("pageSize"), 100)),
     }
-    if input_data.get("departmentKeyword") or input_data.get("keyword"):
-        payload["departmentKeyword"] = _query_text(input_data.get("departmentKeyword") or input_data.get("keyword"))
+    if input_data.get("departmentKeyword") or input_data.get("keyword") or input_data.get("category"):
+        payload["departmentKeyword"] = _query_text(
+            input_data.get("departmentKeyword") or input_data.get("keyword") or input_data.get("category")
+        )
     for field in MARKET_RESEARCH_HIDDEN_FIELDS:
-        if input_data.get(field) is not None:
-            payload[field] = str(input_data[field])
+        payload[field] = "" if input_data.get(field) is None else str(input_data[field])
     return payload
 
 
