@@ -77,7 +77,7 @@ Clarification examples:
 | `keyword-miner` | `keyword` | `filterRootWord`, `amazonChoice`, `includeHighFrequency` |
 | `keyword-reverse` | `asin` | `badges` |
 | `traffic-source` | `keywordOrAsin` | `keyword`, `asin`, `asins`, `order`, `desc` |
-| `market-research` | none | `node`/`category`, `departmentKeyword`, `newReleaseNum`/`newReleaseMonths`, `topn`, market metric min/max fields |
+| `market-research` | none | `category`/`departmentKeyword`, `node`/`nodeIdPath`, `newReleaseNum`/`newReleaseMonths`, `topn`, market metric min/max fields |
 
 Always pass:
 
@@ -167,8 +167,8 @@ If both alias and internal field are provided, the internal field wins.
 
 | 中文含义 | params 字段 |
 | --- | --- |
-| 类目 | `node` / `category` / `nodeIdPath` |
-| 市场 / 类目关键词 | `departmentKeyword` |
+| 类目关键词搜索 | `category` / `departmentKeyword` |
+| 精确类目节点 | `node` / `nodeIdPath` |
 | 样本数量 | `sampleNumber` |
 | 头部 Listing 数量 | `topn` / `topNSelect` |
 | 新品定义月份 | `newReleaseNum` / `newReleaseMonths` / `newReleaseNumSelect` |
@@ -206,7 +206,7 @@ If both alias and internal field are provided, the internal field wins.
 
 ### Category Params
 
-For `product-research`, `competitor-lookup`, and `market-research`, pass category filters through `params.node`, `params.category`, `params.nodeIdPath`, or `params.nodeIdPaths`.
+For `product-research` and `competitor-lookup`, pass category filters through `params.node`, `params.category`, `params.nodeIdPath`, or `params.nodeIdPaths`.
 
 - The backend calls SellerSprite's category API `/v2/competitor-lookup/nodes` with `marketId`, `table`, and `nodeLabelPath` to resolve category text.
 - You may pass natural language category text, such as `bath`, `bed frames`, or a more complete path.
@@ -215,6 +215,8 @@ For `product-research`, `competitor-lookup`, and `market-research`, pass categor
 - If the category API returns multiple matches but one candidate exactly matches the provided full category path or leaf category name, the backend uses that exact match directly.
 - If the category API returns multiple matches, the run fails with candidate `nodeIdPath` and full category paths. Ask the user to choose; do not retry by guessing.
 - If no category is found, ask the user for a more complete category path or a known `nodeIdPath`.
+
+For `market-research`, `params.category` is treated as SellerSprite's form field `departmentKeyword`, and `nodeIdPath` is left blank. Use `params.node` or `params.nodeIdPath` only when the user provides a known SellerSprite node path and wants exact node filtering.
 
 ## Defaults
 
@@ -236,7 +238,7 @@ Scenario defaults:
 | `keyword-miner` | `pageNum=1`, `orderBy=5`, `desc=true`, `filterRootWord=0`, `amazonChoice=false`, `includeHighFrequency=true` |
 | `keyword-reverse` | `page=1`, `order=12`, `desc=true` |
 | `traffic-source` | `pageNo=1`, `order=10`, `desc=true` |
-| `market-research` | `marketId=US(1)`, `monthName=bsr_sales_nearly`, `sampleNumber=1`, `topn=10`, `newReleaseNum=6`, `order.field=total_sales`, `order.desc=true` |
+| `market-research` | `marketId=US(1)`, `nodeIdPath=`, `monthName=bsr_sales_nearly`, `sampleNumber=1`, `topn=10`, `newReleaseNum=6`, `order.field=total_sales`, `order.desc=true`; `category` maps to `departmentKeyword` |
 
 ## Call Examples
 
