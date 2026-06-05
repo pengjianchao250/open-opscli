@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .helpers import _err, _ok
+from .helpers import _err, _get_auth_pair, _ok
 
 
 async def xiyou_scenarios() -> dict:
@@ -30,6 +30,8 @@ async def xiyou_run(
     export_format: str = "json",
     output_dir: str | None = None,
     job_id: str | None = None,
+    session_id: str | None = None,
+    jwt: str | None = None,
 ) -> dict:
     """执行西柚洞察接口场景并导出 JSON/XLSX。"""
     try:
@@ -50,18 +52,9 @@ async def xiyou_run(
             output_dir=output_dir,
             export_format=export_format,
         )
-        result = await XiyouApiManager().run(request)
-        payload = result.to_dict()
-        export = payload.get("export") or {}
-        return _ok(
-            {
-                "job_id": payload.get("job_id"),
-                "row_count": payload.get("row_count"),
-                "filename": export.get("filename"),
-                "url": export.get("url"),
-                "format": export.get("format"),
-            }
-        )
+        sid, jw = _get_auth_pair("ops", session_id, jwt)
+        result = await XiyouApiManager(jwt=jw, session_id=sid).run(request)
+        return _ok(result.to_dict())
     except Exception as exc:
         return _err(
             exc,

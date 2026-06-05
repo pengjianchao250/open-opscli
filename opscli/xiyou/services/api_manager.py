@@ -15,6 +15,7 @@ from opscli.xiyou.credentials import XiyouCredentialProvider
 from opscli.xiyou.domain.exceptions import XiyouConfigError
 from opscli.xiyou.domain.models import XiyouExportResult, XiyouRankingRequest, XiyouRankingResult
 from opscli.xiyou.export.xlsx import export_rows_to_xlsx
+from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 
 
 class XiyouApiManager:
@@ -25,9 +26,13 @@ class XiyouApiManager:
         *,
         settings: XiyouSettings | None = None,
         credential_provider: XiyouCredentialProvider | None = None,
+        jwt: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         self.credential_provider = credential_provider or XiyouCredentialProvider(self.settings)
+        self.jwt = jwt
+        self.session_id = session_id
 
     def scenarios(self) -> list[dict[str, Any]]:
         """列出支持的接口场景。"""
@@ -91,6 +96,7 @@ class XiyouApiManager:
 
         rows = _extract_items(response)
         export_format = _normalize_export_format(request.export_format)
+        warnings: list[dict[str, Any]] = []
         if export_format == "xlsx":
             export = export_rows_to_xlsx(
                 rows=rows,
@@ -109,6 +115,17 @@ class XiyouApiManager:
                 rank_pattern=rank_pattern,
                 rows=rows,
             )
+        _upload_export_if_enabled(
+            export=export,
+            job_id=job_id,
+            request=request,
+            site=site,
+            period=period,
+            rank_pattern=rank_pattern,
+            warnings=warnings,
+            jwt=self.jwt,
+            session_id=self.session_id,
+        )
 
         result = XiyouRankingResult(
             job_id=job_id,
@@ -125,7 +142,7 @@ class XiyouApiManager:
             result_path=str(result_path),
             export=export,
             data=rows,
-            warnings=[],
+            warnings=warnings,
         )
         _write_json(result_path, result.to_dict())
         return result
@@ -221,6 +238,60 @@ def _export_rows_to_json(
         format="json",
         mime_type="application/json",
     )
+
+
+def _upload_export_if_enabled(
+    *,
+    export: XiyouExportResult,
+    job_id: str,
+    request: XiyouRankingRequest,
+    site: str,
+    period: str,
+    rank_pattern: str,
+    warnings: list[dict[str, Any]],
+    jwt: str | None = None,
+    session_id: str | None = None,
+) -> None:
+    client = FileUploadClient(jwt=jwt, session_id=session_id)
+    if not client.enabled:
+        return
+    try:
+        upload = client.upload(
+            export.path,
+            purpose="xiyou_export",
+            folder="xiyou/exports",
+            public="1",
+            metadata={
+                "job_id": job_id,
+                "function": request.function,
+                "provider": request.provider,
+                "target": request.target,
+                "site": site,
+                "period": period,
+                "rank_pattern": rank_pattern,
+                "filename": export.filename,
+            },
+        )
+        export.url = upload.url
+    except FileUploadError as exc:
+        warnings.append(
+            {
+                "stage": "file_upload",
+                "message": "西柚洞察导出文件上传失败，已保留本地文件",
+                "error": exc.to_dict(),
+            }
+        )
+    except Exception as exc:
+        warnings.append(
+            {
+                "stage": "file_upload",
+                "message": "西柚洞察导出文件上传失败，已保留本地文件",
+                "error": {
+                    "code": type(exc).__name__,
+                    "message": str(exc),
+                },
+            }
+        )
 
 
 def _write_json(path: Path, payload: Any) -> None:

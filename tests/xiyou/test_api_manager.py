@@ -52,6 +52,36 @@ class DummyApiClient:
         }
 
 
+class DummyUploadClient:
+    instances = []
+
+    def __init__(self, *, jwt=None, session_id=None):
+        self.jwt = jwt
+        self.session_id = session_id
+        self.uploads = []
+        DummyUploadClient.instances.append(self)
+
+    @property
+    def enabled(self):
+        return True
+
+    def upload(self, path, *, purpose, folder=None, public=None, metadata=None):
+        self.uploads.append(
+            {
+                "path": path,
+                "purpose": purpose,
+                "folder": folder,
+                "public": public,
+                "metadata": metadata,
+            }
+        )
+
+        class Result:
+            url = "https://ops.example.com/download/job-json.json"
+
+        return Result()
+
+
 def test_manager_writes_job_files_and_json(monkeypatch, tmp_path: Path):
     DummyApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "XiyouApiClient", DummyApiClient)
@@ -86,6 +116,50 @@ def test_manager_writes_job_files_and_json(monkeypatch, tmp_path: Path):
     exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
     assert exported["target"] == "asin"
     assert exported["rows"][0]["product"]["asin"] == "B00TEST123"
+
+
+def test_manager_uploads_export_and_returns_download_url(monkeypatch, tmp_path: Path):
+    DummyApiClient.calls = []
+    DummyUploadClient.instances = []
+    monkeypatch.setattr(api_manager_module, "XiyouApiClient", DummyApiClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DummyUploadClient)
+    settings = XiyouSettings(output_dir=tmp_path, authorization=None, cookie=None)
+    manager = XiyouApiManager(
+        settings=settings,
+        credential_provider=DummyCredentialProvider(),
+        jwt="jwt-token",
+        session_id="session-id",
+    )
+
+    result = _run(
+        manager.run(
+            XiyouRankingRequest(
+                function="ranking",
+                provider="xiyou",
+                target="asin",
+                site="US",
+                period="week",
+                rank_pattern="flow",
+                job_id="job-json",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.export is not None
+    assert result.export.url == "https://ops.example.com/download/job-json.json"
+    assert result.warnings == []
+    assert DummyUploadClient.instances[0].jwt == "jwt-token"
+    assert DummyUploadClient.instances[0].session_id == "session-id"
+    upload = DummyUploadClient.instances[0].uploads[0]
+    assert upload["purpose"] == "xiyou_export"
+    assert upload["folder"] == "xiyou/exports"
+    assert upload["public"] == "1"
+    assert upload["metadata"]["job_id"] == "job-json"
+    assert upload["metadata"]["target"] == "asin"
+
+    saved = json.loads((tmp_path / "job-json" / "result.json").read_text(encoding="utf-8"))
+    assert saved["export"]["url"] == "https://ops.example.com/download/job-json.json"
 
 
 def test_manager_writes_xlsx(monkeypatch, tmp_path: Path):

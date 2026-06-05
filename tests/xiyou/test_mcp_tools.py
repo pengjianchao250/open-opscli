@@ -19,10 +19,23 @@ class DummyResult:
                 "path": "C:\\tmp\\job-1.xlsx",
                 "format": "xlsx",
             },
+            "data": [{"asin": "B00TEST123"}],
+            "warnings": [
+                {
+                    "stage": "file_upload",
+                    "message": "upload failed",
+                }
+            ],
         }
 
 
 class DummyManager:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        DummyManager.instances.append(self)
+
     def scenarios(self):
         return [{"function": "ranking"}]
 
@@ -40,7 +53,8 @@ class DummyManager:
 
 
 def test_xiyou_scenarios(monkeypatch):
-    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", lambda: DummyManager())
+    DummyManager.instances = []
+    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", DummyManager)
 
     result = _run(xiyou_tools.xiyou_scenarios())
 
@@ -49,20 +63,26 @@ def test_xiyou_scenarios(monkeypatch):
 
 
 def test_xiyou_run(monkeypatch):
-    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", lambda: DummyManager())
+    DummyManager.instances = []
+    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", DummyManager)
+    monkeypatch.setattr(xiyou_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
 
     result = _run(xiyou_tools.xiyou_run(function="ranking", export_format="json"))
 
     assert result["success"] is True
     assert result["data"]["job_id"] == "job-1"
     assert result["data"]["row_count"] == 1
-    assert result["data"]["url"] == "file:///C:/tmp/job-1.xlsx"
+    assert result["data"]["export"]["url"] == "file:///C:/tmp/job-1.xlsx"
+    assert result["data"]["export"]["filename"] == "job-1.xlsx"
+    assert result["data"]["warnings"][0]["stage"] == "file_upload"
+    assert result["data"]["data"][0]["asin"] == "B00TEST123"
     assert "export_path" not in result["data"]
-    assert "data" not in result["data"]
+    assert DummyManager.instances[0].kwargs == {"jwt": "jwt", "session_id": "sid"}
 
 
 def test_xiyou_export_adds_file_url(monkeypatch):
-    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", lambda: DummyManager())
+    DummyManager.instances = []
+    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", DummyManager)
 
     result = _run(xiyou_tools.xiyou_export("job-1"))
 
