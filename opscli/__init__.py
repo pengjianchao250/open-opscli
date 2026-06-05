@@ -4,6 +4,7 @@
     from opscli import AuthClient        # 通过顶层 re-export
     from opscli.auth import AuthClient   # 直接导入子模块
 """
+from opscli.config import __version__  # noqa: F401 — 暴露给外部 from opscli import __version__
 from opscli.auth import AuthClient
 
 __all__ = ["AuthClient"]
