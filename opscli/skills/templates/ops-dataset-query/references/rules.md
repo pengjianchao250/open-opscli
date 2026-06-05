@@ -37,6 +37,38 @@ description: 查询意图澄清通用规则 — 在构造查询参数前，按�
 
 ---
 
+## 零-A、字段语义解析流程（强制）
+
+> **适用时机**：用户给出字段名称或业务术语（如"库存"、"销售额"、"SP"、"转化率"）时，在构造查询参数前必须执行本流程。
+
+**解析顺序（严格按序）**：
+
+1. **先查 `data/field_semantic_index.yml` 的 `semantic_groups`**
+   - 按 `business_domain` 过滤候选字段（不只做字段名关键词匹配）
+   - 查 `disambiguation.possible_meanings`：若存在多个含义且无法从上下文判断 → 执行步骤 2
+
+2. **多义词触发 AskUserQuestion**
+   - 命中 `disambiguation` 且含义数 ≥ 2 → 按 `disambiguation.possible_meanings` 列出选项，禁止猜测
+
+3. **标记字段特殊属性**
+   - `formula_rule=true`（ACOS/ROAS/转化率/平均CPC 等）→ 构造查询时**不传 `aggregation` 参数**，使用字段的 `summary_expression`
+   - `snapshot_rule=true`（总库存/海外仓库存/在途库存等）→ 只能用于明细表，禁止在有维度分组的聚合查询中使用
+
+4. **校验字段真实存在**
+   - 语义索引只提供候选推荐，仍需通过 `data/dataset_fields.csv`（CLI）或 `query_metadata(dataset=alias)`（MCP）确认字段真实存在
+
+**高风险多义词快查**（必须澄清，不可猜测）：
+
+| 术语 | 可能含义 | 处理 |
+|------|---------|------|
+| SP | SPU 产品编码 / Sponsored Products 广告 | 广告上下文→SP广告；销售上下文→SPU；不明确→澄清 |
+| 销售额 | 账单销售额 / 即时销售额 / 广告销售额 / 总销售额 | 先判断时间口径和平台，再确认数据集 |
+| 库存 | 物控库存 / 快照库存（聚合受限）/ 补货计划 / 库龄 | 必须澄清库存类型 |
+| 转化率 | 广告转化率（CVR）/ 自然转化率（页面转化率）| 确认口径来源 |
+| 部门 | 销售部门（dept_name）/ 物控组织（org_name）| 看数据集类型 |
+
+---
+
 ## 一、时间范围规则
 
 ### 1.1 "近 xx 天"是否包含今天
