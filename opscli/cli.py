@@ -16,6 +16,7 @@ from opscli.query.cli import app as query_app
 from opscli.seller_sprite.cli import app as seller_sprite_app
 from opscli.skills.cli import app as skills_app
 from opscli.version import get_version
+from opscli.xiyou.cli import app as xiyou_app
 
 
 def _version_callback(value: bool):
@@ -34,6 +35,7 @@ app.add_typer(amazon_rufus_app, name="amazon-rufus")
 app.add_typer(query_app, name="query")
 app.add_typer(feedback_app, name="feedback")
 app.add_typer(seller_sprite_app, name="seller-sprite")
+app.add_typer(xiyou_app, name="xiyou")
 # app.add_typer(methods_card_app, name="methods-card")
 app.add_typer(skills_app, name="skills")
 app.add_typer(mcp_app, name="mcp")
