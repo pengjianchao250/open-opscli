@@ -98,20 +98,99 @@ PRODUCT_RESEARCH_RECOMMENDATION_ALIASES: dict[str, str] = {
 PRODUCT_RESEARCH_OFFICIAL_FIELD_ALIASES: dict[str, str] = {
     "minUnits": "minSales",
     "maxUnits": "maxSales",
+    "minRevenue": "minAmount",
+    "maxRevenue": "maxAmount",
+    "minUnitsCr": "minTotalUnitsGrowth",
+    "maxUnitsCr": "maxTotalUnitsGrowth",
     "minRatings": "minReviews",
     "maxRatings": "maxReviews",
+    "minRatingsCv": "minReviewsGrouth",
+    "maxRatingsCv": "maxReviewsGrouth",
     "minStar": "minReviewRating",
     "maxStar": "maxReviewRating",
     "availableMonth": "putawayMonth",
     "fulfillment": "sellerTypes",
+    "dimensionType": "pkgDimensionTypeList",
+    "sellerNation": "sellerNationList",
     "minVariations": "minVariations",
     "maxVariations": "maxVariations",
     "variation": "maxVariations",
     "minBsr": "minRanking",
     "maxBsr": "maxRanking",
+    "minBsrCv": "minRankingCv",
+    "maxBsrCv": "maxRankingCv",
+    "minBsrCr": "minRankingCr",
+    "maxBsrCr": "maxRankingCr",
+    "minLqs": "lqsFrom",
+    "maxLqs": "lqsTo",
+    "excludeKeywords": "outOfKeywords",
     "minSellers": "minSellers",
     "maxSellers": "maxSellers",
 }
+
+MARKET_RESEARCH_HIDDEN_FIELDS = [
+    "minAvgSales",
+    "maxAvgSales",
+    "minAvgBsr",
+    "maxAvgBsr",
+    "minAvgWeight",
+    "maxAvgWeight",
+    "minHeadListingAvgBsr",
+    "maxHeadListingAvgBsr",
+    "minTotalProducts",
+    "maxTotalProducts",
+    "minAvgRevenue",
+    "maxAvgRevenue",
+    "minAvgPrice",
+    "maxAvgPrice",
+    "minAvgVolume",
+    "maxAvgVolume",
+    "minHeadListingAvgSales",
+    "maxHeadListingAvgSales",
+    "minAvgReviews",
+    "maxAvgReviews",
+    "minAvgRating",
+    "maxAvgRating",
+    "minAvgProfit",
+    "maxAvgProfit",
+    "minHeadListingAvgRevenue",
+    "maxHeadListingAvgRevenue",
+    "minBrands",
+    "maxBrands",
+    "minHeadListingProductCrn",
+    "maxHeadListingProductCrn",
+    "minEbcRatio",
+    "maxEbcRatio",
+    "minAmzRatio",
+    "maxAmzRatio",
+    "minSellers",
+    "maxSellers",
+    "minHeadListingBrandCrn",
+    "maxHeadListingBrandCrn",
+    "minFbaRatio",
+    "maxFbaRatio",
+    "sellerNations",
+    "minAvgSellers",
+    "maxAvgSellers",
+    "minHeadListingSellerCrn",
+    "maxHeadListingSellerCrn",
+    "minFbmRatio",
+    "maxFbmRatio",
+    "minNewRatio",
+    "maxNewRatio",
+    "minNewAvgPrice",
+    "maxNewAvgPrice",
+    "minNewAvgRevenue",
+    "maxNewAvgRevenue",
+    "minNewCount",
+    "maxNewCount",
+    "minNewAvgRating",
+    "maxNewAvgRating",
+    "minNewAvgReviews",
+    "maxNewAvgReviews",
+    "minNewAvgSales",
+    "maxNewAvgSales",
+]
 
 
 def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
@@ -171,7 +250,15 @@ def make_product_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     _append_product_list_filters(payload, input_data)
     _append_product_range_filters(payload, input_data)
     _append_product_extra_filters(payload, input_data)
-    for key in ["keyword", "includeBrands", "excludeBrands", "includeSellers", "excludeSellers"]:
+    for key in [
+        "keyword",
+        "keywords",
+        "includeBrands",
+        "excludeBrands",
+        "includeSellers",
+        "excludeSellers",
+        "outOfKeywords",
+    ]:
         if input_data.get(key):
             payload[key] = input_data[key]
     return payload
@@ -222,11 +309,8 @@ def make_keyword_reverse_payload(input_data: dict[str, Any]) -> dict[str, Any]:
         "order": _int(input_data.get("order"), 12),
         "desc": order_desc(input_data.get("desc")),
         "exactly": truthy(input_data.get("exactly")),
-        "ac": truthy(input_data.get("ac") or input_data.get("amazonChoice")),
         "keywordBidMatchType": input_data.get("keywordBidMatchType") or "exact",
         "filterDeletedKeywords": truthy(input_data.get("filterDeletedKeywords")),
-        "includeHighFrequency": truthy(input_data.get("includeHighFrequency"), default=True),
-        "groupNum": _int(input_data.get("groupNum"), 1),
     }
 
 
@@ -253,21 +337,28 @@ def make_traffic_source_payload(input_data: dict[str, Any]) -> dict[str, Any]:
 def make_market_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造选市场表单 payload。"""
     month = input_data.get("month") or input_data.get("period") or "nearly"
+    topn = input_data.get("topn") or input_data.get("topN") or 10
+    new_release = new_release_num(input_data)
     payload: dict[str, Any] = {
         "marketId": str(input_data.get("marketId") or market_research_market_id(_market(input_data, default="US"))),
         "nodeIdPath": _query_text(input_data.get("nodeIdPath") or input_data.get("node") or input_data.get("category")),
         "sampleNumber": str(input_data.get("sampleNumber") or 1),
-        "topn": str(input_data.get("topn") or input_data.get("topN") or 10),
-        "newReleaseNum": str(new_release_num(input_data)),
+        "topn": str(topn),
+        "newReleaseNum": str(new_release),
         "order.field": input_data.get("orderField") or input_data.get("order.field") or "total_sales",
         "order.desc": str(order_desc(input_data.get("orderDesc") or input_data.get("order.desc"))).lower(),
         "tab": str(input_data.get("tab") or 1),
         "monthName": input_data.get("monthName") or month_name(month),
+        "newReleaseNumSelect": str(input_data.get("newReleaseNumSelect") or new_release),
+        "topNSelect": str(input_data.get("topNSelect") or topn),
         "page": str(_int(input_data.get("page") or input_data.get("startPage"), 1)),
         "size": str(_int(input_data.get("size") or input_data.get("pageSize"), 100)),
     }
     if input_data.get("departmentKeyword") or input_data.get("keyword"):
         payload["departmentKeyword"] = _query_text(input_data.get("departmentKeyword") or input_data.get("keyword"))
+    for field in MARKET_RESEARCH_HIDDEN_FIELDS:
+        if input_data.get(field) is not None:
+            payload[field] = str(input_data[field])
     return payload
 
 
@@ -495,6 +586,17 @@ def normalize_product_research_input(input_data: dict[str, Any]) -> dict[str, An
     badge_nr = normalized.get("badgeNR")
     if badge_nr is not None and "productTags" not in normalized and truthy(badge_nr):
         normalized["productTags"] = ["NewRelease"]
+    badge_map = {
+        "badgeBS": "BestSeller",
+        "badgeAC": "AmazonChoice",
+        "badgeNR": "NewRelease",
+    }
+    tags = csv(normalized.get("productTags"))
+    for source, tag in badge_map.items():
+        if truthy(normalized.get(source)) and tag not in tags:
+            tags.append(tag)
+    if tags:
+        normalized["productTags"] = tags
     return normalized
 
 
@@ -514,10 +616,44 @@ def _append_product_range_filters(payload: dict[str, Any], input_data: dict[str,
         "maxPrice": ("maxPrice", "priceMax"),
         "minSales": ("minSales", "salesMin"),
         "maxSales": ("maxSales", "salesMax"),
+        "minAmount": ("minAmount",),
+        "maxAmount": ("maxAmount",),
+        "minAmzUnit": ("minAmzUnit",),
+        "maxAmzUnit": ("maxAmzUnit",),
+        "minTotalUnitsGrowth": ("minTotalUnitsGrowth",),
+        "maxTotalUnitsGrowth": ("maxTotalUnitsGrowth",),
+        "minRanking": ("minRanking",),
+        "maxRanking": ("maxRanking",),
+        "minSubBsrRank": ("minSubBsrRank",),
+        "maxSubBsrRank": ("maxSubBsrRank",),
+        "minRankingCv": ("minRankingCv",),
+        "maxRankingCv": ("maxRankingCv",),
+        "minRankingCr": ("minRankingCr",),
+        "maxRankingCr": ("maxRankingCr",),
+        "minVariations": ("minVariations",),
+        "maxVariations": ("maxVariations",),
+        "minQuestions": ("minQuestions",),
+        "maxQuestions": ("maxQuestions",),
+        "minReviewsGrouth": ("minReviewsGrouth",),
+        "maxReviewsGrouth": ("maxReviewsGrouth",),
+        "minReviewsRate": ("minReviewsRate",),
+        "maxReviewsRate": ("maxReviewsRate",),
+        "minProfit": ("minProfit",),
+        "maxProfit": ("maxProfit",),
+        "lqsFrom": ("lqsFrom",),
+        "lqsTo": ("lqsTo",),
         "minReviews": ("minReviews", "reviewsMin"),
         "maxReviews": ("maxReviews", "reviewsMax"),
         "minReviewRating": ("minReviewRating", "ratingMin"),
         "maxReviewRating": ("maxReviewRating", "ratingMax"),
+        "minFba": ("minFba",),
+        "maxFba": ("maxFba",),
+        "minWeights": ("minWeights",),
+        "maxWeights": ("maxWeights",),
+        "minDeliveryPrice": ("minDeliveryPrice",),
+        "maxDeliveryPrice": ("maxDeliveryPrice",),
+        "minSellers": ("minSellers",),
+        "maxSellers": ("maxSellers",),
     }
     for target, aliases in field_aliases.items():
         for alias in aliases:
@@ -528,17 +664,11 @@ def _append_product_range_filters(payload: dict[str, Any], input_data: dict[str,
 
 def _append_product_extra_filters(payload: dict[str, Any], input_data: dict[str, Any]) -> None:
     for key in [
-        "minRanking",
-        "maxRanking",
-        "minSellers",
-        "maxSellers",
         "putawayMonth",
-        "minTotalUnitsGrowth",
-        "maxVariations",
-        "minRankingCr",
-        "minVariations",
         "smallAndLight",
         "lowPrice",
+        "video",
+        "matchType",
     ]:
         if input_data.get(key) is not None:
             payload[key] = input_data[key]

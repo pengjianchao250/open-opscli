@@ -73,8 +73,6 @@ class SellerSpriteScenario:
         """返回高频词接口地址。"""
         if not self.high_frequency_endpoint:
             return None
-        if self.scenario_id == "keyword-reverse":
-            return f"{self.high_frequency_endpoint}?market={payload.get('market') or 'JP'}"
         return self.high_frequency_endpoint
 
     def _validate_required(self, payload: dict[str, Any]) -> None:
@@ -110,7 +108,6 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         scenario_id="keyword-reverse",
         title="关键词反查",
         endpoint="/v3/api/relation/reversing",
-        high_frequency_endpoint="/v3/api/relation/ta/high-frequency-words-new",
         required_params=("asin",),
         payload_builder=make_keyword_reverse_payload,
     ),

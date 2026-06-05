@@ -106,7 +106,7 @@
     "pagination_fields": ["data.page", "data.size", "data.total", "data.took"]
   },
   "primary_metrics": [
-    {"title": "相关度", "source": "relevancy"},
+    {"title": "相关度", "source": "relevancy", "note": "KeywordMining-US-phone-stand 官方导出与 0033-150908 接口响应一致；fan 样本存在差异，需结合对应官方导出请求/响应继续确认。"},
     {"title": "ABA月排名", "source": "searchRank"},
     {"title": "ABA周排名", "source": "searchWeeklyRank"},
     {"title": "月搜索量", "source": "searches"},

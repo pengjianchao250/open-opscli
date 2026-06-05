@@ -157,6 +157,29 @@ class SellerSpriteApiClient:
         )
         return self._parse_json_response(response)
 
+    async def category_nodes(
+        self,
+        *,
+        market_id: Any,
+        table: str,
+        node_id_path: str | None = None,
+        node_label_path: str | None = None,
+    ) -> dict[str, Any]:
+        """获取卖家精灵类目节点。"""
+        params: dict[str, Any] = {
+            "marketId": market_id,
+            "table": table,
+        }
+        if node_id_path:
+            params["nodeIdPath"] = node_id_path
+        if node_label_path:
+            params["nodeLabelPath"] = node_label_path
+        return await self.get_json(
+            "/v2/competitor-lookup/nodes",
+            params,
+            referer=f"{BASE_URL}/v3/product-research",
+        )
+
     async def request_json(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
         """发送通用请求并返回接口 JSON。"""
         response = await self._client.request(method, _absolute_url(url), **kwargs)
