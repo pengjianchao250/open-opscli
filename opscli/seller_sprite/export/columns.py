@@ -248,6 +248,7 @@ def columns_for_scenario(scenario: str, site: str) -> list[ExportColumn]:
     if scenario == "product-research":
         return _product_columns(
             currency,
+            swap_unit_columns=True,
             reviews_delta_source="reviewsIncreasement",
             percent_suffix_titles={"大类BSR增长率", "月销量增长率", "留评率", "毛利率"},
         )
