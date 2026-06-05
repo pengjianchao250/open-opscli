@@ -12,7 +12,6 @@ dependencies = [
     "keyring>=25",
     "fastmcp>=2.0",
     "openpyxl>=3.1",
-    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]
