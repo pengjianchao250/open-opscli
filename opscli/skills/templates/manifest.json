@@ -80,10 +80,10 @@
       "reason": "强依赖内部属性体系和数据口径，暂不随公开产物发版"
     },
     "ops-seller-sprite": {
-      "source": false,
-      "wheel": false,
-      "binary": false,
-      "binary_full": false,
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
       "tier": "experimental",
       "reason": "卖家精灵已迁移到服务端账号托管的 MCP/CLI 接口直连模式，可作为实验 Skill 安装使用"
     },
