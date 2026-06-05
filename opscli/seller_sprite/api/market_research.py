@@ -107,7 +107,7 @@ def _parse_main_row(cells: list[dict[str, Any]]) -> dict[str, Any]:
         "newRatio": _number(_nth(cells[11], 1)),
         "totalProducts": _number(_first(cells[12])),
         "returnRate": _nth(cells[13], 0),
-        "searchPurchaseRatio": _nth(cells[13], 1),
+        "categoryReturnRate": _nth(cells[13], 1),
     }
     row.update(_sample_counts(cells[2]))
     row.update(_seller_type_ratios(cells[9]))
@@ -141,6 +141,11 @@ def _merge_detail_row(row: dict[str, Any], cell: dict[str, Any]) -> None:
     row["avgVolume"] = _value_after(lines, "平均体积:")
     row["avgProfit"] = _number(_value_after(lines, "平均毛利率:"))
     row["sellerNation"] = _value_after(lines, "卖家所属地:")
+    search_purchase_values = _values_after(lines, "搜索购买比:", count=2)
+    if search_purchase_values:
+        row["searchPurchaseRatio"] = search_purchase_values[0]
+    if len(search_purchase_values) > 1:
+        row["categorySearchPurchaseRatio"] = search_purchase_values[1]
 
 
 def _clean_lines(parts: list[str]) -> list[str]:
@@ -237,6 +242,34 @@ def _value_after(lines: list[str], label: str) -> str:
                 if next_line and ":" not in next_line and re.search(r"\d", next_line):
                     return next_line
     return ""
+
+
+def _values_after(lines: list[str], label: str, *, count: int) -> list[str]:
+    for index, line in enumerate(lines):
+        if not line.startswith(label):
+            continue
+        values: list[str] = []
+        value = line.split(label, 1)[1].strip()
+        if value:
+            values.append(value)
+        for next_line in lines[index + 1 :]:
+            if len(values) >= count:
+                break
+            if ":" in next_line and not _is_value(next_line) and not _is_secondary_value_label(next_line):
+                break
+            if _is_value(next_line):
+                values.append(next_line)
+        return values
+    return []
+
+
+def _is_value(value: str) -> bool:
+    text = str(value or "").strip()
+    return bool(text and (text.upper() == "N/A" or re.search(r"\d", text)))
+
+
+def _is_secondary_value_label(value: str) -> bool:
+    return str(value or "").strip().rstrip(":") in {"同类目均值", "同类目搜索购买比"}
 
 
 def _number(value: Any) -> float | int | None:
