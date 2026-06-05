@@ -326,6 +326,16 @@ def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _int(value: Any, default: int = 0) -> int:
+    """安全将值转为 int，转换失败返回默认值。"""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
 def _looks_like_guest_limited_response(response: dict[str, Any], *, page_size: int) -> bool:
     if page_size <= 20:
         return False
