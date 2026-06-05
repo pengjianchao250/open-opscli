@@ -127,6 +127,29 @@ def test_manager_writes_job_files_and_xlsx(monkeypatch, tmp_path: Path):
     assert "market" not in DummyApiClient.calls[0]["payload"]
 
 
+def test_manager_generates_camel_case_job_id(monkeypatch, tmp_path: Path):
+    DummyApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None)
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-reverse",
+                site="JP",
+                period="nearly",
+                params={"asin": "B07YRMT36L"},
+            )
+        )
+    )
+
+    assert result.export is not None
+    assert result.export.filename.startswith("SellerSprite-ReverseASIN-JP-B07YRMT36L-Nearly-")
+    assert result.export.filename.endswith(".xlsx")
+    assert Path(result.export.path).exists()
+
+
 def test_manager_writes_json_export(monkeypatch, tmp_path: Path):
     DummyApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)

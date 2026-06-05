@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from opscli.seller_sprite.accounts import SellerSpriteAccountProvider
+from opscli.seller_sprite.api.categories import SellerSpriteCategoryResolver
 from opscli.seller_sprite.api.client import SellerSpriteApiClient
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.api.scenarios import get_scenario, list_scenarios
@@ -17,6 +19,7 @@ from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerS
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, SellerSpriteScenarioResult
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
+from opscli.shared.integration_accounts import IntegrationAccountClient
 
 
 class SellerSpriteApiManager:
@@ -27,9 +30,16 @@ class SellerSpriteApiManager:
         *,
         settings: SellerSpriteSettings | None = None,
         account_provider: SellerSpriteAccountProvider | None = None,
+        jwt: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         self.settings = settings or load_settings()
-        self.account_provider = account_provider or SellerSpriteAccountProvider(self.settings)
+        self.jwt = jwt
+        self.session_id = session_id
+        self.account_provider = account_provider or SellerSpriteAccountProvider(
+            self.settings,
+            integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
+        )
 
     def scenarios(self) -> list[dict[str, Any]]:
         """列出支持的接口场景。"""
@@ -38,26 +48,12 @@ class SellerSpriteApiManager:
     async def run(self, request: SellerSpriteScenarioRequest) -> SellerSpriteScenarioResult:
         """执行一个接口场景。"""
         scenario = get_scenario(request.scenario)
-        job_id = request.job_id or _build_job_id(request.scenario)
-        root_dir = self._build_root_dir(request, job_id)
-        root_dir.mkdir(parents=True, exist_ok=True)
-
         site = (request.site or self.settings.default_site).upper()
         period = request.period or self.settings.default_period
+        job_id = request.job_id or _build_job_id(request, site, period)
+        root_dir = self._build_root_dir(request, job_id)
+        root_dir.mkdir(parents=True, exist_ok=True)
         page_size = request.page_size or self.settings.page_size
-        payload = scenario.build_payload(params=request.params, site=site, period=period, page_size=page_size)
-
-        params_path = root_dir / "params.json"
-        raw_path = root_dir / "raw.json"
-        result_path = root_dir / "result.json"
-        _write_json(
-            params_path,
-            {
-                "request": request.to_dict(),
-                "payload": payload,
-            },
-        )
-
         account = self.account_provider.get_default()
         warnings: list[dict[str, Any]] = []
         async with SellerSpriteApiClient(account=account) as client:
@@ -68,6 +64,31 @@ class SellerSpriteApiManager:
                     account_provider=self.account_provider,
                     warnings=warnings,
                 )
+            category_resolver = SellerSpriteCategoryResolver(client)
+            params = await _request_with_session_retry(
+                client=client,
+                warnings=warnings,
+                stage="category",
+                action=lambda: category_resolver.resolve_params(
+                    params=request.params,
+                    scenario=request.scenario,
+                    site=site,
+                    period=period,
+                ),
+            )
+            payload = scenario.build_payload(params=params, site=site, period=period, page_size=page_size)
+
+            params_path = root_dir / "params.json"
+            raw_path = root_dir / "raw.json"
+            result_path = root_dir / "result.json"
+            _write_json(
+                params_path,
+                {
+                    "request": request.to_dict(),
+                    "resolved_params": params,
+                    "payload": payload,
+                },
+            )
             main_response = await _request_with_session_retry(
                 client=client,
                 warnings=warnings,
@@ -166,6 +187,8 @@ class SellerSpriteApiManager:
             site=site,
             period=period,
             warnings=warnings,
+            jwt=self.jwt,
+            session_id=self.session_id,
         )
         result = SellerSpriteScenarioResult(
             job_id=job_id,
@@ -277,16 +300,12 @@ async def _login_with_account_refresh(
 def _main_payload(scenario: str, payload: dict[str, Any]) -> dict[str, Any]:
     """去除仅用于本地编排的字段。"""
     if scenario == "keyword-reverse":
-        return _without(payload, {"market", "includeHighFrequency", "groupNum", "page"})
+        return _without(payload, {"market", "page"})
     return payload
 
 
 def _high_frequency_payload(scenario: str, payload: dict[str, Any]) -> dict[str, Any]:
     """构造高频词接口 payload。"""
-    if scenario == "keyword-reverse":
-        body = _without(payload, {"market", "includeHighFrequency", "groupNum", "page", "limit", "skip"})
-        body["groupNum"] = int(payload.get("groupNum") or 1)
-        return body
     return payload
 
 
@@ -335,10 +354,110 @@ def _extract_high_frequency_rows(response: dict[str, Any] | None) -> list[dict[s
     return []
 
 
-def _build_job_id(scenario: str) -> str:
+def _build_job_id(request: SellerSpriteScenarioRequest, site: str, period: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     suffix = uuid4().hex[:6]
-    return f"seller-sprite-{scenario}-{timestamp}-{suffix}"
+    service = "SellerSprite"
+    scenario_label = _scenario_label(request.scenario)
+    target_label = _build_target_label(request.scenario, request.params)
+    period_label = _build_period_label(period)
+
+    parts = [service, scenario_label, site]
+    if target_label:
+        parts.append(target_label)
+    if period_label:
+        parts.append(period_label)
+    parts.append(timestamp)
+    parts.append(suffix)
+    return "-".join(parts)
+
+
+def _scenario_label(scenario: str) -> str:
+    labels = {
+        "competitor-lookup": "CompetitorLookup",
+        "product-research": "ProductResearch",
+        "keyword-miner": "KeywordMiner",
+        "keyword-reverse": "ReverseASIN",
+        "traffic-source": "TrafficSource",
+        "market-research": "MarketResearch",
+    }
+    return labels.get(scenario, _camel_case(scenario))
+
+
+def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
+    if not isinstance(params, dict):
+        return ""
+
+    def first_value(value: Any) -> str:
+        if isinstance(value, list) and value:
+            return str(value[0])
+        return str(value) if value is not None else ""
+
+    if scenario == "keyword-reverse":
+        return _sanitize_filename_part(params.get("asin"))
+    if scenario == "keyword-miner":
+        return _sanitize_filename_part(params.get("keyword"))
+    if scenario == "traffic-source":
+        return _sanitize_filename_part(
+            params.get("keywordOrAsin")
+            or params.get("keyword")
+            or params.get("asin")
+            or first_value(params.get("asins"))
+        )
+    if scenario == "competitor-lookup":
+        return _sanitize_filename_part(
+            params.get("asins")
+            or params.get("keyword")
+            or params.get("brand")
+            or params.get("sellerName")
+        )
+    if scenario == "product-research":
+        return _sanitize_filename_part(
+            params.get("recommendationMode")
+            or first_value(params.get("keywords"))
+            or params.get("keyword")
+            or params.get("category")
+            or params.get("node")
+        )
+    if scenario == "market-research":
+        return _sanitize_filename_part(
+            params.get("departmentKeyword")
+            or params.get("category")
+            or params.get("node")
+            or params.get("keyword")
+        )
+
+    return ""
+
+
+def _camel_case(value: str) -> str:
+    parts = re.split(r"[^A-Za-z0-9]+", value)
+    return "".join(part.capitalize() for part in parts if part)
+
+
+def _build_period_label(period: str) -> str:
+    if not period:
+        return ""
+    normalized = period.strip().lower()
+    if normalized == "nearly":
+        return "Nearly"
+    if normalized.endswith("d") and normalized[:-1].isdigit():
+        return f"Last-{int(normalized[:-1])}-days"
+    if re.match(r"^\d{4}-\d{2}$", normalized):
+        return normalized.upper()
+    return _sanitize_filename_part(period)
+
+
+def _sanitize_filename_part(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    text = text.replace(" ", "-")
+    text = re.sub(r"[^A-Za-z0-9\-]+", "-", text)
+    text = re.sub(r"-{2,}", "-", text).strip("-")
+    return text[:64]
 
 
 def _normalize_export_format(value: str) -> str:
@@ -394,8 +513,10 @@ def _upload_export_if_enabled(
     site: str,
     period: str,
     warnings: list[dict[str, Any]],
+    jwt: str | None = None,
+    session_id: str | None = None,
 ) -> None:
-    client = FileUploadClient()
+    client = FileUploadClient(jwt=jwt, session_id=session_id)
     if not client.enabled:
         return
     try:

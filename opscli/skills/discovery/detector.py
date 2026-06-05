@@ -53,6 +53,7 @@ class SkillDetector:
                 self._opencode_skills_dir(),
                 home / ".workbuddy" / "skills",
                 home / ".trae-cn" / "skills",
+                home / ".agents" / "skills",
             ]
         )
 
@@ -127,6 +128,7 @@ class SkillDetector:
             "opencode":   current / ".opencode" / "skills",
             "workbuddy":  current / ".workbuddy" / "skills",
             "trae-cn":    current / ".trae-cn" / "skills",
+            "agents":     current / ".agents" / "skills",
         }
         if preferred_runtime and preferred_runtime in runtime_dirs:
             return preferred_runtime, runtime_dirs[preferred_runtime]
@@ -186,6 +188,9 @@ class SkillDetector:
         # Trae Solo：.trae-cn/ 目录存在
         if (current / ".trae-cn").exists():
             targets.append(("trae-cn", current / ".trae-cn" / "skills"))
+        # Agents：.agents/ 目录存在
+        if (current / ".agents").exists():
+            targets.append(("agents", current / ".agents" / "skills"))
         return self._dedupe_targets(targets)
 
     def detect_global_install_targets(self) -> list[tuple[str, Path]]:
@@ -230,6 +235,10 @@ class SkillDetector:
         if (home / ".trae-cn").exists() or shutil.which("trae") is not None:
             targets.append(("trae-cn", home / ".trae-cn" / "skills"))
 
+        # Agents：~/.agents/ 存在 或 `which agents` 可用
+        if (home / ".agents").exists() or shutil.which("agents") is not None:
+            targets.append(("agents", home / ".agents" / "skills"))
+
         return self._dedupe_targets(targets)
 
     def detect_all_install_targets(self) -> list[tuple[str, Path]]:
@@ -247,6 +256,7 @@ class SkillDetector:
                 ("opencode",   self._opencode_skills_dir()),
                 ("workbuddy",  home / ".workbuddy" / "skills"),
                 ("trae-cn",    home / ".trae-cn" / "skills"),
+                ("agents",     home / ".agents" / "skills"),
             ]
         )
 
@@ -285,4 +295,6 @@ class SkillDetector:
             return "workbuddy"
         if ".trae-cn" in parts:
             return "trae-cn"
+        if ".agents" in parts:
+            return "agents"
         return "claude"

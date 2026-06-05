@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteExportResult
-from opscli.seller_sprite.export.columns import ExportColumn, columns_for_scenario
+from opscli.seller_sprite.export.columns import ExportColumn, columns_for_scenario, currency_label
 
 def export_rows_to_xlsx(
     *,
@@ -46,7 +48,7 @@ def export_rows_to_xlsx(
 
     for row_index, row in enumerate(rows, start=2):
         for column_index, column in enumerate(columns, start=1):
-            sheet.cell(row=row_index, column=column_index, value=_cell_value(_column_value(row, column)))
+            sheet.cell(row=row_index, column=column_index, value=_cell_value(_column_value(row, column, site=site)))
 
     sheet.freeze_panes = "A2"
     for column_index, column in enumerate(columns, start=1):
@@ -89,16 +91,16 @@ def _get_value(row: dict[str, Any], field: str) -> Any:
     return value
 
 
-def _column_value(row: dict[str, Any], column: ExportColumn) -> Any:
+def _column_value(row: dict[str, Any], column: ExportColumn, *, site: str) -> Any:
     if column.source is None:
         return ""
     value = _get_value(row, column.source)
     if _is_blank(value) and column.fallback:
         value = _get_value(row, column.fallback)
-    return _apply_transform(value, column.transform, row)
+    return _apply_transform(value, column.transform, row, site=site)
 
 
-def _apply_transform(value: Any, transform: str | None, row: dict[str, Any]) -> Any:
+def _apply_transform(value: Any, transform: str | None, row: dict[str, Any], *, site: str) -> Any:
     if not transform:
         return value
     if transform == "emptyIfNegative":
@@ -117,14 +119,38 @@ def _apply_transform(value: Any, transform: str | None, row: dict[str, Any]) -> 
         return "Y" if bool(value) else ""
     if transform == "departmentsJoin":
         return _departments_join(value)
-    if transform == "yen":
-        return "" if _is_blank(value) else f"円{float(value):.2f}"
+    if transform == "percentage":
+        return _percentage(value)
+    if transform == "percentSuffix":
+        return "" if _is_blank(value) else f"{value}%"
+    if transform == "dateMillis":
+        return _date_millis(value)
+    if transform == "keywordReverseUpdatedTime":
+        return _keyword_reverse_updated_time(value, site=site)
+    if transform == "rankPosition":
+        return _rank_position(value)
+    if transform == "rankPage":
+        return _rank_page(value)
+    if transform == "divide10":
+        return "" if _is_blank(value) else float(value) / 10
+    if transform == "sellerNation":
+        return _seller_nation(value)
+    if transform in {"currency", "yen"}:
+        return "" if _is_blank(value) else f"{currency_label(site)}{float(value):.2f}"
     if transform == "bidRange":
-        return _bid_range(row)
+        return _bid_range(row, site=site)
     if transform == "asinList":
         return _asin_list(value)
     if transform == "listJoin":
         return _list_join(value)
+    if transform == "badgeLabels":
+        return _enum_list_join(value, BADGE_LABELS)
+    if transform == "trafficSourceLabels":
+        return _enum_list_join(value, TRAFFIC_SOURCE_LABELS)
+    if transform == "trafficKeywordTypeLabels":
+        return _enum_list_join(value, TRAFFIC_KEYWORD_TYPE_LABELS)
+    if transform == "conversionKeywordTypeLabels":
+        return _enum_list_join(value, CONVERSION_KEYWORD_TYPE_LABELS)
     return value
 
 
@@ -249,12 +275,98 @@ def _departments_join(value: Any) -> str:
     return "&".join(str(item.get("label")) for item in value if isinstance(item, dict) and item.get("label"))
 
 
-def _bid_range(row: dict[str, Any]) -> str:
+def _percentage(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    return f"{float(value) * 100:.2f}%"
+
+
+def _date_millis(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def _keyword_reverse_updated_time(value: Any, *, site: str) -> str:
+    if _is_blank(value):
+        return ""
+    timestamp = float(value) / 1000
+    china_time = datetime.fromtimestamp(timestamp, tz=_timezone_for_site("CN"))
+    site_time = datetime.fromtimestamp(timestamp, tz=_timezone_for_site(site))
+    site_label = SITE_TIME_LABELS.get(str(site).upper(), str(site).upper())
+    return f"中{china_time.strftime('%m.%d %H:%M')}\n{site_label}{site_time.strftime('%m.%d %H:%M')}"
+
+
+def _rank_page(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    page = value.get("page")
+    index = value.get("index")
+    page_size = value.get("pageSize")
+    if _is_blank(page):
+        return ""
+    if _is_blank(index) or _is_blank(page_size):
+        return f"第{page}页"
+    return f"第{page}页,{index}/{page_size}"
+
+
+def _rank_position(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return "前3页无排名" if _is_blank(value) else value
+    position = value.get("position")
+    return "前3页无排名" if _is_blank(position) else position
+
+
+def _seller_nation(value: Any) -> str:
+    if _is_blank(value):
+        return ""
+    text = str(value)
+    return "CN(HK)" if text == "HK" else text
+
+
+def _bid_range(row: dict[str, Any], *, site: str) -> str:
     bid_min = row.get("bidMin")
     bid_max = row.get("bidMax")
     if _is_blank(bid_min) or _is_blank(bid_max):
         return "-"
-    return f"円{float(bid_min):.2f}-円{float(bid_max):.2f}"
+    currency = currency_label(site)
+    return f"{currency}{float(bid_min):.2f}-{currency}{float(bid_max):.2f}"
+
+
+SITE_TIME_LABELS = {
+    "US": "美",
+    "JP": "日",
+    "DE": "德",
+    "UK": "英",
+    "FR": "法",
+    "IT": "意",
+    "ES": "西",
+    "CA": "加",
+    "IN": "印",
+    "MX": "墨",
+}
+
+SITE_TIMEZONES = {
+    "CN": ("Asia/Shanghai", timezone(timedelta(hours=8))),
+    "US": ("America/Los_Angeles", timezone(timedelta(hours=-7))),
+    "JP": ("Asia/Tokyo", timezone(timedelta(hours=9))),
+    "DE": ("Europe/Berlin", timezone(timedelta(hours=1))),
+    "UK": ("Europe/London", timezone.utc),
+    "FR": ("Europe/Paris", timezone(timedelta(hours=1))),
+    "IT": ("Europe/Rome", timezone(timedelta(hours=1))),
+    "ES": ("Europe/Madrid", timezone(timedelta(hours=1))),
+    "CA": ("America/Los_Angeles", timezone(timedelta(hours=-7))),
+    "IN": ("Asia/Kolkata", timezone(timedelta(hours=5, minutes=30))),
+    "MX": ("America/Mexico_City", timezone(timedelta(hours=-6))),
+}
+
+
+def _timezone_for_site(site: str):
+    name, fallback = SITE_TIMEZONES.get(str(site).upper(), SITE_TIMEZONES["CN"])
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return fallback
 
 
 def _asin_list(value: Any) -> str:
@@ -274,6 +386,67 @@ def _list_join(value: Any) -> str:
             parts.append(str(item.get("label") or item.get("name") or item.get("code") or item.get("value") or json.dumps(item, ensure_ascii=False)))
         elif item is not None:
             parts.append(str(item))
+    return "/".join(part for part in parts if part)
+
+
+BADGE_LABELS = {
+    "NATURAL_SEARCHING": "自然搜索词",
+    "naturalSearching": "自然搜索词",
+    "AMAZON_CHOICE": "AC推荐词",
+    "AMAZON_CHOICH": "AC推荐词",
+    "amazonChoice": "AC推荐词",
+    "EDITORIAL_RECOMMENDATIONS": "ER推荐词",
+    "editorialRecommendations": "ER推荐词",
+    "FOUR_STAR": "4星推荐词",
+    "fourStar": "4星推荐词",
+    "HIGHLY_RATED": "HR推荐词",
+    "highlyRated": "HR推荐词",
+    "SPONSOR_BRAND": "品牌广告词",
+    "sponsorBrand": "品牌广告词",
+    "SPONSOR_VIDEO": "视频广告词",
+    "sponsorVideo": "视频广告词",
+    "ADS": "SP广告词",
+    "ads": "SP广告词",
+}
+
+TRAFFIC_SOURCE_LABELS = {
+    "SEARCH": "自然搜索",
+    "search": "自然搜索",
+    "OFFICIAL": "亚马逊推荐",
+    "official": "亚马逊推荐",
+    "AD": "PPC广告",
+    "ad": "PPC广告",
+}
+
+TRAFFIC_KEYWORD_TYPE_LABELS = {
+    "PRIMARY": "主要流量词",
+    "primary": "主要流量词",
+    "PRECISE": "精准流量词",
+    "precise": "精准流量词",
+    "PRECISE_LONG_TAIL": "转化流失词",
+    "preciseLongTail": "转化流失词",
+}
+
+CONVERSION_KEYWORD_TYPE_LABELS = {
+    "EXCELLENT": "转化优质词",
+    "excellent": "转化优质词",
+    "STABLE": "转化平稳词",
+    "stable": "转化平稳词",
+    "LOST": "转化流失词",
+    "lost": "转化流失词",
+    "INVALID": "无效曝光词",
+    "invalid": "无效曝光词",
+}
+
+
+def _enum_list_join(value: Any, labels: dict[str, str]) -> str:
+    if _is_blank(value):
+        return ""
+    values = value if isinstance(value, list) else [value]
+    parts = []
+    for item in values:
+        key = str(item)
+        parts.append(labels.get(key, key))
     return "/".join(part for part in parts if part)
 
 

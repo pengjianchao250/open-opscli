@@ -60,7 +60,7 @@ class SellerSpriteAccountProvider:
         if self._remote_error:
             raise SellerSpriteConfigError(
                 f"获取卖家精灵集成账号失败：{self._remote_error}。"
-                "请先完成 OPS 授权：MCP 模式调用 auth_mcp_login，CLI 模式执行 opscli auth login。"
+                "请检查 OPS 授权：MCP 模式需携带有效 X-MCP-API-Key，CLI 模式执行 opscli auth login。"
             )
         if not self.settings.username:
             raise SellerSpriteConfigError("缺少 OPSCLI_SELLER_SPRITE_USERNAME")

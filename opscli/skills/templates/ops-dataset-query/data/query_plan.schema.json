@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opscli.local/schemas/ops-dataset-query/query_plan.schema.json",
+  "title": "ops-dataset-query Query Plan",
+  "type": "object",
+  "required": [
+    "user_query",
+    "intent",
+    "dataset",
+    "query",
+    "validation",
+    "execution_policy"
+  ],
+  "properties": {
+    "user_query": {
+      "type": "string",
+      "description": "用户原始问题"
+    },
+    "intent": {
+      "type": "object",
+      "required": ["intent_id", "domain", "user_intent"],
+      "properties": {
+        "intent_id": {
+          "type": "string"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "user_intent": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "matched_keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "dataset": {
+      "type": "object",
+      "required": ["standard_name"],
+      "properties": {
+        "standard_name": {
+          "type": "string"
+        },
+        "table_id": {
+          "type": ["integer", "null"]
+        },
+        "dataset_alias": {
+          "type": ["string", "null"]
+        },
+        "dataset_name": {
+          "type": ["string", "null"]
+        },
+        "execution_dataset": {
+          "type": ["string", "null"],
+          "description": "当业务意图不直接对应独立数据集时，实际承接查询的数据集"
+        },
+        "grain": {
+          "type": ["string", "null"]
+        },
+        "primary_rule": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "query": {
+      "type": "object",
+      "required": ["dimensions", "metrics", "filters"],
+      "properties": {
+        "dimensions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/field_ref"
+          }
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metric_ref"
+          }
+        },
+        "filters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/filter_ref"
+          }
+        },
+        "data_comparison": {
+          "type": ["object", "null"]
+        },
+        "order_by": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["field"],
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "desc": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "limit": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "offset": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "validation": {
+      "type": "object",
+      "required": [
+        "field_existence_checked",
+        "select_column_permission_checked",
+        "formula_metric_checked",
+        "hard_constraints_checked"
+      ],
+      "properties": {
+        "field_existence_checked": {
+          "type": "boolean"
+        },
+        "select_column_permission_checked": {
+          "type": "boolean"
+        },
+        "formula_metric_checked": {
+          "type": "boolean"
+        },
+        "hard_constraints_checked": {
+          "type": "boolean"
+        },
+        "requires_clarification": {
+          "type": "boolean"
+        },
+        "clarification_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "execution_policy": {
+      "type": "object",
+      "required": ["query_entry", "allow_execute"],
+      "properties": {
+        "query_entry": {
+          "type": "string",
+          "enum": ["query_simple", "query_chart", "query_build_and_run"]
+        },
+        "allow_execute": {
+          "type": "boolean"
+        },
+        "reason_if_blocked": {
+          "type": ["string", "null"]
+        },
+        "feedback_required": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "field_ref": {
+      "type": "object",
+      "required": ["field"],
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "verbose_name": {
+          "type": ["string", "null"]
+        },
+        "alias": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "metric_ref": {
+      "type": "object",
+      "required": ["field"],
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "verbose_name": {
+          "type": ["string", "null"]
+        },
+        "alias": {
+          "type": ["string", "null"]
+        },
+        "aggregation": {
+          "type": ["string", "null"]
+        },
+        "is_formula": {
+          "type": "boolean"
+        },
+        "expression_source": {
+          "type": ["string", "null"],
+          "description": "summary_expression/detail_expression"
+        }
+      },
+      "additionalProperties": false
+    },
+    "filter_ref": {
+      "type": "object",
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "operator": {
+          "type": "string"
+        },
+        "value": {},
+        "source": {
+          "type": ["string", "null"],
+          "description": "user/default/context/component"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

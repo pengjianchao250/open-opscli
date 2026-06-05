@@ -1,5 +1,49 @@
 # 待归档变更记录
 
+## 2026-06-03 ops-dataset-query 二期服务端 S-5 - 字段语义索引表 + API
+
+**变更原因**：服务端 P1 任务，为 AI 客户端提供"业务用语 → 数据集字段"的映射索引，后续在后台录入数据后可支持语义搜索
+**改动点**：
+- `vendor/aukey/data-metrics/src/database/migrations/2026_06_03_000003_create_dm_field_semantic_index_table.php`：新建迁移，创建 `dm_field_semantic_index` 表（table_id、field_name、field_type、semantic_term、needs_disambiguation、disambiguation_hint、aggregation_hint、status + 3 个索引）
+- `vendor/aukey/data-metrics/src/Services/DatasetSkillService.php`：新增 `buildFieldSemanticIndexForUser()` 方法，按用户权限过滤并返回字段语义索引
+- `vendor/aukey/data-metrics/src/Http/Controllers/DatasetSkillApiController.php`：新增 `exportFieldSemanticIndex()` 方法
+- `vendor/aukey/data-metrics/src/Http/routes.php`：注册 `GET /skill/field-semantic-index` 路由
+**验证结果**：`artisan migrate` 成功（DONE，212ms）；`Schema::hasTable('dm_field_semantic_index')` → PASS；`buildFieldSemanticIndexForUser(1)` → PASS entry_count=0（表为空的预期值）；路由已注册于 routes.php:66
+**影响范围**：data-metrics 包新增 API 端点，向后兼容（表为空时返回空 entries 数组）
+**回滚方式**：`php artisan migrate:rollback --path=vendor/aukey/data-metrics/src/database/migrations/2026_06_03_000003_create_dm_field_semantic_index_table.php`；还原 DatasetSkillService.php、DatasetSkillApiController.php、routes.php 对应修改
+
+---
+
+## 2026-06-02 ops-dataset-query 二期客户端优化 - 完整落地
+
+**变更原因**：将二期结构化产物（intent_taxonomy、dataset_profiles 等）从草案目录落地到 Skill 模板，新增本地意图路由脚本，使 AI 在远端 Catalog 未命中时能进行四级回退路由而非直接跌落关键词搜索
+**改动点**：
+- `opscli/skills/templates/ops-dataset-query/data/`：新增 6 个结构化产物文件（intent_taxonomy.yml、dataset_profiles.yml、dataset_relationships.yml、field_semantic_index.yml、routing_eval_cases.yml、query_plan.schema.json）
+- `opscli/skills/templates/ops-dataset-query/data/VERSION.json`：版本升级 1.0.2→1.1.0，data_state=ready
+- `pyproject.toml`：新增 `pyyaml>=6` 依赖
+- `opscli/skills/templates/ops-dataset-query/scripts/route_intent.py`：本地意图路由脚本，支持 direct_intent/embedded_intent 路由、澄清触发、fallback 检测
+- `tests/skills/test_route_intent.py`：11个单元测试，覆盖账单销售路由、embedded_intent 映射、SP 澄清、无关问题回退、CLI 入口验证等
+- `opscli/skills/templates/ops-dataset-query/SKILL.md`：新增铁律三-B（四级回退链）
+- `opscli/skills/templates/ops-dataset-query/references/rules.md`：新增零-A 章节（字段语义解析流程 + 高风险多义词快查表）
+**验证结果**：`pytest tests/skills/test_route_intent.py -v` 11/11 PASSED；3 个路由冒烟用例（billing_sales、embedded_intent、SP 澄清）全部符合预期
+**影响范围**：ops-dataset-query Skill 模板，已安装版本需重新 install 获取新文件
+**回滚方式**：`git checkout HEAD -- opscli/skills/templates/ops-dataset-query/ tests/skills/test_route_intent.py pyproject.toml`
+
+---
+
+## 2026-06-02 ops-dataset-query 二期 - 规划文档产出
+
+**变更原因**：完成二期优化的全面规划，为客户端意图路由落地和服务端约束字段扩展提供完整 TDD 实施路径
+**改动点**：
+- `docs/plans/ops-dataset-query二期优化方案.md`：7章完整优化方案，含客户端P0-P2、服务端P0-P1优先级排期
+- `docs/plans/ops-dataset-query二期客户端实施计划.md`：8任务 TDD 客户端实施计划，含完整 `route_intent.py` + `test_route_intent.py` 代码
+- `docs/plans/ops-dataset-query二期服务端实施计划.md`：5任务（S-1~S-5）TDD 服务端实施计划，含完整 Laravel Migration PHP + DatasetSkillService 代码
+**验证结果**：文档已创建，规划覆盖优化方案所有 P0/P1 条目
+**影响范围**：仅文档，代码变更待用户确认后逐任务执行
+**回滚方式**：删除三个新增 md 文档
+
+---
+
 ## 2026-05-29 Skills 分享码功能 - 全链路实现
 
 **变更原因**：技能广场中 personal/department 类型的技能只有创建者或同部门成员可安装。需要允许创建者生成临时分享码（默认 30 分钟有效），持码的任意登录用户可绕过权限限制完整安装技能。

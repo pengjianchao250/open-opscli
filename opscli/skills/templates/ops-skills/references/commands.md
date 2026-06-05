@@ -483,6 +483,7 @@ opscli skills marketplace rate pengjianchao@ops-auth 5 --json
 | `opencode`  | `~/.config/opencode/skills/`  | `~/.config/opencode/` 存在 或 `which opencode` |
 | `workbuddy` | `~/.workbuddy/skills/`        | `~/.workbuddy/` 存在 或 `which workbuddy` |
 | `trae-cn`   | `~/.trae-cn/skills/`          | `~/.trae-cn/` 存在 或 `which trae` |
+| `agents`    | `~/.agents/skills/`           | `~/.agents/` 存在 或 `which agents` |
 
 **安装模式说明：**
 

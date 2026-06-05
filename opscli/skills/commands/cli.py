@@ -60,6 +60,7 @@ _TOOL_LABELS = {
     "opencode":  "OpenCode",
     "workbuddy": "WorkBuddy",
     "trae-cn":   "Trae Solo",
+    "agents":    "Agents",
     "central":   "中央存储",
 }
 
