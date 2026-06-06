@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 
+from opscli.config import __version__
 from opscli.auth import AuthClient, OPS_URL
 from opscli.skills.domain.exceptions import SkillRemoteError
 
@@ -93,7 +94,8 @@ class MarketplaceClient:
 
     def _auth_headers(self) -> dict[str, str]:
         token = self._auth.get_token("ops")
-        return {"Authorization": f"Bearer {token}"}
+        headers = {"Authorization": f"Bearer {token}", "X-Opscli-Version": __version__}
+        return headers
 
     # ──────────────────────────────────────────
     # 分类
