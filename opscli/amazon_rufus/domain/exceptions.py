@@ -13,18 +13,6 @@ class RufusError(Exception):
         return {"code": self.code, "message": str(self)}
 
 
-class ChromeCdpUnavailableError(RufusError):
-    """Chrome CDP 不可用。"""
-
-    code = "CHROME_CDP_UNAVAILABLE"
-
-
-class SeedRequestNotCapturedError(RufusError):
-    """未捕获 Rufus seed request。"""
-
-    code = "SEED_REQUEST_NOT_CAPTURED"
-
-
 class QuestionBankNotReadyError(RufusError):
     """题库尚未安装或升级。"""
 
@@ -37,10 +25,46 @@ class InvalidQuestionError(RufusError):
     code = "INVALID_QUESTION"
 
 
-class RufusLoginRequiredError(RufusError):
-    """Rufus 未返回可用答案，需要用户完成 Amazon 登录后继续。"""
+class InvalidRufusCookieError(RufusError):
+    """用户传入的 Cookie 参数无效。"""
 
-    code = "RUFUS_LOGIN_REQUIRED"
+    code = "INVALID_RUFUS_COOKIE"
+
+
+class InvalidRufusBrowserStateError(RufusError):
+    """用户 Amazon 浏览器状态无效。"""
+
+    code = "INVALID_RUFUS_BROWSER_STATE"
+
+
+class ChromeCdpUnavailableError(RufusError):
+    """Chrome CDP 端点不可用。"""
+
+    code = "CHROME_CDP_UNAVAILABLE"
+
+
+class SeedRequestNotCapturedError(RufusError):
+    """未捕获到 Rufus seed request。"""
+
+    code = "SEED_REQUEST_NOT_CAPTURED"
+
+
+class RufusSecretNotReadyError(RufusError):
+    """Rufus 后端请求凭证尚未准备好。"""
+
+    code = "RUFUS_SECRET_NOT_READY"
+
+
+class HeadlessRufusCaptureError(RufusError):
+    """Rufus headless 捕获失败。"""
+
+    code = "RUFUS_HEADLESS_CAPTURE_ERROR"
+
+
+class HeadlessRufusRequestError(RufusError):
+    """Rufus headless 请求失败。"""
+
+    code = "RUFUS_HEADLESS_REQUEST_ERROR"
 
 
 class RufusReplayError(RufusError):

@@ -67,8 +67,9 @@ _TOOL_LABELS = {
 _AMAZON_RUFUS_SKILL_NAME = "ops-amazon-rufus"
 _AMAZON_RUFUS_NEXT_STEPS = [
     "使用前必须先登录对应国家站点的 Amazon 账户。",
-    "请先执行 opscli amazon-rufus init <country>，在新窗口完成登录。",
-    "登录后再执行 opscli amazon-rufus get <asin> <country> --new-chrome。",
+    "请先执行 opscli amazon-rufus init <country> --launch-if-needed，在新窗口完成登录。",
+    "登录后执行 opscli amazon-rufus save-state <country>，保存当前国家站点登录态。",
+    "保存完成后再调用 amazon_rufus_get 或继续对应的 Rufus MCP 获取流程。",
 ]
 
 # marketplace list 命令的参数枚举与面板标题

@@ -1,5 +1,6 @@
 ﻿import json
 import re
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -8,9 +9,10 @@ import pytest
 from typer.testing import CliRunner
 
 from opscli.amazon_rufus.cli import app
-from opscli.amazon_rufus.domain.exceptions import InvalidQuestionError, QuestionBankNotReadyError, SeedRequestNotCapturedError, UnsupportedMarketplaceError
+from opscli.amazon_rufus.domain.exceptions import HeadlessRufusCaptureError, InvalidQuestionError, InvalidRufusCookieError, QuestionBankNotReadyError, UnsupportedMarketplaceError
 from opscli.amazon_rufus.runtime.country_map import build_product_url, resolve_marketplace
-from opscli.amazon_rufus.services.browser import BrowserAttachService
+from opscli.amazon_rufus.services.answer_report_writer import AnswerReportWriter
+from opscli.amazon_rufus.services.headless_capture import HeadlessRufusCaptureService
 from opscli.amazon_rufus.services.manager import RufusManager
 from opscli.amazon_rufus.services.parser import RufusParserService
 from opscli.amazon_rufus.services.question_bank import QuestionBankService
@@ -412,6 +414,23 @@ def test_answer_report_formatter_omits_missing_answer_when_summary_exists():
     )
 
 
+def test_answer_report_writer_writes_relative_report_path(tmp_path: Path):
+    writer = AnswerReportWriter()
+
+    report_path = writer.write(
+        {
+            "asin": "b0test1234",
+            "questions": ["这个商品适合送礼吗？"],
+            "answers": [{"text": "适合送礼。", "isSuccess": True}],
+        },
+        output_dir=tmp_path / "output" / "amazon-rufus",
+    )
+
+    assert re.fullmatch(r"B0TEST1234-\d{8}-\d{6}\.md", report_path.name)
+    assert report_path.parent == tmp_path / "output" / "amazon-rufus"
+    assert "适合送礼" in report_path.read_text(encoding="utf-8")
+
+
 def test_manager_builds_upload_payload_with_questions(tmp_path: Path):
     manager = RufusManager()
     questions = ["问题0", "问题1"]
@@ -434,48 +453,149 @@ def test_manager_builds_upload_payload_with_questions(tmp_path: Path):
     assert [item["question"] for item in record["questions"]] == questions
 
 
-def test_browser_capture_opens_dedicated_tab_and_brings_to_front(monkeypatch):
+def test_headless_capture_installs_missing_playwright_browser_and_retries(monkeypatch):
+    calls = []
+
     class FakeRequest:
         url = "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
         post_data = '{"tabId":"tab-1"}'
         headers = {"content-type": "application/json"}
 
     class FakePage:
-        def __init__(self) -> None:
-            self.url = "about:blank"
-            self.handler = None
-            self.brought_to_front = False
+        url = "about:blank"
 
         def on(self, event, handler):
             self.handler = handler
 
         def goto(self, url, wait_until, timeout):
             self.url = url
-            if self.handler:
+            self.handler(FakeRequest())
+
+        def wait_for_timeout(self, timeout):
+            return None
+
+    class FakeContext:
+        def add_cookies(self, cookies):
+            calls.append(("cookies", cookies))
+
+        def new_page(self):
+            return FakePage()
+
+        def close(self):
+            calls.append(("context-close", None))
+
+    class FakeBrowser:
+        def new_context(self, storage_state=None):
+            return FakeContext()
+
+        def close(self):
+            calls.append(("browser-close", None))
+
+    class FakeChromium:
+        def __init__(self):
+            self.launch_count = 0
+
+        def launch(self, **kwargs):
+            self.launch_count += 1
+            calls.append(("launch", self.launch_count, kwargs))
+            if self.launch_count == 1:
+                raise Exception("BrowserType.launch: Executable doesn't exist. Please run playwright install")
+            return FakeBrowser()
+
+    fake_chromium = FakeChromium()
+
+    class FakePlaywright:
+        chromium = fake_chromium
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def fake_run(command, check, capture_output, text):
+        calls.append(("install", command, check, capture_output, text))
+        return subprocess.CompletedProcess(command, 0)
+
+    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
+    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    seed = HeadlessRufusCaptureService().capture_seed_request(
+        asin="B0TEST1234",
+        country="US",
+        cookie="session-id=abc",
+        timeout_seconds=1,
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+    )
+
+    install_calls = [item for item in calls if item[0] == "install"]
+    assert seed.tab_id == "tab-1"
+    assert fake_chromium.launch_count == 2
+    assert len(install_calls) == 1
+    assert install_calls[0][1] == [sys.executable, "-m", "playwright", "install", "chromium"]
+
+
+def test_headless_capture_reopens_page_after_transient_miss(monkeypatch):
+    """页面首次未触发 Rufus 请求时，应重开 Amazon 页面并继续捕获。"""
+    calls = []
+
+    class FakeRequest:
+        url = "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
+        post_data = '{"tabId":"tab-1"}'
+        headers = {"content-type": "application/json"}
+
+    class FakePage:
+        def __init__(self, index: int) -> None:
+            self.index = index
+            self.url = "about:blank"
+            self.handler = None
+
+        def on(self, event, handler):
+            self.handler = handler
+
+        def goto(self, url, wait_until, timeout):
+            self.url = url
+            calls.append(("goto", self.index, url, wait_until, timeout))
+            if self.index == 4:
                 self.handler(FakeRequest())
 
         def wait_for_timeout(self, timeout):
-            return None
+            calls.append(("wait", self.index, timeout))
 
-        def bring_to_front(self):
-            self.brought_to_front = True
+        def close(self):
+            calls.append(("page-close", self.index))
 
     class FakeContext:
         def __init__(self) -> None:
-            self.pages = [FakePage()]
-            self.created_page = None
+            self.page_count = 0
+
+        def add_cookies(self, cookies):
+            calls.append(("cookies", cookies))
 
         def new_page(self):
-            self.created_page = FakePage()
-            return self.created_page
+            self.page_count += 1
+            calls.append(("new-page", self.page_count))
+            return FakePage(self.page_count)
 
-    fake_context = FakeContext()
+        def close(self):
+            calls.append(("context-close", None))
 
     class FakeBrowser:
-        contexts = [fake_context]
+        def __init__(self) -> None:
+            self.context = FakeContext()
+
+        def new_context(self, storage_state=None):
+            calls.append(("context", storage_state))
+            return self.context
+
+        def close(self):
+            calls.append(("browser-close", None))
 
     class FakeChromium:
-        def connect_over_cdp(self, cdp_url):
+        def launch(self, **kwargs):
+            calls.append(("launch", kwargs))
             return FakeBrowser()
 
     class FakePlaywright:
@@ -491,118 +611,77 @@ def test_browser_capture_opens_dedicated_tab_and_brings_to_front(monkeypatch):
     monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
     monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
 
-    service = BrowserAttachService()
-
-    seed = service.capture_seed_request(
+    seed = HeadlessRufusCaptureService().capture_seed_request(
         asin="B0TEST1234",
         country="US",
+        cookie="session-id=abc",
+        timeout_seconds=10,
         page_url="https://www.amazon.com/dp/B0TEST1234",
-        cdp_url="http://127.0.0.1:9222",
-        timeout_seconds=1,
     )
 
-    assert fake_context.created_page is not None
-    assert fake_context.created_page.brought_to_front is True
-    assert fake_context.created_page.url == "https://www.amazon.com/dp/B0TEST1234"
-    assert service.current_page is fake_context.created_page
     assert seed.tab_id == "tab-1"
+    assert [item for item in calls if item[0] == "new-page"] == [
+        ("new-page", 1),
+        ("new-page", 2),
+        ("new-page", 3),
+        ("new-page", 4),
+    ]
+    assert len([item for item in calls if item[0] == "launch"]) == 1
+    assert len([item for item in calls if item[0] == "context"]) == 1
 
 
-def test_browser_capture_starts_new_chrome_before_connecting(monkeypatch):
+def test_headless_capture_stops_after_three_page_retries(monkeypatch):
+    """页面持续未触发 Rufus 请求时，最多只重开 3 次 Amazon 页面。"""
     calls = []
-
-    class FakeRequest:
-        url = "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
-        post_data = '{"tabId":"tab-1"}'
-        headers = {"content-type": "application/json"}
 
     class FakePage:
         url = "about:blank"
 
+        def __init__(self, index: int) -> None:
+            self.index = index
+
         def on(self, event, handler):
-            self.handler = handler
+            return None
 
         def goto(self, url, wait_until, timeout):
             self.url = url
-            self.handler(FakeRequest())
+            calls.append(("goto", self.index, url, wait_until, timeout))
 
         def wait_for_timeout(self, timeout):
-            return None
+            calls.append(("wait", self.index, timeout))
 
-        def bring_to_front(self):
-            return None
+        def close(self):
+            calls.append(("page-close", self.index))
 
     class FakeContext:
-        def new_page(self):
-            return FakePage()
-
-    class FakeBrowser:
-        contexts = [FakeContext()]
-
-    class FakeChromium:
-        def connect_over_cdp(self, cdp_url):
-            calls.append(("connect", cdp_url))
-            return FakeBrowser()
-
-    class FakePlaywright:
-        chromium = FakeChromium()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
-    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
-    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
-
-    service = BrowserAttachService()
-    monkeypatch.setattr(service, "_start_new_chrome", lambda: calls.append(("start", None)))
-    monkeypatch.setattr(service, "_wait_for_cdp", lambda cdp_url, timeout_seconds: calls.append(("wait", cdp_url)))
-
-    service.capture_seed_request(
-        asin="B0TEST1234",
-        country="US",
-        page_url="https://www.amazon.com/dp/B0TEST1234",
-        cdp_url="http://127.0.0.1:9222",
-        timeout_seconds=1,
-        new_chrome=True,
-    )
-
-    assert calls[:3] == [
-        ("start", None),
-        ("wait", "http://127.0.0.1:9222"),
-        ("connect", "http://127.0.0.1:9222"),
-    ]
-
-
-def test_browser_capture_failure_guides_user_to_init(monkeypatch):
-    class FakePage:
         def __init__(self) -> None:
-            self.url = "about:blank"
+            self.page_count = 0
 
-        def on(self, event, handler):
-            return None
+        def add_cookies(self, cookies):
+            calls.append(("cookies", cookies))
 
-        def goto(self, url, wait_until, timeout):
-            self.url = url
-
-        def wait_for_timeout(self, timeout):
-            return None
-
-        def bring_to_front(self):
-            return None
-
-    class FakeContext:
         def new_page(self):
-            return FakePage()
+            self.page_count += 1
+            calls.append(("new-page", self.page_count))
+            return FakePage(self.page_count)
+
+        def close(self):
+            calls.append(("context-close", None))
 
     class FakeBrowser:
-        contexts = [FakeContext()]
+        def __init__(self) -> None:
+            self.context = FakeContext()
+
+        def new_context(self, storage_state=None):
+            calls.append(("context", storage_state))
+            return self.context
+
+        def close(self):
+            calls.append(("browser-close", None))
 
     class FakeChromium:
-        def connect_over_cdp(self, cdp_url):
+        def launch(self, **kwargs):
+            calls.append(("launch", kwargs))
             return FakeBrowser()
 
     class FakePlaywright:
@@ -618,309 +697,130 @@ def test_browser_capture_failure_guides_user_to_init(monkeypatch):
     monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
     monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
 
-    service = BrowserAttachService()
-
-    with pytest.raises(SeedRequestNotCapturedError) as exc_info:
-        service.capture_seed_request(
+    with pytest.raises(HeadlessRufusCaptureError) as exc:
+        HeadlessRufusCaptureService().capture_seed_request(
             asin="B0TEST1234",
             country="US",
+            cookie="session-id=abc",
+            timeout_seconds=10,
             page_url="https://www.amazon.com/dp/B0TEST1234",
-            cdp_url="http://127.0.0.1:9222",
-            timeout_seconds=1,
         )
 
-    message = str(exc_info.value)
-    assert "未捕获 /rufus/cl/streaming" in message
-    assert "opscli amazon-rufus init US" in message
-    assert "https://www.amazon.com/dp/B0TEST1234" in message
-
-
-def test_browser_capture_closes_new_chrome_by_default(monkeypatch):
-    calls = []
-
-    class FakeRequest:
-        url = "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
-        post_data = '{"tabId":"tab-1"}'
-        headers = {"content-type": "application/json"}
-
-    class FakePage:
-        url = "about:blank"
-
-        def on(self, event, handler):
-            self.handler = handler
-
-        def goto(self, url, wait_until, timeout):
-            self.url = url
-            self.handler(FakeRequest())
-
-        def wait_for_timeout(self, timeout):
-            return None
-
-        def bring_to_front(self):
-            return None
-
-    class FakeContext:
-        def new_page(self):
-            return FakePage()
-
-    class FakeCdpSession:
-        def send(self, command):
-            calls.append(("cdp", command))
-
-    class FakeBrowser:
-        contexts = [FakeContext()]
-
-        def new_browser_cdp_session(self):
-            return FakeCdpSession()
-
-        def close(self):
-            calls.append(("close", None))
-
-    class FakeChromium:
-        def connect_over_cdp(self, cdp_url):
-            return FakeBrowser()
-
-    class FakePlaywright:
-        chromium = FakeChromium()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
-    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
-    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
-
-    service = BrowserAttachService()
-    monkeypatch.setattr(service, "_start_new_chrome", lambda: calls.append(("start", None)))
-    monkeypatch.setattr(service, "_wait_for_cdp", lambda cdp_url, timeout_seconds: None)
-
-    service.capture_seed_request(
-        asin="B0TEST1234",
-        country="US",
-        page_url="https://www.amazon.com/dp/B0TEST1234",
-        cdp_url="http://127.0.0.1:9222",
-        timeout_seconds=1,
-        new_chrome=True,
-    )
-
-    assert ("cdp", "Browser.close") in calls
-
-
-def test_browser_capture_keeps_new_chrome_open_when_requested(monkeypatch):
-    calls = []
-
-    class FakeRequest:
-        url = "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
-        post_data = '{"tabId":"tab-1"}'
-        headers = {"content-type": "application/json"}
-
-    class FakePage:
-        url = "about:blank"
-
-        def on(self, event, handler):
-            self.handler = handler
-
-        def goto(self, url, wait_until, timeout):
-            self.url = url
-            self.handler(FakeRequest())
-
-        def wait_for_timeout(self, timeout):
-            return None
-
-        def bring_to_front(self):
-            return None
-
-    class FakeContext:
-        def new_page(self):
-            return FakePage()
-
-    class FakeBrowser:
-        contexts = [FakeContext()]
-
-        def close(self):
-            calls.append(("close", None))
-
-    class FakeChromium:
-        def connect_over_cdp(self, cdp_url):
-            return FakeBrowser()
-
-    class FakePlaywright:
-        chromium = FakeChromium()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
-    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
-    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
-
-    service = BrowserAttachService()
-    monkeypatch.setattr(service, "_start_new_chrome", lambda: None)
-    monkeypatch.setattr(service, "_wait_for_cdp", lambda cdp_url, timeout_seconds: None)
-
-    service.capture_seed_request(
-        asin="B0TEST1234",
-        country="US",
-        page_url="https://www.amazon.com/dp/B0TEST1234",
-        cdp_url="http://127.0.0.1:9222",
-        timeout_seconds=1,
-        new_chrome=True,
-        keep_chrome_open=True,
-    )
-
-    assert ("close", None) not in calls
-
-
-def test_browser_capture_keeps_new_chrome_open_when_callback_requests(monkeypatch):
-    calls = []
-
-    class FakeRequest:
-        url = "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
-        post_data = '{"tabId":"tab-1"}'
-        headers = {"content-type": "application/json"}
-
-    class FakePage:
-        url = "about:blank"
-
-        def on(self, event, handler):
-            self.handler = handler
-
-        def goto(self, url, wait_until, timeout):
-            self.url = url
-            self.handler(FakeRequest())
-
-        def wait_for_timeout(self, timeout):
-            return None
-
-        def bring_to_front(self):
-            return None
-
-    class FakeContext:
-        def new_page(self):
-            return FakePage()
-
-    class FakeCdpSession:
-        def send(self, command):
-            calls.append(("cdp", command))
-
-    class FakeBrowser:
-        contexts = [FakeContext()]
-
-        def new_browser_cdp_session(self):
-            return FakeCdpSession()
-
-        def close(self):
-            calls.append(("close", None))
-
-    class FakeChromium:
-        def connect_over_cdp(self, cdp_url):
-            return FakeBrowser()
-
-    class FakePlaywright:
-        chromium = FakeChromium()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
-    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
-    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
-
-    service = BrowserAttachService()
-    monkeypatch.setattr(service, "_start_new_chrome", lambda: None)
-    monkeypatch.setattr(service, "_wait_for_cdp", lambda cdp_url, timeout_seconds: None)
-
-    service.capture_seed_request(
-        asin="B0TEST1234",
-        country="US",
-        page_url="https://www.amazon.com/dp/B0TEST1234",
-        cdp_url="http://127.0.0.1:9222",
-        timeout_seconds=1,
-        new_chrome=True,
-        on_captured=lambda page, seed: True,
-    )
-
-    assert ("cdp", "Browser.close") not in calls
-    assert ("close", None) not in calls
-
-
-def test_new_chrome_arguments_open_devtools_for_tabs():
-    assert "--auto-open-devtools-for-tabs" in BrowserAttachService.DEFAULT_NEW_CHROME_ARGUMENTS
-
-
-def test_browser_open_marketplace_for_login_opens_site_and_keeps_browser(monkeypatch):
-    calls = []
-
-    class FakePage:
-        def __init__(self) -> None:
-            self.url = "about:blank"
-            self.brought_to_front = False
-
-        def goto(self, url, wait_until, timeout):
-            self.url = url
-            calls.append(("goto", url, wait_until, timeout))
-
-        def bring_to_front(self):
-            self.brought_to_front = True
-            calls.append(("front", None))
-
-    fake_page = FakePage()
-
-    class FakeContext:
-        def new_page(self):
-            return fake_page
-
-    class FakeBrowser:
-        contexts = [FakeContext()]
-
-        def close(self):
-            calls.append(("close", None))
-
-    class FakeChromium:
-        def connect_over_cdp(self, cdp_url):
-            calls.append(("connect", cdp_url))
-            return FakeBrowser()
-
-    class FakePlaywright:
-        chromium = FakeChromium()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
-    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
-    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
-
-    service = BrowserAttachService()
-    monkeypatch.setattr(service, "_start_new_chrome", lambda: calls.append(("start", None)))
-    monkeypatch.setattr(service, "_wait_for_cdp", lambda cdp_url, timeout_seconds: calls.append(("wait", cdp_url)))
-
-    service.open_marketplace_for_login(
-        marketplace_url="https://www.amazon.de",
-        cdp_url="http://127.0.0.1:9222",
-        timeout_seconds=30,
-    )
-
-    assert calls == [
-        ("start", None),
-        ("wait", "http://127.0.0.1:9222"),
-        ("connect", "http://127.0.0.1:9222"),
-        ("goto", "https://www.amazon.de", "domcontentloaded", 30000),
-        ("front", None),
+    assert "已重新打开 Amazon 商品页并重试 3 次" in str(exc.value)
+    assert [item for item in calls if item[0] == "new-page"] == [
+        ("new-page", 1),
+        ("new-page", 2),
+        ("new-page", 3),
+        ("new-page", 4),
     ]
-    assert service.current_page is fake_page
+    assert len([item for item in calls if item[0] == "launch"]) == 1
+    assert len([item for item in calls if item[0] == "context"]) == 1
+
+
+def test_headless_capture_reports_install_failure_for_missing_playwright_browser(monkeypatch):
+    calls = []
+
+    class FakeChromium:
+        def launch(self, **kwargs):
+            calls.append(("launch", kwargs))
+            raise Exception("BrowserType.launch: Executable doesn't exist. Please run playwright install")
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def fake_run(command, check, capture_output, text):
+        calls.append(("install", command))
+        raise subprocess.CalledProcessError(1, command, stderr="download failed")
+
+    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
+    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(HeadlessRufusCaptureError) as exc:
+        HeadlessRufusCaptureService().capture_seed_request(
+            asin="B0TEST1234",
+            country="US",
+            cookie="session-id=abc",
+            timeout_seconds=1,
+            page_url="https://www.amazon.com/dp/B0TEST1234",
+        )
+
+    message = str(exc.value)
+    assert [item[0] for item in calls] == ["launch", "install"]
+    assert "已尝试自动安装 Playwright Chromium" in message
+    assert "python -m playwright install chromium" in message
+    assert "download failed" in message
+
+
+def test_headless_capture_does_not_retry_more_than_once_after_browser_install(monkeypatch):
+    calls = []
+
+    class FakeChromium:
+        def launch(self, **kwargs):
+            calls.append(("launch", kwargs))
+            if len([item for item in calls if item[0] == "launch"]) == 1:
+                raise Exception("BrowserType.launch: Executable doesn't exist. Please run playwright install")
+            raise Exception("BrowserType.launch: blocked")
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def fake_run(command, check, capture_output, text):
+        calls.append(("install", command))
+        return subprocess.CompletedProcess(command, 0)
+
+    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
+    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(HeadlessRufusCaptureError) as exc:
+        HeadlessRufusCaptureService().capture_seed_request(
+            asin="B0TEST1234",
+            country="US",
+            cookie="session-id=abc",
+            timeout_seconds=1,
+            page_url="https://www.amazon.com/dp/B0TEST1234",
+        )
+
+    assert [item[0] for item in calls] == ["launch", "install", "launch"]
+    assert "已尝试自动安装 Playwright Chromium" in str(exc.value)
+
+
+def test_cli_help_exposes_init_and_cdp_options():
+    root_help = runner.invoke(app, ["--help"])
+    get_help = runner.invoke(app, ["get", "--help"])
+    init_help = runner.invoke(app, ["init", "--help"])
+
+    assert root_help.exit_code == 0
+    assert get_help.exit_code == 0
+    assert init_help.exit_code == 0
+    assert "init" in root_help.stdout
+    assert "save-state" in root_help.stdout
+    assert "--chrome-path" in init_help.stdout
+    assert "launch-if-needed" in init_help.stdout
+    for text in [
+        "--cdp-url",
+        "--new-chrome",
+        "keep-chrome",
+        "--chrome-path",
+        "launch-if",
+    ]:
+        assert text in get_help.stdout
+    assert "--remote-rufus" not in get_help.stdout
 
 
 def test_cli_get_writes_manager_result_to_report_file(monkeypatch, tmp_path: Path):
@@ -937,6 +837,9 @@ def test_cli_get_writes_manager_result_to_report_file(monkeypatch, tmp_path: Pat
                 "upload_payload": {"records": []},
             }
 
+        def get_backend(self, **kwargs):
+            raise AssertionError("CLI CDP 入口不应调用后端 headless get_backend")
+
     monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
     monkeypatch.chdir(tmp_path)
 
@@ -952,7 +855,12 @@ def test_cli_get_writes_manager_result_to_report_file(monkeypatch, tmp_path: Pat
     assert "默认答案" not in result.stdout
     assert "seed_request" not in result.stdout
     assert "upload_payload" not in result.stdout
+    assert captured["cdp_url"] == "http://127.0.0.1:9222"
     assert captured["new_chrome"] is False
+    assert captured["keep_chrome_open"] is False
+    assert captured["chrome_path"] is None
+    assert captured["launch_if_needed"] is False
+    assert captured["timeout_seconds"] == 180
 
 
 def test_cli_get_writes_frontend_like_answer_report(monkeypatch, tmp_path: Path):
@@ -1008,7 +916,14 @@ def test_cli_get_writes_frontend_like_answer_report(monkeypatch, tmp_path: Path)
 def test_cli_get_answer_report_reports_failed_empty_answer(monkeypatch, tmp_path: Path):
     class DummyManager:
         def get(self, **kwargs):
-            return {"asin": kwargs["asin"], "country": kwargs["country"], "answers": [{"text": "", "isSuccess": False}]}
+            return {
+                "asin": kwargs["asin"],
+                "country": kwargs["country"],
+                "answers": [{"text": "", "isSuccess": False}],
+            }
+
+        def get_backend(self, **kwargs):
+            raise AssertionError("CLI CDP 入口不应调用后端 headless get_backend")
 
     monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
     monkeypatch.chdir(tmp_path)
@@ -1022,15 +937,15 @@ def test_cli_get_answer_report_reports_failed_empty_answer(monkeypatch, tmp_path
     assert "第 1 题未获取到答案" not in result.stdout
 
 
-def test_cli_get_outputs_login_required_error(monkeypatch, tmp_path: Path):
+def test_cli_get_outputs_manager_error(monkeypatch, tmp_path: Path):
     class DummyManager:
         def get(self, **kwargs):
-            from opscli.amazon_rufus.domain.exceptions import RufusLoginRequiredError
+            from opscli.amazon_rufus.domain.exceptions import RufusSecretNotReadyError
 
-            raise RufusLoginRequiredError(
-                "未获取到 Rufus 答案，可能 Amazon 未登录。已保留浏览器窗口。"
-                "请在浏览器中完成登录；如果登录完成，请继续告诉我，我会继续执行。"
-            )
+            raise RufusSecretNotReadyError("Rufus 后端授权材料不可用")
+
+        def get_backend(self, **kwargs):
+            raise AssertionError("CLI CDP 入口不应调用后端 headless get_backend")
 
     monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
     monkeypatch.chdir(tmp_path)
@@ -1040,45 +955,9 @@ def test_cli_get_outputs_login_required_error(monkeypatch, tmp_path: Path):
 
     assert result.exit_code == 1
     assert payload["success"] is False
-    assert payload["error"]["code"] == "RUFUS_LOGIN_REQUIRED"
-    assert "如果登录完成，请继续告诉我，我会继续执行" in payload["error"]["message"]
+    assert payload["error"]["code"] == "RUFUS_SECRET_NOT_READY"
+    assert "后端授权材料不可用" in payload["error"]["message"]
     assert not (tmp_path / "output" / "amazon-rufus").exists()
-
-
-def test_cli_get_passes_new_chrome(monkeypatch, tmp_path: Path):
-    captured = {}
-
-    class DummyManager:
-        def get(self, **kwargs):
-            captured.update(kwargs)
-            return {"asin": kwargs["asin"], "country": kwargs["country"], "answers": []}
-
-    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(app, ["get", "B0TEST1234", "US", "--new-chrome"])
-
-    assert result.exit_code == 0
-    assert captured["new_chrome"] is True
-    assert captured["keep_chrome_open"] is False
-
-
-def test_cli_get_passes_keep_chrome_open(monkeypatch, tmp_path: Path):
-    captured = {}
-
-    class DummyManager:
-        def get(self, **kwargs):
-            captured.update(kwargs)
-            return {"asin": kwargs["asin"], "country": kwargs["country"], "answers": []}
-
-    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(app, ["get", "B0TEST1234", "US", "--new-chrome", "--keep-chrome-open"])
-
-    assert result.exit_code == 0
-    assert captured["new_chrome"] is True
-    assert captured["keep_chrome_open"] is True
 
 
 def test_cli_get_passes_question_to_manager(monkeypatch, tmp_path: Path):
@@ -1095,6 +974,9 @@ def test_cli_get_passes_question_to_manager(monkeypatch, tmp_path: Path):
                 "upload_payload": {"records": [{"questions": [{"question": kwargs["question"], "capturedAt": 1}]}]},
             }
 
+        def get_backend(self, **kwargs):
+            raise AssertionError("CLI CDP 入口不应调用后端 headless get_backend")
+
     monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
     monkeypatch.chdir(tmp_path)
 
@@ -1107,242 +989,635 @@ def test_cli_get_passes_question_to_manager(monkeypatch, tmp_path: Path):
     assert "单题答案" in report_text
 
 
-def test_cli_init_outputs_login_prompt(monkeypatch):
+def test_cli_get_passes_multiple_questions_to_manager(monkeypatch, tmp_path: Path):
+    captured = {}
+
+    class DummyManager:
+        def get(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "asin": kwargs["asin"],
+                "country": kwargs["country"],
+                "questions": kwargs["questions"],
+                "answers": [
+                    {"text": f"答案：{question}", "isSuccess": True}
+                    for question in kwargs["questions"]
+                ],
+                "upload_payload": {
+                    "records": [
+                        {
+                            "questions": [
+                                {"question": question, "capturedAt": index}
+                                for index, question in enumerate(kwargs["questions"], start=1)
+                            ]
+                        }
+                    ]
+                },
+            }
+
+        def get_backend(self, **kwargs):
+            raise AssertionError("CLI CDP 入口不应调用后端 headless get_backend")
+
+        def get_backend(self, **kwargs):
+            raise AssertionError("CLI CDP 入口不应调用后端 headless get_backend")
+
+    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "get",
+            "B0TEST1234",
+            "US",
+            "-q",
+            "这个商品适合送礼吗？",
+            "--question",
+            "差评主要集中在哪些方面？",
+        ],
+    )
+    _, report_text = _read_single_rufus_report(tmp_path)
+
+    assert result.exit_code == 0
+    assert captured["questions"] == ["这个商品适合送礼吗？", "差评主要集中在哪些方面？"]
+    assert captured["question"] is None
+    assert "## 第 1 题：这个商品适合送礼吗？" in report_text
+    assert "## 第 2 题：差评主要集中在哪些方面？" in report_text
+
+
+def test_cli_init_calls_manager(monkeypatch):
     captured = {}
 
     class DummyManager:
         def init(self, **kwargs):
             captured.update(kwargs)
-            return {"country": "US", "url": "https://www.amazon.com"}
+            return {"country": kwargs["country"], "url": "https://www.amazon.com"}
 
     monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
 
     result = runner.invoke(app, ["init", "US"])
 
     assert result.exit_code == 0
-    assert result.stdout == "请在新窗口中登录亚马逊\n"
     assert captured == {
         "country": "US",
         "cdp_url": "http://127.0.0.1:9222",
         "timeout_seconds": 30,
+        "chrome_path": None,
+        "launch_if_needed": True,
     }
+    assert "请在新窗口中登录亚马逊" in result.stdout
 
 
-def test_manager_init_opens_country_marketplace():
+def test_cli_init_passes_chrome_path_to_manager(monkeypatch):
     captured = {}
 
-    class FakeBrowser:
-        def open_marketplace_for_login(self, **kwargs):
+    class DummyManager:
+        def init(self, **kwargs):
             captured.update(kwargs)
+            return {"country": kwargs["country"], "url": "https://www.amazon.com"}
 
-    manager = RufusManager(browser=FakeBrowser())
+    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
 
-    result = manager.init(country="DE", cdp_url="http://127.0.0.1:9333", timeout_seconds=12)
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "US",
+            "--chrome-path",
+            "C:/Program Files/Google/Chrome/Application/chrome.exe",
+            "--no-launch-if-needed",
+        ],
+    )
 
-    assert result == {"country": "DE", "url": "https://www.amazon.de"}
-    assert captured == {
-        "marketplace_url": "https://www.amazon.de",
-        "cdp_url": "http://127.0.0.1:9333",
-        "timeout_seconds": 12,
+    assert result.exit_code == 0
+    assert captured["chrome_path"] == "C:/Program Files/Google/Chrome/Application/chrome.exe"
+    assert captured["launch_if_needed"] is False
+
+
+def test_cli_save_state_outputs_safe_summary(monkeypatch):
+    captured = {}
+
+    class DummyManager:
+        def save_state(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "country": kwargs["country"],
+                "saved": True,
+                "cookie_count": 2,
+                "origin_count": 1,
+            }
+
+    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+
+    result = runner.invoke(app, ["save-state", "US", "--pretty"])
+    payload = json.loads(result.stdout)
+    output_text = json.dumps(payload, ensure_ascii=False)
+
+    assert result.exit_code == 0
+    assert payload["success"] is True
+    assert payload["command"] == "amazon-rufus save-state"
+    assert payload["data"] == {
+        "country": "US",
+        "saved": True,
+        "cookie_count": 2,
+        "origin_count": 1,
     }
-
-
-def test_manager_get_uses_question_bank_browser_and_replay():
-    from opscli.amazon_rufus.domain.models import AnswerData, Question, QuestionTemplate, SeedRequestRecord
-
-    class FakeQuestionBank:
-        def load_templates(self):
-            return [QuestionTemplate(id=1, description="默认", preferred_version_index=0, questions=[Question(id=1, text="问题1", position=1)])]
-
-    class FakeBrowser:
-        def capture_seed_request(self, **kwargs):
-            self.kwargs = kwargs
-            return SeedRequestRecord(
-                request_url="https://www.amazon.com/rufus/cl/streaming",
-                request_headers={},
-                request_body='{"queryContext": {}}',
-                page_url=kwargs["page_url"],
-                tab_id="tab-1",
-                asin=kwargs["asin"],
-                country=kwargs["country"],
-                captured_at=1710000000000,
-            )
-
-    class FakeReplay:
-        def replay(self, seed, questions):
-            return [AnswerData(text=f"answer:{questions[0]}", thread_id="thread-1")]
-
-    fake_browser = FakeBrowser()
-    manager = RufusManager(question_bank=FakeQuestionBank(), browser=fake_browser, replay=FakeReplay())
-
-    result = manager.get(asin="b0test1234", country="US", new_chrome=True)
-
-    assert result["answers"][0]["text"] == "answer:问题1"
-    assert result["question_count"] == 1
-    assert result["questions"] == ["问题1"]
-    assert result["upload_payload"]["records"][0]["questions"][0]["question"] == "问题1"
-    assert fake_browser.kwargs["new_chrome"] is True
-    assert fake_browser.kwargs["keep_chrome_open"] is False
-
-
-def test_manager_get_uses_single_question_without_loading_bank():
-    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
-
-    class ForbiddenQuestionBank:
-        def load_templates(self):
-            raise AssertionError("单题模式不应读取题库")
-
-    class FakeBrowser:
-        def capture_seed_request(self, **kwargs):
-            self.kwargs = kwargs
-            return SeedRequestRecord(
-                request_url="https://www.amazon.com/rufus/cl/streaming",
-                request_headers={},
-                request_body='{"queryContext": {}}',
-                page_url=kwargs["page_url"],
-                tab_id="tab-1",
-                asin=kwargs["asin"],
-                country=kwargs["country"],
-                captured_at=1710000000000,
-            )
-
-    class FakeReplay:
-        def replay(self, seed, questions):
-            return [AnswerData(text=f"answer:{questions[0]}", thread_id="thread-1")]
-
-    fake_browser = FakeBrowser()
-    manager = RufusManager(question_bank=ForbiddenQuestionBank(), browser=fake_browser, replay=FakeReplay())
-
-    result = manager.get(asin="b0test1234", country="US", question="这个商品是做什么的")
-
-    assert result["answers"][0]["text"] == "answer:这个商品是做什么的"
-    assert result["question_count"] == 1
-    assert result["questions"] == ["这个商品是做什么的"]
-    assert result["upload_payload"]["records"][0]["questions"][0]["question"] == "这个商品是做什么的"
+    assert captured == {
+        "country": "US",
+        "cdp_url": "http://127.0.0.1:9222",
+        "timeout_seconds": 30,
+        "chrome_path": None,
+        "launch_if_needed": False,
+    }
+    assert "session-id" not in output_text
+    assert "localStorage" not in output_text
+    assert "storage_state" not in output_text
 
 
 def test_manager_get_rejects_blank_question():
     manager = RufusManager()
 
     with pytest.raises(InvalidQuestionError) as exc:
-        manager.get(asin="B0TEST1234", country="US", question="   ")
+        manager.get_backend(asin="B0TEST1234", country="US", question="   ")
 
     assert "question" in str(exc.value)
 
 
-def test_manager_get_raises_login_required_when_answers_are_empty():
-    from opscli.amazon_rufus.domain.exceptions import RufusLoginRequiredError
+def test_manager_get_headless_rejects_blank_cookie():
+    manager = RufusManager()
+
+    with pytest.raises(InvalidRufusCookieError) as exc:
+        manager.get_headless(
+            asin="B0TEST1234",
+            country="US",
+            question="这个商品是做什么的",
+            streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+            headers={},
+            cookie="   ",
+            payload_template={},
+        )
+
+    assert "cookie" in str(exc.value)
+
+
+def test_manager_get_headless_uses_cookie_for_capture_and_streaming():
     from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
 
-    class ForbiddenQuestionBank:
-        def load_templates(self):
-            raise AssertionError("单题模式不应读取题库")
-
-    class FakeBrowser:
-        def __init__(self) -> None:
-            self.keep_open_requested = None
-
+    class FakeHeadlessCapture:
         def capture_seed_request(self, **kwargs):
-            seed = SeedRequestRecord(
-                request_url="https://www.amazon.com/rufus/cl/streaming",
-                request_headers={},
-                request_body='{"queryContext": {}}',
+            self.kwargs = kwargs
+            return SeedRequestRecord(
+                request_url=kwargs["streaming_url"],
+                request_headers={"content-type": "application/json"},
+                request_body='{"queryContext": {"query": "seed"}}',
                 page_url=kwargs["page_url"],
                 tab_id="tab-1",
                 asin=kwargs["asin"],
                 country=kwargs["country"],
                 captured_at=1710000000000,
             )
-            self.keep_open_requested = kwargs["on_captured"]("page", seed)
-            return seed
 
-    class FakeReplay:
-        def replay_with_page(self, page, seed, questions):
-            # 空答案代表 Rufus 没有返回可展示内容，应进入登录中断续跑。
-            return [AnswerData(text="", is_success=False)]
+    class FakeHeadlessClient:
+        def query(self, **kwargs):
+            self.kwargs = kwargs
+            return [AnswerData(text=f"answer:{kwargs['questions'][0]}", thread_id="thread-1")]
 
-        def replay(self, seed, questions):
-            raise AssertionError("页面内 replay 已返回结果时不应进入 fallback")
+    capture = FakeHeadlessCapture()
+    client = FakeHeadlessClient()
+    manager = RufusManager(headless_capture=capture, headless_client=client)
 
-    fake_browser = FakeBrowser()
-    manager = RufusManager(question_bank=ForbiddenQuestionBank(), browser=fake_browser, replay=FakeReplay())
+    result = manager.get_headless(
+        asin="b0test1234",
+        country="US",
+        question="这个商品是做什么的",
+        streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+        headers={"anti-csrftoken-a2z": "token"},
+        cookie="session-id=abc; ubid-main=def",
+        payload_template={"queryContext": {"query": "old"}},
+        timeout_seconds=12,
+    )
 
-    with pytest.raises(RufusLoginRequiredError) as exc:
-        manager.get(asin="B0TEST1234", country="US", question="这个商品是做什么的", new_chrome=True)
+    assert capture.kwargs["cookie"] == "session-id=abc; ubid-main=def"
+    assert client.kwargs["cookie"] == "session-id=abc; ubid-main=def"
+    assert client.kwargs["payload_template"] == {"queryContext": {"query": "old"}}
+    assert result["asin"] == "B0TEST1234"
+    assert result["question_count"] == 1
+    assert result["answers"][0]["text"] == "answer:这个商品是做什么的"
+    assert "cookie" not in json.dumps(result, ensure_ascii=False).lower()
 
-    assert exc.value.to_dict()["code"] == "RUFUS_LOGIN_REQUIRED"
-    assert "如果登录完成，请继续告诉我，我会继续执行" in str(exc.value)
-    assert fake_browser.keep_open_requested is True
+
+def test_manager_get_headless_returns_reportable_result_when_answers_are_empty():
+    from opscli.amazon_rufus.domain.models import SeedRequestRecord
+
+    class FakeHeadlessCapture:
+        def capture_seed_request(self, **kwargs):
+            return SeedRequestRecord(
+                request_url=kwargs["streaming_url"],
+                request_headers={"content-type": "application/json"},
+                request_body='{"queryContext": {"query": "seed"}}',
+                page_url=kwargs["page_url"],
+                tab_id="tab-1",
+                asin=kwargs["asin"],
+                country=kwargs["country"],
+                captured_at=1710000000000,
+            )
+
+    class FakeHeadlessClient:
+        def query(self, **kwargs):
+            return []
+
+    manager = RufusManager(
+        headless_capture=FakeHeadlessCapture(),
+        headless_client=FakeHeadlessClient(),
+    )
+
+    result = manager.get_headless(
+        asin="b0test1234",
+        country="US",
+        question="这个商品是做什么的",
+        streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+        headers={},
+        cookie="session-id=abc",
+        payload_template={},
+    )
+
+    assert result["asin"] == "B0TEST1234"
+    assert result["question_count"] == 1
+    assert result["answers"] == []
 
 
-def test_manager_get_replays_before_playwright_context_closes(monkeypatch):
-    from opscli.amazon_rufus.domain.models import AnswerData, Question, QuestionTemplate, SeedRequestRecord
+def test_manager_get_backend_uses_secret_provider_and_headless_services():
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
 
-    class FakeQuestionBank:
-        def load_templates(self):
-            return [QuestionTemplate(id=1, description="默认", preferred_version_index=0, questions=[Question(id=1, text="问题1", position=1)])]
+    class FakeSecretProvider:
+        def load(self, **kwargs):
+            self.kwargs = kwargs
+            return types.SimpleNamespace(
+                url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+                headers={"anti-csrftoken-a2z": "token"},
+                cookies="session-id=abc; ubid-main=def",
+                payload_template={"queryContext": {"query": "old"}},
+                storage_state=None,
+            )
 
-    class FakeRequest:
-        url = "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
-        post_data = '{"queryContext": {"query": ""}}'
-        headers = {"content-type": "application/json"}
+    class FakeHeadlessCapture:
+        def capture_seed_request(self, **kwargs):
+            self.kwargs = kwargs
+            return SeedRequestRecord(
+                request_url=kwargs["streaming_url"],
+                request_headers={"content-type": "application/json"},
+                request_body='{"queryContext": {"query": "seed"}}',
+                page_url=kwargs["page_url"],
+                tab_id="tab-1",
+                asin=kwargs["asin"],
+                country=kwargs["country"],
+                captured_at=1710000000000,
+            )
 
-    class FakePage:
-        def __init__(self) -> None:
-            self.url = "about:blank"
-            self.closed_loop = False
+    class FakeHeadlessClient:
+        def query(self, **kwargs):
+            self.kwargs = kwargs
+            return [AnswerData(text=f"backend:{kwargs['questions'][0]}", thread_id="thread-1")]
 
-        def on(self, event, handler):
-            self.handler = handler
+    secret_provider = FakeSecretProvider()
+    capture = FakeHeadlessCapture()
+    client = FakeHeadlessClient()
+    manager = RufusManager(
+        headless_capture=capture,
+        headless_client=client,
+        backend_secret_provider=secret_provider,
+    )
 
-        def goto(self, url, wait_until, timeout):
-            self.url = url
-            self.handler(FakeRequest())
+    result = manager.get_backend(
+        asin="b0test1234",
+        country="US",
+        question="这个商品是做什么的",
+        timeout_seconds=12,
+    )
 
-        def wait_for_timeout(self, timeout):
-            return None
+    assert secret_provider.kwargs == {"country": "US"}
+    assert capture.kwargs["cookie"] == "session-id=abc; ubid-main=def"
+    assert capture.kwargs["streaming_url"] == "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
+    assert client.kwargs["cookie"] == "session-id=abc; ubid-main=def"
+    assert client.kwargs["headers"] == {"anti-csrftoken-a2z": "token"}
+    assert client.kwargs["payload_template"] == {"queryContext": {"query": "old"}}
+    assert result["asin"] == "B0TEST1234"
+    assert result["answers"][0]["text"] == "backend:这个商品是做什么的"
+    assert "session-id" not in json.dumps(result, ensure_ascii=False)
 
-        def bring_to_front(self):
-            return None
 
-    fake_page = FakePage()
+def test_manager_get_backend_returns_reportable_result_when_answers_are_empty():
+    from opscli.amazon_rufus.domain.models import SeedRequestRecord
 
-    class FakeContext:
-        def new_page(self):
-            return fake_page
+    class FakeSecretProvider:
+        def load(self, **kwargs):
+            return types.SimpleNamespace(
+                url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+                headers={},
+                cookies="session-id=abc",
+                payload_template=None,
+                storage_state=None,
+            )
+
+    class FakeHeadlessCapture:
+        def capture_seed_request(self, **kwargs):
+            return SeedRequestRecord(
+                request_url=kwargs["streaming_url"],
+                request_headers={"content-type": "application/json"},
+                request_body='{"queryContext": {"query": "seed"}}',
+                page_url=kwargs["page_url"],
+                tab_id="tab-1",
+                asin=kwargs["asin"],
+                country=kwargs["country"],
+                captured_at=1710000000000,
+            )
+
+    class FakeHeadlessClient:
+        def query(self, **kwargs):
+            return []
+
+    manager = RufusManager(
+        headless_capture=FakeHeadlessCapture(),
+        headless_client=FakeHeadlessClient(),
+        backend_secret_provider=FakeSecretProvider(),
+    )
+
+    result = manager.get_backend(
+        asin="b0test1234",
+        country="US",
+        question="这个商品是做什么的",
+    )
+
+    assert result["asin"] == "B0TEST1234"
+    assert result["question_count"] == 1
+    assert result["answers"] == []
+
+
+def test_manager_get_backend_defaults_to_three_minutes_for_capture_and_streaming():
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+
+    class FakeSecretProvider:
+        def load(self, **kwargs):
+            return types.SimpleNamespace(
+                url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+                headers={"anti-csrftoken-a2z": "token"},
+                cookies="session-id=abc; ubid-main=def",
+                payload_template={"queryContext": {"query": "old"}},
+                storage_state=None,
+            )
+
+    class FakeHeadlessCapture:
+        def capture_seed_request(self, **kwargs):
+            self.kwargs = kwargs
+            return SeedRequestRecord(
+                request_url=kwargs["streaming_url"],
+                request_headers={"content-type": "application/json"},
+                request_body='{"queryContext": {"query": "seed"}}',
+                page_url=kwargs["page_url"],
+                tab_id="tab-1",
+                asin=kwargs["asin"],
+                country=kwargs["country"],
+                captured_at=1710000000000,
+            )
+
+    class FakeHeadlessClient:
+        def query(self, **kwargs):
+            self.kwargs = kwargs
+            return [AnswerData(text=f"backend:{question}", thread_id="thread-1") for question in kwargs["questions"]]
+
+    capture = FakeHeadlessCapture()
+    client = FakeHeadlessClient()
+    manager = RufusManager(
+        headless_capture=capture,
+        headless_client=client,
+        backend_secret_provider=FakeSecretProvider(),
+    )
+
+    result = manager.get_backend(
+        asin="b0test1234",
+        country="US",
+        questions=["问题1", "问题2"],
+    )
+
+    assert capture.kwargs["timeout_seconds"] == 180
+    assert client.kwargs["timeout_seconds"] == 180
+    assert result["question_count"] == 2
+
+
+def test_manager_save_state_persists_browser_storage_state(tmp_path: Path):
+    storage_state = {
+        "cookies": [{"name": "session-id", "value": "abc", "domain": ".amazon.com", "path": "/"}],
+        "origins": [{"origin": "https://www.amazon.com", "localStorage": [{"name": "k", "value": "v"}]}],
+    }
 
     class FakeBrowser:
-        contexts = [FakeContext()]
+        def capture_storage_state(self, **kwargs):
+            self.kwargs = kwargs
+            return storage_state
 
-    class FakeChromium:
-        def connect_over_cdp(self, cdp_url):
-            return FakeBrowser()
+    class FakeStore:
+        def save(self, **kwargs):
+            self.kwargs = kwargs
+            return tmp_path / "browser-state-US.bin"
 
-    class FakePlaywright:
-        chromium = FakeChromium()
+    browser = FakeBrowser()
+    store = FakeStore()
+    manager = RufusManager(browser=browser, browser_state_store=store)
 
-        def __enter__(self):
-            return self
+    result = manager.save_state(
+        country="us",
+        cdp_url="http://127.0.0.1:9333",
+        timeout_seconds=12,
+        chrome_path="C:/Program Files/Google/Chrome/Application/chrome.exe",
+        launch_if_needed=True,
+    )
 
-        def __exit__(self, exc_type, exc, traceback):
-            fake_page.closed_loop = True
-            return False
+    assert browser.kwargs == {
+        "marketplace_url": "https://www.amazon.com",
+        "cdp_url": "http://127.0.0.1:9333",
+        "timeout_seconds": 12,
+        "chrome_path": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+        "launch_if_needed": True,
+    }
+    assert store.kwargs == {
+        "country": "US",
+        "marketplace_origin": "https://www.amazon.com",
+        "storage_state": storage_state,
+    }
+    assert result == {
+        "country": "US",
+        "saved": True,
+        "cookie_count": 1,
+        "origin_count": 1,
+    }
+    assert "session-id" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_manager_get_uses_browser_cdp_and_replay():
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+
+    class FakeBrowser:
+        def capture_seed_request(self, **kwargs):
+            self.kwargs = kwargs
+            return SeedRequestRecord(
+                request_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+                request_headers={"content-type": "application/json"},
+                request_body='{"queryContext": {"query": "seed"}}',
+                page_url=kwargs["page_url"],
+                tab_id="tab-1",
+                asin=kwargs["asin"],
+                country=kwargs["country"],
+                captured_at=1710000000000,
+            )
 
     class FakeReplay:
-        def replay_with_page(self, page, seed, questions):
-            if page.closed_loop:
-                raise RuntimeError("Event loop is closed! Is Playwright already stopped?")
-            return [AnswerData(text="answer", thread_id="thread-1")]
+        def replay(self, seed, questions):
+            self.seed = seed
+            self.questions = questions
+            return [AnswerData(text=f"cdp:{question}", thread_id="thread-1") for question in questions]
 
-    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
-    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
-    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+    browser = FakeBrowser()
+    replay = FakeReplay()
+    manager = RufusManager(browser=browser, replay=replay)
 
-    manager = RufusManager(question_bank=FakeQuestionBank(), browser=BrowserAttachService(), replay=FakeReplay())
+    result = manager.get(
+        asin="b0test1234",
+        country="US",
+        questions=["问题1", "问题2"],
+        cdp_url="http://127.0.0.1:9333",
+        new_chrome=True,
+        keep_chrome_open=True,
+        chrome_path="C:/Program Files/Google/Chrome/Application/chrome.exe",
+        launch_if_needed=True,
+        timeout_seconds=180,
+    )
 
-    result = manager.get(asin="B0TEST1234", country="US")
+    assert browser.kwargs["page_url"] == "https://www.amazon.com/dp/B0TEST1234"
+    assert browser.kwargs["cdp_url"] == "http://127.0.0.1:9333"
+    assert browser.kwargs["new_chrome"] is True
+    assert browser.kwargs["keep_chrome_open"] is True
+    assert browser.kwargs["chrome_path"] == "C:/Program Files/Google/Chrome/Application/chrome.exe"
+    assert browser.kwargs["launch_if_needed"] is True
+    assert browser.kwargs["timeout_seconds"] == 180
+    assert callable(browser.kwargs["on_captured"])
+    assert replay.questions == ["问题1", "问题2"]
+    assert result["asin"] == "B0TEST1234"
+    assert result["question_count"] == 2
+    assert result["answers"][0]["text"] == "cdp:问题1"
 
-    assert result["answers"][0]["text"] == "answer"
+
+def test_manager_get_returns_reportable_result_when_answers_are_empty():
+    from opscli.amazon_rufus.domain.models import SeedRequestRecord
+
+    class FakeBrowser:
+        def capture_seed_request(self, **kwargs):
+            return SeedRequestRecord(
+                request_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+                request_headers={"content-type": "application/json"},
+                request_body='{"queryContext": {"query": "seed"}}',
+                page_url=kwargs["page_url"],
+                tab_id="tab-1",
+                asin=kwargs["asin"],
+                country=kwargs["country"],
+                captured_at=1710000000000,
+            )
+
+    class FakeReplay:
+        def replay(self, seed, questions):
+            return []
+
+    manager = RufusManager(browser=FakeBrowser(), replay=FakeReplay())
+
+    result = manager.get(
+        asin="b0test1234",
+        country="US",
+        question="这个商品是做什么的",
+    )
+
+    assert result["asin"] == "B0TEST1234"
+    assert result["question_count"] == 1
+    assert result["answers"] == []
+
+
+def test_headless_client_uses_timeout_for_each_question(monkeypatch):
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+    from opscli.amazon_rufus.services.headless_client import HeadlessRufusClient
+
+    calls = []
+
+    class FakeReplay:
+        def build_payload(self, seed_body_text, question, thread_id, asin):
+            return {"queryContext": {"query": question}, "historyThreadContext": {"threadId": thread_id}}
+
+    class FakeParser:
+        def parse(self, raw_text):
+            return AnswerData(text=raw_text, thread_id=f"thread-{len(calls)}")
+
+    seed = SeedRequestRecord(
+        request_url="https://www.amazon.com/rufus/cl/streaming",
+        request_headers={"content-type": "application/json"},
+        request_body='{"queryContext": {"query": "seed"}}',
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        tab_id="tab-1",
+        asin="B0TEST1234",
+        country="US",
+        captured_at=1710000000000,
+    )
+    client = HeadlessRufusClient(parser=FakeParser(), replay=FakeReplay())
+
+    def fake_post_rufus(self, *, url, headers, payload, timeout_seconds):
+        calls.append({"question": payload["queryContext"]["query"], "timeout_seconds": timeout_seconds})
+        return payload["queryContext"]["query"]
+
+    monkeypatch.setattr(HeadlessRufusClient, "_post_rufus", fake_post_rufus)
+
+    answers = client.query(
+        streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+        seed=seed,
+        questions=["问题1", "问题2", "问题3"],
+        cookie="session-id=abc",
+        headers={},
+        payload_template=None,
+        timeout_seconds=180,
+    )
+
+    assert calls == [
+        {"question": "问题1", "timeout_seconds": 180},
+        {"question": "问题2", "timeout_seconds": 180},
+        {"question": "问题3", "timeout_seconds": 180},
+    ]
+    assert [answer.text for answer in answers] == ["问题1", "问题2", "问题3"]
+
+
+def test_browser_state_store_saves_storage_state_encrypted_and_builds_cookie_header(tmp_path: Path):
+    from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
+
+    storage_state = {
+        "cookies": [
+            {"name": "session-id", "value": "abc", "domain": ".amazon.com", "path": "/"},
+            {"name": "ubid-main", "value": "def", "domain": "www.amazon.com", "path": "/"},
+            {"name": "de-only", "value": "skip", "domain": ".amazon.de", "path": "/"},
+        ],
+        "origins": [
+            {
+                "origin": "https://www.amazon.com",
+                "localStorage": [{"name": "rufus-key", "value": "rufus-value"}],
+            }
+        ],
+    }
+    store = RufusBrowserStateStore(base_dir=tmp_path)
+
+    state_path = store.save(
+        country="US",
+        marketplace_origin="https://www.amazon.com",
+        storage_state=storage_state,
+    )
+    loaded = store.load("US")
+
+    assert state_path.parent == tmp_path
+    assert b"session-id" not in state_path.read_bytes()
+    assert loaded["storage_state"] == storage_state
+    assert store.build_cookie_header(storage_state, "https://www.amazon.com") == "session-id=abc; ubid-main=def"
 
 
 def test_replay_with_page_reuses_required_seed_headers():

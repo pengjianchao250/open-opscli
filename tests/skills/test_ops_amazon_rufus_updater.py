@@ -153,3 +153,48 @@ def test_ops_amazon_rufus_template_json_files_do_not_have_bom():
 
     for path in [template_dir / "VERSION.json", template_dir / "question_templates.json"]:
         assert path.read_bytes()[:3] != b"\xef\xbb\xbf"
+
+
+def test_ops_amazon_rufus_template_uses_mcp_boundary():
+    template_dir = Path("opscli/skills/templates/ops-amazon-rufus")
+
+    assert list(template_dir.rglob("*.py")) == []
+    assert (template_dir / "references" / "rufus-mcp-workflow.md").exists()
+
+    skill_text = (template_dir / "SKILL.md").read_text(encoding="utf-8")
+    assert "references/rufus-mcp-workflow.md" in skill_text
+    assert "question?, questions?" not in skill_text
+    assert "检测到当前 Amazon 未登录或登录态不可用" not in skill_text
+
+    docs = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [
+            template_dir / "SKILL.md",
+            template_dir / "README.md",
+            template_dir / "references" / "question-templates.md",
+            template_dir / "references" / "rufus-mcp-workflow.md",
+        ]
+    )
+    assert "opscli/mcp/tools/amazon_rufus.py" in docs
+    assert "默认使用 MCP 后端 headless 链路" in docs
+    assert "RUFUS_SECRET_NOT_READY" in docs
+    assert "headless 后端获取" in docs
+    assert "timeout_seconds=180" in docs
+    assert "外层请求上限" in docs
+    assert "RUFUS_HEADLESS_CAPTURE_ERROR" in docs
+    assert "opscli amazon-rufus init" in docs
+    assert "opscli amazon-rufus save-state" in docs
+    assert "init <COUNTRY> --launch-if-needed -> 用户登录 -> opscli amazon-rufus save-state <COUNTRY> -> amazon_rufus_get" in docs
+    assert "保存完成后，重新按原问题来源调用 `amazon_rufus_get`" in docs
+    assert "--launch-if-needed" in docs
+    assert "--chrome-path" in docs
+    assert "Chrome CDP" in docs
+    for forbidden in [
+        "amazon_rufus_init",
+        "amazon_rufus_get_remote",
+        "allow_capture_browser_state",
+        "--remote-rufus",
+        "--new-chrome",
+        "用户确认登录后，按原问题来源重新执行 `opscli amazon-rufus get`",
+    ]:
+        assert forbidden not in docs
