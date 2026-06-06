@@ -59,8 +59,8 @@ class AuthClient:
         return headers, cookies
 
     def build_session_headers(self, alias: str | None = None) -> dict[str, str]:
-        """构造基于 session 的请求头。"""
-        return {"X-Session-Id": self.get_session(alias)}
+        """构造基于 session 的请求头，附带 opscli 版本号。"""
+        return {"X-Session-Id": self.get_session(alias), "X-Opscli-Version": __version__}
 
     def check_token(self, alias: str) -> dict:
         """检测指定系统 token 是否有效，返回 {valid, expires_in}"""
