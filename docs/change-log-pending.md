@@ -1,5 +1,20 @@
 # 待归档变更记录
 
+## 2026-06-07 GitHub Actions - PyPI 发布从 API Token 迁移到 Trusted Publisher (OIDC)
+
+**变更原因**：`build-and-publish.yml` 使用 `twine upload` + API Token 认证发布到 PyPI，近期频繁出现 `400 Bad Request` 错误。根因是 `--skip-existing` 在 PyPI 新版上传 API 下不再可靠，re-run 或部分成功后重试时，已上传的 wheel 导致 400。切换到 PyPI 官方推荐的 Trusted Publisher (OIDC) 方式可彻底解决此问题。
+**改动点**：
+- `.github/workflows/build-and-publish.yml` 的 `publish` job：
+  - 新增 `permissions: id-token: write`（OIDC 必需，允许 GitHub 签发 JWT token 给 PyPI 验证身份）
+  - 删除 `Set up Python for publish` 步骤（action 自带 Python 环境）
+  - 将 `pip install twine` + `twine upload dist/* --username __token__ --password "$PYPI_TOKEN" --skip-existing` 替换为 `pypa/gh-action-pypi-publish@release/v1`（自动通过 OIDC 认证，无需 API Token）
+  - `skip-existing: true` 在新版 action 中真正有效（内部做 hash 比对）
+  - 删除 `PYPI_TOKEN` 环境变量和 `secrets.PIPY_OPEN_OPSCLI` 引用
+**验证结果**：workflow YAML 语法正确，修改仅涉及 publish job 的认证方式和上传步骤，build_wheels 和 build_sdist job 未改动。**需在 PyPI 网页端配置 Trusted Publisher 后才能生效**（https://pypi.org/manage/account/publishing/，填写 PyPI Project Name: `aukeys-opscli`，Workflow filename: `build-and-publish.yml`）
+**影响范围**：仅影响 GitHub Actions 发布到 PyPI 的认证方式，不影响本地 `publish.sh` 手动发布流程
+**回滚方式**：还原 publish job 为手动 twine upload 方式，恢复 `permissions`、`setup-python`、`pip install twine`、`twine upload` 步骤和 `PYPI_TOKEN` 环境变量
+---
+
 ## 2026-06-07 ops-dataset-query - 修复平台过滤规则硬编码 Amazon 的问题
 
 **变更原因**：`references/rules.md` 和 `data/field_semantic_index.yml` 中多处硬编码了"必须强制添加 Amazon SC + Amazon VC 平台过滤、丢弃非 Amazon 数据"的规则，但系统实际包含 Tiktok、速卖通、Shopify 等多平台数据。这导致用户查询非 Amazon 平台数据时被强制丢弃，返回空结果。

@@ -122,9 +122,12 @@ jobs:
     name: Publish to PyPI
     needs: [build_wheels, build_sdist]
     # 只要 build_wheels 未被整体取消即触发发布（允许个别平台 runner 获取失败）
-    # twine 使用 --skip-existing，ubuntu 等平台恢复后重跑可自动补充 wheel
+    # 使用 Trusted Publisher (OIDC) 认证，无需维护 API Token
     if: ${{ !cancelled() && needs.build_wheels.result != 'cancelled' }}
     runs-on: macos-latest
+    environment: pipy    # 必须与 PyPI Trusted Publisher 配置的 Environment name 一致
+    permissions:
+      id-token: write   # OIDC: 允许 GitHub 签发 JWT token 给 PyPI 验证身份
 
     steps:
       - name: Download all wheel artifacts
@@ -145,15 +148,7 @@ jobs:
       - name: List dist contents
         run: ls -lh dist/
 
-      - name: Set up Python for publish
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Publish to PyPI
-        # 直接用最新 twine 上传，彻底绕开 action 内置的旧版 twine（不支持 Metadata-Version 2.4）
-        run: |
-          pip install --quiet twine
-          twine upload dist/* --username __token__ --password "$PYPI_TOKEN" --skip-existing
-        env:
-          PYPI_TOKEN: ${{ secrets.PIPY_OPEN_OPSCLI }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true   # 已存在的文件自动跳过，re-run 时不会 400 报错
