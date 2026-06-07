@@ -1,5 +1,19 @@
 # 待归档变更记录
 
+## 2026-06-07 ops-dataset-query - 修复平台过滤规则硬编码 Amazon 的问题
+
+**变更原因**：`references/rules.md` 和 `data/field_semantic_index.yml` 中多处硬编码了"必须强制添加 Amazon SC + Amazon VC 平台过滤、丢弃非 Amazon 数据"的规则，但系统实际包含 Tiktok、速卖通、Shopify 等多平台数据。这导致用户查询非 Amazon 平台数据时被强制丢弃，返回空结果。
+**改动点**：
+1. `references/rules.md` 第九章自检清单（原第450行）：将"强制添加 Amazon SC + Amazon VC 平台过滤"改为"按用户意图动态决定平台过滤"
+2. `references/rules.md` 第二章2.4节（原第213行）：平台维度行补充完整枚举值（Amazon SC、Amazon VC、Tiktok、速卖通、Shopify）
+3. `references/rules.md` 第十五章15.1节（原第702-710行）：平台映射表新增 Tiktok/速卖通/Shopify 的口语映射，并增加枚举值说明段落
+4. `references/rules.md` 第十八章防错表（原第764-766行）：去掉"必须丢弃非 Amazon 数据"，改为按用户指定平台过滤
+5. `data/field_semantic_index.yml`：新增 `platform_fields` 语义映射组，包含口语到枚举值的映射和5条硬规则
+**验证结果**：四个编辑点逐一 Read 验证，内容正确；field_semantic_index.yml YAML 结构完整
+**影响范围**：ops-dataset-query Skill 的平台过滤行为，从"只允许 Amazon"变为"按用户意图动态决定"
+**回滚方式**：git checkout 还原两个文件即可
+---
+
 ## 2026-06-05 query metadata - 把 --dataset / --table-id 参数透传给后端 API
 
 **变更原因**：`opscli query metadata --dataset ds_xxx` 命令此前把参数仅用于本地内存过滤，远端请求拉取全量 datasets+fields，造成网络浪费、opscli 端处理负担线性增长、后端无法做权限层面针对性优化；改造为参数透传，让后端按需返回。
