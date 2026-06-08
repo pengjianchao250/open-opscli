@@ -40,6 +40,7 @@ class DummyManager:
         return [{"function": "ranking"}]
 
     async def run(self, request):
+        self.request = request
         return DummyResult()
 
     def job_status(self, job_id):
@@ -78,6 +79,27 @@ def test_xiyou_run(monkeypatch):
     assert result["data"]["data"][0]["asin"] == "B00TEST123"
     assert "export_path" not in result["data"]
     assert DummyManager.instances[0].kwargs == {"jwt": "jwt", "session_id": "sid"}
+
+
+def test_xiyou_run_passes_resource_params(monkeypatch):
+    DummyManager.instances = []
+    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", DummyManager)
+    monkeypatch.setattr(xiyou_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+
+    result = _run(
+        xiyou_tools.xiyou_run(
+            function="asin-compare",
+            asins=["B0G33FZ8XS", "B0G337Q47M"],
+            dataset="keywords",
+            export_format="xlsx",
+        )
+    )
+
+    assert result["success"] is True
+    request = DummyManager.instances[0].request
+    assert request.function == "asin-compare"
+    assert request.asins == ["B0G33FZ8XS", "B0G337Q47M"]
+    assert request.dataset == "keywords"
 
 
 def test_xiyou_export_adds_file_url(monkeypatch):

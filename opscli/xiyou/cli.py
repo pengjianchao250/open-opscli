@@ -29,6 +29,10 @@ def run_function(
     site: str = typer.Option("US", "--site", help="站点，如 US、DE、UK、CA、FR"),
     period: str = typer.Option("week", "--period", help="周期：week/month"),
     rank_pattern: str | None = typer.Option(None, "--rank-pattern", help="榜单类型，如 flow/surge/aba"),
+    dataset: str | None = typer.Option(None, "--dataset", help="业务数据块，如 keywords/analysis"),
+    asin: str | None = typer.Option(None, "--asin", help="单个 ASIN，用于反查关键词"),
+    asins: str | None = typer.Option(None, "--asins", help="多个 ASIN，逗号分隔，用于多ASIN对比"),
+    keyword: str | None = typer.Option(None, "--keyword", help="关键词，用于关键词分析/以词找词"),
     query: str = typer.Option("", "--query", help="搜索过滤词"),
     page: int = typer.Option(1, "--page", help="页码"),
     page_size: int = typer.Option(50, "--page-size", help="每页数量"),
@@ -44,6 +48,10 @@ def run_function(
         site=site,
         period=period,
         rank_pattern=rank_pattern,
+        dataset=dataset,
+        asin=asin,
+        asins=asins,
+        keyword=keyword,
         query=query,
         page=page,
         page_size=page_size,
@@ -53,4 +61,3 @@ def run_function(
     )
     result = asyncio.run(XiyouApiManager().run(request))
     typer.echo(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
-

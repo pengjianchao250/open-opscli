@@ -1,5 +1,44 @@
 # 待归档变更记录
 
+## 2026-06-05 xiyou - 站点白名单与中文别名归一化
+
+**变更原因**：MCP `xiyou_run` 仅在 `_site()` 里做 `str.upper()`，任何未支持的取值（含中文国家名"柬埔寨"等）会原样透传给西柚后端，由西柚返回模糊错误，Agent 难以纠错；同时 `XiyouApiManager.scenarios()` 里 `sites` 是 5 项硬编码字符串数组，与真实支持的 13 个站点严重不一致，导致 Agent 误以为西柚只支持 5 个国家。需要建立单一可信源的站点白名单 + 中文别名兜底 + fail-fast 校验。
+**改动点**：
+- `opscli/xiyou/api/payloads.py`：新增 `SUPPORTED_SITES`（frozenset，覆盖西柚官网披露的 13 个站点 US/CA/MX/BR/DE/UK/FR/IT/ES/JP/AE/SA/AU）、`SITE_ALIASES`（中文国家名/带"站"后缀/常见别名映射到 ISO2 code，含 `gb→UK` 兜底）、`normalize_site(value)`（依次走别名表→大写白名单→fail-fast 抛 `XiyouConfigError`，错误信息列出所有支持值）；`_site()` 改为调用 `normalize_site`，`make_ranking_payload` 同步改用 `_site` 而非内联 `str.upper()`，确保 ranking/resource 两条路径走同一归一化
+- `opscli/xiyou/services/api_manager.py`：`scenarios()` 中 `sites` 硬编码列表改为 `sorted(SUPPORTED_SITES)`，从 `payloads` 派生，避免两处不同步
+- `opscli/skills/templates/ops-xiyou/SKILL.md`：`site` 参数说明从单行 5 个站点扩展到分区列出 13 个完整站点及中文标注，明确"中文名 Agent 应优先映射 + opscli 内部有兜底"
+- `tests/xiyou/test_payloads.py`：新增 7 个用例覆盖支持站点集合冻结、中文别名归一化、ISO2 大小写不敏感、空值默认 US、不支持站点报错带详情、ranking/resource 两条路径都会被归一化校验
+**验证结果**：`.venv\Scripts\python.exe -m pytest tests/xiyou/ -v` → 42 passed in 9.32s（含新增 7 个用例和之前的 35 个）
+**影响范围**：所有走 xiyou ranking/resource 场景的入口（CLI `opscli xiyou run` 与 MCP `xiyou_run`）；`scenarios()` 输出的 `sites` 数组从 5 项变为 13 项排序输出；用户传不支持的站点（含中文）现在会被 opscli 提前拦截并返回包含支持站点列表的错误，而非到西柚后端才报错；现有所有传 US/DE 等合法 code 的调用零变化；**MCP 进程需要重启才能生效**
+**回滚方式**：删除 `payloads.py` 顶部 `SUPPORTED_SITES`/`SITE_ALIASES`/`normalize_site` 块，将 `_site()` 恢复为 `str(params.get("site") or params.get("country") or "US").upper()`、`make_ranking_payload` 的 `country` 恢复为 `str(params.get("site") or "US").upper()`；`api_manager.py` 删除 `SUPPORTED_SITES` 导入并把 `sites` 改回 `["US", "DE", "UK", "CA", "FR"]`；`SKILL.md` 的 `site` 行还原为单行；删除 `tests/xiyou/test_payloads.py` 末尾新增 7 个用例及 `SUPPORTED_SITES`/`normalize_site` 导入
+---
+
+## 2026-06-05 xiyou - resource 导出补全 row_count 与 page_size 警告
+
+**变更原因**：MCP `xiyou_run` 在 `reverse-keyword` 等 resource 导出场景下 `row_count` 长期硬编码为 0，导致 Agent 误判为"导出失败"或"零结果"；调用方传 `page_size=10` 实际拿到 1600+ 行也无任何提示，原因是西柚 resource 接口固定返回全量数据、`pageSize` 仅对网页分页生效。这两个问题让 AI 在拿到结果后无法判断数据有效性，也无法理解为什么 page_size 没生效。
+**改动点**：
+- `opscli/xiyou/services/api_manager.py`：`_run_resource` 提前初始化 `warnings`/`row_count`，xlsx 下载成功后调用新增的 `_count_xlsx_rows` 读取真实数据行数；当调用方显式传 `page_size` 且与返回行数不符时追加 `stage=resource_export` warning 说明西柚后端忽略 pageSize；`XiyouRankingResult.row_count` 改用真实值
+- `opscli/xiyou/services/api_manager.py`：末尾新增 `_count_xlsx_rows(path)` 工具函数，使用 `openpyxl.load_workbook(read_only=True)` 读 `max_row - 1`，文件损坏时返回 0 不中断主任务
+- `tests/xiyou/test_api_manager.py`：新增 4 个测试 —— `_count_xlsx_rows` 对真实 xlsx / 损坏文件的行为，以及 `_run_resource` xlsx 分支在 page_size 不足/默认情况下的 `row_count` 与 warning 行为；新增 `DummyResourceXlsxClient` 通过 `_build_xlsx_bytes(n)` 用 openpyxl 真实生成可下载字节
+**验证结果**：`.venv/Scripts/python.exe -m pytest tests/xiyou -v` → 35 passed in 9.03s（含新增 4 个用例与之前的 31 个）
+**影响范围**：仅影响 xiyou resource 导出场景返回结构（`row_count` 现在反映真实行数，必要时增加 `resource_export` 阶段 warning）；`_run_ranking` / 排行榜场景零影响；MCP `xiyou_run` / CLI `opscli xiyou run` 对外签名不变
+**回滚方式**：还原 `opscli/xiyou/services/api_manager.py` `_run_resource` 的 `warnings/row_count` 初始化与 `row_count=0` 写法，删除 `_count_xlsx_rows`；删除 `tests/xiyou/test_api_manager.py` 末尾新增的 4 个测试与 `DummyResourceXlsxClient`
+
+---
+
+## 2026-06-05 xiyou - 修复 OSS 预签名链接下载 403 SignatureDoesNotMatch
+
+**变更原因**：MCP `xiyou_run` 在 `reverse-keyword` 等 resource 导出场景下载 `excel.xydc.com` 的 xlsx 文件时稳定报 403 `SignatureDoesNotMatch`。根因为 `XiyouApiClient.get_bytes` 复用了 `XiyouApiClient` 内部的 httpx 客户端并显式传入 `_browser_headers()`，将西柚业务请求头（`authorization` JWT、`cookie`、`origin`、`referer`、`content-type` 等）一并发给了 OSS；部分 OSS bucket 检测到请求同时存在 `Authorization` 头和 `Signature` query 参数时会按 Authorization 头优先解析签名，从而将合法的预签名链接判为签名不匹配。此外西柚返回的 URL path 把分隔符 `/` 误编码为 `%2F`，需要在客户端规范化以避免 httpx 或中间代理处理不一致。
+**改动点**：
+- `opscli/xiyou/api/client.py`：重写 `get_bytes`，改为使用独立 `httpx.AsyncClient`，仅携带 `user-agent`，并对 URL 调用新增的 `_normalize_oss_url` 做 path 规范化（仅 unquote path，query 严格保留）；响应体片段从 1000 提升到 2000 便于保留 OSS 错误体的关键字段
+- `opscli/xiyou/services/api_manager.py`：在 `_run_resource` 的 xlsx 下载处包装 `XiyouApiError`，转为 `XiyouConfigError` 并附带 `resource_url` 与 OSS 响应片段（含 `<StringToSign>` / `<SignatureProvided>` 等），便于反向定位签名问题；新增 `XiyouApiError` 导入
+- `tests/xiyou/test_api_client.py`：新增 4 个测试：`_normalize_oss_url` path 规范化与 query 保留、`get_bytes` 不向 OSS 泄漏业务头、`get_bytes` 在 403 时抛出含 OSS 错误片段的异常
+**验证结果**：`pytest tests/xiyou -v` → 31 passed in 7.65s（含新增 4 个用例与排行榜原有全部用例）
+**影响范围**：仅影响 xiyou resource 导出场景（`reverse-keyword` / `asin-compare` / `keyword-analysis` / `keyword-explorer` 的 xlsx 下载链路）；排行榜场景 `_run_ranking` 本地生成 xlsx，不经过 `get_bytes`，零影响；MCP `xiyou_run` / CLI `opscli xiyou run` 对外签名不变
+**回滚方式**：还原 `opscli/xiyou/api/client.py` 与 `opscli/xiyou/services/api_manager.py` 对应修改，删除 `tests/xiyou/test_api_client.py`
+
+---
+
 ## 2026-06-03 ops-dataset-query 二期服务端 S-5 - 字段语义索引表 + API
 
 **变更原因**：服务端 P1 任务，为 AI 客户端提供"业务用语 → 数据集字段"的映射索引，后续在后台录入数据后可支持语义搜索

@@ -24,7 +24,7 @@ class XiyouExportResult:
 
 @dataclass
 class XiyouRankingRequest:
-    """西柚洞察排行榜执行请求。"""
+    """西柚洞察接口场景执行请求。"""
 
     function: str = "ranking"
     provider: str = "xiyou"
@@ -32,6 +32,10 @@ class XiyouRankingRequest:
     site: str = "US"
     period: str = "week"
     rank_pattern: str | None = None
+    dataset: str | None = None
+    asin: str | None = None
+    asins: list[str] | str | None = None
+    keyword: str | None = None
     query: str = ""
     page: int = 1
     page_size: int = 50
@@ -46,7 +50,7 @@ class XiyouRankingRequest:
 
 @dataclass
 class XiyouRankingResult:
-    """西柚洞察排行榜执行结果。"""
+    """西柚洞察接口场景执行结果。"""
 
     job_id: str
     function: str
@@ -60,6 +64,10 @@ class XiyouRankingResult:
     params_path: str
     raw_path: str
     result_path: str
+    dataset: str | None = None
+    data_mode: str = "rows"
+    resource_id: str | None = None
+    resource_url: str | None = None
     export: XiyouExportResult | None = None
     data: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
@@ -97,4 +105,3 @@ class XiyouRankingResult:
             raw_path=str(raw_path),
             result_path=str(result_path),
         )
-

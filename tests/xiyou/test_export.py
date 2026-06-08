@@ -1,12 +1,25 @@
+import shutil
 from pathlib import Path
+from uuid import uuid4
 
+import pytest
 from openpyxl import load_workbook
 
 from opscli.xiyou.export.xlsx import export_rows_to_xlsx
 
 
-def test_xlsx_export_writes_known_and_extra_columns(tmp_path: Path):
-    output = tmp_path / "xiyou.xlsx"
+@pytest.fixture
+def local_tmp_path():
+    path = Path("output") / "test-runs" / f"xiyou-export-{uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=False)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def test_xlsx_export_writes_known_and_extra_columns(local_tmp_path: Path):
+    output = local_tmp_path / "xiyou.xlsx"
 
     result = export_rows_to_xlsx(
         rows=[
@@ -44,8 +57,8 @@ def test_xlsx_export_writes_known_and_extra_columns(tmp_path: Path):
     assert sheet.cell(row=2, column=21).value == "kept"
 
 
-def test_xlsx_export_writes_keyword_headers_for_empty_rows(tmp_path: Path):
-    output = tmp_path / "keyword.xlsx"
+def test_xlsx_export_writes_keyword_headers_for_empty_rows(local_tmp_path: Path):
+    output = local_tmp_path / "keyword.xlsx"
 
     export_rows_to_xlsx(
         rows=[],
