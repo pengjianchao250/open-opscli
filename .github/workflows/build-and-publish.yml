@@ -148,6 +148,19 @@ jobs:
       - name: List dist contents
         run: ls -lh dist/
 
+      - name: Diagnose: twine verbose probe (sdist only)
+        # 诊断步骤：用 twine --verbose 单独上传 sdist 试 PyPI 真实响应
+        # 失败时不影响主流程，输出 PyPI 返回的详细 400 原因
+        # 诊断完成后可删除
+        if: always()
+        continue-on-error: true
+        env:
+          PYPI_TOKEN: ${{ secrets.PIPY_OPEN_OPSCLI }}
+        run: |
+          pip install --quiet twine
+          ls -lh dist/*.tar.gz 2>/dev/null || echo "no sdist"
+          twine upload --verbose --skip-existing dist/*.tar.gz --username __token__ --password "$PYPI_TOKEN" 2>&1 | tail -200 || true
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
