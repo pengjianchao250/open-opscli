@@ -50,6 +50,18 @@ def test_competitor_payload_keeps_optional_filters_when_provided():
     assert payload["nodeIdPaths"] == ["78191031"]
 
 
+def test_competitor_payload_accepts_singular_node_id_path():
+    payload = make_competitor_payload(
+        {
+            "site": "US",
+            "period": "2026-04",
+            "nodeIdPath": "3375251:3386071:375519011:375540011",
+        }
+    )
+
+    assert payload["nodeIdPaths"] == ["3375251:3386071:375519011:375540011"]
+
+
 def test_keyword_miner_payload_maps_root_word_and_amazon_choice():
     payload = make_keyword_miner_payload(
         {
@@ -86,7 +98,7 @@ def test_keyword_reverse_payload_keeps_orchestration_fields_for_manager():
     assert payload["month"] == "202603"
     assert payload["limit"] == 100
     assert payload["skip"] == 0
-    assert payload["includeHighFrequency"] is True
+    assert "includeHighFrequency" not in payload
 
 
 def test_product_research_accepts_recommendation_mode():
@@ -104,6 +116,22 @@ def test_product_research_accepts_recommendation_mode():
     assert payload["maxPrice"] == "10"
     assert payload["smallAndLight"] == "lowPrice"
     assert payload["lowPrice"] == "Y"
+
+
+def test_product_research_accepts_singular_node_id_path():
+    payload = make_product_research_payload(
+        {
+            "site": "US",
+            "period": "2026-04",
+            "nodeIdPath": "165793011:166508011:3244725011",
+            "minPrice": 100,
+            "maxPrice": 500,
+        }
+    )
+
+    assert payload["nodeIdPaths"] == ["165793011:166508011:3244725011"]
+    assert payload["minPrice"] == "100"
+    assert payload["maxPrice"] == "500"
 
 
 def test_product_research_accepts_official_field_aliases():
@@ -125,7 +153,7 @@ def test_product_research_accepts_official_field_aliases():
     assert payload["putawayMonth"] == 6
     assert payload["sellerTypes"] == ["FBA"]
     assert payload["productTags"] == ["NewRelease"]
-    assert payload["maxVariations"] == 1
+    assert payload["maxVariations"] == "1"
 
 
 def test_required_params_are_validated_before_request():

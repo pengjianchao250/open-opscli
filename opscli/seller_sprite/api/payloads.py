@@ -202,7 +202,7 @@ def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
         "monthName": input_data.get("monthName") or month_name(month),
         "asins": csv(input_data.get("asins")),
         "page": _int(input_data.get("page") or input_data.get("startPage"), 1),
-        "nodeIdPaths": csv(input_data.get("node") or input_data.get("nodeIdPaths")),
+        "nodeIdPaths": csv(input_data.get("node") or input_data.get("nodeIdPaths") or input_data.get("nodeIdPath")),
         "symbolFlag": False,
         "size": _int(input_data.get("size") or input_data.get("pageSize"), 100),
         "order": {
@@ -238,7 +238,12 @@ def make_product_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
             "desc": order_desc(input_data.get("orderDesc")),
         },
         "productTags": [],
-        "nodeIdPaths": csv(input_data.get("node") or input_data.get("category") or input_data.get("nodeIdPaths")),
+        "nodeIdPaths": csv(
+            input_data.get("node")
+            or input_data.get("category")
+            or input_data.get("nodeIdPaths")
+            or input_data.get("nodeIdPath")
+        ),
         "sellerTypes": [],
         "eligibility": [],
         "pkgDimensionTypeList": csv(input_data.get("pkgDimensionTypeList")),
