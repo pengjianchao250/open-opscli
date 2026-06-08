@@ -4,7 +4,7 @@
 
 本文只描述 `ops-amazon-rufus` 使用的问题模板数据与接口调用方式，包括默认题库获取、管理端模板保存、问题列表保存和本地题库文件关系。
 
-本文不描述 Rufus 回答获取、Amazon 登录、Chrome CDP、seed request、SSE 解析或答案报告格式化。回答获取流程仍以 `opscli amazon-rufus get <asin> <country>` 为准，报告格式化规范见 `references/rufus-report-formatting.md`。
+本文不描述 Rufus 回答获取、seed request、SSE 解析或答案报告格式化。回答获取流程见 `references/rufus-mcp-workflow.md`，报告格式化规范见 `references/rufus-report-formatting.md`。
 
 ## 认证与基础路径
 
@@ -16,7 +16,7 @@
 - `X-Polaris-User-Token: <OPERATION_USER_TOKEN 或 polarisUserToken cookie>`
 - `withCredentials: true`
 
-Skill 文档和脚本不得直接调用后端接口。如果后续需要通过 CLI 保存问题模板，应先新增正式 `opscli` 命令，由 `opscli` 负责认证、参数校验与错误映射。
+Skill 文档不得直接调用后端接口。如果后续需要通过 CLI 保存问题模板，应先新增正式 `opscli` 命令，由 `opscli` 负责认证、参数校验与错误映射。
 
 ## 数据模型
 
@@ -63,6 +63,22 @@ Skill 文档和脚本不得直接调用后端接口。如果后续需要通过 C
 ```http
 GET /opencalw/default-question-templates
 ```
+
+CLI 端固定使用该 path。前缀域名/base URL 复用 opscli 的 ops 系统地址配置，默认来自 `ops_url`。
+
+```ini
+# ~/.config/opscli/config.ini
+[systems]
+ops_url = https://ops.api.xenkee.com/api
+```
+
+本地开发环境也可以用 `.env` 覆盖同一个 base URL：
+
+```text
+OPSCLI_OPS_URL=http://127.0.0.1:8000/api
+```
+
+实际请求地址为 `{ops_url}/opencalw/default-question-templates`，并使用 ops 登录态请求。
 
 响应 `data`：
 
