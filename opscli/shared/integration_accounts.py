@@ -93,15 +93,22 @@ class IntegrationAccountClient:
         self.ops_system_url = get_ops_system_url().rstrip("/")
 
     def _get_auth(self, alias: str = "ops") -> tuple[dict[str, str], dict[str, str]]:
+        mcp_headers = get_mcp_request_headers()
         if self.session_id:
             jwt = self.jwt
             if not jwt:
                 jwt = self.auth_client.get_token_by_session(self.session_id, alias)
             headers = {"Authorization": f"Bearer {jwt}"}
-            headers.update(get_mcp_request_headers())
+            headers.update(mcp_headers)
             return headers, {"polarisUserToken": self.session_id}
+        if self.jwt:
+            headers = {"Authorization": f"Bearer {self.jwt}"}
+            headers.update(mcp_headers)
+            return headers, {}
+        if mcp_headers:
+            return mcp_headers, {}
         headers, cookies = self.auth_client.build_request_auth(alias)
-        headers.update(get_mcp_request_headers())
+        headers.update(mcp_headers)
         return headers, cookies
 
     def get_accounts(self, platform: str) -> IntegrationAccountBundle:

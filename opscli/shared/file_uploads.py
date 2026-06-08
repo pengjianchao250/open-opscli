@@ -112,7 +112,6 @@ class FileUploadClient:
             raise FileUploadError(f"上传文件不存在：{file_path}")
 
         headers, cookies = self._get_auth("ops")
-        headers.update(get_mcp_request_headers())
         fields: list[tuple[str, Any]] = [
             ("folder", (None, folder or self.folder)),
             ("public", (None, public or self.public)),
@@ -139,9 +138,18 @@ class FileUploadClient:
         return FileUploadResult(url=url, raw=payload)
 
     def _get_auth(self, alias: str) -> tuple[dict[str, str], dict[str, str]]:
+        mcp_headers = get_mcp_request_headers()
         if self.session_id:
             jwt = self.jwt or self.auth_client.get_token_by_session(self.session_id, alias)
-            return {"Authorization": f"Bearer {jwt}"}, {"polarisUserToken": self.session_id}
+            headers = {"Authorization": f"Bearer {jwt}"}
+            headers.update(mcp_headers)
+            return headers, {"polarisUserToken": self.session_id}
+        if self.jwt:
+            headers = {"Authorization": f"Bearer {self.jwt}"}
+            headers.update(mcp_headers)
+            return headers, {}
+        if mcp_headers:
+            return mcp_headers, {}
         return self.auth_client.build_request_auth(alias)
 
 
