@@ -2021,6 +2021,15 @@ Rufus 请求被 Amazon 拒绝，本轮按授权或页面上下文失效处理，
 Rufus 获取完成，报告已生成：output/amazon-rufus/<ASIN>-<timestamp>.md
 ```
 
+## 2026-06-06 体验增量：接口配置可见性
+
+本轮不新增图形界面。用户可见体验只体现在 CLI 配置和帮助文本：
+
+1. 默认题库 path 固定为 `/opencalw/default-question-templates`，环境切换只配置 `ops_url` / `OPSCLI_OPS_URL`。
+2. Rufus 上传 path 固定为 `/v1/rufus/upload`，只有显式上传时才发送。
+3. `opscli amazon-rufus get --submit-upload` 是唯一显式上传入口；默认获取和 MCP 获取不上传。
+4. 错误提示不得引导用户配置 Rufus path，不暴露 cookie、headers、payload 或完整请求。
+
 ### 二次失败提示
 
 如果登录后仍失败：
@@ -2148,3 +2157,302 @@ opscli amazon-rufus get B0TEST1234 US --launch-if-needed
 - 完整原始 JSON
 
 用户不需要复制 cookie，也不需要理解 `storage_state` 文件路径。系统只告知“本地登录态已保存”。
+
+## 2026-06-06 体验增量：Skill 与 CLI 重构后的用户路径冻结
+
+### 体验目标
+
+本轮重构后的体验目标是消除入口混乱。普通用户和 Agent 只需要理解一条默认路径、一条恢复路径和一条兜底路径。
+
+### 默认路径
+
+默认获取时，Agent 只调用 MCP：
+
+```text
+amazon_rufus_get(asin, country, question/questions/skills_dir)
+```
+
+成功回复只展示：
+
+```text
+Rufus 获取完成，报告已生成：output/amazon-rufus/<ASIN>-<timestamp>.md
+```
+
+不解释 CDP、不展示 Chrome 路径、不展示内部 JSON。
+
+### 恢复路径
+
+当 MCP 返回以下错误时：
+
+```text
+RUFUS_SECRET_NOT_READY
+RUFUS_HEADLESS_CAPTURE_ERROR
+RUFUS_HEADLESS_REQUEST_ERROR
+```
+
+Agent 展示短提示：
+
+```text
+当前国家站点登录态不可用。我会打开一次 Amazon 登录窗口。请完成登录后回复“已登录”，我会保存本地登录态并继续 Rufus MCP 获取。
+```
+
+用户确认后，Agent 执行：
+
+```powershell
+opscli amazon-rufus save-state <COUNTRY>
+```
+
+保存成功后不展示文件路径或状态 JSON，只提示：
+
+```text
+本地登录态已保存，正在重新调用 amazon_rufus_get。
+```
+
+### 兜底路径
+
+仅当当前宿主没有暴露 `amazon_rufus_get` MCP 工具时，Agent 提示：
+
+```text
+当前宿主未暴露 Rufus MCP 工具。我将改用 opscli amazon-rufus 的本机兼容入口获取 Rufus，仍只返回报告路径。
+```
+
+推荐命令：
+
+```powershell
+opscli amazon-rufus get <ASIN> <COUNTRY> --skills-dir ".agents/skills" --launch-if-needed
+```
+
+如果用户提供多个临时问题，使用多次 `-q`：
+
+```powershell
+opscli amazon-rufus get <ASIN> <COUNTRY> --skills-dir ".agents/skills" --launch-if-needed -q "问题一" -q "问题二"
+```
+
+### CLI 文案原则
+
+1. `init` 文案聚焦“打开目标国家站点登录窗口”。
+2. `save-state` 文案聚焦“保存本地登录态，不请求 Rufus”。
+3. `get` 文案聚焦“本机兼容获取”，不作为默认 Agent 主路径。
+4. `--new-chrome` 不出现在普通用户引导中。
+5. `--chrome-path` 只在自动发现 Chrome 失败后出现。
+
+### 禁止体验
+
+任何默认提示、报告或错误都不得要求用户复制：
+
+1. cookie
+2. localStorage
+3. `storage_state`
+4. headers
+5. seed request
+6. upload payload
+
+也不得让用户在默认路径中理解 Chrome remote debugging、CDP 端口或 profile 目录。
+
+### UI/设计系统
+
+本轮没有图形界面，不新增图标库、字体系统、design token、组件生态或页面骨架。若后续新增授权状态管理 UI，必须重新进入 UIUX 文档确认，并优先锁定 Lucide/Heroicons/Tabler 之一作为图标库。
+
+## 2026-06-06 体验增量：移除手动登录态导入提示
+
+### 体验目标
+
+用户不应被要求把 cookie、headers、payload 或浏览器请求复制到 MCP 参数、Skill 文档或报告里。正确体验是：Skill 默认调用 `amazon_rufus_get`；若登录态缺失或 headless 捕获失败，Agent 引导用户运行 `watch-login`，由 CLI 在本机浏览器内完成登录检测和 streaming seed 捕获。
+
+### 推荐用户路径
+
+触发登录恢复：
+
+```powershell
+opscli amazon-rufus watch-login B0B1MLVMY5 US --launch-if-needed
+```
+
+继续 Rufus 获取：
+
+```text
+amazon_rufus_get(
+  asin="B0B1MLVMY5",
+  country="US",
+  questions=["这是什么商品", "这个商品评价如何？"]
+)
+```
+
+### CLI 输出体验
+
+`watch-login` 成功只输出摘要：
+
+```json
+{
+  "success": true,
+  "command": "amazon-rufus watch-login",
+  "data": {
+    "country": "US",
+    "asin": "B0B1MLVMY5",
+    "saved": true,
+    "login_detected": true,
+    "cookie_count": 10,
+    "origin_count": 1,
+    "streaming_request_saved": true,
+    "has_payload_template": true
+  },
+  "error": null
+}
+```
+
+任何 CLI 输出都不展示 cookie 名值、localStorage、`storage_state`、headers、payload、完整请求或保存文件绝对路径。
+
+### Agent 提示文案
+
+当 `amazon_rufus_get` 返回登录态缺失或捕获失败时，Agent 推荐提示：
+
+```text
+需要刷新美国站 Rufus 登录态。我会运行 opscli 的 watch-login，完成后再调用 amazon_rufus_get；请只在打开的 Amazon 页面中登录，不要把 cookie 或请求材料发给我。
+```
+
+保存成功后：
+
+```text
+本地登录态和 Rufus 请求种子已保存，正在调用 amazon_rufus_get。
+```
+
+MCP 成功后：
+
+```text
+Rufus 获取完成，报告已生成：output/amazon-rufus/<ASIN>-<timestamp>.md
+```
+
+MCP 失败且本次已经保存过 cookie：
+
+```text
+本次已保存本地登录态并重试 Rufus MCP，仍未成功；不再重复写入或打开登录窗口。错误：<ERROR_CODE>: <message>
+```
+
+### 明文参数禁用
+
+不推荐也不设计通过命令行参数传入 Cookie 原文的体验。
+
+原因：
+
+1. 命令行参数容易进入 shell history。
+2. 进程列表可能短暂暴露参数。
+3. Agent 日志和测试失败输出更容易带出明文。
+
+如需从文件读取，默认仍建议 stdin；`--cookie-file` 是否提供留到 Spec 阶段确认。
+
+## 2026-06-06 CLI 监听登录页体验增量
+
+### 命令体验
+
+登录恢复优先使用阻塞式监听命令：
+
+```powershell
+opscli amazon-rufus watch-login B0TEST1234 US --launch-if-needed
+```
+
+如果 Chrome 自动发现失败，再追加 `--chrome-path`：
+
+```powershell
+opscli amazon-rufus watch-login B0TEST1234 US --launch-if-needed --chrome-path "C:/Program Files/Google/Chrome/Application/chrome.exe"
+```
+
+### 用户可见状态
+
+命令会打开或连接目标国家站点 Amazon 页面。用户只需要在该页面完成登录；Agent 不再单独等待用户回复“已登录”。CLI 内部持续检测登录状态，并在登录完成后自动打开目标 ASIN 商品页监听页面请求。捕获成功后，本地加密保存 normalized `curl_data`，MCP 后端优先用它请求 Rufus。
+
+成功输出只展示脱敏摘要：
+
+```json
+{
+  "success": true,
+  "command": "amazon-rufus watch-login",
+  "data": {
+    "country": "US",
+    "asin": "B0TEST1234",
+    "saved": true,
+    "login_detected": true,
+    "cookie_count": 10,
+    "origin_count": 1,
+    "streaming_request_saved": true,
+    "has_payload_template": true
+  },
+  "error": null
+}
+```
+
+禁止输出 cookie、headers、payload template、request body、curl_data、完整 curl、storage_state 和本地状态文件路径。
+
+### 子 agent 测试体验
+
+代码实现、单测和 Skill 校验完成后，真实子 agent 测试提示词固定为：
+
+```text
+$ops-amazon-rufus 帮我分析美国站，B0B1MLVMY5 这个商品的信息，要问 1. 这是什么商品 2. 这个商品评价如何？
+```
+
+期望体验：
+
+1. Skill 读取用户意图，识别美国站和 ASIN。
+2. Skill 将两个临时问题一次性传给 `amazon_rufus_get.questions`。
+3. MCP 返回 `report_path`。
+4. Agent 最终只展示报告路径；如需正文，再读取报告文件。
+
+### UI/设计系统
+
+本轮没有图形界面，不新增图标库、字体系统、design token、组件生态或页面骨架。所有体验变更仅限 CLI 命令、Agent 提示和敏感信息脱敏。
+
+## 2026-06-08 体验增量：只返回本次最新 Rufus 报告
+
+### 体验目标
+
+用户看到的报告必须来自本次 Rufus 获取。即使同一个 ASIN 在 `output/amazon-rufus/` 下存在历史 Markdown 文件，Agent 也不能把旧报告当成本次结果返回。
+
+### 推荐成功体验
+
+MCP 成功后，Agent 只展示本次工具响应中的路径：
+
+```text
+Rufus 获取完成，报告已生成：output/amazon-rufus/<ASIN>-<timestamp>.md
+```
+
+如果用户继续要求“把正文给我”，Agent 只读取刚才返回的 `report_path`：
+
+```text
+我将读取本次生成的报告：output/amazon-rufus/<ASIN>-<timestamp>.md
+```
+
+### 禁止体验
+
+不得出现以下行为：
+
+1. 因为用户给了 ASIN，就读取 `output/amazon-rufus/<ASIN>-*.md` 中任意一个文件。
+2. 读取 IDE 当前打开的旧报告。
+3. 读取上一轮对话遗留的 `report_path`。
+4. 登录恢复后继续返回恢复前或历史运行的报告路径。
+5. 本次获取失败时，用历史报告补齐最终结果。
+
+### CLI 兼容体验
+
+如果当前宿主没有 MCP，只能使用 CLI 兼容入口，Agent 应从本次命令输出中提取报告路径。只有本次命令没有输出路径时，才允许说明正在按时间戳查找最新文件：
+
+```text
+本次 CLI 输出未包含 report_path，我会只在当前 ASIN 的报告中选择时间戳最新的文件；如果无法确认最新文件，将停止而不是返回历史报告。
+```
+
+### 错误体验
+
+无法确定本次最新报告时，推荐提示：
+
+```text
+本次 Rufus 获取未返回可确认的最新 report_path。为避免返回历史 ASIN 报告，我不会读取 output/amazon-rufus 下的旧文件。
+```
+
+### Agent 行为规则
+
+1. 成功响应里的 `report_path` 是用户体验层唯一可信输出。
+2. 读取正文前先确认路径等于本次响应路径。
+3. 二次重试成功后更新路径，不保留旧路径。
+4. 没有本次路径时宁可失败，也不返回历史报告。
+
+### UI/设计系统
+
+本轮没有图形界面，不新增图标库、字体系统、design token、组件生态或页面骨架。体验变更仅限 Agent 输出路径选择和错误文案。

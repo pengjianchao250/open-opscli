@@ -188,7 +188,21 @@ def test_amazon_rufus_tool_schema_excludes_cdp_options():
     tool = _run(scenario())
     properties = (tool.inputSchema or {}).get("properties", {})
 
-    for name in ["cdp_url", "new_chrome", "keep_chrome_open", "chrome_path", "launch_if_needed"]:
+    for name in [
+        "cdp_url",
+        "new_chrome",
+        "keep_chrome_open",
+        "chrome_path",
+        "launch_if_needed",
+        "cookie",
+        "curl",
+        "curl_data",
+        "headers",
+        "payload_template",
+        "raw_curl",
+        "storage_state",
+        "allow_capture_browser_state",
+    ]:
         assert name not in properties
 
 

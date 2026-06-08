@@ -152,8 +152,11 @@ class HeadlessRufusCaptureService:
             page = context.new_page()
             captured: list[SeedRequestRecord] = []
 
+            def is_rufus_request(request: Any) -> bool:
+                return "/rufus/cl/streaming" in str(getattr(request, "url", "") or "")
+
             def on_request(request: Any) -> None:
-                if "/rufus/cl/streaming" not in str(getattr(request, "url", "") or ""):
+                if not is_rufus_request(request):
                     return
                 if captured:
                     return
@@ -173,7 +176,22 @@ class HeadlessRufusCaptureService:
 
             page.on("request", on_request)
             page.goto(page_url, wait_until="domcontentloaded", timeout=timeout_ms)
-            page.wait_for_timeout(min(timeout_ms, 1000))
+            if not captured:
+                wait_for_event = getattr(page, "wait_for_event", None)
+                if callable(wait_for_event):
+                    try:
+                        # Amazon 商品页可能在首屏脚本完成后才触发 Rufus 请求；
+                        # 等待目标 request 事件比固定 1 秒更稳定，同时保留总超时约束。
+                        delayed_request = wait_for_event(
+                            "request",
+                            predicate=is_rufus_request,
+                            timeout=min(timeout_ms, 30000),
+                        )
+                        on_request(delayed_request)
+                    except Exception:
+                        pass
+                else:
+                    page.wait_for_timeout(min(timeout_ms, 1000))
             if not captured:
                 raise HeadlessRufusCaptureError(
                     "未捕获 /rufus/cl/streaming。请确认 cookie 是否有效，或目标商品页是否支持 Rufus。"

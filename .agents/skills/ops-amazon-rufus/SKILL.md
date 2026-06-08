@@ -25,12 +25,13 @@ description: Amazon Rufus 默认题库数据与 Agent 编排入口。用于基�
 1. 解析用户提供的 ASIN、国家站点和可选 Rufus 问题，并初始化本次 Skill 调用状态：`login_recovery_attempted=false`。
 2. 默认调用 `amazon_rufus_get`，由 MCP 后端使用 headless 链路获取 Rufus 回答并写入报告。
 3. 如果用户提供一个临时问题，传 `question`；如果提供多个临时问题，传 `questions`；未提供问题时传 `skills_dir=".agents/skills"` 读取默认题库。
-4. 如果 `amazon_rufus_get` 返回 `RUFUS_HEADLESS_REQUEST_ERROR`、`RUFUS_HEADLESS_CAPTURE_ERROR` 或 `RUFUS_SECRET_NOT_READY`，且 `login_recovery_attempted=false`，按 `references/rufus-mcp-workflow.md` 进入一次 CDP 登录恢复。
-5. 进入登录恢复后立即记录 `login_recovery_attempted=true`，调用 `opscli amazon-rufus init <COUNTRY> --launch-if-needed`，等待用户明确回复“已登录”，再执行 `opscli amazon-rufus save-state <COUNTRY>` 加密保存本地登录态。
-6. 保存完成后按原 ASIN、国家和问题来源重新调用 `amazon_rufus_get`；MCP 服务层从本地加密状态派生 Cookie header，不在 MCP 参数、报告或回复中展示 cookie、localStorage 或 `storage_state`。
-7. 如果本次 Skill 调用已经触发过一次登录恢复，或保存后重新调用 `amazon_rufus_get` 仍失败，不再打开第二次登录窗口，直接返回错误并说明本次已完成一次登录恢复。
-8. 如果成功但 `answer_count=0`，按正常 0 答案报告处理，不推断为登录恢复。
-9. 最终回复只展示 `report_path` 或报告文件路径；如需正文，再读取该 Markdown 报告文件。
+4. 如果 `amazon_rufus_get` 返回 `RUFUS_HEADLESS_REQUEST_ERROR`、`RUFUS_HEADLESS_CAPTURE_ERROR` 或 `RUFUS_SECRET_NOT_READY`，且 `login_recovery_attempted=false`，按 `references/rufus-mcp-workflow.md` 进入一次 CLI 登录页监听恢复。
+5. 进入登录恢复后立即记录 `login_recovery_attempted=true`，先调用 `opscli amazon-rufus logout <COUNTRY> --pretty` 清理旧 Rufus 状态和 opscli-owned Chrome profile；`logout` 成功后再执行 `watch-login`，失败则停止恢复并提示用户关闭对应调试 Chrome 后重试。
+6. 调用 `opscli amazon-rufus watch-login <ASIN> <COUNTRY> --launch-if-needed`；该命令会打开或连接目标国家站点 Amazon 页面，通过 `#nav-tools` 未登录提示和 `sso-state-main` / `at-main` Cookie key 判断登录完成，自动打开目标商品页并捕获 `/rufus/cl/streaming` 请求种子。
+7. `watch-login` 成功后按原 ASIN、国家和问题来源重新调用 `amazon_rufus_get`；MCP 服务层读取本地明文状态（敏感）请求 Rufus，不在 MCP 参数、报告或回复中展示 cookie、localStorage、`storage_state`、headers、payload 或完整请求。
+8. 如果本次 Skill 调用已经触发过一次登录恢复，或保存后重新调用 `amazon_rufus_get` 仍失败，不再打开第二次登录窗口，直接返回错误并说明本次已完成一次登录恢复。
+9. 如果成功但 `answer_count=0`，按正常 0 答案报告处理，不推断为登录恢复。
+10. 最终回复只展示本次工具返回的 `report_path` 或报告文件路径；如需正文，只读取本次工具返回的 `report_path`，不得按 ASIN 读取历史报告。
 
 ## References
 

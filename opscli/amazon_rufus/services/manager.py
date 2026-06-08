@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from opscli.amazon_rufus.constants import DEFAULT_RUFUS_TIMEOUT_SECONDS
-from opscli.amazon_rufus.domain.exceptions import InvalidQuestionError, InvalidRufusCookieError
+from opscli.amazon_rufus.domain.exceptions import InvalidQuestionError, InvalidRufusCookieError, InvalidRufusCurlError
+from opscli.amazon_rufus.domain.models import SeedRequestRecord
 from opscli.amazon_rufus.runtime.country_map import build_product_url, resolve_marketplace
 from opscli.amazon_rufus.services.backend_secret import RufusBackendSecretProvider
 from opscli.amazon_rufus.services.browser import BrowserAttachService
 from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
+from opscli.amazon_rufus.services.cookie_parser import RufusCookieParser
+from opscli.amazon_rufus.services.curl_parser import RufusCurlParser
 from opscli.amazon_rufus.services.headless_capture import HeadlessRufusCaptureService
 from opscli.amazon_rufus.services.headless_client import HeadlessRufusClient
 from opscli.amazon_rufus.services.question_bank import QuestionBankService
 from opscli.amazon_rufus.services.replay import RufusReplayService
+from opscli.amazon_rufus.transport.client import RufusTransportClient
 
 
 class RufusManager:
@@ -30,6 +36,9 @@ class RufusManager:
         headless_client: HeadlessRufusClient | None = None,
         browser_state_store: RufusBrowserStateStore | None = None,
         backend_secret_provider: RufusBackendSecretProvider | None = None,
+        cookie_parser: RufusCookieParser | None = None,
+        curl_parser: RufusCurlParser | None = None,
+        transport_client: RufusTransportClient | None = None,
     ) -> None:
         self.question_bank = question_bank
         self.browser = browser or BrowserAttachService()
@@ -38,6 +47,9 @@ class RufusManager:
         self.headless_client = headless_client or HeadlessRufusClient()
         self._browser_state_store = browser_state_store
         self._backend_secret_provider = backend_secret_provider
+        self.cookie_parser = cookie_parser or RufusCookieParser()
+        self.curl_parser = curl_parser or RufusCurlParser()
+        self.transport_client = transport_client or RufusTransportClient()
 
     @property
     def browser_state_store(self) -> RufusBrowserStateStore:
@@ -84,7 +96,7 @@ class RufusManager:
         chrome_path: str | None = None,
         launch_if_needed: bool = False,
     ) -> dict:
-        """捕获并加密保存指定国家站点的浏览器状态。"""
+        """捕获并保存指定国家站点的浏览器状态。"""
         marketplace = resolve_marketplace(country.strip().upper())
         storage_state = self.browser.capture_storage_state(
             marketplace_url=marketplace.base_url,
@@ -105,6 +117,163 @@ class RufusManager:
             "origin_count": len(storage_state.get("origins", [])) if isinstance(storage_state, dict) else 0,
         }
 
+    def watch_login(
+        self,
+        *,
+        asin: str,
+        country: str,
+        cdp_url: str = "http://127.0.0.1:9222",
+        timeout_seconds: int = DEFAULT_RUFUS_TIMEOUT_SECONDS,
+        chrome_path: str | None = None,
+        launch_if_needed: bool = True,
+    ) -> dict:
+        """监听登录页并保存 Rufus streaming 请求种子。"""
+        normalized_asin = asin.strip().upper()
+        normalized_country = country.strip().upper()
+        marketplace = resolve_marketplace(normalized_country)
+        page_url = build_product_url(normalized_asin, marketplace.country)
+        capture = self.browser.watch_login_and_capture_seed_request(
+            asin=normalized_asin,
+            country=marketplace.country,
+            marketplace_url=marketplace.base_url,
+            page_url=page_url,
+            cdp_url=cdp_url,
+            timeout_seconds=timeout_seconds,
+            chrome_path=chrome_path,
+            launch_if_needed=launch_if_needed,
+        )
+        storage_state = capture.get("storage_state")
+        seed_request = capture.get("seed_request")
+        self.browser_state_store.save(
+            country=marketplace.country,
+            marketplace_origin=marketplace.base_url,
+            storage_state=storage_state,
+            seed_request=seed_request,
+        )
+        return {
+            "country": marketplace.country,
+            "asin": normalized_asin,
+            "saved": True,
+            "login_detected": bool(capture.get("login_detected")),
+            "cookie_count": len(storage_state.get("cookies", [])) if isinstance(storage_state, dict) else 0,
+            "origin_count": len(storage_state.get("origins", [])) if isinstance(storage_state, dict) else 0,
+            "streaming_request_saved": seed_request is not None,
+            "has_payload_template": bool(self._safe_json(getattr(seed_request, "request_body", ""))),
+        }
+
+    def logout(
+        self,
+        *,
+        country: str,
+        cdp_url: str = "http://127.0.0.1:9222",
+        include_browser_profile: bool = True,
+    ) -> dict:
+        """清除指定国家站点的 Amazon/Rufus 本地登录态。"""
+        marketplace = resolve_marketplace(country.strip().upper())
+        state_deleted = self.browser_state_store.delete(marketplace.country)
+        browser_profile_deleted = False
+        if include_browser_profile:
+            browser_profile_deleted = self.browser.clear_owned_profile(cdp_url=cdp_url)
+        return {
+            "country": marketplace.country,
+            "state_deleted": state_deleted,
+            "browser_profile_deleted": browser_profile_deleted,
+            "mcp_state_cleared": True,
+        }
+
+    def save_cookie(
+        self,
+        *,
+        country: str,
+        cookie_header: str,
+    ) -> dict:
+        """将用户提供的 Cookie header 保存为 Rufus 本地状态。"""
+        marketplace = resolve_marketplace(country.strip().upper())
+        storage_state = self.cookie_parser.parse_cookie_header(
+            cookie_header,
+            marketplace_origin=marketplace.base_url,
+        )
+        self.browser_state_store.save(
+            country=marketplace.country,
+            marketplace_origin=marketplace.base_url,
+            storage_state=storage_state,
+        )
+        return {
+            "country": marketplace.country,
+            "saved": True,
+            "cookie_count": len(storage_state.get("cookies", [])),
+        }
+
+    def save_curl(
+        self,
+        *,
+        asin: str,
+        country: str,
+        raw_curl: str,
+    ) -> dict:
+        """将 Copy-as-cURL 保存为 Rufus 后端请求状态。"""
+        normalized_asin = asin.strip().upper()
+        if not normalized_asin:
+            raise InvalidRufusCurlError("asin 不能为空")
+        marketplace = resolve_marketplace(country.strip().upper())
+        parsed = self.curl_parser.parse(raw_curl)
+        storage_state = self.cookie_parser.parse_cookie_header(
+            parsed.cookies,
+            marketplace_origin=marketplace.base_url,
+        )
+        seed = SeedRequestRecord(
+            request_url=parsed.url,
+            request_headers={**parsed.headers, "cookie": parsed.cookies},
+            request_body=json.dumps(parsed.payload_template, ensure_ascii=False),
+            page_url=self._extract_page_url(parsed.payload_template) or build_product_url(normalized_asin, marketplace.country),
+            tab_id=self._extract_tab_id(parsed.url),
+            asin=normalized_asin,
+            country=marketplace.country,
+            captured_at=int(time.time() * 1000),
+        )
+        self.browser_state_store.save(
+            country=marketplace.country,
+            marketplace_origin=marketplace.base_url,
+            storage_state=storage_state,
+            seed_request=seed,
+        )
+        return {
+            "country": marketplace.country,
+            "asin": normalized_asin,
+            "saved": True,
+            "cookie_count": len(storage_state.get("cookies", [])),
+            "header_count": len(parsed.headers),
+            "has_curl_data": True,
+            "has_payload_template": bool(parsed.payload_template),
+        }
+
+    def cookie_status(self, *, country: str) -> dict:
+        """读取本地 Rufus Cookie 状态并返回脱敏摘要。"""
+        marketplace = resolve_marketplace(country.strip().upper())
+        record = self.browser_state_store.load(marketplace.country)
+        if not isinstance(record, dict):
+            return {
+                "country": marketplace.country,
+                "has_state": False,
+                "cookie_count": 0,
+                "can_build_cookie_header": False,
+            }
+        storage_state = record.get("storage_state")
+        cookie_count = len(storage_state.get("cookies", [])) if isinstance(storage_state, dict) else 0
+        can_build_cookie_header = False
+        if isinstance(storage_state, dict):
+            try:
+                self.browser_state_store.build_cookie_header(storage_state, marketplace.base_url)
+                can_build_cookie_header = True
+            except Exception:
+                can_build_cookie_header = False
+        return {
+            "country": marketplace.country,
+            "has_state": True,
+            "cookie_count": cookie_count,
+            "can_build_cookie_header": can_build_cookie_header,
+        }
+
     def get(
         self,
         *,
@@ -120,6 +289,7 @@ class RufusManager:
         launch_if_needed: bool = False,
         timeout_seconds: int = DEFAULT_RUFUS_TIMEOUT_SECONDS,
         include_upload_payload: bool = True,
+        submit_upload: bool = False,
     ) -> dict:
         """通过本机 Chrome CDP 捕获 seed request，并在页面上下文内回放 Rufus。"""
         normalized_asin = asin.strip().upper()
@@ -161,6 +331,7 @@ class RufusManager:
             answers=answers,
             seed=seed,
             include_upload_payload=include_upload_payload,
+            submit_upload=submit_upload,
         )
 
     def get_headless(
@@ -178,6 +349,7 @@ class RufusManager:
         skills_dir: str | None = None,
         timeout_seconds: int = DEFAULT_RUFUS_TIMEOUT_SECONDS,
         include_upload_payload: bool = True,
+        submit_upload: bool = False,
     ) -> dict:
         """使用 headless browser 和传入 Cookie 获取 Rufus 数据。"""
         normalized_asin = asin.strip().upper()
@@ -218,6 +390,7 @@ class RufusManager:
             answers=answers,
             seed=seed,
             include_upload_payload=include_upload_payload,
+            submit_upload=submit_upload,
         )
 
     def get_backend(
@@ -230,6 +403,7 @@ class RufusManager:
         skills_dir: str | None = None,
         timeout_seconds: int = DEFAULT_RUFUS_TIMEOUT_SECONDS,
         include_upload_payload: bool = True,
+        submit_upload: bool = False,
     ) -> dict:
         """使用后端请求凭证、headless 捕获和 HTTP streaming 获取 Rufus 数据。"""
         normalized_asin = asin.strip().upper()
@@ -239,16 +413,20 @@ class RufusManager:
         secret = self.backend_secret_provider.load(country=normalized_country)
         page_url = build_product_url(normalized_asin, normalized_country)
         streaming_url = str(getattr(secret, "url", "") or "").strip() or None
+        saved_seed = getattr(secret, "seed_request", None)
 
-        seed = self.headless_capture.capture_seed_request(
-            asin=normalized_asin,
-            country=normalized_country,
-            cookie=str(getattr(secret, "cookies", "") or ""),
-            storage_state=getattr(secret, "storage_state", None),
-            timeout_seconds=timeout_seconds,
-            page_url=page_url,
-            streaming_url=streaming_url,
-        )
+        if self._can_use_saved_seed(saved_seed, asin=normalized_asin, country=normalized_country):
+            seed = saved_seed
+        else:
+            seed = self.headless_capture.capture_seed_request(
+                asin=normalized_asin,
+                country=normalized_country,
+                cookie=str(getattr(secret, "cookies", "") or ""),
+                storage_state=getattr(secret, "storage_state", None),
+                timeout_seconds=timeout_seconds,
+                page_url=page_url,
+                streaming_url=streaming_url,
+            )
         request_url = streaming_url or seed.request_url
         answers = self.headless_client.query(
             streaming_url=request_url,
@@ -267,6 +445,7 @@ class RufusManager:
             answers=answers,
             seed=seed,
             include_upload_payload=include_upload_payload,
+            submit_upload=submit_upload,
         )
 
     def _resolve_questions(
@@ -304,6 +483,7 @@ class RufusManager:
         answers: list[Any],
         seed: Any,
         include_upload_payload: bool,
+        submit_upload: bool = False,
     ) -> dict:
         """组装各条获取链路统一返回结构。"""
         data = {
@@ -326,6 +506,8 @@ class RufusManager:
                 questions=questions,
                 captured_at=seed.captured_at,
             )
+            if submit_upload:
+                data["upload_result"] = self.transport_client.submit_upload_payload(data["upload_payload"])
         return data
 
     def build_upload_payload(
@@ -378,5 +560,30 @@ class RufusManager:
         except json.JSONDecodeError:
             return {}
         return parsed if isinstance(parsed, dict) else {}
+
+    def _can_use_saved_seed(self, seed: Any, *, asin: str, country: str) -> bool:
+        """仅复用同 ASIN、同国家站点的本地 streaming seed。"""
+        return bool(
+            seed is not None
+            and str(getattr(seed, "asin", "") or "").strip().upper() == asin
+            and str(getattr(seed, "country", "") or "").strip().upper() == country
+            and "/rufus/cl/streaming" in str(getattr(seed, "request_url", "") or "")
+        )
+
+    def _extract_tab_id(self, request_url: str) -> str:
+        """从 streaming URL 中提取 tabId。"""
+        values = parse_qs(urlsplit(str(request_url or "")).query).get("tabId")
+        return str(values[0]).strip() if values else ""
+
+    def _extract_page_url(self, payload_template: dict[str, Any]) -> str:
+        """从 Rufus payload template 中提取商品页 URL。"""
+        page_context = payload_template.get("pageContext") if isinstance(payload_template, dict) else None
+        if not isinstance(page_context, dict):
+            return ""
+        for key in ("targetUrl", "originUrl"):
+            value = str(page_context.get(key) or "").strip()
+            if value:
+                return value
+        return ""
 
 

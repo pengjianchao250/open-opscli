@@ -2375,7 +2375,7 @@ class RufusManager:
 - 负责本地数据校验
 - 若文件缺失，抛出“请安装/升级 ops-amazon-rufus”的错误
 
-本地 `question_templates.json` 应参考当前可访问接口 `http://127.0.0.1:8000/api/opencalw/default-question-templates` 的数据结构：
+本地 `question_templates.json` 应参考固定默认题库接口 `/opencalw/default-question-templates` 的数据结构；本地联调只覆盖 `ops_url` / `OPSCLI_OPS_URL` 这一段 base URL。
 
 ```json
 {
@@ -2645,13 +2645,13 @@ opscli/skills/templates/ops-amazon-rufus/
 
 在 `opscli/skills/sync/updater.py` 中新增：
 
-- `OPS_RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT`
+- `RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT`
 - `upgrade_ops_amazon_rufus()`
 
-`OPS_RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT` 对应当前接口：
+`RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT` 作为固定相对路径，实际请求地址由 `OPS_URL + 固定 path` 决定：
 
 ```text
-http://127.0.0.1:8000/api/opencalw/default-question-templates
+/opencalw/default-question-templates
 ```
 
 ### SkillsManager 改造点
@@ -3514,3 +3514,450 @@ answer_count=0
 3. `test_mcp_get_uses_saved_state`：已有本地状态时，`RufusBackendSecretProvider` 能派生 Cookie header 并传入 headless capture/client。
 4. `test_install_guidance_uses_save_state_flow`：安装后提示不再推荐 `--new-chrome`。
 5. `test_init_exposes_chrome_path`：CLI help 包含 `--chrome-path`。
+
+## 2026-06-06 架构增量：Skill 与 CLI 重构后的目标边界
+
+### 覆盖说明
+
+本节不是删除 CDP 的新方案，而是对当前实现进行职责收敛。此前“彻底删除 CDP”和“CDP 恢复”之间的冲突，统一解释为：
+
+1. MCP 默认获取不暴露 CDP。
+2. CLI CDP 能力保留，但只承担登录态初始化、状态保存和宿主无 MCP 时的兼容获取。
+3. Skill 负责分流和护栏，不承载 Python 获取实现。
+
+### 目标调用链
+
+默认获取链：
+
+```text
+Agent
+  -> ops-amazon-rufus Skill
+  -> amazon_rufus_get
+  -> RufusManager.get_backend
+  -> RufusBackendSecretProvider.load
+  -> RufusBrowserStateStore.build_cookie_header
+  -> HeadlessRufusCaptureService
+  -> HeadlessRufusClient
+  -> AnswerReportWriter
+  -> report_path
+```
+
+登录态刷新链：
+
+```text
+amazon_rufus_get 返回登录态触发错误
+  -> Skill 记录 login_recovery_attempted=true
+  -> opscli amazon-rufus init <COUNTRY> --launch-if-needed
+  -> 用户确认已登录
+  -> opscli amazon-rufus save-state <COUNTRY>
+  -> RufusManager.save_state
+  -> BrowserAttachService.capture_storage_state
+  -> RufusBrowserStateStore.save
+  -> amazon_rufus_get 原参数重试
+```
+
+宿主兜底链：
+
+```text
+当前宿主未暴露 amazon_rufus_get
+  -> opscli amazon-rufus get <ASIN> <COUNTRY> --skills-dir ".agents/skills" --launch-if-needed
+  -> RufusManager.get
+  -> BrowserAttachService.capture_seed_request
+  -> RufusReplayService
+  -> AnswerReportWriter
+  -> report_path
+```
+
+### 组件职责
+
+| 组件 | 保留职责 | 不承担职责 |
+|---|---|---|
+| `opscli/mcp/tools/amazon_rufus.py` | 注册 `amazon_rufus_get`，调用 `get_backend`，输出 allowlist 响应 | 不暴露 CDP 参数，不返回敏感字段 |
+| `RufusManager.get_backend` | 默认后端/headless Rufus 获取 | 不打开可见浏览器，不要求用户登录确认 |
+| `RufusManager.init` | 打开目标国家站点登录窗口 | 不保存状态，不请求 Rufus |
+| `RufusManager.save_state` | 捕获并加密保存 Playwright `storage_state` | 不生成 Rufus 报告，不输出状态原文 |
+| `RufusManager.get` | CLI 本机兼容获取 | 不作为 Skill 默认主路径 |
+| `BrowserAttachService` | CDP 登录窗口、storage_state 捕获、本机兼容 seed 捕获 | 不进入 MCP 默认参数面 |
+| `ops-amazon-rufus/SKILL.md` | 触发、主流程、reference 索引、单次恢复护栏 | 不承载采集脚本、不展开完整参数表 |
+
+### 数据与敏感信息边界
+
+本地登录态保存位置继续由服务层控制。目标结构为：
+
+```text
+CONFIG_DIR/amazon-rufus/browser-state-<COUNTRY>.bin
+CONFIG_DIR/amazon-rufus/.browser-state-key
+```
+
+如果后续调整 CDP profile，也应收敛到：
+
+```text
+CONFIG_DIR/amazon-rufus/chrome-profile-<PORT>/
+```
+
+禁止输出或写入报告：
+
+1. cookie
+2. localStorage
+3. `storage_state`
+4. headers
+5. seed request 原文
+6. upload payload 原文
+
+### CLI 参数策略
+
+`get` 保留现有 `-q/--question` 多问题能力。多题参数在 CLI 层拆分为：
+
+```text
+单个问题 -> question
+多个问题 -> questions
+无问题 -> skills_dir/default bank
+```
+
+`init` 和 `save-state` 可保留 `--chrome-path`。`--new-chrome` 只允许作为开发排障参数，不进入普通用户默认路径。
+
+### 实现优先级建议
+
+Spec 阶段按以下顺序拆任务：
+
+1. 文档和 Skill 同步：模板目录、`.agents` 目录、README、reference。
+2. CLI help 与安装后 next_steps 文案统一。
+3. 测试补齐：文档同步、MCP schema、CLI help、next_steps、敏感字段过滤。
+4. 低风险代码整理：CDP profile 目录、`--remote-debugging-address=127.0.0.1`、`--auto-open-devtools-for-tabs` 是否降级为调试参数。
+
+不建议首个任务删除 `RufusManager.get()` 或 `BrowserAttachService`，因为它们仍是宿主无 MCP 时的兼容路径。
+
+## 2026-06-06 架构增量：手动登录态导入能力撤出 Skill/MCP
+
+### 结论
+
+手动登录态导入能力只能保留在 CLI 与 `opscli.amazon_rufus` 服务层的底层调试面，不能出现在 MCP schema、Skill 模板、已安装 Skill、README、workflow reference 或安装后 next_steps 中。
+
+目标边界：
+
+```text
+Skill
+  -> 默认调用 amazon_rufus_get
+  -> 登录态缺失时提示用户运行 watch-login
+  -> watch-login 成功后重试 amazon_rufus_get
+
+amazon_rufus_get
+  -> RufusManager.get_backend
+  -> RufusBackendSecretProvider.load
+  -> 读取本地加密状态
+```
+
+### 保留与移除
+
+1. `RufusCookieParser`、`RufusBrowserStateStore` 和 `RufusBackendSecretProvider` 可以继续作为服务层实现细节存在。
+2. MCP 工具不新增 cookie、headers、payload、curl、`storage_state` 或 CDP 参数。
+3. Skill 不编排手动导入登录态，不让用户复制请求材料，不展示相关 CLI 子命令。
+4. 安装后 next_steps 只保留 `init/watch-login` 与 `amazon_rufus_get`。
+5. 文档和测试只允许在“禁止项/内部实现/测试隔离”语境下提到敏感字段，不提供可执行手动导入流程。
+
+### 服务层约束
+
+服务层若继续读取本地状态，必须满足：
+
+1. 成功输出不包含 cookie 名值、headers、payload template、request body、完整请求或本地状态文件绝对路径。
+2. 本地状态继续加密保存。
+3. `amazon_rufus_get` 只通过 `RufusBackendSecretProvider.load(country)` 获取后端请求材料。
+4. 同 ASIN seed 可以由 `watch-login` 捕获并复用；不依赖 Skill 传入敏感材料。
+
+### MCP 不变约束
+
+`opscli/mcp/tools/amazon_rufus.py` 不新增任何工具，也不新增参数：
+
+```text
+asin
+country
+question
+questions
+skills_dir
+timeout_seconds
+```
+
+原因：
+
+1. MCP 参数会被 Agent、宿主、日志或调试界面更容易观察到。
+2. 当前 `RufusBackendSecretProvider` 已能从本地加密状态派生 Cookie header。
+3. 让状态管理留在 CLI/服务层内部可以减少 Skill 与 MCP 的敏感数据面。
+
+### Skill 边界
+
+Skill 只写流程规则：
+
+1. 默认直接调用 `amazon_rufus_get`。
+2. 如果 MCP 返回登录态缺失或捕获失败，提示并运行 `watch-login`。
+3. `watch-login` 成功后重试 `amazon_rufus_get`。
+4. Skill 不读取 cookie 原文，不解析 cookie，不把 cookie 写入报告，不提供手动状态导入命令样例。
+
+### 测试策略
+
+1. MCP schema 测试禁止敏感请求材料参数回扩。
+2. Skill 文档测试禁止手动状态导入、浏览器复制请求和敏感字段样例。
+3. 安装后 next_steps 测试禁止出现手动状态导入命令。
+4. 服务层状态读取测试继续使用假数据，避免访问真实 Amazon 或真实浏览器 profile。
+## 2026-06-06 变更需求：监听登录页并保存 Rufus streaming 请求种子
+
+### 目标
+
+本轮新增 CLI 侧登录恢复自动化能力：连接 `opscli amazon-rufus init` 打开的 CDP Chrome，实时监听用户正在操作的 Amazon 页面。当用户完成目标国家站点登录后，CLI 自动打开目标 ASIN 商品页，持续监听 `/rufus/cl/streaming` 请求，并把该请求的 curl 等价材料保存到本地加密 Rufus 状态。
+
+### 职责边界
+
+1. CLI 新增阻塞式监听入口，负责打开或连接本机调试 Chrome、检测登录完成、捕获 streaming 请求、保存本地加密状态。
+2. Skill 只编排流程：当 `amazon_rufus_get` 失败且本轮未恢复过登录态时，调用 CLI 监听入口；CLI 成功后重试 `amazon_rufus_get`。
+3. MCP 仍只暴露 `amazon_rufus_get`，不新增 `init`、`save_cookie`、`watch_login` 或 CDP 参数。
+4. curl 等价材料只在服务层内部加密保存，不进入 MCP 参数、报告、feedback、Skill 文档示例或终端明文输出。
+
+### CLI 入口
+
+推荐新增命令：
+
+```powershell
+opscli amazon-rufus watch-login <ASIN> <COUNTRY> --launch-if-needed
+```
+
+该命令阻塞执行，直到满足以下任一条件：
+
+1. 捕获到 `/rufus/cl/streaming` 请求并保存本地状态，返回脱敏 JSON 摘要。
+2. 超时未捕获请求，返回 `SEED_REQUEST_NOT_CAPTURED` 或等价 Rufus 错误。
+3. Chrome CDP 不可用，返回 `CHROME_CDP_UNAVAILABLE`。
+
+### 运行流程
+
+```text
+watch-login
+  -> 确保 Chrome CDP 可用，必要时启动调试 Chrome
+  -> 打开目标国家站点 Amazon 页面供用户登录
+  -> 注册 context/page request 监听器
+  -> 周期性检测目标国家站点登录完成
+  -> 登录完成后打开目标 ASIN 商品页
+  -> 捕获 /rufus/cl/streaming request
+  -> 捕获当前 context.storage_state()
+  -> RufusBrowserStateStore.save(..., seed_request=...)
+  -> 返回脱敏摘要
+```
+
+### 登录完成检测
+
+检测策略保持保守：
+
+1. 优先读取 Amazon 顶部账号区域文本；如果仍包含 `sign in`，视为未登录。
+2. 账号区域不再显示 sign-in 语义且当前 context 能导出目标站点 Cookie 时，视为登录完成。
+3. 即便登录检测尚未明确完成，只要监听器捕获到 `/rufus/cl/streaming`，即可直接进入保存流程；捕获请求是更强的成功信号。
+
+### 加密保存字段
+
+`RufusBrowserStateStore.save()` 保持向后兼容，新增可选 `seed_request` 参数。保存记录的规范结构对齐参考实现 `ParsedCurlRufusRequest.to_dict()`，优先保存 `curl_data`：
+
+```json
+{
+  "curl_data": {
+    "url": "<rufus streaming url>",
+    "headers": "<不含 Cookie/content-length 的请求头>",
+    "cookies": "<Cookie header，内部加密保存，不输出>",
+    "payload_template": "<request body JSON>"
+  }
+}
+```
+
+`curl_data` 是 MCP 后端获取 Rufus 的优先输入。它只存在于本地加密状态内，不进入 MCP 参数、CLI 成功输出、报告或 feedback。
+
+为兼容旧状态与现有 provider，保存记录也可以继续包含冗余派生字段：
+
+```json
+{
+  "storage_state": "<Playwright storage_state>",
+  "streaming_url": "<内部保存，不输出>",
+  "headers": "<删除 cookie/content-length 后的请求头>",
+  "payload_template": "<request body JSON>",
+  "seed_request": {
+    "request_url": "<内部保存，不输出>",
+    "page_url": "<商品页 URL>",
+    "tab_id": "<tabId>",
+    "asin": "<ASIN>",
+    "country": "<COUNTRY>",
+    "captured_at": 1710000000000
+  }
+}
+```
+
+请求头保存前必须移除 `cookie`、`authorization`、`proxy-authorization`、`content-length`。Cookie 统一保存到 `curl_data.cookies`，优先来自捕获到的 request Cookie header；如果 request headers 中没有 Cookie，再从加密 `storage_state` 派生。
+
+### 后端获取复用策略
+
+`RufusBackendSecretProvider.load(country)` 读取本地记录时，优先解析 `curl_data.url`、`curl_data.headers`、`curl_data.cookies` 和 `curl_data.payload_template`；旧字段只作为兼容 fallback。如果存在同 ASIN 的 `seed_request`，`RufusManager.get_backend()` 可以跳过 headless 页面捕获，直接用加密保存的 curl_data 请求 Rufus。若保存的 seed ASIN 与本次 ASIN 不一致，则继续走现有 headless 商品页捕获，避免用错误商品上下文。
+
+### 输出约束
+
+CLI 成功输出只允许包含：
+
+```json
+{
+  "country": "US",
+  "asin": "B0TEST1234",
+  "saved": true,
+  "login_detected": true,
+  "cookie_count": 10,
+  "origin_count": 1,
+  "streaming_request_saved": true,
+  "has_payload_template": true
+}
+```
+
+禁止输出 cookie、headers、payload_template、request body、完整 curl、storage_state、本地状态文件绝对路径。
+
+## 2026-06-06 架构增量：浏览器复制请求导入路径撤出 Skill/MCP
+
+### 目标
+
+浏览器 Network 面板复制请求只能作为服务层调试材料，不再作为 Skill、安装提示或 MCP 参数面的一部分。默认恢复路径统一为 `watch-login -> amazon_rufus_get`，由 CLI 监听真实登录页并捕获 Rufus streaming seed。
+
+### 当前边界
+
+1. `amazon_rufus_get` MCP schema 不新增 cookie、headers、curl、payload 或 `storage_state` 参数。
+2. `ops-amazon-rufus` Skill 不提示用户复制浏览器请求，不编排手动导入命令。
+3. 安装后 next_steps 不出现手动导入命令，只保留登录监听与 Rufus 获取。
+4. 服务层可以继续读取本地加密 `curl_data`，但该字段只来自内部捕获或底层调试入口。
+
+### 测试要求
+
+1. MCP schema 测试禁止敏感请求材料参数。
+2. Skill 模板和 `.agents` 已安装 Skill 测试禁止手动导入与浏览器复制请求文案。
+3. 安装后 next_steps 测试禁止手动导入命令。
+4. 服务层回归测试继续覆盖 `curl_data` 读取与脱敏输出，不把该能力升级为 Skill/MCP 暴露面。
+
+### MCP 运行时诊断结论
+
+本轮验证区分三层：
+
+1. 直接调用 `RufusManager.get_backend()`：成功返回 2 个 Rufus 答案。
+2. 直接调用当前工作区 `opscli.mcp.tools.amazon_rufus.amazon_rufus_get()`：成功返回 MCP allowlist 结构。
+3. 新建 MCP 服务验证：
+   - 进程内 `FastMCP` server + `fastmcp.Client`：`amazon_rufus_get` 可见，调用成功。
+   - 全新 `opscli-mcp --transport stdio` 子进程 + `fastmcp.Client`：`amazon_rufus_get` 可见，调用成功。
+   - 子代理独立执行同类 stdio MCP 验证：调用成功。
+
+因此当前会话已绑定的 `mcp__mcp_router.amazon_rufus_get` 返回旧的 headless 捕获错误，不代表 Rufus MCP 代码路径失败；更符合“宿主已挂载的 MCP Router 进程未加载本轮工作区代码或需要重启/刷新”的运行时问题。交付验证应以新建当前工作区 MCP 服务为准；继续使用宿主内置 MCP Router 前需要重启该 MCP 连接。
+
+## 2026-06-06 架构增量：Rufus 接口配置化
+
+### 配置项
+
+Rufus 默认题库接口和上传接口统一进入 `opscli.auth.config` 的三层配置模型：
+
+```text
+.env > ~/.config/opscli/config.ini [systems] > DEFAULTS
+```
+
+Rufus 不新增独立 endpoint 配置键，复用 opscli 既有 ops 系统地址配置：
+
+```ini
+[systems]
+ops_url = https://ops.api.xenkee.com/api
+```
+
+对应环境变量：
+
+```text
+OPSCLI_OPS_URL=http://127.0.0.1:8000/api
+```
+
+### 默认题库接口
+
+`SkillsUpdater.upgrade_ops_amazon_rufus()` 固定请求 `/opencalw/default-question-templates`，不再硬编码 `127.0.0.1`，也不暴露题库 path 配置；本地开发通过覆盖 `OPS_URL` 的 base URL 切换环境，并复用 ops 登录态。
+
+### 上传接口
+
+`RufusTransportClient.submit_upload_payload()` 按 `OPS_URL + /v1/rufus/upload` 提交 `upload_payload`，复用 `AuthClient.build_request_auth("ops")`、MCP API Key 透传和统一远端错误解析。`RufusManager` 只在显式 `submit_upload=True` 时提交；CLI 对应 `--submit-upload`，MCP 仍默认 `include_upload_payload=False` 且不上传。
+
+## 2026-06-08 架构增量：报告路径新鲜度绑定
+
+### 结论
+
+“不允许返回历史 ASIN Markdown 报告”应作为 Skill/Agent 流程层的硬约束，并在实现阶段用测试兜住。当前 MCP 运行层已经在成功路径中调用 `AnswerReportWriter.write(data)` 并返回本次生成的 `report_path`，因此首选修正不是改写报告 writer，而是禁止 Agent 脱离本次 `report_path` 去扫历史目录。
+
+### 当前正确链路
+
+```text
+amazon_rufus_get
+  -> RufusManager.get_backend(...)
+  -> AnswerReportWriter.write(data)
+  -> output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md
+  -> _build_success_payload(data)
+  -> data.report_path
+  -> Agent 只展示或读取该 report_path
+```
+
+### 新增流程不变量
+
+每次 Skill 调用维护一个非持久运行态：
+
+```text
+current_report_path = None
+```
+
+状态规则：
+
+1. `amazon_rufus_get` 成功时，设置 `current_report_path = response.data.report_path`。
+2. 登录恢复后重试成功时，用重试响应覆盖 `current_report_path`。
+3. 最终回复只允许输出 `current_report_path`。
+4. 如果用户要求读取正文，只允许读取 `current_report_path`。
+5. 如果 `current_report_path` 为空，不得按 ASIN 历史文件兜底。
+
+该状态不写入 Skill 目录、报告或 `output/` 元数据，只存在于本次 Agent 编排中。
+
+### CLI 兼容路径
+
+宿主没有 MCP 工具时才走 CLI 兼容入口。该路径必须优先解析本次命令 stdout 中的报告路径：
+
+```text
+Rufus 答案报告已保存：output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md
+```
+
+只有 stdout 未提供路径时，才允许引入一个明确的最新报告解析 helper：
+
+```python
+class RufusReportResolver:
+    """解析 Rufus 报告路径。"""
+
+    def latest_for_asin(self, *, asin: str, output_dir: Path) -> Path:
+        """按文件名时间戳和 mtime 返回最新 ASIN 报告。"""
+```
+
+解析顺序：
+
+1. 只匹配规范文件名：`<ASIN>-YYYYMMDD-HHMMSS.md`。
+2. 文件名时间戳降序。
+3. 时间戳相同则 mtime 降序。
+4. 无法唯一确定时抛出稳定错误，不返回旧文件。
+
+### 文档落点
+
+| 文件 | 需要新增的约束 |
+|---|---|
+| `SKILL.md` | 最终回复只展示本次工具返回的 `report_path`；正文也只读该路径 |
+| `references/rufus-mcp-workflow.md` | 新增“报告新鲜度约束”小节 |
+| `README.md` | 常用路径补充禁止返回历史 ASIN 报告 |
+| `tests/skills/test_ops_amazon_rufus_updater.py` | 断言模板与已安装 Skill 都包含该约束 |
+| `tests/mcp/test_amazon_rufus_tools.py` | 继续断言 MCP 成功返回 `report_path` 并写入报告 |
+
+### 非推荐方案
+
+不建议在本轮：
+
+1. 删除历史报告。
+2. 让 `AnswerReportWriter` 覆盖同 ASIN 旧报告。
+3. 在最终回复中按 ASIN 自动拼接历史报告正文。
+4. 将“最新”理解为用户当前 IDE 打开的 Markdown 文件。
+
+这些方案要么破坏历史追溯，要么仍然无法保证本次调用绑定。
+
+### 测试策略
+
+1. 文档测试：`SKILL.md`、README、workflow reference 均包含“本次 report_path”和“禁止历史报告”。
+2. 流程测试：模拟 MCP 两次返回同 ASIN 不同 `report_path`，最终只使用第二次成功路径。
+3. helper 测试：若实现 `RufusReportResolver`，创建同 ASIN 多个报告，断言返回最新时间戳/mtime 文件。
+4. 负例测试：没有本次 `report_path` 且目录中只有历史报告时，Agent/CLI helper 返回错误而不是读取旧报告。

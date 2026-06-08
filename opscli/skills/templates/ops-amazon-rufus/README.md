@@ -31,15 +31,19 @@ ops-amazon-rufus/
 - `references/question-templates.md`：默认题库和问题模板维护说明。
 - `references/rufus-report-formatting.md`：报告格式化、拒答改写和输出隐藏规则。
 
+## 接口配置
+
+默认题库 path `/opencalw/default-question-templates` 与上传 path `/v1/rufus/upload` 固定在 opscli 代码中。接口前缀域名/base URL 复用 opscli 的 `[systems] ops_url` 或 `.env` 中的 `OPSCLI_OPS_URL`；上传只有 CLI 显式传入 `--submit-upload` 时才发送。配置方式见 `references/question-templates.md` 和 `references/rufus-mcp-workflow.md`。
+
 ## 常用路径
 
 1. 用户给出 ASIN、国家站点和可选问题。
 2. Agent 先读取 `SKILL.md` 判断是否触发本 Skill。
 3. 调用 `amazon_rufus_get`，由 MCP 后端使用 headless 链路获取。
 4. 如果当前宿主未暴露 `amazon_rufus_get`，才改用 `opscli amazon-rufus get` 的本机 Chrome CDP 兼容入口；必要时使用 `--launch-if-needed`，自动发现失败后再传 `--chrome-path`。
-5. 如果 MCP 返回 `RUFUS_HEADLESS_REQUEST_ERROR`、`RUFUS_HEADLESS_CAPTURE_ERROR` 或 `RUFUS_SECRET_NOT_READY`，本次 Skill 调用尚未触发登录恢复时，按 `opscli amazon-rufus init <COUNTRY> --launch-if-needed -> 用户登录 -> opscli amazon-rufus save-state <COUNTRY> -> amazon_rufus_get` 闭环刷新本地登录态。
-6. 每次 Skill 调用最多触发一次登录恢复；保存本地登录态后仍失败时直接报错，不再重复打开登录窗口。
-7. 最终只向用户展示工具返回的 `report_path` 或报告文件路径。
+5. 如果 MCP 返回 `RUFUS_HEADLESS_REQUEST_ERROR`、`RUFUS_HEADLESS_CAPTURE_ERROR` 或 `RUFUS_SECRET_NOT_READY`，本次 Skill 调用尚未触发登录恢复时，按 `opscli amazon-rufus watch-login <ASIN> <COUNTRY> --launch-if-needed -> amazon_rufus_get` 闭环刷新本地登录态并保存请求种子。
+6. 每次 Skill 调用最多触发一次登录恢复；`watch-login` 成功后仍失败时直接报错，不再重复打开登录窗口。
+7. 最终只向用户展示本次工具返回的 `report_path` 或报告文件路径；不得返回历史 ASIN 报告。
 
 ## 文件边界
 
@@ -54,3 +58,6 @@ ops-amazon-rufus/scripts/headless_rufus.py
 ```
 
 所有获取 Rufus、读取后端授权材料、请求 Amazon Rufus 的 Python 代码必须位于 `opscli/amazon_rufus/` 或 `opscli/mcp/tools/amazon_rufus.py`。
+
+
+$ops-amazon-rufus  帮我分析美国站，B0B1MLVMY5 这个商品的信息，要问 1. 这是什么商品 2. 这个商品评价如何 ？

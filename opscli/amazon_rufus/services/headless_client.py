@@ -54,7 +54,7 @@ class HeadlessRufusClient:
         )
 
         for question in questions:
-            payload = self.replay.build_payload(seed_body_text, question, thread_id, seed.asin)
+            payload = self.replay.build_payload(seed_body_text, question, thread_id, seed.asin, origin_url=seed.page_url)
             raw_text = self._post_rufus(
                 url=normalized_url,
                 headers=request_headers,

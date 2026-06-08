@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -28,14 +29,14 @@ class RufusReplayService:
         question: str,
         thread_id: str | None = None,
         asin: str | None = None,
+        origin_url: str | None = None,
     ) -> dict:
-        """基于 seed body 复刻扩展端 Rufus 请求上下文。"""
+        """基于 curl payload_template 复刻 Rufus 请求上下文。"""
         try:
-            payload = json.loads(seed_body or "{}")
+            parsed = json.loads(seed_body or "{}")
         except json.JSONDecodeError as exc:
             raise RufusReplayError("seed request body 不是合法 JSON") from exc
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = copy.deepcopy(parsed) if isinstance(parsed, dict) else {}
         query_context = payload.setdefault("queryContext", {})
         if not isinstance(query_context, dict):
             query_context = {}
@@ -48,10 +49,16 @@ class RufusReplayService:
         if not isinstance(page_context, dict):
             page_context = {}
             payload["pageContext"] = page_context
+        page_context["pageType"] = "DETAIL_PAGE"
+        page_context["targetPageType"] = "DETAIL_PAGE"
         page_context["originPageType"] = "DETAIL_PAGE"
         normalized_asin = (asin or "").strip().upper()
         if normalized_asin:
+            if origin_url:
+                page_context["targetUrl"] = str(origin_url)
+                page_context["originUrl"] = str(origin_url)
             self._upsert_asin_metadata(page_context, "targetPageMetadata", normalized_asin)
+            self._upsert_asin_metadata(page_context, "pageMetadata", normalized_asin)
             self._upsert_asin_metadata(page_context, "originPageMetadata", normalized_asin)
 
         bottom_sheet_context = payload.setdefault("bottomSheetContext", {})
@@ -66,14 +73,13 @@ class RufusReplayService:
             payload["impressionsContext"] = impressions_context
         impressions_context["FIRST_TIME_USER_MESSAGE_SEEN_STATUS"] = "SEEN"
 
-        if thread_id:
-            history_context = payload.get("historyThreadContext")
-            if not isinstance(history_context, dict):
-                history_context = {}
-            payload["historyThreadContext"] = {
-                "threadId": thread_id,
-                "threadState": history_context.get("threadState") or "THREAD_STATE_UNKNOWN",
-            }
+        history_context = payload.get("historyThreadContext")
+        if not isinstance(history_context, dict):
+            history_context = {}
+        payload["historyThreadContext"] = {
+            "threadId": thread_id,
+            "threadState": history_context.get("threadState") or "THREAD_STATE_UNKNOWN",
+        }
         return payload
 
     def build_replay_url(self, seed: SeedRequestRecord) -> str:

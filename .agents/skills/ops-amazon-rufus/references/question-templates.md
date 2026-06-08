@@ -64,6 +64,22 @@ Skill 文档不得直接调用后端接口。如果后续需要通过 CLI 保存
 GET /opencalw/default-question-templates
 ```
 
+CLI 端固定使用该 path。前缀域名/base URL 复用 opscli 的 ops 系统地址配置，默认来自 `ops_url`。
+
+```ini
+# ~/.config/opscli/config.ini
+[systems]
+ops_url = https://ops.api.xenkee.com/api
+```
+
+本地开发环境也可以用 `.env` 覆盖同一个 base URL：
+
+```text
+OPSCLI_OPS_URL=http://127.0.0.1:8000/api
+```
+
+实际请求地址为 `{ops_url}/opencalw/default-question-templates`，并使用 ops 登录态请求。
+
 响应 `data`：
 
 ```json

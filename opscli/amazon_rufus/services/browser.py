@@ -96,6 +96,123 @@ class BrowserAttachService:
             storage_state = context.storage_state()
             return storage_state if isinstance(storage_state, dict) else {}
 
+    def watch_login_and_capture_seed_request(
+        self,
+        *,
+        asin: str,
+        country: str,
+        marketplace_url: str,
+        page_url: str,
+        cdp_url: str,
+        timeout_seconds: int,
+        chrome_path: str | None = None,
+        launch_if_needed: bool = True,
+    ) -> dict:
+        """监听登录页，登录后捕获首个 Rufus streaming 请求。"""
+        self._ensure_cdp_ready(
+            cdp_url=cdp_url,
+            timeout_seconds=min(max(timeout_seconds, 1), 10),
+            chrome_path=chrome_path,
+            launch_if_needed=launch_if_needed,
+            new_chrome=False,
+        )
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            raise ChromeCdpUnavailableError("缺少 Playwright，请安装 `opscli[amazon]`") from exc
+
+        deadline_at = time.monotonic() + max(int(timeout_seconds), 1)
+        captured: list[SeedRequestRecord] = []
+        login_detected = False
+        product_page_opened = False
+        active_page = None
+        registered_page_ids: set[int] = set()
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.connect_over_cdp(cdp_url)
+            except Exception as exc:
+                raise ChromeCdpUnavailableError(f"无法连接 Chrome CDP: {cdp_url}") from exc
+
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+
+            def register_page(page: Any) -> None:
+                page_id = id(page)
+                if page_id in registered_page_ids:
+                    return
+                registered_page_ids.add(page_id)
+
+                def on_request(request: Any) -> None:
+                    if captured:
+                        return
+                    if "/rufus/cl/streaming" not in str(getattr(request, "url", "") or ""):
+                        return
+                    body = str(getattr(request, "post_data", "") or "{}")
+                    captured.append(
+                        SeedRequestRecord(
+                            request_url=str(getattr(request, "url", "") or ""),
+                            request_headers=dict(getattr(request, "headers", {}) or {}),
+                            request_body=body,
+                            page_url=str(getattr(page, "url", "") or page_url),
+                            tab_id=self._extract_tab_id(str(getattr(request, "url", "") or ""), body),
+                            asin=asin.strip().upper(),
+                            country=country.strip().upper(),
+                            captured_at=int(time.time() * 1000),
+                        )
+                    )
+
+                page.on("request", on_request)
+
+            for page in list(getattr(context, "pages", []) or []):
+                register_page(page)
+
+            context_on = getattr(context, "on", None)
+            if callable(context_on):
+                context_on("page", register_page)
+
+            login_page = context.new_page()
+            active_page = login_page
+            register_page(login_page)
+            login_page.goto(marketplace_url, wait_until="domcontentloaded", timeout=self._remaining_ms(deadline_at))
+            login_page.bring_to_front()
+            self.current_page = login_page
+
+            while time.monotonic() < deadline_at:
+                if captured:
+                    storage_state = context.storage_state()
+                    return {
+                        "storage_state": storage_state if isinstance(storage_state, dict) else {},
+                        "seed_request": captured[0],
+                        "login_detected": login_detected,
+                    }
+
+                for page in list(getattr(context, "pages", []) or []):
+                    register_page(page)
+
+                login_detected = login_detected or self._is_marketplace_logged_in(
+                    context=context,
+                    pages=list(getattr(context, "pages", []) or []),
+                    marketplace_url=marketplace_url,
+                )
+                if login_detected and not product_page_opened:
+                    product_page = context.new_page()
+                    active_page = product_page
+                    register_page(product_page)
+                    product_page.goto(page_url, wait_until="domcontentloaded", timeout=self._remaining_ms(deadline_at))
+                    product_page.bring_to_front()
+                    self.current_page = product_page
+                    product_page_opened = True
+
+                self._wait_page_or_sleep(active_page, min(self._remaining_ms(deadline_at), 1000))
+
+        normalized_country = country.strip().upper()
+        raise SeedRequestNotCapturedError(
+            "未捕获 /rufus/cl/streaming。"
+            f"已监听目标国家站点登录页并等待 {max(int(timeout_seconds), 1)} 秒；"
+            f"请确认 {normalized_country} 站点已登录且目标商品页支持 Rufus: {page_url}"
+        )
+
     def capture_seed_request(
         self,
         *,
@@ -206,8 +323,29 @@ class BrowserAttachService:
             if callable(close):
                 close()
 
+    def clear_owned_profile(self, *, cdp_url: str = "http://127.0.0.1:9222") -> bool:
+        """删除 opscli 自己创建的 Rufus 调试 Chrome profile。"""
+        port = self._resolve_cdp_port(cdp_url)
+        root = (Path.home() / ".opscli" / "chrome-profiles").resolve()
+        profile_dir = (root / f"amazon-rufus-{port}").resolve()
+        try:
+            profile_dir.relative_to(root)
+        except ValueError as exc:
+            raise ChromeCdpUnavailableError("拒绝删除非 opscli Rufus Chrome profile") from exc
+        if profile_dir.name != f"amazon-rufus-{port}":
+            raise ChromeCdpUnavailableError("拒绝删除非 Rufus 调试 Chrome profile")
+        if not profile_dir.exists():
+            return False
+        if not profile_dir.is_dir():
+            raise ChromeCdpUnavailableError("opscli Rufus Chrome profile 不是目录，拒绝删除。")
+        try:
+            shutil.rmtree(profile_dir)
+        except OSError as exc:
+            raise ChromeCdpUnavailableError("无法删除 opscli Rufus Chrome profile，请先关闭对应调试 Chrome 后重试。") from exc
+        return True
+
     def _start_new_chrome(self, *, cdp_url: str, chrome_path: str | None) -> None:
-        """新开一个固定 profile 的 Chrome 调试窗口。"""
+        """新开一个固定 profile 的 Chromium 调试窗口。"""
         resolved_chrome = self._resolve_chrome_path(chrome_path)
         port = self._resolve_cdp_port(cdp_url)
         profile_dir = Path.home() / ".opscli" / "chrome-profiles" / f"amazon-rufus-{port}"
@@ -227,18 +365,18 @@ class BrowserAttachService:
             )
         except OSError as exc:
             raise ChromeCdpUnavailableError(
-                "无法启动 Chrome 调试窗口，请确认本机已安装 Chrome，或使用 --chrome-path 指定可执行文件。"
+                "无法启动 Chrome/Edge 调试窗口，请确认本机已安装 Chrome 或 Edge，或使用 --chrome-path 指定可执行文件。"
             ) from exc
 
     def _resolve_chrome_path(self, chrome_path: str | None) -> str:
-        """解析 Chrome 可执行文件路径。"""
+        """解析 Chrome/Edge 可执行文件路径。"""
         if chrome_path:
             candidate = Path(chrome_path).expanduser()
             if candidate.exists():
                 return str(candidate)
             raise ChromeCdpUnavailableError(f"指定的 Chrome 路径不存在: {chrome_path}")
 
-        for command in ("chrome.exe", "chrome"):
+        for command in ("chrome.exe", "chrome", "msedge.exe", "msedge"):
             found = shutil.which(command)
             if found:
                 return found
@@ -247,13 +385,16 @@ class BrowserAttachService:
             Path(os.environ.get("ProgramFiles", "")) / "Google/Chrome/Application/chrome.exe",
             Path(os.environ.get("ProgramFiles(x86)", "")) / "Google/Chrome/Application/chrome.exe",
             Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/Application/chrome.exe",
+            Path(os.environ.get("ProgramFiles", "")) / "Microsoft/Edge/Application/msedge.exe",
+            Path(os.environ.get("ProgramFiles(x86)", "")) / "Microsoft/Edge/Application/msedge.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft/Edge/Application/msedge.exe",
         ]
         for candidate in candidates:
             if candidate.exists():
                 return str(candidate)
 
         raise ChromeCdpUnavailableError(
-            "未找到 Chrome 可执行文件，请先安装 Chrome，或使用 --chrome-path 指定可执行文件。"
+            "未找到 Chrome/Edge 可执行文件，请先安装 Chrome 或 Edge，或使用 --chrome-path 指定可执行文件。"
         )
 
     def _is_cdp_available(self, cdp_url: str) -> bool:
@@ -297,3 +438,85 @@ class BrowserAttachService:
             return ""
         value = payload.get("tabId") or payload.get("tab_id")
         return str(value or "")
+
+    def _remaining_ms(self, deadline_at: float) -> int:
+        """计算距离截止时间剩余的毫秒数。"""
+        return max(int((deadline_at - time.monotonic()) * 1000), 1)
+
+    def _wait_page_or_sleep(self, page: Any, timeout_ms: int) -> None:
+        """优先用 Playwright page 等待，测试替身缺失时退回 sleep。"""
+        wait_for_timeout = getattr(page, "wait_for_timeout", None)
+        if callable(wait_for_timeout):
+            wait_for_timeout(max(int(timeout_ms), 1))
+            return
+        time.sleep(max(int(timeout_ms), 1) / 1000)
+
+    def _is_marketplace_logged_in(self, *, context: Any, pages: list[Any], marketplace_url: str) -> bool:
+        """通过登录态 Cookie key 或 Amazon 顶部工具区文本判断登录完成。"""
+        if self._has_marketplace_login_cookie(context, marketplace_url):
+            return True
+        for page in pages:
+            text = self._read_account_nav_text(page)
+            if not text:
+                continue
+            normalized = text.strip().lower()
+            if self._looks_like_signed_out_text(normalized):
+                continue
+            return True
+        return False
+
+    def _has_marketplace_login_cookie(self, context: Any, marketplace_url: str) -> bool:
+        """检查当前 CDP context 是否已有目标站点登录态 Cookie key。"""
+        host = (urlsplit(marketplace_url).hostname or "").lower()
+        storage_state = context.storage_state()
+        if not isinstance(storage_state, dict):
+            return False
+        login_cookie_names = {"sso-state-main", "at-main"}
+        for item in storage_state.get("cookies", []):
+            if not isinstance(item, dict):
+                continue
+            domain = str(item.get("domain") or "").strip().lower().lstrip(".")
+            name = str(item.get("name") or "").strip().lower()
+            if name in login_cookie_names and domain and (host == domain or host.endswith("." + domain)):
+                return True
+        return False
+
+    def _read_account_nav_text(self, page: Any) -> str:
+        """读取 Amazon 顶部工具区文本，失败时返回空字符串。"""
+        evaluate = getattr(page, "evaluate", None)
+        if not callable(evaluate):
+            return ""
+        try:
+            value = evaluate(
+                """
+                () => {
+                  const node = document.querySelector('#nav-tools');
+                  return node ? node.textContent : '';
+                }
+                """
+            )
+        except Exception:
+            return ""
+        return str(value or "")
+
+    def _looks_like_signed_out_text(self, text: str) -> bool:
+        """识别常见未登录文案。"""
+        signed_out_markers = (
+            "sign in",
+            "signin",
+            "log in",
+            "login",
+            "identifícate",
+            "identificate",
+            "identificarse",
+            "iniciar sesión",
+            "登录",
+            "登入",
+            "サインイン",
+            "ログイン",
+            "anmelden",
+            "einloggen",
+            "connexion",
+            "se connecter",
+        )
+        return any(marker in text for marker in signed_out_markers)
