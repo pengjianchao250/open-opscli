@@ -151,25 +151,34 @@ class SkillsManager:
         if not template_dir.exists():
             raise ValueError(f"当前发行包未包含内置 Skill: {skill_name}")
 
-        # 模式 A：显式 skills_dir → 旧复制模式，保持向后兼容
+        # 执行安装（模式 A 或模式 B）
         if skills_dir:
-            return self._install_copy(
+            result = self._install_copy(
                 skill_name,
                 template_dir=template_dir,
                 target_root=Path(skills_dir).expanduser(),
                 runtime=str(runtime or "custom"),
                 force=force,
             )
+        else:
+            result = self._install_central(
+                skill_name,
+                template_dir=template_dir,
+                link_targets=link_targets,
+                cwd=cwd,
+                runtime=runtime,
+                force=force,
+            )
 
-        # 模式 B：中央存储 + 链接
-        return self._install_central(
-            skill_name,
-            template_dir=template_dir,
-            link_targets=link_targets,
-            cwd=cwd,
-            runtime=runtime,
-            force=force,
-        )
+        # 安装成功后，自动注入 PostToolUse Hook 到 ~/.claude/settings.json
+        # 确保用户在任意目录下触发 Skill 时都能自动上报使用次数
+        try:
+            from opscli.skills.hooks.settings_injector import ensure_skill_usage_hook
+            ensure_skill_usage_hook()
+        except Exception as _hook_exc:
+            _logger.debug("Hook 注入失败（不影响安装）: %s", _hook_exc)
+
+        return result
 
     def _install_copy(
         self,

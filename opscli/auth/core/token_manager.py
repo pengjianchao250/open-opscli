@@ -13,6 +13,8 @@ import logging
 import os
 import threading
 from datetime import datetime, timezone, timedelta
+
+from opscli.config import __version__
 from opscli.auth.exceptions import NotAuthenticatedError, TokenFetchError
 
 try:
@@ -25,18 +27,17 @@ _logger = logging.getLogger("opscli.auth.token")
 
 
 def _get_mcp_api_key_header() -> dict[str, str]:
-    """获取 MCP API Key 请求头（仅在 HTTP/SSE 模式下有效）。
+    """获取 MCP API Key + opscli 版本请求头（仅在 HTTP/SSE 模式下有效）。
 
-    CLI（stdio）模式下 get_current_api_key() 返回 None，不会附加 header。
+    CLI（stdio）模式下 get_current_api_key() 返回 None，不会附加 API Key header，
+    但 X-Opscli-Version 始终携带。
     """
     try:
-        from opscli.mcp.context import get_current_api_key
-        api_key = get_current_api_key()
-        if api_key:
-            return {"X-MCP-API-Key": api_key}
+        from opscli.mcp.context import get_mcp_request_headers
+        return get_mcp_request_headers()
     except Exception:
         pass
-    return {}
+    return {"X-Opscli-Version": __version__}
 
 # 进程内线程锁：key = system_key
 _thread_locks: dict[str, threading.Lock] = {}
