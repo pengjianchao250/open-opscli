@@ -49,6 +49,10 @@ SellerSprite integration accounts are cached in the backend process for 10 minut
 - Always include known user-provided conditions in `params`; do not invent hidden enum values.
 - Category text can be passed directly in `params.category` or `params.node`. The backend resolves it through SellerSprite's category API before querying.
 - If SellerSprite returns multiple category matches, stop and ask the user to choose one of the returned full category paths or provide `nodeIdPath`.
+- Category parameter priority is scenario-specific:
+  - `product-research`: prefer `params.nodeIdPaths` for exact category filtering, especially after the user confirms a category candidate.
+  - `market-research`: prefer `params.departmentKeyword` for market/category search. Use `params.nodeIdPath` only when the user explicitly provides a known SellerSprite node path and wants exact-node filtering.
+- After the user confirms one category candidate for `product-research`, pass the confirmed node as `params.nodeIdPaths: ["..."]` whenever possible. Do not retry with only `nodeIdPath`, and do not drop the category filter.
 
 Clarification examples:
 
@@ -73,11 +77,11 @@ Clarification examples:
 | scenario | Required | Common optional params |
 | --- | --- | --- |
 | `competitor-lookup` | one of `keyword`, `brand`, `sellerName`, `asins`, product link | `node` / `category` |
-| `product-research` | none | `recommendationMode`, `node`/`category`, `minPrice`, `maxPrice`, `minSales`, `maxSales`, `minReviews`, `maxReviews`, `productTags`, `sellerTypes`, `keywords`, `outOfKeywords` |
+| `product-research` | none | `recommendationMode`, `nodeIdPaths`/`node`/`category`, `minPrice`, `maxPrice`, `minSales`, `maxSales`, `minReviews`, `maxReviews`, `productTags`, `sellerTypes`, `keywords`, `outOfKeywords` |
 | `keyword-miner` | `keyword` | `filterRootWord`, `amazonChoice`, `includeHighFrequency` |
 | `keyword-reverse` | `asin` | `badges` |
 | `traffic-source` | `keywordOrAsin` | `keyword`, `asin`, `asins`, `order`, `desc` |
-| `market-research` | none | `category`/`departmentKeyword`, `node`/`nodeIdPath`, `newReleaseNum`/`newReleaseMonths`, `topn`, market metric min/max fields |
+| `market-research` | none | `departmentKeyword`/`category`, `node`/`nodeIdPath`, `newReleaseNum`/`newReleaseMonths`, `topn`, market metric min/max fields |
 
 Always pass:
 
@@ -97,7 +101,7 @@ For `product-research`, 推荐模式传 `params.recommendationMode`，可用值�
 
 | 中文含义 | params 字段 |
 | --- | --- |
-| 类目 | `node` / `category` / `nodeIdPaths` |
+| 类目 | `nodeIdPaths` / `node` / `category` / `nodeIdPath` |
 | 月销量 | `minSales` / `maxSales` |
 | 月销售额 | `minAmount` / `maxAmount` |
 | 子体销量 | `minAmzUnit` / `maxAmzUnit` |
@@ -167,7 +171,7 @@ If both alias and internal field are provided, the internal field wins.
 
 | 中文含义 | params 字段 |
 | --- | --- |
-| 类目关键词搜索 | `category` / `departmentKeyword` |
+| 类目关键词搜索 | `departmentKeyword` / `category` |
 | 精确类目节点 | `node` / `nodeIdPath` |
 | 样本数量 | `sampleNumber` |
 | 头部 Listing 数量 | `topn` / `topNSelect` |
@@ -211,12 +215,13 @@ For `product-research` and `competitor-lookup`, pass category filters through `p
 - The backend calls SellerSprite's category API `/v2/competitor-lookup/nodes` with `marketId`, `table`, and `nodeLabelPath` to resolve category text.
 - You may pass natural language category text, such as `bath`, `bed frames`, or a more complete path.
 - You may also pass a SellerSprite node path directly, such as `1055398:1063236`; numeric paths are used as-is.
+- For `product-research`, the SellerSprite request field is `nodeIdPaths`. When the user confirms a returned candidate, pass `params.nodeIdPaths` as an array, for example `["165793011:166508011:3244725011"]`.
 - If the category API returns exactly one match, the backend converts it to `nodeIdPath` before querying.
 - If the category API returns multiple matches but one candidate exactly matches the provided full category path or leaf category name, the backend uses that exact match directly.
-- If the category API returns multiple matches, the run fails with candidate `nodeIdPath` and full category paths. Ask the user to choose; do not retry by guessing.
+- If the category API returns multiple matches, the run fails with candidate `nodeIdPath` and full category paths. Ask the user to choose; do not retry by guessing. After the user chooses, retry `product-research` with the chosen `nodeIdPaths` value.
 - If no category is found, ask the user for a more complete category path or a known `nodeIdPath`.
 
-For `market-research`, `params.category` is treated as SellerSprite's form field `departmentKeyword`, and `nodeIdPath` is left blank. Use `params.node` or `params.nodeIdPath` only when the user provides a known SellerSprite node path and wants exact node filtering.
+For `market-research`, prefer `params.departmentKeyword` for category/market text. `params.category` is accepted as an alias and is submitted as SellerSprite's `departmentKeyword`; `nodeIdPath` is left blank in this search mode. Use `params.node` or `params.nodeIdPath` only when the user provides a known SellerSprite node path and wants exact node filtering.
 
 ## Defaults
 

@@ -13,71 +13,44 @@ visibility: internal
 用户大多数会用中文自然语言提需求，Agent 应优先把中文意图转换成
 `keepa_run` 的 `scenario + site + params`，再执行工具。
 
+## Agent 快速执行规则
+
+1. 先把用户话术归类为商品、关键词搜索、筛选、类目、卖家、热销、折扣、秒杀之一。
+2. 站点缺省用 `US`；不要因为缺站点而追问。
+3. 必填参数齐全时直接执行 `keepa_run`；不要把内部参数确认流程暴露给用户。
+4. 只缺必填项时最多追问 1 个短问题；一次追问尽量覆盖同一场景的所有必填项。
+5. 默认导出用户可读 XLSX；只有用户明确要原始数据、后端比对或 JSON 时才用 JSON。
+6. 最终回复只给业务结果：查询对象、站点、返回行数、导出文件或链接。
+7. 不主动展示 API Key、账号来源、token 消耗、额度余额、内部参数、`params.json`、`raw.json`。
+
 ## 工具列表
 
 - `keepa_spec_must_read`: read this guide before first use.
 - `keepa_scenarios`: list supported Keepa scenarios.
-- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX.
+- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX. `export_format` accepts `xls`/`xlsx`/`json`; `xls` and `xlsx` both generate `.xlsx`.
 - `keepa_job_status`: read a saved task result by `job_id`.
 - `keepa_export`: read export path or cloud URL, filename, format, and MIME type.
 
 不要向用户推荐或暴露单独的 token 状态查询。Keepa 额度由系统内部管理。
 
-## 中文自然语言流程
+## 输入识别规则
 
-1. 识别用户要查什么：商品、关键词搜索、筛选、类目、卖家、热销、折扣、秒杀。
-2. 识别站点：用户未指定时默认 `US`。用户说美国/美区/亚马逊美国都映射为 `US`。
-3. 抽取必填参数：ASIN、关键词、类目 ID、seller ID 等。
-4. 参数足够时直接调用 `keepa_run`，不要先反复确认。
-5. 参数不足时只问缺失的必填项，最多问 1 个短问题。
-6. 默认导出 XLSX，除非用户明确要求 JSON 或“后端对比原始数据”。
-7. 回答用户时只说查询完成、站点、场景、行数、导出文件/链接。不要展示 token 消耗、剩余额度、API Key、账号来源。
+- ASIN 通常是 10 位，由大写字母和数字组成，常见形态为 `B0XXXXXXXX` 或 `B00XXXXXXX`。
+- 多个 ASIN / seller ID / category id 支持用户用逗号、空格、顿号、换行分隔；调用前规范化为数组或逗号字符串均可。
+- UPC/EAN/ISBN-13 等条码走 `code`/`codes`；不要和 `asin`/`asins` 同时传给 `product`。
+- 用户同时给 ASIN 和关键词时，以明确动作判断：说“查这个 ASIN”走 `product`，说“搜关键词”走 `product-search`；意图冲突时只追问查询对象类型。
+- 用户说“最近 30 天”“近 90 天”时，优先映射为 `stats=30/90`；如果同时说“历史/曲线/走势”，再加 `history=true`。
+- 用户说“只要 ASIN”“只导出 ASIN 列表”时，`product-search` 加 `asins_only=true`。
+- 用户说“店铺商品”“店铺 ASIN”时，`seller` 加 `storefront=true`。
 
-推荐回答格式：
+## 认证与额度
 
-```text
-已完成 Keepa 商品关键词搜索并导出表格。
+- Keepa API Key 由后端读取：优先 OPS integration account `platform=keepa`，本地兜底为 `OPSCLI_KEEPA_API_KEY`。
+- Keepa 额度由系统内部管理；Agent 不向普通用户展示 API Key、账号来源、token 消耗或剩余额度。
+- `keepa_run` 会做额度预检；额度不足或等待卡住时，只回复用户稍后重试或联系运营人员。
+- 内部文件可能保留 `tokensLeft`、`tokensConsumed` 等 quota 字段，仅用于排障。
 
-站点：US
-关键词：flashlight
-返回行数：20
-导出文件：<优先使用 export.url，没有则使用 export.path>
-```
-
-如果额度不足或等待卡住：
-
-```text
-Keepa 当前可用额度不足，请稍后重试；如果持续卡住，请联系运营人员处理。
-```
-
-## 认证
-
-Keepa uses an API key. The backend first tries OPS integration account `platform=keepa`.
-Store the Keepa API key in the integration account password field. If that is unavailable,
-the local fallback is `OPSCLI_KEEPA_API_KEY`.
-
-Agent 不需要让用户感知 API Key 或账号配置。除非是开发/运营排障，不要在用户回答中提账号来源。
-
-## 额度
-
-Keepa API quota is managed internally. Do not expose account source, API key,
-or standalone token status to end users. If quota is insufficient or the request
-is stuck waiting for quota, tell the user to retry later or contact operations.
-
-Internal saved files may preserve Keepa quota fields when available:
-
-- `tokensLeft`
-- `refillIn`
-- `refillRate`
-- `tokensConsumed`
-- `tokenFlowReduction`
-
-`keepa_run` performs an internal precheck with `estimated_tokens + reserve_tokens`.
-If balance is below the threshold, it returns a user-facing insufficient-quota
-message unless `force=true` or `wait=true`. `estimated_tokens` is only a warning
-estimate; Keepa's returned `tokensConsumed` is authoritative.
-
-## 导出和落盘
+## 导出、任务与文件边界
 
 Every run writes files under the task directory:
 
@@ -87,10 +60,11 @@ Every run writes files under the task directory:
 - `<job_id>.xlsx`: default user-facing export with Chinese headers.
 - `<job_id>.json`: optional debug export when `export_format=json`, containing rows, raw response, request params, and quota fields.
 
-These files are intentionally retained for backend comparison and debugging.
-When OPS file upload is available, the export is uploaded to `keepa/exports` and
-`export.url` points to the cloud download URL. If upload fails, keep using the
-local `export.path` and do not treat the task as failed.
+- `export.url` 存在时只回复云端链接；否则回复 `export.path`。
+- 上传失败但本地导出存在时，不判定任务失败，回复本地文件路径。
+- 用户提供 `job_id` 查询结果时用 `keepa_job_status`；只问文件位置时用 `keepa_export`。
+- `job_id` 查不到时回复“未找到该 Keepa 任务”，不要暴露内部目录。
+- 不向普通用户展示 task directory、`params.json`、`raw.json`、`result.json`，除非明确要求后端比对或排障。
 
 XLSX 中文表头不是 Keepa 官方提供的，是本地导出层按场景映射生成：
 
@@ -100,26 +74,18 @@ XLSX 中文表头不是 Keepa 官方提供的，是本地导出层按场景映�
 
 `raw.json` 保留 Keepa 原始字段，后端对比以 `raw.json` 为准；XLSX 用于用户查看。
 
-## Keepa Time Minutes
+## 字段口径与时间处理
 
 Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 
 - Unix seconds: `(keepa_time + 21564000) * 60`
 - Unix milliseconds: `(keepa_time + 21564000) * 60000`
 
-Example:
-
-```text
-keepa_time = 7588958
-seconds = (7588958 + 21564000) * 60 = 1749177480
-milliseconds = 1749177480000
-utc = 2025-06-06T02:38:00Z
-```
-
-`raw_response` is never modified. Normalized `rows` add derived fields for common
-Keepa time keys, for example `lastUpdateUnixSeconds`, `lastUpdateUnixMilliseconds`,
-and `lastUpdateUtc`. For Keepa `csv` time/value arrays, normalized rows also add
-`csvUnixSeconds` while preserving the original `csv`.
+- 不在 MCP 使用规范中推断 Keepa 原始价格、评分、排名、评论、Offer 等字段的单位、倍率或空值语义；除非 Keepa 官方文档、接口说明或当前响应字段已明确说明。
+- `raw_response` 不修改；normalized `rows` 只额外补充常见时间字段，如 `lastUpdateUtc`。
+- `csv` 时间/数值数组保持 Keepa 原始结构；面向普通用户不要解释原始数组，优先让用户查看 XLSX 可读字段。
+- `raw.json` 是后端对比和排障基准；XLSX 是本地导出层生成的用户查看文件。
+- 用户追问字段单位、倍率、计算方式或准确性时，不要自行类比卖家精灵或其他数据源；应说明以 Keepa 原始响应、官方文档和后端确认口径为准。
 
 ## 场景和必填参数
 
@@ -144,7 +110,7 @@ and `lastUpdateUtc`. For Keepa `csv` time/value arrays, normalized rows also add
 - `seller` 缺 seller ID：`请提供 seller ID。`
 - `bestsellers` 缺类目：`请提供 category id 或 productGroup。`
 
-## 自然语言到参数映射
+## 参数映射与默认值
 
 | 中文表达 | 调用参数 |
 | --- | --- |
@@ -155,53 +121,58 @@ and `lastUpdateUtc`. For Keepa `csv` time/value arrays, normalized rows also add
 | `查 seller A2L77EE7U53NWQ 店铺商品` | `scenario="seller"`, `params={"seller":"A2L77EE7U53NWQ","storefront":true}` |
 | `查 172282 类目的 best sellers` | `scenario="bestsellers"`, `params={"category":"172282"}` |
 | `查 flashlight 的类目` | `scenario="category-search"`, `params={"keyword":"flashlight"}` |
-
-## 默认参数建议
+| `查这个 ASIN 最近 90 天价格走势` | `scenario="product"`, `params={"asin":"...","stats":90,"history":true}` |
+| `导出 flashlight 搜索结果，只要 ASIN` | `scenario="product-search"`, `params={"keyword":"flashlight","asins_only":true}` |
+| `查某店铺的 ASIN 列表` | `scenario="seller"`, `params={"seller":"...","storefront":true}` |
+| `查美国当前秒杀` | `scenario="lightning-deals"`, `site="US"`, `params={}` |
+| `查折扣商品，按 selection 筛选` | `scenario="deals"`, `params={"selection":{...}}` |
+| `要原始 JSON 给后端对比` | 保持原场景和参数，额外传 `export_format="json"` |
 
 - 用户未指定站点：`site="US"`。
-- 用户只说“导出”：使用默认 `export_format="xls"`。
+- 用户只说“导出”：使用默认 `export_format="xls"`，实际生成 `.xlsx`；也可显式传 `export_format="xlsx"`。
 - 用户只说“查商品详情”：建议 `stats=30`, `history=false`，减少返回体积。
 - 用户说“价格历史/历史曲线”：使用 `history=true`。
 - 用户说“只要 ASIN”：使用 `asins_only=true`。
 - 用户要求后端比对、原始数据、JSON：使用 `export_format="json"`。
+- 用户未指定页码：`product-search` 可以不传 `page`，需要显式第一页时传 `page=0`。
+- 用户要求店铺商品或店铺 ASIN：`seller` 使用 `storefront=true`。
 
 ## 用户回答规范
 
 回答要站在业务用户视角，不解释 API token、账号、内部请求参数、原始 JSON 结构。
 
-成功时包含：
+成功时固定包含：查询已完成、站点、查询对象、返回行数、导出文件。导出文件优先 `export.url`，没有再用 `export.path`。
 
-- 查询已完成。
-- 站点。
-- 查询对象，例如关键词、ASIN、seller ID、category id。
-- 返回行数。
-- 导出文件链接，优先展示 `export.url`；没有云端 URL 时展示 `export.path`。
-
-成功时不要包含：
-
-- token 消耗。
-- 剩余 tokens。
-- API Key 后缀。
-- 账号来源。
-- `params.json`、`raw.json` 等内部调试文件，除非用户明确问“后端对比文件在哪里”。
-
-当 `export.url` 是云端链接时，优先回答：
-
-```text
-导出文件：<export.url>
-```
-
-当只有本地文件时，回答：
-
-```text
-导出文件：<export.path>
-```
+成功时不要包含：token 消耗、剩余 tokens、API Key、账号来源、`params.json`、`raw.json` 等内部调试文件。
 
 当用户问“导出的数据准确吗/字段怎么来的”：
 
 ```text
-表格字段来自 Keepa 原始响应，本地导出层只做中文表头、时间、价格、评分等便于查看的转换；原始响应保存在 raw.json，可用于后端对比。
+表格字段来自 Keepa 原始响应，本地导出层只做中文表头和部分可读化处理；字段单位、倍率和准确性以 Keepa 原始响应、官方文档和后端确认口径为准。原始响应保存在 raw.json，可用于后端对比。
 ```
+
+成功模板：
+
+```text
+已完成 Keepa <场景> 查询并导出表格。
+
+站点：US
+查询对象：<关键词 / ASIN / seller ID / category id / selection>
+返回行数：<row_count>
+导出文件：<export.url 或 export.path>
+```
+
+异常和空结果模板：
+
+| 场景 | 用户回复 |
+| --- | --- |
+| 返回行数为 0 | `已完成查询，但没有返回匹配结果。\n\n站点：<site>\n查询对象：<对象>\n建议：可以换一个更宽泛的关键词，或确认站点和查询对象是否正确。` |
+| 查询对象无效或查不到 | `未查询到相关数据，请确认 ASIN、code、category id、seller ID 或站点是否正确。` |
+| 多 ASIN 部分无数据 | `查询已完成，部分 ASIN 未返回 Keepa 数据；已将可用结果导出。` |
+| Keepa 额度不足或等待卡住 | `Keepa 当前可用额度不足，请稍后重试；如果持续卡住，请联系运营人员处理。` |
+| 导出上传失败但本地文件存在 | `查询已完成，云端上传失败，已保留本地导出文件。\n\n导出文件：<export.path>` |
+| `job_id` 不存在 | `未找到该 Keepa 任务，请确认 job_id 是否正确，或重新发起查询。` |
+| Keepa API 限流/服务异常 | `Keepa 服务暂时不可用，请稍后重试；如果持续失败，请联系运营人员处理。` |
 
 ## 站点
 
@@ -209,19 +180,11 @@ Use Keepa site codes: `US`, `GB`/`UK`, `DE`, `FR`, `JP`, `CA`, `IT`, `ES`, `IN`,
 
 中文站点映射：
 
-| 中文 | site |
-| --- | --- |
-| 美国、美区、US | `US` |
-| 日本、日区、JP | `JP` |
-| 德国、德区、DE | `DE` |
-| 英国、英区、UK/GB | `GB` |
-| 法国、法区、FR | `FR` |
-| 加拿大、CA | `CA` |
-| 意大利、IT | `IT` |
-| 西班牙、ES | `ES` |
-| 印度、IN | `IN` |
-| 墨西哥、MX | `MX` |
-| 巴西、BR | `BR` |
+- 美国/美区/US -> `US`
+- 日本/日区/JP -> `JP`
+- 德国/德区/DE -> `DE`
+- 英国/英区/UK/GB -> `GB`
+- 法国/FR、加拿大/CA、意大利/IT、西班牙/ES、印度/IN、墨西哥/MX、巴西/BR 按对应站点码映射。
 
 ## 调用示例
 
@@ -236,20 +199,6 @@ Product:
     "stats": 30,
     "history": false
   }
-}
-```
-
-Seller storefront:
-
-```json
-{
-  "scenario": "seller",
-  "site": "US",
-  "params": {
-    "seller": "A2L77EE7U53NWQ",
-    "storefront": true
-  },
-  "force": true
 }
 ```
 
@@ -270,19 +219,6 @@ Product search with default XLSX export:
 
 ```text
 跑 keepa product-search，关键词 flashlight，导出结果
-```
-
-Use JSON export only for backend comparison:
-
-```json
-{
-  "scenario": "product-search",
-  "site": "US",
-  "params": {
-    "keyword": "flashlight"
-  },
-  "export_format": "json"
-}
 ```
 
 Product Finder:

@@ -58,6 +58,12 @@ class KeepaApiKeyProvider:
             )
 
         if self._remote_error:
+            message = str(self._remote_error)
+            if "暂不支持的平台" in message or "platform" in message.lower():
+                raise KeepaConfigError(
+                    "OPS 集成账号接口暂不支持平台 keepa，请先在 OPS 后端开通 keepa 平台配置，"
+                    "或临时设置 OPSCLI_KEEPA_API_KEY。"
+                )
             raise KeepaConfigError(
                 f"获取 Keepa 集成账号失败：{self._remote_error}。"
                 "请检查 OPS 授权，或设置 OPSCLI_KEEPA_API_KEY。"
