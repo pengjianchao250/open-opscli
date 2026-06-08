@@ -66,9 +66,9 @@ def test_keepa_spec_reads_internal_reference():
     result = _run(keepa_tools.keepa_spec_must_read())
 
     assert result["success"] is True
-    assert "opscli/keepa/reference" in result["data"]["spec"]
+    assert "opscli/mcp/references/keepa" in result["data"]["spec"]
     source = Path(result["data"]["source"])
-    assert source.parts[-3:] == ("keepa", "reference", "SKILL_MCP.md")
+    assert source.parts[-4:] == ("mcp", "references", "keepa", "SKILL_MCP.md")
 
 
 def test_keepa_run_accepts_params_json_string(monkeypatch):
