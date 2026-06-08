@@ -124,10 +124,10 @@ jobs:
     # 只要 build_wheels 未被整体取消即触发发布（允许个别平台 runner 获取失败）
     # 使用 Trusted Publisher (OIDC) 认证，无需维护 API Token
     if: ${{ !cancelled() && needs.build_wheels.result != 'cancelled' }}
-    runs-on: macos-latest
-    environment: pipy    # 必须与 PyPI Trusted Publisher 配置的 Environment name 一致
+    runs-on: ubuntu-22.04   # pypa/gh-action-pypi-publish 仅支持 GNU/Linux
+    environment: pipy       # 必须与 PyPI Trusted Publisher 配置的 Environment name 一致
     permissions:
-      id-token: write   # OIDC: 允许 GitHub 签发 JWT token 给 PyPI 验证身份
+      id-token: write       # OIDC: 允许 GitHub 签发 JWT token 给 PyPI 验证身份
 
     steps:
       - name: Download all wheel artifacts
