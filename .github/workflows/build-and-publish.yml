@@ -122,12 +122,9 @@ jobs:
     name: Publish to PyPI
     needs: [build_wheels, build_sdist]
     # 只要 build_wheels 未被整体取消即触发发布（允许个别平台 runner 获取失败）
-    # 使用 Trusted Publisher (OIDC) 认证，无需维护 API Token
+    # twine 使用 --skip-existing，ubuntu 等平台恢复后重跑可自动补充 wheel
     if: ${{ !cancelled() && needs.build_wheels.result != 'cancelled' }}
-    runs-on: ubuntu-22.04   # pypa/gh-action-pypi-publish 仅支持 GNU/Linux
-    environment: pipy       # 必须与 PyPI Trusted Publisher 配置的 Environment name 一致
-    permissions:
-      id-token: write       # OIDC: 允许 GitHub 签发 JWT token 给 PyPI 验证身份
+    runs-on: macos-latest
 
     steps:
       - name: Download all wheel artifacts
@@ -148,20 +145,15 @@ jobs:
       - name: List dist contents
         run: ls -lh dist/
 
-      - name: Diagnose twine verbose probe (sdist only)
-        # 诊断步骤：用 twine --verbose 单独上传 sdist 试 PyPI 真实响应
-        # 失败时不影响主流程，输出 PyPI 返回的详细 400 原因
-        # 诊断完成后可删除
-        if: always()
-        continue-on-error: true
-        env:
-          PYPI_TOKEN: ${{ secrets.PIPY_OPEN_OPSCLI }}
-        run: |
-          pip install --quiet twine
-          ls -lh dist/*.tar.gz 2>/dev/null || echo "no sdist"
-          twine upload --verbose --skip-existing dist/*.tar.gz --username __token__ --password "$PYPI_TOKEN" 2>&1 | tail -200 || true
+      - name: Set up Python for publish
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          skip-existing: true   # 已存在的文件自动跳过，re-run 时不会 400 报错
+        # 直接用最新 twine 上传，彻底绕开 action 内置的旧版 twine（不支持 Metadata-Version 2.4）
+        run: |
+          pip install --quiet twine
+          twine upload dist/* --username __token__ --password "$PYPI_TOKEN" --skip-existing
+        env:
+          PYPI_TOKEN: ${{ secrets.PIPY_OPEN_OPSCLI }}
