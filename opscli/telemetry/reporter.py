@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 
+from opscli.config import __version__
 from opscli.auth.config import get_ops_url
 
 # 遥测接收端点：ops_url + /v1/cli/telemetry
@@ -53,6 +54,7 @@ def _do_send(payload: dict) -> None:
         httpx.post(
             _TELEMETRY_URL,
             json={"events": [payload]},
+            headers={"X-Opscli-Version": __version__},
             timeout=5,
         )
     except Exception:
