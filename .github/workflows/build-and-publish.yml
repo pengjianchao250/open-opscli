@@ -148,7 +148,7 @@ jobs:
       - name: List dist contents
         run: ls -lh dist/
 
-      - name: Diagnose: twine verbose probe (sdist only)
+      - name: Diagnose twine verbose probe (sdist only)
         # 诊断步骤：用 twine --verbose 单独上传 sdist 试 PyPI 真实响应
         # 失败时不影响主流程，输出 PyPI 返回的详细 400 原因
         # 诊断完成后可删除
