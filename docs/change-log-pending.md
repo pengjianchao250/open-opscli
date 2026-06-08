@@ -1,5 +1,25 @@
 # 待归档变更记录
 
+## 2026-06-08 Amazon Rufus - 获取前登录态检查
+
+**变更原因**：用户要求在发起 Rufus 获取前先检查是否已有 Amazon 登录态；没有可用登录态时再走登录采集流程，避免 allowed/denied 路径直接获取后才失败或重复打开登录窗口。
+**改动点**：新增 `RufusManager.login_status()` 脱敏摘要能力；`opscli amazon-rufus` 新增 `login-status <COUNTRY>` 命令；`ops-amazon-rufus` Skill、README、workflow reference 和安装后提示改为 `remote-consent -> login-status -> 必要时 watch-login --close-browser -> allowed/denied 获取`；Super Dev architecture/proposal/tasks 同步追加获取前登录态检查状态机；补充 manager、CLI、Skill 文档和安装提示契约测试。
+**验证结果**：定向 RED/GREEN 已完成：`.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_core.py" -k "login_status or cli_help_exposes" -q` 通过，4 passed；`.venv/Scripts/python.exe -m pytest "tests/skills/test_ops_amazon_rufus_updater.py" -k "template_uses_mcp_boundary" -q` 通过，1 passed；`.venv/Scripts/python.exe -m pytest "tests/skills/test_cli.py" -k "rufus_outputs_login_guidance" -q` 通过，2 passed。`.venv/Scripts/opscli.exe skills install ops-amazon-rufus --skills-dir ".agents/skills" --force` 成功，安装输出已包含 `login-status` 获取前检查引导；完整回归 `.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_core.py" "tests/mcp/test_amazon_rufus_tools.py" "tests/skills/test_ops_amazon_rufus_updater.py" "tests/skills/test_cli.py" -q` 通过，109 passed；`.venv/Scripts/opscli.exe amazon-rufus login-status US --pretty` 冒烟成功，返回 `status=ready`、`can_get_backend=true`，未输出敏感字段；子代理验证 allowed 路径先执行 `remote-consent status -> login-status`，因已有登录态跳过 `watch-login` 并调用 `amazon_rufus_get`，生成 `output/amazon-rufus/B0B1MLVMY5-20260608-172248.md`；子代理验证 denied 路径先执行 `remote-consent status -> login-status`，因已有登录态跳过 `watch-login` 并调用 `opscli amazon-rufus get-backend`，生成 `output/amazon-rufus/B0B1MLVMY5-20260608-172506.md`。两次均两题有答案且未发现敏感字段泄露；测试后已将 US consent 恢复为 `allowed`。
+**影响范围**：影响 Amazon Rufus CLI、Rufus 获取前 Agent 编排、`ops-amazon-rufus` 模板与已安装 Skill 文档、安装后引导和相关测试；不改变 MCP schema，不暴露 cookie、localStorage、`storage_state`、headers、payload 或请求种子。
+**回滚方式**：回退 `opscli/amazon_rufus/services/manager.py`、`opscli/amazon_rufus/commands/cli.py`、`opscli/skills/commands/cli.py`、Rufus Skill 模板与 `.agents/skills/ops-amazon-rufus` 安装副本文档、`.super-dev/changes/amazon-rufus-remote-consent/`、`output/rufus-remote-consent-architecture.md` 和相关测试中的 `login-status` 变更。
+
+---
+
+## 2026-06-08 Amazon Rufus - 远程授权偏好与拒绝授权 CLI 获取闭环
+
+**变更原因**：Rufus Skill 需要在保存 Amazon 登录态用于 MCP/headless 任务前取得用户授权；用户拒绝时仍需完成登录采集并关闭浏览器，然后通过 CLI 复用后端获取逻辑拿到 Rufus 数据，避免把拒绝路径继续交给 MCP 获取。
+**改动点**：新增 `RemoteConsentStore` 保存 `remote-consent.json` 授权偏好摘要；`opscli amazon-rufus` 新增 `remote-consent status/set` 和 `get-backend` 命令；`watch-login` 增加 `--close-browser/--keep-browser-open`，仅关闭本次由 opscli 启动的调试浏览器；同步更新 `ops-amazon-rufus` 模板 Skill、README、workflow reference 和契约测试，约束 allowed 走 `amazon_rufus_get`，denied 走通用登录采集后调用 `opscli amazon-rufus get-backend`。
+**验证结果**：`.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_core.py" "tests/mcp/test_amazon_rufus_tools.py" "tests/skills/test_ops_amazon_rufus_updater.py" "tests/skills/test_cli.py" -q` 通过，106 passed；`.venv/Scripts/opscli.exe skills install ops-amazon-rufus --skills-dir ".agents/skills" --force` 成功，安装输出已包含 `remote-consent`、`--close-browser` 和 `get-backend` 引导；子代理用指定 `$ops-amazon-rufus` 提示词测试 allowed 路径，确认执行 `remote-consent status` 后调用 `amazon_rufus_get`，生成 `output/amazon-rufus/B0B1MLVMY5-20260608-164046.md`，两题均有答案且未发现敏感字段；denied 路径首次暴露 `watch-login --close-browser` 在 Playwright 退出后关闭浏览器导致 `Event loop is closed`，已修复关闭时序并补充 RED/GREEN 回归，复测确认执行 `remote-consent status -> watch-login --launch-if-needed --close-browser -> get-backend`，生成 `output/amazon-rufus/B0B1MLVMY5-20260608-164939.md`，两题均有答案且未发现敏感字段。失败反馈提交尝试因当前 ops JWT 401 未生成 feedback_uuid，stdio 模式无法使用 `auth_mcp_login` 自动恢复。
+**影响范围**：影响 Amazon Rufus CLI、Rufus 本地授权偏好文件、`watch-login` 浏览器生命周期、`ops-amazon-rufus` Agent 编排文档和相关测试；不改变 MCP schema，不在 MCP 参数、报告、CLI 成功输出或 Skill 文档中暴露 cookie、localStorage、`storage_state`、headers、payload 或请求种子。
+**回滚方式**：回退 `opscli/amazon_rufus/services/remote_consent.py`、`opscli/amazon_rufus/commands/cli.py`、`opscli/amazon_rufus/services/browser.py`、`opscli/amazon_rufus/services/manager.py`、`opscli/skills/commands/cli.py`、Rufus Skill 模板与 `.agents/skills/ops-amazon-rufus` 安装副本文档、`.super-dev/changes/amazon-rufus-remote-consent/` 和相关测试中的本次新增断言。
+
+---
+
 ## 2026-06-05 query metadata - 把 --dataset / --table-id 参数透传给后端 API
 
 **变更原因**：`opscli query metadata --dataset ds_xxx` 命令此前把参数仅用于本地内存过滤，远端请求拉取全量 datasets+fields，造成网络浪费、opscli 端处理负担线性增长、后端无法做权限层面针对性优化；改造为参数透传，让后端按需返回。

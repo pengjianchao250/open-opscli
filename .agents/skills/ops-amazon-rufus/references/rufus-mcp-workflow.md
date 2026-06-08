@@ -2,7 +2,7 @@
 
 ## 适用范围
 
-本文描述 `ops-amazon-rufus` 的 Rufus 获取与 MCP 工具调用规则，包括默认后端/headless 获取、问题来源选择、错误处理和报告路径输出。
+本文描述 `ops-amazon-rufus` 的 Rufus 获取与 MCP 工具调用规则，包括 remote-consent 授权偏好分流、默认后端/headless 获取、拒绝远程授权 CLI 获取、问题来源选择、错误处理和报告路径输出。
 
 题库维护见 `references/question-templates.md`。报告格式与拒答改写见 `references/rufus-report-formatting.md`。
 
@@ -12,16 +12,72 @@
 |------|------|
 | `amazon_rufus_get` | 默认使用 MCP 后端 headless 链路获取 Rufus 回答并写入报告 |
 
+CLI `opscli amazon-rufus get-backend` 复用同一套 headless 后端获取能力，用于用户拒绝远程授权或当前宿主未暴露 MCP 工具时的获取路径。
+
 ## 获取前规则
 
 1. 先确认 ASIN、国家站点和用户问题。
-2. 默认直接使用 `amazon_rufus_get`；该工具不打开可见浏览器页。
-3. 如果当前宿主未暴露 `amazon_rufus_get`，改用 opscli 正式 CLI 的本机 Chrome CDP 入口，不在 Skill 目录创建或执行 Rufus 获取脚本。
-4. 每次 Skill 调用开始时记录 `login_recovery_attempted=false`，用于限制本轮最多触发一次登录恢复。
-5. 如果 `amazon_rufus_get` 返回 `RUFUS_HEADLESS_REQUEST_ERROR`、`RUFUS_HEADLESS_CAPTURE_ERROR` 或 `RUFUS_SECRET_NOT_READY`，且 `login_recovery_attempted=false`，进入一次 CDP 登录态刷新。
-6. 登录态刷新必须先执行 `opscli amazon-rufus logout <COUNTRY> --pretty` 清理旧状态；`logout` 成功后再执行 `watch-login` 监听登录页并保存本地明文状态（敏感）与 streaming seed，再按原问题来源重新调用 `amazon_rufus_get`。
-7. 如果本轮已触发过登录态刷新，或保存后重新调用 `amazon_rufus_get` 仍失败，不再打开第二次登录窗口，直接报错。
-8. 如果成功但 `answer_count=0`，按正常 0 答案报告处理，不推断为登录恢复。
+2. 执行 `opscli amazon-rufus remote-consent status <COUNTRY> --pretty`，读取该站点远程授权偏好。
+3. 状态为 `unknown` 或 `invalid` 时，必须先询问用户是否允许保存该站点 Amazon 登录状态。用户明确回复后，用 `opscli amazon-rufus remote-consent set <COUNTRY> --allow --pretty` 或 `opscli amazon-rufus remote-consent set <COUNTRY> --deny --pretty` 保存偏好。
+4. 发起 Rufus 获取前必须执行 `opscli amazon-rufus login-status <COUNTRY> --pretty`。如果 `can_get_backend=false` 或 `status=missing/invalid`，说明没有可用登录态，先执行通用登录采集并关闭浏览器。
+5. 状态为 `allowed` 且登录态可用时，使用 `amazon_rufus_get`；该工具不打开可见浏览器页。
+6. 状态为 `denied` 且登录态可用时，使用 `opscli amazon-rufus get-backend` 获取 Rufus 数据；拒绝远程授权路径不调用 `amazon_rufus_get`。
+7. 如果当前宿主未暴露 `amazon_rufus_get`，使用 `opscli amazon-rufus get-backend` 作为正式 CLI 兼容入口，不在 Skill 目录创建或执行 Rufus 获取脚本。
+8. 每次 Skill 调用开始时记录 `login_recovery_attempted=false`，用于限制本轮最多触发一次登录恢复。
+9. 如果 allowed 路径中的 `amazon_rufus_get` 返回 `RUFUS_HEADLESS_REQUEST_ERROR`、`RUFUS_HEADLESS_CAPTURE_ERROR` 或 `RUFUS_SECRET_NOT_READY`，且 `login_recovery_attempted=false`，进入一次通用登录采集恢复。
+10. 通用登录采集恢复必须先执行 `opscli amazon-rufus logout <COUNTRY> --pretty` 清理旧状态；`logout` 成功后再执行 `watch-login` 监听登录页并保存本地明文状态（敏感）与 streaming seed，再按原问题来源重新调用 `amazon_rufus_get`。
+11. 如果本轮已触发过通用登录采集恢复，或保存后重新调用仍失败，不再打开第二次登录窗口，直接报错。
+12. 如果成功但 `answer_count=0`，按正常 0 答案报告处理，不推断为登录恢复。
+
+## 远程授权偏好
+
+读取授权偏好：
+
+```powershell
+opscli amazon-rufus remote-consent status <COUNTRY> --pretty
+```
+
+当返回 `unknown` 或 `invalid` 时，使用以下优化后的询问文案：
+
+```text
+本次 Rufus 获取需要 Amazon 登录态。是否允许 opscli 保存该站点的 Amazon 登录状态，用于后续由你的账号权限触发的 MCP/headless 任务？
+
+说明：
+- 保存的登录态仅供当前 opscli 用户使用，不会写入报告或对话回复。
+- 登录态相当于已登录会话，请使用独立、干净的 Amazon 账号。
+- 不建议在该 Amazon 账号中绑定信用卡或其他支付方式。
+
+请明确回复“允许”或“拒绝”。
+```
+
+保存允许：
+
+```powershell
+opscli amazon-rufus remote-consent set <COUNTRY> --allow --pretty
+```
+
+保存拒绝：
+
+```powershell
+opscli amazon-rufus remote-consent set <COUNTRY> --deny --pretty
+```
+
+`remote-consent` 只保存授权偏好，不保存 Amazon 登录态、cookie、localStorage、`storage_state`、headers、payload 或请求种子。
+
+## 获取前登录态检查
+
+发起 Rufus 获取前，必须先检查本地是否已有可用登录态：
+
+```powershell
+opscli amazon-rufus login-status <COUNTRY> --pretty
+```
+
+判断规则：
+
+- `can_get_backend=true`：本机已有可用于 Rufus 后端/headless 获取的 Amazon 登录态，继续按 remote-consent 分支获取。
+- `can_get_backend=false` 或 `status=missing/invalid`：没有可用登录态，先执行通用登录采集。
+
+`login-status` 只输出 `status`、`has_login_state`、`can_get_backend`、`session_cookie_count`、`has_streaming_request` 等脱敏摘要。不要让 Agent 读取或展示本地状态文件内容。
 
 ## 超时预算
 
@@ -55,9 +111,9 @@ amazon_rufus_get(asin="B0TEST1234", country="US", skills_dir=".agents/skills")
 
 临时问题模式传入后会跳过默认题库。不要把多个问题拼成一个长字符串，也不要为了多个临时问题改用默认题库。
 
-## opscli 登录页监听入口
+## 通用登录采集入口
 
-当 MCP 默认链路返回三类登录态相关错误时，先用 opscli 清理旧 Rufus 登录态，再打开或连接目标国家站点登录窗口，实时检测用户是否完成登录，并捕获目标 ASIN 商品页的 `/rufus/cl/streaming` 请求种子。保存完成后继续调用 `amazon_rufus_get`；不要把 CDP 参数、cookie、headers、payload、完整请求或 `storage_state` 暴露给 MCP 入参。
+当用户拒绝远程授权，或 allowed 路径中的 MCP 默认链路返回三类登录态相关错误时，使用通用登录采集入口。`watch-login` 底层使用 Chrome CDP 打开或连接目标国家站点登录窗口，实时检测用户是否完成登录，并捕获目标 ASIN 商品页的 `/rufus/cl/streaming` 请求种子。不要把 CDP 参数、cookie、headers、payload、完整请求或 `storage_state` 暴露给 MCP 入参。
 
 恢复前清理旧状态：
 
@@ -65,7 +121,7 @@ amazon_rufus_get(asin="B0TEST1234", country="US", skills_dir=".agents/skills")
 opscli amazon-rufus logout <COUNTRY> --pretty
 ```
 
-`logout` 成功后再执行 `watch-login`。如果 `logout` 因 opscli-owned Chrome profile 被占用失败，不要自动降级到 `--no-browser-profile`；应提示用户关闭对应调试 Chrome 后重试，避免继续复用旧登录态。
+`logout` 成功后再执行 `watch-login`。如果 `logout` 因 opscli-owned Chrome profile 被占用失败，不要自动降级到 `--no-browser-profile`；应提示用户关闭对应调试 Chrome 后重试，避免继续复用旧登录态。拒绝远程授权路径不需要先执行 `logout`，除非本次采集明确需要清理旧状态。
 
 监听登录页并保存本地明文状态（敏感）：
 
@@ -73,10 +129,16 @@ opscli amazon-rufus logout <COUNTRY> --pretty
 opscli amazon-rufus watch-login B0TEST1234 US --launch-if-needed
 ```
 
+需要采集完成后关闭本次由 opscli 启动的调试浏览器时，使用：
+
+```powershell
+opscli amazon-rufus watch-login <ASIN> <COUNTRY> --launch-if-needed --close-browser
+```
+
 如果自动发现 Chrome 失败，再询问用户 Chrome 可执行文件路径，并追加 `--chrome-path`：
 
 ```powershell
-opscli amazon-rufus watch-login B0TEST1234 US --launch-if-needed --chrome-path "C:/Program Files/Google/Chrome/Application/chrome.exe"
+opscli amazon-rufus watch-login B0TEST1234 US --launch-if-needed --close-browser --chrome-path "C:/Program Files/Google/Chrome/Application/chrome.exe"
 ```
 
 `watch-login` 是阻塞命令：它会打开 Amazon 页面供用户登录，命令内部持续监听页面登录状态和 `/rufus/cl/streaming` 请求。用户无需在 Agent 会话中额外回复“已登录”；命令捕获成功后会自动保存当前 CDP profile 的登录态和请求种子到本地明文状态（敏感）。
@@ -118,32 +180,42 @@ amazon_rufus_get(
 )
 ```
 
-## opscli 兼容获取入口
+## 拒绝远程授权 CLI 获取入口
 
-如果当前宿主没有暴露 `amazon_rufus_get`，可改用正式 CLI 的本机 Chrome CDP 获取入口；MCP 默认链路仍保持后端/headless 获取，不把 CDP 参数暴露给 MCP。
+如果用户拒绝远程授权，先执行 `login-status` 检查；没有可用登录态时完成通用登录采集并关闭浏览器，然后调用正式 CLI 的 headless 后端获取入口。该入口复用 MCP 中的 Rufus 后端获取实现，但执行面是本机 `opscli` 命令。
 
 默认题库模式：
 
 ```powershell
-opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" --launch-if-needed
+opscli amazon-rufus login-status US --pretty
+# 如果没有可用登录态，再执行下一行
+opscli amazon-rufus watch-login B0TEST1234 US --launch-if-needed --close-browser
+opscli amazon-rufus get-backend B0TEST1234 US --skills-dir ".agents/skills"
 ```
 
 单题临时问题：
 
 ```powershell
-opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" -q "这个商品适合送礼吗？"
+opscli amazon-rufus login-status US --pretty
+# 如果没有可用登录态，再执行下一行
+opscli amazon-rufus watch-login B0TEST1234 US --launch-if-needed --close-browser
+opscli amazon-rufus get-backend B0TEST1234 US --skills-dir ".agents/skills" -q "这个商品适合送礼吗？"
 ```
 
 多题临时问题：
 
 ```powershell
-opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" -q "这个商品适合送礼吗？" -q "差评主要集中在哪些方面？"
+opscli amazon-rufus login-status US --pretty
+# 如果没有可用登录态，再执行下一行
+opscli amazon-rufus watch-login B0TEST1234 US --launch-if-needed --close-browser
+opscli amazon-rufus get-backend B0TEST1234 US --skills-dir ".agents/skills" -q "这个商品适合送礼吗？" -q "差评主要集中在哪些方面？"
 ```
 
 显式指定 Chrome 可执行文件：
 
 ```powershell
-opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" --launch-if-needed --chrome-path "C:/Program Files/Google/Chrome/Application/chrome.exe"
+opscli amazon-rufus watch-login B0TEST1234 US --launch-if-needed --close-browser --chrome-path "C:/Program Files/Google/Chrome/Application/chrome.exe"
+opscli amazon-rufus get-backend B0TEST1234 US --skills-dir ".agents/skills"
 ```
 
 CLI 成功时只提取报告文件路径作为最终输出；不要展示完整 JSON、seed request、headers、cookie、localStorage、`storage_state` 或 upload payload。
@@ -177,14 +249,14 @@ OPSCLI_OPS_URL=http://127.0.0.1:8000/api
 显式上传示例：
 
 ```powershell
-opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" --submit-upload
+opscli amazon-rufus get-backend B0TEST1234 US --skills-dir ".agents/skills" --submit-upload
 ```
 
 上传请求由 opscli 自动附带 ops 登录态；不要把 cookie、headers、payload 或完整请求材料交给 Skill 或 MCP 参数。
 
-## 三类 MCP 错误的登录态刷新
+## 三类 MCP 错误的通用登录采集恢复
 
-以下错误统一进入一次 CDP 登录态刷新：
+以下错误在 allowed 路径中统一进入一次通用登录采集恢复：
 
 ```text
 RUFUS_HEADLESS_REQUEST_ERROR
@@ -192,9 +264,9 @@ RUFUS_HEADLESS_CAPTURE_ERROR
 RUFUS_SECRET_NOT_READY
 ```
 
-`RUFUS_HEADLESS_REQUEST_ERROR` 的 message 可能是 `Rufus 请求失败: 403`。此时不要把 403 当作 MCP 服务不可用，也不要直接重复调用 `amazon_rufus_get`；按授权或页面上下文失效处理，进入一次登录态刷新。
+`RUFUS_HEADLESS_REQUEST_ERROR` 的 message 可能是 `Rufus 请求失败: 403`。此时不要把 403 当作 MCP 服务不可用，也不要直接重复调用 `amazon_rufus_get`；按授权或页面上下文失效处理，进入一次通用登录采集恢复。
 
-### 登录态刷新状态
+### 恢复状态
 
 本状态只存在于当前 Skill 调用内：
 
@@ -202,7 +274,7 @@ RUFUS_SECRET_NOT_READY
 login_recovery_attempted=false
 ```
 
-首次进入登录态刷新时立即设置：
+首次进入通用登录采集恢复时立即设置：
 
 ```text
 login_recovery_attempted=true
@@ -210,7 +282,7 @@ login_recovery_attempted=true
 
 该状态不得写入 Skill 目录、报告、`output/` 或 feedback。它只用于防止同一次 Skill 调用无限打开登录窗口。
 
-### 登录态刷新步骤
+### 恢复步骤
 
 1. 保留原始 ASIN、国家站点、`question`、`questions` 和 `skills_dir`。
 2. 先清理旧 Rufus 登录态：
@@ -222,7 +294,7 @@ opscli amazon-rufus logout <COUNTRY> --pretty
 3. `logout` 成功后再执行登录页监听和 streaming seed 捕获：
 
 ```powershell
-opscli amazon-rufus watch-login <ASIN> <COUNTRY> --launch-if-needed
+opscli amazon-rufus watch-login <ASIN> <COUNTRY> --launch-if-needed --close-browser
 ```
 
 4. `watch-login` 会阻塞等待用户在打开的目标国家站点 Amazon 窗口完成登录，并自动打开目标 ASIN 商品页监听页面请求。
@@ -254,15 +326,15 @@ amazon_rufus_get(
 如果自动发现 Chrome 失败，再询问用户 Chrome 可执行文件路径，并在 `watch-login` 中复用：
 
 ```powershell
-opscli amazon-rufus watch-login <ASIN> <COUNTRY> --launch-if-needed --chrome-path "C:/Program Files/Google/Chrome/Application/chrome.exe"
+opscli amazon-rufus watch-login <ASIN> <COUNTRY> --launch-if-needed --close-browser --chrome-path "C:/Program Files/Google/Chrome/Application/chrome.exe"
 ```
 
 ### 二次失败处理
 
-如果登录态刷新后仍返回任意错误，或者再次命中上述三类错误，不再触发第二次登录。建议提示：
+如果通用登录采集恢复后仍返回任意错误，或者再次命中上述三类错误，不再触发第二次登录。建议提示：
 
 ```text
-本次 Skill 调用已触发过一次登录态刷新，仍未成功；为避免重复登录循环，不再打开第二次登录窗口。错误：<ERROR_CODE>: <message>
+本次 Skill 调用已触发过一次通用登录采集恢复，仍未成功；为避免重复登录循环，不再打开第二次登录窗口。错误：<ERROR_CODE>: <message>
 ```
 
 不要把多个问题拼成一个长字符串，不要在恢复路径改跑默认题库，不要输出 cookie、localStorage、`storage_state`、headers、seed request 或 upload payload。

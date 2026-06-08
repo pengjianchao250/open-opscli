@@ -432,6 +432,50 @@ def test_answer_report_writer_writes_relative_report_path(tmp_path: Path):
     assert "适合送礼" in report_path.read_text(encoding="utf-8")
 
 
+def test_remote_consent_store_status_and_country_scope(tmp_path: Path):
+    from opscli.amazon_rufus.services.remote_consent import RemoteConsentStore
+
+    store = RemoteConsentStore(base_dir=tmp_path)
+
+    assert store.status("US") == {
+        "country": "US",
+        "status": "unknown",
+        "use_remote_authorization": None,
+        "updated_at": None,
+        "source": None,
+    }
+
+    saved = store.save(country="us", allowed=True, source="codex-agent")
+    payload = json.loads((tmp_path / "remote-consent.json").read_text(encoding="utf-8"))
+
+    assert saved["status"] == "allowed"
+    assert saved["use_remote_authorization"] is True
+    assert payload["country"] == "US"
+    assert payload["use_remote_authorization"] is True
+    assert payload["source"] == "codex-agent"
+    assert store.status("DE") == {
+        "country": "DE",
+        "status": "unknown",
+        "use_remote_authorization": None,
+        "updated_at": None,
+        "source": None,
+    }
+
+
+def test_remote_consent_store_reports_invalid_json(tmp_path: Path):
+    from opscli.amazon_rufus.services.remote_consent import RemoteConsentStore
+
+    (tmp_path / "remote-consent.json").write_text("{bad json", encoding="utf-8")
+
+    assert RemoteConsentStore(base_dir=tmp_path).status("US") == {
+        "country": "US",
+        "status": "invalid",
+        "use_remote_authorization": None,
+        "updated_at": None,
+        "source": None,
+    }
+
+
 def test_manager_builds_upload_payload_with_questions(tmp_path: Path):
     manager = RufusManager()
     questions = ["问题0", "问题1"]
@@ -920,15 +964,28 @@ def test_cli_help_exposes_init_and_cdp_options():
     root_help = runner.invoke(app, ["--help"])
     get_help = runner.invoke(app, ["get", "--help"])
     init_help = runner.invoke(app, ["init", "--help"])
+    backend_help = runner.invoke(app, ["get-backend", "--help"])
+    consent_help = runner.invoke(app, ["remote-consent", "--help"])
+    login_status_help = runner.invoke(app, ["login-status", "--help"])
 
     assert root_help.exit_code == 0
     assert get_help.exit_code == 0
     assert init_help.exit_code == 0
+    assert backend_help.exit_code == 0
+    assert consent_help.exit_code == 0
+    assert login_status_help.exit_code == 0
     assert "init" in root_help.stdout
     assert "save-state" in root_help.stdout
     assert "watch-login" in root_help.stdout
+    assert "get-backend" in root_help.stdout
+    assert "remote-consent" in root_help.stdout
+    assert "login-status" in root_help.stdout
     assert "--chrome-path" in init_help.stdout
     assert "launch-if-needed" in init_help.stdout
+    assert "--submit-upload" in backend_help.stdout
+    assert "国家名" in login_status_help.stdout
+    assert "status" in consent_help.stdout
+    assert "set" in consent_help.stdout
     for text in [
         "--cdp-url",
         "--new-chrome",
@@ -980,6 +1037,125 @@ def test_cli_get_writes_manager_result_to_report_file(monkeypatch, tmp_path: Pat
     assert captured["launch_if_needed"] is False
     assert captured["timeout_seconds"] == 180
     assert captured["submit_upload"] is False
+
+
+def test_cli_get_backend_calls_backend_manager_and_writes_report(monkeypatch, tmp_path: Path):
+    captured = {}
+
+    class DummyManager:
+        def get(self, **kwargs):
+            raise AssertionError("get-backend 不应调用 CDP get")
+
+        def get_backend(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "asin": kwargs["asin"],
+                "country": kwargs["country"],
+                "page_url": "https://www.amazon.com/dp/B0TEST1234",
+                "question_count": len(kwargs["questions"]),
+                "questions": kwargs["questions"],
+                "answers": [
+                    {"text": f"答案：{question}", "isSuccess": True, "summaryText": ""}
+                    for question in kwargs["questions"]
+                ],
+                "seed_request": {
+                    "request_headers": {"cookie": "session-id=hidden"},
+                    "request_body": '{"storage_state":"hidden"}',
+                },
+            }
+
+    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "get-backend",
+            "B0TEST1234",
+            "US",
+            "-q",
+            "这是什么商品？",
+            "-q",
+            "这个商品评价如何？",
+        ],
+    )
+    report_path, report_text = _read_single_rufus_report(tmp_path)
+
+    assert result.exit_code == 0
+    assert "Rufus 答案报告已保存：" in result.stdout
+    assert report_path.name.startswith("B0TEST1234-")
+    assert captured == {
+        "asin": "B0TEST1234",
+        "country": "US",
+        "question": None,
+        "questions": ["这是什么商品？", "这个商品评价如何？"],
+        "skills_dir": None,
+        "timeout_seconds": 180,
+        "include_upload_payload": True,
+        "submit_upload": False,
+    }
+    assert "这是什么商品" in report_text
+    assert "storage_state" not in report_text
+    assert "cookie" not in report_text.lower()
+
+
+def test_cli_remote_consent_status_and_set_are_safe(monkeypatch, tmp_path: Path):
+    from opscli.amazon_rufus.services import remote_consent as consent_module
+
+    monkeypatch.setattr(consent_module, "CONFIG_DIR", tmp_path)
+
+    missing = runner.invoke(app, ["remote-consent", "status", "US", "--pretty"])
+    allow = runner.invoke(app, ["remote-consent", "set", "US", "--allow", "--pretty"])
+    status = runner.invoke(app, ["remote-consent", "status", "US", "--pretty"])
+    deny = runner.invoke(app, ["remote-consent", "set", "US", "--deny", "--pretty"])
+
+    assert missing.exit_code == 0
+    assert allow.exit_code == 0
+    assert status.exit_code == 0
+    assert deny.exit_code == 0
+    assert json.loads(missing.stdout)["data"]["status"] == "unknown"
+    assert json.loads(allow.stdout)["data"]["status"] == "allowed"
+    assert json.loads(status.stdout)["data"]["use_remote_authorization"] is True
+    assert json.loads(deny.stdout)["data"]["status"] == "denied"
+
+    combined = missing.stdout + allow.stdout + status.stdout + deny.stdout
+    for forbidden in ["cookie", "storage_state", "headers", "payload", "seed_request"]:
+        assert forbidden not in combined.lower()
+
+
+def test_cli_login_status_outputs_safe_summary(monkeypatch, tmp_path: Path):
+    from opscli.amazon_rufus.services import browser_state_store as state_module
+    from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
+
+    monkeypatch.setattr(state_module, "CONFIG_DIR", tmp_path)
+    store = RufusBrowserStateStore(base_dir=tmp_path / "amazon-rufus")
+    missing = runner.invoke(app, ["login-status", "US", "--pretty"])
+    store.save(
+        country="US",
+        marketplace_origin="https://www.amazon.com",
+        storage_state={
+            "cookies": [{"name": "session-id", "value": "abc", "domain": ".amazon.com", "path": "/"}],
+            "origins": [],
+        },
+    )
+    ready = runner.invoke(app, ["login-status", "US", "--pretty"])
+
+    assert missing.exit_code == 0
+    assert ready.exit_code == 0
+    assert json.loads(missing.stdout)["data"]["status"] == "missing"
+    ready_payload = json.loads(ready.stdout)
+    assert ready_payload["command"] == "amazon-rufus login-status"
+    assert ready_payload["data"] == {
+        "country": "US",
+        "status": "ready",
+        "has_login_state": True,
+        "can_get_backend": True,
+        "session_cookie_count": 1,
+        "has_streaming_request": False,
+    }
+    combined = missing.stdout + ready.stdout
+    for forbidden in ["session-id=abc", "storage_state", "\"headers\"", "\"payload\"", "\"seed_request\""]:
+        assert forbidden not in combined
 
 
 def test_cli_get_submit_upload_flag_forwards_to_manager(monkeypatch, tmp_path: Path):
@@ -1692,6 +1868,109 @@ def test_browser_watch_login_detects_login_and_captures_streaming_request(monkey
     assert result["storage_state"]["cookies"][0]["name"] == "session-id"
 
 
+def test_browser_watch_login_closes_launched_browser_when_requested(monkeypatch):
+    from opscli.amazon_rufus.services.browser import BrowserAttachService
+
+    calls = []
+    state = {"playwright_active": False}
+
+    class FakeRequest:
+        url = "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
+        headers = {"content-type": "application/json", "cookie": "session-id=abc"}
+        post_data = '{"queryContext": {"query": "seed"}}'
+
+    class FakePage:
+        def __init__(self, name):
+            self.name = name
+            self.url = ""
+            self.handler = None
+
+        def on(self, event, handler):
+            if event == "request":
+                self.handler = handler
+
+        def goto(self, url, wait_until=None, timeout=None):
+            self.url = url
+            if "/dp/" in url and self.handler:
+                self.handler(FakeRequest())
+
+        def bring_to_front(self):
+            return None
+
+        def wait_for_timeout(self, timeout_ms):
+            return None
+
+        def evaluate(self, script):
+            return "Hello, Alice"
+
+    class FakeContext:
+        def __init__(self):
+            self.pages = []
+
+        def new_page(self):
+            page = FakePage(f"page-{len(self.pages) + 1}")
+            self.pages.append(page)
+            return page
+
+        def on(self, event, handler):
+            return None
+
+        def storage_state(self):
+            return {
+                "cookies": [{"name": "session-id", "value": "abc", "domain": ".amazon.com", "path": "/"}],
+                "origins": [],
+            }
+
+    class FakeSession:
+        def send(self, command):
+            if not state["playwright_active"]:
+                calls.append(("send-after-playwright-exit", command))
+                raise RuntimeError("Event loop is closed! Is Playwright already stopped?")
+            calls.append(("session-send", command))
+
+    class FakeBrowser:
+        def __init__(self):
+            self.contexts = [FakeContext()]
+
+        def new_browser_cdp_session(self):
+            return FakeSession()
+
+    class FakeChromium:
+        def connect_over_cdp(self, cdp_url):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def __enter__(self):
+            state["playwright_active"] = True
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            state["playwright_active"] = False
+            return False
+
+    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
+    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+    monkeypatch.setattr(BrowserAttachService, "_ensure_cdp_ready", lambda self, **kwargs: True)
+
+    BrowserAttachService().watch_login_and_capture_seed_request(
+        asin="B0TEST1234",
+        country="US",
+        marketplace_url="https://www.amazon.com",
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        cdp_url="http://127.0.0.1:9333",
+        timeout_seconds=30,
+        chrome_path=None,
+        launch_if_needed=True,
+        close_browser=True,
+    )
+
+    assert ("session-send", "Browser.close") in calls
+    assert ("send-after-playwright-exit", "Browser.close") not in calls
+
+
 def test_browser_login_detection_uses_nav_tools_text_without_account_list_selector():
     from opscli.amazon_rufus.services.browser import BrowserAttachService
 
@@ -2152,6 +2431,74 @@ def test_manager_cookie_status_returns_masked_summary(tmp_path: Path):
     assert "abc" not in json.dumps(result, ensure_ascii=False)
 
 
+def test_manager_login_status_reports_missing_and_ready_state(tmp_path: Path):
+    from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
+
+    store = RufusBrowserStateStore(base_dir=tmp_path)
+    manager = RufusManager(browser_state_store=store)
+
+    assert manager.login_status(country="US") == {
+        "country": "US",
+        "status": "missing",
+        "has_login_state": False,
+        "can_get_backend": False,
+        "session_cookie_count": 0,
+        "has_streaming_request": False,
+    }
+
+    store.save(
+        country="US",
+        marketplace_origin="https://www.amazon.com",
+        storage_state={
+            "cookies": [
+                {"name": "session-id", "value": "abc", "domain": ".amazon.com", "path": "/"},
+                {"name": "session-token", "value": "secret-token", "domain": ".amazon.com", "path": "/"},
+            ],
+            "origins": [],
+        },
+        seed_request=SeedRequestRecord(
+            request_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+            request_headers={"cookie": "session-id=abc; session-token=secret-token"},
+            request_body='{"queryContext": {"query": "seed"}}',
+            page_url="https://www.amazon.com/dp/B0TEST1234",
+            tab_id="tab-1",
+            asin="B0TEST1234",
+            country="US",
+            captured_at=123,
+        ),
+    )
+
+    ready = manager.login_status(country="US")
+
+    assert ready == {
+        "country": "US",
+        "status": "ready",
+        "has_login_state": True,
+        "can_get_backend": True,
+        "session_cookie_count": 2,
+        "has_streaming_request": True,
+    }
+    serialized = json.dumps(ready, ensure_ascii=False)
+    assert "abc" not in serialized
+    assert "secret-token" not in serialized
+
+
+def test_manager_login_status_reports_invalid_state(tmp_path: Path):
+    from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
+
+    (tmp_path / "browser-state-US.json").write_text("{bad json", encoding="utf-8")
+    manager = RufusManager(browser_state_store=RufusBrowserStateStore(base_dir=tmp_path))
+
+    assert manager.login_status(country="US") == {
+        "country": "US",
+        "status": "invalid",
+        "has_login_state": False,
+        "can_get_backend": False,
+        "session_cookie_count": 0,
+        "has_streaming_request": False,
+    }
+
+
 def test_browser_state_store_delete_is_idempotent(tmp_path: Path):
     from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
 
@@ -2277,6 +2624,7 @@ def test_manager_watch_login_saves_state_and_streaming_seed(tmp_path: Path):
         timeout_seconds=120,
         chrome_path="C:/Program Files/Google/Chrome/Application/chrome.exe",
         launch_if_needed=True,
+        close_browser=True,
     )
     loaded = store.load("US")
 
@@ -2289,6 +2637,7 @@ def test_manager_watch_login_saves_state_and_streaming_seed(tmp_path: Path):
         "timeout_seconds": 120,
         "chrome_path": "C:/Program Files/Google/Chrome/Application/chrome.exe",
         "launch_if_needed": True,
+        "close_browser": True,
     }
     assert result == {
         "country": "US",
@@ -2467,6 +2816,7 @@ def test_cli_watch_login_outputs_safe_summary(monkeypatch):
             "120",
             "--chrome-path",
             "C:/Program Files/Google/Chrome/Application/chrome.exe",
+            "--close-browser",
             "--pretty",
         ],
     )
@@ -2481,6 +2831,7 @@ def test_cli_watch_login_outputs_safe_summary(monkeypatch):
         "timeout_seconds": 120,
         "chrome_path": "C:/Program Files/Google/Chrome/Application/chrome.exe",
         "launch_if_needed": True,
+        "close_browser": True,
     }
     assert payload["success"] is True
     assert payload["command"] == "amazon-rufus watch-login"

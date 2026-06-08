@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from opscli.amazon_rufus.constants import DEFAULT_RUFUS_TIMEOUT_SECONDS
-from opscli.amazon_rufus.domain.exceptions import InvalidQuestionError, InvalidRufusCookieError, InvalidRufusCurlError
+from opscli.amazon_rufus.domain.exceptions import InvalidQuestionError, InvalidRufusBrowserStateError, InvalidRufusCookieError, InvalidRufusCurlError
 from opscli.amazon_rufus.domain.models import SeedRequestRecord
 from opscli.amazon_rufus.runtime.country_map import build_product_url, resolve_marketplace
 from opscli.amazon_rufus.services.backend_secret import RufusBackendSecretProvider
@@ -126,6 +126,7 @@ class RufusManager:
         timeout_seconds: int = DEFAULT_RUFUS_TIMEOUT_SECONDS,
         chrome_path: str | None = None,
         launch_if_needed: bool = True,
+        close_browser: bool = False,
     ) -> dict:
         """监听登录页并保存 Rufus streaming 请求种子。"""
         normalized_asin = asin.strip().upper()
@@ -141,6 +142,7 @@ class RufusManager:
             timeout_seconds=timeout_seconds,
             chrome_path=chrome_path,
             launch_if_needed=launch_if_needed,
+            close_browser=close_browser,
         )
         storage_state = capture.get("storage_state")
         seed_request = capture.get("seed_request")
@@ -273,6 +275,48 @@ class RufusManager:
             "cookie_count": cookie_count,
             "can_build_cookie_header": can_build_cookie_header,
         }
+
+    def login_status(self, *, country: str) -> dict:
+        """读取本地 Amazon 登录态并返回 Rufus 获取前可用性摘要。"""
+        marketplace = resolve_marketplace(country.strip().upper())
+        try:
+            record = self.browser_state_store.load(marketplace.country)
+        except InvalidRufusBrowserStateError:
+            return self._login_status_payload(
+                country=marketplace.country,
+                status="invalid",
+                has_login_state=False,
+                can_get_backend=False,
+                session_cookie_count=0,
+                has_streaming_request=False,
+            )
+        if not isinstance(record, dict):
+            return self._login_status_payload(
+                country=marketplace.country,
+                status="missing",
+                has_login_state=False,
+                can_get_backend=False,
+                session_cookie_count=0,
+                has_streaming_request=False,
+            )
+
+        storage_state = record.get("storage_state")
+        session_cookie_count = len(storage_state.get("cookies", [])) if isinstance(storage_state, dict) else 0
+        can_get_backend = False
+        if isinstance(storage_state, dict):
+            try:
+                can_get_backend = bool(self.browser_state_store.build_cookie_header(storage_state, marketplace.base_url))
+            except (InvalidRufusBrowserStateError, InvalidRufusCookieError):
+                can_get_backend = False
+        status = "ready" if can_get_backend else "invalid"
+        return self._login_status_payload(
+            country=marketplace.country,
+            status=status,
+            has_login_state=can_get_backend,
+            can_get_backend=can_get_backend,
+            session_cookie_count=session_cookie_count if can_get_backend else 0,
+            has_streaming_request=self._has_saved_streaming_request(record) if can_get_backend else False,
+        )
 
     def get(
         self,
@@ -560,6 +604,37 @@ class RufusManager:
         except json.JSONDecodeError:
             return {}
         return parsed if isinstance(parsed, dict) else {}
+
+    def _login_status_payload(
+        self,
+        *,
+        country: str,
+        status: str,
+        has_login_state: bool,
+        can_get_backend: bool,
+        session_cookie_count: int,
+        has_streaming_request: bool,
+    ) -> dict:
+        """构造获取前登录态检查的脱敏摘要。"""
+        return {
+            "country": country,
+            "status": status,
+            "has_login_state": has_login_state,
+            "can_get_backend": can_get_backend,
+            "session_cookie_count": session_cookie_count,
+            "has_streaming_request": has_streaming_request,
+        }
+
+    def _has_saved_streaming_request(self, record: dict[str, Any]) -> bool:
+        """判断本地状态是否包含已保存的 Rufus streaming 请求摘要。"""
+        seed = record.get("seed_request")
+        curl_data = record.get("curl_data")
+        request_url = ""
+        if isinstance(seed, dict):
+            request_url = str(seed.get("request_url") or "")
+        if not request_url and isinstance(curl_data, dict):
+            request_url = str(curl_data.get("url") or "")
+        return "/rufus/cl/streaming" in request_url
 
     def _can_use_saved_seed(self, seed: Any, *, asin: str, country: str) -> bool:
         """仅复用同 ASIN、同国家站点的本地 streaming seed。"""

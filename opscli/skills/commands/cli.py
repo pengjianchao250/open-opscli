@@ -67,9 +67,11 @@ _TOOL_LABELS = {
 # ops-amazon-rufus 安装后引导信息
 _AMAZON_RUFUS_SKILL_NAME = "ops-amazon-rufus"
 _AMAZON_RUFUS_NEXT_STEPS = [
-    "使用前必须先登录对应国家站点的 Amazon 账户。",
-    "登录恢复时执行 opscli amazon-rufus watch-login <asin> <country> --launch-if-needed，命令会监听登录页并捕获 Rufus streaming 请求。",
-    "watch-login 成功后再调用 amazon_rufus_get 或继续对应的 Rufus MCP 获取流程。",
+    "先执行 opscli amazon-rufus remote-consent status <country> --pretty 读取该站点远程授权偏好。",
+    "未询问过时让用户明确回复“允许”或“拒绝”；请建议使用独立干净的 Amazon 账号，且不建议绑定信用卡或支付方式。",
+    "发起 Rufus 获取前执行 opscli amazon-rufus login-status <country> --pretty；没有可用登录态时执行 opscli amazon-rufus watch-login <asin> <country> --launch-if-needed --close-browser。",
+    "允许远程授权且登录态可用时调用 amazon_rufus_get；如需恢复登录态，执行 watch-login 后重试 MCP 获取。",
+    "拒绝远程授权且登录态可用时调用 opscli amazon-rufus get-backend <asin> <country>。",
 ]
 
 # marketplace list 命令的参数枚举与面板标题

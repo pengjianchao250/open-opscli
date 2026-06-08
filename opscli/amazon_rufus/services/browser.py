@@ -107,9 +107,10 @@ class BrowserAttachService:
         timeout_seconds: int,
         chrome_path: str | None = None,
         launch_if_needed: bool = True,
+        close_browser: bool = False,
     ) -> dict:
         """监听登录页，登录后捕获首个 Rufus streaming 请求。"""
-        self._ensure_cdp_ready(
+        launched_by_service = self._ensure_cdp_ready(
             cdp_url=cdp_url,
             timeout_seconds=min(max(timeout_seconds, 1), 10),
             chrome_path=chrome_path,
@@ -128,83 +129,88 @@ class BrowserAttachService:
         product_page_opened = False
         active_page = None
         registered_page_ids: set[int] = set()
+        browser = None
 
         with sync_playwright() as playwright:
             try:
-                browser = playwright.chromium.connect_over_cdp(cdp_url)
-            except Exception as exc:
-                raise ChromeCdpUnavailableError(f"无法连接 Chrome CDP: {cdp_url}") from exc
+                try:
+                    browser = playwright.chromium.connect_over_cdp(cdp_url)
+                except Exception as exc:
+                    raise ChromeCdpUnavailableError(f"无法连接 Chrome CDP: {cdp_url}") from exc
 
-            context = browser.contexts[0] if browser.contexts else browser.new_context()
+                context = browser.contexts[0] if browser.contexts else browser.new_context()
 
-            def register_page(page: Any) -> None:
-                page_id = id(page)
-                if page_id in registered_page_ids:
-                    return
-                registered_page_ids.add(page_id)
-
-                def on_request(request: Any) -> None:
-                    if captured:
+                def register_page(page: Any) -> None:
+                    page_id = id(page)
+                    if page_id in registered_page_ids:
                         return
-                    if "/rufus/cl/streaming" not in str(getattr(request, "url", "") or ""):
-                        return
-                    body = str(getattr(request, "post_data", "") or "{}")
-                    captured.append(
-                        SeedRequestRecord(
-                            request_url=str(getattr(request, "url", "") or ""),
-                            request_headers=dict(getattr(request, "headers", {}) or {}),
-                            request_body=body,
-                            page_url=str(getattr(page, "url", "") or page_url),
-                            tab_id=self._extract_tab_id(str(getattr(request, "url", "") or ""), body),
-                            asin=asin.strip().upper(),
-                            country=country.strip().upper(),
-                            captured_at=int(time.time() * 1000),
+                    registered_page_ids.add(page_id)
+
+                    def on_request(request: Any) -> None:
+                        if captured:
+                            return
+                        if "/rufus/cl/streaming" not in str(getattr(request, "url", "") or ""):
+                            return
+                        body = str(getattr(request, "post_data", "") or "{}")
+                        captured.append(
+                            SeedRequestRecord(
+                                request_url=str(getattr(request, "url", "") or ""),
+                                request_headers=dict(getattr(request, "headers", {}) or {}),
+                                request_body=body,
+                                page_url=str(getattr(page, "url", "") or page_url),
+                                tab_id=self._extract_tab_id(str(getattr(request, "url", "") or ""), body),
+                                asin=asin.strip().upper(),
+                                country=country.strip().upper(),
+                                captured_at=int(time.time() * 1000),
+                            )
                         )
-                    )
 
-                page.on("request", on_request)
-
-            for page in list(getattr(context, "pages", []) or []):
-                register_page(page)
-
-            context_on = getattr(context, "on", None)
-            if callable(context_on):
-                context_on("page", register_page)
-
-            login_page = context.new_page()
-            active_page = login_page
-            register_page(login_page)
-            login_page.goto(marketplace_url, wait_until="domcontentloaded", timeout=self._remaining_ms(deadline_at))
-            login_page.bring_to_front()
-            self.current_page = login_page
-
-            while time.monotonic() < deadline_at:
-                if captured:
-                    storage_state = context.storage_state()
-                    return {
-                        "storage_state": storage_state if isinstance(storage_state, dict) else {},
-                        "seed_request": captured[0],
-                        "login_detected": login_detected,
-                    }
+                    page.on("request", on_request)
 
                 for page in list(getattr(context, "pages", []) or []):
                     register_page(page)
 
-                login_detected = login_detected or self._is_marketplace_logged_in(
-                    context=context,
-                    pages=list(getattr(context, "pages", []) or []),
-                    marketplace_url=marketplace_url,
-                )
-                if login_detected and not product_page_opened:
-                    product_page = context.new_page()
-                    active_page = product_page
-                    register_page(product_page)
-                    product_page.goto(page_url, wait_until="domcontentloaded", timeout=self._remaining_ms(deadline_at))
-                    product_page.bring_to_front()
-                    self.current_page = product_page
-                    product_page_opened = True
+                context_on = getattr(context, "on", None)
+                if callable(context_on):
+                    context_on("page", register_page)
 
-                self._wait_page_or_sleep(active_page, min(self._remaining_ms(deadline_at), 1000))
+                login_page = context.new_page()
+                active_page = login_page
+                register_page(login_page)
+                login_page.goto(marketplace_url, wait_until="domcontentloaded", timeout=self._remaining_ms(deadline_at))
+                login_page.bring_to_front()
+                self.current_page = login_page
+
+                while time.monotonic() < deadline_at:
+                    if captured:
+                        storage_state = context.storage_state()
+                        return {
+                            "storage_state": storage_state if isinstance(storage_state, dict) else {},
+                            "seed_request": captured[0],
+                            "login_detected": login_detected,
+                        }
+
+                    for page in list(getattr(context, "pages", []) or []):
+                        register_page(page)
+
+                    login_detected = login_detected or self._is_marketplace_logged_in(
+                        context=context,
+                        pages=list(getattr(context, "pages", []) or []),
+                        marketplace_url=marketplace_url,
+                    )
+                    if login_detected and not product_page_opened:
+                        product_page = context.new_page()
+                        active_page = product_page
+                        register_page(product_page)
+                        product_page.goto(page_url, wait_until="domcontentloaded", timeout=self._remaining_ms(deadline_at))
+                        product_page.bring_to_front()
+                        self.current_page = product_page
+                        product_page_opened = True
+
+                    self._wait_page_or_sleep(active_page, min(self._remaining_ms(deadline_at), 1000))
+            finally:
+                if close_browser and launched_by_service and browser is not None:
+                    self._close_new_chrome(browser)
 
         normalized_country = country.strip().upper()
         raise SeedRequestNotCapturedError(

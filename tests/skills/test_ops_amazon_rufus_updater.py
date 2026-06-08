@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from opscli.config import __version__
 from opscli.skills.manager import SkillsManager
 from opscli.skills.models import SkillRecord, SkillUpgradeResult
 from opscli.skills.updater import SkillsUpdater
@@ -73,7 +74,7 @@ def test_upgrade_ops_amazon_rufus_writes_merged_question_templates(tmp_path: Pat
 
     assert captured == {
         "url": "https://ops.example.com/api/opencalw/default-question-templates",
-        "headers": {"Authorization": "Bearer jwt-token"},
+        "headers": {"Authorization": "Bearer jwt-token", "X-Opscli-Version": __version__},
         "cookies": {"polarisUserToken": "session-123"},
         "timeout": 20,
         "follow_redirects": True,
@@ -133,7 +134,7 @@ def test_upgrade_ops_amazon_rufus_uses_fixed_question_template_path(
 
     assert captured == {
         "url": "https://ops.example.com/api/opencalw/default-question-templates",
-        "headers": {"Authorization": "Bearer jwt-token"},
+        "headers": {"Authorization": "Bearer jwt-token", "X-Opscli-Version": __version__},
         "cookies": {"polarisUserToken": "session-123"},
         "timeout": 20,
         "follow_redirects": True,
@@ -253,6 +254,17 @@ def test_ops_amazon_rufus_template_uses_mcp_boundary():
     assert "本地明文状态（敏感）" in docs
     assert "旧 `.bin`" in docs
     assert "保存完成后，重新按原问题来源调用 `amazon_rufus_get`" in docs
+    assert "remote-consent status <COUNTRY>" in docs
+    assert "opscli amazon-rufus login-status <COUNTRY> --pretty" in docs
+    assert "发起 Rufus 获取前" in docs
+    assert "can_get_backend" in docs
+    assert "没有可用登录态" in docs
+    assert "请明确回复“允许”或“拒绝”" in docs
+    assert "不建议在该 Amazon 账号中绑定信用卡" in docs
+    assert "opscli amazon-rufus get-backend" in docs
+    assert "watch-login <ASIN> <COUNTRY> --launch-if-needed --close-browser" in docs
+    assert "拒绝远程授权" in docs
+    assert "通用登录采集" in docs
     assert "--launch-if-needed" in docs
     assert "--chrome-path" in docs
     assert "Chrome CDP" in docs
@@ -284,6 +296,8 @@ def test_ops_amazon_rufus_template_uses_mcp_boundary():
         "本地加密状态",
         "本地加密浏览器状态",
         "加密请求种子",
+        "直接走 CDP",
+        "拒绝则走 CDP",
     ]:
         assert forbidden not in docs
 
