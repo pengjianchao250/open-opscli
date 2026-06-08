@@ -1,4 +1,6 @@
 from pathlib import Path
+
+from opscli.config import __version__
 from opscli.auth.storage.credential_store import CredentialStore
 from opscli.auth.core.system_registry import SystemRegistry
 from opscli.auth.core.token_manager import TokenManager
@@ -43,12 +45,13 @@ class AuthClient:
 
         当前统一返回：
         - Authorization Bearer JWT
+        - X-Opscli-Version opscli 版本号（供服务端判断是否需要提示升级）
         - polarisUserToken session cookie
         - opscliDeviceCode cookie（若本地已保存）
         """
         token = self.get_token(alias)
         session_id = self.get_session(alias)
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = {"Authorization": f"Bearer {token}", "X-Opscli-Version": __version__}
         cookies = {"polarisUserToken": session_id}
         device_code = self.get_device_code()
         if device_code:
@@ -56,8 +59,8 @@ class AuthClient:
         return headers, cookies
 
     def build_session_headers(self, alias: str | None = None) -> dict[str, str]:
-        """构造基于 session 的请求头。"""
-        return {"X-Session-Id": self.get_session(alias)}
+        """构造基于 session 的请求头，附带 opscli 版本号。"""
+        return {"X-Session-Id": self.get_session(alias), "X-Opscli-Version": __version__}
 
     def check_token(self, alias: str) -> dict:
         """检测指定系统 token 是否有效，返回 {valid, expires_in}"""
@@ -88,7 +91,7 @@ class AuthClient:
         """
         if jwt is None:
             jwt = self.get_token_by_session(session_id, alias)
-        headers = {"Authorization": f"Bearer {jwt}"}
+        headers = {"Authorization": f"Bearer {jwt}", "X-Opscli-Version": __version__}
         cookies = {"polarisUserToken": session_id}
         device_code = self.get_device_code()
         if device_code:

@@ -95,6 +95,21 @@
 
 ---
 
+## 2026-06-01 query - simple 接口 filters operator 符号写法自动标准化
+
+**变更原因**：`query simple` 的 `_validate_simple_filter_operators()` 只校验不转换，用户/AI Agent 按文档传入符号操作符（如 `=`）会被拒绝并报 `INVALID_PAYLOAD`，而 `query build` 路径已有 `_WHERE_OP_MAP` 做符号标准化。两条路径行为不一致，且文档中列出的 operator 与代码白名单不匹配。
+**改动点**：
+- `opscli/query/services/manager.py`（`_validate_simple_filter_operators` 方法）：
+  - 校验前用 `_WHERE_OP_MAP` 将符号操作符（=, >=, <=, >, <, !=, <>, ==）转换为语义操作符（eq, gte, lte, gt, lt, neq, neq, eq）
+  - 就地修改 node 的 operator 字段，确保后续 build_simple 构造 payload 时使用标准化后的值
+- `opscli/skills/templates/ops-dataset-query/references/simple-query-guide.md`：
+  - 补全所有支持的操作符（13 个语义 + 8 个符号），明确标注符号写法会自动转换
+**验证结果**：`pytest tests/query/ -v`
+**影响范围**：所有通过 `query simple` / `query_build_and_run` / MCP `query_simple` 入口传入 filters 的调用场景
+**回滚方式**：`git revert` 此次改动即可恢复原行为（符号操作符被拒绝）
+
+---
+
 ## 2026-05-29 Skills 分享码功能 - 全链路实现
 
 **变更原因**：技能广场中 personal/department 类型的技能只有创建者或同部门成员可安装。需要允许创建者生成临时分享码（默认 30 分钟有效），持码的任意登录用户可绕过权限限制完整安装技能。

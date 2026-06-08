@@ -1,7 +1,7 @@
 """Skills CLI 子命令定义。
 
 注册到 opscli 顶级命令下，提供以下子命令：
-  list / install / status / link / unlink / upgrade / report-usage  — Skill 本地生命周期
+  list / install / status / link / unlink / upgrade / report-usage — Skill 本地生命周期
   publish / edit / unpublish                                        — 技能广场发布管理
   marketplace categories / list / search / info / versions / rate  — 技能广场浏览
   sync-exclude add / remove / list                                  — 同步排除名单管理
@@ -1853,13 +1853,15 @@ def unlink_skill(
 
 @app.command("report-usage")
 def report_usage(
-    identifier: str = typer.Argument(..., help="Skill 标识符，如 pengjianchao@ops-auth"),
+    identifier: str = typer.Argument(..., help="Skill 标识符（username@skill_name 或纯 skill_name，如 ops-auth）"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """直接上报一次 Skill 使用记录到服务端（不经过本地队列）。
 
     \b
-    identifier 格式：username@skill_name，如 pengjianchao@ops-auth。
+    identifier 支持两种格式：
+      - 完整标识符：username@skill_name，如 pengjianchao@ops-auth
+      - 纯 skill_name：如 ops-auth（适用于 Hook 自动上报场景）
     """
     from datetime import datetime, timezone
 

@@ -787,7 +787,8 @@ def test_build_simple_rejects_unknown_filter_field(tmp_path, monkeypatch):
         )
 
 
-def test_build_simple_rejects_formula_metric_aggregation(tmp_path, monkeypatch):
+def test_build_simple_auto_fixes_formula_metric_aggregation(tmp_path, monkeypatch):
+    """公式字段传入 aggregation 时，自动修正为 expr + 移除 aggregation，不再报错。"""
     manager = QueryManager()
     payload = {
         "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
@@ -804,12 +805,17 @@ def test_build_simple_rejects_formula_metric_aggregation(tmp_path, monkeypatch):
     }
     _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
 
-    with pytest.raises(InvalidPayloadError, match="公式字段禁止额外聚合"):
-        manager.build_simple(
-            table_id=1103,
-            metrics=[{"field": "acos", "aggregation": "SUM"}],
-            validate_fields=True,
-        )
+    # 传入含 aggregation 的公式字段，应自动修正而非报错
+    result = manager.build_simple(
+        table_id=1103,
+        metrics=[{"field": "acos", "aggregation": "SUM"}],
+        validate_fields=True,
+    )
+    metrics_out = result["payload"]["metrics"]
+    assert len(metrics_out) == 1
+    assert "aggregation" not in metrics_out[0], "aggregation 应被自动移除"
+    assert metrics_out[0]["expr"] == "ROUND(SUM(cost) / SUM(sales), 4)", "应填入 summary_expression"
+    assert metrics_out[0]["field"] == "acos"
 
 
 def test_build_and_run_uses_built_payload(tmp_path, monkeypatch):
