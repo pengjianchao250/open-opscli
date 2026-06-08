@@ -24,6 +24,12 @@ class SifLoginError(SifError):
     code = "SIF_LOGIN_FAILED"
 
 
+class SifConfigError(SifError):
+    """Sif 本地或集成配置错误。"""
+
+    code = "SIF_CONFIG_ERROR"
+
+
 class SifApiRequestError(SifError):
     """Sif API 请求失败。"""
 
