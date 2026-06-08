@@ -17,11 +17,11 @@ from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 
 async def keepa_spec_must_read() -> dict:
-    """读取 Keepa MCP 使用规范（opscli/keepa/reference/SKILL_MCP.md）。"""
+    """读取 Keepa MCP 使用规范（opscli/mcp/references/keepa/SKILL_MCP.md）。"""
     spec_path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[1]
+        / "references"
         / "keepa"
-        / "reference"
         / "SKILL_MCP.md"
     )
     if not spec_path.exists():

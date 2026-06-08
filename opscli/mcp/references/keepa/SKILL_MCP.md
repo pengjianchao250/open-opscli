@@ -8,7 +8,7 @@ visibility: internal
 # ops-keepa MCP
 
 这是 `keepa_spec_must_read` 读取的内部 MCP 使用规范，放在
-`opscli/keepa/reference/` 下，不作为可安装用户 Skill 暴露。
+`opscli/mcp/references/keepa/` 下，不作为可安装用户 Skill 暴露。
 
 用户大多数会用中文自然语言提需求，Agent 应优先把中文意图转换成
 `keepa_run` 的 `scenario + site + params`，再执行工具。
