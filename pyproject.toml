@@ -40,3 +40,9 @@ build-backend = "setuptools.build_meta"
 # setuptools 自动发现所有子包
 where = ["."]
 include = ["opscli*"]
+
+[tool.setuptools.package-data]
+# Hook 脚本作为资源文件保留（非编译对象，由 settings_injector.py 部署到用户目录）
+"opscli" = [
+    "skills/hooks/report_skill_usage.py",
+]
