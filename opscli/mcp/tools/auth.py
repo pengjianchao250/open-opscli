@@ -66,7 +66,7 @@ def _get_isolated_store():
 def _get_mcp_request_headers() -> dict | None:
     """获取当前 MCP 请求中的 API Key + opscli 版本，用于向后端透传。
 
-    有 MCP 上下文时返回 {"X-MCP-API-Key": ..., "X-Opscli-Version": ...}；
+    有 MCP 上下文时返回 {"X-MCP-API-Key": ...}；
     stdio 模式下返回 None（调用方据此判断是否可用 MCP 一步登录）。
     """
     from opscli.mcp.context import get_current_api_key, get_mcp_request_headers

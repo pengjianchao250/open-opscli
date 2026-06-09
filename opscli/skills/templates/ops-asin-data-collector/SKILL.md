@@ -1,12 +1,35 @@
 ---
 name: ops-asin-data-collector
-description: Collects batch ASIN data from SellerSprite, Amazon scrape, crawler datasets, BI sales datasets, and Rufus through the official opscli asin-data command. Use when operations users need to fetch SellerSprite keyword reverse/miner/listing-analysis data, Amazon listing snapshots, BI sales data, crawler listing data, Rufus optimization suggestions, or frontend-facing ASIN data packages for one or more ASINs from CSV/XLSX/JSON/JSONL inputs.
-version: 0.1.2
+description: Use this skill when Codex users need to run opscli asin-data collect for ASIN batch data collection, single-ASIN collection, SellerSprite keyword reverse/miner/listing-analysis data, Amazon listing snapshots, BI sales data, crawler listing data, Rufus optimization suggestions, or frontend-facing ASIN data packages from CSV/XLSX/JSON/JSONL inputs.
+version: 0.1.3
 ---
 
 # ops-asin-data-collector
 
-Batch data collection wrapper for operations Codex users. It reads an ASIN input file, executes the first-class `opscli asin-data collect` command, and writes a unified per-ASIN data package. The command calls SellerSprite, Query, Amazon, and Rufus Python service managers directly instead of shelling out to nested `opscli` commands.
+Codex-facing wrapper for the official `opscli asin-data collect` command. Use it to collect one or more ASINs into a unified data package containing SellerSprite, Amazon scrape, BI sales, crawler Listing, Rufus, and frontend-facing outputs.
+
+## Trigger Scope
+
+Use this Skill when the user asks for any of these:
+
+- ASIN 批量取数、ASIN 数据包、ASIN 采集、Listing 数据采集
+- 单个 ASIN 的卖家精灵、Amazon 页面、BI 销售、爬虫 Listing 或 Rufus 数据
+- 生成前端可读的 `frontend-data.json` / `frontend-data.md`
+- 通过 Codex 调用 `opscli asin-data collect`
+
+Do not use this Skill for final report writing, Listing 文案改写、价格/库存/广告修改，or any operation that changes remote business data.
+
+## Codex Workflow
+
+1. Read `references/codex-usage.md` before constructing the command.
+2. Confirm exactly one input source:
+   - file mode: `--input <csv|xlsx|json|jsonl>`
+   - single mode: `--asin <ASIN>` with optional repeated `--keyword`
+3. For real collection, first check auth with `opscli auth token status`.
+4. Run `opscli asin-data collect ... --dry-run --pretty` unless the user explicitly asks to execute immediately.
+5. After dry-run review, run the same command without `--dry-run`.
+6. Return the `output_dir`, `frontend-data.json`, `frontend-data.md`, `frontend-data.txt`, and `aliyun_url` when present.
+7. If any `opscli` command fails, immediately submit `ops-feedback` according to project rules, then continue with the user task where possible.
 
 ## Quick Start
 
@@ -19,7 +42,8 @@ opscli asin-data collect \
   --keyword-column keyword \
   --sales-start 2026-05-01 \
   --sales-end 2026-05-31 \
-  --dry-run
+  --dry-run \
+  --pretty
 ```
 
 Single ASIN:
@@ -28,7 +52,8 @@ Single ASIN:
 opscli asin-data collect \
   --asin B0BY8Y5766 \
   --site US \
-  --keyword "bed frame"
+  --keyword "bed frame" \
+  --pretty
 ```
 
 Execute after reviewing the plan:
@@ -39,12 +64,13 @@ opscli asin-data collect \
   --asin-column asin \
   --keyword-column keyword \
   --sales-start 2026-05-01 \
-  --sales-end 2026-05-31
+  --sales-end 2026-05-31 \
+  --pretty
 ```
 
 ## Workflow
 
-1. Read the input file with `scripts/parse_asin_input.py`.
+1. Read the input file or single ASIN arguments.
 2. Normalize ASINs, site, one-or-more keywords, and source row metadata.
 3. Run BI sales and crawler dataset queries in ASIN chunks through `QueryManager`.
 4. For each ASIN, call SellerSprite `keyword-reverse`; call `keyword-miner` only when a keyword is available or derived.
@@ -52,13 +78,13 @@ opscli asin-data collect \
 6. For each ASIN, call `AmazonManager.scrape_product` unless skipped.
 7. Run Amazon Rufus questions for each ASIN through `RufusManager.get_backend`, unless skipped.
 8. Build frontend-facing Chinese sections: `基础数据`, `卖家精灵关键词数据`, `卖家精灵AI全景分析数据`, `Rufus优化建议数据`.
-8. Write `manifest.json`, `asin-data.jsonl`, `frontend-data.json`, `frontend-data.md`, `asin-data-summary.json`, `commands.jsonl`, and `errors.jsonl`.
+9. Write `manifest.json`, `asin-data.jsonl`, `frontend-data.json`, `frontend-data.md`, `frontend-data.txt`, `asin-data-summary.json`, `commands.jsonl`, and `errors.jsonl`.
 
 ## Boundaries
 
 - Use `opscli asin-data collect` as the stable entry point.
 - Do not wrap SellerSprite, Query, Amazon, or Rufus by invoking nested CLI subprocesses from the collector; use the corresponding Python managers directly.
-- The legacy `scripts/collect_asin_data.py` remains only as the data-contract implementation source reused by the command.
+- The legacy `scripts/collect_asin_data.py` remains only as the data-contract implementation source reused by the command; Codex users should call the CLI command.
 - If any `opscli` command fails during an agent-run task, immediately submit `ops-feedback` according to project rules.
 - This Skill collects data only. It does not generate final reports, edit listing content, change prices, modify images, or operate ads/campaigns.
 - Use `--skip-sales-query`, `--skip-crawler-query`, `--skip-seller-sprite`, `--skip-listing-analysis`, and `--skip-amazon` for staged verification.
@@ -103,6 +129,7 @@ Main files:
 
 ## References
 
+- Codex usage guide: `references/codex-usage.md`
 - Data contract: `references/data-contract.md`
 - Source mapping: `references/source-mapping.md`
 - Execution policy: `references/execution-policy.md`
