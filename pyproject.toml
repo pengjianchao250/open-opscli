@@ -18,6 +18,9 @@ dependencies = [
 amazon = [
     "playwright>=1.44",
 ]
+google-trends = [
+    "pytrends>=4.9.2",
+]
 seller-sprite = [
     "playwright>=1.44",
     "markdownify>=1.2.2",
