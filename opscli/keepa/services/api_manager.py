@@ -565,6 +565,8 @@ def _upload_export_if_enabled(
                 "scenario": scenario,
                 "site": site,
                 "filename": export.filename,
+                "format": export.format,
+                "mime_type": export.mime_type,
             },
         )
         export.url = upload.url
