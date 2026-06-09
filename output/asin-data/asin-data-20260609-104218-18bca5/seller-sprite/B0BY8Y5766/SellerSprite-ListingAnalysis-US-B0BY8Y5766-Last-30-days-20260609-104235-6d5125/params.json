@@ -1,0 +1,23 @@
+{
+  "request": {
+    "scenario": "listing-analysis",
+    "site": "US",
+    "period": "30d",
+    "params": {
+      "asin": "B0BY8Y5766",
+      "station": "GLOBAL"
+    },
+    "page_size": 100,
+    "job_id": null,
+    "output_dir": "output\\asin-data\\asin-data-20260609-104218-18bca5\\seller-sprite\\B0BY8Y5766",
+    "export_format": "json"
+  },
+  "resolved_params": {
+    "asin": "B0BY8Y5766",
+    "station": "GLOBAL"
+  },
+  "payload": {
+    "asin": "B0BY8Y5766",
+    "station": "GLOBAL"
+  }
+}

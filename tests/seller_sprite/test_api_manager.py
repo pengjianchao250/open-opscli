@@ -241,6 +241,15 @@ def test_manager_writes_json_export(monkeypatch, tmp_path: Path):
     assert exported["rows"][0]["keywords"] == "flashlight"
 
 
+def test_export_output_path_uses_short_filename_for_windows_compatibility(tmp_path: Path):
+    job_id = "SellerSprite-ListingAnalysis-US-B0TEST1234-Last-30-days-" + ("a" * 90)
+    root_dir = tmp_path / job_id
+
+    export_path = api_manager_module._export_output_path(root_dir, job_id, "json")
+
+    assert export_path == root_dir / "export.json"
+
+
 def test_job_status_reads_existing_result(tmp_path: Path):
     root_dir = tmp_path / "job-1"
     root_dir.mkdir()

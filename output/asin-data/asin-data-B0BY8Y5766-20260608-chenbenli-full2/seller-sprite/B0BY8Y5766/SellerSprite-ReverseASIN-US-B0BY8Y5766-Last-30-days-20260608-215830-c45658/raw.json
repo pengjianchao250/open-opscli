@@ -1,0 +1,86 @@
+{
+  "job_id": "SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260608-215830-c45658",
+  "scenario": "keyword-reverse",
+  "login": {
+    "mode": "cached",
+    "cookie_names": [
+      "ecookie",
+      "5a77a394991d6bcbd25f",
+      "be317f38615897058fb3",
+      "cd8bd352c4a1345c6d33",
+      "c0d1a46686c21ccce751",
+      "b80cb32e042735ffaf5f",
+      "JSESSIONID",
+      "rank-login-user",
+      "rank-login-user-info",
+      "ao_lo_to_n",
+      "Sprite-X-Token"
+    ]
+  },
+  "payload": {
+    "asin": "B0BY8Y5766",
+    "market": "US",
+    "limit": 100,
+    "skip": 0,
+    "page": 1,
+    "month": "",
+    "badges": [],
+    "conversionKeywordTypes": [],
+    "trafficKeywordTypes": [],
+    "order": 12,
+    "desc": true,
+    "exactly": false,
+    "keywordBidMatchType": "exact",
+    "filterDeletedKeywords": false
+  },
+  "response": {
+    "code": "OK",
+    "message": "成功",
+    "data": {
+      "guestId": null,
+      "station": null,
+      "marketId": 1,
+      "website": "https://www.amazon.com",
+      "asin": "B0BY8Y5766",
+      "total": 0,
+      "items": [],
+      "stats": null,
+      "took": 0,
+      "unauthorized": null,
+      "guestVisited": false
+    },
+    "success": true
+  },
+  "high_frequency_response": null,
+  "warnings": [
+    {
+      "stage": "main",
+      "message": "卖家精灵会话过期，已重新登录并重试一次",
+      "error": {
+        "code": "SELLER_SPRITE_API_ERROR",
+        "message": "卖家精灵接口返回错误：ERR_GLOBAL_SESSION_EXPIRED",
+        "status_code": 200,
+        "api_code": "ERR_GLOBAL_SESSION_EXPIRED",
+        "api_message": "登陆已失效。",
+        "response_excerpt": "{\"code\":\"ERR_GLOBAL_SESSION_EXPIRED\",\"data\":\"/user/login?callback=/v3/api/relation/reversing%3Fmarket%3DUS\",\"message\":\"登陆已失效。\"}"
+      },
+      "relogin": {
+        "login_status": 302,
+        "login_redirect": true,
+        "cookie_names": [
+          "ecookie",
+          "5a77a394991d6bcbd25f",
+          "be317f38615897058fb3",
+          "cd8bd352c4a1345c6d33",
+          "c0d1a46686c21ccce751",
+          "b80cb32e042735ffaf5f",
+          "JSESSIONID",
+          "rank-login-user",
+          "rank-login-user-info",
+          "ao_lo_to_n",
+          "Sprite-X-Token"
+        ]
+      }
+    }
+  ]
+}

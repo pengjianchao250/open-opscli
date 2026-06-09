@@ -1,0 +1,190 @@
+{
+  "dimensions": [
+    {
+      "field": "ds_icw50TLOFu4F.asin",
+      "alias": "f_asin"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.date_id",
+      "alias": "f_date_id"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.country",
+      "alias": "f_country"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.currency",
+      "alias": "f_currency"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.listing",
+      "alias": "f_product_name"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.link",
+      "alias": "f_link"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.image",
+      "alias": "f_image"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.description",
+      "alias": "f_description"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.brand",
+      "alias": "f_brand"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.seller_id",
+      "alias": "f_seller_id"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.price_scribe",
+      "alias": "f_price_scribe"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.original_price",
+      "alias": "f_original_price"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.unit_price",
+      "alias": "f_unit_price"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.reduction",
+      "alias": "f_reduction"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.coupon",
+      "alias": "f_coupon"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.promo_code_value",
+      "alias": "f_promo_code_value"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.promo_code",
+      "alias": "f_promo_code"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.deal",
+      "alias": "f_deal"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.major_name",
+      "alias": "f_major_name"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.major_rank",
+      "alias": "f_major_rank"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.subclass_name",
+      "alias": "f_subclass_name"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.subclass_rank",
+      "alias": "f_subclass_rank"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.deal_type",
+      "alias": "f_deal_type"
+    }
+  ],
+  "metrics": [
+    {
+      "field": "ds_icw50TLOFu4F.price",
+      "aggregation": "AVG",
+      "alias": "f_price"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.rating",
+      "aggregation": "AVG",
+      "alias": "f_rating"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.rating_count",
+      "aggregation": "MAX",
+      "alias": "f_rating_count"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.review_count",
+      "aggregation": "MAX",
+      "alias": "f_review_count"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.stock_qty",
+      "aggregation": "MAX",
+      "alias": "f_stock_qty"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.sales_status",
+      "aggregation": "MAX",
+      "alias": "f_sales_status"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.in_stock",
+      "aggregation": "MAX",
+      "alias": "f_in_stock"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.subplot_count",
+      "aggregation": "MAX",
+      "alias": "f_subplot_count"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.video_count",
+      "aggregation": "MAX",
+      "alias": "f_video_count"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.five_point_description_count",
+      "aggregation": "MAX",
+      "alias": "f_five_point_description_count"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.a_image_count",
+      "aggregation": "MAX",
+      "alias": "f_a_image_count"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.variant_count",
+      "aggregation": "MAX",
+      "alias": "f_variant_count"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.cs_count",
+      "aggregation": "MAX",
+      "alias": "f_cs_count"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.qa_count",
+      "aggregation": "MAX",
+      "alias": "f_qa_count"
+    },
+    {
+      "field": "ds_icw50TLOFu4F.timestamp",
+      "aggregation": "MAX",
+      "alias": "f_timestamp"
+    }
+  ],
+  "filters": [
+    {
+      "field": "ds_icw50TLOFu4F.asin",
+      "operator": "in",
+      "value": [
+        "B0BY8Y5766"
+      ]
+    }
+  ],
+  "orderBy": [
+    {
+      "field": "f_date_id",
+      "desc": true
+    }
+  ],
+  "limit": 100,
+  "offset": 0
+}

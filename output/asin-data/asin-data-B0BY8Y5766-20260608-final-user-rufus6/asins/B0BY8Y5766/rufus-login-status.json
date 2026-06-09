@@ -1,0 +1,30 @@
+{
+  "time": "2026-06-08T20:16:21",
+  "source": "rufus.login_status",
+  "asin": "B0BY8Y5766",
+  "command": [
+    "opscli",
+    "amazon-rufus",
+    "login-status",
+    "US",
+    "--pretty"
+  ],
+  "dry_run": false,
+  "status": "success",
+  "exit_code": 0,
+  "stdout": "{\n  \"success\": true,\n  \"command\": \"amazon-rufus login-status\",\n  \"data\": {\n    \"country\": \"US\",\n    \"status\": \"ready\",\n    \"has_login_state\": true,\n    \"can_get_backend\": true,\n    \"session_cookie_count\": 19,\n    \"has_streaming_request\": true\n  },\n  \"error\": null\n}\n",
+  "stderr": "\nopscli 有新版本可用，建议更新最新版本: v0.0.22 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n",
+  "json": {
+    "success": true,
+    "command": "amazon-rufus login-status",
+    "data": {
+      "country": "US",
+      "status": "ready",
+      "has_login_state": true,
+      "can_get_backend": true,
+      "session_cookie_count": 19,
+      "has_streaming_request": true
+    },
+    "error": null
+  }
+}

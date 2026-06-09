@@ -25,8 +25,9 @@ from opscli.shared.integration_accounts import IntegrationAccountClient
 
 AI_TASK_DONE_STATUSES = {"COMPLETED", "COMPLETE", "SUCCESS", "SUCCEEDED", "FINISHED", "DONE"}
 AI_TASK_FAILED_STATUSES = {"FAILED", "FAIL", "ERROR", "CANCELED", "CANCELLED", "EXPIRED"}
-DEFAULT_AI_TASK_POLL_ATTEMPTS = 90
+DEFAULT_AI_TASK_POLL_ATTEMPTS = 180
 DEFAULT_AI_TASK_POLL_INTERVAL_SECONDS = 2.0
+WINDOWS_COMPAT_EXPORT_PATH_LIMIT = 240
 
 
 class SellerSpriteApiManager:
@@ -182,7 +183,7 @@ class SellerSpriteApiManager:
         if export_format == "xlsx":
             export = export_rows_to_xlsx(
                 rows=rows,
-                output_path=root_dir / f"{job_id}.xlsx",
+                output_path=_export_output_path(root_dir, job_id, "xlsx"),
                 scenario=request.scenario,
                 site=site,
                 period=period,
@@ -191,7 +192,7 @@ class SellerSpriteApiManager:
             )
         else:
             export = _export_rows_to_json(
-                output_path=root_dir / f"{job_id}.json",
+                output_path=_export_output_path(root_dir, job_id, "json"),
                 job_id=job_id,
                 scenario=request.scenario,
                 site=site,
@@ -630,6 +631,14 @@ def _sanitize_filename_part(value: Any) -> str:
     text = re.sub(r"[^A-Za-z0-9\-]+", "-", text)
     text = re.sub(r"-{2,}", "-", text).strip("-")
     return text[:64]
+
+
+def _export_output_path(root_dir: Path, job_id: str, extension: str) -> Path:
+    suffix = extension.lstrip(".")
+    candidate = root_dir / f"{job_id}.{suffix}"
+    if len(str(candidate)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+        return root_dir / f"export.{suffix}"
+    return candidate
 
 
 def _normalize_export_format(value: str) -> str:

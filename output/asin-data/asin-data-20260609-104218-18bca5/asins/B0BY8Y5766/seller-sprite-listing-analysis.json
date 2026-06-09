@@ -1,0 +1,40 @@
+{
+  "time": "2026-06-09T10:42:35",
+  "source": "seller_sprite.listing_analysis",
+  "asin": "B0BY8Y5766",
+  "command": [
+    "__direct__",
+    "seller-sprite",
+    "run",
+    "listing-analysis",
+    "--site",
+    "US",
+    "--period",
+    "30d",
+    "--params",
+    "{\"asin\": \"B0BY8Y5766\", \"station\": \"GLOBAL\"}",
+    "--page-size",
+    "100",
+    "--export-format",
+    "json",
+    "--output-dir",
+    "output\\asin-data\\asin-data-20260609-104218-18bca5\\seller-sprite\\B0BY8Y5766"
+  ],
+  "dry_run": false,
+  "execution": "direct",
+  "status": "failed",
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": "SellerSprite AI task timeout: 887d9e6d3cd0b1ed7bcfbd888696948f",
+  "json": {
+    "success": false,
+    "command": "seller_sprite.listing_analysis",
+    "data": null,
+    "error": {
+      "code": "SELLER_SPRITE_API_ERROR",
+      "message": "SellerSprite AI task timeout: 887d9e6d3cd0b1ed7bcfbd888696948f",
+      "api_code": "ERR_AI_TASK_TIMEOUT",
+      "response_excerpt": "{\"code\": \"OK\", \"message\": \"成功\", \"data\": {\"language\": \"CN\", \"marketId\": 1, \"clientId\": 1833659, \"taskId\": \"887d9e6d3cd0b1ed7bcfbd888696948f\", \"originalTaskId\": null, \"taskStatus\": \"SUBMITTED\", \"taskErrMsg\": null, \"tabTitle\": \"US(B0BY8Y5766) | 全景分析 | Listing数据深度解析报告\", \"title\": \"US(B0BY8Y5766) | 全景分析 | Listing数据深度解析报告\", \"aliasTitle\": null, \"promptContent\": null, \"content\": null, \"htmlStatus\": null, \"htmlContent\": null, \"completedTime\": null, \"expiredTime\": null, \"dataStartMonth\": null, \"dataEndMonth\": null, \"module\": \"LA\", \"isSub\": false}, \"success\": true}"
+    }
+  }
+}

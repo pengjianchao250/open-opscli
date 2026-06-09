@@ -1,0 +1,93 @@
+{
+  "time": "2026-06-08T09:26:21",
+  "source": "query.sales",
+  "asin": null,
+  "command": [
+    "opscli",
+    "query",
+    "simple",
+    "--table-id",
+    "1",
+    "--payload",
+    "output\\asin-data\\asin-data-20260608-092621-d73589\\query\\sales-payload.json",
+    "--run"
+  ],
+  "dry_run": false,
+  "status": "success",
+  "exit_code": 0,
+  "stdout": "{\"success\": true, \"command\": \"query simple-run\", \"data\": {\"payload\": {\"tableId\": 1, \"dimensions\": [{\"field\": \"ds_d35ac6f3910c.asin\", \"alias\": \"f_asin\"}, {\"field\": \"ds_d35ac6f3910c.product_name\", \"alias\": \"f_product_name\"}], \"metrics\": [{\"field\": \"ds_d35ac6f3910c.order_qty\", \"aggregation\": \"SUM\", \"alias\": \"f_order_qty\"}, {\"field\": \"ds_d35ac6f3910c.orders\", \"aggregation\": \"SUM\", \"alias\": \"f_orders\"}, {\"field\": \"ds_d35ac6f3910c.price\", \"aggregation\": \"SUM\", \"alias\": \"f_sales_amount\"}], \"filters\": [{\"field\": \"ds_d35ac6f3910c.asin\", \"operator\": \"in\", \"value\": [\"B0TEST0001\", \"B0TEST0002\"]}, {\"field\": \"ds_d35ac6f3910c.date_id\", \"operator\": \"between\", \"value\": [\"2026-05-01\", \"2026-05-31\"]}], \"limit\": 100, \"offset\": 0}, \"output\": null, \"result\": {\"success\": true, \"data\": [], \"meta\": {\"dataSource\": \"doris_analytics\", \"rowCount\": 0, \"totalCount\": 0, \"executionTimeMs\": 572, \"queryId\": \"93d3033d-79ac-4dfc-8c67-e1ad7e5fd098\", \"timestamp\": \"2026-06-08T01:26:24.478087\", \"dialect\": \"doris\", \"cached\": false}, \"error\": null}}, \"error\": null}\n",
+  "stderr": "\nopscli 有新版本可用，建议更新最新版本: v0.0.22 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n",
+  "json": {
+    "success": true,
+    "command": "query simple-run",
+    "data": {
+      "payload": {
+        "tableId": 1,
+        "dimensions": [
+          {
+            "field": "ds_d35ac6f3910c.asin",
+            "alias": "f_asin"
+          },
+          {
+            "field": "ds_d35ac6f3910c.product_name",
+            "alias": "f_product_name"
+          }
+        ],
+        "metrics": [
+          {
+            "field": "ds_d35ac6f3910c.order_qty",
+            "aggregation": "SUM",
+            "alias": "f_order_qty"
+          },
+          {
+            "field": "ds_d35ac6f3910c.orders",
+            "aggregation": "SUM",
+            "alias": "f_orders"
+          },
+          {
+            "field": "ds_d35ac6f3910c.price",
+            "aggregation": "SUM",
+            "alias": "f_sales_amount"
+          }
+        ],
+        "filters": [
+          {
+            "field": "ds_d35ac6f3910c.asin",
+            "operator": "in",
+            "value": [
+              "B0TEST0001",
+              "B0TEST0002"
+            ]
+          },
+          {
+            "field": "ds_d35ac6f3910c.date_id",
+            "operator": "between",
+            "value": [
+              "2026-05-01",
+              "2026-05-31"
+            ]
+          }
+        ],
+        "limit": 100,
+        "offset": 0
+      },
+      "output": null,
+      "result": {
+        "success": true,
+        "data": [],
+        "meta": {
+          "dataSource": "doris_analytics",
+          "rowCount": 0,
+          "totalCount": 0,
+          "executionTimeMs": 572,
+          "queryId": "93d3033d-79ac-4dfc-8c67-e1ad7e5fd098",
+          "timestamp": "2026-06-08T01:26:24.478087",
+          "dialect": "doris",
+          "cached": false
+        },
+        "error": null
+      }
+    },
+    "error": null
+  }
+}

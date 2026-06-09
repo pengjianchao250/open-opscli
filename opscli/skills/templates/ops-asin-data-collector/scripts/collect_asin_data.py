@@ -19,6 +19,10 @@ from parse_asin_input import load_asin_records, normalize_keywords
 
 DEFAULT_SALES_ALIAS = "ds_d35ac6f3910c"
 DEFAULT_CRAWLER_ALIAS = "ds_icw50TLOFu4F"
+KEYWORD_SELLER_SPRITE_EXPORT_FORMAT = "xlsx"
+KEYWORD_SELLER_SPRITE_INLINE_ROWS = False
+DEFAULT_LISTING_ANALYSIS_POLL_ATTEMPTS = 180
+DEFAULT_LISTING_ANALYSIS_POLL_INTERVAL_SECONDS = 2.0
 CRAWLER_DATE_FIELDS = ("f_date_id", "date_id")
 DEFAULT_RUFUS_QUESTIONS = (
     "这个产品ASIN {{asin}}，标题写得清楚吗？如果我要找这个产品ASIN {{asin}}，一般搜什么词能找到他？",
@@ -281,8 +285,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keyword-source", choices=["input_only", "reverse_top", "skip"], default="reverse_top")
     parser.add_argument("--max-miner-keywords", type=int, default=1)
     parser.add_argument("--listing-analysis-station", default="GLOBAL")
-    parser.add_argument("--listing-analysis-poll-attempts", type=int)
-    parser.add_argument("--listing-analysis-poll-interval-seconds", type=float)
+    parser.add_argument("--listing-analysis-poll-attempts", type=int, default=DEFAULT_LISTING_ANALYSIS_POLL_ATTEMPTS)
+    parser.add_argument(
+        "--listing-analysis-poll-interval-seconds",
+        type=float,
+        default=DEFAULT_LISTING_ANALYSIS_POLL_INTERVAL_SECONDS,
+    )
 
     parser.add_argument("--rufus-country", help="Override Rufus country code; default follows each record site")
     parser.add_argument("--rufus-question", action="append", dest="rufus_questions", help="Rufus question; repeat for multiple questions")
@@ -511,7 +519,7 @@ def collect_one_asin(
             "--page-size",
             str(args.seller_sprite_page_size),
             "--export-format",
-            "json",
+            KEYWORD_SELLER_SPRITE_EXPORT_FORMAT,
             "--output-dir",
             str(seller_dir),
         ]
@@ -524,7 +532,10 @@ def collect_one_asin(
             asin=asin,
             raw_output_path=asin_dir / "seller-sprite-keyword-reverse.json",
         )
-    result["seller_sprite"]["keyword_reverse"] = compact_seller_sprite_result(reverse_result)
+    result["seller_sprite"]["keyword_reverse"] = compact_seller_sprite_result(
+        reverse_result,
+        inline_rows=KEYWORD_SELLER_SPRITE_INLINE_ROWS,
+    )
 
     keywords = list(record_keywords)
     if not keywords and args.keyword_source == "reverse_top":
@@ -559,7 +570,7 @@ def collect_one_asin(
                 "--page-size",
                 str(args.seller_sprite_page_size),
                 "--export-format",
-                "json",
+                KEYWORD_SELLER_SPRITE_EXPORT_FORMAT,
                 "--output-dir",
                 str(seller_dir),
             ]
@@ -577,7 +588,10 @@ def collect_one_asin(
         result["seller_sprite"]["keyword_miner"] = {
             "status": aggregate_status(miner_jobs),
             "seed_keywords": miner_keywords,
-            "jobs": [compact_seller_sprite_result(job) for job in miner_jobs],
+            "jobs": [
+                compact_seller_sprite_result(job, inline_rows=KEYWORD_SELLER_SPRITE_INLINE_ROWS)
+                for job in miner_jobs
+            ],
         }
 
     listing_result = {"status": "skipped", "reason": "seller sprite skipped"}
@@ -1576,17 +1590,33 @@ def seller_sprite_rows(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
-def compact_seller_sprite_result(result: dict[str, Any]) -> dict[str, Any]:
+def seller_sprite_export_format(export: Any, export_path: str | None) -> str | None:
+    if isinstance(export, dict):
+        value = export.get("format")
+        if isinstance(value, str) and value.strip():
+            normalized = value.strip().lower()
+            return "xlsx" if normalized == "xls" else normalized
+    if export_path:
+        suffix = Path(export_path).suffix.lower().lstrip(".")
+        if suffix:
+            return "xlsx" if suffix == "xls" else suffix
+    return None
+
+
+def compact_seller_sprite_result(result: dict[str, Any], *, inline_rows: bool = True) -> dict[str, Any]:
     payload = result.get("json") if isinstance(result, dict) else None
     data = seller_sprite_run_payload(payload)
     export = data.get("export") if isinstance(data, dict) else {}
     export_path = export.get("path") if isinstance(export, dict) else None
     rows = seller_sprite_rows(payload) or read_export_rows(export_path)
+    export_format = seller_sprite_export_format(export, export_path)
     compact = {
         "status": result.get("status", "skipped"),
         "job_id": data.get("job_id") if isinstance(data, dict) else None,
         "row_count": data.get("row_count") if isinstance(data, dict) else None,
-        "rows": rows,
+        "rows": rows if inline_rows else [],
+        "rows_inlined": inline_rows,
+        "export_format": export_format,
         "export_path": export_path,
         "export_url": export.get("url") if isinstance(export, dict) else None,
         "command": result.get("command"),
@@ -2038,7 +2068,15 @@ def json_block(payload: Any) -> str:
 def localize_seller_sprite_job(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {"状态": "跳过", "原始状态": "skipped", "结果数据": []}
-    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else read_export_rows(payload.get("export_path"))
+    export_path = payload.get("export_path")
+    export_url = payload.get("export_url")
+    export_format = str(payload.get("export_format") or "").lower()
+    if not export_format and isinstance(export_path, str):
+        export_format = Path(export_path).suffix.lower().lstrip(".")
+    is_spreadsheet = export_format in {"xls", "xlsx"}
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else read_export_rows(export_path)
+    if is_spreadsheet:
+        rows = []
     data = {
         "状态": status_zh(payload.get("status")),
         "原始状态": payload.get("status"),
@@ -2046,12 +2084,16 @@ def localize_seller_sprite_job(payload: Any) -> dict[str, Any]:
         "行数": payload.get("row_count"),
         "结果数据": rows,
     }
+    if is_spreadsheet:
+        data["导出格式"] = "xlsx"
+        data["导出路径"] = export_path
+        data["导出URL"] = export_url
+        data["数据说明"] = "明细已导出为 Excel，MD 不内嵌完整明细。"
     if payload.get("reason") and payload.get("status") != "success":
         data["原因"] = payload.get("reason")
     if payload.get("error_message") and payload.get("status") != "success":
         data["错误信息"] = payload.get("error_message")
     return data
-
 
 def localize_keyword_input(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):

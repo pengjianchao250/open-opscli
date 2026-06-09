@@ -1,0 +1,32 @@
+{
+  "time": "2026-06-08T17:06:17",
+  "source": "query.crawler_listing",
+  "asin": null,
+  "command": [
+    "opscli",
+    "query",
+    "simple",
+    "--table-id",
+    "43",
+    "--dataset",
+    "ds_icw50TLOFu4F",
+    "--payload",
+    "output\\asin-data\\asin-data-B0BY8Y5766-20260608-current-fields\\query\\crawler-listing-payload.json",
+    "--run"
+  ],
+  "dry_run": false,
+  "status": "failed",
+  "exit_code": 1,
+  "stdout": "{\"success\": false, \"command\": \"query simple-run\", \"data\": null, \"error\": {\"code\": \"REMOTE_BUSINESS_ERROR\", \"message\": \"字段不存在: ds_icw50TLOFu4F.a_image\", \"business_code\": 400}}\n",
+  "stderr": "\nopscli 有新版本可用，建议更新最新版本: v0.0.22 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n",
+  "json": {
+    "success": false,
+    "command": "query simple-run",
+    "data": null,
+    "error": {
+      "code": "REMOTE_BUSINESS_ERROR",
+      "message": "字段不存在: ds_icw50TLOFu4F.a_image",
+      "business_code": 400
+    }
+  }
+}

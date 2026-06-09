@@ -32,12 +32,13 @@ def _get_mcp_api_key_header() -> dict[str, str]:
     CLI（stdio）模式下 get_current_api_key() 返回 None，不会附加 API Key header，
     但 X-Opscli-Version 始终携带。
     """
+    headers = {"X-Opscli-Version": __version__}
     try:
         from opscli.mcp.context import get_mcp_request_headers
-        return get_mcp_request_headers()
+        headers.update(get_mcp_request_headers())
     except Exception:
         pass
-    return {"X-Opscli-Version": __version__}
+    return headers
 
 # 进程内线程锁：key = system_key
 _thread_locks: dict[str, threading.Lock] = {}

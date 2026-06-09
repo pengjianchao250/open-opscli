@@ -1,0 +1,3 @@
+{"asin": "B0BY8Y5766", "source": "seller_sprite.listing_analysis", "tool": "direct:seller_sprite.listing_analysis", "status": "failed", "exit_code": 1, "error_message": "SELLER_SPRITE_API_ERROR: SellerSprite AI task timeout: 887d9e6d3cd0b1ed7bcfbd888696948f", "retry_count": 0}
+{"asin": "B0BY8Y5766", "source": "amazon.scrape", "tool": "direct:amazon.scrape", "status": "failed", "exit_code": 1, "error_message": "SCRAPER_DEPENDENCY_ERROR: 缺少 playwright 依赖，请安装 `pip install opscli` 并执行 `playwright install chromium`", "retry_count": 0}
+{"asin": "B0BY8Y5766", "source": "rufus.get_backend", "tool": "direct:rufus.get_backend", "status": "failed", "exit_code": 1, "error_message": "RUFUS_HEADLESS_CAPTURE_ERROR: 缺少 Playwright，请安装 `opscli[amazon]`", "retry_count": 0}

@@ -1,0 +1,40 @@
+{
+  "run_id": "asin-data-B0BY8Y5766-20260608-current-fields",
+  "started_at": "2026-06-08T17:06:07",
+  "finished_at": "2026-06-08T17:06:20",
+  "output_dir": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-current-fields",
+  "dry_run": false,
+  "summary": {
+    "input_count": 1,
+    "asin_count": 1,
+    "input_error_count": 0,
+    "source_error_count": 2,
+    "failed_asin_count": 1,
+    "failed_asins": [
+      "B0BY8Y5766"
+    ]
+  },
+  "options": {
+    "skip_seller_sprite": true,
+    "skip_keyword_miner": true,
+    "skip_listing_analysis": true,
+    "skip_amazon": true,
+    "skip_query": false,
+    "skip_sales_query": false,
+    "skip_crawler_query": false,
+    "seller_sprite_period": "30d",
+    "listing_analysis_station": "GLOBAL",
+    "sales_start": null,
+    "sales_end": null,
+    "query_chunk_size": 100
+  },
+  "files": {
+    "manifest": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-current-fields\\manifest.json",
+    "results": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-current-fields\\asin-data.jsonl",
+    "frontend_data": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-current-fields\\frontend-data.json",
+    "frontend_markdown": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-current-fields\\frontend-data.md",
+    "summary": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-current-fields\\asin-data-summary.json",
+    "commands": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-current-fields\\commands.jsonl",
+    "errors": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-current-fields\\errors.jsonl"
+  }
+}

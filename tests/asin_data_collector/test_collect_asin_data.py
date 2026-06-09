@@ -229,6 +229,35 @@ def test_seller_sprite_job_outputs_rows_without_paths(tmp_path: Path):
     assert "命令" not in localized
 
 
+def test_seller_sprite_spreadsheet_job_outputs_export_reference_only():
+    collector = load_collector_module()
+
+    compact = collector.compact_seller_sprite_result(
+        {
+            "status": "success",
+            "command": ["opscli", "seller-sprite", "run", "keyword-reverse"],
+            "json": {
+                "job_id": "job-1",
+                "row_count": 100,
+                "data": [{"keyword": "bed frame"}],
+                "export": {
+                    "path": "keyword-reverse.xlsx",
+                    "url": "https://example.test/keyword-reverse.xlsx",
+                    "format": "xlsx",
+                },
+            },
+        },
+        inline_rows=False,
+    )
+    localized = collector.localize_seller_sprite_job(compact)
+
+    assert compact["rows"] == []
+    assert compact["rows_inlined"] is False
+    assert localized["\u7ed3\u679c\u6570\u636e"] == []
+    assert localized["\u5bfc\u51fa\u683c\u5f0f"] == "xlsx"
+    assert localized["\u5bfc\u51faURL"] == "https://example.test/keyword-reverse.xlsx"
+
+
 def test_keyword_miner_runs_input_keywords_up_to_limit(tmp_path: Path, monkeypatch):
     collector = load_collector_module()
     commands = []
@@ -277,6 +306,9 @@ def test_keyword_miner_runs_input_keywords_up_to_limit(tmp_path: Path, monkeypat
         for command in miner_commands
     ]
     assert miner_params == ["bed frame", "storage bed"]
+    assert all(command[command.index("--export-format") + 1] == "xlsx" for command in miner_commands)
+    reverse_command = next(command for command in commands if "keyword-reverse" in command)
+    assert reverse_command[reverse_command.index("--export-format") + 1] == "xlsx"
     assert result["input"]["keywords"] == ["bed frame", "storage bed", "charging bed"]
     assert result["seller_sprite"]["keyword_miner"]["seed_keywords"] == ["bed frame", "storage bed"]
 
