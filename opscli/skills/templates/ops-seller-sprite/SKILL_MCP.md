@@ -71,6 +71,7 @@ Clarification examples:
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
 | 查流量来源 / traffic source | `traffic-source` |
 | 选市场 / market research | `market-research` |
+| Listing panorama / listing analysis | `listing-analysis` |
 
 ## Required Params
 
@@ -82,6 +83,7 @@ Clarification examples:
 | `keyword-reverse` | `asin` | `badges` |
 | `traffic-source` | `keywordOrAsin` | `keyword`, `asin`, `asins`, `order`, `desc` |
 | `market-research` | none | `departmentKeyword`/`category`, `node`/`nodeIdPath`, `newReleaseNum`/`newReleaseMonths`, `topn`, market metric min/max fields |
+| `listing-analysis` | `asin` | `station` (default `GLOBAL`), `pollAttempts`/`maxPolls`, `pollIntervalSeconds`/`pollInterval` |
 
 Always pass:
 
@@ -244,6 +246,7 @@ Scenario defaults:
 | `keyword-reverse` | `page=1`, `order=12`, `desc=true` |
 | `traffic-source` | `pageNo=1`, `order=10`, `desc=true` |
 | `market-research` | `marketId=US(1)`, `nodeIdPath=`, `monthName=bsr_sales_nearly`, `sampleNumber=1`, `topn=10`, `newReleaseNum=6`, `order.field=total_sales`, `order.desc=true`; `category` maps to `departmentKeyword` |
+| `listing-analysis` | `station=GLOBAL`; submits `/v3/api/ai-workflow/listing-analysis`, then polls `/v3/api/ai-analysis/task/{taskId}` until `data.content` is available |
 
 ## Call Examples
 
@@ -256,6 +259,19 @@ Scenario defaults:
     "asin": "B07YRMT36L"
   },
   "export_format": "xlsx"
+}
+```
+
+```json
+{
+  "scenario": "listing-analysis",
+  "site": "US",
+  "period": "30d",
+  "params": {
+    "asin": "B0D3845MWD",
+    "station": "GLOBAL"
+  },
+  "export_format": "json"
 }
 ```
 

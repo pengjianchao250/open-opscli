@@ -16,6 +16,9 @@ from typing import Any
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 
+MAX_PUBLIC_DATA_PREVIEW_ROWS = 20
+
+
 async def keepa_spec_must_read() -> dict:
     """读取 Keepa MCP 使用规范（opscli/mcp/references/keepa/SKILL_MCP.md）。"""
     spec_path = (
@@ -139,8 +142,28 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         public.pop("account", None)
         public.pop("params_path", None)
         public.pop("raw_path", None)
+        _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
     return public
+
+
+def _compact_public_data(public: dict[str, Any]) -> None:
+    data = public.get("data")
+    if not isinstance(data, list) or len(data) <= MAX_PUBLIC_DATA_PREVIEW_ROWS:
+        return
+    public["data_preview"] = data[:MAX_PUBLIC_DATA_PREVIEW_ROWS]
+    public["data_omitted"] = len(data) - MAX_PUBLIC_DATA_PREVIEW_ROWS
+    public.pop("data", None)
+    warnings = public.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+    warnings.append(
+        {
+            "stage": "mcp_response_compact",
+            "message": "返回数据量较大，MCP 响应仅保留摘要和导出文件，请通过导出文件查看完整数据。",
+        }
+    )
+    public["warnings"] = warnings
 
 
 def _strip_sensitive(value: Any) -> Any:

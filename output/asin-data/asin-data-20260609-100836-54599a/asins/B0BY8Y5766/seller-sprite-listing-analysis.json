@@ -1,0 +1,38 @@
+{
+  "time": "2026-06-09T10:08:49",
+  "source": "seller_sprite.listing_analysis",
+  "asin": "B0BY8Y5766",
+  "command": [
+    "__direct__",
+    "seller-sprite",
+    "run",
+    "listing-analysis",
+    "--site",
+    "US",
+    "--period",
+    "30d",
+    "--params",
+    "{\"asin\": \"B0BY8Y5766\", \"station\": \"GLOBAL\"}",
+    "--page-size",
+    "100",
+    "--export-format",
+    "json",
+    "--output-dir",
+    "output\\asin-data\\asin-data-20260609-100836-54599a\\seller-sprite\\B0BY8Y5766"
+  ],
+  "dry_run": false,
+  "execution": "direct",
+  "status": "failed",
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": "获取卖家精灵集成账号失败：用户不存在。请检查 OPS 授权：MCP 模式需携带有效 X-MCP-API-Key，CLI 模式执行 opscli auth login。",
+  "json": {
+    "success": false,
+    "command": "seller_sprite.listing_analysis",
+    "data": null,
+    "error": {
+      "code": "SELLER_SPRITE_CONFIG_ERROR",
+      "message": "获取卖家精灵集成账号失败：用户不存在。请检查 OPS 授权：MCP 模式需携带有效 X-MCP-API-Key，CLI 模式执行 opscli auth login。"
+    }
+  }
+}

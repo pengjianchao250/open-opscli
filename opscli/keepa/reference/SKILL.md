@@ -35,7 +35,7 @@ opscli keepa scenarios
 Run a product request:
 
 ```powershell
-opscli keepa run product --site US --params '{"asin":"B0088PUEPK","stats":30,"history":false}'
+opscli keepa run product --site US --params '{"asin":"B0088PUEPK","stats":30}'
 ```
 
 Default export is XLSX with Chinese headers. Use JSON only for backend
@@ -70,7 +70,7 @@ result = await manager.run(
     KeepaScenarioRequest(
         scenario="product",
         site="US",
-        params={"asin": "B0088PUEPK", "stats": 30, "history": False},
+        params={"asin": "B0088PUEPK", "stats": 30},
         force=True,
     )
 )
@@ -156,7 +156,7 @@ Example `keepa_run` arguments:
   "params": {
     "asin": "B0088PUEPK",
     "stats": 30,
-    "history": false
+    "history": true
   },
   "force": true
 }

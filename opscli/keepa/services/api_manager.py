@@ -22,6 +22,9 @@ from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 from opscli.shared.integration_accounts import IntegrationAccountClient
 
 
+MAX_XLSX_EXPORT_ROWS = 5_000
+
+
 class KeepaApiManager:
     """执行 Keepa API 场景并保存请求和响应数据。"""
 
@@ -134,10 +137,15 @@ class KeepaApiManager:
 
         raw_rows = extract_rows(raw_response)
         data = add_keepa_time_conversions(raw_rows)
-        export_format = _normalize_export_format(request.export_format)
+        export_format = _resolve_export_format(
+            requested_format=_normalize_export_format(request.export_format),
+            row_count=len(raw_rows),
+            warnings=warnings,
+        )
         if export_format == "xlsx":
+            export_rows = raw_response_to_export_rows(raw_response)
             export = export_rows_to_xlsx(
-                rows=data,
+                rows=export_rows,
                 output_path=root_dir / f"{job_id}.xlsx",
                 scenario=request.scenario,
                 site=site,
@@ -214,6 +222,11 @@ def extract_rows(payload: dict[str, Any]) -> list[Any]:
     """从 Keepa 原始响应中提取主要结果列表。"""
     if not isinstance(payload, dict):
         return []
+    sellers = payload.get("sellers")
+    if isinstance(sellers, list):
+        return sellers
+    if isinstance(sellers, dict):
+        return list(sellers.values())
     for key in (
         "products",
         "asinList",
@@ -228,9 +241,6 @@ def extract_rows(payload: dict[str, Any]) -> list[Any]:
     categories = payload.get("categories")
     if isinstance(categories, dict):
         return list(categories.values())
-    sellers = payload.get("sellers")
-    if isinstance(sellers, dict):
-        return list(sellers.values())
     deals = payload.get("deals")
     if isinstance(deals, dict):
         for key in ("dr", "deals"):
@@ -248,6 +258,72 @@ def extract_rows(payload: dict[str, Any]) -> list[Any]:
     if total is not None:
         return [{"totalResults": total}]
     return []
+
+
+def raw_response_to_export_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """将 Keepa 原始响应转换成 XLSX 行，尽量保留 API 返回的全部顶层 JSON 字段。"""
+    if not isinstance(payload, dict):
+        return [{"value": payload}]
+    row_source_key, row_items = _primary_row_items(payload)
+    base_row = {key: value for key, value in payload.items() if key != row_source_key}
+    if not row_items:
+        return [dict(payload)]
+    rows: list[dict[str, Any]] = []
+    for item in row_items:
+        row = dict(base_row)
+        if row_source_key:
+            row["rowSource"] = row_source_key
+        if isinstance(item, dict):
+            row.update(item)
+        else:
+            row[_scalar_item_field(row_source_key)] = item
+        rows.append(row)
+    return rows
+
+
+def _primary_row_items(payload: dict[str, Any]) -> tuple[str | None, list[Any]]:
+    for key in (
+        "products",
+        "sellers",
+        "categories",
+        "deals",
+        "bestSellersList",
+        "asinList",
+        "sellerIdList",
+        "lightningDeals",
+        "trackings",
+        "notifications",
+    ):
+        value = payload.get(key)
+        rows = _rows_from_response_value(key, value)
+        if rows:
+            return key, rows
+    return None, []
+
+
+def _rows_from_response_value(key: str, value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        if key == "deals":
+            for child_key in ("dr", "deals"):
+                child_value = value.get(child_key)
+                if isinstance(child_value, list):
+                    return child_value
+        if key == "bestSellersList":
+            asin_list = value.get("asinList")
+            if isinstance(asin_list, list):
+                return asin_list
+        return list(value.values())
+    return []
+
+
+def _scalar_item_field(row_source_key: str | None) -> str:
+    if row_source_key == "sellerIdList":
+        return "sellerId"
+    if row_source_key in {"asinList", "bestSellersList"}:
+        return "asin"
+    return "value"
 
 
 async def _safe_token_status(client: KeepaApiClient, warnings: list[dict[str, Any]]) -> dict[str, Any]:
@@ -409,6 +485,25 @@ def _normalize_export_format(value: str) -> str:
     if text == "json":
         return "json"
     raise KeepaConfigError(f"不支持的导出格式：{value}")
+
+
+def _resolve_export_format(
+    *,
+    requested_format: str,
+    row_count: int,
+    warnings: list[dict[str, Any]],
+) -> str:
+    if requested_format != "xlsx" or row_count <= MAX_XLSX_EXPORT_ROWS:
+        return requested_format
+    warnings.append(
+        {
+            "stage": "export_format_auto_json",
+            "message": f"Keepa 返回 {row_count} 行，数据量较大，已自动改为 JSON 导出，避免 XLSX 文件过大或导出超时。",
+            "row_count": row_count,
+            "max_xlsx_rows": MAX_XLSX_EXPORT_ROWS,
+        }
+    )
+    return "json"
 
 
 def _export_raw_to_json(

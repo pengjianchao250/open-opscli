@@ -105,7 +105,7 @@ class IntegrationAccountClient:
             headers = {"Authorization": f"Bearer {self.jwt}"}
             headers.update(mcp_headers)
             return headers, {}
-        if mcp_headers:
+        if _has_mcp_api_key(mcp_headers):
             return mcp_headers, {}
         headers, cookies = self.auth_client.build_request_auth(alias)
         headers.update(mcp_headers)
@@ -179,3 +179,7 @@ def decrypt_integration_account_value(encrypted_b64: str, raw_key: str) -> str:
     except ValueError as exc:
         raise IntegrationAccountBadJsonError("集成账号字段解密失败，请检查密钥或密文") from exc
     return plaintext.decode("utf-8")
+
+
+def _has_mcp_api_key(headers: dict[str, str]) -> bool:
+    return bool(headers.get("X-MCP-API-Key"))

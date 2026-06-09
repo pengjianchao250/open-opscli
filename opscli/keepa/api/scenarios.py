@@ -101,6 +101,7 @@ def _product_params(params: dict[str, Any], site: str) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "domain": normalize_domain(site),
         "asin" if asins else "code": items,
+        "history": True,
     }
     _copy_optional(
         payload,

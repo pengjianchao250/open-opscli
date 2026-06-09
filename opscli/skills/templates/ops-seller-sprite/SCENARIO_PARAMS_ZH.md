@@ -135,6 +135,24 @@
 - `order`：排序字段
 - `desc`：是否倒序
 
+## Listing 全景分析 `listing-analysis`
+
+必填：
+
+- `asin`：ASIN
+
+可选：
+
+- `station`：分析站点，默认 `GLOBAL`
+- `pollAttempts` / `maxPolls`：最多轮询次数，默认 `90`
+- `pollIntervalSeconds` / `pollInterval`：轮询间隔秒数，默认 `2`
+
+说明：
+
+- 首先请求 `/v3/api/ai-workflow/listing-analysis` 创建任务。
+- 返回 `taskId` 后轮询 `/v3/api/ai-analysis/task/{taskId}`。
+- 报告正文在结果的 `data.content` 中，建议使用 `export_format=json`。
+
 ## 选市场 `market-research`
 
 必填：无

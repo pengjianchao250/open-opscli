@@ -1,0 +1,42 @@
+{
+  "time": "2026-06-09T10:22:32",
+  "source": "seller_sprite.keyword_reverse",
+  "asin": "B0BY8Y5766",
+  "command": [
+    "__direct__",
+    "seller-sprite",
+    "run",
+    "keyword-reverse",
+    "--site",
+    "US",
+    "--period",
+    "30d",
+    "--params",
+    "{\"asin\": \"B0BY8Y5766\"}",
+    "--page-size",
+    "100",
+    "--export-format",
+    "json",
+    "--output-dir",
+    "output\\asin-data\\asin-data-20260609-102224-52b366\\seller-sprite\\B0BY8Y5766"
+  ],
+  "dry_run": false,
+  "execution": "direct",
+  "status": "failed",
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": "卖家精灵接口返回错误：ERR_ROBOT_CHECK",
+  "json": {
+    "success": false,
+    "command": "seller_sprite.keyword_reverse",
+    "data": null,
+    "error": {
+      "code": "SELLER_SPRITE_API_ERROR",
+      "message": "卖家精灵接口返回错误：ERR_ROBOT_CHECK",
+      "status_code": 200,
+      "api_code": "ERR_ROBOT_CHECK",
+      "api_message": "抱歉，目前您使用过于频繁，请验证后再使用。",
+      "response_excerpt": "{\"code\":\"ERR_ROBOT_CHECK\",\"message\":\"抱歉，目前您使用过于频繁，请验证后再使用。\"}"
+    }
+  }
+}

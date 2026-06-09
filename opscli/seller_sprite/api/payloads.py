@@ -368,8 +368,21 @@ def make_market_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def make_listing_analysis_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "asin": str(input_data.get("asin") or input_data.get("q") or "").strip().upper(),
+        "station": str(input_data.get("station") or "GLOBAL").strip().upper(),
+    }
+
+
 def build_referer(payload: dict[str, Any], scenario: str) -> str:
     """按场景构造 Web referer。"""
+    if scenario == "listing-analysis":
+        query = {
+            "asin": payload.get("asin") or "",
+            "station": payload.get("station") or "GLOBAL",
+        }
+        return f"https://www.sellersprite.com/v3/listing-analysis?{urlencode(query)}"
     if scenario == "keyword-miner":
         return "https://www.sellersprite.com/v3/keyword-miner/"
     if scenario == "keyword-reverse":

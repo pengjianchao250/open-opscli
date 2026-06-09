@@ -305,6 +305,7 @@ def build(
 @app.command("simple")
 def simple(
     table_id: int = typer.Option(..., "--table-id", help="数据集 ID"),
+    dataset: str | None = typer.Option(None, "--dataset", help="dataset_alias 或 dataset_name，用于字段校验"),
     payload_file: str | None = typer.Option(None, "--payload", help="简化查询 JSON 文件路径（与 --json 二选一）"),
     payload_json: str | None = typer.Option(None, "--json", help="简化查询 JSON 字符串（与 --payload 二选一）"),
     output: str | None = typer.Option(None, "--output", help="将 payload 写入指定文件"),
@@ -345,7 +346,7 @@ def simple(
                     f"JSON 字符串解析失败: {exc}{hint}"
                 ) from exc
 
-        kwargs: dict[str, object] = {"table_id": table_id}
+        kwargs: dict[str, object] = {"table_id": table_id, "dataset_alias": dataset}
 
         key_map = {
             "dimensions": "dimensions",

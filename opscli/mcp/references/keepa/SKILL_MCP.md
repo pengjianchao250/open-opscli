@@ -19,7 +19,7 @@ visibility: internal
 2. 站点缺省用 `US`；不要因为缺站点而追问。
 3. 必填参数齐全时直接执行 `keepa_run`；不要把内部参数确认流程暴露给用户。
 4. 只缺必填项时最多追问 1 个短问题；一次追问尽量覆盖同一场景的所有必填项。
-5. 默认导出用户可读 XLSX；只有用户明确要原始数据、后端比对或 JSON 时才用 JSON。
+5. 默认导出用户可读 XLSX；用户明确要原始数据、后端比对、JSON 或结果行数过大时用 JSON。
 6. 最终回复只给业务结果：查询对象、站点、返回行数、导出文件或链接。
 7. 不主动展示 API Key、账号来源、token 消耗、额度余额、内部参数、`params.json`、`raw.json`。
 
@@ -27,7 +27,7 @@ visibility: internal
 
 - `keepa_spec_must_read`: read this guide before first use.
 - `keepa_scenarios`: list supported Keepa scenarios.
-- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX. `export_format` accepts `xls`/`xlsx`/`json`; `xls` and `xlsx` both generate `.xlsx`.
+- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX. `export_format` accepts `xls`/`xlsx`/`json`; `xls` and `xlsx` both generate `.xlsx`. Large results are automatically exported as JSON to avoid XLSX timeout.
 - `keepa_job_status`: read a saved task result by `job_id`.
 - `keepa_export`: read export path or cloud URL, filename, format, and MIME type.
 
@@ -39,7 +39,8 @@ visibility: internal
 - 多个 ASIN / seller ID / category id 支持用户用逗号、空格、顿号、换行分隔；调用前规范化为数组或逗号字符串均可。
 - UPC/EAN/ISBN-13 等条码走 `code`/`codes`；不要和 `asin`/`asins` 同时传给 `product`。
 - 用户同时给 ASIN 和关键词时，以明确动作判断：说“查这个 ASIN”走 `product`，说“搜关键词”走 `product-search`；意图冲突时只追问查询对象类型。
-- 用户说“最近 30 天”“近 90 天”时，优先映射为 `stats=30/90`；如果同时说“历史/曲线/走势”，再加 `history=true`。
+- 用户说“查商品详情”“查商品”时，`product` 默认会带 `history=true` 获取历史价格变化；用户明确说不要历史时再传 `history=false`。
+- 用户说“最近 30 天”“近 90 天”时，优先映射为 `stats=30/90`。
 - 用户说“只要 ASIN”“只导出 ASIN 列表”时，`product-search` 加 `asins_only=true`。
 - 用户说“店铺商品”“店铺 ASIN”时，`seller` 加 `storefront=true`。
 
@@ -59,6 +60,7 @@ Every run writes files under the task directory:
 - `result.json`: normalized task result and export metadata.
 - `<job_id>.xlsx`: default user-facing export with Chinese headers.
 - `<job_id>.json`: optional debug export when `export_format=json`, containing rows, raw response, request params, and quota fields.
+- 当结果行数过大时，即使请求 XLSX 也会自动改为 JSON，并通过 `warnings` 返回文字提示。
 
 - `export.url` 存在时只回复云端链接；否则回复 `export.path`。
 - 上传失败但本地导出存在时，不判定任务失败，回复本地文件路径。
@@ -115,7 +117,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 | 中文表达 | 调用参数 |
 | --- | --- |
 | `跑 keepa product-search，关键词 flashlight，导出结果` | `scenario="product-search"`, `site="US"`, `params={"keyword":"flashlight"}` |
-| `查美区 ASIN B0088PUEPK 的商品详情` | `scenario="product"`, `site="US"`, `params={"asin":"B0088PUEPK","stats":30,"history":false}` |
+| `查美区 ASIN B0088PUEPK 的商品详情` | `scenario="product"`, `site="US"`, `params={"asin":"B0088PUEPK","stats":30}` |
 | `查这个 ASIN 的价格历史` | `scenario="product"`, `params={"asin":"...","history":true,"stats":30}` |
 | `只要 ASIN 列表` | 对 `product-search` 加 `params={"asins_only":true}` |
 | `查 seller A2L77EE7U53NWQ 店铺商品` | `scenario="seller"`, `params={"seller":"A2L77EE7U53NWQ","storefront":true}` |
@@ -130,8 +132,8 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 
 - 用户未指定站点：`site="US"`。
 - 用户只说“导出”：使用默认 `export_format="xls"`，实际生成 `.xlsx`；也可显式传 `export_format="xlsx"`。
-- 用户只说“查商品详情”：建议 `stats=30`, `history=false`，减少返回体积。
-- 用户说“价格历史/历史曲线”：使用 `history=true`。
+- 用户只说“查商品详情”：建议 `stats=30`；`product` 场景默认会带 `history=true`。
+- 用户说“不需要历史/不要价格历史”：额外传 `history=false`。
 - 用户说“只要 ASIN”：使用 `asins_only=true`。
 - 用户要求后端比对、原始数据、JSON：使用 `export_format="json"`。
 - 用户未指定页码：`product-search` 可以不传 `page`，需要显式第一页时传 `page=0`。
@@ -197,7 +199,7 @@ Product:
   "params": {
     "asins": ["B0088PUEPK"],
     "stats": 30,
-    "history": false
+    "history": true
   }
 }
 ```

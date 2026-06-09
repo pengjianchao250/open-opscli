@@ -1,0 +1,32 @@
+{
+  "request": {
+    "scenario": "keyword-miner",
+    "site": "US",
+    "period": "30d",
+    "params": {
+      "keyword": "bed frame"
+    },
+    "page_size": 100,
+    "job_id": null,
+    "output_dir": "output\\asin-data\\asin-data-20260609-102224-52b366\\seller-sprite\\B0BY8Y5766",
+    "export_format": "json"
+  },
+  "resolved_params": {
+    "keyword": "bed frame"
+  },
+  "payload": {
+    "keyword": "bed frame",
+    "market": 1,
+    "pageNum": 1,
+    "pageSize": 100,
+    "historyDate": "",
+    "orderBy": 5,
+    "desc": true,
+    "filterRootWord": 0,
+    "matchType": 0,
+    "amazonChoice": false,
+    "keywordBidMatchType": "exact",
+    "includeHighFrequency": true,
+    "groupNum": 1
+  }
+}

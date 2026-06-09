@@ -1,0 +1,54 @@
+{
+  "run_id": "asin-data-B0D3845MWD-20260608-diagnose-venv",
+  "started_at": "2026-06-08T18:33:09",
+  "finished_at": "2026-06-08T18:33:13",
+  "output_dir": "output\\asin-data\\asin-data-B0D3845MWD-20260608-diagnose-venv",
+  "dry_run": false,
+  "summary": {
+    "input_count": 1,
+    "asin_count": 1,
+    "input_error_count": 0,
+    "source_error_count": 2,
+    "failed_asin_count": 1,
+    "failed_asins": [
+      "B0D3845MWD"
+    ]
+  },
+  "options": {
+    "asin_column": "asin",
+    "keyword_column": "keyword",
+    "site_column": "site",
+    "skip_seller_sprite": false,
+    "skip_keyword_miner": true,
+    "skip_listing_analysis": false,
+    "skip_amazon": true,
+    "skip_query": true,
+    "skip_sales_query": false,
+    "skip_crawler_query": false,
+    "skip_rufus": true,
+    "seller_sprite_period": "30d",
+    "keyword_source": "reverse_top",
+    "max_miner_keywords": 1,
+    "listing_analysis_station": "GLOBAL",
+    "rufus_country": null,
+    "rufus_questions": [
+      "这是什么商品",
+      "这个商品评价如何？"
+    ],
+    "rufus_skills_dir": ".agents/skills",
+    "rufus_timeout_seconds": 180,
+    "skip_rufus_login_recovery": false,
+    "sales_start": null,
+    "sales_end": null,
+    "query_chunk_size": 100
+  },
+  "files": {
+    "manifest": "output\\asin-data\\asin-data-B0D3845MWD-20260608-diagnose-venv\\manifest.json",
+    "results": "output\\asin-data\\asin-data-B0D3845MWD-20260608-diagnose-venv\\asin-data.jsonl",
+    "frontend_data": "output\\asin-data\\asin-data-B0D3845MWD-20260608-diagnose-venv\\frontend-data.json",
+    "frontend_markdown": "output\\asin-data\\asin-data-B0D3845MWD-20260608-diagnose-venv\\frontend-data.md",
+    "summary": "output\\asin-data\\asin-data-B0D3845MWD-20260608-diagnose-venv\\asin-data-summary.json",
+    "commands": "output\\asin-data\\asin-data-B0D3845MWD-20260608-diagnose-venv\\commands.jsonl",
+    "errors": "output\\asin-data\\asin-data-B0D3845MWD-20260608-diagnose-venv\\errors.jsonl"
+  }
+}
