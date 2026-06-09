@@ -791,6 +791,34 @@ def test_build_simple_auto_fixes_formula_metric_aggregation(tmp_path, monkeypatc
     """公式字段传入 aggregation 时，自动修正为 expr + 移除 aggregation，不再报错。"""
     manager = QueryManager()
     payload = {
+        "datasets": [
+            {
+                "table_id": 3,
+                "dataset_alias": "ds_6fbfb45edd2a",
+                "dataset_name": "order_sale_trend_set",
+                "select_columns": [{"column_name": "asin", "verbose_name": "ASIN"}],
+            }
+        ],
+        "fields": [],
+    }
+    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
+
+    result = manager.build_simple(
+        table_id=3,
+        dataset_alias="order_sale_trend_set",
+        dimensions=[{"field": "ds_6fbfb45edd2a.asin", "alias": "f_asin"}],
+        filters=[{"field": "ds_6fbfb45edd2a.asin", "operator": "in", "value": ["B0TEST0001"]}],
+        validate_fields=True,
+    )
+
+    assert result["payload"]["tableId"] == 3
+
+
+def test_build_simple_rejects_formula_metric_aggregation(tmp_path, monkeypatch):
+def test_build_simple_auto_fixes_formula_metric_aggregation(tmp_path, monkeypatch):
+    """公式字段传入 aggregation 时，自动修正为 expr + 移除 aggregation，不再报错。"""
+    manager = QueryManager()
+    payload = {
         "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
         "fields": [
             {

@@ -6,7 +6,13 @@
 output/asin-data/<run_id>/frontend-data.json
 ```
 
-如果需要人工确认本次运行概览，可读取同目录：
+如果需要人工确认本次运行概览，可读取同目录 HTML；该文件也是默认上传到阿里云的文件：
+
+```text
+output/asin-data/<run_id>/frontend-data.html
+```
+
+本地还会保留 Markdown 交接文件：
 
 ```text
 output/asin-data/<run_id>/frontend-data.md

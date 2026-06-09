@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import html
 import importlib.util
 import json
 from datetime import datetime
@@ -103,17 +104,22 @@ class AsinDataCollector:
             frontend_bundle = self.legacy.build_frontend_bundle(summary, asin_results)
             frontend_json_path = output_root / "frontend-data.json"
             frontend_markdown_path = output_root / "frontend-data.md"
+            frontend_html_path = output_root / "frontend-data.html"
             self.legacy.write_json(frontend_json_path, frontend_bundle)
             self.legacy.write_text(frontend_markdown_path, self.legacy.render_frontend_markdown(frontend_bundle))
+            self.legacy.write_text(frontend_html_path, self._render_frontend_html(frontend_bundle))
+            summary["files"]["frontend_html"] = str(frontend_html_path)
             upload = None
             if args.upload:
-                upload = self._upload_frontend_markdown(
-                    frontend_markdown_path,
+                upload = self._upload_frontend_json(
+                    frontend_json_path,
                     run_id=run_id,
                     records=records,
                     summary=summary,
                 )
-                summary["files"]["frontend_markdown_url"] = upload["url"]
+                summary["files"]["frontend_data_url"] = upload["url"]
+                summary["files"]["frontend_json_url"] = upload["url"]
+                summary["files"]["frontend_upload_url"] = upload["url"]
                 summary["upload"] = upload
             self.legacy.write_json(output_root / "asin-data-summary.json", summary)
             self.legacy.write_json(output_root / "manifest.json", summary)
@@ -185,7 +191,7 @@ class AsinDataCollector:
         self._validate_args(args)
         return args
 
-    def _upload_frontend_markdown(
+    def _upload_frontend_json(
         self,
         path: Path,
         *,
@@ -193,17 +199,21 @@ class AsinDataCollector:
         records: list[dict[str, Any]],
         summary: dict[str, Any],
     ) -> dict[str, Any]:
-        upload_path = self._prepare_frontend_markdown_upload_file(path)
+        upload_path = self._prepare_frontend_json_upload_file(path)
         upload = self.file_upload_client.upload(
             upload_path,
-            purpose="asin_data_frontend_markdown",
+            purpose="asin_data_frontend_json",
             folder="asin-data",
             public="1",
             metadata={
                 "run_id": run_id,
                 "asin_count": len(records),
                 "asins": [record.get("asin") for record in records],
-                "frontend_data": "frontend-data.md",
+                "frontend_json": "frontend-data.json",
+                "frontend_data": "frontend-data.json",
+                "frontend_html": "frontend-data.html",
+                "frontend_markdown": "frontend-data.md",
+                "source_filename": path.name,
                 "upload_filename": upload_path.name,
                 "summary": summary.get("summary"),
             },
@@ -212,18 +222,107 @@ class AsinDataCollector:
             "url": upload.url,
             "path": str(path),
             "upload_path": str(upload_path),
-            "purpose": "asin_data_frontend_markdown",
+            "purpose": "asin_data_frontend_json",
             "folder": "asin-data",
             "raw": upload.raw,
         }
 
     @staticmethod
-    def _prepare_frontend_markdown_upload_file(path: Path) -> Path:
-        if path.suffix.lower() != ".md":
-            return path
+    def _prepare_frontend_json_upload_file(path: Path) -> Path:
         upload_path = path.with_suffix(".txt")
-        upload_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        upload_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8-sig")
         return upload_path
+
+    @staticmethod
+    def _render_frontend_html(frontend_bundle: dict[str, Any]) -> str:
+        run_info = frontend_bundle.get("运行信息")
+        rows = frontend_bundle.get("数据")
+        if not isinstance(run_info, dict):
+            run_info = {}
+        if not isinstance(rows, list):
+            rows = []
+
+        def esc(value: Any) -> str:
+            return html.escape("" if value is None else str(value), quote=True)
+
+        def json_block(value: Any) -> str:
+            return (
+                "<pre>"
+                + esc(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+                + "</pre>"
+            )
+
+        def table(payload: dict[str, Any]) -> str:
+            body = "\n".join(
+                f"<tr><th>{esc(key)}</th><td>{esc(value) if not isinstance(value, (dict, list)) else json_block(value)}</td></tr>"
+                for key, value in payload.items()
+            )
+            return f"<table>{body}</table>"
+
+        cards: list[str] = []
+        for index, record in enumerate(rows, start=1):
+            if not isinstance(record, dict):
+                cards.append(f"<section class=\"asin-card\"><h2>ASIN {index}</h2>{json_block(record)}</section>")
+                continue
+            base = record.get("基础数据") if isinstance(record.get("基础数据"), dict) else {}
+            asin = base.get("ASIN") or f"ASIN {index}" if isinstance(base, dict) else f"ASIN {index}"
+            section_html: list[str] = []
+            for section_name, section_payload in record.items():
+                open_attr = " open" if section_name == "基础数据" else ""
+                section_html.append(
+                    f"<details{open_attr}><summary>{esc(section_name)}</summary>{json_block(section_payload)}</details>"
+                )
+            cards.append(
+                f"<section class=\"asin-card\" id=\"asin-{esc(asin)}\"><h2>{esc(asin)}</h2>{''.join(section_html)}</section>"
+            )
+
+        template = """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ASIN Data Package</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f6f8fb; color: #17202a; }
+    header { background: #0f172a; color: #fff; padding: 24px 32px; }
+    main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+    h1, h2 { margin: 0 0 16px; }
+    .panel, .asin-card { background: #fff; border: 1px solid #d8dee8; border-radius: 8px; padding: 20px; margin-bottom: 18px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid #e6eaf0; padding: 10px 12px; text-align: left; vertical-align: top; }
+    th { width: 220px; color: #475569; background: #f8fafc; }
+    details { border: 1px solid #e2e8f0; border-radius: 6px; margin: 10px 0; background: #fbfdff; }
+    summary { cursor: pointer; font-weight: 600; padding: 12px 14px; }
+    pre { margin: 0; padding: 14px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: #0b1020; color: #d7e0ff; border-radius: 0 0 6px 6px; }
+    .panel pre { border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ASIN Data Package</h1>
+    <div>Generated by opscli asin-data collect</div>
+  </header>
+      <main>
+        <section class="panel">
+          <h2>运行信息</h2>
+      __RUN_INFO__
+    </section>
+    __CARDS__
+    <section class="panel">
+      <h2>完整 JSON</h2>
+      __FULL_JSON__
+    </section>
+  </main>
+</body>
+</html>
+"""
+        return (
+            template
+            .replace("__RUN_INFO__", table(run_info))
+            .replace("__CARDS__", "\n".join(cards))
+            .replace("__FULL_JSON__", json_block(frontend_bundle))
+        )
 
     def _load_records(self, args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         if args.input:

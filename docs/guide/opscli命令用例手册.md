@@ -1623,7 +1623,7 @@ opscli asin-data collect (--input <file> | --asin <ASIN>) [选项...]
 | `--crawler-dataset-alias` | 否 | `ds_icw50TLOFu4F` | 爬虫 Listing 数据集 alias |
 | `--crawler-field-mode` | 否 | `full` | 爬虫字段模式：`full` / `compatible` |
 | `--query-chunk-size` | 否 | `100` | BI/爬虫每批 ASIN 数 |
-| `--upload/--no-upload` | 否 | `--upload` | 是否上传 `frontend-data.txt` 并返回 URL |
+| `--upload/--no-upload` | 否 | `--upload` | 是否上传 `frontend-data.json` 并返回 URL |
 | `--url-only` | 否 | `false` | 只输出上传后的 URL |
 | `--pretty` | 否 | `false` | 格式化 JSON 输出 |
 
@@ -1658,7 +1658,7 @@ output/asin-data/<run_id>/
 
 - `frontend-data.json`：前端优先读取的数据包
 - `frontend-data.md`：人工可读交接文件
-- `frontend-data.txt`：上传用文本文件
+- `frontend-data.html`：本地 HTML 预览文件，不上传
 - `asin-data.jsonl`：每个 ASIN 一行的完整记录
 - `manifest.json`：运行参数和文件索引
 - `commands.jsonl`：数据源执行日志
