@@ -91,6 +91,7 @@ def test_keepa_run_accepts_params_json_string(monkeypatch):
     assert "quota" not in result["data"]
     assert "params_path" not in result["data"]
     assert "raw_path" not in result["data"]
+    assert result["data"]["export"]["url"].startswith("file://")
     assert "tokens_left" not in str(result["data"])
     assert result["data"]["warnings"][0]["message"] == "Keepa 当前可用额度不足，请稍后重试；如果持续卡住，请联系运营人员处理。"
 
@@ -104,6 +105,7 @@ def test_keepa_job_status_hides_quota(monkeypatch):
     assert result["data"]["job_id"] == "job-1"
     assert "quota" not in result["data"]
     assert "tokensLeft" not in str(result["data"])
+    assert result["data"]["export"]["url"].startswith("file://")
 
 
 def test_keepa_export_returns_export_info(monkeypatch):
