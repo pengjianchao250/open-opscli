@@ -16,7 +16,6 @@ from opscli.xiyou.credential_service import (
 )
 from opscli.xiyou.credentials import XiyouCredentialProvider, XiyouCredentialStore
 from opscli.xiyou.domain.exceptions import XiyouConfigError
-from opscli.mcp.context import mcp_request_ctx
 
 
 @pytest.fixture
@@ -97,13 +96,6 @@ def test_credential_provider_prefers_remote_latest_when_configured(local_tmp_pat
     token = _jwt()
     calls = []
 
-    class BlockingAuthClient:
-        def build_request_auth(self, alias):
-            raise AssertionError("CLI auth should not be used when explicit credential API key is configured")
-
-        def get_token_by_session(self, session_id, alias):
-            raise AssertionError("session token should not be fetched")
-
     class Response:
         status_code = 200
         text = "{}"
@@ -133,7 +125,7 @@ def test_credential_provider_prefers_remote_latest_when_configured(local_tmp_pat
         credential_latest_url="https://ops.example.com/api/internal/xiyou/credential/latest",
         credential_api_key="secret",
     )
-    client = XiyouCredentialServiceClient(settings, auth_client=BlockingAuthClient(), http_get=http_get)
+    client = XiyouCredentialServiceClient(settings, http_get=http_get)
     credential = get_cached_remote_credential(settings, client=client, refresh=True)
 
     assert credential.authorization == token
@@ -147,15 +139,6 @@ def test_credential_provider_prefers_remote_latest_when_configured(local_tmp_pat
 def test_remote_credential_cache_can_be_forced_to_refresh(local_tmp_path: Path):
     tokens = [_jwt(seconds=3600), _jwt(seconds=7200)]
     calls = []
-
-    class RecordingAuthClient:
-        def build_request_auth(self, alias):
-            return {"Authorization": "Bearer cli-jwt", "X-Opscli-Version": "test"}, {
-                "polarisUserToken": "cli-session"
-            }
-
-        def get_token_by_session(self, session_id, alias):
-            raise AssertionError("session token should not be fetched")
 
     class Response:
         status_code = 200
@@ -175,7 +158,7 @@ def test_remote_credential_cache_can_be_forced_to_refresh(local_tmp_path: Path):
         credential_latest_url="https://ops.example.com/api/internal/xiyou/credential/latest",
         credential_cache_ttl_seconds=600,
     )
-    client = XiyouCredentialServiceClient(settings, auth_client=RecordingAuthClient(), http_get=http_get)
+    client = XiyouCredentialServiceClient(settings, http_get=http_get)
 
     first = get_cached_remote_credential(settings, client=client, refresh=True)
     second = get_cached_remote_credential(settings, client=client)
@@ -241,72 +224,3 @@ def test_parse_latest_credential_response_supports_mcp_accounts_shape():
     assert credential.operator == "西柚补登"
     assert credential.version == 3
     assert credential.headers == {"krs-ver": "1.0.0"}
-
-
-def test_credential_service_uses_mcp_api_key_without_cli_auth():
-    class BlockingAuthClient:
-        def build_request_auth(self, alias):
-            raise AssertionError("CLI auth should not be used when MCP API key is present")
-
-        def get_token_by_session(self, session_id, alias):
-            raise AssertionError("session token should not be fetched")
-
-    client = XiyouCredentialServiceClient(
-        XiyouSettings(credential_latest_url="https://ops.api.qa.aukeyit.com/api/v1/mcp-accounts?platform=xiyou"),
-        auth_client=BlockingAuthClient(),
-        http_get=lambda *args, **kwargs: None,
-    )
-    token = mcp_request_ctx.set({"api_key": "mcp-key-xiyou"})
-    try:
-        headers, cookies = client._get_auth("ops")
-    finally:
-        mcp_request_ctx.reset(token)
-
-    assert headers["X-MCP-API-Key"] == "mcp-key-xiyou"
-    assert headers["X-Opscli-Version"] == "0.0.84"
-    assert cookies == {}
-
-
-def test_credential_service_debug_logs_request_and_response(monkeypatch, capsys):
-    token = _jwt()
-    monkeypatch.setenv("OPSCLI_XIYOU_DEBUG_CREDENTIAL_REQUEST", "1")
-
-    class DummyAuthClient:
-        def build_request_auth(self, alias):
-            raise AssertionError("CLI auth should not be used when explicit credential API key is configured")
-
-        def get_token_by_session(self, session_id, alias):
-            raise AssertionError("session token should not be fetched")
-
-    class Response:
-        status_code = 200
-        text = '{"code":200}'
-
-        def json(self):
-            return {
-                "code": 200,
-                "data": {
-                    "credential": {
-                        "authorization": token,
-                        "cookie": "sid=remote",
-                    }
-                },
-            }
-
-    client = XiyouCredentialServiceClient(
-        XiyouSettings(
-            credential_latest_url="https://ops.api.qa.aukeyit.com/api/v1/mcp-accounts?platform=xiyou",
-            credential_api_key="secret-debug-token",
-        ),
-        auth_client=DummyAuthClient(),
-        http_get=lambda *args, **kwargs: Response(),
-    )
-
-    credential = client.get_latest()
-
-    assert credential.authorization == token
-    stderr = capsys.readouterr().err
-    assert "[xiyou-debug]" in stderr
-    assert "secret-debug-token" in stderr
-    assert "https://ops.api.qa.aukeyit.com/api/v1/mcp-accounts?platform=xiyou" in stderr
-    assert '"stage": "response_json"' in stderr
