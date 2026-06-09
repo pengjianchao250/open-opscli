@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
+import shutil
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -11,11 +17,32 @@ import respx
 from opscli.xiyou.api.client import XiyouApiClient, _normalize_oss_url
 from opscli.xiyou.config import XiyouSettings
 from opscli.xiyou.credentials import XiyouCredential
-from opscli.xiyou.domain.exceptions import XiyouApiError
+from opscli.xiyou.domain.exceptions import XiyouApiError, XiyouCredentialExpiredError
+
+
+@pytest.fixture
+def local_tmp_path():
+    path = Path("output") / "test-runs" / f"xiyou-client-{uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=False)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def _jwt(*, seconds: int = 3600) -> str:
+    exp = int((datetime.now(timezone.utc) + timedelta(seconds=seconds)).timestamp())
+    payload = {"exp": exp, "UserId": "u-1"}
+    return f"{_b64({'alg': 'none', 'typ': 'JWT'})}.{_b64(payload)}.signature"
+
+
+def _b64(payload: dict) -> str:
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
 def _make_client() -> XiyouApiClient:
@@ -60,7 +87,7 @@ def test_get_bytes_does_not_leak_business_headers_to_oss():
         return httpx.Response(200, content=b"xlsx-bytes")
 
     try:
-        with respx.mock(assert_all_called=True) as mock:
+        with respx.mock(assert_all_called=False) as mock:
             mock.get(
                 "https://excel.xydc.com/search_by_asin/20260528~20260603/US_X.xlsx"
             ).mock(side_effect=_record)
@@ -106,3 +133,177 @@ def test_get_bytes_raises_with_response_excerpt_on_403():
     assert err.response_excerpt is not None
     assert "SignatureDoesNotMatch" in err.response_excerpt
     assert "StringToSign" in err.response_excerpt
+
+
+def test_user_info_uses_get_with_business_headers():
+    """补登校验调用 user/info，并携带西柚 authorization。"""
+    client = _make_client()
+    captured: dict[str, httpx.Headers] = {}
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = request.headers
+        return httpx.Response(200, json={"code": 200, "data": {"name": "demo"}})
+
+    try:
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get("https://api.xydc.com/user/info").mock(side_effect=_record)
+            result = _run(client.user_info())
+    finally:
+        _run(client.aclose())
+
+    assert result["code"] == 200
+    assert captured["headers"]["authorization"] == "Bearer xiyou-jwt"
+
+
+def test_user_info_merges_credential_service_headers():
+    """后台凭据服务下发的 headers 应合并进西柚请求头。"""
+    client = XiyouApiClient(
+        credential=XiyouCredential(
+            authorization="Bearer xiyou-jwt",
+            cookie="sid=abc",
+            headers={"krs-ver": "from-service", "web-version": "5.0"},
+        ),
+        settings=XiyouSettings(authorization="Bearer xiyou-jwt", cookie="sid=abc"),
+    )
+    captured: dict[str, httpx.Headers] = {}
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = request.headers
+        return httpx.Response(200, json={"code": 200})
+
+    try:
+        with respx.mock(assert_all_called=True) as mock:
+            mock.get("https://api.xydc.com/user/info").mock(side_effect=_record)
+            result = _run(client.user_info())
+    finally:
+        _run(client.aclose())
+
+    assert result["code"] == 200
+    assert captured["headers"]["krs-ver"] == "from-service"
+    assert captured["headers"]["web-version"] == "5.0"
+
+
+def test_http_401_triggers_token_required_notification(local_tmp_path: Path):
+    """西柚 HTTP 401 应触发补登通知。"""
+    webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=client"
+    notify_path = local_tmp_path / "notify.yaml"
+    notify_path.write_text(
+        "\n".join(
+            [
+                "wechat_work:",
+                f"  webhook_url: {webhook}",
+                "mentions:",
+                "  mentioned_list:",
+                "    - zhangsan",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings = XiyouSettings(
+        authorization=_jwt(seconds=7200),
+        credential_path=local_tmp_path / "credential.json",
+        notify_path=notify_path,
+    )
+    client = XiyouApiClient(
+        credential=XiyouCredential(authorization=_jwt(seconds=7200)),
+        settings=settings,
+    )
+    try:
+        with respx.mock(assert_all_called=True) as mock:
+            api_route = mock.get("https://api.xydc.com/user/info").mock(
+                return_value=httpx.Response(401, json={"code": "TokenInvalid"})
+            )
+            notify_route = mock.post(webhook).mock(return_value=httpx.Response(200, json={"errcode": 0}))
+            with pytest.raises(XiyouCredentialExpiredError) as exc_info:
+                _run(client.get_json("/user/info"))
+    finally:
+        _run(client.aclose())
+
+    assert exc_info.value.reason == "http_401"
+    assert api_route.calls.call_count == 1
+    assert notify_route.calls.call_count == 1
+    body = json.loads(notify_route.calls.last.request.content)
+    assert "TokenInvalid" in body["text"]["content"]
+
+
+def test_business_token_expired_returns_terminal_credential_error(local_tmp_path: Path):
+    """西柚业务码 TokenExpired 应被识别为补登终态错误。"""
+    webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=token-expired"
+    notify_path = local_tmp_path / "notify.yaml"
+    notify_path.write_text(
+        "\n".join(
+            [
+                "wechat_work:",
+                f"  webhook_url: {webhook}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings = XiyouSettings(
+        authorization=_jwt(seconds=7200),
+        credential_path=local_tmp_path / "credential.json",
+        notify_path=notify_path,
+    )
+    client = XiyouApiClient(
+        credential=XiyouCredential(authorization=_jwt(seconds=7200)),
+        settings=settings,
+    )
+    try:
+        with respx.mock(assert_all_called=True) as mock:
+            api_route = mock.get("https://api.xydc.com/user/info").mock(
+                return_value=httpx.Response(200, json={"code": "TokenExpired"})
+            )
+            notify_route = mock.post(webhook).mock(return_value=httpx.Response(200, json={"errcode": 0}))
+            with pytest.raises(XiyouCredentialExpiredError) as exc_info:
+                _run(client.get_json("/user/info"))
+    finally:
+        _run(client.aclose())
+
+    assert exc_info.value.reason == "business_token_invalid"
+    assert api_route.calls.call_count == 1
+    assert notify_route.calls.call_count == 1
+    body = json.loads(notify_route.calls.last.request.content)
+    assert "TokenExpired" in body["text"]["content"]
+
+
+def test_expired_jwt_triggers_token_required_notification_and_stops_request(local_tmp_path: Path):
+    """本地 JWT 已过期时，请求前应通知补登并终止当前任务。"""
+    webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=expired"
+    notify_path = local_tmp_path / "notify.yaml"
+    notify_path.write_text(
+        "\n".join(
+            [
+                "wechat_work:",
+                f"  webhook_url: {webhook}",
+                "mentions:",
+                "  mentioned_mobile_list:",
+                "    - '13800138000'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings = XiyouSettings(
+        authorization=_jwt(seconds=-60),
+        credential_path=local_tmp_path / "credential.json",
+        notify_path=notify_path,
+    )
+    client = XiyouApiClient(
+        credential=XiyouCredential(authorization=_jwt(seconds=-60)),
+        settings=settings,
+    )
+    try:
+        with respx.mock(assert_all_called=False) as mock:
+            api_route = mock.get("https://api.xydc.com/user/info").mock(
+                return_value=httpx.Response(200, json={"code": 200})
+            )
+            notify_route = mock.post(webhook).mock(return_value=httpx.Response(200, json={"errcode": 0}))
+            with pytest.raises(XiyouCredentialExpiredError) as exc_info:
+                _run(client.get_json("/user/info"))
+    finally:
+        _run(client.aclose())
+
+    assert exc_info.value.reason == "jwt_expired"
+    assert api_route.calls.call_count == 0
+    assert notify_route.calls.call_count == 1
+    body = json.loads(notify_route.calls.last.request.content)
+    assert "jwt_expired" in body["text"]["content"]

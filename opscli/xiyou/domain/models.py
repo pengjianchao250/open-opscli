@@ -37,6 +37,15 @@ class XiyouRankingRequest:
     asins: list[str] | str | None = None
     keyword: str | None = None
     query: str = ""
+    cycle_period: str | None = None
+    start_month: str | None = None
+    end_month: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    report_date: str | None = None
+    view_mode: str | None = None
+    replay_type: str | None = None
+    keyword_type: str | None = None
     page: int = 1
     page_size: int = 50
     job_id: str | None = None

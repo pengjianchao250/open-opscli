@@ -7,8 +7,12 @@ from typing import Any, Callable
 
 from opscli.xiyou.api.payloads import (
     make_asin_compare_payload,
+    make_keyword_ad_replay_payload,
+    make_keyword_ad_toppers_payload,
     make_keyword_analysis_payload,
     make_keyword_explorer_payload,
+    make_keyword_historical_traffic_payload,
+    make_keyword_organic_replay_payload,
     make_ranking_payload,
     make_reverse_keyword_payload,
 )
@@ -28,6 +32,8 @@ class XiyouRankingScenario:
     endpoint: str
     allowed_rank_patterns: tuple[str, ...]
     default_rank_pattern: str
+    allowed_periods: tuple[str, ...]
+    default_period: str
     mode: str = "rows"
     default_dataset: str | None = None
     status_endpoint: str | None = None
@@ -67,6 +73,14 @@ class XiyouRankingScenario:
             raise XiyouConfigError(f"{self.target} 排行榜 rank_pattern 仅支持：{allowed}")
         return rank_pattern
 
+    def normalize_period(self, value: str | None) -> str:
+        """校验并返回排行榜周期。"""
+        period = (value or self.default_period).lower()
+        if period not in self.allowed_periods:
+            allowed = ", ".join(self.allowed_periods)
+            raise XiyouConfigError(f"{self.target} 排行榜 period 仅支持：{allowed}")
+        return period
+
 
 SCENARIOS: dict[str, XiyouRankingScenario] = {
     "asin": XiyouRankingScenario(
@@ -76,6 +90,8 @@ SCENARIOS: dict[str, XiyouRankingScenario] = {
         endpoint="/v2/rankingList/asins",
         allowed_rank_patterns=("flow", "surge"),
         default_rank_pattern="flow",
+        allowed_periods=("week", "month"),
+        default_period="week",
     ),
     "keyword": XiyouRankingScenario(
         function="ranking",
@@ -84,6 +100,8 @@ SCENARIOS: dict[str, XiyouRankingScenario] = {
         endpoint="/v3/rankingList/searchTerms",
         allowed_rank_patterns=("aba", "surge"),
         default_rank_pattern="aba",
+        allowed_periods=("week",),
+        default_period="week",
     ),
 }
 
@@ -115,8 +133,16 @@ class XiyouResourceScenario:
         asins: list[str] | str | None,
         keyword: str | None,
         query: str,
+        cycle_period: str | None,
+        start_month: str | None,
+        end_month: str | None,
+        start_date: str | None,
+        end_date: str | None,
+        report_date: str | None,
         page: int,
         page_size: int,
+        view_mode: str | None = None,
+        keyword_type: str | None = None,
     ) -> dict[str, Any]:
         """构造 resource 场景 payload。"""
         return self.payload_builder(
@@ -126,6 +152,14 @@ class XiyouResourceScenario:
                 "asins": asins,
                 "keyword": keyword,
                 "query": query,
+                "cycle_period": cycle_period,
+                "start_month": start_month,
+                "end_month": end_month,
+                "start_date": start_date,
+                "end_date": end_date,
+                "report_date": report_date,
+                "view_mode": view_mode,
+                "keyword_type": keyword_type,
                 "page": page,
                 "page_size": page_size,
             }
@@ -168,6 +202,43 @@ RESOURCE_SCENARIOS: dict[str, XiyouResourceScenario] = {
         required_params=("keyword",),
         payload_builder=make_keyword_explorer_payload,
         default_dataset="keywords",
+    ),
+    "keyword-historical-traffic": XiyouResourceScenario(
+        function="keyword-historical-traffic",
+        title="关键词历史流量分析",
+        endpoint="/v3/searchTerms/historicalTrafficRatio/list",
+        status_endpoint="",
+        required_params=("keyword",),
+        payload_builder=make_keyword_historical_traffic_payload,
+        default_dataset="analysis",
+        mode="rows",
+    ),
+    "keyword-ad-replay": XiyouResourceScenario(
+        function="keyword-ad-replay",
+        title="关键词广告放映机",
+        endpoint="/v4/searchTerms/advertisingReplay/resource",
+        status_endpoint="/v4/resource/status",
+        required_params=("keyword",),
+        payload_builder=make_keyword_ad_replay_payload,
+        default_dataset="analysis",
+    ),
+    "keyword-organic-replay": XiyouResourceScenario(
+        function="keyword-organic-replay",
+        title="关键词自然放映机",
+        endpoint="/v3/searchTerms/organic/replay/resource",
+        status_endpoint="/v2/resource/status",
+        required_params=("keyword",),
+        payload_builder=make_keyword_organic_replay_payload,
+        default_dataset="analysis",
+    ),
+    "keyword-ad-toppers": XiyouResourceScenario(
+        function="keyword-ad-toppers",
+        title="关键词广告金主榜",
+        endpoint="/v2/searchTerms/advertising/toppers/excel/resource",
+        status_endpoint="/v2/resource/status",
+        required_params=("keyword",),
+        payload_builder=make_keyword_ad_toppers_payload,
+        default_dataset="analysis",
     ),
 }
 

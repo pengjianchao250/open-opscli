@@ -38,3 +38,37 @@ class XiyouApiError(XiyouError):
             error["response_excerpt"] = self.response_excerpt
         return error
 
+
+class XiyouCredentialExpiredError(XiyouError):
+    """西柚业务凭据已失效，需要运维补登。"""
+
+    code = "XIYOU_CREDENTIAL_EXPIRED"
+
+    def __init__(
+        self,
+        message: str = "西柚凭据已过期，已发送企微补登通知，请等待运维在运营后台补登后重试。",
+        *,
+        reason: str,
+        expires_at: str | None = None,
+        notify_result: dict | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.expires_at = expires_at
+        self.notify_result = notify_result or {}
+
+    def to_dict(self) -> dict[str, object]:
+        """转换为 MCP `_err` 可识别的终态错误结构。"""
+        return {
+            "code": self.code,
+            "message": str(self),
+            "auth_system": "xiyou",
+            "retryable": False,
+            "terminal": True,
+            "reason": self.reason,
+            "expires_at": self.expires_at,
+            "notify_result": self.notify_result,
+            "user_action": "等待运维在运营系统后台补登西柚 token/cookie 后，再重新发起西柚任务。",
+            "agent_action": "停止当前西柚任务，不要调用 auth_mcp_login/auth_get_token/auth_token_refresh；这些工具只刷新 OPS 登录，不能修复西柚凭据。",
+            "do_not_call_tools": ["auth_mcp_login", "auth_get_token", "auth_token_refresh"],
+        }

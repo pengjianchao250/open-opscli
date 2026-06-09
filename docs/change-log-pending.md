@@ -1318,3 +1318,11 @@
 **影响范围**：技能广场全员可见，安装命令 `opscli skills install zhangpeiliang@ops-dataset-query`
 **回滚方式**：`opscli skills unpublish zhangpeiliang@ops-dataset-query`
 ---
+## 2026-06-08 西柚 - 接入运营后台凭据服务
+
+**变更原因**：正式环境不能依赖 `.env` 或本地 `credential.json` 保存西柚 token/cookie，需要从运营后台统一读取最新凭据，并支持补登成功后清理进程缓存。
+**改动点**：新增 `opscli/xiyou/credential_service.py`，增加 `OPSCLI_XIYOU_CREDENTIAL_LATEST_URL`、`OPSCLI_XIYOU_CREDENTIAL_API_KEY`、`OPSCLI_XIYOU_CREDENTIAL_CACHE_TTL_SECONDS` 配置；`XiyouCredentialProvider` 调整为“配置 latest URL 则只远程拉取并进程内缓存，未配置 latest 才读取 `.env` / 环境变量 `OPSCLI_XIYOU_AUTHORIZATION`、`OPSCLI_XIYOU_COOKIE`”；删除 MCP/HTTP 本地补登入口 `/xiyou/credential/update` 的正常链路，只保留 `/internal/xiyou/credential/updated` 回调清缓存；新增 `opscli/xiyou/docs/后端服务.md` 给后端对接。
+**验证结果**：已运行 `python -m pytest tests/xiyou -q -p no:cacheprovider`，结果 `61 passed, 1 warning`。
+**影响范围**：西柚凭据读取、MCP/HTTP 模式下西柚任务启动前的 token 获取、补登成功后的缓存刷新。
+**回滚方式**：移除新增配置和 `credential_service.py`，恢复 `XiyouCredentialProvider` 只读取本地 `.env`，删除新增回调路由和后端服务文档。
+---

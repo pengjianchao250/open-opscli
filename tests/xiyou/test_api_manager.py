@@ -50,8 +50,8 @@ class DummyApiClient:
     async def __aexit__(self, exc_type, exc, tb):
         return None
 
-    async def post_json(self, url, payload):
-        self.calls.append({"url": url, "payload": payload})
+    async def post_json(self, url, payload, *, request_url=None):
+        self.calls.append({"url": url, "payload": payload, "request_url": request_url})
         return {
             "code": 200,
             "list": [
@@ -73,8 +73,8 @@ class DummyApiClient:
 
 
 class DummyResourceApiClient(DummyApiClient):
-    async def post_json(self, url, payload):
-        self.calls.append({"url": url, "payload": payload})
+    async def post_json(self, url, payload, *, request_url=None):
+        self.calls.append({"url": url, "payload": payload, "request_url": request_url})
         if url.endswith("/resource/status"):
             return {
                 "resourceId": payload["resourceId"],
@@ -257,6 +257,26 @@ def test_invalid_function_is_rejected(local_tmp_path: Path):
         _run(manager.run(XiyouRankingRequest(function="unknown")))
 
 
+def test_keyword_ranking_rejects_month_period(local_tmp_path: Path):
+    manager = XiyouApiManager(
+        settings=XiyouSettings(output_dir=local_tmp_path),
+        credential_provider=DummyCredentialProvider(),
+    )
+
+    with pytest.raises(XiyouConfigError) as exc:
+        _run(
+            manager.run(
+                XiyouRankingRequest(
+                    function="ranking",
+                    target="keyword",
+                    period="month",
+                )
+            )
+        )
+
+    assert "keyword 排行榜 period 仅支持：week" in str(exc.value)
+
+
 def test_manager_downloads_resource_xlsx(monkeypatch, local_tmp_path: Path):
     DummyResourceApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "XiyouApiClient", DummyResourceApiClient)
@@ -288,8 +308,127 @@ def test_manager_downloads_resource_xlsx(monkeypatch, local_tmp_path: Path):
     assert (root_dir / "raw.json").exists()
     assert (root_dir / "result.json").exists()
     assert DummyResourceApiClient.calls[0]["url"] == "/v3/asins/research/list/resource"
+    assert DummyResourceApiClient.calls[0]["request_url"] == "/detail/asin/look_up/US/B0G33FZ8XS"
     assert DummyResourceApiClient.calls[1]["url"] == "/v4/resource/status"
     assert DummyResourceApiClient.calls[2]["method"] == "GET"
+
+
+def test_reverse_keyword_uses_trends_request_url_and_payload(monkeypatch, local_tmp_path: Path):
+    DummyResourceApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "XiyouApiClient", DummyResourceApiClient)
+    settings = XiyouSettings(output_dir=local_tmp_path, authorization=None, cookie=None)
+    manager = XiyouApiManager(settings=settings, credential_provider=DummyCredentialProvider())
+
+    result = _run(
+        manager.run(
+            XiyouRankingRequest(
+                function="reverse-keyword",
+                provider="xiyou",
+                asin="B0DZFGTCLR",
+                site="US",
+                cycle_period="last3months",
+                view_mode="trends",
+                keyword_type="organic",
+                page_size=20,
+                job_id="job-reverse-keyword-trends",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.data_mode == "resource_export"
+    assert result.resource_id == "resource-1"
+    assert DummyResourceApiClient.calls[0]["url"] == "/v3/asins/research/list/resource"
+    assert (
+        DummyResourceApiClient.calls[0]["request_url"]
+        == "/detail/asin/look_up/US/B0DZFGTCLR?listType=trendsViewList"
+    )
+    assert DummyResourceApiClient.calls[0]["payload"]["biz"]["orders"] == [
+        {"field": "organicTraffic", "order": "desc"}
+    ]
+    assert DummyResourceApiClient.calls[0]["payload"]["biz"]["filters"] == [
+        {"field": "asinResearchType", "filter": ["organic"]}
+    ]
+    assert (
+        DummyResourceApiClient.calls[0]["payload"]["biz"]["tableType"]
+        == "asinResearchTrendsViewOrganicSearchTerm"
+    )
+    assert DummyResourceApiClient.calls[1]["request_url"] == DummyResourceApiClient.calls[0]["request_url"]
+
+
+def test_reverse_keyword_uses_top10_request_url_and_payload(monkeypatch, local_tmp_path: Path):
+    DummyResourceApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "XiyouApiClient", DummyResourceApiClient)
+    settings = XiyouSettings(output_dir=local_tmp_path, authorization=None, cookie=None)
+    manager = XiyouApiManager(settings=settings, credential_provider=DummyCredentialProvider())
+
+    result = _run(
+        manager.run(
+            XiyouRankingRequest(
+                function="reverse-keyword",
+                provider="xiyou",
+                asin="B0DZFGTCLR",
+                site="US",
+                cycle_period="custom_month_range",
+                start_month="2026-05",
+                end_month="2026-06",
+                view_mode="top10",
+                keyword_type="advertising",
+                job_id="job-reverse-keyword-top10",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.data_mode == "resource_export"
+    assert result.resource_id == "resource-1"
+    assert (
+        DummyResourceApiClient.calls[0]["request_url"]
+        == "/detail/asin/look_up/US/B0DZFGTCLR?listType=topDataList"
+    )
+    assert DummyResourceApiClient.calls[0]["payload"]["biz"]["orders"] == [
+        {"field": "adTraffic", "order": "desc"}
+    ]
+    assert DummyResourceApiClient.calls[0]["payload"]["biz"]["filters"] == [
+        {"field": "asinResearchType", "filter": ["advertising"]}
+    ]
+    assert DummyResourceApiClient.calls[0]["payload"]["biz"]["tableType"] == "asinResearchOrganicTop10"
+
+
+def test_asin_compare_uses_request_url_and_top10_payload(monkeypatch, local_tmp_path: Path):
+    DummyResourceApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "XiyouApiClient", DummyResourceApiClient)
+    settings = XiyouSettings(output_dir=local_tmp_path, authorization=None, cookie=None)
+    manager = XiyouApiManager(settings=settings, credential_provider=DummyCredentialProvider())
+
+    result = _run(
+        manager.run(
+            XiyouRankingRequest(
+                function="asin-compare",
+                provider="xiyou",
+                asins=["B08X4615SC", "B07BJN11KV"],
+                site="US",
+                cycle_period="last1month",
+                view_mode="top10",
+                keyword_type="organic",
+                job_id="job-asin-compare-top10",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.data_mode == "resource_export"
+    assert result.resource_id == "resource-1"
+    assert DummyResourceApiClient.calls[0]["url"] == "/v4/asins/compare/list/resource"
+    assert (
+        DummyResourceApiClient.calls[0]["request_url"]
+        == "/detail/asin_compare/look_up/US/B08X4615SC,B07BJN11KV?listType=topDataList"
+    )
+    assert DummyResourceApiClient.calls[0]["payload"]["tableType"] == "multiAsinsComparisonOrTop10"
+    assert DummyResourceApiClient.calls[0]["payload"]["filters"] == [
+        {"field": "asinResearchType", "filter": ["organic"]}
+    ]
+    assert DummyResourceApiClient.calls[1]["request_url"] == DummyResourceApiClient.calls[0]["request_url"]
 
 
 def test_manager_writes_resource_json_metadata(monkeypatch, local_tmp_path: Path):
@@ -318,6 +457,100 @@ def test_manager_writes_resource_json_metadata(monkeypatch, local_tmp_path: Path
     assert exported["resource_url"].endswith("Signature=s")
 
 
+def test_keyword_analysis_json_uses_live_list_endpoint(monkeypatch, local_tmp_path: Path):
+    DummyApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "XiyouApiClient", DummyApiClient)
+    settings = XiyouSettings(output_dir=local_tmp_path, authorization=None, cookie=None)
+    manager = XiyouApiManager(settings=settings, credential_provider=DummyCredentialProvider())
+
+    result = _run(
+        manager.run(
+            XiyouRankingRequest(
+                function="keyword-analysis",
+                provider="xiyou",
+                keyword="tv stands for living room",
+                site="US",
+                cycle_period="last3months",
+                view_mode="trends",
+                job_id="job-keyword-analysis-json",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.data_mode == "rows"
+    assert result.row_count == 1
+    assert result.export is not None
+    assert result.export.filename == "job-keyword-analysis-json.json"
+    assert DummyApiClient.calls[0]["url"] == "/v4/searchTerms/analysis/list"
+    assert DummyApiClient.calls[0]["payload"]["resource"]["searchTerm"] == "tv stands for living room"
+    assert DummyApiClient.calls[0]["payload"]["cycleFilter"]["cycle"] == "monthly"
+    assert "listType=trendsViewList" in DummyApiClient.calls[0]["request_url"]
+
+
+def test_keyword_historical_traffic_json_uses_rows_endpoint(monkeypatch, local_tmp_path: Path):
+    DummyApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "XiyouApiClient", DummyApiClient)
+    settings = XiyouSettings(output_dir=local_tmp_path, authorization=None, cookie=None)
+    manager = XiyouApiManager(settings=settings, credential_provider=DummyCredentialProvider())
+
+    result = _run(
+        manager.run(
+            XiyouRankingRequest(
+                function="keyword-historical-traffic",
+                provider="xiyou",
+                keyword="backpack",
+                site="US",
+                start_date="2026-05-09",
+                end_date="2026-06-07",
+                job_id="job-keyword-historical-traffic-json",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.data_mode == "rows"
+    assert result.row_count == 1
+    assert result.export is not None
+    assert result.export.filename == "job-keyword-historical-traffic-json.json"
+    assert DummyApiClient.calls[0]["url"] == "/v3/searchTerms/historicalTrafficRatio/list"
+    assert DummyApiClient.calls[0]["request_url"].endswith(
+        "/detail/search_term/historical_traffic_analysis/US/backpack"
+    )
+    assert DummyApiClient.calls[0]["payload"]["biz"]["cycleFilter"]["startCycle"]["startDate"] == "2026-05-09"
+
+
+def test_keyword_organic_replay_passes_request_url_and_report_date(monkeypatch, local_tmp_path: Path):
+    DummyResourceApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "XiyouApiClient", DummyResourceApiClient)
+    settings = XiyouSettings(output_dir=local_tmp_path, authorization=None, cookie=None)
+    manager = XiyouApiManager(settings=settings, credential_provider=DummyCredentialProvider())
+
+    result = _run(
+        manager.run(
+            XiyouRankingRequest(
+                function="keyword-organic-replay",
+                provider="xiyou",
+                keyword="backpack",
+                site="US",
+                report_date="2026-06-08",
+                replay_type="ac",
+                view_mode="trends",
+                job_id="job-keyword-organic-replay",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.data_mode == "resource_export"
+    assert result.resource_id == "resource-1"
+    assert DummyResourceApiClient.calls[0]["url"] == "/v3/searchTerms/organic/replay/resource"
+    assert DummyResourceApiClient.calls[0]["payload"]["biz"]["reportDate"] == "2026-06-08"
+    assert "listType=trendsViewList" in DummyResourceApiClient.calls[0]["request_url"]
+    assert "adOnceMoreType=ac" in DummyResourceApiClient.calls[0]["request_url"]
+    assert DummyResourceApiClient.calls[1]["request_url"] == DummyResourceApiClient.calls[0]["request_url"]
+
+
 
 def _build_xlsx_bytes(data_rows: int) -> bytes:
     """生成包含 1 行表头 + data_rows 行数据的 xlsx 字节，供 mock 下载使用。"""
@@ -335,17 +568,17 @@ def _build_xlsx_bytes(data_rows: int) -> bytes:
     return buffer.getvalue()
 
 
-def test_count_xlsx_rows_returns_data_row_count(tmp_path: Path):
+def test_count_xlsx_rows_returns_data_row_count(local_tmp_path: Path):
     # 真实 xlsx：表头 1 行 + 数据 5 行，_count_xlsx_rows 应返回 5
-    xlsx_path = tmp_path / "sample.xlsx"
+    xlsx_path = local_tmp_path / "sample.xlsx"
     xlsx_path.write_bytes(_build_xlsx_bytes(5))
 
     assert _count_xlsx_rows(xlsx_path) == 5
 
 
-def test_count_xlsx_rows_returns_zero_for_corrupt_file(tmp_path: Path):
+def test_count_xlsx_rows_returns_zero_for_corrupt_file(local_tmp_path: Path):
     # 非标准 xlsx（伪字节）必须返回 0，不能抛异常导致主任务失败
-    corrupt_path = tmp_path / "broken.xlsx"
+    corrupt_path = local_tmp_path / "broken.xlsx"
     corrupt_path.write_bytes(b"not-an-xlsx")
 
     assert _count_xlsx_rows(corrupt_path) == 0

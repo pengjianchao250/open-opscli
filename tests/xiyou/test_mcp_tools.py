@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 from opscli.mcp.tools import xiyou as xiyou_tools
+from opscli.xiyou.domain.exceptions import XiyouCredentialExpiredError
 
 
 def _run(coro):
@@ -91,6 +92,10 @@ def test_xiyou_run_passes_resource_params(monkeypatch):
             function="asin-compare",
             asins=["B0G33FZ8XS", "B0G337Q47M"],
             dataset="keywords",
+            report_date="2026-06-08",
+            view_mode="top10",
+            keyword_type="organic",
+            replay_type="ac",
             export_format="xlsx",
         )
     )
@@ -100,6 +105,64 @@ def test_xiyou_run_passes_resource_params(monkeypatch):
     assert request.function == "asin-compare"
     assert request.asins == ["B0G33FZ8XS", "B0G337Q47M"]
     assert request.dataset == "keywords"
+    assert request.report_date == "2026-06-08"
+    assert request.view_mode == "top10"
+    assert request.keyword_type == "organic"
+    assert request.replay_type == "ac"
+
+
+def test_xiyou_run_passes_reverse_keyword_params(monkeypatch):
+    DummyManager.instances = []
+    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", DummyManager)
+    monkeypatch.setattr(xiyou_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+
+    result = _run(
+        xiyou_tools.xiyou_run(
+            function="reverse-keyword",
+            asin="B0DZFGTCLR",
+            cycle_period="custom_month_range",
+            start_month="2026-05",
+            end_month="2026-06",
+            view_mode="top10",
+            keyword_type="advertising",
+            export_format="xlsx",
+        )
+    )
+
+    assert result["success"] is True
+    request = DummyManager.instances[0].request
+    assert request.function == "reverse-keyword"
+    assert request.asin == "B0DZFGTCLR"
+    assert request.cycle_period == "custom_month_range"
+    assert request.start_month == "2026-05"
+    assert request.end_month == "2026-06"
+    assert request.view_mode == "top10"
+    assert request.keyword_type == "advertising"
+
+
+def test_xiyou_run_returns_terminal_error_for_expired_xiyou_credential(monkeypatch):
+    class ExpiredManager(DummyManager):
+        async def run(self, request):
+            raise XiyouCredentialExpiredError(
+                reason="jwt_expired",
+                expires_at="2023-11-14T22:13:20+00:00",
+                notify_result={"sent": True, "dedupe_key": "token_required"},
+            )
+
+    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", ExpiredManager)
+    monkeypatch.setattr(xiyou_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+
+    result = _run(xiyou_tools.xiyou_run(function="ranking", export_format="json"))
+
+    assert result["success"] is False
+    assert result["error"]["code"] == "XIYOU_CREDENTIAL_EXPIRED"
+    assert result["error"]["auth_system"] == "xiyou"
+    assert result["retryable"] is False
+    assert result["do_not_retry"] is True
+    assert "auth_mcp_login" in result["do_not_call_tools"]
+    assert "不要刷新 OPS/MCP 登录" in result["agent_message"]
+    failed_call = result["feedback"]["execution_summary"]["failed_calls"][0]
+    assert failed_call["call_params"]["function"] == "ranking"
 
 
 def test_xiyou_export_adds_file_url(monkeypatch):

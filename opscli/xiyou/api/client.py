@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 import httpx
 
 from opscli.xiyou.config import XiyouSettings
-from opscli.xiyou.credentials import XiyouCredential
-from opscli.xiyou.domain.exceptions import XiyouApiError
+from opscli.xiyou.credentials import XiyouCredential, decode_jwt_payload
+from opscli.xiyou.domain.exceptions import XiyouApiError, XiyouCredentialExpiredError
+from opscli.xiyou.notify import is_token_invalid_signal, notify_token_required
 
 
 DEFAULT_USER_AGENT = (
@@ -34,10 +35,12 @@ class XiyouApiClient:
         settings: XiyouSettings,
         user_agent: str = DEFAULT_USER_AGENT,
         timeout: float = 60.0,
+        notify_on_auth_error: bool = True,
     ) -> None:
         self.credential = credential
         self.settings = settings
         self.user_agent = user_agent
+        self.notify_on_auth_error = notify_on_auth_error
         self._client = httpx.AsyncClient(
             timeout=timeout,
             follow_redirects=False,
@@ -54,14 +57,34 @@ class XiyouApiClient:
         """关闭底层 HTTP client。"""
         await self._client.aclose()
 
-    async def post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def post_json(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        *,
+        request_url: str | None = None,
+    ) -> dict[str, Any]:
         """POST JSON 并返回接口 JSON。"""
+        self._check_credential_expiry()
         response = await self._client.post(
             _absolute_url(url),
             json=payload,
-            headers=self._browser_headers(),
+            headers=self._browser_headers(request_url=request_url),
         )
         return self._parse_json_response(response)
+
+    async def get_json(self, url: str, *, request_url: str | None = None) -> dict[str, Any]:
+        """GET JSON 并返回接口 JSON。"""
+        self._check_credential_expiry()
+        response = await self._client.get(
+            _absolute_url(url),
+            headers=self._browser_headers(request_url=request_url),
+        )
+        return self._parse_json_response(response)
+
+    async def user_info(self) -> dict[str, Any]:
+        """试调用户信息接口，用于补登 token 生效校验。"""
+        return await self.get_json("/user/info")
 
     async def get_bytes(self, url: str) -> bytes:
         """下载 OSS 预签名链接对应的二进制内容。
@@ -98,19 +121,44 @@ class XiyouApiClient:
         try:
             payload = response.json()
         except json.JSONDecodeError as exc:
+            self._notify_auth_signal(
+                reason="http_401" if response.status_code == 401 else "bad_json",
+                status_code=response.status_code,
+                business_code=None,
+            )
             raise XiyouApiError(
                 "西柚洞察接口返回非 JSON",
                 status_code=response.status_code,
                 response_excerpt=text[:1000],
             ) from exc
+        code = payload.get("code") if isinstance(payload, dict) else None
         if response.status_code >= 400:
+            notify_result = self._notify_auth_signal(
+                reason="http_401" if response.status_code == 401 else "http_error",
+                status_code=response.status_code,
+                business_code=str(code) if code is not None else None,
+            )
+            if is_token_invalid_signal(response.status_code, code):
+                raise XiyouCredentialExpiredError(
+                    reason="http_401" if response.status_code == 401 else "http_error",
+                    notify_result=notify_result,
+                )
             raise XiyouApiError(
                 "西柚洞察接口请求失败",
                 status_code=response.status_code,
                 response_excerpt=text[:1000],
             )
-        code = payload.get("code") if isinstance(payload, dict) else None
         if code not in (None, 0, 200, "0", "200", "OK", "ok", "success"):
+            notify_result = self._notify_auth_signal(
+                reason="business_token_invalid" if is_token_invalid_signal(None, code) else "business_error",
+                status_code=response.status_code,
+                business_code=str(code),
+            )
+            if is_token_invalid_signal(None, code):
+                raise XiyouCredentialExpiredError(
+                    reason="business_token_invalid",
+                    notify_result=notify_result,
+                )
             raise XiyouApiError(
                 f"西柚洞察接口返回错误：{code}",
                 status_code=response.status_code,
@@ -118,7 +166,59 @@ class XiyouApiClient:
             )
         return payload
 
-    def _browser_headers(self) -> dict[str, str]:
+    def _check_credential_expiry(self) -> None:
+        """JWT 已过期时通知并终止；30 分钟内过期时仅主动预警。"""
+        if not self.notify_on_auth_error:
+            return
+        try:
+            payload = decode_jwt_payload(self.credential.authorization)
+            exp = payload.get("exp")
+            if not isinstance(exp, int):
+                return
+            remaining = exp - int(datetime.now(timezone.utc).timestamp())
+            if remaining <= 0:
+                expires_at = datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()
+                notify_result = notify_token_required(
+                    reason="jwt_expired",
+                    expires_at=expires_at,
+                    settings=self.settings,
+                )
+                raise XiyouCredentialExpiredError(
+                    reason="jwt_expired",
+                    expires_at=expires_at,
+                    notify_result=notify_result,
+                )
+            elif remaining < 1800:
+                notify_token_required(
+                    reason="jwt_expiring_soon",
+                    expires_at=datetime.fromtimestamp(exp, tz=timezone.utc).isoformat(),
+                    settings=self.settings,
+                )
+        except XiyouCredentialExpiredError:
+            raise
+        except Exception:
+            return
+
+    def _notify_auth_signal(
+        self,
+        *,
+        reason: str,
+        status_code: int | None,
+        business_code: str | None,
+    ) -> dict[str, Any]:
+        if not self.notify_on_auth_error:
+            return {"sent": False, "reason": "disabled"}
+        if not is_token_invalid_signal(status_code, business_code):
+            return {"sent": False, "reason": "not_token_invalid"}
+        return notify_token_required(
+            reason=reason,
+            status_code=status_code,
+            business_code=business_code,
+            expires_at=self.credential.expires_at,
+            settings=self.settings,
+        )
+
+    def _browser_headers(self, *, request_url: str | None = None) -> dict[str, str]:
         """构造接近 Web 浏览器的请求头。"""
         headers = {
             "accept": "application/json, text/plain, */*",
@@ -128,13 +228,18 @@ class XiyouApiClient:
             "krs-ver": self.settings.krs_ver or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "origin": WEB_ORIGIN,
             "referer": f"{WEB_ORIGIN}/",
-            "request-url": "/detail/ranking_list",
+            "request-url": request_url or "/detail/ranking_list",
             "select-lang": "zh-cn",
             "user-agent": self.user_agent,
             "web-version": "4.0",
         }
         if self.credential.cookie:
             headers["cookie"] = self.credential.cookie
+        if self.credential.headers:
+            for key, value in self.credential.headers.items():
+                normalized = str(key).strip()
+                if normalized:
+                    headers[normalized] = str(value)
         return headers
 
 

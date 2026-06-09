@@ -242,8 +242,6 @@ def _load_or_create_api_key() -> str:
     return api_key
 
 
-# ── 双端点组合应用构建 ───────────────────────────────────────────────
-
 def _build_dual_endpoint_app(
     *,
     api_key: str | None = None,

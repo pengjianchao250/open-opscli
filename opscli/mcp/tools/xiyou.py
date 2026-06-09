@@ -7,6 +7,47 @@ from pathlib import Path
 from .helpers import _err, _get_auth_pair, _ok
 
 
+def _xiyou_terminal_credential_error(exc: Exception, *, call_params: dict) -> dict | None:
+    """将西柚凭据过期返回为终态错误，避免 Agent 误调 OPS auth 工具。"""
+    if getattr(exc, "code", None) != "XIYOU_CREDENTIAL_EXPIRED":
+        return None
+    to_dict = getattr(exc, "to_dict", None)
+    error = to_dict() if callable(to_dict) else {"code": "XIYOU_CREDENTIAL_EXPIRED", "message": str(exc)}
+    return {
+        "success": False,
+        "data": None,
+        "error": error,
+        "next_action": "STOP_AND_WAIT_FOR_XIYOU_CREDENTIAL_UPDATE",
+        "retryable": False,
+        "do_not_retry": True,
+        "do_not_call_tools": ["auth_mcp_login", "auth_get_token", "auth_token_refresh"],
+        "agent_message": (
+            "西柚业务凭据已过期，企微补登通知已发送。"
+            "不要刷新 OPS/MCP 登录，也不要继续重试当前西柚任务；"
+            "等待运维在运营后台补登西柚 token/cookie 后，让用户重新发起任务。"
+        ),
+        "feedback": {
+            "feedback_type": "data_issue",
+            "severity": "medium",
+            "source": "mcp",
+            "execution_summary": {
+                "summary": "xiyou_run 因西柚业务凭据过期终止，已触发补登通知。",
+                "failed_calls": [
+                    {
+                        "tool": "MCP -> xiyou_run(...)",
+                        "call_params": call_params,
+                        "error_message": f"{error.get('code')}: {error.get('message')}",
+                        "reason": "西柚 authorization/cookie 过期或被服务端判定失效；这不是 OPS/MCP 登录态问题。",
+                        "fix_suggestion": "等待运维通过运营后台补登西柚凭据；不要调用 auth_mcp_login/auth_get_token/auth_token_refresh。",
+                    }
+                ],
+                "successful_calls": [],
+                "final_resolution": "当前任务已终止，等待西柚凭据更新后由用户重新发起。",
+            },
+        },
+    }
+
+
 async def xiyou_scenarios() -> dict:
     """列出西柚洞察接口直连场景。"""
     try:
@@ -29,6 +70,15 @@ async def xiyou_run(
     asins: list[str] | str | None = None,
     keyword: str | None = None,
     query: str = "",
+    cycle_period: str | None = None,
+    start_month: str | None = None,
+    end_month: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    report_date: str | None = None,
+    view_mode: str | None = None,
+    replay_type: str | None = None,
+    keyword_type: str | None = None,
     page: int = 1,
     page_size: int = 50,
     export_format: str = "json",
@@ -54,6 +104,15 @@ async def xiyou_run(
             asins=asins,
             keyword=keyword,
             query=query,
+            cycle_period=cycle_period,
+            start_month=start_month,
+            end_month=end_month,
+            start_date=start_date,
+            end_date=end_date,
+            report_date=report_date,
+            view_mode=view_mode,
+            replay_type=replay_type,
+            keyword_type=keyword_type,
             page=page,
             page_size=page_size,
             job_id=job_id,
@@ -64,26 +123,35 @@ async def xiyou_run(
         result = await XiyouApiManager(jwt=jw, session_id=sid).run(request)
         return _ok(result.to_dict())
     except Exception as exc:
-        return _err(
-            exc,
-            tool="MCP -> xiyou_run(...)",
-            call_params={
-                "function": function,
-                "provider": provider,
-                "target": target,
-                "site": site,
-                "period": period,
-                "rank_pattern": rank_pattern,
-                "dataset": dataset,
-                "asin": asin,
-                "asins": asins,
-                "keyword": keyword,
-                "page": page,
-                "page_size": page_size,
-                "export_format": export_format,
-                "job_id": job_id,
-            },
-        )
+        call_params = {
+            "function": function,
+            "provider": provider,
+            "target": target,
+            "site": site,
+            "period": period,
+            "rank_pattern": rank_pattern,
+            "dataset": dataset,
+            "asin": asin,
+            "asins": asins,
+            "keyword": keyword,
+            "page": page,
+            "page_size": page_size,
+            "cycle_period": cycle_period,
+            "start_month": start_month,
+            "end_month": end_month,
+            "start_date": start_date,
+            "end_date": end_date,
+            "report_date": report_date,
+            "view_mode": view_mode,
+            "replay_type": replay_type,
+            "keyword_type": keyword_type,
+            "export_format": export_format,
+            "job_id": job_id,
+        }
+        terminal_error = _xiyou_terminal_credential_error(exc, call_params=call_params)
+        if terminal_error:
+            return terminal_error
+        return _err(exc, tool="MCP -> xiyou_run(...)", call_params=call_params)
 
 
 async def xiyou_job_status(job_id: str) -> dict:
