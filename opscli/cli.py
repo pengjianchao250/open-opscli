@@ -10,6 +10,7 @@ from opscli.amazon.cli import app as amazon_app
 from opscli.amazon_rufus.cli import app as amazon_rufus_app
 from opscli.auth.cli import app as auth_app
 from opscli.feedback.cli import app as feedback_app
+from opscli.google_trends.cli import app as google_trends_app
 from opscli.keepa.cli import app as keepa_app
 from opscli.mcp.cli import app as mcp_app
 # from opscli.methods_card.cli import app as methods_card_app
@@ -34,6 +35,7 @@ app.add_typer(amazon_app, name="amazon")
 app.add_typer(amazon_rufus_app, name="amazon-rufus")
 app.add_typer(query_app, name="query")
 app.add_typer(feedback_app, name="feedback")
+app.add_typer(google_trends_app, name="google-trends")
 app.add_typer(keepa_app, name="keepa")
 app.add_typer(seller_sprite_app, name="seller-sprite")
 # app.add_typer(methods_card_app, name="methods-card")
