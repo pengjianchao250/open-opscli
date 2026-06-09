@@ -104,7 +104,7 @@ def collect(
     crawler_table_id: int | None = typer.Option(None, "--crawler-table-id", help="爬虫 Listing table_id"),
     crawler_dataset_alias: str = typer.Option("ds_icw50TLOFu4F", "--crawler-dataset-alias", help="爬虫 Listing dataset alias"),
     crawler_field_mode: FieldMode = typer.Option(FieldMode.full, "--crawler-field-mode", help="爬虫 Listing 字段模式"),
-    upload: bool = typer.Option(True, "--upload/--no-upload", help="上传 frontend-data.md 并返回阿里云文件地址"),
+    upload: bool = typer.Option(True, "--upload/--no-upload", help="上传 frontend-data.json 并返回阿里云文件地址"),
     url_only: bool = typer.Option(False, "--url-only", help="只输出阿里云文件地址"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
 ) -> None:

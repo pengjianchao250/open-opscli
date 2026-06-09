@@ -11,7 +11,7 @@
 - Amazon Rufus 问答/Listing 优化建议
 - BI 即时综合销售数据
 - 爬虫 Listing 快照数据
-- 前端可直接读取的 `frontend-data.json` / `frontend-data.md`
+- 前端可直接读取的 `frontend-data.json`，以及本地预览用 `frontend-data.html`
 
 ## 1. Codex 中的推荐用法
 
@@ -157,7 +157,7 @@ opscli asin-data collect \
   --pretty
 ```
 
-默认会启用上传，成功时返回 `data.aliyun_url`。如果只要本地文件：
+默认会上传 `frontend-data.json`，成功时返回 `data.aliyun_url`。如果只要本地文件：
 
 ```bash
 opscli asin-data collect \
@@ -270,7 +270,7 @@ opscli asin-data collect \
 | `--crawler-table-id` | 空 | 爬虫 Listing table_id；已验证 `custom_crawler_amazon_details` 为 `43` |
 | `--crawler-dataset-alias` | `ds_icw50TLOFu4F` | 爬虫 Listing 数据集 alias |
 | `--crawler-field-mode` | `full` | 爬虫字段模式；必要时用 `compatible` |
-| `--upload/--no-upload` | `--upload` | 是否上传 `frontend-data.txt` 并返回阿里云 URL |
+| `--upload/--no-upload` | `--upload` | 是否上传 `frontend-data.json` 并返回阿里云 URL |
 | `--url-only` | `false` | 只输出上传 URL |
 | `--pretty` | `false` | 格式化 JSON 输出 |
 
@@ -300,8 +300,8 @@ output/asin-data/<run_id>/
 | 文件 | 说明 |
 | --- | --- |
 | `frontend-data.json` | 前端优先读取的结构化数据包 |
-| `frontend-data.md` | 人工可读的 Markdown 交接文件 |
-| `frontend-data.txt` | 上传用文本文件，内容同 Markdown |
+| `frontend-data.html` | 本地 HTML 预览文件，不上传 |
+| `frontend-data.md` | 本地保留的 Markdown 交接文件 |
 | `asin-data.jsonl` | 每个 ASIN 一行的完整统一结果 |
 | `asin-data-summary.json` | 汇总统计 |
 | `manifest.json` | 本次运行参数、文件路径、摘要 |
@@ -319,7 +319,7 @@ output/asin-data/<run_id>/
 | `data.summary` | 简要统计 |
 | `data.manifest` | 完整 manifest |
 | `data.upload` | 上传结果 |
-| `data.aliyun_url` | 上传后的前端数据 URL |
+| `data.aliyun_url` | 上传后的 `frontend-data.json` URL |
 
 ## 9. 前端数据结构
 
@@ -361,7 +361,7 @@ Codex 执行完成后，优先返回：
 
 1. `data.output_dir`
 2. `data.aliyun_url`，如果存在
-3. `frontend-data.json` 和 `frontend-data.md` 路径
+3. `frontend-data.json`、`frontend-data.html` 和 `frontend-data.md` 路径
 4. `errors.jsonl` 是否为空
 5. 失败数据源摘要
 

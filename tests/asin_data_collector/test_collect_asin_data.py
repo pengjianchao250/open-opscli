@@ -431,11 +431,33 @@ def test_rufus_default_questions_are_listing_diagnosis_and_render_asin():
 
     assert len(questions) == 6
     assert questions[0] == (
-        "这个产品ASIN B0TEST0001，标题写得清楚吗？"
-        "如果我要找这个产品ASIN B0TEST0001，一般搜什么词能找到他？"
+        "标题清晰度：分析 ASIN B0TEST0001 的标题是否清楚，"
+        "是否能让买家搜索到产品并愿意点击查看详情？按：标题｜问题｜依据｜建议改为 输出。"
     )
-    assert questions[-1] == "这个产品ASIN B0TEST0001如果让你给这个产品页面只提一个最着急改的地方，会是什么？"
+    assert questions[-1] == (
+        "整体优化：从标题、五点、图片、A+、评论中，找出 ASIN B0TEST0001 "
+        "最优先修改的一处。按：整体｜问题｜依据｜建议改为 输出。"
+    )
+    assert "图片｜问题｜依据｜每张图建议改为" in questions[2]
+    assert "A+｜问题｜依据｜每张图建议改为" in questions[3]
     assert all("{{asin}}" not in question for question in questions)
+
+
+def test_rufus_collect_command_passes_collector_default_questions_explicitly():
+    collector = load_collector_module()
+    args = argparse.Namespace(
+        opscli_bin="opscli",
+        rufus_skills_dir=".agents/skills",
+        rufus_timeout_seconds=180,
+        rufus_questions=None,
+    )
+    questions = collector.rufus_questions(args, asin="B0TEST0001")
+
+    command = collector.build_rufus_get_backend_command(args, "B0TEST0001", "US", questions)
+
+    assert command.count("-q") == 6
+    assert any(item.startswith("标题清晰度：分析 ASIN B0TEST0001") for item in command)
+    assert "--skills-dir" in command
 
 
 def test_rufus_explicit_questions_render_asin_placeholder():

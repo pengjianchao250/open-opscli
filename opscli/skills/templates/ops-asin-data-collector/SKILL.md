@@ -14,7 +14,7 @@ Use this Skill when the user asks for any of these:
 
 - ASIN 批量取数、ASIN 数据包、ASIN 采集、Listing 数据采集
 - 单个 ASIN 的卖家精灵、Amazon 页面、BI 销售、爬虫 Listing 或 Rufus 数据
-- 生成前端可读的 `frontend-data.json` / `frontend-data.md`
+- 生成前端可读的 `frontend-data.json`，并保留本地预览用 `frontend-data.html`
 - 通过 Codex 调用 `opscli asin-data collect`
 
 Do not use this Skill for final report writing, Listing 文案改写、价格/库存/广告修改，or any operation that changes remote business data.
@@ -28,7 +28,7 @@ Do not use this Skill for final report writing, Listing 文案改写、价格/�
 3. For real collection, first check auth with `opscli auth token status`.
 4. Run `opscli asin-data collect ... --dry-run --pretty` unless the user explicitly asks to execute immediately.
 5. After dry-run review, run the same command without `--dry-run`.
-6. Return the `output_dir`, `frontend-data.json`, `frontend-data.md`, `frontend-data.txt`, and `aliyun_url` when present.
+6. Return the `output_dir`, `frontend-data.json`, `frontend-data.html`, `frontend-data.md`, and JSON `aliyun_url` when present.
 7. If any `opscli` command fails, immediately submit `ops-feedback` according to project rules, then continue with the user task where possible.
 
 ## Quick Start
@@ -78,7 +78,7 @@ opscli asin-data collect \
 6. For each ASIN, call `AmazonManager.scrape_product` unless skipped.
 7. Run Amazon Rufus questions for each ASIN through `RufusManager.get_backend`, unless skipped.
 8. Build frontend-facing Chinese sections: `基础数据`, `卖家精灵关键词数据`, `卖家精灵AI全景分析数据`, `Rufus优化建议数据`.
-9. Write `manifest.json`, `asin-data.jsonl`, `frontend-data.json`, `frontend-data.md`, `frontend-data.txt`, `asin-data-summary.json`, `commands.jsonl`, and `errors.jsonl`.
+9. Write `manifest.json`, `asin-data.jsonl`, `frontend-data.json`, `frontend-data.html`, `frontend-data.md`, `asin-data-summary.json`, `commands.jsonl`, and `errors.jsonl`.
 
 ## Boundaries
 
@@ -118,8 +118,9 @@ Main files:
 - `manifest.json`: run parameters and summary.
 - `asin-data.jsonl`: one normalized record per ASIN, including `frontend_data`.
 - `frontend-data.json`: aggregate frontend-friendly JSON with Chinese section names.
-- `frontend-data.md`: Markdown handoff for frontend consumers.
-- `frontend-data.txt`: upload copy with the same Markdown content. The shared file upload endpoint rejects `.md`, so `--upload` / `--url-only` returns the `.txt` OSS URL.
+- `frontend-data.html`: local human-readable HTML handoff; upload is not used because the file service rejects html.
+- `--upload` / `--url-only`: uploads `frontend-data.json` and returns this OSS URL.
+- `frontend-data.md`: local Markdown handoff for operators.
 - `asin-data-summary.json`: compact success/error counts.
 - `commands.jsonl`: command plan and execution status.
 - `errors.jsonl`: structured per-source errors.
