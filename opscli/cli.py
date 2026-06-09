@@ -10,7 +10,6 @@ from opscli.amazon.cli import app as amazon_app
 from opscli.amazon_rufus.cli import app as amazon_rufus_app
 from opscli.asin_data.cli import app as asin_data_app
 from opscli.auth.cli import app as auth_app
-from opscli.feedtask.cli import app as feedtask_app
 from opscli.feedback.cli import app as feedback_app
 from opscli.google_trends.cli import app as google_trends_app
 from opscli.keepa.cli import app as keepa_app
