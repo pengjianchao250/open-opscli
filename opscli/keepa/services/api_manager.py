@@ -137,7 +137,7 @@ class KeepaApiManager:
         export_format = _normalize_export_format(request.export_format)
         if export_format == "xlsx":
             export = export_rows_to_xlsx(
-                rows=data,
+                rows=raw_rows,
                 output_path=root_dir / f"{job_id}.xlsx",
                 scenario=request.scenario,
                 site=site,

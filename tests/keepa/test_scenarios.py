@@ -15,7 +15,15 @@ def test_product_params_validate_item_limits_with_offers():
 
     assert params["domain"] == "1"
     assert params["asin"] == "B000000001,B000000002"
+    assert params["history"] is True
     assert params["offers"] == 20
+
+
+def test_product_params_default_history_can_be_disabled():
+    scenario = get_scenario("product")
+    params = scenario.build_params(params={"asin": "B000000001", "history": False}, site="US")
+
+    assert params["history"] is False
 
 
 def test_product_params_rejects_too_many_items_with_offers():

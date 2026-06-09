@@ -93,9 +93,10 @@ def test_manager_writes_params_raw_result_and_xlsx_export(monkeypatch, tmp_path:
     workbook = load_workbook(result.export.path)
     sheet = workbook.active
     headers = [cell.value for cell in sheet[1]]
-    assert headers[:4] == ["ASIN", "父ASIN", "标题", "品牌"]
+    assert headers[:3] == ["ASIN", "标题", "最近更新(Keepa分钟)"]
     assert sheet.cell(row=2, column=1).value == "B0088PUEPK"
-    assert sheet.cell(row=2, column=3).value == "Test Product"
+    assert sheet.cell(row=2, column=2).value == "Test Product"
+    assert sheet.cell(row=2, column=3).value == 7588958
 
 
 def test_manager_writes_json_export_when_requested(monkeypatch, tmp_path: Path):

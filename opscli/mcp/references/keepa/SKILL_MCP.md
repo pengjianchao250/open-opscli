@@ -39,7 +39,8 @@ visibility: internal
 - 多个 ASIN / seller ID / category id 支持用户用逗号、空格、顿号、换行分隔；调用前规范化为数组或逗号字符串均可。
 - UPC/EAN/ISBN-13 等条码走 `code`/`codes`；不要和 `asin`/`asins` 同时传给 `product`。
 - 用户同时给 ASIN 和关键词时，以明确动作判断：说“查这个 ASIN”走 `product`，说“搜关键词”走 `product-search`；意图冲突时只追问查询对象类型。
-- 用户说“最近 30 天”“近 90 天”时，优先映射为 `stats=30/90`；如果同时说“历史/曲线/走势”，再加 `history=true`。
+- 用户说“查商品详情”“查商品”时，`product` 默认会带 `history=true` 获取历史价格变化；用户明确说不要历史时再传 `history=false`。
+- 用户说“最近 30 天”“近 90 天”时，优先映射为 `stats=30/90`。
 - 用户说“只要 ASIN”“只导出 ASIN 列表”时，`product-search` 加 `asins_only=true`。
 - 用户说“店铺商品”“店铺 ASIN”时，`seller` 加 `storefront=true`。
 
@@ -115,7 +116,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 | 中文表达 | 调用参数 |
 | --- | --- |
 | `跑 keepa product-search，关键词 flashlight，导出结果` | `scenario="product-search"`, `site="US"`, `params={"keyword":"flashlight"}` |
-| `查美区 ASIN B0088PUEPK 的商品详情` | `scenario="product"`, `site="US"`, `params={"asin":"B0088PUEPK","stats":30,"history":false}` |
+| `查美区 ASIN B0088PUEPK 的商品详情` | `scenario="product"`, `site="US"`, `params={"asin":"B0088PUEPK","stats":30}` |
 | `查这个 ASIN 的价格历史` | `scenario="product"`, `params={"asin":"...","history":true,"stats":30}` |
 | `只要 ASIN 列表` | 对 `product-search` 加 `params={"asins_only":true}` |
 | `查 seller A2L77EE7U53NWQ 店铺商品` | `scenario="seller"`, `params={"seller":"A2L77EE7U53NWQ","storefront":true}` |
@@ -130,8 +131,8 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 
 - 用户未指定站点：`site="US"`。
 - 用户只说“导出”：使用默认 `export_format="xls"`，实际生成 `.xlsx`；也可显式传 `export_format="xlsx"`。
-- 用户只说“查商品详情”：建议 `stats=30`, `history=false`，减少返回体积。
-- 用户说“价格历史/历史曲线”：使用 `history=true`。
+- 用户只说“查商品详情”：建议 `stats=30`；`product` 场景默认会带 `history=true`。
+- 用户说“不需要历史/不要价格历史”：额外传 `history=false`。
 - 用户说“只要 ASIN”：使用 `asins_only=true`。
 - 用户要求后端比对、原始数据、JSON：使用 `export_format="json"`。
 - 用户未指定页码：`product-search` 可以不传 `page`，需要显式第一页时传 `page=0`。
@@ -197,7 +198,7 @@ Product:
   "params": {
     "asins": ["B0088PUEPK"],
     "stats": 30,
-    "history": false
+    "history": true
   }
 }
 ```
