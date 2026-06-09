@@ -248,6 +248,7 @@ from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import seller_sprite as _seller_sprite_tools
 from opscli.mcp.tools import sif as _sif_tools
 from opscli.mcp.tools import skills as _skills_tools
+from opscli.mcp.tools import xiyou as _xiyou_tools
 
 _auth_tools.register(_telemetry_mcp)
 _amazon_rufus_tools.register(_telemetry_mcp)
@@ -258,6 +259,7 @@ _keepa_tools.register(_telemetry_mcp)
 _query_tools.register(_telemetry_mcp)
 _seller_sprite_tools.register(_telemetry_mcp)
 _sif_tools.register(_telemetry_mcp)
+_xiyou_tools.register(_telemetry_mcp)
 _skills_tools.register(_telemetry_mcp)
 
 # amazon 工具依赖可选扩展 playwright，未安装时跳过注册不影响其他工具
@@ -307,8 +309,6 @@ def _load_or_create_api_key() -> str:
     key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     return api_key
 
-
-# ── 双端点组合应用构建 ───────────────────────────────────────────────
 
 def _build_dual_endpoint_app(
     *,
