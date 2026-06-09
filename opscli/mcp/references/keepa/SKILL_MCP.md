@@ -19,7 +19,7 @@ visibility: internal
 2. 站点缺省用 `US`；不要因为缺站点而追问。
 3. 必填参数齐全时直接执行 `keepa_run`；不要把内部参数确认流程暴露给用户。
 4. 只缺必填项时最多追问 1 个短问题；一次追问尽量覆盖同一场景的所有必填项。
-5. 默认导出用户可读 XLSX；只有用户明确要原始数据、后端比对或 JSON 时才用 JSON。
+5. 默认导出用户可读 XLSX；用户明确要原始数据、后端比对、JSON 或结果行数过大时用 JSON。
 6. 最终回复只给业务结果：查询对象、站点、返回行数、导出文件或链接。
 7. 不主动展示 API Key、账号来源、token 消耗、额度余额、内部参数、`params.json`、`raw.json`。
 
@@ -27,7 +27,7 @@ visibility: internal
 
 - `keepa_spec_must_read`: read this guide before first use.
 - `keepa_scenarios`: list supported Keepa scenarios.
-- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX. `export_format` accepts `xls`/`xlsx`/`json`; `xls` and `xlsx` both generate `.xlsx`.
+- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX. `export_format` accepts `xls`/`xlsx`/`json`; `xls` and `xlsx` both generate `.xlsx`. Large results are automatically exported as JSON to avoid XLSX timeout.
 - `keepa_job_status`: read a saved task result by `job_id`.
 - `keepa_export`: read export path or cloud URL, filename, format, and MIME type.
 
@@ -60,6 +60,7 @@ Every run writes files under the task directory:
 - `result.json`: normalized task result and export metadata.
 - `<job_id>.xlsx`: default user-facing export with Chinese headers.
 - `<job_id>.json`: optional debug export when `export_format=json`, containing rows, raw response, request params, and quota fields.
+- 当结果行数过大时，即使请求 XLSX 也会自动改为 JSON，并通过 `warnings` 返回文字提示。
 
 - `export.url` 存在时只回复云端链接；否则回复 `export.path`。
 - 上传失败但本地导出存在时，不判定任务失败，回复本地文件路径。
