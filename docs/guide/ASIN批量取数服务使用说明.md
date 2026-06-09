@@ -1,6 +1,6 @@
 # `opscli asin-data collect` 使用说明
 
-本文说明如何在 Codex 或本地终端中通过正式入口 `opscli asin-data collect` 采集 ASIN 数据，并让 Codex 通过 `ops-asin-data-collector` Skill 自动调用对应命令。
+本文说明如何通过正式入口 `opscli asin-data collect` 采集 ASIN 数据。
 
 该命令会按 ASIN 生成统一数据包，覆盖：
 
@@ -8,40 +8,12 @@
 - 卖家精灵关键词挖掘
 - 卖家精灵 AI 全景分析
 - Amazon 商品页抓取
-- Amazon Rufus 问答/Listing 优化建议
+- Amazon Alexa 问答/Listing 优化建议
 - BI 即时综合销售数据
 - 爬虫 Listing 快照数据
 - 前端可直接读取的 `frontend-data.json`，以及本地预览用 `frontend-data.html`
 
-## 1. Codex 中的推荐用法
-
-先确保 Codex 运行环境已安装 Skill：
-
-```bash
-opscli skills install ops-asin-data-collector --runtime codex --force
-```
-
-安装后，用户可以在 Codex 中直接说：
-
-```text
-用 ops-asin-data-collector 帮我采集 asins.csv 里的 ASIN 数据，时间 2026-05-01 到 2026-05-31。
-```
-
-或：
-
-```text
-帮我采集 ASIN B0BY8Y5766 的卖家精灵、Rufus、BI 销售和爬虫 Listing 数据，关键词 bed frame。
-```
-
-Codex 应进入 `ops-asin-data-collector` Skill，并调用：
-
-```bash
-opscli asin-data collect ...
-```
-
-不要让 Codex 直接调用旧脚本 `opscli/skills/templates/ops-asin-data-collector/scripts/collect_asin_data.py`。旧脚本只保留为命令内部复用的数据契约实现。
-
-## 2. 前置条件
+## 1. 前置条件
 
 正式执行前先确认登录态：
 
@@ -55,13 +27,11 @@ opscli auth token status
 opscli auth login
 ```
 
-Codex 运行时如果任何 `opscli` 命令失败，必须按项目规则立即提交 `ops-feedback`，再继续处理原任务。
-
-## 3. 输入方式
+## 2. 输入方式
 
 命令支持两种输入方式，二选一。
 
-### 3.1 批量文件
+### 2.1 批量文件
 
 推荐 CSV：
 
@@ -80,7 +50,7 @@ B0YYYYYYY,US,"flashlight; rechargeable flashlight",李四,测试
 
 必填列只有 `asin`。`site` 默认 `US`。`keyword` 可选，也可以使用 `keywords` 或 `关键词` 作为列名。一个单元格里多个关键词可用英文逗号、中文逗号、分号、竖线或换行分隔。
 
-### 3.2 单个 ASIN
+### 2.2 单个 ASIN
 
 当用户只给一个 ASIN 时，用 `--asin`：
 
@@ -103,7 +73,7 @@ opscli asin-data collect \
   --pretty
 ```
 
-## 4. 先 Dry Run
+## 3. 先 Dry Run
 
 正式取数前，建议先 dry-run，只生成计划和输出骨架，不调用远端数据源：
 
@@ -130,7 +100,7 @@ opscli asin-data collect \
 
 如果计划无误，再去掉 `--dry-run` 正式执行。
 
-## 5. 正式执行
+## 4. 正式执行
 
 批量执行：
 
@@ -176,7 +146,7 @@ opscli asin-data collect \
   --url-only
 ```
 
-## 6. 常用跳过参数
+## 5. 常用跳过参数
 
 只查 BI 和爬虫，不跑外部采集：
 
@@ -229,7 +199,7 @@ opscli asin-data collect \
   --pretty
 ```
 
-跳过 Rufus：
+跳过 Alexa：
 
 ```bash
 opscli asin-data collect \
@@ -238,7 +208,7 @@ opscli asin-data collect \
   --pretty
 ```
 
-## 7. 关键参数
+## 6. 关键参数
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
@@ -259,11 +229,10 @@ opscli asin-data collect \
 | `--keyword-source` | `reverse_top` | 无输入关键词时是否从关键词反查结果派生关键词；可用 `input_only`、`reverse_top`、`skip` |
 | `--max-miner-keywords` | `1` | 每个 ASIN 最多用于 keyword-miner 的关键词数 |
 | `--listing-analysis-station` | `GLOBAL` | 卖家精灵 AI 全景分析站点参数 |
-| `--rufus-question` | 默认 6 题 | Rufus 临时问题，可重复传入，支持 `{{asin}}` 占位符 |
-| `--rufus-country` | 空 | Rufus 国家站点，默认跟随每行 `site` |
-| `--rufus-skills-dir` | `.agents/skills` | Rufus 默认题库 Skill 根目录 |
-| `--rufus-timeout-seconds` | `180` | Rufus 单题超时秒数 |
-| `--skip-rufus-login-recovery` | `false` | Rufus 登录态缺失时不自动恢复 |
+| `--rufus-question` | 默认 6 题 | Alexa 临时问题，可重复传入，支持 `{{asin}}` 占位符 |
+| `--rufus-country` | 空 | Alexa 国家站点，默认跟随每行 `site` |
+| `--rufus-timeout-seconds` | `180` | Alexa 单题超时秒数 |
+| `--skip-rufus-login-recovery` | `false` | Alexa 登录态缺失时不自动恢复 |
 | `--sales-table-id` | 空 | BI 销售数据 table_id；为空时使用默认销售数据集 |
 | `--sales-dataset-alias` | `ds_d35ac6f3910c` | BI 销售数据集 alias |
 | `--sales-field-mode` | `full` | 销售字段模式；必要时用 `compatible` |
@@ -285,9 +254,9 @@ opscli asin-data collect \
 | `--skip-query` | 跳过全部 BI/query 数据 |
 | `--skip-sales-query` | 跳过 BI 销售数据 |
 | `--skip-crawler-query` | 跳过爬虫 Listing 数据 |
-| `--skip-rufus` | 跳过 Rufus 问答 |
+| `--skip-rufus` | 跳过 Alexa 问答 |
 
-## 8. 输出文件
+## 7. 输出文件
 
 默认输出目录：
 
@@ -321,7 +290,7 @@ output/asin-data/<run_id>/
 | `data.upload` | 上传结果 |
 | `data.aliyun_url` | 上传后的 `frontend-data.json` URL |
 
-## 9. 前端数据结构
+## 8. 前端数据结构
 
 前端优先读取：
 
@@ -334,7 +303,7 @@ output/asin-data/<run_id>/frontend-data.json
 1. `基础数据`
 2. `卖家精灵关键词数据`
 3. `卖家精灵AI全景分析数据`
-4. `Rufus优化建议数据`
+4. `Alexa优化建议数据`
 
 详细字段说明见：
 
@@ -342,7 +311,7 @@ output/asin-data/<run_id>/frontend-data.json
 docs/guide/ASIN取数前端数据结构.md
 ```
 
-## 10. 注意事项
+## 9. 注意事项
 
 - `--input` 和 `--asin` 必须二选一，不能同时传，也不能都不传。
 - ASIN 必须是 10 位字母或数字。
@@ -351,18 +320,6 @@ docs/guide/ASIN取数前端数据结构.md
 - 当前默认爬虫数据集 alias 为 `ds_icw50TLOFu4F`，对应数据集名 `custom_crawler_amazon_details`，已验证 `table_id=43`。
 - 如果爬虫 metadata 解析失败，优先传 `--crawler-table-id 43`，或用 `--skip-crawler-query` 暂时跳过爬虫来源。
 - 如果远端 metadata 字段缺失导致字段校验失败，可尝试 `--sales-field-mode compatible` 或 `--crawler-field-mode compatible`。
-- Rufus 默认问题为 6 个 Listing 诊断问题；如需替换，可重复传 `--rufus-question "..."`。
+- Alexa 默认问题为 6 个 Listing 诊断问题；如需替换，可重复传 `--rufus-question "..."`。
 - `--url-only` 依赖上传成功；如果只需要本地文件，不要传 `--url-only`。
 - Windows PowerShell 下不要手写复杂内联 JSON；本命令不要求用户手写 query JSON。
-
-## 11. Codex 回复用户时应返回什么
-
-Codex 执行完成后，优先返回：
-
-1. `data.output_dir`
-2. `data.aliyun_url`，如果存在
-3. `frontend-data.json`、`frontend-data.html` 和 `frontend-data.md` 路径
-4. `errors.jsonl` 是否为空
-5. 失败数据源摘要
-
-不要在聊天里粘贴完整大 JSON；让用户打开输出文件查看完整数据。

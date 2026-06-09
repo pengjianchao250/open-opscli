@@ -174,7 +174,7 @@ def test_frontend_record_has_four_chinese_sections_and_full_ai_content():
         "基础数据",
         "卖家精灵关键词数据",
         "卖家精灵AI全景分析数据",
-        "Rufus优化建议数据",
+        "Alexa优化建议数据",
     ]
     assert frontend["基础数据"]["关键词来源"] == "输入文件"
     assert frontend["基础数据"]["输入关键词列表"] == ["bed frame", "storage bed"]
@@ -200,10 +200,10 @@ def test_frontend_record_has_four_chinese_sections_and_full_ai_content():
     assert crawler["评论"] == "评论内容"
     assert crawler["评论数"] == 123
     assert frontend["卖家精灵AI全景分析数据"]["content"] == ai_content
-    assert frontend["Rufus优化建议数据"]["状态"] == "成功"
-    assert frontend["Rufus优化建议数据"]["接入状态"] == "已接入"
-    assert frontend["Rufus优化建议数据"]["报告路径"] == "output/amazon-rufus/B0TEST0001.md"
-    assert frontend["Rufus优化建议数据"]["数据"][0]["答案"] == "这是一款床架。"
+    assert frontend["Alexa优化建议数据"]["状态"] == "成功"
+    assert frontend["Alexa优化建议数据"]["接入状态"] == "已接入"
+    assert frontend["Alexa优化建议数据"]["报告路径"] == "output/amazon-rufus/B0TEST0001.md"
+    assert frontend["Alexa优化建议数据"]["数据"][0]["答案"] == "这是一款床架。"
 
 
 def test_seller_sprite_job_outputs_rows_without_paths(tmp_path: Path):
@@ -420,7 +420,7 @@ def test_collect_one_asin_runs_rufus_backend_and_attaches_answers(tmp_path: Path
     assert any("get-backend" in command for command in commands)
     assert result["rufus"]["status"] == "success"
     assert result["rufus"]["answers"][0]["answer"] == "评价总体较好，但需要关注耐用性。"
-    assert result["frontend_data"]["Rufus优化建议数据"]["数据"][0]["答案"] == "评价总体较好，但需要关注耐用性。"
+    assert result["frontend_data"]["Alexa优化建议数据"]["数据"][0]["答案"] == "评价总体较好，但需要关注耐用性。"
 
 
 def test_rufus_default_questions_are_listing_diagnosis_and_render_asin():

@@ -1919,7 +1919,7 @@ def build_frontend_record(result: dict[str, Any]) -> dict[str, Any]:
             "关键词挖掘": localize_keyword_miner(seller_sprite.get("keyword_miner")),
         },
         "卖家精灵AI全景分析数据": localize_listing_analysis(seller_sprite.get("listing_analysis")),
-        "Rufus优化建议数据": localize_rufus_data(rufus),
+        "Alexa优化建议数据": localize_rufus_data(rufus),
     }
 
 
@@ -1959,11 +1959,11 @@ def render_frontend_markdown(frontend_bundle: dict[str, Any]) -> str:
         "- `基础数据`：中文字段，包含输入信息、BI 销售、爬虫 Listing 和错误列表。",
         "- `卖家精灵关键词数据`：关键词反查和关键词挖掘任务信息。",
         "- `卖家精灵AI全景分析数据`：直接返回 SellerSprite AI 全景分析的完整 `content`。",
-        "- `Rufus优化建议数据`：Amazon Rufus 问答数据、报告路径和答案明细。",
+        "- `Alexa优化建议数据`：Amazon Alexa 问答数据、报告路径和答案明细。",
         "",
         "## ASIN汇总",
         "",
-        "| ASIN | 站点 | 输入关键词 | 基础数据 | 关键词数据 | AI全景分析 | Rufus |",
+        "| ASIN | 站点 | 输入关键词 | 基础数据 | 关键词数据 | AI全景分析 | Alexa |",
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     records = frontend_bundle.get("数据") or []
@@ -1971,7 +1971,7 @@ def render_frontend_markdown(frontend_bundle: dict[str, Any]) -> str:
         base = item.get("基础数据") or {}
         keyword = item.get("卖家精灵关键词数据") or {}
         ai = item.get("卖家精灵AI全景分析数据") or {}
-        rufus = item.get("Rufus优化建议数据") or {}
+        rufus = item.get("Alexa优化建议数据") or {}
         lines.append(
             "| {asin} | {site} | {input_keywords} | {base_status} | {keyword_status} | {ai_status} | {rufus_status} |".format(
                 asin=base.get("ASIN") or "",
@@ -1988,7 +1988,7 @@ def render_frontend_markdown(frontend_bundle: dict[str, Any]) -> str:
         base = item.get("基础数据") or {}
         keyword = item.get("卖家精灵关键词数据") or {}
         ai = item.get("卖家精灵AI全景分析数据") or {}
-        rufus = item.get("Rufus优化建议数据") or {}
+        rufus = item.get("Alexa优化建议数据") or {}
         lines.extend(
             [
                 "",
@@ -2036,7 +2036,7 @@ def render_frontend_markdown(frontend_bundle: dict[str, Any]) -> str:
                 "",
                 json_block(ai.get("content")),
                 "",
-                "### Rufus优化建议数据",
+                "### Alexa优化建议数据",
                 "",
                 json_block(rufus),
                 "",

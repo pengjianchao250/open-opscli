@@ -40,7 +40,7 @@ output/asin-data/<run_id>/frontend-data.md
 1. `基础数据`
 2. `卖家精灵关键词数据`
 3. `卖家精灵AI全景分析数据`
-4. `Rufus优化建议数据`
+4. `Alexa优化建议数据`
 
 ## 单个ASIN结构
 
@@ -77,7 +77,7 @@ output/asin-data/<run_id>/frontend-data.md
     "报告状态": "COMPLETED",
     "content": {}
   },
-  "Rufus优化建议数据": {
+  "Alexa优化建议数据": {
     "状态": "成功",
     "原始状态": "success",
     "接入状态": "已接入",
@@ -115,7 +115,7 @@ output/asin-data/<run_id>/frontend-data.md
 
 `卖家精灵AI全景分析数据.content` 直接返回卖家精灵 AI 全景分析接口结果里的完整 `content`。脚本只会把 JSON 字符串解析成 JSON 对象，不做摘要、不删字段、不扁平化。
 
-`Rufus优化建议数据` 来自 `opscli amazon-rufus get-backend` 当前运行生成的报告。`数据` 是按题号拆分后的问答明细，`报告路径` 指向本次 Rufus Markdown 报告。若传入 `--skip-rufus`，该段会返回 `状态=跳过`。
+`Alexa优化建议数据` 来自 `opscli amazon-rufus get-backend` 当前运行生成的报告。`数据` 是按题号拆分后的问答明细，`报告路径` 指向本次 Alexa Markdown 报告。若传入 `--skip-rufus`，该段会返回 `状态=跳过`。
 
 ## 状态值
 
