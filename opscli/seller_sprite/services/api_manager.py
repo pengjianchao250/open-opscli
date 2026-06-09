@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import datetime
@@ -11,7 +12,7 @@ from uuid import uuid4
 
 from opscli.seller_sprite.accounts import SellerSpriteAccountProvider
 from opscli.seller_sprite.api.categories import SellerSpriteCategoryResolver
-from opscli.seller_sprite.api.client import SellerSpriteApiClient
+from opscli.seller_sprite.api.client import BASE_URL, SellerSpriteApiClient
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.api.scenarios import get_scenario, list_scenarios
 from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
@@ -20,6 +21,13 @@ from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, Sell
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 from opscli.shared.integration_accounts import IntegrationAccountClient
+
+
+AI_TASK_DONE_STATUSES = {"COMPLETED", "COMPLETE", "SUCCESS", "SUCCEEDED", "FINISHED", "DONE"}
+AI_TASK_FAILED_STATUSES = {"FAILED", "FAIL", "ERROR", "CANCELED", "CANCELLED", "EXPIRED"}
+DEFAULT_AI_TASK_POLL_ATTEMPTS = 180
+DEFAULT_AI_TASK_POLL_INTERVAL_SECONDS = 2.0
+WINDOWS_COMPAT_EXPORT_PATH_LIMIT = 240
 
 
 class SellerSpriteApiManager:
@@ -102,6 +110,19 @@ class SellerSpriteApiManager:
                     root_dir=root_dir,
                 ),
             )
+            if scenario.task_result_endpoint:
+                main_response = await _request_with_session_retry(
+                    client=client,
+                    warnings=warnings,
+                    stage="ai_task",
+                    action=lambda: _poll_ai_task_result(
+                        client=client,
+                        submit_response=main_response,
+                        result_endpoint_template=scenario.task_result_endpoint or "",
+                        referer=scenario.build_referer(payload),
+                        params=request.params,
+                    ),
+                )
             if _looks_like_guest_limited_response(main_response, page_size=page_size):
                 login = await _login_with_account_refresh(
                     client=client,
@@ -162,7 +183,7 @@ class SellerSpriteApiManager:
         if export_format == "xlsx":
             export = export_rows_to_xlsx(
                 rows=rows,
-                output_path=root_dir / f"{job_id}.xlsx",
+                output_path=_export_output_path(root_dir, job_id, "xlsx"),
                 scenario=request.scenario,
                 site=site,
                 period=period,
@@ -171,7 +192,7 @@ class SellerSpriteApiManager:
             )
         else:
             export = _export_rows_to_json(
-                output_path=root_dir / f"{job_id}.json",
+                output_path=_export_output_path(root_dir, job_id, "json"),
                 job_id=job_id,
                 scenario=request.scenario,
                 site=site,
@@ -233,6 +254,22 @@ async def _run_main_request(
 ) -> dict[str, Any]:
     if method == "GET":
         return await client.get_json(endpoint, payload, referer=referer)
+    if method == "POST_QUERY":
+        return await client.request_json(
+            "POST",
+            endpoint,
+            params=payload,
+            json={},
+            headers={
+                **client._browser_headers(referer=referer),
+                "Accept": "application/json, text/plain, */*",
+                "Content-Type": "application/json;charset=UTF-8",
+                "Origin": BASE_URL,
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-origin",
+            },
+        )
     if method == "FORM":
         response_html = await client.post_form(endpoint, payload, referer=referer)
         response_html_path = root_dir / "response.html"
@@ -247,6 +284,107 @@ async def _run_main_request(
             "response_html_length": len(response_html),
         }
     return await client.post_json(endpoint, payload, referer=referer)
+
+
+async def _poll_ai_task_result(
+    *,
+    client: SellerSpriteApiClient,
+    submit_response: dict[str, Any],
+    result_endpoint_template: str,
+    referer: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    task_id = _extract_task_id(submit_response)
+    if not task_id:
+        raise SellerSpriteApiError(
+            "SellerSprite AI task response missing taskId",
+            response_excerpt=json.dumps(submit_response, ensure_ascii=False)[:1000],
+            api_code="ERR_AI_TASK_ID_MISSING",
+        )
+
+    attempts = _int(params.get("pollAttempts") or params.get("maxPolls"), DEFAULT_AI_TASK_POLL_ATTEMPTS)
+    attempts = max(1, attempts)
+    interval = _float(
+        params.get("pollIntervalSeconds") or params.get("pollInterval"),
+        DEFAULT_AI_TASK_POLL_INTERVAL_SECONDS,
+    )
+    endpoint = result_endpoint_template.format(task_id=task_id)
+    last_response: dict[str, Any] | None = None
+    for attempt in range(attempts):
+        task_response = await client.get_json(endpoint, {}, referer=referer)
+        last_response = task_response
+        if _ai_task_has_content(task_response) or _ai_task_is_done(task_response):
+            return _merge_ai_task_response(
+                submit_response=submit_response,
+                task_response=task_response,
+                task_id=task_id,
+                attempts=attempt + 1,
+            )
+        if _ai_task_failed(task_response):
+            data = task_response.get("data") if isinstance(task_response, dict) else {}
+            message = data.get("taskErrMsg") if isinstance(data, dict) else None
+            raise SellerSpriteApiError(
+                f"SellerSprite AI task failed: {task_id}",
+                response_excerpt=json.dumps(task_response, ensure_ascii=False)[:1000],
+                api_code="ERR_AI_TASK_FAILED",
+                api_message=str(message) if message else None,
+            )
+        if attempt < attempts - 1 and interval > 0:
+            await asyncio.sleep(interval)
+
+    raise SellerSpriteApiError(
+        f"SellerSprite AI task timeout: {task_id}",
+        response_excerpt=json.dumps(last_response or submit_response, ensure_ascii=False)[:1000],
+        api_code="ERR_AI_TASK_TIMEOUT",
+    )
+
+
+def _extract_task_id(response: dict[str, Any]) -> str:
+    data = response.get("data") if isinstance(response, dict) else None
+    if isinstance(data, dict):
+        return str(data.get("taskId") or data.get("task_id") or "").strip()
+    return ""
+
+
+def _merge_ai_task_response(
+    *,
+    submit_response: dict[str, Any],
+    task_response: dict[str, Any],
+    task_id: str,
+    attempts: int,
+) -> dict[str, Any]:
+    payload = dict(task_response)
+    data = dict(task_response.get("data") or {})
+    data.setdefault("taskId", task_id)
+    data["pollAttempts"] = attempts
+    data["submitTask"] = submit_response.get("data")
+    payload["data"] = data
+    return payload
+
+
+def _ai_task_has_content(response: dict[str, Any]) -> bool:
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, dict):
+        return False
+    content = data.get("content")
+    return content is not None and content != ""
+
+
+def _ai_task_is_done(response: dict[str, Any]) -> bool:
+    status = _ai_task_status(response)
+    return status in AI_TASK_DONE_STATUSES
+
+
+def _ai_task_failed(response: dict[str, Any]) -> bool:
+    status = _ai_task_status(response)
+    return status in AI_TASK_FAILED_STATUSES
+
+
+def _ai_task_status(response: dict[str, Any]) -> str:
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("taskStatus") or data.get("status") or "").strip().upper()
 
 
 async def _request_with_session_retry(
@@ -315,6 +453,18 @@ def _without(payload: dict[str, Any], keys: set[str]) -> dict[str, Any]:
 
 def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
     data = response.get("data") if isinstance(response, dict) else None
+    if isinstance(data, dict) and ("content" in data or "htmlContent" in data):
+        return [
+            {
+                "taskId": data.get("taskId"),
+                "taskStatus": data.get("taskStatus"),
+                "content": data.get("content"),
+                "htmlStatus": data.get("htmlStatus"),
+                "htmlContent": data.get("htmlContent"),
+                "completedTime": data.get("completedTime"),
+                "expiredTime": data.get("expiredTime"),
+            }
+        ]
     if isinstance(data, dict) and isinstance(data.get("items"), list):
         return [item for item in data["items"] if isinstance(item, dict)]
     if isinstance(data, dict) and isinstance(data.get("pager"), dict):
@@ -324,6 +474,26 @@ def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     return []
+
+
+def _int(value: Any, default: int = 0) -> int:
+    """安全将值转为 int，转换失败返回默认值。"""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def _float(value: Any, default: float = 0) -> float:
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except (ValueError, TypeError):
+        return default
+    return parsed if parsed >= 0 else default
 
 
 def _looks_like_guest_limited_response(response: dict[str, Any], *, page_size: int) -> bool:
@@ -380,6 +550,7 @@ def _scenario_label(scenario: str) -> str:
         "keyword-reverse": "ReverseASIN",
         "traffic-source": "TrafficSource",
         "market-research": "MarketResearch",
+        "listing-analysis": "ListingAnalysis",
     }
     return labels.get(scenario, _camel_case(scenario))
 
@@ -394,6 +565,8 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
         return str(value) if value is not None else ""
 
     if scenario == "keyword-reverse":
+        return _sanitize_filename_part(params.get("asin"))
+    if scenario == "listing-analysis":
         return _sanitize_filename_part(params.get("asin"))
     if scenario == "keyword-miner":
         return _sanitize_filename_part(params.get("keyword"))
@@ -458,6 +631,14 @@ def _sanitize_filename_part(value: Any) -> str:
     text = re.sub(r"[^A-Za-z0-9\-]+", "-", text)
     text = re.sub(r"-{2,}", "-", text).strip("-")
     return text[:64]
+
+
+def _export_output_path(root_dir: Path, job_id: str, extension: str) -> Path:
+    suffix = extension.lstrip(".")
+    candidate = root_dir / f"{job_id}.{suffix}"
+    if len(str(candidate)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+        return root_dir / f"export.{suffix}"
+    return candidate
 
 
 def _normalize_export_format(value: str) -> str:

@@ -23,6 +23,8 @@ import time
 import urllib.parse
 from typing import Any
 
+from opscli.config import __version__
+
 # 直接使用 Starlette 官方类型，消除中间件接口与 Starlette 的类型不兼容问题
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -215,7 +217,7 @@ class ApiKeyAuthMiddleware:
                 resp = await client.get(
                     self._auth_verify_url,
                     params={"api_key": api_key},
-                    headers={"X-MCP-API-Key": api_key},
+                    headers={"X-MCP-API-Key": api_key, "X-Opscli-Version": __version__},
                     timeout=_VERIFY_REQUEST_TIMEOUT_SECONDS,
                 )
                 if resp.status_code == 200:

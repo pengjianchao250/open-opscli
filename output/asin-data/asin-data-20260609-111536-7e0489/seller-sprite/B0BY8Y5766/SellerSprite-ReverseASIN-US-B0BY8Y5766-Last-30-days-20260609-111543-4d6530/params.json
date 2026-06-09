@@ -1,0 +1,33 @@
+{
+  "request": {
+    "scenario": "keyword-reverse",
+    "site": "US",
+    "period": "30d",
+    "params": {
+      "asin": "B0BY8Y5766"
+    },
+    "page_size": 100,
+    "job_id": null,
+    "output_dir": "output\\asin-data\\asin-data-20260609-111536-7e0489\\seller-sprite\\B0BY8Y5766",
+    "export_format": "xlsx"
+  },
+  "resolved_params": {
+    "asin": "B0BY8Y5766"
+  },
+  "payload": {
+    "asin": "B0BY8Y5766",
+    "market": "US",
+    "limit": 100,
+    "skip": 0,
+    "page": 1,
+    "month": "",
+    "badges": [],
+    "conversionKeywordTypes": [],
+    "trafficKeywordTypes": [],
+    "order": 12,
+    "desc": true,
+    "exactly": false,
+    "keywordBidMatchType": "exact",
+    "filterDeletedKeywords": false
+  }
+}

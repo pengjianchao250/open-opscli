@@ -1,0 +1,48 @@
+{
+  "dimensions": [
+    {
+      "field": "ds_d35ac6f3910c.asin",
+      "alias": "f_asin"
+    },
+    {
+      "field": "ds_d35ac6f3910c.product_name",
+      "alias": "f_product_name"
+    }
+  ],
+  "metrics": [
+    {
+      "field": "ds_d35ac6f3910c.order_qty",
+      "aggregation": "SUM",
+      "alias": "f_order_qty"
+    },
+    {
+      "field": "ds_d35ac6f3910c.orders",
+      "aggregation": "SUM",
+      "alias": "f_orders"
+    },
+    {
+      "field": "ds_d35ac6f3910c.price",
+      "aggregation": "SUM",
+      "alias": "f_sales_amount"
+    }
+  ],
+  "filters": [
+    {
+      "field": "ds_d35ac6f3910c.asin",
+      "operator": "in",
+      "value": [
+        "B0TEST0002"
+      ]
+    },
+    {
+      "field": "ds_d35ac6f3910c.date_id",
+      "operator": "between",
+      "value": [
+        "2026-05-01",
+        "2026-05-31"
+      ]
+    }
+  ],
+  "limit": 1,
+  "offset": 0
+}

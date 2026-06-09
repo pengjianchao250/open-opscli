@@ -97,7 +97,18 @@ def test_install_ops_amazon_rufus_outputs_login_guidance(monkeypatch):
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["data"]["requires_amazon_login"] is True
-    assert any("opscli amazon-rufus init <country>" in step for step in payload["data"]["next_steps"])
+    assert any("remote-consent status <country>" in step for step in payload["data"]["next_steps"])
+    assert any("login-status <country>" in step for step in payload["data"]["next_steps"])
+    assert any("没有可用登录态" in step for step in payload["data"]["next_steps"])
+    assert any("opscli amazon-rufus watch-login <asin> <country>" in step for step in payload["data"]["next_steps"])
+    assert any("--close-browser" in step for step in payload["data"]["next_steps"])
+    assert any("amazon_rufus_get" in step for step in payload["data"]["next_steps"])
+    assert any("opscli amazon-rufus get-backend <asin> <country>" in step for step in payload["data"]["next_steps"])
+    assert any("不建议绑定信用卡" in step for step in payload["data"]["next_steps"])
+    assert not any("--new-chrome" in step for step in payload["data"]["next_steps"])
+    assert not any("mock" in step.lower() for step in payload["data"]["next_steps"])
+    assert not any("curl save" in step.lower() for step in payload["data"]["next_steps"])
+    assert not any("cookie save" in step.lower() for step in payload["data"]["next_steps"])
 
 
 def test_interactive_install_ops_amazon_rufus_outputs_login_guidance(monkeypatch):
@@ -132,7 +143,18 @@ def test_interactive_install_ops_amazon_rufus_outputs_login_guidance(monkeypatch
     payload = json.loads(result.stdout.splitlines()[-1])
     installed = payload["data"]["results"][0]
     assert installed["requires_amazon_login"] is True
-    assert any("opscli amazon-rufus init <country>" in step for step in installed["next_steps"])
+    assert any("remote-consent status <country>" in step for step in installed["next_steps"])
+    assert any("login-status <country>" in step for step in installed["next_steps"])
+    assert any("没有可用登录态" in step for step in installed["next_steps"])
+    assert any("opscli amazon-rufus watch-login <asin> <country>" in step for step in installed["next_steps"])
+    assert any("--close-browser" in step for step in installed["next_steps"])
+    assert any("amazon_rufus_get" in step for step in installed["next_steps"])
+    assert any("opscli amazon-rufus get-backend <asin> <country>" in step for step in installed["next_steps"])
+    assert any("不建议绑定信用卡" in step for step in installed["next_steps"])
+    assert not any("--new-chrome" in step for step in installed["next_steps"])
+    assert not any("mock" in step.lower() for step in installed["next_steps"])
+    assert not any("curl save" in step.lower() for step in installed["next_steps"])
+    assert not any("cookie save" in step.lower() for step in installed["next_steps"])
 
 
 def test_install_prompts_and_defaults_to_all_detected_targets(monkeypatch):

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from opscli.auth import AuthClient
 from opscli.query.domain.exceptions import DatasetNotFoundError, InvalidPayloadError, QueryMetadataNotReadyError
@@ -84,10 +87,13 @@ class QueryManager:
         未指定 --dataset / --table-id 时返回所有数据集列表（不含字段），
         指定了筛选条件时返回匹配的数据集及其字段。
         """
-        # 远端优先，统一拉取最新数据
+        # 远端优先，统一拉取最新数据；过滤参数透传给后端按需收敛
         source = "remote"
         try:
-            remote_data = self.client.fetch_query_metadata()
+            remote_data = self.client.fetch_query_metadata(
+                dataset_alias=dataset_alias,
+                table_id=table_id,
+            )
             datasets = remote_data.get("datasets") or []
             fields = remote_data.get("fields") or []
         except Exception:
@@ -295,6 +301,7 @@ class QueryManager:
         self,
         *,
         table_id: int,
+        dataset_alias: str | None = None,
         dimensions: list[dict] | None = None,
         metrics: list[dict] | None = None,
         filters: list[dict] | None = None,
@@ -321,7 +328,7 @@ class QueryManager:
             raise InvalidPayloadError("至少需要提供一个 dimension 或 metric")
 
         if validate_fields:
-            metadata = self.metadata(table_id=table_id, skills_dir=skills_dir, cwd=cwd)
+            metadata = self.metadata(dataset_alias=dataset_alias, table_id=table_id, skills_dir=skills_dir, cwd=cwd)
             self._validate_simple_fields(
                 metadata.fields,
                 dimensions=dimensions or [],
@@ -391,6 +398,10 @@ class QueryManager:
         注意：select_columns（查询组件）中的字段即使不在普通 fields 列表中，
         也是合法的过滤条件，过滤校验时会跳过这些字段的 metadata 强制匹配。
         """
+        if not fields and select_columns:
+            self._validate_simple_filter_operators(filters)
+            return
+
         if not fields:
             raise InvalidPayloadError("当前数据集 metadata 未返回字段，无法执行字段歧义门禁")
 
@@ -412,15 +423,17 @@ class QueryManager:
             resolved = self._resolve_simple_field(fields, field_ref, field_type="metric", context="metric")
             aggregation = item.get("aggregation") if isinstance(item, dict) else self._extract_simple_metric_aggregation(item)
             if aggregation and self._field_has_formula(resolved):
+                # 公式字段已内置聚合表达式，自动修正：移除 aggregation，填入 expr
                 formula_expr = (
                     str(resolved.get("summary_expression") or "").strip()
                     or str(resolved.get("detail_expression") or "").strip()
-                    or "(请执行 opscli query metadata --dataset <别名> 查看完整公式)"
                 )
-                raise InvalidPayloadError(
-                    f"公式字段禁止额外聚合: {field_ref}"
-                    f"\n  对应公式: {formula_expr}"
-                    f"\n  修复方式: 移除 aggregation，改为在 metric 中传入 expr 字段，值为上述公式表达式"
+                if formula_expr:
+                    item["expr"] = formula_expr
+                item.pop("aggregation", None)
+                logger.info(
+                    "公式字段自动修正: %s 移除 aggregation=%s，%s",
+                    field_ref, aggregation, "填入 expr" if formula_expr else "仅移除 aggregation",
                 )
 
         for field_ref in self._iter_filter_field_refs(filters):
@@ -480,6 +493,12 @@ class QueryManager:
         return refs
 
     def _validate_simple_filter_operators(self, filters: list[dict]) -> None:
+        """校验并标准化 filters 中的 operator 字段。
+
+        支持符号操作符（=, >=, <=, >, <, !=, <>, ==）自动转换为语义操作符，
+        与 query build 的 _WHERE_OP_MAP 行为对齐。就地修改 node 确保后续
+        build_simple 构造 payload 时使用标准化后的值。
+        """
         valid = self._VALID_FILTER_OPERATORS
         logical = self._LOGICAL_OPERATORS
 
@@ -491,11 +510,17 @@ class QueryManager:
                 op_str = str(op).strip()
                 if op_str in logical:
                     pass  # AND/OR 逻辑操作符，合法跳过
-                elif op_str not in valid:
-                    raise InvalidPayloadError(
-                        f"无效的过滤操作符: {op}\n"
-                        f"  支持: {', '.join(sorted(valid))}"
-                    )
+                else:
+                    # 符号操作符自动标准化为语义操作符
+                    normalized = self._WHERE_OP_MAP.get(op_str, op_str)
+                    if normalized != op_str:
+                        node["operator"] = normalized
+                        op_str = normalized
+                    if op_str not in valid:
+                        raise InvalidPayloadError(
+                            f"无效的过滤操作符: {op}\n"
+                            f"  支持: {', '.join(sorted(valid))}"
+                        )
             for child in node.get("conditions") or []:
                 walk(child)
 

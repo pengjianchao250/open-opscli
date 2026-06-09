@@ -1,0 +1,30 @@
+{
+  "time": "2026-06-08T22:05:01",
+  "source": "rufus.remote_consent",
+  "asin": "B0BY8Y5766",
+  "command": [
+    ".tmp\\opscli-local.cmd",
+    "amazon-rufus",
+    "remote-consent",
+    "status",
+    "US",
+    "--pretty"
+  ],
+  "dry_run": false,
+  "status": "success",
+  "exit_code": 0,
+  "stdout": "{\n  \"success\": true,\n  \"command\": \"amazon-rufus remote-consent status\",\n  \"data\": {\n    \"country\": \"US\",\n    \"status\": \"allowed\",\n    \"use_remote_authorization\": true,\n    \"updated_at\": \"2026-06-08T09:01:53Z\",\n    \"source\": \"opscli\"\n  },\n  \"error\": null\n}\n",
+  "stderr": "\nopscli 有新版本可用，建议更新最新版本: v0.0.84 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n",
+  "json": {
+    "success": true,
+    "command": "amazon-rufus remote-consent status",
+    "data": {
+      "country": "US",
+      "status": "allowed",
+      "use_remote_authorization": true,
+      "updated_at": "2026-06-08T09:01:53Z",
+      "source": "opscli"
+    },
+    "error": null
+  }
+}

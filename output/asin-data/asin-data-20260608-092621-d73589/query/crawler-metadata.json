@@ -1,0 +1,26 @@
+{
+  "time": "2026-06-08T09:26:24",
+  "source": "query.metadata",
+  "asin": null,
+  "command": [
+    "opscli",
+    "query",
+    "metadata",
+    "--dataset",
+    "ds_pdTYjvLRCadv"
+  ],
+  "dry_run": false,
+  "status": "failed",
+  "exit_code": 1,
+  "stdout": "{\"success\": false, \"command\": \"query metadata\", \"data\": null, \"error\": {\"code\": \"DATASET_NOT_FOUND\", \"message\": \"未找到目标数据集: ds_pdTYjvLRCadv\"}}\n",
+  "stderr": "\nopscli 有新版本可用，建议更新最新版本: v0.0.22 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n",
+  "json": {
+    "success": false,
+    "command": "query metadata",
+    "data": null,
+    "error": {
+      "code": "DATASET_NOT_FOUND",
+      "message": "未找到目标数据集: ds_pdTYjvLRCadv"
+    }
+  }
+}

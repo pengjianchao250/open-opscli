@@ -1,0 +1,35 @@
+flowchart TD
+    A[用户提供 ASIN / 国家 / 可选问题] --> B{当前宿主可调用 amazon_rufus_get?}
+    B -->|是| C[调用 amazon_rufus_get]
+    B -->|否| Z[使用 opscli amazon-rufus get 兼容入口]
+
+    C --> D[RufusManager.get_backend]
+    D --> E[读取本地加密 browser-state-COUNTRY.bin]
+    E --> F{storage_state 可用?}
+    F -->|是| G[从 storage_state 派生 Cookie header]
+    F -->|否| H[返回 RUFUS_SECRET_NOT_READY]
+
+    G --> I[HeadlessRufusCaptureService 用 storage_state 打开商品页]
+    I --> J{捕获 /rufus/cl/streaming?}
+    J -->|是| K[HeadlessRufusClient 逐题请求 Rufus SSE]
+    J -->|否| L[返回 RUFUS_HEADLESS_CAPTURE_ERROR]
+    K --> M{Rufus 请求成功?}
+    M -->|是| N[AnswerReportWriter 写 output/amazon-rufus 报告]
+    M -->|否| O[返回 RUFUS_HEADLESS_REQUEST_ERROR]
+    N --> P[返回 report_path]
+
+    H --> Q{本轮已刷新登录态?}
+    L --> Q
+    O --> Q
+    Q -->|是| R[停止恢复并返回错误]
+    Q -->|否| S[设置 login_recovery_attempted=true]
+    S --> T[opscli amazon-rufus init COUNTRY --launch-if-needed]
+    T --> U[用户在目标国家站点 Amazon 窗口完成登录]
+    U --> V[opscli amazon-rufus save-state COUNTRY]
+    V --> W[加密保存 Playwright storage_state 到本地]
+    W --> C
+
+    Z --> ZA[BrowserAttachService 连接本机 Chrome CDP]
+    ZA --> ZB[捕获 seed request]
+    ZB --> ZC[RufusReplayService 在页面上下文逐题请求]
+    ZC --> N

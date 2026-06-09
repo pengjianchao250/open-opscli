@@ -1,0 +1,2 @@
+{"asin": null, "source": "query.sales", "tool": "opscli query simple --table-id", "status": "failed", "exit_code": 1, "error_message": "REMOTE_BUSINESS_ERROR: 参数验证失败", "retry_count": 0}
+{"asin": null, "source": "query.crawler_listing", "tool": "opscli query simple --table-id", "status": "failed", "exit_code": 1, "error_message": "REMOTE_BUSINESS_ERROR: 字段不存在: ds_icw50TLOFu4F.a_image", "retry_count": 0}

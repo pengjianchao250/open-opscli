@@ -1,0 +1,59 @@
+{
+  "time": "2026-06-08T17:06:14",
+  "source": "query.metadata",
+  "asin": null,
+  "command": [
+    "opscli",
+    "query",
+    "metadata",
+    "--dataset",
+    "ds_icw50TLOFu4F"
+  ],
+  "dry_run": false,
+  "status": "success",
+  "exit_code": 0,
+  "stdout": "{\"success\": true, \"command\": \"query metadata\", \"data\": {\"dataset\": {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"dataset_category\": \"normal\", \"inner_where_enabled\": false, \"description\": \"ASIN明细表\", \"remarks\": \"\", \"select_columns\": [{\"column_name\": \"date_id\", \"verbose_name\": \"日期\", \"component_dataset_alias\": \"ds_d35ac6f3910c\"}, {\"column_name\": \"asin\", \"verbose_name\": \"ASIN\", \"component_dataset_alias\": \"ds_3634c85fc90f\"}]}, \"fields\": [], \"source\": \"remote\", \"select_columns\": [{\"column_name\": \"date_id\", \"verbose_name\": \"日期\", \"component_dataset_alias\": \"ds_d35ac6f3910c\"}, {\"column_name\": \"asin\", \"verbose_name\": \"ASIN\", \"component_dataset_alias\": \"ds_3634c85fc90f\"}]}, \"error\": null}\n",
+  "stderr": "\nopscli 有新版本可用，建议更新最新版本: v0.0.22 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n",
+  "json": {
+    "success": true,
+    "command": "query metadata",
+    "data": {
+      "dataset": {
+        "table_id": 43,
+        "dataset_alias": "ds_icw50TLOFu4F",
+        "dataset_name": "custom_crawler_amazon_details",
+        "dataset_category": "normal",
+        "inner_where_enabled": false,
+        "description": "ASIN明细表",
+        "remarks": "",
+        "select_columns": [
+          {
+            "column_name": "date_id",
+            "verbose_name": "日期",
+            "component_dataset_alias": "ds_d35ac6f3910c"
+          },
+          {
+            "column_name": "asin",
+            "verbose_name": "ASIN",
+            "component_dataset_alias": "ds_3634c85fc90f"
+          }
+        ]
+      },
+      "fields": [],
+      "source": "remote",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        }
+      ]
+    },
+    "error": null
+  }
+}

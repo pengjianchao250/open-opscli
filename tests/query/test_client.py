@@ -174,11 +174,76 @@ def test_fetch_query_metadata_sends_get_request(monkeypatch):
     result = client.fetch_query_metadata()
 
     assert captured["url"].endswith("/v1/data-metrics/datasets/query-metadata")
+    assert captured["params"] is None  # 裸调用时不带 query params，与原行为兼容
     assert captured["headers"]["Authorization"] == "Bearer jwt-token"
     assert captured["cookies"]["polarisUserToken"] == "session-123"
     assert captured["timeout"] == 20
     assert result["datasets"][0]["dataset_alias"] == "ds_sales"
     assert len(result["fields"]) == 1
+
+
+def test_fetch_query_metadata_with_dataset_alias_param(monkeypatch):
+    """指定 dataset_alias 时应作为 query params 传给后端。"""
+    captured = {}
+
+    def fake_get(url, params=None, headers=None, cookies=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = params
+        return httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "data": {
+                    "datasets": [{"table_id": 1103, "dataset_alias": "ds_sales"}],
+                    "fields": [{"table_id": 1103, "field_name": "date_id"}],
+                },
+            },
+        )
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.get", fake_get)
+    client = QueryClient(auth_client=DummyAuthClient())
+
+    client.fetch_query_metadata(dataset_alias="ds_sales")
+
+    assert captured["params"] == {"dataset_alias": "ds_sales"}
+
+
+def test_fetch_query_metadata_with_table_id_param(monkeypatch):
+    """指定 table_id 时应作为 query params 传给后端，整数被转为字符串。"""
+    captured = {}
+
+    def fake_get(url, params=None, headers=None, cookies=None, timeout=None):
+        captured["params"] = params
+        return httpx.Response(
+            200,
+            json={"code": 200, "data": {"datasets": [], "fields": []}},
+        )
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.get", fake_get)
+    client = QueryClient(auth_client=DummyAuthClient())
+
+    client.fetch_query_metadata(table_id=1103)
+
+    assert captured["params"] == {"table_id": "1103"}
+
+
+def test_fetch_query_metadata_with_both_params(monkeypatch):
+    """同时传入 dataset_alias 和 table_id 时两者都应进入 query params。"""
+    captured = {}
+
+    def fake_get(url, params=None, headers=None, cookies=None, timeout=None):
+        captured["params"] = params
+        return httpx.Response(
+            200,
+            json={"code": 200, "data": {"datasets": [], "fields": []}},
+        )
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.get", fake_get)
+    client = QueryClient(auth_client=DummyAuthClient())
+
+    client.fetch_query_metadata(dataset_alias="ds_sales", table_id=1103)
+
+    assert captured["params"] == {"dataset_alias": "ds_sales", "table_id": "1103"}
 
 
 def test_fetch_chart_bundle_supports_new_structured_response(monkeypatch):

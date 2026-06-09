@@ -1,0 +1,53 @@
+{
+  "run_id": "asin-data-B0BY8Y5766-20260608-正式",
+  "started_at": "2026-06-08T14:09:28",
+  "finished_at": "2026-06-08T14:14:01",
+  "output_dir": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式",
+  "dry_run": false,
+  "summary": {
+    "input_count": 1,
+    "asin_count": 1,
+    "input_error_count": 0,
+    "source_error_count": 3,
+    "failed_asin_count": 1,
+    "failed_asins": [
+      "B0BY8Y5766"
+    ]
+  },
+  "options": {
+    "skip_seller_sprite": false,
+    "skip_keyword_miner": false,
+    "skip_listing_analysis": false,
+    "skip_amazon": false,
+    "skip_query": false,
+    "skip_sales_query": false,
+    "skip_crawler_query": false,
+    "seller_sprite_period": "30d",
+    "listing_analysis_station": "GLOBAL",
+    "sales_start": null,
+    "sales_end": null,
+    "query_chunk_size": 100
+  },
+  "files": {
+    "manifest": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\manifest.json",
+    "results": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\asin-data.jsonl",
+    "frontend_data": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\frontend-data.json",
+    "frontend_markdown": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\frontend-data.md",
+    "summary": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\asin-data-summary.json",
+    "commands": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\commands.jsonl",
+    "errors": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\errors.jsonl"
+  },
+  "post_processing": {
+    "ai_listing_analysis_backfill": {
+      "status": "success",
+      "task_id": "d3e57d2d8e498f1d814c7e5d6fe160d4",
+      "completed_time": "2026-06-08 14:12:24",
+      "note": "Initial collector polling timed out, then follow-up polling fetched completed content and regenerated frontend-data.json/frontend-data.md."
+    },
+    "remaining_failed_sources": [
+      "query.sales",
+      "query.crawler_listing",
+      "amazon.scrape"
+    ]
+  }
+}

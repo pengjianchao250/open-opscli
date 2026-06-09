@@ -33,7 +33,7 @@ class SkillsUpdater:
     SELECT_COLUMNS_ENDPOINT = "/v1/data-metrics/datasets/skill/export-select-columns" # 查询组件关联导出
     CATALOG_ENDPOINT = "/v1/data-metrics/datasets/skill/catalog"                      # AI 业务语义索引
     QUERY_METADATA_ENDPOINT = "/v1/data-metrics/datasets/query-metadata"              # 查询元数据
-    RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT = "http://127.0.0.1:8000/api/opencalw/default-question-templates"  # Rufus 默认题库
+    RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT = "/opencalw/default-question-templates"  # Rufus 默认题库固定接口
 
     def build_remote_summary(self, skill_name: str) -> dict:
         """构建远端状态摘要，供 `skills status` 与调试输出复用。"""
@@ -280,18 +280,19 @@ class SkillsUpdater:
     def upgrade_ops_amazon_rufus(self, record: SkillRecord, force: bool = False) -> SkillUpgradeResult:
         """执行 ops-amazon-rufus 默认题库升级。"""
         response = self._get_rufus_default_question_templates()
-        payload = self._parse_json_response(response, endpoint=self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT)
+        endpoint = self._get_rufus_default_question_templates_endpoint()
+        payload = self._parse_json_response(response, endpoint=endpoint)
         data = payload.get("data")
         if not isinstance(data, dict) or not isinstance(data.get("items"), list):
             raise SkillRemoteError(
                 "Rufus 默认题库接口返回格式异常",
-                endpoint=self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT,
+                endpoint=endpoint,
             )
         question_count = sum(len(item.get("questions", [])) for item in data["items"] if isinstance(item, dict))
         if question_count == 0:
             raise SkillRemoteError(
                 "Rufus 默认题库为空，已取消本地题库更新",
-                endpoint=self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT,
+                endpoint=endpoint,
             )
 
         current_version = record.version
@@ -338,26 +339,12 @@ class SkillsUpdater:
             raise
 
     def _get_rufus_default_question_templates(self) -> httpx.Response:
-        """请求 Rufus 默认题库接口；该本地接口不依赖 ops 登录态。"""
-        try:
-            response = httpx.get(
-                self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT,
-                timeout=20,
-                follow_redirects=True,
-            )
-            response.raise_for_status()
-            return response
-        except httpx.HTTPStatusError as exc:
-            raise SkillRemoteError(
-                self._format_http_error(self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT, exc.response.status_code),
-                endpoint=self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT,
-                status_code=exc.response.status_code,
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise SkillRemoteError(
-                f"请求 Rufus 默认题库接口失败: {exc}",
-                endpoint=self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT,
-            ) from exc
+        """请求 Rufus 默认题库接口。"""
+        return self._get(self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT)
+
+    def _get_rufus_default_question_templates_endpoint(self) -> str:
+        """返回 Rufus 默认题库固定接口路径。"""
+        return self.RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT
 
     def _extract_field_count(
         self,

@@ -112,6 +112,65 @@ def _telemetry_wrap(fn):
     return _wrapper
 
 
+def _get_current_mcp_user_email() -> str | None:
+    """获取当前 MCP 请求关联的用户邮箱（telemetry 专用，静默失败）。
+
+    按以下优先级回退，覆盖 MCP 的三种运行模式：
+
+    1. HTTP/SSE 远程校验模式：直接读取 `mcp.context.get_current_user_email()`，
+       中间件已从 OPS `/v1/mcp/verify-key` 拿到 email 并注入 contextvar / scope。
+    2. HTTP/SSE 固定 API Key 模式：context 拿不到 email，按 API Key 隔离目录
+       读取 CredentialStore 中保存的 email。
+    3. stdio 模式：`_get_credential_dir()` 返回 None，回退到默认凭证目录，
+       与 CLI 共用同一份登录态。
+
+    Returns:
+        用户邮箱字符串，或 None（未登录 / 任一环节异常）
+    """
+    try:
+        # 优先：远程校验模式下中间件已注入 email
+        from opscli.mcp.context import get_current_user_email
+
+        email = get_current_user_email()
+        if email:
+            return email
+
+        # 回退：从凭证存储读取（固定 API Key 模式 / stdio 模式）
+        from opscli.auth.storage.credential_store import CredentialStore
+        from opscli.mcp.tools.helpers import _get_credential_dir
+
+        cred_dir = _get_credential_dir()
+        store = CredentialStore(base_dir=cred_dir) if cred_dir else CredentialStore()
+        data = store.load()
+        return data.get("email") if data else None
+    except Exception:
+        # telemetry 不允许影响主流程，任何异常静默吞掉
+        return None
+
+
+def _get_current_mcp_skill_name() -> str | None:
+    """获取当前 MCP 调用方的标识（telemetry 专用，静默失败）。
+
+    MCP 协议层无法直接拿到"业务 Skill 名"，此处退而求其次使用
+    `clientInfo.name`（MCP initialize 握手中的客户端 Agent 名，
+    如 claude / cursor / codex），作为调用方近似标识填入 skill_name。
+
+    语义说明：
+        - skill_name 字段后端定义为"调用方 Skill 名称"
+        - 但 MCP 协议层只能识别到 Agent 名，无法识别到 Skill 名
+        - 用 Agent 名作为近似值，至少可以统计哪个 Agent 工具调用了 MCP
+
+    Returns:
+        客户端 Agent 名（已 lowercase + strip），或 None
+    """
+    try:
+        from opscli.mcp.context import get_current_client_name
+
+        return get_current_client_name()
+    except Exception:
+        return None
+
+
 def _fire_mcp_event(
     tool_name: str, *, status: str, duration_ms: int,
     error_type: str | None = None,
@@ -139,6 +198,8 @@ def _fire_mcp_event(
             status=status,
             duration_ms=duration_ms,
             error_type=error_type,
+            user_email=_get_current_mcp_user_email(),
+            skill_name=_get_current_mcp_skill_name(),
             raw_payload={"params": params} if params else None,
         )
         TelemetryReporter.fire(**event)
@@ -177,20 +238,27 @@ class _TelemetryMcpProxy:
 _telemetry_mcp = _TelemetryMcpProxy(mcp)
 
 from opscli.mcp.tools import auth as _auth_tools
-from opscli.mcp.tools import amazon_listing_intelligence as _amazon_listing_intelligence_tools
+from opscli.mcp.tools import amazon_rufus as _amazon_rufus_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
 from opscli.mcp.tools import feedback as _feedback_tools
+# Google Trends 暂时停用：下午 MCP Server 崩溃疑似与该工具相关，先不注册使用。
+# from opscli.mcp.tools import google_trends as _google_trends_tools
+from opscli.mcp.tools import keepa as _keepa_tools
 from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import seller_sprite as _seller_sprite_tools
+from opscli.mcp.tools import sif as _sif_tools
 from opscli.mcp.tools import skills as _skills_tools
 from opscli.mcp.tools import xiyou as _xiyou_tools
 
 _auth_tools.register(_telemetry_mcp)
-_amazon_listing_intelligence_tools.register(_telemetry_mcp)
+_amazon_rufus_tools.register(_telemetry_mcp)
 _chatgpt_tools.register(_telemetry_mcp)
 _feedback_tools.register(_telemetry_mcp)
+# _google_trends_tools.register(_telemetry_mcp)
+_keepa_tools.register(_telemetry_mcp)
 _query_tools.register(_telemetry_mcp)
 _seller_sprite_tools.register(_telemetry_mcp)
+_sif_tools.register(_telemetry_mcp)
 _xiyou_tools.register(_telemetry_mcp)
 _skills_tools.register(_telemetry_mcp)
 

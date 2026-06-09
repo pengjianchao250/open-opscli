@@ -1,0 +1,38 @@
+{
+  "run_id": "asin-data-B0BY8Y5766-20260608-compatible-latest",
+  "started_at": "2026-06-08T17:26:53",
+  "finished_at": "2026-06-08T17:27:05",
+  "output_dir": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-compatible-latest",
+  "dry_run": false,
+  "summary": {
+    "input_count": 1,
+    "asin_count": 1,
+    "input_error_count": 0,
+    "source_error_count": 0,
+    "failed_asin_count": 0,
+    "failed_asins": []
+  },
+  "options": {
+    "skip_seller_sprite": true,
+    "skip_keyword_miner": true,
+    "skip_listing_analysis": true,
+    "skip_amazon": true,
+    "skip_query": false,
+    "skip_sales_query": false,
+    "skip_crawler_query": false,
+    "seller_sprite_period": "30d",
+    "listing_analysis_station": "GLOBAL",
+    "sales_start": null,
+    "sales_end": null,
+    "query_chunk_size": 100
+  },
+  "files": {
+    "manifest": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-compatible-latest\\manifest.json",
+    "results": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-compatible-latest\\asin-data.jsonl",
+    "frontend_data": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-compatible-latest\\frontend-data.json",
+    "frontend_markdown": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-compatible-latest\\frontend-data.md",
+    "summary": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-compatible-latest\\asin-data-summary.json",
+    "commands": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-compatible-latest\\commands.jsonl",
+    "errors": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-compatible-latest\\errors.jsonl"
+  }
+}

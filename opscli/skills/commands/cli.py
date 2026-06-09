@@ -1,7 +1,7 @@
 """Skills CLI 子命令定义。
 
 注册到 opscli 顶级命令下，提供以下子命令：
-  list / install / status / link / unlink / upgrade / report-usage  — Skill 本地生命周期
+  list / install / status / link / unlink / upgrade / report-usage — Skill 本地生命周期
   publish / edit / unpublish                                        — 技能广场发布管理
   marketplace categories / list / search / info / versions / rate  — 技能广场浏览
   sync-exclude add / remove / list                                  — 同步排除名单管理
@@ -67,9 +67,11 @@ _TOOL_LABELS = {
 # ops-amazon-rufus 安装后引导信息
 _AMAZON_RUFUS_SKILL_NAME = "ops-amazon-rufus"
 _AMAZON_RUFUS_NEXT_STEPS = [
-    "使用前必须先登录对应国家站点的 Amazon 账户。",
-    "请先执行 opscli amazon-rufus init <country>，在新窗口完成登录。",
-    "登录后再执行 opscli amazon-rufus get <asin> <country> --new-chrome。",
+    "先执行 opscli amazon-rufus remote-consent status <country> --pretty 读取该站点远程授权偏好。",
+    "未询问过时让用户明确回复“允许”或“拒绝”；请建议使用独立干净的 Amazon 账号，且不建议绑定信用卡或支付方式。",
+    "发起 Rufus 获取前执行 opscli amazon-rufus login-status <country> --pretty；没有可用登录态时执行 opscli amazon-rufus watch-login <asin> <country> --launch-if-needed --close-browser。",
+    "允许远程授权且登录态可用时调用 amazon_rufus_get；如需恢复登录态，执行 watch-login 后重试 MCP 获取。",
+    "拒绝远程授权且登录态可用时调用 opscli amazon-rufus get-backend <asin> <country>。",
 ]
 
 # marketplace list 命令的参数枚举与面板标题
@@ -1853,13 +1855,15 @@ def unlink_skill(
 
 @app.command("report-usage")
 def report_usage(
-    identifier: str = typer.Argument(..., help="Skill 标识符，如 pengjianchao@ops-auth"),
+    identifier: str = typer.Argument(..., help="Skill 标识符（username@skill_name 或纯 skill_name，如 ops-auth）"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """直接上报一次 Skill 使用记录到服务端（不经过本地队列）。
 
     \b
-    identifier 格式：username@skill_name，如 pengjianchao@ops-auth。
+    identifier 支持两种格式：
+      - 完整标识符：username@skill_name，如 pengjianchao@ops-auth
+      - 纯 skill_name：如 ops-auth（适用于 Hook 自动上报场景）
     """
     from datetime import datetime, timezone
 

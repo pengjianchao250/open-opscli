@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>opscli 系统架构培训文档</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+:root{
+  --ink:#0b1120;          /* 主背景：深墨蓝 */
+  --ink-2:#0f172a;        /* 次背景 */
+  --panel:#131c30;        /* 卡片面板 */
+  --panel-2:#19233b;      /* 浅一层面板 */
+  --line:#243149;         /* 边框线 */
+  --line-2:#33425f;
+  --txt:#e7edf7;          /* 主文字 */
+  --txt-dim:#9fb0c9;      /* 次文字 */
+  --txt-faint:#64748b;    /* 弱文字 */
+  --amber:#f5a623;        /* 主强调：琥珀 */
+  --amber-soft:#fbbf5410;
+  --cyan:#38d6c8;         /* 次强调：青 */
+  --cyan-2:#2dd4bf;
+  --violet:#8b9bff;       /* 辅助：靛蓝 */
+  --rose:#fb7185;         /* 警示 */
+  --green:#4ade80;        /* 成功 */
+  --grid:rgba(56,214,200,.045);
+  --glow-amber:0 0 0 1px rgba(245,166,35,.35),0 8px 30px -6px rgba(245,166,35,.25);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{
+  background:var(--ink);
+  color:var(--txt);
+  font-family:'IBM Plex Sans',sans-serif;
+  font-weight:400;
+  line-height:1.7;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+/* 蓝图网格背景 */
+body::before{
+  content:"";position:fixed;inset:0;z-index:-2;
+  background:
+    linear-gradient(var(--grid) 1px,transparent 1px),
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:42px 42px;
+  mask-image:radial-gradient(ellipse 100% 80% at 70% 0%,#000 30%,transparent 90%);
+}
+body::after{
+  content:"";position:fixed;inset:0;z-index:-3;
+  background:
+    radial-gradient(circle at 85% -5%,rgba(245,166,35,.10),transparent 45%),
+    radial-gradient(circle at 5% 30%,rgba(56,214,200,.08),transparent 40%);
+}
+code,pre,.mono{font-family:'IBM Plex Mono',monospace}
+
+/* ============ 布局 ============ */
+.layout{display:grid;grid-template-columns:288px 1fr;max-width:1600px;margin:0 auto}
+aside{
+  position:sticky;top:0;height:100vh;overflow-y:auto;
+  border-right:1px solid var(--line);
+  background:linear-gradient(180deg,rgba(15,23,42,.7),rgba(11,17,32,.4));
+  backdrop-filter:blur(8px);
+  padding:28px 20px 60px;
+}
+aside::-webkit-scrollbar{width:6px}
+aside::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:3px}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.brand .logo{
+  width:42px;height:42px;border-radius:10px;flex-shrink:0;
+  background:linear-gradient(135deg,var(--amber),#d97706);
+  display:grid;place-items:center;color:#1a1205;font-weight:700;
+  font-family:'Chakra Petch';font-size:1.25rem;
+  box-shadow:var(--glow-amber);
+}
+.brand h1{font-family:'Chakra Petch';font-size:1.15rem;font-weight:700;letter-spacing:.5px}
+.brand .ver{font-size:.7rem;color:var(--cyan);font-family:'IBM Plex Mono';letter-spacing:1px}
+.nav-meta{font-size:.7rem;color:var(--txt-faint);margin:18px 0 10px;letter-spacing:2px;text-transform:uppercase;font-family:'IBM Plex Mono'}
+nav a{
+  display:flex;align-items:center;gap:10px;
+  padding:8px 12px;border-radius:8px;color:var(--txt-dim);
+  text-decoration:none;font-size:.88rem;transition:.18s;
+  border:1px solid transparent;
+}
+nav a .idx{font-family:'IBM Plex Mono';font-size:.7rem;color:var(--txt-faint);width:22px}
+nav a:hover{background:var(--panel);color:var(--txt)}
+nav a.active{
+  background:linear-gradient(90deg,rgba(245,166,35,.12),transparent);
+  color:var(--amber);border-color:rgba(245,166,35,.25)
+}
+nav a.active .idx{color:var(--amber)}
+
+main{padding:0 clamp(20px,4vw,64px) 120px;min-width:0}
+
+/* ============ Hero ============ */
+.hero{padding:80px 0 56px;border-bottom:1px solid var(--line);position:relative}
+.kicker{
+  display:inline-flex;align-items:center;gap:8px;
+  font-family:'IBM Plex Mono';font-size:.72rem;letter-spacing:2px;
+  color:var(--cyan);text-transform:uppercase;
+  border:1px solid rgba(56,214,200,.3);border-radius:30px;
+  padding:5px 14px;margin-bottom:24px;
+  background:rgba(56,214,200,.05);
+}
+.kicker .dot{width:7px;height:7px;border-radius:50%;background:var(--cyan);animation:pulse 1.8s infinite}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(56,214,200,.5)}50%{opacity:.6;box-shadow:0 0 0 6px rgba(56,214,200,0)}}
+.hero h2{
+  font-family:'Chakra Petch';font-weight:700;
+  font-size:clamp(2.4rem,5.5vw,4rem);line-height:1.05;letter-spacing:-1px;
+  margin-bottom:20px;
+}
+.hero h2 .hl{
+  color:transparent;background:linear-gradient(120deg,var(--amber),#fcd34d 60%,var(--cyan));
+  -webkit-background-clip:text;background-clip:text;
+}
+.hero p.lead{font-size:1.12rem;color:var(--txt-dim);max-width:760px;margin-bottom:36px}
+.stat-row{display:flex;flex-wrap:wrap;gap:14px}
+.stat{
+  border:1px solid var(--line);border-radius:14px;padding:16px 22px;
+  background:linear-gradient(160deg,var(--panel),rgba(19,28,48,.4));
+  min-width:130px;position:relative;overflow:hidden;
+}
+.stat::before{content:"";position:absolute;top:0;left:0;width:3px;height:100%;background:var(--amber);opacity:.6}
+.stat .num{font-family:'Chakra Petch';font-size:1.9rem;font-weight:700;color:var(--txt)}
+.stat .num.cy{color:var(--cyan)}
+.stat .lbl{font-size:.75rem;color:var(--txt-faint);font-family:'IBM Plex Mono';margin-top:2px}
+
+/* reveal 动画 */
+[data-reveal]{opacity:0;transform:translateY(24px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+[data-reveal].in{opacity:1;transform:none}
+.hero [data-reveal]{animation:heroIn .8s cubic-bezier(.2,.7,.2,1) forwards;opacity:0;transform:none}
+.hero [data-reveal]:nth-child(1){animation-delay:.05s}
+.hero [data-reveal]:nth-child(2){animation-delay:.15s}
+.hero [data-reveal]:nth-child(3){animation-delay:.28s}
+.hero [data-reveal]:nth-child(4){animation-delay:.42s}
+@keyframes heroIn{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}
+
+/* ============ Section ============ */
+section{padding:68px 0 12px;scroll-margin-top:20px;border-bottom:1px solid var(--line)}
+section:last-of-type{border-bottom:none}
+.sec-head{display:flex;align-items:flex-start;gap:18px;margin-bottom:34px}
+.sec-num{
+  font-family:'Chakra Petch';font-size:1rem;font-weight:700;color:var(--ink);
+  background:var(--cyan);width:40px;height:40px;border-radius:10px;
+  display:grid;place-items:center;flex-shrink:0;box-shadow:0 6px 20px -6px rgba(56,214,200,.5)
+}
+.sec-num.am{background:var(--amber);box-shadow:0 6px 20px -6px rgba(245,166,35,.5)}
+.sec-head h3{font-family:'Chakra Petch';font-size:clamp(1.6rem,3vw,2.1rem);font-weight:700;letter-spacing:-.5px;line-height:1.15}
+.sec-head p{color:var(--txt-dim);font-size:.95rem;margin-top:6px;max-width:780px}
+
+h4.sub{font-family:'Chakra Petch';font-size:1.2rem;font-weight:600;margin:38px 0 16px;color:var(--txt);display:flex;align-items:center;gap:10px}
+h4.sub::before{content:"";width:14px;height:14px;border:2px solid var(--amber);border-radius:3px;transform:rotate(45deg);flex-shrink:0}
+
+p.body{color:var(--txt-dim);margin-bottom:16px;max-width:820px}
+strong{color:var(--txt);font-weight:600}
+.ac{color:var(--amber);font-weight:600}
+.cy{color:var(--cyan)}
+
+/* 卡片 */
+.card{
+  border:1px solid var(--line);border-radius:16px;padding:24px;
+  background:linear-gradient(160deg,var(--panel),rgba(15,23,42,.5));
+  margin:18px 0;position:relative;
+}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}
+
+.feat{
+  border:1px solid var(--line);border-radius:14px;padding:20px;
+  background:var(--panel);transition:.25s;position:relative;overflow:hidden
+}
+.feat:hover{transform:translateY(-4px);border-color:var(--line-2);box-shadow:0 16px 40px -16px rgba(0,0,0,.6)}
+.feat .ico{
+  width:38px;height:38px;border-radius:9px;display:grid;place-items:center;
+  font-family:'IBM Plex Mono';font-weight:600;font-size:.95rem;margin-bottom:12px;
+  background:rgba(56,214,200,.1);color:var(--cyan);border:1px solid rgba(56,214,200,.25)
+}
+.feat .ico.am{background:rgba(245,166,35,.1);color:var(--amber);border-color:rgba(245,166,35,.25)}
+.feat h5{font-family:'Chakra Petch';font-size:1.02rem;font-weight:600;margin-bottom:6px}
+.feat p{font-size:.85rem;color:var(--txt-dim)}
+
+/* 模块标签 */
+.tag{display:inline-block;font-family:'IBM Plex Mono';font-size:.72rem;padding:3px 9px;border-radius:6px;background:var(--panel-2);border:1px solid var(--line-2);color:var(--txt-dim);margin:2px}
+.tag.am{color:var(--amber);border-color:rgba(245,166,35,.3)}
+.tag.cy{color:var(--cyan);border-color:rgba(56,214,200,.3)}
+
+/* 代码块 */
+pre{
+  background:#070c18;border:1px solid var(--line);border-radius:12px;
+  padding:18px 20px;overflow-x:auto;font-size:.82rem;line-height:1.65;
+  margin:16px 0;position:relative
+}
+pre::before{
+  content:attr(data-label);position:absolute;top:0;right:0;
+  font-size:.65rem;color:var(--txt-faint);font-family:'IBM Plex Mono';
+  padding:4px 10px;border-left:1px solid var(--line);border-bottom:1px solid var(--line);
+  border-bottom-left-radius:8px;letter-spacing:1px
+}
+pre code{color:#c8d4e8}
+.c-key{color:var(--violet)}.c-str{color:var(--green)}.c-com{color:var(--txt-faint);font-style:italic}.c-fn{color:var(--amber)}.c-num{color:var(--cyan)}
+
+/* 表格 */
+table{width:100%;border-collapse:collapse;margin:18px 0;font-size:.86rem;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+th{background:var(--panel-2);color:var(--cyan);font-family:'IBM Plex Mono';font-weight:600;font-size:.76rem;text-transform:uppercase;letter-spacing:.5px;text-align:left;padding:11px 14px}
+td{padding:11px 14px;border-top:1px solid var(--line);color:var(--txt-dim);vertical-align:top}
+tr:hover td{background:rgba(56,214,200,.03)}
+td code{color:var(--amber);font-size:.82rem;background:rgba(245,166,35,.08);padding:1px 6px;border-radius:5px}
+
+/* mermaid 容器 */
+.diagram{
+  border:1px solid var(--line);border-radius:16px;padding:26px;margin:22px 0;
+  background:
+    radial-gradient(circle at 50% 0%,rgba(56,214,200,.05),transparent 70%),
+    var(--ink-2);
+  overflow-x:auto
+}
+.diagram .cap{font-family:'IBM Plex Mono';font-size:.74rem;color:var(--txt-faint);text-align:center;margin-top:16px;letter-spacing:1px}
+.mermaid{display:flex;justify-content:center}
+
+/* ============ 动态 SVG 图：架构总览 ============ */
+.arch-map{position:relative;border:1px solid var(--line);border-radius:18px;background:var(--ink-2);padding:30px;margin:24px 0;overflow:hidden}
+.arch-map svg{width:100%;height:auto;display:block}
+.flow-line{stroke-dasharray:6 8;animation:dash 1.2s linear infinite}
+@keyframes dash{to{stroke-dashoffset:-28}}
+.node-box{fill:var(--panel);stroke:var(--line-2);stroke-width:1.5;rx:10}
+.node-glow{animation:nodeGlow 3s ease-in-out infinite}
+@keyframes nodeGlow{0%,100%{filter:drop-shadow(0 0 2px rgba(245,166,35,.2))}50%{filter:drop-shadow(0 0 10px rgba(245,166,35,.5))}}
+.particle{animation:particleMove 3s linear infinite}
+@keyframes particleMove{0%{offset-distance:0%;opacity:0}10%{opacity:1}90%{opacity:1}100%{offset-distance:100%;opacity:0}}
+
+/* ============ Token 三态机 ============ */
+.fsm{display:flex;align-items:center;justify-content:center;gap:0;flex-wrap:wrap;margin:30px 0;padding:20px}
+.fsm-state{
+  width:160px;height:108px;border-radius:14px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:4px;position:relative;
+  border:2px solid;text-align:center;flex-shrink:0;background:var(--panel)
+}
+.fsm-state .st-name{font-family:'IBM Plex Mono';font-weight:600;font-size:.9rem}
+.fsm-state .st-desc{font-size:.7rem;color:var(--txt-faint);padding:0 8px}
+.fsm-state.valid{border-color:var(--green);box-shadow:0 0 24px -8px rgba(74,222,128,.5)}
+.fsm-state.valid .st-name{color:var(--green)}
+.fsm-state.refresh{border-color:var(--amber);box-shadow:0 0 24px -8px rgba(245,166,35,.5)}
+.fsm-state.refresh .st-name{color:var(--amber)}
+.fsm-state.expired{border-color:var(--rose);box-shadow:0 0 24px -8px rgba(251,113,133,.5)}
+.fsm-state.expired .st-name{color:var(--rose)}
+.fsm-arrow{display:flex;flex-direction:column;align-items:center;color:var(--txt-faint);font-size:.65rem;font-family:'IBM Plex Mono';padding:0 6px;min-width:80px}
+.fsm-arrow .line{width:100%;height:2px;background:linear-gradient(90deg,var(--line-2),var(--amber),var(--line-2));background-size:200% 100%;animation:arrowFlow 2s linear infinite;margin:4px 0;border-radius:2px}
+@keyframes arrowFlow{to{background-position:-200% 0}}
+
+/* 双层锁动画 */
+.locks{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:22px 0}
+.lock-layer{border:1px solid var(--line);border-radius:14px;padding:20px;background:var(--panel);position:relative;overflow:hidden}
+.lock-layer .badge{font-family:'IBM Plex Mono';font-size:.7rem;color:var(--ink);background:var(--cyan);padding:3px 10px;border-radius:20px;display:inline-block;margin-bottom:12px;font-weight:600}
+.lock-layer.l2 .badge{background:var(--amber)}
+.lock-layer h5{font-family:'Chakra Petch';font-size:1.05rem;margin-bottom:8px}
+.lock-layer p{font-size:.82rem;color:var(--txt-dim)}
+.lock-ring{position:absolute;top:-30px;right:-30px;width:90px;height:90px;border:3px dashed var(--line-2);border-radius:50%;animation:spin 8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* 凭证存储瀑布 */
+.store-flow{display:flex;align-items:center;gap:14px;margin:22px 0;flex-wrap:wrap}
+.store-step{flex:1;min-width:180px;border:1px solid var(--line);border-radius:14px;padding:18px;background:var(--panel);position:relative}
+.store-step .ico{font-family:'IBM Plex Mono';font-weight:600;font-size:.8rem;color:var(--cyan);margin-bottom:6px}
+.store-step h5{font-family:'Chakra Petch';font-size:.98rem;margin-bottom:4px}
+.store-step p{font-size:.78rem;color:var(--txt-dim)}
+.store-arrow{color:var(--amber);font-size:1.4rem;font-weight:700;flex-shrink:0}
+
+/* 铁律网格 */
+.law{border:1px solid var(--line);border-radius:12px;padding:16px 18px;background:var(--panel);transition:.2s}
+.law:hover{border-color:rgba(245,166,35,.4);background:linear-gradient(160deg,var(--panel),rgba(245,166,35,.03))}
+.law .ln{font-family:'Chakra Petch';font-weight:700;color:var(--amber);font-size:.85rem;margin-bottom:6px}
+.law p{font-size:.82rem;color:var(--txt-dim)}
+
+/* 命令树 */
+.tree{font-family:'IBM Plex Mono';font-size:.83rem;line-height:1.9;background:#070c18;border:1px solid var(--line);border-radius:14px;padding:24px 26px;overflow-x:auto}
+.tree .root{color:var(--amber);font-weight:600}
+.tree .cmd{color:var(--cyan)}
+.tree .sub{color:var(--txt)}
+.tree .desc{color:var(--txt-faint)}
+.tree .br{color:var(--line-2)}
+
+/* 提示框 */
+.note{border-left:3px solid var(--cyan);background:rgba(56,214,200,.05);border-radius:0 10px 10px 0;padding:14px 18px;margin:18px 0;font-size:.86rem;color:var(--txt-dim)}
+.note.warn{border-color:var(--amber);background:rgba(245,166,35,.05)}
+.note strong{color:var(--txt)}
+
+footer{padding:50px 0 20px;text-align:center;color:var(--txt-faint);font-size:.8rem;font-family:'IBM Plex Mono'}
+footer .line{width:60px;height:2px;background:var(--amber);margin:0 auto 20px;border-radius:2px}
+
+/* 移动端 */
+.menu-btn{display:none}
+@media(max-width:980px){
+  .layout{grid-template-columns:1fr}
+  aside{position:fixed;left:0;top:0;width:280px;z-index:50;transform:translateX(-100%);transition:.3s}
+  aside.open{transform:none}
+  .menu-btn{display:grid;place-items:center;position:fixed;top:16px;left:16px;z-index:60;width:44px;height:44px;border-radius:10px;background:var(--amber);border:none;color:var(--ink);font-size:1.3rem;cursor:pointer;box-shadow:var(--glow-amber)}
+  main{padding-top:60px}
+  .locks{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<button class="menu-btn" id="menuBtn">≡</button>
+
+<div class="layout">
+<!-- ============ 侧边栏 ============ -->
+<aside id="sidebar">
+  <div class="brand">
+    <div class="logo">O</div>
+    <div>
+      <h1>opscli</h1>
+      <div class="ver">v0.0.85 · 架构培训</div>
+    </div>
+  </div>
+  <div class="nav-meta">// 目录</div>
+  <nav id="nav">
+    <a href="#overview"><span class="idx">00</span>项目总览</a>
+    <a href="#architecture"><span class="idx">01</span>整体架构</a>
+    <a href="#layered"><span class="idx">02</span>分层模式</a>
+    <a href="#auth"><span class="idx">03</span>auth 认证</a>
+    <a href="#query"><span class="idx">04</span>query 查询</a>
+    <a href="#mcp"><span class="idx">05</span>mcp 服务</a>
+    <a href="#skills"><span class="idx">06</span>skills 技能</a>
+    <a href="#data"><span class="idx">07</span>数据采集模块</a>
+    <a href="#infra"><span class="idx">08</span>基础设施层</a>
+    <a href="#commands"><span class="idx">09</span>命令地图</a>
+    <a href="#laws"><span class="idx">10</span>开发铁律</a>
+  </nav>
+</aside>
+
+<main>
+<!-- ============ Hero ============ -->
+<div class="hero">
+  <div data-reveal><span class="kicker"><span class="dot"></span>运营工具集 · 系统架构</span></div>
+  <h2 data-reveal>一套代码，<span class="hl">双形态交付</span><br>CLI 与 MCP 双引擎</h2>
+  <p class="lead" data-reveal>opscli 是一套内部运营 CLI 工具集，以 Python 包形式分发。它把认证、数据查询、Amazon 采集、卖家精灵、技能管理等运营能力，同时暴露为<strong>命令行工具（面向人/脚本）</strong>和 <strong>MCP Server（面向 AI Agent）</strong>——共享同一套业务内核与凭证体系。</p>
+  <div class="stat-row" data-reveal>
+    <div class="stat"><div class="num">8</div><div class="lbl">核心业务模块</div></div>
+    <div class="stat"><div class="num cy">2</div><div class="lbl">交付形态 CLI/MCP</div></div>
+    <div class="stat"><div class="num">23</div><div class="lbl">开发铁律</div></div>
+    <div class="stat"><div class="num cy">4</div><div class="lbl">MCP 传输协议</div></div>
+    <div class="stat"><div class="num">3</div><div class="lbl">凭证存储层级</div></div>
+  </div>
+</div>
+
+<!-- ============ 00 项目总览 ============ -->
+<section id="overview">
+  <div class="sec-head">
+    <div class="sec-num am">00</div>
+    <div><h3>项目总览</h3><p>理解 opscli 的定位、技术栈与设计哲学，是看懂后续所有模块的前提。</p></div>
+  </div>
+
+  <p class="body">opscli 的本质是一个<strong>多模块可扩展的运营能力网关</strong>。它本身不直接持有业务数据，而是统一封装"认证 → 取数/采集 → 结果产出"的完整链路，并把每一项能力同时投射到两个消费端：</p>
+
+  <div class="grid2">
+    <div class="feat" data-reveal>
+      <div class="ico am">$</div>
+      <h5>CLI 形态</h5>
+      <p>入口 <code class="mono">opscli</code>，基于 Typer 构建命令树。面向运营同事手动执行，以及 Shell 脚本/CI 自动化调用。默认输出 JSON，便于脚本消费。</p>
+    </div>
+    <div class="feat" data-reveal>
+      <div class="ico">{ }</div>
+      <h5>MCP 形态</h5>
+      <p>入口 <code class="mono">opscli-mcp</code>，基于 FastMCP 把同样的能力暴露为 MCP Tools。面向 Claude / ChatGPT 等 AI Agent，支持 stdio 与远程 HTTP/SSE 部署。</p>
+    </div>
+  </div>
+
+  <h4 class="sub">技术栈与约束</h4>
+  <table>
+    <tr><th>维度</th><th>选型</th><th>说明</th></tr>
+    <tr><td>语言</td><td><code>Python ≥ 3.10</code></td><td>可用 <code>X | Y</code> 联合类型、<code>match</code> 语句</td></tr>
+    <tr><td>CLI 框架</td><td><code>typer</code></td><td>声明式命令树，模块以 <code>add_typer</code> 注册</td></tr>
+    <tr><td>MCP 框架</td><td><code>fastmcp ≥ 2.0</code></td><td>装饰器注册 Tool，支持多传输协议</td></tr>
+    <tr><td>HTTP 客户端</td><td><code>httpx</code></td><td>统一 <code>timeout=10</code>，测试用 <code>respx</code> mock</td></tr>
+    <tr><td>加密</td><td><code>cryptography</code></td><td>AES-256-GCM 凭证兜底加密</td></tr>
+    <tr><td>凭证</td><td><code>keyring</code></td><td>系统 Keychain 优先存储</td></tr>
+    <tr><td>采集（可选）</td><td><code>playwright</code></td><td>Amazon / 卖家精灵抓取，按需安装 extras</td></tr>
+    <tr><td>构建</td><td><code>setuptools + Cython</code></td><td>生产构建编译为 <code>.so</code> 二进制 wheel</td></tr>
+  </table>
+
+  <h4 class="sub">业务模块地图</h4>
+  <div class="grid3">
+    <div class="feat" data-reveal><div class="ico am">A</div><h5>auth</h5><p>Device Flow 认证、多系统 JWT 管理、凭证存储</p></div>
+    <div class="feat" data-reveal><div class="ico">Q</div><h5>query</h5><p>数据集元数据、查询构造、图表取数</p></div>
+    <div class="feat" data-reveal><div class="ico">M</div><h5>mcp</h5><p>无状态 MCP Server、API Key 鉴权、上下文隔离</p></div>
+    <div class="feat" data-reveal><div class="ico">S</div><h5>skills</h5><p>Skill 安装/升级、技能广场、多工具同步</p></div>
+    <div class="feat" data-reveal><div class="ico am">Az</div><h5>amazon</h5><p>商品页/搜索结果抓取、字段取样</p></div>
+    <div class="feat" data-reveal><div class="ico am">Rf</div><h5>amazon-rufus</h5><p>Rufus 问答采集与 Listing 诊断</p></div>
+    <div class="feat" data-reveal><div class="ico">Sp</div><h5>seller-sprite</h5><p>卖家精灵关键词与 Listing 证据采集</p></div>
+    <div class="feat" data-reveal><div class="ico">Fb</div><h5>feedback</h5><p>结构化反馈提交与查询</p></div>
+    <div class="feat" data-reveal><div class="ico">Tm</div><h5>telemetry</h5><p>无侵入遥测，fire-and-forget 上报</p></div>
+  </div>
+</section>
+
+<!-- ============ 01 整体架构 ============ -->
+<section id="architecture">
+  <div class="sec-head">
+    <div class="sec-num">01</div>
+    <div><h3>整体架构</h3><p>两个入口、一套内核、统一凭证——这是理解 opscli 的关键心智模型。</p></div>
+  </div>
+
+  <p class="body">无论是 CLI 命令还是 MCP Tool，最终都收敛到<strong>同一套业务管理器（Manager）</strong>，再经由<strong>统一的 AuthClient 与凭证存储</strong>访问后端。这种"双前端、单内核"的设计，保证了能力一致、凭证统一、维护成本最低。</p>
+
+  <!-- 动态架构总览图 -->
+  <div class="arch-map">
+    <svg viewBox="0 0 920 440" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 z" fill="#f5a623"/>
+        </marker>
+        <linearGradient id="gcli" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#f5a623" stop-opacity=".25"/><stop offset="1" stop-color="#f5a623" stop-opacity=".05"/>
+        </linearGradient>
+        <linearGradient id="gmcp" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#38d6c8" stop-opacity=".25"/><stop offset="1" stop-color="#38d6c8" stop-opacity=".05"/>
+        </linearGradient>
+      </defs>
+
+      <!-- 顶层：消费端 -->
+      <g font-family="IBM Plex Mono" font-size="13">
+        <rect x="60" y="24" width="320" height="62" rx="12" fill="url(#gcli)" stroke="#f5a623" stroke-width="1.5"/>
+        <text x="220" y="50" fill="#f5a623" text-anchor="middle" font-weight="600">运营同事 / Shell 脚本 / CI</text>
+        <text x="220" y="70" fill="#9fb0c9" text-anchor="middle" font-size="11">CLI 消费端</text>
+
+        <rect x="540" y="24" width="320" height="62" rx="12" fill="url(#gmcp)" stroke="#38d6c8" stroke-width="1.5"/>
+        <text x="700" y="50" fill="#38d6c8" text-anchor="middle" font-weight="600">Claude / ChatGPT AI Agent</text>
+        <text x="700" y="70" fill="#9fb0c9" text-anchor="middle" font-size="11">MCP 消费端</text>
+      </g>
+
+      <!-- 入口层 -->
+      <g font-family="IBM Plex Mono" font-size="12">
+        <rect x="100" y="130" width="240" height="50" rx="10" fill="#131c30" stroke="#f5a623" stroke-width="1.5" class="node-glow"/>
+        <text x="220" y="152" fill="#e7edf7" text-anchor="middle" font-weight="600">opscli (Typer)</text>
+        <text x="220" y="168" fill="#64748b" text-anchor="middle" font-size="10">cli.py · add_typer 注册</text>
+
+        <rect x="580" y="130" width="240" height="50" rx="10" fill="#131c30" stroke="#38d6c8" stroke-width="1.5"/>
+        <text x="700" y="152" fill="#e7edf7" text-anchor="middle" font-weight="600">opscli-mcp (FastMCP)</text>
+        <text x="700" y="168" fill="#64748b" text-anchor="middle" font-size="10">server.py · 遥测代理注册</text>
+      </g>
+
+      <!-- 业务内核 -->
+      <rect x="210" y="232" width="500" height="72" rx="14" fill="#19233b" stroke="#8b9bff" stroke-width="1.5"/>
+      <text x="460" y="258" fill="#8b9bff" text-anchor="middle" font-family="Chakra Petch" font-size="15" font-weight="600">业务内核 · Services / Managers</text>
+      <g font-family="IBM Plex Mono" font-size="10.5" fill="#9fb0c9">
+        <text x="460" y="282" text-anchor="middle">QueryManager · SkillsManager · AmazonManager · FeedbackManager …</text>
+        <text x="460" y="296" text-anchor="middle" fill="#64748b">domain（模型/异常） · transport（HTTP 客户端）</text>
+      </g>
+
+      <!-- 凭证 & 后端 -->
+      <g font-family="IBM Plex Mono" font-size="11.5">
+        <rect x="120" y="356" width="300" height="58" rx="12" fill="#131c30" stroke="#f5a623" stroke-width="1.5"/>
+        <text x="270" y="380" fill="#f5a623" text-anchor="middle" font-weight="600">AuthClient + CredentialStore</text>
+        <text x="270" y="398" fill="#64748b" text-anchor="middle" font-size="10">Keychain / AES 文件 · 双层并发锁</text>
+
+        <rect x="500" y="356" width="300" height="58" rx="12" fill="#131c30" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="650" y="380" fill="#4ade80" text-anchor="middle" font-weight="600">OPS / Polaris 后端服务</text>
+        <text x="650" y="398" fill="#64748b" text-anchor="middle" font-size="10">JWT 鉴权 · 查询/采集 API</text>
+      </g>
+
+      <!-- 连线 -->
+      <g fill="none" stroke="#f5a623" stroke-width="1.6" marker-end="url(#ah)" opacity=".8">
+        <path class="flow-line" d="M220,88 L220,128"/>
+        <path class="flow-line" d="M700,88 L700,128"/>
+        <path class="flow-line" d="M220,182 C220,210 360,214 380,230"/>
+        <path class="flow-line" d="M700,182 C700,210 560,214 540,230"/>
+        <path class="flow-line" d="M380,306 C340,330 300,338 280,354"/>
+        <path class="flow-line" d="M540,306 C600,330 630,338 650,354"/>
+        <path class="flow-line" d="M420,386 L498,386"/>
+      </g>
+    </svg>
+    <div class="cap">▲ 双前端单内核：CLI 与 MCP 收敛到同一业务内核，共享 AuthClient 与凭证存储</div>
+  </div>
+
+  <div class="note"><strong>关键洞察：</strong>新增一个模块时，只需在 <code class="mono">cli.py</code> 追加一行 <code class="mono">add_typer</code>，并在 <code class="mono">mcp/server.py</code> 调用一次 <code class="mono">register()</code>，业务逻辑写在 <code class="mono">services/</code> 即可被两端复用。这是模块化扩展的核心契约（铁律 1）。</div>
+</section>
+
+<!-- ============ 02 分层模式 ============ -->
+<section id="layered">
+  <div class="sec-head">
+    <div class="sec-num">02</div>
+    <div><h3>统一分层模式</h3><p>较新的模块都遵循同一套四层目录结构，理解一个即可读懂全部。</p></div>
+  </div>
+
+  <p class="body">为了让多个模块保持一致的可读性，opscli 约定了一套<strong>清晰的纵向分层</strong>。以 <span class="tag cy">query</span> <span class="tag cy">amazon</span> <span class="tag cy">feedback</span> <span class="tag cy">seller_sprite</span> 为代表，模块内部按职责拆分为：</p>
+
+  <div class="diagram">
+    <div class="mermaid">
+flowchart TB
+    subgraph M["模块 opscli/&lt;module&gt;/"]
+      direction TB
+      C["commands/cli.py<br/>CLI 命令定义 · 参数解析 · 输出渲染"]
+      S["services/manager.py<br/>业务编排 · 校验 · 流程协调"]
+      T["transport/client.py<br/>HTTP 转发 · 响应解析"]
+      D["domain/<br/>models 数据模型 + exceptions 异常"]
+    end
+    C -->|调用| S
+    S -->|发请求| T
+    S -.依赖.-> D
+    T -.依赖.-> D
+    T -->|HTTPS| API[(OPS / Polaris 后端)]
+
+    classDef c fill:#1a2236,stroke:#f5a623,color:#e7edf7;
+    classDef s fill:#19233b,stroke:#8b9bff,color:#e7edf7;
+    classDef t fill:#152033,stroke:#38d6c8,color:#e7edf7;
+    classDef d fill:#131c30,stroke:#64748b,color:#9fb0c9;
+    classDef api fill:#0f1b14,stroke:#4ade80,color:#4ade80;
+    class C c; class S s; class T t; class D d; class API api;
+    </div>
+    <div class="cap">▲ 四层职责分离：命令层只管交互，业务层只管编排，传输层只管通信</div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h4 class="sub" style="margin-top:0">职责边界</h4>
+      <table style="margin:0">
+        <tr><th>层</th><th>只做</th><th>不做</th></tr>
+        <tr><td><code>commands</code></td><td>解析参数、调用 service、渲染输出</td><td>不写业务逻辑</td></tr>
+        <tr><td><code>services</code></td><td>编排流程、字段校验、组装 payload</td><td>不直接发 HTTP</td></tr>
+        <tr><td><code>transport</code></td><td>发请求、解析响应、抛业务异常</td><td>不做业务判断</td></tr>
+        <tr><td><code>domain</code></td><td>定义模型与异常基类</td><td>无副作用</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h4 class="sub" style="margin-top:0">特例：auth 模块</h4>
+      <p class="body" style="margin-bottom:10px">auth 作为最早的模块，采用更细分的结构：</p>
+      <p style="font-size:.85rem;color:var(--txt-dim);line-height:2">
+        <span class="tag">core/</span> Device Flow · Token 管理 · 系统注册表<br>
+        <span class="tag">storage/</span> 凭证存储 · AES 加密工具<br>
+        <span class="tag">commands/</span> CLI 子命令<br>
+        <span class="tag">domain/</span> 异常定义
+      </p>
+      <div class="note" style="margin-bottom:0">两种 SDK 导入方式必须同时可用（铁律 3）：<br><code class="mono">from opscli import AuthClient</code> 与 <code class="mono">from opscli.auth import AuthClient</code></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 03 auth 认证 ============ -->
+<section id="auth">
+  <div class="sec-head">
+    <div class="sec-num am">03</div>
+    <div><h3>auth · 认证授权内核</h3><p>整个工具集的安全地基：OAuth2 设备流登录、多系统 JWT 管理、双层凭证存储、双层并发锁。</p></div>
+  </div>
+
+  <h4 class="sub">登录：OAuth2 Device Flow（RFC 8628）</h4>
+  <p class="body">CLI 无法承载浏览器登录页，因此采用<strong>设备授权流</strong>：CLI 拿设备码 → 用户在浏览器确认 → CLI 轮询换取 session。MCP 模式下，轮询节奏交给 AI Agent 用 <code class="mono">poll_once()</code> 单次查询控制。</p>
+
+  <div class="diagram">
+    <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant C as opscli CLI
+    participant O as OPS 后端
+    participant B as 浏览器
+    C->>O: POST /v1/cli/device/code
+    O-->>C: device_code + user_code + verification_url
+    C->>U: 显示验证 URL 与验证码
+    U->>B: 打开 URL 输入 user_code 确认授权
+    loop 每 interval 秒轮询(最长 5 分钟)
+        C->>O: GET /v1/cli/device/poll?device_code=...
+        O-->>C: status: pending
+    end
+    O-->>C: status: authorized + session_id + expires_at
+    C->>C: CredentialStore.save_session() 持久化
+    Note over C: 切换账号时自动清空旧 JWT
+    </div>
+    <div class="cap">▲ Device Flow 时序：授权成功后落地 session，登录态切换会清空旧系统 Token</div>
+  </div>
+
+  <div class="note warn"><strong>状态机分支：</strong><code class="mono">poll_once()</code> 返回 5 种状态——<span class="cy">authorized</span>（成功落库）/ <span class="cy">pending</span>（继续轮询）/ <span style="color:var(--rose)">expired</span>（设备码超时，不可重试）/ <span style="color:var(--rose)">denied</span>（用户拒绝）/ <span class="ac">error</span>（含 retryable 标志，区分网络超时与服务不可达）。</div>
+
+  <h4 class="sub">Token 三态生命周期</h4>
+  <p class="body">每个系统的 JWT 都有三种状态，由 <code class="mono">REFRESH_THRESHOLD = 300s</code>（提前 5 分钟刷新）与过期时间共同决定。<code class="mono">MAX_JWT_TTL = 86400s</code> 防止后端返回异常超长 TTL（铁律 7）。</p>
+
+  <div class="fsm">
+    <div class="fsm-state valid">
+      <div class="st-name">valid</div>
+      <div class="st-desc">剩余 &gt; 300s<br>直接复用</div>
+    </div>
+    <div class="fsm-arrow"><span>时间流逝</span><div class="line"></div><span>剩余≤300s</span></div>
+    <div class="fsm-state refresh">
+      <div class="st-name">needs_refresh</div>
+      <div class="st-desc">0 &lt; 剩余 ≤ 300s<br>提前换新</div>
+    </div>
+    <div class="fsm-arrow"><span>已到期</span><div class="line"></div><span>剩余≤0</span></div>
+    <div class="fsm-state expired">
+      <div class="st-name">expired</div>
+      <div class="st-desc">剩余 ≤ 0<br>重新获取</div>
+    </div>
+  </div>
+
+  <h4 class="sub">双层并发锁（铁律 6）</h4>
+  <p class="body">多个 CLI 进程、多个线程可能同时发现 Token 过期而并发去换取，造成对后端的重复请求。<code class="mono">TokenManager.get_token()</code> 用<strong>双层锁 + 双重检查</strong>解决：</p>
+
+  <div class="locks">
+    <div class="lock-layer l1">
+      <div class="lock-ring"></div>
+      <span class="badge">LAYER 1</span>
+      <h5>threading.Lock</h5>
+      <p>进程内线程锁，按 <code class="mono">system_key</code> 隔离。防止同进程多线程并发换取。进锁后先做一次"是否已有效"的双重检查。</p>
+    </div>
+    <div class="lock-layer l2">
+      <div class="lock-ring"></div>
+      <span class="badge">LAYER 2</span>
+      <h5>fcntl.flock()</h5>
+      <p>跨进程文件锁 <code class="mono">.lock_&lt;system_key&gt;</code>。防止多个 CLI 进程并发换取。Windows 无 fcntl 时自动跳过。进锁后再次双重检查。</p>
+    </div>
+  </div>
+
+  <pre data-label="token_manager.py · get_token"><code><span class="c-com"># 层1：进程内线程锁，防止同进程多线程并发重复换取</span>
+<span class="c-key">with</span> thread_lock:
+    td = data.get(<span class="c-str">"tokens"</span>, {}).get(system_key)
+    <span class="c-key">if</span> td <span class="c-key">and</span> self._is_valid(td): <span class="c-key">return</span> td[<span class="c-str">"jwt"</span>]  <span class="c-com"># 双重检查</span>
+    <span class="c-com"># 层2：跨进程文件锁，防止多个 CLI 进程并发重复换取</span>
+    <span class="c-key">with</span> open(lock_path, <span class="c-str">"w"</span>) <span class="c-key">as</span> lf:
+        fcntl.<span class="c-fn">flock</span>(lf, fcntl.LOCK_EX)
+        td = ...  <span class="c-com"># 再次双重检查：其他进程可能已完成刷新</span>
+        <span class="c-key">if</span> td <span class="c-key">and</span> self._is_valid(td): <span class="c-key">return</span> td[<span class="c-str">"jwt"</span>]
+        <span class="c-key">return</span> self.<span class="c-fn">_fetch_token</span>(system_key, url, endpoint)</code></pre>
+
+  <h4 class="sub">双层凭证存储（铁律 5/9）</h4>
+  <p class="body">凭证存储优先用系统 Keychain，不可用时兜底到 AES-256-GCM 加密文件。Keychain 操作放在 daemon 线程并设 <code class="mono">3s</code> 超时，避免 macOS 弹框挂起导致命令卡死。</p>
+
+  <div class="store-flow">
+    <div class="store-step">
+      <div class="ico">// 优先</div>
+      <h5>系统 Keychain</h5>
+      <p>macOS 钥匙串 / Linux Secret Service。服务名 <code class="mono">opscli-auth</code>（绝不可改，否则用户凭证全失效）。</p>
+    </div>
+    <div class="store-arrow">→</div>
+    <div class="store-step">
+      <div class="ico">// 超时降级</div>
+      <h5>AES-256-GCM 文件</h5>
+      <p><code class="mono">credentials.bin</code> + <code class="mono">.key</code>（权限 600）。解密失败自动清除损坏文件，重新登录。</p>
+    </div>
+    <div class="store-arrow">→</div>
+    <div class="store-step">
+      <div class="ico">// 统一</div>
+      <h5>CLI 与 MCP 共用</h5>
+      <p>同一套 CredentialStore；MCP 经 McpCredentialCache 内存缓存读取，避免高频 AES 解密。</p>
+    </div>
+  </div>
+
+  <h4 class="sub">系统注册表与 AuthClient SDK</h4>
+  <div class="grid2">
+    <div class="card">
+      <h5 style="font-family:'Chakra Petch';margin-bottom:10px">SystemRegistry · 三类来源</h5>
+      <table style="margin:0">
+        <tr><th>来源</th><th>说明</th></tr>
+        <tr><td><code>builtin</code></td><td>内置 ops/polaris，受保护不可删除（铁律 10）</td></tr>
+        <tr><td><code>local</code></td><td>用户手动添加，持久化 systems.json</td></tr>
+        <tr><td><code>ops_sync</code></td><td>从 OPS 后端同步，全量替换</td></tr>
+      </table>
+      <p style="font-size:.8rem;color:var(--txt-faint);margin-top:10px">合并优先级：local/ops_sync &gt; builtin（同别名时用户配置覆盖）</p>
+    </div>
+    <div class="card">
+      <h5 style="font-family:'Chakra Petch';margin-bottom:10px">AuthClient · SDK 入口</h5>
+      <p style="font-size:.85rem;color:var(--txt-dim);line-height:1.9">
+        <code class="mono">get_token(alias)</code> 获取有效 JWT（自动刷新）<br>
+        <code class="mono">build_request_auth(alias)</code> 构造 headers+cookies<br>
+        <code class="mono">is_authenticated()</code> 登录态检测<br>
+        <code class="mono">get_token_by_session(sid, alias)</code> <span class="ac">无状态模式</span>：用外部 session 直接换 JWT，不读本地存储——这是 MCP 远程多用户场景的关键。
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 04 query 查询 ============ -->
+<section id="query">
+  <div class="sec-head">
+    <div class="sec-num">04</div>
+    <div><h3>query · 数据查询</h3><p>把"自然语言取数意图"转化为合规的查询 payload，并守住字段口径的硬门禁。</p></div>
+  </div>
+
+  <p class="body"><code class="mono">QueryManager</code> 协调<strong>本地数据集 metadata</strong> 与<strong>远端查询执行</strong>。元数据采用"远端优先、失败回退本地缓存"策略；查询构造支持完整版（<code class="mono">build</code>）与简化版（<code class="mono">build_simple</code>，供 AI 用自然语言参数拼装）。</p>
+
+  <div class="diagram">
+    <div class="mermaid">
+flowchart LR
+    A["用户/Agent 取数意图"] --> B{"build_simple<br/>组装参数"}
+    B --> C["metadata()<br/>远端优先拉取<br/>失败回退本地缓存"]
+    C --> D{"字段歧义门禁<br/>_validate_simple_fields"}
+    D -->|唯一命中| E["生成 payload<br/>tableId + dimensions/metrics/filters"]
+    D -->|歧义/不存在| X["抛 InvalidPayloadError<br/>给出候选提示"]
+    D -->|公式字段+聚合| Y["拒绝：公式禁止额外聚合"]
+    E --> F["cli_simple_query<br/>POST /cli-query/simple"]
+    F --> G[("结果 rows + meta")]
+
+    classDef a fill:#1a2236,stroke:#f5a623,color:#e7edf7;
+    classDef g fill:#152033,stroke:#38d6c8,color:#e7edf7;
+    classDef e fill:#0f1b14,stroke:#4ade80,color:#4ade80;
+    classDef x fill:#241016,stroke:#fb7185,color:#fb7185;
+    class A,B a; class C,F g; class E,G e; class X,Y x;
+    </div>
+    <div class="cap">▲ 查询编排：执行前的字段歧义门禁是数据口径正确性的最后防线</div>
+  </div>
+
+  <h4 class="sub">字段歧义门禁——"查得到但口径错"的防火墙</h4>
+  <p class="body">AI 用自然语言拼字段时，最容易因为字段名相似、中文名重复而选错列。<code class="mono">_resolve_simple_field()</code> 采用<strong>分层精确匹配 + 模糊兜底</strong>，任一层命中多条即判为歧义并报错：</p>
+
+  <table>
+    <tr><th>匹配层级</th><th>依据</th><th>命中多条</th></tr>
+    <tr><td>① 精确</td><td><code>global_alias</code> 全局别名</td><td rowspan="4" style="color:var(--rose);vertical-align:middle;text-align:center">报歧义错误<br>列出候选<br>要求改用唯一 global_alias</td></tr>
+    <tr><td>② 精确</td><td><code>field_name</code> 字段名</td></tr>
+    <tr><td>③ 精确</td><td><code>verbose_name</code> 中文名</td></tr>
+    <tr><td>④ 模糊</td><td>子串包含（≥2 字符）</td></tr>
+  </table>
+
+  <div class="note warn"><strong>公式字段保护：</strong>若字段自带公式（<code class="mono">summary_expression</code> 等），禁止再传 <code class="mono">aggregation</code>——公式内已内置聚合逻辑，重复聚合会得到错误结果。门禁会直接拒绝并提示改用 <code class="mono">expr</code> 传入完整公式。</div>
+
+  <h4 class="sub">图表取数与文档生成</h4>
+  <div class="grid2">
+    <div class="feat" data-reveal><div class="ico">UUID</div><h5>chart 多查询合并</h5><p><code class="mono">run_chart_queries(chart_uuid)</code> 拉取图表查询结构，逐个独立执行（单个失败不中断），最终合并所有 rows 并加 <code class="mono">_query_index</code>。</p></div>
+    <div class="feat" data-reveal><div class="ico am">MD</div><h5>chart-doc 自动文档</h5><p><code class="mono">generate_chart_doc()</code> 把图表查询结构转成给 AI 消费的 Markdown：字段语义表、字段引用表、可过滤字段、可直接执行的 payload 样例。</p></div>
+  </div>
+
+  <h4 class="sub">QueryClient 后端端点</h4>
+  <table>
+    <tr><th>方法</th><th>端点</th></tr>
+    <tr><td><code>cli_query</code></td><td><code>POST /v1/data-metrics/cli-query</code></td></tr>
+    <tr><td><code>cli_simple_query</code></td><td><code>POST /v1/data-metrics/cli-query/simple</code></td></tr>
+    <tr><td><code>fetch_query_metadata</code></td><td><code>GET /v1/data-metrics/datasets/query-metadata</code></td></tr>
+    <tr><td><code>fetch_chart_bundle</code></td><td><code>GET /v1/data-metrics/cli-query/latest-request-data</code></td></tr>
+    <tr><td><code>fetch_user_preferences</code></td><td><code>GET /v1/data-metrics/cli-query/user-preferences</code></td></tr>
+  </table>
+
+  <div class="note"><strong>铁律 12：</strong>Skill 文档与脚本中的查询 payload 禁止手写 <code class="mono">userEmail</code> / <code class="mono">query.from.table</code> / <code class="mono">query.from.permission</code>——这些涉及用户隐私与权限占位符，一律由 <code class="mono">opscli query build</code> 根据数据集 metadata 自动生成。</div>
+</section>
+
+<!-- ============ 05 mcp 服务 ============ -->
+<section id="mcp">
+  <div class="sec-head">
+    <div class="sec-num am">05</div>
+    <div><h3>mcp · 无状态 MCP 服务</h3><p>把 opscli 能力暴露给 AI Agent。核心是"服务器不存凭证"的无状态设计与按 API Key 隔离的多用户安全。</p></div>
+  </div>
+
+  <p class="body">MCP Server 基于 FastMCP，<strong>不保存任何用户 OAuth 凭证</strong>：所有认证信息由调用方（AI Agent）传入 <code class="mono">session_id</code>/<code class="mono">jwt</code>。这从根本上规避了远程共享部署时的"用户 session 串用"风险。</p>
+
+  <h4 class="sub">四种传输协议</h4>
+  <div class="grid2">
+    <div class="feat" data-reveal><div class="ico">stdio</div><h5>stdio（默认）</h5><p>标准输入输出，本地 AI 工具集成。无需 API Key。</p></div>
+    <div class="feat" data-reveal><div class="ico">sse</div><h5>sse</h5><p>GET /sse 事件流 + POST /messages/。兼容 Cursor、Claude Desktop。</p></div>
+    <div class="feat" data-reveal><div class="ico">http</div><h5>http</h5><p>Streamable HTTP，统一走 POST /mcp。ChatGPT / OpenAI Apps SDK 推荐。</p></div>
+    <div class="feat" data-reveal><div class="ico am">both</div><h5>both（推荐远程）</h5><p>同时暴露 /sse 与 /mcp，链式生命周期合并到一个 Starlette 应用。</p></div>
+  </div>
+
+  <h4 class="sub">无状态授权与多用户隔离</h4>
+  <div class="diagram">
+    <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant AI as AI Agent
+    participant MW as ApiKeyAuthMiddleware
+    participant OPS as OPS verify-key
+    participant T as MCP Tool
+    participant BE as 后端
+    AI->>MW: 请求(Authorization: Bearer api_key)
+    MW->>MW: 提取 token(query/header/proxy-auth)
+    alt 远程校验模式(多用户)
+        MW->>OPS: GET /v1/mcp/verify-key?api_key=...
+        OPS-->>MW: {valid:true, user_id, email}
+        Note over MW: 结果缓存 60s · 超时 3s
+    else 固定 API Key 模式(单用户)
+        MW->>MW: 本地比对 api_key
+    end
+    MW->>MW: 注入 contextvar(api_key/user_id/email)
+    AI->>T: 调用 tool(session_id, jwt?)
+    T->>T: 从 contextvar 读 API Key
+    T->>BE: 携带 session/jwt + X-MCP-API-Key
+    BE-->>T: 业务结果
+    T-->>AI: 返回
+    </div>
+    <div class="cap">▲ 中间件统一鉴权 → contextvar 透传 → Tool 用调用方凭证访问后端</div>
+  </div>
+
+  <h4 class="sub">三个精巧的工程设计</h4>
+  <div class="grid3">
+    <div class="card">
+      <h5 style="font-family:'Chakra Petch';color:var(--amber);margin-bottom:8px">① 遥测代理</h5>
+      <p style="font-size:.83rem;color:var(--txt-dim)"><code class="mono">_TelemetryMcpProxy</code> 拦截 <code class="mono">mcp.tool()</code> 装饰器，注册时自动包裹遥测——<strong>零侵入</strong>，无需改任何 tools/ 代码。</p>
+    </div>
+    <div class="card">
+      <h5 style="font-family:'Chakra Petch';color:var(--cyan);margin-bottom:8px">② contextvar 双读</h5>
+      <p style="font-size:.83rem;color:var(--txt-dim)">SSE 模式下 contextvar 传播链复杂易丢失。<code class="mono">context.py</code> 优先读自定义 <code class="mono">mcp_request_ctx</code>，降级读 MCP 框架的 <code class="mono">request_ctx</code> scope。</p>
+    </div>
+    <div class="card">
+      <h5 style="font-family:'Chakra Petch';color:var(--violet);margin-bottom:8px">③ 客户端识别</h5>
+      <p style="font-size:.83rem;color:var(--txt-dim)">从 MCP <code class="mono">initialize</code> 握手读 <code class="mono">clientInfo.name</code>，识别是哪个 AI 工具在调用，用于按 Agent 隔离与统计。</p>
+    </div>
+  </div>
+
+  <h4 class="sub">MCP Tools 工具集</h4>
+  <p class="body">tools/ 目录下按业务域分组注册，每组提供一个 <code class="mono">register(mcp)</code> 入口：</p>
+  <div>
+    <span class="tag am">auth_*</span><span class="tag am">query_*</span><span class="tag am">skills_*</span><span class="tag">feedback_*</span><span class="tag">seller_sprite_*</span><span class="tag">amazon_*（依赖 playwright，缺失则跳过）</span><span class="tag">amazon_listing_intelligence_*</span><span class="tag">chatgpt（search/fetch）</span>
+  </div>
+</section>
+
+<!-- ============ 06 skills 技能 ============ -->
+<section id="skills">
+  <div class="sec-head">
+    <div class="sec-num">06</div>
+    <div><h3>skills · 技能生命周期</h3><p>管理 AI 工具中已安装 Skill 的安装、扫描、升级，以及技能广场的发布与同步。</p></div>
+  </div>
+
+  <p class="body">skills 是代码量最大的模块。它管理 <code class="mono">templates/</code> 下的内置 Skill（均以 <span class="ac">ops-</span> 前缀命名，铁律 13），并对接<strong>技能广场</strong>实现跨用户共享。</p>
+
+  <div class="diagram">
+    <div class="mermaid">
+flowchart TB
+    subgraph SM["SkillsManager 协调中枢"]
+      I["install 安装"]
+      ST["status 版本对比"]
+      UP["upgrade 升级"]
+    end
+    TPL["templates/ 内置模板<br/>ops-auth · ops-dataset-query …"]
+    MK["技能广场 marketplace<br/>publish/edit/browse/rate"]
+    DET["detector 扫描<br/>.claude/skills · .openclaw/skills"]
+    UPD["updater 远端拉取<br/>manifest + CSV + metadata"]
+    LINK["link 软链接<br/>中央目录 → 各 AI 工具"]
+
+    I --> TPL
+    I --> MK
+    I --> LINK
+    ST --> DET
+    ST --> UPD
+    UP --> UPD
+    UP --> LINK
+
+    classDef sm fill:#1a2236,stroke:#f5a623,color:#e7edf7;
+    classDef o fill:#131c30,stroke:#38d6c8,color:#e7edf7;
+    class I,ST,UP sm; class TPL,MK,DET,UPD,LINK o;
+    </div>
+    <div class="cap">▲ Skill 管理：本地模板安装、远端广场分发、多工具软链接同步</div>
+  </div>
+
+  <div class="grid3">
+    <div class="feat" data-reveal><div class="ico am">↓</div><h5>安装</h5><p>内置模板复制安装，或 <code class="mono">username@skill</code> 从广场远程安装到中央目录并软链接到全局 AI 工具目录。</p></div>
+    <div class="feat" data-reveal><div class="ico">⟂</div><h5>扫描</h5><p>自动扫描 <code class="mono">--skills-dir</code>、<code class="mono">OPSCLI_SKILLS_DIR</code>、<code class="mono">.claude/skills</code>、<code class="mono">.openclaw/skills</code>。</p></div>
+    <div class="feat" data-reveal><div class="ico">↑</div><h5>升级</h5><p>从远端拉取 manifest、字段 CSV、数据集 CSV、查询元数据，<strong>原子替换</strong>本地缓存。</p></div>
+  </div>
+
+  <div class="note warn"><strong>铁律 11（最重要的安全边界）：</strong>Skill 脚本<strong>禁止直连后端 API</strong>。所有数据查询、认证、元数据获取必须通过 <code class="mono">opscli</code> 子命令转发（如 <code class="mono">opscli query run</code> / <code class="mono">opscli auth token get</code>）。Skill 只负责本地文件读取、构造命令参数、用 subprocess 调 opscli。认证、校验、payload 组装、错误映射统一由 opscli 负责。</div>
+</section>
+
+<!-- ============ 07 数据采集模块 ============ -->
+<section id="data">
+  <div class="sec-head">
+    <div class="sec-num">07</div>
+    <div><h3>数据采集模块群</h3><p>amazon / amazon-rufus / seller-sprite——围绕 Amazon 运营场景的外部数据采集能力。</p></div>
+  </div>
+
+  <p class="body">这组模块多依赖 <code class="mono">playwright</code> 浏览器自动化（可选 extras），均遵循统一分层，并额外增加 <code class="mono">scraping/</code>（抓取）与 <code class="mono">export/</code>（导出）层。</p>
+
+  <div class="grid3">
+    <div class="card">
+      <h5 style="font-family:'Chakra Petch';color:var(--amber);margin-bottom:10px">amazon</h5>
+      <p style="font-size:.85rem;color:var(--txt-dim)">商品页快照（价格/评分/评论数/配送地）、关键词搜索结果抓取。结果可落本地 JSONL 做趋势分析。</p>
+      <p style="margin-top:8px"><span class="tag">scraping</span><span class="tag">transport</span><span class="tag">services</span></p>
+    </div>
+    <div class="card">
+      <h5 style="font-family:'Chakra Petch';color:var(--amber);margin-bottom:10px">amazon-rufus</h5>
+      <p style="font-size:.85rem;color:var(--txt-dim)">采集 Amazon Rufus 助手问答，支持默认题库与单题查询、拒答改写重试，输出 Listing 诊断报告。</p>
+      <p style="margin-top:8px"><span class="tag">runtime</span><span class="tag">transport</span><span class="tag">services</span></p>
+    </div>
+    <div class="card">
+      <h5 style="font-family:'Chakra Petch';color:var(--cyan);margin-bottom:10px">seller-sprite</h5>
+      <p style="font-size:.85rem;color:var(--txt-dim)">卖家精灵关键词挖掘、高频词、市场调研。保存接口 JSON、截图、HTML、Markdown 全套证据，支持多账号。</p>
+      <p style="margin-top:8px"><span class="tag">api</span><span class="tag">scraping</span><span class="tag">export</span></p>
+    </div>
+  </div>
+
+  <div class="note"><strong>渐进式依赖：</strong>采集类工具依赖在 <code class="mono">pyproject.toml</code> 的 optional-dependencies 中（<code class="mono">[amazon]</code> / <code class="mono">[seller-sprite]</code>）。MCP Server 注册 amazon 工具时用 <code class="mono">try/except ImportError</code> 包裹，未安装 playwright 时静默跳过，不影响其他工具。</div>
+</section>
+
+<!-- ============ 08 基础设施层 ============ -->
+<section id="infra">
+  <div class="sec-head">
+    <div class="sec-num am">08</div>
+    <div><h3>基础设施层</h3><p>telemetry / shared / feedback / config——支撑所有业务模块的横切能力。</p></div>
+  </div>
+
+  <h4 class="sub">telemetry · 无侵入遥测</h4>
+  <p class="body">遥测的设计原则是<strong>绝不影响主流程</strong>：单后台线程异步发送，主进程立即返回；网络失败静默丢弃。CLI 经 <code class="mono">ctx.call_on_close</code> 在命令结束时上报，MCP 经遥测代理在 Tool 执行后上报。</p>
+
+  <div class="diagram">
+    <div class="mermaid">
+flowchart LR
+    A["CLI 命令结束<br/>call_on_close"] --> R
+    B["MCP Tool 执行后<br/>_telemetry_wrap"] --> R
+    R["TelemetryReporter.fire()"] --> Q["ThreadPoolExecutor<br/>max_workers=1"]
+    Q -.fire-and-forget.-> P["POST /v1/cli/telemetry<br/>timeout=5"]
+    P -.失败.-> D["静默丢弃<br/>不影响主流程"]
+    R --> RET["主进程立即返回"]
+
+    classDef a fill:#1a2236,stroke:#f5a623,color:#e7edf7;
+    classDef q fill:#152033,stroke:#38d6c8,color:#e7edf7;
+    classDef d fill:#241016,stroke:#fb7185,color:#fb7185;
+    class A,B a; class R,Q,P q; class D d; class RET a;
+    </div>
+    <div class="cap">▲ fire-and-forget 遥测：异步、非阻塞、失败无声</div>
+  </div>
+
+  <div class="grid3">
+    <div class="feat" data-reveal><div class="ico">http</div><h5>shared.http</h5><p>统一远端响应解析：识别 HTTP 错误、业务 code、JSON 异常，抛出各模块对应异常类。</p></div>
+    <div class="feat" data-reveal><div class="ico am">cfg</div><h5>config</h5><p>全局 <code class="mono">CONFIG_DIR</code>（~/.config/opscli/）+ 旧版自动迁移。只依赖标准库，禁止反向导入子模块（铁律 2）。</p></div>
+    <div class="feat" data-reveal><div class="ico">fb</div><h5>feedback</h5><p>结构化反馈提交/查询。工具调用失败时由 ops-feedback Skill 自动提交执行摘要。</p></div>
+    <div class="feat" data-reveal><div class="ico">log</div><h5>shared.logging</h5><p>统一日志配置。</p></div>
+    <div class="feat" data-reveal><div class="ico">up</div><h5>shared.update_check</h5><p>CLI 启动时检查新版本并提示（仅 CLI，MCP 不经过）。</p></div>
+    <div class="feat" data-reveal><div class="ico">id</div><h5>telemetry.device_id</h5><p>稳定设备标识，用于遥测去重与统计。</p></div>
+  </div>
+
+  <h4 class="sub">本地配置存储布局</h4>
+  <pre data-label="~/.config/opscli/"><code><span class="c-com"># 全部位于 CONFIG_DIR，模块禁止硬编码路径（铁律 1/2）</span>
+config.ini        <span class="c-com"># 可选，覆盖服务地址 ops_url / polaris_url 等</span>
+credentials.bin   <span class="c-com"># AES-256-GCM 加密凭证（Keychain 不可用时）</span>
+.key              <span class="c-com"># 256-bit 加密密钥，权限 600</span>
+systems.json      <span class="c-com"># 用户自定义 + ops_sync 系统列表</span>
+mcp_api_key       <span class="c-com"># MCP 固定 API Key（单用户模式）</span>
+.lock_&lt;key&gt;       <span class="c-com"># 跨进程文件锁（运行时临时文件）</span></code></pre>
+</section>
+
+<!-- ============ 09 命令地图 ============ -->
+<section id="commands">
+  <div class="sec-head">
+    <div class="sec-num">09</div>
+    <div><h3>CLI 命令地图</h3><p>opscli 完整命令树速查。</p></div>
+  </div>
+
+  <div class="tree">
+<span class="root">opscli</span> <span class="desc">--version / -V</span>
+<span class="br">├─</span> <span class="cmd">auth</span> <span class="desc"># 认证授权</span>
+<span class="br">│  ├─</span> <span class="sub">login / logout / doctor</span>
+<span class="br">│  ├─</span> <span class="sub">token</span> <span class="desc">status · get -s &lt;alias&gt; · check · refresh --all</span>
+<span class="br">│  └─</span> <span class="sub">system</span> <span class="desc">list · sync · add · remove</span>
+<span class="br">├─</span> <span class="cmd">query</span> <span class="desc"># 数据查询</span>
+<span class="br">│  ├─</span> <span class="sub">metadata</span> <span class="desc">[--dataset | --table-id]</span>
+<span class="br">│  ├─</span> <span class="sub">build</span> <span class="desc">[--dimension --metric --where --order-by --run]</span>
+<span class="br">│  ├─</span> <span class="sub">run</span> <span class="desc">--payload &lt;file&gt;</span>
+<span class="br">│  └─</span> <span class="sub">chart / chart-doc</span> <span class="desc">--chart-uuid</span>
+<span class="br">├─</span> <span class="cmd">amazon</span> <span class="desc"># 商品页/搜索抓取</span>
+<span class="br">├─</span> <span class="cmd">amazon-rufus</span> <span class="desc"># Rufus 问答采集</span>
+<span class="br">├─</span> <span class="cmd">seller-sprite</span> <span class="desc"># 卖家精灵采集</span>
+<span class="br">├─</span> <span class="cmd">feedback</span> <span class="desc">submit · detail</span>
+<span class="br">├─</span> <span class="cmd">skills</span> <span class="desc"># 技能管理</span>
+<span class="br">│  ├─</span> <span class="sub">list · install · status · upgrade</span>
+<span class="br">│  └─</span> <span class="sub">marketplace</span> <span class="desc">browse · publish · edit · rate</span>
+<span class="br">└─</span> <span class="cmd">mcp</span> <span class="desc"># MCP 服务管理</span>
+   <span class="br">└─</span> <span class="sub">user</span> <span class="desc"># 多用户 API Key 注册表</span>
+
+<span class="root">opscli-mcp</span> <span class="desc">--transport stdio|sse|http|both --port --auth-verify-url</span>
+  </div>
+</section>
+
+<!-- ============ 10 开发铁律 ============ -->
+<section id="laws">
+  <div class="sec-head">
+    <div class="sec-num am">10</div>
+    <div><h3>开发铁律精选</h3><p>23 条铁律是 opscli 长期可维护的护栏。以下为架构相关的核心条目。</p></div>
+  </div>
+
+  <div class="grid2">
+    <div class="law"><div class="ln">铁律 1 · 模块接入</div><p>新模块只在 cli.py 追加一行 add_typer，配置必须用 CONFIG_DIR，禁止硬编码路径。</p></div>
+    <div class="law"><div class="ln">铁律 2 · 导入方向</div><p>config.py 只依赖标准库，绝不反向导入子模块，避免循环导入。</p></div>
+    <div class="law"><div class="ln">铁律 3 · 双 SDK 导入</div><p>顶层 re-export 与子模块直导两种 AuthClient 导入方式必须同时可用。</p></div>
+    <div class="law"><div class="ln">铁律 5 · Keychain 服务名</div><p>opscli-auth 不可改，否则全部用户凭证失效需重登。</p></div>
+    <div class="law"><div class="ln">铁律 6 · 双层并发锁</div><p>线程锁 + 文件锁不可删减任意一层。</p></div>
+    <div class="law"><div class="ln">铁律 7 · Token 常量</div><p>REFRESH_THRESHOLD=300s / MAX_JWT_TTL=86400s 调整需评估影响。</p></div>
+    <div class="law"><div class="ln">铁律 8 · 测试隔离</div><p>测试用 base_dir=tmp_path 跳过 Keychain，用 respx mock 网络。</p></div>
+    <div class="law"><div class="ln">铁律 9 · 统一凭证</div><p>CLI 与 MCP 共用 CredentialStore，禁止 MCP 引入独立明文存储。</p></div>
+    <div class="law"><div class="ln">铁律 10 · 内置系统</div><p>ops/polaris 受保护不可删除。</p></div>
+    <div class="law"><div class="ln">铁律 11 · Skill 不直连</div><p>所有远端动作必须经 opscli 命令转发。</p></div>
+    <div class="law"><div class="ln">铁律 13 · ops- 前缀</div><p>所有内置 Skill 命名必须以 ops- 开头。</p></div>
+    <div class="law"><div class="ln">铁律 17/23 · 中文注释 & GBK</div><p>代码必须中文注释；终端输出字符必须 GBK 兼容（Windows 安全）。</p></div>
+  </div>
+
+  <div class="note" style="margin-top:24px"><strong>这些铁律有效的标志：</strong>diff 中不必要的减少、因过度复杂导致的重写减少、澄清问题在实现之前而非犯错之后。</div>
+</section>
+
+<footer>
+  <div class="line"></div>
+  opscli v0.0.85 · 系统架构培训文档 · 双前端单内核 · CLI + MCP<br>
+  <span style="opacity:.6">// 文档基于源码静态分析生成，随版本演进请以最新代码为准</span>
+</footer>
+</main>
+</div>
+
+<script>
+// ===== Mermaid 初始化（蓝图深色主题）=====
+mermaid.initialize({
+  startOnLoad:true,
+  theme:'base',
+  themeVariables:{
+    background:'#0f172a',
+    primaryColor:'#19233b',
+    primaryTextColor:'#e7edf7',
+    primaryBorderColor:'#33425f',
+    lineColor:'#f5a623',
+    secondaryColor:'#152033',
+    tertiaryColor:'#131c30',
+    fontFamily:'IBM Plex Mono, monospace',
+    fontSize:'13px',
+    actorBkg:'#19233b',
+    actorBorder:'#38d6c8',
+    actorTextColor:'#e7edf7',
+    signalColor:'#9fb0c9',
+    signalTextColor:'#e7edf7',
+    noteBkgColor:'#241a08',
+    noteTextColor:'#f5a623',
+    noteBorderColor:'#f5a623',
+    labelBoxBkgColor:'#19233b',
+    sequenceNumberColor:'#0b1120'
+  }
+});
+
+// ===== 滚动 reveal =====
+const io=new IntersectionObserver((es)=>{
+  es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}})
+},{threshold:.12});
+document.querySelectorAll('[data-reveal]:not(.hero [data-reveal])').forEach(el=>io.observe(el));
+
+// ===== 滚动高亮导航（scroll spy）=====
+const links=[...document.querySelectorAll('#nav a')];
+const secs=links.map(a=>document.querySelector(a.getAttribute('href')));
+const spy=new IntersectionObserver((es)=>{
+  es.forEach(e=>{
+    if(e.isIntersecting){
+      const id='#'+e.target.id;
+      links.forEach(a=>a.classList.toggle('active',a.getAttribute('href')===id));
+    }
+  })
+},{rootMargin:'-20% 0px -70% 0px'});
+secs.forEach(s=>s&&spy.observe(s));
+
+// ===== 移动端菜单 =====
+const sb=document.getElementById('sidebar'),mb=document.getElementById('menuBtn');
+mb.addEventListener('click',()=>sb.classList.toggle('open'));
+document.querySelectorAll('#nav a').forEach(a=>a.addEventListener('click',()=>sb.classList.remove('open')));
+</script>
+</body>
+</html>

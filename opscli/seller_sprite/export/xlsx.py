@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from numbers import Real
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -48,7 +49,8 @@ def export_rows_to_xlsx(
 
     for row_index, row in enumerate(rows, start=2):
         for column_index, column in enumerate(columns, start=1):
-            sheet.cell(row=row_index, column=column_index, value=_cell_value(_column_value(row, column, site=site)))
+            cell = sheet.cell(row=row_index, column=column_index, value=_cell_value(_column_value(row, column, site=site)))
+            _apply_number_format(cell)
 
     sheet.freeze_panes = "A2"
     for column_index, column in enumerate(columns, start=1):
@@ -162,6 +164,13 @@ def _cell_value(value: Any) -> Any:
     return value
 
 
+def _apply_number_format(cell) -> None:
+    value = cell.value
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return
+    cell.number_format = "#,##0" if float(value).is_integer() else "#,##0.00"
+
+
 def _add_high_frequency_sheet(workbook, rows: list[dict[str, Any]]) -> None:
     from openpyxl.styles import Font
 
@@ -172,8 +181,10 @@ def _add_high_frequency_sheet(workbook, rows: list[dict[str, Any]]) -> None:
         sheet.cell(row=1, column=column_index).font = Font(bold=True)
     for row_index, row in enumerate(rows, start=2):
         sheet.cell(row=row_index, column=1, value=row.get("keyword") or row.get("词语") or row.get("word"))
-        sheet.cell(row=row_index, column=2, value=row.get("frequency") or row.get("出现频次"))
-        sheet.cell(row=row_index, column=3, value=row.get("percentage") or row.get("百分比"))
+        frequency_cell = sheet.cell(row=row_index, column=2, value=row.get("frequency") or row.get("出现频次"))
+        percentage_cell = sheet.cell(row=row_index, column=3, value=row.get("percentage") or row.get("百分比"))
+        _apply_number_format(frequency_cell)
+        _apply_number_format(percentage_cell)
     sheet.column_dimensions["A"].width = 24
     sheet.column_dimensions["B"].width = 14
     sheet.column_dimensions["C"].width = 14

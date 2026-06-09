@@ -1,0 +1,58 @@
+{
+  "run_id": "asin-data-B0BY8Y5766-20260608-chenbenli-full2",
+  "started_at": "2026-06-08T21:58:15",
+  "finished_at": "2026-06-08T21:58:54",
+  "output_dir": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-chenbenli-full2",
+  "dry_run": false,
+  "summary": {
+    "input_count": 1,
+    "asin_count": 1,
+    "input_error_count": 0,
+    "source_error_count": 3,
+    "failed_asin_count": 1,
+    "failed_asins": [
+      "B0BY8Y5766"
+    ]
+  },
+  "options": {
+    "asin_column": "asin",
+    "keyword_column": "keyword",
+    "site_column": "site",
+    "skip_seller_sprite": false,
+    "skip_keyword_miner": false,
+    "skip_listing_analysis": false,
+    "skip_amazon": false,
+    "skip_query": false,
+    "skip_sales_query": false,
+    "skip_crawler_query": false,
+    "skip_rufus": false,
+    "seller_sprite_period": "30d",
+    "keyword_source": "reverse_top",
+    "max_miner_keywords": 1,
+    "listing_analysis_station": "GLOBAL",
+    "rufus_country": null,
+    "rufus_questions": [
+      "这个产品ASIN {{asin}}，标题写得清楚吗？如果我要找这个产品ASIN {{asin}}，一般搜什么词能找到他？",
+      "这个产品ASIN {{asin}}五点卖点描述里，最重要的一条是什么？有没有买家很想知道但没写进去的事？",
+      "看完这个产品ASIN {{asin}}这些图，还有什么是我想知道但看不出来的？要是再加一张图，加什么最有用？",
+      "这个产品ASIN {{asin}}下面那个长的图文介绍，跟上面五点说的有区别吗？看完能让我更放心买吗？还少介绍了什么？",
+      "这个产品ASIN {{asin}}评价里大家最常夸和最常抱怨的是什么？这些在介绍里提前说清楚了吗？",
+      "这个产品ASIN {{asin}}如果让你给这个产品页面只提一个最着急改的地方，会是什么？"
+    ],
+    "rufus_skills_dir": ".agents/skills",
+    "rufus_timeout_seconds": 180,
+    "skip_rufus_login_recovery": false,
+    "sales_start": null,
+    "sales_end": null,
+    "query_chunk_size": 100
+  },
+  "files": {
+    "manifest": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-chenbenli-full2\\manifest.json",
+    "results": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-chenbenli-full2\\asin-data.jsonl",
+    "frontend_data": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-chenbenli-full2\\frontend-data.json",
+    "frontend_markdown": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-chenbenli-full2\\frontend-data.md",
+    "summary": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-chenbenli-full2\\asin-data-summary.json",
+    "commands": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-chenbenli-full2\\commands.jsonl",
+    "errors": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-chenbenli-full2\\errors.jsonl"
+  }
+}

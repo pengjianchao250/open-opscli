@@ -23,7 +23,7 @@ def _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload):
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     # 模拟远端不可用，回退到本地
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
 
 
 def test_metadata_reads_from_installed_dataset_fields(tmp_path, monkeypatch):
@@ -66,7 +66,7 @@ def test_metadata_no_args_returns_all_datasets(tmp_path, monkeypatch):
             {"table_id": 1104, "field_name": "sku"},
         ],
     }
-    monkeypatch.setattr(manager.client, "fetch_query_metadata", lambda: remote_data)
+    monkeypatch.setattr(manager.client, "fetch_query_metadata", lambda **kw: remote_data)
 
     result = manager.metadata()
 
@@ -105,7 +105,7 @@ def test_metadata_with_args_fetches_from_remote(monkeypatch):
             {"table_id": 1103, "field_name": "revenue"},
         ],
     }
-    monkeypatch.setattr(manager.client, "fetch_query_metadata", lambda: remote_data)
+    monkeypatch.setattr(manager.client, "fetch_query_metadata", lambda **kw: remote_data)
 
     result = manager.metadata(dataset_alias="ds_sales")
 
@@ -346,7 +346,7 @@ def test_build_constructs_payload_from_dimension_metric_and_where(tmp_path, monk
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     result = manager.build(
         dataset_alias="ds_xxx",
@@ -415,7 +415,7 @@ def test_build_defaults_alias_to_global_alias_and_supports_verbose_name(tmp_path
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     result = manager.build(
         dataset_alias="ds_xxx",
@@ -459,7 +459,7 @@ def test_build_uses_summary_expression_for_formula_metric(tmp_path, monkeypatch)
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     result = manager.build(
         dataset_alias="ds_xxx",
@@ -496,7 +496,7 @@ def test_build_supports_having_and_dry_run(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     result = manager.build(
         dataset_alias="ds_xxx",
@@ -535,7 +535,7 @@ def test_build_constructs_where_from_repeated_short_flags(tmp_path, monkeypatch)
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     result = manager.build(
         dataset_alias="ds_xxx",
@@ -575,7 +575,7 @@ def test_build_rejects_multiple_where_sources(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     with pytest.raises(InvalidPayloadError):
         manager.build(
@@ -605,7 +605,7 @@ def test_build_rejects_invalid_having(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     with pytest.raises(InvalidPayloadError):
         manager.build(
@@ -634,7 +634,7 @@ def test_build_writes_output_file(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
     output_file = tmp_path / "payloads" / "query.json"
 
     result = manager.build(
@@ -666,7 +666,7 @@ def test_build_raises_when_field_missing(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     with pytest.raises(InvalidPayloadError):
         manager.build(dataset_alias="ds_xxx", dimensions=["missing_field"])
@@ -691,7 +691,7 @@ def test_build_rejects_non_ascii_alias(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     with pytest.raises(InvalidPayloadError):
         manager.build(dataset_alias="ds_xxx", dimensions=["date_id:日期"])
@@ -719,7 +719,7 @@ def test_build_rejects_ambiguous_verbose_name(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
 
     with pytest.raises(InvalidPayloadError):
         manager.build(dataset_alias="ds_xxx", dimensions=["名称"])
@@ -787,7 +787,36 @@ def test_build_simple_rejects_unknown_filter_field(tmp_path, monkeypatch):
         )
 
 
+def test_build_simple_auto_fixes_formula_metric_aggregation(tmp_path, monkeypatch):
+    """公式字段传入 aggregation 时，自动修正为 expr + 移除 aggregation，不再报错。"""
+    manager = QueryManager()
+    payload = {
+        "datasets": [
+            {
+                "table_id": 3,
+                "dataset_alias": "ds_6fbfb45edd2a",
+                "dataset_name": "order_sale_trend_set",
+                "select_columns": [{"column_name": "asin", "verbose_name": "ASIN"}],
+            }
+        ],
+        "fields": [],
+    }
+    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
+
+    result = manager.build_simple(
+        table_id=3,
+        dataset_alias="order_sale_trend_set",
+        dimensions=[{"field": "ds_6fbfb45edd2a.asin", "alias": "f_asin"}],
+        filters=[{"field": "ds_6fbfb45edd2a.asin", "operator": "in", "value": ["B0TEST0001"]}],
+        validate_fields=True,
+    )
+
+    assert result["payload"]["tableId"] == 3
+
+
 def test_build_simple_rejects_formula_metric_aggregation(tmp_path, monkeypatch):
+def test_build_simple_auto_fixes_formula_metric_aggregation(tmp_path, monkeypatch):
+    """公式字段传入 aggregation 时，自动修正为 expr + 移除 aggregation，不再报错。"""
     manager = QueryManager()
     payload = {
         "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
@@ -804,12 +833,17 @@ def test_build_simple_rejects_formula_metric_aggregation(tmp_path, monkeypatch):
     }
     _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
 
-    with pytest.raises(InvalidPayloadError, match="公式字段禁止额外聚合"):
-        manager.build_simple(
-            table_id=1103,
-            metrics=[{"field": "acos", "aggregation": "SUM"}],
-            validate_fields=True,
-        )
+    # 传入含 aggregation 的公式字段，应自动修正而非报错
+    result = manager.build_simple(
+        table_id=1103,
+        metrics=[{"field": "acos", "aggregation": "SUM"}],
+        validate_fields=True,
+    )
+    metrics_out = result["payload"]["metrics"]
+    assert len(metrics_out) == 1
+    assert "aggregation" not in metrics_out[0], "aggregation 应被自动移除"
+    assert metrics_out[0]["expr"] == "ROUND(SUM(cost) / SUM(sales), 4)", "应填入 summary_expression"
+    assert metrics_out[0]["field"] == "acos"
 
 
 def test_build_and_run_uses_built_payload(tmp_path, monkeypatch):
@@ -831,7 +865,7 @@ def test_build_and_run_uses_built_payload(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
     called = {}
 
     def fake_cli_query(request_payload):

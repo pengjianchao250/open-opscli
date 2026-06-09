@@ -1,0 +1,229 @@
+{
+  "time": "2026-06-08T17:28:05",
+  "source": "query.metadata",
+  "asin": null,
+  "command": [
+    "opscli",
+    "query",
+    "metadata",
+    "--dataset",
+    "ds_d35ac6f3910c"
+  ],
+  "dry_run": false,
+  "status": "success",
+  "exit_code": 0,
+  "stdout": "{\"success\": true, \"command\": \"query metadata\", \"data\": {\"dataset\": {\"table_id\": 1, \"dataset_alias\": \"ds_d35ac6f3910c\", \"dataset_name\": \"order_sale_trend_adv_traffic_inv_set\", \"dataset_category\": \"normal\", \"inner_where_enabled\": false, \"description\": \"即时综合数据集\", \"remarks\": \"\", \"select_columns\": [{\"column_name\": \"date_id\", \"verbose_name\": \"日期\", \"component_dataset_alias\": \"ds_d35ac6f3910c\"}, {\"column_name\": \"platform_name\", \"verbose_name\": \"平台\", \"component_dataset_alias\": \"ds_3d2714e6d40e\"}, {\"column_name\": \"country_name\", \"verbose_name\": \"国家\", \"component_dataset_alias\": \"ds_3d2714e6d40e\"}, {\"column_name\": \"channel_name\", \"verbose_name\": \"渠道\", \"component_dataset_alias\": \"ds_3d2714e6d40e\"}, {\"column_name\": \"team_name\", \"verbose_name\": \"销售小组\", \"component_dataset_alias\": \"ds_d1bf6b0b1723\"}, {\"column_name\": \"team_username\", \"verbose_name\": \"销售\", \"component_dataset_alias\": \"ds_d1bf6b0b1723\"}, {\"column_name\": \"develop_username\", \"verbose_name\": \"开发\", \"component_dataset_alias\": \"ds_b5f5ac7c8501\"}, {\"column_name\": \"ed_sku\", \"verbose_name\": \"公司SKU\", \"component_dataset_alias\": \"ds_8f24440d149b\"}, {\"column_name\": \"sell_sku\", \"verbose_name\": \"渠道SKU\", \"component_dataset_alias\": \"ds_3634c85fc90f\"}, {\"column_name\": \"product_name\", \"verbose_name\": \"产品名称\", \"component_dataset_alias\": \"ds_8f24440d149b\"}, {\"column_name\": \"model\", \"verbose_name\": \"产品型号\", \"component_dataset_alias\": \"ds_8f24440d149b\"}, {\"column_name\": \"asin\", \"verbose_name\": \"ASIN\", \"component_dataset_alias\": \"ds_3634c85fc90f\"}, {\"column_name\": \"dept_name\", \"verbose_name\": \"部门\", \"component_dataset_alias\": \"ds_1n8a4K0d7yBB\"}, {\"column_name\": \"category\", \"verbose_name\": \"品类\", \"component_dataset_alias\": \"ds_8f24440d149b\"}, {\"column_name\": \"amazon_cat\", \"verbose_name\": \"平台类目\", \"component_dataset_alias\": \"ds_3634c85fc90f\"}, {\"column_name\": \"brand_name\", \"verbose_name\": \"品牌\", \"component_dataset_alias\": \"ds_3634c85fc90f\"}, {\"column_name\": \"spu\", \"verbose_name\": \"SPU\", \"component_dataset_alias\": \"ds_8f24440d149b\"}, {\"column_name\": \"large_team_name\", \"verbose_name\": \"大组\", \"component_dataset_alias\": \"ds_d1bf6b0b1723\"}, {\"column_name\": \"pmc_code\", \"verbose_name\": \"物控编码\", \"component_dataset_alias\": \"ds_8f24440d149b\"}]}, \"fields\": [], \"source\": \"remote\", \"select_columns\": [{\"column_name\": \"date_id\", \"verbose_name\": \"日期\", \"component_dataset_alias\": \"ds_d35ac6f3910c\"}, {\"column_name\": \"platform_name\", \"verbose_name\": \"平台\", \"component_dataset_alias\": \"ds_3d2714e6d40e\"}, {\"column_name\": \"country_name\", \"verbose_name\": \"国家\", \"component_dataset_alias\": \"ds_3d2714e6d40e\"}, {\"column_name\": \"channel_name\", \"verbose_name\": \"渠道\", \"component_dataset_alias\": \"ds_3d2714e6d40e\"}, {\"column_name\": \"team_name\", \"verbose_name\": \"销售小组\", \"component_dataset_alias\": \"ds_d1bf6b0b1723\"}, {\"column_name\": \"team_username\", \"verbose_name\": \"销售\", \"component_dataset_alias\": \"ds_d1bf6b0b1723\"}, {\"column_name\": \"develop_username\", \"verbose_name\": \"开发\", \"component_dataset_alias\": \"ds_b5f5ac7c8501\"}, {\"column_name\": \"ed_sku\", \"verbose_name\": \"公司SKU\", \"component_dataset_alias\": \"ds_8f24440d149b\"}, {\"column_name\": \"sell_sku\", \"verbose_name\": \"渠道SKU\", \"component_dataset_alias\": \"ds_3634c85fc90f\"}, {\"column_name\": \"product_name\", \"verbose_name\": \"产品名称\", \"component_dataset_alias\": \"ds_8f24440d149b\"}, {\"column_name\": \"model\", \"verbose_name\": \"产品型号\", \"component_dataset_alias\": \"ds_8f24440d149b\"}, {\"column_name\": \"asin\", \"verbose_name\": \"ASIN\", \"component_dataset_alias\": \"ds_3634c85fc90f\"}, {\"column_name\": \"dept_name\", \"verbose_name\": \"部门\", \"component_dataset_alias\": \"ds_1n8a4K0d7yBB\"}, {\"column_name\": \"category\", \"verbose_name\": \"品类\", \"component_dataset_alias\": \"ds_8f24440d149b\"}, {\"column_name\": \"amazon_cat\", \"verbose_name\": \"平台类目\", \"component_dataset_alias\": \"ds_3634c85fc90f\"}, {\"column_name\": \"brand_name\", \"verbose_name\": \"品牌\", \"component_dataset_alias\": \"ds_3634c85fc90f\"}, {\"column_name\": \"spu\", \"verbose_name\": \"SPU\", \"component_dataset_alias\": \"ds_8f24440d149b\"}, {\"column_name\": \"large_team_name\", \"verbose_name\": \"大组\", \"component_dataset_alias\": \"ds_d1bf6b0b1723\"}, {\"column_name\": \"pmc_code\", \"verbose_name\": \"物控编码\", \"component_dataset_alias\": \"ds_8f24440d149b\"}]}, \"error\": null}\n",
+  "stderr": "\nopscli 有新版本可用，建议更新最新版本: v0.0.22 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n",
+  "json": {
+    "success": true,
+    "command": "query metadata",
+    "data": {
+      "dataset": {
+        "table_id": 1,
+        "dataset_alias": "ds_d35ac6f3910c",
+        "dataset_name": "order_sale_trend_adv_traffic_inv_set",
+        "dataset_category": "normal",
+        "inner_where_enabled": false,
+        "description": "即时综合数据集",
+        "remarks": "",
+        "select_columns": [
+          {
+            "column_name": "date_id",
+            "verbose_name": "日期",
+            "component_dataset_alias": "ds_d35ac6f3910c"
+          },
+          {
+            "column_name": "platform_name",
+            "verbose_name": "平台",
+            "component_dataset_alias": "ds_3d2714e6d40e"
+          },
+          {
+            "column_name": "country_name",
+            "verbose_name": "国家",
+            "component_dataset_alias": "ds_3d2714e6d40e"
+          },
+          {
+            "column_name": "channel_name",
+            "verbose_name": "渠道",
+            "component_dataset_alias": "ds_3d2714e6d40e"
+          },
+          {
+            "column_name": "team_name",
+            "verbose_name": "销售小组",
+            "component_dataset_alias": "ds_d1bf6b0b1723"
+          },
+          {
+            "column_name": "team_username",
+            "verbose_name": "销售",
+            "component_dataset_alias": "ds_d1bf6b0b1723"
+          },
+          {
+            "column_name": "develop_username",
+            "verbose_name": "开发",
+            "component_dataset_alias": "ds_b5f5ac7c8501"
+          },
+          {
+            "column_name": "ed_sku",
+            "verbose_name": "公司SKU",
+            "component_dataset_alias": "ds_8f24440d149b"
+          },
+          {
+            "column_name": "sell_sku",
+            "verbose_name": "渠道SKU",
+            "component_dataset_alias": "ds_3634c85fc90f"
+          },
+          {
+            "column_name": "product_name",
+            "verbose_name": "产品名称",
+            "component_dataset_alias": "ds_8f24440d149b"
+          },
+          {
+            "column_name": "model",
+            "verbose_name": "产品型号",
+            "component_dataset_alias": "ds_8f24440d149b"
+          },
+          {
+            "column_name": "asin",
+            "verbose_name": "ASIN",
+            "component_dataset_alias": "ds_3634c85fc90f"
+          },
+          {
+            "column_name": "dept_name",
+            "verbose_name": "部门",
+            "component_dataset_alias": "ds_1n8a4K0d7yBB"
+          },
+          {
+            "column_name": "category",
+            "verbose_name": "品类",
+            "component_dataset_alias": "ds_8f24440d149b"
+          },
+          {
+            "column_name": "amazon_cat",
+            "verbose_name": "平台类目",
+            "component_dataset_alias": "ds_3634c85fc90f"
+          },
+          {
+            "column_name": "brand_name",
+            "verbose_name": "品牌",
+            "component_dataset_alias": "ds_3634c85fc90f"
+          },
+          {
+            "column_name": "spu",
+            "verbose_name": "SPU",
+            "component_dataset_alias": "ds_8f24440d149b"
+          },
+          {
+            "column_name": "large_team_name",
+            "verbose_name": "大组",
+            "component_dataset_alias": "ds_d1bf6b0b1723"
+          },
+          {
+            "column_name": "pmc_code",
+            "verbose_name": "物控编码",
+            "component_dataset_alias": "ds_8f24440d149b"
+          }
+        ]
+      },
+      "fields": [],
+      "source": "remote",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    "error": null
+  }
+}

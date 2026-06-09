@@ -202,7 +202,7 @@ def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
         "monthName": input_data.get("monthName") or month_name(month),
         "asins": csv(input_data.get("asins")),
         "page": _int(input_data.get("page") or input_data.get("startPage"), 1),
-        "nodeIdPaths": csv(input_data.get("node") or input_data.get("nodeIdPaths")),
+        "nodeIdPaths": csv(input_data.get("node") or input_data.get("nodeIdPaths") or input_data.get("nodeIdPath")),
         "symbolFlag": False,
         "size": _int(input_data.get("size") or input_data.get("pageSize"), 100),
         "order": {
@@ -238,7 +238,12 @@ def make_product_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
             "desc": order_desc(input_data.get("orderDesc")),
         },
         "productTags": [],
-        "nodeIdPaths": csv(input_data.get("node") or input_data.get("category") or input_data.get("nodeIdPaths")),
+        "nodeIdPaths": csv(
+            input_data.get("node")
+            or input_data.get("category")
+            or input_data.get("nodeIdPaths")
+            or input_data.get("nodeIdPath")
+        ),
         "sellerTypes": [],
         "eligibility": [],
         "pkgDimensionTypeList": csv(input_data.get("pkgDimensionTypeList")),
@@ -341,7 +346,7 @@ def make_market_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     new_release = new_release_num(input_data)
     payload: dict[str, Any] = {
         "marketId": str(input_data.get("marketId") or market_research_market_id(_market(input_data, default="US"))),
-        "nodeIdPath": _query_text(input_data.get("nodeIdPath") or input_data.get("node") or input_data.get("category")),
+        "nodeIdPath": _query_text(input_data.get("nodeIdPath") or input_data.get("node")),
         "sampleNumber": str(input_data.get("sampleNumber") or 1),
         "topn": str(topn),
         "newReleaseNum": str(new_release),
@@ -354,16 +359,30 @@ def make_market_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
         "page": str(_int(input_data.get("page") or input_data.get("startPage"), 1)),
         "size": str(_int(input_data.get("size") or input_data.get("pageSize"), 100)),
     }
-    if input_data.get("departmentKeyword") or input_data.get("keyword"):
-        payload["departmentKeyword"] = _query_text(input_data.get("departmentKeyword") or input_data.get("keyword"))
+    if input_data.get("departmentKeyword") or input_data.get("keyword") or input_data.get("category"):
+        payload["departmentKeyword"] = _query_text(
+            input_data.get("departmentKeyword") or input_data.get("keyword") or input_data.get("category")
+        )
     for field in MARKET_RESEARCH_HIDDEN_FIELDS:
-        if input_data.get(field) is not None:
-            payload[field] = str(input_data[field])
+        payload[field] = "" if input_data.get(field) is None else str(input_data[field])
     return payload
+
+
+def make_listing_analysis_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "asin": str(input_data.get("asin") or input_data.get("q") or "").strip().upper(),
+        "station": str(input_data.get("station") or "GLOBAL").strip().upper(),
+    }
 
 
 def build_referer(payload: dict[str, Any], scenario: str) -> str:
     """按场景构造 Web referer。"""
+    if scenario == "listing-analysis":
+        query = {
+            "asin": payload.get("asin") or "",
+            "station": payload.get("station") or "GLOBAL",
+        }
+        return f"https://www.sellersprite.com/v3/listing-analysis?{urlencode(query)}"
     if scenario == "keyword-miner":
         return "https://www.sellersprite.com/v3/keyword-miner/"
     if scenario == "keyword-reverse":
