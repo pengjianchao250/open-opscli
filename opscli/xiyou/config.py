@@ -1,4 +1,4 @@
-"""西柚洞察接口直连配置。"""
+"""Xiyou integration settings."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
+from opscli.auth.config import get_ops_system_url
 from opscli.config import CONFIG_DIR
 
 
@@ -22,6 +24,9 @@ ENV_CREDENTIAL_LATEST_URL = "OPSCLI_XIYOU_CREDENTIAL_LATEST_URL"
 ENV_CREDENTIAL_API_KEY = "OPSCLI_XIYOU_CREDENTIAL_API_KEY"
 ENV_CREDENTIAL_CACHE_TTL_SECONDS = "OPSCLI_XIYOU_CREDENTIAL_CACHE_TTL_SECONDS"
 
+ENV_OPS_URL = "OPSCLI_OPS_URL"
+ENV_OPS_SYSTEM_URL = "OPSCLI_OPS_SYSTEM_URL"
+
 DEFAULT_PROVIDER = "xiyou"
 DEFAULT_PAGE_SIZE = 50
 DEFAULT_SITE = "US"
@@ -34,7 +39,7 @@ DEFAULT_CREDENTIAL_CACHE_TTL_SECONDS = 300
 
 @dataclass(frozen=True)
 class XiyouSettings:
-    """西柚洞察接口直连运行配置。"""
+    """Runtime settings for Xiyou integration."""
 
     provider: str = DEFAULT_PROVIDER
     authorization: str | None = None
@@ -51,7 +56,7 @@ class XiyouSettings:
     credential_cache_ttl_seconds: int = DEFAULT_CREDENTIAL_CACHE_TTL_SECONDS
 
     def to_public_dict(self) -> dict[str, Any]:
-        """返回不包含敏感字段的配置摘要。"""
+        """Return a redacted settings summary."""
         payload = asdict(self)
         payload["output_dir"] = str(self.output_dir)
         payload["notify_path"] = str(self.notify_path)
@@ -66,7 +71,7 @@ class XiyouSettings:
 
 
 def load_settings() -> XiyouSettings:
-    """从 `.env` 和环境变量读取西柚洞察配置。"""
+    """Load settings from `.env` and process environment."""
     values = _load_env_values()
     output_dir = Path(values.get(ENV_OUTPUT_DIR) or DEFAULT_OUTPUT_DIR).expanduser()
     credential_path = Path(values.get(ENV_CREDENTIAL_PATH) or DEFAULT_CREDENTIAL_PATH).expanduser()
@@ -76,6 +81,7 @@ def load_settings() -> XiyouSettings:
         values.get(ENV_CREDENTIAL_CACHE_TTL_SECONDS),
         DEFAULT_CREDENTIAL_CACHE_TTL_SECONDS,
     )
+    credential_latest_url = values.get(ENV_CREDENTIAL_LATEST_URL) or _build_default_credential_latest_url()
     return XiyouSettings(
         provider=values.get(ENV_PROVIDER) or DEFAULT_PROVIDER,
         authorization=values.get(ENV_AUTHORIZATION) or None,
@@ -85,14 +91,14 @@ def load_settings() -> XiyouSettings:
         notify_path=notify_path,
         page_size=page_size,
         krs_ver=values.get(ENV_KRS_VER) or None,
-        credential_latest_url=values.get(ENV_CREDENTIAL_LATEST_URL) or None,
+        credential_latest_url=credential_latest_url,
         credential_api_key=values.get(ENV_CREDENTIAL_API_KEY) or None,
         credential_cache_ttl_seconds=credential_cache_ttl_seconds,
     )
 
 
 def _load_env_values() -> dict[str, str]:
-    """读取 `.env` 后叠加真实环境变量，真实环境变量优先。"""
+    """Load `.env`, then override with real environment variables."""
     values = _read_dotenv()
     for key in [
         ENV_AUTHORIZATION,
@@ -106,6 +112,8 @@ def _load_env_values() -> dict[str, str]:
         ENV_CREDENTIAL_LATEST_URL,
         ENV_CREDENTIAL_API_KEY,
         ENV_CREDENTIAL_CACHE_TTL_SECONDS,
+        ENV_OPS_URL,
+        ENV_OPS_SYSTEM_URL,
     ]:
         value = os.environ.get(key)
         if value:
@@ -114,7 +122,7 @@ def _load_env_values() -> dict[str, str]:
 
 
 def _read_dotenv() -> dict[str, str]:
-    """从当前目录向上查找并解析 `.env`。"""
+    """Find and parse the nearest `.env` from cwd upward."""
     current = Path.cwd().resolve()
     for directory in [current, *current.parents]:
         dotenv = directory / ".env"
@@ -124,7 +132,7 @@ def _read_dotenv() -> dict[str, str]:
 
 
 def _parse_dotenv(path: Path) -> dict[str, str]:
-    """解析简单 KEY=VALUE 格式的 `.env` 文件。"""
+    """Parse simple KEY=VALUE entries from `.env`."""
     values: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
@@ -139,7 +147,7 @@ def _parse_dotenv(path: Path) -> dict[str, str]:
 
 
 def _parse_int(value: str | None, default: int) -> int:
-    """解析正整数配置。"""
+    """Parse a positive integer with a default fallback."""
     if not value:
         return default
     try:
@@ -147,3 +155,39 @@ def _parse_int(value: str | None, default: int) -> int:
     except ValueError:
         return default
     return parsed if parsed > 0 else default
+
+
+def _build_default_credential_latest_url() -> str | None:
+    """Build the default Xiyou credential endpoint from the active ops env."""
+    ops_system_url = _resolve_ops_system_url()
+    if not ops_system_url:
+        return None
+    parts = urlsplit(ops_system_url)
+    if not parts.scheme or not parts.netloc:
+        return None
+    path = parts.path.rstrip("/")
+    return urlunsplit(
+        (
+            parts.scheme,
+            parts.netloc,
+            f"{path}/api/v1/mcp-accounts",
+            "platform=xiyou",
+            "",
+        )
+    )
+
+
+def _resolve_ops_system_url() -> str | None:
+    """Resolve the active ops base URL from env first, then shared config."""
+    direct = (os.environ.get(ENV_OPS_SYSTEM_URL) or "").strip()
+    if direct:
+        return direct.rstrip("/")
+
+    from_loaded_env = _read_dotenv().get(ENV_OPS_SYSTEM_URL, "").strip()
+    if from_loaded_env:
+        return from_loaded_env.rstrip("/")
+
+    fallback = (get_ops_system_url() or "").strip()
+    if fallback:
+        return fallback.rstrip("/")
+    return None

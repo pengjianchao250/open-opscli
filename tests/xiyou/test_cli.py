@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 import opscli.xiyou.cli as cli_module
 from opscli.xiyou.cli import app
 from opscli.xiyou.config import XiyouSettings
+from opscli.xiyou.credentials import XiyouCredential
 
 
 runner = CliRunner()
@@ -67,3 +68,25 @@ def test_notify_test_prints_send_result(monkeypatch):
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload == {"sent": True, "job_id": "verify-1", "force": True}
+
+
+def test_credential_status_marks_default_latest_url(monkeypatch):
+    settings = XiyouSettings(
+        authorization="header.payload.signature",
+        credential_latest_url="https://ops.api.qa.aukeyit.com/api/v1/mcp-accounts?platform=xiyou",
+    )
+    monkeypatch.setattr(cli_module, "load_settings", lambda: settings)
+    monkeypatch.setattr(
+        cli_module.XiyouCredentialProvider,
+        "get_default",
+        lambda self: XiyouCredential(
+            authorization="header.payload.signature",
+            source="credential_service",
+        ),
+    )
+
+    result = runner.invoke(app, ["credential", "status"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["has_credential_latest_url"] is True

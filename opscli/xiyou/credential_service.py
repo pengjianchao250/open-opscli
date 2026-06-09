@@ -1,7 +1,8 @@
-"""西柚运营后台凭据服务客户端。"""
+"""Remote Xiyou credential service client."""
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -16,14 +17,14 @@ _CREDENTIAL_CACHE: dict[str, tuple[float, XiyouCredential]] = {}
 
 
 class XiyouCredentialServiceClient:
-    """从运营后台读取西柚最新凭据。"""
+    """Load the latest Xiyou credential from remote ops service."""
 
     def __init__(self, settings: XiyouSettings, *, http_get: Any | None = None) -> None:
         self.settings = settings
         self.http_get = http_get or httpx.get
 
     def get_latest(self) -> XiyouCredential:
-        """调用运营后台 latest 接口，返回可直接用于西柚 API 的凭据。"""
+        """Fetch the latest credential payload and convert it to runtime format."""
         if not self.settings.credential_latest_url:
             raise XiyouConfigError("缺少 OPSCLI_XIYOU_CREDENTIAL_LATEST_URL")
         headers = {"accept": "application/json"}
@@ -37,7 +38,7 @@ class XiyouCredentialServiceClient:
         status_code = getattr(response, "status_code", 200)
         text = getattr(response, "text", "")
         if status_code >= 400:
-            raise XiyouConfigError(f"获取西柚最新凭据失败 status={status_code} response={text[:500]}")
+            raise XiyouConfigError(f"获取西柚最新凭据失败：status={status_code} response={text[:500]}")
         try:
             payload = response.json()
         except Exception as exc:
@@ -51,7 +52,7 @@ def get_cached_remote_credential(
     refresh: bool = False,
     client: XiyouCredentialServiceClient | None = None,
 ) -> XiyouCredential:
-    """读取远程凭据并做进程内缓存，避免同一进程高频请求后台。"""
+    """Fetch remote credential with in-process caching."""
     if not settings.credential_latest_url:
         raise XiyouConfigError("缺少 OPSCLI_XIYOU_CREDENTIAL_LATEST_URL")
     cache_key = settings.credential_latest_url
@@ -65,16 +66,22 @@ def get_cached_remote_credential(
 
 
 def parse_latest_credential_response(payload: Any) -> XiyouCredential:
-    """解析后台 latest 接口响应，兼容 data.credential 和顶层 credential。"""
+    """Support both legacy credential payloads and new mcp-accounts responses."""
     if not isinstance(payload, dict):
         raise XiyouConfigError("西柚最新凭据响应必须是 JSON 对象")
+
     if payload.get("success") is False:
         error = payload.get("error")
         message = error.get("message") if isinstance(error, dict) else None
         raise XiyouConfigError(f"获取西柚最新凭据失败：{message or 'success=false'}")
 
+    code = payload.get("code")
+    if code not in (None, 0, 200, "0", "200"):
+        msg = _optional_str(payload.get("msg"))
+        raise XiyouConfigError(f"获取西柚最新凭据失败：{msg or f'code={code}'}")
+
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    credential_payload = data.get("credential") if isinstance(data.get("credential"), dict) else data
+    credential_payload = _extract_credential_payload(data)
     authorization = normalize_authorization(
         credential_payload.get("authorization")
         or credential_payload.get("auth")
@@ -86,12 +93,50 @@ def parse_latest_credential_response(payload: Any) -> XiyouCredential:
         authorization=authorization,
         cookie=str(cookie).strip() if cookie else None,
         source="credential_service",
-        operator=_optional_str(data.get("updated_by") or data.get("operator")),
+        operator=_optional_str(data.get("updated_by") or data.get("operator") or data.get("remark")),
         updated_at=_optional_str(data.get("updated_at")),
         expires_at=_optional_str(data.get("expires_at")),
-        version=data.get("version"),
-        headers={str(key): str(value) for key, value in headers.items()},
+        version=data.get("version") or data.get("id"),
+        headers={str(key): str(value) for key, value in headers.items() if value is not None},
     )
+
+
+def _extract_credential_payload(data: dict[str, Any]) -> dict[str, Any]:
+    credential_payload = data.get("credential") if isinstance(data.get("credential"), dict) else data
+    cookie_content = credential_payload.get("cookie_content")
+    if isinstance(cookie_content, str) and cookie_content.strip():
+        return _parse_cookie_content(cookie_content, fallback=credential_payload)
+    return credential_payload
+
+
+def _parse_cookie_content(raw: str, *, fallback: dict[str, Any]) -> dict[str, Any]:
+    try:
+        content = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise XiyouConfigError("西柚最新凭据里的 cookie_content 不是有效 JSON") from exc
+    if not isinstance(content, dict):
+        raise XiyouConfigError("西柚最新凭据里的 cookie_content 结构错误")
+
+    headers: dict[str, str] = {}
+    krs_ver = _optional_str(content.get("OPSCLI_XIYOU_KRS_VER"))
+    if krs_ver:
+        headers["krs-ver"] = krs_ver
+
+    web_version = _optional_str(content.get("OPSCLI_XIYOU_WEB_VERSION"))
+    if web_version:
+        headers["web-version"] = web_version
+
+    fallback_headers = fallback.get("headers")
+    if isinstance(fallback_headers, dict):
+        for key, value in fallback_headers.items():
+            if value is not None and str(key).strip():
+                headers.setdefault(str(key).strip(), str(value))
+
+    return {
+        "authorization": content.get("OPSCLI_XIYOU_AUTHORIZATION"),
+        "cookie": content.get("OPSCLI_XIYOU_COOKIE"),
+        "headers": headers,
+    }
 
 
 def _optional_str(value: Any) -> str | None:

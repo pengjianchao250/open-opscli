@@ -7,10 +7,12 @@ from uuid import uuid4
 
 import pytest
 
-from opscli.xiyou.config import XiyouSettings
+import opscli.xiyou.config as xiyou_config
+from opscli.xiyou.config import XiyouSettings, load_settings
 from opscli.xiyou.credential_service import (
     XiyouCredentialServiceClient,
     get_cached_remote_credential,
+    parse_latest_credential_response,
 )
 from opscli.xiyou.credentials import XiyouCredentialProvider, XiyouCredentialStore
 from opscli.xiyou.domain.exceptions import XiyouConfigError
@@ -165,3 +167,60 @@ def test_remote_credential_cache_can_be_forced_to_refresh(local_tmp_path: Path):
     assert first.authorization == second.authorization
     assert third.authorization != first.authorization
     assert len(calls) == 2
+
+
+def test_load_settings_builds_default_latest_url_from_ops_system_url(monkeypatch):
+    monkeypatch.setattr(xiyou_config, "_read_dotenv", lambda: {})
+    monkeypatch.setattr(xiyou_config, "get_ops_system_url", lambda: "https://ops.api.qa.aukeyit.com")
+    monkeypatch.delenv("OPSCLI_OPS_SYSTEM_URL", raising=False)
+    monkeypatch.delenv("OPSCLI_XIYOU_CREDENTIAL_LATEST_URL", raising=False)
+
+    settings = load_settings()
+
+    assert settings.credential_latest_url == "https://ops.api.qa.aukeyit.com/api/v1/mcp-accounts?platform=xiyou"
+
+
+def test_load_settings_prefers_explicit_latest_url_override(monkeypatch):
+    monkeypatch.setattr(
+        xiyou_config,
+        "_read_dotenv",
+        lambda: {"OPSCLI_XIYOU_CREDENTIAL_LATEST_URL": "https://custom.example.com/xiyou/latest"},
+    )
+    monkeypatch.setattr(xiyou_config, "get_ops_system_url", lambda: "https://ops.api.qa.aukeyit.com")
+    monkeypatch.delenv("OPSCLI_OPS_SYSTEM_URL", raising=False)
+    monkeypatch.delenv("OPSCLI_XIYOU_CREDENTIAL_LATEST_URL", raising=False)
+
+    settings = load_settings()
+
+    assert settings.credential_latest_url == "https://custom.example.com/xiyou/latest"
+
+
+def test_parse_latest_credential_response_supports_mcp_accounts_shape():
+    token = _jwt()
+    payload = {
+        "code": 200,
+        "msg": "操作成功",
+        "data": {
+            "id": 3,
+            "platform": "xiyou",
+            "cookie_content": json.dumps(
+                {
+                    "OPSCLI_XIYOU_AUTHORIZATION": token,
+                    "OPSCLI_XIYOU_COOKIE": "sid=remote",
+                    "OPSCLI_XIYOU_KRS_VER": "1.0.0",
+                }
+            ),
+            "remark": "西柚补登",
+            "expires_at": None,
+            "updated_at": "2026-06-09 16:55:36",
+        },
+    }
+
+    credential = parse_latest_credential_response(payload)
+
+    assert credential.authorization == token
+    assert credential.cookie == "sid=remote"
+    assert credential.source == "credential_service"
+    assert credential.operator == "西柚补登"
+    assert credential.version == 3
+    assert credential.headers == {"krs-ver": "1.0.0"}
