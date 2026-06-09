@@ -19,6 +19,7 @@ from opscli.mcp.cli import app as mcp_app
 from opscli.query.cli import app as query_app
 from opscli.shopify.cli import app as shopify_app
 from opscli.seller_sprite.cli import app as seller_sprite_app
+from opscli.sif.cli import app as sif_app
 from opscli.skills.cli import app as skills_app
 from opscli.version import get_version
 
@@ -44,7 +45,7 @@ app.add_typer(feedback_app, name="feedback")
 app.add_typer(google_trends_app, name="google-trends")
 app.add_typer(keepa_app, name="keepa")
 app.add_typer(seller_sprite_app, name="seller-sprite")
-app.add_typer(asin_data_app, name="asin-data")
+app.add_typer(sif_app, name="sif")
 # app.add_typer(methods_card_app, name="methods-card")
 app.add_typer(skills_app, name="skills")
 app.add_typer(mcp_app, name="mcp")
@@ -110,3 +111,7 @@ def main(
 
     # 注册关闭钩子：命令执行完毕时自动触发上报
     ctx.call_on_close(_report_telemetry)
+
+
+if __name__ == "__main__":
+    app()

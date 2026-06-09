@@ -1,0 +1,19 @@
+{
+  "summary": "使用 dummy Sif 账号执行 sales login-check 时登录请求超时。",
+  "failed_calls": [
+    {
+      "tool": "CLI -> python -m opscli.cli sales login-check --provider sif --timeout 1 --sif-username dummy --sif-password dummy --pretty",
+      "call_params": {
+        "provider": "sif",
+        "timeout": 1,
+        "has_sif_username": true,
+        "has_sif_password": true
+      },
+      "error_message": "SALES_ERROR: timed out",
+      "reason": "推测 timeout=1 过短，Sif 登录请求未在 1 秒内完成；本次只用于验证新版命令是否进入账号密码登录路径。",
+      "fix_suggestion": "实际验收使用 --timeout 8 或更高；后续可把 httpx timeout 包装为更明确的 SIF_API_TIMEOUT 错误码。"
+    }
+  ],
+  "successful_calls": [],
+  "final_resolution": "不影响源码改动验证；限定测试已通过。"
+}

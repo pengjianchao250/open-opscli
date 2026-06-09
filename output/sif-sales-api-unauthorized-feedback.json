@@ -1,0 +1,20 @@
+{
+  "summary": "用户执行 Sif 查销量账号密码自动登录后，后续 listingHistory 接口仍返回 401 UNAUTHORIZED。",
+  "failed_calls": [
+    {
+      "tool": "opscli sales run 查销量 --provider sif --asin <ASIN> --site <SITE> --sif-username <redacted> --sif-password <redacted>",
+      "call_params": {
+        "feature": "查销量",
+        "provider": "sif",
+        "asin": "<redacted>",
+        "site": "<redacted>",
+        "auth_mode": "credentials"
+      },
+      "error_message": "SIF_API_REQUEST_FAILED: Sif API 请求失败：/api/search/bought/listingHistory status_code=401 response={\"code\":-10,\"message\":\"UNAUTHORIZED\"}",
+      "reason": "推测账号密码登录接口没有把后续查销量接口需要的认证信息完整带上，可能需要 Authorization/Token header、特定 Cookie、或登录请求格式不是当前实现的 JSON body。",
+      "fix_suggestion": "继续分析 Sif 前端请求封装和登录响应，补齐自动登录后的认证 header/cookie 复用逻辑。"
+    }
+  ],
+  "successful_calls": [],
+  "final_resolution": "继续排查并修复 Sif 自动登录认证链路。"
+}

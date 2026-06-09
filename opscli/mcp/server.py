@@ -245,6 +245,7 @@ from opscli.mcp.tools import google_trends as _google_trends_tools
 from opscli.mcp.tools import keepa as _keepa_tools
 from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import seller_sprite as _seller_sprite_tools
+from opscli.mcp.tools import sif as _sif_tools
 from opscli.mcp.tools import skills as _skills_tools
 
 _auth_tools.register(_telemetry_mcp)
@@ -255,6 +256,7 @@ _google_trends_tools.register(_telemetry_mcp)
 _keepa_tools.register(_telemetry_mcp)
 _query_tools.register(_telemetry_mcp)
 _seller_sprite_tools.register(_telemetry_mcp)
+_sif_tools.register(_telemetry_mcp)
 _skills_tools.register(_telemetry_mcp)
 
 # amazon 工具依赖可选扩展 playwright，未安装时跳过注册不影响其他工具
