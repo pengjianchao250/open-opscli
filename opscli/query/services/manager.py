@@ -301,6 +301,7 @@ class QueryManager:
         self,
         *,
         table_id: int,
+        dataset_alias: str | None = None,
         dimensions: list[dict] | None = None,
         metrics: list[dict] | None = None,
         filters: list[dict] | None = None,
@@ -327,7 +328,7 @@ class QueryManager:
             raise InvalidPayloadError("至少需要提供一个 dimension 或 metric")
 
         if validate_fields:
-            metadata = self.metadata(table_id=table_id, skills_dir=skills_dir, cwd=cwd)
+            metadata = self.metadata(dataset_alias=dataset_alias, table_id=table_id, skills_dir=skills_dir, cwd=cwd)
             self._validate_simple_fields(
                 metadata.fields,
                 dimensions=dimensions or [],
@@ -397,6 +398,10 @@ class QueryManager:
         注意：select_columns（查询组件）中的字段即使不在普通 fields 列表中，
         也是合法的过滤条件，过滤校验时会跳过这些字段的 metadata 强制匹配。
         """
+        if not fields and select_columns:
+            self._validate_simple_filter_operators(filters)
+            return
+
         if not fields:
             raise InvalidPayloadError("当前数据集 metadata 未返回字段，无法执行字段歧义门禁")
 
