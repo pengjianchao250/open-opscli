@@ -104,8 +104,13 @@ def collect(
     crawler_table_id: int | None = typer.Option(None, "--crawler-table-id", help="爬虫 Listing table_id"),
     crawler_dataset_alias: str = typer.Option("ds_icw50TLOFu4F", "--crawler-dataset-alias", help="爬虫 Listing dataset alias"),
     crawler_field_mode: FieldMode = typer.Option(FieldMode.full, "--crawler-field-mode", help="爬虫 Listing 字段模式"),
-    upload: bool = typer.Option(True, "--upload/--no-upload", help="上传 frontend-data.json 并返回阿里云文件地址"),
-    url_only: bool = typer.Option(False, "--url-only", help="只输出阿里云文件地址"),
+    fetch_report_files: bool = typer.Option(
+        True,
+        "--fetch-report-files/--no-fetch-report-files",
+        help="从 ASIN 报告文件接口获取报告地址",
+    ),
+    upload: bool = typer.Option(True, "--upload/--no-upload", help="上传 ASIN 取数报告 txt 并返回阿里云文件地址"),
+    url_only: bool = typer.Option(False, "--url-only", help="只输出报告文件地址"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
 ) -> None:
     """执行 ASIN 批量取数，并输出标准前端数据文件。"""
@@ -151,6 +156,7 @@ def collect(
             crawler_table_id=crawler_table_id,
             crawler_dataset_alias=crawler_dataset_alias,
             crawler_field_mode=crawler_field_mode.value,
+            fetch_report_files=fetch_report_files,
             upload=upload,
         )
     except Exception as exc:

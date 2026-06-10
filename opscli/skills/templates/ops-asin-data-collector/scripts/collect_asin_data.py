@@ -2296,28 +2296,48 @@ def localize_rufus_data(payload: Any) -> dict[str, Any]:
         "原始状态": payload.get("status"),
         "接入状态": "已接入",
         "国家站点": payload.get("country"),
-        "问题列表": payload.get("questions") or [],
+        "问题列表": clean_rufus_text_list(payload.get("questions")),
         "问题数量": payload.get("question_count") or len(payload.get("questions") or []),
         "答案数量": payload.get("answer_count") or len(payload.get("answers") or []),
-        "报告路径": payload.get("report_path"),
+        "报告路径": json_path(payload.get("report_path")) if payload.get("report_path") else None,
         "数据": [localize_rufus_answer(answer) for answer in (payload.get("answers") or []) if isinstance(answer, dict)],
     }
     if payload.get("reason") and payload.get("status") != "success":
-        data["原因"] = payload.get("reason")
+        data["原因"] = clean_rufus_text(payload.get("reason"))
     if payload.get("error_message") and payload.get("status") != "success":
-        data["错误信息"] = payload.get("error_message")
+        data["错误信息"] = clean_rufus_text(payload.get("error_message"))
     return data
 
 
 def localize_rufus_answer(answer: dict[str, Any]) -> dict[str, Any]:
     return {
         "题号": answer.get("index"),
-        "问题": answer.get("question"),
-        "相关产品": answer.get("related_products") or [],
-        "答案": answer.get("answer") or "",
-        "推荐ASIN": answer.get("recommended_asins") or [],
-        "总结": answer.get("summary") or "",
+        "问题": clean_rufus_text(answer.get("question")),
+        "相关产品": clean_rufus_text_list(answer.get("related_products")),
+        "答案": clean_rufus_text(answer.get("answer")),
+        "推荐ASIN": clean_rufus_text_list(answer.get("recommended_asins")),
+        "总结": clean_rufus_text(answer.get("summary")),
     }
+
+
+def clean_rufus_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    text = text.replace("\\r\\n", " ").replace("\\n", " ").replace("\\r", " ")
+    text = re.sub(r"[\r\n]+", " ", text)
+    return re.sub(r"[ \t\f\v]+", " ", text).strip()
+
+
+def clean_rufus_text_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned = []
+    for item in value:
+        text = clean_rufus_text(item)
+        if text:
+            cleaned.append(text)
+    return cleaned
 
 
 def localize_amazon_scrape(payload: Any) -> dict[str, Any]:

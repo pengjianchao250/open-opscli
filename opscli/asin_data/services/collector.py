@@ -18,6 +18,7 @@ from types import ModuleType
 from typing import Any
 from uuid import uuid4
 
+from opscli.asin_data.services.report_files import AsinReportFileClient, AsinReportFileNotFoundError
 from opscli.amazon.services.manager import AmazonManager
 from opscli.amazon_rufus.services.answer_report_writer import AnswerReportWriter
 from opscli.amazon_rufus.services.manager import RufusManager
@@ -54,10 +55,12 @@ class AsinDataCollector:
         remote_consent_store: RemoteConsentStore | None = None,
         report_writer: AnswerReportWriter | None = None,
         file_upload_client: FileUploadClient | None = None,
+        report_file_client: AsinReportFileClient | None = None,
         legacy_module: ModuleType | None = None,
     ) -> None:
         self.legacy = legacy_module or load_legacy_collector()
         self.file_upload_client = file_upload_client or FileUploadClient()
+        self.report_file_client = report_file_client or AsinReportFileClient()
         self.runner = DirectOpsRunner(
             self.legacy,
             query_manager=query_manager,
@@ -90,6 +93,10 @@ class AsinDataCollector:
         original_run_or_plan = self.legacy.run_or_plan
         self.legacy.run_or_plan = self.runner.run_or_plan
         try:
+            report_files = None
+            if args.fetch_report_files and not args.dry_run:
+                report_files = self._fetch_report_files(records, [], error_log, require_all=True)
+
             query_bundle = {}
             if not args.skip_query:
                 query_bundle = self.legacy.collect_query_sources(args, records, output_root, command_log, error_log)
@@ -98,41 +105,60 @@ class AsinDataCollector:
             for record in records:
                 asin_result = self.legacy.collect_one_asin(args, record, output_root, command_log, error_log, query_bundle)
                 asin_results.append(asin_result)
+
+            if report_files is None and args.fetch_report_files and not args.dry_run:
+                report_files = self._fetch_report_files(records, asin_results, error_log)
+            elif report_files is not None:
+                self._attach_report_files(asin_results, report_files)
+
+            for asin_result in asin_results:
                 result_log.write(asin_result)
 
             summary = self.legacy.build_summary(records, asin_results, input_errors, output_root, started_at, args)
+            summary["options"]["fetch_report_files"] = args.fetch_report_files
+            if report_files is not None:
+                summary["report_files"] = report_files
             frontend_bundle = self.legacy.build_frontend_bundle(summary, asin_results)
             frontend_json_path = output_root / "frontend-data.json"
             frontend_markdown_path = output_root / "frontend-data.md"
             frontend_html_path = output_root / "frontend-data.html"
+            report_txt_path = self._write_report_txt(output_root, frontend_bundle, records)
             self.legacy.write_json(frontend_json_path, frontend_bundle)
             self.legacy.write_text(frontend_markdown_path, self.legacy.render_frontend_markdown(frontend_bundle))
             self.legacy.write_text(frontend_html_path, self._render_frontend_html(frontend_bundle))
             summary["files"]["frontend_html"] = frontend_html_path.as_posix()
+            summary["files"]["asin_report_txt"] = report_txt_path.as_posix()
             upload = None
             if args.upload:
-                upload = self._upload_frontend_json(
-                    frontend_json_path,
+                upload = self._upload_report_txt(
+                    report_txt_path,
                     run_id=run_id,
                     records=records,
                     summary=summary,
                 )
-                summary["files"]["frontend_data_url"] = upload["url"]
-                summary["files"]["frontend_json_url"] = upload["url"]
                 summary["files"]["frontend_upload_url"] = upload["url"]
+                summary["files"]["asin_report_upload_url"] = upload["url"]
                 summary["upload"] = upload
             self.legacy.write_json(output_root / "asin-data-summary.json", summary)
             self.legacy.write_json(output_root / "manifest.json", summary)
         finally:
             self.legacy.run_or_plan = original_run_or_plan
 
+        if isinstance(upload, dict):
+            upload = self._normalize_upload_paths(upload)
+            summary["upload"] = upload
+
+        report_file_url = self._single_report_file_url(summary.get("report_files"))
+        aliyun_url = report_file_url or (upload["url"] if upload else None)
         return {
             "success": True,
             "output_dir": output_root.as_posix(),
             "summary": summary["summary"],
             "manifest": summary,
             "upload": upload,
-            "aliyun_url": upload["url"] if upload else None,
+            "report_files": summary.get("report_files"),
+            "report_file_url": report_file_url,
+            "aliyun_url": aliyun_url,
         }
 
     def _build_args(self, **kwargs: Any) -> argparse.Namespace:
@@ -187,11 +213,128 @@ class AsinDataCollector:
             crawler_dataset_alias=kwargs.get("crawler_dataset_alias", self.legacy.DEFAULT_CRAWLER_ALIAS),
             crawler_field_mode=kwargs.get("crawler_field_mode", "full"),
             upload=kwargs.get("upload", False),
+            fetch_report_files=kwargs.get("fetch_report_files", False),
         )
         self._validate_args(args)
         return args
 
-    def _upload_frontend_json(
+    def _fetch_report_files(
+        self,
+        records: list[dict[str, Any]],
+        asin_results: list[dict[str, Any]],
+        error_log: Any,
+        *,
+        require_all: bool = False,
+    ) -> dict[str, Any]:
+        by_asin = {item.get("asin"): item for item in asin_results}
+        items: list[dict[str, Any]] = []
+        for record in records:
+            asin = str(record.get("asin") or "").strip().upper()
+            site = str(record.get("site") or "US").strip().upper()
+            payload: dict[str, Any]
+            try:
+                report_file = self.report_file_client.fetch(asin=asin, site=site)
+                payload = {
+                    "asin": asin,
+                    "site": site,
+                    "status": "success" if report_file.url else "not_found",
+                    "url": report_file.url,
+                    "record": report_file.record,
+                }
+                if require_all and not report_file.url:
+                    error_log.write(
+                        {
+                            "asin": asin,
+                            "source": "asin_report_files",
+                            "status": "not_found",
+                            "error_message": "report file url not found",
+                        }
+                    )
+                    raise AsinReportFileNotFoundError(asin=asin, site=site)
+            except Exception as exc:
+                if require_all:
+                    if isinstance(exc, AsinReportFileNotFoundError):
+                        raise
+                    error_log.write(
+                        {
+                            "asin": asin,
+                            "source": "asin_report_files",
+                            "status": "failed",
+                            "error_message": str(exc),
+                        }
+                    )
+                    raise AsinReportFileNotFoundError(
+                        asin=asin,
+                        site=site,
+                        message=f"取数服务异常：ASIN 报告地址接口查询失败（ASIN={asin}，站点={site}）：{exc}",
+                    ) from exc
+                payload = {
+                    "asin": asin,
+                    "site": site,
+                    "status": "failed",
+                    "url": None,
+                    "error_message": str(exc),
+                }
+                error_log.write(
+                    {
+                        "asin": asin,
+                        "source": "asin_report_files",
+                        "status": "failed",
+                        "error_message": str(exc),
+                    }
+                )
+            items.append(payload)
+            asin_result = by_asin.get(asin)
+            if isinstance(asin_result, dict):
+                asin_result["asin_report_file"] = payload
+                self._attach_report_file_to_frontend(asin_result, payload)
+        success_count = sum(1 for item in items if item.get("url"))
+        return {
+            "status": "success" if success_count == len(items) else ("partial" if success_count else "failed"),
+            "endpoint": "/dataMetrics/v1/asin-report-files",
+            "count": len(items),
+            "success_count": success_count,
+            "items": items,
+        }
+
+    def _attach_report_files(self, asin_results: list[dict[str, Any]], report_files: dict[str, Any]) -> None:
+        items = report_files.get("items")
+        if not isinstance(items, list):
+            return
+        by_asin = {
+            str(item.get("asin") or "").strip().upper(): item
+            for item in items
+            if isinstance(item, dict)
+        }
+        for asin_result in asin_results:
+            asin = str(asin_result.get("asin") or "").strip().upper()
+            payload = by_asin.get(asin)
+            if payload:
+                asin_result["asin_report_file"] = payload
+                self._attach_report_file_to_frontend(asin_result, payload)
+
+    @staticmethod
+    def _attach_report_file_to_frontend(asin_result: dict[str, Any], report_file: dict[str, Any]) -> None:
+        frontend_data = asin_result.get("frontend_data")
+        if not isinstance(frontend_data, dict):
+            return
+        base_section = frontend_data.get("基础数据")
+        if not isinstance(base_section, dict):
+            return
+        base_section["取数报告地址"] = report_file.get("url")
+        base_section["取数报告状态"] = report_file.get("status")
+
+    @staticmethod
+    def _single_report_file_url(report_files: Any) -> str | None:
+        if not isinstance(report_files, dict):
+            return None
+        items = report_files.get("items")
+        if not isinstance(items, list) or len(items) != 1:
+            return None
+        url = items[0].get("url") if isinstance(items[0], dict) else None
+        return url if isinstance(url, str) and url.strip() else None
+
+    def _upload_report_txt(
         self,
         path: Path,
         *,
@@ -199,39 +342,68 @@ class AsinDataCollector:
         records: list[dict[str, Any]],
         summary: dict[str, Any],
     ) -> dict[str, Any]:
-        upload_path = self._prepare_frontend_json_upload_file(path)
         upload = self.file_upload_client.upload(
-            upload_path,
-            purpose="asin_data_frontend_json",
+            path,
+            purpose="asin_data_report_txt",
             folder="asin-data",
             public="1",
             metadata={
                 "run_id": run_id,
                 "asin_count": len(records),
                 "asins": [record.get("asin") for record in records],
-                "frontend_json": "frontend-data.json",
-                "frontend_data": "frontend-data.json",
+                "report_type": "asin_data_report_txt",
+                "report_filename": path.name,
                 "frontend_html": "frontend-data.html",
                 "frontend_markdown": "frontend-data.md",
                 "source_filename": path.name,
-                "upload_filename": upload_path.name,
+                "upload_filename": path.name,
                 "summary": summary.get("summary"),
             },
         )
         return {
             "url": upload.url,
-            "path": str(path),
-            "upload_path": str(upload_path),
-            "purpose": "asin_data_frontend_json",
+            "path": path.as_posix(),
+            "upload_path": path.as_posix(),
+            "purpose": "asin_data_report_txt",
             "folder": "asin-data",
             "raw": upload.raw,
         }
 
     @staticmethod
-    def _prepare_frontend_json_upload_file(path: Path) -> Path:
-        upload_path = path.with_suffix(".txt")
-        upload_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8-sig")
-        return upload_path
+    def _normalize_upload_paths(upload: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(upload)
+        for key in ("path", "upload_path"):
+            if normalized.get(key):
+                normalized[key] = str(normalized[key]).replace("\\", "/")
+        return normalized
+
+    def _write_report_txt(self, output_root: Path, frontend_bundle: dict[str, Any], records: list[dict[str, Any]]) -> Path:
+        report_path = output_root / self._report_txt_filename(records)
+        report_text = self._render_report_txt(frontend_bundle, records)
+        with report_path.open("w", encoding="utf-8-sig", newline="\n") as handle:
+            handle.write(report_text)
+        return report_path
+
+    def _render_report_txt(self, frontend_bundle: dict[str, Any], records: list[dict[str, Any]]) -> str:
+        markdown = self.legacy.render_frontend_markdown(frontend_bundle)
+        asin = self._single_record_asin(records)
+        if asin:
+            return markdown.replace("# ASIN取数完整数据", f"# ASIN 取数汇总报告 - {asin}", 1)
+        return markdown.replace("# ASIN取数完整数据", "# ASIN 取数汇总报告", 1)
+
+    @classmethod
+    def _report_txt_filename(cls, records: list[dict[str, Any]]) -> str:
+        asin = cls._single_record_asin(records)
+        if asin:
+            return f"{asin}-asin-data-report.txt"
+        return "asin-data-report.txt"
+
+    @staticmethod
+    def _single_record_asin(records: list[dict[str, Any]]) -> str | None:
+        if len(records) != 1:
+            return None
+        asin = str(records[0].get("asin") or "").strip().upper()
+        return asin or None
 
     @staticmethod
     def _render_frontend_html(frontend_bundle: dict[str, Any]) -> str:

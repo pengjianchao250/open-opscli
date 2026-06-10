@@ -119,7 +119,8 @@ Main files:
 - `asin-data.jsonl`: one normalized record per ASIN, including `frontend_data`.
 - `frontend-data.json`: aggregate frontend-friendly JSON with Chinese section names.
 - `frontend-data.html`: local human-readable HTML handoff; upload is not used because the file service rejects html.
-- `--upload` / `--url-only`: uploads `frontend-data.json` and returns this OSS URL.
+- `<ASIN>-asin-data-report.txt`: UTF-8 BOM report uploaded by default when `--upload` is enabled.
+- `--fetch-report-files`: before real collection, fetches the latest report URL from `/dataMetrics/v1/asin-report-files?asin=...&site=...`; missing URL fails the command with a `取数服务异常` error.
 - `frontend-data.md`: local Markdown handoff for operators.
 - `asin-data-summary.json`: compact success/error counts.
 - `commands.jsonl`: command plan and execution status.

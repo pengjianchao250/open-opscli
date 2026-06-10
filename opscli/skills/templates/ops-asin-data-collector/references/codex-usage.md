@@ -137,7 +137,7 @@ opscli asin-data collect \
 
 ### URL-Only Output
 
-Use when another system only needs the uploaded frontend JSON URL.
+Use when another system only needs the ASIN report file URL.
 
 ```bash
 opscli asin-data collect \
@@ -147,7 +147,7 @@ opscli asin-data collect \
   --url-only
 ```
 
-`--url-only` requires upload to succeed. Upload is enabled by default. Use `--no-upload` only when the caller wants local files only.
+`--url-only` returns the single-ASIN report URL from `/dataMetrics/v1/asin-report-files?asin=...&site=...`. When `--fetch-report-files` is enabled and the interface returns no URL, the command fails with `取数服务异常`; use `--no-fetch-report-files` only for debugging or when the caller explicitly wants to skip the report-file lookup.
 
 ## Parameter Rules
 
@@ -164,6 +164,7 @@ opscli asin-data collect \
 | `--rufus-question` | default 6 questions | Repeat to override Rufus questions; supports `{{asin}}` |
 | `--skip-*` flags | false | Use for staged validation or when a data source is unavailable |
 | `--sales-field-mode`, `--crawler-field-mode` | `full` | Use `compatible` when remote metadata lacks newer fields |
+| `--fetch-report-files/--no-fetch-report-files` | `--fetch-report-files` | Precheck latest report URL from `/dataMetrics/v1/asin-report-files`; fail when missing |
 
 ## Output Contract
 
@@ -177,8 +178,9 @@ Key response fields:
 | `data.output_dir` | run output directory |
 | `data.summary` | compact run counts |
 | `data.manifest` | full run manifest |
-| `data.upload` | upload metadata when upload succeeds |
-| `data.aliyun_url` | uploaded `frontend-data.json` URL when available |
+| `data.upload` | uploaded `<ASIN>-asin-data-report.txt` metadata when upload succeeds |
+| `data.report_file_url` | single-ASIN report URL from `/dataMetrics/v1/asin-report-files`, when available |
+| `data.aliyun_url` | `data.report_file_url` when available, otherwise uploaded report txt URL |
 
 Default files under `data.output_dir`:
 
@@ -187,6 +189,7 @@ Default files under `data.output_dir`:
 | `frontend-data.json` | primary frontend data package |
 | `frontend-data.html` | local human-readable handoff; not uploaded |
 | `frontend-data.md` | local Markdown handoff |
+| `<ASIN>-asin-data-report.txt` | uploaded UTF-8 BOM report txt for single-ASIN runs |
 | `asin-data.jsonl` | one normalized record per ASIN |
 | `asin-data-summary.json` | compact summary |
 | `manifest.json` | run manifest |

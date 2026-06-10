@@ -127,7 +127,7 @@ opscli asin-data collect \
   --pretty
 ```
 
-默认会上传 `frontend-data.json`，成功时返回 `data.aliyun_url`。如果只要本地文件：
+默认会上传 UTF-8 BOM 格式的 `ASIN-asin-data-report.txt`，成功时返回 `data.upload.url`；`data.aliyun_url` 优先使用 `/dataMetrics/v1/asin-report-files` 返回的报告地址。如果只要本地文件：
 
 ```bash
 opscli asin-data collect \
@@ -239,8 +239,9 @@ opscli asin-data collect \
 | `--crawler-table-id` | 空 | 爬虫 Listing table_id；已验证 `custom_crawler_amazon_details` 为 `43` |
 | `--crawler-dataset-alias` | `ds_icw50TLOFu4F` | 爬虫 Listing 数据集 alias |
 | `--crawler-field-mode` | `full` | 爬虫字段模式；必要时用 `compatible` |
-| `--upload/--no-upload` | `--upload` | 是否上传 `frontend-data.json` 并返回阿里云 URL |
-| `--url-only` | `false` | 只输出上传 URL |
+| `--fetch-report-files/--no-fetch-report-files` | `--fetch-report-files` | 是否先从 `/dataMetrics/v1/asin-report-files` 获取最新报告地址；无 URL 时直接报错 |
+| `--upload/--no-upload` | `--upload` | 是否上传 UTF-8 BOM 的 `ASIN-asin-data-report.txt` |
+| `--url-only` | `false` | 只输出报告地址；单 ASIN 使用报告文件接口 URL |
 | `--pretty` | `false` | 格式化 JSON 输出 |
 
 常见跳过参数：
@@ -271,6 +272,7 @@ output/asin-data/<run_id>/
 | `frontend-data.json` | 前端优先读取的结构化数据包 |
 | `frontend-data.html` | 本地 HTML 预览文件，不上传 |
 | `frontend-data.md` | 本地保留的 Markdown 交接文件 |
+| `<ASIN>-asin-data-report.txt` | 单 ASIN 取数报告；UTF-8 BOM，上传文件名保持该格式 |
 | `asin-data.jsonl` | 每个 ASIN 一行的完整统一结果 |
 | `asin-data-summary.json` | 汇总统计 |
 | `manifest.json` | 本次运行参数、文件路径、摘要 |
@@ -287,8 +289,9 @@ output/asin-data/<run_id>/
 | `data.output_dir` | 输出目录 |
 | `data.summary` | 简要统计 |
 | `data.manifest` | 完整 manifest |
-| `data.upload` | 上传结果 |
-| `data.aliyun_url` | 上传后的 `frontend-data.json` URL |
+| `data.upload` | 上传后的报告 txt 结果 |
+| `data.report_file_url` | `/dataMetrics/v1/asin-report-files` 返回的报告 URL |
+| `data.aliyun_url` | 优先为 `data.report_file_url`，否则为上传报告 txt URL |
 
 ## 8. 前端数据结构
 
@@ -321,5 +324,5 @@ docs/guide/ASIN取数前端数据结构.md
 - 如果爬虫 metadata 解析失败，优先传 `--crawler-table-id 43`，或用 `--skip-crawler-query` 暂时跳过爬虫来源。
 - 如果远端 metadata 字段缺失导致字段校验失败，可尝试 `--sales-field-mode compatible` 或 `--crawler-field-mode compatible`。
 - Alexa 默认问题为 6 个 Listing 诊断问题；如需替换，可重复传 `--rufus-question "..."`。
-- `--url-only` 依赖上传成功；如果只需要本地文件，不要传 `--url-only`。
+- `--fetch-report-files` 默认开启，单 ASIN 会先查 `/dataMetrics/v1/asin-report-files`；接口无结果时直接返回 `取数服务异常`，不会继续静默回退。
 - Windows PowerShell 下不要手写复杂内联 JSON；本命令不要求用户手写 query JSON。
