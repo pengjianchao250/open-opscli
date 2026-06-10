@@ -1,6 +1,6 @@
 ---
 name: ops-sif-mcp
-description: Use Sif MCP tools for Sif 查销量、查流量、多产品对比 exports. Prefer MCP when running inside a client connected to opscli-mcp.
+description: Use Sif MCP tools for Sif 查销量、查流量、多产品对比、查排名、运营时光机、产品时光机 exports. Prefer MCP when running inside a client connected to opscli-mcp.
 ---
 
 # ops-sif MCP
@@ -21,6 +21,9 @@ The service reads Sif credentials from OPS integration account platform `sif`, t
 - `查销量`: one ASIN.
 - `查流量`: one ASIN.
 - `多产品对比`: at least two ASINs. Pass them as comma-separated `asin` or as `asins`.
+- `查排名`: one ASIN.
+- `运营时光机`: one ASIN.
+- `产品时光机`: one keyword.
 
 ## Optional Params
 
@@ -28,6 +31,10 @@ The service reads Sif credentials from OPS integration account platform `sif`, t
 - `sections`: optional list or comma-separated text. Omit to download all sections.
 - `time_piece_type`: `latelyDay`, `week`, or `month`, where supported.
 - `time_piece_value`: value for the selected time type.
+- `keyword`: required for `产品时光机`.
+- `granularity`: `week/month` for ranking; `day/week/month` for operation time machine.
+- `last_months`: operation time machine supports `3/6/12/24`, default `6`.
+- `change_type`: operation time machine, use `all` for 流量词数量变化.
 - `page_num`: default `1`.
 - `page_size`: use when the user asks for a specific row count.
 - `output_dir`: optional; normally omit so the service writes to the user-level opscli config directory.
@@ -50,12 +57,16 @@ The service reads Sif credentials from OPS integration account platform `sif`, t
 | 对比流量分 | `多产品对比` | `对比流量分` |
 | 重点流量词 | `多产品对比` | `重点流量词` |
 | 重点广告词 | `多产品对比` | `重点广告词` |
+| 查排名, 每日排名, 推排名, 查坑位 | `查排名` | omit |
+| 运营时光机, 运营流量趋势, 流量变化 | `运营时光机` | `流量变化` |
+| 流量词数量变化 | `运营时光机` | `流量词数量变化` |
+| 产品时光机, 关键词产品时光机 | `产品时光机` | omit |
 
-ASCII aliases are also supported: `sales`, `traffic`, `traffic-keywords`, `compare`.
+ASCII aliases are also supported: `sales`, `traffic`, `traffic-keywords`, `compare`, `ranking`, `operation-time-machine`, `keyword-product-time-machine`.
 
 ## Site Mapping
 
-Pass a Sif country code through `site`.
+Pass a Sif country code through `site`. Supported values are resolved by `opscli.sif.sites.SITE_ALIASES`, the same mapping used by all Sif CLI features.
 
 | User text | site |
 | --- | --- |
@@ -91,6 +102,26 @@ If the user asks for the last 7 or 30 days, use `latelyDay` with `7` or `30`.
 If the user asks for a month, use `month` with `YYYY-MM`.
 If the user asks for a week, use `week` with the first day of that week as `YYYY-MM-DD`.
 
+For `查排名`, default to:
+
+```json
+{"granularity":"week"}
+```
+
+For `运营时光机`, default to:
+
+```json
+{"granularity":"day","last_months":6}
+```
+
+Use `change_type:"all"` only when the user asks for 流量词数量变化.
+
+For `产品时光机`, default to:
+
+```json
+{"time_piece_type":"latelyDay","time_piece_value":"7"}
+```
+
 ## Examples
 
 Run sales for one ASIN:
@@ -116,6 +147,24 @@ Only download key ad keywords for multiple products:
 }
 ```
 
+Run ranking:
+
+```json
+{"feature":"查排名","asin":"B0BMW2985V","site":"US","granularity":"week"}
+```
+
+Run operation time machine keyword count change:
+
+```json
+{"feature":"运营时光机","asin":"B01NBNDC1T","sections":["流量词数量变化"],"last_months":6,"granularity":"day","change_type":"all"}
+```
+
+Run product time machine:
+
+```json
+{"feature":"产品时光机","keyword":"balloon pump","site":"US"}
+```
+
 ## Output
 
 `sif_run` returns `exports`, where every item includes:
@@ -132,7 +181,7 @@ It also returns top-level `download_links`. Use `download_links[].markdown` when
 
 When OPS file upload is available, `url` is the remote downloadable link. If upload is unavailable, `url` is a `file://` link to the local service file.
 
-Do not expose Sif credentials in the answer. Report concise result info: feature, ASIN or ASIN count, site, and XLSX filenames/links. Prefer this format:
+Do not expose Sif credentials in the answer. Report concise result info: feature, ASIN, ASIN count, keyword, site, and XLSX filenames/links. Prefer this format:
 
 ```markdown
 - 流量结构: [流量结构_B01NBNDC1T_1780000000001.xlsx](download-url)

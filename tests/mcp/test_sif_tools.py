@@ -25,6 +25,7 @@ class DummyManager:
             feature=request.feature,
             provider="sif",
             asin=request.asin,
+            keyword=request.keyword,
             site=request.site,
             root_dir=str(Path("output/test-artifacts/job-sif").resolve()),
             params_path=str(Path("output/test-artifacts/job-sif/params.json").resolve()),
@@ -101,6 +102,42 @@ def test_sif_run_accepts_asins_list_for_compare(monkeypatch):
     assert DummyManager.last_request.asin == "B075WPKK5P,B07KVV8RFF"
     assert DummyManager.last_request.asins == ["B075WPKK5P", "B07KVV8RFF"]
     assert DummyManager.last_request.sections == ["重点广告词"]
+
+
+def test_sif_run_accepts_product_time_machine_keyword(monkeypatch):
+    monkeypatch.setattr("opscli.sif.services.SifServiceManager", lambda **kwargs: DummyManager(**kwargs))
+
+    result = _run(
+        sif_tools.sif_run(
+            feature="产品时光机",
+            keyword="balloon pump",
+            site="US",
+        )
+    )
+
+    assert result["success"] is True
+    assert DummyManager.last_request.asin == ""
+    assert DummyManager.last_request.keyword == "balloon pump"
+    assert DummyManager.last_request.time_piece_value == "7"
+
+
+def test_sif_run_accepts_operation_time_machine_options(monkeypatch):
+    monkeypatch.setattr("opscli.sif.services.SifServiceManager", lambda **kwargs: DummyManager(**kwargs))
+
+    result = _run(
+        sif_tools.sif_run(
+            feature="运营时光机",
+            asin="B01NBNDC1T",
+            granularity="week",
+            last_months=12,
+            change_type="all",
+        )
+    )
+
+    assert result["success"] is True
+    assert DummyManager.last_request.granularity == "week"
+    assert DummyManager.last_request.last_months == 12
+    assert DummyManager.last_request.change_type == "all"
 
 
 def test_sif_export_returns_export_info(monkeypatch):
