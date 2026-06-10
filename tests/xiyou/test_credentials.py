@@ -16,6 +16,7 @@ from opscli.xiyou.credential_service import (
 )
 from opscli.xiyou.credentials import XiyouCredentialProvider, XiyouCredentialStore
 from opscli.xiyou.domain.exceptions import XiyouConfigError
+from opscli.mcp.context import mcp_request_ctx
 
 
 @pytest.fixture
@@ -96,6 +97,13 @@ def test_credential_provider_prefers_remote_latest_when_configured(local_tmp_pat
     token = _jwt()
     calls = []
 
+    class BlockingAuthClient:
+        def build_request_auth(self, alias):
+            raise AssertionError("CLI auth should not be used when explicit credential API key is configured")
+
+        def get_token_by_session(self, session_id, alias):
+            raise AssertionError("session token should not be fetched")
+
     class Response:
         status_code = 200
         text = "{}"
@@ -125,7 +133,7 @@ def test_credential_provider_prefers_remote_latest_when_configured(local_tmp_pat
         credential_latest_url="https://ops.example.com/api/internal/xiyou/credential/latest",
         credential_api_key="secret",
     )
-    client = XiyouCredentialServiceClient(settings, http_get=http_get)
+    client = XiyouCredentialServiceClient(settings, auth_client=BlockingAuthClient(), http_get=http_get)
     credential = get_cached_remote_credential(settings, client=client, refresh=True)
 
     assert credential.authorization == token
@@ -139,6 +147,15 @@ def test_credential_provider_prefers_remote_latest_when_configured(local_tmp_pat
 def test_remote_credential_cache_can_be_forced_to_refresh(local_tmp_path: Path):
     tokens = [_jwt(seconds=3600), _jwt(seconds=7200)]
     calls = []
+
+    class RecordingAuthClient:
+        def build_request_auth(self, alias):
+            return {"Authorization": "Bearer cli-jwt", "X-Opscli-Version": "test"}, {
+                "polarisUserToken": "cli-session"
+            }
+
+        def get_token_by_session(self, session_id, alias):
+            raise AssertionError("session token should not be fetched")
 
     class Response:
         status_code = 200
@@ -158,7 +175,7 @@ def test_remote_credential_cache_can_be_forced_to_refresh(local_tmp_path: Path):
         credential_latest_url="https://ops.example.com/api/internal/xiyou/credential/latest",
         credential_cache_ttl_seconds=600,
     )
-    client = XiyouCredentialServiceClient(settings, http_get=http_get)
+    client = XiyouCredentialServiceClient(settings, auth_client=RecordingAuthClient(), http_get=http_get)
 
     first = get_cached_remote_credential(settings, client=client, refresh=True)
     second = get_cached_remote_credential(settings, client=client)
