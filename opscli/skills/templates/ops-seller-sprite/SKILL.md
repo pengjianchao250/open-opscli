@@ -131,7 +131,11 @@ For `product-research`, 推荐模式传 `params.recommendationMode`，可用值�
 
 `product-research` 枚举参数：
 
-- `productTags`：商品标识数组，可用 `BestSeller`、`AmazonChoice`、`NewRelease`
+- `productTags`：商品标识数组，可用 `BestSeller`、`AmazonChoice`、`NewRelease`、`A+`、`NonA+`
+  - 仅勾选 A+：`productTags` 加 `"A+"`
+  - 仅勾选 不含A+：`productTags` 加 `"NonA+"`
+  - 同时勾选 A+ 和 不含A+：不传 `"A+"` 和 `"NonA+"`
+  - 两者都不勾选：不传 `"A+"` 和 `"NonA+"`
 - `sellerTypes`：配送方式数组，可用 `AMZ`、`FBA`、`FBM`
 - `pkgDimensionTypeList`：包装尺寸分段数组，可用 `SS`、`LS`、`SB`、`LB`、`ELO`、`EL5O`、`EL7O`、`EL15O`、`O`
 - `sellerNationList`：卖家所属地数组，如 `CN`、`US`、`JP`、`GB`、`DE`
