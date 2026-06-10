@@ -37,6 +37,16 @@ class DummyCredentialProvider:
         return XiyouCredential(authorization="token", cookie="cookie=value")
 
 
+class DisabledUploadClient:
+    def __init__(self, *, jwt=None, session_id=None):
+        self.jwt = jwt
+        self.session_id = session_id
+
+    @property
+    def enabled(self):
+        return False
+
+
 class DummyApiClient:
     calls = []
 
@@ -112,6 +122,11 @@ class DummyUploadClient:
             url = "https://ops.example.com/download/job-json.json"
 
         return Result()
+
+
+@pytest.fixture(autouse=True)
+def disable_real_file_upload_client(monkeypatch):
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
 
 
 def test_manager_writes_job_files_and_json(monkeypatch, local_tmp_path: Path):
@@ -192,6 +207,30 @@ def test_manager_uploads_export_and_returns_download_url(monkeypatch, local_tmp_
 
     saved = json.loads((local_tmp_path / "job-json" / "result.json").read_text(encoding="utf-8"))
     assert saved["export"]["url"] == "https://ops.example.com/download/job-json.json"
+
+
+def test_manager_passes_explicit_session_and_jwt_to_default_credential_provider(local_tmp_path: Path):
+    captured = {}
+
+    class RecordingCredentialProvider:
+        def __init__(self, settings, *, auth_client=None, jwt=None, session_id=None):
+            captured["settings"] = settings
+            captured["auth_client"] = auth_client
+            captured["jwt"] = jwt
+            captured["session_id"] = session_id
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(api_manager_module, "XiyouCredentialProvider", RecordingCredentialProvider)
+    try:
+        settings = XiyouSettings(output_dir=local_tmp_path, authorization=None, cookie=None)
+        manager = XiyouApiManager(settings=settings, jwt="jwt-token", session_id="session-id")
+    finally:
+        monkeypatch.undo()
+
+    assert isinstance(manager.credential_provider, RecordingCredentialProvider)
+    assert captured["settings"] == settings
+    assert captured["jwt"] == "jwt-token"
+    assert captured["session_id"] == "session-id"
 
 
 def test_manager_writes_xlsx(monkeypatch, local_tmp_path: Path):

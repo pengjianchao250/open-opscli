@@ -267,6 +267,49 @@ def test_credential_service_uses_mcp_api_key_without_cli_auth():
     assert cookies == {}
 
 
+def test_credential_provider_passes_explicit_session_and_jwt_to_remote_client():
+    token = _jwt()
+    captured = {}
+
+    class DummyServiceClient:
+        def __init__(self, settings, *, auth_client=None, jwt=None, session_id=None, http_get=None):
+            captured["settings"] = settings
+            captured["auth_client"] = auth_client
+            captured["jwt"] = jwt
+            captured["session_id"] = session_id
+
+    def fake_get_cached_remote_credential(settings, *, refresh=False, client=None):
+        captured["cached_settings"] = settings
+        captured["cached_client"] = client
+        return XiyouCredentialProvider(
+            XiyouSettings(authorization=token, cookie="sid=remote")
+        ).get_default()
+
+    import opscli.xiyou.credential_service as credential_service_module
+
+    original_client = credential_service_module.XiyouCredentialServiceClient
+    original_cached = credential_service_module.get_cached_remote_credential
+    credential_service_module.XiyouCredentialServiceClient = DummyServiceClient
+    credential_service_module.get_cached_remote_credential = fake_get_cached_remote_credential
+    try:
+        settings = XiyouSettings(
+            credential_latest_url="https://ops.api.qa.aukeyit.com/api/v1/mcp-accounts?platform=xiyou"
+        )
+        provider = XiyouCredentialProvider(settings, jwt="explicit-jwt", session_id="explicit-session")
+
+        credential = provider.get_default()
+    finally:
+        credential_service_module.XiyouCredentialServiceClient = original_client
+        credential_service_module.get_cached_remote_credential = original_cached
+
+    assert credential.authorization == token
+    assert captured["settings"] == settings
+    assert captured["cached_settings"] == settings
+    assert captured["jwt"] == "explicit-jwt"
+    assert captured["session_id"] == "explicit-session"
+    assert isinstance(captured["cached_client"], DummyServiceClient)
+
+
 def test_credential_service_debug_logs_request_and_response(monkeypatch, capsys):
     token = _jwt()
     monkeypatch.setenv("OPSCLI_XIYOU_DEBUG_CREDENTIAL_REQUEST", "1")

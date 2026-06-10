@@ -18,31 +18,58 @@ ChatGPT connector 配置示例：
   Connector URL: https://<your-domain>/mcp
   （注意：ChatGPT 需要公网 HTTPS，本地地址仅供开发调试）
 
-INFO:     127.0.0.1:50017 - "POST /mcp HTTP/1.1" 401 Unauthorized
-INFO:     127.0.0.1:50017 - "GET /sse HTTP/1.1" 401 Unauthorized
-INFO:     127.0.0.1:50079 - "GET /.well-known/oauth-authorization-server/mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:50083 - "GET /mcp/.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:50084 - "GET /.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:50085 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50086 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 202 Accepted
-INFO:     127.0.0.1:50088 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50087 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50089 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50090 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50091 - "DELETE /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50113 - "GET /.well-known/oauth-authorization-server/mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:50114 - "GET /mcp/.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:50115 - "GET /.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:50116 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50117 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 202 Accepted
-INFO:     127.0.0.1:50118 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50119 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50140 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50170 - "GET /.well-known/oauth-authorization-server/mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:50170 - "GET /mcp/.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:50173 - "GET /.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:50174 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50175 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 202 Accepted
-INFO:     127.0.0.1:50176 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50177 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
-INFO:     127.0.0.1:50178 - "DELETE /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52235 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52236 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52243 - "POST /mcp HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:52243 - "GET /sse HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:52249 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52250 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52425 - "GET /.well-known/oauth-authorization-server/mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52425 - "GET /mcp/.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52425 - "GET /.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52426 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52427 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:52428 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52429 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52430 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52431 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52432 - "DELETE /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52448 - "GET /.well-known/oauth-authorization-server/mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52448 - "GET /mcp/.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52449 - "GET /.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52451 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52452 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:52453 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52454 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52456 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52457 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52473 - "GET /.well-known/oauth-authorization-server/mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52478 - "GET /mcp/.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52473 - "GET /.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52479 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52480 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:52481 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52482 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52483 - "GET /.well-known/oauth-authorization-server/mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52483 - "GET /mcp/.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52484 - "GET /.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52486 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52487 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:52488 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52489 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52513 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52517 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52527 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52542 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52543 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52554 - "GET /.well-known/oauth-authorization-server/mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52554 - "GET /mcp/.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52556 - "GET /.well-known/oauth-authorization-server?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52557 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52558 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:52559 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52560 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52561 - "DELETE /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52582 - "POST /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52612 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52611 - "GET /mcp?api_key=mcp_usr_be9AzOBH4UlnHhooB5IW1vc3Vwonq16bWZtYmfbxNoOgpYtB HTTP/1.1" 404 Not Found
