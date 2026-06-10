@@ -118,8 +118,7 @@ async def keepa_export(job_id: str) -> dict:
         export = status.get("export")
         if not export:
             raise ValueError(f"任务无导出文件：{job_id}")
-        if export.get("path") and not export.get("url"):
-            export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
+        _ensure_export_url(export)
         return _ok(export)
     except Exception as exc:
         return _err(exc, tool="MCP → keepa_export(...)", call_params={"job_id": job_id})
@@ -142,9 +141,17 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         public.pop("account", None)
         public.pop("params_path", None)
         public.pop("raw_path", None)
+        _ensure_export_url(public.get("export"))
         _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
     return public
+
+
+def _ensure_export_url(export: Any) -> None:
+    if not isinstance(export, dict):
+        return
+    if export.get("path") and not export.get("url"):
+        export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
 
 
 def _compact_public_data(public: dict[str, Any]) -> None:

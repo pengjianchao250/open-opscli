@@ -108,7 +108,7 @@ class AsinDataCollector:
             self.legacy.write_json(frontend_json_path, frontend_bundle)
             self.legacy.write_text(frontend_markdown_path, self.legacy.render_frontend_markdown(frontend_bundle))
             self.legacy.write_text(frontend_html_path, self._render_frontend_html(frontend_bundle))
-            summary["files"]["frontend_html"] = str(frontend_html_path)
+            summary["files"]["frontend_html"] = frontend_html_path.as_posix()
             upload = None
             if args.upload:
                 upload = self._upload_frontend_json(
@@ -128,7 +128,7 @@ class AsinDataCollector:
 
         return {
             "success": True,
-            "output_dir": str(output_root),
+            "output_dir": output_root.as_posix(),
             "summary": summary["summary"],
             "manifest": summary,
             "upload": upload,
@@ -465,7 +465,11 @@ class DirectOpsRunner:
     def _dispatch(self, *, source: str, command: list[str]) -> tuple[Any, str]:
         if source == "query.metadata":
             return self._run_query_metadata(command), ""
-        if source in {"query.sales", "query.crawler_listing"}:
+        if source == "query.sales":
+            return self._run_query_simple(command), ""
+        if source == "query.crawler_listing":
+            if len(command) > 2 and command[2] == "run":
+                return self._run_query_run(command), ""
             return self._run_query_simple(command), ""
         if source.startswith("seller_sprite."):
             return self._run_seller_sprite(command), ""
@@ -507,6 +511,11 @@ class DirectOpsRunner:
             validate_fields=True,
         )
         return {"success": True, "command": "query simple-run", "data": result, "error": None}
+
+    def _run_query_run(self, command: list[str]) -> dict[str, Any]:
+        payload_path = _required_option(command, "--payload")
+        result = self.query_manager.run(payload_path=payload_path)
+        return {"success": True, "command": "query run", "data": result, "error": None}
 
     def _run_seller_sprite(self, command: list[str]) -> dict[str, Any]:
         scenario = command[3] if len(command) > 3 else ""

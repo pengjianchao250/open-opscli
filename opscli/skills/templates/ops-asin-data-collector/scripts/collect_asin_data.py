@@ -23,7 +23,58 @@ KEYWORD_SELLER_SPRITE_EXPORT_FORMAT = "xlsx"
 KEYWORD_SELLER_SPRITE_INLINE_ROWS = False
 DEFAULT_LISTING_ANALYSIS_POLL_ATTEMPTS = 180
 DEFAULT_LISTING_ANALYSIS_POLL_INTERVAL_SECONDS = 2.0
-CRAWLER_DATE_FIELDS = ("f_date_id", "date_id")
+CRAWLER_DATE_FIELDS = ("f_date_id", "date_id", "日期")
+CRAWLER_ASIN_FIELDS = ("f_asin", "asin", "ASIN")
+CRAWLER_CURRENT_FIELDS = (
+    ("date_id", "日期", False),
+    ("asin", "ASIN", False),
+    ("listing", "商品标题", False),
+    ("subplot", "副图", True),
+    ("subplot_count", "副图数量", False),
+    ("video", "视频", True),
+    ("video_count", "视频数量", False),
+    ("categories", "类目", True),
+    ("image", "主图", False),
+    ("price_list", "价格列表", True),
+    ("five_point_description", "五点描述", True),
+    ("five_point_description_count", "五点描述数量", False),
+    ("info", "信息", True),
+    ("cs_info_list", "跟卖信息列表", True),
+    ("a_image", "A+图片", True),
+    ("a_image_count", "A+图片数量", False),
+    ("a_description", "A+文案", True),
+    ("description", "商品描述", False),
+    ("product_details", "产品详情", True),
+    ("rating", "星级评分", False),
+    ("rating_count", "评分数量", False),
+    ("rating_stars_distribution", "星级分布", True),
+    ("qa", "QA", True),
+    ("qa_count", "QA数量", False),
+    ("high_frequency_word", "高频词", True),
+    ("high_frequency_word_count", "高频词数量", False),
+    ("review_count", "评论数量", False),
+    ("review_list", "评论列表", True),
+    ("customer_ratings_by_feature", "按功能评分", True),
+    ("related", "相关商品", True),
+    ("recommend", "推荐商品", True),
+    ("variant", "变体", True),
+    ("variant_count", "变体数量", False),
+    ("original_price", "原价", False),
+    ("unit_price", "单价", False),
+    ("reduction", "降价比例", False),
+    ("coupon", "优惠券", False),
+    ("promo_code", "促销码", False),
+    ("promo_code_value", "促销值", False),
+    ("deal_type", "Deal类型", False),
+    ("deal", "Deal", False),
+    ("country", "国家", False),
+    ("currency", "币种", False),
+    ("link", "商品链接", False),
+    ("major_rank", "大类排名", False),
+    ("subclass_rank", "小类排名", False),
+)
+CRAWLER_FIELD_LABELS = {field: label for field, label, _ in CRAWLER_CURRENT_FIELDS}
+CRAWLER_JSON_FIELDS = {field for field, _, cast_to_string in CRAWLER_CURRENT_FIELDS if cast_to_string}
 DEFAULT_RUFUS_QUESTIONS = (
     "标题清晰度：分析 ASIN {{asin}} 的标题是否清楚，是否能让买家搜索到产品并愿意点击查看详情？按：标题｜问题｜依据｜建议改为 输出。",
     "五点优化方向：分析 ASIN {{asin}} 的五点卖点，从消费者决策路径与商品信息表达优化的角度，对该商品进行系统分析。按：五点｜问题｜依据｜建议改为 输出。",
@@ -256,7 +307,7 @@ def main() -> None:
     write_json(output_root / "asin-data-summary.json", summary)
     write_json(output_root / "manifest.json", summary)
 
-    print(json.dumps({"success": True, "output_dir": str(output_root), "summary": summary["summary"]}, ensure_ascii=False, indent=2))
+    print(json.dumps({"success": True, "output_dir": json_path(output_root), "summary": summary["summary"]}, ensure_ascii=False, indent=2))
 
 
 def parse_args() -> argparse.Namespace:
@@ -437,6 +488,8 @@ def collect_query_sources(
         crawler_args = argparse.Namespace(**vars(args))
         crawler_args.crawler_dataset_alias = crawler_query_alias
         crawler_args.crawler_sites = sorted({str(record.get("site") or "").upper() for record in records if record.get("site")})
+        # Query crawler rows one ASIN at a time so the remote date-desc limit returns the latest row per ASIN.
+        crawler_args.query_chunk_size = 1
         crawler_result = run_query_chunks(
             source="query.crawler_listing",
             table_id=crawler_table_id,
@@ -479,6 +532,7 @@ def collect_one_asin(
     asin_dir.mkdir(parents=True, exist_ok=True)
 
     errors: list[dict[str, Any]] = []
+    crawler_rows = localize_crawler_source_rows(rows_for_asin(query_bundle.get("crawler_listing"), asin))
     result = {
         "asin": asin,
         "site": site,
@@ -495,7 +549,7 @@ def collect_one_asin(
         "rufus": {},
         "query": {
             "sales": rows_for_asin(query_bundle.get("sales"), asin),
-            "crawler_listing": rows_for_asin(query_bundle.get("crawler_listing"), asin),
+            "crawler_listing": crawler_rows,
         },
         "errors": errors,
     }
@@ -990,6 +1044,8 @@ def build_sales_compatible_payload(args: argparse.Namespace, asins: list[str]) -
 
 
 def build_crawler_payload(args: argparse.Namespace, asins: list[str]) -> dict[str, Any]:
+    return build_crawler_current_payload(args, asins)
+
     if getattr(args, "crawler_field_mode", "full") == "compatible":
         return build_crawler_compatible_payload(args, asins)
 
@@ -1052,6 +1108,8 @@ def build_crawler_payload(args: argparse.Namespace, asins: list[str]) -> dict[st
 
 
 def build_crawler_compatible_payload(args: argparse.Namespace, asins: list[str]) -> dict[str, Any]:
+    return build_crawler_current_payload(args, asins)
+
     alias = args.crawler_dataset_alias
     filters = build_crawler_filters(args, asins)
     return {
@@ -1101,6 +1159,40 @@ def build_crawler_compatible_payload(args: argparse.Namespace, asins: list[str])
         "orderBy": [{"field": "f_date_id", "desc": True}],
         "limit": max(len(asins), args.query_chunk_size),
         "offset": 0,
+    }
+
+
+def build_crawler_current_payload(args: argparse.Namespace, asins: list[str]) -> dict[str, Any]:
+    alias = args.crawler_dataset_alias
+    select_items = []
+    for field_name, _label, cast_to_string in CRAWLER_CURRENT_FIELDS:
+        expr = f"{alias}.{field_name}"
+        if cast_to_string:
+            expr = f"CAST({expr} AS STRING)"
+        select_items.append({"expr": expr, "alias": field_name})
+
+    return {
+        "query": {
+            "select": select_items,
+            "where": build_crawler_where(args, asins),
+            "orderBy": [{"expr": f"{alias}.date_id", "desc": True}],
+            "limit": max(len(asins), args.query_chunk_size),
+            "offset": 0,
+        },
+    }
+
+
+def build_crawler_where(args: argparse.Namespace, asins: list[str]) -> dict[str, Any]:
+    alias = args.crawler_dataset_alias
+    conditions: list[dict[str, Any]] = [
+        {"field": f"{alias}.asin", "operator": "in", "value": asins},
+    ]
+    sites = [site for site in getattr(args, "crawler_sites", []) if site]
+    if sites:
+        conditions.append({"field": f"{alias}.country", "operator": "in", "value": sites})
+    return {
+        "operator": "AND",
+        "conditions": conditions,
     }
 
 
@@ -1255,21 +1347,36 @@ def run_query_chunks(
     for index, chunk in enumerate(chunks, start=1):
         suffix = "" if len(chunks) == 1 else f"-{index:03d}"
         payload = payload_builder(args, chunk)
-        payload, dropped_fields = filter_query_payload_by_metadata(payload, dataset_alias, metadata_fields)
+        is_standard_query = isinstance(payload.get("query"), dict)
+        if is_standard_query:
+            dropped_fields = []
+        else:
+            payload, dropped_fields = filter_query_payload_by_metadata(payload, dataset_alias, metadata_fields)
         metadata_dropped_fields.extend(dropped_fields)
         payload_path = query_dir / f"{payload_prefix}-payload{suffix}.json"
         result_path = query_dir / f"{payload_prefix}-result{suffix}.json"
         write_json(payload_path, payload)
-        command = [
-            args.opscli_bin,
-            "query",
-            "simple",
-            "--table-id",
-            str(table_id),
-            "--payload",
-            str(payload_path),
-            "--run",
-        ]
+        if is_standard_query:
+            payload["tableId"] = table_id
+            write_json(payload_path, payload)
+            command = [
+                args.opscli_bin,
+                "query",
+                "run",
+                "--payload",
+                str(payload_path),
+            ]
+        else:
+            command = [
+                args.opscli_bin,
+                "query",
+                "simple",
+                "--table-id",
+                str(table_id),
+                "--payload",
+                str(payload_path),
+                "--run",
+            ]
         result = run_or_plan(
             source=source,
             command=command,
@@ -1410,16 +1517,24 @@ def parse_json_output(text: str) -> Any:
 
 
 def is_payload_failure(payload: Any) -> bool:
-    return isinstance(payload, dict) and payload.get("success") is False
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("success") is False:
+        return True
+    data = payload.get("data")
+    return isinstance(data, dict) and data.get("success") is False
 
 
 def extract_error_message(payload: Any, stderr: str) -> str:
     if isinstance(payload, dict):
-        error = payload.get("error")
-        if isinstance(error, dict):
-            return f"{error.get('code') or ''}: {error.get('message') or ''}".strip(": ")
-        if error:
-            return str(error)
+        for candidate in (payload, payload.get("data")):
+            if not isinstance(candidate, dict):
+                continue
+            error = candidate.get("error")
+            if isinstance(error, dict):
+                return f"{error.get('code') or ''}: {error.get('message') or ''}".strip(": ")
+            if error:
+                return str(error)
     return stderr.strip()
 
 
@@ -1430,6 +1545,19 @@ def strip_large_output(result: dict[str, Any]) -> dict[str, Any]:
         if len(value) > 1000:
             compact[key] = value[:1000] + "...<truncated>"
     return compact
+
+
+def localize_crawler_source_rows(source_result: dict[str, Any]) -> dict[str, Any]:
+    result = dict(source_result)
+    rows = result.get("rows")
+    if isinstance(rows, list):
+        result["rows"] = [
+            localize_crawler_row(row) if isinstance(row, dict) else row
+            for row in rows
+        ]
+        result["row_count"] = len(result["rows"])
+        result["field_language"] = "zh"
+    return result
 
 
 def rows_for_asin(source_result: Any, asin: str) -> dict[str, Any]:
@@ -1447,7 +1575,7 @@ def rows_for_asin(source_result: Any, asin: str) -> dict[str, Any]:
     rows = source_result.get("rows")
     if not isinstance(rows, list):
         rows = extract_query_rows(source_result.get("json"))
-    matched = [row for row in rows if str(row.get("f_asin") or row.get("asin") or "").upper() == asin]
+    matched = [row for row in rows if crawler_asin_value(row) == asin]
     return {"status": status, "rows": matched, "row_count": len(matched)}
 
 
@@ -1468,7 +1596,7 @@ def keep_latest_date_per_asin(source_result: dict[str, Any]) -> dict[str, Any]:
 def latest_date_rows_per_asin(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        asin = str(row.get("f_asin") or row.get("asin") or "").upper()
+        asin = crawler_asin_value(row)
         grouped.setdefault(asin, []).append(row)
 
     latest_rows: list[dict[str, Any]] = []
@@ -1479,11 +1607,12 @@ def latest_date_rows_per_asin(rows: list[dict[str, Any]]) -> list[dict[str, Any]
             if crawler_date_value(row) is not None
         ]
         if not dated_rows:
-            latest_rows.extend(asin_rows)
+            latest_rows.append(asin_rows[0])
             continue
 
         latest_key = max(date_key for _, date_key in dated_rows)
-        latest_rows.extend(row for row, date_key in dated_rows if date_key == latest_key)
+        latest_row = next(row for row, date_key in dated_rows if date_key == latest_key)
+        latest_rows.append(latest_row)
 
     return latest_rows
 
@@ -1491,11 +1620,22 @@ def latest_date_rows_per_asin(rows: list[dict[str, Any]]) -> list[dict[str, Any]
 def latest_dates_by_asin(rows: list[dict[str, Any]]) -> dict[str, str]:
     latest_dates: dict[str, str] = {}
     for row in rows:
-        asin = str(row.get("f_asin") or row.get("asin") or "").upper()
+        asin = crawler_asin_value(row)
         date_value = crawler_date_value(row)
         if asin and date_value is not None:
             latest_dates[asin] = date_value
     return latest_dates
+
+
+def crawler_asin_value(row: dict[str, Any]) -> str:
+    for field in CRAWLER_ASIN_FIELDS:
+        value = row.get(field)
+        if value is None:
+            continue
+        text = str(value).strip().upper()
+        if text:
+            return text
+    return ""
 
 
 def crawler_date_value(row: dict[str, Any]) -> str | None:
@@ -1929,7 +2069,7 @@ def build_frontend_bundle(summary: dict[str, Any], asin_results: list[dict[str, 
             "运行ID": summary.get("run_id"),
             "开始时间": summary.get("started_at"),
             "结束时间": summary.get("finished_at"),
-            "输出目录": summary.get("output_dir"),
+            "输出目录": json_path(summary.get("output_dir")),
             "是否DryRun": summary.get("dry_run"),
             "ASIN数量": (summary.get("summary") or {}).get("asin_count"),
             "失败ASIN数量": (summary.get("summary") or {}).get("failed_asin_count"),
@@ -2228,6 +2368,14 @@ def localize_sales_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def localize_crawler_row(row: dict[str, Any]) -> dict[str, Any]:
+    localized: dict[str, Any] = {}
+    for field_name, label in CRAWLER_FIELD_LABELS.items():
+        for key in (label, field_name, f"f_{field_name}"):
+            if key in row:
+                localized[label] = normalize_crawler_value(field_name, row.get(key))
+                break
+    return localized
+
     return {
         "ASIN": row.get("f_asin") or row.get("asin"),
         "快照日期": row.get("f_date_id") or row.get("date_id"),
@@ -2276,6 +2424,24 @@ def localize_crawler_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def normalize_crawler_value(field_name: str, value: Any) -> Any:
+    if field_name not in CRAWLER_JSON_FIELDS:
+        return value
+    return parse_json_string_value(value)
+
+
+def parse_json_string_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text or text[0] not in "[{":
+        return value
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return value
+
+
 def localize_errors(errors: list[dict[str, Any]], *, exclude_sources: set[str] | None = None) -> list[dict[str, Any]]:
     exclude_sources = exclude_sources or set()
     localized = []
@@ -2321,7 +2487,7 @@ def build_summary(
         "run_id": output_root.name,
         "started_at": started_at,
         "finished_at": datetime.now().isoformat(timespec="seconds"),
-        "output_dir": str(output_root),
+        "output_dir": json_path(output_root),
         "dry_run": args.dry_run,
         "summary": {
             "input_count": len(records),
@@ -2357,15 +2523,23 @@ def build_summary(
             "query_chunk_size": args.query_chunk_size,
         },
         "files": {
-            "manifest": str(output_root / "manifest.json"),
-            "results": str(output_root / "asin-data.jsonl"),
-            "frontend_data": str(output_root / "frontend-data.json"),
-            "frontend_markdown": str(output_root / "frontend-data.md"),
-            "summary": str(output_root / "asin-data-summary.json"),
-            "commands": str(output_root / "commands.jsonl"),
-            "errors": str(output_root / "errors.jsonl"),
+            "manifest": json_path(output_root / "manifest.json"),
+            "results": json_path(output_root / "asin-data.jsonl"),
+            "frontend_data": json_path(output_root / "frontend-data.json"),
+            "frontend_markdown": json_path(output_root / "frontend-data.md"),
+            "summary": json_path(output_root / "asin-data-summary.json"),
+            "commands": json_path(output_root / "commands.jsonl"),
+            "errors": json_path(output_root / "errors.jsonl"),
         },
     }
+
+
+def json_path(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, Path):
+        return value.as_posix()
+    return str(value).replace("\\", "/")
 
 
 def safe_name(value: str) -> str:

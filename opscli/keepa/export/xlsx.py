@@ -19,6 +19,15 @@ class ExportColumn:
 
 EMPTY_COLUMNS = [ExportColumn("原始数据", "value")]
 
+EXCLUDED_FIELDS = {
+    "timestamp",
+    "tokensLeft",
+    "tokensConsumed",
+    "refillIn",
+    "refillRate",
+    "rowSource",
+}
+
 FIELD_TITLES = {
     "asin": "ASIN",
     "asins": "ASIN列表",
@@ -155,6 +164,8 @@ def _columns_from_rows(rows: list[dict[str, Any]]) -> list[ExportColumn]:
     seen: set[str] = set()
     for row in rows:
         for key in row:
+            if key in EXCLUDED_FIELDS:
+                continue
             if key not in seen:
                 seen.add(key)
                 fields.append(key)
@@ -199,4 +210,6 @@ def _column_width(title: str) -> int:
 
 
 def _title_for_field(field: str) -> str:
-    return FIELD_TITLES.get(field, field)
+    # 暂停 XLSX 表头中文翻译，保持与 Keepa API 字段名一致，避免字段含义不清晰。
+    return field
+    # return FIELD_TITLES.get(field, field)

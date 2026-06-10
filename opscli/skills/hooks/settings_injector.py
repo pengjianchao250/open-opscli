@@ -24,6 +24,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shlex
+import subprocess
 from importlib.resources import files as pkg_files
 from pathlib import Path
 
@@ -64,7 +67,6 @@ def _detect_python_command() -> str:
 
 def _build_hook_entry() -> dict:
     """构建 Hook 条目。"""
-    py_cmd = _detect_python_command()
     return {
         # matcher 对 "Skill" 有特殊处理可能不生效，用 ".*" 宽泛匹配
         # 脚本内部通过 tool_name != "Skill" 过滤非 Skill 工具调用
@@ -72,17 +74,43 @@ def _build_hook_entry() -> dict:
         "hooks": [
             {
                 "type": "command",
-                "command": f'{py_cmd} "{_HOOK_SCRIPT_PATH}"',
+                "command": _build_hook_command(),
                 "timeout": 15,
             }
         ],
     }
 
 
+def _shell_quote_arg(value: str) -> str:
+    """按当前平台生成 hook command 中的单个参数。
+
+    Codex / Claude hooks 的 command 字段最终交给宿主 shell 执行：
+    - POSIX 使用 shlex.quote，处理空格、单引号、$ 等特殊字符。
+    - Windows 使用 subprocess.list2cmdline，生成 cmd/CreateProcess 兼容的双引号格式。
+    """
+    if os.name == "nt":
+        return subprocess.list2cmdline([value])
+    return shlex.quote(value)
+
+
 def _build_hook_command() -> str:
     """构建 Hook 命令字符串。"""
     py_cmd = _detect_python_command()
-    return f'{py_cmd} "{_HOOK_SCRIPT_PATH}"'
+    return " ".join(
+        [
+            _shell_quote_arg(py_cmd),
+            _shell_quote_arg(str(_HOOK_SCRIPT_PATH)),
+        ]
+    )
+
+
+def _toml_string(value: str) -> str:
+    """生成 TOML basic string。
+
+    TOML basic string 与 JSON 字符串转义规则对本场景兼容，能正确处理
+    Windows 反斜杠、双引号和 POSIX shlex 产生的单引号。
+    """
+    return json.dumps(value, ensure_ascii=False)
 
 
 # ── Claude Code 专用（hooks 嵌入在 settings.json 中） ──────────────────
@@ -246,7 +274,6 @@ def _build_codex_toml_block() -> str:
     Codex 使用 [[hooks.PostToolUse]] 数组表语法，格式固定。
     """
     hook_cmd = _build_hook_command()
-    # Windows 路径中的反斜杠在 TOML 单引号字符串中无需转义
     return (
         "\n"
         "\n# opscli Skill 使用上报 Hook（由 opscli skills install 自动注入，请勿手动删除）\n"
@@ -255,7 +282,7 @@ def _build_codex_toml_block() -> str:
         "\n"
         "[[hooks.PostToolUse.hooks]]\n"
         "type = \"command\"\n"
-        f"command = '{hook_cmd}'\n"
+        f"command = {_toml_string(hook_cmd)}\n"
         "timeout = 15\n"
     )
 
@@ -277,7 +304,7 @@ def _codex_toml_update_hook(raw: str) -> str:
         if _HOOK_COMMAND_MARKER in line and "command" in line:
             # 找到 command 行，替换为新的命令值，保留行首缩进
             indent = len(line) - len(line.lstrip())
-            updated.append(" " * indent + f"command = '{new_cmd}'")
+            updated.append(" " * indent + f"command = {_toml_string(new_cmd)}")
         else:
             updated.append(line)
     return "\n".join(updated)
