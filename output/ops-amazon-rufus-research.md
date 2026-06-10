@@ -1,5 +1,416 @@
 # ops-amazon-rufus Research
 
+## 2026-06-04 MCP 默认获取链路改为 headless 后端研究
+
+### 本轮需求
+
+用户指出当前 `amazon_rufus_get` MCP 服务实现有问题：默认获取 Rufus 时不应该打开或连接可见浏览器页面，也不应该依赖 Chrome CDP 调试窗口。参考实现位于 `E:/code/work/extension/python/app/contexts/rufus/application/account_runner.py`，正确方向应是“无头浏览器捕获上下文 + 纯后端 httpx streaming 请求”，而不是通过 CDP 打开浏览器页获取。
+
+### 当前仓库证据
+
+当前 MCP 调用链如下：
+
+```text
+opscli/mcp/tools/amazon_rufus.py:amazon_rufus_get
+  -> RufusManager.get
+  -> BrowserAttachService.capture_seed_request
+  -> playwright.chromium.connect_over_cdp(cdp_url)
+  -> page.goto(product_url)
+  -> page.on("request") 捕获 /rufus/cl/streaming
+  -> RufusReplayService.replay_with_page(page, seed, questions)
+```
+
+这说明 `amazon_rufus_get` 默认路径仍是 CDP attach + 可见页面路径。`launch_if_needed`、`new_chrome`、`cdp_url`、`chrome_path` 等参数进一步证明 MCP 默认入口暴露的是本机浏览器控制心智。
+
+仓库中已经存在 headless 能力，但只挂在远程/显式路径：
+
+```text
+RufusManager.get_headless
+RufusManager.get_remote_from_storage_state
+RufusManager.get_remote_from_browser
+HeadlessRufusCaptureService
+HeadlessRufusClient
+RufusBrowserStateStore
+```
+
+问题不是“没有 headless 代码”，而是默认 MCP 工具没有把 headless 后端作为首选执行路径。
+
+### 参考实现结论
+
+`E:/code/work/extension/python` 的 runner 链路不是连接用户打开的 Chrome。核心模式是：
+
+1. 从账号 secret 读取 `ParsedCurlRufusRequest(url, headers, cookies, payload_template)`。
+2. 调用 `capture_rufus_payload_context_for_asin(asin, cookie, origin_url=...)`。
+3. 该函数通过 Playwright headless 访问 Amazon 商品页，拦截 `rufus/cl/streaming` 请求与响应：
+   - 从请求 body 提取 `impressionsContext`。
+   - 从 SSE response 的 `event: context` 提取 `requestContext`。
+   - 捕获失败时可回退固定上下文，避免队列永久卡死。
+4. 调用 `build_rufus_payload_from_template(...)`，基于 `payload_template` 覆盖问题、ASIN、页面上下文、impressions/request context。
+5. 调用 `query_rufus(...)`，用 `httpx.AsyncClient.stream(POST ...)` 请求 Rufus SSE。
+6. 解析 SSE 后只持久化答案，不回显 cookie/header 明文。
+
+该实现的关键不是“打开浏览器给用户登录”，而是使用已保存的 Rufus 账号 secret，在后端 headless 环境中短暂访问详情页补齐上下文，再用 HTTP 客户端请求 Rufus。
+
+### 官方资料核验
+
+Playwright Python 官方文档支持 `browser.new_context(storage_state=...)`，可用 cookies 与 localStorage 初始化上下文。官方文档也说明 Chromium headless 场景会使用独立 headless shell，运行环境需要安装对应浏览器二进制。参考：
+
+- https://playwright.dev/python/docs/api/class-browser
+- https://playwright.dev/python/docs/browsers
+
+这与参考实现和当前仓库 `HeadlessRufusCaptureService` 的方向一致：headless browser 只用于后端捕获页面上下文，不需要 CDP 连接用户可见 Chrome。
+
+### 根因判断
+
+根因是 MCP 工具职责边界偏移：
+
+1. `amazon_rufus_get` 的业务名是“获取 Rufus 回答”，但实现默认绑定本机 CDP。
+2. `amazon_rufus_get_remote` 名义上是远程/headless，但仍先调用 `get_remote_from_browser()`，会打开 CDP Chrome 捕获 storage_state。
+3. 真正接近参考实现的 `get_headless()` 需要 `cookie`、`headers`、`payload_template` 等输入，却没有被设计成 MCP 默认后端路径。
+4. 现有 Skill 文档也继续推荐 `amazon_rufus_get(..., launch_if_needed=True)`，进一步强化了错误默认路径。
+
+### 方案判断
+
+推荐采用“后端 Rufus secret + headless context capture + httpx streaming”的默认 MCP 方案：
+
+1. `amazon_rufus_get` 默认不再调用 `RufusManager.get()`，而是调用新的后端/headless 编排入口。
+2. 新入口从本地加密状态或 ops 后端获取 Rufus secret，结构对齐参考实现的 `url/headers/cookies/payload_template`。
+3. 无头浏览器仅用于访问商品页并捕获 Rufus payload 上下文；不连接 CDP，不打开可见页面，不要求用户在运行中登录。
+4. Rufus 问题请求由后端 HTTP client 完成，按问题列表逐题请求 SSE 并解析答案。
+5. CDP 相关工具只保留为可选辅助：
+   - `amazon_rufus_init`：仅用于人工登录或重新捕获本地账号状态。
+   - `amazon_rufus_get_remote`：如继续存在，应明确是“捕获/更新本地授权状态”，不是默认获取路径。
+   - `launch_if_needed`、`chrome_path` 不应出现在默认获取推荐流程中。
+6. 敏感字段不返回、不写报告、不写 feedback：cookie、headers、storage_state、seed request、payload_template 都只在服务层内部流转。
+
+该方案符合 KISS/YAGNI：复用现有 `HeadlessRufusCaptureService`、`HeadlessRufusClient`、`RufusReplayService.build_payload()` 与参考实现思路，只改默认入口和 secret 输入边界，不新增可见 UI 或 CDP 浏览器管理复杂度。
+
+## 2026-06-04 Skill 主文档瘦身与 references 拆分研究
+
+### 本轮需求
+
+用户要求继续优化 `ops-amazon-rufus` Skill 文档结构：`SKILL.md` 应只保存前置条件、主流程、文件说明等核心功能；Rufus 获取细节、MCP 调用流程、远程授权细则、错误处理规范等应拆分到 `references/` 下。
+
+### 本地现状
+
+当前模板目录与已安装目录都具备 reference 结构：
+
+```text
+ops-amazon-rufus/
+├── README.md
+├── SKILL.md
+├── data/
+│   ├── VERSION.json
+│   └── question_templates.json
+└── references/
+    ├── question-templates.md
+    └── rufus-report-formatting.md
+```
+
+但 `SKILL.md` 当前仍承载了过多细节：
+
+1. MCP 工具完整参数列表。
+2. `amazon_rufus_get`、`amazon_rufus_get_remote` 的详细调用顺序。
+3. Chrome CDP 自动启动排障细节。
+4. 远程授权提示文案与拒绝分支。
+5. 临时问题、默认题库、拒答重试和输出隐藏规则。
+6. 获取实现文件边界。
+
+这些内容都重要，但不应全部留在主 `SKILL.md`。主文档过长会让 Agent 首屏难以判断“先做什么”，也会把稳定前置条件和可演进的工具调用细则耦合在一起。
+
+### 方案判断
+
+推荐采用“主文档索引化 + references 专题化”的最小方案：
+
+1. `SKILL.md` 只保留：
+   - Skill 定位。
+   - 触发范围。
+   - 前置条件。
+   - 精简主流程。
+   - 数据文件说明。
+   - references 索引。
+   - 文件边界。
+2. 新增 `references/rufus-mcp-workflow.md`：
+   - MCP 工具说明。
+   - 单题、多题、默认题库模式。
+   - Chrome CDP 自动启动与登录初始化。
+   - report_path 输出规则。
+3. 新增 `references/remote-authorization.md`：
+   - 远程授权偏好保存规则。
+   - 用户同意后仍需 Amazon 登录确认。
+   - 用户回复“已登录”后再调用 `amazon_rufus_get_remote`。
+   - 敏感信息禁止输出。
+4. 现有 `references/rufus-report-formatting.md` 继续承载报告格式化、拒答改写、输出隐藏规则。
+5. 现有 `references/question-templates.md` 继续承载题库数据结构和题库维护说明。
+
+该方案符合 KISS/YAGNI：只调整文档信息架构，不改 MCP 工具 schema，不新增 Python 获取脚本，也不把 Skill 变成执行层。
+
+## 2026-06-04 远程授权偏好记忆研究
+
+### 本轮需求
+
+用户反馈 `ops-amazon-rufus` 当前在获取 Rufus 的中途没有出现远程授权确认，因此 Agent 没有机会调用 `amazon_rufus_get_remote`。新要求是：当流程判断“需要获取 Rufus”时，必须先确定用户是否使用远程授权；若之前已经保存过该选择，则直接按保存值执行，不再反复询问。
+
+### 本地现状
+
+当前仓库已经具备远程授权执行能力，但偏好决策只停留在文档分支：
+
+1. `opscli/mcp/tools/amazon_rufus.py` 已提供 `amazon_rufus_get_remote(..., allow_capture_browser_state=True)`，并在未授权时返回 `RUFUS_REMOTE_CONSENT_REQUIRED`。
+2. `opscli/amazon_rufus/services/manager.py` 已有 `get_remote_from_browser()` 与 `get_remote_from_storage_state()`，可以捕获并复用 Playwright `storage_state`。
+3. `opscli/skills/templates/ops-amazon-rufus/SKILL.md` 只写了“仅在用户明确同意后才允许调用远程授权工具”，但没有规定在每次 Rufus 获取入口先检查偏好。
+4. 当前 Skill 的推荐工作流优先调用 `amazon_rufus_get`，只有在 `RUFUS_LOGIN_REQUIRED` 或 `SEED_REQUEST_NOT_CAPTURED` 后才引导本机登录；这解释了为什么用户中途看不到远程授权询问。
+5. 仓库已有 `RufusBrowserStateStore` 用于保存敏感浏览器状态，但没有一个轻量的“远程授权偏好”保存点。
+
+### 外部资料校验
+
+MCP Tools 规范将工具调用定义为模型与外部系统交互的能力，客户端和宿主需要在工具调用前处理用户可理解的确认与拒绝路径。参考：<https://modelcontextprotocol.io/specification/2025-06-18/server/tools>
+
+Playwright Authentication 文档说明认证状态可能包含 cookies 和 localStorage，`storage_state` 文件可能携带可冒充账号的敏感信息，不应提交到仓库。参考：<https://playwright.dev/python/docs/auth>
+
+因此“是否允许远程授权”应作为显式用户偏好保存；“浏览器状态”仍必须由现有加密状态链路保存，二者不能混为一个普通配置项。
+
+### 方案判断
+
+推荐采用“获取前偏好门禁 + 本地偏好文件 + MCP 分支”的最小方案：
+
+1. 在 Skill 工作流中新增“远程授权偏好检查”作为 Rufus 获取前置步骤。
+2. 偏好存在时直接复用：`true` 先进入 Amazon 登录检测/确认流程，用户回复已登录后再调用 `amazon_rufus_get_remote(..., allow_capture_browser_state=True)`；`false` 调用 `opscli amazon-rufus get ... --launch-if-needed` 走原有本机 CDP 获取链路。
+3. 偏好不存在时，先询问用户是否使用远程授权，并说明会捕获并加密保存当前 Amazon 浏览器状态。
+4. 用户回答后保存偏好；若用户确认使用远程授权，应继续打开或检查目标国家站点 Amazon 登录页，请用户完成登录并回复“已登录”，再调用 MCP 获取 Rufus。
+5. 后续同一 Skill 流程不再重复询问远程授权偏好，但远程授权路径仍要确认 Amazon 已登录。
+6. 偏好只保存布尔值和必要元数据，例如 `country`、`updated_at`、`source`；不得保存 cookie、localStorage 或 `storage_state`。
+7. 偏好建议按 `opscli.config.CONFIG_DIR / "amazon-rufus" / "remote-consent.json"` 保存，避免写入仓库、Skill 目录或 `output/`。
+8. 本轮不引入账号池、租户级共享偏好、自动撤销策略或复杂 UI；用户需要变更选择时，可通过后续显式命令或删除偏好文件重置。
+
+该方案符合 KISS/YAGNI：只补齐缺失的决策记忆点，复用现有 MCP 与 storage_state 能力，不重写 Rufus 获取链路。
+
+## 2026-06-04 CDP 未启动时自动发现并启动 Chrome 研究
+
+### 本轮需求
+
+用户反馈 Rufus CLI 当前会出现 Chrome CDP 没启动的问题，希望在 `ops-amazon-rufus` Skill 编排中处理该问题：先检查 CDP 状态；如果 CDP 不可用，再搜索用户已安装的 Chrome；最后用 Python 脚本启动带 CDP 的 Chrome，帮助用户继续 Rufus 获取流程。
+
+### 本地现状
+
+当前仓库已经有部分预留能力，但没有完整闭环：
+
+1. `opscli/amazon_rufus/services/browser.py` 的 `BrowserAttachService._wait_for_cdp()` 会请求 `{cdp_url}/json/version`，但只在 `--new-chrome` 或 `init` 已经启动 Chrome 后等待。
+2. `_start_new_chrome()` 目前固定通过 PowerShell `Start-Process chrome.exe` 启动，依赖系统 PATH 中存在 `chrome.exe`。
+3. `opscli amazon-rufus get` 已有 `--chrome-path` 与 `--launch-if-needed` 参数，但 help 文案仍标注“预留”，`RufusManager.get()` 也没有把这两个参数传给 `BrowserAttachService.capture_seed_request()`。
+4. MCP `amazon_rufus_get` 暂未暴露 `chrome_path` 或 `launch_if_needed`，Agent 只能显式传 `new_chrome=True`，不能表达“先探测 CDP，不通再启动”。
+5. Skill 文档当前推荐登录/获取流程，但没有对 `CHROME_CDP_UNAVAILABLE` 做专门分支，也没有告诉 Agent 优先尝试自动启动 CDP。
+
+### 外部资料校验
+
+Playwright Python 官方文档说明，`browser_type.connect_over_cdp()` 用于通过 Chrome DevTools Protocol 连接已有 Chromium 浏览器，参数可以是 `http://localhost:9222/` 这类 HTTP endpoint；默认 browser context 可通过 `browser.contexts[0]` 访问。参考：<https://playwright.dev/python/docs/api/class-browsertype#browser-type-connect-over-cdp>
+
+Chrome for Developers 在 2025-03-17 发布的 remote debugging 安全变更说明中明确：从 Chrome 136 开始，`--remote-debugging-port` 和 `--remote-debugging-pipe` 不能再用于默认 Chrome data directory，必须配合 `--user-data-dir` 指向非默认目录。参考：<https://developer.chrome.com/blog/remote-debugging-port>
+
+Chrome DevTools Protocol 文档说明，当 Chrome 设置 `--remote-debugging-port=9222` 后，可通过 `localhost:9222/json/protocol` 等 HTTP endpoint 获取协议信息；这支持当前用 `json/version` 或等价 endpoint 做 CDP 存活探测的做法。参考：<https://chromedevtools.github.io/devtools-protocol/>
+
+### 方案判断
+
+推荐采用“CDP 探测 + Chrome 路径发现 + 独立 profile 启动 + Skill 分支提示”的最小方案：
+
+1. Python 实现不放入 `ops-amazon-rufus` Skill 目录，避免违反 Skill 文件边界；应落在 `opscli/amazon_rufus/services/browser.py` 或新的轻量服务模块，例如 `chrome_cdp.py`。
+2. `BrowserAttachService.capture_seed_request()` 增加 `chrome_path` 与 `launch_if_needed` 参数；当 `launch_if_needed=True` 时，先探测 CDP，若不可用再启动 Chrome。
+3. Chrome 路径发现只做本机查找，不联网、不安装 Chrome、不修改系统环境变量。
+4. Windows 优先搜索常见安装路径、注册表 App Paths、PATH；macOS/Linux 作为跨平台兜底路径处理。
+5. 启动参数必须包含 `--remote-debugging-port=<port>`、`--remote-debugging-address=127.0.0.1`、`--user-data-dir=<opscli 专用 profile>`、`--no-first-run`、`--no-default-browser-check`。
+6. 仍保留 `--new-chrome` 的显式行为；`--launch-if-needed` 是“已有 CDP 优先，否则启动”的更柔和路径。
+7. Skill 中只更新编排规则：遇到 `CHROME_CDP_UNAVAILABLE` 或用户未显式说明已有 CDP 时，优先调用支持自动启动 CDP 的 CLI/MCP 参数，而不是要求用户手写 PowerShell。
+
+该方案符合 KISS/YAGNI：复用现有 CLI 参数和 CDP attach 链路，不新增浏览器管理命令，不引入全局安装/依赖更新，不把采集脚本散落到 Skill 目录。
+
+## 2026-06-04 CLI `-q/--question` 多问题能力核查
+
+### 本轮需求
+
+用户询问 `amazon-rufus` CLI 是否已经支持类似 `-q` 的参数，并希望一次输入多个临时问题来提问，同时不使用默认问题模板。
+
+目标语义可以拆成两层：
+
+1. 用户传入明确问题时跳过 `ops-amazon-rufus/data/question_templates.json` 默认题库。
+2. 同一次 CLI 调用允许传入多个临时问题，例如多次 `-q "问题"`，并按传入顺序逐题获取 Rufus 回答。
+
+### 本地现状
+
+当前仓库已经具备“单题跳过题库”的基础能力，但没有完整支持“`-q` 多题”。
+
+已具备：
+
+1. `opscli/amazon_rufus/commands/cli.py` 的 `get` 命令已有 `--question` 选项。
+2. `RufusManager._resolve_questions(question=...)` 在 `question is not None` 时会去空白、校验非空，并返回单元素列表 `[question]`。
+3. 单题模式不会调用 `QuestionBankService.load_templates()`，因此可以跳过默认问题模板。
+4. `RufusReplayService`、报告 writer 和 upload payload 已经面向 `questions: list[str]` 工作，底层逐题 replay 天然支持多问题列表。
+5. MCP Tool `amazon_rufus_get` 也已有 `question: str | None` 单题参数。
+
+缺口：
+
+1. CLI 只有 `--question`，没有 `-q` 简写。
+2. CLI 参数类型是 `str | None`，不是 `list[str] | None`，不能多次传入。
+3. `RufusManager.get()`、`get_headless()`、`get_remote_from_browser()`、`get_remote_from_storage_state()` 只接收单个 `question` 字符串。
+4. MCP Tool 当前也只接收单题 `question`，多个临时问题只能由 Agent 逐条调用，或回退默认题库。
+5. `ops-amazon-rufus` Skill 当前明确写着“单题模式一次只传入一个问题”，这与本轮目标相冲突。
+
+### 官方资料校验
+
+Typer 官方 Option Name 文档说明，若要保留默认长选项并增加短选项，需要在 `typer.Option()` 中显式声明两个名称，例如 `typer.Option("--user-name", "-n")`。参考：https://typer.tiangolo.com/tutorial/options/name/
+
+Typer 官方 Multiple CLI Options 文档说明，使用 `list[str] | None` 类型的 option 可以让同一选项在一次命令中传入多次并收集所有值。参考：https://typer.tiangolo.com/tutorial/multiple-values/multiple-options/
+
+因此本轮推荐用 Typer 原生能力实现多问题参数，不需要自定义字符串分隔符、JSON 参数或问题文件。
+
+### 方案判断
+
+推荐采用“保留 `--question` + 新增 `-q` + 允许多次传入”的最小方案：
+
+```powershell
+opscli amazon-rufus get B0TEST1234 US `
+  -q "这个商品适合送礼吗？" `
+  -q "差评主要集中在哪些方面？" `
+  -q "这个商品更适合什么使用场景？"
+```
+
+设计要点：
+
+1. CLI 层将 `question` 参数改为 `list[str] | None`，选项名保留 `--question` 并新增 `-q`。
+2. Manager 层新增内部 `questions: list[str] | None` 参数，保留现有 `question: str | None` 兼容旧调用。
+3. 问题来源优先级：显式临时问题列表优先；无临时问题时才读取默认题库。
+4. 多题模式应一次捕获 seed request，并在同一运行里按传入顺序 replay 多个问题，避免用户多次启动浏览器。
+5. 空白问题应稳定报错，不静默过滤后继续执行，避免用户误以为问题被执行。
+6. CLI 与 MCP 的能力需要对齐：MCP 可新增 `questions: list[str] | None`，同时保留 `question` 单题兼容。
+7. Skill 文档同步改为：用户给出多个临时问题时，优先一次性传 `questions` 或多次 `-q`，不再建议逐条调用。
+
+该方案符合 KISS/YAGNI：复用底层已有 `questions` 列表执行链路，只扩展参数解析和问题来源选择；不新增命令、不引入问题文件、不实现复杂分隔语法。
+
+## 2026-06-03 登录缺失时远程获取授权与 Rufus MCP 研究
+
+### 本轮需求
+
+用户要求调整 Rufus CLI Skill 的登录失败体验：当系统发现用户未登录 Amazon 时，不再只进入人工登录中断，而是先询问用户是否同意使用远程 Rufus 获取方式。该方式需要用户提供一个干净、未绑定信用卡的 Amazon 账户；该账户仅用户本人使用，不共享给其他用户。
+
+分支规则：
+
+1. 用户不同意远程获取时，继续走现有本机 Chrome/CDP 流程；系统需提示本机获取期间可能出现卡顿。
+2. 用户同意远程获取时，仍打开 Amazon 页面并检查登录状态；用户完成登录后，系统获取该站点的 cookie 和 localStorage，保存到本地，再调用 Rufus MCP 工具。
+3. Rufus MCP 工具通过传入 cookie 和 localStorage 获取 Rufus 信息；获取完成后继续原有 Skill 流程，包括问题选择、报告生成、拒答改写和格式化输出。
+
+### 本地现状
+
+当前 `open-opscli` 的 Rufus 链路仍以本机浏览器为主：
+
+1. `opscli/amazon_rufus/commands/cli.py` 的 `get` 命令只透传 `--question`、Chrome/CDP 参数和报告输出参数，没有远程获取 consent 参数或交互提示。
+2. `RufusManager.get()` 通过 `BrowserAttachService.capture_seed_request()` 捕获 `/rufus/cl/streaming` seed request，再在页面上下文里 replay。
+3. 当答案为空或未捕获 seed request 时，现有逻辑返回 `RUFUS_LOGIN_REQUIRED` 或 `SEED_REQUEST_NOT_CAPTURED`，Skill 文档要求用户登录后说“继续”。
+4. 当前没有保存 Amazon cookie/localStorage 的本地状态文件，也没有 Rufus MCP tool 注册代码；`opscli/mcp/tools/amazon.py` 目前未注册 Rufus 工具。
+
+### 官方资料校验
+
+Playwright 官方 Authentication 文档说明，Web 应用认证状态可能保存在 cookies、localStorage 或 IndexedDB 中，并可通过 `browser_context.storage_state()` 取出并复用。官方同时提醒，浏览器状态文件可能包含可冒充用户或测试账号的敏感 cookies/headers，不应提交到仓库。
+
+Playwright `BrowserContext.storage_state()` API 文档显示，返回结构包含 `cookies` 与 `origins[].localStorage`，并可选择保存到文件。这正好覆盖用户要求的 cookie 与 localStorage 捕获，不需要手写浏览器脚本逐项拼接。
+
+MCP 官方工具规范说明，工具调用应有明确参数 schema；对于安全和信任场景，客户端应向用户展示确认提示并让用户可拒绝敏感工具调用。这与本轮必须先询问用户是否同意远程获取一致。
+
+Amazon 官方资料显示，Rufus 是面向商品详情、评论和社区问答的购物助手；Amazon 在 2026 年将 Rufus 与 Alexa+ 能力组合到 Alexa for Shopping。仓库命令和 Skill 名称继续保持 `ops-amazon-rufus`，本轮只改获取链路，不做命名迁移。
+
+参考：
+
+- https://playwright.dev/python/docs/auth
+- https://playwright.dev/python/docs/api/class-browsercontext#browser-context-storage-state
+- https://modelcontextprotocol.io/specification/2025-06-18/server/tools
+- https://www.aboutamazon.com/news/retail/how-to-use-amazon-rufus
+- https://www.aboutamazon.com/news/retail/alexa-for-shopping-ai-assistant
+
+### 方案判断
+
+采用“显式 consent + Playwright storage_state + 本地加密保存 + Rufus MCP 获取 + 原报告链路复用”的最小方案：
+
+1. 不替换现有本机 Chrome/CDP 流程；拒绝远程获取时完全沿用当前流程。
+2. 同意远程获取后，使用 Playwright `storage_state()` 作为 cookie/localStorage 的标准载体，避免重复发明状态格式。
+3. 状态文件不得写入 `output/`、`.agents/skills/` 或仓库目录；应保存在 `opscli.config.CONFIG_DIR` 下，并按现有凭证存储策略做加密或等价保护。
+4. Rufus MCP 工具返回结构应与 `RufusManager.get()` 兼容，确保 `AnswerReportFormatter`、拒答改写和报告落地不重复实现。
+5. 不做账号池、多用户共享、自动注册 Amazon 账号、信用卡校验或支付能力；“干净且未绑定信用卡”只作为用户 consent 前置说明和使用约束。
+
+该方案符合 KISS/YAGNI：只在未登录场景增加一个远程获取分支，保留现有成功路径和报告结构；敏感状态用官方 Playwright storage_state 表达，避免自定义 cookie/localStorage 格式造成维护成本。
+
+## 2026-06-03 Python 端 headless 获取 Rufus 数据研究
+
+### 本轮需求
+
+用户要求修改 Rufus CLI，并先提供 Python 端获取 Rufus 数据的调用方法。参考实现位于 `E:/code/work/extension/python`，其核心不是连接用户已打开的 Chrome，而是用 Playwright headless browser 访问 Amazon 商品页，捕获 `rufus/cl/streaming` 请求与响应上下文，再用该上下文构造 Rufus 问题请求。
+
+### 本地现状
+
+当前 `open-opscli` 的 Rufus 获取链路是 CDP attach 模式：
+
+1. `opscli/amazon_rufus/services/browser.py` 的 `BrowserAttachService` 使用 `playwright.chromium.connect_over_cdp(cdp_url)` 连接固定 Chrome 调试端口。
+2. `amazon-rufus init <country>` 打开登录窗口，要求用户在可见 Chrome 中完成 Amazon 登录。
+3. `amazon-rufus get <asin> <country>` 打开商品页并监听首个 `/rufus/cl/streaming` request。
+4. `RufusReplayService.replay_with_page()` 在页面上下文中 `fetch()` 重放问题，复用浏览器登录态。
+
+该链路适合本地人工登录，但不是纯 Python/headless 获取方式。
+
+### 外部参考实现结论
+
+`E:/code/work/extension/python` 的关键调用链如下：
+
+1. `app/contexts/rufus/infrastructure/amazon_rufus/payload_builder.py`
+   - `capture_rufus_payload_context_for_asin(asin, cookie, origin_url=None)`
+   - 调用 `get_playwright_target_request_captor().capture(...)`
+   - 返回 `impressions_context`、`request_context`、`final_page_url`
+2. `app/contexts/web_capture/infrastructure/playwright_captor.py`
+   - `_BrowserManager.get_browser()` 使用 `async_playwright().start()` 和 `playwright.chromium.launch(headless=True)`。
+   - `capture()` 新建 browser context，并用 `context.add_cookies()` 注入 Amazon cookie。
+   - `page.route("**/*", handle_route)` 拦截请求，命中 `rufus/cl/streaming` 后保存 request body、headers、response body excerpt。
+3. `build_rufus_payload_from_template(...)`
+   - 基于保存的 `payload_template` 覆盖 `queryContext.query`、ASIN metadata、`impressionsContext` 和 `requestCancellationTokens`。
+4. `app/contexts/rufus/infrastructure/amazon_rufus/client.py`
+   - `query_rufus(...)` 用 `httpx.AsyncClient.stream("POST", ...)` 请求 `/rufus/cl/streaming`。
+   - SSE events 经过 `text_extractor` 输出 Rufus 文本答案。
+
+### 官方资料校验
+
+Playwright 官方 Python API 说明 `browserType.launch()` 用于启动浏览器实例，`headless` 选项默认值为 `true`；这与外部项目 `_BrowserManager` 的 headless browser 设计一致。Playwright Network 文档也说明可通过 `page.on("request")` / `page.on("response")` 监听网络事件，并通过 `page.route()` 处理请求。
+
+参考：
+
+- https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch
+- https://playwright.dev/python/docs/network#network-events
+- https://playwright.dev/python/docs/network#handle-requests
+
+### 方案判断
+
+本轮应新增 Python 端 headless 获取入口，但不应替换现有 CDP attach 链路：
+
+1. 保留现有 `RufusManager.get()` 和 `opscli amazon-rufus get` 的可见 Chrome 登录模式，避免破坏已验证流程。
+2. 新增独立 Python 方法，例如 `RufusManager.get_headless(...)`，接收 `streaming_url`、`headers`、`cookie`、`payload_template` 等来自 Copy as cURL 或上游账号配置的数据；`cookie` 是必传的 Amazon 登录态输入。
+3. headless 方法内部先将 `cookie` 注入 Playwright browser context，访问商品页并抓动态上下文，再用同一个 `cookie` 发起 Rufus streaming 请求，最终返回与现有 `get()` 相同的数据结构，便于复用 `AnswerReportFormatter`。
+4. 不在 CLI 中直接暴露 `--cookie` 这类敏感参数。若后续需要 CLI 调用，应优先使用 `--curl-file` 或 `--secrets-file` 读取本地文件。
+5. 测试只 mock Playwright/httpx，不访问真实 Amazon，不读取真实浏览器 profile。
+
+### 拟定调用方法
+
+首选 Python SDK 调用：
+
+```python
+from opscli.amazon_rufus.services.manager import RufusManager
+
+data = RufusManager().get_headless(
+    asin="B0TEST1234",
+    country="US",
+    question="这个商品适合送礼吗？",
+    streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=...",
+    headers=headers,
+    cookie=amazon_cookie,
+    payload_template=payload_template,
+    timeout_seconds=90,
+)
+```
+
+其中 `amazon_cookie` 是完整 Amazon Cookie header 字符串，来自用户 Copy as cURL 解析结果或上游账号配置。实现时应参考外部 `capture_rufus_payload_context_for_asin(asin, cookie, origin_url)`：先用该 `cookie` 在 headless browser 中建立 Amazon 登录态并捕获 `rufus/cl/streaming` 上下文，再用同一个 `cookie` 请求 Rufus 数据。方法返回结构与当前 `RufusManager.get()` 保持兼容，包含 `asin`、`country`、`questions`、`answers`、`seed_request` 或等价捕获上下文。
+
 ## 2026-05-14 Rufus 拒答检测与问题改写研究
 
 ### 本轮反馈
@@ -188,7 +599,7 @@ Typer 还支持多次传入同一个 option 并获得 `list[str]`，说明后续
 
 1. 新增 `opscli/skills/templates/ops-amazon-rufus/references/question-templates.md`。
 2. 新文件只写问题模板数据模型、获取接口、保存接口、保存工作流、本地题库文件关系和注意事项。
-3. `README.md` 与 `SKILL.md` 只保留题库升级的简短入口，并链接到 `references/question-templates.md`。
+3. `README.md` 与 `SKILL.md` 只保留题库升级和 MCP 编排入口，并链接到 `references/question-templates.md`。
 4. 不把 Rufus 回答获取、Chrome 登录、seed request、报告格式化写入新 reference。
 5. 不新增 CLI 子命令，不改变 `amazon-rufus get` 运行链路。
 6. 不让 Skill 脚本直接调用后端接口；如后续需要命令化保存，应新增正式 `opscli` 命令入口，而不是在 Skill 文档里指导直接 `curl` 生产接口。
@@ -765,6 +1176,123 @@ Amazon 官方对 Rufus 的公开定位是“购物助手”，能力包括回答
 
 ---
 
+## 2026-06-03 研究增量：Rufus 获取能力从 Skill 下沉到 MCP Tool
+
+### 用户新约束
+
+本轮需求明确调整边界：
+
+- MCP 应包含之前已经创建的 Python 获取 Rufus 功能。
+- Python 获取 Rufus 的实现细节不应该出现在 `ops-amazon-rufus` Skill 中。
+- 获取 Rufus 的 `.py` 脚本文件应归 MCP 工具模块所有，例如 `opscli/mcp/tools/amazon_rufus.py`；不应放在 Skill 目录中。
+- Skill 应保留用户授权判断规则：当用户同意保存 cookie / browser state 时，Agent 通过 MCP Tool 获取 Rufus。
+- 使用 Super Dev 流程先完成 research、PRD、architecture、UIUX 文档确认，再进入 Spec 和实现。
+
+本节为最新约束，后续 Spec 和实现以本节为准；旧章节中出现的 CLI 获取示例只保留历史背景，不再作为 Skill 交互入口。
+
+### 本地知识发现
+
+本轮检查了 `knowledge/`、`output/knowledge-cache/*-knowledge-bundle.json`、`.super-dev/SESSION_BRIEF.md` 与 `.super-dev/WORKFLOW.md`，当前仓库没有可读取的本地知识包或会话摘要。因此本轮以仓库现状和既有 `output/ops-amazon-rufus-*` 文档作为本地知识来源。
+
+### 仓库现状
+
+当前 Rufus 能力需要分清三类位置：
+
+1. 正式 Python 业务模块：
+   - `opscli/amazon_rufus/services/manager.py`
+   - `opscli/amazon_rufus/services/headless_capture.py`
+   - `opscli/amazon_rufus/services/headless_client.py`
+   - `opscli/amazon_rufus/services/browser_state_store.py`
+   - `opscli/amazon_rufus/services/answer_report_formatter.py`
+2. MCP 工具文件归属位置：
+   - `opscli/mcp/tools/amazon_rufus.py`
+3. Skill 文档与数据：
+   - `opscli/skills/templates/ops-amazon-rufus/SKILL.md`
+   - `.agents/skills/ops-amazon-rufus/SKILL.md`
+   - `opscli/skills/templates/ops-amazon-rufus/data/question_templates.json`
+
+按本轮约束，后续不在以下目录新增 Rufus 获取脚本：
+
+```text
+opscli/skills/templates/ops-amazon-rufus/scripts/
+.agents/skills/ops-amazon-rufus/scripts/
+```
+
+如果需要 Python 文件承载 MCP 调用逻辑，应落在：
+
+```text
+opscli/mcp/tools/amazon_rufus.py
+```
+
+`RufusManager` 已有可复用的 Python 入口：
+
+- `init()`：打开对应国家 Amazon 登录页。
+- `get()`：本机 Chrome/CDP 方式获取 Rufus 答案。
+- `get_headless()`：使用 cookie 或 storage state 走 headless 获取。
+- `get_remote_from_browser()`：捕获 storage state 后走远程/headless 获取。
+- `get_remote_from_storage_state()`：保存 storage state 后复用 headless 获取。
+
+这些能力已经属于 Python 业务代码，不应再被 Skill 文档描述为 CLI 或 Python 脚本执行流程。Skill 可以继续承载题库数据与 Agent 决策规则：当用户明确同意保存 cookie / browser state 后，Skill 指导 Agent 调用 MCP Tool，而不是执行 `opscli amazon-rufus get` 或 Python headless 代码。
+
+### MCP 现状
+
+仓库已经有统一 MCP Server：
+
+- `opscli/mcp/server.py`
+- `opscli/mcp/tools/auth.py`
+- `opscli/mcp/tools/query.py`
+- `opscli/mcp/tools/skills.py`
+- `opscli/mcp/tools/amazon.py`
+
+`amazon.py` 当前存在但 `_ALL_TOOLS` 为空，说明 Amazon MCP 模块结构已预留，但抓取工具未启用。Rufus 可以接入现有 MCP Server，不需要新建独立服务。
+
+推荐新增专门模块：
+
+```text
+opscli/mcp/tools/amazon_rufus.py
+```
+
+而不是继续把 Rufus 获取实现流程写进 `opscli/skills/templates/ops-amazon-rufus/SKILL.md`。Skill 中可以保留“同意保存 cookie 后调用 `amazon_rufus_get_remote`”这类 MCP 编排规则。
+该 `.py` 文件属于 MCP 工具层，不属于 Skill 文件。
+
+### 官方资料结论
+
+MCP 官方 Tools 规范说明，Tool 是服务器暴露给模型调用的能力，适用于查询数据库、调用 API、执行计算等外部系统交互；工具定义包含名称、描述、输入 schema、输出 schema 和 annotations。该定义与“把 Rufus 获取封装为 `amazon_rufus_*` MCP Tool”一致。来源：Model Context Protocol Tools 规范，2025-06-18 版，https://modelcontextprotocol.io/specification/2025-06-18/server/tools。
+
+同一规范还强调工具调用应有人类可拒绝的交互能力。Rufus 远程授权、Amazon 登录态捕获、storage state 保存都属于需要明确用户授权的操作，不能隐藏在自动执行中。Skill 可以负责提示 Agent 先征得用户同意；MCP Tool 通过显式参数表达 `allow_capture_browser_state` 等选择，并在工具描述中要求用户授权。
+
+FastMCP 文档说明，FastMCP 默认通过 Python 函数签名和类型注解生成 MCP Tool schema。因此本项目继续采用现有 `register(mcp)` 模式即可，不需要引入新的协议层或脚手架。来源：FastMCP Tools 文档，https://gofastmcp.com/v2/servers/tools。
+
+MCP tool annotations 资料说明，`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint` 是风险提示，不是安全合约。Rufus 工具访问 Amazon 外部站点并可能写入本地加密 storage state，应设置为 open world 且非 read-only；真正的安全约束仍应由参数校验、敏感字段过滤和用户授权流程保证。来源：MCP Tool Annotations blog，2026-03-16，https://blog.modelcontextprotocol.io/posts/2026-03-16-tool-annotations/。
+
+### 边界调整结论
+
+新的产品边界应调整为：
+
+```text
+MCP Tool = Rufus 获取能力执行入口
+opscli/amazon_rufus = Python 业务实现
+opscli/mcp/tools/amazon_rufus.py = 获取 Rufus 的 MCP Python 工具文件
+ops-amazon-rufus Skill = 题库数据包 + Agent 授权决策规则，不承载 Python/CLI 获取实现或 .py 脚本
+```
+
+这比“Skill 指导 Agent 调 CLI / Python 脚本”更符合项目架构：
+
+- 减少 Agent 对终端命令和交互文案的依赖。
+- 让 Rufus 能力被所有 MCP 客户端统一调用。
+- 把 cookie、localStorage、storage_state 等敏感数据控制在 Python/MCP 实现内。
+- Skill 保留可升级的题库数据和授权判断规则，避免把 Python 获取实现或获取脚本散落在 Skill 文件中。
+
+### 风险与对策
+
+| 风险 | 影响 | 对策 |
+|------|------|------|
+| MCP Tool 内部调用同步 Playwright 阻塞事件循环 | MCP 请求卡死或超时 | 首版可用同步函数直接封装，但应限制工具超时；如出现阻塞，再用线程包装同步 RufusManager 调用 |
+| 返回结构泄露 seed/header/cookie/storage_state | 敏感数据暴露给 Agent 或报告 | 默认返回报告路径和摘要，调试字段仅在显式 `include_debug=false/true` 中受控，首版建议不暴露 debug |
+| Skill 仍包含 CLI/Python 获取实现或 `.py` 获取脚本 | 与新边界冲突 | Skill 只保留题库升级、数据文件描述和 MCP 调用规则，不放 `scripts/get_rufus.py` 之类文件 |
+| 登录中断被当作工具 bug 反馈 | 反馈噪声和隐私风险 | `RUFUS_LOGIN_REQUIRED`、`SEED_REQUEST_NOT_CAPTURED` 返回可恢复状态，不自动生成反馈草案 |
+| MCP 远程授权缺少用户确认 | 账号和登录态风险 | 远程捕获工具必须要求显式参数，例如 `remote_rufus=True`、`allow_capture_browser_state=True` |
+
 ## 研究结论
 
 这次需求的正确落地方式不是“在 Skill 里直接写一堆 Playwright 脚本”，而是：
@@ -780,3 +1308,803 @@ Amazon 官方对 Rufus 的公开定位是“购物助手”，能力包括回答
 - Skill 远端升级模型
 - 与现有前端口径对齐
 - 后续可接真实上传 API 的扩展性
+
+## 2026-06-04 诊断增量：远程 Rufus 获取 headless Chromium 启动失败
+
+### 用户反馈
+
+MCP 远程获取 Rufus 时返回：
+
+```text
+RUFUS_HEADLESS_CAPTURE_ERROR: 无法启动 headless Chromium
+```
+
+用户要求检查 MCP 服务做了什么，并确认 MCP 是否通过 Python 脚本获取 Rufus 问题结果。
+
+### 本地调用链结论
+
+当前 MCP Rufus 工具并没有在 Skill 目录执行脚本。实际调用链为：
+
+```text
+opscli/mcp/server.py
+  -> opscli/mcp/tools/amazon_rufus.py:amazon_rufus_get_remote
+  -> RufusManager.get_remote_from_browser
+  -> RufusBrowserStateStore.capture_from_browser
+  -> RufusManager.get_remote_from_storage_state
+  -> RufusManager.get_headless
+  -> HeadlessRufusCaptureService.capture_seed_request
+  -> playwright.chromium.launch(headless=True)
+  -> HeadlessRufusClient.query
+  -> AnswerReportWriter.write
+```
+
+因此，MCP 是通过 `opscli/amazon_rufus` 的 Python 服务层执行 Rufus 获取，MCP 工具文件只是入口与响应包装。Skill 目录只保存题库和编排文档。
+
+### 复现证据
+
+在当前仓库环境执行最小 Playwright 启动脚本：
+
+```powershell
+$env:PYTHONUTF8='1'
+$env:PYTHONIOENCODING='utf-8'
+uv run --extra amazon python -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True, args=['--disable-dev-shm-usage','--disable-gpu'])"
+```
+
+实际底层错误为：
+
+```text
+BrowserType.launch: Executable doesn't exist at C:\Users\A\AppData\Local\ms-playwright\chromium_headless_shell-1217\chrome-headless-shell-win64\chrome-headless-shell.exe
+Looks like Playwright was just installed or updated. Please run the following command to download new browsers: playwright install
+```
+
+当前 `.venv` 中 Playwright 可导入，`python -m playwright --version` 返回 `1.59.0`。本机缓存存在其他版本目录：
+
+```text
+chromium_headless_shell-1200
+chromium_headless_shell-1208
+chromium_headless_shell-1223
+chromium-1200
+chromium-1208
+chromium-1223
+```
+
+但缺少当前 Playwright 期望的 `chromium_headless_shell-1217`。
+
+### 官方资料校验
+
+Playwright Python 官方文档说明，每个 Playwright 版本都需要对应版本的浏览器二进制，并且更新 Playwright 后可能需要重新执行 `install` 命令安装浏览器。参考：<https://playwright.dev/python/docs/browsers>
+
+文档还说明 headless 模式默认使用单独的 Chromium headless shell。当前错误正是缺少该 headless shell 二进制。
+
+### 根因判断
+
+根因是环境依赖不完整：Python 包 `playwright` 已安装，但当前版本对应的 Chromium headless shell 未安装。不是 Amazon 登录态问题，不是 Chrome CDP 问题，也不是 MCP 没有调用 Python 获取链路。
+
+### 当前代码暴露的问题
+
+`HeadlessRufusCaptureService.capture_seed_request()` 在 `playwright.chromium.launch(...)` 失败时只抛出：
+
+```python
+HeadlessRufusCaptureError("无法启动 headless Chromium")
+```
+
+这隐藏了 Playwright 给出的可操作原因，导致用户只能看到通用错误码，无法判断需要安装浏览器二进制。
+
+### 最小处理建议
+
+用户已确认期望默认自动修复一次，不新增 CLI/MCP 参数。因此推荐方案调整为：
+
+1. 首次 `playwright.chromium.launch(headless=True)` 失败时，先判断底层异常是否为 Playwright 浏览器二进制缺失，例如包含 `Executable doesn't exist` 或 `playwright install`。
+2. 若命中该明确场景，使用当前 Python 解释器执行 `python -m playwright install chromium`，确保安装到 MCP/opscli 实际运行环境。
+3. 安装完成后只重试一次 `chromium.launch()`。
+4. 重试成功则继续原 Rufus headless 捕获链路，用户无感继续获取。
+5. 安装失败或重试仍失败时，保留 `RUFUS_HEADLESS_CAPTURE_ERROR`，并在 message 中附加短的底层原因和手动安装命令。
+6. 测试增强：新增“首次 launch 缺浏览器 -> 自动 install -> 重试成功”和“install 后仍失败 -> 返回可读错误”两类单元测试。
+
+该处理符合 KISS/YAGNI：不重写远程 Rufus 链路，不新增公开参数，不引入长期浏览器管理抽象，只对明确的环境依赖缺失做一次可控修复。
+
+## 2026-06-05 研究增量：RUFUS_HEADLESS_CAPTURE_ERROR 页面重开重试
+
+### 本轮需求
+
+用户反馈 Rufus MCP 工具有时会返回 `RUFUS_HEADLESS_CAPTURE_ERROR`，希望在该错误场景增加重试机制：重新打开 Amazon 页面，最多重试 3 次。
+
+### 本地证据
+
+当前 `HeadlessRufusCaptureService.capture_seed_request()` 的页面捕获链路是单次尝试：
+
+```text
+sync_playwright()
+  -> _launch_headless_browser_with_repair()
+  -> browser.new_context(...)
+  -> context.add_cookies(...)
+  -> context.new_page()
+  -> page.on("request", on_request)
+  -> page.goto(page_url, wait_until="domcontentloaded", timeout=deadline_ms)
+  -> page.wait_for_timeout(min(deadline_ms, 1000))
+  -> 未捕获则直接 raise HeadlessRufusCaptureError
+```
+
+已有自动修复只覆盖 Playwright 浏览器二进制缺失：
+
+```text
+_launch_headless_browser_with_repair()
+  -> launch 失败且明确缺浏览器
+  -> python -m playwright install chromium
+  -> launch 重试一次
+```
+
+这说明当前缺口不是“浏览器启动重试”，而是“页面打开与 Rufus streaming 捕获重试”。一旦 Amazon 商品页首轮未触发 `/rufus/cl/streaming`、导航临时失败或页面初始化慢，MCP 会直接把该次偶发失败暴露为 `RUFUS_HEADLESS_CAPTURE_ERROR`。
+
+### 官方资料核验
+
+Playwright 官方 `Page.goto` 文档说明页面导航会等待指定状态并受 timeout 约束；网络事件文档说明可以通过 `page.on("request", handler)` 监听请求；Browser API 文档说明可通过 `browser.new_context(storage_state=...)` 创建带登录状态的上下文。
+
+参考：
+
+- https://playwright.dev/python/docs/api/class-page
+- https://playwright.dev/python/docs/events
+- https://playwright.dev/python/docs/api/class-browser
+
+这些资料支持本轮方案：同一个 headless browser/context 内可以重新创建页面并再次导航到商品页，监听新的 request 事件，以处理临时未捕获场景。
+
+### 根因判断
+
+`RUFUS_HEADLESS_CAPTURE_ERROR` 当前覆盖多类捕获失败，其中一类是 Amazon 商品页打开后的 transient failure：
+
+1. 页面首轮未触发 Rufus streaming 请求。
+2. 商品页导航或渲染临时超时。
+3. 请求监听已注册，但 Amazon 侧异步触发时间不稳定。
+4. 页面实例进入异常状态后没有第二次打开机会。
+
+这些场景与 cookie 空、Playwright 缺失、secret 缺失不同，不应让用户重新授权或手动处理。更合适的处理是服务内部用同一份 cookie/storage_state 重新打开商品页，做有限次捕获重试。
+
+### 方案判断
+
+推荐采用“同一 browser/context 内新建 page 重试”的最小方案：
+
+1. 保留 `_launch_headless_browser_with_repair()`，浏览器启动失败不进入页面重试。
+2. context 只创建一次，继续复用 cookie 或 storage_state，避免每次重试重新注入状态。
+3. 将当前页面捕获逻辑拆为一次性 helper，例如 `_capture_seed_request_once(...)`。
+4. 捕获失败时关闭当前 page，再 `context.new_page()` 重新打开 Amazon 商品页。
+5. 首次尝试失败后最多重试 3 次，即最多 4 次页面打开尝试。
+6. `timeout_seconds` 仍作为 headless 捕获总预算；重试使用剩余预算，避免单次 MCP 调用因重试线性放大到不可控时长。
+7. 最终仍失败时抛出 `HeadlessRufusCaptureError`，错误码保持 `RUFUS_HEADLESS_CAPTURE_ERROR`，message 说明已重试打开 Amazon 商品页 3 次。
+8. 不新增 MCP/CLI 参数，不把重试次数暴露给 Agent，避免增加调用心智。
+
+该方案符合 KISS/YAGNI：只在现有 headless capture 边界内增加有限重试，不改 `RufusManager`、MCP schema、题库、报告、Rufus SSE 请求和远程授权流程。
+
+## 2026-06-05 研究增量：移除 MCP CDP 链路与 amazon_rufus_get_remote
+
+### 本轮需求
+
+用户要求去掉 Rufus MCP 工具里的 CDP 链路，以及 `amazon_rufus_get_remote` 这条链路；同时询问“答案是否需要登录恢复”是什么判断。
+
+### 本地现状
+
+当前 MCP 文件 `opscli/mcp/tools/amazon_rufus.py` 暴露 3 个工具：
+
+```text
+amazon_rufus_init
+amazon_rufus_get
+amazon_rufus_get_remote
+```
+
+其中：
+
+1. `amazon_rufus_get` 已经默认调用 `RufusManager.get_backend()`，不走 CDP。
+2. `amazon_rufus_init` 调用 `RufusManager.init()`，用于打开 Amazon 登录窗口，底层依赖 Chrome CDP。
+3. `amazon_rufus_get_remote` 调用 `RufusManager.get_remote_from_browser()`，先通过 CDP 捕获浏览器 `storage_state`，再进入 headless 获取。
+4. `amazon_rufus_get` 参数里仍保留 `new_chrome`、`keep_chrome_open`、`chrome_path`、`launch_if_needed`、`cdp_url` 等兼容参数，但默认后端路径不使用。
+
+因此，MCP 层“CDP 残留”主要是两个公开工具和一组兼容参数，而不是默认获取主链路。
+
+### 答案是否需要登录恢复的现有判断
+
+现有判断位于 `RufusManager._answers_require_login_resume()`：
+
+```python
+if not answers:
+    return True
+return all(not self._answer_has_content(answer) for answer in answers)
+```
+
+`_answer_has_content()` 的判断是：
+
+```python
+answer.text.strip()
+or answer.html.strip()
+or answer.summary_text.strip()
+or answer.blocks
+```
+
+也就是说：
+
+1. Rufus 一题答案都没有返回时，判定需要登录恢复。
+2. 返回了答案对象，但所有答案都没有 `text`、`html`、`summary_text`、`blocks` 任何可展示内容时，也判定需要登录恢复。
+3. 只要任意一题有可展示内容，就不判定为登录恢复。
+
+该判断本质是“空答案兜底判断”，不是严格的 Amazon 登录态检测。它把空答案、登录态失效、Rufus 未返回可解析内容都归入 `RUFUS_LOGIN_REQUIRED`。
+
+### 现有判断的问题
+
+移除 CDP 和 remote 之后，`RUFUS_LOGIN_REQUIRED` 不能再提示调用 `amazon_rufus_init` 或 `amazon_rufus_get_remote`。否则错误恢复路径会指向已经移除的工具。
+
+更合理的语义应调整为：
+
+```text
+空答案 / 全部无可展示内容
+  -> 授权状态可能失效或 Rufus 返回空内容
+  -> 返回 RUFUS_LOGIN_REQUIRED 或更准确的授权状态错误
+  -> next_action 指向刷新后端 Rufus secret / 联系授权状态维护流程
+```
+
+### 推荐方案
+
+首版推荐只移除 MCP 公共入口，不立即删除 CLI 和服务层旧代码：
+
+1. MCP `_ALL_TOOLS` 只注册 `amazon_rufus_get`。
+2. 删除或不再暴露 `amazon_rufus_init`。
+3. 删除或不再暴露 `amazon_rufus_get_remote`。
+4. 精简 `amazon_rufus_get` 函数签名，移除 CDP 兼容参数。
+5. `_rufus_error()` 不再把登录恢复 next_action 指向 `amazon_rufus_init`，改成提示刷新 Rufus 后端授权状态。
+6. Skill 文档删除 CDP 兼容入口、remote authorization 和 `amazon_rufus_get_remote` 调用规则。
+7. 服务层 `RufusManager.get()`、`init()`、`get_remote_from_browser()`、`BrowserAttachService` 可暂时保留给 CLI 旧入口和历史测试，后续单独治理。
+
+该方案符合 KISS/YAGNI：先切断 MCP 对外可见的 CDP/remote 能力，避免一次性删除 CLI 兼容代码带来大范围测试和用户迁移风险。
+
+## 2026-06-05 研究增量：宿主未暴露 Rufus MCP 工具时的兼容入口
+
+### 本轮需求
+
+用户要求优化 `ops-amazon-rufus` Skill：当当前宿主没有暴露 Rufus MCP 服务或工具时，需要有兜底流程，但不能使用粗粒度直译表述。需要先检查 Skill 当前做了什么，再用更贴合现有边界的方式说明。
+
+### 本地证据
+
+当前 `ops-amazon-rufus/SKILL.md` 已经完成主文档瘦身，核心定位是：
+
+1. Skill 只承载默认题库、编排规则和 references。
+2. Rufus 获取能力由 `amazon_rufus_*` MCP Tool 提供。
+3. 获取实现归属 `opscli/amazon_rufus/` 与 `opscli/mcp/tools/amazon_rufus.py`，不得放到 Skill 目录。
+4. 默认 `amazon_rufus_get` 已调用 `RufusManager.get_backend()`，即后端/headless 链路，不再使用本机 CDP。
+
+同时，仓库仍保留正式 CLI 兼容入口：
+
+```text
+opscli amazon-rufus init <country>
+opscli amazon-rufus get <asin> <country> --launch-if-needed
+```
+
+CLI `get` 会调用 `RufusManager.get()`，该路径使用 `BrowserAttachService.capture_seed_request()` 连接本机 Chrome CDP，并支持：
+
+1. `--launch-if-needed`：CDP 不可用时自动搜索并启动 Chrome。
+2. `--chrome-path`：自动搜索失败时由用户指定 Chrome 路径。
+3. `-q/--question`：显式临时问题，且可多次传入。
+4. `--skills-dir`：读取已安装 Skill 题库。
+
+### 问题判断
+
+“没有对应 MCP 服务”应拆成两类，不应混写：
+
+1. 当前宿主工具列表未暴露 `amazon_rufus_*`。这是宿主能力不可见或 MCP Server 未接入，不代表 Rufus 后端授权失败。
+2. `amazon_rufus_get` 已可调用但返回 `RUFUS_SECRET_NOT_READY`、`RUFUS_LOGIN_REQUIRED` 等业务错误。此时应进入授权初始化或刷新，不应直接改走 CDP。
+
+如果不区分这两类，Agent 可能在后端授权缺失时错误地尝试 CDP 参数，也可能在 MCP 工具完全不可见时卡在“确认 MCP Server 可用”这一步。
+
+### 方案判断
+
+推荐采用“宿主能力分流”的表述：
+
+1. 当前宿主能看到 `amazon_rufus_*` 工具时，默认走 MCP `amazon_rufus_get`。
+2. 当前宿主没有暴露 Rufus MCP 工具时，改用 `opscli amazon-rufus` 正式 CLI 入口触发本机 CDP 兼容链路。
+3. CLI 兼容入口仍属于 opscli 正式运行层，不是在 Skill 目录执行 Python 脚本。
+4. 授权缺失、登录中断、CDP 不可用分别按 reference 中的独立分支处理。
+5. 最终输出仍只展示报告路径，不输出 cookie、storage_state、headers、seed request 或 upload payload。
+
+该方案符合 KISS/YAGNI：只补充文档分流规则，不改 MCP schema、不新增工具、不把实现脚本放入 Skill。
+
+## 2026-06-05 研究增量：RUFUS_HEADLESS_CAPTURE_ERROR 后的 CDP 登录恢复流程
+
+### 本轮需求
+
+用户要求继续优化 `ops-amazon-rufus` Skill：当 MCP 服务返回 `RUFUS_HEADLESS_CAPTURE_ERROR`，导致获取 Rufus 出错时，不应只停留在 headless 错误提示；应先走 CDP 登录流程，让用户完成目标国家站点 Amazon 登录，再按原有问题来源重新走 MCP 或 CDP 获取 Rufus 流程。
+
+### 本地现状
+
+现有文档已经区分了几类分支：
+
+1. `amazon_rufus_get` 默认走 MCP 后端/headless 链路。
+2. 当前宿主未暴露 `amazon_rufus_*` 工具时，走 `opscli amazon-rufus get` 本机 CDP 兼容入口。
+3. `RUFUS_SECRET_NOT_READY` 转入 `remote-authorization.md` 完成授权初始化或刷新。
+4. `CHROME_CDP_UNAVAILABLE` 走本机兼容 CDP 排障。
+
+但 `RUFUS_HEADLESS_CAPTURE_ERROR` 目前只被说明为不适用“MCP 工具不可见时的兼容入口”，缺少恢复动作。Agent 看到该错误后容易出现三种错误反应：
+
+1. 把它当作 MCP 工具不可见，错误改走 CLI。
+2. 把它当作 CDP 未启动，错误处理 `chrome_path`。
+3. 直接向用户暴露 headless 错误，不刷新登录态。
+
+### 根因判断
+
+`RUFUS_HEADLESS_CAPTURE_ERROR` 与 `CHROME_CDP_UNAVAILABLE` 不同。前者表示 MCP/headless 链路已经进入后端捕获阶段，但未能稳定捕获商品页 Rufus 上下文，常见原因包括：
+
+1. 已保存的浏览器状态失效。
+2. 目标国家站点 Amazon 登录态不可用。
+3. 商品页首次打开未触发 Rufus streaming。
+4. headless 页面上下文异常。
+
+因此恢复方向不是立即改 Chrome 路径，而是先让用户通过 CDP 可见登录窗口刷新目标国家站点登录态，再按原入口重试。
+
+### 方案判断
+
+推荐新增“headless 捕获失败恢复”文档分支：
+
+1. 保留原 ASIN、国家、单题/多题/默认题库来源。
+2. 当前宿主可调用 MCP 工具时，先调用 `amazon_rufus_init(country=...)` 打开目标国家站点登录窗口。
+3. 用户完成 Amazon 登录并明确回复“已登录”后，调用 `amazon_rufus_get_remote(..., allow_capture_browser_state=True)`，让 MCP 捕获或刷新浏览器状态并继续获取 Rufus。
+4. 如果当前宿主未暴露 MCP 工具，使用 `opscli amazon-rufus init <COUNTRY>` 打开 CDP 登录窗口；用户确认登录后重新执行原 `opscli amazon-rufus get ...` 命令。
+5. 如果 MCP 远程刷新后仍返回 `RUFUS_HEADLESS_CAPTURE_ERROR`，再提示用户可改走本机 CDP 兼容入口或重新确认目标站点是否支持 Rufus。
+
+该方案符合 KISS/YAGNI：只补齐 Agent 恢复流程，不改 MCP schema、不新增 CLI 参数、不把获取脚本放到 Skill 目录。
+
+## 2026-06-05 研究增量：Amazon 登录态保存位置与 Rufus 获取流程核查
+
+### 本轮问题
+
+用户要求检查 `ops-amazon-rufus` Skill 与当前实现，确认登录后的 cookie 保存位置，并给出整体流程图。
+
+### 当前代码结论
+
+当前实现中有两层状态保存，需要区分：
+
+1. `amazon_rufus_init(country=...)` 只负责打开目标国家站点的 Amazon 登录窗口。该窗口使用 opscli 专用 Chrome profile，路径为 `CONFIG_DIR / "amazon-rufus" / "chrome-profile-<port>"`，默认端口为 `9222`。
+2. 用户登录完成后，只有调用 `amazon_rufus_get_remote(..., allow_capture_browser_state=True)`，才会通过 Playwright `context.storage_state()` 捕获 cookies 与 localStorage，并由 `RufusBrowserStateStore.save()` 加密保存。
+
+当前 `CONFIG_DIR` 定义为：
+
+```text
+Path.home() / ".config" / "opscli"
+```
+
+因此在当前 Windows 用户环境下，实际 Rufus 登录态保存位置是：
+
+```text
+C:/Users/A/.config/opscli/amazon-rufus/browser-state-<COUNTRY>.bin
+C:/Users/A/.config/opscli/amazon-rufus/.browser-state-key
+C:/Users/A/.config/opscli/amazon-rufus/chrome-profile-9222/
+```
+
+其中：
+
+- `browser-state-<COUNTRY>.bin`：加密后的 Rufus 浏览器状态，包含 Playwright `storage_state`，也就是 cookies 与 localStorage。
+- `.browser-state-key`：AES-256-GCM 密钥文件，用于加解密上述浏览器状态。
+- `chrome-profile-9222/`：`amazon_rufus_init` 或 CDP 兼容链路打开的 Chrome 独立 profile，由 Chrome 自身保存浏览器 cookie；它不是 MCP 默认后端获取读取的主凭证文件。
+
+### 默认获取流程
+
+当前 `amazon_rufus_get` 不走 CDP，不打开可见浏览器。MCP 工具调用 `RufusManager.get_backend()`，后者通过 `RufusBackendSecretProvider.load()` 读取本地加密 `storage_state`，再派生 Cookie header，进入 headless 捕获与 HTTP streaming 请求。
+
+### 授权刷新流程
+
+当 `amazon_rufus_get` 返回 `RUFUS_SECRET_NOT_READY` 或登录态失效时，才进入授权选择：
+
+1. 用户允许捕获并保存浏览器状态时，调用 `amazon_rufus_init(country=...)` 打开目标国家 Amazon 登录窗口。
+2. 用户完成登录并明确确认后，调用 `amazon_rufus_get_remote(..., allow_capture_browser_state=True)`。
+3. `RufusBrowserStateStore.capture_from_browser()` 捕获 `storage_state`。
+4. `RufusBrowserStateStore.save()` 加密写入 `browser-state-<COUNTRY>.bin`。
+5. 随后复用 headless 链路生成 Rufus 报告。
+6. 用户不允许捕获并保存浏览器状态时，不调用 `amazon_rufus_get_remote`，改用 `opscli amazon-rufus get ... --launch-if-needed`，也就是原有 `RufusManager.get()` 本机 CDP 获取链路。
+
+### 流程图
+
+```mermaid
+flowchart TD
+    A[用户提供 ASIN / 国家 / 问题] --> B{当前宿主可调用 amazon_rufus_get?}
+    B -->|是| C[调用 amazon_rufus_get]
+    B -->|否| Z[使用 opscli amazon-rufus get 兼容入口]
+
+    C --> D[RufusManager.get_backend]
+    D --> E[读取 CONFIG_DIR/amazon-rufus/browser-state-COUNTRY.bin]
+    E --> F{加密 storage_state 可用?}
+    F -->|是| G[从 storage_state 派生 Cookie header]
+    F -->|否| H[返回 RUFUS_SECRET_NOT_READY]
+
+    G --> I[HeadlessRufusCaptureService 打开商品页捕获 /rufus/cl/streaming]
+    I --> J[HeadlessRufusClient 逐题请求 Rufus SSE]
+    J --> K[AnswerReportWriter 写入 output/amazon-rufus 报告]
+    K --> L[返回 report_path]
+
+    H --> S{用户允许捕获并保存浏览器状态?}
+    S -->|允许| M[调用 amazon_rufus_init 打开 Amazon 登录窗口]
+    S -->|不允许| T[改用 opscli amazon-rufus get --launch-if-needed]
+    T --> U[RufusManager.get 走原有本机 CDP 链路]
+    U --> V[BrowserAttachService 捕获 seed request]
+    V --> W[RufusReplayService 在页面上下文逐题请求]
+    W --> K
+
+    M --> N[Chrome 使用 CONFIG_DIR/amazon-rufus/chrome-profile-9222 保存浏览器登录态]
+    N --> O[用户确认已登录]
+    O --> P[调用 amazon_rufus_get_remote allow_capture_browser_state=True]
+    P --> Q[Playwright 捕获 context.storage_state]
+    Q --> R[加密保存 browser-state-COUNTRY.bin]
+    R --> G
+```
+
+### 边界说明
+
+Skill 目录只保存文档与题库，不保存 cookie、localStorage 或 `storage_state`。`output/amazon-rufus/*.md` 只保存答案报告，不应包含 cookie、headers、seed request 或 `storage_state`。当前代码中 `remote-consent.json` 仍只是 Super Dev 文档里的规划项，未在服务层落地。
+
+## 2026-06-05 研究修正：Rufus CDP 全量删除与空答案正常返回
+
+### 本轮最新要求
+
+用户明确要求“彻底删除 CDP”，并要求去掉 `if not answers` 判断，空答案按正常结果处理。该要求覆盖前文所有“CLI 兼容 CDP 暂留”“通过 CDP 登录窗口恢复”“`amazon_rufus_get_remote` 刷新浏览器状态”的结论。
+
+### 最新范围结论
+
+Rufus 模块后续只保留一条正式获取链路：
+
+```text
+amazon_rufus_get
+  -> RufusManager.get_backend
+  -> RufusBackendSecretProvider
+  -> HeadlessRufusCaptureService
+  -> HeadlessRufusClient
+  -> AnswerReportWriter
+  -> report_path
+```
+
+需要删除的范围：
+
+1. MCP 工具：删除 `amazon_rufus_init`、`amazon_rufus_get_remote`，`_ALL_TOOLS` 只保留 `amazon_rufus_get`。
+2. MCP 参数：`amazon_rufus_get` 删除 `cdp_url`、`new_chrome`、`keep_chrome_open`、`chrome_path`、`launch_if_needed` 等兼容参数。
+3. CLI 命令：删除 `opscli amazon-rufus init`，删除 `get` 中的 `--cdp-url`、`--new-chrome`、`--keep-chrome-open`、`--chrome-path`、`--launch-if-needed`、`--remote-rufus`。
+4. Service 层：删除 `BrowserAttachService`、`RufusManager.get()` 的 CDP 主链路、`get_remote_from_browser()`、`get_remote_from_storage_state()` 和 CDP browser state 捕获入口。
+5. Skill 文档：删除 CDP 登录、远程授权、`amazon_rufus_get_remote`、`amazon_rufus_init`、`opscli amazon-rufus init`、`--launch-if-needed`、`chrome_path` 等说明。
+6. 测试：删除或改写所有依赖 CDP/remote/init 的测试，新增工具暴露、CLI help、空答案正常返回的契约测试。
+
+### 空答案判断修正
+
+当前 `_answers_require_login_resume()` 会把以下情况归为需要登录恢复：
+
+1. `answers` 为空。
+2. 所有 answer 都没有正文、HTML、摘要或结构化 blocks。
+
+最新要求是取消这层推断。后续实现中，空 `answers` 不再抛 `RUFUS_LOGIN_REQUIRED`，而是按正常结果进入报告生成与 MCP 返回：
+
+```text
+question_count = 原问题数量
+answer_count = 0
+report_path = 已生成的报告路径
+next_action = 读取报告并继续分析
+```
+
+只有明确的底层异常才作为失败处理，例如 secret 缺失、headless 捕获异常、Rufus HTTP 请求异常。不能再通过“没有答案内容”推断登录态。
+
+## 2026-06-05 研究增量：三类 MCP 错误后的单次 CDP 登录恢复
+
+### 本轮最新要求
+
+用户要求优化 `ops-amazon-rufus` Skill 项目：当 MCP 服务返回以下错误时，不再只提示刷新后端授权或稍后重试，而是统一进入 CDP 登录流程：
+
+```text
+RUFUS_HEADLESS_REQUEST_ERROR
+RUFUS_HEADLESS_CAPTURE_ERROR
+RUFUS_SECRET_NOT_READY
+```
+
+同时需要记录本次 Skill 调用已经触发过登录。每次 Skill 调用最多触发一次登录；如果登录后仍失败，不再重复打开登录窗口，应直接报错。
+
+### 本地证据
+
+当前 MCP Rufus 工具只暴露 `amazon_rufus_get`。`tests/mcp/test_amazon_rufus_tools.py` 断言 `amazon_rufus_get_remote` 不暴露，MCP schema 也排除了 `cdp_url`、`new_chrome`、`keep_chrome_open`、`chrome_path`、`launch_if_needed` 等 CDP 参数。
+
+当前 CLI 仍保留正式 CDP 兼容入口：
+
+```text
+opscli amazon-rufus init <COUNTRY>
+opscli amazon-rufus get <ASIN> <COUNTRY> --skills-dir ".agents/skills" --launch-if-needed
+```
+
+因此本轮更现实的恢复路径不是让 MCP 重新暴露 CDP 参数，而是在 Skill 编排层做分流：默认先调用 MCP `amazon_rufus_get`；若命中三类错误且本次 Skill 调用尚未触发登录，则转入 CLI CDP 登录和 CLI CDP 获取。
+
+### 外部资料校验
+
+MCP 工具规范把工具调用结果作为模型可读取的结构化结果，工具失败应由调用方根据结果分支处理。参考：<https://modelcontextprotocol.io/specification/2025-06-18/server/tools>
+
+Playwright 认证文档说明 storage state 会包含 cookies 与 localStorage，属于可复用登录态，不应进入仓库或普通报告。参考：<https://playwright.dev/python/docs/auth>
+
+HTTP 403 表示服务端理解请求但拒绝授权，本轮将其视为 `RUFUS_HEADLESS_REQUEST_ERROR` 下的可恢复授权/上下文问题，而不是 MCP 传输层错误。参考：<https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403>
+
+### 冲突修正
+
+此前文档曾有“彻底删除 Rufus CDP 与 remote 链路”的结论。该结论不再适用于当前 Skill 编排需求。新的覆盖结论是：
+
+1. MCP 默认链路仍只调用 `amazon_rufus_get`，不重新暴露 CDP 参数。
+2. CDP 作为三类错误后的 Skill 恢复路径存在。
+3. CDP 登录恢复优先使用 opscli 正式 CLI，不在 Skill 目录新增脚本。
+4. 单次 Skill 调用内只允许触发一次登录窗口，避免无限登录循环。
+
+### 方案判断
+
+推荐采用“默认 MCP + 一次性 CDP 登录恢复”的最小方案：
+
+1. 进入 Skill 时初始化运行态：`login_recovery_attempted = false`。
+2. 解析 ASIN、国家和问题来源，优先调用 `amazon_rufus_get`。
+3. 如果 MCP 成功，返回 `report_path`。
+4. 如果 MCP 返回三类错误之一，且 `login_recovery_attempted = false`，将其置为 `true`，记录原 ASIN、国家、问题来源和本轮错误码。
+5. 调用 `opscli amazon-rufus init <COUNTRY>` 打开目标国家站点 Amazon 登录窗口。
+6. 等待用户明确回复“已登录”或等价确认。
+7. 按原问题来源重新执行 `opscli amazon-rufus get ... --launch-if-needed`。
+8. 如果 CDP 获取成功，最终只展示报告路径。
+9. 如果登录后仍失败，或再次命中三类错误，不再触发第二次登录，直接报错并说明“本次 Skill 调用已完成一次登录恢复”。
+
+### 记录边界
+
+“记录这次登录”应先定义为当前 Skill 调用的内存态，而不是持久配置文件：
+
+```text
+login_recovery_attempted = true
+login_recovery_error_code = 原始 MCP 错误码
+login_recovery_country = COUNTRY
+```
+
+不得保存到：
+
+- Skill 目录
+- `output/`
+- 报告文件
+- feedback 的敏感字段
+
+CDP 登录态由 Chrome profile 自身维护；Skill 只记录“本轮是否已经触发过登录恢复”，不保存 cookie、localStorage、`storage_state` 或 seed request。
+
+### Skill 文档落点
+
+`SKILL.md` 只保留精简规则：三类 MCP 错误进入一次性 CDP 登录恢复，最多一次，超过报错。详细命令、问题来源拼装、错误分流和敏感信息边界放入 `references/rufus-mcp-workflow.md`。
+
+## 2026-06-05 研究修正：登录态闭环、题库接口环境现状与 CLI 指引统一
+
+### 用户确认范围
+
+本轮只处理上一轮问题清单中的 1、5、6：
+
+1. 闭环 Amazon 登录态：判断未登录或登录态不可用，用户完成登录后捕获 cookie/localStorage，保存到本地加密状态，再让 `amazon_rufus_get` 使用该状态继续 MCP 获取。
+2. 统一 CLI 与 Skill 指引，避免 `--new-chrome` 和 `--launch-if-needed` 两套推荐入口并存。
+3. 补齐当前仅测试覆盖、生产链路未接入的浏览器状态保存能力。
+
+以下问题本轮不处理，只记录边界：
+
+1. 默认题库为空时继续报错，不新增兜底题库或静默跳过。
+2. `answer_count=0` 或空报告不处理。
+3. 发布配置中 `ops-amazon-rufus` 未进入公开产物不处理。
+
+### 题库升级接口环境结论
+
+历史状态中 `opscli/skills/sync/updater.py` 的 `RUFUS_DEFAULT_QUESTION_TEMPLATES_ENDPOINT` 曾硬编码为本地开发地址：
+
+```text
+http://127.0.0.1:8000/api/opencalw/default-question-templates
+```
+
+当前实现已改为固定题库 path `/opencalw/default-question-templates`：请求前缀复用 `OPS_URL` 与 ops 登录态，本地调试仅覆盖 `ops_url` / `OPSCLI_OPS_URL`。
+
+因此对用户问题“题库升级接口有区分线上环境吗？例如读取 .env 等”的当前结论是：已经支持 `.env` 和 `config.ini` 覆盖 base URL，但接口 path 固定在代码中。
+
+### 官方资料校验
+
+Playwright Python 官方文档说明 `browser_context.storage_state()` 返回的状态包含 cookies 与 origins 下的 localStorage，可用于后续创建带登录信息的新 browser context；`browser.new_context(storage_state=...)` 可以复用该登录态。参考：
+
+- https://playwright.dev/python/docs/auth
+- https://playwright.dev/python/docs/api/class-browsercontext
+
+这支持本轮采用 Playwright `storage_state` 作为标准载体，而不是手写 cookie/localStorage 采集格式。
+
+### 新推荐链路
+
+推荐将登录态闭环拆成四步：
+
+```text
+amazon_rufus_get
+  -> RufusBackendSecretProvider.load(country)
+  -> 未找到或登录态不可用
+  -> opscli amazon-rufus init <COUNTRY> --launch-if-needed [--chrome-path <PATH>]
+  -> 用户在目标国家站点完成 Amazon 登录
+  -> opscli amazon-rufus save-state <COUNTRY>
+  -> RufusBrowserStateStore.save(country, storage_state)
+  -> 重新调用 amazon_rufus_get
+  -> RufusBackendSecretProvider 从 storage_state 派生 Cookie header
+  -> HeadlessRufusCaptureService + HeadlessRufusClient 使用同一 Cookie 获取 Rufus
+  -> AnswerReportWriter 写 report_path
+```
+
+关键点：
+
+1. MCP `amazon_rufus_get` 不新增 cookie 参数，避免把敏感信息暴露给 Agent 调用层。
+2. cookie 由 `RufusBackendSecretProvider` 从本地加密 `storage_state` 派生，继续在服务层内部流转。
+3. `opscli amazon-rufus save-state` 是登录完成后的生产入口，补齐当前 `RufusBrowserStateStore.save()` 只有测试覆盖的问题。
+4. 登录恢复后不再改跑 `opscli amazon-rufus get`，而是重新调用 MCP `amazon_rufus_get`，符合“调用 MCP 时带上 cookie”的目标。
+
+### #5 的处理结论
+
+上一轮指出安装后指引推荐 `--new-chrome`，而 Skill 恢复流程推荐 `--launch-if-needed`。本轮建议：
+
+1. 用户文档、Skill 文档、安装后 next_steps 统一推荐 `--launch-if-needed`。
+2. `--new-chrome` 保留为底层调试兼容参数，不作为默认用户路径。
+3. `opscli amazon-rufus init` 暴露 `--chrome-path`，因为底层 `RufusManager.init()` 已支持该参数；CLI 不暴露会导致 Chrome 自动发现失败时无解。
+4. 新增 `opscli amazon-rufus save-state <COUNTRY>`，让“登录完成后保存状态”成为显式动作，而不是混在 `get` 中隐式发生。
+5. Skill 的登录恢复提示从“登录后执行 CLI get”改为“登录后保存状态，再重试 MCP get”。
+
+## 2026-06-06 研究增量：Rufus Skill 与 CLI 重构边界收敛
+
+### 本轮需求
+
+用户要求“现在对 rufus skill 和 cli 进行重构”。该需求发生在 Super Dev 流程中，当前阶段只做 research 与三份核心文档，不直接编码、不创建 `.super-dev/changes/*`。
+
+### 本地代码核查
+
+当前实现已经形成三条不同职责链路：
+
+1. MCP 默认获取：`opscli/mcp/tools/amazon_rufus.py::amazon_rufus_get` 只暴露业务参数，并调用 `RufusManager.get_backend(..., include_upload_payload=False)`，成功响应只返回 `report_path`、ASIN、国家、题数、答案数和 `next_action`。
+2. 登录态维护：CLI 已有 `opscli amazon-rufus init <COUNTRY> --launch-if-needed` 与 `opscli amazon-rufus save-state <COUNTRY>`。`save-state` 会调用 `RufusManager.save_state()`，再由 `RufusBrowserStateStore.save()` 加密保存 Playwright `storage_state`。
+3. 本机兼容获取：CLI `opscli amazon-rufus get` 仍调用 `RufusManager.get()` 的 CDP seed request 捕获链路，并保留 `--cdp-url`、`--new-chrome`、`--keep-chrome-open`、`--chrome-path`、`--launch-if-needed` 等参数。
+
+测试也反映了这一边界：
+
+1. `tests/mcp/test_amazon_rufus_tools.py` 已断言 MCP 只暴露 `amazon_rufus_get`，并排除 CDP 参数。
+2. `tests/amazon_rufus/test_core.py` 已覆盖 `save-state`、多次 `-q/--question`、`init --launch-if-needed` 和本地状态保存。
+3. `tests/skills/test_cli.py` 已要求安装后指引包含 `init <country>` 与 `save-state <country>`，且不推荐 `--new-chrome`。
+
+### 文档现状
+
+模板 Skill 与 `.agents` 已安装 Skill 当前都保留了轻量 `SKILL.md`、`README.md`、题库数据和 3 个 reference：
+
+```text
+references/question-templates.md
+references/rufus-mcp-workflow.md
+references/rufus-report-formatting.md
+```
+
+`SKILL.md` 已经表达“默认调用 `amazon_rufus_get`，三类错误进入一次登录态刷新，保存后重新调用 MCP”。`rufus-mcp-workflow.md` 是当前最接近真实执行规则的 source of truth。
+
+主要漂移点不在“有没有能力”，而在“用户和 Agent 应把 CLI `get` 理解成默认路径还是兜底路径”。当前建议将 CLI `get` 明确降级为两类用途：
+
+1. 当前宿主没有暴露 `amazon_rufus_get` MCP 工具时的本机兼容入口。
+2. 开发者排障 CDP seed request 的兼容路径。
+
+普通 Skill 主路径只应推荐：
+
+```text
+amazon_rufus_get
+  -> 失败且属于登录态触发错误
+  -> opscli amazon-rufus init <COUNTRY> --launch-if-needed
+  -> 用户确认已登录
+  -> opscli amazon-rufus save-state <COUNTRY>
+  -> amazon_rufus_get
+```
+
+### 外部资料核验
+
+1. Amazon 官方资料仍把 Rufus/Alexa for Shopping 定位为购物助手能力，用户可以围绕商品、评论、Q&A、推荐和对比提问。这支持本 Skill 继续聚焦 ASIN 商品页问答和 Listing 表达风险判断，而不是扩展成广告、关键词或全站运营分析工具。参考：https://www.aboutamazon.com/news/retail/amazon-rufus-ai-assistant-personalized-shopping-features 与 https://www.aboutamazon.com/news/retail/how-to-use-amazon-rufus
+2. Playwright 官方认证文档说明 `storage_state` 会包含 cookies 与 localStorage，应避免提交到仓库或暴露给不可信上下文。这支持当前“本地加密保存、MCP 入参不传 cookie、报告不输出敏感字段”的边界。参考：https://playwright.dev/python/docs/auth
+3. Typer 官方文档支持同一个 Option 多次传入并收集为列表，也支持给选项配置短别名。这支持当前 `-q/--question` 多临时问题方案，不需要新增 JSON 参数或分隔符语法。参考：https://typer.tiangolo.com/tutorial/multiple-values/multiple-options/ 与 https://typer.tiangolo.com/tutorial/options/name/
+4. Chrome 官方 remote debugging 安全变更要求使用非默认 `--user-data-dir`。当前 CDP 启动已使用独立 profile，后续可把 profile 路径进一步收敛到 `CONFIG_DIR/amazon-rufus/` 以贴合 opscli 配置目录规范。参考：https://developer.chrome.com/blog/remote-debugging-port
+
+### 结论
+
+本轮重构不建议先删除 CDP service 或重写 Rufus 获取核心。更小、更稳的范围是：
+
+1. Skill 重构：保持 `SKILL.md` 轻量，`rufus-mcp-workflow.md` 承担执行细节，模板目录与 `.agents` 副本同步；删除或改写任何把 CLI `get` 当作普通默认路径的文案。
+2. CLI 重构：统一 help、next_steps、README 和 reference 的默认推荐路径为 `init -> save-state -> amazon_rufus_get`；`get` 明确为宿主无 MCP 或排障兜底。
+3. 安全重构：敏感字段继续只在服务层内部流转；`save-state` 输出只保留国家、保存状态、cookie 数量和 origin 数量。
+4. 后续实现候选：把 CDP profile 目录从 `Path.home() / ".opscli" / "chrome-profiles"` 收敛到 `CONFIG_DIR / "amazon-rufus" / "chrome-profile-<port>"`，并补齐 `--remote-debugging-address=127.0.0.1`，但该项应在 Spec/tasks 确认后再编码。
+
+## 2026-06-06 研究增量：手动登录态导入撤出 Skill/MCP 边界
+
+### 本轮新增要求
+
+用户要求继续收敛 Rufus Skill、CLI 与 MCP 的职责，并在后续明确要求清理手动导入相关能力的 Skill/MCP 暴露面：
+
+1. 能力尽量由 CLI 提供，Skill 只处理流程编排、用户确认和 CLI/MCP 无法处理的判断。
+2. MCP 能力只保留“无头浏览器获取 Rufus”，不再承担登录窗口、cookie 保存、cookie 读取或 CDP 管理。
+3. Skill 与 MCP 不应出现 mock、cookie/curl 保存、浏览器复制请求或敏感状态写入入口。
+4. 用户提供的 Amazon Cookie 和后续请求材料只用于临时验证，研究和文档阶段不得把敏感值写入仓库、报告或反馈。
+
+### 当前本地实现证据
+
+当前代码已经满足部分边界：
+
+1. `opscli/mcp/tools/amazon_rufus.py` 的 `_ALL_TOOLS` 只注册 `amazon_rufus_get`，且工具参数只有 ASIN、国家、问题、Skill 目录和超时。`tests/mcp/test_amazon_rufus_tools.py` 也断言 `amazon_rufus_init`、`amazon_rufus_get_remote` 不暴露，且 schema 不包含 CDP 参数。
+2. `amazon_rufus_get` 默认调用 `RufusManager.get_backend(..., include_upload_payload=False)`，MCP 成功返回前由 `_build_success_payload()` 做 allowlist，只返回 `report_path`、ASIN、国家、题数、答案数和 `next_action`。
+3. CLI 已有 `opscli amazon-rufus init` 和 `opscli amazon-rufus save-state`，可以通过 CDP 捕获 Playwright `storage_state` 并调用 `RufusBrowserStateStore.save()` 加密保存。
+4. `RufusBackendSecretProvider.load()` 已经能从加密 `storage_state` 派生 Cookie header，供 `get_backend()` 进入 headless capture 与 HTTP streaming。
+
+当前边界调整为：手动登录态导入可以作为 CLI/服务层底层调试能力存在，但不能成为 Skill 默认路径、安装提示或 MCP schema。面向 Agent 的登录恢复应统一使用 `watch-login` 捕获真实页面的 streaming seed。
+
+### 外部资料核验
+
+Amazon 官方资料说明 Rufus 是 Amazon 商品页内的购物问答助手，能基于 listing、客户评价、Q&A 等信息回答特定商品问题；2026-05-13 后官方已将 Rufus 并入 Alexa for Shopping 品牌，但商品页问答能力仍是同一类购物助手场景。参考：https://www.aboutamazon.com/news/retail/amazon-rufus
+
+Playwright 官方认证文档说明浏览器认证状态会包含 cookies、localStorage 或 IndexedDB，`storage_state()` 可保存并在后续 context 中复用；同时官方明确提醒这类状态文件可能包含可冒充账号的敏感 cookies 和 headers，不应提交到仓库。参考：https://playwright.dev/python/docs/auth
+
+Typer 官方文档说明 `list[str] | None` option 可以多次传入并收集全部值，短选项也应通过 `typer.Option("--name", "-n")` 显式声明。当前 `-q/--question` 多题实现符合该方向。参考：https://typer.tiangolo.com/tutorial/multiple-values/multiple-options/ 与 https://typer.tiangolo.com/tutorial/options/name/
+
+### 收敛判断
+
+后续实现不应让 MCP 新增 `cookie`、`storage_state`、`cdp_url` 或 `launch_if_needed` 参数，也不应让 Skill 提示用户复制 cookie、headers、payload 或浏览器请求材料。最小重构是把状态读写留在 `RufusBrowserStateStore` 和 `RufusBackendSecretProvider` 的服务层内部，Skill 只在登录态错误时编排 `watch-login -> amazon_rufus_get`。
+
+设计要点：
+
+1. `watch-login` 负责在本机浏览器内检测登录并捕获 streaming seed。
+2. `amazon_rufus_get` 继续通过 `RufusBackendSecretProvider.load()` 读取本地加密状态。
+3. Skill 文档、README、workflow reference 和安装后 next_steps 不出现手动登录态导入命令或浏览器复制请求流程。
+4. MCP schema 测试继续禁止 cookie、headers、payload、curl、`storage_state` 和 CDP 参数。
+5. Skill 文档测试继续禁止敏感请求材料示例。
+
+该方案符合 KISS/YAGNI：不扩大 MCP 参数面，不把敏感状态传给 Agent，不新增用户手动复制请求材料的默认路径。
+
+## 2026-06-06 研究增量：Rufus endpoint 配置化
+
+### 本地证据
+
+现有 opscli 远端 endpoint 主要有两种模式：
+
+1. `opscli.auth.config` 统一提供 `.env`、`config.ini` 和默认值三层合并，例如 `amazon_submit_endpoint`。
+2. `SkillsUpdater` 的其他 Skill 数据接口使用相对路径并通过 `OPS_URL + endpoint`、`AuthClient.build_request_auth("ops")` 请求。
+
+Rufus 默认题库接口此前硬编码为 `http://127.0.0.1:8000/api/opencalw/default-question-templates`，不适合生产环境；Rufus 上传传输层此前只返回 disabled hint，无法接入后端。
+
+### 收敛结论
+
+1. 题库 path 固定为 `/opencalw/default-question-templates`，不暴露独立 endpoint 配置。
+2. 上传 path 固定为 `/v1/rufus/upload`，不暴露独立 endpoint 配置。
+3. 两类请求统一按 ops 系统地址 `OPS_URL` 拼接固定 path，并复用 ops 登录态。
+4. `--submit-upload` 是显式发送开关；MCP 不新增上传能力。
+
+## 2026-06-08 研究增量：禁止返回历史 ASIN 报告
+
+### 本轮需求
+
+用户指出 Rufus Skill 存在一个流程风险：同一个 ASIN 在 `output/amazon-rufus/` 下可能已经有多个历史 Markdown 报告，Agent 后续读取正文或最终回复时，不能返回旧的 ASIN 报告，必须使用本次获取生成的最新报告。
+
+### 本地证据
+
+当前 MCP 成功路径已经天然生成并返回本次报告路径：
+
+```text
+amazon_rufus_get
+  -> RufusManager.get_backend(...)
+  -> AnswerReportWriter().write(data)
+  -> output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md
+  -> MCP allowlist 返回 report_path
+```
+
+`AnswerReportWriter._build_filename()` 按 ASIN 与秒级时间戳生成文件名，历史报告不会被自动删除。同一个 ASIN 多次执行后会形成多份 Markdown 文件。
+
+因此风险不在写报告本身，而在 Agent 流程层：
+
+1. 用户要求“读取报告正文”时，Agent 可能按 `output/amazon-rufus/<ASIN>-*.md` 扫描并读取第一个命中文件。
+2. IDE 当前打开的旧报告、历史输出目录或旧 `report_path` 可能污染最终回复。
+3. 登录恢复后重试 `amazon_rufus_get` 时，如果仍沿用第一次失败前的旧路径，也会造成过期报告误返回。
+
+### 结论
+
+这条限制应优先加入 `ops-amazon-rufus` 的流程规范，而不是只改报告 writer。原因是 MCP 工具已经返回本次 `report_path`，正确行为是让 Agent 始终绑定该路径。
+
+推荐新增“报告新鲜度”规则：
+
+1. 成功调用 `amazon_rufus_get` 后，本次 Skill 调用的唯一有效报告路径是工具返回的 `data.report_path`。
+2. 如需读取正文，只允许读取本次 `report_path` 指向的 Markdown 文件。
+3. 禁止仅凭 ASIN 在 `output/amazon-rufus/` 中读取任意历史 `*.md`。
+4. 如果当前宿主没有 MCP、只能走 CLI 兼容入口，则必须从本次 CLI stdout 中提取报告路径；只有 stdout 未提供路径时，才允许按 ASIN 报告文件名时间戳和 mtime 选择最新文件。
+5. 如果无法确定本次最新报告，必须报错说明“本次未拿到最新 report_path”，不能用历史报告兜底。
+
+### 文档落点
+
+最小落点：
+
+1. `SKILL.md` 主流程最终输出步骤：强调“只使用本次工具返回的 report_path”。
+2. `references/rufus-mcp-workflow.md` 输出要求：新增“报告新鲜度约束”小节。
+3. `README.md` 常用路径：补充“不得返回历史 ASIN 报告”。
+4. 测试：新增 Skill 文档断言；若实现 helper，再新增两个同 ASIN 报告时选择最新的单测。
+
+该方案符合 KISS/YAGNI：先把 Agent 行为约束写清楚，避免引入全局清理历史报告、自动删除旧文件或复杂索引。

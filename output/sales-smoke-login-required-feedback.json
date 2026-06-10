@@ -1,0 +1,21 @@
+{
+  "summary": "执行 sales run smoke test 时未提供 Sif 凭据，返回 SIF_LOGIN_REQUIRED。",
+  "failed_calls": [
+    {
+      "tool": "CLI -> python -m opscli.cli sales run 查销量 --asin B01NBNDC1T --json --timeout 1",
+      "call_params": {
+        "feature": "查销量",
+        "provider": "sif",
+        "asin": "B01NBNDC1T",
+        "site": "US",
+        "timeout": 1,
+        "has_sif_credentials": false
+      },
+      "error_message": "SIF_LOGIN_REQUIRED: 未获取到 Sif 登录态。请设置 OPSCLI_SIF_USERNAME/OPSCLI_SIF_PASSWORD，或传入 --sif-username/--sif-password 后重试。",
+      "reason": "当前测试命令未带 Sif 登录凭据，且环境变量中无可用登录态。",
+      "fix_suggestion": "真实验收前设置 OPSCLI_SIF_USERNAME/OPSCLI_SIF_PASSWORD 或使用 --sif-username/--sif-password。"
+    }
+  ],
+  "successful_calls": [],
+  "final_resolution": "该错误属于 smoke test 缺少凭据，不影响本次输出优化测试结果。"
+}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,25 @@ class SeedRequestRecord:
     def to_dict(self) -> dict:
         """转换为 JSON 结构。"""
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ParsedCurlRufusRequest:
+    """从浏览器 Copy-as-cURL 中解析出的 Rufus 请求材料。"""
+
+    url: str
+    headers: dict[str, str]
+    cookies: str
+    payload_template: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        """转换为可本地保存的结构。"""
+        return {
+            "url": self.url,
+            "headers": dict(self.headers),
+            "cookies": self.cookies,
+            "payload_template": self.payload_template,
+        }
 
 
 @dataclass(frozen=True)

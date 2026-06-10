@@ -1,0 +1,45 @@
+{
+  "time": "2026-06-09T10:46:17",
+  "source": "rufus.get_backend",
+  "asin": "B0BY8Y5766",
+  "command": [
+    "__direct__",
+    "amazon-rufus",
+    "get-backend",
+    "B0BY8Y5766",
+    "US",
+    "--skills-dir",
+    ".agents/skills",
+    "--timeout",
+    "180",
+    "--no-upload-payload",
+    "--pretty",
+    "-q",
+    "这个产品ASIN B0BY8Y5766，标题写得清楚吗？如果我要找这个产品ASIN B0BY8Y5766，一般搜什么词能找到他？",
+    "-q",
+    "这个产品ASIN B0BY8Y5766五点卖点描述里，最重要的一条是什么？有没有买家很想知道但没写进去的事？",
+    "-q",
+    "看完这个产品ASIN B0BY8Y5766这些图，还有什么是我想知道但看不出来的？要是再加一张图，加什么最有用？",
+    "-q",
+    "这个产品ASIN B0BY8Y5766下面那个长的图文介绍，跟上面五点说的有区别吗？看完能让我更放心买吗？还少介绍了什么？",
+    "-q",
+    "这个产品ASIN B0BY8Y5766评价里大家最常夸和最常抱怨的是什么？这些在介绍里提前说清楚了吗？",
+    "-q",
+    "这个产品ASIN B0BY8Y5766如果让你给这个产品页面只提一个最着急改的地方，会是什么？"
+  ],
+  "dry_run": false,
+  "execution": "direct",
+  "status": "failed",
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": "缺少 Playwright，请安装 `opscli[amazon]`",
+  "json": {
+    "success": false,
+    "command": "rufus.get_backend",
+    "data": null,
+    "error": {
+      "code": "RUFUS_HEADLESS_CAPTURE_ERROR",
+      "message": "缺少 Playwright，请安装 `opscli[amazon]`"
+    }
+  }
+}

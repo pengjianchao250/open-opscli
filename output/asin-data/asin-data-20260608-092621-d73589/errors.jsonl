@@ -1,0 +1,1 @@
+{"asin": null, "source": "query.metadata", "tool": "opscli query metadata --dataset", "status": "failed", "exit_code": 1, "error_message": "DATASET_NOT_FOUND: 未找到目标数据集: ds_pdTYjvLRCadv", "retry_count": 0}

@@ -134,7 +134,7 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 ]
 ```
 
-- `operator`：`=`、`!=`、`>`、`>=`、`<`、`<=`、`in`、`not in`、`between`
+- `operator`：语义写法（`eq`、`neq`、`gt`、`gte`、`lt`、`lte`、`in`、`not_in`、`between`、`like`、`not_like`、`is_null`、`is_not_null`）；符号写法（`=`、`!=`、`<>`、`>`、`>=`、`<`、`<=`、`==`）会自动转换为对应的语义操作符
 
 ### dataComparison — 数据对比
 

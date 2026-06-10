@@ -148,9 +148,11 @@ class FileUploadClient:
             headers = {"Authorization": f"Bearer {self.jwt}"}
             headers.update(mcp_headers)
             return headers, {}
-        if mcp_headers:
+        if _has_mcp_api_key(mcp_headers):
             return mcp_headers, {}
-        return self.auth_client.build_request_auth(alias)
+        headers, cookies = self.auth_client.build_request_auth(alias)
+        headers.update(mcp_headers)
+        return headers, cookies
 
 
 def _resolve_endpoint(endpoint: str) -> str:
@@ -160,6 +162,10 @@ def _resolve_endpoint(endpoint: str) -> str:
     if not text.startswith("/"):
         text = f"/{text}"
     return f"{OPS_URL.rstrip('/')}{text}"
+
+
+def _has_mcp_api_key(headers: dict[str, str]) -> bool:
+    return bool(headers.get("X-MCP-API-Key"))
 
 
 def _parse_upload_response(response: httpx.Response) -> dict[str, Any]:

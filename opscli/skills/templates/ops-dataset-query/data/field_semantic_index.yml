@@ -42,6 +42,34 @@ semantic_groups:
         clarify_when:
           - "用户问物控、补货、库龄时优先物控版库存周转，不按普通销售组织直接套用。"
 
+  platform_fields:
+    description: "平台维度字段。不同平台的枚举值由查询组件动态提供，禁止硬编码假设平台范围。"
+    canonical_terms:
+      平台:
+        common_fields: [platform_name]
+        clarify_when:
+          - "用户未指定平台时，不加平台过滤，返回全平台数据。"
+          - "用户提到的平台名称不在查询组件枚举值中时，需告知当前系统不支持，展示可用平台列表。"
+    platform_name_mapping:
+      口语到枚举值映射:
+        亚马逊: [Amazon SC, Amazon VC]
+        Amazon SC: [Amazon SC]
+        Amazon VC: [Amazon VC]
+        抖音: [Tiktok]
+        海外版抖音: [Tiktok]
+        Tiktok: [Tiktok]
+        TikTok Shop: [Tiktok]
+        速卖通: [速卖通]
+        AliExpress: [速卖通]
+        独立站: [Shopify]
+        Shopify: [Shopify]
+    hard_rules:
+      - "平台枚举值以查询组件数据集返回的实际值为准，上述映射仅为常见口语映射。"
+      - "用户未指定平台时，不加 platform_name 过滤条件，返回全平台数据。"
+      - "用户指定平台时，必须先通过查询组件校验该值在枚举值中存在。"
+      - "亚马逊平台映射为 Amazon SC + Amazon VC 两个值，查询时需同时过滤。"
+      - "亚马逊广告明细数据集（SP/SD/SB 等）仅包含亚马逊平台数据，这是数据源限制，不是规则限制。"
+
   product_identity_fields:
     description: "产品标识字段。ASIN、父ASIN、公司SKU、渠道SKU、SPU、物控编码、型号需区分。"
     canonical_terms:

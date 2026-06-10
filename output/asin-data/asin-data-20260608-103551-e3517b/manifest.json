@@ -1,0 +1,34 @@
+{
+  "run_id": "asin-data-20260608-103551-e3517b",
+  "started_at": "2026-06-08T10:35:51",
+  "finished_at": "2026-06-08T10:36:00",
+  "output_dir": "output\\asin-data\\asin-data-20260608-103551-e3517b",
+  "dry_run": false,
+  "summary": {
+    "input_count": 1,
+    "asin_count": 1,
+    "input_error_count": 0,
+    "source_error_count": 0,
+    "failed_asin_count": 0,
+    "failed_asins": []
+  },
+  "options": {
+    "skip_seller_sprite": true,
+    "skip_keyword_miner": false,
+    "skip_amazon": true,
+    "skip_query": false,
+    "skip_sales_query": false,
+    "skip_crawler_query": false,
+    "seller_sprite_period": "30d",
+    "sales_start": "2025-06-01",
+    "sales_end": "2025-06-30",
+    "query_chunk_size": 1
+  },
+  "files": {
+    "manifest": "output\\asin-data\\asin-data-20260608-103551-e3517b\\manifest.json",
+    "results": "output\\asin-data\\asin-data-20260608-103551-e3517b\\asin-data.jsonl",
+    "summary": "output\\asin-data\\asin-data-20260608-103551-e3517b\\asin-data-summary.json",
+    "commands": "output\\asin-data\\asin-data-20260608-103551-e3517b\\commands.jsonl",
+    "errors": "output\\asin-data\\asin-data-20260608-103551-e3517b\\errors.jsonl"
+  }
+}

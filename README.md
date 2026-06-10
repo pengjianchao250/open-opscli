@@ -391,9 +391,9 @@ opscli auth token get --system polaris
 opscli auth token get -s polaris
 ```
 
-| 参数 | 简写 | 必需 | 说明 |
-|------|------|------|------|
-| `--system` | `-s` | 是 | 系统别名（ops / polaris） |
+| 参数       | 简写 | 必需 | 说明                      |
+| ---------- | ---- | ---- | ------------------------- |
+| `--system` | `-s` | 是   | 系统别名（ops / polaris） |
 
 **脚本集成示例**：
 ```bash
@@ -453,11 +453,11 @@ opscli auth system add --alias 数据分析 --url http://analytics.cm
 opscli auth system add --alias 财务系统 --url http://finance.cm --key finance
 ```
 
-| 参数 | 必需 | 说明 |
-|------|------|------|
-| `--alias` | 是 | 系统别名（用于 CLI 调用） |
-| `--url` | 是 | 系统 base URL |
-| `--key` | 否 | 存储键（默认从 alias 自动生成） |
+| 参数      | 必需 | 说明                            |
+| --------- | ---- | ------------------------------- |
+| `--alias` | 是   | 系统别名（用于 CLI 调用）       |
+| `--url`   | 是   | 系统 base URL                   |
+| `--key`   | 否   | 存储键（默认从 alias 自动生成） |
 
 #### `opscli auth system remove` - 移除手动添加的系统
 
@@ -514,16 +514,16 @@ client = AuthClient()
 
 ### 方法列表
 
-| 方法 | 返回值 | 说明 |
-|------|--------|------|
-| `is_authenticated()` | `bool` | 是否已登录 |
-| `get_token(alias)` | `str` | 获取 JWT（自动缓存+刷新） |
-| `get_session(alias)` | `str` | 获取当前登录态对应的 `session_id` |
-| `get_device_code()` | `str \| None` | 获取当前登录态对应的 `device_code` |
-| `build_request_auth(alias)` | `tuple[dict, dict]` | 构造业务接口请求所需的 `headers` 和 `cookies` |
-| `build_session_headers(alias)` | `dict` | 构造 ops session 型接口所需的 `X-Session-Id` 请求头 |
-| `check_token(alias)` | `dict` | 检测有效性，返回 `{"valid": bool, "expires_in": int}` |
-| `refresh_token(alias)` | `str` | 强制刷新 JWT |
+| 方法                           | 返回值              | 说明                                                  |
+| ------------------------------ | ------------------- | ----------------------------------------------------- |
+| `is_authenticated()`           | `bool`              | 是否已登录                                            |
+| `get_token(alias)`             | `str`               | 获取 JWT（自动缓存+刷新）                             |
+| `get_session(alias)`           | `str`               | 获取当前登录态对应的 `session_id`                     |
+| `get_device_code()`            | `str \| None`       | 获取当前登录态对应的 `device_code`                    |
+| `build_request_auth(alias)`    | `tuple[dict, dict]` | 构造业务接口请求所需的 `headers` 和 `cookies`         |
+| `build_session_headers(alias)` | `dict`              | 构造 ops session 型接口所需的 `X-Session-Id` 请求头   |
+| `check_token(alias)`           | `dict`              | 检测有效性，返回 `{"valid": bool, "expires_in": int}` |
+| `refresh_token(alias)`         | `str`               | 强制刷新 JWT                                          |
 
 ### 使用示例
 
@@ -679,11 +679,11 @@ polaris_token_endpoint = /api/auth/cli-token
 
 ### Token 生命周期
 
-| 类型 | 有效期 | 说明 |
-|------|--------|------|
-| Session ID | **30 天** | 登录后签发，浏览器授权确认时自动续期 |
-| JWT Token | **24 小时** | 用 session_id 换取，三态管理（过期前 5 分钟自动刷新） |
-| Device Code | **5 分钟** | login 时生成，超时需重新执行 login |
+| 类型        | 有效期      | 说明                                                  |
+| ----------- | ----------- | ----------------------------------------------------- |
+| Session ID  | **30 天**   | 登录后签发，浏览器授权确认时自动续期                  |
+| JWT Token   | **24 小时** | 用 session_id 换取，三态管理（过期前 5 分钟自动刷新） |
+| Device Code | **5 分钟**  | login 时生成，超时需重新执行 login                    |
 
 ---
 
@@ -749,33 +749,33 @@ python -c "from opscli import AuthClient; print('SDK OK')"
 
 ### 常见问题
 
-| 问题 | 原因 | 解决方式 |
-|------|------|----------|
-| `File already exists` | PyPI 不允许覆盖同版本号 | 修改 `pyproject.toml` 中的 `version` 后重新构建 |
-| `Invalid API Token` | `~/.pypirc` 中 token 过期或错误 | 重新生成 token 并更新 `~/.pypirc` |
-| TestPyPI 安装到旧版本 | 缺少 `--extra-index-url` | 加上 `--extra-index-url https://pypi.org/simple/` |
+| 问题                  | 原因                            | 解决方式                                          |
+| --------------------- | ------------------------------- | ------------------------------------------------- |
+| `File already exists` | PyPI 不允许覆盖同版本号         | 修改 `pyproject.toml` 中的 `version` 后重新构建   |
+| `Invalid API Token`   | `~/.pypirc` 中 token 过期或错误 | 重新生成 token 并更新 `~/.pypirc`                 |
+| TestPyPI 安装到旧版本 | 缺少 `--extra-index-url`        | 加上 `--extra-index-url https://pypi.org/simple/` |
 
 ---
 
 ## 错误处理
 
-| 场景 | 错误信息 | 处理方式 |
-|------|----------|----------|
-| 未登录 | `未登录，请运行: opscli auth login` | 执行 login |
-| session 过期 | `登录已过期，请重新运行: opscli auth login` | 重新 login |
-| Token 过期 | `已过期或未获取` | 执行 token refresh 或自动刷新 |
-| 系统别名不存在 | `系统 'xxx' 未注册` | 用 system list 查看，或 system add 添加 |
-| 目标系统不可达 | `获取 xxx JWT 失败` | 用 doctor 检查连通性 |
+| 场景           | 错误信息                                    | 处理方式                                |
+| -------------- | ------------------------------------------- | --------------------------------------- |
+| 未登录         | `未登录，请运行: opscli auth login`         | 执行 login                              |
+| session 过期   | `登录已过期，请重新运行: opscli auth login` | 重新 login                              |
+| Token 过期     | `已过期或未获取`                            | 执行 token refresh 或自动刷新           |
+| 系统别名不存在 | `系统 'xxx' 未注册`                         | 用 system list 查看，或 system add 添加 |
+| 目标系统不可达 | `获取 xxx JWT 失败`                         | 用 doctor 检查连通性                    |
 
 ### `skills` 常见错误
 
-| 场景 | 典型提示 | 处理方式 |
-|------|----------|----------|
-| 未登录 ops | `未登录 ops，请先执行 opscli auth login` | 先执行 `opscli auth login` |
-| 远端环境未部署接口 | `远端环境未部署该 Skill 接口` | 检查 `~/.config/opscli/config.ini` 中的 `ops_url` 是否指向已部署环境 |
-| 远端接口鉴权失败 | `远端 Skill 接口鉴权失败` | 重新登录后重试 |
-| 远端返回坏 JSON | `远端接口返回了无法解析的 JSON` | 检查目标环境接口返回内容 |
-| 本地未安装 Skill | `未找到已安装 Skill: ops-dataset-query` | 先执行 `opscli skills install ops-dataset-query` |
+| 场景               | 典型提示                                 | 处理方式                                                             |
+| ------------------ | ---------------------------------------- | -------------------------------------------------------------------- |
+| 未登录 ops         | `未登录 ops，请先执行 opscli auth login` | 先执行 `opscli auth login`                                           |
+| 远端环境未部署接口 | `远端环境未部署该 Skill 接口`            | 检查 `~/.config/opscli/config.ini` 中的 `ops_url` 是否指向已部署环境 |
+| 远端接口鉴权失败   | `远端 Skill 接口鉴权失败`                | 重新登录后重试                                                       |
+| 远端返回坏 JSON    | `远端接口返回了无法解析的 JSON`          | 检查目标环境接口返回内容                                             |
+| 本地未安装 Skill   | `未找到已安装 Skill: ops-dataset-query`  | 先执行 `opscli skills install ops-dataset-query`                     |
 
 ### 异常类
 
@@ -836,12 +836,12 @@ opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --pretty
 opscli query chart --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --run --dry-run --pretty
 ```
 
-| 参数 | 必需 | 说明 |
-|------|------|------|
-| `--uuid` | 是 | 图表 UUID |
-| `--run` | 否 | 获取后立即执行所有查询 |
-| `--dry-run` | 否 | 仅生成 SQL（需配合 `--run`） |
-| `--pretty` | 否 | 格式化 JSON 输出 |
+| 参数        | 必需 | 说明                         |
+| ----------- | ---- | ---------------------------- |
+| `--uuid`    | 是   | 图表 UUID                    |
+| `--run`     | 否   | 获取后立即执行所有查询       |
+| `--dry-run` | 否   | 仅生成 SQL（需配合 `--run`） |
+| `--pretty`  | 否   | 格式化 JSON 输出             |
 
 **返回结构（--run 时）**：
 
@@ -870,11 +870,11 @@ opscli query chart-doc --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --pretty
 opscli query chart-doc --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --output chart-doc.md --pretty
 ```
 
-| 参数 | 必需 | 说明 |
-|------|------|------|
-| `--uuid` | 是 | 图表 UUID（chart_uuid） |
-| `--output` | 否 | 将 Markdown 文档写入指定文件路径 |
-| `--pretty` | 否 | 格式化 JSON 输出 |
+| 参数       | 必需 | 说明                             |
+| ---------- | ---- | -------------------------------- |
+| `--uuid`   | 是   | 图表 UUID（chart_uuid）          |
+| `--output` | 否   | 将 Markdown 文档写入指定文件路径 |
+| `--pretty` | 否   | 格式化 JSON 输出                 |
 
 **返回结构**：
 
@@ -997,17 +997,17 @@ opscli skills publish --dir /path/to/my-skill --summary "一句话摘要" --shar
 opscli skills publish --changelog "修复了某个 bug，新增了某个功能"
 ```
 
-| 参数 | 必需 | 说明 |
-|------|------|------|
-| `--dir` / `-d` | 否 | Skill 目录，默认当前目录 |
-| `--title` | 否 | 技能标题（覆盖 SKILL.md frontmatter） |
-| `--summary` | 否 | 一句话摘要，显示在列表卡片 |
-| `--desc` | 否 | 技能详细简介 |
-| `--tags` | 否 | 标签，逗号分隔 |
-| `--category` | 否 | 分类 ID；未指定时自动根据技能名称/标题/标签关键词匹配最合适的分类 |
-| `--share-type` | 否 | 分享范围：`personal`（默认）/ `department` / `company` |
-| `--changelog` | 否 | 本次版本变更说明 |
-| `--json` | 否 | 输出原始 JSON |
+| 参数           | 必需 | 说明                                                              |
+| -------------- | ---- | ----------------------------------------------------------------- |
+| `--dir` / `-d` | 否   | Skill 目录，默认当前目录                                          |
+| `--title`      | 否   | 技能标题（覆盖 SKILL.md frontmatter）                             |
+| `--summary`    | 否   | 一句话摘要，显示在列表卡片                                        |
+| `--desc`       | 否   | 技能详细简介                                                      |
+| `--tags`       | 否   | 标签，逗号分隔                                                    |
+| `--category`   | 否   | 分类 ID；未指定时自动根据技能名称/标题/标签关键词匹配最合适的分类 |
+| `--share-type` | 否   | 分享范围：`personal`（默认）/ `department` / `company`            |
+| `--changelog`  | 否   | 本次版本变更说明                                                  |
+| `--json`       | 否   | 输出原始 JSON                                                     |
 
 技能目录须包含 `SKILL.md` 和 `data/VERSION.json`，发布前自动打包整个目录为 zip。
 
@@ -1058,17 +1058,17 @@ opscli skills marketplace list --category 1 --limit 10
 opscli skills marketplace list --official
 ```
 
-| 参数 | 必需 | 默认值 | 说明 |
-|------|------|--------|------|
-| `--scope` | 否 | - | `personal`（个人相关）/ `all`（广场公开） |
-| `--sub` | 否 | - | `personal` 子筛选：`mine` / `shared_with_me` |
-| `--category` | 否 | - | 按分类 ID 筛选 |
-| `--sort` | 否 | `downloads` | 排序字段：`downloads` / `rating` / `created_at` |
-| `--order` | 否 | `desc` | 排序方向：`asc` / `desc` |
-| `--page` | 否 | `1` | 页码 |
-| `--limit` | 否 | `20` | 每页条数 |
-| `--official` | 否 | - | 只显示官方技能 |
-| `--json` | 否 | - | 输出原始 JSON |
+| 参数         | 必需 | 默认值      | 说明                                            |
+| ------------ | ---- | ----------- | ----------------------------------------------- |
+| `--scope`    | 否   | -           | `personal`（个人相关）/ `all`（广场公开）       |
+| `--sub`      | 否   | -           | `personal` 子筛选：`mine` / `shared_with_me`    |
+| `--category` | 否   | -           | 按分类 ID 筛选                                  |
+| `--sort`     | 否   | `downloads` | 排序字段：`downloads` / `rating` / `created_at` |
+| `--order`    | 否   | `desc`      | 排序方向：`asc` / `desc`                        |
+| `--page`     | 否   | `1`         | 页码                                            |
+| `--limit`    | 否   | `20`        | 每页条数                                        |
+| `--official` | 否   | -           | 只显示官方技能                                  |
+| `--json`     | 否   | -           | 输出原始 JSON                                   |
 
 ### `opscli skills marketplace search <keyword>` - 搜索技能
 
@@ -1213,13 +1213,13 @@ opscli amazon scrape --asin B09LCJPZ1P --zip-code 10001 --include-raw --pretty
 opscli amazon scrape --asin B09LCJPZ1P --no-save-history
 ```
 
-| 参数 | 必需 | 说明 |
-|------|------|------|
-| `--asin` | 是 | 目标商品 ASIN |
-| `--zip-code` | 否 | 配送邮编，默认 `10001` |
-| `--save-history/--no-save-history` | 否 | 是否将快照落本地历史，默认保存 |
-| `--include-raw` | 否 | 是否返回 `raw` 原始抓取字段 |
-| `--pretty` | 否 | 是否格式化 JSON 输出 |
+| 参数                               | 必需 | 说明                           |
+| ---------------------------------- | ---- | ------------------------------ |
+| `--asin`                           | 是   | 目标商品 ASIN                  |
+| `--zip-code`                       | 否   | 配送邮编，默认 `10001`         |
+| `--save-history/--no-save-history` | 否   | 是否将快照落本地历史，默认保存 |
+| `--include-raw`                    | 否   | 是否返回 `raw` 原始抓取字段    |
+| `--pretty`                         | 否   | 是否格式化 JSON 输出           |
 
 返回结构包含：
 
@@ -1236,12 +1236,12 @@ opscli amazon payload --asin B09LCJPZ1P
 opscli amazon payload --asin B09LCJPZ1P --zip-code 10001 --pretty
 ```
 
-| 参数 | 必需 | 说明 |
-|------|------|------|
-| `--asin` | 是 | 目标商品 ASIN |
-| `--zip-code` | 否 | 配送邮编，默认 `10001` |
-| `--save-history/--no-save-history` | 否 | 是否将快照落本地历史，默认保存 |
-| `--pretty` | 否 | 是否格式化 JSON 输出 |
+| 参数                               | 必需 | 说明                           |
+| ---------------------------------- | ---- | ------------------------------ |
+| `--asin`                           | 是   | 目标商品 ASIN                  |
+| `--zip-code`                       | 否   | 配送邮编，默认 `10001`         |
+| `--save-history/--no-save-history` | 否   | 是否将快照落本地历史，默认保存 |
+| `--pretty`                         | 否   | 是否格式化 JSON 输出           |
 
 返回结构包含：
 
@@ -1258,12 +1258,12 @@ opscli amazon search --keyword "usb c cable"
 opscli amazon search --keyword "usb c cable" --zip-code 10001 --limit 10 --pretty
 ```
 
-| 参数 | 必需 | 说明 |
-|------|------|------|
-| `--keyword` | 是 | 搜索关键词 |
-| `--zip-code` | 否 | 配送邮编，默认 `10001` |
-| `--limit` | 否 | 最大结果数，默认 `10`，范围 `1-50` |
-| `--pretty` | 否 | 是否格式化 JSON 输出 |
+| 参数         | 必需 | 说明                               |
+| ------------ | ---- | ---------------------------------- |
+| `--keyword`  | 是   | 搜索关键词                         |
+| `--zip-code` | 否   | 配送邮编，默认 `10001`             |
+| `--limit`    | 否   | 最大结果数，默认 `10`，范围 `1-50` |
+| `--pretty`   | 否   | 是否格式化 JSON 输出               |
 
 返回结构包含：
 
@@ -1286,9 +1286,9 @@ opscli amazon schema
 opscli amazon schema --pretty
 ```
 
-| 参数 | 必需 | 说明 |
-|------|------|------|
-| `--pretty` | 否 | 是否格式化 JSON 输出 |
+| 参数       | 必需 | 说明                 |
+| ---------- | ---- | -------------------- |
+| `--pretty` | 否   | 是否格式化 JSON 输出 |
 
 ### `opscli amazon history`
 
@@ -1299,10 +1299,10 @@ opscli amazon history --asin B09LCJPZ1P
 opscli amazon history --asin B09LCJPZ1P --pretty
 ```
 
-| 参数 | 必需 | 说明 |
-|------|------|------|
-| `--asin` | 是 | 目标商品 ASIN |
-| `--pretty` | 否 | 是否格式化 JSON 输出 |
+| 参数       | 必需 | 说明                 |
+| ---------- | ---- | -------------------- |
+| `--asin`   | 是   | 目标商品 ASIN        |
+| `--pretty` | 否   | 是否格式化 JSON 输出 |
 
 默认历史路径位于 `~/.config/opscli/amazon/history/<ASIN>.jsonl`。
 

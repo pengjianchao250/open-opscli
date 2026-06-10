@@ -106,15 +106,33 @@ class QueryClient:
         data = payload.get("data")
         return data if isinstance(data, list) else []
 
-    def fetch_query_metadata(self) -> dict:
+    def fetch_query_metadata(
+        self,
+        *,
+        dataset_alias: str | None = None,
+        table_id: int | None = None,
+    ) -> dict:
         """从远端拉取最新的数据集与字段元数据。
 
         调用 GET /v1/data-metrics/datasets/query-metadata，
         返回 {"datasets": [...], "fields": [...]} 结构。
+
+        可选参数 dataset_alias / table_id 用于让后端按需返回单个数据集
+        及其字段，减少网络传输与 opscli 本地过滤负担；
+        均不传时后端返回全量数据集列表（裸调用行为保持兼容）。
         """
         headers, cookies = self._get_auth("ops")
+
+        # 按 snake_case 风格组装 query params，None 值自动忽略
+        params: dict[str, str] = {}
+        if dataset_alias:
+            params["dataset_alias"] = dataset_alias
+        if table_id is not None:
+            params["table_id"] = str(table_id)
+
         response = httpx.get(
             f"{self.ops_url}/v1/data-metrics/datasets/query-metadata",
+            params=params or None,
             headers=headers,
             cookies=cookies,
             timeout=20,

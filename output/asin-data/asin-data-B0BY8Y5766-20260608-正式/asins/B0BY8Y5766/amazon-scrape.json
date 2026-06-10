@@ -1,0 +1,26 @@
+{
+  "time": "2026-06-08T14:14:00",
+  "source": "amazon.scrape",
+  "asin": "B0BY8Y5766",
+  "command": [
+    ".venv\\Scripts\\opscli.exe",
+    "amazon",
+    "scrape",
+    "--asin",
+    "B0BY8Y5766"
+  ],
+  "dry_run": false,
+  "status": "failed",
+  "exit_code": 1,
+  "stdout": "{\"success\": false, \"command\": \"amazon scrape\", \"data\": null, \"error\": {\"code\": \"SCRAPER_DEPENDENCY_ERROR\", \"message\": \"缺少 playwright 依赖，请安装 `pip install opscli` 并执行 `playwright install chromium`\"}}\n",
+  "stderr": "\nopscli 有新版本可用，建议更新最新版本: v0.0.84 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n",
+  "json": {
+    "success": false,
+    "command": "amazon scrape",
+    "data": null,
+    "error": {
+      "code": "SCRAPER_DEPENDENCY_ERROR",
+      "message": "缺少 playwright 依赖，请安装 `pip install opscli` 并执行 `playwright install chromium`"
+    }
+  }
+}

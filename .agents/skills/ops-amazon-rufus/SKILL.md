@@ -1,11 +1,11 @@
 ---
 name: ops-amazon-rufus
-description: Amazon Rufus 默认题库数据、单题问题获取、拒答改写重试与报告格式化规范。用于执行 opscli amazon-rufus get、通过 --question 回答指定 ASIN/Rufus 商品问题、按默认题库生成报告、读取或格式化 output/amazon-rufus/*.md 报告；当用户提到 Amazon Listing、listing 商品页、listing 分析或 listing 优化，并需要 Rufus 对 ASIN 商品页进行问答、诊断或报告时，也应使用本 Skill。
+description: Amazon Rufus 默认题库数据与 Agent 编排入口。用于基于 amazon_rufus_get MCP 工具或 opscli amazon-rufus get-backend 对 ASIN 商品页进行 Rufus 问答、Listing 诊断、报告读取、远程授权偏好处理和 headless 后端获取错误恢复。
 ---
 
 # ops-amazon-rufus
 
-提供 `opscli amazon-rufus get <asin> <country>` 所需的默认题库数据，并定义通过 `--question` 直接提问时的执行规则。
+本 Skill 是 Amazon Rufus 默认题库数据包与 Agent 编排入口。Rufus 获取能力由 `amazon_rufus_get` MCP Tool 或 opscli 正式 CLI 提供，获取 Rufus 的 Python 工具文件归属 `opscli/mcp/tools/amazon_rufus.py` 和 `opscli/amazon_rufus/`，不得放在本 Skill 目录中。
 
 ## 触发范围
 
@@ -15,124 +15,62 @@ description: Amazon Rufus 默认题库数据、单题问题获取、拒答改写
 
 ## 前置条件
 
-使用本 Skill 前，必须先在对应国家站点登录 Amazon 账户。不同国家站点的登录态相互独立，例如 `US` 对应 `amazon.com`，`DE` 对应 `amazon.de`。
+1. 确认本 Skill 已安装并完成题库升级。
+2. 确认当前宿主可调用 `amazon_rufus_get` MCP 工具；拒绝远程授权或 MCP 工具不可见时，改用 opscli 正式 CLI 的 `opscli amazon-rufus get-backend`，不能在 Skill 目录新增脚本。
+3. 每次获取前必须先读取 `opscli amazon-rufus remote-consent status <COUNTRY> --pretty`。不同国家站点授权偏好相互独立，例如 `US` 对应 `amazon.com`，`DE` 对应 `amazon.de`。
+4. `remote-consent` 只保存用户是否允许远程复用 Amazon 登录态的偏好，不保存 cookie、localStorage、`storage_state`、headers、payload 或请求种子。
+5. 发起 Rufus 获取前必须执行 `opscli amazon-rufus login-status <COUNTRY> --pretty`。如果 `can_get_backend=false`，说明没有可用登录态，必须先走通用登录采集。
+6. 获取结果只以本次工具返回的 `report_path` 或本次 CLI 输出的报告文件路径为准。
 
-PowerShell 下通过 `uv run` 执行任何 `opscli amazon-rufus` 或 `opscli skills upgrade ops-amazon-rufus` 命令前，推荐在同一命令行设置 UTF-8 环境与本地开发构建开关，避免状态提示乱码，并跳过源码仓库内的 Cython 编译。完整 Rufus 答案报告不依赖终端历史，命令成功后会写入运行目录下的 `output/amazon-rufus`。推荐统一使用以下前缀：
+## 主流程
 
-```powershell
-$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:SKIP_CYTHON = "1";
-```
-
-推荐使用初始化命令打开固定 Chrome profile 的登录窗口：
-
-```powershell
-$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:SKIP_CYTHON = "1"; uv run --extra amazon opscli amazon-rufus init US
-```
-
-命令打开页面后会提示：
+1. 解析用户提供的 ASIN、国家站点和可选 Rufus 问题，并初始化本次 Skill 调用状态：`login_recovery_attempted=false`。
+2. 执行 `opscli amazon-rufus remote-consent status <COUNTRY> --pretty`，读取该站点的远程授权偏好。
+3. 如果状态为 `unknown` 或 `invalid`，先询问用户：
 
 ```text
-请在新窗口中登录亚马逊
+本次 Rufus 获取需要 Amazon 登录态。是否允许 opscli 保存该站点的 Amazon 登录状态，用于后续由你的账号权限触发的 MCP/headless 任务？
+
+说明：
+- 保存的登录态仅供当前 opscli 用户使用，不会写入报告或对话回复。
+- 登录态相当于已登录会话，请使用独立、干净的 Amazon 账号。
+- 不建议在该 Amazon 账号中绑定信用卡或其他支付方式。
+
+请明确回复“允许”或“拒绝”。
 ```
 
-请在新窗口中完成对应国家站点的 Amazon 登录，再执行 Rufus 获取命令。
+4. 用户回复“允许”时，执行 `opscli amazon-rufus remote-consent set <COUNTRY> --allow --pretty`。用户回复“拒绝”时，执行 `opscli amazon-rufus remote-consent set <COUNTRY> --deny --pretty`。
+5. 发起 Rufus 获取前，执行 `opscli amazon-rufus login-status <COUNTRY> --pretty`。如果返回 `can_get_backend=false` 或 `status=missing/invalid`，说明没有可用登录态，先执行通用登录采集：`opscli amazon-rufus watch-login <ASIN> <COUNTRY> --launch-if-needed --close-browser`。该命令会等待用户完成 Amazon 登录、捕获 `/rufus/cl/streaming` 请求种子，并在采集完成后关闭本次由 opscli 启动的调试浏览器。
+6. 状态为 `allowed` 且登录态可用时，调用 `amazon_rufus_get`，由 MCP 后端使用 headless 链路获取 Rufus 回答并写入报告。单题传 `question`，多题传 `questions`，未提供问题时传 `skills_dir=".agents/skills"` 读取默认题库。
+7. 状态为 `denied` 且登录态可用时，调用 `opscli amazon-rufus get-backend <ASIN> <COUNTRY>`，并按原问题来源追加 `--skills-dir ".agents/skills"` 或 `-q` 参数；该路径不调用 `amazon_rufus_get` MCP 工具。
+8. 如果 allowed 路径中的 `amazon_rufus_get` 返回 `RUFUS_HEADLESS_REQUEST_ERROR`、`RUFUS_HEADLESS_CAPTURE_ERROR` 或 `RUFUS_SECRET_NOT_READY`，且 `login_recovery_attempted=false`，按 `references/rufus-mcp-workflow.md` 进入一次通用登录采集恢复。
+9. 进入恢复后立即记录 `login_recovery_attempted=true`，先调用 `opscli amazon-rufus logout <COUNTRY> --pretty` 清理旧 Rufus 状态和 opscli-owned Chrome profile；`logout` 成功后再执行 `opscli amazon-rufus watch-login <ASIN> <COUNTRY> --launch-if-needed --close-browser`，失败则停止恢复并提示用户关闭对应调试 Chrome 后重试。
+10. allowed 恢复路径中，`watch-login` 成功后按原 ASIN、国家和问题来源重新调用 `amazon_rufus_get`；MCP 服务层读取本地明文状态（敏感）请求 Rufus，不在 MCP 参数、报告或回复中展示 cookie、localStorage、`storage_state`、headers、payload 或完整请求。
+11. 如果本次 Skill 调用已经触发过一次登录恢复，或保存后重新调用仍失败，不再打开第二次登录窗口，直接返回错误并说明本次已完成一次登录恢复。
+12. 如果成功但 `answer_count=0`，按正常 0 答案报告处理，不推断为登录恢复。
+13. 最终回复只展示本次工具返回的 `report_path` 或报告文件路径；如需正文，只读取本次工具返回的 `report_path`，不得按 ASIN 读取历史报告。
 
-## 未获取答案时的登录中断续跑
+## References
 
-调用本 Skill 时，先按正常流程执行 `opscli amazon-rufus get` 获取 Rufus 答案。
-
-如果命令返回 `RUFUS_LOGIN_REQUIRED`，或提示“未获取到 Rufus 答案，可能 Amazon 未登录”，表示可能需要用户在已打开的 Amazon 浏览器窗口中完成登录。此时必须停止当前执行，不要关闭浏览器窗口，不要继续重试。
-
-如果命令返回 `SEED_REQUEST_NOT_CAPTURED`，且错误信息提示先执行 `opscli amazon-rufus init <country>` 或登录 Amazon，也按同一登录中断流程处理。
-
-上述两类登录中断属于 Rufus 人工登录的正常交互流程，不属于工具异常；不要调用 `ops-feedback`，不要执行 `opscli feedback submit`，也不要创建 `output/amazon-rufus/feedback-*.json` 反馈文件。
-
-回复用户：
-
-```text
-未获取到 Rufus 答案，可能 Amazon 未登录。浏览器窗口已保留。请在窗口中完成登录；如果登录完成，请继续告诉我，我会继续执行。
-```
-
-用户说“继续”后，复用上一轮 ASIN、国家站点、`--question` 和 Chrome 参数重新执行同一条 Rufus 获取命令。
-
-## 使用
-
-1. 安装 Skill：`opscli skills install ops-amazon-rufus`
-2. 同步题库：`opscli skills upgrade ops-amazon-rufus`
-3. 初始化登录窗口：`opscli amazon-rufus init US`
-4. 在新窗口中登录对应国家站点的 Amazon 账户
-5. 执行：`opscli amazon-rufus get B0TEST1234 US --new-chrome`
-
-## 问题来源选择
-
-当用户已经给出明确 Rufus 问题时，优先使用 `--question` 单题模式，不要默认跑完整题库：
-
-```powershell
-$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:SKIP_CYTHON = "1"; uv run --extra amazon opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" --new-chrome --question "这个商品适合送礼吗？"
-```
-
-当用户只提供 ASIN 和国家，或要求“默认报告”“完整分析”“跑题库”时，使用默认题库模式：
-
-```powershell
-$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:SKIP_CYTHON = "1"; uv run --extra amazon opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" --new-chrome
-```
-
-单题模式一次只传入一个问题。用户要求多个临时问题时，逐条执行 `--question`，或在用户接受时改用默认题库模式。
-
-## 拒答处理
-
-执行 Rufus 获取后，需要判断答案是否属于拒绝回答。若检测到拒答，系统应在保持原问题语义的前提下改写问题，并满足以下规则：
-
-1. 改写问题不得超过 180 字。
-2. 改写后的问题必须使用中文；原问题为英文或中英混合时，也要转写为自然中文问题。
-3. 保留商品对象、比较对象、分析维度和用户意图。
-4. 使用中性、基于商品页面和公开评价的表达。
-5. 最多改写并重试 3 次；加上原问题首次执行，单题最多 4 次尝试。
-6. 3 次改写重试后仍拒答时，保留最后一次结果并在报告中说明已达到重试上限。
-
-发生拒答改写时，最终回复用户只说明已自动改写并重试，并给出报告路径；除非用户明确要求排障，不输出首次拒答全文、`seed_request`、`upload_payload`、headers 或原始 JSON。
-
-## 最新数据优先
-
-当用户询问 ASIN 的 Rufus 分析、商品判断、报告内容或要求输出报告时，默认必须重新执行 `opscli amazon-rufus get <asin> <country>` 获取最新数据，不得直接使用 `output/amazon-rufus` 下的历史报告作答。
-
-只有在用户明确要求“历史数据”“已有报告”“指定文件路径”“不要重新获取”时，才读取历史报告或指定文件。若用户未提供 ASIN 或国家站点，先补齐必要参数；不要用历史报告替代最新获取。
-
-PowerShell 下通过 `uv run` 执行 `opscli` 命令前必须在当前命令会话设置 UTF-8 环境与本地开发构建开关：
-
-```powershell
-$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:SKIP_CYTHON = "1"; uv run --extra amazon opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" --new-chrome
-```
-
-如果用户提供明确问题，改用：
-
-```powershell
-$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:SKIP_CYTHON = "1"; uv run --extra amazon opscli amazon-rufus get B0TEST1234 US --skills-dir ".agents/skills" --new-chrome --question "请分析该商品的主要差评风险"
-```
-
-如需切换国家，请先执行对应国家的初始化命令并完成该站点登录，例如：
-
-```powershell
-$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:SKIP_CYTHON = "1"; uv run --extra amazon opscli amazon-rufus init DE
-```
-
-命令执行成功后只输出报告保存路径，例如 `Rufus 答案报告已保存：output/amazon-rufus/B0TEST1234-20260430-101530.md`。完整答案报告写入运行目录下的 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md`，文件名时间精确到秒。除非用户明确要求排障，不输出 `seed_request`、`upload_payload`、headers 或原始 JSON。
-
-说明：`--new-chrome` 命令完成后默认关闭本次新开的 Chrome 调试窗口；如需保留窗口，使用 `--new-chrome --keep-chrome-open`。
-
-手动启动 Chrome 的命令：
-
-```powershell
-Start-Process chrome.exe -ArgumentList '--remote-debugging-port=9222 --user-data-dir="E:\chrome-profiles\opscli-rufus" --auto-open-devtools-for-tabs --no-first-run --no-default-browser-check'
-```
+- `references/rufus-mcp-workflow.md`：Rufus 后端/headless 获取、remote-consent 分流、MCP 工具调用、拒绝远程授权 CLI 获取、三类 MCP 错误的一次通用登录采集恢复、问题来源选择和 `report_path` 输出规则。
+- `references/question-templates.md`：默认题库数据结构、问题模板维护和本地题库文件说明。
+- `references/rufus-report-formatting.md`：报告格式化、拒答改写和输出隐藏规则。
 
 ## 数据文件
 
-- `data/question_templates.json`：合并模板与题目的默认题库
-- `references/question-templates.md`：问题模板获取、保存和本地题库文件结构说明；该文件只包含问题模板相关内容。
+- `data/VERSION.json`：Skill 名称与版本。
+- `data/question_templates.json`：合并模板与题目的默认题库；未传临时问题时由 Rufus 获取链路读取。
 
-## 报告格式化
+## 文件边界
 
-每次生成或输出 `output/amazon-rufus/*.md` 报告后，都必须读取 `references/rufus-report-formatting.md`，并在同目录额外写出格式化后的 Markdown 文档。格式化必须完整保留 Rufus 原始输出内容，只做 Markdown 标题、列表、表格、代码块、引用块、空行与缩进等格式化处理。
+本 Skill 目录只承载文档、题库数据和 reference，不承载 Rufus 获取实现。
 
-回复用户时同时给出原始报告路径和格式化报告路径；除非用户只要求排障，不输出 `seed_request`、`upload_payload`、headers 或原始 JSON。
+不得在本 Skill 下新增：
+
+```text
+scripts/get_rufus.py
+scripts/rufus.py
+scripts/headless_rufus.py
+```
+
+所有获取 Rufus、读取后端授权材料、请求 Amazon Rufus 的 Python 代码必须位于 `opscli/amazon_rufus/` 或 `opscli/mcp/tools/amazon_rufus.py`。

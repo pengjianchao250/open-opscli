@@ -10,6 +10,8 @@
 """
 import time
 import httpx
+
+from opscli.config import __version__
 from opscli.auth.exceptions import DeviceFlowExpiredError, DeviceFlowDeniedError
 
 
@@ -27,7 +29,8 @@ class DeviceFlow:
         """
         self._url = ops_url.rstrip("/")
         self._store = store
-        self._headers = headers or {}
+        # 始终注入 opscli 版本号，调用方传入的 headers 作为补充
+        self._headers = {"X-Opscli-Version": __version__, **(headers or {})}
 
     def request_device_code(self) -> dict:
         """向后端请求设备码和验证信息。

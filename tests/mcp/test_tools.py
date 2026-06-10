@@ -23,7 +23,7 @@ def test_mcp_exposes_expected_tools():
 
     # 工具总数可能随 amazon/chatgpt 等模块增减而变化，此处只验证核心工具存在
     assert len(names) >= 21
-    assert "auth_login_start" in names
+    assert "auth_mcp_login" in names
     assert "auth_token_refresh" in names
     assert "skills_install" in names
     assert "query_simple" in names
@@ -43,16 +43,16 @@ def test_context_parameter_is_not_exposed_in_tool_schema():
         assert "ctx" not in properties
 
 
-def test_auth_login_poll_has_device_code_param():
-    """auth_login_poll 必须暴露 device_code 参数，由客户端传入。"""
+def test_auth_mcp_login_has_agent_name_param():
+    """auth_mcp_login 暴露 agent_name 参数，便于写入后端审计。"""
     async def scenario():
         async with Client(mcp) as client:
             tools = await client.list_tools()
-            return next(tool for tool in tools if tool.name == "auth_login_poll")
+            return next(tool for tool in tools if tool.name == "auth_mcp_login")
 
     tool = _run(scenario())
     properties = (tool.inputSchema or {}).get("properties", {})
-    assert "device_code" in properties
+    assert "agent_name" in properties
 
 
 @respx.mock
