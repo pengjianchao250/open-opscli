@@ -32,6 +32,7 @@ class DummyManager:
         )
         result.row_count = 1
         result.export = KeepaExportResult(path="/tmp/job-1.xlsx", filename="job-1.xlsx")
+        result.export.url = "https://example.com/job-1.xlsx"
         result.quota = {"estimated_tokens": 1, "after": {"tokensLeft": 1190, "tokensConsumed": 10}}
         result.warnings = [
             {
@@ -48,7 +49,11 @@ class DummyManager:
         return {
             "job_id": job_id,
             "row_count": 1,
-            "export": {"path": f"/tmp/{job_id}.xlsx", "filename": f"{job_id}.xlsx"},
+            "export": {
+                "path": f"/tmp/{job_id}.xlsx",
+                "url": f"https://example.com/{job_id}.xlsx",
+                "filename": f"{job_id}.xlsx",
+            },
             "quota": {"after": {"tokensLeft": 1190, "tokensConsumed": 10}},
         }
 
@@ -91,7 +96,8 @@ def test_keepa_run_accepts_params_json_string(monkeypatch):
     assert "quota" not in result["data"]
     assert "params_path" not in result["data"]
     assert "raw_path" not in result["data"]
-    assert result["data"]["export"]["url"].startswith("file://")
+    assert result["data"]["export"]["url"] == "https://example.com/job-1.xlsx"
+    assert "path" not in result["data"]["export"]
     assert "tokens_left" not in str(result["data"])
     assert result["data"]["warnings"][0]["message"] == "Keepa 当前可用额度不足，请稍后重试；如果持续卡住，请联系运营人员处理。"
 
@@ -105,7 +111,8 @@ def test_keepa_job_status_hides_quota(monkeypatch):
     assert result["data"]["job_id"] == "job-1"
     assert "quota" not in result["data"]
     assert "tokensLeft" not in str(result["data"])
-    assert result["data"]["export"]["url"].startswith("file://")
+    assert result["data"]["export"]["url"] == "https://example.com/job-1.xlsx"
+    assert "path" not in result["data"]["export"]
 
 
 def test_keepa_export_returns_export_info(monkeypatch):
@@ -114,5 +121,5 @@ def test_keepa_export_returns_export_info(monkeypatch):
     result = _run(keepa_tools.keepa_export("job-1"))
 
     assert result["success"] is True
-    assert result["data"]["path"] == "/tmp/job-1.xlsx"
-    assert result["data"]["url"].startswith("file://")
+    assert result["data"]["url"] == "https://example.com/job-1.xlsx"
+    assert "path" not in result["data"]

@@ -150,7 +150,9 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
 def _ensure_export_url(export: Any) -> None:
     if not isinstance(export, dict):
         return
-    if export.get("path") and not export.get("url"):
+    if export.get("url"):
+        export.pop("path", None)
+    elif export.get("path"):
         export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
 
 

@@ -54,7 +54,7 @@ opscli keepa run product --site US --params '{"asins":["B0088PUEPK"]}' --force
 Run with explicit output directory:
 
 ```powershell
-opscli keepa run seller --site US --params '{"seller":"A2L77EE7U53NWQ","storefront":true}' --output-dir D:\tmp\keepa
+opscli keepa run seller --site US --params '{"seller":"A2L77EE7U53NWQ"}' --output-dir D:\tmp\keepa
 ```
 
 ## Python Calls
