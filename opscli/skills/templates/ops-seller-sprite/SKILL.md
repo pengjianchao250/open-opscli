@@ -91,6 +91,8 @@ Always pass:
 - `period`: `30d`, `nearly`, or a month such as `2026-03`.
 - `page_size`: default `100` unless the user requests otherwise.
 
+For `product-research`, `月份` / `数据月份` / a value like `2026-04` must be passed as top-level `period`, not as `params.putawayMonth`. Only map `上架时间` / `上架月数` / `上架多久` to `params.putawayMonth`, and that value must be a month count such as `1`, `3`, `6`, or `12`. Never pass `YYYY-MM` to `putawayMonth`.
+
 For `competitor-lookup`, product links are accepted as user input, but tool params should pass ASINs: extract the ASIN from Amazon product URLs and set `params.asins`.
 
 For `product-research`, 推荐模式传 `params.recommendationMode`，可用值：
@@ -122,7 +124,7 @@ For `product-research`, 推荐模式传 `params.recommendationMode`，可用值�
 | 评分数 | `minReviews` / `maxReviews` |
 | 评分 | `minReviewRating` / `maxReviewRating` |
 | FBA 运费 | `minFba` / `maxFba` |
-| 上架时间 | `putawayMonth` |
+| 上架时间 / 上架月数（不是数据月份） | `putawayMonth` |
 | 包装重量 | `minWeights` / `maxWeights`，单位用 `weightUnit` |
 | 买家运费 | `minDeliveryPrice` / `maxDeliveryPrice` |
 | 卖家数 | `minSellers` / `maxSellers` |
@@ -245,7 +247,7 @@ Scenario defaults:
 | scenario | Defaults |
 | --- | --- |
 | `competitor-lookup` | `page=1`, `order.field=amz_unit`, `order.desc=true`, `lowPrice=N` |
-| `product-research` | `page=1`, `selectType=2`, `order.field=amz_unit`, `order.desc=true`, `smallAndLight=N`, `lowPrice=N` |
+| `product-research` | `page=1`, `selectType=2`, `order.field=total_units`, `order.desc=true`, `smallAndLight=N`, `lowPrice=N` |
 | `keyword-miner` | `pageNum=1`, `orderBy=5`, `desc=true`, `filterRootWord=0`, `amazonChoice=false`, `includeHighFrequency=true` |
 | `keyword-reverse` | `page=1`, `order=12`, `desc=true` |
 | `traffic-source` | `pageNo=1`, `order=10`, `desc=true` |

@@ -34,6 +34,10 @@ class SellerSpriteScenarioRequest:
     job_id: str | None = None
     output_dir: str | None = None
     export_format: str = "xls"
+    mode: str | None = None
+    page_prepare: bool | None = None
+    task_interval_seconds: float | None = None
+    cooldown_seconds: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """转换为可序列化字典。"""

@@ -1,4 +1,4 @@
-"""卖家精灵接口直连 CLI。"""
+"""卖家精灵 CLI。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
 from opscli.seller_sprite.services import SellerSpriteApiManager
 
 
-app = typer.Typer(help="卖家精灵接口直连")
+app = typer.Typer(help="卖家精灵采集与导出")
 
 
 @app.command("scenarios")
@@ -30,6 +30,22 @@ def run_scenario(
     params: str = typer.Option("{}", "--params", help="场景参数 JSON 字符串"),
     page_size: int = typer.Option(100, "--page-size", help="每页数量"),
     export_format: str = typer.Option("xls", "--export-format", help="导出格式：xls/xlsx/json"),
+    mode: str | None = typer.Option(None, "--mode", help="执行模式：api-direct/browser-route"),
+    page_prepare: bool | None = typer.Option(
+        None,
+        "--page-prepare/--no-page-prepare",
+        help="browser-route 前是否执行页面滚动、鼠标移动和空白点击",
+    ),
+    task_interval_seconds: float | None = typer.Option(
+        None,
+        "--task-interval-seconds",
+        help="browser-route 同账号任务间隔秒数",
+    ),
+    cooldown_seconds: float | None = typer.Option(
+        None,
+        "--cooldown-seconds",
+        help="browser-route 失败后账号冷却秒数",
+    ),
     output_dir: str | None = typer.Option(None, "--output-dir", help="输出目录"),
     job_id: str | None = typer.Option(None, "--job-id", help="指定任务 ID"),
 ) -> None:
@@ -43,6 +59,10 @@ def run_scenario(
         job_id=job_id,
         output_dir=output_dir,
         export_format=export_format,
+        mode=mode,
+        page_prepare=page_prepare,
+        task_interval_seconds=task_interval_seconds,
+        cooldown_seconds=cooldown_seconds,
     )
     result = asyncio.run(SellerSpriteApiManager().run(request))
     typer.echo(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
