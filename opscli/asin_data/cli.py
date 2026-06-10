@@ -12,6 +12,7 @@ from opscli.asin_data.services.collector import (
     DEFAULT_LISTING_ANALYSIS_POLL_INTERVAL_SECONDS,
     AsinDataCollector,
 )
+from opscli.asin_data.services.report_files import AsinReportFileClient, AsinReportFileNotFoundError
 
 
 class KeywordSource(str, Enum):
@@ -46,6 +47,45 @@ def _error_payload(command: str, exc: Exception) -> dict:
     else:
         error = {"code": "ASIN_DATA_ERROR", "message": str(exc)}
     return {"success": False, "command": command, "data": None, "error": error}
+
+
+@app.command("report-url")
+def report_url(
+    asin: str = typer.Option(..., "--asin", help="ASIN"),
+    site: str = typer.Option("US", "--site", help="站点"),
+    url_only: bool = typer.Option(False, "--url-only", help="只输出报告文件地址"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """只查询 ASIN 报告文件接口并返回报告地址。"""
+    normalized_asin = asin.strip().upper()
+    normalized_site = site.strip().upper()
+    try:
+        report_file = AsinReportFileClient().fetch(asin=normalized_asin, site=normalized_site)
+        if not report_file.url:
+            raise AsinReportFileNotFoundError(asin=normalized_asin, site=normalized_site)
+    except Exception as exc:
+        _emit(_error_payload("asin-data report-url", exc), pretty)
+        raise typer.Exit(1)
+
+    if url_only:
+        typer.echo(report_file.url)
+        return
+
+    _emit(
+        {
+            "success": True,
+            "command": "asin-data report-url",
+            "data": {
+                "asin": report_file.asin,
+                "site": report_file.site,
+                "report_file_url": report_file.url,
+                "record": report_file.record,
+                "raw": report_file.raw,
+            },
+            "error": None,
+        },
+        pretty,
+    )
 
 
 @app.command("collect")

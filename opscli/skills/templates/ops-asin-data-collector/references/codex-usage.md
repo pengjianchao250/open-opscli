@@ -1,14 +1,22 @@
 # Codex Usage Guide
 
-This guide tells Codex how to use the official `opscli asin-data collect` command.
+This guide tells Codex how to use the official `opscli asin-data` commands.
 
 ## Entry Point
 
-Always call:
+For real ASIN data collection, call:
 
 ```bash
 opscli asin-data collect
 ```
+
+For existing report URL lookup only, call:
+
+```bash
+opscli asin-data report-url --asin <ASIN> --site <SITE> --url-only
+```
+
+Do not run full collection for a URL-only lookup request.
 
 Do not call `scripts/collect_asin_data.py` directly for user-facing work. The script is retained as an internal compatibility/data-contract implementation.
 
@@ -137,15 +145,30 @@ opscli asin-data collect \
 
 ### URL-Only Output
 
-Use when another system only needs the ASIN report file URL.
+Use when another system only needs the ASIN report file URL. Prefer the dedicated report URL command:
+
+```bash
+opscli asin-data report-url \
+  --asin B0BY8Y5766 \
+  --site US \
+  --url-only
+```
+
+If the installed opscli does not have `asin-data report-url`, use `collect` only with the exact minimal skip flags below:
 
 ```bash
 opscli asin-data collect \
   --asin B0BY8Y5766 \
   --site US \
-  --keyword "bed frame" \
+  --skip-query \
+  --skip-seller-sprite \
+  --skip-amazon \
+  --skip-rufus \
+  --no-upload \
   --url-only
 ```
+
+Do not add keywords, Rufus questions, upload options, Amazon scrape options, SellerSprite options, or query options in this fallback mode. The command must stay URL lookup only.
 
 `--url-only` returns the single-ASIN report URL from `/dataMetrics/v1/asin-report-files?asin=...&site=...`. When `--fetch-report-files` is enabled and the interface returns no URL, the command fails with `取数服务异常`; use `--no-fetch-report-files` only for debugging or when the caller explicitly wants to skip the report-file lookup.
 

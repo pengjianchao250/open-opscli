@@ -6,7 +6,7 @@ version: 0.1.3
 
 # ops-asin-data-collector
 
-Codex-facing wrapper for the official `opscli asin-data collect` command. Use it to collect one or more ASINs into a unified data package containing SellerSprite, Amazon scrape, BI sales, crawler Listing, Rufus, and frontend-facing outputs.
+Codex-facing wrapper for the official `opscli asin-data` commands. Use `collect` to collect one or more ASINs into a unified data package containing SellerSprite, Amazon scrape, BI sales, crawler Listing, Rufus, and frontend-facing outputs. Use `report-url` when the user only needs an existing ASIN report file URL.
 
 ## Trigger Scope
 
@@ -16,20 +16,22 @@ Use this Skill when the user asks for any of these:
 - 单个 ASIN 的卖家精灵、Amazon 页面、BI 销售、爬虫 Listing 或 Rufus 数据
 - 生成前端可读的 `frontend-data.json`，并保留本地预览用 `frontend-data.html`
 - 通过 Codex 调用 `opscli asin-data collect`
+- 只查询 ASIN 报告 URL 时，优先调用 `opscli asin-data report-url --asin <ASIN> --site <SITE> --url-only`
 
 Do not use this Skill for final report writing, Listing 文案改写、价格/库存/广告修改，or any operation that changes remote business data.
 
 ## Codex Workflow
 
 1. Read `references/codex-usage.md` before constructing the command.
-2. Confirm exactly one input source:
+2. If the request is only to query an existing ASIN report URL, use `opscli asin-data report-url --asin <ASIN> --site <SITE> --url-only` and do not run the full collection workflow.
+3. Confirm exactly one input source:
    - file mode: `--input <csv|xlsx|json|jsonl>`
    - single mode: `--asin <ASIN>` with optional repeated `--keyword`
-3. For real collection, first check auth with `opscli auth token status`.
-4. Run `opscli asin-data collect ... --dry-run --pretty` unless the user explicitly asks to execute immediately.
-5. After dry-run review, run the same command without `--dry-run`.
-6. Return the `output_dir`, `frontend-data.json`, `frontend-data.html`, `frontend-data.md`, and JSON `aliyun_url` when present.
-7. If any `opscli` command fails, immediately submit `ops-feedback` according to project rules, then continue with the user task where possible.
+4. For real collection, first check auth with `opscli auth token status`.
+5. Run `opscli asin-data collect ... --dry-run --pretty` unless the user explicitly asks to execute immediately.
+6. After dry-run review, run the same command without `--dry-run`.
+7. Return the `output_dir`, `frontend-data.json`, `frontend-data.html`, `frontend-data.md`, and JSON `aliyun_url` when present.
+8. If any `opscli` command fails, immediately submit `ops-feedback` according to project rules, then continue with the user task where possible.
 
 ## Quick Start
 
@@ -80,9 +82,25 @@ opscli asin-data collect \
 8. Build frontend-facing Chinese sections: `基础数据`, `卖家精灵关键词数据`, `卖家精灵AI全景分析数据`, `Rufus优化建议数据`.
 9. Write `manifest.json`, `asin-data.jsonl`, `frontend-data.json`, `frontend-data.html`, `frontend-data.md`, `asin-data-summary.json`, `commands.jsonl`, and `errors.jsonl`.
 
+## Report URL Lookup Boundary
+
+When the task is only "查询报告 URL / 输出报告地址 / 给运营报告链接", use this command first:
+
+```bash
+opscli asin-data report-url --asin <ASIN> --site <SITE> --url-only
+```
+
+If the installed opscli version does not have `asin-data report-url`, `collect` is allowed only with this exact minimal parameter set:
+
+```bash
+opscli asin-data collect --asin <ASIN> --site <SITE> --skip-query --skip-seller-sprite --skip-amazon --skip-rufus --no-upload --url-only
+```
+
+Do not run plain `opscli asin-data collect --asin <ASIN> --site <SITE>` for report URL lookup.
+
 ## Boundaries
 
-- Use `opscli asin-data collect` as the stable entry point.
+- Use `opscli asin-data collect` as the stable entry point for real collection.
 - Do not wrap SellerSprite, Query, Amazon, or Rufus by invoking nested CLI subprocesses from the collector; use the corresponding Python managers directly.
 - The legacy `scripts/collect_asin_data.py` remains only as the data-contract implementation source reused by the command; Codex users should call the CLI command.
 - If any `opscli` command fails during an agent-run task, immediately submit `ops-feedback` according to project rules.
