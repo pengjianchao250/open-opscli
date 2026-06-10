@@ -92,7 +92,7 @@ def load_settings() -> SellerSpriteSettings:
         ),
         default_mode=_normalize_mode(values.get(ENV_MODE)),
         browser_profile_dir=browser_profile_dir,
-        browser_headless=_parse_bool(values.get(ENV_BROWSER_HEADLESS), False),
+        browser_headless=_parse_bool(values.get(ENV_BROWSER_HEADLESS), _default_browser_headless()),
         browser_channel=values.get(ENV_BROWSER_CHANNEL) or None,
         browser_task_interval_seconds=_parse_float(
             values.get(ENV_BROWSER_TASK_INTERVAL_SECONDS),
@@ -183,6 +183,13 @@ def _parse_bool(value: str | None, default: bool) -> bool:
     if value is None or value == "":
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _default_browser_headless() -> bool:
+    """无显示环境时默认使用 headless。"""
+    if os.name == "nt":
+        return False
+    return not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
 def _normalize_mode(value: str | None) -> str:
