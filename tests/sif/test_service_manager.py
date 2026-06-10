@@ -79,6 +79,66 @@ class FakeTrafficProvider:
         )
 
 
+class FakeProductTimeMachineProvider:
+    last_request = None
+
+    def run(self, request, *, default_output_dir):
+        self.__class__.last_request = request
+        root = Path(request.output_dir) / "job-product"
+        root.mkdir(parents=True, exist_ok=True)
+        export_path = root / "product.xlsx"
+        export_path.write_bytes(b"PK\x03\x04")
+        result_path = root / "result.json"
+        result_payload = {
+            "schema_version": "sif_product_time_machine.v1",
+            "feature": request.feature,
+            "keyword": request.keyword,
+            "exports": {
+                "product_time_machine_xlsx": {
+                    "path": str(export_path),
+                    "filename": export_path.name,
+                    "url": export_path.resolve().as_uri(),
+                    "format": "xlsx",
+                    "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                }
+            },
+            "summary": {"export_count": 1},
+            "warnings": [],
+        }
+        result_path.write_text(json.dumps(result_payload, ensure_ascii=False), encoding="utf-8")
+        return SifRunResult(
+            job_id="job-product",
+            feature=request.feature,
+            provider="sif",
+            site=request.site,
+            keyword=request.keyword,
+            root_dir=str(root),
+            params_path=str(root / "params.json"),
+            raw_path=str(root / "raw.json"),
+            result_path=str(result_path),
+            exports={
+                "product_time_machine_xlsx": SifExportResult(
+                    path=str(export_path),
+                    filename=export_path.name,
+                    url=export_path.resolve().as_uri(),
+                )
+            },
+            summary={"export_count": 1},
+        )
+
+
+def test_sif_service_manager_scenarios_include_new_features():
+    manager = SifServiceManager(settings=SifSettings(output_dir=Path("output/test-artifacts")), account_provider=FakeAccountProvider())
+
+    scenarios = {item["feature"]: item for item in manager.scenarios()}
+
+    assert "查排名" in scenarios
+    assert scenarios["查排名"]["default_granularity"] == "week"
+    assert "运营时光机" in scenarios
+    assert scenarios["运营时光机"]["default_last_months"] == 6
+    assert "产品时光机" in scenarios
+
+
 def test_sif_service_manager_injects_account_and_uploads_exports(monkeypatch):
     output_dir = Path("output") / "test-artifacts" / f"sif-service-{uuid4().hex}"
     monkeypatch.setattr("opscli.sif.services.manager.SifTrafficProvider", lambda: FakeTrafficProvider())
@@ -109,6 +169,26 @@ def test_sif_service_manager_injects_account_and_uploads_exports(monkeypatch):
     assert persisted["download_links"][0]["filename"] == "traffic.xlsx"
     assert persisted["download_links"][0]["markdown"].startswith("[traffic.xlsx](")
     assert "sif-secret" not in Path(result.result_path).read_text(encoding="utf-8")
+
+
+def test_sif_service_manager_routes_product_time_machine(monkeypatch):
+    output_dir = Path("output") / "test-artifacts" / f"sif-service-product-{uuid4().hex}"
+    monkeypatch.setattr("opscli.sif.services.manager.SifProductTimeMachineProvider", lambda: FakeProductTimeMachineProvider())
+    monkeypatch.setattr("opscli.sif.services.manager.FileUploadClient", lambda **kwargs: FakeUploadClient(**kwargs))
+
+    manager = SifServiceManager(settings=SifSettings(output_dir=output_dir), account_provider=FakeAccountProvider())
+    result = manager.run(
+        SifRunRequest(
+            feature="产品时光机",
+            keyword="balloon pump",
+            site="US",
+            output_dir=str(output_dir),
+        )
+    )
+
+    assert result.keyword == "balloon pump"
+    assert FakeProductTimeMachineProvider.last_request.sif_username == "sif-user"
+    assert FakeProductTimeMachineProvider.last_request.sif_password == "sif-secret"
 
 
 def test_sif_service_manager_job_status_adds_file_url():

@@ -264,6 +264,12 @@ class SifApiClient:
             self._ensure_authenticated(client)
             return self._download(client, path, payload=payload, country=country)
 
+    def post_json(self, path: str, *, payload: dict[str, Any], country: str | None = None) -> dict[str, Any]:
+        """Call a Sif POST JSON endpoint."""
+        with httpx.Client(timeout=self.timeout, headers=self._headers(), follow_redirects=True) as client:
+            self._ensure_authenticated(client)
+            return self._post_json(client, path, payload=payload, country=country)
+
     def download_get(
         self,
         path: str,

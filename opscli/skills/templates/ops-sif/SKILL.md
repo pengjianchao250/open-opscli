@@ -1,6 +1,6 @@
 ---
 name: ops-sif
-description: Use when the user asks for Sif关键词, Sif 查销量, 不同变体销量, 同组变体销量, 查流量, 流量结构, 反查流量词, 多变体自然位, 多产品对比, 对比销量, 对比流量结构, 对比流量词, 对比流量分, 重点流量词, or 重点广告词 exports through opscli CLI. Prefer CLI. MCP is not enabled in the first version.
+description: Use when the user asks for Sif关键词, Sif 查销量, 查流量, 多产品对比, 查排名, 每日排名, 运营时光机, 产品时光机, or their section exports through opscli CLI.
 ---
 
 # ops-sif
@@ -15,6 +15,9 @@ Use the Sif platform CLI:
 opscli sif run 查销量 --asin B01NBNDC1T --site US
 opscli sif run 查流量 --asin B01NBNDC1T --site US
 opscli sif run 多产品对比 --asin B075WPKK5P,B07KVV8RFF,B07QQ21GL2 --site US
+opscli sif run 查排名 --asin B0BMW2985V --site US
+opscli sif run 运营时光机 --asin B01NBNDC1T --last-months 6 --granularity day
+opscli sif run 产品时光机 --keyword "balloon pump" --site US
 ```
 
 If the user names a specific Sif submodule, pass `--sections` so only that XLSX is downloaded.
@@ -29,6 +32,8 @@ opscli sif run 多产品对比 --asin B075WPKK5P,B07KVV8RFF --sections 重点广
 - Ask only for missing required params.
 - Required for `查销量` and `查流量`: one ASIN.
 - Required for `多产品对比`: at least two ASINs, comma-separated.
+- Required for `查排名` and `运营时光机`: one ASIN.
+- Required for `产品时光机`: one keyword via `--keyword`.
 - Do not ask for optional params. Use defaults unless the user explicitly provides them.
 - Do not ask the user for Sif password, cookie, token, or account credentials in chat.
 
@@ -49,19 +54,27 @@ opscli sif run 多产品对比 --asin B075WPKK5P,B07KVV8RFF --sections 重点广
 | 对比流量分, 流量分 | `多产品对比` | `对比流量分` |
 | 重点流量词 | `多产品对比` | `重点流量词` |
 | 重点广告词, 广告词 | `多产品对比` | `重点广告词` |
+| 查排名, 每日排名, 推排名, 查坑位 | `查排名` | omit |
+| 运营时光机, 运营流量趋势, 流量变化 | `运营时光机` | `流量变化` |
+| 流量词数量变化 | `运营时光机` | `流量词数量变化` |
+| 产品时光机, 关键词产品时光机, 按关键词查产品销量 | `产品时光机` | omit |
 
-ASCII aliases are supported for non-Chinese terminals: `sales`, `traffic`, `traffic-keywords`, and `compare`.
+ASCII aliases are supported for non-Chinese terminals: `sales`, `traffic`, `traffic-keywords`, `compare`, `ranking`, `operation-time-machine`, and `keyword-product-time-machine`.
 
 ## CLI Params
 
 | Parameter | Required | Notes |
 | --- | --- | --- |
-| `feature` | yes | `查销量`, `查流量`, or `多产品对比` |
-| `--asin` | yes | Single ASIN for sales/traffic; comma-separated ASINs for compare |
+| `feature` | yes | `查销量`, `查流量`, `多产品对比`, `查排名`, `运营时光机`, or `产品时光机` |
+| `--asin` | conditional | Single ASIN for sales/traffic/ranking/operation time machine; comma-separated ASINs for compare |
+| `--keyword` | conditional | Required for `产品时光机` |
 | `--site` | no | Marketplace code or Chinese marketplace name. Default `US` |
 | `--sections` | no | Comma-separated section names; omit for all sections |
 | `--time-piece-type` | no | `latelyDay`, `week`, or `month` where supported |
 | `--time-piece-value` | no | Depends on time type |
+| `--granularity` | no | Ranking supports `week/month`; operation time machine supports `day/week/month` |
+| `--last-months` | no | Operation time machine supports `3/6/12/24`; default `6` |
+| `--change-type` | no | Operation time machine: `all` means 流量词数量变化 |
 | `--page-num` | no | Default `1` |
 | `--page-size` | no | User asks “查20条” -> `--page-size 20` |
 | `--output-dir` | no | Export root directory; default uses user-level opscli config directory |
@@ -69,7 +82,7 @@ ASCII aliases are supported for non-Chinese terminals: `sales`, `traffic`, `traf
 
 ## Site Mapping
 
-Always pass a Sif `country` code through `--site`. Supported aliases include:
+Always pass a Sif `country` code through `--site`. The actual supported values come from `opscli.sif.sites.SITE_ALIASES`, shared by all Sif features. Common aliases include:
 
 | User text | `--site` |
 | --- | --- |
@@ -121,6 +134,49 @@ Rules:
 - “2026-02月” / “2026年2月” -> `--time-piece-type month --time-piece-value 2026-02`
 - Week must be in the past. If it is later than today, fall back to `latelyDay/7`.
 - Month can be current month or past month for traffic. If invalid, fall back to `latelyDay/30`.
+
+### Ranking
+
+Default:
+
+```bash
+--granularity week
+```
+
+Rules:
+
+- “按周” / “周” -> `--granularity week`
+- “按月” / “月” -> `--granularity month`
+
+### Operation Time Machine
+
+Default:
+
+```bash
+--granularity day --last-months 6
+```
+
+Rules:
+
+- “日趋势” -> `--granularity day`
+- “周趋势” -> `--granularity week`
+- “月趋势” -> `--granularity month`
+- “近三个月/近六个月/近一年/近两年” -> `--last-months 3/6/12/24`
+- “流量词数量变化” -> `--sections 流量词数量变化` or `--change-type all`
+
+### Product Time Machine
+
+Default:
+
+```bash
+--time-piece-type latelyDay --time-piece-value 7
+```
+
+Rules:
+
+- “最近30天” -> `--time-piece-type latelyDay --time-piece-value 30`
+- “某周” -> `--time-piece-type week --time-piece-value YYYY-MM-DD`
+- “2026-02月” -> `--time-piece-type month --time-piece-value 2026-02`
 
 ## Endpoint Contracts
 
@@ -217,6 +273,38 @@ User says “查20条重点广告词” -> pass:
 --sections 重点广告词 --page-size 20
 ```
 
+### 查排名
+
+`每日排名`:
+
+- List: POST `/api/search/subscribe/v2`
+- Download: POST `/api/updown/userSubs/download`
+- Payload fields:
+  - `asin`: one ASIN
+  - `granularity`: default `week`; supports `week/month`
+  - list payload also includes `pageNum=1`, `pageSize=200`, `interval=7`, `sortBy=estSearchesNum`, `desc=true`, `isListingSearch=true`, `isExample=true`
+
+### 运营时光机
+
+- List: POST `/api/search/timeMachine/asinOpTrafficTrend/list`
+- Download: POST `/api/updown/timeMachine/asinOpTrafficTrend/download`
+- Payload fields:
+  - `asin`: one ASIN
+  - `granularity`: default `day`; supports `day/week/month`
+  - `lastMonths`: default `6`; supports `3/6/12/24`
+  - `listingSearch=false`, `endDay=null`, `interval=null`
+  - `type=all` only when the user asks for 流量词数量变化
+
+### 产品时光机
+
+- List: POST `/api/search/bought/keyword`
+- Download: POST `/api/updown/boughtByKeyword/download`
+- Payload fields:
+  - `keyword`: required
+  - `timePieceType`: default `latelyDay`
+  - `timePieceValue`: default `7`
+  - list payload also includes `pageNum=1`, `pageSize=100`, `sortBy=""`, `desc=true`
+
 ## Output
 
 Every command writes:
@@ -230,7 +318,7 @@ For successful runs, report the concise feature result and generated XLSX filena
 
 ## Guardrails
 
-- Prefer CLI; MCP is deferred until the Sif auth and data contract are stable.
+- Prefer CLI when running locally; use Sif MCP tools when the client has opscli-mcp enabled.
 - Do not ask the user for Sif credentials in chat.
 - Do not place Sif account, password, cookie, or token in examples, logs, tests, or reports.
 - If an `opscli` command fails unexpectedly, follow the repository rule and submit `ops-feedback` immediately.
