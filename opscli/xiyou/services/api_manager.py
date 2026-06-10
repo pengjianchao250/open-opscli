@@ -43,7 +43,11 @@ class XiyouApiManager:
         session_id: str | None = None,
     ) -> None:
         self.settings = settings or load_settings()
-        self.credential_provider = credential_provider or XiyouCredentialProvider(self.settings)
+        self.credential_provider = credential_provider or XiyouCredentialProvider(
+            self.settings,
+            jwt=jwt,
+            session_id=session_id,
+        )
         self.jwt = jwt
         self.session_id = session_id
 

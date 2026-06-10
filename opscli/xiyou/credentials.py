@@ -125,15 +125,34 @@ class XiyouCredentialStore:
 class XiyouCredentialProvider:
     """从服务端配置读取西柚洞察凭据。"""
 
-    def __init__(self, settings: XiyouSettings | None = None) -> None:
+    def __init__(
+        self,
+        settings: XiyouSettings | None = None,
+        *,
+        auth_client: Any | None = None,
+        jwt: str | None = None,
+        session_id: str | None = None,
+    ) -> None:
         self.settings = settings or load_settings()
+        self.auth_client = auth_client
+        self.jwt = jwt
+        self.session_id = session_id
 
     def get_default(self) -> XiyouCredential:
         """读取默认凭据。"""
         if self.settings.credential_latest_url:
-            from opscli.xiyou.credential_service import get_cached_remote_credential
+            from opscli.xiyou.credential_service import (
+                XiyouCredentialServiceClient,
+                get_cached_remote_credential,
+            )
 
-            return get_cached_remote_credential(self.settings)
+            client = XiyouCredentialServiceClient(
+                self.settings,
+                auth_client=self.auth_client,
+                jwt=self.jwt,
+                session_id=self.session_id,
+            )
+            return get_cached_remote_credential(self.settings, client=client)
         if not self.settings.authorization:
             raise XiyouConfigError("missing OPSCLI_XIYOU_CREDENTIAL_LATEST_URL or OPSCLI_XIYOU_AUTHORIZATION")
         return XiyouCredential(
