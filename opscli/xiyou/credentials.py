@@ -110,7 +110,7 @@ class XiyouCredentialStore:
             os.replace(tmp_path, self.path)
         except PermissionError:
             # 部分受限 Windows 运行环境允许写文件但拒绝 rename/replace。
-            # 兜底写入发生在所有校验通过之后，避免失败 token 覆盖旧凭据。
+            # 兜底写入发生在所有校验通过之后，避免失败 token 覆盖旧凭据。20260610
             self.path.write_text(tmp_path.read_text(encoding="utf-8"), encoding="utf-8")
             try:
                 tmp_path.unlink(missing_ok=True)
