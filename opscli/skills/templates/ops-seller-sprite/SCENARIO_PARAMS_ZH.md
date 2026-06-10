@@ -7,6 +7,8 @@
 - `page_size`：每页数量，默认 `100`
 - `export_format`：导出格式，默认 `xls`，也支持 `xlsx`、`json`
 
+注意：`product-research` 里的“月份 / 数据月份 / 2026-04”应传公共参数 `period`，不是 `putawayMonth`。`putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
+
 ## 查竞品 `competitor-lookup`
 
 必填，任选一种：
@@ -62,7 +64,7 @@
 - `minReviews` / `maxReviews`：最低评分数 / 最高评分数
 - `minReviewRating` / `maxReviewRating`：最低评分 / 最高评分
 - `minFba` / `maxFba`：最低 FBA 运费 / 最高 FBA 运费
-- `putawayMonth`：上架月数，如 `1` 表示近 30 天，`3` 表示近 3 个月，`6` 表示近半年
+- `putawayMonth`：上架月数，不是数据月份；如 `1` 表示近 30 天，`3` 表示近 3 个月，`6` 表示近半年
 - `minWeights` / `maxWeights`：最低包装重量 / 最高包装重量
 - `weightUnit`：重量单位，如 `g`、`kg`、`oz`、`lb`
 - `minDeliveryPrice` / `maxDeliveryPrice`：最低买家运费 / 最高买家运费
