@@ -25,7 +25,7 @@ visibility: internal
 
 ## 工具列表
 
-- `keepa_spec_must_read`: read this guide before first use.
+- `keepa_spec_must_read`: read this guide before first use. 官方接口细节见 `opscli/mcp/references/keepa/OFFICIAL.md`。
 - `keepa_scenarios`: list supported Keepa scenarios.
 - `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX. `export_format` accepts `xls`/`xlsx`/`json`; `xls` and `xlsx` both generate `.xlsx`. Large results are automatically exported as JSON to avoid XLSX timeout.
 - `keepa_job_status`: read a saved task result by `job_id`.
@@ -42,7 +42,7 @@ visibility: internal
 - 用户说“查商品详情”“查商品”时，`product` 默认会带 `history=true` 获取历史价格变化；用户明确说不要历史时再传 `history=false`。
 - 用户说“最近 30 天”“近 90 天”时，优先映射为 `stats=30/90`。
 - 用户说“只要 ASIN”“只导出 ASIN 列表”时，`product-search` 加 `asins_only=true`。
-- `seller` 场景默认带 `storefront=true`，确保返回店铺 ASIN 相关字段；用户明确不要店铺商品时才传 `storefront=false`。
+- `seller` 场景默认带 `storefront=true`，确保返回店铺 ASIN 相关字段；但官方不允许批量 seller ID 与 `storefront=1` 同时使用，批量查多个 seller 时必须传 `storefront=false`，如需店铺 ASIN 列表则按单个 seller 分开查。
 
 ## 认证与额度
 
@@ -89,18 +89,28 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 - `raw.json` 是后端对比和排障基准；XLSX 是本地导出层生成的用户查看文件。
 - 用户追问字段单位、倍率、计算方式或准确性时，不要自行类比卖家精灵或其他数据源；应说明以 Keepa 原始响应、官方文档和后端确认口径为准。
 
+## 官方口径索引
+
+详细官方口径见 `opscli/mcp/references/keepa/OFFICIAL.md`；当用户追问字段、token、分页、响应结构或接口限制时，先读取该文件。
+
+- Product Search：`/search`，必填 `domain`、`type=product`、`term`；默认返回 `products`，`asins-only=1` 返回 `asinList`。
+- Best Sellers：`/bestsellers`，必填 `domain`、`category`；响应主字段 `bestSellersList.asinList`，不返回完整商品详情。
+- Product Finder：`/query`，必填 `domain`、`selection`；selection 是 query JSON，响应只返回 `asinList`，不返回 product objects。
+- Seller Information：`/seller`，必填 `domain`、`seller`；响应主字段 `sellers` map，单次最多 100 个 seller ID。
+- 关键限制：`seller` 请求 `storefront=1` 时不允许批量 seller ID；批量查多个 seller 时必须传 `storefront=false`。
+
 ## 场景和必填参数
 
 | 用户说法 | scenario | 必填参数 | 常用可选参数 | 说明 |
 | --- | --- | --- | --- | --- |
 | 查商品详情、查 ASIN、查价格历史 | `product` | `asin`/`asins` 或 `code`/`codes` | `stats`, `history`, `offers`, `buybox`, `rating`, `days`, `update` | ASIN 或 UPC/EAN/ISBN-13 查询。最多 100 个；带 `offers` 时最多 20 个。 |
-| 关键词搜商品、搜索 flashlight | `product-search` | `keyword` 或 `term` | `page`, `stats`, `history`, `update`, `asins_only` | 关键词搜索 Amazon 商品。 |
-| 按条件筛商品、Product Finder | `product-finder` | 无固定必填；建议传 `selection` | `selection.perPage`, `selection.sort`, 各类筛选字段 | 复杂筛选走 Keepa Product Finder selection。 |
+| 关键词搜商品、搜索 flashlight | `product-search` | `keyword` 或 `term` | `page`, `stats`, `history`, `update`, `asins_only` | 调用 Keepa `/search` 且 `type=product`；默认返回 `products`，传 `asins_only=true` 时返回 `asinList`。 |
+| 按条件筛商品、Product Finder | `product-finder` | `selection` 或至少 1 个筛选字段 | `selection.page`, `selection.perPage`, `selection.sort`, 各类筛选字段 | 调用 Keepa `/query`；按 Product Finder selection 筛选商品库，只返回 `asinList`。 |
 | 搜类目、查类目关键词 | `category-search` | `keyword` 或 `term` | `parents` | 按类目名称关键词搜索。 |
 | 查类目详情、类目 ID | `category-lookup` | `category`/`categories` | `parents` | 按 category id 查询，最多 10 个。 |
-| 查卖家、查店铺 | `seller` | `seller`/`sellers` | `storefront`, `update` | 按 seller id 查询，默认拉 storefront ASIN。 |
+| 查卖家、查店铺 | `seller` | `seller`/`sellers` | `storefront`, `update` | 按 seller id 查询；单 seller 默认拉 storefront ASIN，批量 seller 必须传 `storefront=false`。 |
 | 查 Top Sellers、头部卖家 | `top-seller` | 无 | 无 | 查询指定站点评分最多的 marketplace sellers。 |
-| 查热销、Best Sellers | `bestsellers` | `category` 或 `productGroup` | 无 | 按 category node 或 product group 获取热销 ASIN。 |
+| 查热销、Best Sellers | `bestsellers` | `category` 或 `productGroup` | 无 | 调用 Keepa `/bestsellers`；按 category node/productGroup 获取 `bestSellersList.asinList` 热销 ASIN。 |
 | 查折扣、Deals | `deals` | 无固定必填；建议传 `selection` | `selection` | 查询最近变动和折扣商品，单次最多约 150 条。 |
 | 查秒杀、Lightning Deals | `lightning-deals` | 无 | `asin` | 当前和即将开始的秒杀，可按 ASIN 过滤。 |
 
@@ -110,7 +120,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 - `product-search` 缺关键词：`请提供要搜索的关键词。`
 - `category-lookup` 缺类目 ID：`请提供 Keepa/Amazon category id。`
 - `seller` 缺 seller ID：`请提供 seller ID。`
-- `bestsellers` 缺类目：`请提供 category id 或 productGroup。`
+- `bestsellers` 缺类目：`请提供 Keepa/Amazon category id，或 productGroup。`
 
 ## 参数映射与默认值
 
@@ -121,7 +131,10 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 | `查这个 ASIN 的价格历史` | `scenario="product"`, `params={"asin":"...","history":true,"stats":30}` |
 | `只要 ASIN 列表` | 对 `product-search` 加 `params={"asins_only":true}` |
 | `查 seller A2L77EE7U53NWQ 店铺商品` | `scenario="seller"`, `params={"seller":"A2L77EE7U53NWQ","storefront":true}` |
+| `批量查多个 seller 信息，不要店铺商品` | `scenario="seller"`, `params={"sellers":["...","..."],"storefront":false}` |
 | `查 172282 类目的 best sellers` | `scenario="bestsellers"`, `params={"category":"172282"}` |
+| `查 Home productGroup 的 best sellers` | `scenario="bestsellers"`, `params={"productGroup":"Home"}` |
+| `Product Finder 查 sales rank 1 到 5000 的商品` | `scenario="product-finder"`, `params={"selection":{"current_SALES_gte":1,"current_SALES_lte":5000,"perPage":50}}` |
 | `查 flashlight 的类目` | `scenario="category-search"`, `params={"keyword":"flashlight"}` |
 | `查这个 ASIN 最近 90 天价格走势` | `scenario="product"`, `params={"asin":"...","stats":90,"history":true}` |
 | `导出 flashlight 搜索结果，只要 ASIN` | `scenario="product-search"`, `params={"keyword":"flashlight","asins_only":true}` |
@@ -137,7 +150,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 - 用户说“只要 ASIN”：使用 `asins_only=true`。
 - 用户要求后端比对、原始数据、JSON：使用 `export_format="json"`。
 - 用户未指定页码：`product-search` 可以不传 `page`，需要显式第一页时传 `page=0`。
-- `seller` 默认使用 `storefront=true`；用户明确不要店铺商品或店铺 ASIN 时才传 `storefront=false`。
+- `seller` 默认使用 `storefront=true`；用户明确不要店铺商品/店铺 ASIN，或一次传多个 seller ID 时，传 `storefront=false`。
 
 ## 用户回答规范
 
