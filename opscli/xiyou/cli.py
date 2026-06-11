@@ -30,29 +30,50 @@ def scenarios() -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-@app.command("run")
+@app.command(
+    "run",
+    help=(
+        "ranking 场景支持把 `asin` / `keyword` 作为 `query` 别名传入；"
+        "`flow-diagnosis`（流量诊断仪）现按列表接口拉取数据并在本地导出文件。"
+    ),
+)
 def run_function(
     function: str = typer.Argument(
         ...,
         help=(
             "功能名称，如 ranking、reverse-keyword、asin-compare、keyword-analysis、keyword-explorer、"
-            "keyword-historical-traffic、keyword-ad-replay、keyword-organic-replay、keyword-ad-toppers"
+            "keyword-historical-traffic、keyword-ad-replay、keyword-organic-replay、keyword-ad-toppers、"
+            "ad-analysis、parent-analysis、sales-analysis、flow-diagnosis、flow-insight、ad-insight、flow-weekly"
         ),
     ),
     provider: str = typer.Option("xiyou", "--provider", help="服务商，默认 xiyou"),
     target: str = typer.Option("asin", "--target", help="排行榜目标：asin/keyword"),
     site: str = typer.Option("US", "--site", help="站点，如 US、DE、UK、CA、FR"),
-    period: str = typer.Option("week", "--period", help="周期：ASIN 排行榜支持 week/month；关键词排行榜仅支持 week"),
+    period: str = typer.Option(
+        "week",
+        "--period",
+        help="周期：ASIN 排行榜支持 week/month；关键词排行榜仅支持 week；历史流量分析会自动按 month（最近1个月）处理",
+    ),
     rank_pattern: str | None = typer.Option(None, "--rank-pattern", help="榜单类型，如 flow/surge/aba"),
     dataset: str | None = typer.Option(None, "--dataset", help="业务数据块，如 keywords/analysis"),
     asin: str | None = typer.Option(None, "--asin", help="单个 ASIN，用于反查关键词"),
-    asins: str | None = typer.Option(None, "--asins", help="多个 ASIN，逗号分隔，用于多ASIN对比"),
+    asins: str | None = typer.Option(
+        None,
+        "--asins",
+        help="多个 ASIN，逗号分隔，用于多ASIN对比；广告分析缺省时会尝试自动补齐",
+    ),
     keyword: str | None = typer.Option(
         None,
         "--keyword",
         help="关键词，用于关键词分析、以词找词、历史流量分析、广告放映机、自然放映机、广告金主榜",
     ),
+    parent_asin: str | None = typer.Option(
+        None,
+        "--parent-asin",
+        help="父体 ASIN，用于广告分析、父体分析、订单量分析；缺省时会尝试自动补齐",
+    ),
     query: str = typer.Option("", "--query", help="搜索过滤词"),
+    search_terms: str | None = typer.Option(None, "--search-terms", help="搜索词列表，逗号分隔；主要用于广告分析"),
     cycle_period: str | None = typer.Option(
         None,
         "--cycle-period",
@@ -71,12 +92,12 @@ def run_function(
     start_date: str | None = typer.Option(
         None,
         "--start-date",
-        help="日期区间起始日，格式 YYYY-MM-DD；主要用于历史流量分析",
+        help="日期区间起始日，格式 YYYY-MM-DD；历史流量分析已不再支持该参数",
     ),
     end_date: str | None = typer.Option(
         None,
         "--end-date",
-        help="日期区间结束日，格式 YYYY-MM-DD；主要用于历史流量分析",
+        help="日期区间结束日，格式 YYYY-MM-DD；历史流量分析已不再支持该参数",
     ),
     report_date: str | None = typer.Option(
         None,
@@ -86,7 +107,7 @@ def run_function(
     view_mode: str | None = typer.Option(
         None,
         "--view-mode",
-        help="视图：reverse-keyword 支持 data/trends/top10；keyword-analysis 支持 data/trends；asin-compare 支持 data/top10",
+        help="视图：reverse-keyword 支持 data/trends/top10；keyword-analysis 支持 data/trends；asin-compare 下载时忽略该参数",
     ),
     replay_type: str | None = typer.Option(
         None,
@@ -116,6 +137,7 @@ def run_function(
         asin=asin,
         asins=asins,
         keyword=keyword,
+        parent_asin=parent_asin,
         query=query,
         cycle_period=cycle_period,
         start_month=start_month,
@@ -123,6 +145,7 @@ def run_function(
         start_date=start_date,
         end_date=end_date,
         report_date=report_date,
+        search_terms=search_terms,
         view_mode=view_mode,
         replay_type=replay_type,
         keyword_type=keyword_type,
@@ -170,7 +193,7 @@ def notify_status() -> None:
         "mentioned_list": list(config.mentioned_list),
         "mentioned_mobile_list": list(config.mentioned_mobile_list),
         "mention_all": config.mention_all,
-        "notify_path": str(settings.notify_path),
+        "state_path": str(config.state_path),
     }
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 

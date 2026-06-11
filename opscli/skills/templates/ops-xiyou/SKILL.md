@@ -28,6 +28,13 @@ MCP default export is `json`. If the user asks for Excel, XLS, XLSX, 表格, or 
 | 关键词 ABA 排行榜, keyword ABA ranking | `ranking` | `keyword` | `aba` | none |
 | 搜索暴增榜, keyword surge ranking | `ranking` | `keyword` | `surge` | none |
 | 反查关键词, ASIN 关键词反查 | `reverse-keyword` | omit | omit | `asin` |
+| 广告分析 | `ad-analysis` | omit | omit | `asin` |
+| 父体分析 | `parent-analysis` | omit | omit | `parent_asin`, `asins` |
+| 订单量分析 | `sales-analysis` | omit | omit | `asin`, `parent_asin` |
+| 流量诊断仪 | `flow-diagnosis` | omit | omit | `asin` |
+| 流量洞察 | `flow-insight` | omit | omit | `asin`, `start_date`, `end_date` |
+| 广告洞察 | `ad-insight` | omit | omit | `asin`, `start_date`, `end_date` |
+| 流量周报 | `flow-weekly` | omit | omit | `asin`, `start_date`, `end_date` |
 | 多ASIN对比 | `asin-compare` | omit | omit | `asins` |
 | 关键词分析 | `keyword-analysis` | omit | omit | `keyword` |
 | 以词找词, 关键词拓展 | `keyword-explorer` | omit | omit | `keyword` |
@@ -36,7 +43,7 @@ MCP default export is `json`. If the user asks for Excel, XLS, XLSX, 表格, or 
 
 Always pass:
 
-- `function`: one of `ranking`, `reverse-keyword`, `asin-compare`, `keyword-analysis`, `keyword-explorer`.
+- `function`: one of `ranking`, `reverse-keyword`, `ad-analysis`, `parent-analysis`, `sales-analysis`, `flow-diagnosis`, `flow-insight`, `ad-insight`, `flow-weekly`, `asin-compare`, `keyword-analysis`, `keyword-explorer`.
 - `provider`: `xiyou` unless the user explicitly asks for another supported provider.
 - `site`: 西柚站点 code。支持：
   - 北美及拉美：`US`（美国）、`CA`（加拿大）、`MX`（墨西哥）、`BR`（巴西）
@@ -53,10 +60,19 @@ For `ranking`, also pass:
 - `target`: `asin` or `keyword`.
 - `period`: `week` or `month`.
 - `rank_pattern`: see intent map.
+- `query`: optional ASIN / keyword filter. If the user says `asin=...` in an ASIN ranking request or `keyword=...` in a keyword ranking request, you may pass that value through `asin` / `keyword`; opscli will treat it as a `query` alias for `ranking`.
 
 For resource export scenarios:
 
-- `reverse-keyword`: pass `asin`.
+- `reverse-keyword`: pass `asin`. When the latest web doc requires the monthly data view, also pass `view_mode` plus `keyword_type`; `keyword_type=organic/advertising` maps to the dedicated `dataList` request and table variant.
+- `ad-analysis`: pass `asin`; when `parent_asin` / `asins` are omitted, opscli will auto-call the documented variation preflight APIs to resolve them. Use `search_terms` or `keyword/query` for the searched term list.
+- `parent-analysis`: pass `parent_asin`, `asins`; `query` is the filtered keyword text, and `keyword_type` supports `all/organic/advertising`.
+- `sales-analysis`: pass `asin`, `parent_asin`; use monthly `cycle_period` or `start_month/end_month`.
+- `flow-diagnosis`: pass `asin` only when the user is asking about the scenario itself. If the user explicitly asks to download/export this scenario, stop immediately and tell them Xiyou officially has no download API for it. Do not try alternate endpoints, page scraping, or inferred export paths.
+  Natural-language alias guidance: map `流量诊断仪` and `流量诊断` to `flow-diagnosis`. Do not map the standalone word `诊断仪` by itself, because it is too broad and may refer to other diagnosis capabilities in future.
+- `flow-insight`: pass `asin`, `start_date`, `end_date`.
+- `ad-insight`: pass `asin`, `start_date`, `end_date`.
+- `flow-weekly`: pass `asin`, `start_date`, `end_date`.
 - `asin-compare`: pass `asins` as a list or comma-separated string with at least 2 ASINs.
 - `keyword-analysis`: pass `keyword`.
 - `keyword-explorer`: pass `keyword`.
@@ -92,6 +108,51 @@ Reverse keyword XLSX:
   "asin": "B0G33FZ8XS",
   "site": "US",
   "export_format": "xlsx"
+}
+```
+
+Reverse keyword monthly organic data view:
+
+```json
+{
+  "function": "reverse-keyword",
+  "provider": "xiyou",
+  "asin": "B0DZFGTCLR",
+  "site": "US",
+  "view_mode": "data",
+  "keyword_type": "organic",
+  "cycle_period": "last1month",
+  "query": "home decor",
+  "export_format": "xlsx"
+}
+```
+
+Ad analysis JSON:
+
+```json
+{
+  "function": "ad-analysis",
+  "provider": "xiyou",
+  "asin": "B0DZFGTCLR",
+  "parent_asin": "B0FDB5VR1V",
+  "asins": ["B0DZFGTCLR", "B0DZFW1QS1"],
+  "search_terms": ["candle warmer"],
+  "site": "US",
+  "export_format": "json"
+}
+```
+
+Flow insight JSON:
+
+```json
+{
+  "function": "flow-insight",
+  "provider": "xiyou",
+  "asin": "B0DZFGTCLR",
+  "site": "US",
+  "start_date": "2026-05-27",
+  "end_date": "2026-06-09",
+  "export_format": "json"
 }
 ```
 
@@ -144,7 +205,7 @@ Keyword ABA ranking JSON:
 }
 ```
 
-After `xiyou_run`, return only the `job_id`, row count, export filename, and clickable `url` when available. In the final user-facing answer, render the file as a Markdown link such as `[打开 Excel](file:///...)` and do not print the Windows `path` unless the user explicitly asks for it. Use `xiyou_job_status` only when the user asks for full task details. Do not expose Xiyou authorization token or cookies.
+After `xiyou_run`, return only the `job_id`, row count, export filename, and clickable `url` when available. If `resource_url` or `export.download_url` exists, show that real download link first; do not make the user click a local `.json` / `.url` wrapper file just to see the download URL. If `export.local_url` also exists, keep it only as a fallback. In the final user-facing answer, render the preferred link as a Markdown link and do not print the Windows `path` unless the user explicitly asks for it. Use `xiyou_job_status` only when the user asks for full task details. Do not expose Xiyou authorization token or cookies.
 
 ## CLI Fallback
 
@@ -197,5 +258,6 @@ opscli xiyou run ranking --provider xiyou --target keyword --site US --period we
 - Do not ask the user for Xiyou account credentials; authorization is configured on the server.
 - Do not call Xiyou APIs directly from the agent. Use MCP tools or CLI.
 - Do not invent category IDs or hidden filters. Omit optional filters unless documented.
+- If the scenario is `flow-diagnosis` and the user wants a download/export, explicitly tell them: `西柚官方暂未提供下载接口` and stop this task. Do not continue trying other technical paths.
 - If a scenario returns 0 rows, report the parameters used and suggest checking the same filters in the Xiyou web UI.
 - Resource export scenarios may return `row_count: 0` because the data is inside the downloaded Excel file. Do not treat that as no data when `data_mode` is `resource_export`.

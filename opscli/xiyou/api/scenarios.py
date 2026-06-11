@@ -1,4 +1,4 @@
-"""西柚洞察接口场景注册表。"""
+"""Scenario registry for Xiyou API integrations."""
 
 from __future__ import annotations
 
@@ -6,15 +6,22 @@ from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
 from opscli.xiyou.api.payloads import (
+    make_ad_analysis_payload,
+    make_ad_insight_payload,
     make_asin_compare_payload,
+    make_flow_diagnosis_payload,
+    make_flow_insight_payload,
+    make_flow_weekly_payload,
     make_keyword_ad_replay_payload,
     make_keyword_ad_toppers_payload,
     make_keyword_analysis_payload,
     make_keyword_explorer_payload,
     make_keyword_historical_traffic_payload,
     make_keyword_organic_replay_payload,
+    make_parent_analysis_payload,
     make_ranking_payload,
     make_reverse_keyword_payload,
+    make_sales_analysis_payload,
 )
 from opscli.xiyou.domain.exceptions import XiyouConfigError
 
@@ -24,8 +31,6 @@ PayloadBuilder = Callable[[dict[str, Any]], dict[str, Any]]
 
 @dataclass(frozen=True)
 class XiyouRankingScenario:
-    """西柚洞察排行榜场景定义。"""
-
     function: str
     target: str
     title: str
@@ -39,7 +44,6 @@ class XiyouRankingScenario:
     status_endpoint: str | None = None
 
     def to_public_dict(self) -> dict[str, Any]:
-        """返回 MCP 可公开的场景说明。"""
         return asdict(self)
 
     def build_payload(
@@ -52,7 +56,6 @@ class XiyouRankingScenario:
         page: int,
         page_size: int,
     ) -> dict[str, Any]:
-        """构造排行榜 payload。"""
         normalized_rank_pattern = self.normalize_rank_pattern(rank_pattern)
         return make_ranking_payload(
             {
@@ -66,19 +69,17 @@ class XiyouRankingScenario:
         )
 
     def normalize_rank_pattern(self, value: str | None) -> str:
-        """校验并返回排行榜类型。"""
         rank_pattern = (value or self.default_rank_pattern).lower()
         if rank_pattern not in self.allowed_rank_patterns:
             allowed = ", ".join(self.allowed_rank_patterns)
-            raise XiyouConfigError(f"{self.target} 排行榜 rank_pattern 仅支持：{allowed}")
+            raise XiyouConfigError(f"{self.target} ranking rank_pattern only supports: {allowed}")
         return rank_pattern
 
     def normalize_period(self, value: str | None) -> str:
-        """校验并返回排行榜周期。"""
         period = (value or self.default_period).lower()
         if period not in self.allowed_periods:
             allowed = ", ".join(self.allowed_periods)
-            raise XiyouConfigError(f"{self.target} 排行榜 period 仅支持：{allowed}")
+            raise XiyouConfigError(f"{self.target} ranking period only supports: {allowed}")
         return period
 
 
@@ -86,7 +87,7 @@ SCENARIOS: dict[str, XiyouRankingScenario] = {
     "asin": XiyouRankingScenario(
         function="ranking",
         target="asin",
-        title="ASIN 排行榜",
+        title="ASIN ranking",
         endpoint="/v2/rankingList/asins",
         allowed_rank_patterns=("flow", "surge"),
         default_rank_pattern="flow",
@@ -96,7 +97,7 @@ SCENARIOS: dict[str, XiyouRankingScenario] = {
     "keyword": XiyouRankingScenario(
         function="ranking",
         target="keyword",
-        title="关键词排行榜",
+        title="Keyword ranking",
         endpoint="/v3/rankingList/searchTerms",
         allowed_rank_patterns=("aba", "surge"),
         default_rank_pattern="aba",
@@ -108,8 +109,6 @@ SCENARIOS: dict[str, XiyouRankingScenario] = {
 
 @dataclass(frozen=True)
 class XiyouResourceScenario:
-    """西柚洞察 resource 导出场景定义。"""
-
     function: str
     title: str
     endpoint: str
@@ -120,7 +119,6 @@ class XiyouResourceScenario:
     mode: str = "resource"
 
     def to_public_dict(self) -> dict[str, Any]:
-        """返回 MCP 可公开的场景说明。"""
         payload = asdict(self)
         payload.pop("payload_builder", None)
         return payload
@@ -133,18 +131,19 @@ class XiyouResourceScenario:
         asins: list[str] | str | None,
         keyword: str | None,
         query: str,
-        cycle_period: str | None,
-        start_month: str | None,
-        end_month: str | None,
-        start_date: str | None,
-        end_date: str | None,
-        report_date: str | None,
-        page: int,
-        page_size: int,
+        parent_asin: str | None = None,
+        cycle_period: str | None = None,
+        start_month: str | None = None,
+        end_month: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        report_date: str | None = None,
+        search_terms: list[str] | str | None = None,
+        page: int = 1,
+        page_size: int = 50,
         view_mode: str | None = None,
         keyword_type: str | None = None,
     ) -> dict[str, Any]:
-        """构造 resource 场景 payload。"""
         return self.payload_builder(
             {
                 "site": site,
@@ -152,12 +151,14 @@ class XiyouResourceScenario:
                 "asins": asins,
                 "keyword": keyword,
                 "query": query,
+                "parent_asin": parent_asin,
                 "cycle_period": cycle_period,
                 "start_month": start_month,
                 "end_month": end_month,
                 "start_date": start_date,
                 "end_date": end_date,
                 "report_date": report_date,
+                "search_terms": search_terms,
                 "view_mode": view_mode,
                 "keyword_type": keyword_type,
                 "page": page,
@@ -169,7 +170,7 @@ class XiyouResourceScenario:
 RESOURCE_SCENARIOS: dict[str, XiyouResourceScenario] = {
     "reverse-keyword": XiyouResourceScenario(
         function="reverse-keyword",
-        title="反查关键词",
+        title="Reverse keyword",
         endpoint="/v3/asins/research/list/resource",
         status_endpoint="/v4/resource/status",
         required_params=("asin",),
@@ -178,7 +179,7 @@ RESOURCE_SCENARIOS: dict[str, XiyouResourceScenario] = {
     ),
     "asin-compare": XiyouResourceScenario(
         function="asin-compare",
-        title="多ASIN对比",
+        title="ASIN compare",
         endpoint="/v4/asins/compare/list/resource",
         status_endpoint="/v4/resource/status",
         required_params=("asins",),
@@ -187,7 +188,7 @@ RESOURCE_SCENARIOS: dict[str, XiyouResourceScenario] = {
     ),
     "keyword-analysis": XiyouResourceScenario(
         function="keyword-analysis",
-        title="关键词分析",
+        title="Keyword analysis",
         endpoint="/v4/searchTerms/analysis/list/resource",
         status_endpoint="/v4/resource/status",
         required_params=("keyword",),
@@ -196,7 +197,7 @@ RESOURCE_SCENARIOS: dict[str, XiyouResourceScenario] = {
     ),
     "keyword-explorer": XiyouResourceScenario(
         function="keyword-explorer",
-        title="以词找词",
+        title="Keyword explorer",
         endpoint="/v4/searchTermExplorer/list/resource",
         status_endpoint="/v4/resource/status",
         required_params=("keyword",),
@@ -205,7 +206,7 @@ RESOURCE_SCENARIOS: dict[str, XiyouResourceScenario] = {
     ),
     "keyword-historical-traffic": XiyouResourceScenario(
         function="keyword-historical-traffic",
-        title="关键词历史流量分析",
+        title="Keyword historical traffic",
         endpoint="/v3/searchTerms/historicalTrafficRatio/list",
         status_endpoint="",
         required_params=("keyword",),
@@ -215,7 +216,7 @@ RESOURCE_SCENARIOS: dict[str, XiyouResourceScenario] = {
     ),
     "keyword-ad-replay": XiyouResourceScenario(
         function="keyword-ad-replay",
-        title="关键词广告放映机",
+        title="Keyword ad replay",
         endpoint="/v4/searchTerms/advertisingReplay/resource",
         status_endpoint="/v4/resource/status",
         required_params=("keyword",),
@@ -224,7 +225,7 @@ RESOURCE_SCENARIOS: dict[str, XiyouResourceScenario] = {
     ),
     "keyword-organic-replay": XiyouResourceScenario(
         function="keyword-organic-replay",
-        title="关键词自然放映机",
+        title="Keyword organic replay",
         endpoint="/v3/searchTerms/organic/replay/resource",
         status_endpoint="/v2/resource/status",
         required_params=("keyword",),
@@ -233,39 +234,98 @@ RESOURCE_SCENARIOS: dict[str, XiyouResourceScenario] = {
     ),
     "keyword-ad-toppers": XiyouResourceScenario(
         function="keyword-ad-toppers",
-        title="关键词广告金主榜",
+        title="Keyword ad toppers",
         endpoint="/v2/searchTerms/advertising/toppers/excel/resource",
         status_endpoint="/v2/resource/status",
         required_params=("keyword",),
         payload_builder=make_keyword_ad_toppers_payload,
         default_dataset="analysis",
     ),
+    "ad-analysis": XiyouResourceScenario(
+        function="ad-analysis",
+        title="Ad analysis",
+        endpoint="/v3/advertising/research/searchTerm/list/resource",
+        status_endpoint="/v2/resource/status",
+        required_params=("asin",),
+        payload_builder=make_ad_analysis_payload,
+        default_dataset="analysis",
+    ),
+    "parent-analysis": XiyouResourceScenario(
+        function="parent-analysis",
+        title="Parent analysis",
+        endpoint="/v4/variation/compare/list/resource",
+        status_endpoint="/v4/resource/status",
+        required_params=("parent_asin", "asins"),
+        payload_builder=make_parent_analysis_payload,
+        default_dataset="analysis",
+    ),
+    "sales-analysis": XiyouResourceScenario(
+        function="sales-analysis",
+        title="Sales analysis",
+        endpoint="/v3/asins/sales/list/resource",
+        status_endpoint="/v3/resource/status",
+        required_params=("asin", "parent_asin"),
+        payload_builder=make_sales_analysis_payload,
+        default_dataset="analysis",
+    ),
+    "flow-diagnosis": XiyouResourceScenario(
+        function="flow-diagnosis",
+        title="Flow diagnosis",
+        endpoint="/v3/asins/traffic/diagnosis/list",
+        status_endpoint="",
+        required_params=("asin",),
+        payload_builder=make_flow_diagnosis_payload,
+        default_dataset="analysis",
+        mode="rows",
+    ),
+    "flow-insight": XiyouResourceScenario(
+        function="flow-insight",
+        title="Flow insight",
+        endpoint="/v2/asins/flow/insights/resource",
+        status_endpoint="/v2/asins/flow/insights/resource/status",
+        required_params=("asin", "start_date", "end_date"),
+        payload_builder=make_flow_insight_payload,
+        default_dataset="analysis",
+    ),
+    "ad-insight": XiyouResourceScenario(
+        function="ad-insight",
+        title="Ad insight",
+        endpoint="/v2/asins/advertising/insights/resource",
+        status_endpoint="/v2/asins/advertising/insights/resource/status",
+        required_params=("asin", "start_date", "end_date"),
+        payload_builder=make_ad_insight_payload,
+        default_dataset="analysis",
+    ),
+    "flow-weekly": XiyouResourceScenario(
+        function="flow-weekly",
+        title="Flow weekly",
+        endpoint="/v2/asins/flow/weeklyReport/resource",
+        status_endpoint="/v2/asins/flow/weeklyReport/resource/status",
+        required_params=("asin", "start_date", "end_date"),
+        payload_builder=make_flow_weekly_payload,
+        default_dataset="analysis",
+    ),
 }
 
 
 def list_scenarios() -> list[dict[str, Any]]:
-    """列出可用排行榜场景。"""
     return [scenario.to_public_dict() for scenario in SCENARIOS.values()]
 
 
 def list_resource_scenarios() -> list[dict[str, Any]]:
-    """列出可用 resource 导出场景。"""
     return [scenario.to_public_dict() for scenario in RESOURCE_SCENARIOS.values()]
 
 
 def get_scenario(target: str) -> XiyouRankingScenario:
-    """按 target 获取排行榜场景。"""
-    key = (target or "").lower()
-    scenario = SCENARIOS.get(key)
+    scenario = SCENARIOS.get((target or "").lower())
     if not scenario:
-        raise XiyouConfigError("ranking target 仅支持：asin, keyword")
+        raise XiyouConfigError("ranking target only supports: asin, keyword")
     return scenario
 
 
 def get_resource_scenario(function: str) -> XiyouResourceScenario:
-    """按 function 获取 resource 导出场景。"""
     scenario = RESOURCE_SCENARIOS.get((function or "").lower())
     if not scenario:
         allowed = ", ".join(["ranking", *RESOURCE_SCENARIOS.keys()])
-        raise XiyouConfigError(f"opscli xiyou run 支持功能：{allowed}")
+        raise XiyouConfigError(f"opscli xiyou run supports: {allowed}")
     return scenario

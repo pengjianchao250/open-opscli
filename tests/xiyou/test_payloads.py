@@ -152,6 +152,58 @@ def test_reverse_keyword_supports_trends_view_and_organic_keywords(monkeypatch):
     }
 
 
+def test_reverse_keyword_data_view_uses_organic_table_for_organic_keywords():
+    scenario = get_resource_scenario("reverse-keyword")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=None,
+        keyword=None,
+        query="home decor",
+        cycle_period="last1month",
+        start_month=None,
+        end_month=None,
+        start_date=None,
+        end_date=None,
+        report_date=None,
+        page=1,
+        page_size=50,
+        view_mode="data",
+        keyword_type="organic",
+    )
+
+    assert payload["biz"]["orders"] == [{"field": "organicTraffic", "order": "desc"}]
+    assert payload["biz"]["filters"] == [{"field": "asinResearchType", "filter": ["organic"]}]
+    assert payload["biz"]["tableType"] == "asinResearchOrganicList"
+
+
+def test_reverse_keyword_data_view_uses_advertising_table_for_ad_keywords():
+    scenario = get_resource_scenario("reverse-keyword")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=None,
+        keyword=None,
+        query="home decor",
+        cycle_period="last1month",
+        start_month=None,
+        end_month=None,
+        start_date=None,
+        end_date=None,
+        report_date=None,
+        page=1,
+        page_size=50,
+        view_mode="data",
+        keyword_type="advertising",
+    )
+
+    assert payload["biz"]["orders"] == [{"field": "adTraffic", "order": "desc"}]
+    assert payload["biz"]["filters"] == [{"field": "asinResearchType", "filter": ["advertising"]}]
+    assert payload["biz"]["tableType"] == "asinResearchAdvertisingList"
+
+
 def test_reverse_keyword_supports_top10_and_custom_month_range():
     scenario = get_resource_scenario("reverse-keyword")
 
@@ -224,7 +276,7 @@ def test_asin_compare_payload_requires_two_asins():
         )
 
 
-def test_asin_compare_supports_top10_monthly_organic(monkeypatch):
+def test_asin_compare_ignores_view_mode_for_monthly_organic_download(monkeypatch):
     monkeypatch.setattr(payloads_module, "_today", lambda: date(2026, 6, 9))
     scenario = get_resource_scenario("asin-compare")
 
@@ -247,7 +299,7 @@ def test_asin_compare_supports_top10_monthly_organic(monkeypatch):
     )
 
     assert payload["filters"] == [{"field": "asinResearchType", "filter": ["organic"]}]
-    assert payload["tableType"] == "multiAsinsComparisonOrTop10"
+    assert payload["tableType"] == "multiAsinsComparisonList"
     assert payload["cycleFilter"] == {
         "cycle": "monthly",
         "period": "",
@@ -278,13 +330,38 @@ def test_asin_compare_supports_custom_month_range_and_advertising_keywords():
     )
 
     assert payload["filters"] == [{"field": "asinResearchType", "filter": ["advertising"]}]
-    assert payload["tableType"] == "multiAsinsComparisonOrTop10"
+    assert payload["tableType"] == "multiAsinsComparisonList"
     assert payload["cycleFilter"] == {
         "cycle": "monthly",
         "period": "",
         "startCycle": {"startDate": "2026-05-01", "endDate": "2026-05-31"},
         "endCycle": {"startDate": "2026-06-01", "endDate": "2026-06-30"},
     }
+
+
+def test_asin_compare_ignores_invalid_view_mode_for_download_shape():
+    scenario = get_resource_scenario("asin-compare")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin=None,
+        asins=["B08X4615SC", "B07BJN11KV"],
+        keyword=None,
+        query="tupperware",
+        cycle_period="last7days",
+        start_month=None,
+        end_month=None,
+        start_date=None,
+        end_date=None,
+        report_date=None,
+        page=1,
+        page_size=50,
+        view_mode="preview-only-style",
+        keyword_type="all",
+    )
+
+    assert payload["tableType"] == "multiAsinsComparisonList"
+    assert payload["filters"] == [{"field": "asinResearchType", "filter": ["all"]}]
 
 
 def test_keyword_analysis_payload():
@@ -493,7 +570,7 @@ def test_keyword_explorer_rejects_invalid_custom_month_range():
         )
 
 
-def test_keyword_historical_traffic_payload_defaults_to_last_30_days(monkeypatch):
+def test_keyword_historical_traffic_payload_defaults_to_last1month(monkeypatch):
     monkeypatch.setattr(payloads_module, "_today", lambda: date(2026, 6, 9))
     scenario = get_resource_scenario("keyword-historical-traffic")
 
@@ -514,41 +591,35 @@ def test_keyword_historical_traffic_payload_defaults_to_last_30_days(monkeypatch
     )
 
     assert payload["biz"]["cycleFilter"] == {
-        "cycle": "daily",
+        "cycle": "monthly",
         "period": "",
-        "startCycle": {"startDate": "2026-05-10", "endDate": "2026-05-10"},
-        "endCycle": {"startDate": "2026-06-08", "endDate": "2026-06-08"},
+        "startCycle": {"startDate": "2026-05-01", "endDate": "2026-05-31"},
+        "endCycle": {"startDate": "2026-06-01", "endDate": "2026-06-30"},
     }
     assert payload["biz"]["trafficCampaignType"] == "organicCampaign"
 
 
-def test_keyword_historical_traffic_payload_supports_custom_date_range():
+def test_keyword_historical_traffic_payload_rejects_custom_date_range():
     scenario = get_resource_scenario("keyword-historical-traffic")
 
-    payload = scenario.build_payload(
-        site="US",
-        asin=None,
-        asins=None,
-        keyword="backpack",
-        query="",
-        cycle_period=None,
-        start_month=None,
-        end_month=None,
-        start_date="2026-05-09",
-        end_date="2026-06-07",
-        report_date=None,
-        page=2,
-        page_size=20,
-    )
+    with pytest.raises(XiyouConfigError) as exc:
+        scenario.build_payload(
+            site="US",
+            asin=None,
+            asins=None,
+            keyword="backpack",
+            query="",
+            cycle_period=None,
+            start_month=None,
+            end_month=None,
+            start_date="2026-05-09",
+            end_date="2026-06-07",
+            report_date=None,
+            page=2,
+            page_size=20,
+        )
 
-    assert payload["biz"]["cycleFilter"] == {
-        "cycle": "daily",
-        "period": "",
-        "startCycle": {"startDate": "2026-05-09", "endDate": "2026-05-09"},
-        "endCycle": {"startDate": "2026-06-07", "endDate": "2026-06-07"},
-    }
-    assert payload["biz"]["page"] == 2
-    assert payload["biz"]["pageSize"] == 20
+    assert "period=month" in str(exc.value)
 
 
 def test_keyword_ad_replay_payload_supports_report_date():
@@ -633,6 +704,233 @@ def test_keyword_ad_toppers_payload():
             "searchTerm": "backpack",
         },
     }
+
+
+def test_ad_analysis_payload_uses_parent_asin_related_asins_and_search_terms():
+    scenario = get_resource_scenario("ad-analysis")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=["B0DZFGTCLR", "B0DZFW1QS1"],
+        keyword=None,
+        query="",
+        parent_asin="B0FDB5VR1V",
+        cycle_period="last7days",
+        start_month=None,
+        end_month=None,
+        start_date=None,
+        end_date=None,
+        report_date=None,
+        search_terms="candle warmer",
+        page=1,
+        page_size=20,
+    )
+
+    assert payload["resource"] == {"country": "US", "asin": "B0DZFGTCLR"}
+    assert payload["biz"]["parentAsin"] == "B0FDB5VR1V"
+    assert payload["biz"]["asins"] == ["B0DZFGTCLR", "B0DZFW1QS1"]
+    assert payload["biz"]["filters"]["searchTerms"] == ["candle warmer"]
+
+
+def test_parent_analysis_payload_uses_variation_compare_shape():
+    scenario = get_resource_scenario("parent-analysis")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=["B0DZFGTCLR", "B0DZFW1QS1"],
+        keyword=None,
+        query="candle warmer lamp",
+        parent_asin="B0FDB5VR1V",
+        cycle_period="last1month",
+        start_month=None,
+        end_month=None,
+        start_date=None,
+        end_date=None,
+        report_date=None,
+        search_terms=None,
+        page=1,
+        page_size=50,
+        keyword_type="organic",
+    )
+
+    assert payload["resource"] == {"country": "US", "parentAsin": "B0FDB5VR1V"}
+    assert payload["filters"] == [{"field": "asinResearchType", "filter": ["organic"]}]
+    assert payload["tableType"] == "variationCompareList"
+    assert payload["asins"] == ["B0DZFGTCLR", "B0DZFW1QS1"]
+
+
+def test_sales_analysis_payload_uses_monthly_cycle_and_query_defaults_to_asin():
+    scenario = get_resource_scenario("sales-analysis")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=None,
+        keyword=None,
+        query="",
+        parent_asin="B0FDB5VR1V",
+        cycle_period="custom_month_range",
+        start_month="2024-02",
+        end_month="2026-05",
+        start_date=None,
+        end_date=None,
+        report_date=None,
+        search_terms=None,
+        page=1,
+        page_size=50,
+    )
+
+    assert payload["biz"]["query"] == "B0DZFGTCLR"
+    assert payload["biz"]["cycleFilter"]["cycle"] == "monthly"
+    assert payload["biz"]["cycleFilter"]["startCycle"] == {
+        "startDate": "2024-02-01",
+        "endDate": "2024-02-29",
+    }
+
+
+def test_flow_insight_payload_uses_date_range():
+    scenario = get_resource_scenario("flow-insight")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=None,
+        keyword=None,
+        query="",
+        parent_asin=None,
+        cycle_period=None,
+        start_month=None,
+        end_month=None,
+        start_date="2026-05-27",
+        end_date="2026-06-09",
+        report_date=None,
+        search_terms=None,
+        page=1,
+        page_size=50,
+    )
+
+    assert payload["biz"] == {
+        "asin": "B0DZFGTCLR",
+        "country": "US",
+        "startDate": "2026-05-27",
+        "endDate": "2026-06-09",
+    }
+
+
+def test_flow_weekly_payload_uses_date_range_and_blank_end_of_week():
+    scenario = get_resource_scenario("flow-weekly")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=None,
+        keyword=None,
+        query="",
+        parent_asin=None,
+        cycle_period=None,
+        start_month=None,
+        end_month=None,
+        start_date="2026-05-25",
+        end_date="2026-05-31",
+        report_date=None,
+        search_terms=None,
+        page=1,
+        page_size=50,
+    )
+
+    assert payload["biz"]["startDate"] == "2026-05-25"
+    assert payload["biz"]["endDate"] == "2026-05-31"
+    assert payload["biz"]["endOfWeek"] == ""
+
+
+def test_flow_diagnosis_scenario_is_registered():
+    scenario = get_resource_scenario("flow-diagnosis")
+
+    assert scenario.function == "flow-diagnosis"
+    assert scenario.endpoint == "/v3/asins/traffic/diagnosis/list"
+    assert scenario.status_endpoint == ""
+    assert scenario.mode == "rows"
+
+
+def test_flow_diagnosis_payload_supports_report_date_and_traffic_type():
+    scenario = get_resource_scenario("flow-diagnosis")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=None,
+        keyword=None,
+        query="",
+        cycle_period=None,
+        start_month=None,
+        end_month=None,
+        start_date=None,
+        end_date=None,
+        report_date="2026-06-02",
+        page=1,
+        page_size=50,
+        keyword_type="advertising",
+    )
+
+    assert payload == {
+        "resource": {"country": "US", "asin": "B0DZFGTCLR"},
+        "biz": {
+            "asin": "B0DZFGTCLR",
+            "country": "US",
+            "date": "2026-06-02",
+            "trafficType": "advertising",
+        },
+    }
+
+
+def test_flow_diagnosis_defaults_to_total_and_latest_allowed_date(monkeypatch):
+    monkeypatch.setattr(payloads_module, "_today", lambda: date(2026, 6, 11))
+    scenario = get_resource_scenario("flow-diagnosis")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=None,
+        keyword=None,
+        query="",
+        cycle_period=None,
+        start_month=None,
+        end_month=None,
+        start_date=None,
+        end_date=None,
+        report_date=None,
+        page=1,
+        page_size=50,
+    )
+
+    assert payload["biz"]["date"] == "2026-06-09"
+    assert payload["biz"]["trafficType"] == "total"
+
+
+def test_flow_diagnosis_rejects_yesterday_or_newer_report_date(monkeypatch):
+    monkeypatch.setattr(payloads_module, "_today", lambda: date(2026, 6, 11))
+    scenario = get_resource_scenario("flow-diagnosis")
+
+    with pytest.raises(XiyouConfigError) as exc:
+        scenario.build_payload(
+            site="US",
+            asin="B0DZFGTCLR",
+            asins=None,
+            keyword=None,
+            query="",
+            cycle_period=None,
+            start_month=None,
+            end_month=None,
+            start_date=None,
+            end_date=None,
+            report_date="2026-06-10",
+            page=1,
+            page_size=50,
+        )
+
+    assert "昨天之前" in str(exc.value)
 
 
 def test_supported_sites_contains_all_thirteen_xiyou_marketplaces():
