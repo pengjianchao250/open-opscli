@@ -741,7 +741,7 @@ def _upload_export_if_enabled(
         upload = client.upload(
             export.path,
             purpose="keepa_export",
-            folder="keepa/exports",
+            folder="keepa/export",
             public="1",
             metadata={
                 "job_id": job_id,

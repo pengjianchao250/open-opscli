@@ -55,6 +55,31 @@ class DisabledUploadClient:
         self.enabled = False
 
 
+class DummyUploadClient:
+    instances = []
+
+    def __init__(self, *args, **kwargs):
+        self.enabled = True
+        self.uploads = []
+        self.__class__.instances.append(self)
+
+    def upload(self, path, *, purpose, folder=None, public=None, metadata=None):
+        self.uploads.append(
+            {
+                "path": path,
+                "purpose": purpose,
+                "folder": folder,
+                "public": public,
+                "metadata": metadata,
+            }
+        )
+
+        class Result:
+            url = "https://ops.example.com/uploads/keepa.xlsx"
+
+        return Result()
+
+
 def test_manager_writes_params_raw_result_and_xlsx_export(monkeypatch, tmp_path: Path):
     DummyKeepaClient.requests = []
     monkeypatch.setattr(api_manager_module, "KeepaApiClient", DummyKeepaClient)
@@ -97,6 +122,35 @@ def test_manager_writes_params_raw_result_and_xlsx_export(monkeypatch, tmp_path:
     assert sheet.cell(row=2, column=1).value == "B0088PUEPK"
     assert sheet.cell(row=2, column=2).value == "Test Product"
     assert sheet.cell(row=2, column=3).value == 7588958
+
+
+def test_manager_uploads_export_to_keepa_export_folder(monkeypatch, tmp_path: Path):
+    DummyKeepaClient.requests = []
+    DummyUploadClient.instances = []
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", DummyKeepaClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DummyUploadClient)
+    settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
+    manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
+
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="product",
+                site="US",
+                params={"asin": "B0088PUEPK", "stats": 30, "history": False},
+                job_id="keepa-upload-regression",
+            )
+        )
+    )
+
+    upload = DummyUploadClient.instances[0].uploads[0]
+    assert upload["purpose"] == "keepa_export"
+    assert upload["folder"] == "keepa/export"
+    assert upload["public"] == "1"
+    assert upload["metadata"]["job_id"] == "keepa-upload-regression"
+    assert upload["metadata"]["filename"] == "keepa-upload-regression.xlsx"
+    assert result.export.url == "https://ops.example.com/uploads/keepa.xlsx"
+    assert result.warnings == []
 
 
 def test_manager_writes_json_export_when_requested(monkeypatch, tmp_path: Path):
