@@ -45,7 +45,8 @@ def test_seller_sprite_scenarios_uses_manager(monkeypatch):
 
 
 def test_seller_sprite_run_accepts_params_json_string(monkeypatch):
-    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda: DummyManager())
+    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda **kwargs: DummyManager())
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
 
     result = _run(
         seller_sprite_tools.seller_sprite_run(
@@ -53,6 +54,7 @@ def test_seller_sprite_run_accepts_params_json_string(monkeypatch):
             site="JP",
             period="nearly",
             params='{"asin":"B07YRMT36L"}',
+            export_format="json",
         )
     )
 
@@ -61,6 +63,7 @@ def test_seller_sprite_run_accepts_params_json_string(monkeypatch):
     assert DummyManager.last_request.params == {"asin": "B07YRMT36L"}
     assert DummyManager.last_request.page_size == 100
     assert DummyManager.last_request.export_format == "json"
+    assert DummyManager.last_request.mode == "browser-route"
 
 
 def test_seller_sprite_export_returns_export_info(monkeypatch):

@@ -69,7 +69,7 @@ async def seller_sprite_run(
     period: str = "30d",
     page_size: int = 100,
     export_format: str = "xls",
-    mode: str | None = None,
+    mode: str | None = "browser-route",
     page_prepare: bool | None = None,
     task_interval_seconds: float | None = None,
     cooldown_seconds: float | None = None,

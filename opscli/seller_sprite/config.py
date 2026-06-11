@@ -186,10 +186,8 @@ def _parse_bool(value: str | None, default: bool) -> bool:
 
 
 def _default_browser_headless() -> bool:
-    """无显示环境时默认使用 headless。"""
-    if os.name == "nt":
-        return False
-    return not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    """默认使用有头浏览器；Linux 无显示环境由 browser-route 自动启动 Xvfb。"""
+    return False
 
 
 def _normalize_mode(value: str | None) -> str:

@@ -30,7 +30,7 @@ def run_scenario(
     params: str = typer.Option("{}", "--params", help="场景参数 JSON 字符串"),
     page_size: int = typer.Option(100, "--page-size", help="每页数量"),
     export_format: str = typer.Option("xls", "--export-format", help="导出格式：xls/xlsx/json"),
-    mode: str | None = typer.Option(None, "--mode", help="执行模式：api-direct/browser-route"),
+    mode: str | None = typer.Option("browser-route", "--mode", help="执行模式：api-direct/browser-route"),
     page_prepare: bool | None = typer.Option(
         None,
         "--page-prepare/--no-page-prepare",

@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import hashlib
 import json
+import os
 import random
 import re
+import shutil
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,9 +25,15 @@ from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerS
 
 
 BASE_URL = "https://www.sellersprite.com"
-LOGIN_URL = "https://www.sellersprite.com/w/user/login"
+HOME_URL = "https://www.sellersprite.com/"
+LOGIN_URL = "https://www.sellersprite.com/cn/w/user/login"
 DEFAULT_PAGE_URL = "https://www.sellersprite.com/v3/keyword-miner/"
 DEFAULT_TIMEOUT_MS = 120000
+XVFB_DISPLAY_CANDIDATES = range(99, 110)
+
+_AUTO_XVFB_PROCESS: subprocess.Popen | None = None
+_AUTO_XVFB_DISPLAY: str | None = None
+_AUTO_XVFB_REF_COUNT = 0
 
 
 @dataclass(frozen=True)
@@ -72,6 +83,7 @@ class SellerSpriteBrowserRouteWorker:
         self._playwright = None
         self._context = None
         self._page = None
+        self._auto_xvfb_attached = False
 
     async def submit(self, request: BrowserRouteRequest) -> BrowserRouteResult:
         """入队并顺序执行任务。"""
@@ -90,6 +102,9 @@ class SellerSpriteBrowserRouteWorker:
         if self._playwright:
             await self._playwright.stop()
             self._playwright = None
+        if self._auto_xvfb_attached:
+            _release_auto_xvfb()
+            self._auto_xvfb_attached = False
 
     async def _drain_queue(self) -> None:
         async with self._drain_lock:
@@ -187,6 +202,9 @@ class SellerSpriteBrowserRouteWorker:
     async def _ensure_page(self, account: SellerSpriteAccount):
         if self._page and not self._page.is_closed():
             return self._page
+        if _ensure_headed_browser_environment(self.settings) and not self._auto_xvfb_attached:
+            _retain_auto_xvfb()
+            self._auto_xvfb_attached = True
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:
@@ -203,6 +221,7 @@ class SellerSpriteBrowserRouteWorker:
             "viewport": {"width": 1440, "height": 1000},
             "locale": "zh-CN",
             "accept_downloads": True,
+            "args": ["--no-sandbox"],
         }
         if self.settings.browser_channel:
             launch_options["channel"] = self.settings.browser_channel
@@ -215,6 +234,10 @@ class SellerSpriteBrowserRouteWorker:
 
     async def _open_referer_and_login(self, page, request: BrowserRouteRequest) -> dict[str, Any]:
         referer = request.referer or DEFAULT_PAGE_URL
+        await page.goto(HOME_URL, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+        await page.wait_for_timeout(1500)
+        if await _homepage_requires_login(page) or not await _detect_logged_in(page):
+            await self._login_with_account(page, request.account, callback=referer)
         await page.goto(referer, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
         await page.wait_for_timeout(1500)
         if not await _detect_logged_in(page):
@@ -229,18 +252,36 @@ class SellerSpriteBrowserRouteWorker:
             "profile_dir": str(_profile_dir(self.settings, request.account)),
             "current_url": page.url,
             "logged_in": logged_in,
+            "browser_headless": self.settings.browser_headless,
+            "display": os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"),
+            "auto_xvfb": self._auto_xvfb_attached,
             "account": request.account.to_public_dict(),
         }
 
     async def _login_with_account(self, page, account: SellerSpriteAccount, *, callback: str) -> None:
         callback_url = _callback_path(callback)
-        await page.goto(f"{LOGIN_URL}?callback={quote(callback_url)}", wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+        await page.goto(
+            f"{LOGIN_URL}?callback={quote(callback_url)}",
+            wait_until="domcontentloaded",
+            timeout=DEFAULT_TIMEOUT_MS,
+        )
         await page.wait_for_timeout(1000)
+        if await _detect_logged_in(page):
+            return
+        await _click_account_login_tab(page)
         password_input = page.locator("input[type='password']:visible").first
-        await password_input.wait_for(state="visible", timeout=15000)
+        try:
+            await password_input.wait_for(state="visible", timeout=15000)
+        except Exception as exc:
+            if await _detect_logged_in(page):
+                return
+            raise SellerSpriteConfigError(
+                f"卖家精灵登录页未显示账号登录密码框，current_url={page.url}"
+            ) from exc
         username_input = page.locator(
             "input[placeholder*='手机号']:visible:not([readonly]):not([disabled]), "
             "input[placeholder*='邮箱']:visible:not([readonly]):not([disabled]), "
+            "input[placeholder*='子账号']:visible:not([readonly]):not([disabled]), "
             "input[placeholder*='账号']:visible:not([readonly]):not([disabled]), "
             "input[placeholder*='用户名']:visible:not([readonly]):not([disabled]), "
             "input[type='email']:visible:not([readonly]):not([disabled]), "
@@ -248,9 +289,7 @@ class SellerSpriteBrowserRouteWorker:
         ).first
         await username_input.fill(account.username)
         await password_input.fill(account.password)
-        await page.locator(
-            "button:visible:has-text('登录'), button:visible:has-text('登 录'), button:visible:has-text('立即登录')"
-        ).first.click(timeout=15000)
+        await _click_login_submit(page)
         await page.wait_for_timeout(3000)
 
     async def _execute_route_fetch(
@@ -299,7 +338,7 @@ class SellerSpriteBrowserRouteWorker:
 
         await page.route(pattern, _handle)
         try:
-            response = await _trigger_request(page, endpoint=endpoint, method=normalized_method)
+            response = await _trigger_request(page, endpoint=endpoint, method=normalized_method, payload=payload)
             return await _parse_response(response, method=normalized_method, root_dir=root_dir, section=section)
         finally:
             await page.unroute(pattern, _handle)
@@ -324,16 +363,169 @@ def get_browser_route_worker(*, settings: SellerSpriteSettings, account: SellerS
     return worker
 
 
-async def _trigger_request(page, *, endpoint: str, method: str):
+def _ensure_headed_browser_environment(settings: SellerSpriteSettings) -> bool:
+    """确保有头浏览器运行环境可用，返回是否使用了自动 Xvfb。"""
+    if settings.browser_headless:
+        return False
+    if sys.platform.startswith("linux"):
+        display = os.environ.get("DISPLAY")
+        if _is_auto_xvfb_running() and display == _AUTO_XVFB_DISPLAY:
+            return True
+        if not (display or os.environ.get("WAYLAND_DISPLAY")):
+            _ensure_auto_xvfb()
+            return True
+    if sys.platform == "win32" and os.environ.get("SESSIONNAME", "").lower().startswith("services"):
+        raise SellerSpriteConfigError(
+            "当前为 browser-route 有头浏览器模式，但 Windows 服务会话无法启动可见浏览器；"
+            "请在交互式桌面/RDP 会话启动，或改用 OPSCLI_SELLER_SPRITE_MODE=api-direct"
+        )
+    return False
+
+
+def _is_auto_xvfb_running() -> bool:
+    return bool(_AUTO_XVFB_PROCESS and _AUTO_XVFB_PROCESS.poll() is None and _AUTO_XVFB_DISPLAY)
+
+
+def _ensure_auto_xvfb() -> None:
+    """Linux 无显示环境时自动启动 Xvfb。"""
+    global _AUTO_XVFB_PROCESS, _AUTO_XVFB_DISPLAY
+    if _is_auto_xvfb_running():
+        os.environ["DISPLAY"] = _AUTO_XVFB_DISPLAY
+        return
+    xvfb = shutil.which("Xvfb")
+    if not xvfb:
+        raise SellerSpriteConfigError(
+            "当前为 browser-route 有头浏览器模式，但 Linux 环境未检测到 DISPLAY/WAYLAND_DISPLAY，且未找到 Xvfb；"
+            "请安装 xvfb，或改用 OPSCLI_SELLER_SPRITE_MODE=api-direct"
+        )
+    for display_number in XVFB_DISPLAY_CANDIDATES:
+        display = f":{display_number}"
+        process = subprocess.Popen(
+            [xvfb, display, "-screen", "0", "1920x1080x24", "-ac", "-nolisten", "tcp"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if _wait_for_xvfb(process, display):
+            _AUTO_XVFB_PROCESS = process
+            _AUTO_XVFB_DISPLAY = display
+            os.environ["DISPLAY"] = display
+            return
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+    raise SellerSpriteConfigError(
+        "自动启动 Xvfb 失败，请检查服务器显示端口占用或手动设置 DISPLAY；"
+        "若不使用浏览器路线，请改用 OPSCLI_SELLER_SPRITE_MODE=api-direct"
+    )
+
+
+def _wait_for_xvfb(process: subprocess.Popen, display: str) -> bool:
+    """等待 Xvfb 进程和 Unix socket 就绪。"""
+    socket_path = Path("/tmp/.X11-unix") / f"X{display.lstrip(':')}"
+    for _ in range(20):
+        if process.poll() is not None:
+            return False
+        if socket_path.exists():
+            return True
+        time.sleep(0.1)
+    return process.poll() is None
+
+
+def _retain_auto_xvfb() -> None:
+    global _AUTO_XVFB_REF_COUNT
+    _AUTO_XVFB_REF_COUNT += 1
+
+
+def _release_auto_xvfb() -> None:
+    global _AUTO_XVFB_REF_COUNT
+    if _AUTO_XVFB_REF_COUNT > 0:
+        _AUTO_XVFB_REF_COUNT -= 1
+    if _AUTO_XVFB_REF_COUNT == 0:
+        _stop_auto_xvfb()
+
+
+def _stop_auto_xvfb() -> None:
+    """关闭本进程自动启动的 Xvfb。"""
+    global _AUTO_XVFB_PROCESS, _AUTO_XVFB_DISPLAY, _AUTO_XVFB_REF_COUNT
+    process = _AUTO_XVFB_PROCESS
+    display = _AUTO_XVFB_DISPLAY
+    _AUTO_XVFB_PROCESS = None
+    _AUTO_XVFB_DISPLAY = None
+    _AUTO_XVFB_REF_COUNT = 0
+    if display and os.environ.get("DISPLAY") == display:
+        os.environ.pop("DISPLAY", None)
+    if process and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+
+atexit.register(_stop_auto_xvfb)
+
+
+async def _trigger_request(page, *, endpoint: str, method: str, payload: dict[str, Any]):
     try:
         async with page.expect_response(lambda response: _same_endpoint(response.url, endpoint), timeout=15000) as info:
             if not await _click_query_button(page):
                 raise _NoQueryButtonError()
         return await info.value
     except Exception:
-        async with page.expect_response(lambda response: _same_endpoint(response.url, endpoint), timeout=DEFAULT_TIMEOUT_MS) as info:
-            await _trigger_fetch(page, endpoint=endpoint, method=method)
-        return await info.value
+        return await _request_with_browser_context(page, endpoint=endpoint, method=method, payload=payload)
+
+
+async def _request_with_browser_context(page, *, endpoint: str, method: str, payload: dict[str, Any]):
+    """使用浏览器上下文请求接口，复用当前 profile 的 cookie，避免页面内 fetch 被拦截。"""
+    headers = _context_request_headers(page.url, method=method)
+    try:
+        if method == "GET":
+            return await page.context.request.get(
+                _url_with_query(endpoint, payload),
+                headers=headers,
+                timeout=DEFAULT_TIMEOUT_MS,
+                fail_on_status_code=False,
+            )
+        if method == "FORM":
+            return await page.context.request.post(
+                _absolute_url(endpoint),
+                headers=headers,
+                data=urlencode(_query_pairs(payload), doseq=True),
+                timeout=DEFAULT_TIMEOUT_MS,
+                fail_on_status_code=False,
+            )
+        return await page.context.request.post(
+            _absolute_url(endpoint),
+            headers=headers,
+            data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            timeout=DEFAULT_TIMEOUT_MS,
+            fail_on_status_code=False,
+        )
+    except Exception as exc:
+        raise SellerSpriteApiError(
+            "卖家精灵浏览器上下文请求失败",
+            response_excerpt=(f"method={method} endpoint={endpoint}\n{exc}")[:1000],
+            api_code="ERR_BROWSER_CONTEXT_REQUEST_FAILED",
+            api_message="浏览器已打开并登录，但通过浏览器上下文发起接口请求失败。",
+        ) from exc
+
+
+def _context_request_headers(referer: str, *, method: str) -> dict[str, str]:
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Origin": BASE_URL,
+        "Referer": referer if referer.startswith("http") else DEFAULT_PAGE_URL,
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    if method == "FORM":
+        headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif method != "GET":
+        headers["Content-Type"] = "application/json;charset=UTF-8"
+    return headers
 
 
 async def _click_query_button(page) -> bool:
@@ -359,27 +551,42 @@ async def _click_query_button(page) -> bool:
 
 
 async def _trigger_fetch(page, *, endpoint: str, method: str) -> None:
-    await page.evaluate(
-        """
-        async ({ url, method }) => {
-          const init = {
-            method: method === 'GET' ? 'GET' : 'POST',
-            credentials: 'include',
-            headers: { 'X-Requested-With': 'XMLHttpRequest' }
-          };
-          if (method === 'FORM') {
-            init.headers['Content-Type'] = 'application/x-www-form-urlencoded';
-            init.body = '_ops_probe=1';
-          } else if (method !== 'GET') {
-            init.headers['Content-Type'] = 'application/json;charset=UTF-8';
-            init.body = JSON.stringify({ _ops_probe: true });
-          }
-          const response = await fetch(url, init);
-          await response.text();
-        }
-        """,
-        {"url": _absolute_url(endpoint), "method": method},
-    )
+    try:
+        await page.evaluate(
+            """
+            async ({ url, method }) => {
+              const init = {
+                method: method === 'GET' ? 'GET' : 'POST',
+                credentials: 'include',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+              };
+              if (method === 'FORM') {
+                init.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+                init.body = '_ops_probe=1';
+              } else if (method !== 'GET') {
+                init.headers['Content-Type'] = 'application/json;charset=UTF-8';
+                init.body = JSON.stringify({ _ops_probe: true });
+              }
+              const response = await fetch(url, init);
+              await response.text();
+            }
+            """,
+            {"url": _absolute_url(endpoint), "method": method},
+        )
+    except Exception as exc:
+        if _looks_like_browser_fetch_failed(exc):
+            raise SellerSpriteApiError(
+                "卖家精灵浏览器接口临时不可用：页面内 fetch 失败，请稍后重试",
+                response_excerpt=(f"method={method} endpoint={endpoint}\n{exc}")[:1000],
+                api_code="ERR_BROWSER_FETCH_FAILED",
+                api_message="页面内 fetch 被浏览器判定失败，通常是卖家精灵接口临时不可达、网关异常或网络抖动。",
+            ) from exc
+        raise
+
+
+def _looks_like_browser_fetch_failed(exc: Exception) -> bool:
+    message = str(exc)
+    return "Failed to fetch" in message and ("Page.evaluate" in message or "TypeError" in message)
 
 
 async def _prepare_page(page) -> None:
@@ -504,9 +711,17 @@ async def _detect_logged_in(page) -> bool:
         pass
     if "/w/user/login" in page.url or "/cn/w/user/login" in page.url:
         return False
-    if await _has_visible_text(page, "未登录") or await _has_visible_text(page, "游客"):
+    if await _homepage_requires_login(page) or await _has_visible_text(page, "游客"):
         return False
     return True
+
+
+async def _homepage_requires_login(page) -> bool:
+    return (
+        await _has_visible_text(page, "未登录")
+        or await _has_visible_text(page, "登录/注册")
+        or await _has_visible_text(page, "登录 / 注册")
+    )
 
 
 async def _has_visible_text(page, text: str) -> bool:
@@ -515,6 +730,47 @@ async def _has_visible_text(page, text: str) -> bool:
         return await locator.is_visible(timeout=1000)
     except Exception:
         return False
+
+
+async def _click_account_login_tab(page) -> None:
+    selectors = [
+        "text=账号登录",
+        "[role='tab']:visible:has-text('账号登录')",
+        "a:visible:has-text('账号登录')",
+        "button:visible:has-text('账号登录')",
+        "div:visible:has-text('账号登录')",
+    ]
+    await _click_first_visible(page, selectors, timeout=5000, optional=True)
+
+
+async def _click_login_submit(page) -> None:
+    selectors = [
+        "button:visible:has-text('立即登录')",
+        "[role='button']:visible:has-text('立即登录')",
+        "a:visible:has-text('立即登录')",
+        "div:visible:has-text('立即登录')",
+        "button:visible:has-text('登录')",
+        "button:visible:has-text('登 录')",
+    ]
+    await _click_first_visible(page, selectors, timeout=15000, optional=False)
+
+
+async def _click_first_visible(page, selectors: list[str], *, timeout: int, optional: bool) -> bool:
+    last_error: Exception | None = None
+    for selector in selectors:
+        locator = page.locator(selector).first
+        try:
+            if await locator.count() and await locator.is_visible(timeout=800):
+                await locator.click(timeout=timeout)
+                return True
+        except Exception as exc:
+            last_error = exc
+            continue
+    if optional:
+        return False
+    if last_error:
+        raise last_error
+    raise SellerSpriteConfigError("卖家精灵登录页未找到可点击的登录按钮")
 
 
 def _profile_dir(settings: SellerSpriteSettings, account: SellerSpriteAccount) -> Path:

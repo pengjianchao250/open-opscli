@@ -156,7 +156,7 @@ class ListingAnalysisApiClient(DummyApiClient):
 def test_manager_writes_job_files_and_xlsx(monkeypatch, tmp_path: Path):
     DummyApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
-    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None, default_mode="api-direct")
     manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
 
     result = _run(
@@ -191,7 +191,7 @@ def test_manager_writes_job_files_and_xlsx(monkeypatch, tmp_path: Path):
 def test_manager_generates_camel_case_job_id(monkeypatch, tmp_path: Path):
     DummyApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
-    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None, default_mode="api-direct")
     manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
 
     result = _run(
@@ -214,7 +214,7 @@ def test_manager_generates_camel_case_job_id(monkeypatch, tmp_path: Path):
 def test_manager_writes_json_export(monkeypatch, tmp_path: Path):
     DummyApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
-    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None, default_mode="api-direct")
     manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
 
     result = _run(
@@ -266,7 +266,7 @@ def test_manager_relogs_and_retries_when_session_expires(monkeypatch, tmp_path: 
     SessionExpiredOnceApiClient.calls = []
     SessionExpiredOnceApiClient.instance = None
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", SessionExpiredOnceApiClient)
-    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None, default_mode="api-direct")
     manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
 
     result = _run(
@@ -293,7 +293,7 @@ def test_manager_polls_listing_analysis_task_content(monkeypatch, tmp_path: Path
     ListingAnalysisApiClient.calls = []
     ListingAnalysisApiClient.instance = None
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", ListingAnalysisApiClient)
-    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None, default_mode="api-direct")
     manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
 
     result = _run(
