@@ -1,0 +1,27 @@
+{
+  "request": {
+    "scenario": "listing-analysis",
+    "site": "US",
+    "period": "30d",
+    "params": {
+      "asin": "B0BY8Y5766",
+      "station": "GLOBAL",
+      "pollAttempts": 120,
+      "pollIntervalSeconds": 2.0
+    },
+    "page_size": 100,
+    "job_id": null,
+    "output_dir": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\seller-sprite\\B0BY8Y5766",
+    "export_format": "json"
+  },
+  "resolved_params": {
+    "asin": "B0BY8Y5766",
+    "station": "GLOBAL",
+    "pollAttempts": 120,
+    "pollIntervalSeconds": 2.0
+  },
+  "payload": {
+    "asin": "B0BY8Y5766",
+    "station": "GLOBAL"
+  }
+}

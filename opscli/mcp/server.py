@@ -238,19 +238,28 @@ class _TelemetryMcpProxy:
 _telemetry_mcp = _TelemetryMcpProxy(mcp)
 
 from opscli.mcp.tools import auth as _auth_tools
-from opscli.mcp.tools import amazon_listing_intelligence as _amazon_listing_intelligence_tools
+from opscli.mcp.tools import amazon_rufus as _amazon_rufus_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
 from opscli.mcp.tools import feedback as _feedback_tools
+# Google Trends 暂时停用：下午 MCP Server 崩溃疑似与该工具相关，先不注册使用。
+# from opscli.mcp.tools import google_trends as _google_trends_tools
+from opscli.mcp.tools import keepa as _keepa_tools
 from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import seller_sprite as _seller_sprite_tools
+from opscli.mcp.tools import sif as _sif_tools
 from opscli.mcp.tools import skills as _skills_tools
+from opscli.mcp.tools import xiyou as _xiyou_tools
 
 _auth_tools.register(_telemetry_mcp)
-_amazon_listing_intelligence_tools.register(_telemetry_mcp)
+_amazon_rufus_tools.register(_telemetry_mcp)
 _chatgpt_tools.register(_telemetry_mcp)
 _feedback_tools.register(_telemetry_mcp)
+# _google_trends_tools.register(_telemetry_mcp)
+_keepa_tools.register(_telemetry_mcp)
 _query_tools.register(_telemetry_mcp)
 _seller_sprite_tools.register(_telemetry_mcp)
+_sif_tools.register(_telemetry_mcp)
+_xiyou_tools.register(_telemetry_mcp)
 _skills_tools.register(_telemetry_mcp)
 
 # amazon 工具依赖可选扩展 playwright，未安装时跳过注册不影响其他工具
@@ -300,8 +309,6 @@ def _load_or_create_api_key() -> str:
     key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     return api_key
 
-
-# ── 双端点组合应用构建 ───────────────────────────────────────────────
 
 def _build_dual_endpoint_app(
     *,

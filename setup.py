@@ -177,6 +177,7 @@ setup(
         "opscli": [
             "skills/templates/**/*",
             "skills/templates/**/**/*",
+            "mcp/references/**/*.md",
         ],
     },
     exclude_package_data={
@@ -186,6 +187,7 @@ setup(
             "skills/templates/**/*.pyc",
             "skills/templates/**/*.pyo",
             "skills/templates/**/__pycache__/*",
+            "mcp/references/**/.DS_Store",
         ],
     },
     # 跳过 Cython 时仍保留 Skill 模板裁剪逻辑；正常发版同时排除业务源码。

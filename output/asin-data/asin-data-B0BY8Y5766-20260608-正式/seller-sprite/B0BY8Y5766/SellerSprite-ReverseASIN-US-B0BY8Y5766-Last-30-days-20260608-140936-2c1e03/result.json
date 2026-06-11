@@ -1,0 +1,57 @@
+{
+  "job_id": "SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260608-140936-2c1e03",
+  "scenario": "keyword-reverse",
+  "site": "US",
+  "period": "30d",
+  "row_count": 0,
+  "root_dir": "D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\seller-sprite\\B0BY8Y5766\\SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260608-140936-2c1e03",
+  "params_path": "D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\seller-sprite\\B0BY8Y5766\\SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260608-140936-2c1e03\\params.json",
+  "raw_path": "D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\seller-sprite\\B0BY8Y5766\\SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260608-140936-2c1e03\\raw.json",
+  "result_path": "D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\seller-sprite\\B0BY8Y5766\\SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260608-140936-2c1e03\\result.json",
+  "export": {
+    "path": "D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\seller-sprite\\B0BY8Y5766\\SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260608-140936-2c1e03\\SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260608-140936-2c1e03.json",
+    "filename": "SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260608-140936-2c1e03.json",
+    "url": "file:///D:/workspace/open-opscli/output/asin-data/asin-data-B0BY8Y5766-20260608-%E6%AD%A3%E5%BC%8F/seller-sprite/B0BY8Y5766/SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260608-140936-2c1e03/SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260608-140936-2c1e03.json",
+    "format": "json",
+    "mime_type": "application/json"
+  },
+  "data": [],
+  "warnings": [
+    {
+      "stage": "main",
+      "message": "卖家精灵会话过期，已重新登录并重试一次",
+      "error": {
+        "code": "SELLER_SPRITE_API_ERROR",
+        "message": "卖家精灵接口返回错误：ERR_GLOBAL_SESSION_EXPIRED",
+        "status_code": 200,
+        "api_code": "ERR_GLOBAL_SESSION_EXPIRED",
+        "api_message": "登陆已失效。",
+        "response_excerpt": "{\"code\":\"ERR_GLOBAL_SESSION_EXPIRED\",\"data\":\"/user/login?callback=/v3/api/relation/reversing%3Fmarket%3DUS\",\"message\":\"登陆已失效。\"}"
+      },
+      "relogin": {
+        "login_status": 302,
+        "login_redirect": true,
+        "cookie_names": [
+          "ecookie",
+          "5a77a394991d6bcbd25f",
+          "be317f38615897058fb3",
+          "cd8bd352c4a1345c6d33",
+          "c0d1a46686c21ccce751",
+          "JSESSIONID",
+          "rank-login-user",
+          "rank-login-user-info",
+          "ao_lo_to_n",
+          "Sprite-X-Token"
+        ]
+      }
+    },
+    {
+      "stage": "file_upload",
+      "message": "导出文件上传失败，已保留服务端本地文件",
+      "error": {
+        "code": "FILE_UPLOAD_BUSINESS_ERROR",
+        "message": "不支持的文件类型: json"
+      }
+    }
+  ]
+}

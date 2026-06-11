@@ -1,0 +1,23 @@
+{
+  "summary": "sales run 查销量下载 XLSX 时使用 GET，Sif 返回 Request method 'GET' not supported。",
+  "failed_calls": [
+    {
+      "tool": "CLI -> sales run 查销量",
+      "call_params": {
+        "feature": "查销量",
+        "provider": "sif",
+        "asin": "B01NBNDC1T",
+        "site": "US",
+        "download_endpoints": [
+          "/api/updown/boughtListingHistory/download",
+          "/api/updown/boughtByAsin/download"
+        ]
+      },
+      "error_message": "SIF_DOWNLOAD_FAILED: Sif 下载接口返回非 XLSX 内容：{\"message\":\"Request method 'GET' not supported\",\"code\":0}",
+      "reason": "Sif 下载接口不支持 GET，需改为 POST，并复用查询接口的 pageSize/pageNum/asins/dimension 请求体。",
+      "fix_suggestion": "将下载接口请求方式改为 POST JSON，query 仍保留 country/_t/_m。"
+    }
+  ],
+  "successful_calls": [],
+  "final_resolution": "修正 Sif 下载接口请求方式。"
+}

@@ -1,0 +1,19 @@
+{
+  "summary": "用户执行 opscli sales run 查销量 时因未配置 Sif 登录态失败，按项目规则提交反馈。",
+  "failed_calls": [
+    {
+      "tool": "opscli sales run 查销量 --provider sif --asin <ASIN> --site <SITE>",
+      "call_params": {
+        "feature": "查销量",
+        "provider": "sif",
+        "asin": "<redacted>",
+        "site": "<redacted>"
+      },
+      "error_message": "SIF_LOGIN_REQUIRED: 未获取到 Sif 登录态。请在浏览器中登录 https://www.sif.com 后重试。",
+      "reason": "当前第一版实现只读取 OPSCLI_SIF_COOKIE，不支持账号密码自动登录，也尚未实现 Playwright 从浏览器会话提取 cookie。用户虽有测试账号，但命令没有可用登录态。",
+      "fix_suggestion": "短期验收可从已登录浏览器复制 Cookie 设置为 OPSCLI_SIF_COOKIE 后重试；后续应实现 Sif 登录态引导或 Playwright/CDP 会话提取能力。"
+    }
+  ],
+  "successful_calls": [],
+  "final_resolution": "已说明当前认证边界，并给出基于 OPSCLI_SIF_COOKIE 的验收路径。"
+}

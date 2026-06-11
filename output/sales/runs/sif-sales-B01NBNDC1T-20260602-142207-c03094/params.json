@@ -1,0 +1,12 @@
+{
+  "job_id": "sif-sales-B01NBNDC1T-20260602-142207-c03094",
+  "feature": "查销量",
+  "provider": "sif",
+  "asin": "B01NBNDC1T",
+  "site": "US",
+  "range": null,
+  "cdp_url": "http://127.0.0.1:9222",
+  "new_chrome": false,
+  "params": {},
+  "auth_mode": "configured"
+}

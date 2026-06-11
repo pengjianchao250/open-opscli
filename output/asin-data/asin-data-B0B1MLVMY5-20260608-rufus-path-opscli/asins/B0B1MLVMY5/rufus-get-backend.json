@@ -1,0 +1,28 @@
+{
+  "time": "2026-06-08T19:18:38",
+  "source": "rufus.get_backend",
+  "asin": "B0B1MLVMY5",
+  "command": [
+    "opscli",
+    "amazon-rufus",
+    "get-backend",
+    "B0B1MLVMY5",
+    "US",
+    "--skills-dir",
+    ".agents/skills",
+    "--timeout",
+    "180",
+    "--no-upload-payload",
+    "--pretty",
+    "-q",
+    "这是什么商品",
+    "-q",
+    "这个商品评价如何？"
+  ],
+  "dry_run": false,
+  "status": "success",
+  "exit_code": 0,
+  "stdout": "Rufus 答案报告已保存：output/amazon-rufus/B0B1MLVMY5-20260608-191900.md\n",
+  "stderr": "\nopscli 有新版本可用，建议更新最新版本: v0.0.22 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n",
+  "json": null
+}

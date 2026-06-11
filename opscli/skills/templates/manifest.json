@@ -39,6 +39,14 @@
       "tier": "internal",
       "reason": "强依赖内部数据口径和健康诊断阈值，暂不随公开产物发版"
     },
+    "ops-asin-data-collector": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "面向内部运营 Codex 的 ASIN 批量取数编排 Skill，强依赖内部 BI/爬虫数据集和 SellerSprite/Amazon 采集入口，暂不随公开产物发版"
+    },
     "ops-auth": {
       "source": true,
       "wheel": true,

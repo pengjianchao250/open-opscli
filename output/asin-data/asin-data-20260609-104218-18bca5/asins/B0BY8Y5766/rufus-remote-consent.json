@@ -1,0 +1,31 @@
+{
+  "time": "2026-06-09T10:46:17",
+  "source": "rufus.remote_consent",
+  "asin": "B0BY8Y5766",
+  "command": [
+    "__direct__",
+    "amazon-rufus",
+    "remote-consent",
+    "status",
+    "US",
+    "--pretty"
+  ],
+  "dry_run": false,
+  "execution": "direct",
+  "status": "success",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": "",
+  "json": {
+    "success": true,
+    "command": "amazon-rufus remote-consent status",
+    "data": {
+      "country": "US",
+      "status": "allowed",
+      "use_remote_authorization": true,
+      "updated_at": "2026-06-08T09:01:53Z",
+      "source": "opscli"
+    },
+    "error": null
+  }
+}

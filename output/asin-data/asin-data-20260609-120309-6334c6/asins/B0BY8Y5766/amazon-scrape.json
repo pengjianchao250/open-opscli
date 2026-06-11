@@ -1,0 +1,46 @@
+{
+  "time": "2026-06-09T12:06:12",
+  "source": "amazon.scrape",
+  "asin": "B0BY8Y5766",
+  "command": [
+    "__direct__",
+    "amazon",
+    "scrape",
+    "--asin",
+    "B0BY8Y5766"
+  ],
+  "dry_run": false,
+  "execution": "direct",
+  "status": "success",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": "",
+  "json": {
+    "success": true,
+    "command": "amazon scrape",
+    "data": {
+      "snapshot": {
+        "asin": "B0BY8Y5766",
+        "zip_code": "10001",
+        "marketplace": "amazon.com",
+        "page_url": "https://www.amazon.com/dp/B0BY8Y5766",
+        "page_title": "Amazon.com: ANCTOR Queen Size Bed Frame with 3 Drawers, Upholstered Platform Bed with Storage Headboard and Charging Station for Bedroom, No Box Spring Needed, Easy Assembly, Beige : Home & Kitchen",
+        "product_name": "ANCTOR Queen Size Bed Frame with 3 Drawers, Upholstered Platform Bed with Storage Headboard and Charging Station for Bedroom, No Box Spring Needed, Easy Assembly, Beige",
+        "price_text": "$199.99",
+        "price_amount": 199.99,
+        "currency": "USD",
+        "rating_text": "4.4 out of 5 stars",
+        "rating_value": 4.4,
+        "review_count_text": "(995)",
+        "review_count_value": 995,
+        "location": "New York 10001",
+        "collected_at": "2026-06-09 12:06:27",
+        "valid": true,
+        "error": null
+      },
+      "history_path": "C:\\Users\\AA\\.config\\opscli\\amazon\\history\\B0BY8Y5766.jsonl",
+      "submit_result": null
+    },
+    "error": null
+  }
+}

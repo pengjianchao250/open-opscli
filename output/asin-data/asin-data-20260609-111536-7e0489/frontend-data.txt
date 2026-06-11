@@ -1,0 +1,281 @@
+﻿# ASIN取数完整数据
+
+## 运行信息
+
+- 运行ID：asin-data-20260609-111536-7e0489
+- 开始时间：2026-06-09T11:15:36
+- 结束时间：2026-06-09T11:22:37
+- 输出目录：output\asin-data\asin-data-20260609-111536-7e0489
+- ASIN数量：1
+- 失败ASIN数量：1
+
+## 数据结构
+
+每个 ASIN 固定返回四段：
+
+- `基础数据`：中文字段，包含输入信息、BI 销售、爬虫 Listing 和错误列表。
+- `卖家精灵关键词数据`：关键词反查和关键词挖掘任务信息。
+- `卖家精灵AI全景分析数据`：直接返回 SellerSprite AI 全景分析的完整 `content`。
+- `Rufus优化建议数据`：Amazon Rufus 问答数据、报告路径和答案明细。
+
+## ASIN汇总
+
+| ASIN | 站点 | 输入关键词 | 基础数据 | 关键词数据 | AI全景分析 | Rufus |
+| --- | --- | --- | --- | --- | --- | --- |
+| B0BY8Y5766 | US | bed frame | 有错误 | 成功 | 失败 | 成功 |
+
+## 1. ASIN B0BY8Y5766
+
+### 基础数据
+
+- ASIN：B0BY8Y5766
+- 站点：US
+- 输入关键词：bed frame
+- 输入关键词列表：
+```json
+[
+  "bed frame"
+]
+```
+- 关键词数量：1
+- 关键词来源：输入文件
+- 输入行号：1
+- 来源文件：--asin
+
+#### BI销售数据
+
+```json
+{
+  "状态": "成功",
+  "原始状态": "success",
+  "行数": 1,
+  "明细": [
+    {
+      "产品名称": "ACT 米色层架软包带三抽屉带排插queen码-枫木色",
+      "ASIN": "B0BY8Y5766",
+      "订单量": 7496,
+      "销量": 7546,
+      "流量": 425435,
+      "浏览量": 663789,
+      "原价销售额": "14342020.1115",
+      "退款金额": "547247.0156",
+      "广告费": "1479772.5464",
+      "广告销售额(CNY)": "6988611.676552",
+      "广告点击量": 267783,
+      "广告曝光量": 48849408,
+      "销售额": "13642759.4186"
+    }
+  ]
+}
+```
+
+#### 爬虫Listing数据
+
+```json
+{
+  "状态": "成功",
+  "原始状态": "success",
+  "行数": 1,
+  "明细": [
+    {
+      "ASIN": "B0BY8Y5766",
+      "快照日期": "2026-06-09",
+      "国家": "US",
+      "币种": "$",
+      "产品名称": "ANCTOR Queen Size Bed Frame with 3 Drawers, Upholstered Platform Bed with Storage Headboard and Charging Station for Bedroom, No Box Spring Needed, Easy Assembly, Beige",
+      "商品链接": "https://www.amazon.com/ANCTOR-Upholstered-Platform-Headboard-Charging/dp/B0BY8Y5766",
+      "主图": "https://m.media-amazon.com/images/I/81KXBYIgFJL._AC_SX300_SY300_QL70_FMwebp_.jpg",
+      "A+图片": null,
+      "A+文案": null,
+      "产品详情": null,
+      "五点描述": null,
+      "QA": null,
+      "评论": null,
+      "星级": "4.4000",
+      "划线价": null,
+      "售价": "199.9900",
+      "折扣百分比": null,
+      "评论数": 13,
+      "描述": null,
+      "品牌": "ANCTOR",
+      "卖家ID": "AFW8VX6NB710",
+      "到手价文案": "$199.99",
+      "单价": null,
+      "优惠券": null,
+      "促销码金额": null,
+      "促销码": null,
+      "Deal": "0",
+      "大类名称": "Home & Kitchen",
+      "大类排名": "393744",
+      "小类名称": "Bed Frames",
+      "小类排名": "1646",
+      "Deal类型": null,
+      "评分数": 995,
+      "库存数": null,
+      "销售状态": 1,
+      "是否有库存": 1,
+      "子图数量": 9,
+      "视频数量": null,
+      "五点描述数量": 7,
+      "A+图片数量": 13,
+      "变体数量": 1,
+      "CS数量": null,
+      "QA数量": 2,
+      "时间戳": 1780950169
+    }
+  ]
+}
+```
+
+#### 错误列表
+
+```json
+[
+  {
+    "来源": "seller_sprite.listing_analysis",
+    "状态": "失败",
+    "原始状态": "failed",
+    "原因": null
+  }
+]
+```
+
+### 卖家精灵关键词数据
+
+#### 关键词反查
+
+```json
+{
+  "状态": "成功",
+  "原始状态": "success",
+  "任务ID": "SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260609-111543-4d6530",
+  "行数": 0,
+  "结果数据": [],
+  "导出格式": "xlsx",
+  "导出路径": "D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-20260609-111536-7e0489\\seller-sprite\\B0BY8Y5766\\SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260609-111543-4d6530\\SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260609-111543-4d6530.xlsx",
+  "导出URL": "https://p-amazon-task-test.oss-cn-hongkong.aliyuncs.com/seller-sprite/exports/2026/06/1780974946-SellerSprite-ReverseASIN-US-B0BY8Y5766-Last-30-days-20260609-111543-4d6530.xlsx",
+  "数据说明": "明细已导出为 Excel，MD 不内嵌完整明细。"
+}
+```
+
+#### 关键词挖掘
+
+```json
+{
+  "状态": "成功",
+  "原始状态": "success",
+  "种子关键词": [
+    "bed frame"
+  ],
+  "任务列表": [
+    {
+      "状态": "成功",
+      "原始状态": "success",
+      "任务ID": "SellerSprite-KeywordMiner-US-bed-frame-Last-30-days-20260609-111546-c030b6",
+      "行数": 100,
+      "结果数据": [],
+      "导出格式": "xlsx",
+      "导出路径": "D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-20260609-111536-7e0489\\seller-sprite\\B0BY8Y5766\\SellerSprite-KeywordMiner-US-bed-frame-Last-30-days-20260609-111546-c030b6\\SellerSprite-KeywordMiner-US-bed-frame-Last-30-days-20260609-111546-c030b6.xlsx",
+      "导出URL": "https://p-amazon-task-test.oss-cn-hongkong.aliyuncs.com/seller-sprite/exports/2026/06/1780975005-SellerSprite-KeywordMiner-US-bed-frame-Last-30-days-20260609-111546-c030b6.xlsx",
+      "数据说明": "明细已导出为 Excel，MD 不内嵌完整明细。"
+    }
+  ]
+}
+```
+
+### 卖家精灵AI全景分析数据
+
+- 状态：失败
+- 原始状态：failed
+- 任务ID：
+- 报告任务ID：
+- 报告状态：
+- 完成时间：
+- 过期时间：
+- html状态：
+- 错误信息：FileNotFoundError: [Errno 2] No such file or directory: 'D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-20260609-111536-7e0489\\seller-sprite\\B0BY8Y5766\\SellerSprite-ListingAnalysis-US-B0BY8Y5766-Last-30-days-20260609-111645-fa0295\\SellerSprite-ListingAnalysis-US-B0BY8Y5766-Last-30-days-20260609-111645-fa0295.json'
+
+#### content
+
+```json
+null
+```
+
+### Rufus优化建议数据
+
+```json
+{
+  "状态": "成功",
+  "原始状态": "success",
+  "接入状态": "已接入",
+  "国家站点": "US",
+  "问题列表": [
+    "这个产品ASIN B0BY8Y5766，标题写得清楚吗？如果我要找这个产品ASIN B0BY8Y5766，一般搜什么词能找到他？",
+    "这个产品ASIN B0BY8Y5766五点卖点描述里，最重要的一条是什么？有没有买家很想知道但没写进去的事？",
+    "看完这个产品ASIN B0BY8Y5766这些图，还有什么是我想知道但看不出来的？要是再加一张图，加什么最有用？",
+    "这个产品ASIN B0BY8Y5766下面那个长的图文介绍，跟上面五点说的有区别吗？看完能让我更放心买吗？还少介绍了什么？",
+    "这个产品ASIN B0BY8Y5766评价里大家最常夸和最常抱怨的是什么？这些在介绍里提前说清楚了吗？",
+    "这个产品ASIN B0BY8Y5766如果让你给这个产品页面只提一个最着急改的地方，会是什么？"
+  ],
+  "问题数量": 6,
+  "答案数量": 6,
+  "报告路径": "output/amazon-rufus/B0BY8Y5766-20260609-112237.md",
+  "数据": [
+    {
+      "题号": 1,
+      "问题": "这个产品ASIN B0BY8Y5766，标题写得清楚吗？如果我要找这个产品ASIN B0BY8Y5766，一般搜什么词能找到他？",
+      "相关产品": [
+        "https://www.amazon.com/dp/B0BY8Y5766"
+      ],
+      "答案": "产品标题写得相当清楚。ANCTOR Queen Size Bed Frame with 3 Drawers, Upholstered Platform Bed with Storage Headboard and Charging Station for Bedroom, No Box Spring Needed, Easy Assembly, Beige 涵盖了产品的关键信息：\n\n•\n主要特征：床框类型、尺寸（Queen）、抽屉数量（3个）\n\n•\n关键卖点：储物床头柜、充电站、不需要床垫基础、易于组装\n\n•\n颜色：米色/象牙色\n\n搜索建议：\n如果您要找到这款产品，可以尝试搜索：\n\n•\n\"Queen bed frame with storage\"\n\n•\n\"Bed with drawers and headboard\"\n\n•\n\"Platform bed with charging station\"\n\n•\n\"Storage bed frame with drawers\"\n\n•\n\"ANCTOR bed frame\"\n\n•\n\"Bedroom bed with storage headboard\"\n\n•\n\"Queen platform bed no box spring\"\n\n这些关键词都能帮助您快速找到这款产品，因为标题中包含了这些搜索词的各个组成部分。",
+      "推荐ASIN": [
+        "B0BY8Y5766"
+      ],
+      "总结": "产品标题写得相当清楚。ANCTOR Queen Size Bed Frame with 3 Drawers, Upholstered Platform Bed with Storage Headboard and Charging Station for Bedroom, No Box Spring Needed, Easy Assembly, Beige 涵盖了产品的关键信息：\n\n•\n主要特征：床框类型、尺寸（Queen）、抽屉数量（3个）\n\n•\n关键卖点：储物床头柜、充电站、不需要床垫基础、易于组装\n\n•\n颜色：米色/象牙色\n\n搜索建议：\n如果您要找到这款产品，可以尝试搜索：\n\n•\n\"Queen bed frame with storage\"\n\n•\n\"Bed with drawers and headboard\"\n\n•\n\"Platform bed with charging station\"\n\n•\n\"Storage bed frame with drawers\"\n\n•\n\"ANCTOR bed frame\"\n\n•\n\"Bedroom bed with storage headboard\"\n\n•\n\"Queen platform bed no box spring\"\n\n这些关键词都能帮助您快速找到这款产品，因为标题中包含了这些搜索词的各个组成部分。"
+    },
+    {
+      "题号": 2,
+      "问题": "这个产品ASIN B0BY8Y5766五点卖点描述里，最重要的一条是什么？有没有买家很想知道但没写进去的事？",
+      "相关产品": [],
+      "答案": "五点卖点里，最重要的一条是什么？\n第1名：「Storage Headboard with Charging Station」（储物床头柜+充电站）\n为什么最重要：\n\n理由\n\n证据\n\n最核心的卖点\n\n这是整个产品最与众不同的地方 —— 别的床没有充电功能\n\n买家最想要的\n\nQ\nA 里有人问\"charging station\"、很多人说\"love the option to plug in my phone on the frame shelf\"\n\n决定买不买的关键\n\n很多人的评论都是\"Love the drawers + charging area\"，两个合起来才是这个床的核心价值\n\n价格的正当性\n\n$199.99 这个价格能卖得动，主要是因为有充电功能这个高级配置\n\n但是这五点里，买家很想知道但没写进去的事：\n\n排名\n\n很想知道但没写\n\n现在怎么说\n\n应该怎么改\n\n⚠️\n第1名\n\n❌ 充电只有USB-A，没USB-C\n\n\"charge your phone, laptop\" 很模糊\n✅ \"USB-A charging only (no USB-C)\"\n\n⚠️\n第2名\n\n❌ 组装要3-5小时，需要电钻\n\n\"Quick installation makes it a breeze\" 虚伪\n✅ \"3-5 hours assembly with power drill recommended\"\n\n⚠️\n第3名\n\n❌ 床离地只有12英寸、腿放不下\n\n完全没提\n✅ \"Mattress height: ~12\\\" above floor\"\n\n⚠️\n第4名\n\n❌ 抽屉没内部轨道、会不平\n\n\"Special lock design makes them always stay in place\" 虚伪\n✅ \"Drawers have wheels, no internal tracks—may shift slightly\"\n\n⚠️\n第5名\n\n❌ 颜色比图深很多\n\n什么都没说\n✅ \"Color: Linen Beige, appears tan/warmer than photos\"\n\n最关键的对比\n\n五点现在说\n\nQ\nA 买家真实说\n\n伤害\n\n\"charge your phone, laptop\"\n\"Only USB type. But the bed is awesome!\"\n⚠️ 隐瞒了没USB-C\n\n\"Quick installation makes it a breeze\"\n\"assembly (2 people) took 5 hours...scared cause this product was not prime but oh my god it was so worth it!!\"\n⚠️⚠️⚠️ 虚伪宣传\n\n没提\n\"The drawers are not on tracks so when you pull them out they're not always even\"\n⚠️⚠️ 直接被打脸\n\n没提\n\"The mattress sits on the platform about a foot above the floor\"\n⚠️ 腿放不下\n\n\"Linen Beige\"\n\"more of a tan feel\"\n⚠️ 颜色比图深\n\n如果五点要改，应该这样改：\n❌ 现在的第1点： Storage Headboard with Charging Station\n✅ 改成： Storage Headboard with USB-A Charging Station (4 devices, USB-A only)\n❌ 现在的第4点： Quick installation & Noise-Free\n✅ 改成： Assembly: 3-5 hours with power drill recommended. Noise-free with EVA strips.\n❌ 现在缺少： 没有提床高度、抽屉结构、颜色深度\n✅ 补充： 新增\"Specifications: 12\\\" mattress height, 3 drawers with wheels (no internal tracks), Beige color (appears tan in person)\"",
+      "推荐ASIN": [],
+      "总结": "五点卖点里，最重要的一条是什么？\n第1名：「Storage Headboard with Charging Station」（储物床头柜+充电站）\n为什么最重要：\n\n理由\n\n证据\n\n最核心的卖点\n\n这是整个产品最与众不同的地方 —— 别的床没有充电功能\n\n买家最想要的\n\nQ\nA 里有人问\"charging station\"、很多人说\"love the option to plug in my phone on the frame shelf\"\n\n决定买不买的关键\n\n很多人的评论都是\"Love the drawers + charging area\"，两个合起来才是这个床的核心价值\n\n价格的正当性\n\n$199.99 这个价格能卖得动，主要是因为有充电功能这个高级配置\n\n但是这五点里，买家很想知道但没写进去的事：\n\n排名\n\n很想知道但没写\n\n现在怎么说\n\n应该怎么改\n\n⚠️\n第1名\n\n❌ 充电只有USB-A，没USB-C\n\n\"charge your phone, laptop\" 很模糊\n✅ \"USB-A charging only (no USB-C)\"\n\n⚠️\n第2名\n\n❌ 组装要3-5小时，需要电钻\n\n\"Quick installation makes it a breeze\" 虚伪\n✅ \"3-5 hours assembly with power drill recommended\"\n\n⚠️\n第3名\n\n❌ 床离地只有12英寸、腿放不下\n\n完全没提\n✅ \"Mattress height: ~12\\\" above floor\"\n\n⚠️\n第4名\n\n❌ 抽屉没内部轨道、会不平\n\n\"Special lock design makes them always stay in place\" 虚伪\n✅ \"Drawers have wheels, no internal tracks—may shift slightly\"\n\n⚠️\n第5名\n\n❌ 颜色比图深很多\n\n什么都没说\n✅ \"Color: Linen Beige, appears tan/warmer than photos\"\n\n最关键的对比\n\n五点现在说\n\nQ\nA 买家真实说\n\n伤害\n\n\"charge your phone, laptop\"\n\"Only USB type. But the bed is awesome!\"\n⚠️ 隐瞒了没USB-C\n\n\"Quick installation makes it a breeze\"\n\"assembly (2 people) took 5 hours...scared cause this product was not prime but oh my god it was so worth it!!\"\n⚠️⚠️⚠️ 虚伪宣传\n\n没提\n\"The drawers are not on tracks so when you pull them out they're not always even\"\n⚠️⚠️ 直接被打脸\n\n没提\n\"The mattress sits on the platform about a foot above the floor\"\n⚠️ 腿放不下\n\n\"Linen Beige\"\n\"more of a tan feel\"\n⚠️ 颜色比图深\n\n如果五点要改，应该这样改：\n❌ 现在的第1点： Storage Headboard with Charging Station\n✅ 改成： Storage Headboard with USB-A Charging Station (4 devices, USB-A only)\n❌ 现在的第4点： Quick installation & Noise-Free\n✅ 改成： Assembly: 3-5 hours with power drill recommended. Noise-free with EVA strips.\n❌ 现在缺少： 没有提床高度、抽屉结构、颜色深度\n✅ 补充： 新增\"Specifications: 12\\\" mattress height, 3 drawers with wheels (no internal tracks), Beige color (appears tan in person)\""
+    },
+    {
+      "题号": 3,
+      "问题": "看完这个产品ASIN B0BY8Y5766这些图，还有什么是我想知道但看不出来的？要是再加一张图，加什么最有用？",
+      "相关产品": [],
+      "答案": "看完这个产品的图，你想知道但看不出来的：\n\n排名\n\n最想看\n\n现在的图里有吗\n\n为什么重要\n\n⚠️\n第1名\n\n抽屉实际拉出来是什么样？会不会歪？\n\n❌ 没有\nQ&A 里很多人说\"drawers not on tracks so not always even\"，需要看实拍证据\n\n⚠️\n第2名\n\n颜色真实样子（不是修图后）\n\n❌ 只有产品图，没有真实家居照\nQ&A 明确说\"more of a tan feel\"比图深，买家想看真实颜色\n\n⚠️\n第3名\n\n床离地的高度、腿是否能放下\n\n❌ 没有侧面图显示高度\nQ&A 说\"mattress sits about a foot above floor\"，有人说\"太低腿放不下\"\n\n⚠️\n第4名\n\n充电站的 USB 插口特写（只有USB-A没USB-C）\n\n❌ 图里看不清\nQ&A 明确\"Only USB type\"，买家想看清楚是什么类型\n\n⚠️\n第5名\n\n组装过程中的难点（螺丝、木板对齐）\n\n❌ 没有\n负评 36% 都说\"3-5小时、很累\"，需要看到组装的复杂度\n\n⚠️\n第6名\n\n床头柜的侧面口袋、顶部架子的实际空间大小\n\n❌ 只有正面图\nQ&A 有人问\"多大能放什么\"，需要侧面和上面的特写\n\n如果只能再加一张图，加什么最有用？\n最重要：加一张「抽屉拉出来的侧面照」\n为什么最重要：\n\n•\nQ&A 里有人说\"The drawers are not on tracks so when you pull them out they're not always even\"\n\n•\n现在的图都是闭合状态，看不出拉出来会不会歪\n\n•\n这直接影响买家能不能接受（如果会歪歪的，很多人就不买了）\n\n•\n占负评的 26%（13条）\n\n应该加的内容：\n\n•\n从侧面/斜45度角拍一张抽屉完全拉出来的样子\n\n•\n重点标注\"drawers on casters, no internal tracks\"（诚实说明）\n\n•\n拍 3 个抽屉，显示它们是否平行或歪斜\n\n排名第2-5 的补充图：\n\n排名\n\n补充什么\n\n现在的问题\n\n会解决什么抱怨\n\n#129352;\n\n真实家居放置照（不修图）\n图太完美，颜色偏深的问题隐藏了\n\"more of a tan feel\"的抱怨（多人提）\n\n#129353;\n\n从床边拍一张，显示离地高度\n看不出床有多低\n\"too low, legs don't fit\"（有人抱怨）\n\n#129354;\n\nUSB充电站的特写照\n看不清是USB-A还是USB-C\n\"only USB type\"的失望（有人问过）\n\n#129355;\n\n组装步骤的难点细节（复杂的螺丝、对齐）\n没显示组装的复杂度\n对\"需要5小时\"的心理预期不足",
+      "推荐ASIN": [],
+      "总结": "看完这个产品的图，你想知道但看不出来的：\n\n排名\n\n最想看\n\n现在的图里有吗\n\n为什么重要\n\n⚠️\n第1名\n\n抽屉实际拉出来是什么样？会不会歪？\n\n❌ 没有\nQ&A 里很多人说\"drawers not on tracks so not always even\"，需要看实拍证据\n\n⚠️\n第2名\n\n颜色真实样子（不是修图后）\n\n❌ 只有产品图，没有真实家居照\nQ&A 明确说\"more of a tan feel\"比图深，买家想看真实颜色\n\n⚠️\n第3名\n\n床离地的高度、腿是否能放下\n\n❌ 没有侧面图显示高度\nQ&A 说\"mattress sits about a foot above floor\"，有人说\"太低腿放不下\"\n\n⚠️\n第4名\n\n充电站的 USB 插口特写（只有USB-A没USB-C）\n\n❌ 图里看不清\nQ&A 明确\"Only USB type\"，买家想看清楚是什么类型\n\n⚠️\n第5名\n\n组装过程中的难点（螺丝、木板对齐）\n\n❌ 没有\n负评 36% 都说\"3-5小时、很累\"，需要看到组装的复杂度\n\n⚠️\n第6名\n\n床头柜的侧面口袋、顶部架子的实际空间大小\n\n❌ 只有正面图\nQ&A 有人问\"多大能放什么\"，需要侧面和上面的特写\n\n如果只能再加一张图，加什么最有用？\n最重要：加一张「抽屉拉出来的侧面照」\n为什么最重要：\n\n•\nQ&A 里有人说\"The drawers are not on tracks so when you pull them out they're not always even\"\n\n•\n现在的图都是闭合状态，看不出拉出来会不会歪\n\n•\n这直接影响买家能不能接受（如果会歪歪的，很多人就不买了）\n\n•\n占负评的 26%（13条）\n\n应该加的内容：\n\n•\n从侧面/斜45度角拍一张抽屉完全拉出来的样子\n\n•\n重点标注\"drawers on casters, no internal tracks\"（诚实说明）\n\n•\n拍 3 个抽屉，显示它们是否平行或歪斜\n\n排名第2-5 的补充图：\n\n排名\n\n补充什么\n\n现在的问题\n\n会解决什么抱怨\n\n#129352;\n\n真实家居放置照（不修图）\n图太完美，颜色偏深的问题隐藏了\n\"more of a tan feel\"的抱怨（多人提）\n\n#129353;\n\n从床边拍一张，显示离地高度\n看不出床有多低\n\"too low, legs don't fit\"（有人抱怨）\n\n#129354;\n\nUSB充电站的特写照\n看不清是USB-A还是USB-C\n\"only USB type\"的失望（有人问过）\n\n#129355;\n\n组装步骤的难点细节（复杂的螺丝、对齐）\n没显示组装的复杂度\n对\"需要5小时\"的心理预期不足"
+    },
+    {
+      "题号": 4,
+      "问题": "这个产品ASIN B0BY8Y5766下面那个长的图文介绍，跟上面五点说的有区别吗？看完能让我更放心买吗？还少介绍了什么？",
+      "相关产品": [],
+      "答案": "长图文介绍和五点有区别，但问题更严重：\n✅ 长图文里新增的信息\n\n内容\n\n在五点里\n\n在长文里\n\n承重上限\n❌ 没说\n✅ \"1,100 lbs\"\n\n床头柜两侧口袋\n❌ 没说\n✅ \"2 Handy Side Pockets for mobile phone, glasses...\"\n\n床垫厚度兼容性\n❌ 没说\n✅ \"fits for 8\"-12\" mattresses\"\n\n木板数量\n❌ 没说\n✅ \"twelve thickened wooden slats\"\n\n充电功能\n⚠️ 说了但模糊\n✅ \"charge up to 4 devices\"\n\n材质\n❌ 没说\n✅ \"maple wood, high-density foam, linen fabric\"\n\n看起来长文补充了五点遗漏的信息…\n❌ 但是长文比五点还要虚伪：\n\n虚伪宣传\n\n五点怎么说\n\n长文怎么说\n\nQ&A真实情况\n\n伤害度\n\n充电功能\n\n\"charge your phone, laptop\"\n\"charge up to 4 devices\"\n⚠️ \"Only USB type. But the bed is awesome!\"\n完全没提USB-A只限制\n\n组装时间\n\n\"Quick installation makes it a breeze\"\n\"Velcro design makes installation a breeze, saving you valuable time\"\n⚠️ 负评说\"3-5小时、tons of screws\"\n更虚伪了！加了\"Velcro\"谎言\n\n抽屉稳定性\n\n\"Special lock design makes them always stay in place\"\n（重复）\n⚠️ \"The drawers are not on tracks so...not always even\"\n直接被打脸\n\n床高度\n\n完全没提\n完全没提\n⚠️ \"mattress sits about a foot above the floor\"\n腿放不下\n\n颜色\n\n只说\"Beige\"\n只说\"beige linen fabric\"\n⚠️ \"more of a tan feel\"\n比图深\n\n结论：长文不是补充，是强化虚伪宣传。\n看完能让我更放心买吗？\n❌ 不能，反而更不放心\n\n原因\n\n证据\n\n虚伪升级\n\n五点只说\"Quick installation\"，长文加了\"Velcro design\"这种本不存在的细节，试图用技术词汇骗人\n\n关键信息藏着\n\n长文里说\"up to 4 devices\"，却隐瞒了\"Only USB-A\"这个关键限制\n\n完全回避负评\n\n36% 的人说\"3-5小时\"，长文还在说\"saving you valuable time\"，无视真实反馈\n\n没有诚实的警告\n\n如果长文真的有用，应该说\"Assembly: 3-5 hours, recommend power drill\"，但没有\n\n还少介绍了什么？（最关键的5点）\n\n排名\n\n最重要但没提\n\n现在怎么说\n\n应该加\n\n⚠️\n第1名\n\n⏱️ 组装实际需要时间\n\n\"making installation a breeze\"\n\"Assembly: 3-5 hours with power drill. Tip: pre-buy allen wrench bits.\"\n\n⚠️\n第2名\n\n📏 床离地高度\n\n完全没提\n\"Mattress height: ~12\\\" above floor. Side table leg space: ~1 foot.\"\n\n⚠️\n第3名\n\n🎨 实际颜色与图不同\n\n\"beige linen fabric\"\n\"Color note: Appears tan/warmer in person than photos. Not pure white/ivory.\"\n\n⚠️\n第4名\n\n🔌 充电只有USB-A\n\n\"charge up to 4 devices\"\n\"USB-A only (no USB-C). UL certified power outlet.\"\n\n⚠️\n第5名\n\n🚪 抽屉会轻微不平\n\n\"Special lock design makes them always stay in place\"\n\"Drawers on casters, no internal tracks—may shift slightly when pulled fully.\"\n\n如果长文要改，应该这样改：\n现在的垃圾版本：\n \"Quick installation & Noise-Free: The hook and loop fastener design of the bed slats makes installation a breeze and the EVA silent strip...\"\n改成诚实版本：\n \"Assembly: 3-5 hours with power drill recommended (pre-buy allen wrench bits). Velcro fasteners and EVA silent strips reduce friction noise. Clear 22-step instructions included.\"\n现在的虚伪版本：\n \"Special lock design of bed drawers makes them always stay in place\"\n改成诚实版本：\n \"3 drawers with locking wheels. Note: Drawers roll on casters without internal tracks, so may shift slightly when fully extended.\"\n完全缺失的信息：\n ❌ \"Mattress height: Approx. 12\\\" above floor with standard mattress. Ensure adequate leg clearance for your room setup.\"\n ❌ \"Color: Linen Beige appears tan/warmer in person than product photos. Not pure white or ivory.\"\n ❌ \"Charging: USB-A ports only. No USB-C support. 4-device capacity.\"",
+      "推荐ASIN": [],
+      "总结": "长图文介绍和五点有区别，但问题更严重：\n✅ 长图文里新增的信息\n\n内容\n\n在五点里\n\n在长文里\n\n承重上限\n❌ 没说\n✅ \"1,100 lbs\"\n\n床头柜两侧口袋\n❌ 没说\n✅ \"2 Handy Side Pockets for mobile phone, glasses...\"\n\n床垫厚度兼容性\n❌ 没说\n✅ \"fits for 8\"-12\" mattresses\"\n\n木板数量\n❌ 没说\n✅ \"twelve thickened wooden slats\"\n\n充电功能\n⚠️ 说了但模糊\n✅ \"charge up to 4 devices\"\n\n材质\n❌ 没说\n✅ \"maple wood, high-density foam, linen fabric\"\n\n看起来长文补充了五点遗漏的信息…\n❌ 但是长文比五点还要虚伪：\n\n虚伪宣传\n\n五点怎么说\n\n长文怎么说\n\nQ&A真实情况\n\n伤害度\n\n充电功能\n\n\"charge your phone, laptop\"\n\"charge up to 4 devices\"\n⚠️ \"Only USB type. But the bed is awesome!\"\n完全没提USB-A只限制\n\n组装时间\n\n\"Quick installation makes it a breeze\"\n\"Velcro design makes installation a breeze, saving you valuable time\"\n⚠️ 负评说\"3-5小时、tons of screws\"\n更虚伪了！加了\"Velcro\"谎言\n\n抽屉稳定性\n\n\"Special lock design makes them always stay in place\"\n（重复）\n⚠️ \"The drawers are not on tracks so...not always even\"\n直接被打脸\n\n床高度\n\n完全没提\n完全没提\n⚠️ \"mattress sits about a foot above the floor\"\n腿放不下\n\n颜色\n\n只说\"Beige\"\n只说\"beige linen fabric\"\n⚠️ \"more of a tan feel\"\n比图深\n\n结论：长文不是补充，是强化虚伪宣传。\n看完能让我更放心买吗？\n❌ 不能，反而更不放心\n\n原因\n\n证据\n\n虚伪升级\n\n五点只说\"Quick installation\"，长文加了\"Velcro design\"这种本不存在的细节，试图用技术词汇骗人\n\n关键信息藏着\n\n长文里说\"up to 4 devices\"，却隐瞒了\"Only USB-A\"这个关键限制\n\n完全回避负评\n\n36% 的人说\"3-5小时\"，长文还在说\"saving you valuable time\"，无视真实反馈\n\n没有诚实的警告\n\n如果长文真的有用，应该说\"Assembly: 3-5 hours, recommend power drill\"，但没有\n\n还少介绍了什么？（最关键的5点）\n\n排名\n\n最重要但没提\n\n现在怎么说\n\n应该加\n\n⚠️\n第1名\n\n⏱️ 组装实际需要时间\n\n\"making installation a breeze\"\n\"Assembly: 3-5 hours with power drill. Tip: pre-buy allen wrench bits.\"\n\n⚠️\n第2名\n\n📏 床离地高度\n\n完全没提\n\"Mattress height: ~12\\\" above floor. Side table leg space: ~1 foot.\"\n\n⚠️\n第3名\n\n🎨 实际颜色与图不同\n\n\"beige linen fabric\"\n\"Color note: Appears tan/warmer in person than photos. Not pure white/ivory.\"\n\n⚠️\n第4名\n\n🔌 充电只有USB-A\n\n\"charge up to 4 devices\"\n\"USB-A only (no USB-C). UL certified power outlet.\"\n\n⚠️\n第5名\n\n🚪 抽屉会轻微不平\n\n\"Special lock design makes them always stay in place\"\n\"Drawers on casters, no internal tracks—may shift slightly when pulled fully.\"\n\n如果长文要改，应该这样改：\n现在的垃圾版本：\n \"Quick installation & Noise-Free: The hook and loop fastener design of the bed slats makes installation a breeze and the EVA silent strip...\"\n改成诚实版本：\n \"Assembly: 3-5 hours with power drill recommended (pre-buy allen wrench bits). Velcro fasteners and EVA silent strips reduce friction noise. Clear 22-step instructions included.\"\n现在的虚伪版本：\n \"Special lock design of bed drawers makes them always stay in place\"\n改成诚实版本：\n \"3 drawers with locking wheels. Note: Drawers roll on casters without internal tracks, so may shift slightly when fully extended.\"\n完全缺失的信息：\n ❌ \"Mattress height: Approx. 12\\\" above floor with standard mattress. Ensure adequate leg clearance for your room setup.\"\n ❌ \"Color: Linen Beige appears tan/warmer in person than product photos. Not pure white or ivory.\"\n ❌ \"Charging: USB-A ports only. No USB-C support. 4-device capacity.\""
+    },
+    {
+      "题号": 5,
+      "问题": "这个产品ASIN B0BY8Y5766评价里大家最常夸和最常抱怨的是什么？这些在介绍里提前说清楚了吗？",
+      "相关产品": [],
+      "答案": "评价里最常夸的（TOP 5）\n\n排名\n\n最常夸\n\n出现比例\n\n介绍里提前说了吗\n\n⭐\n第1名\n\n质量好、结实稳固\n\n84% 正评说quality\n✅ 说了\"Sturdy Construction & Strong Support\"\n\n⭐\n第2名\n\n外观好看、设计现代\n\n91% 正评说appearance\n✅ 说了\"Elegant design\"\n\n⭐\n第3名\n\n收纳功能强、抽屉好用\n\n73% 正评说drawers\n✅ 说了\"3 Storage Drawers\"\n\n⭐\n第4名\n\n性价比高、值这个价\n\n92% 正评说value for money\n✅ 说了\"All-in-One Package\"\n\n⭐\n第5名\n\n充电功能方便\n\nQ&A说\"love the option to plug in my phone\"\n✅ 说了\"charging function\"\n\n结论：这些夸的点介绍里都提了。\n评价里最常抱怨的（TOP 5）\n\n排名\n\n最常抱怨\n\n负评比例\n\n介绍里提前说了吗\n\n虚伪度\n\n⚠️\n第1名\n\n组装太费时（3-5小时，需要电钻）\n\n36% 负评（153条中55条）\n❌ 说\"Quick installation makes it a breeze\"\n⚠️⚠️⚠️\n严重虚伪\n\n⚠️\n第2名\n\n抽屉会歪（没内部轨道）\n\n26% 负评说\"drawers not on tracks...not always even\"\n❌ 说\"Special lock design makes them always stay in place\"\n⚠️⚠️⚠️\n直接打脸\n\n⚠️\n第3名\n\n颜色比图深（tan feel不是off-white）\n\nQ&A明确说\"more of a tan feel，我们很失望\"\n❌ 只说\"beige linen fabric\"\n⚠️⚠️\n隐瞒\n\n⚠️\n第4名\n\n床太低、腿放不下\n\nQ&A说\"mattress sits about a foot above floor\"\n❌ 完全没提\n⚠️⚠️\n隐瞒\n\n⚠️\n第5名\n\n充电只有USB-A没USB-C\n\nQ&A明确\"Only USB type\"\n❌ 说\"charge up to 4 devices\"但隐瞒限制\n⚠️⚠️\n隐瞒\n\n现实对比：介绍说什么 vs 评价说什么\n❌ 组装时间 —— 最严重的虚伪\n\n介绍说\n\n评价说\n\n差距\n\n\"Quick installation makes it a breeze\"\n\"assembly (2 people) took 5 hours\"、\"tons of screws\"\n虚伪宣传\n\n\"Velcro design\"\n几乎没人提Velcro，反而都说\"buy allen wrench bits\"\n编造细节\n\n没提工具\n评价建议\"I would recommend buying allen wrench bits for your drill\"\n关键信息缺失\n\n伤害： 36% 的人因为对\"Quick installation\"的虚伪预期而失望，给了2-3星而不是4-5星。\n❌ 抽屉稳定性 —— 第二严重的虚伪\n\n介绍说\n\n评价说\n\n差距\n\n\"Special lock design of bed drawers makes them always stay in place\"\n\"The drawers are not on tracks so when you pull them out they're not always even\"\n直接打脸\n\n没说是否有内部轨道\n明确说\"drawers on casters, no internal tracks\"\n隐瞒关键结构\n\n伤害： 26% 的负评都在抱怨这个，但介绍里还在虚伪宣传\"always stay in place\"。\n❌ 颜色 —— 隐瞒而不是虚伪\n\n介绍说\n\n评价说\n\n差距\n\n\"Linen Beige\"\n\"more of a tan feel，我们以为是off-white\"\n词不达意\n\n无图片注释\nQ&A明确\"We are a little upset it was not lighter\"\n隐瞒颜色差异\n\n伤害： 图片修饰得太亮，实物是tan color，有人明确说\"我们很失望\"。\n❌ 床高度 —— 完全没提\n\n介绍说\n\n评价说\n\n差距\n\n完全没提\n\"The mattress sits on the platform about a foot above the floor\"\n隐瞒关键信息\n\n没说腿能不能放下\nQ&A有人问\"too low, legs don't fit\"\n可能影响购买决定\n\n伤害： 虽然说了\"fits for 8-12\\\" mattresses\"，但没说床本身有多低，有人买了才发现腿放不下。\n❌ 充电端口 —— 隐瞒限制\n\n介绍说\n\n评价说\n\n差距\n\n\"charge up to 4 devices\"\n\"Only USB type. But the bed is awesome!\"\n隐瞒USB-A限制\n\n没说USB-A还是USB-C\nQ&A明确\"Only USB type\"\n关键限制缺失\n\n伤害： 虽然产品本身\"awesome\"，但隐瞒了\"无USB-C\"这个限制，有人可能买了才发现。\n这些在介绍里提前说清楚了吗？\n🔴 没有，恰恰相反 —— 介绍里是虚伪和隐瞒\n\n介绍方式\n\n现实对应\n\n评价\n\n虚伪宣传\n组装时间、抽屉稳定性\n❌ 36% 和 26% 的人被骗了\n\n完全隐瞒\n床高度、颜色深度\n❌ 有人买了才后悔\n\n模糊隐瞒\n充电只有USB-A\n❌ 隐瞒了关键限制\n\n如果介绍诚实说清楚，这些抱怨会大幅减少。\n最关键的对比：如果要改\n❌ 现在的虚伪版本：\ngt; \"Quick installation  Noise-Free: The hook and loop fastener design...makes installation a breeze...\"\n✅ 诚实版本应该是：\ngt; \"Assembly: 3-5 hours with power drill recommended (pre-buy allen wrench bits). Clear 22-step instructions. Tip: assembly takes time but worth it. Noise-free with EVA strips.\"\n❌ 现在说：\ngt; \"Special lock design of bed drawers makes them always stay in place\"\n✅ 应该改成：\ngt; \"3 drawers on casters without internal tracks—easy to pull out but may shift slightly when fully extended.\"\n❌ 现在说：\ngt; \"charge up to 4 devices\"\n✅ 应该改成：\ngt; \"USB-A charging only (4 devices max). No USB-C support.\"\n完全缺失的：\ngt; ❌ \"Mattress height: ~12\\\" above floor when fully assembled.\"\ngt; ❌ \"Color: Linen Beige appears tan/warmer in person than photos.\"",
+      "推荐ASIN": [],
+      "总结": "评价里最常夸的（TOP 5）\n\n排名\n\n最常夸\n\n出现比例\n\n介绍里提前说了吗\n\n⭐\n第1名\n\n质量好、结实稳固\n\n84% 正评说quality\n✅ 说了\"Sturdy Construction & Strong Support\"\n\n⭐\n第2名\n\n外观好看、设计现代\n\n91% 正评说appearance\n✅ 说了\"Elegant design\"\n\n⭐\n第3名\n\n收纳功能强、抽屉好用\n\n73% 正评说drawers\n✅ 说了\"3 Storage Drawers\"\n\n⭐\n第4名\n\n性价比高、值这个价\n\n92% 正评说value for money\n✅ 说了\"All-in-One Package\"\n\n⭐\n第5名\n\n充电功能方便\n\nQ&A说\"love the option to plug in my phone\"\n✅ 说了\"charging function\"\n\n结论：这些夸的点介绍里都提了。\n评价里最常抱怨的（TOP 5）\n\n排名\n\n最常抱怨\n\n负评比例\n\n介绍里提前说了吗\n\n虚伪度\n\n⚠️\n第1名\n\n组装太费时（3-5小时，需要电钻）\n\n36% 负评（153条中55条）\n❌ 说\"Quick installation makes it a breeze\"\n⚠️⚠️⚠️\n严重虚伪\n\n⚠️\n第2名\n\n抽屉会歪（没内部轨道）\n\n26% 负评说\"drawers not on tracks...not always even\"\n❌ 说\"Special lock design makes them always stay in place\"\n⚠️⚠️⚠️\n直接打脸\n\n⚠️\n第3名\n\n颜色比图深（tan feel不是off-white）\n\nQ&A明确说\"more of a tan feel，我们很失望\"\n❌ 只说\"beige linen fabric\"\n⚠️⚠️\n隐瞒\n\n⚠️\n第4名\n\n床太低、腿放不下\n\nQ&A说\"mattress sits about a foot above floor\"\n❌ 完全没提\n⚠️⚠️\n隐瞒\n\n⚠️\n第5名\n\n充电只有USB-A没USB-C\n\nQ&A明确\"Only USB type\"\n❌ 说\"charge up to 4 devices\"但隐瞒限制\n⚠️⚠️\n隐瞒\n\n现实对比：介绍说什么 vs 评价说什么\n❌ 组装时间 —— 最严重的虚伪\n\n介绍说\n\n评价说\n\n差距\n\n\"Quick installation makes it a breeze\"\n\"assembly (2 people) took 5 hours\"、\"tons of screws\"\n虚伪宣传\n\n\"Velcro design\"\n几乎没人提Velcro，反而都说\"buy allen wrench bits\"\n编造细节\n\n没提工具\n评价建议\"I would recommend buying allen wrench bits for your drill\"\n关键信息缺失\n\n伤害： 36% 的人因为对\"Quick installation\"的虚伪预期而失望，给了2-3星而不是4-5星。\n❌ 抽屉稳定性 —— 第二严重的虚伪\n\n介绍说\n\n评价说\n\n差距\n\n\"Special lock design of bed drawers makes them always stay in place\"\n\"The drawers are not on tracks so when you pull them out they're not always even\"\n直接打脸\n\n没说是否有内部轨道\n明确说\"drawers on casters, no internal tracks\"\n隐瞒关键结构\n\n伤害： 26% 的负评都在抱怨这个，但介绍里还在虚伪宣传\"always stay in place\"。\n❌ 颜色 —— 隐瞒而不是虚伪\n\n介绍说\n\n评价说\n\n差距\n\n\"Linen Beige\"\n\"more of a tan feel，我们以为是off-white\"\n词不达意\n\n无图片注释\nQ&A明确\"We are a little upset it was not lighter\"\n隐瞒颜色差异\n\n伤害： 图片修饰得太亮，实物是tan color，有人明确说\"我们很失望\"。\n❌ 床高度 —— 完全没提\n\n介绍说\n\n评价说\n\n差距\n\n完全没提\n\"The mattress sits on the platform about a foot above the floor\"\n隐瞒关键信息\n\n没说腿能不能放下\nQ&A有人问\"too low, legs don't fit\"\n可能影响购买决定\n\n伤害： 虽然说了\"fits for 8-12\\\" mattresses\"，但没说床本身有多低，有人买了才发现腿放不下。\n❌ 充电端口 —— 隐瞒限制\n\n介绍说\n\n评价说\n\n差距\n\n\"charge up to 4 devices\"\n\"Only USB type. But the bed is awesome!\"\n隐瞒USB-A限制\n\n没说USB-A还是USB-C\nQ&A明确\"Only USB type\"\n关键限制缺失\n\n伤害： 虽然产品本身\"awesome\"，但隐瞒了\"无USB-C\"这个限制，有人可能买了才发现。\n这些在介绍里提前说清楚了吗？\n🔴 没有，恰恰相反 —— 介绍里是虚伪和隐瞒\n\n介绍方式\n\n现实对应\n\n评价\n\n虚伪宣传\n组装时间、抽屉稳定性\n❌ 36% 和 26% 的人被骗了\n\n完全隐瞒\n床高度、颜色深度\n❌ 有人买了才后悔\n\n模糊隐瞒\n充电只有USB-A\n❌ 隐瞒了关键限制\n\n如果介绍诚实说清楚，这些抱怨会大幅减少。\n最关键的对比：如果要改\n❌ 现在的虚伪版本：\ngt; \"Quick installation  Noise-Free: The hook and loop fastener design...makes installation a breeze...\"\n✅ 诚实版本应该是：\ngt; \"Assembly: 3-5 hours with power drill recommended (pre-buy allen wrench bits). Clear 22-step instructions. Tip: assembly takes time but worth it. Noise-free with EVA strips.\"\n❌ 现在说：\ngt; \"Special lock design of bed drawers makes them always stay in place\"\n✅ 应该改成：\ngt; \"3 drawers on casters without internal tracks—easy to pull out but may shift slightly when fully extended.\"\n❌ 现在说：\ngt; \"charge up to 4 devices\"\n✅ 应该改成：\ngt; \"USB-A charging only (4 devices max). No USB-C support.\"\n完全缺失的：\ngt; ❌ \"Mattress height: ~12\\\" above floor when fully assembled.\"\ngt; ❌ \"Color: Linen Beige appears tan/warmer in person than photos.\""
+    },
+    {
+      "题号": 6,
+      "问题": "这个产品ASIN B0BY8Y5766如果让你给这个产品页面只提一个最着急改的地方，会是什么？",
+      "相关产品": [],
+      "答案": "只提一个最着急改的地方：\n最着急：改「组装时间」的虚伪宣传\n现在的垃圾版本：\n\"Quick installation makes it a breeze\"\n为什么最着急改：\n\n原因\n\n数据\n\n伤害\n\n虚伪成灾\n\n153条评价中55条（36%）抱怨组装时间\n超过三分之一的人被骗\n\n反向销售\n\n说\"breeze\"，买家说\"3-5小时、tons of screws、buy allen wrench bits\"\n完全相反的预期\n\n直接降星\n\n很多人本来满意这个床，但因为组装费时就给了2-3星而非5星\n评分严重虚伪\n\nQ&A曝光\n\n明确说\"assembly (2 people) took 5 hours… it was worth it!!\"\n信息完全相反\n\n改成这样：\n\"Assembly: 3-5 hours with power drill recommended (pre-buy allen wrench bits). Clear 22-step instructions included. Worth the effort—customers say it's sturdy and beautiful.\"\n为什么这样改最有效：\n\n•\n✅ 诚实说出真实时间（3-5小时）\n\n•\n✅ 建议工具（电钻+六角形钥匙组）\n\n•\n✅ 保留正面评价（sturdy、beautiful）\n\n•\n✅ 降低退货率（期望正确了，满意度反而提高）\n\n如果不改，后果：\n\n•\n❌ 36% 的人会因为虚伪预期而给低星\n\n•\n❌ 退货率持续高企\n\n•\n❌ Q&A 继续被\"takes 5 hours\"刷屏\n\n•\n❌ 消费者信任继续破裂\n\n这一个改动能解决产品页面最严重的虚伪问题。",
+      "推荐ASIN": [],
+      "总结": "只提一个最着急改的地方：\n最着急：改「组装时间」的虚伪宣传\n现在的垃圾版本：\n\"Quick installation makes it a breeze\"\n为什么最着急改：\n\n原因\n\n数据\n\n伤害\n\n虚伪成灾\n\n153条评价中55条（36%）抱怨组装时间\n超过三分之一的人被骗\n\n反向销售\n\n说\"breeze\"，买家说\"3-5小时、tons of screws、buy allen wrench bits\"\n完全相反的预期\n\n直接降星\n\n很多人本来满意这个床，但因为组装费时就给了2-3星而非5星\n评分严重虚伪\n\nQ&A曝光\n\n明确说\"assembly (2 people) took 5 hours… it was worth it!!\"\n信息完全相反\n\n改成这样：\n\"Assembly: 3-5 hours with power drill recommended (pre-buy allen wrench bits). Clear 22-step instructions included. Worth the effort—customers say it's sturdy and beautiful.\"\n为什么这样改最有效：\n\n•\n✅ 诚实说出真实时间（3-5小时）\n\n•\n✅ 建议工具（电钻+六角形钥匙组）\n\n•\n✅ 保留正面评价（sturdy、beautiful）\n\n•\n✅ 降低退货率（期望正确了，满意度反而提高）\n\n如果不改，后果：\n\n•\n❌ 36% 的人会因为虚伪预期而给低星\n\n•\n❌ 退货率持续高企\n\n•\n❌ Q&A 继续被\"takes 5 hours\"刷屏\n\n•\n❌ 消费者信任继续破裂\n\n这一个改动能解决产品页面最严重的虚伪问题。"
+    }
+  ]
+}
+```
+
+
+完整机器可读 JSON 数据见同目录 `frontend-data.json`。

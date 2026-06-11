@@ -1,0 +1,18 @@
+{
+  "time": "2026-06-08T21:58:52",
+  "source": "rufus.login_status",
+  "asin": "B0BY8Y5766",
+  "command": [
+    "opscli",
+    "amazon-rufus",
+    "login-status",
+    "US",
+    "--pretty"
+  ],
+  "dry_run": false,
+  "status": "failed",
+  "exit_code": 2,
+  "stdout": "",
+  "stderr": "Usage: opscli amazon-rufus [OPTIONS] COMMAND [ARGS]...\nTry 'opscli amazon-rufus --help' for help.\n┌─ Error ─────────────────────────────────────────────────────────────────────┐\n│ No such command 'login-status'.                                             │\n└─────────────────────────────────────────────────────────────────────────────┘\n",
+  "json": null
+}

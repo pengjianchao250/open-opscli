@@ -1,0 +1,98 @@
+%% Rufus Skill 现有编排流程图
+flowchart TD
+    Start([用户提出 Rufus / Listing 问答需求])
+    ReadSkill["读取 ops-amazon-rufus/SKILL.md 与 reference"]
+    Parse["解析 ASIN、country、question/questions"]
+    Init["初始化本轮状态<br/>login_recovery_attempted = false"]
+
+    QuestionMode{"问题来源？"}
+    Single["单题临时问题<br/>传 question"]
+    Multi["多题临时问题<br/>传 questions"]
+    DefaultBank["默认题库模式<br/>传 skills_dir = .agents/skills<br/>读取 question_templates.json"]
+
+    McpAvailable{"当前宿主暴露<br/>amazon_rufus_get？"}
+    McpCall["调用 amazon_rufus_get"]
+    CliFallback["CLI 兼容入口<br/>opscli amazon-rufus get ... --launch-if-needed"]
+
+    Backend["MCP 工具内部<br/>RufusManager.get_backend()"]
+    ResolveQuestions["RufusManager._resolve_questions()<br/>校验问题或加载默认题库"]
+    LoadSecret["RufusBackendSecretProvider.load()<br/>读取 browser-state-&lt;COUNTRY&gt;.json"]
+    SecretReady{"本地 Rufus 状态<br/>是否可用？"}
+    UseSavedSeed{"保存的 streaming seed<br/>是否同 ASIN + 同国家？"}
+    HeadlessCapture["HeadlessRufusCaptureService<br/>headless 打开商品页<br/>捕获 /rufus/cl/streaming"]
+    HeadlessQuery["HeadlessRufusClient.query()<br/>逐题 POST streaming<br/>解析 SSE 答案"]
+
+    Success{"获取成功？"}
+    ZeroAnswer{"answer_count = 0？"}
+    WriteReport["AnswerReportWriter.write()<br/>写入 output/amazon-rufus/&lt;ASIN&gt;-&lt;timestamp&gt;.md"]
+    ReturnPath["最终只返回本次 report_path<br/>需要正文时仅读取该路径"]
+
+    ErrorType{"错误码是否为<br/>RUFUS_HEADLESS_REQUEST_ERROR<br/>RUFUS_HEADLESS_CAPTURE_ERROR<br/>RUFUS_SECRET_NOT_READY？"}
+    RecoveryAttempted{"login_recovery_attempted<br/>是否已为 true？"}
+    MarkRecovery["标记 login_recovery_attempted = true"]
+    Logout["opscli amazon-rufus logout &lt;COUNTRY&gt; --pretty<br/>清理旧状态和 opscli Chrome profile"]
+    LogoutOk{"logout 成功？"}
+    StopLogout["停止恢复<br/>提示关闭对应调试 Chrome 后重试"]
+    WatchLogin["opscli amazon-rufus watch-login &lt;ASIN&gt; &lt;COUNTRY&gt; --launch-if-needed<br/>打开/连接目标国家 Amazon 登录页"]
+    LoginDetected{"检测到登录？<br/>#nav-tools 非未登录文案<br/>或 sso-state-main / at-main Cookie"}
+    CaptureSeed["打开商品页并捕获 streaming seed<br/>保存 storage_state + seed 到本地明文状态"]
+    WatchOk{"watch-login 成功？"}
+    RetryMcp["按原 ASIN、国家和问题来源<br/>重新调用 amazon_rufus_get"]
+    StopNoSecond["不再打开第二次登录窗口<br/>返回本轮失败错误"]
+    StopOther["直接返回非登录态错误"]
+
+    CliCapture["本机 Chrome CDP 捕获 seed request"]
+    CliReplay["RufusReplayService 逐题回放"]
+    CliReport["写入报告并从本次 CLI 输出提取路径"]
+
+    Boundary["敏感信息边界<br/>不向 MCP 参数、报告或回复展示<br/>cookie / localStorage / storage_state / headers / payload / seed_request"]
+    RemoteConsentNote["当前代码未读取 remote-consent.json<br/>现有 Skill 主线仍依赖本地 browser-state 文件"]
+
+    Start --> ReadSkill --> Parse --> Init --> QuestionMode
+    QuestionMode -->|一个明确问题| Single --> McpAvailable
+    QuestionMode -->|多个明确问题| Multi --> McpAvailable
+    QuestionMode -->|未给问题/默认报告/完整分析| DefaultBank --> McpAvailable
+
+    McpAvailable -->|是| McpCall --> Backend --> ResolveQuestions --> LoadSecret --> SecretReady
+    McpAvailable -->|否| CliFallback --> CliCapture --> CliReplay --> CliReport --> ReturnPath
+
+    SecretReady -->|否| ErrorType
+    SecretReady -->|是| UseSavedSeed
+    UseSavedSeed -->|是，复用 seed| HeadlessQuery
+    UseSavedSeed -->|否，重新捕获| HeadlessCapture --> HeadlessQuery
+    HeadlessQuery --> Success
+
+    Success -->|是| ZeroAnswer
+    ZeroAnswer -->|是，按正常 0 答案报告处理| WriteReport
+    ZeroAnswer -->|否| WriteReport
+    WriteReport --> ReturnPath
+    Success -->|否| ErrorType
+
+    ErrorType -->|否| StopOther
+    ErrorType -->|是| RecoveryAttempted
+    RecoveryAttempted -->|是| StopNoSecond
+    RecoveryAttempted -->|否| MarkRecovery --> Logout --> LogoutOk
+    LogoutOk -->|否| StopLogout
+    LogoutOk -->|是| WatchLogin --> LoginDetected
+    LoginDetected -->|否，超时/未捕获| WatchOk
+    LoginDetected -->|是| CaptureSeed --> WatchOk
+    WatchOk -->|否| StopNoSecond
+    WatchOk -->|是| RetryMcp --> McpCall
+
+    LoadSecret -.-> Boundary
+    CaptureSeed -.-> Boundary
+    HeadlessQuery -.-> Boundary
+    ReturnPath -.-> Boundary
+    RemoteConsentNote -.-> LoadSecret
+
+    classDef normal fill:#f8fafc,stroke:#334155,color:#0f172a;
+    classDef decision fill:#fff7ed,stroke:#c2410c,color:#7c2d12;
+    classDef success fill:#ecfdf5,stroke:#047857,color:#064e3b;
+    classDef error fill:#fef2f2,stroke:#b91c1c,color:#7f1d1d;
+    classDef boundary fill:#eff6ff,stroke:#2563eb,color:#1e3a8a;
+
+    class Start,ReadSkill,Parse,Init,Single,Multi,DefaultBank,McpCall,CliFallback,Backend,ResolveQuestions,LoadSecret,HeadlessCapture,HeadlessQuery,MarkRecovery,Logout,WatchLogin,CaptureSeed,RetryMcp,CliCapture,CliReplay,CliReport normal;
+    class QuestionMode,McpAvailable,SecretReady,UseSavedSeed,Success,ZeroAnswer,ErrorType,RecoveryAttempted,LogoutOk,LoginDetected,WatchOk decision;
+    class WriteReport,ReturnPath success;
+    class StopLogout,StopNoSecond,StopOther error;
+    class Boundary,RemoteConsentNote boundary;

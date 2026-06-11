@@ -1,0 +1,85 @@
+{
+  "dimensions": [
+    {
+      "field": "ds_6fbfb45edd2a.asin",
+      "alias": "f_asin"
+    },
+    {
+      "field": "ds_6fbfb45edd2a.product_name",
+      "alias": "f_product_name"
+    }
+  ],
+  "metrics": [
+    {
+      "field": "ds_6fbfb45edd2a.order_qty",
+      "aggregation": "SUM",
+      "alias": "f_order_qty"
+    },
+    {
+      "field": "ds_6fbfb45edd2a.orders",
+      "aggregation": "SUM",
+      "alias": "f_orders"
+    },
+    {
+      "field": "ds_6fbfb45edd2a.sessions",
+      "aggregation": "SUM",
+      "alias": "f_sessions"
+    },
+    {
+      "field": "ds_6fbfb45edd2a.page_views",
+      "aggregation": "SUM",
+      "alias": "f_page_views"
+    },
+    {
+      "field": "ds_6fbfb45edd2a.original_price",
+      "aggregation": "SUM",
+      "alias": "f_original_price"
+    },
+    {
+      "field": "ds_6fbfb45edd2a.price",
+      "aggregation": "SUM",
+      "alias": "f_sales_amount"
+    },
+    {
+      "field": "ds_6fbfb45edd2a.advertising_fee",
+      "aggregation": "SUM",
+      "alias": "f_advertising_fee"
+    },
+    {
+      "field": "ds_6fbfb45edd2a.ads_sales_cny",
+      "aggregation": "SUM",
+      "alias": "f_ads_sales_cny"
+    },
+    {
+      "field": "ds_6fbfb45edd2a.ads_conversions",
+      "aggregation": "SUM",
+      "alias": "f_ads_conversions"
+    },
+    {
+      "field": "ds_6fbfb45edd2a.ads_clicks",
+      "aggregation": "SUM",
+      "alias": "f_ads_clicks"
+    },
+    {
+      "field": "ds_6fbfb45edd2a.ads_impressions",
+      "aggregation": "SUM",
+      "alias": "f_ads_impressions"
+    },
+    {
+      "field": "ds_6fbfb45edd2a.refund",
+      "aggregation": "SUM",
+      "alias": "f_refund"
+    }
+  ],
+  "filters": [
+    {
+      "field": "ds_6fbfb45edd2a.asin",
+      "operator": "in",
+      "value": [
+        "B0BY8Y5766"
+      ]
+    }
+  ],
+  "limit": 100,
+  "offset": 0
+}

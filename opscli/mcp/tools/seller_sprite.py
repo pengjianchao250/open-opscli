@@ -2,8 +2,8 @@
 
 将卖家精灵服务能力暴露为 MCP 工具：
 - seller_sprite_spec_must_read — 读取卖家精灵 MCP 使用规范（SKILL_MCP.md）
-- seller_sprite_scenarios      — 列出卖家精灵接口直连场景
-- seller_sprite_run            — 执行卖家精灵接口场景并导出 XLS/JSON
+- seller_sprite_scenarios      — 列出卖家精灵场景
+- seller_sprite_run            — 执行卖家精灵场景并导出 XLS/JSON
 - seller_sprite_job_status     — 读取卖家精灵任务结果
 - seller_sprite_export         — 读取卖家精灵任务导出文件信息
 """
@@ -53,7 +53,7 @@ async def seller_sprite_spec_must_read() -> dict:
 
 
 async def seller_sprite_scenarios() -> dict:
-    """列出卖家精灵接口直连场景。"""
+    """列出卖家精灵场景。"""
     try:
         from opscli.seller_sprite.services import SellerSpriteApiManager
 
@@ -69,12 +69,16 @@ async def seller_sprite_run(
     period: str = "30d",
     page_size: int = 100,
     export_format: str = "xls",
+    mode: str | None = "browser-route",
+    page_prepare: bool | None = None,
+    task_interval_seconds: float | None = None,
+    cooldown_seconds: float | None = None,
     output_dir: str | None = None,
     job_id: str | None = None,
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """执行卖家精灵接口场景并导出 XLS/JSON。
+    """执行卖家精灵场景并导出 XLS/JSON。
 
     如果未提供 session_id / jwt，会自动尝试从当前 MCP 会话隔离凭证中加载。
     """
@@ -89,6 +93,10 @@ async def seller_sprite_run(
                 "period": period,
                 "page_size": page_size,
                 "export_format": export_format,
+                "mode": mode,
+                "page_prepare": page_prepare,
+                "task_interval_seconds": task_interval_seconds,
+                "cooldown_seconds": cooldown_seconds,
                 "job_id": job_id,
             },
         )
@@ -107,6 +115,10 @@ async def seller_sprite_run(
             job_id=job_id,
             output_dir=output_dir,
             export_format=export_format,
+            mode=mode,
+            page_prepare=page_prepare,
+            task_interval_seconds=task_interval_seconds,
+            cooldown_seconds=cooldown_seconds,
         )
         result = await SellerSpriteApiManager(jwt=jw, session_id=sid).run(request)
         return _ok(result.to_dict())
@@ -120,6 +132,10 @@ async def seller_sprite_run(
                 "period": period,
                 "page_size": page_size,
                 "export_format": export_format,
+                "mode": mode,
+                "page_prepare": page_prepare,
+                "task_interval_seconds": task_interval_seconds,
+                "cooldown_seconds": cooldown_seconds,
                 "job_id": job_id,
             },
         )

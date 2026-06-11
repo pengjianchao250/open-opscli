@@ -1,0 +1,23 @@
+{
+  "time": "2026-06-08T21:12:22",
+  "source": "query.crawler_listing",
+  "asin": null,
+  "command": [
+    "opscli",
+    "query",
+    "simple",
+    "--table-id",
+    "43",
+    "--dataset",
+    "ds_icw50TLOFu4F",
+    "--payload",
+    "output\\asin-data\\asin-data-B0BY8Y5766-20260608-metadata-filter-verify\\query\\crawler-listing-payload.json",
+    "--run"
+  ],
+  "dry_run": false,
+  "status": "failed",
+  "exit_code": 2,
+  "stdout": "",
+  "stderr": "Usage: opscli query simple [OPTIONS]\nTry 'opscli query simple --help' for help.\n┌─ Error ─────────────────────────────────────────────────────────────────────┐\n│ No such option: --dataset                                                   │\n└─────────────────────────────────────────────────────────────────────────────┘\n",
+  "json": null
+}
