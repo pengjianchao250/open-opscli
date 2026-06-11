@@ -1673,3 +1673,11 @@
 **影响范围**：西柚凭据读取、MCP/HTTP 模式下西柚任务启动前的 token 获取、补登成功后的缓存刷新。
 **回滚方式**：移除新增配置和 `credential_service.py`，恢复 `XiyouCredentialProvider` 只读取本地 `.env`，删除新增回调路由和后端服务文档。
 ---
+## 2026-06-11 skills - manifest 补齐 8 个未声明的 Skill 模板目录
+
+**变更原因**：Skill 发版检查（`validate_release_manifest`）报错"模板目录未在 manifest 声明"，`opscli/skills/templates/` 下 8 个新模板目录未在 `manifest.json` 中登记。
+**改动点**：在 `opscli/skills/templates/manifest.json` 的 `skills` 末尾追加 `ops-feed-task`、`ops-shopify-delete`、`ops-shopify-inventory`、`ops-shopify-price`、`ops-shopify-query`、`ops-shopify-status`、`ops-sif`、`ops-xiyou` 共 8 个条目，四个发版开关（source/wheel/binary/binary_full）全部为 false，tier 设为 internal。
+**验证结果**：`validate_release_manifest()` 返回空（通过）；`pytest tests/skills/test_packaging.py -q -s` 6 passed；目录与 manifest 双向对比无缺失无多余。
+**影响范围**：仅影响 Skill 发版打包白名单，新增条目均为 false，不改变任何现有发版产物内容。
+**回滚方式**：从 `manifest.json` 中删除上述 8 个新增条目。
+---
