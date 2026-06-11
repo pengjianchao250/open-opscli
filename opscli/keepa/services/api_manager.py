@@ -17,6 +17,8 @@ from opscli.keepa.config import KeepaSettings, load_settings
 from opscli.keepa.domain.exceptions import KeepaApiError, KeepaConfigError
 from opscli.keepa.domain.models import KeepaExportResult, KeepaScenarioRequest, KeepaScenarioResult
 from opscli.keepa.export.xlsx import export_rows_to_xlsx
+from opscli.keepa.product_formatter import FormattedProductExport, format_product_export
+from opscli.keepa.search_insights_formatter import FormattedSearchInsightsExport, format_search_insights_export
 from opscli.keepa.time import add_keepa_time_conversions
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 from opscli.shared.integration_accounts import IntegrationAccountClient
@@ -136,20 +138,34 @@ class KeepaApiManager:
         _write_json(raw_path, raw_payload)
 
         raw_rows = extract_rows(raw_response)
-        data = add_keepa_time_conversions(raw_rows)
+        product_export = _format_product_rows_if_needed(
+            scenario=request.scenario,
+            rows=raw_rows,
+            site=site,
+            normalized_params=normalized_params,
+        )
+        search_insights_export = _format_search_insights_if_needed(
+            scenario=request.scenario,
+            raw_response=raw_response,
+            site=site,
+            normalized_params=normalized_params,
+            request_params=request.params,
+        )
+        data = product_export.products if product_export else add_keepa_time_conversions(raw_rows)
         export_format = _resolve_export_format(
             requested_format=_normalize_export_format(request.export_format),
             row_count=len(raw_rows),
             warnings=warnings,
         )
         if export_format == "xlsx":
-            export_rows = raw_response_to_export_rows(raw_response)
+            export_rows = product_export.products if product_export else raw_response_to_export_rows(raw_response)
             export = export_rows_to_xlsx(
                 rows=export_rows,
                 output_path=root_dir / f"{job_id}.xlsx",
                 scenario=request.scenario,
                 site=site,
                 params=request.params,
+                extra_sheets=_merge_extra_sheets(product_export, search_insights_export),
             )
         else:
             export = _export_raw_to_json(
@@ -162,6 +178,7 @@ class KeepaApiManager:
                 raw_response=raw_response,
                 rows=data,
                 warnings=warnings,
+                formatted_tables=_formatted_tables_payload(product_export, search_insights_export),
             )
         _upload_export_if_enabled(
             export=export,
@@ -265,7 +282,11 @@ def raw_response_to_export_rows(payload: dict[str, Any]) -> list[dict[str, Any]]
     if not isinstance(payload, dict):
         return [{"value": payload}]
     row_source_key, row_items = _primary_row_items(payload)
-    base_row = {key: value for key, value in payload.items() if key != row_source_key}
+    base_row = {
+        key: value
+        for key, value in payload.items()
+        if key != row_source_key and key != "searchInsights"
+    }
     if not row_items:
         return [dict(payload)]
     rows: list[dict[str, Any]] = []
@@ -324,6 +345,68 @@ def _scalar_item_field(row_source_key: str | None) -> str:
     if row_source_key in {"asinList", "bestSellersList"}:
         return "asin"
     return "value"
+
+
+def _format_product_rows_if_needed(
+    *,
+    scenario: str,
+    rows: list[Any],
+    site: str,
+    normalized_params: dict[str, Any],
+) -> FormattedProductExport | None:
+    if scenario != "product":
+        return None
+    return format_product_export(rows, site=site, domain_id=normalized_params.get("domain"))
+
+
+def _format_search_insights_if_needed(
+    *,
+    scenario: str,
+    raw_response: dict[str, Any],
+    site: str,
+    normalized_params: dict[str, Any],
+    request_params: dict[str, Any],
+) -> FormattedSearchInsightsExport | None:
+    if scenario != "product-finder":
+        return None
+    return format_search_insights_export(
+        raw_response.get("searchInsights"),
+        site=site,
+        domain_id=normalized_params.get("domain"),
+        query_name=_search_insights_query_name(request_params),
+    )
+
+
+def _merge_extra_sheets(
+    product_export: FormattedProductExport | None,
+    search_insights_export: FormattedSearchInsightsExport | None,
+) -> dict[str, list[dict[str, Any]]] | None:
+    sheets: dict[str, list[dict[str, Any]]] = {}
+    if product_export:
+        sheets.update(product_export.extra_sheets())
+    if search_insights_export:
+        sheets.update(search_insights_export.extra_sheets())
+    return sheets or None
+
+
+def _formatted_tables_payload(
+    product_export: FormattedProductExport | None,
+    search_insights_export: FormattedSearchInsightsExport | None,
+) -> dict[str, Any] | None:
+    payload: dict[str, Any] = {}
+    if product_export:
+        payload.update(product_export.to_dict())
+    if search_insights_export:
+        payload.update(search_insights_export.to_dict())
+    return payload or None
+
+
+def _search_insights_query_name(params: dict[str, Any]) -> str:
+    for key in ("queryName", "query_name", "name", "keyword", "term"):
+        value = params.get(key)
+        if value:
+            return str(value)
+    return "product-finder"
 
 
 async def _safe_token_status(client: KeepaApiClient, warnings: list[dict[str, Any]]) -> dict[str, Any]:
@@ -517,6 +600,7 @@ def _export_raw_to_json(
     raw_response: dict[str, Any],
     rows: list[Any],
     warnings: list[dict[str, Any]],
+    formatted_tables: dict[str, Any] | None = None,
 ) -> KeepaExportResult:
     payload = {
         "job_id": job_id,
@@ -530,6 +614,8 @@ def _export_raw_to_json(
         "quota": extract_quota(raw_response),
         "warnings": warnings,
     }
+    if formatted_tables:
+        payload["formatted_tables"] = formatted_tables
     _write_json(output_path, payload)
     resolved = output_path.resolve()
     return KeepaExportResult(

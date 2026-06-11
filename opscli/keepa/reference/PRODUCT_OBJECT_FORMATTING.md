@@ -213,3 +213,10 @@ Product 主行不直接展开完整 `csv`，避免 XLSX 爆列/爆行。建议�
 4. 将 Keepa Time 派生逻辑扩展为字段白名单解析，避免把非时间整数误转。
 5. XLSX 导出支持多 sheet：`products`、`csv_history`、`offers`、`variations`；大数据量继续回退 JSON。
 6. 文档与实现都必须保留未知字段，避免 Keepa 新增字段造成解析失败。
+
+## Keepa Time Minutes
+
+Time format used for all timestamps. To convert to an uncompressed Unix epoch time:
+
+- For milliseconds: (keepaTime + 21564000) * 60000
+- For seconds: (keepaTime + 21564000) * 60

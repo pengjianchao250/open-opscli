@@ -129,6 +129,70 @@ def test_manager_writes_json_export_when_requested(monkeypatch, tmp_path: Path):
     assert export_payload["rows"][0]["lastUpdateUnixSeconds"] == 1749177480
 
 
+def test_product_finder_formats_search_insights_sheets(monkeypatch, tmp_path: Path):
+    class ProductFinderClient(DummyKeepaClient):
+        async def get_json(self, endpoint, params):
+            self.__class__.requests.append({"endpoint": endpoint, "params": params})
+            return {
+                "timestamp": 2000,
+                "tokensLeft": 49,
+                "tokensConsumed": 1,
+                "asinList": ["B0088PUEPK"],
+                "searchInsights": {
+                    "avgBuyBox": 1299,
+                    "avgRating": 45,
+                    "isFBAPercent": 78.3,
+                    "relatedCategories": [172282],
+                    "topBrandsWithCounts": {"Brand A": 10},
+                    "topSellersWithCounts": {"A2L77EE7U53NWQ": 7},
+                },
+            }
+
+    ProductFinderClient.requests = []
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", ProductFinderClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
+    manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
+
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="product-finder",
+                site="US",
+                params={
+                    "stats": 1,
+                    "queryName": "portable charger",
+                    "current_SALES_gte": 1,
+                },
+                job_id="keepa-search-insights-regression",
+            )
+        )
+    )
+
+    request_params = ProductFinderClient.requests[0]["params"]
+    selection = json.loads(request_params["selection"])
+
+    assert request_params["stats"] == 1
+    assert "stats" not in selection
+    assert selection["current_SALES_gte"] == 1
+
+    workbook = load_workbook(result.export.path)
+    assert "search_insights" in workbook.sheetnames
+    assert "search_insight_brands" in workbook.sheetnames
+    assert "search_insight_sellers" in workbook.sheetnames
+    assert "search_insight_categories" in workbook.sheetnames
+    main_headers = [cell.value for cell in workbook.active[1]]
+    assert "searchInsights" not in main_headers
+
+    sheet = workbook["search_insights"]
+    headers = [cell.value for cell in sheet[1]]
+    assert "avgBuyBoxAmount" in headers
+    amount_column = headers.index("avgBuyBoxAmount") + 1
+    rating_column = headers.index("avgRatingStars") + 1
+    assert sheet.cell(row=2, column=amount_column).value == 12.99
+    assert sheet.cell(row=2, column=rating_column).value == 4.5
+
+
 def test_manager_blocks_low_quota_without_force(monkeypatch, tmp_path: Path):
     class LowQuotaClient(DummyKeepaClient):
         async def token_status(self):
