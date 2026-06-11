@@ -1,5 +1,7 @@
 # Keepa Search Insights Object 字段格式化方案
 
+> 实现状态：已接入默认格式化导出。实现文件：`opscli/keepa/search_insights_formatter.py`；接入场景：`product-finder` 携带 `stats=1` 且返回 `searchInsights`；默认 XLSX 会追加 `search_insights`、`search_insight_brands`、`search_insight_sellers`、`search_insight_categories` sheet。
+
 > 参考：Keepa Search Insights Object 官方讨论文档 `https://keepa.com/#!discuss/t/search-insights-object/18199`。本文用于指导 `opscli keepa` 后续对 Product Finder `searchInsights` 的展示、导出与结构化解析；原始响应仍应完整保留。
 
 ## 1. 总体原则

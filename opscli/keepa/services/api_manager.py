@@ -13,7 +13,9 @@ from uuid import uuid4
 from opscli.keepa.accounts import KeepaApiKeyProvider
 from opscli.keepa.api.client import KeepaApiClient
 from opscli.keepa.api.scenarios import get_scenario, list_scenarios
+from opscli.keepa.best_sellers_formatter import FormattedBestSellersExport, format_best_sellers_export
 from opscli.keepa.config import KeepaSettings, load_settings
+from opscli.keepa.deal_formatter import FormattedDealExport, format_deal_export
 from opscli.keepa.domain.exceptions import KeepaApiError, KeepaConfigError
 from opscli.keepa.domain.models import KeepaExportResult, KeepaScenarioRequest, KeepaScenarioResult
 from opscli.keepa.export.xlsx import export_rows_to_xlsx
@@ -151,21 +153,43 @@ class KeepaApiManager:
             normalized_params=normalized_params,
             request_params=request.params,
         )
-        data = product_export.products if product_export else add_keepa_time_conversions(raw_rows)
+        best_sellers_export = _format_best_sellers_if_needed(
+            scenario=request.scenario,
+            raw_response=raw_response,
+            site=site,
+            normalized_params=normalized_params,
+        )
+        deal_export = _format_deals_if_needed(
+            scenario=request.scenario,
+            rows=raw_rows,
+            site=site,
+            normalized_params=normalized_params,
+        )
+        data = _formatted_data_or_default(
+            raw_rows=raw_rows,
+            product_export=product_export,
+            best_sellers_export=best_sellers_export,
+            deal_export=deal_export,
+        )
         export_format = _resolve_export_format(
             requested_format=_normalize_export_format(request.export_format),
             row_count=len(raw_rows),
             warnings=warnings,
         )
         if export_format == "xlsx":
-            export_rows = product_export.products if product_export else raw_response_to_export_rows(raw_response)
+            export_rows = _export_rows_for_xlsx(
+                raw_response=raw_response,
+                product_export=product_export,
+                best_sellers_export=best_sellers_export,
+                deal_export=deal_export,
+            )
             export = export_rows_to_xlsx(
                 rows=export_rows,
                 output_path=root_dir / f"{job_id}.xlsx",
                 scenario=request.scenario,
                 site=site,
                 params=request.params,
-                extra_sheets=_merge_extra_sheets(product_export, search_insights_export),
+                extra_sheets=_merge_extra_sheets(product_export, search_insights_export, best_sellers_export, deal_export),
             )
         else:
             export = _export_raw_to_json(
@@ -178,7 +202,7 @@ class KeepaApiManager:
                 raw_response=raw_response,
                 rows=data,
                 warnings=warnings,
-                formatted_tables=_formatted_tables_payload(product_export, search_insights_export),
+                formatted_tables=_formatted_tables_payload(product_export, search_insights_export, best_sellers_export, deal_export),
             )
         _upload_export_if_enabled(
             export=export,
@@ -377,27 +401,100 @@ def _format_search_insights_if_needed(
     )
 
 
+def _format_best_sellers_if_needed(
+    *,
+    scenario: str,
+    raw_response: dict[str, Any],
+    site: str,
+    normalized_params: dict[str, Any],
+) -> FormattedBestSellersExport | None:
+    if scenario != "bestsellers":
+        return None
+    return format_best_sellers_export(
+        raw_response.get("bestSellersList"),
+        site=site,
+        domain_id=normalized_params.get("domain"),
+        category_id=normalized_params.get("category"),
+    )
+
+
+def _format_deals_if_needed(
+    *,
+    scenario: str,
+    rows: list[Any],
+    site: str,
+    normalized_params: dict[str, Any],
+) -> FormattedDealExport | None:
+    if scenario != "deals":
+        return None
+    return format_deal_export(rows, site=site, domain_id=normalized_params.get("domain"))
+
+
+def _formatted_data_or_default(
+    *,
+    raw_rows: list[Any],
+    product_export: FormattedProductExport | None,
+    best_sellers_export: FormattedBestSellersExport | None,
+    deal_export: FormattedDealExport | None,
+) -> list[Any]:
+    if product_export:
+        return product_export.products
+    if best_sellers_export:
+        return best_sellers_export.asin_rows
+    if deal_export:
+        return deal_export.deals
+    return add_keepa_time_conversions(raw_rows)
+
+
+def _export_rows_for_xlsx(
+    *,
+    raw_response: dict[str, Any],
+    product_export: FormattedProductExport | None,
+    best_sellers_export: FormattedBestSellersExport | None,
+    deal_export: FormattedDealExport | None,
+) -> list[dict[str, Any]]:
+    if product_export:
+        return product_export.products
+    if best_sellers_export:
+        return best_sellers_export.asin_rows
+    if deal_export:
+        return deal_export.deals
+    return raw_response_to_export_rows(raw_response)
+
+
 def _merge_extra_sheets(
     product_export: FormattedProductExport | None,
     search_insights_export: FormattedSearchInsightsExport | None,
+    best_sellers_export: FormattedBestSellersExport | None,
+    deal_export: FormattedDealExport | None,
 ) -> dict[str, list[dict[str, Any]]] | None:
     sheets: dict[str, list[dict[str, Any]]] = {}
     if product_export:
         sheets.update(product_export.extra_sheets())
     if search_insights_export:
         sheets.update(search_insights_export.extra_sheets())
+    if best_sellers_export:
+        sheets.update(best_sellers_export.extra_sheets())
+    if deal_export:
+        sheets.update(deal_export.extra_sheets())
     return sheets or None
 
 
 def _formatted_tables_payload(
     product_export: FormattedProductExport | None,
     search_insights_export: FormattedSearchInsightsExport | None,
+    best_sellers_export: FormattedBestSellersExport | None,
+    deal_export: FormattedDealExport | None,
 ) -> dict[str, Any] | None:
     payload: dict[str, Any] = {}
     if product_export:
         payload.update(product_export.to_dict())
     if search_insights_export:
         payload.update(search_insights_export.to_dict())
+    if best_sellers_export:
+        payload.update(best_sellers_export.to_dict())
+    if deal_export:
+        payload.update(deal_export.to_dict())
     return payload or None
 
 

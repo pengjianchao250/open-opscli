@@ -193,6 +193,168 @@ def test_product_finder_formats_search_insights_sheets(monkeypatch, tmp_path: Pa
     assert sheet.cell(row=2, column=rating_column).value == 4.5
 
 
+def test_product_stats_formatting_sheets_are_exported(monkeypatch, tmp_path: Path):
+    class ProductStatsClient(DummyKeepaClient):
+        async def get_json(self, endpoint, params):
+            self.__class__.requests.append({"endpoint": endpoint, "params": params})
+            current = [-1] * 36
+            current[0] = 1299
+            current[16] = 45
+            current[17] = 456
+            return {
+                "timestamp": 2000,
+                "tokensLeft": 49,
+                "tokensConsumed": 1,
+                "products": [
+                    {
+                        "asin": "B0088PUEPK",
+                        "title": "Stats Product",
+                        "stats": {
+                            "current": current,
+                            "min": [[7588958, 999]],
+                            "buyBoxStats": {
+                                "A2L77EE7U53NWQ": {
+                                    "avgPrice": 1299,
+                                    "lastSeen": 7588958,
+                                    "percentageWon": 80,
+                                }
+                            },
+                            "retrievedOfferCount": 10,
+                            "sellerIdsLowestFBA": ["A2L77EE7U53NWQ"],
+                        },
+                    }
+                ],
+            }
+
+    ProductStatsClient.requests = []
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", ProductStatsClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
+    manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
+
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="product",
+                site="US",
+                params={"asin": "B0088PUEPK", "stats": 30},
+                job_id="keepa-product-stats-regression",
+            )
+        )
+    )
+
+    workbook = load_workbook(result.export.path)
+    assert "stats_price_types" in workbook.sheetnames
+    assert "stats_extremes" in workbook.sheetnames
+    assert "stats_buy_box_sellers" in workbook.sheetnames
+    assert "stats_offer_snapshot" in workbook.sheetnames
+
+    headers = [cell.value for cell in workbook.active[1]]
+    price_column = headers.index("statsCurrentAmazonPrice") + 1
+    rating_column = headers.index("statsCurrentRating") + 1
+    assert workbook.active.cell(row=2, column=price_column).value == 12.99
+    assert workbook.active.cell(row=2, column=rating_column).value == 4.5
+
+
+def test_bestsellers_formats_ranked_asin_rows(monkeypatch, tmp_path: Path):
+    class BestSellersClient(DummyKeepaClient):
+        async def get_json(self, endpoint, params):
+            self.__class__.requests.append({"endpoint": endpoint, "params": params})
+            return {
+                "timestamp": 2000,
+                "tokensLeft": 49,
+                "tokensConsumed": 1,
+                "bestSellersList": {
+                    "domainId": 1,
+                    "categoryId": 172282,
+                    "lastUpdate": 7588958,
+                    "asinList": ["B000000001", "B000000002"],
+                },
+            }
+
+    BestSellersClient.requests = []
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", BestSellersClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
+    manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
+
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="bestsellers",
+                site="US",
+                params={"category": "172282"},
+                job_id="keepa-bestsellers-regression",
+            )
+        )
+    )
+
+    assert result.row_count == 2
+    assert result.data[0]["bestSellerRank"] == 1
+    assert result.data[1]["bestSellerRank"] == 2
+
+    workbook = load_workbook(result.export.path)
+    assert "best_sellers_list" in workbook.sheetnames
+    headers = [cell.value for cell in workbook.active[1]]
+    assert "bestSellerRank" in headers
+    assert workbook.active.cell(row=2, column=headers.index("ASIN") + 1).value == "B000000001"
+    assert workbook.active.cell(row=2, column=headers.index("bestSellerRank") + 1).value == 1
+
+
+def test_deals_formats_metric_sheet(monkeypatch, tmp_path: Path):
+    class DealsClient(DummyKeepaClient):
+        async def get_json(self, endpoint, params):
+            self.__class__.requests.append({"endpoint": endpoint, "params": params})
+            return {
+                "timestamp": 2000,
+                "tokensLeft": 49,
+                "tokensConsumed": 1,
+                "deals": {
+                    "dr": [
+                        {
+                            "asin": "B0088PUEPK",
+                            "title": "<b>Deal Product</b>",
+                            "image": [97, 98, 99, 46, 106, 112, 103],
+                            "lastUpdate": 7588958,
+                            "warehouseCondition": 3,
+                            "current": [1299, 1399, -1, 12345] + [-1] * 12 + [45, 456, 1499],
+                            "currentSince": [7588958, 7588959],
+                            "deltaPercent": [[-8, -10, -1, 5]],
+                        }
+                    ]
+                },
+            }
+
+    DealsClient.requests = []
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", DealsClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
+    manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
+
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="deals",
+                site="US",
+                params={"selection": {"page": 0}},
+                job_id="keepa-deals-regression",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert result.data[0]["titleText"] == "Deal Product"
+    assert result.data[0]["currentAmazonPrice"] == 12.99
+    assert result.data[0]["currentRating"] == 4.5
+
+    workbook = load_workbook(result.export.path)
+    assert "deal_metrics" in workbook.sheetnames
+    headers = [cell.value for cell in workbook.active[1]]
+    assert "imageUrl" in headers
+    assert "currentAmazonPrice" in headers
+    assert workbook.active.cell(row=2, column=headers.index("currentAmazonPrice") + 1).value == 12.99
+
+
 def test_manager_blocks_low_quota_without_force(monkeypatch, tmp_path: Path):
     class LowQuotaClient(DummyKeepaClient):
         async def token_status(self):

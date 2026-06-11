@@ -75,7 +75,10 @@ XLSX 中文表头不是 Keepa 官方提供的，是本地导出层按场景映�
 - 卖家类：Seller ID、店铺名称、最近更新(UTC)、评分、评分数、店铺ASIN数、店铺链接等。
 - 类目类：类目ID、类目名称、父类目ID、产品数量、最高排名、子类目等。
 - Product Object 默认自动派生金额、Keepa 时间、图片 URL、类目路径、变体摘要、stats 当前值，并在 XLSX 中按需追加 `csv_history`、`offers`、`variations` 明细 sheet。
+- Product Object 返回 `stats` 时，默认自动派生 stats 主表字段，并按需追加 `stats_price_types`、`stats_extremes`、`stats_buy_box_sellers`、`stats_offer_snapshot` sheet。
 - Product Finder 请求带 `stats=1` 且 Keepa 返回 `searchInsights` 时，默认自动追加 `search_insights`、`search_insight_brands`、`search_insight_sellers`、`search_insight_categories` sheet。
+- Best Sellers 默认主表输出带 `bestSellerRank` 的 ASIN 明细，并追加 `best_sellers_list` 汇总 sheet。
+- Deals 默认派生图片、Keepa 时间、Warehouse 成色、Lightning 标记、常用 current 指标，并追加 `deal_metrics` 指标展开 sheet。
 
 `raw.json` 保留 Keepa 原始字段，后端对比以 `raw.json` 为准；XLSX 用于用户查看。
 

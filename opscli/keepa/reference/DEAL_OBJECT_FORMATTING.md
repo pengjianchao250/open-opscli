@@ -1,5 +1,7 @@
 # Keepa Deal Object 字段格式化方案
 
+> 实现状态：已接入默认格式化导出。实现文件：`opscli/keepa/deal_formatter.py`；接入场景：`deals`；默认 XLSX 会派生图片、Keepa 时间、Warehouse 成色、Lightning 标记、常用 current 指标，并追加 `deal_metrics` 指标展开 sheet。
+
 > 参考：Keepa Deal Object 官方文档 `https://keepa.com/#!discuss/t/deal-object/412`。本文用于指导 `opscli keepa` 后续对 Deal Object 的展示、导出与结构化解析；原始响应仍应完整保留。
 
 ## 1. 总体原则
