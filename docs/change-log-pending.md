@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-06-11 Amazon Rufus Skill - README 补充三条整体调用链
+
+**变更原因**：用户纠正应保存最初讨论的 Rufus 整体调用链，而不是只记录 OPS 平台 Cookie `content` 读取局部链路；README 中需要按三条链路说明 Skill、MCP 和 CLI 的调用关系。
+**改动点**：将 Rufus Skill 模板 README 中的局部 `content` 读取小节替换为“整体调用链（三条）”，分别描述 Skill 编排链、MCP 后端获取链、CLI fallback 链，并在 MCP 后端获取链中保留 `content` 裸 cURL 读取、旧 JSON record 兼容和旧 `curl_data` / 仅 `storage_state` 失效规则。
+**验证结果**：已运行 `uv run pytest tests/skills/test_ops_amazon_rufus_updater.py tests/skills/test_cli.py -q`，结果 20 passed。
+**影响范围**：仅影响 `opscli/skills/templates/ops-amazon-rufus/README.md` 文档说明和本变更记录，不改变代码行为、MCP schema、CLI 参数或后端 API 契约。
+**回滚方式**：删除 README 中新增的“整体调用链（三条）”小节，并移除此变更记录。
+
+---
+
 ## 2026-06-11 Amazon Rufus - 平台 Cookie content 直接保存 streaming cURL
 
 **变更原因**：用户确认从浏览器获取亚马逊 Rufus 登录态时，保存到后端 `/v1/platform-cookies` 的 `content` 应该直接是 `/rufus/cl/streaming` 浏览器 cURL 命令态，而不是包含 `storage_state`、`curl` 和请求种子摘要的 JSON 包装。

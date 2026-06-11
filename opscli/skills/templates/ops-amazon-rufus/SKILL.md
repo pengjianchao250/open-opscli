@@ -68,13 +68,13 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 5. 如果状态为 `unknown` 或 `invalid`，先询问用户：
 
 ```text
-本次 Rufus 获取需要亚马逊 Rufus 登录态。是否允许当前 MCP/headless 链路保存并复用该站点的亚马逊 Rufus 登录状态？
+本次 Rufus 获取需要亚马逊 Rufus 登录态。是否允许保存并复用该站点的亚马逊 Rufus 登录状态？
 
 说明：
-- 保存的亚马逊 Rufus 登录态仅供当前 MCP 用户和当前 Agent 隔离凭证使用，不会写入报告或对话回复。
-- 亚马逊 Rufus 登录态相当于已登录会话，请使用独立、干净的 Amazon 账号。
+- 保存的亚马逊登录态仅供当前用户使用，不会写入报告或对话回复。
+- 亚马逊登录态相当于已登录会话，请使用独立、干净的 Amazon 账号。
 - 不建议在该 Amazon 账号中绑定信用卡或其他支付方式。
-- 如果拒绝，本次将改用本机 opscli CLI 获取 Rufus 报告；CLI 仍不会在回复或报告中展示 cookie、localStorage、storage_state、headers、payload 或请求种子。
+- 如果拒绝，本次将改用本机获取 Rufus 报告。
 
 请明确回复“允许”或“拒绝”。
 ```
