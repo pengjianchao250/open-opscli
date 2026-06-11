@@ -301,6 +301,60 @@ def test_bestsellers_formats_ranked_asin_rows(monkeypatch, tmp_path: Path):
     assert workbook.active.cell(row=2, column=headers.index("bestSellerRank") + 1).value == 1
 
 
+def test_deals_formats_metric_sheet(monkeypatch, tmp_path: Path):
+    class DealsClient(DummyKeepaClient):
+        async def get_json(self, endpoint, params):
+            self.__class__.requests.append({"endpoint": endpoint, "params": params})
+            return {
+                "timestamp": 2000,
+                "tokensLeft": 49,
+                "tokensConsumed": 1,
+                "deals": {
+                    "dr": [
+                        {
+                            "asin": "B0088PUEPK",
+                            "title": "<b>Deal Product</b>",
+                            "image": [97, 98, 99, 46, 106, 112, 103],
+                            "lastUpdate": 7588958,
+                            "warehouseCondition": 3,
+                            "current": [1299, 1399, -1, 12345] + [-1] * 12 + [45, 456, 1499],
+                            "currentSince": [7588958, 7588959],
+                            "deltaPercent": [[-8, -10, -1, 5]],
+                        }
+                    ]
+                },
+            }
+
+    DealsClient.requests = []
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", DealsClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
+    manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
+
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="deals",
+                site="US",
+                params={"selection": {"page": 0}},
+                job_id="keepa-deals-regression",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert result.data[0]["titleText"] == "Deal Product"
+    assert result.data[0]["currentAmazonPrice"] == 12.99
+    assert result.data[0]["currentRating"] == 4.5
+
+    workbook = load_workbook(result.export.path)
+    assert "deal_metrics" in workbook.sheetnames
+    headers = [cell.value for cell in workbook.active[1]]
+    assert "imageUrl" in headers
+    assert "currentAmazonPrice" in headers
+    assert workbook.active.cell(row=2, column=headers.index("currentAmazonPrice") + 1).value == 12.99
+
+
 def test_manager_blocks_low_quota_without_force(monkeypatch, tmp_path: Path):
     class LowQuotaClient(DummyKeepaClient):
         async def token_status(self):

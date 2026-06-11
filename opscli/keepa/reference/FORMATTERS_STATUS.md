@@ -8,8 +8,8 @@
 | `SEARCH_INSIGHTS_OBJECT_FORMATTING.md` | Search Insights Object | 已接入 | `opscli/keepa/search_insights_formatter.py` | `product-finder` 携带 `stats=1` 且返回 `searchInsights` 时，XLSX 默认追加 `search_insights`、`search_insight_brands`、`search_insight_sellers`、`search_insight_categories` sheet。 |
 | `STATISTICS_OBJECT_FORMATTING.md` | Statistics Object | 已接入 | `opscli/keepa/stats_formatter.py` | `product` 场景返回 `stats` 时，XLSX 默认派生 stats 主表字段，并按需追加 `stats_price_types`、`stats_extremes`、`stats_buy_box_sellers`、`stats_offer_snapshot` sheet。 |
 | `BEST_SELLERS_OBJECT_FORMATTING.md` | Best Sellers Object | 已接入 | `opscli/keepa/best_sellers_formatter.py` | `bestsellers` 场景 XLSX 主表默认输出带 `bestSellerRank` 的 ASIN 明细，并追加 `best_sellers_list` 汇总 sheet。 |
+| `DEAL_OBJECT_FORMATTING.md` | Deal Object | 已接入 | `opscli/keepa/deal_formatter.py` | `deals` 场景 XLSX 默认派生图片、时间、Warehouse 成色、Lightning 标记、常用 current 指标，并追加 `deal_metrics` 指标展开 sheet。 |
 | `CATEGORY_OBJECT_FORMATTING.md` | Category Object | 待接入 | - | 暂未实现独立 formatter。 |
-| `DEAL_OBJECT_FORMATTING.md` | Deal Object | 待接入 | - | 暂未实现独立 formatter。 |
 
 约定：
 
