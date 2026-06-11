@@ -150,10 +150,13 @@ def _product_search_params(params: dict[str, Any], site: str) -> dict[str, Any]:
 
 def _product_finder_params(params: dict[str, Any], site: str) -> dict[str, Any]:
     selection = _selection(params)
-    return {
+    selection.pop("stats", None)
+    payload = {
         "domain": normalize_domain(site),
         "selection": json.dumps(selection, ensure_ascii=False, separators=(",", ":")),
     }
+    _copy_optional(payload, params, {"stats": "stats"})
+    return payload
 
 
 def _category_search_params(params: dict[str, Any], site: str) -> dict[str, Any]:

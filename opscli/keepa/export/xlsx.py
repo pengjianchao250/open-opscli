@@ -120,6 +120,7 @@ def export_rows_to_xlsx(
     scenario: str,
     site: str = "US",
     params: dict[str, Any] | None = None,
+    extra_sheets: dict[str, list[Any]] | None = None,
 ) -> KeepaExportResult:
     """Export Keepa rows to a user-friendly XLSX workbook."""
     try:
@@ -129,16 +130,52 @@ def export_rows_to_xlsx(
     except ModuleNotFoundError as exc:
         raise KeepaConfigError("缺少 openpyxl 依赖，无法导出 XLSX") from exc
 
-    normalized_rows = [_normalize_row(row, scenario=scenario) for row in rows]
-    columns = _columns_from_rows(normalized_rows)
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = _safe_sheet_title(_sheet_title(scenario=scenario, site=site, params=params or {}, rows=rows))
-
     header_fill = PatternFill("solid", fgColor="EAF2F8")
     header_font = Font(bold=True)
+
+    _write_rows_sheet(
+        sheet=sheet,
+        rows=rows,
+        scenario=scenario,
+        header_fill=header_fill,
+        header_font=header_font,
+        get_column_letter=get_column_letter,
+    )
+
+    for sheet_name, sheet_rows in (extra_sheets or {}).items():
+        if not sheet_rows:
+            continue
+        detail_sheet = workbook.create_sheet(title=_safe_sheet_title(sheet_name))
+        _write_rows_sheet(
+            sheet=detail_sheet,
+            rows=sheet_rows,
+            scenario=scenario,
+            header_fill=header_fill,
+            header_font=header_font,
+            get_column_letter=get_column_letter,
+        )
+
+    workbook.save(output_path)
+    resolved = output_path.resolve()
+    return KeepaExportResult(path=str(resolved), filename=resolved.name, url=resolved.as_uri())
+
+
+def _write_rows_sheet(
+    *,
+    sheet: Any,
+    rows: list[Any],
+    scenario: str,
+    header_fill: Any,
+    header_font: Any,
+    get_column_letter: Any,
+) -> None:
+    normalized_rows = [_normalize_row(row, scenario=scenario) for row in rows]
+    columns = _columns_from_rows(normalized_rows)
+
     for column_index, column in enumerate(columns, start=1):
         cell = sheet.cell(row=1, column=column_index, value=column.title)
         cell.font = header_font
@@ -151,10 +188,6 @@ def export_rows_to_xlsx(
     sheet.freeze_panes = "A2"
     for column_index, column in enumerate(columns, start=1):
         sheet.column_dimensions[get_column_letter(column_index)].width = _column_width(column.title)
-
-    workbook.save(output_path)
-    resolved = output_path.resolve()
-    return KeepaExportResult(path=str(resolved), filename=resolved.name, url=resolved.as_uri())
 
 
 def _columns_from_rows(rows: list[dict[str, Any]]) -> list[ExportColumn]:
@@ -210,6 +243,4 @@ def _column_width(title: str) -> int:
 
 
 def _title_for_field(field: str) -> str:
-    # 暂停 XLSX 表头中文翻译，保持与 Keepa API 字段名一致，避免字段含义不清晰。
-    return field
-    # return FIELD_TITLES.get(field, field)
+    return FIELD_TITLES.get(field, field)

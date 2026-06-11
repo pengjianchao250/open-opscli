@@ -22,12 +22,13 @@ visibility: internal
 5. 默认导出用户可读 XLSX；用户明确要原始数据、后端比对、JSON 或结果行数过大时用 JSON。
 6. 最终回复只给业务结果：查询对象、站点、返回行数、导出文件或链接。
 7. 不主动展示 API Key、账号来源、token 消耗、额度余额、内部参数、`params.json`、`raw.json`。
+8. 用户不需要额外说“格式化”；默认 XLSX 导出会自动写入本地可读派生字段和明细 sheet。用户明确要求原始数据/JSON 时才跳过 XLSX 友好导出。
 
 ## 工具列表
 
 - `keepa_spec_must_read`: read this guide before first use. 官方接口细节见 `opscli/mcp/references/keepa/OFFICIAL.md`。
 - `keepa_scenarios`: list supported Keepa scenarios.
-- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX. `export_format` accepts `xls`/`xlsx`/`json`; `xls` and `xlsx` both generate `.xlsx`. Large results are automatically exported as JSON to avoid XLSX timeout.
+- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX with automatic readable formatting. `export_format` accepts `xls`/`xlsx`/`json`; `xls` and `xlsx` both generate `.xlsx`. Large results are automatically exported as JSON to avoid XLSX timeout.
 - `keepa_job_status`: read a saved task result by `job_id`.
 - `keepa_export`: read export path or cloud URL, filename, format, and MIME type.
 
@@ -73,6 +74,8 @@ XLSX 中文表头不是 Keepa 官方提供的，是本地导出层按场景映�
 - 商品类：ASIN、父ASIN、标题、品牌、产品组、最近更新(UTC)、评分、评论数、价格、链接等。
 - 卖家类：Seller ID、店铺名称、最近更新(UTC)、评分、评分数、店铺ASIN数、店铺链接等。
 - 类目类：类目ID、类目名称、父类目ID、产品数量、最高排名、子类目等。
+- Product Object 默认自动派生金额、Keepa 时间、图片 URL、类目路径、变体摘要、stats 当前值，并在 XLSX 中按需追加 `csv_history`、`offers`、`variations` 明细 sheet。
+- Product Finder 请求带 `stats=1` 且 Keepa 返回 `searchInsights` 时，默认自动追加 `search_insights`、`search_insight_brands`、`search_insight_sellers`、`search_insight_categories` sheet。
 
 `raw.json` 保留 Keepa 原始字段，后端对比以 `raw.json` 为准；XLSX 用于用户查看。
 
@@ -84,8 +87,8 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 - Unix milliseconds: `(keepa_time + 21564000) * 60000`
 
 - 不在 MCP 使用规范中推断 Keepa 原始价格、评分、排名、评论、Offer 等字段的单位、倍率或空值语义；除非 Keepa 官方文档、接口说明或当前响应字段已明确说明。
-- `raw_response` 不修改；normalized `rows` 只额外补充常见时间字段，如 `lastUpdateUtc`。
-- `csv` 时间/数值数组保持 Keepa 原始结构；面向普通用户不要解释原始数组，优先让用户查看 XLSX 可读字段。
+- `raw_response` 不修改；normalized `rows` 和 XLSX 默认自动补充可读派生字段，如 `lastUpdateUtc`、金额字段、评分星级等。
+- `csv` 原始数组保留；Product Object XLSX 会默认把常用 `csv` 历史拆到 `csv_history` 明细 sheet。面向普通用户不要解释原始数组，优先让用户查看 XLSX 可读字段。
 - `raw.json` 是后端对比和排障基准；XLSX 是本地导出层生成的用户查看文件。
 - 用户追问字段单位、倍率、计算方式或准确性时，不要自行类比卖家精灵或其他数据源；应说明以 Keepa 原始响应、官方文档和后端确认口径为准。
 
@@ -105,7 +108,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 | --- | --- | --- | --- | --- |
 | 查商品详情、查 ASIN、查价格历史 | `product` | `asin`/`asins` 或 `code`/`codes` | `stats`, `history`, `offers`, `buybox`, `rating`, `days`, `update` | ASIN 或 UPC/EAN/ISBN-13 查询。最多 100 个；带 `offers` 时最多 20 个。 |
 | 关键词搜商品、搜索 flashlight | `product-search` | `keyword` 或 `term` | `page`, `stats`, `history`, `update`, `asins_only` | 调用 Keepa `/search` 且 `type=product`；默认返回 `products`，传 `asins_only=true` 时返回 `asinList`。 |
-| 按条件筛商品、Product Finder | `product-finder` | `selection` 或至少 1 个筛选字段 | `selection.page`, `selection.perPage`, `selection.sort`, 各类筛选字段 | 调用 Keepa `/query`；按 Product Finder selection 筛选商品库，只返回 `asinList`。 |
+| 按条件筛商品、Product Finder | `product-finder` | `selection` 或至少 1 个筛选字段 | `stats`, `selection.page`, `selection.perPage`, `selection.sort`, 各类筛选字段 | 调用 Keepa `/query`；按 Product Finder selection 筛选商品库，返回 `asinList`；带 `stats=1` 时会自动导出 `searchInsights` 明细 sheet。 |
 | 搜类目、查类目关键词 | `category-search` | `keyword` 或 `term` | `parents` | 按类目名称关键词搜索。 |
 | 查类目详情、类目 ID | `category-lookup` | `category`/`categories` | `parents` | 按 category id 查询，最多 10 个。 |
 | 查卖家、查店铺 | `seller` | `seller`/`sellers` | `storefront`, `update` | 按 seller id 查询；单 seller 默认拉 storefront ASIN，批量 seller 必须传 `storefront=false`。 |
@@ -135,6 +138,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 | `查 172282 类目的 best sellers` | `scenario="bestsellers"`, `params={"category":"172282"}` |
 | `查 Home productGroup 的 best sellers` | `scenario="bestsellers"`, `params={"productGroup":"Home"}` |
 | `Product Finder 查 sales rank 1 到 5000 的商品` | `scenario="product-finder"`, `params={"selection":{"current_SALES_gte":1,"current_SALES_lte":5000,"perPage":50}}` |
+| `Product Finder 查 sales rank 1 到 5000 的市场概况` | `scenario="product-finder"`, `params={"stats":1,"selection":{"current_SALES_gte":1,"current_SALES_lte":5000,"perPage":50}}` |
 | `查 flashlight 的类目` | `scenario="category-search"`, `params={"keyword":"flashlight"}` |
 | `查这个 ASIN 最近 90 天价格走势` | `scenario="product"`, `params={"asin":"...","stats":90,"history":true}` |
 | `导出 flashlight 搜索结果，只要 ASIN` | `scenario="product-search"`, `params={"keyword":"flashlight","asins_only":true}` |
@@ -144,7 +148,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 | `要原始 JSON 给后端对比` | 保持原场景和参数，额外传 `export_format="json"` |
 
 - 用户未指定站点：`site="US"`。
-- 用户只说“导出”：使用默认 `export_format="xls"`，实际生成 `.xlsx`；也可显式传 `export_format="xlsx"`。
+- 用户只说“导出”：使用默认 `export_format="xls"`，实际生成自动格式化的 `.xlsx`；也可显式传 `export_format="xlsx"`。
 - 用户只说“查商品详情”：建议 `stats=30`；`product` 场景默认会带 `history=true`。
 - 用户说“不需要历史/不要价格历史”：额外传 `history=false`。
 - 用户说“只要 ASIN”：使用 `asins_only=true`。
@@ -164,6 +168,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 
 ```text
 表格字段来自 Keepa 原始响应，本地导出层只做中文表头和部分可读化处理；字段单位、倍率和准确性以 Keepa 原始响应、官方文档和后端确认口径为准。原始响应保存在 raw.json，可用于后端对比。
+默认 XLSX 会自动追加可读派生字段和明细 sheet；如需后端比对，请使用 raw.json 或显式导出 JSON。
 ```
 
 成功模板：

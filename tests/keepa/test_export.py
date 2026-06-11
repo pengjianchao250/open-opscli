@@ -81,6 +81,31 @@ def test_nested_values_are_serialized_without_domain_formatting(tmp_path: Path):
     assert sheet.cell(row=2, column=3).value is False
 
 
+def test_xlsx_export_writes_extra_sheets(tmp_path: Path):
+    export = export_rows_to_xlsx(
+        rows=[{"asin": "B0088PUEPK", "title": "Test Product"}],
+        output_path=tmp_path / "product.xlsx",
+        scenario="product",
+        site="US",
+        extra_sheets={
+            "csv_history": [
+                {
+                    "asin": "B0088PUEPK",
+                    "csvName": "AMAZON",
+                    "priceAmount": 12.99,
+                }
+            ]
+        },
+    )
+
+    workbook = load_workbook(export.path)
+
+    assert "csv_history" in workbook.sheetnames
+    sheet = workbook["csv_history"]
+    assert [cell.value for cell in sheet[1]][:3] == ["ASIN", "csvName", "priceAmount"]
+    assert sheet.cell(row=2, column=3).value == 12.99
+
+
 def test_all_keepa_scenarios_can_export_xlsx(tmp_path: Path):
     missing_samples = set(SCENARIOS) - set(SCENARIO_ROWS)
     assert missing_samples == set()
