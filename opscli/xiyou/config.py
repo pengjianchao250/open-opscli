@@ -19,7 +19,6 @@ ENV_PAGE_SIZE = "OPSCLI_XIYOU_PAGE_SIZE"
 ENV_PROVIDER = "OPSCLI_XIYOU_PROVIDER"
 ENV_KRS_VER = "OPSCLI_XIYOU_KRS_VER"
 ENV_CREDENTIAL_PATH = "OPSCLI_XIYOU_CREDENTIAL_PATH"
-ENV_NOTIFY_PATH = "OPSCLI_XIYOU_NOTIFY_PATH"
 ENV_CREDENTIAL_LATEST_URL = "OPSCLI_XIYOU_CREDENTIAL_LATEST_URL"
 ENV_CREDENTIAL_API_KEY = "OPSCLI_XIYOU_CREDENTIAL_API_KEY"
 ENV_CREDENTIAL_CACHE_TTL_SECONDS = "OPSCLI_XIYOU_CREDENTIAL_CACHE_TTL_SECONDS"
@@ -33,7 +32,6 @@ DEFAULT_SITE = "US"
 DEFAULT_PERIOD = "week"
 DEFAULT_OUTPUT_DIR = CONFIG_DIR / "xiyou" / "api_runs"
 DEFAULT_CREDENTIAL_PATH = CONFIG_DIR / "xiyou" / "credential.json"
-DEFAULT_NOTIFY_PATH = CONFIG_DIR / "xiyou" / "notify.yaml"
 DEFAULT_CREDENTIAL_CACHE_TTL_SECONDS = 300
 
 
@@ -46,7 +44,6 @@ class XiyouSettings:
     cookie: str | None = None
     output_dir: Path = DEFAULT_OUTPUT_DIR
     credential_path: Path = DEFAULT_CREDENTIAL_PATH
-    notify_path: Path = DEFAULT_NOTIFY_PATH
     page_size: int = DEFAULT_PAGE_SIZE
     default_site: str = DEFAULT_SITE
     default_period: str = DEFAULT_PERIOD
@@ -59,7 +56,6 @@ class XiyouSettings:
         """Return a redacted settings summary."""
         payload = asdict(self)
         payload["output_dir"] = str(self.output_dir)
-        payload["notify_path"] = str(self.notify_path)
         payload["has_authorization"] = bool(self.authorization)
         payload["has_cookie"] = bool(self.cookie)
         payload["has_credential_latest_url"] = bool(self.credential_latest_url)
@@ -75,7 +71,6 @@ def load_settings() -> XiyouSettings:
     values = _load_env_values()
     output_dir = Path(values.get(ENV_OUTPUT_DIR) or DEFAULT_OUTPUT_DIR).expanduser()
     credential_path = Path(values.get(ENV_CREDENTIAL_PATH) or DEFAULT_CREDENTIAL_PATH).expanduser()
-    notify_path = Path(values.get(ENV_NOTIFY_PATH) or DEFAULT_NOTIFY_PATH).expanduser()
     page_size = _parse_int(values.get(ENV_PAGE_SIZE), DEFAULT_PAGE_SIZE)
     credential_cache_ttl_seconds = _parse_int(
         values.get(ENV_CREDENTIAL_CACHE_TTL_SECONDS),
@@ -88,7 +83,6 @@ def load_settings() -> XiyouSettings:
         cookie=values.get(ENV_COOKIE) or None,
         output_dir=output_dir,
         credential_path=credential_path,
-        notify_path=notify_path,
         page_size=page_size,
         krs_ver=values.get(ENV_KRS_VER) or None,
         credential_latest_url=credential_latest_url,
@@ -108,7 +102,6 @@ def _load_env_values() -> dict[str, str]:
         ENV_PROVIDER,
         ENV_KRS_VER,
         ENV_CREDENTIAL_PATH,
-        ENV_NOTIFY_PATH,
         ENV_CREDENTIAL_LATEST_URL,
         ENV_CREDENTIAL_API_KEY,
         ENV_CREDENTIAL_CACHE_TTL_SECONDS,

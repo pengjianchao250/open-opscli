@@ -140,6 +140,34 @@ def test_xiyou_run_passes_reverse_keyword_params(monkeypatch):
     assert request.keyword_type == "advertising"
 
 
+def test_xiyou_run_passes_new_reverse_keyword_family_params(monkeypatch):
+    DummyManager.instances = []
+    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", DummyManager)
+    monkeypatch.setattr(xiyou_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+
+    result = _run(
+        xiyou_tools.xiyou_run(
+            function="ad-analysis",
+            asin="B0DZFGTCLR",
+            parent_asin="B0FDB5VR1V",
+            asins=["B0DZFGTCLR", "B0DZFW1QS1"],
+            search_terms=["candle warmer"],
+            start_date="2026-06-01",
+            end_date="2026-06-02",
+            export_format="json",
+        )
+    )
+
+    assert result["success"] is True
+    request = DummyManager.instances[0].request
+    assert request.function == "ad-analysis"
+    assert request.parent_asin == "B0FDB5VR1V"
+    assert request.asins == ["B0DZFGTCLR", "B0DZFW1QS1"]
+    assert request.search_terms == ["candle warmer"]
+    assert request.start_date == "2026-06-01"
+    assert request.end_date == "2026-06-02"
+
+
 def test_xiyou_run_returns_terminal_error_for_expired_xiyou_credential(monkeypatch):
     class ExpiredManager(DummyManager):
         async def run(self, request):
@@ -165,6 +193,47 @@ def test_xiyou_run_returns_terminal_error_for_expired_xiyou_credential(monkeypat
     assert failed_call["call_params"]["function"] == "ranking"
 
 
+def test_xiyou_run_passes_flow_diagnosis_download_params(monkeypatch):
+    DummyManager.instances = []
+    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", DummyManager)
+    monkeypatch.setattr(xiyou_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+
+    result = _run(
+        xiyou_tools.xiyou_run(
+            function="flow-diagnosis",
+            asin="B0DZFGTCLR",
+            report_date="2026-06-02",
+            keyword_type="advertising",
+            export_format="xlsx",
+        )
+    )
+
+    assert result["success"] is True
+    request = DummyManager.instances[0].request
+    assert request.function == "flow-diagnosis"
+    assert request.asin == "B0DZFGTCLR"
+    assert request.report_date == "2026-06-02"
+    assert request.keyword_type == "advertising"
+
+
+def test_xiyou_run_passes_flow_diagnosis_alias(monkeypatch):
+    DummyManager.instances = []
+    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", DummyManager)
+    monkeypatch.setattr(xiyou_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+
+    result = _run(
+        xiyou_tools.xiyou_run(
+            function="流量诊断仪",
+            asin="B0DZFGTCLR",
+            export_format="json",
+        )
+    )
+
+    assert result["success"] is True
+    request = DummyManager.instances[0].request
+    assert request.function == "流量诊断仪"
+
+
 def test_xiyou_export_adds_file_url(monkeypatch):
     DummyManager.instances = []
     monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", DummyManager)
@@ -173,3 +242,26 @@ def test_xiyou_export_adds_file_url(monkeypatch):
 
     assert result["success"] is True
     assert result["data"]["url"].startswith("file:")
+
+
+def test_xiyou_export_prefers_download_url(monkeypatch):
+    class ResourceExportManager(DummyManager):
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "resource_url": "https://excel.xydc.com/demo.xlsx?Expires=1&Signature=s",
+                "export": {
+                    "path": str(Path("output.json").resolve()),
+                    "filename": "output.json",
+                    "url": Path("output.json").resolve().as_uri(),
+                },
+            }
+
+    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", ResourceExportManager)
+
+    result = _run(xiyou_tools.xiyou_export("job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["url"] == "https://excel.xydc.com/demo.xlsx?Expires=1&Signature=s"
+    assert result["data"]["download_url"] == "https://excel.xydc.com/demo.xlsx?Expires=1&Signature=s"
+    assert result["data"]["local_url"].startswith("file:")

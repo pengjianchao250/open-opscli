@@ -70,12 +70,14 @@ async def xiyou_run(
     asins: list[str] | str | None = None,
     keyword: str | None = None,
     query: str = "",
+    parent_asin: str | None = None,
     cycle_period: str | None = None,
     start_month: str | None = None,
     end_month: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     report_date: str | None = None,
+    search_terms: list[str] | str | None = None,
     view_mode: str | None = None,
     replay_type: str | None = None,
     keyword_type: str | None = None,
@@ -104,12 +106,14 @@ async def xiyou_run(
             asins=asins,
             keyword=keyword,
             query=query,
+            parent_asin=parent_asin,
             cycle_period=cycle_period,
             start_month=start_month,
             end_month=end_month,
             start_date=start_date,
             end_date=end_date,
             report_date=report_date,
+            search_terms=search_terms,
             view_mode=view_mode,
             replay_type=replay_type,
             keyword_type=keyword_type,
@@ -134,6 +138,8 @@ async def xiyou_run(
             "asin": asin,
             "asins": asins,
             "keyword": keyword,
+            "query": query,
+            "parent_asin": parent_asin,
             "page": page,
             "page_size": page_size,
             "cycle_period": cycle_period,
@@ -142,6 +148,7 @@ async def xiyou_run(
             "start_date": start_date,
             "end_date": end_date,
             "report_date": report_date,
+            "search_terms": search_terms,
             "view_mode": view_mode,
             "replay_type": replay_type,
             "keyword_type": keyword_type,
@@ -170,11 +177,17 @@ async def xiyou_export(job_id: str) -> dict:
         from opscli.xiyou.services import XiyouApiManager
 
         status = XiyouApiManager().job_status(job_id)
-        export = status.get("export")
+        export = dict(status.get("export") or {})
         if not export:
             raise ValueError(f"任务无导出文件：{job_id}")
-        if export.get("path") and not export.get("url"):
-            export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
+        if export.get("path"):
+            export.setdefault("local_url", Path(export["path"]).expanduser().resolve().as_uri())
+        if status.get("resource_url"):
+            export["download_url"] = status["resource_url"]
+            if not export.get("url") or str(export["url"]).startswith("file:"):
+                export["url"] = status["resource_url"]
+        elif export.get("path") and not export.get("url"):
+            export["url"] = export["local_url"]
         return _ok(export)
     except Exception as exc:
         return _err(exc, tool="MCP -> xiyou_export(...)", call_params={"job_id": job_id})
@@ -191,4 +204,13 @@ _ALL_TOOLS = [
 def register(mcp) -> None:
     """向 FastMCP 实例注册西柚洞察工具。"""
     for fn in _ALL_TOOLS:
-        mcp.tool()(fn)
+        if fn is xiyou_run:
+            mcp.tool(
+                description=(
+                    "执行西柚洞察场景并导出 JSON/XLSX；ranking 场景支持把 asin / keyword "
+                    "作为 query 别名传入。flow-diagnosis（流量诊断仪）因西柚官方暂无下载接口，"
+                    "会直接提示并终止，不应继续尝试其他导出路径。"
+                )
+            )(fn)
+        else:
+            mcp.tool()(fn)
