@@ -1,5 +1,7 @@
 # Keepa Statistics Object 字段格式化方案
 
+> 实现状态：已接入默认格式化导出。实现文件：`opscli/keepa/stats_formatter.py`；接入场景：`product` 返回 `stats` 对象；默认 XLSX 会派生 stats 主表字段，并按需追加 `stats_price_types`、`stats_extremes`、`stats_buy_box_sellers`、`stats_offer_snapshot` sheet。
+
 > 参考：Keepa Statistics Object 官方讨论页 `https://keepa.com/#!discuss/t/statistics-object/1308`。本文用于指导 `opscli keepa` 后续对 Product Object 内 `stats` 对象的展示、导出与结构化解析；原始响应仍应完整保留。
 
 ## 1. 返回条件与总体原则

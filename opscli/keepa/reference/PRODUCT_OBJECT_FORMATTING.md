@@ -1,5 +1,7 @@
 # Keepa Product Object 字段格式化方案
 
+> 实现状态：已接入默认格式化导出。实现文件：`opscli/keepa/product_formatter.py`；接入场景：`product`；默认 XLSX 会派生金额、Keepa 时间、图片 URL、类目路径、变体摘要、stats 当前值，并按需追加 `csv_history`、`offers`、`variations` sheet。
+
 > 参考：Keepa Product Object 官方文档 `https://keepa.com/#!discuss/t/product-object/116`。本文用于指导 `opscli keepa` 后续对 Product Object 的展示、导出与结构化解析；原始响应仍应完整保留。
 
 ## 1. 总体原则

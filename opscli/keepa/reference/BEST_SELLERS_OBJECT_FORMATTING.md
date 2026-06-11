@@ -1,5 +1,7 @@
 # Keepa Best Sellers Object 字段格式化方案
 
+> 实现状态：已接入默认格式化导出。实现文件：`opscli/keepa/best_sellers_formatter.py`；接入场景：`bestsellers`；默认 XLSX 主表输出带 `bestSellerRank` 的 ASIN 明细，并追加 `best_sellers_list` 榜单汇总 sheet。
+
 > 参考：Keepa Best Sellers Object 官方文档 `https://keepa.com/#!discuss/t/best-sellers-object/1299`。本文用于指导 `opscli keepa` 后续对 Best Sellers Object 的展示、导出与结构化解析；原始响应仍应完整保留。
 
 ## 1. 总体原则

@@ -16,6 +16,7 @@ from opscli.keepa.time import (
     keepa_minutes_to_unix_seconds,
     keepa_minutes_to_utc_iso,
 )
+from opscli.keepa.stats_formatter import FormattedStatsExport, format_stats_for_product
 
 
 MISSING_NUMERIC_VALUES = {-1}
@@ -152,6 +153,10 @@ class FormattedProductExport:
     csv_history: list[dict[str, Any]]
     offers: list[dict[str, Any]]
     variations: list[dict[str, Any]]
+    stats_price_types: list[dict[str, Any]]
+    stats_extremes: list[dict[str, Any]]
+    stats_buy_box_sellers: list[dict[str, Any]]
+    stats_offer_snapshot: list[dict[str, Any]]
 
     def extra_sheets(self) -> dict[str, list[dict[str, Any]]]:
         sheets: dict[str, list[dict[str, Any]]] = {}
@@ -161,6 +166,14 @@ class FormattedProductExport:
             sheets["offers"] = self.offers
         if self.variations:
             sheets["variations"] = self.variations
+        if self.stats_price_types:
+            sheets["stats_price_types"] = self.stats_price_types
+        if self.stats_extremes:
+            sheets["stats_extremes"] = self.stats_extremes
+        if self.stats_buy_box_sellers:
+            sheets["stats_buy_box_sellers"] = self.stats_buy_box_sellers
+        if self.stats_offer_snapshot:
+            sheets["stats_offer_snapshot"] = self.stats_offer_snapshot
         return sheets
 
     def to_dict(self) -> dict[str, Any]:
@@ -169,6 +182,10 @@ class FormattedProductExport:
             "csv_history": self.csv_history,
             "offers": self.offers,
             "variations": self.variations,
+            "stats_price_types": self.stats_price_types,
+            "stats_extremes": self.stats_extremes,
+            "stats_buy_box_sellers": self.stats_buy_box_sellers,
+            "stats_offer_snapshot": self.stats_offer_snapshot,
         }
 
 
@@ -178,23 +195,48 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
     csv_history: list[dict[str, Any]] = []
     offers: list[dict[str, Any]] = []
     variations: list[dict[str, Any]] = []
+    stats_price_types: list[dict[str, Any]] = []
+    stats_extremes: list[dict[str, Any]] = []
+    stats_buy_box_sellers: list[dict[str, Any]] = []
+    stats_offer_snapshot: list[dict[str, Any]] = []
     currency = _currency_for(site=site, domain_id=domain_id)
 
     for row in rows:
         if not isinstance(row, dict):
             products.append({"value": row})
             continue
-        formatted = format_product_object(row, site=site, domain_id=domain_id)
+        stats_export = format_stats_for_product(row, site=site, domain_id=domain_id)
+        formatted = format_product_object(row, site=site, domain_id=domain_id, stats_export=stats_export)
         products.append(formatted)
         asin = _string_or_empty(row.get("asin"))
         csv_history.extend(format_csv_history_rows(row, asin=asin, currency=currency))
         offers.extend(format_offer_rows(row, asin=asin))
         variations.extend(format_variation_rows(row, asin=asin))
+        if stats_export:
+            stats_price_types.extend(stats_export.price_type_rows)
+            stats_extremes.extend(stats_export.extreme_rows)
+            stats_buy_box_sellers.extend(stats_export.buy_box_seller_rows)
+            stats_offer_snapshot.extend(stats_export.offer_snapshot_rows)
 
-    return FormattedProductExport(products=products, csv_history=csv_history, offers=offers, variations=variations)
+    return FormattedProductExport(
+        products=products,
+        csv_history=csv_history,
+        offers=offers,
+        variations=variations,
+        stats_price_types=stats_price_types,
+        stats_extremes=stats_extremes,
+        stats_buy_box_sellers=stats_buy_box_sellers,
+        stats_offer_snapshot=stats_offer_snapshot,
+    )
 
 
-def format_product_object(product: dict[str, Any], *, site: str = "US", domain_id: Any = None) -> dict[str, Any]:
+def format_product_object(
+    product: dict[str, Any],
+    *,
+    site: str = "US",
+    domain_id: Any = None,
+    stats_export: FormattedStatsExport | None = None,
+) -> dict[str, Any]:
     """Return a Product Object copy with compact derived fields appended."""
     currency = _currency_for(site=site, domain_id=domain_id or product.get("domainId"))
     row = dict(product)
@@ -219,6 +261,8 @@ def format_product_object(product: dict[str, Any], *, site: str = "US", domain_i
     _add_content_summary(row)
     _add_coupon_fields(row, currency)
     _add_stats_current_fields(row, product, currency)
+    if stats_export:
+        row.update(stats_export.main_fields)
 
     row["currencyCode"] = currency.code
     row["currencyDecimals"] = currency.decimals
