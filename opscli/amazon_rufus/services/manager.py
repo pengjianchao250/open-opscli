@@ -8,7 +8,14 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from opscli.amazon_rufus.constants import DEFAULT_RUFUS_TIMEOUT_SECONDS
-from opscli.amazon_rufus.domain.exceptions import InvalidQuestionError, InvalidRufusBrowserStateError, InvalidRufusCookieError, InvalidRufusCurlError
+from opscli.amazon_rufus.domain.exceptions import (
+    InvalidQuestionError,
+    InvalidRufusBrowserStateError,
+    InvalidRufusCookieError,
+    InvalidRufusCurlError,
+    InvalidRufusPlatformError,
+    RufusRemoteBusinessError,
+)
 from opscli.amazon_rufus.domain.models import SeedRequestRecord
 from opscli.amazon_rufus.runtime.country_map import build_product_url, resolve_marketplace
 from opscli.amazon_rufus.services.backend_secret import RufusBackendSecretProvider
@@ -53,9 +60,9 @@ class RufusManager:
 
     @property
     def browser_state_store(self) -> RufusBrowserStateStore:
-        """按需创建 Rufus 浏览器状态存储，避免普通流程写真实配置目录。"""
+        """按需创建 Rufus 浏览器状态存储，默认通过 OPS 平台 Cookie 接口读写。"""
         if self._browser_state_store is None:
-            self._browser_state_store = RufusBrowserStateStore()
+            self._browser_state_store = RufusBrowserStateStore(platform_cookie_client=self.transport_client)
         return self._browser_state_store
 
     @property
@@ -189,7 +196,7 @@ class RufusManager:
         country: str,
         cookie_header: str,
     ) -> dict:
-        """将用户提供的 Cookie header 保存为 Rufus 本地状态。"""
+        """将用户提供的 Cookie header 保存为 Rufus 状态。"""
         marketplace = resolve_marketplace(country.strip().upper())
         storage_state = self.cookie_parser.parse_cookie_header(
             cookie_header,
@@ -245,12 +252,12 @@ class RufusManager:
             "saved": True,
             "cookie_count": len(storage_state.get("cookies", [])),
             "header_count": len(parsed.headers),
-            "has_curl_data": True,
+            "has_curl": True,
             "has_payload_template": bool(parsed.payload_template),
         }
 
     def cookie_status(self, *, country: str) -> dict:
-        """读取本地 Rufus Cookie 状态并返回脱敏摘要。"""
+        """读取 Rufus Cookie 状态并返回脱敏摘要。"""
         marketplace = resolve_marketplace(country.strip().upper())
         record = self.browser_state_store.load(marketplace.country)
         if not isinstance(record, dict):
@@ -276,8 +283,64 @@ class RufusManager:
             "can_build_cookie_header": can_build_cookie_header,
         }
 
+    def save_platform_cookie(self, *, platform: str, country: str, content: str) -> dict:
+        """通过 OPS 平台 Cookie 接口保存 Rufus content。"""
+        normalized_platform = self._normalize_platform(platform)
+        normalized_country = self._normalize_country_code(country)
+        normalized_content = self._normalize_content(content)
+        payload = self.transport_client.save_platform_cookie(
+            platform=normalized_platform,
+            country=normalized_country,
+            content=normalized_content,
+        )
+        return {
+            "platform": normalized_platform,
+            "country": normalized_country,
+            "status": "saved",
+            "message": str(payload.get("msg") or payload.get("message") or ""),
+            "content_length": len(normalized_content),
+        }
+
+    def get_platform_cookie(self, *, platform: str, country: str) -> dict:
+        """通过 OPS 平台 Cookie 接口读取 Rufus content。"""
+        normalized_platform = self._normalize_platform(platform)
+        normalized_country = self._normalize_country_code(country)
+        try:
+            payload = self.transport_client.get_platform_cookie(platform=normalized_platform)
+        except RufusRemoteBusinessError as exc:
+            if exc.business_code == 404 or str(exc.business_code) == "404":
+                return self._missing_platform_cookie_payload(
+                    platform=normalized_platform,
+                    country=normalized_country,
+                    message=str(exc),
+                )
+            raise
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            return self._missing_platform_cookie_payload(
+                platform=normalized_platform,
+                country=normalized_country,
+                message="远端未返回平台 Cookie 记录",
+            )
+        remote_country = str(data.get("country") or "").strip().upper()
+        if remote_country and remote_country != normalized_country:
+            return self._missing_platform_cookie_payload(
+                platform=normalized_platform,
+                country=normalized_country,
+                message="远端平台 Cookie 记录国家不匹配",
+            )
+        content = str(data.get("content") or "")
+        return {
+            "platform": normalized_platform,
+            "country": normalized_country,
+            "status": "exists",
+            "message": str(payload.get("msg") or payload.get("message") or ""),
+            "content": content,
+            "content_length": len(content),
+        }
+
     def login_status(self, *, country: str) -> dict:
-        """读取本地 Amazon 登录态并返回 Rufus 获取前可用性摘要。"""
+        """读取亚马逊 Rufus 登录态并返回 Rufus 获取前可用性摘要。"""
         marketplace = resolve_marketplace(country.strip().upper())
         try:
             record = self.browser_state_store.load(marketplace.country)
@@ -300,14 +363,13 @@ class RufusManager:
                 has_streaming_request=False,
             )
 
-        storage_state = record.get("storage_state")
-        session_cookie_count = len(storage_state.get("cookies", [])) if isinstance(storage_state, dict) else 0
-        can_get_backend = False
-        if isinstance(storage_state, dict):
-            try:
-                can_get_backend = bool(self.browser_state_store.build_cookie_header(storage_state, marketplace.base_url))
-            except (InvalidRufusBrowserStateError, InvalidRufusCookieError):
-                can_get_backend = False
+        try:
+            parsed = self.curl_parser.parse(str(record.get("curl") or ""))
+            session_cookie_count = self._count_cookie_pairs(parsed.cookies)
+            can_get_backend = bool(parsed.cookies and "/rufus/cl/streaming" in parsed.url)
+        except InvalidRufusCurlError:
+            session_cookie_count = 0
+            can_get_backend = False
         status = "ready" if can_get_backend else "invalid"
         return self._login_status_payload(
             country=marketplace.country,
@@ -315,7 +377,7 @@ class RufusManager:
             has_login_state=can_get_backend,
             can_get_backend=can_get_backend,
             session_cookie_count=session_cookie_count if can_get_backend else 0,
-            has_streaming_request=self._has_saved_streaming_request(record) if can_get_backend else False,
+            has_streaming_request=can_get_backend,
         )
 
     def get(
@@ -625,16 +687,9 @@ class RufusManager:
             "has_streaming_request": has_streaming_request,
         }
 
-    def _has_saved_streaming_request(self, record: dict[str, Any]) -> bool:
-        """判断本地状态是否包含已保存的 Rufus streaming 请求摘要。"""
-        seed = record.get("seed_request")
-        curl_data = record.get("curl_data")
-        request_url = ""
-        if isinstance(seed, dict):
-            request_url = str(seed.get("request_url") or "")
-        if not request_url and isinstance(curl_data, dict):
-            request_url = str(curl_data.get("url") or "")
-        return "/rufus/cl/streaming" in request_url
+    def _count_cookie_pairs(self, cookie_header: str) -> int:
+        """统计 Cookie header 中有效键值对数量，不暴露具体 Cookie 值。"""
+        return len([part for part in str(cookie_header or "").split(";") if "=" in part.strip()])
 
     def _can_use_saved_seed(self, seed: Any, *, asin: str, country: str) -> bool:
         """仅复用同 ASIN、同国家站点的本地 streaming seed。"""
@@ -660,5 +715,39 @@ class RufusManager:
             if value:
                 return value
         return ""
+
+    def _normalize_platform(self, platform: str) -> str:
+        """校验平台标识，保持远端 API 的自由字符串语义。"""
+        value = str(platform or "").strip()
+        if not value:
+            raise InvalidRufusPlatformError("platform 不能为空")
+        if len(value) > 50:
+            raise InvalidRufusPlatformError("platform 长度不能超过 50")
+        return value
+
+    def _normalize_country_code(self, country: str) -> str:
+        """校验平台 Cookie 国家字段为 ISO alpha-2 形态。"""
+        value = str(country or "").strip().upper()
+        if len(value) != 2 or not value.isalpha():
+            raise InvalidRufusPlatformError("country 必须是 2 位字母国家代码")
+        return value
+
+    def _normalize_content(self, content: str) -> str:
+        """校验远端 content 不为空。"""
+        value = str(content or "").strip()
+        if not value:
+            raise InvalidRufusPlatformError("content 不能为空")
+        return value
+
+    def _missing_platform_cookie_payload(self, *, platform: str, country: str, message: str) -> dict:
+        """构造平台 Cookie 未命中的稳定结构。"""
+        return {
+            "platform": platform,
+            "country": country,
+            "status": "missing",
+            "message": message,
+            "content": "",
+            "content_length": 0,
+        }
 
 

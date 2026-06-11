@@ -46,3 +46,19 @@
   - [x] 6.6 实现 `RufusBackendSecretProvider` 优先读取 curl_data，兼容旧字段。
   - [x] 6.7 同步 Skill/README/reference 文档，说明保存的是加密 curl_data，不输出完整 curl。
   - [x] 6.8 运行 Rufus/MCP/Skill 回归、安装 Skill、扫描敏感信息。
+
+- [x] 7. 平台 Cookie content 远端读写 CLI
+  - [x] 7.1 RED：Transport POST/GET 测试，确认保存只发送 `platform/country/content`，读取只按 `platform` 查询。
+  - [x] 7.2 RED：Browser state store 测试，确认完整 Rufus record 可通过远端 `content` 往返并被 provider 读取。
+  - [x] 7.3 RED：CLI 测试，确认 `platform-cookie save/get <PLATFORM> <COUNTRY>` 参数透传和 JSON 输出。
+  - [x] 7.4 GREEN：实现 `RufusTransportClient.save_platform_cookie()` / `get_platform_cookie()`。
+  - [x] 7.5 GREEN：实现 `RufusBrowserStateStore` 远端 content 适配、`RufusManager.save_platform_cookie()` / `get_platform_cookie()` 和 CLI 子命令。
+  - [x] 7.6 同步 Skill 模板、`.agents` 副本、Super Dev 文档和待归档变更记录。
+  - [x] 7.7 运行 Rufus/Skill/MCP 定向回归和必要 CLI help 冒烟。
+
+- [x] 8. 默认状态读写替换本地 browser-state JSON
+  - [x] 8.1 RED：新增默认 `RufusManager.save_cookie()` / `cookie_status()` 测试，确认只调用线上平台 Cookie content，不创建 `browser-state-<COUNTRY>.json`。
+  - [x] 8.2 RED：新增默认 `RufusManager.get_backend()` 测试，确认从线上 content 恢复 `seed_request` 和 cookie。
+  - [x] 8.3 GREEN：默认 `RufusManager` 和独立 `RufusBackendSecretProvider` 创建注入 `RufusTransportClient` 的线上 store。
+  - [x] 8.4 保留显式 `RufusBrowserStateStore(base_dir=...)` 本地 JSON fallback，并将相关测试命名为 `local_fallback`。
+  - [x] 8.5 文档：同步 Skill/README/reference 与架构/PRD，删除默认流程依赖 `browser-state-<COUNTRY>.json` 的描述。

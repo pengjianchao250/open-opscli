@@ -1,5 +1,69 @@
 # 待归档变更记录
 
+## 2026-06-11 Amazon Rufus - 平台 Cookie content 直接保存 streaming cURL
+
+**变更原因**：用户确认从浏览器获取亚马逊 Rufus 登录态时，保存到后端 `/v1/platform-cookies` 的 `content` 应该直接是 `/rufus/cl/streaming` 浏览器 cURL 命令态，而不是包含 `storage_state`、`curl` 和请求种子摘要的 JSON 包装。
+**改动点**：`RufusBrowserStateStore.save()` 在远端平台 Cookie client 存在且已捕获 streaming seed 时，直接把构造出的 cURL 命令态写入 `content`；`_load_remote()` 支持裸 cURL content，并继续兼容旧 JSON record；`RufusBackendSecretProvider` 可从裸 cURL 的 payload 中恢复内部 `SeedRequestRecord`，避免默认 `get_backend` 因缺少 JSON 摘要重新 headless 捕获；同步更新 Rufus Skill 模板、`.agents` 副本、MCP/CLI 帮助文案和测试。
+**验证结果**：已先用更新后的目标用例验证旧实现失败于 `content` 仍为 JSON 包装和裸 cURL 读取无效；实现后运行 `uv run pytest tests/amazon_rufus/test_core.py -q`，结果 85 passed；运行 `uv run pytest tests/amazon_rufus/test_transport.py tests/amazon_rufus/test_mcp_manager.py tests/mcp/test_amazon_rufus_tools.py tests/skills/test_ops_amazon_rufus_updater.py tests/skills/test_cli.py -q`，结果 60 passed；文档同步后补跑 `uv run pytest tests/amazon_rufus/test_core.py tests/skills/test_ops_amazon_rufus_updater.py tests/skills/test_cli.py -q`，结果 105 passed。
+**影响范围**：影响 Rufus `watch_login`、`save_curl` 等默认远端保存链路以及 `login_status` / `get_backend` 读取远端 content 的行为；后端 API path 和 POST 字段仍保持 `platform`、`country`、`content` 三字段；本地 fallback `browser-state-<COUNTRY>.json` 仍保留内部 JSON record。
+**回滚方式**：回退 `opscli/amazon_rufus/services/browser_state_store.py`、`backend_secret.py`、`commands/cli.py`、`opscli/mcp/tools/amazon_rufus.py`、Rufus Skill 文档和相关测试中关于裸 cURL content 的修改，恢复远端 content JSON record 保存方式。
+
+---
+
+## 2026-06-11 Amazon Rufus Skill - 登录态术语改为亚马逊 Rufus 登录态
+
+**变更原因**：用户要求 Rufus Skill 中关于亚马逊登录态的描述统一改为“亚马逊 Rufus 登录态”，避免把实际保存为浏览器 cURL 命令态的状态误描述为普通 Cookie；后端接口名仍保留平台 Cookie 命名。
+**改动点**：更新 `opscli/skills/templates/ops-amazon-rufus/` 与 `.agents/skills/ops-amazon-rufus/` 的 `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md`，新增术语约定并把授权、登录态检查、登录采集和恢复路径改为“亚马逊 Rufus 登录态”；同步更新 Rufus MCP/CLI 帮助文案、401 错误提示和相关测试断言。
+**验证结果**：已运行 `uv run pytest tests/skills/test_ops_amazon_rufus_updater.py tests/skills/test_cli.py tests/amazon_rufus/test_transport.py -q`，结果 28 passed；已运行 `uv run pytest tests/amazon_rufus/test_core.py -q`，结果 85 passed；最终文档微调后重跑 `uv run pytest tests/skills/test_ops_amazon_rufus_updater.py tests/skills/test_cli.py -q`，结果 20 passed。
+**影响范围**：影响 Rufus Skill 文档、安装后引导、CLI/MCP 帮助文案和平台 Cookie 401 错误提示；不改变 `platform-cookie` 接口名、MCP Tool 名、CLI 命令、状态保存结构或 Rufus 获取逻辑。
+**回滚方式**：回退本次对 Rufus Skill 模板、`.agents` 安装副本、Rufus 帮助/错误文案、测试断言和本变更记录的修改。
+
+---
+
+## 2026-06-10 Amazon Rufus - CLI fallback 限域流程调整
+
+**变更原因**：用户要求 Rufus Skill 从绝对 MCP-only 调整为 MCP 优先，并仅在必需 MCP Tool 不可用或用户拒绝保存复用 Amazon 登录态两种场景回退 CLI；同时要求 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401 进入 MCP 登录采集。
+**改动点**：更新 `ops-amazon-rufus` 模板与 `.agents` 安装副本的 Skill/README/workflow 文档，明确 bounded CLI fallback、denied 分支 CLI 获取和 401 分支 MCP `amazon_rufus_watch_login`；更新安装后 `next_steps`；更新文档契约测试和当前流程图。
+**验证结果**：已完成 RED/GREEN 定向验证：旧实现下 `.venv/Scripts/python.exe -m pytest "tests/skills/test_ops_amazon_rufus_updater.py" "tests/skills/test_cli.py" -q` 失败 4 项；实现后定向回归 `.venv/Scripts/python.exe -m pytest "tests/skills/test_ops_amazon_rufus_updater.py" -q` 通过，8 passed；`.venv/Scripts/python.exe -m pytest "tests/skills/test_cli.py" -q` 通过，12 passed；`.venv/Scripts/python.exe -m pytest "tests/mcp/test_amazon_rufus_tools.py" -q` 通过，14 passed。
+**影响范围**：影响 Rufus Skill Agent 编排、安装后提示、报告流程图和文档契约测试；不新增 MCP Tool、不新增 CLI 命令、不暴露 cookie、localStorage、`storage_state`、headers、payload 或请求种子。
+**回滚方式**：回退本轮对 `opscli/skills/templates/ops-amazon-rufus/`、`.agents/skills/ops-amazon-rufus/`、`opscli/skills/commands/cli.py`、`tests/skills/`、`output/rufus-current-skill-flow.*` 和本变更记录的修改，恢复旧 MCP-only 文案与断言。
+
+---
+
+## 2026-06-09 Amazon Rufus - 默认状态读写切换到平台 Cookie content
+
+**变更原因**：用户要求替换默认 `browser-state-<COUNTRY>.json` 文件保存/获取方式，Rufus 登录态和请求种子默认必须使用线上 `/v1/platform-cookies` 保存与读取接口。
+**改动点**：`RufusManager.browser_state_store` 默认创建注入 `RufusTransportClient` 的 `RufusBrowserStateStore`，`save_state`、`watch_login`、`save_cookie`、`save_curl`、`login_status`、`get_backend`、`logout` 默认通过 `platform=amazon` 的平台 Cookie content 读写；`RufusBackendSecretProvider` 独立实例化时也默认使用线上 store；`RufusBrowserStateStore(base_dir=...)` 仅保留为显式 local fallback；同步更新 Rufus Skill 模板、`.agents` 副本、Super Dev PRD/Architecture/Tasks 和文档契约测试。
+**验证结果**：新增 RED/GREEN 测试证明默认 `save_cookie` / `cookie_status` 只调用线上 content 且不创建 `browser-state-<COUNTRY>.json`，默认 `get_backend` 可从线上 content 恢复 `seed_request`；定向回归 `.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_transport.py" "tests/amazon_rufus/test_core.py" "tests/mcp/test_amazon_rufus_tools.py" "tests/skills/test_ops_amazon_rufus_updater.py" -q` 通过，106 passed；Skill CLI 回归 `.venv/Scripts/python.exe -m pytest "tests/skills/test_cli.py" -q` 通过，12 passed。
+**影响范围**：影响 Rufus 默认状态读写、MCP/headless 后端凭证读取、登录恢复文档和测试；旧 `browser-state-<COUNTRY>.json` 不再作为默认读写源，如只有本地旧状态需要重新执行 `watch-login` 写入线上平台 Cookie content。
+**回滚方式**：回退 `opscli/amazon_rufus/services/manager.py`、`backend_secret.py`、`browser_state_store.py` 中默认线上 store 相关改动，恢复 Skill/README/reference 和测试中关于平台 Cookie content 默认读写的断言。
+
+---
+
+## 2026-06-09 Amazon Rufus - OPS 平台 Cookie 鉴权边界修复
+
+**变更原因**：平台 Cookie API HTTP 401 代表 OPS/MCP 鉴权失败，不是 Amazon 登录态缺失。旧逻辑暴露泛化 `RUFUS_REMOTE_HTTP_ERROR`，Skill 容易误触发 `logout -> watch-login`，导致用户重复登录 Amazon 但无法修复 OPS API 401。
+
+**改动点**：新增 `RufusPlatformCookieAuthError` 并只在平台 Cookie GET/POST 的 HTTP 401 上映射；MCP `amazon_rufus_get` 通过当前请求隔离凭证目录创建 Rufus manager；补充 transport、manager、MCP 和 Skill 文档契约测试；同步 `ops-amazon-rufus` 模板与 `.agents` 副本的禁止恢复规则。
+
+**验证结果**：已运行 `E:/code/work/open-opscli/.venv/Scripts/python.exe -m pytest tests/amazon_rufus/test_transport.py tests/amazon_rufus/test_core.py tests/mcp/test_amazon_rufus_tools.py tests/skills/test_ops_amazon_rufus_updater.py -q`，结果为 116 passed；已扫描 Rufus auth boundary 文档、Skill 模板和 `.agents` 副本，未发现真实 JWT、session、Cookie、CSRF 等敏感样例值。
+
+**影响范围**：影响 Rufus 平台 Cookie API 错误分类、MCP Rufus 当前请求凭证隔离、`ops-amazon-rufus` 错误恢复流程和相关测试；不改变 MCP schema、平台 Cookie API path、三字段保存契约或 Rufus upload 错误语义。
+
+**回滚方式**：回退 `opscli/amazon_rufus/domain/exceptions.py`、`opscli/amazon_rufus/transport/client.py`、`opscli/mcp/tools/amazon_rufus.py`、Rufus/Skill 测试以及 `ops-amazon-rufus` Skill 文档中的本轮改动。
+
+---
+
+## 2026-06-08 Amazon Rufus - 平台 Cookie content 远端读写 CLI
+
+**变更原因**：用户要求参考 Apifox `/v1/platform-cookies` 文档，为 Rufus Skill/CLI 接入平台 Cookie 保存与读取能力，并约束 CLI/API 只使用 `platform`、`country`、`content` 三个字段；除国家和平台外，Rufus 内部状态整合为大 JSON 存入 `content`。
+**改动点**：`RufusTransportClient` 新增 `save_platform_cookie()` / `get_platform_cookie()`，POST 只发送 `platform/country/content`，GET 只按 `platform` 查询；`RufusBrowserStateStore` 支持注入平台 Cookie client，把完整 Rufus record 序列化进远端 `content` 并反序列化供 `RufusBackendSecretProvider` 读取；`RufusManager` 新增 `save_platform_cookie()` / `get_platform_cookie()` 参数校验与 404 missing 映射；`opscli amazon-rufus` 新增 `platform-cookie save/get` 子命令；同步更新 `ops-amazon-rufus` 模板、已安装 Skill 和 Super Dev 文档。
+**验证结果**：已完成 RED/GREEN 定向测试：`.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_transport.py" "tests/amazon_rufus/test_core.py" -k "platform_cookie" -q` 通过，4 passed；完整定向回归 `.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_transport.py" "tests/amazon_rufus/test_core.py" "tests/mcp/test_amazon_rufus_tools.py" "tests/skills/test_ops_amazon_rufus_updater.py" -q` 通过，104 passed；Skill CLI 引导回归 `.venv/Scripts/python.exe -m pytest "tests/skills/test_cli.py" -q` 通过，12 passed。
+**影响范围**：影响 Amazon Rufus transport、manager、browser state store 可注入远端 content 读写、CLI 子命令、Skill 文档和 Super Dev 文档；不新增 MCP Tool，不把 `cookie_content`、账号、域名、headers、payload、`storage_state` 或请求种子拆成 CLI/API 独立参数；后续 2026-06-09 变更已把默认状态链路切换为平台 Cookie content，本地 JSON 仅保留显式 fallback。
+**回滚方式**：回退 `opscli/amazon_rufus/transport/client.py`、`opscli/amazon_rufus/services/browser_state_store.py`、`opscli/amazon_rufus/services/manager.py`、`opscli/amazon_rufus/commands/cli.py`、`opscli/amazon_rufus/domain/exceptions.py`、Rufus Skill 模板和 `.agents/skills/ops-amazon-rufus` 文档、`output/rufus-platform-cookie-*.md`、相关测试与本变更记录。
+
+---
+
 ## 2026-06-08 Amazon Rufus - 获取前登录态检查
 
 **变更原因**：用户要求在发起 Rufus 获取前先检查是否已有 Amazon 登录态；没有可用登录态时再走登录采集流程，避免 allowed/denied 路径直接获取后才失败或重复打开登录窗口。
@@ -1627,5 +1691,46 @@
 **影响范围**：仅影响 `ops-amazon-rufus` Skill 文档、已安装 Skill 副本、Super Dev 文档和 Skill 文档契约测试；不改变 MCP 工具参数、Rufus headless 获取实现或 CLI 实现。
 
 **回滚方式**：回退上述 Skill 文档和 `output/ops-amazon-rufus-*.md` 中关于 `RUFUS_HEADLESS_CAPTURE_ERROR` 登录恢复的新增段落，并移除 `tests/skills/test_ops_amazon_rufus_updater.py` 中新增的恢复流程断言。
+
+---
+## 2026-06-09 Amazon Rufus Skill - MCP-only 运行链路
+
+**变更原因**：用户要求 `ops-amazon-rufus` Skill 使用 MCP 后不再通过 opscli CLI 处理授权、登录态采集、恢复或获取，运行期全程走 MCP Tool，并在 MCP 鉴权失败时通过 MCP auth 工具处理。
+
+**改动点**：`opscli/mcp/tools/amazon_rufus.py` 新增 `amazon_rufus_remote_consent_status`、`amazon_rufus_remote_consent_set`、`amazon_rufus_login_status`、`amazon_rufus_watch_login`、`amazon_rufus_logout` 及脱敏响应；更新 `opscli/skills/templates/ops-amazon-rufus` 与 `.agents/skills/ops-amazon-rufus` 的 Skill 文档和 workflow，删除运行期 CLI fallback；更新 `opscli/skills/commands/cli.py` 安装后引导；补充 MCP 工具、Skill 文档和安装引导测试；新增 Super Dev MCP-only 文档和变更任务。
+
+**验证结果**：`python -m py_compile opscli/mcp/tools/amazon_rufus.py` 通过；`uv run pytest tests/mcp/test_amazon_rufus_tools.py tests/skills/test_cli.py tests/skills/test_ops_amazon_rufus_updater.py -q` 为 34 passed；`uv run pytest tests/amazon_rufus/test_transport.py tests/amazon_rufus/test_core.py -q` 为 91 passed。
+
+**影响范围**：影响 Rufus MCP Tool 暴露面、`ops-amazon-rufus` Skill 编排文档、安装后提示和相关测试；不删除现有 Rufus CLI 命令，不改变 `amazon_rufus_get` 的敏感字段过滤和报告输出契约。
+
+**回滚方式**：回退 `opscli/mcp/tools/amazon_rufus.py` 中新增 MCP wrapper 和注册项，恢复 `ops-amazon-rufus` Skill 文档、安装后引导和测试断言到 CLI fallback 版本，删除 `.super-dev/changes/amazon-rufus-mcp-only-flow` 与 `output/rufus-mcp-only-flow-*` 文档。
+
+---
+
+## 2026-06-10 Amazon Rufus MCP - 标准架构收敛
+
+**变更原因**：Rufus MCP 已完成 MCP-only，但 `opscli/mcp/tools/amazon_rufus.py` 仍承担 manager 工厂、remote-consent store 工厂、报告写入和响应 allowlist 等适配职责。为对齐 Keepa、SellerSprite、Query 等 MCP 工具的薄 Tool 层架构，需要将 MCP-facing 编排下沉到 Rufus service 层。
+
+**改动点**：新增 `opscli/amazon_rufus/domain/mcp_models.py`，定义 `RufusGetRequest`、`RufusWatchLoginRequest`、`RufusRemoteConsentRequest` 和 `RufusMcpResult`；新增 `opscli/amazon_rufus/services/mcp_manager.py`，集中处理 MCP 凭证目录、`AuthClient`/`RufusTransportClient`/`RufusManager`/`RemoteConsentStore` 创建、报告写入和 MCP-safe 脱敏响应；精简 `opscli/mcp/tools/amazon_rufus.py`，Tool 函数只构造 request、调用 `RufusMcpManager` 并返回 `_ok/_err`；新增 `tests/amazon_rufus/test_mcp_manager.py`，调整 `tests/mcp/test_amazon_rufus_tools.py` 聚焦 Tool 注册、schema 和参数转发；新增 Super Dev 标准架构文档和 change 任务。
+
+**验证结果**：`uv run pytest tests/amazon_rufus/test_mcp_manager.py -q` 为 9 passed；`uv run pytest tests/mcp/test_amazon_rufus_tools.py -q` 为 14 passed；`uv run pytest tests/amazon_rufus/test_transport.py -q` 为 8 passed；`uv run pytest tests/skills/test_ops_amazon_rufus_updater.py -q` 为 8 passed。
+
+**影响范围**：影响 Rufus MCP Tool 内部实现边界和测试分层；不改变现有 MCP Tool 名称、参数 schema、Skill MCP-only 流程、Rufus 报告格式、OPS 平台 Cookie API 契约或 CLI 可用性。MCP 成功响应仍不暴露 cookie、headers、payload、storage_state、seed request、upload_payload 或平台 Cookie content。
+
+**回滚方式**：回退 `opscli/amazon_rufus/domain/mcp_models.py`、`opscli/amazon_rufus/services/mcp_manager.py`、`opscli/mcp/tools/amazon_rufus.py` 和相关测试改动，恢复 Tool 层直接调用 `RufusManager`、`RemoteConsentStore` 与 `AnswerReportWriter` 的旧结构，并删除 `.super-dev/changes/amazon-rufus-mcp-standard-architecture` 与 `output/rufus-mcp-standard-architecture-*` 文档。
+
+---
+
+## 2026-06-10 Amazon Rufus - cURL 命令态登录状态
+
+**变更原因**：Rufus 后端请求状态原来保存为内部 `curl_data` 对象，并兼容旧 `storage_state` fallback；用户要求改为接近浏览器 Copy-as-cURL 的 cURL 命令格式，并移除旧结构解析兼容。
+
+**改动点**：`RufusBrowserStateStore` 将 streaming 请求材料保存为 `version=2` 和浏览器 cURL 命令态；`RufusBackendSecretProvider` 只解析新 `curl` 字段；`RufusManager.login_status()` 改为基于 cURL 可解析性判断 `can_get_backend`，并删除旧 streaming request helper；`RufusMcpManager` 将 `curl` 加入敏感字段拦截；同步更新 Rufus Skill 文档、Super Dev 文档和相关测试。
+
+**验证结果**：RED：新增目标测试先失败于缺少 `version/curl`、旧 `curl_data` 仍可读取、旧 `storage_state` 仍判定 ready、MCP 脱敏未拦截 `curl`、`RufusSecret` 仍暴露 `curl_data` 属性；GREEN：`uv run pytest "tests/amazon_rufus/test_core.py" -v` 为 85 passed；`uv run pytest "tests/amazon_rufus/test_mcp_manager.py" "tests/mcp/test_amazon_rufus_tools.py" "tests/skills/test_ops_amazon_rufus_updater.py" -v` 为 31 passed；`uv run python -m py_compile "opscli/amazon_rufus/services/browser_state_store.py" "opscli/amazon_rufus/services/backend_secret.py" "opscli/amazon_rufus/services/manager.py" "opscli/amazon_rufus/services/mcp_manager.py"` 通过；固定字符串检查确认旧解析 helper 和旧字段 fallback 无命中。
+
+**影响范围**：影响 Rufus 登录态保存结构、后端凭证读取、登录态状态判断和 Skill 文档说明。旧 `curl_data` 或仅 `storage_state` 的平台 Cookie content 会被视为不可用，需要重新执行登录采集或重新保存 Copy-as-cURL；CLI/MCP/报告仍不输出 cookie、headers、payload、storage_state、seed request、平台 Cookie content 或 cURL 命令。
+
+**回滚方式**：回退 `browser_state_store.py`、`backend_secret.py`、`manager.py`、`mcp_manager.py`、Rufus Skill 文档、Super Dev change 文档和相关测试改动，恢复 `curl_data` 对象保存与旧 `storage_state` fallback 解析。
 
 ---

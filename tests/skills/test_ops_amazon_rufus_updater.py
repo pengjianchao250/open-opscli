@@ -235,39 +235,54 @@ def test_ops_amazon_rufus_template_uses_mcp_boundary():
         ]
     )
     assert "opscli/mcp/tools/amazon_rufus.py" in docs
-    assert "默认使用 MCP 后端 headless 链路" in docs
+    assert "Rufus 运行期以 MCP Tool 优先编排" in docs
+    assert "MCP-first" in docs
+    assert "amazon_rufus_remote_consent_status" in docs
+    assert "amazon_rufus_remote_consent_set" in docs
+    assert "amazon_rufus_login_status" in docs
+    assert "amazon_rufus_watch_login" in docs
+    assert "amazon_rufus_logout" in docs
+    assert "amazon_rufus_get" in docs
+    assert "amazon_rufus_platform_cookie_save" in docs
+    assert "amazon_rufus_platform_cookie_get" in docs
+    assert "amazon_rufus_curl_save" in docs
     assert "RUFUS_SECRET_NOT_READY" in docs
     assert "headless 后端获取" in docs
     assert "timeout_seconds=180" in docs
     assert "外层请求上限" in docs
     assert "RUFUS_HEADLESS_CAPTURE_ERROR" in docs
-    assert "opscli amazon-rufus watch-login" in docs
-    assert "opscli amazon-rufus logout <COUNTRY> --pretty" in docs
-    assert "logout` 成功后再执行 `watch-login`" in docs
+    assert "amazon_rufus_logout -> amazon_rufus_watch_login -> amazon_rufus_get" in docs
     assert "#nav-tools" in docs
     assert "sso-state-main" in docs
     assert "at-main" in docs
     assert "identifícate" in docs
-    assert "watch-login <ASIN> <COUNTRY> --launch-if-needed" in docs
+    assert "amazon_rufus_watch_login(asin=\"B0TEST1234\", country=\"US\", close_browser=true)" in docs
     assert "用户无需在 Agent 会话中额外回复“已登录”" in docs
     assert "请求种子" in docs
-    assert "本地明文状态（敏感）" in docs
-    assert "旧 `.bin`" in docs
+    assert "OPS 平台 Cookie 接口 content" in docs
+    assert "旧 `browser-state-<COUNTRY>.bin`" in docs
+    assert "browser-state-<COUNTRY>.json` 和 `.browser-state-key` 不再作为默认读写源" in docs
     assert "保存完成后，重新按原问题来源调用 `amazon_rufus_get`" in docs
-    assert "remote-consent status <COUNTRY>" in docs
-    assert "opscli amazon-rufus login-status <COUNTRY> --pretty" in docs
     assert "发起 Rufus 获取前" in docs
     assert "can_get_backend" in docs
-    assert "没有可用登录态" in docs
+    assert "没有可用亚马逊 Rufus 登录态" in docs
     assert "请明确回复“允许”或“拒绝”" in docs
     assert "不建议在该 Amazon 账号中绑定信用卡" in docs
-    assert "opscli amazon-rufus get-backend" in docs
-    assert "watch-login <ASIN> <COUNTRY> --launch-if-needed --close-browser" in docs
+    assert "只有以下两种情况允许 CLI fallback" in docs
+    assert "必需 MCP Tool 不可用" in docs
+    assert "用户拒绝保存并复用该站点亚马逊 Rufus 登录态" in docs
+    assert "状态为 `denied` 时进入 CLI fallback" in docs
     assert "拒绝远程授权" in docs
-    assert "通用登录采集" in docs
-    assert "--launch-if-needed" in docs
-    assert "--chrome-path" in docs
+    assert "opscli amazon-rufus login-status" in docs
+    assert "opscli amazon-rufus watch-login" in docs
+    assert "opscli amazon-rufus get-backend" in docs
+    assert "其他错误不允许 CLI fallback" in docs
+    assert "MCP 登录采集" in docs
+    assert "chrome_path" in docs
     assert "Chrome CDP" in docs
+    assert "浏览器 cURL 命令态" in docs
+    assert "旧 `curl_data` 或仅 `storage_state`" in docs
+    assert "cURL 命令" in docs
     for forbidden in [
         "amazon_rufus_init",
         "amazon_rufus_get_remote",
@@ -279,8 +294,6 @@ def test_ops_amazon_rufus_template_uses_mcp_boundary():
         "--cookie ",
         "curl '",
         "curl \"",
-        "curl",
-        "curl_data",
         "payload_template",
         "完整 curl",
         "curl 等价",
@@ -293,6 +306,8 @@ def test_ops_amazon_rufus_template_uses_mcp_boundary():
         "init <COUNTRY> --launch-if-needed -> 用户登录",
         "opscli amazon-rufus save-state <COUNTRY>",
         "用户确认登录后，按原问题来源重新执行 `opscli amazon-rufus get`",
+        "opscli amazon-rufus logout",
+        "opscli amazon-rufus remote-consent",
         "本地加密状态",
         "本地加密浏览器状态",
         "加密请求种子",
@@ -319,3 +334,29 @@ def test_ops_amazon_rufus_docs_require_fresh_report_path():
         assert "报告新鲜度约束" in workflow_text
         assert "禁止仅凭 ASIN" in workflow_text
         assert "本次 `report_path`" in workflow_text
+
+
+def test_ops_amazon_rufus_docs_route_platform_cookie_auth_to_watch_login():
+    """OPS 平台 Cookie 鉴权失败按新规则进入 MCP 登录采集。"""
+    skill_dirs = [
+        Path("opscli/skills/templates/ops-amazon-rufus"),
+        Path(".agents/skills/ops-amazon-rufus"),
+    ]
+
+    for skill_dir in skill_dirs:
+        docs = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in [
+                skill_dir / "SKILL.md",
+                skill_dir / "README.md",
+                skill_dir / "references" / "rufus-mcp-workflow.md",
+            ]
+        )
+
+        assert "RUFUS_PLATFORM_COOKIE_AUTH_ERROR" in docs
+        assert "OPS 平台 Cookie 鉴权错误" in docs
+        assert "401" in docs
+        assert "amazon_rufus_watch_login(asin, country, close_browser=true)" in docs
+        assert "本分支不允许 CLI fallback" in docs
+        assert "本轮不得执行 `amazon_rufus_logout`、`amazon_rufus_watch_login` 或重复 `amazon_rufus_get`" not in docs
+        assert "先通过 MCP auth 工具修复 OPS/MCP 鉴权" not in docs
