@@ -143,6 +143,9 @@ class ApiKeyAuthMiddleware:
             scope["mcp_api_key"] = token
             scope["mcp_user_id"] = user_info.get("user_id")
             scope["mcp_user_email"] = user_info.get("email")
+            # 工具权限白名单：新后端 verify-key 返回 allowed_tools 字段；
+            # 旧后端无此字段时为 None，权限中间件视为全量放行（向后兼容）
+            scope["mcp_allowed_tools"] = user_info.get("allowed_tools")
         elif self._api_key and token == self._api_key:
             # 固定 API Key 模式（向后兼容）
             scope["mcp_api_key"] = token
@@ -157,6 +160,8 @@ class ApiKeyAuthMiddleware:
             "api_key": token,
             "user_id": scope.get("mcp_user_id"),
             "email": scope.get("mcp_user_email"),
+            # None=固定 Key 模式/旧后端（全量放行）；list=按白名单过滤
+            "allowed_tools": scope.get("mcp_allowed_tools"),
         })
 
         # ── SSE 响应追踪（消除 uvicorn 错误日志）──────────────────────
