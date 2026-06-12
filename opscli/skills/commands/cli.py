@@ -1213,7 +1213,8 @@ def publish_skill(
         raise typer.Exit(1)
 
     skill_name = version_data.get("name", "")
-    version = version_data.get("version", "1.0.0").lstrip("v")
+    # 首次发布时默认使用 0.0.1（而非 1.0.0），符合语义化版本规范
+    version = version_data.get("version", "0.0.1").lstrip("v")
     if not skill_name:
         _emit({
             "success": False, "command": command,
@@ -1221,8 +1222,20 @@ def publish_skill(
         }, json_output)
         raise typer.Exit(1)
 
-    # 从 SKILL.md frontmatter 读取元数据，CLI 参数优先
+    # 版本号一致性检查：VERSION.json 与 SKILL.md frontmatter
     fm = _parse_skill_md_frontmatter(skill_md_path)
+    fm_version = (fm.get("version") or "").lstrip("v")
+    if fm_version and fm_version != version:
+        _emit({
+            "success": False, "command": command,
+            "error": {
+                "type": "ValueError",
+                "message": f"版本号不一致：data/VERSION.json 中为 '{version}'，SKILL.md frontmatter 中为 '{fm_version}'。请确保两者一致。",
+            },
+        }, json_output)
+        raise typer.Exit(1)
+
+    # 从 SKILL.md frontmatter 读取元数据，CLI 参数优先
     resolved_title      = title or fm.get("title") or skill_name
     resolved_desc       = description or fm.get("description") or ""
     resolved_summary    = summary or fm.get("summary") or ""
