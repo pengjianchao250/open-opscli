@@ -5,7 +5,7 @@
 - `site`：站点，如美国站 `US`、日本站 `JP`、德国站 `DE`、英国站 `UK`、法国站 `FR`、意大利站 `IT`、西班牙站 `ES`、加拿大站 `CA`、印度站 `IN`、墨西哥站 `MX`
 - `period`：周期，如近 30 天 `30d`、最近 `nearly`、指定月份 `2026-03`
 - `page_size`：每页数量，默认 `100`
-- `export_format`：导出格式，默认 `xls`，也支持 `xlsx`、`json`
+- `export_format`：导出格式，默认 `xls`；可省略或显式传 `xls`
 
 注意：`product-research` 里的“月份 / 数据月份 / 2026-04”应传公共参数 `period`，不是 `putawayMonth`。`putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
 
@@ -153,7 +153,7 @@
 
 - 首先请求 `/v3/api/ai-workflow/listing-analysis` 创建任务。
 - 返回 `taskId` 后轮询 `/v3/api/ai-analysis/task/{taskId}`。
-- 报告正文在结果的 `data.content` 中，建议使用 `export_format=json`。
+- 报告正文在结果的 `data.content` 中；导出格式仍使用默认 `xls`。
 
 ## 选市场 `market-research`
 
