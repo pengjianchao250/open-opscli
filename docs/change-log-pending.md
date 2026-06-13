@@ -1740,3 +1740,25 @@
 **影响范围**：仅管理后台角色绑定交互；单角色保存接口语义不变。
 **回滚方式**：git checkout 恢复控制器、路由和 blade 文件。
 ---
+
+## 2026-06-13 skills - 新增 AuWork 安装路径支持（Windows 专属，多用户目录 fan-out）
+
+**变更原因**：需支持 AuWork Windows 客户端这一特殊安装路径 `C:\Users\<用户>\.auwork\{用户ID}\skills`，其中 `{用户ID}` 为纯数字目录，且同一机器可有多个登录用户对应多个数字目录，需把 Skill fan-out 安装到全部用户目录。AuWork 与现有 7 种运行时的本质区别是「一个运行时展开为 N 个目标目录」。
+**改动点**：
+- `opscli/skills/discovery/detector.py`：新增 `import sys` 与 `_auwork_targets()` 方法（Windows 专属，扫描 `~/.auwork` 下所有纯数字子目录的 skills/，非 Win/空目录返回空列表）；在 `detect_available_install_targets`、`detect_global_install_targets`、`detect_all_install_targets`、`detect_install_targets`（显式 auwork 分支）4 处织入；`candidate_dirs` 追加 auwork 目录使 list/upgrade 可发现；`_infer_runtime` 识别 `.auwork` 段。
+- `opscli/skills/domain/models.py`：`runtime_to_tool_name` 加 `"auwork": "auwork"`。
+- `opscli/skills/commands/cli.py`：`_TOOL_LABELS` 加 `"auwork": "AuWork"`；install `--runtime` help 文案补充 auwork；显式 `--runtime auwork` 但无数字目录时打印「已跳过」提示（GBK 兼容）。
+- `tests/skills/test_detector.py`：新增 8 个 AuWork 用例（monkeypatch `sys.platform=win32` + `Path.home`）。
+**验证结果**：`pytest tests/skills/test_detector.py` 新增 8 个 AuWork 用例全部 PASSED；`tests/skills/test_cli.py` 12 passed。`test_manager.py` 3 个失败、`test_detector` 中 1 个 `--runtime all` 失败、whole-dir 的 capture I/O error 经 `git stash` 验证均为改动前已存在，与本次无关。安装/链接主循环与 linker 未改动（管线本就按 list[(runtime,path)] 处理）。
+**影响范围**：仅 skills 安装目标探测；新增 auwork 运行时，非 Windows 平台 `_auwork_targets()` 恒为空，对 mac/linux 零影响；现有 7 种运行时行为不变。
+**回滚方式**：删除 detector 的 `_auwork_targets` 方法、4 处 `extend`/分支、candidate_dirs 与 _infer_runtime 增量，及 models/cli 的 2 处映射与提示；git checkout 恢复对应文件。
+---
+
+## 2026-06-13 skills - 修正 test_runtime_all_targets_all_supported_global_dirs 陈旧断言
+
+**变更原因**：该测试断言 `--runtime all` 仅返回 5 个运行时，但 `detect_all_install_targets` 早已新增 trae-cn、agents（本次又加 auwork），测试一直处于失败状态（改动前已失败）。
+**改动点**：`tests/skills/test_detector.py` —— 补全断言为 claude/openclaw/codex/opencode/workbuddy/trae-cn/agents/auwork 共 8 项；用例内 monkeypatch `sys.platform=win32` 并构造 `~/.auwork/1001` 数字目录以覆盖 auwork。
+**验证结果**：`pytest tests/skills/test_detector.py` 9 passed。
+**影响范围**：仅测试文件，无生产代码改动。
+**回滚方式**：git checkout 恢复 tests/skills/test_detector.py。
+---
