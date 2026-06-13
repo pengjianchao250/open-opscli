@@ -35,13 +35,14 @@ def reset_stdio_cache():
     invalidate_stdio_cache()
 
 
-def _set_http_ctx(allowed_tools):
+def _set_http_ctx(allowed_tools, permission_enabled=None):
     """模拟 HTTP/SSE 模式下 ApiKeyAuthMiddleware 注入的请求上下文。"""
     mcp_request_ctx.set({
         "api_key": "mcp_test_key",
         "user_id": 1,
         "email": "user@example.com",
         "allowed_tools": allowed_tools,
+        "permission_enabled": permission_enabled,
     })
 
 
@@ -72,6 +73,23 @@ def test_http_mode_empty_allowed_tools_keeps_base_auth():
     _set_http_ctx([])
 
     assert _run(_resolve_allowed_tools()) == BASE_AUTH_TOOLS
+
+
+def test_http_mode_permission_disabled_allows_all():
+    """后端关闭权限管控（permission_enabled=False）→ 全量放行，忽略 allowed_tools。"""
+    _set_http_ctx(["query_simple"], permission_enabled=False)
+
+    assert _run(_resolve_allowed_tools()) is None
+
+
+def test_http_mode_permission_enabled_still_filters():
+    """后端开启权限管控（permission_enabled=True）→ 仍按白名单过滤。"""
+    _set_http_ctx(["query_simple"], permission_enabled=True)
+
+    allowed = _run(_resolve_allowed_tools())
+
+    assert "query_simple" in allowed
+    assert "keepa_run" not in allowed
 
 
 # ── 中间件过滤与拦截 ────────────────────────────────────────────────
@@ -173,6 +191,23 @@ def test_stdio_mode_fetches_allowed_tools(stdio_env):
     assert BASE_AUTH_TOOLS <= first
     assert first == second
     assert route.calls.call_count == 1
+
+
+@respx.mock
+def test_stdio_mode_permission_disabled_allows_all(stdio_env):
+    """stdio 模式：后端关闭权限管控（permission_enabled=False）→ 全量放行。"""
+    respx.get("https://ops.example.com/api/v1/mcp/allowed-tools").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "success": True,
+                "permission_enabled": False,
+                "allowed_tools": ["query_simple"],
+            },
+        )
+    )
+
+    assert _run(_resolve_allowed_tools()) is None
 
 
 @respx.mock
