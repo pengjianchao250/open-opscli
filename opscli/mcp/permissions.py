@@ -4,9 +4,13 @@
 - on_list_tools：无权限的工具直接从工具列表中隐藏（减少 AI Agent 的上下文开销）
 - on_call_tool：拦截越权调用（防止绕过 list_tools 直接调用）
 
+全局管控开关：后端响应附带 permission_enabled 字段（来自 auto-scheduler 的
+config('opscli.tool_permission_enabled')）。显式为 False 时表示后端未开启管控，
+本端直接全量放行；字段缺失（旧后端，None）时维持按 allowed_tools 过滤的原有行为。
+
 三种运行模式的权限来源（自动探测，无需启动参数）：
 1. HTTP/SSE 远程校验模式：ApiKeyAuthMiddleware 调用 /v1/mcp/verify-key 时
-   后端已返回 allowed_tools，随用户信息注入请求上下文（contextvar/scope）
+   后端已返回 allowed_tools / permission_enabled，随用户信息注入请求上下文（contextvar/scope）
 2. HTTP/SSE 固定 API Key 模式 / 旧后端：上下文中 allowed_tools 为 None
    → 全量放行（保持向后兼容，不破坏单用户部署）
 3. stdio 本地模式：无 API Key，读取本地 CredentialStore 的 session_id，
@@ -77,14 +81,21 @@ async def _resolve_allowed_tools() -> frozenset[str] | None:
     if get_current_api_key():
         # 双重读取：优先 contextvar，降级读 POST 请求 scope（SSE 模式下 contextvar 可能丢失）
         allowed: list | None = None
+        permission_enabled: bool | None = None
         ctx = mcp_request_ctx.get()
         if ctx:
             allowed = ctx.get("allowed_tools")
+            permission_enabled = ctx.get("permission_enabled")
         if allowed is None:
             scope = _get_scope_from_mcp_request_ctx()
             if scope:
                 allowed = scope.get("mcp_allowed_tools")
+                if permission_enabled is None:
+                    permission_enabled = scope.get("mcp_permission_enabled")
 
+        # 后端显式关闭权限管控（permission_enabled=False）→ 全量放行
+        if permission_enabled is False:
+            return None
         if allowed is None:
             # 固定 API Key 模式 / 旧后端（verify-key 响应无 allowed_tools 字段）→ 全量放行
             return None
@@ -132,7 +143,11 @@ async def _stdio_allowed_tools() -> frozenset[str] | None:
         if resp.status_code == 200:
             data = resp.json()
             if data.get("success"):
-                result = frozenset(data.get("allowed_tools") or []) | BASE_AUTH_TOOLS
+                if data.get("permission_enabled") is False:
+                    # 后端关闭权限管控 → 全量放行
+                    result = None
+                else:
+                    result = frozenset(data.get("allowed_tools") or []) | BASE_AUTH_TOOLS
             else:
                 result = BASE_AUTH_TOOLS
         elif resp.status_code == 404:

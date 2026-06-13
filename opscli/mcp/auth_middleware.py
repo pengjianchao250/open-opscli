@@ -146,6 +146,9 @@ class ApiKeyAuthMiddleware:
             # 工具权限白名单：新后端 verify-key 返回 allowed_tools 字段；
             # 旧后端无此字段时为 None，权限中间件视为全量放行（向后兼容）
             scope["mcp_allowed_tools"] = user_info.get("allowed_tools")
+            # 权限管控开关：后端显式返回 False 时全量放行；旧后端无此字段为 None，
+            # 维持按 allowed_tools 过滤的原有行为
+            scope["mcp_permission_enabled"] = user_info.get("permission_enabled")
         elif self._api_key and token == self._api_key:
             # 固定 API Key 模式（向后兼容）
             scope["mcp_api_key"] = token
@@ -162,6 +165,8 @@ class ApiKeyAuthMiddleware:
             "email": scope.get("mcp_user_email"),
             # None=固定 Key 模式/旧后端（全量放行）；list=按白名单过滤
             "allowed_tools": scope.get("mcp_allowed_tools"),
+            # False=后端关闭权限管控（全量放行）；None=旧后端（按 allowed_tools 过滤）
+            "permission_enabled": scope.get("mcp_permission_enabled"),
         })
 
         # ── SSE 响应追踪（消除 uvicorn 错误日志）──────────────────────
