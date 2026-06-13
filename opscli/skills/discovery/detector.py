@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 from pathlib import Path
 
 from opscli.skills.domain.models import SkillRecord
@@ -56,6 +57,10 @@ class SkillDetector:
                 home / ".agents" / "skills",
             ]
         )
+
+        # AuWork（Windows 专属）：追加 ~/.auwork 下所有纯数字用户目录的 skills/，
+        # 使 list/status/upgrade/unlink 能发现已安装到 AuWork 的 Skill
+        candidates.extend(path for _, path in self._auwork_targets())
 
         # 按路径去重，避免同一目录被重复扫描
         seen: set[str] = set()
@@ -150,6 +155,11 @@ class SkillDetector:
                 normalized = runtime.strip().lower()
                 if normalized == "all":
                     return self.detect_all_install_targets()
+                # AuWork 是特殊运行时：一个运行时展开为 N 个目标目录，
+                # 不能走单路径的 detect_install_target
+                if normalized == "auwork":
+                    targets.extend(self._auwork_targets())
+                    continue
                 _, path = self.detect_install_target(cwd=current, preferred_runtime=normalized)
                 targets.append((normalized, path))
             return self._dedupe_targets(targets)
@@ -191,6 +201,9 @@ class SkillDetector:
         # Agents：.agents/ 目录存在
         if (current / ".agents").exists():
             targets.append(("agents", current / ".agents" / "skills"))
+        # AuWork（Windows 专属）：始终基于用户 home 探测，与 cwd 无关，
+        # 自动纳入 ~/.auwork 下所有纯数字用户目录
+        targets.extend(self._auwork_targets())
         return self._dedupe_targets(targets)
 
     def detect_global_install_targets(self) -> list[tuple[str, Path]]:
@@ -239,6 +252,9 @@ class SkillDetector:
         if (home / ".agents").exists() or shutil.which("agents") is not None:
             targets.append(("agents", home / ".agents" / "skills"))
 
+        # AuWork（Windows 专属）：~/.auwork 下所有纯数字用户目录
+        targets.extend(self._auwork_targets())
+
         return self._dedupe_targets(targets)
 
     def detect_all_install_targets(self) -> list[tuple[str, Path]]:
@@ -258,7 +274,29 @@ class SkillDetector:
                 ("trae-cn",    home / ".trae-cn" / "skills"),
                 ("agents",     home / ".agents" / "skills"),
             ]
+            # AuWork（Windows 专属）：非 Windows 自动为空，不影响 mac/linux
+            + self._auwork_targets()
         )
+
+    def _auwork_targets(self) -> list[tuple[str, Path]]:
+        """返回 AuWork 安装目标列表：~/.auwork 下所有纯数字用户目录的 skills/。
+
+        AuWork 是 Windows 专属的特殊运行时，一个运行时展开为 N 个目标目录
+        （每个登录过的 AuWork 用户对应一个纯数字命名的目录）。
+        非 Windows、~/.auwork 不存在、或无任何纯数字子目录时均返回空列表
+        （对应"跳过并提示"语义，由调用方决定是否提示）。
+        """
+        # 仅 Windows 生效：AuWork 是 Windows 客户端专属路径
+        if sys.platform != "win32":
+            return []
+        auwork_root = Path.home() / ".auwork"
+        if not auwork_root.exists():
+            return []
+        # 只纳入"纯数字"命名的用户目录，按名称排序保证输出稳定
+        return [
+            ("auwork", sub / "skills")
+            for sub in sorted(p for p in auwork_root.iterdir() if p.is_dir() and p.name.isdigit())
+        ]
 
     def _opencode_config_dir(self) -> Path:
         """返回 OpenCode 的配置根目录（所有平台统一为 ~/.config/opencode/）。"""
@@ -297,4 +335,6 @@ class SkillDetector:
             return "trae-cn"
         if ".agents" in parts:
             return "agents"
+        if ".auwork" in parts:
+            return "auwork"
         return "claude"

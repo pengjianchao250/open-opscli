@@ -61,6 +61,7 @@ _TOOL_LABELS = {
     "workbuddy": "WorkBuddy",
     "trae-cn":   "Trae Solo",
     "agents":    "Agents",
+    "auwork":    "AuWork",
     "central":   "中央存储",
 }
 
@@ -1640,7 +1641,7 @@ def list_skills(
 def install_skill(
     name: str | None = typer.Argument(None, help="Skill 名称或远程标识符（如 pengjianchao@ops-auth）"),
     skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定安装目录"),
-    runtime: str | None = typer.Option(None, "--runtime", help="claude、openclaw、all，或逗号分隔多个值"),
+    runtime: str | None = typer.Option(None, "--runtime", help="claude、openclaw、auwork、all，或逗号分隔多个值"),
     force: bool = typer.Option(False, "--force", help="覆盖已存在目录"),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认，自动全选所有 Skills 和检测到的 AI 工具"),
     version: str | None = typer.Option(None, "--version", help="安装指定版本（仅远程安装有效）"),
@@ -1677,6 +1678,11 @@ def install_skill(
         return
 
     manager = SkillsManager()
+    # 显式指定 --runtime auwork 但 ~/.auwork 下无纯数字用户目录时，提示已跳过
+    # （AuWork 客户端尚未登录过，无法凭空知道用户 ID）
+    if runtime and "auwork" in [r.strip().lower() for r in runtime.split(",")]:
+        if not manager.detector._auwork_targets():
+            _console.print("[dim]未发现 AuWork 用户目录（~/.auwork 下无纯数字子目录），已跳过 AuWork 安装[/dim]")
     try:
         if name is None:
             _install_interactive(manager, skills_dir=skills_dir, runtime=runtime, force=force, yes=yes, pretty=pretty)
