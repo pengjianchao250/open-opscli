@@ -1,7 +1,7 @@
 ---
 name: ops-seller-sprite
 mcp-version: v1.0.0
-description: SellerSprite/卖家精灵 usage guide for querying scenarios and exporting JSON or XLSX files through seller_sprite_* MCP tools.
+description: SellerSprite/卖家精灵 usage guide for querying scenarios and exporting XLS files through seller_sprite_* MCP tools.
 ---
 
 # ops-seller-sprite MCP
@@ -31,9 +31,8 @@ SellerSprite integration accounts are cached in the backend process for 10 minut
 
 ## Export Format
 
-- MCP default: `xls`, which the backend writes as an XLSX file.
-- Use `export_format: "json"` only when the user explicitly asks for JSON.
-- `xlsx` is accepted by the backend; `xls` and `xlsx` both produce XLSX files.
+- MCP export format: `xls`.
+- Omit `export_format` to use the `xls` default, or pass `export_format: "xls"` explicitly.
 
 ## Missing Params Policy
 
@@ -240,7 +239,7 @@ Top-level defaults:
 | `site` | `US` |
 | `period` | `30d` |
 | `page_size` | `100` |
-| `export_format` | `xls` (XLSX file) |
+| `export_format` | `xls` |
 
 Scenario defaults:
 
@@ -264,7 +263,7 @@ Scenario defaults:
   "params": {
     "asin": "B07YRMT36L"
   },
-  "export_format": "xlsx"
+  "export_format": "xls"
 }
 ```
 
@@ -277,7 +276,7 @@ Scenario defaults:
     "asin": "B0D3845MWD",
     "station": "GLOBAL"
   },
-  "export_format": "json"
+  "export_format": "xls"
 }
 ```
 
@@ -291,7 +290,7 @@ Scenario defaults:
     "filterRootWord": 1,
     "amazonChoice": true
   },
-  "export_format": "json"
+  "export_format": "xls"
 }
 ```
 
@@ -303,7 +302,7 @@ Scenario defaults:
   "params": {
     "keyword": "solar outdoor lights"
   },
-  "export_format": "json"
+  "export_format": "xls"
 }
 ```
 
@@ -316,7 +315,7 @@ Scenario defaults:
     "departmentKeyword": "Baby Diapers",
     "newReleaseNum": 3
   },
-  "export_format": "xlsx"
+  "export_format": "xls"
 }
 ```
 
