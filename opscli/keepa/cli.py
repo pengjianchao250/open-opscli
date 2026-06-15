@@ -36,7 +36,7 @@ def run_scenario(
     params: str = typer.Option("{}", "--params", help="场景参数 JSON 字符串"),
     output_dir: str | None = typer.Option(None, "--output-dir", help="输出目录"),
     job_id: str | None = typer.Option(None, "--job-id", help="指定任务 ID"),
-    export_format: str = typer.Option("xls", "--export-format", help="导出格式：xls/xlsx/json；大结果会自动改为 JSON"),
+    export_format: str = typer.Option("xls", "--export-format", help="导出格式：xls/xlsx"),
     reserve_tokens: int | None = typer.Option(None, "--reserve-tokens", help="预留 token 阈值"),
     force: bool = typer.Option(False, "--force", help="忽略 token 预检查提醒继续执行"),
     wait: bool = typer.Option(False, "--wait", help="token 不足时等待一次 refill 后执行"),

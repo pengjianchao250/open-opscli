@@ -1,5 +1,25 @@
 # 待归档变更记录
 
+## 2026-06-15 Keepa - XLSX 流式导出优化
+
+**变更原因**：Keepa MCP 已不再支持 JSON 用户导出，需要提升 XLSX 导出对较大结果集的承载能力，避免普通 openpyxl 工作簿逐格写入带来的内存和耗时压力。
+**改动点**：`opscli/keepa/export/xlsx.py` 改为 `Workbook(write_only=True)` 流式工作簿，通过 `sheet.append()` 写入表头和数据行；列扫描改为基于原始 rows 遍历，避免额外复制整表 normalized 数据；保留中文表头、表头样式、冻结窗格、列宽和 extra sheets 行为；`tests/keepa/test_export.py` 新增流式 workbook 约束测试。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\keepa\test_export.py::test_xlsx_export_uses_streaming_workbook -q` 失败于当前实现调用普通 `Workbook()`；GREEN 阶段同一命令通过，`1 passed`；回归 `.\.venv\Scripts\python.exe -m pytest tests\keepa\test_export.py tests\keepa\test_api_manager.py tests\mcp\test_keepa_tools.py -q` 通过，`21 passed`。
+**影响范围**：影响 Keepa XLSX 文件生成方式；输出文件格式、字段标题、extra sheets 和 MCP 返回结构保持不变。
+**回滚方式**：恢复 `opscli/keepa/export/xlsx.py` 为普通 `Workbook()` + `sheet.cell()` 逐格写入，并移除 `tests/keepa/test_export.py` 中流式 workbook 约束测试。
+
+---
+
+## 2026-06-15 Keepa - 禁用 JSON 用户导出
+
+**变更原因**：Keepa MCP 当前只支持面向用户的 xls/xlsx 表格导出，JSON 导出对运营用户没有实际价值，旧文档和实现仍允许请求 JSON，容易让 Agent 返回不可用的用户交付物。
+**改动点**：`opscli/mcp/tools/keepa.py` 在 MCP 入口校验导出格式，只允许 `xls/xlsx`；`opscli/keepa/services/api_manager.py` 移除 JSON 用户导出和大结果自动转 JSON 路径，直接拒绝 `json`；同步更新 CLI 帮助、Keepa MCP 规范和内部 Keepa 参考文档；新增/调整 Keepa MCP 与 manager 测试覆盖非法 JSON 导出。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_keepa_tools.py tests\keepa\test_api_manager.py -q` 失败于 MCP 和 manager 仍接受 `export_format="json"`；GREEN 阶段同一命令通过，`14 passed`。
+**影响范围**：影响 Keepa MCP、Keepa CLI/Python manager 的用户导出格式；`params.json`、`raw.json`、`result.json` 任务内部文件仍保留，用于排障和后端比对。
+**回滚方式**：恢复 `opscli/keepa/services/api_manager.py` 的 JSON 导出分支和大结果自动 JSON 逻辑，恢复 `opscli/mcp/tools/keepa.py` 对 `export_format` 的原样透传，并回退相关文档和测试。
+
+---
+
 ## 2026-06-08 Amazon Rufus - 获取前登录态检查
 
 **变更原因**：用户要求在发起 Rufus 获取前先检查是否已有 Amazon 登录态；没有可用登录态时再走登录采集流程，避免 allowed/denied 路径直接获取后才失败或重复打开登录窗口。
