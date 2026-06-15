@@ -1673,3 +1673,23 @@
 **影响范围**：西柚凭据读取、MCP/HTTP 模式下西柚任务启动前的 token 获取、补登成功后的缓存刷新。
 **回滚方式**：移除新增配置和 `credential_service.py`，恢复 `XiyouCredentialProvider` 只读取本地 `.env`，删除新增回调路由和后端服务文档。
 ---
+
+## 2026-06-15 MCP - 卖家精灵调用限额
+
+**变更原因**：MCP 卖家精灵服务需要按用户限制每日调用次数，避免外部服务被单用户高频消耗；后续西柚、Sif 也需要复用同一限额切面。
+**改动点**：新增 `opscli/mcp/quota.py`，提供 `QuotaPolicy`、`SQLiteQuotaStore`、`QuotaLimiter`、`QuotaConfig`、配置文件加载和 MCP 用户身份解析；`opscli/mcp/server.py` 在现有 Tool 注册代理中加入限额 AOP 包裹，首期只限制 `seller_sprite_run`；限额计数、失败次数和每日持久化记录统一写入 SQLite 表 `mcp_quota_daily`；表内新增 `identity_key` 用于对照中间件用户身份，远程校验模式保存 `user_id` 或标准化邮箱，固定 API Key 模式保存与 MCP 用户表一致的 `sha256:<digest>`；新增 `configs/mcp-quota.json` 作为项目 / 部署目录默认运行配置，新增 `opscli/mcp/configs/mcp-quota.json` 作为 wheel 包内默认配置并通过 `pyproject.toml` 纳入 package data；运行时按 `OPSCLI_MCP_QUOTA_CONFIG_PATH`、当前工作目录 `configs/mcp-quota.json`、源码项目根目录 `configs/mcp-quota.json`、`~/.config/opscli/mcp_quota/config.json`、包内默认配置、代码默认值读取限额配置；`pyproject.toml` 和 `uv.lock` 移除外部缓存依赖，并移除暂不开放的 `google-trends` optional extra / `pytrends` 锁定；新增 `tests/mcp/test_quota.py` 并扩展卖家精灵 MCP 测试；新增 `docs/plans/MCP服务调用限额方案.md` 归档方案并更新为 SQLite 和配置文件口径。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests/mcp/test_quota.py -vv -s` 失败于 `ModuleNotFoundError: No module named 'opscli.mcp.quota'`；SQLite 持久化 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于 `ImportError: cannot import name 'SQLiteQuotaStore'`；身份对照 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于 API Key 缺少 `sha256:` 前缀和 SQLite 缺少 `identity_key` 列；配置文件 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于缺少 `ENV_QUOTA_CONFIG_PATH` 和 `load_quota_config`；项目配置优先级 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于缺少 `_project_quota_config_path`；打包部署目录 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于未读取当前工作目录 `configs/mcp-quota.json`；GREEN 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 为 14 passed；目标回归 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_tools.py::test_mcp_exposes_expected_tools tests/mcp/test_tools.py::test_mcp_hides_temporarily_closed_service_tools tests/mcp/test_quota.py tests/mcp/test_seller_sprite_tools.py -q` 为 21 passed。完整 MCP 回归 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp -q` 为 75 passed、5 failed，失败项为既有 `get_mcp_request_headers` 版本头断言不一致和已停用 google_trends 注册断言。
+**影响范围**：影响 MCP Tool 注册链路和 `seller_sprite_run` 调用行为；`seller_sprite_spec_must_read`、`seller_sprite_scenarios`、`seller_sprite_job_status`、`seller_sprite_export` 不扣次数；SQLite 不可用时受限服务返回 `MCP_QUOTA_UNAVAILABLE`；默认库文件为 `~/.config/opscli/mcp_quota/quota.sqlite3`，可通过 `OPSCLI_MCP_QUOTA_SQLITE_PATH` 覆盖。
+**回滚方式**：删除 `opscli/mcp/quota.py`、`tests/mcp/test_quota.py` 和 `configs/mcp-quota.json`，回退 `opscli/mcp/server.py` 中 `_quota_wrap` 及注册包裹顺序，按需恢复 `google-trends` optional extra，删除方案文档和卖家精灵测试中的限额断言；如需清理本地限额记录，删除 `~/.config/opscli/mcp_quota/quota.sqlite3*` 和运行时限额配置文件。
+
+---
+
+## 2026-06-15 MCP - 暂停 Sif 和西柚工具注册
+
+**变更原因**：Sif 和西柚 MCP 工具当前暂不对外开放，需要从 MCP Server 工具列表中隐藏，避免客户端继续发现和调用。
+**改动点**：注释 `opscli/mcp/server.py` 中 Sif / 西柚工具模块导入与注册，保留工具模块代码；`tests/mcp/test_tools.py` 新增工具列表不可见断言。
+**验证结果**：RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_tools.py::test_mcp_hides_temporarily_closed_service_tools -q` 失败于 `sif_run` 仍存在；GREEN 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_tools.py::test_mcp_exposes_expected_tools tests/mcp/test_tools.py::test_mcp_hides_temporarily_closed_service_tools -q` 为 2 passed。
+**影响范围**：MCP Server 不再暴露 `sif_*` 和 `xiyou_*` 工具；CLI、业务模块和直接导入测试不受影响。
+**回滚方式**：恢复 `opscli/mcp/server.py` 中 `_sif_tools`、`_xiyou_tools` 的导入与 register 调用，并移除工具列表隐藏断言。
+
+---

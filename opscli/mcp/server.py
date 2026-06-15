@@ -76,6 +76,34 @@ import functools
 import time as _time
 
 
+def _quota_wrap(fn, *, limiter=None):
+    """将 MCP tool 函数包裹限额切面。
+
+    限额策略按 tool 函数名匹配。未配置策略的工具会直接放行，
+    因此 seller_sprite_scenarios / job_status / export 不会消耗次数。
+    """
+    @functools.wraps(fn)
+    async def _wrapper(*args, **kwargs):
+        from opscli.mcp.quota import get_quota_limiter
+
+        quota_limiter = limiter or get_quota_limiter()
+        decision = await quota_limiter.before_call(fn.__name__)
+        if not decision.allowed:
+            return decision.error_response
+
+        try:
+            result = await fn(*args, **kwargs)
+        except Exception:
+            await quota_limiter.after_exception(decision.ticket)
+            raise
+
+        if isinstance(result, dict):
+            return await quota_limiter.after_call(decision.ticket, result)
+        return result
+
+    return _wrapper
+
+
 def _telemetry_wrap(fn):
     """将 MCP tool 函数包裹遥测装饰器。
 
@@ -224,8 +252,8 @@ class _TelemetryMcpProxy:
         real_decorator = self._real.tool(*args, **kwargs)
 
         def wrap(fn):
-            # 先包裹遥测，再注册到 FastMCP
-            return real_decorator(_telemetry_wrap(fn))
+            # 先插入限额切面，再包裹遥测，最终注册到 FastMCP
+            return real_decorator(_telemetry_wrap(_quota_wrap(fn)))
 
         return wrap
 
@@ -246,9 +274,10 @@ from opscli.mcp.tools import feedback as _feedback_tools
 from opscli.mcp.tools import keepa as _keepa_tools
 from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import seller_sprite as _seller_sprite_tools
-from opscli.mcp.tools import sif as _sif_tools
 from opscli.mcp.tools import skills as _skills_tools
-from opscli.mcp.tools import xiyou as _xiyou_tools
+# Sif / 西柚暂不开放 MCP 工具：保留工具模块代码，待业务确认后再恢复注册。
+# from opscli.mcp.tools import sif as _sif_tools
+# from opscli.mcp.tools import xiyou as _xiyou_tools
 
 _auth_tools.register(_telemetry_mcp)
 _amazon_rufus_tools.register(_telemetry_mcp)
@@ -258,8 +287,8 @@ _feedback_tools.register(_telemetry_mcp)
 _keepa_tools.register(_telemetry_mcp)
 _query_tools.register(_telemetry_mcp)
 _seller_sprite_tools.register(_telemetry_mcp)
-_sif_tools.register(_telemetry_mcp)
-_xiyou_tools.register(_telemetry_mcp)
+# _sif_tools.register(_telemetry_mcp)
+# _xiyou_tools.register(_telemetry_mcp)
 _skills_tools.register(_telemetry_mcp)
 
 # amazon 工具依赖可选扩展 playwright，未安装时跳过注册不影响其他工具
