@@ -67,7 +67,6 @@ async def keepa_run(
     如果未提供 session_id / jwt，会自动尝试从当前 MCP 会话隔离凭证中加载。
     若无 OPS 登录态但设置了 OPSCLI_KEEPA_API_KEY，也可直接执行。
     """
-    sid, jw = _get_auth_pair("ops", session_id, jwt)
     call_params = {
         "scenario": scenario,
         "site": site,
@@ -78,6 +77,9 @@ async def keepa_run(
         "job_id": job_id,
     }
     try:
+        export_format = _normalize_mcp_export_format(export_format)
+        call_params["export_format"] = export_format
+        sid, jw = _get_auth_pair("ops", session_id, jwt)
         from opscli.keepa.domain.models import KeepaScenarioRequest
         from opscli.keepa.services import KeepaApiManager
 
@@ -95,6 +97,8 @@ async def keepa_run(
         )
         result = await KeepaApiManager(jwt=jw, session_id=sid).run(request)
         return _ok(_public_result(result.to_dict()))
+    except ValueError as exc:
+        return _err(exc, tool="MCP → keepa_run(...)", call_params=call_params, auto_feedback=False)
     except Exception as exc:
         return _err(exc, tool="MCP → keepa_run(...)", call_params=call_params)
 
@@ -145,6 +149,14 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
     return public
+
+
+def _normalize_mcp_export_format(value: str) -> str:
+    """校验 MCP 对外导出格式；当前只允许生成用户可读表格。"""
+    text = (value or "").strip().lower()
+    if text in {"", "xls", "xlsx"}:
+        return "xls"
+    raise ValueError(f"不支持的导出格式：{value}。Keepa MCP 当前仅支持 xls/xlsx 表格导出。")
 
 
 def _ensure_export_url(export: Any) -> None:

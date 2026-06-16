@@ -19,16 +19,16 @@ visibility: internal
 2. 站点缺省用 `US`；不要因为缺站点而追问。
 3. 必填参数齐全时直接执行 `keepa_run`；不要把内部参数确认流程暴露给用户。
 4. 只缺必填项时最多追问 1 个短问题；一次追问尽量覆盖同一场景的所有必填项。
-5. 默认导出用户可读 XLSX；用户明确要原始数据、后端比对、JSON 或结果行数过大时用 JSON。
+5. 默认导出用户可读 XLSX；MCP 当前不支持 JSON 用户导出，后端比对使用任务内部 `raw.json`。
 6. 最终回复只给业务结果：查询对象、站点、返回行数、导出文件或链接。
 7. 不主动展示 API Key、账号来源、token 消耗、额度余额、内部参数、`params.json`、`raw.json`。
-8. 用户不需要额外说“格式化”；默认 XLSX 导出会自动写入本地可读派生字段和明细 sheet。用户明确要求原始数据/JSON 时才跳过 XLSX 友好导出。
+8. 用户不需要额外说“格式化”；默认 XLSX 导出会自动写入本地可读派生字段和明细 sheet。
 
 ## 工具列表
 
 - `keepa_spec_must_read`: read this guide before first use. 官方接口细节见 `opscli/mcp/references/keepa/OFFICIAL.md`。
 - `keepa_scenarios`: list supported Keepa scenarios.
-- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX with automatic readable formatting. `export_format` accepts `xls`/`xlsx`/`json`; `xls` and `xlsx` both generate `.xlsx`. Large results are automatically exported as JSON to avoid XLSX timeout.
+- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX with automatic readable formatting. `export_format` accepts `xls`/`xlsx`; `xls` and `xlsx` both generate `.xlsx`.
 - `keepa_job_status`: read a saved task result by `job_id`.
 - `keepa_export`: read export path or cloud URL, filename, format, and MIME type.
 
@@ -60,8 +60,7 @@ Every run writes files under the task directory:
 - `raw.json`: endpoint, normalized request params, before/after token status, raw Keepa response.
 - `result.json`: normalized task result and export metadata.
 - `<job_id>.xlsx`: default user-facing export with Chinese headers.
-- `<job_id>.json`: optional debug export when `export_format=json`, containing rows, raw response, request params, and quota fields.
-- 当结果行数过大时，即使请求 XLSX 也会自动改为 JSON，并通过 `warnings` 返回文字提示。
+- 用户导出文件仅支持 `<job_id>.xlsx`。
 
 - `export.url` 存在时只回复云端链接；否则回复 `export.path`。
 - 上传失败但本地导出存在时，不判定任务失败，回复本地文件路径。
@@ -148,14 +147,14 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 | `查某店铺的 ASIN 列表` | `scenario="seller"`, `params={"seller":"...","storefront":true}` |
 | `查美国当前秒杀` | `scenario="lightning-deals"`, `site="US"`, `params={}` |
 | `查折扣商品，按 selection 筛选` | `scenario="deals"`, `params={"selection":{...}}` |
-| `要原始 JSON 给后端对比` | 保持原场景和参数，额外传 `export_format="json"` |
+| `要原始 JSON 给后端对比` | 保持原场景和参数，导出 XLSX；后端比对使用任务内部 `raw.json` |
 
 - 用户未指定站点：`site="US"`。
 - 用户只说“导出”：使用默认 `export_format="xls"`，实际生成自动格式化的 `.xlsx`；也可显式传 `export_format="xlsx"`。
 - 用户只说“查商品详情”：建议 `stats=30`；`product` 场景默认会带 `history=true`。
 - 用户说“不需要历史/不要价格历史”：额外传 `history=false`。
 - 用户说“只要 ASIN”：使用 `asins_only=true`。
-- 用户要求后端比对、原始数据、JSON：使用 `export_format="json"`。
+- 用户要求后端比对、原始数据、JSON：仍使用默认 XLSX 导出；说明 MCP 暂不支持 JSON 用户导出，后端比对以任务内部 `raw.json` 为准。
 - 用户未指定页码：`product-search` 可以不传 `page`，需要显式第一页时传 `page=0`。
 - `seller` 默认使用 `storefront=true`；用户明确不要店铺商品/店铺 ASIN，或一次传多个 seller ID 时，传 `storefront=false`。
 
@@ -171,7 +170,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 
 ```text
 表格字段来自 Keepa 原始响应，本地导出层只做中文表头和部分可读化处理；字段单位、倍率和准确性以 Keepa 原始响应、官方文档和后端确认口径为准。原始响应保存在 raw.json，可用于后端对比。
-默认 XLSX 会自动追加可读派生字段和明细 sheet；如需后端比对，请使用 raw.json 或显式导出 JSON。
+默认 XLSX 会自动追加可读派生字段和明细 sheet；如需后端比对，请使用任务内部 raw.json。
 ```
 
 成功模板：

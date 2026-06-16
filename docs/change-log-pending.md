@@ -1,5 +1,94 @@
 # 待归档变更记录
 
+## 2026-06-16 MCP - 处理 server.py 工具注册冲突
+
+**变更原因**：`opscli/mcp/server.py` 在合并工具清单自动上报与卖家精灵限额切面时出现冲突，需要同时保留两侧能力。
+**改动点**：在 `_TelemetryMcpProxy.tool()` 的注册代理中保留 `record_tool()` 工具清单采集，并将注册函数按“限额切面 -> 遥测切面 -> FastMCP 注册”的顺序包裹。
+**验证结果**：`.\.venv\Scripts\python.exe -m pytest tests\mcp\test_tool_catalog.py tests\mcp\test_quota.py tests\mcp\test_seller_sprite_tools.py -q` 通过，25 passed in 1.57s；`rg -n "<<<<<<<|=======|>>>>>>>" opscli\mcp\server.py` 无匹配。附加回归 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_tool_catalog.py tests\mcp\test_quota.py tests\mcp\test_seller_sprite_tools.py tests\mcp\test_tools.py -q` 中 29 passed、1 failed，失败为 `test_mcp_exposes_expected_tools` 在当前 stdio 未登录/权限过滤环境下只返回基础 auth 工具，和本次冲突块无直接关系。
+**影响范围**：影响 MCP 工具注册链路；工具清单同步、遥测采集和受限工具限额逻辑会同时生效。
+**回滚方式**：回退 `opscli/mcp/server.py` 中本次冲突块合并，并删除本条变更记录。
+
+---
+
+## 2026-06-16 MCP beta - 评论分页默认值与导出上传
+
+**变更原因**：用户反馈使用 beta/Canopy 查询 Amazon 评论时，首次未带分页参数容易因数据量过大在 30 秒内超时；同时导出结果只返回本地路径口径，未复用 Keepa 的服务器上传能力，最终回复缺少统一模板。
+**改动点**：`opscli/mcp/tools/beta.py` 将 beta 默认超时调整为 60 秒，并在 `product-reviews` 场景未显式传 `page` 时默认补 `page=1`；`opscli/beta/canopy/services/api_manager.py` 复用 `FileUploadClient` 上传 Excel 导出，上传成功后写入远端 `export.url`，上传失败时追加 `file_upload` warning；`opscli/mcp/references/beta/SKILL_MCP.md` 补充评论默认分页、默认超时、导出上传和回复模板；`tests/mcp/test_beta_tools.py` 与 `tests/beta/canopy/test_api_manager.py` 增加默认分页/超时和上传 URL 回归测试，并在 beta MCP 单测中禁用真实上传。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_beta_tools.py::test_beta_canopy_run_product_reviews_defaults_page_and_longer_timeout -q` 失败于缺少 `page`；RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\beta\canopy\test_api_manager.py::test_manager_uploads_export_and_returns_download_url -q` 失败于 `export.url` 仍为本地 `file://`；GREEN 阶段两个单测分别通过；回归 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_beta_tools.py tests\beta\canopy -q` 通过，29 passed in 2.14s。
+**影响范围**：影响 beta Canopy `product-reviews` 默认调用参数、beta MCP 默认超时和 Canopy 导出文件返回口径；不改变其它 Canopy 场景必填参数和 xls 用户导出格式。
+**回滚方式**：回退 `opscli/mcp/tools/beta.py` 中默认超时和评论默认 `page` 逻辑，删除 `CanopyApiManager` 的文件上传调用和 helper，恢复 beta MCP 规范中的旧导出说明，并移除对应测试。
+
+---
+
+## 2026-06-16 MCP beta - 移除源码中的 Canopy key
+
+**变更原因**：用户误将 Canopy 测试 key 写入 `opscli/beta/canopy/config.py`，源码不应保存真实凭据。
+**改动点**：从 `opscli/beta/canopy/config.py` 删除硬编码 key 赋值，并将该值迁移到项目内本地文件 `opscli/beta/canopy/api_key`；未在变更记录中记录完整 key。
+**验证结果**：`Select-String -Pattern '^CANOPY_API_KEY\\s*=' opscli/beta/canopy/config.py` 无输出；本地 `api_key` 文件存在且长度为 36。
+**影响范围**：仅影响本地测试服务凭据放置位置；`beta_canopy_run` 仍通过本地配置文件读取 key。
+**回滚方式**：不建议回滚到源码硬编码；如需撤销本地 key，删除 `opscli/beta/canopy/api_key`。
+
+---
+
+## 2026-06-16 MCP beta - 隐藏 Canopy key 文档说明
+
+**变更原因**：用户要求 `opscli/mcp/references/beta/SKILL_MCP.md` 不再包含 api-key 相关描述，对用户隐藏 Canopy key 管理细节，并且不对用户开放 CLI/直连调用方式。
+**改动点**：删除 beta MCP 内部规范中的认证章节、key 管理工具说明、`api_key` 调用示例和 key 替换提示；新增规则要求对用户只开放 MCP beta 查询能力，不提供 CLI、curl、Python 或直连 REST 调用方式；保留场景、参数、导出和错误处理说明；错误处理仅保留 401 为 Canopy 认证配置异常。
+**验证结果**：`rg -n "api_key|API key|API-KEY|YOUR_CANOPY|beta_canopy_api_key|CANOPY_API_KEY|key" opscli/mcp/references/beta/SKILL_MCP.md` 无匹配；`rg -n "CLI|cli|curl|Python|直连|REST 示例" opscli/mcp/references/beta/SKILL_MCP.md` 仅保留禁止向用户提供相关调用方式的规则。
+**影响范围**：影响 beta MCP 参考文档展示口径；MCP 不再对用户暴露 key 管理工具，Canopy 调用行为仍由项目内本地 key 文件支撑。
+**回滚方式**：从 Git 历史恢复 `opscli/mcp/references/beta/SKILL_MCP.md` 中的 key 管理说明和示例。
+
+---
+
+## 2026-06-16 MCP beta - Canopy 本地 API key 管理
+
+**变更原因**：用户使用 MCP beta Canopy 时，MCP Server 进程未必继承当前 shell 的 Canopy 环境变量，导致同一 key 用 curl 成功但 MCP 调用可能使用错误或缺失的 key。测试服务只需要本地保存一个 Canopy API key，并由 beta 调用默认读取。
+**改动点**：`opscli/beta/canopy/config.py` 只保留项目内本地 `api_key` 文件读取能力，路径为 `opscli/beta/canopy/api_key`；`beta_canopy_run` 的 key 读取顺序调整为显式内部参数、项目内本地 key、占位符，不再读取 Canopy key 环境变量；MCP 对用户仅注册 `beta_spec_must_read`、`beta_canopy_scenarios`、`beta_canopy_run`；同步更新 Canopy MCP 规范和用户指南。
+**验证结果**：`.venv\Scripts\python.exe -m pytest tests/beta/canopy tests/mcp/test_beta_tools.py -q` 通过，27 passed in 1.96s；真实 `beta_canopy_run(product)` 冒烟成功，`placeholder_used=False`，确认已读取项目内本地 key 文件，返回 `row_count=1` 并生成 `canopy-local-key-smoke.xlsx`。
+**影响范围**：仅影响 beta Canopy 测试服务的 API key 获取；不改变 Canopy 请求参数、导出格式、任务文件脱敏策略或其它 MCP 工具。
+**回滚方式**：删除 `opscli/beta/canopy/config.py` 中本地 key 读取逻辑，回退 `opscli/mcp/tools/beta.py` 的 key 读取顺序，并回退 Canopy 文档说明。
+
+---
+
+## 2026-06-16 MCP beta - Canopy 评论自然语言别名映射
+
+**变更原因**：用户反馈使用 beta/Canopy `product-reviews` 查询评论时，希望自然语言中的“差评”“已验证购买”等表达能自动映射为 Canopy 官方筛选参数，降低 Agent 调用时遗漏结构化字段的概率。
+**改动点**：`opscli/mcp/tools/beta.py` 在 `product-reviews` 场景解析 `params` 后增加轻量别名归一化，支持从 `query`、`text`、`natural_language`、`naturalLanguage`、`user_input`、`userInput` 中识别星级和已验证购买表达；结构化 `rating`、`onlyVerifiedReviews` 显式入参优先，不被自然语言覆盖；同步补充 MCP beta 规范、Canopy 使用指南和 MCP 工具测试。
+**验证结果**：`.venv\Scripts\python.exe -m pytest tests\mcp\test_beta_tools.py -q` 通过，15 passed in 1.70s；`.venv\Scripts\python.exe -m pytest tests\beta\canopy tests\mcp\test_beta_tools.py -q` 通过，24 passed in 1.86s。
+**影响范围**：仅影响 beta Canopy `product-reviews` 场景参数归一化；不改变其它 Canopy 场景、Canopy API 调用层或导出层；无法规避 Canopy 上游 HTTP 500。
+**回滚方式**：移除 `opscli/mcp/tools/beta.py` 中评论别名归一化 helper 与调用，删除 `tests/mcp/test_beta_tools.py` 新增用例，并回退对应文档说明。
+
+---
+
+## 2026-06-15 MCP beta - 接入 Canopy REST API 文档与接口
+
+**变更原因**：用户要求基于 Canopy Swagger/OpenAPI 与 Python 示例，先生成 API 文档和测试阶段 beta MCP 相关接口；API key 暂用占位符，后续再提供真实 key。
+**改动点**：新增 `opscli/mcp/references/beta/SKILL_MCP.md` 和 `OFFICIAL.md` 整理 Canopy MCP 使用规范与 17 个 REST endpoint；新增 `docs/guide/Canopy API接口使用指南.md`；新增 `opscli/mcp/tools/beta.py`，提供 `beta_spec_must_read`、`beta_canopy_scenarios`、`beta_canopy_run`，内置 Canopy 场景清单，使用 `domain` 参数、`API-KEY` header 与 `<YOUR_CANOPY_API_KEY>` 占位符；在 `opscli/mcp/server.py` 注册 beta 工具；新增 `opscli/beta/canopy/` 集中管理 Canopy API 调用任务、`params.json`/`raw.json`/`result.json` 落盘和 Excel 导出，用户侧导出格式只允许 `xls`，内部按 Keepa 兼容方式生成 `.xlsx` 并通过 `export.url` 返回；新增 `tests/mcp/test_beta_tools.py` 与 `tests/beta/canopy/` 覆盖场景、参数、API key、MCP 注册、导出格式限制、路径脱敏和 xlsx 生成；按用户要求收紧 beta 触发规则，明确只有用户提到 beta/Canopy/测试服务时才调用 `beta_*` 工具，普通 Amazon 查询不得自动路由到 beta；根据真实 Canopy 评论接口响应，将 beta 默认 HTTP timeout 调整为 30 秒，并在导出层展开 `data.amazonProduct.reviewsPaginated.reviews` 为逐条评论行，保留商品上下文、分页统计和评论人/标题/正文/评分/已验证购买等字段，避免真实评论响应导出成单行巨型 JSON。
+**验证结果**：`.venv\Scripts\python.exe -m pytest tests/mcp/test_beta_tools.py tests/mcp/test_keepa_tools.py tests/mcp/test_amazon_rufus_tools.py -q` 通过，22 passed in 1.47s；收紧触发规则后复跑 `.venv\Scripts\python.exe -m pytest tests/mcp/test_beta_tools.py -q` 通过，10 passed in 1.06s；新增 beta xls 导出后复跑 `.venv\Scripts\python.exe -m pytest tests/mcp/test_beta_tools.py tests/beta/canopy tests/mcp/test_keepa_tools.py -q` 通过，22 passed in 1.71s；追加评论查询本地调试用例后复跑 `.venv\Scripts\python.exe -m pytest tests/mcp/test_beta_tools.py -q` 通过，12 passed in 1.34s；真实接口调试确认 Windows User 环境存在 `OPSCLI_BETA_CANOPY_API_KEY`，当前子进程需显式注入后可用，商品详情接口真实调用成功，评论接口在默认 10 秒超时时曾超时，调整为 30 秒后真实调用成功；修正真实评论响应展开后复跑 `.venv\Scripts\python.exe -m pytest tests\beta\canopy tests\mcp\test_beta_tools.py -q` 通过，21 passed in 1.30s；使用真实 Canopy key 对 `product-reviews`（US、ASIN `B0B3JBVDYP`）冒烟成功，默认 30 秒超时下返回 `row_count=10`，`data_preview` 来源为 `reviewsPaginated.reviews`，分页总数 `totalResults=26`，导出 `canopy-review-real-default-timeout-after-fix.xlsx`。
+**影响范围**：新增 beta MCP Canopy 只读 API 查询能力、xls 用户导出能力和文档；MCP 进程需重启后才能暴露新工具/新参数；真实 API key 只从参数或环境变量读取，不写入任务文件，不影响既有 Keepa/Rufus 工具。
+**回滚方式**：删除 `opscli/mcp/tools/beta.py`、`opscli/beta/`、`tests/mcp/test_beta_tools.py`、`tests/beta/canopy/`、`opscli/mcp/references/beta/`、`docs/guide/Canopy API接口使用指南.md`，并还原 `opscli/mcp/server.py` 中 beta import/register 改动。
+---
+
+## 2026-06-15 Keepa - XLSX 流式导出优化
+
+**变更原因**：Keepa MCP 已不再支持 JSON 用户导出，需要提升 XLSX 导出对较大结果集的承载能力，避免普通 openpyxl 工作簿逐格写入带来的内存和耗时压力。
+**改动点**：`opscli/keepa/export/xlsx.py` 改为 `Workbook(write_only=True)` 流式工作簿，通过 `sheet.append()` 写入表头和数据行；列扫描改为基于原始 rows 遍历，避免额外复制整表 normalized 数据；保留中文表头、表头样式、冻结窗格、列宽和 extra sheets 行为；`tests/keepa/test_export.py` 新增流式 workbook 约束测试。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\keepa\test_export.py::test_xlsx_export_uses_streaming_workbook -q` 失败于当前实现调用普通 `Workbook()`；GREEN 阶段同一命令通过，`1 passed`；回归 `.\.venv\Scripts\python.exe -m pytest tests\keepa\test_export.py tests\keepa\test_api_manager.py tests\mcp\test_keepa_tools.py -q` 通过，`21 passed`。
+**影响范围**：影响 Keepa XLSX 文件生成方式；输出文件格式、字段标题、extra sheets 和 MCP 返回结构保持不变。
+**回滚方式**：恢复 `opscli/keepa/export/xlsx.py` 为普通 `Workbook()` + `sheet.cell()` 逐格写入，并移除 `tests/keepa/test_export.py` 中流式 workbook 约束测试。
+
+---
+
+## 2026-06-15 Keepa - 禁用 JSON 用户导出
+
+**变更原因**：Keepa MCP 当前只支持面向用户的 xls/xlsx 表格导出，JSON 导出对运营用户没有实际价值，旧文档和实现仍允许请求 JSON，容易让 Agent 返回不可用的用户交付物。
+**改动点**：`opscli/mcp/tools/keepa.py` 在 MCP 入口校验导出格式，只允许 `xls/xlsx`；`opscli/keepa/services/api_manager.py` 移除 JSON 用户导出和大结果自动转 JSON 路径，直接拒绝 `json`；同步更新 CLI 帮助、Keepa MCP 规范和内部 Keepa 参考文档；新增/调整 Keepa MCP 与 manager 测试覆盖非法 JSON 导出。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_keepa_tools.py tests\keepa\test_api_manager.py -q` 失败于 MCP 和 manager 仍接受 `export_format="json"`；GREEN 阶段同一命令通过，`14 passed`。
+**影响范围**：影响 Keepa MCP、Keepa CLI/Python manager 的用户导出格式；`params.json`、`raw.json`、`result.json` 任务内部文件仍保留，用于排障和后端比对。
+**回滚方式**：恢复 `opscli/keepa/services/api_manager.py` 的 JSON 导出分支和大结果自动 JSON 逻辑，恢复 `opscli/mcp/tools/keepa.py` 对 `export_format` 的原样透传，并回退相关文档和测试。
+
+---
+
 ## 2026-06-08 Amazon Rufus - 获取前登录态检查
 
 **变更原因**：用户要求在发起 Rufus 获取前先检查是否已有 Amazon 登录态；没有可用登录态时再走登录采集流程，避免 allowed/denied 路径直接获取后才失败或重复打开登录窗口。
@@ -1761,4 +1850,23 @@
 **验证结果**：`pytest tests/skills/test_detector.py` 9 passed。
 **影响范围**：仅测试文件，无生产代码改动。
 **回滚方式**：git checkout 恢复 tests/skills/test_detector.py。
+
+## 2026-06-15 MCP - 卖家精灵调用限额
+
+**变更原因**：MCP 卖家精灵服务需要按用户限制每日调用次数，避免外部服务被单用户高频消耗；后续西柚、Sif 也需要复用同一限额切面。
+**改动点**：新增 `opscli/mcp/quota.py`，提供 `QuotaPolicy`、`SQLiteQuotaStore`、`QuotaLimiter`、`QuotaConfig`、配置文件加载和 MCP 用户身份解析；`opscli/mcp/server.py` 在现有 Tool 注册代理中加入限额 AOP 包裹，首期只限制 `seller_sprite_run`；限额计数、失败次数和每日持久化记录统一写入 SQLite 表 `mcp_quota_daily`；表内新增 `identity_key` 用于对照中间件用户身份，远程校验模式保存 `user_id` 或标准化邮箱，固定 API Key 模式保存与 MCP 用户表一致的 `sha256:<digest>`；新增 `configs/mcp-quota.json` 作为项目 / 部署目录默认运行配置，新增 `opscli/mcp/configs/mcp-quota.json` 作为 wheel 包内默认配置并通过 `pyproject.toml` 纳入 package data；运行时按 `OPSCLI_MCP_QUOTA_CONFIG_PATH`、当前工作目录 `configs/mcp-quota.json`、源码项目根目录 `configs/mcp-quota.json`、`~/.config/opscli/mcp_quota/config.json`、包内默认配置、代码默认值读取限额配置；`pyproject.toml` 和 `uv.lock` 移除外部缓存依赖，并移除暂不开放的 `google-trends` optional extra / `pytrends` 锁定；新增 `tests/mcp/test_quota.py` 并扩展卖家精灵 MCP 测试；新增 `docs/plans/MCP服务调用限额方案.md` 归档方案并更新为 SQLite 和配置文件口径。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests/mcp/test_quota.py -vv -s` 失败于 `ModuleNotFoundError: No module named 'opscli.mcp.quota'`；SQLite 持久化 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于 `ImportError: cannot import name 'SQLiteQuotaStore'`；身份对照 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于 API Key 缺少 `sha256:` 前缀和 SQLite 缺少 `identity_key` 列；配置文件 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于缺少 `ENV_QUOTA_CONFIG_PATH` 和 `load_quota_config`；项目配置优先级 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于缺少 `_project_quota_config_path`；打包部署目录 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于未读取当前工作目录 `configs/mcp-quota.json`；GREEN 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 为 14 passed；目标回归 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_tools.py::test_mcp_exposes_expected_tools tests/mcp/test_tools.py::test_mcp_hides_temporarily_closed_service_tools tests/mcp/test_quota.py tests/mcp/test_seller_sprite_tools.py -q` 为 21 passed。完整 MCP 回归 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp -q` 为 75 passed、5 failed，失败项为既有 `get_mcp_request_headers` 版本头断言不一致和已停用 google_trends 注册断言。
+**影响范围**：影响 MCP Tool 注册链路和 `seller_sprite_run` 调用行为；`seller_sprite_spec_must_read`、`seller_sprite_scenarios`、`seller_sprite_job_status`、`seller_sprite_export` 不扣次数；SQLite 不可用时受限服务返回 `MCP_QUOTA_UNAVAILABLE`；默认库文件为 `~/.config/opscli/mcp_quota/quota.sqlite3`，可通过 `OPSCLI_MCP_QUOTA_SQLITE_PATH` 覆盖。
+**回滚方式**：删除 `opscli/mcp/quota.py`、`tests/mcp/test_quota.py` 和 `configs/mcp-quota.json`，回退 `opscli/mcp/server.py` 中 `_quota_wrap` 及注册包裹顺序，按需恢复 `google-trends` optional extra，删除方案文档和卖家精灵测试中的限额断言；如需清理本地限额记录，删除 `~/.config/opscli/mcp_quota/quota.sqlite3*` 和运行时限额配置文件。
+
+---
+
+## 2026-06-15 MCP - 暂停 Sif 和西柚工具注册
+
+**变更原因**：Sif 和西柚 MCP 工具当前暂不对外开放，需要从 MCP Server 工具列表中隐藏，避免客户端继续发现和调用。
+**改动点**：注释 `opscli/mcp/server.py` 中 Sif / 西柚工具模块导入与注册，保留工具模块代码；`tests/mcp/test_tools.py` 新增工具列表不可见断言。
+**验证结果**：RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_tools.py::test_mcp_hides_temporarily_closed_service_tools -q` 失败于 `sif_run` 仍存在；GREEN 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_tools.py::test_mcp_exposes_expected_tools tests/mcp/test_tools.py::test_mcp_hides_temporarily_closed_service_tools -q` 为 2 passed。
+**影响范围**：MCP Server 不再暴露 `sif_*` 和 `xiyou_*` 工具；CLI、业务模块和直接导入测试不受影响。
+**回滚方式**：恢复 `opscli/mcp/server.py` 中 `_sif_tools`、`_xiyou_tools` 的导入与 register 调用，并移除工具列表隐藏断言。
+
 ---

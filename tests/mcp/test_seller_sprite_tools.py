@@ -1,6 +1,7 @@
 import asyncio
 
 from opscli.mcp.tools import seller_sprite as seller_sprite_tools
+from opscli.mcp.server import _quota_wrap
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioResult
 
 
@@ -74,3 +75,56 @@ def test_seller_sprite_export_returns_export_info(monkeypatch):
     assert result["success"] is True
     assert result["data"]["path"] == "/tmp/job-1.xlsx"
     assert result["data"]["url"].startswith("file://")
+
+
+def test_seller_sprite_run_is_wrapped_by_quota(monkeypatch):
+    called = {"service": 0}
+
+    class BlockingLimiter:
+        async def before_call(self, tool_name):
+            assert tool_name == "seller_sprite_run"
+            return type(
+                "Decision",
+                (),
+                {
+                    "allowed": False,
+                    "error_response": {
+                        "success": False,
+                        "data": None,
+                        "error": {"code": "MCP_QUOTA_EXCEEDED", "message": "超出每日调用限额"},
+                        "quota": {"service": "seller_sprite", "limit": 5, "used": 5, "remaining": 0},
+                    },
+                },
+            )()
+
+        async def after_call(self, ticket, response):
+            raise AssertionError("blocked calls must not settle quota")
+
+    async def limited_tool():
+        called["service"] += 1
+        return {"success": True, "data": {}, "error": None}
+
+    limited_tool.__name__ = "seller_sprite_run"
+    wrapped = _quota_wrap(limited_tool, limiter=BlockingLimiter())
+
+    result = _run(wrapped())
+
+    assert called["service"] == 0
+    assert result["success"] is False
+    assert result["error"]["code"] == "MCP_QUOTA_EXCEEDED"
+
+
+def test_seller_sprite_non_run_tools_are_not_wrapped_by_quota():
+    called = {"service": 0}
+
+    async def scenarios_tool():
+        called["service"] += 1
+        return {"success": True, "data": [], "error": None}
+
+    scenarios_tool.__name__ = "seller_sprite_scenarios"
+    wrapped = _quota_wrap(scenarios_tool)
+
+    result = _run(wrapped())
+
+    assert called["service"] == 1
+    assert result["success"] is True
