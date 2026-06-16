@@ -1,5 +1,64 @@
 # 待归档变更记录
 
+## 2026-06-16 MCP beta - 评论分页默认值与导出上传
+
+**变更原因**：用户反馈使用 beta/Canopy 查询 Amazon 评论时，首次未带分页参数容易因数据量过大在 30 秒内超时；同时导出结果只返回本地路径口径，未复用 Keepa 的服务器上传能力，最终回复缺少统一模板。
+**改动点**：`opscli/mcp/tools/beta.py` 将 beta 默认超时调整为 60 秒，并在 `product-reviews` 场景未显式传 `page` 时默认补 `page=1`；`opscli/beta/canopy/services/api_manager.py` 复用 `FileUploadClient` 上传 Excel 导出，上传成功后写入远端 `export.url`，上传失败时追加 `file_upload` warning；`opscli/mcp/references/beta/SKILL_MCP.md` 补充评论默认分页、默认超时、导出上传和回复模板；`tests/mcp/test_beta_tools.py` 与 `tests/beta/canopy/test_api_manager.py` 增加默认分页/超时和上传 URL 回归测试，并在 beta MCP 单测中禁用真实上传。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_beta_tools.py::test_beta_canopy_run_product_reviews_defaults_page_and_longer_timeout -q` 失败于缺少 `page`；RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\beta\canopy\test_api_manager.py::test_manager_uploads_export_and_returns_download_url -q` 失败于 `export.url` 仍为本地 `file://`；GREEN 阶段两个单测分别通过；回归 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_beta_tools.py tests\beta\canopy -q` 通过，29 passed in 2.14s。
+**影响范围**：影响 beta Canopy `product-reviews` 默认调用参数、beta MCP 默认超时和 Canopy 导出文件返回口径；不改变其它 Canopy 场景必填参数和 xls 用户导出格式。
+**回滚方式**：回退 `opscli/mcp/tools/beta.py` 中默认超时和评论默认 `page` 逻辑，删除 `CanopyApiManager` 的文件上传调用和 helper，恢复 beta MCP 规范中的旧导出说明，并移除对应测试。
+
+---
+
+## 2026-06-16 MCP beta - 移除源码中的 Canopy key
+
+**变更原因**：用户误将 Canopy 测试 key 写入 `opscli/beta/canopy/config.py`，源码不应保存真实凭据。
+**改动点**：从 `opscli/beta/canopy/config.py` 删除硬编码 key 赋值，并将该值迁移到项目内本地文件 `opscli/beta/canopy/api_key`；未在变更记录中记录完整 key。
+**验证结果**：`Select-String -Pattern '^CANOPY_API_KEY\\s*=' opscli/beta/canopy/config.py` 无输出；本地 `api_key` 文件存在且长度为 36。
+**影响范围**：仅影响本地测试服务凭据放置位置；`beta_canopy_run` 仍通过本地配置文件读取 key。
+**回滚方式**：不建议回滚到源码硬编码；如需撤销本地 key，删除 `opscli/beta/canopy/api_key`。
+
+---
+
+## 2026-06-16 MCP beta - 隐藏 Canopy key 文档说明
+
+**变更原因**：用户要求 `opscli/mcp/references/beta/SKILL_MCP.md` 不再包含 api-key 相关描述，对用户隐藏 Canopy key 管理细节，并且不对用户开放 CLI/直连调用方式。
+**改动点**：删除 beta MCP 内部规范中的认证章节、key 管理工具说明、`api_key` 调用示例和 key 替换提示；新增规则要求对用户只开放 MCP beta 查询能力，不提供 CLI、curl、Python 或直连 REST 调用方式；保留场景、参数、导出和错误处理说明；错误处理仅保留 401 为 Canopy 认证配置异常。
+**验证结果**：`rg -n "api_key|API key|API-KEY|YOUR_CANOPY|beta_canopy_api_key|CANOPY_API_KEY|key" opscli/mcp/references/beta/SKILL_MCP.md` 无匹配；`rg -n "CLI|cli|curl|Python|直连|REST 示例" opscli/mcp/references/beta/SKILL_MCP.md` 仅保留禁止向用户提供相关调用方式的规则。
+**影响范围**：影响 beta MCP 参考文档展示口径；MCP 不再对用户暴露 key 管理工具，Canopy 调用行为仍由项目内本地 key 文件支撑。
+**回滚方式**：从 Git 历史恢复 `opscli/mcp/references/beta/SKILL_MCP.md` 中的 key 管理说明和示例。
+
+---
+
+## 2026-06-16 MCP beta - Canopy 本地 API key 管理
+
+**变更原因**：用户使用 MCP beta Canopy 时，MCP Server 进程未必继承当前 shell 的 Canopy 环境变量，导致同一 key 用 curl 成功但 MCP 调用可能使用错误或缺失的 key。测试服务只需要本地保存一个 Canopy API key，并由 beta 调用默认读取。
+**改动点**：`opscli/beta/canopy/config.py` 只保留项目内本地 `api_key` 文件读取能力，路径为 `opscli/beta/canopy/api_key`；`beta_canopy_run` 的 key 读取顺序调整为显式内部参数、项目内本地 key、占位符，不再读取 Canopy key 环境变量；MCP 对用户仅注册 `beta_spec_must_read`、`beta_canopy_scenarios`、`beta_canopy_run`；同步更新 Canopy MCP 规范和用户指南。
+**验证结果**：`.venv\Scripts\python.exe -m pytest tests/beta/canopy tests/mcp/test_beta_tools.py -q` 通过，27 passed in 1.96s；真实 `beta_canopy_run(product)` 冒烟成功，`placeholder_used=False`，确认已读取项目内本地 key 文件，返回 `row_count=1` 并生成 `canopy-local-key-smoke.xlsx`。
+**影响范围**：仅影响 beta Canopy 测试服务的 API key 获取；不改变 Canopy 请求参数、导出格式、任务文件脱敏策略或其它 MCP 工具。
+**回滚方式**：删除 `opscli/beta/canopy/config.py` 中本地 key 读取逻辑，回退 `opscli/mcp/tools/beta.py` 的 key 读取顺序，并回退 Canopy 文档说明。
+
+---
+
+## 2026-06-16 MCP beta - Canopy 评论自然语言别名映射
+
+**变更原因**：用户反馈使用 beta/Canopy `product-reviews` 查询评论时，希望自然语言中的“差评”“已验证购买”等表达能自动映射为 Canopy 官方筛选参数，降低 Agent 调用时遗漏结构化字段的概率。
+**改动点**：`opscli/mcp/tools/beta.py` 在 `product-reviews` 场景解析 `params` 后增加轻量别名归一化，支持从 `query`、`text`、`natural_language`、`naturalLanguage`、`user_input`、`userInput` 中识别星级和已验证购买表达；结构化 `rating`、`onlyVerifiedReviews` 显式入参优先，不被自然语言覆盖；同步补充 MCP beta 规范、Canopy 使用指南和 MCP 工具测试。
+**验证结果**：`.venv\Scripts\python.exe -m pytest tests\mcp\test_beta_tools.py -q` 通过，15 passed in 1.70s；`.venv\Scripts\python.exe -m pytest tests\beta\canopy tests\mcp\test_beta_tools.py -q` 通过，24 passed in 1.86s。
+**影响范围**：仅影响 beta Canopy `product-reviews` 场景参数归一化；不改变其它 Canopy 场景、Canopy API 调用层或导出层；无法规避 Canopy 上游 HTTP 500。
+**回滚方式**：移除 `opscli/mcp/tools/beta.py` 中评论别名归一化 helper 与调用，删除 `tests/mcp/test_beta_tools.py` 新增用例，并回退对应文档说明。
+
+---
+
+## 2026-06-15 MCP beta - 接入 Canopy REST API 文档与接口
+
+**变更原因**：用户要求基于 Canopy Swagger/OpenAPI 与 Python 示例，先生成 API 文档和测试阶段 beta MCP 相关接口；API key 暂用占位符，后续再提供真实 key。
+**改动点**：新增 `opscli/mcp/references/beta/SKILL_MCP.md` 和 `OFFICIAL.md` 整理 Canopy MCP 使用规范与 17 个 REST endpoint；新增 `docs/guide/Canopy API接口使用指南.md`；新增 `opscli/mcp/tools/beta.py`，提供 `beta_spec_must_read`、`beta_canopy_scenarios`、`beta_canopy_run`，内置 Canopy 场景清单，使用 `domain` 参数、`API-KEY` header 与 `<YOUR_CANOPY_API_KEY>` 占位符；在 `opscli/mcp/server.py` 注册 beta 工具；新增 `opscli/beta/canopy/` 集中管理 Canopy API 调用任务、`params.json`/`raw.json`/`result.json` 落盘和 Excel 导出，用户侧导出格式只允许 `xls`，内部按 Keepa 兼容方式生成 `.xlsx` 并通过 `export.url` 返回；新增 `tests/mcp/test_beta_tools.py` 与 `tests/beta/canopy/` 覆盖场景、参数、API key、MCP 注册、导出格式限制、路径脱敏和 xlsx 生成；按用户要求收紧 beta 触发规则，明确只有用户提到 beta/Canopy/测试服务时才调用 `beta_*` 工具，普通 Amazon 查询不得自动路由到 beta；根据真实 Canopy 评论接口响应，将 beta 默认 HTTP timeout 调整为 30 秒，并在导出层展开 `data.amazonProduct.reviewsPaginated.reviews` 为逐条评论行，保留商品上下文、分页统计和评论人/标题/正文/评分/已验证购买等字段，避免真实评论响应导出成单行巨型 JSON。
+**验证结果**：`.venv\Scripts\python.exe -m pytest tests/mcp/test_beta_tools.py tests/mcp/test_keepa_tools.py tests/mcp/test_amazon_rufus_tools.py -q` 通过，22 passed in 1.47s；收紧触发规则后复跑 `.venv\Scripts\python.exe -m pytest tests/mcp/test_beta_tools.py -q` 通过，10 passed in 1.06s；新增 beta xls 导出后复跑 `.venv\Scripts\python.exe -m pytest tests/mcp/test_beta_tools.py tests/beta/canopy tests/mcp/test_keepa_tools.py -q` 通过，22 passed in 1.71s；追加评论查询本地调试用例后复跑 `.venv\Scripts\python.exe -m pytest tests/mcp/test_beta_tools.py -q` 通过，12 passed in 1.34s；真实接口调试确认 Windows User 环境存在 `OPSCLI_BETA_CANOPY_API_KEY`，当前子进程需显式注入后可用，商品详情接口真实调用成功，评论接口在默认 10 秒超时时曾超时，调整为 30 秒后真实调用成功；修正真实评论响应展开后复跑 `.venv\Scripts\python.exe -m pytest tests\beta\canopy tests\mcp\test_beta_tools.py -q` 通过，21 passed in 1.30s；使用真实 Canopy key 对 `product-reviews`（US、ASIN `B0B3JBVDYP`）冒烟成功，默认 30 秒超时下返回 `row_count=10`，`data_preview` 来源为 `reviewsPaginated.reviews`，分页总数 `totalResults=26`，导出 `canopy-review-real-default-timeout-after-fix.xlsx`。
+**影响范围**：新增 beta MCP Canopy 只读 API 查询能力、xls 用户导出能力和文档；MCP 进程需重启后才能暴露新工具/新参数；真实 API key 只从参数或环境变量读取，不写入任务文件，不影响既有 Keepa/Rufus 工具。
+**回滚方式**：删除 `opscli/mcp/tools/beta.py`、`opscli/beta/`、`tests/mcp/test_beta_tools.py`、`tests/beta/canopy/`、`opscli/mcp/references/beta/`、`docs/guide/Canopy API接口使用指南.md`，并还原 `opscli/mcp/server.py` 中 beta import/register 改动。
+---
+
 ## 2026-06-15 Keepa - XLSX 流式导出优化
 
 **变更原因**：Keepa MCP 已不再支持 JSON 用户导出，需要提升 XLSX 导出对较大结果集的承载能力，避免普通 openpyxl 工作簿逐格写入带来的内存和耗时压力。

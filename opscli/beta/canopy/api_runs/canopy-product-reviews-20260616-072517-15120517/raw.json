@@ -1,0 +1,384 @@
+{
+  "job_id": "canopy-product-reviews-20260616-072517-15120517",
+  "scenario": "product-reviews",
+  "domain": "US",
+  "method": "GET",
+  "url": "https://rest.canopyapi.co/api/amazon/product/reviews",
+  "request_params": {
+    "asin": "B0CDQFTWQ2",
+    "page": 1,
+    "domain": "US"
+  },
+  "response": {
+    "data": {
+      "amazonProduct": {
+        "topReviews": [
+          {
+            "id": "R3GDH1EXCY295W",
+            "title": "High quality bed with tons of storage",
+            "body": "This is a beautiful, sturdy bed with tons of storage space. I did a lot of research and most of the beds I found with a similar amount of storage looked tacky or were made of particle board that I knew would not hold up (and usually both). This bed is simple and stylish and clearly made of quality material. I’m honestly surprised by how nice it is for the price. You would pay thousands buying this at a furniture store.It does take some time and determination to assemble. The instructions are very clear and the parts are well-labeled, but there are a lot of pieces which should be expected for something with multiple drawers and cabinets. Assembly took about 5 hours for two people so start in the morning! It was easy to align and assemble everything and it came with extra hardware which is always appreciated, just make sure you follow the directions carefully.It’s quiet without creaking and the bed slats are very supportive so it’s comfortable without a box spring. The height is great. I can sit on the bed and my feet just touch the floor which seems ideal.",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 5,
+            "helpfulVotes": 7,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": "AGM4B74RUXR7QSWVUNWO37MN262A?ref=cm_cr_dp_d_bdcrb_top",
+              "name": "Gina Stewart",
+              "url": "https://www.amazon.com/gp/profile/amzn1.account.AGM4B74RUXR7QSWVUNWO37MN262A?ref=cm_cr_dp_d_bdcrb_top"
+            }
+          },
+          {
+            "id": "R2IHZJBZN6I4QL",
+            "title": "Fantastic bed, fantastic company",
+            "body": "I spent a considerable amount of time researching this bed before purchasing the white king size over a year ago.  I absolutely love it, as did a decorator friend that happened to see it (just saying).  It's nice.  I purchased it because I wanted something to save space that was practical and this bed has a boat load of storage (both headboard and platform).  How to tackle this....1--this company was incredible to work with when I first purchased it.  The boxes are heavy and the shipping company damaged a couple of the boxes--some damage was obvious, some wasn't, but every time I contacted Memomad they responded and graciously replaced the items without a problem.  They did the same with a door where the hinge hole had been drilled incorrectly.  I am so grateful with they way they worked with me as a customer b/c it added to the experience.2--Assembly was tedious, BUT I was not an experienced assembler at the time--this bed changed that, hahaha.  While I don't recommend it, I did end up putting the bed together by myself.  It was a very lengthy process and took a slow, methodical and precise approach including thinking about physics and how to leverage heavier parts alone without damaging myself, the finish on the parts, or the floor.  If you decide to tackle it alone or with help I recommend having a secondary sleeping spot just in case it takes longer than a day.  I had another room to sleep in so I was able to take my time and/or walk away when I needed to take a break, manage frustration, etc.  It made a huge difference.  OR, hire the installers, lol.3) Mattress height @ 11\" (inc pad if you want that) will bring it right below the hinges of the headboard if you go that route.4) The headboard was worth it to me.  It is deep and the doors are slightly angled towards the wall.  There is a  natural ledge that is fun to decorate with.  The doors keep stuff from sliding off onto your head while sleeping.  Lots of storage in it.  The cubbies on the sides are big enough to put down comforters in comfortably.  I love the hydraulic hinges on the front facing cubbies.  The headboard and bed are not connected, but I haven't had a problem with them separating if I'm sitting up reading.5) I was concerned the feet would damage my LV floor, but they are tiny 1/4\" or 1/2\" flat disks.  No marks or dents on my floor and they actually make the bed easy to move.  There is no clearance for dust bunnies (score!).  If anything I have to dust the open shelves and alcoves at the end of the bed every once in a while.  It's been very easy care.I think that's about it.  Again, a very comfortable, very practical, very roomy bed!  Thanks again, Memomad!",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 5,
+            "helpfulVotes": 87,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": "AH3NLJUWJ4LAIMKBGAEAT5B4AE4A?ref=cm_cr_dp_d_bdcrb_top",
+              "name": "bcl",
+              "url": "https://www.amazon.com/gp/profile/amzn1.account.AH3NLJUWJ4LAIMKBGAEAT5B4AE4A?ref=cm_cr_dp_d_bdcrb_top"
+            }
+          },
+          {
+            "id": "R27GTOW1SOK3SI",
+            "title": "Nice Bed, I lie it OK, But...",
+            "body": "I bought the white one. My daughter helped me assemble it. Took us 2 good days to accomplish, but was very manageable. Overall, I am reasonably satisfied with the bed. It is sturdy enough with a few exceptions and looks very nice. I do have some comments regarding the materials and engineering of the assembly:(1) To start with it is NOT solid wood! I would estimate that 70 to 75% is MDF, or equivalent. Most of the solid wood pieces are the slats and a few braces. A lot of reviewers must not know what solid wood looks like!(2) The assembly instructions were OK. They were accurate, but one needs to study the pictures very closely. It was often helpful to lay out the pieces and look ahead to where they fit before proceeding. A few words would have helped, but I understand why pictures  are the norm now (to avoid the language issue).(3) The assembly plan is OK, but is mostly about lowering the cost. There were quite a few (90 deg) butt joints that would be more secure by using angle brackets. A lot of the dowel pins were smaller than the holes, not a big deal but annoying. Also, a lot of pieces are attached with screws into MDF, no inserts to insure a secure joint. Once together, the assembled bed is sturdy and functional. However, the only way to move it would be to disassemble into the major sub-assemblies. Doable, but painful.(4) The two open bays at the foot of the bed, while looking nice, are a structural problem. If someone sits on the corner (not unusual!) they could break the top bed frame! I have plans already to add a vertical brace to the two unsupported edges. This should be fairly simple (using angle brackets!!).(5) I am not unhappy with this product. It looks great and should last for some time, with the proper care. However, I do believe it is a little overpriced based upon the material quality and the fact that ALL assembly must be performed by the customer.(6) If you are comfortable with significant assembly, don't mind some minor design and assembly flaws, and are willing to somewhat overpay IMO for this product, then go for it. It is a unique design and is very pretty. I am satisfied with it, but knowing what I know now, I would probably look for something else.",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 4,
+            "helpfulVotes": 102,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": "AHVJJMCD4DPQURLL6OAO2ELGJIFQ?ref=cm_cr_dp_d_bdcrb_top",
+              "name": "Ronald C McGregor",
+              "url": "https://www.amazon.com/gp/profile/amzn1.account.AHVJJMCD4DPQURLL6OAO2ELGJIFQ?ref=cm_cr_dp_d_bdcrb_top"
+            }
+          },
+          {
+            "id": "RP7RVAV58RHD5",
+            "title": "A gorgeous bed frame… and a humbling experience",
+            "body": "I have been in love with this bed frame for months and was finally able to order it. All in all, it doesn’t disappoint in the slightest.My biggest hope for a new frame (coming from a very basic and strictly-for-necessity metal frame) was to have one that doesn’t squeak, and having not found the answer to that question easily on here, I can happily say that this bed frame DOES NOT SQUEAK! Halle-freaking-lujah! Once assembled, it’s extremely sturdy and well put together.Okay, now getting to the assembled state? Whooo boy. I went through the reviews and determined confidently that my husband and I could knock it out in 4-5 hours. I was wrong. Now, the instructions are faultless. I, someone who loves putting furniture together, thought they were very direct, easy to follow, universally communicative, just well done. The hardware is very well labeled, and while the pieces themselves kinda aren’t—they’re individually numbered with a printed number at one edge of each, some very visible and others not, but all hidden upon assembly—I appreciated that they weren’t labeled with stickers that would have had to be removed one by one.We started the assembly at 6:47pm… and ended at 2:58am. By the end, my hands were bright red and bruised (raw is too dramatic a word, but that’s how it felt), my entire body ached, I was quite literally functioning on pure instinct. For my arrogance, I had been thoroughly punished.Redeemingly though, the satisfaction of the completed project is bar none and made the struggle totally worth it. The frame is perfect. The drawers are a little small, but the shelves are pleasantly deep to make up for it. Even though the color is supposedly “off white”, it matches our white furniture perfectly.Some kudos: They included extras of the smallest couple screws and dowels. There aren’t predrilled holes for a lot of the steps which allows for the flexibility of natural placement in some of the pieces—this doesn’t affect the overall stability, just makes it easier to put together.A complaint: Some of the raw wood boards were warped and bent and difficult to get into placeI can’t say whether or not this is worth the price tag, but for me, it was the frame I wanted no matter the cost. And I’m beyond happy with it!",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 5,
+            "helpfulVotes": 135,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": "AFFH5NPSELSB5RCXNLUMF4DLHF3Q?ref=cm_cr_dp_d_bdcrb_top",
+              "name": "Linnea",
+              "url": "https://www.amazon.com/gp/profile/amzn1.account.AFFH5NPSELSB5RCXNLUMF4DLHF3Q?ref=cm_cr_dp_d_bdcrb_top"
+            }
+          },
+          {
+            "id": "RN8W4NFDQKJNP",
+            "title": "Exquisite Platform Bed",
+            "body": "The platform bed is wonderful and looks fantastic. It is better quality than I expected. The craftsmanship is amazing and it looks beautiful when set up.  The wood quality is excellent as the bed feels very sturdy and complements my room well.  The finish highlights the natural beauty of the wood perfectly.  The seller was wonderful to work with and able to help every step of the way.  If I need another platform bed, I will definitely buy here again.",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 5,
+            "helpfulVotes": 1,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": "AHORDNU7YTE3ZOOJ4NH52U2R22QQ?ref=cm_cr_dp_d_bdcrb_top",
+              "name": "Rad T.",
+              "url": "https://www.amazon.com/gp/profile/amzn1.account.AHORDNU7YTE3ZOOJ4NH52U2R22QQ?ref=cm_cr_dp_d_bdcrb_top"
+            }
+          },
+          {
+            "id": "R3A06LLKD5C3ZU",
+            "title": "Assmebly took a while, but well worth it",
+            "body": "This bed frame is amazing. I used to own a waterbed with a big storage frame similar to this but a little taller. However, in my move I opted not to bring the waterbed with me. I'm happy with my new mattress, but I though I was going to have a hard time finding a bed frame with a similar storage ability. Then four boxes from Brazil got delivered by UPS.Pros:* Amazing storage capability* The slide-out end tables are a great space saver if this were to go into a smaller room. I put it in a 12' x 15' room with the width of the bed in the shorter dimension and there is still plenty of space to move along the edges of the frame.* It seems very sturdy. Being an American couple, my girl friend and I combined weigh about 500 lbs and it seems very sturdy.* The pictorial instructions are well done* Almost all screw holes are pre-drilled, with a few exceptions* Plenty of extra hardware just in caseCons:* This isn't IKEA (though some might see that as a good thing). Assembly took about 8 hours with one person (though two people are recommended). It's also takes up a lot of space during construction, so keep that in mind.* No instructions on how to level the large storage doors. However, if you adjust the screw toward the edge of the frame it will lower (counter-clockwise) or raise (clockwise) the door.* The end tables don't feel like they could hold very much and are somewhat shorter than I expected, but still very useful -- just don't expect to set a weighty or large lamp on it or anything.Overall, I am very happy with this product, though I've only slept in it one night so far. If anything changes, I'll be sure to update this review. However, given how sturdy the construction seems overall, I don't think I'll have any issues in the future.",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 5,
+            "helpfulVotes": 14,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": "AEMHFOW535PYURBHVJDKYDY4LC5Q?ref=cm_cr_dp_d_bdcrb_top",
+              "name": "Charles Ricketts",
+              "url": "https://www.amazon.com/gp/profile/amzn1.account.AEMHFOW535PYURBHVJDKYDY4LC5Q?ref=cm_cr_dp_d_bdcrb_top"
+            }
+          },
+          {
+            "id": "R25BB1MJR40AOP",
+            "title": "Stylish and Built to Last!",
+            "body": "I absolutely love my Memomad Bali Storage Platform Bed! Not only is the caramel brown wood color gorgeous and warm, but the storage capabilities are a game changer. The drawers and shelves provide so much space for extra bedding, clothes, or whatever you need to tuck away, making it perfect for small bedrooms or anyone looking to declutter.One thing to note—this bed is VERY heavy! But that's a testament to its solid construction and durability. Once assembled, you can feel that it's built to last, which gives me confidence that I’ll be enjoying it for years to come. The assembly process does take some time due to the weight and number of pieces, so having a helping hand is ideal.Overall, I couldn’t be happier with this purchase. It's stylish, functional, and incredibly sturdy. Highly recommend.",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 5,
+            "helpfulVotes": 1,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": "AGGH57BVJWY73AXKWPUJA5PUBY5Q?ref=cm_cr_dp_d_bdcrb_top",
+              "name": "Evan S.",
+              "url": "https://www.amazon.com/gp/profile/amzn1.account.AGGH57BVJWY73AXKWPUJA5PUBY5Q?ref=cm_cr_dp_d_bdcrb_top"
+            }
+          },
+          {
+            "id": "R3IZ61Z8QGTP1E",
+            "title": "Brutal assembly.",
+            "body": "We purchased both the bed and matching headboard.  I want to start out by saying that I do like this bed quite a bit.  As a base for a memory foam mattress it required no modifications to perform perfectly.  It has lots of storage and is generally nice in appearance.The biggest thing to keep in mind about this bed and matching headboard is assembly.  It's going to take a long time.  Hours.  You need a helper, and you need to have a cordless drill.  I'd suggest getting hex bits for the drill as well.  The bed is complicated, as beds go, but one of the real issues for the long assembly is the instructions.  They can ultimately be followed and are accurate, but they are black and white, the parts are barely labeled, and there are multiple points where I questioned the sequence of instructions in hindsight.  I think a more detailed, color assembly guide if not a step by step video would help a lot.  There's hours of assembly, but half that time is figuring out exactly what they're telling you to do and with which part and which fastener.In terms of quality it's more or less typical flat-pack furniture, comparable to IKEA.  However they aren't using any engineered wood like furniture grade MDF.  That's an interesting choice since for things like this a more dimensionally stable material like MDF might actually tend to be preferable.  I'm not familiar with the species used though.  There is some pine, but I don't think that's what the more visible pieces are made of.  It is a very soft wood.  On the plus side it is much lighter due to the natural wood, but plenty heavy to stay in place.The finish is incredibly thin.  It looks nice, but I don't anticipate it lasting long at all.  Which is a shame, it seems reasonably sturdy to last a long time if not for the ultimate quality of the finish.  I also noticed some of the interior pieces, not meant to be seen or seen most of the time, were ever so slightly tacky.  Not enough to create issues, but still.Overall, we do like it, but we also spent nearly $1500 for something that's more or less a marginal improvement on IKEA offerings (but with much more storage) so I have a hard time making an enthusiastic recommendation to others.",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 3,
+            "helpfulVotes": 11,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": "AFLBKDKQ3H5H6IHH7U6KZSF3QG4Q?ref=cm_cr_dp_d_bdcrb_top",
+              "name": "Matt",
+              "url": "https://www.amazon.com/gp/profile/amzn1.account.AFLBKDKQ3H5H6IHH7U6KZSF3QG4Q?ref=cm_cr_dp_d_bdcrb_top"
+            }
+          },
+          {
+            "id": "RDZMXK94FO8J4",
+            "title": "Superbe!",
+            "body": "Beau lit solide, bien construit et explications détaillées. Temps de montage par une personne seule et sans outil électrique: boîte 1=1h, la boîte 2=3h et la boîte 3=2h pour un total de 6h!",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 5,
+            "helpfulVotes": null,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": null,
+              "name": "Genevieve",
+              "url": null
+            }
+          },
+          {
+            "id": "R1035G2GC5WXFK",
+            "title": "Convenient shelves for so many things, one being a cpap machine at the head of the bed.",
+            "body": "This bed is super nice. Strong and real wood board slats under your mattress, that you can get between the boards with vacuum hose, and at one end of the bed. If you don't put the backing on the middle large cupboard you will also have access there as well to vacuum, though mine is on. I vacuum through slats and one end only under the bed. I love the large cupboard pull down door and shelve for my cpap and vitamins for this old lady. I love having a 12\" mattress on it for me to just slide off of it being I'm a short ... of 5' 3\" DON'T MOVE THIS BED ONCE TOGETHER. EVEN WITH TWO PEOPLE ON CARPET YOU CAN'T. YOU CAN ONLY SLIDE IT, AND NOT STRONG ENOUGH TO SLIDE IT TOO MANY TIMES. Good quality if you don't move it once together.",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 5,
+            "helpfulVotes": null,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": null,
+              "name": "Judy",
+              "url": null
+            }
+          },
+          {
+            "id": "R2QYV9RRUSKGJS",
+            "title": "Nice bed. Very sturdy.",
+            "body": "Nice bed. Very sturdy. Very time consuming the put together. A couple boards had a small gouges in them, but thank goodness they were to the inside once the bed was together. Will have to take the bed apart to move as it is pretty heavy.",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 4,
+            "helpfulVotes": null,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": null,
+              "name": "Meeshie",
+              "url": null
+            }
+          },
+          {
+            "id": "R3OJDSVGRNJISN",
+            "title": "Nice",
+            "body": "I like the style of the bed. It’s extra storage. I don’t like that the top slate of the bed frame are put together not very well. If you push on the top of the bed it will fall apart under the mattress and pop off the dowels as it isn’t secured in places it should be. So you have to push the bed into place lower down on the frame. It’s very heavy (not a bad thing). The instructions are a bit out of sorts, so #22 is actually #11 when assembling it. So as long as you’re good at building things and paying attention to detail you should be fine.Over all it is nice, and a good height.",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 5,
+            "helpfulVotes": null,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": null,
+              "name": "Jami Bott",
+              "url": null
+            }
+          },
+          {
+            "id": "R34KD9Q2AIXP54",
+            "title": "Very sturdy",
+            "body": "It’s a very durable sturdy bed, it doesn’t budge no matter the activity that’s presented, it’s very spacious, lots of storage and very sleek and stylish",
+            "imageUrls": null,
+            "videos": null,
+            "rating": 5,
+            "helpfulVotes": null,
+            "verifiedPurchase": true,
+            "reviewer": {
+              "id": "AENNGU2PUIQCEY6QAOBAWUDXY3TQ",
+              "name": "Chad G",
+              "url": "https://www.amazon.com/gp/profile/amzn1.account.AENNGU2PUIQCEY6QAOBAWUDXY3TQ"
+            }
+          }
+        ],
+        "reviewsPaginated": {
+          "reviews": [
+            {
+              "id": null,
+              "title": "High quality bed with tons of storage",
+              "body": "This is a beautiful, sturdy bed with tons of storage space. I did a lot of research and most of the beds I found with a similar amount of storage looked tacky or were made of particle board that I knew would not hold up (and usually both). This bed is simple and stylish and clearly made of quality material. I’m honestly surprised by how nice it is for the price. You would pay thousands buying this at a furniture store. It does take some time and determination to assemble. The instructions are very clear and the parts are well-labeled, but there are a lot of pieces which should be expected for something with multiple drawers and cabinets. Assembly took about 5 hours for two people so start in the morning! It was easy to align and assemble everything and it came with extra hardware which is always appreciated, just make sure you follow the directions carefully. It’s quiet without creaking and the bed slats are very supportive so it’s comfortable without a box spring. The height is great. I can sit on the bed and my feet just touch the floor which seems ideal.",
+              "imageUrls": [],
+              "videos": [],
+              "rating": 5,
+              "helpfulVotes": 7,
+              "verifiedPurchase": true,
+              "reviewer": {
+                "id": null,
+                "name": "Gina Stewart",
+                "url": null
+              }
+            },
+            {
+              "id": null,
+              "title": "Fantastic bed, fantastic company",
+              "body": "I spent a considerable amount of time researching this bed before purchasing the white king size over a year ago. I absolutely love it, as did a decorator friend that happened to see it (just saying). It&#39;s nice. I purchased it because I wanted something to save space that was practical and this bed has a boat load of storage (both headboard and platform). How to tackle this.... 1--this company was incredible to work with when I first purchased it. The boxes are heavy and the shipping company damaged a couple of the boxes--some damage was obvious, some wasn&#39;t, but every time I contacted Memomad they responded and graciously replaced the items without a problem. They did the same with a door where the hinge hole had been drilled incorrectly. I am so grateful with they way they worked with me as a customer b/c it added to the experience. 2--Assembly was tedious, BUT I was not an experienced assembler at the time--this bed changed that, hahaha. While I don&#39;t recommend it, I did end up putting the bed together by myself. It was a very lengthy process and took a slow, methodical and precise approach including thinking about physics and how to leverage heavier parts alone without damaging myself, the finish on the parts, or the floor. If you decide to tackle it alone or with help I recommend having a secondary sleeping spot just in case it takes longer than a day. I had another room to sleep in so I was able to take my time and/or walk away when I needed to take a break, manage frustration, etc. It made a huge difference. OR, hire the installers, lol. 3) Mattress height @ 11&#34; (inc pad if you want that) will bring it right below the hinges of the headboard if you go that route. 4) The headboard was worth it to me. It is deep and the doors are slightly angled towards the wall. There is a natural ledge that is fun to decorate with. The doors keep stuff from sliding off onto your head while sleeping. Lots of storage in it. The cubbies on the sides are big enough to put down comforters in comfortably. I love the hydraulic hinges on the front facing cubbies. The headboard and bed are not connected, but I haven&#39;t had a problem with them separating if I&#39;m sitting up reading. 5) I was concerned the feet would damage my LV floor, but they are tiny 1/4&#34; or 1/2&#34; flat disks. No marks or dents on my floor and they actually make the bed easy to move. There is no clearance for dust bunnies (score!). If anything I have to dust the open shelves and alcoves at the end of the bed every once in a while. It&#39;s been very easy care. I think that&#39;s about it. Again, a very comfortable, very practical, very roomy bed! Thanks again, Memomad!",
+              "imageUrls": [],
+              "videos": [],
+              "rating": 5,
+              "helpfulVotes": 87,
+              "verifiedPurchase": true,
+              "reviewer": {
+                "id": null,
+                "name": "bcl",
+                "url": null
+              }
+            },
+            {
+              "id": null,
+              "title": "A gorgeous bed frame… and a humbling experience",
+              "body": "I have been in love with this bed frame for months and was finally able to order it. All in all, it doesn’t disappoint in the slightest. My biggest hope for a new frame (coming from a very basic and strictly-for-necessity metal frame) was to have one that doesn’t squeak, and having not found the answer to that question easily on here, I can happily say that this bed frame DOES NOT SQUEAK! Halle-freaking-lujah! Once assembled, it’s extremely sturdy and well put together. Okay, now getting to the assembled state? Whooo boy. I went through the reviews and determined confidently that my husband and I could knock it out in 4-5 hours. I was wrong. Now, the instructions are faultless. I, someone who loves putting furniture together, thought they were very direct, easy to follow, universally communicative, just well done. The hardware is very well labeled, and while the pieces themselves kinda aren’t—they’re individually numbered with a printed number at one edge of each, some very visible and others not, but all hidden upon assembly—I appreciated that they weren’t labeled with stickers that would have had to be removed one by one. We started the assembly at 6:47pm… and ended at 2:58am. By the end, my hands were bright red and bruised (raw is too dramatic a word, but that’s how it felt), my entire body ached, I was quite literally functioning on pure instinct. For my arrogance, I had been thoroughly punished. Redeemingly though, the satisfaction of the completed project is bar none and made the struggle totally worth it. The frame is perfect. The drawers are a little small, but the shelves are pleasantly deep to make up for it. Even though the color is supposedly “off white”, it matches our white furniture perfectly. Some kudos: They included extras of the smallest couple screws and dowels. There aren’t predrilled holes for a lot of the steps which allows for the flexibility of natural placement in some of the pieces—this doesn’t affect the overall stability, just makes it easier to put together. A complaint: Some of the raw wood boards were warped and bent and difficult to get into place I can’t say whether or not this is worth the price tag, but for me, it was the frame I wanted no matter the cost. And I’m beyond happy with it!",
+              "imageUrls": [
+                "https://m.media-amazon.com/images/I/81ZAV+SSGwL.jpg",
+                "https://m.media-amazon.com/images/I/81jdEXwCwXL.jpg"
+              ],
+              "videos": [],
+              "rating": 5,
+              "helpfulVotes": 135,
+              "verifiedPurchase": true,
+              "reviewer": {
+                "id": null,
+                "name": "Linnea",
+                "url": null
+              }
+            },
+            {
+              "id": null,
+              "title": "Exquisite Platform Bed",
+              "body": "The platform bed is wonderful and looks fantastic. It is better quality than I expected. The craftsmanship is amazing and it looks beautiful when set up. The wood quality is excellent as the bed feels very sturdy and complements my room well. The finish highlights the natural beauty of the wood perfectly. The seller was wonderful to work with and able to help every step of the way. If I need another platform bed, I will definitely buy here again.",
+              "imageUrls": [],
+              "videos": [],
+              "rating": 5,
+              "helpfulVotes": 1,
+              "verifiedPurchase": true,
+              "reviewer": {
+                "id": null,
+                "name": "Rad T.",
+                "url": null
+              }
+            },
+            {
+              "id": null,
+              "title": "Assmebly took a while, but well worth it",
+              "body": "This bed frame is amazing. I used to own a waterbed with a big storage frame similar to this but a little taller. However, in my move I opted not to bring the waterbed with me. I&#39;m happy with my new mattress, but I though I was going to have a hard time finding a bed frame with a similar storage ability. Then four boxes from Brazil got delivered by UPS. Pros: * Amazing storage capability * The slide-out end tables are a great space saver if this were to go into a smaller room. I put it in a 12&#39; x 15&#39; room with the width of the bed in the shorter dimension and there is still plenty of space to move along the edges of the frame. * It seems very sturdy. Being an American couple, my girl friend and I combined weigh about 500 lbs and it seems very sturdy. * The pictorial instructions are well done * Almost all screw holes are pre-drilled, with a few exceptions * Plenty of extra hardware just in case Cons: * This isn&#39;t IKEA (though some might see that as a good thing). Assembly took about 8 hours with one person (though two people are recommended). It&#39;s also takes up a lot of space during construction, so keep that in mind. * No instructions on how to level the large storage doors. However, if you adjust the screw toward the edge of the frame it will lower (counter-clockwise) or raise (clockwise) the door. * The end tables don&#39;t feel like they could hold very much and are somewhat shorter than I expected, but still very useful -- just don&#39;t expect to set a weighty or large lamp on it or anything. Overall, I am very happy with this product, though I&#39;ve only slept in it one night so far. If anything changes, I&#39;ll be sure to update this review. However, given how sturdy the construction seems overall, I don&#39;t think I&#39;ll have any issues in the future.",
+              "imageUrls": [],
+              "videos": [],
+              "rating": 5,
+              "helpfulVotes": 14,
+              "verifiedPurchase": true,
+              "reviewer": {
+                "id": null,
+                "name": "Charles Ricketts",
+                "url": null
+              }
+            },
+            {
+              "id": null,
+              "title": "Stylish and Built to Last!",
+              "body": "I absolutely love my Memomad Bali Storage Platform Bed! Not only is the caramel brown wood color gorgeous and warm, but the storage capabilities are a game changer. The drawers and shelves provide so much space for extra bedding, clothes, or whatever you need to tuck away, making it perfect for small bedrooms or anyone looking to declutter. One thing to note—this bed is VERY heavy! But that&#39;s a testament to its solid construction and durability. Once assembled, you can feel that it&#39;s built to last, which gives me confidence that I’ll be enjoying it for years to come. The assembly process does take some time due to the weight and number of pieces, so having a helping hand is ideal. Overall, I couldn’t be happier with this purchase. It&#39;s stylish, functional, and incredibly sturdy. Highly recommend.",
+              "imageUrls": [
+                "https://m.media-amazon.com/images/I/71DhtAVHE9L.jpg",
+                "https://m.media-amazon.com/images/I/71d2wmdjF9L.jpg"
+              ],
+              "videos": [],
+              "rating": 5,
+              "helpfulVotes": 1,
+              "verifiedPurchase": true,
+              "reviewer": {
+                "id": null,
+                "name": "Evan S.",
+                "url": null
+              }
+            },
+            {
+              "id": null,
+              "title": "Great bed and customer service with Memomad Bali Bed",
+              "body": "I bought a Memomad Bali bed and was a bit nervous about buying a bed online but I couldn&#39;t be happier. The bed is beautiful, well made with great instructions. It was delivered super fast, sooner than the the date given. Most of all they have amazing customer service which nowadays is rare to find. When I had a question about anything I received a response that day and the gentleman that helped me was super friendly and helpful. I highly recommend this company and would definitely buy from them again. A+ all the way.",
+              "imageUrls": [],
+              "videos": [],
+              "rating": 5,
+              "helpfulVotes": 1,
+              "verifiedPurchase": true,
+              "reviewer": {
+                "id": null,
+                "name": "Joy Monkan",
+                "url": null
+              }
+            },
+            {
+              "id": null,
+              "title": "Great bed, but a few things you may want to know",
+              "body": "Really great bed. Very well manufactured, very clear instructions. It has a lot of pieces, and I was surprised how nicely all came together. I did not even have to do any adjustments of the drawers. Looks very nice too. But a few things you may want to know: - Once you set it up, the bed is hard to move. So if you plan to put it on a corner or on hardwood, keep this in mind. On carpet, it can be moved. But instructions clearly say not to lift the bed (and it is too heavy anyway) - I was excited about the nightstands but they are way too flimsy for more than a few tiny items. But a handy person can easy improve it. - I am pretty handy and it took 8 hours to install, with some help from my wife. Without a power tool (only with screwdriver), all those screws would take many more ours. Some assembly advice, in case it helps: Despite excellent instructions, I made a few recoverable mistakes, ended up with a few (unseen) scratches and two unnecessary holes. Here are some tips: - If you are confused, pay attention to all &#34;good sides&#34; of the wood looking at the same direction. If you see all white on top, but one white side down, think again. - Don&#39;t assume everything is symmetric. Step 19, you have a C screw on one end, and 2 F screws on the other. - There are two identical drawer side pieces,. and it is easy to get confused with where the nightstand should be. At step 21, wait before you lay the frame until you fix the slides with D wood screws. - In step 40, setting the sides of the frame, all 4 sides are different. Pat attention ot the frames correct orientation on top with respect to the bottom. - Step 46 and 48: This is where I scratched inside the frame. Make sure the T connection is as closely screwed to 35, so when you put it int the frame, T does not scratch the frame.",
+              "imageUrls": [],
+              "videos": [],
+              "rating": 5,
+              "helpfulVotes": 541,
+              "verifiedPurchase": true,
+              "reviewer": {
+                "id": null,
+                "name": "Variant Controller",
+                "url": null
+              }
+            },
+            {
+              "id": null,
+              "title": "Beautiful and Functional",
+              "body": "All four boxes arrived in tact and un- damaged - bonus! I did have one piece of wood break, but I simply used wood glue. It broke in an area where it would be supported, screwed in, and framed, so it was an easy fix. The bed has to be assembled in stages, starting with box 1, then box 2, and so on. Because I was doing this alone and working in a small bedroom, I was placing the sections together as I completed them. Now, the directions recommended having two people - I&#39;m sure it would have been easier with two people, but it&#39;s not necessary. I did use a battery-charged screwdriver; you DO have to be careful and if you can adjust the torque, do so. The wood is soft and it will crack. I had read this in other reviews, and they were accurate observations. The directions pamphlet can be a bit confusing. The pamphlet is in box #1 and includes the directions for each of the other boxes, as well; however, the pages are not labeled or separated clearly. When I first started putting it together, I fumbled a few times, having to flip pages, wondering, &#34;Now, where was I?!&#34; After a few instances of this, I grabbed a pen to mark each page as I completed the steps. It made the process much smoother. Lastly, and with regard to the diagrams: REALLY pay attention to the details in the diagrams. Each and every piece fit perfectly, and all of the holes are right where they are supposed to be and lined up with the other parts and pieces - but you DO have to look for those subtle details in the pictures. I&#39;m really enjoying this bed! If you are intimidated by the thought of putting the bed together, don&#39;t be. It took me 3 days, and I took breaks throughout those days, but it wasn&#39;t hard. Using power tools (interchangeable phillips and allen) is a must as long as you&#39;re careful. Overall, it was definitely worth it.",
+              "imageUrls": [
+                "https://m.media-amazon.com/images/I/71nKbkKPkDL.jpg"
+              ],
+              "videos": [],
+              "rating": 5,
+              "helpfulVotes": 33,
+              "verifiedPurchase": true,
+              "reviewer": {
+                "id": null,
+                "name": "Rebecca",
+                "url": null
+              }
+            },
+            {
+              "id": null,
+              "title": "Beautiful Beast",
+              "body": "Fantastic build, it came in 4 different boxes. I would highly recommend having a power drill and building it with a partner. The instructions aren&#39;t complex but it is tiresome since it&#39;s a lot of work. I built step 1 and 2 by myself and it took about 8 hours and finished step 3 and 4 with my girlfriend the next day. The first two steps would&#39;ve gone faster if I had help and in total it took about 12 hours to build it. You will get cranky as you build it so be sure to take breaks but it is so worth it because it&#39;s gorgeous, high quality, and sturdy.",
+              "imageUrls": [],
+              "videos": [],
+              "rating": 5,
+              "helpfulVotes": 1,
+              "verifiedPurchase": true,
+              "reviewer": {
+                "id": null,
+                "name": "Mohammad Raza",
+                "url": null
+              }
+            }
+          ],
+          "pageInfo": {
+            "currentPage": 1,
+            "totalPages": 13,
+            "totalResults": 121,
+            "hasNextPage": true,
+            "hasPrevPage": false
+          }
+        }
+      }
+    }
+  }
+}

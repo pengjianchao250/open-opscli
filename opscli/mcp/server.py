@@ -267,6 +267,7 @@ _telemetry_mcp = _TelemetryMcpProxy(mcp)
 
 from opscli.mcp.tools import auth as _auth_tools
 from opscli.mcp.tools import amazon_rufus as _amazon_rufus_tools
+from opscli.mcp.tools import beta as _beta_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
 from opscli.mcp.tools import feedback as _feedback_tools
 # Google Trends 暂时停用：下午 MCP Server 崩溃疑似与该工具相关，先不注册使用。
@@ -281,6 +282,7 @@ from opscli.mcp.tools import skills as _skills_tools
 
 _auth_tools.register(_telemetry_mcp)
 _amazon_rufus_tools.register(_telemetry_mcp)
+_beta_tools.register(_telemetry_mcp)
 _chatgpt_tools.register(_telemetry_mcp)
 _feedback_tools.register(_telemetry_mcp)
 # _google_trends_tools.register(_telemetry_mcp)
