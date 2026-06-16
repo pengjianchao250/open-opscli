@@ -153,34 +153,32 @@ def test_manager_uploads_export_to_keepa_export_folder(monkeypatch, tmp_path: Pa
     assert result.warnings == []
 
 
-def test_manager_writes_json_export_when_requested(monkeypatch, tmp_path: Path):
+def test_manager_rejects_json_export_when_requested(monkeypatch, tmp_path: Path):
     DummyKeepaClient.requests = []
     monkeypatch.setattr(api_manager_module, "KeepaApiClient", DummyKeepaClient)
     monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
     settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
     manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
 
-    result = _run(
-        manager.run(
-            KeepaScenarioRequest(
-                scenario="product",
-                site="US",
-                params={"asin": "B0088PUEPK", "stats": 30, "history": False},
-                job_id="keepa-json-regression",
-                export_format="json",
+    try:
+        _run(
+            manager.run(
+                KeepaScenarioRequest(
+                    scenario="product",
+                    site="US",
+                    params={"asin": "B0088PUEPK", "stats": 30, "history": False},
+                    job_id="keepa-json-regression",
+                    export_format="json",
+                )
             )
         )
-    )
+    except Exception as exc:
+        assert "不支持的导出格式" in str(exc)
+    else:
+        raise AssertionError("expected json export format rejection")
 
-    export_payload = json.loads((tmp_path / "keepa-json-regression" / "keepa-json-regression.json").read_text(encoding="utf-8"))
-
-    assert result.export is not None
-    assert result.export.filename == "keepa-json-regression.json"
-    assert result.export.format == "json"
-    assert export_payload["request_params"]["stats"] == 30
-    assert export_payload["raw_response"]["tokensConsumed"] == 1
-    assert export_payload["raw_response"]["products"][0]["lastUpdate"] == 7588958
-    assert export_payload["rows"][0]["lastUpdateUnixSeconds"] == 1749177480
+    assert DummyKeepaClient.requests == []
+    assert not (tmp_path / "keepa-json-regression" / "keepa-json-regression.json").exists()
 
 
 def test_product_finder_formats_search_insights_sheets(monkeypatch, tmp_path: Path):

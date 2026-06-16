@@ -102,6 +102,24 @@ def test_keepa_run_accepts_params_json_string(monkeypatch):
     assert result["data"]["warnings"][0]["message"] == "Keepa 当前可用额度不足，请稍后重试；如果持续卡住，请联系运营人员处理。"
 
 
+def test_keepa_run_rejects_json_export_format(monkeypatch):
+    DummyManager.last_request = None
+    monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
+
+    result = _run(
+        keepa_tools.keepa_run(
+            scenario="product",
+            site="US",
+            params='{"asin":"B0088PUEPK"}',
+            export_format="json",
+        )
+    )
+
+    assert result["success"] is False
+    assert "不支持的导出格式" in result["error"]["message"]
+    assert DummyManager.last_request is None
+
+
 def test_keepa_job_status_hides_quota(monkeypatch):
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
 
