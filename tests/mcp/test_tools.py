@@ -46,6 +46,24 @@ def test_mcp_hides_temporarily_closed_service_tools():
     assert "xiyou_scenarios" not in names
 
 
+def test_seller_sprite_internal_controls_are_not_exposed():
+    """卖家精灵对 Agent 只暴露业务入口，不暴露异步/采集模式开关。"""
+    async def scenario():
+        async with Client(mcp) as client:
+            tools = await client.list_tools()
+            return tools
+
+    tools = _run(scenario())
+    names = [tool.name for tool in tools]
+    run_tool = next(tool for tool in tools if tool.name == "seller_sprite_run")
+    properties = (run_tool.inputSchema or {}).get("properties", {})
+
+    assert "seller_sprite_run" in names
+    assert "seller_sprite_start" not in names
+    assert "mode" not in properties
+    assert "async_mode" not in properties
+
+
 def test_context_parameter_is_not_exposed_in_tool_schema():
     async def scenario():
         async with Client(mcp) as client:

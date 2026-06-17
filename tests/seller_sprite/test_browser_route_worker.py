@@ -183,3 +183,16 @@ def test_headless_mode_does_not_start_xvfb(monkeypatch):
     )
 
     assert worker_module._ensure_headed_browser_environment(SellerSpriteSettings(browser_headless=True)) is False
+
+
+def test_worker_reports_busy_when_drain_lock_is_held(tmp_path):
+    async def scenario():
+        account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+        settings = SellerSpriteSettings(output_dir=tmp_path, browser_profile_dir=tmp_path / "profiles")
+        worker = SellerSpriteBrowserRouteWorker(settings=settings, account=account)
+
+        assert worker.is_busy is False
+        async with worker._drain_lock:
+            assert worker.is_busy is True
+
+    _run(scenario())

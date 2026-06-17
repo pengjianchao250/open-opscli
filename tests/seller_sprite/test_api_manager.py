@@ -5,7 +5,7 @@ from pathlib import Path
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.config import SellerSpriteSettings
 from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError
-from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
+from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, SellerSpriteScenarioResult
 from opscli.seller_sprite.services import api_manager as api_manager_module
 from opscli.seller_sprite.services.api_manager import SellerSpriteApiManager
 
@@ -153,6 +153,44 @@ class ListingAnalysisApiClient(DummyApiClient):
         raise AssertionError(f"unexpected url: {url}")
 
 
+async def _wait_for_state(manager, job_id: str, expected_state: str, *, attempts: int = 20):
+    for _ in range(attempts):
+        status = manager.job_status(job_id)
+        if status.get("state") == expected_state:
+            return status
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"job {job_id} did not reach state {expected_state}")
+
+
+class ControlledAsyncManager(SellerSpriteApiManager):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.run_started = asyncio.Event()
+        self.allow_finish = asyncio.Event()
+        self.last_request = None
+
+    async def run(self, request):
+        self.last_request = request
+        self.run_started.set()
+        await self.allow_finish.wait()
+        root_dir = self._build_root_dir(request, request.job_id or "job-controlled")
+        return SellerSpriteScenarioResult.empty(
+            job_id=request.job_id or "job-controlled",
+            scenario=request.scenario,
+            site=request.site,
+            period=request.period,
+            root_dir=root_dir,
+            params_path=root_dir / "params.json",
+            raw_path=root_dir / "raw.json",
+            result_path=root_dir / "result.json",
+        )
+
+
+class FailingAsyncManager(SellerSpriteApiManager):
+    async def run(self, request):
+        raise ValueError("boom from async seller sprite")
+
+
 def test_manager_writes_job_files_and_xlsx(monkeypatch, tmp_path: Path):
     DummyApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
@@ -260,6 +298,93 @@ def test_job_status_reads_existing_result(tmp_path: Path):
     result = manager.job_status("job-1")
 
     assert result == {"job_id": "job-1", "row_count": 3}
+
+
+def test_job_status_merges_completed_async_status_with_result(tmp_path: Path):
+    root_dir = tmp_path / "job-async-complete"
+    root_dir.mkdir()
+    (root_dir / "status.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job-async-complete",
+                "state": "succeeded",
+                "stage": "finished",
+                "error": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root_dir / "result.json").write_text(
+        json.dumps({"job_id": "job-async-complete", "row_count": 3}),
+        encoding="utf-8",
+    )
+    settings = SellerSpriteSettings(output_dir=tmp_path)
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = manager.job_status("job-async-complete")
+
+    assert result["job_id"] == "job-async-complete"
+    assert result["state"] == "succeeded"
+    assert result["stage"] == "finished"
+    assert result["row_count"] == 3
+
+
+def test_manager_start_returns_before_background_task_finishes(tmp_path: Path):
+    async def scenario():
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        manager = ControlledAsyncManager(settings=settings, account_provider=DummyAccountProvider())
+
+        status = await manager.start(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-reverse",
+                site="JP",
+                period="nearly",
+                params={"asin": "B07YRMT36L"},
+                job_id="job-async-controlled",
+            )
+        )
+
+        assert status["job_id"] == "job-async-controlled"
+        assert status["state"] == "queued"
+        assert status["stage"] == "created"
+        assert manager.last_request is None
+
+        await manager.run_started.wait()
+        running = manager.job_status("job-async-controlled")
+        assert running["state"] == "running"
+        assert running["stage"] == "running"
+
+        manager.allow_finish.set()
+        succeeded = await _wait_for_state(manager, "job-async-controlled", "succeeded")
+        assert succeeded["state"] == "succeeded"
+        assert succeeded["stage"] == "finished"
+        assert succeeded["error"] is None
+
+    _run(scenario())
+
+
+def test_manager_start_records_failed_status(tmp_path: Path):
+    async def scenario():
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        manager = FailingAsyncManager(settings=settings, account_provider=DummyAccountProvider())
+
+        status = await manager.start(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-reverse",
+                site="JP",
+                period="nearly",
+                params={"asin": "B07YRMT36L"},
+                job_id="job-async-failed",
+            )
+        )
+
+        assert status["state"] == "queued"
+        failed = await _wait_for_state(manager, "job-async-failed", "failed")
+        assert failed["stage"] == "failed"
+        assert failed["error"]["code"] == "ValueError"
+        assert failed["error"]["message"] == "boom from async seller sprite"
+
+    _run(scenario())
 
 
 def test_manager_relogs_and_retries_when_session_expires(monkeypatch, tmp_path: Path):

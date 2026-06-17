@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -15,11 +16,22 @@ from opscli.seller_sprite.api.categories import SellerSpriteCategoryResolver
 from opscli.seller_sprite.api.client import BASE_URL, SellerSpriteApiClient
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.api.scenarios import get_scenario, list_scenarios
-from opscli.seller_sprite.browser_route import BrowserRouteRequest, get_browser_route_worker
+from opscli.seller_sprite.browser_route import (
+    BrowserRouteRequest,
+    get_browser_route_worker,
+    get_existing_browser_route_worker,
+)
 from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
 from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, SellerSpriteScenarioResult
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
+from opscli.seller_sprite.services.task_status import (
+    base_status,
+    error_to_dict,
+    now_iso,
+    read_status,
+    write_status,
+)
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 from opscli.shared.integration_accounts import IntegrationAccountClient
 
@@ -29,6 +41,7 @@ AI_TASK_FAILED_STATUSES = {"FAILED", "FAIL", "ERROR", "CANCELED", "CANCELLED", "
 DEFAULT_AI_TASK_POLL_ATTEMPTS = 180
 DEFAULT_AI_TASK_POLL_INTERVAL_SECONDS = 2.0
 WINDOWS_COMPAT_EXPORT_PATH_LIMIT = 240
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
 class SellerSpriteApiManager:
@@ -53,6 +66,74 @@ class SellerSpriteApiManager:
     def scenarios(self) -> list[dict[str, Any]]:
         """列出支持的接口场景。"""
         return list_scenarios()
+
+    def browser_route_busy(self, request: SellerSpriteScenarioRequest) -> bool:
+        """判断当前请求对应账号的 browser-route worker 是否正忙。"""
+        mode = _resolve_request_mode(request.mode or self.settings.default_mode)
+        if mode != "browser-route":
+            return False
+        account = self.account_provider.get_default()
+        worker = get_existing_browser_route_worker(settings=self.settings, account=account)
+        return bool(worker and worker.is_busy)
+
+    async def start(self, request: SellerSpriteScenarioRequest) -> dict[str, Any]:
+        """创建异步任务并立即返回任务状态。"""
+        get_scenario(request.scenario)
+        site = (request.site or self.settings.default_site).upper()
+        period = request.period or self.settings.default_period
+        job_id = request.job_id or _build_job_id(request, site, period)
+        request = replace(request, site=site, period=period, job_id=job_id)
+        root_dir = self._build_root_dir(request, job_id)
+        status = base_status(
+            job_id=job_id,
+            scenario=request.scenario,
+            site=site,
+            period=period,
+            state="queued",
+            stage="created",
+            root_dir=root_dir,
+        )
+        write_status(root_dir, status)
+
+        # 保留 task 引用，避免后台任务在事件循环中被提前回收。
+        task = asyncio.create_task(self._run_background_task(request, root_dir))
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+        return status
+
+    async def _run_background_task(self, request: SellerSpriteScenarioRequest, root_dir: Path) -> None:
+        """执行后台任务并持续更新状态文件。"""
+        status = read_status(root_dir) or base_status(
+            job_id=request.job_id or "",
+            scenario=request.scenario,
+            site=request.site,
+            period=request.period,
+            state="queued",
+            stage="created",
+            root_dir=root_dir,
+        )
+        status["state"] = "running"
+        status["stage"] = "running"
+        status["started_at"] = now_iso()
+        write_status(root_dir, status)
+        try:
+            result = await self.run(request)
+        except Exception as exc:
+            status["state"] = "failed"
+            status["stage"] = "failed"
+            status["finished_at"] = now_iso()
+            status["error"] = error_to_dict(exc)
+            write_status(root_dir, status)
+            return
+
+        status["state"] = "succeeded"
+        status["stage"] = "finished"
+        status["finished_at"] = now_iso()
+        status["error"] = None
+        status["export"] = result.export.to_dict() if result.export else None
+        status["row_count"] = result.row_count
+        status["result_path"] = result.result_path
+        write_status(root_dir, status)
 
     async def run(self, request: SellerSpriteScenarioRequest) -> SellerSpriteScenarioResult:
         """执行一个接口场景。"""
@@ -262,8 +343,20 @@ class SellerSpriteApiManager:
         root_dir = self.settings.output_dir / job_id
         result_path = root_dir / "result.json"
         if not result_path.exists():
+            status = read_status(root_dir)
+            if status:
+                return status
             raise SellerSpriteConfigError(f"任务不存在：{job_id}")
-        return json.loads(result_path.read_text(encoding="utf-8"))
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        status = read_status(root_dir)
+        if not status:
+            return result
+        # 异步任务完成后保留 state/stage，同时用 result.json 补充最终业务结果。
+        merged = dict(status)
+        merged.update(result)
+        merged.setdefault("state", status.get("state") or "succeeded")
+        merged.setdefault("stage", status.get("stage") or "finished")
+        return merged
 
     def _build_root_dir(self, request: SellerSpriteScenarioRequest, job_id: str) -> Path:
         base_dir = Path(request.output_dir).expanduser() if request.output_dir else self.settings.output_dir
