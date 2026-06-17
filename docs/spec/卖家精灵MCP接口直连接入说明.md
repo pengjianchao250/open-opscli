@@ -52,6 +52,8 @@ opscli-mcp --transport sse --port 8765
 
 执行场景并导出 XLSX。
 
+兼容说明：调用方只需要传业务参数，不需要选择同步/异步或采集模式。后端会在长任务场景或同账号浏览器 worker 已有运行中/排队任务时，自动切换为异步任务并立即返回 `job_id`。这样后续请求不会把 MCP 同步等待时间耗在浏览器队列排队上。采集模式由服务端配置和风控策略决定，不通过 MCP 参数暴露。
+
 参数：
 
 | 参数 | 说明 |
@@ -61,7 +63,7 @@ opscli-mcp --transport sse --port 8765
 | `site` | 站点，如 `US`、`JP`、`DE` |
 | `period` | 日期，如 `30d`、`nearly`、`2026-03` |
 | `page_size` | 默认 `100` |
-| `export_format` | MCP 默认 `json`；可选 `xlsx` / `xls` / `json` |
+| `export_format` | MCP 默认 `xls`；可选 `xlsx` / `xls` / `json` |
 | `output_dir` | 可选任务输出目录 |
 | `job_id` | 可选指定任务 ID |
 
@@ -90,6 +92,27 @@ opscli-mcp --transport sse --port 8765
 ### `seller_sprite_job_status`
 
 通过 `job_id` 读取 `result.json`。
+
+异步返回示例：
+
+返回示例：
+
+```json
+{
+  "success": true,
+  "data": {
+    "job_id": "SellerSprite-ProductResearch-US-Bookcases-20260616-120000-a1b2c3",
+    "scenario": "product-research",
+    "site": "US",
+    "period": "30d",
+    "state": "queued",
+    "stage": "created"
+  },
+  "error": null
+}
+```
+
+Agent 应在同一轮对话内用 `seller_sprite_job_status(job_id)` 自动轮询 60 到 90 秒；如果仍未完成，应把 `job_id` 留在对话上下文中，用户后续说“继续”或“查结果”时直接复用该任务编号。
 
 ### `seller_sprite_export`
 

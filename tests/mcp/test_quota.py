@@ -13,6 +13,7 @@ from opscli.mcp.quota import (
     QuotaPolicy,
     SQLiteQuotaStore,
     QuotaUnavailableError,
+    default_quota_policies,
     load_quota_config,
     _beijing_day_key,
     _seconds_until_next_beijing_day,
@@ -112,6 +113,13 @@ def test_limiter_allows_first_five_calls_and_blocks_sixth():
     assert blocked.error_response["error"]["code"] == "MCP_QUOTA_EXCEEDED"
     assert blocked.error_response["quota"]["used"] == 5
     assert blocked.error_response["quota"]["remaining"] == 0
+
+
+def test_default_quota_policies_only_limit_public_seller_sprite_entry():
+    policies = default_quota_policies()
+
+    assert policies["seller_sprite_run"].service == "seller_sprite"
+    assert "seller_sprite_start" not in policies
 
 
 def test_limiter_refunds_failed_call_and_records_failure():

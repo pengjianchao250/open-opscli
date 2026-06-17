@@ -1772,3 +1772,23 @@
 **回滚方式**：恢复 `opscli/mcp/server.py` 中 `_sif_tools`、`_xiyou_tools` 的导入与 register 调用，并移除工具列表隐藏断言。
 
 ---
+
+## 2026-06-16 MCP - 卖家精灵异步任务化入口
+
+**变更原因**：卖家精灵 `product-research` 等长任务会超过 MCP 客户端约 120 秒同步等待上限，导致用户拿不到 `job_id`，无法继续查询已启动任务状态；需要支持快速返回任务编号并由 Agent 自动轮询。
+**改动点**：新增 `opscli/seller_sprite/services/task_status.py` 管理 `status.json`；`SellerSpriteApiManager` 新增内部 `start()` 和后台任务状态更新，`job_status()` 在 `result.json` 不存在时可读取 `status.json`，完成态异步任务会合并 `status.json` 的 `state/stage` 与 `result.json` 的业务结果；MCP 侧保持 `seller_sprite_run` 作为唯一采集入口，长耗时场景由后端自动调用内部异步任务路径并返回 `job_id`，不向 Agent 暴露 `seller_sprite_start`、`async_mode`、`mode`、`browser-route` 或 `api-direct` 控制；限额策略继续只绑定 `seller_sprite_run`，避免同步/异步入口双计数或策略冲突；更新 `ops-seller-sprite` MCP Skill 文档、卖家精灵 MCP 接口说明、异步入口方案文档和执行计划文档；扩展 MCP、manager、工具列表和 quota 单测覆盖 queued/running/succeeded/failed、Schema 隐藏与公开限额入口。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_seller_sprite_tools.py -q` 失败于缺少自动异步任务路径；RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_api_manager.py -q` 失败于 manager 缺少 `start()`；完成态合并 RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_api_manager.py::test_job_status_merges_completed_async_status_with_result -q` 失败于 `state` 缺失；公开入口收敛 RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_tools.py::test_seller_sprite_internal_controls_are_not_exposed -q` 失败于 MCP Schema 仍暴露内部控制；GREEN 阶段相关定向测试通过；目标回归 `.\.venv\Scripts\python.exe -m pytest tests\seller_sprite tests\mcp\test_seller_sprite_tools.py tests\mcp\test_quota.py tests\mcp\test_tools.py -q` 为 60 passed；编译检查 `.\.venv\Scripts\python.exe -m py_compile opscli\seller_sprite\services\task_status.py opscli\seller_sprite\services\api_manager.py opscli\seller_sprite\browser_route\worker.py opscli\seller_sprite\browser_route\__init__.py opscli\mcp\tools\seller_sprite.py opscli\mcp\quota.py` 通过。
+**影响范围**：影响卖家精灵 `seller_sprite_run` 对长任务的返回形态、`seller_sprite_job_status` 对异步任务的读取行为、卖家精灵任务目录新增 `status.json`，以及 MCP Schema 对内部控制参数的隐藏；公开限额入口仍只有 `seller_sprite_run`，不增加浏览器窗口并发。
+**回滚方式**：删除 `opscli/seller_sprite/services/task_status.py`，回退 `api_manager.py` 中 `start()`、`_run_background_task()`、`job_status()` 状态读取逻辑，回退 `seller_sprite.py` 中 `seller_sprite_run` 自动异步判断和内部控制隐藏，移除对应测试和文档段落。
+
+---
+
+## 2026-06-17 MCP - 卖家精灵队列忙自动异步
+
+**变更原因**：卖家精灵 browser-route 只保留单账号单窗口串行执行；当已有任务运行或排队时，后续同步 `seller_sprite_run` 会把 MCP 等待预算耗在排队上并容易超时，因此队列忙时应自动切换为异步任务。
+**改动点**：`SellerSpriteBrowserRouteWorker` 新增 `is_busy` 状态，`browser_route` 模块新增 `get_existing_browser_route_worker()` 用于只读取已有 worker、不创建新窗口；`SellerSpriteApiManager` 新增 `browser_route_busy()` 判断当前请求对应账号 worker 是否忙；`seller_sprite_run` 在长耗时场景或 browser-route worker 忙时自动调用 `manager.start()`；更新 `ops-seller-sprite` MCP Skill 文档和卖家精灵 MCP 接口说明。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_browser_route_worker.py::test_worker_reports_busy_when_drain_lock_is_held -q` 失败于 worker 缺少 `is_busy`；RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_seller_sprite_tools.py::test_seller_sprite_run_auto_starts_when_browser_queue_is_busy -q` 失败于仍返回同步 `job-1`；GREEN 阶段上述两个测试均为 1 passed；回归 `.\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_browser_route_worker.py tests\seller_sprite\test_api_manager.py tests\mcp\test_seller_sprite_tools.py -q` 为 25 passed；编译检查 `.\.venv\Scripts\python.exe -m py_compile opscli\seller_sprite\browser_route\worker.py opscli\seller_sprite\browser_route\__init__.py opscli\seller_sprite\services\api_manager.py opscli\mcp\tools\seller_sprite.py` 通过。
+**影响范围**：影响 `seller_sprite_run` 在长耗时场景和 browser-route 队列忙时的行为，返回值会从同步结果变为异步任务状态；普通短任务且队列不忙时仍保持同步；不增加浏览器窗口并发。
+**回滚方式**：回退 `worker.py` 的 `is_busy` 和 `get_existing_browser_route_worker()`、`browser_route/__init__.py` 导出、`api_manager.py` 的 `browser_route_busy()`、`seller_sprite.py` 的队列忙自动 `start()` 判断，并移除对应测试和文档说明。
+
+---
