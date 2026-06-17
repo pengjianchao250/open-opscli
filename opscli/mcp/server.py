@@ -268,6 +268,7 @@ class _TelemetryMcpProxy:
             # 先插入限额切面，再包裹遥测，最终注册到 FastMCP
             return real_decorator(_telemetry_wrap(_quota_wrap(fn)))
 
+
         return wrap
 
     def __getattr__(self, name: str):

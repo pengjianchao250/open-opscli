@@ -93,6 +93,11 @@ class SellerSpriteBrowserRouteWorker:
         await self._drain_queue()
         return await future
 
+    @property
+    def is_busy(self) -> bool:
+        """判断当前 worker 是否正在执行或已有排队任务。"""
+        return self._drain_lock.locked() or not self._queue.empty()
+
     async def close(self) -> None:
         """关闭浏览器上下文。"""
         if self._context:
@@ -361,6 +366,17 @@ def get_browser_route_worker(*, settings: SellerSpriteSettings, account: SellerS
         worker = SellerSpriteBrowserRouteWorker(settings=settings, account=account)
         _WORKERS[key] = worker
     return worker
+
+
+def get_existing_browser_route_worker(
+    *,
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+) -> SellerSpriteBrowserRouteWorker | None:
+    """读取已存在的 browser worker，不存在时不创建新窗口或新队列。"""
+    loop_key = id(asyncio.get_running_loop())
+    account_key = f"{account.name}:{account.username}"
+    return _WORKERS.get((loop_key, account_key))
 
 
 def _ensure_headed_browser_environment(settings: SellerSpriteSettings) -> bool:

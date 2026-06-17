@@ -19,9 +19,12 @@ Use these MCP tools:
 2. If the user intent cannot be mapped to exactly one scenario, ask the user to confirm the scenario before calling `seller_sprite_run`.
 3. If required params are missing or ambiguous, ask the user to provide only those params before calling `seller_sprite_run`.
 4. Call `seller_sprite_run` with `scenario`, `site`, `period`, `params`, and optionally `export_format`.
-5. Use the returned `data.job_id` for follow-up status/export calls.
-6. Call `seller_sprite_export` when the user needs the file link.
-7. If MCP tools are unavailable, report that SellerSprite MCP is unavailable.
+5. Do not pass collection-mode controls such as `mode`, `browser-route`, `api-direct`, or `async_mode`; sync/async and collection mode are backend decisions.
+6. Use the returned `data.job_id` for follow-up status/export calls.
+7. If the response has `data.state` such as `queued` or `running`, poll `seller_sprite_job_status(job_id)` every 5-10 seconds within the current response turn. If the job finishes within 60-90 seconds, return the result and export. If it is still running, tell the user the task is still running and keep the `job_id` in conversation context.
+8. When the user later says `继续`, `查结果`, or `刚才那个好了没`, reuse the last SellerSprite `job_id`; do not ask the user to resubmit the full request.
+9. Call `seller_sprite_export` when the user needs the file link.
+10. If MCP tools are unavailable, report that SellerSprite MCP is unavailable.
 
 ## Authentication
 
@@ -33,6 +36,38 @@ SellerSprite integration accounts are cached in the backend process for 10 minut
 
 - MCP export format: `xls`.
 - Omit `export_format` to use the `xls` default, or pass `export_format: "xls"` explicitly.
+
+## Async Tasks
+
+The backend automatically switches to async mode when a scenario may exceed the MCP client's synchronous wait budget.
+
+Agent-facing calls should still use `seller_sprite_run`; do not call internal start helpers and do not pass `async_mode`.
+
+When the current SellerSprite browser worker is already running or has queued tasks, the backend automatically returns an async task. This prevents the MCP call from spending its timeout budget waiting behind an existing browser task. Long-running scenarios such as `product-research`, `market-research`, and `listing-analysis` may also return async task status immediately.
+
+Successful async start returns a task status payload:
+
+```json
+{
+  "job_id": "SellerSprite-ProductResearch-US-Bookcases-20260616-120000-a1b2c3",
+  "scenario": "product-research",
+  "site": "US",
+  "period": "30d",
+  "state": "queued",
+  "stage": "created"
+}
+```
+
+Status values:
+
+| state | Meaning |
+| --- | --- |
+| `queued` | Created and waiting for the background worker |
+| `running` | Background worker is executing the scenario |
+| `succeeded` | Task completed and result/export info is available |
+| `failed` | Task failed; read `error.code` and `error.message` |
+
+For async jobs, do not ask the user to send a new full request. The Agent should keep the `job_id` and use `seller_sprite_job_status`.
 
 ## Missing Params Policy
 

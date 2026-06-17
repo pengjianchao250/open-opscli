@@ -11,9 +11,25 @@ def _run(coro):
 
 class DummyManager:
     last_request = None
+    start_calls = 0
 
     def scenarios(self):
         return [{"scenario_id": "keyword-reverse", "title": "关键词反查"}]
+
+    async def start(self, request):
+        self.__class__.last_request = request
+        self.__class__.start_calls += 1
+        return {
+            "job_id": "job-async-1",
+            "scenario": request.scenario,
+            "site": request.site,
+            "period": request.period,
+            "state": "queued",
+            "stage": "created",
+        }
+
+    def browser_route_busy(self, request):
+        return False
 
     async def run(self, request):
         self.__class__.last_request = request
@@ -48,6 +64,7 @@ def test_seller_sprite_scenarios_uses_manager(monkeypatch):
 def test_seller_sprite_run_accepts_params_json_string(monkeypatch):
     monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda **kwargs: DummyManager())
     monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    DummyManager.start_calls = 0
 
     result = _run(
         seller_sprite_tools.seller_sprite_run(
@@ -64,7 +81,78 @@ def test_seller_sprite_run_accepts_params_json_string(monkeypatch):
     assert DummyManager.last_request.params == {"asin": "B07YRMT36L"}
     assert DummyManager.last_request.page_size == 100
     assert DummyManager.last_request.export_format == "json"
-    assert DummyManager.last_request.mode == "browser-route"
+    assert DummyManager.last_request.mode is None
+    assert DummyManager.start_calls == 0
+
+
+def test_seller_sprite_start_returns_queued_job(monkeypatch):
+    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda **kwargs: DummyManager())
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    DummyManager.start_calls = 0
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_start(
+            scenario="product-research",
+            site="US",
+            period="30d",
+            params={"nodeIdPaths": ["1055398:1063306:1063312:10824421"]},
+            export_format="json",
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "job-async-1"
+    assert result["data"]["state"] == "queued"
+    assert DummyManager.start_calls == 1
+    assert DummyManager.last_request.scenario == "product-research"
+    assert DummyManager.last_request.params == {
+        "nodeIdPaths": ["1055398:1063306:1063312:10824421"]
+    }
+    assert DummyManager.last_request.export_format == "json"
+
+
+def test_seller_sprite_run_auto_starts_long_running_scenario(monkeypatch):
+    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda **kwargs: DummyManager())
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    DummyManager.start_calls = 0
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="product-research",
+            site="US",
+            period="30d",
+            params={"nodeIdPaths": ["1055398:1063306:1063312:10824421"]},
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "job-async-1"
+    assert result["data"]["state"] == "queued"
+    assert DummyManager.start_calls == 1
+
+
+def test_seller_sprite_run_auto_starts_when_browser_queue_is_busy(monkeypatch):
+    class BusyManager(DummyManager):
+        def browser_route_busy(self, request):
+            return True
+
+    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda **kwargs: BusyManager())
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    BusyManager.start_calls = 0
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="product-research",
+            site="US",
+            period="30d",
+            params={"nodeIdPaths": ["1055398:1063306:1063312:10824421"]},
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "job-async-1"
+    assert result["data"]["state"] == "queued"
+    assert BusyManager.start_calls == 1
 
 
 def test_seller_sprite_export_returns_export_info(monkeypatch):

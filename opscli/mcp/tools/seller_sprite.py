@@ -16,6 +16,9 @@ from typing import Any
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 
+LONG_RUNNING_SCENARIOS = {"product-research", "market-research", "listing-analysis"}
+
+
 async def seller_sprite_spec_must_read() -> dict:
     """读取卖家精灵 MCP 使用规范（SKILL_MCP.md）。
 
@@ -69,7 +72,6 @@ async def seller_sprite_run(
     period: str = "30d",
     page_size: int = 100,
     export_format: str = "xls",
-    mode: str | None = "browser-route",
     page_prepare: bool | None = None,
     task_interval_seconds: float | None = None,
     cooldown_seconds: float | None = None,
@@ -93,7 +95,6 @@ async def seller_sprite_run(
                 "period": period,
                 "page_size": page_size,
                 "export_format": export_format,
-                "mode": mode,
                 "page_prepare": page_prepare,
                 "task_interval_seconds": task_interval_seconds,
                 "cooldown_seconds": cooldown_seconds,
@@ -115,12 +116,14 @@ async def seller_sprite_run(
             job_id=job_id,
             output_dir=output_dir,
             export_format=export_format,
-            mode=mode,
             page_prepare=page_prepare,
             task_interval_seconds=task_interval_seconds,
             cooldown_seconds=cooldown_seconds,
         )
-        result = await SellerSpriteApiManager(jwt=jw, session_id=sid).run(request)
+        manager = SellerSpriteApiManager(jwt=jw, session_id=sid)
+        if _should_start_async(request, manager):
+            return _ok(await manager.start(request))
+        result = await manager.run(request)
         return _ok(result.to_dict())
     except Exception as exc:
         return _err(
@@ -132,10 +135,79 @@ async def seller_sprite_run(
                 "period": period,
                 "page_size": page_size,
                 "export_format": export_format,
-                "mode": mode,
                 "page_prepare": page_prepare,
                 "task_interval_seconds": task_interval_seconds,
                 "cooldown_seconds": cooldown_seconds,
+                "job_id": job_id,
+            },
+        )
+
+
+def _should_start_async(request, manager) -> bool:
+    """判断 MCP 主入口是否应自动切换为异步任务。"""
+    return request.scenario in LONG_RUNNING_SCENARIOS or manager.browser_route_busy(request)
+
+
+async def seller_sprite_start(
+    scenario: str,
+    params: dict[str, Any] | str | None = None,
+    site: str = "US",
+    period: str = "30d",
+    page_size: int = 100,
+    export_format: str = "xls",
+    page_prepare: bool | None = None,
+    task_interval_seconds: float | None = None,
+    cooldown_seconds: float | None = None,
+    output_dir: str | None = None,
+    job_id: str | None = None,
+    session_id: str | None = None,
+    jwt: str | None = None,
+) -> dict:
+    """创建卖家精灵异步任务并立即返回 job_id。"""
+    sid, jw = _get_auth_pair("ops", session_id, jwt)
+    if not sid:
+        return _err(
+            ValueError("无 session_id：请完成 OPS 授权，或传入有效的 session_id"),
+            tool="MCP → seller_sprite_start(...)",
+            call_params={
+                "scenario": scenario,
+                "site": site,
+                "period": period,
+                "page_size": page_size,
+                "export_format": export_format,
+                "job_id": job_id,
+            },
+        )
+
+    try:
+        from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
+        from opscli.seller_sprite.services import SellerSpriteApiManager
+
+        parsed_params = _parse_json_arg(params, dict) or {}
+        request = SellerSpriteScenarioRequest(
+            scenario=scenario,
+            site=site,
+            period=period,
+            params=parsed_params,
+            page_size=page_size,
+            job_id=job_id,
+            output_dir=output_dir,
+            export_format=export_format,
+            page_prepare=page_prepare,
+            task_interval_seconds=task_interval_seconds,
+            cooldown_seconds=cooldown_seconds,
+        )
+        return _ok(await SellerSpriteApiManager(jwt=jw, session_id=sid).start(request))
+    except Exception as exc:
+        return _err(
+            exc,
+            tool="MCP → seller_sprite_start(...)",
+            call_params={
+                "scenario": scenario,
+                "site": site,
+                "period": period,
+                "page_size": page_size,
+                "export_format": export_format,
                 "job_id": job_id,
             },
         )

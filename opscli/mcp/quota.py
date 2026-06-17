@@ -2,7 +2,8 @@
 
 本模块为 MCP 外部服务类工具提供统一的每日限额能力。限额逻辑集中在
 Tool 注册切面中执行，避免卖家精灵、西柚、Sif 等业务工具各自重复实现。
-SQLite 作为单机部署下的本地持久化存储，同时负责限额判断和审计记录。
+SQLite 作为单机部署下的本地持久化存储，同时负责限额判断、长期日加额
+和审计记录。
 """
 
 from __future__ import annotations
@@ -104,16 +105,16 @@ class QuotaIdentityResolver:
     """解析当前 MCP 请求的限额身份。"""
 
     def resolve(self) -> str | None:
-        """按 user_id、email、API Key 哈希的优先级返回身份标识。"""
-        from opscli.mcp.context import get_current_api_key, get_current_user_email, get_current_user_id
-
-        user_id = get_current_user_id()
-        if user_id:
-            return f"user:{user_id}"
+        """按邮箱优先、API Key 哈希兜底的顺序返回身份标识。"""
+        from opscli.mcp.context import get_current_api_key, get_current_user_email
 
         email = get_current_user_email()
         if email:
             return f"email:{email.strip().lower()}"
+
+        local_email = _load_local_quota_email()
+        if local_email:
+            return f"email:{local_email}"
 
         api_key = get_current_api_key()
         if api_key:
@@ -140,6 +141,7 @@ class SQLiteQuotaStore:
         try:
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
+                effective_limit = self._effective_daily_limit(conn, policy, identity_type, identity_key)
                 calls, failures = self._read_or_create_record(
                     conn,
                     policy,
@@ -148,14 +150,23 @@ class SQLiteQuotaStore:
                     identity_hash,
                     now,
                 )
-                if calls >= policy.daily_limit:
+                if calls >= effective_limit:
                     conn.commit()
-                    return False, _snapshot(policy, calls, failures, now)
+                    return False, _snapshot(policy.service, effective_limit, calls, failures, now)
 
                 calls += 1
-                self._update_record(conn, policy, identity_key, identity_hash, calls, failures, now)
+                self._update_record(
+                    conn,
+                    policy,
+                    identity_key,
+                    identity_hash,
+                    calls,
+                    failures,
+                    effective_limit,
+                    now,
+                )
                 conn.commit()
-                return True, _snapshot(policy, calls, failures, now)
+                return True, _snapshot(policy.service, effective_limit, calls, failures, now)
         except QuotaUnavailableError:
             raise
         except Exception as exc:
@@ -168,6 +179,7 @@ class SQLiteQuotaStore:
         try:
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
+                effective_limit = self._effective_daily_limit(conn, policy, identity_type, identity_key)
                 calls, failures = self._read_or_create_record(
                     conn,
                     policy,
@@ -178,11 +190,50 @@ class SQLiteQuotaStore:
                 )
                 calls = max(calls - 1, 0)
                 failures += 1
-                self._update_record(conn, policy, identity_key, identity_hash, calls, failures, now)
+                self._update_record(
+                    conn,
+                    policy,
+                    identity_key,
+                    identity_hash,
+                    calls,
+                    failures,
+                    effective_limit,
+                    now,
+                )
                 conn.commit()
-                return _snapshot(policy, calls, failures, now)
+                return _snapshot(policy.service, effective_limit, calls, failures, now)
         except QuotaUnavailableError:
             raise
+        except Exception as exc:
+            raise QuotaUnavailableError(str(exc)) from exc
+
+    async def upsert_bonus_daily_limit(self, service: str, email: str, bonus_daily_limit: int) -> None:
+        """写入某服务某邮箱的长期日加额记录。"""
+        if bonus_daily_limit < 0:
+            raise ValueError("bonus_daily_limit 不能为负数")
+
+        now = datetime.now(UTC)
+        normalized_email = email.strip().lower()
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO mcp_quota_bonus_daily (
+                        service, email, bonus_daily_limit, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(service, email) DO UPDATE SET
+                        bonus_daily_limit = excluded.bonus_daily_limit,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        service,
+                        normalized_email,
+                        bonus_daily_limit,
+                        _updated_at_iso(now),
+                        _updated_at_iso(now),
+                    ),
+                )
         except Exception as exc:
             raise QuotaUnavailableError(str(exc)) from exc
 
@@ -222,6 +273,18 @@ class SQLiteQuotaStore:
         if "identity_key" not in columns:
             # 兼容早期 SQLite 方案创建的本地库，新增可对照身份字段。
             conn.execute("ALTER TABLE mcp_quota_daily ADD COLUMN identity_key TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mcp_quota_bonus_daily (
+                service TEXT NOT NULL,
+                email TEXT NOT NULL,
+                bonus_daily_limit INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (service, email)
+            )
+            """
+        )
 
     def _read_or_create_record(
         self,
@@ -274,6 +337,7 @@ class SQLiteQuotaStore:
         identity_hash: str,
         calls: int,
         failures: int,
+        effective_limit: int,
         now: datetime,
     ) -> None:
         """更新调用次数、失败次数和当前策略快照。"""
@@ -287,7 +351,7 @@ class SQLiteQuotaStore:
                 identity_key,
                 calls,
                 failures,
-                policy.daily_limit,
+                effective_limit,
                 _reset_at_iso(now),
                 _updated_at_iso(now),
                 policy.service,
@@ -295,6 +359,27 @@ class SQLiteQuotaStore:
                 identity_hash,
             ),
         )
+
+    def _effective_daily_limit(
+        self,
+        conn: sqlite3.Connection,
+        policy: QuotaPolicy,
+        identity_type: str,
+        identity_key: str,
+    ) -> int:
+        """返回基础额度叠加长期日加额后的实际日额度。"""
+        if identity_type != "email":
+            return policy.daily_limit
+        row = conn.execute(
+            """
+            SELECT bonus_daily_limit
+            FROM mcp_quota_bonus_daily
+            WHERE service = ? AND email = ?
+            """,
+            (policy.service, identity_key.strip().lower()),
+        ).fetchone()
+        bonus_daily_limit = int(row["bonus_daily_limit"]) if row else 0
+        return policy.daily_limit + bonus_daily_limit
 
 
 class QuotaLimiter:
@@ -542,6 +627,24 @@ def _merge_policy_config(raw_policies: Any) -> dict[str, QuotaPolicy]:
     return policies
 
 
+def _load_local_quota_email() -> str | None:
+    """从当前请求对应的本地凭证中恢复邮箱。"""
+    from opscli.auth.storage.credential_store import CredentialStore
+    from opscli.mcp.tools.helpers import _get_credential_dir
+
+    try:
+        cred_dir = _get_credential_dir()
+        store = CredentialStore(base_dir=cred_dir) if cred_dir else CredentialStore()
+        data = store.load()
+    except Exception:
+        return None
+
+    email = data.get("email") if data else None
+    if not email:
+        return None
+    return str(email).strip().lower()
+
+
 def _beijing_day_key(moment: datetime | None = None) -> str:
     """返回北京时间自然日 key，格式 yyyyMMdd。"""
     current = moment or datetime.now(UTC)
@@ -587,13 +690,13 @@ def _updated_at_iso(moment: datetime) -> str:
     return moment.astimezone(BEIJING_TZ).isoformat()
 
 
-def _snapshot(policy: QuotaPolicy, calls: int, failures: int, moment: datetime) -> dict[str, Any]:
+def _snapshot(service: str, limit: int, calls: int, failures: int, moment: datetime) -> dict[str, Any]:
     """生成 MCP 响应中的 quota 元信息。"""
     return {
-        "service": policy.service,
-        "limit": policy.daily_limit,
+        "service": service,
+        "limit": limit,
         "used": calls,
-        "remaining": max(policy.daily_limit - calls, 0),
+        "remaining": max(limit - calls, 0),
         "failures": failures,
         "reset_at": _reset_at_iso(moment),
     }
@@ -601,7 +704,7 @@ def _snapshot(policy: QuotaPolicy, calls: int, failures: int, moment: datetime) 
 
 def _empty_snapshot(policy: QuotaPolicy) -> dict[str, Any]:
     """生成未能读取 SQLite 时的保守 quota 元信息。"""
-    return _snapshot(policy, 0, 0, datetime.now(UTC))
+    return _snapshot(policy.service, policy.daily_limit, 0, 0, datetime.now(UTC))
 
 
 def _error_response(code: str, message: str, snapshot: dict[str, Any]) -> dict[str, Any]:
