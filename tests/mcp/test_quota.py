@@ -69,18 +69,12 @@ def test_seconds_until_next_beijing_day_is_positive_and_targets_next_midnight():
     assert _seconds_until_next_beijing_day(moment) == 30
 
 
-def test_identity_resolver_prefers_user_id_then_email_then_api_key_hash():
+def test_identity_resolver_prefers_email_then_api_key_hash():
     token = mcp_request_ctx.set({
         "api_key": "raw-api-key",
         "user_id": "user-1",
         "email": "USER@example.com",
     })
-    try:
-        assert QuotaIdentityResolver().resolve() == "user:user-1"
-    finally:
-        mcp_request_ctx.reset(token)
-
-    token = mcp_request_ctx.set({"api_key": "raw-api-key", "email": "USER@example.com"})
     try:
         assert QuotaIdentityResolver().resolve() == "email:user@example.com"
     finally:
@@ -95,6 +89,15 @@ def test_identity_resolver_prefers_user_id_then_email_then_api_key_hash():
     assert identity is not None
     assert identity == f"api_key:{MCPUserStore.hash_api_key('raw-api-key')}"
     assert "raw-api-key" not in identity
+
+
+def test_identity_resolver_falls_back_to_local_credential_email(monkeypatch):
+    token = mcp_request_ctx.set({"api_key": "raw-api-key"})
+    monkeypatch.setattr("opscli.mcp.quota._load_local_quota_email", lambda: "local@example.com", raising=False)
+    try:
+        assert QuotaIdentityResolver().resolve() == "email:local@example.com"
+    finally:
+        mcp_request_ctx.reset(token)
 
 
 def test_limiter_allows_first_five_calls_and_blocks_sixth():
@@ -187,6 +190,36 @@ def test_sqlite_quota_store_refunds_failed_call_and_records_failure(tmp_path):
     assert row[1] == 1
     assert row[2] == "user@example.com"
     assert "user@example.com" not in row[3]
+
+
+def test_sqlite_quota_store_applies_bonus_daily_limit(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    policy = QuotaPolicy(tool_name="seller_sprite_run", service="seller_sprite", daily_limit=5)
+    store = SQLiteQuotaStore(db_path)
+
+    _run(store.upsert_bonus_daily_limit("seller_sprite", "User@example.com", 3))
+
+    for _ in range(8):
+        allowed, snapshot = _run(store.reserve(policy, "email:user@example.com"))
+        assert allowed is True
+
+    blocked, blocked_snapshot = _run(store.reserve(policy, "email:user@example.com"))
+
+    assert snapshot["limit"] == 8
+    assert blocked is False
+    assert blocked_snapshot["used"] == 8
+    assert blocked_snapshot["remaining"] == 0
+
+    with sqlite3.connect(db_path) as conn:
+        bonus_row = conn.execute(
+            "SELECT service, email, bonus_daily_limit FROM mcp_quota_bonus_daily"
+        ).fetchone()
+        daily_row = conn.execute(
+            "SELECT identity_key, calls, limit_count FROM mcp_quota_daily"
+        ).fetchone()
+
+    assert bonus_row == ("seller_sprite", "user@example.com", 3)
+    assert daily_row == ("user@example.com", 8, 8)
 
 
 def test_sqlite_quota_store_migrates_existing_table_to_identity_key(tmp_path):

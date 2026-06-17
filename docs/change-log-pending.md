@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-06-17 MCP - 卖家精灵长期日加额
+
+**变更原因**：现有限额只支持全局默认日额度，无法按用户长期追加卖家精灵 MCP 每日额度；运维又不希望新增公开 CLI 命令，因此需要在 SQLite 层增加长期日加额能力，并统一以邮箱作为主匹配口径。
+**改动点**：`opscli/mcp/quota.py` 将限额身份解析调整为邮箱优先，并增加本地凭证邮箱回退；`SQLiteQuotaStore` 新增 `mcp_quota_bonus_daily` 表和 `upsert_bonus_daily_limit()`，运行时按 `base_limit + bonus_daily_limit` 计算实际额度并把实际额度写入 `quota.limit` / `limit_count`；`tests/mcp/test_quota.py` 新增邮箱优先、本地凭证邮箱回退和长期日加额生效回归测试；新增内部文档 `docs/guide/卖家精灵MCP长期日加额内部SQL手册.md`，提供只面向内部运维的 SQL 操作说明。
+**验证结果**：RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py::test_identity_resolver_prefers_email_then_api_key_hash tests/mcp/test_quota.py::test_identity_resolver_falls_back_to_local_credential_email tests/mcp/test_quota.py::test_sqlite_quota_store_applies_bonus_daily_limit -q` 失败，原因分别为身份仍优先 `user_id`、缺少本地邮箱回退、缺少 `upsert_bonus_daily_limit()`；GREEN 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 为 `17 passed`；目标回归 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py tests/mcp/test_seller_sprite_tools.py tests/mcp/test_tools.py -q` 为 `31 passed`。
+**影响范围**：影响 `seller_sprite_run` 的限额主身份口径、SQLite schema 和 `quota.limit` 返回值；不新增公开 CLI 命令，不改变非 `seller_sprite_run` MCP 工具的限额行为。
+**回滚方式**：回退 `opscli/mcp/quota.py` 对邮箱主匹配和 `mcp_quota_bonus_daily` 的改动，删除对应测试和内部 SQL 手册；如需清理本地策略数据，删除 SQLite 中 `mcp_quota_bonus_daily` 表。
+
+---
+
 ## 2026-06-16 MCP beta - 评论分页默认值与导出上传
 
 **变更原因**：用户反馈使用 beta/Canopy 查询 Amazon 评论时，首次未带分页参数容易因数据量过大在 30 秒内超时；同时导出结果只返回本地路径口径，未复用 Keepa 的服务器上传能力，最终回复缺少统一模板。
