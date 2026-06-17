@@ -18,6 +18,7 @@ def runtime_to_tool_name(runtime: str) -> str:
         "trae-cn": "trae-solo",
         "central": "中央存储",   # 无 AI 工具时仅写入中央存储的合成记录
         "agents": "agents",
+        "auwork": "auwork",      # Windows 专属 AuWork 客户端
     }
     return mapping.get(runtime, runtime)
 

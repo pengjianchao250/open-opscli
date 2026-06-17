@@ -267,9 +267,9 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 
 ## 注意事项
 
-### catalog default_filters 需验证
+### default_filters 需验证
 
-catalog 中 `default_filters`（如 `amazon_cat=Amazon`）可能与实际数据不匹配。首次使用时应先不带 `default_filters` 探查数据是否存在，确认后再决定是否加上。若加上后返回 0 行，则去掉继续查询。
+数据集预设的 `default_filters`（如 `amazon_cat=Amazon`）可能与实际数据不匹配。首次使用时应先不带 `default_filters` 探查数据是否存在，确认后再决定是否加上。若加上后返回 0 行，则去掉继续查询。
 
 ---
 
@@ -344,7 +344,7 @@ query_simple(
 | 不支持 comparison 类型 | 400 | 仅支持 `MOY`、`ACC`、`PPT` |
 | `dataComparison` SQL 解析错误 | `QS-EXE-005` 等 | 先检查是否缺少主周期日期 `filters`；缺少时补上当前周期日期过滤后重试，仍失败再降级为纯 `filters` 查询 |
 | `dataComparison` 未返回对比字段 | 无错误码 | 若未返回对比字段，降级为分别查询两个周期后本地合并计算 |
-| catalog `default_filters` 返回 0 行 | 无错误码 | `default_filters` 可能与实际数据不匹配，去掉后重试 |
+| `default_filters` 返回 0 行 | 无错误码 | `default_filters` 可能与实际数据不匹配，去掉后重试 |
 
 ---
 

@@ -184,6 +184,9 @@ async def auth_mcp_login(agent_name: str | None = None) -> dict:
             store.save_session(session_id, email, expires_at)
             from opscli.mcp.credential_cache import invalidate_credential_cache
             invalidate_credential_cache(base_dir=_get_credential_dir())
+            # 登录用户变化，清空 stdio 模式的工具权限缓存使新权限立即生效
+            from opscli.mcp.permissions import invalidate_stdio_cache
+            invalidate_stdio_cache()
             result["saved_locally"] = True
         except Exception as exc:
             # 本地保存失败不阻断返回，但标注未保存
@@ -276,6 +279,9 @@ async def auth_login_poll(device_code: str, timeout: int = 30) -> dict:
                 # 刷新内存缓存，确保后续 Tool 调用立即可见
                 from opscli.mcp.credential_cache import invalidate_credential_cache
                 invalidate_credential_cache(base_dir=_get_credential_dir())
+                # 登录用户变化，清空 stdio 模式的工具权限缓存使新权限立即生效
+                from opscli.mcp.permissions import invalidate_stdio_cache
+                invalidate_stdio_cache()
                 result["saved_locally"] = True
         return _ok(result)
     except Exception as exc:
@@ -539,6 +545,9 @@ async def auth_logout(system: str = "__all__") -> dict:
             store.remove_token(system)
         from opscli.mcp.credential_cache import invalidate_credential_cache
         invalidate_credential_cache(base_dir=_get_credential_dir())
+        # 登出后清空 stdio 模式的工具权限缓存，回退到仅基础 auth 工具
+        from opscli.mcp.permissions import invalidate_stdio_cache
+        invalidate_stdio_cache()
         return _ok({"cleared": system})
     except Exception as exc:
         return _err(exc)

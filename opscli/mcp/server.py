@@ -237,11 +237,14 @@ def _fire_mcp_event(
 
 
 class _TelemetryMcpProxy:
-    """FastMCP 代理，在 tool 注册时自动插入遥测装饰器。
+    """FastMCP 代理，在 tool 注册时自动插入遥测装饰器并采集工具清单。
 
     替换各 register(mcp) 调用中的 mcp 参数，
     使所有 tool 函数在注册时被 _telemetry_wrap 包裹，
     无需修改任何 tools/ 模块代码。
+
+    同时将每个工具的元数据（名称/模块/描述）记入 tool_catalog，
+    供 HTTP 模式启动时自动上报后端管理清单。
     """
 
     def __init__(self, real_mcp: FastMCP) -> None:
@@ -252,8 +255,20 @@ class _TelemetryMcpProxy:
         real_decorator = self._real.tool(*args, **kwargs)
 
         def wrap(fn):
-            # 先插入限额切面，再包裹遥测，最终注册到 FastMCP
+
+            # 采集工具清单元数据：
+            # - 工具名优先取 name= 覆盖（如 chatgpt 模块的 fetch/search）
+            # - 模块取注册函数 __module__ 末段（精确归属，避免按前缀切分出错）
+            from opscli.mcp.tool_catalog import extract_description, record_tool
+
+            record_tool(
+                name=kwargs.get("name") or fn.__name__,
+                module=fn.__module__.rsplit(".", 1)[-1],
+                description=extract_description(fn, kwargs),
+            )
+            # 先包裹遥测，再注册到 FastMCP
             return real_decorator(_telemetry_wrap(_quota_wrap(fn)))
+
 
         return wrap
 
@@ -301,6 +316,12 @@ try:
 except (ImportError, ModuleNotFoundError):
     # playwright 或 opscli[amazon] 未安装，amazon_* 工具不可用
     _logger.info("amazon 工具未加载：缺少 playwright 依赖，安装命令：pip install opscli[amazon] && playwright install chromium")
+
+
+# ── 工具权限过滤（按用户角色隐藏无权限工具 + 拦截越权调用）──────────
+from opscli.mcp.permissions import ToolPermissionMiddleware
+
+mcp.add_middleware(ToolPermissionMiddleware())
 
 
 # ── API Key 管理（HTTP 模式使用）─────────────────────────────────────
@@ -526,6 +547,11 @@ def run() -> None:
                 host, port, mode=transport_val,
                 api_key=api_key,
             )
+
+        # 自动上报工具清单到后端管理库（守护线程，失败不影响启动）
+        from opscli.mcp.tool_catalog import sync_catalog_async
+
+        sync_catalog_async(auth_verify_url=auth_verify_url)
 
         if transport_val == "both":
             # 同时暴露 /sse（SSE）和 /mcp（Streamable HTTP）

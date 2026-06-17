@@ -7,7 +7,7 @@ description: 查询意图澄清通用规则 — 在构造查询参数前，按�
 
 > **适用范围**：AI Agent 通过 `opscli query` 或 `query_*` MCP Tool 执行数据查询前，必须先按本规则逐项检查用户输入。
 > **核心原则**：不确定就问，禁止猜测。任何可能产生歧义的情况都必须向用户确认。
-> **数据来源**：本文件只描述规则和模式。具体数据集、字段名称、字段含义等数据应从 `data/datasets.csv`、`data/dataset_fields.csv`、`data/dataset_catalog.json` 中动态查询，**禁止将数据硬编码到规则判断中**。
+> **数据来源**：本文件只描述规则和模式。具体数据集、字段名称、字段含义等数据应从 `data/datasets.csv`、`data/dataset_fields.csv` 中动态查询，**禁止将数据硬编码到规则判断中**。
 > **结构化提问**：凡本文件写到"确认"、"澄清"、"让用户选择"、"确认后执行"的场景，必须按 `references/ask-user-question-guide.md` 使用 `AskUserQuestion`。纯文本告知不等于用户确认。
 
 ---
@@ -266,8 +266,8 @@ description: 查询意图澄清通用规则 — 在构造查询参数前，按�
    - 匹配到 0 个 → 使用 `AskUserQuestion` 请求用户指定数据集、查看全量数据集或改写需求
    - 匹配到 1 个 → 使用 `AskUserQuestion` 确认"使用该数据集 / 查看其他候选 / 自定义"，确认前不得查询
    - 匹配到 >=2 个 → **强制列出所有候选**，分别说明其数据粒度和适用场景，再用 `AskUserQuestion` 让用户选择
-3. **catalog intents 可用时** → 优先用 catalog 意图匹配，但仍需用 `AskUserQuestion` 确认匹配结果
-4. **业务领域词特殊规则**：当用户只说"广告数据"、"销售数据"、"库存数据"、"物流数据"、"财务数据"等大领域词时，必须搜索数据集列表本身（`datasets.csv` / `query_metadata()` / catalog），不能只根据字段搜索结果集中在某个 table_id 就认定数据集唯一。
+3. **本地意图分类可用时** → 优先用 `scripts/route_intent.py` 做本地意图匹配，但仍需用 `AskUserQuestion` 确认匹配结果
+4. **业务领域词特殊规则**：当用户只说"广告数据"、"销售数据"、"库存数据"、"物流数据"、"财务数据"等大领域词时，必须搜索数据集列表本身（`datasets.csv` / `query_metadata()`），不能只根据字段搜索结果集中在某个 table_id 就认定数据集唯一。
 
 ### 5.1 数据集名称相似歧义
 
@@ -393,13 +393,13 @@ ACOS、ROAS 等公式指标在多个数据集中存在，但计算口径不同�
 
 ---
 
-## 八、catalog 意图匹配规则
+## 八、意图匹配规则
 
 ### 8.1 意图匹配优先级
 
-当 catalog 的 `intents` 可用时，按以下优先级选择数据集：
+按以下优先级选择数据集：
 1. 用户明确指定数据集名称 > 所有自动匹配
-2. catalog intents 推荐 > 本地关键词检索
+2. 本地意图分类（`scripts/route_intent.py`）推荐 > 本地关键词检索
 3. 关键词精确匹配 > 模糊匹配
 
 ### 8.2 多个数据集同时匹配
@@ -442,7 +442,7 @@ ACOS、ROAS 等公式指标在多个数据集中存在，但计算口径不同�
 □ 【查询组件权限校验】filters 中是否存在属于查询组件的字段？
          → 是 → 先查询 component_dataset_alias 数据集获取合法枚举值列表，确认用户指定的值存在后再查询
          → 值不在列表中 → 告知无权限，展示合法值列表，用 AskUserQuestion 引导重选
-□ 【default_filters】catalog 的 default_filters 是否已验证可用？
+□ 【default_filters】数据集预设的 default_filters 是否已验证可用？
 □ 【参数确认】本次是否使用了推荐值或默认值？如是，执行前是否已用 AskUserQuestion 展示参数摘要并获得确认？
 □ 【输出字段名】输出结果时，列名和指标名称是否使用了数据集原始字段名？
          → 禁止将"广告费"写成"广告花费"、将"订单量"写成"订单数量"等

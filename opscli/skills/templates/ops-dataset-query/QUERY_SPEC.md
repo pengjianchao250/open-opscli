@@ -15,13 +15,12 @@
 | 2 | **工具优先级** | `query_simple` > `query_build_and_run` > `query_chart`；禁止跳级 |
 | 3 | **公式字段禁止聚合** | 含 `summary_expression` 的字段（ACOS/ROAS 等）禁止额外传 `aggregation` |
 | 4 | **dataComparison 必带主周期** | 使用数据对比时 `filters` 必须包含当前主周期日期；单独传 `dataComparison` 会报 `QS-EXE-005` |
-| 5 | **先匹配意图再确认字段** | 用户未指定数据集时，先通过 `query_intent_match` 确认 intent 和约束，再通过 `query_metadata` 确认字段存在 |
+| 5 | **先确认数据集再确认字段** | 用户未指定数据集时，先通过 `query_metadata()` 获取数据集列表并按关键词筛选确认目标数据集，再通过 `query_metadata(dataset=...)` 确认字段存在 |
 | 6 | **参数命名约定** | MCP 工具参数用 `snake_case`（`table_id`），JSON payload 用 `camelCase`（`tableId`），禁止混用 |
 | 7 | **字段歧义必须澄清** | 用户术语匹配到 ≥2 个字段时，禁止静默选择，必须让用户确认 |
 | 8 | **输出字段名不可改写** | 结果列名必须使用数据集定义的 `verbose_name`，禁止自行意译 |
 | 9 | **本地数据初始化检查** | `data_state=placeholder` 时本地索引为空模板；执行搜索/查询前必须先 `skills_upgrade`（CLI）或 `skills_upgrade(name="ops-dataset-query")`（MCP）拉取远端数据 |
 | 10 | **查询前意图澄清** | 构造任何查询参数前，必须先按第十五章字段歧义规则逐项检查；时间/人员/产品/币种/数据集存在歧义时，必须向用户确认，禁止猜测 |
-| 10-A | **Intent 约束优先** | `query_intent_match` 命中后，必须优先遵循 `intent_constraints` 中的 `scenario_description`、规则、默认过滤、对比策略和推荐字段 |
 | 11 | **查询闭环强制反馈** | 每次执行查询工具后，无论成功或失败，必须在后续 3 次工具调用内调用 `feedback_submit` 提交反馈；成功/降级 → `query_result`，工具报错 → `bug` |
 | 12 | **结构化确认优先** | 凡需要确认/澄清/让用户选择的场景，必须按 `references/ask-user-question-guide.md` 使用 AskUserQuestion；纯文本告知不等于用户确认 |
 | 13 | **查询组件权限校验** | 构造 filters 前必须检查 `query_metadata(dataset=alias)` 响应中的 `select_columns`：① 其中的字段即使不在普通字段列表也是合法筛选条件；② 必须查 `component_dataset_alias` 数据集验证枚举值权限，值不存在则无权限，禁止继续查询 |
@@ -32,7 +31,7 @@
 
 ## 二、认证前置流程
 
-> **规则**：`query_catalog(source="local")` 不需要认证；所有远端查询必须先确认已登录。
+> **规则**：本地只读操作不需要认证；所有远端查询必须先确认已登录。
 > **重要**：所有需要认证的工具均支持 **自动加载本地凭证**，已登录过的会话无需重复传入 `session_id`。
 
 ### 方式 A（推荐）：auth_mcp_login 一步登录
@@ -60,10 +59,8 @@ auth_is_authenticated()
 
 | 操作 | 是否需要 session_id |
 |------|-------------------|
-| `query_catalog(source="local")` | ❌ 不需要 |
 | `query_metadata`（无参数，本地列表） | ❌ 不需要 |
 | `query_metadata(dataset="xxx")`（远端获取字段） | 自动加载（建议登录后调用） |
-| `query_catalog()` / `query_intent_match()`（远端，默认） | 自动加载（建议登录后调用） |
 | `query_simple` | 自动加载（未登录时报错） |
 | `query_build_and_run` | 自动加载（未登录时报错） |
 | `query_chart(run=True)` | 自动加载（未登录时报错） |
@@ -298,14 +295,9 @@ query_chart(
 
 ---
 
-## 七、辅助工具（query_metadata / query_catalog）
+## 七、辅助工具（query_metadata）
 
-> **两者用途完全不同，禁止混用**：
-> - `query_metadata`：获取数据集字段信息，或查看所有可用数据集列表 → **"有哪些数据集/字段"**
-> - `query_catalog`：读取预定义业务意图（intents）原始索引 → **"有哪些意图定义"**（catalog 不返回数据集列表）
-> - `query_intent_match`：将 NL 需求与 intents 匹配，识别目标数据集并返回 intent 规则约束 → **"这个需求该用哪个数据集、遵循什么口径"**
-
-### query_metadata — 获取数据集字段信息
+### query_metadata — 获取数据集字段信息或数据集列表
 
 ```python
 # 获取所有数据集列表（本地，不需要认证）
@@ -320,57 +312,16 @@ query_metadata(table_id=123)
 
 > 查询公式字段前必须调用此接口获取 `summary_expression`，不能靠猜测。
 
-### query_catalog — 数据集意图匹配
+**用户未指定数据集时的确认流程**：
 
-```python
-# 远端获取（默认），失败自动回退本地
-query_catalog()
-
-# 仅本地缓存（不需要认证）
-query_catalog(source="local")
 ```
-
-**返回结构**：
-```json
-{
-  "version": "v1.0.0",
-  "intent_count": 15,
-  "intents": [
-    {
-      "use_case": "销售订单分析",
-      "keywords": ["订单", "销售额", "出库"],
-      "scenario": "查看某时段内的销售订单汇总数据",
-      "priority": 1,
-      "dataset_alias": "sales_order_d",
-      "table_id": 1,
-      "default_filters": {},
-      "comparison_strategy": "dataComparison"
-    }
-  ]
-}
+1. query_metadata() 获取所有数据集列表
+2. 按用户需求关键词筛选 dataset_name / description
+   → 匹配到 1 个 → AskUserQuestion 确认后使用
+   → 匹配到 ≥2 个 → AskUserQuestion 列出候选让用户选择
+   → 匹配到 0 个 → 列出全量数据集让用户指定
+3. query_metadata(dataset="<确认的 alias>") 获取字段详情
 ```
-
-> `query_catalog()` 只读取原始意图索引。用户未指定数据集时，优先调用 `query_intent_match()` 获取结构化匹配结果；只有需要人工审阅完整 catalog 时才直接读 `query_catalog()`。
-
-### query_intent_match — 自然语言意图匹配（推荐入口）
-
-```python
-query_intent_match(query="查看库存周转趋势")
-query_intent_match(query="财务口径销售额月环比", source="local")
-```
-
-返回重点字段：
-
-| 字段 | 说明 |
-|------|------|
-| `matched` | 是否命中 catalog intent |
-| `selected` | 唯一命中时的推荐 intent；多候选时为 `null` |
-| `candidates` | 候选 intent 列表 |
-| `ask_user_question_required` | 为 `true` 时必须用 AskUserQuestion 让用户选择 |
-| `fallback_required` | 为 `true` 时静默回退本地关键词搜索 |
-| `intent_constraints` | 命中 intent 的 `scenario_description`、`notes`、`default_filters`、`comparison_strategy`、推荐字段和扩展规则 |
-
-> **强制**：用户未指定数据集时，必须先调用 `query_intent_match()`。后续构造查询时必须优先遵循 `intent_constraints`，再做字段校验。若约束与公式字段聚合、dataComparison 主周期、查询组件权限校验等硬性铁律冲突，则硬性铁律优先。
 
 ---
 
@@ -508,7 +459,7 @@ for f in fields:
 | Token 过期 | 401 Unauthorized | `auth_token_refresh()` 刷新（session_id 可不传） |
 | chart_uuid 不存在 | 404 | 确认图表 ID 正确，检查访问权限 |
 | MCP 参数用了 camelCase | `Unexpected keyword argument` | 改用 snake_case：`table_id` 而非 `tableId` |
-| catalog default_filters 返回 0 行 | 无错误码 | 去掉 default_filters 后重试 |
+| default_filters 返回 0 行 | 无错误码 | 去掉 default_filters 后重试 |
 
 ---
 
@@ -522,7 +473,7 @@ for f in fields:
 
 ```
 用户未明确指定数据集 →
-  先用 query_intent_match() 做意图匹配
+  先用 query_metadata() 获取数据集列表，按需求关键词筛选 dataset_name / description
   匹配到 0 个 → AskUserQuestion：指定数据集 / 查看全量列表 / 改写需求
   匹配到 1 个 → AskUserQuestion：使用推荐数据集 / 查看其他候选 / 自定义
   匹配到 ≥2 个 → 文本列出所有候选（名称 + 粒度 + 适用场景）+ AskUserQuestion 让用户选择
@@ -530,7 +481,7 @@ for f in fields:
 
 用户明确指定数据集名称时，若在 `query_metadata()` 中模糊匹配到 ≥2 个相似名称，仍需列出并通过 AskUserQuestion 让用户确认。
 
-> **业务领域词硬规则**：用户只说"广告数据"、"销售数据"、"库存数据"、"物流数据"、"财务数据"等大领域词时，必须搜索数据集列表本身（`query_metadata()` / `datasets.csv` / catalog），不能只根据字段搜索结果集中在某个 table_id 就判定数据集唯一。
+> **业务领域词硬规则**：用户只说"广告数据"、"销售数据"、"库存数据"、"物流数据"、"财务数据"等大领域词时，必须搜索数据集列表本身（`query_metadata()` / `datasets.csv`），不能只根据字段搜索结果集中在某个 table_id 就判定数据集唯一。
 
 ### 字段匹配两级优先级（铁律）
 
@@ -567,7 +518,7 @@ for f in fields:
 | SKU/ASIN 多变体 | field_name 含 SKU/ASIN 且 ≥2 个 | 列出所有变体（渠道SKU/公司SKU/父公司SKU）并用 AskUserQuestion 让用户选 |
 | 产品标识缩写歧义 | 用户使用"SP"等缩写 | 根据语境判断（广告指标→广告类型，产品管理→产品编码）；无法判断时澄清 |
 | 公式指标跨数据集口径不同 | 相同 field_name 出现在 ≥2 个 table_id | 说明各数据集的计算口径差异，并用 AskUserQuestion 让用户选择 |
-| 综合 vs 细分数据集 | catalog intents 命中多个 priority 相近的数据集 | 用 AskUserQuestion 问用户要全貌（综合）还是细分详情 |
+| 综合 vs 细分数据集 | 用户需求同时匹配综合数据集和细分数据集 | 用 AskUserQuestion 问用户要全貌（综合）还是细分详情 |
 | 库存多子类 | 含"库存"且存在 ≥3 个变体字段 | 列出所有变体并用 AskUserQuestion 让用户选择，不得默认选"总库存" |
 | 分类体系歧义 | 存在多套分类体系（内部品类 vs 平台类目） | 用 AskUserQuestion 确认用哪套体系 |
 
@@ -710,8 +661,7 @@ query_simple(
 □ 认证：未登录时 → HTTP/SSE 模式执行 auth_mcp_login()；stdio 模式执行 Device Flow
 □ 时间：日期范围是否明确？近 N 天是否用 N-1 推算起始日期？"最近一个月"是否已用 AskUserQuestion 澄清？
 □ 月份天数：跨月对比时天数是否对等？本月前N天 vs 上月完整月 → AskUserQuestion 澄清
-□ 数据集：是否唯一确认？（query_intent_match 意图匹配 → AskUserQuestion 确认）
-□ Intent 约束：是否已读取并优先采用 selected/candidate.intent_constraints 中的 scenario_description、notes、default_filters、comparison_strategy、推荐字段和扩展规则？
+□ 数据集：是否唯一确认？（本地关键词搜索 → 匹配到多个时 AskUserQuestion 确认）
 □ 数据集名称：用户关键词匹配到 ≥2 个相似数据集 → 列出并用 AskUserQuestion 让用户选
 □ 业务领域词：用户只说广告/销售/库存等数据时，是否搜索了数据集列表本身，而不是只靠字段搜索判定唯一？
 □ 字段确认：是否通过 query_metadata(dataset="<alias>") 确认字段存在（含 select_columns）？
@@ -732,7 +682,6 @@ query_simple(
 □ 库存查询：指定具体产品查库存 → 默认不加时间聚合，查最新快照
 □ 参数确认：本次是否使用推荐项或默认值？如是，执行前是否已用 AskUserQuestion 展示参数摘要并确认？
 □ 输出列名：是否使用了原始 verbose_name？禁止意译
-□ catalog default_filters：是否已验证可用（返回 0 行时去掉重试）
 □ 闭环：查询完成后是否已调用 feedbackSubmit 提交结果反馈？
 ```
 
@@ -768,10 +717,10 @@ query_simple(
 1. auth_is_authenticated()                      # 自动检查本地凭证
    → authenticated=false → 先完成登录（见工作流 A 步骤 1）
 
-2. query_intent_match(query="<用户自然语言需求>") 做意图匹配
-   → 匹配到多个：列出候选，等用户选择
-   → 匹配到 1 个：告知用户确认
-   → 命中后先读取 intent_constraints，优先采用其中的业务口径和查询约束
+2. query_metadata() 获取数据集列表，按需求关键词筛选确认目标数据集
+   → 匹配到多个：列出候选，用 AskUserQuestion 等用户选择
+   → 匹配到 1 个：用 AskUserQuestion 告知用户确认
+   → 匹配到 0 个：列出全量数据集让用户指定
 
 3. query_metadata(dataset="<确认的 alias>") 校验目标字段
 
