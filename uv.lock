@@ -91,11 +91,6 @@ seller-sprite = [
     { name = "patchright" },
     { name = "playwright" },
 ]
-seller-sprite-stealth = [
-    { name = "markdownify" },
-    { name = "patchright" },
-    { name = "playwright" },
-]
 
 [package.metadata]
 requires-dist = [
@@ -104,19 +99,16 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "keyring", specifier = ">=25" },
     { name = "markdownify", marker = "extra == 'seller-sprite'", specifier = ">=1.2.2" },
-    { name = "markdownify", marker = "extra == 'seller-sprite-stealth'", specifier = ">=1.2.2" },
     { name = "openpyxl", specifier = ">=3.1" },
     { name = "patchright", marker = "extra == 'seller-sprite'", specifier = ">=1.60.1" },
-    { name = "patchright", marker = "extra == 'seller-sprite-stealth'", specifier = ">=1.60.1" },
     { name = "playwright", marker = "extra == 'amazon'", specifier = ">=1.44" },
     { name = "playwright", marker = "extra == 'seller-sprite'", specifier = ">=1.44" },
-    { name = "playwright", marker = "extra == 'seller-sprite-stealth'", specifier = ">=1.44" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "rich", specifier = ">=13" },
     { name = "typer", specifier = ">=0.12" },
 ]
-provides-extras = ["amazon", "seller-sprite", "seller-sprite-stealth", "dev"]
+provides-extras = ["amazon", "seller-sprite", "dev"]
 
 [[package]]
 name = "authlib"
