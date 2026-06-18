@@ -16,12 +16,50 @@ from typing import Any
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 
-LONG_RUNNING_SCENARIOS = {"product-research", "market-research", "listing-analysis"}
-
-
 def _seller_sprite_skill_dir() -> Path:
     """返回卖家精灵 Skill 模板目录。"""
     return Path(__file__).resolve().parents[2] / "skills" / "templates" / "ops-seller-sprite"
+
+
+def _get_task_scheduler(*, jwt: str | None = None, session_id: str | None = None):
+    """返回卖家精灵任务调度器。"""
+    from opscli.seller_sprite.services import get_task_scheduler
+
+    return get_task_scheduler(jwt=jwt, session_id=session_id)
+
+
+def _build_request(
+    *,
+    scenario: str,
+    params: dict[str, Any] | str | None,
+    site: str,
+    period: str,
+    page_size: int,
+    export_format: str,
+    page_prepare: bool | None,
+    task_interval_seconds: float | None,
+    cooldown_seconds: float | None,
+    output_dir: str | None,
+    job_id: str | None,
+):
+    """构造卖家精灵场景请求对象。"""
+    from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
+
+    parsed_params = _parse_json_arg(params, dict) or {}
+    return SellerSpriteScenarioRequest(
+        scenario=scenario,
+        site=site,
+        period=period,
+        params=parsed_params,
+        page_size=page_size,
+        job_id=job_id,
+        output_dir=output_dir,
+        export_format=export_format,
+        mode="browser-route",
+        page_prepare=page_prepare,
+        task_interval_seconds=task_interval_seconds,
+        cooldown_seconds=cooldown_seconds,
+    )
 
 
 async def seller_sprite_spec_must_read() -> dict:
@@ -113,29 +151,21 @@ async def seller_sprite_run(
         )
 
     try:
-        from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
-        from opscli.seller_sprite.services import SellerSpriteApiManager
-
-        parsed_params = _parse_json_arg(params, dict) or {}
-        request = SellerSpriteScenarioRequest(
+        request = _build_request(
             scenario=scenario,
+            params=params,
             site=site,
             period=period,
-            params=parsed_params,
             page_size=page_size,
-            job_id=job_id,
-            output_dir=output_dir,
             export_format=export_format,
-            mode="browser-route",
             page_prepare=page_prepare,
             task_interval_seconds=task_interval_seconds,
             cooldown_seconds=cooldown_seconds,
+            output_dir=output_dir,
+            job_id=job_id,
         )
-        manager = SellerSpriteApiManager(jwt=jw, session_id=sid)
-        if _should_start_async(request, manager):
-            return _ok(await manager.start(request))
-        result = await manager.run(request)
-        return _ok(result.to_dict())
+        scheduler = _get_task_scheduler(jwt=jw, session_id=sid)
+        return _ok(await scheduler.enqueue(request))
     except Exception as exc:
         return _err(
             exc,
@@ -152,11 +182,6 @@ async def seller_sprite_run(
                 "job_id": job_id,
             },
         )
-
-
-def _should_start_async(request, manager) -> bool:
-    """判断 MCP 主入口是否应自动切换为异步任务。"""
-    return request.scenario in LONG_RUNNING_SCENARIOS or manager.browser_route_busy(request)
 
 
 async def seller_sprite_start(
@@ -191,25 +216,21 @@ async def seller_sprite_start(
         )
 
     try:
-        from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
-        from opscli.seller_sprite.services import SellerSpriteApiManager
-
-        parsed_params = _parse_json_arg(params, dict) or {}
-        request = SellerSpriteScenarioRequest(
+        request = _build_request(
             scenario=scenario,
+            params=params,
             site=site,
             period=period,
-            params=parsed_params,
             page_size=page_size,
-            job_id=job_id,
-            output_dir=output_dir,
             export_format=export_format,
-            mode="browser-route",
             page_prepare=page_prepare,
             task_interval_seconds=task_interval_seconds,
             cooldown_seconds=cooldown_seconds,
+            output_dir=output_dir,
+            job_id=job_id,
         )
-        return _ok(await SellerSpriteApiManager(jwt=jw, session_id=sid).start(request))
+        scheduler = _get_task_scheduler(jwt=jw, session_id=sid)
+        return _ok(await scheduler.enqueue(request))
     except Exception as exc:
         return _err(
             exc,
@@ -228,9 +249,7 @@ async def seller_sprite_start(
 async def seller_sprite_job_status(job_id: str) -> dict:
     """读取卖家精灵任务结果。"""
     try:
-        from opscli.seller_sprite.services import SellerSpriteApiManager
-
-        return _ok(SellerSpriteApiManager().job_status(job_id))
+        return _ok(_get_task_scheduler().job_status(job_id))
     except Exception as exc:
         return _err(exc, tool="MCP → seller_sprite_job_status(...)", call_params={"job_id": job_id})
 
@@ -238,9 +257,7 @@ async def seller_sprite_job_status(job_id: str) -> dict:
 async def seller_sprite_export(job_id: str) -> dict:
     """读取卖家精灵任务导出文件信息。"""
     try:
-        from opscli.seller_sprite.services import SellerSpriteApiManager
-
-        status = SellerSpriteApiManager().job_status(job_id)
+        status = _get_task_scheduler().job_status(job_id)
         export = status.get("export")
         if not export:
             raise ValueError(f"任务无导出文件：{job_id}")

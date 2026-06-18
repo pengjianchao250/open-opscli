@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-06-18 seller_sprite - SQLite 单账号排队一期
+
+**变更原因**：当前卖家精灵 MCP 入口同时混合同步直跑、browser-route 忙时自动异步和任务目录文件状态，用户无法稳定看到排队序号；第一阶段需要先补单账号 SQLite 队列、统一入队返回和可查询状态，为后续多账号扩展预留结构。
+**改动点**：新增 `opscli/seller_sprite/services/task_queue_store.py`，提供 SQLite 队列仓储、排队序号计算、运行中任务恢复和任务认证上下文持久化；新增 `opscli/seller_sprite/services/task_scheduler.py`，实现单账号 FIFO 调度、后台消费和完成态 `result.json` 合并；`opscli/seller_sprite/services/__init__.py` 导出新调度入口；`opscli/mcp/tools/seller_sprite.py` 新增 `_get_task_scheduler()` 与 `_build_request()`，将 `seller_sprite_run` / `seller_sprite_start` 统一改为入队返回，`seller_sprite_job_status` / `seller_sprite_export` 改为走调度器状态；新增 `tests/seller_sprite/test_task_queue_store.py`、`tests/seller_sprite/test_task_scheduler.py`，并更新 `tests/mcp/test_seller_sprite_tools.py` 以覆盖统一入队和状态查询。
+**验证结果**：RED：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_task_queue_store.py -q` 初始失败于缺少 `task_queue_store` 模块；`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_task_scheduler.py -q` 初始失败于缺少 `task_scheduler` 模块；`.\\.venv\\Scripts\\python.exe -m pytest tests/mcp/test_seller_sprite_tools.py -q` 初始失败于 `seller_sprite` MCP 工具缺少 `_get_task_scheduler`。中途 `uv run --extra dev pytest ...` 因 `.venv\\Scripts\\opscli-mcp.exe` 被占用失败，已按项目要求提交反馈 `4f63cc51-23df-4982-afbc-de7bd776dce9` 后改用 `.venv\\Scripts\\python.exe -m pytest` 直跑。GREEN：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_task_queue_store.py tests/seller_sprite/test_task_scheduler.py tests/seller_sprite/test_api_manager.py tests/mcp/test_seller_sprite_tools.py -q` 通过，`29 passed`。
+**影响范围**：影响卖家精灵 MCP 的任务提交与状态查询口径；`seller_sprite_run` 现统一返回排队任务信息，不再在入口层直跑同步任务；单账号执行逻辑仍复用现有 `SellerSpriteApiManager.run()`，`status.json/result.json` 继续保留为任务目录产物。
+**回滚方式**：删除 `task_queue_store.py`、`task_scheduler.py`，回退 `opscli/mcp/tools/seller_sprite.py` 到原先的 `run/start` 分支逻辑，回退 `opscli/seller_sprite/services/__init__.py` 和新增/修改测试，并删除本条变更记录。
+
+---
+
 ## 2026-06-18 卖家精灵 - browser-route 调度与导航优化
 
 **变更原因**：browser-route 每个任务固定访问首页、正常任务固定等待 8 秒，并对所有失败统一冷却 120 秒，导致无效导航和队列阻塞；默认运行时切换为 Patchright 后，基础卖家精灵依赖和文档也需要保持一致。
