@@ -32,6 +32,17 @@ SellerSprite login is cached by the backend. Do not trigger repeated login manua
 
 SellerSprite integration accounts are cached in the backend process for 10 minutes by default. Session expiration should only trigger SellerSprite re-login with the cached account; refresh integration accounts only when SellerSprite login itself fails.
 
+## Browser Runtime
+
+SellerSprite browser-route defaults to Patchright. Patchright is a Playwright-compatible runtime, so existing page, locator, route, request, and persistent-context APIs do not need replacement.
+
+- Install optional dependencies with `pip install "aukeys-opscli[seller-sprite]"`.
+- Install the browser with `python -m patchright install chromium`.
+- To use real Google Chrome, install it with `python -m patchright install chrome` and set `OPSCLI_SELLER_SPRITE_BROWSER_CHANNEL=chrome`.
+- To fall back to Playwright, set `OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME=playwright` and install its Chromium browser.
+
+Agents should not pass runtime controls in `seller_sprite_run`; browser runtime selection is an ops/deployment decision.
+
 ## Export Format
 
 - MCP export format: `xls`.

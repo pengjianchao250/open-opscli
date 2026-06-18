@@ -20,6 +20,12 @@ amazon = [
 ]
 seller-sprite = [
     "playwright>=1.44",
+    "patchright>=1.60.1",
+    "markdownify>=1.2.2",
+]
+seller-sprite-stealth = [
+    "playwright>=1.44",
+    "patchright>=1.60.1",
     "markdownify>=1.2.2",
 ]
 dev = [

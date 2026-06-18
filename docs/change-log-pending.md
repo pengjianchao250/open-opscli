@@ -1,5 +1,25 @@
 # 待归档变更记录
 
+## 2026-06-18 卖家精灵 - browser-route 调度与导航优化
+
+**变更原因**：browser-route 每个任务固定访问首页、正常任务固定等待 8 秒，并对所有失败统一冷却 120 秒，导致无效导航和队列阻塞；默认运行时切换为 Patchright 后，基础卖家精灵依赖和文档也需要保持一致。
+**改动点**：`opscli/seller_sprite/browser_route/worker.py` 改为同目标页刷新、不同目标页直接导航，不再固定访问首页；正常任务随机间隔 1-5 秒，网络错误随机冷却 3-5 秒，429/验证码/疑似风控随机冷却 15-20 秒，登录失效立即重新登录并只重试主请求一次，配置和未知代码错误不冷却；`opscli/seller_sprite/config.py` 将任务间隔上限调整为 5 秒、冷却上限调整为 20 秒；`pyproject.toml` 让基础 `seller-sprite` extra 安装默认 Patchright 运行时；同步更新 README、MCP Skill 和 worker 单元测试。
+**验证结果**：RED：worker 测试分别因缺少随机等待分类函数、仍固定访问首页、主请求不支持会话重试而失败；GREEN：`.\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_browser_route_worker.py -q` 通过，17 passed；回归 `.\.venv\Scripts\python.exe -m pytest tests/seller_sprite tests/mcp/test_seller_sprite_tools.py -q` 通过，49 passed；`uv lock` 成功并确认基础 `seller-sprite` extra 包含 Patchright；对已安装 Patchright 1.60.1 做 API 冒烟检查，确认 `launch_persistent_context(no_viewport)`、`Page.reload/route/expect_response` 和 `APIRequestContext.post` 均可用。全量 `pytest tests -q` 在收集阶段被仓库既存同名测试模块阻断，首个错误为 `tests/amazon_rufus/test_transport.py` 与 `tests/feedback/test_transport.py` 的 import file mismatch，与本次卖家精灵变更无关。
+**影响范围**：影响同账号 browser-route 的页面导航、任务等待、失败恢复和默认安装依赖；不改变 `api-direct`、场景 payload、MCP schema、导出格式和异步任务状态结构。
+**回滚方式**：恢复 `worker.py` 的首页探测、固定间隔和统一冷却，恢复 `config.py` 默认值，移除对应测试，并从基础 `seller-sprite` extra 删除 Patchright 依赖后回退 README 与 Skill 说明。
+
+---
+
+## 2026-06-17 卖家精灵 - browser-route 支持 Patchright 运行时
+
+**变更原因**：卖家精灵 browser-route 需要启用 Patchright 进行本地验证，以降低 Playwright 自动化特征和 webdriver/CDP 检测风险，同时保留 Playwright 路线作为兼容回退。
+**改动点**：`opscli/seller_sprite/config.py` 新增 `OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME` 配置并限制为 `playwright`/`patchright`，默认运行时设为 `patchright`；`opscli/seller_sprite/browser_route/worker.py` 将 async API 加载和启动参数构造收敛为局部 runtime 策略，Patchright 模式使用 `no_viewport` 且保留 persistent context；`pyproject.toml` 新增 `seller-sprite-stealth` optional extra；`ops-seller-sprite` MCP Skill 文档和 README 补充 Patchright 安装与运行时配置说明；新增 browser-route 单元测试覆盖默认配置、环境变量解析、Patchright loader 和启动参数。
+**验证结果**：RED：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_browser_route_worker.py -q` 在实现前 3 failed，失败点为 `SellerSpriteSettings.browser_runtime` 不存在、worker 未提供 `_load_async_playwright`、未提供 Patchright 启动参数构造。GREEN：同一命令通过（10 passed）；默认值由用户先行本地调整后补充回归断言，因此该断言未单独经历 RED。回归：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite tests/mcp/test_seller_sprite_tools.py -q` 通过（43 passed）。依赖锁定：`uv lock` 成功，新增 `patchright v1.60.1`；当前 `.venv` 已安装 Patchright 1.60.1 及其 Chromium，实际启动后 `navigator.webdriver` 为 `False`。补充检查：`.\\.venv\\Scripts\\python.exe -m pytest tests/mcp/test_tools.py -q` 当前 2 failed、4 passed，失败点为当前 MCP 权限/注册上下文只暴露 10 个 auth 类工具且 `seller_sprite_run` 未出现在 `Client(mcp).list_tools()` 中；该失败不在本次 browser-route runtime 改动路径内。
+**影响范围**：影响卖家精灵 browser-route 的浏览器启动层和部署配置；默认 runtime 改为 Patchright，可通过 `OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME=playwright` 回退，不影响 `api-direct`、MCP schema、导出逻辑、账号池和 Rufus 模块。
+**回滚方式**：回退 `config.py`、`worker.py`、`pyproject.toml`、`tests/seller_sprite/test_browser_route_worker.py`、`ops-seller-sprite/SKILL_MCP.md`、`README.md` 和本变更记录。
+
+---
+
 ## 2026-06-17 MCP - 卖家精灵长期日加额
 
 **变更原因**：现有限额只支持全局默认日额度，无法按用户长期追加卖家精灵 MCP 每日额度；运维又不希望新增公开 CLI 命令，因此需要在 SQLite 层增加长期日加额能力，并统一以邮箱作为主匹配口径。
