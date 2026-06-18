@@ -55,6 +55,43 @@ Always pass:
   用户用中文国家名（如"日本"、"美国站"）时优先映射为对应 code 再传入；opscli 内部对中文别名也有兜底映射，传入不在以上列表的站点会直接报错。
 - `page_size`: default `50` unless the user requests otherwise.
 
+## Natural Language Mapping
+
+When the user provides Chinese business-style fields such as `站点=...`, `关键词=...`, `筛选关键词=...`, map them before calling MCP or CLI.
+
+Core mapping rules:
+
+- `站点`, `国家站点`, `市场`, `美国站`, `日本站` -> `site`
+- `关键词`, `主关键词`, `查询词` -> `keyword`
+- `筛选关键词`, `过滤关键词`, `搜索过滤词`, `结果内筛选词` -> `query`
+- `时间范围` -> scenario-specific time params. Do not assume one global Xiyou mapping for all scenarios.
+- `开始月份`, `起始月份` -> `start_month`
+- `结束月份`, `截止月份` -> `end_month`
+
+Important distinctions:
+
+- `keyword` is the main search term that decides which Xiyou page/resource is queried.
+- `query` is the secondary filter term applied inside the exported/search result.
+- `筛选关键词` / `过滤关键词` / `搜索过滤词` / `结果内筛选词` should always be normalized to `query` first.
+- `query` only takes effect for Xiyou scenarios whose payload actually supports it. Unsupported scenarios ignore this field.
+- If both `关键词` and `筛选关键词` appear, keep both. Never overwrite `keyword` with `query`, and never drop `query`.
+- For scenarios that support `query`, keep the documented Xiyou server-side export flow. Do not download full data first and then filter locally.
+
+Recommended preset normalization:
+
+- `美国站` -> `US`
+- `日本站` -> `JP`
+- `近7天` -> `last7days`
+- `近1个月` -> `last1month`
+- `近3个月` -> `last3months`
+- `近6个月` -> `last6months`
+- `近12个月` -> `last12months`
+
+Scenario notes for time mapping:
+
+- `ad-analysis`: map `近7天` -> `last7days`, `近14天` -> `last14days`, `近30天` -> `last30days`; if an upstream prompt expander emits `7d` or `week`, normalize it back to `last7days`; if it emits `month` or `last1month`, normalize it to `last30days`; monthly custom ranges should use `start_month` / `end_month`.
+- `reverse-keyword` / `asin-compare` / `keyword-analysis` / `keyword-explorer` / `parent-analysis` / `sales-analysis`: keep the existing monthly preset mapping such as `last1month`, `last3months`, `last6months`, `last12months`, or `custom_month_range`.
+
 For `ranking`, also pass:
 
 - `target`: `asin` or `keyword`.
@@ -65,7 +102,7 @@ For `ranking`, also pass:
 For resource export scenarios:
 
 - `reverse-keyword`: pass `asin`. When the latest web doc requires the monthly data view, also pass `view_mode` plus `keyword_type`; `keyword_type=organic/advertising` maps to the dedicated `dataList` request and table variant.
-- `ad-analysis`: pass `asin`; when `parent_asin` / `asins` are omitted, opscli will auto-call the documented variation preflight APIs to resolve them. Use `search_terms` or `keyword/query` for the searched term list.
+- `ad-analysis`: pass `asin`; when `parent_asin` / `asins` are omitted, opscli will auto-call the documented variation preflight APIs to resolve them. `search_terms` is optional: use `search_terms` or `keyword/query` when the user provides a searched term list, otherwise export with an empty `searchTerms` filter.
 - `parent-analysis`: pass `parent_asin`, `asins`; `query` is the filtered keyword text, and `keyword_type` supports `all/organic/advertising`.
 - `sales-analysis`: pass `asin`, `parent_asin`; use monthly `cycle_period` or `start_month/end_month`.
 - `flow-diagnosis`: pass `asin` only when the user is asking about the scenario itself. If the user explicitly asks to download/export this scenario, stop immediately and tell them Xiyou officially has no download API for it. Do not try alternate endpoints, page scraping, or inferred export paths.
@@ -74,12 +111,12 @@ For resource export scenarios:
 - `ad-insight`: pass `asin`, `start_date`, `end_date`.
 - `flow-weekly`: pass `asin`, `start_date`, `end_date`.
 - `asin-compare`: pass `asins` as a list or comma-separated string with at least 2 ASINs.
-- `keyword-analysis`: pass `keyword`.
-- `keyword-explorer`: pass `keyword`.
+- `keyword-analysis`: pass `keyword`. If the user also gives `筛选关键词`, pass it as `query`.
+- `keyword-explorer`: pass `keyword`. If the user also gives `筛选关键词`, pass it as `query`.
 
 Optional:
 
-- `query`: ASIN or keyword filter.
+- `query`: ASIN or keyword filter. For Chinese natural-language requests, this is usually the value from `筛选关键词` / `过滤关键词` / `搜索过滤词`. If the selected scenario does not support `query`, it is ignored.
 - `page`: default `1`.
 - `job_id`: only when the user needs a stable custom job id.
 
@@ -192,6 +229,20 @@ Keyword explorer XLSX:
 }
 ```
 
+Keyword explorer with filtered keyword:
+
+```json
+{
+  "function": "keyword-explorer",
+  "provider": "xiyou",
+  "keyword": "backpack",
+  "query": "backpacking",
+  "site": "US",
+  "cycle_period": "last7days",
+  "export_format": "xlsx"
+}
+```
+
 Keyword ABA ranking JSON:
 
 ```json
@@ -245,6 +296,12 @@ Run keyword explorer XLSX export:
 
 ```bash
 opscli xiyou run keyword-explorer --provider xiyou --keyword "tv stand" --site US --export-format xlsx
+```
+
+Run keyword explorer XLSX export with filtered keyword:
+
+```bash
+opscli xiyou run keyword-explorer --provider xiyou --keyword "backpack" --query "backpacking" --site US --cycle-period last7days --export-format xlsx
 ```
 
 Run JSON export:

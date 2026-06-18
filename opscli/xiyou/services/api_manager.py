@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -221,6 +222,8 @@ class XiyouApiManager:
         params_path = root_dir / "params.json"
         raw_path = root_dir / "raw.json"
         result_path = root_dir / "result.json"
+        prequery_endpoint = _build_resource_prequery_endpoint(request)
+        prequery_payload: dict[str, Any] | None = None
         # warnings/row_count 在 async with 之前初始化，使得 xlsx 分支
         # 既能填充真实行数，也能在 page_size 与全量导出不符时追加提示
         warnings: list[dict[str, Any]] = []
@@ -253,22 +256,34 @@ class XiyouApiManager:
                 page=request.page,
                 page_size=page_size,
             )
+            if prequery_endpoint:
+                prequery_payload = _build_resource_prequery_payload(request=request, payload=payload)
             _write_json(
                 params_path,
                 {
                     "request": request.to_dict(),
                     "endpoint": scenario.endpoint,
                     "status_endpoint": scenario.status_endpoint,
+                    "prequery_endpoint": prequery_endpoint,
+                    "prequery_payload": prequery_payload,
                     "payload": payload,
                     "request_url": request_url,
                 },
             )
+            prequery_response: dict[str, Any] | None = None
+            if prequery_endpoint and prequery_payload:
+                prequery_response = await client.post_json(
+                    prequery_endpoint,
+                    prequery_payload,
+                    request_url=request_url,
+                )
             submit_response = await client.post_json(scenario.endpoint, payload, request_url=request_url)
             resource_id = _extract_resource_id(submit_response)
-            status_payload = {
-                "resource": _resource_payload(payload),
-                "resourceId": resource_id,
-            }
+            status_payload = _build_resource_status_payload(
+                function=request.function,
+                payload=payload,
+                resource_id=resource_id,
+            )
             status_response = await _poll_resource_status(
                 client=client,
                 endpoint=scenario.status_endpoint,
@@ -784,45 +799,45 @@ class XiyouApiManager:
                     request.query = str(request.keyword).strip()
             return
 
+        self._normalize_resource_period(request)
+
         if function != "keyword-historical-traffic":
             return
 
         if request.start_date or request.end_date:
             raise XiyouConfigError(
-                "keyword-historical-traffic 不再支持 start_date/end_date；仅支持 period=month（最近1个月）"
+                "keyword-historical-traffic 不支持用户自定义时间范围；固定导出最近一个月（不包含今天和昨天）"
             )
 
         period = (request.period or "").strip().lower()
-        if period not in {"", "week", "month"}:
+        if period not in {"", "week", "month", "last1month"}:
             raise XiyouConfigError(
-                "keyword-historical-traffic 仅支持 period=month（最近1个月）"
+                "keyword-historical-traffic 不支持用户自定义时间范围；固定导出最近一个月（不包含今天和昨天）"
             )
 
         cycle_period = (request.cycle_period or "").strip().lower()
-        if cycle_period and cycle_period not in {
-            "last1month",
-            "1m",
-            "1month",
-            "1_month",
-            "month",
-            "一个月",
-            "1个月",
-            "近1个月",
-        }:
+        if cycle_period or request.start_month or request.end_month:
             raise XiyouConfigError(
-                "keyword-historical-traffic 仅支持最近1个月；请使用 period=month"
+                "keyword-historical-traffic 不支持用户自定义时间范围；固定导出最近一个月（不包含今天和昨天）"
             )
 
-        # `period` 在 ranking 场景里默认是 week；这里统一归一化为月周期，
-        # 兼容 CLI/MCP 的通用默认值，同时避免历史调用无参时直接失败。
-        request.period = "month"
-        request.cycle_period = "last1month"
+        # `period` 在通用请求里默认是 week，这里统一归一化为固定窗口标签，
+        # 兼容旧调用默认值，同时避免结果元数据继续误导为周榜/月榜语义。
+        request.period = "last1month"
+        request.cycle_period = None
 
     def _build_root_dir(self, request: XiyouRankingRequest, job_id: str) -> Path:
         base_dir = Path(request.output_dir).expanduser() if request.output_dir else self.settings.output_dir
         if not base_dir.is_absolute():
             base_dir = Path.cwd() / base_dir
         return base_dir.resolve() / job_id
+
+    def _normalize_resource_period(self, request: XiyouRankingRequest) -> None:
+        function = (request.function or "").lower()
+        if function in {"", "ranking"}:
+            return
+        scenario = get_resource_scenario(function)
+        scenario.normalize_request_defaults(request, self.settings.page_size)
 
     async def _hydrate_variation_context(
         self,
@@ -921,6 +936,30 @@ def _normalize_export_format(value: str) -> str:
     raise XiyouConfigError(f"不支持的导出格式：{value}")
 
 
+def _build_resource_prequery_endpoint(request: XiyouRankingRequest) -> str | None:
+    function = (request.function or "").lower()
+    if function == "reverse-keyword" and (request.query or "").strip():
+        return "/v3/asins/research/list"
+    return None
+
+
+def _build_resource_prequery_payload(
+    *,
+    request: XiyouRankingRequest,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    function = (request.function or "").lower()
+    if function != "reverse-keyword":
+        return None
+
+    prequery_payload = deepcopy(payload)
+    biz = prequery_payload.get("biz")
+    if isinstance(biz, dict):
+        # 列表预查询用来让西柚先按筛选词命中服务端结果集，不需要资源导出专用 tableType。
+        biz.pop("tableType", None)
+    return prequery_payload
+
+
 def _build_resource_request_url(
     *,
     function: str,
@@ -950,7 +989,7 @@ def _build_resource_request_url(
         return f"/detail/asin_compare/look_up/{site}/{joined_asins}"
     if normalized_function == "ad-analysis":
         normalized_asin = str(asin or "").strip().upper()
-        return f"/detail/asin/ad_analysis/{site}/{normalized_asin}?listType=dataList"
+        return f"/detail/asin/ad_analysis/{site}/{normalized_asin}"
     if normalized_function == "parent-analysis":
         normalized_asin = str(asin or "").strip().upper()
         return f"/detail/asin/variations_insight/{site}/{normalized_asin}?listType=dataList"
@@ -1028,6 +1067,31 @@ def _extract_resource_url(response: dict[str, Any]) -> str:
 def _resource_payload(payload: dict[str, Any]) -> dict[str, Any]:
     resource = payload.get("resource") if isinstance(payload, dict) else None
     return resource if isinstance(resource, dict) else {}
+
+
+def _build_resource_status_payload(
+    *,
+    function: str,
+    payload: dict[str, Any],
+    resource_id: str,
+) -> dict[str, Any]:
+    """Build status polling payloads according to the documented Xiyou scenario contract."""
+    resource = _resource_payload(payload)
+    normalized_function = (function or "").lower()
+    if normalized_function in {"keyword-organic-replay", "keyword-ad-toppers"}:
+        return {
+            "resource": resource,
+            "biz": {"resourceId": resource_id},
+        }
+    if normalized_function == "ad-analysis":
+        return {
+            "resource": resource,
+            "biz": {"resourceId": resource_id},
+        }
+    return {
+        "resource": resource,
+        "resourceId": resource_id,
+    }
 
 
 def _has_request_asins(value: list[str] | str | None) -> bool:

@@ -87,8 +87,11 @@ class DummyResourceApiClient(DummyApiClient):
     async def post_json(self, url, payload, *, request_url=None):
         self.calls.append({"url": url, "payload": payload, "request_url": request_url})
         if url.endswith("/resource/status"):
+            resource_id = payload.get("resourceId")
+            if not resource_id and isinstance(payload.get("biz"), dict):
+                resource_id = payload["biz"].get("resourceId")
             return {
-                "resourceId": payload["resourceId"],
+                "resourceId": resource_id,
                 "status": "Done",
                 "resourceUrl": "https://excel.xydc.com/demo.xlsx?Expires=1\\u0026Signature=s",
             }
@@ -570,6 +573,40 @@ def test_reverse_keyword_data_view_uses_data_list_request_url_for_ad_keywords(
     assert DummyResourceApiClient.calls[1]["request_url"] == DummyResourceApiClient.calls[0]["request_url"]
 
 
+def test_reverse_keyword_with_query_keeps_resource_export_flow(monkeypatch, local_tmp_path: Path):
+    DummyResourceApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "XiyouApiClient", DummyResourceApiClient)
+    settings = XiyouSettings(output_dir=local_tmp_path, authorization=None, cookie=None)
+    manager = XiyouApiManager(settings=settings, credential_provider=DummyCredentialProvider())
+
+    result = _run(
+        manager.run(
+            XiyouRankingRequest(
+                function="reverse-keyword",
+                provider="xiyou",
+                asin="B0DZFGTCLR",
+                site="US",
+                query="home decor",
+                job_id="job-reverse-keyword-query-guard",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.data_mode == "resource_export"
+    assert result.resource_id == "resource-1"
+    assert DummyResourceApiClient.calls[0]["url"] == "/v3/asins/research/list"
+    assert DummyResourceApiClient.calls[0]["request_url"] == "/detail/asin/look_up/US/B0DZFGTCLR"
+    assert DummyResourceApiClient.calls[0]["payload"]["biz"]["query"] == "home decor"
+    assert "tableType" not in DummyResourceApiClient.calls[0]["payload"]["biz"]
+    assert DummyResourceApiClient.calls[1]["url"] == "/v3/asins/research/list/resource"
+    assert DummyResourceApiClient.calls[1]["request_url"] == DummyResourceApiClient.calls[0]["request_url"]
+    assert DummyResourceApiClient.calls[1]["payload"]["biz"]["query"] == "home decor"
+    assert DummyResourceApiClient.calls[1]["payload"]["biz"]["tableType"] == "asinResearchTotalList"
+    assert DummyResourceApiClient.calls[2]["url"] == "/v4/resource/status"
+    assert DummyResourceApiClient.calls[2]["request_url"] == DummyResourceApiClient.calls[1]["request_url"]
+
+
 def test_reverse_keyword_uses_top10_request_url_and_payload(monkeypatch, local_tmp_path: Path):
     DummyResourceApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "XiyouApiClient", DummyResourceApiClient)
@@ -669,8 +706,12 @@ def test_ad_analysis_uses_request_url_and_payload(monkeypatch, local_tmp_path: P
 
     assert result.data_mode == "resource_export"
     assert DummyResourceApiClient.calls[0]["url"] == "/v3/advertising/research/searchTerm/list/resource"
-    assert DummyResourceApiClient.calls[0]["request_url"] == "/detail/asin/ad_analysis/US/B0DZFGTCLR?listType=dataList"
+    assert DummyResourceApiClient.calls[0]["request_url"] == "/detail/asin/ad_analysis/US/B0DZFGTCLR"
     assert DummyResourceApiClient.calls[0]["payload"]["biz"]["filters"]["searchTerms"] == ["candle warmer"]
+    assert DummyResourceApiClient.calls[1]["payload"] == {
+        "resource": {"country": "US", "asin": "B0DZFGTCLR"},
+        "biz": {"resourceId": "resource-1"},
+    }
 
 
 def test_ad_analysis_auto_hydrates_parent_asin_and_asins(monkeypatch, local_tmp_path: Path):
@@ -705,6 +746,32 @@ def test_ad_analysis_auto_hydrates_parent_asin_and_asins(monkeypatch, local_tmp_
         "B0DZFW1QS1",
         "B0DZFGTCLR",
     ]
+
+
+def test_ad_analysis_allows_empty_search_terms(monkeypatch, local_tmp_path: Path):
+    DummyVariationAwareResourceApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "XiyouApiClient", DummyVariationAwareResourceApiClient)
+    settings = XiyouSettings(output_dir=local_tmp_path, authorization=None, cookie=None)
+    manager = XiyouApiManager(settings=settings, credential_provider=DummyCredentialProvider())
+
+    result = _run(
+        manager.run(
+            XiyouRankingRequest(
+                function="ad-analysis",
+                provider="xiyou",
+                asin="B0DZFGTCLR",
+                site="US",
+                cycle_period="last1month",
+                job_id="job-ad-analysis-empty-search",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.data_mode == "resource_export"
+    assert DummyVariationAwareResourceApiClient.calls[2]["url"] == "/v3/advertising/research/searchTerm/list/resource"
+    assert DummyVariationAwareResourceApiClient.calls[2]["payload"]["biz"]["pageSize"] == 20
+    assert DummyVariationAwareResourceApiClient.calls[2]["payload"]["biz"]["filters"]["searchTerms"] == []
 
 
 def test_parent_analysis_uses_request_url_and_payload(monkeypatch, local_tmp_path: Path):
@@ -892,6 +959,75 @@ def test_flow_diagnosis_aliases_are_normalized(local_tmp_path: Path):
     assert request.function == "flow-diagnosis"
 
 
+def test_ad_analysis_period_week_is_normalized_to_last7days_and_default_page_size_20(local_tmp_path: Path):
+    manager = XiyouApiManager(
+        settings=XiyouSettings(output_dir=local_tmp_path),
+        credential_provider=DummyCredentialProvider(),
+    )
+
+    request = XiyouRankingRequest(function="ad-analysis", asin="B0DZFGTCLR", period="week")
+
+    manager._normalize_request(request)
+
+    assert request.cycle_period == "last7days"
+    assert request.page_size == 20
+
+
+def test_ad_analysis_period_month_is_normalized_to_last1month(local_tmp_path: Path):
+    manager = XiyouApiManager(
+        settings=XiyouSettings(output_dir=local_tmp_path),
+        credential_provider=DummyCredentialProvider(),
+    )
+
+    request = XiyouRankingRequest(function="ad-analysis", asin="B0DZFGTCLR", period="month")
+
+    manager._normalize_request(request)
+
+    assert request.cycle_period == "last30days"
+
+
+def test_ad_analysis_period_last14days_is_normalized_to_last14days_and_default_page_size_20(
+    local_tmp_path: Path,
+):
+    manager = XiyouApiManager(
+        settings=XiyouSettings(output_dir=local_tmp_path),
+        credential_provider=DummyCredentialProvider(),
+    )
+
+    request = XiyouRankingRequest(function="ad-analysis", asin="B0DZFGTCLR", period="last14days")
+
+    manager._normalize_request(request)
+
+    assert request.cycle_period == "last14days"
+    assert request.page_size == 20
+
+
+def test_ad_analysis_period_last30days_is_normalized_to_last30days(local_tmp_path: Path):
+    manager = XiyouApiManager(
+        settings=XiyouSettings(output_dir=local_tmp_path),
+        credential_provider=DummyCredentialProvider(),
+    )
+
+    request = XiyouRankingRequest(function="ad-analysis", asin="B0DZFGTCLR", period="last30days")
+
+    manager._normalize_request(request)
+
+    assert request.cycle_period == "last30days"
+
+
+def test_ad_analysis_period_7d_is_normalized_to_last7days(local_tmp_path: Path):
+    manager = XiyouApiManager(
+        settings=XiyouSettings(output_dir=local_tmp_path),
+        credential_provider=DummyCredentialProvider(),
+    )
+
+    request = XiyouRankingRequest(function="ad-analysis", asin="B0DZFGTCLR", period="7d")
+
+    manager._normalize_request(request)
+
+    assert request.cycle_period == "last7days"
+
+
 def test_standalone_diagnosis_alias_is_not_normalized(local_tmp_path: Path):
     manager = XiyouApiManager(
         settings=XiyouSettings(output_dir=local_tmp_path),
@@ -1014,16 +1150,16 @@ def test_keyword_historical_traffic_json_uses_rows_endpoint(monkeypatch, local_t
     assert result.row_count == 1
     assert result.export is not None
     assert result.export.filename == "job-keyword-historical-traffic-json.json"
-    assert result.period == "month"
+    assert result.period == "last1month"
     assert DummyApiClient.calls[0]["url"] == "/v3/searchTerms/historicalTrafficRatio/list"
     assert DummyApiClient.calls[0]["request_url"].endswith(
         "/detail/search_term/historical_traffic_analysis/US/backpack"
     )
     assert DummyApiClient.calls[0]["payload"]["biz"]["cycleFilter"] == {
-        "cycle": "monthly",
+        "cycle": "daily",
         "period": "",
-        "startCycle": {"startDate": "2026-05-01", "endDate": "2026-05-31"},
-        "endCycle": {"startDate": "2026-06-01", "endDate": "2026-06-30"},
+        "startCycle": {"startDate": "2026-05-09", "endDate": "2026-05-09"},
+        "endCycle": {"startDate": "2026-06-07", "endDate": "2026-06-07"},
     }
 
 
@@ -1045,7 +1181,27 @@ def test_keyword_historical_traffic_rejects_custom_date_range(local_tmp_path: Pa
             )
         )
 
-    assert "period=month" in str(exc.value)
+    assert "不支持用户自定义时间范围" in str(exc.value)
+
+
+def test_keyword_historical_traffic_rejects_cycle_period_override(local_tmp_path: Path):
+    manager = XiyouApiManager(
+        settings=XiyouSettings(output_dir=local_tmp_path),
+        credential_provider=DummyCredentialProvider(),
+    )
+
+    with pytest.raises(XiyouConfigError) as exc:
+        _run(
+            manager.run(
+                XiyouRankingRequest(
+                    function="keyword-historical-traffic",
+                    keyword="backpack",
+                    cycle_period="last1month",
+                )
+            )
+        )
+
+    assert "不支持用户自定义时间范围" in str(exc.value)
 
 
 def test_keyword_ad_replay_uses_doc_request_url_and_report_date(monkeypatch, local_tmp_path: Path):
@@ -1075,6 +1231,10 @@ def test_keyword_ad_replay_uses_doc_request_url_and_report_date(monkeypatch, loc
     assert DummyResourceApiClient.calls[0]["url"] == "/v4/searchTerms/advertisingReplay/resource"
     assert DummyResourceApiClient.calls[0]["payload"]["reportDate"] == "2026-06-08"
     assert DummyResourceApiClient.calls[0]["request_url"] == "/detail/search_term/ad_once_more/US/backpack"
+    assert DummyResourceApiClient.calls[1]["payload"] == {
+        "resource": {"country": "US", "searchTerm": "backpack"},
+        "resourceId": "resource-1",
+    }
     assert DummyResourceApiClient.calls[1]["request_url"] == DummyResourceApiClient.calls[0]["request_url"]
 
 
@@ -1108,6 +1268,10 @@ def test_keyword_organic_replay_uses_doc_request_url_and_report_date(monkeypatch
         DummyResourceApiClient.calls[0]["request_url"]
         == "/detail/search_term/na_once_more/US/backpack?adOnceMoreType=na"
     )
+    assert DummyResourceApiClient.calls[1]["payload"] == {
+        "resource": {"country": "US", "searchTerm": "backpack"},
+        "biz": {"resourceId": "resource-1"},
+    }
     assert DummyResourceApiClient.calls[1]["request_url"] == DummyResourceApiClient.calls[0]["request_url"]
 
 
@@ -1139,6 +1303,10 @@ def test_keyword_ad_toppers_uses_doc_request_url(monkeypatch, local_tmp_path: Pa
         DummyResourceApiClient.calls[0]["request_url"]
         == "/detail/search_term/ad_display_insight/US/backpack?adOnceMoreType=na"
     )
+    assert DummyResourceApiClient.calls[1]["payload"] == {
+        "resource": {"country": "US", "searchTerm": "backpack"},
+        "biz": {"resourceId": "resource-1"},
+    }
     assert DummyResourceApiClient.calls[1]["request_url"] == DummyResourceApiClient.calls[0]["request_url"]
 
 
