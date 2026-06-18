@@ -88,7 +88,7 @@ def test_seller_sprite_run_accepts_params_json_string(monkeypatch):
     assert DummyManager.last_request.params == {"asin": "B07YRMT36L"}
     assert DummyManager.last_request.page_size == 100
     assert DummyManager.last_request.export_format == "json"
-    assert DummyManager.last_request.mode is None
+    assert DummyManager.last_request.mode == "browser-route"
     assert DummyManager.start_calls == 0
 
 
@@ -116,6 +116,7 @@ def test_seller_sprite_start_returns_queued_job(monkeypatch):
         "nodeIdPaths": ["1055398:1063306:1063312:10824421"]
     }
     assert DummyManager.last_request.export_format == "json"
+    assert DummyManager.last_request.mode == "browser-route"
 
 
 def test_seller_sprite_run_auto_starts_long_running_scenario(monkeypatch):
