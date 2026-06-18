@@ -1,7 +1,7 @@
 """卖家精灵 MCP 工具模块。
 
 将卖家精灵服务能力暴露为 MCP 工具：
-- seller_sprite_spec_must_read — 读取卖家精灵 MCP 使用规范（SKILL_MCP.md）
+- seller_sprite_spec_must_read — 读取卖家精灵 MCP 使用规范和参数手册
 - seller_sprite_scenarios      — 列出卖家精灵场景
 - seller_sprite_run            — 执行卖家精灵场景并导出 XLS/JSON
 - seller_sprite_job_status     — 读取卖家精灵任务结果
@@ -19,38 +19,48 @@ from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 LONG_RUNNING_SCENARIOS = {"product-research", "market-research", "listing-analysis"}
 
 
+def _seller_sprite_skill_dir() -> Path:
+    """返回卖家精灵 Skill 模板目录。"""
+    return Path(__file__).resolve().parents[2] / "skills" / "templates" / "ops-seller-sprite"
+
+
 async def seller_sprite_spec_must_read() -> dict:
-    """读取卖家精灵 MCP 使用规范（SKILL_MCP.md）。
+    """读取卖家精灵 MCP 使用规范与参数手册。
 
     【首次使用提示】首次调用卖家精灵服务前，应先调用本工具读取完整规范，
     了解可用场景、参数格式、站点/周期约束、导出格式和任务查询流程。
 
     规范内容来自 opscli 内置 Skill 模板：
-    opscli/skills/templates/ops-seller-sprite/SKILL_MCP.md
+    - opscli/skills/templates/ops-seller-sprite/SKILL_MCP.md
+    - opscli/skills/templates/ops-seller-sprite/SCENARIO_PARAMS_ZH.md
 
     Returns:
-        {"success": true, "data": {"spec": "<Markdown 文档内容>", "source": "<文件路径>"}}
+        {"success": true, "data": {"spec": "<Markdown 文档内容>", "source": "<主文件路径>", "sources": ["<文件路径>", ...]}}
         或 {"success": false, "error": "<错误原因>"}
     """
-    spec_path = (
-        Path(__file__).resolve().parents[2]
-        / "skills"
-        / "templates"
-        / "ops-seller-sprite"
-        / "SKILL_MCP.md"
-    )
+    skill_dir = _seller_sprite_skill_dir()
+    spec_path = skill_dir / "SKILL_MCP.md"
+    params_path = skill_dir / "SCENARIO_PARAMS_ZH.md"
+    required_paths = [spec_path, params_path]
 
-    if not spec_path.exists():
-        return _err(
-            FileNotFoundError(
-                f"卖家精灵 MCP 规范文档不存在：{spec_path}。请检查 opscli 安装是否完整。"
-            ),
-            tool="MCP → seller_sprite_spec_must_read()",
-        )
+    for path in required_paths:
+        if not path.exists():
+            return _err(
+                FileNotFoundError(
+                    f"卖家精灵 MCP 规范文档不存在：{path}。请检查 opscli 安装是否完整。"
+                ),
+                tool="MCP → seller_sprite_spec_must_read()",
+            )
 
     try:
-        content = spec_path.read_text(encoding="utf-8")
-        return _ok({"spec": content, "source": str(spec_path)})
+        content = "\n\n".join(path.read_text(encoding="utf-8") for path in required_paths)
+        return _ok(
+            {
+                "spec": content,
+                "source": str(spec_path),
+                "sources": [str(path) for path in required_paths],
+            }
+        )
     except Exception as exc:
         return _err(exc, tool="MCP → seller_sprite_spec_must_read()")
 

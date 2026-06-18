@@ -199,10 +199,11 @@ def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造竞品查询 payload。"""
     market = _market(input_data)
     month = input_data.get("month") or input_data.get("period") or "202604"
+    asin_values = input_data.get("asins") or input_data.get("asin")
     payload: dict[str, Any] = {
         "market": market,
         "monthName": input_data.get("monthName") or month_name(month),
-        "asins": csv(input_data.get("asins")),
+        "asins": csv(asin_values),
         "page": _int(input_data.get("page") or input_data.get("startPage"), 1),
         "nodeIdPaths": csv(input_data.get("node") or input_data.get("nodeIdPaths") or input_data.get("nodeIdPath")),
         "symbolFlag": False,

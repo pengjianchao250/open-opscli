@@ -1910,3 +1910,19 @@
 **影响范围**：仅测试文件，无生产代码改动。
 **回滚方式**：git checkout 恢复 tests/skills/test_detector.py。
 ---
+## 2026-06-18 mcp - 卖家精灵规范读取合并参数手册
+
+**变更原因**：`ops-seller-sprite` 的 `SKILL_MCP.md` 已精简为入口文档，参数细节下沉到 `SCENARIO_PARAMS_ZH.md`。`seller_sprite_spec_must_read` 若仍只返回主文档，纯 MCP 客户端将拿不到完整参数口径。
+**改动点**：`opscli/mcp/tools/seller_sprite.py` 新增 Skill 模板目录辅助函数，并让 `seller_sprite_spec_must_read()` 同时读取 `SKILL_MCP.md` 和 `SCENARIO_PARAMS_ZH.md`，返回合并后的 `spec` 与 `sources`；`tests/mcp/test_seller_sprite_tools.py` 新增回归测试，要求规范读取结果包含参数手册标题。
+**验证结果**：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_seller_sprite_tools.py -k spec_must_read -v` 通过（1 passed）；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_seller_sprite_tools.py -v` 通过（9 passed）。
+**影响范围**：影响 SellerSprite MCP 首次“先读规范”行为；不影响 `seller_sprite_run`、`seller_sprite_job_status`、`seller_sprite_export` 的业务执行逻辑。
+**回滚方式**：回退 `opscli/mcp/tools/seller_sprite.py`、`tests/mcp/test_seller_sprite_tools.py` 和本条变更记录。
+---
+## 2026-06-18 seller_sprite - 竞品查询补单 ASIN 归一化与本地快速失败
+
+**变更原因**：`competitor-lookup` 场景在收到单个 `asin` 时没有归一化到 `asins`，会构造出空主筛选 payload；缺少主筛选条件时也未在本地拦截，导致无效请求继续走远端并表现为 MCP 30 秒超时。
+**改动点**：`opscli/seller_sprite/api/payloads.py` 的 `make_competitor_payload()` 新增 `asin -> asins` 归一化；`opscli/seller_sprite/api/scenarios.py` 为场景定义新增 `required_any_params`，并让 `competitor-lookup` 强制要求 `keyword`、`brand`、`sellerName`、`asin`、`asins` 至少其一；`ops-seller-sprite` 的 `SKILL.md`、`SKILL_MCP.md`、`SCENARIO_PARAMS_ZH.md` 同步补充“单个 ASIN 必须归一化为 asins”和“缺主筛选条件必须本地快速失败”的规则；`tests/seller_sprite/test_payloads.py` 与 `tests/seller_sprite/test_api_manager.py` 新增对应回归测试。
+**验证结果**：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_payloads.py tests/seller_sprite/test_api_manager.py -k "competitor" -v` 通过（6 passed）；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_payloads.py tests/seller_sprite/test_api_manager.py -v` 通过（23 passed）。
+**影响范围**：影响 `competitor-lookup` 的本地参数校验和 payload 构造；无效竞品请求将立即报配置错误，不再继续拖成远端超时。
+**回滚方式**：回退 `opscli/seller_sprite/api/payloads.py`、`opscli/seller_sprite/api/scenarios.py`、相关 skill 文档、测试和本条变更记录。
+---

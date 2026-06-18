@@ -61,6 +61,13 @@ def test_seller_sprite_scenarios_uses_manager(monkeypatch):
     assert result["data"][0]["scenario_id"] == "keyword-reverse"
 
 
+def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
+    result = _run(seller_sprite_tools.seller_sprite_spec_must_read())
+
+    assert result["success"] is True
+    assert "# 卖家精灵场景参数手册" in result["data"]["spec"]
+
+
 def test_seller_sprite_run_accepts_params_json_string(monkeypatch):
     monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda **kwargs: DummyManager())
     monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))

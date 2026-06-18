@@ -2,9 +2,11 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.config import SellerSpriteSettings
-from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError
+from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, SellerSpriteScenarioResult
 from opscli.seller_sprite.services import api_manager as api_manager_module
 from opscli.seller_sprite.services.api_manager import SellerSpriteApiManager
@@ -224,6 +226,53 @@ def test_manager_writes_job_files_and_xlsx(monkeypatch, tmp_path: Path):
     assert saved["export"]["filename"] == "job-offline-regression.xlsx"
     assert DummyApiClient.calls[0]["payload"]["asin"] == "B07YRMT36L"
     assert "market" not in DummyApiClient.calls[0]["payload"]
+
+
+def test_manager_normalizes_competitor_lookup_singular_asin_before_api_call(monkeypatch, tmp_path: Path):
+    DummyApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None, default_mode="api-direct")
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="competitor-lookup",
+                site="US",
+                period="30d",
+                params={"asin": "B00FLYWNYQ"},
+                job_id="job-competitor-asin",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert DummyApiClient.calls[0]["payload"]["asins"] == ["B00FLYWNYQ"]
+    assert "asin" not in DummyApiClient.calls[0]["payload"]
+
+
+def test_manager_fast_fails_empty_competitor_lookup_before_api_call(monkeypatch, tmp_path: Path):
+    DummyApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None, default_mode="api-direct")
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    with pytest.raises(SellerSpriteConfigError, match="至少需要一个主筛选条件"):
+        _run(
+            manager.run(
+                SellerSpriteScenarioRequest(
+                    scenario="competitor-lookup",
+                    site="US",
+                    period="30d",
+                    params={},
+                    job_id="job-competitor-empty",
+                    export_format="json",
+                )
+            )
+        )
+
+    assert DummyApiClient.calls == []
 
 
 def test_manager_generates_camel_case_job_id(monkeypatch, tmp_path: Path):
