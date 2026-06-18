@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import hashlib
+import importlib
 import json
 import os
 import random
@@ -30,6 +31,9 @@ LOGIN_URL = "https://www.sellersprite.com/cn/w/user/login"
 DEFAULT_PAGE_URL = "https://www.sellersprite.com/v3/keyword-miner/"
 DEFAULT_TIMEOUT_MS = 120000
 XVFB_DISPLAY_CANDIDATES = range(99, 110)
+TASK_INTERVAL_RANGE_SECONDS = (1.0, 5.0)
+NETWORK_COOLDOWN_RANGE_SECONDS = (3.0, 5.0)
+RISK_COOLDOWN_RANGE_SECONDS = (15.0, 20.0)
 
 _AUTO_XVFB_PROCESS: subprocess.Popen | None = None
 _AUTO_XVFB_DISPLAY: str | None = None
@@ -50,8 +54,8 @@ class BrowserRouteRequest:
     high_frequency_endpoint: str | None = None
     high_frequency_payload: dict[str, Any] | None = None
     page_prepare: bool = True
-    task_interval_seconds: float = 8.0
-    cooldown_seconds: float = 120.0
+    task_interval_seconds: float = 5.0
+    cooldown_seconds: float = 20.0
 
 
 @dataclass
@@ -118,10 +122,15 @@ class SellerSpriteBrowserRouteWorker:
                 try:
                     result = await self._run_one(task.request)
                 except Exception as exc:
-                    self._cooldown_until = max(
-                        self._cooldown_until,
-                        time.monotonic() + max(task.request.cooldown_seconds, 0.0),
+                    cooldown_seconds = min(
+                        _failure_cooldown_seconds(exc),
+                        max(task.request.cooldown_seconds, 0.0),
                     )
+                    if cooldown_seconds > 0:
+                        self._cooldown_until = max(
+                            self._cooldown_until,
+                            time.monotonic() + cooldown_seconds,
+                        )
                     if not task.future.done():
                         task.future.set_exception(exc)
                 else:
@@ -133,20 +142,31 @@ class SellerSpriteBrowserRouteWorker:
 
     async def _run_one(self, request: BrowserRouteRequest) -> BrowserRouteResult:
         warnings: list[dict[str, Any]] = []
+        referer = request.referer or DEFAULT_PAGE_URL
         await self._wait_for_cooldown(request, warnings)
         await self._wait_for_rate_limit(request, warnings)
         page = await self._ensure_page(request.account)
         login = await self._open_referer_and_login(page, request)
         if request.page_prepare:
             await _prepare_page(page)
-        response = await self._execute_route_fetch(
-            page=page,
-            method=request.method,
-            endpoint=request.endpoint,
-            payload=request.payload,
-            root_dir=request.root_dir,
-            section="main",
-        )
+        for attempt in range(2):
+            try:
+                response = await self._execute_route_fetch(
+                    page=page,
+                    method=request.method,
+                    endpoint=request.endpoint,
+                    payload=request.payload,
+                    root_dir=request.root_dir,
+                    section="main",
+                )
+                break
+            except SellerSpriteApiError as exc:
+                if attempt > 0 or not exc.is_session_expired():
+                    raise
+                await self._login_with_account(page, request.account, callback=referer)
+                login = await self._open_referer_and_login(page, request)
+                if request.page_prepare:
+                    await _prepare_page(page)
         high_frequency_response = None
         if request.high_frequency_endpoint and request.high_frequency_payload:
             try:
@@ -188,8 +208,10 @@ class SellerSpriteBrowserRouteWorker:
         await asyncio.sleep(wait_seconds)
 
     async def _wait_for_rate_limit(self, request: BrowserRouteRequest, warnings: list[dict[str, Any]]) -> None:
-        interval = max(request.task_interval_seconds, 0.0)
-        if not self._last_finished_at or interval <= 0:
+        if not self._last_finished_at:
+            return
+        interval = _random_task_interval_seconds(request.task_interval_seconds)
+        if interval <= 0:
             return
         wait_seconds = interval - (time.monotonic() - self._last_finished_at)
         if wait_seconds <= 0:
@@ -210,26 +232,12 @@ class SellerSpriteBrowserRouteWorker:
         if _ensure_headed_browser_environment(self.settings) and not self._auto_xvfb_attached:
             _retain_auto_xvfb()
             self._auto_xvfb_attached = True
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError as exc:
-            raise SellerSpriteConfigError(
-                "缺少 playwright 依赖，请安装 `pip install opscli[seller-sprite]` 并执行 "
-                "`python -m playwright install chromium --no-shell`"
-            ) from exc
+        async_playwright = _load_async_playwright(self.settings.browser_runtime)
         if not self._playwright:
             self._playwright = await async_playwright().start()
         profile_dir = _profile_dir(self.settings, account)
         profile_dir.mkdir(parents=True, exist_ok=True)
-        launch_options: dict[str, Any] = {
-            "headless": self.settings.browser_headless,
-            "viewport": {"width": 1440, "height": 1000},
-            "locale": "zh-CN",
-            "accept_downloads": True,
-            "args": ["--no-sandbox"],
-        }
-        if self.settings.browser_channel:
-            launch_options["channel"] = self.settings.browser_channel
+        launch_options = _build_launch_options(self.settings)
         self._context = await self._playwright.chromium.launch_persistent_context(
             str(profile_dir),
             **launch_options,
@@ -239,11 +247,12 @@ class SellerSpriteBrowserRouteWorker:
 
     async def _open_referer_and_login(self, page, request: BrowserRouteRequest) -> dict[str, Any]:
         referer = request.referer or DEFAULT_PAGE_URL
-        await page.goto(HOME_URL, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
-        await page.wait_for_timeout(1500)
-        if await _homepage_requires_login(page) or not await _detect_logged_in(page):
+        if _is_login_url(page.url):
             await self._login_with_account(page, request.account, callback=referer)
-        await page.goto(referer, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+        if _same_page_url(page.url, referer):
+            await page.reload(wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+        else:
+            await page.goto(referer, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
         await page.wait_for_timeout(1500)
         if not await _detect_logged_in(page):
             await self._login_with_account(page, request.account, callback=referer)
@@ -258,6 +267,7 @@ class SellerSpriteBrowserRouteWorker:
             "current_url": page.url,
             "logged_in": logged_in,
             "browser_headless": self.settings.browser_headless,
+            "browser_runtime": self.settings.browser_runtime,
             "display": os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"),
             "auto_xvfb": self._auto_xvfb_attached,
             "account": request.account.to_public_dict(),
@@ -349,6 +359,74 @@ class SellerSpriteBrowserRouteWorker:
             await page.unroute(pattern, _handle)
 
 
+def _random_task_interval_seconds(max_seconds: float) -> float:
+    """按配置上限生成同账号任务的随机间隔。"""
+    upper = max(max_seconds, 0.0)
+    if upper <= 0:
+        return 0.0
+    lower = min(TASK_INTERVAL_RANGE_SECONDS[0], upper)
+    return random.uniform(lower, upper)
+
+
+def _failure_cooldown_seconds(exc: Exception) -> float:
+    """按失败类型计算后续任务冷却时间。"""
+    if _is_session_expired_error(exc) or isinstance(exc, SellerSpriteConfigError):
+        return 0.0
+    if _is_risk_control_error(exc):
+        return random.uniform(*RISK_COOLDOWN_RANGE_SECONDS)
+    if _is_transient_network_error(exc):
+        return random.uniform(*NETWORK_COOLDOWN_RANGE_SECONDS)
+    return 0.0
+
+
+def _is_session_expired_error(exc: Exception) -> bool:
+    return isinstance(exc, SellerSpriteApiError) and exc.is_session_expired()
+
+
+def _is_risk_control_error(exc: Exception) -> bool:
+    if isinstance(exc, SellerSpriteApiError) and exc.status_code == 429:
+        return True
+    details = _error_details(exc)
+    return any(
+        marker in details
+        for marker in ("captcha", "验证码", "risk control", "risk_control", "rate limit", "rate_limit", "too many", "风控")
+    )
+
+
+def _is_transient_network_error(exc: Exception) -> bool:
+    if isinstance(exc, SellerSpriteApiError):
+        if exc.api_code in {"ERR_BROWSER_FETCH_FAILED", "ERR_BROWSER_CONTEXT_REQUEST_FAILED"}:
+            return True
+        if exc.status_code in {408, 425, 500, 502, 503, 504}:
+            return True
+    return isinstance(exc, (TimeoutError, ConnectionError, OSError)) or exc.__class__.__name__ == "TimeoutError"
+
+
+def _error_details(exc: Exception) -> str:
+    values = [str(exc)]
+    if isinstance(exc, SellerSpriteApiError):
+        values.extend([exc.api_code or "", exc.api_message or "", exc.response_excerpt or ""])
+    return " ".join(values).lower()
+
+
+def _is_login_url(url: str) -> bool:
+    return urlparse(url).path.rstrip("/").endswith("/w/user/login")
+
+
+def _same_page_url(current_url: str, target_url: str) -> bool:
+    return _normalized_page_url(current_url) == _normalized_page_url(target_url)
+
+
+def _normalized_page_url(url: str) -> tuple[str, str, str, tuple[tuple[str, str], ...]]:
+    parsed = urlparse(url)
+    return (
+        parsed.scheme.lower(),
+        parsed.netloc.lower(),
+        parsed.path.rstrip("/") or "/",
+        tuple(sorted(parse_qsl(parsed.query, keep_blank_values=True))),
+    )
+
+
 _WORKERS: dict[tuple[int, str], SellerSpriteBrowserRouteWorker] = {}
 
 
@@ -396,6 +474,44 @@ def _ensure_headed_browser_environment(settings: SellerSpriteSettings) -> bool:
             "请在交互式桌面/RDP 会话启动，或改用 OPSCLI_SELLER_SPRITE_MODE=api-direct"
         )
     return False
+
+
+def _load_async_playwright(browser_runtime: str):
+    """按配置加载 Playwright 或 Patchright 的 async API。"""
+    runtime = (browser_runtime or "playwright").strip().lower()
+    module_name = "patchright.async_api" if runtime == "patchright" else "playwright.async_api"
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        if runtime == "patchright":
+            raise SellerSpriteConfigError(
+                "缺少 patchright 依赖，请安装 `pip install aukeys-opscli[seller-sprite]` 并执行 "
+                "`python -m patchright install chromium`；如需真实 Chrome，可执行 "
+                "`python -m patchright install chrome` 后设置 OPSCLI_SELLER_SPRITE_BROWSER_CHANNEL=chrome"
+            ) from exc
+        raise SellerSpriteConfigError(
+            "缺少 playwright 依赖，请安装 `pip install opscli[seller-sprite]` 并执行 "
+            "`python -m playwright install chromium --no-shell`"
+        ) from exc
+    return module.async_playwright
+
+
+def _build_launch_options(settings: SellerSpriteSettings) -> dict[str, Any]:
+    """构造 browser-route 持久化浏览器上下文启动参数。"""
+    runtime = (settings.browser_runtime or "playwright").strip().lower()
+    launch_options: dict[str, Any] = {
+        "headless": settings.browser_headless,
+        "locale": "zh-CN",
+        "accept_downloads": True,
+        "args": ["--no-sandbox"],
+    }
+    if runtime == "patchright":
+        launch_options["no_viewport"] = True
+    else:
+        launch_options["viewport"] = {"width": 1440, "height": 1000}
+    if settings.browser_channel:
+        launch_options["channel"] = settings.browser_channel
+    return launch_options
 
 
 def _is_auto_xvfb_running() -> bool:

@@ -21,6 +21,7 @@ ENV_ACCOUNT_CACHE_TTL_SECONDS = "OPSCLI_SELLER_SPRITE_ACCOUNT_CACHE_TTL_SECONDS"
 ENV_MODE = "OPSCLI_SELLER_SPRITE_MODE"
 ENV_BROWSER_PROFILE_DIR = "OPSCLI_SELLER_SPRITE_BROWSER_PROFILE_DIR"
 ENV_BROWSER_HEADLESS = "OPSCLI_SELLER_SPRITE_BROWSER_HEADLESS"
+ENV_BROWSER_RUNTIME = "OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME"
 ENV_BROWSER_CHANNEL = "OPSCLI_SELLER_SPRITE_BROWSER_CHANNEL"
 ENV_BROWSER_TASK_INTERVAL_SECONDS = "OPSCLI_SELLER_SPRITE_BROWSER_TASK_INTERVAL_SECONDS"
 ENV_BROWSER_COOLDOWN_SECONDS = "OPSCLI_SELLER_SPRITE_BROWSER_COOLDOWN_SECONDS"
@@ -34,8 +35,9 @@ DEFAULT_OUTPUT_DIR = CONFIG_DIR / "seller_sprite" / "api_runs"
 DEFAULT_ACCOUNT_CACHE_TTL_SECONDS = 600
 DEFAULT_MODE = "browser-route"
 DEFAULT_BROWSER_PROFILE_DIR = CONFIG_DIR / "seller_sprite" / "browser_profiles"
-DEFAULT_BROWSER_TASK_INTERVAL_SECONDS = 8.0
-DEFAULT_BROWSER_COOLDOWN_SECONDS = 120.0
+DEFAULT_BROWSER_RUNTIME = "patchright"
+DEFAULT_BROWSER_TASK_INTERVAL_SECONDS = 5.0
+DEFAULT_BROWSER_COOLDOWN_SECONDS = 20.0
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,7 @@ class SellerSpriteSettings:
     default_mode: str = DEFAULT_MODE
     browser_profile_dir: Path = DEFAULT_BROWSER_PROFILE_DIR
     browser_headless: bool = False
+    browser_runtime: str = DEFAULT_BROWSER_RUNTIME
     browser_channel: str | None = None
     browser_task_interval_seconds: float = DEFAULT_BROWSER_TASK_INTERVAL_SECONDS
     browser_cooldown_seconds: float = DEFAULT_BROWSER_COOLDOWN_SECONDS
@@ -93,6 +96,7 @@ def load_settings() -> SellerSpriteSettings:
         default_mode=_normalize_mode(values.get(ENV_MODE)),
         browser_profile_dir=browser_profile_dir,
         browser_headless=_parse_bool(values.get(ENV_BROWSER_HEADLESS), _default_browser_headless()),
+        browser_runtime=_normalize_browser_runtime(values.get(ENV_BROWSER_RUNTIME)),
         browser_channel=values.get(ENV_BROWSER_CHANNEL) or None,
         browser_task_interval_seconds=_parse_float(
             values.get(ENV_BROWSER_TASK_INTERVAL_SECONDS),
@@ -120,6 +124,7 @@ def _load_env_values() -> dict[str, str]:
         ENV_MODE,
         ENV_BROWSER_PROFILE_DIR,
         ENV_BROWSER_HEADLESS,
+        ENV_BROWSER_RUNTIME,
         ENV_BROWSER_CHANNEL,
         ENV_BROWSER_TASK_INTERVAL_SECONDS,
         ENV_BROWSER_COOLDOWN_SECONDS,
@@ -194,6 +199,12 @@ def _normalize_mode(value: str | None) -> str:
     """规范化执行模式。"""
     mode = (value or DEFAULT_MODE).strip().lower()
     return mode if mode in {"api-direct", "browser-route"} else DEFAULT_MODE
+
+
+def _normalize_browser_runtime(value: str | None) -> str:
+    """规范化 browser-route 使用的浏览器自动化运行时。"""
+    runtime = (value or DEFAULT_BROWSER_RUNTIME).strip().lower()
+    return runtime if runtime in {"playwright", "patchright"} else DEFAULT_BROWSER_RUNTIME
 
 
 def _parse_accounts(value: str | None) -> tuple[dict[str, str], ...]:
