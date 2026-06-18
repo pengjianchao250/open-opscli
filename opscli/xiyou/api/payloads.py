@@ -219,7 +219,7 @@ def make_ad_analysis_payload(params: dict[str, Any]) -> dict[str, Any]:
                 "excludeWords": {"words": []},
                 "searchTerm": [],
             },
-            "cycleFilter": _keyword_cycle_filter(params),
+            "cycleFilter": _ad_analysis_cycle_filter(params),
         },
     }
 
@@ -399,13 +399,20 @@ def _search_terms(params: dict[str, Any]) -> list[str]:
         return [keyword]
     if query:
         return [query]
+    function = _optional_text(params.get("function"))
+    if function and function.lower() == "ad-analysis":
+        return []
     raise XiyouConfigError("缺少参数：search_terms 或 keyword/query")
 
 
 def _default_cycle_filter() -> dict[str, Any]:
+    return _daily_cycle_filter("last7days")
+
+
+def _daily_cycle_filter(period: str) -> dict[str, Any]:
     return {
         "cycle": "daily",
-        "period": "last7days",
+        "period": period,
         "startCycle": {"startDate": "", "endDate": ""},
         "endCycle": {"startDate": "", "endDate": ""},
     }
@@ -643,6 +650,41 @@ def _keyword_cycle_filter(params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _ad_analysis_cycle_filter(params: dict[str, Any]) -> dict[str, Any]:
+    cycle_period = _optional_text(params.get("cycle_period"))
+    start_month = _optional_text(params.get("start_month"))
+    end_month = _optional_text(params.get("end_month"))
+
+    if not cycle_period and not start_month and not end_month:
+        return _default_cycle_filter()
+
+    daily_presets = {
+        "last7days": "last7days",
+        "7d": "last7days",
+        "7days": "last7days",
+        "last_7_days": "last7days",
+        "近7天": "last7days",
+        "最近7天": "last7days",
+        "last14days": "last14days",
+        "14d": "last14days",
+        "14days": "last14days",
+        "last_14_days": "last14days",
+        "近14天": "last14days",
+        "最近14天": "last14days",
+        "last30days": "last30days",
+        "30d": "last30days",
+        "30days": "last30days",
+        "last_30_days": "last30days",
+        "近30天": "last30days",
+        "最近30天": "last30days",
+    }
+    normalized_daily_period = daily_presets.get(cycle_period or "")
+    if normalized_daily_period:
+        return _daily_cycle_filter(normalized_daily_period)
+
+    return _keyword_cycle_filter(params)
+
+
 def _sales_cycle_filter(params: dict[str, Any]) -> dict[str, Any]:
     cycle_filter = _keyword_cycle_filter(params)
     if cycle_filter["cycle"] != "monthly":
@@ -661,28 +703,31 @@ def _historical_traffic_cycle_filter(params: dict[str, Any]) -> dict[str, Any]:
     end_date = _optional_text(params.get("end_date"))
     if start_date or end_date:
         raise XiyouConfigError(
-            "keyword-historical-traffic 不再支持 start_date/end_date；仅支持 period=month（最近一个月）"
+            "keyword-historical-traffic 不支持用户自定义时间范围；固定导出最近一个月（不包含今天和昨天）"
         )
 
     cycle_period = _optional_text(params.get("cycle_period"))
-    allowed_aliases = {
-        "last1month",
-        "1m",
-        "1month",
-        "1_month",
-        "month",
-        "一个月",
-        "1个月",
-        "近一个月",
-    }
-    if cycle_period and cycle_period.lower() not in allowed_aliases:
+    start_month = _optional_text(params.get("start_month"))
+    end_month = _optional_text(params.get("end_month"))
+    if cycle_period or start_month or end_month:
         raise XiyouConfigError(
-            "keyword-historical-traffic 仅支持最近一个月；请使用 period=month"
+            "keyword-historical-traffic 不支持用户自定义时间范围；固定导出最近一个月（不包含今天和昨天）"
         )
 
-    end_anchor = _first_day_of_month(_today())
-    start_anchor = _shift_month(end_anchor, -1)
-    return _monthly_cycle_filter(start_anchor, end_anchor)
+    latest_allowed = _today() - timedelta(days=2)
+    start_anchor = latest_allowed - timedelta(days=29)
+    return {
+        "cycle": "daily",
+        "period": "",
+        "startCycle": {
+            "startDate": start_anchor.isoformat(),
+            "endDate": start_anchor.isoformat(),
+        },
+        "endCycle": {
+            "startDate": latest_allowed.isoformat(),
+            "endDate": latest_allowed.isoformat(),
+        },
+    }
 
 
 def _report_date(params: dict[str, Any]) -> str:

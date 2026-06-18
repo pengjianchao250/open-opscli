@@ -24,6 +24,7 @@ from opscli.xiyou.api.payloads import (
     make_sales_analysis_payload,
 )
 from opscli.xiyou.domain.exceptions import XiyouConfigError
+from opscli.xiyou.domain.models import XiyouRankingRequest
 
 
 PayloadBuilder = Callable[[dict[str, Any]], dict[str, Any]]
@@ -143,9 +144,10 @@ class XiyouResourceScenario:
         page_size: int = 50,
         view_mode: str | None = None,
         keyword_type: str | None = None,
-    ) -> dict[str, Any]:
+        ) -> dict[str, Any]:
         return self.payload_builder(
             {
+                "function": self.function,
                 "site": site,
                 "asin": asin,
                 "asins": asins,
@@ -165,6 +167,46 @@ class XiyouResourceScenario:
                 "page_size": page_size,
             }
         )
+
+    def normalize_request_defaults(self, request: XiyouRankingRequest, default_page_size: int) -> None:
+        if request.cycle_period or request.start_month or request.end_month:
+            return
+
+        period = (request.period or "").strip().lower()
+        if period in {"", "week", "last7days"}:
+            request.cycle_period = "last7days"
+        elif period in {"month", "last1month"}:
+            request.cycle_period = "last1month"
+
+
+@dataclass(frozen=True)
+class XiyouAdAnalysisScenario(XiyouResourceScenario):
+    def normalize_request_defaults(self, request: XiyouRankingRequest, default_page_size: int) -> None:
+        if not (request.cycle_period or request.start_month or request.end_month):
+            period = (request.period or "").strip().lower()
+            cycle_aliases = {
+                "": "last7days",
+                "week": "last7days",
+                "7d": "last7days",
+                "7days": "last7days",
+                "last7days": "last7days",
+                "month": "last30days",
+                "1m": "last30days",
+                "1month": "last30days",
+                "last1month": "last30days",
+                "last14days": "last14days",
+                "14d": "last14days",
+                "14days": "last14days",
+                "last30days": "last30days",
+                "30d": "last30days",
+                "30days": "last30days",
+            }
+            normalized_cycle = cycle_aliases.get(period)
+            if normalized_cycle:
+                request.cycle_period = normalized_cycle
+
+        if request.page_size == default_page_size:
+            request.page_size = 20
 
 
 RESOURCE_SCENARIOS: dict[str, XiyouResourceScenario] = {
@@ -241,7 +283,7 @@ RESOURCE_SCENARIOS: dict[str, XiyouResourceScenario] = {
         payload_builder=make_keyword_ad_toppers_payload,
         default_dataset="analysis",
     ),
-    "ad-analysis": XiyouResourceScenario(
+    "ad-analysis": XiyouAdAnalysisScenario(
         function="ad-analysis",
         title="Ad analysis",
         endpoint="/v3/advertising/research/searchTerm/list/resource",

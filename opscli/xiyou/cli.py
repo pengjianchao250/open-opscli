@@ -52,7 +52,7 @@ def run_function(
     period: str = typer.Option(
         "week",
         "--period",
-        help="周期：ASIN 排行榜支持 week/month；关键词排行榜仅支持 week；历史流量分析会自动按 month（最近1个月）处理",
+        help="周期：ASIN 排行榜支持 week/month；关键词排行榜仅支持 week；历史流量分析固定导出最近一个月（不包含今天和昨天）",
     ),
     rank_pattern: str | None = typer.Option(None, "--rank-pattern", help="榜单类型，如 flow/surge/aba"),
     dataset: str | None = typer.Option(None, "--dataset", help="业务数据块，如 keywords/analysis"),
@@ -92,12 +92,12 @@ def run_function(
     start_date: str | None = typer.Option(
         None,
         "--start-date",
-        help="日期区间起始日，格式 YYYY-MM-DD；历史流量分析已不再支持该参数",
+        help="日期区间起始日，格式 YYYY-MM-DD；历史流量分析不支持用户自定义时间范围",
     ),
     end_date: str | None = typer.Option(
         None,
         "--end-date",
-        help="日期区间结束日，格式 YYYY-MM-DD；历史流量分析已不再支持该参数",
+        help="日期区间结束日，格式 YYYY-MM-DD；历史流量分析不支持用户自定义时间范围",
     ),
     report_date: str | None = typer.Option(
         None,

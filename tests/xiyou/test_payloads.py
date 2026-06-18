@@ -591,10 +591,10 @@ def test_keyword_historical_traffic_payload_defaults_to_last1month(monkeypatch):
     )
 
     assert payload["biz"]["cycleFilter"] == {
-        "cycle": "monthly",
+        "cycle": "daily",
         "period": "",
-        "startCycle": {"startDate": "2026-05-01", "endDate": "2026-05-31"},
-        "endCycle": {"startDate": "2026-06-01", "endDate": "2026-06-30"},
+        "startCycle": {"startDate": "2026-05-09", "endDate": "2026-05-09"},
+        "endCycle": {"startDate": "2026-06-07", "endDate": "2026-06-07"},
     }
     assert payload["biz"]["trafficCampaignType"] == "organicCampaign"
 
@@ -619,7 +619,30 @@ def test_keyword_historical_traffic_payload_rejects_custom_date_range():
             page_size=20,
         )
 
-    assert "period=month" in str(exc.value)
+    assert "不支持用户自定义时间范围" in str(exc.value)
+
+
+def test_keyword_historical_traffic_payload_rejects_cycle_period_override():
+    scenario = get_resource_scenario("keyword-historical-traffic")
+
+    with pytest.raises(XiyouConfigError) as exc:
+        scenario.build_payload(
+            site="US",
+            asin=None,
+            asins=None,
+            keyword="backpack",
+            query="",
+            cycle_period="last1month",
+            start_month=None,
+            end_month=None,
+            start_date=None,
+            end_date=None,
+            report_date=None,
+            page=1,
+            page_size=50,
+        )
+
+    assert "不支持用户自定义时间范围" in str(exc.value)
 
 
 def test_keyword_ad_replay_payload_supports_report_date():
@@ -731,6 +754,112 @@ def test_ad_analysis_payload_uses_parent_asin_related_asins_and_search_terms():
     assert payload["biz"]["parentAsin"] == "B0FDB5VR1V"
     assert payload["biz"]["asins"] == ["B0DZFGTCLR", "B0DZFW1QS1"]
     assert payload["biz"]["filters"]["searchTerms"] == ["candle warmer"]
+
+
+def test_ad_analysis_payload_allows_empty_search_terms():
+    scenario = get_resource_scenario("ad-analysis")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=["B0DZFGTCLR", "B0DZFW1QS1"],
+        keyword=None,
+        query="",
+        parent_asin="B0FDB5VR1V",
+        cycle_period="last1month",
+        start_month=None,
+        end_month=None,
+        start_date=None,
+        end_date=None,
+        report_date=None,
+        search_terms=None,
+        page=1,
+        page_size=20,
+    )
+
+    assert payload["biz"]["filters"]["searchTerms"] == []
+
+
+def test_ad_analysis_payload_falls_back_to_query_as_search_terms():
+    scenario = get_resource_scenario("ad-analysis")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=["B0DZFGTCLR", "B0DZFW1QS1"],
+        keyword=None,
+        query="candle warmer",
+        parent_asin="B0FDB5VR1V",
+        cycle_period="last1month",
+        start_month=None,
+        end_month=None,
+        start_date=None,
+        end_date=None,
+        report_date=None,
+        search_terms=None,
+        page=1,
+        page_size=20,
+    )
+
+    assert payload["biz"]["filters"]["searchTerms"] == ["candle warmer"]
+
+
+def test_ad_analysis_payload_supports_last14days():
+    scenario = get_resource_scenario("ad-analysis")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=["B0DZFGTCLR", "B0DZFW1QS1"],
+        keyword=None,
+        query="",
+        parent_asin="B0FDB5VR1V",
+        cycle_period="last14days",
+        start_month=None,
+        end_month=None,
+        start_date=None,
+        end_date=None,
+        report_date=None,
+        search_terms=None,
+        page=1,
+        page_size=20,
+    )
+
+    assert payload["biz"]["cycleFilter"] == {
+        "cycle": "daily",
+        "period": "last14days",
+        "startCycle": {"startDate": "", "endDate": ""},
+        "endCycle": {"startDate": "", "endDate": ""},
+    }
+
+
+def test_ad_analysis_payload_supports_last30days():
+    scenario = get_resource_scenario("ad-analysis")
+
+    payload = scenario.build_payload(
+        site="US",
+        asin="B0DZFGTCLR",
+        asins=["B0DZFGTCLR", "B0DZFW1QS1"],
+        keyword=None,
+        query="",
+        parent_asin="B0FDB5VR1V",
+        cycle_period="last30days",
+        start_month=None,
+        end_month=None,
+        start_date=None,
+        end_date=None,
+        report_date=None,
+        search_terms=None,
+        page=1,
+        page_size=20,
+    )
+
+    assert payload["biz"]["cycleFilter"] == {
+        "cycle": "daily",
+        "period": "last30days",
+        "startCycle": {"startDate": "", "endDate": ""},
+        "endCycle": {"startDate": "", "endDate": ""},
+    }
 
 
 def test_parent_analysis_payload_uses_variation_compare_shape():
