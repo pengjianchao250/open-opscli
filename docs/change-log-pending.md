@@ -10,6 +10,36 @@
 
 ---
 
+## 2026-06-18 seller_sprite - SQLite 单账号排队一期
+
+**变更原因**：当前卖家精灵 MCP 入口同时混合同步直跑、browser-route 忙时自动异步和任务目录文件状态，用户无法稳定看到排队序号；第一阶段需要先补单账号 SQLite 队列、统一入队返回和可查询状态，为后续多账号扩展预留结构。
+**改动点**：新增 `opscli/seller_sprite/services/task_queue_store.py`，提供 SQLite 队列仓储、排队序号计算、运行中任务恢复和任务认证上下文持久化；新增 `opscli/seller_sprite/services/task_scheduler.py`，实现单账号 FIFO 调度、后台消费和完成态 `result.json` 合并；`opscli/seller_sprite/services/__init__.py` 导出新调度入口；`opscli/mcp/tools/seller_sprite.py` 新增 `_get_task_scheduler()` 与 `_build_request()`，将 `seller_sprite_run` / `seller_sprite_start` 统一改为入队返回，`seller_sprite_job_status` / `seller_sprite_export` 改为走调度器状态；新增 `tests/seller_sprite/test_task_queue_store.py`、`tests/seller_sprite/test_task_scheduler.py`，并更新 `tests/mcp/test_seller_sprite_tools.py` 以覆盖统一入队和状态查询。
+**验证结果**：RED：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_task_queue_store.py -q` 初始失败于缺少 `task_queue_store` 模块；`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_task_scheduler.py -q` 初始失败于缺少 `task_scheduler` 模块；`.\\.venv\\Scripts\\python.exe -m pytest tests/mcp/test_seller_sprite_tools.py -q` 初始失败于 `seller_sprite` MCP 工具缺少 `_get_task_scheduler`。中途 `uv run --extra dev pytest ...` 因 `.venv\\Scripts\\opscli-mcp.exe` 被占用失败，已按项目要求提交反馈 `4f63cc51-23df-4982-afbc-de7bd776dce9` 后改用 `.venv\\Scripts\\python.exe -m pytest` 直跑。GREEN：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_task_queue_store.py tests/seller_sprite/test_task_scheduler.py tests/seller_sprite/test_api_manager.py tests/mcp/test_seller_sprite_tools.py -q` 通过，`29 passed`。
+**影响范围**：影响卖家精灵 MCP 的任务提交与状态查询口径；`seller_sprite_run` 现统一返回排队任务信息，不再在入口层直跑同步任务；单账号执行逻辑仍复用现有 `SellerSpriteApiManager.run()`，`status.json/result.json` 继续保留为任务目录产物。
+**回滚方式**：删除 `task_queue_store.py`、`task_scheduler.py`，回退 `opscli/mcp/tools/seller_sprite.py` 到原先的 `run/start` 分支逻辑，回退 `opscli/seller_sprite/services/__init__.py` 和新增/修改测试，并删除本条变更记录。
+
+---
+
+## 2026-06-18 卖家精灵 - browser-route 调度与导航优化
+
+**变更原因**：browser-route 每个任务固定访问首页、正常任务固定等待 8 秒，并对所有失败统一冷却 120 秒，导致无效导航和队列阻塞；默认运行时切换为 Patchright 后，基础卖家精灵依赖和文档也需要保持一致。
+**改动点**：`opscli/seller_sprite/browser_route/worker.py` 改为同目标页刷新、不同目标页直接导航，不再固定访问首页；正常任务随机间隔 1-5 秒，网络错误随机冷却 3-5 秒，429/验证码/疑似风控随机冷却 15-20 秒，登录失效立即重新登录并只重试主请求一次，配置和未知代码错误不冷却；`opscli/seller_sprite/config.py` 将任务间隔上限调整为 5 秒、冷却上限调整为 20 秒；`pyproject.toml` 让基础 `seller-sprite` extra 安装默认 Patchright 运行时；同步更新 README、MCP Skill 和 worker 单元测试。
+**验证结果**：RED：worker 测试分别因缺少随机等待分类函数、仍固定访问首页、主请求不支持会话重试而失败；GREEN：`.\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_browser_route_worker.py -q` 通过，17 passed；回归 `.\.venv\Scripts\python.exe -m pytest tests/seller_sprite tests/mcp/test_seller_sprite_tools.py -q` 通过，49 passed；`uv lock` 成功并确认基础 `seller-sprite` extra 包含 Patchright；对已安装 Patchright 1.60.1 做 API 冒烟检查，确认 `launch_persistent_context(no_viewport)`、`Page.reload/route/expect_response` 和 `APIRequestContext.post` 均可用。全量 `pytest tests -q` 在收集阶段被仓库既存同名测试模块阻断，首个错误为 `tests/amazon_rufus/test_transport.py` 与 `tests/feedback/test_transport.py` 的 import file mismatch，与本次卖家精灵变更无关。
+**影响范围**：影响同账号 browser-route 的页面导航、任务等待、失败恢复和默认安装依赖；不改变 `api-direct`、场景 payload、MCP schema、导出格式和异步任务状态结构。
+**回滚方式**：恢复 `worker.py` 的首页探测、固定间隔和统一冷却，恢复 `config.py` 默认值，移除对应测试，并从基础 `seller-sprite` extra 删除 Patchright 依赖后回退 README 与 Skill 说明。
+
+---
+
+## 2026-06-17 卖家精灵 - browser-route 支持 Patchright 运行时
+
+**变更原因**：卖家精灵 browser-route 需要启用 Patchright 进行本地验证，以降低 Playwright 自动化特征和 webdriver/CDP 检测风险，同时保留 Playwright 路线作为兼容回退。
+**改动点**：`opscli/seller_sprite/config.py` 新增 `OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME` 配置并限制为 `playwright`/`patchright`，默认运行时设为 `patchright`；`opscli/seller_sprite/browser_route/worker.py` 将 async API 加载和启动参数构造收敛为局部 runtime 策略，Patchright 模式使用 `no_viewport` 且保留 persistent context；`ops-seller-sprite` MCP Skill 文档和 README 补充 Patchright 安装与运行时配置说明；新增 browser-route 单元测试覆盖默认配置、环境变量解析、Patchright loader 和启动参数。
+**验证结果**：RED：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_browser_route_worker.py -q` 在实现前 3 failed，失败点为 `SellerSpriteSettings.browser_runtime` 不存在、worker 未提供 `_load_async_playwright`、未提供 Patchright 启动参数构造。GREEN：同一命令通过（10 passed）；默认值由用户先行本地调整后补充回归断言，因此该断言未单独经历 RED。回归：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite tests/mcp/test_seller_sprite_tools.py -q` 通过（43 passed）。依赖锁定：`uv lock` 成功，新增 `patchright v1.60.1`；当前 `.venv` 已安装 Patchright 1.60.1 及其 Chromium，实际启动后 `navigator.webdriver` 为 `False`。补充检查：`.\\.venv\\Scripts\\python.exe -m pytest tests/mcp/test_tools.py -q` 当前 2 failed、4 passed，失败点为当前 MCP 权限/注册上下文只暴露 10 个 auth 类工具且 `seller_sprite_run` 未出现在 `Client(mcp).list_tools()` 中；该失败不在本次 browser-route runtime 改动路径内。
+**影响范围**：影响卖家精灵 browser-route 的浏览器启动层和部署配置；默认 runtime 改为 Patchright，可通过 `OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME=playwright` 回退，不影响 `api-direct`、MCP schema、导出逻辑、账号池和 Rufus 模块。
+**回滚方式**：回退 `config.py`、`worker.py`、`pyproject.toml`、`tests/seller_sprite/test_browser_route_worker.py`、`ops-seller-sprite/SKILL_MCP.md`、`README.md` 和本变更记录。
+
+---
+
 ## 2026-06-17 MCP - 卖家精灵长期日加额
 
 **变更原因**：现有限额只支持全局默认日额度，无法按用户长期追加卖家精灵 MCP 每日额度；运维又不希望新增公开 CLI 命令，因此需要在 SQLite 层增加长期日加额能力，并统一以邮箱作为主匹配口径。
@@ -1987,4 +2017,20 @@
 **验证结果**：`pytest tests/skills/test_detector.py` 9 passed。
 **影响范围**：仅测试文件，无生产代码改动。
 **回滚方式**：git checkout 恢复 tests/skills/test_detector.py。
+---
+## 2026-06-18 mcp - 卖家精灵规范读取合并参数手册
+
+**变更原因**：`ops-seller-sprite` 的 `SKILL_MCP.md` 已精简为入口文档，参数细节下沉到 `SCENARIO_PARAMS_ZH.md`。`seller_sprite_spec_must_read` 若仍只返回主文档，纯 MCP 客户端将拿不到完整参数口径。
+**改动点**：`opscli/mcp/tools/seller_sprite.py` 新增 Skill 模板目录辅助函数，并让 `seller_sprite_spec_must_read()` 同时读取 `SKILL_MCP.md` 和 `SCENARIO_PARAMS_ZH.md`，返回合并后的 `spec` 与 `sources`；`tests/mcp/test_seller_sprite_tools.py` 新增回归测试，要求规范读取结果包含参数手册标题。
+**验证结果**：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_seller_sprite_tools.py -k spec_must_read -v` 通过（1 passed）；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_seller_sprite_tools.py -v` 通过（9 passed）。
+**影响范围**：影响 SellerSprite MCP 首次“先读规范”行为；不影响 `seller_sprite_run`、`seller_sprite_job_status`、`seller_sprite_export` 的业务执行逻辑。
+**回滚方式**：回退 `opscli/mcp/tools/seller_sprite.py`、`tests/mcp/test_seller_sprite_tools.py` 和本条变更记录。
+---
+## 2026-06-18 seller_sprite - 竞品查询补单 ASIN 归一化与本地快速失败
+
+**变更原因**：`competitor-lookup` 场景在收到单个 `asin` 时没有归一化到 `asins`，会构造出空主筛选 payload；缺少主筛选条件时也未在本地拦截，导致无效请求继续走远端并表现为 MCP 30 秒超时。
+**改动点**：`opscli/seller_sprite/api/payloads.py` 的 `make_competitor_payload()` 新增 `asin -> asins` 归一化；`opscli/seller_sprite/api/scenarios.py` 为场景定义新增 `required_any_params`，并让 `competitor-lookup` 强制要求 `keyword`、`brand`、`sellerName`、`asin`、`asins` 至少其一；`ops-seller-sprite` 的 `SKILL.md`、`SKILL_MCP.md`、`SCENARIO_PARAMS_ZH.md` 同步补充“单个 ASIN 必须归一化为 asins”和“缺主筛选条件必须本地快速失败”的规则；`tests/seller_sprite/test_payloads.py` 与 `tests/seller_sprite/test_api_manager.py` 新增对应回归测试。
+**验证结果**：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_payloads.py tests/seller_sprite/test_api_manager.py -k "competitor" -v` 通过（6 passed）；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_payloads.py tests/seller_sprite/test_api_manager.py -v` 通过（23 passed）。
+**影响范围**：影响 `competitor-lookup` 的本地参数校验和 payload 构造；无效竞品请求将立即报配置错误，不再继续拖成远端超时。
+**回滚方式**：回退 `opscli/seller_sprite/api/payloads.py`、`opscli/seller_sprite/api/scenarios.py`、相关 skill 文档、测试和本条变更记录。
 ---

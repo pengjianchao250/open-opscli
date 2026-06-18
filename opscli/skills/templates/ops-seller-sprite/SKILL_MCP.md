@@ -1,417 +1,62 @@
 ---
 name: ops-seller-sprite
 mcp-version: v1.0.0
-description: SellerSprite/卖家精灵 usage guide for querying scenarios and exporting XLS files through seller_sprite_* MCP tools.
+description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sprite_* 工具执行场景查询、轮询异步任务、读取导出文件并给出用户可读结果。
 ---
 
 # ops-seller-sprite MCP
 
-Use these MCP tools:
+先读 [SCENARIO_PARAMS_ZH.md](SCENARIO_PARAMS_ZH.md) 获取场景映射、缺参规则和参数口径；本文件只保留 MCP 工具链和异步执行规则。
 
-- `seller_sprite_scenarios`: list available scenarios.
-- `seller_sprite_run`: run a scenario and create an export file.
-- `seller_sprite_job_status`: read a saved task result by `job_id`.
-- `seller_sprite_export`: read export path, `file://` URL, filename, format, and MIME type.
+## MCP 工具
 
-## Workflow
+- `seller_sprite_scenarios`：查看支持的场景。
+- `seller_sprite_run`：执行场景并创建导出任务。
+- `seller_sprite_job_status`：按 `job_id` 查看任务状态。
+- `seller_sprite_export`：读取导出文件路径、URL、文件名和 MIME 信息。
 
-1. Call `seller_sprite_scenarios` when scenario names or required params are uncertain.
-2. If the user intent cannot be mapped to exactly one scenario, ask the user to confirm the scenario before calling `seller_sprite_run`.
-3. If required params are missing or ambiguous, ask the user to provide only those params before calling `seller_sprite_run`.
-4. Call `seller_sprite_run` with `scenario`, `site`, `period`, `params`, and optionally `export_format`.
-5. Do not pass collection-mode controls such as `mode`, `browser-route`, `api-direct`, or `async_mode`; sync/async and collection mode are backend decisions.
-6. Use the returned `data.job_id` for follow-up status/export calls.
-7. If the response has `data.state` such as `queued` or `running`, poll `seller_sprite_job_status(job_id)` every 5-10 seconds within the current response turn. If the job finishes within 60-90 seconds, return the result and export. If it is still running, tell the user the task is still running and keep the `job_id` in conversation context.
-8. When the user later says `继续`, `查结果`, or `刚才那个好了没`, reuse the last SellerSprite `job_id`; do not ask the user to resubmit the full request.
-9. Call `seller_sprite_export` when the user needs the file link.
-10. If MCP tools are unavailable, report that SellerSprite MCP is unavailable.
+## 执行规则
 
-## Authentication
+1. 拿不准场景或必填参数时，先调 `seller_sprite_scenarios` 或先回看参数手册。
+2. 真正执行只用 `seller_sprite_run`；不要调用内部 start helper。
+3. 不要传 `mode`、`browser-route`、`api-direct`、`async_mode` 这类控制参数；同步/异步与采集模式由后端决定。
+4. `competitor-lookup` 如果只有单个 ASIN，也要先按 `asins` 传；缺少 `keyword`、`brand`、`sellerName`、`asin/asins` 这类主筛选条件时，直接报错或澄清，不要把无效请求拖成 30 秒超时。
+5. 每次成功执行后都记录 `data.job_id`；状态查询和导出都复用这个 `job_id`。
+6. 如果返回 `data.state=queued` 或 `running`，在当前回复轮次内每 5-10 秒调用一次 `seller_sprite_job_status(job_id)`，总等待 60-90 秒。
+7. 如果任务在当前轮次内完成，直接返回结果和导出文件；如果还在跑，明确告诉用户任务仍在进行，并保留 `job_id` 供后续续查。
+8. 用户后续只说 `继续`、`查结果`、`刚才那个好了没` 时，直接复用最近一次 SellerSprite `job_id`。
+9. 用户只需要文件链接时，调用 `seller_sprite_export`。
+10. MCP tools 不可用时，直接说明当前宿主没有可用的 SellerSprite MCP。
 
-SellerSprite login is cached by the backend. Do not trigger repeated login manually; normal runs reuse cached cookies and only re-login when the session expires.
+## 认证与运行时边界
 
-SellerSprite integration accounts are cached in the backend process for 10 minutes by default. Session expiration should only trigger SellerSprite re-login with the cached account; refresh integration accounts only when SellerSprite login itself fails.
+- SellerSprite 登录态由后端缓存；不要手动重复登录。
+- 集成账号也由后端缓存；只有 SellerSprite 登录本身失败时，才需要后端刷新账号或登录态。
+- 浏览器运行时由部署侧决定；Agent 不负责切换 Patchright / Playwright / Chrome。
 
-## Export Format
+## 异步状态
 
-- MCP export format: `xls`.
-- Omit `export_format` to use the `xls` default, or pass `export_format: "xls"` explicitly.
-
-## Async Tasks
-
-The backend automatically switches to async mode when a scenario may exceed the MCP client's synchronous wait budget.
-
-Agent-facing calls should still use `seller_sprite_run`; do not call internal start helpers and do not pass `async_mode`.
-
-When the current SellerSprite browser worker is already running or has queued tasks, the backend automatically returns an async task. This prevents the MCP call from spending its timeout budget waiting behind an existing browser task. Long-running scenarios such as `product-research`, `market-research`, and `listing-analysis` may also return async task status immediately.
-
-Successful async start returns a task status payload:
-
-```json
-{
-  "job_id": "SellerSprite-ProductResearch-US-Bookcases-20260616-120000-a1b2c3",
-  "scenario": "product-research",
-  "site": "US",
-  "period": "30d",
-  "state": "queued",
-  "stage": "created"
-}
-```
-
-Status values:
-
-| state | Meaning |
-| --- | --- |
-| `queued` | Created and waiting for the background worker |
-| `running` | Background worker is executing the scenario |
-| `succeeded` | Task completed and result/export info is available |
-| `failed` | Task failed; read `error.code` and `error.message` |
-
-For async jobs, do not ask the user to send a new full request. The Agent should keep the `job_id` and use `seller_sprite_job_status`.
-
-## Missing Params Policy
-
-- Do not call `seller_sprite_run` when the scenario is unclear or required params are missing.
-- Ask a concise clarification question when the user request is too broad, such as `跑卖家精灵`, `查一下`, `导出数据`, or `看这个产品`, and no scenario can be determined confidently.
-- If multiple scenarios may match the same wording, ask the user to choose. Common ambiguous cases:
-  - `查关键词`: choose `keyword-miner`, `keyword-reverse`, or `traffic-source`.
-  - `查产品`: choose `competitor-lookup` or `product-research`.
-  - `看市场/类目`: choose `market-research` or `product-research`.
-- Ask only for missing required params, including one-of required groups.
-- Do not ask for optional params. Omit them and let backend defaults apply unless the user explicitly provides values.
-- If a scenario has no required params, run it with defaults after mapping the intent.
-- Always include known user-provided conditions in `params`; do not invent hidden enum values.
-- Category text can be passed directly in `params.category` or `params.node`. The backend resolves it through SellerSprite's category API before querying.
-- If SellerSprite returns multiple category matches, stop and ask the user to choose one of the returned full category paths or provide `nodeIdPath`.
-- Category parameter priority is scenario-specific:
-  - `product-research`: prefer `params.nodeIdPaths` for exact category filtering, especially after the user confirms a category candidate.
-  - `market-research`: prefer `params.departmentKeyword` for market/category search. Use `params.nodeIdPath` only when the user explicitly provides a known SellerSprite node path and wants exact-node filtering.
-- After the user confirms one category candidate for `product-research`, pass the confirmed node as `params.nodeIdPaths: ["..."]` whenever possible. Do not retry with only `nodeIdPath`, and do not drop the category filter.
-
-Clarification examples:
-
-- `你想做关键词挖掘、关键词反查，还是查流量来源？`
-- `查竞品需要 keyword、brand、sellerName、asins 或 Amazon 产品链接中的一种，请补充。`
-- `关键词反查需要 ASIN，请提供 ASIN 或 Amazon 产品链接。`
-- `查流量来源需要关键词或 ASIN，请补充。`
-
-## Scenario Mapping
-
-| Natural language | scenario |
-| --- | --- |
-| 查竞品 / 查产品 / 选竞品 / competitor lookup | `competitor-lookup` |
-| 选产品 / product research | `product-research` |
-| 关键词挖掘 / keyword mining | `keyword-miner` |
-| 关键词反查 / reverse ASIN | `keyword-reverse` |
-| 查流量来源 / traffic source | `traffic-source` |
-| 选市场 / market research | `market-research` |
-| Listing panorama / listing analysis | `listing-analysis` |
-
-## Required Params
-
-| scenario | Required | Common optional params |
+| `state` | 含义 | Agent 动作 |
 | --- | --- | --- |
-| `competitor-lookup` | one of `keyword`, `brand`, `sellerName`, `asins`, product link | `node` / `category` |
-| `product-research` | none | `recommendationMode`, `nodeIdPaths`/`node`/`category`, `minPrice`, `maxPrice`, `minSales`, `maxSales`, `minReviews`, `maxReviews`, `productTags`, `sellerTypes`, `keywords`, `outOfKeywords` |
-| `keyword-miner` | `keyword` | `filterRootWord`, `amazonChoice`, `includeHighFrequency` |
-| `keyword-reverse` | `asin` | `badges` |
-| `traffic-source` | `keywordOrAsin` | `keyword`, `asin`, `asins`, `order`, `desc` |
-| `market-research` | none | `departmentKeyword`/`category`, `node`/`nodeIdPath`, `newReleaseNum`/`newReleaseMonths`, `topn`, market metric min/max fields |
-| `listing-analysis` | `asin` | `station` (default `GLOBAL`), `pollAttempts`/`maxPolls`, `pollIntervalSeconds`/`pollInterval` |
+| `queued` | 任务已创建，等待后台 worker | 继续轮询，或告知用户稍后续查 |
+| `running` | 后台正在执行 | 继续轮询，或告知用户稍后续查 |
+| `succeeded` | 已完成，结果和导出可读 | 返回 `summary`、`job_id`、`row_count`、导出文件 |
+| `failed` | 后台执行失败 | 报告 `error.message`，不要复用旧导出文件 |
 
-Always pass:
+## 回复规则
 
-- `site`: marketplace code such as `US`, `JP`, `DE`, `UK`, `FR`, `IT`, `ES`, `CA`, `IN`, `MX`.
-- `period`: `30d`, `nearly`, or a month such as `2026-03`.
-- `page_size`: default `100` unless the user requests otherwise.
+- 优先读取并复用：
+  - `data.summary`
+  - `data.job_id`
+  - `data.row_count`
+  - `data.export.filename`
+  - `data.export.url`
+  - `data.export.path`
+  - `data.export.format`
+- 不要在最终回复里打印完整工具参数、原始 JSON、内部路径或账号信息。
+- 若存在 `data.summary`，优先把它当成结果主文案，只补最少的任务信息。
 
-For `product-research`, `月份` / `数据月份` / a value like `2026-04` must be passed as top-level `period`, not as `params.putawayMonth`. Only map `上架时间` / `上架月数` / `上架多久` to `params.putawayMonth`, and that value must be a month count such as `1`, `3`, `6`, or `12`. Never pass `YYYY-MM` to `putawayMonth`.
-
-For `competitor-lookup`, product links are accepted as user input, but tool params should pass ASINs: extract the ASIN from Amazon product URLs and set `params.asins`.
-
-For `product-research`, 推荐模式传 `params.recommendationMode`，可用值：
-
-`低价长尾选品`, `研发新品榜`, `潜力单变体`, `销量飙升`, `潜力市场`, `未被满足的市场`, `不压库存的市场`, `投机市场`, `高需求低要求市场`, `全品类铺货`, `精品铺货`, `低价商品`, `新手推荐`.
-
-推荐模式会展开为一组筛选条件；用户同时提供同名筛选条件时，以用户显式条件为准。
-
-`product-research` 常用中文字段：
-
-| 中文含义 | params 字段 |
-| --- | --- |
-| 类目 | `nodeIdPaths` / `node` / `category` / `nodeIdPath` |
-| 月销量 | `minSales` / `maxSales` |
-| 月销售额 | `minAmount` / `maxAmount` |
-| 子体销量 | `minAmzUnit` / `maxAmzUnit` |
-| 月销量增长率 | `minTotalUnitsGrowth` / `maxTotalUnitsGrowth` |
-| 大类 BSR | `minRanking` / `maxRanking` |
-| 小类 BSR | `minSubBsrRank` / `maxSubBsrRank` |
-| BSR 增长数 | `minRankingCv` / `maxRankingCv` |
-| BSR 增长率 | `minRankingCr` / `maxRankingCr` |
-| 变体数 | `minVariations` / `maxVariations` |
-| Q&A | `minQuestions` / `maxQuestions` |
-| 月评新增 | `minReviewsGrouth` / `maxReviewsGrouth` |
-| 留评率 | `minReviewsRate` / `maxReviewsRate` |
-| 毛利率 | `minProfit` / `maxProfit` |
-| LQS | `lqsFrom` / `lqsTo` |
-| 价格 | `minPrice` / `maxPrice` |
-| 评分数 | `minReviews` / `maxReviews` |
-| 评分 | `minReviewRating` / `maxReviewRating` |
-| FBA 运费 | `minFba` / `maxFba` |
-| 上架时间 / 上架月数（不是数据月份） | `putawayMonth` |
-| 包装重量 | `minWeights` / `maxWeights`，单位用 `weightUnit` |
-| 买家运费 | `minDeliveryPrice` / `maxDeliveryPrice` |
-| 卖家数 | `minSellers` / `maxSellers` |
-| 卖家所属地 | `sellerNationList` |
-| 包含 / 排除品牌 | `includeBrands` / `excludeBrands` |
-| 包含 / 排除卖家 | `includeSellers` / `excludeSellers` |
-| 包含 / 排除关键词 | `keywords` / `outOfKeywords` |
-
-`product-research` 枚举参数：
-
-- `productTags`：商品标识数组，可用 `BestSeller`、`AmazonChoice`、`NewRelease`、`A+`、`NonA+`
-  - 仅勾选 A+：`productTags` 加 `"A+"`
-  - 仅勾选 不含A+：`productTags` 加 `"NonA+"`
-  - 同时勾选 A+ 和 不含A+：不传 `"A+"` 和 `"NonA+"`
-  - 两者都不勾选：不传 `"A+"` 和 `"NonA+"`
-- `sellerTypes`：配送方式数组，可用 `AMZ`、`FBA`、`FBM`
-- `pkgDimensionTypeList`：包装尺寸分段数组，可用 `SS`、`LS`、`SB`、`LB`、`ELO`、`EL5O`、`EL7O`、`EL15O`、`O`
-- `sellerNationList`：卖家所属地数组，如 `CN`、`US`、`JP`、`GB`、`DE`
-- `video`：主图视频，`Y` 表示含视频，`N` 表示不含视频
-- `lowPrice`：低价商品，`Y` / `N`
-- `smallAndLight`：商品资格，常用 `N` 或 `lowPrice`
-- `filterSub`：是否只看所选子类目排名
-- `matchType`：关键词匹配方式，`0` 模糊匹配，`1` 词组匹配，`2` 精准匹配
-
-`product-research` accepts official SellerSprite API aliases in `params`; they are converted internally:
-
-| Official alias | Internal field |
-| --- | --- |
-| `minUnits` / `maxUnits` | `minSales` / `maxSales` |
-| `minRevenue` / `maxRevenue` | `minAmount` / `maxAmount` |
-| `minUnitsCr` / `maxUnitsCr` | `minTotalUnitsGrowth` / `maxTotalUnitsGrowth` |
-| `minRatings` / `maxRatings` | `minReviews` / `maxReviews` |
-| `minRatingsCv` / `maxRatingsCv` | `minReviewsGrouth` / `maxReviewsGrouth` |
-| `minStar` / `maxStar` | `minReviewRating` / `maxReviewRating` |
-| `availableMonth` | `putawayMonth` |
-| `fulfillment` | `sellerTypes` |
-| `badgeBS=true` | add `BestSeller` to `productTags` |
-| `badgeAC=true` | add `AmazonChoice` to `productTags` |
-| `badgeNR=true` | `productTags=["NewRelease"]` |
-| `variation` | `maxVariations` |
-| `minBsr` / `maxBsr` | `minRanking` / `maxRanking` |
-| `minBsrCv` / `maxBsrCv` | `minRankingCv` / `maxRankingCv` |
-| `minBsrCr` / `maxBsrCr` | `minRankingCr` / `maxRankingCr` |
-| `minLqs` / `maxLqs` | `lqsFrom` / `lqsTo` |
-| `dimensionType` | `pkgDimensionTypeList` |
-| `sellerNation` | `sellerNationList` |
-| `excludeKeywords` | `outOfKeywords` |
-
-If both alias and internal field are provided, the internal field wins.
-
-`market-research` 常用中文字段：
-
-| 中文含义 | params 字段 |
-| --- | --- |
-| 类目关键词搜索 | `departmentKeyword` / `category` |
-| 精确类目节点 | `node` / `nodeIdPath` |
-| 样本数量 | `sampleNumber` |
-| 头部 Listing 数量 | `topn` / `topNSelect` |
-| 新品定义月份 | `newReleaseNum` / `newReleaseMonths` / `newReleaseNumSelect` |
-| 月均销量 | `minAvgSales` / `maxAvgSales` |
-| 平均 BSR | `minAvgBsr` / `maxAvgBsr` |
-| 平均重量 | `minAvgWeight` / `maxAvgWeight` |
-| 头部 Listing 平均 BSR | `minHeadListingAvgBsr` / `maxHeadListingAvgBsr` |
-| 商品总数 | `minTotalProducts` / `maxTotalProducts` |
-| 月均销售额 | `minAvgRevenue` / `maxAvgRevenue` |
-| 平均价格 | `minAvgPrice` / `maxAvgPrice` |
-| 平均体积 | `minAvgVolume` / `maxAvgVolume` |
-| 头部 Listing 月均销量 | `minHeadListingAvgSales` / `maxHeadListingAvgSales` |
-| 平均评分数 | `minAvgReviews` / `maxAvgReviews` |
-| 平均星级 | `minAvgRating` / `maxAvgRating` |
-| 平均毛利率 | `minAvgProfit` / `maxAvgProfit` |
-| 头部 Listing 月均销售额 | `minHeadListingAvgRevenue` / `maxHeadListingAvgRevenue` |
-| 品牌数量 | `minBrands` / `maxBrands` |
-| 商品集中度 | `minHeadListingProductCrn` / `maxHeadListingProductCrn` |
-| A+ 数量占比 | `minEbcRatio` / `maxEbcRatio` |
-| Amazon 自营占比 | `minAmzRatio` / `maxAmzRatio` |
-| 卖家数量 | `minSellers` / `maxSellers` |
-| 品牌集中度 | `minHeadListingBrandCrn` / `maxHeadListingBrandCrn` |
-| FBA 占比 | `minFbaRatio` / `maxFbaRatio` |
-| 卖家所属地 | `sellerNations` |
-| 平均卖家数 | `minAvgSellers` / `maxAvgSellers` |
-| 卖家集中度 | `minHeadListingSellerCrn` / `maxHeadListingSellerCrn` |
-| FBM 占比 | `minFbmRatio` / `maxFbmRatio` |
-| 新品数量占比 | `minNewRatio` / `maxNewRatio` |
-| 新品平均价格 | `minNewAvgPrice` / `maxNewAvgPrice` |
-| 新品月均销售额 | `minNewAvgRevenue` / `maxNewAvgRevenue` |
-| 新品数量 | `minNewCount` / `maxNewCount` |
-| 新品平均星级 | `minNewAvgRating` / `maxNewAvgRating` |
-| 新品平均评分数 | `minNewAvgReviews` / `maxNewAvgReviews` |
-| 新品月均销量 | `minNewAvgSales` / `maxNewAvgSales` |
-
-### Category Params
-
-For `product-research` and `competitor-lookup`, pass category filters through `params.node`, `params.category`, `params.nodeIdPath`, or `params.nodeIdPaths`.
-
-- The backend calls SellerSprite's category API `/v2/competitor-lookup/nodes` with `marketId`, `table`, and `nodeLabelPath` to resolve category text.
-- You may pass natural language category text, such as `bath`, `bed frames`, or a more complete path.
-- You may also pass a SellerSprite node path directly, such as `1055398:1063236`; numeric paths are used as-is.
-- For `product-research`, the SellerSprite request field is `nodeIdPaths`. When the user confirms a returned candidate, pass `params.nodeIdPaths` as an array, for example `["165793011:166508011:3244725011"]`.
-- If the category API returns exactly one match, the backend converts it to `nodeIdPath` before querying.
-- If the category API returns multiple matches but one candidate exactly matches the provided full category path or leaf category name, the backend uses that exact match directly.
-- If the category API returns multiple matches, the run fails with candidate `nodeIdPath` and full category paths. Ask the user to choose; do not retry by guessing. After the user chooses, retry `product-research` with the chosen `nodeIdPaths` value.
-- If no category is found, ask the user for a more complete category path or a known `nodeIdPath`.
-
-For `market-research`, prefer `params.departmentKeyword` for category/market text. `params.category` is accepted as an alias and is submitted as SellerSprite's `departmentKeyword`; `nodeIdPath` is left blank in this search mode. Use `params.node` or `params.nodeIdPath` only when the user provides a known SellerSprite node path and wants exact node filtering.
-
-## Defaults
-
-Top-level defaults:
-
-| Field | Default |
-| --- | --- |
-| `site` | `US` |
-| `period` | `30d` |
-| `page_size` | `100` |
-| `export_format` | `xls` |
-
-Scenario defaults:
-
-| scenario | Defaults |
-| --- | --- |
-| `competitor-lookup` | `page=1`, `order.field=amz_unit`, `order.desc=true`, `lowPrice=N` |
-| `product-research` | `page=1`, `selectType=2`, `order.field=total_units`, `order.desc=true`, `smallAndLight=N`, `lowPrice=N` |
-| `keyword-miner` | `pageNum=1`, `orderBy=5`, `desc=true`, `filterRootWord=0`, `amazonChoice=false`, `includeHighFrequency=true` |
-| `keyword-reverse` | `page=1`, `order=12`, `desc=true` |
-| `traffic-source` | `pageNo=1`, `order=10`, `desc=true` |
-| `market-research` | `marketId=US(1)`, `nodeIdPath=`, `monthName=bsr_sales_nearly`, `sampleNumber=1`, `topn=10`, `newReleaseNum=6`, `order.field=total_sales`, `order.desc=true`; `category` maps to `departmentKeyword` |
-| `listing-analysis` | `station=GLOBAL`; submits `/v3/api/ai-workflow/listing-analysis`, then polls `/v3/api/ai-analysis/task/{taskId}` until `data.content` is available |
-
-## Call Examples
-
-```json
-{
-  "scenario": "keyword-reverse",
-  "site": "JP",
-  "period": "nearly",
-  "params": {
-    "asin": "B07YRMT36L"
-  },
-  "export_format": "xls"
-}
-```
-
-```json
-{
-  "scenario": "listing-analysis",
-  "site": "US",
-  "period": "30d",
-  "params": {
-    "asin": "B0D3845MWD",
-    "station": "GLOBAL"
-  },
-  "export_format": "xls"
-}
-```
-
-```json
-{
-  "scenario": "keyword-miner",
-  "site": "JP",
-  "period": "nearly",
-  "params": {
-    "keyword": "flashlight",
-    "filterRootWord": 1,
-    "amazonChoice": true
-  },
-  "export_format": "xls"
-}
-```
-
-```json
-{
-  "scenario": "traffic-source",
-  "site": "US",
-  "period": "nearly",
-  "params": {
-    "keyword": "solar outdoor lights"
-  },
-  "export_format": "xls"
-}
-```
-
-```json
-{
-  "scenario": "market-research",
-  "site": "CA",
-  "period": "nearly",
-  "params": {
-    "departmentKeyword": "Baby Diapers",
-    "newReleaseNum": 3
-  },
-  "export_format": "xls"
-}
-```
-
-```json
-{
-  "scenario": "product-research",
-  "site": "US",
-  "period": "30d",
-  "params": {
-    "recommendationMode": "精品铺货"
-  }
-}
-```
-
-```json
-{
-  "scenario": "product-research",
-  "site": "US",
-  "period": "30d",
-  "params": {
-    "category": "bed frames",
-    "minSales": 300,
-    "maxReviews": 50
-  }
-}
-```
-
-```json
-{
-  "scenario": "product-research",
-  "site": "US",
-  "period": "30d",
-  "params": {
-    "minUnits": 300,
-    "maxRatings": 50,
-    "availableMonth": 6,
-    "fulfillment": ["FBA"],
-    "badgeNR": true
-  }
-}
-```
-
-## Result Handling
-
-For `seller_sprite_run`, read:
-
-- `data.summary`
-- `data.job_id`
-- `data.row_count`
-- `data.export.filename`
-- `data.export.path`
-- `data.export.url`
-- `data.export.format`
-
-If `success=false`, report `error.message` and do not reuse stale files.
-
-Keep the final answer short and user-facing. Do not print the full tool call JSON, raw params, or long local paths unless the user explicitly asks for debugging details.
-
-If the tool returns `data.summary`, use that summary as the primary final answer. Do not rewrite it into raw JSON. Only add extra details when the user explicitly asks.
-
-For successful runs, use this shape:
+成功模板：
 
 ```md
 已按 `site` 做好了 `scenario title`，并导出为 `format`。
@@ -422,10 +67,8 @@ For successful runs, use this shape:
 - 导出文件: [filename](url-or-path)
 ```
 
-Rules:
+补充规则：
 
-- Put only important conditions in the first sentence, such as site, keyword, ASIN, period, or recommendation mode.
-- Prefer filename or link for the export file; avoid showing full local paths as standalone code blocks.
-- If row count is 0, say `row_count: 0` and include the parameters used only in a compact inline form.
-- If row count is 0, ask the user to confirm whether key inputs are correct before retrying. Mention likely mismatches such as marketplace/site vs ASIN region, wrong ASIN, typo in keyword, overly narrow category/filter, or an unsupported month/period. Example: `没有查到数据。请确认站点和 ASIN 是否匹配，比如 US 站不能查询只在 FR 站有效的 ASIN；也可以补充正确站点或 ASIN 后我再查。`
-- Do not expose SellerSprite account credentials.
+- 第一行只保留关键条件，如站点、关键词、ASIN、月份、推荐模式。
+- 优先展示文件名或链接，不要单独贴长本地路径。
+- `row_count=0` 时，要明确提示用户核对站点、ASIN、关键词、类目或筛选是否过窄。

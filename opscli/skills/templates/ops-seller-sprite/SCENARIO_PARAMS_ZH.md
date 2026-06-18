@@ -1,174 +1,149 @@
-# 卖家精灵场景参数说明
+# 卖家精灵场景参数手册
 
-## 公共参数
+本文件是 `ops-seller-sprite` 的唯一参数参考。`SKILL.md` 和 `SKILL_MCP.md` 只保留入口和执行规则；场景映射、参数词典、默认值、别名和类目口径统一以本文件为准。
 
-- `site`：站点，如美国站 `US`、日本站 `JP`、德国站 `DE`、英国站 `UK`、法国站 `FR`、意大利站 `IT`、西班牙站 `ES`、加拿大站 `CA`、印度站 `IN`、墨西哥站 `MX`
-- `period`：周期，如近 30 天 `30d`、最近 `nearly`、指定月份 `2026-03`
+## 场景映射
+
+| 用户表达 | `scenario` |
+| --- | --- |
+| 查竞品 / 查产品 / 选竞品 / competitor lookup | `competitor-lookup` |
+| 选产品 / product research | `product-research` |
+| 关键词挖掘 / keyword mining | `keyword-miner` |
+| 关键词反查 / reverse ASIN | `keyword-reverse` |
+| 查流量来源 / traffic source | `traffic-source` |
+| 选市场 / market research | `market-research` |
+| Listing panorama / listing analysis | `listing-analysis` |
+
+## 公共参数与默认值
+
+- `site`：站点，如 `US`、`JP`、`DE`、`UK`、`FR`、`IT`、`ES`、`CA`、`IN`、`MX`
+- `period`：周期，如 `30d`、`nearly`、`2026-03`
 - `page_size`：每页数量，默认 `100`
-- `export_format`：导出格式，默认 `xls`；可省略或显式传 `xls`
+- `export_format`：默认 `xls`
 
-注意：`product-research` 里的“月份 / 数据月份 / 2026-04”应传公共参数 `period`，不是 `putawayMonth`。`putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
+默认值：
 
-## 查竞品 `competitor-lookup`
+| 字段 | 默认值 |
+| --- | --- |
+| `site` | `US` |
+| `period` | `30d` |
+| `page_size` | `100` |
+| `export_format` | `xls` |
 
-必填，任选一种：
+关键注意：
 
-- `keyword`：关键词
-- `brand`：品牌名
-- `sellerName`：卖家名称
-- `asins`：ASIN 列表
-- Amazon 商品链接：亚马逊商品链接，程序会提取 ASIN
+- `product-research` 里的“月份 / 数据月份 / 2026-04”应传顶层 `period`，不是 `putawayMonth`。
+- `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
+- `competitor-lookup` 收到 Amazon 商品链接时，应先提取 ASIN，再传 `params.asins`。
+- `competitor-lookup` 如果用户只给了单个 `asin`，也应先归一化成 `params.asins` 再执行。
 
-可选：
+## 缺参澄清规则
 
-- `node` / `category` / `nodeIdPath` / `nodeIdPaths`：类目名称、完整类目路径或节点 ID 路径。
+- 场景不明确时先澄清，不要直接跑。
+- 只问必填，不问可选。
+- `competitor-lookup` 至少需要 `keyword`、`brand`、`sellerName`、`asins` 或 Amazon 商品链接中的一种。
+- `competitor-lookup` 缺少上述主筛选条件时，应在本地快速报错或继续澄清，不要把无效请求拖成 MCP 30 秒超时。
+- `keyword-reverse` 必须有 `asin`。
+- `traffic-source` 必须有关键词或 ASIN。
+- `product-research`、`market-research` 虽然没有硬性必填，但用户只说“跑一下”“看下市场”时仍应先确认意图。
 
-## 选产品 `product-research`
+## 场景参数速查
 
-必填：无
+| `scenario` | 必填 | 常用可选参数 | 默认重点 |
+| --- | --- | --- | --- |
+| `competitor-lookup` | `keyword` / `brand` / `sellerName` / `asins` / 商品链接 五选一；单个 `asin` 需先转成 `asins` | `node` / `category` / `nodeIdPath` / `nodeIdPaths` | `page=1`，按销量倒序，`lowPrice=N` |
+| `product-research` | 无 | `recommendationMode`、类目参数、销量/价格/评分/卖家/关键词筛选 | `page=1`，`selectType=2`，按 `total_units` 倒序，`smallAndLight=N`，`lowPrice=N` |
+| `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
+| `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
+| `traffic-source` | 关键词或 ASIN | `keyword`、`asin`、`asins`、`order`、`desc` | `pageNo=1`，`order=10`，`desc=true` |
+| `market-research` | 无 | `departmentKeyword` / `category`、`node` / `nodeIdPath`、`newReleaseNum`、`topn`、市场指标筛选 | `sampleNumber=1`，`topn=10`，`newReleaseNum=6`，按 `total_sales` 倒序 |
+| `listing-analysis` | `asin` | `station`、`pollAttempts` / `maxPolls`、`pollIntervalSeconds` / `pollInterval` | `station=GLOBAL` |
 
-可选：
+## `product-research` 重点参数
 
-- `recommendationMode`：推荐模式
-- `nodeIdPaths` / `node` / `category` / `nodeIdPath`：类目名称、完整类目路径或节点 ID 路径。确认候选类目后，优先传 `nodeIdPaths` 数组。
-- `productTags`：商品标识，数组，如 `BestSeller`、`AmazonChoice`、`NewRelease`
-- `sellerTypes`：配送方式，数组，如 `AMZ`、`FBA`、`FBM`
-- `sellerNationList`：卖家所属地，数组，如 `CN`、`US`、`JP`
-- `pkgDimensionTypeList`：包装尺寸分段，数组，如 `SS`、`LS`、`SB`、`LB`、`ELO`、`EL5O`、`EL7O`、`EL15O`、`O`
-- `video`：主图视频，`Y` 表示含视频，`N` 表示不含视频
-- `lowPrice`：低价商品，`Y` / `N`
-- `smallAndLight`：商品资格，常用 `N` 或 `lowPrice`
-- `filterSub`：是否只看所选子类目排名
-- `matchType`：关键词匹配方式，`0` 模糊匹配，`1` 词组匹配，`2` 精准匹配
+### 推荐模式
 
-销售表现：
-
-- `minSales` / `maxSales`：最低月销量 / 最高月销量
-- `minAmount` / `maxAmount`：最低月销售额 / 最高月销售额
-- `minAmzUnit` / `maxAmzUnit`：最低子体销量 / 最高子体销量
-- `minTotalUnitsGrowth` / `maxTotalUnitsGrowth`：最低月销量增长率 / 最高月销量增长率
-- `minRanking` / `maxRanking`：最低大类 BSR / 最高大类 BSR
-- `minSubBsrRank` / `maxSubBsrRank`：最低小类 BSR / 最高小类 BSR
-- `minRankingCv` / `maxRankingCv`：最低 BSR 增长数 / 最高 BSR 增长数
-- `minRankingCr` / `maxRankingCr`：最低 BSR 增长率 / 最高 BSR 增长率
-
-产品信息：
-
-- `minVariations` / `maxVariations`：最低变体数 / 最高变体数
-- `minQuestions` / `maxQuestions`：最低 Q&A / 最高 Q&A
-- `minReviewsGrouth` / `maxReviewsGrouth`：最低月评新增 / 最高月评新增
-- `minReviewsRate` / `maxReviewsRate`：最低留评率 / 最高留评率
-- `minProfit` / `maxProfit`：最低毛利率 / 最高毛利率
-- `lqsFrom` / `lqsTo`：最低 LQS / 最高 LQS
-- `minPrice` / `maxPrice`：最低价 / 最高价
-- `minReviews` / `maxReviews`：最低评分数 / 最高评分数
-- `minReviewRating` / `maxReviewRating`：最低评分 / 最高评分
-- `minFba` / `maxFba`：最低 FBA 运费 / 最高 FBA 运费
-- `putawayMonth`：上架月数，不是数据月份；如 `1` 表示近 30 天，`3` 表示近 3 个月，`6` 表示近半年
-- `minWeights` / `maxWeights`：最低包装重量 / 最高包装重量
-- `weightUnit`：重量单位，如 `g`、`kg`、`oz`、`lb`
-- `minDeliveryPrice` / `maxDeliveryPrice`：最低买家运费 / 最高买家运费
-- `minSellers` / `maxSellers`：最低卖家数 / 最高卖家数
-
-竞品筛选：
-
-- `includeBrands` / `excludeBrands`：包含品牌 / 排除品牌
-- `includeSellers` / `excludeSellers`：包含卖家 / 排除卖家
-- `keywords`：包含关键词
-- `outOfKeywords`：排除关键词
-
-推荐模式可选：
+`recommendationMode` 可用值：
 
 `低价长尾选品`、`研发新品榜`、`潜力单变体`、`销量飙升`、`潜力市场`、`未被满足的市场`、`不压库存的市场`、`投机市场`、`高需求低要求市场`、`全品类铺货`、`精品铺货`、`低价商品`、`新手推荐`
 
-官方别名：
+推荐模式会展开为一组筛选条件；如果用户同时显式给出同名筛选条件，以用户条件为准。
 
-- `minUnits` / `maxUnits`：最低销量 / 最高销量
-- `minRevenue` / `maxRevenue`：最低销售额 / 最高销售额
-- `minUnitsCr` / `maxUnitsCr`：最低销量增长率 / 最高销量增长率
-- `minRatings` / `maxRatings`：最低评分数 / 最高评分数
-- `minRatingsCv` / `maxRatingsCv`：最低月评新增 / 最高月评新增
-- `minStar` / `maxStar`：最低星级 / 最高星级
-- `availableMonth`：上架月数
-- `fulfillment`：配送方式
-- `badgeBS` / `badgeAC` / `badgeNR`：Best Seller / Amazon's Choice / New Release 标记
-- `variation`：变体数
-- `minBsr` / `maxBsr`：最低 BSR / 最高 BSR
-- `minBsrCv` / `maxBsrCv`：最低 BSR 增长数 / 最高 BSR 增长数
-- `minBsrCr` / `maxBsrCr`：最低 BSR 增长率 / 最高 BSR 增长率
-- `minLqs` / `maxLqs`：最低 LQS / 最高 LQS
-- `dimensionType`：包装尺寸分段
-- `sellerNation`：卖家所属地
-- `excludeKeywords`：排除关键词
+### 常用中文字段
 
-## 关键词挖掘 `keyword-miner`
+| 中文含义 | `params` 字段 |
+| --- | --- |
+| 类目 | `nodeIdPaths` / `node` / `category` / `nodeIdPath` |
+| 月销量 | `minSales` / `maxSales` |
+| 月销售额 | `minAmount` / `maxAmount` |
+| 子体销量 | `minAmzUnit` / `maxAmzUnit` |
+| 月销量增长率 | `minTotalUnitsGrowth` / `maxTotalUnitsGrowth` |
+| 大类 BSR | `minRanking` / `maxRanking` |
+| 小类 BSR | `minSubBsrRank` / `maxSubBsrRank` |
+| BSR 增长数 / 增长率 | `minRankingCv` / `maxRankingCv`、`minRankingCr` / `maxRankingCr` |
+| 变体数 | `minVariations` / `maxVariations` |
+| Q&A | `minQuestions` / `maxQuestions` |
+| 月评新增 / 留评率 | `minReviewsGrouth` / `maxReviewsGrouth`、`minReviewsRate` / `maxReviewsRate` |
+| 毛利率 / LQS | `minProfit` / `maxProfit`、`lqsFrom` / `lqsTo` |
+| 价格 | `minPrice` / `maxPrice` |
+| 评分数 / 评分 | `minReviews` / `maxReviews`、`minReviewRating` / `maxReviewRating` |
+| FBA 运费 | `minFba` / `maxFba` |
+| 上架月数 | `putawayMonth` |
+| 包装重量 | `minWeights` / `maxWeights`，配合 `weightUnit` |
+| 买家运费 | `minDeliveryPrice` / `maxDeliveryPrice` |
+| 卖家数 | `minSellers` / `maxSellers` |
+| 卖家所属地 | `sellerNationList` |
+| 包含 / 排除品牌 | `includeBrands` / `excludeBrands` |
+| 包含 / 排除卖家 | `includeSellers` / `excludeSellers` |
+| 包含 / 排除关键词 | `keywords` / `outOfKeywords` |
 
-必填：
+### 枚举参数
 
-- `keyword`：关键词
+- `productTags`：`BestSeller`、`AmazonChoice`、`NewRelease`、`A+`、`NonA+`
+- `sellerTypes`：`AMZ`、`FBA`、`FBM`
+- `pkgDimensionTypeList`：`SS`、`LS`、`SB`、`LB`、`ELO`、`EL5O`、`EL7O`、`EL15O`、`O`
+- `sellerNationList`：如 `CN`、`US`、`JP`、`GB`、`DE`
+- `video`：`Y` / `N`
+- `lowPrice`：`Y` / `N`
+- `smallAndLight`：常用 `N` 或 `lowPrice`
+- `filterSub`：是否只看所选子类目排名
+- `matchType`：`0` 模糊匹配，`1` 词组匹配，`2` 精准匹配
 
-可选：
+关于 `A+` / `NonA+`：
 
-- `filterRootWord`：是否过滤同根词
-- `amazonChoice`：是否只看 Amazon's Choice
-- `includeHighFrequency`：是否包含高频词
+- 仅勾选 A+：传 `"A+"`
+- 仅勾选不含 A+：传 `"NonA+"`
+- 两者都勾选或都不勾选：都不要传
 
-## 关键词反查 `keyword-reverse`
+### 官方别名
 
-必填：
+如果同时给了官方别名和内部字段，以内部字段为准。
 
-- `asin`：ASIN
+| 官方别名 | 内部字段 |
+| --- | --- |
+| `minUnits` / `maxUnits` | `minSales` / `maxSales` |
+| `minRevenue` / `maxRevenue` | `minAmount` / `maxAmount` |
+| `minUnitsCr` / `maxUnitsCr` | `minTotalUnitsGrowth` / `maxTotalUnitsGrowth` |
+| `minRatings` / `maxRatings` | `minReviews` / `maxReviews` |
+| `minRatingsCv` / `maxRatingsCv` | `minReviewsGrouth` / `maxReviewsGrouth` |
+| `minStar` / `maxStar` | `minReviewRating` / `maxReviewRating` |
+| `availableMonth` | `putawayMonth` |
+| `fulfillment` | `sellerTypes` |
+| `badgeBS=true` | 向 `productTags` 添加 `BestSeller` |
+| `badgeAC=true` | 向 `productTags` 添加 `AmazonChoice` |
+| `badgeNR=true` | `productTags=["NewRelease"]` |
+| `variation` | `maxVariations` |
+| `minBsr` / `maxBsr` | `minRanking` / `maxRanking` |
+| `minBsrCv` / `maxBsrCv` | `minRankingCv` / `maxRankingCv` |
+| `minBsrCr` / `maxBsrCr` | `minRankingCr` / `maxRankingCr` |
+| `minLqs` / `maxLqs` | `lqsFrom` / `lqsTo` |
+| `dimensionType` | `pkgDimensionTypeList` |
+| `sellerNation` | `sellerNationList` |
+| `excludeKeywords` | `outOfKeywords` |
 
-可选：
+## `market-research` 常用字段
 
-- `badges`：流量词类型标签
-
-## 查流量来源 `traffic-source`
-
-必填：
-
-- `keywordOrAsin`：关键词或 ASIN
-
-可选：
-
-- `keyword`：关键词
-- `asin`：单个 ASIN
-- `asins`：ASIN 列表
-- `order`：排序字段
-- `desc`：是否倒序
-
-## Listing 全景分析 `listing-analysis`
-
-必填：
-
-- `asin`：ASIN
-
-可选：
-
-- `station`：分析站点，默认 `GLOBAL`
-- `pollAttempts` / `maxPolls`：最多轮询次数，默认 `90`
-- `pollIntervalSeconds` / `pollInterval`：轮询间隔秒数，默认 `2`
-
-说明：
-
-- 首先请求 `/v3/api/ai-workflow/listing-analysis` 创建任务。
-- 返回 `taskId` 后轮询 `/v3/api/ai-analysis/task/{taskId}`。
-- 报告正文在结果的 `data.content` 中；导出格式仍使用默认 `xls`。
-
-## 选市场 `market-research`
-
-必填：无
-
-可选：
-
-- `departmentKeyword` / `category`：市场 / 类目关键词，按卖家精灵表单的 `departmentKeyword` 搜索；优先传 `departmentKeyword`
-- `node` / `nodeIdPath`：精确类目节点路径，仅在已知 SellerSprite nodeIdPath 时使用
-- `newReleaseNum` / `newReleaseMonths`：新品月份数
-- `topn`：取 Top N 数据
-
-常用中文字段：
-
-| 中文含义 | params 字段 |
+| 中文含义 | `params` 字段 |
 | --- | --- |
 | 类目关键词搜索 | `departmentKeyword` / `category` |
 | 精确类目节点 | `node` / `nodeIdPath` |
@@ -184,8 +159,7 @@
 | 平均价格 | `minAvgPrice` / `maxAvgPrice` |
 | 平均体积 | `minAvgVolume` / `maxAvgVolume` |
 | 头部 Listing 月均销量 | `minHeadListingAvgSales` / `maxHeadListingAvgSales` |
-| 平均评分数 | `minAvgReviews` / `maxAvgReviews` |
-| 平均星级 | `minAvgRating` / `maxAvgRating` |
+| 平均评分数 / 平均星级 | `minAvgReviews` / `maxAvgReviews`、`minAvgRating` / `maxAvgRating` |
 | 平均毛利率 | `minAvgProfit` / `maxAvgProfit` |
 | 头部 Listing 月均销售额 | `minHeadListingAvgRevenue` / `maxHeadListingAvgRevenue` |
 | 品牌数量 | `minBrands` / `maxBrands` |
@@ -203,18 +177,22 @@
 | 新品平均价格 | `minNewAvgPrice` / `maxNewAvgPrice` |
 | 新品月均销售额 | `minNewAvgRevenue` / `maxNewAvgRevenue` |
 | 新品数量 | `minNewCount` / `maxNewCount` |
-| 新品平均星级 | `minNewAvgRating` / `maxNewAvgRating` |
-| 新品平均评分数 | `minNewAvgReviews` / `maxNewAvgReviews` |
-| 新品月均销量 | `minNewAvgSales` / `maxNewAvgSales` |
+| 新品平均星级 / 评分数 / 月均销量 | `minNewAvgRating` / `maxNewAvgRating`、`minNewAvgReviews` / `maxNewAvgReviews`、`minNewAvgSales` / `maxNewAvgSales` |
 
-## 类目参数注意
+## 类目规则
 
-`product-research`、`competitor-lookup` 可以直接传自然语言类目，后端会通过卖家精灵类目接口 `/v2/competitor-lookup/nodes` 解析。
+### `product-research` / `competitor-lookup`
 
-- 可传：`bath`、`bed frames`、`Home & Kitchen:Bedding:Bed Skirts`
-- 可传节点路径：`1055398:1063236`
-- 如果接口返回多个候选，但其中有一个候选与输入的完整类目路径或叶子类目名完全匹配，后端会直接使用该候选继续查询。
-- 如果接口返回多个候选，任务会暂停并返回候选 `nodeIdPath` / 完整类目路径，需要用户补充后再查。用户确认候选后，`product-research` 优先用 `nodeIdPaths: ["..."]` 重试，不能省略类目条件。
-- 不要猜测节点 ID。
+- 可以直接传自然语言类目，如 `bath`、`bed frames`、`Home & Kitchen:Bedding:Bed Skirts`
+- 也可以直接传数值节点路径，如 `1055398:1063236`
+- 后端会通过卖家精灵类目接口解析类目文本
+- 如果只返回一个候选，后端会直接继续查询
+- 如果返回多个候选且其中有一个和用户输入完全匹配，后端会优先使用完全匹配项
+- 如果返回多个候选但无法唯一确认，必须停下来让用户选，不要猜
+- `product-research` 在用户确认类目后，优先传 `nodeIdPaths: ["..."]`，不要丢掉类目条件
 
-`market-research` 优先使用 `departmentKeyword` 做类目 / 市场关键词搜索；`category` 只是别名，也会按 `departmentKeyword` 提交，`nodeIdPath` 保持空。只有用户明确提供 SellerSprite 节点路径并要求精确节点筛选时，才用 `node` / `nodeIdPath`。
+### `market-research`
+
+- 优先用 `departmentKeyword` 做类目 / 市场关键词搜索
+- `category` 只是 `departmentKeyword` 的别名
+- 只有用户明确给出 SellerSprite 节点路径并要求精确节点筛选时，才使用 `node` / `nodeIdPath`

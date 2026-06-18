@@ -2,7 +2,6 @@ import asyncio
 
 from opscli.mcp.tools import seller_sprite as seller_sprite_tools
 from opscli.mcp.server import _quota_wrap
-from opscli.seller_sprite.domain.models import SellerSpriteScenarioResult
 
 
 def _run(coro):
@@ -10,43 +9,33 @@ def _run(coro):
 
 
 class DummyManager:
-    last_request = None
-    start_calls = 0
-
     def scenarios(self):
         return [{"scenario_id": "keyword-reverse", "title": "关键词反查"}]
 
-    async def start(self, request):
+
+class DummyScheduler:
+    last_request = None
+    enqueue_calls = 0
+
+    async def enqueue(self, request):
         self.__class__.last_request = request
-        self.__class__.start_calls += 1
+        self.__class__.enqueue_calls += 1
         return {
             "job_id": "job-async-1",
             "scenario": request.scenario,
             "site": request.site,
             "period": request.period,
             "state": "queued",
-            "stage": "created",
+            "stage": "queued",
+            "position": 1,
         }
-
-    def browser_route_busy(self, request):
-        return False
-
-    async def run(self, request):
-        self.__class__.last_request = request
-        return SellerSpriteScenarioResult.empty(
-            job_id="job-1",
-            scenario=request.scenario,
-            site=request.site,
-            period=request.period,
-            root_dir=__import__("pathlib").Path("/tmp/job-1"),
-            params_path=__import__("pathlib").Path("/tmp/job-1/params.json"),
-            raw_path=__import__("pathlib").Path("/tmp/job-1/raw.json"),
-            result_path=__import__("pathlib").Path("/tmp/job-1/result.json"),
-        )
 
     def job_status(self, job_id):
         return {
             "job_id": job_id,
+            "state": "queued",
+            "stage": "queued",
+            "position": 2,
             "row_count": 1,
             "export": {"path": f"/tmp/{job_id}.xlsx", "filename": f"{job_id}.xlsx"},
         }
@@ -61,10 +50,17 @@ def test_seller_sprite_scenarios_uses_manager(monkeypatch):
     assert result["data"][0]["scenario_id"] == "keyword-reverse"
 
 
+def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
+    result = _run(seller_sprite_tools.seller_sprite_spec_must_read())
+
+    assert result["success"] is True
+    assert "# 卖家精灵场景参数手册" in result["data"]["spec"]
+
+
 def test_seller_sprite_run_accepts_params_json_string(monkeypatch):
-    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda **kwargs: DummyManager())
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
     monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
-    DummyManager.start_calls = 0
+    DummyScheduler.enqueue_calls = 0
 
     result = _run(
         seller_sprite_tools.seller_sprite_run(
@@ -77,18 +73,20 @@ def test_seller_sprite_run_accepts_params_json_string(monkeypatch):
     )
 
     assert result["success"] is True
-    assert result["data"]["job_id"] == "job-1"
-    assert DummyManager.last_request.params == {"asin": "B07YRMT36L"}
-    assert DummyManager.last_request.page_size == 100
-    assert DummyManager.last_request.export_format == "json"
-    assert DummyManager.last_request.mode is None
-    assert DummyManager.start_calls == 0
+    assert result["data"]["job_id"] == "job-async-1"
+    assert result["data"]["state"] == "queued"
+    assert result["data"]["position"] == 1
+    assert DummyScheduler.last_request.params == {"asin": "B07YRMT36L"}
+    assert DummyScheduler.last_request.page_size == 100
+    assert DummyScheduler.last_request.export_format == "json"
+    assert DummyScheduler.last_request.mode == "browser-route"
+    assert DummyScheduler.enqueue_calls == 1
 
 
 def test_seller_sprite_start_returns_queued_job(monkeypatch):
-    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda **kwargs: DummyManager())
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
     monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
-    DummyManager.start_calls = 0
+    DummyScheduler.enqueue_calls = 0
 
     result = _run(
         seller_sprite_tools.seller_sprite_start(
@@ -103,18 +101,19 @@ def test_seller_sprite_start_returns_queued_job(monkeypatch):
     assert result["success"] is True
     assert result["data"]["job_id"] == "job-async-1"
     assert result["data"]["state"] == "queued"
-    assert DummyManager.start_calls == 1
-    assert DummyManager.last_request.scenario == "product-research"
-    assert DummyManager.last_request.params == {
+    assert DummyScheduler.enqueue_calls == 1
+    assert DummyScheduler.last_request.scenario == "product-research"
+    assert DummyScheduler.last_request.params == {
         "nodeIdPaths": ["1055398:1063306:1063312:10824421"]
     }
-    assert DummyManager.last_request.export_format == "json"
+    assert DummyScheduler.last_request.export_format == "json"
+    assert DummyScheduler.last_request.mode == "browser-route"
 
 
-def test_seller_sprite_run_auto_starts_long_running_scenario(monkeypatch):
-    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda **kwargs: DummyManager())
+def test_seller_sprite_run_always_enqueues(monkeypatch):
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
     monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
-    DummyManager.start_calls = 0
+    DummyScheduler.enqueue_calls = 0
 
     result = _run(
         seller_sprite_tools.seller_sprite_run(
@@ -128,41 +127,28 @@ def test_seller_sprite_run_auto_starts_long_running_scenario(monkeypatch):
     assert result["success"] is True
     assert result["data"]["job_id"] == "job-async-1"
     assert result["data"]["state"] == "queued"
-    assert DummyManager.start_calls == 1
-
-
-def test_seller_sprite_run_auto_starts_when_browser_queue_is_busy(monkeypatch):
-    class BusyManager(DummyManager):
-        def browser_route_busy(self, request):
-            return True
-
-    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda **kwargs: BusyManager())
-    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
-    BusyManager.start_calls = 0
-
-    result = _run(
-        seller_sprite_tools.seller_sprite_run(
-            scenario="product-research",
-            site="US",
-            period="30d",
-            params={"nodeIdPaths": ["1055398:1063306:1063312:10824421"]},
-        )
-    )
-
-    assert result["success"] is True
-    assert result["data"]["job_id"] == "job-async-1"
-    assert result["data"]["state"] == "queued"
-    assert BusyManager.start_calls == 1
+    assert DummyScheduler.enqueue_calls == 1
 
 
 def test_seller_sprite_export_returns_export_info(monkeypatch):
-    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda: DummyManager())
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
 
     result = _run(seller_sprite_tools.seller_sprite_export("job-1"))
 
     assert result["success"] is True
     assert result["data"]["path"] == "/tmp/job-1.xlsx"
     assert result["data"]["url"].startswith("file://")
+
+
+def test_seller_sprite_job_status_reads_scheduler(monkeypatch):
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
+
+    result = _run(seller_sprite_tools.seller_sprite_job_status("job-2"))
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "job-2"
+    assert result["data"]["state"] == "queued"
+    assert result["data"]["position"] == 2
 
 
 def test_seller_sprite_run_is_wrapped_by_quota(monkeypatch):
