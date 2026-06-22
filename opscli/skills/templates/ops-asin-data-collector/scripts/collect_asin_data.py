@@ -76,12 +76,45 @@ CRAWLER_CURRENT_FIELDS = (
 CRAWLER_FIELD_LABELS = {field: label for field, label, _ in CRAWLER_CURRENT_FIELDS}
 CRAWLER_JSON_FIELDS = {field for field, _, cast_to_string in CRAWLER_CURRENT_FIELDS if cast_to_string}
 DEFAULT_RUFUS_QUESTIONS = (
-    "标题清晰度：分析 ASIN {{asin}} 的标题是否清楚，是否能让买家搜索到产品并愿意点击查看详情？按：标题｜问题｜依据｜建议改为 输出。",
-    "五点优化方向：分析 ASIN {{asin}} 的五点卖点，从消费者决策路径与商品信息表达优化的角度，对该商品进行系统分析。按：五点｜问题｜依据｜建议改为 输出。",
-    "图片优化方向：分析 ASIN {{asin}} 的图片是否解决买家购买疑问，从消费者决策路径与商品信息表达优化的角度。按：图片｜问题｜依据｜每张图建议改为 输出。",
-    "A+优化方向：分析 ASIN {{asin}} 的 A+ 是否补充了关键信息、增强购买信任。按：A+｜问题｜依据｜每张图建议改为 输出。",
-    "评论/星级优化方向：分析 ASIN {{asin}} 的评论中买家最常夸和最常抱怨的点，判断页面是否提前说明。按：评论｜问题｜依据｜建议改为 输出。",
-    "整体优化：从标题、五点、图片、A+、评论中，找出 ASIN {{asin}} 最优先修改的一处。按：整体｜问题｜依据｜建议改为 输出。",
+    "分析这个ASIN {{asin}}的标题是否清楚，是否能让买家搜索到产品并愿意点击查看详情？按这个格式输出：\n"
+    "1、当前标题内容\n"
+    "2、问题逐项分析\n"
+    "问题类型｜具体问题 ｜ 问题依据｜建议修改\n"
+    "3、建议优化标题\n"
+    "4、优化核心逻辑总结",
+    "分析这个ASIN {{asin}} 的五点卖点，从消费者决策路径与商品信息表达优化的角度，对该商品进行系统分析。按这个格式输出：\n"
+    "1、当前五点内容\n"
+    "2、问题逐项分析 \n"
+    "五点序号｜问题类型｜具体问题 ｜ 问题依据｜建议修改\n"
+    "3、建议优化五点\n"
+    "4、优化核心逻辑总结",
+    "分析这个ASIN {{asin}} 的图片是否解决买家购买疑问，从消费者决策路径与商品信息表达优化的角度。按这个格式输出：\n"
+    "1、当前图片整体问题 \n"
+    "2、问题逐项分析 \n"
+    "每张图序号｜目标｜具体问题 ｜ 核心依据｜优化方案\n"
+    "3、优化优先级总结\n"
+    "优先级｜图片序号｜核心价值\n"
+    "4、优化核心逻辑总结",
+    "分析这个ASIN {{asin}} 的 A+ 是否补充了关键信息、增强购买信任。按这个格式输出：\n"
+    "1、当前A+内容整体问题\n"
+    "2、问题逐项分析 \n"
+    "每个模块｜目标｜具体问题 ｜ 核心依据｜优化方案\n"
+    "3、优化优先级总结\n"
+    "优先级｜优化项｜预期效果\n"
+    "4、优化核心逻辑总结",
+    "分析这个ASIN {{asin}} 的评论中买家最常夸和最常抱怨的点，判断产品页面是否提前说明，并且需如何优化产品，按这个格式输出：\n"
+    "1、评价整体总结分析\n"
+    "2、问题逐项分析\n"
+    "问题类型｜风险等级｜影响范围｜评论依据｜产品页面现状｜优化方案\n"
+    "3、优化优先级总结\n"
+    "优先级｜优化项｜预期效果\n"
+    "4、优化核心逻辑总结",
+    "从标题、五点、图片、A+、评论中，找出这个 ASIN {{asin}} 最优先修改的一处。按这个格式输出：\n"
+    "1、核心问题定位\n"
+    "2、最优先修改原因\n"
+    "问题维度｜影响范围｜具体分析｜建议方案\n"
+    "3、总体执行修改方案\n"
+    "4、优化核心逻辑总结",
 )
 RUFUS_REPORT_PATH_PATTERN = re.compile(r"Rufus 答案报告已保存：\s*(.+?\.md)")
 STATUS_ZH = {
@@ -348,6 +381,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rufus-skills-dir", default=".agents/skills")
     parser.add_argument("--rufus-timeout-seconds", type=int, default=180)
     parser.add_argument("--rufus-login-timeout-seconds", type=int, default=180)
+    parser.add_argument("--rufus-parallel", action="store_true", help="Run Rufus questions concurrently")
+    parser.add_argument("--rufus-concurrency", type=int, default=3, help="Rufus concurrency when --rufus-parallel is set")
+    parser.add_argument("--rufus-retry", type=int, default=0, help="Retry invalid Rufus answers per question")
+    parser.add_argument("--rufus-strict-answer", action="store_true", help="Fail when Rufus answers remain invalid after retry")
     parser.add_argument(
         "--skip-rufus-login-recovery",
         action="store_true",
@@ -378,6 +415,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--rufus-timeout-seconds must be >= 1")
     if args.rufus_login_timeout_seconds < 1:
         parser.error("--rufus-login-timeout-seconds must be >= 1")
+    if args.rufus_concurrency < 1:
+        parser.error("--rufus-concurrency must be >= 1")
+    if args.rufus_retry < 0:
+        parser.error("--rufus-retry must be >= 0")
     return args
 
 
@@ -929,6 +970,13 @@ def build_rufus_get_backend_command(
         "--no-upload-payload",
         "--pretty",
     ]
+    if getattr(args, "rufus_parallel", False):
+        command.append("--parallel")
+        command.extend(["--concurrency", str(args.rufus_concurrency)])
+    if int(getattr(args, "rufus_retry", 0) or 0) > 0:
+        command.extend(["--retry", str(args.rufus_retry)])
+    if getattr(args, "rufus_strict_answer", False):
+        command.append("--strict-answer")
     for question in questions:
         command.extend(["-q", question])
     return command
@@ -1936,12 +1984,13 @@ def parse_rufus_report_text(text: str) -> list[dict[str, Any]]:
 
     for raw_line in (text or "").splitlines():
         line = raw_line.rstrip()
-        question_match = re.match(r"^##\s+第\s*(\d+)\s*题[:：]\s*(.+?)\s*$", line)
+        question_match = re.match(r"^##\s+第\s*(\d+)\s*题(?:[:：]\s*(.*?))?\s*$", line)
         if question_match:
             flush_current()
+            question_text = (question_match.group(2) or "").strip()
             current = {
                 "index": int(question_match.group(1)),
-                "question": question_match.group(2).strip(),
+                "question": [question_text] if question_text else [],
                 "related_products": [],
                 "answer": [],
                 "recommended_asins": [],
@@ -1951,12 +2000,20 @@ def parse_rufus_report_text(text: str) -> list[dict[str, Any]]:
             continue
         if current is None:
             continue
-        heading_match = re.match(r"^###\s+(.+?)\s*$", line)
+        inline_question_match = re.match(r"^问题[:：]\s*(.*?)\s*$", line)
+        if inline_question_match and current_field is None:
+            current_field = "question"
+            inline_question = inline_question_match.group(1).strip()
+            if inline_question:
+                current["question"].append(inline_question)
+            continue
+        heading_match = re.match(r"^#{3,6}\s+(.+?)\s*$", line)
         if heading_match:
             heading = heading_match.group(1).strip()
             current_field = {
                 "相关产品": "related_products",
                 "答案": "answer",
+                "Rufus 展示内容": "answer",
                 "推荐 ASIN": "recommended_asins",
                 "推荐ASIN": "recommended_asins",
                 "总结": "summary",
@@ -2537,6 +2594,10 @@ def build_summary(
             "rufus_questions": rufus_questions(args),
             "rufus_skills_dir": args.rufus_skills_dir,
             "rufus_timeout_seconds": args.rufus_timeout_seconds,
+            "rufus_parallel": args.rufus_parallel,
+            "rufus_concurrency": args.rufus_concurrency,
+            "rufus_retry": args.rufus_retry,
+            "rufus_strict_answer": args.rufus_strict_answer,
             "skip_rufus_login_recovery": args.skip_rufus_login_recovery,
             "sales_start": args.sales_start,
             "sales_end": args.sales_end,

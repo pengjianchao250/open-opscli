@@ -141,16 +141,26 @@ def test_amazon_rufus_get_accepts_multiple_questions(monkeypatch, tmp_path: Path
             asin="B0TEST1234",
             country="US",
             questions=questions,
+            parallel=True,
+            concurrency=2,
+            retry=1,
+            strict_answer=True,
         )
     )
 
     assert result["success"] is True
     assert captured["question"] is None
     assert captured["questions"] == questions
+    assert captured["parallel"] is True
+    assert captured["concurrency"] == 2
+    assert captured["retry"] == 1
+    assert captured["strict_answer"] is True
     assert result["data"]["question_count"] == 2
     report_text = (tmp_path / result["data"]["report_path"]).read_text(encoding="utf-8")
-    assert "## 第 1 题：这个商品适合送礼吗？" in report_text
-    assert "## 第 2 题：差评主要集中在哪些方面？" in report_text
+    assert "## 第 1 题" in report_text
+    assert "问题:\n这个商品适合送礼吗？" in report_text
+    assert "## 第 2 题" in report_text
+    assert "问题:\n差评主要集中在哪些方面？" in report_text
 
 
 def test_amazon_rufus_get_rejects_removed_cdp_options(monkeypatch, tmp_path: Path):

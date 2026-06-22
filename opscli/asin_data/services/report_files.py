@@ -94,11 +94,13 @@ class AsinReportFileClient:
         auth_client: AuthClient | None = None,
         endpoint: str = DEFAULT_REPORT_FILES_ENDPOINT,
         http_get: Callable[..., httpx.Response] | None = None,
+        http_post: Callable[..., httpx.Response] | None = None,
         ops_url: str | None = None,
     ) -> None:
         self.auth_client = auth_client or AuthClient()
         self.endpoint = endpoint
         self.http_get = http_get or httpx.get
+        self.http_post = http_post or httpx.post
         self.ops_url = _report_files_base_url(ops_url or OPS_URL)
 
     def fetch(self, *, asin: str, site: str) -> AsinReportFile:
@@ -127,6 +129,40 @@ class AsinReportFileClient:
             url=_extract_report_url(record),
             record=record if isinstance(record, dict) else None,
             raw=payload,
+        )
+
+    def upsert(
+        self,
+        *,
+        items: list[dict[str, Any]],
+        request_id: str | None = None,
+        source: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Submit ASIN report file records to the ops data-metrics service."""
+        headers, cookies = self.auth_client.build_request_auth("ops")
+        headers.update(get_mcp_request_headers())
+        headers.setdefault("Content-Type", "application/json")
+        body: dict[str, Any] = {"items": items}
+        if request_id:
+            body["request_id"] = request_id
+        if source:
+            body["source"] = source
+        if idempotency_key:
+            body["idempotency_key"] = idempotency_key
+
+        response = self.http_post(
+            self._resolve_endpoint(),
+            json=body,
+            headers=headers,
+            cookies=cookies,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        return parse_remote_response(
+            response,
+            http_error_cls=AsinReportFileHttpError,
+            business_error_cls=AsinReportFileBusinessError,
+            bad_json_error_cls=AsinReportFileBadJsonError,
         )
 
     def _resolve_endpoint(self) -> str:

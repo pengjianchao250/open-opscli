@@ -113,7 +113,7 @@ def test_manager_renders_asin_placeholder_from_question_bank(tmp_path: Path):
                         "questions": [
                             {
                                 "id": 1,
-                                "text": "这个产品ASIN {{asin}}，标题写得清楚吗？",
+                                "text": "分析这个ASIN {{asin}}的标题是否清楚，是否能让买家搜索到产品并愿意点击查看详情？按这个格式输出：\n1、当前标题内容\n2、问题逐项分析",
                                 "position": 1,
                             }
                         ],
@@ -128,7 +128,9 @@ def test_manager_renders_asin_placeholder_from_question_bank(tmp_path: Path):
 
     questions = manager._resolve_questions(asin="b0test0001", question=None, questions=None, skills_dir=None)
 
-    assert questions == ["这个产品ASIN B0TEST0001，标题写得清楚吗？"]
+    assert questions == [
+        "分析这个ASIN B0TEST0001的标题是否清楚，是否能让买家搜索到产品并愿意点击查看详情？按这个格式输出：\n1、当前标题内容\n2、问题逐项分析"
+    ]
 
 
 def test_parser_extracts_text_from_sse_inference_event():
@@ -138,6 +140,7 @@ def test_parser_extracts_text_from_sse_inference_event():
         '',
         'event: close',
         'data: {}',
+        'data: [DONE]',
         '',
     ])
 
@@ -146,6 +149,10 @@ def test_parser_extracts_text_from_sse_inference_event():
     assert answer.text == "hello"
     assert answer.thread_id == "thread-1"
     assert answer.is_success is True
+    assert answer.has_done_marker is True
+    assert answer.raw_length == len(raw)
+    assert answer.text_length == len("hello")
+    assert answer.event_count == 2
 
 
 def test_parser_extracts_html_sections_and_top_level_thread_id():
@@ -271,7 +278,7 @@ def test_parser_extracts_asin_faceout_list_and_footer_cards():
     ]
 
 
-def test_answer_report_formatter_prefers_structured_blocks_and_related_sections():
+def test_answer_report_formatter_outputs_official_rufus_markdown():
     from opscli.amazon_rufus.services.answer_report_formatter import AnswerReportFormatter
 
     report = AnswerReportFormatter().format_data(
@@ -328,39 +335,189 @@ def test_answer_report_formatter_prefers_structured_blocks_and_related_sections(
 
     assert report == "\n".join(
         [
-            "## 第 1 题：这个商品怎么样？",
+            "# Rufus 数据 - B0TEST1234",
             "",
-            "### 相关产品",
+            "- ASIN: B0TEST1234",
+            "- 站点: US",
+            "- 状态: success",
+            "- 问题数量: 1",
+            "- 商品URL: https://www.amazon.com/dp/B0TEST1234",
+            "- 原始报告:",
+            "",
+            "## 第 1 题",
+            "",
+            "问题:",
+            "这个商品怎么样？",
+            "",
+            "#### Rufus 展示内容",
             "",
             "- B0LINK1234 - 相关商品",
             "  https://www.amazon.com/dp/B0LINK1234",
-            "",
-            "### 答案",
-            "",
-            "#### 标题",
-            "",
-            "段落",
-            "",
-            "- 要点 1",
-            "- 要点 2",
-            "",
-            "| A | B |",
-            "| --- | --- |",
-            "| 1 | 2 |",
-            "",
-            "### 推荐 ASIN",
-            "",
-            "- B0REC12345 - 推荐商品 (AsinFaceoutList)",
-            "  https://www.amazon.com/dp/B0REC12345",
-            "  推荐原因",
-            "",
-            "### 总结",
-            "",
-            "总结文本",
         ]
     )
     assert "fallback text should not appear" not in report
+    assert "推荐商品" not in report
+    assert "总结文本" not in report
     assert "seed_request" not in report
+
+
+def test_answer_report_formatter_renders_structured_listing_diagnosis_json():
+    from opscli.amazon_rufus.services.answer_report_formatter import AnswerReportFormatter
+
+    report = AnswerReportFormatter().format_data(
+        {
+            "asin": "b0fdg9nfqm",
+            "diagnosis_report": {
+                "sections": [
+                    {
+                        "index": 1,
+                        "subsections": [
+                            {
+                                "index": 1,
+                                "blocks": [
+                                    {
+                                        "type": "quote",
+                                        "text": "ANCTOR Full Corner Bed Frame with Storage Drawers",
+                                    },
+                                    {"type": "paragraph", "text": "**共约 175 字符**"},
+                                ],
+                            },
+                            {
+                                "index": 2,
+                                "table": {
+                                    "rows": [
+                                        {
+                                            "问题类型": "核心属性缺失",
+                                            "具体问题": "尺寸未写在标题中",
+                                            "问题依据": "产品有 Twin / Full 两个尺码变体",
+                                            "建议修改": "在品牌名后加入 Full Size",
+                                        }
+                                    ]
+                                },
+                            },
+                            {
+                                "index": 3,
+                                "blocks": [
+                                    {
+                                        "type": "quote",
+                                        "text": "**Full Size L-Shaped Corner Daybed Frame for Teen Bedroom**",
+                                    },
+                                    {"type": "heading", "level": 4, "text": "优化对比说明"},
+                                    {"type": "list", "items": ["Full Size 前置", "补入 L-Shaped"]},
+                                ],
+                            },
+                            {
+                                "index": 4,
+                                "table": {
+                                    "rows": [
+                                        {"逻辑维度": "Searchability", "说明": "补入高频搜索词"}
+                                    ]
+                                },
+                            },
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+
+    assert report.startswith("# ASIN B0FDG9NFQM Listing 优化诊断报告")
+    assert "## 1. 标题清晰度与点击意愿分析" in report
+    assert "> ANCTOR Full Corner Bed Frame with Storage Drawers" in report
+    assert "| 问题类型 | 具体问题 | 问题依据 | 建议修改 |" in report
+    assert "| 核心属性缺失 | 尺寸未写在标题中 | 产品有 Twin / Full 两个尺码变体 | 在品牌名后加入 Full Size |" in report
+    assert "#### 优化对比说明" in report
+    assert "- 补入 L-Shaped" in report
+    assert "| Searchability | 补入高频搜索词 |" in report
+
+
+def test_answer_report_formatter_infers_listing_diagnosis_sections_from_loose_text():
+    from opscli.amazon_rufus.services.answer_report_formatter import AnswerReportFormatter
+
+    report = AnswerReportFormatter().format_data(
+        {
+            "asin": "B0FDG9NFQM",
+            "answers": [
+                {
+                    "answer": "\n".join(
+                        [
+                            "以下是标题分析：",
+                            "当前标题：",
+                            "ANCTOR Full Corner Bed Frame with Storage Drawers, Daybed with LED Lights and Charging Station",
+                            "分析结果",
+                            "维度",
+                            "问题",
+                            "依据",
+                            "建议改为",
+                            "核心属性缺失",
+                            "尺寸未写在标题中",
+                            "产品有 Twin / Full 两个尺码变体",
+                            "加入 Full Size",
+                            "综合建议标题（参考）",
+                            "ANCTOR Full Size L-Shaped Daybed Frame with Storage Drawers",
+                            "优化点说明：",
+                            "Full Size 前置，尺寸筛选一目了然",
+                        ]
+                    )
+                }
+            ],
+        }
+    )
+
+    assert report.startswith("# ASIN B0FDG9NFQM Listing 优化诊断报告")
+    assert "### 1、当前标题内容" in report
+    assert "> ANCTOR Full Corner Bed Frame" in report
+    assert "| 问题类型 | 具体问题 | 问题依据 | 建议修改 |" in report
+    assert "| 核心属性缺失 | 尺寸未写在标题中 | 产品有 Twin / Full 两个尺码变体 | 加入 Full Size |" in report
+    assert "### 3、建议优化标题" in report
+    assert "ANCTOR Full Size L-Shaped Daybed Frame" in report
+    assert "\n无\n" not in report
+
+
+def test_render_report_cli_writes_structured_json_to_markdown(tmp_path: Path):
+    input_path = tmp_path / "rufus.json"
+    output_path = tmp_path / "report.md"
+    input_path.write_text(
+        json.dumps(
+            {
+                "asin": "B0FDG9NFQM",
+                "diagnosis_report": {
+                    "sections": [
+                        {
+                            "index": 7,
+                            "subsections": [
+                                {"index": 1, "text": "五点描述需要优先重构。"},
+                                {
+                                    "index": 2,
+                                    "table": {
+                                        "rows": [
+                                            {
+                                                "问题维度": "五点第1条定位模糊",
+                                                "影响范围": "首屏核心转化",
+                                                "具体分析": "外观描述多于买家利益",
+                                                "建议方案": "改为买家利益开头",
+                                            }
+                                        ]
+                                    },
+                                },
+                            ],
+                        }
+                    ]
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["render-report", str(input_path), "--output", str(output_path)])
+
+    assert result.exit_code == 0
+    assert "Rufus 答案报告已保存" in result.stdout
+    report = output_path.read_text(encoding="utf-8")
+    assert "# ASIN B0FDG9NFQM Listing 优化诊断报告" in report
+    assert "## 7. 最优先修改项综合判断" in report
+    assert "| 五点第1条定位模糊 | 首屏核心转化 | 外观描述多于买家利益 | 改为买家利益开头 |" in report
 
 
 def test_answer_report_formatter_falls_back_to_markdown_text():
@@ -390,7 +547,9 @@ def test_answer_report_formatter_falls_back_to_markdown_text():
         }
     )
 
-    assert "## 第 1 题：第 1 题" in report
+    assert "# Rufus 数据 - UNKNOWN" in report
+    assert "## 第 1 题" in report
+    assert "#### Rufus 展示内容" in report
     assert "# 标题" in report
     assert "- 要点 1 续行" in report
     assert "| A | B |" in report
@@ -416,8 +575,8 @@ def test_answer_report_formatter_falls_back_to_text_when_raw_blocks_are_unrender
 
     assert "正文文本" in report
     assert "第 1 题未获取到答案" not in report
-    assert "### 总结" in report
-    assert "总结文本" in report
+    assert "#### Rufus 展示内容" in report
+    assert "总结文本" not in report
 
 
 def test_answer_report_formatter_omits_missing_answer_when_summary_exists():
@@ -438,9 +597,21 @@ def test_answer_report_formatter_omits_missing_answer_when_summary_exists():
 
     assert report == "\n".join(
         [
-            "## 第 1 题：第 1 题",
+            "# Rufus 数据 - UNKNOWN",
             "",
-            "### 总结",
+            "- ASIN: UNKNOWN",
+            "- 站点:",
+            "- 状态: success",
+            "- 问题数量: 1",
+            "- 商品URL:",
+            "- 原始报告:",
+            "",
+            "## 第 1 题",
+            "",
+            "问题:",
+            "第 1 题",
+            "",
+            "#### Rufus 展示内容",
             "",
             "总结文本",
         ]
@@ -461,7 +632,10 @@ def test_answer_report_writer_writes_relative_report_path(tmp_path: Path):
 
     assert re.fullmatch(r"B0TEST1234-\d{8}-\d{6}\.md", report_path.name)
     assert report_path.parent == tmp_path / "output" / "amazon-rufus"
-    assert "适合送礼" in report_path.read_text(encoding="utf-8")
+    report_text = report_path.read_text(encoding="utf-8")
+    assert "# Rufus 数据 - B0TEST1234" in report_text
+    assert f"- 原始报告: {report_path.as_posix()}" in report_text
+    assert "适合送礼" in report_text
 
 
 def test_remote_consent_store_status_and_country_scope(tmp_path: Path):
@@ -1015,6 +1189,8 @@ def test_cli_help_exposes_init_and_cdp_options():
     assert "--chrome-path" in init_help.stdout
     assert "launch-if-needed" in init_help.stdout
     assert "--submit-upload" in backend_help.stdout
+    assert "--parallel" in backend_help.stdout
+    assert "--strict-answer" in backend_help.stdout
     assert "国家名" in login_status_help.stdout
     assert "status" in consent_help.stdout
     assert "set" in consent_help.stdout
@@ -1056,7 +1232,27 @@ def test_cli_get_writes_manager_result_to_report_file(monkeypatch, tmp_path: Pat
     assert result.exit_code == 0
     assert re.fullmatch(r"B0TEST1234-\d{8}-\d{6}\.md", report_path.name)
     assert report_path.parent == tmp_path / "output" / "amazon-rufus"
-    assert report_text == "## 第 1 题：第 1 题\n\n### 答案\n\n默认答案"
+    assert report_text == "\n".join(
+        [
+            "# Rufus 数据 - B0TEST1234",
+            "",
+            "- ASIN: B0TEST1234",
+            "- 站点: US",
+            "- 状态: success",
+            "- 问题数量: 1",
+            "- 商品URL:",
+            f"- 原始报告: {(Path('output') / 'amazon-rufus' / report_path.name).as_posix()}",
+            "",
+            "## 第 1 题",
+            "",
+            "问题:",
+            "第 1 题",
+            "",
+            "#### Rufus 展示内容",
+            "",
+            "默认答案",
+        ]
+    )
     assert "Rufus 答案报告已保存：" in result.stdout
     assert (Path("output") / "amazon-rufus" / report_path.name).as_posix() in result.stdout
     assert "默认答案" not in result.stdout
@@ -1123,6 +1319,10 @@ def test_cli_get_backend_calls_backend_manager_and_writes_report(monkeypatch, tm
         "questions": ["这是什么商品？", "这个商品评价如何？"],
         "skills_dir": None,
         "timeout_seconds": 180,
+        "parallel": False,
+        "concurrency": 3,
+        "retry": 0,
+        "strict_answer": False,
         "include_upload_payload": True,
         "submit_upload": False,
     }
@@ -1249,11 +1449,15 @@ def test_cli_get_writes_frontend_like_answer_report(monkeypatch, tmp_path: Path)
     _, report_text = _read_single_rufus_report(tmp_path)
 
     assert result.exit_code == 0
-    assert "## 第 1 题：问题一" in report_text
+    assert "# Rufus 数据 - B0TEST1234" in report_text
+    assert "## 第 1 题" in report_text
+    assert "问题:\n问题一" in report_text
+    assert "#### Rufus 展示内容" in report_text
     assert "#### 回答标题" in report_text
     assert "第一条答案" in report_text
-    assert "### 总结" in report_text
-    assert "## 第 2 题：问题二" in report_text
+    assert "### 总结" not in report_text
+    assert "## 第 2 题" in report_text
+    assert "问题:\n问题二" in report_text
     assert "第二条答案" in report_text
     assert "fallback" not in report_text
     assert "第一条答案" not in result.stdout
@@ -1280,7 +1484,8 @@ def test_cli_get_answer_report_reports_failed_empty_answer(monkeypatch, tmp_path
     _, report_text = _read_single_rufus_report(tmp_path)
 
     assert result.exit_code == 0
-    assert "## 第 1 题：第 1 题" in report_text
+    assert "## 第 1 题" in report_text
+    assert "问题:\n第 1 题" in report_text
     assert "第 1 题未获取到答案" in report_text
     assert "第 1 题未获取到答案" not in result.stdout
 
@@ -1333,7 +1538,8 @@ def test_cli_get_passes_question_to_manager(monkeypatch, tmp_path: Path):
 
     assert result.exit_code == 0
     assert captured["question"] == "这个商品是做什么的"
-    assert "## 第 1 题：这个商品是做什么的" in report_text
+    assert "## 第 1 题" in report_text
+    assert "问题:\n这个商品是做什么的" in report_text
     assert "单题答案" in report_text
 
 
@@ -1389,8 +1595,10 @@ def test_cli_get_passes_multiple_questions_to_manager(monkeypatch, tmp_path: Pat
     assert result.exit_code == 0
     assert captured["questions"] == ["这个商品适合送礼吗？", "差评主要集中在哪些方面？"]
     assert captured["question"] is None
-    assert "## 第 1 题：这个商品适合送礼吗？" in report_text
-    assert "## 第 2 题：差评主要集中在哪些方面？" in report_text
+    assert "## 第 1 题" in report_text
+    assert "问题:\n这个商品适合送礼吗？" in report_text
+    assert "## 第 2 题" in report_text
+    assert "问题:\n差评主要集中在哪些方面？" in report_text
 
 
 def test_cli_init_calls_manager(monkeypatch):
@@ -1641,6 +1849,10 @@ def test_manager_get_backend_uses_secret_provider_and_headless_services():
         country="US",
         question="这个商品是做什么的",
         timeout_seconds=12,
+        parallel=True,
+        concurrency=2,
+        retry=1,
+        strict_answer=True,
     )
 
     assert secret_provider.kwargs == {"country": "US"}
@@ -1649,6 +1861,10 @@ def test_manager_get_backend_uses_secret_provider_and_headless_services():
     assert client.kwargs["cookie"] == "session-id=abc; ubid-main=def"
     assert client.kwargs["headers"] == {"anti-csrftoken-a2z": "token"}
     assert client.kwargs["payload_template"] == {"queryContext": {"query": "old"}}
+    assert client.kwargs["parallel"] is True
+    assert client.kwargs["concurrency"] == 2
+    assert client.kwargs["retry"] == 1
+    assert client.kwargs["strict_answer"] is True
     assert result["asin"] == "B0TEST1234"
     assert result["answers"][0]["text"] == "backend:这个商品是做什么的"
     assert "session-id" not in json.dumps(result, ensure_ascii=False)
@@ -2221,6 +2437,465 @@ def test_headless_client_uses_timeout_for_each_question(monkeypatch):
         {"question": "问题3", "timeout_seconds": 180},
     ]
     assert [answer.text for answer in answers] == ["问题1", "问题2", "问题3"]
+
+
+def test_headless_client_parallel_uses_independent_threads_and_preserves_order(monkeypatch):
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+    from opscli.amazon_rufus.services.headless_client import HeadlessRufusClient
+
+    calls = []
+
+    class FakeReplay:
+        def build_payload(self, seed_body_text, question, thread_id, asin, origin_url=None):
+            calls.append({"question": question, "thread_id": thread_id})
+            return {"queryContext": {"query": question}, "historyThreadContext": {"threadId": thread_id}}
+
+    class FakeParser:
+        def parse(self, raw_text):
+            return AnswerData(text=raw_text, thread_id=f"thread-{raw_text}")
+
+    seed = SeedRequestRecord(
+        request_url="https://www.amazon.com/rufus/cl/streaming",
+        request_headers={"content-type": "application/json"},
+        request_body='{"queryContext": {"query": "seed"}}',
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        tab_id="tab-1",
+        asin="B0TEST1234",
+        country="US",
+        captured_at=1710000000000,
+    )
+    client = HeadlessRufusClient(parser=FakeParser(), replay=FakeReplay())
+
+    def fake_post_rufus(self, *, url, headers, payload, timeout_seconds):
+        return payload["queryContext"]["query"]
+
+    monkeypatch.setattr(HeadlessRufusClient, "_post_rufus", fake_post_rufus)
+
+    answers = client.query(
+        streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+        seed=seed,
+        questions=["问题1", "问题2", "问题3"],
+        cookie="session-id=abc",
+        headers={},
+        payload_template=None,
+        timeout_seconds=180,
+        parallel=True,
+        concurrency=2,
+    )
+
+    assert [answer.text for answer in answers] == ["问题1", "问题2", "问题3"]
+    assert sorted(calls, key=lambda item: item["question"]) == [
+        {"question": "问题1", "thread_id": None},
+        {"question": "问题2", "thread_id": None},
+        {"question": "问题3", "thread_id": None},
+    ]
+
+
+def test_headless_client_strict_answer_retries_and_raises_on_official_error(monkeypatch):
+    from opscli.amazon_rufus.domain.exceptions import RufusAnswerValidationError
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+    from opscli.amazon_rufus.services.headless_client import HeadlessRufusClient
+
+    calls = []
+
+    class FakeReplay:
+        def build_payload(self, seed_body_text, question, thread_id, asin, origin_url=None):
+            return {"queryContext": {"query": question}, "historyThreadContext": {"threadId": thread_id}}
+
+    class FakeParser:
+        def parse(self, raw_text):
+            return AnswerData(text=raw_text, thread_id="thread-error")
+
+    seed = SeedRequestRecord(
+        request_url="https://www.amazon.com/rufus/cl/streaming",
+        request_headers={"content-type": "application/json"},
+        request_body='{"queryContext": {"query": "seed"}}',
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        tab_id="tab-1",
+        asin="B0TEST1234",
+        country="US",
+        captured_at=1710000000000,
+    )
+    client = HeadlessRufusClient(parser=FakeParser(), replay=FakeReplay())
+
+    def fake_post_rufus(self, *, url, headers, payload, timeout_seconds):
+        calls.append(payload["queryContext"]["query"])
+        return "Sorry, something went wrong."
+
+    monkeypatch.setattr(HeadlessRufusClient, "_post_rufus", fake_post_rufus)
+    monkeypatch.setattr("opscli.amazon_rufus.services.headless_client.time.sleep", lambda seconds: None)
+
+    with pytest.raises(RufusAnswerValidationError) as exc:
+        client.query(
+            streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+            seed=seed,
+            questions=["问题1"],
+            cookie="session-id=abc",
+            headers={},
+            payload_template=None,
+            timeout_seconds=180,
+            retry=2,
+            strict_answer=True,
+        )
+
+    assert calls == ["问题1", "问题1", "问题1"]
+    assert exc.value.to_dict()["code"] == "RUFUS_ANSWER_VALIDATION_ERROR"
+    assert exc.value.to_dict()["reason"] == "official_error_placeholder"
+    assert exc.value.to_dict()["attempt_count"] == 3
+
+
+def test_headless_client_non_strict_marks_invalid_answer_without_raising(monkeypatch):
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+    from opscli.amazon_rufus.services.headless_client import HeadlessRufusClient
+
+    class FakeReplay:
+        def build_payload(self, seed_body_text, question, thread_id, asin, origin_url=None):
+            return {"queryContext": {"query": question}, "historyThreadContext": {"threadId": thread_id}}
+
+    class FakeParser:
+        def parse(self, raw_text):
+            return AnswerData(text=raw_text, thread_id="thread-error")
+
+    seed = SeedRequestRecord(
+        request_url="https://www.amazon.com/rufus/cl/streaming",
+        request_headers={"content-type": "application/json"},
+        request_body='{"queryContext": {"query": "seed"}}',
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        tab_id="tab-1",
+        asin="B0TEST1234",
+        country="US",
+        captured_at=1710000000000,
+    )
+    client = HeadlessRufusClient(parser=FakeParser(), replay=FakeReplay())
+
+    monkeypatch.setattr(
+        HeadlessRufusClient,
+        "_post_rufus",
+        lambda self, *, url, headers, payload, timeout_seconds: "Thinking...",
+    )
+
+    answers = client.query(
+        streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+        seed=seed,
+        questions=["问题1"],
+        cookie="session-id=abc",
+        headers={},
+        payload_template=None,
+        timeout_seconds=180,
+    )
+
+    assert answers[0].is_success is False
+    assert answers[0].error_reason == "thinking_placeholder"
+
+
+def test_headless_client_strict_answer_retries_and_raises_on_shopping_scope_refusal(monkeypatch):
+    from opscli.amazon_rufus.domain.exceptions import RufusAnswerValidationError
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+    from opscli.amazon_rufus.services.headless_client import HeadlessRufusClient
+
+    calls = []
+    refusal = (
+        "I appreciate your request, but I need to let you know that I'm designed specifically "
+        "to help customers with shopping decisions on Amazon. Your request appears to be asking "
+        "for an internal business analysis of product optimization strategies, which falls "
+        "outside my scope as a shopping assistant."
+    )
+
+    class FakeReplay:
+        def build_payload(self, seed_body_text, question, thread_id, asin, origin_url=None):
+            return {"queryContext": {"query": question}, "historyThreadContext": {"threadId": thread_id}}
+
+    class FakeParser:
+        def parse(self, raw_text):
+            return AnswerData(text=raw_text, thread_id="thread-refusal")
+
+    seed = SeedRequestRecord(
+        request_url="https://www.amazon.com/rufus/cl/streaming",
+        request_headers={"content-type": "application/json"},
+        request_body='{"queryContext": {"query": "seed"}}',
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        tab_id="tab-1",
+        asin="B0TEST1234",
+        country="US",
+        captured_at=1710000000000,
+    )
+    client = HeadlessRufusClient(parser=FakeParser(), replay=FakeReplay())
+
+    def fake_post_rufus(self, *, url, headers, payload, timeout_seconds):
+        calls.append(payload["queryContext"]["query"])
+        return refusal
+
+    monkeypatch.setattr(HeadlessRufusClient, "_post_rufus", fake_post_rufus)
+    monkeypatch.setattr("opscli.amazon_rufus.services.headless_client.time.sleep", lambda seconds: None)
+
+    with pytest.raises(RufusAnswerValidationError) as exc:
+        client.query(
+            streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+            seed=seed,
+            questions=["问题1"],
+            cookie="session-id=abc",
+            headers={},
+            payload_template=None,
+            timeout_seconds=180,
+            retry=1,
+            strict_answer=True,
+        )
+
+    assert calls == ["问题1", "问题1"]
+    assert exc.value.to_dict()["code"] == "RUFUS_ANSWER_VALIDATION_ERROR"
+    assert exc.value.to_dict()["reason"] == "shopping_scope_refusal"
+    assert exc.value.to_dict()["attempt_count"] == 2
+
+
+def test_headless_client_strict_answer_retries_and_raises_on_chinese_scope_refusal(monkeypatch):
+    from opscli.amazon_rufus.domain.exceptions import RufusAnswerValidationError
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+    from opscli.amazon_rufus.services.headless_client import HeadlessRufusClient
+
+    refusal = "抱歉，我是专门为帮助顾客在亚马逊上做购物决策而设计的。你的请求涉及内部业务分析和产品优化策略，超出了我作为购物助手的范围。"
+
+    class FakeReplay:
+        def build_payload(self, seed_body_text, question, thread_id, asin, origin_url=None):
+            return {"queryContext": {"query": question}, "historyThreadContext": {"threadId": thread_id}}
+
+    class FakeParser:
+        def parse(self, raw_text):
+            return AnswerData(text=raw_text, thread_id="thread-cn-refusal")
+
+    seed = SeedRequestRecord(
+        request_url="https://www.amazon.com/rufus/cl/streaming",
+        request_headers={"content-type": "application/json"},
+        request_body='{"queryContext": {"query": "seed"}}',
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        tab_id="tab-1",
+        asin="B0TEST1234",
+        country="US",
+        captured_at=1710000000000,
+    )
+    client = HeadlessRufusClient(parser=FakeParser(), replay=FakeReplay())
+
+    monkeypatch.setattr(
+        HeadlessRufusClient,
+        "_post_rufus",
+        lambda self, *, url, headers, payload, timeout_seconds: refusal,
+    )
+    monkeypatch.setattr("opscli.amazon_rufus.services.headless_client.time.sleep", lambda seconds: None)
+
+    with pytest.raises(RufusAnswerValidationError) as exc:
+        client.query(
+            streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+            seed=seed,
+            questions=["问题1"],
+            cookie="session-id=abc",
+            headers={},
+            payload_template=None,
+            timeout_seconds=180,
+            retry=1,
+            strict_answer=True,
+        )
+
+    assert exc.value.to_dict()["reason"] == "shopping_scope_refusal"
+    assert exc.value.to_dict()["attempt_count"] == 2
+
+
+def test_headless_client_does_not_treat_generic_chinese_cannot_answer_as_scope_refusal(monkeypatch):
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+    from opscli.amazon_rufus.services.headless_client import HeadlessRufusClient
+
+    answer_text = "这个问题不能回答为单一结论，但从评论看，买家主要关注安装便利性和床架稳定性。"
+
+    class FakeReplay:
+        def build_payload(self, seed_body_text, question, thread_id, asin, origin_url=None):
+            return {"queryContext": {"query": question}, "historyThreadContext": {"threadId": thread_id}}
+
+    class FakeParser:
+        def parse(self, raw_text):
+            return AnswerData(text=raw_text, thread_id="thread-valid")
+
+    seed = SeedRequestRecord(
+        request_url="https://www.amazon.com/rufus/cl/streaming",
+        request_headers={"content-type": "application/json"},
+        request_body='{"queryContext": {"query": "seed"}}',
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        tab_id="tab-1",
+        asin="B0TEST1234",
+        country="US",
+        captured_at=1710000000000,
+    )
+    client = HeadlessRufusClient(parser=FakeParser(), replay=FakeReplay())
+
+    monkeypatch.setattr(
+        HeadlessRufusClient,
+        "_post_rufus",
+        lambda self, *, url, headers, payload, timeout_seconds: answer_text,
+    )
+
+    answers = client.query(
+        streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+        seed=seed,
+        questions=["问题1"],
+        cookie="session-id=abc",
+        headers={},
+        payload_template=None,
+        timeout_seconds=180,
+        retry=1,
+        strict_answer=True,
+    )
+
+    assert answers[0].is_success is True
+    assert answers[0].error_reason == ""
+
+
+def test_headless_client_strict_answer_retries_incomplete_diagnosis_sections(monkeypatch):
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+    from opscli.amazon_rufus.services.headless_client import HeadlessRufusClient
+
+    diagnosis_question = (
+        "分析这个ASIN B0TEST1234的标题是否清楚，是否能让买家搜索到产品并愿意点击查看详情？按这个格式输出：\n"
+        "1、当前标题内容\n"
+        "2、问题逐项分析\n"
+        "3、建议优化标题\n"
+        "4、优化核心逻辑总结"
+    )
+    incomplete = (
+        "1、当前标题内容\n"
+        "当前标题包含品牌、尺寸和产品类型，长度足够用于测试。\n"
+        "2、问题逐项分析\n"
+        "| 问题类型 | 具体问题 | 问题依据 | 建议修改 |\n"
+        "| --- | --- | --- | --- |\n"
+        "| 关键词缺失 | L-Shaped 未出现 | 买家会按结构搜索 | 补入 L-Shaped |\n"
+        "3、建议优化标题\n"
+        "Full Size L-Shaped Bed Frame with Storage and Charging Station\n"
+        "4、优化核心逻辑总结\n"
+        "无"
+    )
+    complete = (
+        "1、当前标题内容\n"
+        "当前标题包含品牌、尺寸和产品类型，能支持基础搜索识别。\n"
+        "2、问题逐项分析\n"
+        "| 问题类型 | 具体问题 | 问题依据 | 建议修改 |\n"
+        "| --- | --- | --- | --- |\n"
+        "| 关键词缺失 | L-Shaped 未出现 | 买家会按结构搜索 | 补入 L-Shaped |\n"
+        "3、建议优化标题\n"
+        "Full Size L-Shaped Bed Frame with Storage and Charging Station\n"
+        "4、优化核心逻辑总结\n"
+        "优化逻辑是先补齐核心搜索词，再前置尺寸、结构和差异化功能，提升搜索相关性与点击转化。"
+    )
+    responses = [incomplete, complete]
+
+    class FakeReplay:
+        def build_payload(self, seed_body_text, question, thread_id, asin, origin_url=None):
+            return {"queryContext": {"query": question}, "historyThreadContext": {"threadId": thread_id}}
+
+    class FakeParser:
+        def parse(self, raw_text):
+            return AnswerData(text=raw_text, thread_id="thread-diagnosis")
+
+    seed = SeedRequestRecord(
+        request_url="https://www.amazon.com/rufus/cl/streaming",
+        request_headers={"content-type": "application/json"},
+        request_body='{"queryContext": {"query": "seed"}}',
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        tab_id="tab-1",
+        asin="B0TEST1234",
+        country="US",
+        captured_at=1710000000000,
+    )
+    client = HeadlessRufusClient(parser=FakeParser(), replay=FakeReplay())
+
+    monkeypatch.setattr(
+        HeadlessRufusClient,
+        "_post_rufus",
+        lambda self, *, url, headers, payload, timeout_seconds: responses.pop(0),
+    )
+    monkeypatch.setattr("opscli.amazon_rufus.services.headless_client.time.sleep", lambda seconds: None)
+
+    answers = client.query(
+        streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+        seed=seed,
+        questions=[diagnosis_question],
+        cookie="session-id=abc",
+        headers={},
+        payload_template=None,
+        timeout_seconds=180,
+        retry=1,
+        strict_answer=True,
+    )
+
+    assert answers[0].is_success is True
+    assert "优化逻辑是先补齐核心搜索词" in answers[0].text
+    assert responses == []
+
+
+def test_headless_client_strict_answer_raises_on_incomplete_diagnosis_sections(monkeypatch):
+    from opscli.amazon_rufus.domain.exceptions import RufusAnswerValidationError
+    from opscli.amazon_rufus.domain.models import AnswerData, SeedRequestRecord
+    from opscli.amazon_rufus.services.headless_client import HeadlessRufusClient
+
+    diagnosis_question = (
+        "分析这个ASIN B0TEST1234 的图片是否解决买家购买疑问，从消费者决策路径与商品信息表达优化的角度。按这个格式输出：\n"
+        "1、当前图片整体问题 \n"
+        "2、问题逐项分析 \n"
+        "3、优化优先级总结\n"
+        "4、优化核心逻辑总结"
+    )
+    incomplete = (
+        "1、当前图片整体问题\n"
+        "现有图片缺少功能细节和空间适配说明，买家难以快速判断。\n"
+        "2、问题逐项分析\n"
+        "| 图片序号 | 目标 | 具体问题 | 核心依据 | 优化方案 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| 图1 | 吸引点击 | 结构不清晰 | 主图影响点击 | 改为45度视角 |\n"
+        "3、优化优先级总结\n"
+        "| 优先级 | 图片序号 | 核心价值 |\n"
+        "| --- | --- | --- |\n"
+        "| P0 | 图1 | 提升点击率 |\n"
+        "4、优化核心逻辑总结\n"
+        "无"
+    )
+
+    class FakeReplay:
+        def build_payload(self, seed_body_text, question, thread_id, asin, origin_url=None):
+            return {"queryContext": {"query": question}, "historyThreadContext": {"threadId": thread_id}}
+
+    class FakeParser:
+        def parse(self, raw_text):
+            return AnswerData(text=raw_text, thread_id="thread-diagnosis")
+
+    seed = SeedRequestRecord(
+        request_url="https://www.amazon.com/rufus/cl/streaming",
+        request_headers={"content-type": "application/json"},
+        request_body='{"queryContext": {"query": "seed"}}',
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        tab_id="tab-1",
+        asin="B0TEST1234",
+        country="US",
+        captured_at=1710000000000,
+    )
+    client = HeadlessRufusClient(parser=FakeParser(), replay=FakeReplay())
+
+    monkeypatch.setattr(
+        HeadlessRufusClient,
+        "_post_rufus",
+        lambda self, *, url, headers, payload, timeout_seconds: incomplete,
+    )
+    monkeypatch.setattr("opscli.amazon_rufus.services.headless_client.time.sleep", lambda seconds: None)
+
+    with pytest.raises(RufusAnswerValidationError) as exc:
+        client.query(
+            streaming_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+            seed=seed,
+            questions=[diagnosis_question],
+            cookie="session-id=abc",
+            headers={},
+            payload_template=None,
+            timeout_seconds=180,
+            retry=1,
+            strict_answer=True,
+        )
+
+    assert exc.value.to_dict()["reason"] == "diagnosis_section_incomplete_4"
+    assert exc.value.to_dict()["attempt_count"] == 2
 
 
 def test_browser_state_store_saves_storage_state_plaintext_json_and_builds_cookie_header(tmp_path: Path):

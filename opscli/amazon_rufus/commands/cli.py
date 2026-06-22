@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import typer
 
 from opscli.amazon_rufus.constants import DEFAULT_RUFUS_TIMEOUT_SECONDS
 from opscli.amazon_rufus.domain.exceptions import InvalidRufusCookieError, InvalidRufusCurlError, RufusError
+from opscli.amazon_rufus.services.answer_report_formatter import AnswerReportFormatter
 from opscli.amazon_rufus.services.answer_report_writer import AnswerReportWriter
+from opscli.amazon_rufus.services.batch_backend import BatchGetBackendOptions, RufusBatchBackendRunner
 from opscli.amazon_rufus.services.manager import RufusManager
 from opscli.amazon_rufus.services.remote_consent import RemoteConsentStore
 
@@ -40,6 +43,14 @@ def _emit_answer_report(data: dict) -> None:
     typer.echo(f"Rufus 答案报告已保存：{report_path.as_posix()}")
 
 
+def _load_json_file(path: Path) -> dict:
+    """读取本地 Rufus JSON 文件。"""
+    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict):
+        raise ValueError("Rufus JSON root must be an object")
+    return payload
+
+
 def _error_payload(command: str, exc: Exception) -> dict:
     """统一错误结构。"""
     if isinstance(exc, RufusError):
@@ -56,6 +67,42 @@ def _split_question_options(question: list[str] | None) -> tuple[str | None, lis
     if len(question) == 1:
         return question[0], None
     return None, question
+
+
+def _load_batch_asins(asin: list[str] | None, asin_file: Path | None) -> list[str]:
+    """Read batch ASIN values from repeated options and an optional text file."""
+    values: list[str] = []
+    values.extend(asin or [])
+    if asin_file is not None:
+        for line in asin_file.read_text(encoding="utf-8-sig").splitlines():
+            cleaned = line.split("#", 1)[0].strip()
+            if cleaned:
+                values.append(cleaned)
+    return values
+
+
+@app.command("render-report")
+def render_report(
+    input_path: Path = typer.Argument(..., help="本地 Rufus JSON 文件路径"),
+    output_path: Path | None = typer.Option(None, "--output", "-o", help="指定输出 Markdown 文件路径"),
+    output_dir: Path | None = typer.Option(None, "--output-dir", help="指定输出目录，未传 --output 时生效"),
+    pretty: bool = typer.Option(False, "--pretty", help="错误时格式化输出"),
+):
+    """将 Rufus JSON 渲染为 Listing 优化诊断 Markdown。"""
+    try:
+        data = _load_json_file(input_path)
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            render_data = dict(data)
+            render_data.setdefault("report_path", output_path.as_posix())
+            output_path.write_text(AnswerReportFormatter().format_data(render_data), encoding="utf-8")
+            report_path = output_path
+        else:
+            report_path = AnswerReportWriter().write(data, output_dir=output_dir)
+    except Exception as exc:
+        _emit(_error_payload("amazon-rufus render-report", exc), pretty)
+        raise typer.Exit(1)
+    typer.echo(f"Rufus 答案报告已保存：{report_path.as_posix()}")
 
 
 @app.command("get")
@@ -106,6 +153,10 @@ def get_backend(
     question: list[str] | None = typer.Option(None, "--question", "-q", help="指定 Rufus 问题，可多次传入；传入后跳过默认题库"),
     skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 根目录"),
     timeout_seconds: int = typer.Option(DEFAULT_RUFUS_TIMEOUT_SECONDS, "--timeout", min=1, help="Rufus 获取超时秒数（每题）"),
+    parallel: bool = typer.Option(False, "--parallel", help="多问题并发请求；每题独立 Rufus 会话"),
+    concurrency: int = typer.Option(3, "--concurrency", min=1, help="并发请求数，仅 --parallel 生效"),
+    retry: int = typer.Option(0, "--retry", min=0, help="单题无效回答重试次数"),
+    strict_answer: bool = typer.Option(False, "--strict-answer", help="无效回答重试后仍失败时直接报错"),
     include_upload_payload: bool = typer.Option(True, "--upload-payload/--no-upload-payload", help="是否输出上传 payload"),
     submit_upload: bool = typer.Option(False, "--submit-upload", help="显式提交 Rufus upload_payload 到配置的后端接口"),
     pretty: bool = typer.Option(False, "--pretty", help="错误时格式化输出"),
@@ -121,6 +172,10 @@ def get_backend(
             questions=multiple_questions,
             skills_dir=skills_dir,
             timeout_seconds=timeout_seconds,
+            parallel=parallel,
+            concurrency=concurrency,
+            retry=retry,
+            strict_answer=strict_answer,
             include_upload_payload=include_upload_payload or submit_upload,
             submit_upload=submit_upload,
         )
@@ -128,6 +183,64 @@ def get_backend(
         _emit(_error_payload("amazon-rufus get-backend", exc), pretty)
         raise typer.Exit(1)
     _emit_answer_report(data)
+
+
+@app.command("batch-get-backend")
+def batch_get_backend(
+    country: str = typer.Argument(..., help="国家名，如 US、UK、DE、JP"),
+    asin: list[str] | None = typer.Option(None, "--asin", "-a", help="目标 ASIN，可重复传入，也可用逗号或空格分隔"),
+    asin_file: Path | None = typer.Option(None, "--asin-file", help="包含 ASIN 的文本文件，支持空格/逗号分隔和 # 注释"),
+    question: list[str] | None = typer.Option(None, "--question", "-q", help="指定 Rufus 问题，可多次传入；传入后跳过默认题库"),
+    skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 根目录"),
+    mode: str = typer.Option("balanced", "--mode", help="运行模式：fast、balanced、safe"),
+    asin_concurrency: int | None = typer.Option(None, "--asin-concurrency", min=1, help="ASIN 并发数；未传时由 mode 决定"),
+    parallel_questions: bool = typer.Option(False, "--parallel-questions", help="强制每个 ASIN 内多问题并发"),
+    serial_questions: bool = typer.Option(False, "--serial-questions", help="强制每个 ASIN 内多问题串行"),
+    question_concurrency: int | None = typer.Option(None, "--question-concurrency", min=1, help="问题并发数，仅并发问题时生效"),
+    timeout_seconds: int | None = typer.Option(None, "--timeout", min=1, help="Rufus 获取超时秒数（每题）；未传时由 mode 决定"),
+    retry: int | None = typer.Option(None, "--retry", min=0, help="单题无效回答重试次数；未传时由 mode 决定"),
+    strict_answer: bool = typer.Option(True, "--strict-answer/--no-strict-answer", help="启用回答完整性校验"),
+    resume: bool = typer.Option(True, "--resume/--no-resume", help="已有合格报告时跳过该 ASIN"),
+    fallback_serial: bool = typer.Option(True, "--fallback-serial/--no-fallback-serial", help="快跑失败后自动用 safe 串行兜底"),
+    validate_report: bool = typer.Option(True, "--validate-report/--no-validate-report", help="写入后校验报告结构和空小节"),
+    output_dir: Path = typer.Option(Path("output") / "amazon-rufus", "--output-dir", help="报告输出目录"),
+    summary_output: Path | None = typer.Option(None, "--summary-output", help="将批量汇总 JSON 写入指定文件"),
+    allow_partial: bool = typer.Option(False, "--allow-partial", help="部分 ASIN 失败时仍返回 0"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+):
+    """批量通过后端/headless 链路获取 Rufus 回答，支持快跑、resume 与 safe 兜底。"""
+    try:
+        if parallel_questions and serial_questions:
+            raise ValueError("--parallel-questions 和 --serial-questions 不能同时使用")
+        question_parallel = True if parallel_questions else False if serial_questions else None
+        data = RufusBatchBackendRunner().run(
+            BatchGetBackendOptions(
+                asins=_load_batch_asins(asin, asin_file),
+                country=country,
+                questions=question,
+                skills_dir=skills_dir,
+                mode=mode,
+                asin_concurrency=asin_concurrency,
+                question_parallel=question_parallel,
+                question_concurrency=question_concurrency,
+                timeout_seconds=timeout_seconds,
+                retry=retry,
+                strict_answer=strict_answer,
+                resume=resume,
+                fallback_serial=fallback_serial,
+                validate_report=validate_report,
+                output_dir=output_dir,
+            )
+        )
+        if summary_output is not None:
+            summary_output.parent.mkdir(parents=True, exist_ok=True)
+            summary_output.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        _emit(_error_payload("amazon-rufus batch-get-backend", exc), pretty)
+        raise typer.Exit(1)
+    _emit(data, pretty)
+    if not data.get("success") and not allow_partial:
+        raise typer.Exit(1)
 
 
 @app.command("init")
