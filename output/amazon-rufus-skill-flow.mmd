@@ -1,0 +1,79 @@
+flowchart TD
+    A([用户提出 Rufus / Listing 需求]) --> B[解析 ASIN、国家站点、问题来源]
+    B --> C[初始化状态<br/>login_recovery_attempted=false<br/>watch_login_attempted=false<br/>answer_rewrite_attempts_by_question={}]
+
+    subgraph S1[Skill 编排层]
+        C --> D{必需 MCP Tool 是否可见}
+        D -->|否| F1[进入 CLI fallback]
+        D -->|是| E[执行 MCP 鉴权和 ops Token 检查]
+        E --> G[读取远程授权偏好]
+        G --> H{授权偏好状态}
+        H -->|unknown / invalid| I[询问用户允许或拒绝]
+        I -->|允许| J[保存 allowed=true]
+        I -->|拒绝| K[保存 allowed=false]
+        K --> F1
+        H -->|denied| F1
+        H -->|allowed| L[检查亚马逊 Rufus 登录态]
+        J --> L
+        L --> M{登录态可用于后端获取}
+        M -->|否或 OPS 鉴权错误| WL1{watch_login_attempted=false}
+        WL1 -->|是| N[设置 watch_login_attempted=true<br/>执行登录采集<br/>amazon_rufus_watch_login]
+        WL1 -->|否| X([返回错误<br/>不再打开第二次登录窗口<br/>不读取历史报告兜底])
+        N --> O[再次检查登录态]
+        O --> P[按原问题来源请求 Rufus<br/>同一个对话处理多问题]
+        M -->|ready| P
+    end
+
+    subgraph S2[MCP 后端获取链]
+        P --> Q[RufusMcpManager.get]
+        Q --> R[RufusManager.get_backend]
+        R --> R1[读取 OPS 平台 Cookie content]
+        R1 --> R2[解析 cURL 命令态和 seed]
+        R2 --> R3[HeadlessRufusClient 逐题请求]
+        R3 --> R4[AnswerReportWriter 写入报告]
+    end
+
+    subgraph S3[回答质量判断与问题改写重试]
+        R4 --> QA1[读取本次 report_path]
+        F6 --> QA1
+        QA1 --> QA2{回答是否合格}
+        QA2 -->|合格| Z([最终只返回最新 report_path])
+        QA2 -->|无回答 / 拒答 / 答非所问<br/>或退化为商品详情| QA3{该题重试次数 < 5}
+        QA3 -->|否| QA6[停止重试该题<br/>说明对应题目达到上限]
+        QA3 -->|是| QA4[开启子 agent 改写不合格问题<br/>总字数不要超过200]
+        QA4 --> QA5[替换回完整问题列表<br/>同一个 Rufus 对话重新请求]
+        QA5 --> P
+        QA6 --> Z
+    end
+
+    subgraph S4[登录恢复]
+        P --> ER{是否返回可恢复错误}
+        ER -->|三类 headless / secret 错误| ER1{是否已恢复过}
+        ER1 -->|否| WL2{watch_login_attempted=false}
+        WL2 -->|否| X
+        WL2 -->|是| ER2[设置恢复状态<br/>login_recovery_attempted=true<br/>watch_login_attempted=true<br/>amazon_rufus_logout]
+        ER2 --> ER3[amazon_rufus_watch_login]
+        ER3 --> P
+        ER1 -->|是| X
+        ER -->|OPS 鉴权错误 / 401| WL1
+    end
+
+    subgraph S5[CLI fallback 白名单路径]
+        F1 --> F2[opscli amazon-rufus login-status]
+        F2 --> F3{CLI 登录态是否可用}
+        F3 -->|否| WL3{watch_login_attempted=false}
+        WL3 -->|否| X
+        WL3 -->|是| F4[设置 watch_login_attempted=true<br/>opscli amazon-rufus watch-login]
+        F3 -->|是| F5[opscli amazon-rufus get-backend]
+        F4 --> F5
+        F5 --> F6[写入本次 Rufus 报告]
+    end
+
+    classDef startEnd fill:#f8fafc,stroke:#334155,stroke-width:1px,color:#0f172a;
+    classDef action fill:#eef6ff,stroke:#2563eb,stroke-width:1px,color:#0f172a;
+    classDef decision fill:#fff7ed,stroke:#ea580c,stroke-width:1px,color:#0f172a;
+    classDef fallback fill:#fef2f2,stroke:#dc2626,stroke-width:1px,color:#0f172a;
+
+    class A,Z,X startEnd;
+    class B,C,E,G,I,J,K,L,N,O,P,Q,R,R1,R2,R3,R4,QA1,QA4,QA5,QA6,ER2,ER3,F1,F2,F4,F5,F6 action;
+    class D,H,M,WL1,WL2,WL3,QA2,QA3,ER,ER1,F3 decision;

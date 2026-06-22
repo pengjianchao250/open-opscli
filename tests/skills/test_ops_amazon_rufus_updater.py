@@ -360,3 +360,59 @@ def test_ops_amazon_rufus_docs_route_platform_cookie_auth_to_watch_login():
         assert "本分支不允许 CLI fallback" in docs
         assert "本轮不得执行 `amazon_rufus_logout`、`amazon_rufus_watch_login` 或重复 `amazon_rufus_get`" not in docs
         assert "先通过 MCP auth 工具修复 OPS/MCP 鉴权" not in docs
+
+
+def test_ops_amazon_rufus_docs_require_answer_quality_rewrite_retry():
+    """Rufus 回答无效时必须按 Skill 规则改写问题并有限重试。"""
+    skill_dirs = [
+        Path("opscli/skills/templates/ops-amazon-rufus"),
+        Path(".agents/skills/ops-amazon-rufus"),
+    ]
+
+    for skill_dir in skill_dirs:
+        docs = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in [
+                skill_dir / "SKILL.md",
+                skill_dir / "README.md",
+                skill_dir / "references" / "rufus-mcp-workflow.md",
+            ]
+        )
+
+        assert "回答质量判断" in docs
+        assert "answer_rewrite_attempts_by_question" in docs
+        assert "每个问题最多 5 次" in docs
+        assert "按问题分别记录" in docs
+        assert "同一个 Rufus 对话" in docs
+        assert "多问题" in docs
+        assert "开启一个子 agent" in docs
+        assert "重写这些问题，修改其中的字，但要求意思保持不变。总字数不要超过200。" in docs
+        assert "answer_count=0" in docs
+        assert "拒答" in docs
+        assert "商品详情" in docs
+        assert "按改写后的完整问题来源重新调用 `amazon_rufus_get`" in docs
+        assert "整个回答质量重试过程最多 5 次" not in docs
+
+
+def test_ops_amazon_rufus_docs_limit_watch_login_once_per_skill_call():
+    """同一次 Skill 调用内所有登录采集入口共享 watch_login 单次触发状态。"""
+    skill_dirs = [
+        Path("opscli/skills/templates/ops-amazon-rufus"),
+        Path(".agents/skills/ops-amazon-rufus"),
+    ]
+
+    for skill_dir in skill_dirs:
+        docs = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in [
+                skill_dir / "SKILL.md",
+                skill_dir / "README.md",
+                skill_dir / "references" / "rufus-mcp-workflow.md",
+            ]
+        )
+
+        assert "watch_login_attempted=false" in docs
+        assert "watch_login_attempted=true" in docs
+        assert "同一次 Skill 调用最多触发一次 `watch_login`" in docs
+        assert "任何分支准备调用 `amazon_rufus_watch_login`" in docs
+        assert "如果 `watch_login_attempted=true`，不得再次调用 `amazon_rufus_watch_login`" in docs

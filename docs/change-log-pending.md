@@ -1,5 +1,19 @@
 # 待归档变更记录
 
+## 2026-06-22 Amazon Rufus - watch_login 单次触发与 DevTools 参数修复
+
+**变更原因**：亚马逊 Rufus 登录态失效时，同一次 Skill 调用内多个错误分支都可能再次触发 `watch_login`，导致浏览器反复打开登录页或商品页；同时 Chrome 启动参数会自动打开 DevTools 页签，增加额外页面干扰。
+
+**改动点**：移除 `opscli/amazon_rufus/services/browser.py` 中的 `--auto-open-devtools-for-tabs`；更新 `.agents/skills/ops-amazon-rufus` 与 `opscli/skills/templates/ops-amazon-rufus` 的 `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md`，新增 `watch_login_attempted` 约束，要求 MCP/CLI 登录采集在同一次 Skill 调用内最多触发一次；同步新增 `.super-dev/changes/amazon-rufus-watch-login-once` 与 `output/amazon-rufus-skill-*` 产物；补充 `tests/amazon_rufus/test_core.py` 和 `tests/skills/test_ops_amazon_rufus_updater.py` 回归测试。
+
+**验证结果**：已先运行新增测试并确认旧实现失败于 DevTools 参数仍存在、Skill 文档缺少 `watch_login_attempted`；修复后运行 `uv run pytest "tests/amazon_rufus/test_core.py" -q`，结果 86 passed；运行 `uv run pytest "tests/skills/test_ops_amazon_rufus_updater.py" -q`，结果 10 passed；运行 `uv run python -m py_compile "opscli/amazon_rufus/services/browser.py"` 通过；运行 pretty-mermaid 渲染命令重新生成 `output/amazon-rufus-skill-flow.svg` 成功。
+
+**影响范围**：影响 Rufus 自动启动调试浏览器的参数、Agent/Skill 登录采集编排、内置模板、已安装项目版 Skill、Super Dev 设计产物和文档契约测试；不改变 MCP Tool schema、远程授权偏好、CLI fallback 白名单、Rufus 后端请求逻辑或敏感字段隐藏规则。
+
+**回滚方式**：回退 `browser.py` 启动参数修改、上述 Skill 文档与 Super Dev 产物中的 `watch_login_attempted` 规则，以及新增/调整的回归测试和本变更记录。
+
+---
+
 ## 2026-06-11 Amazon Rufus Skill - README 补充三条整体调用链
 
 **变更原因**：用户纠正应保存最初讨论的 Rufus 整体调用链，而不是只记录 OPS 平台 Cookie `content` 读取局部链路；README 中需要按三条链路说明 Skill、MCP 和 CLI 的调用关系。
@@ -7,6 +21,22 @@
 **验证结果**：已运行 `uv run pytest tests/skills/test_ops_amazon_rufus_updater.py tests/skills/test_cli.py -q`，结果 20 passed。
 **影响范围**：仅影响 `opscli/skills/templates/ops-amazon-rufus/README.md` 文档说明和本变更记录，不改变代码行为、MCP schema、CLI 参数或后端 API 契约。
 **回滚方式**：删除 README 中新增的“整体调用链（三条）”小节，并移除此变更记录。
+
+---
+
+## 2026-06-22 ops-amazon-rufus Skill - 增加回答质量重试规则
+
+**变更原因**：Rufus 获取成功后可能出现无回答、拒答、答非所问，或用户询问评价/风险/适配性等复杂问题但回答退化为商品详情的情况；原 Skill 缺少问题改写和有限重试规则。
+
+**改动点**：更新 `.agents/skills/ops-amazon-rufus` 与 `opscli/skills/templates/ops-amazon-rufus` 的 `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md`，新增 `answer_rewrite_attempts_by_question`、回答质量判断、子 agent 固定提示词、同一个 Rufus 对话处理多问题、每个问题最多 5 次的问题改写重试规则；新增 `.super-dev/changes/amazon-rufus-answer-retry` 和 `output/amazon-rufus-skill-*` 文档与流程图；补充 `tests/skills/test_ops_amazon_rufus_updater.py` 文档契约测试。
+
+**验证结果**：新增测试先失败于缺少“回答质量判断”规则；补充文档后 `uv run pytest "tests/skills/test_ops_amazon_rufus_updater.py" -q` 为 9 passed。补充运行 `uv run pytest "tests/amazon_rufus" -q` 时发现既有失败：`test_get_platform_cookie_sends_platform_query` 期望 timeout 为 10，当前实际为 180；该失败与本次 Skill 文档变更无关，未在本次处理。
+
+**影响范围**：影响 `ops-amazon-rufus` Agent 编排规则、内置模板、已安装项目版 Skill、Super Dev 设计产物和文档契约测试；不改变 Rufus MCP 工具参数、Python 后端获取逻辑、登录恢复、远程授权偏好、CLI fallback 白名单或敏感字段隐藏规则。
+
+**回滚方式**：回退上述 Skill 文档、Super Dev change、`output/amazon-rufus-skill-*` 产物和 `tests/skills/test_ops_amazon_rufus_updater.py` 中新增的回答质量重试断言。
+
+**补充修正**：根据用户确认，将回答质量重试上限改为按问题独立计算，并明确 Rufus 获取会在同一个 Rufus 对话中处理多个问题；已同步项目版、模板版、Super Dev 文档和流程图。
 
 ---
 

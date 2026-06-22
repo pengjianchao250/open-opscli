@@ -94,11 +94,13 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 7. 状态为 `unknown` 或 `invalid` 时，必须先询问用户是否允许保存该站点亚马逊 Rufus 登录状态。用户明确回复后，用 `amazon_rufus_remote_consent_set(country, allowed=true)` 或 `amazon_rufus_remote_consent_set(country, allowed=false)` 保存偏好。
 8. 状态为 `denied` 时进入 CLI fallback，原因是用户拒绝保存并复用该站点亚马逊 Rufus 登录态。
 9. 状态为 `allowed` 时，调用 `amazon_rufus_login_status(country)`。
-10. 如果 `amazon_rufus_login_status` 返回 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401，调用 `amazon_rufus_watch_login(asin, country, close_browser=true)`；本分支不允许 CLI fallback。
-11. 如果 `can_get_backend=false` 或 `status=missing/invalid`，说明没有可用亚马逊 Rufus 登录态，调用 `amazon_rufus_watch_login(asin, country, close_browser=true)` 完成登录采集并关闭本次由工具启动的调试浏览器。
+10. 如果 `amazon_rufus_login_status` 返回 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401，且 `watch_login_attempted=false`，设置 `watch_login_attempted=true` 后调用 `amazon_rufus_watch_login(asin, country, close_browser=true)`；本分支不允许 CLI fallback。
+11. 如果 `can_get_backend=false` 或 `status=missing/invalid`，说明没有可用亚马逊 Rufus 登录态；仅当 `watch_login_attempted=false` 时，设置 `watch_login_attempted=true` 并调用 `amazon_rufus_watch_login(asin, country, close_browser=true)` 完成登录采集并关闭本次由工具启动的调试浏览器。
 12. 登录采集成功后，再次调用 `amazon_rufus_login_status(country)` 确认可用。
 13. 调用 `amazon_rufus_get` 获取 Rufus 回答。
 14. 每次 Skill 调用开始时记录 `login_recovery_attempted=false`，用于限制本轮最多触发一次登录恢复。
+15. 每次 Skill 调用开始时记录 `watch_login_attempted=false`，用于限制同一次 Skill 调用最多触发一次 `watch_login`。
+16. 每次 Skill 调用开始时记录 `answer_rewrite_attempts_by_question={}`，用于按问题分别限制回答质量重试；每个问题最多 5 次。
 
 ## 远程授权偏好
 
@@ -147,12 +149,30 @@ amazon_rufus_login_status(country="US")
 判断规则：
 
 - `can_get_backend=true`：已有可用于 Rufus 后端/headless 获取的亚马逊 Rufus 登录态，继续调用 `amazon_rufus_get`。
-- `can_get_backend=false` 或 `status=missing/invalid`：没有可用亚马逊 Rufus 登录态，先执行 MCP 登录采集。
-- OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401：执行 `amazon_rufus_watch_login(asin, country, close_browser=true)`；本分支不允许 CLI fallback。
+- `can_get_backend=false` 或 `status=missing/invalid`：没有可用亚马逊 Rufus 登录态，且 `watch_login_attempted=false` 时先执行 MCP 登录采集。
+- OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401：且 `watch_login_attempted=false` 时执行 `amazon_rufus_watch_login(asin, country, close_browser=true)`；本分支不允许 CLI fallback。
 
 `amazon_rufus_login_status` 只输出 `status`、`has_login_state`、`can_get_backend`、`session_cookie_count`、`has_streaming_request` 等脱敏摘要。不要让 Agent 读取或展示 OPS 平台 Cookie 接口 content 原文。
 
-`can_get_backend=true` 只表示 OPS 平台 Cookie 接口 content 内的亚马逊 Rufus 登录态存在可解析的浏览器 cURL 命令态。旧 `curl_data` 或仅 `storage_state` 的 content 不再作为可用后端凭证，遇到 `status=invalid` 时重新执行 `amazon_rufus_watch_login(asin, country, close_browser=true)`。
+`can_get_backend=true` 只表示 OPS 平台 Cookie 接口 content 内的亚马逊 Rufus 登录态存在可解析的浏览器 cURL 命令态。旧 `curl_data` 或仅 `storage_state` 的 content 不再作为可用后端凭证，遇到 `status=invalid` 时仅在 `watch_login_attempted=false` 时重新执行 `amazon_rufus_watch_login(asin, country, close_browser=true)`。
+
+## watch_login 单次触发约束
+
+`watch_login` 是监听亚马逊 Rufus 登录态并捕获 Rufus streaming 请求种子的阻塞入口，不是通用重试动作。同一次 Skill 调用最多触发一次 `watch_login`；MCP `amazon_rufus_watch_login` 和 CLI `opscli amazon-rufus watch-login` 都计入。
+
+本状态只存在于当前 Skill 调用内：
+
+```text
+watch_login_attempted=false
+```
+
+任何分支准备调用 `amazon_rufus_watch_login` 或 CLI `opscli amazon-rufus watch-login` 前，必须先检查 `watch_login_attempted=false`，并在调用前立即设置：
+
+```text
+watch_login_attempted=true
+```
+
+如果 `watch_login_attempted=true`，不得再次调用 `amazon_rufus_watch_login`，不得改走 CLI `watch-login`，也不得先 `amazon_rufus_logout` 后重新登录；直接返回最新错误并说明本次 Skill 调用已触发过登录监听。该状态不得写入 Skill 目录、报告、`output/` 或 feedback。
 
 ## 超时预算
 
@@ -178,6 +198,8 @@ amazon_rufus_get(
 )
 ```
 
+多题临时问题在同一个 Rufus 对话中获取，不拆成多个独立对话；回答质量重试也必须保留这一批问题的完整上下文。
+
 当用户只提供 ASIN 和国家，或要求“默认报告”“完整分析”“跑题库”时，使用默认题库模式：
 
 ```text
@@ -188,9 +210,47 @@ amazon_rufus_get(asin="B0TEST1234", country="US", skills_dir=".agents/skills")
 
 CLI fallback 中必须保持相同问题来源：单题传一次 `-q`，多题重复 `-q`，默认题库传 `--skills-dir ".agents/skills"`。
 
+## 回答质量判断与问题重写重试
+
+每次 `amazon_rufus_get` 或 CLI `get-backend` 成功后，Agent 必须读取本次 `report_path` 做回答质量判断。本判断只使用本次报告，不读取历史 ASIN 报告，不使用 IDE 打开的旧文件。多问题获取属于同一个 Rufus 对话，判断和重试都按题目逐项处理，但重新请求时保持完整问题列表。
+
+### 不合格判断
+
+以下任一情况视为回答不合格，需要改写问题并重新请求 Rufus：
+
+1. `answer_count=0`、报告为空、题目下没有实际答案。
+2. Rufus 明确拒答、提示重试、表示无法回答，或只返回错误性文本。
+3. 回答没有覆盖问题意图。例如问题询问差评、风险、评价、适配人群、广告投放、对比、场景判断或优化建议，但答案只描述商品详情、规格参数或基础卖点。
+4. 多题场景中某一题答案串题、漏题，或回答内容明显属于另一道题。
+
+成功但 `answer_count=0` 不再按正常 0 答案报告直接结束；必须进入本节的回答质量判断与问题重写重试流程。
+
+### 子 agent 改写规则
+
+1. 只把未达到 5 次上限的不合格题目交给子 agent 改写，合格题目保留原文。
+2. 开启一个子 agent，并使用固定提示词：
+
+```text
+重写这些问题，修改其中的字，但要求意思保持不变。总字数不要超过200。
+```
+
+3. 子 agent 只接收待改写问题文本，不接收 cookie、headers、payload、`storage_state`、cURL 命令、请求种子、OPS 平台 Cookie 接口 content 或亚马逊 Rufus 登录态。
+4. 子 agent 输出必须保持问题数量一致、语义不变、总字数不超过 200。若输出为空、数量不一致或明显改变语义，本轮不请求 Rufus，先要求子 agent 修正一次；仍不合格时停止回答质量重试。
+
+### 重新请求规则
+
+1. 将改写后的题目替换回原位置，形成完整问题列表。
+2. 按改写后的完整问题来源重新调用 `amazon_rufus_get` 或 CLI `get-backend`。
+3. 单题继续传 `question`；多题或默认题库重试时传完整 `questions` 列表，继续在同一个 Rufus 对话语义下处理本批问题。
+4. 不得把多个问题拼成一个长字符串，不得因为重试改跑默认题库。
+5. 保持原 ASIN、国家站点和已取得的亚马逊 Rufus 登录态，不得因为问题改写触发 `amazon_rufus_logout`。
+6. `answer_rewrite_attempts_by_question` 按问题分别记录次数；每完成一次 Rufus 重新请求，只增加本轮被改写题目的计数，每个问题最多 5 次。
+7. 回答质量重试与登录恢复相互独立，不得重置 `login_recovery_attempted` 或 `watch_login_attempted`，不得扩大 CLI fallback 范围。
+8. 某题达到 5 次后仍不合格时停止重试该题，其他不合格题目仍可按各自上限继续；最终回复只展示最新一次 `report_path` 并说明对应题目已达到回答质量重试上限。
+
 ## MCP 登录采集入口
 
-当亚马逊 Rufus 登录态缺失、平台 Cookie 鉴权错误、401，或 allowed 路径中的 MCP 默认链路返回三类登录态相关错误时，使用 MCP 登录采集入口。
+当亚马逊 Rufus 登录态缺失、平台 Cookie 鉴权错误、401，或 allowed 路径中的 MCP 默认链路返回三类登录态相关错误时，使用 MCP 登录采集入口。进入该入口前必须确认 `watch_login_attempted=false`，并在调用前设置为 `watch_login_attempted=true`。
 
 监听登录页并把亚马逊 Rufus 登录态保存到 OPS 平台 Cookie 接口 content：
 
@@ -228,7 +288,7 @@ MCP 后端只从 OPS 平台 Cookie 接口 content 中读取浏览器 cURL 命令
 
 ## 三类 MCP 错误的登录采集恢复
 
-以下错误在 allowed 路径中统一进入一次登录采集恢复：
+以下错误在 allowed 路径中仅当 `login_recovery_attempted=false` 且 `watch_login_attempted=false` 时进入一次登录采集恢复：
 
 ```text
 RUFUS_HEADLESS_REQUEST_ERROR
@@ -236,7 +296,7 @@ RUFUS_HEADLESS_CAPTURE_ERROR
 RUFUS_SECRET_NOT_READY
 ```
 
-OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401 也进入 `amazon_rufus_watch_login(asin, country, close_browser=true)`，但本分支不允许 CLI fallback，也不执行 `amazon_rufus_logout` 预清理。
+OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401 也只在 `watch_login_attempted=false` 时进入 `amazon_rufus_watch_login(asin, country, close_browser=true)`，但本分支不允许 CLI fallback，也不执行 `amazon_rufus_logout` 预清理。
 
 `RUFUS_HEADLESS_REQUEST_ERROR` 的 message 可能是 `Rufus 请求失败: 403`。此时不要把 403 当作 MCP 服务不可用，也不要直接重复调用 `amazon_rufus_get`；按授权或页面上下文失效处理，进入一次登录采集恢复。
 
@@ -246,19 +306,21 @@ OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401 也�
 
 ```text
 login_recovery_attempted=false
+watch_login_attempted=false
 ```
 
 首次进入登录采集恢复时立即设置：
 
 ```text
 login_recovery_attempted=true
+watch_login_attempted=true
 ```
 
 该状态不得写入 Skill 目录、报告、`output/` 或 feedback。它只用于防止同一次 Skill 调用无限打开登录窗口。
 
 ### 恢复步骤
 
-1. 保留原始 ASIN、国家站点、`question`、`questions` 和 `skills_dir`。
+1. 保留原始 ASIN、国家站点、`question`、`questions` 和 `skills_dir`；仅当 `watch_login_attempted=false` 时继续恢复。
 2. 先清理旧 Rufus 登录态：
 
 ```text
@@ -277,10 +339,10 @@ amazon_rufus_watch_login(asin="B0TEST1234", country="US", close_browser=true)
 
 ### 二次失败处理
 
-如果登录采集恢复后仍返回任意错误，或者再次命中上述三类错误，不再触发第二次登录。建议提示：
+如果登录采集恢复后仍返回任意错误、再次命中上述三类错误，或 `watch_login_attempted=true` 后又进入任意登录采集分支，不再触发第二次登录。建议提示：
 
 ```text
-本次 Skill 调用已触发过一次 MCP 登录采集恢复，仍未成功；为避免重复登录循环，不再打开第二次登录窗口。错误：<ERROR_CODE>: <message>
+本次 Skill 调用已触发过一次 watch_login / MCP 登录采集恢复，仍未成功；为避免重复登录循环，不再打开第二次登录窗口。错误：<ERROR_CODE>: <message>
 ```
 
 不要把多个问题拼成一个长字符串，不要在恢复路径改跑默认题库，不要输出 cookie、localStorage、`storage_state`、headers、seed request 或 upload payload。
@@ -295,7 +357,7 @@ CLI fallback 只由 `mcp_tools_unavailable` 或 `remote_consent_denied` 触发�
 opscli amazon-rufus login-status <COUNTRY> --pretty
 ```
 
-2. 如果 `can_get_backend=false` 或状态为 `missing/invalid`，执行登录采集：
+2. 如果 `can_get_backend=false` 或状态为 `missing/invalid`，且 `watch_login_attempted=false`，设置 `watch_login_attempted=true` 后执行登录采集；如果 `watch_login_attempted=true`，直接返回错误，不再打开浏览器：
 
 ```text
 opscli amazon-rufus watch-login <ASIN> <COUNTRY> --close-browser --pretty
@@ -321,7 +383,7 @@ MCP 工具或 CLI 获取成功时返回 `report_path`。完整答案报告写入
 
 禁止仅凭 ASIN 在 `output/amazon-rufus/` 中读取任意 `<ASIN>-*.md` 历史报告，也不要使用 IDE 当前打开文件或上一轮对话遗留路径作为本次结果。
 
-登录恢复后重新调用 `amazon_rufus_get` 成功时，必须使用重试成功响应中的最新 `report_path` 覆盖旧路径；如果无法确认本次 `report_path`，直接报错，不用历史报告兜底。
+登录恢复或回答质量重试后重新调用 `amazon_rufus_get` 成功时，必须使用重试成功响应中的最新 `report_path` 覆盖旧路径；如果无法确认本次 `report_path`，直接报错，不用历史报告兜底。
 
 除非用户明确要求排障，不输出：
 

@@ -1549,6 +1549,29 @@ def test_manager_save_state_persists_browser_storage_state(tmp_path: Path):
     assert "session-id" not in json.dumps(result, ensure_ascii=False)
 
 
+def test_browser_start_new_chrome_does_not_auto_open_devtools(monkeypatch, tmp_path: Path):
+    """确保自动启动调试浏览器时不会额外打开 DevTools 页签。"""
+    from opscli.amazon_rufus.services import browser as browser_module
+    from opscli.amazon_rufus.services.browser import BrowserAttachService
+
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, args, stdout=None, stderr=None):
+            captured["args"] = args
+            captured["stdout"] = stdout
+            captured["stderr"] = stderr
+
+    monkeypatch.setattr(browser_module.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(BrowserAttachService, "_resolve_chrome_path", lambda self, chrome_path: "chrome.exe")
+    monkeypatch.setattr(browser_module.subprocess, "Popen", FakePopen)
+
+    BrowserAttachService()._start_new_chrome(cdp_url="http://127.0.0.1:9333", chrome_path=None)
+
+    assert "--auto-open-devtools-for-tabs" not in captured["args"]
+    assert "--no-first-run" in captured["args"]
+
+
 def test_browser_watch_login_detects_login_and_captures_streaming_request(monkeypatch):
     from opscli.amazon_rufus.services.browser import BrowserAttachService
 
