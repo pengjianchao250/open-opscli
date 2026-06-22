@@ -13,7 +13,7 @@
 3. 子 agent 固定提示词：`重写这些问题，修改其中的字，但要求意思保持不变。总字数不要超过200。`
 4. 拿到新问题后重新请求 Rufus。
 5. 多问题获取保持在同一个 Rufus 对话中，不拆成多个独立对话。
-6. 使用 `answer_rewrite_attempts_by_question` 按问题分别记录，每个问题最多 5 次。
+6. 使用 `answer_rewrite_attempts_by_question` 按问题分别记录，每个问题最多 10 次。
 7. 同一次 Skill 调用最多触发一次 `watch_login`，MCP 和 CLI 登录采集共享 `watch_login_attempted`。
 8. Chrome 启动不再携带自动打开 DevTools 的参数。
 9. 同步更新项目安装版 Skill、内置模板版 Skill、reference、README、Super Dev 文档和流程图。
@@ -41,7 +41,7 @@
 
 ### 重试上限
 
-使用 `answer_rewrite_attempts_by_question={}` 按问题分别记录回答质量重试次数。每完成一次 Rufus 重新请求后，只增加本轮被改写题目的计数；每个问题最多 5 次。某题达到上限后停止重试该题，其他题目仍可按各自上限继续，最终返回最新 `report_path`。
+使用 `answer_rewrite_attempts_by_question={}` 按问题分别记录回答质量重试次数。每完成一次 Rufus 重新请求后，只增加本轮被改写题目的计数；每个问题最多 10 次。某题达到上限后停止重试该题，其他题目仍可按各自上限继续，最终返回最新 `report_path`。
 
 ### 登录采集单次触发
 
@@ -56,7 +56,7 @@
 | 项目 | 标准 |
 |---|---|
 | Skill 入口 | 项目版和模板版 `SKILL.md` 都包含回答质量判断和问题改写重试规则。 |
-| reference | 两份 `rufus-mcp-workflow.md` 都包含不合格判断、子 agent 提示词、同一个 Rufus 对话和每个问题最多 5 次规则。 |
+| reference | 两份 `rufus-mcp-workflow.md` 都包含不合格判断、子 agent 提示词、同一个 Rufus 对话和每个问题最多 10 次规则。 |
 | README | 两份 README 都说明获取后需要质量判断和重试。 |
 | 流程图 | Mermaid 图包含回答质量判断、问题改写重试和 `watch_login_attempted` 分支。 |
 | 测试 | `test_ops_amazon_rufus_docs_require_answer_quality_rewrite_retry`、`test_ops_amazon_rufus_docs_limit_watch_login_once_per_skill_call` 和 Chrome 启动参数测试通过。 |

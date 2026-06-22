@@ -38,7 +38,7 @@ ops-amazon-rufus/
 10. 用户拒绝远程授权时进入 CLI fallback，不调用 `amazon_rufus_get`。
 11. 旧 `curl_data` 或仅 `storage_state` 的 OPS 平台 Cookie 接口 content 不再作为可用亚马逊 Rufus 登录态；状态为 `invalid` 时需要重新执行登录采集。
 12. 同一次 Skill 调用最多触发一次 `watch_login`；MCP `amazon_rufus_watch_login` 和 CLI `opscli amazon-rufus watch-login` 都计入。
-13. Rufus 获取成功后必须执行回答质量判断；无回答、拒答、答非所问或复杂问题退化为商品详情时，开启一个子 agent 改写问题，并按改写后的完整问题来源重新调用 `amazon_rufus_get`；多问题保持在同一个 Rufus 对话中，每个问题最多 5 次。
+13. Rufus 获取成功后必须执行回答质量判断；无回答、拒答、答非所问或复杂问题退化为商品详情时，开启一个子 agent 改写问题，并按改写后的完整问题来源重新调用 `amazon_rufus_get`；多问题保持在同一个 Rufus 对话中，每个问题最多 10 次。
 
 ## CLI fallback 指令
 
@@ -69,7 +69,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 11. 调用 `amazon_rufus_get` 获取 Rufus 回答并写入报告。
 12. 读取本次 `report_path` 做回答质量判断；如果 `answer_count=0`、拒答、答非所问，或问题不止商品详情但回答只是商品详情，开启子 agent 改写不合格问题。
 13. 子 agent 固定提示词为：`重写这些问题，修改其中的字，但要求意思保持不变。总字数不要超过200。`
-14. 用改写结果替换原问题位置，按完整问题列表重新请求 Rufus；使用 `answer_rewrite_attempts_by_question` 按问题分别记录，每个问题最多 5 次，多问题仍保持同一个 Rufus 对话。
+14. 用改写结果替换原问题位置，按完整问题列表重新请求 Rufus；使用 `answer_rewrite_attempts_by_question` 按问题分别记录，每个问题最多 10 次，多问题仍保持同一个 Rufus 对话。
 15. 如果命中 `RUFUS_SECRET_NOT_READY`、`RUFUS_HEADLESS_CAPTURE_ERROR` 或 `RUFUS_HEADLESS_REQUEST_ERROR`，本次 Skill 调用尚未触发登录恢复且 `watch_login_attempted=false` 时，按 `amazon_rufus_logout -> amazon_rufus_watch_login -> amazon_rufus_get` 恢复一次。
 16. 如果 `watch_login_attempted=true`，不得再次调用 `amazon_rufus_watch_login`；每次 Skill 调用最多触发一次登录恢复，恢复后仍失败时直接报错，不再重复打开登录窗口。
 17. 其他错误不允许 CLI fallback。

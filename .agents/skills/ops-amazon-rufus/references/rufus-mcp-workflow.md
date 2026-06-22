@@ -100,7 +100,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 13. 调用 `amazon_rufus_get` 获取 Rufus 回答。
 14. 每次 Skill 调用开始时记录 `login_recovery_attempted=false`，用于限制本轮最多触发一次登录恢复。
 15. 每次 Skill 调用开始时记录 `watch_login_attempted=false`，用于限制同一次 Skill 调用最多触发一次 `watch_login`。
-16. 每次 Skill 调用开始时记录 `answer_rewrite_attempts_by_question={}`，用于按问题分别限制回答质量重试；每个问题最多 5 次。
+16. 每次 Skill 调用开始时记录 `answer_rewrite_attempts_by_question={}`，用于按问题分别限制回答质量重试；每个问题最多 10 次。
 
 ## 远程授权偏好
 
@@ -227,7 +227,7 @@ CLI fallback 中必须保持相同问题来源：单题传一次 `-q`，多题�
 
 ### 子 agent 改写规则
 
-1. 只把未达到 5 次上限的不合格题目交给子 agent 改写，合格题目保留原文。
+1. 只把未达到 10 次上限的不合格题目交给子 agent 改写，合格题目保留原文。
 2. 开启一个子 agent，并使用固定提示词：
 
 ```text
@@ -244,9 +244,9 @@ CLI fallback 中必须保持相同问题来源：单题传一次 `-q`，多题�
 3. 单题继续传 `question`；多题或默认题库重试时传完整 `questions` 列表，继续在同一个 Rufus 对话语义下处理本批问题。
 4. 不得把多个问题拼成一个长字符串，不得因为重试改跑默认题库。
 5. 保持原 ASIN、国家站点和已取得的亚马逊 Rufus 登录态，不得因为问题改写触发 `amazon_rufus_logout`。
-6. `answer_rewrite_attempts_by_question` 按问题分别记录次数；每完成一次 Rufus 重新请求，只增加本轮被改写题目的计数，每个问题最多 5 次。
+6. `answer_rewrite_attempts_by_question` 按问题分别记录次数；每完成一次 Rufus 重新请求，只增加本轮被改写题目的计数，每个问题最多 10 次。
 7. 回答质量重试与登录恢复相互独立，不得重置 `login_recovery_attempted` 或 `watch_login_attempted`，不得扩大 CLI fallback 范围。
-8. 某题达到 5 次后仍不合格时停止重试该题，其他不合格题目仍可按各自上限继续；最终回复只展示最新一次 `report_path` 并说明对应题目已达到回答质量重试上限。
+8. 某题达到 10 次后仍不合格时停止重试该题，其他不合格题目仍可按各自上限继续；最终回复只展示最新一次 `report_path` 并说明对应题目已达到回答质量重试上限。
 
 ## MCP 登录采集入口
 

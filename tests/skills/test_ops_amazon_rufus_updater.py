@@ -381,7 +381,7 @@ def test_ops_amazon_rufus_docs_require_answer_quality_rewrite_retry():
 
         assert "回答质量判断" in docs
         assert "answer_rewrite_attempts_by_question" in docs
-        assert "每个问题最多 5 次" in docs
+        assert "每个问题最多 10 次" in docs
         assert "按问题分别记录" in docs
         assert "同一个 Rufus 对话" in docs
         assert "多问题" in docs
@@ -391,7 +391,7 @@ def test_ops_amazon_rufus_docs_require_answer_quality_rewrite_retry():
         assert "拒答" in docs
         assert "商品详情" in docs
         assert "按改写后的完整问题来源重新调用 `amazon_rufus_get`" in docs
-        assert "整个回答质量重试过程最多 5 次" not in docs
+        assert "整个回答质量重试过程最多 10 次" not in docs
 
 
 def test_ops_amazon_rufus_docs_limit_watch_login_once_per_skill_call():

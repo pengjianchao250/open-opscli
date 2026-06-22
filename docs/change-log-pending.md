@@ -28,7 +28,7 @@
 
 **变更原因**：Rufus 获取成功后可能出现无回答、拒答、答非所问，或用户询问评价/风险/适配性等复杂问题但回答退化为商品详情的情况；原 Skill 缺少问题改写和有限重试规则。
 
-**改动点**：更新 `.agents/skills/ops-amazon-rufus` 与 `opscli/skills/templates/ops-amazon-rufus` 的 `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md`，新增 `answer_rewrite_attempts_by_question`、回答质量判断、子 agent 固定提示词、同一个 Rufus 对话处理多问题、每个问题最多 5 次的问题改写重试规则；新增 `.super-dev/changes/amazon-rufus-answer-retry` 和 `output/amazon-rufus-skill-*` 文档与流程图；补充 `tests/skills/test_ops_amazon_rufus_updater.py` 文档契约测试。
+**改动点**：更新 `.agents/skills/ops-amazon-rufus` 与 `opscli/skills/templates/ops-amazon-rufus` 的 `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md`，新增 `answer_rewrite_attempts_by_question`、回答质量判断、子 agent 固定提示词、同一个 Rufus 对话处理多问题、每个问题最多 10 次的问题改写重试规则；新增 `.super-dev/changes/amazon-rufus-answer-retry` 和 `output/amazon-rufus-skill-*` 文档与流程图；补充 `tests/skills/test_ops_amazon_rufus_updater.py` 文档契约测试。
 
 **验证结果**：新增测试先失败于缺少“回答质量判断”规则；补充文档后 `uv run pytest "tests/skills/test_ops_amazon_rufus_updater.py" -q` 为 9 passed。补充运行 `uv run pytest "tests/amazon_rufus" -q` 时发现既有失败：`test_get_platform_cookie_sends_platform_query` 期望 timeout 为 10，当前实际为 180；该失败与本次 Skill 文档变更无关，未在本次处理。
 

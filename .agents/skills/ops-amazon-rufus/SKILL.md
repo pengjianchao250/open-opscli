@@ -30,7 +30,7 @@ description: Amazon Rufus 默认题库数据与 Agent 编排入口。用于基�
 8. OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401 按本 Skill 新规则进入 MCP 登录采集：`amazon_rufus_watch_login(asin, country, close_browser=true)`；本分支不允许 CLI fallback。
 9. 同一次 Skill 调用最多触发一次 `watch_login`：MCP `amazon_rufus_watch_login` 和 CLI `opscli amazon-rufus watch-login` 都计入。任何分支准备调用 `amazon_rufus_watch_login` 前必须先检查 `watch_login_attempted=false`，并在调用前立即设置为 `watch_login_attempted=true`。
 10. 获取结果只以本次 `amazon_rufus_get` 或 CLI `get-backend` 返回的 `report_path` 为准。
-11. Rufus 获取成功后必须执行回答质量判断；无回答、拒答、答非所问或复杂问题退化为商品详情时，按“回答质量判断与问题重写重试”规则改写问题并重新请求 Rufus；多问题获取保持在同一个 Rufus 对话中，每个问题最多 5 次。
+11. Rufus 获取成功后必须执行回答质量判断；无回答、拒答、答非所问或复杂问题退化为商品详情时，按“回答质量判断与问题重写重试”规则改写问题并重新请求 Rufus；多问题获取保持在同一个 Rufus 对话中，每个问题最多 10 次。
 
 ## 排障/初始化 MCP 工具边界
 
@@ -97,11 +97,11 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 19. 如果本次 Skill 调用已经触发过一次 `watch_login` 或登录恢复，或保存后重新调用仍失败，不再打开第二次登录窗口，直接返回错误；其他错误不允许 CLI fallback。
 20. Rufus 获取成功后，必须读取本次返回的 `report_path` 做回答质量判断；不得读取历史报告参与判断。
 21. 如果存在无回答、拒答、答非所问，或用户问题不止商品详情但回答退化为商品详情的情况，进入问题重写重试流程。
-22. 问题重写重试必须按问题分别记录 `answer_rewrite_attempts_by_question`，每个问题最多 5 次；达到上限的题目不再交给子 agent。
+22. 问题重写重试必须按问题分别记录 `answer_rewrite_attempts_by_question`，每个问题最多 10 次；达到上限的题目不再交给子 agent。
 23. 对未达到上限的不合格题目开启一个子 agent，提示词固定为：`重写这些问题，修改其中的字，但要求意思保持不变。总字数不要超过200。`
 24. 拿到新问题后，按改写后的完整问题来源重新调用 `amazon_rufus_get` 或 CLI `get-backend`；不要把多个问题拼成一个长字符串，不要改跑默认题库。
 25. 重新请求 Rufus 时仍保持同一个 Rufus 对话的多问题语义：单题继续传 `question`，多题或默认题库重试时传完整 `questions` 列表，只替换本轮改写题目的原位置。
-26. 每完成一次 Rufus 重新请求，只增加本轮被改写题目的计数；某题达到 5 次后停止重试该题，其他不合格题目仍可按各自上限继续。
+26. 每完成一次 Rufus 重新请求，只增加本轮被改写题目的计数；某题达到 10 次后停止重试该题，其他不合格题目仍可按各自上限继续。
 27. 如果仍有题目达到上限后不合格，最终回复只展示最新一次 `report_path` 并说明对应题目已达到回答质量重试上限。
 28. 最终回复只展示本次工具返回的 `report_path` 或本次 CLI 返回的 `report_path`；如需正文，只读取本次返回的 `report_path`，不得按 ASIN 读取历史报告。
 
@@ -122,7 +122,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
    - Rufus 明确拒答、要求重试、表示无法回答或只返回错误性文本。
    - 回答没有覆盖问题意图，例如问题询问差评、风险、评价、适配人群、广告投放、对比或优化建议，但答案只描述商品详情、规格或基础卖点。
    - 多题场景中某一题答案串题、漏题，或回答内容明显属于另一道题。
-3. 只把未达到 5 次上限的不合格题目交给子 agent 改写；合格题目保留原文。拿到改写结果后，用改写后的题目替换原位置，形成完整问题列表。
+3. 只把未达到 10 次上限的不合格题目交给子 agent 改写；合格题目保留原文。拿到改写结果后，用改写后的题目替换原位置，形成完整问题列表。
 4. 子 agent 提示词必须固定为：
 
 ```text
@@ -133,7 +133,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 6. 子 agent 输出必须保持问题数量一致、语义不变、总字数不超过 200；如果输出为空、数量不一致或明显改变语义，本轮不请求 Rufus，先要求子 agent 修正一次。
 7. 重新请求时必须保持原 ASIN、国家站点、登录态、同一个 Rufus 对话和问题来源语义。单题继续传 `question`；多题或默认题库重试时传完整 `questions` 列表。
 8. 回答质量重试与登录恢复相互独立：重写问题不得触发 `amazon_rufus_logout`，不得扩大 CLI fallback，且不得重置 `login_recovery_attempted` 或 `watch_login_attempted`。
-9. `answer_rewrite_attempts_by_question` 按问题分别记录回答质量重试次数，每个问题最多 5 次；某题达到上限后不再开启子 agent 改写该题，也不再为该题单独请求 Rufus。
+9. `answer_rewrite_attempts_by_question` 按问题分别记录回答质量重试次数，每个问题最多 10 次；某题达到上限后不再开启子 agent 改写该题，也不再为该题单独请求 Rufus。
 
 ## CLI fallback 子流程
 
