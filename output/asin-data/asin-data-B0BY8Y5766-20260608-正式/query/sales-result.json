@@ -1,0 +1,29 @@
+{
+  "time": "2026-06-08T14:09:28",
+  "source": "query.sales",
+  "asin": null,
+  "command": [
+    ".venv\\Scripts\\opscli.exe",
+    "query",
+    "simple",
+    "--table-id",
+    "1",
+    "--payload",
+    "output\\asin-data\\asin-data-B0BY8Y5766-20260608-正式\\query\\sales-payload.json",
+    "--run"
+  ],
+  "dry_run": false,
+  "status": "failed",
+  "exit_code": 1,
+  "stdout": "{\"success\": false, \"command\": \"query simple-run\", \"data\": null, \"error\": {\"code\": \"INVALID_PAYLOAD\", \"message\": \"当前数据集 metadata 未返回字段，无法执行字段歧义门禁\"}}\n",
+  "stderr": "\nopscli 有新版本可用，建议更新最新版本: v0.0.84 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n",
+  "json": {
+    "success": false,
+    "command": "query simple-run",
+    "data": null,
+    "error": {
+      "code": "INVALID_PAYLOAD",
+      "message": "当前数据集 metadata 未返回字段，无法执行字段歧义门禁"
+    }
+  }
+}

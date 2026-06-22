@@ -101,6 +101,7 @@ def _product_params(params: dict[str, Any], site: str) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "domain": normalize_domain(site),
         "asin" if asins else "code": items,
+        "history": True,
     }
     _copy_optional(
         payload,
@@ -149,10 +150,13 @@ def _product_search_params(params: dict[str, Any], site: str) -> dict[str, Any]:
 
 def _product_finder_params(params: dict[str, Any], site: str) -> dict[str, Any]:
     selection = _selection(params)
-    return {
+    selection.pop("stats", None)
+    payload = {
         "domain": normalize_domain(site),
         "selection": json.dumps(selection, ensure_ascii=False, separators=(",", ":")),
     }
+    _copy_optional(payload, params, {"stats": "stats"})
+    return payload
 
 
 def _category_search_params(params: dict[str, Any], site: str) -> dict[str, Any]:
@@ -185,7 +189,7 @@ def _seller_params(params: dict[str, Any], site: str) -> dict[str, Any]:
         raise KeepaConfigError("seller 场景需要 seller 或 sellers")
     if len(_split_csv(sellers)) > 100:
         raise KeepaConfigError("seller 场景单次最多 100 个 seller id")
-    payload = {"domain": normalize_domain(site), "seller": sellers}
+    payload = {"domain": normalize_domain(site), "seller": sellers, "storefront": True}
     _copy_optional(payload, params, {"storefront": "storefront", "update": "update"})
     return payload
 

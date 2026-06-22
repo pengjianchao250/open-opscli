@@ -1,0 +1,31 @@
+{
+  "time": "2026-06-08T20:45:20",
+  "source": "query.sales",
+  "asin": null,
+  "command": [
+    ".tmp\\opscli-source.cmd",
+    "query",
+    "simple",
+    "--table-id",
+    "1",
+    "--dataset",
+    "ds_d35ac6f3910c",
+    "--payload",
+    "output\\asin-data\\asin-data-B0BY8Y5766-20260608-qa-rerun\\query\\sales-payload.json",
+    "--run"
+  ],
+  "dry_run": false,
+  "status": "failed",
+  "exit_code": 1,
+  "stdout": "{\"success\": false, \"command\": \"query simple-run\", \"data\": null, \"error\": {\"code\": \"INVALID_PAYLOAD\", \"message\": \"metric 字段不存在于当前数据集 metadata 中: ds_d35ac6f3910c.refund_qty\"}}\n",
+  "stderr": "\nopscli 有新版本可用，建议更新最新版本: v0.0.84 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n",
+  "json": {
+    "success": false,
+    "command": "query simple-run",
+    "data": null,
+    "error": {
+      "code": "INVALID_PAYLOAD",
+      "message": "metric 字段不存在于当前数据集 metadata 中: ds_d35ac6f3910c.refund_qty"
+    }
+  }
+}

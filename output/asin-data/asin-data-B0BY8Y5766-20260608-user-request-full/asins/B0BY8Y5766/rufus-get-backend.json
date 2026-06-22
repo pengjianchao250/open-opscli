@@ -1,0 +1,36 @@
+{
+  "time": "2026-06-08T18:39:22",
+  "source": "rufus.get_backend",
+  "asin": "B0BY8Y5766",
+  "command": [
+    ".venv\\Scripts\\opscli.exe",
+    "amazon-rufus",
+    "get-backend",
+    "B0BY8Y5766",
+    "US",
+    "--skills-dir",
+    ".agents/skills",
+    "--timeout",
+    "180",
+    "--no-upload-payload",
+    "--pretty",
+    "-q",
+    "这是什么商品",
+    "-q",
+    "这个商品评价如何？"
+  ],
+  "dry_run": false,
+  "status": "failed",
+  "exit_code": 1,
+  "stdout": "{\n  \"success\": false,\n  \"command\": \"amazon-rufus get-backend\",\n  \"data\": null,\n  \"error\": {\n    \"code\": \"RUFUS_HEADLESS_CAPTURE_ERROR\",\n    \"message\": \"缺少 Playwright，请安装 `opscli[amazon]`\"\n  }\n}\n",
+  "stderr": "\nopscli 有新版本可用，建议更新最新版本: v0.0.84 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n",
+  "json": {
+    "success": false,
+    "command": "amazon-rufus get-backend",
+    "data": null,
+    "error": {
+      "code": "RUFUS_HEADLESS_CAPTURE_ERROR",
+      "message": "缺少 Playwright，请安装 `opscli[amazon]`"
+    }
+  }
+}

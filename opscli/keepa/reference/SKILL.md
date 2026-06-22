@@ -35,15 +35,11 @@ opscli keepa scenarios
 Run a product request:
 
 ```powershell
-opscli keepa run product --site US --params '{"asin":"B0088PUEPK","stats":30,"history":false}'
+opscli keepa run product --site US --params '{"asin":"B0088PUEPK","stats":30}'
 ```
 
-Default export is XLSX with Chinese headers. Use JSON only for backend
-comparison:
-
-```powershell
-opscli keepa run product-search --site US --params '{"keyword":"flashlight"}' --export-format json
-```
+Default export is XLSX with Chinese headers. `--export-format` currently accepts
+only `xls` and `xlsx`; backend comparison should use the task `raw.json`.
 
 Run with low-quota override:
 
@@ -54,7 +50,7 @@ opscli keepa run product --site US --params '{"asins":["B0088PUEPK"]}' --force
 Run with explicit output directory:
 
 ```powershell
-opscli keepa run seller --site US --params '{"seller":"A2L77EE7U53NWQ","storefront":true}' --output-dir D:\tmp\keepa
+opscli keepa run seller --site US --params '{"seller":"A2L77EE7U53NWQ"}' --output-dir D:\tmp\keepa
 ```
 
 ## Python Calls
@@ -70,7 +66,7 @@ result = await manager.run(
     KeepaScenarioRequest(
         scenario="product",
         site="US",
-        params={"asin": "B0088PUEPK", "stats": 30, "history": False},
+        params={"asin": "B0088PUEPK", "stats": 30},
         force=True,
     )
 )
@@ -156,13 +152,13 @@ Example `keepa_run` arguments:
   "params": {
     "asin": "B0088PUEPK",
     "stats": 30,
-    "history": false
+    "history": true
   },
   "force": true
 }
 ```
 
 The run saves `params.json`, `raw.json`, `result.json`, and an XLSX export under
-the task directory. JSON export is available with `export_format=json` /
-`--export-format json` for backend comparison. When OPS file upload is available,
-the export metadata includes a cloud URL; otherwise use the local `export.path`.
+the task directory. JSON user export is not supported for now; backend
+comparison should use `raw.json`. When OPS file upload is available, the export
+metadata includes a cloud URL; otherwise use the local `export.path`.

@@ -18,6 +18,14 @@ ENV_ACCOUNTS = "OPSCLI_SELLER_SPRITE_ACCOUNTS"
 ENV_OUTPUT_DIR = "OPSCLI_SELLER_SPRITE_OUTPUT_DIR"
 ENV_PAGE_SIZE = "OPSCLI_SELLER_SPRITE_PAGE_SIZE"
 ENV_ACCOUNT_CACHE_TTL_SECONDS = "OPSCLI_SELLER_SPRITE_ACCOUNT_CACHE_TTL_SECONDS"
+ENV_MODE = "OPSCLI_SELLER_SPRITE_MODE"
+ENV_BROWSER_PROFILE_DIR = "OPSCLI_SELLER_SPRITE_BROWSER_PROFILE_DIR"
+ENV_BROWSER_HEADLESS = "OPSCLI_SELLER_SPRITE_BROWSER_HEADLESS"
+ENV_BROWSER_RUNTIME = "OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME"
+ENV_BROWSER_CHANNEL = "OPSCLI_SELLER_SPRITE_BROWSER_CHANNEL"
+ENV_BROWSER_TASK_INTERVAL_SECONDS = "OPSCLI_SELLER_SPRITE_BROWSER_TASK_INTERVAL_SECONDS"
+ENV_BROWSER_COOLDOWN_SECONDS = "OPSCLI_SELLER_SPRITE_BROWSER_COOLDOWN_SECONDS"
+ENV_BROWSER_PAGE_PREPARE = "OPSCLI_SELLER_SPRITE_BROWSER_PAGE_PREPARE"
 
 DEFAULT_ACCOUNT_NAME = "default"
 DEFAULT_PAGE_SIZE = 100
@@ -25,6 +33,11 @@ DEFAULT_SITE = "us"
 DEFAULT_PERIOD = "30d"
 DEFAULT_OUTPUT_DIR = CONFIG_DIR / "seller_sprite" / "api_runs"
 DEFAULT_ACCOUNT_CACHE_TTL_SECONDS = 600
+DEFAULT_MODE = "browser-route"
+DEFAULT_BROWSER_PROFILE_DIR = CONFIG_DIR / "seller_sprite" / "browser_profiles"
+DEFAULT_BROWSER_RUNTIME = "patchright"
+DEFAULT_BROWSER_TASK_INTERVAL_SECONDS = 5.0
+DEFAULT_BROWSER_COOLDOWN_SECONDS = 20.0
 
 
 @dataclass(frozen=True)
@@ -40,11 +53,20 @@ class SellerSpriteSettings:
     default_site: str = DEFAULT_SITE
     default_period: str = DEFAULT_PERIOD
     account_cache_ttl_seconds: int = DEFAULT_ACCOUNT_CACHE_TTL_SECONDS
+    default_mode: str = DEFAULT_MODE
+    browser_profile_dir: Path = DEFAULT_BROWSER_PROFILE_DIR
+    browser_headless: bool = False
+    browser_runtime: str = DEFAULT_BROWSER_RUNTIME
+    browser_channel: str | None = None
+    browser_task_interval_seconds: float = DEFAULT_BROWSER_TASK_INTERVAL_SECONDS
+    browser_cooldown_seconds: float = DEFAULT_BROWSER_COOLDOWN_SECONDS
+    browser_page_prepare: bool = True
 
     def to_public_dict(self) -> dict[str, Any]:
         """返回不包含敏感字段的配置摘要。"""
         payload = asdict(self)
         payload["output_dir"] = str(self.output_dir)
+        payload["browser_profile_dir"] = str(self.browser_profile_dir)
         payload["has_username"] = bool(self.username)
         payload["has_password"] = bool(self.password)
         payload["account_count"] = len(self.accounts) or int(bool(self.username))
@@ -58,6 +80,7 @@ def load_settings() -> SellerSpriteSettings:
     """从 `.env` 和环境变量读取卖家精灵配置。"""
     values = _load_env_values()
     output_dir = Path(values.get(ENV_OUTPUT_DIR) or DEFAULT_OUTPUT_DIR).expanduser()
+    browser_profile_dir = Path(values.get(ENV_BROWSER_PROFILE_DIR) or DEFAULT_BROWSER_PROFILE_DIR).expanduser()
     page_size = _parse_int(values.get(ENV_PAGE_SIZE), DEFAULT_PAGE_SIZE)
     return SellerSpriteSettings(
         account_name=values.get(ENV_ACCOUNT_NAME) or DEFAULT_ACCOUNT_NAME,
@@ -70,6 +93,20 @@ def load_settings() -> SellerSpriteSettings:
             values.get(ENV_ACCOUNT_CACHE_TTL_SECONDS),
             DEFAULT_ACCOUNT_CACHE_TTL_SECONDS,
         ),
+        default_mode=_normalize_mode(values.get(ENV_MODE)),
+        browser_profile_dir=browser_profile_dir,
+        browser_headless=_parse_bool(values.get(ENV_BROWSER_HEADLESS), _default_browser_headless()),
+        browser_runtime=_normalize_browser_runtime(values.get(ENV_BROWSER_RUNTIME)),
+        browser_channel=values.get(ENV_BROWSER_CHANNEL) or None,
+        browser_task_interval_seconds=_parse_float(
+            values.get(ENV_BROWSER_TASK_INTERVAL_SECONDS),
+            DEFAULT_BROWSER_TASK_INTERVAL_SECONDS,
+        ),
+        browser_cooldown_seconds=_parse_float(
+            values.get(ENV_BROWSER_COOLDOWN_SECONDS),
+            DEFAULT_BROWSER_COOLDOWN_SECONDS,
+        ),
+        browser_page_prepare=_parse_bool(values.get(ENV_BROWSER_PAGE_PREPARE), True),
     )
 
 
@@ -84,6 +121,14 @@ def _load_env_values() -> dict[str, str]:
         ENV_OUTPUT_DIR,
         ENV_PAGE_SIZE,
         ENV_ACCOUNT_CACHE_TTL_SECONDS,
+        ENV_MODE,
+        ENV_BROWSER_PROFILE_DIR,
+        ENV_BROWSER_HEADLESS,
+        ENV_BROWSER_RUNTIME,
+        ENV_BROWSER_CHANNEL,
+        ENV_BROWSER_TASK_INTERVAL_SECONDS,
+        ENV_BROWSER_COOLDOWN_SECONDS,
+        ENV_BROWSER_PAGE_PREPARE,
     ]:
         value = os.environ.get(key)
         if value:
@@ -125,6 +170,41 @@ def _parse_int(value: str | None, default: int) -> int:
     except ValueError:
         return default
     return parsed if parsed > 0 else default
+
+
+def _parse_float(value: str | None, default: float) -> float:
+    """解析非负浮点配置。"""
+    if not value:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def _parse_bool(value: str | None, default: bool) -> bool:
+    """解析布尔配置。"""
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _default_browser_headless() -> bool:
+    """默认使用有头浏览器；Linux 无显示环境由 browser-route 自动启动 Xvfb。"""
+    return False
+
+
+def _normalize_mode(value: str | None) -> str:
+    """规范化执行模式。"""
+    mode = (value or DEFAULT_MODE).strip().lower()
+    return mode if mode in {"api-direct", "browser-route"} else DEFAULT_MODE
+
+
+def _normalize_browser_runtime(value: str | None) -> str:
+    """规范化 browser-route 使用的浏览器自动化运行时。"""
+    runtime = (value or DEFAULT_BROWSER_RUNTIME).strip().lower()
+    return runtime if runtime in {"playwright", "patchright"} else DEFAULT_BROWSER_RUNTIME
 
 
 def _parse_accounts(value: str | None) -> tuple[dict[str, str], ...]:

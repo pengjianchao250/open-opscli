@@ -514,10 +514,19 @@ opscli skills marketplace rate pengjianchao@ops-auth 5 --json
 
 ```json
 {
-  "name": "ops-skills",
-  "version": "1.7.2"
+  "name": "my-skill",
+  "version": "0.0.1"
 }
 ```
 
 - `name`：必须与 Skill 目录名一致
 - `version`：格式 `{major}.{minor}.{patch}`，**不带 `v` 前缀**
+- **首次发布**：新创建的 Skill 应从 `0.0.1` 开始，若未指定 `version` 字段，系统将自动使用 `0.0.1` 作为默认值
+
+> **版本号递增规则**：
+> | 变更类型 | 递增示例 | 说明 |
+> |---------|---------|------|
+> | Bug 修复 | 0.0.1 → 0.0.2 | patch +1 |
+> | 小功能新增 | 0.0.99 → 0.1.0 | patch 逢 100 进 minor |
+> | 大版本更新 | 0.99.0 → 1.0.0 | minor 逢 100 进 major |
+> | 首次发布 | — | 从 0.0.1 开始 |

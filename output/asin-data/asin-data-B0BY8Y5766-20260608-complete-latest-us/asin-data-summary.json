@@ -1,0 +1,40 @@
+{
+  "run_id": "asin-data-B0BY8Y5766-20260608-complete-latest-us",
+  "started_at": "2026-06-08T17:29:42",
+  "finished_at": "2026-06-08T17:30:38",
+  "output_dir": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-complete-latest-us",
+  "dry_run": false,
+  "summary": {
+    "input_count": 1,
+    "asin_count": 1,
+    "input_error_count": 0,
+    "source_error_count": 2,
+    "failed_asin_count": 1,
+    "failed_asins": [
+      "B0BY8Y5766"
+    ]
+  },
+  "options": {
+    "skip_seller_sprite": false,
+    "skip_keyword_miner": false,
+    "skip_listing_analysis": false,
+    "skip_amazon": true,
+    "skip_query": false,
+    "skip_sales_query": false,
+    "skip_crawler_query": false,
+    "seller_sprite_period": "30d",
+    "listing_analysis_station": "GLOBAL",
+    "sales_start": null,
+    "sales_end": null,
+    "query_chunk_size": 100
+  },
+  "files": {
+    "manifest": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-complete-latest-us\\manifest.json",
+    "results": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-complete-latest-us\\asin-data.jsonl",
+    "frontend_data": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-complete-latest-us\\frontend-data.json",
+    "frontend_markdown": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-complete-latest-us\\frontend-data.md",
+    "summary": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-complete-latest-us\\asin-data-summary.json",
+    "commands": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-complete-latest-us\\commands.jsonl",
+    "errors": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-complete-latest-us\\errors.jsonl"
+  }
+}

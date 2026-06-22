@@ -1,0 +1,206 @@
+{
+  "运行信息": {
+    "运行ID": "asin-data-B0BY8Y5766-20260608-final-user-rufus6",
+    "开始时间": "2026-06-08T20:15:46",
+    "结束时间": "2026-06-08T20:17:31",
+    "输出目录": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-final-user-rufus6",
+    "是否DryRun": false,
+    "ASIN数量": 1,
+    "失败ASIN数量": 1
+  },
+  "数据": [
+    {
+      "基础数据": {
+        "ASIN": "B0BY8Y5766",
+        "站点": "US",
+        "输入关键词": "",
+        "输入关键词列表": [],
+        "关键词数量": 0,
+        "关键词来源": "未提供",
+        "输入行号": 1,
+        "来源文件": ".tmp\\asin-data-B0BY8Y5766-input.csv",
+        "BI销售数据": {
+          "状态": "成功",
+          "原始状态": "success",
+          "行数": 0,
+          "明细": []
+        },
+        "爬虫Listing数据": {
+          "状态": "成功",
+          "原始状态": "success",
+          "行数": 1,
+          "明细": [
+            {
+              "ASIN": "B0BY8Y5766",
+              "快照日期": "2026-06-08",
+              "国家": "US",
+              "币种": "$",
+              "产品名称": "ANCTOR Queen Size Bed Frame with 3 Drawers, Upholstered Platform Bed with Storage Headboard and Charging Station for Bedroom, No Box Spring Needed, Easy Assembly, Beige",
+              "商品链接": "https://www.amazon.com/ANCTOR-Upholstered-Platform-Headboard-Charging/dp/B0BY8Y5766",
+              "主图": "https://m.media-amazon.com/images/I/81KXBYIgFJL._AC_SX300_SY300_QL70_FMwebp_.jpg",
+              "A+图片": null,
+              "A+文案": null,
+              "产品详情": null,
+              "五点描述": null,
+              "QA": null,
+              "评论": null,
+              "星级": "4.4000",
+              "划线价": null,
+              "售价": "199.9900",
+              "折扣百分比": null,
+              "评论数": 13,
+              "描述": null,
+              "品牌": "ANCTOR",
+              "卖家ID": "AFW8VX6NB710",
+              "到手价文案": "$199.99",
+              "单价": null,
+              "优惠券": null,
+              "促销码金额": null,
+              "促销码": null,
+              "Deal": "0",
+              "大类名称": "Home & Kitchen",
+              "大类排名": "399401",
+              "小类名称": "Bed Frames",
+              "小类排名": "1683",
+              "Deal类型": null,
+              "评分数": 995,
+              "库存数": null,
+              "销售状态": 1,
+              "是否有库存": 1,
+              "子图数量": 9,
+              "视频数量": null,
+              "五点描述数量": 7,
+              "A+图片数量": 13,
+              "变体数量": 1,
+              "CS数量": null,
+              "QA数量": 2,
+              "时间戳": 1780861420
+            }
+          ]
+        },
+        "错误列表": [
+          {
+            "来源": "seller_sprite.keyword_reverse",
+            "状态": "失败",
+            "原始状态": "failed",
+            "原因": null
+          },
+          {
+            "来源": "seller_sprite.listing_analysis",
+            "状态": "失败",
+            "原始状态": "failed",
+            "原因": null
+          }
+        ]
+      },
+      "卖家精灵关键词数据": {
+        "关键词输入": {
+          "状态": "跳过",
+          "原始状态": "skipped",
+          "关键词来源": "未提供",
+          "关键词列表": [],
+          "关键词数量": 0
+        },
+        "关键词反查": {
+          "状态": "失败",
+          "原始状态": "failed",
+          "任务ID": null,
+          "行数": null,
+          "结果数据": [],
+          "错误信息": "opscli 有新版本可用，建议更新最新版本: v0.0.22 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n┌───────────────────── Traceback (most recent call last) ─────────────────────┐\n│ D:\\workspace\\open-opscli\\opscli\\seller_sprite\\cli.py:47 in run_scenario     │\n│                                                                             │\n│   44 │   │   output_dir=output_dir,                                         │\n│   45 │   │   export_format=export_format,                                   │\n│   46 │   )                                                                  │\n│ > 47 │   result = asyncio.run(SellerSpriteApiManager().run(request))        │\n│   48 │   typer.echo(json.dumps(result.to_dict(), ensure_ascii=False,        │\n│      indent=2))                                                             │\n│   49                                                                        │\n│   50                                                                        │\n│                                                                             │\n│ C:\\Users\\AA\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\asyncio\\runners.py: │\n│ 194 in run                                                                  │\n│                                                                             │\n│   191 │   │   │   \"asyncio.run() cannot be called from a running event      │\n│       loop\")                                                                │\n│   192 │                                                                     │\n│   193 │   with Runner(debug=debug, loop_factory=loop_factory) as runner:    │\n│ > 194 │   │   return runner.run(main)                                       │\n│   195                                                                       │\n│   196                                                                       │\n│   197 def _cancel_all_tasks(loop):                                          │\n│                                                                             │\n│ C:\\Users\\AA\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\asyncio\\runners.py: │\n│ 118 in run                                                                  │\n│                                                                             │\n│   115 │   │                                                                 │\n│   116 │   │   self._interrupt_count = 0                                     │\n│   117 │   │   try:                                                          │\n│ > 118 │   │   │   return self._loop.run_until_complete(task)                │\n│   119 │   │   except exceptions.CancelledError:                             │\n│   120 │   │   │   if self._interrupt_count > 0:                             │\n│   121 │   │   │   │   uncancel = getattr(task, \"uncancel\", None)            │\n│                                                                             │\n│ C:\\Users\\AA\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\asyncio\\base_events │\n│ .py:686 in run_until_complete                                               │\n│                                                                             │\n│    683 │   │   if not future.done():                                        │\n│    684 │   │   │   raise RuntimeError('Event loop stopped before Future     │\n│        completed.')                                                         │\n│    685 │   │                                                                │\n│ >  686 │   │   return future.result()                                       │\n│    687 │                                                                    │\n│    688 │   def stop(self):                                                  │\n│    689 │   │   \"\"\"Stop running the event loop.                              │\n│                                                                             │\n│ D:\\workspace\\open-opscli\\opscli\\seller_sprite\\services\\api_manager.py:64 in │\n│ run                                                                         │\n│                                                                             │\n│    61 │   │   root_dir = self._build_root_dir(request, job_id)              │\n│    62 │   │   root_dir.mkdir(parents=True, exist_ok=True)                   │\n│    63 │   │   page_size = request.page_size or self.settings.page_size      │\n│ >  64 │   │   account = self.account_provider.get_default()                 │\n│    65 │   │   warnings: list[dict[str, Any]] = []                           │\n│    66 │   │   async with SellerSpriteApiClient(account=account) as client:  │\n│    67 │   │   │   login = {\"mode\": \"cached\", \"cookie_names\":                │\n│       client.cookie_names()}                                                │\n│                                                                             │\n│ D:\\workspace\\open-opscli\\opscli\\seller_sprite\\accounts.py:61 in get_default │\n│                                                                             │\n│    58 │   │   │   raise                                                     │\n│       SellerSpriteConfigError(f\"账号池中不存在默认账号：{self.settings.acco │\n│       unt_name}\")                                                           │\n│    59 │   │                                                                 │\n│    60 │   │   if self._remote_error:                                        │\n│ >  61 │   │   │   raise SellerSpriteConfigError(                            │\n│    62 │   │   │   │   f\"获取卖家精灵集成账号失败：{self._remote_error}。\"   │\n│    63 │   │   │   │   \"请检查 OPS 授权：MCP 模式需携带有效                  │\n│       X-MCP-API-Key，CLI 模式执行 opscli auth login。\"                      │\n│    64 │   │   │   )                                                         │\n└─────────────────────────────────────────────────────────────────────────────┘\nSellerSpriteConfigError: 获取卖家精灵集成账号失败：用户不存在。请检查 OPS \n授权：MCP 模式需携带有效 X-MCP-API-Key，CLI 模式执行 opscli auth login。"
+        },
+        "关键词挖掘": {
+          "状态": "跳过",
+          "原始状态": "skipped",
+          "种子关键词": [],
+          "任务列表": [],
+          "原因": "keyword is missing"
+        }
+      },
+      "卖家精灵AI全景分析数据": {
+        "状态": "失败",
+        "原始状态": "failed",
+        "任务ID": null,
+        "报告任务ID": null,
+        "报告状态": null,
+        "完成时间": null,
+        "过期时间": null,
+        "content": null,
+        "html状态": null,
+        "html内容": null,
+        "错误信息": "opscli 有新版本可用，建议更新最新版本: v0.0.22 → v0.0.86\n请按以下步骤更新：\n  1. pip install --upgrade aukeys-opscli\n  2. opscli skills install --force\n  3. opscli skills upgrade\n\n┌───────────────────── Traceback (most recent call last) ─────────────────────┐\n│ D:\\workspace\\open-opscli\\opscli\\seller_sprite\\cli.py:47 in run_scenario     │\n│                                                                             │\n│   44 │   │   output_dir=output_dir,                                         │\n│   45 │   │   export_format=export_format,                                   │\n│   46 │   )                                                                  │\n│ > 47 │   result = asyncio.run(SellerSpriteApiManager().run(request))        │\n│   48 │   typer.echo(json.dumps(result.to_dict(), ensure_ascii=False,        │\n│      indent=2))                                                             │\n│   49                                                                        │\n│   50                                                                        │\n│                                                                             │\n│ C:\\Users\\AA\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\asyncio\\runners.py: │\n│ 194 in run                                                                  │\n│                                                                             │\n│   191 │   │   │   \"asyncio.run() cannot be called from a running event      │\n│       loop\")                                                                │\n│   192 │                                                                     │\n│   193 │   with Runner(debug=debug, loop_factory=loop_factory) as runner:    │\n│ > 194 │   │   return runner.run(main)                                       │\n│   195                                                                       │\n│   196                                                                       │\n│   197 def _cancel_all_tasks(loop):                                          │\n│                                                                             │\n│ C:\\Users\\AA\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\asyncio\\runners.py: │\n│ 118 in run                                                                  │\n│                                                                             │\n│   115 │   │                                                                 │\n│   116 │   │   self._interrupt_count = 0                                     │\n│   117 │   │   try:                                                          │\n│ > 118 │   │   │   return self._loop.run_until_complete(task)                │\n│   119 │   │   except exceptions.CancelledError:                             │\n│   120 │   │   │   if self._interrupt_count > 0:                             │\n│   121 │   │   │   │   uncancel = getattr(task, \"uncancel\", None)            │\n│                                                                             │\n│ C:\\Users\\AA\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\asyncio\\base_events │\n│ .py:686 in run_until_complete                                               │\n│                                                                             │\n│    683 │   │   if not future.done():                                        │\n│    684 │   │   │   raise RuntimeError('Event loop stopped before Future     │\n│        completed.')                                                         │\n│    685 │   │                                                                │\n│ >  686 │   │   return future.result()                                       │\n│    687 │                                                                    │\n│    688 │   def stop(self):                                                  │\n│    689 │   │   \"\"\"Stop running the event loop.                              │\n│                                                                             │\n│ D:\\workspace\\open-opscli\\opscli\\seller_sprite\\services\\api_manager.py:64 in │\n│ run                                                                         │\n│                                                                             │\n│    61 │   │   root_dir = self._build_root_dir(request, job_id)              │\n│    62 │   │   root_dir.mkdir(parents=True, exist_ok=True)                   │\n│    63 │   │   page_size = request.page_size or self.settings.page_size      │\n│ >  64 │   │   account = self.account_provider.get_default()                 │\n│    65 │   │   warnings: list[dict[str, Any]] = []                           │\n│    66 │   │   async with SellerSpriteApiClient(account=account) as client:  │\n│    67 │   │   │   login = {\"mode\": \"cached\", \"cookie_names\":                │\n│       client.cookie_names()}                                                │\n│                                                                             │\n│ D:\\workspace\\open-opscli\\opscli\\seller_sprite\\accounts.py:61 in get_default │\n│                                                                             │\n│    58 │   │   │   raise                                                     │\n│       SellerSpriteConfigError(f\"账号池中不存在默认账号：{self.settings.acco │\n│       unt_name}\")                                                           │\n│    59 │   │                                                                 │\n│    60 │   │   if self._remote_error:                                        │\n│ >  61 │   │   │   raise SellerSpriteConfigError(                            │\n│    62 │   │   │   │   f\"获取卖家精灵集成账号失败：{self._remote_error}。\"   │\n│    63 │   │   │   │   \"请检查 OPS 授权：MCP 模式需携带有效                  │\n│       X-MCP-API-Key，CLI 模式执行 opscli auth login。\"                      │\n│    64 │   │   │   )                                                         │\n└─────────────────────────────────────────────────────────────────────────────┘\nSellerSpriteConfigError: 获取卖家精灵集成账号失败：用户不存在。请检查 OPS \n授权：MCP 模式需携带有效 X-MCP-API-Key，CLI 模式执行 opscli auth login。"
+      },
+      "Rufus优化建议数据": {
+        "状态": "成功",
+        "原始状态": "success",
+        "接入状态": "已接入",
+        "国家站点": "US",
+        "问题列表": [
+          "这个产品ASIN B0BY8Y5766，标题写得清楚吗？如果我要找这个产品ASIN B0BY8Y5766，一般搜什么词能找到他？",
+          "这个产品ASIN B0BY8Y5766五点卖点描述里，最重要的一条是什么？有没有买家很想知道但没写进去的事？",
+          "看完这个产品ASIN B0BY8Y5766这些图，还有什么是我想知道但看不出来的？要是再加一张图，加什么最有用？",
+          "这个产品ASIN B0BY8Y5766下面那个长的图文介绍，跟上面五点说的有区别吗？看完能让我更放心买吗？还少介绍了什么？",
+          "这个产品ASIN B0BY8Y5766评价里大家最常夸和最常抱怨的是什么？这些在介绍里提前说清楚了吗？",
+          "这个产品ASIN B0BY8Y5766如果让你给这个产品页面只提一个最着急改的地方，会是什么？"
+        ],
+        "问题数量": 6,
+        "答案数量": 6,
+        "报告路径": "output/amazon-rufus/B0BY8Y5766-20260608-201728.md",
+        "数据": [
+          {
+            "题号": 1,
+            "问题": "这个产品ASIN B0BY8Y5766，标题写得清楚吗？如果我要找这个产品ASIN B0BY8Y5766，一般搜什么词能找到他？",
+            "相关产品": [
+              "https://www.amazon.com/dp/B0BY8Y5766"
+            ],
+            "答案": "产品标题清晰度\nANCTOR 皇后床架的标题写得很清楚。它包含了所有关键信息：\n\n•\n品牌名称 - ANCTOR\n\n•\n床的尺寸 - 皇后床（Queen Size）\n\n•\n主要功能 - 3个抽屉、储物床头板、充电站\n\n•\n材料和风格 - 正规床架，无需箱体弹簧\n\n搜索这款产品的常见关键词\n您可以用以下词语搜索找到它：\n\n•\n具体功能搜索 - \"带储物的皇后床框\"、\"带抽屉的床框\"、\"带充电站的床\"\n\n•\n品牌搜索 - \"ANCTOR 床框\"\n\n•\n组合搜索 - \"皇后床框 3 抽屉充电\"、\"现代储物床框\"、\"小空间床框\"\n\n•\n功能为主 - \"床头板充电器\"、\"床下储物解决方案\"\n\n标题的描述性很强，所以即使只搜索\"ANCTOR 床框\"或\"储物床框\"也能轻松找到。",
+            "推荐ASIN": [
+              "B0BY8Y5766"
+            ],
+            "总结": "产品标题清晰度\nANCTOR 皇后床架的标题写得很清楚。它包含了所有关键信息：\n\n•\n品牌名称 - ANCTOR\n\n•\n床的尺寸 - 皇后床（Queen Size）\n\n•\n主要功能 - 3个抽屉、储物床头板、充电站\n\n•\n材料和风格 - 正规床架，无需箱体弹簧\n\n搜索这款产品的常见关键词\n您可以用以下词语搜索找到它：\n\n•\n具体功能搜索 - \"带储物的皇后床框\"、\"带抽屉的床框\"、\"带充电站的床\"\n\n•\n品牌搜索 - \"ANCTOR 床框\"\n\n•\n组合搜索 - \"皇后床框 3 抽屉充电\"、\"现代储物床框\"、\"小空间床框\"\n\n•\n功能为主 - \"床头板充电器\"、\"床下储物解决方案\"\n\n标题的描述性很强，所以即使只搜索\"ANCTOR 床框\"或\"储物床框\"也能轻松找到。"
+          },
+          {
+            "题号": 2,
+            "问题": "这个产品ASIN B0BY8Y5766五点卖点描述里，最重要的一条是什么？有没有买家很想知道但没写进去的事？",
+            "相关产品": [],
+            "答案": "最重要的五点卖点是：储物空间 + 充电站\n五点卖点里最核心的是第1条 「带充电站的储物床头板」，因为这是这款床最独特的卖点。买家评价里 91% 正面提及外观设计，92% 认为性价比高，最常说的就是\"有地方充电\"和\"有地方存东西\"。\n但买家超想知道、卖点里完全没提的关键问题：\n\n买家最想知道\n\n卖点有提吗\n\n实际情况\n\n组装难度和时间\n\n❌ 没提\n⚠️ 55%负评说\"很难装、很费时\"\n\n床的高度（会不会太低）\n\n❌ 没提\n⚠️ 多人问\"床太低，腿放不下\"\n\n厚度>12\\\"的床垫能用吗\n\n❌ 没提\n⚠️ 高频被问的问题\n\n充电口是什么类型\n\n❌ 没提\n⚠️ 只有 USB-A，没有 USB-C\n\n抽屉会不会松动\n\n❌ 没提\n⚠️ 29%负评说\"抽屉不平整、容易松\"\n\n颜色色差\n\n❌ 没提\n⚠️ 多人反馈色差大（比图更偏棕色）\n\n最严重漏掉的是：\n\n•\n组装体验 — 5点卖点说\"快速安装\"，但买家说要 3-5 小时，还要很多螺丝，这是最常被吐槽的\n\n•\n充电口规格 — 明确说\"只支持 USB-A，不支持 USB-C\"（现在很多人用 USB-C）\n\n这两个信息应该补充进去。",
+            "推荐ASIN": [],
+            "总结": "最重要的五点卖点是：储物空间 + 充电站\n五点卖点里最核心的是第1条 「带充电站的储物床头板」，因为这是这款床最独特的卖点。买家评价里 91% 正面提及外观设计，92% 认为性价比高，最常说的就是\"有地方充电\"和\"有地方存东西\"。\n但买家超想知道、卖点里完全没提的关键问题：\n\n买家最想知道\n\n卖点有提吗\n\n实际情况\n\n组装难度和时间\n\n❌ 没提\n⚠️ 55%负评说\"很难装、很费时\"\n\n床的高度（会不会太低）\n\n❌ 没提\n⚠️ 多人问\"床太低，腿放不下\"\n\n厚度>12\\\"的床垫能用吗\n\n❌ 没提\n⚠️ 高频被问的问题\n\n充电口是什么类型\n\n❌ 没提\n⚠️ 只有 USB-A，没有 USB-C\n\n抽屉会不会松动\n\n❌ 没提\n⚠️ 29%负评说\"抽屉不平整、容易松\"\n\n颜色色差\n\n❌ 没提\n⚠️ 多人反馈色差大（比图更偏棕色）\n\n最严重漏掉的是：\n\n•\n组装体验 — 5点卖点说\"快速安装\"，但买家说要 3-5 小时，还要很多螺丝，这是最常被吐槽的\n\n•\n充电口规格 — 明确说\"只支持 USB-A，不支持 USB-C\"（现在很多人用 USB-C）\n\n这两个信息应该补充进去。"
+          },
+          {
+            "题号": 3,
+            "问题": "看完这个产品ASIN B0BY8Y5766这些图，还有什么是我想知道但看不出来的？要是再加一张图，加什么最有用？",
+            "相关产品": [],
+            "答案": "看完图片后，你看不出来的关键问题：\n\n想知道的事\n\n现有图能看出来吗\n\n实际情况\n\n⚠️\n组装难度\n\n（要用多少螺丝？）\n\n❌ 看不出\n55% 买家说\"大量螺丝、很费时\"\n\n⚠️\n床有多高\n\n（腿能放下吗？）\n\n❌ 看不出\n多人反馈\"床太低，不舒服\"\n\n⚠️\n颜色真实色差\n\n❌ 图偏白，实物偏棕\n多人惊讶\"比图片深很多\"\n\n⚠️\n抽屉滑轮顺不顺\n\n❌ 看不出\n29% 负评说\"不平整、容易松\"\n\n⚠️\n充电口是什么规格\n\n❌ 看不出\n只有 USB-A，\n没有 USB-C\n\n⚠️\n床会不会吱吱响\n\n❌ 看不出\n大部分说不响，但有人说\"吱吱叫\"\n\n最应该加一张图的是：\n组装过程对比图\n\n•\n左图：准备工作（所有螺丝、工具、零件铺开）\n\n•\n右图：完成度检查点（第5步、第10步、第15步的中间进度）\n\n为什么这张图最有用？\n\n•\n55% 负评都在吐槽组装，但现有图完全看不出难度\n\n•\n买家评价说\"要3-5小时\"、\"需要电钻\"、\"大量 Allen 螺丝\"\n\n•\n一张步骤对比图能让买家做好心理准备（预留时间、准备工具）\n\n其他有用的补充图：\n\n1.\n床高度对比图 — 站人、坐人、放椅子的参考\n\n2.\n抽屉内部细节 — 底部、侧面、滑轮特写\n\n3.\n颜色真实对比 — 实物 vs 官方图（说明色差）\n\n4.\n充电口特写 — 4 个 USB-A 口位置和规格",
+            "推荐ASIN": [],
+            "总结": "看完图片后，你看不出来的关键问题：\n\n想知道的事\n\n现有图能看出来吗\n\n实际情况\n\n⚠️\n组装难度\n\n（要用多少螺丝？）\n\n❌ 看不出\n55% 买家说\"大量螺丝、很费时\"\n\n⚠️\n床有多高\n\n（腿能放下吗？）\n\n❌ 看不出\n多人反馈\"床太低，不舒服\"\n\n⚠️\n颜色真实色差\n\n❌ 图偏白，实物偏棕\n多人惊讶\"比图片深很多\"\n\n⚠️\n抽屉滑轮顺不顺\n\n❌ 看不出\n29% 负评说\"不平整、容易松\"\n\n⚠️\n充电口是什么规格\n\n❌ 看不出\n只有 USB-A，\n没有 USB-C\n\n⚠️\n床会不会吱吱响\n\n❌ 看不出\n大部分说不响，但有人说\"吱吱叫\"\n\n最应该加一张图的是：\n组装过程对比图\n\n•\n左图：准备工作（所有螺丝、工具、零件铺开）\n\n•\n右图：完成度检查点（第5步、第10步、第15步的中间进度）\n\n为什么这张图最有用？\n\n•\n55% 负评都在吐槽组装，但现有图完全看不出难度\n\n•\n买家评价说\"要3-5小时\"、\"需要电钻\"、\"大量 Allen 螺丝\"\n\n•\n一张步骤对比图能让买家做好心理准备（预留时间、准备工具）\n\n其他有用的补充图：\n\n1.\n床高度对比图 — 站人、坐人、放椅子的参考\n\n2.\n抽屉内部细节 — 底部、侧面、滑轮特写\n\n3.\n颜色真实对比 — 实物 vs 官方图（说明色差）\n\n4.\n充电口特写 — 4 个 USB-A 口位置和规格"
+          },
+          {
+            "题号": 4,
+            "问题": "这个产品ASIN B0BY8Y5766下面那个长的图文介绍，跟上面五点说的有区别吗？看完能让我更放心买吗？还少介绍了什么？",
+            "相关产品": [],
+            "答案": "长图文介绍和五点卖点有大量重复，而且都隐瞒了关键缺点，看完不会让你更放心。\n五点卖点 vs 长图文对比\n\n内容\n\n五点有\n\n长图有\n\n新增信息\n\n储物 + 充电\n✅\n✅\n❌ 没新东西\n\n质量好\n✅\n✅\n❌ 没新东西\n\n组装容易\n✅\n✅\n❌\n虚假\n\n（实际3-5小时）\n\n无需弹簧\n✅\n✅\n❌ 没新东西\n\n噪音小\n❌\n✅\n✅ 新增一条\n\n结论：长图文只是五点的重复，没有补充真正有用的细节。\n买家超想知道、两个地方都没说清楚的：\n\n关键问题\n\n两处都没提\n\n买家真实反馈\n\n组装时间\n\n❌ 都说\"容易\"\n⚠️ 实际\n3-5小时\n\n，还要\n大量 Allen 螺丝\n\n床有多高\n\n❌ 没提\n⚠️ 多人说\"\n太低了\n\n\"\n\n12\\\" 以上床垫能用吗\n\n❌ 规格说\"8-12\\\"\"\n⚠️ Q&A 里高频被问，有人用 14\\\" 成功，有人说\"就别用了\"\n\n充电口规格\n\n❌ 完全没提\n⚠️\n只有 USB-A，没 USB-C\n\n抽屉会松动吗\n\n❌ 只说\"特殊锁定设计\"\n⚠️ 29% 负评说\"\n抽屉不平整、容易松\n\n\"\n\n颜色真实色差\n\n❌ 只说\"米白色\"\n⚠️\n实物比图片深很多\n\n（偏棕色，不是白色）\n\n最严重漏掉的三个地方：\n\n1.\n虚假宣传\"容易组装\" — 五点和长图都说\"容易\"、\"Velcro 设计\"、\"省时\"，但 55% 买家说\"大量螺丝、费时、建议用电钻\"\n\n2.\n隐瞒 USB 规格 — 没说充电站只支持 USB-A，现在买 USB-C 设备的人很多\n\n3.\n隐瞒颜色色差 — 官方图偏白，实物是棕色米白，买家惊讶度很高\n\n看完这两个地方，你不会更放心买**，反而问题更多。**",
+            "推荐ASIN": [],
+            "总结": "长图文介绍和五点卖点有大量重复，而且都隐瞒了关键缺点，看完不会让你更放心。\n五点卖点 vs 长图文对比\n\n内容\n\n五点有\n\n长图有\n\n新增信息\n\n储物 + 充电\n✅\n✅\n❌ 没新东西\n\n质量好\n✅\n✅\n❌ 没新东西\n\n组装容易\n✅\n✅\n❌\n虚假\n\n（实际3-5小时）\n\n无需弹簧\n✅\n✅\n❌ 没新东西\n\n噪音小\n❌\n✅\n✅ 新增一条\n\n结论：长图文只是五点的重复，没有补充真正有用的细节。\n买家超想知道、两个地方都没说清楚的：\n\n关键问题\n\n两处都没提\n\n买家真实反馈\n\n组装时间\n\n❌ 都说\"容易\"\n⚠️ 实际\n3-5小时\n\n，还要\n大量 Allen 螺丝\n\n床有多高\n\n❌ 没提\n⚠️ 多人说\"\n太低了\n\n\"\n\n12\\\" 以上床垫能用吗\n\n❌ 规格说\"8-12\\\"\"\n⚠️ Q&A 里高频被问，有人用 14\\\" 成功，有人说\"就别用了\"\n\n充电口规格\n\n❌ 完全没提\n⚠️\n只有 USB-A，没 USB-C\n\n抽屉会松动吗\n\n❌ 只说\"特殊锁定设计\"\n⚠️ 29% 负评说\"\n抽屉不平整、容易松\n\n\"\n\n颜色真实色差\n\n❌ 只说\"米白色\"\n⚠️\n实物比图片深很多\n\n（偏棕色，不是白色）\n\n最严重漏掉的三个地方：\n\n1.\n虚假宣传\"容易组装\" — 五点和长图都说\"容易\"、\"Velcro 设计\"、\"省时\"，但 55% 买家说\"大量螺丝、费时、建议用电钻\"\n\n2.\n隐瞒 USB 规格 — 没说充电站只支持 USB-A，现在买 USB-C 设备的人很多\n\n3.\n隐瞒颜色色差 — 官方图偏白，实物是棕色米白，买家惊讶度很高\n\n看完这两个地方，你不会更放心买**，反而问题更多。**"
+          },
+          {
+            "题号": 5,
+            "问题": "这个产品ASIN B0BY8Y5766评价里大家最常夸和最常抱怨的是什么？这些在介绍里提前说清楚了吗？",
+            "相关产品": [],
+            "答案": "买家最常夸的（TOP 3）\n\n排名\n\n最常夸的\n\n比例\n\n介绍里提到吗\n\n🥇\n外观设计好看\n\n91% 正面提及\n高\n✅\n提到了\n\n（\"优雅设计\"、\"现代风格\"）\n\n🥈\n性价比高\n\n92% 认为值得买\n高\n✅\n提到了\n\n（\"合理价格\"）\n\n🥉\n储物 + 充电很方便\n\n73% 赞抽屉\n高\n✅\n提到了\n\n（五点卖点重点说）\n\n买家最常抱怨的（TOP 5）\n\n排名\n\n最常抱怨的\n\n比例\n\n介绍里有提吗\n\n🔴\n组装超费时 + 螺丝太多\n\n55 负评提及\n最多\n\n❌\n完全隐瞒\n\n（说\"容易装\"，实际3-5小时）\n\n🔴\n床太低，腿放不下\n\n多人吐槽\n高\n❌\n没提\n\n（床高度46.1\"，腿只有12\"空间）\n\n🔴\n抽屉松动、不平整\n\n13 负评 / 49 评论\n26%\n\n❌\n隐瞒\n\n（说\"锁定设计\"，但26%人反馈不平)\n\n🔴\n颜色偏棕，不是白色\n\nQ&A 高频问\n高\n❌\n色差严重\n\n（图片偏白，实物是米棕色）\n\n🔴\n只支持 USB-A，没 USB-C\n\nQ&A 明确回答\n中\n❌\n完全没说\n\n（充电站只有4个USB-A口）\n\n最严重的三个隐瞒：\n❌ 1. 虚假宣传\"容易装\"\n\n•\n介绍说的：\"Quick installation\"、\"容易安装\"、\"Hook and loop fastener\"\n\n•\n买家实际体验：\"3-5小时\"、\"大量 Allen 螺丝\"、\"建议用电钻\"、\"手指很酸\"\n\n•\n真实数据：64% 正面（容易），但 36% 人说困难（比你想的高）\n\n❌ 2. 隐瞒床太低\n\n•\n介绍完全没提高度\n\n•\n买家反馈：\"太低了\"、\"腿放不下\"、\"像睡地上\"\n\n•\n实际高度：床垫离地 12\"，对高个子不友好\n\n❌ 3. 隐瞒充电口规格\n\n•\n介绍说：\"可同时为 4 个设备充电\"\n\n•\n完全没说：只有 USB-A，没有 USB-C\n\n•\n买家Q&A确认：用户问\"有 USB-C 吗？\"，官方回：\"只有 USB 类型\"\n\n总结\n**看完介绍，你会觉得：**✅ 好看、✅ 便宜、✅ 储物方便\n但收到后会发现： ❌ 要装 3-5 小时、❌ 床太低腿放不下、❌ 抽屉可能松动、❌ 充电口不支持 USB-C\n介绍隐瞒了最常被吐槽的东西，突出了最常被夸的东西。这是典型的选择性信息披露。",
+            "推荐ASIN": [],
+            "总结": "买家最常夸的（TOP 3）\n\n排名\n\n最常夸的\n\n比例\n\n介绍里提到吗\n\n🥇\n外观设计好看\n\n91% 正面提及\n高\n✅\n提到了\n\n（\"优雅设计\"、\"现代风格\"）\n\n🥈\n性价比高\n\n92% 认为值得买\n高\n✅\n提到了\n\n（\"合理价格\"）\n\n🥉\n储物 + 充电很方便\n\n73% 赞抽屉\n高\n✅\n提到了\n\n（五点卖点重点说）\n\n买家最常抱怨的（TOP 5）\n\n排名\n\n最常抱怨的\n\n比例\n\n介绍里有提吗\n\n🔴\n组装超费时 + 螺丝太多\n\n55 负评提及\n最多\n\n❌\n完全隐瞒\n\n（说\"容易装\"，实际3-5小时）\n\n🔴\n床太低，腿放不下\n\n多人吐槽\n高\n❌\n没提\n\n（床高度46.1\"，腿只有12\"空间）\n\n🔴\n抽屉松动、不平整\n\n13 负评 / 49 评论\n26%\n\n❌\n隐瞒\n\n（说\"锁定设计\"，但26%人反馈不平)\n\n🔴\n颜色偏棕，不是白色\n\nQ&A 高频问\n高\n❌\n色差严重\n\n（图片偏白，实物是米棕色）\n\n🔴\n只支持 USB-A，没 USB-C\n\nQ&A 明确回答\n中\n❌\n完全没说\n\n（充电站只有4个USB-A口）\n\n最严重的三个隐瞒：\n❌ 1. 虚假宣传\"容易装\"\n\n•\n介绍说的：\"Quick installation\"、\"容易安装\"、\"Hook and loop fastener\"\n\n•\n买家实际体验：\"3-5小时\"、\"大量 Allen 螺丝\"、\"建议用电钻\"、\"手指很酸\"\n\n•\n真实数据：64% 正面（容易），但 36% 人说困难（比你想的高）\n\n❌ 2. 隐瞒床太低\n\n•\n介绍完全没提高度\n\n•\n买家反馈：\"太低了\"、\"腿放不下\"、\"像睡地上\"\n\n•\n实际高度：床垫离地 12\"，对高个子不友好\n\n❌ 3. 隐瞒充电口规格\n\n•\n介绍说：\"可同时为 4 个设备充电\"\n\n•\n完全没说：只有 USB-A，没有 USB-C\n\n•\n买家Q&A确认：用户问\"有 USB-C 吗？\"，官方回：\"只有 USB 类型\"\n\n总结\n**看完介绍，你会觉得：**✅ 好看、✅ 便宜、✅ 储物方便\n但收到后会发现： ❌ 要装 3-5 小时、❌ 床太低腿放不下、❌ 抽屉可能松动、❌ 充电口不支持 USB-C\n介绍隐瞒了最常被吐槽的东西，突出了最常被夸的东西。这是典型的选择性信息披露。"
+          },
+          {
+            "题号": 6,
+            "问题": "这个产品ASIN B0BY8Y5766如果让你给这个产品页面只提一个最着急改的地方，会是什么？",
+            "相关产品": [],
+            "答案": "只提一个最着急改的地方：在五点卖点里，把\"Easy to Assemble\"（容易装）改成\"3-5 Hours to Assemble – Use Power Drill\"（需要3-5小时组装，建议用电钻）\n为什么这是最着急改的？\n\n原因\n\n数据\n\n虚假宣传最严重\n\n五点卖点说\"Easy\"，但\n55% 负评\n\n、\n36% 说困难\n\n影响最大\n\n这是买家\n最后悔的地方\n\n— \"如果知道要3-5小时，我就不买了\"\n\n高频投诉\n\n所有负评里，\n\"组装\"是第1常见问题\n\n（远超其他问题）\n\n直接影响退货率\n\n买家组装累了或组装坏了，最容易退货\n\n信任度最低\n\n虚假宣传 + 现实落差 = 官方可信度崩盘\n\n现在的虚假宣传有多严重？\n\n地方\n\n说什么\n\n买家实际体验\n\n五点卖点\n✅ \"Easy to Assemble\"\n❌ \"3-5 hours\"、\"tons of screws\"、\"use power drill\"\n\n长图文\n✅ \"Quick installation\"\n❌ 55% 说困难、手酸、费时\n\n产品详情\n✅ \"Velcro design makes installation a breeze\"\n❌ 大量螺丝（不是 Velcro）\n\n这样会被消费者投诉虚假宣传。\n如何改最好？\n五点卖点第4条改成：\n❌ 原：\"Easy to Assemble\"\n✅ 改为：\"3-5 Hours Assembly – Power Drill Recommended\"\n或：\"Professional Assembly – Plan 4-5 Hours, Use Power Drill\"\n配合一张新图： 组装到一半的中间进度照片（让买家知道规模有多大）\n改完会发生什么？\n✅ 诚实度提高 → 信任度回升\n✅ 退货率下降 → 买家做好心理准备\n✅ 差评会减少 → \"我知道要装这么久\"\n✅ 更多人会买 → 预期管理好，反而满意度更高\n这一个改变能解决 55% 的负评问题。",
+            "推荐ASIN": [],
+            "总结": "只提一个最着急改的地方：在五点卖点里，把\"Easy to Assemble\"（容易装）改成\"3-5 Hours to Assemble – Use Power Drill\"（需要3-5小时组装，建议用电钻）\n为什么这是最着急改的？\n\n原因\n\n数据\n\n虚假宣传最严重\n\n五点卖点说\"Easy\"，但\n55% 负评\n\n、\n36% 说困难\n\n影响最大\n\n这是买家\n最后悔的地方\n\n — \"如果知道要3-5小时，我就不买了\"\n\n高频投诉\n\n所有负评里，\n\"组装\"是第1常见问题\n\n（远超其他问题）\n\n直接影响退货率\n\n买家组装累了或组装坏了，最容易退货\n\n信任度最低\n\n虚假宣传 + 现实落差 = 官方可信度崩盘\n\n现在的虚假宣传有多严重？\n\n地方\n\n说什么\n\n买家实际体验\n\n五点卖点\n✅ \"Easy to Assemble\"\n❌ \"3-5 hours\"、\"tons of screws\"、\"use power drill\"\n\n长图文\n✅ \"Quick installation\"\n❌ 55% 说困难、手酸、费时\n\n产品详情\n✅ \"Velcro design makes installation a breeze\"\n❌ 大量螺丝（不是 Velcro）\n\n这样会被消费者投诉虚假宣传。\n如何改最好？\n五点卖点第4条改成：\n❌ 原：\"Easy to Assemble\"\n✅ 改为：\"3-5 Hours Assembly – Power Drill Recommended\"\n或：\"Professional Assembly – Plan 4-5 Hours, Use Power Drill\"\n配合一张新图： 组装到一半的中间进度照片（让买家知道规模有多大）\n改完会发生什么？\n✅ 诚实度提高 → 信任度回升\n✅ 退货率下降 → 买家做好心理准备\n✅ 差评会减少 → \"我知道要装这么久\"\n✅ 更多人会买 → 预期管理好，反而满意度更高\n这一个改变能解决 55% 的负评问题。"
+          }
+        ]
+      }
+    }
+  ]
+}

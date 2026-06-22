@@ -1,0 +1,39 @@
+{
+  "run_id": "asin-data-B0BY8Y5766-20260608-final-dataset",
+  "started_at": "2026-06-08T15:36:15",
+  "finished_at": "2026-06-08T15:42:48",
+  "output_dir": "output\\asin-data\\asin-data-B0BY8Y5766-20260608-final-dataset",
+  "dry_run": false,
+  "summary": {
+    "input_count": 1,
+    "asin_count": 1,
+    "input_error_count": 0,
+    "source_error_count": 0,
+    "failed_asin_count": 0,
+    "failed_asins": []
+  },
+  "options": {
+    "skip_seller_sprite": true,
+    "skip_keyword_miner": true,
+    "skip_listing_analysis": true,
+    "skip_amazon": true,
+    "skip_query": false,
+    "skip_sales_query": false,
+    "skip_crawler_query": false,
+    "seller_sprite_period": "30d",
+    "listing_analysis_station": "GLOBAL",
+    "sales_start": null,
+    "sales_end": null,
+    "query_chunk_size": 100,
+    "sales_dataset_alias": "order_sale_trend_set",
+    "crawler_dataset_alias": "ds_icw50TLOFu4F",
+    "amazon_module_removed": true
+  },
+  "files": {
+    "manifest": "D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-B0BY8Y5766-20260608-final-dataset\\manifest.json",
+    "results": "D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-B0BY8Y5766-20260608-final-dataset\\asin-data.jsonl",
+    "frontend_data": "D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-B0BY8Y5766-20260608-final-dataset\\frontend-data.json",
+    "frontend_markdown": "D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-B0BY8Y5766-20260608-final-dataset\\frontend-data.md",
+    "summary": "D:\\workspace\\open-opscli\\output\\asin-data\\asin-data-B0BY8Y5766-20260608-final-dataset\\asin-data-summary.json"
+  }
+}

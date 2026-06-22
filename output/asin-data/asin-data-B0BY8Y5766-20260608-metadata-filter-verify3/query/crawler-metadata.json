@@ -1,0 +1,626 @@
+{
+  "time": "2026-06-08T21:20:14",
+  "source": "query.metadata",
+  "asin": null,
+  "command": [
+    "opscli",
+    "query",
+    "metadata",
+    "--dataset",
+    "ds_icw50TLOFu4F"
+  ],
+  "dry_run": false,
+  "status": "success",
+  "exit_code": 0,
+  "stdout": "{\"success\": true, \"command\": \"query metadata\", \"data\": {\"dataset\": {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"dataset_category\": \"normal\", \"inner_where_enabled\": false, \"description\": \"ASIN明细表\", \"remarks\": \"\", \"select_columns\": [{\"column_name\": \"date_id\", \"verbose_name\": \"日期\", \"component_dataset_alias\": \"ds_d35ac6f3910c\"}, {\"column_name\": \"asin\", \"verbose_name\": \"ASIN\", \"component_dataset_alias\": \"ds_3634c85fc90f\"}]}, \"fields\": [{\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"date_time\", \"verbose_name\": \"下载时间\", \"field_type\": \"dimension\", \"global_alias\": \"f_C80osDX3sufwOWyNRS\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"country\", \"verbose_name\": \"国家\", \"field_type\": \"dimension\", \"global_alias\": \"f_fCnlT9CC8aACHEpyp\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"browser\", \"verbose_name\": \"端口号\", \"field_type\": \"dimension\", \"global_alias\": \"f_BFEG7QpC8RvtBpf8p1B\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"asin\", \"verbose_name\": \"ASIN\", \"field_type\": \"dimension\", \"global_alias\": \"f_F48QQjyMNQQLduumKZU\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"lastmouth_sales\", \"verbose_name\": \"上月销量\", \"field_type\": \"dimension\", \"global_alias\": \"f_jYKLEq8HrNZQEzMMdDhA\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"currency\", \"verbose_name\": \"币种\", \"field_type\": \"dimension\", \"global_alias\": \"f_0D6WF4el4jfMOAkl\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"price_scribe\", \"verbose_name\": \"日常价(带货币符号)\", \"field_type\": \"dimension\", \"global_alias\": \"f_O0rowwTregeV3m7atq\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"reduction\", \"verbose_name\": \"降价比例(%)\", \"field_type\": \"dimension\", \"global_alias\": \"f_C1uSl8NsZMcRyiBFSLtK\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"original_price\", \"verbose_name\": \"销售额\", \"field_type\": \"dimension\", \"global_alias\": \"f_qcA4WA5yuZAbyOZIaGd2\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"unit_price\", \"verbose_name\": \"单价(原币)\", \"field_type\": \"dimension\", \"global_alias\": \"f_zs2ZYyolvAk0Co85gFdZ\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"coupon\", \"verbose_name\": \"优惠券(%或金额)\", \"field_type\": \"dimension\", \"global_alias\": \"f_halwPgqJendAceKpA8\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"promo_code_value\", \"verbose_name\": \"促销值(%或金额)\", \"field_type\": \"dimension\", \"global_alias\": \"f_xLH9JwtO01EBTmRfJb\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"promo_code\", \"verbose_name\": \"促销码Code\", \"field_type\": \"dimension\", \"global_alias\": \"f_l33x3iypxXHRS0cmgk\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"deal\", \"verbose_name\": \"deal\", \"field_type\": \"dimension\", \"global_alias\": \"f_9dkaHeBRpadHu4UF\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"deal_type\", \"verbose_name\": \"活动类型\", \"field_type\": \"dimension\", \"global_alias\": \"f_GiSKYaENayX0dhgM\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"brand\", \"verbose_name\": \"商品品牌\", \"field_type\": \"dimension\", \"global_alias\": \"f_zZTI1SybuvSEclJbA\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"ships\", \"verbose_name\": \"发货来源\", \"field_type\": \"dimension\", \"global_alias\": \"f_wnY1dUmrfQfKcPXMZDf\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"sold\", \"verbose_name\": \"售出量\", \"field_type\": \"dimension\", \"global_alias\": \"f_uIVEC33OvPHi2nrY\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"major_name\", \"verbose_name\": \"大类名称\", \"field_type\": \"dimension\", \"global_alias\": \"f_0tf016a775HQ8L4oVms\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"major_rank\", \"verbose_name\": \"大类排名\", \"field_type\": \"dimension\", \"global_alias\": \"f_biQ8siMtQ1uTHWWu\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"subclass_name\", \"verbose_name\": \"小类名称\", \"field_type\": \"dimension\", \"global_alias\": \"f_WjwjK1ZYVr4XU3itG9\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"subclass_rank\", \"verbose_name\": \"小类排名\", \"field_type\": \"dimension\", \"global_alias\": \"f_gSQym8UIEV4RbYOg8y\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"item_uuid\", \"verbose_name\": \"item_uuid\", \"field_type\": \"dimension\", \"global_alias\": \"f_DtXvhjAVsWj4iaDN\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"date_id\", \"verbose_name\": \"日期\", \"field_type\": \"dimension\", \"global_alias\": \"f_1LLmEUvPflyvnZ6bB3Sb\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"link\", \"verbose_name\": \"商品详情链接\", \"field_type\": \"dimension\", \"global_alias\": \"f_QbGa0ODDhKnHfdchilY\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"listing\", \"verbose_name\": \"商品标题\", \"field_type\": \"dimension\", \"global_alias\": \"f_Y0DXZ7mlDH121IfX4F\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"image\", \"verbose_name\": \"图片\", \"field_type\": \"dimension\", \"global_alias\": \"f_RJL3L3UdeD2mvVny8E\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"seller_id\", \"verbose_name\": \"卖家ID(购物车卖家)\", \"field_type\": \"dimension\", \"global_alias\": \"f_VROD8XgRE8mLDPsli32l\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"description\", \"verbose_name\": \"商品描述(无A+时存在)\", \"field_type\": \"dimension\", \"global_alias\": \"f_8qAeu0VzLrBMtVvpbn\", \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"task_level\", \"verbose_name\": \"任务等级\", \"field_type\": \"metric\", \"global_alias\": \"f_YfNOUA5gVh4nRwdDId0s\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"sales_status\", \"verbose_name\": \"销售状态(1:正常销售2:不可售3:变狗)\", \"field_type\": \"metric\", \"global_alias\": \"f_qE730OiVmq1brheC\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"timestamp\", \"verbose_name\": \"下载时间戳(北京时间)\", \"field_type\": \"metric\", \"global_alias\": \"f_YaWB4fcRzDDng6XT0Ot\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"subplot_count\", \"verbose_name\": \"副图数量\", \"field_type\": \"metric\", \"global_alias\": \"f_HR90LPIe03ucnYEuO\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"video_count\", \"verbose_name\": \"视频数量\", \"field_type\": \"metric\", \"global_alias\": \"f_Y6CaSpxKMHCWGJa3zgP\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"stock_qty\", \"verbose_name\": \"商品可售数量\", \"field_type\": \"metric\", \"global_alias\": \"f_VtzTNUAB2i7eunHaoI\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"price\", \"verbose_name\": \"销售额(原币)\", \"field_type\": \"metric\", \"global_alias\": \"f_EMUkxWMq6Gp5Bav5\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"in_stock\", \"verbose_name\": \"是否有库存(1有0无)\", \"field_type\": \"metric\", \"global_alias\": \"f_SZJ7xq2pqMnVbMcJsL\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"cart\", \"verbose_name\": \"是否有购物车标识(暂时无用)\", \"field_type\": \"metric\", \"global_alias\": \"f_B3HuU20CmqxqnSvpEh\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"ac\", \"verbose_name\": \"是否有AC标\", \"field_type\": \"metric\", \"global_alias\": \"f_ex82jzBBGiT4ZEzMTEk\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"bs\", \"verbose_name\": \"是否有BS标\", \"field_type\": \"metric\", \"global_alias\": \"f_q2alkFxxQaIjc0rjuM\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"new_label\", \"verbose_name\": \"是否有新品标识\", \"field_type\": \"metric\", \"global_alias\": \"f_TqLtOBuhigbF7nA1Jcmv\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"five_point_description_count\", \"verbose_name\": \"商品五点数量\", \"field_type\": \"metric\", \"global_alias\": \"f_xUdecNL3WWZdhkQr\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"cs\", \"verbose_name\": \"是否存在跟卖情况\", \"field_type\": \"metric\", \"global_alias\": \"f_taO5Purm1cAudvC7q\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"cs_count\", \"verbose_name\": \"跟卖卖家数量\", \"field_type\": \"metric\", \"global_alias\": \"f_9yqi58VcTQf3Ap3ghER\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"a_image_count\", \"verbose_name\": \"A+图片数量\", \"field_type\": \"metric\", \"global_alias\": \"f_Ux2CUPL52w9fwY1j\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"rating\", \"verbose_name\": \"星级评分\", \"field_type\": \"metric\", \"global_alias\": \"f_D7RYciz8NSvhbb2hw1\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"rating_count\", \"verbose_name\": \"评分数量\", \"field_type\": \"metric\", \"global_alias\": \"f_GiPDNdm18g5SAPvdQn6D\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"qa_count\", \"verbose_name\": \"qa数量\", \"field_type\": \"metric\", \"global_alias\": \"f_oOU1gkyTtvXuNsmGK\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"high_frequency_word_count\", \"verbose_name\": \"高频词的数量\", \"field_type\": \"metric\", \"global_alias\": \"f_wY25Se3FjZbWh6KSua\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"review_count\", \"verbose_name\": \"评论数量(评论第一页)\", \"field_type\": \"metric\", \"global_alias\": \"f_BM4owMPcz2SXiJ21c0L\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"vp_count\", \"verbose_name\": \"真实买家的评论数量(评论第一页)\", \"field_type\": \"metric\", \"global_alias\": \"f_DCJwO6lSXWhSiTfzmU\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}, {\"table_id\": 43, \"dataset_alias\": \"ds_icw50TLOFu4F\", \"dataset_name\": \"custom_crawler_amazon_details\", \"field_name\": \"variant_count\", \"verbose_name\": \"相关变体子体的数量\", \"field_type\": \"metric\", \"global_alias\": \"f_H6swHSdAQ7uV36pGAk\", \"detail_expression\": null, \"summary_expression\": null, \"description\": \"ASIN明细表\"}], \"source\": \"remote\", \"select_columns\": [{\"column_name\": \"date_id\", \"verbose_name\": \"日期\", \"component_dataset_alias\": \"ds_d35ac6f3910c\"}, {\"column_name\": \"asin\", \"verbose_name\": \"ASIN\", \"component_dataset_alias\": \"ds_3634c85fc90f\"}]}, \"error\": null}\n",
+  "stderr": "",
+  "json": {
+    "success": true,
+    "command": "query metadata",
+    "data": {
+      "dataset": {
+        "table_id": 43,
+        "dataset_alias": "ds_icw50TLOFu4F",
+        "dataset_name": "custom_crawler_amazon_details",
+        "dataset_category": "normal",
+        "inner_where_enabled": false,
+        "description": "ASIN明细表",
+        "remarks": "",
+        "select_columns": [
+          {
+            "column_name": "date_id",
+            "verbose_name": "日期",
+            "component_dataset_alias": "ds_d35ac6f3910c"
+          },
+          {
+            "column_name": "asin",
+            "verbose_name": "ASIN",
+            "component_dataset_alias": "ds_3634c85fc90f"
+          }
+        ]
+      },
+      "fields": [
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "date_time",
+          "verbose_name": "下载时间",
+          "field_type": "dimension",
+          "global_alias": "f_C80osDX3sufwOWyNRS",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "country",
+          "verbose_name": "国家",
+          "field_type": "dimension",
+          "global_alias": "f_fCnlT9CC8aACHEpyp",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "browser",
+          "verbose_name": "端口号",
+          "field_type": "dimension",
+          "global_alias": "f_BFEG7QpC8RvtBpf8p1B",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "asin",
+          "verbose_name": "ASIN",
+          "field_type": "dimension",
+          "global_alias": "f_F48QQjyMNQQLduumKZU",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "lastmouth_sales",
+          "verbose_name": "上月销量",
+          "field_type": "dimension",
+          "global_alias": "f_jYKLEq8HrNZQEzMMdDhA",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "currency",
+          "verbose_name": "币种",
+          "field_type": "dimension",
+          "global_alias": "f_0D6WF4el4jfMOAkl",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "price_scribe",
+          "verbose_name": "日常价(带货币符号)",
+          "field_type": "dimension",
+          "global_alias": "f_O0rowwTregeV3m7atq",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "reduction",
+          "verbose_name": "降价比例(%)",
+          "field_type": "dimension",
+          "global_alias": "f_C1uSl8NsZMcRyiBFSLtK",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "original_price",
+          "verbose_name": "销售额",
+          "field_type": "dimension",
+          "global_alias": "f_qcA4WA5yuZAbyOZIaGd2",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "unit_price",
+          "verbose_name": "单价(原币)",
+          "field_type": "dimension",
+          "global_alias": "f_zs2ZYyolvAk0Co85gFdZ",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "coupon",
+          "verbose_name": "优惠券(%或金额)",
+          "field_type": "dimension",
+          "global_alias": "f_halwPgqJendAceKpA8",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "promo_code_value",
+          "verbose_name": "促销值(%或金额)",
+          "field_type": "dimension",
+          "global_alias": "f_xLH9JwtO01EBTmRfJb",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "promo_code",
+          "verbose_name": "促销码Code",
+          "field_type": "dimension",
+          "global_alias": "f_l33x3iypxXHRS0cmgk",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "deal",
+          "verbose_name": "deal",
+          "field_type": "dimension",
+          "global_alias": "f_9dkaHeBRpadHu4UF",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "deal_type",
+          "verbose_name": "活动类型",
+          "field_type": "dimension",
+          "global_alias": "f_GiSKYaENayX0dhgM",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "brand",
+          "verbose_name": "商品品牌",
+          "field_type": "dimension",
+          "global_alias": "f_zZTI1SybuvSEclJbA",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "ships",
+          "verbose_name": "发货来源",
+          "field_type": "dimension",
+          "global_alias": "f_wnY1dUmrfQfKcPXMZDf",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "sold",
+          "verbose_name": "售出量",
+          "field_type": "dimension",
+          "global_alias": "f_uIVEC33OvPHi2nrY",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "major_name",
+          "verbose_name": "大类名称",
+          "field_type": "dimension",
+          "global_alias": "f_0tf016a775HQ8L4oVms",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "major_rank",
+          "verbose_name": "大类排名",
+          "field_type": "dimension",
+          "global_alias": "f_biQ8siMtQ1uTHWWu",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "subclass_name",
+          "verbose_name": "小类名称",
+          "field_type": "dimension",
+          "global_alias": "f_WjwjK1ZYVr4XU3itG9",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "subclass_rank",
+          "verbose_name": "小类排名",
+          "field_type": "dimension",
+          "global_alias": "f_gSQym8UIEV4RbYOg8y",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "item_uuid",
+          "verbose_name": "item_uuid",
+          "field_type": "dimension",
+          "global_alias": "f_DtXvhjAVsWj4iaDN",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "date_id",
+          "verbose_name": "日期",
+          "field_type": "dimension",
+          "global_alias": "f_1LLmEUvPflyvnZ6bB3Sb",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "link",
+          "verbose_name": "商品详情链接",
+          "field_type": "dimension",
+          "global_alias": "f_QbGa0ODDhKnHfdchilY",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "listing",
+          "verbose_name": "商品标题",
+          "field_type": "dimension",
+          "global_alias": "f_Y0DXZ7mlDH121IfX4F",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "image",
+          "verbose_name": "图片",
+          "field_type": "dimension",
+          "global_alias": "f_RJL3L3UdeD2mvVny8E",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "seller_id",
+          "verbose_name": "卖家ID(购物车卖家)",
+          "field_type": "dimension",
+          "global_alias": "f_VROD8XgRE8mLDPsli32l",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "description",
+          "verbose_name": "商品描述(无A+时存在)",
+          "field_type": "dimension",
+          "global_alias": "f_8qAeu0VzLrBMtVvpbn",
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "task_level",
+          "verbose_name": "任务等级",
+          "field_type": "metric",
+          "global_alias": "f_YfNOUA5gVh4nRwdDId0s",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "sales_status",
+          "verbose_name": "销售状态(1:正常销售2:不可售3:变狗)",
+          "field_type": "metric",
+          "global_alias": "f_qE730OiVmq1brheC",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "timestamp",
+          "verbose_name": "下载时间戳(北京时间)",
+          "field_type": "metric",
+          "global_alias": "f_YaWB4fcRzDDng6XT0Ot",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "subplot_count",
+          "verbose_name": "副图数量",
+          "field_type": "metric",
+          "global_alias": "f_HR90LPIe03ucnYEuO",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "video_count",
+          "verbose_name": "视频数量",
+          "field_type": "metric",
+          "global_alias": "f_Y6CaSpxKMHCWGJa3zgP",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "stock_qty",
+          "verbose_name": "商品可售数量",
+          "field_type": "metric",
+          "global_alias": "f_VtzTNUAB2i7eunHaoI",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "price",
+          "verbose_name": "销售额(原币)",
+          "field_type": "metric",
+          "global_alias": "f_EMUkxWMq6Gp5Bav5",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "in_stock",
+          "verbose_name": "是否有库存(1有0无)",
+          "field_type": "metric",
+          "global_alias": "f_SZJ7xq2pqMnVbMcJsL",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "cart",
+          "verbose_name": "是否有购物车标识(暂时无用)",
+          "field_type": "metric",
+          "global_alias": "f_B3HuU20CmqxqnSvpEh",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "ac",
+          "verbose_name": "是否有AC标",
+          "field_type": "metric",
+          "global_alias": "f_ex82jzBBGiT4ZEzMTEk",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "bs",
+          "verbose_name": "是否有BS标",
+          "field_type": "metric",
+          "global_alias": "f_q2alkFxxQaIjc0rjuM",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "new_label",
+          "verbose_name": "是否有新品标识",
+          "field_type": "metric",
+          "global_alias": "f_TqLtOBuhigbF7nA1Jcmv",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "five_point_description_count",
+          "verbose_name": "商品五点数量",
+          "field_type": "metric",
+          "global_alias": "f_xUdecNL3WWZdhkQr",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "cs",
+          "verbose_name": "是否存在跟卖情况",
+          "field_type": "metric",
+          "global_alias": "f_taO5Purm1cAudvC7q",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "cs_count",
+          "verbose_name": "跟卖卖家数量",
+          "field_type": "metric",
+          "global_alias": "f_9yqi58VcTQf3Ap3ghER",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "a_image_count",
+          "verbose_name": "A+图片数量",
+          "field_type": "metric",
+          "global_alias": "f_Ux2CUPL52w9fwY1j",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "rating",
+          "verbose_name": "星级评分",
+          "field_type": "metric",
+          "global_alias": "f_D7RYciz8NSvhbb2hw1",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "rating_count",
+          "verbose_name": "评分数量",
+          "field_type": "metric",
+          "global_alias": "f_GiPDNdm18g5SAPvdQn6D",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "qa_count",
+          "verbose_name": "qa数量",
+          "field_type": "metric",
+          "global_alias": "f_oOU1gkyTtvXuNsmGK",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "high_frequency_word_count",
+          "verbose_name": "高频词的数量",
+          "field_type": "metric",
+          "global_alias": "f_wY25Se3FjZbWh6KSua",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "review_count",
+          "verbose_name": "评论数量(评论第一页)",
+          "field_type": "metric",
+          "global_alias": "f_BM4owMPcz2SXiJ21c0L",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "vp_count",
+          "verbose_name": "真实买家的评论数量(评论第一页)",
+          "field_type": "metric",
+          "global_alias": "f_DCJwO6lSXWhSiTfzmU",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        },
+        {
+          "table_id": 43,
+          "dataset_alias": "ds_icw50TLOFu4F",
+          "dataset_name": "custom_crawler_amazon_details",
+          "field_name": "variant_count",
+          "verbose_name": "相关变体子体的数量",
+          "field_type": "metric",
+          "global_alias": "f_H6swHSdAQ7uV36pGAk",
+          "detail_expression": null,
+          "summary_expression": null,
+          "description": "ASIN明细表"
+        }
+      ],
+      "source": "remote",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        }
+      ]
+    },
+    "error": null
+  }
+}

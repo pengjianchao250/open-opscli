@@ -76,6 +76,34 @@ import functools
 import time as _time
 
 
+def _quota_wrap(fn, *, limiter=None):
+    """将 MCP tool 函数包裹限额切面。
+
+    限额策略按 tool 函数名匹配。未配置策略的工具会直接放行，
+    因此 seller_sprite_scenarios / job_status / export 不会消耗次数。
+    """
+    @functools.wraps(fn)
+    async def _wrapper(*args, **kwargs):
+        from opscli.mcp.quota import get_quota_limiter
+
+        quota_limiter = limiter or get_quota_limiter()
+        decision = await quota_limiter.before_call(fn.__name__)
+        if not decision.allowed:
+            return decision.error_response
+
+        try:
+            result = await fn(*args, **kwargs)
+        except Exception:
+            await quota_limiter.after_exception(decision.ticket)
+            raise
+
+        if isinstance(result, dict):
+            return await quota_limiter.after_call(decision.ticket, result)
+        return result
+
+    return _wrapper
+
+
 def _telemetry_wrap(fn):
     """将 MCP tool 函数包裹遥测装饰器。
 
@@ -209,11 +237,14 @@ def _fire_mcp_event(
 
 
 class _TelemetryMcpProxy:
-    """FastMCP 代理，在 tool 注册时自动插入遥测装饰器。
+    """FastMCP 代理，在 tool 注册时自动插入遥测装饰器并采集工具清单。
 
     替换各 register(mcp) 调用中的 mcp 参数，
     使所有 tool 函数在注册时被 _telemetry_wrap 包裹，
     无需修改任何 tools/ 模块代码。
+
+    同时将每个工具的元数据（名称/模块/描述）记入 tool_catalog，
+    供 HTTP 模式启动时自动上报后端管理清单。
     """
 
     def __init__(self, real_mcp: FastMCP) -> None:
@@ -224,8 +255,19 @@ class _TelemetryMcpProxy:
         real_decorator = self._real.tool(*args, **kwargs)
 
         def wrap(fn):
-            # 先包裹遥测，再注册到 FastMCP
-            return real_decorator(_telemetry_wrap(fn))
+            # 采集工具清单元数据：
+            # - 工具名优先取 name= 覆盖（如 chatgpt 模块的 fetch/search）
+            # - 模块取注册函数 __module__ 末段（精确归属，避免按前缀切分出错）
+            from opscli.mcp.tool_catalog import extract_description, record_tool
+
+            record_tool(
+                name=kwargs.get("name") or fn.__name__,
+                module=fn.__module__.rsplit(".", 1)[-1],
+                description=extract_description(fn, kwargs),
+            )
+            # 先插入限额切面，再包裹遥测，最终注册到 FastMCP
+            return real_decorator(_telemetry_wrap(_quota_wrap(fn)))
+
 
         return wrap
 
@@ -239,20 +281,30 @@ _telemetry_mcp = _TelemetryMcpProxy(mcp)
 
 from opscli.mcp.tools import auth as _auth_tools
 from opscli.mcp.tools import amazon_rufus as _amazon_rufus_tools
+from opscli.mcp.tools import beta as _beta_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
 from opscli.mcp.tools import feedback as _feedback_tools
+# Google Trends 暂时停用：下午 MCP Server 崩溃疑似与该工具相关，先不注册使用。
+# from opscli.mcp.tools import google_trends as _google_trends_tools
 from opscli.mcp.tools import keepa as _keepa_tools
 from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import seller_sprite as _seller_sprite_tools
 from opscli.mcp.tools import skills as _skills_tools
+# Sif / 西柚暂不开放 MCP 工具：保留工具模块代码，待业务确认后再恢复注册。
+# from opscli.mcp.tools import sif as _sif_tools
+# from opscli.mcp.tools import xiyou as _xiyou_tools
 
 _auth_tools.register(_telemetry_mcp)
 _amazon_rufus_tools.register(_telemetry_mcp)
+_beta_tools.register(_telemetry_mcp)
 _chatgpt_tools.register(_telemetry_mcp)
 _feedback_tools.register(_telemetry_mcp)
+# _google_trends_tools.register(_telemetry_mcp)
 _keepa_tools.register(_telemetry_mcp)
 _query_tools.register(_telemetry_mcp)
 _seller_sprite_tools.register(_telemetry_mcp)
+# _sif_tools.register(_telemetry_mcp)
+# _xiyou_tools.register(_telemetry_mcp)
 _skills_tools.register(_telemetry_mcp)
 
 # amazon 工具依赖可选扩展 playwright，未安装时跳过注册不影响其他工具
@@ -263,6 +315,12 @@ try:
 except (ImportError, ModuleNotFoundError):
     # playwright 或 opscli[amazon] 未安装，amazon_* 工具不可用
     _logger.info("amazon 工具未加载：缺少 playwright 依赖，安装命令：pip install opscli[amazon] && playwright install chromium")
+
+
+# ── 工具权限过滤（按用户角色隐藏无权限工具 + 拦截越权调用）──────────
+from opscli.mcp.permissions import ToolPermissionMiddleware
+
+mcp.add_middleware(ToolPermissionMiddleware())
 
 
 # ── API Key 管理（HTTP 模式使用）─────────────────────────────────────
@@ -302,8 +360,6 @@ def _load_or_create_api_key() -> str:
     key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     return api_key
 
-
-# ── 双端点组合应用构建 ───────────────────────────────────────────────
 
 def _build_dual_endpoint_app(
     *,
@@ -490,6 +546,11 @@ def run() -> None:
                 host, port, mode=transport_val,
                 api_key=api_key,
             )
+
+        # 自动上报工具清单到后端管理库（守护线程，失败不影响启动）
+        from opscli.mcp.tool_catalog import sync_catalog_async
+
+        sync_catalog_async(auth_verify_url=auth_verify_url)
 
         if transport_val == "both":
             # 同时暴露 /sse（SSE）和 /mcp（Streamable HTTP）

@@ -22,10 +22,10 @@ description: 使用本地缓存的数据集与字段索引辅助检索和查询�
 
 ## 调用前置要求
 
-> **认证按动作触发**：本地只读检索不要求登录；涉及远端 catalog、远端执行或升级时，必须先检测是否已授权登录。
+> **认证按动作触发**：本地只读检索不要求登录；涉及远端执行或升级时，必须先检测是否已授权登录。
 
-- 本地只读动作可直接执行：`python scripts/search.py`、`opscli query catalog --source local`、`opscli query intent --source local`、`opscli query metadata`
-- 远端动作前先执行 `opscli auth token status`：`opscli query catalog`、`opscli query intent`、`opscli query simple --run`、`opscli query chart --run`、`opscli skills upgrade ops-dataset-query`
+- 本地只读动作可直接执行：`python scripts/search.py`、`python scripts/route_intent.py`、`opscli query metadata`
+- 远端动作前先执行 `opscli auth token status`：`opscli query simple --run`、`opscli query chart --run`、`opscli skills upgrade ops-dataset-query`
 - 若状态中出现“未登录 / 未授权 / Token 过期 / expired / 401”，必须立即调用 `ops-auth` Skill
 - 若是“未登录 / 未授权 / 401”，在 `ops-auth` 中执行 `opscli auth login`
 - 若是 JWT Token 过期，优先执行 `opscli auth token refresh --all` 或 `opscli auth token refresh -s ops`；刷新失败再执行 `opscli auth login`
@@ -68,7 +68,7 @@ opscli auth token status
 
 标准顺序：
 
-0. 若用户未显式指定 `dataset_alias/table_id`，必须先执行 `opscli query intent --query "<用户自然语言需求>" --pretty`，按返回的 `intent_constraints` 确认业务口径和查询约束
+0. 若用户未显式指定 `dataset_alias/table_id`，必须先执行 `python scripts/route_intent.py "<用户自然语言需求>"` 做本地意图路由，未命中再用 `python scripts/search.py` 关键词搜索
 1. 已确认目标数据集后，确认目标 `dataset_alias` 是否存在于 `data/datasets.csv`，或用 `opscli query metadata`（无参数）查看数据集列表
 2. 再确认目标字段是否存在于 `data/dataset_fields.csv`
 3. 如需获取**最新**字段信息（含公式字段、聚合方式、表达式结构），执行 `opscli query metadata --dataset <dataset_alias> --pretty`（远端优先，自动回退本地）
@@ -96,10 +96,10 @@ python scripts/search.py "广告" -n 20
 推荐检查方式：
 
 ```bash
-# 0. 用户未指定数据集时，先做意图匹配
-opscli query intent --query "查看库存周转趋势" --pretty
+# 0. 用户未指定数据集时，先做本地意图路由
+python scripts/route_intent.py "查看库存周转趋势"
 
-# 1. 意图匹配确认数据集后，再确认数据集
+# 1. 意图路由确认数据集后，再确认数据集
 python scripts/search.py sales_order_d -n 20
 
 # 2. 在指定数据集内确认字段
@@ -140,7 +140,7 @@ opscli skills upgrade ops-dataset-query
 | 文件 | 内容 | 说明 |
 |------|------|------|
 | `data/VERSION.json` | 版本号 | `{"name": "ops-dataset-query", "version": "v1.x.x"}` |
-| `data/dataset_catalog.json` | **预定义业务意图集合**（非数据集列表） | version、intent_count、intents（使用案例/关键词/场景/优先级/数据集映射）、query_strategy |
+| `data/intent_taxonomy.yml` | 本地业务意图分类 | intents（意图 ID/触发关键词/主数据集/路由规则/澄清条件），供 route_intent.py 使用 |
 | `data/dataset_fields.csv` | 字段明细 | dataset_alias、field_name、verbose_name、global_alias、field_type、formula_config、detail_expression、summary_expression 等 |
 | `data/datasets.csv` | 数据集列表 | table_id、dataset_alias、dataset_name、dataset_category、inner_where_enabled、description、remarks、select_column_count、select_column_names |
 | `data/dataset_select_columns.csv` | **查询组件关联** | current_dataset_alias、column_name、verbose_name、component_dataset_alias |
@@ -224,92 +224,22 @@ opscli query metadata --table-id 123 --pretty
 
 ---
 
-### `opscli query catalog`
+### `python scripts/route_intent.py`（本地意图路由）
 
-> ⚠️ **catalog ≠ 数据集列表**：catalog 返回的是预定义业务意图集合（intents），不是数据集清单。需要查看所有可用数据集请用 `opscli query metadata`（无参数）。
-
-读取预定义业务意图索引。默认远端优先，远端失败时回退本地缓存；专用于将自然语言需求与 intents 匹配，从而识别目标数据集、推荐 default_filters 和 comparison_strategy。
-
-```
-选项：
-  --source TEXT       数据来源：remote（默认）或 local
-  --fallback-local / --no-fallback-local
-                      远端失败时是否回退本地缓存
-  --skills-dir TEXT   指定 Skill 目录
-  --pretty            格式化 JSON 输出
-```
+> **推荐入口**：用户未指定 dataset/table_id 时，先用该脚本做本地意图匹配（不依赖网络）。
 
 ```bash
-# 读取完整 catalog
-opscli query catalog --pretty
-
-# 只读取本地缓存
-opscli query catalog --source local --pretty
-
-# 只允许远端，失败直接报错
-opscli query catalog --source remote --no-fallback-local --pretty
-
-# 指定 Skill 目录
-opscli query catalog --skills-dir ~/.claude/skills --pretty
-```
-
-**返回结构**：
-
-```json
-{
-  "success": true,
-  "command": "query catalog",
-  "data": {
-    "version": "v1.0.0",
-    "intent_count": 15,
-    "intents": [
-      {
-        "use_case": "销售订单分析",
-        "keywords": ["订单", "销售额", "出库"],
-        "scenario": "查看某时段内的销售订单汇总数据",
-        "priority": 1,
-        "dataset_alias": "sales_order_d"
-      }
-    ],
-    "query_strategy": {}
-  },
-  "error": null
-}
-```
-
----
-
-### `opscli query intent`
-
-> **强制入口**：用户未指定 dataset/table_id 时，必须先用该命令匹配 catalog intents。返回的 `intent_constraints` 包含 intent 中定义的业务口径、查询规则和约束，后续构造查询时必须优先采用，再进行字段校验。
-
-```
-选项：
-  --query / -q TEXT   自然语言查询需求
-  --source TEXT       数据来源：remote（默认）或 local
-  --fallback-local / --no-fallback-local
-                      远端失败时是否回退本地缓存
-  --skills-dir TEXT   指定 Skill 目录
-  --pretty            格式化 JSON 输出
-```
-
-```bash
-opscli query intent --query "查看库存周转趋势" --pretty
-opscli query intent -q "财务口径销售额月环比" --source local --pretty
+python scripts/route_intent.py "<用户自然语言问题>" [--top-n 3] [--data-dir data/]
 ```
 
 返回重点字段：
 
 | 字段 | 说明 |
 |------|------|
-| `matched` | 是否命中 catalog intent |
-| `selected` | 唯一命中时的推荐 intent；多候选时为 `null` |
-| `candidates` | 候选 intent 列表，含 `dataset_alias`、`table_id`、`score`、`matched_terms` |
-| `ask_user_question_required` | 为 `true` 时必须结构化确认候选 |
-| `fallback_required` | 为 `true` 时静默回退本地关键词搜索 |
-| `intent_constraints` | 命中 intent 的 `scenario_description`、`notes`、`default_filters`、`comparison_strategy`、推荐字段和扩展规则 |
-
-**约束优先级**：只要 `intent_constraints` 中包含查询口径、规则或约束，后续构造查询必须优先采用；若与公式字段聚合、dataComparison 主周期、查询组件权限校验等硬性铁律冲突，则硬性铁律优先。
+| `top_results` | 候选意图列表，含 `intent_id`、`primary_dataset`、`execution_alias`、`table_id`、`confidence`、`matched_keywords` |
+| `routing_status` | `direct_intent`（直接路由）/ `embedded_intent`（口径映射执行） |
+| `requires_clarification` | 为 `true` 时必须先用 AskUserQuestion 澄清，禁止直接执行查询 |
+| `fallback_needed` | 为 `true` 时回退本地关键词搜索（search.py） |
 
 ---
 
@@ -317,7 +247,6 @@ opscli query intent -q "财务口径销售额月环比" --source local --pretty
 
 | 命令 | 类型 | 说明 | 详细文档 |
 |------|------|------|---------|
-| `opscli query intent` | 意图匹配 | 将自然语言需求匹配到 catalog intents，并返回 intent 约束 | 本文件 |
 | `opscli query simple` | 简易版 | 基于简化参数构造并执行查询（推荐优先使用） | `references/cli-simple-guide.md` |
 | `opscli query chart` | 图表 | 通过图表 ID 获取查询结构并执行，含多 query/小计总计 | `references/cli-simple-guide.md` |
 
@@ -410,41 +339,38 @@ python3 -c "import json; print(json.load(open('/tmp/result.json'))['data']['resu
 
 ### 意图分析 → 数据集选择 → 构造 → 执行（推荐）
 
-> **【强制】用户未指定 dataset 时，必须从远程 catalog 意图匹配开始，禁止跳过直接用本地搜索猜测。**
+> **【强制】用户未指定 dataset 时，先做本地意图路由，再做本地关键词搜索，禁止跳过直接猜测数据集。**
 
 ```bash
 # 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
 opscli auth token status
 
-# 1.【强制】远程 catalog 意图分析（默认远端优先，失败自动回退本地缓存）
-opscli query catalog --pretty
-# 从返回的 intents 中匹配用户需求：
-#   - 比对 use_cases / keywords / scenario_description
-#   - 按 priority 选择最佳候选
-#   - 提取 table_id、dataset_alias、default_filters、comparison_strategy
+# 1. 本地意图路由（不依赖网络）
+python scripts/route_intent.py "<用户自然语言问题>"
+# 命中 direct_intent     → 使用返回的 table_id / dataset_alias
+# 命中 embedded_intent   → 使用 execution_alias 执行，向用户说明口径映射
+# requires_clarification=true → 先用 AskUserQuestion 澄清
 
 # 2. 用本地索引校验目标字段是否存在
 python scripts/search.py <field_name> --dataset <dataset_alias> -n 20
 # 或查看完整 metadata
 opscli query metadata --dataset <dataset_alias> --pretty
 
-# 3. 基于 catalog 提供的 table_id + default_filters + comparison_strategy 构造查询
+# 3. 基于确认的 table_id 构造查询
 #    详见 references/cli-simple-guide.md 中的简化接口示例
 ```
 
-### Catalog 未命中时的回退工作流
+### 意图路由未命中时的回退工作流
 
-> 远端 catalog 意图覆盖有限，未命中属正常现象。**静默回退，不提示用户。**
+> 本地意图覆盖有限，未命中属正常现象。**静默回退，不提示用户。**
 
 ```bash
-# catalog 返回 intent_count=0 或全部 intents 关键词不匹配时：
+# route_intent.py 返回 fallback_needed=true 时：
 
-# 1. 静默进入本地关键词搜索（无需提示用户 catalog 未命中）
+# 1. 静默进入本地关键词搜索
 python scripts/search.py "<用户关键词>" -n 20
 
 # 示例：用户查询"物控库存周转 Temu 近30天趋势"
-# catalog intent_count=1，唯一意图为"账单销售趋势"，无匹配
-# → 立即执行：
 python scripts/search.py "库存周转" -n 20
 # 返回2个数据集：ds_97zj6R0KDKpB（物控库存周转）、ds_dI5gNc0YRLrD（物控库存周转期初期末）
 
@@ -454,23 +380,13 @@ python scripts/search.py "库存周转" -n 20
 # 3. 用户选定数据集后 → 检查查询组件（dataset_select_columns.csv）→ 校验 filter 权限 → 执行查询
 ```
 
-**何时用本地搜索 vs 何时用 catalog**：
+**何时用意图路由 vs 何时用关键词搜索**：
 
 | 场景 | 方式 |
 |------|------|
-| catalog 有匹配 intent | 优先使用 catalog 提供的 table_id + default_filters |
-| catalog 无匹配（intent_count 少 / 关键词不命中） | 立即回退本地 search.py，静默处理 |
-| 用户已明确指定数据集别名 | 跳过 catalog，直接进入字段检查 |
-| 只需确认字段是否存在 | 直接 python scripts/search.py，跳过 catalog |
-
-**意图匹配示例**：
-
-用户说"查广告数据" → catalog 返回 `intent_code: instant_advertising_analysis`：
-- `table_id: 15`，`dataset_alias: ds_0759e20F0DrG`
-- `default_filters: [{"field": "amazon_cat", "value": "Amazon", "operator": "="}]`
-- `comparison_strategy: {"trend_compare": "MOM", "summary_compare": "dataComparison"}`
-
-→ 直接用 `table_id=15` + `platform_name in ["Amazon"]` 构造查询，无需猜测数据集。
+| 用户给出自然语言需求且未指定数据集 | 先 route_intent.py，未命中再 search.py |
+| 用户已明确指定数据集别名 | 跳过意图路由，直接进入字段检查 |
+| 只需确认字段是否存在 | 直接 python scripts/search.py |
 
 ### 数据更新 → 重新查询
 

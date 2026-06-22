@@ -39,6 +39,14 @@
       "tier": "internal",
       "reason": "强依赖内部数据口径和健康诊断阈值，暂不随公开产物发版"
     },
+    "ops-asin-data-collector": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "面向内部运营 Codex 的 ASIN 批量取数编排 Skill，强依赖内部 BI/爬虫数据集和 SellerSprite/Amazon 采集入口，暂不随公开产物发版"
+    },
     "ops-auth": {
       "source": true,
       "wheel": true,
@@ -134,6 +142,70 @@
       "binary_full": true,
       "tier": "internal",
       "reason": "新增 Skill，跨 AI 工具 Skill 同步，依赖本地各工具路径约定，暂不进入公开发版产物"
+    },
+    "ops-feed-task": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-shopify-delete": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-shopify-inventory": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-shopify-price": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-shopify-query": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-shopify-status": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-sif": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-xiyou": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
     }
   }
 }

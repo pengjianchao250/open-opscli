@@ -10,6 +10,14 @@ recursive-include opscli __init__.py
 recursive-exclude opscli *.py
 recursive-include opscli __init__.py
 
+# Hook 脚本作为资源文件保留 —— 由 settings_injector.py 部署到用户 ~/.opscli/hooks/，
+# 非编译对象，必须在 sdist 中保留 .py 源文件
+include opscli/skills/hooks/report_skill_usage.py
+
 # Skill 模板数据原样保留（非编译对象，用户安装后直接使用）
 recursive-include opscli/skills/templates *
 recursive-exclude opscli/skills/templates __pycache__ *.pyc *.pyo .DS_Store
+
+# MCP 内部参考文档，供 *_spec_must_read 工具读取
+recursive-include opscli/mcp/references *.md
+recursive-exclude opscli/mcp/references __pycache__ *.pyc *.pyo .DS_Store

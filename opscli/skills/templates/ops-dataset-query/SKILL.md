@@ -113,70 +113,26 @@ version: 1.0.2
 
 所有远端查询动作必须统一走选定模式下的正式查询入口，**禁止直接调用后端 HTTP 接口**。
 
-### 铁律三：Catalog 意图匹配 → 确定数据集
+### 铁律三：本地意图路由 → 确定数据集
 
-> ⚠️ **catalog ≠ 数据集列表**：catalog 只包含预定义业务意图（intents），不返回数据集列表。需要查看所有可用数据集请用 `opscli query metadata`（CLI）或 `query_metadata()`（MCP）。
-
-当用户只给出自然语言需求、没有指定 dataset 时，**必须先执行意图匹配入口**：
-
-- CLI 模式：`opscli query intent --query "<用户自然语言需求>" --pretty`
-- MCP 模式：`query_intent_match(query="<用户自然语言需求>")`
-
-该入口会读取远端 catalog 的 `intents` 做匹配，从中识别最匹配的数据集别名；仅当 catalog 不可用或 intents 无法匹配时，才回退到本地关键词检索。禁止跳过意图匹配直接使用本地字段搜索猜测数据集。
-
-### 铁律三-A：Intent 规则和约束优先
-
-`query_intent_match` / `opscli query intent` 返回的 `intent_constraints` 是后续构造查询的业务口径输入，优先级高于通用经验推断。
-
-若命中的 intent 在 `scenario_description`、`notes`、`comparison_strategy`、`default_filters`、`recommended_dimensions`、`recommended_metrics`、`rules`、`constraints`、`query_rules` 等字段中设定了相关查询规则或约束，必须优先采用这些规则和约束，再执行 `query_metadata(dataset=...)` 字段存在性校验。
-
-优先级规则：
-
-1. 不违反硬性查询铁律时，优先使用 intent 中定义的业务口径、过滤条件、对比策略和推荐字段
-2. 若 intent 规则与公式字段聚合、dataComparison 主周期、查询组件权限校验等硬性铁律冲突，硬性铁律优先
-3. 若 intent 规则不完整，再回退到 `references/rules.md` 和 metadata 推断
-4. 不能只提取 `dataset_alias/table_id` 后忽略 `intent_constraints`
-
-**Catalog 命中失败的回退规则（铁律）**：
-
-远端 catalog 的意图覆盖有限，维护存在滞后，这属于正常现象。遇到以下任一情况，**必须立即静默回退**到本地关键词搜索，不得向用户提示"catalog 未命中"，不得暂停等待：
-
-- `intent_count` 为 0（空 catalog）
-- 所有 intents 的 `keywords` 均不包含用户查询中的任何关键词
-- `intent_count` < 5 且无任何匹配项
-
-**回退流程**：
+当用户只给出自然语言需求、没有指定 dataset 时，按以下顺序确定数据集：
 
 ```
-query_intent_match / opscli query intent → 无命中
-  ↓ 静默，不向用户提示未命中
-本地关键词搜索：python scripts/search.py "<关键词>" -n 20
-  ↓
-匹配到 1 个数据集 → AskUserQuestion 确认后执行
-匹配到 ≥2 个数据集 → AskUserQuestion 列出候选让用户选择
-匹配到 0 个数据集 → 提示用户无匹配，询问是否查看全量数据集列表（opscli query metadata）
-```
-
-### 铁律三-B：Catalog 未命中完整回退链
-
-远端 Catalog 未命中时，按以下顺序回退，**禁止直接跳到 search.py**：
-
-```
-1. 远端 catalog (query_intent_match / opscli query intent) → 命中 → 遵循 intent_constraints
-   ↓ 未命中（静默，不向用户提示）
-2. 本地 intent_taxonomy.yml 关键词匹配：
+1. 本地 intent_taxonomy.yml 意图匹配：
    CLI 模式：python scripts/route_intent.py "<用户问题>"
      → 命中 direct_intent     → 正常路由到 table_id / dataset_alias
      → 命中 embedded_intent   → 使用 execution_alias 执行，向用户说明口径映射
      → requires_clarification=true → 先用 AskUserQuestion 澄清，禁止直接执行查询
    ↓ 未命中（fallback_needed=true）
-3. search.py 本地关键词搜索（现有逻辑）
+2. 本地关键词搜索：python scripts/search.py "<关键词>" -n 20
    → 匹配到 1 个 → AskUserQuestion 确认后执行
-   → 匹配到 ≥2 个 → AskUserQuestion 列出候选
+   → 匹配到 ≥2 个 → AskUserQuestion 列出候选让用户选择
    → 匹配到 0 个 → 提示用户无匹配，询问是否查看全量数据集列表（opscli query metadata）
 ```
 
 **embedded_intent 执行说明**：若 `routing_status=embedded_intent`，使用 `execution_alias` 和 `table_id` 构造查询，并向用户说明实际使用的数据集及其口径差异（如"即时销售意图实际使用即时综合数据集中的 order_sale_trend_set 销售口径，以订单下单时间统计"）。
+
+MCP 模式下无法运行本地脚本时，使用 `query_metadata()` 获取数据集列表后按关键词筛选，匹配规则与上述工作流一致。
 
 ### 铁律四：字段存在性校验
 
@@ -184,7 +140,7 @@ query_intent_match / opscli query intent → 无命中
 
 ### 铁律五：认证按需触发
 
-本地只读检索不要求登录；涉及远端 catalog、远端执行、图表运行和 Skill 升级前必须确认认证状态。
+本地只读检索不要求登录；涉及远端 metadata、远端执行、图表运行和 Skill 升级前必须确认认证状态。
 
 ### 铁律六：dataComparison 必须同时传主周期
 
@@ -192,7 +148,7 @@ query_intent_match / opscli query intent → 无命中
 
 ### 铁律七：default_filters 必须验证
 
-catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某数据集的 `default_filters` 时，必须先轻量探查验证；若加上后返回 0 行，则去掉该 `default_filters` 继续查询，并告知用户已跳过不可用的默认过滤条件。
+数据集预设的 `default_filters` 可能与实际数据不匹配。首次使用某数据集的 `default_filters` 时，必须先轻量探查验证；若加上后返回 0 行，则去掉该 `default_filters` 继续查询，并告知用户已跳过不可用的默认过滤条件。
 
 ### 铁律八：公式字段禁止套用普通聚合
 
@@ -204,7 +160,7 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 
 ### 铁律九：本地数据初始化检查
 
-`data/VERSION.json` 的 `data_state` 为 `placeholder` 时，表示本地数据为空模板（如 `datasets.csv` 只有表头无数据行）。此时任何字段搜索都会返回空结果，无法完成铁律三（Catalog 优先）和铁律四（字段存在性校验）。
+`data/VERSION.json` 的 `data_state` 为 `placeholder` 时，表示本地数据为空模板（如 `datasets.csv` 只有表头无数据行）。此时任何字段搜索都会返回空结果，无法完成铁律三（本地意图路由）和铁律四（字段存在性校验）。
 
 **处理规则**：在执行任何需要本地数据索引的操作前，必须先检查 `data/VERSION.json` 的 `data_state` 字段：
 
@@ -218,7 +174,7 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 | 批量全量刷新 | `opscli skills upgrade ops-dataset-query` / `skills_upgrade` | 本地数据为空、大批字段缺失、版本过期 |
 | 按需远端查询 | `opscli query metadata --dataset <alias>` / `query_metadata(dataset=...)` | 仅需确认单个数据集的最新字段、不想等待全量升级 |
 
-> `query metadata` 始终远端优先：无参数时返回远端数据集列表（不含字段），指定 `--dataset` 或 `--table-id` 时返回远端最新字段信息。远端失败自动回退本地缓存。远端查询需要认证（与 catalog 相同）。
+> `query metadata` 始终远端优先：无参数时返回远端数据集列表（不含字段），指定 `--dataset` 或 `--table-id` 时返回远端最新字段信息。远端失败自动回退本地缓存。远端查询需要认证。
 
 ### 铁律十：查询前必须执行意图澄清检查
 
@@ -333,12 +289,11 @@ catalog 的 `default_filters` 可能与实际数据不匹配。首次使用某�
 ```
 1. 意图澄清（读 references/rules.md）
 2. 认证检查
-3. 未指定 dataset/table_id 时执行 query_intent_match / opscli query intent
-4. 按 intent_constraints 确认业务口径和查询约束
-5. query_metadata / 本地索引校验数据集和字段
-6. 执行查询（query_simple / opscli query simple 等）
-7. 输出结果给用户
-8. 【铁律十一】调用 ops-feedback 提交反馈   ← 不可跳过
+3. 未指定 dataset/table_id 时执行本地意图路由（route_intent.py → search.py）
+4. query_metadata / 本地索引校验数据集和字段
+5. 执行查询（query_simple / opscli query simple 等）
+6. 输出结果给用户
+7. 【铁律十一】调用 ops-feedback 提交反馈   ← 不可跳过
 ```
 
 ### 反馈规则速查

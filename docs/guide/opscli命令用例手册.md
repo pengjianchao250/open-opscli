@@ -8,6 +8,7 @@
   - `opscli/cli.py`
   - `opscli/auth/cli.py`
   - `opscli/amazon/commands/cli.py`
+  - `opscli/asin_data/cli.py`
   - `opscli/query/commands/cli.py`
   - `opscli/skills/commands/cli.py`
   - `opscli/seller_sprite/commands/cli.py`
@@ -37,6 +38,8 @@ opscli
 │   ├── search
 │   ├── schema
 │   └── history
+├── asin-data
+│   └── collect
 ├── feedback
 │   ├── schema
 │   ├── submit
@@ -107,6 +110,7 @@ opscli
 | `auth` | 以 Rich 文本表格和状态提示为主 |
 | `auth token get` | 纯文本输出 JWT，适合脚本 |
 | `amazon` | 标准 JSON |
+| `asin-data` | 标准 JSON；`--url-only` 时输出纯 URL |
 | `query` | 标准 JSON |
 | `skills` | 标准 JSON；交互安装时会先显示 TUI 选择界面 |
 | `seller-sprite` | 标准 JSON |
@@ -1568,13 +1572,107 @@ opscli skills marketplace rate pengjianchao@ops-auth --score 5 --json
 
 ---
 
-## 8. 卖家精灵模块 `opscli seller-sprite`
+## 8. ASIN 批量取数模块 `opscli asin-data`
+
+用于按单个 ASIN 或 ASIN 表格批量采集卖家精灵、Amazon 抓取、BI 销售、爬虫 Listing 和 Rufus 数据，并输出前端可直接消费的数据包。
+
+详细使用说明见 `docs/guide/ASIN批量取数服务使用说明.md`。
+
+### 8.1 `opscli asin-data collect`
+
+执行 ASIN 批量取数，并写出标准前端数据文件。
+
+**用法**
+
+```bash
+opscli asin-data collect (--input <file> | --asin <ASIN>) [选项...]
+```
+
+**参数**
+
+| 参数 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--input` / `-i` | 与 `--asin` 二选一 | - | CSV/XLSX/JSON/JSONL 输入文件 |
+| `--asin` | 与 `--input` 二选一 | - | 单个 ASIN |
+| `--keyword` | 否 | - | 单个 ASIN 的关键词，可重复传入 |
+| `--asin-column` | 否 | `asin` | 输入文件中的 ASIN 列名 |
+| `--keyword-column` | 否 | `keyword` | 输入文件中的关键词列名 |
+| `--site-column` | 否 | `site` | 输入文件中的站点列名 |
+| `--site` | 否 | `US` | 默认站点 |
+| `--output-dir` | 否 | `output/asin-data` | 输出根目录 |
+| `--run-id` | 否 | 自动生成 | 本次运行 ID |
+| `--dry-run` | 否 | `false` | 只生成计划和输出骨架，不执行远端取数 |
+| `--skip-seller-sprite` | 否 | `false` | 跳过卖家精灵数据 |
+| `--skip-keyword-miner` | 否 | `false` | 跳过关键词挖掘 |
+| `--skip-listing-analysis` | 否 | `false` | 跳过卖家精灵 AI 全景分析 |
+| `--skip-amazon` | 否 | `false` | 跳过 Amazon 页面抓取 |
+| `--skip-query` | 否 | `false` | 跳过全部 BI/query 数据 |
+| `--skip-sales-query` | 否 | `false` | 跳过 BI 销售数据 |
+| `--skip-crawler-query` | 否 | `false` | 跳过爬虫 Listing 数据 |
+| `--skip-rufus` | 否 | `false` | 跳过 Rufus 优化建议 |
+| `--seller-sprite-period` | 否 | `30d` | 卖家精灵周期 |
+| `--keyword-source` | 否 | `reverse_top` | 关键词来源策略：`input_only` / `reverse_top` / `skip` |
+| `--max-miner-keywords` | 否 | `1` | 每个 ASIN 最多挖掘的关键词数 |
+| `--rufus-question` | 否 | 默认题库 | Rufus 问题，可重复传入，支持 `{{asin}}` |
+| `--sales-start` | 否 | - | BI 销售开始日期 |
+| `--sales-end` | 否 | - | BI 销售结束日期 |
+| `--sales-table-id` | 否 | - | BI 销售数据 table_id |
+| `--sales-dataset-alias` | 否 | `ds_d35ac6f3910c` | BI 销售数据集 alias |
+| `--sales-field-mode` | 否 | `full` | 销售字段模式：`full` / `compatible` |
+| `--crawler-table-id` | 否 | - | 爬虫 Listing table_id；`custom_crawler_amazon_details` 已验证为 `43` |
+| `--crawler-dataset-alias` | 否 | `ds_icw50TLOFu4F` | 爬虫 Listing 数据集 alias |
+| `--crawler-field-mode` | 否 | `full` | 爬虫字段模式：`full` / `compatible` |
+| `--query-chunk-size` | 否 | `100` | BI/爬虫每批 ASIN 数 |
+| `--upload/--no-upload` | 否 | `--upload` | 是否上传 `frontend-data.json` 并返回 URL |
+| `--url-only` | 否 | `false` | 只输出上传后的 URL |
+| `--pretty` | 否 | `false` | 格式化 JSON 输出 |
+
+**示例**
+
+```bash
+# 先 dry-run 检查计划
+opscli asin-data collect --input ./asins.csv --sales-start 2026-05-01 --sales-end 2026-05-31 --dry-run --pretty
+
+# 批量正式执行
+opscli asin-data collect --input ./asins.csv --sales-start 2026-05-01 --sales-end 2026-05-31 --pretty
+
+# 单个 ASIN
+opscli asin-data collect --asin B0BY8Y5766 --site US --keyword "bed frame" --pretty
+
+# 只查 BI 和爬虫数据
+opscli asin-data collect --input ./asins.csv --skip-seller-sprite --skip-amazon --skip-rufus --pretty
+
+# 只输出上传 URL
+opscli asin-data collect --asin B0BY8Y5766 --site US --keyword "bed frame" --url-only
+```
+
+**输出**
+
+默认写入：
+
+```text
+output/asin-data/<run_id>/
+```
+
+主要文件：
+
+- `frontend-data.json`：前端优先读取的数据包
+- `frontend-data.md`：人工可读交接文件
+- `frontend-data.html`：本地 HTML 预览文件，不上传
+- `asin-data.jsonl`：每个 ASIN 一行的完整记录
+- `manifest.json`：运行参数和文件索引
+- `commands.jsonl`：数据源执行日志
+- `errors.jsonl`：失败来源和错误信息
+
+---
+
+## 9. 卖家精灵模块 `opscli seller-sprite`
 
 用于卖家精灵关键词挖掘、高频词采集、关键词反查、页面归档等数据采集操作。
 
 > 前置依赖：`pip install opscli && playwright install chromium`
 
-### 8.1 `opscli seller-sprite collect`
+### 9.1 `opscli seller-sprite collect`
 
 围绕显式关键词执行完整采集（关键词挖掘 + 高频词）。
 
@@ -1609,7 +1707,7 @@ opscli seller-sprite collect --keyword "usb c cable" --asin B09LCJPZ1P --limit 1
 opscli seller-sprite collect --keyword "usb c cable" --trend-limit 10 --account default --pretty
 ```
 
-### 8.2 `opscli seller-sprite frequency`
+### 9.2 `opscli seller-sprite frequency`
 
 采集高频词。
 
@@ -1638,7 +1736,7 @@ opscli seller-sprite frequency --keyword "usb c cable" --pretty
 opscli seller-sprite frequency --keyword "usb c cable" --frequency-phrase-count 3 --pretty
 ```
 
-### 8.3 `opscli seller-sprite keyword-mining`
+### 9.3 `opscli seller-sprite keyword-mining`
 
 采集关键词挖掘结果。
 
@@ -1669,7 +1767,7 @@ opscli seller-sprite keyword-mining --keyword "usb c cable" --pretty
 opscli seller-sprite keyword-mining --keyword "usb c cable" --limit 100 --trend-limit 5 --pretty
 ```
 
-### 8.4 `opscli seller-sprite keyword-reverse`
+### 9.4 `opscli seller-sprite keyword-reverse`
 
 采集关键词反查结果。
 
@@ -1701,7 +1799,7 @@ opscli seller-sprite keyword-reverse --asin B09LCJPZ1P --pretty
 opscli seller-sprite keyword-reverse --asin B09LCJPZ1P --limit 100 --account default --pretty
 ```
 
-### 8.5 `opscli seller-sprite archive`
+### 9.5 `opscli seller-sprite archive`
 
 归档指定页面（截图 + HTML + Markdown）。
 
@@ -1725,7 +1823,7 @@ opscli seller-sprite archive --url <url> [--output-dir <dir>] [--pretty]
 opscli seller-sprite archive --url "https://www.sellersprite.com/..." --pretty
 ```
 
-### 8.6 `opscli seller-sprite login`
+### 9.6 `opscli seller-sprite login`
 
 打开浏览器并手动建立卖家精灵登录态。
 
@@ -1741,7 +1839,7 @@ opscli seller-sprite login [--pretty]
 opscli seller-sprite login
 ```
 
-### 8.7 `opscli seller-sprite login-status`
+### 9.7 `opscli seller-sprite login-status`
 
 检查当前浏览器 profile 是否已有卖家精灵登录态。
 
@@ -1757,7 +1855,7 @@ opscli seller-sprite login-status [--output-dir <dir>] [--pretty]
 opscli seller-sprite login-status --pretty
 ```
 
-### 8.8 `opscli seller-sprite schema`
+### 9.8 `opscli seller-sprite schema`
 
 输出当前字段契约。
 
@@ -1773,7 +1871,7 @@ opscli seller-sprite schema [--pretty]
 opscli seller-sprite schema --pretty
 ```
 
-### 8.9 `opscli seller-sprite account save`
+### 9.9 `opscli seller-sprite account save`
 
 保存卖家精灵命名账号，密码写入系统凭据管理器（交互式输入密码）。
 
@@ -1797,7 +1895,7 @@ opscli seller-sprite account save --name <name> --username <username> [--pretty]
 opscli seller-sprite account save --name default --username myuser@example.com
 ```
 
-### 8.10 `opscli seller-sprite account list`
+### 9.10 `opscli seller-sprite account list`
 
 列出卖家精灵命名账号，不输出密码。
 
@@ -1813,7 +1911,7 @@ opscli seller-sprite account list [--pretty]
 opscli seller-sprite account list --pretty
 ```
 
-### 8.11 `opscli seller-sprite account delete`
+### 9.11 `opscli seller-sprite account delete`
 
 删除卖家精灵命名账号。
 
@@ -1836,11 +1934,11 @@ opscli seller-sprite account delete --name <name> [--pretty]
 opscli seller-sprite account delete --name default
 ```
 
-## 9. MCP 管理模块 `opscli mcp`
+## 10. MCP 管理模块 `opscli mcp`
 
 用于 MCP Server 多用户模式下的用户注册、删除与 API Key 轮换。
 
-### 9.1 `opscli mcp user list`
+### 10.1 `opscli mcp user list`
 
 列出所有 MCP 用户。
 
@@ -1863,7 +1961,7 @@ opscli mcp user list [--config-dir <dir>] [--pretty]
 opscli mcp user list --pretty
 ```
 
-### 9.2 `opscli mcp user add`
+### 10.2 `opscli mcp user add`
 
 创建 MCP 用户并输出只展示一次的 API Key。
 
@@ -1887,7 +1985,7 @@ opscli mcp user add [--desc <description>] [--config-dir <dir>] [--pretty]
 opscli mcp user add --desc "开发环境" --pretty
 ```
 
-### 9.3 `opscli mcp user remove`
+### 10.3 `opscli mcp user remove`
 
 删除 MCP 用户，默认同步删除隔离凭证目录。
 
@@ -1913,7 +2011,7 @@ opscli mcp user remove --id abc123 --pretty
 opscli mcp user remove --id abc123 --keep-credentials --pretty
 ```
 
-### 9.4 `opscli mcp user rotate`
+### 10.4 `opscli mcp user rotate`
 
 轮换 MCP 用户 API Key，新 Key 只展示一次。
 
@@ -1937,7 +2035,7 @@ opscli mcp user rotate --id <user_id> [--config-dir <dir>] [--pretty]
 opscli mcp user rotate --id abc123 --pretty
 ```
 
-## 10. 反馈模块 `opscli feedback`
+## 11. 反馈模块 `opscli feedback`
 
 用于提交结构化用户反馈和查询反馈详情。反馈数据保存到 `polaris_ops_metrics.dm_user_feedbacks`。
 
@@ -1952,7 +2050,7 @@ opscli mcp user rotate --id abc123 --pretty
 3. 调用 `opscli feedback submit` 提交，execution_summary 中记录失败的命令和参数
 4. 将 `feedback_uuid` 返回给用户，然后继续处理原任务
 
-### 10.1 `opscli feedback schema`
+### 11.1 `opscli feedback schema`
 
 输出反馈 payload 的 schema 定义。
 
@@ -1974,7 +2072,7 @@ opscli feedback schema [--pretty]
 opscli feedback schema --pretty
 ```
 
-### 10.2 `opscli feedback submit`
+### 11.2 `opscli feedback submit`
 
 提交用户反馈。
 
@@ -2037,7 +2135,7 @@ opscli feedback submit \
   --pretty
 ```
 
-### 10.3 `opscli feedback detail`
+### 11.3 `opscli feedback detail`
 
 按 `feedback_uuid` 查询当前用户反馈详情。
 
@@ -2060,9 +2158,9 @@ opscli feedback detail --uuid <feedback_uuid> [--pretty]
 opscli feedback detail --uuid xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx --pretty
 ```
 
-## 11. 常见组合用例
+## 12. 常见组合用例
 
-### 11.1 首次完成认证并查询数据
+### 12.1 首次完成认证并查询数据
 
 ```bash
 opscli auth login
@@ -2072,7 +2170,7 @@ opscli query build --dataset sales_order_d --dimension date_id --metric gmv:sum 
 opscli query run --payload payload.json --pretty
 ```
 
-### 11.2 检查并刷新某个系统的 Token
+### 12.2 检查并刷新某个系统的 Token
 
 ```bash
 opscli auth token status
@@ -2081,7 +2179,7 @@ opscli auth token refresh -s ops
 opscli auth token get -s ops
 ```
 
-### 11.3 抓取 Amazon 商品并查看历史
+### 12.3 抓取 Amazon 商品并查看历史
 
 ```bash
 opscli amazon scrape --asin B09LCJPZ1P --include-raw --pretty
@@ -2089,7 +2187,7 @@ opscli amazon payload --asin B09LCJPZ1P --pretty
 opscli amazon history --asin B09LCJPZ1P --pretty
 ```
 
-### 11.4 检查 Skill 是否有更新
+### 12.4 检查 Skill 是否有更新
 
 ```bash
 opscli skills list --pretty
@@ -2097,7 +2195,7 @@ opscli skills status --pretty
 opscli skills upgrade ops-dataset-query --pretty
 ```
 
-### 11.5 卖家精灵完整采集流程
+### 12.5 卖家精灵完整采集流程
 
 ```bash
 # 1. 保存账号（仅首次）
@@ -2113,7 +2211,7 @@ opscli seller-sprite collect --keyword "usb c cable" --limit 100 --account defau
 opscli seller-sprite keyword-reverse --asin B09LCJPZ1P --account default --pretty
 ```
 
-### 11.6 MCP 用户管理
+### 12.6 MCP 用户管理
 
 ```bash
 # 1. 添加用户
@@ -2129,7 +2227,7 @@ opscli mcp user rotate --id abc123 --pretty
 opscli mcp user remove --id abc123 --pretty
 ```
 
-### 11.6 技能广场完整使用流程
+### 12.7 技能广场完整使用流程
 
 ```bash
 # 1. 浏览广场全量公开技能
@@ -2174,7 +2272,7 @@ opscli skills edit pengjianchao@my-skill --share-type department
 opscli skills unpublish pengjianchao@my-skill --force
 ```
 
-### 11.8 市场同步工作流（多设备 / 换机场景）
+### 12.8 市场同步工作流（多设备 / 换机场景）
 
 当你在新设备上登录，或希望将市场安装记录自动同步到本地时：
 
@@ -2201,7 +2299,7 @@ opscli skills list --pretty
 同步完成：2 项变更，1 项跳过
 ```
 
-### 11.9 同步黑名单管理
+### 12.9 同步黑名单管理
 
 当某些技能不希望被 `--sync-market` 自动安装/升级时，加入排除名单：
 
@@ -2223,7 +2321,7 @@ opscli skills sync-exclude remove pengjianchao@ops-auth
 opscli skills install --sync-market --pretty
 ```
 
-### 11.7 提交工具调用失败的结构化反馈
+### 12.10 提交工具调用失败的结构化反馈
 
 ```bash
 # 1. 查看 schema
@@ -2260,7 +2358,7 @@ opscli feedback submit --file feedback.json --pretty
 opscli feedback detail --uuid <feedback_uuid> --pretty
 ```
 
-## 12. 快速索引
+## 13. 快速索引
 
 | 模块 | 命令 |
 | --- | --- |
@@ -2269,6 +2367,7 @@ opscli feedback detail --uuid <feedback_uuid> --pretty
 | Token | `opscli auth token status`、`get`、`check`、`refresh` |
 | 系统管理 | `opscli auth system list`、`sync`、`add`、`remove` |
 | Amazon | `opscli amazon scrape`、`payload`、`search`、`schema`、`history` |
+| ASIN 批量取数 | `opscli asin-data collect` |
 | 查询 | `opscli query metadata`、`catalog`、`run`、`build`、`simple`、`chart`、`chart-doc` |
 | 反馈 | `opscli feedback schema`、`submit`、`detail` |
 | Skills | `opscli skills list`、`install [--sync-market] [--dry-run]`、`status`、`upgrade`、`edit`、`publish`、`unpublish` |

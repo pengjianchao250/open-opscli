@@ -402,6 +402,7 @@ class RufusManager:
         normalized_country = country.strip().upper()
         resolve_marketplace(normalized_country)
         resolved_questions = self._resolve_questions(
+            asin=normalized_asin,
             question=question,
             questions=questions,
             skills_dir=skills_dir,
@@ -461,7 +462,12 @@ class RufusManager:
         normalized_asin = asin.strip().upper()
         normalized_country = country.strip().upper()
         marketplace = resolve_marketplace(normalized_country)
-        questions = self._resolve_questions(question=question, questions=questions, skills_dir=skills_dir)
+        questions = self._resolve_questions(
+            asin=normalized_asin,
+            question=question,
+            questions=questions,
+            skills_dir=skills_dir,
+        )
         normalized_cookie = (cookie or "").strip()
         if not normalized_cookie and storage_state is not None:
             normalized_cookie = self.browser_state_store.build_cookie_header(storage_state, marketplace.base_url)
@@ -515,7 +521,12 @@ class RufusManager:
         normalized_asin = asin.strip().upper()
         normalized_country = country.strip().upper()
         resolve_marketplace(normalized_country)
-        questions = self._resolve_questions(question=question, questions=questions, skills_dir=skills_dir)
+        questions = self._resolve_questions(
+            asin=normalized_asin,
+            question=question,
+            questions=questions,
+            skills_dir=skills_dir,
+        )
         secret = self.backend_secret_provider.load(country=normalized_country)
         page_url = build_product_url(normalized_asin, normalized_country)
         streaming_url = str(getattr(secret, "url", "") or "").strip() or None
@@ -557,6 +568,7 @@ class RufusManager:
     def _resolve_questions(
         self,
         *,
+        asin: str,
         question: str | None,
         questions: list[str] | None,
         skills_dir: str | None,
@@ -569,15 +581,15 @@ class RufusManager:
             normalized_questions = [item.strip() for item in explicit_questions]
             if any(not item for item in normalized_questions):
                 raise InvalidQuestionError("question 不能为空")
-            return normalized_questions
+            return [_render_asin_placeholder(item, asin) for item in normalized_questions]
         if question is not None:
             normalized_question = question.strip()
             if not normalized_question:
                 raise InvalidQuestionError("question 不能为空")
-            return [normalized_question]
+            return [_render_asin_placeholder(normalized_question, asin)]
         bank = self.question_bank or QuestionBankService(skills_dir=skills_dir)
         templates = bank.load_templates()
-        return [item.text for template in templates for item in template.questions if item.text]
+        return [_render_asin_placeholder(item.text, asin) for template in templates for item in template.questions if item.text]
 
     def _build_result(
         self,
@@ -749,5 +761,10 @@ class RufusManager:
             "content": "",
             "content_length": 0,
         }
+
+
+def _render_asin_placeholder(question: str, asin: str) -> str:
+    normalized_asin = str(asin or "").strip().upper()
+    return str(question).replace("{{asin}}", normalized_asin).replace("{asin}", normalized_asin)
 
 

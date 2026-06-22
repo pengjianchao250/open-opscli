@@ -1,0 +1,21 @@
+{
+  "summary": "验证 opscli sif run traffic 时默认输出目录无写入权限，CLI 返回 SIF_OUTPUT_PERMISSION_DENIED。",
+  "failed_calls": [
+    {
+      "tool": "CLI -> python -m opscli.cli sif run traffic --asin B01NBNDC1T --sections 流量结构 --page-size 20 --json --timeout 1",
+      "call_params": {
+        "feature": "traffic",
+        "asin": "B01NBNDC1T",
+        "sections": "流量结构",
+        "page_size": 20,
+        "timeout": 1,
+        "json": true
+      },
+      "error_message": "SIF_OUTPUT_PERMISSION_DENIED: [WinError 5] 拒绝访问。默认输出目录位于 C:\\Users\\AA\\.config\\opscli\\sif\\traffic\\runs",
+      "reason": "推测当前 Windows 环境对用户级配置目录下的 Sif 默认输出路径没有创建目录权限。",
+      "fix_suggestion": "验证命令改用 --output-dir output/test-artifacts/... 指定项目内可写目录；运行时代码无需因此回退默认用户级目录策略。"
+    }
+  ],
+  "successful_calls": [],
+  "final_resolution": "已记录反馈，后续 smoke 验证将使用项目内输出目录。"
+}

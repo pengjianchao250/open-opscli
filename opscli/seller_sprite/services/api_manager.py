@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -11,15 +13,35 @@ from uuid import uuid4
 
 from opscli.seller_sprite.accounts import SellerSpriteAccountProvider
 from opscli.seller_sprite.api.categories import SellerSpriteCategoryResolver
-from opscli.seller_sprite.api.client import SellerSpriteApiClient
+from opscli.seller_sprite.api.client import BASE_URL, SellerSpriteApiClient
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.api.scenarios import get_scenario, list_scenarios
+from opscli.seller_sprite.browser_route import (
+    BrowserRouteRequest,
+    get_browser_route_worker,
+    get_existing_browser_route_worker,
+)
 from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
 from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, SellerSpriteScenarioResult
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
+from opscli.seller_sprite.services.task_status import (
+    base_status,
+    error_to_dict,
+    now_iso,
+    read_status,
+    write_status,
+)
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 from opscli.shared.integration_accounts import IntegrationAccountClient
+
+
+AI_TASK_DONE_STATUSES = {"COMPLETED", "COMPLETE", "SUCCESS", "SUCCEEDED", "FINISHED", "DONE"}
+AI_TASK_FAILED_STATUSES = {"FAILED", "FAIL", "ERROR", "CANCELED", "CANCELLED", "EXPIRED"}
+DEFAULT_AI_TASK_POLL_ATTEMPTS = 180
+DEFAULT_AI_TASK_POLL_INTERVAL_SECONDS = 2.0
+WINDOWS_COMPAT_EXPORT_PATH_LIMIT = 240
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
 class SellerSpriteApiManager:
@@ -45,6 +67,74 @@ class SellerSpriteApiManager:
         """列出支持的接口场景。"""
         return list_scenarios()
 
+    def browser_route_busy(self, request: SellerSpriteScenarioRequest) -> bool:
+        """判断当前请求对应账号的 browser-route worker 是否正忙。"""
+        mode = _resolve_request_mode(request.mode or self.settings.default_mode)
+        if mode != "browser-route":
+            return False
+        account = self.account_provider.get_default()
+        worker = get_existing_browser_route_worker(settings=self.settings, account=account)
+        return bool(worker and worker.is_busy)
+
+    async def start(self, request: SellerSpriteScenarioRequest) -> dict[str, Any]:
+        """创建异步任务并立即返回任务状态。"""
+        get_scenario(request.scenario)
+        site = (request.site or self.settings.default_site).upper()
+        period = request.period or self.settings.default_period
+        job_id = request.job_id or _build_job_id(request, site, period)
+        request = replace(request, site=site, period=period, job_id=job_id)
+        root_dir = self._build_root_dir(request, job_id)
+        status = base_status(
+            job_id=job_id,
+            scenario=request.scenario,
+            site=site,
+            period=period,
+            state="queued",
+            stage="created",
+            root_dir=root_dir,
+        )
+        write_status(root_dir, status)
+
+        # 保留 task 引用，避免后台任务在事件循环中被提前回收。
+        task = asyncio.create_task(self._run_background_task(request, root_dir))
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+        return status
+
+    async def _run_background_task(self, request: SellerSpriteScenarioRequest, root_dir: Path) -> None:
+        """执行后台任务并持续更新状态文件。"""
+        status = read_status(root_dir) or base_status(
+            job_id=request.job_id or "",
+            scenario=request.scenario,
+            site=request.site,
+            period=request.period,
+            state="queued",
+            stage="created",
+            root_dir=root_dir,
+        )
+        status["state"] = "running"
+        status["stage"] = "running"
+        status["started_at"] = now_iso()
+        write_status(root_dir, status)
+        try:
+            result = await self.run(request)
+        except Exception as exc:
+            status["state"] = "failed"
+            status["stage"] = "failed"
+            status["finished_at"] = now_iso()
+            status["error"] = error_to_dict(exc)
+            write_status(root_dir, status)
+            return
+
+        status["state"] = "succeeded"
+        status["stage"] = "finished"
+        status["finished_at"] = now_iso()
+        status["error"] = None
+        status["export"] = result.export.to_dict() if result.export else None
+        status["row_count"] = result.row_count
+        status["result_path"] = result.result_path
+        write_status(root_dir, status)
+
     async def run(self, request: SellerSpriteScenarioRequest) -> SellerSpriteScenarioResult:
         """执行一个接口场景。"""
         scenario = get_scenario(request.scenario)
@@ -56,9 +146,10 @@ class SellerSpriteApiManager:
         page_size = request.page_size or self.settings.page_size
         account = self.account_provider.get_default()
         warnings: list[dict[str, Any]] = []
+        mode = _resolve_request_mode(request.mode or self.settings.default_mode)
         async with SellerSpriteApiClient(account=account) as client:
             login = {"mode": "cached", "cookie_names": client.cookie_names()}
-            if not client.has_login_cookies():
+            if mode == "api-direct" and not client.has_login_cookies():
                 login = await _login_with_account_refresh(
                     client=client,
                     account_provider=self.account_provider,
@@ -89,65 +180,105 @@ class SellerSpriteApiManager:
                     "payload": payload,
                 },
             )
-            main_response = await _request_with_session_retry(
-                client=client,
-                warnings=warnings,
-                stage="main",
-                action=lambda: _run_main_request(
-                    client=client,
-                    method=scenario.method,
+            if mode == "browser-route":
+                browser_result = await _run_browser_route_request(
+                    settings=self.settings,
+                    account=account,
+                    request=request,
+                    scenario_method=scenario.method,
                     endpoint=scenario.endpoint_for(payload),
                     payload=_main_payload(request.scenario, payload),
                     referer=scenario.build_referer(payload),
                     root_dir=root_dir,
-                ),
-            )
-            if _looks_like_guest_limited_response(main_response, page_size=page_size):
-                login = await _login_with_account_refresh(
+                    high_frequency_endpoint=(
+                        scenario.high_frequency_endpoint_for(payload)
+                        if payload.get("includeHighFrequency")
+                        else None
+                    ),
+                    high_frequency_payload=(
+                        _high_frequency_payload(request.scenario, payload)
+                        if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload)
+                        else None
+                    ),
+                )
+                login = browser_result.login
+                main_response = browser_result.response
+                high_frequency_response = browser_result.high_frequency_response
+                warnings.extend(browser_result.warnings)
+            else:
+                main_response = await _request_with_session_retry(
                     client=client,
-                    account_provider=self.account_provider,
                     warnings=warnings,
+                    stage="main",
+                    action=lambda: _run_main_request(
+                        client=client,
+                        method=scenario.method,
+                        endpoint=scenario.endpoint_for(payload),
+                        payload=_main_payload(request.scenario, payload),
+                        referer=scenario.build_referer(payload),
+                        root_dir=root_dir,
+                    ),
                 )
-                warnings.append(
-                    {
-                        "stage": "main",
-                        "message": "卖家精灵疑似返回游客限制数据，已登录并重试一次",
-                        "login": login,
-                    }
-                )
-                main_response = await _run_main_request(
-                    client=client,
-                    method=scenario.method,
-                    endpoint=scenario.endpoint_for(payload),
-                    payload=_main_payload(request.scenario, payload),
-                    referer=scenario.build_referer(payload),
-                    root_dir=root_dir,
-                )
-            high_frequency_response = None
-            if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload):
-                try:
-                    high_frequency_response = await _request_with_session_retry(
+                if scenario.task_result_endpoint:
+                    main_response = await _request_with_session_retry(
                         client=client,
                         warnings=warnings,
-                        stage="high_frequency",
-                        action=lambda: client.post_json(
-                            scenario.high_frequency_endpoint_for(payload) or "",
-                            _high_frequency_payload(request.scenario, payload),
+                        stage="ai_task",
+                        action=lambda: _poll_ai_task_result(
+                            client=client,
+                            submit_response=main_response,
+                            result_endpoint_template=scenario.task_result_endpoint or "",
                             referer=scenario.build_referer(payload),
+                            params=request.params,
                         ),
                     )
-                except SellerSpriteApiError as exc:
+                if _looks_like_guest_limited_response(main_response, page_size=page_size):
+                    login = await _login_with_account_refresh(
+                        client=client,
+                        account_provider=self.account_provider,
+                        warnings=warnings,
+                    )
                     warnings.append(
                         {
-                            "stage": "high_frequency",
-                            "message": "高频词接口请求失败，主表继续导出",
-                            "error": exc.to_dict(),
+                            "stage": "main",
+                            "message": "卖家精灵疑似返回游客限制数据，已登录并重试一次",
+                            "login": login,
                         }
                     )
+                    main_response = await _run_main_request(
+                        client=client,
+                        method=scenario.method,
+                        endpoint=scenario.endpoint_for(payload),
+                        payload=_main_payload(request.scenario, payload),
+                        referer=scenario.build_referer(payload),
+                        root_dir=root_dir,
+                    )
+                high_frequency_response = None
+                if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload):
+                    try:
+                        high_frequency_response = await _request_with_session_retry(
+                            client=client,
+                            warnings=warnings,
+                            stage="high_frequency",
+                            action=lambda: client.post_json(
+                                scenario.high_frequency_endpoint_for(payload) or "",
+                                _high_frequency_payload(request.scenario, payload),
+                                referer=scenario.build_referer(payload),
+                            ),
+                        )
+                    except SellerSpriteApiError as exc:
+                        warnings.append(
+                            {
+                                "stage": "high_frequency",
+                                "message": "高频词接口请求失败，主表继续导出",
+                                "error": exc.to_dict(),
+                            }
+                        )
 
         raw = {
             "job_id": job_id,
             "scenario": request.scenario,
+            "mode": mode,
             "login": login,
             "payload": payload,
             "response": main_response,
@@ -162,7 +293,7 @@ class SellerSpriteApiManager:
         if export_format == "xlsx":
             export = export_rows_to_xlsx(
                 rows=rows,
-                output_path=root_dir / f"{job_id}.xlsx",
+                output_path=_export_output_path(root_dir, job_id, "xlsx"),
                 scenario=request.scenario,
                 site=site,
                 period=period,
@@ -171,7 +302,7 @@ class SellerSpriteApiManager:
             )
         else:
             export = _export_rows_to_json(
-                output_path=root_dir / f"{job_id}.json",
+                output_path=_export_output_path(root_dir, job_id, "json"),
                 job_id=job_id,
                 scenario=request.scenario,
                 site=site,
@@ -212,8 +343,20 @@ class SellerSpriteApiManager:
         root_dir = self.settings.output_dir / job_id
         result_path = root_dir / "result.json"
         if not result_path.exists():
+            status = read_status(root_dir)
+            if status:
+                return status
             raise SellerSpriteConfigError(f"任务不存在：{job_id}")
-        return json.loads(result_path.read_text(encoding="utf-8"))
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        status = read_status(root_dir)
+        if not status:
+            return result
+        # 异步任务完成后保留 state/stage，同时用 result.json 补充最终业务结果。
+        merged = dict(status)
+        merged.update(result)
+        merged.setdefault("state", status.get("state") or "succeeded")
+        merged.setdefault("stage", status.get("stage") or "finished")
+        return merged
 
     def _build_root_dir(self, request: SellerSpriteScenarioRequest, job_id: str) -> Path:
         base_dir = Path(request.output_dir).expanduser() if request.output_dir else self.settings.output_dir
@@ -233,6 +376,22 @@ async def _run_main_request(
 ) -> dict[str, Any]:
     if method == "GET":
         return await client.get_json(endpoint, payload, referer=referer)
+    if method == "POST_QUERY":
+        return await client.request_json(
+            "POST",
+            endpoint,
+            params=payload,
+            json={},
+            headers={
+                **client._browser_headers(referer=referer),
+                "Accept": "application/json, text/plain, */*",
+                "Content-Type": "application/json;charset=UTF-8",
+                "Origin": BASE_URL,
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-origin",
+            },
+        )
     if method == "FORM":
         response_html = await client.post_form(endpoint, payload, referer=referer)
         response_html_path = root_dir / "response.html"
@@ -247,6 +406,156 @@ async def _run_main_request(
             "response_html_length": len(response_html),
         }
     return await client.post_json(endpoint, payload, referer=referer)
+
+
+async def _run_browser_route_request(
+    *,
+    settings: SellerSpriteSettings,
+    account,
+    request: SellerSpriteScenarioRequest,
+    scenario_method: str,
+    endpoint: str,
+    payload: dict[str, Any],
+    referer: str,
+    root_dir: Path,
+    high_frequency_endpoint: str | None,
+    high_frequency_payload: dict[str, Any] | None,
+):
+    worker = get_browser_route_worker(settings=settings, account=account)
+    return await worker.submit(
+        BrowserRouteRequest(
+            scenario=request.scenario,
+            method=scenario_method,
+            endpoint=endpoint,
+            payload=payload,
+            referer=referer,
+            account=account,
+            root_dir=root_dir,
+            high_frequency_endpoint=high_frequency_endpoint,
+            high_frequency_payload=high_frequency_payload,
+            page_prepare=(
+                settings.browser_page_prepare if request.page_prepare is None else request.page_prepare
+            ),
+            task_interval_seconds=(
+                settings.browser_task_interval_seconds
+                if request.task_interval_seconds is None
+                else request.task_interval_seconds
+            ),
+            cooldown_seconds=(
+                settings.browser_cooldown_seconds
+                if request.cooldown_seconds is None
+                else request.cooldown_seconds
+            ),
+        )
+    )
+
+
+def _resolve_request_mode(value: str) -> str:
+    mode = (value or "browser-route").strip().lower()
+    if mode not in {"api-direct", "browser-route"}:
+        raise SellerSpriteConfigError("卖家精灵 mode 仅支持 api-direct 或 browser-route")
+    return mode
+
+
+async def _poll_ai_task_result(
+    *,
+    client: SellerSpriteApiClient,
+    submit_response: dict[str, Any],
+    result_endpoint_template: str,
+    referer: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    task_id = _extract_task_id(submit_response)
+    if not task_id:
+        raise SellerSpriteApiError(
+            "SellerSprite AI task response missing taskId",
+            response_excerpt=json.dumps(submit_response, ensure_ascii=False)[:1000],
+            api_code="ERR_AI_TASK_ID_MISSING",
+        )
+
+    attempts = _int(params.get("pollAttempts") or params.get("maxPolls"), DEFAULT_AI_TASK_POLL_ATTEMPTS)
+    attempts = max(1, attempts)
+    interval = _float(
+        params.get("pollIntervalSeconds") or params.get("pollInterval"),
+        DEFAULT_AI_TASK_POLL_INTERVAL_SECONDS,
+    )
+    endpoint = result_endpoint_template.format(task_id=task_id)
+    last_response: dict[str, Any] | None = None
+    for attempt in range(attempts):
+        task_response = await client.get_json(endpoint, {}, referer=referer)
+        last_response = task_response
+        if _ai_task_has_content(task_response) or _ai_task_is_done(task_response):
+            return _merge_ai_task_response(
+                submit_response=submit_response,
+                task_response=task_response,
+                task_id=task_id,
+                attempts=attempt + 1,
+            )
+        if _ai_task_failed(task_response):
+            data = task_response.get("data") if isinstance(task_response, dict) else {}
+            message = data.get("taskErrMsg") if isinstance(data, dict) else None
+            raise SellerSpriteApiError(
+                f"SellerSprite AI task failed: {task_id}",
+                response_excerpt=json.dumps(task_response, ensure_ascii=False)[:1000],
+                api_code="ERR_AI_TASK_FAILED",
+                api_message=str(message) if message else None,
+            )
+        if attempt < attempts - 1 and interval > 0:
+            await asyncio.sleep(interval)
+
+    raise SellerSpriteApiError(
+        f"SellerSprite AI task timeout: {task_id}",
+        response_excerpt=json.dumps(last_response or submit_response, ensure_ascii=False)[:1000],
+        api_code="ERR_AI_TASK_TIMEOUT",
+    )
+
+
+def _extract_task_id(response: dict[str, Any]) -> str:
+    data = response.get("data") if isinstance(response, dict) else None
+    if isinstance(data, dict):
+        return str(data.get("taskId") or data.get("task_id") or "").strip()
+    return ""
+
+
+def _merge_ai_task_response(
+    *,
+    submit_response: dict[str, Any],
+    task_response: dict[str, Any],
+    task_id: str,
+    attempts: int,
+) -> dict[str, Any]:
+    payload = dict(task_response)
+    data = dict(task_response.get("data") or {})
+    data.setdefault("taskId", task_id)
+    data["pollAttempts"] = attempts
+    data["submitTask"] = submit_response.get("data")
+    payload["data"] = data
+    return payload
+
+
+def _ai_task_has_content(response: dict[str, Any]) -> bool:
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, dict):
+        return False
+    content = data.get("content")
+    return content is not None and content != ""
+
+
+def _ai_task_is_done(response: dict[str, Any]) -> bool:
+    status = _ai_task_status(response)
+    return status in AI_TASK_DONE_STATUSES
+
+
+def _ai_task_failed(response: dict[str, Any]) -> bool:
+    status = _ai_task_status(response)
+    return status in AI_TASK_FAILED_STATUSES
+
+
+def _ai_task_status(response: dict[str, Any]) -> str:
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("taskStatus") or data.get("status") or "").strip().upper()
 
 
 async def _request_with_session_retry(
@@ -315,6 +624,18 @@ def _without(payload: dict[str, Any], keys: set[str]) -> dict[str, Any]:
 
 def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
     data = response.get("data") if isinstance(response, dict) else None
+    if isinstance(data, dict) and ("content" in data or "htmlContent" in data):
+        return [
+            {
+                "taskId": data.get("taskId"),
+                "taskStatus": data.get("taskStatus"),
+                "content": data.get("content"),
+                "htmlStatus": data.get("htmlStatus"),
+                "htmlContent": data.get("htmlContent"),
+                "completedTime": data.get("completedTime"),
+                "expiredTime": data.get("expiredTime"),
+            }
+        ]
     if isinstance(data, dict) and isinstance(data.get("items"), list):
         return [item for item in data["items"] if isinstance(item, dict)]
     if isinstance(data, dict) and isinstance(data.get("pager"), dict):
@@ -334,6 +655,16 @@ def _int(value: Any, default: int = 0) -> int:
         return int(value)
     except (ValueError, TypeError):
         return default
+
+
+def _float(value: Any, default: float = 0) -> float:
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except (ValueError, TypeError):
+        return default
+    return parsed if parsed >= 0 else default
 
 
 def _looks_like_guest_limited_response(response: dict[str, Any], *, page_size: int) -> bool:
@@ -390,6 +721,7 @@ def _scenario_label(scenario: str) -> str:
         "keyword-reverse": "ReverseASIN",
         "traffic-source": "TrafficSource",
         "market-research": "MarketResearch",
+        "listing-analysis": "ListingAnalysis",
     }
     return labels.get(scenario, _camel_case(scenario))
 
@@ -404,6 +736,8 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
         return str(value) if value is not None else ""
 
     if scenario == "keyword-reverse":
+        return _sanitize_filename_part(params.get("asin"))
+    if scenario == "listing-analysis":
         return _sanitize_filename_part(params.get("asin"))
     if scenario == "keyword-miner":
         return _sanitize_filename_part(params.get("keyword"))
@@ -468,6 +802,14 @@ def _sanitize_filename_part(value: Any) -> str:
     text = re.sub(r"[^A-Za-z0-9\-]+", "-", text)
     text = re.sub(r"-{2,}", "-", text).strip("-")
     return text[:64]
+
+
+def _export_output_path(root_dir: Path, job_id: str, extension: str) -> Path:
+    suffix = extension.lstrip(".")
+    candidate = root_dir / f"{job_id}.{suffix}"
+    if len(str(candidate)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+        return root_dir / f"export.{suffix}"
+    return candidate
 
 
 def _normalize_export_format(value: str) -> str:

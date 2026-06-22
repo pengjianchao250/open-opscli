@@ -4,29 +4,23 @@ from opscli.seller_sprite.api.payloads import (
     make_competitor_payload,
     make_keyword_miner_payload,
     make_keyword_reverse_payload,
+    make_listing_analysis_payload,
     make_product_research_payload,
 )
 from opscli.seller_sprite.api.scenarios import get_scenario
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 
 
-def test_competitor_payload_uses_page_size_month_name_and_no_default_filters():
+def test_competitor_payload_requires_primary_filter_before_request():
     scenario = get_scenario("competitor-lookup")
 
-    payload = scenario.build_payload(
-        params={},
-        site="DE",
-        period="2026-04",
-        page_size=100,
-    )
-
-    assert payload["market"] == "DE"
-    assert payload["monthName"] == "bsr_sales_monthly_202604"
-    assert payload["size"] == 100
-    assert payload["nodeIdPaths"] == []
-    assert payload["asins"] == []
-    assert "brand" not in payload
-    assert "sellerName" not in payload
+    with pytest.raises(SellerSpriteConfigError, match="至少需要一个主筛选条件"):
+        scenario.build_payload(
+            params={},
+            site="DE",
+            period="2026-04",
+            page_size=100,
+        )
 
 
 def test_competitor_payload_keeps_optional_filters_when_provided():
@@ -48,6 +42,18 @@ def test_competitor_payload_keeps_optional_filters_when_provided():
     assert payload["sellerName"] == "AnkerDirect"
     assert payload["asins"] == ["B00FLYWNYQ"]
     assert payload["nodeIdPaths"] == ["78191031"]
+
+
+def test_competitor_payload_maps_singular_asin_to_asins_list():
+    payload = make_competitor_payload(
+        {
+            "site": "US",
+            "period": "2026-04",
+            "asin": "B00FLYWNYQ",
+        }
+    )
+
+    assert payload["asins"] == ["B00FLYWNYQ"]
 
 
 def test_competitor_payload_accepts_singular_node_id_path():
@@ -99,6 +105,25 @@ def test_keyword_reverse_payload_keeps_orchestration_fields_for_manager():
     assert payload["limit"] == 100
     assert payload["skip"] == 0
     assert "includeHighFrequency" not in payload
+
+
+def test_listing_analysis_payload_defaults_to_global_station():
+    scenario = get_scenario("listing-analysis")
+
+    payload = scenario.build_payload(
+        params={"asin": "b0d3845mwd"},
+        site="US",
+        period="30d",
+        page_size=100,
+    )
+
+    assert payload == {"asin": "B0D3845MWD", "station": "GLOBAL"}
+    assert scenario.method == "POST_QUERY"
+    assert scenario.task_result_endpoint == "/v3/api/ai-analysis/task/{task_id}"
+    assert make_listing_analysis_payload({"asin": "b0d3845mwd", "station": "us"}) == {
+        "asin": "B0D3845MWD",
+        "station": "US",
+    }
 
 
 def test_product_research_accepts_recommendation_mode():

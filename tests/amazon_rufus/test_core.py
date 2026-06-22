@@ -99,6 +99,38 @@ def test_question_bank_rejects_empty_items(tmp_path: Path):
     assert "题库为空" in str(exc.value)
 
 
+def test_manager_renders_asin_placeholder_from_question_bank(tmp_path: Path):
+    data_dir = tmp_path / "ops-amazon-rufus" / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "question_templates.json").write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "id": 1,
+                        "description": "ASIN Listing 快速诊断默认问题",
+                        "preferred_version_index": 0,
+                        "questions": [
+                            {
+                                "id": 1,
+                                "text": "这个产品ASIN {{asin}}，标题写得清楚吗？",
+                                "position": 1,
+                            }
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    manager = RufusManager(question_bank=QuestionBankService(skills_dir=str(tmp_path)))
+
+    questions = manager._resolve_questions(asin="b0test0001", question=None, questions=None, skills_dir=None)
+
+    assert questions == ["这个产品ASIN B0TEST0001，标题写得清楚吗？"]
+
+
 def test_parser_extracts_text_from_sse_inference_event():
     raw = '\n'.join([
         'event: inference',

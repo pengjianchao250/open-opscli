@@ -251,6 +251,39 @@ def test_build_outputs_doc_aligned_json(monkeypatch):
     assert payload["data"]["dataset"]["table_id"] == 1103
 
 
+def test_simple_passes_dataset_for_field_validation(monkeypatch, tmp_path):
+    payload_file = tmp_path / "simple.json"
+    payload_file.write_text(json.dumps({"dimensions": [{"field": "order_sale_trend_set.asin"}]}), encoding="utf-8")
+
+    class DummyManager:
+        def __init__(self):
+            self.called_with = None
+
+        def build_simple(self, **kwargs):
+            self.called_with = kwargs
+            return {"payload": {"tableId": kwargs["table_id"]}, "output": None}
+
+    manager = DummyManager()
+    monkeypatch.setattr("opscli.query.commands.cli.QueryManager", lambda: manager)
+
+    result = runner.invoke(
+        app,
+        [
+            "simple",
+            "--table-id",
+            "1103",
+            "--dataset",
+            "order_sale_trend_set",
+            "--payload",
+            str(payload_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert manager.called_with["dataset_alias"] == "order_sale_trend_set"
+    assert manager.called_with["validate_fields"] is True
+
+
 def test_build_passes_short_where_flags(monkeypatch):
     class DummyManager:
         def __init__(self):

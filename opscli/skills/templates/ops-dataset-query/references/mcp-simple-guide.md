@@ -18,8 +18,7 @@ description: MCP 模式 — 查询 Tool 详解（query_simple / query_build_and_
 - **`query_simple`**（推荐）：基于简化参数直接执行查询。服务端自动处理 `translate`、`MOY` 展开等技术细节。
 - **`query_build_and_run`**：基于简化参数构造标准 query payload 并立即执行，一步返回数据结果。输入参数使用 CLI 风格字符串格式。
 - **`query_chart`**：通过 `chart_uuid` 获取图表查询结构，可选立即执行所有查询并合并输出结果。涉及多 query、小计/总计等复杂场景。
-- **`query_metadata`**：读取指定数据集的 query metadata（字段定义、可用聚合方式等）。
-- **`query_catalog`**：读取数据集业务语义索引（dataset catalog），用于意图匹配。
+- **`query_metadata`**：读取指定数据集的 query metadata（字段定义、可用聚合方式等），无参数时返回数据集列表。
 
 ---
 
@@ -313,43 +312,6 @@ query_chart(
 query_metadata(dataset="sales_order_d")
 query_metadata(table_id=123)
 ```
-
-### `query_catalog`
-
-读取数据集业务语义索引（dataset catalog）原始内容。默认远端优先，远端失败时回退本地缓存。
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `skills_dir` | string | 否 | 指定 Skill 安装根目录 |
-| `source` | string | 否 | 数据来源：`remote`（默认）或 `local` |
-| `fallback_local` | boolean | 否 | source=remote 时，远端失败是否回退本地缓存，默认 true |
-| `session_id` | string | 否 | OAuth 授权后的 Session ID |
-| `jwt` | string | 否 | 已有 JWT |
-
-```python
-query_catalog()
-query_catalog(source="local")
-```
-
-### `query_intent_match`
-
-根据自然语言需求匹配 catalog intents，并返回候选数据集和 intent 约束。用户未指定 `dataset/table_id` 时，必须优先调用本工具。
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `query` | string | 是 | 用户自然语言查询需求 |
-| `skills_dir` | string | 否 | 指定 Skill 安装根目录 |
-| `source` | string | 否 | 数据来源：`remote`（默认）或 `local` |
-| `fallback_local` | boolean | 否 | source=remote 时，远端失败是否回退本地缓存，默认 true |
-| `session_id` | string | 否 | OAuth 授权后的 Session ID |
-| `jwt` | string | 否 | 已有 JWT |
-
-```python
-query_intent_match(query="查看库存周转趋势")
-query_intent_match(query="财务口径销售额月环比", source="local")
-```
-
-返回的 `intent_constraints` 包含 `scenario_description`、`notes`、`default_filters`、`comparison_strategy`、推荐字段和扩展规则。后续构造查询时必须优先遵循这些约束，再做 `query_metadata(dataset=...)` 字段校验；若约束与硬性查询铁律冲突，则硬性铁律优先。
 
 ---
 

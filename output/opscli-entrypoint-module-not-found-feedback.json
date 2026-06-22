@@ -1,0 +1,47 @@
+{
+  "source": "cli",
+  "feedback_type": "bug",
+  "severity": "medium",
+  "title": "opscli.exe 入口无法导入 opscli 模块",
+  "content": "在项目根目录执行 .venv\\Scripts\\opscli.exe sif features --pretty 或用户执行 opscli --help 时，console entrypoint 启动后抛出 ModuleNotFoundError: No module named 'opscli'。python -m opscli.cli 可正常导入，推测为当前虚拟环境未完成 editable install 或 console entrypoint 的导入路径与项目包不一致。",
+  "payload": {
+    "expected": "opscli console entrypoint 能正常显示帮助或执行 sif features",
+    "actual": "ModuleNotFoundError: No module named 'opscli'",
+    "failed_command": ".\\.venv\\Scripts\\opscli.exe sif features --pretty"
+  },
+  "skill_name": "ops-sif",
+  "skill_version": "0.2.0",
+  "command_name": "opscli sif features",
+  "context": {
+    "cwd": "E:\\WorkProjects\\open-opscli",
+    "agent": "Codex",
+    "workflow": "SIF feature acceptance"
+  },
+  "execution_summary": {
+    "summary": "调用 opscli console entrypoint 失败，自动提交反馈。",
+    "failed_calls": [
+      {
+        "tool": "PowerShell -> .\\.venv\\Scripts\\opscli.exe sif features --pretty",
+        "call_params": {
+          "command": ".\\.venv\\Scripts\\opscli.exe sif features --pretty",
+          "cwd": "E:\\WorkProjects\\open-opscli"
+        },
+        "error_message": "ModuleNotFoundError: No module named 'opscli'",
+        "reason": "推测当前 .venv 的 console entrypoint 未正确关联项目包安装路径；同一环境下 .\\.venv\\Scripts\\python.exe -c \"import opscli\" 可导入项目源码。",
+        "fix_suggestion": "重新在当前虚拟环境执行 editable install，或临时改用 .\\.venv\\Scripts\\python.exe -m opscli.cli。"
+      }
+    ],
+    "successful_calls": [
+      {
+        "tool": "PowerShell -> .\\.venv\\Scripts\\python.exe -c \"import opscli\"",
+        "result": "成功导入 E:\\WorkProjects\\open-opscli\\opscli\\__init__.py"
+      },
+      {
+        "tool": "PowerShell -> .\\.venv\\Scripts\\python.exe -m pip --version",
+        "result": "pip 26.1.2 可用"
+      }
+    ],
+    "final_resolution": "已准备通过 editable install 修复 console entrypoint。"
+  },
+  "attachments": []
+}

@@ -10,6 +10,7 @@ from opscli.seller_sprite.api.payloads import (
     make_competitor_payload,
     make_keyword_miner_payload,
     make_keyword_reverse_payload,
+    make_listing_analysis_payload,
     make_market_research_payload,
     make_product_research_payload,
     make_traffic_source_payload,
@@ -29,8 +30,10 @@ class SellerSpriteScenario:
     endpoint: str
     required_params: tuple[str, ...]
     payload_builder: PayloadBuilder
+    required_any_params: tuple[str, ...] = ()
     method: str = "POST"
     high_frequency_endpoint: str | None = None
+    task_result_endpoint: str | None = None
 
     def to_public_dict(self) -> dict[str, Any]:
         """返回 MCP 可公开的场景说明。"""
@@ -79,6 +82,10 @@ class SellerSpriteScenario:
         missing = [key for key in self.required_params if not payload.get(key)]
         if missing:
             raise SellerSpriteConfigError(f"场景 {self.scenario_id} 缺少参数：{', '.join(missing)}")
+        if self.required_any_params and not any(payload.get(key) for key in self.required_any_params):
+            raise SellerSpriteConfigError(
+                f"场景 {self.scenario_id} 至少需要一个主筛选条件：{', '.join(self.required_any_params)}"
+            )
 
 
 SCENARIOS: dict[str, SellerSpriteScenario] = {
@@ -87,6 +94,7 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         title="选竞品",
         endpoint="/v3/api/competing-lookup",
         required_params=(),
+        required_any_params=("keyword", "brand", "sellerName", "asin", "asins"),
         payload_builder=make_competitor_payload,
     ),
     "product-research": SellerSpriteScenario(
@@ -126,6 +134,15 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         method="FORM",
         required_params=(),
         payload_builder=make_market_research_payload,
+    ),
+    "listing-analysis": SellerSpriteScenario(
+        scenario_id="listing-analysis",
+        title="Listing Analysis",
+        endpoint="/v3/api/ai-workflow/listing-analysis",
+        method="POST_QUERY",
+        task_result_endpoint="/v3/api/ai-analysis/task/{task_id}",
+        required_params=("asin",),
+        payload_builder=make_listing_analysis_payload,
     ),
 }
 

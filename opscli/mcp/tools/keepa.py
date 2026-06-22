@@ -16,12 +16,15 @@ from typing import Any
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 
+MAX_PUBLIC_DATA_PREVIEW_ROWS = 20
+
+
 async def keepa_spec_must_read() -> dict:
-    """读取 Keepa MCP 使用规范（opscli/keepa/reference/SKILL_MCP.md）。"""
+    """读取 Keepa MCP 使用规范（opscli/mcp/references/keepa/SKILL_MCP.md）。"""
     spec_path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[1]
+        / "references"
         / "keepa"
-        / "reference"
         / "SKILL_MCP.md"
     )
     if not spec_path.exists():
@@ -64,7 +67,6 @@ async def keepa_run(
     如果未提供 session_id / jwt，会自动尝试从当前 MCP 会话隔离凭证中加载。
     若无 OPS 登录态但设置了 OPSCLI_KEEPA_API_KEY，也可直接执行。
     """
-    sid, jw = _get_auth_pair("ops", session_id, jwt)
     call_params = {
         "scenario": scenario,
         "site": site,
@@ -75,6 +77,9 @@ async def keepa_run(
         "job_id": job_id,
     }
     try:
+        export_format = _normalize_mcp_export_format(export_format)
+        call_params["export_format"] = export_format
+        sid, jw = _get_auth_pair("ops", session_id, jwt)
         from opscli.keepa.domain.models import KeepaScenarioRequest
         from opscli.keepa.services import KeepaApiManager
 
@@ -92,6 +97,8 @@ async def keepa_run(
         )
         result = await KeepaApiManager(jwt=jw, session_id=sid).run(request)
         return _ok(_public_result(result.to_dict()))
+    except ValueError as exc:
+        return _err(exc, tool="MCP → keepa_run(...)", call_params=call_params, auto_feedback=False)
     except Exception as exc:
         return _err(exc, tool="MCP → keepa_run(...)", call_params=call_params)
 
@@ -115,8 +122,7 @@ async def keepa_export(job_id: str) -> dict:
         export = status.get("export")
         if not export:
             raise ValueError(f"任务无导出文件：{job_id}")
-        if export.get("path") and not export.get("url"):
-            export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
+        _ensure_export_url(export)
         return _ok(export)
     except Exception as exc:
         return _err(exc, tool="MCP → keepa_export(...)", call_params={"job_id": job_id})
@@ -139,8 +145,46 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         public.pop("account", None)
         public.pop("params_path", None)
         public.pop("raw_path", None)
+        _ensure_export_url(public.get("export"))
+        _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
     return public
+
+
+def _normalize_mcp_export_format(value: str) -> str:
+    """校验 MCP 对外导出格式；当前只允许生成用户可读表格。"""
+    text = (value or "").strip().lower()
+    if text in {"", "xls", "xlsx"}:
+        return "xls"
+    raise ValueError(f"不支持的导出格式：{value}。Keepa MCP 当前仅支持 xls/xlsx 表格导出。")
+
+
+def _ensure_export_url(export: Any) -> None:
+    if not isinstance(export, dict):
+        return
+    if export.get("url"):
+        export.pop("path", None)
+    elif export.get("path"):
+        export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
+
+
+def _compact_public_data(public: dict[str, Any]) -> None:
+    data = public.get("data")
+    if not isinstance(data, list) or len(data) <= MAX_PUBLIC_DATA_PREVIEW_ROWS:
+        return
+    public["data_preview"] = data[:MAX_PUBLIC_DATA_PREVIEW_ROWS]
+    public["data_omitted"] = len(data) - MAX_PUBLIC_DATA_PREVIEW_ROWS
+    public.pop("data", None)
+    warnings = public.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+    warnings.append(
+        {
+            "stage": "mcp_response_compact",
+            "message": "返回数据量较大，MCP 响应仅保留摘要和导出文件，请通过导出文件查看完整数据。",
+        }
+    )
+    public["warnings"] = warnings
 
 
 def _strip_sensitive(value: Any) -> Any:

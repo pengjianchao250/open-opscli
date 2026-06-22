@@ -1,0 +1,27 @@
+{
+  "time": "2026-06-09T09:57:57",
+  "source": "amazon.scrape",
+  "asin": "B0BY8Y5766",
+  "command": [
+    "__direct__",
+    "amazon",
+    "scrape",
+    "--asin",
+    "B0BY8Y5766"
+  ],
+  "dry_run": false,
+  "execution": "direct",
+  "status": "failed",
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": "缺少 playwright 依赖，请安装 `pip install opscli` 并执行 `playwright install chromium`",
+  "json": {
+    "success": false,
+    "command": "amazon.scrape",
+    "data": null,
+    "error": {
+      "code": "SCRAPER_DEPENDENCY_ERROR",
+      "message": "缺少 playwright 依赖，请安装 `pip install opscli` 并执行 `playwright install chromium`"
+    }
+  }
+}
