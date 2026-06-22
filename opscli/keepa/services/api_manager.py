@@ -13,16 +13,17 @@ from uuid import uuid4
 from opscli.keepa.accounts import KeepaApiKeyProvider
 from opscli.keepa.api.client import KeepaApiClient
 from opscli.keepa.api.scenarios import get_scenario, list_scenarios
+from opscli.keepa.best_sellers_formatter import FormattedBestSellersExport, format_best_sellers_export
 from opscli.keepa.config import KeepaSettings, load_settings
+from opscli.keepa.deal_formatter import FormattedDealExport, format_deal_export
 from opscli.keepa.domain.exceptions import KeepaApiError, KeepaConfigError
 from opscli.keepa.domain.models import KeepaExportResult, KeepaScenarioRequest, KeepaScenarioResult
 from opscli.keepa.export.xlsx import export_rows_to_xlsx
+from opscli.keepa.product_formatter import FormattedProductExport, format_product_export
+from opscli.keepa.search_insights_formatter import FormattedSearchInsightsExport, format_search_insights_export
 from opscli.keepa.time import add_keepa_time_conversions
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 from opscli.shared.integration_accounts import IntegrationAccountClient
-
-
-MAX_XLSX_EXPORT_ROWS = 5_000
 
 
 class KeepaApiManager:
@@ -61,6 +62,7 @@ class KeepaApiManager:
 
     async def run(self, request: KeepaScenarioRequest) -> KeepaScenarioResult:
         """执行一个 Keepa API 场景。"""
+        _normalize_export_format(request.export_format)
         scenario = get_scenario(request.scenario)
         site = (request.site or "US").upper()
         job_id = request.job_id or _build_job_id(request, site)
@@ -136,33 +138,51 @@ class KeepaApiManager:
         _write_json(raw_path, raw_payload)
 
         raw_rows = extract_rows(raw_response)
-        data = add_keepa_time_conversions(raw_rows)
-        export_format = _resolve_export_format(
-            requested_format=_normalize_export_format(request.export_format),
-            row_count=len(raw_rows),
-            warnings=warnings,
+        product_export = _format_product_rows_if_needed(
+            scenario=request.scenario,
+            rows=raw_rows,
+            site=site,
+            normalized_params=normalized_params,
         )
-        if export_format == "xlsx":
-            export_rows = raw_response_to_export_rows(raw_response)
-            export = export_rows_to_xlsx(
-                rows=export_rows,
-                output_path=root_dir / f"{job_id}.xlsx",
-                scenario=request.scenario,
-                site=site,
-                params=request.params,
-            )
-        else:
-            export = _export_raw_to_json(
-                output_path=root_dir / f"{job_id}.json",
-                job_id=job_id,
-                scenario=request.scenario,
-                site=site,
-                endpoint=scenario.endpoint,
-                request_params=normalized_params,
-                raw_response=raw_response,
-                rows=data,
-                warnings=warnings,
-            )
+        search_insights_export = _format_search_insights_if_needed(
+            scenario=request.scenario,
+            raw_response=raw_response,
+            site=site,
+            normalized_params=normalized_params,
+            request_params=request.params,
+        )
+        best_sellers_export = _format_best_sellers_if_needed(
+            scenario=request.scenario,
+            raw_response=raw_response,
+            site=site,
+            normalized_params=normalized_params,
+        )
+        deal_export = _format_deals_if_needed(
+            scenario=request.scenario,
+            rows=raw_rows,
+            site=site,
+            normalized_params=normalized_params,
+        )
+        data = _formatted_data_or_default(
+            raw_rows=raw_rows,
+            product_export=product_export,
+            best_sellers_export=best_sellers_export,
+            deal_export=deal_export,
+        )
+        export_rows = _export_rows_for_xlsx(
+            raw_response=raw_response,
+            product_export=product_export,
+            best_sellers_export=best_sellers_export,
+            deal_export=deal_export,
+        )
+        export = export_rows_to_xlsx(
+            rows=export_rows,
+            output_path=root_dir / f"{job_id}.xlsx",
+            scenario=request.scenario,
+            site=site,
+            params=request.params,
+            extra_sheets=_merge_extra_sheets(product_export, search_insights_export, best_sellers_export, deal_export),
+        )
         _upload_export_if_enabled(
             export=export,
             job_id=job_id,
@@ -265,7 +285,11 @@ def raw_response_to_export_rows(payload: dict[str, Any]) -> list[dict[str, Any]]
     if not isinstance(payload, dict):
         return [{"value": payload}]
     row_source_key, row_items = _primary_row_items(payload)
-    base_row = {key: value for key, value in payload.items() if key != row_source_key}
+    base_row = {
+        key: value
+        for key, value in payload.items()
+        if key != row_source_key and key != "searchInsights"
+    }
     if not row_items:
         return [dict(payload)]
     rows: list[dict[str, Any]] = []
@@ -324,6 +348,123 @@ def _scalar_item_field(row_source_key: str | None) -> str:
     if row_source_key in {"asinList", "bestSellersList"}:
         return "asin"
     return "value"
+
+
+def _format_product_rows_if_needed(
+    *,
+    scenario: str,
+    rows: list[Any],
+    site: str,
+    normalized_params: dict[str, Any],
+) -> FormattedProductExport | None:
+    if scenario != "product":
+        return None
+    return format_product_export(rows, site=site, domain_id=normalized_params.get("domain"))
+
+
+def _format_search_insights_if_needed(
+    *,
+    scenario: str,
+    raw_response: dict[str, Any],
+    site: str,
+    normalized_params: dict[str, Any],
+    request_params: dict[str, Any],
+) -> FormattedSearchInsightsExport | None:
+    if scenario != "product-finder":
+        return None
+    return format_search_insights_export(
+        raw_response.get("searchInsights"),
+        site=site,
+        domain_id=normalized_params.get("domain"),
+        query_name=_search_insights_query_name(request_params),
+    )
+
+
+def _format_best_sellers_if_needed(
+    *,
+    scenario: str,
+    raw_response: dict[str, Any],
+    site: str,
+    normalized_params: dict[str, Any],
+) -> FormattedBestSellersExport | None:
+    if scenario != "bestsellers":
+        return None
+    return format_best_sellers_export(
+        raw_response.get("bestSellersList"),
+        site=site,
+        domain_id=normalized_params.get("domain"),
+        category_id=normalized_params.get("category"),
+    )
+
+
+def _format_deals_if_needed(
+    *,
+    scenario: str,
+    rows: list[Any],
+    site: str,
+    normalized_params: dict[str, Any],
+) -> FormattedDealExport | None:
+    if scenario != "deals":
+        return None
+    return format_deal_export(rows, site=site, domain_id=normalized_params.get("domain"))
+
+
+def _formatted_data_or_default(
+    *,
+    raw_rows: list[Any],
+    product_export: FormattedProductExport | None,
+    best_sellers_export: FormattedBestSellersExport | None,
+    deal_export: FormattedDealExport | None,
+) -> list[Any]:
+    if product_export:
+        return product_export.products
+    if best_sellers_export:
+        return best_sellers_export.asin_rows
+    if deal_export:
+        return deal_export.deals
+    return add_keepa_time_conversions(raw_rows)
+
+
+def _export_rows_for_xlsx(
+    *,
+    raw_response: dict[str, Any],
+    product_export: FormattedProductExport | None,
+    best_sellers_export: FormattedBestSellersExport | None,
+    deal_export: FormattedDealExport | None,
+) -> list[dict[str, Any]]:
+    if product_export:
+        return product_export.products
+    if best_sellers_export:
+        return best_sellers_export.asin_rows
+    if deal_export:
+        return deal_export.deals
+    return raw_response_to_export_rows(raw_response)
+
+
+def _merge_extra_sheets(
+    product_export: FormattedProductExport | None,
+    search_insights_export: FormattedSearchInsightsExport | None,
+    best_sellers_export: FormattedBestSellersExport | None,
+    deal_export: FormattedDealExport | None,
+) -> dict[str, list[dict[str, Any]]] | None:
+    sheets: dict[str, list[dict[str, Any]]] = {}
+    if product_export:
+        sheets.update(product_export.extra_sheets())
+    if search_insights_export:
+        sheets.update(search_insights_export.extra_sheets())
+    if best_sellers_export:
+        sheets.update(best_sellers_export.extra_sheets())
+    if deal_export:
+        sheets.update(deal_export.extra_sheets())
+    return sheets or None
+
+
+def _search_insights_query_name(params: dict[str, Any]) -> str:
+    for key in ("queryName", "query_name", "name", "keyword", "term"):
+        value = params.get(key)
+        if value:
+            return str(value)
+    return "product-finder"
 
 
 async def _safe_token_status(client: KeepaApiClient, warnings: list[dict[str, Any]]) -> dict[str, Any]:
@@ -482,63 +623,7 @@ def _normalize_export_format(value: str) -> str:
     text = (value or "").strip().lower()
     if text in {"", "xls", "xlsx"}:
         return "xlsx"
-    if text == "json":
-        return "json"
-    raise KeepaConfigError(f"不支持的导出格式：{value}")
-
-
-def _resolve_export_format(
-    *,
-    requested_format: str,
-    row_count: int,
-    warnings: list[dict[str, Any]],
-) -> str:
-    if requested_format != "xlsx" or row_count <= MAX_XLSX_EXPORT_ROWS:
-        return requested_format
-    warnings.append(
-        {
-            "stage": "export_format_auto_json",
-            "message": f"Keepa 返回 {row_count} 行，数据量较大，已自动改为 JSON 导出，避免 XLSX 文件过大或导出超时。",
-            "row_count": row_count,
-            "max_xlsx_rows": MAX_XLSX_EXPORT_ROWS,
-        }
-    )
-    return "json"
-
-
-def _export_raw_to_json(
-    *,
-    output_path: Path,
-    job_id: str,
-    scenario: str,
-    site: str,
-    endpoint: str,
-    request_params: dict[str, Any],
-    raw_response: dict[str, Any],
-    rows: list[Any],
-    warnings: list[dict[str, Any]],
-) -> KeepaExportResult:
-    payload = {
-        "job_id": job_id,
-        "scenario": scenario,
-        "site": site,
-        "endpoint": endpoint,
-        "request_params": request_params,
-        "row_count": len(rows),
-        "rows": rows,
-        "raw_response": raw_response,
-        "quota": extract_quota(raw_response),
-        "warnings": warnings,
-    }
-    _write_json(output_path, payload)
-    resolved = output_path.resolve()
-    return KeepaExportResult(
-        path=str(resolved),
-        filename=resolved.name,
-        url=resolved.as_uri(),
-        format="json",
-        mime_type="application/json",
-    )
+    raise KeepaConfigError(f"不支持的导出格式：{value}。Keepa 当前仅支持 xls/xlsx 表格导出。")
 
 
 def _upload_export_if_enabled(
@@ -558,7 +643,7 @@ def _upload_export_if_enabled(
         upload = client.upload(
             export.path,
             purpose="keepa_export",
-            folder="keepa/exports",
+            folder="keepa/export",
             public="1",
             metadata={
                 "job_id": job_id,

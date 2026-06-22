@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlencode
 
+from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+
 
 PRODUCT_RESEARCH_RECOMMENDATION_PRESETS: dict[str, dict[str, Any]] = {
     "低价长尾选品": {
@@ -197,10 +199,11 @@ def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造竞品查询 payload。"""
     market = _market(input_data)
     month = input_data.get("month") or input_data.get("period") or "202604"
+    asin_values = input_data.get("asins") or input_data.get("asin")
     payload: dict[str, Any] = {
         "market": market,
         "monthName": input_data.get("monthName") or month_name(month),
-        "asins": csv(input_data.get("asins")),
+        "asins": csv(asin_values),
         "page": _int(input_data.get("page") or input_data.get("startPage"), 1),
         "nodeIdPaths": csv(input_data.get("node") or input_data.get("nodeIdPaths") or input_data.get("nodeIdPath")),
         "symbolFlag": False,
@@ -234,7 +237,7 @@ def make_product_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
         "filterSub": truthy(input_data.get("filterSub")) if input_data.get("filterSub") is not None else False,
         "weightUnit": input_data.get("weightUnit") or "g",
         "order": {
-            "field": input_data.get("orderField") or "amz_unit",
+            "field": input_data.get("orderField") or "total_units",
             "desc": order_desc(input_data.get("orderDesc")),
         },
         "productTags": [],
@@ -690,7 +693,32 @@ def _append_product_extra_filters(payload: dict[str, Any], input_data: dict[str,
         "matchType",
     ]:
         if input_data.get(key) is not None:
-            payload[key] = input_data[key]
+            if key == "putawayMonth":
+                payload[key] = _validate_putaway_month(input_data[key])
+            else:
+                payload[key] = input_data[key]
+
+
+def _validate_putaway_month(value: Any) -> Any:
+    """校验选产品上架月数，避免误把数据月份传给 putawayMonth。"""
+    text = str(value).strip()
+    if _looks_like_data_month(text):
+        raise SellerSpriteConfigError(
+            "product-research 的 putawayMonth/availableMonth 表示上架月数，不是数据月份；"
+            "数据月份请传顶层 period，例如 period=2026-04。"
+        )
+    return value
+
+
+def _looks_like_data_month(value: str) -> bool:
+    if value.startswith("bsr_sales_"):
+        return True
+    normalized = value.replace("-", "").replace("/", "").replace(".", "")
+    if len(normalized) != 6 or not normalized.isdigit():
+        return False
+    year = _int(normalized[:4], 0)
+    month = _int(normalized[4:], 0)
+    return 1900 <= year <= 2100 and 1 <= month <= 12
 
 
 def _preset_key(value: str) -> str:

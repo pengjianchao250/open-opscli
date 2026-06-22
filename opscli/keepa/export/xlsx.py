@@ -120,50 +120,87 @@ def export_rows_to_xlsx(
     scenario: str,
     site: str = "US",
     params: dict[str, Any] | None = None,
+    extra_sheets: dict[str, list[Any]] | None = None,
 ) -> KeepaExportResult:
     """Export Keepa rows to a user-friendly XLSX workbook."""
     try:
         from openpyxl import Workbook
+        from openpyxl.cell import WriteOnlyCell
         from openpyxl.styles import Font, PatternFill
         from openpyxl.utils import get_column_letter
     except ModuleNotFoundError as exc:
         raise KeepaConfigError("缺少 openpyxl 依赖，无法导出 XLSX") from exc
 
-    normalized_rows = [_normalize_row(row, scenario=scenario) for row in rows]
-    columns = _columns_from_rows(normalized_rows)
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = _safe_sheet_title(_sheet_title(scenario=scenario, site=site, params=params or {}, rows=rows))
-
+    workbook = Workbook(write_only=True)
+    sheet = workbook.create_sheet(title=_safe_sheet_title(_sheet_title(scenario=scenario, site=site, params=params or {}, rows=rows)))
     header_fill = PatternFill("solid", fgColor="EAF2F8")
     header_font = Font(bold=True)
-    for column_index, column in enumerate(columns, start=1):
-        cell = sheet.cell(row=1, column=column_index, value=column.title)
-        cell.font = header_font
-        cell.fill = header_fill
 
-    for row_index, row in enumerate(normalized_rows, start=2):
-        for column_index, column in enumerate(columns, start=1):
-            sheet.cell(row=row_index, column=column_index, value=_cell_value(row.get(column.source)))
+    _write_rows_sheet(
+        sheet=sheet,
+        rows=rows,
+        scenario=scenario,
+        header_fill=header_fill,
+        header_font=header_font,
+        write_only_cell=WriteOnlyCell,
+        get_column_letter=get_column_letter,
+    )
 
-    sheet.freeze_panes = "A2"
-    for column_index, column in enumerate(columns, start=1):
-        sheet.column_dimensions[get_column_letter(column_index)].width = _column_width(column.title)
+    for sheet_name, sheet_rows in (extra_sheets or {}).items():
+        if not sheet_rows:
+            continue
+        detail_sheet = workbook.create_sheet(title=_safe_sheet_title(sheet_name))
+        _write_rows_sheet(
+            sheet=detail_sheet,
+            rows=sheet_rows,
+            scenario=scenario,
+            header_fill=header_fill,
+            header_font=header_font,
+            write_only_cell=WriteOnlyCell,
+            get_column_letter=get_column_letter,
+        )
 
     workbook.save(output_path)
     resolved = output_path.resolve()
     return KeepaExportResult(path=str(resolved), filename=resolved.name, url=resolved.as_uri())
 
 
-def _columns_from_rows(rows: list[dict[str, Any]]) -> list[ExportColumn]:
-    if not rows:
-        return EMPTY_COLUMNS
+def _write_rows_sheet(
+    *,
+    sheet: Any,
+    rows: list[Any],
+    scenario: str,
+    header_fill: Any,
+    header_font: Any,
+    write_only_cell: Any,
+    get_column_letter: Any,
+) -> None:
+    columns = _columns_from_row_values(rows, scenario=scenario)
+    sheet.freeze_panes = "A2"
+
+    header_cells = []
+    for column in columns:
+        cell = write_only_cell(sheet, value=column.title)
+        cell.font = header_font
+        cell.fill = header_fill
+        header_cells.append(cell)
+    sheet.append(header_cells)
+
+    for row in rows:
+        normalized_row = _normalize_row(row, scenario=scenario)
+        sheet.append([_cell_value(normalized_row.get(column.source)) for column in columns])
+
+    for column_index, column in enumerate(columns, start=1):
+        sheet.column_dimensions[get_column_letter(column_index)].width = _column_width(column.title)
+
+
+def _columns_from_row_values(rows: list[Any], *, scenario: str) -> list[ExportColumn]:
+    """扫描原始行确定导出列，避免为大结果额外复制整表数据。"""
     fields: list[str] = []
     seen: set[str] = set()
     for row in rows:
-        for key in row:
+        for key in _normalize_row(row, scenario=scenario):
             if key in EXCLUDED_FIELDS:
                 continue
             if key not in seen:
@@ -210,6 +247,4 @@ def _column_width(title: str) -> int:
 
 
 def _title_for_field(field: str) -> str:
-    # 暂停 XLSX 表头中文翻译，保持与 Keepa API 字段名一致，避免字段含义不清晰。
-    return field
-    # return FIELD_TITLES.get(field, field)
+    return FIELD_TITLES.get(field, field)

@@ -1,6 +1,6 @@
 [project]
 name = "aukeys-opscli"
-version = "0.0.103"
+version = "0.0.97"
 description = "Aukeys 运营 CLI 工具集"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,11 +18,9 @@ dependencies = [
 amazon = [
     "playwright>=1.44",
 ]
-google-trends = [
-    "pytrends>=4.9.2",
-]
 seller-sprite = [
     "playwright>=1.44",
+    "patchright>=1.60.1",
     "markdownify>=1.2.2",
 ]
 dev = [
@@ -48,4 +46,5 @@ include = ["opscli*"]
 # Hook 脚本作为资源文件保留（非编译对象，由 settings_injector.py 部署到用户目录）
 "opscli" = [
     "skills/hooks/report_skill_usage.py",
+    "mcp/configs/mcp-quota.json",
 ]

@@ -37,12 +37,14 @@ class XiyouRankingRequest:
     asins: list[str] | str | None = None
     keyword: str | None = None
     query: str = ""
+    parent_asin: str | None = None
     cycle_period: str | None = None
     start_month: str | None = None
     end_month: str | None = None
     start_date: str | None = None
     end_date: str | None = None
     report_date: str | None = None
+    search_terms: list[str] | str | None = None
     view_mode: str | None = None
     replay_type: str | None = None
     keyword_type: str | None = None
@@ -84,7 +86,22 @@ class XiyouRankingResult:
     def to_dict(self) -> dict[str, Any]:
         """转换为 MCP/CLI 返回结构。"""
         payload = asdict(self)
-        payload["export"] = self.export.to_dict() if self.export else None
+        if self.export:
+            export_payload = self.export.to_dict()
+            if self.resource_url:
+                export_payload["download_url"] = self.resource_url
+                local_url = None
+                if export_payload.get("path"):
+                    local_url = Path(export_payload["path"]).expanduser().resolve().as_uri()
+
+                if local_url:
+                    export_payload.setdefault("local_url", local_url)
+                if not export_payload.get("url") or str(export_payload["url"]).startswith("file:"):
+                    export_payload["url"] = self.resource_url
+
+            payload["export"] = export_payload
+        else:
+            payload["export"] = None
         return payload
 
     @classmethod

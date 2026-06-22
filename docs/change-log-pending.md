@@ -1,5 +1,134 @@
 # 待归档变更记录
 
+## 2026-06-16 MCP - 处理 server.py 工具注册冲突
+
+**变更原因**：`opscli/mcp/server.py` 在合并工具清单自动上报与卖家精灵限额切面时出现冲突，需要同时保留两侧能力。
+**改动点**：在 `_TelemetryMcpProxy.tool()` 的注册代理中保留 `record_tool()` 工具清单采集，并将注册函数按“限额切面 -> 遥测切面 -> FastMCP 注册”的顺序包裹。
+**验证结果**：`.\.venv\Scripts\python.exe -m pytest tests\mcp\test_tool_catalog.py tests\mcp\test_quota.py tests\mcp\test_seller_sprite_tools.py -q` 通过，25 passed in 1.57s；`rg -n "<<<<<<<|=======|>>>>>>>" opscli\mcp\server.py` 无匹配。附加回归 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_tool_catalog.py tests\mcp\test_quota.py tests\mcp\test_seller_sprite_tools.py tests\mcp\test_tools.py -q` 中 29 passed、1 failed，失败为 `test_mcp_exposes_expected_tools` 在当前 stdio 未登录/权限过滤环境下只返回基础 auth 工具，和本次冲突块无直接关系。
+**影响范围**：影响 MCP 工具注册链路；工具清单同步、遥测采集和受限工具限额逻辑会同时生效。
+**回滚方式**：回退 `opscli/mcp/server.py` 中本次冲突块合并，并删除本条变更记录。
+
+---
+
+## 2026-06-18 seller_sprite - SQLite 单账号排队一期
+
+**变更原因**：当前卖家精灵 MCP 入口同时混合同步直跑、browser-route 忙时自动异步和任务目录文件状态，用户无法稳定看到排队序号；第一阶段需要先补单账号 SQLite 队列、统一入队返回和可查询状态，为后续多账号扩展预留结构。
+**改动点**：新增 `opscli/seller_sprite/services/task_queue_store.py`，提供 SQLite 队列仓储、排队序号计算、运行中任务恢复和任务认证上下文持久化；新增 `opscli/seller_sprite/services/task_scheduler.py`，实现单账号 FIFO 调度、后台消费和完成态 `result.json` 合并；`opscli/seller_sprite/services/__init__.py` 导出新调度入口；`opscli/mcp/tools/seller_sprite.py` 新增 `_get_task_scheduler()` 与 `_build_request()`，将 `seller_sprite_run` / `seller_sprite_start` 统一改为入队返回，`seller_sprite_job_status` / `seller_sprite_export` 改为走调度器状态；新增 `tests/seller_sprite/test_task_queue_store.py`、`tests/seller_sprite/test_task_scheduler.py`，并更新 `tests/mcp/test_seller_sprite_tools.py` 以覆盖统一入队和状态查询。
+**验证结果**：RED：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_task_queue_store.py -q` 初始失败于缺少 `task_queue_store` 模块；`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_task_scheduler.py -q` 初始失败于缺少 `task_scheduler` 模块；`.\\.venv\\Scripts\\python.exe -m pytest tests/mcp/test_seller_sprite_tools.py -q` 初始失败于 `seller_sprite` MCP 工具缺少 `_get_task_scheduler`。中途 `uv run --extra dev pytest ...` 因 `.venv\\Scripts\\opscli-mcp.exe` 被占用失败，已按项目要求提交反馈 `4f63cc51-23df-4982-afbc-de7bd776dce9` 后改用 `.venv\\Scripts\\python.exe -m pytest` 直跑。GREEN：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_task_queue_store.py tests/seller_sprite/test_task_scheduler.py tests/seller_sprite/test_api_manager.py tests/mcp/test_seller_sprite_tools.py -q` 通过，`29 passed`。
+**影响范围**：影响卖家精灵 MCP 的任务提交与状态查询口径；`seller_sprite_run` 现统一返回排队任务信息，不再在入口层直跑同步任务；单账号执行逻辑仍复用现有 `SellerSpriteApiManager.run()`，`status.json/result.json` 继续保留为任务目录产物。
+**回滚方式**：删除 `task_queue_store.py`、`task_scheduler.py`，回退 `opscli/mcp/tools/seller_sprite.py` 到原先的 `run/start` 分支逻辑，回退 `opscli/seller_sprite/services/__init__.py` 和新增/修改测试，并删除本条变更记录。
+
+---
+
+## 2026-06-18 卖家精灵 - browser-route 调度与导航优化
+
+**变更原因**：browser-route 每个任务固定访问首页、正常任务固定等待 8 秒，并对所有失败统一冷却 120 秒，导致无效导航和队列阻塞；默认运行时切换为 Patchright 后，基础卖家精灵依赖和文档也需要保持一致。
+**改动点**：`opscli/seller_sprite/browser_route/worker.py` 改为同目标页刷新、不同目标页直接导航，不再固定访问首页；正常任务随机间隔 1-5 秒，网络错误随机冷却 3-5 秒，429/验证码/疑似风控随机冷却 15-20 秒，登录失效立即重新登录并只重试主请求一次，配置和未知代码错误不冷却；`opscli/seller_sprite/config.py` 将任务间隔上限调整为 5 秒、冷却上限调整为 20 秒；`pyproject.toml` 让基础 `seller-sprite` extra 安装默认 Patchright 运行时；同步更新 README、MCP Skill 和 worker 单元测试。
+**验证结果**：RED：worker 测试分别因缺少随机等待分类函数、仍固定访问首页、主请求不支持会话重试而失败；GREEN：`.\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_browser_route_worker.py -q` 通过，17 passed；回归 `.\.venv\Scripts\python.exe -m pytest tests/seller_sprite tests/mcp/test_seller_sprite_tools.py -q` 通过，49 passed；`uv lock` 成功并确认基础 `seller-sprite` extra 包含 Patchright；对已安装 Patchright 1.60.1 做 API 冒烟检查，确认 `launch_persistent_context(no_viewport)`、`Page.reload/route/expect_response` 和 `APIRequestContext.post` 均可用。全量 `pytest tests -q` 在收集阶段被仓库既存同名测试模块阻断，首个错误为 `tests/amazon_rufus/test_transport.py` 与 `tests/feedback/test_transport.py` 的 import file mismatch，与本次卖家精灵变更无关。
+**影响范围**：影响同账号 browser-route 的页面导航、任务等待、失败恢复和默认安装依赖；不改变 `api-direct`、场景 payload、MCP schema、导出格式和异步任务状态结构。
+**回滚方式**：恢复 `worker.py` 的首页探测、固定间隔和统一冷却，恢复 `config.py` 默认值，移除对应测试，并从基础 `seller-sprite` extra 删除 Patchright 依赖后回退 README 与 Skill 说明。
+
+---
+
+## 2026-06-17 卖家精灵 - browser-route 支持 Patchright 运行时
+
+**变更原因**：卖家精灵 browser-route 需要启用 Patchright 进行本地验证，以降低 Playwright 自动化特征和 webdriver/CDP 检测风险，同时保留 Playwright 路线作为兼容回退。
+**改动点**：`opscli/seller_sprite/config.py` 新增 `OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME` 配置并限制为 `playwright`/`patchright`，默认运行时设为 `patchright`；`opscli/seller_sprite/browser_route/worker.py` 将 async API 加载和启动参数构造收敛为局部 runtime 策略，Patchright 模式使用 `no_viewport` 且保留 persistent context；`ops-seller-sprite` MCP Skill 文档和 README 补充 Patchright 安装与运行时配置说明；新增 browser-route 单元测试覆盖默认配置、环境变量解析、Patchright loader 和启动参数。
+**验证结果**：RED：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_browser_route_worker.py -q` 在实现前 3 failed，失败点为 `SellerSpriteSettings.browser_runtime` 不存在、worker 未提供 `_load_async_playwright`、未提供 Patchright 启动参数构造。GREEN：同一命令通过（10 passed）；默认值由用户先行本地调整后补充回归断言，因此该断言未单独经历 RED。回归：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite tests/mcp/test_seller_sprite_tools.py -q` 通过（43 passed）。依赖锁定：`uv lock` 成功，新增 `patchright v1.60.1`；当前 `.venv` 已安装 Patchright 1.60.1 及其 Chromium，实际启动后 `navigator.webdriver` 为 `False`。补充检查：`.\\.venv\\Scripts\\python.exe -m pytest tests/mcp/test_tools.py -q` 当前 2 failed、4 passed，失败点为当前 MCP 权限/注册上下文只暴露 10 个 auth 类工具且 `seller_sprite_run` 未出现在 `Client(mcp).list_tools()` 中；该失败不在本次 browser-route runtime 改动路径内。
+**影响范围**：影响卖家精灵 browser-route 的浏览器启动层和部署配置；默认 runtime 改为 Patchright，可通过 `OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME=playwright` 回退，不影响 `api-direct`、MCP schema、导出逻辑、账号池和 Rufus 模块。
+**回滚方式**：回退 `config.py`、`worker.py`、`pyproject.toml`、`tests/seller_sprite/test_browser_route_worker.py`、`ops-seller-sprite/SKILL_MCP.md`、`README.md` 和本变更记录。
+
+---
+
+## 2026-06-17 MCP - 卖家精灵长期日加额
+
+**变更原因**：现有限额只支持全局默认日额度，无法按用户长期追加卖家精灵 MCP 每日额度；运维又不希望新增公开 CLI 命令，因此需要在 SQLite 层增加长期日加额能力，并统一以邮箱作为主匹配口径。
+**改动点**：`opscli/mcp/quota.py` 将限额身份解析调整为邮箱优先，并增加本地凭证邮箱回退；`SQLiteQuotaStore` 新增 `mcp_quota_bonus_daily` 表和 `upsert_bonus_daily_limit()`，运行时按 `base_limit + bonus_daily_limit` 计算实际额度并把实际额度写入 `quota.limit` / `limit_count`；`tests/mcp/test_quota.py` 新增邮箱优先、本地凭证邮箱回退和长期日加额生效回归测试；新增内部文档 `docs/guide/卖家精灵MCP长期日加额内部SQL手册.md`，提供只面向内部运维的 SQL 操作说明。
+**验证结果**：RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py::test_identity_resolver_prefers_email_then_api_key_hash tests/mcp/test_quota.py::test_identity_resolver_falls_back_to_local_credential_email tests/mcp/test_quota.py::test_sqlite_quota_store_applies_bonus_daily_limit -q` 失败，原因分别为身份仍优先 `user_id`、缺少本地邮箱回退、缺少 `upsert_bonus_daily_limit()`；GREEN 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 为 `17 passed`；目标回归 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py tests/mcp/test_seller_sprite_tools.py tests/mcp/test_tools.py -q` 为 `31 passed`。
+**影响范围**：影响 `seller_sprite_run` 的限额主身份口径、SQLite schema 和 `quota.limit` 返回值；不新增公开 CLI 命令，不改变非 `seller_sprite_run` MCP 工具的限额行为。
+**回滚方式**：回退 `opscli/mcp/quota.py` 对邮箱主匹配和 `mcp_quota_bonus_daily` 的改动，删除对应测试和内部 SQL 手册；如需清理本地策略数据，删除 SQLite 中 `mcp_quota_bonus_daily` 表。
+
+---
+
+## 2026-06-16 MCP beta - 评论分页默认值与导出上传
+
+**变更原因**：用户反馈使用 beta/Canopy 查询 Amazon 评论时，首次未带分页参数容易因数据量过大在 30 秒内超时；同时导出结果只返回本地路径口径，未复用 Keepa 的服务器上传能力，最终回复缺少统一模板。
+**改动点**：`opscli/mcp/tools/beta.py` 将 beta 默认超时调整为 60 秒，并在 `product-reviews` 场景未显式传 `page` 时默认补 `page=1`；`opscli/beta/canopy/services/api_manager.py` 复用 `FileUploadClient` 上传 Excel 导出，上传成功后写入远端 `export.url`，上传失败时追加 `file_upload` warning；`opscli/mcp/references/beta/SKILL_MCP.md` 补充评论默认分页、默认超时、导出上传和回复模板；`tests/mcp/test_beta_tools.py` 与 `tests/beta/canopy/test_api_manager.py` 增加默认分页/超时和上传 URL 回归测试，并在 beta MCP 单测中禁用真实上传。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_beta_tools.py::test_beta_canopy_run_product_reviews_defaults_page_and_longer_timeout -q` 失败于缺少 `page`；RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\beta\canopy\test_api_manager.py::test_manager_uploads_export_and_returns_download_url -q` 失败于 `export.url` 仍为本地 `file://`；GREEN 阶段两个单测分别通过；回归 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_beta_tools.py tests\beta\canopy -q` 通过，29 passed in 2.14s。
+**影响范围**：影响 beta Canopy `product-reviews` 默认调用参数、beta MCP 默认超时和 Canopy 导出文件返回口径；不改变其它 Canopy 场景必填参数和 xls 用户导出格式。
+**回滚方式**：回退 `opscli/mcp/tools/beta.py` 中默认超时和评论默认 `page` 逻辑，删除 `CanopyApiManager` 的文件上传调用和 helper，恢复 beta MCP 规范中的旧导出说明，并移除对应测试。
+
+---
+
+## 2026-06-16 MCP beta - 移除源码中的 Canopy key
+
+**变更原因**：用户误将 Canopy 测试 key 写入 `opscli/beta/canopy/config.py`，源码不应保存真实凭据。
+**改动点**：从 `opscli/beta/canopy/config.py` 删除硬编码 key 赋值，并将该值迁移到项目内本地文件 `opscli/beta/canopy/api_key`；未在变更记录中记录完整 key。
+**验证结果**：`Select-String -Pattern '^CANOPY_API_KEY\\s*=' opscli/beta/canopy/config.py` 无输出；本地 `api_key` 文件存在且长度为 36。
+**影响范围**：仅影响本地测试服务凭据放置位置；`beta_canopy_run` 仍通过本地配置文件读取 key。
+**回滚方式**：不建议回滚到源码硬编码；如需撤销本地 key，删除 `opscli/beta/canopy/api_key`。
+
+---
+
+## 2026-06-16 MCP beta - 隐藏 Canopy key 文档说明
+
+**变更原因**：用户要求 `opscli/mcp/references/beta/SKILL_MCP.md` 不再包含 api-key 相关描述，对用户隐藏 Canopy key 管理细节，并且不对用户开放 CLI/直连调用方式。
+**改动点**：删除 beta MCP 内部规范中的认证章节、key 管理工具说明、`api_key` 调用示例和 key 替换提示；新增规则要求对用户只开放 MCP beta 查询能力，不提供 CLI、curl、Python 或直连 REST 调用方式；保留场景、参数、导出和错误处理说明；错误处理仅保留 401 为 Canopy 认证配置异常。
+**验证结果**：`rg -n "api_key|API key|API-KEY|YOUR_CANOPY|beta_canopy_api_key|CANOPY_API_KEY|key" opscli/mcp/references/beta/SKILL_MCP.md` 无匹配；`rg -n "CLI|cli|curl|Python|直连|REST 示例" opscli/mcp/references/beta/SKILL_MCP.md` 仅保留禁止向用户提供相关调用方式的规则。
+**影响范围**：影响 beta MCP 参考文档展示口径；MCP 不再对用户暴露 key 管理工具，Canopy 调用行为仍由项目内本地 key 文件支撑。
+**回滚方式**：从 Git 历史恢复 `opscli/mcp/references/beta/SKILL_MCP.md` 中的 key 管理说明和示例。
+
+---
+
+## 2026-06-16 MCP beta - Canopy 本地 API key 管理
+
+**变更原因**：用户使用 MCP beta Canopy 时，MCP Server 进程未必继承当前 shell 的 Canopy 环境变量，导致同一 key 用 curl 成功但 MCP 调用可能使用错误或缺失的 key。测试服务只需要本地保存一个 Canopy API key，并由 beta 调用默认读取。
+**改动点**：`opscli/beta/canopy/config.py` 只保留项目内本地 `api_key` 文件读取能力，路径为 `opscli/beta/canopy/api_key`；`beta_canopy_run` 的 key 读取顺序调整为显式内部参数、项目内本地 key、占位符，不再读取 Canopy key 环境变量；MCP 对用户仅注册 `beta_spec_must_read`、`beta_canopy_scenarios`、`beta_canopy_run`；同步更新 Canopy MCP 规范和用户指南。
+**验证结果**：`.venv\Scripts\python.exe -m pytest tests/beta/canopy tests/mcp/test_beta_tools.py -q` 通过，27 passed in 1.96s；真实 `beta_canopy_run(product)` 冒烟成功，`placeholder_used=False`，确认已读取项目内本地 key 文件，返回 `row_count=1` 并生成 `canopy-local-key-smoke.xlsx`。
+**影响范围**：仅影响 beta Canopy 测试服务的 API key 获取；不改变 Canopy 请求参数、导出格式、任务文件脱敏策略或其它 MCP 工具。
+**回滚方式**：删除 `opscli/beta/canopy/config.py` 中本地 key 读取逻辑，回退 `opscli/mcp/tools/beta.py` 的 key 读取顺序，并回退 Canopy 文档说明。
+
+---
+
+## 2026-06-16 MCP beta - Canopy 评论自然语言别名映射
+
+**变更原因**：用户反馈使用 beta/Canopy `product-reviews` 查询评论时，希望自然语言中的“差评”“已验证购买”等表达能自动映射为 Canopy 官方筛选参数，降低 Agent 调用时遗漏结构化字段的概率。
+**改动点**：`opscli/mcp/tools/beta.py` 在 `product-reviews` 场景解析 `params` 后增加轻量别名归一化，支持从 `query`、`text`、`natural_language`、`naturalLanguage`、`user_input`、`userInput` 中识别星级和已验证购买表达；结构化 `rating`、`onlyVerifiedReviews` 显式入参优先，不被自然语言覆盖；同步补充 MCP beta 规范、Canopy 使用指南和 MCP 工具测试。
+**验证结果**：`.venv\Scripts\python.exe -m pytest tests\mcp\test_beta_tools.py -q` 通过，15 passed in 1.70s；`.venv\Scripts\python.exe -m pytest tests\beta\canopy tests\mcp\test_beta_tools.py -q` 通过，24 passed in 1.86s。
+**影响范围**：仅影响 beta Canopy `product-reviews` 场景参数归一化；不改变其它 Canopy 场景、Canopy API 调用层或导出层；无法规避 Canopy 上游 HTTP 500。
+**回滚方式**：移除 `opscli/mcp/tools/beta.py` 中评论别名归一化 helper 与调用，删除 `tests/mcp/test_beta_tools.py` 新增用例，并回退对应文档说明。
+
+---
+
+## 2026-06-15 MCP beta - 接入 Canopy REST API 文档与接口
+
+**变更原因**：用户要求基于 Canopy Swagger/OpenAPI 与 Python 示例，先生成 API 文档和测试阶段 beta MCP 相关接口；API key 暂用占位符，后续再提供真实 key。
+**改动点**：新增 `opscli/mcp/references/beta/SKILL_MCP.md` 和 `OFFICIAL.md` 整理 Canopy MCP 使用规范与 17 个 REST endpoint；新增 `docs/guide/Canopy API接口使用指南.md`；新增 `opscli/mcp/tools/beta.py`，提供 `beta_spec_must_read`、`beta_canopy_scenarios`、`beta_canopy_run`，内置 Canopy 场景清单，使用 `domain` 参数、`API-KEY` header 与 `<YOUR_CANOPY_API_KEY>` 占位符；在 `opscli/mcp/server.py` 注册 beta 工具；新增 `opscli/beta/canopy/` 集中管理 Canopy API 调用任务、`params.json`/`raw.json`/`result.json` 落盘和 Excel 导出，用户侧导出格式只允许 `xls`，内部按 Keepa 兼容方式生成 `.xlsx` 并通过 `export.url` 返回；新增 `tests/mcp/test_beta_tools.py` 与 `tests/beta/canopy/` 覆盖场景、参数、API key、MCP 注册、导出格式限制、路径脱敏和 xlsx 生成；按用户要求收紧 beta 触发规则，明确只有用户提到 beta/Canopy/测试服务时才调用 `beta_*` 工具，普通 Amazon 查询不得自动路由到 beta；根据真实 Canopy 评论接口响应，将 beta 默认 HTTP timeout 调整为 30 秒，并在导出层展开 `data.amazonProduct.reviewsPaginated.reviews` 为逐条评论行，保留商品上下文、分页统计和评论人/标题/正文/评分/已验证购买等字段，避免真实评论响应导出成单行巨型 JSON。
+**验证结果**：`.venv\Scripts\python.exe -m pytest tests/mcp/test_beta_tools.py tests/mcp/test_keepa_tools.py tests/mcp/test_amazon_rufus_tools.py -q` 通过，22 passed in 1.47s；收紧触发规则后复跑 `.venv\Scripts\python.exe -m pytest tests/mcp/test_beta_tools.py -q` 通过，10 passed in 1.06s；新增 beta xls 导出后复跑 `.venv\Scripts\python.exe -m pytest tests/mcp/test_beta_tools.py tests/beta/canopy tests/mcp/test_keepa_tools.py -q` 通过，22 passed in 1.71s；追加评论查询本地调试用例后复跑 `.venv\Scripts\python.exe -m pytest tests/mcp/test_beta_tools.py -q` 通过，12 passed in 1.34s；真实接口调试确认 Windows User 环境存在 `OPSCLI_BETA_CANOPY_API_KEY`，当前子进程需显式注入后可用，商品详情接口真实调用成功，评论接口在默认 10 秒超时时曾超时，调整为 30 秒后真实调用成功；修正真实评论响应展开后复跑 `.venv\Scripts\python.exe -m pytest tests\beta\canopy tests\mcp\test_beta_tools.py -q` 通过，21 passed in 1.30s；使用真实 Canopy key 对 `product-reviews`（US、ASIN `B0B3JBVDYP`）冒烟成功，默认 30 秒超时下返回 `row_count=10`，`data_preview` 来源为 `reviewsPaginated.reviews`，分页总数 `totalResults=26`，导出 `canopy-review-real-default-timeout-after-fix.xlsx`。
+**影响范围**：新增 beta MCP Canopy 只读 API 查询能力、xls 用户导出能力和文档；MCP 进程需重启后才能暴露新工具/新参数；真实 API key 只从参数或环境变量读取，不写入任务文件，不影响既有 Keepa/Rufus 工具。
+**回滚方式**：删除 `opscli/mcp/tools/beta.py`、`opscli/beta/`、`tests/mcp/test_beta_tools.py`、`tests/beta/canopy/`、`opscli/mcp/references/beta/`、`docs/guide/Canopy API接口使用指南.md`，并还原 `opscli/mcp/server.py` 中 beta import/register 改动。
+---
+
+## 2026-06-15 Keepa - XLSX 流式导出优化
+
+**变更原因**：Keepa MCP 已不再支持 JSON 用户导出，需要提升 XLSX 导出对较大结果集的承载能力，避免普通 openpyxl 工作簿逐格写入带来的内存和耗时压力。
+**改动点**：`opscli/keepa/export/xlsx.py` 改为 `Workbook(write_only=True)` 流式工作簿，通过 `sheet.append()` 写入表头和数据行；列扫描改为基于原始 rows 遍历，避免额外复制整表 normalized 数据；保留中文表头、表头样式、冻结窗格、列宽和 extra sheets 行为；`tests/keepa/test_export.py` 新增流式 workbook 约束测试。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\keepa\test_export.py::test_xlsx_export_uses_streaming_workbook -q` 失败于当前实现调用普通 `Workbook()`；GREEN 阶段同一命令通过，`1 passed`；回归 `.\.venv\Scripts\python.exe -m pytest tests\keepa\test_export.py tests\keepa\test_api_manager.py tests\mcp\test_keepa_tools.py -q` 通过，`21 passed`。
+**影响范围**：影响 Keepa XLSX 文件生成方式；输出文件格式、字段标题、extra sheets 和 MCP 返回结构保持不变。
+**回滚方式**：恢复 `opscli/keepa/export/xlsx.py` 为普通 `Workbook()` + `sheet.cell()` 逐格写入，并移除 `tests/keepa/test_export.py` 中流式 workbook 约束测试。
+
+---
+
+## 2026-06-15 Keepa - 禁用 JSON 用户导出
+
+**变更原因**：Keepa MCP 当前只支持面向用户的 xls/xlsx 表格导出，JSON 导出对运营用户没有实际价值，旧文档和实现仍允许请求 JSON，容易让 Agent 返回不可用的用户交付物。
+**改动点**：`opscli/mcp/tools/keepa.py` 在 MCP 入口校验导出格式，只允许 `xls/xlsx`；`opscli/keepa/services/api_manager.py` 移除 JSON 用户导出和大结果自动转 JSON 路径，直接拒绝 `json`；同步更新 CLI 帮助、Keepa MCP 规范和内部 Keepa 参考文档；新增/调整 Keepa MCP 与 manager 测试覆盖非法 JSON 导出。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_keepa_tools.py tests\keepa\test_api_manager.py -q` 失败于 MCP 和 manager 仍接受 `export_format="json"`；GREEN 阶段同一命令通过，`14 passed`。
+**影响范围**：影响 Keepa MCP、Keepa CLI/Python manager 的用户导出格式；`params.json`、`raw.json`、`result.json` 任务内部文件仍保留，用于排障和后端比对。
+**回滚方式**：恢复 `opscli/keepa/services/api_manager.py` 的 JSON 导出分支和大结果自动 JSON 逻辑，恢复 `opscli/mcp/tools/keepa.py` 对 `export_format` 的原样透传，并回退相关文档和测试。
+
+---
+
 ## 2026-06-08 Amazon Rufus - 获取前登录态检查
 
 **变更原因**：用户要求在发起 Rufus 获取前先检查是否已有 Amazon 登录态；没有可用登录态时再走登录采集流程，避免 allowed/denied 路径直接获取后才失败或重复打开登录窗口。
@@ -1672,4 +1801,236 @@
 **验证结果**：已运行 `python -m pytest tests/xiyou -q -p no:cacheprovider`，结果 `61 passed, 1 warning`。
 **影响范围**：西柚凭据读取、MCP/HTTP 模式下西柚任务启动前的 token 获取、补登成功后的缓存刷新。
 **回滚方式**：移除新增配置和 `credential_service.py`，恢复 `XiyouCredentialProvider` 只读取本地 `.env`，删除新增回调路由和后端服务文档。
+---
+## 2026-06-11 skills - manifest 补齐 8 个未声明的 Skill 模板目录
+
+**变更原因**：Skill 发版检查（`validate_release_manifest`）报错"模板目录未在 manifest 声明"，`opscli/skills/templates/` 下 8 个新模板目录未在 `manifest.json` 中登记。
+**改动点**：在 `opscli/skills/templates/manifest.json` 的 `skills` 末尾追加 `ops-feed-task`、`ops-shopify-delete`、`ops-shopify-inventory`、`ops-shopify-price`、`ops-shopify-query`、`ops-shopify-status`、`ops-sif`、`ops-xiyou` 共 8 个条目，四个发版开关（source/wheel/binary/binary_full）全部为 false，tier 设为 internal。
+**验证结果**：`validate_release_manifest()` 返回空（通过）；`pytest tests/skills/test_packaging.py -q -s` 6 passed；目录与 manifest 双向对比无缺失无多余。
+**影响范围**：仅影响 Skill 发版打包白名单，新增条目均为 false，不改变任何现有发版产物内容。
+**回滚方式**：从 `manifest.json` 中删除上述 8 个新增条目。
+---
+## 2026-06-12 skills - ops-dataset-query 移除 catalog intents 意图匹配
+
+**变更原因**：后台暂未配置 catalog intents，远端意图匹配（`query_catalog` / `query_intent_match` / `opscli query intent`）无数据可用，强制要求先调用会导致流程空转。本版将数据集确定流程改为：本地意图路由（route_intent.py）→ 本地关键词搜索（search.py）→ MCP 模式用 query_metadata() 列表筛选。
+**改动点**：仅修改 ops-dataset-query Skill 模板文档，未改任何 Python 代码：
+- `SKILL.md`：铁律三改为"本地意图路由"，删除铁律三-A（Intent 约束优先）和铁律三-B（Catalog 回退链）的远端部分；标准工作流去除 query_intent_match 步骤
+- `QUERY_SPEC.md`：删除铁律 5 / 10-A 的 catalog 依赖，删除 query_catalog / query_intent_match 工具章节，工作流 B 改为 query_metadata() 列表筛选，自检清单去除 Intent 约束项
+- `references/cli.md`：删除 `opscli query catalog` / `opscli query intent` 命令章节，改为 route_intent.py 本地意图路由；典型工作流同步更新
+- `references/mcp.md`：删除 query_catalog / query_intent_match Tool 索引，字段存在性检查第 0 步改为 query_metadata() 列表筛选
+- `references/mcp-simple-guide.md`：删除 query_catalog / query_intent_match 参数说明章节
+- `references/rules.md`：第八章改为本地意图匹配规则，数据来源去除 dataset_catalog.json
+- `references/simple-query-guide.md` / `references/ask-user-question-guide.md`：去除 catalog 字样引用
+**验证结果**：`grep -rn -i "catalog|query_intent_match|opscli query intent|intent_constraints"` 在 Skill 模板所有 .md 中零残留；本地路由脚本 route_intent.py 与 intent_taxonomy.yml 数据文件保持不变，本地意图路由能力保留。
+**影响范围**：仅影响 AI Agent 阅读 ops-dataset-query Skill 后的数据集确定流程；MCP Server 端 query_catalog / query_intent_match 工具代码未删除，后台配置 intents 后可恢复文档。
+**回滚方式**：git checkout 恢复 opscli/skills/templates/ops-dataset-query/ 下的 SKILL.md、QUERY_SPEC.md 和 references/ 各文件。
+---
+## 2026-06-12 mcp - MCP 工具按用户角色权限动态过滤
+
+**变更原因**：此前任何用户连接 MCP Server 后默认可见/可用全部 60+ 工具。需求改为白名单制：由 OPS 后端按用户角色（运营系统角色 sys_roles + BI 角色 Doris mv_user_role）计算可用工具，opscli 在 list_tools 阶段过滤无权限工具（减少 AI 上下文开销）并在 call_tool 时拦截越权调用。
+**改动点**：
+- 新增 `opscli/mcp/permissions.py`：`ToolPermissionMiddleware`（fastmcp Middleware，on_list_tools 过滤 + on_call_tool 拦截）、`BASE_AUTH_TOOLS` 基础白名单（14 个 auth_* 工具，与后端 McpToolPermissionService::BASE_AUTH_TOOLS 双端一致）、`_resolve_allowed_tools()` 三模式自探测（HTTP 远程校验模式读上下文 allowed_tools / 固定 Key 模式或旧后端全量放行 / stdio 模式按本地 session 调 GET /v1/mcp/allowed-tools，缓存 300s，404 放行、401 仅基础工具、网络异常 stale-while-error 或 fail-closed）
+- `opscli/mcp/auth_middleware.py`：verify-key 响应中的 allowed_tools 注入 scope 和 contextvar
+- `opscli/mcp/server.py`：注册 `mcp.add_middleware(ToolPermissionMiddleware())`
+- `opscli/mcp/tools/auth.py`：auth_mcp_login / auth_login_poll / auth_logout 成功路径调用 invalidate_stdio_cache()
+- 后端配套（auto-scheduler）：新增 mcp_modules / mcp_tools / mcp_role_permissions 三表（ops_sys 库）+ McpToolPermissionService + verify-key 返回 allowed_tools + GET /v1/mcp/allowed-tools 端点
+**验证结果**：新增 `tests/mcp/test_tool_permissions.py` 15 个测试全部通过；tests/mcp/ 81 passed（5 个失败经 git stash 对比确认为历史遗留）；后端 tinker 验证三种授权情形（无绑定=14 基础工具/整模块=25/单工具=26）；curl 验证 verify-key 带 allowed_tools 字段、allowed-tools 端点 200/401 两条路径。
+**影响范围**：HTTP/SSE 远程校验模式和 stdio 模式的工具可见性按角色过滤；固定 API Key 单用户模式和旧后端全量放行不受影响（兼容语义：响应无 allowed_tools 字段=放行）。
+**回滚方式**：opscli 端删除 server.py 中 add_middleware 一行即恢复全量；后端回滚迁移 `php artisan migrate:rollback --path=database/migrations/2026_06_12_000001_create_mcp_tool_permission_tables.php`。
+---
+## 2026-06-12 mcp - MCP 工具清单启动自动上报后端（替代人工维护）
+
+**变更原因**：MCP 工具清单此前由管理后台人工维护，新增工具需手工录入且显示名/说明为空。改为 MCP Server 启动时自动上报清单，描述自动取自代码 docstring。
+**改动点**：
+- 新增 `opscli/mcp/tool_catalog.py`：`record_tool()` 注册时采集元数据（工具名优先取 name= 覆盖、模块取函数 __module__ 末段、描述取注册参数或 docstring 首行）；`sync_catalog_async()` HTTP/SSE 模式启动时守护线程 POST /v1/mcp/sync-tools（同步地址与 --auth-verify-url 同源，否则从 config.ini 推导；404/网络异常静默不影响启动）
+- `opscli/mcp/server.py`：`_TelemetryMcpProxy.tool()` 注册包裹时调用 record_tool；run() HTTP 分支启动时调用 sync_catalog_async
+- 后端（auto-scheduler）：新增 `McpToolSyncController::sync` + 路由 POST /v1/mcp/sync-tools。同步语义：只增不删（新模块/工具自动入库启用，缺失工具不自动停用），已有工具仅刷新 description 和 module_id，label/is_active 人工字段不覆盖
+- 管理页（auto-scheduler_debug mcp-tool-permissions.blade.php）：工具表格改 table-layout:fixed 固定列宽（22/12/42/7/17%），超长省略+title 提示
+- 数据修正：停用种子中 4 个代码注释未注册的预留工具（auth_login_start/auth_login_poll/auth_system_add/auth_system_remove）
+**验证结果**：新增 `tests/mcp/test_tool_catalog.py` 6 个测试通过（chatgpt 无前缀工具归属、seller_sprite 多段前缀、404/网络异常容错）；tests/mcp/ 87 passed（5 失败为历史遗留）；真实启动 E2E：清空 keepa_run 描述 → 启动服务 → 描述自动回填 docstring 首行；浏览器确认页面列宽对齐、53 个工具说明已自动填充。
+**影响范围**：HTTP/SSE 模式启动多一次后台上报（守护线程，失败仅日志）；stdio 模式不上报；管理后台 CRUD 保留可继续手动微调。
+**回滚方式**：opscli 删除 server.py 中 sync_catalog_async 调用；后端删除 sync-tools 路由。
+---
+## 2026-06-12 mcp - 管理后台工具清单移除显示名列
+
+**变更原因**：label（显示名）定位为纯人工维护的特殊别名字段，代码中无短中文名来源，自动同步刻意不覆盖该字段，导致列表中长期显示 "-"，视觉上像数据缺失。
+**改动点**：auto-scheduler_debug `mcp-tool-permissions.blade.php` 工具清单表格移除「显示名」列，改为 4 列（工具名 24% / 说明 52% / 状态 7% / 操作 17%）；label 字段保留在编辑弹窗中，需要特殊别名时仍可人工维护。
+**验证结果**：浏览器登录实测，表格 4 列对齐，说明列加宽展示完整 docstring 摘要。
+**影响范围**：仅管理后台清单展示，数据结构与同步逻辑不变。
+**回滚方式**：git checkout 恢复该 blade 文件。
+---
+## 2026-06-12 mcp - 角色绑定增加批量操作等快捷功能
+
+**变更原因**：角色绑定 Tab 一次只能配置一个角色，多角色相似授权需重复操作，且无法看出哪些角色已配置。
+**改动点**（均在 auto-scheduler_debug）：
+- `McpToolPermissionController` 新增 `bindingsOverview`（角色授权统计）和 `batchBindings`（批量 replace/add/remove，add 整模块自动归一化清散装工具记录、已有整模块时跳过单工具、remove 整模块连带删除工具行，insertOrIgnore 依赖 uk_grant 幂等）；routes/api.php 注册 GET bindings/overview、PUT bindings/batch
+- `mcp-tool-permissions.blade.php` 角色绑定 Tab 新增：全选整模块/清空（纯前端）、复制自角色（下拉只列已配置角色，载入后需手动保存）、批量操作弹窗（当前矩阵勾选为模板 + 多选角色 + 三模式）、角色下拉显示「N模块/M工具 / 未配置」统计；saveBindings 复用 collectGrants 并在保存后刷新统计
+**验证结果**：tinker 验证批量端点 6 场景（幂等 add、整模块覆盖跳过、remove 工具/整模块、replace、overview 统计）；浏览器实测批量添加 11 模块到 2 角色落库 22 条、批量移除清零、复制 common→purchase 矩阵正确载入、保存后下拉统计即时刷新。测试数据已清理。
+**影响范围**：仅管理后台角色绑定交互；单角色保存接口语义不变。
+**回滚方式**：git checkout 恢复控制器、路由和 blade 文件。
+---
+
+## 2026-06-13 skills - 新增 AuWork 安装路径支持（Windows 专属，多用户目录 fan-out）
+
+**变更原因**：需支持 AuWork Windows 客户端这一特殊安装路径 `C:\Users\<用户>\.auwork\{用户ID}\skills`，其中 `{用户ID}` 为纯数字目录，且同一机器可有多个登录用户对应多个数字目录，需把 Skill fan-out 安装到全部用户目录。AuWork 与现有 7 种运行时的本质区别是「一个运行时展开为 N 个目标目录」。
+**改动点**：
+- `opscli/skills/discovery/detector.py`：新增 `import sys` 与 `_auwork_targets()` 方法（Windows 专属，扫描 `~/.auwork` 下所有纯数字子目录的 skills/，非 Win/空目录返回空列表）；在 `detect_available_install_targets`、`detect_global_install_targets`、`detect_all_install_targets`、`detect_install_targets`（显式 auwork 分支）4 处织入；`candidate_dirs` 追加 auwork 目录使 list/upgrade 可发现；`_infer_runtime` 识别 `.auwork` 段。
+- `opscli/skills/domain/models.py`：`runtime_to_tool_name` 加 `"auwork": "auwork"`。
+- `opscli/skills/commands/cli.py`：`_TOOL_LABELS` 加 `"auwork": "AuWork"`；install `--runtime` help 文案补充 auwork；显式 `--runtime auwork` 但无数字目录时打印「已跳过」提示（GBK 兼容）。
+- `tests/skills/test_detector.py`：新增 8 个 AuWork 用例（monkeypatch `sys.platform=win32` + `Path.home`）。
+**验证结果**：`pytest tests/skills/test_detector.py` 新增 8 个 AuWork 用例全部 PASSED；`tests/skills/test_cli.py` 12 passed。`test_manager.py` 3 个失败、`test_detector` 中 1 个 `--runtime all` 失败、whole-dir 的 capture I/O error 经 `git stash` 验证均为改动前已存在，与本次无关。安装/链接主循环与 linker 未改动（管线本就按 list[(runtime,path)] 处理）。
+**影响范围**：仅 skills 安装目标探测；新增 auwork 运行时，非 Windows 平台 `_auwork_targets()` 恒为空，对 mac/linux 零影响；现有 7 种运行时行为不变。
+**回滚方式**：删除 detector 的 `_auwork_targets` 方法、4 处 `extend`/分支、candidate_dirs 与 _infer_runtime 增量，及 models/cli 的 2 处映射与提示；git checkout 恢复对应文件。
+---
+
+## 2026-06-13 skills - 修正 test_runtime_all_targets_all_supported_global_dirs 陈旧断言
+
+**变更原因**：该测试断言 `--runtime all` 仅返回 5 个运行时，但 `detect_all_install_targets` 早已新增 trae-cn、agents（本次又加 auwork），测试一直处于失败状态（改动前已失败）。
+**改动点**：`tests/skills/test_detector.py` —— 补全断言为 claude/openclaw/codex/opencode/workbuddy/trae-cn/agents/auwork 共 8 项；用例内 monkeypatch `sys.platform=win32` 并构造 `~/.auwork/1001` 数字目录以覆盖 auwork。
+**验证结果**：`pytest tests/skills/test_detector.py` 9 passed。
+**影响范围**：仅测试文件，无生产代码改动。
+**回滚方式**：git checkout 恢复 tests/skills/test_detector.py。
+
+## 2026-06-15 MCP - 卖家精灵调用限额
+
+**变更原因**：MCP 卖家精灵服务需要按用户限制每日调用次数，避免外部服务被单用户高频消耗；后续西柚、Sif 也需要复用同一限额切面。
+**改动点**：新增 `opscli/mcp/quota.py`，提供 `QuotaPolicy`、`SQLiteQuotaStore`、`QuotaLimiter`、`QuotaConfig`、配置文件加载和 MCP 用户身份解析；`opscli/mcp/server.py` 在现有 Tool 注册代理中加入限额 AOP 包裹，首期只限制 `seller_sprite_run`；限额计数、失败次数和每日持久化记录统一写入 SQLite 表 `mcp_quota_daily`；表内新增 `identity_key` 用于对照中间件用户身份，远程校验模式保存 `user_id` 或标准化邮箱，固定 API Key 模式保存与 MCP 用户表一致的 `sha256:<digest>`；新增 `configs/mcp-quota.json` 作为项目 / 部署目录默认运行配置，新增 `opscli/mcp/configs/mcp-quota.json` 作为 wheel 包内默认配置并通过 `pyproject.toml` 纳入 package data；运行时按 `OPSCLI_MCP_QUOTA_CONFIG_PATH`、当前工作目录 `configs/mcp-quota.json`、源码项目根目录 `configs/mcp-quota.json`、`~/.config/opscli/mcp_quota/config.json`、包内默认配置、代码默认值读取限额配置；`pyproject.toml` 和 `uv.lock` 移除外部缓存依赖，并移除暂不开放的 `google-trends` optional extra / `pytrends` 锁定；新增 `tests/mcp/test_quota.py` 并扩展卖家精灵 MCP 测试；新增 `docs/plans/MCP服务调用限额方案.md` 归档方案并更新为 SQLite 和配置文件口径。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests/mcp/test_quota.py -vv -s` 失败于 `ModuleNotFoundError: No module named 'opscli.mcp.quota'`；SQLite 持久化 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于 `ImportError: cannot import name 'SQLiteQuotaStore'`；身份对照 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于 API Key 缺少 `sha256:` 前缀和 SQLite 缺少 `identity_key` 列；配置文件 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于缺少 `ENV_QUOTA_CONFIG_PATH` 和 `load_quota_config`；项目配置优先级 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于缺少 `_project_quota_config_path`；打包部署目录 RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 失败于未读取当前工作目录 `configs/mcp-quota.json`；GREEN 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_quota.py -q` 为 14 passed；目标回归 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_tools.py::test_mcp_exposes_expected_tools tests/mcp/test_tools.py::test_mcp_hides_temporarily_closed_service_tools tests/mcp/test_quota.py tests/mcp/test_seller_sprite_tools.py -q` 为 21 passed。完整 MCP 回归 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp -q` 为 75 passed、5 failed，失败项为既有 `get_mcp_request_headers` 版本头断言不一致和已停用 google_trends 注册断言。
+**影响范围**：影响 MCP Tool 注册链路和 `seller_sprite_run` 调用行为；`seller_sprite_spec_must_read`、`seller_sprite_scenarios`、`seller_sprite_job_status`、`seller_sprite_export` 不扣次数；SQLite 不可用时受限服务返回 `MCP_QUOTA_UNAVAILABLE`；默认库文件为 `~/.config/opscli/mcp_quota/quota.sqlite3`，可通过 `OPSCLI_MCP_QUOTA_SQLITE_PATH` 覆盖。
+**回滚方式**：删除 `opscli/mcp/quota.py`、`tests/mcp/test_quota.py` 和 `configs/mcp-quota.json`，回退 `opscli/mcp/server.py` 中 `_quota_wrap` 及注册包裹顺序，按需恢复 `google-trends` optional extra，删除方案文档和卖家精灵测试中的限额断言；如需清理本地限额记录，删除 `~/.config/opscli/mcp_quota/quota.sqlite3*` 和运行时限额配置文件。
+
+---
+
+## 2026-06-15 MCP - 暂停 Sif 和西柚工具注册
+
+**变更原因**：Sif 和西柚 MCP 工具当前暂不对外开放，需要从 MCP Server 工具列表中隐藏，避免客户端继续发现和调用。
+**改动点**：注释 `opscli/mcp/server.py` 中 Sif / 西柚工具模块导入与注册，保留工具模块代码；`tests/mcp/test_tools.py` 新增工具列表不可见断言。
+**验证结果**：RED 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_tools.py::test_mcp_hides_temporarily_closed_service_tools -q` 失败于 `sif_run` 仍存在；GREEN 阶段 `$env:SKIP_CYTHON='1'; uv run --extra dev pytest tests/mcp/test_tools.py::test_mcp_exposes_expected_tools tests/mcp/test_tools.py::test_mcp_hides_temporarily_closed_service_tools -q` 为 2 passed。
+**影响范围**：MCP Server 不再暴露 `sif_*` 和 `xiyou_*` 工具；CLI、业务模块和直接导入测试不受影响。
+**回滚方式**：恢复 `opscli/mcp/server.py` 中 `_sif_tools`、`_xiyou_tools` 的导入与 register 调用，并移除工具列表隐藏断言。
+
+---
+
+## 2026-06-16 MCP - 卖家精灵异步任务化入口
+
+**变更原因**：卖家精灵 `product-research` 等长任务会超过 MCP 客户端约 120 秒同步等待上限，导致用户拿不到 `job_id`，无法继续查询已启动任务状态；需要支持快速返回任务编号并由 Agent 自动轮询。
+**改动点**：新增 `opscli/seller_sprite/services/task_status.py` 管理 `status.json`；`SellerSpriteApiManager` 新增内部 `start()` 和后台任务状态更新，`job_status()` 在 `result.json` 不存在时可读取 `status.json`，完成态异步任务会合并 `status.json` 的 `state/stage` 与 `result.json` 的业务结果；MCP 侧保持 `seller_sprite_run` 作为唯一采集入口，长耗时场景由后端自动调用内部异步任务路径并返回 `job_id`，不向 Agent 暴露 `seller_sprite_start`、`async_mode`、`mode`、`browser-route` 或 `api-direct` 控制；限额策略继续只绑定 `seller_sprite_run`，避免同步/异步入口双计数或策略冲突；更新 `ops-seller-sprite` MCP Skill 文档、卖家精灵 MCP 接口说明、异步入口方案文档和执行计划文档；扩展 MCP、manager、工具列表和 quota 单测覆盖 queued/running/succeeded/failed、Schema 隐藏与公开限额入口。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_seller_sprite_tools.py -q` 失败于缺少自动异步任务路径；RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_api_manager.py -q` 失败于 manager 缺少 `start()`；完成态合并 RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_api_manager.py::test_job_status_merges_completed_async_status_with_result -q` 失败于 `state` 缺失；公开入口收敛 RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_tools.py::test_seller_sprite_internal_controls_are_not_exposed -q` 失败于 MCP Schema 仍暴露内部控制；GREEN 阶段相关定向测试通过；目标回归 `.\.venv\Scripts\python.exe -m pytest tests\seller_sprite tests\mcp\test_seller_sprite_tools.py tests\mcp\test_quota.py tests\mcp\test_tools.py -q` 为 60 passed；编译检查 `.\.venv\Scripts\python.exe -m py_compile opscli\seller_sprite\services\task_status.py opscli\seller_sprite\services\api_manager.py opscli\seller_sprite\browser_route\worker.py opscli\seller_sprite\browser_route\__init__.py opscli\mcp\tools\seller_sprite.py opscli\mcp\quota.py` 通过。
+**影响范围**：影响卖家精灵 `seller_sprite_run` 对长任务的返回形态、`seller_sprite_job_status` 对异步任务的读取行为、卖家精灵任务目录新增 `status.json`，以及 MCP Schema 对内部控制参数的隐藏；公开限额入口仍只有 `seller_sprite_run`，不增加浏览器窗口并发。
+**回滚方式**：删除 `opscli/seller_sprite/services/task_status.py`，回退 `api_manager.py` 中 `start()`、`_run_background_task()`、`job_status()` 状态读取逻辑，回退 `seller_sprite.py` 中 `seller_sprite_run` 自动异步判断和内部控制隐藏，移除对应测试和文档段落。
+
+---
+
+## 2026-06-17 MCP - 卖家精灵队列忙自动异步
+
+**变更原因**：卖家精灵 browser-route 只保留单账号单窗口串行执行；当已有任务运行或排队时，后续同步 `seller_sprite_run` 会把 MCP 等待预算耗在排队上并容易超时，因此队列忙时应自动切换为异步任务。
+**改动点**：`SellerSpriteBrowserRouteWorker` 新增 `is_busy` 状态，`browser_route` 模块新增 `get_existing_browser_route_worker()` 用于只读取已有 worker、不创建新窗口；`SellerSpriteApiManager` 新增 `browser_route_busy()` 判断当前请求对应账号 worker 是否忙；`seller_sprite_run` 在长耗时场景或 browser-route worker 忙时自动调用 `manager.start()`；更新 `ops-seller-sprite` MCP Skill 文档和卖家精灵 MCP 接口说明。
+**验证结果**：RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_browser_route_worker.py::test_worker_reports_busy_when_drain_lock_is_held -q` 失败于 worker 缺少 `is_busy`；RED 阶段 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_seller_sprite_tools.py::test_seller_sprite_run_auto_starts_when_browser_queue_is_busy -q` 失败于仍返回同步 `job-1`；GREEN 阶段上述两个测试均为 1 passed；回归 `.\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_browser_route_worker.py tests\seller_sprite\test_api_manager.py tests\mcp\test_seller_sprite_tools.py -q` 为 25 passed；编译检查 `.\.venv\Scripts\python.exe -m py_compile opscli\seller_sprite\browser_route\worker.py opscli\seller_sprite\browser_route\__init__.py opscli\seller_sprite\services\api_manager.py opscli\mcp\tools\seller_sprite.py` 通过。
+**影响范围**：影响 `seller_sprite_run` 在长耗时场景和 browser-route 队列忙时的行为，返回值会从同步结果变为异步任务状态；普通短任务且队列不忙时仍保持同步；不增加浏览器窗口并发。
+**回滚方式**：回退 `worker.py` 的 `is_busy` 和 `get_existing_browser_route_worker()`、`browser_route/__init__.py` 导出、`api_manager.py` 的 `browser_route_busy()`、`seller_sprite.py` 的队列忙自动 `start()` 判断，并移除对应测试和文档说明。
+
+## 2026-06-11 skills - manifest 补齐 8 个未声明的 Skill 模板目录
+
+**变更原因**：Skill 发版检查（`validate_release_manifest`）报错"模板目录未在 manifest 声明"，`opscli/skills/templates/` 下 8 个新模板目录未在 `manifest.json` 中登记。
+**改动点**：在 `opscli/skills/templates/manifest.json` 的 `skills` 末尾追加 `ops-feed-task`、`ops-shopify-delete`、`ops-shopify-inventory`、`ops-shopify-price`、`ops-shopify-query`、`ops-shopify-status`、`ops-sif`、`ops-xiyou` 共 8 个条目，四个发版开关（source/wheel/binary/binary_full）全部为 false，tier 设为 internal。
+**验证结果**：`validate_release_manifest()` 返回空（通过）；`pytest tests/skills/test_packaging.py -q -s` 6 passed；目录与 manifest 双向对比无缺失无多余。
+**影响范围**：仅影响 Skill 发版打包白名单，新增条目均为 false，不改变任何现有发版产物内容。
+**回滚方式**：从 `manifest.json` 中删除上述 8 个新增条目。
+---
+## 2026-06-12 skills - ops-dataset-query 移除 catalog intents 意图匹配
+
+**变更原因**：后台暂未配置 catalog intents，远端意图匹配（`query_catalog` / `query_intent_match` / `opscli query intent`）无数据可用，强制要求先调用会导致流程空转。本版将数据集确定流程改为：本地意图路由（route_intent.py）→ 本地关键词搜索（search.py）→ MCP 模式用 query_metadata() 列表筛选。
+**改动点**：仅修改 ops-dataset-query Skill 模板文档，未改任何 Python 代码：
+- `SKILL.md`：铁律三改为"本地意图路由"，删除铁律三-A（Intent 约束优先）和铁律三-B（Catalog 回退链）的远端部分；标准工作流去除 query_intent_match 步骤
+- `QUERY_SPEC.md`：删除铁律 5 / 10-A 的 catalog 依赖，删除 query_catalog / query_intent_match 工具章节，工作流 B 改为 query_metadata() 列表筛选，自检清单去除 Intent 约束项
+- `references/cli.md`：删除 `opscli query catalog` / `opscli query intent` 命令章节，改为 route_intent.py 本地意图路由；典型工作流同步更新
+- `references/mcp.md`：删除 query_catalog / query_intent_match Tool 索引，字段存在性检查第 0 步改为 query_metadata() 列表筛选
+- `references/mcp-simple-guide.md`：删除 query_catalog / query_intent_match 参数说明章节
+- `references/rules.md`：第八章改为本地意图匹配规则，数据来源去除 dataset_catalog.json
+- `references/simple-query-guide.md` / `references/ask-user-question-guide.md`：去除 catalog 字样引用
+**验证结果**：`grep -rn -i "catalog|query_intent_match|opscli query intent|intent_constraints"` 在 Skill 模板所有 .md 中零残留；本地路由脚本 route_intent.py 与 intent_taxonomy.yml 数据文件保持不变，本地意图路由能力保留。
+**影响范围**：仅影响 AI Agent 阅读 ops-dataset-query Skill 后的数据集确定流程；MCP Server 端 query_catalog / query_intent_match 工具代码未删除，后台配置 intents 后可恢复文档。
+**回滚方式**：git checkout 恢复 opscli/skills/templates/ops-dataset-query/ 下的 SKILL.md、QUERY_SPEC.md 和 references/ 各文件。
+---
+## 2026-06-12 mcp - MCP 工具按用户角色权限动态过滤
+
+**变更原因**：此前任何用户连接 MCP Server 后默认可见/可用全部 60+ 工具。需求改为白名单制：由 OPS 后端按用户角色（运营系统角色 sys_roles + BI 角色 Doris mv_user_role）计算可用工具，opscli 在 list_tools 阶段过滤无权限工具（减少 AI 上下文开销）并在 call_tool 时拦截越权调用。
+**改动点**：
+- 新增 `opscli/mcp/permissions.py`：`ToolPermissionMiddleware`（fastmcp Middleware，on_list_tools 过滤 + on_call_tool 拦截）、`BASE_AUTH_TOOLS` 基础白名单（14 个 auth_* 工具，与后端 McpToolPermissionService::BASE_AUTH_TOOLS 双端一致）、`_resolve_allowed_tools()` 三模式自探测（HTTP 远程校验模式读上下文 allowed_tools / 固定 Key 模式或旧后端全量放行 / stdio 模式按本地 session 调 GET /v1/mcp/allowed-tools，缓存 300s，404 放行、401 仅基础工具、网络异常 stale-while-error 或 fail-closed）
+- `opscli/mcp/auth_middleware.py`：verify-key 响应中的 allowed_tools 注入 scope 和 contextvar
+- `opscli/mcp/server.py`：注册 `mcp.add_middleware(ToolPermissionMiddleware())`
+- `opscli/mcp/tools/auth.py`：auth_mcp_login / auth_login_poll / auth_logout 成功路径调用 invalidate_stdio_cache()
+- 后端配套（auto-scheduler）：新增 mcp_modules / mcp_tools / mcp_role_permissions 三表（ops_sys 库）+ McpToolPermissionService + verify-key 返回 allowed_tools + GET /v1/mcp/allowed-tools 端点
+**验证结果**：新增 `tests/mcp/test_tool_permissions.py` 15 个测试全部通过；tests/mcp/ 81 passed（5 个失败经 git stash 对比确认为历史遗留）；后端 tinker 验证三种授权情形（无绑定=14 基础工具/整模块=25/单工具=26）；curl 验证 verify-key 带 allowed_tools 字段、allowed-tools 端点 200/401 两条路径。
+**影响范围**：HTTP/SSE 远程校验模式和 stdio 模式的工具可见性按角色过滤；固定 API Key 单用户模式和旧后端全量放行不受影响（兼容语义：响应无 allowed_tools 字段=放行）。
+**回滚方式**：opscli 端删除 server.py 中 add_middleware 一行即恢复全量；后端回滚迁移 `php artisan migrate:rollback --path=database/migrations/2026_06_12_000001_create_mcp_tool_permission_tables.php`。
+---
+## 2026-06-12 mcp - MCP 工具清单启动自动上报后端（替代人工维护）
+
+**变更原因**：MCP 工具清单此前由管理后台人工维护，新增工具需手工录入且显示名/说明为空。改为 MCP Server 启动时自动上报清单，描述自动取自代码 docstring。
+**改动点**：
+- 新增 `opscli/mcp/tool_catalog.py`：`record_tool()` 注册时采集元数据（工具名优先取 name= 覆盖、模块取函数 __module__ 末段、描述取注册参数或 docstring 首行）；`sync_catalog_async()` HTTP/SSE 模式启动时守护线程 POST /v1/mcp/sync-tools（同步地址与 --auth-verify-url 同源，否则从 config.ini 推导；404/网络异常静默不影响启动）
+- `opscli/mcp/server.py`：`_TelemetryMcpProxy.tool()` 注册包裹时调用 record_tool；run() HTTP 分支启动时调用 sync_catalog_async
+- 后端（auto-scheduler）：新增 `McpToolSyncController::sync` + 路由 POST /v1/mcp/sync-tools。同步语义：只增不删（新模块/工具自动入库启用，缺失工具不自动停用），已有工具仅刷新 description 和 module_id，label/is_active 人工字段不覆盖
+- 管理页（auto-scheduler_debug mcp-tool-permissions.blade.php）：工具表格改 table-layout:fixed 固定列宽（22/12/42/7/17%），超长省略+title 提示
+- 数据修正：停用种子中 4 个代码注释未注册的预留工具（auth_login_start/auth_login_poll/auth_system_add/auth_system_remove）
+**验证结果**：新增 `tests/mcp/test_tool_catalog.py` 6 个测试通过（chatgpt 无前缀工具归属、seller_sprite 多段前缀、404/网络异常容错）；tests/mcp/ 87 passed（5 失败为历史遗留）；真实启动 E2E：清空 keepa_run 描述 → 启动服务 → 描述自动回填 docstring 首行；浏览器确认页面列宽对齐、53 个工具说明已自动填充。
+**影响范围**：HTTP/SSE 模式启动多一次后台上报（守护线程，失败仅日志）；stdio 模式不上报；管理后台 CRUD 保留可继续手动微调。
+**回滚方式**：opscli 删除 server.py 中 sync_catalog_async 调用；后端删除 sync-tools 路由。
+---
+## 2026-06-12 mcp - 管理后台工具清单移除显示名列
+
+**变更原因**：label（显示名）定位为纯人工维护的特殊别名字段，代码中无短中文名来源，自动同步刻意不覆盖该字段，导致列表中长期显示 "-"，视觉上像数据缺失。
+**改动点**：auto-scheduler_debug `mcp-tool-permissions.blade.php` 工具清单表格移除「显示名」列，改为 4 列（工具名 24% / 说明 52% / 状态 7% / 操作 17%）；label 字段保留在编辑弹窗中，需要特殊别名时仍可人工维护。
+**验证结果**：浏览器登录实测，表格 4 列对齐，说明列加宽展示完整 docstring 摘要。
+**影响范围**：仅管理后台清单展示，数据结构与同步逻辑不变。
+**回滚方式**：git checkout 恢复该 blade 文件。
+---
+## 2026-06-12 mcp - 角色绑定增加批量操作等快捷功能
+
+**变更原因**：角色绑定 Tab 一次只能配置一个角色，多角色相似授权需重复操作，且无法看出哪些角色已配置。
+**改动点**（均在 auto-scheduler_debug）：
+- `McpToolPermissionController` 新增 `bindingsOverview`（角色授权统计）和 `batchBindings`（批量 replace/add/remove，add 整模块自动归一化清散装工具记录、已有整模块时跳过单工具、remove 整模块连带删除工具行，insertOrIgnore 依赖 uk_grant 幂等）；routes/api.php 注册 GET bindings/overview、PUT bindings/batch
+- `mcp-tool-permissions.blade.php` 角色绑定 Tab 新增：全选整模块/清空（纯前端）、复制自角色（下拉只列已配置角色，载入后需手动保存）、批量操作弹窗（当前矩阵勾选为模板 + 多选角色 + 三模式）、角色下拉显示「N模块/M工具 / 未配置」统计；saveBindings 复用 collectGrants 并在保存后刷新统计
+**验证结果**：tinker 验证批量端点 6 场景（幂等 add、整模块覆盖跳过、remove 工具/整模块、replace、overview 统计）；浏览器实测批量添加 11 模块到 2 角色落库 22 条、批量移除清零、复制 common→purchase 矩阵正确载入、保存后下拉统计即时刷新。测试数据已清理。
+**影响范围**：仅管理后台角色绑定交互；单角色保存接口语义不变。
+**回滚方式**：git checkout 恢复控制器、路由和 blade 文件。
+---
+
+## 2026-06-13 skills - 新增 AuWork 安装路径支持（Windows 专属，多用户目录 fan-out）
+
+**变更原因**：需支持 AuWork Windows 客户端这一特殊安装路径 `C:\Users\<用户>\.auwork\{用户ID}\skills`，其中 `{用户ID}` 为纯数字目录，且同一机器可有多个登录用户对应多个数字目录，需把 Skill fan-out 安装到全部用户目录。AuWork 与现有 7 种运行时的本质区别是「一个运行时展开为 N 个目标目录」。
+**改动点**：
+- `opscli/skills/discovery/detector.py`：新增 `import sys` 与 `_auwork_targets()` 方法（Windows 专属，扫描 `~/.auwork` 下所有纯数字子目录的 skills/，非 Win/空目录返回空列表）；在 `detect_available_install_targets`、`detect_global_install_targets`、`detect_all_install_targets`、`detect_install_targets`（显式 auwork 分支）4 处织入；`candidate_dirs` 追加 auwork 目录使 list/upgrade 可发现；`_infer_runtime` 识别 `.auwork` 段。
+- `opscli/skills/domain/models.py`：`runtime_to_tool_name` 加 `"auwork": "auwork"`。
+- `opscli/skills/commands/cli.py`：`_TOOL_LABELS` 加 `"auwork": "AuWork"`；install `--runtime` help 文案补充 auwork；显式 `--runtime auwork` 但无数字目录时打印「已跳过」提示（GBK 兼容）。
+- `tests/skills/test_detector.py`：新增 8 个 AuWork 用例（monkeypatch `sys.platform=win32` + `Path.home`）。
+**验证结果**：`pytest tests/skills/test_detector.py` 新增 8 个 AuWork 用例全部 PASSED；`tests/skills/test_cli.py` 12 passed。`test_manager.py` 3 个失败、`test_detector` 中 1 个 `--runtime all` 失败、whole-dir 的 capture I/O error 经 `git stash` 验证均为改动前已存在，与本次无关。安装/链接主循环与 linker 未改动（管线本就按 list[(runtime,path)] 处理）。
+**影响范围**：仅 skills 安装目标探测；新增 auwork 运行时，非 Windows 平台 `_auwork_targets()` 恒为空，对 mac/linux 零影响；现有 7 种运行时行为不变。
+**回滚方式**：删除 detector 的 `_auwork_targets` 方法、4 处 `extend`/分支、candidate_dirs 与 _infer_runtime 增量，及 models/cli 的 2 处映射与提示；git checkout 恢复对应文件。
+---
+
+## 2026-06-13 skills - 修正 test_runtime_all_targets_all_supported_global_dirs 陈旧断言
+
+**变更原因**：该测试断言 `--runtime all` 仅返回 5 个运行时，但 `detect_all_install_targets` 早已新增 trae-cn、agents（本次又加 auwork），测试一直处于失败状态（改动前已失败）。
+**改动点**：`tests/skills/test_detector.py` —— 补全断言为 claude/openclaw/codex/opencode/workbuddy/trae-cn/agents/auwork 共 8 项；用例内 monkeypatch `sys.platform=win32` 并构造 `~/.auwork/1001` 数字目录以覆盖 auwork。
+**验证结果**：`pytest tests/skills/test_detector.py` 9 passed。
+**影响范围**：仅测试文件，无生产代码改动。
+**回滚方式**：git checkout 恢复 tests/skills/test_detector.py。
+---
+## 2026-06-18 mcp - 卖家精灵规范读取合并参数手册
+
+**变更原因**：`ops-seller-sprite` 的 `SKILL_MCP.md` 已精简为入口文档，参数细节下沉到 `SCENARIO_PARAMS_ZH.md`。`seller_sprite_spec_must_read` 若仍只返回主文档，纯 MCP 客户端将拿不到完整参数口径。
+**改动点**：`opscli/mcp/tools/seller_sprite.py` 新增 Skill 模板目录辅助函数，并让 `seller_sprite_spec_must_read()` 同时读取 `SKILL_MCP.md` 和 `SCENARIO_PARAMS_ZH.md`，返回合并后的 `spec` 与 `sources`；`tests/mcp/test_seller_sprite_tools.py` 新增回归测试，要求规范读取结果包含参数手册标题。
+**验证结果**：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_seller_sprite_tools.py -k spec_must_read -v` 通过（1 passed）；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_seller_sprite_tools.py -v` 通过（9 passed）。
+**影响范围**：影响 SellerSprite MCP 首次“先读规范”行为；不影响 `seller_sprite_run`、`seller_sprite_job_status`、`seller_sprite_export` 的业务执行逻辑。
+**回滚方式**：回退 `opscli/mcp/tools/seller_sprite.py`、`tests/mcp/test_seller_sprite_tools.py` 和本条变更记录。
+---
+## 2026-06-18 seller_sprite - 竞品查询补单 ASIN 归一化与本地快速失败
+
+**变更原因**：`competitor-lookup` 场景在收到单个 `asin` 时没有归一化到 `asins`，会构造出空主筛选 payload；缺少主筛选条件时也未在本地拦截，导致无效请求继续走远端并表现为 MCP 30 秒超时。
+**改动点**：`opscli/seller_sprite/api/payloads.py` 的 `make_competitor_payload()` 新增 `asin -> asins` 归一化；`opscli/seller_sprite/api/scenarios.py` 为场景定义新增 `required_any_params`，并让 `competitor-lookup` 强制要求 `keyword`、`brand`、`sellerName`、`asin`、`asins` 至少其一；`ops-seller-sprite` 的 `SKILL.md`、`SKILL_MCP.md`、`SCENARIO_PARAMS_ZH.md` 同步补充“单个 ASIN 必须归一化为 asins”和“缺主筛选条件必须本地快速失败”的规则；`tests/seller_sprite/test_payloads.py` 与 `tests/seller_sprite/test_api_manager.py` 新增对应回归测试。
+**验证结果**：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_payloads.py tests/seller_sprite/test_api_manager.py -k "competitor" -v` 通过（6 passed）；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_payloads.py tests/seller_sprite/test_api_manager.py -v` 通过（23 passed）。
+**影响范围**：影响 `competitor-lookup` 的本地参数校验和 payload 构造；无效竞品请求将立即报配置错误，不再继续拖成远端超时。
+**回滚方式**：回退 `opscli/seller_sprite/api/payloads.py`、`opscli/seller_sprite/api/scenarios.py`、相关 skill 文档、测试和本条变更记录。
 ---

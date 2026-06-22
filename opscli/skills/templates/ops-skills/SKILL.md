@@ -1,7 +1,7 @@
 ---
 name: ops-skills
 description: 管理 AI 工具中已安装的 Skill 生命周期，包含技能广场的发布、编辑、安装、浏览与评分。当用户需要：安装/升级/列出 Skill、发布或编辑广场技能、浏览技能广场、查看已安装技能版本状态、管理多运行时 Skill 时使用。所有操作通过 opscli skills 子命令完成。触发场景：发布到广场、发布到技能广场、把技能发布到广场、发布skill到广场、发布到运营系统广场、发布到BI广场、上传skill到广场、把技能上架到广场、把这个skill发布出去、发布新版skill、提交技能到广场、publish skill、发布技能、上架技能、分享技能。
-version: 1.7.2
+version: 1.7.3
 ---
 
 # ops-skills
@@ -43,6 +43,8 @@ opscli auth login                 # 未登录或刷新失败时登录
 3. 更新 `data/VERSION.json`（无 `v` 前缀，如 `"1.7.2"`）
 4. 同步更新 `SKILL.md` frontmatter（无 `v` 前缀，如 `1.7.2`）
 5. `--version` 参数值必须与 `VERSION.json` 一致
+
+**首次发布注意**：新创建的 Skill 应从 `0.0.1` 开始，而非 `1.0.0`。若 `VERSION.json` 中未指定 `version` 字段，系统将自动使用 `0.0.1` 作为初始版本。
 
 **发布前一致性检查：**
 

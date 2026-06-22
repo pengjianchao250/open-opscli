@@ -52,6 +52,7 @@ Aukeys 运营 CLI 工具集
 - **Listing 分析证据**：围绕 ASIN 和关键词保存接口 JSON、截图、HTML、Markdown 与标准化结果
 - **默认 50 条**：关键词挖掘默认采集 50 条，支持通过 `--limit` 控制
 - **验证码预留**：一期检测并留痕验证码，后续可接入超级鹰图形验证码 provider
+- **浏览器运行时**：`browser-route` 默认使用 Patchright，安装 `aukeys-opscli[seller-sprite]` 后执行 `python -m patchright install chromium`；现有 Playwright 页面、定位、路由和 request API 无需替换，可通过 `OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME=playwright` 回退
 
 ---
 

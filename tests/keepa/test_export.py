@@ -1,4 +1,6 @@
 from pathlib import Path
+from collections import defaultdict
+from types import SimpleNamespace
 
 from openpyxl import load_workbook
 
@@ -79,6 +81,85 @@ def test_nested_values_are_serialized_without_domain_formatting(tmp_path: Path):
     assert [cell.value for cell in sheet[1]][:3] == ["ASIN", "统计数据", "成人产品"]
     assert sheet.cell(row=2, column=2).value == '{"current": [1299]}'
     assert sheet.cell(row=2, column=3).value is False
+
+
+def test_xlsx_export_writes_extra_sheets(tmp_path: Path):
+    export = export_rows_to_xlsx(
+        rows=[{"asin": "B0088PUEPK", "title": "Test Product"}],
+        output_path=tmp_path / "product.xlsx",
+        scenario="product",
+        site="US",
+        extra_sheets={
+            "csv_history": [
+                {
+                    "asin": "B0088PUEPK",
+                    "csvName": "AMAZON",
+                    "priceAmount": 12.99,
+                }
+            ]
+        },
+    )
+
+    workbook = load_workbook(export.path)
+
+    assert "csv_history" in workbook.sheetnames
+    sheet = workbook["csv_history"]
+    assert [cell.value for cell in sheet[1]][:3] == ["ASIN", "csvName", "priceAmount"]
+    assert sheet.cell(row=2, column=3).value == 12.99
+
+
+def test_xlsx_export_uses_streaming_workbook(monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+
+    class FakeSheet:
+        def __init__(self, title: str):
+            self.title = title
+            self.rows = []
+            self.freeze_panes = None
+            self.column_dimensions = defaultdict(SimpleNamespace)
+
+        def append(self, row):
+            self.rows.append(row)
+
+        def cell(self, *args, **kwargs):
+            raise AssertionError("streaming export should append rows instead of writing cells one by one")
+
+    class FakeWorkbook:
+        def __init__(self, **kwargs):
+            assert kwargs == {"write_only": True}
+            captured["workbook_kwargs"] = kwargs
+            self.sheets = []
+
+        def create_sheet(self, title: str):
+            sheet = FakeSheet(title)
+            self.sheets.append(sheet)
+            return sheet
+
+        def save(self, path):
+            captured["sheets"] = self.sheets
+            Path(path).write_bytes(b"fake-xlsx")
+
+    monkeypatch.setattr("openpyxl.Workbook", FakeWorkbook)
+    monkeypatch.setattr(
+        "openpyxl.cell.WriteOnlyCell",
+        lambda sheet, value: SimpleNamespace(value=value, font=None, fill=None),
+    )
+    monkeypatch.setattr("openpyxl.utils.get_column_letter", lambda index: f"C{index}")
+
+    export = export_rows_to_xlsx(
+        rows=[{"asin": "B0088PUEPK", "title": "Test Product"}],
+        output_path=tmp_path / "streaming.xlsx",
+        scenario="product",
+        site="US",
+        extra_sheets={"details": [{"asin": "B0088PUEPK", "value": {"nested": True}}]},
+    )
+
+    sheets = captured["sheets"]
+    assert export.filename == "streaming.xlsx"
+    assert len(sheets) == 2
+    assert sheets[0].rows[0][0].value == "ASIN"
+    assert sheets[0].rows[1] == ["B0088PUEPK", "Test Product"]
+    assert sheets[1].rows[1][1] == '{"nested": true}'
 
 
 def test_all_keepa_scenarios_can_export_xlsx(tmp_path: Path):

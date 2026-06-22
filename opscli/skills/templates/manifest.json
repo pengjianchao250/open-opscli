@@ -142,6 +142,70 @@
       "binary_full": true,
       "tier": "internal",
       "reason": "新增 Skill，跨 AI 工具 Skill 同步，依赖本地各工具路径约定，暂不进入公开发版产物"
+    },
+    "ops-feed-task": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-shopify-delete": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-shopify-inventory": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-shopify-price": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-shopify-query": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-shopify-status": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-sif": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
+    },
+    "ops-xiyou": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "新增 Skill，尚未进入公开发版产物"
     }
   }
 }

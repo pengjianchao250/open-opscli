@@ -38,12 +38,12 @@ description: ops-dataset-query 中 AskUserQuestion 结构化澄清规范
 
 触发条件：
 - 用户只给出业务领域或自然语言需求（如"广告数据"、"销售数据"、"库存数据"），未指定 dataset/table_id。
-- catalog intent、`datasets.csv`、`query_metadata()` 或本地搜索返回多个候选数据集。
+- `datasets.csv`、`query_metadata()` 或本地搜索返回多个候选数据集。
 - 仅字段搜索命中一个表，但业务领域词可能存在其他粒度数据集。
 - 用户指定的数据集名称模糊匹配到多个相似数据集。
 
 要求：
-- 先基于 `query_catalog()`、`query_metadata()` 或 `datasets.csv` 获取数据集候选。
+- 先基于 `query_metadata()` 或 `datasets.csv` 获取数据集候选。
 - 对"广告/销售/库存/物流/财务"等大领域词，必须搜索数据集列表本身，不能只依赖字段搜索结果。
 - 列出候选时说明：数据集名称、table_id、dataset_alias、数据粒度、适用场景、主要约束。
 

@@ -1,0 +1,86 @@
+from opscli.keepa.stats_formatter import format_stats_for_product
+
+
+def test_stats_formatter_derives_main_fields_and_detail_rows():
+    current = [-1] * 36
+    current[0] = 1299
+    current[1] = 1399
+    current[3] = 12345
+    current[16] = 45
+    current[17] = 456
+    avg30 = [-1] * 36
+    avg30[1] = 1499
+    avg30[3] = 23456
+    avg90 = [-1] * 36
+    avg90[1] = 1599
+
+    formatted = format_stats_for_product(
+        {
+            "asin": "B0088PUEPK",
+            "domainId": 1,
+            "stats": {
+                "current": current,
+                "avg30": avg30,
+                "avg90": avg90,
+                "min": [[7588958, 999], None, None, [7588958, 1000]],
+                "outOfStockPercentage30": [25, 0],
+                "lastOffersUpdate": 7588958,
+                "buyBoxSellerId": "A2L77EE7U53NWQ",
+                "buyBoxPrice": 1299,
+                "buyBoxShipping": 200,
+                "buyBoxSavingPercentage": 15,
+                "buyBoxShippingTime": [24, 48],
+                "lightningDealInfo": [7588958, -1],
+                "buyBoxStats": {
+                    "A2L77EE7U53NWQ": {
+                        "avgPrice": 1299,
+                        "avgNewOfferCount": 2.5,
+                        "isFBA": True,
+                        "lastSeen": 7588958,
+                        "percentageWon": 80,
+                    }
+                },
+                "retrievedOfferCount": 10,
+                "totalOfferCount": 12,
+                "sellerIdsLowestFBA": ["A2L77EE7U53NWQ"],
+                "offerCountFBA": -2,
+            },
+        },
+        site="US",
+        domain_id=1,
+    )
+
+    assert formatted is not None
+    main = formatted.main_fields
+    assert main["statsCurrentAmazonPriceRaw"] == 1299
+    assert main["statsCurrentAmazonPrice"] == 12.99
+    assert main["statsCurrentNewPrice"] == 13.99
+    assert main["statsCurrentSalesRank"] == 12345
+    assert main["statsCurrentRating"] == 4.5
+    assert main["statsCurrentReviewCount"] == 456
+    assert main["statsAvg30NewPrice"] == 14.99
+    assert main["statsAvg90NewPrice"] == 15.99
+    assert main["statsOutOfStockPercentage30Amazon"] == 25
+    assert main["statsOutOfStockPercentage30AmazonDisplay"] == "25%"
+    assert main["statsLastOffersUpdateUtc"] == "2025-06-06T02:38:00Z"
+    assert main["statsBuyBoxPrice"] == 12.99
+    assert main["statsBuyBoxLandedPrice"] == 14.99
+    assert main["statsBuyBoxSellerStatus"] == "seller"
+    assert main["statsHasBuyBox"] is True
+    assert main["statsBuyBoxShippingTimeText"] == "1-2 days"
+    assert main["statsLightningDealStatus"] == "upcoming"
+    assert main["statsSellerIdsLowestFBAJoined"] == "A2L77EE7U53NWQ"
+    assert main["statsOfferCountFBA"] is None
+
+    price_rows = [row for row in formatted.price_type_rows if row["statField"] == "current" and row["priceTypeIndex"] == 0]
+    assert price_rows[0]["formattedValue"] == 12.99
+
+    extreme_rows = [row for row in formatted.extreme_rows if row["statField"] == "min" and row["priceTypeIndex"] == 0]
+    assert extreme_rows[0]["utc"] == "2025-06-06T02:38:00Z"
+    assert extreme_rows[0]["formattedValue"] == 9.99
+
+    assert formatted.buy_box_seller_rows[0]["avgPrice"] == 12.99
+    assert formatted.buy_box_seller_rows[0]["lastSeenUtc"] == "2025-06-06T02:38:00Z"
+    assert formatted.buy_box_seller_rows[0]["percentageWonDisplay"] == "80%"
+
+    assert formatted.offer_snapshot_rows[0]["sellerIdsLowestFBAJoined"] == "A2L77EE7U53NWQ"
