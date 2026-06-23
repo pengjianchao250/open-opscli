@@ -72,3 +72,11 @@ amazon_rufus_get
 6. MCP schema 仍不包含 cookie、headers、storage_state 或 CDP 参数。
 7. Skill 模板与 `.agents` 副本同步，且不包含真实 cookie 或明文 cookie 示例。
 8. 安装 Skill 后，用子 agent 提示词跑通 Rufus 获取真实流程。
+
+## 追加需求：平台 Cookie content 远端读写
+
+用户要求参考 Apifox `/v1/platform-cookies`，把 Rufus 平台 Cookie 保存/获取改为 CLI/API 能力，并且只使用 `platform`、`country`、`content` 三个字段。除国家和平台外，Rufus 内部状态整合为一个大 JSON 字符串保存在 `content` 中，不拆分为 `cookie_content`、账号、域名、headers、payload、`storage_state` 或请求种子等独立 CLI/API 字段。
+
+## 追加需求：替换默认 browser-state JSON
+
+默认 Rufus 状态读写必须使用 OPS 平台 Cookie 保存/获取接口，不再把 `browser-state-<COUNTRY>.json` 作为主路径。`save_state`、`watch_login`、`save_cookie`、`save_curl`、`login_status`、`get_backend`、`logout` 默认围绕 `platform=amazon` 的远端 `content` 工作；本地 JSON 仅作为显式注入 `RufusBrowserStateStore(base_dir=...)` 的测试/兼容 fallback。

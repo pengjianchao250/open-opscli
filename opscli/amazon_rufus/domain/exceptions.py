@@ -37,6 +37,12 @@ class InvalidRufusCurlError(RufusError):
     code = "INVALID_RUFUS_CURL"
 
 
+class InvalidRufusPlatformError(RufusError):
+    """用户传入的平台 Cookie 参数无效。"""
+
+    code = "INVALID_RUFUS_PLATFORM"
+
+
 class InvalidRufusBrowserStateError(RufusError):
     """用户 Amazon 浏览器状态无效。"""
 
@@ -128,6 +134,26 @@ class RufusRemoteHttpError(RufusError):
         self.status_code = status_code
 
     def to_dict(self) -> dict:
+        payload = super().to_dict()
+        payload["status_code"] = self.status_code
+        return payload
+
+
+class RufusPlatformCookieAuthError(RufusError):
+    """OPS 平台 Cookie API 鉴权失败。"""
+
+    code = "RUFUS_PLATFORM_COOKIE_AUTH_ERROR"
+
+    def __init__(
+        self,
+        message: str = "OPS 平台 Cookie 接口未授权，请先刷新 OPS/MCP 认证；这不是亚马逊 Rufus 登录态缺失。",
+        status_code: int = 401,
+    ):
+        super().__init__(message)
+        self.status_code = status_code
+
+    def to_dict(self) -> dict:
+        """转换为包含 HTTP 状态码的稳定 JSON 错误结构。"""
         payload = super().to_dict()
         payload["status_code"] = self.status_code
         return payload

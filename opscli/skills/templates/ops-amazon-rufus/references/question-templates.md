@@ -109,7 +109,7 @@ OPSCLI_OPS_URL=http://127.0.0.1:8000/api
 .agents/skills/ops-amazon-rufus/data/question_templates.json
 ```
 
-`amazon-rufus get` 只读取该本地文件，不会在回答获取过程中自动拉取或保存模板。
+Rufus 获取链路只读取该本地文件，不会在回答获取过程中自动拉取或保存模板。
 
 ## 管理端模板接口
 
@@ -352,11 +352,11 @@ DELETE /admin/opencalw/question-templates/{templateId}/questions/{questionId}
 }
 ```
 
-`QuestionBankService` 会按 `questions[].position` 排序后执行问题。若文件缺失或问题总数为 0，`amazon-rufus get` 会提示先安装并升级 `ops-amazon-rufus`。
+`QuestionBankService` 会按 `questions[].position` 排序后执行问题。若文件缺失或问题总数为 0，Rufus 获取链路会提示先安装并升级 `ops-amazon-rufus`。
 
 ## 注意事项
 
-- 模板保存接口属于管理端能力，不在 `amazon-rufus get` 执行过程中调用。
+- 模板保存接口属于管理端能力，不在 Rufus 获取过程中调用。
 - `POST /admin/opencalw/question-templates` 只保存描述；问题列表需要通过 questions 接口保存。
 - `PUT .../questions` 是整体覆盖，传入空数组会清空问题列表。
 - `PUT .../questions/append` 适合追加新问题，并会返回 `inserted` 与 `skipped`。
