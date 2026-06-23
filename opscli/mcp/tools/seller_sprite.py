@@ -10,9 +10,12 @@
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+
+from opscli.mcp.quota import get_quota_limiter
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
@@ -151,6 +154,25 @@ async def seller_sprite_scenarios() -> dict:
         return _ok(SellerSpriteApiManager().scenarios())
     except Exception as exc:
         return _err(exc, tool="MCP → seller_sprite_scenarios()")
+
+
+async def seller_sprite_quota_status() -> dict:
+    """读取当前 MCP 用户的卖家精灵每日额度快照。"""
+    user_email = _get_current_mcp_user_email()
+    if not user_email:
+        return _err(
+            ValueError("当前 MCP 用户邮箱缺失，无法读取卖家精灵额度"),
+            tool="MCP → seller_sprite_quota_status()",
+        )
+
+    try:
+        identity = f"email:{user_email.strip().lower()}"
+        snapshot = get_quota_limiter().quota_snapshot("seller_sprite_run", identity)
+        if inspect.isawaitable(snapshot):
+            snapshot = await snapshot
+        return _ok(snapshot)
+    except Exception as exc:
+        return _err(exc, tool="MCP → seller_sprite_quota_status()")
 
 
 async def seller_sprite_run(
@@ -346,6 +368,7 @@ async def seller_sprite_export(job_id: str) -> dict:
 _ALL_TOOLS = [
     seller_sprite_spec_must_read,
     seller_sprite_scenarios,
+    seller_sprite_quota_status,
     seller_sprite_run,
     seller_sprite_job_status,
     seller_sprite_export,

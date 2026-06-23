@@ -20,6 +20,13 @@ def scenarios() -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+@app.command("quota-status")
+def quota_status() -> None:
+    """读取当前用户的卖家精灵额度快照。"""
+    payload = SellerSpriteRemoteAdapter().quota_status()
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
 @app.command("run")
 def run_scenario(
     scenario: str = typer.Argument(..., help="场景 ID，如 keyword-reverse"),

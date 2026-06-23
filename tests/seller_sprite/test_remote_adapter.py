@@ -119,3 +119,25 @@ def test_remote_adapter_maps_job_status_and_export_tools():
         "seller_sprite_job_status",
         "seller_sprite_export",
     ]
+
+
+def test_remote_adapter_maps_quota_status_tool():
+    config_client = FakeConfigClient()
+    created_clients = []
+
+    def make_remote_client(url: str):
+        client = FakeRemoteClient(url)
+        created_clients.append(client)
+        return client
+
+    adapter = SellerSpriteRemoteAdapter(
+        config_client=config_client,
+        remote_client_factory=make_remote_client,
+    )
+
+    result = adapter.quota_status()
+
+    assert result["success"] is True
+    assert result["data"]["tool"] == "seller_sprite_quota_status"
+    assert result["data"]["arguments"] == {}
+    assert created_clients[0].calls == [("seller_sprite_quota_status", {})]

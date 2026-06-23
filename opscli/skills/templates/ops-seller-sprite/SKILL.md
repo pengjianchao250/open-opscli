@@ -33,7 +33,8 @@ description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自
 2. 缺少必填参数时，只问当前场景真正缺的字段。
 3. 条件齐全后，构造 `scenario + site + period + params`。
 4. 执行后记录 `job_id`，后续查状态、取导出文件都复用它。
-5. 如果当前宿主是 MCP 工具协作环境，继续阅读 [SKILL_MCP.md](SKILL_MCP.md) 的工具链和异步规则。
+5. 用户想先看今天还剩几次额度时，优先走 `seller_sprite_quota_status`，或正式 CLI `opscli seller-sprite quota-status`。
+6. 如果当前宿主是 MCP 工具协作环境，继续阅读 [SKILL_MCP.md](SKILL_MCP.md) 的工具链和异步规则。
 
 ## 缺参澄清原则
 
@@ -58,5 +59,8 @@ description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自
 
 - 优先使用工具返回的 `data.summary`，不要改写成原始 JSON。
 - 成功时只保留用户关心的信息：场景、关键条件、`job_id`、`row_count`、导出文件。
+- 若 `seller_sprite_run` 响应顶层存在 `quota`，补一句：
+  - `今日额度：已用 used / limit，剩余 remaining，重置时间 reset_at`
+- `seller_sprite_run` 会消耗次数；`seller_sprite_scenarios`、`seller_sprite_quota_status`、`seller_sprite_job_status`、`seller_sprite_export` 不消耗次数。
 - `row_count=0` 时，要明确告诉用户没有查到数据，并提醒核对站点、ASIN、关键词、类目或筛选条件是否过窄。
 - 用户后来只说 `继续`、`查结果`、`刚才那个好了没` 时，直接复用最近一次 SellerSprite `job_id`，不要要求用户重新描述整单请求。

@@ -55,7 +55,7 @@ class BrowserRouteRequest:
     high_frequency_payload: dict[str, Any] | None = None
     page_prepare: bool = True
     task_interval_seconds: float = 5.0
-    cooldown_seconds: float = 20.0
+    cooldown_seconds: float = 10.0
 
 
 @dataclass
@@ -286,7 +286,7 @@ class SellerSpriteBrowserRouteWorker:
         await _click_account_login_tab(page)
         password_input = page.locator("input[type='password']:visible").first
         try:
-            await password_input.wait_for(state="visible", timeout=15000)
+            await password_input.wait_for(state="visible", timeout=5000)
         except Exception as exc:
             if await _detect_logged_in(page):
                 return

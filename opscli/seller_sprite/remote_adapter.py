@@ -44,6 +44,9 @@ class SellerSpriteRemoteAdapter:
             },
         )
 
+    def quota_status(self) -> dict[str, Any]:
+        return self._call_tool("seller_sprite_quota_status", {})
+
     def job_status(self, job_id: str) -> dict[str, Any]:
         return self._call_tool("seller_sprite_job_status", {"job_id": job_id})
 

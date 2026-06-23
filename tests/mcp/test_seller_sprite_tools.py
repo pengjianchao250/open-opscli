@@ -100,6 +100,38 @@ def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
     assert "# 卖家精灵场景参数手册" in result["data"]["spec"]
 
 
+def test_seller_sprite_quota_status_returns_snapshot(monkeypatch):
+    class FakeLimiter:
+        def quota_snapshot(self, tool_name, identity):
+            assert tool_name == "seller_sprite_run"
+            assert identity == "email:mcp-user@example.com"
+            return {
+                "service": "seller_sprite",
+                "limit": 5,
+                "used": 2,
+                "remaining": 3,
+                "failures": 0,
+                "reset_at": "2026-06-24T00:00:00+08:00",
+            }
+
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr("opscli.mcp.tools.seller_sprite.get_quota_limiter", lambda: FakeLimiter())
+
+    result = _run(seller_sprite_tools.seller_sprite_quota_status())
+
+    assert result["success"] is True
+    assert result["data"]["remaining"] == 3
+
+
+def test_seller_sprite_quota_status_returns_error_when_user_email_missing(monkeypatch):
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: None)
+
+    result = _run(seller_sprite_tools.seller_sprite_quota_status())
+
+    assert result["success"] is False
+    assert "邮箱" in result["error"]["message"]
+
+
 def test_seller_sprite_run_accepts_params_json_string(monkeypatch, tmp_path):
     store = _make_store(tmp_path)
     monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
