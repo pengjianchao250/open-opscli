@@ -499,3 +499,14 @@ def test_scheduler_continues_consuming_after_mcp_cleanup_error(tmp_path: Path):
         await scheduler.close()
 
     asyncio.run(scenario())
+
+
+def test_get_task_scheduler_supports_sync_cli_context():
+    from opscli.seller_sprite.services import task_scheduler as module
+
+    module._SCHEDULERS.clear()
+
+    first = module.get_task_scheduler()
+    second = module.get_task_scheduler()
+
+    assert first is second

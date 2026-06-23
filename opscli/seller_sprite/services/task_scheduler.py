@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
@@ -203,7 +204,12 @@ def get_task_scheduler(
 ) -> SellerSpriteTaskScheduler:
     """按事件循环和队列库路径复用任务调度器实例。"""
     current_settings = settings or load_settings()
-    loop_key = id(asyncio.get_running_loop())
+    try:
+        loop_key = id(asyncio.get_running_loop())
+    except RuntimeError:
+        # Sync CLI commands do not run inside an event loop, but they still need
+        # a stable scheduler instance to read queued task status/export metadata.
+        loop_key = -threading.get_ident()
     store_key = str(SellerSpriteTaskQueueStore().db_path.resolve())
     key = (loop_key, store_key)
     scheduler = _SCHEDULERS.get(key)

@@ -1,22 +1,26 @@
-"""卖家精灵正式 CLI。"""
+"""卖家精灵本地调试 CLI。"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
 import typer
 
-from opscli.seller_sprite.remote_adapter import SellerSpriteRemoteAdapter
+from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
+from opscli.seller_sprite.services import SellerSpriteApiManager
 
 
-app = typer.Typer(help="卖家精灵远端 MCP 正式命令面。")
+app = typer.Typer(
+    help="卖家精灵本地调试命令；`run` 保留 `--mode` 等本地专用参数。",
+)
 
 
 @app.command("scenarios")
 def scenarios() -> None:
-    """列出远端命令面支持的卖家精灵场景。"""
-    payload = SellerSpriteRemoteAdapter().scenarios()
+    """列出支持的卖家精灵场景。"""
+    payload = SellerSpriteApiManager().scenarios()
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
@@ -28,11 +32,27 @@ def run_scenario(
     params: str = typer.Option("{}", "--params", help="场景参数 JSON 字符串"),
     page_size: int = typer.Option(100, "--page-size", help="每页数量"),
     export_format: str = typer.Option("xls", "--export-format", help="导出格式：xls/xlsx/json"),
+    mode: str | None = typer.Option("browser-route", "--mode", help="执行模式：api-direct/browser-route"),
+    page_prepare: bool | None = typer.Option(
+        None,
+        "--page-prepare/--no-page-prepare",
+        help="browser-route 前是否执行页面滚动、鼠标移动和空白点击",
+    ),
+    task_interval_seconds: float | None = typer.Option(
+        None,
+        "--task-interval-seconds",
+        help="browser-route 同账号任务间隔秒数",
+    ),
+    cooldown_seconds: float | None = typer.Option(
+        None,
+        "--cooldown-seconds",
+        help="browser-route 失败后账号冷却秒数",
+    ),
     output_dir: str | None = typer.Option(None, "--output-dir", help="输出目录"),
     job_id: str | None = typer.Option(None, "--job-id", help="指定任务 ID"),
 ) -> None:
-    """按正式公共命令契约执行卖家精灵场景。"""
-    payload = SellerSpriteRemoteAdapter().run(
+    """执行场景并导出文件。"""
+    request = SellerSpriteScenarioRequest(
         scenario=scenario,
         site=site,
         period=period,
@@ -41,22 +61,13 @@ def run_scenario(
         job_id=job_id,
         output_dir=output_dir,
         export_format=export_format,
+        mode=mode,
+        page_prepare=page_prepare,
+        task_interval_seconds=task_interval_seconds,
+        cooldown_seconds=cooldown_seconds,
     )
-    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
-
-
-@app.command("job-status")
-def job_status(job_id: str = typer.Argument(..., help="任务 ID")) -> None:
-    """读取卖家精灵任务结果。"""
-    payload = SellerSpriteRemoteAdapter().job_status(job_id)
-    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
-
-
-@app.command("export")
-def export(job_id: str = typer.Argument(..., help="任务 ID")) -> None:
-    """读取卖家精灵任务导出文件信息。"""
-    payload = SellerSpriteRemoteAdapter().export(job_id)
-    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    result = asyncio.run(SellerSpriteApiManager().run(request))
+    typer.echo(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
 
 
 def _parse_params(value: str) -> dict[str, Any]:
