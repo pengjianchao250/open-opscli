@@ -10,6 +10,15 @@
 
 ---
 
+## 2026-06-23 seller_sprite - 收紧登录等待与失败冷却上限
+
+**变更原因**：卖家精灵 browser-route 默认失败冷却上限仍为 20 秒，登录页密码框等待上限为 15 秒，体感偏慢；同时需要锁定“参数错误不冷却”的回归行为。
+**改动点**：`opscli/seller_sprite/config.py` 将 `DEFAULT_BROWSER_COOLDOWN_SECONDS` 从 `20.0` 调整为 `10.0`；`opscli/seller_sprite/browser_route/worker.py` 将 `BrowserRouteRequest.cooldown_seconds` 默认值同步改为 `10.0`，并把密码框 `wait_for(..., timeout=15000)` 调整为 `5000`；`tests/seller_sprite/test_browser_route_worker.py` 新增默认冷却值断言、参数错误不冷却断言和登录页密码框最大等待 5 秒的回归测试。
+**验证结果**：RED：`.\\.venv\\Scripts\\python.exe -m pytest tests/seller_sprite/test_browser_route_worker.py -q` 初始失败于默认冷却仍为 `20.0`、密码框等待仍为 `15000ms`。GREEN：同命令复跑通过，`18 passed in 0.47s`。
+**影响范围**：影响卖家精灵 browser-route 的默认失败冷却上限与登录页账号密码框等待时长，不影响网络错误 `3-5s` 和风控错误 `15-20s` 的基础分类逻辑，只收紧默认 cap。
+**回滚方式**：将上述两个默认值改回原值，回退新增测试断言，并删除本条变更记录。
+---
+
 ## 2026-06-18 seller_sprite - SQLite 单账号排队一期
 
 **变更原因**：当前卖家精灵 MCP 入口同时混合同步直跑、browser-route 忙时自动异步和任务目录文件状态，用户无法稳定看到排队序号；第一阶段需要先补单账号 SQLite 队列、统一入队返回和可查询状态，为后续多账号扩展预留结构。
@@ -2033,4 +2042,36 @@
 **验证结果**：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_payloads.py tests/seller_sprite/test_api_manager.py -k "competitor" -v` 通过（6 passed）；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_payloads.py tests/seller_sprite/test_api_manager.py -v` 通过（23 passed）。
 **影响范围**：影响 `competitor-lookup` 的本地参数校验和 payload 构造；无效竞品请求将立即报配置错误，不再继续拖成远端超时。
 **回滚方式**：回退 `opscli/seller_sprite/api/payloads.py`、`opscli/seller_sprite/api/scenarios.py`、相关 skill 文档、测试和本条变更记录。
+---
+## 2026-06-22 seller_sprite - MCP 调用记录入 SQLite
+
+**变更原因**：卖家精灵 MCP 服务需要补齐调用审计，记录调用用户、模式、参数和结果摘要，便于排查异步队列任务与导出结果。
+**改动点**：`opscli/seller_sprite/services/task_queue_store.py` 在现有 `task_queue.sqlite3` 中新增 `seller_sprite_mcp_runs` 表、迁移补列逻辑和 MCP 记录读写方法；`opscli/mcp/tools/seller_sprite.py` 在 `seller_sprite_run` 中补邮箱读取、最终 `job_id` 规范化、入队前创建记录和入队异常失败回写；`opscli/seller_sprite/services/task_scheduler.py` 在任务执行链路中接入 `running/succeeded/failed` 审计状态同步，并隔离 MCP 探测/收尾异常避免拖垮普通任务；`tests/seller_sprite/test_task_queue_store.py`、`tests/mcp/test_seller_sprite_tools.py`、`tests/seller_sprite/test_task_scheduler.py` 新增对应 TDD 回归用例。
+**验证结果**：仓储层定向回归 `D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_queue_store.py -q` 通过（12 passed）；MCP 入口定向回归 `D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\mcp\test_seller_sprite_tools.py -v` 通过（14 passed）；调度器定向回归 `D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_scheduler.py -v` 通过（9 passed）；目标总回归 `D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_queue_store.py tests\mcp\test_seller_sprite_tools.py tests\seller_sprite\test_task_scheduler.py -q` 通过（35 passed）。
+**影响范围**：影响 `seller_sprite_run` 的 MCP 入队前后审计行为、卖家精灵单账号调度器的 MCP 状态同步，以及本地 `task_queue.sqlite3` 的表结构；`seller_sprite_start`、任务目录产物和非 MCP 卖家精灵执行入口保持不变。
+**回滚方式**：回退 `opscli/seller_sprite/services/task_queue_store.py`、`opscli/mcp/tools/seller_sprite.py`、`opscli/seller_sprite/services/task_scheduler.py` 及对应三组测试，并删除 `seller_sprite_mcp_runs` 表相关逻辑和本条变更记录。
+---
+## 2026-06-23 seller_sprite - 修复 task_scheduler 测试文件合并冲突
+
+**变更原因**：`tests/seller_sprite/test_task_scheduler.py` 残留 Git 冲突标记，导致 pytest 在收集阶段直接抛出 `SyntaxError`，卖家精灵调度器相关回归无法执行。
+**改动点**：清理 `tests/seller_sprite/test_task_scheduler.py` 中的冲突标记，保留 MCP 调度状态回写测试和 `get_task_scheduler()` 同步 CLI 上下文复用测试两侧内容，并补齐函数间空行。
+**验证结果**：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_scheduler.py -q` 通过（10 passed）。
+**影响范围**：仅影响卖家精灵调度器测试文件的可解析性与回归覆盖面，不改动生产代码逻辑。
+**回滚方式**：回退 `tests/seller_sprite/test_task_scheduler.py` 与本条变更记录。
+---
+## 2026-06-23 seller_sprite / mcp_client - 正式 CLI 切换为远端 MCP 配置直连
+
+**变更原因**：卖家精灵正式 CLI 需要先复用现有 CLI 登录态请求 `/v1/mcp-api-keys/config`，以获取远端 MCP HTTP 服务配置；同时需要把公开 `opscli seller-sprite` 从“本地服务桥接”切换为“远端 MCP URL 直连”，而 `seller-sprite-debug` 保留本地调试链路。
+**改动点**：新增 `opscli/mcp_client/__init__.py` 导出 `McpConfigClient`、`RemoteMcpServerConfig`、`RemoteMcpClient`、`RemoteMcpToolError` 及模块内专用异常；新增 `opscli/mcp_client/config_client.py`，通过 `AuthClient.build_request_auth("ops")` + `httpx.get` + `parse_remote_response` 获取 `/v1/mcp-api-keys/config`，并补充该接口专属 `success=true` 契约校验；在同文件内新增 `RemoteConfigHttpError`、`RemoteConfigBusinessError`、`BadRemoteConfigError`，替换原先裸 `RuntimeError` / `ValueError`；`select_server()` 增加 `http.mcpServers` 非空字典、服务项 `type`、`url` 等结构校验，并在 malformed 输入时统一抛结构化异常；新增 `opscli/mcp_client/remote_client.py` 作为 URL 直连 MCP 的极薄封装，补齐 `create_mcp_http_client()` 生命周期管理，显式关闭自建 `AsyncClient`，并将错误分支改为“安全文本提取”：远端 `result.isError=true` 时即使 `content` 缺失、为空、首项非文本或空白文本，也统一抛出 `RemoteMcpToolError`，不再先被本地 `ValueError` 截断；新增 `opscli/seller_sprite/remote_adapter.py`，统一将 `scenarios/run/job-status/export` 映射到远端 `seller_sprite_*` MCP tool，并在首次调用因 `401` 失败时重拉一次远端 config 后重试一次；`opscli/seller_sprite/cli.py` 改为正式 CLI 通过该 adapter 执行远端调用，不再直接依赖本地 `SellerSpriteApiManager` / `task_scheduler`；`seller-sprite-debug` 入口与本地专用 `--mode` 等参数保持不变；新增 `tests/mcp/test_config_client.py`、`tests/mcp/test_remote_client.py`、`tests/seller_sprite/test_remote_adapter.py`、`tests/seller_sprite/test_cli.py`、`tests/seller_sprite/test_remote_refresh.py`，并更新 `tests/seller_sprite/test_cli_split.py` 覆盖正式/debug 命令分流、远端适配器接线与 401 后一次性重拉 config。
+**验证结果**：RED：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\mcp\test_config_client.py -q` 初始失败，报 `ModuleNotFoundError: No module named 'opscli.mcp_client'`；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\mcp\test_remote_client.py -q` 初始失败，报 `ModuleNotFoundError: No module named 'opscli.mcp_client.remote_client'`；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_remote_adapter.py tests\seller_sprite\test_cli.py tests\seller_sprite\test_cli_split.py -q` 初始失败，报 `ModuleNotFoundError: No module named 'opscli.seller_sprite.remote_adapter'`；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_remote_refresh.py -q` 初始失败，报首次 `401 unauthorized` 仍直接外抛；本次质量修复阶段再次先写失败测试，`tests\mcp\test_remote_client.py` 初始失败于 `isError=true` 且 `content` 畸形时仍抛本地 `ValueError`。GREEN：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\mcp\test_config_client.py -q` 通过（8 passed）；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\mcp\test_remote_client.py -q` 通过（14 passed）；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_remote_adapter.py tests\seller_sprite\test_cli.py tests\seller_sprite\test_cli_split.py -q` 通过（10 passed）；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_remote_refresh.py -q` 通过（1 passed）；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_remote_refresh.py tests\seller_sprite\test_remote_adapter.py tests\seller_sprite\test_cli.py tests\seller_sprite\test_cli_split.py tests\mcp\test_config_client.py tests\mcp\test_remote_client.py -q` 通过（33 passed）。
+**影响范围**：影响公开 `opscli seller-sprite` 命令的执行链路与返回口径，现改为“CLI auth -> 远端 MCP 配置 -> 远端 tool 调用”；`opscli seller-sprite-debug` 本地调试命令、现有卖家精灵服务实现、MCP server 内部工具实现不受影响。
+**回滚方式**：删除 `opscli/mcp_client/__init__.py`、`opscli/mcp_client/config_client.py`、`opscli/mcp_client/remote_client.py`、`opscli/seller_sprite/remote_adapter.py`、对应新增测试，并将 `opscli/seller_sprite/cli.py` 回退到本地桥接版本，同时回退本条变更记录。
+---
+## 2026-06-23 seller_sprite - 卖家精灵额度查询与提示优化
+
+**变更原因**：卖家精灵 MCP 已有每日限额，但用户缺少执行前查询额度的入口，执行后也没有统一的剩余额度提示规则。
+**改动点**：在 MCP 限额模块新增只读额度快照能力；新增 `seller_sprite_quota_status` 工具和 `opscli seller-sprite quota-status` 正式 CLI 入口；更新卖家精灵 Skill 文档，明确只有 `run` 消耗次数，并要求回答中补充额度摘要。
+**验证结果**：已运行 `.\\.venv\\Scripts\\python.exe -m pytest tests\\mcp\\test_quota.py -k snapshot -v`、`.\\.venv\\Scripts\\python.exe -m pytest tests\\mcp\\test_seller_sprite_tools.py -k quota_status -v`、`.\\.venv\\Scripts\\python.exe -m pytest tests\\seller_sprite\\test_remote_adapter.py tests\\seller_sprite\\test_cli.py -k quota_status -v`，均通过。
+**影响范围**：卖家精灵 MCP、正式 CLI、Skill 文档、MCP 限额快照读取逻辑。
+**回滚方式**：回退 `opscli/mcp/quota.py`、`opscli/mcp/tools/seller_sprite.py`、`opscli/seller_sprite/remote_adapter.py`、`opscli/seller_sprite/cli.py`、对应测试和文档改动。
 ---

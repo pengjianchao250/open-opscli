@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
@@ -18,6 +20,7 @@ from opscli.seller_sprite.services.task_status import error_to_dict
 QUEUE_SCOPE = "seller_sprite"
 DEFAULT_WORKER_KEY = "default"
 _SCHEDULERS: dict[tuple[int, str], "SellerSpriteTaskScheduler"] = {}
+logger = logging.getLogger(__name__)
 
 
 class SellerSpriteTaskScheduler:
@@ -109,11 +112,17 @@ class SellerSpriteTaskScheduler:
             if claimed is None:
                 await asyncio.sleep(self.poll_interval_seconds)
                 continue
-            await self._run_one(str(claimed["job_id"]))
+            job_id = str(claimed["job_id"])
+            try:
+                await self._run_one(job_id)
+            except Exception:
+                # 单条任务的审计收尾异常不能拖垮整个后台 worker，记录后继续消费后续任务。
+                logger.exception("卖家精灵任务调度执行异常，继续消费后续任务：job_id=%s", job_id)
 
     async def _run_one(self, job_id: str) -> None:
         request = self.store.get_request(job_id)
         context = self.store.get_task_context(job_id)
+        has_mcp_run = self._has_mcp_run(job_id)
         manager = self.manager_factory(
             settings=self.settings,
             account_provider=self.account_provider,
@@ -121,16 +130,23 @@ class SellerSpriteTaskScheduler:
             session_id=context["session_id"],
         )
         try:
+            if has_mcp_run:
+                self.store.mark_mcp_run_running(job_id)
             result = await manager.run(request)
+            export_payload = self._build_mcp_export_payload(request, result)
+            self.store.finish_task(
+                job_id=job_id,
+                result_path=result.result_path,
+                row_count=result.row_count,
+                export_payload=result.export.to_dict() if result.export else None,
+            )
+            if has_mcp_run:
+                self.store.finish_mcp_run_success(job_id, result.row_count, export_payload)
         except Exception as exc:
-            self.store.fail_task(job_id=job_id, error_payload=error_to_dict(exc))
-            return
-        self.store.finish_task(
-            job_id=job_id,
-            result_path=result.result_path,
-            row_count=result.row_count,
-            export_payload=result.export.to_dict() if result.export else None,
-        )
+            error_payload = error_to_dict(exc)
+            self.store.fail_task(job_id=job_id, error_payload=error_payload)
+            if has_mcp_run:
+                self.store.finish_mcp_run_failed(job_id, error_payload)
 
     def _default_manager_factory(self, **kwargs) -> SellerSpriteApiManager:
         return SellerSpriteApiManager(**kwargs)
@@ -153,6 +169,31 @@ class SellerSpriteTaskScheduler:
             base_dir = Path.cwd() / base_dir
         return base_dir.resolve() / str(request.job_id)
 
+    def _has_mcp_run(self, job_id: str) -> bool:
+        """探测任务是否存在 MCP 调用记录。"""
+        try:
+            self.store.get_mcp_run(job_id)
+            return True
+        except ValueError:
+            return False
+        except Exception:
+            # MCP 探测阶段以主任务可执行为优先，探测异常按无 MCP 记录降级处理。
+            logger.warning("探测 MCP 调用记录失败，按普通任务继续执行：job_id=%s", job_id, exc_info=True)
+            return False
+
+    def _build_mcp_export_payload(
+        self,
+        request: SellerSpriteScenarioRequest,
+        result: Any,
+    ) -> dict[str, Any]:
+        """构造 MCP 成功态所需的导出信息。"""
+        if result.export:
+            return result.export.to_dict()
+        return {
+            "format": request.export_format,
+            "filename": Path(result.result_path).name,
+        }
+
 
 def get_task_scheduler(
     *,
@@ -163,7 +204,12 @@ def get_task_scheduler(
 ) -> SellerSpriteTaskScheduler:
     """按事件循环和队列库路径复用任务调度器实例。"""
     current_settings = settings or load_settings()
-    loop_key = id(asyncio.get_running_loop())
+    try:
+        loop_key = id(asyncio.get_running_loop())
+    except RuntimeError:
+        # Sync CLI commands do not run inside an event loop, but they still need
+        # a stable scheduler instance to read queued task status/export metadata.
+        loop_key = -threading.get_ident()
     store_key = str(SellerSpriteTaskQueueStore().db_path.resolve())
     key = (loop_key, store_key)
     scheduler = _SCHEDULERS.get(key)
