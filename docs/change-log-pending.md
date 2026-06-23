@@ -1936,3 +1936,11 @@
 **影响范围**：影响 `competitor-lookup` 的本地参数校验和 payload 构造；无效竞品请求将立即报配置错误，不再继续拖成远端超时。
 **回滚方式**：回退 `opscli/seller_sprite/api/payloads.py`、`opscli/seller_sprite/api/scenarios.py`、相关 skill 文档、测试和本条变更记录。
 ---
+## 2026-06-22 seller_sprite - MCP 调用记录入 SQLite
+
+**变更原因**：卖家精灵 MCP 服务需要补齐调用审计，记录调用用户、模式、参数和结果摘要，便于排查异步队列任务与导出结果。
+**改动点**：`opscli/seller_sprite/services/task_queue_store.py` 在现有 `task_queue.sqlite3` 中新增 `seller_sprite_mcp_runs` 表、迁移补列逻辑和 MCP 记录读写方法；`opscli/mcp/tools/seller_sprite.py` 在 `seller_sprite_run` 中补邮箱读取、最终 `job_id` 规范化、入队前创建记录和入队异常失败回写；`opscli/seller_sprite/services/task_scheduler.py` 在任务执行链路中接入 `running/succeeded/failed` 审计状态同步，并隔离 MCP 探测/收尾异常避免拖垮普通任务；`tests/seller_sprite/test_task_queue_store.py`、`tests/mcp/test_seller_sprite_tools.py`、`tests/seller_sprite/test_task_scheduler.py` 新增对应 TDD 回归用例。
+**验证结果**：仓储层定向回归 `D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_queue_store.py -q` 通过（12 passed）；MCP 入口定向回归 `D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\mcp\test_seller_sprite_tools.py -v` 通过（14 passed）；调度器定向回归 `D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_scheduler.py -v` 通过（9 passed）；目标总回归 `D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_queue_store.py tests\mcp\test_seller_sprite_tools.py tests\seller_sprite\test_task_scheduler.py -q` 通过（35 passed）。
+**影响范围**：影响 `seller_sprite_run` 的 MCP 入队前后审计行为、卖家精灵单账号调度器的 MCP 状态同步，以及本地 `task_queue.sqlite3` 的表结构；`seller_sprite_start`、任务目录产物和非 MCP 卖家精灵执行入口保持不变。
+**回滚方式**：回退 `opscli/seller_sprite/services/task_queue_store.py`、`opscli/mcp/tools/seller_sprite.py`、`opscli/seller_sprite/services/task_scheduler.py` 及对应三组测试，并删除 `seller_sprite_mcp_runs` 表相关逻辑和本条变更记录。
+---
