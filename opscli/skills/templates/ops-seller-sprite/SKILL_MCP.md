@@ -11,6 +11,7 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 ## MCP 工具
 
 - `seller_sprite_scenarios`：查看支持的场景。
+- `seller_sprite_quota_status`：查看当前用户今日剩余额度。
 - `seller_sprite_run`：执行场景并创建导出任务。
 - `seller_sprite_job_status`：按 `job_id` 查看任务状态。
 - `seller_sprite_export`：读取导出文件路径、URL、文件名和 MIME 信息。
@@ -26,7 +27,8 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 7. 如果任务在当前轮次内完成，直接返回结果和导出文件；如果还在跑，明确告诉用户任务仍在进行，并保留 `job_id` 供后续续查。
 8. 用户后续只说 `继续`、`查结果`、`刚才那个好了没` 时，直接复用最近一次 SellerSprite `job_id`。
 9. 用户只需要文件链接时，调用 `seller_sprite_export`。
-10. MCP tools 不可用时，直接说明当前宿主没有可用的 SellerSprite MCP。
+10. 用户执行前如果想确认今天还能查几次，调用 `seller_sprite_quota_status`。
+11. MCP tools 不可用时，直接说明当前宿主没有可用的 SellerSprite MCP。
 
 ## 认证与运行时边界
 
@@ -53,6 +55,10 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
   - `data.export.url`
   - `data.export.path`
   - `data.export.format`
+- 若 `seller_sprite_run` 响应顶层存在 `quota`，在最终自然语言回复末尾补一句：
+  - `今日额度：已用 used / limit，剩余 remaining，重置时间 reset_at`
+- `seller_sprite_scenarios`、`seller_sprite_quota_status`、`seller_sprite_job_status`、`seller_sprite_export` 不消耗额度；只有 `seller_sprite_run` 消耗次数。
+- `job_status` 和 `export` 默认不重复提示额度，避免轮询阶段重复刷屏。
 - 不要在最终回复里打印完整工具参数、原始 JSON、内部路径或账号信息。
 - 若存在 `data.summary`，优先把它当成结果主文案，只补最少的任务信息。
 

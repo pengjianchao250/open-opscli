@@ -10,8 +10,12 @@
 
 from __future__ import annotations
 
+import inspect
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+
+from opscli.mcp.quota import get_quota_limiter
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
@@ -26,6 +30,20 @@ def _get_task_scheduler(*, jwt: str | None = None, session_id: str | None = None
     from opscli.seller_sprite.services import get_task_scheduler
 
     return get_task_scheduler(jwt=jwt, session_id=session_id)
+
+
+def _get_task_queue_store():
+    """返回卖家精灵任务队列仓储。"""
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    return SellerSpriteTaskQueueStore()
+
+
+def _get_current_mcp_user_email() -> str | None:
+    """读取当前 MCP 请求对应的用户邮箱。"""
+    from opscli.mcp.context import get_current_user_email
+
+    return get_current_user_email()
 
 
 def _build_request(
@@ -59,6 +77,31 @@ def _build_request(
         page_prepare=page_prepare,
         task_interval_seconds=task_interval_seconds,
         cooldown_seconds=cooldown_seconds,
+    )
+
+
+def _build_mcp_job_id(request, site: str, period: str) -> str:
+    """为 MCP 入口生成最终 job_id。"""
+    from opscli.seller_sprite.services.api_manager import _build_job_id
+
+    return _build_job_id(request, site, period)
+
+
+def _prepare_request_for_enqueue(request):
+    """在 MCP 入口层完成 site、period 和 job_id 规范化。"""
+    from opscli.seller_sprite.config import load_settings
+
+    settings = load_settings()
+    normalized_site = (request.site or settings.default_site).upper()
+    normalized_period = request.period or settings.default_period
+    normalized_job_id = request.job_id or _build_mcp_job_id(
+        request, normalized_site, normalized_period
+    )
+    return replace(
+        request,
+        site=normalized_site,
+        period=normalized_period,
+        job_id=normalized_job_id,
     )
 
 
@@ -113,6 +156,25 @@ async def seller_sprite_scenarios() -> dict:
         return _err(exc, tool="MCP → seller_sprite_scenarios()")
 
 
+async def seller_sprite_quota_status() -> dict:
+    """读取当前 MCP 用户的卖家精灵每日额度快照。"""
+    user_email = _get_current_mcp_user_email()
+    if not user_email:
+        return _err(
+            ValueError("当前 MCP 用户邮箱缺失，无法读取卖家精灵额度"),
+            tool="MCP → seller_sprite_quota_status()",
+        )
+
+    try:
+        identity = f"email:{user_email.strip().lower()}"
+        snapshot = get_quota_limiter().quota_snapshot("seller_sprite_run", identity)
+        if inspect.isawaitable(snapshot):
+            snapshot = await snapshot
+        return _ok(snapshot)
+    except Exception as exc:
+        return _err(exc, tool="MCP → seller_sprite_quota_status()")
+
+
 async def seller_sprite_run(
     scenario: str,
     params: dict[str, Any] | str | None = None,
@@ -150,8 +212,28 @@ async def seller_sprite_run(
             },
         )
 
+    user_email = _get_current_mcp_user_email()
+    if not user_email:
+        return _err(
+            ValueError("当前 MCP 用户邮箱缺失，无法创建卖家精灵调用记录"),
+            tool="MCP → seller_sprite_run(...)",
+            call_params={
+                "scenario": scenario,
+                "site": site,
+                "period": period,
+                "page_size": page_size,
+                "export_format": export_format,
+                "page_prepare": page_prepare,
+                "task_interval_seconds": task_interval_seconds,
+                "cooldown_seconds": cooldown_seconds,
+                "job_id": job_id,
+            },
+        )
+
+    created_job_id: str | None = None
+    mcp_run_created = False
     try:
-        request = _build_request(
+        raw_request = _build_request(
             scenario=scenario,
             params=params,
             site=site,
@@ -164,9 +246,24 @@ async def seller_sprite_run(
             output_dir=output_dir,
             job_id=job_id,
         )
+        request = _prepare_request_for_enqueue(raw_request)
+        created_job_id = str(request.job_id)
+        store = _get_task_queue_store()
         scheduler = _get_task_scheduler(jwt=jw, session_id=sid)
+
+        # 入队前先落一条 MCP 调用记录，确保调度失败时也能追踪。
+        store.create_mcp_run(request, user_email)
+        mcp_run_created = True
         return _ok(await scheduler.enqueue(request))
     except Exception as exc:
+        if mcp_run_created and created_job_id:
+            try:
+                from opscli.seller_sprite.services.task_status import error_to_dict
+
+                _get_task_queue_store().finish_mcp_run_failed(created_job_id, error_to_dict(exc))
+            except Exception:
+                # 入口层保留原始入队异常，避免记录补偿失败覆盖主错误。
+                pass
         return _err(
             exc,
             tool="MCP → seller_sprite_run(...)",
@@ -271,6 +368,7 @@ async def seller_sprite_export(job_id: str) -> dict:
 _ALL_TOOLS = [
     seller_sprite_spec_must_read,
     seller_sprite_scenarios,
+    seller_sprite_quota_status,
     seller_sprite_run,
     seller_sprite_job_status,
     seller_sprite_export,

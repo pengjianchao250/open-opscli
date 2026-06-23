@@ -222,6 +222,38 @@ def test_sqlite_quota_store_applies_bonus_daily_limit(tmp_path):
     assert daily_row == ("user@example.com", 8, 8)
 
 
+def test_sqlite_quota_store_snapshot_reads_current_usage_without_consuming(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    policy = QuotaPolicy(tool_name="seller_sprite_run", service="seller_sprite", daily_limit=5)
+    store = SQLiteQuotaStore(db_path)
+
+    allowed, _ = _run(store.reserve(policy, "email:user@example.com"))
+    snapshot = _run(store.snapshot(policy, "email:user@example.com"))
+
+    assert allowed is True
+    assert snapshot["limit"] == 5
+    assert snapshot["used"] == 1
+    assert snapshot["remaining"] == 4
+
+    allowed_again, second_snapshot = _run(store.reserve(policy, "email:user@example.com"))
+
+    assert allowed_again is True
+    assert second_snapshot["used"] == 2
+
+
+def test_sqlite_quota_store_snapshot_applies_bonus_daily_limit(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    policy = QuotaPolicy(tool_name="seller_sprite_run", service="seller_sprite", daily_limit=5)
+    store = SQLiteQuotaStore(db_path)
+
+    _run(store.upsert_bonus_daily_limit("seller_sprite", "User@example.com", 3))
+    snapshot = _run(store.snapshot(policy, "email:user@example.com"))
+
+    assert snapshot["limit"] == 8
+    assert snapshot["used"] == 0
+    assert snapshot["remaining"] == 8
+
+
 def test_sqlite_quota_store_migrates_existing_table_to_identity_key(tmp_path):
     db_path = tmp_path / "quota.sqlite3"
     policy = QuotaPolicy(tool_name="seller_sprite_run", service="seller_sprite", daily_limit=5)

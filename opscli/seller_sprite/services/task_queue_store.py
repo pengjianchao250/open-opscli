@@ -13,6 +13,7 @@ from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
 
 
 DEFAULT_QUEUE_DB_PATH = Path(CONFIG_DIR) / "seller_sprite" / "task_queue.sqlite3"
+DEFAULT_MCP_RUN_MODE = "browser-route"
 
 
 class SellerSpriteTaskQueueStore:
@@ -196,6 +197,129 @@ class SellerSpriteTaskQueueStore:
             "jwt": row["jwt"],
         }
 
+    def create_mcp_run(
+        self,
+        request: SellerSpriteScenarioRequest,
+        user_email: str,
+    ) -> dict[str, Any]:
+        """创建一条 MCP 调用记录并返回初始状态。"""
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO seller_sprite_mcp_runs (
+                    job_id, user_email, scenario, mode, params_json,
+                    result_state, result_row_count, result_export_format,
+                    result_export_filename, result_export_job_id, error_json,
+                    created_at, started_at, finished_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'queued', 0, NULL, NULL, NULL, NULL, ?, NULL, NULL, ?)
+                """,
+                (
+                    request.job_id,
+                    user_email,
+                    request.scenario,
+                    DEFAULT_MCP_RUN_MODE,
+                    json.dumps(request.params, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+        return self.get_mcp_run(str(request.job_id))
+
+    def get_mcp_run(self, job_id: str) -> dict[str, Any]:
+        """读取 MCP 调用记录。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT job_id, user_email, scenario, mode, params_json,
+                       result_state, result_row_count, result_export_format,
+                       result_export_filename, result_export_job_id, error_json,
+                       created_at, started_at, finished_at, updated_at
+                FROM seller_sprite_mcp_runs
+                WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"MCP 调用记录不存在：{job_id}")
+        return self._row_to_mcp_run(row)
+
+    def mark_mcp_run_running(self, job_id: str) -> None:
+        """将 MCP 调用记录标记为运行中。"""
+        now = _now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE seller_sprite_mcp_runs
+                SET result_state = 'running',
+                    started_at = ?,
+                    updated_at = ?
+                WHERE job_id = ?
+                """,
+                (now, now, job_id),
+            )
+        if int(cursor.rowcount or 0) != 1:
+            raise ValueError(f"MCP 调用记录不存在：{job_id}")
+
+    def finish_mcp_run_success(
+        self,
+        job_id: str,
+        row_count: int,
+        export_payload: dict[str, Any],
+    ) -> None:
+        """将 MCP 调用记录标记为成功完成。"""
+        now = _now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE seller_sprite_mcp_runs
+                SET result_state = 'succeeded',
+                    result_row_count = ?,
+                    result_export_format = ?,
+                    result_export_filename = ?,
+                    result_export_job_id = ?,
+                    error_json = NULL,
+                    finished_at = ?,
+                    updated_at = ?
+                WHERE job_id = ?
+                """,
+                (
+                    row_count,
+                    export_payload.get("format"),
+                    export_payload.get("filename"),
+                    job_id,
+                    now,
+                    now,
+                    job_id,
+                ),
+            )
+        if int(cursor.rowcount or 0) != 1:
+            raise ValueError(f"MCP 调用记录不存在：{job_id}")
+
+    def finish_mcp_run_failed(self, job_id: str, error_payload: dict[str, Any]) -> None:
+        """将 MCP 调用记录标记为失败。"""
+        now = _now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE seller_sprite_mcp_runs
+                SET result_state = 'failed',
+                    error_json = ?,
+                    finished_at = ?,
+                    updated_at = ?
+                WHERE job_id = ?
+                """,
+                (
+                    json.dumps(error_payload, ensure_ascii=False),
+                    now,
+                    now,
+                    job_id,
+                ),
+            )
+        if int(cursor.rowcount or 0) != 1:
+            raise ValueError(f"MCP 调用记录不存在：{job_id}")
+
     def _ensure_schema(self) -> None:
         """初始化 SQLite 表结构。"""
         with self._connect() as conn:
@@ -227,6 +351,48 @@ class SellerSpriteTaskQueueStore:
                 conn.execute("ALTER TABLE seller_sprite_task_queue ADD COLUMN session_id TEXT NULL")
             if "jwt" not in columns:
                 conn.execute("ALTER TABLE seller_sprite_task_queue ADD COLUMN jwt TEXT NULL")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS seller_sprite_mcp_runs (
+                    job_id TEXT NOT NULL PRIMARY KEY,
+                    user_email TEXT NOT NULL,
+                    scenario TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    params_json TEXT NOT NULL,
+                    result_state TEXT NOT NULL,
+                    result_row_count INTEGER NOT NULL DEFAULT 0,
+                    result_export_format TEXT NULL,
+                    result_export_filename TEXT NULL,
+                    result_export_job_id TEXT NULL,
+                    error_json TEXT NULL,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT NULL,
+                    finished_at TEXT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            mcp_columns = {row[1] for row in conn.execute("PRAGMA table_info(seller_sprite_mcp_runs)")}
+            if "result_row_count" not in mcp_columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_mcp_runs ADD COLUMN result_row_count INTEGER NOT NULL DEFAULT 0"
+                )
+            if "result_export_format" not in mcp_columns:
+                conn.execute("ALTER TABLE seller_sprite_mcp_runs ADD COLUMN result_export_format TEXT NULL")
+            if "result_export_filename" not in mcp_columns:
+                conn.execute("ALTER TABLE seller_sprite_mcp_runs ADD COLUMN result_export_filename TEXT NULL")
+            if "result_export_job_id" not in mcp_columns:
+                conn.execute("ALTER TABLE seller_sprite_mcp_runs ADD COLUMN result_export_job_id TEXT NULL")
+            if "error_json" not in mcp_columns:
+                conn.execute("ALTER TABLE seller_sprite_mcp_runs ADD COLUMN error_json TEXT NULL")
+            if "started_at" not in mcp_columns:
+                conn.execute("ALTER TABLE seller_sprite_mcp_runs ADD COLUMN started_at TEXT NULL")
+            if "finished_at" not in mcp_columns:
+                conn.execute("ALTER TABLE seller_sprite_mcp_runs ADD COLUMN finished_at TEXT NULL")
+            if "updated_at" not in mcp_columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_mcp_runs ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''"
+                )
 
     def _connect(self) -> sqlite3.Connection:
         """创建 SQLite 连接。"""
@@ -285,6 +451,26 @@ class SellerSpriteTaskQueueStore:
                 (row["queue_scope"], task_id),
             ).fetchone()
         return int(count_row["cnt"] or 0)
+
+    def _row_to_mcp_run(self, row: sqlite3.Row) -> dict[str, Any]:
+        """将 MCP 运行记录转换为外部可读结构。"""
+        return {
+            "job_id": str(row["job_id"]),
+            "user_email": str(row["user_email"]),
+            "scenario": str(row["scenario"]),
+            "mode": row["mode"],
+            "params_json": json.loads(str(row["params_json"])),
+            "result_state": str(row["result_state"]),
+            "result_row_count": int(row["result_row_count"] or 0),
+            "result_export_format": row["result_export_format"],
+            "result_export_filename": row["result_export_filename"],
+            "result_export_job_id": row["result_export_job_id"],
+            "error_json": json.loads(str(row["error_json"])) if row["error_json"] else None,
+            "created_at": row["created_at"],
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+            "updated_at": row["updated_at"],
+        }
 
 
 def _stage_for_status(status: str) -> str:

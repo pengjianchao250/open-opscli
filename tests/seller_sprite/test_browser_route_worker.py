@@ -231,6 +231,7 @@ def test_load_settings_reads_patchright_browser_runtime(monkeypatch):
 def test_browser_runtime_defaults_to_patchright():
     assert DEFAULT_BROWSER_RUNTIME == "patchright"
     assert SellerSpriteSettings().browser_runtime == "patchright"
+    assert SellerSpriteSettings().browser_cooldown_seconds == 10.0
 
 
 def test_load_async_playwright_uses_patchright_runtime(monkeypatch):
@@ -315,8 +316,59 @@ def test_failure_cooldown_skips_session_config_and_unknown_errors(monkeypatch):
     assert worker_module._failure_cooldown_seconds(
         SellerSpriteApiError("expired", api_code="ERR_GLOBAL_SESSION_EXPIRED")
     ) == 0.0
+    assert worker_module._failure_cooldown_seconds(
+        SellerSpriteApiError("参数不对", status_code=400, api_message="参数错误")
+    ) == 0.0
     assert worker_module._failure_cooldown_seconds(SellerSpriteConfigError("bad account")) == 0.0
     assert worker_module._failure_cooldown_seconds(RuntimeError("code bug")) == 0.0
+
+
+def test_login_waits_at_most_five_seconds_for_password_input(monkeypatch, tmp_path):
+    events = []
+
+    class FakeInput:
+        def __init__(self, name):
+            self.name = name
+            self.first = self
+
+        async def wait_for(self, **kwargs):
+            events.append((self.name, "wait_for", kwargs))
+
+        async def fill(self, value):
+            events.append((self.name, "fill", value))
+
+    class FakeLoginPage(FakePage):
+        def __init__(self):
+            super().__init__(url="")
+            self.password_input = FakeInput("password")
+            self.username_input = FakeInput("username")
+
+        def locator(self, selector):
+            if selector == "input[type='password']:visible":
+                return self.password_input
+            return self.username_input
+
+    async def fake_detect_logged_in(current_page):
+        return False
+
+    async def fake_click_account_login_tab(current_page):
+        events.append(("page", "click_account_login_tab", None))
+
+    async def fake_click_login_submit(current_page):
+        events.append(("page", "click_login_submit", None))
+
+    monkeypatch.setattr(worker_module, "_detect_logged_in", fake_detect_logged_in)
+    monkeypatch.setattr(worker_module, "_click_account_login_tab", fake_click_account_login_tab)
+    monkeypatch.setattr(worker_module, "_click_login_submit", fake_click_login_submit)
+
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    settings = SellerSpriteSettings(output_dir=tmp_path, browser_profile_dir=tmp_path / "profiles")
+    worker = SellerSpriteBrowserRouteWorker(settings=settings, account=account)
+    page = FakeLoginPage()
+
+    _run(worker._login_with_account(page, account, callback=worker_module.DEFAULT_PAGE_URL))
+
+    assert ("password", "wait_for", {"state": "visible", "timeout": 5000}) in events
 
 
 def test_run_one_relogs_and_retries_main_request_once(monkeypatch, tmp_path):

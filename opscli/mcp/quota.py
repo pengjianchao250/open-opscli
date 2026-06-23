@@ -100,6 +100,9 @@ class QuotaStore(Protocol):
     async def refund_failure(self, policy: QuotaPolicy, identity: str) -> dict[str, Any]:
         """业务失败后退回调用次数并增加失败次数。"""
 
+    async def snapshot(self, policy: QuotaPolicy, identity: str) -> dict[str, Any]:
+        """读取当前身份的额度快照，不占用次数。"""
+
 
 class QuotaIdentityResolver:
     """解析当前 MCP 请求的限额身份。"""
@@ -198,6 +201,29 @@ class SQLiteQuotaStore:
                     calls,
                     failures,
                     effective_limit,
+                    now,
+                )
+                conn.commit()
+                return _snapshot(policy.service, effective_limit, calls, failures, now)
+        except QuotaUnavailableError:
+            raise
+        except Exception as exc:
+            raise QuotaUnavailableError(str(exc)) from exc
+
+    async def snapshot(self, policy: QuotaPolicy, identity: str) -> dict[str, Any]:
+        """读取当前身份的额度快照，不占用次数。"""
+        now = datetime.now(UTC)
+        identity_type, identity_key, identity_hash = _identity_public_parts(identity)
+        try:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                effective_limit = self._effective_daily_limit(conn, policy, identity_type, identity_key)
+                calls, failures = self._read_or_create_record(
+                    conn,
+                    policy,
+                    identity_type,
+                    identity_key,
+                    identity_hash,
                     now,
                 )
                 conn.commit()
@@ -467,6 +493,18 @@ class QuotaLimiter:
             await self.store.refund_failure(ticket.policy, ticket.identity)
         except QuotaUnavailableError:
             pass
+
+    async def quota_snapshot(self, tool_name: str, identity: str | None = None) -> dict[str, Any]:
+        """读取某个受限工具当前身份的额度快照。"""
+        policy = self.policies.get(tool_name)
+        if not policy:
+            raise ValueError(f"未配置限额策略：{tool_name}")
+
+        resolved_identity = identity or self._resolve_identity()
+        if not resolved_identity:
+            raise ValueError("无法识别当前 MCP 调用用户，无法读取额度")
+
+        return await self.store.snapshot(policy, resolved_identity)
 
     def _resolve_identity(self) -> str | None:
         """兼容对象解析器和函数解析器两种 DI 形式。"""
