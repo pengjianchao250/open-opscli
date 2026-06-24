@@ -18,20 +18,23 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 
 ## 执行规则
 
-1. 拿不准场景或必填参数时，先调 `seller_sprite_scenarios` 或先回看参数手册。
-2. 真正执行只用 `seller_sprite_run`；不要调用内部 start helper。
-3. 不要传 `mode`、`browser-route`、`api-direct`、`async_mode` 这类控制参数；同步/异步与采集模式由后端决定。
-4. `competitor-lookup` 如果只有单个 ASIN，也要先按 `asins` 传；缺少 `keyword`、`brand`、`sellerName`、`asin/asins` 这类主筛选条件时，直接报错或澄清，不要把无效请求拖成 30 秒超时。
-5. `seller_sprite_run` 会在公开入口内持续等待：`queued` 阶段继续等，进入 `running` 后最多再等 8 分钟。
-6. 如果任务在上述等待窗口内完成，直接返回结果和导出文件；如果 `running` 超过 8 分钟仍未完成，才返回 `job_id` 供后续续查。
-7. 只有当 `seller_sprite_run` 已经返回 `job_id` 但结果未完成时，才继续调用 `seller_sprite_job_status(job_id)`。
-8. 用户后续只说 `继续`、`查结果`、`刚才那个好了没` 时，直接复用最近一次 SellerSprite `job_id`。
-9. 用户只需要文件链接时，调用 `seller_sprite_export`。
-10. 用户执行前如果想确认今天还能查几次，调用 `seller_sprite_quota_status`。
-11. MCP tools 不可用时，直接说明当前宿主没有可用的 SellerSprite MCP。
+1. 如果当前宿主是通过远端 MCP `api_key` 直接连接 `seller_sprite_*` tools，首次执行前必须先完成 `auth_mcp_login`；不要在仅拿到 `api_key` 后直接调用 `seller_sprite_run`。
+2. 拿不准场景或必填参数时，先调 `seller_sprite_scenarios` 或先回看参数手册。
+3. 真正执行只用 `seller_sprite_run`；不要调用内部 start helper。
+4. 不要传 `mode`、`browser-route`、`api-direct`、`async_mode` 这类控制参数；同步/异步与采集模式由后端决定。
+5. `competitor-lookup` 如果只有单个 ASIN，也要先按 `asins` 传；缺少 `keyword`、`brand`、`sellerName`、`asin/asins` 这类主筛选条件时，直接报错或澄清，不要把无效请求拖成 30 秒超时。
+6. `seller_sprite_run` 会在公开入口内持续等待：`queued` 阶段继续等，进入 `running` 后最多再等 8 分钟。
+7. 如果任务在上述等待窗口内完成，直接返回结果和导出文件；如果 `running` 超过 8 分钟仍未完成，才返回 `job_id` 供后续续查。
+8. 只有当 `seller_sprite_run` 已经返回 `job_id` 但结果未完成时，才继续调用 `seller_sprite_job_status(job_id)`。
+9. 用户后续只说 `继续`、`查结果`、`刚才那个好了没` 时，直接复用最近一次 SellerSprite `job_id`。
+10. 用户只需要文件链接时，调用 `seller_sprite_export`。
+11. 用户执行前如果想确认今天还能查几次，调用 `seller_sprite_quota_status`。
+12. MCP tools 不可用时，直接说明当前宿主没有可用的 SellerSprite MCP。
 
 ## 认证与运行时边界
 
+- 远端 MCP 直连场景下，OPS `session_id` 由 `auth_mcp_login` 建立并保存在当前 MCP 用户的隔离凭证里；不要把“已拿到 MCP `api_key`”误当成“已经具备 `seller_sprite_run` 所需的 OPS 登录态”。
+- 正式 `opscli seller-sprite ...` CLI 代理链路不属于本文件的默认语境；如果宿主走的是 CLI 代理链路，可由 CLI 显式透传本机 `session_id`，因此不要求先单独执行 `auth_mcp_login`。
 - SellerSprite 登录态由后端缓存；不要手动重复登录。
 - 集成账号也由后端缓存；只有 SellerSprite 登录本身失败时，才需要后端刷新账号或登录态。
 - 浏览器运行时由部署侧决定；Agent 不负责切换 Patchright / Playwright / Chrome。

@@ -29,6 +29,11 @@ description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自
 9. 面向 CLI 说明时，默认引用 `opscli seller-sprite ...` 这条正式命令路径；不要向用户展开底层远端 URL、`api_key` 或内部调试入口。
 10. 若返回授权类错误或提示先完成 OPS 授权，优先检查本机 CLI 登录态；不要先把问题归因为卖家精灵账号、场景参数或采集模式。
 
+## 链路区分
+
+- 正式 CLI 代理链路：默认指 `opscli seller-sprite ...`。这条链路依赖本机 `opscli auth login` 已完成，必要时由 CLI 显式透传本机 OPS `session_id`。
+- 远端 MCP 直连链路：指宿主拿远端 MCP `api_key` 直接连接 `seller_sprite_*` tools。该链路下不要在仅拿到 `api_key` 后立刻执行 `seller_sprite_run`；应先完成 `auth_mcp_login`，让当前 MCP 用户的远端凭证中存在可复用的 OPS `session_id`。
+
 ## 最小工作流
 
 1. 先按用户意图映射场景；拿不准时再读取参数手册确认。
