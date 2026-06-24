@@ -72,7 +72,7 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 
 结果：
 - `job_id`: xxx
-- `row_count`: 20
+- 返回行数: 20
 - 导出文件: [filename](url-or-path)
 ```
 
