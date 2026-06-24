@@ -1994,3 +1994,21 @@
 **影响范围**：卖家精灵 MCP、正式 CLI、Skill 文档、MCP 限额快照读取逻辑。
 **回滚方式**：回退 `opscli/mcp/quota.py`、`opscli/mcp/tools/seller_sprite.py`、`opscli/seller_sprite/remote_adapter.py`、`opscli/seller_sprite/cli.py`、对应测试和文档改动。
 ---
+
+## 2026-06-24 CI/build-and-publish - 弃用 win32 并跳过 macOS x86_64 跨架构测试
+
+**变更原因**：v0.0.98 发版 CI 在 cibuildwheel 测试阶段失败。根因是测试时 pip 安装 wheel 会拉取 cryptography，但 (1) Windows win32 没有 32 位 cryptography 预编译 wheel；(2) macos-latest 已是 arm64，cibuildwheel 用 `arch -x86_64` 跨架构测试 x86_64 wheel 时匹配不到 x86_64 预编译包，两者均退化为源码编译（需 Rust+OpenSSL）从而报错 `Failed building wheel for cryptography` / `openssl-sys`。
+**改动点**：`.github/workflows/build-and-publish.yml` 新增 `CIBW_ARCHS_WINDOWS: "AMD64"`（不再构建 win32）与 `CIBW_TEST_SKIP: "*-macosx_x86_64"`（仅跳过 x86_64 macOS 的冒烟测试，仍正常构建该 wheel）。
+**验证结果**：`python3 -c "import yaml; yaml.safe_load(...)"` 校验 YAML 语法通过；待重新触发 tag 构建确认 CI 绿。
+**影响范围**：不再产出 32 位 Windows wheel（该 wheel 本就无法安装 cryptography，用户无损失）；macOS x86_64 wheel 仍正常构建发布，仅 CI 不再跨架构冒烟测试它，真实 Intel Mac 安装不受影响。
+**回滚方式**：删除这两行 env 配置即可恢复原状。
+---
+
+## 2026-06-24 pyproject + CI - 【修正】锁 cryptography<49 修复 Intel Mac/win32 安装失败（取代上一条方案B）
+
+**变更原因**：进一步核实 PyPI 后发现，v0.0.98 CI 失败的真正根因是 cryptography 在 49.0.0（2026-06 新发布）中**移除了 macOS x86_64/universal2 与 Windows win32 的预编译 wheel**（48.0.1 仍带这两类 wheel）。`cryptography>=38` 无上限 → CI 与真实用户都会拿到 49.0.0 → Intel Mac / 32 位 Windows 上无匹配 wheel → 退化为源码编译（需 Rust+OpenSSL）失败。v0.0.97（cryptography 48.0.1）能过即此证。**仅跳过 CI 测试（方案B）会让 CI 假绿，但有 Intel Mac 用户仍无法安装，故改为锁版本。**
+**改动点**：(1) `pyproject.toml` 核心依赖 `cryptography>=38` → `cryptography>=38,<49`（带中文注释说明 breaking change）；(2) `.github/workflows/build-and-publish.yml` 撤掉前一条加的 `CIBW_TEST_SKIP: "*-macosx_x86_64"`（锁版本后 48.0.1 universal2 可在 Rosetta 下正常安装，无需跳过测试）；保留 `CIBW_ARCHS_WINDOWS: "AMD64"`（团队无 32 位 Windows 用户，产品选择弃用 win32，注释已据实修正）。
+**验证结果**：`tomllib`/`yaml` 语法校验通过；`<49` 经 PyPI 解析到 48.0.1（确认含 universal2 + win32 wheel）。最终验证待发新 tag 触发 CI 全绿。
+**影响范围**：Intel Mac 与（若构建）32 位 Windows 用户恢复可安装；arm64 mac / win_amd64 / Linux 不受影响。代价：用户停留在 cryptography 48.0.1，暂不获取 49.x 安全更新；上游 macOS 正转向仅 arm64，Intel Mac 支持长期需另行规划。
+**回滚方式**：`pyproject.toml` 改回 `cryptography>=38`，workflow 改动用 git 还原即可。
+---

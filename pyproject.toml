@@ -7,7 +7,10 @@ requires-python = ">=3.10"
 dependencies = [
     "typer>=0.12",
     "httpx>=0.27",
-    "cryptography>=38",
+    # cryptography 49.0.0 移除了 macOS x86_64/universal2 与 Windows win32 预编译 wheel,
+    # Intel Mac 与 32 位 Windows 用户安装时会退化为源码编译(需 Rust+OpenSSL)从而失败;
+    # 锁 <49 让其停留在仍带 Intel/win32 wheel 的 48.0.1。属于【铁律15】明确 breaking change 例外。
+    "cryptography>=38,<49",
     "rich>=13",
     "keyring>=25",
     "fastmcp>=2.0",
