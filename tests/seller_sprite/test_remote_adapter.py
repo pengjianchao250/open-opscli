@@ -2,10 +2,17 @@ from opscli.mcp_client.config_client import RemoteMcpServerConfig
 from opscli.seller_sprite.remote_adapter import SellerSpriteRemoteAdapter
 
 
+class FakeAuthClient:
+    def get_session(self, alias: str | None = None) -> str:
+        assert alias == "ops"
+        return "sid-cli-123"
+
+
 class FakeConfigClient:
     def __init__(self) -> None:
         self.payload = {"data": {}}
         self.calls = []
+        self.auth_client = FakeAuthClient()
 
     def fetch_remote_config(self):
         self.calls.append(("fetch_remote_config",))
@@ -73,6 +80,7 @@ def test_remote_adapter_maps_run_to_seller_sprite_run():
     assert result["data"]["arguments"]["export_format"] == "json"
     assert result["data"]["arguments"]["output_dir"] is None
     assert result["data"]["arguments"]["job_id"] is None
+    assert result["data"]["arguments"]["session_id"] == "sid-cli-123"
     assert created_clients[0].calls == [
         (
             "seller_sprite_run",
@@ -85,6 +93,7 @@ def test_remote_adapter_maps_run_to_seller_sprite_run():
                 "export_format": "json",
                 "output_dir": None,
                 "job_id": None,
+                "session_id": "sid-cli-123",
             },
         )
     ]

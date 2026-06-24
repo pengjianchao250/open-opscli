@@ -10,6 +10,16 @@
 
 ---
 
+## 2026-06-24 seller_sprite - 正式 CLI 远端调用显式透传 session_id
+
+**变更原因**：`opscli seller-sprite` 正式 CLI 已能用本机 `opscli auth login` 拉取远端 MCP 配置，但调用远端 `seller_sprite_run` 时未显式带上本机 `session_id`，导致“本机 CLI 已登录、远端卖家精灵 MCP 仍报无 session_id”的断层。
+**改动点**：`opscli/seller_sprite/remote_adapter.py` 新增 `AuthClient` 依赖注入，默认复用 `config_client.auth_client`；`run()` 调远端 `seller_sprite_run` 前显式读取本机 `AuthClient.get_session("ops")`，并将 `session_id` 一并透传给远端工具。`tests/seller_sprite/test_remote_adapter.py` 新增回归断言，要求正式 CLI 远端调用参数包含 `session_id`。
+**验证结果**：RED：`.\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_remote_adapter.py -q` 初始失败，`KeyError: 'session_id'`。GREEN：同命令复跑通过，`3 passed in 0.46s`；回归 `.\.venv\Scripts\python.exe -m pytest tests/seller_sprite -q` 通过，`82 passed in 9.33s`。
+**影响范围**：仅影响正式 `opscli seller-sprite` 远端调用参数；`seller-sprite-debug`、远端 MCP 凭证隔离模型、卖家精灵任务调度和导出逻辑不变。
+**回滚方式**：回退 `opscli/seller_sprite/remote_adapter.py`、`tests/seller_sprite/test_remote_adapter.py` 和本条变更记录。
+
+---
+
 ## 2026-06-23 seller_sprite - 收紧登录等待与失败冷却上限
 
 **变更原因**：卖家精灵 browser-route 默认失败冷却上限仍为 20 秒，登录页密码框等待上限为 15 秒，体感偏慢；同时需要锁定“参数错误不冷却”的回归行为。

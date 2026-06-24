@@ -5,15 +5,22 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from opscli.auth import AuthClient
 from opscli.mcp_client import McpConfigClient, RemoteMcpClient
 
 
 class SellerSpriteRemoteAdapter:
     """将正式 CLI 动作映射到远端卖家精灵 MCP 工具。"""
 
-    def __init__(self, config_client=None, remote_client_factory=None) -> None:
+    def __init__(
+        self,
+        config_client=None,
+        remote_client_factory=None,
+        auth_client: AuthClient | None = None,
+    ) -> None:
         self.config_client = config_client or McpConfigClient()
         self.remote_client_factory = remote_client_factory or RemoteMcpClient
+        self.auth_client = auth_client or getattr(self.config_client, "auth_client", None) or AuthClient()
 
     def scenarios(self) -> dict[str, Any]:
         return self._call_tool("seller_sprite_scenarios", {})
@@ -30,6 +37,7 @@ class SellerSpriteRemoteAdapter:
         output_dir: str | None,
         job_id: str | None,
     ) -> dict[str, Any]:
+        session_id = self.auth_client.get_session("ops")
         return self._call_tool(
             "seller_sprite_run",
             {
@@ -41,6 +49,7 @@ class SellerSpriteRemoteAdapter:
                 "export_format": export_format,
                 "output_dir": output_dir,
                 "job_id": job_id,
+                "session_id": session_id,
             },
         )
 

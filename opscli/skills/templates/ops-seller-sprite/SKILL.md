@@ -10,6 +10,7 @@ description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自
 
 当前对用户公开的正式 CLI 入口是 `opscli seller-sprite ...`。
 该入口默认通过 CLI auth 获取远端 MCP 配置，再调用远端 `seller_sprite_*` tool 完成查询；本 Skill 也以这条正式链路作为默认执行口径。
+正式 CLI 依赖本机已完成 OPS 授权；若本机未登录或登录态过期，先完成 `opscli auth login` 再继续。
 
 ## 快速规则
 
@@ -26,6 +27,7 @@ description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自
 7. 不向用户暴露账号、Cookie、内部运行参数、长本地路径或调试文件。
 8. 当前 Skill 的参数词典、场景映射、别名、默认值统一以 [SCENARIO_PARAMS_ZH.md](SCENARIO_PARAMS_ZH.md) 为准。
 9. 面向 CLI 说明时，默认引用 `opscli seller-sprite ...` 这条正式命令路径；不要向用户展开底层远端 URL、`api_key` 或内部调试入口。
+10. 若返回授权类错误或提示先完成 OPS 授权，优先检查本机 CLI 登录态；不要先把问题归因为卖家精灵账号、场景参数或采集模式。
 
 ## 最小工作流
 
