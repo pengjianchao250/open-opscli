@@ -12,7 +12,7 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 
 - `seller_sprite_scenarios`：查看支持的场景。
 - `seller_sprite_quota_status`：查看当前用户今日剩余额度。
-- `seller_sprite_run`：执行场景并创建导出任务。
+- `seller_sprite_run`：执行场景，并在公开入口内先等待任务完成。
 - `seller_sprite_job_status`：按 `job_id` 查看任务状态。
 - `seller_sprite_export`：读取导出文件路径、URL、文件名和 MIME 信息。
 
@@ -22,9 +22,9 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 2. 真正执行只用 `seller_sprite_run`；不要调用内部 start helper。
 3. 不要传 `mode`、`browser-route`、`api-direct`、`async_mode` 这类控制参数；同步/异步与采集模式由后端决定。
 4. `competitor-lookup` 如果只有单个 ASIN，也要先按 `asins` 传；缺少 `keyword`、`brand`、`sellerName`、`asin/asins` 这类主筛选条件时，直接报错或澄清，不要把无效请求拖成 30 秒超时。
-5. 每次成功执行后都记录 `data.job_id`；状态查询和导出都复用这个 `job_id`。
-6. 如果返回 `data.state=queued` 或 `running`，在当前回复轮次内每 5-10 秒调用一次 `seller_sprite_job_status(job_id)`，总等待 60-90 秒。
-7. 如果任务在当前轮次内完成，直接返回结果和导出文件；如果还在跑，明确告诉用户任务仍在进行，并保留 `job_id` 供后续续查。
+5. `seller_sprite_run` 会在公开入口内持续等待：`queued` 阶段继续等，进入 `running` 后最多再等 8 分钟。
+6. 如果任务在上述等待窗口内完成，直接返回结果和导出文件；如果 `running` 超过 8 分钟仍未完成，才返回 `job_id` 供后续续查。
+7. 只有当 `seller_sprite_run` 已经返回 `job_id` 但结果未完成时，才继续调用 `seller_sprite_job_status(job_id)`。
 8. 用户后续只说 `继续`、`查结果`、`刚才那个好了没` 时，直接复用最近一次 SellerSprite `job_id`。
 9. 用户只需要文件链接时，调用 `seller_sprite_export`。
 10. 用户执行前如果想确认今天还能查几次，调用 `seller_sprite_quota_status`。
@@ -40,8 +40,8 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 
 | `state` | 含义 | Agent 动作 |
 | --- | --- | --- |
-| `queued` | 任务已创建，等待后台 worker | 继续轮询，或告知用户稍后续查 |
-| `running` | 后台正在执行 | 继续轮询，或告知用户稍后续查 |
+| `queued` | 任务已创建，等待后台 worker | `seller_sprite_run` 内部继续等待 |
+| `running` | 后台正在执行 | `seller_sprite_run` 内部继续等待；超过 8 分钟仍未完成时返回 `job_id` |
 | `succeeded` | 已完成，结果和导出可读 | 返回 `summary`、`job_id`、`row_count`、导出文件 |
 | `failed` | 后台执行失败 | 报告 `error.message`，不要复用旧导出文件 |
 
@@ -51,6 +51,8 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
   - `data.summary`
   - `data.job_id`
   - `data.row_count`
+  - `data.queue_duration`
+  - `data.running_duration`
   - `data.export.filename`
   - `data.export.url`
   - `data.export.path`
@@ -61,6 +63,7 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 - `job_status` 和 `export` 默认不重复提示额度，避免轮询阶段重复刷屏。
 - 不要在最终回复里打印完整工具参数、原始 JSON、内部路径或账号信息。
 - 若存在 `data.summary`，优先把它当成结果主文案，只补最少的任务信息。
+- 若 `seller_sprite_run` 因运行超时才返回 `job_id`，补充说明 `queue_duration` 与 `running_duration`，让用户知道当前是排队久还是执行久。
 
 成功模板：
 

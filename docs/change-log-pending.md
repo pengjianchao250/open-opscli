@@ -1937,6 +1937,14 @@
 **影响范围**：影响 SellerSprite MCP 首次“先读规范”行为；不影响 `seller_sprite_run`、`seller_sprite_job_status`、`seller_sprite_export` 的业务执行逻辑。
 **回滚方式**：回退 `opscli/mcp/tools/seller_sprite.py`、`tests/mcp/test_seller_sprite_tools.py` 和本条变更记录。
 ---
+## 2026-06-24 seller_sprite - run 入口增加运行态 8 分钟代等
+
+**变更原因**：用户认为公开 `seller_sprite_run` 过早把 `job_id` 暴露给调用方，要求 CLI 与 MCP 统一改为“先代等结果，只有任务真正执行超时后才转异步续查”。
+**改动点**：`opscli/mcp/tools/seller_sprite.py` 新增公开 run 入口的代等逻辑：`queued` 阶段持续等待，进入 `running` 后最多再等待 8 分钟；若在窗口内 `succeeded/failed` 则直接返回最终状态，若 `running` 超时则返回 `job_id` 并补充 `queue_duration`、`running_duration`；`tests/mcp/test_seller_sprite_tools.py` 新增成功直返与运行超时两组 TDD 回归，并将原本只验证入队的测试改为显式跳过代等；`opscli/skills/templates/ops-seller-sprite/SKILL.md`、`opscli/skills/templates/ops-seller-sprite/SKILL_MCP.md` 同步更新公开入口等待语义与续查规则。
+**验证结果**：RED：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\mcp\test_seller_sprite_tools.py -k "waits_until_success or running_timeout" -v` 初始失败，现有实现仍直接返回 `queued`；GREEN：同命令复跑通过（2 passed）；`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests\mcp\test_seller_sprite_tools.py -v` 通过（18 passed）。
+**影响范围**：影响公开 `seller_sprite_run` 的返回时机与超时回包字段；底层 SQLite 队列、调度器消费、`seller_sprite_start`、`seller_sprite_job_status`、`seller_sprite_export` 保持不变。
+**回滚方式**：回退 `opscli/mcp/tools/seller_sprite.py`、`tests/mcp/test_seller_sprite_tools.py`、两份 `ops-seller-sprite` Skill 文档以及本条变更记录。
+---
 ## 2026-06-18 seller_sprite - 竞品查询补单 ASIN 归一化与本地快速失败
 
 **变更原因**：`competitor-lookup` 场景在收到单个 `asin` 时没有归一化到 `asins`，会构造出空主筛选 payload；缺少主筛选条件时也未在本地拦截，导致无效请求继续走远端并表现为 MCP 30 秒超时。

@@ -10,14 +10,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from opscli.mcp.quota import get_quota_limiter
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
+
+SELLER_SPRITE_RUN_POLL_INTERVAL_SECONDS = 5.0
+SELLER_SPRITE_RUN_RUNNING_TIMEOUT_SECONDS = 8 * 60
 
 
 def _seller_sprite_skill_dir() -> Path:
@@ -103,6 +108,66 @@ def _prepare_request_for_enqueue(request):
         period=normalized_period,
         job_id=normalized_job_id,
     )
+
+
+async def _wait_for_seller_sprite_run_result(
+    *,
+    scheduler,
+    job_id: str,
+    initial_status: dict[str, Any],
+) -> dict[str, Any]:
+    """等待公开 run 入口的最终可返回状态。"""
+    status = dict(initial_status)
+    while True:
+        state = str(status.get("state") or "").strip().lower()
+        if state in {"succeeded", "failed"}:
+            return status
+
+        now = datetime.now(timezone.utc).astimezone()
+        if state == "running" and _running_timed_out(status, now=now):
+            return _build_timeout_status(status, now=now)
+
+        await asyncio.sleep(max(SELLER_SPRITE_RUN_POLL_INTERVAL_SECONDS, 0))
+        status = dict(scheduler.job_status(job_id))
+
+
+def _running_timed_out(status: dict[str, Any], *, now: datetime) -> bool:
+    """判断任务是否已经超过运行态同步等待上限。"""
+    started_at = _parse_status_time(status.get("started_at"))
+    if started_at is None:
+        return False
+    return _duration_seconds(started_at, now) >= SELLER_SPRITE_RUN_RUNNING_TIMEOUT_SECONDS
+
+
+def _build_timeout_status(status: dict[str, Any], *, now: datetime) -> dict[str, Any]:
+    """在运行态超时后补充排队与运行时长摘要。"""
+    payload = dict(status)
+    created_at = _parse_status_time(status.get("created_at"))
+    started_at = _parse_status_time(status.get("started_at"))
+
+    payload["queue_duration"] = (
+        _duration_seconds(created_at, started_at) if created_at and started_at else None
+    )
+    payload["running_duration"] = _duration_seconds(started_at, now) if started_at else None
+    return payload
+
+
+def _parse_status_time(value: Any) -> datetime | None:
+    """解析状态里的 ISO 时间字符串。"""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _duration_seconds(start: datetime, end: datetime) -> int:
+    """返回两个时间点之间的非负秒数。"""
+    return max(0, int((end - start).total_seconds()))
 
 
 async def seller_sprite_spec_must_read() -> dict:
@@ -254,7 +319,14 @@ async def seller_sprite_run(
         # 入队前先落一条 MCP 调用记录，确保调度失败时也能追踪。
         store.create_mcp_run(request, user_email)
         mcp_run_created = True
-        return _ok(await scheduler.enqueue(request))
+        queued_status = await scheduler.enqueue(request)
+        return _ok(
+            await _wait_for_seller_sprite_run_result(
+                scheduler=scheduler,
+                job_id=created_job_id,
+                initial_status=queued_status,
+            )
+        )
     except Exception as exc:
         if mcp_run_created and created_job_id:
             try:
