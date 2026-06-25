@@ -270,6 +270,26 @@ async def beta_canopy_run(
         return _err(exc, tool="MCP → beta_canopy_run(...)", call_params=call_params)
 
 
+async def beta_canopy_job_status(job_id: str) -> dict:
+    """仅当用户明确提到 beta/Canopy/测试服务时，读取 Canopy 任务结果。"""
+    try:
+        return _ok(_public_result(CanopyApiManager().job_status(job_id)))
+    except Exception as exc:
+        return _err(exc, tool="MCP → beta_canopy_job_status(...)", call_params={"job_id": job_id})
+
+
+async def beta_canopy_export(job_id: str) -> dict:
+    """仅当用户明确提到 beta/Canopy/测试服务时，读取 Canopy 任务导出文件信息。"""
+    try:
+        status = CanopyApiManager().job_status(job_id)
+        export = _public_export_payload(status.get("export"))
+        if not export.get("url"):
+            raise ValueError(f"任务导出文件没有可下载地址：{job_id}")
+        return _ok(export)
+    except Exception as exc:
+        return _err(exc, tool="MCP → beta_canopy_export(...)", call_params={"job_id": job_id})
+
+
 async def _request_canopy_api(
     *,
     path: str,
@@ -426,20 +446,55 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         public.pop("raw_path", None)
         public.pop("result_path", None)
         public.pop("response", None)
-        _ensure_export_url(public.get("export"))
+        _strip_public_debug_fields(public.get("request"))
+        _sanitize_public_export(public)
         _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
     return public
 
 
-def _ensure_export_url(export: Any) -> None:
+def _strip_public_debug_fields(request: Any) -> None:
+    """移除 public MCP 返回中不应暴露的调试字段。"""
+    if not isinstance(request, dict):
+        return
+    request.pop("api_key_placeholder_used", None)
+
+
+def _sanitize_public_export(public: dict[str, Any]) -> None:
+    export = public.get("export")
     if not isinstance(export, dict):
         return
-    if export.get("url"):
-        export.pop("path", None)
-    elif export.get("path"):
-        export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
-        export.pop("path", None)
+    export.pop("path", None)
+    url = export.get("url")
+    if isinstance(url, str) and url.startswith("file://"):
+        export["url"] = None
+        url = None
+    if url:
+        return
+
+    warnings = public.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+    warnings.append(
+        {
+            "stage": "export_url_unavailable",
+            "message": "当前任务导出文件没有可下载地址，请稍后重试或联系管理员检查上传链路。",
+        }
+    )
+    public["warnings"] = warnings
+
+
+def _public_export_payload(export: Any) -> dict[str, Any]:
+    if not isinstance(export, dict):
+        raise ValueError("任务无导出文件")
+    payload = _strip_sensitive(export)
+    if not isinstance(payload, dict):
+        raise ValueError("任务导出结构不合法")
+    payload.pop("path", None)
+    url = payload.get("url")
+    if isinstance(url, str) and url.startswith("file://"):
+        payload["url"] = None
+    return payload
 
 
 def _compact_public_data(public: dict[str, Any]) -> None:
@@ -510,6 +565,8 @@ _ALL_TOOLS = [
     beta_spec_must_read,
     beta_canopy_scenarios,
     beta_canopy_run,
+    beta_canopy_job_status,
+    beta_canopy_export,
 ]
 
 

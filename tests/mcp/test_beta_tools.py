@@ -39,6 +39,8 @@ def test_mcp_exposes_beta_tools():
     assert "beta_spec_must_read" in names
     assert "beta_canopy_scenarios" in names
     assert "beta_canopy_run" in names
+    assert "beta_canopy_job_status" in names
+    assert "beta_canopy_export" in names
     assert "beta_canopy_api_key_set" not in names
     assert "beta_canopy_api_key_status" not in names
     assert "beta_canopy_api_key_clear" not in names
@@ -59,6 +61,103 @@ def test_beta_canopy_scenarios_returns_all_openapi_endpoints():
     scenario_ids = {item["scenario_id"] for item in result["data"]}
     assert len(scenario_ids) == 17
     assert {"product", "search", "product-reviews"}.issubset(scenario_ids)
+
+
+def test_beta_canopy_job_status_hides_local_paths(monkeypatch):
+    class FakeManager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "root_dir": "D:/tmp/private",
+                "params_path": "D:/tmp/private/params.json",
+                "raw_path": "D:/tmp/private/raw.json",
+                "result_path": "D:/tmp/private/result.json",
+                "response": {"api_key": "secret"},
+                "request": {
+                    "url": "https://rest.canopyapi.co/api/amazon/product",
+                    "api_key_placeholder_used": True,
+                },
+                "export": {
+                    "path": "D:/tmp/private/canopy-job-1.xlsx",
+                    "filename": "canopy-job-1.xlsx",
+                    "url": None,
+                },
+            }
+
+    monkeypatch.setattr(beta_tools, "CanopyApiManager", FakeManager)
+
+    result = _run(beta_tools.beta_canopy_job_status("job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "job-1"
+    assert "root_dir" not in result["data"]
+    assert "params_path" not in result["data"]
+    assert "raw_path" not in result["data"]
+    assert "result_path" not in result["data"]
+    assert "response" not in result["data"]
+    assert "api_key_placeholder_used" not in str(result["data"])
+    assert "api_key_placeholder_used" not in result["data"]["request"]
+    assert "path" not in result["data"]["export"]
+    assert result["data"]["export"].get("url") is None
+    assert "file://" not in str(result["data"])
+    assert result["data"]["warnings"] == [
+        {
+            "stage": "export_url_unavailable",
+            "message": "当前任务导出文件没有可下载地址，请稍后重试或联系管理员检查上传链路。",
+        }
+    ]
+
+
+def test_beta_canopy_export_fails_without_remote_upload_url(monkeypatch):
+    class FakeManager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "export": {
+                    "path": "D:/tmp/private/canopy-job-1.xlsx",
+                    "filename": "canopy-job-1.xlsx",
+                    "url": None,
+                },
+            }
+
+    monkeypatch.setattr(beta_tools, "CanopyApiManager", FakeManager)
+
+    result = _run(beta_tools.beta_canopy_export("job-1"))
+
+    assert result["success"] is False
+    assert result["error"]["code"] == "ValueError"
+    assert "没有可下载地址" in result["error"]["message"]
+
+
+def test_beta_canopy_export_returns_remote_url_only(monkeypatch):
+    class FakeManager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "export": {
+                    "path": "D:/tmp/private/canopy-job-1.xlsx",
+                    "filename": "canopy-job-1.xlsx",
+                    "url": "https://ops.example.com/canopy-job-1.xlsx",
+                },
+            }
+
+    monkeypatch.setattr(beta_tools, "CanopyApiManager", FakeManager)
+
+    result = _run(beta_tools.beta_canopy_export("job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["filename"] == "canopy-job-1.xlsx"
+    assert result["data"]["url"] == "https://ops.example.com/canopy-job-1.xlsx"
+    assert "path" not in result["data"]
 
 
 def test_beta_canopy_run_calls_canopy_with_domain_placeholder_key_and_xls_export(monkeypatch, tmp_path: Path):
@@ -88,16 +187,24 @@ def test_beta_canopy_run_calls_canopy_with_domain_placeholder_key_and_xls_export
     assert data["job_id"] == "beta-product-regression"
     assert data["row_count"] == 1
     assert data["request"]["url"] == "https://rest.canopyapi.co/api/amazon/product"
-    assert data["request"]["api_key_placeholder_used"] is True
+    assert "api_key_placeholder_used" not in str(data)
+    assert "api_key_placeholder_used" not in data["request"]
     assert data["request"]["export_format"] == "xls"
-    assert data["export"]["url"].startswith("file://")
     assert data["export"]["filename"] == "beta-product-regression.xlsx"
     assert "path" not in data["export"]
+    assert data["export"].get("url") is None
     assert "root_dir" not in data
     assert "params_path" not in data
     assert "raw_path" not in data
     assert "result_path" not in data
     assert "response" not in data
+    assert "file://" not in str(data)
+    assert data["warnings"] == [
+        {
+            "stage": "export_url_unavailable",
+            "message": "当前任务导出文件没有可下载地址，请稍后重试或联系管理员检查上传链路。",
+        }
+    ]
     assert data["data_preview"][0]["asin"] == "B0B3JBVDYP"
     assert "asin=B0B3JBVDYP" in captured["url"]
     assert "domain=US" in captured["url"]
@@ -173,8 +280,9 @@ def test_beta_canopy_run_product_reviews_local_debug_instruction(monkeypatch, tm
     assert data["row_count"] == 2
     assert data["request"]["url"] == "https://rest.canopyapi.co/api/amazon/product/reviews"
     assert data["request"]["export_format"] == "xls"
-    assert data["export"]["url"].startswith("file://")
     assert data["export"]["filename"] == "beta-review-local-debug.xlsx"
+    assert data["export"].get("url") is None
+    assert "file://" not in str(data)
     assert data["data_preview"][0]["reviewTitle"] == "Battery issue"
     assert "asin=B0B3JBVDYP" in captured["url"]
     assert "domain=US" in captured["url"]
@@ -351,9 +459,11 @@ def test_beta_canopy_run_accepts_json_params_api_key_argument_and_blank_export_f
     assert "searchTerm=coffee+grinder" in captured["url"]
     assert "domain=US" in captured["url"]
     assert captured["api_key"] == "test-key"
-    assert result["data"]["request"]["api_key_placeholder_used"] is False
+    assert "api_key_placeholder_used" not in str(result["data"])
+    assert "api_key_placeholder_used" not in result["data"]["request"]
     assert result["data"]["request"]["export_format"] == "xls"
-    assert result["data"]["export"]["url"].startswith("file://")
+    assert result["data"]["export"].get("url") is None
+    assert "file://" not in str(result["data"])
 
 
 def test_beta_canopy_run_ignores_env_without_local_api_key(monkeypatch, tmp_path: Path):

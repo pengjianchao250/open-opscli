@@ -119,10 +119,9 @@ async def keepa_export(job_id: str) -> dict:
         from opscli.keepa.services import KeepaApiManager
 
         status = KeepaApiManager().job_status(job_id)
-        export = status.get("export")
-        if not export:
-            raise ValueError(f"任务无导出文件：{job_id}")
-        _ensure_export_url(export)
+        export = _public_export_payload(status.get("export"))
+        if not export.get("url"):
+            raise ValueError(f"任务导出文件没有可下载地址：{job_id}")
         return _ok(export)
     except Exception as exc:
         return _err(exc, tool="MCP → keepa_export(...)", call_params={"job_id": job_id})
@@ -145,7 +144,7 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         public.pop("account", None)
         public.pop("params_path", None)
         public.pop("raw_path", None)
-        _ensure_export_url(public.get("export"))
+        _sanitize_public_export(public)
         _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
     return public
@@ -159,13 +158,41 @@ def _normalize_mcp_export_format(value: str) -> str:
     raise ValueError(f"不支持的导出格式：{value}。Keepa MCP 当前仅支持 xls/xlsx 表格导出。")
 
 
-def _ensure_export_url(export: Any) -> None:
+def _sanitize_public_export(public: dict[str, Any]) -> None:
+    export = public.get("export")
     if not isinstance(export, dict):
         return
-    if export.get("url"):
-        export.pop("path", None)
-    elif export.get("path"):
-        export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
+    export.pop("path", None)
+    url = export.get("url")
+    if isinstance(url, str) and url.startswith("file://"):
+        export["url"] = None
+        url = None
+    if url:
+        return
+
+    warnings = public.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+    warnings.append(
+        {
+            "stage": "export_url_unavailable",
+            "message": "当前任务导出文件没有可下载地址，请稍后重试或联系管理员检查上传链路。",
+        }
+    )
+    public["warnings"] = warnings
+
+
+def _public_export_payload(export: Any) -> dict[str, Any]:
+    if not isinstance(export, dict):
+        raise ValueError("任务无导出文件")
+    payload = _strip_sensitive(export)
+    if not isinstance(payload, dict):
+        raise ValueError("任务导出结构不合法")
+    payload.pop("path", None)
+    url = payload.get("url")
+    if isinstance(url, str) and url.startswith("file://"):
+        payload["url"] = None
+    return payload
 
 
 def _compact_public_data(public: dict[str, Any]) -> None:

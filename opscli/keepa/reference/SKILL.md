@@ -23,7 +23,7 @@ $env:OPSCLI_KEEPA_API_KEY="YOUR_KEEPA_API_KEY"
 Check quota for developer/operator debugging only:
 
 ```powershell
-opscli keepa token-status
+opscli keepa-debug token-status
 ```
 
 List scenarios:
@@ -47,10 +47,10 @@ Run with low-quota override:
 opscli keepa run product --site US --params '{"asins":["B0088PUEPK"]}' --force
 ```
 
-Run with explicit output directory:
+Run with explicit output directory in local debug mode:
 
 ```powershell
-opscli keepa run seller --site US --params '{"seller":"A2L77EE7U53NWQ"}' --output-dir D:\tmp\keepa
+opscli keepa-debug run seller --site US --params '{"seller":"A2L77EE7U53NWQ"}' --output-dir D:\tmp\keepa
 ```
 
 ## Python Calls

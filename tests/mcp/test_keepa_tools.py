@@ -141,3 +141,45 @@ def test_keepa_export_returns_export_info(monkeypatch):
     assert result["success"] is True
     assert result["data"]["url"] == "https://example.com/job-1.xlsx"
     assert "path" not in result["data"]
+
+
+def test_keepa_job_status_warns_when_export_url_missing(monkeypatch):
+    class NoUrlManager(DummyManager):
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "row_count": 1,
+                "export": {
+                    "path": f"/tmp/{job_id}.xlsx",
+                    "filename": f"{job_id}.xlsx",
+                },
+            }
+
+    monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", NoUrlManager)
+
+    result = _run(keepa_tools.keepa_job_status("job-2"))
+
+    assert result["success"] is True
+    assert result["data"]["export"]["filename"] == "job-2.xlsx"
+    assert "path" not in result["data"]["export"]
+    assert not result["data"]["export"].get("url")
+    assert any(item["stage"] == "export_url_unavailable" for item in result["data"]["warnings"])
+
+
+def test_keepa_export_fails_when_download_url_missing(monkeypatch):
+    class NoUrlManager(DummyManager):
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "export": {
+                    "path": f"/tmp/{job_id}.xlsx",
+                    "filename": f"{job_id}.xlsx",
+                },
+            }
+
+    monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", NoUrlManager)
+
+    result = _run(keepa_tools.keepa_export("job-2"))
+
+    assert result["success"] is False
+    assert "没有可下载地址" in result["error"]["message"]
