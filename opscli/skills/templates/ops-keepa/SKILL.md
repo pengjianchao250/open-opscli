@@ -21,6 +21,12 @@ description: Use when the user asks to query or export Keepa data through the pu
 6. `product-search`、`category-search` 缺少关键词时先补关键词；`seller` 缺少 seller id、`category-lookup` 缺少 category id、`bestsellers` 缺少 `category` 或 `productGroup` 时先澄清。
 7. 不向用户暴露 Keepa token 余额、账号来源、`params.json`、`raw.json`、本地导出路径等内部信息。
 8. 如果当前宿主是远端 MCP 直连而不是 CLI 代理，继续看 [SKILL_MCP.md](SKILL_MCP.md)。
+9. 若远端 MCP 直连时提示 `无 session_id：请完成授权登录，或传入有效的 session_id` 等授权类错误，先执行 `auth_mcp_login`；不要先把问题归因为 Keepa 场景、参数或导出格式。
+
+## 链路区分
+
+- 本地 CLI 代理链路：默认指 `opscli keepa ...`。这条链路依赖本机 `opscli auth login` 已完成，必要时由 CLI 显式透传本机 OPS `session_id`。
+- 远端 MCP 直连链路：指宿主拿远端 MCP `api_key` 直接连接 `keepa_*` tools。该链路下不要在仅拿到 `api_key` 后立刻执行 `keepa_run`；应先完成 `auth_mcp_login`，让当前 MCP 用户的远端凭证中存在可复用的 OPS `session_id`。
 
 ## 正式链路
 
