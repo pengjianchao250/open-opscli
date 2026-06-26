@@ -266,7 +266,7 @@ opscli skills publish --json
 ---
 title: Ops 认证授权
 description: 管理认证授权流程
-summary: 一键完成 ops/polaris 登录与 Token 管理
+summary: 一键完成 ops 登录与 Token 管理
 share_type: company
 tags: auth,ops,认证
 category_id: 1
