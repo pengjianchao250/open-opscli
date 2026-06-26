@@ -14,6 +14,10 @@ class KeepaRemoteAdapter(RemoteMcpAdapter):
         """读取远端 Keepa 场景列表。"""
         return self.call_tool("keepa_scenarios", {})
 
+    def quota_status(self) -> dict[str, Any]:
+        """读取远端 Keepa 每日额度快照。"""
+        return self.call_tool("keepa_quota_status", {})
+
     def run(
         self,
         *,

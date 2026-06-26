@@ -67,6 +67,39 @@ def test_keepa_scenarios_uses_manager(monkeypatch):
     assert result["data"][0]["scenario_id"] == "product"
 
 
+def test_keepa_quota_status_returns_snapshot(monkeypatch):
+    class FakeLimiter:
+        def quota_snapshot(self, tool_name, identity):
+            assert tool_name == "keepa_run"
+            assert identity == "email:mcp-user@example.com"
+            return {
+                "service": "keepa",
+                "limit": 5,
+                "used": 1,
+                "remaining": 4,
+                "failures": 0,
+                "reset_at": "2026-06-24T00:00:00+08:00",
+            }
+
+    monkeypatch.setattr(keepa_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr("opscli.mcp.tools.keepa.get_quota_limiter", lambda: FakeLimiter())
+
+    result = _run(keepa_tools.keepa_quota_status())
+
+    assert result["success"] is True
+    assert result["data"]["service"] == "keepa"
+    assert result["data"]["remaining"] == 4
+
+
+def test_keepa_quota_status_returns_error_when_user_email_missing(monkeypatch):
+    monkeypatch.setattr(keepa_tools, "_get_current_mcp_user_email", lambda: None)
+
+    result = _run(keepa_tools.keepa_quota_status())
+
+    assert result["success"] is False
+    assert "邮箱" in result["error"]["message"]
+
+
 def test_keepa_spec_reads_internal_reference():
     result = _run(keepa_tools.keepa_spec_must_read())
 

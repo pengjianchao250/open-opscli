@@ -130,6 +130,28 @@ def test_remote_adapter_maps_status_and_export_tools():
     ]
 
 
+def test_remote_adapter_maps_quota_status_tool():
+    config_client = FakeConfigClient()
+    created_clients = []
+
+    def make_remote_client(url: str):
+        client = FakeRemoteClient(url)
+        created_clients.append(client)
+        return client
+
+    adapter = KeepaRemoteAdapter(
+        config_client=config_client,
+        remote_client_factory=make_remote_client,
+    )
+
+    result = adapter.quota_status()
+
+    assert result["success"] is True
+    assert result["data"]["tool"] == "keepa_quota_status"
+    assert result["data"]["arguments"] == {}
+    assert created_clients[0].calls == [("keepa_quota_status", {})]
+
+
 def test_remote_adapter_preserves_explicit_job_id():
     config_client = FakeConfigClient()
     created_clients = []

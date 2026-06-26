@@ -3,6 +3,7 @@
 将 Keepa API 能力暴露为 MCP 工具：
 - keepa_spec_must_read — 读取 Keepa MCP 使用规范
 - keepa_scenarios      — 列出 Keepa 场景
+- keepa_quota_status   — 读取 Keepa 每日额度快照
 - keepa_run            — 执行 Keepa 场景并保存请求/响应/导出
 - keepa_job_status     — 读取任务结果
 - keepa_export         — 读取导出文件信息
@@ -10,9 +11,11 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Any
 
+from opscli.mcp.quota import get_quota_limiter
 from opscli.skills.packaging import get_builtin_templates_dir
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
@@ -24,6 +27,13 @@ MAX_PUBLIC_DATA_PREVIEW_ROWS = 20
 def _keepa_skill_dir() -> Path:
     """返回 Keepa Skill 模板目录。"""
     return get_builtin_templates_dir() / "ops-keepa"
+
+
+def _get_current_mcp_user_email() -> str | None:
+    """读取当前 MCP 请求对应的用户邮箱。"""
+    from opscli.mcp.context import get_current_user_email
+
+    return get_current_user_email()
 
 
 async def keepa_spec_must_read() -> dict:
@@ -65,6 +75,25 @@ async def keepa_scenarios() -> dict:
         return _ok(KeepaApiManager().scenarios())
     except Exception as exc:
         return _err(exc, tool="MCP → keepa_scenarios()")
+
+
+async def keepa_quota_status() -> dict:
+    """读取当前 MCP 用户的 Keepa 每日额度快照。"""
+    user_email = _get_current_mcp_user_email()
+    if not user_email:
+        return _err(
+            ValueError("当前 MCP 用户邮箱缺失，无法读取 Keepa 额度"),
+            tool="MCP → keepa_quota_status()",
+        )
+
+    try:
+        identity = f"email:{user_email.strip().lower()}"
+        snapshot = get_quota_limiter().quota_snapshot("keepa_run", identity)
+        if inspect.isawaitable(snapshot):
+            snapshot = await snapshot
+        return _ok(snapshot)
+    except Exception as exc:
+        return _err(exc, tool="MCP → keepa_quota_status()")
 
 
 async def keepa_run(
@@ -148,6 +177,7 @@ async def keepa_export(job_id: str) -> dict:
 _ALL_TOOLS = [
     keepa_spec_must_read,
     keepa_scenarios,
+    keepa_quota_status,
     keepa_run,
     keepa_job_status,
     keepa_export,

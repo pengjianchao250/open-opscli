@@ -57,12 +57,15 @@ def test_public_keepa_run_uses_remote_adapter(monkeypatch):
     assert '"job_id": "public-job"' in result.stdout
 
 
-def test_public_keepa_scenarios_job_status_and_export_use_remote_adapter(monkeypatch):
+def test_public_keepa_scenarios_quota_status_job_status_and_export_use_remote_adapter(monkeypatch):
     class FakeAdapter:
         """模拟正式 CLI 的查询接口。"""
 
         def scenarios(self):
             return {"success": True, "data": [{"id": "product"}]}
+
+        def quota_status(self):
+            return {"success": True, "data": {"service": "keepa", "remaining": 4}}
 
         def job_status(self, job_id):
             return {"success": True, "data": {"job_id": job_id, "state": "succeeded"}}
@@ -80,11 +83,14 @@ def test_public_keepa_scenarios_job_status_and_export_use_remote_adapter(monkeyp
     monkeypatch.setattr(keepa_cli, "KeepaRemoteAdapter", lambda: FakeAdapter())
 
     scenarios_result = runner.invoke(keepa_cli.app, ["scenarios"])
+    quota_result = runner.invoke(keepa_cli.app, ["quota-status"])
     status_result = runner.invoke(keepa_cli.app, ["job-status", "job-1"])
     export_result = runner.invoke(keepa_cli.app, ["export", "job-1"])
 
     assert scenarios_result.exit_code == 0
     assert '"id": "product"' in scenarios_result.stdout
+    assert quota_result.exit_code == 0
+    assert '"service": "keepa"' in quota_result.stdout
     assert status_result.exit_code == 0
     assert '"job_id": "job-1"' in status_result.stdout
     assert export_result.exit_code == 0
