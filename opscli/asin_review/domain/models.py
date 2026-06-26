@@ -114,30 +114,3 @@ def validate_asin(value: str) -> str:
     if not _ASIN_PATTERN.match(cleaned):
         raise InvalidParamsError(f"ASIN 格式不合法：{value!r}（应为 10 位字母数字）")
     return cleaned
-
-
-def parse_asin_list(raw: str) -> list[str]:
-    """解析逗号分隔的 ASIN 列表。
-
-    Args:
-        raw: 逗号分隔的 ASIN 字符串
-
-    Returns:
-        校验后的 ASIN 列表
-
-    Raises:
-        InvalidParamsError: 输入为空或全部格式不合法
-    """
-    parts = [p.strip() for p in raw.split(",") if p.strip()]
-    if not parts:
-        raise InvalidParamsError("ASIN 列表为空，请提供至少一个 ASIN")
-
-    results: list[str] = []
-    for p in parts:
-        # 跳过无效条目，只收集合法的
-        cleaned = p.strip().upper()
-        if _ASIN_PATTERN.match(cleaned):
-            results.append(cleaned)
-        else:
-            raise InvalidParamsError(f"ASIN 格式不合法：{p!r}（应为 10 位字母数字）")
-    return results
