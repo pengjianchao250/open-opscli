@@ -7,8 +7,8 @@ visibility: internal
 
 # ops-keepa MCP
 
-这是 `keepa_spec_must_read` 读取的内部 MCP 使用规范，放在
-`opscli/mcp/references/keepa/` 下，不作为可安装用户 Skill 暴露。
+这是 `keepa_spec_must_read` 读取的内部 MCP 使用规范，位于
+`opscli/skills/templates/ops-keepa/` 下，不再单独维护 `opscli/mcp/references/keepa/` 副本。
 
 用户大多数会用中文自然语言提需求，Agent 应优先把中文意图转换成
 `keepa_run` 的 `scenario + site + params`，再执行工具。
@@ -18,19 +18,20 @@ visibility: internal
 1. 先把用户话术归类为商品、关键词搜索、筛选、类目、卖家、热销、折扣、秒杀之一。
 2. 站点缺省用 `US`；不要因为缺站点而追问。
 3. 必填参数齐全时直接执行 `keepa_run`；不要把内部参数确认流程暴露给用户。
-4. 只缺必填项时最多追问 1 个短问题；一次追问尽量覆盖同一场景的所有必填项。
-5. 默认导出用户可读 XLSX；MCP 当前不支持 JSON 用户导出，后端比对使用任务内部 `raw.json`。
-6. 最终回复只给业务结果：查询对象、站点、返回行数、导出文件或链接。
-7. 不主动展示 API Key、账号来源、token 消耗、额度余额、内部参数、`params.json`、`raw.json`。
-8. 用户不需要额外说“格式化”；默认 XLSX 导出会自动写入本地可读派生字段和明细 sheet。
+4. 如果返回 `无 session_id：请完成授权登录，或传入有效的 session_id` 等授权类提示，先执行 `auth_mcp_login`，再重试 `keepa_run`；不要先误判为场景参数错误。
+5. 只缺必填项时最多追问 1 个短问题；一次追问尽量覆盖同一场景的所有必填项。
+6. 默认导出用户可读 XLSX；MCP 当前不支持 JSON 用户导出，后端比对使用任务内部 `raw.json`。
+7. 最终回复只给业务结果：查询对象、站点、返回行数、导出文件或链接。
+8. 不主动展示 API Key、账号来源、token 消耗、额度余额、内部参数、`params.json`、`raw.json`。
+9. 用户不需要额外说“格式化”；默认 XLSX 导出会自动写入本地可读派生字段和明细 sheet。
 
 ## 工具列表
 
-- `keepa_spec_must_read`: read this guide before first use. 官方接口细节见 `opscli/mcp/references/keepa/OFFICIAL.md`。
+- `keepa_spec_must_read`: read this guide before first use. 官方接口细节见 `opscli/skills/templates/ops-keepa/references/OFFICIAL.md`。
 - `keepa_scenarios`: list supported Keepa scenarios.
-- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX with automatic readable formatting. `export_format` accepts `xls`/`xlsx`; `xls` and `xlsx` both generate `.xlsx`.
-- `keepa_job_status`: read a saved task result by `job_id`.
-- `keepa_export`: read export path or cloud URL, filename, format, and MIME type.
+- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX with automatic readable formatting. `export_format` accepts `xls`/`xlsx`; `xls` and `xlsx` both generate `.xlsx`。
+- `keepa_job_status`: read a saved task result by `job_id`。
+- `keepa_export`: read export path or cloud URL, filename, format, and MIME type。
 
 不要向用户推荐或暴露单独的 token 状态查询。Keepa 额度由系统内部管理。
 
@@ -47,6 +48,8 @@ visibility: internal
 
 ## 认证与额度
 
+- 如果当前宿主是通过远端 MCP `api_key` 直接连接 `keepa_*` tools，首次执行前应先完成 `auth_mcp_login`；不要把“已拿到 MCP `api_key`”误当成“已经具备 `keepa_run` 所需的 OPS 登录态”。
+- 出现 `无 session_id：请完成授权登录，或传入有效的 session_id`、`未授权`、`请先登录` 这类提示时，优先补做 `auth_mcp_login` 并重试；不要先归因为 Keepa token、场景参数或导出逻辑问题。
 - Keepa API Key 由后端读取：优先 OPS integration account `platform=keepa`，本地兜底为 `OPSCLI_KEEPA_API_KEY`。
 - Keepa 额度由系统内部管理；Agent 不向普通用户展示 API Key、账号来源、token 消耗或剩余额度。
 - `keepa_run` 会做额度预检；额度不足或等待卡住时，只回复用户稍后重试或联系运营人员。
@@ -96,7 +99,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 
 ## 官方口径索引
 
-详细官方口径见 `opscli/mcp/references/keepa/OFFICIAL.md`；当用户追问字段、token、分页、响应结构或接口限制时，先读取该文件。
+详细官方口径见 `opscli/skills/templates/ops-keepa/references/OFFICIAL.md`；当用户追问字段、token、分页、响应结构或接口限制时，先读取该文件。
 
 - Product Search：`/search`，必填 `domain`、`type=product`、`term`；默认返回 `products`，`asins-only=1` 返回 `asinList`。
 - Best Sellers：`/bestsellers`，必填 `domain`、`category`；响应主字段 `bestSellersList.asinList`，不返回完整商品详情。
@@ -198,7 +201,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 
 ## 站点
 
-Use Keepa site codes: `US`, `GB`/`UK`, `DE`, `FR`, `JP`, `CA`, `IT`, `ES`, `IN`, `MX`, `BR`.
+Use Keepa site codes: `US`, `GB`/`UK`, `DE`, `FR`, `JP`, `CA`, `IT`, `ES`, `IN`, `MX`, `BR`。
 
 中文站点映射：
 

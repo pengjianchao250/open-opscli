@@ -13,17 +13,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from opscli.skills.packaging import get_builtin_templates_dir
+
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 
+def _google_trends_skill_dir() -> Path:
+    """返回 Google Trends Skill 模板目录。"""
+    return get_builtin_templates_dir() / "ops-google-trends"
+
+
 async def google_trends_spec_must_read() -> dict:
-    """读取 Google Trends MCP 使用规范（opscli/mcp/references/google_trends/SKILL_MCP.md）。"""
-    spec_path = (
-        Path(__file__).resolve().parents[1]
-        / "references"
-        / "google_trends"
-        / "SKILL_MCP.md"
-    )
+    """读取 Google Trends MCP 使用规范。
+
+    规范内容统一收口到 opscli 内置 Skill 模板：
+    - opscli/skills/templates/ops-google-trends/SKILL_MCP.md
+    """
+    spec_path = _google_trends_skill_dir() / "SKILL_MCP.md"
     if not spec_path.exists():
         return _err(
             FileNotFoundError(f"Google Trends MCP 规范文档不存在：{spec_path}。请检查 opscli 安装是否完整。"),
@@ -31,7 +37,7 @@ async def google_trends_spec_must_read() -> dict:
         )
     try:
         content = spec_path.read_text(encoding="utf-8")
-        return _ok({"spec": content, "source": str(spec_path)})
+        return _ok({"spec": content, "source": str(spec_path), "sources": [str(spec_path)]})
     except Exception as exc:
         return _err(exc, tool="MCP → google_trends_spec_must_read()")
 
@@ -105,11 +111,9 @@ async def google_trends_export(job_id: str) -> dict:
         from opscli.google_trends.services import GoogleTrendsApiManager
 
         status = GoogleTrendsApiManager().job_status(job_id)
-        export = status.get("export")
-        if not export:
-            raise ValueError(f"任务无导出文件：{job_id}")
-        if export.get("path") and not export.get("url"):
-            export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
+        export = _public_export_payload(status.get("export"))
+        if not export.get("url"):
+            raise ValueError(f"任务导出文件没有可下载地址：{job_id}")
         return _ok(export)
     except Exception as exc:
         return _err(exc, tool="MCP → google_trends_export(...)", call_params={"job_id": job_id})
@@ -130,8 +134,46 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(public, dict):
         public.pop("params_path", None)
         public.pop("raw_path", None)
+        _sanitize_public_export(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
     return public
+
+
+def _sanitize_public_export(public: dict[str, Any]) -> None:
+    export = public.get("export")
+    if not isinstance(export, dict):
+        return
+    export.pop("path", None)
+    url = export.get("url")
+    if isinstance(url, str) and url.startswith("file://"):
+        export["url"] = None
+        url = None
+    if url:
+        return
+
+    warnings = public.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+    warnings.append(
+        {
+            "stage": "export_url_unavailable",
+            "message": "当前任务导出文件没有可下载地址，请稍后重试或联系管理员检查上传链路。",
+        }
+    )
+    public["warnings"] = warnings
+
+
+def _public_export_payload(export: Any) -> dict[str, Any]:
+    if not isinstance(export, dict):
+        raise ValueError("任务无导出文件")
+    payload = _strip_sensitive(export)
+    if not isinstance(payload, dict):
+        raise ValueError("任务导出结构不合法")
+    payload.pop("path", None)
+    url = payload.get("url")
+    if isinstance(url, str) and url.startswith("file://"):
+        payload["url"] = None
+    return payload
 
 
 def _strip_sensitive(value: Any) -> Any:

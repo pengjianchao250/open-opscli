@@ -118,11 +118,13 @@ def test_limiter_allows_first_five_calls_and_blocks_sixth():
     assert blocked.error_response["quota"]["remaining"] == 0
 
 
-def test_default_quota_policies_only_limit_public_seller_sprite_entry():
+def test_default_quota_policies_only_limit_public_service_run_entries():
     policies = default_quota_policies()
 
     assert policies["seller_sprite_run"].service == "seller_sprite"
+    assert policies["keepa_run"].service == "keepa"
     assert "seller_sprite_start" not in policies
+    assert "keepa_job_status" not in policies
 
 
 def test_limiter_refunds_failed_call_and_records_failure():

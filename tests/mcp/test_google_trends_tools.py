@@ -87,7 +87,8 @@ def test_google_trends_spec_reads_internal_reference():
     assert result["success"] is True
     assert "Google Trends MCP" in result["data"]["spec"]
     source = Path(result["data"]["source"])
-    assert source.parts[-4:] == ("mcp", "references", "google_trends", "SKILL_MCP.md")
+    assert source.parts[-3:] == ("templates", "ops-google-trends", "SKILL_MCP.md")
+    assert result["data"]["sources"] == [str(source)]
 
 
 def test_google_trends_run_accepts_params_json_string(monkeypatch):
@@ -124,6 +125,9 @@ def test_google_trends_job_status_hides_internal_paths_and_raw(monkeypatch):
     assert "raw_path" not in result["data"]
     assert "raw_response" not in result["data"]
     assert "request_params" not in result["data"]
+    assert "path" not in result["data"]["export"]
+    assert not result["data"]["export"].get("url")
+    assert any(item["stage"] == "export_url_unavailable" for item in result["data"]["warnings"])
 
 
 def test_google_trends_export_returns_export_info(monkeypatch):
@@ -131,6 +135,21 @@ def test_google_trends_export_returns_export_info(monkeypatch):
 
     result = _run(google_trends_tools.google_trends_export("job-1"))
 
+    assert result["success"] is False
+    assert "没有可下载地址" in result["error"]["message"]
+
+
+def test_google_trends_export_returns_remote_url_when_available(monkeypatch):
+    class RemoteUrlManager(DummyManager):
+        def job_status(self, job_id):
+            payload = super().job_status(job_id)
+            payload["export"]["url"] = f"https://example.com/{job_id}.xlsx"
+            return payload
+
+    monkeypatch.setattr("opscli.google_trends.services.GoogleTrendsApiManager", RemoteUrlManager)
+
+    result = _run(google_trends_tools.google_trends_export("job-2"))
+
     assert result["success"] is True
-    assert result["data"]["path"] == "/tmp/job-1.xlsx"
-    assert result["data"]["url"].startswith("file://")
+    assert result["data"]["url"] == "https://example.com/job-2.xlsx"
+    assert "path" not in result["data"]
