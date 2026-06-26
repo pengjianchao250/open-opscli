@@ -9,6 +9,7 @@ import typer
 from opscli.amazon.cli import app as amazon_app
 from opscli.amazon_rufus.cli import app as amazon_rufus_app
 from opscli.asin_data.cli import app as asin_data_app
+from opscli.asin_review.cli import app as asin_review_app
 from opscli.auth.cli import app as auth_app
 from opscli.feedback.cli import app as feedback_app
 from opscli.feedtask.cli import app as feedtask_app
@@ -40,6 +41,7 @@ app.add_typer(auth_app, name="auth")
 app.add_typer(amazon_app, name="amazon")
 app.add_typer(amazon_rufus_app, name="amazon-rufus")
 app.add_typer(asin_data_app, name="asin-data")
+app.add_typer(asin_review_app, name="asin-review")
 app.add_typer(query_app, name="query")
 app.add_typer(shopify_app, name="shopify")
 app.add_typer(feedback_app, name="feedback")
