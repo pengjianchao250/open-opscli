@@ -9,6 +9,7 @@ import typer
 from opscli.amazon.cli import app as amazon_app
 from opscli.amazon_rufus.cli import app as amazon_rufus_app
 from opscli.asin_data.cli import app as asin_data_app
+from opscli.asin_review.cli import app as asin_review_app
 from opscli.auth.cli import app as auth_app
 from opscli.canopy.cli import app as canopy_app
 from opscli.canopy_debug.cli import app as canopy_debug_app
