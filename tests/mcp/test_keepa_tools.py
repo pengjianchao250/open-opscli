@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 from opscli.keepa.domain.models import KeepaExportResult
 from opscli.keepa.domain.models import KeepaScenarioResult
@@ -12,9 +13,10 @@ def _run(coro):
 
 class DummyManager:
     last_request = None
+    init_kwargs = None
 
     def __init__(self, *args, **kwargs):
-        pass
+        self.__class__.init_kwargs = kwargs
 
     def scenarios(self):
         return [{"scenario_id": "product", "title": "商品详情"}]
@@ -136,6 +138,98 @@ def test_keepa_run_accepts_params_json_string(monkeypatch):
     assert result["data"]["warnings"][0]["message"] == "Keepa 当前可用额度不足，请稍后重试；如果持续卡住，请联系运营人员处理。"
 
 
+def test_keepa_run_auto_logins_when_session_missing(monkeypatch):
+    DummyManager.last_request = None
+    DummyManager.init_kwargs = None
+    auth_calls = []
+    auth_pairs = iter([(None, None), ("sid-auto", "jwt-auto")])
+
+    monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
+    monkeypatch.setattr(keepa_tools, "_get_auth_pair", lambda system, session_id, jwt: next(auth_pairs))
+    monkeypatch.setattr(keepa_tools, "_load_keepa_settings", lambda: SimpleNamespace(api_key=None))
+    monkeypatch.setattr(
+        keepa_tools,
+        "_try_auto_mcp_login",
+        lambda: _async_return(_record_and_return(auth_calls, {"success": True, "data": {"session_id": "sid-auto"}})),
+    )
+
+    result = _run(
+        keepa_tools.keepa_run(
+            scenario="product",
+            site="US",
+            params='{"asin":"B0088PUEPK"}',
+        )
+    )
+
+    assert result["success"] is True
+    assert auth_calls == [{"success": True, "data": {"session_id": "sid-auto"}}]
+    assert DummyManager.init_kwargs == {"jwt": "jwt-auto", "session_id": "sid-auto"}
+    assert DummyManager.last_request.params == {"asin": "B0088PUEPK"}
+
+
+def test_keepa_run_returns_auth_error_when_auto_login_fails(monkeypatch):
+    DummyManager.last_request = None
+    DummyManager.init_kwargs = None
+
+    monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
+    monkeypatch.setattr(keepa_tools, "_get_auth_pair", lambda system, session_id, jwt: (None, None))
+    monkeypatch.setattr(keepa_tools, "_load_keepa_settings", lambda: SimpleNamespace(api_key=None))
+    monkeypatch.setattr(
+        keepa_tools,
+        "_try_auto_mcp_login",
+        lambda: _async_return(
+            {
+                "success": False,
+                "error": {
+                    "message": "auth_mcp_login 仅适用于 HTTP/SSE 模式（需携带 X-MCP-API-Key）。",
+                },
+            }
+        ),
+    )
+
+    result = _run(
+        keepa_tools.keepa_run(
+            scenario="product",
+            site="US",
+            params='{"asin":"B0088PUEPK"}',
+        )
+    )
+
+    assert result["success"] is False
+    assert "无 session_id" in result["error"]["message"]
+    assert "auth_mcp_login" in result["error"]["message"]
+    assert DummyManager.last_request is None
+
+
+def test_keepa_run_skips_auto_login_when_env_api_key_present(monkeypatch):
+    DummyManager.last_request = None
+    DummyManager.init_kwargs = None
+    auto_login_called = False
+
+    monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
+    monkeypatch.setattr(keepa_tools, "_get_auth_pair", lambda system, session_id, jwt: (None, None))
+    monkeypatch.setattr(keepa_tools, "_load_keepa_settings", lambda: SimpleNamespace(api_key="env-key"))
+
+    def _unexpected_auto_login():
+        nonlocal auto_login_called
+        auto_login_called = True
+        return {"success": True, "data": {"session_id": "sid-auto"}}
+
+    monkeypatch.setattr(keepa_tools, "_try_auto_mcp_login", _unexpected_auto_login)
+
+    result = _run(
+        keepa_tools.keepa_run(
+            scenario="product",
+            site="US",
+            params='{"asin":"B0088PUEPK"}',
+        )
+    )
+
+    assert result["success"] is True
+    assert auto_login_called is False
+    assert DummyManager.init_kwargs == {"jwt": None, "session_id": None}
+
+
 def test_keepa_run_rejects_json_export_format(monkeypatch):
     DummyManager.last_request = None
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
@@ -217,3 +311,12 @@ def test_keepa_export_fails_when_download_url_missing(monkeypatch):
 
     assert result["success"] is False
     assert "没有可下载地址" in result["error"]["message"]
+
+
+def _record_and_return(storage, value):
+    storage.append(value)
+    return value
+
+
+async def _async_return(value):
+    return value
