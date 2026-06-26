@@ -13,28 +13,46 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from opscli.skills.packaging import get_builtin_templates_dir
+
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 
 MAX_PUBLIC_DATA_PREVIEW_ROWS = 20
 
 
+def _keepa_skill_dir() -> Path:
+    """返回 Keepa Skill 模板目录。"""
+    return get_builtin_templates_dir() / "ops-keepa"
+
+
 async def keepa_spec_must_read() -> dict:
-    """读取 Keepa MCP 使用规范（opscli/mcp/references/keepa/SKILL_MCP.md）。"""
-    spec_path = (
-        Path(__file__).resolve().parents[1]
-        / "references"
-        / "keepa"
-        / "SKILL_MCP.md"
-    )
-    if not spec_path.exists():
-        return _err(
-            FileNotFoundError(f"Keepa MCP 规范文档不存在：{spec_path}。请检查 opscli 安装是否完整。"),
-            tool="MCP → keepa_spec_must_read()",
-        )
+    """读取 Keepa MCP 使用规范与官方参考。
+
+    规范内容统一收口到 opscli 内置 Skill 模板：
+    - opscli/skills/templates/ops-keepa/SKILL_MCP.md
+    - opscli/skills/templates/ops-keepa/references/OFFICIAL.md
+    """
+    skill_dir = _keepa_skill_dir()
+    spec_path = skill_dir / "SKILL_MCP.md"
+    official_path = skill_dir / "references" / "OFFICIAL.md"
+    required_paths = [spec_path, official_path]
+
+    for path in required_paths:
+        if not path.exists():
+            return _err(
+                FileNotFoundError(f"Keepa MCP 规范文档不存在：{path}。请检查 opscli 安装是否完整。"),
+                tool="MCP → keepa_spec_must_read()",
+            )
     try:
-        content = spec_path.read_text(encoding="utf-8")
-        return _ok({"spec": content, "source": str(spec_path)})
+        content = "\n\n".join(path.read_text(encoding="utf-8") for path in required_paths)
+        return _ok(
+            {
+                "spec": content,
+                "source": str(spec_path),
+                "sources": [str(path) for path in required_paths],
+            }
+        )
     except Exception as exc:
         return _err(exc, tool="MCP → keepa_spec_must_read()")
 

@@ -13,17 +13,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from opscli.skills.packaging import get_builtin_templates_dir
+
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 
+def _google_trends_skill_dir() -> Path:
+    """返回 Google Trends Skill 模板目录。"""
+    return get_builtin_templates_dir() / "ops-google-trends"
+
+
 async def google_trends_spec_must_read() -> dict:
-    """读取 Google Trends MCP 使用规范（opscli/mcp/references/google_trends/SKILL_MCP.md）。"""
-    spec_path = (
-        Path(__file__).resolve().parents[1]
-        / "references"
-        / "google_trends"
-        / "SKILL_MCP.md"
-    )
+    """读取 Google Trends MCP 使用规范。
+
+    规范内容统一收口到 opscli 内置 Skill 模板：
+    - opscli/skills/templates/ops-google-trends/SKILL_MCP.md
+    """
+    spec_path = _google_trends_skill_dir() / "SKILL_MCP.md"
     if not spec_path.exists():
         return _err(
             FileNotFoundError(f"Google Trends MCP 规范文档不存在：{spec_path}。请检查 opscli 安装是否完整。"),
@@ -31,7 +37,7 @@ async def google_trends_spec_must_read() -> dict:
         )
     try:
         content = spec_path.read_text(encoding="utf-8")
-        return _ok({"spec": content, "source": str(spec_path)})
+        return _ok({"spec": content, "source": str(spec_path), "sources": [str(spec_path)]})
     except Exception as exc:
         return _err(exc, tool="MCP → google_trends_spec_must_read()")
 

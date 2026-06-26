@@ -7,11 +7,11 @@ visibility: internal
 
 # ops-beta Canopy MCP
 
-这是 `beta_spec_must_read` 读取的内部 MCP 使用规范，放在
-`opscli/mcp/references/beta/` 下，不作为可安装用户 Skill 暴露。
+这是 `beta_spec_must_read` 读取的内部 MCP 使用规范，位于
+`opscli/skills/templates/ops-canopy/` 下，不再单独维护 `opscli/mcp/references/beta/` 副本。
 
 `beta` 是测试阶段小模块名，当前封装 Canopy REST API。Canopy 官方接口细节见
-`opscli/mcp/references/beta/OFFICIAL.md`。
+`opscli/skills/templates/ops-canopy/references/OFFICIAL.md`。
 
 ## Agent 快速执行规则
 

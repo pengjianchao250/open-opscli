@@ -19,6 +19,7 @@ from opscli.beta.canopy.domain.exceptions import CanopyConfigError
 from opscli.beta.canopy.domain.models import CanopyScenarioRequest
 from opscli.beta.canopy.services import CanopyApiManager
 from opscli.beta.canopy.services.api_manager import request_canopy_api
+from opscli.skills.packaging import get_builtin_templates_dir
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
@@ -168,16 +169,37 @@ CANOPY_SCENARIOS: dict[str, dict[str, Any]] = {
 }
 
 
+def _canopy_skill_dir() -> Path:
+    """返回 Canopy Skill 模板目录。"""
+    return get_builtin_templates_dir() / "ops-canopy"
+
+
 async def beta_spec_must_read() -> dict:
-    """仅当用户明确提到 beta/Canopy/测试服务时，读取 beta MCP 使用规范。"""
-    spec_path = Path(__file__).resolve().parents[1] / "references" / "beta" / "SKILL_MCP.md"
-    if not spec_path.exists():
-        return _err(
-            FileNotFoundError(f"beta MCP 规范文档不存在：{spec_path}。请检查 opscli 安装是否完整。"),
-            tool="MCP → beta_spec_must_read()",
-        )
+    """仅当用户明确提到 beta/Canopy/测试服务时，读取 beta MCP 使用规范。
+
+    规范内容统一收口到 opscli 内置 Skill 模板：
+    - opscli/skills/templates/ops-canopy/SKILL_MCP.md
+    - opscli/skills/templates/ops-canopy/references/OFFICIAL.md
+    """
+    skill_dir = _canopy_skill_dir()
+    spec_path = skill_dir / "SKILL_MCP.md"
+    official_path = skill_dir / "references" / "OFFICIAL.md"
+    required_paths = [spec_path, official_path]
+
+    for path in required_paths:
+        if not path.exists():
+            return _err(
+                FileNotFoundError(f"beta MCP 规范文档不存在：{path}。请检查 opscli 安装是否完整。"),
+                tool="MCP → beta_spec_must_read()",
+            )
     try:
-        return _ok({"spec": spec_path.read_text(encoding="utf-8"), "source": str(spec_path)})
+        return _ok(
+            {
+                "spec": "\n\n".join(path.read_text(encoding="utf-8") for path in required_paths),
+                "source": str(spec_path),
+                "sources": [str(path) for path in required_paths],
+            }
+        )
     except Exception as exc:
         return _err(exc, tool="MCP → beta_spec_must_read()")
 

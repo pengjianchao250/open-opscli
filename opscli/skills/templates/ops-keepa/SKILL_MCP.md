@@ -7,8 +7,8 @@ visibility: internal
 
 # ops-keepa MCP
 
-这是 `keepa_spec_must_read` 读取的内部 MCP 使用规范，放在
-`opscli/mcp/references/keepa/` 下，不作为可安装用户 Skill 暴露。
+这是 `keepa_spec_must_read` 读取的内部 MCP 使用规范，位于
+`opscli/skills/templates/ops-keepa/` 下，不再单独维护 `opscli/mcp/references/keepa/` 副本。
 
 用户大多数会用中文自然语言提需求，Agent 应优先把中文意图转换成
 `keepa_run` 的 `scenario + site + params`，再执行工具。
@@ -26,11 +26,11 @@ visibility: internal
 
 ## 工具列表
 
-- `keepa_spec_must_read`: read this guide before first use. 官方接口细节见 `opscli/mcp/references/keepa/OFFICIAL.md`。
+- `keepa_spec_must_read`: read this guide before first use. 官方接口细节见 `opscli/skills/templates/ops-keepa/references/OFFICIAL.md`。
 - `keepa_scenarios`: list supported Keepa scenarios.
-- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX with automatic readable formatting. `export_format` accepts `xls`/`xlsx`; `xls` and `xlsx` both generate `.xlsx`.
-- `keepa_job_status`: read a saved task result by `job_id`.
-- `keepa_export`: read export path or cloud URL, filename, format, and MIME type.
+- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX with automatic readable formatting. `export_format` accepts `xls`/`xlsx`; `xls` and `xlsx` both generate `.xlsx`。
+- `keepa_job_status`: read a saved task result by `job_id`。
+- `keepa_export`: read export path or cloud URL, filename, format, and MIME type。
 
 不要向用户推荐或暴露单独的 token 状态查询。Keepa 额度由系统内部管理。
 
@@ -96,7 +96,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 
 ## 官方口径索引
 
-详细官方口径见 `opscli/mcp/references/keepa/OFFICIAL.md`；当用户追问字段、token、分页、响应结构或接口限制时，先读取该文件。
+详细官方口径见 `opscli/skills/templates/ops-keepa/references/OFFICIAL.md`；当用户追问字段、token、分页、响应结构或接口限制时，先读取该文件。
 
 - Product Search：`/search`，必填 `domain`、`type=product`、`term`；默认返回 `products`，`asins-only=1` 返回 `asinList`。
 - Best Sellers：`/bestsellers`，必填 `domain`、`category`；响应主字段 `bestSellersList.asinList`，不返回完整商品详情。
@@ -198,7 +198,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 
 ## 站点
 
-Use Keepa site codes: `US`, `GB`/`UK`, `DE`, `FR`, `JP`, `CA`, `IT`, `ES`, `IN`, `MX`, `BR`.
+Use Keepa site codes: `US`, `GB`/`UK`, `DE`, `FR`, `JP`, `CA`, `IT`, `ES`, `IN`, `MX`, `BR`。
 
 中文站点映射：
 

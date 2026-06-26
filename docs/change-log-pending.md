@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-06-25 skills - 新增 Keepa / Google Trends / Canopy 服务 Skill 模板
+
+**变更原因**：本地 CLI 调远端 public MCP 的正式链路已经完成改造，需要补齐 Keepa、Google Trends、Canopy 三个服务的标准 Skill 模板，统一说明正式 CLI 代理远端 MCP 的调用流程、基础参数和场景能力，便于后续 AI Agent 直接按公开命令面工作。
+**改动点**：在 `opscli/skills/templates/` 下新增 `ops-keepa`、`ops-google-trends`、`ops-canopy` 三个 Skill 目录；每个目录补充 `SKILL.md`（面向正式 CLI 代理链路）、`SKILL_MCP.md`（面向远端 MCP 直连语境）和 `data/VERSION.json`。其中 `SKILL.md` 统一收口到正式 `opscli keepa`、`opscli google-trends`、`opscli canopy` 命令路径，说明默认链路、最小工作流、关键命令参数、典型场景和用户回复边界，并明确禁止向用户暴露内部调试命令；同时补充显式前置约束：正式 CLI 依赖本机已完成 OPS 授权，若本机未登录或登录态过期，必须先执行 `opscli auth login`，避免 CLI 代理远端 MCP 时因缺少本机登录态直接报错。`SKILL_MCP.md` 则单独约束对应远端 `keepa_*`、`google_trends_*`、`beta_canopy_*` tools 的直接调用语境。同步将原 `opscli/mcp/references/keepa`、`google_trends`、`beta` 的参考规范整合进模板目录，改为由 `opscli/mcp/tools/keepa.py`、`google_trends.py`、`beta.py` 直接读取模板目录作为单一规范来源，不再维护重复副本。同步更新 `opscli/skills/templates/manifest.json`，为三个新模板补充发版清单声明、tier 和 reason。
+**验证结果**：执行 `.\.venv\Scripts\python.exe -c "from opscli.skills.packaging import validate_release_manifest; problems = validate_release_manifest(); print(problems)"`，返回 `[]`；执行 `.\.venv\Scripts\python.exe -c "from opscli.skills.services.manager import SkillsManager; import json; data = [item for item in SkillsManager().list_templates() if item['name'] in {'ops-keepa','ops-google-trends','ops-canopy'}]; print(json.dumps(data, ensure_ascii=False, indent=2))"`，确认三个新模板都能被模板扫描逻辑识别。
+**影响范围**：影响 Skills 模板目录与发版清单；不改动 Keepa、Google Trends、Canopy 的正式 CLI 实现、远端 MCP 适配层或底层服务逻辑。
+**回滚方式**：删除 `opscli/skills/templates/ops-keepa`、`opscli/skills/templates/ops-google-trends`、`opscli/skills/templates/ops-canopy` 三个目录，回退 `opscli/skills/templates/manifest.json` 和本条变更记录。
+---
+
 ## 2026-06-25 canopy - 正式远端命令面 / 本地调试命令面分轨
 
 **变更原因**：远程 MCP 代理 CLI 统一改造要求 `opscli canopy` 对外去掉 beta 命名，收敛为正式远端命令面，同时把本地直连执行链路下沉到 `opscli canopy-debug`，并补齐 `job-status` / `export` 以对齐 Keepa、Google Trends 的统一命令面。

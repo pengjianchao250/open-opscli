@@ -51,7 +51,7 @@ def test_beta_spec_reads_internal_reference():
 
     assert result["success"] is True
     assert "ops-beta Canopy MCP" in result["data"]["spec"]
-    assert result["data"]["source"].endswith("opscli\\mcp\\references\\beta\\SKILL_MCP.md") or result["data"]["source"].endswith("opscli/mcp/references/beta/SKILL_MCP.md")
+    assert result["data"]["source"].endswith("opscli\\skills\\templates\\ops-canopy\\SKILL_MCP.md") or result["data"]["source"].endswith("opscli/skills/templates/ops-canopy/SKILL_MCP.md")
 
 
 def test_beta_canopy_scenarios_returns_all_openapi_endpoints():

@@ -87,7 +87,8 @@ def test_google_trends_spec_reads_internal_reference():
     assert result["success"] is True
     assert "Google Trends MCP" in result["data"]["spec"]
     source = Path(result["data"]["source"])
-    assert source.parts[-4:] == ("mcp", "references", "google_trends", "SKILL_MCP.md")
+    assert source.parts[-3:] == ("templates", "ops-google-trends", "SKILL_MCP.md")
+    assert result["data"]["sources"] == [str(source)]
 
 
 def test_google_trends_run_accepts_params_json_string(monkeypatch):
