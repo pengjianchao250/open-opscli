@@ -21,6 +21,8 @@ venv/
 
 # IDE
 .idea/
+.agents/
+.claude/
 .vscode/
 .tmp/
 *.swp
