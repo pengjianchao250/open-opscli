@@ -119,6 +119,30 @@
       "tier": "internal",
       "reason": "新增 Skill，尚未进入公开发版产物"
     },
+    "ops-keepa": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "experimental",
+      "reason": "Keepa 已迁移到正式 CLI 代理远端 MCP 模式，可作为实验 Skill 安装使用"
+    },
+    "ops-google-trends": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "experimental",
+      "reason": "Google Trends 已迁移到正式 CLI 代理远端 MCP 模式，可作为实验 Skill 安装使用"
+    },
+    "ops-canopy": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "experimental",
+      "reason": "Canopy 已通过正式 CLI 代理 beta 远端 MCP 模式对外暴露，可作为实验 Skill 安装使用"
+    },
     "ops-query-wizard": {
       "source": true,
       "wheel": true,

@@ -47,6 +47,10 @@ jobs:
           # macOS：同时编译 Intel (x86_64) 和 Apple Silicon (arm64)
           CIBW_ARCHS_MACOS: "x86_64 arm64"
 
+          # Windows：仅编译 64 位 AMD64，弃用 32 位 win32
+          # 原因：团队无 32 位 Windows 用户，无需为其产出 wheel，减少构建矩阵与维护成本
+          CIBW_ARCHS_WINDOWS: "AMD64"
+
           # 构建前安装 Cython 和 setuptools（编译依赖）
           CIBW_BEFORE_BUILD: "pip install cython>=3 setuptools>=68 wheel"
 
