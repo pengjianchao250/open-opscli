@@ -4,17 +4,17 @@
   "policies": {
     "seller_sprite_run": {
       "service": "seller_sprite",
-      "daily_limit": 5,
+      "daily_limit": 10,
       "enabled": true
     },
     "xiyou_run": {
       "service": "xiyou",
-      "daily_limit": 5,
+      "daily_limit": 10,
       "enabled": false
     },
     "sif_run": {
       "service": "sif",
-      "daily_limit": 5,
+      "daily_limit": 10,
       "enabled": false
     }
   }
