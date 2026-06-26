@@ -2163,4 +2163,21 @@
 **验证结果**：RED：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_quota.py tests/mcp/test_keepa_tools.py tests/keepa/test_cli_remote.py tests/keepa/test_remote_adapter.py -q` 初始失败（5 failed），分别暴露 `keepa_run` 未进入默认策略、`keepa_quota_status` 工具缺失、正式 CLI 缺少 `quota-status`、remote adapter 缺少 `quota_status()`；GREEN：同命令复跑通过（36 passed）；补充回归 `D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_quota.py tests/mcp/test_keepa_tools.py tests/mcp/test_tools.py tests/keepa/test_cli_remote.py tests/keepa/test_cli_split.py tests/keepa/test_remote_adapter.py -q` 通过（50 passed）。
 **影响范围**：影响 Keepa MCP 入口、Keepa 正式 CLI、远端 MCP 适配层与 MCP 配额默认配置；Keepa 业务执行逻辑、导出逻辑与内部 token 预检查逻辑保持不变。
 **回滚方式**：回退 `opscli/mcp/quota.py`、`opscli/mcp/tools/keepa.py`、`opscli/keepa/remote_adapter.py`、`opscli/keepa/cli.py`、`opscli/mcp/configs/mcp-quota.json`、对应四组测试和本条变更记录。
+
+## 2026-06-24 ops-dataset-query Skill - 取消「发现新版本提示强制升级」约束
+
+**变更原因**：用户要求取消 skill 在调用 opscli 时一旦输出新版本提示就强制暂停并先升级的约束。该规则会打断正常取数流程、把升级动作强加给 AI。
+**改动点**：`opscli/skills/templates/ops-dataset-query/SKILL.md` 删除「铁律十二：发现新版本提示必须先升级再继续」整节（含处理规则与禁止行为）。其余铁律及 `scripts/updater.py` 的 `update_available` 状态字段未动（仅状态展示，非强制逻辑）。
+**验证结果**：`grep` 确认无「铁律十二」交叉引用、无「发现新版本/建议升级/A newer version」强制升级残留。
+**影响范围**：AI 执行 opscli 命令时不再因新版本提示强制中断升级，按用户意图继续原操作；不影响数据为空时的 skills upgrade 兜底规则。
+**回滚方式**：git 还原 SKILL.md 即可恢复该铁律。
+---
+
+## 2026-06-25 opscli/cli.py + mcp/server.py - 移除悬空的 asin_review 引用（修复 0.0.99 导入崩溃）
+
+**变更原因**：0.0.99 安装后所有 opscli 命令启动即报 `ModuleNotFoundError: No module named 'opscli.asin_review'`。根因：提交 7489810 往 cli.py 与 mcp/server.py 加了对 asin_review 模块的 4 处引用，但 `opscli/asin_review/` 顶层包与 `opscli/mcp/tools/asin_review.py` 从未提交（全历史/所有分支/stash 均无），属漏 git add。cli.py 导入失败导致整个 CLI 不可用。
+**改动点**：删除 4 处悬空引用——cli.py:12 import、cli.py:44 add_typer(name="asin-review")、mcp/server.py:293 import、mcp/server.py:310 register。其余模块未动。
+**验证结果**：`grep -rn asin_review opscli/` 零命中；`python3 -c "import opscli.cli"` 与 `import opscli.mcp.server` 均成功；`python3 -m opscli.cli --version`/`--help` 正常，asin-data 保留、asin-review 消失。
+**影响范围**：恢复 opscli 全部命令可用；asin-review 功能本就无实体，移除无功能损失。0.0.99 已发布且损坏，需发新版本（如 0.0.100）覆盖。
+**回滚方式**：git 还原 cli.py 与 mcp/server.py 即可（但会恢复崩溃，不建议）。
 ---
