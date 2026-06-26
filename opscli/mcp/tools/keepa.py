@@ -36,6 +36,20 @@ def _get_current_mcp_user_email() -> str | None:
     return get_current_user_email()
 
 
+def _load_keepa_settings():
+    """读取 Keepa 运行配置。"""
+    from opscli.keepa.config import load_settings
+
+    return load_settings()
+
+
+async def _try_auto_mcp_login() -> dict:
+    """在 HTTP/SSE MCP 模式下尝试一步登录并缓存 session。"""
+    from .auth import auth_mcp_login
+
+    return await auth_mcp_login()
+
+
 async def keepa_spec_must_read() -> dict:
     """读取 Keepa MCP 使用规范与官方参考。
 
@@ -127,6 +141,17 @@ async def keepa_run(
         export_format = _normalize_mcp_export_format(export_format)
         call_params["export_format"] = export_format
         sid, jw = _get_auth_pair("ops", session_id, jwt)
+        keepa_settings = _load_keepa_settings()
+        if not sid and not keepa_settings.api_key:
+            login_result = await _try_auto_mcp_login()
+            if login_result.get("success"):
+                sid, jw = _get_auth_pair("ops", session_id, jwt)
+            if not sid:
+                login_error = (login_result.get("error") or {}).get("message")
+                message = "无 session_id：请完成授权登录，或传入有效的 session_id"
+                if login_error:
+                    message = f"{message}。自动执行 auth_mcp_login 失败：{login_error}"
+                raise ValueError(message)
         from opscli.keepa.domain.models import KeepaScenarioRequest
         from opscli.keepa.services import KeepaApiManager
 
