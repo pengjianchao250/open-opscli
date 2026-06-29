@@ -19,7 +19,7 @@ description: Use when the user asks to query or export Keepa data through the pu
 4. `params` 必须是 JSON 对象字符串；不要把数组、裸字符串或半结构化文本直接塞给 `--params`。
 5. `product` 至少提供 `asin/asins` 或 `code/codes` 之一，不能同时传两类标识。
 6. `product-search`、`category-search` 缺少关键词时先补关键词；`seller` 缺少 seller id、`category-lookup` 缺少 category id、`bestsellers` 缺少 `category` 或 `productGroup` 时先澄清。
-7. 不向用户暴露 Keepa token 余额、账号来源、`params.json`、`raw.json`、本地导出路径等内部信息。
+7. 不向用户暴露 Keepa token 余额、账号来源、`params.json`、`raw.json`、本地导出路径等内部信息；MCP 每日调用额度按本 Skill 的回复规则展示。
 8. 如果当前宿主是远端 MCP 直连而不是 CLI 代理，继续看 [SKILL_MCP.md](SKILL_MCP.md)。
 9. 若远端 MCP 直连时提示 `无 session_id：请完成授权登录，或传入有效的 session_id` 等授权类错误，先执行 `auth_mcp_login`；不要先把问题归因为 Keepa 场景、参数或导出格式。
 
@@ -31,7 +31,7 @@ description: Use when the user asks to query or export Keepa data through the pu
 ## 正式链路
 
 - 本地 CLI 代理链路：`opscli keepa ...`
-- 远端 MCP tools：`keepa_scenarios`、`keepa_run`、`keepa_job_status`、`keepa_export`
+- 远端 MCP tools：`keepa_scenarios`、`keepa_quota_status`、`keepa_run`、`keepa_job_status`、`keepa_export`
 - 常见前置：确认本机 `opscli auth login` 已完成且登录态仍有效
 
 说明：
@@ -47,7 +47,15 @@ description: Use when the user asks to query or export Keepa data through the pu
 opscli keepa scenarios
 ```
 
-2. 执行场景
+2. 查询每日额度
+
+```powershell
+opscli keepa quota-status
+```
+
+该命令只读取当前用户的 MCP 每日调用额度，不消耗调用次数，也不展示 Keepa 账号级 token 余额。
+
+3. 执行场景
 
 ```powershell
 opscli keepa run <scenario> --site US --params '{"asin":"B0088PUEPK"}'
@@ -64,13 +72,13 @@ opscli keepa run <scenario> --site US --params '{"asin":"B0088PUEPK"}'
 - `--force`：忽略 token 预检查提醒继续执行
 - `--wait`：token 不足时等待一次 refill 后再执行
 
-3. 查任务结果
+4. 查任务结果
 
 ```powershell
 opscli keepa job-status <job_id>
 ```
 
-4. 查导出文件
+5. 查导出文件
 
 ```powershell
 opscli keepa export <job_id>
@@ -81,7 +89,8 @@ opscli keepa export <job_id>
 1. 用自然语言判断场景；拿不准时先跑 `opscli keepa scenarios`
 2. 只补当前场景缺失的必填参数
 3. 组织 `scenario + site + params`，执行 `opscli keepa run ...`
-4. 如果用户要续查任务或只要导出文件，再用 `job-status` / `export`
+4. 用户执行前想确认今天还能查几次时，使用 `opscli keepa quota-status`
+5. 如果用户要续查任务或只要导出文件，再用 `job-status` / `export`
 
 ## 场景速查
 
@@ -133,6 +142,10 @@ opscli keepa run bestsellers --site US --params '{"category":"172282"}'
 ## 回复规则
 
 - 成功时只保留：场景、站点、查询对象、`job_id`、`row_count`、导出文件
+- 若 `keepa_run` 响应顶层存在 `quota`，在最终回复末尾补一句：
+  - `今日额度：已用 used / limit，剩余 remaining，重置时间 reset_at`
+- `keepa_scenarios`、`keepa_quota_status`、`keepa_job_status`、`keepa_export` 不消耗额度；只有 `keepa_run` 消耗次数。
+- `job_status` 和 `export` 默认不重复提示额度，避免轮询阶段重复刷屏。
 - 如果 `row_count=0`，明确告诉用户无匹配结果，并提醒核对站点、ASIN、关键词或筛选条件
 - 用户问“字段准不准”时，只说明 XLSX 是在 Keepa 原始响应基础上做中文表头和可读化处理；口径以 Keepa 原始响应和官方文档为准
-- 不要主动打印 token 消耗、剩余额度、服务器本地路径、内部原始 JSON
+- 不要主动打印 Keepa token 消耗、token 余额、服务器本地路径或内部原始 JSON

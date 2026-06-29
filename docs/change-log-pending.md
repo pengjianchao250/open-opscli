@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-06-29 skills - 统一 Keepa 每日额度提示
+
+**变更原因**：`keepa_run` 已通过 MCP 限额中间件返回每日调用额度，但 Keepa Skill 仍要求隐藏剩余额度，导致最终回复未像卖家精灵一样提示用户当天的额度使用情况。
+**改动点**：更新 `ops-keepa/SKILL.md` 与 `SKILL_MCP.md`，补充 `keepa_quota_status` / `opscli keepa quota-status` 使用说明，并要求 `keepa_run` 顶层存在 `quota` 时展示已用、总额、剩余和重置时间；`job_status` / `export` 不重复提示；Keepa API token 余额和账号信息继续隐藏。`tests/mcp/test_keepa_tools.py` 增加两份 Skill 模板的额度提示契约测试。
+**验证结果**：RED 阶段运行 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_keepa_tools.py::test_keepa_skill_templates_require_daily_quota_prompt -q`，按预期失败于 Keepa Skill 缺少额度提示模板；GREEN 阶段同命令通过（1 passed）。聚焦回归 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_keepa_tools.py tests\keepa\test_remote_adapter.py tests\keepa\test_cli_remote.py -q` 通过（21 passed）。`ops-keepa` manifest 条目、`SKILL.md`、`SKILL_MCP.md` 和 `data/VERSION.json` 定向校验通过。全局 `validate_release_manifest()` 被仓库既存问题阻断：提交 `eb665b4` 删除了 `ops-canopy`、`ops-google-trends` 目录但 manifest 仍保留声明；`tests/skills/test_packaging.py` 另有 Windows 路径分隔符既存断言失败，均未在本次变更中扩范围修复。
+**影响范围**：仅影响 Keepa Skill 的用户回复与额度查询指引，不修改 `keepa_run` 参数、MCP 返回结构、限额计算或底层 Keepa token 预检逻辑。
+**回滚方式**：回退两份 Keepa Skill、对应契约测试和本条变更记录。
+---
+
 ## 2026-06-25 skills - 新增 Keepa / Google Trends / Canopy 服务 Skill 模板
 
 **变更原因**：本地 CLI 调远端 public MCP 的正式链路已经完成改造，需要补齐 Keepa、Google Trends、Canopy 三个服务的标准 Skill 模板，统一说明正式 CLI 代理远端 MCP 的调用流程、基础参数和场景能力，便于后续 AI Agent 直接按公开命令面工作。
