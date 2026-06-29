@@ -112,6 +112,16 @@ def test_keepa_spec_reads_internal_reference():
     assert any(path.endswith(("ops-keepa\\references\\OFFICIAL.md", "ops-keepa/references/OFFICIAL.md")) for path in result["data"]["sources"])
 
 
+def test_keepa_skill_templates_require_daily_quota_prompt():
+    skill_dir = keepa_tools._keepa_skill_dir()
+    expected_prompt = "今日额度：已用 used / limit，剩余 remaining，重置时间 reset_at"
+
+    for filename in ("SKILL.md", "SKILL_MCP.md"):
+        content = (skill_dir / filename).read_text(encoding="utf-8")
+        assert expected_prompt in content
+        assert "job_status` 和 `export` 默认不重复提示额度" in content
+
+
 def test_keepa_run_accepts_params_json_string(monkeypatch):
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
 
