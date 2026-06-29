@@ -1,0 +1,210 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="2100" viewBox="0 0 1600 2100" role="img" aria-labelledby="title desc">
+  <title id="title">Amazon Rufus 功能总流程图</title>
+  <desc id="desc">展示 Amazon Rufus 的入口、MCP 和 CLI 编排、登录采集、后端获取、状态存储、题库和错误恢复流程。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 12 6 L 0 12 z" fill="#344054"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke: #d0d5dd; stroke-width: 2; rx: 18; }
+      .box { fill: #eef4ff; stroke: #84adff; stroke-width: 2; rx: 12; }
+      .box-green { fill: #ecfdf3; stroke: #6ce9a6; stroke-width: 2; rx: 12; }
+      .box-yellow { fill: #fffaeb; stroke: #fdb022; stroke-width: 2; rx: 12; }
+      .box-red { fill: #fff1f3; stroke: #fda29b; stroke-width: 2; rx: 12; }
+      .box-gray { fill: #f2f4f7; stroke: #98a2b3; stroke-width: 2; rx: 12; }
+      .lane { fill: #f9fafb; stroke: #eaecf0; stroke-width: 2; rx: 16; }
+      .title { font: 700 34px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #101828; }
+      .section { font: 700 24px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #101828; }
+      .label { font: 600 18px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #182230; }
+      .text { font: 15px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #344054; }
+      .small { font: 13px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #475467; }
+      .arrow { stroke: #344054; stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #667085; stroke-width: 2.2; fill: none; stroke-dasharray: 7 7; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1600" height="2100"/>
+  <text class="title" x="60" y="70">Amazon Rufus 功能总流程图</text>
+  <text class="text" x="60" y="105">核心目标：让 Agent 或 CLI 在不暴露敏感材料的前提下，稳定获取指定 ASIN 的 Rufus 问答结果并写入本地报告。</text>
+
+  <rect class="panel" x="40" y="135" width="1520" height="300"/>
+  <text class="section" x="70" y="180">1. 入口层</text>
+  <rect class="box" x="95" y="220" width="210" height="82"/>
+  <text class="label" x="133" y="252">用户 / Agent</text>
+  <text class="small" x="124" y="278">提出 ASIN、国家、问题</text>
+
+  <rect class="box-yellow" x="405" y="205" width="260" height="112"/>
+  <text class="label" x="448" y="238">ops-amazon-rufus Skill</text>
+  <text class="small" x="430" y="265">保存默认题库和编排规则</text>
+  <text class="small" x="430" y="290">本身不执行 Rufus 抓取</text>
+
+  <rect class="box-green" x="790" y="185" width="280" height="150"/>
+  <text class="label" x="860" y="218">MCP Tools</text>
+  <text class="small" x="815" y="245">remote_consent / login_status</text>
+  <text class="small" x="815" y="270">watch_login / logout / get</text>
+  <text class="small" x="815" y="295">platform_cookie / curl_save</text>
+
+  <rect class="box" x="1190" y="185" width="275" height="150"/>
+  <text class="label" x="1276" y="218">CLI</text>
+  <text class="small" x="1215" y="245">get-backend / watch-login</text>
+  <text class="small" x="1215" y="270">login-status / logout</text>
+  <text class="small" x="1215" y="295">remote-consent / 排障命令</text>
+
+  <path class="arrow" d="M305 261 L405 261"/>
+  <path class="arrow" d="M665 248 L790 248"/>
+  <path class="dash" d="M665 292 C800 390 1040 390 1190 292"/>
+
+  <rect class="panel" x="40" y="470" width="1520" height="360"/>
+  <text class="section" x="70" y="515">2. 编排主线</text>
+  <rect class="box-gray" x="85" y="560" width="190" height="72"/>
+  <text class="label" x="121" y="592">鉴权检查</text>
+  <text class="small" x="108" y="617">OPS / MCP Token</text>
+
+  <rect class="box-gray" x="325" y="560" width="210" height="72"/>
+  <text class="label" x="366" y="592">授权偏好</text>
+  <text class="small" x="354" y="617">remote-consent</text>
+
+  <rect class="box-yellow" x="585" y="545" width="220" height="102"/>
+  <text class="label" x="633" y="577">登录态检查</text>
+  <text class="small" x="616" y="602">login-status</text>
+  <text class="small" x="614" y="626">ready / missing / invalid</text>
+
+  <rect class="box-green" x="855" y="545" width="220" height="102"/>
+  <text class="label" x="902" y="577">登录采集</text>
+  <text class="small" x="889" y="602">watch-login</text>
+  <text class="small" x="883" y="626">保存 streaming cURL</text>
+
+  <rect class="box" x="1125" y="545" width="220" height="102"/>
+  <text class="label" x="1171" y="577">获取回答</text>
+  <text class="small" x="1160" y="602">get-backend</text>
+  <text class="small" x="1156" y="626">逐题请求 Rufus</text>
+
+  <rect class="box" x="1095" y="690" width="280" height="78"/>
+  <text class="label" x="1153" y="722">输出本次报告</text>
+  <text class="small" x="1124" y="747">output/amazon-rufus/*.md</text>
+
+  <path class="arrow" d="M275 596 L325 596"/>
+  <path class="arrow" d="M535 596 L585 596"/>
+  <path class="arrow" d="M805 596 L855 596"/>
+  <path class="arrow" d="M1075 596 L1125 596"/>
+  <path class="arrow" d="M1235 647 L1235 690"/>
+  <path class="dash" d="M700 647 C700 735 920 750 1095 728"/>
+  <text class="small" x="710" y="705">ready 时可跳过 watch-login</text>
+
+  <rect class="panel" x="40" y="865" width="1520" height="370"/>
+  <text class="section" x="70" y="910">3. watch-login 登录采集</text>
+  <rect class="box-gray" x="85" y="960" width="190" height="76"/>
+  <text class="label" x="122" y="992">解析 ASIN</text>
+  <text class="small" x="113" y="1017">生成商品详情页 URL</text>
+
+  <rect class="box-gray" x="335" y="960" width="210" height="76"/>
+  <text class="label" x="386" y="992">连接 Chrome</text>
+  <text class="small" x="366" y="1017">CDP 调试端口</text>
+
+  <rect class="box-yellow" x="605" y="945" width="220" height="106"/>
+  <text class="label" x="657" y="977">用户登录</text>
+  <text class="small" x="635" y="1002">打开 Amazon 站点</text>
+  <text class="small" x="635" y="1027">检测账号已登录</text>
+
+  <rect class="box-yellow" x="885" y="945" width="230" height="106"/>
+  <text class="label" x="932" y="977">触发 Rufus</text>
+  <text class="small" x="912" y="1002">商品页 Ask Alexa</text>
+  <text class="small" x="912" y="1027">或 Rufus 问答入口</text>
+
+  <rect class="box-green" x="1175" y="945" width="250" height="106"/>
+  <text class="label" x="1216" y="977">保存请求种子</text>
+  <text class="small" x="1204" y="1002">捕获 streaming 请求</text>
+  <text class="small" x="1204" y="1027">streaming_request_saved</text>
+
+  <rect class="box-green" x="520" y="1110" width="560" height="74"/>
+  <text class="label" x="632" y="1140">成功结果</text>
+  <text class="small" x="610" y="1165">login_detected=true，cookie_count 大于 0，streaming_request_saved=true</text>
+
+  <path class="arrow" d="M275 998 L335 998"/>
+  <path class="arrow" d="M545 998 L605 998"/>
+  <path class="arrow" d="M825 998 L885 998"/>
+  <path class="arrow" d="M1115 998 L1175 998"/>
+  <path class="arrow" d="M1300 1051 C1285 1125 1150 1147 1080 1147"/>
+
+  <rect class="panel" x="40" y="1270" width="1520" height="360"/>
+  <text class="section" x="70" y="1315">4. 登录态状态机与状态存储</text>
+  <rect class="box-red" x="120" y="1375" width="210" height="80"/>
+  <text class="label" x="183" y="1406">missing</text>
+  <text class="small" x="157" y="1431">没有 Rufus 状态</text>
+
+  <rect class="box-green" x="540" y="1375" width="210" height="80"/>
+  <text class="label" x="606" y="1406">ready</text>
+  <text class="small" x="568" y="1431">可 get-backend</text>
+
+  <rect class="box-yellow" x="960" y="1375" width="230" height="80"/>
+  <text class="label" x="1036" y="1406">invalid</text>
+  <text class="small" x="990" y="1431">普通状态，非 streaming</text>
+
+  <path class="arrow" d="M330 1415 L540 1415"/>
+  <text class="small" x="382" y="1395">watch-login</text>
+  <path class="arrow" d="M750 1415 L960 1415"/>
+  <text class="small" x="792" y="1395">save-state 覆盖</text>
+  <path class="arrow" d="M960 1450 C760 1525 520 1525 330 1450"/>
+  <text class="small" x="602" y="1530">logout 后回到 missing；invalid 需重新 watch-login</text>
+
+  <rect class="box-gray" x="130" y="1535" width="350" height="64"/>
+  <text class="label" x="205" y="1562">默认远端状态源</text>
+  <text class="small" x="183" y="1586">OPS 平台 Cookie content</text>
+
+  <rect class="box-gray" x="560" y="1535" width="350" height="64"/>
+  <text class="label" x="652" y="1562">显式 fallback</text>
+  <text class="small" x="615" y="1586">本地 browser-state 文件</text>
+
+  <rect class="box-red" x="990" y="1535" width="360" height="64"/>
+  <text class="label" x="1068" y="1562">注意</text>
+  <text class="small" x="1030" y="1586">真实主线通常不要跑 save-state</text>
+
+  <rect class="panel" x="40" y="1665" width="1520" height="360"/>
+  <text class="section" x="70" y="1710">5. get-backend、题库和错误恢复</text>
+
+  <rect class="box-gray" x="90" y="1760" width="215" height="80"/>
+  <text class="label" x="132" y="1790">问题来源</text>
+  <text class="small" x="114" y="1815">-q 或默认题库</text>
+
+  <rect class="box-yellow" x="360" y="1745" width="240" height="110"/>
+  <text class="label" x="430" y="1775">默认题库</text>
+  <text class="small" x="390" y="1800">question_templates.json</text>
+  <text class="small" x="390" y="1825">为空时报 QUESTION_BANK</text>
+
+  <rect class="box-green" x="660" y="1745" width="240" height="110"/>
+  <text class="label" x="717" y="1775">后端凭证</text>
+  <text class="small" x="690" y="1800">读取 Rufus 状态</text>
+  <text class="small" x="690" y="1825">解析 streaming cURL</text>
+
+  <rect class="box-green" x="960" y="1745" width="240" height="110"/>
+  <text class="label" x="1024" y="1775">请求 Rufus</text>
+  <text class="small" x="990" y="1800">HeadlessRufusClient</text>
+  <text class="small" x="990" y="1825">解析 SSE 回答</text>
+
+  <rect class="box" x="1260" y="1745" width="230" height="110"/>
+  <text class="label" x="1323" y="1775">报告</text>
+  <text class="small" x="1290" y="1800">写入 output 目录</text>
+  <text class="small" x="1290" y="1825">只读取本次路径</text>
+
+  <path class="arrow" d="M305 1800 L360 1800"/>
+  <path class="arrow" d="M600 1800 L660 1800"/>
+  <path class="arrow" d="M900 1800 L960 1800"/>
+  <path class="arrow" d="M1200 1800 L1260 1800"/>
+
+  <rect class="box-red" x="105" y="1900" width="320" height="74"/>
+  <text class="label" x="143" y="1928">QUESTION_BANK_NOT_READY</text>
+  <text class="small" x="145" y="1953">临时使用 -q 指定问题</text>
+
+  <rect class="box-red" x="475" y="1900" width="300" height="74"/>
+  <text class="label" x="543" y="1928">login-status invalid</text>
+  <text class="small" x="528" y="1953">重新 watch-login，避免 save-state</text>
+
+  <rect class="box-red" x="825" y="1900" width="330" height="74"/>
+  <text class="label" x="878" y="1928">平台 Cookie 鉴权错误</text>
+  <text class="small" x="880" y="1953">先处理 OPS 或 MCP 登录</text>
+
+  <rect class="box-red" x="1205" y="1900" width="290" height="74"/>
+  <text class="label" x="1258" y="1928">未捕获 seed</text>
+  <text class="small" x="1240" y="1953">换 ASIN 或点击 Ask Alexa</text>
+</svg>

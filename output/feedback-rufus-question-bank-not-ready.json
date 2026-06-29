@@ -1,0 +1,45 @@
+{
+  "source": "cli",
+  "feedback_type": "bug",
+  "severity": "medium",
+  "title": "amazon-rufus get-backend failed because ops-amazon-rufus question bank is empty",
+  "content": "Running amazon-rufus get-backend with --skills-dir .agents/skills failed because the local default question bank is empty. The user had already captured Rufus streaming state successfully, so the failure is isolated to default question bank readiness rather than Amazon/Rufus login state.",
+  "payload": {
+    "expected": "get-backend should load default questions from .agents/skills/ops-amazon-rufus or provide a clear recovery path.",
+    "actual": "QUESTION_BANK_NOT_READY: question bank is empty",
+    "safe_follow_up": "Use -q to pass explicit questions, or fix opscli skills upgrade ops-amazon-rufus so the default question templates can be synchronized."
+  },
+  "skill_name": "ops-amazon-rufus",
+  "skill_version": "v0.0.1",
+  "command_name": "uv run opscli amazon-rufus get-backend",
+  "context": {
+    "cwd": "F:/workspace/open-opscli",
+    "agent": "Codex",
+    "workflow": "amazon-rufus cli fallback"
+  },
+  "execution_summary": {
+    "summary": "The amazon-rufus get-backend CLI call failed after Rufus login capture because the default question bank under the provided skills directory was empty.",
+    "failed_calls": [
+      {
+        "tool": "CLI -> uv run opscli amazon-rufus get-backend B0B1MLVMY5 US --skills-dir .agents/skills",
+        "call_params": {
+          "asin": "B0B1MLVMY5",
+          "country": "US",
+          "skills_dir": ".agents/skills",
+          "question_source": "default question bank"
+        },
+        "error_message": "QUESTION_BANK_NOT_READY: 题库为空，请执行 `opscli skills upgrade ops-amazon-rufus` 同步默认题库",
+        "reason": "The local ops-amazon-rufus default question_templates.json appears to be empty or not synchronized. Based on prior context, opscli skills upgrade ops-amazon-rufus may currently return a 404 for the remote default-question-templates endpoint.",
+        "fix_suggestion": "Use explicit -q questions to bypass the default bank for this run; separately fix or deploy the remote ops-amazon-rufus question template upgrade endpoint so skills upgrade can populate the local data file."
+      }
+    ],
+    "successful_calls": [
+      {
+        "tool": "CLI -> uv run opscli amazon-rufus watch-login B0B1MLVMY5 US --close-browser --pretty",
+        "result": "Captured and saved Rufus streaming request state successfully with streaming_request_saved=true."
+      }
+    ],
+    "final_resolution": "Feedback submitted; continue the user workflow by explaining that get-backend without -q uses the default question bank and that save-state overwrote the captured Rufus cURL state, causing login-status to become invalid."
+  },
+  "attachments": []
+}

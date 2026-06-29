@@ -362,7 +362,6 @@ class BrowserAttachService:
                     resolved_chrome,
                     f"--remote-debugging-port={port}",
                     f"--user-data-dir={profile_dir}",
-                    "--auto-open-devtools-for-tabs",
                     "--no-first-run",
                     "--no-default-browser-check",
                 ],

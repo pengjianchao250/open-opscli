@@ -992,83 +992,39 @@ def test_headless_capture_does_not_retry_more_than_once_after_browser_install(mo
     assert "已尝试自动安装 Playwright Chromium" in str(exc.value)
 
 
-def test_cli_help_exposes_init_and_cdp_options():
+def test_cli_help_exposes_backend_and_login_entries_without_legacy_get():
     root_help = runner.invoke(app, ["--help"])
     get_help = runner.invoke(app, ["get", "--help"])
     init_help = runner.invoke(app, ["init", "--help"])
     backend_help = runner.invoke(app, ["get-backend", "--help"])
     consent_help = runner.invoke(app, ["remote-consent", "--help"])
     login_status_help = runner.invoke(app, ["login-status", "--help"])
+    platform_cookie_help = runner.invoke(app, ["platform-cookie", "--help"])
 
     assert root_help.exit_code == 0
-    assert get_help.exit_code == 0
+    assert get_help.exit_code != 0
     assert init_help.exit_code == 0
     assert backend_help.exit_code == 0
     assert consent_help.exit_code == 0
     assert login_status_help.exit_code == 0
+    assert platform_cookie_help.exit_code == 0
+    assert " get " not in root_help.stdout
     assert "init" in root_help.stdout
     assert "save-state" in root_help.stdout
     assert "watch-login" in root_help.stdout
     assert "get-backend" in root_help.stdout
     assert "remote-consent" in root_help.stdout
     assert "login-status" in root_help.stdout
+    assert "platform-cookie" in root_help.stdout
     assert "--chrome-path" in init_help.stdout
     assert "launch-if-needed" in init_help.stdout
     assert "--submit-upload" in backend_help.stdout
     assert "国家名" in login_status_help.stdout
     assert "status" in consent_help.stdout
     assert "set" in consent_help.stdout
-    for text in [
-        "--cdp-url",
-        "--new-chrome",
-        "keep-chrome",
-        "--chrome-path",
-        "launch-if",
-        "submit-upload",
-    ]:
-        assert text in get_help.stdout
-    assert "--remote-rufus" not in get_help.stdout
-
-
-def test_cli_get_writes_manager_result_to_report_file(monkeypatch, tmp_path: Path):
-    captured = {}
-
-    class DummyManager:
-        def get(self, **kwargs):
-            captured.update(kwargs)
-            return {
-                "asin": kwargs["asin"],
-                "country": kwargs["country"],
-                "answers": [{"text": "默认答案", "isSuccess": True}],
-                "seed_request": {"request_url": "hidden"},
-                "upload_payload": {"records": []},
-            }
-
-        def get_backend(self, **kwargs):
-            raise AssertionError("CLI CDP 入口不应调用后端 headless get_backend")
-
-    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(app, ["get", "B0TEST1234", "US"])
-    report_path, report_text = _read_single_rufus_report(tmp_path)
-
-    assert result.exit_code == 0
-    assert re.fullmatch(r"B0TEST1234-\d{8}-\d{6}\.md", report_path.name)
-    assert report_path.parent == tmp_path / "output" / "amazon-rufus"
-    assert report_text == "## 第 1 题：第 1 题\n\n### 答案\n\n默认答案"
-    assert "Rufus 答案报告已保存：" in result.stdout
-    assert (Path("output") / "amazon-rufus" / report_path.name).as_posix() in result.stdout
-    assert "默认答案" not in result.stdout
-    assert "seed_request" not in result.stdout
-    assert "upload_payload" not in result.stdout
-    assert captured["cdp_url"] == "http://127.0.0.1:9222"
-    assert captured["new_chrome"] is False
-    assert captured["keep_chrome_open"] is False
-    assert captured["chrome_path"] is None
-    assert captured["launch_if_needed"] is False
-    assert captured["timeout_seconds"] == 180
-    assert captured["submit_upload"] is False
+    assert "save" in platform_cookie_help.stdout
+    assert "get" in platform_cookie_help.stdout
+    assert "--remote-rufus" not in root_help.stdout
 
 
 def test_cli_get_backend_calls_backend_manager_and_writes_report(monkeypatch, tmp_path: Path):
@@ -1155,12 +1111,29 @@ def test_cli_remote_consent_status_and_set_are_safe(monkeypatch, tmp_path: Path)
         assert forbidden not in combined.lower()
 
 
-def test_cli_login_status_outputs_safe_summary(monkeypatch, tmp_path: Path):
-    from opscli.amazon_rufus.services import browser_state_store as state_module
+def test_cli_login_status_outputs_safe_summary(monkeypatch):
     from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
 
-    monkeypatch.setattr(state_module, "CONFIG_DIR", tmp_path)
-    store = RufusBrowserStateStore(base_dir=tmp_path / "amazon-rufus")
+    class FakePlatformCookieClient:
+        def __init__(self):
+            self.saved = None
+
+        def save_platform_cookie(self, *, platform: str, country: str, content: str):
+            self.saved = {"platform": platform, "country": country, "content": content}
+            return {"code": 200, "msg": "保存成功", "data": self.saved}
+
+        def get_platform_cookie(self, *, platform: str):
+            return {"code": 200, "msg": "操作成功", "data": self.saved}
+
+    remote_client = FakePlatformCookieClient()
+    store = RufusBrowserStateStore(platform_cookie_client=remote_client)
+
+    class TestManager(RufusManager):
+        def __init__(self):
+            super().__init__(transport_client=remote_client)
+
+    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", TestManager)
+
     missing = runner.invoke(app, ["login-status", "US", "--pretty"])
     store.save(
         country="US",
@@ -1169,6 +1142,16 @@ def test_cli_login_status_outputs_safe_summary(monkeypatch, tmp_path: Path):
             "cookies": [{"name": "session-id", "value": "abc", "domain": ".amazon.com", "path": "/"}],
             "origins": [],
         },
+        seed_request=SeedRequestRecord(
+            request_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+            request_headers={"cookie": "session-id=abc"},
+            request_body='{"queryContext": {"query": "seed"}}',
+            page_url="https://www.amazon.com/dp/B0TEST1234",
+            tab_id="tab-1",
+            asin="B0TEST1234",
+            country="US",
+            captured_at=123,
+        ),
     )
     ready = runner.invoke(app, ["login-status", "US", "--pretty"])
 
@@ -1183,214 +1166,11 @@ def test_cli_login_status_outputs_safe_summary(monkeypatch, tmp_path: Path):
         "has_login_state": True,
         "can_get_backend": True,
         "session_cookie_count": 1,
-        "has_streaming_request": False,
+        "has_streaming_request": True,
     }
     combined = missing.stdout + ready.stdout
     for forbidden in ["session-id=abc", "storage_state", "\"headers\"", "\"payload\"", "\"seed_request\""]:
         assert forbidden not in combined
-
-
-def test_cli_get_submit_upload_flag_forwards_to_manager(monkeypatch, tmp_path: Path):
-    captured = {}
-
-    class DummyManager:
-        def get(self, **kwargs):
-            captured.update(kwargs)
-            return {
-                "asin": kwargs["asin"],
-                "country": kwargs["country"],
-                "answers": [{"text": "默认答案", "isSuccess": True}],
-            }
-
-    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(app, ["get", "B0TEST1234", "US", "--submit-upload"])
-
-    assert result.exit_code == 0
-    assert captured["submit_upload"] is True
-
-
-def test_cli_get_writes_frontend_like_answer_report(monkeypatch, tmp_path: Path):
-    class DummyManager:
-        def get(self, **kwargs):
-            return {
-                "asin": kwargs["asin"],
-                "country": kwargs["country"],
-                "answers": [
-                    {
-                        "text": "fallback",
-                        "isSuccess": True,
-                        "blocks": [
-                            {"type": "heading", "text": "回答标题", "level": 2},
-                            {"type": "paragraph", "text": "第一条答案"},
-                        ],
-                        "summaryText": "总结",
-                    },
-                    {"text": "第二条答案", "isSuccess": True},
-                ],
-                "seed_request": {"request_url": "hidden"},
-                "upload_payload": {
-                    "records": [
-                        {
-                            "questions": [
-                                {"question": "问题一", "capturedAt": 1},
-                                {"question": "问题二", "capturedAt": 2},
-                            ]
-                        }
-                    ]
-                },
-            }
-
-    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(app, ["get", "B0TEST1234", "US"])
-    _, report_text = _read_single_rufus_report(tmp_path)
-
-    assert result.exit_code == 0
-    assert "## 第 1 题：问题一" in report_text
-    assert "#### 回答标题" in report_text
-    assert "第一条答案" in report_text
-    assert "### 总结" in report_text
-    assert "## 第 2 题：问题二" in report_text
-    assert "第二条答案" in report_text
-    assert "fallback" not in report_text
-    assert "第一条答案" not in result.stdout
-    assert "seed_request" not in result.stdout
-    assert "upload_payload" not in result.stdout
-
-
-def test_cli_get_answer_report_reports_failed_empty_answer(monkeypatch, tmp_path: Path):
-    class DummyManager:
-        def get(self, **kwargs):
-            return {
-                "asin": kwargs["asin"],
-                "country": kwargs["country"],
-                "answers": [{"text": "", "isSuccess": False}],
-            }
-
-        def get_backend(self, **kwargs):
-            raise AssertionError("CLI CDP 入口不应调用后端 headless get_backend")
-
-    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(app, ["get", "B0TEST1234", "US"])
-    _, report_text = _read_single_rufus_report(tmp_path)
-
-    assert result.exit_code == 0
-    assert "## 第 1 题：第 1 题" in report_text
-    assert "第 1 题未获取到答案" in report_text
-    assert "第 1 题未获取到答案" not in result.stdout
-
-
-def test_cli_get_outputs_manager_error(monkeypatch, tmp_path: Path):
-    class DummyManager:
-        def get(self, **kwargs):
-            from opscli.amazon_rufus.domain.exceptions import RufusSecretNotReadyError
-
-            raise RufusSecretNotReadyError("Rufus 后端授权材料不可用")
-
-        def get_backend(self, **kwargs):
-            raise AssertionError("CLI CDP 入口不应调用后端 headless get_backend")
-
-    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(app, ["get", "B0TEST1234", "US"])
-    payload = json.loads(result.stdout)
-
-    assert result.exit_code == 1
-    assert payload["success"] is False
-    assert payload["error"]["code"] == "RUFUS_SECRET_NOT_READY"
-    assert "后端授权材料不可用" in payload["error"]["message"]
-    assert not (tmp_path / "output" / "amazon-rufus").exists()
-
-
-def test_cli_get_passes_question_to_manager(monkeypatch, tmp_path: Path):
-    captured = {}
-
-    class DummyManager:
-        def get(self, **kwargs):
-            captured.update(kwargs)
-            return {
-                "asin": kwargs["asin"],
-                "country": kwargs["country"],
-                "questions": [kwargs["question"]],
-                "answers": [{"text": "单题答案", "isSuccess": True}],
-                "upload_payload": {"records": [{"questions": [{"question": kwargs["question"], "capturedAt": 1}]}]},
-            }
-
-        def get_backend(self, **kwargs):
-            raise AssertionError("CLI CDP 入口不应调用后端 headless get_backend")
-
-    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(app, ["get", "B0TEST1234", "US", "--question", "这个商品是做什么的"])
-    _, report_text = _read_single_rufus_report(tmp_path)
-
-    assert result.exit_code == 0
-    assert captured["question"] == "这个商品是做什么的"
-    assert "## 第 1 题：这个商品是做什么的" in report_text
-    assert "单题答案" in report_text
-
-
-def test_cli_get_passes_multiple_questions_to_manager(monkeypatch, tmp_path: Path):
-    captured = {}
-
-    class DummyManager:
-        def get(self, **kwargs):
-            captured.update(kwargs)
-            return {
-                "asin": kwargs["asin"],
-                "country": kwargs["country"],
-                "questions": kwargs["questions"],
-                "answers": [
-                    {"text": f"答案：{question}", "isSuccess": True}
-                    for question in kwargs["questions"]
-                ],
-                "upload_payload": {
-                    "records": [
-                        {
-                            "questions": [
-                                {"question": question, "capturedAt": index}
-                                for index, question in enumerate(kwargs["questions"], start=1)
-                            ]
-                        }
-                    ]
-                },
-            }
-
-        def get_backend(self, **kwargs):
-            raise AssertionError("CLI CDP 入口不应调用后端 headless get_backend")
-
-        def get_backend(self, **kwargs):
-            raise AssertionError("CLI CDP 入口不应调用后端 headless get_backend")
-
-    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(
-        app,
-        [
-            "get",
-            "B0TEST1234",
-            "US",
-            "-q",
-            "这个商品适合送礼吗？",
-            "--question",
-            "差评主要集中在哪些方面？",
-        ],
-    )
-    _, report_text = _read_single_rufus_report(tmp_path)
-
-    assert result.exit_code == 0
-    assert captured["questions"] == ["这个商品适合送礼吗？", "差评主要集中在哪些方面？"]
-    assert captured["question"] is None
-    assert "## 第 1 题：这个商品适合送礼吗？" in report_text
-    assert "## 第 2 题：差评主要集中在哪些方面？" in report_text
 
 
 def test_cli_init_calls_manager(monkeypatch):
@@ -1799,6 +1579,29 @@ def test_manager_save_state_persists_browser_storage_state(tmp_path: Path):
         "origin_count": 1,
     }
     assert "session-id" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_browser_start_new_chrome_does_not_auto_open_devtools(monkeypatch, tmp_path: Path):
+    """确保自动启动调试浏览器时不会额外打开 DevTools 页签。"""
+    from opscli.amazon_rufus.services import browser as browser_module
+    from opscli.amazon_rufus.services.browser import BrowserAttachService
+
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, args, stdout=None, stderr=None):
+            captured["args"] = args
+            captured["stdout"] = stdout
+            captured["stderr"] = stderr
+
+    monkeypatch.setattr(browser_module.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(BrowserAttachService, "_resolve_chrome_path", lambda self, chrome_path: "chrome.exe")
+    monkeypatch.setattr(browser_module.subprocess, "Popen", FakePopen)
+
+    BrowserAttachService()._start_new_chrome(cdp_url="http://127.0.0.1:9333", chrome_path=None)
+
+    assert "--auto-open-devtools-for-tabs" not in captured["args"]
+    assert "--no-first-run" in captured["args"]
 
 
 def test_browser_watch_login_detects_login_and_captures_streaming_request(monkeypatch):
@@ -2223,7 +2026,7 @@ def test_headless_client_uses_timeout_for_each_question(monkeypatch):
     assert [answer.text for answer in answers] == ["问题1", "问题2", "问题3"]
 
 
-def test_browser_state_store_saves_storage_state_plaintext_json_and_builds_cookie_header(tmp_path: Path):
+def test_browser_state_store_local_fallback_saves_storage_state_plaintext_json_and_builds_cookie_header(tmp_path: Path):
     from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
 
     storage_state = {
@@ -2259,7 +2062,7 @@ def test_browser_state_store_saves_storage_state_plaintext_json_and_builds_cooki
     assert store.build_cookie_header(storage_state, "https://www.amazon.com") == "session-id=abc; ubid-main=def"
 
 
-def test_browser_state_store_saves_streaming_seed_material_plaintext_json(tmp_path: Path):
+def test_browser_state_store_local_fallback_saves_streaming_seed_as_curl_command(tmp_path: Path):
     from opscli.amazon_rufus.domain.models import SeedRequestRecord
     from opscli.amazon_rufus.services.backend_secret import RufusBackendSecretProvider
     from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
@@ -2299,24 +2102,193 @@ def test_browser_state_store_saves_streaming_seed_material_plaintext_json(tmp_pa
     assert "session-id=from-curl" in raw_state
     assert "csrf-token" in raw_state
     assert not (tmp_path / ".browser-state-key").exists()
-    assert loaded["curl_data"] == {
-        "url": "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
-        "headers": {"content-type": "application/json", "anti-csrftoken-a2z": "csrf-token"},
-        "cookies": "session-id=from-curl; ubid-main=from-curl",
-        "payload_template": {"queryContext": {"query": "seed"}},
-    }
-    assert loaded["streaming_url"] == "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
-    assert loaded["headers"] == {"content-type": "application/json", "anti-csrftoken-a2z": "csrf-token"}
-    assert loaded["payload_template"] == {"queryContext": {"query": "seed"}}
+    assert loaded["version"] == 2
+    assert loaded["curl"].startswith("curl 'https://www.amazon.com/rufus/cl/streaming?tabId=tab-1'")
+    assert "-H 'content-type: application/json'" in loaded["curl"]
+    assert "-H 'anti-csrftoken-a2z: csrf-token'" in loaded["curl"]
+    assert "-H 'cookie: session-id=from-curl; ubid-main=from-curl'" in loaded["curl"]
+    assert '--data-raw \'{"queryContext":{"query":"seed"}}\'' in loaded["curl"]
+    assert "\\" not in loaded["curl"]
+    assert "curl_data" not in loaded
+    assert "streaming_url" not in loaded
+    assert "headers" not in loaded
+    assert "payload_template" not in loaded
     assert loaded["seed_request"]["asin"] == "B0TEST1234"
     assert "request_body" not in loaded["seed_request"]
     assert secret.url == "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
     assert secret.headers == {"content-type": "application/json", "anti-csrftoken-a2z": "csrf-token"}
     assert secret.cookies == "session-id=from-curl; ubid-main=from-curl"
-    assert secret.curl_data == loaded["curl_data"]
+    assert secret.curl == loaded["curl"]
+    assert not hasattr(secret, "curl_data")
     assert secret.payload_template == {"queryContext": {"query": "seed"}}
     assert secret.seed_request is not None
     assert secret.seed_request.asin == "B0TEST1234"
+
+
+def test_browser_state_store_can_roundtrip_remote_platform_cookie_content(tmp_path: Path):
+    from opscli.amazon_rufus.services.backend_secret import RufusBackendSecretProvider
+    from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
+
+    class FakePlatformCookieClient:
+        def __init__(self):
+            self.saved = None
+
+        def save_platform_cookie(self, *, platform: str, country: str, content: str):
+            self.saved = {"platform": platform, "country": country, "content": content}
+            return {"code": 200, "msg": "保存成功", "data": self.saved}
+
+        def get_platform_cookie(self, *, platform: str):
+            assert self.saved is not None
+            return {"code": 200, "msg": "操作成功", "data": self.saved}
+
+    remote_client = FakePlatformCookieClient()
+    storage_state = {
+        "cookies": [{"name": "session-id", "value": "from-storage", "domain": ".amazon.com", "path": "/"}],
+        "origins": [],
+    }
+    seed = SeedRequestRecord(
+        request_url="https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+        request_headers={
+            "content-type": "application/json",
+            "cookie": "session-id=from-curl; ubid-main=from-curl",
+            "anti-csrftoken-a2z": "csrf-token",
+        },
+        request_body=(
+            '{"queryContext": {"query": "seed"}, '
+            '"pageContext": {"targetUrl": "https://www.amazon.com/dp/B0TEST1234", '
+            '"targetPageMetadata": [{"type": "ASIN", "value": "B0TEST1234"}]}}'
+        ),
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        tab_id="tab-1",
+        asin="B0TEST1234",
+        country="US",
+        captured_at=1710000000000,
+    )
+    store = RufusBrowserStateStore(
+        base_dir=tmp_path,
+        platform_cookie_client=remote_client,
+        platform="amazon",
+    )
+
+    store.save(
+        country="US",
+        marketplace_origin="https://www.amazon.com",
+        storage_state=storage_state,
+        seed_request=seed,
+    )
+    loaded = store.load("US")
+    secret = RufusBackendSecretProvider(browser_state_store=store).load(country="US")
+    saved_content = remote_client.saved["content"]
+
+    assert remote_client.saved["platform"] == "amazon"
+    assert remote_client.saved["country"] == "US"
+    assert not (tmp_path / "browser-state-US.json").exists()
+    assert saved_content.startswith("curl 'https://www.amazon.com/rufus/cl/streaming?tabId=tab-1'")
+    assert saved_content == loaded["curl"]
+    assert "-H 'cookie: session-id=from-curl; ubid-main=from-curl'" in saved_content
+    assert "curl_data" not in loaded
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(saved_content)
+    assert secret.cookies == "session-id=from-curl; ubid-main=from-curl"
+    assert secret.curl == saved_content
+    assert secret.seed_request is not None
+    assert secret.seed_request.asin == "B0TEST1234"
+
+
+def test_manager_default_cookie_state_uses_platform_cookie_api(monkeypatch, tmp_path: Path):
+    from opscli.amazon_rufus.services import browser_state_store as state_module
+
+    monkeypatch.setattr(state_module, "CONFIG_DIR", tmp_path)
+
+    class FakePlatformCookieClient:
+        def __init__(self):
+            self.saved = None
+            self.get_calls = []
+
+        def save_platform_cookie(self, *, platform: str, country: str, content: str):
+            self.saved = {"platform": platform, "country": country, "content": content}
+            return {"code": 200, "msg": "保存成功", "data": self.saved}
+
+        def get_platform_cookie(self, *, platform: str):
+            self.get_calls.append(platform)
+            assert self.saved is not None
+            return {"code": 200, "msg": "操作成功", "data": self.saved}
+
+    remote_client = FakePlatformCookieClient()
+    manager = RufusManager(transport_client=remote_client)
+
+    result = manager.save_cookie(
+        country="us",
+        cookie_header="session-id=abc; session-token=secret-token",
+    )
+    status = manager.cookie_status(country="US")
+    saved_content = json.loads(remote_client.saved["content"])
+
+    assert result == {"country": "US", "saved": True, "cookie_count": 2}
+    assert remote_client.saved["platform"] == "amazon"
+    assert remote_client.saved["country"] == "US"
+    assert saved_content["storage_state"]["cookies"][1]["value"] == "secret-token"
+    assert status["has_state"] is True
+    assert status["can_build_cookie_header"] is True
+    assert remote_client.get_calls == ["amazon"]
+    assert not (tmp_path / "amazon-rufus" / "browser-state-US.json").exists()
+
+
+def test_manager_get_backend_loads_default_platform_cookie_content(monkeypatch, tmp_path: Path):
+    from opscli.amazon_rufus.domain.models import AnswerData
+    from opscli.amazon_rufus.services import browser_state_store as state_module
+
+    monkeypatch.setattr(state_module, "CONFIG_DIR", tmp_path)
+    raw_curl = (
+        "curl 'https://www.amazon.com/rufus/cl/streaming?tabId=tab-1' "
+        "-H 'content-type: application/json' "
+        "-H 'anti-csrftoken-a2z: csrf-token' "
+        "-H 'cookie: session-id=from-curl; ubid-main=from-curl' "
+        "--data-raw '{\"queryContext\":{\"query\":\"seed\"},"
+        "\"pageContext\":{\"targetUrl\":\"https://www.amazon.com/dp/B0TEST1234\","
+        "\"targetPageMetadata\":[{\"type\":\"ASIN\",\"value\":\"B0TEST1234\"}]}}'"
+    )
+
+    class FakePlatformCookieClient:
+        def __init__(self):
+            self.get_calls = []
+
+        def get_platform_cookie(self, *, platform: str):
+            self.get_calls.append(platform)
+            return {
+                "code": 200,
+                "msg": "操作成功",
+                "data": {"platform": platform, "country": "US", "content": raw_curl},
+            }
+
+    class FailingHeadlessCapture:
+        def capture_seed_request(self, **kwargs):
+            raise AssertionError("默认远端 content 已保存 seed 时不应重新 headless 捕获")
+
+    class FakeHeadlessClient:
+        def query(self, **kwargs):
+            self.kwargs = kwargs
+            return [AnswerData(text="remote-seed answer")]
+
+    remote_client = FakePlatformCookieClient()
+    headless_client = FakeHeadlessClient()
+    manager = RufusManager(
+        transport_client=remote_client,
+        headless_capture=FailingHeadlessCapture(),
+        headless_client=headless_client,
+    )
+
+    result = manager.get_backend(
+        asin="b0test1234",
+        country="US",
+        question="这是什么商品？",
+    )
+
+    assert remote_client.get_calls == ["amazon"]
+    assert headless_client.kwargs["streaming_url"] == "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
+    assert headless_client.kwargs["cookie"] == "session-id=from-curl; ubid-main=from-curl"
+    assert result["answers"][0]["text"] == "remote-seed answer"
+    assert not (tmp_path / "amazon-rufus" / "browser-state-US.json").exists()
 
 
 def test_browser_state_store_ignores_legacy_bin_without_plaintext_json(tmp_path: Path):
@@ -2378,7 +2350,7 @@ def test_curl_parser_extracts_streaming_request_and_sanitizes_headers():
     assert parsed.payload_template["pageContext"]["targetUrl"] == "https://www.amazon.com/dp/B0TEST1234?th=1"
 
 
-def test_manager_save_curl_persists_plaintext_curl_data_and_masks_result(tmp_path: Path):
+def test_manager_save_curl_local_fallback_persists_curl_command_and_masks_result(tmp_path: Path):
     from opscli.amazon_rufus.services.backend_secret import RufusBackendSecretProvider
     from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
 
@@ -2401,28 +2373,31 @@ def test_manager_save_curl_persists_plaintext_curl_data_and_masks_result(tmp_pat
         "saved": True,
         "cookie_count": 3,
         "header_count": 3,
-        "has_curl_data": True,
+        "has_curl": True,
         "has_payload_template": True,
     }
     assert "secret-token" not in serialized_result
     assert "csrf-token" not in serialized_result
     assert "secret-token" in state_text
     assert "csrf-token" in state_text
-    assert loaded["curl_data"]["url"].endswith("programId=NILE_CLASSIC%3Adesktop-cl")
-    assert loaded["curl_data"]["cookies"] == "session-id=abc; ubid-main=def; session-token=secret-token"
-    assert loaded["curl_data"]["headers"] == {
-        "accept": "*/*",
-        "anti-csrftoken-a2z": "csrf-token",
-        "content-type": "application/json",
-    }
+    assert loaded["version"] == 2
+    assert loaded["curl"].startswith("curl 'https://www.amazon.com/rufus/cl/streaming?tabId=tab-1")
+    assert "-H 'accept: */*'" in loaded["curl"]
+    assert "-H 'anti-csrftoken-a2z: csrf-token'" in loaded["curl"]
+    assert "-H 'content-type: application/json'" in loaded["curl"]
+    assert "-H 'cookie: session-id=abc; ubid-main=def; session-token=secret-token'" in loaded["curl"]
+    assert "--data-raw '" in loaded["curl"]
+    assert "\\" not in loaded["curl"]
+    assert "curl_data" not in loaded
     assert loaded["seed_request"]["asin"] == "B0TEST1234"
     assert loaded["seed_request"]["tab_id"] == "tab-1"
     assert secret.seed_request is not None
     assert secret.seed_request.page_url == "https://www.amazon.com/dp/B0TEST1234?th=1"
-    assert secret.curl_data == loaded["curl_data"]
+    assert secret.curl == loaded["curl"]
+    assert not hasattr(secret, "curl_data")
 
 
-def test_manager_save_cookie_persists_plaintext_state_and_masks_result(tmp_path: Path):
+def test_manager_save_cookie_local_fallback_persists_plaintext_state_and_masks_result(tmp_path: Path):
     from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
 
     store = RufusBrowserStateStore(base_dir=tmp_path)
@@ -2515,7 +2490,7 @@ def test_manager_login_status_reports_missing_and_ready_state(tmp_path: Path):
     assert "secret-token" not in serialized
 
 
-def test_manager_login_status_reports_invalid_state(tmp_path: Path):
+def test_manager_login_status_reports_invalid_local_fallback_state(tmp_path: Path):
     from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
 
     (tmp_path / "browser-state-US.json").write_text("{bad json", encoding="utf-8")
@@ -2531,7 +2506,51 @@ def test_manager_login_status_reports_invalid_state(tmp_path: Path):
     }
 
 
-def test_browser_state_store_delete_is_idempotent(tmp_path: Path):
+def test_manager_login_status_rejects_legacy_storage_state_without_curl(tmp_path: Path):
+    from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
+
+    store = RufusBrowserStateStore(base_dir=tmp_path)
+    store.save(
+        country="US",
+        marketplace_origin="https://www.amazon.com",
+        storage_state={
+            "cookies": [
+                {"name": "session-id", "value": "abc", "domain": ".amazon.com", "path": "/"},
+                {"name": "session-token", "value": "secret-token", "domain": ".amazon.com", "path": "/"},
+            ],
+            "origins": [],
+        },
+    )
+    manager = RufusManager(browser_state_store=store)
+
+    assert manager.login_status(country="US") == {
+        "country": "US",
+        "status": "invalid",
+        "has_login_state": False,
+        "can_get_backend": False,
+        "session_cookie_count": 0,
+        "has_streaming_request": False,
+    }
+
+
+def test_manager_login_status_raises_platform_cookie_auth_error():
+    """平台 Cookie API 401 不能降级为亚马逊 Rufus 登录态缺失。"""
+    from opscli.amazon_rufus.domain.exceptions import RufusPlatformCookieAuthError
+    from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
+
+    class FakePlatformCookieClient:
+        def get_platform_cookie(self, *, platform: str):
+            raise RufusPlatformCookieAuthError()
+
+    manager = RufusManager(
+        browser_state_store=RufusBrowserStateStore(platform_cookie_client=FakePlatformCookieClient())
+    )
+
+    with pytest.raises(RufusPlatformCookieAuthError):
+        manager.login_status(country="US")
+
+
+def test_browser_state_store_local_fallback_delete_is_idempotent(tmp_path: Path):
     from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
 
     store = RufusBrowserStateStore(base_dir=tmp_path)
@@ -2551,7 +2570,8 @@ def test_browser_state_store_delete_is_idempotent(tmp_path: Path):
     assert store.delete("US") is False
 
 
-def test_backend_secret_provider_reads_cookie_saved_state(tmp_path: Path):
+def test_backend_secret_provider_rejects_cookie_saved_state_without_curl(tmp_path: Path):
+    from opscli.amazon_rufus.domain.exceptions import RufusSecretNotReadyError
     from opscli.amazon_rufus.services.backend_secret import RufusBackendSecretProvider
     from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
 
@@ -2559,10 +2579,40 @@ def test_backend_secret_provider_reads_cookie_saved_state(tmp_path: Path):
     manager = RufusManager(browser_state_store=store)
     manager.save_cookie(country="US", cookie_header="session-id=abc; ubid-main=def")
 
-    secret = RufusBackendSecretProvider(browser_state_store=store).load(country="US")
+    with pytest.raises(RufusSecretNotReadyError):
+        RufusBackendSecretProvider(browser_state_store=store).load(country="US")
 
-    assert secret.cookies == "session-id=abc; ubid-main=def"
-    assert secret.storage_state is not None
+
+def test_backend_secret_provider_rejects_legacy_curl_data_without_curl(tmp_path: Path):
+    from opscli.amazon_rufus.domain.exceptions import RufusSecretNotReadyError
+    from opscli.amazon_rufus.services.backend_secret import RufusBackendSecretProvider
+    from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
+
+    legacy_record = {
+        "country": "US",
+        "marketplace_origin": "https://www.amazon.com",
+        "captured_at": 1710000000000,
+        "storage_state": {"cookies": [], "origins": []},
+        "curl_data": {
+            "url": "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+            "headers": {"content-type": "application/json"},
+            "cookies": "session-id=legacy",
+            "payload_template": {"queryContext": {"query": "seed"}},
+        },
+        "seed_request": {
+            "request_url": "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1",
+            "page_url": "https://www.amazon.com/dp/B0TEST1234",
+            "tab_id": "tab-1",
+            "asin": "B0TEST1234",
+            "country": "US",
+            "captured_at": 1710000000000,
+        },
+    }
+    (tmp_path / "browser-state-US.json").write_text(json.dumps(legacy_record, ensure_ascii=False), encoding="utf-8")
+    store = RufusBrowserStateStore(base_dir=tmp_path)
+
+    with pytest.raises(RufusSecretNotReadyError):
+        RufusBackendSecretProvider(browser_state_store=store).load(country="US")
 
 
 def test_manager_logout_clears_mcp_readable_state_and_profile(tmp_path: Path):
@@ -2579,7 +2629,7 @@ def test_manager_logout_clears_mcp_readable_state_and_profile(tmp_path: Path):
 
     store = RufusBrowserStateStore(base_dir=tmp_path)
     manager = RufusManager(browser=FakeBrowser(), browser_state_store=store)
-    manager.save_cookie(country="US", cookie_header="session-id=abc; ubid-main=def")
+    manager.save_curl(asin="B0TEST1234", country="US", raw_curl=_sample_rufus_curl())
 
     assert RufusBackendSecretProvider(browser_state_store=store).load(country="US").cookies
 
@@ -2616,6 +2666,28 @@ def test_manager_logout_can_skip_browser_profile(tmp_path: Path):
         "browser_profile_deleted": False,
         "mcp_state_cleared": True,
     }
+
+
+def test_manager_logout_platform_cookie_auth_error_keeps_browser_profile():
+    """远端 Rufus 状态清理失败时不能继续删除本机 profile。"""
+    from opscli.amazon_rufus.domain.exceptions import RufusPlatformCookieAuthError
+    from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateStore
+
+    class FakePlatformCookieClient:
+        def save_platform_cookie(self, *, platform: str, country: str, content: str):
+            raise RufusPlatformCookieAuthError()
+
+    class FakeBrowser:
+        def clear_owned_profile(self, *, cdp_url: str):
+            raise AssertionError("远端清理失败时不应清理浏览器 profile")
+
+    manager = RufusManager(
+        browser=FakeBrowser(),
+        browser_state_store=RufusBrowserStateStore(platform_cookie_client=FakePlatformCookieClient()),
+    )
+
+    with pytest.raises(RufusPlatformCookieAuthError):
+        manager.logout(country="US")
 
 
 def test_manager_watch_login_saves_state_and_streaming_seed(tmp_path: Path):
@@ -2681,7 +2753,10 @@ def test_manager_watch_login_saves_state_and_streaming_seed(tmp_path: Path):
         "streaming_request_saved": True,
         "has_payload_template": True,
     }
-    assert loaded["streaming_url"] == "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
+    assert loaded["version"] == 2
+    assert loaded["curl"].startswith("curl 'https://www.amazon.com/rufus/cl/streaming?tabId=tab-1'")
+    assert "-H 'cookie: session-id=abc'" in loaded["curl"]
+    assert "streaming_url" not in loaded
     assert "abc" not in json.dumps(result, ensure_ascii=False)
 
 
@@ -2802,19 +2877,65 @@ def test_cli_curl_save_from_stdin_outputs_safe_summary(monkeypatch, tmp_path: Pa
         "saved": True,
         "cookie_count": 3,
         "header_count": 3,
-        "has_curl_data": True,
+        "has_curl": True,
         "has_payload_template": True,
     }
     for forbidden in [
         "secret-token",
         "csrf-token",
         "from-header",
+        "curl '",
+        "curl \"",
         "\"payload_template\"",
         "\"headers\"",
         "cookie:",
         "storage_state",
     ]:
         assert forbidden not in output_text
+
+
+def test_cli_platform_cookie_save_and_get_use_platform_country_content(monkeypatch):
+    captured = {}
+    content = json.dumps({"country": "US", "storage_state": {"cookies": [], "origins": []}}, ensure_ascii=False)
+
+    class DummyManager:
+        def save_platform_cookie(self, **kwargs):
+            captured["save"] = kwargs
+            return {
+                "platform": kwargs["platform"],
+                "country": kwargs["country"],
+                "status": "saved",
+                "content_length": len(kwargs["content"]),
+            }
+
+        def get_platform_cookie(self, **kwargs):
+            captured["get"] = kwargs
+            return {
+                "platform": kwargs["platform"],
+                "country": kwargs["country"],
+                "content": content,
+                "content_length": len(content),
+            }
+
+    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+
+    save_result = runner.invoke(
+        app,
+        ["platform-cookie", "save", "amazon", "US", "--from-stdin", "--pretty"],
+        input=content,
+    )
+    get_result = runner.invoke(app, ["platform-cookie", "get", "amazon", "US", "--pretty"])
+
+    assert save_result.exit_code == 0
+    assert get_result.exit_code == 0
+    save_payload = json.loads(save_result.stdout)
+    get_payload = json.loads(get_result.stdout)
+    assert captured["save"] == {"platform": "amazon", "country": "US", "content": content}
+    assert captured["get"] == {"platform": "amazon", "country": "US"}
+    assert save_payload["command"] == "amazon-rufus platform-cookie save"
+    assert save_payload["data"]["content_length"] == len(content)
+    assert get_payload["command"] == "amazon-rufus platform-cookie get"
+    assert get_payload["data"]["content"] == content
 
 
 def test_cli_watch_login_outputs_safe_summary(monkeypatch):
