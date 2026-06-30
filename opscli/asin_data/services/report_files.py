@@ -14,6 +14,7 @@ from opscli.shared.http import parse_remote_response
 
 
 DEFAULT_REPORT_FILES_ENDPOINT = "/dataMetrics/v1/asin-report-files"
+DEFAULT_ABTEST_DATA_ENDPOINT = "/dataMetrics/v1/asin-report-files/abtest-data"
 DEFAULT_TIMEOUT = 20
 
 
@@ -93,12 +94,14 @@ class AsinReportFileClient:
         *,
         auth_client: AuthClient | None = None,
         endpoint: str = DEFAULT_REPORT_FILES_ENDPOINT,
+        abtest_endpoint: str = DEFAULT_ABTEST_DATA_ENDPOINT,
         http_get: Callable[..., httpx.Response] | None = None,
         http_post: Callable[..., httpx.Response] | None = None,
         ops_url: str | None = None,
     ) -> None:
         self.auth_client = auth_client or AuthClient()
         self.endpoint = endpoint
+        self.abtest_endpoint = abtest_endpoint
         self.http_get = http_get or httpx.get
         self.http_post = http_post or httpx.post
         self.ops_url = _report_files_base_url(ops_url or OPS_URL)
@@ -111,6 +114,45 @@ class AsinReportFileClient:
         response = self.http_get(
             self._resolve_endpoint(),
             params={"asin": normalized_asin, "site": normalized_site},
+            headers=headers,
+            cookies=cookies,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        payload = parse_remote_response(
+            response,
+            http_error_cls=AsinReportFileHttpError,
+            business_error_cls=AsinReportFileBusinessError,
+            bad_json_error_cls=AsinReportFileBadJsonError,
+        )
+        data = payload.get("data")
+        record = _select_record(data if data is not None else payload, asin=normalized_asin, site=normalized_site)
+        return AsinReportFile(
+            asin=normalized_asin,
+            site=normalized_site,
+            url=_extract_report_url(record),
+            record=record if isinstance(record, dict) else None,
+            raw=payload,
+        )
+
+    def fetch_abtest(self, *, asin: str, site: str, data_type: str = "file") -> AsinReportFile:
+        """Fetch ABTest report data via /dataMetrics/v1/asin-report-files/abtest-data.
+
+        Args:
+            asin: 目标 ASIN。
+            site: 站点（如 US）。
+            data_type: 返回数据类型，默认 "file" 表示取报告文件地址。
+        """
+        normalized_asin = asin.strip().upper()
+        normalized_site = site.strip().upper()
+        headers, cookies = self.auth_client.build_request_auth("ops")
+        headers.update(get_mcp_request_headers())
+        response = self.http_get(
+            self._resolve_endpoint(self.abtest_endpoint),
+            params={
+                "asin": normalized_asin,
+                "site": normalized_site,
+                "data_type": data_type,
+            },
             headers=headers,
             cookies=cookies,
             timeout=DEFAULT_TIMEOUT,
@@ -165,8 +207,8 @@ class AsinReportFileClient:
             bad_json_error_cls=AsinReportFileBadJsonError,
         )
 
-    def _resolve_endpoint(self) -> str:
-        text = self.endpoint.strip()
+    def _resolve_endpoint(self, endpoint: str | None = None) -> str:
+        text = (endpoint or self.endpoint).strip()
         if text.startswith(("http://", "https://")):
             return text
         if not text.startswith("/"):

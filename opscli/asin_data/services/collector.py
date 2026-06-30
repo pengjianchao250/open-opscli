@@ -250,13 +250,7 @@ class AsinDataCollector:
         error_log: Any,
     ) -> dict[str, Any]:
         asins = [str(record.get("asin") or "").strip().upper() for record in records if record.get("asin")]
-        if args.skip_query:
-            bundle = build_bi_report_data_placeholder(
-                asins=asins,
-                status="skipped",
-                reason="BI report data skipped by --skip-query",
-            )
-        elif args.skip_bi_report_data:
+        if args.skip_bi_report_data:
             bundle = build_bi_report_data_placeholder(
                 asins=asins,
                 status="skipped",

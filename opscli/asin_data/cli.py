@@ -110,6 +110,49 @@ def report_url(
     )
 
 
+@app.command("abtest-url")
+def abtest_url(
+    asin: str = typer.Option(..., "--asin", help="ASIN"),
+    site: str = typer.Option("US", "--site", help="站点"),
+    data_type: str = typer.Option("file", "--data-type", help="返回数据类型，默认 file 取报告文件地址"),
+    url_only: bool = typer.Option(False, "--url-only", help="只输出 ABTest 报告文件地址"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """只查询 ABTest 报告文件接口并返回报告地址。"""
+    normalized_asin = asin.strip().upper()
+    normalized_site = site.strip().upper()
+    try:
+        report_file = AsinReportFileClient().fetch_abtest(
+            asin=normalized_asin, site=normalized_site, data_type=data_type
+        )
+        if not report_file.url:
+            raise AsinReportFileNotFoundError(asin=normalized_asin, site=normalized_site)
+    except Exception as exc:
+        _emit(_error_payload("asin-data abtest-url", exc), pretty)
+        raise typer.Exit(1)
+
+    if url_only:
+        typer.echo(report_file.url)
+        return
+
+    _emit(
+        {
+            "success": True,
+            "command": "asin-data abtest-url",
+            "data": {
+                "asin": report_file.asin,
+                "site": report_file.site,
+                "data_type": data_type,
+                "abtest_report_url": report_file.url,
+                "record": report_file.record,
+                "raw": report_file.raw,
+            },
+            "error": None,
+        },
+        pretty,
+    )
+
+
 @app.command("collect")
 def collect(
     input_path: str | None = typer.Option(None, "--input", "-i", help="CSV/XLSX/JSON/JSONL 输入文件"),
