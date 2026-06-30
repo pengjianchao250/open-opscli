@@ -2376,3 +2376,17 @@
 **影响范围**：仅清理本地遗留文件与版本号；功能无变化。
 **回滚方式**：git 还原两个 VERSION.json（删除的 .c/.pyc 本就未跟踪，无需回滚）。
 ---
+
+## 2026-06-30 skills - publish/edit 的 summary 缺失时回退到 SKILL.md description
+
+**变更原因**：`opscli skills publish`（及 `edit --dir`）中 summary 仅回退到 frontmatter 的 `summary` 字段，而多数 SKILL.md 只写了 `description`、无 `summary`，导致客户端不传 `--summary` 时 summary 为空。
+**改动点**：
+- `opscli/skills/commands/cli.py`：新增辅助函数 `_summary_from_desc`（取 description、去空白、截断到 500 字符 `_SUMMARY_MAX_LEN`）；publish 命令 `resolved_summary` 与 edit `--dir` 模式 `summary` 的回退链追加 `_summary_from_desc(fm.get("description"))`。
+- `opscli/skills/templates/ops-skills/references/commands.md`：在 publish 与 edit 章节补充「字段回退规则」说明。
+**验证结果**：
+- 辅助函数单测（空值/去空白/600→500 截断）通过。
+- 端到端三场景通过：未传 summary 回退并截断、显式 summary 优先、desc 回退不变。
+- `tests/skills/test_cli.py` 全部通过；`test_manager.py` 的 3 个 install 失败为环境性预存问题（缺 ops-methods-card 模板），与本次改动无关（stash 后仍同样失败已确认）。
+**影响范围**：仅 publish/edit 的 summary 字段解析；desc 逻辑与解析器未改。
+**回滚方式**：git 还原 `cli.py` 与 `commands.md` 两个文件。
+---
