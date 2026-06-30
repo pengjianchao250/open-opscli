@@ -230,6 +230,8 @@ opscli skills upgrade ops-dataset-query --skills-dir ~/.claude/skills/
 
 > **自动分类匹配**：未指定 `--category` 时，自动从广场获取分类列表做关键词匹配，输出 `已自动匹配分类：<name>` 提示。
 
+> **字段回退规则**：未传 `--desc` 时取 frontmatter `description`；未传 `--summary` 且 frontmatter 无 `summary` 字段时，自动回退使用 frontmatter `description`（超过 500 字符截断）。`edit --dir` 模式同此规则。
+
 **分享权限类型：**
 
 | 类型 | 含义 |
@@ -266,7 +268,7 @@ opscli skills publish --json
 ---
 title: Ops 认证授权
 description: 管理认证授权流程
-summary: 一键完成 ops/polaris 登录与 Token 管理
+summary: 一键完成 ops 登录与 Token 管理
 share_type: company
 tags: auth,ops,认证
 category_id: 1
@@ -326,7 +328,7 @@ opscli skills edit pengjianchao@ops-auth --file ./SKILL.md
 opscli skills edit pengjianchao@ops-auth --title "新标题" --json
 ```
 
-> `--dir` 模式自动读取 `SKILL.md` frontmatter 作为字段默认值；命令行显式参数优先级更高。
+> `--dir` 模式自动读取 `SKILL.md` frontmatter 作为字段默认值；命令行显式参数优先级更高。未传 `--summary` 且 frontmatter 无 `summary` 字段时，回退使用 frontmatter `description`（超过 500 字符截断）。
 
 ---
 

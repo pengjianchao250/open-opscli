@@ -2065,7 +2065,9 @@
 **验证结果**：`tomllib`/`yaml` 语法校验通过；`<49` 经 PyPI 解析到 48.0.1（确认含 universal2 + win32 wheel）。最终验证待发新 tag 触发 CI 全绿。
 **影响范围**：Intel Mac 与（若构建）32 位 Windows 用户恢复可安装；arm64 mac / win_amd64 / Linux 不受影响。代价：用户停留在 cryptography 48.0.1，暂不获取 49.x 安全更新；上游 macOS 正转向仅 arm64，Intel Mac 支持长期需另行规划。
 **回滚方式**：`pyproject.toml` 改回 `cryptography>=38`，workflow 改动用 git 还原即可。
+
 ---
+
 ## 2026-06-26 keepa / mcp - Keepa 接入 MCP 每日额度限制与额度查询入口
 
 **变更原因**：`opscli keepa` 仍缺少和 `seller_sprite` 一致的 MCP 外层每日额度限制与额度查询入口；同时 `opscli/mcp/configs/mcp-quota.json` 也未登记 `keepa_run` 的默认策略，导致 Keepa 无法被统一配额配置覆盖。
@@ -2073,4 +2075,62 @@
 **验证结果**：RED：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_quota.py tests/mcp/test_keepa_tools.py tests/keepa/test_cli_remote.py tests/keepa/test_remote_adapter.py -q` 初始失败（5 failed），分别暴露 `keepa_run` 未进入默认策略、`keepa_quota_status` 工具缺失、正式 CLI 缺少 `quota-status`、remote adapter 缺少 `quota_status()`；GREEN：同命令复跑通过（36 passed）；补充回归 `D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_quota.py tests/mcp/test_keepa_tools.py tests/mcp/test_tools.py tests/keepa/test_cli_remote.py tests/keepa/test_cli_split.py tests/keepa/test_remote_adapter.py -q` 通过（50 passed）。
 **影响范围**：影响 Keepa MCP 入口、Keepa 正式 CLI、远端 MCP 适配层与 MCP 配额默认配置；Keepa 业务执行逻辑、导出逻辑与内部 token 预检查逻辑保持不变。
 **回滚方式**：回退 `opscli/mcp/quota.py`、`opscli/mcp/tools/keepa.py`、`opscli/keepa/remote_adapter.py`、`opscli/keepa/cli.py`、`opscli/mcp/configs/mcp-quota.json`、对应四组测试和本条变更记录。
+
+---
+
+## 2026-06-24 ops-dataset-query Skill - 取消「发现新版本提示强制升级」约束
+
+**变更原因**：用户要求取消 skill 在调用 opscli 时一旦输出新版本提示就强制暂停并先升级的约束。该规则会打断正常取数流程、把升级动作强加给 AI。
+**改动点**：`opscli/skills/templates/ops-dataset-query/SKILL.md` 删除「铁律十二：发现新版本提示必须先升级再继续」整节（含处理规则与禁止行为）。其余铁律及 `scripts/updater.py` 的 `update_available` 状态字段未动（仅状态展示，非强制逻辑）。
+**验证结果**：`grep` 确认无「铁律十二」交叉引用、无「发现新版本/建议升级/A newer version」强制升级残留。
+**影响范围**：AI 执行 opscli 命令时不再因新版本提示强制中断升级，按用户意图继续原操作；不影响数据为空时的 skills upgrade 兜底规则。
+**回滚方式**：git 还原 SKILL.md 即可恢复该铁律。
+---
+
+## 2026-06-25 opscli/cli.py + mcp/server.py - 移除悬空的 asin_review 引用（修复 0.0.99 导入崩溃）
+
+**变更原因**：0.0.99 安装后所有 opscli 命令启动即报 `ModuleNotFoundError: No module named 'opscli.asin_review'`。根因：提交 7489810 往 cli.py 与 mcp/server.py 加了对 asin_review 模块的 4 处引用，但 `opscli/asin_review/` 顶层包与 `opscli/mcp/tools/asin_review.py` 从未提交（全历史/所有分支/stash 均无），属漏 git add。cli.py 导入失败导致整个 CLI 不可用。
+**改动点**：删除 4 处悬空引用——cli.py:12 import、cli.py:44 add_typer(name="asin-review")、mcp/server.py:293 import、mcp/server.py:310 register。其余模块未动。
+**验证结果**：`grep -rn asin_review opscli/` 零命中；`python3 -c "import opscli.cli"` 与 `import opscli.mcp.server` 均成功；`python3 -m opscli.cli --version`/`--help` 正常，asin-data 保留、asin-review 消失。
+**影响范围**：恢复 opscli 全部命令可用；asin-review 功能本就无实体，移除无功能损失。0.0.99 已发布且损坏，需发新版本（如 0.0.100）覆盖。
+**回滚方式**：git 还原 cli.py 与 mcp/server.py 即可（但会恢复崩溃，不建议）。
+---
+
+## 2026-06-29 skills(ops-query-wizard / ops-dataset-query) - 移除 catalog 相关描述与子命令
+
+**变更原因**：Agent 取数时总用 `query catalog` 找数据集，但 catalog 只是业务语义索引底座、且被 ops-query-wizard 错标成"做意图匹配"；正确做法是列数据集用 `query metadata`、意图匹配用 `query intent`。需把误导性的 catalog 描述去除。
+**改动点**：
+- `ops-query-wizard/SKILL.md:197`：数据集匹配从 `query catalog` 改为 `query metadata` 无参全量列表筛选。
+- `ops-query-wizard/references/step-guide.md`：Step 2 执行流程删除 `query_catalog() 做意图匹配` 步骤并重排（推荐来源改为从需求摘要推断）；防呆规则两处"意图匹配"措辞改为"推断推荐"。
+- `ops-dataset-query/scripts/query.py`：移除 catalog 子命令（docstring 示例、build_command 分支、subparser 定义）；intent/metadata/simple/chart/chart-doc 保留。
+- 未改动：ops-dataset-query 文档（本无 catalog 工具描述）、业务词 amazon_catalog_performance 等、dataset_catalog.json 数据文件、updater_mcp.py。
+**验证结果**：`python -c "ast.parse(query.py)"` 通过；`query.py catalog` 报 invalid choice（已移除），`query.py -h` 仅列 metadata/intent/simple/chart/chart-doc；`grep catalog` 在 wizard 文档与 query.py 中零命中。
+**影响范围**：ops-query-wizard 选数据集流程改为纯 metadata 全量列表+用户选择；ops-dataset-query 脚本不再支持 catalog 透传（intent 仍在）。两个为已上线 Skill，发布升级需评估 VERSION.json 版本号。
+**回滚方式**：git 还原上述 3 个文件即可。
+---
+
+## 2026-06-29 skills 收尾 - 清理陈旧产物 + 版本号 bump
+
+**变更原因**：移除 catalog 后，scripts/query.c 仍残留旧 catalog 代码；两个已上线 Skill 需 bump 版本以便升级机制下发。
+**改动点**：
+- 删除 `ops-dataset-query/scripts/query.c` 与 `__pycache__/query.cpython-313.pyc`（均未被 git 跟踪，setup.py 已将 skills/templates 排除编译，零影响）。
+- `ops-query-wizard/data/VERSION.json`：v0.1.0 → v0.1.1。
+- `ops-dataset-query/data/VERSION.json`：1.1.0 → 1.1.1。
+**验证结果**：query.c/.pyc 已不存在；两个 VERSION.json 版本号已更新。
+**影响范围**：仅清理本地遗留文件与版本号；功能无变化。
+**回滚方式**：git 还原两个 VERSION.json（删除的 .c/.pyc 本就未跟踪，无需回滚）。
+---
+
+## 2026-06-30 skills - publish/edit 的 summary 缺失时回退到 SKILL.md description
+
+**变更原因**：`opscli skills publish`（及 `edit --dir`）中 summary 仅回退到 frontmatter 的 `summary` 字段，而多数 SKILL.md 只写了 `description`、无 `summary`，导致客户端不传 `--summary` 时 summary 为空。
+**改动点**：
+- `opscli/skills/commands/cli.py`：新增辅助函数 `_summary_from_desc`（取 description、去空白、截断到 500 字符 `_SUMMARY_MAX_LEN`）；publish 命令 `resolved_summary` 与 edit `--dir` 模式 `summary` 的回退链追加 `_summary_from_desc(fm.get("description"))`。
+- `opscli/skills/templates/ops-skills/references/commands.md`：在 publish 与 edit 章节补充「字段回退规则」说明。
+**验证结果**：
+- 辅助函数单测（空值/去空白/600→500 截断）通过。
+- 端到端三场景通过：未传 summary 回退并截断、显式 summary 优先、desc 回退不变。
+- `tests/skills/test_cli.py` 全部通过；`test_manager.py` 的 3 个 install 失败为环境性预存问题（缺 ops-methods-card 模板），与本次改动无关（stash 后仍同样失败已确认）。
+**影响范围**：仅 publish/edit 的 summary 字段解析；desc 逻辑与解析器未改。
+**回滚方式**：git 还原 `cli.py` 与 `commands.md` 两个文件。
 ---
