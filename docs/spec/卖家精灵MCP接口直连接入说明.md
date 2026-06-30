@@ -6,6 +6,13 @@
 
 新接口直连方案位于 `opscli/seller_sprite`，MCP 工具位于 `opscli/mcp/tools/seller_sprite.py`。后续对外入口优先使用 MCP，不暴露卖家精灵账号密码。
 
+## CLI 命令契约
+
+- `opscli seller-sprite` 是正式的 remote-first 用户入口，对外命令面只保留远端 MCP 相关能力。
+- 当前 `opscli seller-sprite` 实现仍通过现有本地服务链路做迁移桥接，但命令面已经冻结为正式公共契约；后续切到 remote MCP 时不再新增本地专用参数。
+- `opscli seller-sprite-debug` 仅用于开发调试，保留本地浏览器/账号执行链路和本地专用参数。
+- 本地浏览器/账号直跑能力不属于公开 `opscli seller-sprite` 命令契约。
+
 ## 账号配置
 
 服务端本地配置账号，MCP 调用方不传账号密码。

@@ -66,7 +66,7 @@ wheels = [
 
 [[package]]
 name = "aukeys-opscli"
-version = "0.0.103"
+version = "0.0.120"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -94,7 +94,7 @@ seller-sprite = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cryptography", specifier = ">=38" },
+    { name = "cryptography", specifier = ">=38,<49" },
     { name = "fastmcp", specifier = ">=2.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "keyring", specifier = ">=25" },

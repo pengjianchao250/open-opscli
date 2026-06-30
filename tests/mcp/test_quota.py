@@ -118,11 +118,13 @@ def test_limiter_allows_first_five_calls_and_blocks_sixth():
     assert blocked.error_response["quota"]["remaining"] == 0
 
 
-def test_default_quota_policies_only_limit_public_seller_sprite_entry():
+def test_default_quota_policies_only_limit_public_service_run_entries():
     policies = default_quota_policies()
 
     assert policies["seller_sprite_run"].service == "seller_sprite"
+    assert policies["keepa_run"].service == "keepa"
     assert "seller_sprite_start" not in policies
+    assert "keepa_job_status" not in policies
 
 
 def test_limiter_refunds_failed_call_and_records_failure():
@@ -220,6 +222,38 @@ def test_sqlite_quota_store_applies_bonus_daily_limit(tmp_path):
 
     assert bonus_row == ("seller_sprite", "user@example.com", 3)
     assert daily_row == ("user@example.com", 8, 8)
+
+
+def test_sqlite_quota_store_snapshot_reads_current_usage_without_consuming(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    policy = QuotaPolicy(tool_name="seller_sprite_run", service="seller_sprite", daily_limit=5)
+    store = SQLiteQuotaStore(db_path)
+
+    allowed, _ = _run(store.reserve(policy, "email:user@example.com"))
+    snapshot = _run(store.snapshot(policy, "email:user@example.com"))
+
+    assert allowed is True
+    assert snapshot["limit"] == 5
+    assert snapshot["used"] == 1
+    assert snapshot["remaining"] == 4
+
+    allowed_again, second_snapshot = _run(store.reserve(policy, "email:user@example.com"))
+
+    assert allowed_again is True
+    assert second_snapshot["used"] == 2
+
+
+def test_sqlite_quota_store_snapshot_applies_bonus_daily_limit(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    policy = QuotaPolicy(tool_name="seller_sprite_run", service="seller_sprite", daily_limit=5)
+    store = SQLiteQuotaStore(db_path)
+
+    _run(store.upsert_bonus_daily_limit("seller_sprite", "User@example.com", 3))
+    snapshot = _run(store.snapshot(policy, "email:user@example.com"))
+
+    assert snapshot["limit"] == 8
+    assert snapshot["used"] == 0
+    assert snapshot["remaining"] == 8
 
 
 def test_sqlite_quota_store_migrates_existing_table_to_identity_key(tmp_path):

@@ -1,0 +1,69 @@
+"""卖家精灵正式 CLI 的远端 MCP 适配层。"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from opscli.auth import AuthClient
+from opscli.shared.remote_mcp_adapter import RemoteMcpAdapter
+
+
+class SellerSpriteRemoteAdapter(RemoteMcpAdapter):
+    """将正式 CLI 动作映射到远端卖家精灵 MCP 工具。"""
+
+    def __init__(
+        self,
+        config_client=None,
+        remote_client_factory=None,
+        auth_client: AuthClient | None = None,
+    ) -> None:
+        super().__init__(
+            config_client=config_client,
+            remote_client_factory=remote_client_factory,
+        )
+        self.auth_client = auth_client or getattr(self.config_client, "auth_client", None) or AuthClient()
+
+    def scenarios(self) -> dict[str, Any]:
+        """获取卖家精灵远端可用场景列表。"""
+        return self.call_tool("seller_sprite_scenarios", {})
+
+    def run(
+        self,
+        *,
+        scenario: str,
+        site: str,
+        period: str,
+        params: dict[str, Any],
+        page_size: int,
+        export_format: str,
+        output_dir: str | None,
+        job_id: str | None,
+    ) -> dict[str, Any]:
+        """执行卖家精灵远端任务，并补充本机会话标识。"""
+        session_id = self.auth_client.get_session("ops")
+        return self.call_tool(
+            "seller_sprite_run",
+            {
+                "scenario": scenario,
+                "site": site,
+                "period": period,
+                "params": params,
+                "page_size": page_size,
+                "export_format": export_format,
+                "output_dir": output_dir,
+                "job_id": job_id,
+                "session_id": session_id,
+            },
+        )
+
+    def quota_status(self) -> dict[str, Any]:
+        """查询卖家精灵远端额度状态。"""
+        return self.call_tool("seller_sprite_quota_status", {})
+
+    def job_status(self, job_id: str) -> dict[str, Any]:
+        """查询卖家精灵远端任务状态。"""
+        return self.call_tool("seller_sprite_job_status", {"job_id": job_id})
+
+    def export(self, job_id: str) -> dict[str, Any]:
+        """读取卖家精灵远端任务导出信息。"""
+        return self.call_tool("seller_sprite_export", {"job_id": job_id})

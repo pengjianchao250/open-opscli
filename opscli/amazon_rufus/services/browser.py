@@ -129,6 +129,9 @@ class BrowserAttachService:
         product_page_opened = False
         active_page = None
         registered_page_ids: set[int] = set()
+        page_sources: dict[int, str] = {}
+        pending_page_sources: list[str] = []
+        debug_pages_enabled = self._debug_pages_enabled()
         browser = None
 
         with sync_playwright() as playwright:
@@ -139,9 +142,34 @@ class BrowserAttachService:
                     raise ChromeCdpUnavailableError(f"无法连接 Chrome CDP: {cdp_url}") from exc
 
                 context = browser.contexts[0] if browser.contexts else browser.new_context()
+                self._install_watch_login_request_filters(context)
+
+                def debug_page_event(event: str, page: Any, *, source: str | None = None) -> None:
+                    """按需输出页面生命周期诊断，避免默认路径产生噪声。"""
+                    if not debug_pages_enabled:
+                        return
+                    self._print_debug_page_event(
+                        event=event,
+                        page=page,
+                        source=source or page_sources.get(id(page), "external"),
+                    )
+
+                def new_service_page(source: str) -> Any:
+                    """创建 opscli 页签并提前记录来源，兼容 Playwright 同步触发 page 事件。"""
+                    pending_page_sources.append(source)
+                    try:
+                        page = context.new_page()
+                    finally:
+                        if pending_page_sources and pending_page_sources[-1] == source:
+                            pending_page_sources.pop()
+                    page_sources[id(page)] = source
+                    register_page(page)
+                    return page
 
                 def register_page(page: Any) -> None:
                     page_id = id(page)
+                    if page_id not in page_sources:
+                        page_sources[page_id] = pending_page_sources.pop(0) if pending_page_sources else "external"
                     if page_id in registered_page_ids:
                         return
                     registered_page_ids.add(page_id)
@@ -165,19 +193,30 @@ class BrowserAttachService:
                             )
                         )
 
+                    page_source = page_sources[page_id]
+
+                    def on_frame_navigated(*_args: Any, watched_page: Any = page, watched_source: str = page_source) -> None:
+                        """外部广告页导航后立即关闭，避免空白页反复闪烁。"""
+                        self._close_blocked_external_page(watched_page, watched_source)
+
                     page.on("request", on_request)
+                    page.on("framenavigated", on_frame_navigated)
+                    page.on("close", lambda *_args: debug_page_event("closed", page))
+                    self._close_blocked_external_page(page, page_source)
+                    debug_page_event("created", page, source=page_source)
 
                 for page in list(getattr(context, "pages", []) or []):
+                    page_sources.setdefault(id(page), "existing")
                     register_page(page)
 
                 context_on = getattr(context, "on", None)
                 if callable(context_on):
                     context_on("page", register_page)
 
-                login_page = context.new_page()
+                login_page = new_service_page("ops-login")
                 active_page = login_page
-                register_page(login_page)
                 login_page.goto(marketplace_url, wait_until="domcontentloaded", timeout=self._remaining_ms(deadline_at))
+                debug_page_event("navigated", login_page)
                 login_page.bring_to_front()
                 self.current_page = login_page
 
@@ -199,10 +238,10 @@ class BrowserAttachService:
                         marketplace_url=marketplace_url,
                     )
                     if login_detected and not product_page_opened:
-                        product_page = context.new_page()
+                        product_page = new_service_page("ops-product")
                         active_page = product_page
-                        register_page(product_page)
                         product_page.goto(page_url, wait_until="domcontentloaded", timeout=self._remaining_ms(deadline_at))
+                        debug_page_event("navigated", product_page)
                         product_page.bring_to_front()
                         self.current_page = product_page
                         product_page_opened = True
@@ -452,9 +491,82 @@ class BrowserAttachService:
         """优先用 Playwright page 等待，测试替身缺失时退回 sleep。"""
         wait_for_timeout = getattr(page, "wait_for_timeout", None)
         if callable(wait_for_timeout):
-            wait_for_timeout(max(int(timeout_ms), 1))
+            try:
+                wait_for_timeout(max(int(timeout_ms), 1))
+            except Exception as exc:
+                if self._is_page_closed_error(exc):
+                    raise SeedRequestNotCapturedError(
+                        "监听 Rufus 登录页时页面、上下文或浏览器已关闭；"
+                        "请确认没有浏览器扩展或外部自动化反复打开并关闭页签后重试。"
+                    ) from exc
+                raise
             return
         time.sleep(max(int(timeout_ms), 1) / 1000)
+
+    def _install_watch_login_request_filters(self, context: Any) -> None:
+        """安装 watch-login 专用请求过滤，屏蔽会反复拉起空白页的广告域名。"""
+        route = getattr(context, "route", None)
+        if not callable(route):
+            return
+        try:
+            route("https://s.amazon-adsystem.com/**", self._abort_watch_login_route)
+        except Exception:
+            # 过滤失败不应阻断登录采集，外部页签关闭逻辑仍会兜底处理。
+            return
+
+    def _abort_watch_login_route(self, route: Any) -> None:
+        """中止 watch-login 阶段不需要的广告请求。"""
+        abort = getattr(route, "abort", None)
+        if callable(abort):
+            abort()
+
+    def _close_blocked_external_page(self, page: Any, source: str) -> None:
+        """关闭 Amazon 广告系统触发的外部页签，不影响 opscli 自建页签。"""
+        if source != "external":
+            return
+        if not self._is_blocked_watch_login_url(str(getattr(page, "url", "") or "")):
+            return
+        close = getattr(page, "close", None)
+        if not callable(close):
+            return
+        try:
+            close()
+        except Exception:
+            # 外部广告页可能已经自关闭，忽略竞态即可继续监听 Rufus 请求。
+            return
+
+    def _is_blocked_watch_login_url(self, url: str) -> bool:
+        """识别 watch-login 阶段可屏蔽的 Amazon 广告系统 URL。"""
+        host = (urlsplit(str(url or "")).hostname or "").lower()
+        return host == "s.amazon-adsystem.com"
+
+    def _debug_pages_enabled(self) -> bool:
+        """判断是否开启 Rufus 页面生命周期诊断。"""
+        value = os.environ.get("OPS_RUFUS_DEBUG_PAGES", "")
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    def _print_debug_page_event(self, *, event: str, page: Any, source: str) -> None:
+        """输出脱敏后的 page 生命周期事件。"""
+        url = self._sanitize_debug_url(str(getattr(page, "url", "") or ""))
+        print(f"[rufus-debug-pages] event={event} page_id={id(page)} source={source} url={url}")
+
+    def _sanitize_debug_url(self, url: str) -> str:
+        """仅保留 URL 的 scheme、host 和 path，避免泄露 query 参数。"""
+        raw_url = str(url or "").strip()
+        if not raw_url:
+            return "-"
+        parsed = urlsplit(raw_url)
+        if parsed.scheme and parsed.netloc:
+            path = parsed.path or "/"
+            return f"{parsed.scheme}://{parsed.netloc}{path}"
+        return raw_url.split("?", 1)[0].split("#", 1)[0] or "-"
+
+    def _is_page_closed_error(self, exc: Exception) -> bool:
+        """识别 Playwright 页面关闭类异常。"""
+        message = str(exc).lower()
+        return "target page, context or browser has been closed" in message or (
+            "page.wait_for_timeout" in message and "closed" in message
+        )
 
     def _is_marketplace_logged_in(self, *, context: Any, pages: list[Any], marketplace_url: str) -> bool:
         """通过登录态 Cookie key 或 Amazon 顶部工具区文本判断登录完成。"""

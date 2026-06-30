@@ -194,7 +194,7 @@ description: 引导式数据查询向导。当用户需要获取数据进行分�
 - 查询执行：委托给 `opscli query simple` / `query_simple` MCP Tool
 - 歧义澄清：复用 `ops-dataset-query/references/rules.md`，不重复定义规则
 - 字段校验：通过 `opscli query metadata` / `query_metadata` 确认字段存在
-- 数据集匹配：通过 `opscli query catalog` / `query_catalog` 做意图匹配
+- 数据集匹配：通过 `opscli query metadata` / `query_metadata` 无参调用获取全量数据集列表，按需求关键词筛选
 
 ### 触发边界
 

@@ -1,4 +1,6 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from opscli.mcp.tools import seller_sprite as seller_sprite_tools
 from opscli.mcp.server import _quota_wrap
@@ -21,7 +23,7 @@ class DummyScheduler:
         self.__class__.last_request = request
         self.__class__.enqueue_calls += 1
         return {
-            "job_id": "job-async-1",
+            "job_id": request.job_id or "job-async-1",
             "scenario": request.scenario,
             "site": request.site,
             "period": request.period,
@@ -41,6 +43,143 @@ class DummyScheduler:
         }
 
 
+class SuccessPollingScheduler:
+    def __init__(self):
+        now = datetime.now(timezone.utc).astimezone()
+        self.created_at = (now - timedelta(seconds=12)).isoformat(timespec="seconds")
+        self.started_at = (now - timedelta(seconds=4)).isoformat(timespec="seconds")
+        self.job_status_calls = 0
+
+    async def enqueue(self, request):
+        return {
+            "job_id": request.job_id or "job-success-1",
+            "scenario": request.scenario,
+            "site": request.site,
+            "period": request.period,
+            "state": "queued",
+            "stage": "queued",
+            "position": 1,
+            "created_at": self.created_at,
+            "started_at": None,
+            "finished_at": None,
+        }
+
+    def job_status(self, job_id):
+        self.job_status_calls += 1
+        if self.job_status_calls == 1:
+            return {
+                "job_id": job_id,
+                "state": "queued",
+                "stage": "queued",
+                "position": 1,
+                "created_at": self.created_at,
+                "started_at": None,
+                "finished_at": None,
+            }
+        if self.job_status_calls == 2:
+            return {
+                "job_id": job_id,
+                "state": "running",
+                "stage": "running",
+                "position": None,
+                "created_at": self.created_at,
+                "started_at": self.started_at,
+                "finished_at": None,
+            }
+        return {
+            "job_id": job_id,
+            "state": "succeeded",
+            "stage": "finished",
+            "position": None,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "finished_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+            "row_count": 3,
+            "export": {"path": f"/tmp/{job_id}.json", "filename": f"{job_id}.json"},
+        }
+
+
+class RunningTimeoutScheduler:
+    def __init__(self):
+        now = datetime.now(timezone.utc).astimezone()
+        self.created_at = (now - timedelta(minutes=9)).isoformat(timespec="seconds")
+        self.started_at = (now - timedelta(minutes=8, seconds=5)).isoformat(timespec="seconds")
+
+    async def enqueue(self, request):
+        return {
+            "job_id": request.job_id or "job-timeout-1",
+            "scenario": request.scenario,
+            "site": request.site,
+            "period": request.period,
+            "state": "queued",
+            "stage": "queued",
+            "position": 1,
+            "created_at": self.created_at,
+            "started_at": None,
+            "finished_at": None,
+        }
+
+    def job_status(self, job_id):
+        return {
+            "job_id": job_id,
+            "state": "running",
+            "stage": "running",
+            "position": None,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "finished_at": None,
+        }
+
+
+class FailingScheduler:
+    async def enqueue(self, request):
+        raise RuntimeError("enqueue boom")
+
+
+class NoNormalizeScheduler:
+    last_request = None
+    enqueue_calls = 0
+
+    async def enqueue(self, request):
+        self.__class__.last_request = request
+        self.__class__.enqueue_calls += 1
+        return {
+            "job_id": request.job_id,
+            "scenario": request.scenario,
+            "site": request.site,
+            "period": request.period,
+            "state": "queued",
+            "stage": "queued",
+            "position": 1,
+        }
+
+
+class RecordingStore:
+    def __init__(self):
+        self.create_calls = 0
+        self.finish_failed_calls = 0
+
+    def create_mcp_run(self, request, user_email):
+        self.create_calls += 1
+        raise RuntimeError("create run boom")
+
+    def finish_mcp_run_failed(self, job_id, error_payload):
+        self.finish_failed_calls += 1
+
+
+def _make_store(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    return SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+
+
+def _skip_wait_for_run(monkeypatch):
+    async def _fake_wait(*, scheduler, job_id, initial_status):
+        return initial_status
+
+    monkeypatch.setattr(seller_sprite_tools, "_wait_for_seller_sprite_run_result", _fake_wait)
+
+
 def test_seller_sprite_scenarios_uses_manager(monkeypatch):
     monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", lambda: DummyManager())
 
@@ -57,9 +196,46 @@ def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
     assert "# 卖家精灵场景参数手册" in result["data"]["spec"]
 
 
-def test_seller_sprite_run_accepts_params_json_string(monkeypatch):
+def test_seller_sprite_quota_status_returns_snapshot(monkeypatch):
+    class FakeLimiter:
+        def quota_snapshot(self, tool_name, identity):
+            assert tool_name == "seller_sprite_run"
+            assert identity == "email:mcp-user@example.com"
+            return {
+                "service": "seller_sprite",
+                "limit": 5,
+                "used": 2,
+                "remaining": 3,
+                "failures": 0,
+                "reset_at": "2026-06-24T00:00:00+08:00",
+            }
+
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr("opscli.mcp.tools.seller_sprite.get_quota_limiter", lambda: FakeLimiter())
+
+    result = _run(seller_sprite_tools.seller_sprite_quota_status())
+
+    assert result["success"] is True
+    assert result["data"]["remaining"] == 3
+
+
+def test_seller_sprite_quota_status_returns_error_when_user_email_missing(monkeypatch):
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: None)
+
+    result = _run(seller_sprite_tools.seller_sprite_quota_status())
+
+    assert result["success"] is False
+    assert "邮箱" in result["error"]["message"]
+
+
+def test_seller_sprite_run_accepts_params_json_string(monkeypatch, tmp_path):
+    store = _make_store(tmp_path)
+    _skip_wait_for_run(monkeypatch)
     monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_build_mcp_job_id", lambda request, site, period: "job-async-1")
     monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
     DummyScheduler.enqueue_calls = 0
 
     result = _run(
@@ -81,6 +257,7 @@ def test_seller_sprite_run_accepts_params_json_string(monkeypatch):
     assert DummyScheduler.last_request.export_format == "json"
     assert DummyScheduler.last_request.mode == "browser-route"
     assert DummyScheduler.enqueue_calls == 1
+    assert store.get_mcp_run("job-async-1")["mode"] == "browser-route"
 
 
 def test_seller_sprite_start_returns_queued_job(monkeypatch):
@@ -110,9 +287,14 @@ def test_seller_sprite_start_returns_queued_job(monkeypatch):
     assert DummyScheduler.last_request.mode == "browser-route"
 
 
-def test_seller_sprite_run_always_enqueues(monkeypatch):
+def test_seller_sprite_run_always_enqueues(monkeypatch, tmp_path):
+    store = _make_store(tmp_path)
+    _skip_wait_for_run(monkeypatch)
     monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_build_mcp_job_id", lambda request, site, period: "job-async-1")
     monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
     DummyScheduler.enqueue_calls = 0
 
     result = _run(
@@ -128,6 +310,60 @@ def test_seller_sprite_run_always_enqueues(monkeypatch):
     assert result["data"]["job_id"] == "job-async-1"
     assert result["data"]["state"] == "queued"
     assert DummyScheduler.enqueue_calls == 1
+    assert store.get_mcp_run("job-async-1")["job_id"] == "job-async-1"
+
+
+def test_seller_sprite_run_waits_until_success(monkeypatch, tmp_path):
+    store = _make_store(tmp_path)
+    scheduler = SuccessPollingScheduler()
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: scheduler)
+    monkeypatch.setattr(seller_sprite_tools, "_build_mcp_job_id", lambda request, site, period: "job-success-1")
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
+    monkeypatch.setattr(seller_sprite_tools, "SELLER_SPRITE_RUN_POLL_INTERVAL_SECONDS", 0, raising=False)
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="keyword-reverse",
+            site="JP",
+            period="nearly",
+            params={"asin": "B07YRMT36L"},
+            export_format="json",
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "job-success-1"
+    assert result["data"]["state"] == "succeeded"
+    assert result["data"]["row_count"] == 3
+    assert result["data"]["export"]["filename"] == "job-success-1.json"
+
+
+def test_seller_sprite_run_returns_job_id_after_running_timeout(monkeypatch, tmp_path):
+    store = _make_store(tmp_path)
+    scheduler = RunningTimeoutScheduler()
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: scheduler)
+    monkeypatch.setattr(seller_sprite_tools, "_build_mcp_job_id", lambda request, site, period: "job-timeout-1")
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="keyword-reverse",
+            site="JP",
+            period="nearly",
+            params={"asin": "B07YRMT36L"},
+            export_format="json",
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "job-timeout-1"
+    assert result["data"]["state"] == "running"
+    assert result["data"]["queue_duration"] is not None
+    assert result["data"]["running_duration"] is not None
 
 
 def test_seller_sprite_export_returns_export_info(monkeypatch):
@@ -202,3 +438,130 @@ def test_seller_sprite_non_run_tools_are_not_wrapped_by_quota():
 
     assert called["service"] == 1
     assert result["success"] is True
+
+
+def test_seller_sprite_run_creates_mcp_run_before_enqueue(monkeypatch, tmp_path):
+    store = _make_store(tmp_path)
+    _skip_wait_for_run(monkeypatch)
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
+    DummyScheduler.enqueue_calls = 0
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="keyword-reverse",
+            site="JP",
+            period="nearly",
+            params={"asin": "B07YRMT36L", "keywords": ["router"]},
+            export_format="json",
+            job_id="mcp-job-run-1",
+        )
+    )
+
+    assert result["success"] is True
+    assert DummyScheduler.enqueue_calls == 1
+    record = store.get_mcp_run("mcp-job-run-1")
+    assert record["user_email"] == "mcp-user@example.com"
+    assert record["scenario"] == "keyword-reverse"
+    assert record["job_id"] == "mcp-job-run-1"
+    assert record["mode"] == "browser-route"
+    assert record["params_json"] == {"asin": "B07YRMT36L", "keywords": ["router"]}
+    assert record["result_state"] == "queued"
+
+
+def test_seller_sprite_run_marks_mcp_run_failed_when_enqueue_raises(monkeypatch, tmp_path):
+    store = _make_store(tmp_path)
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: FailingScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="product-research",
+            params={"asin": "B0FAIL1234"},
+            job_id="mcp-job-run-failed",
+        )
+    )
+
+    assert result["success"] is False
+    record = store.get_mcp_run("mcp-job-run-failed")
+    assert record["result_state"] == "failed"
+    assert record["error_json"]["code"] == "RuntimeError"
+    assert record["error_json"]["message"] == "enqueue boom"
+
+
+def test_seller_sprite_run_returns_error_when_mcp_user_email_missing(monkeypatch, tmp_path):
+    store = _make_store(tmp_path)
+    DummyScheduler.enqueue_calls = 0
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_build_mcp_job_id", lambda request, site, period: "job-async-1")
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: None)
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="keyword-reverse",
+            params={"asin": "B07YRMT36L"},
+        )
+    )
+
+    assert result["success"] is False
+    assert "邮箱" in result["error"]["message"]
+    assert DummyScheduler.enqueue_calls == 0
+    try:
+        store.get_mcp_run("job-async-1")
+        raise AssertionError("邮箱缺失时不应创建 MCP 调用记录")
+    except ValueError:
+        pass
+
+
+def test_seller_sprite_run_does_not_mark_failed_when_create_record_itself_fails(monkeypatch):
+    store = RecordingStore()
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_build_mcp_job_id", lambda request, site, period: "job-async-1")
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="keyword-reverse",
+            params={"asin": "B07YRMT36L"},
+        )
+    )
+
+    assert result["success"] is False
+    assert store.create_calls == 1
+    assert store.finish_failed_calls == 0
+
+
+def test_seller_sprite_run_without_scheduler_normalize_still_creates_record(monkeypatch, tmp_path):
+    store = _make_store(tmp_path)
+    _skip_wait_for_run(monkeypatch)
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: NoNormalizeScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_build_mcp_job_id", lambda request, site, period: "job-async-1")
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
+    NoNormalizeScheduler.enqueue_calls = 0
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="keyword-reverse",
+            site="jp",
+            period="nearly",
+            params={"asin": "B07YRMT36L"},
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "job-async-1"
+    assert result["data"]["site"] == "JP"
+    assert result["data"]["period"] == "nearly"
+    assert NoNormalizeScheduler.enqueue_calls == 1
+    assert NoNormalizeScheduler.last_request.job_id == "job-async-1"
+    assert store.get_mcp_run("job-async-1")["job_id"] == "job-async-1"

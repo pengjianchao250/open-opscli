@@ -70,13 +70,13 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 5. 如果状态为 `unknown` 或 `invalid`，先询问用户：
 
 ```text
-本次 Rufus 获取需要亚马逊 Rufus 登录态。是否允许当前 MCP/headless 链路保存并复用该站点的亚马逊 Rufus 登录状态？
+本次 Rufus 获取需要亚马逊 Rufus 登录态。是否允许保存并复用该站点的亚马逊 Rufus 登录状态？
 
 说明：
-- 保存的亚马逊 Rufus 登录态仅供当前 MCP 用户和当前 Agent 隔离凭证使用，不会写入报告或对话回复。
-- 亚马逊 Rufus 登录态相当于已登录会话，请使用独立、干净的 Amazon 账号。
+- 保存的亚马逊登录态仅供当前用户使用，不会写入报告或对话回复。
+- 亚马逊登录态相当于已登录会话，请使用独立、干净的 Amazon 账号。
 - 不建议在该 Amazon 账号中绑定信用卡或其他支付方式。
-- 如果拒绝，本次将改用本机 opscli CLI 获取 Rufus 报告；CLI 仍不会在回复或报告中展示 cookie、localStorage、storage_state、headers、payload 或请求种子。
+- 如果拒绝，本次将改用本机获取 Rufus 报告。
 
 请明确回复“允许”或“拒绝”。
 ```
@@ -120,6 +120,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 2. 以下任一情况视为回答不合格：
    - `answer_count=0`、报告为空、题目下没有实际答案。
    - Rufus 明确拒答、要求重试、表示无法回答或只返回错误性文本。
+   - 只要答案或总结中出现以下拒答句式，也必须视为拒答而不是有效结果：`我无法完成您的请求`、`我不能提供以下服务`、`超出了我的服务范围`、`I can't complete your request`、`I cannot complete your request`、`I can't provide`、`I cannot provide`、`outside my scope`。
    - 回答没有覆盖问题意图，例如问题询问差评、风险、评价、适配人群、广告投放、对比或优化建议，但答案只描述商品详情、规格或基础卖点。
    - 多题场景中某一题答案串题、漏题，或回答内容明显属于另一道题。
 3. 只把未达到 10 次上限的不合格题目交给子 agent 改写；合格题目保留原文。拿到改写结果后，用改写后的题目替换原位置，形成完整问题列表。

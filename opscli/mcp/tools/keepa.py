@@ -3,6 +3,7 @@
 将 Keepa API 能力暴露为 MCP 工具：
 - keepa_spec_must_read — 读取 Keepa MCP 使用规范
 - keepa_scenarios      — 列出 Keepa 场景
+- keepa_quota_status   — 读取 Keepa 每日额度快照
 - keepa_run            — 执行 Keepa 场景并保存请求/响应/导出
 - keepa_job_status     — 读取任务结果
 - keepa_export         — 读取导出文件信息
@@ -10,8 +11,12 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Any
+
+from opscli.mcp.quota import get_quota_limiter
+from opscli.skills.packaging import get_builtin_templates_dir
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
@@ -19,22 +24,59 @@ from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 MAX_PUBLIC_DATA_PREVIEW_ROWS = 20
 
 
+def _keepa_skill_dir() -> Path:
+    """返回 Keepa Skill 模板目录。"""
+    return get_builtin_templates_dir() / "ops-keepa"
+
+
+def _get_current_mcp_user_email() -> str | None:
+    """读取当前 MCP 请求对应的用户邮箱。"""
+    from opscli.mcp.context import get_current_user_email
+
+    return get_current_user_email()
+
+
+def _load_keepa_settings():
+    """读取 Keepa 运行配置。"""
+    from opscli.keepa.config import load_settings
+
+    return load_settings()
+
+
+async def _try_auto_mcp_login() -> dict:
+    """在 HTTP/SSE MCP 模式下尝试一步登录并缓存 session。"""
+    from .auth import auth_mcp_login
+
+    return await auth_mcp_login()
+
+
 async def keepa_spec_must_read() -> dict:
-    """读取 Keepa MCP 使用规范（opscli/mcp/references/keepa/SKILL_MCP.md）。"""
-    spec_path = (
-        Path(__file__).resolve().parents[1]
-        / "references"
-        / "keepa"
-        / "SKILL_MCP.md"
-    )
-    if not spec_path.exists():
-        return _err(
-            FileNotFoundError(f"Keepa MCP 规范文档不存在：{spec_path}。请检查 opscli 安装是否完整。"),
-            tool="MCP → keepa_spec_must_read()",
-        )
+    """读取 Keepa MCP 使用规范与官方参考。
+
+    规范内容统一收口到 opscli 内置 Skill 模板：
+    - opscli/skills/templates/ops-keepa/SKILL_MCP.md
+    - opscli/skills/templates/ops-keepa/references/OFFICIAL.md
+    """
+    skill_dir = _keepa_skill_dir()
+    spec_path = skill_dir / "SKILL_MCP.md"
+    official_path = skill_dir / "references" / "OFFICIAL.md"
+    required_paths = [spec_path, official_path]
+
+    for path in required_paths:
+        if not path.exists():
+            return _err(
+                FileNotFoundError(f"Keepa MCP 规范文档不存在：{path}。请检查 opscli 安装是否完整。"),
+                tool="MCP → keepa_spec_must_read()",
+            )
     try:
-        content = spec_path.read_text(encoding="utf-8")
-        return _ok({"spec": content, "source": str(spec_path)})
+        content = "\n\n".join(path.read_text(encoding="utf-8") for path in required_paths)
+        return _ok(
+            {
+                "spec": content,
+                "source": str(spec_path),
+                "sources": [str(path) for path in required_paths],
+            }
+        )
     except Exception as exc:
         return _err(exc, tool="MCP → keepa_spec_must_read()")
 
@@ -47,6 +89,25 @@ async def keepa_scenarios() -> dict:
         return _ok(KeepaApiManager().scenarios())
     except Exception as exc:
         return _err(exc, tool="MCP → keepa_scenarios()")
+
+
+async def keepa_quota_status() -> dict:
+    """读取当前 MCP 用户的 Keepa 每日额度快照。"""
+    user_email = _get_current_mcp_user_email()
+    if not user_email:
+        return _err(
+            ValueError("当前 MCP 用户邮箱缺失，无法读取 Keepa 额度"),
+            tool="MCP → keepa_quota_status()",
+        )
+
+    try:
+        identity = f"email:{user_email.strip().lower()}"
+        snapshot = get_quota_limiter().quota_snapshot("keepa_run", identity)
+        if inspect.isawaitable(snapshot):
+            snapshot = await snapshot
+        return _ok(snapshot)
+    except Exception as exc:
+        return _err(exc, tool="MCP → keepa_quota_status()")
 
 
 async def keepa_run(
@@ -80,6 +141,17 @@ async def keepa_run(
         export_format = _normalize_mcp_export_format(export_format)
         call_params["export_format"] = export_format
         sid, jw = _get_auth_pair("ops", session_id, jwt)
+        keepa_settings = _load_keepa_settings()
+        if not sid and not keepa_settings.api_key:
+            login_result = await _try_auto_mcp_login()
+            if login_result.get("success"):
+                sid, jw = _get_auth_pair("ops", session_id, jwt)
+            if not sid:
+                login_error = (login_result.get("error") or {}).get("message")
+                message = "无 session_id：请完成授权登录，或传入有效的 session_id"
+                if login_error:
+                    message = f"{message}。自动执行 auth_mcp_login 失败：{login_error}"
+                raise ValueError(message)
         from opscli.keepa.domain.models import KeepaScenarioRequest
         from opscli.keepa.services import KeepaApiManager
 
@@ -119,10 +191,9 @@ async def keepa_export(job_id: str) -> dict:
         from opscli.keepa.services import KeepaApiManager
 
         status = KeepaApiManager().job_status(job_id)
-        export = status.get("export")
-        if not export:
-            raise ValueError(f"任务无导出文件：{job_id}")
-        _ensure_export_url(export)
+        export = _public_export_payload(status.get("export"))
+        if not export.get("url"):
+            raise ValueError(f"任务导出文件没有可下载地址：{job_id}")
         return _ok(export)
     except Exception as exc:
         return _err(exc, tool="MCP → keepa_export(...)", call_params={"job_id": job_id})
@@ -131,6 +202,7 @@ async def keepa_export(job_id: str) -> dict:
 _ALL_TOOLS = [
     keepa_spec_must_read,
     keepa_scenarios,
+    keepa_quota_status,
     keepa_run,
     keepa_job_status,
     keepa_export,
@@ -145,7 +217,7 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         public.pop("account", None)
         public.pop("params_path", None)
         public.pop("raw_path", None)
-        _ensure_export_url(public.get("export"))
+        _sanitize_public_export(public)
         _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
     return public
@@ -159,13 +231,41 @@ def _normalize_mcp_export_format(value: str) -> str:
     raise ValueError(f"不支持的导出格式：{value}。Keepa MCP 当前仅支持 xls/xlsx 表格导出。")
 
 
-def _ensure_export_url(export: Any) -> None:
+def _sanitize_public_export(public: dict[str, Any]) -> None:
+    export = public.get("export")
     if not isinstance(export, dict):
         return
-    if export.get("url"):
-        export.pop("path", None)
-    elif export.get("path"):
-        export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
+    export.pop("path", None)
+    url = export.get("url")
+    if isinstance(url, str) and url.startswith("file://"):
+        export["url"] = None
+        url = None
+    if url:
+        return
+
+    warnings = public.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+    warnings.append(
+        {
+            "stage": "export_url_unavailable",
+            "message": "当前任务导出文件没有可下载地址，请稍后重试或联系管理员检查上传链路。",
+        }
+    )
+    public["warnings"] = warnings
+
+
+def _public_export_payload(export: Any) -> dict[str, Any]:
+    if not isinstance(export, dict):
+        raise ValueError("任务无导出文件")
+    payload = _strip_sensitive(export)
+    if not isinstance(payload, dict):
+        raise ValueError("任务导出结构不合法")
+    payload.pop("path", None)
+    url = payload.get("url")
+    if isinstance(url, str) and url.startswith("file://"):
+        payload["url"] = None
+    return payload
 
 
 def _compact_public_data(public: dict[str, Any]) -> None:

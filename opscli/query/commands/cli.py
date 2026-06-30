@@ -67,7 +67,7 @@ def metadata(
     skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 目录"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
-    """读取指定数据集的 query metadata。"""
+    """读取指定数据集的 query metadata，不传任何参数时默认获取所有数据集"""
     manager = QueryManager()
     try:
         result = manager.metadata(dataset_alias=dataset, table_id=table_id, skills_dir=skills_dir)
