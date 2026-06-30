@@ -4,7 +4,7 @@
   "policies": {
     "keepa_run": {
       "service": "keepa",
-      "daily_limit": 5,
+      "daily_limit": 50,
       "enabled": true
     },
     "seller_sprite_run": {
