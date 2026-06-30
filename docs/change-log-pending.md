@@ -1,5 +1,19 @@
 # 待归档变更记录
 
+## 2026-06-29 Amazon Rufus - watch-login 页面生命周期诊断
+
+**变更原因**：用户反馈 `amazon-rufus watch-login` 打开浏览器后保留 Amazon 页面，但另一个页签会反复打开并关闭。静态代码无法直接确认该页签来源，需要增加可控诊断日志，并避免页面关闭时透出裸 Playwright 异常。
+
+**改动点**：`opscli/amazon_rufus/services/browser.py` 新增 `OPS_RUFUS_DEBUG_PAGES=1` 控制的 page 创建、导航、关闭诊断输出，按 `existing`、`external`、`ops-login`、`ops-product` 标记页签来源，并对诊断 URL 仅保留 scheme、host、path；`_wait_page_or_sleep()` 将 Playwright 页面关闭类错误转换为 `SeedRequestNotCapturedError`；`tests/amazon_rufus/test_core.py` 新增页面生命周期、URL query 脱敏和关闭异常包装回归测试。
+
+**验证结果**：RED 阶段新增用例在旧实现下失败：`./.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_core.py" -k "debug_pages or wraps_closed_page_wait_error" -q`，结果 3 failed；GREEN 后同命令通过，3 passed；运行 `./.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_core.py" -k "watch_login or debug_pages or closed" -q` 通过，7 passed；运行 `./.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_core.py" -q` 通过，90 passed；运行 `./.venv/Scripts/python.exe -m py_compile "opscli/amazon_rufus/services/browser.py"` 通过。
+
+**影响范围**：仅影响 Rufus `watch_login_and_capture_seed_request()` 的可选诊断输出和页面关闭错误口径；默认未设置 `OPS_RUFUS_DEBUG_PAGES` 时不输出诊断日志，不改变 MCP schema、CLI 参数、登录页打开次数、商品页打开次数或 headless 后端获取链路。
+
+**回滚方式**：回退 `opscli/amazon_rufus/services/browser.py`、`tests/amazon_rufus/test_core.py` 中本次页面生命周期诊断和关闭异常包装相关改动，并删除本条变更记录。
+
+---
+
 ## 2026-06-22 Amazon Rufus - watch_login 单次触发与 DevTools 参数修复
 
 **变更原因**：亚马逊 Rufus 登录态失效时，同一次 Skill 调用内多个错误分支都可能再次触发 `watch_login`，导致浏览器反复打开登录页或商品页；同时 Chrome 启动参数会自动打开 DevTools 页签，增加额外页面干扰。
@@ -2322,4 +2336,13 @@
 **验证结果**：`grep -rn asin_review opscli/` 零命中；`python3 -c "import opscli.cli"` 与 `import opscli.mcp.server` 均成功；`python3 -m opscli.cli --version`/`--help` 正常，asin-data 保留、asin-review 消失。
 **影响范围**：恢复 opscli 全部命令可用；asin-review 功能本就无实体，移除无功能损失。0.0.99 已发布且损坏，需发新版本（如 0.0.100）覆盖。
 **回滚方式**：git 还原 cli.py 与 mcp/server.py 即可（但会恢复崩溃，不建议）。
+---
+
+## 2026-06-29 amazon_rufus - 拦截 watch-login 外部广告空白页
+
+**变更原因**：Rufus `watch-login` 打开 Amazon 后，Chrome 会反复出现并关闭短生命周期空白页；CDP 诊断确认其生命周期为 `about:blank -> https://s.amazon-adsystem.com/ -> destroyed`，不是 opscli 自建的 `ops-login` 或 `ops-product` 页签。
+**改动点**：`opscli/amazon_rufus/services/browser.py` 在 `watch_login_and_capture_seed_request()` 连接 CDP context 后安装 `https://s.amazon-adsystem.com/**` 请求拦截，并在外部页签导航到该广告域名时立即关闭；`tests/amazon_rufus/test_core.py` 新增回归测试，模拟外部广告页签反复开关并验证 Rufus 请求捕获不受影响。
+**验证结果**：RED：`.\\.venv\\Scripts\\python.exe -m pytest tests/amazon_rufus/test_core.py -k "blocks_external_amazon_ad_pages" -q` 初始失败，确认未注册广告域名拦截；GREEN：同命令复跑通过（1 passed）；定向回归 `.\\.venv\\Scripts\\python.exe -m pytest tests/amazon_rufus/test_core.py -k "watch_login or debug_pages or closed or blocks_external" -q` 通过（8 passed）；语法检查 `.\\.venv\\Scripts\\python.exe -m py_compile opscli/amazon_rufus/services/browser.py` 通过；全文件回归 `.\\.venv\\Scripts\\python.exe -m pytest tests/amazon_rufus/test_core.py -q` 通过（91 passed）；真实 CDP 短窗观测中 `adsystem_page_target_count=0`，未复现循环广告空白页。
+**影响范围**：仅影响 Amazon Rufus `watch-login` 登录监听阶段的外部广告请求和外部广告页签处理；登录页、商品页、Rufus streaming 请求捕获与后端获取流程不变。
+**回滚方式**：回退 `opscli/amazon_rufus/services/browser.py`、`tests/amazon_rufus/test_core.py` 和本条变更记录。
 ---

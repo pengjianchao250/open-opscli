@@ -1703,6 +1703,412 @@ def test_browser_watch_login_detects_login_and_captures_streaming_request(monkey
     assert result["storage_state"]["cookies"][0]["name"] == "session-id"
 
 
+def test_browser_watch_login_debug_pages_records_page_create_and_close(monkeypatch, capsys):
+    """开启页面调试时，应记录 page 创建和关闭事件。"""
+    from opscli.amazon_rufus.services.browser import BrowserAttachService
+
+    class FakeRequest:
+        url = "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1&token=secret-token"
+        headers = {"content-type": "application/json", "cookie": "session-id=abc"}
+        post_data = '{"queryContext": {"query": "seed"}}'
+
+    class FakePage:
+        def __init__(self, name):
+            self.name = name
+            self.url = ""
+            self.handlers = {}
+
+        def on(self, event, handler):
+            self.handlers.setdefault(event, []).append(handler)
+
+        def goto(self, url, wait_until=None, timeout=None):
+            self.url = url
+            if "/dp/" not in url:
+                return
+            self.url = "https://www.amazon.com/dp/B0TEST1234?tabId=tab-1&token=secret-token"
+            for handler in self.handlers.get("request", []):
+                handler(FakeRequest())
+            for handler in self.handlers.get("close", []):
+                # Playwright close 回调签名可能无参，测试替身兼容两种写法。
+                try:
+                    handler()
+                except TypeError:
+                    handler(self)
+
+        def bring_to_front(self):
+            return None
+
+        def wait_for_timeout(self, timeout_ms):
+            return None
+
+        def evaluate(self, script):
+            return "Hello, Alice"
+
+    class FakeContext:
+        def __init__(self):
+            self.pages = []
+            self.page_handler = None
+
+        def new_page(self):
+            page = FakePage(f"page-{len(self.pages) + 1}")
+            self.pages.append(page)
+            if self.page_handler:
+                self.page_handler(page)
+            return page
+
+        def on(self, event, handler):
+            if event == "page":
+                self.page_handler = handler
+
+        def storage_state(self):
+            return {
+                "cookies": [{"name": "sso-state-main", "value": "abc", "domain": ".amazon.com", "path": "/"}],
+                "origins": [],
+            }
+
+    class FakeBrowser:
+        def __init__(self):
+            self.contexts = [FakeContext()]
+
+    class FakeChromium:
+        def connect_over_cdp(self, cdp_url):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
+    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+    monkeypatch.setattr(BrowserAttachService, "_ensure_cdp_ready", lambda self, **kwargs: False)
+    monkeypatch.setenv("OPS_RUFUS_DEBUG_PAGES", "1")
+
+    result = BrowserAttachService().watch_login_and_capture_seed_request(
+        asin="B0TEST1234",
+        country="US",
+        marketplace_url="https://www.amazon.com",
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        cdp_url="http://127.0.0.1:9333",
+        timeout_seconds=30,
+        chrome_path=None,
+        launch_if_needed=True,
+    )
+
+    captured_output = capsys.readouterr()
+    diagnostic_output = (captured_output.out + captured_output.err).lower()
+    assert result["seed_request"].tab_id == "tab-1"
+    assert "page" in diagnostic_output
+    assert "created" in diagnostic_output or "创建" in diagnostic_output
+    assert "close" in diagnostic_output or "关闭" in diagnostic_output
+
+
+def test_browser_watch_login_debug_pages_strips_query_from_diagnostic_urls(monkeypatch, capsys):
+    """页面诊断输出只能保留 URL 路径，不能泄露 query 参数。"""
+    from opscli.amazon_rufus.services.browser import BrowserAttachService
+
+    class FakeRequest:
+        url = "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1&token=secret-token"
+        headers = {"content-type": "application/json", "cookie": "session-id=abc"}
+        post_data = '{"queryContext": {"query": "seed"}}'
+
+    class FakePage:
+        def __init__(self, name):
+            self.name = name
+            self.url = ""
+            self.handlers = {}
+
+        def on(self, event, handler):
+            self.handlers.setdefault(event, []).append(handler)
+
+        def goto(self, url, wait_until=None, timeout=None):
+            self.url = url
+            if "/dp/" not in url:
+                return
+            self.url = "https://www.amazon.com/dp/B0TEST1234?tabId=tab-1&token=secret-token"
+            for handler in self.handlers.get("request", []):
+                handler(FakeRequest())
+
+        def bring_to_front(self):
+            return None
+
+        def wait_for_timeout(self, timeout_ms):
+            return None
+
+        def evaluate(self, script):
+            return "Hello, Alice"
+
+    class FakeContext:
+        def __init__(self):
+            self.pages = []
+            self.page_handler = None
+
+        def new_page(self):
+            page = FakePage(f"page-{len(self.pages) + 1}")
+            self.pages.append(page)
+            if self.page_handler:
+                self.page_handler(page)
+            return page
+
+        def on(self, event, handler):
+            if event == "page":
+                self.page_handler = handler
+
+        def storage_state(self):
+            return {
+                "cookies": [{"name": "sso-state-main", "value": "abc", "domain": ".amazon.com", "path": "/"}],
+                "origins": [],
+            }
+
+    class FakeBrowser:
+        def __init__(self):
+            self.contexts = [FakeContext()]
+
+    class FakeChromium:
+        def connect_over_cdp(self, cdp_url):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
+    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+    monkeypatch.setattr(BrowserAttachService, "_ensure_cdp_ready", lambda self, **kwargs: False)
+    monkeypatch.setenv("OPS_RUFUS_DEBUG_PAGES", "1")
+
+    BrowserAttachService().watch_login_and_capture_seed_request(
+        asin="B0TEST1234",
+        country="US",
+        marketplace_url="https://www.amazon.com",
+        page_url="https://www.amazon.com/dp/B0TEST1234?tabId=tab-1&token=secret-token",
+        cdp_url="http://127.0.0.1:9333",
+        timeout_seconds=30,
+        chrome_path=None,
+        launch_if_needed=True,
+    )
+
+    captured_output = capsys.readouterr()
+    diagnostic_output = captured_output.out + captured_output.err
+    assert "https://www.amazon.com/dp/B0TEST1234" in diagnostic_output
+    assert "tabId=" not in diagnostic_output
+    assert "token=" not in diagnostic_output
+    assert "secret-token" not in diagnostic_output
+
+
+def test_browser_watch_login_blocks_external_amazon_ad_pages(monkeypatch):
+    """watch-login 应拦截 Amazon 广告页，避免外部空白页反复开关。"""
+    from opscli.amazon_rufus.services.browser import BrowserAttachService
+
+    calls = []
+
+    class FakeRequest:
+        url = "https://www.amazon.com/rufus/cl/streaming?tabId=tab-1"
+        headers = {"content-type": "application/json", "cookie": "session-id=abc"}
+        post_data = '{"queryContext": {"query": "seed"}}'
+
+    class FakeRoute:
+        def abort(self):
+            calls.append(("route", "abort"))
+
+    class FakePage:
+        def __init__(self, context, name):
+            self.context = context
+            self.name = name
+            self.url = "about:blank"
+            self.handlers = {}
+            self.closed = False
+
+        def on(self, event, handler):
+            self.handlers.setdefault(event, []).append(handler)
+
+        def goto(self, url, wait_until=None, timeout=None):
+            self.url = url
+            calls.append((self.name, "goto", url))
+            if url == "https://www.amazon.com":
+                self.context.spawn_external_ad_page()
+            if "/dp/" in url:
+                for handler in self.handlers.get("request", []):
+                    handler(FakeRequest())
+
+        def bring_to_front(self):
+            calls.append((self.name, "front"))
+
+        def wait_for_timeout(self, timeout_ms):
+            calls.append((self.name, "wait", timeout_ms))
+
+        def evaluate(self, script):
+            return "Hello, Alice"
+
+        def close(self):
+            self.closed = True
+            calls.append((self.name, "close"))
+
+    class FakeContext:
+        def __init__(self):
+            self.pages = []
+            self.page_handler = None
+            self.route_patterns = []
+            self.external_ad_page = None
+
+        def new_page(self):
+            page = FakePage(self, f"page-{len(self.pages) + 1}")
+            self.pages.append(page)
+            if self.page_handler:
+                self.page_handler(page)
+            return page
+
+        def on(self, event, handler):
+            if event == "page":
+                self.page_handler = handler
+
+        def route(self, pattern, handler):
+            self.route_patterns.append(pattern)
+            handler(FakeRoute())
+
+        def spawn_external_ad_page(self):
+            if self.external_ad_page is not None:
+                return
+            page = FakePage(self, "external-ad")
+            self.external_ad_page = page
+            self.pages.append(page)
+            if self.page_handler:
+                self.page_handler(page)
+            page.url = "https://s.amazon-adsystem.com/"
+            for handler in page.handlers.get("framenavigated", []):
+                handler()
+
+        def storage_state(self):
+            return {
+                "cookies": [{"name": "sso-state-main", "value": "abc", "domain": ".amazon.com", "path": "/"}],
+                "origins": [],
+            }
+
+    fake_context = FakeContext()
+
+    class FakeBrowser:
+        contexts = [fake_context]
+
+    class FakeChromium:
+        def connect_over_cdp(self, cdp_url):
+            calls.append(("connect", cdp_url))
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
+    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+    monkeypatch.setattr(BrowserAttachService, "_ensure_cdp_ready", lambda self, **kwargs: False)
+
+    result = BrowserAttachService().watch_login_and_capture_seed_request(
+        asin="B0TEST1234",
+        country="US",
+        marketplace_url="https://www.amazon.com",
+        page_url="https://www.amazon.com/dp/B0TEST1234",
+        cdp_url="http://127.0.0.1:9333",
+        timeout_seconds=30,
+        chrome_path=None,
+        launch_if_needed=True,
+    )
+
+    assert "https://s.amazon-adsystem.com/**" in fake_context.route_patterns
+    assert ("route", "abort") in calls
+    assert fake_context.external_ad_page.closed is True
+    assert result["seed_request"].tab_id == "tab-1"
+
+
+def test_browser_watch_login_wraps_closed_page_wait_error(monkeypatch):
+    """监听页面被关闭时，应抛出业务错误而不是透出裸 RuntimeError。"""
+    from opscli.amazon_rufus.domain.exceptions import SeedRequestNotCapturedError
+    from opscli.amazon_rufus.services.browser import BrowserAttachService
+
+    class FakePage:
+        url = "https://www.amazon.com"
+
+        def on(self, event, handler):
+            return None
+
+        def goto(self, url, wait_until=None, timeout=None):
+            self.url = url
+
+        def bring_to_front(self):
+            return None
+
+        def wait_for_timeout(self, timeout_ms):
+            raise RuntimeError("Page.wait_for_timeout: Target page, context or browser has been closed")
+
+        def evaluate(self, script):
+            return "Sign in"
+
+    class FakeContext:
+        def __init__(self):
+            self.pages = []
+
+        def new_page(self):
+            page = FakePage()
+            self.pages.append(page)
+            return page
+
+        def on(self, event, handler):
+            return None
+
+        def storage_state(self):
+            return {"cookies": [], "origins": []}
+
+    class FakeBrowser:
+        def __init__(self):
+            self.contexts = [FakeContext()]
+
+    class FakeChromium:
+        def connect_over_cdp(self, cdp_url):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    fake_sync_api = types.SimpleNamespace(sync_playwright=lambda: FakePlaywright())
+    monkeypatch.setitem(sys.modules, "playwright", types.SimpleNamespace(sync_api=fake_sync_api))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+    monkeypatch.setattr(BrowserAttachService, "_ensure_cdp_ready", lambda self, **kwargs: False)
+
+    with pytest.raises(SeedRequestNotCapturedError):
+        BrowserAttachService().watch_login_and_capture_seed_request(
+            asin="B0TEST1234",
+            country="US",
+            marketplace_url="https://www.amazon.com",
+            page_url="https://www.amazon.com/dp/B0TEST1234",
+            cdp_url="http://127.0.0.1:9333",
+            timeout_seconds=30,
+            chrome_path=None,
+            launch_if_needed=True,
+        )
+
+
 def test_browser_watch_login_closes_launched_browser_when_requested(monkeypatch):
     from opscli.amazon_rufus.services.browser import BrowserAttachService
 
