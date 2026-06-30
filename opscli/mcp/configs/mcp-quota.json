@@ -2,6 +2,11 @@
   "enabled": true,
   "sqlite_path": "",
   "policies": {
+    "keepa_run": {
+      "service": "keepa",
+      "daily_limit": 50,
+      "enabled": true
+    },
     "seller_sprite_run": {
       "service": "seller_sprite",
       "daily_limit": 10,

@@ -19,6 +19,7 @@ from opscli.beta.canopy.domain.exceptions import CanopyConfigError
 from opscli.beta.canopy.domain.models import CanopyScenarioRequest
 from opscli.beta.canopy.services import CanopyApiManager
 from opscli.beta.canopy.services.api_manager import request_canopy_api
+from opscli.skills.packaging import get_builtin_templates_dir
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
@@ -168,16 +169,37 @@ CANOPY_SCENARIOS: dict[str, dict[str, Any]] = {
 }
 
 
+def _canopy_skill_dir() -> Path:
+    """返回 Canopy Skill 模板目录。"""
+    return get_builtin_templates_dir() / "ops-canopy"
+
+
 async def beta_spec_must_read() -> dict:
-    """仅当用户明确提到 beta/Canopy/测试服务时，读取 beta MCP 使用规范。"""
-    spec_path = Path(__file__).resolve().parents[1] / "references" / "beta" / "SKILL_MCP.md"
-    if not spec_path.exists():
-        return _err(
-            FileNotFoundError(f"beta MCP 规范文档不存在：{spec_path}。请检查 opscli 安装是否完整。"),
-            tool="MCP → beta_spec_must_read()",
-        )
+    """仅当用户明确提到 beta/Canopy/测试服务时，读取 beta MCP 使用规范。
+
+    规范内容统一收口到 opscli 内置 Skill 模板：
+    - opscli/skills/templates/ops-canopy/SKILL_MCP.md
+    - opscli/skills/templates/ops-canopy/references/OFFICIAL.md
+    """
+    skill_dir = _canopy_skill_dir()
+    spec_path = skill_dir / "SKILL_MCP.md"
+    official_path = skill_dir / "references" / "OFFICIAL.md"
+    required_paths = [spec_path, official_path]
+
+    for path in required_paths:
+        if not path.exists():
+            return _err(
+                FileNotFoundError(f"beta MCP 规范文档不存在：{path}。请检查 opscli 安装是否完整。"),
+                tool="MCP → beta_spec_must_read()",
+            )
     try:
-        return _ok({"spec": spec_path.read_text(encoding="utf-8"), "source": str(spec_path)})
+        return _ok(
+            {
+                "spec": "\n\n".join(path.read_text(encoding="utf-8") for path in required_paths),
+                "source": str(spec_path),
+                "sources": [str(path) for path in required_paths],
+            }
+        )
     except Exception as exc:
         return _err(exc, tool="MCP → beta_spec_must_read()")
 
@@ -268,6 +290,26 @@ async def beta_canopy_run(
         return _err(exc, tool="MCP → beta_canopy_run(...)", call_params=call_params, auto_feedback=False)
     except Exception as exc:
         return _err(exc, tool="MCP → beta_canopy_run(...)", call_params=call_params)
+
+
+async def beta_canopy_job_status(job_id: str) -> dict:
+    """仅当用户明确提到 beta/Canopy/测试服务时，读取 Canopy 任务结果。"""
+    try:
+        return _ok(_public_result(CanopyApiManager().job_status(job_id)))
+    except Exception as exc:
+        return _err(exc, tool="MCP → beta_canopy_job_status(...)", call_params={"job_id": job_id})
+
+
+async def beta_canopy_export(job_id: str) -> dict:
+    """仅当用户明确提到 beta/Canopy/测试服务时，读取 Canopy 任务导出文件信息。"""
+    try:
+        status = CanopyApiManager().job_status(job_id)
+        export = _public_export_payload(status.get("export"))
+        if not export.get("url"):
+            raise ValueError(f"任务导出文件没有可下载地址：{job_id}")
+        return _ok(export)
+    except Exception as exc:
+        return _err(exc, tool="MCP → beta_canopy_export(...)", call_params={"job_id": job_id})
 
 
 async def _request_canopy_api(
@@ -426,20 +468,55 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         public.pop("raw_path", None)
         public.pop("result_path", None)
         public.pop("response", None)
-        _ensure_export_url(public.get("export"))
+        _strip_public_debug_fields(public.get("request"))
+        _sanitize_public_export(public)
         _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
     return public
 
 
-def _ensure_export_url(export: Any) -> None:
+def _strip_public_debug_fields(request: Any) -> None:
+    """移除 public MCP 返回中不应暴露的调试字段。"""
+    if not isinstance(request, dict):
+        return
+    request.pop("api_key_placeholder_used", None)
+
+
+def _sanitize_public_export(public: dict[str, Any]) -> None:
+    export = public.get("export")
     if not isinstance(export, dict):
         return
-    if export.get("url"):
-        export.pop("path", None)
-    elif export.get("path"):
-        export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
-        export.pop("path", None)
+    export.pop("path", None)
+    url = export.get("url")
+    if isinstance(url, str) and url.startswith("file://"):
+        export["url"] = None
+        url = None
+    if url:
+        return
+
+    warnings = public.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+    warnings.append(
+        {
+            "stage": "export_url_unavailable",
+            "message": "当前任务导出文件没有可下载地址，请稍后重试或联系管理员检查上传链路。",
+        }
+    )
+    public["warnings"] = warnings
+
+
+def _public_export_payload(export: Any) -> dict[str, Any]:
+    if not isinstance(export, dict):
+        raise ValueError("任务无导出文件")
+    payload = _strip_sensitive(export)
+    if not isinstance(payload, dict):
+        raise ValueError("任务导出结构不合法")
+    payload.pop("path", None)
+    url = payload.get("url")
+    if isinstance(url, str) and url.startswith("file://"):
+        payload["url"] = None
+    return payload
 
 
 def _compact_public_data(public: dict[str, Any]) -> None:
@@ -510,6 +587,8 @@ _ALL_TOOLS = [
     beta_spec_must_read,
     beta_canopy_scenarios,
     beta_canopy_run,
+    beta_canopy_job_status,
+    beta_canopy_export,
 ]
 
 

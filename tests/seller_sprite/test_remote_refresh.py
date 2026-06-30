@@ -1,5 +1,13 @@
+import httpx
+
 from opscli.mcp_client.config_client import RemoteMcpServerConfig
 from opscli.seller_sprite.remote_adapter import SellerSpriteRemoteAdapter
+
+
+def _make_http_status_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://ops.mcp.xenkee.com/mcp")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError(f"{status_code} error", request=request, response=response)
 
 
 def test_remote_adapter_refetches_config_once_on_unauthorized():
@@ -37,7 +45,7 @@ def test_remote_adapter_refetches_config_once_on_unauthorized():
         async def call_tool(self, tool_name, arguments):
             calls["tool"] += 1
             if "api_key=old" in self.url:
-                raise PermissionError("401 unauthorized")
+                raise ExceptionGroup("remote unauthorized", [_make_http_status_error(401)])
             return {"success": True, "data": {"job_id": "job-1"}, "error": None}
 
     adapter = SellerSpriteRemoteAdapter(

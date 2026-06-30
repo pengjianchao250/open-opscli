@@ -516,6 +516,11 @@ class QuotaLimiter:
 def default_quota_policies() -> dict[str, QuotaPolicy]:
     """返回当前启用的 MCP Tool 限额策略。"""
     return {
+        "keepa_run": QuotaPolicy(
+            tool_name="keepa_run",
+            service="keepa",
+            daily_limit=5,
+        ),
         "seller_sprite_run": QuotaPolicy(
             tool_name="seller_sprite_run",
             service="seller_sprite",
@@ -528,7 +533,7 @@ def default_quota_policies() -> dict[str, QuotaPolicy]:
 def load_quota_config(path: str | Path | None = None) -> QuotaConfig:
     """读取 MCP 限额配置文件。
 
-    配置文件只覆盖代码默认策略，缺失时继续使用默认 seller_sprite_run=5。
+    配置文件只覆盖代码默认策略，缺失时继续使用代码内置默认值。
     读取优先级为：显式 path、环境变量、工作目录 configs、项目 configs、用户配置目录。
     """
     config_path = Path(path).expanduser() if path else _find_quota_config_path()

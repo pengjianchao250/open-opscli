@@ -1,5 +1,59 @@
 # 待归档变更记录
 
+## 2026-06-29 skills - 统一 Keepa 每日额度提示
+
+**变更原因**：`keepa_run` 已通过 MCP 限额中间件返回每日调用额度，但 Keepa Skill 仍要求隐藏剩余额度，导致最终回复未像卖家精灵一样提示用户当天的额度使用情况。
+**改动点**：更新 `ops-keepa/SKILL.md` 与 `SKILL_MCP.md`，补充 `keepa_quota_status` / `opscli keepa quota-status` 使用说明，并要求 `keepa_run` 顶层存在 `quota` 时展示已用、总额、剩余和重置时间；`job_status` / `export` 不重复提示；Keepa API token 余额和账号信息继续隐藏。`tests/mcp/test_keepa_tools.py` 增加两份 Skill 模板的额度提示契约测试。
+**验证结果**：RED 阶段运行 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_keepa_tools.py::test_keepa_skill_templates_require_daily_quota_prompt -q`，按预期失败于 Keepa Skill 缺少额度提示模板；GREEN 阶段同命令通过（1 passed）。聚焦回归 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_keepa_tools.py tests\keepa\test_remote_adapter.py tests\keepa\test_cli_remote.py -q` 通过（21 passed）。`ops-keepa` manifest 条目、`SKILL.md`、`SKILL_MCP.md` 和 `data/VERSION.json` 定向校验通过。全局 `validate_release_manifest()` 被仓库既存问题阻断：提交 `eb665b4` 删除了 `ops-canopy`、`ops-google-trends` 目录但 manifest 仍保留声明；`tests/skills/test_packaging.py` 另有 Windows 路径分隔符既存断言失败，均未在本次变更中扩范围修复。
+**影响范围**：仅影响 Keepa Skill 的用户回复与额度查询指引，不修改 `keepa_run` 参数、MCP 返回结构、限额计算或底层 Keepa token 预检逻辑。
+**回滚方式**：回退两份 Keepa Skill、对应契约测试和本条变更记录。
+---
+
+## 2026-06-25 skills - 新增 Keepa / Google Trends / Canopy 服务 Skill 模板
+
+**变更原因**：本地 CLI 调远端 public MCP 的正式链路已经完成改造，需要补齐 Keepa、Google Trends、Canopy 三个服务的标准 Skill 模板，统一说明正式 CLI 代理远端 MCP 的调用流程、基础参数和场景能力，便于后续 AI Agent 直接按公开命令面工作。
+**改动点**：在 `opscli/skills/templates/` 下新增 `ops-keepa`、`ops-google-trends`、`ops-canopy` 三个 Skill 目录；每个目录补充 `SKILL.md`（面向正式 CLI 代理链路）、`SKILL_MCP.md`（面向远端 MCP 直连语境）和 `data/VERSION.json`。其中 `SKILL.md` 统一收口到正式 `opscli keepa`、`opscli google-trends`、`opscli canopy` 命令路径，说明默认链路、最小工作流、关键命令参数、典型场景和用户回复边界，并明确禁止向用户暴露内部调试命令；同时补充显式前置约束：正式 CLI 依赖本机已完成 OPS 授权，若本机未登录或登录态过期，必须先执行 `opscli auth login`，避免 CLI 代理远端 MCP 时因缺少本机登录态直接报错。`SKILL_MCP.md` 则单独约束对应远端 `keepa_*`、`google_trends_*`、`beta_canopy_*` tools 的直接调用语境。同步将原 `opscli/mcp/references/keepa`、`google_trends`、`beta` 的参考规范整合进模板目录，改为由 `opscli/mcp/tools/keepa.py`、`google_trends.py`、`beta.py` 直接读取模板目录作为单一规范来源，不再维护重复副本。同步更新 `opscli/skills/templates/manifest.json`，为三个新模板补充发版清单声明、tier 和 reason。
+**验证结果**：执行 `.\.venv\Scripts\python.exe -c "from opscli.skills.packaging import validate_release_manifest; problems = validate_release_manifest(); print(problems)"`，返回 `[]`；执行 `.\.venv\Scripts\python.exe -c "from opscli.skills.services.manager import SkillsManager; import json; data = [item for item in SkillsManager().list_templates() if item['name'] in {'ops-keepa','ops-google-trends','ops-canopy'}]; print(json.dumps(data, ensure_ascii=False, indent=2))"`，确认三个新模板都能被模板扫描逻辑识别。
+**影响范围**：影响 Skills 模板目录与发版清单；不改动 Keepa、Google Trends、Canopy 的正式 CLI 实现、远端 MCP 适配层或底层服务逻辑。
+**回滚方式**：删除 `opscli/skills/templates/ops-keepa`、`opscli/skills/templates/ops-google-trends`、`opscli/skills/templates/ops-canopy` 三个目录，回退 `opscli/skills/templates/manifest.json` 和本条变更记录。
+---
+
+## 2026-06-25 canopy - 正式远端命令面 / 本地调试命令面分轨
+
+**变更原因**：远程 MCP 代理 CLI 统一改造要求 `opscli canopy` 对外去掉 beta 命名，收敛为正式远端命令面，同时把本地直连执行链路下沉到 `opscli canopy-debug`，并补齐 `job-status` / `export` 以对齐 Keepa、Google Trends 的统一命令面。
+**改动点**：`opscli/canopy/remote_adapter.py` 新增 `CanopyRemoteAdapter`，复用共享 `RemoteMcpAdapter` 基座并将正式 CLI 映射到 `beta_canopy_scenarios`、`beta_canopy_run`、`beta_canopy_job_status`、`beta_canopy_export` 四个远端 tools；`opscli/canopy/cli.py` 改为正式远端命令面，只保留 `scenarios`、`run`、`job-status`、`export`，其中正式 `run` 不再暴露 `--output-dir`；新增 `opscli/canopy_debug/__init__.py` 与 `opscli/canopy_debug/cli.py`，迁入本地直连执行链路，并为 `run`、`job-status`、`export` 保留或补齐 `--output-dir`；`opscli/mcp/tools/beta.py` 扩展 `beta_canopy_job_status`、`beta_canopy_export`，并将 public beta MCP 返回统一收口为不暴露 `api_key_placeholder_used`、不回退 `file://`、在无远端上传 URL 时由 `run` / `job-status` 追加 warning、`export` 直接返回结构化错误；`opscli/cli.py` 新增顶级 `canopy` 与 `canopy-debug` 命令注册。新增 `tests/canopy/test_remote_adapter.py`、`tests/canopy/test_cli_remote.py`、`tests/canopy/test_cli_split.py`，并扩展 `tests/mcp/test_beta_tools.py` 覆盖正式/调试命令分轨、远端 tool 映射、public 返回脱敏和导出 URL 行为。
+**验证结果**：回归 `.\.venv\Scripts\python.exe -m pytest --import-mode=importlib tests\shared\test_remote_mcp_adapter.py tests\seller_sprite\test_remote_adapter.py tests\seller_sprite\test_remote_refresh.py tests\keepa\test_remote_adapter.py tests\keepa\test_cli_remote.py tests\keepa\test_cli_split.py tests\google_trends\test_remote_adapter.py tests\google_trends\test_cli_remote.py tests\google_trends\test_cli_split.py tests\canopy\test_remote_adapter.py tests\canopy\test_cli_remote.py tests\canopy\test_cli_split.py tests\mcp\test_keepa_tools.py tests\mcp\test_google_trends_tools.py tests\mcp\test_beta_tools.py tests\mcp\test_server_google_trends_registration.py -q` 通过，`85 passed in 3.10s`；顶级命令树检查 `.\.venv\Scripts\python.exe -m opscli.cli --help` 通过，并确认 `keepa-debug`、`google-trends-debug`、`canopy`、`canopy-debug` 都在。
+**影响范围**：影响公开 `opscli canopy` / `opscli canopy-debug` 的命令面、正式远端调用链路以及 beta Canopy public MCP 返回口径；底层 `opscli/beta/canopy/` 本地 service 仍保留并继续服务 debug 命令与内部调用。
+**回滚方式**：回退 `opscli/canopy/`、`opscli/canopy_debug/`、`opscli/mcp/tools/beta.py`、`opscli/cli.py`、对应 Canopy/MCP 测试和本条变更记录。
+---
+
+## 2026-06-25 google_trends - 正式远端命令面 / 本地调试命令面分轨并恢复 MCP 注册
+
+**变更原因**：远程 MCP 代理 CLI 统一改造要求 `opscli google-trends` 对外收敛为正式远端命令面，恢复 Google Trends MCP Server 注册，同时把本地直连执行链路下沉到 `opscli google-trends-debug`，避免正式命令继续依赖本地 pytrends/落盘环境。
+**改动点**：`opscli/mcp/server.py` 恢复 `google_trends` 工具导入与注册，使正式 MCP Server 再次暴露 `google_trends_spec_must_read`、`google_trends_scenarios`、`google_trends_run`、`google_trends_job_status`、`google_trends_export`；并把缺失 `asin_review` MCP 模块改为可选导入，避免导入 server 时直接中断。`opscli/google_trends/remote_adapter.py` 新增 `GoogleTrendsRemoteAdapter`，复用共享 `RemoteMcpAdapter` 基座，将正式 CLI 映射到 `google_trends_scenarios`、`google_trends_run`、`google_trends_job_status`、`google_trends_export` 四个远端 tools；`opscli/google_trends/cli.py` 改为正式远端命令面，正式 `run` 不再暴露 `--output-dir`；新增 `opscli/google_trends_debug/__init__.py` 与 `opscli/google_trends_debug/cli.py`，迁入原本的本地直连执行、任务状态读取和导出提取逻辑；`opscli/mcp/tools/google_trends.py` 将 public 返回统一收口为不暴露服务器本地 `path` / `file://`，在无远端上传 URL 时由 `job-status` 追加 warning、`export` 直接返回结构化错误；`opscli/cli.py` 新增顶级 `google-trends-debug` 命令注册。新增 `tests/mcp/test_server_google_trends_registration.py`、`tests/google_trends/test_remote_adapter.py`、`tests/google_trends/test_cli_remote.py`、`tests/google_trends/test_cli_split.py`，并扩展 `tests/mcp/test_google_trends_tools.py` 覆盖正式 MCP Server 注册、远端 tool 映射、正式 CLI 远端执行路径、正式/调试命令分轨，以及 public 导出 URL 契约。
+**验证结果**：RED：`.\.venv\Scripts\python.exe -m pytest tests\mcp\test_server_google_trends_registration.py tests\google_trends\test_remote_adapter.py tests\google_trends\test_cli_remote.py tests\google_trends\test_cli_split.py -q` 初始失败，暴露 `opscli.google_trends.remote_adapter` 缺失、`opscli.google_trends_debug` 缺失，以及 `opscli.mcp.server` 导入时缺少可选 `asin_review` MCP 模块。GREEN：同命令复跑通过，`11 passed in 1.84s`；跟进 public 契约统一后回归 `.\.venv\Scripts\python.exe -m pytest --import-mode=importlib tests\mcp\test_google_trends_tools.py tests\mcp\test_server_google_trends_registration.py tests\google_trends\test_remote_adapter.py tests\google_trends\test_cli_remote.py tests\google_trends\test_cli_split.py -q` 通过，`19 passed in 1.83s`。
+**影响范围**：影响正式 `opscli google-trends` 命令的执行链路与公开口径，现改为“CLI auth -> 远端 MCP 配置 -> 远端 tool 调用”；`opscli google-trends-debug` 保留本地 pytrends/落盘调试链路；Google Trends MCP 工具重新出现在正式 MCP Server 的工具列表中。
+**回滚方式**：回退 `opscli/mcp/server.py`、`opscli/google_trends/cli.py`、`opscli/google_trends/remote_adapter.py`、`opscli/google_trends_debug/`、`opscli/cli.py`、对应测试和本条变更记录。
+---
+
+## 2026-06-25 keepa - 正式远端命令面 / 本地调试命令面分轨
+
+**变更原因**：远程 MCP 代理 CLI 统一改造要求 `opscli keepa` 对外收敛为正式远端命令面，只保留 `scenarios/run/job-status/export`，同时把本地直连执行和 `token-status` 下沉到 `opscli keepa-debug`，避免普通用户接触 Keepa 额度与本地账号细节。
+**改动点**：`opscli/keepa/remote_adapter.py` 新增 `KeepaRemoteAdapter`，复用共享 `RemoteMcpAdapter` 基座并将正式 CLI 映射到 `keepa_scenarios`、`keepa_run`、`keepa_job_status`、`keepa_export` 四个远端 tools；`opscli/keepa/cli.py` 改为正式远端命令面，移除 `token-status`，新增 `job-status` 和 `export`，正式 `run` 不再暴露 `--output-dir`；新增 `opscli/keepa_debug/__init__.py` 与 `opscli/keepa_debug/cli.py`，迁入 Keepa 本地直连逻辑并保留 `token-status`、`scenarios`、`run`、`job-status`、`export`；`opscli/mcp/tools/keepa.py` 将 public 返回统一收口为不暴露服务器本地 `path` / `file://`，在无远端上传 URL 时由 `job-status` 追加 warning、`export` 直接返回结构化错误；`opscli/cli.py` 新增顶级 `keepa-debug` 命令注册，并在 `opscli.asin_review` 缺失时跳过可选注册，保证 `import opscli.cli` 仍可用；新增 `tests/keepa/test_remote_adapter.py`、`tests/keepa/test_cli_remote.py`、`tests/keepa/test_cli_split.py`，并扩展 `tests/mcp/test_keepa_tools.py` 覆盖远端 tool 映射、正式 CLI 远端执行路径、正式/调试命令分轨、`token-status` 下沉，以及 public 导出 URL 契约；跟进质量修复移除了 Keepa 测试里的假 `sys.modules` stub，改为直接测试 `keepa_cli.app` / `keepa_debug_cli.app`，并补充根 CLI 的 `keepa-debug` 注册断言以及 `keepa-debug export` 缺失导出时的明确报错。
+**验证结果**：RED：`.\.venv\Scripts\python.exe -m pytest tests\keepa\test_remote_adapter.py tests\keepa\test_cli_remote.py tests\keepa\test_cli_split.py -q` 初始失败，报 `ModuleNotFoundError: No module named 'opscli.keepa.remote_adapter'` 和 `ModuleNotFoundError: No module named 'opscli.keepa_debug'`；质量修复阶段 `.\.venv\Scripts\python.exe -m pytest tests\keepa\test_cli_remote.py tests\keepa\test_cli_split.py -q` 初始失败，暴露 `opscli.cli` 导入时缺少 `opscli.asin_review` 以及 `keepa-debug export` 缺失导出仍返回 `null`。GREEN：聚焦回归通过，验证正式 `keepa` 仅走远端 adapter、`keepa-debug` 保留本地执行与 `token-status`，且根 CLI 可在缺少 `asin_review` 模块时成功导入；跟进 public 契约统一后回归 `.\.venv\Scripts\python.exe -m pytest --import-mode=importlib tests\mcp\test_keepa_tools.py tests\keepa\test_remote_adapter.py tests\keepa\test_cli_remote.py tests\keepa\test_cli_split.py -q` 通过，`18 passed in 1.75s`。
+**影响范围**：影响公开 `opscli keepa` 的命令面与执行链路；普通用户不再看到 `token-status`，正式命令改为远端 MCP 代理；本地 Keepa 直连、落盘查询与额度查看能力迁移到 `opscli keepa-debug`。
+**回滚方式**：回退 `opscli/keepa/cli.py`、`opscli/keepa/remote_adapter.py`、`opscli/keepa_debug/`、`opscli/cli.py`、对应 Keepa 测试和本条变更记录。
+---
+
+## 2026-06-25 shared / seller_sprite - 远端 MCP CLI 共享适配基座收口
+
+**变更原因**：远端 MCP 代理 CLI 统一改造需要先把 `seller_sprite` 已有的远端配置拉取、HTTP server 选择、401 重试和空参数过滤抽成共享能力，后续供 `keepa`、`google_trends`、`canopy` 复用，同时要求 `seller_sprite` 对外命令行为保持不变。
+**改动点**：新增 `opscli/shared/remote_mcp_adapter.py`，封装 `McpConfigClient` + `RemoteMcpClient` 的公共基座，固定从 `data.http.mcpServers` 中优先选择 `BI运营系统`，调用前过滤顶层 `None` 参数，并在远端调用链路出现 `401` 时重拉配置后重试一次，兼容 `PermissionError`、`HTTPStatusError` 与 `ExceptionGroup` 等异常形态；`opscli/seller_sprite/remote_adapter.py` 改为继承共享基座，保留原有 `seller_sprite_*` tool 映射和 `session_id` 注入，只把远端调用细节下沉到公共层；新增 `tests/shared/test_remote_mcp_adapter.py` 覆盖共享基座的 server 选择、`None` 过滤、非 `401` 错误直抛、`preferred_name` 透传，以及 `PermissionError` / `ExceptionGroup(HTTP 401)` 两条重试链路，并更新 `tests/seller_sprite/test_remote_adapter.py` 与 `tests/seller_sprite/test_remote_refresh.py` 断言正式 CLI 仍透传 `session_id`，且在真实风格的 401 异常链路下只刷新一次配置。
+**验证结果**：RED：`.\.venv\Scripts\python.exe -m pytest tests\shared\test_remote_mcp_adapter.py -q` 初始失败，报 `ModuleNotFoundError: No module named 'opscli.shared.remote_mcp_adapter'`；`.\.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_remote_adapter.py -q` 初始失败，因现有实现仍向远端透传 `output_dir=None` 与 `job_id=None`。GREEN：`.\.venv\Scripts\python.exe -m pytest tests\shared\test_remote_mcp_adapter.py tests\seller_sprite\test_remote_adapter.py -q` 通过，`5 passed in 0.49s`。跟进质量补强与 401 异常链路扩展后，回归 `.\.venv\Scripts\python.exe -m pytest --import-mode=importlib tests\shared\test_remote_mcp_adapter.py tests\seller_sprite\test_remote_adapter.py tests\seller_sprite\test_remote_refresh.py -q` 通过，`12 passed in 0.56s`。
+**影响范围**：影响正式 CLI 远端调用共享层和 `seller_sprite` 远端参数整理逻辑；`seller_sprite` 的 tool 名映射、`session_id` 注入、CLI 命令面和返回结构不变。
+**回滚方式**：回退 `opscli/shared/remote_mcp_adapter.py`、`opscli/seller_sprite/remote_adapter.py`、对应测试和本条变更记录。
+---
+
 ## 2026-06-24 seller_sprite - 正式 CLI 远端调用显式透传 session_id
 
 **变更原因**：`opscli seller-sprite` 正式 CLI 已能用本机 `opscli auth login` 拉取远端 MCP 配置，但调用远端 `seller_sprite_run` 时未显式带上本机 `session_id`，导致“本机 CLI 已登录、远端卖家精灵 MCP 仍报无 session_id”的断层。
@@ -2011,6 +2065,17 @@
 **验证结果**：`tomllib`/`yaml` 语法校验通过；`<49` 经 PyPI 解析到 48.0.1（确认含 universal2 + win32 wheel）。最终验证待发新 tag 触发 CI 全绿。
 **影响范围**：Intel Mac 与（若构建）32 位 Windows 用户恢复可安装；arm64 mac / win_amd64 / Linux 不受影响。代价：用户停留在 cryptography 48.0.1，暂不获取 49.x 安全更新；上游 macOS 正转向仅 arm64，Intel Mac 支持长期需另行规划。
 **回滚方式**：`pyproject.toml` 改回 `cryptography>=38`，workflow 改动用 git 还原即可。
+
+---
+
+## 2026-06-26 keepa / mcp - Keepa 接入 MCP 每日额度限制与额度查询入口
+
+**变更原因**：`opscli keepa` 仍缺少和 `seller_sprite` 一致的 MCP 外层每日额度限制与额度查询入口；同时 `opscli/mcp/configs/mcp-quota.json` 也未登记 `keepa_run` 的默认策略，导致 Keepa 无法被统一配额配置覆盖。
+**改动点**：`opscli/mcp/quota.py` 将 `keepa_run` 纳入内置默认限额策略（service=`keepa`，daily_limit=5），并同步放宽配置读取注释为“使用代码内置默认值”；`opscli/mcp/tools/keepa.py` 新增 `keepa_quota_status` 工具与当前 MCP 用户邮箱解析辅助函数，并把该工具注册到公开 MCP 列表；`opscli/keepa/remote_adapter.py` 新增 `quota_status()` 映射到远端 `keepa_quota_status`；`opscli/keepa/cli.py` 新增正式命令 `opscli keepa quota-status`；`opscli/mcp/configs/mcp-quota.json` 新增 `keepa_run` 配置项；测试侧补充 `tests/mcp/test_quota.py`、`tests/mcp/test_keepa_tools.py`、`tests/keepa/test_cli_remote.py`、`tests/keepa/test_remote_adapter.py` 回归，覆盖默认策略、MCP 快照读取、正式 CLI 和 remote adapter 映射。
+**验证结果**：RED：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_quota.py tests/mcp/test_keepa_tools.py tests/keepa/test_cli_remote.py tests/keepa/test_remote_adapter.py -q` 初始失败（5 failed），分别暴露 `keepa_run` 未进入默认策略、`keepa_quota_status` 工具缺失、正式 CLI 缺少 `quota-status`、remote adapter 缺少 `quota_status()`；GREEN：同命令复跑通过（36 passed）；补充回归 `D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_quota.py tests/mcp/test_keepa_tools.py tests/mcp/test_tools.py tests/keepa/test_cli_remote.py tests/keepa/test_cli_split.py tests/keepa/test_remote_adapter.py -q` 通过（50 passed）。
+**影响范围**：影响 Keepa MCP 入口、Keepa 正式 CLI、远端 MCP 适配层与 MCP 配额默认配置；Keepa 业务执行逻辑、导出逻辑与内部 token 预检查逻辑保持不变。
+**回滚方式**：回退 `opscli/mcp/quota.py`、`opscli/mcp/tools/keepa.py`、`opscli/keepa/remote_adapter.py`、`opscli/keepa/cli.py`、`opscli/mcp/configs/mcp-quota.json`、对应四组测试和本条变更记录。
+
 ---
 
 ## 2026-06-24 ops-dataset-query Skill - 取消「发现新版本提示强制升级」约束

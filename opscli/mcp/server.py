@@ -45,6 +45,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import secrets
 import stat
@@ -285,8 +286,7 @@ from opscli.mcp.tools import amazon_rufus as _amazon_rufus_tools
 from opscli.mcp.tools import beta as _beta_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
 from opscli.mcp.tools import feedback as _feedback_tools
-# Google Trends 暂时停用：下午 MCP Server 崩溃疑似与该工具相关，先不注册使用。
-# from opscli.mcp.tools import google_trends as _google_trends_tools
+from opscli.mcp.tools import google_trends as _google_trends_tools
 from opscli.mcp.tools import keepa as _keepa_tools
 from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import seller_sprite as _seller_sprite_tools
@@ -301,7 +301,7 @@ _amazon_rufus_tools.register(_telemetry_mcp)
 _beta_tools.register(_telemetry_mcp)
 _chatgpt_tools.register(_telemetry_mcp)
 _feedback_tools.register(_telemetry_mcp)
-# _google_trends_tools.register(_telemetry_mcp)
+_google_trends_tools.register(_telemetry_mcp)
 _keepa_tools.register(_telemetry_mcp)
 _query_tools.register(_telemetry_mcp)
 _seller_sprite_tools.register(_telemetry_mcp)
@@ -309,6 +309,21 @@ _asin_review_tools.register(_telemetry_mcp)
 # _sif_tools.register(_telemetry_mcp)
 # _xiyou_tools.register(_telemetry_mcp)
 _skills_tools.register(_telemetry_mcp)
+
+def _register_optional_asin_review_tool(telemetry_mcp) -> None:
+    """注册可选的 asin_review 工具，仅在顶层模块缺失时降级跳过。"""
+    try:
+        asin_review_tools = importlib.import_module("opscli.mcp.tools.asin_review")
+    except ModuleNotFoundError as exc:
+        if exc.name != "opscli.mcp.tools.asin_review":
+            raise
+        _logger.info("asin_review 工具未加载：缺少可选模块 opscli.mcp.tools.asin_review")
+        return
+
+    asin_review_tools.register(telemetry_mcp)
+
+
+_register_optional_asin_review_tool(_telemetry_mcp)
 
 # amazon 工具依赖可选扩展 playwright，未安装时跳过注册不影响其他工具
 try:
