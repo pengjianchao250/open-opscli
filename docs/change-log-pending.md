@@ -123,6 +123,13 @@
 **影响范围**：影响 MCP 工具注册链路；工具清单同步、遥测采集和受限工具限额逻辑会同时生效。
 **回滚方式**：回退 `opscli/mcp/server.py` 中本次冲突块合并，并删除本条变更记录。
 
+## 2026-06-29 skills - 统一 Keepa 每日额度提示
+
+**变更原因**：`keepa_run` 已通过 MCP 限额中间件返回每日调用额度，但 Keepa Skill 仍要求隐藏剩余额度，导致最终回复未像卖家精灵一样提示用户当天的额度使用情况。
+**改动点**：更新 `ops-keepa/SKILL.md` 与 `SKILL_MCP.md`，补充 `keepa_quota_status` / `opscli keepa quota-status` 使用说明，并要求 `keepa_run` 顶层存在 `quota` 时展示已用、总额、剩余和重置时间；`job_status` / `export` 不重复提示；Keepa API token 余额和账号信息继续隐藏。`tests/mcp/test_keepa_tools.py` 增加两份 Skill 模板的额度提示契约测试。
+**验证结果**：RED 阶段运行 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_keepa_tools.py::test_keepa_skill_templates_require_daily_quota_prompt -q`，按预期失败于 Keepa Skill 缺少额度提示模板；GREEN 阶段同命令通过（1 passed）。聚焦回归 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_keepa_tools.py tests\keepa\test_remote_adapter.py tests\keepa\test_cli_remote.py -q` 通过（21 passed）。`ops-keepa` manifest 条目、`SKILL.md`、`SKILL_MCP.md` 和 `data/VERSION.json` 定向校验通过。全局 `validate_release_manifest()` 被仓库既存问题阻断：提交 `eb665b4` 删除了 `ops-canopy`、`ops-google-trends` 目录但 manifest 仍保留声明；`tests/skills/test_packaging.py` 另有 Windows 路径分隔符既存断言失败，均未在本次变更中扩范围修复。
+**影响范围**：仅影响 Keepa Skill 的用户回复与额度查询指引，不修改 `keepa_run` 参数、MCP 返回结构、限额计算或底层 Keepa token 预检逻辑。
+**回滚方式**：回退两份 Keepa Skill、对应契约测试和本条变更记录。
 ---
 
 ## 2026-06-25 skills - 新增 Keepa / Google Trends / Canopy 服务 Skill 模板
@@ -2345,4 +2352,27 @@
 **验证结果**：RED：`.\\.venv\\Scripts\\python.exe -m pytest tests/amazon_rufus/test_core.py -k "blocks_external_amazon_ad_pages" -q` 初始失败，确认未注册广告域名拦截；GREEN：同命令复跑通过（1 passed）；定向回归 `.\\.venv\\Scripts\\python.exe -m pytest tests/amazon_rufus/test_core.py -k "watch_login or debug_pages or closed or blocks_external" -q` 通过（8 passed）；语法检查 `.\\.venv\\Scripts\\python.exe -m py_compile opscli/amazon_rufus/services/browser.py` 通过；全文件回归 `.\\.venv\\Scripts\\python.exe -m pytest tests/amazon_rufus/test_core.py -q` 通过（91 passed）；真实 CDP 短窗观测中 `adsystem_page_target_count=0`，未复现循环广告空白页。
 **影响范围**：仅影响 Amazon Rufus `watch-login` 登录监听阶段的外部广告请求和外部广告页签处理；登录页、商品页、Rufus streaming 请求捕获与后端获取流程不变。
 **回滚方式**：回退 `opscli/amazon_rufus/services/browser.py`、`tests/amazon_rufus/test_core.py` 和本条变更记录。
+## 2026-06-29 skills(ops-query-wizard / ops-dataset-query) - 移除 catalog 相关描述与子命令
+
+**变更原因**：Agent 取数时总用 `query catalog` 找数据集，但 catalog 只是业务语义索引底座、且被 ops-query-wizard 错标成"做意图匹配"；正确做法是列数据集用 `query metadata`、意图匹配用 `query intent`。需把误导性的 catalog 描述去除。
+**改动点**：
+- `ops-query-wizard/SKILL.md:197`：数据集匹配从 `query catalog` 改为 `query metadata` 无参全量列表筛选。
+- `ops-query-wizard/references/step-guide.md`：Step 2 执行流程删除 `query_catalog() 做意图匹配` 步骤并重排（推荐来源改为从需求摘要推断）；防呆规则两处"意图匹配"措辞改为"推断推荐"。
+- `ops-dataset-query/scripts/query.py`：移除 catalog 子命令（docstring 示例、build_command 分支、subparser 定义）；intent/metadata/simple/chart/chart-doc 保留。
+- 未改动：ops-dataset-query 文档（本无 catalog 工具描述）、业务词 amazon_catalog_performance 等、dataset_catalog.json 数据文件、updater_mcp.py。
+**验证结果**：`python -c "ast.parse(query.py)"` 通过；`query.py catalog` 报 invalid choice（已移除），`query.py -h` 仅列 metadata/intent/simple/chart/chart-doc；`grep catalog` 在 wizard 文档与 query.py 中零命中。
+**影响范围**：ops-query-wizard 选数据集流程改为纯 metadata 全量列表+用户选择；ops-dataset-query 脚本不再支持 catalog 透传（intent 仍在）。两个为已上线 Skill，发布升级需评估 VERSION.json 版本号。
+**回滚方式**：git 还原上述 3 个文件即可。
+---
+
+## 2026-06-29 skills 收尾 - 清理陈旧产物 + 版本号 bump
+
+**变更原因**：移除 catalog 后，scripts/query.c 仍残留旧 catalog 代码；两个已上线 Skill 需 bump 版本以便升级机制下发。
+**改动点**：
+- 删除 `ops-dataset-query/scripts/query.c` 与 `__pycache__/query.cpython-313.pyc`（均未被 git 跟踪，setup.py 已将 skills/templates 排除编译，零影响）。
+- `ops-query-wizard/data/VERSION.json`：v0.1.0 → v0.1.1。
+- `ops-dataset-query/data/VERSION.json`：1.1.0 → 1.1.1。
+**验证结果**：query.c/.pyc 已不存在；两个 VERSION.json 版本号已更新。
+**影响范围**：仅清理本地遗留文件与版本号；功能无变化。
+**回滚方式**：git 还原两个 VERSION.json（删除的 .c/.pyc 本就未跟踪，无需回滚）。
 ---
