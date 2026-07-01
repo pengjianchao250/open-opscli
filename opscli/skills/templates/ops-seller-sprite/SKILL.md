@@ -12,6 +12,8 @@ description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自
 该入口默认通过 CLI auth 获取远端 MCP 配置，再调用远端 `seller_sprite_*` tool 完成查询；本 Skill 也以这条正式链路作为默认执行口径。
 正式 CLI 依赖本机已完成 OPS 授权；若本机未登录或登录态过期，先完成 `opscli auth login` 再继续。
 
+授权排查先看链路类型：正式 CLI 代理链路优先用本机 `opscli auth login`；远端 MCP 直连链路优先用 MCP 授权工具完成当前 MCP 用户的 OPS 登录。两条链路不要混用判断。
+
 ## 快速规则
 
 1. 先识别场景，再决定是否执行；场景不明确时先澄清，不要盲跑。
@@ -31,8 +33,53 @@ description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自
 
 ## 链路区分
 
-- 正式 CLI 代理链路：默认指 `opscli seller-sprite ...`。这条链路依赖本机 `opscli auth login` 已完成，必要时由 CLI 显式透传本机 OPS `session_id`。
-- 远端 MCP 直连链路：指宿主拿远端 MCP `api_key` 直接连接 `seller_sprite_*` tools。该链路下不要在仅拿到 `api_key` 后立刻执行 `seller_sprite_run`；应先完成 `auth_mcp_login`，让当前 MCP 用户的远端凭证中存在可复用的 OPS `session_id`。
+### A. 正式 CLI 代理链路（默认）
+
+适用入口：
+
+```bash
+opscli seller-sprite scenarios
+opscli seller-sprite quota-status
+opscli seller-sprite run ...
+opscli seller-sprite job-status <job_id>
+opscli seller-sprite export <job_id>
+```
+
+判断规则：
+
+- 用户在本机终端执行 `opscli seller-sprite ...`，或 Agent 需要代表用户跑正式 CLI 命令时，默认就是这条链路。
+- 这条链路依赖本机 OPS 登录态；未登录、登录态过期、返回授权类错误时，先执行：
+
+```bash
+opscli auth login
+```
+
+- 登录完成后再重试原命令。
+- 不要让用户手动传 `api_key`、远端 MCP URL、Cookie 或内部账号参数。
+- 不要把此链路的问题误判为卖家精灵业务账号异常；先确认 CLI 登录态。
+
+### B. 远端 MCP 直连链路
+
+适用入口：
+
+- 宿主环境已经连接远端 MCP，并直接调用 `seller_sprite_*` tools。
+- 当前上下文不是本机 CLI 命令，而是 MCP 工具协作环境。
+
+判断规则：
+
+- 远端 MCP `api_key` 只表示“能连接 MCP 服务”，不等于当前 MCP 用户已有 OPS 登录态。
+- 如果只有 `api_key`，不要直接执行会消耗额度的 `seller_sprite_run`。
+- 先完成 MCP 授权登录，让当前 MCP 用户的远端凭证里存在可复用 OPS `session_id`；再调用 `seller_sprite_run`。
+- 如果工具返回需要 `session_id`、未授权、授权过期等错误，优先走 MCP 授权流程，而不是要求用户重新给业务参数。
+
+### 快速判断表
+
+| 当前入口 | 优先动作 | 不要做 |
+|---|---|---|
+| `opscli seller-sprite ...` 报未授权 | 执行 `opscli auth login` 后重试 | 不要让用户传 api_key |
+| MCP 直连 `seller_sprite_run` 报未授权 | 先完成 MCP 授权登录 | 不要直接重跑消耗额度工具 |
+| 只是查场景/额度/任务状态 | 可先调用对应只读工具 | 不要误判为业务采集失败 |
+| 用户只说“登录一下/授权一下” | 根据当前链路选择 CLI 登录或 MCP 登录 | 不要混用两套登录态 |
 
 ## 最小工作流
 
