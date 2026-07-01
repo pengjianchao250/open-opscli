@@ -95,6 +95,14 @@
       "tier": "experimental",
       "reason": "卖家精灵已迁移到服务端账号托管的 MCP/CLI 接口直连模式，可作为实验 Skill 安装使用"
     },
+    "ops-scrape-do": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "experimental",
+      "reason": "Scrape.do Amazon Scraper 已接入正式 CLI 代理远端 MCP 模式，可作为补充数据源实验 Skill 使用"
+    },
     "ops-skills": {
       "source": true,
       "wheel": true,

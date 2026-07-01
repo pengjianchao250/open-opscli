@@ -21,6 +21,7 @@ from opscli.keepa_debug.cli import app as keepa_debug_app
 from opscli.mcp.cli import app as mcp_app
 # from opscli.methods_card.cli import app as methods_card_app
 from opscli.query.cli import app as query_app
+from opscli.scrape_do.cli import app as scrape_do_app
 from opscli.shopify.cli import app as shopify_app
 from opscli.seller_sprite.cli import app as seller_sprite_app
 from opscli.seller_sprite_debug.cli import app as seller_sprite_debug_app
@@ -56,6 +57,7 @@ if asin_review_app is not None:
 app.add_typer(canopy_app, name="canopy")
 app.add_typer(canopy_debug_app, name="canopy-debug")
 app.add_typer(query_app, name="query")
+app.add_typer(scrape_do_app, name="scrape-do")
 app.add_typer(shopify_app, name="shopify")
 app.add_typer(feedback_app, name="feedback")
 app.add_typer(feedtask_app, name="feedback")
