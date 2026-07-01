@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -395,6 +396,7 @@ class BrowserAttachService:
         port = self._resolve_cdp_port(cdp_url)
         profile_dir = Path.home() / ".opscli" / "chrome-profiles" / f"amazon-rufus-{port}"
         profile_dir.mkdir(parents=True, exist_ok=True)
+        self._disable_auto_open_devtools(profile_dir)
         try:
             subprocess.Popen(
                 [
@@ -411,6 +413,49 @@ class BrowserAttachService:
             raise ChromeCdpUnavailableError(
                 "无法启动 Chrome/Edge 调试窗口，请确认本机已安装 Chrome 或 Edge，或使用 --chrome-path 指定可执行文件。"
             ) from exc
+
+    def _disable_auto_open_devtools(self, profile_dir: Path) -> None:
+        """关闭 opscli 自建 Rufus profile 中残留的 DevTools 自动打开偏好。"""
+        preference_files = [profile_dir / "Default" / "Preferences"]
+        preference_files.extend(profile_dir.glob("Profile */Preferences"))
+        for preference_file in preference_files:
+            self._disable_auto_open_devtools_in_file(preference_file)
+
+    def _disable_auto_open_devtools_in_file(self, preference_file: Path) -> None:
+        """宽容更新单个 Chrome 偏好文件，避免损坏文件阻断 Rufus 采集。"""
+        if not preference_file.exists() or not preference_file.is_file():
+            return
+        try:
+            preferences = json.loads(preference_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(preferences, dict):
+            return
+        if not self._disable_auto_open_devtools_values(preferences):
+            return
+        try:
+            preference_file.write_text(
+                json.dumps(preferences, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+        except OSError:
+            return
+
+    def _disable_auto_open_devtools_values(self, value: Any) -> bool:
+        """递归关闭 DevTools 自动打开键，保留其他浏览器偏好。"""
+        changed = False
+        if isinstance(value, dict):
+            for key, child in value.items():
+                normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+                if normalized_key in {"autoopendevtools", "autoopendevtoolsforpopups", "autoopendevtoolsfortabs"}:
+                    value[key] = "false" if isinstance(child, str) else False
+                    changed = True
+                    continue
+                changed = self._disable_auto_open_devtools_values(child) or changed
+        elif isinstance(value, list):
+            for child in value:
+                changed = self._disable_auto_open_devtools_values(child) or changed
+        return changed
 
     def _resolve_chrome_path(self, chrome_path: str | None) -> str:
         """解析 Chrome/Edge 可执行文件路径。"""
