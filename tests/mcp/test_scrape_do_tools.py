@@ -72,9 +72,9 @@ def test_scrape_do_spec_uses_logical_source_without_local_path():
     result = _run(scrape_do_tools.scrape_do_spec_must_read())
 
     assert result["success"] is True
-    assert "ops-scrape-do MCP" in result["data"]["spec"]
-    assert result["data"]["source"] == "ops-scrape-do/SKILL_MCP.md"
-    assert result["data"]["sources"] == ["ops-scrape-do/SKILL_MCP.md"]
+    assert "ops-amazon-product-data MCP" in result["data"]["spec"]
+    assert result["data"]["source"] == "ops-amazon-product-data/SKILL_MCP.md"
+    assert result["data"]["sources"] == ["ops-amazon-product-data/SKILL_MCP.md"]
     assert "Gitlab" not in str(result["data"])
     assert "/plugin/amazon" not in result["data"]["spec"]
     assert "token" not in result["data"]["spec"].lower()

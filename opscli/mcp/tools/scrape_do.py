@@ -1,4 +1,4 @@
-"""Scrape.do MCP 工具模块。"""
+"""Amazon 商品数据 MCP 工具模块。"""
 
 from __future__ import annotations
 
@@ -14,28 +14,28 @@ MAX_PUBLIC_DATA_PREVIEW_ROWS = 20
 
 
 def _scrape_do_skill_dir() -> Path:
-    """返回 Scrape.do Skill 模板目录。"""
-    return get_builtin_templates_dir() / "ops-scrape-do"
+    """返回 Amazon 商品数据 Skill 模板目录。"""
+    return get_builtin_templates_dir() / "ops-amazon-product-data"
 
 
 async def scrape_do_spec_must_read() -> dict:
-    """读取 Scrape.do MCP 使用规范。"""
+    """读取 Amazon 商品数据 MCP 使用规范。"""
     spec_path = _scrape_do_skill_dir() / "SKILL_MCP.md"
     if not spec_path.exists():
         return _safe_err(
-            FileNotFoundError("Scrape.do MCP 规范文档不存在：ops-scrape-do/SKILL_MCP.md。请检查 opscli 安装是否完整。"),
+            FileNotFoundError("Amazon 商品数据 MCP 规范文档不存在：ops-amazon-product-data/SKILL_MCP.md。请检查 opscli 安装是否完整。"),
             tool="MCP → scrape_do_spec_must_read()",
         )
     try:
         content = spec_path.read_text(encoding="utf-8")
-        source = "ops-scrape-do/SKILL_MCP.md"
+        source = "ops-amazon-product-data/SKILL_MCP.md"
         return _ok({"spec": content, "source": source, "sources": [source]})
     except Exception as exc:
         return _safe_err(exc, tool="MCP → scrape_do_spec_must_read()")
 
 
 async def scrape_do_scenarios() -> dict:
-    """列出 Scrape.do 支持的接口场景。"""
+    """列出 Amazon 商品数据 支持的接口场景。"""
     try:
         from opscli.scrape_do.services import ScrapeDoApiManager
 
@@ -55,7 +55,7 @@ async def scrape_do_run(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """执行 Scrape.do 场景并保存请求参数、原始响应、规范化结果和导出 XLSX。"""
+    """执行 Amazon 商品数据 场景并保存请求参数、原始响应、规范化结果和导出 XLSX。"""
     call_params = {
         "scenario": scenario,
         "site": site,
@@ -85,7 +85,7 @@ async def scrape_do_run(
 
 
 async def scrape_do_job_status(job_id: str) -> dict:
-    """读取 Scrape.do 任务结果。"""
+    """读取 Amazon 商品数据 任务结果。"""
     try:
         from opscli.scrape_do.services import ScrapeDoApiManager
 
@@ -95,7 +95,7 @@ async def scrape_do_job_status(job_id: str) -> dict:
 
 
 async def scrape_do_export(job_id: str) -> dict:
-    """读取 Scrape.do 任务导出文件信息。"""
+    """读取 Amazon 商品数据 任务导出文件信息。"""
     try:
         from opscli.scrape_do.services import ScrapeDoApiManager
 
@@ -118,8 +118,8 @@ _ALL_TOOLS = [
 
 
 def _safe_err(exc: Exception, *, tool: str | None = None, call_params: dict | None = None) -> dict:
-    """返回 Scrape.do MCP 安全错误，不暴露本地路径、endpoint 和敏感字段。"""
-    safe_message = _sanitize_public_text(str(exc)) or "Scrape.do MCP 工具调用失败。"
+    """返回 Amazon 商品数据 MCP 安全错误，不暴露本地路径、endpoint 和敏感字段。"""
+    safe_message = _sanitize_public_text(str(exc)) or "Amazon 商品数据 MCP 工具调用失败。"
     safe_exc = type(exc)(safe_message)
     result = _err(safe_exc, tool=tool, call_params=_safe_call_params(call_params))
     return _sanitize_error_payload(result)
@@ -134,7 +134,7 @@ def _safe_call_params(call_params: dict | None) -> dict | None:
 
 def _sanitize_error_payload(payload: dict[str, Any]) -> dict[str, Any]:
     cleaned = _sanitize_error_text(_scrub_public_payload(payload))
-    return cleaned if isinstance(cleaned, dict) else {"success": False, "data": None, "error": {"code": "Error", "message": "Scrape.do MCP 工具调用失败。"}}
+    return cleaned if isinstance(cleaned, dict) else {"success": False, "data": None, "error": {"code": "Error", "message": "Amazon 商品数据 MCP 工具调用失败。"}}
 
 
 def _sanitize_error_text(value: Any) -> Any:
@@ -333,6 +333,6 @@ def _public_warnings(value: Any) -> list[dict[str, Any]]:
 
 
 def register(mcp) -> None:
-    """向 FastMCP 实例注册 Scrape.do 工具。"""
+    """向 FastMCP 实例注册 Amazon 商品数据 工具。"""
     for fn in _ALL_TOOLS:
         mcp.tool()(fn)
