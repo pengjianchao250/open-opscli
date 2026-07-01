@@ -289,8 +289,9 @@ from opscli.mcp.tools import google_trends as _google_trends_tools
 from opscli.mcp.tools import keepa as _keepa_tools
 from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import seller_sprite as _seller_sprite_tools
-from opscli.mcp.tools import skills as _skills_tools
+from opscli.mcp.tools import sif as _sif_tools
 from opscli.mcp.tools import asin_review as _asin_review_tools
+from opscli.mcp.tools import skills as _skills_tools
 # Sif / 西柚暂不开放 MCP 工具：保留工具模块代码，待业务确认后再恢复注册。
 # from opscli.mcp.tools import sif as _sif_tools
 # from opscli.mcp.tools import xiyou as _xiyou_tools

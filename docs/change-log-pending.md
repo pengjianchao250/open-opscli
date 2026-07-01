@@ -2377,6 +2377,13 @@
 **回滚方式**：git 还原两个 VERSION.json（删除的 .c/.pyc 本就未跟踪，无需回滚）。
 ---
 
+## 2026-06-30 amazon_rufus - Rufus 自动启动浏览器时关闭 DevTools 自动打开偏好
+
+**变更原因**：用户反馈 Rufus Skill 打开 Amazon 页面时会自动打开控制台；当前启动参数虽未包含 `--auto-open-devtools-for-tabs`，但 opscli 复用固定 Rufus Chrome profile，旧 profile 中可能残留 DevTools 自动打开偏好。
+**改动点**：`opscli/amazon_rufus/services/browser.py` 在 `_start_new_chrome()` 启动 Chrome/Edge 前清理 opscli 自建 Rufus profile 的 DevTools 自动打开相关偏好；清理仅修改相关键，不删除 profile、Cookie、localStorage 或 Rufus 状态。`tests/amazon_rufus/test_core.py` 新增回归测试，覆盖偏好关闭、无关字段保留和损坏偏好文件不阻断启动。
+**验证结果**：RED：`uv run pytest tests/amazon_rufus/test_core.py -k "devtools or start_new_chrome" -v` 初始失败于 `autoOpenDevToolsForPopups` 仍为 `true`；GREEN：同命令通过（3 passed）；定向回归 `uv run pytest tests/amazon_rufus/test_core.py -k "devtools or start_new_chrome or watch_login" -v` 通过（11 passed）；语法检查 `uv run python -m py_compile opscli/amazon_rufus/services/browser.py` 通过。
+**影响范围**：仅影响 opscli 自动启动的 Rufus 调试 Chrome/Edge profile；已运行的外部 CDP Chrome、MCP 默认后端获取、登录态保存、题库与报告流程不变。
+**回滚方式**：回退 `opscli/amazon_rufus/services/browser.py`、`tests/amazon_rufus/test_core.py`、`.super-dev/changes/rufus-no-devtools-console/`、`output/rufus-no-devtools-console-*.md` 和本条变更记录。
 ## 2026-06-30 skills - publish/edit 的 summary 缺失时回退到 SKILL.md description
 
 **变更原因**：`opscli skills publish`（及 `edit --dir`）中 summary 仅回退到 frontmatter 的 `summary` 字段，而多数 SKILL.md 只写了 `description`、无 `summary`，导致客户端不传 `--summary` 时 summary 为空。

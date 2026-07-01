@@ -1604,6 +1604,72 @@ def test_browser_start_new_chrome_does_not_auto_open_devtools(monkeypatch, tmp_p
     assert "--no-first-run" in captured["args"]
 
 
+def test_browser_start_new_chrome_disables_profile_devtools_auto_open(monkeypatch, tmp_path: Path):
+    """启动前关闭 opscli Rufus profile 中残留的 DevTools 自动打开偏好。"""
+    from opscli.amazon_rufus.services import browser as browser_module
+    from opscli.amazon_rufus.services.browser import BrowserAttachService
+
+    captured = {}
+    preferences_path = tmp_path / ".opscli" / "chrome-profiles" / "amazon-rufus-9333" / "Default" / "Preferences"
+    preferences_path.parent.mkdir(parents=True)
+    preferences_path.write_text(
+        json.dumps(
+            {
+                "devtools": {
+                    "preferences": {
+                        "autoOpenDevToolsForPopups": "true",
+                        "preserveConsoleLog": "true",
+                    }
+                },
+                "profile": {"name": "opscli-rufus"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class FakePopen:
+        def __init__(self, args, stdout=None, stderr=None):
+            captured["args"] = args
+
+    monkeypatch.setattr(browser_module.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(BrowserAttachService, "_resolve_chrome_path", lambda self, chrome_path: "chrome.exe")
+    monkeypatch.setattr(browser_module.subprocess, "Popen", FakePopen)
+
+    BrowserAttachService()._start_new_chrome(cdp_url="http://127.0.0.1:9333", chrome_path=None)
+
+    preferences = json.loads(preferences_path.read_text(encoding="utf-8"))
+    devtools_preferences = preferences["devtools"]["preferences"]
+    assert devtools_preferences["autoOpenDevToolsForPopups"] == "false"
+    assert devtools_preferences["preserveConsoleLog"] == "true"
+    assert preferences["profile"]["name"] == "opscli-rufus"
+    assert captured["args"][0] == "chrome.exe"
+
+
+def test_browser_start_new_chrome_ignores_invalid_devtools_preferences(monkeypatch, tmp_path: Path):
+    """DevTools 偏好文件损坏时继续启动浏览器，避免引入新阻断点。"""
+    from opscli.amazon_rufus.services import browser as browser_module
+    from opscli.amazon_rufus.services.browser import BrowserAttachService
+
+    captured = {}
+    preferences_path = tmp_path / ".opscli" / "chrome-profiles" / "amazon-rufus-9333" / "Default" / "Preferences"
+    preferences_path.parent.mkdir(parents=True)
+    preferences_path.write_text("{invalid json", encoding="utf-8")
+
+    class FakePopen:
+        def __init__(self, args, stdout=None, stderr=None):
+            captured["args"] = args
+
+    monkeypatch.setattr(browser_module.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(BrowserAttachService, "_resolve_chrome_path", lambda self, chrome_path: "chrome.exe")
+    monkeypatch.setattr(browser_module.subprocess, "Popen", FakePopen)
+
+    BrowserAttachService()._start_new_chrome(cdp_url="http://127.0.0.1:9333", chrome_path=None)
+
+    assert captured["args"][0] == "chrome.exe"
+    assert preferences_path.read_text(encoding="utf-8") == "{invalid json"
+
+
 def test_browser_watch_login_detects_login_and_captures_streaming_request(monkeypatch):
     from opscli.amazon_rufus.services.browser import BrowserAttachService
 
