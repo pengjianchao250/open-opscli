@@ -361,6 +361,108 @@ def test_rufus_report_is_compacted_from_cli_stdout(tmp_path: Path):
     }
 
 
+def test_rufus_report_parser_supports_official_markdown(tmp_path: Path):
+    collector = load_collector_module()
+    report_path = tmp_path / "rufus-official.md"
+    report_path.write_text(
+        """# Rufus 数据 - B0TEST0001
+
+- ASIN: B0TEST0001
+- 站点: US
+- 状态: success
+- 问题数量: 1
+- 商品URL: https://www.amazon.com/dp/B0TEST0001
+- 原始报告: output/amazon-rufus/B0TEST0001.md
+
+## 第 1 题
+
+问题:
+这是什么商品
+
+#### Rufus 展示内容
+
+这是一款温控鹅颈电热水壶。
+""",
+        encoding="utf-8",
+    )
+
+    compact = collector.compact_rufus_result(
+        {
+            "status": "success",
+            "stdout": f"Rufus 答案报告已保存：{report_path}\n",
+            "command": ["opscli", "amazon-rufus", "get-backend"],
+        },
+        asin="B0TEST0001",
+        country="US",
+        questions=["这是什么商品"],
+    )
+
+    assert compact["answer_count"] == 1
+    assert compact["answers"][0] == {
+        "index": 1,
+        "question": "这是什么商品",
+        "related_products": [],
+        "answer": "这是一款温控鹅颈电热水壶。",
+        "recommended_asins": [],
+        "summary": "",
+    }
+
+
+def test_split_package_renders_rufus_diagnosis_instead_of_copying_report_path(tmp_path: Path):
+    from opscli.asin_data.services.split_package_builder import FILE_RUFUS, build_split_package
+
+    old_report = tmp_path / "old-rufus.md"
+    old_report.write_text("## 第 1 题：旧格式\n\n### 答案\n\n旧内容\n", encoding="utf-8")
+    asin_result = {
+        "asin": "B0TEST0001",
+        "site": "US",
+        "seller_sprite": {},
+        "query": {},
+        "bi_report_data": {},
+        "rufus": {
+            "status": "success",
+            "country": "US",
+            "report_path": str(old_report),
+            "answers": [
+                {
+                    "index": 1,
+                    "answer": "\n".join(
+                        [
+                            "当前标题：",
+                            "ANCTOR Full Corner Bed Frame with Storage Drawers",
+                            "分析结果",
+                            "问题类型",
+                            "具体问题",
+                            "问题依据",
+                            "建议修改",
+                            "核心属性缺失",
+                            "尺寸未写在标题中",
+                            "产品有多个尺寸变体",
+                            "加入 Full Size",
+                            "综合建议标题（参考）",
+                            "ANCTOR Full Size L-Shaped Daybed Frame",
+                        ]
+                    ),
+                }
+            ],
+        },
+        "frontend_data": {"基础数据": {}},
+    }
+
+    package = build_split_package(
+        output_root=tmp_path,
+        asin_results=[asin_result],
+        summary={"summary": {"asin_count": 1}},
+    )
+    rufus_path = Path(package["package_dir"]) / "B0TEST0001" / FILE_RUFUS
+    markdown = rufus_path.read_text(encoding="utf-8")
+
+    assert markdown.startswith("# ASIN B0TEST0001 Listing 优化诊断报告")
+    assert "### 1、当前标题内容" in markdown
+    assert "| 核心属性缺失 | 尺寸未写在标题中 | 产品有多个尺寸变体 | 加入 Full Size |" in markdown
+    assert "旧内容" not in markdown
+
+
 def test_collect_one_asin_runs_rufus_backend_and_attaches_answers(tmp_path: Path, monkeypatch):
     collector = load_collector_module()
     report_path = tmp_path / "rufus.md"
@@ -403,6 +505,10 @@ def test_collect_one_asin_runs_rufus_backend_and_attaches_answers(tmp_path: Path
         rufus_skills_dir=".agents/skills",
         rufus_timeout_seconds=180,
         rufus_login_timeout_seconds=180,
+        rufus_parallel=False,
+        rufus_concurrency=3,
+        rufus_retry=0,
+        rufus_strict_answer=False,
         keyword_source="input",
         dry_run=False,
         opscli_bin="opscli",
@@ -431,15 +537,23 @@ def test_rufus_default_questions_are_listing_diagnosis_and_render_asin():
 
     assert len(questions) == 6
     assert questions[0] == (
-        "标题清晰度：分析 ASIN B0TEST0001 的标题是否清楚，"
-        "是否能让买家搜索到产品并愿意点击查看详情？按：标题｜问题｜依据｜建议改为 输出。"
+        "分析这个ASIN B0TEST0001的标题是否清楚，是否能让买家搜索到产品并愿意点击查看详情？按这个格式输出：\n"
+        "1、当前标题内容\n"
+        "2、问题逐项分析\n"
+        "问题类型｜具体问题 ｜ 问题依据｜建议修改\n"
+        "3、建议优化标题\n"
+        "4、优化核心逻辑总结"
     )
     assert questions[-1] == (
-        "整体优化：从标题、五点、图片、A+、评论中，找出 ASIN B0TEST0001 "
-        "最优先修改的一处。按：整体｜问题｜依据｜建议改为 输出。"
+        "从标题、五点、图片、A+、评论中，找出这个 ASIN B0TEST0001 最优先修改的一处。按这个格式输出：\n"
+        "1、核心问题定位\n"
+        "2、最优先修改原因\n"
+        "问题维度｜影响范围｜具体分析｜建议方案\n"
+        "3、总体执行修改方案\n"
+        "4、优化核心逻辑总结"
     )
-    assert "图片｜问题｜依据｜每张图建议改为" in questions[2]
-    assert "A+｜问题｜依据｜每张图建议改为" in questions[3]
+    assert "每张图序号｜目标｜具体问题 ｜ 核心依据｜优化方案" in questions[2]
+    assert "每个模块｜目标｜具体问题 ｜ 核心依据｜优化方案" in questions[3]
     assert all("{{asin}}" not in question for question in questions)
 
 
@@ -450,14 +564,22 @@ def test_rufus_collect_command_passes_collector_default_questions_explicitly():
         rufus_skills_dir=".agents/skills",
         rufus_timeout_seconds=180,
         rufus_questions=None,
+        rufus_parallel=True,
+        rufus_concurrency=2,
+        rufus_retry=1,
+        rufus_strict_answer=True,
     )
     questions = collector.rufus_questions(args, asin="B0TEST0001")
 
     command = collector.build_rufus_get_backend_command(args, "B0TEST0001", "US", questions)
 
     assert command.count("-q") == 6
-    assert any(item.startswith("标题清晰度：分析 ASIN B0TEST0001") for item in command)
+    assert any(item.startswith("分析这个ASIN B0TEST0001的标题是否清楚") for item in command)
     assert "--skills-dir" in command
+    assert "--parallel" in command
+    assert command[command.index("--concurrency") + 1] == "2"
+    assert command[command.index("--retry") + 1] == "1"
+    assert "--strict-answer" in command
 
 
 def test_rufus_explicit_questions_render_asin_placeholder():

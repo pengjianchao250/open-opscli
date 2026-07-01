@@ -457,6 +457,10 @@ class RufusManager:
         timeout_seconds: int = DEFAULT_RUFUS_TIMEOUT_SECONDS,
         include_upload_payload: bool = True,
         submit_upload: bool = False,
+        parallel: bool = False,
+        concurrency: int = 3,
+        retry: int = 0,
+        strict_answer: bool = False,
     ) -> dict:
         """使用 headless browser 和传入 Cookie 获取 Rufus 数据。"""
         normalized_asin = asin.strip().upper()
@@ -493,6 +497,10 @@ class RufusManager:
             headers=headers,
             payload_template=payload_template,
             timeout_seconds=timeout_seconds,
+            parallel=parallel,
+            concurrency=concurrency,
+            retry=retry,
+            strict_answer=strict_answer,
         )
         return self._build_result(
             asin=normalized_asin,
@@ -516,6 +524,10 @@ class RufusManager:
         timeout_seconds: int = DEFAULT_RUFUS_TIMEOUT_SECONDS,
         include_upload_payload: bool = True,
         submit_upload: bool = False,
+        parallel: bool = False,
+        concurrency: int = 3,
+        retry: int = 0,
+        strict_answer: bool = False,
     ) -> dict:
         """使用后端请求凭证、headless 捕获和 HTTP streaming 获取 Rufus 数据。"""
         normalized_asin = asin.strip().upper()
@@ -553,6 +565,10 @@ class RufusManager:
             headers=getattr(secret, "headers", None),
             payload_template=getattr(secret, "payload_template", None),
             timeout_seconds=timeout_seconds,
+            parallel=parallel,
+            concurrency=concurrency,
+            retry=retry,
+            strict_answer=strict_answer,
         )
         return self._build_result(
             asin=normalized_asin,

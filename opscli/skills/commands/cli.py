@@ -328,6 +328,22 @@ def _match_best_category(
     return best_cat if best_score > 0 else None
 
 
+# summary 上限 500 字符（与 --summary 选项文档约束一致），从 description 派生时需截断
+_SUMMARY_MAX_LEN = 500
+
+
+def _summary_from_desc(description: str | None) -> str:
+    """从 frontmatter 的 description 派生 summary：去空白并截断到 500 字符。
+
+    用于客户端未传 --summary 且 frontmatter 无 summary 字段时的回退，
+    避免发布时 summary 为空。返回空串表示无可用 description。
+    """
+    if not description:
+        return ""
+    text = description.strip()
+    return text[:_SUMMARY_MAX_LEN]
+
+
 def _parse_skill_md_frontmatter(skill_md: Path) -> dict:
     """解析 SKILL.md 顶部 YAML frontmatter（--- 包裹），返回字段字典。
 
@@ -1242,7 +1258,8 @@ def publish_skill(
     # 从 SKILL.md frontmatter 读取元数据，CLI 参数优先
     resolved_title      = title or fm.get("title") or skill_name
     resolved_desc       = description or fm.get("description") or ""
-    resolved_summary    = summary or fm.get("summary") or ""
+    # summary 回退链：CLI 参数 > frontmatter summary > frontmatter description（截断到 500 字符）
+    resolved_summary    = summary or fm.get("summary") or _summary_from_desc(fm.get("description"))
     resolved_tags       = tags or fm.get("tags") or ""
     resolved_cat        = category_id or (int(fm["category_id"]) if "category_id" in fm else None)
     resolved_share_type = share_type or fm.get("share_type") or SHARE_TYPE_PERSONAL
@@ -1447,7 +1464,8 @@ def edit_skill(
         fm = _parse_skill_md_frontmatter(skill_md_path)
         title       = title       or fm.get("title")
         description = description or fm.get("description")
-        summary     = summary     or fm.get("summary")
+        # summary 回退链：CLI 参数 > frontmatter summary > frontmatter description（截断到 500 字符）
+        summary     = summary     or fm.get("summary") or _summary_from_desc(fm.get("description"))
         share_type  = share_type  or fm.get("share_type")
         tags        = tags        or fm.get("tags")
         if category_id is None and "category_id" in fm:

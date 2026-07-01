@@ -79,6 +79,39 @@ class HeadlessRufusRequestError(RufusError):
     code = "RUFUS_HEADLESS_REQUEST_ERROR"
 
 
+class RufusAnswerValidationError(RufusError):
+    """Rufus 回答未通过完整性校验。"""
+
+    code = "RUFUS_ANSWER_VALIDATION_ERROR"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        question_index: int | None = None,
+        question: str | None = None,
+        reason: str | None = None,
+        attempt_count: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.question_index = question_index
+        self.question = question
+        self.reason = reason
+        self.attempt_count = attempt_count
+
+    def to_dict(self) -> dict:
+        payload = super().to_dict()
+        if self.question_index is not None:
+            payload["question_index"] = self.question_index
+        if self.question:
+            payload["question"] = self.question
+        if self.reason:
+            payload["reason"] = self.reason
+        if self.attempt_count is not None:
+            payload["attempt_count"] = self.attempt_count
+        return payload
+
+
 class RufusReplayError(RufusError):
     """Rufus 重放失败。"""
 
