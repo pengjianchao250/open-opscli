@@ -27,7 +27,10 @@ from opscli.asin_data.services.bi_report_data import (
 )
 from opscli.asin_data.services.merged_report_renderer import render_merged_report_text
 from opscli.asin_data.services.report_files import AsinReportFileClient, AsinReportFileNotFoundError
-from opscli.asin_data.services.split_package_builder import build_split_package
+from opscli.asin_data.services.split_package_builder import (
+    SPLIT_FILE_KEYS,
+    build_split_package,
+)
 from opscli.amazon.services.manager import AmazonManager
 from opscli.amazon_rufus.services.answer_report_writer import AnswerReportWriter
 from opscli.amazon_rufus.services.manager import RufusManager
@@ -158,6 +161,13 @@ class AsinDataCollector:
                 summary["files"]["asin_data_package_upload_url"] = upload["url"]
                 summary["files"]["asin_report_upload_url"] = upload["url"]
                 summary["upload"] = upload
+                file_uploads = self._upload_split_package_files(
+                    split_package,
+                    run_id=run_id,
+                    records=records,
+                )
+                summary["files"]["asin_data_file_urls"] = file_uploads
+                summary["asin_data_files"] = file_uploads
             self.legacy.write_json(output_root / "asin-data-summary.json", summary)
             self.legacy.write_json(output_root / "manifest.json", summary)
         finally:
@@ -178,6 +188,7 @@ class AsinDataCollector:
             "report_files": summary.get("report_files"),
             "report_file_url": report_file_url,
             "aliyun_url": aliyun_url,
+            "asin_data_files": summary.get("asin_data_files"),
         }
 
     def _build_args(self, **kwargs: Any) -> argparse.Namespace:
@@ -540,6 +551,59 @@ class AsinDataCollector:
             "folder": "asin-data",
             "raw": upload.raw,
         }
+
+    def _upload_split_package_files(
+        self,
+        split_package: dict[str, Any],
+        *,
+        run_id: str,
+        records: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Upload each ASIN's 6 split files individually and return per-file URLs.
+
+        This complements :meth:`_upload_split_package` (whole zip) by giving the
+        downstream AI a way to fetch one file at a time instead of the whole zip,
+        avoiding oversized context windows.
+        """
+        asin_set = {str(record.get("asin") or "").strip().upper() for record in records}
+        items: list[dict[str, Any]] = []
+        files_uploaded = 0
+        for entry in split_package.get("items", []) or []:
+            asin = str(entry.get("asin") or "").strip().upper()
+            if not asin or (asin_set and asin not in asin_set):
+                continue
+            file_paths = entry.get("files") if isinstance(entry.get("files"), dict) else {}
+            per_file: dict[str, Any] = {}
+            for file_key in SPLIT_FILE_KEYS:
+                path_text = file_paths.get(file_key)
+                if not isinstance(path_text, str) or not path_text.strip():
+                    continue
+                file_path = Path(path_text)
+                if not file_path.exists():
+                    continue
+                try:
+                    upload = self.file_upload_client.upload(
+                        file_path,
+                        purpose="asin_data_file",
+                        folder="asin-data",
+                        public="1",
+                        metadata={
+                            "run_id": run_id,
+                            "asin": asin,
+                            "file_key": file_key,
+                            "report_filename": file_path.name,
+                        },
+                    )
+                except Exception:
+                    continue
+                per_file[file_key] = {
+                    "url": upload.url,
+                    "file_name": file_path.name,
+                    "file_path": file_path.as_posix(),
+                }
+                files_uploaded += 1
+            items.append({"asin": asin, "files": per_file})
+        return {"files_uploaded": files_uploaded, "items": items}
 
     @classmethod
     def _validate_split_package_upload_url(cls, url: str, records: list[dict[str, Any]]) -> None:

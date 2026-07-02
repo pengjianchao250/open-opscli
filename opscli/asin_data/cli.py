@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from enum import Enum
 
+import httpx
 import typer
 
 from opscli.asin_data.services.collector import (
@@ -19,6 +20,11 @@ from opscli.asin_data.services.report_file_submitter import (
     AsinReportFileSubmitter,
 )
 from opscli.asin_data.services.report_files import AsinReportFileClient, AsinReportFileNotFoundError
+from opscli.asin_data.services.split_package_builder import (
+    FILE_FIELD_MAP,
+    SPLIT_FILE_KEYS,
+)
+
 
 
 class KeywordSource(str, Enum):
@@ -46,6 +52,17 @@ class RufusBatchMode(str, Enum):
     fast = "fast"
     balanced = "balanced"
     safe = "safe"
+
+
+class FileKey(str, Enum):
+    """Split package file keys exposed to AI per-file delivery."""
+
+    basic = "basic"
+    bi = "bi"
+    keyword_reverse = "keyword_reverse"
+    keyword_miner = "keyword_miner"
+    competitor = "competitor"
+    rufus = "rufus"
 
 
 app = typer.Typer(help="ASIN 批量取数服务")
@@ -153,6 +170,154 @@ def abtest_url(
     )
 
 
+@app.command("file-url")
+def file_url(
+    asin: str = typer.Option(..., "--asin", help="ASIN"),
+    site: str = typer.Option("US", "--site", help="站点"),
+    file: FileKey | None = typer.Option(
+        None, "--file", help="文件类型；不传时配合 --list 列出全部"
+    ),
+    list_all: bool = typer.Option(False, "--list", help="列出该 ASIN 所有可用的拆分文件地址"),
+    url_only: bool = typer.Option(False, "--url-only", help="只输出文件地址"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """查询 ASIN 拆分数据包中某个文件的 OSS 地址（按文件粒度）。"""
+    normalized_asin = asin.strip().upper()
+    normalized_site = site.strip().upper()
+    client = AsinReportFileClient()
+    try:
+        result = client.fetch_split_files(asin=normalized_asin, site=normalized_site)
+        files = result.get("files") or {}
+        if list_all or file is None:
+            data = [
+                {"file_key": key, "url": value}
+                for key, value in files.items()
+            ]
+            if url_only:
+                lines: list[str] = []
+                for item in data:
+                    urls = item["url"]
+                    if isinstance(urls, list):
+                        lines.extend(urls)
+                    elif urls:
+                        lines.append(str(urls))
+                typer.echo("\n".join(lines))
+                return
+            _emit(
+                {
+                    "success": True,
+                    "command": "asin-data file-url",
+                    "data": {
+                        "asin": normalized_asin,
+                        "site": normalized_site,
+                        "files": data,
+                        "record": result.get("record"),
+                    },
+                    "error": None,
+                },
+                pretty,
+            )
+            return
+
+        urls = files.get(file.value)
+        if not urls:
+            raise AsinReportFileNotFoundError(asin=normalized_asin, site=normalized_site)
+    except Exception as exc:
+        _emit(_error_payload("asin-data file-url", exc), pretty)
+        raise typer.Exit(1)
+
+    if url_only:
+        if isinstance(urls, list):
+            typer.echo("\n".join(urls))
+        else:
+            typer.echo(urls)
+        return
+
+    _emit(
+        {
+            "success": True,
+            "command": "asin-data file-url",
+            "data": {
+                "asin": normalized_asin,
+                "site": normalized_site,
+                "file_key": file.value,
+                "file_url": urls,
+                "record": result.get("record"),
+            },
+            "error": None,
+        },
+        pretty,
+    )
+
+
+@app.command("fetch-file")
+def fetch_file(
+    asin: str = typer.Option(..., "--asin", help="ASIN"),
+    file: FileKey = typer.Option(..., "--file", help="文件类型"),
+    site: str = typer.Option("US", "--site", help="站点"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """下载并返回 ASIN 拆分数据包中某个文件的内容（xlsx 转 JSON，md 输出文本）。"""
+    normalized_asin = asin.strip().upper()
+    normalized_site = site.strip().upper()
+    try:
+        result = AsinReportFileClient().fetch_split_files(
+            asin=normalized_asin, site=normalized_site
+        )
+        files = result.get("files") or {}
+        urls = files.get(file.value)
+        if not urls:
+            raise AsinReportFileNotFoundError(asin=normalized_asin, site=normalized_site)
+        first_url = urls[0] if isinstance(urls, list) else urls
+        content = _download_file_content(first_url, file.value)
+    except Exception as exc:
+        _emit(_error_payload("asin-data fetch-file", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(
+        {
+            "success": True,
+            "command": "asin-data fetch-file",
+            "data": {
+                "asin": normalized_asin,
+                "site": normalized_site,
+                "file_key": file.value,
+                "file_url": urls,
+                "content": content,
+            },
+            "error": None,
+        },
+        pretty,
+    )
+
+
+def _download_file_content(url: str, file_key: str) -> Any:
+    """Download a split package file and return structured content.
+
+    xlsx files are converted to {sheet_name: [rows]} JSON; markdown files are
+    returned as plain text. This lets the AI consume file content without
+    parsing xlsx itself.
+    """
+    response = httpx.get(url, timeout=60, follow_redirects=True)
+    response.raise_for_status()
+    raw = response.content
+    if file_key == "rufus":
+        return raw.decode("utf-8", errors="replace")
+    # xlsx -> {sheet: [rows]}
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+    sheets: dict[str, list[list[Any]]] = {}
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        rows = [list(row) for row in ws.iter_rows(values_only=True)]
+        sheets[sheet_name] = rows
+    wb.close()
+    return sheets
+
+
 @app.command("collect")
 def collect(
     input_path: str | None = typer.Option(None, "--input", "-i", help="CSV/XLSX/JSON/JSONL 输入文件"),
@@ -222,6 +387,7 @@ def collect(
     ),
     upload: bool = typer.Option(True, "--upload/--no-upload", help="上传 ASIN 拆分数据包 zip 并返回阿里云文件地址"),
     submit_report_files: bool = typer.Option(False, "--submit-report-files/--no-submit-report-files", help="采集完成后提交报告文件记录到 /dataMetrics/v1/asin-report-files"),
+    submit_file_records: bool = typer.Option(False, "--submit-file-records/--no-submit-file-records", help="额外按文件粒度提交拆分文件记录（每个 xlsx/md 一条，report_type 区分）"),
     report_date: str | None = typer.Option(None, "--report-date", help="报告日期，默认当天"),
     report_type: str = typer.Option(DEFAULT_REPORT_TYPE, "--report-type", help="报告类型"),
     report_source: str = typer.Option(DEFAULT_SOURCE, "--report-source", help="报告记录来源"),
@@ -296,6 +462,25 @@ def collect(
                     report_type=report_type,
                     source=report_source,
                     include_content=include_report_content,
+                )
+        if submit_file_records:
+            if dry_run:
+                result["file_record_submit"] = {
+                    "submitted": False,
+                    "reason": "dry_run",
+                }
+            elif not result.get("asin_data_files"):
+                result["file_record_submit"] = {
+                    "submitted": False,
+                    "reason": "no per-file uploads (require --upload)",
+                }
+            else:
+                client = AsinReportFileClient(endpoint=register_endpoint) if register_endpoint else AsinReportFileClient()
+                result["file_record_submit"] = AsinReportFileSubmitter(client=client).submit(
+                    result,
+                    report_date=report_date,
+                    source=report_source,
+                    file_mode=True,
                 )
     except Exception as exc:
         _emit(_error_payload("asin-data collect", exc), pretty)

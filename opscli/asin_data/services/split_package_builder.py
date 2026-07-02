@@ -28,7 +28,7 @@ FILE_BASIC = "01-\u57fa\u7840\u6570\u636e.xlsx"
 FILE_BI = "02-BI\u6570\u636e.xlsx"
 FILE_KEYWORD_REVERSE = "03-\u5356\u5bb6\u7cbe\u7075\u5173\u952e\u8bcd\u6570\u636e.xlsx"
 FILE_KEYWORD_MINER = "04-\u5356\u5bb6\u7cbe\u7075\u5173\u952e\u8bcd\u6316\u6398.xlsx"
-FILE_AI = "05-\u5356\u5bb6\u7cbe\u7075AI\u5168\u666f\u5206\u6790.xlsx"
+FILE_COMPETITOR = "05-\u5356\u5bb6\u7cbe\u7075\u7ade\u54c1\u5206\u6790.xlsx"
 FILE_RUFUS = "06-Rufus\u6570\u636e\u5206\u6790.md"
 
 SHEET_NO_DATA = "\u65e0\u6570\u636e"
@@ -40,6 +40,23 @@ SHEET_BULLETS = "\u4e94\u70b9\u63cf\u8ff0"
 SHEET_IMAGES = "\u56fe\u7247\u94fe\u63a5"
 SHEET_QA = "QA"
 SHEET_REVIEWS = "\u8bc4\u8bba"
+
+# file_key -> (db_column, is_multi) mapping for per-file delivery.
+# Each ASIN's split package files are uploaded individually and the OSS URLs
+# are stored in the corresponding column of ops_asin_data_report_files.
+# - single-file keys use a varchar column (one URL)
+# - multi-file keys (keyword_miner / competitor) use a json column (URL array)
+FILE_FIELD_MAP = {
+    "basic": ("basic_data_url", False),
+    "bi": ("bi_data_url", False),
+    "keyword_reverse": ("keyword_reverse_url", False),
+    "keyword_miner": ("keyword_miner_urls", True),
+    "competitor": ("competitor_urls", True),
+    "rufus": ("rufus_report_url", False),
+}
+
+# Ordered file_key list matching the 01~06 split package files.
+SPLIT_FILE_KEYS = ("basic", "bi", "keyword_reverse", "keyword_miner", "competitor", "rufus")
 
 
 def build_split_package(
@@ -66,7 +83,7 @@ def build_split_package(
             "bi": asin_dir / FILE_BI,
             "keyword_reverse": asin_dir / FILE_KEYWORD_REVERSE,
             "keyword_miner": asin_dir / FILE_KEYWORD_MINER,
-            "ai": asin_dir / FILE_AI,
+            "competitor": asin_dir / FILE_COMPETITOR,
             "rufus": asin_dir / FILE_RUFUS,
         }
         write_basic_workbook(files["basic"], asin_result)
@@ -74,7 +91,7 @@ def build_split_package(
         seller_sprite = asin_result.get("seller_sprite") if isinstance(asin_result.get("seller_sprite"), dict) else {}
         write_seller_sprite_workbook(files["keyword_reverse"], seller_sprite.get("keyword_reverse"), title="\u5173\u952e\u8bcd\u53cd\u67e5")
         write_keyword_miner_workbook(files["keyword_miner"], seller_sprite.get("keyword_miner"))
-        write_ai_workbook(files["ai"], seller_sprite.get("listing_analysis"))
+        write_competitor_workbook(files["competitor"], seller_sprite.get("competitor"))
         write_rufus_markdown(files["rufus"], asin_result)
         items.append(
             {
@@ -199,15 +216,14 @@ def write_keyword_miner_workbook(path: Path, payload: Any) -> None:
     save_workbook(wb, path)
 
 
-def write_ai_workbook(path: Path, payload: Any) -> None:
-    content = payload.get("content") if isinstance(payload, dict) and isinstance(payload.get("content"), dict) else None
-    wb = new_workbook()
-    if not content:
-        write_rows(wb.create_sheet(SHEET_NO_DATA), [{"\u8bf4\u660e": "\u65e0\u5356\u5bb6\u7cbe\u7075AI\u5168\u666f\u5206\u6790\u6570\u636e"}])
-        save_workbook(wb, path)
+def write_competitor_workbook(path: Path, payload: Any) -> None:
+    export_paths = seller_sprite_export_paths(payload)
+    if export_paths:
+        write_export_workbook(path, export_paths)
         return
-    for key in ("reportDetails", "productAnalysis", "textAnalysis", "imageAnalysis", "keywordAnalysis", "reviewAnalysis"):
-        write_rows(wb.create_sheet(safe_sheet_name(key)), flatten_payload(content.get(key)))
+    rows = seller_sprite_rows(payload)
+    wb = new_workbook()
+    write_rows(wb.create_sheet("\u7ade\u54c1\u5206\u6790"), rows or [{"\u8bf4\u660e": "\u65e0\u7ade\u54c1\u5206\u6790\u6570\u636e"}])
     save_workbook(wb, path)
 
 
@@ -569,7 +585,7 @@ def build_readme(summary: dict[str, Any], items: list[dict[str, Any]]) -> str:
         f"2. `{FILE_BI}`",
         f"3. `{FILE_KEYWORD_REVERSE}`",
         f"4. `{FILE_KEYWORD_MINER}`",
-        f"5. `{FILE_AI}`",
+        f"5. `{FILE_COMPETITOR}`",
         f"6. `{FILE_RUFUS}`",
         "",
         "## ASIN",

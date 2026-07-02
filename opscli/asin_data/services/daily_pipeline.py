@@ -251,6 +251,13 @@ class DailyAsinDataPipeline:
             summary["files"]["asin_data_package_upload_url"] = upload["url"]
             summary["files"]["asin_report_upload_url"] = upload["url"]
             summary["upload"] = upload
+            file_uploads = self.collector._upload_split_package_files(
+                split_package,
+                run_id=paths.output_root.name,
+                records=records,
+            )
+            summary["files"]["asin_data_file_urls"] = file_uploads
+            summary["asin_data_files"] = file_uploads
 
         self.legacy.write_json(paths.output_root / "asin-data-summary.json", summary)
         self.legacy.write_json(paths.output_root / "manifest.json", summary)
@@ -265,6 +272,7 @@ class DailyAsinDataPipeline:
             "report_files": summary.get("report_files"),
             "report_file_url": report_file_url,
             "aliyun_url": report_file_url or (upload["url"] if upload else None),
+            "asin_data_files": summary.get("asin_data_files"),
         }
 
     def _prepare_run(self, **kwargs: Any) -> tuple[Any, DailyStagePaths, list[dict[str, Any]], list[dict[str, Any]]]:

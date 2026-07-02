@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -106,14 +107,17 @@ class AsinReportFileClient:
         self.http_post = http_post or httpx.post
         self.ops_url = _report_files_base_url(ops_url or OPS_URL)
 
-    def fetch(self, *, asin: str, site: str) -> AsinReportFile:
+    def fetch(self, *, asin: str, site: str, report_type: str | None = None) -> AsinReportFile:
         normalized_asin = asin.strip().upper()
         normalized_site = site.strip().upper()
         headers, cookies = self.auth_client.build_request_auth("ops")
         headers.update(get_mcp_request_headers())
+        params: dict[str, str] = {"asin": normalized_asin, "site": normalized_site}
+        if report_type:
+            params["report_type"] = report_type
         response = self.http_get(
             self._resolve_endpoint(),
-            params={"asin": normalized_asin, "site": normalized_site},
+            params=params,
             headers=headers,
             cookies=cookies,
             timeout=DEFAULT_TIMEOUT,
@@ -133,6 +137,94 @@ class AsinReportFileClient:
             record=record if isinstance(record, dict) else None,
             raw=payload,
         )
+
+    def fetch_file(self, *, asin: str, site: str, report_type: str) -> AsinReportFile:
+        """Fetch a single per-file ASIN data record by report_type.
+
+        Thin wrapper around :meth:`fetch` that always passes ``report_type``,
+        used by the per-file delivery flow (e.g. asin_data_basic_xlsx).
+        """
+        return self.fetch(asin=asin, site=site, report_type=report_type)
+
+    def fetch_file_list(self, *, asin: str, site: str) -> list[AsinReportFile]:
+        """List all per-file records for an ASIN (any asin_data_*_xlsx / *_md report_type)."""
+        normalized_asin = asin.strip().upper()
+        normalized_site = site.strip().upper()
+        headers, cookies = self.auth_client.build_request_auth("ops")
+        headers.update(get_mcp_request_headers())
+        response = self.http_get(
+            self._resolve_endpoint(),
+            params={"asin": normalized_asin, "site": normalized_site},
+            headers=headers,
+            cookies=cookies,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        payload = parse_remote_response(
+            response,
+            http_error_cls=AsinReportFileHttpError,
+            business_error_cls=AsinReportFileBusinessError,
+            bad_json_error_cls=AsinReportFileBadJsonError,
+        )
+        data = payload.get("data") if isinstance(payload, dict) else payload
+        records = _collect_records(data)
+        results: list[AsinReportFile] = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            rt = str(record.get("report_type") or "")
+            # only keep per-file split package records (exclude the whole zip / merged txt)
+            if not (rt.startswith("asin_data_") and (rt.endswith("_xlsx") or rt.endswith("_md"))):
+                continue
+            results.append(
+                AsinReportFile(
+                    asin=normalized_asin,
+                    site=normalized_site,
+                    url=_extract_report_url(record),
+                    record=record,
+                    raw=payload,
+                )
+            )
+        return results
+
+    def fetch_split_files(self, *, asin: str, site: str) -> dict[str, Any]:
+        """Fetch the per-file split record for an ASIN and return URLs by file_key.
+
+        Reads the single per-ASIN record (report_type=asin_data_split_package_files)
+        that carries each split file's OSS URL in a dedicated column, and returns
+        a normalized ``{file_key: url | [urls]}`` mapping plus the raw record.
+        """
+        normalized_asin = asin.strip().upper()
+        normalized_site = site.strip().upper()
+        headers, cookies = self.auth_client.build_request_auth("ops")
+        headers.update(get_mcp_request_headers())
+        response = self.http_get(
+            self._resolve_endpoint(),
+            params={
+                "asin": normalized_asin,
+                "site": normalized_site,
+                "report_type": "asin_data_split_package_files",
+            },
+            headers=headers,
+            cookies=cookies,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        payload = parse_remote_response(
+            response,
+            http_error_cls=AsinReportFileHttpError,
+            business_error_cls=AsinReportFileBusinessError,
+            bad_json_error_cls=AsinReportFileBadJsonError,
+        )
+        data = payload.get("data") if isinstance(payload, dict) else payload
+        record = _select_record(data, asin=normalized_asin, site=normalized_site)
+        record = record if isinstance(record, dict) else {}
+        files = _extract_split_file_urls(record)
+        return {
+            "asin": normalized_asin,
+            "site": normalized_site,
+            "record": record,
+            "raw": payload,
+            "files": files,
+        }
 
     def fetch_abtest(self, *, asin: str, site: str, data_type: str = "file") -> AsinReportFile:
         """Fetch ABTest report data via /dataMetrics/v1/asin-report-files/abtest-data.
@@ -240,6 +332,61 @@ def _select_record(data: Any, *, asin: str, site: str) -> Any:
                 return item
         return fallback
     return data
+
+
+def _collect_records(data: Any) -> list[dict[str, Any]]:
+    """Flatten any container shape into a flat list of record dicts."""
+    records: list[dict[str, Any]] = []
+    if isinstance(data, dict):
+        for key in ("list", "items", "records", "rows", "data"):
+            value = data.get(key)
+            if isinstance(value, list):
+                records.extend(item for item in value if isinstance(item, dict))
+                if records:
+                    return records
+        return [data]
+    if isinstance(data, list):
+        records.extend(item for item in data if isinstance(item, dict))
+    return records
+
+
+# file_key -> (db_column, is_multi) — mirrors split_package_builder.FILE_FIELD_MAP
+_SPLIT_FILE_COLUMNS = {
+    "basic": ("basic_data_url", False),
+    "bi": ("bi_data_url", False),
+    "keyword_reverse": ("keyword_reverse_url", False),
+    "keyword_miner": ("keyword_miner_urls", True),
+    "competitor": ("competitor_urls", True),
+    "rufus": ("rufus_report_url", False),
+}
+
+
+def _extract_split_file_urls(record: dict[str, Any]) -> dict[str, Any]:
+    """Extract per-file URLs from a split-files record into {file_key: url|[urls]}."""
+    result: dict[str, Any] = {}
+    for file_key, (column, is_multi) in _SPLIT_FILE_COLUMNS.items():
+        value = record.get(column)
+        if value is None or value == "":
+            continue
+        if is_multi:
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                except (TypeError, ValueError):
+                    parsed = [value]
+            else:
+                parsed = value
+            if isinstance(parsed, list):
+                urls = [str(item).strip() for item in parsed if str(item).strip()]
+                if urls:
+                    result[file_key] = urls
+            elif isinstance(parsed, str) and parsed.strip():
+                result[file_key] = [parsed.strip()]
+        else:
+            text = str(value).strip()
+            if text:
+                result[file_key] = text
+    return result
 
 
 def _report_files_base_url(ops_url: str) -> str:

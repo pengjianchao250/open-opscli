@@ -11,6 +11,10 @@ from uuid import NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
 from opscli.asin_data.services.report_files import DEFAULT_REPORT_FILES_ENDPOINT, AsinReportFileClient
+from opscli.asin_data.services.split_package_builder import (
+    FILE_FIELD_MAP,
+    SPLIT_FILE_KEYS,
+)
 
 
 DEFAULT_REPORT_TYPE = "asin_data_split_package_zip"
@@ -32,14 +36,22 @@ class AsinReportFileSubmitter:
         source: str = DEFAULT_SOURCE,
         include_content: bool = False,
         idempotency_key: str | None = None,
+        file_mode: bool = False,
     ) -> dict[str, Any]:
-        items = self.build_items(
-            collect_result,
-            report_date=report_date,
-            report_type=report_type,
-            source=source,
-            include_content=include_content,
-        )
+        if file_mode:
+            items = self.build_file_items(
+                collect_result,
+                report_date=report_date,
+                source=source,
+            )
+        else:
+            items = self.build_items(
+                collect_result,
+                report_date=report_date,
+                report_type=report_type,
+                source=source,
+                include_content=include_content,
+            )
         request_id = _run_id(collect_result) or idempotency_key
         response = self.client.upsert(
             items=items,
@@ -98,12 +110,106 @@ class AsinReportFileSubmitter:
                 "meta_json": _meta_json(manifest, content_hash=report_hash),
                 "frontend_json": frontend_by_asin.get(asin) if include_content else None,
                 "raw_record_json": raw_record if include_content else None,
-                "errors_json": related_errors if related_errors else None,
                 "error_message": _error_message(related_errors),
             }
             items.append(item)
         if not items:
             raise ValueError("No ASIN report file records were generated for submit.")
+        return items
+
+    def build_file_items(
+        self,
+        collect_result: dict[str, Any],
+        *,
+        report_date: str | None = None,
+        source: str = DEFAULT_SOURCE,
+    ) -> list[dict[str, Any]]:
+        """Build one record per ASIN with per-file OSS URLs in dedicated columns.
+
+        Unlike :meth:`build_items` (one record pointing at the whole zip), this
+        writes each split file's OSS URL into its own column on a single per-ASIN
+        record: ``basic_data_url`` / ``bi_data_url`` / ``keyword_reverse_url`` /
+        ``keyword_miner_urls`` (json array) / ``competitor_urls`` (json array) /
+        ``rufus_report_url``. The downstream AI can then fetch one file at a time
+        without loading the whole package.
+        """
+        manifest = _manifest(collect_result, _output_dir(collect_result))
+        run_id = manifest.get("run_id") or _run_id(collect_result)
+        normalized_report_date = report_date or datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        file_uploads = collect_result.get("asin_data_files") or {}
+        items_by_asin = {
+            str(entry.get("asin") or "").strip().upper(): entry
+            for entry in (file_uploads.get("items") or [])
+            if isinstance(entry, dict)
+        }
+
+        items: list[dict[str, Any]] = []
+        for asin, entry in items_by_asin.items():
+            if not asin:
+                continue
+            site = _normalize_site(_site_for_asin(manifest, asin))
+            per_files = entry.get("files") if isinstance(entry.get("files"), dict) else {}
+
+            # group URLs by db column; multi-file keys accumulate into a list
+            column_values: dict[str, Any] = {}
+            column_meta: dict[str, Any] = {}
+            for file_key in SPLIT_FILE_KEYS:
+                mapping = FILE_FIELD_MAP.get(file_key)
+                if not mapping:
+                    continue
+                db_column, is_multi = mapping
+                file_info = per_files.get(file_key) if isinstance(per_files.get(file_key), dict) else {}
+                file_url = file_info.get("url") if isinstance(file_info.get("url"), str) else None
+                if not file_url:
+                    continue
+                if is_multi:
+                    column_values.setdefault(db_column, []).append(file_url)
+                else:
+                    column_values[db_column] = file_url
+                column_meta[file_key] = {
+                    "url": file_url,
+                    "file_name": file_info.get("file_name"),
+                }
+            if not column_values:
+                continue
+
+            # serialize multi-file columns as JSON arrays
+            extra_fields: dict[str, Any] = {}
+            for file_key in SPLIT_FILE_KEYS:
+                mapping = FILE_FIELD_MAP.get(file_key)
+                if not mapping:
+                    continue
+                db_column, is_multi = mapping
+                value = column_values.get(db_column)
+                if value is None:
+                    continue
+                if is_multi:
+                    extra_fields[db_column] = json.dumps(value, ensure_ascii=False)
+                else:
+                    extra_fields[db_column] = value
+
+            report_type = "asin_data_split_package_files"
+            item = {
+                "report_uuid": str(
+                    uuid5(NAMESPACE_URL, f"{asin}:{site}:{report_type}:{normalized_report_date}")
+                ),
+                "run_id": run_id,
+                "asin": asin,
+                "site": site,
+                "report_type": report_type,
+                "source": source,
+                "status": "success",
+                "report_date": normalized_report_date,
+                "meta_json": {
+                    "run_id": run_id,
+                    "files": column_meta,
+                },
+                "error_message": None,
+            }
+            item.update(extra_fields)
+            items.append(item)
+        if not items:
+            raise ValueError("No per-file ASIN report records were generated for submit.")
         return items
 
 
@@ -266,6 +372,38 @@ def _normalize_asin(value: Any) -> str:
 
 def _normalize_site(value: Any) -> str:
     return str(value or "US").strip().upper()
+
+
+def _site_for_asin(manifest: dict[str, Any], asin: str) -> str:
+    """Best-effort site lookup for an ASIN from manifest summary/records."""
+    records = manifest.get("records")
+    if isinstance(records, list):
+        for record in records:
+            if isinstance(record, dict) and _normalize_asin(record.get("asin")) == asin:
+                site = record.get("site")
+                if site:
+                    return str(site)
+    return "US"
+
+
+def _file_ext(file_name: str | None) -> str:
+    if not isinstance(file_name, str) or not file_name.strip():
+        return "txt"
+    suffix = Path(file_name).suffix.lstrip(".")
+    return suffix or "txt"
+
+
+def _mime_type_for_name(file_name: str | None) -> str:
+    if not isinstance(file_name, str):
+        return "application/octet-stream"
+    suffix = Path(file_name).suffix.lower()
+    if suffix == ".xlsx":
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if suffix == ".md":
+        return "text/markdown; charset=utf-8"
+    if suffix == ".zip":
+        return "application/zip"
+    return "text/plain; charset=utf-8"
 
 
 def _summarize_submit_response(response: dict[str, Any], *, items: list[dict[str, Any]], endpoint: str) -> dict[str, Any]:
