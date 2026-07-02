@@ -34,14 +34,54 @@ description: Use when the user asks for Amazon 商品页、ASIN、报价、Offer
 - 如果工具返回本地路径，只在需要用户打开本机文件时展示相对路径或经过确认的本地路径。
 - 不展示 raw HTML；若用户要求源码类内容，说明当前只支持结构化 JSON 商品数据。
 
-## 必须先读规范
+## 运行路径选择
 
-首次使用本能力时，先调用：
+默认优先使用正式 CLI 路径。只有在用户明确要求 MCP、当前宿主只能调用 MCP Tool、或 CLI 首次正式调用不可用时，才切换到 MCP 直连路径。
 
-1. `scrape_do_spec_must_read`
-2. `scrape_do_scenarios`
+| 环境 / 约束 | 路径 | 说明 |
+|---|---|---|
+| 当前在 `opscli` 项目或本地可执行正式命令，且用户未指定 MCP | CLI 优先 | 使用 `opscli auth` 和 `opscli scrape-do`；这是最贴近真实交付的路径 |
+| 用户明确要求 MCP，或当前宿主只能调用 MCP Tool | MCP 直连 | 使用 `auth_*` 与 `scrape_do_*` MCP tools |
+| CLI 首次正式调用失败 | 切换 MCP 直连 | 若失败属于 `opscli` 命令失败，按项目规则提交 `ops-feedback` 后继续 |
 
-这两个工具是当前 Amazon 商品数据接口的 MCP 入口。调用和内部工具名可以出现在执行过程，但最终面向用户总结时隐藏供应商和内部 endpoint。
+不要在两条路径之间来回切换。选定路径后保持一致，除非当前路径不可用。
+
+## CLI 授权与执行流程
+
+CLI 路径先使用 `ops-auth` 的 CLI 模式确认本地登录态，再调用正式商品数据命令。
+
+1. 检查登录态：`opscli auth token status`。
+2. 如果未登录或 Token 无效，执行：`opscli auth login`。
+3. 查看支持场景：`opscli scrape-do scenarios`。
+4. 执行采集：`opscli scrape-do run <scenario> --site <site> --params '<json>'`。
+5. 如需复核任务状态：`opscli scrape-do job-status <job_id>`。
+6. 如需读取导出信息：`opscli scrape-do export <job_id>`。
+
+CLI 内部会使用本地登录态向 OPS 获取远端 MCP 配置/API Key，然后调用远端 MCP 服务。不要要求用户提供 API Key，不要手动拼接远端 MCP URL，也不要在回复中展示 API Key、远端 URL、token 或内部 endpoint。
+
+示例：
+
+```bash
+opscli auth token status
+opscli scrape-do scenarios
+opscli scrape-do run amazon-pdp --site US --params '{"asin":"B0C7BKZ883"}'
+opscli scrape-do job-status <job_id>
+opscli scrape-do export <job_id>
+```
+
+## MCP 授权与执行流程
+
+MCP 直连路径先使用 `ops-auth` 的 MCP 模式确认登录态，再调用商品数据 MCP tools。
+
+1. 检查登录态：`auth_is_authenticated()`。
+2. 如果未登录，执行：`auth_mcp_login()`。
+3. 首次使用当前 MCP 能力时，调用 `scrape_do_spec_must_read()`。
+4. 调用 `scrape_do_scenarios()` 查看支持场景。
+5. 选择场景并调用 `scrape_do_run()`。
+6. 如需复核，调用 `scrape_do_job_status(job_id)`。
+7. 如需下载表格，调用 `scrape_do_export(job_id)`。
+
+MCP 直连路径也不要要求用户提供认证令牌或 API Key；凭证由登录态、远端配置或服务端托管。
 
 ## 场景选择
 
@@ -65,12 +105,13 @@ description: Use when the user asks for Amazon 商品页、ASIN、报价、Offer
 ## 推荐执行流程
 
 1. 明确目标：ASIN、关键词、站点、是否需要报价/搜索/商品页。
-2. 调用 `scrape_do_spec_must_read` 和 `scrape_do_scenarios`。
-3. 选择场景并调用 `scrape_do_run`。
-4. 查看返回的 `job_id`、`row_count`、`billing`、`export.url`。
-5. 如需复核，调用 `scrape_do_job_status(job_id)`。
-6. 如需下载表格，调用 `scrape_do_export(job_id)`。
-7. 向用户总结时只说业务结果、导出文件、字段情况，不暴露供应商和内部 endpoint。
+2. 按“运行路径选择”确定 CLI 或 MCP 直连路径。
+3. 按所选路径完成授权检查；不要要求用户提供 token 或 API Key。
+4. 选择场景并执行采集。
+5. 查看返回的 `job_id`、`row_count`、`billing`、`export.url`。
+6. 如需复核，按所选路径查询任务状态。
+7. 如需下载表格，按所选路径读取导出信息。
+8. 向用户总结时只说业务结果、导出文件、字段情况，不暴露供应商、API Key、远端 URL 或内部 endpoint。
 
 ## 输出文件说明
 
