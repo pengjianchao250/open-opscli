@@ -189,9 +189,11 @@ class AsinReportFileClient:
     def fetch_split_files(self, *, asin: str, site: str) -> dict[str, Any]:
         """Fetch the per-file split record for an ASIN and return URLs by file_key.
 
-        Reads the single per-ASIN record (report_type=asin_data_split_package_files)
-        that carries each split file's OSS URL in a dedicated column, and returns
-        a normalized ``{file_key: url | [urls]}`` mapping plus the raw record.
+        Queries the latest record for the ASIN (regardless of report_type) and
+        extracts per-file URLs from the dedicated columns
+        (basic_data_url / bi_data_url / ...). Works whether the URLs were written
+        onto a ``asin_data_split_package_zip`` record (UPDATE backfill) or a
+        ``asin_data_split_package_files`` record (INSERT new).
         """
         normalized_asin = asin.strip().upper()
         normalized_site = site.strip().upper()
@@ -199,11 +201,7 @@ class AsinReportFileClient:
         headers.update(get_mcp_request_headers())
         response = self.http_get(
             self._resolve_endpoint(),
-            params={
-                "asin": normalized_asin,
-                "site": normalized_site,
-                "report_type": "asin_data_split_package_files",
-            },
+            params={"asin": normalized_asin, "site": normalized_site},
             headers=headers,
             cookies=cookies,
             timeout=DEFAULT_TIMEOUT,
@@ -215,8 +213,17 @@ class AsinReportFileClient:
             bad_json_error_cls=AsinReportFileBadJsonError,
         )
         data = payload.get("data") if isinstance(payload, dict) else payload
-        record = _select_record(data, asin=normalized_asin, site=normalized_site)
-        record = record if isinstance(record, dict) else {}
+        records = _collect_records(data)
+        # pick the record that actually carries per-file URLs (newest first)
+        record: dict[str, Any] = {}
+        for candidate in records:
+            if not isinstance(candidate, dict):
+                continue
+            if _extract_split_file_urls(candidate):
+                record = candidate
+                break
+        if not record and records:
+            record = records[0] if isinstance(records[0], dict) else {}
         files = _extract_split_file_urls(record)
         return {
             "asin": normalized_asin,
