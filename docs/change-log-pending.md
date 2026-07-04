@@ -2134,3 +2134,19 @@
 **影响范围**：仅 publish/edit 的 summary 字段解析；desc 逻辑与解析器未改。
 **回滚方式**：git 还原 `cli.py` 与 `commands.md` 两个文件。
 ---
+
+## 2026-07-04 amazon - 增加代理反拦截与扩展字段采集
+
+**变更原因**：服务部署在阿里云（数据中心 IP 段），被 Amazon Bot 检测标记为高风险，抓取时频繁遭遇验证码/首页重定向；且原采集字段过少（仅标题/价格/评分/评论数/位置），无法满足更完整的商品信息需求。
+**改动点**：
+- 新增 `opscli/amazon/config.py`：从 `config.ini [amazon]` 段与 `OPSCLI_AMAZON_*` 环境变量读取代理（proxy_server/username/password）、max_retries、headless；内置 UA 池与视口池。代理是绕过机房 IP 被封的根因修复手段。
+- 重写 `opscli/amazon/scraping/scraper.py`（AmazonScraper）：
+  - launch 注入可选代理 + 反自动化 args（`--disable-blink-features=AutomationControlled`、`--no-sandbox` 等）。
+  - 每次上下文随机 UA + 随机视口；自注入 stealth 脚本（覆盖 navigator.webdriver/languages/plugins/window.chrome/permissions），不再依赖未在 pyproject 声明的 playwright_stealth。
+  - `scrape_product_async` 增加命中拦截时的退避重试（默认 3 次，每次换全新指纹上下文）；`_is_retryable` 区分可重试拦截与 404。
+  - 新增 `_extract_extended_fields`：单次 JS evaluate 提取品牌/库存/五点/描述/图片/BSR/类目/配送/发货方/卖家/优惠券。
+- 扩展 `opscli/amazon/domain/models.py`（AmazonProductSnapshot）：新增 11 个扩展字段，全部带默认值保持向后兼容。
+**验证结果**：`pytest tests/amazon/ -q` → 21 passed；导入冒烟测试通过，新字段与 config getter 正常。
+**影响范围**：仅 amazon 抓取模块；现有 CLI/manager 接口与测试不变（均 mock scraper）。默认不使用代理，需在 config.ini/环境变量显式配置后生效。
+**回滚方式**：git 还原 `opscli/amazon/scraping/scraper.py`、`opscli/amazon/domain/models.py`，删除 `opscli/amazon/config.py`。
+---
