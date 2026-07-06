@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-06 calculator - 临时草稿统一归档 tmp-validation
+
+**变更原因**：新品计算器本地烟测会在仓库根目录生成 `calculator-draft-*` 草稿包和 `tmp-calculator-*.json` 反馈临时文件，容易污染工作区；项目已有 `tmp-validation/` 用于统一管理本地验证产物。
+**改动点**：将 calculator 默认草稿输出目录从仓库根目录改为 `tmp-validation/calculator/`，同步更新 `recommend` 示例、Skill 指引和测试断言；`.gitignore` 增加 `calculator-draft-*/` 与 `tmp-calculator-*.json` 兜底忽略；已将当前根目录下既有 calculator 草稿包和临时 JSON 移入 `tmp-validation/calculator/`。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_cli.py tests/skills/test_ops_new_product_calculator_skill.py -q` 通过，`26 passed in 1.07s`。
+**影响范围**：影响新品计算器默认 `draft/copy/recommend` 本地输出路径；显式传入 `--out` 的旧命令仍按用户指定路径输出。
+**回滚方式**：恢复 `opscli/calculator/cli.py` 默认输出路径、Skill 示例、测试断言和 `.gitignore` 兜底规则，并按需将 `tmp-validation/calculator/` 中的临时产物移回根目录。
+---
+
 ## 2026-07-03 calculator - CSV 中文下拉值与草稿包快照
 
 **变更原因**：新品计算器 CSV 草稿虽然已替代多文件 JSON 填写入口，但仍暴露 `GROSS_PROFIT`、`zone_1_3`、省市编码、仓库 ID 等后端 key/code，业务用户只会填写中文省市、中文分区和仓库名称，需要让 CSV 展示和接收中文值，并在提交前自动转换为接口格式。

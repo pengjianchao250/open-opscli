@@ -100,7 +100,7 @@ opscli calculator search-category 数据线 --limit 5
 可直接提示命令：
 
 ```bash
-opscli calculator draft --country US --platform 1 --platform 7 --hs-code-id 4 --out calculator-draft-usb-cable-20260703
+opscli calculator draft --country US --platform 1 --platform 7 --hs-code-id 4 --out tmp-validation/calculator/calculator-draft-usb-cable-20260703
 ```
 
 也可以先运行：
@@ -114,7 +114,7 @@ opscli calculator recommend
 ### 3. 生成草稿包
 
 ```bash
-opscli calculator draft --country US --platform 1 --platform 7 --hs-code-id 4 --out calculator-draft-usb-cable-20260703
+opscli calculator draft --country US --platform 1 --platform 7 --hs-code-id 4 --out tmp-validation/calculator/calculator-draft-usb-cable-20260703
 ```
 
 生成后告知用户重点看：
@@ -191,7 +191,7 @@ https://bi.xenkee.com/#/newProductCalculator
 用户填写并保存 `填写表格.csv` 后，优先传草稿目录，让 CLI 自动同步 CSV 到 `draft.json` 后再校验：
 
 ```bash
-opscli calculator validate calculator-draft-usb-cable-20260703
+opscli calculator validate tmp-validation/calculator/calculator-draft-usb-cable-20260703
 ```
 
 高级用户也可以继续传 `draft.json` 路径，但普通用户不建议直接替换 JSON。
@@ -209,7 +209,7 @@ submit 会创建真实试算任务。确认要提交吗？
 用户确认后才执行：
 
 ```bash
-opscli calculator submit calculator-draft-usb-cable-20260703
+opscli calculator submit tmp-validation/calculator/calculator-draft-usb-cable-20260703
 ```
 
 提交成功后，CLI 会输出 `任务编号`，如果后端返回 `sudo`，也会输出 `代查标识`，并给出后续查询命令。

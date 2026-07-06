@@ -84,7 +84,7 @@ def test_new_product_calculator_skill_prevents_draft_overwrite():
     assert "输出目录必须是新的空目录" in text
     assert "不得覆盖已有 draft.json" in text
     assert "普通用户不建议手动替换整个 JSON" in text
-    assert "calculator-draft-usb-cable-20260703" in text
+    assert "tmp-validation/calculator/calculator-draft-usb-cable-20260703" in text
 
 
 def test_new_product_calculator_skill_routes_failures_to_ops_feedback():

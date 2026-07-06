@@ -32,6 +32,10 @@ app = typer.Typer(help="新品计算器")
 console = Console()
 
 TRIAL_RESULT_PLANS = ("mfn", "fba", "wfs")
+CALCULATOR_TMP_DIR = Path("tmp-validation") / "calculator"
+DEFAULT_DRAFT_OUT = CALCULATOR_TMP_DIR / "calculator-draft"
+DEFAULT_COPY_OUT = CALCULATOR_TMP_DIR / "calculator-draft-copy"
+
 TRIAL_RESULT_PLAN_LABELS = {
     "mfn": "自发货",
     "fba": "FBA",
@@ -378,7 +382,7 @@ def recommend_command() -> None:
     typer.echo("海关类目：4（8544421100-USB数据线）")
     typer.echo("")
     typer.echo("生成草稿包命令：")
-    typer.echo("opscli calculator draft --country US --platform 1 --platform 7 --hs-code-id 4 --out calculator-draft-test")
+    typer.echo(f"opscli calculator draft --country US --platform 1 --platform 7 --hs-code-id 4 --out {CALCULATOR_TMP_DIR / 'calculator-draft-test'}")
 
 
 @app.command("draft")
@@ -390,7 +394,7 @@ def draft_command(
     reference: str = typer.Option("NONE", "--reference", help="试算参考类型"),
     reference_value: str | None = typer.Option(None, "--reference-value", help="试算参考值"),
     payload: Path | None = typer.Option(None, "--payload", help="第一阶段参数 JSON 文件"),
-    out: Path = typer.Option(Path("calculator-draft"), "--out", help="草稿包输出目录"),
+    out: Path = typer.Option(DEFAULT_DRAFT_OUT, "--out", help="草稿包输出目录，默认写入 tmp-validation/calculator"),
 ) -> None:
     """根据第一阶段参数生成试算草稿包。"""
     payload_data = read_json_file(payload) if payload else None
@@ -606,7 +610,7 @@ def detail_command(
 def copy_command(
     task_code: str = typer.Option(..., "--task-code", help="任务编号"),
     sudo: str | None = typer.Option(None, "--sudo", help="代查标识，复制网页链接时可带入"),
-    out: Path = typer.Option(Path("calculator-draft-copy"), "--out", help="草稿包输出目录"),
+    out: Path = typer.Option(DEFAULT_COPY_OUT, "--out", help="草稿包输出目录，默认写入 tmp-validation/calculator"),
 ) -> None:
     """复制历史试算任务为本地草稿包。"""
     payload = {"task_code": task_code, "_t": _calculator_request_timestamp()}

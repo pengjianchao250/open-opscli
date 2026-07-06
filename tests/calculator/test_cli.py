@@ -153,15 +153,17 @@ def test_recommend_command_prints_smoke_test_parameters(monkeypatch):
     assert "--platform 1" in result.output
     assert "--platform 7" in result.output
     assert "--hs-code-id 4" in result.output
+    assert "tmp-validation" in result.output
 
 
 def test_draft_command_creates_package(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "CalculatorClient", lambda: FakeClient())
-    out_dir = tmp_path / "draft-pkg"
+    monkeypatch.chdir(tmp_path)
+    out_dir = tmp_path / "tmp-validation" / "calculator" / "calculator-draft"
 
     result = runner.invoke(
         cli.app,
-        ["draft", "--country", "US", "--platform", "1", "--platform", "7", "--hs-code-id", "12345", "--out", str(out_dir)],
+        ["draft", "--country", "US", "--platform", "1", "--platform", "7", "--hs-code-id", "12345"],
     )
 
     assert result.exit_code == 0
@@ -172,6 +174,7 @@ def test_draft_command_creates_package(monkeypatch, tmp_path):
     assert "已生成试算草稿包" in result.output
     assert DRAFT_CSV_FILENAME in result.output
     assert "https://bi.xenkee.com/#/newProductCalculator" in result.output
+    assert "tmp-validation" in result.output
     assert "算毛利" in csv_text
     assert "1区全部、指定分区" in csv_text
     assert "河北省" in csv_text
