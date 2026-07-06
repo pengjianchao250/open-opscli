@@ -1,5 +1,32 @@
 # 待归档变更记录
 
+## 2026-07-03 calculator - CSV 中文下拉值与草稿包快照
+
+**变更原因**：新品计算器 CSV 草稿虽然已替代多文件 JSON 填写入口，但仍暴露 `GROSS_PROFIT`、`zone_1_3`、省市编码、仓库 ID 等后端 key/code，业务用户只会填写中文省市、中文分区和仓库名称，需要让 CSV 展示和接收中文值，并在提交前自动转换为接口格式。
+**改动点**：扩展 `opscli/calculator/draft.py`，新增 `.dropdown-cache.json` 草稿包下拉快照、`DraftOption` 映射、内置试算方案/备货区域中文选项、后端 `dropdownList` 与 `zonesWarehouseList` 选项提取、CSV 中文值展示、CSV 中文输入到 key/code 的解析、备货区域默认 `1区全部、指定分区`；更新 `opscli/calculator/cli.py`，`draft/copy` 生成草稿时实时拉取公共下拉和站点分区/仓库并写入快照，目录模式 `validate/submit` 优先实时刷新下拉，失败时回退草稿包快照，直接传 `draft.json` 时保持旧兼容行为；更新 calculator/Skill 测试覆盖中文省市、试算方案、备货区域、分区、仓库名称映射和 zones `country` 查询参数。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator tests/skills/test_ops_new_product_calculator_skill.py -q` 通过，`53 passed in 2.14s`。
+**影响范围**：影响新品计算器草稿包 CSV 展示、目录模式校验/提交前的数据同步和草稿包内新增隐藏快照文件；`draft.json` 高级用户和旧脚本仍使用接口 key/code。
+**回滚方式**：回退 `opscli/calculator/draft.py`、`opscli/calculator/cli.py`、Skill 文案与相关测试中的中文下拉和 `.dropdown-cache.json` 改动，并删除本条变更记录。
+---
+
+## 2026-07-03 calculator - CSV 草稿填写入口
+
+**变更原因**：新品计算器草稿包默认生成多个分散文件且要求用户直接编辑 JSON，业务用户填写成本高、替换 JSON 容易出错，需要改为轻量表格入口。
+**改动点**：扩展 `opscli/calculator/draft.py`，新增 `填写表格.csv` 常量、CSV 渲染、UTF-8 BOM 写入、CSV “请填写”列解析、草稿目录解析、目录模式 CSV 同步到 `draft.json`，并将使用说明改为优先引导填写 CSV 和网页端兜底；更新 `opscli/calculator/cli.py`，使 `draft/copy` 输出推荐打开 CSV，`show/validate/submit` 兼容草稿目录输入，目录模式会先同步 CSV 再校验或提交；更新 `ops-new-product-calculator` Skill，引导普通用户优先填写 CSV，并在用户不想本地填写时转向网页端新品计算器；更新 calculator/Skill 测试覆盖 CSV 生成、CSV 同步、目录校验/提交和 Skill 文案。
+**验证结果**：先执行系统 Python 的 `python -m pytest tests/calculator/test_draft.py tests/calculator/test_cli.py tests/skills/test_ops_new_product_calculator_skill.py -q`，因全局 Python 未安装 pytest 失败（`No module named pytest`）；改用项目虚拟环境执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_draft.py tests/calculator/test_cli.py tests/skills/test_ops_new_product_calculator_skill.py -q` 通过，`42 passed in 1.85s`；继续执行 `.venv/Scripts/python.exe -m pytest tests/calculator tests/skills/test_ops_new_product_calculator_skill.py -q` 通过，`49 passed in 1.68s`。
+**影响范围**：影响新品计算器草稿包生成、目录模式校验/提交前的数据准备；保留 `draft.json` 兼容高级用户和旧脚本。
+**回滚方式**：回退 `opscli/calculator/draft.py`、CLI 与测试中的 CSV 草稿相关改动，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - 新品计算器 CLI 草稿包模式
+
+**变更原因**：Polaris 新品计算器页面字段多、第二阶段表单由前端固定模板动态填充，不适合要求非技术运营同学一次性列出所有参数；第一版先以 CLI 能力落地，通过后端 `queryCost` 生成本地草稿包，再引导用户按中文字段说明补充 `draft.json` 并提交试算。
+**改动点**：新增 `opscli/calculator/` 模块，包含字段字典、草稿归一化、缺失项 Markdown、本地校验、提交 payload 派生、JSON 文件辅助和 Polaris calculator HTTP client；新增 `opscli calculator` 顶级命令组，提供 `search-category`、`recommend`、`draft`、`show`、`validate`、`submit`、`dropdown-list`、`zones`、`list`、`detail`、`copy` 命令；`recommend` 默认平台改为同时选择亚马逊和沃尔玛；草稿包固定生成 `draft.json`、`字段说明.md`、`缺失项.md`、`使用说明.md`；新增 `tests/calculator/` 覆盖字段说明、草稿处理、HTTP client、CLI 命令和根命令注册；补充设计文档 `docs/design/新品计算器CLI草稿包模式设计.md` 与执行计划 `docs/superpowers/plans/2026-07-02-新品计算器-cli草稿包.md`。新增 `ops-new-product-calculator` Skill 模板与 manifest 声明，用于通过自然语言引导站点、平台、海关类目下拉选择，要求平台默认同时选择亚马逊和沃尔玛，并约束所有后端访问必须走 `opscli calculator`。真实联调时发现系统 URL 带尾斜杠会与 token endpoint 拼出双斜杠路径，同步修正 `TokenManager._fetch_token()` 的 URL 拼接；`zones` 真实接口返回仓库字段为 `by_warehouses`，同步修正普通文本输出。
+**验证结果**：TDD RED 阶段分别验证缺少 `fields`、`draft`、`models`、`client`、`cli` 模块以及 `zones/list/detail/copy/calculator` 根注册时测试失败；GREEN 后执行 `.venv/Scripts/python.exe -m pytest tests/calculator -v` 通过，`24 passed in 1.30s`。随后补充默认 base URL 回归测试，先复现 `CalculatorClient` 将 `get_builtin_systems()` 列表误当 dict 读取的失败，再修正为按 `alias=polaris` 读取 `url`；复跑 `.venv/Scripts/python.exe -m pytest tests/calculator/test_client.py tests/calculator -v` 通过，`25 passed in 1.37s`。补充 token URL 拼接回归测试，先复现 `https://biapi.qa.aukeyit.com/` 与 `/api/auth/cli-token` 拼出 `//api`，修复后 `.venv/Scripts/python.exe -m pytest tests/auth/test_token_manager.py::test_fetch_token_joins_base_url_and_endpoint_without_double_slash -v` 通过。真实只读联调中 `.venv/Scripts/python.exe -m opscli.cli auth token check --system polaris` 显示 token 有效，`.venv/Scripts/python.exe -m opscli.cli calculator dropdown-list` 成功返回字段集合；`.venv/Scripts/python.exe -m opscli.cli calculator search-category 数据线 --limit 5` 成功返回 QA 真实类目匹配，`.venv/Scripts/python.exe -m opscli.cli calculator recommend` 成功输出第一轮烟测参数；`.venv/Scripts/python.exe -m opscli.cli calculator zones --country US --json` 成功返回 `by_warehouses`，据此补充普通输出回归测试并修正展示，新增 `ops-new-product-calculator` Skill 契约测试先失败于模板缺失，补齐后 `.venv/Scripts/python.exe -m pytest tests/skills/test_ops_new_product_calculator_skill.py -v` 通过，`2 passed`。最终 `.venv/Scripts/python.exe -m pytest tests/calculator tests/skills/test_ops_new_product_calculator_skill.py -v` 通过，`30 passed in 1.33s`。执行 `.venv/Scripts/python.exe -m opscli.cli calculator --help` 成功显示 9 个 calculator 子命令。执行 calculator 新增文件 GBK 兼容扫描通过。受影响回归中 `.venv/Scripts/python.exe -m pytest tests/auth tests/query -v` 被既存问题阻断：`tests/query/test_manager.py:817-818` 存在重复函数定义导致 `IndentationError`；单独执行 `.venv/Scripts/python.exe -m pytest tests/auth -v` 为 `39 passed, 2 failed`，失败项为 Windows 权限位断言期望 `600` 但实际 `666`，以及 `build_session_headers` 现返回额外 `X-Opscli-Version`。以上失败均不在本次 calculator 变更范围内。
+**影响范围**：新增新品计算器 CLI 能力和本地草稿包工作流；不修改 Polaris 后端接口、不新增 MCP 工具、不让 Skill 直接调用后端；现阶段交互仍以 JSON 草稿和 Markdown 说明为主。
+**回滚方式**：删除 `opscli/calculator/`、`tests/calculator/`、新增设计/计划文档，回退 `opscli/cli.py` 中 calculator 注册和本条变更记录。
+---
+
 ## 2026-06-29 skills - 统一 Keepa 每日额度提示
 
 **变更原因**：`keepa_run` 已通过 MCP 限额中间件返回每日调用额度，但 Keepa Skill 仍要求隐藏剩余额度，导致最终回复未像卖家精灵一样提示用户当天的额度使用情况。
@@ -2133,4 +2160,139 @@
 - `tests/skills/test_cli.py` 全部通过；`test_manager.py` 的 3 个 install 失败为环境性预存问题（缺 ops-methods-card 模板），与本次改动无关（stash 后仍同样失败已确认）。
 **影响范围**：仅 publish/edit 的 summary 字段解析；desc 逻辑与解析器未改。
 **回滚方式**：git 还原 `cli.py` 与 `commands.md` 两个文件。
+---
+
+## 2026-07-02 calculator - 新品计算器 CLI 草稿包模式设计
+
+**变更原因**：确认将 Polaris 新品计算器优先封装为 opscli CLI 模式，并采用面向运营同学的草稿包交互。
+**改动点**：新增 `docs/design/新品计算器CLI草稿包模式设计.md`，明确 draft/show/validate/submit/list/detail/copy 命令、草稿包结构、字段字典、校验规则和后续增强路线。
+**验证结果**：仅文档变更，未运行代码测试；已完成设计内容自查，未发现占位符、范围漂移或未决问题。
+**影响范围**：不影响现有 CLI 行为，为后续 calculator 模块开发提供设计依据。
+**回滚方式**：删除 `docs/design/新品计算器CLI草稿包模式设计.md`，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - 新品计算器 CLI 实施计划
+
+**变更原因**：用户已确认新品计算器 CLI 草稿包模式设计，需要形成可执行开发计划。
+**改动点**：新增 `docs/superpowers/plans/2026-07-02-新品计算器-cli草稿包.md`，将实现拆分为字段字典、草稿校验、草稿包生成、HTTP client、核心 CLI、查询复制命令和验证记录 7 个任务。
+**验证结果**：仅文档变更；已按 writing-plans 要求完成 spec coverage、placeholder scan 和 type consistency 自查。
+**影响范围**：不影响现有 CLI 行为，为后续 calculator 模块开发提供执行步骤。
+**回滚方式**：删除该实施计划文档，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task1 字段字典失败测试
+
+**变更原因**：按 TDD 先为新品计算器字段字典编写失败测试，锁定中文字段说明行为。
+**改动点**：新增 `tests/calculator/test_fields.py`，覆盖字段中文名、单位、示例和字段说明 Markdown。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_fields.py -v`，因 `opscli.calculator.fields` 尚未实现而失败，符合 RED 阶段预期。
+**影响范围**：仅新增测试，不影响现有 CLI 行为。
+**回滚方式**：删除 `tests/calculator/test_fields.py` 并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task1 字段字典实现
+
+**变更原因**：让新品计算器字段字典测试通过，为草稿说明、摘要和校验提供中文字段基础。
+**改动点**：新增 `opscli/calculator/__init__.py` 和 `opscli/calculator/fields.py`，定义 `FieldSpec`、字段分组、字段索引、中文标签获取和字段说明 Markdown 渲染。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_fields.py -v`，2 个测试全部通过。
+**影响范围**：新增 calculator 模块字段字典，不影响现有 CLI 行为。
+**回滚方式**：删除 `opscli/calculator/__init__.py`、`opscli/calculator/fields.py` 和相关测试，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task2 草稿校验失败测试
+
+**变更原因**：按 TDD 为新品计算器草稿初始化、缺失项识别和本地校验编写失败测试。
+**改动点**：新增 `tests/calculator/test_draft.py`，覆盖后端数据归一化、关税率默认值、中文校验错误、试算方案条件必填、提交 payload 派生字段和中文摘要。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_draft.py -v`，因 `opscli.calculator.draft` 尚未实现而失败，符合 RED 阶段预期。
+**影响范围**：仅新增测试，不影响现有 CLI 行为。
+**回滚方式**：删除 `tests/calculator/test_draft.py` 并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task2 草稿校验实现
+
+**变更原因**：实现新品计算器草稿初始化、中文缺失项识别和本地校验，使 Task2 测试通过。
+**改动点**：新增 `opscli/calculator/exceptions.py` 和 `opscli/calculator/draft.py`，实现 `ValidationIssue`、`normalize_draft_data`、`validate_draft_data`、缺失项 Markdown、使用说明、中文摘要和提交 payload 派生字段。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_draft.py -v`，6 个测试全部通过；期间修复了非数值字段被误按数字校验的问题。
+**影响范围**：新增 calculator 草稿校验逻辑，不影响现有 CLI 行为。
+**回滚方式**：删除 `opscli/calculator/exceptions.py`、`opscli/calculator/draft.py` 和相关测试，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task3 草稿包失败测试
+
+**变更原因**：按 TDD 为新品计算器 JSON 文件读写、第一阶段 payload 构造和草稿包四文件生成编写失败测试。
+**改动点**：扩展 `tests/calculator/test_draft.py`，新增 JSON helper、query payload 构造和 `create_draft_package` 草稿包生成测试。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_draft.py -v`，因 `create_draft_package` 尚未实现而失败，符合 RED 阶段预期。
+**影响范围**：仅扩展测试，不影响现有 CLI 行为。
+**回滚方式**：移除 `tests/calculator/test_draft.py` 中 Task3 新增测试，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task3 草稿包实现
+
+**变更原因**：实现新品计算器 JSON 文件读写、第一阶段 payload 构造和草稿包四文件生成。
+**改动点**：新增 `opscli/calculator/models.py`，扩展 `opscli/calculator/draft.py` 的 `create_draft_package`，生成 `draft.json`、`字段说明.md`、`缺失项.md`、`使用说明.md`；修正 payload 文件优先时不混入 CLI 参数的逻辑。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_draft.py -v`，10 个测试全部通过。
+**影响范围**：新增 calculator 草稿包生成逻辑，不影响现有 CLI 行为。
+**回滚方式**：删除 `opscli/calculator/models.py`，移除 `draft.py` 中 `create_draft_package` 相关修改和测试，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task4 HTTP Client 失败测试
+
+**变更原因**：按 TDD 为 Polaris 新品计算器 HTTP client 编写失败测试，锁定认证、路径和错误提示行为。
+**改动点**：新增 `tests/calculator/test_client.py`，覆盖 queryCost 请求、所有接口路径和非 200 响应中文错误。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_client.py -v`，因 `opscli.calculator.client` 尚未实现而失败，符合 RED 阶段预期。
+**影响范围**：仅新增测试，不影响现有 CLI 行为。
+**回滚方式**：删除 `tests/calculator/test_client.py` 并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task4 HTTP Client 实现
+
+**变更原因**：实现 Polaris 新品计算器接口客户端，为 CLI 命令提供统一远端访问层。
+**改动点**：新增 `opscli/calculator/client.py`，实现 dropdownList、zonesWarehouseList、queryCost、doCalc、forecastList、taskDetails、copyTask；更新 `opscli/calculator/__init__.py` 导出 `CalculatorClient`。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_client.py -v`，3 个测试全部通过。
+**影响范围**：新增 calculator HTTP client，不影响现有 CLI 行为。
+**回滚方式**：删除 `opscli/calculator/client.py`，恢复 `opscli/calculator/__init__.py`，删除相关测试，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task5 核心 CLI 失败测试
+
+**变更原因**：按 TDD 为新品计算器 draft/show/validate/submit 核心 CLI 命令编写失败测试。
+**改动点**：新增 `tests/calculator/test_cli.py`，覆盖草稿包生成、中文摘要、中文校验失败和提交成功输出。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_cli.py -v`，因 `opscli.calculator.cli` 尚未实现而失败，符合 RED 阶段预期。
+**影响范围**：仅新增测试，不影响现有 CLI 行为。
+**回滚方式**：删除 `tests/calculator/test_cli.py` 并移除此变更记录。
+---
+
+## 2026-07-03 ops-new-product-calculator - Skill 完善失败测试
+
+**变更原因**：按 TDD 锁定新品计算器 Skill 的版本、失败反馈、下拉选项、防覆盖和完整草稿示例契约。
+**改动点**：增强 `tests/skills/test_ops_new_product_calculator_skill.py`，改用结构化版本与 manifest 断言，并使用真实草稿校验器验证 JSON 示例。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/skills/test_ops_new_product_calculator_skill.py -q`，新增契约中 5 项按预期失败，完成 RED 阶段。
+**影响范围**：仅调整 Skill 契约测试，不改变 calculator CLI 行为。
+**回滚方式**：恢复 `tests/skills/test_ops_new_product_calculator_skill.py` 并移除此变更记录。
+---
+
+## 2026-07-03 ops-new-product-calculator - Skill 工作流完善
+
+**变更原因**：修复 Skill 版本不一致、下拉命令无法展示选项、固定目录可能覆盖草稿、示例无法独立通过校验及失败后未反馈的问题。
+**改动点**：更新 `SKILL.md` 的失败反馈、`dropdown-list --json`、任务专属输出目录、完整最小草稿和常见问题规则；移除不受支持的 frontmatter 版本字段；统一 `data/VERSION.json` 为 `v0.0.1`。
+**验证结果**：目标 Skill 测试 7 项通过；calculator 的 fields、draft、client、CLI 共 36 项通过；发布 manifest 使用纯校验函数检查通过。`test_packaging.py` 因其导入脚本在模块加载时重绑标准输出而破坏 pytest 捕获，属于既有测试基础设施问题。
+**影响范围**：影响新品计算器 Skill 的 Agent 操作指引，不改变 calculator CLI 的接口和运行行为。
+**回滚方式**：恢复 `SKILL.md`、`data/VERSION.json`、对应测试和本变更记录。
+---
+
+## 2026-07-03 ops-new-product-calculator - Polaris 权限前置测试
+
+**变更原因**：按 TDD 锁定新品计算器执行前必须检查登录状态和 Polaris 权限的流程。
+**改动点**：扩展 `tests/skills/test_ops_new_product_calculator_skill.py`，要求 Skill 明确 `auth token status`、未登录时 `auth login` 以及已登录但无 Polaris Token 时申请权限。
+**验证结果**：执行权限前置目标测试，因 Skill 尚未包含 Polaris 权限和认证命令而失败，完成 RED 阶段。
+**影响范围**：仅增加 Skill 契约测试，不改变认证或 calculator CLI 行为。
+**回滚方式**：移除新增测试和本变更记录。
+---
+
+## 2026-07-03 ops-new-product-calculator - Polaris 权限前置流程
+
+**变更原因**：确保 Agent 在调用新品计算器前先确认登录状态和北极星系统权限，避免将权限缺失误判为普通接口故障。
+**改动点**：在 `SKILL.md` 新增权限与登录前置检查，约定 `opscli auth token status`、未登录时 `opscli auth login`，以及已登录但 Polaris Token 无效时申请 BI/Polaris 权限。
+**验证结果**：权限契约目标测试通过；最终 Skill 与 calculator 回归结果见本次交付验证。
+**影响范围**：影响新品计算器 Skill 的执行前置流程，不改变 CLI 实现。
+**回滚方式**：移除 `SKILL.md` 的权限与登录前置检查、对应测试和本变更记录。
 ---
