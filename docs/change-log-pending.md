@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-06 ops-new-product-calculator - 强化详情结果完整表格回复
+
+**变更原因**：实际使用 Skill 查询新品计算器详情时，Agent 会把 CLI 已输出的完整“试算结果”表格压缩成“方案/毛利/毛利率”三列，导致用户看不到售价、采购价、头程、仓储、尾程、广告、佣金、退款和固定成本等关键费用明细。
+**改动点**：更新 `ops-new-product-calculator` Skill 的结果查询章节和回复风格，明确 `calculator detail` 后最终回复必须保留 CLI 返回的所有方案列和主要费用行，不能只摘要毛利/毛利率；补充完整 Markdown 表格示例，并扩展 Skill 契约测试锁定“不要压缩完整表格”的规则。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/skills/test_ops_new_product_calculator_skill.py -q` 通过，`8 passed in 0.22s`。
+**影响范围**：仅影响新品计算器 Skill 的 Agent 最终回复约束，不改变 `opscli calculator detail` 命令输出和后端接口。
+**回滚方式**：恢复 `opscli/skills/templates/ops-new-product-calculator/SKILL.md` 的详情回复规则和对应测试，并删除本条变更记录。
+---
+
 ## 2026-07-06 calculator - 临时草稿统一归档 tmp-validation
 
 **变更原因**：新品计算器本地烟测会在仓库根目录生成 `calculator-draft-*` 草稿包和 `tmp-calculator-*.json` 反馈临时文件，容易污染工作区；项目已有 `tmp-validation/` 用于统一管理本地验证产物。

@@ -119,6 +119,10 @@ def test_new_product_calculator_skill_guides_result_query_workflow():
     assert "费用" in text
     assert "自发货(币种)" in text
     assert "FBA(币种)" in text
+    assert "不要只摘要毛利/毛利率" in text
+    assert "不能把完整表格压缩成“方案/毛利/毛利率”三列" in text
+    for row_label in ("售价", "毛利", "毛利率", "非税采购价", "头程费用", "仓库费用", "尾程费用", "站内广告", "站外促销", "平台佣金", "退款费", "固定成本", "备注"):
+        assert row_label in text
     assert "Web详情页" in text
     assert "unexpected extra argument" in text
     assert "不要在回复中泄露完整 JWT/Cookie" in text
