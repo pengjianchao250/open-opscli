@@ -9,10 +9,25 @@ ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "opscli" / "skills" / "templates" / "ops-new-product-calculator" / "SKILL.md"
 VERSION = ROOT / "opscli" / "skills" / "templates" / "ops-new-product-calculator" / "data" / "VERSION.json"
 MANIFEST = ROOT / "opscli" / "skills" / "templates" / "manifest.json"
+DRAFT_REFERENCE = SKILL.parent / "references" / "draft-workflow.md"
+RESULT_REFERENCE = SKILL.parent / "references" / "result-workflow.md"
 
 
 def _skill_text() -> str:
     return SKILL.read_text(encoding="utf-8")
+
+
+def _reference_text(path: Path) -> str:
+    assert path.exists(), f"缺少参考文件：{path}"
+    return path.read_text(encoding="utf-8")
+
+
+def _full_skill_text() -> str:
+    text = _skill_text()
+    for path in (DRAFT_REFERENCE, RESULT_REFERENCE):
+        if path.exists():
+            text += "\n" + path.read_text(encoding="utf-8")
+    return text
 
 
 def _frontmatter(text: str) -> str:
@@ -25,8 +40,35 @@ def _first_json_example(text: str) -> dict:
     return json.loads(match.group(1))
 
 
+def test_new_product_calculator_skill_uses_progressive_disclosure():
+    main_text = _skill_text()
+
+    assert len(main_text.splitlines()) <= 220
+    assert "references/draft-workflow.md" in main_text
+    assert "references/result-workflow.md" in main_text
+    assert "新建试算" in main_text
+    assert "继续已有草稿" in main_text
+    assert "查询或复用已有任务" in main_text
+    assert "```json" not in main_text
+    assert DRAFT_REFERENCE.exists()
+    assert RESULT_REFERENCE.exists()
+
+
+def test_new_product_calculator_skill_covers_existing_draft_and_copy_workflows():
+    draft_text = _reference_text(DRAFT_REFERENCE)
+    result_text = _reference_text(RESULT_REFERENCE)
+
+    assert "opscli calculator show" in draft_text
+    assert "opscli calculator validate" in draft_text
+    assert "opscli calculator submit" in draft_text
+    assert "opscli calculator list" in result_text
+    assert "opscli calculator detail" in result_text
+    assert "opscli calculator copy" in result_text
+    assert "新的空目录" in result_text
+
+
 def test_new_product_calculator_skill_guides_dropdown_workflow():
-    text = _skill_text()
+    text = _full_skill_text()
 
     assert "opscli calculator" in text
     assert "search-category" in text
@@ -42,7 +84,7 @@ def test_new_product_calculator_skill_guides_dropdown_workflow():
 
 
 def test_new_product_calculator_skill_guides_second_stage_draft_completion():
-    text = _skill_text()
+    text = _full_skill_text()
 
     assert "第二阶段草稿补全" in text
     assert "pick_up_province" in text
@@ -73,13 +115,13 @@ def test_new_product_calculator_skill_guides_second_stage_draft_completion():
 
 
 def test_new_product_calculator_skill_json_example_passes_real_validation():
-    draft = _first_json_example(_skill_text())
+    draft = _first_json_example(_reference_text(DRAFT_REFERENCE))
 
     assert validate_draft_data(draft) == []
 
 
 def test_new_product_calculator_skill_prevents_draft_overwrite():
-    text = _skill_text()
+    text = _full_skill_text()
 
     assert "输出目录必须是新的空目录" in text
     assert "不得覆盖已有 draft.json" in text
@@ -88,7 +130,7 @@ def test_new_product_calculator_skill_prevents_draft_overwrite():
 
 
 def test_new_product_calculator_skill_routes_failures_to_ops_feedback():
-    text = _skill_text()
+    text = _full_skill_text()
 
     assert "REQUIRED SUB-SKILL" in text
     assert "ops-feedback" in text
@@ -98,7 +140,7 @@ def test_new_product_calculator_skill_routes_failures_to_ops_feedback():
 
 
 def test_new_product_calculator_skill_requires_polaris_auth_preflight():
-    text = _skill_text()
+    text = _full_skill_text()
 
     assert "需要北极星 Polaris 权限" in text
     assert "opscli auth token status" in text
@@ -109,7 +151,7 @@ def test_new_product_calculator_skill_requires_polaris_auth_preflight():
 
 
 def test_new_product_calculator_skill_guides_result_query_workflow():
-    text = _skill_text()
+    text = _full_skill_text()
 
     assert "查询最终试算结果" in text
     assert "calculator detail --task-code" in text
@@ -126,6 +168,23 @@ def test_new_product_calculator_skill_guides_result_query_workflow():
     assert "Web详情页" in text
     assert "unexpected extra argument" in text
     assert "不要在回复中泄露完整 JWT/Cookie" in text
+
+
+def test_new_product_calculator_skill_documents_web_routes():
+    main_text = _skill_text()
+    draft_text = _reference_text(DRAFT_REFERENCE)
+    result_text = _reference_text(RESULT_REFERENCE)
+
+    create_url = "https://bi.xenkee.com/#/newProductCalculator"
+    list_url = "https://bi.xenkee.com/#/calculatorResultList"
+    detail_url = "https://bi.xenkee.com/#/calculatorDatail?task_code=<TASK_CODE>&sudo=<SUDO>"
+
+    assert create_url in main_text
+    assert list_url in main_text
+    assert detail_url in main_text
+    assert create_url in draft_text
+    assert list_url in result_text
+    assert detail_url in result_text
 
 
 def test_new_product_calculator_skill_has_version_and_manifest_entry():

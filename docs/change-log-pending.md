@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-06 ops-new-product-calculator - Skill 渐进式拆分
+
+**变更原因**：主 `SKILL.md` 混合核心流程与分支细节，且未覆盖 `show` / `copy`，需降低上下文占用并补齐入口。
+**改动点**：增加渐进式加载、三类入口、`show` / `copy`、主文件行数和版本不变契约测试；精简主 `SKILL.md`，新增 `references/draft-workflow.md` 与 `references/result-workflow.md`，分别承载草稿字段细节和结果查询细节；补充线上创建页、列表页和结果详情页路由。
+**验证结果**：RED 阶段聚焦测试按预期失败于主 `SKILL.md` 为 318 行、超过 220 行上限（`1 failed`）；GREEN 阶段 `tests/skills/test_ops_new_product_calculator_skill.py` 通过（`10 passed`），与 `tests/skills/test_ops_feedback_template.py` 的相关回归通过（`16 passed`）。补充 Web 路由前，新增契约按预期失败于主 Skill 缺少创建页 URL（`1 failed`）；补充后路由契约通过（`1 passed`），相关回归通过（`17 passed`）。主文件最终为 107 行，`VERSION.json` 无差异。逐文件运行 `tests/skills/test_*.py` 时，仓库既有的 `test_manager.py`、`test_ops_dataset_query_search.py`、`test_ops_methods_card_xlsx_preview.py`、`test_packaging.py`、`test_updater.py` 仍因旧版本断言、硬编码 Linux 路径、缺失模板文件、mock 未覆盖新 endpoint 或未收集测试而失败，均不涉及本次变更文件。
+**影响范围**：仅新品计算器 Skill 文档和对应契约测试；不修改 calculator CLI。
+**回滚方式**：回退对应测试、Skill 参考文件、主 `SKILL.md` 和本条记录。
+---
+
 ## 2026-07-06 ops-new-product-calculator - 强化详情结果完整表格回复
 
 **变更原因**：实际使用 Skill 查询新品计算器详情时，Agent 会把 CLI 已输出的完整“试算结果”表格压缩成“方案/毛利/毛利率”三列，导致用户看不到售价、采购价、头程、仓储、尾程、广告、佣金、退款和固定成本等关键费用明细。
