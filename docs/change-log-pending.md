@@ -2413,3 +2413,14 @@
 **影响范围**：仅 amazon 抓取模块；现有 CLI/manager 接口与测试不变（均 mock scraper）。默认不使用代理，需在 config.ini/环境变量显式配置后生效。
 **回滚方式**：git 还原 `opscli/amazon/scraping/scraper.py`、`opscli/amazon/domain/models.py`，删除 `opscli/amazon/config.py`。
 ---
+
+## 2026-07-07 query/mcp - 临时屏蔽 catalog 与 intent 调用入口
+
+**变更原因**：按用户要求，临时屏蔽 dataset catalog（业务语义索引）与 intent（自然语言意图匹配）两个能力的对外调用入口，使其不可调用（CLI + MCP 双入口）。
+**改动点**：
+- `opscli/query/commands/cli.py`：注释掉 `@app.command("catalog")` 与 `@app.command("intent")` 装饰器（函数体保留，未注册到 Typer）。
+- `opscli/mcp/tools/query.py`：在 `_ALL_TOOLS` 注册列表中注释掉 `query_catalog` 与 `query_intent_match` 两项（函数体保留，未注册到 FastMCP）。
+**验证结果**：从源码导入验证——CLI 命令列表为 `['preferences', 'metadata', 'run', 'chart', 'chart-doc', 'build', 'simple']`（catalog/intent 已消失）；MCP `_ALL_TOOLS` 中已无 `query_catalog`/`query_intent_match`。另：验证过程中 `uv run` 自动同步项目环境，`.venv` 已从打包版 v0.0.91 替换为本地源码可编辑安装 v0.0.129，`opscli query --help` 实测两命令已消失，屏蔽在本机立即生效。
+**影响范围**：`opscli query catalog`、`opscli query intent` 命令及 MCP 工具 `query_catalog`、`query_intent_match` 在源码构建版本中不可调用；`manager.catalog()`/`intent_match()` 底层方法未删除，其他命令不受影响。
+**回滚方式**：取消上述两处文件中带【临时屏蔽】标记的注释即可恢复。
+---

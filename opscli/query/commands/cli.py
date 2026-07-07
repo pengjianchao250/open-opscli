@@ -92,7 +92,8 @@ def metadata(
     _emit(payload, pretty)
 
 
-@app.command("catalog")
+# 【临时屏蔽】catalog 命令暂停对外暴露，恢复时取消下一行注释即可
+# @app.command("catalog")
 def catalog(
     source: str = typer.Option("remote", "--source", help="数据来源: remote 或 local"),
     fallback_local: bool = typer.Option(True, "--fallback-local/--no-fallback-local", help="远端失败时回退本地缓存"),
@@ -120,7 +121,8 @@ def catalog(
     _emit(payload, pretty)
 
 
-@app.command("intent")
+# 【临时屏蔽】intent 命令暂停对外暴露，恢复时取消下一行注释即可
+# @app.command("intent")
 def intent(
     query: str = typer.Option(..., "--query", "-q", help="自然语言查询需求"),
     source: str = typer.Option("remote", "--source", help="数据来源: remote 或 local"),
