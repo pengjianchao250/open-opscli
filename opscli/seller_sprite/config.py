@@ -26,6 +26,8 @@ ENV_BROWSER_CHANNEL = "OPSCLI_SELLER_SPRITE_BROWSER_CHANNEL"
 ENV_BROWSER_TASK_INTERVAL_SECONDS = "OPSCLI_SELLER_SPRITE_BROWSER_TASK_INTERVAL_SECONDS"
 ENV_BROWSER_COOLDOWN_SECONDS = "OPSCLI_SELLER_SPRITE_BROWSER_COOLDOWN_SECONDS"
 ENV_BROWSER_PAGE_PREPARE = "OPSCLI_SELLER_SPRITE_BROWSER_PAGE_PREPARE"
+ENV_BROWSER_CAPTCHA_OCR_ENABLED = "OPSCLI_SELLER_SPRITE_BROWSER_CAPTCHA_OCR_ENABLED"
+ENV_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS = "OPSCLI_SELLER_SPRITE_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS"
 
 DEFAULT_ACCOUNT_NAME = "default"
 DEFAULT_PAGE_SIZE = 100
@@ -38,6 +40,7 @@ DEFAULT_BROWSER_PROFILE_DIR = CONFIG_DIR / "seller_sprite" / "browser_profiles"
 DEFAULT_BROWSER_RUNTIME = "patchright"
 DEFAULT_BROWSER_TASK_INTERVAL_SECONDS = 5.0
 DEFAULT_BROWSER_COOLDOWN_SECONDS = 10.0
+DEFAULT_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS = 2
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,8 @@ class SellerSpriteSettings:
     browser_task_interval_seconds: float = DEFAULT_BROWSER_TASK_INTERVAL_SECONDS
     browser_cooldown_seconds: float = DEFAULT_BROWSER_COOLDOWN_SECONDS
     browser_page_prepare: bool = True
+    browser_captcha_ocr_enabled: bool = True
+    browser_captcha_ocr_max_attempts: int = DEFAULT_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS
 
     def to_public_dict(self) -> dict[str, Any]:
         """返回不包含敏感字段的配置摘要。"""
@@ -107,6 +112,11 @@ def load_settings() -> SellerSpriteSettings:
             DEFAULT_BROWSER_COOLDOWN_SECONDS,
         ),
         browser_page_prepare=_parse_bool(values.get(ENV_BROWSER_PAGE_PREPARE), True),
+        browser_captcha_ocr_enabled=_parse_bool(values.get(ENV_BROWSER_CAPTCHA_OCR_ENABLED), True),
+        browser_captcha_ocr_max_attempts=_parse_int(
+            values.get(ENV_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS),
+            DEFAULT_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS,
+        ),
     )
 
 
@@ -129,6 +139,8 @@ def _load_env_values() -> dict[str, str]:
         ENV_BROWSER_TASK_INTERVAL_SECONDS,
         ENV_BROWSER_COOLDOWN_SECONDS,
         ENV_BROWSER_PAGE_PREPARE,
+        ENV_BROWSER_CAPTCHA_OCR_ENABLED,
+        ENV_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS,
     ]:
         value = os.environ.get(key)
         if value:

@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-07 seller_sprite - 清理 browser-route 耗时日志
+
+**变更原因**：卖家精灵 browser-route 阶段耗时以 warning 写入 MCP 进程日志，生产部署时会刷屏并干扰 MCP 整体信息输出。
+**改动点**：移除 `opscli/seller_sprite/browser_route/worker.py` 中 `_record_timing()` 的逐阶段 warning 日志输出，保留内部 `timings` 结构用于任务结果诊断。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/seller_sprite/test_browser_route_worker.py -q` 通过，`29 passed in 1.23s`。
+**影响范围**：仅影响 browser-route 阶段耗时的进程日志输出；不改变卖家精灵请求、重试、验证码处理和结果结构。
+**回滚方式**：恢复 `_record_timing()` 中的 logger warning 输出，并恢复对应 import。
+---
+
 ## 2026-07-06 ops-new-product-calculator - Skill 渐进式拆分
 
 **变更原因**：主 `SKILL.md` 混合核心流程与分支细节，且未覆盖 `show` / `copy`，需降低上下文占用并补齐入口。
