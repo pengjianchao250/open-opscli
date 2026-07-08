@@ -279,7 +279,11 @@ class AsinDataCollector:
                 asin = str(asin_result.get("asin") or "").strip().upper()
                 if not asin:
                     continue
-                asin_bundle = self.bi_report_data_client.fetch(asins=[asin])
+                asin_bundle = self.bi_report_data_client.fetch(
+                    asins=[asin],
+                    start_date=args.sales_start,
+                    end_date=args.sales_end,
+                )
                 bundles[asin] = asin_bundle
                 self._attach_bi_report_data([asin_result], asin_bundle, error_log)
             return self._merge_per_asin_bi_report_data(bundles, asins=asins)

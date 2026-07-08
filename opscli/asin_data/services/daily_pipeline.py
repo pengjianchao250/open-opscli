@@ -315,7 +315,11 @@ class DailyAsinDataPipeline:
             )
         bundles = {}
         for asin in asins:
-            bundles[asin] = self.collector.bi_report_data_client.fetch(asins=[asin])
+            bundles[asin] = self.collector.bi_report_data_client.fetch(
+                asins=[asin],
+                start_date=args.sales_start,
+                end_date=args.sales_end,
+            )
         return self.collector._merge_per_asin_bi_report_data(bundles, asins=asins)
 
     def _run_basic_stage(self, args: Any, records: list[dict[str, Any]], paths: DailyStagePaths, command_log: Any, error_log: Any) -> list[dict[str, Any]]:

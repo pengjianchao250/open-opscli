@@ -102,6 +102,35 @@ opscli asin-data collect \
   --pretty
 ```
 
+### Live Internal Listing/BI Data
+
+Use this when the user needs real-time internal listing/basic BI data returned directly, especially with a sales date range.
+
+```bash
+opscli asin-data live-data \
+  --asin B0BY8Y5766 \
+  --site US \
+  --sales-start 2026-05-01 \
+  --sales-end 2026-05-31 \
+  --pretty
+```
+
+`live-data` writes the usual local files but returns `frontend-data.json` inline as `data.frontend_data`. It also returns the freshly generated basic and BI split files as `data.split_files.<ASIN>.basic.content` and `data.split_files.<ASIN>.bi.content`; the xlsx content uses the same `{sheet_name: [rows]}` shape as `fetch-file`. It defaults to ASIN report/listing interfaces, skips legacy Query, and disables report-file lookup, zip upload, SellerSprite, Amazon scrape, and Rufus by default. Use `--no-skip-query` only when you explicitly need the legacy Query path.
+
+Add `--upload-xlsx` when the caller needs OSS xlsx URLs for the current run:
+
+```bash
+opscli asin-data live-data \
+  --asin B0BY8Y5766 \
+  --site US \
+  --sales-start 2026-05-01 \
+  --sales-end 2026-05-31 \
+  --upload-xlsx \
+  --pretty
+```
+
+When enabled, `basic` and `bi` are uploaded with stable ASCII filenames like `<ASIN>-basic-live-data.xlsx`; each item includes `file_url`, and the compact URL map is also returned under `data.split_file_urls`.
+
 ### Query-Only Validation
 
 Use this when the user only wants BI/crawler data or wants a fast internal-data check.
@@ -201,6 +230,9 @@ Key response fields:
 | `data.output_dir` | run output directory |
 | `data.summary` | compact run counts |
 | `data.manifest` | full run manifest |
+| `data.frontend_data` | inline frontend-friendly JSON, returned by `live-data` |
+| `data.split_files` | live-data inline basic/BI split file content by ASIN; each content value is `{sheet_name: [rows]}` |
+| `data.split_file_urls` | compact OSS URL map returned by `live-data --upload-xlsx`, keyed by ASIN and file key |
 | `data.upload` | uploaded `<ASIN>-asin-data-report.txt` metadata when upload succeeds |
 | `data.report_file_url` | single-ASIN report URL from `/dataMetrics/v1/asin-report-files`, when available |
 | `data.aliyun_url` | `data.report_file_url` when available, otherwise uploaded report txt URL |

@@ -132,7 +132,13 @@ class AsinBiReportDataClient:
         self.ops_url = _report_files_base_url(ops_url or OPS_URL)
         self._listing_auth_cache: tuple[dict[str, str], dict[str, str]] | None = None
 
-    def fetch(self, *, asins: Sequence[str]) -> dict[str, Any]:
+    def fetch(
+        self,
+        *,
+        asins: Sequence[str],
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict[str, Any]:
         normalized_asins = normalize_asins(asins)
         if not normalized_asins:
             raise ValueError("asins must not be empty")
@@ -157,6 +163,8 @@ class AsinBiReportDataClient:
                 key=key,
                 config=config,
                 asins=normalized_asins,
+                start_date=start_date,
+                end_date=end_date,
                 headers=headers,
                 cookies=cookies,
             )
@@ -175,6 +183,8 @@ class AsinBiReportDataClient:
         key: str,
         config: dict[str, str],
         asins: list[str],
+        start_date: str | None,
+        end_date: str | None,
         headers: dict[str, str],
         cookies: dict[str, str],
     ) -> dict[str, Any]:
@@ -213,12 +223,16 @@ class AsinBiReportDataClient:
                     key=key,
                     config=config,
                     asins=asins,
+                    start_date=start_date,
+                    end_date=end_date,
                     headers=headers,
                     cookies=cookies,
                 )
+            params = {"asins": ",".join(asins)}
+            params.update(_date_range_params(start_date=start_date, end_date=end_date))
             response = self.http_get(
                 self._resolve_endpoint(endpoint),
-                params={"asins": ",".join(asins)},
+                params=params,
                 headers=headers,
                 cookies=cookies,
                 timeout=DEFAULT_TIMEOUT,
@@ -305,6 +319,8 @@ class AsinBiReportDataClient:
         key: str,
         config: dict[str, str],
         asins: list[str],
+        start_date: str | None,
+        end_date: str | None,
         headers: dict[str, str],
         cookies: dict[str, str],
     ) -> dict[str, Any]:
@@ -314,9 +330,11 @@ class AsinBiReportDataClient:
         errors: list[str] = []
         for asin in asins:
             try:
+                body = {"asin": asin}
+                body.update(_date_range_params(start_date=start_date, end_date=end_date))
                 response = httpx.post(
                     self._resolve_endpoint(config["endpoint"]),
-                    json={"asin": asin},
+                    json=body,
                     headers=headers,
                     cookies=cookies,
                     timeout=DEFAULT_TIMEOUT,
@@ -716,6 +734,13 @@ def normalize_asins(asins: Sequence[str]) -> list[str]:
 
 def normalize_asin(value: Any) -> str:
     return str(value or "").strip().upper()
+
+
+def _date_range_params(*, start_date: str | None, end_date: str | None) -> dict[str, str]:
+    """构造后端 ASIN BI 接口支持的日期范围参数。"""
+    if not start_date or not end_date:
+        return {}
+    return {"start_date": start_date, "end_date": end_date}
 
 
 def _source_configs(endpoints: Mapping[str, str] | None) -> dict[str, dict[str, str]]:

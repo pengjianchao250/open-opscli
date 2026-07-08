@@ -6,7 +6,7 @@ version: 0.1.3
 
 # ops-asin-data-collector
 
-Codex-facing wrapper for the official `opscli asin-data` commands. Use `collect` to collect one or more ASINs into a unified data package containing SellerSprite, Amazon scrape, BI sales, crawler Listing, Rufus, and frontend-facing outputs. Use `report-url` when the user only needs an existing ASIN report file URL.
+Codex-facing wrapper for the official `opscli asin-data` commands. Use `collect` to collect one or more ASINs into a unified data package containing SellerSprite, Amazon scrape, BI sales, crawler Listing, Rufus, and frontend-facing outputs. Use `live-data` when the user needs real-time internal listing/BI data returned inline by date range. Use `report-url` when the user only needs an existing ASIN report file URL.
 
 ## Trigger Scope
 
@@ -24,14 +24,15 @@ Do not use this Skill for final report writing, Listing 文案改写、价格/�
 
 1. Read `references/codex-usage.md` before constructing the command.
 2. If the request is only to query an existing ASIN report URL, use `opscli asin-data report-url --asin <ASIN> --site <SITE> --url-only` and do not run the full collection workflow.
-3. Confirm exactly one input source:
+3. If the request is real-time internal listing/BI data with optional date range, use `opscli asin-data live-data ... --sales-start <YYYY-MM-DD> --sales-end <YYYY-MM-DD> --pretty`.
+4. Confirm exactly one input source:
    - file mode: `--input <csv|xlsx|json|jsonl>`
    - single mode: `--asin <ASIN>` with optional repeated `--keyword`
-4. For real collection, first check auth with `opscli auth token status`.
-5. Run `opscli asin-data collect ... --dry-run --pretty` unless the user explicitly asks to execute immediately.
-6. After dry-run review, run the same command without `--dry-run`.
-7. Return the `output_dir`, `frontend-data.json`, `frontend-data.html`, `frontend-data.md`, and JSON `aliyun_url` when present.
-8. If any `opscli` command fails, immediately submit `ops-feedback` according to project rules, then continue with the user task where possible.
+5. For real collection, first check auth with `opscli auth token status`.
+6. Run `opscli asin-data collect ... --dry-run --pretty` unless the user explicitly asks to execute immediately.
+7. After dry-run review, run the same command without `--dry-run`.
+8. Return the `output_dir`, `frontend-data.json`, `frontend-data.html`, `frontend-data.md`, and JSON `aliyun_url` when present.
+9. If any `opscli` command fails, immediately submit `ops-feedback` according to project rules, then continue with the user task where possible.
 
 ## Quick Start
 
@@ -55,6 +56,29 @@ opscli asin-data collect \
   --asin B0BY8Y5766 \
   --site US \
   --keyword "bed frame" \
+  --pretty
+```
+
+Real-time internal listing/BI data:
+
+```bash
+opscli asin-data live-data \
+  --asin B0BY8Y5766 \
+  --site US \
+  --sales-start 2026-05-01 \
+  --sales-end 2026-05-31 \
+  --pretty
+```
+
+Real-time internal listing/BI data with OSS xlsx URLs:
+
+```bash
+opscli asin-data live-data \
+  --asin B0BY8Y5766 \
+  --site US \
+  --sales-start 2026-05-01 \
+  --sales-end 2026-05-31 \
+  --upload-xlsx \
   --pretty
 ```
 
@@ -137,6 +161,7 @@ Main files:
 - `asin-data.jsonl`: one normalized record per ASIN, including `frontend_data`.
 - `frontend-data.json`: aggregate frontend-friendly JSON with Chinese section names.
 - `frontend-data.html`: local human-readable HTML handoff; upload is not used because the file service rejects html.
+- `live-data`: defaults to ASIN report/listing interfaces and skips legacy Query; it returns the same frontend JSON inline in `data.frontend_data`, and returns real-time local split file content in `data.split_files.<ASIN>.basic.content` and `data.split_files.<ASIN>.bi.content`; each xlsx content uses the same `{sheet_name: [rows]}` shape as `fetch-file`. Add `--upload-xlsx` to upload the current basic/BI xlsx files with stable ASCII filenames and return OSS URLs in `data.split_files.<ASIN>.<basic|bi>.file_url` and `data.split_file_urls`.
 - `<ASIN>-asin-data-report.txt`: UTF-8 BOM report uploaded by default when `--upload` is enabled.
 - `--fetch-report-files`: before real collection, fetches the latest report URL from `/dataMetrics/v1/asin-report-files?asin=...&site=...`; missing URL fails the command with a `取数服务异常` error.
 - `frontend-data.md`: local Markdown handoff for operators.

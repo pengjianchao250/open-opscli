@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+import shutil
+from io import BytesIO
 from enum import Enum
+from pathlib import Path
+from typing import Any
 
 import httpx
 import typer
@@ -24,6 +28,7 @@ from opscli.asin_data.services.split_package_builder import (
     FILE_FIELD_MAP,
     SPLIT_FILE_KEYS,
 )
+from opscli.shared.file_uploads import FileUploadClient
 
 
 
@@ -86,6 +91,108 @@ def _error_payload(command: str, exc: Exception) -> dict:
     else:
         error = {"code": "ASIN_DATA_ERROR", "message": str(exc)}
     return {"success": False, "command": command, "data": None, "error": error}
+
+
+def _load_frontend_data(output_dir: str) -> dict[str, Any]:
+    """读取本次实时采集生成的前端 JSON 数据。"""
+    frontend_path = Path(output_dir) / "frontend-data.json"
+    return json.loads(frontend_path.read_text(encoding="utf-8"))
+
+
+def _load_live_split_files(result: dict[str, Any], file_keys: tuple[str, ...] = ("basic", "bi")) -> dict[str, dict[str, Any]]:
+    """读取实时采集生成的 ASIN 拆包文件内容。"""
+    manifest = result.get("manifest") if isinstance(result.get("manifest"), dict) else {}
+    package = manifest.get("asin_data_package") if isinstance(manifest.get("asin_data_package"), dict) else {}
+    items = package.get("items") if isinstance(package.get("items"), list) else []
+    split_files: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        asin = str(item.get("asin") or "").strip().upper()
+        files = item.get("files") if isinstance(item.get("files"), dict) else {}
+        if not asin:
+            continue
+        asin_files: dict[str, Any] = {}
+        for file_key in file_keys:
+            path_text = files.get(file_key)
+            if not isinstance(path_text, str) or not path_text.strip():
+                continue
+            path = Path(path_text)
+            asin_files[file_key] = {
+                "asin": asin,
+                "file_key": file_key,
+                "file_path": path.as_posix(),
+                "content": _read_local_split_file_content(path, file_key),
+            }
+        if asin_files:
+            split_files[asin] = asin_files
+    return split_files
+
+
+def _read_local_split_file_content(path: Path, file_key: str) -> Any:
+    """读取本地拆包文件，并返回与 fetch-file 一致的结构化内容。"""
+    if file_key == "rufus":
+        return path.read_text(encoding="utf-8", errors="replace")
+    return _read_xlsx_content(path)
+
+
+def _upload_live_split_files(split_files: dict[str, dict[str, Any]], *, run_id: str) -> dict[str, Any]:
+    """上传实时 basic/bi xlsx，并把 OSS 地址写回 split_files。"""
+    client = FileUploadClient()
+    items: list[dict[str, Any]] = []
+    files_uploaded = 0
+    for asin, files in split_files.items():
+        uploaded: dict[str, Any] = {}
+        for file_key in ("basic", "bi"):
+            file_item = files.get(file_key)
+            if not isinstance(file_item, dict):
+                continue
+            path_text = file_item.get("file_path")
+            if not isinstance(path_text, str) or not path_text.strip():
+                continue
+            path = Path(path_text)
+            upload_path = path.with_name(f"{asin}-{file_key}-live-data.xlsx")
+            if upload_path != path:
+                shutil.copyfile(path, upload_path)
+            upload = client.upload(
+                upload_path,
+                purpose="asin_data_live_xlsx",
+                folder="asin-data",
+                public="1",
+                metadata={
+                    "run_id": run_id,
+                    "asin": asin,
+                    "file_key": file_key,
+                    "report_filename": upload_path.name,
+                    "source_filename": path.name,
+                    "source": "asin-data live-data",
+                },
+            )
+            file_item["file_url"] = upload.url
+            file_item["upload"] = {"url": upload.url, "raw": upload.raw}
+            uploaded[file_key] = {
+                "url": upload.url,
+                "file_name": upload_path.name,
+                "file_path": path.as_posix(),
+                "upload_path": upload_path.as_posix(),
+            }
+            files_uploaded += 1
+        items.append({"asin": asin, "files": uploaded})
+    return {"files_uploaded": files_uploaded, "items": items}
+
+
+def _split_file_urls(split_files: dict[str, dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """从 split_files 中提取轻量 OSS URL 映射。"""
+    urls: dict[str, dict[str, str]] = {}
+    for asin, files in split_files.items():
+        asin_urls = {
+            file_key: str(file_item.get("file_url"))
+            for file_key, file_item in files.items()
+            if isinstance(file_item, dict) and file_item.get("file_url")
+        }
+        if asin_urls:
+            urls[asin] = asin_urls
+    return urls
 
 
 @app.command("report-url")
@@ -292,23 +399,20 @@ def fetch_file(
 
 
 def _download_file_content(url: str, file_key: str) -> Any:
-    """Download a split package file and return structured content.
-
-    xlsx files are converted to {sheet_name: [rows]} JSON; markdown files are
-    returned as plain text. This lets the AI consume file content without
-    parsing xlsx itself.
-    """
+    """下载拆包文件，并返回结构化内容。"""
     response = httpx.get(url, timeout=60, follow_redirects=True)
     response.raise_for_status()
     raw = response.content
     if file_key == "rufus":
         return raw.decode("utf-8", errors="replace")
-    # xlsx -> {sheet: [rows]}
-    from io import BytesIO
+    return _read_xlsx_content(BytesIO(raw))
 
+
+def _read_xlsx_content(source: Any) -> dict[str, list[list[Any]]]:
+    """将 xlsx 转为 fetch-file 使用的 {sheet_name: [rows]} JSON 结构。"""
     from openpyxl import load_workbook
 
-    wb = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+    wb = load_workbook(source, read_only=True, data_only=True)
     sheets: dict[str, list[list[Any]]] = {}
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
@@ -316,6 +420,86 @@ def _download_file_content(url: str, file_key: str) -> Any:
         sheets[sheet_name] = rows
     wb.close()
     return sheets
+
+
+@app.command("live-data")
+def live_data(
+    input_path: str | None = typer.Option(None, "--input", "-i", help="CSV/XLSX/JSON/JSONL 输入文件"),
+    asin: str | None = typer.Option(None, "--asin", help="单个 ASIN；与 --input 二选一"),
+    keywords: list[str] | None = typer.Option(None, "--keyword", help="单个 ASIN 的关键词，可重复传入"),
+    asin_column: str = typer.Option("asin", "--asin-column", help="ASIN 列名"),
+    keyword_column: str = typer.Option("keyword", "--keyword-column", help="关键词列名"),
+    site_column: str = typer.Option("site", "--site-column", help="站点列名"),
+    site: str = typer.Option("US", "--site", help="默认站点"),
+    output_dir: str = typer.Option("output/asin-data", "--output-dir", help="输出目录"),
+    run_id: str | None = typer.Option(None, "--run-id", help="本次运行 ID"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只生成计划与前端文件，不执行远程取数"),
+    skip_query: bool = typer.Option(True, "--skip-query/--no-skip-query", help="跳过旧 BI query 取数；live-data 默认走实时接口"),
+    skip_bi_report_data: bool = typer.Option(False, "--skip-bi-report-data", help="跳过 ASIN 报告 BI 接口取数"),
+    skip_sales_query: bool = typer.Option(False, "--skip-sales-query", help="跳过销售数据 query"),
+    skip_crawler_query: bool = typer.Option(False, "--skip-crawler-query", help="跳过旧爬虫 Listing query"),
+    legacy_crawler_query: bool = typer.Option(False, "--legacy-crawler-query", help="启用旧爬虫 Listing query"),
+    sales_table_id: int | None = typer.Option(None, "--sales-table-id", help="BI 销售数据 table_id"),
+    sales_dataset_alias: str = typer.Option("ds_d35ac6f3910c", "--sales-dataset-alias", help="BI 销售数据 dataset alias"),
+    sales_field_mode: FieldMode = typer.Option(FieldMode.full, "--sales-field-mode", help="销售字段模式"),
+    sales_start: str | None = typer.Option(None, "--sales-start", help="销售开始日期"),
+    sales_end: str | None = typer.Option(None, "--sales-end", help="销售结束日期"),
+    query_chunk_size: int = typer.Option(100, "--query-chunk-size", min=1, help="query 每批 ASIN 数量"),
+    crawler_table_id: int | None = typer.Option(None, "--crawler-table-id", help="爬虫 Listing table_id"),
+    crawler_dataset_alias: str = typer.Option("ds_icw50TLOFu4F", "--crawler-dataset-alias", help="爬虫 Listing dataset alias"),
+    crawler_field_mode: FieldMode = typer.Option(FieldMode.full, "--crawler-field-mode", help="爬虫 Listing 字段模式"),
+    upload_xlsx: bool = typer.Option(False, "--upload-xlsx/--no-upload-xlsx", help="上传实时生成的基础/BI xlsx 到 OSS 并返回 file_url"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """实时获取 ASIN 基础刊登数据与 BI 数据，并直接返回前端 JSON。"""
+    try:
+        result = AsinDataCollector().collect(
+            input=input_path,
+            asin=asin,
+            keywords=keywords,
+            asin_column=asin_column,
+            keyword_column=keyword_column,
+            site_column=site_column,
+            site=site,
+            output_dir=output_dir,
+            run_id=run_id,
+            dry_run=dry_run,
+            skip_seller_sprite=True,
+            skip_keyword_miner=True,
+            skip_listing_analysis=True,
+            skip_amazon=True,
+            skip_query=skip_query,
+            skip_bi_report_data=skip_bi_report_data,
+            skip_sales_query=skip_sales_query,
+            skip_crawler_query=(skip_crawler_query or not legacy_crawler_query),
+            skip_rufus=True,
+            sales_table_id=sales_table_id,
+            sales_dataset_alias=sales_dataset_alias,
+            sales_field_mode=sales_field_mode.value,
+            sales_start=sales_start,
+            sales_end=sales_end,
+            query_chunk_size=query_chunk_size,
+            crawler_table_id=crawler_table_id,
+            crawler_dataset_alias=crawler_dataset_alias,
+            crawler_field_mode=crawler_field_mode.value,
+            fetch_report_files=False,
+            upload=False,
+        )
+        result["frontend_data"] = _load_frontend_data(str(result["output_dir"]))
+        result["split_files"] = _load_live_split_files(result)
+        if upload_xlsx:
+            manifest = result.get("manifest") if isinstance(result.get("manifest"), dict) else {}
+            run_id_for_upload = str(manifest.get("run_id") or Path(str(result["output_dir"])).name)
+            result["split_file_uploads"] = _upload_live_split_files(
+                result["split_files"],
+                run_id=run_id_for_upload,
+            )
+            result["split_file_urls"] = _split_file_urls(result["split_files"])
+    except Exception as exc:
+        _emit(_error_payload("asin-data live-data", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit({"success": True, "command": "asin-data live-data", "data": result, "error": None}, pretty)
 
 
 @app.command("collect")
