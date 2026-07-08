@@ -12,6 +12,11 @@ from typing import Any
 import httpx
 import typer
 
+from opscli.asin_data.services.bi_report_data import (
+    BASIC_REPORT_SOURCE_KEYS,
+    BI_ONLY_REPORT_SOURCE_KEYS,
+    LISTING_REPORT_SOURCE_KEYS,
+)
 from opscli.asin_data.services.collector import (
     DEFAULT_LISTING_ANALYSIS_POLL_ATTEMPTS,
     DEFAULT_LISTING_ANALYSIS_POLL_INTERVAL_SECONDS,
@@ -68,6 +73,16 @@ class FileKey(str, Enum):
     keyword_miner = "keyword_miner"
     competitor = "competitor"
     rufus = "rufus"
+
+
+class LiveDataScope(str, Enum):
+    """实时数据范围。"""
+
+    all = "all"
+    basic = "basic"
+    bi = "bi"
+    listing = "listing"
+    listing_basic = "listing_basic"
 
 
 app = typer.Typer(help="ASIN 批量取数服务")
@@ -193,6 +208,26 @@ def _split_file_urls(split_files: dict[str, dict[str, Any]]) -> dict[str, dict[s
         if asin_urls:
             urls[asin] = asin_urls
     return urls
+
+
+def _live_data_source_keys(scope: LiveDataScope) -> tuple[str, ...] | None:
+    """把 live-data 范围参数映射到实时 BI 接口 source key。"""
+    if scope == LiveDataScope.basic:
+        return BASIC_REPORT_SOURCE_KEYS
+    if scope in {LiveDataScope.listing, LiveDataScope.listing_basic}:
+        return LISTING_REPORT_SOURCE_KEYS
+    if scope == LiveDataScope.bi:
+        return BI_ONLY_REPORT_SOURCE_KEYS
+    return None
+
+
+def _live_data_file_keys(scope: LiveDataScope) -> tuple[str, ...]:
+    """把 live-data 范围参数映射到需要返回/上传的拆包文件。"""
+    if scope in {LiveDataScope.basic, LiveDataScope.listing, LiveDataScope.listing_basic}:
+        return ("basic",)
+    if scope == LiveDataScope.bi:
+        return ("bi",)
+    return ("basic", "bi")
 
 
 @app.command("report-url")
@@ -448,11 +483,14 @@ def live_data(
     crawler_table_id: int | None = typer.Option(None, "--crawler-table-id", help="爬虫 Listing table_id"),
     crawler_dataset_alias: str = typer.Option("ds_icw50TLOFu4F", "--crawler-dataset-alias", help="爬虫 Listing dataset alias"),
     crawler_field_mode: FieldMode = typer.Option(FieldMode.full, "--crawler-field-mode", help="爬虫 Listing 字段模式"),
+    data_scope: LiveDataScope = typer.Option(LiveDataScope.all, "--data-scope", help="实时数据范围：all=基础+BI，basic=完整基础(刊登+爬虫)，listing/listing_basic=仅刊登，bi=仅BI"),
     upload_xlsx: bool = typer.Option(False, "--upload-xlsx/--no-upload-xlsx", help="上传实时生成的基础/BI xlsx 到 OSS 并返回 file_url"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
 ) -> None:
     """实时获取 ASIN 基础刊登数据与 BI 数据，并直接返回前端 JSON。"""
     try:
+        source_keys = _live_data_source_keys(data_scope)
+        file_keys = _live_data_file_keys(data_scope)
         result = AsinDataCollector().collect(
             input=input_path,
             asin=asin,
@@ -478,6 +516,7 @@ def live_data(
             sales_field_mode=sales_field_mode.value,
             sales_start=sales_start,
             sales_end=sales_end,
+            bi_report_source_keys=source_keys,
             query_chunk_size=query_chunk_size,
             crawler_table_id=crawler_table_id,
             crawler_dataset_alias=crawler_dataset_alias,
@@ -485,8 +524,9 @@ def live_data(
             fetch_report_files=False,
             upload=False,
         )
+        result["data_scope"] = data_scope.value
         result["frontend_data"] = _load_frontend_data(str(result["output_dir"]))
-        result["split_files"] = _load_live_split_files(result)
+        result["split_files"] = _load_live_split_files(result, file_keys=file_keys)
         if upload_xlsx:
             manifest = result.get("manifest") if isinstance(result.get("manifest"), dict) else {}
             run_id_for_upload = str(manifest.get("run_id") or Path(str(result["output_dir"])).name)

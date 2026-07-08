@@ -41,6 +41,28 @@ SHEET_IMAGES = "\u56fe\u7247\u94fe\u63a5"
 SHEET_QA = "QA"
 SHEET_REVIEWS = "\u8bc4\u8bba"
 
+LISTING_SHEET_ALWAYS_OMITTED_FIELDS = {
+    "asin",
+    "\u5173\u952e\u8bcd\u641c\u7d22",
+    "generic_keyword.value",
+    "\u8f93\u5165\u5173\u952e\u8bcd",
+    "\u8f93\u5165\u5173\u952e\u8bcd\u5217\u8868",
+    "\u5173\u952e\u8bcd\u6570\u91cf",
+    "\u5173\u952e\u8bcd\u6765\u6e90",
+    "\u8f93\u5165\u884c\u53f7",
+    "\u6765\u6e90\u6587\u4ef6",
+    "\u4e94\u70b9\u63cf\u8ff0",
+    "\u5e97\u94fa/\u90e8\u95e8",
+    "\u8d1f\u8d23\u4eba",
+    "listid",
+}
+
+LISTING_SHEET_DUPLICATE_FIELDS = {
+    "\u5546\u54c1\u6807\u9898": "\u4ea7\u54c1\u6807\u9898",
+    "\u54c1\u724c": "\u54c1\u724c\u540d",
+    "\u4e3b\u56fe\u94fe\u63a5": "\u4e3b\u56fe",
+}
+
 # file_key -> (db_column, is_multi) mapping for per-file delivery.
 # Each ASIN's split package files are uploaded individually and the OSS URLs
 # are stored in the corresponding column of ops_asin_data_report_files.
@@ -136,41 +158,45 @@ def write_basic_workbook(path: Path, asin_result: dict[str, Any]) -> None:
     product_details = parse_jsonish(first_value(crawler_row, "product_details", "f_product_details", "\u5546\u54c1\u8be6\u60c5")) or {}
     if not isinstance(product_details, dict):
         product_details = {}
-
-    summary_rows = [
-        kv_row("ASIN", asin_result.get("asin")),
-        kv_row("\u7ad9\u70b9", asin_result.get("site")),
-        kv_row("\u8f93\u5165\u5173\u952e\u8bcd", first_value(base, "\u8f93\u5165\u5173\u952e\u8bcd", "\u8f93\u5165\u5173\u952e\u8bcd\u5217\u8868")),
-        kv_row("\u6807\u9898", first_value(crawler_row, "listing", "title", "productTitle", "\u5546\u54c1\u6807\u9898")),
-        kv_row("\u54c1\u724c", first_value(product_details, "Brand Name", "Brand", "\u54c1\u724c") or first_value(crawler_row, "brand", "\u54c1\u724c")),
-        kv_row("\u7c7b\u76ee", first_value(crawler_row, "categories", "f_categories", "\u7c7b\u76ee")),
-        kv_row("\u4e3b\u56fe\u94fe\u63a5", first_value(crawler_row, "image", "f_image", "\u4e3b\u56fe")),
-        kv_row("\u4ef7\u683c", first_value(crawler_row, "price_list", "price", "f_price", "\u4ef7\u683c")),
-        kv_row("\u8bc4\u5206", first_value(crawler_row, "rating", "f_rating", "\u8bc4\u5206")),
-        kv_row("\u8bc4\u8bba\u6570", first_value(crawler_row, "review_count", "rating_count", "f_review_count", "\u8bc4\u8bba\u6570")),
-        kv_row("\u5546\u54c1\u94fe\u63a5", first_value(crawler_row, "link", "f_link", "\u5546\u54c1\u94fe\u63a5")),
-        kv_row("\u5173\u952e\u8bcd\u641c\u7d22", first_value(listing_basic_row, "\u5173\u952e\u8bcd\u641c\u7d22", "generic_keyword.value")),
-    ]
-    write_rows(wb.create_sheet(SHEET_BASIC), summary_rows, ["\u6570\u636e\u9879", "\u503c"])
+    listing_main_image = first_value(
+        listing_basic_row,
+        "\u4e3b\u56fe\u94fe\u63a5",
+        "main_product_image_locator.media_location",
+        "main_image_url",
+    )
+    listing_other_images = first_value(listing_basic_row, "\u5176\u4ed6\u9644\u56fe\u94fe\u63a5")
+    listing_bullets = first_value(listing_basic_row, "\u4e94\u70b9\u63cf\u8ff0")
 
     listing_rows = []
+    listing_omitted_fields = listing_sheet_omitted_fields(listing_basic_row)
     if listing_basic_row:
         listing_rows.extend(
             {"\u6570\u636e\u7c7b\u578b": "\u520a\u767b\u57fa\u7840\u6570\u636e", "\u5b57\u6bb5": key, "\u503c": value}
             for key, value in listing_basic_row.items()
+            if key not in listing_omitted_fields
         )
     if isinstance(base, dict):
-        listing_rows.extend({"\u5b57\u6bb5": key, "\u503c": value} for key, value in base.items() if key not in {"BI\u9500\u552e\u6570\u636e", "\u722c\u866bListing\u6570\u636e", "BI\u63a5\u53e3\u6570\u636e", "\u9519\u8bef\u5217\u8868"})
+        excluded_base_fields = {
+            "BI\u9500\u552e\u6570\u636e",
+            "\u722c\u866bListing\u6570\u636e",
+            "BI\u63a5\u53e3\u6570\u636e",
+            "\u9519\u8bef\u5217\u8868",
+            *listing_omitted_fields,
+        }
+        listing_rows.extend({"\u5b57\u6bb5": key, "\u503c": value} for key, value in base.items() if key not in excluded_base_fields)
     if sales_rows:
         listing_rows.extend(add_row_type(sales_rows, "\u9500\u552e/\u520a\u767b\u5173\u8054\u6570\u636e"))
     write_rows(wb.create_sheet(SHEET_LISTING), listing_rows)
 
     write_rows(wb.create_sheet(SHEET_CRAWLER), legacy_crawler_rows or ([crawler_row] if crawler_row else []))
     write_key_values(wb.create_sheet(SHEET_PRODUCT), product_details)
-    write_rows(wb.create_sheet(SHEET_BULLETS), numbered_rows(as_list(first_value(crawler_row, "five_point_description", "f_five_point_description", "\u4e94\u70b9\u63cf\u8ff0"))), ["\u5e8f\u53f7", "\u5185\u5bb9"])
+    bullet_values = as_list(first_value(crawler_row, "five_point_description", "f_five_point_description", "\u4e94\u70b9\u63cf\u8ff0"))
+    if not bullet_values:
+        bullet_values = as_list(listing_bullets)
+    write_rows(wb.create_sheet(SHEET_BULLETS), numbered_rows(bullet_values), ["\u5e8f\u53f7", "\u5185\u5bb9"])
     image_rows: list[dict[str, Any]] = []
-    append_image_rows(image_rows, "\u4e3b\u56fe", first_value(crawler_row, "image", "f_image", "\u4e3b\u56fe"))
-    append_image_rows(image_rows, "\u9644\u56fe", first_value(crawler_row, "subplot", "f_subplot", "\u9644\u56fe"))
+    append_image_rows(image_rows, "\u4e3b\u56fe", first_value(crawler_row, "image", "f_image", "\u4e3b\u56fe") or listing_main_image)
+    append_image_rows(image_rows, "\u9644\u56fe", first_value(crawler_row, "subplot", "f_subplot", "\u9644\u56fe") or listing_other_images)
     append_image_rows(image_rows, "A+\u56fe\u7247", first_value(crawler_row, "a_image", "f_a_image", "A+\u56fe\u7247"))
     write_rows(wb.create_sheet(SHEET_IMAGES), image_rows, ["\u7c7b\u578b", "\u5e8f\u53f7", "URL"])
     write_rows(wb.create_sheet(SHEET_QA), normalize_rows(first_value(crawler_row, "qa", "f_qa", "QA")))
@@ -503,6 +529,23 @@ def append_image_rows(rows: list[dict[str, Any]], image_type: str, value: Any) -
 
 def add_row_type(rows: list[dict[str, Any]], row_type: str) -> list[dict[str, Any]]:
     return [{"\u7c7b\u578b": row_type, **row} for row in rows]
+
+
+def listing_sheet_omitted_fields(row: dict[str, Any]) -> set[str]:
+    """计算刊登数据 sheet 中需要隐藏的输入、内部和重复字段。"""
+    omitted = set(LISTING_SHEET_ALWAYS_OMITTED_FIELDS)
+    for source_field, template_field in LISTING_SHEET_DUPLICATE_FIELDS.items():
+        if has_cell_value(row.get(template_field)):
+            omitted.add(source_field)
+    if any(has_cell_value(row.get(f"\u526f\u56fe{index}")) for index in range(1, 9)):
+        omitted.add("\u5176\u4ed6\u9644\u56fe\u94fe\u63a5")
+    return omitted
+
+
+def has_cell_value(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value not in (None, "", [], {})
 
 
 def flatten_payload(payload: Any, prefix: str = "") -> list[dict[str, Any]]:

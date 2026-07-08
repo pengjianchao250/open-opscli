@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import time
+import configparser
+from http.cookies import SimpleCookie
 from typing import Any, Callable, Mapping, Sequence
 
 import httpx
@@ -12,19 +14,23 @@ import httpx
 from opscli.auth import AuthClient, OPS_URL
 from opscli.auth.config import load_config
 from opscli.asin_data.services.report_files import _report_files_base_url
-from opscli.config import __version__
+from opscli.config import CONFIG_DIR, __version__
 from opscli.mcp.context import get_mcp_request_headers
 from opscli.shared.exceptions import RemoteError
 from opscli.shared.http import parse_remote_response
 
 
 DEFAULT_TIMEOUT = 30
+DEFAULT_BI_LOGIN_ENDPOINT = "https://bi.api.xenkee.com/auth/login"
+DEFAULT_POLARIS_BJX_TOKEN_ENDPOINT = "/dataMetrics/v1/asin-report-files/polaris-bjx-token"
+BI_LOGIN_CONFIG_SECTION = "bi_login"
 
 BI_REPORT_DATA_SOURCES: dict[str, dict[str, str]] = {
     "listing_basic": {
         "label": "刊登基础数据",
         "endpoint": "https://bi.api.xenkee.com/listing/amazonlisdet",
         "list_endpoint": "https://bi.api.xenkee.com/listing/getAmazonListing",
+        "template_endpoint": "https://bi.api.xenkee.com/amazon/feed/getTemplate",
     },
     "sales_traffic": {
         "label": "销售/库存/广告/流量数据",
@@ -47,6 +53,11 @@ BI_REPORT_DATA_SOURCES: dict[str, dict[str, str]] = {
         "endpoint": "/dataMetrics/v1/asin-report-files/crawler-details",
     },
 }
+LISTING_REPORT_SOURCE_KEYS = ("listing_basic",)
+BASIC_REPORT_SOURCE_KEYS = ("listing_basic", "crawler_details")
+BI_ONLY_REPORT_SOURCE_KEYS = tuple(
+    key for key in BI_REPORT_DATA_SOURCES if key not in BASIC_REPORT_SOURCE_KEYS
+)
 
 ROW_CONTAINER_KEYS = ("rows", "items", "records", "list", "data", "result", "results")
 ASIN_KEYS = (
@@ -124,11 +135,13 @@ class AsinBiReportDataClient:
         auth_client: AuthClient | None = None,
         endpoints: Mapping[str, str] | None = None,
         http_get: Callable[..., httpx.Response] | None = None,
+        http_post: Callable[..., httpx.Response] | None = None,
         ops_url: str | None = None,
     ) -> None:
         self.auth_client = auth_client or AuthClient()
         self.sources = _source_configs(endpoints)
         self.http_get = http_get or httpx.get
+        self.http_post = http_post or httpx.post
         self.ops_url = _report_files_base_url(ops_url or OPS_URL)
         self._listing_auth_cache: tuple[dict[str, str], dict[str, str]] | None = None
 
@@ -138,37 +151,39 @@ class AsinBiReportDataClient:
         asins: Sequence[str],
         start_date: str | None = None,
         end_date: str | None = None,
+        source_keys: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         normalized_asins = normalize_asins(asins)
         if not normalized_asins:
             raise ValueError("asins must not be empty")
+        source_configs = _filter_source_configs(self.sources, source_keys)
 
-        try:
-            headers, cookies = self.auth_client.build_request_auth("ops")
-            headers.update(get_mcp_request_headers())
-        except Exception as exc:
-            sources = {
-                key: _failed_source(key, config, exc)
-                for key, config in self.sources.items()
-            }
-            return {
-                "status": "failed",
-                "asins": normalized_asins,
-                "count": len(normalized_asins),
-                "sources": sources,
-            }
+        headers: dict[str, str] = {}
+        cookies: dict[str, str] = {}
+        ops_auth_error: Exception | None = None
+        needs_ops_auth = any(key not in LISTING_REPORT_SOURCE_KEYS for key in source_configs)
+        if needs_ops_auth:
+            try:
+                headers, cookies = self.auth_client.build_request_auth("ops")
+                headers.update(get_mcp_request_headers())
+            except Exception as exc:
+                ops_auth_error = exc
 
         sources = {
-            key: self._fetch_source(
-                key=key,
-                config=config,
-                asins=normalized_asins,
-                start_date=start_date,
-                end_date=end_date,
-                headers=headers,
-                cookies=cookies,
+            key: (
+                _failed_source(key, config, ops_auth_error)
+                if ops_auth_error is not None and key not in LISTING_REPORT_SOURCE_KEYS
+                else self._fetch_source(
+                    key=key,
+                    config=config,
+                    asins=normalized_asins,
+                    start_date=start_date,
+                    end_date=end_date,
+                    headers=headers,
+                    cookies=cookies,
+                )
             )
-            for key, config in self.sources.items()
+            for key, config in source_configs.items()
         }
         return {
             "status": _aggregate_status(sources.values()),
@@ -272,6 +287,20 @@ class AsinBiReportDataClient:
             headers, cookies = self._listing_auth_cache
             return dict(headers), dict(cookies)
         try:
+            auth = self._build_remote_polaris_bjx_request_auth()
+            if auth is not None:
+                headers, cookies = auth
+                return self._cache_listing_auth(_listing_browser_headers(headers), cookies)
+        except Exception:
+            pass
+        try:
+            auth = self._build_bi_login_request_auth()
+            if auth is not None:
+                headers, cookies = auth
+                return self._cache_listing_auth(_listing_browser_headers(headers), cookies)
+        except Exception:
+            pass
+        try:
             headers, cookies = self.auth_client.build_request_auth("polaris")
             headers.update(get_mcp_request_headers())
             return self._cache_listing_auth(_listing_browser_headers(headers), cookies)
@@ -282,6 +311,69 @@ class AsinBiReportDataClient:
             except Exception:
                 pass
             return _listing_browser_headers(fallback_headers), fallback_cookies
+
+    def _build_remote_polaris_bjx_request_auth(self) -> tuple[dict[str, str], dict[str, str]] | None:
+        """从 ops 取数服务获取托管的北极星 token，并转换为刊登接口鉴权。"""
+        headers, cookies = self.auth_client.build_request_auth("ops")
+        headers.update(get_mcp_request_headers())
+        response = self.http_get(
+            self._resolve_endpoint(DEFAULT_POLARIS_BJX_TOKEN_ENDPOINT),
+            headers=headers,
+            cookies=cookies,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        payload = parse_remote_response(
+            response,
+            http_error_cls=AsinBiReportDataHttpError,
+            business_error_cls=AsinBiReportDataBusinessError,
+            bad_json_error_cls=AsinBiReportDataBadJsonError,
+        )
+        token = _extract_polaris_bjx_token(payload)
+        if not token:
+            raise AsinBiReportDataBusinessError(
+                "POLARIS_BJX_TOKEN_MISSING",
+                "polaris-bjx-token response missing polaris_bjx_token",
+            )
+        return {"Authorization": _authorization_value(token), "X-Opscli-Version": __version__}, {}
+
+    def _build_bi_login_request_auth(self) -> tuple[dict[str, str], dict[str, str]] | None:
+        """通过本地配置中的 BI 账号密码登录，并返回刊登接口鉴权信息。"""
+        login_config = _load_bi_login_config()
+        username = _bi_login_setting("BI_LOGIN_USERNAME", "username", login_config)
+        password = _bi_login_setting("BI_LOGIN_PASSWORD", "password", login_config)
+        if not username or not password:
+            return None
+
+        endpoint = _bi_login_setting("BI_LOGIN_ENDPOINT", "endpoint", login_config) or DEFAULT_BI_LOGIN_ENDPOINT
+        cookies = _parse_cookie_header(_bi_login_setting("BI_LOGIN_COOKIE", "cookie", login_config))
+        headers = _listing_browser_headers(
+            {
+                "Content-Type": "application/json;charset=UTF-8",
+                "X-Opscli-Version": __version__,
+            }
+        )
+        response = self.http_post(
+            endpoint,
+            json={"username": username, "password": password, "_t": int(time.time())},
+            headers=headers,
+            cookies=cookies,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        payload = parse_remote_response(
+            response,
+            http_error_cls=AsinBiReportDataHttpError,
+            business_error_cls=AsinBiReportDataBusinessError,
+            bad_json_error_cls=AsinBiReportDataBadJsonError,
+        )
+        token = _extract_auth_token(payload)
+        response_cookies = _response_cookies(response)
+        merged_cookies = {**cookies, **response_cookies}
+        auth_headers = {"X-Opscli-Version": __version__}
+        if token:
+            auth_headers["Authorization"] = _authorization_value(token)
+        if not token and not merged_cookies:
+            raise AsinBiReportDataBusinessError("BI_LOGIN_AUTH_MISSING", "BI login response missing token or cookies")
+        return auth_headers, merged_cookies
 
     def _cache_listing_auth(
         self,
@@ -296,7 +388,7 @@ class AsinBiReportDataClient:
         cfg = load_config()
         headers = {"X-Opscli-Version": __version__}
         headers.update(get_mcp_request_headers())
-        response = httpx.post(
+        response = self.http_post(
             f"{str(cfg['polaris_system_url']).rstrip('/')}{cfg['polaris_token_endpoint']}",
             json={"session_id": session_id},
             headers=headers,
@@ -332,7 +424,7 @@ class AsinBiReportDataClient:
             try:
                 body = {"asin": asin}
                 body.update(_date_range_params(start_date=start_date, end_date=end_date))
-                response = httpx.post(
+                response = self.http_post(
                     self._resolve_endpoint(config["endpoint"]),
                     json=body,
                     headers=headers,
@@ -445,13 +537,36 @@ class AsinBiReportDataClient:
             detail = detail_payload.get("data") if isinstance(detail_payload, dict) else None
             if not isinstance(detail, dict):
                 continue
+            template_payload: dict[str, Any] = {}
+            template_error = ""
+            if _listing_template_params(list_row=selected, detail=detail, listid=listid):
+                try:
+                    template_payload = self._fetch_listing_template_payload(
+                        config=config,
+                        list_row=selected,
+                        detail=detail,
+                        listid=listid,
+                        headers=headers,
+                        cookies=cookies,
+                    )
+                except Exception as exc:
+                    template_error = str(exc)
             payload = {
                 "asin": asin,
                 "listid": listid,
-                "row": normalize_listing_basic(asin=asin, list_row=selected, detail=detail),
+                "row": normalize_listing_basic(
+                    asin=asin,
+                    list_row=selected,
+                    detail=detail,
+                    template=template_payload,
+                ),
                 "list_response": list_payload,
                 "detail_response": detail_payload,
             }
+            if template_payload:
+                payload["template_response"] = template_payload
+            if template_error:
+                payload["template_error"] = template_error
             if first_payload is None:
                 first_payload = payload
             if _has_value(detail.get("generic_keyword.value")):
@@ -482,6 +597,34 @@ class AsinBiReportDataClient:
             bad_json_error_cls=AsinBiReportDataBadJsonError,
         )
 
+    def _fetch_listing_template_payload(
+        self,
+        *,
+        config: dict[str, str],
+        list_row: dict[str, Any],
+        detail: dict[str, Any],
+        listid: Any,
+        headers: dict[str, str],
+        cookies: dict[str, str],
+    ) -> dict[str, Any]:
+        params = _listing_template_params(list_row=list_row, detail=detail, listid=listid)
+        if not params:
+            return {}
+        template_endpoint = config.get("template_endpoint") or "https://bi.api.xenkee.com/amazon/feed/getTemplate"
+        response = self.http_get(
+            self._resolve_endpoint(template_endpoint),
+            params=params,
+            headers=headers,
+            cookies=cookies,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        return parse_remote_response(
+            response,
+            http_error_cls=AsinBiReportDataHttpError,
+            business_error_cls=AsinBiReportDataBusinessError,
+            bad_json_error_cls=AsinBiReportDataBadJsonError,
+        )
+
     def _resolve_endpoint(self, endpoint: str) -> str:
         text = endpoint.strip()
         if text.startswith(("http://", "https://")):
@@ -496,8 +639,10 @@ def build_bi_report_data_placeholder(
     asins: Sequence[str],
     status: str,
     reason: str,
+    source_keys: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     normalized_asins = normalize_asins(asins)
+    source_configs = _filter_source_configs(BI_REPORT_DATA_SOURCES, source_keys)
     return {
         "status": status,
         "asins": normalized_asins,
@@ -514,7 +659,7 @@ def build_bi_report_data_placeholder(
                 "raw": None,
                 "reason": reason,
             }
-            for key, config in BI_REPORT_DATA_SOURCES.items()
+            for key, config in source_configs.items()
         },
     }
 
@@ -622,7 +767,13 @@ def _listing_row_priority(row: dict[str, Any]) -> tuple[int, int]:
     return active_rank, deleted_rank
 
 
-def normalize_listing_basic(*, asin: str, list_row: dict[str, Any], detail: dict[str, Any]) -> dict[str, Any]:
+def normalize_listing_basic(
+    *,
+    asin: str,
+    list_row: dict[str, Any],
+    detail: dict[str, Any],
+    template: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     merged = {**list_row, **detail}
     other_images = [
         _first_present(merged, f"other_product_image_locator_{index}.media_location", f"other_image_url{index}")
@@ -655,7 +806,70 @@ def normalize_listing_basic(*, asin: str, list_row: dict[str, Any], detail: dict
         "负责人": _first_present(merged, "sales_team_user_name"),
         "listid": _first_present(merged, "listid", "id"),
     }
+    for key, value in listing_template_alias_values(merged, template or {}).items():
+        if key not in row or not _has_value(row.get(key)):
+            row[key] = value
     return {key: value for key, value in row.items() if _has_value(value)}
+
+
+def listing_template_alias_values(values: dict[str, Any], template: dict[str, Any]) -> dict[str, Any]:
+    """按刊登模板里的中文 alias，把 amazonlisdet 字段值转换成中文字段。"""
+    result: dict[str, Any] = {}
+    for item in iter_template_fields(template):
+        field = str(item.get("field") or "").strip()
+        alias = str(item.get("alias") or "").strip()
+        if not field or not alias:
+            continue
+        value = values.get(field)
+        if _has_value(value) and alias not in result:
+            result[alias] = value
+    return result
+
+
+def iter_template_fields(value: Any) -> list[dict[str, Any]]:
+    """递归提取 getTemplate 响应中的 field/alias 字段定义。"""
+    rows: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        if isinstance(value.get("field"), str) and isinstance(value.get("alias"), str):
+            rows.append(value)
+        for child in value.values():
+            rows.extend(iter_template_fields(child))
+    elif isinstance(value, list):
+        for item in value:
+            rows.extend(iter_template_fields(item))
+    return rows
+
+
+def _listing_template_params(*, list_row: dict[str, Any], detail: dict[str, Any], listid: Any) -> dict[str, Any]:
+    """从 amazonlisdet 和列表行中构造 getTemplate 查询参数。"""
+    merged = {**list_row, **detail}
+    feed_info = _json_object(_first_present(merged, "feed_type_info"))
+    params = {
+        "feed_product_type": _first_present(merged, "feed_product_type") or feed_info.get("feed_product_type"),
+        "feed_product_type_id": _first_present(merged, "feed_product_type_id") or feed_info.get("feed_product_type_id"),
+        "item_type": _first_present(merged, "item_type") or feed_info.get("item_type"),
+        "channel_id": _first_present(merged, "channel_id"),
+        "source_type": 1,
+        "listid": listid,
+        "task_id": "",
+        "_t": int(time.time()),
+    }
+    required_keys = ("feed_product_type", "feed_product_type_id", "item_type", "channel_id", "listid")
+    if not all(_has_value(params.get(key)) for key in required_keys):
+        return {}
+    return params
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def normalize_category(path_name: Any, feed_type_info: Any) -> str:
@@ -752,6 +966,44 @@ def _source_configs(endpoints: Mapping[str, str] | None) -> dict[str, dict[str, 
     return configs
 
 
+def _load_bi_login_config() -> dict[str, str]:
+    """读取本机 BI 登录配置，避免把服务账号写进代码仓库。"""
+    config_path = CONFIG_DIR / "config.ini"
+    if not config_path.exists():
+        return {}
+    parser = configparser.ConfigParser()
+    parser.read(config_path, encoding="utf-8")
+    if not parser.has_section(BI_LOGIN_CONFIG_SECTION):
+        return {}
+    return {
+        key: str(value).strip()
+        for key, value in parser.items(BI_LOGIN_CONFIG_SECTION)
+        if str(value).strip()
+    }
+
+
+def _bi_login_setting(env_name: str, config_name: str, login_config: Mapping[str, str]) -> str:
+    """按环境变量优先、本地配置兜底的顺序读取 BI 登录参数。"""
+    env_value = os.environ.get(env_name, "").strip()
+    if env_value:
+        return env_value
+    return str(login_config.get(config_name) or "").strip()
+
+
+def _filter_source_configs(
+    configs: Mapping[str, dict[str, str]],
+    source_keys: Sequence[str] | None,
+) -> dict[str, dict[str, str]]:
+    """按调用方指定的数据源 key 过滤配置。"""
+    if source_keys is None:
+        return {key: dict(value) for key, value in configs.items()}
+    normalized = [str(key).strip() for key in source_keys if str(key).strip()]
+    unknown = [key for key in normalized if key not in configs]
+    if unknown:
+        raise ValueError(f"Unknown BI report data source keys: {', '.join(unknown)}")
+    return {key: dict(configs[key]) for key in normalized}
+
+
 def _normalize_asin_values(value: Any) -> set[str]:
     if value is None:
         return set()
@@ -773,6 +1025,63 @@ def _looks_like_row(value: dict[str, Any]) -> bool:
     if set(value).issubset(meta_keys):
         return False
     return any(not isinstance(item, (dict, list)) for item in value.values())
+
+
+def _extract_auth_token(payload: Any) -> str:
+    """从 BI 登录响应中递归提取常见 token 字段。"""
+    token_keys = {
+        "token",
+        "access_token",
+        "accessToken",
+        "jwt",
+        "id_token",
+        "idToken",
+        "authorization",
+        "Authorization",
+        "bearer_token",
+        "bearerToken",
+    }
+    if isinstance(payload, dict):
+        for key in token_keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        for value in payload.values():
+            token = _extract_auth_token(value)
+            if token:
+                return token
+    if isinstance(payload, list):
+        for item in payload:
+            token = _extract_auth_token(item)
+            if token:
+                return token
+    return ""
+
+
+def _extract_polaris_bjx_token(payload: Any) -> str:
+    """从取数服务响应中提取托管的北极星刊登 token。"""
+    if isinstance(payload, dict):
+        value = payload.get("polaris_bjx_token")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        for child in payload.values():
+            token = _extract_polaris_bjx_token(child)
+            if token:
+                return token
+    if isinstance(payload, list):
+        for item in payload:
+            token = _extract_polaris_bjx_token(item)
+            if token:
+                return token
+    return ""
+
+
+def _authorization_value(token: str) -> str:
+    """统一补齐 Authorization 头，兼容后端直接返回 Bearer 字符串。"""
+    text = token.strip()
+    if text.lower().startswith(("bearer ", "basic ")):
+        return text
+    return f"Bearer {text}"
 
 
 def _failed_source(key: str, config: dict[str, str], exc: Exception) -> dict[str, Any]:
@@ -814,6 +1123,17 @@ def _parse_cookie_header(value: str) -> dict[str, str]:
         if key:
             cookies[key] = cookie_value.strip()
     return cookies
+
+
+def _response_cookies(response: httpx.Response) -> dict[str, str]:
+    """从 HTTP 响应中提取 cookie，兼容测试中未绑定 request 的 Response。"""
+    try:
+        return {key: value for key, value in response.cookies.items()}
+    except RuntimeError:
+        parsed = SimpleCookie()
+        for value in response.headers.get_list("set-cookie"):
+            parsed.load(value)
+        return {key: morsel.value for key, morsel in parsed.items()}
 
 
 def _aggregate_status(sources: Any) -> str:

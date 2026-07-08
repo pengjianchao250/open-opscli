@@ -306,12 +306,14 @@ class DailyAsinDataPipeline:
                 asins=asins,
                 status="skipped",
                 reason="BI report data skipped by --skip-bi-report-data",
+                source_keys=args.bi_report_source_keys,
             )
         if args.dry_run:
             return build_bi_report_data_placeholder(
                 asins=asins,
                 status="planned",
                 reason="BI report data endpoints will be fetched during execution",
+                source_keys=args.bi_report_source_keys,
             )
         bundles = {}
         for asin in asins:
@@ -319,6 +321,7 @@ class DailyAsinDataPipeline:
                 asins=[asin],
                 start_date=args.sales_start,
                 end_date=args.sales_end,
+                source_keys=args.bi_report_source_keys,
             )
         return self.collector._merge_per_asin_bi_report_data(bundles, asins=asins)
 

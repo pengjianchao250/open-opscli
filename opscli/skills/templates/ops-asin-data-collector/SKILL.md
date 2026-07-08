@@ -82,6 +82,43 @@ opscli asin-data live-data \
   --pretty
 ```
 
+Only real-time listing/basic data:
+
+```bash
+opscli asin-data live-data \
+  --asin B0BY8Y5766 \
+  --site US \
+  --data-scope listing_basic \
+  --upload-xlsx \
+  --pretty
+```
+
+Only complete real-time basic data, including listing and crawler details:
+
+```bash
+opscli asin-data live-data \
+  --asin B0BY8Y5766 \
+  --site US \
+  --data-scope basic \
+  --upload-xlsx \
+  --pretty
+```
+
+Only real-time BI data:
+
+```bash
+opscli asin-data live-data \
+  --asin B0BY8Y5766 \
+  --site US \
+  --sales-start 2026-05-01 \
+  --sales-end 2026-05-31 \
+  --data-scope bi \
+  --upload-xlsx \
+  --pretty
+```
+
+For listing interface authentication, prefer existing `BI_AUTH`/`BI_COOKIE`; otherwise live-data fetches the managed token from `/dataMetrics/v1/asin-report-files/polaris-bjx-token` and uses `data.polaris_bjx_token` for listing requests. Local `BI_LOGIN_USERNAME`/`BI_LOGIN_PASSWORD`, `~/.config/opscli/config.ini` `[bi_login]`, and opscli `polaris` auth are only fallbacks. Do not hardcode real BI credentials in this repository.
+
 Execute after reviewing the plan:
 
 ```bash
@@ -161,7 +198,7 @@ Main files:
 - `asin-data.jsonl`: one normalized record per ASIN, including `frontend_data`.
 - `frontend-data.json`: aggregate frontend-friendly JSON with Chinese section names.
 - `frontend-data.html`: local human-readable HTML handoff; upload is not used because the file service rejects html.
-- `live-data`: defaults to ASIN report/listing interfaces and skips legacy Query; it returns the same frontend JSON inline in `data.frontend_data`, and returns real-time local split file content in `data.split_files.<ASIN>.basic.content` and `data.split_files.<ASIN>.bi.content`; each xlsx content uses the same `{sheet_name: [rows]}` shape as `fetch-file`. Add `--upload-xlsx` to upload the current basic/BI xlsx files with stable ASCII filenames and return OSS URLs in `data.split_files.<ASIN>.<basic|bi>.file_url` and `data.split_file_urls`.
+- `live-data`: defaults to ASIN report/listing interfaces and skips legacy Query; it returns the same frontend JSON inline in `data.frontend_data`, and returns real-time local split file content in `data.split_files.<ASIN>.basic.content` and `data.split_files.<ASIN>.bi.content`; each xlsx content uses the same `{sheet_name: [rows]}` shape as `fetch-file`. Use `--data-scope basic` to call `listing_basic` + `crawler_details` and return/upload only `basic`; use `--data-scope listing_basic` (or legacy alias `listing`) to call only `listing_basic` and return/upload only `basic`; use `--data-scope bi` to call only BI sources and return/upload only `bi`. Add `--upload-xlsx` to upload the current xlsx files with stable ASCII filenames and return OSS URLs in `data.split_files.<ASIN>.<file_key>.file_url` and `data.split_file_urls`.
 - `<ASIN>-asin-data-report.txt`: UTF-8 BOM report uploaded by default when `--upload` is enabled.
 - `--fetch-report-files`: before real collection, fetches the latest report URL from `/dataMetrics/v1/asin-report-files?asin=...&site=...`; missing URL fails the command with a `取数服务异常` error.
 - `frontend-data.md`: local Markdown handoff for operators.

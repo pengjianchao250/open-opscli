@@ -117,6 +117,16 @@ opscli asin-data live-data \
 
 `live-data` writes the usual local files but returns `frontend-data.json` inline as `data.frontend_data`. It also returns the freshly generated basic and BI split files as `data.split_files.<ASIN>.basic.content` and `data.split_files.<ASIN>.bi.content`; the xlsx content uses the same `{sheet_name: [rows]}` shape as `fetch-file`. It defaults to ASIN report/listing interfaces, skips legacy Query, and disables report-file lookup, zip upload, SellerSprite, Amazon scrape, and Rufus by default. Use `--no-skip-query` only when you explicitly need the legacy Query path.
 
+Use `--data-scope` to narrow real-time sources:
+
+| Scope | Behavior |
+| --- | --- |
+| `all` | Default. Fetches complete basic data plus BI sources, and returns `basic` + `bi` split files. |
+| `basic` | Fetches `listing_basic` + `crawler_details`, and returns/uploads only the `basic` split xlsx. |
+| `listing_basic` | Fetches only `listing_basic`, and returns/uploads only the `basic` split xlsx. |
+| `listing` | Legacy alias of `listing_basic`. |
+| `bi` | Fetches only BI sources (`sales_traffic`, `sp_search_term`, `deals`, `turnover_inventory`), and returns/uploads only the `bi` split xlsx. |
+
 Add `--upload-xlsx` when the caller needs OSS xlsx URLs for the current run:
 
 ```bash
@@ -130,6 +140,28 @@ opscli asin-data live-data \
 ```
 
 When enabled, `basic` and `bi` are uploaded with stable ASCII filenames like `<ASIN>-basic-live-data.xlsx`; each item includes `file_url`, and the compact URL map is also returned under `data.split_file_urls`.
+
+Listing interface authentication order:
+
+1. `BI_AUTH` and optional `BI_COOKIE`.
+2. Cached live-data listing auth in the current process.
+3. Remote ops endpoint `/dataMetrics/v1/asin-report-files/polaris-bjx-token`; this returns `data.polaris_bjx_token`, which live-data sends as the listing request `Authorization` token.
+4. `BI_LOGIN_USERNAME` + `BI_LOGIN_PASSWORD` auto-login through `https://bi.api.xenkee.com/auth/login`; optional `BI_LOGIN_ENDPOINT` and `BI_LOGIN_COOKIE` can override endpoint/cookie bootstrap.
+5. Local `~/.config/opscli/config.ini` `[bi_login]` section with `username`, `password`, optional `endpoint`, and optional `cookie`.
+6. Existing opscli `polaris` auth.
+7. Fallback to ops auth headers.
+
+Never put real BI usernames, passwords, or cookies in committed files or command examples. Use environment variables, local shell profile, CI secrets, or deployment secret injection.
+
+Local config example:
+
+```ini
+[bi_login]
+username = service@example.com
+password = <local-secret>
+endpoint = https://bi.api.xenkee.com/auth/login
+cookie =
+```
 
 ### Query-Only Validation
 
@@ -209,6 +241,7 @@ Do not add keywords, Rufus questions, upload options, Amazon scrape options, Sel
 | `--run-id` | auto | Use for reproducible runs or handoff IDs |
 | `--site` | `US` | Default marketplace for rows without a site column |
 | `--sales-start`, `--sales-end` | empty | Set for dated BI sales windows |
+| `--data-scope` | `all` | For `live-data`; set `basic` for complete basic data (`listing_basic` + `crawler_details`), `listing_basic` for listing-only data, or `bi` for only BI data |
 | `--query-chunk-size` | `100` | Lower for debugging; raise cautiously for large batches |
 | `--seller-sprite-period` | `30d` | SellerSprite time window |
 | `--keyword-source` | `reverse_top` | `input_only` only uses provided keywords; `skip` skips keyword-miner when no input keyword exists |

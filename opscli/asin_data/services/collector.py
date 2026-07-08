@@ -243,6 +243,7 @@ class AsinDataCollector:
             sales_field_mode=kwargs.get("sales_field_mode", "full"),
             sales_start=kwargs.get("sales_start"),
             sales_end=kwargs.get("sales_end"),
+            bi_report_source_keys=kwargs.get("bi_report_source_keys"),
             query_chunk_size=kwargs.get("query_chunk_size", 100),
             crawler_table_id=kwargs.get("crawler_table_id"),
             crawler_dataset_alias=kwargs.get("crawler_dataset_alias", self.legacy.DEFAULT_CRAWLER_ALIAS),
@@ -266,12 +267,14 @@ class AsinDataCollector:
                 asins=asins,
                 status="skipped",
                 reason="BI report data skipped by --skip-bi-report-data",
+                source_keys=args.bi_report_source_keys,
             )
         elif args.dry_run:
             bundle = build_bi_report_data_placeholder(
                 asins=asins,
                 status="planned",
                 reason="BI report data endpoints will be fetched during execution",
+                source_keys=args.bi_report_source_keys,
             )
         else:
             bundles: dict[str, dict[str, Any]] = {}
@@ -283,6 +286,7 @@ class AsinDataCollector:
                     asins=[asin],
                     start_date=args.sales_start,
                     end_date=args.sales_end,
+                    source_keys=args.bi_report_source_keys,
                 )
                 bundles[asin] = asin_bundle
                 self._attach_bi_report_data([asin_result], asin_bundle, error_log)
