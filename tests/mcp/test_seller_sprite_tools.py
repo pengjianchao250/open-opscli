@@ -311,6 +311,127 @@ def test_listing_analysis_status_returns_local_queue_state(monkeypatch):
 
 
 
+def test_listing_analysis_history_status_uses_history_get_endpoint(monkeypatch):
+    class FakeManager:
+        def __init__(self, **kwargs):
+            self.account_provider = type("AccountProvider", (), {"get_default": lambda self: object()})()
+
+    class FakeClient:
+        calls = []
+
+        def __init__(self, *, account):
+            self.account = account
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def has_login_cookies(self):
+            return True
+
+        async def login(self):
+            raise AssertionError("cached browser cookies should be used for history status")
+
+        async def get_json(self, url, params, *, referer=None):
+            self.__class__.calls.append({"url": url, "params": params, "referer": referer})
+            return {
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "items": [
+                        {
+                            "taskId": "f1f297d499620bd41177fa5455ff8001",
+                            "taskStatus": "COMPLETED",
+                            "tabTitle": "US(B0FQJR6RTS) | 全景分析 | Listing数据深度解析报告",
+                            "module": "LA",
+                        }
+                    ]
+                },
+            }
+
+        async def post_json(self, *args, **kwargs):
+            raise AssertionError("task/history must follow the page GET request shape")
+
+    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", FakeManager)
+    monkeypatch.setattr("opscli.seller_sprite.api.client.SellerSpriteApiClient", FakeClient)
+
+    result = _run(
+        seller_sprite_tools._fetch_listing_analysis_history_status(
+            asin="B0FQJR6RTS",
+            session_id="sid",
+            jwt="jwt",
+        )
+    )
+
+    assert result["task_id"] == "f1f297d499620bd41177fa5455ff8001"
+    assert FakeClient.calls == [
+        {
+            "url": "/v3/api/ai-analysis/task/history",
+            "params": {"page": 1, "pageSize": 20, "keywords": "", "modules": ""},
+            "referer": "https://www.sellersprite.com/v3/ai-history?module=LA",
+        }
+    ]
+
+
+
+def test_listing_analysis_status_reads_history_by_asin(monkeypatch):
+    class SubmittedScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "scenario": "listing-analysis",
+                "state": "succeeded",
+                "stage": "finished",
+                "data": [{"taskId": "task-1", "asin": "B0FQJR6RTS", "contentReady": False}],
+            }
+
+    class OwnerStore:
+        def get_mcp_run(self, job_id):
+            return {
+                "job_id": job_id,
+                "user_email": "mcp-user@example.com",
+                "params_json": {"asin": "B0FQJR6RTS", "station": "GLOBAL"},
+            }
+
+    async def fake_history_status(*, asin, session_id, jwt):
+        assert asin == "B0FQJR6RTS"
+        assert session_id == "sid"
+        assert jwt == "jwt"
+        return {
+            "task_id": "86ead00315941d0810d9b564e2986013",
+            "ready": True,
+            "failed": False,
+            "remote": {
+                "code": "OK",
+                "data": {
+                    "items": [
+                        {
+                            "taskId": "86ead00315941d0810d9b564e2986013",
+                            "taskStatus": "COMPLETED",
+                            "tabTitle": "US(B0FQJR6RTS) | 文案质量分析 | Listing数据深度解析报告",
+                            "module": "LA",
+                        }
+                    ]
+                },
+            },
+        }
+
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: SubmittedScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_history_status", fake_history_status, raising=False)
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: OwnerStore())
+
+    result = _run(seller_sprite_tools.seller_sprite_listing_analysis_status("listing-job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["ready"] is True
+    assert result["data"]["task_id"] == "86ead00315941d0810d9b564e2986013"
+
+
+
 def test_listing_analysis_status_rejects_other_user_job(monkeypatch):
     class OwnerStore:
         def get_mcp_run(self, job_id):
@@ -343,7 +464,7 @@ def test_listing_analysis_result_reports_not_ready(monkeypatch):
         return {"task_id": "task-1", "ready": False, "remote": {"data": {"taskStatus": "RUNNING"}}}
 
     monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: PendingScheduler())
-    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_remote_status", fake_remote_status)
+    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_report_result", fake_remote_status)
     monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
     monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: OwnerStore())
 
@@ -351,6 +472,106 @@ def test_listing_analysis_result_reports_not_ready(monkeypatch):
 
     assert result["success"] is True
     assert result["data"]["ready"] is False
+    assert result["data"]["task_id"] == "task-1"
+
+
+
+def test_listing_analysis_result_prefers_history_task_id_over_submit_placeholder(monkeypatch):
+    class ReadyTaskScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "scenario": "listing-analysis",
+                "state": "succeeded",
+                "data": [{"taskId": "task-1", "asin": "B0FQJR6RTS", "contentReady": False}],
+            }
+
+    class OwnerStore:
+        def get_mcp_run(self, job_id):
+            return {
+                "job_id": job_id,
+                "user_email": "mcp-user@example.com",
+                "params_json": {"asin": "B0FQJR6RTS", "station": "GLOBAL"},
+            }
+
+    async def fake_history_status(*, asin, session_id, jwt):
+        assert asin == "B0FQJR6RTS"
+        return {
+            "task_id": "f1f297d499620bd41177fa5455ff8001",
+            "ready": True,
+            "failed": False,
+            "remote_status": "COMPLETED",
+            "history_item": {
+                "taskId": "f1f297d499620bd41177fa5455ff8001",
+                "taskStatus": "COMPLETED",
+                "tabTitle": "US(B0FQJR6RTS) | 全景分析 | Listing数据深度解析报告",
+                "module": "LA",
+            },
+            "remote": {"code": "OK", "success": True},
+        }
+
+    async def fake_report_result(*, task_id, session_id, jwt):
+        assert task_id == "f1f297d499620bd41177fa5455ff8001"
+        return {"task_id": task_id, "ready": False, "failed": False, "analyzing": True, "remote": None}
+
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: ReadyTaskScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_history_status", fake_history_status)
+    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_report_result", fake_report_result)
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: OwnerStore())
+
+    result = _run(seller_sprite_tools.seller_sprite_listing_analysis_result("listing-job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["task_id"] == "f1f297d499620bd41177fa5455ff8001"
+
+
+
+def test_listing_analysis_result_uses_report_page_when_history_task_ready(monkeypatch):
+    class ReadyTaskScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "scenario": "listing-analysis",
+                "state": "succeeded",
+                "data": [{"taskId": "task-1", "asin": "B0FQJR6RTS", "contentReady": False}],
+            }
+
+    class OwnerStore:
+        def get_mcp_run(self, job_id):
+            return {
+                "job_id": job_id,
+                "user_email": "mcp-user@example.com",
+                "params_json": {"asin": "B0FQJR6RTS", "station": "GLOBAL"},
+            }
+
+    async def fail_old_remote_status(*args, **kwargs):
+        raise AssertionError("result must open ai-report through browser-route instead of old task API")
+
+    async def fake_history_status(*, asin, session_id, jwt):
+        assert asin == "B0FQJR6RTS"
+        return {"task_id": "task-1", "ready": True, "failed": False, "remote_status": "COMPLETED", "remote": {}}
+
+    async def fake_report_result(*, task_id, session_id, jwt):
+        assert task_id == "task-1"
+        assert session_id == "sid"
+        assert jwt == "jwt"
+        return {"task_id": "task-1", "ready": False, "failed": False, "analyzing": True, "remote": None}
+
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: ReadyTaskScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_remote_status", fail_old_remote_status)
+    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_history_status", fake_history_status)
+    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_report_result", fake_report_result, raising=False)
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: OwnerStore())
+
+    result = _run(seller_sprite_tools.seller_sprite_listing_analysis_result("listing-job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["ready"] is False
+    assert result["data"]["analyzing"] is True
     assert result["data"]["task_id"] == "task-1"
 
 
@@ -389,7 +610,7 @@ def test_listing_analysis_result_marks_remote_failure(monkeypatch):
 
     store = RecordingStore()
     monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: FailedScheduler())
-    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_remote_status", fake_remote_status)
+    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_report_result", fake_remote_status)
     monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
     monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
 
@@ -455,7 +676,7 @@ def test_listing_analysis_result_persists_ready_remote_payload(monkeypatch, tmp_
 
     store = RecordingStore()
     monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: ReadyScheduler())
-    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_remote_status", fake_remote_status)
+    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_report_result", fake_remote_status)
     monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
     monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
 

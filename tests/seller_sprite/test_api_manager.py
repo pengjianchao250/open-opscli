@@ -130,26 +130,14 @@ class ListingAnalysisApiClient(DummyApiClient):
 
     async def get_json(self, url, params, *, referer=None):
         self.calls.append({"method": "GET", "url": url, "params": params, "referer": referer})
-        if url == "/v3/api/ai-analysis/task/task-listing-1":
-            self.poll_calls += 1
-            if self.poll_calls == 1:
-                return {
-                    "code": "OK",
-                    "success": True,
-                    "data": {
-                        "taskId": "task-listing-1",
-                        "taskStatus": "SUBMITTED",
-                        "content": None,
-                    },
-                }
+        if url == "/v3/api/ai-analysis/get-submitted":
             return {
                 "code": "OK",
                 "success": True,
                 "data": {
-                    "taskId": "task-listing-1",
-                    "taskStatus": "COMPLETED",
-                    "content": "listing report content",
-                    "completedTime": "2026-06-08 12:00:00",
+                    "asin": params["asin"],
+                    "station": params["station"],
+                    "taskStatus": "RUNNING",
                 },
             }
         raise AssertionError(f"unexpected url: {url}")
@@ -488,7 +476,7 @@ def test_extract_items_returns_listing_analysis_submit_task_row():
 
 
 
-def test_manager_polls_listing_analysis_task_content(monkeypatch, tmp_path: Path):
+def test_manager_records_listing_analysis_submit_state(monkeypatch, tmp_path: Path):
     ListingAnalysisApiClient.calls = []
     ListingAnalysisApiClient.instance = None
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", ListingAnalysisApiClient)
@@ -509,21 +497,22 @@ def test_manager_polls_listing_analysis_task_content(monkeypatch, tmp_path: Path
     )
 
     assert result.row_count == 1
-    assert result.data[0]["taskId"] == "task-listing-1"
-    assert result.data[0]["content"] == "listing report content"
+    assert result.data[0] == {
+        "asin": "B0D3845MWD",
+        "station": "GLOBAL",
+        "taskStatus": "RUNNING",
+        "contentReady": False,
+    }
     assert ListingAnalysisApiClient.instance is not None
-    assert ListingAnalysisApiClient.instance.poll_calls == 2
-    assert ListingAnalysisApiClient.calls[0]["method"] == "POST"
-    assert ListingAnalysisApiClient.calls[0]["url"] == "/v3/api/ai-workflow/listing-analysis"
-    assert ListingAnalysisApiClient.calls[0]["json"] == {}
-    assert ListingAnalysisApiClient.calls[0]["headers"]["Content-Type"] == "application/json;charset=UTF-8"
+    assert ListingAnalysisApiClient.instance.poll_calls == 0
+    assert ListingAnalysisApiClient.calls[0]["method"] == "GET"
+    assert ListingAnalysisApiClient.calls[0]["url"] == "/v3/api/ai-analysis/get-submitted"
     assert ListingAnalysisApiClient.calls[0]["params"] == {
         "asin": "B0D3845MWD",
         "station": "GLOBAL",
     }
 
     raw = json.loads((tmp_path / "job-listing-analysis" / "raw.json").read_text(encoding="utf-8"))
-    assert raw["response"]["data"]["content"] == "listing report content"
-    assert raw["response"]["data"]["submitTask"]["taskId"] == "task-listing-1"
+    assert raw["response"]["data"]["asin"] == "B0D3845MWD"
     exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
-    assert exported["rows"][0]["content"] == "listing report content"
+    assert exported["rows"][0]["asin"] == "B0D3845MWD"

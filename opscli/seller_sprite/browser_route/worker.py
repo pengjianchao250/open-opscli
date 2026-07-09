@@ -339,6 +339,103 @@ class SellerSpriteBrowserRouteWorker:
             warnings=warnings,
         )
 
+    async def fetch_listing_analysis_report(
+        self,
+        *,
+        task_id: str,
+        root_dir: Path,
+        page_prepare: bool = True,
+        task_interval_seconds: float = 5.0,
+        cooldown_seconds: float = 10.0,
+    ) -> BrowserRouteResult:
+        """打开 Listing Analysis 报告详情页并捕获结构化结果。"""
+        request = BrowserRouteRequest(
+            scenario="listing-analysis",
+            method="PAGE_CAPTURE",
+            endpoint="/v3/api/competing-lookup",
+            payload={},
+            referer="https://www.sellersprite.com/v3/ai-history?module=LA",
+            account=self.account,
+            root_dir=root_dir,
+            page_prepare=page_prepare,
+            task_interval_seconds=task_interval_seconds,
+            cooldown_seconds=cooldown_seconds,
+        )
+        warnings: list[dict[str, Any]] = []
+        timings: list[dict[str, Any]] = []
+        total_started_at = time.monotonic()
+        async with self._drain_lock:
+            stage_started_at = time.monotonic()
+            await self._wait_for_cooldown(request, warnings)
+            _record_timing(timings, request, "wait_for_cooldown", stage_started_at)
+            stage_started_at = time.monotonic()
+            await self._wait_for_rate_limit(request, warnings)
+            _record_timing(timings, request, "wait_for_rate_limit", stage_started_at)
+            had_page = bool(self._page and not self._page.is_closed())
+            stage_started_at = time.monotonic()
+            page = await self._ensure_page(self.account)
+            _record_timing(timings, request, "ensure_page", stage_started_at, reused=had_page)
+            stage_started_at = time.monotonic()
+            login = await self._open_referer_and_login(page, request, timings=timings)
+            _record_timing(timings, request, "open_referer_and_login", stage_started_at, current_url=getattr(page, "url", ""))
+            await self._handle_robot_captcha_if_enabled(
+                page,
+                request,
+                warnings,
+                timings,
+                stage="before_listing_analysis_report",
+            )
+            if page_prepare:
+                stage_started_at = time.monotonic()
+                await _prepare_page(page)
+                _record_timing(timings, request, "page_prepare", stage_started_at)
+            report_url = _listing_analysis_report_url(task_id)
+            try:
+                stage_started_at = time.monotonic()
+                response = await _open_listing_analysis_report_and_capture(
+                    page,
+                    task_id=task_id,
+                    report_url=report_url,
+                    root_dir=root_dir,
+                )
+                _record_timing(timings, request, "listing_analysis_report.capture", stage_started_at)
+            except SellerSpriteApiError:
+                raise
+            except Exception as exc:
+                if await _has_visible_text(page, "正在分析中"):
+                    response = {
+                        "code": "OK",
+                        "success": True,
+                        "data": {
+                            "taskId": task_id,
+                            "taskStatus": "RUNNING",
+                            "analyzing": True,
+                        },
+                    }
+                    _record_timing(
+                        timings,
+                        request,
+                        "listing_analysis_report.analyzing",
+                        stage_started_at,
+                        error=type(exc).__name__,
+                    )
+                else:
+                    raise SellerSpriteApiError(
+                        "卖家精灵 Listing Analysis 报告页未捕获 competing-lookup 结构化数据",
+                        response_excerpt=(f"task_id={task_id} url={report_url}\n{exc}")[:1000],
+                        api_code="ERR_LISTING_ANALYSIS_REPORT_CAPTURE_MISSED",
+                    ) from exc
+            _record_timing(timings, request, "total", total_started_at)
+            warnings.append(
+                {
+                    "stage": "browser_route_timing",
+                    "message": "卖家精灵 Listing Analysis 报告页 browser-route 阶段耗时诊断",
+                    "timings": timings,
+                }
+            )
+            self._last_finished_at = time.monotonic()
+            return BrowserRouteResult(login=login, response=response, warnings=warnings)
+
     async def _handle_robot_captcha_if_enabled(
         self,
         page,
@@ -586,6 +683,9 @@ class SellerSpriteBrowserRouteWorker:
                 return
             headers = {key: value for key, value in request.headers.items() if key.lower() != "content-length"}
             headers["accept"] = "application/json, text/plain, */*"
+            if normalized_method == "PAGE_CAPTURE":
+                await route.continue_()
+                return
             if normalized_method == "GET":
                 await route.continue_(
                     url=_url_with_query(endpoint, payload),
@@ -907,6 +1007,45 @@ def _stop_auto_xvfb() -> None:
 atexit.register(_stop_auto_xvfb)
 
 
+async def fetch_listing_analysis_report_with_browser_route(
+    *,
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+    task_id: str,
+    root_dir: Path,
+    page_prepare: bool | None = None,
+) -> BrowserRouteResult:
+    """通过 browser-route 打开 Listing Analysis 报告详情页并捕获结果。"""
+    worker = get_browser_route_worker(settings=settings, account=account)
+    return await worker.fetch_listing_analysis_report(
+        task_id=task_id,
+        root_dir=root_dir,
+        page_prepare=settings.browser_page_prepare if page_prepare is None else page_prepare,
+        task_interval_seconds=settings.browser_task_interval_seconds,
+        cooldown_seconds=settings.browser_cooldown_seconds,
+    )
+
+
+async def _open_listing_analysis_report_and_capture(
+    page,
+    *,
+    task_id: str,
+    report_url: str,
+    root_dir: Path,
+) -> dict[str, Any]:
+    """进入 Listing Analysis 报告页并捕获 competing-lookup 响应。"""
+    async with page.expect_response(
+        lambda response: _same_endpoint(response.url, "/v3/api/competing-lookup"),
+        timeout=DEFAULT_TIMEOUT_MS,
+    ) as info:
+        await page.goto(report_url, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+    response = await info.value
+    payload = await _parse_response(response, method="PAGE_CAPTURE", root_dir=root_dir, section="listing_analysis_report")
+    if isinstance(payload.get("data"), dict):
+        payload["data"].setdefault("taskId", task_id)
+    return payload
+
+
 async def _trigger_request(
     page,
     *,
@@ -974,7 +1113,7 @@ async def _request_with_browser_context(page, *, endpoint: str, method: str, pay
     """使用浏览器上下文请求接口，复用当前 profile 的 cookie，避免页面内 fetch 被拦截。"""
     headers = _context_request_headers(page.url, method=method)
     try:
-        if method == "GET":
+        if method in {"GET", "PAGE_CAPTURE"}:
             return await page.context.request.get(
                 _url_with_query(endpoint, payload),
                 headers=headers,
@@ -1062,6 +1201,11 @@ async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool
     if input_box is None:
         return False
     await input_box.fill(asin)
+    try:
+        await input_box.press("Enter", timeout=5000)
+        return True
+    except Exception:
+        pass
     button = await _first_visible_page_locator(
         page,
         [
@@ -1069,10 +1213,14 @@ async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool
             "[role='button']:visible:has-text('立即分析')",
             "button:visible:has-text('立即查询')",
             "[role='button']:visible:has-text('立即查询')",
+            "button:visible:has-text('查询')",
+            "[role='button']:visible:has-text('查询')",
             ".el-button:visible:has-text('立即分析')",
             ".el-button:visible:has-text('立即查询')",
+            ".el-button:visible:has-text('查询')",
             ".ant-btn:visible:has-text('立即分析')",
             ".ant-btn:visible:has-text('立即查询')",
+            ".ant-btn:visible:has-text('查询')",
         ],
     )
     if button is None:
@@ -1408,6 +1556,11 @@ def _profile_dir(settings: SellerSpriteSettings, account: SellerSpriteAccount) -
     key = hashlib.md5(f"{account.name}:{account.username}".encode("utf-8")).hexdigest()[:12]
     safe_name = _slug(account.name or "default")
     return settings.browser_profile_dir / f"{safe_name}-{key}"
+
+
+def _listing_analysis_report_url(task_id: str) -> str:
+    """构造 Listing Analysis 历史报告详情页地址。"""
+    return f"{BASE_URL}/v3/ai-report?id={quote(str(task_id).strip())}&from=history"
 
 
 def _absolute_url(url: str) -> str:

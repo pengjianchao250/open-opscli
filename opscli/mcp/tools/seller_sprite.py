@@ -109,10 +109,59 @@ def _extract_listing_analysis_task_id(status: dict[str, Any]) -> str | None:
     return None
 
 
+def _extract_listing_analysis_asin(status: dict[str, Any], owner_record: dict[str, Any] | None = None) -> str | None:
+    """从本地状态或 MCP 调用记录中提取 Listing Analysis ASIN。"""
+    for row in status.get("data") or status.get("rows") or []:
+        if isinstance(row, dict) and row.get("asin"):
+            return str(row["asin"]).strip().upper()
+    response = ((status.get("raw") or {}).get("response") or {}) if isinstance(status.get("raw"), dict) else {}
+    data = response.get("data") if isinstance(response, dict) else None
+    if isinstance(data, dict) and data.get("asin"):
+        return str(data["asin"]).strip().upper()
+    params = owner_record.get("params_json") if isinstance(owner_record, dict) else None
+    if isinstance(params, dict) and params.get("asin"):
+        return str(params["asin"]).strip().upper()
+    return None
+
+
+def _select_listing_analysis_history_item(response: dict[str, Any], *, asin: str) -> dict[str, Any] | None:
+    """从历史任务列表中选择匹配 ASIN 的 Listing Analysis 任务。"""
+    data = response.get("data") if isinstance(response, dict) else None
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return None
+    asin_text = str(asin or "").strip().upper()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("module") or "").strip().upper() != "LA":
+            continue
+        title = str(item.get("tabTitle") or item.get("aliasTitle") or "").upper()
+        if asin_text and asin_text not in title:
+            continue
+        return item
+    return None
+
+
+def _listing_analysis_analyzing(response: dict[str, Any]) -> bool:
+    """判断 Listing Analysis 报告页是否仍在分析中。"""
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, dict):
+        return False
+    status = str(data.get("taskStatus") or data.get("status") or "").strip().upper()
+    return bool(data.get("analyzing") is True or status in {"RUNNING", "PENDING", "PROCESSING", "ANALYZING"})
+
+
 def _listing_analysis_ready(response: dict[str, Any]) -> bool:
     """判断 Listing Analysis 远端任务是否已经返回可消费内容。"""
     data = response.get("data") if isinstance(response, dict) else None
-    return bool(isinstance(data, dict) and (data.get("content") or data.get("htmlContent")))
+    if not isinstance(data, dict):
+        return False
+    if _listing_analysis_analyzing(response) or _listing_analysis_failed(response):
+        return False
+    if data.get("content") or data.get("htmlContent"):
+        return True
+    return bool(data and not (data.get("taskId") and len(data) <= 4))
 
 
 def _listing_analysis_failed(response: dict[str, Any]) -> bool:
@@ -124,7 +173,7 @@ def _listing_analysis_failed(response: dict[str, Any]) -> bool:
     return status in {"failed", "fail", "error", "canceled", "cancelled"}
 
 
-def _ensure_listing_analysis_job_owner(job_id: str) -> None:
+def _ensure_listing_analysis_job_owner(job_id: str) -> dict[str, Any]:
     """确认当前 MCP 用户有权读取 Listing Analysis 任务。"""
     user_email = _get_current_mcp_user_email()
     if not user_email:
@@ -136,6 +185,7 @@ def _ensure_listing_analysis_job_owner(job_id: str) -> None:
     scenario = str(record.get("scenario") or "listing-analysis")
     if scenario != "listing-analysis":
         raise ValueError(f"任务不是 Listing Analysis：{job_id}")
+    return record
 
 
 def _listing_analysis_failure_payload(status: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any]:
@@ -176,13 +226,13 @@ def _mark_listing_analysis_remote_failed(job_id: str, status: dict[str, Any], re
     return payload
 
 
-async def _fetch_listing_analysis_remote_status(
+async def _fetch_listing_analysis_history_status(
     *,
-    task_id: str,
+    asin: str,
     session_id: str | None,
     jwt: str | None,
 ) -> dict[str, Any]:
-    """单次读取 Listing Analysis 远端 AI 任务状态。"""
+    """通过历史任务接口读取 Listing Analysis 任务状态。"""
     from opscli.seller_sprite.api.client import SellerSpriteApiClient
     from opscli.seller_sprite.services import SellerSpriteApiManager
 
@@ -192,16 +242,64 @@ async def _fetch_listing_analysis_remote_status(
         if not client.has_login_cookies():
             await client.login()
         response = await client.get_json(
-            f"/v3/api/ai-analysis/task/{task_id}",
-            {},
-            referer="https://www.sellersprite.com/v3/listing-analysis",
+            "/v3/api/ai-analysis/task/history",
+            {"page": 1, "pageSize": 20, "keywords": "", "modules": ""},
+            referer="https://www.sellersprite.com/v3/ai-history?module=LA",
         )
+    item = _select_listing_analysis_history_item(response, asin=asin)
+    task_status = str((item or {}).get("taskStatus") or "").strip().upper()
+    task_id = str((item or {}).get("taskId") or "").strip() or None
+    return {
+        "task_id": task_id,
+        "ready": task_status in {"COMPLETED", "COMPLETE", "SUCCESS", "SUCCEEDED", "FINISHED", "DONE"},
+        "failed": task_status in {"FAILED", "FAIL", "ERROR", "CANCELED", "CANCELLED", "EXPIRED"},
+        "remote_status": task_status,
+        "history_item": item,
+        "remote": response,
+    }
+
+
+async def _fetch_listing_analysis_report_result(
+    *,
+    task_id: str,
+    session_id: str | None,
+    jwt: str | None,
+) -> dict[str, Any]:
+    """通过 browser-route 报告详情页读取 Listing Analysis 最终结果。"""
+    from opscli.seller_sprite.browser_route import fetch_listing_analysis_report_with_browser_route
+    from opscli.seller_sprite.config import load_settings
+    from opscli.seller_sprite.services import SellerSpriteApiManager
+
+    settings = load_settings()
+    manager = SellerSpriteApiManager(settings=settings, jwt=jwt, session_id=session_id)
+    account = manager.account_provider.get_default()
+    root_dir = settings.output_dir / f"listing-analysis-report-{task_id}"
+    browser_result = await fetch_listing_analysis_report_with_browser_route(
+        settings=settings,
+        account=account,
+        task_id=task_id,
+        root_dir=root_dir,
+    )
+    response = browser_result.response
     return {
         "task_id": task_id,
         "ready": _listing_analysis_ready(response),
         "failed": _listing_analysis_failed(response),
+        "analyzing": _listing_analysis_analyzing(response),
         "remote": response,
+        "warnings": browser_result.warnings,
+        "login": browser_result.login,
     }
+
+
+async def _fetch_listing_analysis_remote_status(
+    *,
+    task_id: str,
+    session_id: str | None,
+    jwt: str | None,
+) -> dict[str, Any]:
+    """兼容旧测试的 Listing Analysis 远端状态读取入口。"""
+    return await _fetch_listing_analysis_report_result(task_id=task_id, session_id=session_id, jwt=jwt)
 
 
 def _persist_listing_analysis_remote_result(
@@ -717,14 +815,18 @@ async def seller_sprite_listing_analysis_status(
 ) -> dict:
     """读取 Listing Analysis 本地提交状态，并在可用时续查远端任务状态。"""
     try:
-        _ensure_listing_analysis_job_owner(job_id)
+        owner_record = _ensure_listing_analysis_job_owner(job_id)
         sid, jw = _get_auth_pair("ops", session_id, jwt)
         status = dict(_get_task_scheduler().job_status(job_id))
         task_id = _extract_listing_analysis_task_id(status)
-        if not task_id:
+        asin = _extract_listing_analysis_asin(status, owner_record)
+        if asin:
+            remote = await _fetch_listing_analysis_history_status(asin=asin, session_id=sid, jwt=jw)
+        elif task_id:
+            remote = await _fetch_listing_analysis_remote_status(task_id=task_id, session_id=sid, jwt=jw)
+        else:
             status["ready"] = False
             return _ok(status)
-        remote = await _fetch_listing_analysis_remote_status(task_id=task_id, session_id=sid, jwt=jw)
         if remote.get("failed"):
             return _ok(_listing_analysis_failure_payload(status, remote))
         return _ok({**status, **remote})
@@ -744,14 +846,24 @@ async def seller_sprite_listing_analysis_result(
 ) -> dict:
     """读取 Listing Analysis 远端任务结果；未完成时返回 ready=false。"""
     try:
-        _ensure_listing_analysis_job_owner(job_id)
+        owner_record = _ensure_listing_analysis_job_owner(job_id)
         sid, jw = _get_auth_pair("ops", session_id, jwt)
         status = dict(_get_task_scheduler().job_status(job_id))
         task_id = _extract_listing_analysis_task_id(status)
+        asin = _extract_listing_analysis_asin(status, owner_record)
+        if asin:
+            history = await _fetch_listing_analysis_history_status(asin=asin, session_id=sid, jwt=jw)
+            if history.get("failed"):
+                return _ok(_mark_listing_analysis_remote_failed(job_id, status, history))
+            if not history.get("task_id"):
+                return _ok({**status, **history, "ready": False, "export_format": export_format})
+            task_id = str(history["task_id"])
+            if not history.get("ready"):
+                return _ok({**status, **history, "ready": False, "export_format": export_format})
         if not task_id:
             status["ready"] = False
             return _ok(status)
-        remote = await _fetch_listing_analysis_remote_status(task_id=task_id, session_id=sid, jwt=jw)
+        remote = await _fetch_listing_analysis_report_result(task_id=task_id, session_id=sid, jwt=jw)
         if remote.get("failed"):
             return _ok(_mark_listing_analysis_remote_failed(job_id, status, remote))
         if not remote.get("ready"):

@@ -374,7 +374,7 @@ async def _run_main_request(
     referer: str,
     root_dir: Path,
 ) -> dict[str, Any]:
-    if method == "GET":
+    if method in {"GET", "PAGE_CAPTURE"}:
         return await client.get_json(endpoint, payload, referer=referer)
     if method == "POST_QUERY":
         return await client.request_json(
@@ -645,6 +645,15 @@ def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
                     "taskStatus": data.get("taskStatus") or data.get("status"),
                     "asin": data.get("asin"),
                     "station": data.get("station"),
+                    "contentReady": bool(data.get("content") or data.get("htmlContent")),
+                }
+            ]
+        if data.get("asin"):
+            return [
+                {
+                    "asin": data.get("asin"),
+                    "station": data.get("station"),
+                    "taskStatus": data.get("taskStatus") or data.get("status"),
                     "contentReady": bool(data.get("content") or data.get("htmlContent")),
                 }
             ]

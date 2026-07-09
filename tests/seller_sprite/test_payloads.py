@@ -1,6 +1,7 @@
 import pytest
 
 from opscli.seller_sprite.api.payloads import (
+    build_referer,
     make_competitor_payload,
     make_keyword_miner_payload,
     make_keyword_reverse_payload,
@@ -118,8 +119,10 @@ def test_listing_analysis_payload_defaults_to_global_station():
     )
 
     assert payload == {"asin": "B0D3845MWD", "station": "GLOBAL"}
-    assert scenario.method == "POST_QUERY"
-    assert scenario.task_result_endpoint == "/v3/api/ai-analysis/task/{task_id}"
+    assert scenario.endpoint == "/v3/api/ai-analysis/get-submitted"
+    assert scenario.method == "PAGE_CAPTURE"
+    assert scenario.task_result_endpoint is None
+    assert build_referer(payload, "listing-analysis") == "https://www.sellersprite.com/v3/ai-history?module=LA"
     assert make_listing_analysis_payload({"asin": "b0d3845mwd", "station": "us"}) == {
         "asin": "B0D3845MWD",
         "station": "US",

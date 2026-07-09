@@ -90,7 +90,7 @@ opscli auth login
 2. 缺少必填参数时，只问当前场景真正缺的字段。
 3. 条件齐全后，构造 `scenario + site + period + params`。
 4. 普通场景用 `seller_sprite_run`，默认会先等待结果；只有任务进入 `running` 后超过 8 分钟仍未完成时，才返回 `job_id` 供后续查状态、取导出文件复用。
-5. `listing-analysis` 用三段式：先 submit，等待约 3 分钟，再 status/result 续查；不要让 `seller_sprite_run` 同步阻塞等待 `listing-analysis` 完整结果。
+5. `listing-analysis` 用三段式：先 submit，等待约 3 分钟，再 status/result 续查；后端会从 `task/history` 按 ASIN 获取真实报告 `taskId` 并打开报告页，不要让 `seller_sprite_run` 同步阻塞等待 `listing-analysis` 完整结果。
 6. 用户想先看今天还剩几次额度时，优先走 `seller_sprite_quota_status`，或正式 CLI `opscli seller-sprite quota-status`。
 7. 如果当前宿主是 MCP 工具协作环境，继续阅读 [SKILL_MCP.md](SKILL_MCP.md) 的工具链和异步规则。
 
@@ -105,7 +105,8 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 ```
 
 - `submit` 返回 `job_id` 后不要重复提交同一 ASIN。
-- `status/result` 返回 `ready=false` 时，提示用户稍后继续查。
+- `status` 会从 `task/history` 的 `data.items` 中按 `module=LA` 和 ASIN 匹配报告项。
+- `result` 必须使用 `task/history` 返回的真实 `taskId` 打开 `ai-report?id=<taskId>&from=history`；页面仍显示“正在分析中”时返回 `ready=false`。
 - `result` 返回 `ready=true` 时，再展示 `row_count` 和导出文件。
 
 ## 缺参澄清原则

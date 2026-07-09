@@ -190,6 +190,9 @@ class FakeListingLocator:
     async def fill(self, value):
         self.page.fills.append({"kind": self.kind, "value": value})
 
+    async def press(self, key, **kwargs):
+        self.page.presses.append({"kind": self.kind, "key": key})
+
     async def click(self, **kwargs):
         self.page.clicks.append(self.kind)
 
@@ -197,6 +200,7 @@ class FakeListingLocator:
 class FakeListingPage:
     def __init__(self):
         self.fills = []
+        self.presses = []
         self.clicks = []
 
     def locator(self, selector):
@@ -224,7 +228,7 @@ def test_post_query_context_request_uses_query_and_empty_json_body():
     assert call["kwargs"]["headers"]["Content-Type"] == "application/json;charset=UTF-8"
 
 
-def test_listing_analysis_trigger_fills_asin_and_clicks_submit():
+def test_listing_analysis_trigger_fills_asin_and_submits_with_enter_first():
     page = FakeListingPage()
 
     clicked = _run(
@@ -236,7 +240,8 @@ def test_listing_analysis_trigger_fills_asin_and_clicks_submit():
 
     assert clicked is True
     assert page.fills == [{"kind": "asin", "value": "B0TEST123"}]
-    assert page.clicks == ["submit"]
+    assert page.presses == [{"kind": "asin", "key": "Enter"}]
+    assert page.clicks == []
 
 
 def test_open_referer_navigates_directly_without_homepage(monkeypatch, tmp_path):
