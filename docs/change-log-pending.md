@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-09 seller_sprite - 恢复 Listing Analysis 三段式异步入口
+
+**变更原因**：SellerSprite Listing Analysis 服务通常 3 分钟以上才出 AI 结果，同步等待会拖慢 CLI/MCP 调用；同时 master 中曾隐藏该场景，需要恢复并改为更稳的 submit/status/result 链路。
+**改动点**：恢复 `listing-analysis` 场景注册和参数手册；browser-route 增加 `POST_QUERY`、ASIN 输入和点击查询支持；新增 Listing Analysis 专用 MCP 与 CLI 三段式入口；结果 ready 后写回本地 result/export，submit 纳入卖家精灵额度，status/result 校验任务归属并处理远端失败态；补充相关测试。
+**验证结果**：先按 TDD 验证新增回归失败，再完成修复；执行 `.venv/Scripts/python.exe -m pytest tests/mcp/test_seller_sprite_tools.py::test_seller_sprite_spec_must_read_includes_scenario_param_manual tests/mcp/test_seller_sprite_tools.py::test_listing_analysis_result_persists_ready_remote_payload -q` 通过（`2 passed in 3.68s`）；执行 `.venv/Scripts/python.exe -m pytest tests/mcp/test_quota.py::test_default_quota_policies_only_limit_public_service_run_entries tests/mcp/test_seller_sprite_tools.py::test_listing_analysis_status_rejects_other_user_job tests/mcp/test_seller_sprite_tools.py::test_listing_analysis_result_marks_remote_failure -q` 通过（`3 passed in 1.13s`）；执行 `.venv/Scripts/python.exe -m pytest tests/mcp/test_seller_sprite_tools.py tests/mcp/test_quota.py tests/mcp/test_tools.py -q` 通过（`50 passed in 10.71s`）；执行 `.venv/Scripts/python.exe -m pytest tests/seller_sprite/test_payloads.py tests/seller_sprite/test_api_manager.py -q` 通过（`24 passed in 23.35s`）；执行 `.venv/Scripts/python.exe -m pytest tests/seller_sprite/test_browser_route_worker.py -q` 通过（`31 passed in 0.74s`）。执行 `.venv/Scripts/python.exe -m pytest tests/seller_sprite/test_remote_adapter.py tests/seller_sprite/test_cli_split.py -q` 为 `11 passed, 2 failed`，失败项均为既有 `seller-sprite-debug` 顶层命令未注册导致 `No such command 'seller-sprite-debug'`，不属于本次正式 `seller-sprite` 三段式入口改动范围。
+**影响范围**：影响 SellerSprite `listing-analysis` 场景、公开 MCP 工具列表和 `opscli seller-sprite` 正式命令；不开放通用 `seller_sprite_start`，其他卖家精灵场景保持原入口。
+**回滚方式**：回退本次修改的 SellerSprite 场景、browser-route、MCP 工具、CLI/adapter、Skill 文档、测试和本条变更记录；必要时重新应用 `4d6a168` 的隐藏逻辑。
+---
+
 ## 2026-07-07 seller_sprite - 清理 browser-route 耗时日志
 
 **变更原因**：卖家精灵 browser-route 阶段耗时以 warning 写入 MCP 进程日志，生产部署时会刷屏并干扰 MCP 整体信息输出。

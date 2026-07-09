@@ -107,23 +107,23 @@ def test_keyword_reverse_payload_keeps_orchestration_fields_for_manager():
     assert "includeHighFrequency" not in payload
 
 
-# def test_listing_analysis_payload_defaults_to_global_station():
-#     scenario = get_scenario("listing-analysis")
+def test_listing_analysis_payload_defaults_to_global_station():
+    scenario = get_scenario("listing-analysis")
 
-#     payload = scenario.build_payload(
-#         params={"asin": "b0d3845mwd"},
-#         site="US",
-#         period="30d",
-#         page_size=100,
-#     )
+    payload = scenario.build_payload(
+        params={"asin": "b0d3845mwd"},
+        site="US",
+        period="30d",
+        page_size=100,
+    )
 
-#     assert payload == {"asin": "B0D3845MWD", "station": "GLOBAL"}
-#     assert scenario.method == "POST_QUERY"
-#     assert scenario.task_result_endpoint == "/v3/api/ai-analysis/task/{task_id}"
-#     assert make_listing_analysis_payload({"asin": "b0d3845mwd", "station": "us"}) == {
-#         "asin": "B0D3845MWD",
-#         "station": "US",
-#     }
+    assert payload == {"asin": "B0D3845MWD", "station": "GLOBAL"}
+    assert scenario.method == "POST_QUERY"
+    assert scenario.task_result_endpoint == "/v3/api/ai-analysis/task/{task_id}"
+    assert make_listing_analysis_payload({"asin": "b0d3845mwd", "station": "us"}) == {
+        "asin": "B0D3845MWD",
+        "station": "US",
+    }
 
 
 def test_product_research_accepts_recommendation_mode():

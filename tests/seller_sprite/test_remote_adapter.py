@@ -101,6 +101,39 @@ def test_remote_adapter_maps_run_to_seller_sprite_run():
     ]
 
 
+def test_remote_adapter_maps_listing_analysis_tools():
+    config_client = FakeConfigClient()
+    created_clients = []
+
+    def make_remote_client(url: str):
+        client = FakeRemoteClient(url)
+        created_clients.append(client)
+        return client
+
+    adapter = SellerSpriteRemoteAdapter(
+        config_client=config_client,
+        remote_client_factory=make_remote_client,
+    )
+
+    submit = adapter.listing_analysis_submit(
+        asin="B0TEST123",
+        station="GLOBAL",
+        site="US",
+        export_format="json",
+        job_id=None,
+        output_dir=None,
+    )
+    status = adapter.listing_analysis_status("listing-job-1")
+    result = adapter.listing_analysis_result("listing-job-1", export_format="json")
+
+    assert submit["data"]["tool"] == "seller_sprite_listing_analysis_submit"
+    assert submit["data"]["arguments"]["asin"] == "B0TEST123"
+    assert submit["data"]["arguments"]["session_id"] == "sid-cli-123"
+    assert status["data"]["tool"] == "seller_sprite_listing_analysis_status"
+    assert result["data"]["tool"] == "seller_sprite_listing_analysis_result"
+
+
+
 def test_remote_adapter_maps_job_status_and_export_tools():
     config_client = FakeConfigClient()
     created_clients = []

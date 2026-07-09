@@ -526,6 +526,11 @@ def default_quota_policies() -> dict[str, QuotaPolicy]:
             service="seller_sprite",
             daily_limit=5,
         ),
+        "seller_sprite_listing_analysis_submit": QuotaPolicy(
+            tool_name="seller_sprite_listing_analysis_submit",
+            service="seller_sprite",
+            daily_limit=5,
+        ),
         # 预留后续服务接入点：xiyou_run / sif_run 暂不启用。
     }
 

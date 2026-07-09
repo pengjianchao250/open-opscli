@@ -52,6 +52,44 @@ def run_scenario(
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+@app.command("listing-analysis-submit")
+def listing_analysis_submit(
+    asin: str = typer.Option(..., "--asin", help="Amazon ASIN"),
+    station: str = typer.Option("GLOBAL", "--station", help="Listing Analysis station，默认 GLOBAL"),
+    site: str = typer.Option("US", "--site", help="站点，如 US、JP、DE"),
+    export_format: str = typer.Option("json", "--export-format", help="导出格式：json/xlsx/xls"),
+    output_dir: str | None = typer.Option(None, "--output-dir", help="输出目录"),
+    job_id: str | None = typer.Option(None, "--job-id", help="指定任务 ID"),
+) -> None:
+    """提交 Listing Analysis 任务并返回 job_id。"""
+    payload = SellerSpriteRemoteAdapter().listing_analysis_submit(
+        asin=asin,
+        station=station,
+        site=site,
+        export_format=export_format,
+        output_dir=output_dir,
+        job_id=job_id,
+    )
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@app.command("listing-analysis-status")
+def listing_analysis_status(job_id: str = typer.Argument(..., help="任务 ID")) -> None:
+    """读取 Listing Analysis 任务状态。"""
+    payload = SellerSpriteRemoteAdapter().listing_analysis_status(job_id)
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@app.command("listing-analysis-result")
+def listing_analysis_result(
+    job_id: str = typer.Argument(..., help="任务 ID"),
+    export_format: str = typer.Option("json", "--export-format", help="导出格式：json/xlsx/xls"),
+) -> None:
+    """读取 Listing Analysis 任务结果。"""
+    payload = SellerSpriteRemoteAdapter().listing_analysis_result(job_id, export_format=export_format)
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
 @app.command("job-status")
 def job_status(job_id: str = typer.Argument(..., help="任务 ID")) -> None:
     """读取卖家精灵任务结果。"""

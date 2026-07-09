@@ -160,6 +160,85 @@ class FakeCaptchaPage:
         self.timeout_calls.append(timeout)
 
 
+class FakeContextRequest:
+    def __init__(self):
+        self.post_calls = []
+
+    async def post(self, url, **kwargs):
+        self.post_calls.append({"url": url, "kwargs": kwargs})
+        return SimpleNamespace(status=200)
+
+
+class FakeContextPage:
+    def __init__(self):
+        self.url = "https://www.sellersprite.com/v3/listing-analysis?asin=B0TEST&station=GLOBAL"
+        self.context = SimpleNamespace(request=FakeContextRequest())
+
+
+class FakeListingLocator:
+    def __init__(self, page, kind):
+        self.page = page
+        self.kind = kind
+        self.first = self
+
+    async def count(self):
+        return 1
+
+    async def is_visible(self, **kwargs):
+        return True
+
+    async def fill(self, value):
+        self.page.fills.append({"kind": self.kind, "value": value})
+
+    async def click(self, **kwargs):
+        self.page.clicks.append(self.kind)
+
+
+class FakeListingPage:
+    def __init__(self):
+        self.fills = []
+        self.clicks = []
+
+    def locator(self, selector):
+        if "input" in selector:
+            return FakeListingLocator(self, "asin")
+        return FakeListingLocator(self, "submit")
+
+
+def test_post_query_context_request_uses_query_and_empty_json_body():
+    page = FakeContextPage()
+
+    response = _run(
+        worker_module._request_with_browser_context(
+            page,
+            endpoint="/v3/api/ai-workflow/listing-analysis",
+            method="POST_QUERY",
+            payload={"asin": "B0TEST", "station": "GLOBAL"},
+        )
+    )
+
+    assert response.status == 200
+    call = page.context.request.post_calls[0]
+    assert call["url"] == "https://www.sellersprite.com/v3/api/ai-workflow/listing-analysis?asin=B0TEST&station=GLOBAL"
+    assert call["kwargs"]["data"] == "{}"
+    assert call["kwargs"]["headers"]["Content-Type"] == "application/json;charset=UTF-8"
+
+
+def test_listing_analysis_trigger_fills_asin_and_clicks_submit():
+    page = FakeListingPage()
+
+    clicked = _run(
+        worker_module._trigger_listing_analysis_query(
+            page,
+            {"asin": "B0TEST123", "station": "GLOBAL"},
+        )
+    )
+
+    assert clicked is True
+    assert page.fills == [{"kind": "asin", "value": "B0TEST123"}]
+    assert page.clicks == ["submit"]
+
+
 def test_open_referer_navigates_directly_without_homepage(monkeypatch, tmp_path):
     page = FakePage(url="https://www.sellersprite.com/v3/product-research", logged_in=True)
     account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")

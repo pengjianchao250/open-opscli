@@ -12,6 +12,7 @@
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
 | 查流量来源 / traffic source | `traffic-source` |
 | 选市场 / market research | `market-research` |
+| Listing panorama / listing analysis | `listing-analysis` |
 
 ## 公共参数与默认值
 
@@ -35,6 +36,7 @@
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
 - `competitor-lookup` 收到 Amazon 商品链接时，应先提取 ASIN，再传 `params.asins`。
 - `competitor-lookup` 如果用户只给了单个 `asin`，也应先归一化成 `params.asins` 再执行。
+- `listing-analysis` 结果通常 3 分钟以上才生成，推荐使用 `listing-analysis-submit/status/result` 三段式；不要让 `seller_sprite_run` 同步阻塞等待 `listing-analysis` 完整结果。
 
 ## 缺参澄清规则
 
@@ -56,6 +58,7 @@
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
 | `traffic-source` | 关键词或 ASIN | `keyword`、`asin`、`asins`、`order`、`desc` | `pageNo=1`，`order=10`，`desc=true` |
 | `market-research` | 无 | `departmentKeyword` / `category`、`node` / `nodeIdPath`、`newReleaseNum`、`topn`、市场指标筛选 | `sampleNumber=1`，`topn=10`，`newReleaseNum=6`，按 `total_sales` 倒序 |
+| `listing-analysis` | `asin` | `station` | `station=GLOBAL`；用 submit/status/result 三段式续查 |
 
 ## `product-research` 重点参数
 

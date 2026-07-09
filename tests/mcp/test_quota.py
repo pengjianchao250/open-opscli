@@ -122,8 +122,11 @@ def test_default_quota_policies_only_limit_public_service_run_entries():
     policies = default_quota_policies()
 
     assert policies["seller_sprite_run"].service == "seller_sprite"
+    assert policies["seller_sprite_listing_analysis_submit"].service == "seller_sprite"
     assert policies["keepa_run"].service == "keepa"
     assert "seller_sprite_start" not in policies
+    assert "seller_sprite_listing_analysis_status" not in policies
+    assert "seller_sprite_listing_analysis_result" not in policies
     assert "keepa_job_status" not in policies
 
 

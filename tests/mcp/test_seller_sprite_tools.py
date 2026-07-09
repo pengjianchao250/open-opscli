@@ -194,6 +194,8 @@ def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
 
     assert result["success"] is True
     assert "# 卖家精灵场景参数手册" in result["data"]["spec"]
+    assert "seller_sprite_listing_analysis_submit" in result["data"]["spec"]
+    assert "不要让 `seller_sprite_run` 同步阻塞等待 `listing-analysis`" in result["data"]["spec"]
 
 
 def test_seller_sprite_quota_status_returns_snapshot(monkeypatch):
@@ -258,6 +260,219 @@ def test_seller_sprite_run_accepts_params_json_string(monkeypatch, tmp_path):
     assert DummyScheduler.last_request.mode == "browser-route"
     assert DummyScheduler.enqueue_calls == 1
     assert store.get_mcp_run("job-async-1")["mode"] == "browser-route"
+
+
+def test_listing_analysis_submit_enqueues_without_run_wait(monkeypatch, tmp_path):
+    store = _make_store(tmp_path)
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_build_mcp_job_id", lambda request, site, period: "listing-job-1")
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
+    DummyScheduler.enqueue_calls = 0
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_listing_analysis_submit(
+            asin="b0test123",
+            station="global",
+            site="US",
+            export_format="json",
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "listing-job-1"
+    assert result["data"]["state"] == "queued"
+    assert DummyScheduler.last_request.scenario == "listing-analysis"
+    assert DummyScheduler.last_request.params == {"asin": "B0TEST123", "station": "GLOBAL"}
+    assert DummyScheduler.last_request.mode == "browser-route"
+    assert DummyScheduler.enqueue_calls == 1
+
+
+
+def test_listing_analysis_status_returns_local_queue_state(monkeypatch):
+    class LocalOnlyScheduler:
+        def job_status(self, job_id):
+            return {"job_id": job_id, "scenario": "listing-analysis", "state": "running", "stage": "running"}
+
+    class OwnerStore:
+        def get_mcp_run(self, job_id):
+            return {"job_id": job_id, "user_email": "mcp-user@example.com"}
+
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: LocalOnlyScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: OwnerStore())
+
+    result = _run(seller_sprite_tools.seller_sprite_listing_analysis_status("listing-job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["state"] == "running"
+    assert result["data"]["ready"] is False
+
+
+
+def test_listing_analysis_status_rejects_other_user_job(monkeypatch):
+    class OwnerStore:
+        def get_mcp_run(self, job_id):
+            return {"job_id": job_id, "user_email": "owner@example.com"}
+
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "intruder@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: OwnerStore())
+
+    result = _run(seller_sprite_tools.seller_sprite_listing_analysis_status("listing-job-1"))
+
+    assert result["success"] is False
+    assert "无权读取" in result["error"]["message"]
+
+
+def test_listing_analysis_result_reports_not_ready(monkeypatch):
+    class PendingScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "scenario": "listing-analysis",
+                "state": "succeeded",
+                "data": [{"taskId": "task-1", "contentReady": False}],
+            }
+
+    class OwnerStore:
+        def get_mcp_run(self, job_id):
+            return {"job_id": job_id, "user_email": "mcp-user@example.com"}
+
+    async def fake_remote_status(*args, **kwargs):
+        return {"task_id": "task-1", "ready": False, "remote": {"data": {"taskStatus": "RUNNING"}}}
+
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: PendingScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_remote_status", fake_remote_status)
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: OwnerStore())
+
+    result = _run(seller_sprite_tools.seller_sprite_listing_analysis_result("listing-job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["ready"] is False
+    assert result["data"]["task_id"] == "task-1"
+
+
+
+def test_listing_analysis_result_marks_remote_failure(monkeypatch):
+    class FailedScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "scenario": "listing-analysis",
+                "state": "succeeded",
+                "data": [{"taskId": "task-1", "contentReady": False}],
+            }
+
+    class RecordingStore:
+        def __init__(self):
+            self.fail_task_call = None
+            self.finish_mcp_run_failed_call = None
+
+        def get_mcp_run(self, job_id):
+            return {"job_id": job_id, "user_email": "mcp-user@example.com"}
+
+        def fail_task(self, **kwargs):
+            self.fail_task_call = kwargs
+
+        def finish_mcp_run_failed(self, job_id, error_payload):
+            self.finish_mcp_run_failed_call = {"job_id": job_id, "error_payload": error_payload}
+
+    async def fake_remote_status(*args, **kwargs):
+        return {
+            "task_id": "task-1",
+            "ready": False,
+            "failed": True,
+            "remote": {"data": {"taskStatus": "FAILED", "message": "AI task failed"}},
+        }
+
+    store = RecordingStore()
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: FailedScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_remote_status", fake_remote_status)
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
+
+    result = _run(seller_sprite_tools.seller_sprite_listing_analysis_result("listing-job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["failed"] is True
+    assert result["data"]["state"] == "failed"
+    assert store.fail_task_call["job_id"] == "listing-job-1"
+    assert store.finish_mcp_run_failed_call["error_payload"]["code"] == "SELLER_SPRITE_LISTING_ANALYSIS_FAILED"
+
+
+
+def test_listing_analysis_result_persists_ready_remote_payload(monkeypatch, tmp_path):
+    root_dir = tmp_path / "listing-job-1"
+
+    class ReadyScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "scenario": "listing-analysis",
+                "site": "US",
+                "period": "30d",
+                "state": "succeeded",
+                "root_dir": str(root_dir),
+                "data": [{"taskId": "task-1", "contentReady": False}],
+            }
+
+    class RecordingStore:
+        def __init__(self):
+            self.finish_task_call = None
+            self.finish_mcp_run_success_call = None
+
+        def get_mcp_run(self, job_id):
+            return {"job_id": job_id, "user_email": "mcp-user@example.com"}
+
+        def finish_task(self, **kwargs):
+            self.finish_task_call = kwargs
+
+        def finish_mcp_run_success(self, job_id, row_count, export_payload):
+            self.finish_mcp_run_success_call = {
+                "job_id": job_id,
+                "row_count": row_count,
+                "export_payload": export_payload,
+            }
+
+    async def fake_remote_status(*args, **kwargs):
+        return {
+            "task_id": "task-1",
+            "ready": True,
+            "failed": False,
+            "remote": {
+                "code": "OK",
+                "data": {
+                    "taskId": "task-1",
+                    "taskStatus": "COMPLETED",
+                    "content": "Listing 分析正文",
+                    "htmlContent": "<p>Listing 分析正文</p>",
+                    "completedTime": "2026-07-09 12:00:00",
+                },
+            },
+        }
+
+    store = RecordingStore()
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: ReadyScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_fetch_listing_analysis_remote_status", fake_remote_status)
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
+
+    result = _run(seller_sprite_tools.seller_sprite_listing_analysis_result("listing-job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["ready"] is True
+    assert result["data"]["row_count"] == 1
+    assert result["data"]["data"][0]["content"] == "Listing 分析正文"
+    assert result["data"]["export"]["format"] == "json"
+    assert Path(result["data"]["result_path"]).exists()
+    assert Path(result["data"]["raw_path"]).exists()
+    assert Path(result["data"]["export"]["path"]).exists()
+    assert store.finish_task_call["job_id"] == "listing-job-1"
+    assert store.finish_task_call["row_count"] == 1
+    assert store.finish_mcp_run_success_call["export_payload"]["format"] == "json"
+
 
 
 def test_seller_sprite_start_returns_queued_job(monkeypatch):
@@ -415,6 +630,44 @@ def test_seller_sprite_run_is_wrapped_by_quota(monkeypatch):
         return {"success": True, "data": {}, "error": None}
 
     limited_tool.__name__ = "seller_sprite_run"
+    wrapped = _quota_wrap(limited_tool, limiter=BlockingLimiter())
+
+    result = _run(wrapped())
+
+    assert called["service"] == 0
+    assert result["success"] is False
+    assert result["error"]["code"] == "MCP_QUOTA_EXCEEDED"
+
+
+
+def test_listing_analysis_submit_is_wrapped_by_seller_sprite_quota():
+    called = {"service": 0}
+
+    class BlockingLimiter:
+        async def before_call(self, tool_name):
+            assert tool_name == "seller_sprite_listing_analysis_submit"
+            return type(
+                "Decision",
+                (),
+                {
+                    "allowed": False,
+                    "error_response": {
+                        "success": False,
+                        "data": None,
+                        "error": {"code": "MCP_QUOTA_EXCEEDED", "message": "超出每日调用限额"},
+                        "quota": {"service": "seller_sprite", "limit": 5, "used": 5, "remaining": 0},
+                    },
+                },
+            )()
+
+        async def after_call(self, ticket, response):
+            raise AssertionError("blocked calls must not settle quota")
+
+    async def limited_tool():
+        called["service"] += 1
+        return {"success": True, "data": {}, "error": None}
+
+    limited_tool.__name__ = "seller_sprite_listing_analysis_submit"
     wrapped = _quota_wrap(limited_tool, limiter=BlockingLimiter())
 
     result = _run(wrapped())

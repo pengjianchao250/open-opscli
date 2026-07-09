@@ -4,10 +4,15 @@
   "policies": {
     "keepa_run": {
       "service": "keepa",
-      "daily_limit": 50,
+      "daily_limit": 200,
       "enabled": true
     },
     "seller_sprite_run": {
+      "service": "seller_sprite",
+      "daily_limit": 100,
+      "enabled": true
+    },
+    "seller_sprite_listing_analysis_submit": {
       "service": "seller_sprite",
       "daily_limit": 10,
       "enabled": true

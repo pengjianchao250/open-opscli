@@ -636,6 +636,18 @@ def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
                 "expiredTime": data.get("expiredTime"),
             }
         ]
+    if isinstance(data, dict):
+        task_id = data.get("taskId") or data.get("task_id")
+        if task_id:
+            return [
+                {
+                    "taskId": str(task_id),
+                    "taskStatus": data.get("taskStatus") or data.get("status"),
+                    "asin": data.get("asin"),
+                    "station": data.get("station"),
+                    "contentReady": bool(data.get("content") or data.get("htmlContent")),
+                }
+            ]
     if isinstance(data, dict) and isinstance(data.get("items"), list):
         return [item for item in data["items"] if isinstance(item, dict)]
     if isinstance(data, dict) and isinstance(data.get("pager"), dict):

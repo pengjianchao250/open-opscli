@@ -602,6 +602,15 @@ class SellerSpriteBrowserRouteWorker:
                     post_data=urlencode(_query_pairs(payload), doseq=True),
                 )
                 return
+            if normalized_method == "POST_QUERY":
+                headers["content-type"] = "application/json;charset=UTF-8"
+                await route.continue_(
+                    url=_url_with_query(endpoint, payload),
+                    method="POST",
+                    headers=headers,
+                    post_data="{}",
+                )
+                return
             headers["content-type"] = "application/json;charset=UTF-8"
             await route.continue_(
                 url=_absolute_url(endpoint),
@@ -910,11 +919,17 @@ async def _trigger_request(
 ):
     stage_started_at = time.monotonic()
     wait_started_at = stage_started_at
+    listing_analysis_clicked = False
     try:
         async with page.expect_response(lambda response: _same_endpoint(response.url, endpoint), timeout=15000) as info:
             _record_timing(timings, request, f"route_fetch.{section}.expect_response_ready", stage_started_at)
             stage_started_at = time.monotonic()
-            clicked = await _click_query_button(page)
+            if request and request.scenario == "listing-analysis":
+                # Listing Analysis 必须先在页面输入 ASIN 再点击查询，避免只走静默接口提交。
+                listing_analysis_clicked = await _trigger_listing_analysis_query(page, payload)
+                clicked = listing_analysis_clicked
+            else:
+                clicked = await _click_query_button(page)
             _record_timing(timings, request, f"route_fetch.{section}.click_query_button", stage_started_at, clicked=clicked)
             if not clicked:
                 raise _NoQueryButtonError()
@@ -936,6 +951,13 @@ async def _trigger_request(
             wait_started_at,
             error=type(exc).__name__,
         )
+        if request and request.scenario == "listing-analysis" and listing_analysis_clicked:
+            raise SellerSpriteApiError(
+                "卖家精灵 Listing Analysis 已点击提交但未捕获接口响应，请稍后确认结果，避免重复提交",
+                response_excerpt=f"endpoint={endpoint}",
+                api_code="ERR_LISTING_ANALYSIS_RESPONSE_MISSED",
+                api_message="已完成页面点击，不再自动 fallback 重复创建 AI 任务。",
+            ) from exc
         stage_started_at = time.monotonic()
         response = await _request_with_browser_context(page, endpoint=endpoint, method=method, payload=payload)
         _record_timing(
@@ -964,6 +986,14 @@ async def _request_with_browser_context(page, *, endpoint: str, method: str, pay
                 _absolute_url(endpoint),
                 headers=headers,
                 data=urlencode(_query_pairs(payload), doseq=True),
+                timeout=DEFAULT_TIMEOUT_MS,
+                fail_on_status_code=False,
+            )
+        if method == "POST_QUERY":
+            return await page.context.request.post(
+                _url_with_query(endpoint, payload),
+                headers=headers,
+                data="{}",
                 timeout=DEFAULT_TIMEOUT_MS,
                 fail_on_status_code=False,
             )
@@ -1009,15 +1039,58 @@ async def _click_query_button(page) -> bool:
         ".el-button:visible:has-text('开始筛选')",
         ".ant-btn:visible:has-text('开始筛选')",
     ]
+    locator = await _first_visible_page_locator(page, selectors)
+    if locator is None:
+        return False
+    await locator.click(timeout=5000)
+    return True
+
+
+async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool:
+    """在 Listing Analysis 页面填写 ASIN 并点击查询按钮。"""
+    asin = str(payload.get("asin") or "").strip().upper()
+    if not asin:
+        return False
+    input_box = await _first_visible_page_locator(
+        page,
+        [
+            "input[placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='asin']:visible:not([readonly]):not([disabled])",
+            "input[type='text']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if input_box is None:
+        return False
+    await input_box.fill(asin)
+    button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('立即分析')",
+            "[role='button']:visible:has-text('立即分析')",
+            "button:visible:has-text('立即查询')",
+            "[role='button']:visible:has-text('立即查询')",
+            ".el-button:visible:has-text('立即分析')",
+            ".el-button:visible:has-text('立即查询')",
+            ".ant-btn:visible:has-text('立即分析')",
+            ".ant-btn:visible:has-text('立即查询')",
+        ],
+    )
+    if button is None:
+        return False
+    await button.click(timeout=5000)
+    return True
+
+
+async def _first_visible_page_locator(page, selectors: list[str]):
+    """返回页面中第一个可见 locator。"""
     for selector in selectors:
         locator = page.locator(selector).first
         try:
             if await locator.count() and await locator.is_visible(timeout=800):
-                await locator.click(timeout=5000)
-                return True
+                return locator
         except Exception:
             continue
-    return False
+    return None
 
 
 async def _trigger_fetch(page, *, endpoint: str, method: str) -> None:
