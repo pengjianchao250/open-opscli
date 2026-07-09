@@ -17,7 +17,7 @@ except PackageNotFoundError:
     import tomllib
     _project_root = Path(__file__).resolve().parent.parent
     with open(_project_root / "pyproject.toml", "rb") as _f:
-        __version__ = tomllib.loads(_f.read())["project"]["version"]
+        __version__ = tomllib.load(_f)["project"]["version"]
 
 CONFIG_DIR = Path.home() / ".config" / "opscli"
 

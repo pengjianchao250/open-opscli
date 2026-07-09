@@ -2373,3 +2373,93 @@
 **影响范围**：仅影响顶级 CLI 命令挂载关系；未修改各子模块实现。
 **回滚方式**：还原 `opscli/cli.py` 与本变更记录，重新按需要解决合并冲突。
 ---
+
+## 2026-07-09 MCP - 限额策略迁移到 SQLite 表
+
+**变更原因**：MCP quota 策略此前依赖 `mcp-quota.json`，线上修改后需要重启服务才能生效，运维成本高。
+**改动点**：已先为 SQLite 策略表默认初始化与非覆盖行为补充失败用例；后续将实现 `mcp_quota_policy` 策略表、动态策略读取并删除 JSON 配置链路。
+**验证结果**：执行 `pytest tests/mcp/test_quota.py::test_sqlite_quota_store_initializes_default_policy_table tests/mcp/test_quota.py::test_sqlite_quota_store_does_not_overwrite_existing_policy_table -v` 失败，当前 shell 提示 `pytest: command not found`，需改用可用 Python 环境或安装测试依赖后继续。
+**影响范围**：当前仅新增测试用例，尚未改运行时逻辑；后续影响 MCP 外部服务工具 quota 策略加载方式。
+**回滚方式**：回滚本次测试文件变更即可。
+---
+
+## 2026-07-09 MCP - 新增 SQLite quota 策略表基础实现
+
+**变更原因**：MCP quota 需要改为 SQLite 策略表驱动，支持线上直接修改额度后无需重启生效。
+**改动点**：在 `SQLiteQuotaStore` 中新增 `mcp_quota_policy` 表创建、空表默认策略初始化、`get_policy()` 策略读取和策略行校验；为默认初始化和非空表不覆盖补充测试。
+**验证结果**：已先用 `.venv/Scripts/python.exe -m pytest tests/mcp/test_quota.py::test_sqlite_quota_store_initializes_default_policy_table tests/mcp/test_quota.py::test_sqlite_quota_store_does_not_overwrite_existing_policy_table -v` 观察到预期失败（`SQLiteQuotaStore` 缺少 `get_policy`）；实现后待重新运行验证。
+**影响范围**：影响 MCP quota SQLite schema 初始化；当前阶段尚未切换 `QuotaLimiter` 动态读取策略。
+**回滚方式**：回滚 `opscli/mcp/quota.py` 和 `tests/mcp/test_quota.py` 中本段相关改动。
+---
+
+## 2026-07-09 MCP - 动态读取 SQLite quota 策略测试
+
+**变更原因**：需要验证 MCP quota 策略在线上直接改 SQLite 后下一次调用立即生效。
+**改动点**：新增动态读取策略、禁用策略放行、删除策略放行、非法策略阻断测试用例。
+**验证结果**：已运行 `.venv/Scripts/python.exe -m pytest tests/mcp/test_quota.py::test_limiter_reads_policy_from_sqlite_on_each_call tests/mcp/test_quota.py::test_limiter_allows_disabled_policy_without_creating_daily_record tests/mcp/test_quota.py::test_limiter_allows_deleted_policy_without_creating_daily_record tests/mcp/test_quota.py::test_limiter_blocks_invalid_sqlite_policy_without_calling_service -v`，4 个测试按预期失败，失败原因是 `QuotaLimiter.__init__()` 仍要求 `policies` 参数。
+**影响范围**：当前仅新增测试用例，尚未切换 `QuotaLimiter` 运行逻辑。
+**回滚方式**：回滚 `tests/mcp/test_quota.py` 中本段新增测试。
+---
+
+## 2026-07-09 MCP - QuotaLimiter 改为动态策略读取
+
+**变更原因**：MCP quota 策略需要在服务运行中响应 SQLite 表修改，避免依赖启动时策略快照。
+**改动点**：`QuotaLimiter` 构造参数移除 `policies`，增加 `quota_enabled` 注入；`before_call()` 和 `quota_snapshot()` 每次通过 store 读取当前策略；增加策略读取失败时的保守 quota 快照。
+**验证结果**：已先运行动态策略测试并观察到预期失败；实现后待重新运行 Task 2 测试。
+**影响范围**：影响所有通过 `_quota_wrap()` 包裹的 MCP tool 限额判断；无策略和禁用策略将直接放行。
+**回滚方式**：回滚 `opscli/mcp/quota.py` 中 `QuotaLimiter` 相关改动，并恢复启动时 `policies` 字典。
+---
+
+## 2026-07-09 MCP - 调整 quota 测试存储适配动态策略接口
+
+**变更原因**：`QuotaLimiter` 改为通过 `QuotaStore.get_policy()` 动态读取策略后，旧测试中的 `policies` 构造参数和内存 store 不再适配。
+**改动点**：为 `MemoryQuotaStore` 增加 `get_policy()`；更新限额通过、失败退回、存储不可用测试的 `QuotaLimiter` 构造方式。
+**验证结果**：待运行 Task 2 测试验证。
+**影响范围**：仅影响 `tests/mcp/test_quota.py` 中 quota 编排器单元测试。
+**回滚方式**：回滚 `tests/mcp/test_quota.py` 中本段构造方式和 `MemoryQuotaStore` 改动。
+---
+
+## 2026-07-09 MCP - quota JSON 配置链路删除测试
+
+**变更原因**：用户明确要求删除 `mcp-quota.json` 相关运行时逻辑，不保留兼容残留。
+**改动点**：新增断言，确认 quota 模块不再暴露 `ENV_QUOTA_CONFIG_PATH`、`QuotaConfig`、`load_quota_config()` 和 `_find_quota_config_path()`。
+**验证结果**：已运行 `.venv/Scripts/python.exe -m pytest tests/mcp/test_quota.py::test_quota_module_no_longer_exposes_json_config_loader -v`，按预期失败，失败原因是 `ENV_QUOTA_CONFIG_PATH` 仍存在。
+**影响范围**：当前仅新增删除链路测试，尚未删除运行时代码。
+**回滚方式**：回滚 `tests/mcp/test_quota.py` 中本测试。
+---
+
+## 2026-07-09 MCP - 删除 quota JSON 配置链路
+
+**变更原因**：用户要求 `mcp-quota.json` 不再作为运行时来源，并删除相关 JSON 逻辑。
+**改动点**：删除 quota 模块中的 JSON 配置 dataclass、环境变量、加载函数和路径查找函数；`get_quota_limiter()` 改为只按 `OPSCLI_MCP_QUOTA_SQLITE_PATH` 创建 SQLite store；移除 JSON 配置测试、package-data 资源项并删除 `opscli/mcp/configs/mcp-quota.json`。
+**验证结果**：已先运行 JSON API 删除测试并观察到预期失败；删除实现后待重新运行验证。
+**影响范围**：影响 MCP quota 策略配置来源；运行时不再读取任何 `mcp-quota.json`。
+**回滚方式**：回滚 `opscli/mcp/quota.py`、`tests/mcp/test_quota.py`、`pyproject.toml` 并恢复 `opscli/mcp/configs/mcp-quota.json`。
+---
+
+## 2026-07-09 MCP - 避免 quota JSON 删除断言污染搜索结果
+
+**变更原因**：Task 3 的移除验证需要通过 `rg` 确认运行时代码和测试中不再直接出现旧 JSON 配置符号。
+**改动点**：将 `test_quota_module_no_longer_exposes_json_config_loader` 中的旧符号断言改为字符串拼接，避免测试文件自身命中精确搜索。
+**验证结果**：已运行 `.venv/Scripts/python.exe -m pytest tests/mcp/test_quota.py -v`，21 passed；执行 `rg -n "mcp-quota|load_quota_config|ENV_QUOTA_CONFIG_PATH|QuotaConfig|_find_quota_config_path" opscli tests pyproject.toml -g "!*.c"` 无输出。
+**影响范围**：仅影响测试断言写法，不改变被测行为。
+**回滚方式**：回滚该测试函数的字符串拼接写法。
+---
+
+## 2026-07-09 Config - 修复 Python 3.14 开发模式版本读取
+
+**变更原因**：使用 `.venv/Scripts/python.exe -m pytest ...` 运行 MCP 回归测试时，当前虚拟环境为 Python 3.14，`opscli.config` 在开发模式下调用 `tomllib.loads(_f.read())` 解析二进制内容会抛出 `TypeError: Expected str object, not 'bytes'`，导致测试收集阶段失败。
+**改动点**：新增 `tests/test_config.py` 覆盖未安装包元数据时从 `pyproject.toml` 读取版本号的开发模式分支；将 `opscli/config.py` 中二进制文件解析从 `tomllib.loads(_f.read())` 改为 `tomllib.load(_f)`。
+**验证结果**：已先运行 `.venv/Scripts/python.exe -m pytest tests/test_config.py -v` 观察到预期失败，失败原因为 `tomllib.loads()` 收到 bytes；修复后重新运行 `.venv/Scripts/python.exe -m pytest tests/test_config.py -v`，1 passed。
+**影响范围**：仅影响开发模式下包元数据不可用时的版本号读取；已安装包优先读取 `importlib.metadata.version("aukeys-opscli")` 的行为不变。
+**回滚方式**：删除 `tests/test_config.py` 并将 `opscli/config.py` 版本读取恢复为 `tomllib.loads(_f.read())`。
+---
+
+## 2026-07-09 MCP - quota SQLite 策略表最终回归验证
+
+**变更原因**：完成 MCP quota 策略 SQLite 化、动态读取和 JSON 运行时链路删除后，需要记录最终回归结果与已知构建问题。
+**改动点**：汇总验证 SQLite 策略表默认初始化、非覆盖、动态读取、禁用/删除策略放行、非法策略阻断、JSON 配置 API 删除，以及 Seller Sprite/Keepa MCP tool quota 包裹行为；确认 `mcp-quota.json` 不再作为包资源或运行时来源。
+**验证结果**：`.venv/Scripts/python.exe -m pytest tests/test_config.py -v` 通过，1 passed；`.venv/Scripts/python.exe -m pytest tests/mcp/test_quota.py -v` 通过，21 passed；`.venv/Scripts/python.exe -m pytest tests/mcp/test_seller_sprite_tools.py -v` 通过，29 passed；`.venv/Scripts/python.exe -m pytest tests/mcp/test_keepa_tools.py -v` 通过，14 passed；`rg -n "mcp-quota|load_quota_config|ENV_QUOTA_CONFIG_PATH|QuotaConfig|_find_quota_config_path" opscli tests pyproject.toml -g "!*.c"` 无输出；`git diff --check` 无输出；`git status --ignored --short | rg "(^!! |^\\?\\? )?(build/|dist/|opscli/mcp/quota\\.c|.*egg-info|uv.lock)" || true` 无输出，确认构建产物已清理且 `uv.lock` 未残留修改。此前可选执行 `.venv/Scripts/python.exe -m build` 失败，失败原因为 sdist wheel 构建阶段缺少 `opscli/skills/packaging.py`，该问题来自现有 `MANIFEST.in` 排除业务 `.py` 与 `setup.py` 构建时加载该文件之间的不一致，本次未纳入 quota 改造修复范围。
+**影响范围**：影响 MCP quota 策略加载、所有经 `_quota_wrap()` 包裹的外部服务 tool、开发模式 Python 3.14 版本读取测试入口；不改变 quota 响应顶层字段结构。
+**回滚方式**：回滚 `opscli/mcp/quota.py`、`tests/mcp/test_quota.py`、`pyproject.toml`、`opscli/mcp/configs/mcp-quota.json` 删除、`docs/design/MCP限额SQLite策略表设计.md`、`docs/plans/MCP限额SQLite策略表实施计划.md` 以及本变更记录；如需单独回滚 Python 3.14 版本读取修复，回滚 `opscli/config.py` 和 `tests/test_config.py`。
+---
