@@ -584,12 +584,12 @@ def default_quota_policies() -> dict[str, QuotaPolicy]:
         "keepa_run": QuotaPolicy(
             tool_name="keepa_run",
             service="keepa",
-            daily_limit=5,
+            daily_limit=200,
         ),
         "seller_sprite_run": QuotaPolicy(
             tool_name="seller_sprite_run",
             service="seller_sprite",
-            daily_limit=5,
+            daily_limit=100,
         ),
         "seller_sprite_listing_analysis_submit": QuotaPolicy(
             tool_name="seller_sprite_listing_analysis_submit",
