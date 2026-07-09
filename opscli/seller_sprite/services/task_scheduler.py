@@ -103,21 +103,28 @@ class SellerSpriteTaskScheduler:
         while True:
             if self._stop_requested:
                 return
-            account = self._get_default_account()
-            claimed = self.store.claim_next(
-                queue_scope=QUEUE_SCOPE,
-                worker_key=DEFAULT_WORKER_KEY,
-                assigned_account=account.name,
-            )
-            if claimed is None:
-                await asyncio.sleep(self.poll_interval_seconds)
-                continue
-            job_id = str(claimed["job_id"])
             try:
-                await self._run_one(job_id)
+                await self._consume_once()
             except Exception:
-                # 单条任务的审计收尾异常不能拖垮整个后台 worker，记录后继续消费后续任务。
-                logger.exception("卖家精灵任务调度执行异常，继续消费后续任务：job_id=%s", job_id)
+                # 调度循环自身异常不能让后台 worker 退出，否则后续 queued 会长期无人消费。
+                logger.exception("卖家精灵任务调度循环异常，短暂等待后继续消费")
+                await asyncio.sleep(self.poll_interval_seconds)
+
+    async def _consume_once(self) -> None:
+        claimed = self.store.claim_next(
+            queue_scope=QUEUE_SCOPE,
+            worker_key=DEFAULT_WORKER_KEY,
+            assigned_account=self._assigned_account_name(),
+        )
+        if claimed is None:
+            await asyncio.sleep(self.poll_interval_seconds)
+            return
+        job_id = str(claimed["job_id"])
+        try:
+            await self._run_one(job_id)
+        except Exception:
+            # 单条任务的审计收尾异常不能拖垮整个后台 worker，记录后继续消费后续任务。
+            logger.exception("卖家精灵任务调度执行异常，继续消费后续任务：job_id=%s", job_id)
 
     async def _run_one(self, job_id: str) -> None:
         request = self.store.get_request(job_id)
@@ -151,11 +158,9 @@ class SellerSpriteTaskScheduler:
     def _default_manager_factory(self, **kwargs) -> SellerSpriteApiManager:
         return SellerSpriteApiManager(**kwargs)
 
-    def _get_default_account(self):
-        if self.account_provider is None:
-            manager = self._default_manager_factory(settings=self.settings, jwt=self.jwt, session_id=self.session_id)
-            return manager.account_provider.get_default()
-        return self.account_provider.get_default()
+    def _assigned_account_name(self) -> str:
+        """返回队列记录里的账号标识，不在领取任务前触发账号接口。"""
+        return self.settings.account_name or DEFAULT_WORKER_KEY
 
     def _normalize_request(self, request: SellerSpriteScenarioRequest) -> SellerSpriteScenarioRequest:
         site = (request.site or self.settings.default_site).upper()

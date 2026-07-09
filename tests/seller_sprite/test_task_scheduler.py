@@ -161,6 +161,19 @@ class FailedRunManager:
         raise RuntimeError("卖家精灵执行失败")
 
 
+class AccountErrorRunManager:
+    def __init__(self, *, settings, account_provider, jwt=None, session_id=None):
+        self.account_provider = account_provider
+
+    async def run(self, request):
+        self.account_provider.get_default()
+
+
+class BrokenAccountProvider:
+    def get_default(self, *, refresh=False):
+        raise RuntimeError("卖家精灵账号不可用")
+
+
 class ControlledMcpRunManager:
     def __init__(self, *, settings, account_provider, jwt=None, session_id=None):
         self.settings = settings
@@ -409,6 +422,37 @@ def test_scheduler_updates_existing_mcp_run_to_failed(tmp_path: Path):
         assert mcp_run["finished_at"] is not None
         assert mcp_run["error_json"]["code"] == "RuntimeError"
         assert mcp_run["error_json"]["message"] == "卖家精灵执行失败"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_marks_task_failed_when_account_unavailable(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=BrokenAccountProvider(),
+            manager_factory=lambda **kwargs: AccountErrorRunManager(**kwargs),
+            auto_start=False,
+        )
+
+        request = _request("job-account-error", "B07YRMT36L")
+        await scheduler.enqueue(request)
+        store.create_mcp_run(request, "user@example.com")
+
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-account-error", "failed")
+
+        assert failed["error"]["code"] == "RuntimeError"
+        assert failed["error"]["message"] == "卖家精灵账号不可用"
+        mcp_run = store.get_mcp_run("job-account-error")
+        assert mcp_run["result_state"] == "failed"
+        assert mcp_run["error_json"]["message"] == "卖家精灵账号不可用"
         await scheduler.close()
 
     asyncio.run(scenario())

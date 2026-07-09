@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-09 seller_sprite - 补齐 SQLite 队列恢复与运维入口
+
+**变更原因**：线上 `seller_sprite_task_queue` 出现任务长期停留 `queued`，需要避免 worker 因账号异常退出后无人消费，并提供正式队列运维命令替代手工改 SQLite。
+**改动点**：`opscli/seller_sprite/services/task_scheduler.py` 调整为领取任务前不访问账号接口，单条任务异常和调度循环异常均不拖垮 worker；`opscli/seller_sprite/services/task_queue_store.py` 新增队列摘要、任务列表、批量 failed、按 started_at 截止重排 running 的仓储能力；`opscli/seller_sprite/cli.py` 新增 `seller-sprite queue status/list/fail/requeue-running/worker-health` 本地队列运维命令；补充调度器、仓储和 CLI 回归测试。
+**验证结果**：RED 已分别验证账号异常任务未进入 `failed`、仓储运维方法缺失、CLI `queue` 入口缺失。GREEN：`.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_scheduler.py::test_scheduler_marks_task_failed_when_account_unavailable -q` 通过，`1 passed in 0.32s`；`.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_queue_store.py::test_store_lists_tasks_and_summarizes_queue_status tests\seller_sprite\test_task_queue_store.py::test_store_fails_queued_tasks_and_syncs_mcp_runs tests\seller_sprite\test_task_queue_store.py::test_store_requeues_only_stale_running_tasks -q` 通过，`3 passed in 0.40s`；`.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_cli.py::test_public_seller_sprite_queue_commands_use_local_store -q` 通过，`1 passed in 0.88s`。回归：`.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_scheduler.py tests\seller_sprite\test_task_queue_store.py -q` 通过，`26 passed in 2.69s`；`.venv\Scripts\python.exe -m pytest tests\mcp\test_seller_sprite_tools.py tests\mcp\test_quota.py -q` 通过，`44 passed in 9.04s`；`.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_cli.py -q` 通过，`3 passed in 0.97s`；正式公共 CLI 子集通过，`6 passed in 1.12s`；最终整合 `.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_scheduler.py tests\seller_sprite\test_task_queue_store.py tests\seller_sprite\test_cli.py tests\mcp\test_seller_sprite_tools.py tests\mcp\test_quota.py -q` 通过，`73 passed in 11.90s`。执行 `.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_cli.py tests\seller_sprite\test_cli_split.py -q` 为 `9 passed, 2 failed`，失败项为既有 `seller-sprite-debug` 顶层命令未注册，不属于本次正式 `seller-sprite queue` 改动范围。
+**影响范围**：影响卖家精灵 SQLite 队列后台消费和正式 CLI 本地队列运维能力；不改变远端 MCP 调用参数和已有 `seller-sprite run/job-status/export` 语义。
+**回滚方式**：回退 `opscli/seller_sprite/services/task_scheduler.py`、`opscli/seller_sprite/services/task_queue_store.py`、`opscli/seller_sprite/cli.py`、对应测试和本条变更记录。
+---
+
 ## 2026-07-09 seller_sprite - 恢复 Listing Analysis 三段式异步入口
 
 **变更原因**：SellerSprite Listing Analysis 服务通常 3 分钟以上才出 AI 结果，同步等待会拖慢 CLI/MCP 调用；同时 master 中曾隐藏该场景，需要恢复并改为更稳的 submit/status/result 链路。

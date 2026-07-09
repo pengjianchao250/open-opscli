@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import typer
@@ -11,6 +12,8 @@ from opscli.seller_sprite.remote_adapter import SellerSpriteRemoteAdapter
 
 
 app = typer.Typer(help="卖家精灵远端 MCP 正式命令面。")
+queue_app = typer.Typer(help="卖家精灵本地 SQLite 队列运维命令。")
+app.add_typer(queue_app, name="queue")
 
 
 @app.command("scenarios")
@@ -104,6 +107,75 @@ def export(job_id: str = typer.Argument(..., help="任务 ID")) -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+@queue_app.command("status")
+def queue_status(
+    stale_running_seconds: int = typer.Option(1800, "--stale-running-seconds", help="running 超时判定秒数"),
+) -> None:
+    """读取本机卖家精灵 SQLite 队列摘要。"""
+    payload = _get_queue_store().queue_status(stale_running_seconds=stale_running_seconds)
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@queue_app.command("list")
+def queue_list(
+    state: str | None = typer.Option(None, "--state", help="按状态过滤，如 queued/running/failed"),
+    limit: int = typer.Option(50, "--limit", help="返回条数，最大 500"),
+) -> None:
+    """列出本机卖家精灵队列任务。"""
+    payload = _get_queue_store().list_tasks(state=state, limit=limit)
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@queue_app.command("fail")
+def queue_fail(
+    state: str = typer.Option("queued", "--state", help="要终止的任务状态，默认 queued"),
+    job_ids: list[str] | None = typer.Option(None, "--job-id", help="指定任务 ID，可重复传入"),
+    before: str | None = typer.Option(None, "--before", help="只终止 created_at 不晚于该 ISO 时间的任务"),
+    reason: str = typer.Option("人工终止队列任务", "--reason", help="写入 error_json 的原因"),
+    all_tasks: bool = typer.Option(False, "--all", help="允许在无 job-id/before 时终止全部匹配状态任务"),
+) -> None:
+    """将匹配队列任务标记为 failed。"""
+    if not job_ids and not before and not all_tasks:
+        raise typer.BadParameter("必须提供 --job-id、--before，或显式传入 --all")
+    changed = _get_queue_store().fail_tasks(
+        state=state,
+        job_ids=job_ids,
+        before=before,
+        reason=reason,
+    )
+    typer.echo(json.dumps({"changed": changed}, ensure_ascii=False, indent=2))
+
+
+@queue_app.command("requeue-running")
+def queue_requeue_running(
+    older_than_minutes: int = typer.Option(30, "--older-than-minutes", help="仅重排 started_at 早于该分钟数的 running 任务"),
+) -> None:
+    """将超时 running 任务重新放回 queued。"""
+    before_started_at = _minutes_ago_iso(max(0, older_than_minutes))
+    changed = _get_queue_store().reset_running_tasks(before_started_at=before_started_at)
+    typer.echo(
+        json.dumps(
+            {
+                "changed": changed,
+                "before_started_at": before_started_at,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@queue_app.command("worker-health")
+def queue_worker_health(
+    stale_running_seconds: int = typer.Option(1800, "--stale-running-seconds", help="running 超时判定秒数"),
+) -> None:
+    """读取队列健康摘要。当前版本未持久化 worker heartbeat。"""
+    payload = _get_queue_store().queue_status(stale_running_seconds=stale_running_seconds)
+    payload["worker_state"] = "no_heartbeat"
+    payload["healthy"] = payload.get("stale_running_count", 0) == 0
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
 def _parse_params(value: str) -> dict[str, Any]:
     try:
         parsed = json.loads(value or "{}")
@@ -112,3 +184,15 @@ def _parse_params(value: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise typer.BadParameter("params 必须是 JSON 对象")
     return parsed
+
+
+def _get_queue_store():
+    """延迟加载队列仓储，避免普通远端命令初始化本地 SQLite。"""
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    return SellerSpriteTaskQueueStore()
+
+
+def _minutes_ago_iso(minutes: int) -> str:
+    """返回当前时间向前偏移指定分钟后的本地 ISO 字符串。"""
+    return (datetime.now(timezone.utc).astimezone() - timedelta(minutes=minutes)).isoformat(timespec="seconds")
