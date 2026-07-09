@@ -12,7 +12,6 @@
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
 | 查流量来源 / traffic source | `traffic-source` |
 | 选市场 / market research | `market-research` |
-| Listing panorama / listing analysis | `listing-analysis` |
 
 ## 公共参数与默认值
 
@@ -57,7 +56,6 @@
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
 | `traffic-source` | 关键词或 ASIN | `keyword`、`asin`、`asins`、`order`、`desc` | `pageNo=1`，`order=10`，`desc=true` |
 | `market-research` | 无 | `departmentKeyword` / `category`、`node` / `nodeIdPath`、`newReleaseNum`、`topn`、市场指标筛选 | `sampleNumber=1`，`topn=10`，`newReleaseNum=6`，按 `total_sales` 倒序 |
-| `listing-analysis` | `asin` | `station`、`pollAttempts` / `maxPolls`、`pollIntervalSeconds` / `pollInterval` | `station=GLOBAL` |
 
 ## `product-research` 重点参数
 
