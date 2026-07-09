@@ -63,11 +63,11 @@ LISTING_SHEET_DUPLICATE_FIELDS = {
     "\u4e3b\u56fe\u94fe\u63a5": "\u4e3b\u56fe",
 }
 
-# file_key -> (db_column, is_multi) mapping for per-file delivery.
-# Each ASIN's split package files are uploaded individually and the OSS URLs
-# are stored in the corresponding column of ops_asin_data_report_files.
-# - single-file keys use a varchar column (one URL)
-# - multi-file keys (keyword_miner / competitor) use a json column (URL array)
+# file_key -> (db_column, is_multi) 映射，用于逐文件交付。
+# 每个 ASIN 的拆包文件会单独上传，OSS URL 写入 ops_asin_data_report_files
+# 中对应的字段。
+# - 单文件类型使用 varchar 字段（一个 URL）
+# - 多文件类型（keyword_miner / competitor）使用 json 字段（URL 数组）
 FILE_FIELD_MAP = {
     "basic": ("basic_data_url", False),
     "bi": ("bi_data_url", False),
@@ -77,7 +77,7 @@ FILE_FIELD_MAP = {
     "rufus": ("rufus_report_url", False),
 }
 
-# Ordered file_key list matching the 01~06 split package files.
+# 与 01~06 拆包文件顺序一致的 file_key 列表。
 SPLIT_FILE_KEYS = ("basic", "bi", "keyword_reverse", "keyword_miner", "competitor", "rufus")
 
 
@@ -86,8 +86,11 @@ def build_split_package(
     output_root: Path,
     asin_results: list[dict[str, Any]],
     summary: dict[str, Any],
+    file_keys: tuple[str, ...] = SPLIT_FILE_KEYS,
+    include_zip: bool = True,
 ) -> dict[str, Any]:
-    """Build the current split Excel/Markdown package and zip it."""
+    """按需生成当前拆包 Excel/Markdown 文件，并可选压缩为 zip。"""
+    selected_keys = tuple(key for key in SPLIT_FILE_KEYS if key in set(file_keys))
     package_dir = output_root / "asin-data-packages"
     if package_dir.exists():
         shutil.rmtree(package_dir)
@@ -100,7 +103,7 @@ def build_split_package(
             continue
         asin_dir = package_dir / asin
         asin_dir.mkdir(parents=True, exist_ok=True)
-        files = {
+        all_files = {
             "basic": asin_dir / FILE_BASIC,
             "bi": asin_dir / FILE_BI,
             "keyword_reverse": asin_dir / FILE_KEYWORD_REVERSE,
@@ -108,13 +111,20 @@ def build_split_package(
             "competitor": asin_dir / FILE_COMPETITOR,
             "rufus": asin_dir / FILE_RUFUS,
         }
-        write_basic_workbook(files["basic"], asin_result)
-        write_bi_workbook(files["bi"], asin_result)
+        files = {key: all_files[key] for key in selected_keys}
+        if "basic" in files:
+            write_basic_workbook(files["basic"], asin_result)
+        if "bi" in files:
+            write_bi_workbook(files["bi"], asin_result)
         seller_sprite = asin_result.get("seller_sprite") if isinstance(asin_result.get("seller_sprite"), dict) else {}
-        write_seller_sprite_workbook(files["keyword_reverse"], seller_sprite.get("keyword_reverse"), title="\u5173\u952e\u8bcd\u53cd\u67e5")
-        write_keyword_miner_workbook(files["keyword_miner"], seller_sprite.get("keyword_miner"))
-        write_competitor_workbook(files["competitor"], seller_sprite.get("competitor"))
-        write_rufus_markdown(files["rufus"], asin_result)
+        if "keyword_reverse" in files:
+            write_seller_sprite_workbook(files["keyword_reverse"], seller_sprite.get("keyword_reverse"), title="\u5173\u952e\u8bcd\u53cd\u67e5")
+        if "keyword_miner" in files:
+            write_keyword_miner_workbook(files["keyword_miner"], seller_sprite.get("keyword_miner"))
+        if "competitor" in files:
+            write_competitor_workbook(files["competitor"], seller_sprite.get("competitor"))
+        if "rufus" in files:
+            write_rufus_markdown(files["rufus"], asin_result)
         items.append(
             {
                 "asin": asin,
@@ -123,18 +133,20 @@ def build_split_package(
             }
         )
 
-    readme_path = package_dir / "README.md"
-    readme_path.write_text(build_readme(summary, items), encoding="utf-8")
-    zip_path = output_root / split_package_zip_name(asin_results)
-    if zip_path.exists():
-        zip_path.unlink()
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(package_dir.rglob("*")):
-            if path.is_file():
-                archive.write(path, path.relative_to(package_dir).as_posix())
+    zip_path: Path | None = None
+    if include_zip:
+        readme_path = package_dir / "README.md"
+        readme_path.write_text(build_readme(summary, items), encoding="utf-8")
+        zip_path = output_root / split_package_zip_name(asin_results)
+        if zip_path.exists():
+            zip_path.unlink()
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(package_dir.rglob("*")):
+                if path.is_file():
+                    archive.write(path, path.relative_to(package_dir).as_posix())
     return {
         "package_dir": package_dir.as_posix(),
-        "zip_path": zip_path.as_posix(),
+        "zip_path": zip_path.as_posix() if zip_path else None,
         "items": items,
     }
 

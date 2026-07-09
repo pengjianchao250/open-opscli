@@ -6,6 +6,7 @@ import json
 import os
 import time
 import configparser
+from concurrent.futures import ThreadPoolExecutor
 from http.cookies import SimpleCookie
 from typing import Any, Callable, Mapping, Sequence
 
@@ -169,8 +170,10 @@ class AsinBiReportDataClient:
             except Exception as exc:
                 ops_auth_error = exc
 
-        sources = {
-            key: (
+        source_items = list(source_configs.items())
+
+        def fetch_one(key: str, config: dict[str, str]) -> dict[str, Any]:
+            return (
                 _failed_source(key, config, ops_auth_error)
                 if ops_auth_error is not None and key not in LISTING_REPORT_SOURCE_KEYS
                 else self._fetch_source(
@@ -183,8 +186,16 @@ class AsinBiReportDataClient:
                     cookies=cookies,
                 )
             )
-            for key, config in source_configs.items()
-        }
+
+        if _can_parallel_fetch_sources(source_configs):
+            with ThreadPoolExecutor(max_workers=min(4, len(source_items))) as executor:
+                futures = {
+                    key: executor.submit(fetch_one, key, config)
+                    for key, config in source_items
+                }
+                sources = {key: futures[key].result() for key, _config in source_items}
+        else:
+            sources = {key: fetch_one(key, config) for key, config in source_items}
         return {
             "status": _aggregate_status(sources.values()),
             "asins": normalized_asins,
@@ -420,7 +431,8 @@ class AsinBiReportDataClient:
         all_rows: list[dict[str, Any]] = []
         raw_items: list[Any] = []
         errors: list[str] = []
-        for asin in asins:
+
+        def fetch_one(asin: str) -> tuple[Any | None, list[dict[str, Any]], str | None]:
             try:
                 body = {"asin": asin}
                 body.update(_date_range_params(start_date=start_date, end_date=end_date))
@@ -437,11 +449,24 @@ class AsinBiReportDataClient:
                     business_error_cls=AsinBiReportDataBusinessError,
                     bad_json_error_cls=AsinBiReportDataBadJsonError,
                 )
-                raw_items.append(payload)
                 rows = extract_rows(payload.get("data") if isinstance(payload, dict) and "data" in payload else payload)
-                all_rows.extend(rows)
+                return payload, rows, None
             except Exception as exc:
-                errors.append(f"{asin}: {exc}")
+                return None, [], f"{asin}: {exc}"
+
+        if len(asins) > 1:
+            with ThreadPoolExecutor(max_workers=min(8, len(asins))) as executor:
+                futures = [executor.submit(fetch_one, asin) for asin in asins]
+                results = [future.result() for future in futures]
+        else:
+            results = [fetch_one(asin) for asin in asins]
+
+        for payload, rows, error in results:
+            if payload is not None:
+                raw_items.append(payload)
+            all_rows.extend(rows)
+            if error:
+                errors.append(error)
         status = "success" if not errors else ("partial" if all_rows else "failed")
         result: dict[str, Any] = {
             "key": key,
@@ -467,13 +492,23 @@ class AsinBiReportDataClient:
     ) -> dict[str, Any]:
         rows: list[dict[str, Any]] = []
         raw_items: list[dict[str, Any]] = []
-        for asin in asins:
-            payload = self._fetch_listing_basic_for_asin(
+
+        def fetch_one(asin: str) -> dict[str, Any]:
+            return self._fetch_listing_basic_for_asin(
                 asin=asin,
                 config=config,
                 headers=headers,
                 cookies=cookies,
             )
+
+        if len(asins) > 1:
+            with ThreadPoolExecutor(max_workers=min(8, len(asins))) as executor:
+                futures = [executor.submit(fetch_one, asin) for asin in asins]
+                payloads = [future.result() for future in futures]
+        else:
+            payloads = [fetch_one(asin) for asin in asins]
+
+        for payload in payloads:
             raw_items.append(payload)
             row = payload.get("row")
             if isinstance(row, dict):
@@ -1002,6 +1037,11 @@ def _filter_source_configs(
     if unknown:
         raise ValueError(f"Unknown BI report data source keys: {', '.join(unknown)}")
     return {key: dict(configs[key]) for key in normalized}
+
+
+def _can_parallel_fetch_sources(source_configs: Mapping[str, dict[str, str]]) -> bool:
+    """判断当前 source 组合是否适合并发请求。"""
+    return len(source_configs) > 1 and not any(key in LISTING_REPORT_SOURCE_KEYS for key in source_configs)
 
 
 def _normalize_asin_values(value: Any) -> set[str]:

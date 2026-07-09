@@ -21,6 +21,7 @@ from uuid import uuid4
 
 from opscli.asin_data.services.bi_report_data import (
     AsinBiReportDataClient,
+    LISTING_REPORT_SOURCE_KEYS,
     build_bi_report_data_placeholder,
     select_bi_report_data_for_asin,
     summarize_bi_report_data,
@@ -136,22 +137,33 @@ class AsinDataCollector:
             summary["bi_report_data"] = summarize_bi_report_data(bi_report_data)
             if report_files is not None:
                 summary["report_files"] = report_files
-            frontend_bundle = self.legacy.build_frontend_bundle(summary, asin_results)
-            frontend_json_path = output_root / "frontend-data.json"
-            frontend_markdown_path = output_root / "frontend-data.md"
-            frontend_html_path = output_root / "frontend-data.html"
-            report_txt_path = self._write_report_txt(output_root, frontend_bundle, records, summary, asin_results)
-            self.legacy.write_json(frontend_json_path, frontend_bundle)
-            self.legacy.write_text(frontend_markdown_path, self.legacy.render_frontend_markdown(frontend_bundle))
-            self.legacy.write_text(frontend_html_path, self._render_frontend_html(frontend_bundle))
-            summary["files"]["frontend_html"] = frontend_html_path.as_posix()
-            summary["files"]["asin_report_txt"] = report_txt_path.as_posix()
-            split_package = build_split_package(output_root=output_root, asin_results=asin_results, summary=summary)
+            if args.write_frontend_outputs:
+                frontend_bundle = self.legacy.build_frontend_bundle(summary, asin_results)
+                frontend_json_path = output_root / "frontend-data.json"
+                frontend_markdown_path = output_root / "frontend-data.md"
+                frontend_html_path = output_root / "frontend-data.html"
+                report_txt_path = self._write_report_txt(output_root, frontend_bundle, records, summary, asin_results)
+                self.legacy.write_json(frontend_json_path, frontend_bundle)
+                self.legacy.write_text(frontend_markdown_path, self.legacy.render_frontend_markdown(frontend_bundle))
+                self.legacy.write_text(frontend_html_path, self._render_frontend_html(frontend_bundle))
+                summary["files"]["frontend_html"] = frontend_html_path.as_posix()
+                summary["files"]["asin_report_txt"] = report_txt_path.as_posix()
+            else:
+                for file_key in ("frontend_data", "frontend_markdown", "frontend_html", "asin_report_txt"):
+                    summary["files"].pop(file_key, None)
+            split_package = build_split_package(
+                output_root=output_root,
+                asin_results=asin_results,
+                summary=summary,
+                file_keys=args.split_file_keys,
+                include_zip=args.build_split_package_zip,
+            )
             summary["files"]["asin_data_package_dir"] = split_package["package_dir"]
-            summary["files"]["asin_data_package_zip"] = split_package["zip_path"]
+            if split_package.get("zip_path"):
+                summary["files"]["asin_data_package_zip"] = split_package["zip_path"]
             summary["asin_data_package"] = split_package
             upload = None
-            if args.upload:
+            if args.upload and split_package.get("zip_path"):
                 upload = self._upload_split_package(
                     Path(split_package["zip_path"]),
                     run_id=run_id,
@@ -250,6 +262,9 @@ class AsinDataCollector:
             crawler_field_mode=kwargs.get("crawler_field_mode", "full"),
             upload=kwargs.get("upload", False),
             fetch_report_files=kwargs.get("fetch_report_files", False),
+            split_file_keys=tuple(kwargs.get("split_file_keys") or SPLIT_FILE_KEYS),
+            build_split_package_zip=kwargs.get("build_split_package_zip", True),
+            write_frontend_outputs=kwargs.get("write_frontend_outputs", True),
         )
         self._validate_args(args)
         return args
@@ -277,6 +292,17 @@ class AsinDataCollector:
                 source_keys=args.bi_report_source_keys,
             )
         else:
+            if self._can_batch_bi_report_data(args.bi_report_source_keys):
+                bundle = self.bi_report_data_client.fetch(
+                    asins=asins,
+                    start_date=args.sales_start,
+                    end_date=args.sales_end,
+                    source_keys=args.bi_report_source_keys,
+                )
+                bundle["request_mode"] = "batch"
+                self._attach_bi_report_data(asin_results, bundle, error_log)
+                return bundle
+
             bundles: dict[str, dict[str, Any]] = {}
             for asin_result in asin_results:
                 asin = str(asin_result.get("asin") or "").strip().upper()
@@ -294,6 +320,14 @@ class AsinDataCollector:
 
         self._attach_bi_report_data(asin_results, bundle, error_log)
         return bundle
+
+    @staticmethod
+    def _can_batch_bi_report_data(source_keys: list[str] | tuple[str, ...] | None) -> bool:
+        """仅对不依赖刊登详情接口的 BI 数据源启用批量取数。"""
+        if source_keys is None:
+            return False
+        normalized = {str(key).strip() for key in source_keys if str(key).strip()}
+        return not any(key in LISTING_REPORT_SOURCE_KEYS for key in normalized)
 
     @classmethod
     def _merge_per_asin_bi_report_data(

@@ -23,6 +23,7 @@ from opscli.asin_data.services.collector import (
     AsinDataCollector,
 )
 from opscli.asin_data.services.daily_pipeline import DailyAsinDataPipeline
+from opscli.asin_data.services.live_data import AsinLiveDataService, fetch_split_file
 from opscli.asin_data.services.report_file_submitter import (
     DEFAULT_REPORT_TYPE,
     DEFAULT_SOURCE,
@@ -83,6 +84,15 @@ class LiveDataScope(str, Enum):
     bi = "bi"
     listing = "listing"
     listing_basic = "listing_basic"
+
+
+class LiveDataReturnMode(str, Enum):
+    """实时取数返回模式。"""
+
+    content = "content"
+    url_only = "url_only"
+    both = "both"
+    ai_ready = "ai_ready"
 
 
 app = typer.Typer(help="ASIN 批量取数服务")
@@ -403,6 +413,236 @@ def fetch_file(
     normalized_asin = asin.strip().upper()
     normalized_site = site.strip().upper()
     try:
+        data = fetch_split_file(
+            asin=normalized_asin,
+            site=normalized_site,
+            file_key=file.value,
+        )
+    except Exception as exc:
+        _emit(_error_payload("asin-data fetch-file", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(
+        {
+            "success": True,
+            "command": "asin-data fetch-file",
+            "data": data,
+            "error": None,
+        },
+        pretty,
+    )
+
+
+@app.command("live-data")
+def live_data(
+    input_path: str | None = typer.Option(None, "--input", "-i", help="CSV/XLSX/JSON/JSONL 输入文件"),
+    asin: str | None = typer.Option(None, "--asin", help="单个 ASIN；与 --input 二选一"),
+    keywords: list[str] | None = typer.Option(None, "--keyword", help="单个 ASIN 的关键词，可重复传入"),
+    asin_column: str = typer.Option("asin", "--asin-column", help="ASIN 列名"),
+    keyword_column: str = typer.Option("keyword", "--keyword-column", help="关键词列名"),
+    site_column: str = typer.Option("site", "--site-column", help="站点列名"),
+    site: str = typer.Option("US", "--site", help="默认站点"),
+    output_dir: str = typer.Option("output/asin-data", "--output-dir", help="输出目录"),
+    run_id: str | None = typer.Option(None, "--run-id", help="本次运行 ID"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只生成计划与前端文件，不执行远程取数"),
+    skip_query: bool = typer.Option(True, "--skip-query/--no-skip-query", help="跳过旧 BI query 取数；live-data 默认走实时接口"),
+    skip_bi_report_data: bool = typer.Option(False, "--skip-bi-report-data", help="跳过 ASIN 报告 BI 接口取数"),
+    skip_sales_query: bool = typer.Option(False, "--skip-sales-query", help="跳过销售数据 query"),
+    skip_crawler_query: bool = typer.Option(False, "--skip-crawler-query", help="跳过旧爬虫 Listing query"),
+    legacy_crawler_query: bool = typer.Option(False, "--legacy-crawler-query", help="启用旧爬虫 Listing query"),
+    sales_table_id: int | None = typer.Option(None, "--sales-table-id", help="BI 销售数据 table_id"),
+    sales_dataset_alias: str = typer.Option("ds_d35ac6f3910c", "--sales-dataset-alias", help="BI 销售数据 dataset alias"),
+    sales_field_mode: FieldMode = typer.Option(FieldMode.full, "--sales-field-mode", help="销售字段模式"),
+    sales_start: str | None = typer.Option(None, "--sales-start", help="销售开始日期"),
+    sales_end: str | None = typer.Option(None, "--sales-end", help="销售结束日期"),
+    query_chunk_size: int = typer.Option(100, "--query-chunk-size", min=1, help="query 每批 ASIN 数量"),
+    crawler_table_id: int | None = typer.Option(None, "--crawler-table-id", help="爬虫 Listing table_id"),
+    crawler_dataset_alias: str = typer.Option("ds_icw50TLOFu4F", "--crawler-dataset-alias", help="爬虫 Listing dataset alias"),
+    crawler_field_mode: FieldMode = typer.Option(FieldMode.full, "--crawler-field-mode", help="爬虫 Listing 字段模式"),
+    data_scope: LiveDataScope = typer.Option(LiveDataScope.all, "--data-scope", help="实时数据范围：all=基础+BI，basic=完整基础(刊登+爬虫)，listing/listing_basic=仅刊登，bi=仅BI"),
+    upload_xlsx: bool = typer.Option(False, "--upload-xlsx/--no-upload-xlsx", help="上传实时生成的基础/BI xlsx 到 OSS 并返回 file_url"),
+    return_mode: LiveDataReturnMode = typer.Option(
+        LiveDataReturnMode.content,
+        "--return-mode",
+        help="返回模式：content=返回内联 JSON，url_only=仅返回 xlsx URL，both=内容和 URL 都返回，ai_ready=返回文件索引、数据集预览和诊断",
+    ),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """实时获取 ASIN 基础刊登数据与 BI 数据，并直接返回前端 JSON。"""
+    try:
+        result = AsinLiveDataService(
+            collector=AsinDataCollector(),
+            file_upload_client_factory=FileUploadClient,
+        ).run(
+            input_path=input_path,
+            asin=asin,
+            keywords=keywords,
+            asin_column=asin_column,
+            keyword_column=keyword_column,
+            site_column=site_column,
+            site=site,
+            output_dir=output_dir,
+            run_id=run_id,
+            dry_run=dry_run,
+            skip_query=skip_query,
+            skip_bi_report_data=skip_bi_report_data,
+            skip_sales_query=skip_sales_query,
+            skip_crawler_query=skip_crawler_query,
+            legacy_crawler_query=legacy_crawler_query,
+            sales_table_id=sales_table_id,
+            sales_dataset_alias=sales_dataset_alias,
+            sales_field_mode=sales_field_mode.value,
+            sales_start=sales_start,
+            sales_end=sales_end,
+            query_chunk_size=query_chunk_size,
+            crawler_table_id=crawler_table_id,
+            crawler_dataset_alias=crawler_dataset_alias,
+            crawler_field_mode=crawler_field_mode.value,
+            data_scope=data_scope.value,
+            upload_xlsx=upload_xlsx,
+            return_mode=return_mode.value,
+        )
+    except Exception as exc:
+        _emit(_error_payload("asin-data live-data", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit({"success": True, "command": "asin-data live-data", "data": result, "error": None}, pretty)
+
+
+@app.command("abtest-url")
+def abtest_url(
+    asin: str = typer.Option(..., "--asin", help="ASIN"),
+    site: str = typer.Option("US", "--site", help="站点"),
+    data_type: str = typer.Option("file", "--data-type", help="返回数据类型，默认 file 取报告文件地址"),
+    url_only: bool = typer.Option(False, "--url-only", help="只输出 ABTest 报告文件地址"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """只查询 ABTest 报告文件接口并返回报告地址。"""
+    normalized_asin = asin.strip().upper()
+    normalized_site = site.strip().upper()
+    try:
+        report_file = AsinReportFileClient().fetch_abtest(
+            asin=normalized_asin, site=normalized_site, data_type=data_type
+        )
+        if not report_file.url:
+            raise AsinReportFileNotFoundError(asin=normalized_asin, site=normalized_site)
+    except Exception as exc:
+        _emit(_error_payload("asin-data abtest-url", exc), pretty)
+        raise typer.Exit(1)
+
+    if url_only:
+        typer.echo(report_file.url)
+        return
+
+    _emit(
+        {
+            "success": True,
+            "command": "asin-data abtest-url",
+            "data": {
+                "asin": report_file.asin,
+                "site": report_file.site,
+                "data_type": data_type,
+                "abtest_report_url": report_file.url,
+                "record": report_file.record,
+                "raw": report_file.raw,
+            },
+            "error": None,
+        },
+        pretty,
+    )
+
+
+@app.command("file-url")
+def file_url(
+    asin: str = typer.Option(..., "--asin", help="ASIN"),
+    site: str = typer.Option("US", "--site", help="站点"),
+    file: FileKey | None = typer.Option(
+        None, "--file", help="文件类型；不传时配合 --list 列出全部"
+    ),
+    list_all: bool = typer.Option(False, "--list", help="列出该 ASIN 所有可用的拆分文件地址"),
+    url_only: bool = typer.Option(False, "--url-only", help="只输出文件地址"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """查询 ASIN 拆分数据包中某个文件的 OSS 地址（按文件粒度）。"""
+    normalized_asin = asin.strip().upper()
+    normalized_site = site.strip().upper()
+    client = AsinReportFileClient()
+    try:
+        result = client.fetch_split_files(asin=normalized_asin, site=normalized_site)
+        files = result.get("files") or {}
+        if list_all or file is None:
+            data = [
+                {"file_key": key, "url": value}
+                for key, value in files.items()
+            ]
+            if url_only:
+                lines: list[str] = []
+                for item in data:
+                    urls = item["url"]
+                    if isinstance(urls, list):
+                        lines.extend(urls)
+                    elif urls:
+                        lines.append(str(urls))
+                typer.echo("\n".join(lines))
+                return
+            _emit(
+                {
+                    "success": True,
+                    "command": "asin-data file-url",
+                    "data": {
+                        "asin": normalized_asin,
+                        "site": normalized_site,
+                        "files": data,
+                        "record": result.get("record"),
+                    },
+                    "error": None,
+                },
+                pretty,
+            )
+            return
+
+        urls = files.get(file.value)
+        if not urls:
+            raise AsinReportFileNotFoundError(asin=normalized_asin, site=normalized_site)
+    except Exception as exc:
+        _emit(_error_payload("asin-data file-url", exc), pretty)
+        raise typer.Exit(1)
+
+    if url_only:
+        if isinstance(urls, list):
+            typer.echo("\n".join(urls))
+        else:
+            typer.echo(urls)
+        return
+
+    _emit(
+        {
+            "success": True,
+            "command": "asin-data file-url",
+            "data": {
+                "asin": normalized_asin,
+                "site": normalized_site,
+                "file_key": file.value,
+                "file_url": urls,
+                "record": result.get("record"),
+            },
+            "error": None,
+        },
+        pretty,
+    )
+
+
+@app.command("fetch-file")
+def fetch_file(
+    asin: str = typer.Option(..., "--asin", help="ASIN"),
+    file: FileKey = typer.Option(..., "--file", help="文件类型"),
+    site: str = typer.Option("US", "--site", help="站点"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """下载并返回 ASIN 拆分数据包中某个文件的内容（xlsx 转 JSON，md 输出文本）。"""
+    normalized_asin = asin.strip().upper()
+    normalized_site = site.strip().upper()
+    try:
         result = AsinReportFileClient().fetch_split_files(
             asin=normalized_asin, site=normalized_site
         )
@@ -485,14 +725,20 @@ def live_data(
     crawler_field_mode: FieldMode = typer.Option(FieldMode.full, "--crawler-field-mode", help="爬虫 Listing 字段模式"),
     data_scope: LiveDataScope = typer.Option(LiveDataScope.all, "--data-scope", help="实时数据范围：all=基础+BI，basic=完整基础(刊登+爬虫)，listing/listing_basic=仅刊登，bi=仅BI"),
     upload_xlsx: bool = typer.Option(False, "--upload-xlsx/--no-upload-xlsx", help="上传实时生成的基础/BI xlsx 到 OSS 并返回 file_url"),
+    return_mode: LiveDataReturnMode = typer.Option(
+        LiveDataReturnMode.content,
+        "--return-mode",
+        help="返回模式：content=返回内联 JSON，url_only=仅返回 xlsx URL，both=内容和 URL 都返回，ai_ready=返回文件索引、数据集预览和诊断",
+    ),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
 ) -> None:
     """实时获取 ASIN 基础刊登数据与 BI 数据，并直接返回前端 JSON。"""
     try:
-        source_keys = _live_data_source_keys(data_scope)
-        file_keys = _live_data_file_keys(data_scope)
-        result = AsinDataCollector().collect(
-            input=input_path,
+        result = AsinLiveDataService(
+            collector=AsinDataCollector(),
+            file_upload_client_factory=FileUploadClient,
+        ).run(
+            input_path=input_path,
             asin=asin,
             keywords=keywords,
             asin_column=asin_column,
@@ -502,39 +748,24 @@ def live_data(
             output_dir=output_dir,
             run_id=run_id,
             dry_run=dry_run,
-            skip_seller_sprite=True,
-            skip_keyword_miner=True,
-            skip_listing_analysis=True,
-            skip_amazon=True,
             skip_query=skip_query,
             skip_bi_report_data=skip_bi_report_data,
             skip_sales_query=skip_sales_query,
-            skip_crawler_query=(skip_crawler_query or not legacy_crawler_query),
-            skip_rufus=True,
+            skip_crawler_query=skip_crawler_query,
+            legacy_crawler_query=legacy_crawler_query,
             sales_table_id=sales_table_id,
             sales_dataset_alias=sales_dataset_alias,
             sales_field_mode=sales_field_mode.value,
             sales_start=sales_start,
             sales_end=sales_end,
-            bi_report_source_keys=source_keys,
             query_chunk_size=query_chunk_size,
             crawler_table_id=crawler_table_id,
             crawler_dataset_alias=crawler_dataset_alias,
             crawler_field_mode=crawler_field_mode.value,
-            fetch_report_files=False,
-            upload=False,
+            data_scope=data_scope.value,
+            upload_xlsx=upload_xlsx,
+            return_mode=return_mode.value,
         )
-        result["data_scope"] = data_scope.value
-        result["frontend_data"] = _load_frontend_data(str(result["output_dir"]))
-        result["split_files"] = _load_live_split_files(result, file_keys=file_keys)
-        if upload_xlsx:
-            manifest = result.get("manifest") if isinstance(result.get("manifest"), dict) else {}
-            run_id_for_upload = str(manifest.get("run_id") or Path(str(result["output_dir"])).name)
-            result["split_file_uploads"] = _upload_live_split_files(
-                result["split_files"],
-                run_id=run_id_for_upload,
-            )
-            result["split_file_urls"] = _split_file_urls(result["split_files"])
     except Exception as exc:
         _emit(_error_payload("asin-data live-data", exc), pretty)
         raise typer.Exit(1)
