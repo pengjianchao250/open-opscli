@@ -6,6 +6,37 @@ description: 通过 MCP Tool 提交和查询结构化用户反馈
 
 # ops-feedback MCP
 
+## 分级反馈策略
+
+- 失败即时反馈：MCP Tool `success=false`、抛异常、远端错误码必须立即提交 `bug`。
+- 成功默认本地任务摘要：成功查询、成功引导和批量评估正常样本只写入本地执行总结或项目结果文件。
+- 远端成功反馈默认关闭：只有用户明确要求、发布/审计门禁或 L2 可疑结果需要 owner 处理时，才提交 `query_result`。
+- 抽样：无异常成功样本默认只进入本地评估集或回归候选；用户要求完整审计时才远端提交。
+- 去重：同一失败指纹 30 分钟内只提交 1 次，复用已有 `feedback_uuid`。去重是滑动窗口：窗口内重复失败只刷新本地 occurrence_count，不会自动再次远端提交。
+- 批量失败聚合：批量烟测、回归和多数据集扫描中的同根因 L3 失败在事件 JSON 中传 `feedback_group_key`，首条失败远端提交，后续同组失败复用已有 `feedback_uuid`；显式 group key 会覆盖变化的完整命令字符串和参数。
+- guard 状态恢复：本地状态损坏时按空状态继续；重复失败记录缺少 `feedback_uuid` 时重新提交，不复用空 UUID。
+- 事件瘦身与敏感字段脱敏：guard 生成 fingerprint 的副本会脱敏 token/cookie/authorization/password/secret，并把大日志、大数组和大字典压到 4096 bytes 以内。
+- fail-open：`feedback_submit` 自身失败时只报告该失败，不递归提交，不阻塞原任务。
+- L3 新失败的 guard 决策为 `submit_remote=true`、`non_blocking=true`：仍要立即提交或复用反馈 UUID，但提交动作完成后继续原任务恢复或降级处理。
+
+## 提交前守门
+
+在调用 `feedback_submit` 前，优先把失败或可疑事件写成小 JSON，并运行。事件 JSON 应带 `session_id` / `thread_id` / `task_id`，用于把 L2 非失败反馈预算限制在当前任务内；批量同根因 L3 失败应带 `feedback_group_key`，用于 issue grouping 式去重：
+
+```bash
+python3 scripts/feedback_guard.py decide --event-file event.json
+```
+
+返回 `submit_remote: true` 时才调用 `feedback_submit`。提交成功后运行：
+
+```bash
+python3 scripts/feedback_guard.py record --event-file event.json --feedback-uuid <feedback_uuid>
+```
+
+返回 `agent_action: reuse_existing_feedback_uuid` 时复用已有 `feedback_uuid`，不要重复调用 `feedback_submit`。返回 `agent_action: fail_open_no_recursive_feedback` 时只报告反馈通道失败，不递归提交。L3 决策会返回 `event_hygiene.fingerprint_payload_bytes`、`sensitive_key_count` 和 `oversized_value_count`，用于确认低 token 快速路径没有携带大日志或敏感值。
+
+`decide` 返回 `budget_scope` 时，该值表示当前非失败预算桶；同一 `budget_scope` 默认最多提交 1 条 L2 远端反馈。
+
 ## 自动触发（Agent 工具调用失败后）
 
 当 AI Agent 调用 MCP Tool 失败后，**必须**自动提交反馈。
@@ -19,6 +50,8 @@ description: 通过 MCP Tool 提交和查询结构化用户反馈
 5. 返回 `feedback_uuid` 并继续处理原任务
 
 不要对 `feedback_submit` / `feedback_detail` 自身失败继续自动提交反馈。
+
+成功查询不走本节的失败自动触发流程；默认只写本地任务摘要，不远端提交。只有用户明确要求、发布/审计门禁或 L2 可疑结果需要 owner 处理时，才提交汇总反馈。
 
 ## 参数结构铁律
 
@@ -131,4 +164,5 @@ feedback_detail(feedback_uuid="<feedback_uuid>")
 ## 注意事项
 
 - 当前 MCP 工具会自动尝试读取本地 session，也支持显式传入 `session_id` 和 `jwt`
+- 成功默认本地任务摘要，远端成功反馈默认关闭；不要为同一用户任务中的每次成功 query_simple 都提交一条反馈
 - 不要提交 Token、Cookie、密码等敏感信息
