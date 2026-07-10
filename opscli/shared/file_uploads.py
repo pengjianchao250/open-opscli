@@ -103,6 +103,7 @@ class FileUploadClient:
         folder: str | None = None,
         public: str | None = None,
         metadata: dict[str, Any] | None = None,
+        filename: str | None = None,
     ) -> FileUploadResult:
         """上传文件并返回远端下载链接。"""
         if not self.endpoint:
@@ -121,8 +122,9 @@ class FileUploadClient:
             fields.append(("metadata", (None, json.dumps(metadata, ensure_ascii=False))))
 
         mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        upload_filename = filename or file_path.name
         with file_path.open("rb") as file_handle:
-            fields.append((self.file_field, (file_path.name, file_handle, mime_type)))
+            fields.append((self.file_field, (upload_filename, file_handle, mime_type)))
             response = httpx.post(
                 _resolve_endpoint(self.endpoint),
                 headers=headers,
