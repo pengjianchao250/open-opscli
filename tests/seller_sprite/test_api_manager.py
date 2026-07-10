@@ -461,7 +461,8 @@ def test_extract_items_returns_listing_analysis_submit_task_row():
                 "asin": "B0TEST123",
                 "station": "GLOBAL",
             },
-        }
+        },
+        scenario="listing-analysis",
     )
 
     assert rows == [
@@ -474,6 +475,46 @@ def test_extract_items_returns_listing_analysis_submit_task_row():
         }
     ]
 
+
+def test_extract_items_prefers_keyword_reverse_items_over_context_asin():
+    items = [{"keyword": f"keyword-{index}"} for index in range(100)]
+
+    rows = api_manager_module._extract_items(
+        {
+            "code": "OK",
+            "data": {
+                "asin": "B0TEST123",
+                "station": "US",
+                "items": items,
+            },
+        },
+        scenario="keyword-reverse",
+    )
+
+    assert rows == items
+
+
+def test_extract_items_prefers_traffic_source_pager_items_over_context_asin():
+    items = [{"asin": f"B0TEST{index:03d}", "keywords": index} for index in range(100)]
+
+    rows = api_manager_module._extract_items(
+        {
+            "code": "OK",
+            "data": {
+                "asin": "B0TEST123",
+                "station": "US",
+                "pager": {
+                    "items": items,
+                    "page": 1,
+                    "pageSize": 100,
+                    "total": 100,
+                },
+            },
+        },
+        scenario="traffic-source",
+    )
+
+    assert rows == items
 
 
 def test_manager_records_listing_analysis_submit_state(monkeypatch, tmp_path: Path):

@@ -325,7 +325,7 @@ def _persist_listing_analysis_remote_result(
     )
 
     response = remote.get("remote") if isinstance(remote.get("remote"), dict) else {}
-    rows = _extract_items(response)
+    rows = _extract_items(response, scenario="listing-analysis")
     settings = load_settings()
     root_dir = Path(str(status.get("root_dir") or (settings.output_dir / job_id))).expanduser().resolve()
     site = str(status.get("site") or "US")
