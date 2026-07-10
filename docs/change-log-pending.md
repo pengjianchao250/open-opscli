@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-10 ASIN 取数 - release 合入刊登授权回退
+
+**变更原因**：用户要求将 ASIN 取数服务中“默认走托管北极星 token，刊登接口未登录时再用固定 BI 账号登录回退”的修改合并回 release 并推送，避免部署到 MCP 后继续优先使用本地 BI_AUTH/BI_COOKIE 或旧 token。
+**改动点**：`opscli/asin_data/services/bi_report_data.py` 移除 `BI_AUTH` / `BI_COOKIE` 对刊登基础数据鉴权的优先级，新增默认 BI 登录账号常量和“未登陆/未登录”识别，在托管 token 被刊登接口判定失效时强制使用默认账号登录后重试；新增 `tests/asin_data/test_bi_report_data.py` 覆盖托管 token 优先和未登录回退登录两条路径。
+**验证结果**：已设置 `PYTHONPATH=当前工作区` 后运行 `python -m pytest tests/asin_data/test_bi_report_data.py -q`，结果 2 passed；已运行 `python -m compileall opscli/asin_data/services/bi_report_data.py opscli/mcp/tools/asin_data.py` 通过；已运行 `python -c "import importlib; importlib.import_module('opscli.mcp.server')"` 通过（导入时存在既有工具重复注册 warning，但退出码为 0）；已运行 `git diff --check` 通过。
+**影响范围**：影响 `asin-data live-data --data-scope basic/listing_basic` 及 MCP ASIN 基础刊登取数的授权选择；BI 数据、卖家精灵、Rufus 和非刊登数据源不受影响。
+**回滚方式**：回退 `opscli/asin_data/services/bi_report_data.py`、`tests/asin_data/test_bi_report_data.py` 和本条变更记录即可。
+
+---
+
 ## 2026-06-29 Amazon Rufus - watch-login 页面生命周期诊断
 
 **变更原因**：用户反馈 `amazon-rufus watch-login` 打开浏览器后保留 Amazon 页面，但另一个页签会反复打开并关闭。静态代码无法直接确认该页签来源，需要增加可控诊断日志，并避免页面关闭时透出裸 Playwright 异常。
