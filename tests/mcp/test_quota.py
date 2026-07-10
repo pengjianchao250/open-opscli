@@ -1,5 +1,4 @@
 import asyncio
-import json
 import sqlite3
 from datetime import UTC, datetime
 
@@ -7,14 +6,12 @@ import pytest
 
 from opscli.mcp.context import mcp_request_ctx
 from opscli.mcp.quota import (
-    ENV_QUOTA_CONFIG_PATH,
     QuotaIdentityResolver,
     QuotaLimiter,
     QuotaPolicy,
     SQLiteQuotaStore,
     QuotaUnavailableError,
     default_quota_policies,
-    load_quota_config,
     _beijing_day_key,
     _seconds_until_next_beijing_day,
 )
@@ -30,6 +27,13 @@ class MemoryQuotaStore:
         self.unavailable = unavailable
         self.calls = 0
         self.failures = 0
+
+    async def get_policy(self, tool_name):
+        if self.unavailable:
+            raise QuotaUnavailableError("sqlite down")
+        if tool_name != "seller_sprite_run":
+            return None
+        return QuotaPolicy(tool_name="seller_sprite_run", service="seller_sprite", daily_limit=5)
 
     async def reserve(self, policy, identity):
         if self.unavailable:
@@ -103,7 +107,6 @@ def test_identity_resolver_falls_back_to_local_credential_email(monkeypatch):
 def test_limiter_allows_first_five_calls_and_blocks_sixth():
     store = MemoryQuotaStore()
     limiter = QuotaLimiter(
-        policies={"seller_sprite_run": QuotaPolicy(tool_name="seller_sprite_run", service="seller_sprite", daily_limit=5)},
         store=store,
         identity_resolver=lambda: "user:user-1",
     )
@@ -122,15 +125,85 @@ def test_default_quota_policies_only_limit_public_service_run_entries():
     policies = default_quota_policies()
 
     assert policies["seller_sprite_run"].service == "seller_sprite"
+    assert policies["seller_sprite_listing_analysis_submit"].service == "seller_sprite"
     assert policies["keepa_run"].service == "keepa"
     assert "seller_sprite_start" not in policies
+    assert "seller_sprite_listing_analysis_status" not in policies
+    assert "seller_sprite_listing_analysis_result" not in policies
     assert "keepa_job_status" not in policies
+
+
+def test_sqlite_quota_store_initializes_default_policy_table(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    store = SQLiteQuotaStore(db_path)
+
+    policy = _run(store.get_policy("seller_sprite_run"))
+
+    assert policy == QuotaPolicy(
+        tool_name="seller_sprite_run",
+        service="seller_sprite",
+        daily_limit=5,
+    )
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT tool_name, service, daily_limit, enabled, timezone
+            FROM mcp_quota_policy
+            ORDER BY tool_name
+            """
+        ).fetchall()
+
+    assert rows == [
+        ("keepa_run", "keepa", 5, 1, "Asia/Shanghai"),
+        ("seller_sprite_listing_analysis_submit", "seller_sprite", 5, 1, "Asia/Shanghai"),
+        ("seller_sprite_run", "seller_sprite", 5, 1, "Asia/Shanghai"),
+    ]
+
+
+def test_sqlite_quota_store_does_not_overwrite_existing_policy_table(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE mcp_quota_policy (
+                tool_name TEXT NOT NULL PRIMARY KEY,
+                service TEXT NOT NULL,
+                daily_limit INTEGER NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO mcp_quota_policy (
+                tool_name, service, daily_limit, enabled, timezone, created_at, updated_at
+            )
+            VALUES ('seller_sprite_run', 'seller_sprite', 100, 1, 'Asia/Shanghai', '2026-07-09T10:00:00+08:00', '2026-07-09T10:00:00+08:00')
+            """
+        )
+
+    store = SQLiteQuotaStore(db_path)
+    policy = _run(store.get_policy("seller_sprite_run"))
+
+    assert policy == QuotaPolicy(
+        tool_name="seller_sprite_run",
+        service="seller_sprite",
+        daily_limit=100,
+    )
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT tool_name, daily_limit FROM mcp_quota_policy ORDER BY tool_name"
+        ).fetchall()
+
+    assert rows == [("seller_sprite_run", 100)]
 
 
 def test_limiter_refunds_failed_call_and_records_failure():
     store = MemoryQuotaStore()
     limiter = QuotaLimiter(
-        policies={"seller_sprite_run": QuotaPolicy(tool_name="seller_sprite_run", service="seller_sprite", daily_limit=5)},
         store=store,
         identity_resolver=lambda: "user:user-1",
     )
@@ -142,6 +215,104 @@ def test_limiter_refunds_failed_call_and_records_failure():
     assert store.failures == 1
     assert response["quota"]["used"] == 0
     assert response["quota"]["failures"] == 1
+
+
+def test_limiter_reads_policy_from_sqlite_on_each_call(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    store = SQLiteQuotaStore(db_path)
+    limiter = QuotaLimiter(
+        store=store,
+        identity_resolver=lambda: "email:user@example.com",
+    )
+
+    first = _run(limiter.before_call("seller_sprite_run"))
+    assert first.allowed is True
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE mcp_quota_policy
+            SET daily_limit = 1, updated_at = '2026-07-09T10:00:00+08:00'
+            WHERE tool_name = 'seller_sprite_run'
+            """
+        )
+
+    second = _run(limiter.before_call("seller_sprite_run"))
+
+    assert second.allowed is False
+    assert second.error_response["error"]["code"] == "MCP_QUOTA_EXCEEDED"
+    assert second.error_response["quota"]["limit"] == 1
+    assert second.error_response["quota"]["used"] == 1
+
+
+def test_limiter_allows_disabled_policy_without_creating_daily_record(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    store = SQLiteQuotaStore(db_path)
+    limiter = QuotaLimiter(
+        store=store,
+        identity_resolver=lambda: "email:user@example.com",
+    )
+    _run(store.get_policy("seller_sprite_run"))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE mcp_quota_policy
+            SET enabled = 0, updated_at = '2026-07-09T10:00:00+08:00'
+            WHERE tool_name = 'seller_sprite_run'
+            """
+        )
+
+    decision = _run(limiter.before_call("seller_sprite_run"))
+
+    assert decision.allowed is True
+    assert decision.ticket is None
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT COUNT(*) FROM mcp_quota_daily").fetchone()
+    assert row[0] == 0
+
+
+def test_limiter_allows_deleted_policy_without_creating_daily_record(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    store = SQLiteQuotaStore(db_path)
+    limiter = QuotaLimiter(
+        store=store,
+        identity_resolver=lambda: "email:user@example.com",
+    )
+    _run(store.get_policy("seller_sprite_run"))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM mcp_quota_policy WHERE tool_name = 'seller_sprite_run'")
+
+    decision = _run(limiter.before_call("seller_sprite_run"))
+
+    assert decision.allowed is True
+    assert decision.ticket is None
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT COUNT(*) FROM mcp_quota_daily").fetchone()
+    assert row[0] == 0
+
+
+def test_limiter_blocks_invalid_sqlite_policy_without_calling_service(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    store = SQLiteQuotaStore(db_path)
+    limiter = QuotaLimiter(
+        store=store,
+        identity_resolver=lambda: "email:user@example.com",
+    )
+    _run(store.get_policy("seller_sprite_run"))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE mcp_quota_policy
+            SET daily_limit = 0, updated_at = '2026-07-09T10:00:00+08:00'
+            WHERE tool_name = 'seller_sprite_run'
+            """
+        )
+
+    decision = _run(limiter.before_call("seller_sprite_run"))
+
+    assert decision.allowed is False
+    assert decision.error_response["error"]["code"] == "MCP_QUOTA_UNAVAILABLE"
+    assert decision.error_response["quota"]["service"] == "seller_sprite_run"
 
 
 def test_sqlite_quota_store_persists_calls_between_instances(tmp_path):
@@ -291,9 +462,21 @@ def test_sqlite_quota_store_migrates_existing_table_to_identity_key(tmp_path):
 
 
 def test_limiter_returns_unavailable_error_without_calling_service():
+    class UnavailablePolicyStore:
+        async def get_policy(self, tool_name):
+            raise QuotaUnavailableError("sqlite down")
+
+        async def reserve(self, policy, identity):
+            raise AssertionError("reserve must not be called when policy loading fails")
+
+        async def refund_failure(self, policy, identity):
+            raise AssertionError("refund must not be called when policy loading fails")
+
+        async def snapshot(self, policy, identity):
+            raise AssertionError("snapshot must not be called when policy loading fails")
+
     limiter = QuotaLimiter(
-        policies={"seller_sprite_run": QuotaPolicy(tool_name="seller_sprite_run", service="seller_sprite", daily_limit=5)},
-        store=MemoryQuotaStore(unavailable=True),
+        store=UnavailablePolicyStore(),
         identity_resolver=lambda: "user:user-1",
     )
 
@@ -303,104 +486,14 @@ def test_limiter_returns_unavailable_error_without_calling_service():
     assert result.error_response["error"]["code"] == "MCP_QUOTA_UNAVAILABLE"
 
 
-def test_load_quota_config_overrides_default_policy_limit(tmp_path):
-    config_path = tmp_path / "mcp-quota.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "policies": {
-                    "seller_sprite_run": {
-                        "service": "seller_sprite",
-                        "daily_limit": 8,
-                        "enabled": True,
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+def test_quota_module_no_longer_exposes_json_config_loader():
+    import opscli.mcp.quota as quota_module
 
-    config = load_quota_config(config_path)
-
-    assert config.policies["seller_sprite_run"].daily_limit == 8
-
-
-def test_load_quota_config_can_disable_policy(tmp_path):
-    config_path = tmp_path / "mcp-quota.json"
-    config_path.write_text(
-        json.dumps({"policies": {"seller_sprite_run": {"enabled": False}}}),
-        encoding="utf-8",
-    )
-
-    config = load_quota_config(config_path)
-
-    assert "seller_sprite_run" not in config.policies
-
-
-def test_load_quota_config_uses_env_path_before_default_user_config(tmp_path, monkeypatch):
-    env_path = tmp_path / "env-quota.json"
-    user_config_dir = tmp_path / "home-config"
-    env_path.write_text(
-        json.dumps({"policies": {"seller_sprite_run": {"daily_limit": 9}}}),
-        encoding="utf-8",
-    )
-    (user_config_dir / "mcp_quota").mkdir(parents=True)
-    (user_config_dir / "mcp_quota" / "config.json").write_text(
-        json.dumps({"policies": {"seller_sprite_run": {"daily_limit": 3}}}),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv(ENV_QUOTA_CONFIG_PATH, str(env_path))
-    monkeypatch.setattr("opscli.config.CONFIG_DIR", user_config_dir)
-
-    config = load_quota_config()
-
-    assert config.path == env_path
-    assert config.policies["seller_sprite_run"].daily_limit == 9
-
-
-def test_load_quota_config_uses_project_config_before_user_config(tmp_path, monkeypatch):
-    project_config = tmp_path / "project" / "configs" / "mcp-quota.json"
-    user_config_dir = tmp_path / "home-config"
-    project_config.parent.mkdir(parents=True)
-    project_config.write_text(
-        json.dumps({"policies": {"seller_sprite_run": {"daily_limit": 7}}}),
-        encoding="utf-8",
-    )
-    (user_config_dir / "mcp_quota").mkdir(parents=True)
-    (user_config_dir / "mcp_quota" / "config.json").write_text(
-        json.dumps({"policies": {"seller_sprite_run": {"daily_limit": 3}}}),
-        encoding="utf-8",
-    )
-    monkeypatch.delenv(ENV_QUOTA_CONFIG_PATH, raising=False)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("opscli.config.CONFIG_DIR", user_config_dir)
-    monkeypatch.setattr("opscli.mcp.quota._project_quota_config_path", lambda: project_config)
-
-    config = load_quota_config()
-
-    assert config.path == project_config
-    assert config.policies["seller_sprite_run"].daily_limit == 7
-
-
-def test_load_quota_config_uses_working_directory_config_for_packaged_deploy(tmp_path, monkeypatch):
-    workdir_config = tmp_path / "deploy" / "configs" / "mcp-quota.json"
-    user_config_dir = tmp_path / "home-config"
-    workdir_config.parent.mkdir(parents=True)
-    workdir_config.write_text(
-        json.dumps({"policies": {"seller_sprite_run": {"daily_limit": 11}}}),
-        encoding="utf-8",
-    )
-    (user_config_dir / "mcp_quota").mkdir(parents=True)
-    (user_config_dir / "mcp_quota" / "config.json").write_text(
-        json.dumps({"policies": {"seller_sprite_run": {"daily_limit": 3}}}),
-        encoding="utf-8",
-    )
-    monkeypatch.delenv(ENV_QUOTA_CONFIG_PATH, raising=False)
-    monkeypatch.chdir(tmp_path / "deploy")
-    monkeypatch.setattr("opscli.config.CONFIG_DIR", user_config_dir)
-    monkeypatch.setattr("opscli.mcp.quota._project_quota_config_path", lambda: tmp_path / "missing.json")
-
-    config = load_quota_config()
-
-    assert config.path == workdir_config
-    assert config.policies["seller_sprite_run"].daily_limit == 11
+    removed_names = [
+        "ENV_QUOTA" + "_CONFIG_PATH",
+        "Quota" + "Config",
+        "load_quota" + "_config",
+        "_find_quota" + "_config_path",
+    ]
+    for name in removed_names:
+        assert not hasattr(quota_module, name)

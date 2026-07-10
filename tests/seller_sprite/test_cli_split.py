@@ -131,6 +131,58 @@ def test_public_seller_sprite_run_uses_public_contract_without_local_flags(monke
     assert '"job_id": "public-job"' in result.stdout
 
 
+def test_public_seller_sprite_listing_analysis_commands_use_remote_adapter(monkeypatch):
+    captured = {}
+
+    class FakeAdapter:
+        def listing_analysis_submit(self, **kwargs):
+            captured["submit"] = kwargs
+            return {"success": True, "data": {"job_id": "listing-job-1"}}
+
+        def listing_analysis_status(self, job_id):
+            captured["status"] = job_id
+            return {"success": True, "data": {"job_id": job_id, "ready": False}}
+
+        def listing_analysis_result(self, job_id, *, export_format):
+            captured["result"] = {"job_id": job_id, "export_format": export_format}
+            return {"success": True, "data": {"job_id": job_id, "ready": True}}
+
+    monkeypatch.setattr(seller_sprite_cli, "SellerSpriteRemoteAdapter", lambda: FakeAdapter())
+
+    submit = runner.invoke(
+        app,
+        [
+            "seller-sprite",
+            "listing-analysis-submit",
+            "--asin",
+            "B0TEST123",
+            "--station",
+            "GLOBAL",
+            "--site",
+            "US",
+        ],
+    )
+    status = runner.invoke(app, ["seller-sprite", "listing-analysis-status", "listing-job-1"])
+    result = runner.invoke(
+        app,
+        [
+            "seller-sprite",
+            "listing-analysis-result",
+            "listing-job-1",
+            "--export-format",
+            "json",
+        ],
+    )
+
+    assert submit.exit_code == 0
+    assert status.exit_code == 0
+    assert result.exit_code == 0
+    assert captured["submit"]["asin"] == "B0TEST123"
+    assert captured["status"] == "listing-job-1"
+    assert captured["result"] == {"job_id": "listing-job-1", "export_format": "json"}
+
+
+
 def test_public_seller_sprite_job_status_and_export_use_remote_adapter(monkeypatch):
     class FakeAdapter:
         def job_status(self, job_id):

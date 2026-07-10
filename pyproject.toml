@@ -25,6 +25,7 @@ seller-sprite = [
     "playwright>=1.44",
     "patchright>=1.60.1",
     "markdownify>=1.2.2",
+    "ddddocr>=1.5.6",
 ]
 dev = [
     "pytest>=8",
@@ -49,5 +50,4 @@ include = ["opscli*"]
 # Hook 脚本作为资源文件保留（非编译对象，由 settings_injector.py 部署到用户目录）
 "opscli" = [
     "skills/hooks/report_skill_usage.py",
-    "mcp/configs/mcp-quota.json",
 ]

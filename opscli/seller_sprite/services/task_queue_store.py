@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -138,21 +138,162 @@ class SellerSpriteTaskQueueStore:
                 (_now_iso(), json.dumps(error_payload, ensure_ascii=False), job_id),
             )
 
-    def reset_running_tasks(self) -> int:
+    def reset_running_tasks(self, *, before_started_at: str | None = None) -> int:
         """将异常中断留下的运行中任务重新放回队列。"""
+        where = "status = 'running'"
+        params: list[Any] = []
+        if before_started_at:
+            where += " AND started_at IS NOT NULL AND started_at <= ?"
+            params.append(before_started_at)
         with self._connect() as conn:
             cursor = conn.execute(
-                """
+                f"""
                 UPDATE seller_sprite_task_queue
                 SET status = 'queued',
                     started_at = NULL,
                     finished_at = NULL,
                     assigned_account = NULL,
                     worker_key = NULL
-                WHERE status = 'running'
-                """
+                WHERE {where}
+                """,
+                params,
             )
             return int(cursor.rowcount or 0)
+
+    def list_tasks(self, *, state: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        """按状态列出最近任务，用于队列运维排查。"""
+        safe_limit = max(1, min(int(limit), 500))
+        params: list[Any] = []
+        where = ""
+        if state:
+            where = "WHERE status = ?"
+            params.append(state)
+        params.append(safe_limit)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, job_id, queue_scope, status, request_json, root_dir,
+                       created_at, started_at, finished_at, assigned_account,
+                       worker_key, result_path, row_count, export_json, error_json
+                FROM seller_sprite_task_queue
+                {where}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [self._row_to_status(row) for row in rows]
+
+    def queue_status(self, *, stale_running_seconds: int = 1800) -> dict[str, Any]:
+        """返回队列状态摘要，辅助判断 queued 是否堆积。"""
+        stale_cutoff = _seconds_ago_iso(max(0, int(stale_running_seconds)))
+        with self._connect() as conn:
+            count_rows = conn.execute(
+                """
+                SELECT status, COUNT(*) AS cnt
+                FROM seller_sprite_task_queue
+                GROUP BY status
+                """
+            ).fetchall()
+            oldest_queued = conn.execute(
+                """
+                SELECT MIN(created_at) AS value
+                FROM seller_sprite_task_queue
+                WHERE status = 'queued'
+                """
+            ).fetchone()
+            oldest_running = conn.execute(
+                """
+                SELECT MIN(started_at) AS value
+                FROM seller_sprite_task_queue
+                WHERE status = 'running'
+                """
+            ).fetchone()
+            stale_running = conn.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM seller_sprite_task_queue
+                WHERE status = 'running'
+                  AND started_at IS NOT NULL
+                  AND started_at <= ?
+                """,
+                (stale_cutoff,),
+            ).fetchone()
+        by_state = {str(row["status"]): int(row["cnt"] or 0) for row in count_rows}
+        return {
+            "db_path": str(self.db_path),
+            "total": sum(by_state.values()),
+            "by_state": by_state,
+            "oldest_queued_at": oldest_queued["value"] if oldest_queued else None,
+            "oldest_running_started_at": oldest_running["value"] if oldest_running else None,
+            "stale_running_count": int(stale_running["cnt"] or 0) if stale_running else 0,
+            "stale_running_cutoff": stale_cutoff,
+        }
+
+    def fail_tasks(
+        self,
+        *,
+        state: str = "queued",
+        job_ids: list[str] | None = None,
+        before: str | None = None,
+        reason: str = "人工终止队列任务",
+    ) -> int:
+        """将匹配任务批量标记为 failed，并同步 MCP 调用记录。"""
+        where = ["status = ?"]
+        params: list[Any] = [state]
+        if before:
+            where.append("created_at <= ?")
+            params.append(before)
+        if job_ids:
+            placeholders = ", ".join("?" for _ in job_ids)
+            where.append(f"job_id IN ({placeholders})")
+            params.extend(job_ids)
+
+        error_payload = {
+            "code": "SELLER_SPRITE_QUEUE_ABORTED",
+            "message": reason,
+        }
+        error_json = json.dumps(error_payload, ensure_ascii=False)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                f"""
+                SELECT job_id
+                FROM seller_sprite_task_queue
+                WHERE {' AND '.join(where)}
+                """,
+                params,
+            ).fetchall()
+            matched_job_ids = [str(row["job_id"]) for row in rows]
+            if not matched_job_ids:
+                conn.commit()
+                return 0
+
+            job_placeholders = ", ".join("?" for _ in matched_job_ids)
+            now = _now_iso()
+            conn.execute(
+                f"""
+                UPDATE seller_sprite_task_queue
+                SET status = 'failed',
+                    finished_at = ?,
+                    error_json = ?
+                WHERE job_id IN ({job_placeholders})
+                """,
+                [now, error_json, *matched_job_ids],
+            )
+            conn.execute(
+                f"""
+                UPDATE seller_sprite_mcp_runs
+                SET result_state = 'failed',
+                    error_json = ?,
+                    finished_at = ?,
+                    updated_at = ?
+                WHERE job_id IN ({job_placeholders})
+                """,
+                [error_json, now, now, *matched_job_ids],
+            )
+            conn.commit()
+        return len(matched_job_ids)
 
     def get_status(self, job_id: str) -> dict[str, Any]:
         """读取任务当前状态。"""
@@ -487,3 +628,8 @@ def _stage_for_status(status: str) -> str:
 def _now_iso() -> str:
     """返回带时区的当前时间字符串。"""
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def _seconds_ago_iso(seconds: int) -> str:
+    """返回当前时间向前偏移指定秒数后的本地 ISO 字符串。"""
+    return (datetime.now(timezone.utc).astimezone() - timedelta(seconds=seconds)).isoformat(timespec="seconds")

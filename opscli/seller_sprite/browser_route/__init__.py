@@ -3,6 +3,7 @@
 from opscli.seller_sprite.browser_route.worker import (
     BrowserRouteRequest,
     BrowserRouteResult,
+    fetch_listing_analysis_report_with_browser_route,
     get_existing_browser_route_worker,
     get_browser_route_worker,
 )
@@ -10,6 +11,7 @@ from opscli.seller_sprite.browser_route.worker import (
 __all__ = [
     "BrowserRouteRequest",
     "BrowserRouteResult",
+    "fetch_listing_analysis_report_with_browser_route",
     "get_browser_route_worker",
     "get_existing_browser_route_worker",
 ]

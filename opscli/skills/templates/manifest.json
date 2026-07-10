@@ -31,6 +31,14 @@
       "tier": "ops",
       "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
     },
+    "ops-amazon-product-data": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "experimental",
+      "reason": "Amazon 商品结构化数据通用 Skill，隐藏底层第三方服务商信息，作为多数据源商品采集入口"
+    },
     "ops-asin-health-diagnoser": {
       "source": false,
       "wheel": false,
@@ -79,6 +87,14 @@
       "tier": "core",
       "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
     },
+    "ops-new-product-calculator": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "experimental",
+      "reason": "Polaris 新品计算器 CLI 草稿包引导 Skill，封装下拉选择、类目搜索和提交确认流程"
+    },
     "ops-product-attribute-analyzer": {
       "source": false,
       "wheel": false,
@@ -94,6 +110,14 @@
       "binary_full": true,
       "tier": "experimental",
       "reason": "卖家精灵已迁移到服务端账号托管的 MCP/CLI 接口直连模式，可作为实验 Skill 安装使用"
+    },
+    "ops-scrape-do": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "底层 Amazon 商品数据 provider 规范，仅供通用商品数据 Skill 内部编排，不直接对外发版"
     },
     "ops-skills": {
       "source": true,

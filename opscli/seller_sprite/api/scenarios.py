@@ -10,8 +10,7 @@ from opscli.seller_sprite.api.payloads import (
     make_competitor_payload,
     make_keyword_miner_payload,
     make_keyword_reverse_payload,
-    # listing-analysis 当前不对外暴露，保留 payload 实现但不注册场景。
-    # make_listing_analysis_payload,
+    make_listing_analysis_payload,
     make_market_research_payload,
     make_product_research_payload,
     make_traffic_source_payload,
@@ -136,16 +135,14 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         required_params=(),
         payload_builder=make_market_research_payload,
     ),
-    # listing-analysis 当前封版不对外暴露，避免 CLI/MCP 场景列表和 run 入口继续可用。
-    # "listing-analysis": SellerSpriteScenario(
-    #     scenario_id="listing-analysis",
-    #     title="Listing Analysis",
-    #     endpoint="/v3/api/ai-workflow/listing-analysis",
-    #     method="POST_QUERY",
-    #     task_result_endpoint="/v3/api/ai-analysis/task/{task_id}",
-    #     required_params=("asin",),
-    #     payload_builder=make_listing_analysis_payload,
-    # ),
+    "listing-analysis": SellerSpriteScenario(
+        scenario_id="listing-analysis",
+        title="Listing Analysis",
+        endpoint="/v3/api/ai-analysis/get-submitted",
+        method="PAGE_CAPTURE",
+        required_params=("asin",),
+        payload_builder=make_listing_analysis_payload,
+    ),
 }
 
 

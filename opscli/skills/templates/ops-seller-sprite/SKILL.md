@@ -12,6 +12,8 @@ description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自
 该入口默认通过 CLI auth 获取远端 MCP 配置，再调用远端 `seller_sprite_*` tool 完成查询；本 Skill 也以这条正式链路作为默认执行口径。
 正式 CLI 依赖本机已完成 OPS 授权；若本机未登录或登录态过期，先完成 `opscli auth login` 再继续。
 
+授权排查先看链路类型：正式 CLI 代理链路优先用本机 `opscli auth login`；远端 MCP 直连链路优先用 MCP 授权工具完成当前 MCP 用户的 OPS 登录。两条链路不要混用判断。
+
 ## 快速规则
 
 1. 先识别场景，再决定是否执行；场景不明确时先澄清，不要盲跑。
@@ -31,17 +33,81 @@ description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自
 
 ## 链路区分
 
-- 正式 CLI 代理链路：默认指 `opscli seller-sprite ...`。这条链路依赖本机 `opscli auth login` 已完成，必要时由 CLI 显式透传本机 OPS `session_id`。
-- 远端 MCP 直连链路：指宿主拿远端 MCP `api_key` 直接连接 `seller_sprite_*` tools。该链路下不要在仅拿到 `api_key` 后立刻执行 `seller_sprite_run`；应先完成 `auth_mcp_login`，让当前 MCP 用户的远端凭证中存在可复用的 OPS `session_id`。
+### A. 正式 CLI 代理链路（默认）
+
+适用入口：
+
+```bash
+opscli seller-sprite scenarios
+opscli seller-sprite quota-status
+opscli seller-sprite run ...
+opscli seller-sprite listing-analysis-submit --asin B0XXXX --station GLOBAL --site US
+opscli seller-sprite listing-analysis-status <job_id>
+opscli seller-sprite listing-analysis-result <job_id> --export-format json
+opscli seller-sprite job-status <job_id>
+opscli seller-sprite export <job_id>
+```
+
+判断规则：
+
+- 用户在本机终端执行 `opscli seller-sprite ...`，或 Agent 需要代表用户跑正式 CLI 命令时，默认就是这条链路。
+- 这条链路依赖本机 OPS 登录态；未登录、登录态过期、返回授权类错误时，先执行：
+
+```bash
+opscli auth login
+```
+
+- 登录完成后再重试原命令。
+- 不要让用户手动传 `api_key`、远端 MCP URL、Cookie 或内部账号参数。
+- 不要把此链路的问题误判为卖家精灵业务账号异常；先确认 CLI 登录态。
+
+### B. 远端 MCP 直连链路
+
+适用入口：
+
+- 宿主环境已经连接远端 MCP，并直接调用 `seller_sprite_*` tools。
+- 当前上下文不是本机 CLI 命令，而是 MCP 工具协作环境。
+
+判断规则：
+
+- 远端 MCP `api_key` 只表示“能连接 MCP 服务”，不等于当前 MCP 用户已有 OPS 登录态。
+- 如果只有 `api_key`，不要直接执行会消耗额度的 `seller_sprite_run`。
+- 先完成 MCP 授权登录，让当前 MCP 用户的远端凭证里存在可复用 OPS `session_id`；再调用 `seller_sprite_run`。
+- 如果工具返回需要 `session_id`、未授权、授权过期等错误，优先走 MCP 授权流程，而不是要求用户重新给业务参数。
+
+### 快速判断表
+
+| 当前入口 | 优先动作 | 不要做 |
+|---|---|---|
+| `opscli seller-sprite ...` 报未授权 | 执行 `opscli auth login` 后重试 | 不要让用户传 api_key |
+| MCP 直连 `seller_sprite_run` 报未授权 | 先完成 MCP 授权登录 | 不要直接重跑消耗额度工具 |
+| 只是查场景/额度/任务状态 | 可先调用对应只读工具 | 不要误判为业务采集失败 |
+| 用户只说“登录一下/授权一下” | 根据当前链路选择 CLI 登录或 MCP 登录 | 不要混用两套登录态 |
 
 ## 最小工作流
 
 1. 先按用户意图映射场景；拿不准时再读取参数手册确认。
 2. 缺少必填参数时，只问当前场景真正缺的字段。
 3. 条件齐全后，构造 `scenario + site + period + params`。
-4. `seller_sprite_run` 默认会先等待结果；只有任务进入 `running` 后超过 8 分钟仍未完成时，才返回 `job_id` 供后续查状态、取导出文件复用。
-5. 用户想先看今天还剩几次额度时，优先走 `seller_sprite_quota_status`，或正式 CLI `opscli seller-sprite quota-status`。
-6. 如果当前宿主是 MCP 工具协作环境，继续阅读 [SKILL_MCP.md](SKILL_MCP.md) 的工具链和异步规则。
+4. 普通场景用 `seller_sprite_run`，默认会先等待结果；只有任务进入 `running` 后超过 8 分钟仍未完成时，才返回 `job_id` 供后续查状态、取导出文件复用。
+5. `listing-analysis` 用三段式：先 submit，等待约 3 分钟，再 status/result 续查；后端会从 `task/history` 按 ASIN 获取真实报告 `taskId` 并打开报告页，不要让 `seller_sprite_run` 同步阻塞等待 `listing-analysis` 完整结果。
+6. 用户想先看今天还剩几次额度时，优先走 `seller_sprite_quota_status`，或正式 CLI `opscli seller-sprite quota-status`。
+7. 如果当前宿主是 MCP 工具协作环境，继续阅读 [SKILL_MCP.md](SKILL_MCP.md) 的工具链和异步规则。
+
+## Listing Analysis 三段式 CLI
+
+Listing Analysis 结果通常 3 分钟以上才生成，正式 CLI 推荐拆成三步：
+
+```bash
+opscli seller-sprite listing-analysis-submit --asin B0XXXX --station GLOBAL --site US
+opscli seller-sprite listing-analysis-status <job_id>
+opscli seller-sprite listing-analysis-result <job_id> --export-format json
+```
+
+- `submit` 返回 `job_id` 后不要重复提交同一 ASIN。
+- `status` 会从 `task/history` 的 `data.items` 中按 `module=LA` 和 ASIN 匹配报告项。
+- `result` 必须使用 `task/history` 返回的真实 `taskId` 打开 `ai-report?id=<taskId>&from=history`；页面仍显示“正在分析中”时返回 `ready=false`。
+- `result` 返回 `ready=true` 时，再展示 `row_count` 和导出文件。
 
 ## 缺参澄清原则
 
@@ -69,6 +135,6 @@ description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自
 - 如果 `seller_sprite_run` 因运行超时才返回 `job_id`，补充 `queue_duration` 和 `running_duration`，说明当前是排队久还是执行久。
 - 若 `seller_sprite_run` 响应顶层存在 `quota`，补一句：
   - `今日额度：已用 used / limit，剩余 remaining，重置时间 reset_at`
-- `seller_sprite_run` 会消耗次数；`seller_sprite_scenarios`、`seller_sprite_quota_status`、`seller_sprite_job_status`、`seller_sprite_export` 不消耗次数。
+- `seller_sprite_run` 和 `seller_sprite_listing_analysis_submit` 会消耗次数；`seller_sprite_scenarios`、`seller_sprite_quota_status`、`seller_sprite_job_status`、`seller_sprite_export` 以及 Listing Analysis 的 `status/result` 不消耗次数。
 - `row_count=0` 时，要明确告诉用户没有查到数据，并提醒核对站点、ASIN、关键词、类目或筛选条件是否过窄。
 - 用户后来只说 `继续`、`查结果`、`刚才那个好了没` 时，直接复用最近一次 SellerSprite `job_id`，不要要求用户重新描述整单请求。

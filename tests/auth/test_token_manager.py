@@ -121,6 +121,24 @@ def test_auth_client_get_session_uses_public_token_manager_api(tmp_path):
     mocked.assert_called_once()
 
 
+def test_fetch_token_joins_base_url_and_endpoint_without_double_slash(store, reg, monkeypatch):
+    """系统 URL 带尾斜杠时，请求地址不应出现双斜杠路径。"""
+    import httpx
+
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["url"] = url
+        req = httpx.Request("POST", url)
+        return httpx.Response(200, json={"jwt": "jwt-normal", "expires_in": 7200}, request=req)
+
+    monkeypatch.setattr("opscli.auth.core.token_manager.httpx.post", fake_post)
+    tm = TokenManager(store=store, registry=reg)
+
+    assert tm._fetch_token("polaris", "https://biapi.qa.aukeyit.com/", "/api/auth/cli-token") == "jwt-normal"
+    assert captured["url"] == "https://biapi.qa.aukeyit.com/api/auth/cli-token"
+
+
 def test_fetch_token_forwards_mcp_api_key_when_context_present(store, reg, monkeypatch):
     """MCP 上下文存在时，_fetch_token 应透传 X-MCP-API-Key。"""
     from opscli.mcp.context import mcp_request_ctx

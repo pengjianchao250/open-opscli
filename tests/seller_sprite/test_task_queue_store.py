@@ -90,6 +90,75 @@ def test_store_resets_running_tasks_back_to_queue(tmp_path: Path):
     assert status["assigned_account"] is None
 
 
+def test_store_lists_tasks_and_summarizes_queue_status(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(request=_request(job_id="job-queued"), queue_scope="seller_sprite", root_dir=tmp_path / "job-queued")
+    store.enqueue(request=_request(job_id="job-running"), queue_scope="seller_sprite", root_dir=tmp_path / "job-running")
+    store.claim_next(queue_scope="seller_sprite", worker_key="default", assigned_account="default")
+
+    summary = store.queue_status(stale_running_seconds=0)
+    queued_tasks = store.list_tasks(state="queued")
+    running_tasks = store.list_tasks(state="running")
+
+    assert summary["by_state"] == {"queued": 1, "running": 1}
+    assert summary["oldest_queued_at"] is not None
+    assert summary["stale_running_count"] == 1
+    assert [task["job_id"] for task in queued_tasks] == ["job-running"]
+    assert [task["job_id"] for task in running_tasks] == ["job-queued"]
+
+
+def test_store_fails_queued_tasks_and_syncs_mcp_runs(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    request = _request(job_id="job-to-fail")
+    store.enqueue(request=request, queue_scope="seller_sprite", root_dir=tmp_path / "job-to-fail")
+    store.create_mcp_run(request, "user@example.com")
+
+    changed = store.fail_tasks(
+        state="queued",
+        job_ids=["job-to-fail"],
+        reason="人工终止排队任务",
+    )
+    task = store.get_status("job-to-fail")
+    mcp_run = store.get_mcp_run("job-to-fail")
+
+    assert changed == 1
+    assert task["state"] == "failed"
+    assert task["error"]["code"] == "SELLER_SPRITE_QUEUE_ABORTED"
+    assert task["error"]["message"] == "人工终止排队任务"
+    assert mcp_run["result_state"] == "failed"
+    assert mcp_run["error_json"]["message"] == "人工终止排队任务"
+
+
+def test_store_requeues_only_stale_running_tasks(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(request=_request(job_id="old-running"), queue_scope="seller_sprite", root_dir=tmp_path / "old-running")
+    store.enqueue(request=_request(job_id="new-running"), queue_scope="seller_sprite", root_dir=tmp_path / "new-running")
+    store.claim_next(queue_scope="seller_sprite", worker_key="default", assigned_account="default")
+    store.claim_next(queue_scope="seller_sprite", worker_key="default", assigned_account="default")
+
+    with sqlite3.connect(tmp_path / "queue.sqlite3") as conn:
+        conn.execute(
+            "UPDATE seller_sprite_task_queue SET started_at = ? WHERE job_id = ?",
+            ("2026-07-09T10:00:00+08:00", "old-running"),
+        )
+        conn.execute(
+            "UPDATE seller_sprite_task_queue SET started_at = ? WHERE job_id = ?",
+            ("2026-07-09T12:00:00+08:00", "new-running"),
+        )
+
+    changed = store.reset_running_tasks(before_started_at="2026-07-09T11:00:00+08:00")
+
+    assert changed == 1
+    assert store.get_status("old-running")["state"] == "queued"
+    assert store.get_status("new-running")["state"] == "running"
+
+
 def test_store_marks_task_finished_and_persists_result_metadata(tmp_path: Path):
     from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
 

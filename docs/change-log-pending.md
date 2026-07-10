@@ -1,5 +1,86 @@
 # 待归档变更记录
 
+## 2026-07-09 seller_sprite - 补齐 SQLite 队列恢复与运维入口
+
+**变更原因**：线上 `seller_sprite_task_queue` 出现任务长期停留 `queued`，需要避免 worker 因账号异常退出后无人消费，并提供正式队列运维命令替代手工改 SQLite。
+**改动点**：`opscli/seller_sprite/services/task_scheduler.py` 调整为领取任务前不访问账号接口，单条任务异常和调度循环异常均不拖垮 worker；`opscli/seller_sprite/services/task_queue_store.py` 新增队列摘要、任务列表、批量 failed、按 started_at 截止重排 running 的仓储能力；`opscli/seller_sprite/cli.py` 新增 `seller-sprite queue status/list/fail/requeue-running/worker-health` 本地队列运维命令；补充调度器、仓储和 CLI 回归测试。
+**验证结果**：RED 已分别验证账号异常任务未进入 `failed`、仓储运维方法缺失、CLI `queue` 入口缺失。GREEN：`.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_scheduler.py::test_scheduler_marks_task_failed_when_account_unavailable -q` 通过，`1 passed in 0.32s`；`.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_queue_store.py::test_store_lists_tasks_and_summarizes_queue_status tests\seller_sprite\test_task_queue_store.py::test_store_fails_queued_tasks_and_syncs_mcp_runs tests\seller_sprite\test_task_queue_store.py::test_store_requeues_only_stale_running_tasks -q` 通过，`3 passed in 0.40s`；`.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_cli.py::test_public_seller_sprite_queue_commands_use_local_store -q` 通过，`1 passed in 0.88s`。回归：`.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_scheduler.py tests\seller_sprite\test_task_queue_store.py -q` 通过，`26 passed in 2.69s`；`.venv\Scripts\python.exe -m pytest tests\mcp\test_seller_sprite_tools.py tests\mcp\test_quota.py -q` 通过，`44 passed in 9.04s`；`.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_cli.py -q` 通过，`3 passed in 0.97s`；正式公共 CLI 子集通过，`6 passed in 1.12s`；最终整合 `.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_task_scheduler.py tests\seller_sprite\test_task_queue_store.py tests\seller_sprite\test_cli.py tests\mcp\test_seller_sprite_tools.py tests\mcp\test_quota.py -q` 通过，`73 passed in 11.90s`。执行 `.venv\Scripts\python.exe -m pytest tests\seller_sprite\test_cli.py tests\seller_sprite\test_cli_split.py -q` 为 `9 passed, 2 failed`，失败项为既有 `seller-sprite-debug` 顶层命令未注册，不属于本次正式 `seller-sprite queue` 改动范围。
+**影响范围**：影响卖家精灵 SQLite 队列后台消费和正式 CLI 本地队列运维能力；不改变远端 MCP 调用参数和已有 `seller-sprite run/job-status/export` 语义。
+**回滚方式**：回退 `opscli/seller_sprite/services/task_scheduler.py`、`opscli/seller_sprite/services/task_queue_store.py`、`opscli/seller_sprite/cli.py`、对应测试和本条变更记录。
+---
+
+## 2026-07-09 seller_sprite - 恢复 Listing Analysis 三段式异步入口
+
+**变更原因**：SellerSprite Listing Analysis 服务通常 3 分钟以上才出 AI 结果，同步等待会拖慢 CLI/MCP 调用；同时 master 中曾隐藏该场景，需要恢复并改为更稳的 submit/status/result 链路。
+**改动点**：恢复 `listing-analysis` 场景注册和参数手册；将提交链路切换为 browser-route 打开 `ai-history?module=LA`、输入 ASIN 后按 Enter/查询并捕获 `get-submitted`；新增 Listing Analysis 专用 MCP 与 CLI 三段式入口；`status` 通过 `task/history?page=1&pageSize=20&keywords=&modules=` 按 `module=LA` 和 ASIN 匹配真实报告 `taskId`；`result` 始终优先使用 `task/history` 的 `taskId` 打开 `ai-report?id=<taskId>&from=history`，页面显示“正在分析中”时返回 `ready=false`，生成后捕获 `competing-lookup` 并写回本地 result/export；submit 纳入卖家精灵额度，status/result 校验任务归属并处理远端失败态；补充相关测试。
+**验证结果**：先按 TDD 验证新增回归失败，再完成修复；`test_listing_analysis_status_reads_history_by_asin` 在本地提交行包含占位 `taskId=task-1` 时按预期失败于未使用 `task/history` 真实报告 ID，修复后单测通过（`1 passed in 1.09s`）。聚焦回归执行 `.venv/Scripts/python.exe -m pytest tests/seller_sprite/test_payloads.py tests/seller_sprite/test_api_manager.py tests/seller_sprite/test_browser_route_worker.py tests/mcp/test_seller_sprite_tools.py tests/mcp/test_quota.py tests/mcp/test_tools.py -q` 通过（`109 passed in 19.32s`）。执行 `.venv/Scripts/python.exe -m pytest tests/seller_sprite/test_remote_adapter.py tests/seller_sprite/test_cli_split.py -q` 为 `11 passed, 2 failed`，失败项均为既有 `seller-sprite-debug` 顶层命令未注册导致 `No such command 'seller-sprite-debug'`，不属于本次正式 `seller-sprite` 三段式入口改动范围。
+**影响范围**：影响 SellerSprite `listing-analysis` 场景、公开 MCP 工具列表和 `opscli seller-sprite` 正式命令；不开放通用 `seller_sprite_start`，其他卖家精灵场景保持原入口。
+**回滚方式**：回退本次修改的 SellerSprite 场景、browser-route、MCP 工具、CLI/adapter、Skill 文档、测试和本条变更记录；必要时重新应用 `4d6a168` 的隐藏逻辑。
+---
+
+## 2026-07-07 seller_sprite - 清理 browser-route 耗时日志
+
+**变更原因**：卖家精灵 browser-route 阶段耗时以 warning 写入 MCP 进程日志，生产部署时会刷屏并干扰 MCP 整体信息输出。
+**改动点**：移除 `opscli/seller_sprite/browser_route/worker.py` 中 `_record_timing()` 的逐阶段 warning 日志输出，保留内部 `timings` 结构用于任务结果诊断。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/seller_sprite/test_browser_route_worker.py -q` 通过，`29 passed in 1.23s`。
+**影响范围**：仅影响 browser-route 阶段耗时的进程日志输出；不改变卖家精灵请求、重试、验证码处理和结果结构。
+**回滚方式**：恢复 `_record_timing()` 中的 logger warning 输出，并恢复对应 import。
+---
+
+## 2026-07-06 ops-new-product-calculator - Skill 渐进式拆分
+
+**变更原因**：主 `SKILL.md` 混合核心流程与分支细节，且未覆盖 `show` / `copy`，需降低上下文占用并补齐入口。
+**改动点**：增加渐进式加载、三类入口、`show` / `copy`、主文件行数和版本不变契约测试；精简主 `SKILL.md`，新增 `references/draft-workflow.md` 与 `references/result-workflow.md`，分别承载草稿字段细节和结果查询细节；补充线上创建页、列表页和结果详情页路由。
+**验证结果**：RED 阶段聚焦测试按预期失败于主 `SKILL.md` 为 318 行、超过 220 行上限（`1 failed`）；GREEN 阶段 `tests/skills/test_ops_new_product_calculator_skill.py` 通过（`10 passed`），与 `tests/skills/test_ops_feedback_template.py` 的相关回归通过（`16 passed`）。补充 Web 路由前，新增契约按预期失败于主 Skill 缺少创建页 URL（`1 failed`）；补充后路由契约通过（`1 passed`），相关回归通过（`17 passed`）。主文件最终为 107 行，`VERSION.json` 无差异。逐文件运行 `tests/skills/test_*.py` 时，仓库既有的 `test_manager.py`、`test_ops_dataset_query_search.py`、`test_ops_methods_card_xlsx_preview.py`、`test_packaging.py`、`test_updater.py` 仍因旧版本断言、硬编码 Linux 路径、缺失模板文件、mock 未覆盖新 endpoint 或未收集测试而失败，均不涉及本次变更文件。
+**影响范围**：仅新品计算器 Skill 文档和对应契约测试；不修改 calculator CLI。
+**回滚方式**：回退对应测试、Skill 参考文件、主 `SKILL.md` 和本条记录。
+---
+
+## 2026-07-06 ops-new-product-calculator - 强化详情结果完整表格回复
+
+**变更原因**：实际使用 Skill 查询新品计算器详情时，Agent 会把 CLI 已输出的完整“试算结果”表格压缩成“方案/毛利/毛利率”三列，导致用户看不到售价、采购价、头程、仓储、尾程、广告、佣金、退款和固定成本等关键费用明细。
+**改动点**：更新 `ops-new-product-calculator` Skill 的结果查询章节和回复风格，明确 `calculator detail` 后最终回复必须保留 CLI 返回的所有方案列和主要费用行，不能只摘要毛利/毛利率；补充完整 Markdown 表格示例，并扩展 Skill 契约测试锁定“不要压缩完整表格”的规则。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/skills/test_ops_new_product_calculator_skill.py -q` 通过，`8 passed in 0.22s`。
+**影响范围**：仅影响新品计算器 Skill 的 Agent 最终回复约束，不改变 `opscli calculator detail` 命令输出和后端接口。
+**回滚方式**：恢复 `opscli/skills/templates/ops-new-product-calculator/SKILL.md` 的详情回复规则和对应测试，并删除本条变更记录。
+---
+
+## 2026-07-06 calculator - 临时草稿统一归档 tmp-validation
+
+**变更原因**：新品计算器本地烟测会在仓库根目录生成 `calculator-draft-*` 草稿包和 `tmp-calculator-*.json` 反馈临时文件，容易污染工作区；项目已有 `tmp-validation/` 用于统一管理本地验证产物。
+**改动点**：将 calculator 默认草稿输出目录从仓库根目录改为 `tmp-validation/calculator/`，同步更新 `recommend` 示例、Skill 指引和测试断言；`.gitignore` 增加 `calculator-draft-*/` 与 `tmp-calculator-*.json` 兜底忽略；已将当前根目录下既有 calculator 草稿包和临时 JSON 移入 `tmp-validation/calculator/`。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_cli.py tests/skills/test_ops_new_product_calculator_skill.py -q` 通过，`26 passed in 1.07s`。
+**影响范围**：影响新品计算器默认 `draft/copy/recommend` 本地输出路径；显式传入 `--out` 的旧命令仍按用户指定路径输出。
+**回滚方式**：恢复 `opscli/calculator/cli.py` 默认输出路径、Skill 示例、测试断言和 `.gitignore` 兜底规则，并按需将 `tmp-validation/calculator/` 中的临时产物移回根目录。
+---
+
+## 2026-07-03 calculator - CSV 中文下拉值与草稿包快照
+
+**变更原因**：新品计算器 CSV 草稿虽然已替代多文件 JSON 填写入口，但仍暴露 `GROSS_PROFIT`、`zone_1_3`、省市编码、仓库 ID 等后端 key/code，业务用户只会填写中文省市、中文分区和仓库名称，需要让 CSV 展示和接收中文值，并在提交前自动转换为接口格式。
+**改动点**：扩展 `opscli/calculator/draft.py`，新增 `.dropdown-cache.json` 草稿包下拉快照、`DraftOption` 映射、内置试算方案/备货区域中文选项、后端 `dropdownList` 与 `zonesWarehouseList` 选项提取、CSV 中文值展示、CSV 中文输入到 key/code 的解析、备货区域默认 `1区全部、指定分区`；更新 `opscli/calculator/cli.py`，`draft/copy` 生成草稿时实时拉取公共下拉和站点分区/仓库并写入快照，目录模式 `validate/submit` 优先实时刷新下拉，失败时回退草稿包快照，直接传 `draft.json` 时保持旧兼容行为；更新 calculator/Skill 测试覆盖中文省市、试算方案、备货区域、分区、仓库名称映射和 zones `country` 查询参数。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator tests/skills/test_ops_new_product_calculator_skill.py -q` 通过，`53 passed in 2.14s`。
+**影响范围**：影响新品计算器草稿包 CSV 展示、目录模式校验/提交前的数据同步和草稿包内新增隐藏快照文件；`draft.json` 高级用户和旧脚本仍使用接口 key/code。
+**回滚方式**：回退 `opscli/calculator/draft.py`、`opscli/calculator/cli.py`、Skill 文案与相关测试中的中文下拉和 `.dropdown-cache.json` 改动，并删除本条变更记录。
+---
+
+## 2026-07-03 calculator - CSV 草稿填写入口
+
+**变更原因**：新品计算器草稿包默认生成多个分散文件且要求用户直接编辑 JSON，业务用户填写成本高、替换 JSON 容易出错，需要改为轻量表格入口。
+**改动点**：扩展 `opscli/calculator/draft.py`，新增 `填写表格.csv` 常量、CSV 渲染、UTF-8 BOM 写入、CSV “请填写”列解析、草稿目录解析、目录模式 CSV 同步到 `draft.json`，并将使用说明改为优先引导填写 CSV 和网页端兜底；更新 `opscli/calculator/cli.py`，使 `draft/copy` 输出推荐打开 CSV，`show/validate/submit` 兼容草稿目录输入，目录模式会先同步 CSV 再校验或提交；更新 `ops-new-product-calculator` Skill，引导普通用户优先填写 CSV，并在用户不想本地填写时转向网页端新品计算器；更新 calculator/Skill 测试覆盖 CSV 生成、CSV 同步、目录校验/提交和 Skill 文案。
+**验证结果**：先执行系统 Python 的 `python -m pytest tests/calculator/test_draft.py tests/calculator/test_cli.py tests/skills/test_ops_new_product_calculator_skill.py -q`，因全局 Python 未安装 pytest 失败（`No module named pytest`）；改用项目虚拟环境执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_draft.py tests/calculator/test_cli.py tests/skills/test_ops_new_product_calculator_skill.py -q` 通过，`42 passed in 1.85s`；继续执行 `.venv/Scripts/python.exe -m pytest tests/calculator tests/skills/test_ops_new_product_calculator_skill.py -q` 通过，`49 passed in 1.68s`。
+**影响范围**：影响新品计算器草稿包生成、目录模式校验/提交前的数据准备；保留 `draft.json` 兼容高级用户和旧脚本。
+**回滚方式**：回退 `opscli/calculator/draft.py`、CLI 与测试中的 CSV 草稿相关改动，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - 新品计算器 CLI 草稿包模式
+
+**变更原因**：Polaris 新品计算器页面字段多、第二阶段表单由前端固定模板动态填充，不适合要求非技术运营同学一次性列出所有参数；第一版先以 CLI 能力落地，通过后端 `queryCost` 生成本地草稿包，再引导用户按中文字段说明补充 `draft.json` 并提交试算。
+**改动点**：新增 `opscli/calculator/` 模块，包含字段字典、草稿归一化、缺失项 Markdown、本地校验、提交 payload 派生、JSON 文件辅助和 Polaris calculator HTTP client；新增 `opscli calculator` 顶级命令组，提供 `search-category`、`recommend`、`draft`、`show`、`validate`、`submit`、`dropdown-list`、`zones`、`list`、`detail`、`copy` 命令；`recommend` 默认平台改为同时选择亚马逊和沃尔玛；草稿包固定生成 `draft.json`、`字段说明.md`、`缺失项.md`、`使用说明.md`；新增 `tests/calculator/` 覆盖字段说明、草稿处理、HTTP client、CLI 命令和根命令注册；补充设计文档 `docs/design/新品计算器CLI草稿包模式设计.md` 与执行计划 `docs/superpowers/plans/2026-07-02-新品计算器-cli草稿包.md`。新增 `ops-new-product-calculator` Skill 模板与 manifest 声明，用于通过自然语言引导站点、平台、海关类目下拉选择，要求平台默认同时选择亚马逊和沃尔玛，并约束所有后端访问必须走 `opscli calculator`。真实联调时发现系统 URL 带尾斜杠会与 token endpoint 拼出双斜杠路径，同步修正 `TokenManager._fetch_token()` 的 URL 拼接；`zones` 真实接口返回仓库字段为 `by_warehouses`，同步修正普通文本输出。
+**验证结果**：TDD RED 阶段分别验证缺少 `fields`、`draft`、`models`、`client`、`cli` 模块以及 `zones/list/detail/copy/calculator` 根注册时测试失败；GREEN 后执行 `.venv/Scripts/python.exe -m pytest tests/calculator -v` 通过，`24 passed in 1.30s`。随后补充默认 base URL 回归测试，先复现 `CalculatorClient` 将 `get_builtin_systems()` 列表误当 dict 读取的失败，再修正为按 `alias=polaris` 读取 `url`；复跑 `.venv/Scripts/python.exe -m pytest tests/calculator/test_client.py tests/calculator -v` 通过，`25 passed in 1.37s`。补充 token URL 拼接回归测试，先复现 `https://biapi.qa.aukeyit.com/` 与 `/api/auth/cli-token` 拼出 `//api`，修复后 `.venv/Scripts/python.exe -m pytest tests/auth/test_token_manager.py::test_fetch_token_joins_base_url_and_endpoint_without_double_slash -v` 通过。真实只读联调中 `.venv/Scripts/python.exe -m opscli.cli auth token check --system polaris` 显示 token 有效，`.venv/Scripts/python.exe -m opscli.cli calculator dropdown-list` 成功返回字段集合；`.venv/Scripts/python.exe -m opscli.cli calculator search-category 数据线 --limit 5` 成功返回 QA 真实类目匹配，`.venv/Scripts/python.exe -m opscli.cli calculator recommend` 成功输出第一轮烟测参数；`.venv/Scripts/python.exe -m opscli.cli calculator zones --country US --json` 成功返回 `by_warehouses`，据此补充普通输出回归测试并修正展示，新增 `ops-new-product-calculator` Skill 契约测试先失败于模板缺失，补齐后 `.venv/Scripts/python.exe -m pytest tests/skills/test_ops_new_product_calculator_skill.py -v` 通过，`2 passed`。最终 `.venv/Scripts/python.exe -m pytest tests/calculator tests/skills/test_ops_new_product_calculator_skill.py -v` 通过，`30 passed in 1.33s`。执行 `.venv/Scripts/python.exe -m opscli.cli calculator --help` 成功显示 9 个 calculator 子命令。执行 calculator 新增文件 GBK 兼容扫描通过。受影响回归中 `.venv/Scripts/python.exe -m pytest tests/auth tests/query -v` 被既存问题阻断：`tests/query/test_manager.py:817-818` 存在重复函数定义导致 `IndentationError`；单独执行 `.venv/Scripts/python.exe -m pytest tests/auth -v` 为 `39 passed, 2 failed`，失败项为 Windows 权限位断言期望 `600` 但实际 `666`，以及 `build_session_headers` 现返回额外 `X-Opscli-Version`。以上失败均不在本次 calculator 变更范围内。
+**影响范围**：新增新品计算器 CLI 能力和本地草稿包工作流；不修改 Polaris 后端接口、不新增 MCP 工具、不让 Skill 直接调用后端；现阶段交互仍以 JSON 草稿和 Markdown 说明为主。
+**回滚方式**：删除 `opscli/calculator/`、`tests/calculator/`、新增设计/计划文档，回退 `opscli/cli.py` 中 calculator 注册和本条变更记录。
+---
+
 ## 2026-06-29 skills - 统一 Keepa 每日额度提示
 
 **变更原因**：`keepa_run` 已通过 MCP 限额中间件返回每日调用额度，但 Keepa Skill 仍要求隐藏剩余额度，导致最终回复未像卖家精灵一样提示用户当天的额度使用情况。
@@ -2135,6 +2216,139 @@
 **回滚方式**：git 还原 `cli.py` 与 `commands.md` 两个文件。
 ---
 
+## 2026-07-02 calculator - 新品计算器 CLI 草稿包模式设计
+
+**变更原因**：确认将 Polaris 新品计算器优先封装为 opscli CLI 模式，并采用面向运营同学的草稿包交互。
+**改动点**：新增 `docs/design/新品计算器CLI草稿包模式设计.md`，明确 draft/show/validate/submit/list/detail/copy 命令、草稿包结构、字段字典、校验规则和后续增强路线。
+**验证结果**：仅文档变更，未运行代码测试；已完成设计内容自查，未发现占位符、范围漂移或未决问题。
+**影响范围**：不影响现有 CLI 行为，为后续 calculator 模块开发提供设计依据。
+**回滚方式**：删除 `docs/design/新品计算器CLI草稿包模式设计.md`，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - 新品计算器 CLI 实施计划
+
+**变更原因**：用户已确认新品计算器 CLI 草稿包模式设计，需要形成可执行开发计划。
+**改动点**：新增 `docs/superpowers/plans/2026-07-02-新品计算器-cli草稿包.md`，将实现拆分为字段字典、草稿校验、草稿包生成、HTTP client、核心 CLI、查询复制命令和验证记录 7 个任务。
+**验证结果**：仅文档变更；已按 writing-plans 要求完成 spec coverage、placeholder scan 和 type consistency 自查。
+**影响范围**：不影响现有 CLI 行为，为后续 calculator 模块开发提供执行步骤。
+**回滚方式**：删除该实施计划文档，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task1 字段字典失败测试
+
+**变更原因**：按 TDD 先为新品计算器字段字典编写失败测试，锁定中文字段说明行为。
+**改动点**：新增 `tests/calculator/test_fields.py`，覆盖字段中文名、单位、示例和字段说明 Markdown。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_fields.py -v`，因 `opscli.calculator.fields` 尚未实现而失败，符合 RED 阶段预期。
+**影响范围**：仅新增测试，不影响现有 CLI 行为。
+**回滚方式**：删除 `tests/calculator/test_fields.py` 并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task1 字段字典实现
+
+**变更原因**：让新品计算器字段字典测试通过，为草稿说明、摘要和校验提供中文字段基础。
+**改动点**：新增 `opscli/calculator/__init__.py` 和 `opscli/calculator/fields.py`，定义 `FieldSpec`、字段分组、字段索引、中文标签获取和字段说明 Markdown 渲染。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_fields.py -v`，2 个测试全部通过。
+**影响范围**：新增 calculator 模块字段字典，不影响现有 CLI 行为。
+**回滚方式**：删除 `opscli/calculator/__init__.py`、`opscli/calculator/fields.py` 和相关测试，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task2 草稿校验失败测试
+
+**变更原因**：按 TDD 为新品计算器草稿初始化、缺失项识别和本地校验编写失败测试。
+**改动点**：新增 `tests/calculator/test_draft.py`，覆盖后端数据归一化、关税率默认值、中文校验错误、试算方案条件必填、提交 payload 派生字段和中文摘要。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_draft.py -v`，因 `opscli.calculator.draft` 尚未实现而失败，符合 RED 阶段预期。
+**影响范围**：仅新增测试，不影响现有 CLI 行为。
+**回滚方式**：删除 `tests/calculator/test_draft.py` 并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task2 草稿校验实现
+
+**变更原因**：实现新品计算器草稿初始化、中文缺失项识别和本地校验，使 Task2 测试通过。
+**改动点**：新增 `opscli/calculator/exceptions.py` 和 `opscli/calculator/draft.py`，实现 `ValidationIssue`、`normalize_draft_data`、`validate_draft_data`、缺失项 Markdown、使用说明、中文摘要和提交 payload 派生字段。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_draft.py -v`，6 个测试全部通过；期间修复了非数值字段被误按数字校验的问题。
+**影响范围**：新增 calculator 草稿校验逻辑，不影响现有 CLI 行为。
+**回滚方式**：删除 `opscli/calculator/exceptions.py`、`opscli/calculator/draft.py` 和相关测试，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task3 草稿包失败测试
+
+**变更原因**：按 TDD 为新品计算器 JSON 文件读写、第一阶段 payload 构造和草稿包四文件生成编写失败测试。
+**改动点**：扩展 `tests/calculator/test_draft.py`，新增 JSON helper、query payload 构造和 `create_draft_package` 草稿包生成测试。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_draft.py -v`，因 `create_draft_package` 尚未实现而失败，符合 RED 阶段预期。
+**影响范围**：仅扩展测试，不影响现有 CLI 行为。
+**回滚方式**：移除 `tests/calculator/test_draft.py` 中 Task3 新增测试，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task3 草稿包实现
+
+**变更原因**：实现新品计算器 JSON 文件读写、第一阶段 payload 构造和草稿包四文件生成。
+**改动点**：新增 `opscli/calculator/models.py`，扩展 `opscli/calculator/draft.py` 的 `create_draft_package`，生成 `draft.json`、`字段说明.md`、`缺失项.md`、`使用说明.md`；修正 payload 文件优先时不混入 CLI 参数的逻辑。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_draft.py -v`，10 个测试全部通过。
+**影响范围**：新增 calculator 草稿包生成逻辑，不影响现有 CLI 行为。
+**回滚方式**：删除 `opscli/calculator/models.py`，移除 `draft.py` 中 `create_draft_package` 相关修改和测试，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task4 HTTP Client 失败测试
+
+**变更原因**：按 TDD 为 Polaris 新品计算器 HTTP client 编写失败测试，锁定认证、路径和错误提示行为。
+**改动点**：新增 `tests/calculator/test_client.py`，覆盖 queryCost 请求、所有接口路径和非 200 响应中文错误。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_client.py -v`，因 `opscli.calculator.client` 尚未实现而失败，符合 RED 阶段预期。
+**影响范围**：仅新增测试，不影响现有 CLI 行为。
+**回滚方式**：删除 `tests/calculator/test_client.py` 并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task4 HTTP Client 实现
+
+**变更原因**：实现 Polaris 新品计算器接口客户端，为 CLI 命令提供统一远端访问层。
+**改动点**：新增 `opscli/calculator/client.py`，实现 dropdownList、zonesWarehouseList、queryCost、doCalc、forecastList、taskDetails、copyTask；更新 `opscli/calculator/__init__.py` 导出 `CalculatorClient`。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_client.py -v`，3 个测试全部通过。
+**影响范围**：新增 calculator HTTP client，不影响现有 CLI 行为。
+**回滚方式**：删除 `opscli/calculator/client.py`，恢复 `opscli/calculator/__init__.py`，删除相关测试，并移除此变更记录。
+---
+
+## 2026-07-02 calculator - Task5 核心 CLI 失败测试
+
+**变更原因**：按 TDD 为新品计算器 draft/show/validate/submit 核心 CLI 命令编写失败测试。
+**改动点**：新增 `tests/calculator/test_cli.py`，覆盖草稿包生成、中文摘要、中文校验失败和提交成功输出。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/calculator/test_cli.py -v`，因 `opscli.calculator.cli` 尚未实现而失败，符合 RED 阶段预期。
+**影响范围**：仅新增测试，不影响现有 CLI 行为。
+**回滚方式**：删除 `tests/calculator/test_cli.py` 并移除此变更记录。
+---
+
+## 2026-07-03 ops-new-product-calculator - Skill 完善失败测试
+
+**变更原因**：按 TDD 锁定新品计算器 Skill 的版本、失败反馈、下拉选项、防覆盖和完整草稿示例契约。
+**改动点**：增强 `tests/skills/test_ops_new_product_calculator_skill.py`，改用结构化版本与 manifest 断言，并使用真实草稿校验器验证 JSON 示例。
+**验证结果**：执行 `.venv/Scripts/python.exe -m pytest tests/skills/test_ops_new_product_calculator_skill.py -q`，新增契约中 5 项按预期失败，完成 RED 阶段。
+**影响范围**：仅调整 Skill 契约测试，不改变 calculator CLI 行为。
+**回滚方式**：恢复 `tests/skills/test_ops_new_product_calculator_skill.py` 并移除此变更记录。
+---
+
+## 2026-07-03 ops-new-product-calculator - Skill 工作流完善
+
+**变更原因**：修复 Skill 版本不一致、下拉命令无法展示选项、固定目录可能覆盖草稿、示例无法独立通过校验及失败后未反馈的问题。
+**改动点**：更新 `SKILL.md` 的失败反馈、`dropdown-list --json`、任务专属输出目录、完整最小草稿和常见问题规则；移除不受支持的 frontmatter 版本字段；统一 `data/VERSION.json` 为 `v0.0.1`。
+**验证结果**：目标 Skill 测试 7 项通过；calculator 的 fields、draft、client、CLI 共 36 项通过；发布 manifest 使用纯校验函数检查通过。`test_packaging.py` 因其导入脚本在模块加载时重绑标准输出而破坏 pytest 捕获，属于既有测试基础设施问题。
+**影响范围**：影响新品计算器 Skill 的 Agent 操作指引，不改变 calculator CLI 的接口和运行行为。
+**回滚方式**：恢复 `SKILL.md`、`data/VERSION.json`、对应测试和本变更记录。
+---
+
+## 2026-07-03 ops-new-product-calculator - Polaris 权限前置测试
+
+**变更原因**：按 TDD 锁定新品计算器执行前必须检查登录状态和 Polaris 权限的流程。
+**改动点**：扩展 `tests/skills/test_ops_new_product_calculator_skill.py`，要求 Skill 明确 `auth token status`、未登录时 `auth login` 以及已登录但无 Polaris Token 时申请权限。
+**验证结果**：执行权限前置目标测试，因 Skill 尚未包含 Polaris 权限和认证命令而失败，完成 RED 阶段。
+**影响范围**：仅增加 Skill 契约测试，不改变认证或 calculator CLI 行为。
+**回滚方式**：移除新增测试和本变更记录。
+---
+
+## 2026-07-03 ops-new-product-calculator - Polaris 权限前置流程
+
+**变更原因**：确保 Agent 在调用新品计算器前先确认登录状态和北极星系统权限，避免将权限缺失误判为普通接口故障。
+**改动点**：在 `SKILL.md` 新增权限与登录前置检查，约定 `opscli auth token status`、未登录时 `opscli auth login`，以及已登录但 Polaris Token 无效时申请 BI/Polaris 权限。
+**验证结果**：权限契约目标测试通过；最终 Skill 与 calculator 回归结果见本次交付验证。
+**影响范围**：影响新品计算器 Skill 的执行前置流程，不改变 CLI 实现。
+**回滚方式**：移除 `SKILL.md` 的权限与登录前置检查、对应测试和本变更记录。
 ## 2026-07-04 amazon - 增加代理反拦截与扩展字段采集
 
 **变更原因**：服务部署在阿里云（数据中心 IP 段），被 Amazon Bot 检测标记为高风险，抓取时频繁遭遇验证码/首页重定向；且原采集字段过少（仅标题/价格/评分/评论数/位置），无法满足更完整的商品信息需求。
@@ -2149,4 +2363,103 @@
 **验证结果**：`pytest tests/amazon/ -q` → 21 passed；导入冒烟测试通过，新字段与 config getter 正常。
 **影响范围**：仅 amazon 抓取模块；现有 CLI/manager 接口与测试不变（均 mock scraper）。默认不使用代理，需在 config.ini/环境变量显式配置后生效。
 **回滚方式**：git 还原 `opscli/amazon/scraping/scraper.py`、`opscli/amazon/domain/models.py`，删除 `opscli/amazon/config.py`。
+---
+
+## 2026-07-09 cli - 解决 master 同步冲突
+
+**变更原因**：同步 master 到当前 feature/sellersprite 分支后，顶级 CLI 注册区在 `opscli/cli.py` 产生冲突，需要合并双方命令注册调整。
+**改动点**：移除冲突标记；保留当前分支新增的 `calculator` 与 `scrape-do` 命令；沿用 master 对 debug、shopify、feedtask 等命令暂不注册的处理，并保留 `feedback` 命令注册。
+**验证结果**：执行 `git diff --check` 无输出；`git grep -n -E "^(<<<<<<<|=======|>>>>>>>)" -- opscli/cli.py docs/change-log-pending.md` 无冲突标记；`python -m py_compile opscli/cli.py` 通过；暂未提交合并。
+**影响范围**：仅影响顶级 CLI 命令挂载关系；未修改各子模块实现。
+**回滚方式**：还原 `opscli/cli.py` 与本变更记录，重新按需要解决合并冲突。
+---
+
+## 2026-07-09 MCP - 限额策略迁移到 SQLite 表
+
+**变更原因**：MCP quota 策略此前依赖 `mcp-quota.json`，线上修改后需要重启服务才能生效，运维成本高。
+**改动点**：已先为 SQLite 策略表默认初始化与非覆盖行为补充失败用例；后续将实现 `mcp_quota_policy` 策略表、动态策略读取并删除 JSON 配置链路。
+**验证结果**：执行 `pytest tests/mcp/test_quota.py::test_sqlite_quota_store_initializes_default_policy_table tests/mcp/test_quota.py::test_sqlite_quota_store_does_not_overwrite_existing_policy_table -v` 失败，当前 shell 提示 `pytest: command not found`，需改用可用 Python 环境或安装测试依赖后继续。
+**影响范围**：当前仅新增测试用例，尚未改运行时逻辑；后续影响 MCP 外部服务工具 quota 策略加载方式。
+**回滚方式**：回滚本次测试文件变更即可。
+---
+
+## 2026-07-09 MCP - 新增 SQLite quota 策略表基础实现
+
+**变更原因**：MCP quota 需要改为 SQLite 策略表驱动，支持线上直接修改额度后无需重启生效。
+**改动点**：在 `SQLiteQuotaStore` 中新增 `mcp_quota_policy` 表创建、空表默认策略初始化、`get_policy()` 策略读取和策略行校验；为默认初始化和非空表不覆盖补充测试。
+**验证结果**：已先用 `.venv/Scripts/python.exe -m pytest tests/mcp/test_quota.py::test_sqlite_quota_store_initializes_default_policy_table tests/mcp/test_quota.py::test_sqlite_quota_store_does_not_overwrite_existing_policy_table -v` 观察到预期失败（`SQLiteQuotaStore` 缺少 `get_policy`）；实现后待重新运行验证。
+**影响范围**：影响 MCP quota SQLite schema 初始化；当前阶段尚未切换 `QuotaLimiter` 动态读取策略。
+**回滚方式**：回滚 `opscli/mcp/quota.py` 和 `tests/mcp/test_quota.py` 中本段相关改动。
+---
+
+## 2026-07-09 MCP - 动态读取 SQLite quota 策略测试
+
+**变更原因**：需要验证 MCP quota 策略在线上直接改 SQLite 后下一次调用立即生效。
+**改动点**：新增动态读取策略、禁用策略放行、删除策略放行、非法策略阻断测试用例。
+**验证结果**：已运行 `.venv/Scripts/python.exe -m pytest tests/mcp/test_quota.py::test_limiter_reads_policy_from_sqlite_on_each_call tests/mcp/test_quota.py::test_limiter_allows_disabled_policy_without_creating_daily_record tests/mcp/test_quota.py::test_limiter_allows_deleted_policy_without_creating_daily_record tests/mcp/test_quota.py::test_limiter_blocks_invalid_sqlite_policy_without_calling_service -v`，4 个测试按预期失败，失败原因是 `QuotaLimiter.__init__()` 仍要求 `policies` 参数。
+**影响范围**：当前仅新增测试用例，尚未切换 `QuotaLimiter` 运行逻辑。
+**回滚方式**：回滚 `tests/mcp/test_quota.py` 中本段新增测试。
+---
+
+## 2026-07-09 MCP - QuotaLimiter 改为动态策略读取
+
+**变更原因**：MCP quota 策略需要在服务运行中响应 SQLite 表修改，避免依赖启动时策略快照。
+**改动点**：`QuotaLimiter` 构造参数移除 `policies`，增加 `quota_enabled` 注入；`before_call()` 和 `quota_snapshot()` 每次通过 store 读取当前策略；增加策略读取失败时的保守 quota 快照。
+**验证结果**：已先运行动态策略测试并观察到预期失败；实现后待重新运行 Task 2 测试。
+**影响范围**：影响所有通过 `_quota_wrap()` 包裹的 MCP tool 限额判断；无策略和禁用策略将直接放行。
+**回滚方式**：回滚 `opscli/mcp/quota.py` 中 `QuotaLimiter` 相关改动，并恢复启动时 `policies` 字典。
+---
+
+## 2026-07-09 MCP - 调整 quota 测试存储适配动态策略接口
+
+**变更原因**：`QuotaLimiter` 改为通过 `QuotaStore.get_policy()` 动态读取策略后，旧测试中的 `policies` 构造参数和内存 store 不再适配。
+**改动点**：为 `MemoryQuotaStore` 增加 `get_policy()`；更新限额通过、失败退回、存储不可用测试的 `QuotaLimiter` 构造方式。
+**验证结果**：待运行 Task 2 测试验证。
+**影响范围**：仅影响 `tests/mcp/test_quota.py` 中 quota 编排器单元测试。
+**回滚方式**：回滚 `tests/mcp/test_quota.py` 中本段构造方式和 `MemoryQuotaStore` 改动。
+---
+
+## 2026-07-09 MCP - quota JSON 配置链路删除测试
+
+**变更原因**：用户明确要求删除 `mcp-quota.json` 相关运行时逻辑，不保留兼容残留。
+**改动点**：新增断言，确认 quota 模块不再暴露 `ENV_QUOTA_CONFIG_PATH`、`QuotaConfig`、`load_quota_config()` 和 `_find_quota_config_path()`。
+**验证结果**：已运行 `.venv/Scripts/python.exe -m pytest tests/mcp/test_quota.py::test_quota_module_no_longer_exposes_json_config_loader -v`，按预期失败，失败原因是 `ENV_QUOTA_CONFIG_PATH` 仍存在。
+**影响范围**：当前仅新增删除链路测试，尚未删除运行时代码。
+**回滚方式**：回滚 `tests/mcp/test_quota.py` 中本测试。
+---
+
+## 2026-07-09 MCP - 删除 quota JSON 配置链路
+
+**变更原因**：用户要求 `mcp-quota.json` 不再作为运行时来源，并删除相关 JSON 逻辑。
+**改动点**：删除 quota 模块中的 JSON 配置 dataclass、环境变量、加载函数和路径查找函数；`get_quota_limiter()` 改为只按 `OPSCLI_MCP_QUOTA_SQLITE_PATH` 创建 SQLite store；移除 JSON 配置测试、package-data 资源项并删除 `opscli/mcp/configs/mcp-quota.json`。
+**验证结果**：已先运行 JSON API 删除测试并观察到预期失败；删除实现后待重新运行验证。
+**影响范围**：影响 MCP quota 策略配置来源；运行时不再读取任何 `mcp-quota.json`。
+**回滚方式**：回滚 `opscli/mcp/quota.py`、`tests/mcp/test_quota.py`、`pyproject.toml` 并恢复 `opscli/mcp/configs/mcp-quota.json`。
+---
+
+## 2026-07-09 MCP - 避免 quota JSON 删除断言污染搜索结果
+
+**变更原因**：Task 3 的移除验证需要通过 `rg` 确认运行时代码和测试中不再直接出现旧 JSON 配置符号。
+**改动点**：将 `test_quota_module_no_longer_exposes_json_config_loader` 中的旧符号断言改为字符串拼接，避免测试文件自身命中精确搜索。
+**验证结果**：已运行 `.venv/Scripts/python.exe -m pytest tests/mcp/test_quota.py -v`，21 passed；执行 `rg -n "mcp-quota|load_quota_config|ENV_QUOTA_CONFIG_PATH|QuotaConfig|_find_quota_config_path" opscli tests pyproject.toml -g "!*.c"` 无输出。
+**影响范围**：仅影响测试断言写法，不改变被测行为。
+**回滚方式**：回滚该测试函数的字符串拼接写法。
+---
+
+## 2026-07-09 Config - 修复 Python 3.14 开发模式版本读取
+
+**变更原因**：使用 `.venv/Scripts/python.exe -m pytest ...` 运行 MCP 回归测试时，当前虚拟环境为 Python 3.14，`opscli.config` 在开发模式下调用 `tomllib.loads(_f.read())` 解析二进制内容会抛出 `TypeError: Expected str object, not 'bytes'`，导致测试收集阶段失败。
+**改动点**：新增 `tests/test_config.py` 覆盖未安装包元数据时从 `pyproject.toml` 读取版本号的开发模式分支；将 `opscli/config.py` 中二进制文件解析从 `tomllib.loads(_f.read())` 改为 `tomllib.load(_f)`。
+**验证结果**：已先运行 `.venv/Scripts/python.exe -m pytest tests/test_config.py -v` 观察到预期失败，失败原因为 `tomllib.loads()` 收到 bytes；修复后重新运行 `.venv/Scripts/python.exe -m pytest tests/test_config.py -v`，1 passed。
+**影响范围**：仅影响开发模式下包元数据不可用时的版本号读取；已安装包优先读取 `importlib.metadata.version("aukeys-opscli")` 的行为不变。
+**回滚方式**：删除 `tests/test_config.py` 并将 `opscli/config.py` 版本读取恢复为 `tomllib.loads(_f.read())`。
+---
+
+## 2026-07-09 MCP - quota SQLite 策略表最终回归验证
+
+**变更原因**：完成 MCP quota 策略 SQLite 化、动态读取和 JSON 运行时链路删除后，需要记录最终回归结果与已知构建问题。
+**改动点**：汇总验证 SQLite 策略表默认初始化、非覆盖、动态读取、禁用/删除策略放行、非法策略阻断、JSON 配置 API 删除，以及 Seller Sprite/Keepa MCP tool quota 包裹行为；确认 `mcp-quota.json` 不再作为包资源或运行时来源。
+**验证结果**：`.venv/Scripts/python.exe -m pytest tests/test_config.py -v` 通过，1 passed；`.venv/Scripts/python.exe -m pytest tests/mcp/test_quota.py -v` 通过，21 passed；`.venv/Scripts/python.exe -m pytest tests/mcp/test_seller_sprite_tools.py -v` 通过，29 passed；`.venv/Scripts/python.exe -m pytest tests/mcp/test_keepa_tools.py -v` 通过，14 passed；`rg -n "mcp-quota|load_quota_config|ENV_QUOTA_CONFIG_PATH|QuotaConfig|_find_quota_config_path" opscli tests pyproject.toml -g "!*.c"` 无输出；`git diff --check` 无输出；`git status --ignored --short | rg "(^!! |^\\?\\? )?(build/|dist/|opscli/mcp/quota\\.c|.*egg-info|uv.lock)" || true` 无输出，确认构建产物已清理且 `uv.lock` 未残留修改。此前可选执行 `.venv/Scripts/python.exe -m build` 失败，失败原因为 sdist wheel 构建阶段缺少 `opscli/skills/packaging.py`，该问题来自现有 `MANIFEST.in` 排除业务 `.py` 与 `setup.py` 构建时加载该文件之间的不一致，本次未纳入 quota 改造修复范围。
+**影响范围**：影响 MCP quota 策略加载、所有经 `_quota_wrap()` 包裹的外部服务 tool、开发模式 Python 3.14 版本读取测试入口；不改变 quota 响应顶层字段结构。
+**回滚方式**：回滚 `opscli/mcp/quota.py`、`tests/mcp/test_quota.py`、`pyproject.toml`、`opscli/mcp/configs/mcp-quota.json` 删除、`docs/design/MCP限额SQLite策略表设计.md`、`docs/plans/MCP限额SQLite策略表实施计划.md` 以及本变更记录；如需单独回滚 Python 3.14 版本读取修复，回滚 `opscli/config.py` 和 `tests/test_config.py`。
 ---

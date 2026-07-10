@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import base64
 import hashlib
 import importlib
 import json
@@ -23,6 +24,7 @@ from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.config import SellerSpriteSettings
 from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
+from opscli.seller_sprite.browser_route.ocr import create_captcha_ocr_provider
 
 
 BASE_URL = "https://www.sellersprite.com"
@@ -30,6 +32,29 @@ HOME_URL = "https://www.sellersprite.com/"
 LOGIN_URL = "https://www.sellersprite.com/cn/w/user/login"
 DEFAULT_PAGE_URL = "https://www.sellersprite.com/v3/keyword-miner/"
 DEFAULT_TIMEOUT_MS = 120000
+LOGIN_SUCCESS_TIMEOUT_MS = 15000
+LOGIN_SETTLE_TIMEOUT_MS = 500
+TEXT_DETECT_TIMEOUT_MS = 300
+ROBOT_CAPTCHA_SETTLE_TIMEOUT_MS = 800
+ROBOT_CAPTCHA_DIALOG_SELECTORS = [
+    "[role='dialog'][aria-label='机器人检测']",
+    ".el-dialog:has-text('机器人检测')",
+]
+ROBOT_CAPTCHA_IMAGE_SELECTORS = [
+    "img[src^='data:image/gif;base64,']",
+    "img[src^='data:image/png;base64,']",
+    "img[src^='data:image/jpeg;base64,']",
+    "img:visible",
+]
+ROBOT_CAPTCHA_INPUT_SELECTORS = [
+    "input.el-input__inner[type='text']",
+    "input[type='text']:visible",
+]
+ROBOT_CAPTCHA_CONFIRM_SELECTORS = [
+    "button.el-button--primary[type='button']",
+    "button:visible:has-text('确 定')",
+    "button:visible:has-text('确定')",
+]
 XVFB_DISPLAY_CANDIDATES = range(99, 110)
 TASK_INTERVAL_RANGE_SECONDS = (1.0, 5.0)
 NETWORK_COOLDOWN_RANGE_SECONDS = (3.0, 5.0)
@@ -72,6 +97,35 @@ class BrowserRouteResult:
 class _QueuedTask:
     request: BrowserRouteRequest
     future: asyncio.Future
+
+
+def _record_timing(
+    timings: list[dict[str, Any]] | None,
+    request: BrowserRouteRequest | None,
+    stage: str,
+    started_at: float,
+    **details: Any,
+) -> dict[str, Any]:
+    """记录 browser-route 阶段耗时。"""
+    elapsed_ms = round((time.monotonic() - started_at) * 1000, 1)
+    event: dict[str, Any] = {"stage": stage, "elapsed_ms": elapsed_ms}
+    safe_details = {key: _safe_timing_value(value) for key, value in details.items() if value is not None}
+    event.update(safe_details)
+    if timings is not None:
+        timings.append(event)
+    return event
+
+
+def _safe_timing_value(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _safe_timing_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_safe_timing_value(item) for item in value]
+    return str(value)
 
 
 class SellerSpriteBrowserRouteWorker:
@@ -142,15 +196,45 @@ class SellerSpriteBrowserRouteWorker:
 
     async def _run_one(self, request: BrowserRouteRequest) -> BrowserRouteResult:
         warnings: list[dict[str, Any]] = []
+        timings: list[dict[str, Any]] = []
+        total_started_at = time.monotonic()
         referer = request.referer or DEFAULT_PAGE_URL
+        stage_started_at = time.monotonic()
         await self._wait_for_cooldown(request, warnings)
+        _record_timing(timings, request, "wait_for_cooldown", stage_started_at)
+        stage_started_at = time.monotonic()
         await self._wait_for_rate_limit(request, warnings)
+        _record_timing(timings, request, "wait_for_rate_limit", stage_started_at)
+        stage_started_at = time.monotonic()
+        had_page = bool(self._page and not self._page.is_closed())
         page = await self._ensure_page(request.account)
-        login = await self._open_referer_and_login(page, request)
+        _record_timing(
+            timings,
+            request,
+            "ensure_page",
+            stage_started_at,
+            reused=had_page,
+            url=getattr(page, "url", ""),
+        )
+        stage_started_at = time.monotonic()
+        login = await self._open_referer_and_login(page, request, timings=timings)
+        _record_timing(timings, request, "open_referer_and_login", stage_started_at, current_url=getattr(page, "url", ""))
+        await self._handle_robot_captcha_if_enabled(
+            page,
+            request,
+            warnings,
+            timings,
+            stage="after_open_referer",
+        )
         if request.page_prepare:
+            stage_started_at = time.monotonic()
             await _prepare_page(page)
+            _record_timing(timings, request, "page_prepare", stage_started_at)
+        else:
+            _record_timing(timings, request, "page_prepare", time.monotonic(), skipped=True)
         for attempt in range(2):
             try:
+                stage_started_at = time.monotonic()
                 response = await self._execute_route_fetch(
                     page=page,
                     method=request.method,
@@ -158,18 +242,61 @@ class SellerSpriteBrowserRouteWorker:
                     payload=request.payload,
                     root_dir=request.root_dir,
                     section="main",
+                    timings=timings,
+                    request=request,
                 )
+                _record_timing(timings, request, "execute_route_fetch.main", stage_started_at, attempt=attempt + 1)
                 break
             except SellerSpriteApiError as exc:
-                if attempt > 0 or not exc.is_session_expired():
-                    raise
-                await self._login_with_account(page, request.account, callback=referer)
-                login = await self._open_referer_and_login(page, request)
-                if request.page_prepare:
-                    await _prepare_page(page)
+                _record_timing(
+                    timings,
+                    request,
+                    "execute_route_fetch.main_error",
+                    stage_started_at,
+                    attempt=attempt + 1,
+                    api_code=exc.api_code,
+                    status_code=exc.status_code,
+                )
+                if exc.is_session_expired():
+                    if attempt > 0:
+                        raise
+                    stage_started_at = time.monotonic()
+                    await self._login_with_account(page, request.account, callback=referer, timings=timings, request=request)
+                    _record_timing(timings, request, "session_expired_relogin", stage_started_at)
+                    stage_started_at = time.monotonic()
+                    login = await self._open_referer_and_login(page, request, timings=timings)
+                    _record_timing(timings, request, "session_expired_reopen", stage_started_at, current_url=getattr(page, "url", ""))
+                    await self._handle_robot_captcha_if_enabled(
+                        page,
+                        request,
+                        warnings,
+                        timings,
+                        stage="after_session_expired_reopen",
+                    )
+                    if request.page_prepare:
+                        stage_started_at = time.monotonic()
+                        await _prepare_page(page)
+                        _record_timing(timings, request, "session_expired_page_prepare", stage_started_at)
+                    continue
+                if attempt == 0:
+                    captcha_result = await self._handle_robot_captcha_if_enabled(
+                        page,
+                        request,
+                        warnings,
+                        timings,
+                        stage="after_main_error",
+                    )
+                    if captcha_result:
+                        if request.page_prepare:
+                            stage_started_at = time.monotonic()
+                            await _prepare_page(page)
+                            _record_timing(timings, request, "robot_captcha_page_prepare", stage_started_at)
+                        continue
+                raise
         high_frequency_response = None
         if request.high_frequency_endpoint and request.high_frequency_payload:
             try:
+                stage_started_at = time.monotonic()
                 high_frequency_response = await self._execute_route_fetch(
                     page=page,
                     method="POST",
@@ -177,8 +304,19 @@ class SellerSpriteBrowserRouteWorker:
                     payload=request.high_frequency_payload,
                     root_dir=request.root_dir,
                     section="high_frequency",
+                    timings=timings,
+                    request=request,
                 )
+                _record_timing(timings, request, "execute_route_fetch.high_frequency", stage_started_at)
             except SellerSpriteApiError as exc:
+                _record_timing(
+                    timings,
+                    request,
+                    "execute_route_fetch.high_frequency_error",
+                    stage_started_at,
+                    api_code=exc.api_code,
+                    status_code=exc.status_code,
+                )
                 warnings.append(
                     {
                         "stage": "high_frequency",
@@ -186,12 +324,166 @@ class SellerSpriteBrowserRouteWorker:
                         "error": exc.to_dict(),
                     }
                 )
+        _record_timing(timings, request, "total", total_started_at)
+        warnings.append(
+            {
+                "stage": "browser_route_timing",
+                "message": "卖家精灵 browser-route 阶段耗时诊断",
+                "timings": timings,
+            }
+        )
         return BrowserRouteResult(
             login=login,
             response=response,
             high_frequency_response=high_frequency_response,
             warnings=warnings,
         )
+
+    async def fetch_listing_analysis_report(
+        self,
+        *,
+        task_id: str,
+        root_dir: Path,
+        page_prepare: bool = True,
+        task_interval_seconds: float = 5.0,
+        cooldown_seconds: float = 10.0,
+    ) -> BrowserRouteResult:
+        """打开 Listing Analysis 报告详情页并捕获结构化结果。"""
+        request = BrowserRouteRequest(
+            scenario="listing-analysis",
+            method="PAGE_CAPTURE",
+            endpoint="/v3/api/competing-lookup",
+            payload={},
+            referer="https://www.sellersprite.com/v3/ai-history?module=LA",
+            account=self.account,
+            root_dir=root_dir,
+            page_prepare=page_prepare,
+            task_interval_seconds=task_interval_seconds,
+            cooldown_seconds=cooldown_seconds,
+        )
+        warnings: list[dict[str, Any]] = []
+        timings: list[dict[str, Any]] = []
+        total_started_at = time.monotonic()
+        async with self._drain_lock:
+            stage_started_at = time.monotonic()
+            await self._wait_for_cooldown(request, warnings)
+            _record_timing(timings, request, "wait_for_cooldown", stage_started_at)
+            stage_started_at = time.monotonic()
+            await self._wait_for_rate_limit(request, warnings)
+            _record_timing(timings, request, "wait_for_rate_limit", stage_started_at)
+            had_page = bool(self._page and not self._page.is_closed())
+            stage_started_at = time.monotonic()
+            page = await self._ensure_page(self.account)
+            _record_timing(timings, request, "ensure_page", stage_started_at, reused=had_page)
+            stage_started_at = time.monotonic()
+            login = await self._open_referer_and_login(page, request, timings=timings)
+            _record_timing(timings, request, "open_referer_and_login", stage_started_at, current_url=getattr(page, "url", ""))
+            await self._handle_robot_captcha_if_enabled(
+                page,
+                request,
+                warnings,
+                timings,
+                stage="before_listing_analysis_report",
+            )
+            if page_prepare:
+                stage_started_at = time.monotonic()
+                await _prepare_page(page)
+                _record_timing(timings, request, "page_prepare", stage_started_at)
+            report_url = _listing_analysis_report_url(task_id)
+            try:
+                stage_started_at = time.monotonic()
+                response = await _open_listing_analysis_report_and_capture(
+                    page,
+                    task_id=task_id,
+                    report_url=report_url,
+                    root_dir=root_dir,
+                )
+                _record_timing(timings, request, "listing_analysis_report.capture", stage_started_at)
+            except SellerSpriteApiError:
+                raise
+            except Exception as exc:
+                if await _has_visible_text(page, "正在分析中"):
+                    response = {
+                        "code": "OK",
+                        "success": True,
+                        "data": {
+                            "taskId": task_id,
+                            "taskStatus": "RUNNING",
+                            "analyzing": True,
+                        },
+                    }
+                    _record_timing(
+                        timings,
+                        request,
+                        "listing_analysis_report.analyzing",
+                        stage_started_at,
+                        error=type(exc).__name__,
+                    )
+                else:
+                    raise SellerSpriteApiError(
+                        "卖家精灵 Listing Analysis 报告页未捕获 competing-lookup 结构化数据",
+                        response_excerpt=(f"task_id={task_id} url={report_url}\n{exc}")[:1000],
+                        api_code="ERR_LISTING_ANALYSIS_REPORT_CAPTURE_MISSED",
+                    ) from exc
+            _record_timing(timings, request, "total", total_started_at)
+            warnings.append(
+                {
+                    "stage": "browser_route_timing",
+                    "message": "卖家精灵 Listing Analysis 报告页 browser-route 阶段耗时诊断",
+                    "timings": timings,
+                }
+            )
+            self._last_finished_at = time.monotonic()
+            return BrowserRouteResult(login=login, response=response, warnings=warnings)
+
+    async def _handle_robot_captcha_if_enabled(
+        self,
+        page,
+        request: BrowserRouteRequest,
+        warnings: list[dict[str, Any]],
+        timings: list[dict[str, Any]],
+        *,
+        stage: str,
+    ) -> dict[str, Any] | None:
+        stage_started_at = time.monotonic()
+        try:
+            result = await _solve_robot_image_captcha(
+                page,
+                settings=self.settings,
+                stage=stage,
+            )
+        except Exception as exc:
+            _record_timing(
+                timings,
+                request,
+                f"robot_captcha.{stage}",
+                stage_started_at,
+                enabled=self.settings.browser_captcha_ocr_enabled,
+                error=type(exc).__name__,
+            )
+            raise
+        _record_timing(
+            timings,
+            request,
+            f"robot_captcha.{stage}",
+            stage_started_at,
+            enabled=self.settings.browser_captcha_ocr_enabled,
+            detected=bool(result),
+            attempts=result.get("attempts") if result else None,
+            provider=result.get("provider") if result else None,
+        )
+        if not result:
+            return None
+        warnings.append(
+            {
+                "stage": "robot_captcha",
+                "message": "卖家精灵机器人检测验证码已通过 ddddocr 尝试处理",
+                "trigger_stage": stage,
+                "provider": result["provider"],
+                "attempts": result["attempts"],
+            }
+        )
+        return result
 
     async def _wait_for_cooldown(self, request: BrowserRouteRequest, warnings: list[dict[str, Any]]) -> None:
         wait_seconds = self._cooldown_until - time.monotonic()
@@ -245,20 +537,53 @@ class SellerSpriteBrowserRouteWorker:
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         return self._page
 
-    async def _open_referer_and_login(self, page, request: BrowserRouteRequest) -> dict[str, Any]:
+    async def _open_referer_and_login(
+        self,
+        page,
+        request: BrowserRouteRequest,
+        timings: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         referer = request.referer or DEFAULT_PAGE_URL
+        just_logged_in = False
         if _is_login_url(page.url):
-            await self._login_with_account(page, request.account, callback=referer)
+            stage_started_at = time.monotonic()
+            await self._login_with_account(page, request.account, callback=referer, timings=timings, request=request)
+            _record_timing(timings, request, "login_from_login_url", stage_started_at, current_url=page.url)
+            just_logged_in = True
         if _same_page_url(page.url, referer):
-            await page.reload(wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+            if not just_logged_in:
+                stage_started_at = time.monotonic()
+                await page.reload(wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+                _record_timing(timings, request, "referer_reload", stage_started_at, current_url=page.url)
+                stage_started_at = time.monotonic()
+                await page.wait_for_timeout(1500)
+                _record_timing(timings, request, "referer_settle", stage_started_at, reason="reload")
+            else:
+                _record_timing(timings, request, "referer_reload", time.monotonic(), skipped=True, reason="just_logged_in")
         else:
+            stage_started_at = time.monotonic()
             await page.goto(referer, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
-        await page.wait_for_timeout(1500)
-        if not await _detect_logged_in(page):
-            await self._login_with_account(page, request.account, callback=referer)
-            await page.goto(referer, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+            _record_timing(timings, request, "referer_goto", stage_started_at, current_url=page.url)
+            stage_started_at = time.monotonic()
             await page.wait_for_timeout(1500)
+            _record_timing(timings, request, "referer_settle", stage_started_at, reason="goto")
+        stage_started_at = time.monotonic()
         logged_in = await _detect_logged_in(page)
+        _record_timing(timings, request, "detect_logged_in.initial", stage_started_at, logged_in=logged_in)
+        if not logged_in:
+            stage_started_at = time.monotonic()
+            await self._login_with_account(page, request.account, callback=referer, timings=timings, request=request)
+            _record_timing(timings, request, "login_after_referer", stage_started_at, current_url=page.url)
+            if not _same_page_url(page.url, referer):
+                stage_started_at = time.monotonic()
+                await page.goto(referer, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+                _record_timing(timings, request, "referer_goto_after_login", stage_started_at, current_url=page.url)
+                stage_started_at = time.monotonic()
+                await page.wait_for_timeout(1500)
+                _record_timing(timings, request, "referer_settle_after_login", stage_started_at)
+        stage_started_at = time.monotonic()
+        logged_in = await _detect_logged_in(page)
+        _record_timing(timings, request, "detect_logged_in.final", stage_started_at, logged_in=logged_in)
         if not logged_in:
             raise SellerSpriteConfigError("卖家精灵浏览器登录失败，请检查账号或浏览器 profile 登录状态")
         return {
@@ -273,22 +598,45 @@ class SellerSpriteBrowserRouteWorker:
             "account": request.account.to_public_dict(),
         }
 
-    async def _login_with_account(self, page, account: SellerSpriteAccount, *, callback: str) -> None:
+    async def _login_with_account(
+        self,
+        page,
+        account: SellerSpriteAccount,
+        *,
+        callback: str,
+        timings: list[dict[str, Any]] | None = None,
+        request: BrowserRouteRequest | None = None,
+    ) -> None:
         callback_url = _callback_path(callback)
+        stage_started_at = time.monotonic()
         await page.goto(
             f"{LOGIN_URL}?callback={quote(callback_url)}",
             wait_until="domcontentloaded",
             timeout=DEFAULT_TIMEOUT_MS,
         )
+        _record_timing(timings, request, "login.goto", stage_started_at, current_url=page.url)
+        stage_started_at = time.monotonic()
         await page.wait_for_timeout(1000)
-        if await _detect_logged_in(page):
+        _record_timing(timings, request, "login.page_settle", stage_started_at)
+        stage_started_at = time.monotonic()
+        logged_in = await _detect_logged_in(page)
+        _record_timing(timings, request, "login.detect_existing", stage_started_at, logged_in=logged_in)
+        if logged_in:
             return
+        stage_started_at = time.monotonic()
         await _click_account_login_tab(page)
+        _record_timing(timings, request, "login.click_account_tab", stage_started_at)
         password_input = page.locator("input[type='password']:visible").first
         try:
+            stage_started_at = time.monotonic()
             await password_input.wait_for(state="visible", timeout=5000)
+            _record_timing(timings, request, "login.wait_password_input", stage_started_at)
         except Exception as exc:
-            if await _detect_logged_in(page):
+            _record_timing(timings, request, "login.wait_password_input_error", stage_started_at)
+            stage_started_at = time.monotonic()
+            logged_in = await _detect_logged_in(page)
+            _record_timing(timings, request, "login.detect_after_password_missing", stage_started_at, logged_in=logged_in)
+            if logged_in:
                 return
             raise SellerSpriteConfigError(
                 f"卖家精灵登录页未显示账号登录密码框，current_url={page.url}"
@@ -302,10 +650,16 @@ class SellerSpriteBrowserRouteWorker:
             "input[type='email']:visible:not([readonly]):not([disabled]), "
             "input[type='text']:visible:not([readonly]):not([disabled])"
         ).first
+        stage_started_at = time.monotonic()
         await username_input.fill(account.username)
         await password_input.fill(account.password)
+        _record_timing(timings, request, "login.fill_credentials", stage_started_at)
+        stage_started_at = time.monotonic()
         await _click_login_submit(page)
-        await page.wait_for_timeout(3000)
+        _record_timing(timings, request, "login.click_submit", stage_started_at)
+        stage_started_at = time.monotonic()
+        await _wait_for_login_success(page, callback=callback)
+        _record_timing(timings, request, "login.wait_success", stage_started_at, current_url=page.url)
 
     async def _execute_route_fetch(
         self,
@@ -316,6 +670,8 @@ class SellerSpriteBrowserRouteWorker:
         payload: dict[str, Any],
         root_dir: Path,
         section: str,
+        timings: list[dict[str, Any]] | None = None,
+        request: BrowserRouteRequest | None = None,
     ) -> dict[str, Any]:
         normalized_method = method.upper()
         pattern = _route_pattern(endpoint)
@@ -327,6 +683,9 @@ class SellerSpriteBrowserRouteWorker:
                 return
             headers = {key: value for key, value in request.headers.items() if key.lower() != "content-length"}
             headers["accept"] = "application/json, text/plain, */*"
+            if normalized_method == "PAGE_CAPTURE":
+                await route.continue_()
+                return
             if normalized_method == "GET":
                 await route.continue_(
                     url=_url_with_query(endpoint, payload),
@@ -343,6 +702,15 @@ class SellerSpriteBrowserRouteWorker:
                     post_data=urlencode(_query_pairs(payload), doseq=True),
                 )
                 return
+            if normalized_method == "POST_QUERY":
+                headers["content-type"] = "application/json;charset=UTF-8"
+                await route.continue_(
+                    url=_url_with_query(endpoint, payload),
+                    method="POST",
+                    headers=headers,
+                    post_data="{}",
+                )
+                return
             headers["content-type"] = "application/json;charset=UTF-8"
             await route.continue_(
                 url=_absolute_url(endpoint),
@@ -351,12 +719,34 @@ class SellerSpriteBrowserRouteWorker:
                 post_data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
             )
 
+        stage_started_at = time.monotonic()
         await page.route(pattern, _handle)
+        _record_timing(timings, request, f"route_fetch.{section}.route_setup", stage_started_at, endpoint=endpoint)
         try:
-            response = await _trigger_request(page, endpoint=endpoint, method=normalized_method, payload=payload)
-            return await _parse_response(response, method=normalized_method, root_dir=root_dir, section=section)
+            response, transport = await _trigger_request(
+                page,
+                endpoint=endpoint,
+                method=normalized_method,
+                payload=payload,
+                timings=timings,
+                request=request,
+                section=section,
+            )
+            stage_started_at = time.monotonic()
+            parsed = await _parse_response(response, method=normalized_method, root_dir=root_dir, section=section)
+            _record_timing(
+                timings,
+                request,
+                f"route_fetch.{section}.parse_response",
+                stage_started_at,
+                transport=transport,
+                status=getattr(response, "status", None),
+            )
+            return parsed
         finally:
+            stage_started_at = time.monotonic()
             await page.unroute(pattern, _handle)
+            _record_timing(timings, request, f"route_fetch.{section}.unroute", stage_started_at)
 
 
 def _random_task_interval_seconds(max_seconds: float) -> float:
@@ -389,7 +779,17 @@ def _is_risk_control_error(exc: Exception) -> bool:
     details = _error_details(exc)
     return any(
         marker in details
-        for marker in ("captcha", "验证码", "risk control", "risk_control", "rate limit", "rate_limit", "too many", "风控")
+        for marker in (
+            "captcha",
+            "验证码",
+            "机器人检测",
+            "risk control",
+            "risk_control",
+            "rate limit",
+            "rate_limit",
+            "too many",
+            "风控",
+        )
     )
 
 
@@ -415,6 +815,13 @@ def _is_login_url(url: str) -> bool:
 
 def _same_page_url(current_url: str, target_url: str) -> bool:
     return _normalized_page_url(current_url) == _normalized_page_url(target_url)
+
+
+def _absolute_callback_url(callback: str) -> str:
+    if callback.startswith("http"):
+        return callback
+    path = callback if callback.startswith("/") else f"/{callback}"
+    return f"{BASE_URL}{path}"
 
 
 def _normalized_page_url(url: str) -> tuple[str, str, str, tuple[tuple[str, str], ...]]:
@@ -600,21 +1007,113 @@ def _stop_auto_xvfb() -> None:
 atexit.register(_stop_auto_xvfb)
 
 
-async def _trigger_request(page, *, endpoint: str, method: str, payload: dict[str, Any]):
+async def fetch_listing_analysis_report_with_browser_route(
+    *,
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+    task_id: str,
+    root_dir: Path,
+    page_prepare: bool | None = None,
+) -> BrowserRouteResult:
+    """通过 browser-route 打开 Listing Analysis 报告详情页并捕获结果。"""
+    worker = get_browser_route_worker(settings=settings, account=account)
+    return await worker.fetch_listing_analysis_report(
+        task_id=task_id,
+        root_dir=root_dir,
+        page_prepare=settings.browser_page_prepare if page_prepare is None else page_prepare,
+        task_interval_seconds=settings.browser_task_interval_seconds,
+        cooldown_seconds=settings.browser_cooldown_seconds,
+    )
+
+
+async def _open_listing_analysis_report_and_capture(
+    page,
+    *,
+    task_id: str,
+    report_url: str,
+    root_dir: Path,
+) -> dict[str, Any]:
+    """进入 Listing Analysis 报告页并捕获 competing-lookup 响应。"""
+    async with page.expect_response(
+        lambda response: _same_endpoint(response.url, "/v3/api/competing-lookup"),
+        timeout=DEFAULT_TIMEOUT_MS,
+    ) as info:
+        await page.goto(report_url, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+    response = await info.value
+    payload = await _parse_response(response, method="PAGE_CAPTURE", root_dir=root_dir, section="listing_analysis_report")
+    if isinstance(payload.get("data"), dict):
+        payload["data"].setdefault("taskId", task_id)
+    return payload
+
+
+async def _trigger_request(
+    page,
+    *,
+    endpoint: str,
+    method: str,
+    payload: dict[str, Any],
+    timings: list[dict[str, Any]] | None = None,
+    request: BrowserRouteRequest | None = None,
+    section: str = "main",
+):
+    stage_started_at = time.monotonic()
+    wait_started_at = stage_started_at
+    listing_analysis_clicked = False
     try:
         async with page.expect_response(lambda response: _same_endpoint(response.url, endpoint), timeout=15000) as info:
-            if not await _click_query_button(page):
+            _record_timing(timings, request, f"route_fetch.{section}.expect_response_ready", stage_started_at)
+            stage_started_at = time.monotonic()
+            if request and request.scenario == "listing-analysis":
+                # Listing Analysis 必须先在页面输入 ASIN 再点击查询，避免只走静默接口提交。
+                listing_analysis_clicked = await _trigger_listing_analysis_query(page, payload)
+                clicked = listing_analysis_clicked
+            else:
+                clicked = await _click_query_button(page)
+            _record_timing(timings, request, f"route_fetch.{section}.click_query_button", stage_started_at, clicked=clicked)
+            if not clicked:
                 raise _NoQueryButtonError()
-        return await info.value
-    except Exception:
-        return await _request_with_browser_context(page, endpoint=endpoint, method=method, payload=payload)
+            wait_started_at = time.monotonic()
+        response = await info.value
+        _record_timing(
+            timings,
+            request,
+            f"route_fetch.{section}.wait_page_response",
+            wait_started_at,
+            status=getattr(response, "status", None),
+        )
+        return response, "page_response"
+    except Exception as exc:
+        _record_timing(
+            timings,
+            request,
+            f"route_fetch.{section}.page_response_fallback",
+            wait_started_at,
+            error=type(exc).__name__,
+        )
+        if request and request.scenario == "listing-analysis" and listing_analysis_clicked:
+            raise SellerSpriteApiError(
+                "卖家精灵 Listing Analysis 已点击提交但未捕获接口响应，请稍后确认结果，避免重复提交",
+                response_excerpt=f"endpoint={endpoint}",
+                api_code="ERR_LISTING_ANALYSIS_RESPONSE_MISSED",
+                api_message="已完成页面点击，不再自动 fallback 重复创建 AI 任务。",
+            ) from exc
+        stage_started_at = time.monotonic()
+        response = await _request_with_browser_context(page, endpoint=endpoint, method=method, payload=payload)
+        _record_timing(
+            timings,
+            request,
+            f"route_fetch.{section}.context_request",
+            stage_started_at,
+            status=getattr(response, "status", None),
+        )
+        return response, "context_request"
 
 
 async def _request_with_browser_context(page, *, endpoint: str, method: str, payload: dict[str, Any]):
     """使用浏览器上下文请求接口，复用当前 profile 的 cookie，避免页面内 fetch 被拦截。"""
     headers = _context_request_headers(page.url, method=method)
     try:
-        if method == "GET":
+        if method in {"GET", "PAGE_CAPTURE"}:
             return await page.context.request.get(
                 _url_with_query(endpoint, payload),
                 headers=headers,
@@ -626,6 +1125,14 @@ async def _request_with_browser_context(page, *, endpoint: str, method: str, pay
                 _absolute_url(endpoint),
                 headers=headers,
                 data=urlencode(_query_pairs(payload), doseq=True),
+                timeout=DEFAULT_TIMEOUT_MS,
+                fail_on_status_code=False,
+            )
+        if method == "POST_QUERY":
+            return await page.context.request.post(
+                _url_with_query(endpoint, payload),
+                headers=headers,
+                data="{}",
                 timeout=DEFAULT_TIMEOUT_MS,
                 fail_on_status_code=False,
             )
@@ -671,15 +1178,67 @@ async def _click_query_button(page) -> bool:
         ".el-button:visible:has-text('开始筛选')",
         ".ant-btn:visible:has-text('开始筛选')",
     ]
+    locator = await _first_visible_page_locator(page, selectors)
+    if locator is None:
+        return False
+    await locator.click(timeout=5000)
+    return True
+
+
+async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool:
+    """在 Listing Analysis 页面填写 ASIN 并点击查询按钮。"""
+    asin = str(payload.get("asin") or "").strip().upper()
+    if not asin:
+        return False
+    input_box = await _first_visible_page_locator(
+        page,
+        [
+            "input[placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='asin']:visible:not([readonly]):not([disabled])",
+            "input[type='text']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if input_box is None:
+        return False
+    await input_box.fill(asin)
+    try:
+        await input_box.press("Enter", timeout=5000)
+        return True
+    except Exception:
+        pass
+    button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('立即分析')",
+            "[role='button']:visible:has-text('立即分析')",
+            "button:visible:has-text('立即查询')",
+            "[role='button']:visible:has-text('立即查询')",
+            "button:visible:has-text('查询')",
+            "[role='button']:visible:has-text('查询')",
+            ".el-button:visible:has-text('立即分析')",
+            ".el-button:visible:has-text('立即查询')",
+            ".el-button:visible:has-text('查询')",
+            ".ant-btn:visible:has-text('立即分析')",
+            ".ant-btn:visible:has-text('立即查询')",
+            ".ant-btn:visible:has-text('查询')",
+        ],
+    )
+    if button is None:
+        return False
+    await button.click(timeout=5000)
+    return True
+
+
+async def _first_visible_page_locator(page, selectors: list[str]):
+    """返回页面中第一个可见 locator。"""
     for selector in selectors:
         locator = page.locator(selector).first
         try:
             if await locator.count() and await locator.is_visible(timeout=800):
-                await locator.click(timeout=5000)
-                return True
+                return locator
         except Exception:
             continue
-    return False
+    return None
 
 
 async def _trigger_fetch(page, *, endpoint: str, method: str) -> None:
@@ -719,6 +1278,86 @@ async def _trigger_fetch(page, *, endpoint: str, method: str) -> None:
 def _looks_like_browser_fetch_failed(exc: Exception) -> bool:
     message = str(exc)
     return "Failed to fetch" in message and ("Page.evaluate" in message or "TypeError" in message)
+
+
+async def _solve_robot_image_captcha(
+    page,
+    *,
+    settings: SellerSpriteSettings,
+    stage: str,
+) -> dict[str, Any] | None:
+    """检测并处理卖家精灵机器人检测图片验证码。"""
+    if not settings.browser_captcha_ocr_enabled:
+        return None
+    dialog = await _robot_captcha_dialog(page)
+    if dialog is None:
+        return None
+    provider = create_captcha_ocr_provider()
+    max_attempts = max(settings.browser_captcha_ocr_max_attempts, 1)
+    for attempt in range(1, max_attempts + 1):
+        image = await _first_visible_locator(dialog, ROBOT_CAPTCHA_IMAGE_SELECTORS)
+        input_box = await _first_visible_locator(dialog, ROBOT_CAPTCHA_INPUT_SELECTORS)
+        confirm_button = await _first_visible_locator(dialog, ROBOT_CAPTCHA_CONFIRM_SELECTORS)
+        if image is None or input_box is None or confirm_button is None:
+            raise SellerSpriteConfigError(f"卖家精灵机器人检测验证码结构不完整，stage={stage}")
+        image_bytes = await _captcha_image_bytes(image)
+        answer = provider.recognize(image_bytes)
+        if not answer:
+            if attempt < max_attempts:
+                await image.click(timeout=3000)
+                await page.wait_for_timeout(ROBOT_CAPTCHA_SETTLE_TIMEOUT_MS)
+                continue
+            raise SellerSpriteConfigError(f"卖家精灵机器人检测验证码 OCR 未返回有效结果，stage={stage} attempts={attempt}")
+        await input_box.fill(answer)
+        await confirm_button.click(timeout=5000)
+        await page.wait_for_timeout(ROBOT_CAPTCHA_SETTLE_TIMEOUT_MS)
+        if not await _robot_captcha_visible(page):
+            return {"provider": provider.name, "attempts": attempt}
+        if attempt < max_attempts:
+            await image.click(timeout=3000)
+            await page.wait_for_timeout(ROBOT_CAPTCHA_SETTLE_TIMEOUT_MS)
+    raise SellerSpriteConfigError(f"卖家精灵机器人检测验证码 OCR 处理后仍未通过，stage={stage} attempts={max_attempts}")
+
+
+async def _robot_captcha_visible(page) -> bool:
+    return await _robot_captcha_dialog(page) is not None
+
+
+async def _robot_captcha_dialog(page):
+    if not hasattr(page, "locator"):
+        return None
+    for selector in ROBOT_CAPTCHA_DIALOG_SELECTORS:
+        locator = page.locator(selector).first
+        try:
+            if await locator.count() and await locator.is_visible(timeout=TEXT_DETECT_TIMEOUT_MS):
+                return locator
+        except Exception:
+            continue
+    return None
+
+
+async def _first_visible_locator(scope, selectors: list[str]):
+    for selector in selectors:
+        locator = scope.locator(selector).first
+        try:
+            if await locator.count() and await locator.is_visible(timeout=800):
+                return locator
+        except Exception:
+            continue
+    return None
+
+
+async def _captcha_image_bytes(image) -> bytes:
+    try:
+        src = await image.get_attribute("src")
+    except Exception:
+        src = None
+    if src and src.startswith("data:image/") and "," in src:
+        try:
+            return base64.b64decode(src.split(",", 1)[1])
+        except Exception:
+            pass
+    return await image.screenshot()
 
 
 async def _prepare_page(page) -> None:
@@ -836,12 +1475,20 @@ async def _parse_response(response, *, method: str, root_dir: Path, section: str
     return payload
 
 
-async def _detect_logged_in(page) -> bool:
+async def _wait_for_login_success(page, *, callback: str) -> None:
+    callback_url = _absolute_callback_url(callback)
     try:
-        await page.wait_for_load_state("networkidle", timeout=8000)
+        await page.wait_for_url(
+            lambda url: not _is_login_url(str(url)) or _same_page_url(str(url), callback_url),
+            timeout=LOGIN_SUCCESS_TIMEOUT_MS,
+        )
     except Exception:
         pass
-    if "/w/user/login" in page.url or "/cn/w/user/login" in page.url:
+    await page.wait_for_timeout(LOGIN_SETTLE_TIMEOUT_MS)
+
+
+async def _detect_logged_in(page) -> bool:
+    if _is_login_url(page.url):
         return False
     if await _homepage_requires_login(page) or await _has_visible_text(page, "游客"):
         return False
@@ -859,7 +1506,7 @@ async def _homepage_requires_login(page) -> bool:
 async def _has_visible_text(page, text: str) -> bool:
     locator = page.get_by_text(text).first
     try:
-        return await locator.is_visible(timeout=1000)
+        return await locator.is_visible(timeout=TEXT_DETECT_TIMEOUT_MS)
     except Exception:
         return False
 
@@ -909,6 +1556,11 @@ def _profile_dir(settings: SellerSpriteSettings, account: SellerSpriteAccount) -
     key = hashlib.md5(f"{account.name}:{account.username}".encode("utf-8")).hexdigest()[:12]
     safe_name = _slug(account.name or "default")
     return settings.browser_profile_dir / f"{safe_name}-{key}"
+
+
+def _listing_analysis_report_url(task_id: str) -> str:
+    """构造 Listing Analysis 历史报告详情页地址。"""
+    return f"{BASE_URL}/v3/ai-report?id={quote(str(task_id).strip())}&from=history"
 
 
 def _absolute_url(url: str) -> str:

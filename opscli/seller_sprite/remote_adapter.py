@@ -60,6 +60,42 @@ class SellerSpriteRemoteAdapter(RemoteMcpAdapter):
         """查询卖家精灵远端额度状态。"""
         return self.call_tool("seller_sprite_quota_status", {})
 
+    def listing_analysis_submit(
+        self,
+        *,
+        asin: str,
+        station: str,
+        site: str,
+        export_format: str,
+        output_dir: str | None,
+        job_id: str | None,
+    ) -> dict[str, Any]:
+        """提交 Listing Analysis 远端异步任务。"""
+        session_id = self.auth_client.get_session("ops")
+        return self.call_tool(
+            "seller_sprite_listing_analysis_submit",
+            {
+                "asin": asin,
+                "station": station,
+                "site": site,
+                "export_format": export_format,
+                "output_dir": output_dir,
+                "job_id": job_id,
+                "session_id": session_id,
+            },
+        )
+
+    def listing_analysis_status(self, job_id: str) -> dict[str, Any]:
+        """查询 Listing Analysis 远端任务状态。"""
+        return self.call_tool("seller_sprite_listing_analysis_status", {"job_id": job_id})
+
+    def listing_analysis_result(self, job_id: str, *, export_format: str) -> dict[str, Any]:
+        """读取 Listing Analysis 远端任务结果。"""
+        return self.call_tool(
+            "seller_sprite_listing_analysis_result",
+            {"job_id": job_id, "export_format": export_format},
+        )
+
     def job_status(self, job_id: str) -> dict[str, Any]:
         """查询卖家精灵远端任务状态。"""
         return self.call_tool("seller_sprite_job_status", {"job_id": job_id})

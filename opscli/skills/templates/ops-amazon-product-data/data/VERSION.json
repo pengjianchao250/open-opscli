@@ -1,0 +1,5 @@
+{
+  "version": "0.1.0",
+  "updated_at": "2026-07-01",
+  "summary": "Amazon 商品结构化数据通用 Skill，统一封装商品页、报价、搜索和 raw 字段导出流程"
+}

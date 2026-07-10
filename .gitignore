@@ -36,7 +36,10 @@ Thumbs.db
 # config.ini 位于 ~/.config/opscli/ 不会在项目目录内
 .env
 
-# 本地采集产物
+# 本地采集与验证产物
 seller_sprite_runs/
 debug-seller-sprite/
 tmp-validation/
+calculator-draft-*/
+tmp-calculator-*.json
+output/scrape-do-real-api/

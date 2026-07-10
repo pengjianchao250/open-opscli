@@ -111,8 +111,9 @@ class TokenManager:
         session_id = self.get_session_id()
         headers = _get_mcp_api_key_header()
         try:
+            token_url = f"{url.rstrip('/')}/{endpoint.lstrip('/')}"
             resp = httpx.post(
-                f"{url}{endpoint}",
+                token_url,
                 json={"session_id": session_id},
                 headers=headers or None,
                 timeout=10,

@@ -59,6 +59,9 @@ def test_seller_sprite_internal_controls_are_not_exposed():
     properties = (run_tool.inputSchema or {}).get("properties", {})
 
     assert "seller_sprite_run" in names
+    assert "seller_sprite_listing_analysis_submit" in names
+    assert "seller_sprite_listing_analysis_status" in names
+    assert "seller_sprite_listing_analysis_result" in names
     assert "seller_sprite_start" not in names
     assert "mode" not in properties
     assert "async_mode" not in properties
