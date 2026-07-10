@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-10 asin-data/mcp - 合并 ASIN 实时取数服务到 master
+
+**变更原因**：用户需要把 ASIN 取数服务合并到 master，范围限定为 `asin-data` 实时取数、AI Ready 返回、MCP 取数工具、OSS xlsx 上传和服务端稳定性能力，避免把 release 分支中的 Rufus、Sif、西柚、Shopify 等无关改动带入 master。
+**改动点**：合并 `opscli/asin_data` 实时取数服务和拆包能力，新增/更新 BI/listing/crawler 聚合、`live-data` 按 `basic/listing_basic/bi/all` 取数、AI Ready 返回协议、拆分 xlsx 生成与上传、`site_code` 透传、本地 metrics；新增 MCP `asin_data_live_data`、`asin_data_fetch_file`、`asin_data_report_url` 和 `ops_health_check`，并在 MCP server 中只注册 ASIN 取数和健康检查工具；为文件上传增加 `filename` 参数、重试和诊断上下文；同步更新 `ops-asin-data-collector` Skill 模板、ASIN 测试、MCP 测试、上传测试和压测脚本。
+**验证结果**：`D:\workspace\open-opscli\.venv\Scripts\python.exe -m py_compile opscli\asin_data\cli.py opscli\asin_data\services\ai_response.py opscli\asin_data\services\bi_report_data.py opscli\asin_data\services\collector.py opscli\asin_data\services\daily_pipeline.py opscli\asin_data\services\live_data.py opscli\asin_data\services\live_metrics.py opscli\asin_data\services\split_package_builder.py opscli\mcp\tools\asin_data.py opscli\mcp\asin_data_limit.py opscli\mcp\tools\health.py opscli\mcp\quota.py opscli\shared\file_uploads.py scripts\mcp_asin_data_pressure.py scripts\asin_data_daily_full_package.py` 通过；`D:\workspace\open-opscli\.venv\Scripts\python.exe -m pytest tests\asin_data tests\shared\test_file_uploads.py tests\mcp\test_asin_data_tools.py tests\mcp\test_asin_data_limit.py tests\mcp\test_health_tool.py` 通过，80 passed；`D:\workspace\open-opscli\.venv\Scripts\python.exe -c "import importlib; importlib.import_module('opscli.mcp.server'); print('mcp server import ok')"` 通过；`git diff --check` 通过。
+**影响范围**：影响 `opscli asin-data` 实时取数、MCP ASIN 取数服务、公共文件上传客户端和 ASIN 取数 Skill 文档；不合并 release 分支中的 Rufus/Sif/西柚/Shopify/asin_review 新功能。
+**回滚方式**：回退本次合并的 `opscli/asin_data`、`opscli/mcp/tools/asin_data.py`、`opscli/mcp/asin_data_limit.py`、`opscli/mcp/tools/health.py`、`opscli/mcp/server.py` 中 ASIN/health 注册、`opscli/shared/file_uploads.py`、`ops-asin-data-collector` 模板、ASIN/MCP/上传测试、压测脚本和本条 changelog。
+---
+
 ## 2026-07-09 seller_sprite - 补齐 SQLite 队列恢复与运维入口
 
 **变更原因**：线上 `seller_sprite_task_queue` 出现任务长期停留 `queued`，需要避免 worker 因账号异常退出后无人消费，并提供正式队列运维命令替代手工改 SQLite。

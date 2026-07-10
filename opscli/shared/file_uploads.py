@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,12 +22,15 @@ ENV_FILE_UPLOAD_ENDPOINT = "OPSCLI_FILE_UPLOAD_ENDPOINT"
 ENV_FILE_UPLOAD_FIELD = "OPSCLI_FILE_UPLOAD_FIELD"
 ENV_FILE_UPLOAD_FOLDER = "OPSCLI_FILE_UPLOAD_FOLDER"
 ENV_FILE_UPLOAD_PUBLIC = "OPSCLI_FILE_UPLOAD_PUBLIC"
+ENV_FILE_UPLOAD_RETRIES = "OPSCLI_FILE_UPLOAD_RETRIES"
 
 DEFAULT_ENDPOINT = "/v1/file/upload"
 DEFAULT_FILE_FIELD = "file"
 DEFAULT_FOLDER = "uploads"
 DEFAULT_PUBLIC = "0"
 DEFAULT_TIMEOUT = 60
+DEFAULT_RETRIES = 2
+RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class FileUploadError(RemoteError):
@@ -103,6 +107,7 @@ class FileUploadClient:
         folder: str | None = None,
         public: str | None = None,
         metadata: dict[str, Any] | None = None,
+        filename: str | None = None,
     ) -> FileUploadResult:
         """上传文件并返回远端下载链接。"""
         if not self.endpoint:
@@ -112,30 +117,136 @@ class FileUploadClient:
             raise FileUploadError(f"上传文件不存在：{file_path}")
 
         headers, cookies = self._get_auth("ops")
-        fields: list[tuple[str, Any]] = [
-            ("folder", (None, folder or self.folder)),
-            ("public", (None, public or self.public)),
-            ("purpose", (None, purpose)),
-        ]
-        if metadata:
-            fields.append(("metadata", (None, json.dumps(metadata, ensure_ascii=False))))
-
+        upload_folder = folder or self.folder
+        upload_public = public or self.public
         mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-        with file_path.open("rb") as file_handle:
-            fields.append((self.file_field, (file_path.name, file_handle, mime_type)))
-            response = httpx.post(
-                _resolve_endpoint(self.endpoint),
-                headers=headers,
-                cookies=cookies,
-                files=fields,
-                timeout=DEFAULT_TIMEOUT,
-            )
+        upload_filename = filename or file_path.name
 
+        response = self._post_with_retry(
+            file_path,
+            headers=headers,
+            cookies=cookies,
+            purpose=purpose,
+            folder=upload_folder,
+            public=upload_public,
+            metadata=metadata,
+            upload_filename=upload_filename,
+            mime_type=mime_type,
+        )
         payload = _parse_upload_response(response)
         url = _extract_upload_url(payload)
         if not url:
             raise FileUploadBadJsonError("文件上传响应缺少下载链接")
         return FileUploadResult(url=url, raw=payload)
+
+    def _post_with_retry(
+        self,
+        file_path: Path,
+        *,
+        headers: dict[str, str],
+        cookies: dict[str, str],
+        purpose: str,
+        folder: str,
+        public: str,
+        metadata: dict[str, Any] | None,
+        upload_filename: str,
+        mime_type: str,
+    ) -> httpx.Response:
+        """执行文件上传，并对网关类瞬时错误做有限重试。"""
+        endpoint = _resolve_endpoint(self.endpoint)
+        max_attempts = _upload_attempt_count()
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = self._post_once(
+                    file_path,
+                    endpoint=endpoint,
+                    headers=headers,
+                    cookies=cookies,
+                    purpose=purpose,
+                    folder=folder,
+                    public=public,
+                    metadata=metadata,
+                    upload_filename=upload_filename,
+                    mime_type=mime_type,
+                )
+                if response.status_code not in RETRYABLE_HTTP_STATUS_CODES:
+                    return response
+                if attempt >= max_attempts:
+                    raise FileUploadHttpError(
+                        response.status_code,
+                        _upload_context_message(
+                            file_path,
+                            endpoint=endpoint,
+                            purpose=purpose,
+                            folder=folder,
+                            attempt=attempt,
+                            max_attempts=max_attempts,
+                            message=f"远端返回 HTTP {response.status_code}",
+                        ),
+                    )
+                last_error = FileUploadHttpError(
+                    response.status_code,
+                    _upload_context_message(
+                        file_path,
+                        endpoint=endpoint,
+                        purpose=purpose,
+                        folder=folder,
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                        message=f"远端返回 HTTP {response.status_code}",
+                    ),
+                )
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    raise FileUploadError(
+                        _upload_context_message(
+                            file_path,
+                            endpoint=endpoint,
+                            purpose=purpose,
+                            folder=folder,
+                            attempt=attempt,
+                            max_attempts=max_attempts,
+                            message=str(exc),
+                        )
+                    ) from exc
+            time.sleep(min(0.2 * attempt, 1.0))
+        if last_error:
+            raise last_error
+        raise FileUploadError("文件上传失败：未执行上传请求")
+
+    def _post_once(
+        self,
+        file_path: Path,
+        *,
+        endpoint: str,
+        headers: dict[str, str],
+        cookies: dict[str, str],
+        purpose: str,
+        folder: str,
+        public: str,
+        metadata: dict[str, Any] | None,
+        upload_filename: str,
+        mime_type: str,
+    ) -> httpx.Response:
+        """单次上传请求；每次重试都重新打开文件句柄。"""
+        fields: list[tuple[str, Any]] = [
+            ("folder", (None, folder)),
+            ("public", (None, public)),
+            ("purpose", (None, purpose)),
+        ]
+        if metadata:
+            fields.append(("metadata", (None, json.dumps(metadata, ensure_ascii=False))))
+        with file_path.open("rb") as file_handle:
+            fields.append((self.file_field, (upload_filename, file_handle, mime_type)))
+            return httpx.post(
+                endpoint,
+                headers=headers,
+                cookies=cookies,
+                files=fields,
+                timeout=DEFAULT_TIMEOUT,
+            )
 
     def _get_auth(self, alias: str) -> tuple[dict[str, str], dict[str, str]]:
         mcp_headers = get_mcp_request_headers()
@@ -166,6 +277,35 @@ def _resolve_endpoint(endpoint: str) -> str:
 
 def _has_mcp_api_key(headers: dict[str, str]) -> bool:
     return bool(headers.get("X-MCP-API-Key"))
+
+
+def _upload_attempt_count() -> int:
+    value = os.getenv(ENV_FILE_UPLOAD_RETRIES)
+    if not value:
+        return DEFAULT_RETRIES + 1
+    try:
+        retries = max(int(value), 0)
+    except ValueError:
+        retries = DEFAULT_RETRIES
+    return retries + 1
+
+
+def _upload_context_message(
+    file_path: Path,
+    *,
+    endpoint: str,
+    purpose: str,
+    folder: str,
+    attempt: int,
+    max_attempts: int,
+    message: str,
+) -> str:
+    size = file_path.stat().st_size if file_path.exists() else 0
+    return (
+        f"文件上传失败：{message}；"
+        f"endpoint={endpoint}，folder={folder}，purpose={purpose}，"
+        f"file={file_path.name}，size={size}，attempt={attempt}/{max_attempts}"
+    )
 
 
 def _parse_upload_response(response: httpx.Response) -> dict[str, Any]:

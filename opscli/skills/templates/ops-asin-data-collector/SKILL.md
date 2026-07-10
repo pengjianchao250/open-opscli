@@ -1,156 +1,143 @@
 ---
 name: ops-asin-data-collector
-description: Use this skill when Codex users need to run opscli asin-data collect for ASIN batch data collection, single-ASIN collection, SellerSprite keyword reverse/miner/listing-analysis data, Amazon listing snapshots, BI sales data, crawler listing data, Rufus optimization suggestions, or frontend-facing ASIN data packages from CSV/XLSX/JSON/JSONL inputs.
-version: 0.1.3
+description: Use this skill when Codex users need ASIN inspection data through the current opscli asin-data live-data and fetch-file commands, including real-time basic/listing/BI data, historical SellerSprite keyword files, competitor files, and Rufus files.
+version: 0.1.6
 ---
 
 # ops-asin-data-collector
 
-Codex-facing wrapper for the official `opscli asin-data` commands. Use `collect` to collect one or more ASINs into a unified data package containing SellerSprite, Amazon scrape, BI sales, crawler Listing, Rufus, and frontend-facing outputs. Use `report-url` when the user only needs an existing ASIN report file URL.
+Codex-facing wrapper for the current ASIN inspection data commands. For AI 巡检取数, only use `opscli asin-data live-data` and `opscli asin-data fetch-file`.
+
+## Hard Command Boundary
+
+Allowed ASIN inspection data commands:
+
+| Need | CLI command | MCP equivalent |
+| --- | --- | --- |
+| Complete real-time basic data | `opscli asin-data live-data --data-scope basic --upload-xlsx --return-mode ai_ready --pretty` | `asin_data_live_data(data_scope="basic", upload_xlsx=true, return_mode="ai_ready")` |
+| Listing interface only | `opscli asin-data live-data --data-scope listing_basic --upload-xlsx --return-mode ai_ready --pretty` | `asin_data_live_data(data_scope="listing_basic", upload_xlsx=true, return_mode="ai_ready")` |
+| Real-time BI data | `opscli asin-data live-data --data-scope bi --sales-start <YYYY-MM-DD> --sales-end <YYYY-MM-DD> --upload-xlsx --return-mode ai_ready --pretty` | `asin_data_live_data(data_scope="bi", sales_start=..., sales_end=..., upload_xlsx=true, return_mode="ai_ready")` |
+| Real-time basic + BI | `opscli asin-data live-data --data-scope all --sales-start <YYYY-MM-DD> --sales-end <YYYY-MM-DD> --upload-xlsx --return-mode ai_ready --pretty` | `asin_data_live_data(data_scope="all", sales_start=..., sales_end=..., upload_xlsx=true, return_mode="ai_ready")` |
+| Historical SellerSprite keyword reverse | `opscli asin-data fetch-file --file keyword_reverse --pretty` | `asin_data_fetch_file(file_key="keyword_reverse")` |
+| Historical SellerSprite keyword miner | `opscli asin-data fetch-file --file keyword_miner --pretty` | `asin_data_fetch_file(file_key="keyword_miner")` |
+| Historical competitor file | `opscli asin-data fetch-file --file competitor --pretty` | `asin_data_fetch_file(file_key="competitor")` |
+| Historical Rufus file | `opscli asin-data fetch-file --file rufus --pretty` | `asin_data_fetch_file(file_key="rufus")` |
+
+Do not use any other `opscli asin-data` data command for ASIN inspection workflows.
 
 ## Trigger Scope
 
 Use this Skill when the user asks for any of these:
 
-- ASIN 批量取数、ASIN 数据包、ASIN 采集、Listing 数据采集
-- 单个 ASIN 的卖家精灵、Amazon 页面、BI 销售、爬虫 Listing 或 Rufus 数据
-- 生成前端可读的 `frontend-data.json`，并保留本地预览用 `frontend-data.html`
-- 通过 Codex 调用 `opscli asin-data collect`
-- 只查询 ASIN 报告 URL 时，优先调用 `opscli asin-data report-url --asin <ASIN> --site <SITE> --url-only`
+- ASIN 巡检取数、ASIN 实时基础数据、ASIN 实时 BI 数据
+- 单个或批量 ASIN 的刊登基础、爬虫详情、销售流量、SP 搜索词、活动、库存周转数据
+- 卖家精灵关键词反查、关键词挖掘、竞品文件、Rufus 文件
+- 需要给 AI/Skill 返回 xlsx OSS 地址、数据集索引、字段预览和诊断
 
 Do not use this Skill for final report writing, Listing 文案改写、价格/库存/广告修改，or any operation that changes remote business data.
 
 ## Codex Workflow
 
-1. Read `references/codex-usage.md` before constructing the command.
-2. If the request is only to query an existing ASIN report URL, use `opscli asin-data report-url --asin <ASIN> --site <SITE> --url-only` and do not run the full collection workflow.
-3. Confirm exactly one input source:
+1. Read `references/codex-usage.md` and `docs/guide/ASIN巡检AI取数命令操作手册.md` before constructing commands.
+2. Confirm exactly one input source:
    - file mode: `--input <csv|xlsx|json|jsonl>`
-   - single mode: `--asin <ASIN>` with optional repeated `--keyword`
-4. For real collection, first check auth with `opscli auth token status`.
-5. Run `opscli asin-data collect ... --dry-run --pretty` unless the user explicitly asks to execute immediately.
-6. After dry-run review, run the same command without `--dry-run`.
-7. Return the `output_dir`, `frontend-data.json`, `frontend-data.html`, `frontend-data.md`, and JSON `aliyun_url` when present.
-8. If any `opscli` command fails, immediately submit `ops-feedback` according to project rules, then continue with the user task where possible.
+   - single mode: `--asin <ASIN>`
+3. For real-time basic/listing/BI data, use `live-data` with `--upload-xlsx --return-mode ai_ready --pretty`.
+4. For BI data, always pass `--sales-start <YYYY-MM-DD> --sales-end <YYYY-MM-DD>`.
+5. For SellerSprite/Rufus historical files, use `fetch-file`.
+6. Prefer batch file mode over looping single ASIN commands.
+7. If any `opscli` command or MCP tool fails, immediately submit `ops-feedback` according to project rules, then continue where possible.
 
 ## Quick Start
 
-Dry-run first:
+Complete real-time basic data:
 
 ```bash
-opscli asin-data collect \
-  --input ./asins.csv \
-  --asin-column asin \
-  --keyword-column keyword \
-  --sales-start 2026-05-01 \
-  --sales-end 2026-05-31 \
-  --dry-run \
-  --pretty
-```
-
-Single ASIN:
-
-```bash
-opscli asin-data collect \
-  --asin B0BY8Y5766 \
+opscli asin-data live-data \
+  --asin B0GJDPXFC9 \
   --site US \
-  --keyword "bed frame" \
+  --data-scope basic \
+  --upload-xlsx \
+  --return-mode ai_ready \
   --pretty
 ```
 
-Execute after reviewing the plan:
+Listing interface only:
 
 ```bash
-opscli asin-data collect \
-  --input ./asins.csv \
-  --asin-column asin \
-  --keyword-column keyword \
-  --sales-start 2026-05-01 \
-  --sales-end 2026-05-31 \
+opscli asin-data live-data \
+  --asin B0GJDPXFC9 \
+  --site US \
+  --data-scope listing_basic \
+  --upload-xlsx \
+  --return-mode ai_ready \
   --pretty
 ```
 
-## Workflow
-
-1. Read the input file or single ASIN arguments.
-2. Normalize ASINs, site, one-or-more keywords, and source row metadata.
-3. Run BI sales and crawler dataset queries in ASIN chunks through `QueryManager`.
-4. For each ASIN, call SellerSprite `keyword-reverse`; call `keyword-miner` only when a keyword is available or derived.
-5. For each ASIN, call SellerSprite `listing-analysis` and attach the complete AI task `content`.
-6. For each ASIN, call `AmazonManager.scrape_product` unless skipped.
-7. Run Amazon Rufus questions for each ASIN through `RufusManager.get_backend`, unless skipped.
-8. Build frontend-facing Chinese sections: `基础数据`, `卖家精灵关键词数据`, `卖家精灵AI全景分析数据`, `Rufus优化建议数据`.
-9. Write `manifest.json`, `asin-data.jsonl`, `frontend-data.json`, `frontend-data.html`, `frontend-data.md`, `asin-data-summary.json`, `commands.jsonl`, and `errors.jsonl`.
-
-## Report URL Lookup Boundary
-
-When the task is only "查询报告 URL / 输出报告地址 / 给运营报告链接", use this command first:
+Real-time BI data:
 
 ```bash
-opscli asin-data report-url --asin <ASIN> --site <SITE> --url-only
+opscli asin-data live-data \
+  --asin B0GJDPXFC9 \
+  --site US \
+  --data-scope bi \
+  --sales-start 2026-07-01 \
+  --sales-end 2026-07-08 \
+  --upload-xlsx \
+  --return-mode ai_ready \
+  --pretty
 ```
 
-If the installed opscli version does not have `asin-data report-url`, `collect` is allowed only with this exact minimal parameter set:
+Historical Rufus file:
 
 ```bash
-opscli asin-data collect --asin <ASIN> --site <SITE> --skip-query --skip-seller-sprite --skip-amazon --skip-rufus --no-upload --url-only
+opscli asin-data fetch-file \
+  --asin B0GJDPXFC9 \
+  --site US \
+  --file rufus \
+  --pretty
 ```
 
-Do not run plain `opscli asin-data collect --asin <ASIN> --site <SITE>` for report URL lookup.
+## Output Contract
 
-## Boundaries
+For `live-data --return-mode ai_ready`, read output in this order:
 
-- Use `opscli asin-data collect` as the stable entry point for real collection.
-- Do not wrap SellerSprite, Query, Amazon, or Rufus by invoking nested CLI subprocesses from the collector; use the corresponding Python managers directly.
-- The legacy `scripts/collect_asin_data.py` remains only as the data-contract implementation source reused by the command; Codex users should call the CLI command.
-- If any `opscli` command fails during an agent-run task, immediately submit `ops-feedback` according to project rules.
-- This Skill collects data only. It does not generate final reports, edit listing content, change prices, modify images, or operate ads/campaigns.
-- Use `--skip-sales-query`, `--skip-crawler-query`, `--skip-seller-sprite`, `--skip-listing-analysis`, and `--skip-amazon` for staged verification.
-- Use `--skip-rufus` to skip Amazon Rufus. Rufus collection uses the official Rufus service package and writes the same Markdown report path expected by the frontend data contract.
+1. `success == true`.
+2. `data.metadata.protocol == "asin_data_ai_response"`.
+3. `data.items[].artifacts[].uri` for xlsx URLs.
+4. `data.items[].datasets[]` for `source_key`, row counts, columns, preview rows, and quality flags.
+5. `data.items[].diagnostics[]` and `data.diagnostics[]` before making conclusions.
 
-## Inputs
+For `fetch-file`, read output in this order:
 
-Supported file formats: CSV, XLSX, JSON, JSONL.
+1. `success == true`.
+2. `data.file_url` for historical file URL.
+3. `data.content`; xlsx files are `{sheet_name: rows}`, Rufus is Markdown text.
 
-Recommended columns:
+## Data Quality Checks
 
-| Column | Required | Purpose |
-| --- | --- | --- |
-| `asin` | yes | Amazon ASIN |
-| `site` | no | Marketplace, default `US` |
-| `keyword` / `keywords` / `关键词` | no | SellerSprite keyword-miner seed. Multiple keywords in one cell may be separated by comma, semicolon, pipe, or newline. |
-| `country` | no | Pass-through metadata |
-| `owner` | no | Pass-through metadata |
-| `notes` | no | Pass-through metadata |
+- For `basic`, verify crawler-derived ASIN fields before using `product_detail`, `image_links`, or `reviews`.
+- Prefer `listing_basic` for listing facts such as title, brand, category, price, and image fields.
+- For `bi`, treat `EMPTY_DATASET` as no-data rather than command failure.
+- For `sp_search_term`, if diagnostics include `ASIN_FILTER_UNVERIFIED`, do not make strong single-ASIN conclusions.
+- If `items[].status != "success"` or any diagnostic has `level="error"`, treat the result as failed or partial.
 
-## Outputs
+## Installation Note
 
-Default output directory:
+For a Codex runtime that has not installed this Skill, install or upgrade from the current package/template:
 
-```text
-output/asin-data/<run_id>/
+```bash
+opscli skills install --yes --runtime all
+opscli skills upgrade
 ```
 
-Main files:
+If local `opscli asin-data live-data` is unavailable, install the latest test package first:
 
-- `manifest.json`: run parameters and summary.
-- `asin-data.jsonl`: one normalized record per ASIN, including `frontend_data`.
-- `frontend-data.json`: aggregate frontend-friendly JSON with Chinese section names.
-- `frontend-data.html`: local human-readable HTML handoff; upload is not used because the file service rejects html.
-- `<ASIN>-asin-data-report.txt`: UTF-8 BOM report uploaded by default when `--upload` is enabled.
-- `--fetch-report-files`: before real collection, fetches the latest report URL from `/dataMetrics/v1/asin-report-files?asin=...&site=...`; missing URL fails the command with a `取数服务异常` error.
-- `frontend-data.md`: local Markdown handoff for operators.
-- `asin-data-summary.json`: compact success/error counts.
-- `commands.jsonl`: command plan and execution status.
-- `errors.jsonl`: structured per-source errors.
-- Query payload/result files are chunked when `--query-chunk-size` is smaller than the input ASIN count.
-- Input keywords are preserved in `input.keywords`, `frontend_data.基础数据.输入关键词列表`, and `frontend_data.卖家精灵关键词数据.关键词输入`.
-- Rufus answers are preserved in `rufus.answers` and `frontend_data.Rufus优化建议数据.数据`.
+```bash
+python -m pip install -i https://test.pypi.org/simple/ --upgrade aukeys-opscli
+```
 
 ## References
 
+- Command protocol guide: `docs/guide/ASIN巡检AI取数命令操作手册.md`
 - Codex usage guide: `references/codex-usage.md`
-- Data contract: `references/data-contract.md`
-- Source mapping: `references/source-mapping.md`
-- Execution policy: `references/execution-policy.md`
-- Usage guide: `docs/guide/ASIN批量取数服务使用说明.md`

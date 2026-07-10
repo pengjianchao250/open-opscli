@@ -287,10 +287,12 @@ from opscli.mcp.tools import beta as _beta_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
 from opscli.mcp.tools import feedback as _feedback_tools
 from opscli.mcp.tools import google_trends as _google_trends_tools
+from opscli.mcp.tools import health as _health_tools
 from opscli.mcp.tools import keepa as _keepa_tools
 from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import scrape_do as _scrape_do_tools
 from opscli.mcp.tools import seller_sprite as _seller_sprite_tools
+from opscli.mcp.tools import asin_data as _asin_data_tools
 from opscli.mcp.tools import skills as _skills_tools
 from opscli.mcp.tools import asin_review as _asin_review_tools
 # Sif / 西柚暂不开放 MCP 工具：保留工具模块代码，待业务确认后再恢复注册。
@@ -303,10 +305,12 @@ _beta_tools.register(_telemetry_mcp)
 _chatgpt_tools.register(_telemetry_mcp)
 _feedback_tools.register(_telemetry_mcp)
 _google_trends_tools.register(_telemetry_mcp)
+_health_tools.register(_telemetry_mcp)
 _keepa_tools.register(_telemetry_mcp)
 _query_tools.register(_telemetry_mcp)
 _scrape_do_tools.register(_telemetry_mcp)
 _seller_sprite_tools.register(_telemetry_mcp)
+_asin_data_tools.register(_telemetry_mcp)
 _asin_review_tools.register(_telemetry_mcp)
 # _sif_tools.register(_telemetry_mcp)
 # _xiyou_tools.register(_telemetry_mcp)

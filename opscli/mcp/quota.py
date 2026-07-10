@@ -12,15 +12,19 @@ import hashlib
 import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 ENV_QUOTA_ENABLED = "OPSCLI_MCP_QUOTA_ENABLED"
 ENV_SQLITE_PATH = "OPSCLI_MCP_QUOTA_SQLITE_PATH"
-BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+try:
+    BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+except ZoneInfoNotFoundError:
+    # Windows 精简 Python 环境可能没有 IANA tzdata，MCP 启动不能因此失败。
+    BEIJING_TZ = timezone(timedelta(hours=8), name="Asia/Shanghai")
 
 
 @dataclass(frozen=True)
