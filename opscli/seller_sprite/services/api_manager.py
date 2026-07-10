@@ -287,7 +287,7 @@ class SellerSpriteApiManager:
         }
         _write_json(raw_path, raw)
 
-        rows = _extract_items(main_response)
+        rows = _extract_items(main_response, scenario=request.scenario)
         high_frequency_rows = _extract_high_frequency_rows(high_frequency_response)
         export_format = _normalize_export_format(request.export_format)
         if export_format == "xlsx":
@@ -622,9 +622,27 @@ def _without(payload: dict[str, Any], keys: set[str]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if key not in keys}
 
 
-def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
+def _extract_items(response: dict[str, Any], *, scenario: str | None = None) -> list[dict[str, Any]]:
     data = response.get("data") if isinstance(response, dict) else None
-    if isinstance(data, dict) and ("content" in data or "htmlContent" in data):
+    if scenario == "listing-analysis":
+        listing_rows = _extract_listing_analysis_rows(data)
+        if listing_rows:
+            return listing_rows
+    if isinstance(data, dict) and isinstance(data.get("items"), list):
+        return [item for item in data["items"] if isinstance(item, dict)]
+    if isinstance(data, dict) and isinstance(data.get("pager"), dict):
+        pager = data["pager"]
+        if isinstance(pager.get("items"), list):
+            return [item for item in pager["items"] if isinstance(item, dict)]
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
+
+
+def _extract_listing_analysis_rows(data: Any) -> list[dict[str, Any]]:
+    if not isinstance(data, dict):
+        return []
+    if "content" in data or "htmlContent" in data:
         return [
             {
                 "taskId": data.get("taskId"),
@@ -636,35 +654,26 @@ def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
                 "expiredTime": data.get("expiredTime"),
             }
         ]
-    if isinstance(data, dict):
-        task_id = data.get("taskId") or data.get("task_id")
-        if task_id:
-            return [
-                {
-                    "taskId": str(task_id),
-                    "taskStatus": data.get("taskStatus") or data.get("status"),
-                    "asin": data.get("asin"),
-                    "station": data.get("station"),
-                    "contentReady": bool(data.get("content") or data.get("htmlContent")),
-                }
-            ]
-        if data.get("asin"):
-            return [
-                {
-                    "asin": data.get("asin"),
-                    "station": data.get("station"),
-                    "taskStatus": data.get("taskStatus") or data.get("status"),
-                    "contentReady": bool(data.get("content") or data.get("htmlContent")),
-                }
-            ]
-    if isinstance(data, dict) and isinstance(data.get("items"), list):
-        return [item for item in data["items"] if isinstance(item, dict)]
-    if isinstance(data, dict) and isinstance(data.get("pager"), dict):
-        pager = data["pager"]
-        if isinstance(pager.get("items"), list):
-            return [item for item in pager["items"] if isinstance(item, dict)]
-    if isinstance(data, list):
-        return [item for item in data if isinstance(item, dict)]
+    task_id = data.get("taskId") or data.get("task_id")
+    if task_id:
+        return [
+            {
+                "taskId": str(task_id),
+                "taskStatus": data.get("taskStatus") or data.get("status"),
+                "asin": data.get("asin"),
+                "station": data.get("station"),
+                "contentReady": bool(data.get("content") or data.get("htmlContent")),
+            }
+        ]
+    if data.get("asin"):
+        return [
+            {
+                "asin": data.get("asin"),
+                "station": data.get("station"),
+                "taskStatus": data.get("taskStatus") or data.get("status"),
+                "contentReady": bool(data.get("content") or data.get("htmlContent")),
+            }
+        ]
     return []
 
 
