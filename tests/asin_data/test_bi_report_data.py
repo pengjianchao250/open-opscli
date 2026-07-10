@@ -240,13 +240,18 @@ def test_bi_report_data_client_fetches_sp_search_terms_in_parallel():
     ]
 
 
-def test_bi_report_data_client_fetches_listing_basic_asins_in_parallel(monkeypatch):
-    monkeypatch.setenv("BI_AUTH", "Bearer listing-token")
+def test_bi_report_data_client_fetches_listing_basic_asins_in_parallel():
     state = {"active": 0, "max_active": 0, "site_codes": {}}
     lock = threading.Lock()
 
     def http_get(url, **kwargs):
+        if url.endswith("/polaris-bjx-token"):
+            return httpx.Response(
+                200,
+                json={"code": 200, "data": {"polaris_bjx_token": "bjx-token"}},
+            )
         if url.endswith("/listing/getAmazonListing"):
+            assert kwargs["headers"]["Authorization"] == "Bearer bjx-token"
             asin = kwargs["params"]["asin"]
             with lock:
                 state["active"] += 1
@@ -273,7 +278,7 @@ def test_bi_report_data_client_fetches_listing_basic_asins_in_parallel(monkeypat
         )
 
     client = AsinBiReportDataClient(
-        auth_client=NoOpsAuthClient(),
+        auth_client=DummyAuthClient(),
         http_get=http_get,
     )
 
@@ -294,6 +299,8 @@ def test_bi_report_data_client_fetches_listing_basic_asins_in_parallel(monkeypat
 
 
 def test_bi_report_data_client_listing_only_uses_remote_polaris_bjx_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("BI_AUTH", "Bearer stale-env-token")
+    monkeypatch.setenv("BI_COOKIE", "stale_cookie=stale")
     monkeypatch.delenv("BI_LOGIN_USERNAME", raising=False)
     monkeypatch.delenv("BI_LOGIN_PASSWORD", raising=False)
     monkeypatch.delenv("BI_LOGIN_ENDPOINT", raising=False)
@@ -335,7 +342,7 @@ def test_bi_report_data_client_listing_only_uses_remote_polaris_bjx_token(monkey
 
     bundle = client.fetch(asins=["B0TEST1234"], source_keys=["listing_basic"])
 
-    assert bundle["status"] == "success"
+    assert bundle["status"] == "success", bundle
     assert list(bundle["sources"]) == ["listing_basic"]
     assert [call["url"] for call in get_calls] == [
         "https://ops.example.com/dataMetrics/v1/asin-report-files/polaris-bjx-token",

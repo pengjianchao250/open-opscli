@@ -300,12 +300,6 @@ class AsinBiReportDataClient:
         fallback_headers: dict[str, str],
         fallback_cookies: dict[str, str],
     ) -> tuple[dict[str, str], dict[str, str]]:
-        env_auth = os.environ.get("BI_AUTH", "").strip()
-        env_cookie = os.environ.get("BI_COOKIE", "").strip()
-        if env_auth:
-            headers = {"Authorization": env_auth, "X-Opscli-Version": __version__}
-            cookies = _parse_cookie_header(env_cookie)
-            return _listing_browser_headers(headers), cookies
         if self._listing_auth_cache is not None:
             headers, cookies = self._listing_auth_cache
             return dict(headers), dict(cookies)

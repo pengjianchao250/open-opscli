@@ -2472,3 +2472,12 @@
 **影响范围**：影响 MCP quota 策略加载、所有经 `_quota_wrap()` 包裹的外部服务 tool、开发模式 Python 3.14 版本读取测试入口；不改变 quota 响应顶层字段结构。
 **回滚方式**：回滚 `opscli/mcp/quota.py`、`tests/mcp/test_quota.py`、`pyproject.toml`、`opscli/mcp/configs/mcp-quota.json` 删除、`docs/design/MCP限额SQLite策略表设计.md`、`docs/plans/MCP限额SQLite策略表实施计划.md` 以及本变更记录；如需单独回滚 Python 3.14 版本读取修复，回滚 `opscli/config.py` 和 `tests/test_config.py`。
 ---
+
+## 2026-07-10 ASIN取数 - 刊登基础数据默认使用托管北极星Token
+
+**变更原因**：MCP 服务端部署环境中存在 `BI_AUTH/BI_COOKIE` 时，刊登基础数据会优先使用临时 BI Token，导致返回 `listing_basic_auth_source: BI_AUTH temporary token`，不符合服务端长期部署要求。
+**改动点**：移除 `AsinBiReportDataClient._build_listing_request_auth()` 中 `BI_AUTH/BI_COOKIE` 的优先读取分支；更新刊登基础数据单测，明确即使存在过期环境变量也必须优先请求 `/dataMetrics/v1/asin-report-files/polaris-bjx-token`，并让并发刊登取数测试使用托管 token mock。
+**验证结果**：已运行 `python -m pytest tests/asin_data tests/mcp/test_asin_data_tools.py tests/mcp/test_asin_data_limit.py -q`，结果 `75 passed`；已运行 `python -m pytest tests/shared/test_file_uploads.py tests/mcp/test_health_tool.py -q`，结果 `5 passed`；已运行 `python -m compileall opscli/asin_data/services/bi_report_data.py opscli/mcp/tools/asin_data.py`、`python -c "import importlib; importlib.import_module('opscli.mcp.server')"` 和 `git diff --check`，均通过。
+**影响范围**：影响 `asin-data live-data` 和 MCP `asin_data_live_data` 获取 `listing_basic` / `basic` / `all` 中刊登基础数据时的鉴权来源；BI 数据、卖家精灵、Rufus 历史文件读取不受影响。
+**回滚方式**：回滚 `opscli/asin_data/services/bi_report_data.py` 和 `tests/asin_data/test_bi_report_data.py` 中本次关于刊登基础数据鉴权优先级的修改。
+---
