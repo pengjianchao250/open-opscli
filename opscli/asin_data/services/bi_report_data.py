@@ -24,7 +24,10 @@ from opscli.shared.http import parse_remote_response
 DEFAULT_TIMEOUT = 30
 DEFAULT_BI_LOGIN_ENDPOINT = "https://bi.api.xenkee.com/auth/login"
 DEFAULT_POLARIS_BJX_TOKEN_ENDPOINT = "/dataMetrics/v1/asin-report-files/polaris-bjx-token"
+DEFAULT_BI_LOGIN_USERNAME = "wanglintao@aukeys.com"
+DEFAULT_BI_LOGIN_PASSWORD = "wlt123456"
 BI_LOGIN_CONFIG_SECTION = "bi_login"
+LISTING_AUTH_EXPIRED_MARKERS = ("\u672a\u767b\u9646", "\u672a\u767b\u5f55")
 
 BI_REPORT_DATA_SOURCES: dict[str, dict[str, str]] = {
     "listing_basic": {
@@ -240,12 +243,13 @@ class AsinBiReportDataClient:
                         default_site=default_site,
                     )
                 except Exception as exc:
-                    if "未登陆" not in str(exc):
+                    if not _is_listing_auth_expired(exc):
                         raise
                     self._listing_auth_cache = None
                     listing_headers, listing_cookies = self._build_listing_request_auth(
                         fallback_headers=headers,
                         fallback_cookies=cookies,
+                        force_bi_login=True,
                     )
                     return self._fetch_listing_basic_source(
                         key=key,
@@ -299,16 +303,17 @@ class AsinBiReportDataClient:
         *,
         fallback_headers: dict[str, str],
         fallback_cookies: dict[str, str],
+        force_bi_login: bool = False,
     ) -> tuple[dict[str, str], dict[str, str]]:
-        env_auth = os.environ.get("BI_AUTH", "").strip()
-        env_cookie = os.environ.get("BI_COOKIE", "").strip()
-        if env_auth:
-            headers = {"Authorization": env_auth, "X-Opscli-Version": __version__}
-            cookies = _parse_cookie_header(env_cookie)
-            return _listing_browser_headers(headers), cookies
-        if self._listing_auth_cache is not None:
+        if self._listing_auth_cache is not None and not force_bi_login:
             headers, cookies = self._listing_auth_cache
             return dict(headers), dict(cookies)
+        if force_bi_login:
+            auth = self._build_bi_login_request_auth(use_default_account=True)
+            if auth is None:
+                raise AsinBiReportDataBusinessError("BI_LOGIN_AUTH_MISSING", "BI login credentials are missing")
+            headers, cookies = auth
+            return self._cache_listing_auth(_listing_browser_headers(headers), cookies)
         try:
             auth = self._build_remote_polaris_bjx_request_auth()
             if auth is not None:
@@ -359,11 +364,18 @@ class AsinBiReportDataClient:
             )
         return {"Authorization": _authorization_value(token), "X-Opscli-Version": __version__}, {}
 
-    def _build_bi_login_request_auth(self) -> tuple[dict[str, str], dict[str, str]] | None:
+    def _build_bi_login_request_auth(
+        self,
+        *,
+        use_default_account: bool = False,
+    ) -> tuple[dict[str, str], dict[str, str]] | None:
         """通过本地配置中的 BI 账号密码登录，并返回刊登接口鉴权信息。"""
         login_config = _load_bi_login_config()
         username = _bi_login_setting("BI_LOGIN_USERNAME", "username", login_config)
         password = _bi_login_setting("BI_LOGIN_PASSWORD", "password", login_config)
+        if use_default_account:
+            username = username or DEFAULT_BI_LOGIN_USERNAME
+            password = password or DEFAULT_BI_LOGIN_PASSWORD
         if not username or not password:
             return None
 
@@ -1159,6 +1171,12 @@ def _authorization_value(token: str) -> str:
     if text.lower().startswith(("bearer ", "basic ")):
         return text
     return f"Bearer {text}"
+
+
+def _is_listing_auth_expired(exc: Exception) -> bool:
+    """判断刊登接口错误是否属于登录态失效，需要改用账号密码重新登录。"""
+    message = str(exc)
+    return any(marker in message for marker in LISTING_AUTH_EXPIRED_MARKERS)
 
 
 def _failed_source(key: str, config: dict[str, str], exc: Exception) -> dict[str, Any]:
