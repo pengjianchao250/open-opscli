@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
 import zipfile
@@ -363,6 +364,72 @@ def _parse_skill_md_frontmatter(skill_md: Path) -> dict:
         result[key.strip()] = value.strip()
 
     return result
+
+
+def _normalize_skill_version(version: str | None, label: str) -> str:
+    normalized = (version or "").strip().lstrip("vV")
+    if not normalized:
+        raise ValueError(f"{label} 不能为空")
+    if not re.match(r"^\d+\.\d+\.\d+$", normalized):
+        raise ValueError(f"{label} 必须为 x.y.z 格式，收到：{version!r}")
+    return normalized
+
+
+def _validate_skill_version_consistency(
+    skill_md_path: Path,
+    version_data: dict,
+    request_version: str | None = None,
+) -> str:
+    """校验请求版本、SKILL.md 和 data/VERSION.json 三者一致，返回归一化版本号。"""
+    version_json = _normalize_skill_version(str(version_data.get("version", "")), "data/VERSION.json version")
+    fm = _parse_skill_md_frontmatter(skill_md_path)
+    skill_md_version = _normalize_skill_version(fm.get("version"), "SKILL.md frontmatter.version")
+    if version_json != skill_md_version:
+        raise ValueError(
+            f"版本号不一致：data/VERSION.json 中为 '{version_json}'，"
+            f"SKILL.md frontmatter 中为 '{skill_md_version}'。请确保两者一致。"
+        )
+
+    if request_version is not None:
+        requested = _normalize_skill_version(request_version, "--version")
+        if requested != version_json:
+            raise ValueError(
+                f"版本号不一致：--version 为 '{requested}'，"
+                f"data/VERSION.json / SKILL.md 中为 '{version_json}'。请同步后重试。"
+            )
+
+    return version_json
+
+
+def _validate_zip_skill_version_consistency(zip_path: Path, request_version: str | None = None) -> str:
+    """校验 zip 包内 SKILL.md 和 data/VERSION.json 版本一致，返回归一化版本号。"""
+    with zipfile.ZipFile(zip_path) as zf:
+        skill_md_name = "SKILL.md" if "SKILL.md" in zf.namelist() else None
+        root_prefix = ""
+        if skill_md_name is None:
+            for name in zf.namelist():
+                parts = Path(name).parts
+                if len(parts) == 2 and parts[1] == "SKILL.md" and parts[0] != "__MACOSX":
+                    skill_md_name = name
+                    root_prefix = f"{parts[0]}/"
+                    break
+        if skill_md_name is None:
+            raise ValueError("zip 包中未找到 SKILL.md")
+
+        version_json_name = f"{root_prefix}data/VERSION.json"
+        if version_json_name not in zf.namelist():
+            raise ValueError(f"zip 包中未找到 {version_json_name}")
+
+        skill_md_text = zf.read(skill_md_name).decode("utf-8")
+        version_data = json.loads(zf.read(version_json_name).decode("utf-8"))
+
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as tmp:
+        tmp.write(skill_md_text)
+        tmp_path = Path(tmp.name)
+    try:
+        return _validate_skill_version_consistency(tmp_path, version_data, request_version)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 # ── install 辅助函数 ───────────────────────────────────────────────────────────
@@ -1230,8 +1297,6 @@ def publish_skill(
         raise typer.Exit(1)
 
     skill_name = version_data.get("name", "")
-    # 首次发布时默认使用 0.0.1（而非 1.0.0），符合语义化版本规范
-    version = version_data.get("version", "0.0.1").lstrip("v")
     if not skill_name:
         _emit({
             "success": False, "command": command,
@@ -1239,20 +1304,17 @@ def publish_skill(
         }, json_output)
         raise typer.Exit(1)
 
-    # 版本号一致性检查：VERSION.json 与 SKILL.md frontmatter
-    fm = _parse_skill_md_frontmatter(skill_md_path)
-    fm_version = (fm.get("version") or "").lstrip("v")
-    if fm_version and fm_version != version:
+    try:
+        version = _validate_skill_version_consistency(skill_md_path, version_data)
+    except ValueError as exc:
         _emit({
             "success": False, "command": command,
-            "error": {
-                "type": "ValueError",
-                "message": f"版本号不一致：data/VERSION.json 中为 '{version}'，SKILL.md frontmatter 中为 '{fm_version}'。请确保两者一致。",
-            },
+            "error": {"type": "ValueError", "message": str(exc)},
         }, json_output)
         raise typer.Exit(1)
 
     # 从 SKILL.md frontmatter 读取元数据，CLI 参数优先
+    fm = _parse_skill_md_frontmatter(skill_md_path)
     resolved_title      = title or fm.get("title") or skill_name
     resolved_desc       = description or fm.get("description") or ""
     # summary 回退链：CLI 参数 > frontmatter summary > frontmatter description（截断到 500 字符）
@@ -1467,10 +1529,16 @@ def edit_skill(
         tags        = tags        or fm.get("tags")
         if category_id is None and "category_id" in fm:
             category_id = int(fm["category_id"])
+        try:
+            ver_from_file = _validate_skill_version_consistency(skill_md_path, version_data, version)
+        except ValueError as exc:
+            _emit({
+                "success": False, "command": command,
+                "error": {"type": "ValueError", "message": str(exc)},
+            }, json_output)
+            raise typer.Exit(1)
         if version is None:
-            ver_from_file = version_data.get("version", "").lstrip("v")
-            if ver_from_file:
-                version = ver_from_file
+            version = ver_from_file
 
         try:
             zip_path  = _zip_skill_dir(resolved_dir, skill_name_str)
@@ -1487,6 +1555,29 @@ def edit_skill(
                 "error": {"type": "FileNotFoundError", "message": f"文件不存在：{zip_path}"},
             }, json_output)
             raise typer.Exit(1)
+        if zip_path.suffix.lower() != ".zip":
+            _emit({
+                "success": False, "command": command,
+                "error": {"type": "ValueError", "message": "--file 仅支持 zip 目录型 Skill 包，且包内必须包含 SKILL.md 与 data/VERSION.json"},
+            }, json_output)
+            raise typer.Exit(1)
+        try:
+            ver_from_file = _validate_zip_skill_version_consistency(zip_path, version)
+        except Exception as exc:
+            _emit({
+                "success": False, "command": command,
+                "error": {"type": exc.__class__.__name__, "message": str(exc)},
+            }, json_output)
+            raise typer.Exit(1)
+        if version is None:
+            version = ver_from_file
+
+    if version and zip_path is None:
+        _emit({
+            "success": False, "command": command,
+            "error": {"type": "ValueError", "message": "禁止只修改版本号：发布新版本必须同时传 --dir 或 --file 上传对应 zip 包"},
+        }, json_output)
+        raise typer.Exit(1)
 
     # ── 获取技能 ID ──────────────────────────────────────────
     client = MarketplaceClient()
