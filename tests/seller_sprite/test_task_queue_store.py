@@ -71,6 +71,43 @@ def test_store_claim_next_updates_waiting_position(tmp_path: Path):
     assert waiting["position"] == 1
 
 
+def test_store_claim_next_enforces_one_running_task_per_queue_scope(tmp_path: Path):
+    """同一 SQLite 队列范围已有 running 时，其他实例不得继续领取。"""
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    db_path = tmp_path / "queue.sqlite3"
+    first = SellerSpriteTaskQueueStore(db_path=db_path)
+    second = SellerSpriteTaskQueueStore(db_path=db_path)
+    first.enqueue(request=_request(job_id="job-1"), queue_scope="seller_sprite", root_dir=tmp_path / "job-1")
+    first.enqueue(request=_request(job_id="job-2"), queue_scope="seller_sprite", root_dir=tmp_path / "job-2")
+
+    claimed = first.claim_next(
+        queue_scope="seller_sprite",
+        worker_key="worker-1",
+        assigned_account="default",
+    )
+    blocked = second.claim_next(
+        queue_scope="seller_sprite",
+        worker_key="worker-2",
+        assigned_account="default",
+    )
+
+    assert claimed["job_id"] == "job-1"
+    assert blocked is None
+    first.finish_task(
+        job_id="job-1",
+        result_path=str(tmp_path / "job-1" / "result.json"),
+        row_count=0,
+        export_payload=None,
+    )
+    resumed = second.claim_next(
+        queue_scope="seller_sprite",
+        worker_key="worker-2",
+        assigned_account="default",
+    )
+    assert resumed["job_id"] == "job-2"
+
+
 def test_store_resets_running_tasks_back_to_queue(tmp_path: Path):
     from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
 
@@ -138,9 +175,9 @@ def test_store_requeues_only_stale_running_tasks(tmp_path: Path):
 
     store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
     store.enqueue(request=_request(job_id="old-running"), queue_scope="seller_sprite", root_dir=tmp_path / "old-running")
-    store.enqueue(request=_request(job_id="new-running"), queue_scope="seller_sprite", root_dir=tmp_path / "new-running")
+    store.enqueue(request=_request(job_id="new-running"), queue_scope="seller_sprite-secondary", root_dir=tmp_path / "new-running")
     store.claim_next(queue_scope="seller_sprite", worker_key="default", assigned_account="default")
-    store.claim_next(queue_scope="seller_sprite", worker_key="default", assigned_account="default")
+    store.claim_next(queue_scope="seller_sprite-secondary", worker_key="default", assigned_account="default")
 
     with sqlite3.connect(tmp_path / "queue.sqlite3") as conn:
         conn.execute(
@@ -198,6 +235,59 @@ def test_store_persists_task_auth_context(tmp_path: Path):
 
     assert context["session_id"] == "sid-1"
     assert context["jwt"] == "jwt-1"
+
+
+def test_store_atomic_owned_enqueue_persists_queue_and_mcp_run(tmp_path: Path):
+    """原子 owned enqueue 成功后必须同时存在队列行和所有权行。"""
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    request = _mcp_request(job_id="atomic-job-1")
+
+    queued = store.enqueue_owned_mcp_run(
+        request=request,
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "atomic-job-1",
+        user_email="user@example.com",
+        session_id="sid-1",
+        jwt="jwt-1",
+    )
+
+    assert queued["job_id"] == "atomic-job-1"
+    assert queued["state"] == "queued"
+    assert store.get_task_context("atomic-job-1") == {
+        "session_id": "sid-1",
+        "jwt": "jwt-1",
+    }
+    assert store.get_mcp_run("atomic-job-1")["user_email"] == "user@example.com"
+
+
+def test_store_atomic_owned_enqueue_rolls_back_owner_on_queue_collision(tmp_path: Path):
+    """caller-controlled job_id 碰撞时不得遗留当前用户所有权。"""
+    import pytest
+
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    original = _request(job_id="collision-job", asin="B0ORIGINAL")
+    store.enqueue(
+        request=original,
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "original",
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.enqueue_owned_mcp_run(
+            request=_mcp_request(job_id="collision-job", asin="B0INTRUDER"),
+            queue_scope="seller_sprite",
+            root_dir=tmp_path / "intruder",
+            user_email="intruder@example.com",
+        )
+
+    with pytest.raises(ValueError, match="MCP 调用记录不存在"):
+        store.get_mcp_run("collision-job")
+    assert store.get_status("collision-job")["state"] == "queued"
+    assert store.get_request("collision-job").params == {"asin": "B0ORIGINAL"}
 
 
 def test_store_create_mcp_run_persists_initial_record(tmp_path: Path):

@@ -1,6 +1,10 @@
 # 卖家精灵 MCP 异步任务化优化方案
 
-## 背景
+> **当前契约（2026-07-10）**：本文的背景、问题分析和方案比较作为历史诊断保留；其中早期关于按条件异步、短间隔轮询、较短总预算或仅续查单个任务的建议已被当前契约取代。当前所有普通 `seller_sprite_run` 均立即持久化入队，Agent 按下文“Agent 对话管理（当前契约）”执行。
+
+## 历史诊断（保留）
+
+### 背景
 
 用户在多轮对话中确认 Bookcases 最终类目后，调用 `seller_sprite_run` 执行 `product-research`，参数中已包含精确类目路径：
 
@@ -14,7 +18,7 @@
 
 当前 MCP 同步调用在约 120 秒后由调用方超时中断，用户无法拿到任务标识，也无法继续查询已启动任务的状态。
 
-## 问题分析
+### 问题分析
 
 当前 `seller_sprite_run` 是同步长任务入口，调用链包含：
 
@@ -48,7 +52,7 @@
 
 ## 推荐方案
 
-采用“异步任务化 + 单窗口串行队列 + Agent 自动轮询”的方案。
+采用“立即持久化入队 + 单窗口串行队列 + Agent 有界单/批量跟踪”的方案。
 
 ### MCP 工具层
 
@@ -56,11 +60,12 @@
 
 | 工具 | 职责 |
 | --- | --- |
-| `seller_sprite_run` | 唯一采集入口；内部自动决定同步或异步 |
-| `seller_sprite_job_status` | 查询任务状态，返回 `queued`、`running`、`succeeded`、`failed` |
+| `seller_sprite_run` | 唯一普通采集入口；立即持久化入队并返回 `job_id/state/stage/position` |
+| `seller_sprite_job_status` | 使用 `seller_sprite_job_status(job_id, wait_seconds=30)` 有界查询一个普通任务 |
+| `seller_sprite_jobs_status` | 使用 `seller_sprite_jobs_status(job_ids, wait_seconds=30)` 有界批量查询多个普通任务 |
 | `seller_sprite_export` | 在任务成功后读取导出文件信息 |
 
-对 Agent 和用户隐藏 `seller_sprite_start`、`async_mode`、`browser-route`、`api-direct` 等内部控制。`seller_sprite_run` 根据长任务场景、浏览器队列状态和服务端配置自动返回同步结果或异步 `job_id`。
+对 Agent 和用户隐藏 `seller_sprite_start`、`async_mode`、`browser-route`、`api-direct` 等内部控制。所有普通 `seller_sprite_run` 调用都立即持久化入队并返回任务快照，不在提交入口等待最终结果。
 
 ### 任务状态
 
@@ -121,18 +126,19 @@
 
 后续如确实需要吞吐提升，应优先支持“多账号并发”，即一个账号一个 worker，而不是同账号多窗口。
 
-### Agent 对话管理
+### Agent 对话管理（当前契约）
 
-用户不应该重新发送完整请求。推荐由 Agent 在同一对话中自动管理 `job_id`：
+用户不应该重新发送完整请求。Agent 必须管理本轮产生及跨轮保留的全部普通任务 `job_id`：
 
-1. Agent 调用 `seller_sprite_run`。
-2. 如果后端判断需要异步，MCP 立即返回 `job_id`、`state=queued` 或 `running`。
-3. Agent 在同一轮对话内自动轮询 `seller_sprite_job_status(job_id)`，建议每 5 到 10 秒一次。
-4. 如果 60 到 90 秒内完成，Agent 直接回复结果和导出文件。
-5. 如果仍未完成，Agent 回复任务仍在运行，并给出 `job_id`。
-6. 用户后续说“继续”“查结果”“刚才那个好了没”时，Agent 复用对话上下文中的 `job_id` 查询状态。
+1. 每个普通场景只调用一次 `seller_sprite_run`；任务立即持久化入队，保存返回的 `job_id/state/stage/position`。
+2. 只有一个普通 pending ID 时，调用 `seller_sprite_job_status(job_id, wait_seconds=30)`；有多个普通 pending ID 时，优先调用 `seller_sprite_jobs_status(job_ids, wait_seconds=30)`。
+3. 同一轮连续执行 3–4 个 30 秒有界状态窗口，总预算 90–120 秒；全部任务进入终态时提前停止。
+4. 每个窗口后完成已进入终态的任务处理，并保留全部未完成 `job_id`；下一窗口查询完整 pending 子集。`queued`、`running`、`ready=false` 或等待窗口到期都表示 pending 不是失败。
+5. 预算用尽后向用户说明任务仍在后台执行，并保存完整 pending 集合。用户后续只说 `继续` / `查结果` / `刚才那些好了没` 时续查完整 pending 集合；只有用户明确指定子集时才缩小范围。
+6. pending 任务不得重新提交，也不得再次调用 `seller_sprite_run` 查状态；不得重新消耗额度。`run` 消耗额度；状态和导出不消耗额度。
+7. Listing Analysis 必须使用专用 submit/status/result；`seller_sprite_run` 生产入口会明确拒绝 `listing-analysis`，调用方必须改用 `seller_sprite_listing_analysis_submit`；Listing Analysis `job_id` 不得传入 `seller_sprite_jobs_status`，续查时仍使用专用 status/result。
 
-需要注意：多数对话宿主在回复结束后不会继续后台自动轮询。因此“对话框自管理”应理解为 Agent 在当前回复完成前自动轮询一段时间；超过预算后，必须把 `job_id` 暴露给用户和上下文，供后续继续查。
+多数对话宿主在回复结束后不会继续后台等待，因此 Agent 只在当前回复内执行上述 3–4 个有界窗口；预算结束后依靠保存的完整 pending 集合跨轮继续，不重新入队。
 
 ## 备选方案
 
@@ -163,16 +169,17 @@
 ### 第一阶段：异步任务骨架
 
 - 增加任务状态文件写入能力。
-- `seller_sprite_run` 内部判断长任务或浏览器队列忙时自动入队并立即返回 `job_id`。
+- `seller_sprite_run` 对所有普通任务立即持久化入队并返回 `job_id/state/stage/position`。
 - 后台仍复用现有 `SellerSpriteApiManager.run()` 执行真实采集。
 - `seller_sprite_job_status` 支持读取 `status.json` 和已完成的 `result.json`。
 
 ### 第二阶段：Agent 使用规范
 
 - 更新 `ops-seller-sprite/SKILL_MCP.md`。
-- 标明长任务优先使用异步模式。
-- 规定 Agent 默认自动轮询 60 到 90 秒。
-- 规定超出轮询预算后保留 `job_id`，用户可用自然语言继续查询。
+- 明确普通任务立即持久化入队，提交入口不等待终态。
+- 规定单任务和批量状态均使用 `wait_seconds=30`，同一轮执行 3–4 个窗口，总预算 90–120 秒。
+- 规定每个窗口后完成已终态任务处理，并在预算结束后保留完整 pending 集合，用户可用自然语言继续查询。
+- 明确 pending 不是失败，不得重新提交或重新消耗额度。
 - 修正文档中 `export_format` 默认值不一致的问题。
 
 ### 第三阶段：稳定性增强
@@ -184,21 +191,21 @@
 
 ## 测试建议
 
-- MCP 单测：`seller_sprite_run` 在长任务或浏览器队列忙时能快速返回 `job_id`，不等待 manager 完成。
-- 状态单测：`queued`、`running`、`succeeded`、`failed` 都能被 `job_status` 正确读取。
-- 兼容单测：旧 `seller_sprite_run` 默认行为不变，或按设计明确切换。
+- MCP 单测：所有普通 `seller_sprite_run` 均立即持久化入队并返回 `job_id`，不等待 manager 完成。
+- 状态单测：`queued`、`running`、`succeeded`、`failed` 都能被单任务和批量状态工具正确读取。
+- 契约单测：提交入口不隐藏轮询，单任务和批量状态调用均限制为 0–30 秒。
 - 失败单测：后台任务抛异常时，`status.json` 写入 `failed` 和错误摘要。
 - 文档单测：`ops-seller-sprite` Skill 中默认导出格式和调用流程与代码一致。
 
 ## 风险与约束
 
 - Python 进程内后台任务在 MCP Server 重启后会丢失运行态；本期可先接受，后续再考虑持久化队列。
-- 如果任务已被外层取消，后台是否继续执行需要明确策略。推荐异步模式下继续执行，用户可用 `job_id` 查询。
-- 文件上传仍可能拖慢完成时间，建议异步模式下把上传也纳入任务阶段，而不是阻塞启动响应。
+- 状态等待请求被外层取消或到期时，后台持久任务继续执行；Agent 保留 `job_id` 后续查询。
+- 文件上传仍可能拖慢完成时间，应纳入后台任务阶段，不阻塞提交响应。
 - 单窗口串行会牺牲吞吐，但更符合当前风控与稳定性目标。
 
 ## 推荐结论
 
-本期采用“异步任务化 + 单账号单窗口串行 + Agent 自动轮询”。
+当前采用“立即持久化入队 + 单账号单窗口串行 + Agent 有界单/批量跟踪”。
 
 不要因为异步任务化而默认开启多窗口。多窗口并发应作为后续多账号吞吐优化能力，在限流、冷却、账号隔离和状态观测完善后再评估。

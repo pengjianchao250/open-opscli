@@ -4,25 +4,30 @@
 - seller_sprite_spec_must_read — 读取卖家精灵 MCP 使用规范和参数手册
 - seller_sprite_scenarios      — 列出卖家精灵场景
 - seller_sprite_run            — 执行卖家精灵场景并导出 XLS/JSON
-- seller_sprite_job_status     — 读取卖家精灵任务结果
+- seller_sprite_job_status     — 读取单个卖家精灵任务结果
+- seller_sprite_jobs_status    — 批量读取普通卖家精灵任务结果
 - seller_sprite_export         — 读取卖家精灵任务导出文件信息
 """
 
 from __future__ import annotations
 
-import asyncio
 import inspect
+from asyncio import sleep as _status_wait_sleep
 from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic as _status_wait_monotonic
 from typing import Any
 
 from opscli.mcp.quota import get_quota_limiter
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
-SELLER_SPRITE_RUN_POLL_INTERVAL_SECONDS = 5.0
-SELLER_SPRITE_RUN_RUNNING_TIMEOUT_SECONDS = 8 * 60
+# 状态接口单次等待最多 30 秒，避免 MCP 请求长期占用连接。
+SELLER_SPRITE_STATUS_MAX_WAIT_SECONDS = 30
+# 状态轮询固定最多间隔 5 秒，并在最后一次等待时服从剩余时限。
+SELLER_SPRITE_STATUS_POLL_INTERVAL_SECONDS = 5
+# 当前持久队列只使用 succeeded 和 failed 两种终态。
+SELLER_SPRITE_TERMINAL_STATES = frozenset({"succeeded", "failed"})
 
 
 def _seller_sprite_skill_dir() -> Path:
@@ -45,10 +50,10 @@ def _get_task_queue_store():
 
 
 def _get_current_mcp_user_email() -> str | None:
-    """读取当前 MCP 请求对应的用户邮箱。"""
-    from opscli.mcp.context import get_current_user_email
+    """通过共享认证解析器读取当前 MCP 用户邮箱。"""
+    from opscli.mcp.tools.helpers import _get_authenticated_user_email
 
-    return get_current_user_email()
+    return _get_authenticated_user_email()
 
 
 def _build_request(
@@ -173,19 +178,47 @@ def _listing_analysis_failed(response: dict[str, Any]) -> bool:
     return status in {"failed", "fail", "error", "canceled", "cancelled"}
 
 
-def _ensure_listing_analysis_job_owner(job_id: str) -> dict[str, Any]:
-    """确认当前 MCP 用户有权读取 Listing Analysis 任务。"""
-    user_email = _get_current_mcp_user_email()
-    if not user_email:
-        raise ValueError("当前 MCP 用户邮箱缺失，无法读取 Listing Analysis 任务")
-    record = _get_task_queue_store().get_mcp_run(job_id)
+def _validate_seller_sprite_job_owner_record(
+    job_id: str,
+    record: dict[str, Any],
+    user_email: str,
+    expected_scenario: str | None = None,
+) -> dict[str, Any]:
+    """校验已读取的任务记录所有者与可选场景，不负责访问队列仓储。"""
     owner_email = str(record.get("user_email") or "").strip().lower()
-    if owner_email != user_email.strip().lower():
-        raise PermissionError(f"无权读取 Listing Analysis 任务：{job_id}")
-    scenario = str(record.get("scenario") or "listing-analysis")
-    if scenario != "listing-analysis":
-        raise ValueError(f"任务不是 Listing Analysis：{job_id}")
+    if not owner_email:
+        raise ValueError(f"卖家精灵任务所有者邮箱缺失：{job_id}")
+    if owner_email != user_email:
+        raise PermissionError(f"无权读取卖家精灵任务：{job_id}")
+    if expected_scenario is not None:
+        scenario = str(record.get("scenario") or "listing-analysis")
+        if scenario != expected_scenario:
+            if expected_scenario == "listing-analysis":
+                raise ValueError(f"任务不是 Listing Analysis：{job_id}")
+            raise ValueError(f"任务场景不匹配：{job_id}")
     return record
+
+
+def _ensure_seller_sprite_job_owner(
+    job_id: str,
+    expected_scenario: str | None = None,
+) -> dict[str, Any]:
+    """确认当前 MCP 用户是指定任务所有者，并可选校验任务场景。"""
+    user_email = str(_get_current_mcp_user_email() or "").strip().lower()
+    if not user_email:
+        raise ValueError("当前 MCP 用户邮箱缺失，无法读取卖家精灵任务")
+    record = _get_task_queue_store().get_mcp_run(job_id)
+    return _validate_seller_sprite_job_owner_record(
+        job_id,
+        record,
+        user_email,
+        expected_scenario,
+    )
+
+
+def _ensure_listing_analysis_job_owner(job_id: str) -> dict[str, Any]:
+    """确认当前 MCP 用户有权读取 Listing Analysis 任务且场景匹配。"""
+    return _ensure_seller_sprite_job_owner(job_id, expected_scenario="listing-analysis")
 
 
 def _listing_analysis_failure_payload(status: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any]:
@@ -426,64 +459,37 @@ def _prepare_request_for_enqueue(request):
     )
 
 
-async def _wait_for_seller_sprite_run_result(
+async def _wait_for_preauthorized_seller_sprite_job_statuses(
     *,
     scheduler,
-    job_id: str,
-    initial_status: dict[str, Any],
-) -> dict[str, Any]:
-    """等待公开 run 入口的最终可返回状态。"""
-    status = dict(initial_status)
+    job_ids: list[str],
+    wait_seconds: int,
+) -> list[dict[str, Any]]:
+    """读取已完成完整集合预授权的任务状态；本原语不执行授权。"""
+    statuses = [dict(scheduler.job_status(job_id)) for job_id in job_ids]
+    bounded_wait = max(0, min(int(wait_seconds), SELLER_SPRITE_STATUS_MAX_WAIT_SECONDS))
+    if bounded_wait == 0 or all(
+        str(status.get("state") or "").strip().lower() in SELLER_SPRITE_TERMINAL_STATES
+        for status in statuses
+    ):
+        return statuses
+
+    # 状态查询只观察既有持久任务；正数等待不得取得或改变 scheduler 生命周期。
+    deadline = _status_wait_monotonic() + bounded_wait
     while True:
-        state = str(status.get("state") or "").strip().lower()
-        if state in {"succeeded", "failed"}:
-            return status
-
-        now = datetime.now(timezone.utc).astimezone()
-        if state == "running" and _running_timed_out(status, now=now):
-            return _build_timeout_status(status, now=now)
-
-        await asyncio.sleep(max(SELLER_SPRITE_RUN_POLL_INTERVAL_SECONDS, 0))
-        status = dict(scheduler.job_status(job_id))
-
-
-def _running_timed_out(status: dict[str, Any], *, now: datetime) -> bool:
-    """判断任务是否已经超过运行态同步等待上限。"""
-    started_at = _parse_status_time(status.get("started_at"))
-    if started_at is None:
-        return False
-    return _duration_seconds(started_at, now) >= SELLER_SPRITE_RUN_RUNNING_TIMEOUT_SECONDS
-
-
-def _build_timeout_status(status: dict[str, Any], *, now: datetime) -> dict[str, Any]:
-    """在运行态超时后补充排队与运行时长摘要。"""
-    payload = dict(status)
-    created_at = _parse_status_time(status.get("created_at"))
-    started_at = _parse_status_time(status.get("started_at"))
-
-    payload["queue_duration"] = (
-        _duration_seconds(created_at, started_at) if created_at and started_at else None
-    )
-    payload["running_duration"] = _duration_seconds(started_at, now) if started_at else None
-    return payload
-
-
-def _parse_status_time(value: Any) -> datetime | None:
-    """解析状态里的 ISO 时间字符串。"""
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def _duration_seconds(start: datetime, end: datetime) -> int:
-    """返回两个时间点之间的非负秒数。"""
-    return max(0, int((end - start).total_seconds()))
+        remaining = deadline - _status_wait_monotonic()
+        if remaining <= 0:
+            return statuses
+        await _status_wait_sleep(min(SELLER_SPRITE_STATUS_POLL_INTERVAL_SECONDS, remaining))
+        # 休眠可能晚于预期恢复；超过截止点时禁止再读取，避免到期后访问 scheduler。
+        if _status_wait_monotonic() > deadline:
+            return statuses
+        statuses = [dict(scheduler.job_status(job_id)) for job_id in job_ids]
+        if all(
+            str(status.get("state") or "").strip().lower() in SELLER_SPRITE_TERMINAL_STATES
+            for status in statuses
+        ):
+            return statuses
 
 
 async def seller_sprite_spec_must_read() -> dict:
@@ -575,6 +581,17 @@ async def seller_sprite_run(
 
     如果未提供 session_id / jwt，会自动尝试从当前 MCP 会话隔离凭证中加载。
     """
+    # Listing Analysis 有独立的三段式入口，必须在认证和队列副作用前拒绝通用提交。
+    if str(scenario or "").strip().lower() == "listing-analysis":
+        return _err(
+            ValueError(
+                "seller_sprite_run 不接受 listing-analysis；"
+                "请改用 seller_sprite_listing_analysis_submit"
+            ),
+            tool="MCP → seller_sprite_run(...)",
+            call_params={"scenario": scenario, "job_id": job_id},
+        )
+
     sid, jw = _get_auth_pair("ops", session_id, jwt)
     if not sid:
         return _err(
@@ -593,7 +610,7 @@ async def seller_sprite_run(
             },
         )
 
-    user_email = _get_current_mcp_user_email()
+    user_email = str(_get_current_mcp_user_email() or "").strip().lower()
     if not user_email:
         return _err(
             ValueError("当前 MCP 用户邮箱缺失，无法创建卖家精灵调用记录"),
@@ -611,8 +628,6 @@ async def seller_sprite_run(
             },
         )
 
-    created_job_id: str | None = None
-    mcp_run_created = False
     try:
         raw_request = _build_request(
             scenario=scenario,
@@ -628,30 +643,13 @@ async def seller_sprite_run(
             job_id=job_id,
         )
         request = _prepare_request_for_enqueue(raw_request)
-        created_job_id = str(request.job_id)
-        store = _get_task_queue_store()
         scheduler = _get_task_scheduler(jwt=jw, session_id=sid)
-
-        # 入队前先落一条 MCP 调用记录，确保调度失败时也能追踪。
-        store.create_mcp_run(request, user_email)
-        mcp_run_created = True
-        queued_status = await scheduler.enqueue(request)
-        return _ok(
-            await _wait_for_seller_sprite_run_result(
-                scheduler=scheduler,
-                job_id=created_job_id,
-                initial_status=queued_status,
-            )
+        queued_status = await scheduler.enqueue(
+            request,
+            mcp_user_email=user_email,
         )
+        return _ok(queued_status)
     except Exception as exc:
-        if mcp_run_created and created_job_id:
-            try:
-                from opscli.seller_sprite.services.task_status import error_to_dict
-
-                _get_task_queue_store().finish_mcp_run_failed(created_job_id, error_to_dict(exc))
-            except Exception:
-                # 入口层保留原始入队异常，避免记录补偿失败覆盖主错误。
-                pass
         return _err(
             exc,
             tool="MCP → seller_sprite_run(...)",
@@ -752,7 +750,7 @@ async def seller_sprite_listing_analysis_submit(
             tool="MCP → seller_sprite_listing_analysis_submit(...)",
             call_params={"asin": asin, "station": station, "site": site, "job_id": job_id},
         )
-    user_email = _get_current_mcp_user_email()
+    user_email = str(_get_current_mcp_user_email() or "").strip().lower()
     if not user_email:
         return _err(
             ValueError("当前 MCP 用户邮箱缺失，无法创建卖家精灵调用记录"),
@@ -769,8 +767,6 @@ async def seller_sprite_listing_analysis_submit(
             call_params={"asin": asin, "station": station, "site": site, "job_id": job_id},
         )
 
-    created_job_id: str | None = None
-    mcp_run_created = False
     try:
         raw_request = _build_request(
             scenario="listing-analysis",
@@ -786,21 +782,14 @@ async def seller_sprite_listing_analysis_submit(
             job_id=job_id,
         )
         request = _prepare_request_for_enqueue(raw_request)
-        created_job_id = str(request.job_id)
-        store = _get_task_queue_store()
         scheduler = _get_task_scheduler(jwt=jw, session_id=sid)
-        store.create_mcp_run(request, user_email)
-        mcp_run_created = True
-        return _ok(await scheduler.enqueue(request))
+        return _ok(
+            await scheduler.enqueue(
+                request,
+                mcp_user_email=user_email,
+            )
+        )
     except Exception as exc:
-        if mcp_run_created and created_job_id:
-            try:
-                from opscli.seller_sprite.services.task_status import error_to_dict
-
-                _get_task_queue_store().finish_mcp_run_failed(created_job_id, error_to_dict(exc))
-            except Exception:
-                # 入口层保留原始异常，避免记录补偿失败覆盖主错误。
-                pass
         return _err(
             exc,
             tool="MCP → seller_sprite_listing_analysis_submit(...)",
@@ -885,21 +874,105 @@ async def seller_sprite_listing_analysis_result(
         )
 
 
-async def seller_sprite_job_status(job_id: str) -> dict:
-    """读取卖家精灵任务结果。"""
+async def seller_sprite_job_status(job_id: str, wait_seconds: int = 0) -> dict:
+    """读取卖家精灵任务结果，可在 0 至 30 秒内等待任务终态。"""
     try:
-        return _ok(_get_task_scheduler().job_status(job_id))
+        _ensure_seller_sprite_job_owner(job_id)
+        scheduler = _get_task_scheduler()
+        statuses = await _wait_for_preauthorized_seller_sprite_job_statuses(
+            scheduler=scheduler,
+            job_ids=[job_id],
+            wait_seconds=wait_seconds,
+        )
+        return _ok(statuses[0])
     except Exception as exc:
-        return _err(exc, tool="MCP → seller_sprite_job_status(...)", call_params={"job_id": job_id})
+        return _err(
+            exc,
+            tool="MCP → seller_sprite_job_status(...)",
+            call_params={"job_id": job_id, "wait_seconds": wait_seconds},
+        )
+
+
+async def seller_sprite_jobs_status(job_ids: list[str], wait_seconds: int = 0) -> dict:
+    """批量读取 1 至 50 个普通卖家精灵任务状态，可有界等待全部终态。"""
+    try:
+        if not job_ids:
+            raise ValueError("至少提供 1 个 job_id")
+        if len(job_ids) > 50:
+            raise ValueError("最多提供 50 个 job_id")
+
+        # 先规范化完整输入并去重保序，任何空白 ID 都整批拒绝。
+        normalized_job_ids: list[str] = []
+        seen_job_ids: set[str] = set()
+        for raw_job_id in job_ids:
+            job_id = str(raw_job_id or "").strip()
+            if not job_id:
+                raise ValueError("job_id 不能为空")
+            if job_id not in seen_job_ids:
+                normalized_job_ids.append(job_id)
+                seen_job_ids.add(job_id)
+
+        # 使用同一仓储扫描全部唯一 ID；只在完整集合校验后统一拒绝，避免泄露失败位置和类型。
+        user_email = str(_get_current_mcp_user_email() or "").strip().lower()
+        if not user_email:
+            raise ValueError("当前 MCP 用户邮箱缺失，无法读取卖家精灵任务")
+        store = _get_task_queue_store()
+        unavailable_job_ids: list[str] = []
+        for job_id in normalized_job_ids:
+            try:
+                record = store.get_mcp_run(job_id)
+                _validate_seller_sprite_job_owner_record(job_id, record, user_email)
+                scenario = str(record.get("scenario") or "").strip().lower()
+                if scenario == "listing-analysis":
+                    unavailable_job_ids.append(job_id)
+            except (ValueError, PermissionError):
+                unavailable_job_ids.append(job_id)
+        if unavailable_job_ids:
+            raise ValueError("一个或多个卖家精灵任务不可用")
+
+        scheduler = _get_task_scheduler()
+        statuses = await _wait_for_preauthorized_seller_sprite_job_statuses(
+            scheduler=scheduler,
+            job_ids=normalized_job_ids,
+            wait_seconds=wait_seconds,
+        )
+        summary = {
+            "total": len(statuses),
+            "queued": 0,
+            "running": 0,
+            "succeeded": 0,
+            "failed": 0,
+        }
+        states: list[str] = []
+        for status in statuses:
+            state = str(status.get("state") or "").strip().lower()
+            states.append(state)
+            if state in {"queued", "running", "succeeded", "failed"}:
+                summary[state] += 1
+        return _ok(
+            {
+                "ready": all(state in SELLER_SPRITE_TERMINAL_STATES for state in states),
+                "summary": summary,
+                "jobs": statuses,
+            }
+        )
+    except Exception as exc:
+        return _err(
+            exc,
+            tool="MCP → seller_sprite_jobs_status(...)",
+            call_params={"job_ids": job_ids, "wait_seconds": wait_seconds},
+        )
 
 
 async def seller_sprite_export(job_id: str) -> dict:
-    """读取卖家精灵任务导出文件信息。"""
+    """读取当前 MCP 用户所属卖家精灵任务的导出文件信息。"""
     try:
+        _ensure_seller_sprite_job_owner(job_id)
         status = _get_task_scheduler().job_status(job_id)
         export = status.get("export")
         if not export:
             raise ValueError(f"任务无导出文件：{job_id}")
+        export = dict(export)
         if export.get("path") and not export.get("url"):
             export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
         return _ok(export)
@@ -916,6 +989,7 @@ _ALL_TOOLS = [
     seller_sprite_listing_analysis_status,
     seller_sprite_listing_analysis_result,
     seller_sprite_job_status,
+    seller_sprite_jobs_status,
     seller_sprite_export,
 ]
 

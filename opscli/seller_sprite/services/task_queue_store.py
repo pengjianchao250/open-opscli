@@ -57,6 +57,64 @@ class SellerSpriteTaskQueueStore:
             )
         return self.get_status(str(request.job_id))
 
+    def enqueue_owned_mcp_run(
+        self,
+        *,
+        request: SellerSpriteScenarioRequest,
+        queue_scope: str,
+        root_dir: Path,
+        user_email: str,
+        session_id: str | None = None,
+        jwt: str | None = None,
+    ) -> dict[str, Any]:
+        """在同一事务中写入队列任务及其 MCP 所有权记录。"""
+        now = _now_iso()
+        with self._connect() as conn:
+            # 使用立即事务锁定写入顺序，任一唯一约束失败都会回滚两张表。
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO seller_sprite_task_queue (
+                    job_id, queue_scope, status, request_json, root_dir,
+                    created_at, started_at, finished_at, assigned_account,
+                    worker_key, result_path, row_count, export_json, error_json,
+                    session_id, jwt
+                )
+                VALUES (?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, ?)
+                """,
+                (
+                    request.job_id,
+                    queue_scope,
+                    json.dumps(request.to_dict(), ensure_ascii=False),
+                    str(root_dir),
+                    now,
+                    session_id,
+                    jwt,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO seller_sprite_mcp_runs (
+                    job_id, user_email, scenario, mode, params_json,
+                    result_state, result_row_count, result_export_format,
+                    result_export_filename, result_export_job_id, error_json,
+                    created_at, started_at, finished_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'queued', 0, NULL, NULL, NULL, NULL, ?, NULL, NULL, ?)
+                """,
+                (
+                    request.job_id,
+                    user_email,
+                    request.scenario,
+                    DEFAULT_MCP_RUN_MODE,
+                    json.dumps(request.params, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+        return self.get_status(str(request.job_id))
+
     def claim_next(
         self,
         *,
@@ -69,10 +127,17 @@ class SellerSpriteTaskQueueStore:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
-                SELECT id, *
-                FROM seller_sprite_task_queue
-                WHERE queue_scope = ? AND status = 'queued'
-                ORDER BY id ASC
+                SELECT queued.id, queued.*
+                FROM seller_sprite_task_queue AS queued
+                WHERE queued.queue_scope = ?
+                  AND queued.status = 'queued'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM seller_sprite_task_queue AS running
+                      WHERE running.queue_scope = queued.queue_scope
+                        AND running.status = 'running'
+                  )
+                ORDER BY queued.id ASC
                 LIMIT 1
                 """,
                 (queue_scope,),

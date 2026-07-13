@@ -195,6 +195,35 @@ def _get_isolated_credential_cache(cred_dir: Path | None):
     return get_credential_cache(base_dir=cred_dir)
 
 
+def _get_authenticated_user_email() -> str | None:
+    """按已验证认证模式解析当前 MCP 用户邮箱，无法确认时闭合失败。"""
+    from opscli.mcp.context import (
+        get_current_api_key,
+        get_current_auth_mode,
+        get_current_user_email,
+    )
+
+    auth_mode = get_current_auth_mode()
+    api_key = get_current_api_key()
+    if auth_mode == "remote":
+        # 只有远程校验模式注入的 transport 邮箱可视为已验证身份。
+        verified_email = str(get_current_user_email() or "").strip().lower()
+        return verified_email or None
+    if auth_mode == "fixed":
+        if not api_key:
+            return None
+        cred_dir = _get_credential_dir()
+        if cred_dir is None:
+            return None
+        cached_email = _get_isolated_credential_cache(cred_dir).get_email()
+        return str(cached_email or "").strip().lower() or None
+    if auth_mode is None and api_key is None:
+        # stdio 无 API Key 时与 CLI 共享默认 CredentialStore。
+        cached_email = _get_isolated_credential_cache(None).get_email()
+        return str(cached_email or "").strip().lower() or None
+    return None
+
+
 def _auth_client() -> Any:
     """创建 AuthClient 实例（无状态，不读取本地凭证目录）。
 

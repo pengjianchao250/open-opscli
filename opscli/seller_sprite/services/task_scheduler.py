@@ -50,28 +50,43 @@ class SellerSpriteTaskScheduler:
         self._start_lock = asyncio.Lock()
         self._stop_requested = False
 
-    async def enqueue(self, request: SellerSpriteScenarioRequest) -> dict[str, Any]:
-        """入队并按需启动后台调度循环。"""
+    async def enqueue(
+        self,
+        request: SellerSpriteScenarioRequest,
+        *,
+        mcp_user_email: str | None = None,
+    ) -> dict[str, Any]:
+        """入队并按需启动后台调度循环，可原子记录 MCP 所有权。"""
         normalized = self._normalize_request(request)
         root_dir = self._build_root_dir(normalized)
-        status = self.store.enqueue(
-            request=normalized,
-            queue_scope=QUEUE_SCOPE,
-            root_dir=root_dir,
-            session_id=self.session_id,
-            jwt=self.jwt,
-        )
+        if mcp_user_email:
+            # 公共 MCP 提交必须让队列行和所有权行同成同败，避免碰撞后错误授权。
+            status = self.store.enqueue_owned_mcp_run(
+                request=normalized,
+                queue_scope=QUEUE_SCOPE,
+                root_dir=root_dir,
+                user_email=mcp_user_email,
+                session_id=self.session_id,
+                jwt=self.jwt,
+            )
+        else:
+            status = self.store.enqueue(
+                request=normalized,
+                queue_scope=QUEUE_SCOPE,
+                root_dir=root_dir,
+                session_id=self.session_id,
+                jwt=self.jwt,
+            )
         if self.auto_start:
             await self.start()
         return status
 
     async def start(self) -> None:
-        """启动后台调度循环，并恢复残留运行中任务。"""
+        """启动后台调度循环，不隐式修改持久队列中的运行任务。"""
         async with self._start_lock:
             if self._runner_task and not self._runner_task.done():
                 return
             self._stop_requested = False
-            self.store.reset_running_tasks()
             self._runner_task = asyncio.create_task(self._run_loop())
 
     async def close(self) -> None:

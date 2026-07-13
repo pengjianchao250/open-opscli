@@ -266,31 +266,47 @@ def test_scheduler_runs_tasks_in_fifo_order(tmp_path: Path):
     asyncio.run(scenario())
 
 
-def test_scheduler_requeues_stale_running_tasks_on_start(tmp_path: Path):
+def test_scheduler_start_does_not_requeue_running_task_claimed_by_other_instance(tmp_path: Path):
+    """普通 start 不得修改另一实例已经领取的 running 行。"""
+
     async def scenario():
         from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
 
         settings = SellerSpriteSettings(output_dir=tmp_path)
-        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
-        store.enqueue(
-            request=_request("job-stale", "B07YRMT36L"),
+        db_path = tmp_path / "queue.sqlite3"
+        first_store = SellerSpriteTaskQueueStore(db_path=db_path)
+        second_store = SellerSpriteTaskQueueStore(db_path=db_path)
+        first_store.enqueue(
+            request=_request("job-running", "B07YRMT36L"),
             queue_scope="seller_sprite",
-            root_dir=tmp_path / "job-stale",
+            root_dir=tmp_path / "job-running",
         )
-        store.claim_next(queue_scope="seller_sprite", worker_key="default", assigned_account="default")
+        first_store.enqueue(
+            request=_request("job-queued", "B00TEST222"),
+            queue_scope="seller_sprite",
+            root_dir=tmp_path / "job-queued",
+        )
+        first_store.claim_next(
+            queue_scope="seller_sprite",
+            worker_key="other-worker",
+            assigned_account="default",
+        )
 
         scheduler = SellerSpriteTaskScheduler(
-            store=store,
+            store=second_store,
             settings=settings,
             account_provider=DummyAccountProvider(),
-            manager_factory=lambda **kwargs: ImmediateRunManager(**kwargs),
+            manager_factory=lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("已有 running 时不得领取 queued")
+            ),
             auto_start=False,
         )
 
         await scheduler.start()
-        succeeded = await _wait_for_state(scheduler, "job-stale", "succeeded")
+        await asyncio.sleep(0.05)
 
-        assert succeeded["state"] == "succeeded"
+        assert first_store.get_status("job-running")["state"] == "running"
+        assert first_store.get_status("job-queued")["state"] == "queued"
         await scheduler.close()
 
     asyncio.run(scenario())

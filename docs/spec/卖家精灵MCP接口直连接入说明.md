@@ -51,90 +51,169 @@ opscli-mcp --transport sse --port 8765
 
 ## MCP Tools
 
-### `seller_sprite_scenarios`
+### `seller_sprite_scenarios` / `seller_sprite_quota_status`
 
-列出当前支持的接口场景。
+`seller_sprite_scenarios` 列出当前支持的场景；`seller_sprite_quota_status` 返回当前 MCP 用户的每日额度快照。这两类只读请求不消费查询额度。
 
 ### `seller_sprite_run`
 
-执行场景并导出 XLSX。
-
-兼容说明：调用方只需要传业务参数，不需要选择同步/异步或采集模式。后端会在长任务场景或同账号浏览器 worker 已有运行中/排队任务时，自动切换为异步任务并立即返回 `job_id`。这样后续请求不会把 MCP 同步等待时间耗在浏览器队列排队上。采集模式由服务端配置和风控策略决定，不通过 MCP 参数暴露。
+普通任务调用一次 `seller_sprite_run` 后立即持久化入队，不在入口内等待业务完成。调用方只传业务参数，采集模式由后端决定，不传 `mode`、`browser-route`、`api-direct` 或 `async_mode`。
 
 参数：
 
-| 参数 | 说明 |
-| --- | --- |
-| `scenario` | 场景 ID |
-| `params` | 场景参数对象 |
-| `site` | 站点，如 `US`、`JP`、`DE` |
-| `period` | 日期，如 `30d`、`nearly`、`2026-03` |
-| `page_size` | 默认 `100` |
-| `export_format` | MCP 默认 `xls`；可选 `xlsx` / `xls` / `json` |
-| `output_dir` | 可选任务输出目录 |
-| `job_id` | 可选指定任务 ID |
+| 参数 | 类型/默认值 | 说明 |
+| --- | --- | --- |
+| `scenario` | `str`，必填 | 场景 ID |
+| `params` | `dict \| str \| null` | 场景参数对象或 JSON 字符串 |
+| `site` | `str = "US"` | 站点，如 `US`、`JP`、`DE` |
+| `period` | `str = "30d"` | 日期，如 `30d`、`nearly`、`2026-03` |
+| `page_size` | `int = 100` | 每页数量 |
+| `export_format` | `str = "xls"` | 可选 `xlsx` / `xls` / `json` |
+| `page_prepare` | `bool \| null` | 可选页面预热设置 |
+| `task_interval_seconds` | `float \| null` | 可选任务间隔 |
+| `cooldown_seconds` | `float \| null` | 可选失败冷却 |
+| `output_dir` | `str \| null` | 可选任务输出目录 |
+| `job_id` | `str \| null` | 可选指定任务 ID |
+| `session_id` / `jwt` | `str \| null` | 可选显式认证；省略时读取当前 MCP 隔离凭证 |
 
-返回：
+输入示例：
+
+```text
+seller_sprite_run(
+  scenario="keyword-reverse",
+  params={"asin": "B07YRMT36L"},
+  site="JP",
+  period="nearly",
+  page_size=100,
+  export_format="xls"
+)
+```
+
+立即入队返回示例：
 
 ```json
 {
   "success": true,
   "data": {
-    "job_id": "SellerSprite-ReverseASIN-JP-B07YRMT36L-Nearly-20260522-153000-a1b2c3",
+    "job_id": "SellerSprite-ReverseASIN-JP-B07YRMT36L-Nearly-20260710-153000-a1b2c3",
     "scenario": "keyword-reverse",
-    "row_count": 100,
-    "raw_path": ".../raw.json",
-    "result_path": ".../result.json",
-    "export": {
-      "path": ".../SellerSprite-ReverseASIN-JP-B07YRMT36L-Nearly-20260522-153000-a1b2c3.xlsx",
-      "filename": "SellerSprite-ReverseASIN-JP-B07YRMT36L-Nearly-20260522-153000-a1b2c3.xlsx",
-      "url": "file:///.../SellerSprite-ReverseASIN-JP-B07YRMT36L-Nearly-20260522-153000-a1b2c3.xlsx",
-      "format": "xlsx"
-    }
+    "site": "JP",
+    "period": "nearly",
+    "state": "queued",
+    "stage": "queued",
+    "position": 2,
+    "created_at": "2026-07-10T15:30:00+08:00"
   },
   "error": null
 }
 ```
+
+顶层 `success=true` 只表示工具请求成功，不表示业务已完成；上例的 `state=queued` 仍是 pending。
 
 ### `seller_sprite_job_status`
 
-通过 `job_id` 读取 `result.json`。
+单任务签名为 `seller_sprite_job_status(job_id: str, wait_seconds: int = 0)`。`wait_seconds` 会被限制在 0–30 秒；Agent 跟踪普通任务时使用 `seller_sprite_job_status(job_id, wait_seconds=30)`。
 
-异步返回示例：
+精确输入示例：`seller_sprite_job_status(job_id="job-1", wait_seconds=30)`。
 
-返回示例：
+```text
+seller_sprite_job_status(job_id="job-1", wait_seconds=30)
+```
+
+等待窗口到期、任务仍在执行时返回最新快照：
 
 ```json
 {
   "success": true,
   "data": {
-    "job_id": "SellerSprite-ProductResearch-US-Bookcases-20260616-120000-a1b2c3",
-    "scenario": "product-research",
-    "site": "US",
-    "period": "30d",
-    "state": "queued",
-    "stage": "created"
+    "job_id": "job-1",
+    "state": "running",
+    "stage": "running",
+    "position": null
   },
   "error": null
 }
 ```
 
-Agent 应在同一轮对话内用 `seller_sprite_job_status(job_id)` 自动轮询 60 到 90 秒；如果仍未完成，应把 `job_id` 留在对话上下文中，用户后续说“继续”或“查结果”时直接复用该任务编号。
+`queued`、`running`、`ready=false` 和等待窗口到期都表示 pending，不是工具失败或业务失败。到期不会取消、标记失败或重新入队持久任务。
+
+### `seller_sprite_jobs_status`
+
+批量签名为 `seller_sprite_jobs_status(job_ids: list[str], wait_seconds: int = 0)`，一次接收 1–50 个普通任务 ID。工具先校验完整集合归属，按首次出现顺序去重，并返回 `ready`、`summary` 和 `jobs`。
+
+精确输入示例：`seller_sprite_jobs_status(job_ids=["job-a", "job-b"], wait_seconds=30)`。
+
+```text
+seller_sprite_jobs_status(job_ids=["job-a", "job-b"], wait_seconds=30)
+```
+
+批量 pending 返回示例：
+
+```json
+{
+  "success": true,
+  "data": {
+    "ready": false,
+    "summary": {
+      "total": 2,
+      "queued": 1,
+      "running": 1,
+      "succeeded": 0,
+      "failed": 0
+    },
+    "jobs": [
+      {
+        "job_id": "job-a",
+        "state": "queued",
+        "stage": "queued",
+        "position": 2
+      },
+      {
+        "job_id": "job-b",
+        "state": "running",
+        "stage": "fetching",
+        "position": null
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+`ready=false` 表示至少一个任务仍未终态；`ready=true` 表示全部任务均为 `succeeded` 或 `failed`。状态窗口到期只返回最新 `summary/jobs` 快照，不改变队列生命周期。
+
+### Agent 单任务/批量跟踪契约
+
+1. 一个普通 pending ID：调用 `seller_sprite_job_status(job_id, wait_seconds=30)`。
+2. 多个普通 pending ID：优先每个窗口调用一次 `seller_sprite_jobs_status(job_ids, wait_seconds=30)`，不要逐个查询。
+3. 同一轮执行 3–4 个 30 秒有界窗口，总预算 90–120 秒；全部终态时提前停止。
+4. 每个窗口后保留全部未完成 `job_id`。预算到期时告诉用户可直接说“继续”或“查结果”；后续裸 `继续` / `查结果` 恢复完整 pending 集合，除非用户明确选择子集。
+5. pending 普通任务不得重新提交，不得再次调用 `run` 查状态，也不得重新消耗额度。`run` 消耗额度；状态和导出不消耗额度。
+6. 等待窗口到期不会取消、标记失败或重新入队；它只结束本次有界状态请求。
 
 ### `seller_sprite_export`
 
-通过 `job_id` 读取导出文件信息。当前返回服务器本地路径和 `file://` 文件链接，不返回二进制。远程公网下载后续可扩展 HTTP 临时链接、base64 或 MCP resource。
+`seller_sprite_export(job_id: str)` 读取当前 MCP 用户所属普通任务的导出文件信息。任务成功后再调用；状态和导出不消耗额度。
 
-CLI 调用默认导出 XLSX：
+### Listing Analysis 专用流程
 
-```bash
-opscli seller-sprite run keyword-reverse --site JP --period nearly --params "{\"asin\":\"B07YRMT36L\"}"
+Listing Analysis 必须使用 `seller_sprite_listing_analysis_submit`、`seller_sprite_listing_analysis_status`、`seller_sprite_listing_analysis_result` 的 submit/status/result 三段式。`seller_sprite_run` 生产入口会明确拒绝 `listing-analysis`，调用方必须改用 `seller_sprite_listing_analysis_submit`。它不属于普通批量任务，Listing Analysis `job_id` 不得传入 `seller_sprite_jobs_status`；本工作流继续使用专用 status/result，不推荐改用通用单任务状态工具。
+
+```text
+seller_sprite_listing_analysis_submit(asin="B0XXXX", station="GLOBAL", site="US", export_format="json")
+seller_sprite_listing_analysis_status(job_id="listing-job-1")
+seller_sprite_listing_analysis_result(job_id="listing-job-1", export_format="json")
 ```
 
-CLI 也可导出 JSON：
+`status/result` 返回 `ready=false` 时保留同一个 Listing Analysis `job_id`，不要重新 submit；用户裸“继续/查结果”时仍走专用 status/result，不并入普通 pending 集合。
+
+### 正式 CLI 对应命令
 
 ```bash
-opscli seller-sprite run keyword-reverse --site JP --period nearly --params "{\"asin\":\"B07YRMT36L\"}" --export-format json
+opscli seller-sprite run keyword-reverse --site JP --period nearly --params "{\"asin\":\"B07YRMT36L\"}" --export-format xls
+opscli seller-sprite job-status job-1 --wait-seconds 30
+opscli seller-sprite jobs-status job-a job-b --wait-seconds 30
+opscli seller-sprite export job-1
 ```
 
 ## 场景参数示例
@@ -207,11 +286,11 @@ opscli seller-sprite run keyword-reverse --site JP --period nearly --params "{\"
 
 ## 手动验证清单
 
-- 配置服务端账号后，调用 `seller_sprite_scenarios` 能返回 4 个场景。
-- 调用 `seller_sprite_run` 跑通登录。
-- 4 个场景分别获取 100 条以内数据。
-- 每个任务目录包含 `params.json`、`raw.json`、`result.json`、`*.xlsx`。
-- `seller_sprite_job_status(job_id)` 能读取行数、路径和导出信息。
+- 配置服务端账号后，调用 `seller_sprite_scenarios` 能返回当前注册场景。
+- 对当前注册场景分别调用一次 `seller_sprite_run`，确认任务立即持久化入队并返回 `job_id`。
+- 一个普通 pending 任务使用 `seller_sprite_job_status(job_id, wait_seconds=30)` 做有界状态查询。
+- 多个普通 pending 任务使用 `seller_sprite_jobs_status(job_ids, wait_seconds=30)` 做有界批量状态查询。
+- 任务完成后，每个任务目录包含 `params.json`、`raw.json`、`result.json`、`*.xlsx`。
 - `seller_sprite_export(job_id)` 返回 XLSX 路径和 `file://` 文件链接。
 - 失败时 MCP 返回 `_err` 结构，并包含状态码或响应摘要。
 
