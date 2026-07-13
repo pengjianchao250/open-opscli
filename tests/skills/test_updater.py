@@ -50,6 +50,8 @@ def test_upgrade_ops_dataset_query_writes_files(tmp_path: Path, monkeypatch):
             return DummyResponse("field_header,global_alias\nfield_value,ga_field_value\n")
         if endpoint == updater.DATASETS_ENDPOINT:
             return DummyResponse("dataset_header\ndataset_value\n")
+        if endpoint == updater.SELECT_COLUMNS_ENDPOINT:
+            return DummyResponse("select_column_header\nselect_column_value\n")
         if endpoint == updater.CATALOG_ENDPOINT:
             return DummyResponse(data={"data": {"intent_count": 1, "intents": [{"table_id": 1, "keywords": ["销售额"]}]}})
         if endpoint == updater.QUERY_METADATA_ENDPOINT:
@@ -105,6 +107,8 @@ def test_upgrade_same_version_also_updates(tmp_path: Path, monkeypatch):
             return DummyResponse("new_field,new_alias\n")
         if endpoint == updater.DATASETS_ENDPOINT:
             return DummyResponse("new_dataset\n")
+        if endpoint == updater.SELECT_COLUMNS_ENDPOINT:
+            return DummyResponse("new_select_column\n")
         if endpoint == updater.CATALOG_ENDPOINT:
             return DummyResponse(data={"data": {"intent_count": 1, "intents": [{"table_id": 999, "keywords": ["sales"]}]}})
         if endpoint == updater.QUERY_METADATA_ENDPOINT:
@@ -121,6 +125,68 @@ def test_upgrade_same_version_also_updates(tmp_path: Path, monkeypatch):
     assert "new_field" in (data_dir / "dataset_fields.csv").read_text(encoding="utf-8")
     assert "sales" in (data_dir / "dataset_catalog.json").read_text(encoding="utf-8")
     assert '"table_id": 999' in (data_dir / "query_metadata.json").read_text(encoding="utf-8")
+
+
+def test_upgrade_local_version_ahead_also_updates(tmp_path: Path, monkeypatch):
+    """本地版本号高于远端也执行覆盖更新。
+
+    本地模板版本与远端数据 manifest 属于两套版本空间：模板占位数据的版本号
+    （由本地开发迭代 bump）可能领先远端数据版本，若按版本比较跳过更新，
+    占位 CSV 将永远不会被真实数据填充（历史 Bug：1.1.1 > v1.0.3 导致跳过写入）。
+    """
+    skill_root = tmp_path / "ops-dataset-query"
+    data_dir = skill_root / "data"
+    data_dir.mkdir(parents=True)
+    # 模拟占位安装：本地版本 1.1.1 高于远端 v1.0.3，CSV 仅有表头
+    (data_dir / "VERSION.json").write_text('{"name":"ops-dataset-query","version":"1.1.1"}', encoding="utf-8")
+    (data_dir / "dataset_fields.csv").write_text("header_only\n", encoding="utf-8")
+    (data_dir / "datasets.csv").write_text("header_only\n", encoding="utf-8")
+    (data_dir / "dataset_catalog.json").write_text("{}", encoding="utf-8")
+    (data_dir / "query_metadata.json").write_text('{"datasets":[],"fields":[]}', encoding="utf-8")
+
+    record = SkillRecord(
+        name="ops-dataset-query",
+        version="1.1.1",
+        runtime="claude",
+        root=skill_root,
+        version_file=data_dir / "VERSION.json",
+    )
+    updater = SkillsUpdater()
+
+    # 远端版本号低于本地
+    monkeypatch.setattr(updater, "fetch_manifest", lambda skill_name: {"version": "v1.0.3"})
+
+    class DummyResponse:
+        def __init__(self, text: str = "", data: dict | None = None):
+            self.text = text
+            self._data = data or {}
+
+        def json(self):
+            return self._data
+
+    def fake_get(endpoint: str):
+        if endpoint == updater.FIELDS_ENDPOINT:
+            return DummyResponse("real_field\n")
+        if endpoint == updater.DATASETS_ENDPOINT:
+            return DummyResponse("real_dataset\n")
+        if endpoint == updater.SELECT_COLUMNS_ENDPOINT:
+            return DummyResponse("real_select_column\n")
+        if endpoint == updater.CATALOG_ENDPOINT:
+            return DummyResponse(data={"data": {"intent_count": 1, "intents": [{"table_id": 7, "keywords": ["库存"]}]}})
+        if endpoint == updater.QUERY_METADATA_ENDPOINT:
+            return DummyResponse(data={"data": {"datasets": [{"table_id": 7}], "fields": [{"field_name": "stock"}]}})
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(updater, "_get", fake_get)
+
+    result = updater.upgrade_ops_dataset_query(record)
+
+    assert result.updated is True
+    assert result.from_version == "1.1.1"
+    assert result.to_version == "v1.0.3"
+    assert "real_field" in (data_dir / "dataset_fields.csv").read_text(encoding="utf-8")
+    assert "real_dataset" in (data_dir / "datasets.csv").read_text(encoding="utf-8")
+    assert '"version": "v1.0.3"' in (data_dir / "VERSION.json").read_text(encoding="utf-8")
 
 
 def test_get_wraps_404_as_human_error(monkeypatch):
