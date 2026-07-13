@@ -1,249 +1,105 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://opscli.local/schemas/ops-dataset-query/query_plan.schema.json",
-  "title": "ops-dataset-query Query Plan",
+  "title": "ops-dataset-query Model Query Plan",
   "type": "object",
   "required": [
-    "user_query",
-    "intent",
-    "dataset",
-    "query",
-    "validation",
-    "execution_policy"
+    "contract",
+    "data_state",
+    "metadata_version",
+    "status",
+    "model_view",
+    "answer_contract",
+    "execution_ref"
   ],
   "properties": {
-    "user_query": {
-      "type": "string",
-      "description": "用户原始问题"
+    "contract": {"const": "query_plan_model_contract_v2"},
+    "data_state": {"type": "string"},
+    "metadata_version": {"type": "string"},
+    "status": {
+      "enum": ["planned", "clarify_required", "blocked"]
     },
-    "intent": {
-      "type": "object",
-      "required": ["intent_id", "domain", "user_intent"],
-      "properties": {
-        "intent_id": {
-          "type": "string"
-        },
-        "domain": {
-          "type": "string"
-        },
-        "user_intent": {
-          "type": "string"
-        },
-        "confidence": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "matched_keywords": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "dataset": {
-      "type": "object",
-      "required": ["standard_name"],
-      "properties": {
-        "standard_name": {
-          "type": "string"
-        },
-        "table_id": {
-          "type": ["integer", "null"]
-        },
-        "dataset_alias": {
-          "type": ["string", "null"]
-        },
-        "dataset_name": {
-          "type": ["string", "null"]
-        },
-        "execution_dataset": {
-          "type": ["string", "null"],
-          "description": "当业务意图不直接对应独立数据集时，实际承接查询的数据集"
-        },
-        "grain": {
-          "type": ["string", "null"]
-        },
-        "primary_rule": {
-          "type": ["string", "null"]
-        }
-      },
-      "additionalProperties": false
-    },
-    "query": {
-      "type": "object",
-      "required": ["dimensions", "metrics", "filters"],
-      "properties": {
-        "dimensions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/field_ref"
-          }
-        },
-        "metrics": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/metric_ref"
-          }
-        },
-        "filters": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/filter_ref"
-          }
-        },
-        "data_comparison": {
-          "type": ["object", "null"]
-        },
-        "order_by": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["field"],
-            "properties": {
-              "field": {
-                "type": "string"
-              },
-              "desc": {
-                "type": "boolean"
-              }
-            },
-            "additionalProperties": false
-          }
-        },
-        "limit": {
-          "type": ["integer", "null"],
-          "minimum": 1
-        },
-        "offset": {
-          "type": ["integer", "null"],
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false
-    },
-    "validation": {
+    "model_view": {
       "type": "object",
       "required": [
-        "field_existence_checked",
-        "select_column_permission_checked",
-        "formula_metric_checked",
-        "hard_constraints_checked"
+        "dataset_name_zh",
+        "dimensions",
+        "metrics",
+        "platform_semantic_members",
+        "platform_filter_state",
+        "clarification_reason_codes",
+        "clarification_messages_zh",
+        "next_action"
       ],
       "properties": {
-        "field_existence_checked": {
-          "type": "boolean"
+        "dataset_name_zh": {"type": "string"},
+        "dimensions": {"$ref": "#/$defs/string_array"},
+        "metrics": {"$ref": "#/$defs/string_array"},
+        "platform_semantic_members": {"$ref": "#/$defs/string_array"},
+        "platform_filter_state": {
+          "enum": ["not_requested", "requires_permission_enum", "resolved", "blocked"]
         },
-        "select_column_permission_checked": {
-          "type": "boolean"
-        },
-        "formula_metric_checked": {
-          "type": "boolean"
-        },
-        "hard_constraints_checked": {
-          "type": "boolean"
-        },
-        "requires_clarification": {
-          "type": "boolean"
-        },
-        "clarification_reasons": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
+        "clarification_reason_codes": {"$ref": "#/$defs/string_array"},
+        "clarification_messages_zh": {"$ref": "#/$defs/string_array"},
+        "next_action": {"type": "string"}
       },
       "additionalProperties": false
     },
-    "execution_policy": {
+    "answer_contract": {
       "type": "object",
-      "required": ["query_entry", "allow_execute"],
+      "required": [
+        "required_disclosure_codes",
+        "required_disclosures_zh",
+        "forbidden_output_codes",
+        "forbidden_outputs_zh",
+        "technical_identifiers_user_visible",
+        "user_visible_language"
+      ],
       "properties": {
-        "query_entry": {
-          "type": "string",
-          "enum": ["query_simple", "query_chart", "query_build_and_run"]
-        },
-        "allow_execute": {
-          "type": "boolean"
-        },
-        "reason_if_blocked": {
-          "type": ["string", "null"]
-        },
-        "feedback_required": {
-          "type": "boolean"
-        }
+        "required_disclosure_codes": {"$ref": "#/$defs/string_array"},
+        "required_disclosures_zh": {"$ref": "#/$defs/string_array"},
+        "forbidden_output_codes": {"$ref": "#/$defs/string_array"},
+        "forbidden_outputs_zh": {"$ref": "#/$defs/string_array"},
+        "technical_identifiers_user_visible": {"const": false},
+        "user_visible_language": {"const": "zh-CN"}
+      },
+      "additionalProperties": false
+    },
+    "execution_ref": {
+      "type": "object",
+      "required": ["user_visible"],
+      "properties": {
+        "user_visible": {"const": false},
+        "dataset_alias": {"type": ["string", "null"]},
+        "table_id": {"type": ["string", "integer", "null"]},
+        "platform_component_alias": {"type": ["string", "null"]},
+        "platform_component_table_id": {"type": ["string", "integer", "null"]},
+        "resolved_platform_values": {"$ref": "#/$defs/string_array"},
+        "dimensions": {"$ref": "#/$defs/execution_fields"},
+        "metrics": {"$ref": "#/$defs/execution_fields"}
       },
       "additionalProperties": false
     }
   },
   "$defs": {
-    "field_ref": {
-      "type": "object",
-      "required": ["field"],
-      "properties": {
-        "field": {
-          "type": "string"
-        },
-        "verbose_name": {
-          "type": ["string", "null"]
-        },
-        "alias": {
-          "type": ["string", "null"]
-        }
-      },
-      "additionalProperties": false
+    "string_array": {
+      "type": "array",
+      "items": {"type": "string"}
     },
-    "metric_ref": {
-      "type": "object",
-      "required": ["field"],
-      "properties": {
-        "field": {
-          "type": "string"
+    "execution_fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field_name", "label_zh", "is_formula", "is_snapshot"],
+        "properties": {
+          "field_name": {"type": "string"},
+          "label_zh": {"type": "string"},
+          "is_formula": {"type": "boolean"},
+          "is_snapshot": {"type": "boolean"},
+          "aggregation_policy": {"type": "string"}
         },
-        "verbose_name": {
-          "type": ["string", "null"]
-        },
-        "alias": {
-          "type": ["string", "null"]
-        },
-        "aggregation": {
-          "type": ["string", "null"]
-        },
-        "is_formula": {
-          "type": "boolean"
-        },
-        "expression_source": {
-          "type": ["string", "null"],
-          "description": "summary_expression/detail_expression"
-        }
-      },
-      "additionalProperties": false
-    },
-    "filter_ref": {
-      "type": "object",
-      "required": ["field", "operator", "value"],
-      "properties": {
-        "field": {
-          "type": "string"
-        },
-        "operator": {
-          "type": "string"
-        },
-        "value": {},
-        "source": {
-          "type": ["string", "null"],
-          "description": "user/default/context/component"
-        }
-      },
-      "additionalProperties": false
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": false
