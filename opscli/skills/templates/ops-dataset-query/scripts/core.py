@@ -2,7 +2,7 @@
 
 提供 CSV 加载、过滤、搜索打分、数据目录发现、本地索引加载、
 字段解析、自动升级兜底和数值转换格式化等基础能力，
-供 search.py、chart_map.py、chart_analyze.py、excel_export.py 等复用。
+供 chart_map.py、chart_analyze.py、excel_export.py 等复用。
 """
 
 from __future__ import annotations
