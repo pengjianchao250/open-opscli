@@ -1,6 +1,7 @@
 ---
 name: ops-feedback
 description: Use when submitting or querying Aukeys opscli feedback, or when an opscli CLI/MCP call fails unexpectedly and needs a structured execution summary.
+version: 1.0.1
 ---
 
 # ops-feedback
