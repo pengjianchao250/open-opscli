@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-14 asin-data - crawler-details 多站点取数设计
+
+**变更原因**：`crawler-details` 接口新增 `country` 参数，现有 ASIN live-data、MCP 和类目 Top10 链路需要统一支持默认 US、指定站点及批量多站点分组请求。
+**改动点**：新增 `docs/design/ASIN爬虫多站点取数设计.md`，明确站点来源、按 country 分组并行请求、统一 rows 合并、部分失败语义以及 CLI/MCP/Top10 验收范围；本阶段仅锁定设计，尚未修改运行时代码。
+**验证结果**：已完成文档占位符、内部一致性、范围和歧义自检；待用户确认设计文档后进入 TDD 实现。
+**影响范围**：当前仅新增设计文档和本条变更记录，不改变 CLI、MCP 或远端请求行为。
+**回滚方式**：删除设计文档并移除本条变更记录。
+
+---
+
 ## 2026-07-14 asin-data/mcp - 同步 ASIN 取数服务到 release
 
 **变更原因**：需要将 `codex/asin-data-service-merge` 中已经整理完成的 ASIN 取数 CLI/MCP 能力同步到 `release`，并保留 Top10/category-top 取数修复和默认当前用户北极星鉴权策略，便于后续 release 部署使用。
