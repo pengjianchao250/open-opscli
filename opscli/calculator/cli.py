@@ -211,71 +211,42 @@ def _format_decimal(value: object, bit: int = 4) -> str:
         return str(value)
 
 
-def _format_range(value: object) -> str | None:
-    """格式化费用区间第二行。"""
-    if not isinstance(value, list | tuple) or len(value) < 2:
-        return None
-    first = _format_decimal(value[0])
-    second = _format_decimal(value[1])
-    return f"({first}~{second})"
-
-
 def _format_plan_fee(value: object, value_range: object = None) -> str:
     """格式化单项方案费用及其区间。"""
     if isinstance(value, dict):
         value_range = value.get("range")
         value = value.get("value")
     lines = [_format_decimal(value)]
-    range_line = _format_range(value_range)
-    if range_line:
-        lines.append(range_line)
+    if isinstance(value_range, list | tuple) and len(value_range) >= 2:
+        lines.append(f"({_format_decimal(value_range[0])}~{_format_decimal(value_range[1])})")
     return "\n".join(lines)
-
-
-def _plan_schemes(plan: dict) -> list[dict]:
-    """读取方案内的有效分区线路。"""
-    schemes = plan.get("schemes")
-    if not isinstance(schemes, list):
-        return []
-    return [scheme for scheme in schemes if isinstance(scheme, dict)]
 
 
 def _format_scheme_column(schemes: list[dict], field: str) -> str:
     """把同一方案的多条线路格式化为多行单元格。"""
+    fee_fields = ("first_fee", "storage_fees", "freight")
     values: list[str] = []
     for scheme in schemes:
         if field == "scheme_fee":
             value = _format_plan_fee(scheme.get("scheme_fee"), scheme.get("scheme_range"))
-        elif field in {"first_fee", "storage_fees", "freight"}:
+        elif field in fee_fields:
             value = _format_plan_fee(scheme.get(field))
         else:
             value = _display_value(scheme.get(field))
-        if _scheme_has_range(scheme) and "\n" not in value:
+        scheme_range = scheme.get("scheme_range")
+        has_range = isinstance(scheme_range, list | tuple) and len(scheme_range) >= 2
+        if not has_range:
+            has_range = any(
+                isinstance(scheme.get(fee_field), dict)
+                and isinstance(scheme[fee_field].get("range"), list | tuple)
+                and len(scheme[fee_field]["range"]) >= 2
+                for fee_field in fee_fields
+            )
+        # 同一线路任一费用有区间时，其余列补齐第二行，避免后续线路纵向错位。
+        if has_range and "\n" not in value:
             value += "\n"
         values.append(value)
     return "\n".join(values) if values else "未填写"
-
-
-def _scheme_has_range(scheme: dict) -> bool:
-    """判断线路是否包含任一费用区间。"""
-    scheme_range = scheme.get("scheme_range")
-    if isinstance(scheme_range, list | tuple) and len(scheme_range) >= 2:
-        return True
-    return any(
-        isinstance(scheme.get(field), dict)
-        and isinstance(scheme[field].get("range"), list | tuple)
-        and len(scheme[field]["range"]) >= 2
-        for field in ("first_fee", "storage_fees", "freight")
-    )
-
-
-def _has_first_order_qty(plans: list[dict]) -> bool:
-    """判断是否需要展示首单数量列。"""
-    return any(
-        scheme.get("first_order_qty") not in (None, "", 0)
-        for plan in plans
-        for scheme in _plan_schemes(plan)
-    )
 
 
 def _render_all_plans_table(all_plans: object) -> bool:
@@ -286,7 +257,8 @@ def _render_all_plans_table(all_plans: object) -> bool:
     if not plans:
         return False
 
-    show_first_order_qty = _has_first_order_qty(plans)
+    # 参考前端按首个方案的方案级字段控制整列显隐。
+    show_first_order_qty = bool(plans[0].get("first_order_qty"))
     table = Table(title="费用方案", show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
     table.add_column("分区推荐")
     if show_first_order_qty:
@@ -299,7 +271,8 @@ def _render_all_plans_table(all_plans: object) -> bool:
     table.add_column("每PCS全程平均费用(CNY)", justify="right", style="red")
 
     for plan in plans:
-        schemes = _plan_schemes(plan)
+        raw_schemes = plan.get("schemes")
+        schemes = [scheme for scheme in raw_schemes if isinstance(scheme, dict)] if isinstance(raw_schemes, list) else []
         values = [_display_value(plan.get("partition_recommend"))]
         if show_first_order_qty:
             values.append(_format_scheme_column(schemes, "first_order_qty"))

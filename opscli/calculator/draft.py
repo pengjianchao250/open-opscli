@@ -29,9 +29,11 @@ _ARRAY_FIELD_KEYS = {"platforms", "checkbox_stock", "two_zone_combine", "three_z
 _STRING_FIELD_KEYS = {"country_code", "department", "reference", "reference_value", "pick_up_province", "pick_up_city", "calc_method", "task_name"}
 _BOOL_TRUE_VALUES = {"1", "true", "yes", "y", "是"}
 _BOOL_FALSE_VALUES = {"0", "false", "no", "n", "否"}
+# 新草稿缺少试算方案或分区时，沿用页面默认选择。
 _DEFAULT_CALC_METHOD = "GROSS_PROFIT"
 _DEFAULT_CHECKBOX_STOCK = ["one_zone_all", "specify_part"]
 _DEFAULT_TWO_ZONE_COMBINE = ["zone_1_2"]
+# 当前只计算仓配费用，利润试算输入统一归零。
 _ZERO_COST_FIELD_KEYS = {
     "product_price",
     "gross_profit_percent",
