@@ -8,7 +8,7 @@ description: >
   规划器按 30 秒命令窗口设计，返回 refresh_in_progress 时按其 recovery_command
   等待重跑即可，禁止自行升级）；禁止绕过规划器直接扫描 data/ 目录、
   读脚本源码或凭记忆手拼查询参数。
-version: 1.3.3
+version: 1.3.4
 ---
 
 # ops-dataset-query
@@ -26,17 +26,17 @@ version: 1.3.3
 
 ## 查询规划主线
 
-**主线只有三步：`query_plan.py` 拿规划器 → 按规划器确认口径 → `run_query.py` 执行。** 先做紧凑歧义预检。仅当命中具体歧义时才读取 `references/rules.md`，并按 `references/ask-user-question-guide.md` 澄清；无歧义继续。
+**主线只有三步：`query_plan.py` 拿规划结果 → 按规划结果确认口径 → `run_query.py` 执行。** 先做紧凑歧义预检。仅当命中具体歧义时才读取 `references/rules.md`，并按 `references/ask-user-question-guide.md` 澄清；无歧义继续。
 
 ### CLI-only：一次本地规划
 
-读完本文件后直接运行规划器；除「把枚举值回传取得终版规划器」这一种情况外，每个规划阶段最多运行一次。不要预读 `data/VERSION.json`，不要列目录，不要检查脚本源码，不要扫描 `data/`、`scripts/` 或 `references/`；规划器已完成版本、选表、字段、公式、时间口径和权限规划器检查。
+读完本文件后直接运行规划器；除「把枚举值回传取得终版规划结果」这一种情况外，每个规划阶段最多运行一次。不要预读 `data/VERSION.json`，不要列目录，不要检查脚本源码，不要扫描 `data/`、`scripts/` 或 `references/`；规划器已完成版本、选表、字段、公式、时间口径和权限合同检查。
 
 ```bash
 python3 scripts/query_plan.py "$USER_REQUEST"
 ```
 
-**命令窗口与等待（30 秒窗口设计）**：平台单条命令的有效等待上限约 30 秒（自行设置更大超时无效）。规划器内部已按此窗口设计——任意单次调用确定性返回：数据就绪时（常态）1~3 秒；需要刷新元数据时前台最多等 10 秒，未完成则**转后台续跑**并返回 `status=blocked, recovery_state=refresh_in_progress`，此时**直接执行其 `recovery_command`**（形如 `sleep 25 && python3 scripts/query_plan.py "<原文>"`，等待与重跑合并为一条命令）；连续 3 次仍未就绪才提交反馈并停止。禁止自行执行任何升级动作、禁止因等待改走旁路探查。若命令仍偶发窗口超时：原样重跑一次即可（规划器幂等）。
+**命令窗口与等待（30 秒窗口设计）**：平台单条命令的有效等待上限约 30 秒（自行设置更大超时无效）。规划器内部已按此窗口设计——任意单次调用确定性返回：数据就绪时（常态）1~3 秒；需要刷新元数据时前台最多等 8 秒，未完成则**转后台续跑**并返回 `status=blocked, recovery_state=refresh_in_progress`，此时**直接执行其 `recovery_command`**（形如 `sleep 25 && python3 scripts/query_plan.py "<原文>"`，等待与重跑合并为一条命令）；连续 3 次仍未就绪才提交反馈并停止。禁止自行执行任何升级动作、禁止因等待改走旁路探查。若命令仍偶发窗口超时：原样重跑一次即可（规划器幂等）。
 
 用户请求含引号等特殊字符时改用 `--query-file <文件|->`（stdin）。用户明确指定字段时追加重复的 `--field "$FIELD"`。只处理默认 `model_view`、`answer_contract` 和 `execution_ref`；不得读取内部规划器补充回答：
 

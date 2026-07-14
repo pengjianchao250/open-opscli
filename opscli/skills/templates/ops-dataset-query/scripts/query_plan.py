@@ -405,8 +405,11 @@ def _fallback_ready_data_dir(primary: Path) -> Path | None:
 
 
 # 自动升级前台宽限秒数：后端快时（实测 3~10s）一次调用内直接完成；
-# 超出宽限则转后台续跑并立即返回，保证单次调用恒在平台 30 秒命令窗口内
-_UPGRADE_GRACE_SECONDS = 10.0
+# 超出宽限则转后台续跑并立即返回，保证单次调用恒在平台命令窗口内。
+# 取 8s（< SDK exec 工具默认 yield_time_ms=10000）：验收轮实测模型常不显式设
+# 等待窗、沿用 10s 默认，若宽限也是 10s 会卡在临界点被外层窗口切断（48 次调用 2 次超时，
+# 均为默认 10s 命令）；压到 8s 留出 ≥2s 安全边际，默认窗口下也能拿到 in_progress 返回。
+_UPGRADE_GRACE_SECONDS = 8.0
 
 
 def _upgrade_marker_path(data_dir: Path) -> Path:
