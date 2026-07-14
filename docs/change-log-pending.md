@@ -2580,3 +2580,11 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 - **验证**：pytest 23/23；QA 真实数据包抽验 planned/table 2/time_scope 对比期正常。
 - **影响范围**：仅技能模板文案与指引；无逻辑变更（除 description）。需重新发布到 QA 广场并同步提示词 v20（更名+超时指引）。
 - **回滚方式**：git revert 本次 commit。
+
+## 2026-07-14 ops-dataset-query v1.3.3 规划器 30 秒窗口适配（超时结构性根治）
+
+- **为什么改**：四轮 e2e 实测确认平台单条命令有效等待硬顶约 30 秒（SDK PTY 钳制 PTY_YIELD_TIME_MS_MAX=30000，e2b 后端应用；模型自设 ≥120s 无效），而规划器「同步升级 60s+同步枚举 45s」预算与之结构性错配——占位数据/刷新器失败场景下首调必然超时，且曾实测升级进程被窗口切断致 VERSION.json 半写入（NUL 污染）。
+- **具体做了什么**：①自动升级改「前台 10s 宽限 + 超时转后台续跑」：Popen(start_new_session) 启动，宽限内完成即继续规划；未完成不杀进程、写 pid 标记立即返回 `status=blocked, recovery_state=refresh_in_progress`，恢复命令为 `sleep 25 && 原样重跑`（等待+重跑合并一条命令贴 30s 窗口）；下次调用凭标记与就绪检查接管（fallback 目录前置检查，后台产物就绪即秒级接管）；进程消亡仍未就绪判 refresh_failed 给手动指引；②自动枚举预算 45s→20s，且与升级不在同一次调用内叠加（升级发生则本次跳过 auto-enum、输出内嵌枚举命令走手动路径）——任意单次调用最坏 ~22s；③_refresh_contract 增加 recovery_state（in_progress/failed 两态差异化指引），model_view 透传，schema 同步；④SKILL.md/cli.md/description 撤换已证伪的「设 ≥120s」指引为 30 秒窗口叙事；版本 1.3.2→1.3.3。
+- **验证**：pytest 24/24（升级三态/宽限完成继续规划/转后台返回等待合同/fallback 前置不再发起升级）；本机活体闭环：占位包首调 10.2s 确定性返回 refresh_in_progress（慢速假 opscli 强制 18s 升级），sleep 后重跑 0.11s 接管 planned；就绪数据常态首调 0.14s。
+- **影响范围**：仅技能模板；行为向后兼容（数据就绪路径不变）。需发布 1.3.3 到 QA 广场并同步提示词 v21（撤换 ≥120s 超时段）。
+- **回滚方式**：git revert 本 commit；广场回滚 1.3.2。

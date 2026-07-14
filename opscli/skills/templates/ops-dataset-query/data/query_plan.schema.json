@@ -98,6 +98,10 @@
         "recovery_hint_zh": {
           "description": "与 recovery_command 配套的中文恢复指引",
           "type": "string"
+        },
+        "recovery_state": {
+          "description": "刷新恢复状态：refresh_in_progress（后台刷新中，sleep 后重跑）/ refresh_failed（需手动刷新）",
+          "type": "string"
         }
       },
       "additionalProperties": false

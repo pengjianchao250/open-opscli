@@ -11,8 +11,10 @@ description: 当前账号元数据的 CLI-only 规划、权限枚举与查询路
 query_plan.py -> 当前账号组件枚举 -> opscli query simple
 ```
 
-若当前请求尚未运行规划器，直接在 Skill 目录执行（首次运行设 ≥120 秒执行超时，
-内部含自动升级与自动枚举；超时则加大到 180 秒原样重试一次，规划器幂等、二次通常秒回）：
+若当前请求尚未运行规划器，直接在 Skill 目录执行（规划器按平台 30 秒命令窗口设计：
+常态 1~3 秒返回；需要刷新元数据时前台最多等 10 秒、未完成即转后台续跑并返回
+`recovery_state=refresh_in_progress`，此时直接执行其 `recovery_command`（sleep+重跑
+合并的一条命令）即可，禁止自行升级；偶发窗口超时原样重跑一次，规划器幂等）：
 
 ```bash
 python3 scripts/query_plan.py "$USER_REQUEST"
