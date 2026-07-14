@@ -46,7 +46,7 @@ def test_account_pool_promotes_cold_standby_after_working_account_fails():
     pool.load(accounts)
 
     pool.mark_unavailable(accounts[0])
-    replacement = pool.take_standby(attempted_account_keys=set())
+    replacement = pool.take_standby(attempted_accounts=set())
 
     assert replacement == accounts[4]
     assert [account.name for account in pool.working_accounts] == [
@@ -83,3 +83,24 @@ def test_account_pool_keeps_same_failed_credentials_unavailable_until_password_c
     activated = pool.activate_standby_until_target()
     assert activated == (changed,)
     assert pool.working_accounts == (changed,)
+
+
+def test_account_pool_prioritizes_changed_password_for_same_identity():
+    """同一身份换新密码后，应先于其他冷备用账号参加当前任务接替。"""
+    from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool
+
+    pool = SellerSpriteAccountPool()
+    accounts = _accounts(3)
+    failed = accounts[0]
+    pool.load(accounts)
+    pool.mark_unavailable(failed)
+    changed = SellerSpriteAccount(
+        name=failed.name,
+        username=failed.username,
+        password="rotated-secret",
+    )
+
+    pool.refresh([changed, accounts[1], accounts[2]])
+    replacement = pool.take_standby(attempted_accounts={failed})
+
+    assert replacement == changed

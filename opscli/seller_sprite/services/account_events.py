@@ -77,6 +77,46 @@ class SellerSpriteAccountEventRecorder:
                 extra={"seller_sprite_event": audit_event},
             )
 
+    def record_account_fetch_failure(
+        self,
+        *,
+        error: Exception,
+        next_action: str,
+    ) -> None:
+        """记录账号接口刷新失败，保留脱敏运行日志和 SQLite 审计。"""
+        event = {
+            "event_type": "account_fetch_failed",
+            "account_key": None,
+            "account_name": None,
+            "masked_username": None,
+            "job_id": None,
+            "worker_key": None,
+            "assignment_generation": None,
+            "execution_mode": None,
+            "login_stage": "account_fetch",
+            "error_code": _error_code(error),
+            "error_summary": _sanitize_generic_summary(error),
+            "replacement_account_key": None,
+            "duration_ms": None,
+            "failover_count": None,
+            "next_action": next_action,
+            "metadata": {"reason": "account_fetch"},
+        }
+        logger.warning("卖家精灵账号接口刷新失败", extra={"seller_sprite_event": dict(event)})
+        try:
+            self.store.record_account_event(**event)
+        except Exception as audit_error:
+            logger.error(
+                "卖家精灵账号接口失败事件写入 SQLite 失败",
+                extra={
+                    "seller_sprite_event": {
+                        "event_type": "account_audit_persistence_failed",
+                        "error_code": _error_code(audit_error),
+                        "error_summary": _sanitize_generic_summary(audit_error),
+                    }
+                },
+            )
+
 
 def _error_code(error: Exception) -> str:
     """优先使用业务错误码，否则使用异常类型名。"""
@@ -96,8 +136,17 @@ def _sanitize_error_summary(error: Exception, account: SellerSpriteAccount) -> s
 def _sanitize_generic_summary(error: Exception | str) -> str:
     """清理常见密码、Cookie、Token 和授权头键值。"""
     summary = str(error).replace("\r", " ").replace("\n", " ")
+    credential_keys = (
+        r"password|passwd|pwd|token|access_token|refresh_token|session_token|"
+        r"cookie|authorization"
+    )
     summary = re.sub(
-        r"(?i)\b(password|passwd|pwd|token|cookie|authorization)\s*[:=]\s*[^\s,;]+",
+        rf"(?i)([\"']?(?:{credential_keys})[\"']?\s*:\s*)[\"'][^\"']*[\"']",
+        lambda match: f'{match.group(1)}"***"',
+        summary,
+    )
+    summary = re.sub(
+        rf"(?i)\b({credential_keys})\s*[:=]\s*[^\s,;}}\]]+",
         lambda match: f"{match.group(1)}=***",
         summary,
     )

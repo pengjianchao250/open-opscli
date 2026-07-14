@@ -16,6 +16,8 @@ DEFAULT_QUEUE_DB_PATH = Path(CONFIG_DIR) / "seller_sprite" / "task_queue.sqlite3
 DEFAULT_MCP_RUN_MODE = "browser-route"
 TASK_KIND_GENERIC = "generic"
 TASK_KIND_LISTING_ANALYSIS = "listing_analysis"
+# 版本 2 引入账号级领取、执行代际、故障接替和账号事件审计。
+QUEUE_SCHEMA_VERSION = 2
 
 
 class SellerSpriteTaskQueueStore:
@@ -183,6 +185,14 @@ class SellerSpriteTaskQueueStore:
                   AND queued.status = 'queued'
                   AND NOT EXISTS (
                       SELECT 1
+                      FROM seller_sprite_task_queue AS legacy_running
+                      WHERE legacy_running.queue_scope = queued.queue_scope
+                        AND legacy_running.task_kind = ?
+                        AND legacy_running.status = 'running'
+                        AND legacy_running.assigned_account_key IS NULL
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
                       FROM seller_sprite_task_queue AS running
                       WHERE running.queue_scope = queued.queue_scope
                         AND running.status = 'running'
@@ -191,7 +201,7 @@ class SellerSpriteTaskQueueStore:
                 ORDER BY queued.id ASC
                 LIMIT 1
                 """,
-                (queue_scope, TASK_KIND_GENERIC, account_key),
+                (queue_scope, TASK_KIND_GENERIC, TASK_KIND_GENERIC, account_key),
             ).fetchone()
             if row is None:
                 conn.commit()
@@ -339,6 +349,70 @@ class SellerSpriteTaskQueueStore:
             )
         return int(cursor.rowcount or 0) == 1
 
+    def finish_task_and_mcp_run_if_current(
+        self,
+        *,
+        job_id: str,
+        account_key: str,
+        assignment_generation: int,
+        result_path: str,
+        row_count: int,
+        export_payload: dict[str, Any] | None,
+        mcp_export_payload: dict[str, Any] | None,
+    ) -> bool:
+        """以账号和代际 CAS 原子提交队列成功态及可选 MCP 成功态。"""
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """
+                UPDATE seller_sprite_task_queue
+                SET status = 'succeeded', finished_at = ?, result_path = ?,
+                    row_count = ?, export_json = ?, error_json = NULL
+                WHERE job_id = ? AND status = 'running'
+                  AND assigned_account_key = ? AND assignment_generation = ?
+                """,
+                (
+                    now,
+                    result_path,
+                    row_count,
+                    json.dumps(export_payload, ensure_ascii=False)
+                    if export_payload is not None
+                    else None,
+                    job_id,
+                    account_key,
+                    assignment_generation,
+                ),
+            )
+            if int(cursor.rowcount or 0) != 1:
+                conn.rollback()
+                return False
+            if mcp_export_payload is not None:
+                mcp_cursor = conn.execute(
+                    """
+                    UPDATE seller_sprite_mcp_runs
+                    SET result_state = 'succeeded', result_row_count = ?,
+                        result_export_format = ?, result_export_filename = ?,
+                        result_export_job_id = ?, error_json = NULL,
+                        finished_at = ?, updated_at = ?
+                    WHERE job_id = ?
+                    """,
+                    (
+                        row_count,
+                        mcp_export_payload.get("format"),
+                        mcp_export_payload.get("filename"),
+                        job_id,
+                        now,
+                        now,
+                        job_id,
+                    ),
+                )
+                if int(mcp_cursor.rowcount or 0) != 1:
+                    conn.rollback()
+                    raise ValueError(f"MCP 调用记录不存在：{job_id}")
+            conn.commit()
+        return True
+
     def fail_task(self, *, job_id: str, error_payload: dict[str, Any]) -> None:
         """标记任务执行失败。"""
         with self._connect() as conn:
@@ -386,6 +460,56 @@ class SellerSpriteTaskQueueStore:
             )
         return int(cursor.rowcount or 0) == 1
 
+    def fail_task_and_mcp_run_if_current(
+        self,
+        *,
+        job_id: str,
+        account_key: str,
+        assignment_generation: int,
+        error_payload: dict[str, Any],
+        update_mcp_run: bool,
+    ) -> bool:
+        """以账号和代际 CAS 原子提交队列失败态及可选 MCP 失败态。"""
+        now = _now_iso()
+        error_json = json.dumps(error_payload, ensure_ascii=False)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """
+                UPDATE seller_sprite_task_queue
+                SET status = 'failed', finished_at = ?, error_json = ?,
+                    last_error_code = ?
+                WHERE job_id = ? AND status = 'running'
+                  AND assigned_account_key = ? AND assignment_generation = ?
+                """,
+                (
+                    now,
+                    error_json,
+                    str(error_payload.get("code") or ""),
+                    job_id,
+                    account_key,
+                    assignment_generation,
+                ),
+            )
+            if int(cursor.rowcount or 0) != 1:
+                conn.rollback()
+                return False
+            if update_mcp_run:
+                mcp_cursor = conn.execute(
+                    """
+                    UPDATE seller_sprite_mcp_runs
+                    SET result_state = 'failed', error_json = ?,
+                        finished_at = ?, updated_at = ?
+                    WHERE job_id = ?
+                    """,
+                    (error_json, now, now, job_id),
+                )
+                if int(mcp_cursor.rowcount or 0) != 1:
+                    conn.rollback()
+                    raise ValueError(f"MCP 调用记录不存在：{job_id}")
+            conn.commit()
+        return True
+
     def reassign_task_for_failover(
         self,
         *,
@@ -403,7 +527,7 @@ class SellerSpriteTaskQueueStore:
             conn.execute("BEGIN IMMEDIATE")
             current = conn.execute(
                 """
-                SELECT queue_scope
+                SELECT queue_scope, task_kind
                 FROM seller_sprite_task_queue
                 WHERE job_id = ?
                   AND status = 'running'
@@ -878,8 +1002,10 @@ class SellerSpriteTaskQueueStore:
         return [_account_event_to_dict(row) for row in rows]
 
     def _ensure_schema(self) -> None:
-        """初始化 SQLite 表结构。"""
+        """在单个立即事务内初始化或升级 SQLite 表结构。"""
         with self._connect() as conn:
+            # DDL、历史数据回填和索引发布必须同成同败，避免并发启动看到半迁移结构。
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS seller_sprite_task_queue (
@@ -1025,6 +1151,8 @@ class SellerSpriteTaskQueueStore:
                 "CREATE INDEX IF NOT EXISTS ix_seller_sprite_account_events_event_type "
                 "ON seller_sprite_account_events(event_type, created_at)"
             )
+            conn.execute(f"PRAGMA user_version = {QUEUE_SCHEMA_VERSION}")
+            conn.commit()
 
     def _backfill_task_kinds(self, conn: sqlite3.Connection) -> None:
         """根据历史请求内容回填任务类型，并隔离无法解析的排队行。"""
@@ -1099,7 +1227,7 @@ class SellerSpriteTaskQueueStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT queue_scope
+                SELECT queue_scope, task_kind
                 FROM seller_sprite_task_queue
                 WHERE id = ?
                 """,
@@ -1112,10 +1240,11 @@ class SellerSpriteTaskQueueStore:
                 SELECT COUNT(*) AS cnt
                 FROM seller_sprite_task_queue
                 WHERE queue_scope = ?
+                  AND task_kind = ?
                   AND status = 'queued'
                   AND id <= ?
                 """,
-                (row["queue_scope"], task_id),
+                (row["queue_scope"], row["task_kind"], task_id),
             ).fetchone()
         return int(count_row["cnt"] or 0)
 

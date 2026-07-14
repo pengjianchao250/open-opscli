@@ -7,7 +7,10 @@ from pathlib import Path
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.config import SellerSpriteSettings
-from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+from opscli.seller_sprite.domain.exceptions import (
+    SellerSpriteAuthenticationError,
+    SellerSpriteConfigError,
+)
 from opscli.seller_sprite.domain.models import (
     SellerSpriteExportResult,
     SellerSpriteScenarioRequest,
@@ -304,14 +307,18 @@ class FailoverRunHarness:
                 account = kwargs["account_provider"].get_default()
                 harness.attempted_accounts.append(account.name)
                 if harness.fail_all or account.name == "account-1":
-                    raise SellerSpriteConfigError("卖家精灵账号登录失败")
+                    raise SellerSpriteAuthenticationError("卖家精灵账号登录失败")
                 return _empty_result(kwargs["settings"], request)
 
         return Manager()
 
 
 def _empty_result(settings, request):
-    root_dir = Path(settings.output_dir) / str(request.job_id)
+    root_dir = (
+        Path(request.attempt_output_dir)
+        if request.attempt_output_dir
+        else Path(settings.output_dir) / str(request.job_id)
+    )
     root_dir.mkdir(parents=True, exist_ok=True)
     return SellerSpriteScenarioResult.empty(
         job_id=str(request.job_id),
@@ -427,7 +434,82 @@ def test_scheduler_replaces_failed_working_account_with_cold_standby(tmp_path: P
         assert harness.attempted_accounts == ["account-1", "account-2"]
         assert succeeded["assigned_account"] == "account-2"
         assert succeeded["failover_count"] == 1
+        assert Path(succeeded["result_path"]).parent.name == "generation-2"
         assert store.list_account_events(job_id="job-failover")[0]["event_type"] == "account_login_failed"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_does_not_failover_for_non_authentication_config_error(tmp_path: Path):
+    """请求参数或导出配置错误不能误伤健康账号，也不能触发备用接替。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        class ConfigErrorHarness:
+            def __init__(self):
+                self.accounts = []
+
+            def manager_factory(self, **kwargs):
+                harness = self
+
+                class Manager:
+                    async def run(self, request):
+                        harness.accounts.append(kwargs["account_provider"].get_default().name)
+                        raise SellerSpriteConfigError("不支持的导出格式")
+
+                return Manager()
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(2)
+        harness = ConfigErrorHarness()
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+        )
+
+        await scheduler.enqueue(_request("job-config-error", "B0CONFIGERR"))
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-config-error", "failed")
+
+        assert harness.accounts == ["account-1"]
+        assert failed["error"]["code"] == "SELLER_SPRITE_CONFIG_ERROR"
+        assert store.list_account_events(job_id="job-config-error") == []
+        assert scheduler.generic_worker_count == 1
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_retires_excess_idle_workers_after_account_refresh(tmp_path: Path):
+    """账号接口从五个缩至三个时，空闲工作槽应收敛为两个。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path, account_cache_ttl_seconds=1)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(5)
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+
+        await scheduler.start()
+        assert scheduler.generic_worker_count == 4
+        provider.accounts = provider.accounts[:3]
+        await asyncio.sleep(1.15)
+
+        assert scheduler.generic_worker_count == 2
+        assert scheduler.standby_account_count == 1
         await scheduler.close()
 
     asyncio.run(scenario())

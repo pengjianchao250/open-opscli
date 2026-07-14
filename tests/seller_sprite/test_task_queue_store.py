@@ -154,6 +154,38 @@ def test_store_claims_generic_tasks_in_parallel_for_distinct_accounts(tmp_path: 
     assert blocked is None
 
 
+def test_store_does_not_auto_consume_while_legacy_generic_task_is_running(tmp_path: Path):
+    """升级前领取且没有账号键的 running 任务应阻断新版 generic 自动消费。"""
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_request(job_id="legacy-running"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "legacy",
+    )
+    store.enqueue(
+        request=_request(job_id="new-queued"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "new",
+    )
+    store.claim_next(
+        queue_scope="seller_sprite",
+        worker_key="legacy-worker",
+        assigned_account="legacy-account",
+    )
+
+    claimed = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="new-account-key",
+        assigned_account="new-account",
+        worker_key="new-worker",
+    )
+
+    assert claimed is None
+    assert store.get_status("new-queued")["state"] == "queued"
+
+
 def test_store_generic_claim_skips_listing_analysis_tasks(tmp_path: Path):
     from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
 
@@ -168,6 +200,9 @@ def test_store_generic_claim_skips_listing_analysis_tasks(tmp_path: Path):
         queue_scope="seller_sprite",
         root_dir=tmp_path / "generic-job",
     )
+
+    assert store.get_status("listing-job")["position"] == 1
+    assert store.get_status("generic-job")["position"] == 1
 
     generic = store.claim_next_generic_for_account(
         queue_scope="seller_sprite",
@@ -231,6 +266,59 @@ def test_store_rejects_late_finish_after_failover_generation_changes(tmp_path: P
     assert late_finish is False
     assert current_finish is True
     assert store.get_status("job-failover")["row_count"] == 2
+
+
+def test_store_rejects_stale_generation_without_updating_mcp_terminal_state(tmp_path: Path):
+    """旧代际不得单独覆盖 MCP 终态，队列与 MCP 写回必须同成同败。"""
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    request = _request(job_id="job-mcp-cas")
+    store.enqueue_owned_mcp_run(
+        request=request,
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "job-mcp-cas",
+        user_email="user@example.com",
+    )
+    claimed = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key-1",
+        assigned_account="account-1",
+        worker_key="slot-1",
+    )
+    replacement = store.reassign_task_for_failover(
+        job_id="job-mcp-cas",
+        current_account_key="account-key-1",
+        current_generation=claimed["assignment_generation"],
+        replacement_account_key="account-key-2",
+        replacement_account="account-2",
+        worker_key="slot-1",
+        error_code="SELLER_SPRITE_AUTHENTICATION_ERROR",
+        retry_reason="account_authentication_failed",
+    )
+
+    stale_committed = store.finish_task_and_mcp_run_if_current(
+        job_id="job-mcp-cas",
+        account_key="account-key-1",
+        assignment_generation=claimed["assignment_generation"],
+        result_path=str(tmp_path / "stale.json"),
+        row_count=1,
+        export_payload=None,
+        mcp_export_payload={"format": "json", "filename": "stale.json"},
+    )
+    current_committed = store.finish_task_and_mcp_run_if_current(
+        job_id="job-mcp-cas",
+        account_key="account-key-2",
+        assignment_generation=replacement["assignment_generation"],
+        result_path=str(tmp_path / "current.json"),
+        row_count=2,
+        export_payload=None,
+        mcp_export_payload={"format": "json", "filename": "current.json"},
+    )
+
+    assert stale_committed is False
+    assert current_committed is True
+    assert store.get_mcp_run("job-mcp-cas")["result_export_filename"] == "current.json"
 
 
 def test_store_records_queryable_account_login_failure_event(tmp_path: Path):

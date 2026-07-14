@@ -7,6 +7,7 @@ import hashlib
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 
 
+# 并发上限固定为四，避免账号接口返回过多账号时无界创建浏览器会话。
 DEFAULT_MAX_WORKING_ACCOUNTS = 4
 
 
@@ -16,6 +17,11 @@ def seller_sprite_account_key(account: SellerSpriteAccount) -> str:
         f"seller_sprite:{account.name.strip().casefold()}:{account.username.strip().casefold()}"
     )
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def seller_sprite_account_attempt_key(account: SellerSpriteAccount) -> tuple[str, str]:
+    """返回包含凭证版本的尝试键，使同身份新密码可重新参与接替。"""
+    return seller_sprite_account_key(account), _credential_version(account)
 
 
 def mask_seller_sprite_username(username: str) -> str:
@@ -102,11 +108,20 @@ class SellerSpriteAccountPool:
         self._working = [item for item in self._working if seller_sprite_account_key(item) != key]
         self._standby = [item for item in self._standby if seller_sprite_account_key(item) != key]
 
-    def take_standby(self, *, attempted_account_keys: set[str]) -> SellerSpriteAccount | None:
-        """按接口顺序取出尚未被当前任务尝试的冷备用账号。"""
+    def take_standby(
+        self,
+        *,
+        attempted_accounts: set[SellerSpriteAccount],
+    ) -> SellerSpriteAccount | None:
+        """按接口顺序取出当前凭证版本尚未被任务尝试的冷备用账号。"""
+        attempted_versions = {
+            seller_sprite_account_attempt_key(account) for account in attempted_accounts
+        }
         for index, account in enumerate(self._standby):
-            key = seller_sprite_account_key(account)
-            if key in attempted_account_keys or self._is_unavailable(account):
+            if (
+                seller_sprite_account_attempt_key(account) in attempted_versions
+                or self._is_unavailable(account)
+            ):
                 continue
             replacement = self._standby.pop(index)
             self._working.append(replacement)
@@ -117,7 +132,7 @@ class SellerSpriteAccountPool:
         """按接口顺序使用可用备用账号补足当前目标工作槽。"""
         activated: list[SellerSpriteAccount] = []
         while len(self._working) < self._target_working_count:
-            replacement = self.take_standby(attempted_account_keys=set())
+            replacement = self.take_standby(attempted_accounts=set())
             if replacement is None:
                 break
             activated.append(replacement)

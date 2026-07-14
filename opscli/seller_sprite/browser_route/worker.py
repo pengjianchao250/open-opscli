@@ -23,7 +23,11 @@ from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.config import SellerSpriteSettings
-from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
+from opscli.seller_sprite.domain.exceptions import (
+    SellerSpriteApiError,
+    SellerSpriteAuthenticationError,
+    SellerSpriteConfigError,
+)
 from opscli.seller_sprite.browser_route.ocr import create_captcha_ocr_provider
 
 
@@ -585,7 +589,9 @@ class SellerSpriteBrowserRouteWorker:
         logged_in = await _detect_logged_in(page)
         _record_timing(timings, request, "detect_logged_in.final", stage_started_at, logged_in=logged_in)
         if not logged_in:
-            raise SellerSpriteConfigError("卖家精灵浏览器登录失败，请检查账号或浏览器 profile 登录状态")
+            raise SellerSpriteAuthenticationError(
+                "卖家精灵浏览器登录失败，请检查账号或浏览器 profile 登录状态"
+            )
         return {
             "mode": "browser-route",
             "profile_dir": str(_profile_dir(self.settings, request.account)),

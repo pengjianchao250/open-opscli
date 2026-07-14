@@ -1,4 +1,4 @@
-"""卖家精灵单账号任务调度器。"""
+"""卖家精灵多账号并行任务调度器与冷备用接替编排。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
 from opscli.seller_sprite.domain.exceptions import (
     SellerSpriteAccountUnavailableError,
     SellerSpriteApiError,
-    SellerSpriteConfigError,
+    SellerSpriteAuthenticationError,
 )
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
 from opscli.seller_sprite.services.account_events import SellerSpriteAccountEventRecorder
@@ -148,9 +148,12 @@ class SellerSpriteTaskScheduler:
         provider = self._ensure_account_provider()
         try:
             accounts = provider.list_accounts()
-        except Exception:
+        except Exception as exc:
             # 首次账号接口失败时保持任务 queued，由 supervisor 后续继续刷新。
-            logger.exception("卖家精灵账号接口首次加载失败，任务保持排队")
+            self._event_recorder.record_account_fetch_failure(
+                error=exc,
+                next_action="keep_queued_until_next_ttl_refresh",
+            )
             accounts = []
         self._account_pool.load(accounts)
         self._last_account_refresh_at = time.monotonic()
@@ -185,7 +188,7 @@ class SellerSpriteTaskScheduler:
             self._remove_finished_generic_workers()
             refresh_interval = max(1.0, float(self.settings.account_cache_ttl_seconds))
             refresh_due = time.monotonic() - self._last_account_refresh_at >= refresh_interval
-            if self.generic_worker_count == 0 or refresh_due:
+            if refresh_due:
                 await self._refresh_account_pool()
             await asyncio.sleep(self.poll_interval_seconds)
 
@@ -197,7 +200,15 @@ class SellerSpriteTaskScheduler:
             if task.done()
         ]
         for worker_key in finished:
-            self._generic_worker_tasks.pop(worker_key, None)
+            task = self._generic_worker_tasks.pop(worker_key, None)
+            if task is not None and not task.cancelled():
+                error = task.exception()
+                if error is not None:
+                    logger.error(
+                        "卖家精灵账号工作槽异常退出：worker_key=%s",
+                        worker_key,
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
             self._generic_worker_accounts.pop(worker_key, None)
 
     async def _refresh_account_pool(self) -> None:
@@ -205,16 +216,18 @@ class SellerSpriteTaskScheduler:
         provider = self._ensure_account_provider()
         try:
             accounts = provider.list_accounts(refresh=True)
-        except Exception:
-            logger.warning("卖家精灵账号接口刷新失败，任务继续保持排队", exc_info=True)
+        except Exception as exc:
+            self._event_recorder.record_account_fetch_failure(
+                error=exc,
+                next_action="keep_queued_until_next_ttl_refresh",
+            )
             self._last_account_refresh_at = time.monotonic()
             return
         self._last_account_refresh_at = time.monotonic()
-        if not accounts:
-            return
-        self._account_pool.refresh(accounts)
-        self._account_pool.activate_standby_until_target()
-        self._start_generic_workers()
+        async with self._pool_lock:
+            self._account_pool.refresh(accounts)
+            self._account_pool.activate_standby_until_target()
+            self._start_generic_workers()
         if self._listing_worker_task is None or self._listing_worker_task.done():
             self._start_listing_worker()
 
@@ -222,6 +235,9 @@ class SellerSpriteTaskScheduler:
         """使用独立账号会话串行消费通用任务，认证失败时有限接替。"""
         account = initial_account
         while not self._stop_requested:
+            if not self._is_working_account(account):
+                await self._close_account_session(account)
+                return
             claimed = self.store.claim_next_generic_for_account(
                 queue_scope=QUEUE_SCOPE,
                 account_key=seller_sprite_account_key(account),
@@ -250,14 +266,20 @@ class SellerSpriteTaskScheduler:
     ) -> SellerSpriteAccount | None:
         """执行一条通用任务，并在明确认证失败时改绑冷备用账号。"""
         job_id = str(claimed["job_id"])
-        attempted_account_keys: set[str] = set()
+        attempted_accounts: set[SellerSpriteAccount] = set()
         status = claimed
         while True:
             account_key = seller_sprite_account_key(account)
-            attempted_account_keys.add(account_key)
+            attempted_accounts.add(account)
             generation = int(status["assignment_generation"])
             failover_count = int(status["failover_count"])
             request = self.store.get_request(job_id)
+            attempt_dir = (
+                Path(str(status["root_dir"]))
+                / "attempts"
+                / f"generation-{generation}"
+            )
+            request = replace(request, attempt_output_dir=str(attempt_dir))
             context = self.store.get_task_context(job_id)
             has_mcp_run = self._has_mcp_run(job_id)
             manager = self.manager_factory(
@@ -272,16 +294,15 @@ class SellerSpriteTaskScheduler:
                     self.store.mark_mcp_run_running(job_id)
                 result = await manager.run(request)
                 export_payload = self._build_mcp_export_payload(request, result)
-                committed = self.store.finish_task_if_current(
+                self.store.finish_task_and_mcp_run_if_current(
                     job_id=job_id,
                     account_key=account_key,
                     assignment_generation=generation,
                     result_path=result.result_path,
                     row_count=result.row_count,
                     export_payload=result.export.to_dict() if result.export else None,
+                    mcp_export_payload=export_payload if has_mcp_run else None,
                 )
-                if committed and has_mcp_run:
-                    self.store.finish_mcp_run_success(job_id, result.row_count, export_payload)
                 return account
             except Exception as exc:
                 if not _is_account_authentication_failure(exc):
@@ -309,7 +330,7 @@ class SellerSpriteTaskScheduler:
                 )
                 replacement = await self._select_replacement_account(
                     failed_account=account,
-                    attempted_account_keys=attempted_account_keys,
+                    attempted_accounts=attempted_accounts,
                 )
                 if replacement is None:
                     unavailable = SellerSpriteAccountUnavailableError(
@@ -344,7 +365,7 @@ class SellerSpriteTaskScheduler:
         self,
         *,
         failed_account: SellerSpriteAccount,
-        attempted_account_keys: set[str],
+        attempted_accounts: set[SellerSpriteAccount],
     ) -> SellerSpriteAccount | None:
         """刷新账号接口后按原顺序选择未被当前任务尝试的冷备用。"""
         async with self._pool_lock:
@@ -352,14 +373,25 @@ class SellerSpriteTaskScheduler:
             provider = self._ensure_account_provider()
             try:
                 refreshed = provider.list_accounts(refresh=True)
-            except Exception:
-                logger.warning("卖家精灵账号失效后的账号接口刷新失败", exc_info=True)
+            except Exception as exc:
+                self._event_recorder.record_account_fetch_failure(
+                    error=exc,
+                    next_action="try_cached_standby",
+                )
                 refreshed = []
             if refreshed:
                 self._account_pool.refresh(refreshed)
             return self._account_pool.take_standby(
-                attempted_account_keys=attempted_account_keys
+                attempted_accounts=attempted_accounts
             )
+
+    def _is_working_account(self, account: SellerSpriteAccount) -> bool:
+        """判断账号当前是否仍占用工作槽；缩容账号会在任务边界退出。"""
+        account_key = seller_sprite_account_key(account)
+        return any(
+            seller_sprite_account_key(current) == account_key
+            for current in self._account_pool.working_accounts
+        )
 
     async def _fail_generic_job(
         self,
@@ -372,14 +404,13 @@ class SellerSpriteTaskScheduler:
     ) -> None:
         """使用当前执行令牌标记通用任务失败并同步 MCP 状态。"""
         error_payload = error_to_dict(error)
-        committed = self.store.fail_task_if_current(
+        self.store.fail_task_and_mcp_run_if_current(
             job_id=job_id,
             account_key=account_key,
             assignment_generation=generation,
             error_payload=error_payload,
+            update_mcp_run=has_mcp_run,
         )
-        if committed and has_mcp_run:
-            self.store.finish_mcp_run_failed(job_id, error_payload)
 
     async def _run_listing_worker(self) -> None:
         """串行消费 Listing Analysis，不参与通用账号池 failover。"""
@@ -588,7 +619,7 @@ class _FixedSellerSpriteAccountProvider:
 
 def _is_account_authentication_failure(exc: Exception) -> bool:
     """仅识别可确认未通过认证、允许安全换账号重放的错误。"""
-    if isinstance(exc, SellerSpriteConfigError):
+    if isinstance(exc, SellerSpriteAuthenticationError):
         return True
     if not isinstance(exc, SellerSpriteApiError):
         return False

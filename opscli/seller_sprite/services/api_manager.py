@@ -359,6 +359,11 @@ class SellerSpriteApiManager:
         return merged
 
     def _build_root_dir(self, request: SellerSpriteScenarioRequest, job_id: str) -> Path:
+        if request.attempt_output_dir:
+            attempt_dir = Path(request.attempt_output_dir).expanduser()
+            if not attempt_dir.is_absolute():
+                attempt_dir = Path.cwd() / attempt_dir
+            return attempt_dir.resolve()
         base_dir = Path(request.output_dir).expanduser() if request.output_dir else self.settings.output_dir
         if not base_dir.is_absolute():
             base_dir = Path.cwd() / base_dir

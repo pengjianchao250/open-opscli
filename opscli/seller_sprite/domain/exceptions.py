@@ -61,3 +61,9 @@ class SellerSpriteApiError(SellerSpriteError):
         if self.response_excerpt:
             error["response_excerpt"] = self.response_excerpt
         return error
+
+
+class SellerSpriteAuthenticationError(SellerSpriteApiError):
+    """卖家精灵账号凭证未通过登录认证。"""
+
+    code = "SELLER_SPRITE_AUTHENTICATION_ERROR"
