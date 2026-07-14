@@ -211,8 +211,11 @@ def test_fallback_data_dir_takes_over_readonly_mount(tmp_path: Path, monkeypatch
     _write_ready_metadata(fallback)
     monkeypatch.chdir(workdir)
     monkeypatch.delenv("OPSCLI_SKILLS_DIR", raising=False)
-    # 升级"成功"（写入了 cwd 位置），但主目录（只读挂载）不变
-    monkeypatch.setattr(query_plan, "_try_metadata_upgrade", lambda **_kwargs: True)
+    # 新流程 fallback 前置：就绪目录已存在时应直接接管、不再发起升级
+    def _must_not_upgrade(**_kwargs):
+        raise AssertionError("fallback 目录已就绪时不应再发起自动升级")
+
+    monkeypatch.setattr(query_plan, "_try_metadata_upgrade", _must_not_upgrade)
 
     result = query_plan.build_model_query_plan(
         "SP 广告数据集 ACOS",
@@ -226,23 +229,25 @@ def test_fallback_data_dir_takes_over_readonly_mount(tmp_path: Path, monkeypatch
     assert result["model_view"]["dataset_name_zh"] == "SP广告数据集"
 
 
-def test_auto_upgrade_retries_once_then_succeeds(tmp_path: Path, monkeypatch):
-    """元数据未就绪时应先自动升级一次；升级把元数据修好后继续正常规划。"""
+def test_auto_upgrade_completed_within_grace_continues_planning(tmp_path: Path, monkeypatch):
+    """升级在前台宽限内完成（completed）：同一次调用直接继续规划。"""
     data_dir = tmp_path / "data"
     _write_ready_metadata(data_dir)
     ready_version = (data_dir / "VERSION.json").read_text(encoding="utf-8")
     (data_dir / "VERSION.json").write_text(
-        json.dumps({"name": "ops-dataset-query", "version": "1.2.4", "data_state": "placeholder"}),
+        json.dumps({"name": "ops-dataset-query", "version": "1.3.3", "data_state": "placeholder"}),
         encoding="utf-8",
     )
     calls = []
 
     def fake_upgrade(**_kwargs):
-        # 模拟 opscli skills upgrade 成功：把 VERSION.json 写回就绪形状
+        # 模拟 opscli skills upgrade 在宽限内完成：把 VERSION.json 写回就绪形状
         calls.append(1)
         (data_dir / "VERSION.json").write_text(ready_version, encoding="utf-8")
-        return True
+        return "completed"
 
+    # 隔离环境泄漏：本机可能存在真实的 opscli 安装目录，禁用 fallback 候选
+    monkeypatch.setattr(query_plan, "_fallback_ready_data_dir", lambda _primary: None)
     monkeypatch.setattr(query_plan, "_try_metadata_upgrade", fake_upgrade)
 
     result = query_plan.build_model_query_plan(
@@ -254,6 +259,30 @@ def test_auto_upgrade_retries_once_then_succeeds(tmp_path: Path, monkeypatch):
     assert calls == [1]
     assert result["status"] == "planned"
     assert result["metadata_source"] == "skill_local"
+
+
+def test_auto_upgrade_in_progress_returns_wait_and_rerun_contract(tmp_path: Path, monkeypatch):
+    """升级超出宽限转后台续跑（in_progress）：立即返回等待重跑指引，守住 30 秒窗口。"""
+    data_dir = tmp_path / "data"
+    _write_ready_metadata(data_dir)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "1.3.3", "data_state": "placeholder"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(query_plan, "_fallback_ready_data_dir", lambda _primary: None)
+    monkeypatch.setattr(query_plan, "_try_metadata_upgrade", lambda **_kwargs: "in_progress")
+
+    result = query_plan.build_model_query_plan(
+        "SP 广告数据集 ACOS",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+    )
+
+    assert result["status"] == "blocked"
+    assert result["model_view"]["recovery_state"] == "refresh_in_progress"
+    # 恢复命令是「sleep + 原样重跑」合并的一条命令，模型无需自行升级
+    assert result["model_view"]["recovery_command"].startswith("sleep 25 && ")
+    assert "后台" in result["model_view"]["recovery_hint_zh"]
 
 
 def test_main_error_json_carries_next_action(monkeypatch, capsys):

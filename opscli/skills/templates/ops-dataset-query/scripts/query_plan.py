@@ -404,38 +404,113 @@ def _fallback_ready_data_dir(primary: Path) -> Path | None:
     return None
 
 
-def _try_metadata_upgrade(*, timeout_seconds: float = 60.0) -> bool:
-    """blocked 前的自动升级兜底：调用 opscli skills upgrade 拉取当前账号元数据。
+# 自动升级前台宽限秒数：后端快时（实测 3~10s）一次调用内直接完成；
+# 超出宽限则转后台续跑并立即返回，保证单次调用恒在平台 30 秒命令窗口内
+_UPGRADE_GRACE_SECONDS = 10.0
 
-    与 core.try_upgrade 行为一致，但带超时护栏：沙箱内 opscli 未登录/网络异常时
-    快速失败并回落到刷新规划器，绝不阻塞规划主线；诊断信息只走 stderr，
-    保持 stdout 的规划器输出纯净。
-    """
+
+def _upgrade_marker_path(data_dir: Path) -> Path:
+    """后台升级进程的 pid 标记文件路径（按数据目录区分，落在系统临时目录）。"""
+    import hashlib
+    import tempfile
+
+    digest = hashlib.md5(str(data_dir.resolve()).encode("utf-8")).hexdigest()[:12]
+    return Path(tempfile.gettempdir()) / f"opsdq_upgrade_{digest}.pid"
+
+
+def _pid_alive(pid: int) -> bool:
+    """判断进程是否存活（0 号信号探测；权限异常按存活处理，宁可多等不误判）。"""
     try:
-        result = subprocess.run(
-            ["opscli", "skills", "upgrade", "ops-dataset-query", "--force"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout_seconds,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        print(f"[query_plan] 自动升级未完成：{error}", file=sys.stderr)
+        os.kill(pid, 0)
+    except ProcessLookupError:
         return False
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()[:200]
-        print(f"[query_plan] 自动升级失败：{detail}", file=sys.stderr)
-        return False
-    print("[query_plan] 自动升级成功，使用刷新后的元数据继续规划", file=sys.stderr)
+    except (PermissionError, OSError):
+        return True
     return True
 
 
-def _refresh_contract(version: dict) -> dict:
-    """data_state 未就绪时的刷新规划器：要求先升级当前账号元数据。
+def _try_metadata_upgrade(*, data_dir: Path, grace_seconds: float = _UPGRADE_GRACE_SECONDS) -> str:
+    """blocked 前的自动升级：前台短宽限 + 超时转后台续跑（30 秒窗口适配设计）。
 
-    规划器必须自带恢复命令原文：e2e 实测打回规划器只有状态码时，
+    为什么这样设计（四轮 e2e 实测结论）：平台单条命令的有效等待硬顶约 30 秒
+    （PTY 钳制，模型自设更大超时无效），而升级网络下载常需 30~60 秒——同步等待
+    必然被窗口切断（曾实测把升级进程杀死在写文件中途，留下半写入数据）。
+    改为：启动升级子进程 → 前台最多等 grace_seconds → 未完成则不杀进程、
+    记录 pid 标记后立即返回，升级在后台继续；下次调用凭标记与就绪检查接管结果。
+
+    Returns:
+        "completed"    —— 升级已完成（本次调用可直接继续规划）；
+        "in_progress"  —— 升级仍在后台进行（本次返回等待重跑提示）；
+        "failed"       —— 升级进程退出且失败（返回手动恢复指引）；
+        "unavailable"  —— opscli 不可用（返回手动恢复指引）。
+    """
+    marker = _upgrade_marker_path(data_dir)
+    # 前一次调用遗留的后台升级：存活则继续等它，消亡则清理标记按新一轮处理
+    try:
+        if marker.exists():
+            previous_pid = int(marker.read_text(encoding="utf-8").strip() or "0")
+            if previous_pid and _pid_alive(previous_pid):
+                print(f"[query_plan] 后台元数据刷新进行中（pid={previous_pid}）", file=sys.stderr)
+                return "in_progress"
+            marker.unlink(missing_ok=True)
+    except (OSError, ValueError):
+        marker.unlink(missing_ok=True)
+
+    try:
+        # start_new_session：命令窗口结束后升级进程仍可在沙箱内继续运行
+        process = subprocess.Popen(
+            ["opscli", "skills", "upgrade", "ops-dataset-query", "--force"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as error:
+        print(f"[query_plan] 自动升级不可用：{error}", file=sys.stderr)
+        return "unavailable"
+    try:
+        returncode = process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            marker.write_text(str(process.pid), encoding="utf-8")
+        except OSError:
+            pass
+        print(
+            f"[query_plan] 元数据刷新已转后台续跑（pid={process.pid}），约 30 秒后重跑本命令即可",
+            file=sys.stderr,
+        )
+        return "in_progress"
+    if returncode == 0:
+        print("[query_plan] 自动升级完成，使用刷新后的元数据继续规划", file=sys.stderr)
+        return "completed"
+    print(f"[query_plan] 自动升级失败（exit={returncode}）", file=sys.stderr)
+    return "failed"
+
+
+# recovery_state → (面向模型的中文恢复指引, 恢复命令)。
+# in_progress/started 场景的恢复命令就是「等待后原样重跑」——用 sleep 前缀把
+# 等待与重跑合并进一条命令，恰好贴着 30 秒窗口用满等待时间
+_REFRESH_RECOVERY = {
+    "refresh_in_progress": (
+        "元数据刷新已在后台进行（无需任何升级动作）：等待约 25 秒后原样重跑本规划命令即可，"
+        "可直接执行 recovery_command 一步完成等待与重跑；连续 3 次仍未就绪才按 "
+        "references/feedback-guide.md 提交反馈并停止。",
+        'sleep 25 && python3 scripts/query_plan.py "<原查询原文>"',
+    ),
+    "refresh_failed": (
+        "自动刷新失败：手动执行 recovery_command 刷新后重跑本规划命令；"
+        "仍失败时向用户如实说明元数据异常，并按 references/feedback-guide.md 提交一次反馈。",
+        METADATA_UPGRADE_COMMAND,
+    ),
+}
+
+
+def _refresh_contract(version: dict, recovery_state: str = "refresh_failed") -> dict:
+    """data_state 未就绪时的刷新规划器输出：自带恢复状态与可执行恢复命令。
+
+    规划器必须自带恢复命令原文：e2e 实测打回输出只有状态码时，
     Agent 无一按指引升级、全部弃管线退回旧探查流程。
     """
+    hint, command = _REFRESH_RECOVERY.get(recovery_state, _REFRESH_RECOVERY["refresh_failed"])
     return {
         "contract": INTERNAL_CONTRACT,
         "query_execution_allowed": False,
@@ -445,11 +520,9 @@ def _refresh_contract(version: dict) -> dict:
         "selected_dataset_guidance": None,
         "requested_platform_scope": None,
         "next_action": "refresh_authorized_metadata",
-        "recovery_command": METADATA_UPGRADE_COMMAND,
-        "recovery_hint_zh": (
-            "当前账号元数据未就绪：先执行 recovery_command 刷新，再重新运行本规划命令；"
-            "刷新仍失败时向用户如实说明元数据异常，并按 references/feedback-guide.md 提交一次反馈。"
-        ),
+        "recovery_state": recovery_state,
+        "recovery_command": command,
+        "recovery_hint_zh": hint,
     }
 
 
@@ -505,23 +578,37 @@ def build_query_plan(
     data_dir = Path(data_dir)
     version = _load_json_object(data_dir / "VERSION.json", "invalid_version_file")
     ready, metadata_source = _data_state_ready(version, data_dir)
+    upgrade_performed = False
     if not ready and auto_upgrade:
-        # blocked 之前先自动升级一次：升级成功则重读元数据继续规划，
-        # 把「首查必失败一轮」压缩为入口内部的一次自愈
-        if _try_metadata_upgrade():
+        # 先看后台升级是否已把数据写到 opscli 安装位置（上次调用转后台续跑的情形），
+        # 就绪即接管，无需再等；自愈动作统一受 auto_upgrade 开关约束
+        fallback_dir = _fallback_ready_data_dir(data_dir)
+        if fallback_dir is not None:
+            data_dir = fallback_dir
             version = _load_json_object(data_dir / "VERSION.json", "invalid_version_file")
             ready, metadata_source = _data_state_ready(version, data_dir)
+            metadata_source = f"{metadata_source}+fallback_dir"
         if not ready:
-            # 升级也救不回主目录时（如只读挂载快照），接管 opscli 实际安装位置的就绪数据；
-            # 自愈动作统一受 auto_upgrade 开关约束（--no-auto-upgrade 时保持纯只读判定）
-            fallback_dir = _fallback_ready_data_dir(data_dir)
-            if fallback_dir is not None:
-                data_dir = fallback_dir
+            # 短宽限自动升级：完成→继续规划；后台续跑→立即返回等待重跑提示，
+            # 保证本次调用恒在平台 30 秒命令窗口内返回
+            state = _try_metadata_upgrade(data_dir=data_dir)
+            upgrade_performed = True
+            if state == "in_progress":
+                return _refresh_contract(version, "refresh_in_progress")
+            if state == "completed":
                 version = _load_json_object(data_dir / "VERSION.json", "invalid_version_file")
                 ready, metadata_source = _data_state_ready(version, data_dir)
-                metadata_source = f"{metadata_source}+fallback_dir"
+                if not ready:
+                    # 升级写入了 opscli 自身目录而主目录是只读挂载：接管就绪目录
+                    fallback_dir = _fallback_ready_data_dir(data_dir)
+                    if fallback_dir is not None:
+                        data_dir = fallback_dir
+                        version = _load_json_object(data_dir / "VERSION.json", "invalid_version_file")
+                        ready, metadata_source = _data_state_ready(version, data_dir)
+                        metadata_source = f"{metadata_source}+fallback_dir"
+            # failed / unavailable 落到下方统一返回手动恢复指引
     if not ready:
-        return _refresh_contract(version)
+        return _refresh_contract(version, "refresh_failed")
 
     raw_rules = _load_json_object(Path(rules_path), "invalid_rules_file")
     rules = schema.validate_rules(raw_rules)
@@ -550,6 +637,8 @@ def build_query_plan(
         "data_state": "ready",
         # 元数据来源标记（skill_local / published_bundle / *+fallback_dir），供审计与排错区分形状
         "metadata_source": metadata_source,
+        # 本次调用是否执行过自动升级：为守住 30 秒命令窗口，升级与自动枚举不在同一次调用内叠加
+        "upgrade_performed_this_call": upgrade_performed,
         # 实际生效的数据目录：fallback 接管后与入参不同，投影层读取字段标签须以此为准
         "effective_data_dir": str(data_dir),
         "metadata_version": str(version.get("version", "")),
@@ -1017,6 +1106,8 @@ def build_model_contract(
     if internal.get("recovery_command"):
         model_view["recovery_command"] = str(internal["recovery_command"])
         model_view["recovery_hint_zh"] = str(internal.get("recovery_hint_zh", ""))
+        if internal.get("recovery_state"):
+            model_view["recovery_state"] = str(internal["recovery_state"])
 
     execution_dimensions = _execution_fields(dimensions + recommended_dims)
     execution_metrics = _execution_fields(metrics + recommended_mets)
@@ -1140,9 +1231,12 @@ def build_model_query_plan(
         authorized_field_labels=authorized_fields,
         dataset_names_zh=dataset_names_zh,
     )
-    # P0-3 二段收敛：待权限枚举时自动执行枚举查询并回灌重规划
+    # P0-3 二段收敛：待权限枚举时自动执行枚举查询并回灌重规划。
+    # 本次调用已执行过自动升级时跳过（升级宽限+枚举叠加会撑破 30 秒命令窗口，
+    # 此时输出内嵌枚举命令走手动路径，各调用均可快速返回）
     if (
         auto_enum
+        and not internal.get("upgrade_performed_this_call")
         and not authorized_platform_values
         and contract["model_view"]["next_action"] == "query_platform_permission_enum"
     ):
@@ -1170,7 +1264,7 @@ def build_model_query_plan(
     return contract
 
 
-def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: float = 45.0) -> list[str]:
+def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: float = 20.0) -> list[str]:
     """自动执行平台权限枚举查询，返回服务端实际平台值列表（P0-3）。
 
     任何失败（opscli 不可用/未登录/超时/形状不符）都返回空列表，

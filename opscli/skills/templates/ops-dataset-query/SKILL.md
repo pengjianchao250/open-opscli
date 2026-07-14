@@ -4,10 +4,11 @@ description: >
   运营数据查询取数 Skill。用于按当前账号可见的数据集查询销售、库存、广告、物流、
   流量等数据，支持趋势、环比同比、ACOS/ROAS 和导出。
   加载本 Skill 后必须先读取本目录 SKILL.md 并遵循其流程：CLI 取数的唯一入口是
-  规划器 python3 scripts/query_plan.py "<用户请求>"（先拿规划结果再构造正式命令，
-  首次运行须设 ≥120 秒执行超时，超时则加大超时原样重试一次）；
-  禁止绕过规划器直接扫描 data/ 目录、读脚本源码或凭记忆手拼查询参数。
-version: 1.3.2
+  规划器 python3 scripts/query_plan.py "<用户请求>"（先拿规划结果再构造正式命令；
+  规划器按 30 秒命令窗口设计，返回 refresh_in_progress 时按其 recovery_command
+  等待重跑即可，禁止自行升级）；禁止绕过规划器直接扫描 data/ 目录、
+  读脚本源码或凭记忆手拼查询参数。
+version: 1.3.3
 ---
 
 # ops-dataset-query
@@ -35,7 +36,7 @@ version: 1.3.2
 python3 scripts/query_plan.py "$USER_REQUEST"
 ```
 
-**执行超时预算（防误判超时）**：首次运行规划器必须把命令执行超时设为 **不少于 120 秒**——规划器内部含一次自动升级（≤60s）与自动枚举（≤45s），默认 60 秒超时会把正常自愈误杀。命令超时不是失败：**原样重试一次并把超时加大到 180 秒**；规划器幂等，首次自愈完成后二次调用通常 1~2 秒返回。禁止因超时改走旁路探查。
+**命令窗口与等待（30 秒窗口设计）**：平台单条命令的有效等待上限约 30 秒（自行设置更大超时无效）。规划器内部已按此窗口设计——任意单次调用确定性返回：数据就绪时（常态）1~3 秒；需要刷新元数据时前台最多等 10 秒，未完成则**转后台续跑**并返回 `status=blocked, recovery_state=refresh_in_progress`，此时**直接执行其 `recovery_command`**（形如 `sleep 25 && python3 scripts/query_plan.py "<原文>"`，等待与重跑合并为一条命令）；连续 3 次仍未就绪才提交反馈并停止。禁止自行执行任何升级动作、禁止因等待改走旁路探查。若命令仍偶发窗口超时：原样重跑一次即可（规划器幂等）。
 
 用户请求含引号等特殊字符时改用 `--query-file <文件|->`（stdin）。用户明确指定字段时追加重复的 `--field "$FIELD"`。只处理默认 `model_view`、`answer_contract` 和 `execution_ref`；不得读取内部规划器补充回答：
 
@@ -64,7 +65,7 @@ python3 scripts/query_plan.py "$USER_REQUEST"
 python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON"
 ```
 
-   执行器命令的执行超时设为 **不少于 180 秒**（正式查询可能较慢，排序兜底还可能放大窗口重查一次）；超时同样原样重试一次并加大超时。执行器返回 `precheck_failed` 时按 `next_action_zh` 修正参数，禁止绕过执行器直连；`disclosures.order_fallback` 存在时必须在结论中披露「服务端排序未生效、已本地兜底」。MCP-only 用正式 `query_simple`。复杂图表和 Excel 导出才按 `references/chart-excel-guide.md` 走图表入口。
+   正式查询偶尔较慢（排序兜底还可能放大窗口重查一次），命令窗口超时不是失败：**原样重跑一次**即可（重复执行只是重发同一查询，无副作用）。执行器返回 `precheck_failed` 时按 `next_action_zh` 修正参数，禁止绕过执行器直连；`disclosures.order_fallback` 存在时必须在结论中披露「服务端排序未生效、已本地兜底」。MCP-only 用正式 `query_simple`。复杂图表和 Excel 导出才按 `references/chart-excel-guide.md` 走图表入口。
 6. 保留用户要求的明细和全量范围。限制展示时声明排序、截断数量和总行数（执行器 `disclosures` 已给出），不把局部结果说成全量。
 
 ## 结果分析
