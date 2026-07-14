@@ -145,7 +145,10 @@ def test_bi_report_data_client_fetches_all_sources_and_filters_by_asin():
     assert post_calls[0]["url"] == "https://ops.api.qa.aukeyit.com/api/v1/sp-search-term/query"
     assert post_calls[0]["json"]["asin"] == "B0TEST1234"
     assert get_calls[-1]["url"] == "https://ops.api.qa.aukeyit.com/dataMetrics/v1/asin-report-files/crawler-details"
-    assert get_calls[-1]["params"] == {"asins": "B0TEST1234,B0OTHER123"}
+    assert get_calls[-1]["params"] == {
+        "asins": "B0TEST1234,B0OTHER123",
+        "country": "US",
+    }
     assert asin_bundle["sources"]["listing_basic"]["rows"][0]["关键词搜索"] == "storage bed frame search terms"
     assert asin_bundle["sources"]["listing_basic"]["rows"][0]["generic_keyword.value"] == "storage bed frame search terms"
     assert asin_bundle["sources"]["sales_traffic"]["rows"] == [{"asin": "B0TEST1234", "salesAmount": 123.45}]
@@ -157,6 +160,106 @@ def test_bi_report_data_client_fetches_all_sources_and_filters_by_asin():
     assert asin_bundle["sources"]["crawler_details"]["rows"] == [
         {"asin": "B0TEST1234", "商品标题": "Crawler Endpoint Title"}
     ]
+
+
+def test_crawler_details_groups_asins_by_country_and_merges_rows():
+    calls = []
+    lock = threading.Lock()
+
+    def http_get(url, **kwargs):
+        with lock:
+            calls.append(dict(kwargs["params"]))
+        country = kwargs["params"]["country"]
+        rows = [
+            {"asin": asin, "country": country}
+            for asin in kwargs["params"]["asins"].split(",")
+        ]
+        return httpx.Response(200, json={"code": 0, "data": {"rows": rows}})
+
+    client = AsinBiReportDataClient(
+        auth_client=DummyAuthClient(),
+        ops_url="https://ops.example.com/api",
+        http_get=http_get,
+    )
+
+    bundle = client.fetch(
+        asins=["B0TEST1234", "B0TEST5678", "B0TEST9999"],
+        source_keys=["crawler_details"],
+        site_by_asin={"B0TEST5678": "CA", "B0TEST9999": "美国"},
+        default_site="US",
+    )
+
+    source = bundle["sources"]["crawler_details"]
+    calls_by_country = {call["country"]: call for call in calls}
+    assert calls_by_country == {
+        "US": {"asins": "B0TEST1234,B0TEST9999", "country": "US"},
+        "CA": {"asins": "B0TEST5678", "country": "CA"},
+    }
+    assert source["status"] == "success"
+    assert [row["asin"] for row in source["rows"]] == [
+        "B0TEST1234",
+        "B0TEST9999",
+        "B0TEST5678",
+    ]
+    assert set(source["raw"]) == {"US", "CA"}
+    assert source["country_errors"] == {}
+
+
+def test_crawler_details_keeps_successful_country_when_another_country_fails():
+    def http_get(url, **kwargs):
+        country = kwargs["params"]["country"]
+        if country == "CA":
+            return httpx.Response(500, json={"message": "CA unavailable"})
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"rows": [{"asin": "B0TEST1234", "country": country}]}},
+        )
+
+    client = AsinBiReportDataClient(
+        auth_client=DummyAuthClient(),
+        ops_url="https://ops.example.com/api",
+        http_get=http_get,
+    )
+
+    bundle = client.fetch(
+        asins=["B0TEST1234", "B0TEST5678"],
+        source_keys=["crawler_details"],
+        site_by_asin={"B0TEST5678": "CA"},
+    )
+
+    source = bundle["sources"]["crawler_details"]
+    assert bundle["status"] == "partial"
+    assert source["status"] == "partial"
+    assert source["rows"] == [{"asin": "B0TEST1234", "country": "US"}]
+    assert source["country_errors"]["CA"] == {
+        "code": "ASIN_BI_REPORT_DATA_HTTP_ERROR",
+        "message": "CA unavailable",
+        "status_code": 500,
+    }
+
+
+def test_crawler_details_returns_failed_when_all_countries_fail():
+    def http_get(url, **kwargs):
+        country = kwargs["params"]["country"]
+        return httpx.Response(500, json={"message": f"{country} unavailable"})
+
+    client = AsinBiReportDataClient(
+        auth_client=DummyAuthClient(),
+        ops_url="https://ops.example.com/api",
+        http_get=http_get,
+    )
+
+    bundle = client.fetch(
+        asins=["B0TEST1234", "B0TEST5678"],
+        source_keys=["crawler_details"],
+        site_by_asin={"B0TEST5678": "CA"},
+    )
+
+    source = bundle["sources"]["crawler_details"]
+    assert bundle["status"] == "failed"
+    assert source["status"] == "failed"
+    assert source["rows"] == []
+    assert set(source["country_errors"]) == {"US", "CA"}
 
 
 def test_select_bi_report_data_filters_chinese_asin_group_rows():
