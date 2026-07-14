@@ -43,3 +43,4 @@ tmp-validation/
 calculator-draft-*/
 tmp-calculator-*.json
 output/scrape-do-real-api/
+output/feedback-query/

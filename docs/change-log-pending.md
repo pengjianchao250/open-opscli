@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-14 Skill - 新增内部反馈全量查询工具
+
+**变更原因**：反馈分诊开发人员需要按条件读取全量反馈列表及批量详情，同时不能新增公开 CLI/MCP 查询入口，也不能让相关 Skill、脚本和独立密钥进入公开发行物。
+**改动点**：为 `ops-feedback-query` 增加仅限指定 feedback open-query API 的 Skill 直连规范豁免；新增独立内部 Skill 的发版 manifest 声明、使用文档、版本文件、明文凭据文件和 Python 查询脚本；脚本支持列表全量过滤及 1–100 个 UUID 批量详情，只发送 `X-Feedback-Api-Key`，并补充 Skill 结构、真实非占位凭据、凭据占位校验、请求契约、远端回显密钥脱敏、可信服务主机、业务错误、UUID、文本长度和分页边界回归测试；继续增加显式 `--output` 文件导出、父目录自动创建及两类命令参数契约测试；所有文件输出严格限制在 Git 项目根 `output/feedback-query/`，简单文件名和带专用目录前缀的相对路径统一归一化到该目录，拒绝父目录穿越、目录外绝对路径及无法定位项目根的执行环境。
+**验证结果**：初始 RED 按预期为 `10 failed`，失败均因 Skill 文档、凭据和脚本尚不存在；实现后转为 GREEN。文件导出回归也先按预期 RED（`2 failed`），证明脚本缺少 `write_json_file` 和 `--output`，随后补齐显式导出、父目录创建和终端摘要输出。代码审查进一步发现相对路径未锚定项目根、可信主机仍允许额外端口/路径及缺少 `main()` 级输出契约测试；对应回归先出现 `3 failed, 1 passed`，随后增加 Git 项目根定位、精确根地址校验、GBK 安全终端 JSON，以及有/无 `--output` 的主流程测试，聚焦复跑为 `4 passed`。后续发现凭据文件已由外部替换为真实非空密钥，结构测试不再输出或固定断言具体密钥值；占位值拒绝仍由临时文件独立覆盖。新增远端错误回显密钥安全回归，RED 按预期证明异常消息会原样保留测试密钥（`1 failed`），随后在响应解析边界增加递归脱敏；可信主机和参数边界回归也先按预期 RED（`2 failed`）再完成修复。最终补充输出目录安全边界测试，RED 为 `3 failed`，分别证明简单文件名曾落到项目根、路径可越过专用目录、无 Git 根时会回退任意工作目录；实现严格归一化与目录包含校验后，反馈查询 Skill 测试通过（`19 passed`），连同既有 feedback Skill 回归通过（`25 passed`）；internal/public Profile 和两类 binary 数据收集排除测试通过（`2 passed`）；Skill 发版 manifest 校验为 `0` 个问题；脚本 `py_compile` 与 `git diff --check` 均通过。真实 `--output` 烟雾测试将 1 条 bug 列表结果写入项目根 `output/feedback-query/smoke-test.json`，终端只返回绝对文件路径；文件存在、业务码 200、返回 1 条，未在终端输出反馈内容。使用 `python-release` Profile 成功生成 `aukeys_opscli-0.0.108` wheel 和 sdist，并检查归档成员，`ops-feedback-query`、`query_feedbacks.py`、`credentials.json` 命中数为 `0`。使用内部真实密钥完成只读烟雾测试：`list` 以 `feedback_type=bug,page=1,per_page=1` 返回业务码 200、总数 3747、当前页 1 条；取该条 UUID 调用 `batch-detail` 返回业务码 200、命中 1 条、缺失 0 条。烟雾测试只输出业务码、数量和字段名，未输出 API Key、UUID、邮箱、标题、正文、payload、context、附件或执行参数值。全量 `tests/skills/test_packaging.py` 仍受既有问题影响：导入期重包装并关闭 pytest 捕获流；使用 `-s` 后既有 PyInstaller destination 测试还因 Windows 路径分隔符期待值不一致失败，不属于本次新增断言。
+**影响范围**：仅影响内部开发人员反馈分诊 Skill；现有 `ops-feedback`、feedback CLI/MCP 及 JWT/session 认证链路保持不变。
+**回滚方式**：删除 `ops-feedback-query` 模板及测试，移除 manifest 声明和 `CLAUDE.md` 中的唯一内部豁免，并删除本条记录。
+---
+
 ## 2026-07-10 seller_sprite - 普通 MCP 任务持久入队与有界单批跟踪
 
 **变更原因**：普通 SellerSprite MCP 任务需要从入口内长时间等待统一切换为立即、可靠的持久化入队，并为 Agent 和正式 CLI 提供有归属校验、可控等待时长的单任务及批量续查能力，避免 pending 任务被重复提交和重复消耗额度。

@@ -259,6 +259,16 @@ invalidate_credential_cache()  # 刷新内存缓存
 4. 认证、参数校验、payload 组装、错误映射统一由 `opscli` 负责
 5. 后端新增接口时，默认先补 `opscli` 对应入口，再让 Skill 消费
 
+**唯一内部豁免：`ops-feedback-query`**
+
+`ops-feedback-query` 可由 bundled Python 脚本直接访问 feedback open-query API，但必须同时满足：
+
+1. `opscli/skills/templates/manifest.json` 中该 Skill 的 `source`、`wheel`、`binary`、`binary_full` 全部为 `false`
+2. 只允许访问 `/api/v1/data-metrics/open/feedbacks` 及其 `/batch-detail` 子接口
+3. 只允许从 Skill 自身的 `data/credentials.json` 读取密钥，并通过 `X-Feedback-Api-Key` Header 发送
+4. 禁止通过命令参数、日志、标准输出、标准错误或异常文本暴露密钥
+5. 该豁免不适用于其他 Skill；其他 Skill 的远端操作仍必须通过 `opscli` 正式命令入口
+
 ### 【铁律12】Skill 文档和脚本中的查询 Payload 禁止手写 `userEmail`、`from.table`、`from.permission`
 
 涉及数据查询的 Skill 文档（`reference/*.md`、`SKILL.md`）和脚本，**禁止**手写以下字段：
@@ -352,6 +362,7 @@ invalidate_credential_cache()  # 刷新内存缓存
 - 每个命令必须列出完整参数说明和使用示例
 - 必须包含"典型工作流"章节
 - 格式参照 `ops-auth/SKILL.md` 或 `ops-dataset-query/SKILL.md`
+- 唯一例外：发行标志全部为 `false` 的 `ops-feedback-query` 必须描述其 bundled Python 脚本，不得新增或暴露 `opscli` 查询命令
 
 ### 【铁律15】依赖版本约束不加不必要的上限
 
