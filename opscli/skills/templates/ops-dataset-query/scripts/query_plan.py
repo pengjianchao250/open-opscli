@@ -1196,11 +1196,12 @@ def build_model_query_plan(
     authorized_platform_values: Sequence[str] | None = None,
     **kwargs,
 ) -> dict:
-    """构建内部规划器并投影为模型规划器（规划器的默认输出路径）。
+    """构建内部合同并投影为模型合同（规划器的默认输出路径）。
 
-    auto_enum=True 时（默认），平台筛选待枚举的 planned 规划器会在本函数内
+    auto_enum=True 时（默认），平台筛选待枚举的 planned 合同会在本函数内
     自动执行一次枚举查询并回灌重规划（P0-3），把「枚举→回传→重规划」
-    三步收敛为一次调用；枚举失败时保留首版规划器（内嵌现成枚举命令兜底）。
+    三步收敛为一次调用；枚举短超时（7s，贴合默认命令窗）内未返回或失败时，
+    保留首版合同并内嵌现成枚举命令走手动路径，绝不阻塞命令窗口。
     """
     auto_enum = bool(kwargs.pop("auto_enum", True))
     data_dir = Path(kwargs.get("data_dir", DATA_DIR))
@@ -1267,7 +1268,7 @@ def build_model_query_plan(
     return contract
 
 
-def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: float = 20.0) -> list[str]:
+def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: float = 7.0) -> list[str]:
     """自动执行平台权限枚举查询，返回服务端实际平台值列表（P0-3）。
 
     任何失败（opscli 不可用/未登录/超时/形状不符）都返回空列表，
