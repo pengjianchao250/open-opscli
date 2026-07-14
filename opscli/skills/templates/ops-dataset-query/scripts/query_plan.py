@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""查询规划组合入口：一次调用产出选表、字段与权限规划合同。
+"""查询规划器：一次调用产出选表、字段与权限规划结果。
 
 流程：版本检查 → 规则校验 → 构建授权卡片 → 选表 → 字段指导
-→ 平台权限枚举解析 → 投影为模型可见合同（model contract）。
+→ 平台权限枚举解析 → 投影为模型可见规划器（model contract）。
 
-输出两层合同：
-- 内部合同 query_plan_contract_v1（--output-mode internal，仅维护者排错用）；
-- 模型合同 query_plan_model_contract_v2（默认输出，Agent 只消费这一层）。
+输出两层规划器：
+- 内部规划器 query_plan_contract_v1（--output-mode internal，仅维护者排错用）；
+- 模型规划器 query_plan_model_contract_v2（默认输出，Agent 只消费这一层）。
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ FORBIDDEN_OUTPUT_MESSAGES = [
     "未完成当前账号权限枚举校验时，不得声称正式平台筛选范围已确定。",
 ]
 
-# 元数据刷新命令原文：blocked 合同与错误指引统一引用，避免 Agent 需要翻参考文档才能自救
+# 元数据刷新命令原文：blocked 规划器与错误指引统一引用，避免 Agent 需要翻参考文档才能自救
 METADATA_UPGRADE_COMMAND = "opscli skills upgrade ops-dataset-query"
 
 # 错误码前缀 → (中文下一步指引, 是否直接原样重跑即可)。
@@ -97,7 +97,7 @@ ERROR_NEXT_ACTIONS: list[tuple[str, str, bool]] = [
     ),
     (
         "query_plan_output_too_large",
-        "合同输出超限，请减少 --field 数量或调低 --top-n 后重跑本命令。",
+        "规划器输出超限，请减少 --field 数量或调低 --top-n 后重跑本命令。",
         False,
     ),
     (
@@ -171,7 +171,7 @@ def _normalize_enum(value: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 内部合同：平台权限枚举解析
+# 内部规划器：平台权限枚举解析
 # ---------------------------------------------------------------------------
 
 
@@ -247,7 +247,7 @@ def _platform_scope(
     rules: dict,
     authorized_platform_values: Sequence[str] | None,
 ) -> dict:
-    """构建请求的平台范围合同。
+    """构建请求的平台范围规划器。
 
     平台槽位值先经 platform_scope.members 展开为语义成员
     （例如 amazon → amazon_sc + amazon_vc）；不在 members 中的
@@ -327,7 +327,7 @@ def _data_state_ready(version: dict, data_dir: Path) -> tuple[bool, str]:
 
     为什么需要兼容：技能广场发布包内的 VERSION.json 来自 BI 数据发布管线
     （形如 {"version":"v1.1.2","dataset_count":43,...}），没有 data_state 字段；
-    若硬性要求 data_state=ready，发布包上的组合入口会被无条件打回 blocked
+    若硬性要求 data_state=ready，发布包上的规划器会被无条件打回 blocked
     （2026-07-13 QA e2e 实测 14/14 次全部打回，导致二代管线完全失效）。
 
     返回 (是否就绪, 元数据来源标记)：
@@ -408,8 +408,8 @@ def _try_metadata_upgrade(*, timeout_seconds: float = 60.0) -> bool:
     """blocked 前的自动升级兜底：调用 opscli skills upgrade 拉取当前账号元数据。
 
     与 core.try_upgrade 行为一致，但带超时护栏：沙箱内 opscli 未登录/网络异常时
-    快速失败并回落到刷新合同，绝不阻塞规划主线；诊断信息只走 stderr，
-    保持 stdout 的合同输出纯净。
+    快速失败并回落到刷新规划器，绝不阻塞规划主线；诊断信息只走 stderr，
+    保持 stdout 的规划器输出纯净。
     """
     try:
         result = subprocess.run(
@@ -431,9 +431,9 @@ def _try_metadata_upgrade(*, timeout_seconds: float = 60.0) -> bool:
 
 
 def _refresh_contract(version: dict) -> dict:
-    """data_state 未就绪时的刷新合同：要求先升级当前账号元数据。
+    """data_state 未就绪时的刷新规划器：要求先升级当前账号元数据。
 
-    合同必须自带恢复命令原文：e2e 实测打回合同只有状态码时，
+    规划器必须自带恢复命令原文：e2e 实测打回规划器只有状态码时，
     Agent 无一按指引升级、全部弃管线退回旧探查流程。
     """
     return {
@@ -496,10 +496,10 @@ def build_query_plan(
     top_n: int = planner.MAX_CANDIDATES,
     auto_upgrade: bool = True,
 ) -> dict:
-    """一次调用产出完整的本地内部规划合同。
+    """一次调用产出完整的本地内部规划结果。
 
     元数据未就绪（见 _data_state_ready 的兼容判定）时先尝试一次自动升级，
-    仍未就绪才返回刷新合同、不做任何选表推断，
+    仍未就绪才返回刷新规划器、不做任何选表推断，
     保证规划永远建立在当前账号最新授权元数据之上。
     """
     data_dir = Path(data_dir)
@@ -564,7 +564,7 @@ def build_query_plan(
 
 
 # ---------------------------------------------------------------------------
-# 模型合同投影：只暴露模型规划与最终回答所需的最小字段集
+# 模型规划器投影：只暴露模型规划与最终回答所需的最小字段集
 # ---------------------------------------------------------------------------
 
 
@@ -721,7 +721,7 @@ def _execution_fields(fields: Iterable[dict]) -> list[dict]:
 
 
 def _status(internal: dict) -> str:
-    """把内部合同状态归一为模型合同三态：planned / clarify_required / blocked。"""
+    """把内部规划器状态归一为模型规划器三态：planned / clarify_required / blocked。"""
     if internal.get("data_state") != "ready":
         return "blocked"
     selection = internal.get("selection") or {}
@@ -741,7 +741,7 @@ def _status(internal: dict) -> str:
 def _platform_filter_state(platform: dict, *, data_ready: bool = True) -> str:
     """归一平台筛选状态：未知 / 未请求 / 待权限枚举 / 已解析 / 被阻断。
 
-    元数据未就绪（刷新合同）时规划根本没有跑，平台诉求无从判断，
+    元数据未就绪（刷新规划器）时规划根本没有跑，平台诉求无从判断，
     必须返回 unknown 而非 not_requested，防止模型误读"无平台诉求"。
     """
     if not data_ready:
@@ -763,7 +763,7 @@ def _answer_contract(
     platform_filter_state: str,
     guidance: dict,
 ) -> dict[str, Any]:
-    """生成回答合同：最终回答必须覆盖的披露与禁止输出。"""
+    """生成回答规划器：最终回答必须覆盖的披露与禁止输出。"""
     required = []
     if platform_filter_state == "requires_permission_enum":
         required.append("permission_enum_required")
@@ -774,7 +774,7 @@ def _answer_contract(
     if status == "blocked":
         required.append("blocked_reason_required")
     # 精简原则（P2-1）：对模型而言中文文案即可执行，*_codes 为校验器冗余，
-    # 不再进入模型合同，节省每次规划的固定 token 开销
+    # 不再进入模型规划器，节省每次规划的固定 token 开销
     return {
         "required_disclosures_zh": [
             DISCLOSURE_MESSAGES[code]
@@ -942,7 +942,7 @@ def build_model_contract(
     authorized_field_labels: dict[str, list[str]] | None = None,
     dataset_names_zh: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """把内部合同投影为模型可见的精简合同。
+    """把内部规划器投影为模型可见的精简规划器。
 
     model_view 只含用户可见中文结论；execution_ref 仅供查询构造，
     不得向用户展示，也不得作为业务判断理由。
@@ -1013,7 +1013,7 @@ def build_model_contract(
                 unknown_fields,
                 authorized_field_labels or {"dimensions": [], "metrics": []},
             )
-    # 刷新合同的恢复命令必须透传给模型：e2e 实测缺命令原文时 Agent 从不按指引自救
+    # 刷新规划器的恢复命令必须透传给模型：e2e 实测缺命令原文时 Agent 从不按指引自救
     if internal.get("recovery_command"):
         model_view["recovery_command"] = str(internal["recovery_command"])
         model_view["recovery_hint_zh"] = str(internal.get("recovery_hint_zh", ""))
@@ -1062,7 +1062,7 @@ def build_model_contract(
             execution_ref["platform_enum_command"] = enum_command
             execution_ref["platform_enum_return_hint_zh"] = (
                 "执行上述命令后，把返回的每个 platform_name 值用重复的 "
-                "--authorized-platform-value 参数传回本规划命令，取得终版合同"
+                "--authorized-platform-value 参数传回本规划命令，取得终版规划器"
             )
     # 查询模板骨架（P1-4）：status=planned 时给出可直接填充的 payload
     if status == "planned":
@@ -1102,11 +1102,11 @@ def build_model_query_plan(
     authorized_platform_values: Sequence[str] | None = None,
     **kwargs,
 ) -> dict:
-    """构建内部合同并投影为模型合同（组合入口的默认输出路径）。
+    """构建内部规划器并投影为模型规划器（规划器的默认输出路径）。
 
-    auto_enum=True 时（默认），平台筛选待枚举的 planned 合同会在本函数内
+    auto_enum=True 时（默认），平台筛选待枚举的 planned 规划器会在本函数内
     自动执行一次枚举查询并回灌重规划（P0-3），把「枚举→回传→重规划」
-    三步收敛为一次调用；枚举失败时保留首版合同（内嵌现成枚举命令兜底）。
+    三步收敛为一次调用；枚举失败时保留首版规划器（内嵌现成枚举命令兜底）。
     """
     auto_enum = bool(kwargs.pop("auto_enum", True))
     data_dir = Path(kwargs.get("data_dir", DATA_DIR))
@@ -1164,7 +1164,7 @@ def build_model_query_plan(
             )
             # 枚举来源标注：审计可区分自动枚举与人工回传
             contract["execution_ref"]["platform_enum_source"] = "auto_enum_service"
-    # 模型合同体积守卫：新增投影（模板/组件/时间合同）不得撑爆模型上下文
+    # 模型规划器体积守卫：新增投影（模板/组件/时间规划器）不得撑爆模型上下文
     if len(json.dumps(contract, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_OUTPUT_BYTES:
         raise RuntimeError("query_plan_output_too_large")
     return contract
@@ -1174,7 +1174,7 @@ def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: f
     """自动执行平台权限枚举查询，返回服务端实际平台值列表（P0-3）。
 
     任何失败（opscli 不可用/未登录/超时/形状不符）都返回空列表，
-    回落到合同内嵌的手动枚举命令路径；诊断只走 stderr。
+    回落到规划器内嵌的手动枚举命令路径；诊断只走 stderr。
     """
     command = _platform_enum_command(component_table_id)
     if not command:
@@ -1236,7 +1236,7 @@ def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: f
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """组合入口命令行参数。internal 输出模式仅供维护者排错。"""
+    """规划器命令行参数。internal 输出模式仅供维护者排错。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "query",
@@ -1293,7 +1293,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("missing_query_text")
         extra: dict[str, Any] = {}
         if args.output_mode != "internal":
-            # auto_enum 仅模型合同路径支持（internal 为维护者排错，不做网络调用）
+            # auto_enum 仅模型规划器路径支持（internal 为维护者排错，不做网络调用）
             extra["auto_enum"] = not args.no_auto_enum
         builder = (
             build_query_plan

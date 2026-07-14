@@ -2504,3 +2504,23 @@
 - **验证**：pytest 23/23；本机模拟沙箱闭环（占位挂载包+真实 opscli upgrade）：blocked→自动升级→接管 ~/.claude/skills→`planned, metadata_source=upgraded_local+fallback_dir, table_id=2`。
 - **发布配套**：已组装带真实数据的发布包（模板 1.3.1 代码 + 1.2.3 包的 43 数据集真实数据）供重新发布，消除新沙箱的一次自愈开销；发布后建议与 BI 数据发布管线确认其重新发布数据时是否保留最新 scripts。
 - **回滚方式**：git checkout 恢复 query_plan.py 与测试文件。
+
+## 2026-07-13 后端 data-metrics - 同步队列仅返回当前用户自己发布的技能
+
+**变更原因**：`opscli skills install --sync-market` 原逻辑会把用户安装过的所有广场技能（含他人发布的）都纳入同步队列。新需求要求：非当前用户创建发布的技能默认不进入同步安装，他人发布的技能只能通过 `opscli skills install username@skill_name` 显式安装。
+**改动点**：后端 auto-scheduler 项目 `vendor/aukey/data-metrics`（非 opscli 仓库）：
+1. `src/Services/SkillMarketplaceService.php` — `getSyncQueue()` 查询新增 `->where('sm.user_id', $userId)` 过滤（仅返回当前用户发布的技能），并更新方法 docblock；
+2. `src/Http/Controllers/SkillSyncController.php` — `queue()` docstring 同步更新说明。
+opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表），旧版客户端自动获得新行为。
+**验证结果**：`php -l`（PHP 8.4，/opt/homebrew/opt/php@8.4）两文件均无语法错误。本机默认 PHP 7.4 对该包预存的 PHP 8 语法（nullsafe、构造器属性提升）报 parse error，与本次改动无关。待接口级验证：测试账号调 `GET /v1/skills/sync/queue` 确认不含他人发布的技能，`opscli skills install --sync-market --dry-run` 同步计划只剩自己发布的。
+**影响范围**：仅 `GET /v1/skills/sync/queue` 返回内容（--sync-market 同步范围收窄）；显式远程安装、排除名单、安装统计回调等链路不受影响。过滤后队列内全部为 creator，`is_downloadable` 恒为 true、`download_url` 恒非空（字段保留，兼容旧客户端）。
+**回滚方式**：删除 `getSyncQueue()` 中的 `->where('sm.user_id', $userId)` 一行及其注释，还原两处 docblock。
+---
+
+## 2026-07-14 ops-dataset-query v1.3.2 术语更名与超时处置（用户反馈两项）
+
+- **为什么改**：①「合同」用语在 agent 回复中易被误解为法律合同，按用户要求统一更名为「规划器」；②矩阵复跑实测规划器首次调用常撞默认 60s 执行超时（内部含自动升级 ≤60s + 自动枚举 ≤45s），模型需自行摸索「拉长等待重试」，浪费轮次。
+- **具体做了什么**：①全模板中文用语「合同/组合入口」→「规划器」（产物语境用「规划结果」），保护「证据合同」独立概念不受影响，英文 JSON 键（contract/answer_contract 等）不变；②SKILL.md/cli.md/description 增加执行超时预算指引：规划器首次运行设 ≥120s 超时、run_query 设 ≥180s，超时=原样重试一次并加大超时（规划器幂等二次秒回），禁止因超时改走旁路探查；③SKILL.md 版本 1.3.1→1.3.2。
+- **验证**：pytest 23/23；QA 真实数据包抽验 planned/table 2/time_scope 对比期正常。
+- **影响范围**：仅技能模板文案与指引；无逻辑变更（除 description）。需重新发布到 QA 广场并同步提示词 v20（更名+超时指引）。
+- **回滚方式**：git revert 本次 commit。

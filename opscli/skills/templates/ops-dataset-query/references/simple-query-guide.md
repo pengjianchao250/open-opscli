@@ -1,9 +1,9 @@
 ---
 name: ops-dataset-query-simple-query
-description: 仅使用本次授权 guidance/metadata 的简化查询参数合同
+description: 仅使用本次授权 guidance/metadata 的简化查询参数规划器
 ---
 
-# 简化查询参数合同
+# 简化查询参数规划器
 
 ## 来源边界
 
@@ -104,7 +104,7 @@ MCP Tool 使用 snake_case，JSON payload 使用 camelCase，CLI 选项使用 ke
 ## 筛选与组件
 
 - 不发明默认筛选，不用文档中的业务值代替用户确认。
-- 可用操作符以当前正式查询合同为准；操作符和值必须与字段类型匹配。
+- 可用操作符以当前正式查询规划器为准；操作符和值必须与字段类型匹配。
 - 明确筛选命中查询组件时，先按模式指南取得本次授权的组件关系和枚举。值不在枚举中时停止并请用户重选。
 
 ## CLI-only
