@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-14 asin-data - Polaris 鉴权回退与用户手册设计
+
+**变更原因**：ASIN 刊登实时取数在个人 Polaris JWT 和直接 exchange 均失败时缺少 BJX Token 自动兜底，同时 CLI/MCP 的公开命令、返回协议和 Polaris 开关说明尚未形成独立完整手册。
+**改动点**：新增 `docs/design/ASIN取数鉴权回退与用户手册设计.md`，锁定 user/managed/bi_login 三种模式、个人 JWT 到 BJX Token 的回退顺序、敏感信息边界，以及 CLI/MCP 两份正式用户手册的内容和测试范围；本阶段尚未修改运行时代码。
+**验证结果**：已完成设计范围、鉴权顺序、返回协议和敏感信息边界自检；待用户复核后进入 TDD 实现与手册编写。
+**影响范围**：当前仅新增设计文档和本条变更记录，不改变 ASIN 取数运行行为。
+**回滚方式**：删除设计文档并移除本条变更记录。
+
+---
+
 ## 2026-07-14 asin-data - crawler-details 多站点取数
 
 **变更原因**：`crawler-details` 接口新增 `country` 参数，现有 ASIN live-data、MCP 和类目 Top10 链路需要统一支持默认 US、指定站点及批量多站点分组请求。
