@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-14 asin-data/mcp - 同步 ASIN 取数服务到 release
+
+**变更原因**：需要将 `codex/asin-data-service-merge` 中已经整理完成的 ASIN 取数 CLI/MCP 能力同步到 `release`，并保留 Top10/category-top 取数修复和默认当前用户北极星鉴权策略，便于后续 release 部署使用。
+**改动点**：同步 `opscli asin-data live-data/fetch-file/category-top/yicopy-keyword-engine` 相关服务、AI Ready 返回、xlsx/OSS 上传、MCP `asin_data_live_data`/`asin_data_fetch_file`/`asin_data_category_top`/`asin_data_yicopy_keyword_engine` 工具、ASIN MCP 限流与 health 工具；刊登取数默认使用当前用户 Polaris token，兼容 `OPSCLI_ASIN_DATA_LISTING_AUTH_MODE=managed/bi_login`；修复 token URL 拼接，避免系统 URL 和 endpoint 同时带斜杠时出现双斜杠；补充 ASIN、MCP、文件上传、auth 配置等测试。
+**验证结果**：执行 `D:\workspace\open-opscli\.venv\Scripts\python.exe -m pytest tests\auth\test_config.py tests\auth\test_token_manager.py tests\asin_data\test_ai_response.py tests\asin_data\test_asin_data_cli.py tests\asin_data\test_bi_report_data.py tests\asin_data\test_category_top.py tests\asin_data\test_category_top_workbook.py tests\asin_data\test_daily_pipeline.py tests\asin_data\test_direct_runner.py tests\asin_data\test_report_files.py tests\asin_data\test_single_asin_collect.py tests\asin_data\test_split_package_builder.py tests\asin_data\test_yicopy_keyword_engine.py tests\mcp\test_asin_data_limit.py tests\mcp\test_asin_data_tools.py tests\mcp\test_health_tool.py tests\shared\test_file_uploads.py -q` 通过，结果 `122 passed`；执行 `D:\workspace\open-opscli\.venv\Scripts\python.exe -m py_compile opscli\auth\config.py opscli\auth\core\token_manager.py opscli\asin_data\cli.py opscli\asin_data\services\bi_report_data.py opscli\asin_data\services\collector.py opscli\asin_data\services\daily_pipeline.py opscli\asin_data\services\split_package_builder.py opscli\asin_data\services\category_top.py opscli\asin_data\services\category_top_workbook.py opscli\asin_data\services\yicopy_keyword_engine.py opscli\mcp\asin_data_limit.py opscli\mcp\tools\asin_data.py opscli\mcp\tools\health.py opscli\shared\file_uploads.py` 通过。
+**影响范围**：影响 ASIN 取数 CLI、ASIN MCP 工具、ASIN 取数 Skill 模板、文件上传客户端和 Polaris 鉴权配置；不包含 seller_sprite、sif、scrape_do、shopify 等非 ASIN 改动。
+**回滚方式**：回退本次提交中 ASIN/MCP/文件上传/Skill 模板/测试文件以及本条 changelog 即可。
+---
+
 ## 2026-07-10 ASIN 取数 - release 合入刊登授权回退
 
 **变更原因**：用户要求将 ASIN 取数服务中“默认走托管北极星 token，刊登接口未登录时再用固定 BI 账号登录回退”的修改合并回 release 并推送，避免部署到 MCP 后继续优先使用本地 BI_AUTH/BI_COOKIE 或旧 token。

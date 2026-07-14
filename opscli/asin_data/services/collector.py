@@ -277,6 +277,11 @@ class AsinDataCollector:
         error_log: Any,
     ) -> dict[str, Any]:
         asins = [str(record.get("asin") or "").strip().upper() for record in records if record.get("asin")]
+        site_by_asin = {
+            str(record.get("asin") or "").strip().upper(): str(record.get("site") or args.site or "US").strip().upper()
+            for record in records
+            if record.get("asin")
+        }
         if args.skip_bi_report_data:
             bundle = build_bi_report_data_placeholder(
                 asins=asins,
@@ -298,6 +303,8 @@ class AsinDataCollector:
                     start_date=args.sales_start,
                     end_date=args.sales_end,
                     source_keys=args.bi_report_source_keys,
+                    site_by_asin=site_by_asin,
+                    default_site=args.site,
                 )
                 bundle["request_mode"] = "batch"
                 self._attach_bi_report_data(asin_results, bundle, error_log)
@@ -313,6 +320,8 @@ class AsinDataCollector:
                     start_date=args.sales_start,
                     end_date=args.sales_end,
                     source_keys=args.bi_report_source_keys,
+                    site_by_asin=site_by_asin,
+                    default_site=args.site,
                 )
                 bundles[asin] = asin_bundle
                 self._attach_bi_report_data([asin_result], asin_bundle, error_log)
