@@ -122,6 +122,18 @@ def _is_formula(field: dict) -> bool:
     )
 
 
+def _is_date_field(field: dict) -> bool:
+    """判断日期类维度：技术名含 date/time 或中文名含 日期/时间。
+
+    为什么需要：时间过滤与 dataComparison 都必须使用授权日期字段，
+    但用户几乎从不口头点名日期字段，合同必须无条件携带日期字段引用，
+    否则模型只能靠扫盘或猜字段名补齐（e2e 实测的高频探查形态）。
+    """
+    name = str(field.get("field_name", "")).casefold()
+    label = str(field.get("verbose_name", ""))
+    return "date" in name or "time" in name or "日期" in label or "时间" in label
+
+
 def _is_snapshot(field: dict) -> bool:
     """判断是否快照类指标（如库存量），此类字段不可跨期累加。"""
     return field.get("snapshot_metric") == "1"
@@ -324,6 +336,11 @@ def _permission_scope(
     else:
         relevant = ranked
     selected_rows = [row for _score, _index, row in relevant[:max_components]]
+    # 组件 alias → table_id 映射：contract 模式也要携带组件执行引用，
+    # 否则部门/国家等非平台筛选没有任何合规枚举入口（e2e 实测缺口）
+    alias_to_table = {
+        row["dataset_alias"]: row.get("table_id", "") for row in datasets
+    }
     filter_fields = []
     for row in selected_rows:
         available = row["component_dataset_alias"] in authorized_aliases
@@ -336,6 +353,12 @@ def _permission_scope(
                 else "blocked_missing_authorized_component"
             ),
         }
+        if available:
+            # 两种输出模式都带组件引用：这是显式筛选唯一的合规枚举入口
+            item["component_dataset_alias"] = row["component_dataset_alias"]
+            item["component_table_id"] = alias_to_table.get(
+                row["component_dataset_alias"], ""
+            )
         if output_mode == "full":
             item.update(
                 {
@@ -344,8 +367,6 @@ def _permission_scope(
                     "explicit_filter_allowed": available,
                 }
             )
-            if available:
-                item["component_dataset_alias"] = row["component_dataset_alias"]
         filter_fields.append(item)
     blocked = list(
         dict.fromkeys(
@@ -472,6 +493,16 @@ def build_guidance(
             "formula_rule": FORMULA_RULE,
             "snapshot_rule": SNAPSHOT_RULE,
             "unknown_requested_fields": unknown_fields,
+            # 日期类维度无条件输出（上限 5 个）：时间过滤/dataComparison 的构造依据，
+            # 不受点名/打分筛选影响
+            "date_fields": [
+                {
+                    "field_name": row["field_name"],
+                    "verbose_name": row.get("verbose_name", ""),
+                }
+                for row in dimensions
+                if _is_date_field(row)
+            ][:5],
             "truncated": (
                 len(dimensions) > len(selected_dimensions)
                 or len(metrics) > len(selected_metrics)

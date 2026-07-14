@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 import unicodedata
 from pathlib import Path
@@ -21,6 +23,7 @@ from typing import Any, Iterable, Sequence
 import agent_query_planner as planner
 import dataset_guidance
 import scoped_dataset_reader
+import time_scope
 import typed_schema_linking as schema
 
 
@@ -52,6 +55,85 @@ FORBIDDEN_OUTPUT_MESSAGES = [
     "不得把内部技术标识作为业务判断理由。",
     "未完成当前账号权限枚举校验时，不得声称正式平台筛选范围已确定。",
 ]
+
+# 元数据刷新命令原文：blocked 合同与错误指引统一引用，避免 Agent 需要翻参考文档才能自救
+METADATA_UPGRADE_COMMAND = "opscli skills upgrade ops-dataset-query"
+
+# 错误码前缀 → (中文下一步指引, 是否直接原样重跑即可)。
+# 为什么需要：错误只给紧凑错误码时，Agent 的自然行为是盲重试或翻脚本源码，
+# 每个错误必须自带可执行的下一步动作才能截断探查螺旋（e2e 实测长尾主因之一）。
+ERROR_NEXT_ACTIONS: list[tuple[str, str, bool]] = [
+    (
+        "metadata_snapshot_changed",
+        "元数据快照在读取期间发生了变化（并发窗口），直接原样重跑本命令一次即可。",
+        True,
+    ),
+    (
+        "invalid_version_file",
+        f"元数据版本文件损坏或缺失，执行 {METADATA_UPGRADE_COMMAND} 修复后重跑本命令。",
+        False,
+    ),
+    (
+        "invalid_rules",
+        f"本地规划规则损坏，执行 {METADATA_UPGRADE_COMMAND} 修复后重跑本命令；"
+        "仍失败时按 references/feedback-guide.md 提交一次反馈并停止重试。",
+        False,
+    ),
+    (
+        "invalid_cards",
+        f"授权数据集卡片损坏，执行 {METADATA_UPGRADE_COMMAND} 修复后重跑本命令；"
+        "仍失败时按 references/feedback-guide.md 提交一次反馈并停止重试。",
+        False,
+    ),
+    (
+        "missing_query_text",
+        "缺少查询原文：把用户请求作为位置参数传入，或用 --query-file <文件|-> 传入。",
+        False,
+    ),
+    (
+        "query_too_long",
+        "查询文本超长，请压缩为一句话核心诉求后重跑本命令。",
+        False,
+    ),
+    (
+        "query_plan_output_too_large",
+        "合同输出超限，请减少 --field 数量或调低 --top-n 后重跑本命令。",
+        False,
+    ),
+    (
+        "dataset_has_no_fields",
+        "该数据集没有可用查询字段，向用户如实说明并建议更换数据集；"
+        "如确认属元数据异常，按 references/feedback-guide.md 提交一次反馈。",
+        False,
+    ),
+]
+DEFAULT_ERROR_NEXT_ACTION = (
+    f"先原样重跑本命令一次；仍失败则执行 {METADATA_UPGRADE_COMMAND} 后重试；"
+    "再失败按 references/feedback-guide.md 提交一次反馈并停止盲试。"
+)
+
+# 平台语义成员内部枚举名 → 用户可见中文标签（model_view 只允许中文，
+# 内部枚举名保留在 execution_ref.platform_semantic_keys 供构造引用）
+PLATFORM_MEMBER_LABELS = {
+    "amazon_sc": "亚马逊SC",
+    "amazon_vc": "亚马逊VC",
+}
+
+# 选表候选 reasons 前缀 → 中文短语（澄清话术展示用）
+CANDIDATE_REASON_LABELS = [
+    ("explicit_alias", "技术标识精确命中"),
+    ("explicit_name", "数据集英文名精确命中"),
+    ("explicit_chinese_description", "中文名称命中"),
+    ("domain:", "业务域相关"),
+    ("filter:", "筛选条件相关"),
+]
+
+# 推荐字段（无点名字段时的兜底提议）上限
+MAX_RECOMMENDED_FIELDS = 3
+# 澄清候选卡片上限
+MAX_CANDIDATE_CARDS = 3
+# 筛选组件引用上限（execution_ref.filter_components）
+MAX_FILTER_COMPONENTS = 6
 
 
 def _load_json_object(path: Path, error_code: str) -> dict:
@@ -240,8 +322,120 @@ def _platform_component_lookup(data_dir: Path, dataset_alias: str, query: str) -
     }
 
 
+def _data_state_ready(version: dict, data_dir: Path) -> tuple[bool, str]:
+    """判定元数据是否可用于规划，兼容两种 VERSION.json 形状。
+
+    为什么需要兼容：技能广场发布包内的 VERSION.json 来自 BI 数据发布管线
+    （形如 {"version":"v1.1.2","dataset_count":43,...}），没有 data_state 字段；
+    若硬性要求 data_state=ready，发布包上的组合入口会被无条件打回 blocked
+    （2026-07-13 QA e2e 实测 14/14 次全部打回，导致二代管线完全失效）。
+
+    返回 (是否就绪, 元数据来源标记)：
+    - "skill_local"：模板/updater 形状，data_state 显式为 ready；
+    - "published_bundle"：发布包形状（无 data_state 字段），以真实数据文件佐证就绪；
+    - 其余返回 data_state 原值（placeholder/invalid 等），表示未就绪。
+    """
+    state = version.get("data_state")
+    if state == "ready":
+        return True, "skill_local"
+    if state is None:
+        # 无 data_state 字段的两种真实形状：
+        # ① BI 发布管线形状（含 dataset_count）；② opscli skills upgrade 写入形状
+        #（仅 name+version，2026-07-14 实测）。统一以「核心索引文件存在且含数据行」
+        # 佐证就绪，防止把占位/空包（CSV 仅表头）误判为就绪
+        try:
+            dataset_count = int(version.get("dataset_count", 0))
+        except (TypeError, ValueError):
+            dataset_count = 0
+        if dataset_count > 0 and _csv_has_rows(data_dir / "datasets.csv") and (
+            data_dir / "dataset_fields.csv"
+        ).is_file():
+            return True, "published_bundle"
+        if _csv_has_rows(data_dir / "datasets.csv") and _csv_has_rows(
+            data_dir / "dataset_fields.csv"
+        ):
+            return True, "upgraded_local"
+        return False, "missing"
+    return False, str(state)
+
+
+def _csv_has_rows(path: Path) -> bool:
+    """CSV 是否含表头之外的数据行（只读前两行，不加载全文件）。"""
+    try:
+        with path.open(encoding="utf-8") as handle:
+            next(handle, None)
+            return next(handle, None) is not None
+    except OSError:
+        return False
+
+
+def _fallback_ready_data_dir(primary: Path) -> Path | None:
+    """主数据目录未就绪时，在 opscli 实际安装位置寻找已就绪的数据目录。
+
+    沙箱实测（2026-07-14 v19 验收）：自动升级把最新数据写入 opscli 自己的
+    skills 目录（恒为 cwd/.claude/skills），而挂载目录 .agents 是只读快照、
+    不会被升级更新——升级明明成功、主目录却仍是占位。此时从候选位置
+    接管已就绪的数据目录，完成沙箱内自愈。
+    """
+    candidates = [
+        Path.cwd() / ".claude" / "skills" / "ops-dataset-query" / "data",
+        Path.home() / ".claude" / "skills" / "ops-dataset-query" / "data",
+    ]
+    env_dir = os.getenv("OPSCLI_SKILLS_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser() / "ops-dataset-query" / "data")
+    for candidate in candidates:
+        try:
+            if candidate.resolve() == primary.resolve():
+                continue
+        except OSError:
+            continue
+        version_path = candidate / "VERSION.json"
+        if not version_path.is_file():
+            continue
+        try:
+            version = _load_json_object(version_path, "invalid_version_file")
+        except RuntimeError:
+            continue
+        ready, _source = _data_state_ready(version, candidate)
+        if ready:
+            print(f"[query_plan] 主数据目录未就绪，接管已就绪数据目录：{candidate}", file=sys.stderr)
+            return candidate
+    return None
+
+
+def _try_metadata_upgrade(*, timeout_seconds: float = 60.0) -> bool:
+    """blocked 前的自动升级兜底：调用 opscli skills upgrade 拉取当前账号元数据。
+
+    与 core.try_upgrade 行为一致，但带超时护栏：沙箱内 opscli 未登录/网络异常时
+    快速失败并回落到刷新合同，绝不阻塞规划主线；诊断信息只走 stderr，
+    保持 stdout 的合同输出纯净。
+    """
+    try:
+        result = subprocess.run(
+            ["opscli", "skills", "upgrade", "ops-dataset-query", "--force"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"[query_plan] 自动升级未完成：{error}", file=sys.stderr)
+        return False
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()[:200]
+        print(f"[query_plan] 自动升级失败：{detail}", file=sys.stderr)
+        return False
+    print("[query_plan] 自动升级成功，使用刷新后的元数据继续规划", file=sys.stderr)
+    return True
+
+
 def _refresh_contract(version: dict) -> dict:
-    """data_state 未就绪时的刷新合同：要求先升级当前账号元数据。"""
+    """data_state 未就绪时的刷新合同：要求先升级当前账号元数据。
+
+    合同必须自带恢复命令原文：e2e 实测打回合同只有状态码时，
+    Agent 无一按指引升级、全部弃管线退回旧探查流程。
+    """
     return {
         "contract": INTERNAL_CONTRACT,
         "query_execution_allowed": False,
@@ -251,6 +445,11 @@ def _refresh_contract(version: dict) -> dict:
         "selected_dataset_guidance": None,
         "requested_platform_scope": None,
         "next_action": "refresh_authorized_metadata",
+        "recovery_command": METADATA_UPGRADE_COMMAND,
+        "recovery_hint_zh": (
+            "当前账号元数据未就绪：先执行 recovery_command 刷新，再重新运行本规划命令；"
+            "刷新仍失败时向用户如实说明元数据异常，并按 references/feedback-guide.md 提交一次反馈。"
+        ),
     }
 
 
@@ -272,7 +471,10 @@ def _next_action(selection: dict, guidance: dict | None, platform_scope: dict) -
         if resolution.get("status") == "not_applicable":
             return "block_platform_scope_unsupported"
         lookup = platform_scope.get("component_lookup") or {}
-        if lookup.get("guidance_status") != "permission_enum_only":
+        # 组件引用的权威性来自 select_columns 关系本身；QA 等环境会把渠道组件
+        # 发布为 dataset_category=normal（既可查询又当组件，guidance_status=ready），
+        # 因此 ready 与 permission_enum_only 均视为组件可用，不得据类目形态阻断
+        if lookup.get("guidance_status") not in ("permission_enum_only", "ready"):
             return "block_platform_filter_missing_component"
         if resolution.get("status") == "required":
             return "query_platform_permission_enum"
@@ -292,15 +494,33 @@ def build_query_plan(
     data_dir: Path = DATA_DIR,
     rules_path: Path = RULES_PATH,
     top_n: int = planner.MAX_CANDIDATES,
+    auto_upgrade: bool = True,
 ) -> dict:
     """一次调用产出完整的本地内部规划合同。
 
-    data_state 不为 ready 时直接返回刷新合同，不做任何选表推断，
+    元数据未就绪（见 _data_state_ready 的兼容判定）时先尝试一次自动升级，
+    仍未就绪才返回刷新合同、不做任何选表推断，
     保证规划永远建立在当前账号最新授权元数据之上。
     """
     data_dir = Path(data_dir)
     version = _load_json_object(data_dir / "VERSION.json", "invalid_version_file")
-    if version.get("data_state") != "ready":
+    ready, metadata_source = _data_state_ready(version, data_dir)
+    if not ready and auto_upgrade:
+        # blocked 之前先自动升级一次：升级成功则重读元数据继续规划，
+        # 把「首查必失败一轮」压缩为入口内部的一次自愈
+        if _try_metadata_upgrade():
+            version = _load_json_object(data_dir / "VERSION.json", "invalid_version_file")
+            ready, metadata_source = _data_state_ready(version, data_dir)
+        if not ready:
+            # 升级也救不回主目录时（如只读挂载快照），接管 opscli 实际安装位置的就绪数据；
+            # 自愈动作统一受 auto_upgrade 开关约束（--no-auto-upgrade 时保持纯只读判定）
+            fallback_dir = _fallback_ready_data_dir(data_dir)
+            if fallback_dir is not None:
+                data_dir = fallback_dir
+                version = _load_json_object(data_dir / "VERSION.json", "invalid_version_file")
+                ready, metadata_source = _data_state_ready(version, data_dir)
+                metadata_source = f"{metadata_source}+fallback_dir"
+    if not ready:
         return _refresh_contract(version)
 
     raw_rules = _load_json_object(Path(rules_path), "invalid_rules_file")
@@ -328,6 +548,10 @@ def build_query_plan(
         "contract": INTERNAL_CONTRACT,
         "query_execution_allowed": False,
         "data_state": "ready",
+        # 元数据来源标记（skill_local / published_bundle / *+fallback_dir），供审计与排错区分形状
+        "metadata_source": metadata_source,
+        # 实际生效的数据目录：fallback 接管后与入参不同，投影层读取字段标签须以此为准
+        "effective_data_dir": str(data_dir),
         "metadata_version": str(version.get("version", "")),
         "selection": selection,
         "selected_dataset_guidance": guidance,
@@ -393,12 +617,14 @@ def _selected_fields(
     guidance: dict,
     query: str,
     authorized_field_labels: dict[str, list[str]],
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     """确定模型可见的维度与指标列表。
 
     优先级：字段指导中的显式/原文命中字段 → 全量授权字段标签兜底
     （覆盖指导截断导致点名字段落选的情况）。维度与指标互相做
     包含吞并，避免"广告费"同时被当成维度和指标。
+    返回 (点名维度, 点名指标, 推荐维度, 推荐指标)：
+    点名为空时给出打分推荐字段（selection_source=recommended，需向用户确认）。
     """
     dimensions = _requested_fields(guidance, "dimensions", query)
     metrics = _requested_fields(guidance, "metrics", query)
@@ -414,6 +640,23 @@ def _selected_fields(
             {"verbose_name": label, "selection_source": "authorized_query_label"}
             for label in authorized_field_labels.get("metrics", [])
             if _normalize(label) in normalized_query
+        ]
+    # 无点名字段时的推荐兜底（P0-1c）：把指导层已按打分选出的 top 字段
+    # 以 recommended 来源标注供模型向用户提议，替代「全空无从下手→扫盘」
+    field_guidance = guidance.get("field_guidance") or {}
+    recommended_dimensions: list[dict] = []
+    recommended_metrics: list[dict] = []
+    if not dimensions:
+        recommended_dimensions = [
+            dict(item, selection_source="recommended")
+            for item in (field_guidance.get("dimensions") or [])[:MAX_RECOMMENDED_FIELDS]
+            if isinstance(item, dict)
+        ]
+    if not metrics:
+        recommended_metrics = [
+            dict(item, selection_source="recommended")
+            for item in (field_guidance.get("metrics") or [])[:MAX_RECOMMENDED_FIELDS]
+            if isinstance(item, dict)
         ]
     dimensions = _longest_unique_labels(dimensions)
     metrics = _longest_unique_labels(metrics)
@@ -444,7 +687,7 @@ def _selected_fields(
             for dimension_label in dimension_labels
         )
     ]
-    return dimensions, metrics
+    return dimensions, metrics, recommended_dimensions, recommended_metrics
 
 
 def _field_names(fields: Iterable[dict]) -> list[str]:
@@ -495,8 +738,14 @@ def _status(internal: dict) -> str:
     return "planned"
 
 
-def _platform_filter_state(platform: dict) -> str:
-    """归一平台筛选状态：未请求 / 待权限枚举 / 已解析 / 被阻断。"""
+def _platform_filter_state(platform: dict, *, data_ready: bool = True) -> str:
+    """归一平台筛选状态：未知 / 未请求 / 待权限枚举 / 已解析 / 被阻断。
+
+    元数据未就绪（刷新合同）时规划根本没有跑，平台诉求无从判断，
+    必须返回 unknown 而非 not_requested，防止模型误读"无平台诉求"。
+    """
+    if not data_ready:
+        return "unknown"
     if not platform.get("requires_permission_enum_validation"):
         return "not_requested"
     resolution = platform.get("enum_resolution") or {}
@@ -524,17 +773,13 @@ def _answer_contract(
         required.append("field_confirmation_required")
     if status == "blocked":
         required.append("blocked_reason_required")
+    # 精简原则（P2-1）：对模型而言中文文案即可执行，*_codes 为校验器冗余，
+    # 不再进入模型合同，节省每次规划的固定 token 开销
     return {
-        "required_disclosure_codes": _deduplicate(required),
         "required_disclosures_zh": [
             DISCLOSURE_MESSAGES[code]
             for code in _deduplicate(required)
             if code in DISCLOSURE_MESSAGES
-        ],
-        "forbidden_output_codes": [
-            "english_dataset_key",
-            "technical_identifier_as_business_reason",
-            "permission_scope_without_enum_validation",
         ],
         "forbidden_outputs_zh": FORBIDDEN_OUTPUT_MESSAGES,
         "technical_identifiers_user_visible": False,
@@ -542,10 +787,160 @@ def _answer_contract(
     }
 
 
+def _reason_zh(reasons: Iterable[str]) -> str:
+    """把选表 reasons 代码翻成一句中文短语（取首个可翻译原因）。"""
+    for reason in reasons:
+        for prefix, label in CANDIDATE_REASON_LABELS:
+            if str(reason).startswith(prefix):
+                return label
+    return "语义相关"
+
+
+def _candidate_cards_zh(selection: dict, dataset_names_zh: dict[str, str]) -> list[dict]:
+    """澄清态的候选卡片投影（P0-2）：中文名 + 命中原因，供带选项提问。"""
+    cards = []
+    for item in (selection.get("dataset_candidates") or [])[:MAX_CANDIDATE_CARDS]:
+        alias = str(item.get("dataset_alias", ""))
+        name_zh = dataset_names_zh.get(alias) or ""
+        if not name_zh:
+            continue
+        cards.append({"name_zh": name_zh, "reason_zh": _reason_zh(item.get("reasons") or [])})
+    return cards
+
+
+def _bigrams(text: str) -> set[str]:
+    """中文标签的字符二元组集合（近似相似度用）。"""
+    normalized = _normalize(text)
+    if len(normalized) < 2:
+        return {normalized} if normalized else set()
+    return {normalized[i : i + 2] for i in range(len(normalized) - 1)}
+
+
+def _field_suggestions(
+    unknown_fields: Iterable[str],
+    authorized_field_labels: dict[str, list[str]],
+) -> list[dict]:
+    """为未知点名字段生成「你是不是想要」近似建议（P0-2）。
+
+    用字符二元组重合度做轻量相似排序，避免模型对拼错字段盲试。
+    """
+    labels = _deduplicate(
+        list(authorized_field_labels.get("dimensions", []))
+        + list(authorized_field_labels.get("metrics", []))
+    )
+    suggestions = []
+    for unknown in unknown_fields:
+        target = _bigrams(str(unknown))
+        if not target:
+            continue
+        ranked = sorted(
+            (
+                (len(target & _bigrams(label)), label)
+                for label in labels
+            ),
+            key=lambda item: (-item[0], item[1]),
+        )
+        candidates = [label for score, label in ranked[:3] if score > 0]
+        suggestions.append({"requested": str(unknown), "candidates_zh": candidates})
+    return suggestions
+
+
+def _build_query_template(
+    table_id: object,
+    dimensions: list[dict],
+    metrics: list[dict],
+    date_fields: list[dict],
+    scope: dict | None,
+) -> dict | None:
+    """生成可直接填充的正式查询 payload 骨架（P1-4）。
+
+    形状与已验证的 opscli query simple --json 实测形态一致：
+    日期过滤为 >=/<= 两行、对比为 dataComparison{field,startDate,endDate}、
+    排序为 orderBy[{field,direction}]。普通指标默认 SUM；
+    公式/快照指标不带 aggregation（由服务端口径处理）。
+    """
+    if table_id in (None, ""):
+        return None
+    dims = [
+        {"field": item["field_name"], "alias": item["field_name"]}
+        for item in dimensions
+    ]
+    mets = []
+    for item in metrics:
+        entry: dict[str, Any] = {"field": item["field_name"], "alias": item["field_name"]}
+        if not (item.get("is_formula") or item.get("is_snapshot")):
+            entry["aggregation"] = "SUM"
+        mets.append(entry)
+    date_field = date_fields[0]["field_name"] if date_fields else None
+    filters: list[dict] = []
+    template: dict[str, Any] = {
+        "tableId": table_id,
+        "dimensions": dims,
+        "metrics": mets,
+        "filters": filters,
+        "orderBy": None,
+        "limit": None,
+    }
+    if date_field and scope and scope.get("start"):
+        filters.append({"field": date_field, "operator": ">=", "value": scope["start"]})
+        filters.append({"field": date_field, "operator": "<=", "value": scope["end"]})
+        comparison = scope.get("comparison")
+        if comparison:
+            template["dataComparison"] = {
+                "field": date_field,
+                "startDate": comparison["start"],
+                "endDate": comparison["end"],
+            }
+    return template
+
+
+def _platform_enum_command(component_table_id: object) -> str | None:
+    """生成可直接执行的平台权限枚举命令（P0-3 兜底层）。"""
+    if component_table_id in (None, ""):
+        return None
+    enum_json = json.dumps(
+        {
+            "tableId": component_table_id,
+            "dimensions": [{"field": "platform_name", "alias": "platform_name"}],
+            "metrics": [],
+            "limit": 100,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return (
+        f"opscli query simple --table-id {component_table_id} "
+        f"--json '{enum_json}' --run --pretty"
+    )
+
+
+def _filter_components(guidance: dict) -> list[dict]:
+    """投影可用筛选组件引用（P0-1b）：部门/国家等显式筛选的合规枚举入口。"""
+    scope = guidance.get("permission_scope") or {}
+    components = []
+    for item in scope.get("filter_fields") or []:
+        if item.get("component_status") != "component_available":
+            continue
+        if not item.get("component_dataset_alias"):
+            continue
+        components.append(
+            {
+                "field_name": item.get("field_name", ""),
+                "label_zh": item.get("verbose_name", ""),
+                "component_dataset_alias": item.get("component_dataset_alias"),
+                "component_table_id": item.get("component_table_id", ""),
+            }
+        )
+        if len(components) >= MAX_FILTER_COMPONENTS:
+            break
+    return components
+
+
 def build_model_contract(
     internal: dict,
     query: str = "",
     authorized_field_labels: dict[str, list[str]] | None = None,
+    dataset_names_zh: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """把内部合同投影为模型可见的精简合同。
 
@@ -561,44 +956,143 @@ def build_model_contract(
         str(item) for item in selection.get("missing_information", []) if item
     ]
     status = _status(internal)
-    platform_state = _platform_filter_state(platform)
+    data_ready = internal.get("data_state") == "ready"
+    platform_state = _platform_filter_state(platform, data_ready=data_ready)
     component = platform.get("component_lookup") or {}
-    dimensions, metrics = _selected_fields(
+    dimensions, metrics, recommended_dims, recommended_mets = _selected_fields(
         guidance, query, authorized_field_labels or {"dimensions": [], "metrics": []}
     )
+    # 时间口径本地解析（P0-5）：只在元数据就绪时计算，模型不再自算日期窗口
+    scope = time_scope.parse(query) if data_ready else None
+    field_guidance = guidance.get("field_guidance") or {}
+    date_fields = [
+        {"field_name": item["field_name"], "label_zh": item.get("verbose_name", "")}
+        for item in field_guidance.get("date_fields") or []
+    ]
+    unknown_fields = [
+        str(item) for item in field_guidance.get("unknown_requested_fields") or []
+    ]
+    model_view: dict[str, Any] = {
+        "dataset_name_zh": str(dataset.get("display_name_zh", "")),
+        "dimensions": _field_names(dimensions),
+        "metrics": _field_names(metrics),
+        "platform_semantic_members": [
+            # 用户可见层只允许中文标签，内部枚举名留在 execution_ref
+            PLATFORM_MEMBER_LABELS.get(str(item), str(item))
+            for item in platform.get("semantic_members", [])
+        ],
+        "platform_filter_state": platform_state,
+        "clarification_reason_codes": clarification_reasons,
+        "clarification_messages_zh": [
+            CLARIFICATION_MESSAGES.get(code, "需要补充查询条件。")
+            for code in clarification_reasons
+        ],
+        "next_action": str(internal.get("next_action", "")),
+    }
+    if scope:
+        comparison = scope.get("comparison")
+        scope_zh = f"{scope['label_zh']}：{scope['start']} ~ {scope['end']}（{scope['timezone']}）"
+        if comparison:
+            scope_zh += f"；对比期 {comparison['label_zh']}：{comparison['start']} ~ {comparison['end']}"
+        if scope.get("is_default"):
+            scope_zh += "。注意：未识别到明确时间表述，这是默认口径，必须向用户披露并确认"
+        model_view["time_scope_zh"] = scope_zh
+    # 推荐字段（无点名字段时）：供向用户提议，采用前须在确认摘要中说明来源
+    if recommended_dims:
+        model_view["recommended_dimensions"] = _field_names(recommended_dims)
+    if recommended_mets:
+        model_view["recommended_metrics"] = _field_names(recommended_mets)
+    # 澄清弹药（P0-2）：候选卡片 + 未知字段回显与近似建议
+    if status == "clarify_required":
+        cards = _candidate_cards_zh(selection, dataset_names_zh or {})
+        if cards:
+            model_view["dataset_candidates_zh"] = cards
+        if unknown_fields:
+            model_view["unknown_requested_fields"] = unknown_fields
+            model_view["field_suggestions_zh"] = _field_suggestions(
+                unknown_fields,
+                authorized_field_labels or {"dimensions": [], "metrics": []},
+            )
+    # 刷新合同的恢复命令必须透传给模型：e2e 实测缺命令原文时 Agent 从不按指引自救
+    if internal.get("recovery_command"):
+        model_view["recovery_command"] = str(internal["recovery_command"])
+        model_view["recovery_hint_zh"] = str(internal.get("recovery_hint_zh", ""))
+
+    execution_dimensions = _execution_fields(dimensions + recommended_dims)
+    execution_metrics = _execution_fields(metrics + recommended_mets)
+    # 推荐来源标注：构造阶段须区分「用户点名」与「系统推荐待确认」
+    recommended_names = {
+        item["field_name"] for item in recommended_dims + recommended_mets if item.get("field_name")
+    }
+    for entry in execution_dimensions + execution_metrics:
+        if entry["field_name"] in recommended_names:
+            entry["selection_source"] = "recommended"
+    execution_ref: dict[str, Any] = {
+        "user_visible": False,
+        "dataset_alias": dataset.get("dataset_alias"),
+        "table_id": dataset.get("table_id"),
+        "platform_component_alias": component.get("component_dataset_alias"),
+        "platform_component_table_id": component.get("component_table_id"),
+        "resolved_platform_values": resolution.get("resolved_filter_values", []),
+        "dimensions": execution_dimensions,
+        "metrics": execution_metrics,
+    }
+    if platform.get("semantic_members"):
+        execution_ref["platform_semantic_keys"] = [
+            str(item) for item in platform.get("semantic_members", [])
+        ]
+    if date_fields:
+        execution_ref["date_fields"] = date_fields
+    components = _filter_components(guidance)
+    if components:
+        execution_ref["filter_components"] = components
+    if scope:
+        execution_ref["time_scope"] = {
+            "start": scope["start"],
+            "end": scope["end"],
+            "is_default": scope["is_default"],
+            "comparison_type": (scope.get("comparison") or {}).get("type"),
+            "comparison_start": (scope.get("comparison") or {}).get("start"),
+            "comparison_end": (scope.get("comparison") or {}).get("end"),
+        }
+    # 平台枚举现成命令（P0-3 兜底层）：待枚举时模型无需手拼枚举 payload
+    if platform_state == "requires_permission_enum":
+        enum_command = _platform_enum_command(component.get("component_table_id"))
+        if enum_command:
+            execution_ref["platform_enum_command"] = enum_command
+            execution_ref["platform_enum_return_hint_zh"] = (
+                "执行上述命令后，把返回的每个 platform_name 值用重复的 "
+                "--authorized-platform-value 参数传回本规划命令，取得终版合同"
+            )
+    # 查询模板骨架（P1-4）：status=planned 时给出可直接填充的 payload
+    if status == "planned":
+        template = _build_query_template(
+            dataset.get("table_id"),
+            execution_dimensions,
+            execution_metrics,
+            date_fields,
+            scope,
+        )
+        if template is not None:
+            execution_ref["query_template"] = template
+            execution_ref["query_template_fill_rules_zh"] = (
+                "模板已预填授权字段与时间窗（日期过滤为 >=/<= 两行实测形态）。"
+                "普通指标默认 SUM 按用户口径调整；公式/快照指标不带 aggregation。"
+                "排序填 orderBy=[{\"field\":\"<结果alias>\",\"direction\":\"DESC|ASC\"}]，"
+                "行数填 limit；不需要的键（null 值）必须删除后再执行。"
+                "selection_source=recommended 的字段须先向用户说明再采用。"
+            )
     return {
         "contract": MODEL_CONTRACT,
         "data_state": str(internal.get("data_state", "missing")),
+        "metadata_source": str(internal.get("metadata_source", "")),
         "metadata_version": str(internal.get("metadata_version", "")),
         "status": status,
-        "model_view": {
-            "dataset_name_zh": str(dataset.get("display_name_zh", "")),
-            "dimensions": _field_names(dimensions),
-            "metrics": _field_names(metrics),
-            "platform_semantic_members": [
-                str(item) for item in platform.get("semantic_members", [])
-            ],
-            "platform_filter_state": platform_state,
-            "clarification_reason_codes": clarification_reasons,
-            "clarification_messages_zh": [
-                CLARIFICATION_MESSAGES.get(code, "需要补充查询条件。")
-                for code in clarification_reasons
-            ],
-            "next_action": str(internal.get("next_action", "")),
-        },
+        "model_view": model_view,
         "answer_contract": _answer_contract(
             status, clarification_reasons, platform_state, guidance
         ),
-        "execution_ref": {
-            "user_visible": False,
-            "dataset_alias": dataset.get("dataset_alias"),
-            "table_id": dataset.get("table_id"),
-            "platform_component_alias": component.get("component_dataset_alias"),
-            "platform_component_table_id": component.get("component_table_id"),
-            "resolved_platform_values": resolution.get("resolved_filter_values", []),
-            "dimensions": _execution_fields(dimensions),
-            "metrics": _execution_fields(metrics),
-        },
+        "execution_ref": execution_ref,
     }
 
 
@@ -608,7 +1102,13 @@ def build_model_query_plan(
     authorized_platform_values: Sequence[str] | None = None,
     **kwargs,
 ) -> dict:
-    """构建内部合同并投影为模型合同（组合入口的默认输出路径）。"""
+    """构建内部合同并投影为模型合同（组合入口的默认输出路径）。
+
+    auto_enum=True 时（默认），平台筛选待枚举的 planned 合同会在本函数内
+    自动执行一次枚举查询并回灌重规划（P0-3），把「枚举→回传→重规划」
+    三步收敛为一次调用；枚举失败时保留首版合同（内嵌现成枚举命令兜底）。
+    """
+    auto_enum = bool(kwargs.pop("auto_enum", True))
     data_dir = Path(kwargs.get("data_dir", DATA_DIR))
     internal = build_query_plan(
         query,
@@ -618,56 +1118,212 @@ def build_model_query_plan(
     )
     # 收集全量授权字段中文标签，用于点名字段被指导截断时的兜底匹配
     authorized_fields = {"dimensions": [], "metrics": []}
+    dataset_names_zh: dict[str, str] = {}
     if internal.get("data_state") == "ready":
+        # fallback 接管数据目录后，标签读取必须跟随实际生效目录
+        data_dir = Path(internal.get("effective_data_dir") or data_dir)
         rows = scoped_dataset_reader.load_dataset_fields(data_dir)
         for row in rows:
             key = "dimensions" if row["field_type"] == "dimension" else "metrics"
             label = str(row.get("verbose_name", ""))
             if label and label not in authorized_fields[key]:
                 authorized_fields[key].append(label)
-    return build_model_contract(
+        # 数据集 alias → 中文名映射：澄清候选卡片展示用（用户可见层只允许中文）
+        for row in scoped_dataset_reader.load_datasets(data_dir):
+            alias = str(row.get("dataset_alias", ""))
+            name_zh = str(row.get("description", "") or row.get("dataset_name", ""))
+            if alias and name_zh:
+                dataset_names_zh[alias] = name_zh
+    contract = build_model_contract(
         internal,
         query=query,
         authorized_field_labels=authorized_fields,
+        dataset_names_zh=dataset_names_zh,
     )
+    # P0-3 二段收敛：待权限枚举时自动执行枚举查询并回灌重规划
+    if (
+        auto_enum
+        and not authorized_platform_values
+        and contract["model_view"]["next_action"] == "query_platform_permission_enum"
+    ):
+        values = _auto_enum_platform_values(
+            contract["execution_ref"].get("platform_component_table_id")
+        )
+        if values:
+            internal = build_query_plan(
+                query,
+                requested_fields=requested_fields,
+                authorized_platform_values=values,
+                **kwargs,
+            )
+            contract = build_model_contract(
+                internal,
+                query=query,
+                authorized_field_labels=authorized_fields,
+                dataset_names_zh=dataset_names_zh,
+            )
+            # 枚举来源标注：审计可区分自动枚举与人工回传
+            contract["execution_ref"]["platform_enum_source"] = "auto_enum_service"
+    # 模型合同体积守卫：新增投影（模板/组件/时间合同）不得撑爆模型上下文
+    if len(json.dumps(contract, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_OUTPUT_BYTES:
+        raise RuntimeError("query_plan_output_too_large")
+    return contract
+
+
+def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: float = 45.0) -> list[str]:
+    """自动执行平台权限枚举查询，返回服务端实际平台值列表（P0-3）。
+
+    任何失败（opscli 不可用/未登录/超时/形状不符）都返回空列表，
+    回落到合同内嵌的手动枚举命令路径；诊断只走 stderr。
+    """
+    command = _platform_enum_command(component_table_id)
+    if not command:
+        return []
+    enum_json = json.dumps(
+        {
+            "tableId": component_table_id,
+            "dimensions": [{"field": "platform_name", "alias": "platform_name"}],
+            "metrics": [],
+            "limit": 100,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    try:
+        result = subprocess.run(
+            [
+                "opscli", "query", "simple",
+                "--table-id", str(component_table_id),
+                "--json", enum_json,
+                "--run",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"[query_plan] 自动枚举未完成：{error}", file=sys.stderr)
+        return []
+    if result.returncode != 0:
+        print(f"[query_plan] 自动枚举失败：{(result.stderr or result.stdout or '')[:200]}", file=sys.stderr)
+        return []
+    try:
+        payload = json.loads(result.stdout[result.stdout.index("{"):])
+    except (ValueError, json.JSONDecodeError):
+        print("[query_plan] 自动枚举返回无法解析，回落手动枚举", file=sys.stderr)
+        return []
+    if payload.get("success") is False:
+        print(f"[query_plan] 自动枚举业务失败：{str(payload.get('error'))[:200]}", file=sys.stderr)
+        return []
+    # 结果行兜底遍历：不同版本返回形状可能是 data.result.data / result.data / data
+    rows: list = []
+    for path in (("data", "result", "data"), ("result", "data"), ("data", "data")):
+        node: Any = payload
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, list) and node:
+            rows = node
+            break
+    values = _deduplicate(
+        str(row.get("platform_name", "")).strip()
+        for row in rows
+        if isinstance(row, dict)
+    )
+    if values:
+        print(f"[query_plan] 自动枚举取得平台值：{values}", file=sys.stderr)
+    return values
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """组合入口命令行参数。internal 输出模式仅供维护者排错。"""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("query")
+    parser.add_argument(
+        "query",
+        nargs="?",
+        default="",
+        help="查询原文；含引号等特殊字符时改用 --query-file 或 stdin（传 -）",
+    )
+    parser.add_argument(
+        "--query-file",
+        default="",
+        help="从文件读取查询原文（- 表示 stdin），防止 shell 引号拼接碎裂",
+    )
     parser.add_argument("--field", action="append", default=[])
     parser.add_argument("--authorized-platform-value", action="append")
     parser.add_argument("--top-n", type=int, default=planner.MAX_CANDIDATES)
     parser.add_argument(
         "--output-mode", choices=("model", "internal"), default="model"
     )
+    parser.add_argument(
+        "--no-auto-upgrade",
+        action="store_true",
+        help="元数据未就绪时不自动执行 opscli skills upgrade（默认自动升级一次）",
+    )
+    parser.add_argument(
+        "--no-auto-enum",
+        action="store_true",
+        help="平台待枚举时不自动执行枚举查询（默认自动枚举一次并回灌重规划）",
+    )
     return parser.parse_args(argv)
+
+
+def _resolve_query_text(args: argparse.Namespace) -> str:
+    """归一查询原文来源：--query-file（- 为 stdin）优先于位置参数。"""
+    if args.query_file:
+        if args.query_file == "-":
+            return sys.stdin.read().strip()
+        return Path(args.query_file).read_text(encoding="utf-8").strip()
+    return args.query
+
+
+def _error_next_action(code: str) -> tuple[str, bool]:
+    """按错误码前缀匹配下一步指引，未命中时给通用自救路径。"""
+    for prefix, hint, retryable in ERROR_NEXT_ACTIONS:
+        if code.startswith(prefix):
+            return hint, retryable
+    return DEFAULT_ERROR_NEXT_ACTION, False
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
+        query = _resolve_query_text(args)
+        if not query.strip():
+            raise ValueError("missing_query_text")
+        extra: dict[str, Any] = {}
+        if args.output_mode != "internal":
+            # auto_enum 仅模型合同路径支持（internal 为维护者排错，不做网络调用）
+            extra["auto_enum"] = not args.no_auto_enum
         builder = (
             build_query_plan
             if args.output_mode == "internal"
             else build_model_query_plan
         )
         result = builder(
-            args.query,
+            query,
             requested_fields=args.field,
             authorized_platform_values=args.authorized_platform_value,
             top_n=args.top_n,
+            auto_upgrade=not args.no_auto_upgrade,
+            **extra,
         )
-    except (FileNotFoundError, LookupError, RuntimeError, TypeError, ValueError) as error:
-        # 错误统一走 stderr 的紧凑 JSON，避免污染 stdout 的合同输出
+    except Exception as error:  # noqa: BLE001 —— 兜底捕获：内部错误裸 traceback 极耗 token 且会吓退模型
+        expected = isinstance(
+            error, (FileNotFoundError, LookupError, RuntimeError, TypeError, ValueError)
+        )
+        code = (str(error) or type(error).__name__) if expected else (
+            f"internal_error:{type(error).__name__}"
+        )
+        next_action_zh, retryable = _error_next_action(code)
+        # 错误改走 stdout（保留 exit 2）：部分执行器会吞 stderr，
+        # Agent 若只看到空输出会盲重试；错误 JSON 自带下一步动作
         print(
             json.dumps(
-                {"error": str(error) or type(error).__name__},
+                {"error": code, "retryable": retryable, "next_action_zh": next_action_zh},
                 ensure_ascii=False,
                 separators=(",", ":"),
-            ),
-            file=sys.stderr,
+            )
         )
         return 2
     sys.stdout.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
