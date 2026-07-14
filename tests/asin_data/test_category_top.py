@@ -63,7 +63,13 @@ def test_category_top_client_fetches_remote_rows():
 
 
 def test_category_top_service_writes_and_uploads_xlsx_artifact(tmp_path):
-    calls = {"source_keys": [], "uploads": [], "listing_account_type_by_source": {}}
+    calls = {
+        "source_keys": [],
+        "uploads": [],
+        "listing_account_type_by_source": {},
+        "site_by_source": {},
+        "default_site_by_source": {},
+    }
 
     class DummyTopClient:
         def fetch(self, **kwargs):
@@ -94,6 +100,8 @@ def test_category_top_service_writes_and_uploads_xlsx_artifact(tmp_path):
             source_key = kwargs["source_keys"][0]
             calls["source_keys"].append(source_key)
             calls["listing_account_type_by_source"][source_key] = kwargs.get("listing_account_type_by_asin")
+            calls["site_by_source"][source_key] = kwargs["site_by_asin"]
+            calls["default_site_by_source"][source_key] = kwargs["default_site"]
             rows = [
                 {"ASIN": "B0TEST1234", "source": source_key, "value": "A"},
                 {"ASIN": "B0TEST5678", "source": source_key, "value": "B"},
@@ -158,6 +166,11 @@ def test_category_top_service_writes_and_uploads_xlsx_artifact(tmp_path):
     assert sorted(calls["source_keys"]) == ["crawler_details", "listing_basic"]
     assert calls["listing_account_type_by_source"]["listing_basic"] == {"B0TEST1234": 2}
     assert calls["listing_account_type_by_source"]["crawler_details"] is None
+    assert calls["site_by_source"]["crawler_details"] == {
+        "B0TEST1234": "US",
+        "B0TEST5678": "CA",
+    }
+    assert calls["default_site_by_source"]["crawler_details"] == "US"
     assert calls["uploads"][0]["purpose"] == "asin_data_category_top_xlsx"
     assert calls["uploads"][0]["path"].suffix == ".xlsx"
     assert calls["uploads"][0]["folder"] == "asin-data"

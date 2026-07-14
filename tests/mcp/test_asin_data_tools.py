@@ -104,7 +104,7 @@ def test_asin_data_live_data_passes_realtime_params(monkeypatch, tmp_path):
     result = _run(
         asin_data_tools.asin_data_live_data(
             asin="B0TEST1234",
-            site="US",
+            site="CA",
             data_scope="basic",
             sales_start="2026-07-01",
             sales_end="2026-07-08",
@@ -121,7 +121,7 @@ def test_asin_data_live_data_passes_realtime_params(monkeypatch, tmp_path):
     assert calls["bi_client_kwargs"] == {"auth_client": "auth-client"}
     assert calls["collector_kwargs"]["bi_report_data_client"].__class__ is DummyBiClient
     assert calls["run_kwargs"]["asin"] == "B0TEST1234"
-    assert calls["run_kwargs"]["site"] == "US"
+    assert calls["run_kwargs"]["site"] == "CA"
     assert calls["run_kwargs"]["data_scope"] == "basic"
     assert calls["run_kwargs"]["sales_start"] == "2026-07-01"
     assert calls["run_kwargs"]["sales_end"] == "2026-07-08"
@@ -381,7 +381,7 @@ def test_asin_data_category_top_uses_service(monkeypatch):
             date_from="2026-07-01",
             date_to="2026-07-13",
             limit=5,
-            site="US",
+            site="CA",
             upload=True,
             enrich=True,
             return_content=False,
@@ -398,7 +398,7 @@ def test_asin_data_category_top_uses_service(monkeypatch):
         "date_from": "2026-07-01",
         "date_to": "2026-07-13",
         "limit": 5,
-        "site": "US",
+        "site": "CA",
         "output_dir": "output/asin-data",
         "run_id": "run-1",
         "upload": True,

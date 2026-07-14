@@ -393,7 +393,10 @@ class AsinBiReportDataClient:
             )
             asins_by_country.setdefault(country, []).append(asin)
 
-        def fetch_country(country: str, country_asins: Sequence[str]) -> tuple[Any | None, list[dict[str, Any]], dict[str, Any] | None]:
+        def fetch_country(
+            country: str,
+            country_asins: Sequence[str],
+        ) -> tuple[Any | None, list[dict[str, Any]], dict[str, Any] | None]:
             try:
                 response = self.http_get(
                     self._resolve_endpoint(config["endpoint"]),
