@@ -4,6 +4,7 @@ from types import MethodType
 from typing import Any
 
 import httpx
+import pytest
 
 from opscli.asin_data.services import bi_report_data
 from opscli.asin_data.services.bi_report_data import (
@@ -41,6 +42,29 @@ class DummyAuthClient:
 class NoOpsAuthClient:
     def build_request_auth(self, scope: str):
         raise AssertionError(f"unexpected auth scope: {scope}")
+
+
+class MissingPolarisAuthClient:
+    def __init__(self, *, session_error: Exception | None = None) -> None:
+        self.session_error = session_error
+        self.build_calls: list[str] = []
+
+    def build_request_auth(self, scope: str):
+        self.build_calls.append(scope)
+        if scope == "polaris":
+            raise RuntimeError("polaris system is not registered")
+        if scope == "ops":
+            return {"Authorization": "Bearer ops-token"}, {"ops_token": "ops-cookie"}
+        raise AssertionError(f"unexpected auth scope: {scope}")
+
+    def get_session(self, scope: str) -> str:
+        assert scope == "polaris"
+        if self.session_error is not None:
+            raise self.session_error
+        return "private-session-id"
+
+    def get_device_code(self) -> None:
+        return None
 
 
 def test_normalize_listing_basic_maps_item_highlight_value():
@@ -584,6 +608,139 @@ def test_bi_report_data_client_refreshes_current_polaris_user_when_listing_auth_
     ]
     assert post_calls == []
     assert auth_client.refresh_calls == ["polaris"]
+
+
+def test_listing_auth_user_mode_stops_after_personal_polaris_success(monkeypatch):
+    monkeypatch.delenv(LISTING_AUTH_MODE_ENV, raising=False)
+    auth_client = DummyAuthClient()
+
+    def http_get(url, **kwargs):
+        raise AssertionError(f"managed BJX token endpoint must not be called: {url}")
+
+    client = AsinBiReportDataClient(auth_client=auth_client, http_get=http_get)
+
+    headers, cookies = client._build_listing_request_auth(fallback_headers={}, fallback_cookies={})
+
+    assert headers["Authorization"] == "Bearer user-token"
+    assert cookies == {"polarisUserToken": "user-session"}
+    assert auth_client.build_calls == ["polaris"]
+
+
+def test_listing_auth_falls_back_to_bjx_when_polaris_is_unregistered(monkeypatch):
+    monkeypatch.delenv(LISTING_AUTH_MODE_ENV, raising=False)
+    auth_client = MissingPolarisAuthClient(session_error=RuntimeError("no polaris session"))
+    get_calls = []
+
+    def http_get(url, **kwargs):
+        get_calls.append({"url": url, **kwargs})
+        return httpx.Response(200, json={"code": 200, "data": {"polaris_bjx_token": "managed-token"}})
+
+    client = AsinBiReportDataClient(
+        auth_client=auth_client,
+        ops_url="https://ops.example.com/api",
+        http_get=http_get,
+    )
+
+    headers, cookies = client._build_listing_request_auth(fallback_headers={}, fallback_cookies={})
+
+    assert headers["Authorization"] == "Bearer managed-token"
+    assert cookies == {}
+    assert auth_client.build_calls == ["polaris", "ops"]
+    assert get_calls[0]["url"].endswith("/polaris-bjx-token")
+
+
+def test_listing_auth_falls_back_to_bjx_when_direct_exchange_returns_500(monkeypatch):
+    monkeypatch.delenv(LISTING_AUTH_MODE_ENV, raising=False)
+    monkeypatch.setattr(
+        bi_report_data,
+        "load_config",
+        lambda: {
+            "polaris_system_url": "https://polaris.example.com",
+            "polaris_token_endpoint": "/api/auth/cli-token",
+        },
+    )
+    auth_client = MissingPolarisAuthClient()
+    post_calls = []
+
+    def http_post(url, **kwargs):
+        post_calls.append({"url": url, **kwargs})
+        request = httpx.Request("POST", url)
+        return httpx.Response(500, request=request, json={"message": "exchange unavailable"})
+
+    def http_get(url, **kwargs):
+        return httpx.Response(200, json={"code": 200, "data": {"polaris_bjx_token": "managed-token"}})
+
+    client = AsinBiReportDataClient(
+        auth_client=auth_client,
+        ops_url="https://ops.example.com/api",
+        http_get=http_get,
+        http_post=http_post,
+    )
+
+    headers, cookies = client._build_listing_request_auth(fallback_headers={}, fallback_cookies={})
+
+    assert headers["Authorization"] == "Bearer managed-token"
+    assert cookies == {}
+    assert post_calls[0]["url"] == "https://polaris.example.com/api/auth/cli-token"
+    assert post_calls[0]["json"] == {"session_id": "private-session-id"}
+
+
+def test_listing_auth_bjx_fallback_is_used_by_listing_request(monkeypatch):
+    monkeypatch.delenv(LISTING_AUTH_MODE_ENV, raising=False)
+    auth_client = MissingPolarisAuthClient(session_error=RuntimeError("no polaris session"))
+    listing_authorizations = []
+
+    def http_get(url, **kwargs):
+        if url.endswith("/polaris-bjx-token"):
+            return httpx.Response(200, json={"code": 200, "data": {"polaris_bjx_token": "managed-token"}})
+        listing_authorizations.append(kwargs["headers"]["Authorization"])
+        if url.endswith("/listing/getAmazonListing"):
+            return httpx.Response(200, json={"code": 0, "data": [{"id": 3418337, "asin": "B0TEST1234"}]})
+        return httpx.Response(200, json={"code": 0, "data": {"item_name.value": "Managed listing"}})
+
+    client = AsinBiReportDataClient(
+        auth_client=auth_client,
+        ops_url="https://ops.example.com/api",
+        http_get=http_get,
+    )
+
+    bundle = client.fetch(asins=["B0TEST1234"], source_keys=["listing_basic"])
+
+    assert bundle["status"] == "success"
+    assert listing_authorizations == ["Bearer managed-token", "Bearer managed-token"]
+
+
+def test_listing_auth_reports_three_sanitized_failures(monkeypatch):
+    monkeypatch.delenv(LISTING_AUTH_MODE_ENV, raising=False)
+    client = AsinBiReportDataClient(auth_client=DummyAuthClient())
+    monkeypatch.setattr(
+        client,
+        "_build_user_polaris_request_auth",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("private-user-token")),
+    )
+    monkeypatch.setattr(
+        client,
+        "_build_direct_polaris_request_auth",
+        lambda: (_ for _ in ()).throw(RuntimeError("private-session-id")),
+    )
+    monkeypatch.setattr(
+        client,
+        "_build_remote_polaris_bjx_request_auth",
+        lambda: (_ for _ in ()).throw(RuntimeError("private-managed-token")),
+    )
+
+    with pytest.raises(AsinBiReportDataBusinessError) as exc_info:
+        client._build_listing_request_auth(fallback_headers={}, fallback_cookies={})
+
+    error = exc_info.value
+    assert error.business_code == "POLARIS_USER_AUTH_MISSING"
+    message = str(error)
+    assert "Polaris user auth is missing or invalid" in message
+    assert "direct token exchange failed" in message
+    assert "managed BJX token fallback failed" in message
+    assert "private-user-token" not in message
+    assert "private-session-id" not in message
+    assert "private-managed-token" not in message
 
 
 def test_bi_report_data_client_listing_basic_maps_template_alias_fields(monkeypatch, tmp_path):

@@ -186,6 +186,17 @@ class AsinBiReportDataBadJsonError(AsinBiReportDataError):
     code = "ASIN_BI_REPORT_DATA_BAD_JSON"
 
 
+def _auth_failure_summary(exc: Exception) -> str:
+    """生成不包含上游响应正文和凭据的鉴权失败摘要。"""
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        return f"HTTP {exc.response.status_code}"
+    if isinstance(exc, AsinBiReportDataBusinessError):
+        return f"business code {exc.business_code}"
+    if isinstance(exc, AsinBiReportDataHttpError):
+        return f"HTTP {exc.status_code}"
+    return type(exc).__name__
+
+
 class AsinBiReportDataClient:
     """Fetch BI data used by the ASIN merged report."""
 
@@ -481,10 +492,26 @@ class AsinBiReportDataClient:
                 headers, cookies = self._build_direct_polaris_request_auth()
                 return self._cache_listing_auth(_listing_browser_headers(headers), cookies)
             except Exception as direct_exc:
-                raise AsinBiReportDataBusinessError(
-                    "POLARIS_USER_AUTH_MISSING",
-                    f"Polaris user auth is missing or invalid: {exc}; direct token exchange failed: {direct_exc}",
-                ) from direct_exc
+                try:
+                    auth = self._build_remote_polaris_bjx_request_auth()
+                    if auth is None:
+                        raise AsinBiReportDataBusinessError(
+                            "POLARIS_BJX_TOKEN_MISSING",
+                            "managed BJX token fallback returned no auth",
+                        )
+                    headers, cookies = auth
+                    return self._cache_listing_auth(_listing_browser_headers(headers), cookies)
+                except Exception as managed_exc:
+                    message = (
+                        "Polaris user auth is missing or invalid: "
+                        f"{_auth_failure_summary(exc)}; direct token exchange failed: "
+                        f"{_auth_failure_summary(direct_exc)}; managed BJX token fallback failed: "
+                        f"{_auth_failure_summary(managed_exc)}"
+                    )
+                    raise AsinBiReportDataBusinessError(
+                        "POLARIS_USER_AUTH_MISSING",
+                        message,
+                    ) from managed_exc
 
     def _build_user_polaris_request_auth(self, *, refresh: bool = False) -> tuple[dict[str, str], dict[str, str]]:
         """使用当前 opscli 登录用户的北极星 token 构造刊登接口鉴权。"""
