@@ -30,6 +30,7 @@ description: Use when users need Polaris 新品计算器、新品试算、毛利
 - 用户粘贴 curl、JWT、Cookie、`sudo` 等敏感信息时，不复述完整值；命令示例使用 `<SUDO>` 或带引号占位。
 - `draft` 和 `copy` 的输出目录必须是新的空目录；不得覆盖已有 draft.json。
 - 普通业务用户优先填写 `填写表格.csv` 的“请填写”列，不要求其整段编辑 `draft.json`。
+- `填写表格-旧版.csv` 已弃用，仅保留历史完整字段，不读取其中的修改。
 
 ## 认证前置
 

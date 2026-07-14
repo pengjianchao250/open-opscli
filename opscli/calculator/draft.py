@@ -12,11 +12,12 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from opscli.calculator.fields import FIELD_BY_KEY, FIELD_SPECS
+from opscli.calculator.fields import FIELD_BY_KEY, FIELD_SPECS, FieldSpec
 from opscli.calculator.models import read_json_file, write_json_file
 
 DRAFT_JSON_FILENAME = "draft.json"
 DRAFT_CSV_FILENAME = "填写表格.csv"
+LEGACY_DRAFT_CSV_FILENAME = "填写表格-旧版.csv"
 OPTIONS_CACHE_FILENAME = ".dropdown-cache.json"
 WEB_CALCULATOR_URL = "https://bi.xenkee.com/#/newProductCalculator"
 DRAFT_CSV_COLUMNS = ("分组", "是否必填", "字段", "中文说明", "当前值", "请填写", "单位/格式", "示例", "备注")
@@ -445,11 +446,16 @@ def _csv_remark(field_key: str, issue_by_field: dict[str, str], field_options: d
     return "；".join(parts)
 
 
-def build_draft_csv_text(data: dict[str, Any], field_options: dict[str, list[DraftOption]] | None = None) -> str:
-    """生成给业务用户填写的 CSV 表格文本。"""
+def _build_draft_csv_text(
+    data: dict[str, Any],
+    field_specs: tuple[FieldSpec, ...],
+    notice: str,
+    field_options: dict[str, list[DraftOption]] | None = None,
+) -> str:
+    """按指定字段生成 CSV 表格文本。"""
     issues = validate_draft_data(data)
     issue_by_field = {issue.field: issue.message for issue in issues}
-    indexed_fields = list(enumerate(FIELD_SPECS))
+    indexed_fields = list(enumerate(field_specs))
     indexed_fields.sort(key=lambda item: (0 if item[1].key in issue_by_field else 1, item[0]))
 
     output = io.StringIO()
@@ -458,7 +464,7 @@ def build_draft_csv_text(data: dict[str, Any], field_options: dict[str, list[Dra
     writer.writerow(
         {
             "分组": "说明",
-            "中文说明": "如果不想在本地编辑 CSV/JSON，也可以直接使用网页端新品计算器",
+            "中文说明": notice,
             "备注": WEB_CALCULATOR_URL,
         }
     )
@@ -479,10 +485,34 @@ def build_draft_csv_text(data: dict[str, Any], field_options: dict[str, list[Dra
     return output.getvalue()
 
 
+def build_draft_csv_text(data: dict[str, Any], field_options: dict[str, list[DraftOption]] | None = None) -> str:
+    """生成不含成本费用的新版业务填写表格。"""
+    # 成本字段仍保留在 draft.json 提交给后端，但不再暴露给业务用户填写。
+    visible_fields = tuple(field for field in FIELD_SPECS if field.group != "成本费用")
+    return _build_draft_csv_text(
+        data,
+        visible_fields,
+        "如果不想在本地编辑 CSV/JSON，也可以直接使用网页端新品计算器",
+        field_options,
+    )
+
+
+def build_legacy_draft_csv_text(data: dict[str, Any], field_options: dict[str, list[DraftOption]] | None = None) -> str:
+    """生成保留完整字段但已弃用的旧版填写表格。"""
+    return _build_draft_csv_text(
+        data,
+        FIELD_SPECS,
+        "旧版填写表格已弃用，仅保留历史完整字段；校验和提交不会读取本文件",
+        field_options,
+    )
+
+
 def write_draft_csv(package_dir: str | Path, data: dict[str, Any], field_options: dict[str, list[DraftOption]] | None = None) -> Path:
-    """写入 UTF-8 BOM CSV，方便 Excel/WPS 直接打开中文。"""
+    """写入新版和已弃用旧版 CSV，返回新版文件路径。"""
     csv_path = Path(package_dir) / DRAFT_CSV_FILENAME
     csv_path.write_text(build_draft_csv_text(data, field_options), encoding="utf-8-sig")
+    legacy_csv_path = Path(package_dir) / LEGACY_DRAFT_CSV_FILENAME
+    legacy_csv_path.write_text(build_legacy_draft_csv_text(data, field_options), encoding="utf-8-sig")
     return csv_path
 
 
@@ -704,9 +734,10 @@ def build_usage_markdown(draft_path: str, notes: list[str] | None = None) -> str
         "## 推荐填写方式",
         "",
         f"1. 打开 `{DRAFT_CSV_FILENAME}`。",
-        "2. 只填写“请填写”这一列；省份、城市、试算方案、备货区域、分区和仓库可直接填中文名称，CLI 会自动转换为接口 key/code。",
+        "2. 只填写“请填写”这一列；省份、城市、备货区域、分区和仓库可直接填中文名称，CLI 会自动转换为接口 key/code。",
         f"3. 保存后执行 `opscli calculator validate {package_path}`。",
         f"4. 校验通过后执行 `opscli calculator submit {package_path}`。",
+        f"5. `{LEGACY_DRAFT_CSV_FILENAME}` 已弃用，仅用于保留历史完整字段，不参与校验和提交。",
         "",
         "## 不想本地填写？",
         "",

@@ -63,6 +63,7 @@ opscli calculator show <DRAFT_DIR>
 ## 第二阶段草稿补全
 
 - `填写表格.csv`：业务用户入口，只填写“请填写”列。
+- `填写表格-旧版.csv`：保留完整历史字段的弃用备份，不参与校验和提交。
 - `draft.json`：接口格式和自动化入口，普通用户不建议手动替换整个 JSON。
 - `.dropdown-cache.json`：下拉快照，校验或提交时实时数据不可用才兜底使用。
 - `使用说明.md`：下一步命令和 Web 入口。
@@ -76,7 +77,7 @@ CSV 可填写 `河北省`、`唐山市`、`算毛利`、`1区全部、指定分�
 - 不要求用户手写 `pick_up_province_code` / `pick_up_city_code`；CLI 提交前自动派生。
 - `checkbox_stock: ["one_zone_all", "specify_part"]` 对应 `1区全部、指定分区`。
 - US/CA 的 `two_zone_combine` 默认是 `["zone_1_2"]`，对应“美东+美西”。
-- 利润相关成本费用由 CLI 统一填 `0`，用户无需填写。
+- 利润相关成本费用由 CLI 统一填 `0`，新版 `填写表格.csv` 不包含这些字段；旧版文件仅用于历史备份。
 - `stock_qty_first_percent`、`stock_qty_second_percent`、`stock_qty_third_percent` 之和必须为 100。
 
 ## 最小烟测 JSON
