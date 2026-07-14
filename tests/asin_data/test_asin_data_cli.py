@@ -745,6 +745,72 @@ def test_live_data_url_only_uploads_without_parsing_inline_content(monkeypatch, 
     assert payload["data"]["split_file_uploads"]["files_uploaded"] == 2
 
 
+def test_category_top_command_uses_service(monkeypatch):
+    calls = {}
+
+    class DummyCategoryTopService:
+        def run(self, **kwargs):
+            calls["kwargs"] = kwargs
+            return {
+                "success": True,
+                "metadata": {"protocol": "asin_data_ai_response", "tool": "asin_data_category_top"},
+                "run": {"run_id": "run-1"},
+                "summary": {"asin_count": 1},
+                "items": [
+                    {
+                        "asin": "B0TEST1234",
+                        "artifacts": [{"file_key": "category_top_json", "uri": "https://example.oss/asin-data/category-top.json"}],
+                        "datasets": [],
+                        "diagnostics": [],
+                    }
+                ],
+                "diagnostics": [],
+            }
+
+    monkeypatch.setattr(asin_cli, "AsinCategoryTopService", DummyCategoryTopService)
+
+    result = runner.invoke(
+        asin_cli.app,
+        [
+            "category-top",
+            "--category",
+            "Bed Frames",
+            "--date-from",
+            "2026-07-01",
+            "--date-to",
+            "2026-07-13",
+            "--limit",
+            "5",
+            "--site",
+            "US",
+            "--output-dir",
+            "output/asin-data",
+            "--run-id",
+            "run-1",
+            "--no-upload",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["success"] is True
+    assert payload["command"] == "asin-data category-top"
+    assert payload["data"]["metadata"]["protocol"] == "asin_data_ai_response"
+    assert payload["data"]["items"][0]["artifacts"][0]["uri"] == "https://example.oss/asin-data/category-top.json"
+    assert calls["kwargs"] == {
+        "category": "Bed Frames",
+        "date_from": "2026-07-01",
+        "date_to": "2026-07-13",
+        "limit": 5,
+        "site": "US",
+        "output_dir": "output/asin-data",
+        "run_id": "run-1",
+        "upload": False,
+        "enrich": True,
+        "return_content": False,
+    }
+
+
 def test_live_data_ai_ready_returns_dataset_manifest_without_inline_content(monkeypatch, tmp_path: Path):
     class DummyCollector:
         def __init__(self):
@@ -1018,3 +1084,75 @@ def test_collect_outputs_report_file_not_found_error_payload(monkeypatch):
     assert "取数服务异常" in payload["error"]["message"]
     assert payload["error"]["asin"] == "B0TEST1234"
     assert payload["error"]["site"] == "US"
+
+
+def test_yicopy_keyword_engine_cli_writes_keyword_reverse_file(monkeypatch, tmp_path: Path):
+    """asin-data yicopy 命令应支持 -a/-o 并写出销词数组。"""
+
+    calls = {}
+
+    class DummyEngine:
+        async def run(self, sources, options):
+            calls["sources"] = sources
+            calls["options"] = options
+            return {
+                "status": "succeeded",
+                "keywordRows": [
+                    {
+                        "keyword": "wireless mouse",
+                        "titleFrequency": 0,
+                        "bulletsFrequency": 0,
+                        "totalFrequency": 0,
+                    }
+                ],
+                "summary": {"asinCount": 1, "keywordReverseCount": 1},
+            }
+
+    monkeypatch.setattr(asin_cli, "YicopyKeywordEngine", lambda: DummyEngine(), raising=False)
+    output_file = tmp_path / "yicopy.json"
+
+    result = runner.invoke(
+        asin_cli.app,
+        [
+            "yicopy-keyword-engine",
+            "-a",
+            "B0TEST1234",
+            "-o",
+            str(output_file),
+            "--max-prefixes-per-asin",
+            "1",
+            "--pretty",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert json.loads(output_file.read_text(encoding="utf-8")) == [
+        {
+            "keyword": "wireless mouse",
+            "titleFrequency": 0,
+            "bulletsFrequency": 0,
+            "totalFrequency": 0,
+        }
+    ]
+    payload = json.loads(result.stdout)
+    assert payload["success"] is True
+    assert payload["command"] == "asin-data yicopy-keyword-engine"
+    data = payload["data"]
+    assert data["status"] == "succeeded"
+    assert data["output_file"] == str(output_file)
+    assert data["row_count"] == 1
+    assert data["metadata"]["protocol"] == "asin_data_ai_response"
+    assert data["metadata"]["tool"] == "asin-data yicopy-keyword-engine"
+    assert data["metadata"]["data_scope"] == "yicopy_keyword_reverse"
+    assert data["metadata"]["request"]["asin"] == ["B0TEST1234"]
+    assert data["run"]["output_dir"] == output_file.parent.as_posix()
+    assert data["summary"]["keywordReverseCount"] == 1
+    item = data["items"][0]
+    assert item["asin"] == "B0TEST1234"
+    assert item["artifacts"][0]["file_key"] == "yicopy_keyword_reverse"
+    assert item["artifacts"][0]["local_path"] == output_file.as_posix()
+    assert item["datasets"][0]["source_key"] == "yicopy_keyword_reverse"
+    assert item["datasets"][0]["preview_rows"][0]["keyword"] == "wireless mouse"
+    assert data["diagnostics"] == []
+    assert calls["sources"] == ["B0TEST1234"]
+    assert calls["options"].max_prefixes_per_asin == 1

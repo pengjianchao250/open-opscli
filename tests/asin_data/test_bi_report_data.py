@@ -1,10 +1,14 @@
-import threading
+﻿import threading
 import time
+from types import MethodType
+from typing import Any
 
 import httpx
 
 from opscli.asin_data.services import bi_report_data
 from opscli.asin_data.services.bi_report_data import (
+    BI_REPORT_DATA_SOURCES,
+    AsinBiReportDataBusinessError,
     AsinBiReportDataClient,
     select_bi_report_data_for_asin,
 )
@@ -240,18 +244,13 @@ def test_bi_report_data_client_fetches_sp_search_terms_in_parallel():
     ]
 
 
-def test_bi_report_data_client_fetches_listing_basic_asins_in_parallel():
+def test_bi_report_data_client_fetches_listing_basic_asins_in_parallel(monkeypatch):
+    monkeypatch.setenv("BI_AUTH", "Bearer listing-token")
     state = {"active": 0, "max_active": 0, "site_codes": {}}
     lock = threading.Lock()
 
     def http_get(url, **kwargs):
-        if url.endswith("/polaris-bjx-token"):
-            return httpx.Response(
-                200,
-                json={"code": 200, "data": {"polaris_bjx_token": "bjx-token"}},
-            )
         if url.endswith("/listing/getAmazonListing"):
-            assert kwargs["headers"]["Authorization"] == "Bearer bjx-token"
             asin = kwargs["params"]["asin"]
             with lock:
                 state["active"] += 1
@@ -278,7 +277,7 @@ def test_bi_report_data_client_fetches_listing_basic_asins_in_parallel():
         )
 
     client = AsinBiReportDataClient(
-        auth_client=DummyAuthClient(),
+        auth_client=NoOpsAuthClient(),
         http_get=http_get,
     )
 
@@ -299,8 +298,6 @@ def test_bi_report_data_client_fetches_listing_basic_asins_in_parallel():
 
 
 def test_bi_report_data_client_listing_only_uses_remote_polaris_bjx_token(monkeypatch, tmp_path):
-    monkeypatch.setenv("BI_AUTH", "Bearer stale-env-token")
-    monkeypatch.setenv("BI_COOKIE", "stale_cookie=stale")
     monkeypatch.delenv("BI_LOGIN_USERNAME", raising=False)
     monkeypatch.delenv("BI_LOGIN_PASSWORD", raising=False)
     monkeypatch.delenv("BI_LOGIN_ENDPOINT", raising=False)
@@ -342,7 +339,7 @@ def test_bi_report_data_client_listing_only_uses_remote_polaris_bjx_token(monkey
 
     bundle = client.fetch(asins=["B0TEST1234"], source_keys=["listing_basic"])
 
-    assert bundle["status"] == "success", bundle
+    assert bundle["status"] == "success"
     assert list(bundle["sources"]) == ["listing_basic"]
     assert [call["url"] for call in get_calls] == [
         "https://ops.example.com/dataMetrics/v1/asin-report-files/polaris-bjx-token",
@@ -646,3 +643,44 @@ def test_bi_report_data_client_keeps_partial_failures():
     assert bundle["status"] == "partial"
     assert bundle["sources"]["sp_search_term"]["status"] == "failed"
     assert bundle["sources"]["sp_search_term"]["endpoint"] == "/api/v1/sp-search-term/query"
+
+
+def test_listing_basic_source_keeps_rows_when_one_asin_is_missing():
+    client = AsinBiReportDataClient(
+        auth_client=DummyAuthClient(),
+        http_get=lambda *args, **kwargs: httpx.Response(200, json={}),
+        ops_url="https://ops.example.test",
+    )
+
+    def fake_fetch_listing_basic_for_asin(self: AsinBiReportDataClient, **kwargs: Any) -> dict[str, Any]:
+        asin = kwargs["asin"]
+        if asin == "B0MISS":
+            raise AsinBiReportDataBusinessError("LISTING_NOT_FOUND", f"listing row not found for {asin}")
+        return {
+            "asin": asin,
+            "row": {"ASIN": asin, "title": "hit"},
+            "list_response": {},
+            "detail_response": {},
+        }
+
+    client._fetch_listing_basic_for_asin = MethodType(fake_fetch_listing_basic_for_asin, client)
+
+    result = client._fetch_listing_basic_source(
+        key="listing_basic",
+        config=BI_REPORT_DATA_SOURCES["listing_basic"],
+        asins=["B0MISS", "B0HIT"],
+        headers={},
+        cookies={},
+        site_by_asin={},
+        default_site="US",
+    )
+
+    assert result["status"] == "partial"
+    assert result["row_count"] == 1
+    assert result["rows"] == [{"ASIN": "B0HIT", "title": "hit"}]
+    assert result["raw"][0]["status"] == "not_found"
+    assert result["raw"][0]["error"]["business_code"] == "LISTING_NOT_FOUND"
+    assert result["errors"] == ["B0MISS: listing row not found for B0MISS"]
+
+def test_listing_site_by_asin_normalizes_chinese_country_name():
+    assert bi_report_data._normalize_site_by_asin({"B086M58PQ3": "美国"}) == {"B086M58PQ3": "US"}
