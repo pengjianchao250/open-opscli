@@ -8,7 +8,7 @@ description: >
   规划器按 30 秒命令窗口设计，返回 refresh_in_progress 时按其 recovery_command
   等待重跑即可，禁止自行升级）；禁止绕过规划器直接扫描 data/ 目录、
   读脚本源码或凭记忆手拼查询参数。
-version: 1.3.4
+version: 1.3.5
 ---
 
 # ops-dataset-query
