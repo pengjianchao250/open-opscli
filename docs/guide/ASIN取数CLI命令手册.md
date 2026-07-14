@@ -426,7 +426,28 @@ opscli asin-data yicopy-keyword-engine --asin B0F9F6B6VK --site US --result-form
 
 ## 8. `category-top`
 
-### 8.1 参数和命令
+### 8.1 AI 自动确定最小类目流程
+
+用户只提供 ASIN、未直接提供类目时，AI 必须先从实时刊登数据确定类目，再调用 Top10：
+
+1. 先调用 `opscli asin-data live-data --data-scope listing_basic` 获取目标 ASIN 的最新刊登数据。
+2. 在 `items[].datasets[]` 中选择 `source_key=listing_basic`，读取行内标准字段 `类目`。如果预览没有该字段，则读取 `artifacts[].uri` 指向的基础 XLSX，在“刊登数据”工作表中读取 `类目`，不得改用旧历史基础文件推断。
+3. 将 `类目` 按英文逗号 `,` 拆分，对每段执行首尾空白清理，删除空段，取最后一个非空值作为最小类目。
+4. 示例：`Home & Kitchen,Furniture,Home Office Furniture,Bookcases` 解析结果必须是 `Bookcases`。
+5. 把最小类目原样传给 `category-top --category`，不得翻译、扩写或改成上级类目。
+6. 如果 `类目` 没有逗号，则整个非空值就是最小类目；如果字段缺失、为空或拆分后没有有效值，AI 必须停止 Top10 调用并要求用户提供类目，不得猜测。
+7. 批量 ASIN 得到不同最小类目时，按最小类目分组，每个唯一类目分别调用一次 `category-top`。
+
+完整 CLI 顺序：
+
+```powershell
+opscli asin-data live-data --asin B0TEST1234 --site US --data-scope listing_basic --upload-xlsx --return-mode ai_ready --pretty
+opscli asin-data category-top --category "Bookcases" --date-from 2026-07-01 --date-to 2026-07-14 --limit 10 --site US --upload --enrich --pretty
+```
+
+这两条命令不能并行执行，因为第二条命令的 `--category` 依赖第一条返回的 `类目`。
+
+### 8.2 参数和命令
 
 | 参数 | 类型/默认值 | 说明 |
 | --- | --- | --- |

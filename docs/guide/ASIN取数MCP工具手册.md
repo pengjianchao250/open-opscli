@@ -445,7 +445,49 @@ polaris_enabled = true
 
 ## 8. `asin_data_category_top`
 
-### 8.1 参数
+### 8.1 AI 自动确定最小类目流程
+
+用户只提供 ASIN、未直接提供类目时，AI 必须按顺序调用，不能并行：
+
+1. 先调用 `asin_data_live_data`，传入目标 ASIN、`data_scope="listing_basic"`、`return_mode="ai_ready"` 和 `upload_xlsx=true`。
+2. 在成功响应的 `data.items[].datasets[]` 中选择 `source_key=listing_basic`，读取行内标准字段 `类目`。如果 `preview_rows` 没有该字段，则读取 `artifacts[].uri` 的基础 XLSX，在“刊登数据”工作表中读取 `类目`，不得改用旧历史基础文件推断。
+3. 将 `类目` 按英文逗号 `,` 拆分，对每段去除首尾空白，删除空段，取最后一个非空值作为最小类目。
+4. 示例：`Home & Kitchen,Furniture,Home Office Furniture,Bookcases` 必须解析为 `Bookcases`。
+5. 再调用 `asin_data_category_top`，将 `category` 设置为最小类目原值；不得翻译、扩写或传上级类目。
+6. 没有逗号时，整个非空值就是最小类目。字段缺失、为空或拆分后无有效值时，AI 必须停止并向用户索取类目，不得猜测。
+7. 批量 ASIN 对应多个最小类目时，按最小类目分组，每个唯一类目分别调用一次 `asin_data_category_top`。
+
+第一步调用：
+
+```json
+{
+  "name": "asin_data_live_data",
+  "arguments": {
+    "asin": "B0TEST1234",
+    "site": "US",
+    "data_scope": "listing_basic",
+    "upload_xlsx": true,
+    "return_mode": "ai_ready"
+  }
+}
+```
+
+解析 `类目` 得到 `Bookcases` 后执行第二步：
+
+```json
+{
+  "name": "asin_data_category_top",
+  "arguments": {
+    "category": "Bookcases",
+    "limit": 10,
+    "site": "US",
+    "upload": true,
+    "enrich": true
+  }
+}
+```
+
+### 8.2 参数
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -462,7 +504,7 @@ polaris_enabled = true
 | `session_id` | string/null | null | 普通调用方不要传 |
 | `jwt` | string/null | null | 普通调用方不要传 |
 
-### 8.2 调用样例
+### 8.3 调用样例
 
 ```json
 {
@@ -480,7 +522,7 @@ polaris_enabled = true
 }
 ```
 
-### 8.3 成功样例
+### 8.4 成功样例
 
 ```json
 {
@@ -517,7 +559,7 @@ polaris_enabled = true
 }
 ```
 
-### 8.4 失败样例
+### 8.5 失败样例
 
 ```json
 {

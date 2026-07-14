@@ -52,3 +52,15 @@ def test_manuals_define_auth_and_response_contracts_without_legacy_invocation():
         assert "POLARIS_USER_AUTH_MISSING" in content
         assert "polaris-bjx-token" in content
         assert "asin-data collect" not in content
+
+
+def test_manuals_define_category_top_leaf_category_workflow():
+    category_path = "Home & Kitchen,Furniture,Home Office Furniture,Bookcases"
+    for path in (CLI_MANUAL, MCP_MANUAL):
+        content = _read(path)
+        assert category_path in content
+        assert "`类目`" in content
+        assert "`Bookcases`" in content
+        assert "先调用" in content
+        assert "最后一个非空" in content
+        assert "不得猜测" in content
