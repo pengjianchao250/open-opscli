@@ -38,14 +38,14 @@ python3 scripts/query_plan.py "$USER_REQUEST"
 
 **命令窗口与等待（30 秒窗口设计）**：平台单条命令的有效等待上限约 30 秒（自行设置更大超时无效）。规划器内部已按此窗口设计——任意单次调用确定性返回：数据就绪时（常态）1~3 秒；需要刷新元数据时前台最多等 8 秒，未完成则**转后台续跑**并返回 `status=blocked, recovery_state=refresh_in_progress`，此时**直接执行其 `recovery_command`**（形如 `sleep 25 && python3 scripts/query_plan.py "<原文>"`，等待与重跑合并为一条命令）；连续 3 次仍未就绪才提交反馈并停止。禁止自行执行任何升级动作、禁止因等待改走旁路探查。若命令仍偶发窗口超时：原样重跑一次即可（规划器幂等）。
 
-用户请求含引号等特殊字符时改用 `--query-file <文件|->`（stdin）。用户明确指定字段时追加重复的 `--field "$FIELD"`。只处理默认 `model_view`、`answer_contract` 和 `execution_ref`；不得读取内部规划器补充回答：
+用户请求含引号等特殊字符时改用 `--query-file <文件|->`（stdin）。用户明确指定字段时追加重复的 `--field "$FIELD"`。只处理默认 `model_view`、`answer_contract` 和 `execution_ref`；不得读取内部合同补充回答：
 
-1. `data_state` 不是 `ready`：规划器已内置一次自动升级兜底；若仍返回 `status=blocked`，按规划器中 `model_view.recovery_command`（即 `opscli skills upgrade ops-dataset-query`）执行后从头开始，刷新仍失败则向用户说明元数据异常并停止，不反复重试。登录或账号变更、元数据所有权不明或数据状态不匹配时也必须刷新或升级；客户端不推断账号身份。
-2. `status=clarify_required`：按 `clarification_messages_zh` 提问；规划器给出 `dataset_candidates_zh`（候选卡片）或 `field_suggestions_zh`（近似字段建议）时，必须把它们作为选项呈现给用户点选，不问空泛问题；确认前停止。`blocked` 则按 `recovery_command`/阻断原因处置。
+1. `data_state` 不是 `ready`：规划器已内置一次自动升级兜底；若仍返回 `status=blocked`，按规划结果中 `model_view.recovery_command`（即 `opscli skills upgrade ops-dataset-query`）执行后从头开始，刷新仍失败则向用户说明元数据异常并停止，不反复重试。登录或账号变更、元数据所有权不明或数据状态不匹配时也必须刷新或升级；客户端不推断账号身份。
+2. `status=clarify_required`：按 `clarification_messages_zh` 提问；规划结果给出 `dataset_candidates_zh`（候选卡片）或 `field_suggestions_zh`（近似字段建议）时，必须把它们作为选项呈现给用户点选，不问空泛问题；确认前停止。`blocked` 则按 `recovery_command`/阻断原因处置。
 3. `model_view` 只含用户可见中文结论；最终回答必须覆盖 `answer_contract.required_disclosures_zh`，并遵守 `forbidden_outputs_zh`。
-4. **时间口径以规划器为准**：`model_view.time_scope_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源（Asia/Shanghai），不自行心算日期；`is_default=true` 表示默认口径，必须向用户披露并确认后才可执行。
-5. `platform_semantic_members` 只表示请求语义：亚马逊包含 SC+VC，亚马逊 SC/SC 只含 SC，亚马逊 VC/VC 只含 VC。`platform_filter_state=requires_permission_enum` 时规划器默认已自动枚举并回灌（规划器带 `platform_enum_source=auto_enum_service` 即已收敛）；仅当自动枚举未完成时，直接执行规划器内嵌的 `execution_ref.platform_enum_command`，再把返回值作为重复的 `--authorized-platform-value` 传回规划器取得终版规划器。
-6. `execution_ref` 仅用于正式查询构造，禁止作为业务判断理由或向用户展示。`dimensions`/`metrics` 中 `selection_source=recommended` 的字段是系统推荐（用户未点名），采用前必须在确认摘要中说明来源。规划器 ready 后立即进入构造；构造以 `execution_ref.query_template` 为基底填充，此阶段唯一允许读取的参考是 `references/simple-query-guide.md`（仅模板不能覆盖的特殊参数时），其余文档不再读取。
+4. **时间口径以规划结果为准**：`model_view.time_scope_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源（Asia/Shanghai），不自行心算日期；`is_default=true` 表示默认口径，必须向用户披露并确认后才可执行。
+5. `platform_semantic_members` 只表示请求语义：亚马逊包含 SC+VC，亚马逊 SC/SC 只含 SC，亚马逊 VC/VC 只含 VC。`platform_filter_state=requires_permission_enum` 时规划器默认已自动枚举并回灌（规划结果带 `platform_enum_source=auto_enum_service` 即已收敛）；仅当自动枚举未完成时，直接执行规划结果内嵌的 `execution_ref.platform_enum_command`，再把返回值作为重复的 `--authorized-platform-value` 传回规划器、取得终版规划结果。
+6. `execution_ref` 仅用于正式查询构造，禁止作为业务判断理由或向用户展示。`dimensions`/`metrics` 中 `selection_source=recommended` 的字段是系统推荐（用户未点名），采用前必须在确认摘要中说明来源。规划结果 ready 后立即进入构造；构造以 `execution_ref.query_template` 为基底填充，此阶段唯一允许读取的参考是 `references/simple-query-guide.md`（仅模板不能覆盖的特殊参数时），其余文档不再读取。
 
 `query_component` 只用于权限枚举，不是业务结果数据集。自然语言选表只依据当前账号元数据中的中文名称和中文说明；英文 key 仅在用户明确给出精确完整技术标识时精确匹配，不能从中文请求推断或模糊匹配。
 
@@ -56,7 +56,7 @@ python3 scripts/query_plan.py "$USER_REQUEST"
 ## 构造与执行
 
 1. CLI 构造以 `execution_ref.query_template` 为基底：普通指标按用户口径调整聚合（默认 SUM），公式/快照字段不带 `aggregation`；填 `orderBy`/`limit`，删除不需要的 null 键。MCP 字段只采用当前数据集 metadata。
-2. 不发明默认筛选。未指定筛选时只说明 `current_authenticated_account` 可见范围；明确筛选必须先经组件枚举——平台走规划器的自动枚举/`platform_enum_command`，部门/国家等其他筛选用 `execution_ref.filter_components` 中对应组件的 `component_table_id` 查枚举。无交集或歧义时停止并让用户重选，组件不可用时只阻断该筛选，不扩大范围。
+2. 不发明默认筛选。未指定筛选时只说明 `current_authenticated_account` 可见范围；明确筛选必须先经组件枚举——平台走规划结果的自动枚举/`platform_enum_command`，部门/国家等其他筛选用 `execution_ref.filter_components` 中对应组件的 `component_table_id` 查枚举。无交集或歧义时停止并让用户重选，组件不可用时只阻断该筛选，不扩大范围。
 3. 环比、同比和上期对比必须同时传主周期日期 `filters` 与 `dataComparison`（模板已按 `time_scope` 预填，执行器也会硬校验）。
 4. **执行确认分级**：数据集、字段、时间、筛选、排序、行数全部无歧义时，用一段中文陈述式披露口径后**直接执行，不等待用户回复**；只有 `clarify_required`、默认时间口径未确认、或含 `recommended` 字段未说明时才通过提问等待确认。
 5. CLI 执行只用一体化执行器（内含执行前校验、排序生效校验与兜底、截断披露和证据合同）：
@@ -79,7 +79,7 @@ CLI-only 常规结果分析不要读取 `references/result-analysis.md`：`run_q
 - Top N 或截断必须披露排序、展示数和总行数；未查询范围不得外推。
 - 披露权限、样本、公式和数据新鲜度。没有刷新完成度或外部证据时，不把末日异常当成业务事实，也不得声称因果。
 
-MCP-only（无本地 shell）、复杂审计或用户明确要求完整披露规划器时，才读取 `references/result-analysis.md` 并按其五节结构输出。
+MCP-only（无本地 shell）、复杂审计或用户明确要求完整披露证据合同时，才读取 `references/result-analysis.md` 并按其五节结构输出。
 
 ## 纠错与反馈
 

@@ -1,9 +1,9 @@
 ---
 name: ops-dataset-query-result-analysis
-description: 查询结果的证据、口径和披露规划器
+description: 查询结果的证据、口径和披露合同
 ---
 
-# 结果分析规划器
+# 结果分析合同
 
 输出严格按以下五节排列；没有足够证据的节可写“未发现”或“无法判断”，但不得省略。
 

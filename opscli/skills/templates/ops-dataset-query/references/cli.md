@@ -12,7 +12,7 @@ query_plan.py -> 当前账号组件枚举 -> opscli query simple
 ```
 
 若当前请求尚未运行规划器，直接在 Skill 目录执行（规划器按平台 30 秒命令窗口设计：
-常态 1~3 秒返回；需要刷新元数据时前台最多等 10 秒、未完成即转后台续跑并返回
+常态 1~3 秒返回；需要刷新元数据时前台最多等 8 秒、未完成即转后台续跑并返回
 `recovery_state=refresh_in_progress`，此时直接执行其 `recovery_command`（sleep+重跑
 合并的一条命令）即可，禁止自行升级；偶发窗口超时原样重跑一次，规划器幂等）：
 
@@ -20,9 +20,9 @@ query_plan.py -> 当前账号组件枚举 -> opscli query simple
 python3 scripts/query_plan.py "$USER_REQUEST"
 ```
 
-不要重复读取版本、列目录、检查源码或扫描元数据。组合规划器只消费当前账号下发的 `data/`；元数据未就绪时规划器会先自动执行一次升级兜底，仍返回 `status=blocked` 时按规划器 `model_view.recovery_command`（`opscli skills upgrade ops-dataset-query`）手动刷新后重新规划。登录/账号/元数据所有权发生变化时同样先刷新再规划。
+不要重复读取版本、列目录、检查源码或扫描元数据。规划器只消费当前账号下发的 `data/`；元数据未就绪时规划器会先自动执行一次升级兜底，仍返回 `status=blocked` 时按规划器 `model_view.recovery_command`（`opscli skills upgrade ops-dataset-query`）手动刷新后重新规划。登录/账号/元数据所有权发生变化时同样先刷新再规划。
 
-规划器默认输出模型规划器（`model_view` / `answer_contract` / `execution_ref`），Agent 只消费这三部分。`--output-mode internal` 输出内部完整规划器，仅供维护者排错，不进入正常流程。
+规划器默认输出模型合同（`model_view` / `answer_contract` / `execution_ref`），Agent 只消费这三部分。`--output-mode internal` 输出内部完整合同，仅供维护者排错，不进入正常流程。
 
 ## 1. 选表与字段
 
@@ -38,7 +38,7 @@ python3 scripts/query_plan.py "$USER_REQUEST"
 
 1. `model_view.platform_semantic_members` 表示请求语义（中文标签）；亚马逊为 SC+VC，明确 SC 或 VC 时不得扩展。内部枚举名在 `execution_ref.platform_semantic_keys`。
 2. **规划器默认自动枚举**：待枚举时会自动执行组件查询并回灌重规划，规划器带 `execution_ref.platform_enum_source=auto_enum_service` 即已收敛为终版，直接进入构造。
-3. 仅当自动枚举未完成（规划器仍为 `requires_permission_enum`）时走手动路径：直接执行规划器内嵌的 `execution_ref.platform_enum_command`（现成命令，无需手拼 payload），再将返回的平台值逐项传回：
+3. 仅当自动枚举未完成（规划器仍为 `requires_permission_enum`）时走手动路径：直接执行规划结果内嵌的 `execution_ref.platform_enum_command`（现成命令，无需手拼 payload），再将返回的平台值逐项传回：
 
 ```bash
 python3 scripts/query_plan.py "$USER_REQUEST" \
@@ -67,7 +67,7 @@ opscli query simple --table-id "$TABLE_ID" --json "$QUERY_JSON" --run --pretty
 
 ## 4. 结果与失败
 
-常规结果按 `SKILL.md` 的最小分析规划器输出，不再读取长参考。复杂审计或用户明确要求完整披露时才读取 `references/result-analysis.md`。
+常规结果按 `SKILL.md` 的最小分析合同输出，不再读取长参考。复杂审计或用户明确要求完整披露时才读取 `references/result-analysis.md`。
 
 0 行、澄清、预期的认证未就绪和用户取消不是工具故障。仅意外 opscli 失败读取 `references/feedback-guide.md` 并提交一次反馈；成功查询不自动提交反馈。
 
