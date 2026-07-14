@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-14 asin-data - Polaris 鉴权回退与用户手册
+
+**变更原因**：ASIN 刊登实时取数在个人 Polaris JWT 和直接 exchange 均失败时缺少 BJX Token 自动兜底，同时 CLI/MCP 的公开命令、返回协议和 Polaris 开关说明尚未形成独立完整手册。
+**改动点**：默认 `user` 模式按当前用户 Polaris JWT、直接 `/api/auth/cli-token` exchange、OPS `/dataMetrics/v1/asin-report-files/polaris-bjx-token` 的顺序获取刊登鉴权，前一路成功即停止；三路均失败时返回 `POLARIS_USER_AUTH_MISSING`，错误只保留异常类型、业务码或 HTTP 状态，不包含 Token、Cookie、Session ID、账号、密码或远端敏感正文。显式 `managed`、`bi_login` 模式保持原语义。新增 `docs/guide/ASIN取数CLI命令手册.md` 和 `docs/guide/ASIN取数MCP工具手册.md`，完整说明 `live-data`、`fetch-file`、yicopy、类目 Top 的参数、成功/失败协议、Polaris 开关和恢复流程；类目 Top 补充 AI 顺序调用规范：先从实时 `listing_basic` 的 `类目` 字段按英文逗号取最后一个非空最小类目，再调用 Top10，空类目不得猜测；新增文档契约测试。
+**验证结果**：TDD 阶段新增 5 个鉴权测试，其中 4 个在实现前按预期失败；实现后 `tests/asin_data/test_bi_report_data.py` 结果为 `25 passed`，文档契约测试结果为 `3 passed`。运行全部 `tests/asin_data`、MCP ASIN 工具和限流测试，结果为 `112 passed`；执行 `python -m compileall -q opscli/asin_data opscli/mcp/tools/asin_data.py`、`git diff --check` 和手册敏感信息扫描均通过。
+**影响范围**：影响 `live-data --data-scope basic/listing/listing_basic/all`、MCP `asin_data_live_data` 和 `asin_data_category_top` 的刊登鉴权回退；个人 Polaris 可用时权限不变，BI-only、历史文件、yicopy、卖家精灵和 Rufus 取数逻辑不变。
+**回滚方式**：回退 `bi_report_data.py` 的 BJX 回退分支、对应鉴权测试、两份用户手册、文档契约测试、设计与实施计划及本条变更记录。
+
+---
+
 ## 2026-07-14 asin-data - crawler-details 多站点取数
 
 **变更原因**：`crawler-details` 接口新增 `country` 参数，现有 ASIN live-data、MCP 和类目 Top10 链路需要统一支持默认 US、指定站点及批量多站点分组请求。
