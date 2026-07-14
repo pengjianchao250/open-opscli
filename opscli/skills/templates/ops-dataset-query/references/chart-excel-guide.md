@@ -31,23 +31,23 @@ opscli query chart --uuid <chart_uuid> --run --dry-run --pretty  # 仅生成 SQL
 
 ## 字段映射与格式
 
-- 先用映射脚本自动映射：CLI 用 `python scripts/chart_map.py --input <结果json> --map-results --pretty`；MCP 用 `python scripts/chart_map_mcp.py`（零 opscli 依赖，仅文件输入输出）。
+- 先用映射脚本自动映射：CLI 用 `python3 scripts/chart_map.py --input <结果json> --map-results --pretty`；MCP 用 `python3 scripts/chart_map_mcp.py`（零 opscli 依赖，仅文件输入输出）。
 - 映射不完整（`mapped_name` 仍为 `global_alias`）时手动补充：从 `payload.query.select[].expr` 提取 `field_name`，再按当前账号字段元数据查 `verbose_name`。
 - 百分比类公式指标服务端返回小数（如 `-0.2039` 即 -20.39%），展示时 ×100 保留两位小数，无数据显示 `-`。
 
 ## 异常检测（可选）
 
-`python scripts/chart_analyze.py --input <结果json> --pretty`（MCP 用 `chart_analyze_mcp.py`）。内置 5 类规则：负毛利、毛利环比降超 30%、原价金额环比降超 20%、广告费升且毛利降、订单量归零。输出 `summary`/`anomalies`/`findings`。
+`python3 scripts/chart_analyze.py --input <结果json> --pretty`（MCP 用 `chart_analyze_mcp.py`）。内置 5 类规则：负毛利、毛利环比降超 30%、原价金额环比降超 20%、广告费升且毛利降、订单量归零。输出 `summary`/`anomalies`/`findings`。
 
 ## Excel 导出
 
 前置依赖 `pip install openpyxl`：
 
 ```bash
-python scripts/excel_export.py --input <结果json> --output <输出.xlsx> [--sheet-name 名称]
-python scripts/excel_export.py --uuid <chart_uuid> --output <输出.xlsx>   # 自动调用 opscli 执行后导出
+python3 scripts/excel_export.py --input <结果json> --output <输出.xlsx> [--sheet-name 名称]
+python3 scripts/excel_export.py --uuid <chart_uuid> --output <输出.xlsx>   # 自动调用 opscli 执行后导出
 ```
 
-MCP 模式用 `python scripts/excel_export_mcp.py --input ... --output ...`。
+MCP 模式用 `python3 scripts/excel_export_mcp.py --input ... --output ...`。
 
 格式要求：表头蓝底白字加粗并冻结首行；数值列千分位、百分比列百分比格式；小计行灰底加粗、总计行深蓝底白字加粗；负毛利红字；列宽按内容自适应（最大约 50 字符）；小计/总计数据直接来自 `queries[1+].result.data`。

@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-14 asin-data/mcp - 同步 ASIN 取数服务到 release
+
+**变更原因**：需要将 `codex/asin-data-service-merge` 中已经整理完成的 ASIN 取数 CLI/MCP 能力同步到 `release`，并保留 Top10/category-top 取数修复和默认当前用户北极星鉴权策略，便于后续 release 部署使用。
+**改动点**：同步 `opscli asin-data live-data/fetch-file/category-top/yicopy-keyword-engine` 相关服务、AI Ready 返回、xlsx/OSS 上传、MCP `asin_data_live_data`/`asin_data_fetch_file`/`asin_data_category_top`/`asin_data_yicopy_keyword_engine` 工具、ASIN MCP 限流与 health 工具；刊登取数默认使用当前用户 Polaris token，兼容 `OPSCLI_ASIN_DATA_LISTING_AUTH_MODE=managed/bi_login`；修复 token URL 拼接，避免系统 URL 和 endpoint 同时带斜杠时出现双斜杠；补充 ASIN、MCP、文件上传、auth 配置等测试。
+**验证结果**：执行 `D:\workspace\open-opscli\.venv\Scripts\python.exe -m pytest tests\auth\test_config.py tests\auth\test_token_manager.py tests\asin_data\test_ai_response.py tests\asin_data\test_asin_data_cli.py tests\asin_data\test_bi_report_data.py tests\asin_data\test_category_top.py tests\asin_data\test_category_top_workbook.py tests\asin_data\test_daily_pipeline.py tests\asin_data\test_direct_runner.py tests\asin_data\test_report_files.py tests\asin_data\test_single_asin_collect.py tests\asin_data\test_split_package_builder.py tests\asin_data\test_yicopy_keyword_engine.py tests\mcp\test_asin_data_limit.py tests\mcp\test_asin_data_tools.py tests\mcp\test_health_tool.py tests\shared\test_file_uploads.py -q` 通过，结果 `122 passed`；执行 `D:\workspace\open-opscli\.venv\Scripts\python.exe -m py_compile opscli\auth\config.py opscli\auth\core\token_manager.py opscli\asin_data\cli.py opscli\asin_data\services\bi_report_data.py opscli\asin_data\services\collector.py opscli\asin_data\services\daily_pipeline.py opscli\asin_data\services\split_package_builder.py opscli\asin_data\services\category_top.py opscli\asin_data\services\category_top_workbook.py opscli\asin_data\services\yicopy_keyword_engine.py opscli\mcp\asin_data_limit.py opscli\mcp\tools\asin_data.py opscli\mcp\tools\health.py opscli\shared\file_uploads.py` 通过。
+**影响范围**：影响 ASIN 取数 CLI、ASIN MCP 工具、ASIN 取数 Skill 模板、文件上传客户端和 Polaris 鉴权配置；不包含 seller_sprite、sif、scrape_do、shopify 等非 ASIN 改动。
+**回滚方式**：回退本次提交中 ASIN/MCP/文件上传/Skill 模板/测试文件以及本条 changelog 即可。
+---
+
 ## 2026-07-10 ASIN 取数 - release 合入刊登授权回退
 
 **变更原因**：用户要求将 ASIN 取数服务中“默认走托管北极星 token，刊登接口未登录时再用固定 BI 账号登录回退”的修改合并回 release 并推送，避免部署到 MCP 后继续优先使用本地 BI_AUTH/BI_COOKIE 或旧 token。
@@ -2478,3 +2487,49 @@
 **影响范围**：仅 ops-dataset-query 的 skills upgrade 数据写入行为（每次 upgrade 均覆盖刷新数据文件，含 VERSION.json 跟随远端 manifest 版本）；ops-amazon-rufus 升级路径不受影响。
 **回滚方式**：`git checkout HEAD -- opscli/skills/sync/updater.py`，并删除 tests/skills/test_updater.py 中新增用例与两处 SELECT_COLUMNS mock。
 ---
+
+## 2026-07-13 ops-dataset-query v1.2.4 第一批优化（管线激活修复）
+
+- **为什么改**：2026-07-13 QA e2e 矩阵（6数据集×4场景24用例，报告在 ops-agent 仓库 docs/测试报告/ops-dataset-query-v1.2.3*）实锤 v1.2.3 二代规划管线双重失效：①广场发布包 VERSION.json 无 data_state 字段被 query_plan.py 无条件打回 blocked（14/14 尝试全打回、打回文案无恢复命令、0 会话按指引升级）；②QA 提示词 v18 固化旧流程叠加 lazy load_skill 只回 status/path。另发现真实包上的两个后继硬失败：同名数据集（用户仪表盘分享明细 table 52/61）触发 invalid_cards:duplicate_identifier 拒绝全账号规划；渠道组件 query_channel_set 发布类目为 normal 被 block_platform_filter_missing_component 阻断平台枚举。
+- **改了哪些文件**：opscli/skills/templates/ops-dataset-query/{SKILL.md, references/cli.md, data/query_plan.schema.json, scripts/query_plan.py, scripts/agent_query_planner.py}；tests/skills/test_dataset_query_planner.py
+- **具体做了什么**：①_data_state_ready 兼容发布包形状（无 data_state 时以 dataset_count>0+核心索引文件佐证就绪，metadata_source 标记 skill_local/published_bundle）；②刷新合同增加 recovery_command/recovery_hint_zh 并透传 model_view，build_query_plan 增加 blocked 前一次自动升级兜底（subprocess 90s 超时，--no-auto-upgrade 可关）；③SKILL.md description 内嵌第一命令硬指令（lazy 模式防宿主提示词漂移），版本 1.2.3→1.2.4；④main 错误处理改 stdout JSON {error,retryable,next_action_zh}，错误码前缀映射下一步动作，兜底捕获未预期异常为 internal_error:*；⑤SKILL.md/cli.md 增加「未登录」处置边界（禁止交互式 auth login，等1分钟重试一次后停止并反馈）；⑥agent_query_planner 名称重复不再整体拒绝（仅别名重复硬失败，同名卡片后置标记 name_conflict，显式点名自然走多候选澄清）；⑦_next_action 接受组件 guidance_status=ready（QA 组件类目为 normal 的真实形态）。
+- **如何验证**：pytest tests/skills/test_dataset_query_planner.py 10/10 通过（新增 7 用例：发布包形状就绪/占位打回带恢复命令/空包不误判/自动升级重试/错误JSON带指引/未预期异常包装/normal类目组件可枚举）；QA 真实发布包副本上 CLI 实测：发货环比→planned table 2（1237字节合同）、即时销售显式点名→planned table 3（正解 e2e 错查缺陷）、同名数据集→clarify_required、亚马逊SC筛选→query_platform_permission_enum+组件 table 7、占位模板→blocked+recovery_command。tests/skills 整目录既有收集失败与本次无关（stash 基线复现同样失败）。
+- **影响范围**：仅 ops-dataset-query 技能模板与其回归测试；不涉服务端。发布 1.2.4 到 QA 广场后 system 分享全员自动同步；提示词 v18→v19 对齐为独立协同项，须在本改动发布后进行。
+- **回滚方式**：git checkout 恢复上述 6 个文件即可；广场侧回滚到 1.2.3 版本。
+
+## 2026-07-14 ops-dataset-query v1.3.0 第二三四批优化（合同补全+入口能力+一体化执行器）
+
+- **为什么要改**：延续 v1.2.4 管线激活修复，落地优化分析报告的 P0-1/P0-2/P0-3/P0-4/P0-5 与 P1-3/P1-4/P1-5、2-1/2-2、P2-1/P2-2/P2-5：合同缺日期字段/澄清空洞/枚举三步/排序零兜底/日期心算 是 e2e 实测的五大轮次放大器。
+- **改了哪些文件**：模板内 SKILL.md、QUERY_SPEC.md、references/{cli.md,simple-query-guide.md,chart-excel-guide.md}、data/{query_plan.schema.json,intent_rules.json,README-字段使用.md(新)}、scripts/{query_plan.py,dataset_guidance.py,core.py,evidence_contract.py,time_scope.py(新),run_query.py(新)}；tests/skills/test_dataset_query_planner.py
+- **具体做了什么**：①execution_ref 补全：date_fields 无条件输出、filter_components（部门/国家等组件引用进 contract 模式）、无点名字段时 recommended 字段（标注需确认）；②澄清弹药：dataset_candidates_zh 候选卡片 + unknown_requested_fields 回显 + 字符二元组近似字段建议；③时间口径本地解析 time_scope.py（近N天/昨天/本周/上周/本月/上月/环比/同比，Asia/Shanghai，默认近30天须披露）进 model_view.time_scope_zh 与 execution_ref.time_scope；④平台枚举一次收敛：--auto-enum 默认开（subprocess 45s 超时失败回落），合同内嵌 platform_enum_command 现成命令；扩充 intent_rules 平台别名表（补「亚马逊SC」等形态）；⑤query_template 预填骨架（实测形态：日期>=/<=两行、dataComparison、公式字段不带聚合）；⑥新增 run_query.py 一体化执行器：执行前硬校验（占位符/漏主周期/公式带聚合/desc形态归一为 direction）→ 执行 → 排序单调性校验+本地重排/放大重查兜底（服务端 orderBy 缺陷过渡方案）→ 全量落盘只回预览+披露+内嵌证据合同（stdout 8KB 限幅）；⑦evidence_contract +--input；query_plan +--query-file/stdin；chart 指南统一 python3；⑧SKILL.md 矛盾修订（每规划阶段一次/正向主线前置/读文档边界收敛/platform_semantic_members 中文化/执行确认分级：无歧义陈述式披露直接执行）；⑨answer_contract 去 *_codes 冗余；QUERY_SPEC 首行标注；discover_data_dir 补 .agents 候选。
+- **如何验证**：pytest 22/22（新增 12 用例：日期字段/时间合同/模板/推荐字段/候选卡片/近似建议/auto-enum 收敛/time_scope 三则/run_query 四则）；QA 真实发布包实弹五场景：发货环比合同 2.4KB 一步齐全、模板直填经 run_query 打真实后端取回真数据（美国 353040.70 降序正确）、**服务端 orderBy 缺陷现场复现两次且均被执行器单调性校验逮住并 requery_limit_15_then_local_sort 兜底披露**、同名数据集澄清带双候选卡片、平台筛选实弹 auto-enum 一次调用正确判定 block_platform_scope_not_authorized（enum_source=auto_enum_service）。
+- **影响范围**：仅技能模板与回归测试，不涉服务端；SKILL.md 版本 1.2.4→1.3.0。已知小瑕疵：QA 同名数据集 description 也相同导致候选卡片文案无法区分（数据侧问题，卡片机制本身正常）。
+- **回滚方式**：git checkout 恢复模板目录与测试文件；广场回滚旧版本。
+
+## 2026-07-14 ops-dataset-query v1.3.1 沙箱自愈修复（v19 验收发现的两个新形态）
+
+- **为什么改**：提示词 v19 上线后验收 e2e 发现：①用户从模板目录发布的 1.3.0 广场包带的是占位数据（data_state=placeholder、CSV 仅表头），上一版真实数据是 BI 数据发布管线灌入的，被覆盖；②沙箱内 `opscli skills upgrade` 写入 opscli 自己的发现目录（本机实测 ~/.claude/skills），而挂载的 .agents 是只读快照——升级成功但主目录依旧占位，恢复指引救不回；③upgrade 写入的 VERSION.json 是第三种形状（仅 name+version，无 data_state 无 dataset_count）。v19 提示词行为本身完全符合设计（按合同→按恢复→按排错预算→提交反馈）。
+- **具体做了什么**：①`_data_state_ready` 以「核心索引 CSV 含数据行」为统一就绪证据（新增 upgraded_local 形态；空包=CSV 仅表头判不就绪）；②新增 `_fallback_ready_data_dir`：升级后主目录仍未就绪时接管 cwd/.claude/skills、~/.claude/skills、$OPSCLI_SKILLS_DIR 中已就绪的数据目录（metadata_source 加 +fallback_dir 后缀，自愈动作统一受 auto_upgrade 开关约束）；③`effective_data_dir` 透传投影层，字段标签跟随实际生效目录；④升级超时 90s→60s（防组合入口撑爆单条 exec 超时，v19 验收实测首调超时）。
+- **验证**：pytest 23/23；本机模拟沙箱闭环（占位挂载包+真实 opscli upgrade）：blocked→自动升级→接管 ~/.claude/skills→`planned, metadata_source=upgraded_local+fallback_dir, table_id=2`。
+- **发布配套**：已组装带真实数据的发布包（模板 1.3.1 代码 + 1.2.3 包的 43 数据集真实数据）供重新发布，消除新沙箱的一次自愈开销；发布后建议与 BI 数据发布管线确认其重新发布数据时是否保留最新 scripts。
+- **回滚方式**：git checkout 恢复 query_plan.py 与测试文件。
+
+## 2026-07-13 后端 data-metrics - 同步队列仅返回当前用户自己发布的技能
+
+**变更原因**：`opscli skills install --sync-market` 原逻辑会把用户安装过的所有广场技能（含他人发布的）都纳入同步队列。新需求要求：非当前用户创建发布的技能默认不进入同步安装，他人发布的技能只能通过 `opscli skills install username@skill_name` 显式安装。
+**改动点**：后端 auto-scheduler 项目 `vendor/aukey/data-metrics`（非 opscli 仓库）：
+1. `src/Services/SkillMarketplaceService.php` — `getSyncQueue()` 查询新增 `->where('sm.user_id', $userId)` 过滤（仅返回当前用户发布的技能），并更新方法 docblock；
+2. `src/Http/Controllers/SkillSyncController.php` — `queue()` docstring 同步更新说明。
+opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表），旧版客户端自动获得新行为。
+**验证结果**：`php -l`（PHP 8.4，/opt/homebrew/opt/php@8.4）两文件均无语法错误。本机默认 PHP 7.4 对该包预存的 PHP 8 语法（nullsafe、构造器属性提升）报 parse error，与本次改动无关。待接口级验证：测试账号调 `GET /v1/skills/sync/queue` 确认不含他人发布的技能，`opscli skills install --sync-market --dry-run` 同步计划只剩自己发布的。
+**影响范围**：仅 `GET /v1/skills/sync/queue` 返回内容（--sync-market 同步范围收窄）；显式远程安装、排除名单、安装统计回调等链路不受影响。过滤后队列内全部为 creator，`is_downloadable` 恒为 true、`download_url` 恒非空（字段保留，兼容旧客户端）。
+**回滚方式**：删除 `getSyncQueue()` 中的 `->where('sm.user_id', $userId)` 一行及其注释，还原两处 docblock。
+---
+
+## 2026-07-14 ops-dataset-query v1.3.2 术语更名与超时处置（用户反馈两项）
+
+- **为什么改**：①「合同」用语在 agent 回复中易被误解为法律合同，按用户要求统一更名为「规划器」；②矩阵复跑实测规划器首次调用常撞默认 60s 执行超时（内部含自动升级 ≤60s + 自动枚举 ≤45s），模型需自行摸索「拉长等待重试」，浪费轮次。
+- **具体做了什么**：①全模板中文用语「合同/组合入口」→「规划器」（产物语境用「规划结果」），保护「证据合同」独立概念不受影响，英文 JSON 键（contract/answer_contract 等）不变；②SKILL.md/cli.md/description 增加执行超时预算指引：规划器首次运行设 ≥120s 超时、run_query 设 ≥180s，超时=原样重试一次并加大超时（规划器幂等二次秒回），禁止因超时改走旁路探查；③SKILL.md 版本 1.3.1→1.3.2。
+- **验证**：pytest 23/23；QA 真实数据包抽验 planned/table 2/time_scope 对比期正常。
+- **影响范围**：仅技能模板文案与指引；无逻辑变更（除 description）。需重新发布到 QA 广场并同步提示词 v20（更名+超时指引）。
+- **回滚方式**：git revert 本次 commit。

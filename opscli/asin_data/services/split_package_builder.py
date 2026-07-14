@@ -51,7 +51,6 @@ LISTING_SHEET_ALWAYS_OMITTED_FIELDS = {
     "\u5173\u952e\u8bcd\u6765\u6e90",
     "\u8f93\u5165\u884c\u53f7",
     "\u6765\u6e90\u6587\u4ef6",
-    "\u4e94\u70b9\u63cf\u8ff0",
     "\u5e97\u94fa/\u90e8\u95e8",
     "\u8d1f\u8d23\u4eba",
     "listid",
@@ -61,6 +60,79 @@ LISTING_SHEET_DUPLICATE_FIELDS = {
     "\u5546\u54c1\u6807\u9898": "\u4ea7\u54c1\u6807\u9898",
     "\u54c1\u724c": "\u54c1\u724c\u540d",
     "\u4e3b\u56fe\u94fe\u63a5": "\u4e3b\u56fe",
+}
+
+CRAWLER_LISTING_CONFLICT_FIELDS = {
+    "\u5546\u54c1\u6807\u9898",
+    "\u6807\u9898",
+    "listing",
+    "f_listing",
+    "title",
+    "productTitle",
+    "itemTitle",
+    "\u4ea7\u54c1\u6807\u9898",
+    "\u4e94\u70b9\u63cf\u8ff0",
+    "\u4e94\u70b9",
+    "five_point_description",
+    "f_five_point_description",
+    "five_point_description_count",
+    "f_five_point_description_count",
+    "bullet_points",
+    "bulletPoints",
+    "features",
+    "\u4e94\u70b9\u63cf\u8ff0\u6570\u91cf",
+    "\u5546\u54c1\u63cf\u8ff0",
+    "\u4ea7\u54c1\u63cf\u8ff0",
+    "\u63cf\u8ff0",
+    "description",
+    "f_description",
+    "product_description",
+    "productDescription",
+    "Description",
+    "Product Description",
+    "About this item",
+    "About This Item",
+    "\u4e3b\u56fe",
+    "\u4e3b\u56fe\u94fe\u63a5",
+    "\u5546\u54c1\u56fe\u7247",
+    "\u56fe\u7247",
+    "\u56fe\u7247\u94fe\u63a5",
+    "image",
+    "f_image",
+    "Image",
+    "Images",
+    "Main Image",
+    "main_image",
+    "main_image_url",
+    "mainImage",
+    "mainImageUrl",
+    "image_url",
+    "imageUrl",
+    "imageUrls",
+    "image_urls",
+    "\u526f\u56fe",
+    "\u5176\u4ed6\u9644\u56fe\u94fe\u63a5",
+    "subplot",
+    "f_subplot",
+    "subplot_count",
+    "f_subplot_count",
+    "\u526f\u56fe\u6570\u91cf",
+    "\u5b50\u56fe\u6570\u91cf",
+    "other_images",
+    "otherImages",
+    "other_image_url",
+    "otherImageUrl",
+    "video_count",
+    "f_video_count",
+    "\u89c6\u9891\u6570\u91cf",
+    "product_details",
+    "f_product_details",
+    "\u5546\u54c1\u8be6\u60c5",
+    "\u4ea7\u54c1\u8be6\u60c5",
+}
+CRAWLER_LISTING_CONFLICT_FIELD_KEYS = {
+    re.sub(r"[\s_\-]+", "", field).lower()
+    for field in CRAWLER_LISTING_CONFLICT_FIELDS
 }
 
 # file_key -> (db_column, is_multi) 映射，用于逐文件交付。
@@ -167,17 +239,6 @@ def write_basic_workbook(path: Path, asin_result: dict[str, Any]) -> None:
     legacy_crawler_rows = rows_from_source(query.get("crawler_listing"))
     listing_basic_row = listing_basic_row_from_bi(asin_result)
     crawler_row = crawler_row_from_bi(asin_result) or (legacy_crawler_rows[0] if legacy_crawler_rows else {})
-    product_details = parse_jsonish(first_value(crawler_row, "product_details", "f_product_details", "\u5546\u54c1\u8be6\u60c5")) or {}
-    if not isinstance(product_details, dict):
-        product_details = {}
-    listing_main_image = first_value(
-        listing_basic_row,
-        "\u4e3b\u56fe\u94fe\u63a5",
-        "main_product_image_locator.media_location",
-        "main_image_url",
-    )
-    listing_other_images = first_value(listing_basic_row, "\u5176\u4ed6\u9644\u56fe\u94fe\u63a5")
-    listing_bullets = first_value(listing_basic_row, "\u4e94\u70b9\u63cf\u8ff0")
 
     listing_rows = []
     listing_omitted_fields = listing_sheet_omitted_fields(listing_basic_row)
@@ -200,19 +261,10 @@ def write_basic_workbook(path: Path, asin_result: dict[str, Any]) -> None:
         listing_rows.extend(add_row_type(sales_rows, "\u9500\u552e/\u520a\u767b\u5173\u8054\u6570\u636e"))
     write_rows(wb.create_sheet(SHEET_LISTING), listing_rows)
 
-    write_rows(wb.create_sheet(SHEET_CRAWLER), legacy_crawler_rows or ([crawler_row] if crawler_row else []))
-    write_key_values(wb.create_sheet(SHEET_PRODUCT), product_details)
-    bullet_values = as_list(first_value(crawler_row, "five_point_description", "f_five_point_description", "\u4e94\u70b9\u63cf\u8ff0"))
-    if not bullet_values:
-        bullet_values = as_list(listing_bullets)
-    write_rows(wb.create_sheet(SHEET_BULLETS), numbered_rows(bullet_values), ["\u5e8f\u53f7", "\u5185\u5bb9"])
-    image_rows: list[dict[str, Any]] = []
-    append_image_rows(image_rows, "\u4e3b\u56fe", first_value(crawler_row, "image", "f_image", "\u4e3b\u56fe") or listing_main_image)
-    append_image_rows(image_rows, "\u9644\u56fe", first_value(crawler_row, "subplot", "f_subplot", "\u9644\u56fe") or listing_other_images)
-    append_image_rows(image_rows, "A+\u56fe\u7247", first_value(crawler_row, "a_image", "f_a_image", "A+\u56fe\u7247"))
-    write_rows(wb.create_sheet(SHEET_IMAGES), image_rows, ["\u7c7b\u578b", "\u5e8f\u53f7", "URL"])
-    write_rows(wb.create_sheet(SHEET_QA), normalize_rows(first_value(crawler_row, "qa", "f_qa", "QA")))
-    write_rows(wb.create_sheet(SHEET_REVIEWS), normalize_rows(first_value(crawler_row, "review_list", "f_review_list", "\u8bc4\u8bba")))
+    crawler_rows_for_sheet = remove_crawler_listing_conflict_fields(
+        legacy_crawler_rows or ([crawler_row] if crawler_row else [])
+    )
+    write_rows(wb.create_sheet(SHEET_CRAWLER), crawler_rows_for_sheet)
     save_workbook(wb, path)
 
 
@@ -426,6 +478,29 @@ def rows_from_source(payload: Any) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
+def remove_crawler_listing_conflict_fields(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """移除爬虫中会与刊登基础数据冲突的 Listing 内容字段。"""
+    cleaned: list[dict[str, Any]] = []
+    for row in rows:
+        cleaned.append(
+            {
+                key: value
+                for key, value in row.items()
+                if not is_crawler_listing_conflict_field(key)
+            }
+        )
+    return cleaned
+
+
+def is_crawler_listing_conflict_field(key: Any) -> bool:
+    """判断字段是否属于爬虫侧 Listing 内容，避免与刊登数据重复返回。"""
+    text = str(key).strip()
+    if text in CRAWLER_LISTING_CONFLICT_FIELDS:
+        return True
+    normalized = re.sub(r"[\s_\-]+", "", text).lower()
+    return normalized in CRAWLER_LISTING_CONFLICT_FIELD_KEYS
+
+
 def strip_hidden_rows(rows: list[Any]) -> list[dict[str, Any]]:
     return [strip_hidden_keys(row) for row in rows if isinstance(row, dict)]
 
@@ -528,15 +603,6 @@ def as_list(value: Any) -> list[Any]:
     if value in (None, ""):
         return []
     return [value]
-
-
-def numbered_rows(values: list[Any]) -> list[dict[str, Any]]:
-    return [{"\u5e8f\u53f7": index, "\u5185\u5bb9": value} for index, value in enumerate(values, start=1)]
-
-
-def append_image_rows(rows: list[dict[str, Any]], image_type: str, value: Any) -> None:
-    for index, url in enumerate(as_list(value), start=1):
-        rows.append({"\u7c7b\u578b": image_type, "\u5e8f\u53f7": index, "URL": url})
 
 
 def add_row_type(rows: list[dict[str, Any]], row_type: str) -> list[dict[str, Any]]:

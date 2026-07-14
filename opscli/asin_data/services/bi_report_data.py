@@ -1,4 +1,4 @@
-"""Client for ASIN BI report data endpoints."""
+﻿"""Client for ASIN BI report data endpoints."""
 
 from __future__ import annotations
 
@@ -23,10 +23,21 @@ from opscli.shared.http import parse_remote_response
 
 DEFAULT_TIMEOUT = 30
 DEFAULT_BI_LOGIN_ENDPOINT = "https://bi.api.xenkee.com/auth/login"
+DEFAULT_POLARIS_BJX_TOKEN_ENDPOINT = "/dataMetrics/v1/asin-report-files/polaris-bjx-token"
 DEFAULT_BI_LOGIN_USERNAME = "wanglintao@aukeys.com"
 DEFAULT_BI_LOGIN_PASSWORD = "wlt123456"
-DEFAULT_POLARIS_BJX_TOKEN_ENDPOINT = "/dataMetrics/v1/asin-report-files/polaris-bjx-token"
 BI_LOGIN_CONFIG_SECTION = "bi_login"
+LISTING_AUTH_MODE_ENV = "OPSCLI_ASIN_DATA_LISTING_AUTH_MODE"
+LISTING_AUTH_MODE_ALIASES = {
+    "": "user",
+    "current_user": "user",
+    "personal": "user",
+    "remote": "managed",
+    "remote_token": "managed",
+    "bjx": "managed",
+    "login": "bi_login",
+}
+LISTING_AUTH_MODES = {"user", "managed", "bi_login"}
 LISTING_AUTH_EXPIRED_MARKERS = ("未登陆", "未登录")
 
 BI_REPORT_DATA_SOURCES: dict[str, dict[str, str]] = {
@@ -62,6 +73,51 @@ BASIC_REPORT_SOURCE_KEYS = ("listing_basic", "crawler_details")
 BI_ONLY_REPORT_SOURCE_KEYS = tuple(
     key for key in BI_REPORT_DATA_SOURCES if key not in BASIC_REPORT_SOURCE_KEYS
 )
+SITE_CODE_ALIASES: dict[str, str] = {
+    "US": "US",
+    "USA": "US",
+    "美国": "US",
+    "美国站": "US",
+    "美区": "US",
+    "UK": "UK",
+    "GB": "UK",
+    "英国": "UK",
+    "英国站": "UK",
+    "CA": "CA",
+    "加拿大": "CA",
+    "加拿大站": "CA",
+    "DE": "DE",
+    "德国": "DE",
+    "德国站": "DE",
+    "FR": "FR",
+    "法国": "FR",
+    "法国站": "FR",
+    "IT": "IT",
+    "意大利": "IT",
+    "意大利站": "IT",
+    "ES": "ES",
+    "西班牙": "ES",
+    "西班牙站": "ES",
+    "JP": "JP",
+    "日本": "JP",
+    "日本站": "JP",
+    "AU": "AU",
+    "澳大利亚": "AU",
+    "澳大利亚站": "AU",
+    "澳洲": "AU",
+    "MX": "MX",
+    "墨西哥": "MX",
+    "墨西哥站": "MX",
+    "BR": "BR",
+    "巴西": "BR",
+    "巴西站": "BR",
+    "AE": "AE",
+    "阿联酋": "AE",
+    "阿联酋站": "AE",
+    "SA": "SA",
+    "沙特": "SA",
+    "沙特站": "SA",
+}
 
 ROW_CONTAINER_KEYS = ("rows", "items", "records", "list", "data", "result", "results")
 ASIN_KEYS = (
@@ -156,11 +212,19 @@ class AsinBiReportDataClient:
         start_date: str | None = None,
         end_date: str | None = None,
         source_keys: Sequence[str] | None = None,
+        site_by_asin: Mapping[str, str] | None = None,
+        listing_account_type_by_asin: Mapping[str, int] | None = None,
+        default_site: str = "US",
     ) -> dict[str, Any]:
         normalized_asins = normalize_asins(asins)
         if not normalized_asins:
             raise ValueError("asins must not be empty")
         source_configs = _filter_source_configs(self.sources, source_keys)
+        normalized_site_by_asin = _normalize_site_by_asin(site_by_asin)
+        normalized_listing_account_type_by_asin = _normalize_listing_account_type_by_asin(
+            listing_account_type_by_asin
+        )
+        normalized_default_site = _normalize_site_code(default_site)
 
         headers: dict[str, str] = {}
         cookies: dict[str, str] = {}
@@ -187,6 +251,9 @@ class AsinBiReportDataClient:
                     end_date=end_date,
                     headers=headers,
                     cookies=cookies,
+                    site_by_asin=normalized_site_by_asin,
+                    listing_account_type_by_asin=normalized_listing_account_type_by_asin,
+                    default_site=normalized_default_site,
                 )
             )
 
@@ -216,6 +283,9 @@ class AsinBiReportDataClient:
         end_date: str | None,
         headers: dict[str, str],
         cookies: dict[str, str],
+        site_by_asin: Mapping[str, str],
+        listing_account_type_by_asin: Mapping[str, int],
+        default_site: str,
     ) -> dict[str, Any]:
         endpoint = config["endpoint"]
         try:
@@ -231,6 +301,9 @@ class AsinBiReportDataClient:
                         asins=asins,
                         headers=listing_headers,
                         cookies=listing_cookies,
+                        site_by_asin=site_by_asin,
+                        listing_account_type_by_asin=listing_account_type_by_asin,
+                        default_site=default_site,
                     )
                 except Exception as exc:
                     if not _is_listing_auth_expired(exc):
@@ -239,7 +312,7 @@ class AsinBiReportDataClient:
                     listing_headers, listing_cookies = self._build_listing_request_auth(
                         fallback_headers=headers,
                         fallback_cookies=cookies,
-                        force_bi_login=True,
+                        refresh_auth=True,
                     )
                     return self._fetch_listing_basic_source(
                         key=key,
@@ -247,6 +320,9 @@ class AsinBiReportDataClient:
                         asins=asins,
                         headers=listing_headers,
                         cookies=listing_cookies,
+                        site_by_asin=site_by_asin,
+                        listing_account_type_by_asin=listing_account_type_by_asin,
+                        default_site=default_site,
                     )
             if key == "sp_search_term":
                 return self._fetch_sp_search_term_source(
@@ -291,42 +367,45 @@ class AsinBiReportDataClient:
         *,
         fallback_headers: dict[str, str],
         fallback_cookies: dict[str, str],
-        force_bi_login: bool = False,
+        refresh_auth: bool = False,
     ) -> tuple[dict[str, str], dict[str, str]]:
-        if self._listing_auth_cache is not None and not force_bi_login:
+        if self._listing_auth_cache is not None and not refresh_auth:
             headers, cookies = self._listing_auth_cache
             return dict(headers), dict(cookies)
-        if force_bi_login:
+        mode = _listing_auth_mode()
+        if mode == "bi_login":
             auth = self._build_bi_login_request_auth(use_default_account=True)
             if auth is None:
                 raise AsinBiReportDataBusinessError("BI_LOGIN_AUTH_MISSING", "BI login credentials are missing")
             headers, cookies = auth
             return self._cache_listing_auth(_listing_browser_headers(headers), cookies)
-        try:
+
+        if mode == "managed":
             auth = self._build_remote_polaris_bjx_request_auth()
             if auth is not None:
                 headers, cookies = auth
                 return self._cache_listing_auth(_listing_browser_headers(headers), cookies)
-        except Exception:
-            pass
+
         try:
-            auth = self._build_bi_login_request_auth()
-            if auth is not None:
-                headers, cookies = auth
-                return self._cache_listing_auth(_listing_browser_headers(headers), cookies)
-        except Exception:
-            pass
-        try:
-            headers, cookies = self.auth_client.build_request_auth("polaris")
-            headers.update(get_mcp_request_headers())
+            headers, cookies = self._build_user_polaris_request_auth(refresh=refresh_auth)
             return self._cache_listing_auth(_listing_browser_headers(headers), cookies)
-        except Exception:
+        except Exception as exc:
             try:
                 headers, cookies = self._build_direct_polaris_request_auth()
                 return self._cache_listing_auth(_listing_browser_headers(headers), cookies)
-            except Exception:
-                pass
-            return _listing_browser_headers(fallback_headers), fallback_cookies
+            except Exception as direct_exc:
+                raise AsinBiReportDataBusinessError(
+                    "POLARIS_USER_AUTH_MISSING",
+                    f"Polaris user auth is missing or invalid: {exc}; direct token exchange failed: {direct_exc}",
+                ) from direct_exc
+
+    def _build_user_polaris_request_auth(self, *, refresh: bool = False) -> tuple[dict[str, str], dict[str, str]]:
+        """使用当前 opscli 登录用户的北极星 token 构造刊登接口鉴权。"""
+        if refresh:
+            self.auth_client.refresh_token("polaris")
+        headers, cookies = self.auth_client.build_request_auth("polaris")
+        headers.update(get_mcp_request_headers())
+        return headers, cookies
 
     def _build_remote_polaris_bjx_request_auth(self) -> tuple[dict[str, str], dict[str, str]] | None:
         """从 ops 取数服务获取托管的北极星 token，并转换为刊登接口鉴权。"""
@@ -501,17 +580,33 @@ class AsinBiReportDataClient:
         asins: list[str],
         headers: dict[str, str],
         cookies: dict[str, str],
+        site_by_asin: Mapping[str, str],
+        listing_account_type_by_asin: Mapping[str, int],
+        default_site: str,
     ) -> dict[str, Any]:
         rows: list[dict[str, Any]] = []
         raw_items: list[dict[str, Any]] = []
 
         def fetch_one(asin: str) -> dict[str, Any]:
-            return self._fetch_listing_basic_for_asin(
-                asin=asin,
-                config=config,
-                headers=headers,
-                cookies=cookies,
-            )
+            try:
+                return self._fetch_listing_basic_for_asin(
+                    asin=asin,
+                    site_code=_site_code_for_asin(asin, site_by_asin=site_by_asin, default_site=default_site),
+                    account_type=_listing_account_type_for_asin(asin, listing_account_type_by_asin),
+                    config=config,
+                    headers=headers,
+                    cookies=cookies,
+                )
+            except Exception as exc:
+                if _is_listing_auth_expired(exc):
+                    raise
+                return {
+                    "asin": asin,
+                    "status": "not_found" if _is_listing_not_found(exc) else "failed",
+                    "row": None,
+                    "error": _error_dict(exc),
+                    "error_message": str(exc),
+                }
 
         if len(asins) > 1:
             with ThreadPoolExecutor(max_workers=min(8, len(asins))) as executor:
@@ -525,37 +620,48 @@ class AsinBiReportDataClient:
             row = payload.get("row")
             if isinstance(row, dict):
                 rows.append(row)
+        errors = [
+            f"{payload.get('asin')}: {payload.get('error_message')}"
+            for payload in payloads
+            if payload.get("error_message")
+        ]
         return {
             "key": key,
             "label": config["label"],
             "endpoint": config["endpoint"],
             "list_endpoint": config.get("list_endpoint"),
-            "status": "success",
+            "status": "success" if not errors else "partial",
             "row_count": len(rows),
             "rows": rows,
             "raw": raw_items,
+            **({"errors": errors} if errors else {}),
         }
 
     def _fetch_listing_basic_for_asin(
         self,
         *,
         asin: str,
+        site_code: str,
+        account_type: int,
         config: dict[str, str],
         headers: dict[str, str],
         cookies: dict[str, str],
     ) -> dict[str, Any]:
         list_endpoint = config.get("list_endpoint") or "https://bi.api.xenkee.com/listing/getAmazonListing"
+        list_params = {
+            "abnormal_state": 1,
+            "asin": asin,
+            "page": 1,
+            "limit": 20,
+            "view_type": "child",
+            "account_type": account_type,
+            "_t": int(time.time()),
+        }
+        if _has_value(site_code):
+            list_params["site_code"] = site_code
         list_response = self.http_get(
             self._resolve_endpoint(list_endpoint),
-            params={
-                "abnormal_state": 1,
-                "asin": asin,
-                "page": 1,
-                "limit": 20,
-                "view_type": "child",
-                "account_type": 1,
-                "_t": int(time.time()),
-            },
+            params=list_params,
             headers=headers,
             cookies=cookies,
             timeout=DEFAULT_TIMEOUT,
@@ -847,6 +953,11 @@ def normalize_listing_basic(
         "关键词搜索": _first_present(merged, "generic_keyword.value"),
         "generic_keyword.value": _first_present(merged, "generic_keyword.value"),
         "商品标题": _first_present(merged, "item_name.value", "item_name"),
+        "商品亮点": _first_present(
+            merged,
+            "title_differentiation.value",
+            "title_differentiation",
+        ),
         "品牌": _first_present(merged, "brand.value", "brand_name"),
         "站点": _first_present(merged, "country_iso_code", "country_site_code"),
         "店铺/部门": _first_present(merged, "site_name"),
@@ -997,6 +1108,42 @@ def normalize_asin(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
+def _normalize_site_code(value: Any) -> str:
+    text = str(value or "US").strip()
+    return SITE_CODE_ALIASES.get(text) or SITE_CODE_ALIASES.get(text.upper()) or text.upper()
+
+
+def _normalize_site_by_asin(site_by_asin: Mapping[str, str] | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for asin, site in (site_by_asin or {}).items():
+        normalized_asin = normalize_asin(asin)
+        normalized_site = _normalize_site_code(site)
+        if normalized_asin and normalized_site:
+            result[normalized_asin] = normalized_site
+    return result
+
+
+def _normalize_listing_account_type_by_asin(account_type_by_asin: Mapping[str, int] | None) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for asin, account_type in (account_type_by_asin or {}).items():
+        normalized_asin = normalize_asin(asin)
+        try:
+            normalized_account_type = int(account_type)
+        except (TypeError, ValueError):
+            continue
+        if normalized_asin and normalized_account_type > 0:
+            result[normalized_asin] = normalized_account_type
+    return result
+
+
+def _site_code_for_asin(asin: str, *, site_by_asin: Mapping[str, str], default_site: str) -> str:
+    return site_by_asin.get(normalize_asin(asin)) or _normalize_site_code(default_site)
+
+
+def _listing_account_type_for_asin(asin: str, account_type_by_asin: Mapping[str, int]) -> int:
+    return account_type_by_asin.get(normalize_asin(asin), 1)
+
+
 def _date_range_params(*, start_date: str | None, end_date: str | None) -> dict[str, str]:
     """构造后端 ASIN BI 接口支持的日期范围参数。"""
     if not start_date or not end_date:
@@ -1035,6 +1182,18 @@ def _bi_login_setting(env_name: str, config_name: str, login_config: Mapping[str
     if env_value:
         return env_value
     return str(login_config.get(config_name) or "").strip()
+
+
+def _listing_auth_mode() -> str:
+    """读取刊登接口鉴权模式，默认使用当前登录用户的北极星权限。"""
+    raw_mode = os.environ.get(LISTING_AUTH_MODE_ENV, "user").strip().lower()
+    mode = LISTING_AUTH_MODE_ALIASES.get(raw_mode, raw_mode)
+    if mode not in LISTING_AUTH_MODES:
+        raise AsinBiReportDataBusinessError(
+            "LISTING_AUTH_MODE_INVALID",
+            f"{LISTING_AUTH_MODE_ENV} must be one of: {', '.join(sorted(LISTING_AUTH_MODES))}",
+        )
+    return mode
 
 
 def _filter_source_configs(
@@ -1142,8 +1301,21 @@ def _is_listing_auth_expired(exc: Exception) -> bool:
     return any(marker in message for marker in LISTING_AUTH_EXPIRED_MARKERS)
 
 
+def _is_listing_not_found(exc: Exception) -> bool:
+    """判断单个 ASIN 是否仅是未命中刊登记录，这类错误不应中断整个批量。"""
+    code = str(getattr(exc, "business_code", "") or "").upper()
+    return code in {"LISTING_NOT_FOUND", "LISTING_ID_NOT_FOUND"}
+
+
+def _error_dict(exc: Exception) -> dict[str, Any]:
+    """把异常转换成可序列化的错误字典。"""
+    if hasattr(exc, "to_dict"):
+        return exc.to_dict()  # type: ignore[no-any-return, call-arg]
+    return {"code": type(exc).__name__, "message": str(exc)}
+
+
 def _failed_source(key: str, config: dict[str, str], exc: Exception) -> dict[str, Any]:
-    error = exc.to_dict() if hasattr(exc, "to_dict") else {"code": type(exc).__name__, "message": str(exc)}
+    error = _error_dict(exc)
     return {
         "key": key,
         "label": config["label"],
@@ -1200,7 +1372,7 @@ def _aggregate_status(sources: Any) -> str:
         return "skipped"
     if all(status == "success" for status in statuses):
         return "success"
-    if any(status == "success" for status in statuses):
+    if any(status in {"success", "partial"} for status in statuses):
         return "partial"
     if all(status == "planned" for status in statuses):
         return "planned"

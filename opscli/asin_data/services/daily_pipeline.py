@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
 
-from opscli.amazon_rufus.services.batch_backend import BatchGetBackendOptions, RufusBatchBackendRunner
 from opscli.amazon_rufus.services.question_bank import QuestionBankService
 from opscli.asin_data.services.bi_report_data import (
     build_bi_report_data_placeholder,
@@ -69,12 +68,12 @@ class DailyAsinDataPipeline:
         self,
         *,
         collector: AsinDataCollector | None = None,
-        rufus_batch_runner: RufusBatchBackendRunner | None = None,
+        rufus_batch_runner: Any | None = None,
     ) -> None:
         self.collector = collector or AsinDataCollector()
         self.legacy = self.collector.legacy
         self.runner: DirectOpsRunner = self.collector.runner
-        self.rufus_batch_runner = rufus_batch_runner or RufusBatchBackendRunner()
+        self.rufus_batch_runner = rufus_batch_runner
 
     def run_stage(self, stage: str, **kwargs: Any) -> dict[str, Any]:
         stage = self._normalize_stage(stage)
@@ -301,6 +300,11 @@ class DailyAsinDataPipeline:
 
     def _run_bi_stage(self, args: Any, records: list[dict[str, Any]]) -> dict[str, Any]:
         asins = [str(record.get("asin") or "").strip().upper() for record in records if record.get("asin")]
+        site_by_asin = {
+            str(record.get("asin") or "").strip().upper(): str(record.get("site") or args.site or "US").strip().upper()
+            for record in records
+            if record.get("asin")
+        }
         if args.skip_bi_report_data:
             return build_bi_report_data_placeholder(
                 asins=asins,
@@ -322,6 +326,8 @@ class DailyAsinDataPipeline:
                 start_date=args.sales_start,
                 end_date=args.sales_end,
                 source_keys=args.bi_report_source_keys,
+                site_by_asin=site_by_asin,
+                default_site=args.site,
             )
         return self.collector._merge_per_asin_bi_report_data(bundles, asins=asins)
 
@@ -544,7 +550,9 @@ class DailyAsinDataPipeline:
                 "error": None,
             }
         else:
-            batch_summary = self.rufus_batch_runner.run(
+            from opscli.amazon_rufus.services.batch_backend import BatchGetBackendOptions
+
+            batch_summary = self._rufus_batch_runner().run(
                 BatchGetBackendOptions(
                     asins=asins,
                     country=country,
@@ -586,6 +594,14 @@ class DailyAsinDataPipeline:
             "batch_summary": batch_summary,
             "results": compact_results,
         }
+
+    def _rufus_batch_runner(self) -> Any:
+        """懒加载 Rufus 批量后端，避免 ASIN basic/BI 取数强依赖 Rufus 新模块。"""
+        if self.rufus_batch_runner is None:
+            from opscli.amazon_rufus.services.batch_backend import RufusBatchBackendRunner
+
+            self.rufus_batch_runner = RufusBatchBackendRunner()
+        return self.rufus_batch_runner
 
     def _base_result(self, record: dict[str, Any], query_bundle: dict[str, Any]) -> dict[str, Any]:
         asin = record["asin"]

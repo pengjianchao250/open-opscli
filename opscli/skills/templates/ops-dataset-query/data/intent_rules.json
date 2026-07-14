@@ -166,8 +166,8 @@
       "amazon_vc": ["amazon_vc"]
     },
     "filter_values": {
-      "amazon_sc": ["亚马逊", "Amazon", "Amazon SC", "SC"],
-      "amazon_vc": ["亚马逊VC", "亚马逊 VC", "Amazon VC", "VC"]
+      "amazon_sc": ["亚马逊", "亚马逊SC", "亚马逊 SC", "Amazon", "Amazon SC", "AmazonSC", "SC"],
+      "amazon_vc": ["亚马逊VC", "亚马逊 VC", "Amazon VC", "AmazonVC", "VC"]
     }
   },
   "compatibility": {

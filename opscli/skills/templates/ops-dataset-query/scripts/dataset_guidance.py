@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""为单个已授权数据集产出紧凑的字段与权限筛选指导合同。
+"""为单个已授权数据集产出紧凑的字段与权限筛选指导规划器。
 
 输入：当前账号元数据目录 + 数据集别名 + 用户查询（可选点名字段）。
-输出：dataset_guidance_v1 合同，包含字段选择（含公式/快照聚合口径）、
+输出：dataset_guidance_v1 规划器，包含字段选择（含公式/快照聚合口径）、
 权限筛选范围（查询组件可用性）与下一步动作。
-本模块只读本地授权元数据，由 query_plan 组合入口调用。
+本模块只读本地授权元数据，由 query_plan 规划器调用。
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ def _tokens(value: object) -> set[str]:
 def _find_dataset(datasets: list[dict], lookup: dict) -> dict:
     """按数据集别名精确定位目标数据集。
 
-    只支持 dataset_alias 一种定位方式（组合入口的唯一用法），
+    只支持 dataset_alias 一种定位方式（规划器的唯一用法），
     未命中抛 LookupError，命中多个（元数据异常）抛 ValueError。
     """
     if not isinstance(lookup, dict) or set(lookup) != {"dataset_alias"}:
@@ -122,13 +122,25 @@ def _is_formula(field: dict) -> bool:
     )
 
 
+def _is_date_field(field: dict) -> bool:
+    """判断日期类维度：技术名含 date/time 或中文名含 日期/时间。
+
+    为什么需要：时间过滤与 dataComparison 都必须使用授权日期字段，
+    但用户几乎从不口头点名日期字段，规划器必须无条件携带日期字段引用，
+    否则模型只能靠扫盘或猜字段名补齐（e2e 实测的高频探查形态）。
+    """
+    name = str(field.get("field_name", "")).casefold()
+    label = str(field.get("verbose_name", ""))
+    return "date" in name or "time" in name or "日期" in label or "时间" in label
+
+
 def _is_snapshot(field: dict) -> bool:
     """判断是否快照类指标（如库存量），此类字段不可跨期累加。"""
     return field.get("snapshot_metric") == "1"
 
 
 def _compact_field(field: dict, selection_source: str, output_mode: str) -> dict:
-    """把一个字段压缩为指导合同中的紧凑表示。
+    """把一个字段压缩为指导规划器中的紧凑表示。
 
     aggregation_policy 优先级：公式口径 > 快照口径 > 服务端元数据默认。
     """
@@ -165,7 +177,7 @@ def _select_fields(
     explicit_names: set[str],
     output_mode: str,
 ) -> list[dict]:
-    """选出进入指导合同的字段列表。
+    """选出进入指导规划器的字段列表。
 
     显式点名字段固定 1000 分必选（limit 自动放宽到点名数量）；
     其余字段按匹配分降序补足；仍不足 limit 时按原始顺序兜底填充，
@@ -274,7 +286,7 @@ def _permission_scope(
     output_mode: str,
     max_components: int,
 ) -> dict:
-    """构建权限筛选范围合同。
+    """构建权限筛选范围规划器。
 
     每个可筛选列的组件数据集必须在当前授权范围内才允许显式筛选；
     组件缺失时该列标记为 blocked，只阻断该筛选、不扩大查询范围。
@@ -324,6 +336,11 @@ def _permission_scope(
     else:
         relevant = ranked
     selected_rows = [row for _score, _index, row in relevant[:max_components]]
+    # 组件 alias → table_id 映射：contract 模式也要携带组件执行引用，
+    # 否则部门/国家等非平台筛选没有任何合规枚举入口（e2e 实测缺口）
+    alias_to_table = {
+        row["dataset_alias"]: row.get("table_id", "") for row in datasets
+    }
     filter_fields = []
     for row in selected_rows:
         available = row["component_dataset_alias"] in authorized_aliases
@@ -336,6 +353,12 @@ def _permission_scope(
                 else "blocked_missing_authorized_component"
             ),
         }
+        if available:
+            # 两种输出模式都带组件引用：这是显式筛选唯一的合规枚举入口
+            item["component_dataset_alias"] = row["component_dataset_alias"]
+            item["component_table_id"] = alias_to_table.get(
+                row["component_dataset_alias"], ""
+            )
         if output_mode == "full":
             item.update(
                 {
@@ -344,8 +367,6 @@ def _permission_scope(
                     "explicit_filter_allowed": available,
                 }
             )
-            if available:
-                item["component_dataset_alias"] = row["component_dataset_alias"]
         filter_fields.append(item)
     blocked = list(
         dict.fromkeys(
@@ -367,7 +388,7 @@ def _permission_scope(
 
 
 def _validate_output_size(result: dict, output_mode: str) -> None:
-    """守卫输出体积，防止异常元数据把合同撑爆到模型上下文。"""
+    """守卫输出体积，防止异常元数据把规划器撑爆到模型上下文。"""
     payload = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
     limit = MAX_CONTRACT_BYTES if output_mode == "contract" else MAX_FULL_BYTES
     if len(payload) > limit:
@@ -403,7 +424,7 @@ def build_guidance(
     max_metrics: int = 8,
     max_components: int = 32,
 ) -> dict:
-    """为一个已授权数据集产出字段与权限指导合同。
+    """为一个已授权数据集产出字段与权限指导规划器。
 
     guidance_status 取值：
     - ready：可继续校验筛选并构造查询；
@@ -472,6 +493,16 @@ def build_guidance(
             "formula_rule": FORMULA_RULE,
             "snapshot_rule": SNAPSHOT_RULE,
             "unknown_requested_fields": unknown_fields,
+            # 日期类维度无条件输出（上限 5 个）：时间过滤/dataComparison 的构造依据，
+            # 不受点名/打分筛选影响
+            "date_fields": [
+                {
+                    "field_name": row["field_name"],
+                    "verbose_name": row.get("verbose_name", ""),
+                }
+                for row in dimensions
+                if _is_date_field(row)
+            ][:5],
             "truncated": (
                 len(dimensions) > len(selected_dimensions)
                 or len(metrics) > len(selected_metrics)

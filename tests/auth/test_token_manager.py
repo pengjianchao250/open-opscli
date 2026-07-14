@@ -4,6 +4,7 @@ from unittest.mock import patch
 from opscli.auth import AuthClient
 from opscli.auth.core.token_manager import TokenManager
 from opscli.auth.exceptions import NotAuthenticatedError
+from opscli.config import __version__
 
 BUILTINS = [
     {"alias": "ops", "system_key": "ops", "url": "https://ops.example.com",
@@ -102,7 +103,7 @@ def test_auth_client_build_session_headers_returns_x_session_id(tmp_path):
 
     headers = client.build_session_headers("ops")
 
-    assert headers == {"X-Session-Id": "uuid-1234"}
+    assert headers == {"X-Session-Id": "uuid-1234", "X-Opscli-Version": __version__}
 
 
 def test_auth_client_get_session_raises_when_not_authenticated(tmp_path):
@@ -119,6 +120,24 @@ def test_auth_client_get_session_uses_public_token_manager_api(tmp_path):
         assert client.get_session("ops") == "uuid-public"
 
     mocked.assert_called_once()
+
+
+def test_fetch_token_joins_base_url_and_endpoint_without_double_slash(store, reg, monkeypatch):
+    """系统 URL 带尾斜杠时，请求地址不应出现双斜杠路径。"""
+    import httpx
+
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["url"] = url
+        req = httpx.Request("POST", url)
+        return httpx.Response(200, json={"jwt": "jwt-normal", "expires_in": 7200}, request=req)
+
+    monkeypatch.setattr("opscli.auth.core.token_manager.httpx.post", fake_post)
+    tm = TokenManager(store=store, registry=reg)
+
+    assert tm._fetch_token("polaris", "https://biapi.qa.aukeyit.com/", "/api/auth/cli-token") == "jwt-normal"
+    assert captured["url"] == "https://biapi.qa.aukeyit.com/api/auth/cli-token"
 
 
 def test_fetch_token_forwards_mcp_api_key_when_context_present(store, reg, monkeypatch):

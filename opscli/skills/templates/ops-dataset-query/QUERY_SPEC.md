@@ -1,5 +1,7 @@
 # MCP 查询规范
 
+> 【适用范围】本文件仅作为 MCP 部署契约存档；CLI-only 会话不要读取本文件，一律以 SKILL.md 与规划器为准。
+
 本文件是 `ops-dataset-query` 包内的规范 MCP 查询契约，与 `SKILL.md` 保持一致。
 
 ## 1. 授权元数据

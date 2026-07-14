@@ -50,14 +50,25 @@ class DummyBiReportDataClient:
         self.calls = []
         self.date_calls = []
         self.source_key_calls = []
+        self.site_calls = []
 
-    def fetch(self, *, asins, start_date=None, end_date=None, source_keys=None):
+    def fetch(
+        self,
+        *,
+        asins,
+        start_date=None,
+        end_date=None,
+        source_keys=None,
+        site_by_asin=None,
+        default_site="US",
+    ):
         normalized_asins = [str(asin).upper() for asin in asins]
         normalized_source_keys = list(source_keys) if source_keys is not None else None
         self.called_with = normalized_asins
         self.calls.append(normalized_asins)
         self.date_calls.append({"start_date": start_date, "end_date": end_date})
         self.source_key_calls.append(normalized_source_keys)
+        self.site_calls.append({"site_by_asin": dict(site_by_asin or {}), "default_site": default_site})
         sources = {
             "status": "success",
             "asins": normalized_asins,
@@ -335,6 +346,7 @@ def test_collect_passes_sales_date_range_to_bi_report_data_client(tmp_path: Path
     )
 
     assert bi_client.date_calls == [{"start_date": "2026-07-01", "end_date": "2026-07-08"}]
+    assert bi_client.site_calls == [{"site_by_asin": {"B0TEST1234": "US"}, "default_site": "US"}]
 
 
 def test_collect_fetches_bi_report_data_per_asin_for_input_batch(tmp_path: Path):
@@ -365,6 +377,10 @@ def test_collect_fetches_bi_report_data_per_asin_for_input_batch(tmp_path: Path)
     ]
 
     assert bi_client.calls == [["B0TEST1234"], ["B0TEST5678"]]
+    assert bi_client.site_calls == [
+        {"site_by_asin": {"B0TEST1234": "US", "B0TEST5678": "US"}, "default_site": "US"},
+        {"site_by_asin": {"B0TEST1234": "US", "B0TEST5678": "US"}, "default_site": "US"},
+    ]
     assert manifest["bi_report_data"]["request_mode"] == "per_asin"
     assert manifest["bi_report_data"]["per_asin"]["B0TEST1234"]["sources"]["sales_traffic"]["row_count"] == 1
     assert manifest["bi_report_data"]["per_asin"]["B0TEST5678"]["sources"]["sales_traffic"]["row_count"] == 1
@@ -404,6 +420,7 @@ def test_collect_batches_bi_only_report_data_for_input_batch(tmp_path: Path):
 
     assert bi_client.calls == [["B0TEST1234", "B0TEST5678"]]
     assert bi_client.source_key_calls == [["sales_traffic", "deals"]]
+    assert bi_client.site_calls == [{"site_by_asin": {"B0TEST1234": "US", "B0TEST5678": "US"}, "default_site": "US"}]
     assert manifest["bi_report_data"]["request_mode"] == "batch"
     assert set(manifest["bi_report_data"]["sources"]) == {"sales_traffic", "deals"}
     assert manifest["bi_report_data"]["sources"]["sales_traffic"]["row_count"] == 2
