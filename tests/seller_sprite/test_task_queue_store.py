@@ -1,3 +1,5 @@
+"""卖家精灵 SQLite 任务队列仓储测试。"""
+
 import json
 import sqlite3
 from pathlib import Path
@@ -25,6 +27,17 @@ def _mcp_request(*, job_id: str, asin: str = "B07YRMT36L") -> SellerSpriteScenar
         job_id=job_id,
         export_format="json",
         mode="mcp",
+    )
+
+
+def _listing_request(*, job_id: str) -> SellerSpriteScenarioRequest:
+    return SellerSpriteScenarioRequest(
+        scenario="listing-analysis",
+        site="US",
+        period="nearly",
+        params={"asin": "B0LISTING"},
+        job_id=job_id,
+        export_format="json",
     )
 
 
@@ -106,6 +119,151 @@ def test_store_claim_next_enforces_one_running_task_per_queue_scope(tmp_path: Pa
         assigned_account="default",
     )
     assert resumed["job_id"] == "job-2"
+
+
+def test_store_claims_generic_tasks_in_parallel_for_distinct_accounts(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(request=_request(job_id="job-1"), queue_scope="seller_sprite", root_dir=tmp_path / "job-1")
+    store.enqueue(request=_request(job_id="job-2"), queue_scope="seller_sprite", root_dir=tmp_path / "job-2")
+
+    first = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key-1",
+        assigned_account="account-1",
+        worker_key="slot-1",
+    )
+    second = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key-2",
+        assigned_account="account-2",
+        worker_key="slot-2",
+    )
+    blocked = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key-1",
+        assigned_account="account-1",
+        worker_key="slot-1",
+    )
+
+    assert first["job_id"] == "job-1"
+    assert second["job_id"] == "job-2"
+    assert first["assignment_generation"] == 1
+    assert second["assignment_generation"] == 1
+    assert blocked is None
+
+
+def test_store_generic_claim_skips_listing_analysis_tasks(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_listing_request(job_id="listing-job"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "listing-job",
+    )
+    store.enqueue(
+        request=_request(job_id="generic-job"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "generic-job",
+    )
+
+    generic = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key-1",
+        assigned_account="account-1",
+        worker_key="slot-1",
+    )
+    listing = store.claim_next_listing_analysis(
+        queue_scope="seller_sprite",
+        worker_key="listing-slot",
+        assigned_account="default",
+    )
+
+    assert generic["job_id"] == "generic-job"
+    assert generic["task_kind"] == "generic"
+    assert listing["job_id"] == "listing-job"
+    assert listing["task_kind"] == "listing_analysis"
+
+
+def test_store_rejects_late_finish_after_failover_generation_changes(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(request=_request(job_id="job-failover"), queue_scope="seller_sprite", root_dir=tmp_path / "job-failover")
+    claimed = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key-1",
+        assigned_account="account-1",
+        worker_key="slot-1",
+    )
+
+    replacement = store.reassign_task_for_failover(
+        job_id="job-failover",
+        current_account_key="account-key-1",
+        current_generation=claimed["assignment_generation"],
+        replacement_account_key="account-key-2",
+        replacement_account="account-2",
+        worker_key="slot-1",
+        error_code="SELLER_SPRITE_ACCOUNT_LOGIN_FAILED",
+        retry_reason="account_login_failed",
+    )
+    late_finish = store.finish_task_if_current(
+        job_id="job-failover",
+        account_key="account-key-1",
+        assignment_generation=claimed["assignment_generation"],
+        result_path=str(tmp_path / "stale.json"),
+        row_count=1,
+        export_payload=None,
+    )
+    current_finish = store.finish_task_if_current(
+        job_id="job-failover",
+        account_key="account-key-2",
+        assignment_generation=replacement["assignment_generation"],
+        result_path=str(tmp_path / "current.json"),
+        row_count=2,
+        export_payload=None,
+    )
+
+    assert replacement["assignment_generation"] == 2
+    assert replacement["failover_count"] == 1
+    assert late_finish is False
+    assert current_finish is True
+    assert store.get_status("job-failover")["row_count"] == 2
+
+
+def test_store_records_queryable_account_login_failure_event(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.record_account_event(
+        event_type="account_login_failed",
+        account_key="safe-account-key",
+        account_name="account-1",
+        masked_username="u***@example.com",
+        job_id="job-1",
+        worker_key="slot-1",
+        assignment_generation=2,
+        execution_mode="browser-route",
+        login_stage="failover",
+        error_code="SELLER_SPRITE_CONFIG_ERROR",
+        error_summary="卖家精灵浏览器登录失败",
+        replacement_account_key=None,
+        duration_ms=123,
+        failover_count=1,
+        next_action="try_next_standby",
+        metadata={"reason": "failover"},
+    )
+
+    events = store.list_account_events(job_id="job-1")
+
+    assert len(events) == 1
+    assert events[0]["event_type"] == "account_login_failed"
+    assert events[0]["assignment_generation"] == 2
+    assert events[0]["login_stage"] == "failover"
+    assert events[0]["next_action"] == "try_next_standby"
+    assert events[0]["metadata"] == {"reason": "failover"}
 
 
 def test_store_resets_running_tasks_back_to_queue(tmp_path: Path):

@@ -16,6 +16,36 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def test_close_browser_route_worker_closes_and_removes_account_session():
+    class CloseProbe:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    async def scenario():
+        worker_module._WORKERS.clear()
+        account = SellerSpriteAccount(name="account-1", username="user@example.com", password="secret")
+        probe = CloseProbe()
+        loop_key = id(asyncio.get_running_loop())
+        worker_module._WORKERS[(loop_key, "account-1:user@example.com")] = probe
+
+        closed = await worker_module.close_browser_route_worker(
+            settings=SellerSpriteSettings(),
+            account=account,
+        )
+
+        assert closed is True
+        assert probe.closed is True
+        assert worker_module.get_existing_browser_route_worker(
+            settings=SellerSpriteSettings(),
+            account=account,
+        ) is None
+
+    _run(scenario())
+
+
 def test_record_timing_keeps_diagnostic_data_without_warning_log(caplog, tmp_path):
     account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
     request = worker_module.BrowserRouteRequest(

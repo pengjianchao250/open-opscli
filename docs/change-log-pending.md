@@ -2481,3 +2481,147 @@
 **影响范围**：影响 MCP quota 策略加载、所有经 `_quota_wrap()` 包裹的外部服务 tool、开发模式 Python 3.14 版本读取测试入口；不改变 quota 响应顶层字段结构。
 **回滚方式**：回滚 `opscli/mcp/quota.py`、`tests/mcp/test_quota.py`、`pyproject.toml`、`opscli/mcp/configs/mcp-quota.json` 删除、`docs/design/MCP限额SQLite策略表设计.md`、`docs/plans/MCP限额SQLite策略表实施计划.md` 以及本变更记录；如需单独回滚 Python 3.14 版本读取修复，回滚 `opscli/config.py` 和 `tests/test_config.py`。
 ---
+
+## 2026-07-14 SellerSprite - 多账号池首个 TDD 测试切片
+
+**变更原因**：卖家精灵集成账号接口已可返回多个账号，需要先用公共接口测试锁定有序账号列表、最多四工作账号和冷备用规则。
+**改动点**：扩展 `tests/seller_sprite/test_accounts.py` 覆盖远端多账号顺序及本地账号池降级；新增 `tests/seller_sprite/test_account_pool.py` 覆盖 0～6 账号分配、备用接替和密码变化恢复。
+**验证结果**：待运行目标测试，预期先因 `list_accounts()` 和账号池模块尚未实现而进入 red 状态。
+**影响范围**：当前仅新增 SellerSprite 账号来源和账号池行为测试，不改变运行时代码。
+**回滚方式**：回滚上述两个测试文件中的本次新增内容。
+---
+
+## 2026-07-14 SellerSprite - 多账号来源与冷备用账号池
+
+**变更原因**：首个 TDD 测试已确认现有代码缺少完整账号列表入口和工作/备用账号池，需要提供多账号调度的最小领域能力。
+**改动点**：为 `SellerSpriteAccountProvider` 增加有序 `list_accounts()` 并复用到公开摘要；新增 `services/account_pool.py`，实现最多四工作账号、至少一冷备用、账号身份散列、用户名脱敏、失效凭证版本和密码变化恢复。
+**验证结果**：实现前目标测试为 5 failed、2 passed；实现后待重新运行 `tests/seller_sprite/test_accounts.py` 与 `tests/seller_sprite/test_account_pool.py`。
+**影响范围**：影响 SellerSprite 账号读取与新增的进程内账号池，不改变现有默认账号选择和外部工具签名。
+**回滚方式**：删除 `services/account_pool.py`，并回滚 `accounts.py` 的 `list_accounts()` 与 `list_public()` 调整。
+---
+
+## 2026-07-14 SellerSprite - 多账号队列与审计 TDD 测试
+
+**变更原因**：多账号工作池需要数据库层保证不同账号可并行、同账号串行，并在故障接替后拒绝旧执行代写回，同时保留登录失败审计。
+**改动点**：扩展 `test_task_queue_store.py`，覆盖账号级 generic claim、Listing Analysis 隔离、failover generation CAS 和账号登录失败事件查询。
+**验证结果**：待运行目标测试，预期因队列新字段和新接口尚未实现而进入 red 状态。
+**影响范围**：当前仅新增 SellerSprite 队列与审计行为测试。
+**回滚方式**：回滚 `test_task_queue_store.py` 中本次新增测试和模块 docstring。
+---
+
+## 2026-07-14 SellerSprite - 多账号队列约束与登录失败审计
+
+**变更原因**：数据库层必须允许不同账号并行领取、阻止同账号重复 running，并用 generation CAS 隔离故障接替前后的执行者。
+**改动点**：扩展任务表的 `task_kind`、账号键、generation、failover 和错误字段；增加 generic 账号级领取、Listing Analysis 独立领取、failover CAS、当前代 finish/fail；新增账号事件表及查询接口，并为历史任务回填任务类型。
+**验证结果**：实现前 `test_task_queue_store.py` 为 4 failed、18 passed；实现后待重新运行目标测试。
+**影响范围**：影响 SellerSprite SQLite 队列 schema、任务领取与登录失败审计；保留旧 `claim_next()`、`finish_task()` 和 `fail_task()` 兼容入口。
+**回滚方式**：回滚 `task_queue_store.py` 的新 schema 与接口；新建数据库可直接删除，历史数据库需同步移除新增索引和列依赖。
+---
+
+## 2026-07-14 SellerSprite - 登录失败记录器 TDD 测试
+
+**变更原因**：用户要求账号登录失败增加日志和记录，必须先锁定结构化日志、SQLite 审计、敏感字段脱敏与审计降级行为。
+**改动点**：新增 `test_account_events.py`，覆盖登录失败同时写日志/审计、密码/用户名/Token 脱敏，以及 SQLite 审计失败时只记录降级事件且不抛出新错误。
+**验证结果**：待运行目标测试，预期因账号事件 Recorder 尚未实现而进入 red 状态。
+**影响范围**：当前仅新增 SellerSprite 登录失败可观测性测试。
+**回滚方式**：删除 `tests/seller_sprite/test_account_events.py`。
+---
+
+## 2026-07-14 SellerSprite - 账号登录失败结构化记录器
+
+**变更原因**：登录失败测试已确认缺少统一记录边界，需要保证日志与 SQLite 使用同一套脱敏白名单并在审计故障时安全降级。
+**改动点**：新增 `services/account_events.py`，实现首次登录/重登/备用接替失败事件、账号身份散列与用户名脱敏、常见凭证键值清理、运行日志优先写入和 SQLite 审计失败旁路日志。
+**验证结果**：实现前目标测试 2 failed；实现后待重新运行 `tests/seller_sprite/test_account_events.py`。
+**影响范围**：新增 SellerSprite 登录失败可观测性组件，尚未接入任务调度器。
+**回滚方式**：删除 `opscli/seller_sprite/services/account_events.py`。
+---
+
+## 2026-07-14 SellerSprite - 多账号调度与备用接替 TDD 测试
+
+**变更原因**：需要通过调度器公共接口验证四账号并行、第五账号冷备用、认证失败接替和无备用关闭工作槽的核心用户行为。
+**改动点**：扩展 `test_task_scheduler.py`，增加多账号 provider、可控并行 manager 和故障 manager，覆盖 5 账号四路并发、2 账号备用接替、1 账号失败后槽关闭且后续任务保持 queued。
+**验证结果**：待运行目标测试，预期现有单 runner 调度器无法满足新断言而进入 red 状态。
+**影响范围**：当前仅新增 SellerSprite 多账号调度行为测试。
+**回滚方式**：回滚 `test_task_scheduler.py` 中本次新增测试、辅助类和模块 docstring。
+---
+
+## 2026-07-14 SellerSprite - 多账号并行调度与备用接替
+
+**变更原因**：调度器测试已证明现有单 runner 无法使用多账号并行，也不能在账号认证失败时接替或关闭故障槽。
+**改动点**：新增账号不可用业务异常；调度器对正式多账号 provider 建立最多四个 generic 工作槽和独立 Listing Analysis 槽，使用显式账号 provider 执行任务；认证失败时写日志/审计、刷新账号、CAS 改绑备用账号，备用耗尽则失败任务并关闭该槽；旧单账号测试 provider 保持兼容路径。
+**验证结果**：实现前 `test_task_scheduler.py` 为 3 failed、11 passed；实现后待重新运行目标测试。
+**影响范围**：影响 SellerSprite 通用异步任务调度、账号认证失败处理和 Listing Analysis 队列分流；外部 MCP/CLI 工具签名不变。
+**回滚方式**：回滚 `task_scheduler.py` 的账号池路径及 `exceptions.py` 新异常，恢复单 `_run_loop()` 启动方式。
+---
+
+## 2026-07-14 SellerSprite - 故障账号 browser 会话关闭 TDD 测试
+
+**变更原因**：备用接替或无备用关闭槽时必须关闭失效账号浏览器资源并从进程 registry 移除，避免后续复用旧登录态。
+**改动点**：扩展 `test_browser_route_worker.py`，通过公开关闭入口验证账号 worker 被调用 `close()` 且 registry 不再返回旧实例。
+**验证结果**：待运行目标测试，预期因 `close_browser_route_worker()` 尚未实现而进入 red 状态。
+**影响范围**：当前仅新增 browser-route 会话生命周期测试。
+**回滚方式**：回滚 `test_browser_route_worker.py` 中本次新增测试。
+---
+
+## 2026-07-14 SellerSprite - 关闭并移除故障账号 browser worker
+
+**变更原因**：会话生命周期测试已确认缺少按账号关闭并从 registry 移除 browser worker 的公开入口。
+**改动点**：新增并导出 `close_browser_route_worker()`；先从当前事件循环 registry 移除目标账号 worker，再等待其关闭 page/context/playwright 资源。
+**验证结果**：实现前目标测试 1 failed；实现后待重新运行该测试。
+**影响范围**：影响 browser-route worker 生命周期；正常获取与复用逻辑不变，调度器可在账号失效时调用此入口。
+**回滚方式**：回滚 `browser_route/worker.py` 与 `browser_route/__init__.py` 的关闭入口。
+---
+
+## 2026-07-14 SellerSprite - 新凭证版本补足空工作槽测试
+
+**变更原因**：账号失效且槽关闭后，账号接口若返回同身份的新密码版本，应允许该新凭证从备用候选补足空槽，旧失败版本仍不可恢复。
+**改动点**：扩展账号池密码变化测试，要求 `activate_standby_until_target()` 只提升刷新后的新凭证版本。
+**验证结果**：待运行目标测试，预期因补槽入口尚未实现而进入 red 状态。
+**影响范围**：当前仅增加账号池动态恢复行为测试。
+**回滚方式**：回滚 `test_account_pool.py` 中补槽断言。
+---
+
+## 2026-07-14 SellerSprite - 新凭证版本动态补槽
+
+**变更原因**：补槽测试已确认账号池缺少把刷新后的可用备用账号提升为空工作槽的入口。
+**改动点**：新增 `SellerSpriteAccountPool.activate_standby_until_target()`，按接口顺序提升可用备用账号，直到达到当前目标工作槽数量或备用耗尽。
+**验证结果**：实现前账号池测试 1 failed、2 passed；实现后待重新运行目标测试。
+**影响范围**：影响账号池在刷新后的空槽恢复，不提前创建任何会话资源。
+**回滚方式**：回滚 `account_pool.py` 的补槽方法。
+---
+
+## 2026-07-14 SellerSprite - 关闭槽后的新账号恢复测试
+
+**变更原因**：备用耗尽关闭工作槽后，账号接口后续可能返回新账号，调度器应自动重建槽并继续处理未完成队列。
+**改动点**：扩展调度器测试，模拟首次故障刷新仍无备用、下一次刷新出现新账号，断言后续 queued 任务由新账号完成。
+**验证结果**：待运行目标测试，预期当前 supervisor 未清理已结束 slot task 而进入 red 状态。
+**影响范围**：当前仅新增动态账号恢复行为测试。
+**回滚方式**：回滚 `test_task_scheduler.py` 的 RecoveringAccountProvider 和对应测试。
+---
+
+## 2026-07-14 SellerSprite - 关闭槽后的账号刷新与自动重建
+
+**变更原因**：动态恢复测试已确认 supervisor 保留已结束 Task 引用，导致新账号出现后无法重建工作槽。
+**改动点**：调度器跟踪工作槽绑定账号并清理已结束 Task；账号池为空或 TTL 到期时刷新接口，保留健康账号、提升可用新账号/新凭证补槽并启动新消费协程；备用接替后同步更新槽账号映射。
+**验证结果**：实现前动态恢复测试 1 failed；实现后待重新运行调度器测试。
+**影响范围**：影响多账号调度器长期运行时的账号刷新和空槽恢复；旧单账号兼容路径不变。
+**回滚方式**：回滚 `task_scheduler.py` 的工作槽账号映射、refresh supervisor 和补槽逻辑。
+---
+
+## 2026-07-14 SellerSprite - failover 队列范围校验与审计索引
+
+**变更原因**：failover 的备用账号占用检查应使用任务自身 queue scope，不能依赖固定常量；账号审计需要支持按账号和事件类型检索。
+**改动点**：`reassign_task_for_failover()` 先用当前 CAS 令牌读取真实 queue scope，再检查 replacement 占用；账号事件表补充 `(account_key, created_at)` 和 `(event_type, created_at)` 索引。
+**验证结果**：待随队列和 SellerSprite 回归测试验证。
+**影响范围**：影响非默认 queue scope 的 failover 互斥检查及账号审计查询性能。
+**回滚方式**：回滚 `task_queue_store.py` 的 current scope 查询和两个审计索引。
+---
+
+## 2026-07-14 SellerSprite - 多账号核心切片阶段验证
+
+**变更原因**：完成账号池、队列、审计、调度和会话关闭切片后，需要集中验证新增公共边界并清理 diff 格式问题。
+**改动点**：移除 `task_queue_store.py` 文件尾多余空行；汇总验证账号列表、账号池、事件记录、队列 CAS、多账号调度和 browser worker 关闭行为。
+**验证结果**：新增与相关核心测试共 47 passed；`compileall -q opscli/seller_sprite` 通过；首次 `git diff --check` 仅发现文件尾多余空行，现已修复。
+**影响范围**：仅格式清理和阶段验证记录，不改变业务行为。
+**回滚方式**：无需业务回滚；如需回滚记录，删除本节。
+---

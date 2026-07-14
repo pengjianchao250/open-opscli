@@ -1,9 +1,13 @@
+"""卖家精灵持久队列与多账号任务调度器测试。"""
+
 import asyncio
 import json
 import sqlite3
 from pathlib import Path
 
+from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.config import SellerSpriteSettings
+from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import (
     SellerSpriteExportResult,
     SellerSpriteScenarioRequest,
@@ -227,6 +231,100 @@ class FailingMcpCleanupStore(SellerSpriteTaskQueueStore):
         raise RuntimeError("MCP 失败态写回失败")
 
 
+class MultiAccountProvider:
+    def __init__(self, count: int):
+        self.accounts = [
+            SellerSpriteAccount(
+                name=f"account-{index}",
+                username=f"user-{index}@example.com",
+                password=f"secret-{index}",
+            )
+            for index in range(1, count + 1)
+        ]
+        self.refresh_calls = 0
+
+    def list_accounts(self, *, refresh=False):
+        self.refresh_calls += int(refresh)
+        return list(self.accounts)
+
+    def get_default(self, *, refresh=False):
+        return self.accounts[0]
+
+
+class RecoveringAccountProvider(MultiAccountProvider):
+    def __init__(self):
+        super().__init__(1)
+        self.replacement = SellerSpriteAccount(
+            name="account-2",
+            username="user-2@example.com",
+            password="secret-2",
+        )
+
+    def list_accounts(self, *, refresh=False):
+        if not refresh:
+            return list(self.accounts)
+        self.refresh_calls += 1
+        if self.refresh_calls == 1:
+            return list(self.accounts)
+        return [*self.accounts, self.replacement]
+
+
+class ParallelRunHarness:
+    def __init__(self, expected_started: int):
+        self.expected_started = expected_started
+        self.started_accounts = []
+        self.all_started = asyncio.Event()
+        self.allow_finish = asyncio.Event()
+
+    def manager_factory(self, **kwargs):
+        harness = self
+
+        class Manager:
+            async def run(self, request):
+                account = kwargs["account_provider"].get_default()
+                harness.started_accounts.append(account.name)
+                if len(harness.started_accounts) >= harness.expected_started:
+                    harness.all_started.set()
+                await harness.allow_finish.wait()
+                return _empty_result(kwargs["settings"], request)
+
+        return Manager()
+
+
+class FailoverRunHarness:
+    def __init__(self, *, fail_all=False):
+        self.fail_all = fail_all
+        self.attempted_accounts = []
+
+    def manager_factory(self, **kwargs):
+        harness = self
+
+        class Manager:
+            async def run(self, request):
+                account = kwargs["account_provider"].get_default()
+                harness.attempted_accounts.append(account.name)
+                if harness.fail_all or account.name == "account-1":
+                    raise SellerSpriteConfigError("卖家精灵账号登录失败")
+                return _empty_result(kwargs["settings"], request)
+
+        return Manager()
+
+
+def _empty_result(settings, request):
+    root_dir = Path(settings.output_dir) / str(request.job_id)
+    root_dir.mkdir(parents=True, exist_ok=True)
+    return SellerSpriteScenarioResult.empty(
+        job_id=str(request.job_id),
+        scenario=request.scenario,
+        site=request.site,
+        period=request.period,
+        root_dir=root_dir,
+        params_path=root_dir / "params.json",
+        raw_path=root_dir / "raw.json",
+        result_path=root_dir / "result.json",
+    )
+
+
 def test_scheduler_runs_tasks_in_fifo_order(tmp_path: Path):
     async def scenario():
         from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
@@ -261,6 +359,140 @@ def test_scheduler_runs_tasks_in_fifo_order(tmp_path: Path):
 
         assert second_done["state"] == "succeeded"
         assert manager.started == ["job-1", "job-2"]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_runs_four_accounts_in_parallel_and_keeps_fifth_as_standby(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(5)
+        harness = ParallelRunHarness(expected_started=4)
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+        )
+        for index in range(1, 5):
+            await scheduler.enqueue(_request(f"parallel-{index}", f"B0PARALLEL{index}"))
+
+        await scheduler.start()
+        await asyncio.wait_for(harness.all_started.wait(), timeout=1)
+
+        statuses = [scheduler.job_status(f"parallel-{index}") for index in range(1, 5)]
+        assert {status["state"] for status in statuses} == {"running"}
+        assert {status["assigned_account"] for status in statuses} == {
+            "account-1",
+            "account-2",
+            "account-3",
+            "account-4",
+        }
+        assert scheduler.generic_worker_count == 4
+        assert scheduler.standby_account_count == 1
+
+        harness.allow_finish.set()
+        for index in range(1, 5):
+            await _wait_for_state(scheduler, f"parallel-{index}", "succeeded")
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_replaces_failed_working_account_with_cold_standby(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(2)
+        harness = FailoverRunHarness()
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+        )
+
+        await scheduler.enqueue(_request("job-failover", "B0FAILOVER"))
+        await scheduler.start()
+        succeeded = await _wait_for_state(scheduler, "job-failover", "succeeded")
+
+        assert harness.attempted_accounts == ["account-1", "account-2"]
+        assert succeeded["assigned_account"] == "account-2"
+        assert succeeded["failover_count"] == 1
+        assert store.list_account_events(job_id="job-failover")[0]["event_type"] == "account_login_failed"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_closes_failed_slot_when_no_standby_account_exists(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(1)
+        harness = FailoverRunHarness(fail_all=True)
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+        )
+
+        await scheduler.enqueue(_request("job-no-standby", "B0NOSTANDBY1"))
+        await scheduler.enqueue(_request("job-stays-queued", "B0NOSTANDBY2"))
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-no-standby", "failed")
+        await asyncio.sleep(0.05)
+
+        assert failed["error"]["code"] == "SELLER_SPRITE_ACCOUNT_UNAVAILABLE"
+        assert scheduler.job_status("job-stays-queued")["state"] == "queued"
+        assert scheduler.generic_worker_count == 0
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_rebuilds_closed_slot_when_account_refresh_returns_new_account(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path, account_cache_ttl_seconds=1)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = RecoveringAccountProvider()
+        harness = FailoverRunHarness()
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+
+        await scheduler.enqueue(_request("job-closes-slot", "B0CLOSESLOT"))
+        await scheduler.enqueue(_request("job-after-new-account", "B0NEWACCOUNT"))
+        await scheduler.start()
+        await _wait_for_state(scheduler, "job-closes-slot", "failed")
+        succeeded = await _wait_for_state(
+            scheduler,
+            "job-after-new-account",
+            "succeeded",
+            attempts=100,
+        )
+
+        assert succeeded["assigned_account"] == "account-2"
+        assert provider.refresh_calls >= 2
         await scheduler.close()
 
     asyncio.run(scenario())

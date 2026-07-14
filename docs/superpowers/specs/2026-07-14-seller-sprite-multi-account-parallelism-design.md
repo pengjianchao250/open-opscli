@@ -421,6 +421,15 @@ claim_next_generic_for_account(
 
 不记录正常任务分配、正常任务完成、API 子请求或正常会话关闭。备用接替成功合并到 `account_login_succeeded` 的白名单元数据，不增加“正常使用”事件。
 
+每次登录失败均必须记录，不做按账号或错误码去重：
+
+- 首次登录失败：`account_login_failed`，`login_stage='initial'`；
+- 同账号重登失败：`account_relogin_failed`，`login_stage='relogin'`；
+- 刷新后新密码登录失败：`account_login_failed`，`login_stage='refreshed_credential'`；
+- 备用账号接替登录失败：`account_login_failed`，`login_stage='failover'`。
+
+每条失败事件必须能通过 `job_id + worker_key + assignment_generation` 关联到具体任务、工作槽和执行代际，并记录 `failover_count` 与白名单 `next_action`，方便还原后续是刷新账号、尝试备用还是关闭槽。
+
 ### 14.2 审计表
 
 新增 `seller_sprite_account_events`：
@@ -433,11 +442,15 @@ claim_next_generic_for_account(
 - `masked_username TEXT`；
 - `job_id TEXT`；
 - `worker_key TEXT`；
+- `assignment_generation INTEGER`；
 - `execution_mode TEXT`；
+- `login_stage TEXT`；
 - `error_code TEXT`；
 - `error_summary TEXT`；
 - `replacement_account_key TEXT`；
 - `duration_ms INTEGER`；
+- `failover_count INTEGER`；
+- `next_action TEXT`；
 - `metadata_json TEXT`。
 
 账号接口失败不是单账号事件，因此账号字段允许为空。索引：
@@ -462,6 +475,8 @@ SQLite 事件永久保留，不自动清理。运行日志保留和轮转沿用�
 - 未脱敏用户名。
 
 错误只保存结构化错误码以及脱敏、限长后的摘要。`metadata_json` 使用固定白名单字段。
+
+禁止直接序列化异常对象或记录 `exc_info` 中可能携带的原始登录响应；若需要堆栈定位，只记录异常类型和本地代码位置，不记录异常参数中的响应正文。
 
 ### 14.4 审计写入失败
 
@@ -543,6 +558,8 @@ SQLite 事件永久保留，不自动清理。运行日志保留和轮转沿用�
 - 日志、数据库和路径名不包含明文凭证或完整用户名；
 - 账号登录失败、移除或密码变化会清理旧认证状态；
 - SQLite 审计写入失败不会覆盖任务主错误。
+- 首次登录、重登、新凭证和备用接替的每次登录失败均产生可关联 job、slot、generation 的日志和审计记录；
+- 登录失败记录包含失败阶段、错误码、耗时、failover 次数和下一动作，但不包含完整用户名或任何凭证。
 
 ### 16.6 回归
 

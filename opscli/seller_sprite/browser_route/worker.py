@@ -864,6 +864,22 @@ def get_existing_browser_route_worker(
     return _WORKERS.get((loop_key, account_key))
 
 
+async def close_browser_route_worker(
+    *,
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+) -> bool:
+    """关闭并移除指定账号在当前事件循环中的 browser worker。"""
+    loop_key = id(asyncio.get_running_loop())
+    account_key = f"{account.name}:{account.username}"
+    worker = _WORKERS.pop((loop_key, account_key), None)
+    if worker is None:
+        return False
+    # 必须先从 registry 移除，避免关闭期间新的调用继续取得即将失效的会话。
+    await worker.close()
+    return True
+
+
 def _ensure_headed_browser_environment(settings: SellerSpriteSettings) -> bool:
     """确保有头浏览器运行环境可用，返回是否使用了自动 Xvfb。"""
     if settings.browser_headless:
