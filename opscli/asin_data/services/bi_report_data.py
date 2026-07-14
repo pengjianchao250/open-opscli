@@ -334,6 +334,16 @@ class AsinBiReportDataClient:
                     headers=headers,
                     cookies=cookies,
                 )
+            if key == "crawler_details":
+                return self._fetch_crawler_details_source(
+                    key=key,
+                    config=config,
+                    asins=asins,
+                    headers=headers,
+                    cookies=cookies,
+                    site_by_asin=site_by_asin,
+                    default_site=default_site,
+                )
             params = {"asins": ",".join(asins)}
             params.update(_date_range_params(start_date=start_date, end_date=end_date))
             response = self.http_get(
@@ -361,6 +371,83 @@ class AsinBiReportDataClient:
             }
         except Exception as exc:
             return _failed_source(key, config, exc)
+
+    def _fetch_crawler_details_source(
+        self,
+        *,
+        key: str,
+        config: dict[str, str],
+        asins: Sequence[str],
+        headers: dict[str, str],
+        cookies: dict[str, str],
+        site_by_asin: Mapping[str, str],
+        default_site: str,
+    ) -> dict[str, Any]:
+        """按站点批量获取爬虫详情，并把各站点结果合并为一个数据源。"""
+        asins_by_country: dict[str, list[str]] = {}
+        for asin in asins:
+            country = _site_code_for_asin(
+                asin,
+                site_by_asin=site_by_asin,
+                default_site=default_site,
+            )
+            asins_by_country.setdefault(country, []).append(asin)
+
+        def fetch_country(
+            country: str,
+            country_asins: Sequence[str],
+        ) -> tuple[Any | None, list[dict[str, Any]], dict[str, Any] | None]:
+            try:
+                response = self.http_get(
+                    self._resolve_endpoint(config["endpoint"]),
+                    params={"asins": ",".join(country_asins), "country": country},
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=DEFAULT_TIMEOUT,
+                )
+                payload = parse_remote_response(
+                    response,
+                    http_error_cls=AsinBiReportDataHttpError,
+                    business_error_cls=AsinBiReportDataBusinessError,
+                    bad_json_error_cls=AsinBiReportDataBadJsonError,
+                )
+                data = payload.get("data") if "data" in payload else payload
+                return payload, extract_rows(data), None
+            except Exception as exc:
+                return None, [], _error_dict(exc)
+
+        with ThreadPoolExecutor(max_workers=min(4, len(asins_by_country))) as executor:
+            futures = {
+                country: executor.submit(fetch_country, country, country_asins)
+                for country, country_asins in asins_by_country.items()
+            }
+            results = {
+                country: futures[country].result()
+                for country in asins_by_country
+            }
+
+        rows: list[dict[str, Any]] = []
+        raw_by_country: dict[str, Any] = {}
+        country_errors: dict[str, dict[str, Any]] = {}
+        for country in asins_by_country:
+            payload, country_rows, error = results[country]
+            if error is not None:
+                country_errors[country] = error
+                continue
+            raw_by_country[country] = payload
+            rows.extend(country_rows)
+
+        status = "success" if not country_errors else "partial" if rows else "failed"
+        return {
+            "key": key,
+            "label": config["label"],
+            "endpoint": config["endpoint"],
+            "status": status,
+            "row_count": len(rows),
+            "rows": rows,
+            "raw": raw_by_country,
+            "country_errors": country_errors,
+        }
 
     def _build_listing_request_auth(
         self,

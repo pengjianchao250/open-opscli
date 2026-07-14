@@ -109,7 +109,7 @@ async def asin_data_live_data(
 
     Args:
         asin: 单个 ASIN；与 input_path 二选一。
-        site: 站点，默认 US。
+        site: 站点，默认 US，同时作为 crawler-details 的 country 默认值。
         data_scope: 数据范围，支持 all/basic/bi/listing/listing_basic。
         sales_start: BI 销售开始日期，格式 YYYY-MM-DD。
         sales_end: BI 销售结束日期，格式 YYYY-MM-DD。
@@ -245,7 +245,7 @@ async def asin_data_category_top(
         date_from: 起始日期 YYYY-MM-DD；为空时由后端使用当月 1 日。
         date_to: 截止日期 YYYY-MM-DD；为空时由后端使用当天。
         limit: 返回 Top 数量，范围 1-100。
-        site: 无法从渠道推断站点时使用的默认站点。
+        site: 无法从渠道推断站点时使用的默认站点，同时作为 crawler-details 的 country。
         upload: 是否上传合并后的 JSON 文件到 OSS。
         enrich: 是否补充查询刊登基础数据和爬虫详情数据。
         return_content: 是否在 MCP 响应中返回完整文件内容；默认 false，避免大响应拖慢工具。

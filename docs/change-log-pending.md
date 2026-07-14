@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-14 asin-data - crawler-details 多站点取数
+
+**变更原因**：`crawler-details` 接口新增 `country` 参数，现有 ASIN live-data、MCP 和类目 Top10 链路需要统一支持默认 US、指定站点及批量多站点分组请求。
+**改动点**：`AsinBiReportDataClient` 为 `crawler_details` 增加按标准化站点分组的专用请求逻辑，每次请求携带 `country`，未提供站点时默认 `US`；不同站点并行获取并按站点首次出现顺序合并 `rows`，部分失败保留成功数据并返回 `country_errors`。CLI、MCP 和类目 Top10 继续复用现有 `site/site_by_asin` 参数，补充公开参数说明和站点透传回归测试；新增设计与实施计划文档。
+**验证结果**：先运行 `tests/asin_data/test_bi_report_data.py -k "crawler or fetches_all_sources" -q` 验证旧实现出现 4 个预期失败，完成实现后同命令 `4 passed`；运行 `tests/asin_data/test_bi_report_data.py tests/asin_data/test_category_top.py tests/asin_data/test_asin_data_cli.py tests/mcp/test_asin_data_tools.py -q` 通过，结果 `54 passed`；执行 `python -m py_compile` 检查 `bi_report_data.py`、`cli.py` 和 MCP `asin_data.py` 通过。
+**影响范围**：影响 `live-data --data-scope basic/all`、MCP `asin_data_live_data` 和 `asin_data_category_top` 中的爬虫详情请求；不改变公开参数、`crawler_details.rows` 数据结构、刊登数据、其他 BI 数据源、卖家精灵或 Rufus。
+**回滚方式**：回退 `bi_report_data.py` 的 crawler country 分组方法、CLI/MCP 参数说明、相关测试以及设计和实施计划文档。
+
+---
+
 ## 2026-07-14 asin-data/mcp - 同步 ASIN 取数服务到 release
 
 **变更原因**：需要将 `codex/asin-data-service-merge` 中已经整理完成的 ASIN 取数 CLI/MCP 能力同步到 `release`，并保留 Top10/category-top 取数修复和默认当前用户北极星鉴权策略，便于后续 release 部署使用。
