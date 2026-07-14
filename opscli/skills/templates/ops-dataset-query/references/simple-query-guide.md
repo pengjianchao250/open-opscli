@@ -53,13 +53,23 @@ MCP Tool 使用 snake_case，JSON payload 使用 camelCase，CLI 选项使用 ke
   "orderBy": [
     {
       "field": "$METRIC_RESULT_ALIAS",
-      "desc": "$CONFIRMED_DESC"
+      "direction": "$CONFIRMED_DIRECTION"
     }
   ],
   "limit": "$CONFIRMED_LIMIT",
   "offset": "$CONFIRMED_OFFSET"
 }
 ```
+
+## 排序形态与生效校验（重要）
+
+- `orderBy` 的**已验证可生效形态**是 `{"field": "<结果alias>", "direction": "DESC"}`（或 `ASC`，大写）；
+  旧文档的 `{"field","desc"}` 布尔形态存在被服务端静默忽略的已知缺陷，禁止使用。
+- 日期过滤的实测形态是同字段两行：`{"field":"<日期字段>","operator":">=","value":"YYYY-MM-DD"}`
+  与 `<=` 一行；等值筛选用 `operator: "="`。
+- 带 `orderBy` 的查询必须经 `scripts/run_query.py` 执行：执行器会校验返回行是否按声明字段单调，
+  服务端排序未生效时自动本地重排（有 limit 时放大窗口重查再取前 N），并要求在结论中披露兜底行为。
+  TopN 结论不得基于未经生效校验的排序输出。
 
 需要环比、同比或上期对比时，在主周期 `filters` 之外增加：
 
