@@ -119,7 +119,11 @@ def _validate_cards(cards: object) -> list[dict]:
                 raise ValueError(f"invalid_cards:card_{index}_bad_{key}")
         alias_key = alias.casefold()
         name_key = name.casefold()
-        if alias_key in aliases or name_key in names:
+        # 别名是唯一技术标识，重复即元数据损坏，必须硬失败；
+        # 中文名称重复是真实业务场景（如 QA 账号存在两个同名「用户仪表盘分享明细」，
+        # table_id 52/61 别名各异），不能因此拒绝整个账号的规划——
+        # 显式点名该名称时会产生多候选，由 plan_query 的多候选分支自然进入澄清
+        if alias_key in aliases:
             raise ValueError("invalid_cards:duplicate_identifier")
         aliases.add(alias_key)
         names.add(name_key)
@@ -127,6 +131,14 @@ def _validate_cards(cards: object) -> list[dict]:
         for key in FIELD_TERM_KEYS:
             item[key] = _validate_string_list(source.get(key), f"card_{index}.{key}")
         validated.append(item)
+    # 后置标记同名冲突卡片：仅作信息位供排错/披露，不改变选表打分
+    name_counts: dict[str, int] = {}
+    for item in validated:
+        key = item["dataset_name"].casefold()
+        name_counts[key] = name_counts.get(key, 0) + 1
+    for item in validated:
+        if name_counts[item["dataset_name"].casefold()] > 1:
+            item["name_conflict"] = True
     return validated
 
 
