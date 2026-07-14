@@ -10,7 +10,7 @@
 3. 大结果两次过模型上下文（stdout 全量 + 管道回传 evidence）——全量结果落盘，
    stdout 只输出预览 + 披露 + 内嵌证据合同，单次输出限幅。
 
-用法（合同 ready 后的唯一执行入口）：
+用法（规划器 ready 后的唯一执行入口）：
   python3 scripts/run_query.py --table-id 2 --json "$QUERY_JSON" [--preview-rows 20] [--no-evidence]
   python3 scripts/run_query.py --table-id 2 --json-file payload.json
 """
@@ -88,7 +88,7 @@ def _precheck(payload: dict) -> None:
     blob = json.dumps(payload, ensure_ascii=False)
     leftovers = PLACEHOLDER_RE.findall(blob)
     if leftovers:
-        raise PrecheckError(f"payload 含未替换占位符 {leftovers[:3]}：全部替换为本次合同真实值后重试。")
+        raise PrecheckError(f"payload 含未替换占位符 {leftovers[:3]}：全部替换为本次规划器真实值后重试。")
     if payload.get("dataComparison"):
         comparison = payload["dataComparison"]
         if not isinstance(comparison, dict) or not comparison.get("field"):

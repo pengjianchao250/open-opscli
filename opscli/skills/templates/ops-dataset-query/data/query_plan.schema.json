@@ -133,7 +133,7 @@
           "$ref": "#/$defs/string_array"
         },
         "platform_enum_source": {
-          "description": "枚举值来源：auto_enum_service 表示组合入口已自动枚举回灌",
+          "description": "枚举值来源：auto_enum_service 表示规划器已自动枚举回灌",
           "type": "string"
         },
         "platform_enum_command": {

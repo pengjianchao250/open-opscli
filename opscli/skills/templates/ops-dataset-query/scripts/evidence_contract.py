@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""把查询返回 JSON 拍平为受限的证据与披露合同（evidence_contract_v1）。
+"""把查询返回 JSON 拍平为受限的证据与披露规划器（evidence_contract_v1）。
 
 输入：通过 stdin 传入的一次查询返回 JSON（对象）。
 输出：required_evidence（结论必须引用的证据路径与原值）、
 required_disclosures_zh（必须披露的中文事项）、
 forbidden_inferences_zh（禁止做出的推断）。
-结果分析阶段只允许基于本合同组织结论，防止对返回数据的过度推断。
+结果分析阶段只允许基于本规划器组织结论，防止对返回数据的过度推断。
 """
 
 from __future__ import annotations
@@ -124,7 +124,7 @@ def _dataset_name(source: dict) -> str:
 
 
 def build_evidence_contract(source: dict, max_evidence: int = MAX_EVIDENCE) -> dict:
-    """从一次查询返回构建证据与披露合同。
+    """从一次查询返回构建证据与披露规划器。
 
     披露与禁止推断按信号自动叠加：缺失值、零行、新鲜度不完整、
     币种未声明、跨数据集口径待确认等，每类信号对应固定话术。
