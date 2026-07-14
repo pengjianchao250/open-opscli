@@ -67,7 +67,7 @@ opscli calculator show <DRAFT_DIR>
 - `.dropdown-cache.json`：下拉快照，校验或提交时实时数据不可用才兜底使用。
 - `使用说明.md`：下一步命令和 Web 入口。
 
-CSV 可填写 `河北省`、`唐山市`、`算毛利`、`1区全部、指定分区`、`美东+美中` 等中文值。目录模式的 `validate` / `submit` 会按下拉数据自动转换成后端 key/code 并写回 `draft.json`。
+CSV 可填写 `河北省`、`唐山市`、`算毛利`、`1区全部、指定分区`、`美东+美西` 等中文值。目录模式的 `validate` / `submit` 会按下拉数据自动转换成后端 key/code 并写回 `draft.json`。
 
 ## 字段规则
 
@@ -75,9 +75,8 @@ CSV 可填写 `河北省`、`唐山市`、`算毛利`、`1区全部、指定分�
 - 不要把中文省市名写入 draft.json，例如不要写 `"河北省"`、`"唐山市"`。
 - 不要求用户手写 `pick_up_province_code` / `pick_up_city_code`；CLI 提交前自动派生。
 - `checkbox_stock: ["one_zone_all", "specify_part"]` 对应 `1区全部、指定分区`。
-- US/CA 选择 `one_zone_all` 或 `specify_part` 时，`two_zone_combine` 必填；`美东+美中` 对应 `["zone_1_3"]`。
-- `GROSS_PROFIT` 必须填写 `product_price`。
-- `PRICING` 必须填写 `gross_profit_percent`。
+- US/CA 的 `two_zone_combine` 默认是 `["zone_1_2"]`，对应“美东+美西”。
+- 利润相关成本费用由 CLI 统一填 `0`，用户无需填写。
 - `stock_qty_first_percent`、`stock_qty_second_percent`、`stock_qty_third_percent` 之和必须为 100。
 
 ## 最小烟测 JSON
@@ -101,22 +100,24 @@ CSV 可填写 `河北省`、`唐山市`、`算毛利`、`1区全部、指定分�
   "pick_up_province": "130000",
   "pick_up_city": "130200",
   "calc_method": "GROSS_PROFIT",
-  "purchase_cost_with_tax": 100,
-  "tax_rate_percent": 13,
-  "fee_percent": 15,
-  "advertising_percent": 10,
-  "marketing_percent": 5,
-  "refund_percent": 3,
-  "fixed_cost_percent": 2,
-  "tariff_rate": 25,
+  "product_price": 0,
+  "gross_profit_percent": 0,
+  "purchase_cost_with_tax": 0,
+  "purchase_cost": 0,
+  "tax_rate_percent": 0,
+  "fee_percent": 0,
+  "advertising_percent": 0,
+  "marketing_percent": 0,
+  "refund_percent": 0,
+  "fixed_cost_percent": 0,
+  "tariff_rate": 0,
   "stock_qty_first_percent": 50,
   "stock_qty_second_percent": 30,
   "stock_qty_third_percent": 20,
   "checkbox_stock": ["specify_part", "one_zone_all"],
-  "two_zone_combine": ["zone_1_3"],
+  "two_zone_combine": ["zone_1_2"],
   "three_zone_combine": [],
-  "baiyi_warehouse_ids": [],
-  "product_price": 39.99
+  "baiyi_warehouse_ids": []
 }
 ```
 

@@ -31,31 +31,9 @@ from opscli.calculator.models import build_query_payload, read_json_file
 app = typer.Typer(help="新品计算器")
 console = Console()
 
-TRIAL_RESULT_PLANS = ("mfn", "fba", "wfs")
 CALCULATOR_TMP_DIR = Path("tmp-validation") / "calculator"
 DEFAULT_DRAFT_OUT = CALCULATOR_TMP_DIR / "calculator-draft"
 DEFAULT_COPY_OUT = CALCULATOR_TMP_DIR / "calculator-draft-copy"
-
-TRIAL_RESULT_PLAN_LABELS = {
-    "mfn": "自发货",
-    "fba": "FBA",
-    "wfs": "WFS",
-}
-TRIAL_RESULT_ROW_DEFS = [
-    {"label": "售价", "field": "sales_price", "range_field": "sales_price_range"},
-    {"label": "毛利", "field": "gross_profit", "range_field": "gross_profit_range"},
-    {"label": "毛利率", "field": "gross_profit_percent", "range_field": "gross_profit_percent_range", "is_percent": True},
-    {"label": "非税采购价", "field": "purchase_cost", "percent_field": "purchase_cost_percent"},
-    {"label": "头程费用", "field": "first_leg", "percent_field": "first_leg_percent"},
-    {"label": "仓库费用", "field": "storage_fees", "percent_field": "storage_fees_percent"},
-    {"label": "尾程费用", "field": "freight", "percent_field": "freight_percent"},
-    {"label": "站内广告", "field": "advertising_fee", "percent_field": "advertising_fee_percent"},
-    {"label": "站外促销", "field": "marketing_fee", "percent_field": "marketing_fee_percent"},
-    {"label": "平台佣金", "field": "fee", "percent_field": "fee_percent"},
-    {"label": "退款费", "field": "refund", "percent_field": "refund_percent"},
-    {"label": "固定成本", "field": "fixed_cost", "percent_field": "fixed_cost_percent"},
-    {"label": "备注", "remark": True},
-]
 
 
 @app.callback()
@@ -221,12 +199,7 @@ def _handle_remote_error(action: str, exc: RuntimeError, task_code: str | None =
     _exit_with_error(detail)
 
 
-def _trial_result_channels(trial_result: dict) -> list[str]:
-    """提取前端试算结果表格可展示的方案列。"""
-    return [name for name in TRIAL_RESULT_PLANS if isinstance(trial_result.get(name), dict)]
-
-
-def _format_decimal(value: object, bit: int = 2) -> str:
+def _format_decimal(value: object, bit: int = 4) -> str:
     """按前端 keepDecimal 风格展示数值。"""
     if value is None or value == "":
         return "未填写"
@@ -238,111 +211,109 @@ def _format_decimal(value: object, bit: int = 2) -> str:
         return str(value)
 
 
-def _format_range(value: object, is_percent: bool = False) -> str | None:
-    """格式化前端试算结果 range 第二行。"""
+def _format_range(value: object) -> str | None:
+    """格式化费用区间第二行。"""
     if not isinstance(value, list | tuple) or len(value) < 2:
         return None
     first = _format_decimal(value[0])
     second = _format_decimal(value[1])
-    if is_percent:
-        return f"({first}%~{second}%)"
     return f"({first}~{second})"
 
 
-def _format_percent_line(value: object) -> str | None:
-    """格式化前端费用占比第二行。"""
-    if value is None or value == "":
-        return None
-    return f"({_format_decimal(value)}%)"
-
-
-def _format_trial_value(plan_data: dict, row_def: dict) -> str:
-    """格式化试算结果单元格，匹配前端 trial-result-teble。"""
-    if row_def.get("remark"):
-        return _format_trial_remark(plan_data)
-
-    field = str(row_def["field"])
-    is_percent = bool(row_def.get("is_percent"))
-    value = _format_decimal(plan_data.get(field))
-    if is_percent and value != "未填写":
-        value += "%"
-
-    lines = [value]
-    range_line = _format_range(plan_data.get(str(row_def.get("range_field"))), is_percent) if row_def.get("range_field") else None
-    percent_line = _format_percent_line(plan_data.get(str(row_def.get("percent_field")))) if row_def.get("percent_field") else None
+def _format_plan_fee(value: object, value_range: object = None) -> str:
+    """格式化单项方案费用及其区间。"""
+    if isinstance(value, dict):
+        value_range = value.get("range")
+        value = value.get("value")
+    lines = [_format_decimal(value)]
+    range_line = _format_range(value_range)
     if range_line:
         lines.append(range_line)
-    if percent_line:
-        lines.append(percent_line)
     return "\n".join(lines)
 
 
-def _format_trial_remark(plan_data: dict) -> str:
-    """格式化试算结果备注行。"""
-    warehouses = plan_data.get("warehouses")
-    if isinstance(warehouses, list):
-        areas = [_string_value(item.get("area")) for item in warehouses if isinstance(item, dict)]
-        areas = [area for area in areas if area]
-        if areas:
-            return "备货仓库：" + "、".join(areas)
-
-    remark = plan_data.get("remark")
-    if isinstance(remark, dict):
-        parts = []
-        size = _string_value(remark.get("size"))
-        first = _string_value(remark.get("first"))
-        if size:
-            parts.append(f"尺寸等级：{size}")
-        if first:
-            parts.append(f"头程路线：{first}")
-        if parts:
-            return "; ".join(parts)
-    return "未填写"
+def _plan_schemes(plan: dict) -> list[dict]:
+    """读取方案内的有效分区线路。"""
+    schemes = plan.get("schemes")
+    if not isinstance(schemes, list):
+        return []
+    return [scheme for scheme in schemes if isinstance(scheme, dict)]
 
 
-def _cost_summary_from(cost: object) -> dict:
-    """兼容前端列表结构和 CLI 测试中的对象结构读取成本摘要。"""
-    if isinstance(cost, dict):
-        return cost
-    if isinstance(cost, list) and cost and isinstance(cost[0], dict):
-        return cost[0]
-    return {}
+def _format_scheme_column(schemes: list[dict], field: str) -> str:
+    """把同一方案的多条线路格式化为多行单元格。"""
+    values: list[str] = []
+    for scheme in schemes:
+        if field == "scheme_fee":
+            value = _format_plan_fee(scheme.get("scheme_fee"), scheme.get("scheme_range"))
+        elif field in {"first_fee", "storage_fees", "freight"}:
+            value = _format_plan_fee(scheme.get(field))
+        else:
+            value = _display_value(scheme.get(field))
+        if _scheme_has_range(scheme) and "\n" not in value:
+            value += "\n"
+        values.append(value)
+    return "\n".join(values) if values else "未填写"
 
 
-def _calc_method_from(cost: object) -> str | None:
-    """兼容前端列表结构和 CLI 测试中的对象结构读取试算方式。"""
-    return _string_value(_cost_summary_from(cost).get("calc_method"))
+def _scheme_has_range(scheme: dict) -> bool:
+    """判断线路是否包含任一费用区间。"""
+    scheme_range = scheme.get("scheme_range")
+    if isinstance(scheme_range, list | tuple) and len(scheme_range) >= 2:
+        return True
+    return any(
+        isinstance(scheme.get(field), dict)
+        and isinstance(scheme[field].get("range"), list | tuple)
+        and len(scheme[field]["range"]) >= 2
+        for field in ("first_fee", "storage_fees", "freight")
+    )
 
 
-def _ordered_trial_result_rows(calc_method: str | None) -> list[dict]:
-    """按前端规则调整试算结果行顺序。"""
-    rows = list(TRIAL_RESULT_ROW_DEFS)
-    if calc_method == "GROSS_PROFIT" and len(rows) >= 3:
-        first = rows.pop(0)
-        rows.insert(2, first)
-    return rows
+def _has_first_order_qty(plans: list[dict]) -> bool:
+    """判断是否需要展示首单数量列。"""
+    return any(
+        scheme.get("first_order_qty") not in (None, "", 0)
+        for plan in plans
+        for scheme in _plan_schemes(plan)
+    )
 
 
-def _render_trial_result_table(trial_result: dict, base: dict, cost: object) -> bool:
-    """渲染前端 trial-result-teble 对应的“试算结果”表格。"""
-    channels = _trial_result_channels(trial_result)
-    if not channels:
+def _render_all_plans_table(all_plans: object) -> bool:
+    """渲染前端“方案切换”对应的只读费用方案表。"""
+    if not isinstance(all_plans, list):
+        return False
+    plans = [plan for plan in all_plans if isinstance(plan, dict)]
+    if not plans:
         return False
 
-    currency = _string_value(base.get("currency")) or "USD"
-    winner = _string_value(trial_result.get("winner"))
-    winner_lower = winner.lower() if winner else None
-    table = Table(title="试算结果", show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
-    table.add_column("费用", style="cyan")
-    for channel in channels:
-        label = f"{TRIAL_RESULT_PLAN_LABELS[channel]}({currency})"
-        if winner_lower and channel == winner_lower:
-            label += " 推荐"
-        table.add_column(label, justify="right")
+    show_first_order_qty = _has_first_order_qty(plans)
+    table = Table(title="费用方案", show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
+    table.add_column("分区推荐")
+    if show_first_order_qty:
+        table.add_column("首单数量", justify="right")
+    table.add_column("分区线路")
+    table.add_column("每PCS头程费用(CNY)", justify="right")
+    table.add_column("每PCS目的仓费用(CNY)", justify="right")
+    table.add_column("每PCS尾程费用(CNY)", justify="right")
+    table.add_column("每PCS全程费用(CNY)", justify="right", style="red")
+    table.add_column("每PCS全程平均费用(CNY)", justify="right", style="red")
 
-    for row_def in _ordered_trial_result_rows(_calc_method_from(cost)):
-        values = [_format_trial_value(trial_result[channel], row_def) for channel in channels]
-        table.add_row(str(row_def["label"]), *values)
+    for plan in plans:
+        schemes = _plan_schemes(plan)
+        values = [_display_value(plan.get("partition_recommend"))]
+        if show_first_order_qty:
+            values.append(_format_scheme_column(schemes, "first_order_qty"))
+        values.extend(
+            [
+                _format_scheme_column(schemes, "lines"),
+                _format_scheme_column(schemes, "first_fee"),
+                _format_scheme_column(schemes, "storage_fees"),
+                _format_scheme_column(schemes, "freight"),
+                _format_scheme_column(schemes, "scheme_fee"),
+                _format_decimal(plan.get("total_fee")),
+            ]
+        )
+        table.add_row(*values)
 
     console.print(table)
     return True
@@ -570,9 +541,6 @@ def detail_command(
     resolved_task_code = _task_code_from(data, task_code) or task_code
     resolved_sudo = _sudo_from(data, sudo)
     base = _dict_value(data, "base")
-    raw_cost = data.get("cost")
-    cost = _cost_summary_from(raw_cost)
-    trial_result = _dict_value(data, "trial_result")
 
     typer.echo("任务详情")
     typer.echo(f"任务编号：{resolved_task_code}")
@@ -586,23 +554,12 @@ def detail_command(
     typer.echo(f"- 试算平台：{_display_value(base.get('platforms') or data.get('platforms'))}")
     typer.echo(f"- 试算参考：{_display_value(base.get('trial_refer') or data.get('trial_refer'))}")
     typer.echo("")
-    typer.echo("成本摘要")
-    typer.echo(f"- 商品售价：{_display_value(cost.get('product_price') or data.get('product_price'))}")
-    typer.echo(f"- 商品毛利：{_display_value(cost.get('gross_profit_percent') or data.get('gross_profit_percent'))}")
-    typer.echo(f"- 含税采购价：{_display_value(cost.get('purchase_cost_with_tax') or data.get('purchase_cost_with_tax'))}")
-    typer.echo("")
-    if trial_result:
-        winner = _display_value(trial_result.get("winner"))
-        available = [name.upper() for name in TRIAL_RESULT_PLANS if trial_result.get(name)]
-        typer.echo("试算结果摘要")
-        typer.echo(f"- 可用方案：{', '.join(available) if available else '未返回'}")
-        typer.echo(f"- 推荐方案：{winner}")
+    typer.echo("注：费用计算结果不含头程清关税金。")
+    if _render_all_plans_table(data.get("allPlans")):
         typer.echo("")
-        if _render_trial_result_table(trial_result, base, cost):
-            typer.echo("")
-        else:
-            typer.echo("试算结果表格字段未返回，请使用原始JSON查看完整详情。")
-            typer.echo("")
+    else:
+        typer.echo("暂无方案数据。")
+        typer.echo("")
     _echo_web_detail_hint(resolved_task_code, resolved_sudo)
 
 

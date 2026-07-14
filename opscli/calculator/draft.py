@@ -29,7 +29,22 @@ _ARRAY_FIELD_KEYS = {"platforms", "checkbox_stock", "two_zone_combine", "three_z
 _STRING_FIELD_KEYS = {"country_code", "department", "reference", "reference_value", "pick_up_province", "pick_up_city", "calc_method", "task_name"}
 _BOOL_TRUE_VALUES = {"1", "true", "yes", "y", "是"}
 _BOOL_FALSE_VALUES = {"0", "false", "no", "n", "否"}
+_DEFAULT_CALC_METHOD = "GROSS_PROFIT"
 _DEFAULT_CHECKBOX_STOCK = ["one_zone_all", "specify_part"]
+_DEFAULT_TWO_ZONE_COMBINE = ["zone_1_2"]
+_ZERO_COST_FIELD_KEYS = {
+    "product_price",
+    "gross_profit_percent",
+    "purchase_cost_with_tax",
+    "purchase_cost",
+    "tax_rate_percent",
+    "fee_percent",
+    "advertising_percent",
+    "marketing_percent",
+    "refund_percent",
+    "fixed_cost_percent",
+    "tariff_rate",
+}
 _BUILTIN_OPTIONS = {
     "calc_method": [("GROSS_PROFIT", "算毛利"), ("PRICING", "算定价")],
     "checkbox_stock": [("one_zone_all", "1区全部"), ("specify_part", "指定分区"), ("specify_stock", "指定仓库")],
@@ -90,13 +105,21 @@ def normalize_draft_data(data: dict[str, Any]) -> tuple[dict[str, Any], list[str
             number = float(value) if "." in value else int(value)
             normalized[key] = number
 
-    if not normalized.get("tariff_rate"):
-        normalized["tariff_rate"] = 25
-        notes.append("关税率未返回，已默认填 25。")
+    for key in _ZERO_COST_FIELD_KEYS:
+        normalized[key] = 0
+
+    if _is_empty(normalized.get("calc_method")):
+        normalized["calc_method"] = _DEFAULT_CALC_METHOD
+        notes.append("试算方案未返回，已默认选择算毛利。")
 
     if _is_empty(normalized.get("checkbox_stock")):
         normalized["checkbox_stock"] = list(_DEFAULT_CHECKBOX_STOCK)
         notes.append("备货区域未返回，已默认选择 1区全部、指定分区。")
+
+    country_code = str(normalized.get("country_code") or "").upper()
+    if country_code in {"US", "CA"} and _is_empty(normalized.get("two_zone_combine")):
+        normalized["two_zone_combine"] = list(_DEFAULT_TWO_ZONE_COMBINE)
+        notes.append("指定二区未返回，已默认选择美东+美西。")
 
     bi_message = normalized.get("bi_message")
     if bi_message:
@@ -154,12 +177,6 @@ def validate_draft_data(data: dict[str, Any]) -> list[ValidationIssue]:
             _validate_pickup_code(issues, field.key, value)
         if field.positive or field.percent:
             _validate_number(issues, field.key, value, field.positive, field.percent)
-
-    calc_method = data.get("calc_method")
-    if calc_method == "GROSS_PROFIT" and _is_empty(data.get("product_price")):
-        issues.append(ValidationIssue("product_price", "商品售价：当前试算方案为算毛利，必须填写。", "成本费用"))
-    if calc_method == "PRICING" and _is_empty(data.get("gross_profit_percent")):
-        issues.append(ValidationIssue("gross_profit_percent", "目标毛利率：当前试算方案为算定价，必须填写。", "成本费用"))
 
     stock_values = [
         _to_decimal(data.get("stock_qty_first_percent")) or Decimal("0"),
