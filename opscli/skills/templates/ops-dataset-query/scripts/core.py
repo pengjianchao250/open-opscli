@@ -185,6 +185,9 @@ def discover_data_dir(skills_dir: str | None = None) -> Path | None:
     current = Path.cwd()
     candidates.extend([
         current / ".claude" / "skills",
+        # e2b 沙箱 SDK 的技能挂载点是 cwd/.agents/<技能名>，显式纳入候选
+        current / ".agents",
+        home / ".agents",
         home / ".claude" / "skills",
         home / ".openclaw" / "skills",
         home / ".codex" / "skills",

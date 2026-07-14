@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 
@@ -196,16 +197,26 @@ def build_evidence_contract(source: dict, max_evidence: int = MAX_EVIDENCE) -> d
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """命令行参数：查询返回 JSON 固定从 stdin 读取。"""
+    """命令行参数：查询返回 JSON 默认从 stdin 读取，--input 可改从文件读取。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-evidence", type=int, default=MAX_EVIDENCE)
+    parser.add_argument(
+        "--input",
+        default="",
+        help="查询返回 JSON 文件路径；配合 opscli ... --run > result.json 落盘旁路，"
+        "避免大结果两次占用模型上下文",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
-        value = json.loads(sys.stdin.read())
+        if args.input:
+            raw = Path(args.input).read_text(encoding="utf-8")
+        else:
+            raw = sys.stdin.read()
+        value = json.loads(raw)
         result = build_evidence_contract(value, args.max_evidence)
     except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError) as error:
         print(json.dumps({"error": str(error)}, ensure_ascii=False), file=sys.stderr)
