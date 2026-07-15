@@ -1028,6 +1028,46 @@ def _filter_components(guidance: dict) -> list[dict]:
     return components
 
 
+# filter_config 操作符 → 中文描述（披露文案用，与后台配置表单 label 一致）
+_FILTER_OPERATOR_ZH = {
+    "equals": "等于", "notEquals": "不等于", "gt": "大于", "gte": "大于等于",
+    "lt": "小于", "lte": "小于等于", "isEmpty": "为空", "isNotEmpty": "不为空",
+}
+
+
+def _default_filters_ref(guidance: dict) -> list[dict]:
+    """把 guidance.default_filters 投影为执行引用形态（模型直接填充查询用）。"""
+    refs = []
+    for item in guidance.get("default_filters") or []:
+        config = item.get("filter_config") or {}
+        # 优先取枚举值列表；没有则把 value 归一化为列表
+        values = config.get("enum_value") or []
+        if not values and config.get("value") not in (None, ""):
+            raw = config["value"]
+            values = raw if isinstance(raw, list) else [raw]
+        refs.append({
+            "field_name": item["field_name"],
+            "label_zh": item.get("verbose_name", ""),
+            "operator": config.get("operator", "equals"),
+            "values": values,
+            "type": config.get("type", "required"),
+            "filter_type": config.get("filter_type", "enum"),
+            "filter_agg": config.get("filter_agg", "none"),
+        })
+    return refs
+
+
+def _default_filters_zh(refs: list[dict]) -> list[str]:
+    """默认条件的用户可见中文描述（回答披露用）。"""
+    lines = []
+    for ref in refs:
+        op_zh = _FILTER_OPERATOR_ZH.get(ref["operator"], ref["operator"])
+        value_text = "、".join(str(v) for v in ref["values"]) or "-"
+        type_zh = "强制" if ref["type"] == "required" else "可选"
+        lines.append(f"{ref['label_zh'] or ref['field_name']} {op_zh} {value_text}（{type_zh}）")
+    return lines
+
+
 def build_model_contract(
     internal: dict,
     query: str = "",
@@ -1176,6 +1216,34 @@ def build_model_contract(
                 "行数填 limit；不需要的键（null 值）必须删除后再执行。"
                 "selection_source=recommended 的字段须先向用户说明再采用。"
             )
+    # 默认条件投影（R5）：把 guidance.default_filters 投影到三处输出
+    default_filters = _default_filters_ref(guidance)
+    if default_filters:
+        execution_ref["default_filters"] = default_filters
+        model_view["default_filters_zh"] = _default_filters_zh(default_filters)
+        # 预填 required 默认条件到查询模板 filters（optional/having 条件由模型/服务端决定）
+        template = execution_ref.get("query_template")
+        if template is not None:
+            # filter_config 操作符 → 简化查询操作符（与 run_query 的映射保持一致）
+            op_map = {"equals": "=", "notEquals": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
+            template_filters = template.get("filters") or []
+            for ref in default_filters:
+                if ref["type"] != "required" or ref["filter_agg"] != "none":
+                    continue  # optional 由模型按用户语境决定；having 度量条件服务端兜底
+                op = op_map.get(ref["operator"])
+                if op is None or not ref["values"]:
+                    continue  # isEmpty/isNotEmpty 等暂不支持的操作符跳过，服务端兜底
+                if len(ref["values"]) > 1 and ref["operator"] == "equals":
+                    template_filters.append({"field": ref["field_name"], "operator": "in", "value": ref["values"]})
+                else:
+                    template_filters.append({"field": ref["field_name"], "operator": op, "value": ref["values"][0]})
+            template["filters"] = template_filters
+    # 回答合同：先构建基础版本，再追加默认条件强制披露
+    answer_contract = _answer_contract(status, clarification_reasons, platform_state, guidance)
+    if default_filters:
+        answer_contract["required_disclosures_zh"].append(
+            "本次查询已自动应用数据集默认条件：" + "；".join(model_view["default_filters_zh"])
+        )
     return {
         "contract": MODEL_CONTRACT,
         "data_state": str(internal.get("data_state", "missing")),
@@ -1183,9 +1251,7 @@ def build_model_contract(
         "metadata_version": str(internal.get("metadata_version", "")),
         "status": status,
         "model_view": model_view,
-        "answer_contract": _answer_contract(
-            status, clarification_reasons, platform_state, guidance
-        ),
+        "answer_contract": answer_contract,
         "execution_ref": execution_ref,
     }
 

@@ -35,6 +35,21 @@
 
 ---
 
+## 2026-07-15 skills/query_plan - 投影默认条件到 execution_ref 并强制中文披露（R5 Task4）
+
+**变更原因**：需求 R5 Task 4 要求规划器 `build_model_contract` 把 `guidance["default_filters"]` 投影到三处输出：`execution_ref["default_filters"]`（执行引用，供 Task 5 run_query 消费）、`model_view["default_filters_zh"]`（用户可见中文披露）、`answer_contract["required_disclosures_zh"]`（回答强制披露），并在 `query_template` 预填 required 默认条件。
+**改动点**：
+1. `opscli/skills/templates/ops-dataset-query/scripts/query_plan.py`：
+   - 在 `_filter_components` 之后新增模块级常量 `_FILTER_OPERATOR_ZH`（操作符 → 中文映射）、函数 `_default_filters_ref(guidance)`（投影执行引用形态）、函数 `_default_filters_zh(refs)`（生成中文披露文案）。
+   - 在 `build_model_contract` 的查询模板骨架之后插入默认条件投影逻辑：调用 `_default_filters_ref(guidance)` 获取条目列表；若非空则写入 `execution_ref["default_filters"]`、`model_view["default_filters_zh"]`、预填 required 条件到模板 filters。
+   - 将 `_answer_contract()` 调用提前到 return 前赋变量 `answer_contract`，再对其 `required_disclosures_zh` 追加默认条件披露项。
+2. `tests/skills/test_dataset_query_planner.py`：新增 fixture `_write_ready_metadata_with_filter_config`（ds_ads date_type 字段配置 required QUARTER 默认条件）；新增测试 `test_query_plan_projects_default_filters`（正向：三处投影 + template 预填）和 `test_query_plan_no_default_filters_key_when_unconfigured`（负向：无配置时键不存在）。
+**验证结果**：RED 阶段运行 `pytest tests/skills/test_dataset_query_planner.py -k default_filters -v`，`test_query_plan_projects_default_filters` FAILED（KeyError: 'default_filters'），`test_query_plan_no_default_filters_key_when_unconfigured` PASSED；GREEN 阶段实现后两个测试均 PASSED；全量回归 `pytest tests/skills/ tests/query/ --ignore=tests/skills/test_packaging.py -v` 196 passed，6 FAILED 均为预先存在的模板版本漂移/依赖缺失失败，无新增回归（比基线多 2 PASSED）。
+**影响范围**：影响 `build_model_contract` 输出结构（当数据集有 filter_config 配置时新增 3 个键）；未配置的数据集输出与现状完全一致；不修改其他投影逻辑和字段。
+**回滚方式**：回退 `opscli/skills/templates/ops-dataset-query/scripts/query_plan.py` 中新增的三个辅助定义及 `build_model_contract` 中新增的投影块和 answer_contract 变量化，删除测试文件中新增的 fixture 和两个测试函数，删除本条变更记录。
+
+---
+
 ## 2026-07-14 asin-data - Polaris 鉴权回退与用户手册
 
 **变更原因**：ASIN 刊登实时取数在个人 Polaris JWT 和直接 exchange 均失败时缺少 BJX Token 自动兜底，同时 CLI/MCP 的公开命令、返回协议和 Polaris 开关说明尚未形成独立完整手册。
