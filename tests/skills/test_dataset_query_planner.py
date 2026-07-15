@@ -734,6 +734,12 @@ def test_query_plan_projects_default_filters(tmp_path: Path):
     assert any("QUARTER" in text for text in result["model_view"]["default_filters_zh"])
     # 回答合同强制披露
     assert any("默认条件" in text for text in result["answer_contract"]["required_disclosures_zh"])
+    # query_template 预填：required 默认条件必须已进入模板 filters
+    template_filters = result["execution_ref"]["query_template"]["filters"]
+    assert any(
+        f["field"] == "date_type" and f["operator"] == "=" and f["value"] == "QUARTER"
+        for f in template_filters
+    )
 
 
 def test_query_plan_no_default_filters_key_when_unconfigured(tmp_path: Path):
@@ -746,3 +752,8 @@ def test_query_plan_no_default_filters_key_when_unconfigured(tmp_path: Path):
     )
     assert "default_filters" not in result["execution_ref"]
     assert "default_filters_zh" not in result["model_view"]
+    # 未配置时回答合同不得注入默认条件披露
+    assert not any(
+        "默认条件" in text
+        for text in result["answer_contract"]["required_disclosures_zh"]
+    )
