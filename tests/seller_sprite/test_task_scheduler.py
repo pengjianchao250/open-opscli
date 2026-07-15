@@ -431,7 +431,12 @@ def test_scheduler_close_releases_healthy_browser_sessions_and_audits_states(tmp
         )
         await scheduler.start()
         account = provider.accounts[0]
-        worker = worker_module.get_browser_route_worker(settings=settings, account=account)
+        worker = worker_module.get_browser_route_worker(
+            settings=settings,
+            account=account,
+            state_listener=scheduler._record_browser_session_state_change,
+            owner_id=scheduler._session_owner_id,
+        )
 
         class CloseProbe:
             def __init__(self):
@@ -446,13 +451,17 @@ def test_scheduler_close_releases_healthy_browser_sessions_and_audits_states(tmp
         await scheduler.close()
 
         assert context.closed is True
-        assert worker_module.get_existing_browser_route_worker(settings=settings, account=account) is None
+        assert worker_module.get_existing_browser_route_worker(
+            settings=settings,
+            account=account,
+            owner_id=scheduler._session_owner_id,
+        ) is None
         states = [
             event["metadata"]["state"]
             for event in store.list_account_events()
             if event["event_type"] == "account_session_state_changed"
         ]
-        assert states == ["closed", "closing"]
+        assert states == ["closed", "closing", "ready", "registered"]
 
     asyncio.run(scenario())
 
@@ -482,7 +491,12 @@ def test_scheduler_reaps_idle_browser_session_and_next_task_can_recreate_worker(
         )
         await scheduler.start()
         account = provider.accounts[0]
-        original = worker_module.get_browser_route_worker(settings=settings, account=account)
+        original = worker_module.get_browser_route_worker(
+            settings=settings,
+            account=account,
+            state_listener=scheduler._record_browser_session_state_change,
+            owner_id=scheduler._session_owner_id,
+        )
 
         class CloseProbe:
             def __init__(self):
@@ -496,15 +510,27 @@ def test_scheduler_reaps_idle_browser_session_and_next_task_can_recreate_worker(
         await asyncio.sleep(1.1)
 
         assert context.closed is True
-        assert worker_module.get_existing_browser_route_worker(settings=settings, account=account) is None
-        replacement = worker_module.get_browser_route_worker(settings=settings, account=account)
+        assert worker_module.get_existing_browser_route_worker(
+            settings=settings,
+            account=account,
+            owner_id=scheduler._session_owner_id,
+        ) is None
+        replacement = worker_module.get_browser_route_worker(
+            settings=settings,
+            account=account,
+            state_listener=scheduler._record_browser_session_state_change,
+            owner_id=scheduler._session_owner_id,
+        )
         assert replacement is not original
         reasons = [
             event["metadata"]["reason"]
             for event in store.list_account_events()
             if event["event_type"] == "account_session_state_changed"
         ]
-        assert reasons[:2] == ["idle_timeout", "idle_timeout"]
+        assert [reason for reason in reasons if reason == "idle_timeout"] == [
+            "idle_timeout",
+            "idle_timeout",
+        ]
         await scheduler.close()
 
     asyncio.run(scenario())

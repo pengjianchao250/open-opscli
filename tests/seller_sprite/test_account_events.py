@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
+from opscli.seller_sprite.config import SellerSpriteSettings
 from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
 
 
@@ -152,7 +153,6 @@ def test_account_event_recorder_persists_sanitized_session_state_change(caplog, 
             session_age_seconds=1900,
             idle_seconds=1800,
             task_count=12,
-            is_busy=False,
         )
 
     event = store.list_account_events()[0]
@@ -166,7 +166,6 @@ def test_account_event_recorder_persists_sanitized_session_state_change(caplog, 
         "session_age_seconds": 1900,
         "idle_seconds": 1800,
         "task_count": 12,
-        "is_busy": False,
     }
     assert "private@example.com" not in repr(event)
     assert any(
@@ -174,3 +173,82 @@ def test_account_event_recorder_persists_sanitized_session_state_change(caplog, 
         == "account_session_state_changed"
         for record in caplog.records
     )
+
+
+def test_account_event_recorder_uses_dedicated_close_failed_event(caplog, tmp_path: Path):
+    """会话关闭失败必须写独立事件，且只保留异常类型。"""
+    from opscli.seller_sprite.services.account_events import SellerSpriteAccountEventRecorder
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    recorder = SellerSpriteAccountEventRecorder(store=store)
+    account = SellerSpriteAccount(name="account-1", username="private@example.com", password="secret")
+
+    with caplog.at_level(logging.WARNING):
+        recorder.record_session_state_change(
+            account=account,
+            previous_state="closing",
+            state="close_failed",
+            reason="scheduler_close",
+            session_age_seconds=1900,
+            idle_seconds=1800,
+            task_count=12,
+            error_code="RuntimeError",
+        )
+
+    event = store.list_account_events()[0]
+    assert event["event_type"] == "account_session_close_failed"
+    assert event["error_code"] == "RuntimeError"
+    assert event["error_summary"] is None
+    assert "private@example.com" not in repr(event)
+
+
+def test_default_browser_listener_persists_direct_call_states_in_custom_output(tmp_path: Path):
+    """非 scheduler 直调监听器也应把状态写入自定义输出目录的 SQLite。"""
+    from opscli.seller_sprite.browser_route.worker import build_default_session_state_listener
+
+    settings = SellerSpriteSettings(output_dir=tmp_path)
+    account = SellerSpriteAccount(name="account-1", username="private@example.com", password="secret")
+    listener = build_default_session_state_listener(settings)
+    listener(
+        account,
+        {
+            "previous_state": "registered",
+            "state": "ready",
+            "reason": "browser_context_opened",
+            "session_age_seconds": 0,
+            "idle_seconds": 0,
+            "task_count": 0,
+        },
+    )
+
+    store = SellerSpriteTaskQueueStore(
+        db_path=tmp_path / ".seller_sprite_session_events.sqlite3"
+    )
+    event = store.list_account_events()[0]
+    assert event["event_type"] == "account_session_state_changed"
+    assert event["metadata"]["state"] == "ready"
+    assert event["masked_username"] == "p***@example.com"
+
+
+def test_default_browser_listener_does_not_block_when_sqlite_init_fails(
+    caplog,
+    monkeypatch,
+    tmp_path: Path,
+):
+    """直调审计库初始化失败只能降级记录，不能覆盖 browser 主流程。"""
+    from opscli.seller_sprite.browser_route.worker import build_default_session_state_listener
+    from opscli.seller_sprite.services import task_queue_store as store_module
+
+    def fail_store(*args, **kwargs):
+        raise OSError("private@example.com disk unavailable")
+
+    monkeypatch.setattr(store_module, "SellerSpriteTaskQueueStore", fail_store)
+    listener = build_default_session_state_listener(SellerSpriteSettings(output_dir=tmp_path))
+    account = SellerSpriteAccount(name="account-1", username="private@example.com", password="secret")
+
+    with caplog.at_level(logging.ERROR):
+        listener(account, {"state": "registered"})
+        listener(account, {"state": "ready"})
+
+    assert sum("会话审计初始化失败" in record.message for record in caplog.records) == 1
+    assert "private@example.com" not in caplog.text

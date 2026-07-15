@@ -2665,8 +2665,8 @@
 ## 2026-07-15 SellerSprite - 会话轮换、状态审计与统一释放
 
 **变更原因**：空闲回收之外，还需要保证六小时会话只在安全任务边界轮换、调度器退出释放健康会话，并能还原每次会话状态变化。
-**改动点**：browser worker 增加 ready/busy/idle/recycling/closing/closed/close_failed 状态通知和重复状态抑制；统一事件记录器将白名单生命周期指标写运行日志和 SQLite；调度器每分钟回收空闲会话、每条任务后检查最大生命周期，并在 close 时批量释放健康会话；context 关闭失败时仍继续停止 Playwright 和释放 Xvfb。
-**验证结果**：状态链测试先缺少 busy 状态进入 red，修复后通过；状态审计测试先因 Recorder 接口缺失进入 red，修复后通过；调度器统一关闭和周期空闲回收测试均先进入 red 后通过；半释放测试先观察到 Playwright 未停止，修复后通过；相关 API manager、调度器、browser worker 和账号事件组合测试 76 passed。
+**改动点**：browser worker 增加 registered/ready/busy/idle/recycling/closing/closed/close_failed 状态通知和重复状态抑制；统一事件记录器将白名单生命周期指标写运行日志和 SQLite，关闭失败使用独立 `account_session_close_failed` 事件；调度器每分钟回收空闲会话、每条任务后检查最大生命周期，并在 close 时批量释放健康会话；context 关闭失败时仍继续停止 Playwright 和释放 Xvfb。双轴审查后补充 scheduler owner 隔离、配置热更新旧命名空间清理、通用与 Listing 已领取任务 reservation、生命周期锁、关闭等待内部队列及 closing worker 单次重建重试，防止跨调度器误关和旧引用复活未托管会话；worker 自身安排最早生命周期阈值回收，debug/Listing 等非 scheduler 直调路径也接入延迟初始化的脱敏 SQLite Recorder。
+**验证结果**：状态链测试先缺少 busy 状态进入 red，修复后通过；状态审计测试先因 Recorder 接口缺失进入 red，修复后通过；调度器统一关闭和周期空闲回收测试均先进入 red 后通过；半释放测试先观察到 Playwright 未停止，修复后通过；初版相关 API manager、调度器、browser worker 和账号事件组合测试 76 passed；审查修复新增所有权隔离、reservation、关闭队列竞态、直调 self-reap、异常路径 idle 收尾、审计初始化降级和独立关闭失败事件测试。最终 SellerSprite 与相关 MCP 回归 `233 passed, 2 deselected`，两项 deselected 为既有未注册 `seller-sprite-debug` 顶级命令测试；双轴 Standards/Spec 复审均 PASS。项目全量 pytest 仍被既有重复测试模块收集及 pytest 捕获流被导入期关闭问题阻断，`--import-mode=importlib` 同样在既有导入期捕获流关闭处停止；变更模块 `compileall` 与 `git diff --check` 通过。
 **影响范围**：影响 SellerSprite browser-route 健康会话的回收、轮换、关闭和审计；运行中任务不被中断，下一任务继续按持久 profile 懒创建会话。
 **回滚方式**：回滚 browser worker 生命周期接口、ApiManager 状态监听器透传、TaskScheduler 回收/关闭编排、AccountEventRecorder 状态记录方法及对应测试。
 ---

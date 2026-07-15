@@ -127,10 +127,23 @@ class SellerSpriteAccountEventRecorder:
         session_age_seconds: int,
         idle_seconds: int,
         task_count: int,
-        is_busy: bool,
         error_code: str | None = None,
     ) -> None:
-        """记录一次 browser-route 会话状态变化及其脱敏生命周期指标。"""
+        """记录一次 browser-route 会话状态变化及其脱敏生命周期指标。
+
+        参数：
+            account: 状态变化所属账号。
+            previous_state: 变化前状态。
+            state: 变化后状态。
+            reason: 状态变化原因。
+            session_age_seconds: 当前会话年龄。
+            idle_seconds: 当前空闲时长。
+            task_count: 当前会话累计任务数。
+            error_code: 关闭失败时的异常类型或业务错误码。
+
+        返回：
+            无。
+        """
         metadata = {
             "previous_state": previous_state,
             "state": state,
@@ -138,10 +151,13 @@ class SellerSpriteAccountEventRecorder:
             "session_age_seconds": max(0, int(session_age_seconds)),
             "idle_seconds": max(0, int(idle_seconds)),
             "task_count": max(0, int(task_count)),
-            "is_busy": bool(is_busy),
         }
         event = {
-            "event_type": "account_session_state_changed",
+            "event_type": (
+                "account_session_close_failed"
+                if state == "close_failed"
+                else "account_session_state_changed"
+            ),
             "account_key": seller_sprite_account_key(account),
             "account_name": account.name,
             "masked_username": mask_seller_sprite_username(account.username),
@@ -158,7 +174,8 @@ class SellerSpriteAccountEventRecorder:
             "next_action": reason,
             "metadata": metadata,
         }
-        logger.info("卖家精灵 browser 会话状态变化", extra={"seller_sprite_event": dict(event)})
+        log_method = logger.warning if state == "close_failed" else logger.info
+        log_method("卖家精灵 browser 会话状态变化", extra={"seller_sprite_event": dict(event)})
         try:
             self.store.record_account_event(**event)
         except Exception as audit_error:
@@ -174,6 +191,31 @@ class SellerSpriteAccountEventRecorder:
                     }
                 },
             )
+
+    def record_session_state_payload(
+        self,
+        account: SellerSpriteAccount,
+        payload: dict[str, Any],
+    ) -> None:
+        """记录 browser worker 发送的白名单状态载荷。
+
+        参数：
+            account: 状态变化所属账号。
+            payload: browser worker 生成的生命周期快照。
+
+        返回：
+            无。
+        """
+        self.record_session_state_change(
+            account=account,
+            previous_state=str(payload.get("previous_state") or "unknown"),
+            state=str(payload.get("state") or "unknown"),
+            reason=str(payload.get("reason") or "unknown"),
+            session_age_seconds=int(payload.get("session_age_seconds") or 0),
+            idle_seconds=int(payload.get("idle_seconds") or 0),
+            task_count=int(payload.get("task_count") or 0),
+            error_code=(str(payload["error_code"]) if payload.get("error_code") else None),
+        )
 
 
 def _error_code(error: Exception) -> str:

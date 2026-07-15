@@ -96,10 +96,14 @@ browser-route 关闭时必须：
 会话采用“懒创建、空闲回收、到期轮换”生命周期：
 
 - browser context 首次任务到来时创建，冷备用账号不预热；
+- registry 键包含事件循环、调度器所有权、浏览器启动配置和账号；同进程并发调度器只回收自己拥有的会话，配置热更新时仍能按所有权清理旧命名空间；
 - 最后一次任务完成后空闲满 30 分钟，从 registry 移除并关闭；
 - 会话自 browser context 创建起满 6 小时后，在当前任务完成边界轮换，不中断运行中任务；
+- SQLite 已领取但尚未提交到 browser worker 的任务会预留已有会话，回收器把预留视为 busy；
+- 关闭先阻止新任务进入，再等待内部 queue 排空，旧 worker 引用不能重新创建未托管 context；
 - 下一条任务按原 profile 懒创建新 context，保留仍有效的 Cookie/profile；
 - scheduler 正常关闭时统一关闭其事件循环中的健康 browser 会话；
+- worker 自身同时安排下一次空闲/寿命阈值回收，确保 debug CLI、Listing 报告和其他非 scheduler 直调路径也不会永久驻留；scheduler 分钟扫描作为持久任务路径的兜底；
 - 生命周期判断只使用单调时钟，审计时间继续使用 UTC 墙上时钟。
 
 会话状态机为：
@@ -121,7 +125,9 @@ stateDiagram-v2
 
 每次实际状态变化通过同一个 Recorder 写结构化日志和
 `seller_sprite_account_events`。事件记录账号键、脱敏用户名、前后状态、关闭原因、
-会话年龄、空闲时长和累计任务数；不得记录 Cookie、profile 内容或浏览器响应正文。
+会话年龄、空闲时长和累计任务数；关闭失败使用独立的
+`account_session_close_failed` 事件；非 scheduler 直调路径也使用延迟初始化的同类 Recorder
+写日志和 SQLite；不得记录 Cookie、profile 内容或浏览器响应正文。
 
 ### QueueStore
 

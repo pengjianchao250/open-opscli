@@ -23,7 +23,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.api.market_research import parse_market_research_html
-from opscli.seller_sprite.config import SellerSpriteSettings
+from opscli.seller_sprite.config import DEFAULT_OUTPUT_DIR, SellerSpriteSettings
 from opscli.seller_sprite.domain.exceptions import (
     SellerSpriteApiError,
     SellerSpriteAuthenticationError,
@@ -105,6 +105,10 @@ class _QueuedTask:
     future: asyncio.Future
 
 
+class BrowserRouteWorkerClosedError(RuntimeError):
+    """表示任务提交时目标 browser worker 已进入关闭流程。"""
+
+
 def _record_timing(
     timings: list[dict[str, Any]] | None,
     request: BrowserRouteRequest | None,
@@ -145,13 +149,28 @@ class SellerSpriteBrowserRouteWorker:
         state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        """创建账号隔离 worker；监听器接收脱敏会话状态变化。"""
+        """创建账号隔离 worker。
+
+        参数：
+            settings: browser-route 运行配置。
+            account: 该 worker 独占的卖家精灵账号。
+            state_listener: 接收脱敏会话状态变化的同步监听器。
+            clock: 用于生命周期判断的单调时钟，测试可注入。
+
+        返回：
+            无。
+        """
         self.settings = settings
         self.account = account
         self._clock = clock
         self._state_listener = state_listener
         self._queue: asyncio.Queue[_QueuedTask] = asyncio.Queue()
+        # 生命周期锁只保护“是否接受新任务”的切换；绝不与 drain 锁同时持有，避免锁序反转。
+        self._lifecycle_lock = asyncio.Lock()
         self._drain_lock = asyncio.Lock()
+        self._reservation_count = 0
+        self._closing = False
+        self._closed = False
         self._last_finished_at = 0.0
         self._opened_at = 0.0
         self._task_count = 0
@@ -161,47 +180,121 @@ class SellerSpriteBrowserRouteWorker:
         self._context = None
         self._page = None
         self._auto_xvfb_attached = False
+        self._automatic_reap_task: asyncio.Task | None = None
+        self._notify_state_change(
+            previous_state="none",
+            state="registered",
+            reason="worker_registered",
+        )
 
     async def submit(self, request: BrowserRouteRequest) -> BrowserRouteResult:
-        """入队并顺序执行任务。"""
+        """入队并顺序执行任务。
+
+        参数：
+            request: 待执行的 browser-route 请求。
+
+        返回：
+            browser-route 请求结果。
+
+        异常：
+            BrowserRouteWorkerClosedError: worker 已开始关闭，调用方应获取新 worker 重试。
+            Exception: 透传具体任务执行异常。
+        """
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        await self._queue.put(_QueuedTask(request=request, future=future))
+        # 先在生命周期锁内完成入队；关闭方一旦取得该锁并标记 closing，旧引用便不能复活会话。
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise BrowserRouteWorkerClosedError("browser worker 已进入关闭流程")
+            await self._queue.put(_QueuedTask(request=request, future=future))
         await self._drain_queue()
         return await future
 
     @property
     def is_busy(self) -> bool:
-        """判断当前 worker 是否正在执行或已有排队任务。"""
-        return self._drain_lock.locked() or not self._queue.empty()
+        """判断当前 worker 是否正在执行、排队或已被任务预留。"""
+        return (
+            self._reservation_count > 0
+            or self._drain_lock.locked()
+            or not self._queue.empty()
+        )
+
+    @property
+    def accepts_tasks(self) -> bool:
+        """返回 worker 是否仍接受新任务。"""
+        return not self._closing and not self._closed
+
+    def reserve(self) -> bool:
+        """为已领取但尚未提交的任务预留会话。
+
+        返回：
+            预留成功返回 ``True``；worker 已关闭时返回 ``False``。
+        """
+        if not self.accepts_tasks:
+            return False
+        self._reservation_count += 1
+        return True
+
+    def release_reservation(self) -> None:
+        """释放一次任务预留；重复释放不会产生负数。
+
+        返回：
+            无。
+        """
+        self._reservation_count = max(0, self._reservation_count - 1)
+        if self._reservation_count == 0 and self._opened_at and self.accepts_tasks:
+            self._schedule_automatic_reap()
 
     async def close(self, *, reason: str = "manual_close") -> None:
-        """按指定原因关闭浏览器上下文，并报告关闭状态。"""
-        closing_state = "recycling" if reason in {"idle_timeout", "max_lifetime"} else "closing"
-        self._transition_state(closing_state, reason=reason)
+        """等待内部队列排空后关闭浏览器上下文并报告状态。
+
+        参数：
+            reason: 关闭或轮换原因。
+
+        返回：
+            无。
+
+        异常：
+            Exception: 清理任一浏览器资源失败时，在完成其余清理后抛出首个异常。
+        """
+        async with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closing = True
+        if self._automatic_reap_task is not None:
+            current_task = asyncio.current_task()
+            if self._automatic_reap_task is not current_task:
+                self._automatic_reap_task.cancel()
+            self._automatic_reap_task = None
         errors: list[Exception] = []
-        if self._context:
-            try:
-                await self._context.close()
-            except Exception as exc:
-                errors.append(exc)
-            finally:
-                self._context = None
-                self._page = None
-        if self._playwright:
-            try:
-                await self._playwright.stop()
-            except Exception as exc:
-                errors.append(exc)
-            finally:
-                self._playwright = None
-        if self._auto_xvfb_attached:
-            try:
-                _release_auto_xvfb()
-            except Exception as exc:
-                errors.append(exc)
-            finally:
-                self._auto_xvfb_attached = False
+        # close 与 drain 使用同一把锁：显式关闭会等待已入队任务完成，周期回收则只会选择非忙 worker。
+        async with self._drain_lock:
+            # 必须在队列排空后再进入 closing，避免任务收尾把状态从 closing 错误覆盖为 idle。
+            closing_state = "recycling" if reason in {"idle_timeout", "max_lifetime"} else "closing"
+            self._transition_state(closing_state, reason=reason)
+            if self._context:
+                try:
+                    await self._context.close()
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    self._context = None
+                    self._page = None
+            if self._playwright:
+                try:
+                    await self._playwright.stop()
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    self._playwright = None
+            if self._auto_xvfb_attached:
+                try:
+                    _release_auto_xvfb()
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    self._auto_xvfb_attached = False
+        self._closed = True
         if errors:
             first_error = errors[0]
             self._transition_state(
@@ -243,9 +336,64 @@ class SellerSpriteBrowserRouteWorker:
                     self._queue.task_done()
             if self._opened_at:
                 self._transition_state("idle", reason="queue_drained")
+                self._schedule_automatic_reap()
+
+    def _schedule_automatic_reap(self) -> None:
+        """按空闲阈值和剩余最大寿命安排 worker 自回收。"""
+        if self._closing or self._closed or not self._opened_at:
+            return
+        if self._automatic_reap_task is not None:
+            self._automatic_reap_task.cancel()
+        current = self._clock()
+        idle_base = self._last_finished_at or self._opened_at
+        idle_remaining = self.settings.browser_idle_ttl_seconds - (current - idle_base)
+        lifetime_remaining = self.settings.browser_max_lifetime_seconds - (
+            current - self._opened_at
+        )
+        delay = max(0.0, min(idle_remaining, lifetime_remaining))
+        self._automatic_reap_task = asyncio.create_task(
+            self._automatic_reap_after(delay),
+            name=f"seller-sprite-session-reaper-{self.account.name}",
+        )
+
+    async def _automatic_reap_after(self, delay: float) -> None:
+        """等待当前最早生命周期阈值，并安全移除和关闭自身。"""
+        try:
+            await asyncio.sleep(delay)
+            reason = self.recycle_reason()
+            if reason is None:
+                return
+            registry_entry = next(
+                ((key, worker) for key, worker in _WORKERS.items() if worker is self),
+                None,
+            )
+            if registry_entry is None:
+                return
+            key, worker = registry_entry
+            if _WORKERS.pop(key, None) is not worker:
+                return
+            await self.close(reason=reason)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            # close_failed 已由状态监听器审计；这里只记录异常类型并避免后台 Task 泄露异常。
+            logger.warning(
+                "卖家精灵 browser 会话自动回收失败：account=%s error=%s",
+                self.account.name,
+                type(exc).__name__,
+            )
+
 
     def mark_session_ready(self, *, context: Any, page: Any) -> None:
-        """登记已创建的 browser context/page，并记录首次 ready 状态。"""
+        """登记已创建的 browser context/page，并记录首次 ready 状态。
+
+        参数：
+            context: 当前持久化浏览器上下文。
+            page: 当前复用页面。
+
+        返回：
+            无。
+        """
         self._context = context
         self._page = page
         if not self._opened_at:
@@ -256,12 +404,26 @@ class SellerSpriteBrowserRouteWorker:
         self,
         listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None,
     ) -> None:
-        """更新会话状态监听器，供共享 registry 接入当前调度器审计。"""
+        """更新会话状态监听器。
+
+        参数：
+            listener: 接收脱敏状态载荷的同步监听器；空值不会覆盖已有监听器。
+
+        返回：
+            无。
+        """
         if listener is not None:
             self._state_listener = listener
 
     def session_snapshot(self, *, now: float | None = None) -> dict[str, Any]:
-        """返回不含凭证的会话生命周期快照。"""
+        """返回不含凭证的会话生命周期快照。
+
+        参数：
+            now: 指定计算时刻；不传则读取注入的单调时钟。
+
+        返回：
+            包含状态、会话年龄、空闲时长和任务数的白名单字典。
+        """
         current = self._clock() if now is None else now
         idle_base = self._last_finished_at or self._opened_at
         return {
@@ -273,14 +435,28 @@ class SellerSpriteBrowserRouteWorker:
             "has_open_session": bool(self._opened_at),
         }
 
-    def recycle_reason(self, *, now: float | None = None) -> str | None:
-        """返回当前安全回收原因；忙碌或尚未打开的会话返回空。"""
+    def recycle_reason(
+        self,
+        *,
+        settings: SellerSpriteSettings | None = None,
+        now: float | None = None,
+    ) -> str | None:
+        """返回当前安全回收原因。
+
+        参数：
+            settings: 当前调度器配置，用于配置热更新后的新阈值。
+            now: 指定计算时刻。
+
+        返回：
+            达到阈值时返回 ``idle_timeout`` 或 ``max_lifetime``；否则返回空。
+        """
         snapshot = self.session_snapshot(now=now)
         if not snapshot["has_open_session"] or snapshot["is_busy"]:
             return None
-        if snapshot["session_age_seconds"] >= max(1, self.settings.browser_max_lifetime_seconds):
+        lifecycle_settings = settings or self.settings
+        if snapshot["session_age_seconds"] >= max(1, lifecycle_settings.browser_max_lifetime_seconds):
             return "max_lifetime"
-        if snapshot["idle_seconds"] >= max(1, self.settings.browser_idle_ttl_seconds):
+        if snapshot["idle_seconds"] >= max(1, lifecycle_settings.browser_idle_ttl_seconds):
             return "idle_timeout"
         return None
 
@@ -297,6 +473,18 @@ class SellerSpriteBrowserRouteWorker:
             **self.session_snapshot(),
             "reason": reason,
             **metadata,
+        }
+        self._state_listener(self.account, payload)
+
+    def _notify_state_change(self, *, previous_state: str, state: str, reason: str) -> None:
+        """在初始化阶段直接发送一次状态事件。"""
+        if self._state_listener is None:
+            return
+        payload = {
+            "previous_state": previous_state,
+            **self.session_snapshot(),
+            "state": state,
+            "reason": reason,
         }
         self._state_listener(self.account, payload)
 
@@ -456,7 +644,51 @@ class SellerSpriteBrowserRouteWorker:
         task_interval_seconds: float = 5.0,
         cooldown_seconds: float = 10.0,
     ) -> BrowserRouteResult:
-        """打开 Listing Analysis 报告详情页并捕获结构化结果。"""
+        """打开 Listing Analysis 报告详情页并捕获结构化结果。
+
+        参数：
+            task_id: Listing Analysis 远端任务标识。
+            root_dir: 原始响应和诊断文件目录。
+            page_prepare: 是否执行页面准备脚本。
+            task_interval_seconds: 同账号任务间隔上限。
+            cooldown_seconds: 风控或网络失败冷却上限。
+
+        返回：
+            报告页捕获结果和诊断警告。
+
+        异常：
+            BrowserRouteWorkerClosedError: worker 已进入关闭流程。
+            Exception: 透传登录、验证码或报告捕获异常。
+        """
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise BrowserRouteWorkerClosedError("browser worker 已进入关闭流程")
+        try:
+            return await self._fetch_listing_analysis_report_once(
+                task_id=task_id,
+                root_dir=root_dir,
+                page_prepare=page_prepare,
+                task_interval_seconds=task_interval_seconds,
+                cooldown_seconds=cooldown_seconds,
+            )
+        finally:
+            # 成功和失败都形成任务边界，避免异常路径永久停在 busy 且没有自回收计时器。
+            self._last_finished_at = self._clock()
+            self._task_count += 1
+            if self._opened_at:
+                self._transition_state("idle", reason="queue_drained")
+                self._schedule_automatic_reap()
+
+    async def _fetch_listing_analysis_report_once(
+        self,
+        *,
+        task_id: str,
+        root_dir: Path,
+        page_prepare: bool,
+        task_interval_seconds: float,
+        cooldown_seconds: float,
+    ) -> BrowserRouteResult:
+        """在账号 drain 锁内执行一次 Listing Analysis 报告捕获。"""
         request = BrowserRouteRequest(
             scenario="listing-analysis",
             method="PAGE_CAPTURE",
@@ -482,6 +714,8 @@ class SellerSpriteBrowserRouteWorker:
             had_page = bool(self._page and not self._page.is_closed())
             stage_started_at = time.monotonic()
             page = await self._ensure_page(self.account)
+            self.mark_session_ready(context=self._context, page=page)
+            self._transition_state("busy", reason="task_started")
             _record_timing(timings, request, "ensure_page", stage_started_at, reused=had_page)
             stage_started_at = time.monotonic()
             login = await self._open_referer_and_login(page, request, timings=timings)
@@ -541,7 +775,6 @@ class SellerSpriteBrowserRouteWorker:
                     "timings": timings,
                 }
             )
-            self._last_finished_at = time.monotonic()
             return BrowserRouteResult(login=login, response=response, warnings=warnings)
 
     async def _handle_robot_captcha_if_enabled(
@@ -860,6 +1093,59 @@ class SellerSpriteBrowserRouteWorker:
             _record_timing(timings, request, f"route_fetch.{section}.unroute", stage_started_at)
 
 
+def build_default_session_state_listener(
+    settings: SellerSpriteSettings,
+) -> Callable[[SellerSpriteAccount, dict[str, Any]], None]:
+    """为非 scheduler 直调路径创建延迟初始化的 SQLite 状态监听器。
+
+    参数：
+        settings: 当前卖家精灵配置；自定义输出目录时审计库也落在该目录内。
+
+    返回：
+        可直接传给 browser worker 的同步状态监听器。
+    """
+    recorder = None
+    initialization_failed = False
+
+    def listener(account: SellerSpriteAccount, payload: dict[str, Any]) -> None:
+        nonlocal recorder, initialization_failed
+        if initialization_failed:
+            return
+        if recorder is None:
+            try:
+                from opscli.seller_sprite.services.account_events import (
+                    SellerSpriteAccountEventRecorder,
+                )
+                from opscli.seller_sprite.services.task_queue_store import (
+                    SellerSpriteTaskQueueStore,
+                )
+
+                if settings.output_dir == DEFAULT_OUTPUT_DIR:
+                    store = SellerSpriteTaskQueueStore()
+                else:
+                    store = SellerSpriteTaskQueueStore(
+                        db_path=settings.output_dir / ".seller_sprite_session_events.sqlite3"
+                    )
+                recorder = SellerSpriteAccountEventRecorder(store=store)
+            except Exception as exc:
+                initialization_failed = True
+                # 审计初始化是旁路；只记录异常类型，绝不能覆盖浏览器主任务。
+                logger.error(
+                    "卖家精灵 browser 会话审计初始化失败：error=%s",
+                    type(exc).__name__,
+                    extra={
+                        "seller_sprite_event": {
+                            "event_type": "account_audit_persistence_failed",
+                            "error_code": type(exc).__name__,
+                        }
+                    },
+                )
+                return
+        recorder.record_session_state_payload(account, payload)
+
+    return listener
+
+
 def _random_task_interval_seconds(max_seconds: float) -> float:
     """按配置上限生成同账号任务的随机间隔。"""
     upper = max(max_seconds, 0.0)
@@ -945,7 +1231,7 @@ def _normalized_page_url(url: str) -> tuple[str, str, str, tuple[tuple[str, str]
     )
 
 
-_WORKERS: dict[tuple[int, str], SellerSpriteBrowserRouteWorker] = {}
+_WORKERS: dict[tuple[int, str, str, str], SellerSpriteBrowserRouteWorker] = {}
 
 
 class _NoQueryButtonError(Exception):
@@ -958,13 +1244,23 @@ def get_browser_route_worker(
     account: SellerSpriteAccount,
     state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
     clock: Callable[[], float] = time.monotonic,
+    owner_id: str = "default",
 ) -> SellerSpriteBrowserRouteWorker:
-    """按事件循环和账号获取常驻 browser worker。"""
-    loop_key = id(asyncio.get_running_loop())
-    account_key = f"{account.name}:{account.username}"
-    key = (loop_key, account_key)
+    """按事件循环、所有者、浏览器配置和账号获取常驻 worker。
+
+    参数：
+        settings: browser-route 运行配置。
+        account: worker 独占账号。
+        state_listener: 会话状态监听器。
+        clock: 生命周期单调时钟。
+        owner_id: 调度器运行期所有权标识，用于隔离同配置的并发调度器。
+
+    返回：
+        可接受任务的账号隔离 worker。
+    """
+    key = _worker_registry_key(settings=settings, account=account, owner_id=owner_id)
     worker = _WORKERS.get(key)
-    if not worker:
+    if not worker or not worker.accepts_tasks:
         worker = SellerSpriteBrowserRouteWorker(
             settings=settings,
             account=account,
@@ -981,11 +1277,48 @@ def get_existing_browser_route_worker(
     *,
     settings: SellerSpriteSettings,
     account: SellerSpriteAccount,
+    owner_id: str = "default",
 ) -> SellerSpriteBrowserRouteWorker | None:
-    """读取已存在的 browser worker，不存在时不创建新窗口或新队列。"""
-    loop_key = id(asyncio.get_running_loop())
-    account_key = f"{account.name}:{account.username}"
-    return _WORKERS.get((loop_key, account_key))
+    """读取已存在且可接受任务的 browser worker。
+
+    参数：
+        settings: browser-route 运行配置。
+        account: 目标账号。
+        owner_id: 调度器运行期所有权标识。
+
+    返回：
+        已存在的 worker；不存在或正在关闭时返回空。
+    """
+    worker = _WORKERS.get(
+        _worker_registry_key(settings=settings, account=account, owner_id=owner_id)
+    )
+    return worker if worker and worker.accepts_tasks else None
+
+
+def reserve_browser_route_worker(
+    *,
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+    owner_id: str = "default",
+) -> SellerSpriteBrowserRouteWorker | None:
+    """预留已存在的 worker，避免已领取任务在提交前遭周期回收。
+
+    参数：
+        settings: browser-route 运行配置。
+        account: 已领取任务绑定的账号。
+        owner_id: 调度器运行期所有权标识。
+
+    返回：
+        预留成功的 worker；会话尚未创建或已关闭时返回空。
+    """
+    worker = get_existing_browser_route_worker(
+        settings=settings,
+        account=account,
+        owner_id=owner_id,
+    )
+    if worker is None or not worker.reserve():
+        return None
+    return worker
 
 
 async def close_browser_route_worker(
@@ -994,19 +1327,47 @@ async def close_browser_route_worker(
     account: SellerSpriteAccount,
     reason: str = "account_unavailable",
     state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+    owner_id: str = "default",
 ) -> bool:
-    """关闭并移除指定账号在当前事件循环中的 browser worker。"""
-    loop_key = id(asyncio.get_running_loop())
+    """关闭并移除指定账号在当前所有者中的 browser worker。
+
+    参数：
+        settings: browser-route 运行配置。
+        account: 目标账号。
+        reason: 关闭原因。
+        state_listener: 会话状态监听器。
+        owner_id: 调度器运行期所有权标识。
+
+    返回：
+        实际找到并关闭 worker 时返回 ``True``，否则返回 ``False``。
+
+    异常：
+        Exception: 透传浏览器资源清理异常。
+    """
+    owner_prefix = _worker_owner_prefix(owner_id=owner_id)
     account_key = f"{account.name}:{account.username}"
-    worker = _WORKERS.pop((loop_key, account_key), None)
-    if worker is None:
+    selected = [
+        (key, worker)
+        for key, worker in list(_WORKERS.items())
+        if key[:2] == owner_prefix and key[3] == account_key
+    ]
+    if not selected:
         return False
-    # 必须先从 registry 移除，避免关闭期间新的调用继续取得即将失效的会话。
-    if isinstance(worker, SellerSpriteBrowserRouteWorker):
-        worker.set_state_listener(state_listener)
-        await worker.close(reason=reason)
-    else:
-        await worker.close()
+    errors: list[Exception] = []
+    for key, worker in selected:
+        if _WORKERS.pop(key, None) is not worker:
+            continue
+        # 配置热更新可能留下不同启动命名空间的旧会话，因此按所有者和账号完整清理。
+        try:
+            if isinstance(worker, SellerSpriteBrowserRouteWorker):
+                worker.set_state_listener(state_listener)
+                await worker.close(reason=reason)
+            else:
+                await worker.close()
+        except Exception as exc:
+            errors.append(exc)
+    if errors:
+        raise errors[0]
     return True
 
 
@@ -1015,14 +1376,25 @@ async def reap_browser_route_workers(
     settings: SellerSpriteSettings,
     now: float | None = None,
     state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+    owner_id: str = "default",
 ) -> list[dict[str, str]]:
-    """回收当前事件循环中达到空闲或最大生命周期的安全会话。"""
-    loop_key = id(asyncio.get_running_loop())
+    """回收当前所有者中达到空闲或最大生命周期的安全会话。
+
+    参数：
+        settings: 当前生命周期阈值和浏览器配置。
+        now: 指定生命周期计算时刻。
+        state_listener: 会话状态监听器。
+        owner_id: 调度器运行期所有权标识。
+
+    返回：
+        成功回收的账号名和原因列表。
+    """
+    owner_prefix = _worker_owner_prefix(owner_id=owner_id)
     recycled: list[dict[str, str]] = []
     for key, worker in list(_WORKERS.items()):
-        if key[0] != loop_key or worker.settings != settings:
+        if key[:2] != owner_prefix:
             continue
-        reason = worker.recycle_reason(now=now)
+        reason = worker.recycle_reason(settings=settings, now=now)
         if reason is None:
             continue
         # 先移除再关闭，确保下一任务只能取得全新的 worker。
@@ -1048,12 +1420,23 @@ async def close_all_browser_route_workers(
     settings: SellerSpriteSettings,
     reason: str = "scheduler_close",
     state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+    owner_id: str = "default",
 ) -> int:
-    """关闭当前事件循环中属于该配置的全部 browser-route 会话。"""
-    loop_key = id(asyncio.get_running_loop())
+    """关闭当前所有者管理的全部 browser-route 会话。
+
+    参数：
+        settings: browser-route 运行配置。
+        reason: 批量关闭原因。
+        state_listener: 会话状态监听器。
+        owner_id: 调度器运行期所有权标识。
+
+    返回：
+        成功关闭的 worker 数量。
+    """
+    owner_prefix = _worker_owner_prefix(owner_id=owner_id)
     closed_count = 0
     for key, worker in list(_WORKERS.items()):
-        if key[0] != loop_key or worker.settings != settings:
+        if key[:2] != owner_prefix:
             continue
         if _WORKERS.pop(key, None) is not worker:
             continue
@@ -1070,6 +1453,40 @@ async def close_all_browser_route_workers(
             continue
         closed_count += 1
     return closed_count
+
+
+def _worker_registry_prefix(
+    *,
+    settings: SellerSpriteSettings,
+    owner_id: str,
+) -> tuple[int, str, str]:
+    """构造事件循环、所有者和浏览器启动配置组成的 registry 前缀。"""
+    launch_identity = {
+        "profile_dir": str(settings.browser_profile_dir.expanduser().resolve()),
+        "runtime": settings.browser_runtime.strip().lower(),
+        "channel": (settings.browser_channel or "").strip().lower(),
+        "headless": bool(settings.browser_headless),
+    }
+    namespace = hashlib.sha256(
+        json.dumps(launch_identity, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+    return (id(asyncio.get_running_loop()), str(owner_id or "default"), namespace)
+
+
+def _worker_owner_prefix(*, owner_id: str) -> tuple[int, str]:
+    """构造跨配置热更新稳定的事件循环与所有者前缀。"""
+    return (id(asyncio.get_running_loop()), str(owner_id or "default"))
+
+
+def _worker_registry_key(
+    *,
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+    owner_id: str,
+) -> tuple[int, str, str, str]:
+    """构造不写入日志的完整 worker registry 键。"""
+    account_key = f"{account.name}:{account.username}"
+    return (*_worker_registry_prefix(settings=settings, owner_id=owner_id), account_key)
 
 
 def _ensure_headed_browser_environment(settings: SellerSpriteSettings) -> bool:
@@ -1224,7 +1641,11 @@ async def fetch_listing_analysis_report_with_browser_route(
     page_prepare: bool | None = None,
 ) -> BrowserRouteResult:
     """通过 browser-route 打开 Listing Analysis 报告详情页并捕获结果。"""
-    worker = get_browser_route_worker(settings=settings, account=account)
+    worker = get_browser_route_worker(
+        settings=settings,
+        account=account,
+        state_listener=build_default_session_state_listener(settings),
+    )
     return await worker.fetch_listing_analysis_report(
         task_id=task_id,
         root_dir=root_dir,

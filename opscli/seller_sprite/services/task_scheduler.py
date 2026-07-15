@@ -18,7 +18,10 @@ from opscli.seller_sprite.domain.exceptions import (
     SellerSpriteApiError,
     SellerSpriteAuthenticationError,
 )
-from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
+from opscli.seller_sprite.domain.models import (
+    SellerSpriteScenarioRequest,
+    SellerSpriteScenarioResult,
+)
 from opscli.seller_sprite.services.account_events import SellerSpriteAccountEventRecorder
 from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool, seller_sprite_account_key
 from opscli.seller_sprite.services.api_manager import SellerSpriteApiManager, _build_job_id
@@ -35,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 class SellerSpriteTaskScheduler:
-    """负责单账号 FIFO 排队和后台消费。"""
+    """负责多账号任务排队、工作槽调度和 browser 会话生命周期管理。"""
 
     def __init__(
         self,
@@ -50,6 +53,22 @@ class SellerSpriteTaskScheduler:
         poll_interval_seconds: float = 0.05,
         session_reap_interval_seconds: float = DEFAULT_SESSION_REAP_INTERVAL_SECONDS,
     ) -> None:
+        """创建卖家精灵持久任务调度器。
+
+        参数：
+            store: SQLite 任务队列存储。
+            settings: 卖家精灵运行配置。
+            account_provider: 账号来源；传入旧式单账号 provider 时保留兼容调度模式。
+            manager_factory: 场景执行器工厂。
+            jwt: 当前调用者 JWT，仅用于账号接口。
+            session_id: 当前调用会话标识。
+            auto_start: 入队时是否自动启动后台消费。
+            poll_interval_seconds: 无任务或 supervisor 循环的轮询间隔。
+            session_reap_interval_seconds: browser 会话周期回收扫描间隔。
+
+        返回：
+            无。
+        """
         self.settings = settings or load_settings()
         self.account_provider = account_provider
         self.store = store or SellerSpriteTaskQueueStore()
@@ -66,6 +85,8 @@ class SellerSpriteTaskScheduler:
         self._account_pool = SellerSpriteAccountPool()
         self._pool_lock = asyncio.Lock()
         self._event_recorder = SellerSpriteAccountEventRecorder(store=self.store)
+        # 所有权标识确保同一事件循环中的多个调度器只回收自己创建的 browser 会话。
+        self._session_owner_id = f"scheduler-{id(self)}"
         self._next_worker_slot_number = 1
         self._last_account_refresh_at = 0.0
         self._last_session_reap_at = 0.0
@@ -131,12 +152,15 @@ class SellerSpriteTaskScheduler:
             self._runner_task = asyncio.create_task(self._run_pool_supervisor())
 
     async def close(self) -> None:
-        """停止后台调度循环。"""
+        """停止后台调度循环并释放本调度器拥有的 browser 会话。
+
+        返回：
+            无。
+        """
         self._stop_requested = True
-        if self._runner_task is None:
-            return
-        await self._runner_task
-        self._runner_task = None
+        if self._runner_task is not None:
+            await self._runner_task
+            self._runner_task = None
         pending = [
             task
             for task in [*self._generic_worker_tasks.values(), self._listing_worker_task]
@@ -150,6 +174,7 @@ class SellerSpriteTaskScheduler:
             settings=self.settings,
             reason="scheduler_close",
             state_listener=self._record_browser_session_state_change,
+            owner_id=self._session_owner_id,
         )
         self._generic_worker_tasks.clear()
         self._generic_worker_accounts.clear()
@@ -220,9 +245,9 @@ class SellerSpriteTaskScheduler:
                 error = task.exception()
                 if error is not None:
                     logger.error(
-                        "卖家精灵账号工作槽异常退出：worker_key=%s",
+                        "卖家精灵账号工作槽异常退出：worker_key=%s error=%s",
                         worker_key,
-                        exc_info=(type(error), error, error.__traceback__),
+                        type(error).__name__,
                     )
             self._generic_worker_accounts.pop(worker_key, None)
 
@@ -309,7 +334,11 @@ class SellerSpriteTaskScheduler:
             try:
                 if has_mcp_run and failover_count == 0:
                     self.store.mark_mcp_run_running(job_id)
-                result = await manager.run(request)
+                result = await self._run_manager_with_session_reservation(
+                    manager=manager,
+                    request=request,
+                    account=account,
+                )
                 export_payload = self._build_mcp_export_payload(request, result)
                 self.store.finish_task_and_mcp_run_if_current(
                     job_id=job_id,
@@ -450,6 +479,7 @@ class SellerSpriteTaskScheduler:
         await reap_browser_route_workers(
             settings=self.settings,
             state_listener=self._record_browser_session_state_change,
+            owner_id=self._session_owner_id,
         )
         self._last_session_reap_at = time.monotonic()
 
@@ -468,11 +498,13 @@ class SellerSpriteTaskScheduler:
                 account=account,
                 reason=reason,
                 state_listener=self._record_browser_session_state_change,
+                owner_id=self._session_owner_id,
             )
         except ImportError:
             return
-        except Exception:
-            logger.warning("关闭卖家精灵故障账号会话失败", exc_info=True)
+        except Exception as exc:
+            # 关闭失败详情已由脱敏生命周期事件记录，这里只保留异常类型避免凭证正文进入日志。
+            logger.warning("关闭卖家精灵故障账号会话失败：error=%s", type(exc).__name__)
 
     def _ensure_account_provider(self) -> SellerSpriteAccountProvider:
         """延迟创建使用当前认证上下文的账号接口 provider。"""
@@ -545,7 +577,16 @@ class SellerSpriteTaskScheduler:
         try:
             if has_mcp_run:
                 self.store.mark_mcp_run_running(job_id)
-            result = await manager.run(request)
+            if isinstance(manager, SellerSpriteApiManager):
+                account = manager.account_provider.get_default()
+                result = await self._run_manager_with_session_reservation(
+                    manager=manager,
+                    request=request,
+                    account=account,
+                )
+            else:
+                # 测试或扩展工厂未必暴露账号 provider，保持既有执行器协议兼容。
+                result = await manager.run(request)
             export_payload = self._build_mcp_export_payload(request, result)
             self.store.finish_task(
                 job_id=job_id,
@@ -565,7 +606,44 @@ class SellerSpriteTaskScheduler:
         return SellerSpriteApiManager(
             **kwargs,
             session_state_listener=self._record_browser_session_state_change,
+            session_owner_id=self._session_owner_id,
         )
+
+    async def _run_manager_with_session_reservation(
+        self,
+        *,
+        manager: SellerSpriteApiManager,
+        request: SellerSpriteScenarioRequest,
+        account: SellerSpriteAccount,
+    ) -> SellerSpriteScenarioResult:
+        """预留已有 browser 会话并执行任务，结束后可靠释放预留。
+
+        参数：
+            manager: 当前任务的场景执行器。
+            request: 已领取的任务请求。
+            account: 当前工作槽账号。
+
+        返回：
+            场景执行结果。
+
+        异常：
+            Exception: 透传场景执行器异常。
+        """
+        reservation = None
+        mode = str(request.mode or self.settings.default_mode).strip().lower()
+        if mode == "browser-route":
+            from opscli.seller_sprite.browser_route.worker import reserve_browser_route_worker
+
+            reservation = reserve_browser_route_worker(
+                settings=self.settings,
+                account=account,
+                owner_id=self._session_owner_id,
+            )
+        try:
+            return await manager.run(request)
+        finally:
+            if reservation is not None:
+                reservation.release_reservation()
 
     def _record_browser_session_state_change(
         self,
@@ -573,17 +651,7 @@ class SellerSpriteTaskScheduler:
         payload: dict[str, Any],
     ) -> None:
         """把 browser worker 的白名单生命周期状态转交统一事件记录器。"""
-        self._event_recorder.record_session_state_change(
-            account=account,
-            previous_state=str(payload.get("previous_state") or "unknown"),
-            state=str(payload.get("state") or "unknown"),
-            reason=str(payload.get("reason") or "unknown"),
-            session_age_seconds=int(payload.get("session_age_seconds") or 0),
-            idle_seconds=int(payload.get("idle_seconds") or 0),
-            task_count=int(payload.get("task_count") or 0),
-            is_busy=bool(payload.get("is_busy")),
-            error_code=(str(payload["error_code"]) if payload.get("error_code") else None),
-        )
+        self._event_recorder.record_session_state_payload(account, payload)
 
     def _assigned_account_name(self) -> str:
         """返回队列记录里的账号标识，不在领取任务前触发账号接口。"""

@@ -238,7 +238,13 @@ Cookie/profile 路径继续位于 `CONFIG_DIR/seller_sprite`，文件名不得�
 - scheduler 正常关闭记为 `scheduler_close`；
 - 账号认证失败或退出工作池沿用对应业务原因；
 - 先从 registry 移除，再关闭 context/playwright，防止关闭中的会话被再次取得；
+- registry 以运行期 scheduler owner 隔离，同进程多个 scheduler 不得互相关闭会话；配置热更新后的旧启动命名空间仍由原 owner 统一回收；
+- 关闭必须先拒绝旧引用的新提交，再等待内部 queue 排空；并发回收导致提交命中 closing worker 时，只允许重新获取 worker 后重试一次；
 - 下一任务重新创建会话，不触发 failover，也不增加任务 generation。
+
+browser worker 还必须自行安排最早的空闲/最大寿命阈值回收，覆盖 debug CLI、
+Listing 报告捕获和其他不经过 scheduler supervisor 的直调路径；这些路径同样接入脱敏
+日志与 SQLite Recorder。scheduler 扫描保留为持久队列路径的兜底，不得依赖单一入口才能释放资源。
 
 ## 8. SQLite 队列变更
 
