@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-15 query - QueryMetadataResult 透传数据集默认条件 filter_configs（R4）
+
+**变更原因**：数据集默认条件（filter_config）从后台配置逐级下发到查询执行，opscli query 模块需要透传后端 query-metadata 接口返回的 `filter_configs`，支持远端直接获取和本地缓存回退，为上层 MCP 工具与 Skill 规划器提供元数据。
+**改动点**：`opscli/query/domain/models.py` 的 `QueryMetadataResult` 新增 `filter_configs: list[dict] | None` 字段和 `to_dict()` 对应输出；`opscli/query/services/manager.py` 的 `metadata()` 方法在 `select_columns` 提取后增加 `filter_configs` 提取逻辑，从 `matched.get("filter_configs")` 统一读取（远端响应和本地 query_metadata.json 缓存均在 dataset 对象内嵌 filter_configs，旧缓存缺该字段时回退空列表）。
+**验证结果**：RED 阶段运行 `pytest tests/query/test_manager.py -k filter_configs -v` 按预期失败于 `QueryMetadataResult` 缺少 `filter_configs` 属性（2 tests FAILED）；GREEN 阶段实现改动后同命令通过（2 tests PASSED）；聚焦回归 `pytest tests/query/ -v` 全量通过（71 tests PASSED，覆盖新增 2 个测试和既有 69 个测试无回归）。
+**影响范围**：影响 `opscli query metadata` CLI 命令和 MCP `query_metadata` 工具的返回结构（新增可选字段），MCP 客户端自动在结果中透出 `filter_configs`；不修改 `opscli query build/build_simple` 参数结构（默认条件由服务端强制应用）。
+**回滚方式**：回退 `opscli/query/domain/models.py`、`opscli/query/services/manager.py`、`tests/query/test_manager.py` 中新增的两个测试用例、`docs/design/数据集默认条件filter_config接入需求.md` 的 4.4 节第 2 条更新和本条变更记录。
+
+---
+
 ## 2026-07-10 asin-data/mcp - 合并 ASIN 实时取数服务到 master
 
 **变更原因**：用户需要把 ASIN 取数服务合并到 master，范围限定为 `asin-data` 实时取数、AI Ready 返回、MCP 取数工具、OSS xlsx 上传和服务端稳定性能力，避免把 release 分支中的 Rufus、Sif、西柚、Shopify 等无关改动带入 master。
@@ -2605,3 +2615,43 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 - **验证**：pytest 24/24（auto_enum mock 用例不受超时值影响）；DB 取证的唯一超时命令实测=默认 10000ms 命令墙钟 10.03s（枚举场景）。
 - **影响范围**：仅技能模板；平台枚举待收敛场景下超时改回落手动命令而非被切（原本被切后模型也会重跑，本改动让首调即返回可用合同）。需发布 1.3.5 到 QA 广场。
 - **回滚方式**：git revert 本 commit。
+
+## 2026-07-15 docs - 新增数据集默认条件（filter_config）接入需求说明
+
+- **为什么改**：服务端 `polaris_ops_metrics_qa.dm_table_columns.field_config` 新增字段级默认条件配置 `filter_config`，需打通「后台配置 → query-metadata 下发 filter_configs → 查询/导出强制应用 → ops-dataset-query 规划器感知与披露」全链路，先整理需求文案供评审。
+- **具体做了什么**：新增 `docs/design/数据集默认条件filter_config接入需求.md`，含 filter_config 结构与枚举说明（type/operator/filter_type/filter_agg/日期预设，取证自 datasets.blade.php:4327-4402）、五个需求项（R1 query-metadata 返回 filter_configs、R2 查询导出强制应用、R3 Skill CSV 分发链路同步、R4 opscli query 透传、R5 规划器/执行器/rules.md 优化）、10 条验收标准、7 条待确认问题、关键代码位置附录。
+- **验证**：纯文档，无代码改动；关键代码路径与行号由两个探索 Agent 从 opscli 与 auto-scheduler vendor 包实际取证。
+- **影响范围**：仅新增文档，无功能影响。备注：本会话 memory-lancedb-pro-sse MCP 工具不可用（ToolSearch 两次检索未命中 memory_*），故按兜底规范记录于此，恢复后需补写 MCP 记忆。
+- **回滚方式**：删除该文档文件。
+
+## 2026-07-15 docs - filter_config 需求文档补充导出接口下发范围（用户评审反馈）
+
+- **为什么改**：用户评审指出下发范围不只 queryMetadata，DatasetSkillApiController 的导出方法（export 等）也需支持 filter_config。
+- **具体做了什么**：`docs/design/数据集默认条件filter_config接入需求.md` R3 改写为「DatasetSkillApiController 导出接口同步携带 filter_config」，实际读取控制器与 DatasetSkillService 取证：字段 CSV（export→createFieldExportResponseForUser:248-290）行尾新增 filter_config 列（字段级 JSON 原样下发，主要载体）；数据集 CSV（exportDatasets→createDatasetExportResponseForUser:292-330）新增 filter_config_count/filter_config_names 摘要列（复用 select_column_count 既有模式）；exportSelectColumns 结构不变；manifest 计数可选。同步更新范围总览图、R4 本地回退来源、R5 scoped_dataset_reader 解析新列、验收标准（10→12 条，含 CSV 比对与旧版兼容）、待确认问题 6、附录代码位置（补 4 个导出接口行号）。
+- **验证**：纯文档；CSV 现有列头逐一取证自 DatasetSkillService.php:264-278、308-318、360-365。
+- **影响范围**：仅文档。
+- **回滚方式**：git 恢复该文档上一版本。
+
+## 2026-07-15 docs - filter_config 需求文档定稿（7 条待确认问题评审定案回填）
+
+- **为什么改**：用户对 7 条待确认问题全部给出结论，需回填正文并定稿。
+- **具体做了什么**：`docs/design/数据集默认条件filter_config接入需求.md`：①冲突处理=静默 AND 合并（与前台一致）+同值/子集合并去重，更新 R2 合并规则表与 R5 run_query precheck（不拦截但必须披露双条件同时生效）；②度量字段 having（filter_agg!=none）纳入本期，更新本期范围、R1 汇总范围（条目新增 field_type 标识）、R2 新增聚合后过滤规则；③多枚举值确认翻译为 in；④日期预设确认服务端执行时解析；⑤manifest 计数不做，数据集 CSV 摘要列纳入；⑥导出侧本期仅覆盖图表导出链路；⑦「六、待确认问题」改为「六、评审结论（已确认）」，验收标准 12→15 条（新增 AND 合并去重、metric having、多值 in 三项），文档状态改为已评审定稿。
+- **验证**：纯文档；grep 确认正文无残留"待确认"引用。
+- **影响范围**：仅文档。
+- **回滚方式**：git 恢复该文档上一版本。
+
+## 2026-07-15 docs - filter_config 需求文档修正「导出」语义（用户澄清）
+
+- **为什么改**：用户澄清需求中的「导出」指数据集元数据 CSV 文件导出（export/exportDatasets 等接口，即 R3），并非把默认条件应用到图表导出等查询结果导出，此前 R2 纳入 ChartExportService 属于误读。
+- **具体做了什么**：`docs/design/数据集默认条件filter_config接入需求.md`：①需求目标处新增术语说明框（「导出」=元数据 CSV 导出）；②R2 标题改为「查询强制应用默认条件」，入口覆盖表移除图表导出行，改为范围外注记；③本期范围、背景问题清单、required 语义、范围总览图同步去掉查询结果导出表述；④删除原验收标准第 5 条（导出与查询口径一致），15 条重编号为 14 条；⑤评审结论 7 改写为「导出」含义澄清条目；⑥影响范围第 2 条去掉「导出结果」。
+- **验证**：grep 确认全文仅评审结论 7 与本期范围中以「范围外」口径提及图表导出，无残留将其作为改动面的表述。
+- **影响范围**：仅文档。
+- **回滚方式**：git 恢复该文档上一版本。
+
+## 2026-07-15 docs - filter_config 需求任务拆解（两份实施计划）
+
+- **为什么改**：需求文档已评审定稿，用户要求基于 superpowers:writing-plans 进行开发任务拆解。
+- **具体做了什么**：新增两份可独立交付的实施计划（按子系统拆分）：①`docs/plans/数据集默认条件filter_config实施计划-服务端.md`——8 个任务（FilterConfig 提取助手、日期预设解析器、buildExportPayloadForUser 统一挂载+query-metadata 下发、CSV 导出列、SimpleQueryBuilder 简化入口注入、度量 having 探查实现、CliQueryService 完整入口兜底、QA 验收回归），TDD 步骤含完整 PHP 代码与 PHPUnit 用例；②`docs/plans/数据集默认条件filter_config实施计划-opscli与Skill侧.md`——7 个任务（QueryMetadataResult 透传、scoped_dataset_reader 可选列解析、dataset_guidance 聚合、query_plan 投影+中文披露、run_query 注入、Skill 文档+1.4.0、端到端验收），全部 fixture 驱动可与服务端并行。计划代码基于两个探索 Agent 提取的函数原文（DatasetSkillService/SimpleQueryBuilder/CliQueryService/query 模块/skill 脚本逐字取证）。自审修正：PHP 闭包语法、匿名类返回类型、操作符映射缺口（notEquals/gt 等非 equals 操作符注入）、验收编号错位、DB 过滤条件与 loadColumns/loadMetrics 对齐。
+- **验证**：纯文档；Self-Review 三项检查（需求覆盖/占位符扫描/类型一致性）完成。
+- **影响范围**：仅新增文档。
+- **回滚方式**：删除两份计划文件。
