@@ -101,6 +101,13 @@ ERROR_NEXT_ACTIONS: list[tuple[str, str, bool]] = [
         False,
     ),
     (
+        "duplicate_dataset_field",
+        "该数据集存在同名字段的冲突注册（执行语义不一致，v1.3.6 起语义一致的"
+        "重复注册已自动合并），重跑与升级均无法自愈；向用户如实说明该数据集"
+        "暂不可查，并按 references/feedback-guide.md 提交一次反馈后停止重试。",
+        False,
+    ),
+    (
         "dataset_has_no_fields",
         "该数据集没有可用查询字段，向用户如实说明并建议更换数据集；"
         "如确认属元数据异常，按 references/feedback-guide.md 提交一次反馈。",
