@@ -147,11 +147,16 @@ class QueryManager:
                     cwd=cwd,
                 )
 
+        # 提取数据集默认条件：远端响应与本地 query_metadata.json（远端同源缓存）
+        # 均在 dataset 对象内嵌 filter_configs，旧缓存缺该字段时回退空列表
+        filter_configs = list(matched.get("filter_configs") or [])
+
         return QueryMetadataResult(
             dataset=matched,
             fields=matched_fields,
             source=source,
             select_columns=select_columns,
+            filter_configs=filter_configs,
         )
 
     def user_preferences(self) -> list[dict]:
