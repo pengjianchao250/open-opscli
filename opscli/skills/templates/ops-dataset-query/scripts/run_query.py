@@ -123,8 +123,11 @@ def _apply_default_filters(payload: dict, defaults: list[dict]) -> list[str]:
                 continue
         elif user_conditions:
             # required + 用户同字段：同值/子集去重，否则 AND 合并披露双条件生效
+            # 去重仅适用等值语义（=/in）：异操作符（如 !=）属冲突场景，AND 合并保留并披露（终审修复）
+            equality_ops = {"=", "==", "in"}
             covered = any(
-                set(c["value"] if isinstance(c.get("value"), list) else [c.get("value")]) <= set(values)
+                str(c.get("operator", "")) in equality_ops
+                and set(c["value"] if isinstance(c.get("value"), list) else [c.get("value")]) <= set(values)
                 for c in user_conditions
             )
             if covered:

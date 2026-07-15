@@ -1,5 +1,17 @@
 # 待归档变更记录
 
+## 2026-07-15 skills/run_query - 去重判定限定等值操作符族，防 required 被同值异操作符绕过
+
+**变更原因**：`_apply_default_filters` 中的 `covered` 判定只比较值集合，未检查操作符——当用户传 `date_type != QUARTER` 时，required 默认条件（`= QUARTER`）被错误判定为"已覆盖"而静默丢弃，击穿 required 不可绕过的语义保证。服务端已完成同源修复（去重仅限等值操作符族），opscli 侧需对齐。
+**改动点**：
+1. `opscli/skills/templates/ops-dataset-query/scripts/run_query.py`：`_apply_default_filters` 的 `covered` 判定新增操作符感知——仅当用户条件的 operator 属于等值族（`=`/`==`/`in`）且值集合为默认值子集时才判定为已覆盖；异操作符（如 `!=`/`>`）属冲突场景，走 AND 合并并披露"同时生效"。
+2. `tests/skills/test_run_query_default_filters.py`：新增 `test_apply_not_deduped_on_operator_mismatch` 测试，覆盖同值异操作符（`!=`）不去重的终审修复场景。
+**验证结果**：`pytest tests/skills/test_run_query_default_filters.py -v` 全部 6 tests PASSED（含新增测试）；回归 `pytest tests/skills/ tests/query/ --ignore=tests/skills/test_packaging.py -v` 共 208 tests，无新增失败，6 个预存失败均为模板版本漂移与本次修改无关。
+**影响范围**：仅影响 `_apply_default_filters` 中的 `covered` 分支逻辑；用户 operator 为等值族时行为不变（去重仍生效）；用户 operator 为非等值族时改为 AND 合并并披露，修复前的静默丢弃行为被消除。
+**回滚方式**：将 `run_query.py` 中 `covered = any(...)` 恢复为不含 `equality_ops` 判断的原始版本，删除 `test_apply_not_deduped_on_operator_mismatch` 测试，删除本条变更记录。
+
+---
+
 ## 2026-07-15 skills/dataset_guidance - 聚合数据集默认条件 default_filters（R5）
 
 **变更原因**：需求 R5 要求 `build_guidance()` 返回体顶层包含 `default_filters` 键，聚合"自身字段 + select_columns 关联组件字段"中 filter_config 已启用的条目，供 Task 4（query_plan 投影）消费。
@@ -2700,3 +2712,11 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 - **验证**：纯文档；Self-Review 三项检查（需求覆盖/占位符扫描/类型一致性）完成。
 - **影响范围**：仅新增文档。
 - **回滚方式**：删除两份计划文件。
+
+## 2026-07-15 skills/query - filter_config opscli 与 Skill 侧实施完成（收尾归档）
+
+- **为什么改**：按《数据集默认条件filter_config实施计划-opscli与Skill侧》以 subagent-driven 方式执行完 Task 1-6 及仓内回归，各任务已有独立变更记录，此条为收尾汇总。
+- **具体做了什么**：10 个提交（aaf8c2e..016a875）：QueryMetadataResult 透传 filter_configs；scoped_dataset_reader 可选列解析；dataset_guidance 聚合 default_filters（六键压缩契约）；query_plan 三处投影+query_template 预填；run_query --default-filters 注入去重披露；Skill 文档契约+版本 1.4.0；每任务均经独立审查+修复轮，终审（全分支）Ready to merge。
+- **验证**：分目录全量回归 1133 passed，35 failed 全部为基线既有（改动面 diff 证明不相交）；本计划相关测试 tests/query 71/71、planner 26/26、guidance 3/3、reader 5/5、run_query 5/5。
+- **影响范围**：opscli query 元数据透传、ops-dataset-query Skill 1.4.0（未发布）。端到端验收待服务端 R1-R3 上线 QA。
+- **回滚方式**：git revert aaf8c2e..016a875 区间提交。备注：memory MCP 本会话不可用，恢复后按本文件补录。
