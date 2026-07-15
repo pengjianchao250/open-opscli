@@ -97,13 +97,14 @@ def _apply_default_filters(payload: dict, defaults: list[dict]) -> list[str]:
     客户端预注入会把字面量字符串写入 filters，服务端 AND 合并后永不匹配日期列
     → 配置了日期默认条件的数据集恒返回 0 行。
 
-    本函数保留对用户的透明性披露：
-    - required 且用户无该字段 → 提示服务端将自动应用
-    - required 且用户同字段同值/子集 → 提示"与你的条件一致"
-    - required 且用户同字段冲突 → 提示"同时生效（AND），结果可能为空"
-    - optional 且用户已有 → 提示用户条件优先（跳过）
+    本函数保留对用户的透明性披露（覆盖语义，2026-07 评审定稿）：
+    - 用户没传该字段 → 提示服务端将自动应用数据集默认条件
+    - 用户传了该字段（任意条件） → 提示用户条件将覆盖默认值
     - filter_agg != none 的度量 having 条件 → 提示服务端将按聚合后过滤应用
     - 日期预设值 → 原样展示，注明"服务端解析为执行日"
+
+    旧"AND 冲突同时生效结果可能为空"语义已废弃：服务端改为覆盖语义，
+    用户对某字段传了任意条件 → 服务端用用户的，不注入默认。
 
     payload 不被修改。返回中文披露行列表。
     """
@@ -143,29 +144,16 @@ def _apply_default_filters(payload: dict, defaults: list[dict]) -> list[str]:
         value_text = "、".join(value_texts)
 
         if default.get("type") == "optional":
-            # optional 类型：用户已有同字段条件时，用户条件优先，不披露
+            # optional 类型：用户已有同字段条件时，服务端用用户的（覆盖语义），不披露
             if user_conditions:
                 continue
-            # optional 且用户无该字段：服务端将应用
+            # optional 且用户无该字段：服务端将应用默认
             notes.append(f"服务端将自动应用可选默认条件：{label} = {value_text}")
         elif user_conditions:
-            # required + 用户同字段：判断是同值/子集（去重）还是冲突（AND 合并）
-            # 去重仅适用等值语义（=/in）：异操作符（如 !=）属冲突场景，AND 合并保留并披露（终审修复）
-            equality_ops = {"=", "==", "in"}
-            covered = any(
-                str(c.get("operator", "")) in equality_ops
-                and set(c["value"] if isinstance(c.get("value"), list) else [c.get("value")]) <= set(values)
-                for c in user_conditions
-            )
-            if covered:
-                notes.append(f"默认条件 {label}={value_text} 与你的条件一致，已去重")
-            else:
-                # 冲突：服务端将 AND 合并，必须披露
-                notes.append(
-                    f"[!] 数据集强制默认条件 {label}={value_text} 与你的条件同时生效（AND），结果可能为空"
-                )
+            # 覆盖语义：用户传了该字段的任意条件，服务端用用户的、不注入默认
+            notes.append(f"你已为 {label} 指定条件，将覆盖数据集默认值（默认 {value_text}）")
         else:
-            # required 且用户无该字段：服务端将自动注入
+            # required 且用户无该字段：服务端将自动应用默认条件
             notes.append(f"服务端将自动应用数据集默认条件：{label} = {value_text}（{default.get('type', 'required')}）")
     return notes
 

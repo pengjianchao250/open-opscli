@@ -2752,3 +2752,23 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 - **验证**：包内 43 tests 全过（+3 个既有 oauth_apps Feature errors 与本分支无关）；opscli 侧 208 回归无新增失败。
 - **影响范围**：QA 上线后所有已配置 required 默认条件的数据集查询口径收敛（需求预期）；【技术债上报】既有图表路径 QueryBuilder::buildHavingConditionString(约4432行) 存在字符串值未转义的同类问题（先例缺陷，本计划未动）。
 - **回滚方式**：data-metrics 仓库 git revert f8f9613..4ac10db 区间；opscli 仓库 revert aab90fd。
+
+## 2026-07-15 服务端+opscli - filter_config QA 验收完成（跨仓库收尾）
+
+- **为什么改**：真实 QA 环境（http://ops.cm，VC报告[Manufacturing] 数据集带默认条件）验收，抓到日期预设未解析真缺陷 + 客户端预注入字面量与服务端解析冲突的跨端架构问题。
+- **具体做了什么**：①服务端 c11150d：toSimpleFilters 补 enum_value 单元素日期解析（后台日期字段预设名存 enum_value 非 value）；②opscli 40538b0：run_query 改披露-only 不再 mutate payload；③opscli bba32cd：query_plan 移除 query_template 默认条件预填，确立"客户端只披露、服务端权威注入"架构；④需求文档 2.2 节修正 value/enum_value 存储约定；⑤新增 docs/plans/数据集默认条件filter_config验收记录.md。
+- **验证**：服务端 24 单测 + 真实 API/tinker 逐条验收（注入/解析/去重/冲突/CSV/回归全 PASS，VC 0 行=数据集空非缺陷）；opscli 32 相关测试全绿 review Approved；6 未配置数据集回归 where 无注入、端到端各返回 3 行。
+- **影响范围**：服务端 f8f9613..c11150d、opscli a811d7b..bba32cd，均本地未 push。VC 数据集待补数复验；opscli 端到端待服务端发 QA 后 skills upgrade。
+
+---
+
+## 2026-07-15 skills/run_query - _apply_default_filters 披露文案改为覆盖语义
+
+**变更原因**：服务端 filter_config 默认条件改为覆盖语义（用户对某字段传了任意条件→服务端用用户的、不注入默认；用户没传→服务端注入默认）。opscli 披露文案仍沿用旧"AND 冲突同时生效结果可能为空"语义，与服务端实际行为不符，需对齐。
+**改动点**：
+1. `opscli/skills/templates/ops-dataset-query/scripts/run_query.py`：`_apply_default_filters` 函数中，用户已传同字段条件时，原"冲突 AND 合并""已去重"等旧文案统一改为"你已为 {label} 指定条件，将覆盖数据集默认值（默认 {值}）"；用户未传时保持"服务端将自动应用数据集默认条件"不变；删除旧的 `covered`/`equality_ops` 冗余分支，整体简化为两路（有无用户条件）。更新 docstring 说明覆盖语义及旧 AND 语义废弃。
+2. `tests/skills/test_run_query_default_filters.py`：删除 `test_apply_dedupes_same_or_subset_value`（旧去重语义）、`test_apply_keeps_both_on_conflict`、`test_apply_not_deduped_on_operator_mismatch`（旧 AND 冲突语义），新增 `test_apply_user_condition_overrides_default`（覆盖语义三场景：同值/异值/异操作符，均断言 note 含"覆盖数据集默认值"且不含"同时生效"）。
+**验证结果**：`pytest tests/skills/test_run_query_default_filters.py -v` 全部 4 tests PASSED；回归 `pytest tests/skills/ tests/query/ --ignore=tests/skills/test_packaging.py -v` 无新增失败，预存失败均为模板漂移与本次修改无关。
+**影响范围**：仅 `_apply_default_filters` 披露文案（不改 payload，披露-only 语义不变）；用户侧体验：覆盖场景不再看到"结果可能为空"的误导提示。
+**回滚方式**：git revert 本次提交，或手动将 `_apply_default_filters` 中覆盖分支改回含 `covered`/`equality_ops` 的旧版本，并恢复测试文件。
+- **回滚方式**：服务端 revert c11150d；opscli revert 40538b0/bba32cd。
