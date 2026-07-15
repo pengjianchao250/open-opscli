@@ -1,4 +1,4 @@
-"""run_query 默认条件披露测试（服务端权威注入，客户端只披露不预注入）。"""
+"""run_query 默认条件披露测试（服务端覆盖语义，2026-07 评审定稿）。"""
 # 导入方式与 test_dataset_query_planner.py 一致
 import sys
 from pathlib import Path
@@ -24,7 +24,7 @@ REQUIRED_DEFAULT = {
 
 
 def test_apply_discloses_missing_required():
-    """required 且用户无该字段：payload 不变，note 披露服务端将自动应用。"""
+    """required 且用户无该字段：payload 不变，note 含"服务端将自动应用"。"""
     original_filter = {"field": "date_id", "operator": ">=", "value": "2026-07-01"}
     payload = {"filters": [dict(original_filter)]}
     notes = run_query._apply_default_filters(payload, [REQUIRED_DEFAULT])
@@ -32,38 +32,35 @@ def test_apply_discloses_missing_required():
     assert len(payload["filters"]) == 1, "payload filters 不应被注入新条目"
     assert not any(f.get("field") == "date_type" for f in payload["filters"]), \
         "payload 中不应出现 date_type 条件"
-    # 仍应有默认条件相关披露
+    # 应有"服务端将自动应用"披露
+    assert any("服务端将自动应用" in note for note in notes), "notes 应含服务端将自动应用"
     assert any("QUARTER" in note for note in notes), "notes 应包含 QUARTER 披露"
-    assert any("服务端" in note for note in notes), "notes 应说明服务端将应用"
 
 
-def test_apply_dedupes_same_or_subset_value():
-    """相同值或子集：payload 不变，note 含"一致"类文案，不含"同时生效"。"""
+def test_apply_user_condition_overrides_default():
+    """用户传了同字段条件（覆盖语义）：payload 不变，note 含"覆盖数据集默认值"，不含"同时生效"。"""
     # 场景 1：同值
     payload = {"filters": [{"field": "date_type", "operator": "=", "value": "QUARTER"}]}
     notes = run_query._apply_default_filters(payload, [REQUIRED_DEFAULT])
     # payload 不变（仍只有 1 条 date_type）
     assert len([f for f in payload["filters"] if f.get("field") == "date_type"]) == 1
-    assert any("已去重" in note for note in notes)
+    assert any("覆盖数据集默认值" in note for note in notes)
     assert not any("同时生效" in note for note in notes)
+    assert not any("AND" in note for note in notes)
 
-    # 场景 2：子集去重（用户条件是默认值的子集）
-    subset_default = dict(REQUIRED_DEFAULT, values=["QUARTER", "MONTH"])
-    payload2 = {"filters": [{"field": "date_type", "operator": "=", "value": "QUARTER"}]}
-    notes2 = run_query._apply_default_filters(payload2, [subset_default])
+    # 场景 2：用户条件值与默认不同（旧冲突场景，现在是覆盖语义）
+    payload2 = {"filters": [{"field": "date_type", "operator": "=", "value": "MONTH"}]}
+    notes2 = run_query._apply_default_filters(payload2, [REQUIRED_DEFAULT])
     assert len([f for f in payload2["filters"] if f.get("field") == "date_type"]) == 1
-    assert any("已去重" in note for note in notes2)
+    assert any("覆盖数据集默认值" in note for note in notes2)
     assert not any("同时生效" in note for note in notes2)
 
-
-def test_apply_keeps_both_on_conflict():
-    """冲突场景：payload 不变（服务端负责 AND 合并），note 含"同时生效"。"""
-    payload = {"filters": [{"field": "date_type", "operator": "=", "value": "MONTH"}]}
-    notes = run_query._apply_default_filters(payload, [REQUIRED_DEFAULT])
-    # payload 不变：只有用户原有的 1 条 date_type，不额外追加
-    assert len([f for f in payload["filters"] if f.get("field") == "date_type"]) == 1, \
-        "payload 不应被修改，date_type 条目仍只有 1 条"
-    assert any("同时生效" in note for note in notes)
+    # 场景 3：异操作符（!=，旧的"冲突"场景，现在也是覆盖）
+    payload3 = {"filters": [{"field": "date_type", "operator": "!=", "value": "QUARTER"}]}
+    notes3 = run_query._apply_default_filters(payload3, [REQUIRED_DEFAULT])
+    assert len([f for f in payload3["filters"] if f.get("field") == "date_type"]) == 1
+    assert any("覆盖数据集默认值" in note for note in notes3)
+    assert not any("同时生效" in note for note in notes3)
 
 
 def test_apply_multi_values_discloses_and_optional_skipped():
@@ -93,13 +90,3 @@ def test_apply_optional_discloses_when_missing():
     # note 应说明服务端将应用
     assert any("服务端" in note for note in notes), "notes 应说明服务端将应用可选默认条件"
     assert any("QUARTER" in note for note in notes)
-
-
-def test_apply_not_deduped_on_operator_mismatch():
-    """同字段异操作符（!=）冲突：payload 不变，note 含"同时生效"。"""
-    payload = {"filters": [{"field": "date_type", "operator": "!=", "value": "QUARTER"}]}
-    notes = run_query._apply_default_filters(payload, [REQUIRED_DEFAULT])
-    # payload 不变：只有原有 1 条，不追加
-    assert len([f for f in payload["filters"] if f.get("field") == "date_type"]) == 1, \
-        "payload 不应被修改"
-    assert any("同时生效" in note for note in notes)
