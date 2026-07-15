@@ -55,6 +55,51 @@ def _write_ready_metadata(data_dir: Path) -> None:
     )
 
 
+def _write_ready_metadata_with_filter_config(data_dir: Path) -> None:
+    """写入带 filter_config 的 data_state=ready 元数据。
+
+    ds_ads 的 date_type 维度字段配置了 required QUARTER 默认条件，
+    用于验证规划器的默认条件投影能力（R5）。
+    """
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v1.2.3", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "1,ds_ads,广告数据集,normal,0,SP广告数据集,\n"
+        "2,ds_inv,库存数据集,normal,0,库存快照数据集,\n",
+        encoding="utf-8",
+    )
+    # filter_config 单元格：CSV 内嵌 JSON 需用双引号包裹，内部双引号转义为 ""
+    fc_json = json.dumps({
+        "type": "required",
+        "enabled": True,
+        "operator": "equals",
+        "filter_type": "enum",
+        "enum_value": ["QUARTER"],
+        "value": None,
+        "filter_agg": "none",
+    }, ensure_ascii=False)
+    fc_cell = '"' + fc_json.replace('"', '""') + '"'
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config,filter_config\n"
+        f"1,ds_ads,广告数据集,date_type,日期类型,f_date_type,dimension,,,,,0,0,{fc_cell}\n"
+        "1,ds_ads,广告数据集,date_id,日期,f_date_id,dimension,,,,,0,0,\n"
+        "1,ds_ads,广告数据集,acos,ACOS,f_acos,metric,ads_cost / sales,,广告成本销售比,,0,1,\n"
+        "2,ds_inv,库存数据集,sku,SKU,f_sku,dimension,,,,,0,0,\n"
+        "2,ds_inv,库存数据集,stock_qty,库存量,f_stock_qty,metric,,,,,1,0,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n"
+        "ds_ads,platform_name,平台,ds_ads\n",
+        encoding="utf-8",
+    )
+
+
 def test_query_plan_selects_acos_with_formula_policy(tmp_path: Path):
     """显式点名数据集 + 公式指标：应定表并给出公式聚合口径。"""
     data_dir = tmp_path / "data"
@@ -661,3 +706,43 @@ def test_run_query_ok_path_discloses_effective_order(tmp_path: Path, monkeypatch
     assert "order_fallback" not in out["disclosures"]
     assert "排序已生效" in out["disclosures"]["order_disclosure_zh"]
     assert out["disclosures"]["row_count_returned"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 4: query_plan 投影默认条件（R5）
+# ---------------------------------------------------------------------------
+
+
+def test_query_plan_projects_default_filters(tmp_path: Path):
+    """配置了 filter_config 的数据集：规划结果必须携带默认条件与中文披露。"""
+    data_dir = tmp_path / "data"
+    _write_ready_metadata_with_filter_config(data_dir)  # 新 fixture：ds_ads 的 date_type 配 required QUARTER
+
+    result = query_plan.build_model_query_plan(
+        "SP 广告数据集 ACOS",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+    )
+
+    assert result["status"] == "planned"
+    defaults = result["execution_ref"]["default_filters"]
+    assert defaults[0]["field_name"] == "date_type"
+    assert defaults[0]["operator"] == "equals"
+    assert defaults[0]["values"] == ["QUARTER"]
+    assert defaults[0]["type"] == "required"
+    # 用户可见层中文披露
+    assert any("QUARTER" in text for text in result["model_view"]["default_filters_zh"])
+    # 回答合同强制披露
+    assert any("默认条件" in text for text in result["answer_contract"]["required_disclosures_zh"])
+
+
+def test_query_plan_no_default_filters_key_when_unconfigured(tmp_path: Path):
+    """未配置默认条件：execution_ref 不带 default_filters 键，行为与现状一致。"""
+    data_dir = tmp_path / "data"
+    _write_ready_metadata(data_dir)
+
+    result = query_plan.build_model_query_plan(
+        "SP 广告数据集 ACOS", data_dir=data_dir, rules_path=RULES_PATH,
+    )
+    assert "default_filters" not in result["execution_ref"]
+    assert "default_filters_zh" not in result["model_view"]
