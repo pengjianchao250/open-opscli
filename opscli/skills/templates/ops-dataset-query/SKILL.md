@@ -65,6 +65,12 @@ python3 scripts/query_plan.py "$USER_REQUEST"
 python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON"
 ```
 
+- 默认条件（filter_configs）：规划结果 model_view.default_filters_zh 存在时，
+  必须在回答中向用户披露这些默认条件；执行时把 execution_ref.default_filters
+  原样作为 --default-filters 参数传给执行器：
+  python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON" --default-filters "$DEFAULT_FILTERS_JSON"
+  强制（required）条件不可移除；用户条件与其冲突时两者同时生效（AND），须提示结果可能为空。
+
    正式查询偶尔较慢（排序兜底还可能放大窗口重查一次），命令窗口超时不是失败：**原样重跑一次**即可（重复执行只是重发同一查询，无副作用）。执行器返回 `precheck_failed` 时按 `next_action_zh` 修正参数，禁止绕过执行器直连；`disclosures.order_fallback` 存在时必须在结论中披露「服务端排序未生效、已本地兜底」。MCP-only 用正式 `query_simple`。复杂图表和 Excel 导出才按 `references/chart-excel-guide.md` 走图表入口。
 6. 保留用户要求的明细和全量范围。限制展示时声明排序、截断数量和总行数（执行器 `disclosures` 已给出），不把局部结果说成全量。
 
