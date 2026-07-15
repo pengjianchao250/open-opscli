@@ -17,10 +17,12 @@ class DummyManager:
 
 class DummyScheduler:
     last_request = None
+    last_enqueue_kwargs = None
     enqueue_calls = 0
 
-    async def enqueue(self, request):
+    async def enqueue(self, request, **kwargs):
         self.__class__.last_request = request
+        self.__class__.last_enqueue_kwargs = kwargs
         self.__class__.enqueue_calls += 1
         return {
             "job_id": request.job_id or "job-async-1",
@@ -50,7 +52,7 @@ class SuccessPollingScheduler:
         self.started_at = (now - timedelta(seconds=4)).isoformat(timespec="seconds")
         self.job_status_calls = 0
 
-    async def enqueue(self, request):
+    async def enqueue(self, request, **kwargs):
         return {
             "job_id": request.job_id or "job-success-1",
             "scenario": request.scenario,
@@ -105,7 +107,7 @@ class RunningTimeoutScheduler:
         self.created_at = (now - timedelta(minutes=9)).isoformat(timespec="seconds")
         self.started_at = (now - timedelta(minutes=8, seconds=5)).isoformat(timespec="seconds")
 
-    async def enqueue(self, request):
+    async def enqueue(self, request, **kwargs):
         return {
             "job_id": request.job_id or "job-timeout-1",
             "scenario": request.scenario,
@@ -132,7 +134,7 @@ class RunningTimeoutScheduler:
 
 
 class FailingScheduler:
-    async def enqueue(self, request):
+    async def enqueue(self, request, **kwargs):
         raise RuntimeError("enqueue boom")
 
 
@@ -140,7 +142,7 @@ class NoNormalizeScheduler:
     last_request = None
     enqueue_calls = 0
 
-    async def enqueue(self, request):
+    async def enqueue(self, request, **kwargs):
         self.__class__.last_request = request
         self.__class__.enqueue_calls += 1
         return {
@@ -699,6 +701,11 @@ def test_listing_analysis_result_persists_ready_remote_payload(monkeypatch, tmp_
 def test_seller_sprite_start_returns_queued_job(monkeypatch):
     monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
     monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_current_mcp_user_email",
+        lambda: "mcp-user@example.com",
+    )
     DummyScheduler.enqueue_calls = 0
 
     result = _run(
@@ -936,6 +943,10 @@ def test_seller_sprite_run_creates_mcp_run_before_enqueue(monkeypatch, tmp_path)
 
     assert result["success"] is True
     assert DummyScheduler.enqueue_calls == 1
+    assert DummyScheduler.last_enqueue_kwargs == {
+        "credential_scope": "default",
+        "expected_user_email": "mcp-user@example.com",
+    }
     record = store.get_mcp_run("mcp-job-run-1")
     assert record["user_email"] == "mcp-user@example.com"
     assert record["scenario"] == "keyword-reverse"
@@ -943,6 +954,35 @@ def test_seller_sprite_run_creates_mcp_run_before_enqueue(monkeypatch, tmp_path)
     assert record["mode"] == "browser-route"
     assert record["params_json"] == {"asin": "B07YRMT36L", "keywords": ["router"]}
     assert record["result_state"] == "queued"
+
+
+def test_seller_sprite_run_rejects_explicit_auth_from_mcp_caller(monkeypatch, tmp_path):
+    store = _make_store(tmp_path)
+    _skip_wait_for_run(monkeypatch)
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_auth_pair",
+        lambda system, session_id, jwt: (session_id, jwt),
+    )
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
+    DummyScheduler.enqueue_calls = 0
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="keyword-reverse",
+            params={"asin": "B07YRMT36L"},
+            job_id="mcp-job-explicit-auth",
+            session_id="explicit-session",
+            jwt="explicit-jwt",
+        )
+    )
+
+    assert result["success"] is False
+    assert "不接受显式 session_id/jwt" in result["error"]["message"]
+    assert DummyScheduler.enqueue_calls == 0
+    assert store.get_mcp_run("mcp-job-explicit-auth")["result_state"] == "failed"
 
 
 def test_seller_sprite_run_marks_mcp_run_failed_when_enqueue_raises(monkeypatch, tmp_path):

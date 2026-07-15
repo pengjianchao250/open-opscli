@@ -11,7 +11,8 @@ from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 from opscli.shared.integration_accounts import IntegrationAccountBundle, IntegrationAccountClient, IntegrationAccountError
 
 
-_REMOTE_BUNDLE_CACHE: dict[str, tuple[float, IntegrationAccountBundle]] = {}
+_REMOTE_BUNDLE_CACHE: dict[tuple[str, str], tuple[float, IntegrationAccountBundle]] = {}
+_REMOTE_BUNDLE_CACHE_MAX_ENTRIES = 256
 
 
 @dataclass(frozen=True)
@@ -133,8 +134,10 @@ class SellerSpriteAccountProvider:
         """加载远端集成账号。"""
         if not refresh and self._remote_bundle is not None:
             return self._remote_bundle
-        cache_key = "seller_sprite"
-        cached = _REMOTE_BUNDLE_CACHE.get(cache_key)
+        now = time.time()
+        _cleanup_remote_bundle_cache(now, self.settings.account_cache_ttl_seconds)
+        cache_key = self._remote_cache_key()
+        cached = _REMOTE_BUNDLE_CACHE.get(cache_key) if cache_key else None
         if not refresh and cached and time.time() - cached[0] < self.settings.account_cache_ttl_seconds:
             self._remote_bundle = cached[1]
             self._remote_error = None
@@ -142,8 +145,38 @@ class SellerSpriteAccountProvider:
         try:
             self._remote_bundle = self.integration_client.get_accounts("seller_sprite")
             self._remote_error = None
-            _REMOTE_BUNDLE_CACHE[cache_key] = (time.time(), self._remote_bundle)
+            if cache_key:
+                _REMOTE_BUNDLE_CACHE[cache_key] = (time.time(), self._remote_bundle)
+                _trim_remote_bundle_cache()
         except IntegrationAccountError as exc:
             self._remote_error = exc
             self._remote_bundle = None
         return self._remote_bundle
+
+    def _remote_cache_key(self) -> tuple[str, str] | None:
+        """返回认证主体缓存键；未知身份客户端禁用跨实例缓存。"""
+        cache_identity = getattr(self.integration_client, "cache_identity", None)
+        if not callable(cache_identity):
+            return None
+        return "seller_sprite", str(cache_identity())
+
+
+def _cleanup_remote_bundle_cache(now: float, ttl_seconds: int) -> None:
+    """主动清理过期的解密账号，避免公用 MCP 长期滞留敏感数据。"""
+    expired = [
+        key
+        for key, (created_at, _) in _REMOTE_BUNDLE_CACHE.items()
+        if now - created_at >= ttl_seconds
+    ]
+    for key in expired:
+        _REMOTE_BUNDLE_CACHE.pop(key, None)
+
+
+def _trim_remote_bundle_cache() -> None:
+    """限制解密账号缓存容量，避免高用户量场景无界增长。"""
+    overflow = len(_REMOTE_BUNDLE_CACHE) - _REMOTE_BUNDLE_CACHE_MAX_ENTRIES
+    if overflow <= 0:
+        return
+    oldest = sorted(_REMOTE_BUNDLE_CACHE, key=lambda key: _REMOTE_BUNDLE_CACHE[key][0])
+    for key in oldest[:overflow]:
+        _REMOTE_BUNDLE_CACHE.pop(key, None)
