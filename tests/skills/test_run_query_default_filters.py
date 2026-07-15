@@ -75,3 +75,11 @@ def test_apply_optional_injected_when_missing():
     payload = {"filters": []}
     run_query._apply_default_filters(payload, [optional])
     assert payload["filters"] == [{"field": "date_type", "operator": "=", "value": "QUARTER"}]
+
+
+def test_apply_not_deduped_on_operator_mismatch():
+    """同值异操作符（!=）不去重：required 仍注入，两条同时生效并披露冲突（终审修复）。"""
+    payload = {"filters": [{"field": "date_type", "operator": "!=", "value": "QUARTER"}]}
+    notes = run_query._apply_default_filters(payload, [REQUIRED_DEFAULT])
+    assert len([f for f in payload["filters"] if f["field"] == "date_type"]) == 2
+    assert any("同时生效" in note for note in notes)
