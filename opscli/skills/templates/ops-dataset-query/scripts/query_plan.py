@@ -1215,30 +1215,15 @@ def build_model_contract(
                 "排序填 orderBy=[{\"field\":\"<结果alias>\",\"direction\":\"DESC|ASC\"}]，"
                 "行数填 limit；不需要的键（null 值）必须删除后再执行。"
                 "selection_source=recommended 的字段须先向用户说明再采用。"
+                "数据集默认条件（若有）由服务端查询时自动应用，请勿手动加入 filters；"
+                "仅需在回答中向用户披露 default_filters_zh。"
             )
-    # 默认条件投影（R5）：把 guidance.default_filters 投影到三处输出
+    # 默认条件投影（R5）：把 guidance.default_filters 投影到披露输出，不预填 query_template
+    # 服务端是默认条件注入的唯一权威方，客户端预填会与服务端解析后的真实日期 AND 合并 → 恒 0 行
     default_filters = _default_filters_ref(guidance)
     if default_filters:
         execution_ref["default_filters"] = default_filters
         model_view["default_filters_zh"] = _default_filters_zh(default_filters)
-        # 预填 required 默认条件到查询模板 filters（optional/having 条件由模型/服务端决定）
-        template = execution_ref.get("query_template")
-        if template is not None:
-            # filter_config 操作符 → 简化查询操作符（与 run_query 的映射保持一致）
-            op_map = {"equals": "=", "notEquals": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
-            template_filters = template.get("filters") or []
-            for ref in default_filters:
-                if ref["type"] != "required" or ref["filter_agg"] != "none":
-                    continue  # optional 由模型按用户语境决定；having 度量条件服务端兜底
-                op = op_map.get(ref["operator"])
-                if op is None or not ref["values"]:
-                    continue  # isEmpty/isNotEmpty 等暂不支持的操作符跳过，服务端兜底
-                if len(ref["values"]) > 1 and ref["operator"] == "equals":
-                    template_filters.append({"field": ref["field_name"], "operator": "in", "value": ref["values"]})
-                else:
-                    # 多值仅在 equals 时转 in；gt/lte 等比较操作符多值时取第一个值，业务层应保证此类配置只配单值
-                    template_filters.append({"field": ref["field_name"], "operator": op, "value": ref["values"][0]})
-            template["filters"] = template_filters
     # 回答合同：先构建基础版本，再追加默认条件强制披露
     answer_contract = _answer_contract(status, clarification_reasons, platform_state, guidance)
     if default_filters:

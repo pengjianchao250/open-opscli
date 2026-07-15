@@ -24,6 +24,18 @@
 
 ---
 
+## 2026-07-15 skills/query_plan - 移除 query_template 默认条件预填，改由服务端权威注入
+
+**变更原因**：`build_model_contract` 中的默认条件投影段落将 required 默认条件（包含日期预设字面量如 `beforeYesterday`/`QUARTER`）预填进 `execution_ref["query_template"]["filters"]`。客户端预填的字面量与服务端在查询执行时解析后的真实日期 AND 合并，导致配置了日期默认条件的数据集查询恒返回 0 行。服务端是默认条件注入的唯一权威方，客户端预填是冗余且有害的。
+**改动点**：
+1. `opscli/skills/templates/ops-dataset-query/scripts/query_plan.py`：删除 1225-1241 行的 `query_template` 默认条件预填 if 块（含 `op_map`、`template_filters` 循环、`template["filters"] = template_filters`）；保留 `execution_ref["default_filters"]`、`model_view["default_filters_zh"]`、`answer_contract` 披露追加（仅披露，不注入）；在 `query_template_fill_rules_zh` 文案末尾追加说明"默认条件由服务端自动应用，请勿手动加入 filters；仅需在回答中向用户披露 default_filters_zh"。
+2. `tests/skills/test_dataset_query_planner.py`：`test_query_plan_projects_default_filters` 中原断言 `query_template.filters` 含 `date_type=QUARTER` 翻转为反向断言：`template_filters` 不含 `date_type` 值为 `QUARTER` 的默认条件（注：date_type 作为时间维度的日期范围 >=/<= 过滤仍合法保留）；保留 `default_filters`/`default_filters_zh`/`answer_contract` 披露断言。
+**验证结果**：`pytest tests/skills/test_dataset_query_planner.py -v` 全部 26 tests PASSED；回归 `pytest tests/skills/ tests/query/ --ignore=tests/skills/test_packaging.py -v` 无新增失败（6 个预存失败与本次修改无关）。
+**影响范围**：`query_plan.py` `build_model_contract` 函数：query_template.filters 不再含默认条件；`default_filters`/`default_filters_zh`/`answer_contract` 披露路径不变；服务端执行时仍自动注入默认条件，查询结果不受影响。
+**回滚方式**：在 `query_plan.py` 的默认条件投影段重新插入 `op_map`+`template_filters` 预填 if 块，将测试断言改回"template_filters 含 date_type=QUARTER"形式，删除本条变更记录。
+
+---
+
 ## 2026-07-15 skills/dataset_guidance - 聚合数据集默认条件 default_filters（R5）
 
 **变更原因**：需求 R5 要求 `build_guidance()` 返回体顶层包含 `default_filters` 键，聚合"自身字段 + select_columns 关联组件字段"中 filter_config 已启用的条目，供 Task 4（query_plan 投影）消费。
