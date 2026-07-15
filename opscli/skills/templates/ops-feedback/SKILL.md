@@ -1,6 +1,7 @@
 ---
 name: ops-feedback
 description: Use when submitting or querying Aukeys opscli feedback, or when an opscli CLI/MCP call fails unexpectedly and needs a structured execution summary.
+version: 1.0.1
 ---
 
 # ops-feedback
@@ -24,6 +25,78 @@ description: Use when submitting or querying Aukeys opscli feedback, or when an 
 
 当 AI Agent（Codex / Claude Code / OpenCode）调用 `opscli` CLI 命令或 `opscli` MCP Tool 失败时，**必须**按以下流程自动触发反馈提交：
 
+## 分级反馈策略
+
+反馈用于保留高信号证据，不应阻塞主任务或为每个低价值成功动作产生一条消息。默认采用四级策略：
+
+| 层级 | 场景 | 处理方式 |
+|------|------|----------|
+| L0 | dry_run、本地只读检索、仅生成计划 | 不提交 |
+| L1 | 成功查询、成功引导、批量评估中的正常样本 | 成功默认本地任务摘要；远端成功反馈默认关闭 |
+| L2 | 0 行、全空值、降级重试、用户纠错、可疑数据 | 同一任务内合并证据后最多提交 1 条 `query_result` 或 `data_issue` |
+| L3 | opscli CLI/MCP 失败、异常、远端错误码 | 失败即时反馈，必须按 AGENTS 铁律提交 `bug` |
+
+执行规则：
+
+- 失败即时反馈：任何 `opscli` CLI 非 0、MCP `success=false`、异常或远端错误码必须立即提交，不能等到任务结束。
+- 成功默认本地任务摘要：成功查询、成功引导和正常批量样本只在本地执行总结或项目产物中记录 `successful_calls`，默认不调用 `feedback_submit` / `opscli feedback submit`。
+- 远端成功反馈默认关闭：只有用户明确要求提交、进入发布/审计门禁、或 L2 可疑结果需要产品/数据 owner 处理时，才提交 `query_result`；同一任务最多 1 条。
+- 批量评估：评估、烟测、回归和多数据集扫描默认只写本地结果文件；失败按 L3 即时提交，可疑结果按 L2 合并提交，正常成功样本不远端提交。
+- 批量失败聚合：批量烟测、回归和多数据集扫描发现同一根因的多条 L3 失败时，事件 JSON 必须显式传 `feedback_group_key`，首条失败远端提交，后续同组失败在 30 分钟内复用同一个 `feedback_uuid` 并在本地累加 occurrence_count。
+- 抽样：抽样默认进入本地评估集或回归候选，不等于远端提交；只有开启审计/发布门禁或用户要求完整审计时才把抽样结果提交到远端。
+- 去重：同一失败指纹在 30 分钟内只提交 1 次，后续复用 `feedback_uuid` 并在本地执行总结中累加 occurrence_count。注意去重是滑动窗口：窗口内每次重复失败都会刷新 `last_seen`，持续复发的同一失败不会自动再次远端提交，occurrence_count 仅本地可见；若需要让远端感知失败仍在持续发生，需用户明确要求后重新提交并刷新 `feedback_uuid`。
+- 本轮会话最多：非失败类远端反馈默认最多 1 条；超过后必须只写本地任务摘要或项目结果文件，除非用户明确要求继续提交。
+- fail-open：`feedback_submit` / `opscli feedback submit` 自身失败时只记录并告知，不再递归提交，也不得阻塞原查询或评估流程。
+- Token 预算：`execution_summary` 只保留关键参数、错误码、根因和修复建议；大结果、日志和表格只放附件路径或摘要。
+- 事件瘦身与敏感字段脱敏：`feedback_guard.py` 用于生成 fingerprint 的事件副本会自动脱敏 `token` / `cookie` / `authorization` / `password` / `secret` 等字段，截断大字符串、大数组和大字典，并返回 `event_hygiene.fingerprint_payload_bytes`，避免 guard 自身消耗大量 token 或泄露敏感值。
+
+### 可执行守门脚本
+
+优先使用 `scripts/feedback_guard.py` 做提交前判断，避免靠 Agent 记忆手工控制反馈量。该脚本不提交远端反馈，只输出决策并维护本地去重/预算状态。
+
+### 低 token 快速路径
+
+先 guard 后 payload：除用户明确要求直接提交或查询反馈详情外，先把失败或可疑事件写成小 JSON，并运行 `feedback_guard.py decide`。只有 `submit_remote: true` 时，才构造完整反馈 payload、整理完整 `execution_summary`，并再读取 `references/cli.md` 或 `references/mcp.md` 执行提交。
+
+- 返回 `agent_action: reuse_existing_feedback_uuid`：复用已有 `feedback_uuid`，不要构造完整 `execution_summary`，不要读取 CLI/MCP 长参考，不要重复提交。
+- 返回 `agent_action: write_local_execution_summary`：只写本地任务摘要或项目结果文件，不远端提交。
+- 返回 `agent_action: fail_open_no_recursive_feedback`：只报告反馈通道失败，继续原任务。
+- 返回 `submit_remote: true`：再进入运行模式判断，补齐最小必要字段并提交。
+
+典型流程：
+
+1. 把本次事件保存为小 JSON，字段包含 `outcome`、`source`、`tool` 或 `command_name` / `mcp_tool_name`、`call_params`、`error_code`、`error_message`、`needs_owner_action`，以及能标识本轮任务的 `session_id` / `thread_id` / `task_id`；批量同根因失败还要传稳定的 `feedback_group_key`。
+2. 执行 `python3 scripts/feedback_guard.py decide --event-file event.json`。
+3. 只有返回 `submit_remote: true` 时才继续构造完整 payload 并调用 `feedback_submit` 或 `opscli feedback submit`。
+4. 远端提交成功后执行 `python3 scripts/feedback_guard.py record --event-file event.json --feedback-uuid <feedback_uuid>`，写入失败指纹或 L2 预算。
+5. 如果返回 `agent_action: reuse_existing_feedback_uuid`，直接复用输出的 `feedback_uuid`，不要重复提交。
+6. 如果返回 `agent_action: fail_open_no_recursive_feedback`，说明反馈通道自身失败，只报告并继续原任务，不递归反馈。
+
+`feedback_guard.py` 的默认策略：
+
+- L1 成功事件返回 `write_local_execution_summary`，不远端提交。
+- L2 可疑数据只有 `needs_owner_action: true` 且本轮非失败预算未用完时才允许提交 1 条。
+- L2 非失败预算按 `session_id` / `thread_id` / `task_id` 隔离；未传时使用兼容的 `default` 预算桶。
+- 事件分类先看硬失败信号：`outcome=failure`、`success=false`、非 0 `exit_code` 或明确 `error_code` 才进入 L3；成功事件里的 warning 文本不触发远端 bug，`zero_rows`、`all_null`、`degraded`、`user_correction` 即使带 `error_message` 也按 L2 预算处理。
+- L3 失败优先使用显式 `feedback_group_key` 生成稳定 fingerprint；显式 group key 会覆盖变化的 `tool` / `command_name` 字符串和 `call_params`，用于聚合同根因批量失败；未传时回退到 `{source, tool, error_code, error_message, call_params}`，30 分钟内复用已有 `feedback_uuid`。
+- fingerprint 输入会自动做事件瘦身和敏感字段脱敏；`decide` 的 L3 输出包含 `event_hygiene`，其中 `fingerprint_payload_bytes` 默认不超过 4096，用于检查低 token 快速路径是否仍然成立。
+- 本地 guard 状态默认保留 24 小时；过期 failure 指纹和 L2 会话预算桶会在下一次 `decide` / `record` 时清理，避免状态文件长期膨胀或旧会话预算误拦截。
+- 本地 guard 状态损坏时按空状态继续决策，不让状态文件解析错误阻塞原任务；若重复失败记录缺少 `feedback_uuid`，不得复用空 UUID，必须重新提交本次 L3 失败并刷新状态。
+- `auth_login_start` / `auth_login_poll` 等认证流程中的预期未授权、待授权或轮询中状态返回 `do_not_submit_expected_auth_state`，不远端提交，避免登录轮询产生反馈风暴；认证服务 5xx、异常崩溃等非预期错误仍按 L3 处理。
+- L3 新失败返回 `submit_remote=true` 且 `non_blocking=true`：Agent 必须先提交或复用反馈 UUID，但完成最小反馈动作后要继续原任务恢复、降级重试或交付本地摘要，不把反馈流程当成终止态。
+- 反馈提交/查询自身失败直接 fail-open。
+
+### 行为回归门禁
+
+反馈策略必须能被 Agent/Skill trace 评估复现，不能只写在说明文档里。维护 `ops-dataset-query`、`ops-query-wizard` 或批量评估脚本时，必须把以下行为纳入本地 trace 或 benchmark 评估：
+
+- 成功查询、成功引导和正常批量样本只写本地执行摘要，不远端提交普通 `query_result`。
+- `opscli` CLI/MCP 失败仍必须触发 `ops-feedback` 或先经过 `feedback_guard.py` 后提交/复用 `feedback_uuid`。
+- 批量同根因失败必须带稳定 `feedback_group_key`，评估中应能看到后续重复失败复用同一组反馈，而不是逐条远端提交。
+- `feedback_submit` / `opscli feedback submit` 自身失败只能 fail-open，不能递归提交反馈。
+
+`feedback_guard.py` 的决策逻辑（分级、去重、预算、脱敏、fail-open）由仓库内 `tests/skills/test_feedback_guard.py` 回归覆盖。trace 级评估脚本（检查 `success_feedback_remote_spam`、`success_local_summary_after_query`、`feedback_after_failed_query` 等规则）当前尚未落地，属于待建设项；新增或修改查询类 Skill 时，应同步补充对应 trace 样例与检查规则，避免不同大模型在成功路径刷屏、失败路径漏报或批量扫描中产生 feedback 风暴。
+
 ### 触发条件
 
 满足以下任一条件即触发：
@@ -37,12 +110,12 @@ description: Use when submitting or querying Aukeys opscli feedback, or when an 
 - `auth_login_start`、`auth_login_poll` 等认证流程中的预期未授权状态
 - `feedback_submit`、`feedback_detail`、`opscli feedback submit/detail` 自身失败，避免递归反馈
 - 用户主动取消（`KeyboardInterrupt`）
-- 同一失败在 5 分钟内已提交过反馈
+- 同一失败在 30 分钟内已提交过反馈
 
 ### 触发流程
 
 1. **检查错误响应中的 `feedback` 字段**：MCP `_err` 响应可能包含自动生成的 `feedback` 草案，优先以该草案为基底
-2. **计算本次失败指纹并去重**：使用 `{source}:{tool}:{error.code}:{error.message}:{关键参数JSON}` 作为同会话去重指纹；5 分钟内已提交过则复用上次 `feedback_uuid`，不重复提交
+2. **计算本次失败指纹并去重**：批量同根因失败优先使用 `feedback_group_key`，并忽略同组事件中变化的完整命令字符串和参数；未传时使用 `{source}:{tool}:{error.code}:{error.message}:{关键参数JSON}` 作为去重指纹；30 分钟内已提交过则复用上次 `feedback_uuid`，不重复提交
 3. **补充并校验必要字段**：
    - `title`：简短描述失败，如 `"query_simple 字段不存在"`
    - `content`：详细描述失败场景和现象
@@ -57,7 +130,7 @@ description: Use when submitting or querying Aukeys opscli feedback, or when an 
    - CLI 环境：`opscli feedback submit --type bug --title "..." --content "..." --skill-name "..." --skill-version "..." --command-name "..." --execution-summary-file summary.json`
 5. **返回 feedback_uuid 给用户**，并继续处理原任务
 
-如果反馈提交自身失败，只向用户说明反馈提交失败和原始错误，不要再次调用本 Skill 提交“反馈失败”的反馈。
+如果反馈提交自身失败，按 fail-open 处理：只向用户说明反馈提交失败和原始错误，不要再次调用本 Skill 提交“反馈失败”的反馈，不得阻塞原任务继续。
 
 ### 接口参数规范
 
@@ -108,7 +181,7 @@ description: Use when submitting or querying Aukeys opscli feedback, or when an 
 
 ## 运行模式判断
 
-进入本 Skill 后，不要为模式判断额外运行检测脚本，直接按下面规则判断。
+进入本 Skill 后，不要为模式判断额外运行检测脚本，直接按下面规则判断。除用户明确要求查询/提交反馈外，先执行低 token 快速路径；只有 guard 返回 `submit_remote: true` 后，才读取 CLI/MCP 参考并提交。
 
 优先级如下：
 
@@ -163,6 +236,22 @@ description: Use when submitting or querying Aukeys opscli feedback, or when an 
 ```
 
 没有失败工具调用时，`failed_calls` 使用空数组，但仍要写 `summary` 和 `final_resolution`。
+
+### 成功默认本地任务摘要模板
+
+成功查询或引导流程默认只写本地任务摘要，不远端提交。多轮查询合并到 `successful_calls`，在最终回复、项目结果文件或本地 run artifact 中保存；只有用户明确要求、发布/审计门禁或 L2 可疑结果需要 owner 处理时，才把该摘要作为 `query_result` 远端提交。
+
+```json
+{
+  "summary": "本次任务完成 4 次 query_simple 查询，均成功返回；其中 1 次为 0 行，已提示用户放宽筛选。",
+  "failed_calls": [],
+  "successful_calls": [
+    {"tool": "query_simple", "table_id": 1, "result": "success, 20 rows"},
+    {"tool": "query_simple", "table_id": 15, "result": "success, 0 rows, user_confirmed_filter_too_strict"}
+  ],
+  "final_resolution": "已输出分析结论；成功查询只写本地任务摘要，未远端提交。"
+}
+```
 
 ---
 

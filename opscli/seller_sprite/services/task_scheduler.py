@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import threading
@@ -17,6 +18,7 @@ from opscli.seller_sprite.domain.exceptions import (
     SellerSpriteAccountUnavailableError,
     SellerSpriteApiError,
     SellerSpriteAuthenticationError,
+    SellerSpriteConfigError,
 )
 from opscli.seller_sprite.domain.models import (
     SellerSpriteScenarioRequest,
@@ -47,8 +49,6 @@ class SellerSpriteTaskScheduler:
         settings: SellerSpriteSettings | None = None,
         account_provider=None,
         manager_factory: Callable[..., SellerSpriteApiManager] | None = None,
-        jwt: str | None = None,
-        session_id: str | None = None,
         auto_start: bool = True,
         poll_interval_seconds: float = 0.05,
         session_reap_interval_seconds: float = DEFAULT_SESSION_REAP_INTERVAL_SECONDS,
@@ -60,8 +60,6 @@ class SellerSpriteTaskScheduler:
             settings: 卖家精灵运行配置。
             account_provider: 账号来源；传入旧式单账号 provider 时保留兼容调度模式。
             manager_factory: 场景执行器工厂。
-            jwt: 当前调用者 JWT，仅用于账号接口。
-            session_id: 当前调用会话标识。
             auto_start: 入队时是否自动启动后台消费。
             poll_interval_seconds: 无任务或 supervisor 循环的轮询间隔。
             session_reap_interval_seconds: browser 会话周期回收扫描间隔。
@@ -71,13 +69,15 @@ class SellerSpriteTaskScheduler:
         """
         self.settings = settings or load_settings()
         self.account_provider = account_provider
+        self._account_provider_injected = account_provider is not None
         self.store = store or SellerSpriteTaskQueueStore()
-        self.jwt = jwt
-        self.session_id = session_id
         self.auto_start = auto_start
         self.poll_interval_seconds = poll_interval_seconds
         self.session_reap_interval_seconds = max(0.01, float(session_reap_interval_seconds))
         self.manager_factory = manager_factory or self._default_manager_factory
+        self._runtime_auth: dict[str, tuple[str, str | None]] = {}
+        self._account_credential_scope: str | None = None
+        self._account_expected_user_email: str | None = None
         self._runner_task: asyncio.Task | None = None
         self._generic_worker_tasks: dict[str, asyncio.Task] = {}
         self._generic_worker_accounts: dict[str, SellerSpriteAccount] = {}
@@ -111,8 +111,12 @@ class SellerSpriteTaskScheduler:
         request: SellerSpriteScenarioRequest,
         *,
         mcp_user_email: str | None = None,
+        credential_scope: str | None = None,
+        session_id: str | None = None,
+        jwt: str | None = None,
+        expected_user_email: str | None = None,
     ) -> dict[str, Any]:
-        """入队并按需启动后台调度循环，可原子记录 MCP 所有权。"""
+        """携带非敏感凭证作用域入队，并可原子记录 MCP 所有权。"""
         normalized = self._normalize_request(request)
         root_dir = self._build_root_dir(normalized)
         if mcp_user_email:
@@ -122,17 +126,25 @@ class SellerSpriteTaskScheduler:
                 queue_scope=QUEUE_SCOPE,
                 root_dir=root_dir,
                 user_email=mcp_user_email,
-                session_id=self.session_id,
-                jwt=self.jwt,
+                credential_scope=credential_scope,
+                expected_user_email=expected_user_email,
             )
         else:
             status = self.store.enqueue(
                 request=normalized,
                 queue_scope=QUEUE_SCOPE,
                 root_dir=root_dir,
-                session_id=self.session_id,
-                jwt=self.jwt,
+                credential_scope=credential_scope,
+                runtime_auth_required=bool(session_id or jwt),
+                expected_user_email=expected_user_email,
             )
+        if session_id:
+            # 显式凭证仅按 job_id 短暂保存在内存中，禁止写入 SQLite 或跨任务复用。
+            self._runtime_auth[str(normalized.job_id)] = (session_id, jwt)
+        if credential_scope:
+            # 公共账号刷新只保留非敏感凭证引用，实际 session/JWT 每次从 CredentialStore 读取。
+            self._account_credential_scope = credential_scope
+            self._account_expected_user_email = expected_user_email or mcp_user_email
         if self.auto_start:
             await self.start()
         return status
@@ -144,12 +156,13 @@ class SellerSpriteTaskScheduler:
                 return
             self._stop_requested = False
             if self._legacy_single_account_mode:
-                self._runner_task = asyncio.create_task(self._run_loop())
+                self._runner_task = self._create_background_task(self._run_loop())
                 return
+            self._fail_queued_tasks_with_invalid_auth()
             await self._initialize_account_pool()
             self._start_generic_workers()
             self._start_listing_worker()
-            self._runner_task = asyncio.create_task(self._run_pool_supervisor())
+            self._runner_task = self._create_background_task(self._run_pool_supervisor())
 
     async def close(self) -> None:
         """停止后台调度循环并释放本调度器拥有的 browser 会话。
@@ -180,10 +193,41 @@ class SellerSpriteTaskScheduler:
         self._generic_worker_accounts.clear()
         self._listing_worker_task = None
 
+    def _create_background_task(self, coro: Any) -> asyncio.Task:
+        """从空 Context 创建跨请求后台任务，禁止继承提交者的 MCP 身份。"""
+        return contextvars.Context().run(asyncio.create_task, coro)
+
+    def _fail_queued_tasks_with_invalid_auth(self) -> None:
+        """在账号池刷新前关闭无效的逐任务认证，避免任务永久停留 queued。"""
+        for status in self.store.list_tasks(state="queued", limit=500):
+            job_id = str(status["job_id"])
+            has_mcp_run = False
+            try:
+                context = self.store.get_task_context(job_id)
+                expected_user_email = context.get("expected_user_email")
+                has_mcp_run = self._has_mcp_run(
+                    job_id,
+                    fail_closed=bool(expected_user_email),
+                )
+                if not expected_user_email and has_mcp_run:
+                    expected_user_email = str(self.store.get_mcp_run(job_id)["user_email"])
+                _resolve_task_auth(
+                    context,
+                    runtime_auth=self._runtime_auth.get(job_id),
+                    require_auth=bool(expected_user_email or has_mcp_run),
+                    expected_user_email=expected_user_email,
+                )
+            except Exception as exc:
+                error_payload = error_to_dict(exc)
+                self.store.fail_task(job_id=job_id, error_payload=error_payload)
+                if has_mcp_run:
+                    self.store.finish_mcp_run_failed(job_id, error_payload)
+                self._runtime_auth.pop(job_id, None)
+
     async def _initialize_account_pool(self) -> None:
         """首次读取账号接口并建立工作账号和冷备用账号。"""
-        provider = self._ensure_account_provider()
         try:
+            provider = self._ensure_account_provider(refresh_auth=True)
             accounts = provider.list_accounts()
         except Exception as exc:
             # 首次账号接口失败时保持任务 queued，由 supervisor 后续继续刷新。
@@ -209,7 +253,7 @@ class SellerSpriteTaskScheduler:
             worker_key = f"seller-sprite-slot-{self._next_worker_slot_number}"
             self._next_worker_slot_number += 1
             self._generic_worker_accounts[worker_key] = account
-            self._generic_worker_tasks[worker_key] = asyncio.create_task(
+            self._generic_worker_tasks[worker_key] = self._create_background_task(
                 self._run_generic_worker(worker_key, account)
             )
 
@@ -217,11 +261,12 @@ class SellerSpriteTaskScheduler:
         """为 Listing Analysis 保留独立的单账号串行消费协程。"""
         if not self._account_pool.working_accounts:
             return
-        self._listing_worker_task = asyncio.create_task(self._run_listing_worker())
+        self._listing_worker_task = self._create_background_task(self._run_listing_worker())
 
     async def _run_pool_supervisor(self) -> None:
         """维护账号工作槽生命周期，并在无账号时周期重试账号接口。"""
         while not self._stop_requested:
+            self._prune_runtime_auth()
             self._remove_finished_generic_workers()
             now = time.monotonic()
             refresh_interval = max(1.0, float(self.settings.account_cache_ttl_seconds))
@@ -253,8 +298,8 @@ class SellerSpriteTaskScheduler:
 
     async def _refresh_account_pool(self) -> None:
         """刷新账号接口，并用新账号或新凭证版本补足空工作槽。"""
-        provider = self._ensure_account_provider()
         try:
+            provider = self._ensure_account_provider(refresh_auth=True)
             accounts = provider.list_accounts(refresh=True)
         except Exception as exc:
             self._event_recorder.record_account_fetch_failure(
@@ -310,6 +355,31 @@ class SellerSpriteTaskScheduler:
         job_id = str(claimed["job_id"])
         attempted_accounts: set[SellerSpriteAccount] = set()
         status = claimed
+        context = self.store.get_task_context(job_id)
+        expected_user_email = context.get("expected_user_email")
+        has_mcp_run = False
+        try:
+            has_mcp_run = self._has_mcp_run(
+                job_id,
+                fail_closed=bool(expected_user_email),
+            )
+            if not expected_user_email and has_mcp_run:
+                expected_user_email = str(self.store.get_mcp_run(job_id)["user_email"])
+            session_id, jwt = _resolve_task_auth(
+                context,
+                runtime_auth=self._runtime_auth.pop(job_id, None),
+                require_auth=bool(expected_user_email or has_mcp_run),
+                expected_user_email=expected_user_email,
+            )
+        except Exception as exc:
+            await self._fail_generic_job(
+                job_id=job_id,
+                account_key=str(claimed["assigned_account_key"]),
+                generation=int(claimed["assignment_generation"]),
+                error=exc,
+                has_mcp_run=has_mcp_run,
+            )
+            return account
         while True:
             account_key = seller_sprite_account_key(account)
             attempted_accounts.add(account)
@@ -322,13 +392,11 @@ class SellerSpriteTaskScheduler:
                 / f"generation-{generation}"
             )
             request = replace(request, attempt_output_dir=str(attempt_dir))
-            context = self.store.get_task_context(job_id)
-            has_mcp_run = self._has_mcp_run(job_id)
             manager = self.manager_factory(
                 settings=self.settings,
                 account_provider=_FixedSellerSpriteAccountProvider(account),
-                jwt=context["jwt"],
-                session_id=context["session_id"],
+                jwt=jwt,
+                session_id=session_id,
             )
             started_at = time.monotonic()
             try:
@@ -416,8 +484,8 @@ class SellerSpriteTaskScheduler:
         """刷新账号接口后按原顺序选择未被当前任务尝试的冷备用。"""
         async with self._pool_lock:
             self._account_pool.mark_unavailable(failed_account)
-            provider = self._ensure_account_provider()
             try:
+                provider = self._ensure_account_provider(refresh_auth=True)
                 refreshed = provider.list_accounts(refresh=True)
             except Exception as exc:
                 self._event_recorder.record_account_fetch_failure(
@@ -506,17 +574,27 @@ class SellerSpriteTaskScheduler:
             # 关闭失败详情已由脱敏生命周期事件记录，这里只保留异常类型避免凭证正文进入日志。
             logger.warning("关闭卖家精灵故障账号会话失败：error=%s", type(exc).__name__)
 
-    def _ensure_account_provider(self) -> SellerSpriteAccountProvider:
-        """延迟创建使用当前认证上下文的账号接口 provider。"""
-        if self.account_provider is None:
+    def _ensure_account_provider(self, *, refresh_auth: bool = False) -> SellerSpriteAccountProvider:
+        """使用最新非敏感凭证引用创建公共账号接口 provider。"""
+        if self._account_provider_injected:
+            return self.account_provider
+        if self.account_provider is None or refresh_auth:
             from opscli.shared.integration_accounts import IntegrationAccountClient
 
+            session_id = None
+            jwt = None
+            if self._account_credential_scope:
+                session_id, jwt = _resolve_task_auth(
+                    {
+                        "credential_scope": self._account_credential_scope,
+                        "runtime_auth_required": False,
+                    },
+                    require_auth=True,
+                    expected_user_email=self._account_expected_user_email,
+                )
             self.account_provider = SellerSpriteAccountProvider(
                 self.settings,
-                integration_client=IntegrationAccountClient(
-                    jwt=self.jwt,
-                    session_id=self.session_id,
-                ),
+                integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
             )
         return self.account_provider
 
@@ -549,6 +627,7 @@ class SellerSpriteTaskScheduler:
                 await asyncio.sleep(self.poll_interval_seconds)
 
     async def _consume_once(self) -> None:
+        self._prune_runtime_auth()
         claimed = self.store.claim_next(
             queue_scope=QUEUE_SCOPE,
             worker_key=DEFAULT_WORKER_KEY,
@@ -565,16 +644,30 @@ class SellerSpriteTaskScheduler:
             logger.exception("卖家精灵任务调度执行异常，继续消费后续任务：job_id=%s", job_id)
 
     async def _run_one(self, job_id: str) -> None:
-        request = self.store.get_request(job_id)
-        context = self.store.get_task_context(job_id)
-        has_mcp_run = self._has_mcp_run(job_id)
-        manager = self.manager_factory(
-            settings=self.settings,
-            account_provider=self.account_provider,
-            jwt=context["jwt"],
-            session_id=context["session_id"],
-        )
+        has_mcp_run = False
         try:
+            request = self.store.get_request(job_id)
+            context = self.store.get_task_context(job_id)
+            runtime_auth = self._runtime_auth.pop(job_id, None)
+            expected_user_email = context.get("expected_user_email")
+            has_mcp_run = self._has_mcp_run(
+                job_id,
+                fail_closed=bool(expected_user_email),
+            )
+            if not expected_user_email and has_mcp_run:
+                expected_user_email = str(self.store.get_mcp_run(job_id)["user_email"])
+            session_id, jwt = _resolve_task_auth(
+                context,
+                runtime_auth=runtime_auth,
+                require_auth=bool(expected_user_email or has_mcp_run),
+                expected_user_email=expected_user_email,
+            )
+            manager = self.manager_factory(
+                settings=self.settings,
+                account_provider=self.account_provider,
+                jwt=jwt,
+                session_id=session_id,
+            )
             if has_mcp_run:
                 self.store.mark_mcp_run_running(job_id)
             if isinstance(manager, SellerSpriteApiManager):
@@ -601,6 +694,8 @@ class SellerSpriteTaskScheduler:
             self.store.fail_task(job_id=job_id, error_payload=error_payload)
             if has_mcp_run:
                 self.store.finish_mcp_run_failed(job_id, error_payload)
+        finally:
+            self._runtime_auth.pop(job_id, None)
 
     def _default_manager_factory(self, **kwargs) -> SellerSpriteApiManager:
         return SellerSpriteApiManager(
@@ -653,6 +748,16 @@ class SellerSpriteTaskScheduler:
         """把 browser worker 的白名单生命周期状态转交统一事件记录器。"""
         self._event_recorder.record_session_state_payload(account, payload)
 
+    def _prune_runtime_auth(self) -> None:
+        """清理已被其他进程终止的排队任务凭证，避免敏感信息滞留内存。"""
+        for job_id in list(self._runtime_auth):
+            try:
+                state = str(self.store.get_status(job_id)["state"])
+            except Exception:
+                continue
+            if state in {"succeeded", "failed", "cancelled"}:
+                self._runtime_auth.pop(job_id, None)
+
     def _assigned_account_name(self) -> str:
         """返回队列记录里的账号标识，不在领取任务前触发账号接口。"""
         return self.settings.account_name or DEFAULT_WORKER_KEY
@@ -669,7 +774,7 @@ class SellerSpriteTaskScheduler:
             base_dir = Path.cwd() / base_dir
         return base_dir.resolve() / str(request.job_id)
 
-    def _has_mcp_run(self, job_id: str) -> bool:
+    def _has_mcp_run(self, job_id: str, *, fail_closed: bool = False) -> bool:
         """探测任务是否存在 MCP 调用记录。"""
         try:
             self.store.get_mcp_run(job_id)
@@ -677,8 +782,10 @@ class SellerSpriteTaskScheduler:
         except ValueError:
             return False
         except Exception:
-            # MCP 探测阶段以主任务可执行为优先，探测异常按无 MCP 记录降级处理。
-            logger.warning("探测 MCP 调用记录失败，按普通任务继续执行：job_id=%s", job_id, exc_info=True)
+            if fail_closed:
+                raise
+            # 兼容没有 MCP 身份标记的本地旧任务；新 MCP 任务会携带提交者并严格失败关闭。
+            logger.warning("探测 MCP 调用记录失败，按普通旧任务继续执行：job_id=%s", job_id, exc_info=True)
             return False
 
     def _build_mcp_export_payload(
@@ -699,8 +806,6 @@ def get_task_scheduler(
     *,
     settings: SellerSpriteSettings | None = None,
     account_provider=None,
-    jwt: str | None = None,
-    session_id: str | None = None,
 ) -> SellerSpriteTaskScheduler:
     """按事件循环和队列库路径复用任务调度器实例。"""
     current_settings = settings or load_settings()
@@ -717,15 +822,8 @@ def get_task_scheduler(
         scheduler = SellerSpriteTaskScheduler(
             settings=current_settings,
             account_provider=account_provider,
-            jwt=jwt,
-            session_id=session_id,
         )
         _SCHEDULERS[key] = scheduler
-        return scheduler
-    if jwt:
-        scheduler.jwt = jwt
-    if session_id:
-        scheduler.session_id = session_id
     return scheduler
 
 
@@ -758,3 +856,39 @@ def _login_stage(exc: Exception, failover_count: int) -> str:
     if isinstance(exc, SellerSpriteApiError) and exc.is_session_expired():
         return "relogin"
     return "failover" if failover_count else "initial"
+
+
+def _resolve_task_auth(
+    context: dict[str, Any],
+    *,
+    runtime_auth: tuple[str, str | None] | None = None,
+    require_auth: bool = False,
+    expected_user_email: str | None = None,
+) -> tuple[str | None, str | None]:
+    """优先使用逐任务内存凭证，否则从统一 CredentialStore 读取并严格失败关闭。"""
+    if runtime_auth:
+        return runtime_auth
+    if context.get("runtime_auth_required"):
+        raise SellerSpriteConfigError("显式任务凭证已随服务重启丢失，请重新提交卖家精灵任务")
+    credential_scope = context.get("credential_scope")
+    if credential_scope:
+        from opscli.mcp.credential_cache import get_credential_cache
+
+        base_dir = None if credential_scope == "default" else Path(str(credential_scope))
+        cache = get_credential_cache(base_dir=base_dir)
+        session_id = cache.get_session_id()
+        if not session_id:
+            raise SellerSpriteConfigError("卖家精灵任务凭证作用域未登录，请重新完成 OPS 授权后提交任务")
+        actual_user_email = cache.get_email()
+        if (
+            expected_user_email
+            and str(actual_user_email or "").strip().lower()
+            != expected_user_email.strip().lower()
+        ):
+            raise SellerSpriteConfigError("卖家精灵任务凭证用户与提交用户不一致，请重新完成 OPS 授权后提交任务")
+        return session_id, cache.get_jwt("ops")
+    # 兼容升级前已经排队的旧任务；旧字段会在任务结束时清空。
+    session_id = context.get("session_id")
+    if not session_id and require_auth:
+        raise SellerSpriteConfigError("卖家精灵任务缺少 OPS 授权，禁止回退服务器默认账号")
+    return str(session_id) if session_id else None, context.get("jwt")

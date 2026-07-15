@@ -12,13 +12,26 @@ import asyncio
 import html
 import importlib.util
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 from uuid import uuid4
 
+from opscli.asin_data.services.bi_report_data import (
+    AsinBiReportDataClient,
+    LISTING_REPORT_SOURCE_KEYS,
+    build_bi_report_data_placeholder,
+    select_bi_report_data_for_asin,
+    summarize_bi_report_data,
+)
+from opscli.asin_data.services.merged_report_renderer import render_merged_report_text
 from opscli.asin_data.services.report_files import AsinReportFileClient, AsinReportFileNotFoundError
+from opscli.asin_data.services.split_package_builder import (
+    SPLIT_FILE_KEYS,
+    build_split_package,
+)
 from opscli.amazon.services.manager import AmazonManager
 from opscli.amazon_rufus.services.answer_report_writer import AnswerReportWriter
 from opscli.amazon_rufus.services.manager import RufusManager
@@ -37,7 +50,7 @@ DEFAULT_LEGACY_SCRIPT = (
     / "scripts"
     / "collect_asin_data.py"
 )
-DEFAULT_LISTING_ANALYSIS_POLL_ATTEMPTS = 180
+DEFAULT_LISTING_ANALYSIS_POLL_ATTEMPTS = 600
 DEFAULT_LISTING_ANALYSIS_POLL_INTERVAL_SECONDS = 2.0
 WINDOWS_COMPAT_EXPORT_PATH_LIMIT = 240
 
@@ -56,11 +69,13 @@ class AsinDataCollector:
         report_writer: AnswerReportWriter | None = None,
         file_upload_client: FileUploadClient | None = None,
         report_file_client: AsinReportFileClient | None = None,
+        bi_report_data_client: AsinBiReportDataClient | None = None,
         legacy_module: ModuleType | None = None,
     ) -> None:
         self.legacy = legacy_module or load_legacy_collector()
         self.file_upload_client = file_upload_client or FileUploadClient()
         self.report_file_client = report_file_client or AsinReportFileClient()
+        self.bi_report_data_client = bi_report_data_client or AsinBiReportDataClient()
         self.runner = DirectOpsRunner(
             self.legacy,
             query_manager=query_manager,
@@ -106,6 +121,8 @@ class AsinDataCollector:
                 asin_result = self.legacy.collect_one_asin(args, record, output_root, command_log, error_log, query_bundle)
                 asin_results.append(asin_result)
 
+            bi_report_data = self._collect_bi_report_data(records, asin_results, args, error_log)
+
             if report_files is None and args.fetch_report_files and not args.dry_run:
                 report_files = self._fetch_report_files(records, asin_results, error_log)
             elif report_files is not None:
@@ -116,29 +133,53 @@ class AsinDataCollector:
 
             summary = self.legacy.build_summary(records, asin_results, input_errors, output_root, started_at, args)
             summary["options"]["fetch_report_files"] = args.fetch_report_files
+            summary["options"]["skip_bi_report_data"] = args.skip_bi_report_data
+            summary["bi_report_data"] = summarize_bi_report_data(bi_report_data)
             if report_files is not None:
                 summary["report_files"] = report_files
-            frontend_bundle = self.legacy.build_frontend_bundle(summary, asin_results)
-            frontend_json_path = output_root / "frontend-data.json"
-            frontend_markdown_path = output_root / "frontend-data.md"
-            frontend_html_path = output_root / "frontend-data.html"
-            report_txt_path = self._write_report_txt(output_root, frontend_bundle, records)
-            self.legacy.write_json(frontend_json_path, frontend_bundle)
-            self.legacy.write_text(frontend_markdown_path, self.legacy.render_frontend_markdown(frontend_bundle))
-            self.legacy.write_text(frontend_html_path, self._render_frontend_html(frontend_bundle))
-            summary["files"]["frontend_html"] = frontend_html_path.as_posix()
-            summary["files"]["asin_report_txt"] = report_txt_path.as_posix()
+            if args.write_frontend_outputs:
+                frontend_bundle = self.legacy.build_frontend_bundle(summary, asin_results)
+                frontend_json_path = output_root / "frontend-data.json"
+                frontend_markdown_path = output_root / "frontend-data.md"
+                frontend_html_path = output_root / "frontend-data.html"
+                report_txt_path = self._write_report_txt(output_root, frontend_bundle, records, summary, asin_results)
+                self.legacy.write_json(frontend_json_path, frontend_bundle)
+                self.legacy.write_text(frontend_markdown_path, self.legacy.render_frontend_markdown(frontend_bundle))
+                self.legacy.write_text(frontend_html_path, self._render_frontend_html(frontend_bundle))
+                summary["files"]["frontend_html"] = frontend_html_path.as_posix()
+                summary["files"]["asin_report_txt"] = report_txt_path.as_posix()
+            else:
+                for file_key in ("frontend_data", "frontend_markdown", "frontend_html", "asin_report_txt"):
+                    summary["files"].pop(file_key, None)
+            split_package = build_split_package(
+                output_root=output_root,
+                asin_results=asin_results,
+                summary=summary,
+                file_keys=args.split_file_keys,
+                include_zip=args.build_split_package_zip,
+            )
+            summary["files"]["asin_data_package_dir"] = split_package["package_dir"]
+            if split_package.get("zip_path"):
+                summary["files"]["asin_data_package_zip"] = split_package["zip_path"]
+            summary["asin_data_package"] = split_package
             upload = None
-            if args.upload:
-                upload = self._upload_report_txt(
-                    report_txt_path,
+            if args.upload and split_package.get("zip_path"):
+                upload = self._upload_split_package(
+                    Path(split_package["zip_path"]),
                     run_id=run_id,
                     records=records,
                     summary=summary,
                 )
-                summary["files"]["frontend_upload_url"] = upload["url"]
+                summary["files"]["asin_data_package_upload_url"] = upload["url"]
                 summary["files"]["asin_report_upload_url"] = upload["url"]
                 summary["upload"] = upload
+                file_uploads = self._upload_split_package_files(
+                    split_package,
+                    run_id=run_id,
+                    records=records,
+                )
+                summary["files"]["asin_data_file_urls"] = file_uploads
+                summary["asin_data_files"] = file_uploads
             self.legacy.write_json(output_root / "asin-data-summary.json", summary)
             self.legacy.write_json(output_root / "manifest.json", summary)
         finally:
@@ -159,6 +200,7 @@ class AsinDataCollector:
             "report_files": summary.get("report_files"),
             "report_file_url": report_file_url,
             "aliyun_url": aliyun_url,
+            "asin_data_files": summary.get("asin_data_files"),
         }
 
     def _build_args(self, **kwargs: Any) -> argparse.Namespace:
@@ -179,8 +221,9 @@ class AsinDataCollector:
             skip_listing_analysis=kwargs.get("skip_listing_analysis", False),
             skip_amazon=kwargs.get("skip_amazon", False),
             skip_query=kwargs.get("skip_query", False),
+            skip_bi_report_data=kwargs.get("skip_bi_report_data", False),
             skip_sales_query=kwargs.get("skip_sales_query", False),
-            skip_crawler_query=kwargs.get("skip_crawler_query", False),
+            skip_crawler_query=kwargs.get("skip_crawler_query", True),
             skip_rufus=kwargs.get("skip_rufus", False),
             seller_sprite_period=kwargs.get("seller_sprite_period", "30d"),
             seller_sprite_page_size=kwargs.get("seller_sprite_page_size", 100),
@@ -202,21 +245,210 @@ class AsinDataCollector:
             rufus_skills_dir=kwargs.get("rufus_skills_dir", ".agents/skills"),
             rufus_timeout_seconds=kwargs.get("rufus_timeout_seconds", 180),
             rufus_login_timeout_seconds=kwargs.get("rufus_login_timeout_seconds", 180),
+            rufus_parallel=kwargs.get("rufus_parallel", False),
+            rufus_concurrency=kwargs.get("rufus_concurrency", 3),
+            rufus_retry=kwargs.get("rufus_retry", 0),
+            rufus_strict_answer=kwargs.get("rufus_strict_answer", False),
             skip_rufus_login_recovery=kwargs.get("skip_rufus_login_recovery", False),
             sales_table_id=kwargs.get("sales_table_id"),
             sales_dataset_alias=kwargs.get("sales_dataset_alias", self.legacy.DEFAULT_SALES_ALIAS),
             sales_field_mode=kwargs.get("sales_field_mode", "full"),
             sales_start=kwargs.get("sales_start"),
             sales_end=kwargs.get("sales_end"),
+            bi_report_source_keys=kwargs.get("bi_report_source_keys"),
             query_chunk_size=kwargs.get("query_chunk_size", 100),
             crawler_table_id=kwargs.get("crawler_table_id"),
             crawler_dataset_alias=kwargs.get("crawler_dataset_alias", self.legacy.DEFAULT_CRAWLER_ALIAS),
             crawler_field_mode=kwargs.get("crawler_field_mode", "full"),
             upload=kwargs.get("upload", False),
             fetch_report_files=kwargs.get("fetch_report_files", False),
+            split_file_keys=tuple(kwargs.get("split_file_keys") or SPLIT_FILE_KEYS),
+            build_split_package_zip=kwargs.get("build_split_package_zip", True),
+            write_frontend_outputs=kwargs.get("write_frontend_outputs", True),
         )
         self._validate_args(args)
         return args
+
+    def _collect_bi_report_data(
+        self,
+        records: list[dict[str, Any]],
+        asin_results: list[dict[str, Any]],
+        args: argparse.Namespace,
+        error_log: Any,
+    ) -> dict[str, Any]:
+        asins = [str(record.get("asin") or "").strip().upper() for record in records if record.get("asin")]
+        site_by_asin = {
+            str(record.get("asin") or "").strip().upper(): str(record.get("site") or args.site or "US").strip().upper()
+            for record in records
+            if record.get("asin")
+        }
+        if args.skip_bi_report_data:
+            bundle = build_bi_report_data_placeholder(
+                asins=asins,
+                status="skipped",
+                reason="BI report data skipped by --skip-bi-report-data",
+                source_keys=args.bi_report_source_keys,
+            )
+        elif args.dry_run:
+            bundle = build_bi_report_data_placeholder(
+                asins=asins,
+                status="planned",
+                reason="BI report data endpoints will be fetched during execution",
+                source_keys=args.bi_report_source_keys,
+            )
+        else:
+            if self._can_batch_bi_report_data(args.bi_report_source_keys):
+                bundle = self.bi_report_data_client.fetch(
+                    asins=asins,
+                    start_date=args.sales_start,
+                    end_date=args.sales_end,
+                    source_keys=args.bi_report_source_keys,
+                    site_by_asin=site_by_asin,
+                    default_site=args.site,
+                )
+                bundle["request_mode"] = "batch"
+                self._attach_bi_report_data(asin_results, bundle, error_log)
+                return bundle
+
+            bundles: dict[str, dict[str, Any]] = {}
+            for asin_result in asin_results:
+                asin = str(asin_result.get("asin") or "").strip().upper()
+                if not asin:
+                    continue
+                asin_bundle = self.bi_report_data_client.fetch(
+                    asins=[asin],
+                    start_date=args.sales_start,
+                    end_date=args.sales_end,
+                    source_keys=args.bi_report_source_keys,
+                    site_by_asin=site_by_asin,
+                    default_site=args.site,
+                )
+                bundles[asin] = asin_bundle
+                self._attach_bi_report_data([asin_result], asin_bundle, error_log)
+            return self._merge_per_asin_bi_report_data(bundles, asins=asins)
+
+        self._attach_bi_report_data(asin_results, bundle, error_log)
+        return bundle
+
+    @staticmethod
+    def _can_batch_bi_report_data(source_keys: list[str] | tuple[str, ...] | None) -> bool:
+        """仅对不依赖刊登详情接口的 BI 数据源启用批量取数。"""
+        if source_keys is None:
+            return False
+        normalized = {str(key).strip() for key in source_keys if str(key).strip()}
+        return not any(key in LISTING_REPORT_SOURCE_KEYS for key in normalized)
+
+    @classmethod
+    def _merge_per_asin_bi_report_data(
+        cls,
+        bundles: dict[str, dict[str, Any]],
+        *,
+        asins: list[str],
+    ) -> dict[str, Any]:
+        if len(bundles) == 1:
+            bundle = dict(next(iter(bundles.values())))
+            bundle["request_mode"] = "per_asin"
+            return bundle
+        statuses = [bundle.get("status") for bundle in bundles.values() if isinstance(bundle, dict)]
+        return {
+            "status": cls._aggregate_bi_report_data_status(statuses),
+            "asins": asins,
+            "count": len(asins),
+            "request_mode": "per_asin",
+            "per_asin": bundles,
+        }
+
+    @staticmethod
+    def _aggregate_bi_report_data_status(statuses: list[Any]) -> str:
+        if not statuses:
+            return "skipped"
+        if all(status == "success" for status in statuses):
+            return "success"
+        if any(status == "success" for status in statuses):
+            return "partial"
+        if all(status == "planned" for status in statuses):
+            return "planned"
+        if all(status == "skipped" for status in statuses):
+            return "skipped"
+        return "failed"
+
+    def _attach_bi_report_data(
+        self,
+        asin_results: list[dict[str, Any]],
+        bundle: dict[str, Any],
+        error_log: Any,
+    ) -> None:
+        for asin_result in asin_results:
+            asin = str(asin_result.get("asin") or "").strip().upper()
+            payload = select_bi_report_data_for_asin(bundle, asin=asin)
+            asin_result["bi_report_data"] = payload
+            self._attach_bi_report_data_to_frontend(asin_result, payload)
+            failed_sources = self._failed_bi_report_sources(payload)
+            if failed_sources:
+                errors = asin_result.setdefault("errors", [])
+                if isinstance(errors, list):
+                    errors.extend(failed_sources)
+        self._write_bi_report_data_errors(bundle, error_log)
+
+    @staticmethod
+    def _failed_bi_report_sources(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        sources = payload.get("sources") if isinstance(payload.get("sources"), dict) else {}
+        failed: list[dict[str, Any]] = []
+        for key, source in sources.items():
+            if not isinstance(source, dict) or source.get("status") != "failed":
+                continue
+            failed.append(
+                {
+                    "source": f"bi_report_data.{key}",
+                    "status": "failed",
+                    "endpoint": source.get("endpoint"),
+                    "error_message": source.get("error_message"),
+                }
+            )
+        return failed
+
+    @staticmethod
+    def _write_bi_report_data_errors(bundle: dict[str, Any], error_log: Any) -> None:
+        sources = bundle.get("sources") if isinstance(bundle.get("sources"), dict) else {}
+        for key, source in sources.items():
+            if not isinstance(source, dict) or source.get("status") != "failed":
+                continue
+            error_log.write(
+                {
+                    "source": f"bi_report_data.{key}",
+                    "status": "failed",
+                    "endpoint": source.get("endpoint"),
+                    "asins": bundle.get("asins"),
+                    "error_message": source.get("error_message"),
+                }
+            )
+
+    @staticmethod
+    def _attach_bi_report_data_to_frontend(asin_result: dict[str, Any], payload: dict[str, Any]) -> None:
+        frontend_data = asin_result.get("frontend_data")
+        if not isinstance(frontend_data, dict):
+            return
+        base_section = frontend_data.get("基础数据")
+        if not isinstance(base_section, dict):
+            base_section = frontend_data.get("鍩虹鏁版嵁")
+        if not isinstance(base_section, dict):
+            return
+        sources = payload.get("sources") if isinstance(payload.get("sources"), dict) else {}
+        base_section["BI接口数据"] = {
+            "状态": payload.get("status"),
+            "数据源": {
+                str(source.get("label") or key): {
+                    "接口": source.get("endpoint"),
+                    "状态": source.get("status"),
+                    "行数": source.get("row_count"),
+                    "源行数": source.get("source_row_count"),
+                    "错误": source.get("error_message"),
+                    "数据": source.get("rows"),
+                }
+                for key, source in sources.items()
+                if isinstance(source, dict)
+            },
+        }
 
     def _fetch_report_files(
         self,
@@ -334,7 +566,7 @@ class AsinDataCollector:
         url = items[0].get("url") if isinstance(items[0], dict) else None
         return url if isinstance(url, str) and url.strip() else None
 
-    def _upload_report_txt(
+    def _upload_split_package(
         self,
         path: Path,
         *,
@@ -344,15 +576,16 @@ class AsinDataCollector:
     ) -> dict[str, Any]:
         upload = self.file_upload_client.upload(
             path,
-            purpose="asin_data_report_txt",
+            purpose="asin_data_split_package_zip",
             folder="asin-data",
             public="1",
             metadata={
                 "run_id": run_id,
                 "asin_count": len(records),
                 "asins": [record.get("asin") for record in records],
-                "report_type": "asin_data_report_txt",
+                "report_type": "asin_data_split_package_zip",
                 "report_filename": path.name,
+                "package_filename": path.name,
                 "frontend_html": "frontend-data.html",
                 "frontend_markdown": "frontend-data.md",
                 "source_filename": path.name,
@@ -360,14 +593,80 @@ class AsinDataCollector:
                 "summary": summary.get("summary"),
             },
         )
+        self._validate_split_package_upload_url(upload.url, records)
         return {
             "url": upload.url,
             "path": path.as_posix(),
             "upload_path": path.as_posix(),
-            "purpose": "asin_data_report_txt",
+            "purpose": "asin_data_split_package_zip",
             "folder": "asin-data",
             "raw": upload.raw,
         }
+
+    def _upload_split_package_files(
+        self,
+        split_package: dict[str, Any],
+        *,
+        run_id: str,
+        records: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Upload each ASIN's 6 split files individually and return per-file URLs.
+
+        This complements :meth:`_upload_split_package` (whole zip) by giving the
+        downstream AI a way to fetch one file at a time instead of the whole zip,
+        avoiding oversized context windows.
+        """
+        asin_set = {str(record.get("asin") or "").strip().upper() for record in records}
+        items: list[dict[str, Any]] = []
+        files_uploaded = 0
+        for entry in split_package.get("items", []) or []:
+            asin = str(entry.get("asin") or "").strip().upper()
+            if not asin or (asin_set and asin not in asin_set):
+                continue
+            file_paths = entry.get("files") if isinstance(entry.get("files"), dict) else {}
+            per_file: dict[str, Any] = {}
+            for file_key in SPLIT_FILE_KEYS:
+                path_text = file_paths.get(file_key)
+                if not isinstance(path_text, str) or not path_text.strip():
+                    continue
+                file_path = Path(path_text)
+                if not file_path.exists():
+                    continue
+                try:
+                    upload = self.file_upload_client.upload(
+                        file_path,
+                        purpose="asin_data_file",
+                        folder="asin-data",
+                        public="1",
+                        metadata={
+                            "run_id": run_id,
+                            "asin": asin,
+                            "file_key": file_key,
+                            "report_filename": file_path.name,
+                        },
+                    )
+                except Exception:
+                    continue
+                per_file[file_key] = {
+                    "url": upload.url,
+                    "file_name": file_path.name,
+                    "file_path": file_path.as_posix(),
+                }
+                files_uploaded += 1
+            items.append({"asin": asin, "files": per_file})
+        return {"files_uploaded": files_uploaded, "items": items}
+
+    @classmethod
+    def _validate_split_package_upload_url(cls, url: str, records: list[dict[str, Any]]) -> None:
+        asin = cls._single_record_asin(records)
+        if not asin:
+            return
+        pattern = rf"/asin-data/\d{{4}}/\d{{2}}/\d+-{re.escape(asin)}-asin-data-package\.zip(?:\?.*)?$"
+        if not re.search(pattern, url):
+            raise ValueError(
+                "ASIN data package upload URL format mismatch: "
+                f"expected /asin-data/YYYY/MM/<number>-{asin}-asin-data-package.zip, got {url}"
+            )
 
     @staticmethod
     def _normalize_upload_paths(upload: dict[str, Any]) -> dict[str, Any]:
@@ -377,14 +676,37 @@ class AsinDataCollector:
                 normalized[key] = str(normalized[key]).replace("\\", "/")
         return normalized
 
-    def _write_report_txt(self, output_root: Path, frontend_bundle: dict[str, Any], records: list[dict[str, Any]]) -> Path:
+    def _write_report_txt(
+        self,
+        output_root: Path,
+        frontend_bundle: dict[str, Any],
+        records: list[dict[str, Any]],
+        summary: dict[str, Any],
+        asin_results: list[dict[str, Any]],
+    ) -> Path:
         report_path = output_root / self._report_txt_filename(records)
-        report_text = self._render_report_txt(frontend_bundle, records)
+        report_text = self._render_report_txt(
+            frontend_bundle,
+            records,
+            summary=summary,
+            asin_results=asin_results,
+            output_root=output_root,
+        )
         with report_path.open("w", encoding="utf-8-sig", newline="\n") as handle:
             handle.write(report_text)
         return report_path
 
-    def _render_report_txt(self, frontend_bundle: dict[str, Any], records: list[dict[str, Any]]) -> str:
+    def _render_report_txt(
+        self,
+        frontend_bundle: dict[str, Any],
+        records: list[dict[str, Any]],
+        *,
+        summary: dict[str, Any] | None = None,
+        asin_results: list[dict[str, Any]] | None = None,
+        output_root: Path | None = None,
+    ) -> str:
+        if len(records) == 1 and asin_results and len(asin_results) == 1:
+            return render_merged_report_text(asin_results[0], summary=summary, output_root=output_root)
         markdown = self.legacy.render_frontend_markdown(frontend_bundle)
         asin = self._single_record_asin(records)
         if asin:
@@ -546,6 +868,10 @@ class AsinDataCollector:
             raise ValueError("--rufus-timeout-seconds must be >= 1")
         if args.rufus_login_timeout_seconds < 1:
             raise ValueError("--rufus-login-timeout-seconds must be >= 1")
+        if args.rufus_concurrency < 1:
+            raise ValueError("--rufus-concurrency must be >= 1")
+        if args.rufus_retry < 0:
+            raise ValueError("--rufus-retry must be >= 0")
 
 
 class DirectOpsRunner:
@@ -750,6 +1076,10 @@ class DirectOpsRunner:
             timeout_seconds=_required_int_option(command, "--timeout", default=180),
             include_upload_payload="--no-upload-payload" not in command,
             submit_upload="--submit-upload" in command,
+            parallel="--parallel" in command,
+            concurrency=_required_int_option(command, "--concurrency", default=3),
+            retry=_required_int_option(command, "--retry", default=0),
+            strict_answer="--strict-answer" in command,
         )
 
 

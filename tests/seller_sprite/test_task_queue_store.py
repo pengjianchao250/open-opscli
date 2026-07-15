@@ -279,6 +279,8 @@ def test_store_rejects_stale_generation_without_updating_mcp_terminal_state(tmp_
         queue_scope="seller_sprite",
         root_dir=tmp_path / "job-mcp-cas",
         user_email="user@example.com",
+        credential_scope=str(tmp_path / "credentials-user"),
+        expected_user_email="user@example.com",
     )
     claimed = store.claim_next_generic_for_account(
         queue_scope="seller_sprite",
@@ -319,6 +321,51 @@ def test_store_rejects_stale_generation_without_updating_mcp_terminal_state(tmp_
     assert stale_committed is False
     assert current_committed is True
     assert store.get_mcp_run("job-mcp-cas")["result_export_filename"] == "current.json"
+    assert store.get_task_context("job-mcp-cas") == {
+        "credential_scope": None,
+        "runtime_auth_required": False,
+        "expected_user_email": None,
+        "session_id": None,
+        "jwt": None,
+    }
+
+
+def test_store_clears_auth_when_current_generation_fails_atomically(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    request = _request(job_id="job-mcp-auth-failed")
+    store.enqueue_owned_mcp_run(
+        request=request,
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "job-mcp-auth-failed",
+        user_email="user@example.com",
+        credential_scope=str(tmp_path / "credentials-user"),
+        expected_user_email="user@example.com",
+    )
+    claimed = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key-1",
+        assigned_account="account-1",
+        worker_key="slot-1",
+    )
+
+    committed = store.fail_task_and_mcp_run_if_current(
+        job_id="job-mcp-auth-failed",
+        account_key="account-key-1",
+        assignment_generation=claimed["assignment_generation"],
+        error_payload={"code": "TEST", "message": "failed"},
+        update_mcp_run=True,
+    )
+
+    assert committed is True
+    assert store.get_task_context("job-mcp-auth-failed") == {
+        "credential_scope": None,
+        "runtime_auth_required": False,
+        "expected_user_email": None,
+        "session_id": None,
+        "jwt": None,
+    }
 
 
 def test_store_records_queryable_account_login_failure_event(tmp_path: Path):
@@ -465,7 +512,7 @@ def test_store_marks_task_finished_and_persists_result_metadata(tmp_path: Path):
     assert status["position"] is None
 
 
-def test_store_persists_task_auth_context(tmp_path: Path):
+def test_store_persists_only_non_sensitive_credential_scope(tmp_path: Path):
     from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
 
     store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
@@ -473,14 +520,71 @@ def test_store_persists_task_auth_context(tmp_path: Path):
         request=_request(job_id="job-auth"),
         queue_scope="seller_sprite",
         root_dir=tmp_path / "job-auth",
-        session_id="sid-1",
-        jwt="jwt-1",
+        credential_scope=str(tmp_path / "credentials-user-1"),
+        expected_user_email="user-1@example.com",
     )
 
     context = store.get_task_context("job-auth")
 
-    assert context["session_id"] == "sid-1"
-    assert context["jwt"] == "jwt-1"
+    assert context == {
+        "credential_scope": str(tmp_path / "credentials-user-1"),
+        "runtime_auth_required": False,
+        "expected_user_email": "user-1@example.com",
+        "session_id": None,
+        "jwt": None,
+    }
+
+
+def test_store_clears_task_auth_context_after_success(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_request(job_id="job-auth-success"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "job-auth-success",
+        credential_scope=str(tmp_path / "credentials-success"),
+    )
+
+    store.finish_task(
+        job_id="job-auth-success",
+        result_path=str(tmp_path / "job-auth-success" / "result.json"),
+        row_count=0,
+        export_payload=None,
+    )
+
+    assert store.get_task_context("job-auth-success") == {
+        "credential_scope": None,
+        "runtime_auth_required": False,
+        "expected_user_email": None,
+        "session_id": None,
+        "jwt": None,
+    }
+
+
+def test_store_clears_task_auth_context_after_failure(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_request(job_id="job-auth-failed"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "job-auth-failed",
+        credential_scope=str(tmp_path / "credentials-failed"),
+    )
+
+    store.fail_task(
+        job_id="job-auth-failed",
+        error_payload={"code": "TEST", "message": "failed"},
+    )
+
+    assert store.get_task_context("job-auth-failed") == {
+        "credential_scope": None,
+        "runtime_auth_required": False,
+        "expected_user_email": None,
+        "session_id": None,
+        "jwt": None,
+    }
 
 
 def test_store_atomic_owned_enqueue_persists_queue_and_mcp_run(tmp_path: Path):
@@ -495,15 +599,18 @@ def test_store_atomic_owned_enqueue_persists_queue_and_mcp_run(tmp_path: Path):
         queue_scope="seller_sprite",
         root_dir=tmp_path / "atomic-job-1",
         user_email="user@example.com",
-        session_id="sid-1",
-        jwt="jwt-1",
+        credential_scope=str(tmp_path / "credentials-user"),
+        expected_user_email="user@example.com",
     )
 
     assert queued["job_id"] == "atomic-job-1"
     assert queued["state"] == "queued"
     assert store.get_task_context("atomic-job-1") == {
-        "session_id": "sid-1",
-        "jwt": "jwt-1",
+        "credential_scope": str(tmp_path / "credentials-user"),
+        "runtime_auth_required": False,
+        "expected_user_email": "user@example.com",
+        "session_id": None,
+        "jwt": None,
     }
     assert store.get_mcp_run("atomic-job-1")["user_email"] == "user@example.com"
 

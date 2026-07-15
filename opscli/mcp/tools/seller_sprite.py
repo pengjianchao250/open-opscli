@@ -20,7 +20,7 @@ from typing import Any
 
 from opscli.mcp.quota import get_quota_limiter
 
-from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
+from .helpers import _err, _get_auth_pair, _get_credential_dir, _ok, _parse_json_arg
 
 # 状态接口单次等待最多 30 秒，避免 MCP 请求长期占用连接。
 SELLER_SPRITE_STATUS_MAX_WAIT_SECONDS = 30
@@ -35,11 +35,11 @@ def _seller_sprite_skill_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "skills" / "templates" / "ops-seller-sprite"
 
 
-def _get_task_scheduler(*, jwt: str | None = None, session_id: str | None = None):
+def _get_task_scheduler():
     """返回卖家精灵任务调度器。"""
     from opscli.seller_sprite.services import get_task_scheduler
 
-    return get_task_scheduler(jwt=jwt, session_id=session_id)
+    return get_task_scheduler()
 
 
 def _get_task_queue_store():
@@ -47,6 +47,35 @@ def _get_task_queue_store():
     from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
 
     return SellerSpriteTaskQueueStore()
+
+
+def _get_task_credential_scope() -> str:
+    """返回可持久化的非敏感凭证作用域引用。"""
+    credential_dir = _get_credential_dir()
+    return str(credential_dir) if credential_dir else "default"
+
+
+async def _enqueue_task_with_auth(
+    scheduler: Any,
+    request: Any,
+    *,
+    runtime_auth_required: bool,
+) -> dict[str, Any]:
+    """仅用当前 MCP 用户的统一凭证作用域提交任务。"""
+    if runtime_auth_required:
+        raise ValueError(
+            "卖家精灵 MCP 异步任务不接受显式 session_id/jwt；"
+            "请使用当前 X-MCP-API-Key 对应的 OPS 授权凭证"
+        )
+    user_email = _get_current_mcp_user_email()
+    if not user_email:
+        raise ValueError("当前 MCP 用户邮箱缺失，无法安全提交卖家精灵任务")
+    kwargs: dict[str, Any] = {
+        "credential_scope": _get_task_credential_scope(),
+        "expected_user_email": user_email,
+        "mcp_user_email": user_email,
+    }
+    return await scheduler.enqueue(request, **kwargs)
 
 
 def _get_current_mcp_user_email() -> str | None:
@@ -643,10 +672,11 @@ async def seller_sprite_run(
             job_id=job_id,
         )
         request = _prepare_request_for_enqueue(raw_request)
-        scheduler = _get_task_scheduler(jwt=jw, session_id=sid)
-        queued_status = await scheduler.enqueue(
+        scheduler = _get_task_scheduler()
+        queued_status = await _enqueue_task_with_auth(
+            scheduler,
             request,
-            mcp_user_email=user_email,
+            runtime_auth_required=bool(session_id or jwt),
         )
         return _ok(queued_status)
     except Exception as exc:
@@ -712,8 +742,14 @@ async def seller_sprite_start(
             output_dir=output_dir,
             job_id=job_id,
         )
-        scheduler = _get_task_scheduler(jwt=jw, session_id=sid)
-        return _ok(await scheduler.enqueue(request))
+        scheduler = _get_task_scheduler()
+        return _ok(
+            await _enqueue_task_with_auth(
+                scheduler,
+                request,
+                runtime_auth_required=bool(session_id or jwt),
+            )
+        )
     except Exception as exc:
         return _err(
             exc,
@@ -782,11 +818,12 @@ async def seller_sprite_listing_analysis_submit(
             job_id=job_id,
         )
         request = _prepare_request_for_enqueue(raw_request)
-        scheduler = _get_task_scheduler(jwt=jw, session_id=sid)
+        scheduler = _get_task_scheduler()
         return _ok(
-            await scheduler.enqueue(
+            await _enqueue_task_with_auth(
+                scheduler,
                 request,
-                mcp_user_email=user_email,
+                runtime_auth_required=bool(session_id or jwt),
             )
         )
     except Exception as exc:

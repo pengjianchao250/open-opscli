@@ -1,43 +1,51 @@
 # Codex Usage Guide
 
-This guide tells Codex how to use the official `opscli asin-data` commands.
+This guide tells Codex how to use the current ASIN inspection data commands. The command protocol is documented in `docs/guide/ASIN巡检AI取数命令操作手册.md`.
 
-## Entry Point
+## Command Boundary
 
-For real ASIN data collection, call:
-
-```bash
-opscli asin-data collect
-```
-
-For existing report URL lookup only, call:
+Only two ASIN data commands are allowed for AI inspection workflows:
 
 ```bash
-opscli asin-data report-url --asin <ASIN> --site <SITE> --url-only
+opscli asin-data live-data
+opscli asin-data fetch-file
 ```
 
-Do not run full collection for a URL-only lookup request.
+Do not use other `opscli asin-data` data commands for this workflow.
 
-Do not call `scripts/collect_asin_data.py` directly for user-facing work. The script is retained as an internal compatibility/data-contract implementation.
+## Current Command Matrix
+
+| Need | CLI command | MCP equivalent |
+| --- | --- | --- |
+| Complete real-time basic data | `opscli asin-data live-data --data-scope basic --upload-xlsx --return-mode ai_ready --pretty` | `asin_data_live_data(data_scope="basic", upload_xlsx=true, return_mode="ai_ready")` |
+| Listing interface only | `opscli asin-data live-data --data-scope listing_basic --upload-xlsx --return-mode ai_ready --pretty` | `asin_data_live_data(data_scope="listing_basic", upload_xlsx=true, return_mode="ai_ready")` |
+| Real-time BI data | `opscli asin-data live-data --data-scope bi --sales-start <YYYY-MM-DD> --sales-end <YYYY-MM-DD> --upload-xlsx --return-mode ai_ready --pretty` | `asin_data_live_data(data_scope="bi", sales_start=..., sales_end=..., upload_xlsx=true, return_mode="ai_ready")` |
+| Real-time basic + BI | `opscli asin-data live-data --data-scope all --sales-start <YYYY-MM-DD> --sales-end <YYYY-MM-DD> --upload-xlsx --return-mode ai_ready --pretty` | `asin_data_live_data(data_scope="all", sales_start=..., sales_end=..., upload_xlsx=true, return_mode="ai_ready")` |
+| SellerSprite keyword reverse | `opscli asin-data fetch-file --file keyword_reverse --pretty` | `asin_data_fetch_file(file_key="keyword_reverse")` |
+| SellerSprite keyword miner | `opscli asin-data fetch-file --file keyword_miner --pretty` | `asin_data_fetch_file(file_key="keyword_miner")` |
+| Competitor file | `opscli asin-data fetch-file --file competitor --pretty` | `asin_data_fetch_file(file_key="competitor")` |
+| Rufus file | `opscli asin-data fetch-file --file rufus --pretty` | `asin_data_fetch_file(file_key="rufus")` |
+
+For AI usage, always set `--return-mode ai_ready --upload-xlsx` on CLI `live-data`. MCP `asin_data_live_data` defaults to `ai_ready`, but passing it explicitly is still preferred.
 
 ## Input Modes
 
-Use exactly one mode.
+Use exactly one input mode.
 
 ### File Mode
 
-Use when the user provides CSV/XLSX/JSON/JSONL or asks for batch collection.
+Use this for batch ASINs:
 
 ```bash
-opscli asin-data collect \
+opscli asin-data live-data \
   --input ./asins.csv \
   --asin-column asin \
-  --keyword-column keyword \
   --site-column site \
-  --site US \
-  --sales-start 2026-05-01 \
-  --sales-end 2026-05-31 \
-  --dry-run \
+  --data-scope bi \
+  --sales-start 2026-07-01 \
+  --sales-end 2026-07-08 \
+  --upload-xlsx \
+  --return-mode ai_ready \
   --pretty
 ```
 
@@ -47,198 +55,78 @@ Recommended columns:
 | --- | --- | --- |
 | `asin` | yes | 10-character Amazon ASIN |
 | `site` | no | Marketplace, defaults to `US` |
-| `keyword`, `keywords`, `关键词` | no | SellerSprite keyword-miner seed; multiple values can be comma, semicolon, pipe, or newline separated |
-| `owner`, `country`, `notes` | no | Preserved as pass-through row metadata |
 
 ### Single-ASIN Mode
 
-Use when the user provides one ASIN directly.
+Use this when the user provides one ASIN:
 
 ```bash
-opscli asin-data collect \
-  --asin B0BY8Y5766 \
+opscli asin-data live-data \
+  --asin B0GJDPXFC9 \
   --site US \
-  --keyword "bed frame" \
-  --keyword "storage bed" \
-  --dry-run \
+  --data-scope basic \
+  --upload-xlsx \
+  --return-mode ai_ready \
   --pretty
 ```
 
-Remove `--dry-run` after the user confirms the plan, or when the user explicitly asks to execute immediately.
+## Data Scope
 
-## Required Checks
+| Scope | Behavior |
+| --- | --- |
+| `basic` | Fetches `listing_basic` + `crawler_details`; returns/uploads only `basic` xlsx. |
+| `listing_basic` | Fetches only `listing_basic`; returns/uploads only `basic` xlsx. |
+| `bi` | Fetches `sales_traffic`, `sp_search_term`, `deals`, `turnover_inventory`; returns/uploads only `bi` xlsx. |
+| `all` | Fetches complete basic and BI data; returns/uploads both `basic` and `bi` xlsx. |
 
-Before real execution, run:
+## Historical Files
 
-```bash
-opscli auth token status
-```
-
-If authentication is invalid or expired, use the project auth workflow before running collection.
-
-If any `opscli` command fails, immediately submit structured feedback through `ops-feedback` in the same session. This includes `opscli auth`, `opscli asin-data`, nested query, SellerSprite, Amazon, or Rufus failures observed by Codex.
-
-## Common Commands
-
-### Full Batch Collection
+SellerSprite and Rufus use `fetch-file`:
 
 ```bash
-opscli asin-data collect \
-  --input ./asins.csv \
-  --asin-column asin \
-  --keyword-column keyword \
-  --sales-start 2026-05-01 \
-  --sales-end 2026-05-31 \
-  --pretty
+opscli asin-data fetch-file --asin B0GJDPXFC9 --site US --file keyword_reverse --pretty
+opscli asin-data fetch-file --asin B0GJDPXFC9 --site US --file keyword_miner --pretty
+opscli asin-data fetch-file --asin B0GJDPXFC9 --site US --file competitor --pretty
+opscli asin-data fetch-file --asin B0GJDPXFC9 --site US --file rufus --pretty
 ```
-
-### Full Single-ASIN Collection
-
-```bash
-opscli asin-data collect \
-  --asin B0BY8Y5766 \
-  --site US \
-  --keyword "bed frame" \
-  --pretty
-```
-
-### Query-Only Validation
-
-Use this when the user only wants BI/crawler data or wants a fast internal-data check.
-
-```bash
-opscli asin-data collect \
-  --input ./asins.csv \
-  --skip-seller-sprite \
-  --skip-amazon \
-  --skip-rufus \
-  --sales-start 2026-05-01 \
-  --sales-end 2026-05-31 \
-  --pretty
-```
-
-### SellerSprite-Only
-
-```bash
-opscli asin-data collect \
-  --input ./asins.csv \
-  --skip-query \
-  --skip-amazon \
-  --skip-rufus \
-  --pretty
-```
-
-### Crawler-Only
-
-`custom_crawler_amazon_details` currently maps to table ID `43`.
-
-```bash
-opscli asin-data collect \
-  --input ./asins.csv \
-  --skip-seller-sprite \
-  --skip-amazon \
-  --skip-rufus \
-  --skip-sales-query \
-  --crawler-table-id 43 \
-  --pretty
-```
-
-### URL-Only Output
-
-Use when another system only needs the ASIN report file URL. Prefer the dedicated report URL command:
-
-```bash
-opscli asin-data report-url \
-  --asin B0BY8Y5766 \
-  --site US \
-  --url-only
-```
-
-If the installed opscli does not have `asin-data report-url`, use `collect` only with the exact minimal skip flags below:
-
-```bash
-opscli asin-data collect \
-  --asin B0BY8Y5766 \
-  --site US \
-  --skip-query \
-  --skip-seller-sprite \
-  --skip-amazon \
-  --skip-rufus \
-  --no-upload \
-  --url-only
-```
-
-Do not add keywords, Rufus questions, upload options, Amazon scrape options, SellerSprite options, or query options in this fallback mode. The command must stay URL lookup only.
-
-`--url-only` returns the single-ASIN report URL from `/dataMetrics/v1/asin-report-files?asin=...&site=...`. When `--fetch-report-files` is enabled and the interface returns no URL, the command fails with `取数服务异常`; use `--no-fetch-report-files` only for debugging or when the caller explicitly wants to skip the report-file lookup.
-
-## Parameter Rules
-
-| Parameter | Default | When to set |
-| --- | --- | --- |
-| `--output-dir` | `output/asin-data` | Use when user wants a specific folder |
-| `--run-id` | auto | Use for reproducible runs or handoff IDs |
-| `--site` | `US` | Default marketplace for rows without a site column |
-| `--sales-start`, `--sales-end` | empty | Set for dated BI sales windows |
-| `--query-chunk-size` | `100` | Lower for debugging; raise cautiously for large batches |
-| `--seller-sprite-period` | `30d` | SellerSprite time window |
-| `--keyword-source` | `reverse_top` | `input_only` only uses provided keywords; `skip` skips keyword-miner when no input keyword exists |
-| `--max-miner-keywords` | `1` | Number of seed keywords for SellerSprite keyword-miner |
-| `--rufus-question` | default 6 questions | Repeat to override Rufus questions; supports `{{asin}}` |
-| `--skip-*` flags | false | Use for staged validation or when a data source is unavailable |
-| `--sales-field-mode`, `--crawler-field-mode` | `full` | Use `compatible` when remote metadata lacks newer fields |
-| `--fetch-report-files/--no-fetch-report-files` | `--fetch-report-files` | Precheck latest report URL from `/dataMetrics/v1/asin-report-files`; fail when missing |
 
 ## Output Contract
 
-The command returns JSON unless `--url-only` is used.
-
-Key response fields:
+`live-data --return-mode ai_ready` returns:
 
 | Field | Meaning |
 | --- | --- |
 | `success` | CLI wrapper success flag |
-| `data.output_dir` | run output directory |
-| `data.summary` | compact run counts |
-| `data.manifest` | full run manifest |
-| `data.upload` | uploaded `<ASIN>-asin-data-report.txt` metadata when upload succeeds |
-| `data.report_file_url` | single-ASIN report URL from `/dataMetrics/v1/asin-report-files`, when available |
-| `data.aliyun_url` | `data.report_file_url` when available, otherwise uploaded report txt URL |
+| `data.metadata.protocol` | Must be `asin_data_ai_response` |
+| `data.items[].artifacts[]` | xlsx artifact index with `file_key`, `uri`, `local_path`, `complete` |
+| `data.items[].datasets[]` | dataset manifest with `source_key`, sheet name, row/column counts, columns, preview rows, quality flags |
+| `data.items[].diagnostics[]` | ASIN-level warnings/errors |
+| `data.diagnostics[]` | global warnings/errors |
+| `data.split_file_urls` | legacy URL map; read only as compatibility fallback |
 
-Default files under `data.output_dir`:
+`fetch-file` returns:
 
-| File | Purpose |
+| Field | Meaning |
 | --- | --- |
-| `frontend-data.json` | primary frontend data package |
-| `frontend-data.html` | local human-readable handoff; not uploaded |
-| `frontend-data.md` | local Markdown handoff |
-| `<ASIN>-asin-data-report.txt` | uploaded UTF-8 BOM report txt for single-ASIN runs |
-| `asin-data.jsonl` | one normalized record per ASIN |
-| `asin-data-summary.json` | compact summary |
-| `manifest.json` | run manifest |
-| `commands.jsonl` | per-source command/direct-call log |
-| `errors.jsonl` | structured failures |
+| `success` | CLI wrapper success flag |
+| `data.asin` | ASIN |
+| `data.site` | marketplace |
+| `data.file_key` | requested file type |
+| `data.file_url` | historical file URL, string or array |
+| `data.content` | xlsx as `{sheet_name: rows}`; Rufus as Markdown text |
 
-When reporting back to the user, provide `output_dir` first, then `aliyun_url` if present, then mention any non-empty `errors.jsonl`.
+## Data Quality Checks
 
-## Clarification Policy
+Before using real-time `basic` crawler-derived fields:
 
-Ask a short question before running when:
+1. Compare requested ASIN with crawler ASIN fields.
+2. If product links contain a different ASIN, treat `product_detail`, `image_links`, and `reviews` as suspect.
+3. Prefer `listing_basic` fields for listing facts.
 
-- The user did not provide an ASIN or input file.
-- The user provided both `--input` and a single ASIN.
-- The requested marketplace is unclear and not safely defaultable to `US`.
-- The user wants SellerSprite keyword-miner but no keyword is available and `keyword_source` should not derive from reverse results.
-- The user asks to skip or include sources ambiguously, such as "只要基础数据" or "不要外部数据".
+BI row counts should be checked by `source_key`. `sp_search_term` may contain ASIN-group-level data; if diagnostics include `ASIN_FILTER_UNVERIFIED`, do not make single-ASIN conclusions without explicit verification.
 
-Do not ask about optional params that have safe defaults.
+## Failure Handling
 
-## Installation Note
+If any `opscli` command fails, immediately submit structured feedback through `ops-feedback` in the same session. Include command, call params, original error code/message, inferred reason, and next fix suggestion.
 
-For a Codex runtime that has not installed this Skill, install it from the local template before expecting automatic trigger behavior:
-
-```bash
-opscli skills install ops-asin-data-collector --runtime codex --force
-```
-
-If the runtime uses a shared skills directory, install to that configured directory instead.
+MCP failures may include a `feedback` draft. The AI Agent must still submit the feedback according to project rules.

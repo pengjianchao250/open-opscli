@@ -34,8 +34,9 @@ class SellerSpriteTaskQueueStore:
         request: SellerSpriteScenarioRequest,
         queue_scope: str,
         root_dir: Path,
-        session_id: str | None = None,
-        jwt: str | None = None,
+        credential_scope: str | None = None,
+        runtime_auth_required: bool = False,
+        expected_user_email: str | None = None,
     ) -> dict[str, Any]:
         """写入一条排队任务并返回当前排队状态。"""
         with self._connect() as conn:
@@ -45,9 +46,10 @@ class SellerSpriteTaskQueueStore:
                     job_id, queue_scope, task_kind, status, request_json, root_dir,
                     created_at, started_at, finished_at, assigned_account,
                     worker_key, result_path, row_count, export_json, error_json,
+                    credential_scope, runtime_auth_required, expected_user_email,
                     session_id, jwt
                 )
-                VALUES (?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, ?)
+                VALUES (?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, ?, ?, NULL, NULL)
                 """,
                 (
                     request.job_id,
@@ -56,8 +58,9 @@ class SellerSpriteTaskQueueStore:
                     json.dumps(request.to_dict(), ensure_ascii=False),
                     str(root_dir),
                     _now_iso(),
-                    session_id,
-                    jwt,
+                    credential_scope,
+                    int(runtime_auth_required),
+                    expected_user_email,
                 ),
             )
         return self.get_status(str(request.job_id))
@@ -69,8 +72,8 @@ class SellerSpriteTaskQueueStore:
         queue_scope: str,
         root_dir: Path,
         user_email: str,
-        session_id: str | None = None,
-        jwt: str | None = None,
+        credential_scope: str | None = None,
+        expected_user_email: str | None = None,
     ) -> dict[str, Any]:
         """在同一事务中写入队列任务及其 MCP 所有权记录。"""
         now = _now_iso()
@@ -83,9 +86,10 @@ class SellerSpriteTaskQueueStore:
                     job_id, queue_scope, task_kind, status, request_json, root_dir,
                     created_at, started_at, finished_at, assigned_account,
                     worker_key, result_path, row_count, export_json, error_json,
+                    credential_scope, runtime_auth_required, expected_user_email,
                     session_id, jwt
                 )
-                VALUES (?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, ?)
+                VALUES (?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, 0, ?, NULL, NULL)
                 """,
                 (
                     request.job_id,
@@ -94,8 +98,8 @@ class SellerSpriteTaskQueueStore:
                     json.dumps(request.to_dict(), ensure_ascii=False),
                     str(root_dir),
                     now,
-                    session_id,
-                    jwt,
+                    credential_scope,
+                    expected_user_email or user_email,
                 ),
             )
             conn.execute(
@@ -299,7 +303,12 @@ class SellerSpriteTaskQueueStore:
                     result_path = ?,
                     row_count = ?,
                     export_json = ?,
-                    error_json = NULL
+                    error_json = NULL,
+                    credential_scope = NULL,
+                    runtime_auth_required = 0,
+                    expected_user_email = NULL,
+                    session_id = NULL,
+                    jwt = NULL
                 WHERE job_id = ?
                 """,
                 (
@@ -331,7 +340,12 @@ class SellerSpriteTaskQueueStore:
                     result_path = ?,
                     row_count = ?,
                     export_json = ?,
-                    error_json = NULL
+                    error_json = NULL,
+                    credential_scope = NULL,
+                    runtime_auth_required = 0,
+                    expected_user_email = NULL,
+                    session_id = NULL,
+                    jwt = NULL
                 WHERE job_id = ?
                   AND status = 'running'
                   AND assigned_account_key = ?
@@ -368,7 +382,9 @@ class SellerSpriteTaskQueueStore:
                 """
                 UPDATE seller_sprite_task_queue
                 SET status = 'succeeded', finished_at = ?, result_path = ?,
-                    row_count = ?, export_json = ?, error_json = NULL
+                    row_count = ?, export_json = ?, error_json = NULL,
+                    credential_scope = NULL, runtime_auth_required = 0,
+                    expected_user_email = NULL, session_id = NULL, jwt = NULL
                 WHERE job_id = ? AND status = 'running'
                   AND assigned_account_key = ? AND assignment_generation = ?
                 """,
@@ -421,7 +437,12 @@ class SellerSpriteTaskQueueStore:
                 UPDATE seller_sprite_task_queue
                 SET status = 'failed',
                     finished_at = ?,
-                    error_json = ?
+                    error_json = ?,
+                    credential_scope = NULL,
+                    runtime_auth_required = 0,
+                    expected_user_email = NULL,
+                    session_id = NULL,
+                    jwt = NULL
                 WHERE job_id = ?
                 """,
                 (_now_iso(), json.dumps(error_payload, ensure_ascii=False), job_id),
@@ -443,7 +464,12 @@ class SellerSpriteTaskQueueStore:
                 SET status = 'failed',
                     finished_at = ?,
                     error_json = ?,
-                    last_error_code = ?
+                    last_error_code = ?,
+                    credential_scope = NULL,
+                    runtime_auth_required = 0,
+                    expected_user_email = NULL,
+                    session_id = NULL,
+                    jwt = NULL
                 WHERE job_id = ?
                   AND status = 'running'
                   AND assigned_account_key = ?
@@ -478,7 +504,9 @@ class SellerSpriteTaskQueueStore:
                 """
                 UPDATE seller_sprite_task_queue
                 SET status = 'failed', finished_at = ?, error_json = ?,
-                    last_error_code = ?
+                    last_error_code = ?, credential_scope = NULL,
+                    runtime_auth_required = 0, expected_user_email = NULL,
+                    session_id = NULL, jwt = NULL
                 WHERE job_id = ? AND status = 'running'
                   AND assigned_account_key = ? AND assignment_generation = ?
                 """,
@@ -737,7 +765,12 @@ class SellerSpriteTaskQueueStore:
                 UPDATE seller_sprite_task_queue
                 SET status = 'failed',
                     finished_at = ?,
-                    error_json = ?
+                    error_json = ?,
+                    credential_scope = NULL,
+                    runtime_auth_required = 0,
+                    expected_user_email = NULL,
+                    session_id = NULL,
+                    jwt = NULL
                 WHERE job_id IN ({job_placeholders})
                 """,
                 [now, error_json, *matched_job_ids],
@@ -791,12 +824,16 @@ class SellerSpriteTaskQueueStore:
         """读取任务执行所需的附加上下文。"""
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT session_id, jwt FROM seller_sprite_task_queue WHERE job_id = ?",
+                "SELECT credential_scope, runtime_auth_required, expected_user_email, session_id, jwt "
+                "FROM seller_sprite_task_queue WHERE job_id = ?",
                 (job_id,),
             ).fetchone()
         if row is None:
             raise ValueError(f"任务不存在：{job_id}")
         return {
+            "credential_scope": row["credential_scope"],
+            "runtime_auth_required": bool(row["runtime_auth_required"]),
+            "expected_user_email": row["expected_user_email"],
             "session_id": row["session_id"],
             "jwt": row["jwt"],
         }
@@ -1031,12 +1068,26 @@ class SellerSpriteTaskQueueStore:
                     row_count INTEGER NOT NULL DEFAULT 0,
                     export_json TEXT NULL,
                     error_json TEXT NULL,
+                    credential_scope TEXT NULL,
+                    runtime_auth_required INTEGER NOT NULL DEFAULT 0,
+                    expected_user_email TEXT NULL,
                     session_id TEXT NULL,
                     jwt TEXT NULL
                 )
                 """
             )
             columns = {row[1] for row in conn.execute("PRAGMA table_info(seller_sprite_task_queue)")}
+            if "credential_scope" not in columns:
+                conn.execute("ALTER TABLE seller_sprite_task_queue ADD COLUMN credential_scope TEXT NULL")
+            if "runtime_auth_required" not in columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_task_queue "
+                    "ADD COLUMN runtime_auth_required INTEGER NOT NULL DEFAULT 0"
+                )
+            if "expected_user_email" not in columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_task_queue ADD COLUMN expected_user_email TEXT NULL"
+                )
             if "session_id" not in columns:
                 conn.execute("ALTER TABLE seller_sprite_task_queue ADD COLUMN session_id TEXT NULL")
             if "jwt" not in columns:

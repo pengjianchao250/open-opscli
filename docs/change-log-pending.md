@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-15 seller_sprite - 合并多账号调度与 MCP 多用户认证隔离
+
+**变更原因**：`feature/sellersprite` 的异步多账号池和 `master` 的逐任务认证隔离同时修改了 SellerSprite 队列、调度器与 MCP 入口，需要在保留两边能力的前提下解决合并冲突，并避免无效认证任务被账号池初始化长期阻塞。
+**改动点**：MCP 通用任务和 Listing Analysis 继续使用队列与所有权记录的原子持久化，并只保存 CredentialStore 作用域和提交用户；后台 worker 从空 Context 启动，执行时按任务恢复并校验 session/JWT；多账号池继续支持工作账号、冷备用、故障接替和会话回收；账号池初始化前增加排队任务认证预检，使缺凭证、服务重启丢失显式凭证、用户不匹配及 MCP 审计异常快速失败；多账号 CAS 成功/失败终态同步清除凭证引用。
+**验证结果**：核心账号、队列、调度器、MCP 工具及 API Key 认证组合回归 `139 passed`；新增 CAS 终态凭证清理后，队列与调度器回归 `52 passed`；账号池、账号事件、browser worker、MCP context 与认证中间件回归 `65 passed`；SellerSprite 全套 `170 passed, 2 failed`，两项失败均为既有 `seller-sprite-debug` 顶级命令未注册；变更模块 `py_compile` 通过。
+**影响范围**：影响 SellerSprite MCP 异步任务入队、逐任务 OPS 授权恢复、多账号池启动与终态凭证清理；业务请求参数和外部返回结构不变。
+**回滚方式**：回退本次 SellerSprite MCP 工具、队列 Store、TaskScheduler、账号测试与本条记录，并重新处理 `origin/master` 合并冲突。
+
+---
+
 ## 2026-07-14 Skill - 新增内部反馈全量查询工具
 
 **变更原因**：反馈分诊开发人员需要按条件读取全量反馈列表及批量详情，同时不能新增公开 CLI/MCP 查询入口，也不能让相关 Skill、脚本和独立密钥进入公开发行物。
@@ -16,6 +26,15 @@
 **验证结果**：Task 5 在旧 Skill/正式说明上新增文档契约测试，首次运行按预期失败于 `SKILL.md` 缺少“立即持久化入队”契约（`1 failed`）；更新后 SellerSprite MCP 工具测试 `69 passed`，MCP Schema 测试 `6 passed`，队列/调度器测试 `26 passed`，adapter/CLI 组合为 `22 passed, 2 failed`，失败仅为既有 `seller-sprite-debug` 顶级命令未注册。真实 stdio 子进程通过 `--transport stdio` 发现 65 个工具，确认单/批状态工具公开且 `seller_sprite_start` 隐藏，未调用业务工具。项目全量 `pytest -q` 被重复测试模块名收集冲突阻断；改用 `--import-mode=importlib` 后又被既有 `tests/query/test_manager.py:817-818` 缩进错误和 `tests/skills/test_packaging.py` 导入期关闭 pytest 捕获流阻断；排除两个收集阻断后其余测试实际执行为 `996 passed, 53 failed`，失败分布在多个既有非 SellerSprite 基线及两个已知 debug 节点。`git diff --check` 退出码为 0，仅提示 `opscli/seller_sprite/cli.py` 下次 Git 处理时可能从 LF 转为 CRLF。最终审查修复 RED：`test_seller_sprite_run_rejects_listing_analysis_before_any_side_effect` 按预期失败，证明通用入口仍在拒绝前调用认证 helper（`1 failed`）；通用入口最小修复后与专用 submit 回归通过（`2 passed`）。单/批状态观察者聚焦 RED 按预期出现 `10 failed`，均证明正数等待路径仍调用 `scheduler.start()`；最小修复后同一聚焦集通过（`10 passed`）。Store owned enqueue 的成功双表持久化与 queue-only `job_id` 碰撞回滚先按预期失败于方法缺失（`2 failed`），实现后通过（`2 passed`）；公共通用入口真实 SQLite 碰撞及 Listing Analysis 专用入口原子接口回归按预期失败（`2 failed`），分别证明旧实现遗留 owner 行、专用入口仍独立写 owner；统一改用 scheduler 原子入队后通过（`2 passed`）。既有 MCP 测试中 6 条“先建 owner、入队失败再标 failed”的旧断言已同步为原子同成同败契约，MCP 工具套件通过（`71 passed`）。新增跨 Store 同 scope 单 running 领取边界，以及 scheduler `start()` 不重排其他实例 running 行的回归；聚焦 RED 按预期 `2 failed`，证明第二实例仍可继续领取 queued，且普通 `start()` 会重排并再次领取既有 running；最小实现后聚焦通过（`2 passed`），队列/调度全套通过（`29 passed`）。已新增共享有效认证邮箱、context scope fallback、中间件 auth_mode 注入及 SellerSprite resolver 代理回归；首次 RED 在收集期按预期停止于 `get_current_auth_mode` 尚不存在（`1 error`）；补最小 transport getter 后聚焦 RED 为 `8 failed, 7 passed`，分别证明中间件未传播模式、共享 resolver 缺失及 SellerSprite 仍直读 transport 邮箱；最小实现后同一身份组 GREEN（`15 passed`），测试缓存全部使用 fake/monkeypatch，未读取真实 Keychain；自审补充 fixed/未知 keyed 模式携带未验证 transport 邮箱的回归，RED 为 `2 failed`，随后将 transport 邮箱信任严格限定到 `auth_mode=remote`，fixed 仍使用隔离 cache、未知 keyed 模式仍闭合失败。自审另补 Listing Analysis submit 空白 owner 回归，RED 为 `1 failed`，证明旧检查会把空白邮箱带到 scheduler 并可能降级 queue-only；专用 submit 现与 generic run 一样先规范化再判空，确保公共提交始终走 owned enqueue；另补 51 个重复原始 ID 回归并直接通过（`1 passed`），确认现有实现先按 raw 数量拒绝、再去重，未为该保留契约修改生产代码。正式文档契约 RED 按预期 `2 failed`，证明四份现有说明仍缺生产拒绝措辞；最小文案收紧后同一聚焦组 GREEN（`2 passed`）。首轮必跑 integration 组为 `26 passed, 4 failed`：两条既有 `seller-sprite-debug` 未注册基线外，`test_tools.py` 两条注册测试被既有 stdio 权限中间件读取默认本地登录态后过滤成 10 个 auth tools；为满足测试不得读真实 Keychain，注册/schema 契约用 autouse mock 将权限 resolver 固定为全量放行，不改生产权限逻辑；复跑 integration 组为 `28 passed, 2 failed`，剩余两项均为既有 `seller-sprite-debug` 顶级命令未注册。最终当前态验证：SellerSprite MCP 工具 `74 passed`；context/middleware/helper identity `14 passed`；queue/scheduler `29 passed`；integration 仍为 `28 passed, 2 failed` 且失败仅为上述既有 debug 注册基线；变更 Python 文件 `py_compile` 成功；`git diff --check` 退出码 0，仅提示既有 `opscli/seller_sprite/cli.py` LF→CRLF 转换警告。
 **影响范围**：影响普通 SellerSprite MCP/正式 CLI 的提交返回语义、单任务与 1–50 批量状态跟踪、导出归属校验，以及 Agent 跨轮续查方式；`run` 仍消耗额度，状态和导出不消耗额度；Listing Analysis 继续使用 submit/status/result，不进入普通批量状态工具。
 **回滚方式**：整体回退 Tasks 1–5 涉及的 SellerSprite MCP 工具、adapter、CLI、持久队列、scheduler、两份 Skill、正式接入说明、测试和本条记录；如仅回滚文档层，则恢复本次两份 Skill、正式说明及文档契约测试，但必须同时确保文档与实际生产签名保持一致。
+---
+
+## 2026-07-10 asin-data/mcp - 合并 ASIN 实时取数服务到 master
+
+**变更原因**：用户需要把 ASIN 取数服务合并到 master，范围限定为 `asin-data` 实时取数、AI Ready 返回、MCP 取数工具、OSS xlsx 上传和服务端稳定性能力，避免把 release 分支中的 Rufus、Sif、西柚、Shopify 等无关改动带入 master。
+**改动点**：合并 `opscli/asin_data` 实时取数服务和拆包能力，新增/更新 BI/listing/crawler 聚合、`live-data` 按 `basic/listing_basic/bi/all` 取数、AI Ready 返回协议、拆分 xlsx 生成与上传、`site_code` 透传、本地 metrics；新增 MCP `asin_data_live_data`、`asin_data_fetch_file`、`asin_data_report_url` 和 `ops_health_check`，并在 MCP server 中只注册 ASIN 取数和健康检查工具；为文件上传增加 `filename` 参数、重试和诊断上下文；同步更新 `ops-asin-data-collector` Skill 模板、ASIN 测试、MCP 测试、上传测试和压测脚本。
+**验证结果**：`D:\workspace\open-opscli\.venv\Scripts\python.exe -m py_compile opscli\asin_data\cli.py opscli\asin_data\services\ai_response.py opscli\asin_data\services\bi_report_data.py opscli\asin_data\services\collector.py opscli\asin_data\services\daily_pipeline.py opscli\asin_data\services\live_data.py opscli\asin_data\services\live_metrics.py opscli\asin_data\services\split_package_builder.py opscli\mcp\tools\asin_data.py opscli\mcp\asin_data_limit.py opscli\mcp\tools\health.py opscli\mcp\quota.py opscli\shared\file_uploads.py scripts\mcp_asin_data_pressure.py scripts\asin_data_daily_full_package.py` 通过；`D:\workspace\open-opscli\.venv\Scripts\python.exe -m pytest tests\asin_data tests\shared\test_file_uploads.py tests\mcp\test_asin_data_tools.py tests\mcp\test_asin_data_limit.py tests\mcp\test_health_tool.py` 通过，80 passed；`D:\workspace\open-opscli\.venv\Scripts\python.exe -c "import importlib; importlib.import_module('opscli.mcp.server'); print('mcp server import ok')"` 通过；`git diff --check` 通过。
+**影响范围**：影响 `opscli asin-data` 实时取数、MCP ASIN 取数服务、公共文件上传客户端和 ASIN 取数 Skill 文档；不合并 release 分支中的 Rufus/Sif/西柚/Shopify/asin_review 新功能。
+**回滚方式**：回退本次合并的 `opscli/asin_data`、`opscli/mcp/tools/asin_data.py`、`opscli/mcp/asin_data_limit.py`、`opscli/mcp/tools/health.py`、`opscli/mcp/server.py` 中 ASIN/health 注册、`opscli/shared/file_uploads.py`、`ops-asin-data-collector` 模板、ASIN/MCP/上传测试、压测脚本和本条 changelog。
 ---
 
 ## 2026-07-09 seller_sprite - 补齐 SQLite 队列恢复与运维入口
@@ -2669,4 +2688,155 @@
 **验证结果**：状态链测试先缺少 busy 状态进入 red，修复后通过；状态审计测试先因 Recorder 接口缺失进入 red，修复后通过；调度器统一关闭和周期空闲回收测试均先进入 red 后通过；半释放测试先观察到 Playwright 未停止，修复后通过；初版相关 API manager、调度器、browser worker 和账号事件组合测试 76 passed；审查修复新增所有权隔离、reservation、关闭队列竞态、直调 self-reap、异常路径 idle 收尾、审计初始化降级和独立关闭失败事件测试。最终 SellerSprite 与相关 MCP 回归 `233 passed, 2 deselected`，两项 deselected 为既有未注册 `seller-sprite-debug` 顶级命令测试；双轴 Standards/Spec 复审均 PASS。项目全量 pytest 仍被既有重复测试模块收集及 pytest 捕获流被导入期关闭问题阻断，`--import-mode=importlib` 同样在既有导入期捕获流关闭处停止；变更模块 `compileall` 与 `git diff --check` 通过。
 **影响范围**：影响 SellerSprite browser-route 健康会话的回收、轮换、关闭和审计；运行中任务不被中断，下一任务继续按持久 profile 懒创建会话。
 **回滚方式**：回滚 browser worker 生命周期接口、ApiManager 状态监听器透传、TaskScheduler 回收/关闭编排、AccountEventRecorder 状态记录方法及对应测试。
+---
+
+## 2026-07-10 ASIN取数 - 刊登基础数据默认使用托管北极星Token
+
+**变更原因**：MCP 服务端部署环境中存在 `BI_AUTH/BI_COOKIE` 时，刊登基础数据会优先使用临时 BI Token，导致返回 `listing_basic_auth_source: BI_AUTH temporary token`，不符合服务端长期部署要求。
+**改动点**：移除 `AsinBiReportDataClient._build_listing_request_auth()` 中 `BI_AUTH/BI_COOKIE` 的优先读取分支；更新刊登基础数据单测，明确即使存在过期环境变量也必须优先请求 `/dataMetrics/v1/asin-report-files/polaris-bjx-token`，并让并发刊登取数测试使用托管 token mock。
+**验证结果**：已运行 `python -m pytest tests/asin_data tests/mcp/test_asin_data_tools.py tests/mcp/test_asin_data_limit.py -q`，结果 `75 passed`；已运行 `python -m pytest tests/shared/test_file_uploads.py tests/mcp/test_health_tool.py -q`，结果 `5 passed`；已运行 `python -m compileall opscli/asin_data/services/bi_report_data.py opscli/mcp/tools/asin_data.py`、`python -c "import importlib; importlib.import_module('opscli.mcp.server')"` 和 `git diff --check`，均通过。
+**影响范围**：影响 `asin-data live-data` 和 MCP `asin_data_live_data` 获取 `listing_basic` / `basic` / `all` 中刊登基础数据时的鉴权来源；BI 数据、卖家精灵、Rufus 历史文件读取不受影响。
+**回滚方式**：回滚 `opscli/asin_data/services/bi_report_data.py` 和 `tests/asin_data/test_bi_report_data.py` 中本次关于刊登基础数据鉴权优先级的修改。
+---
+
+## 2026-07-10 ASIN取数 - 刊登接口未登录时默认BI账号兜底
+
+**变更原因**：服务端 MCP 或本地 CLI 取 `listing_basic` 时，如果托管北极星 Token 已失效并被 BI 刊登接口提示未登录，需要自动重新获取刊登接口授权，避免用户手动维护 Token。
+**改动点**：在 `AsinBiReportDataClient` 中内置默认 BI 登录账号密码；当刊登接口返回“未登陆/未登录”时，清空刊登鉴权缓存，强制调用 BI 登录接口获取新授权并重试 `getAmazonListing` / `amazonlisdet`；新增回归测试覆盖托管 Token 失效后自动默认登录重试成功。
+**验证结果**：已运行 `python -m pytest tests/asin_data tests/mcp/test_asin_data_tools.py tests/mcp/test_asin_data_limit.py -q`，结果 `76 passed`；已运行 `python -m compileall opscli/asin_data/services/bi_report_data.py opscli/mcp/tools/asin_data.py`、`python -c "import importlib; importlib.import_module('opscli.mcp.server')"` 和 `git diff --check`，均通过。
+**影响范围**：影响 CLI `opscli asin-data live-data` 与 MCP `asin_data_live_data` 的 `listing_basic`、`basic`、`all` 刊登基础数据取数；远程托管 Token 仍为首次默认来源，仅在 BI 明确返回未登录时触发默认账号兜底。
+**回滚方式**：回滚 `opscli/asin_data/services/bi_report_data.py` 中默认账号常量、强制登录重试逻辑与 `tests/asin_data/test_bi_report_data.py` 中对应回归测试。
+---
+
+## 2026-07-10 skills/ops-feedback - 分级反馈策略随附问题修复（v1.0.16 → v1.0.17）
+
+**变更原因**：深度分析发现 v1.0.16 分级反馈改造存在规则源冲突、虚假脚本引用、零测试、英文注释违反铁律17、死代码等问题；用户确认后逐项修复。
+**改动点**：
+- `~/.claude/CLAUDE.md`：反馈铁律去重窗口 5 分钟 → 30 分钟，补充 `feedback_group_key` 聚合说明（消除与 FEEDBACK_RULE.md 的冲突）。
+- `opscli/skills/templates/ops-feedback/SKILL.md`、`data/FEEDBACK_RULE.md`：移除对不存在的 `evaluate_agent_traces.py` / `evaluate_wizard_traces.py` 的"参考实现"声称，改标注为待建设项并指向 `tests/skills/test_feedback_guard.py`；明示去重为滑动窗口语义（窗口内重复只刷新本地计数，不自动再次远端提交）。
+- `references/cli.md`、`references/mcp.md`：去重条目追加滑动窗口说明。
+- `scripts/feedback_guard.py`：全部改为中文 docstring 与段落注释（铁律17）；删除无调用方的 `fingerprint()` / `fingerprint_source()` 死代码（其中 `fingerprint()` 存在变量覆盖隐患）；`is_feedback_tool` 去除重复 marker；修复 Pyright 类型标注（list 分支变量名）。决策逻辑与 v1.0.16 完全一致。
+- 新增 `tests/skills/test_feedback_guard.py`：26 个用例覆盖事件分类（L0/L1/L2/L3、可疑数据不误报 L3）、L3 滑动窗口去重与窗口过期重提、`feedback_group_key` 跨参数聚合、L2 会话预算（放行/耗尽/按 session 隔离）、敏感字段脱敏、大事件瘦身（≤4096B）、认证轮询抑制、feedback 通道 fail-open、状态损坏兜底、过期清理、record 登记语义。
+- `data/VERSION.json`：v1.0.16 → v1.0.17。
+- 新增 `docs/analysis/ops-feedback与ops-query-wizard优化改动分析报告.md`：存档两个 Skill 的改动对比分析结论（含 ops-query-wizard Step 2–5 引用悬空的致命问题，建议暂缓合入）。
+**验证结果**：`uv run pytest tests/skills/test_feedback_guard.py tests/skills/test_ops_feedback_template.py` → 32 passed；重写后脚本 CLI 冒烟（decide L3 失败事件）输出 `submit_immediate_failure_feedback / submit_remote=true`，与修复前行为一致；`grep evaluate_agent_traces` 全仓库无残留。
+**影响范围**：仅 ops-feedback Skill 模板文档与 guard 脚本注释/死代码；决策行为无变化；guard 状态目录 `~/.opscli/` 未迁移（需单独评估）。ops-query-wizard 本次未改动。
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-feedback`，删除 `tests/skills/test_feedback_guard.py` 与分析报告；`~/.claude/CLAUDE.md` 将"30 分钟"改回"5 分钟"。
+---
+
+## 2026-07-13 skills/ops-dataset-query - 二代规划管线修正优化（死代码清理+结构简化+口径补回）
+
+**变更原因**：深度审查发现新一代 query_plan 规划管线存在约 220 行死代码、上一代方案残留未清理、磁盘缓存层过度设计（含 Windows fcntl 必崩点）、铁律17 全量违规（0 中文注释）、文档交叉引用矛盾及 4 类历史业务口径被删无承接。
+**改动点**：
+1. 删除上一代孤儿：scripts/route_intent.py、search.py，references/cli-simple-guide.md、mcp-simple-guide.md，data 下 5 个无消费 YAML（intent_taxonomy/dataset_profiles/field_semantic_index/dataset_relationships/routing_eval_cases），tests/test_route_intent.py、test_ops_dataset_query_search.py；图表/Excel 用法抢救为新参考 references/chart-excel-guide.md 并挂载到 SKILL.md。
+2. scoped_metadata_index.py 508→107 行：去掉磁盘 JSONL 缓存/fcntl 目录锁/manifest sha256/原子写回滚，改为进程内构建卡片，消除 Windows 崩溃点；数据层统一复用 scoped_dataset_reader（datasets.csv 必需列统一含 remarks）。
+3. 删除死代码：capability overlay 全家（typed_schema_linking + agent_query_planner 转发/CLI）、build_index、3 个未文档化脚本 CLI、evidence_contract 的 --input-json/--input-file、intent_rules.json 不可达的 filter_values.amazon（校验器改为 filter_values 键=成员值并集）。
+4. model_contract.py（271 行）并入 query_plan.py，模块数 8→6。
+5. 行为修正：非亚马逊平台筛选由 block_platform_enum_ambiguous 改为明确的 block_platform_scope_unsupported；接通 snapshot_metric 列（reader 校验 + guidance is_snapshot/latest_snapshot_no_period_aggregation + execution_ref 透传 + schema 增加 is_snapshot 必填）。
+6. 文档修复：cli.md 改用模型合同键并修正 --output-mode full 失效引用（internal 为维护者排错通道）；QUERY_SPEC §5 去除 MCP-only 场景引用本地脚本的矛盾（改内联证据合同）；反馈去重窗口 5→30 分钟对齐项目铁律；SKILL.md 统一 result-analysis.md 读取时机（MCP-only/复杂审计）。
+7. rules.md 补回口径：近N天=[今天-(N-1),今天] 公式、周/月/跨年边界、缺省近30天、快照指标不跨期累加、verbose_name 禁意译、小组/部门独立与 9部↔九部匹配、上下文范围继承。
+8. 铁律17 整改：全部脚本模块/公开函数中文 docstring、复杂逻辑段中文注释；GBK 扫描通过。
+**验证结果**：tests/skills/test_dataset_query_planner.py 重写为 3 用例（公式口径/快照口径/不支持平台阻断）全部通过；tests/skills 其余失败均与 HEAD 基线一致（8<12，零新增回归）；query_plan CLI 冒烟（placeholder 刷新合同）与 evidence_contract stdin 冒烟通过；模型合同输出通过 query_plan.schema.json jsonschema 校验；全部脚本 py_compile 通过。
+**影响范围**：ops-dataset-query Skill 模板（脚本/文档/数据/schema）与其回归测试；不影响 opscli 核心模块。
+**回滚方式**：git checkout HEAD -- opscli/skills/templates/ops-dataset-query tests/skills（注意会同时回滚用户此前未提交的二代重构改动，精确回滚需按文件挑选）。
+---
+
+## 2026-07-13 skills/sync - 修复 skills upgrade 因本地版本领先远端而跳过数据写入
+
+**变更原因**：`opscli skills upgrade` 后 `~/.opscli/skills/ops-dataset-query/data/datasets.csv` 等仍为占位表头。根因是 `apply_upgrade_data()` 的版本门槛 `compare_versions(current, remote) <= 0`：本地模板占位版本（1.1.1）与远端数据 manifest 版本（v1.0.3）属于两套版本空间，本地领先时被判为 already_latest，拉取到的数据从未落盘，与代码注释"始终执行更新"的意图不符。
+**改动点**：
+1. `opscli/skills/sync/updater.py`（类 SkillsUpdater，方法 apply_upgrade_data）：删除 needs_update 版本比较门槛与 updated=False 提前返回，始终覆盖写入远端数据；force 参数保留签名兼容，不再影响写入行为。
+2. `tests/skills/test_updater.py`：新增 test_upgrade_local_version_ahead_also_updates（本地 1.1.1 > 远端 v1.0.3 也必须写入）；为两个存量用例补齐 HEAD 已引入但未 mock 的 SELECT_COLUMNS_ENDPOINT 分支（存量红灯修复）。
+**验证结果**：tests/skills/test_updater.py 全部通过（19 passed 含新用例）；真实执行 `opscli skills upgrade`，datasets.csv 由 96B 占位变为 8032B 真实数据、dataset_fields.csv 259KB，结果归入 updated 而非 already_latest，VERSION.json 更新为远端 v1.1.2。test_manager.py 的 3 个模板安装失败为工作区模板重构 WIP 存量失败，与本次无关。
+**影响范围**：仅 ops-dataset-query 的 skills upgrade 数据写入行为（每次 upgrade 均覆盖刷新数据文件，含 VERSION.json 跟随远端 manifest 版本）；ops-amazon-rufus 升级路径不受影响。
+**回滚方式**：`git checkout HEAD -- opscli/skills/sync/updater.py`，并删除 tests/skills/test_updater.py 中新增用例与两处 SELECT_COLUMNS mock。
+---
+
+## 2026-07-13 ops-dataset-query v1.2.4 第一批优化（管线激活修复）
+
+- **为什么改**：2026-07-13 QA e2e 矩阵（6数据集×4场景24用例，报告在 ops-agent 仓库 docs/测试报告/ops-dataset-query-v1.2.3*）实锤 v1.2.3 二代规划管线双重失效：①广场发布包 VERSION.json 无 data_state 字段被 query_plan.py 无条件打回 blocked（14/14 尝试全打回、打回文案无恢复命令、0 会话按指引升级）；②QA 提示词 v18 固化旧流程叠加 lazy load_skill 只回 status/path。另发现真实包上的两个后继硬失败：同名数据集（用户仪表盘分享明细 table 52/61）触发 invalid_cards:duplicate_identifier 拒绝全账号规划；渠道组件 query_channel_set 发布类目为 normal 被 block_platform_filter_missing_component 阻断平台枚举。
+- **改了哪些文件**：opscli/skills/templates/ops-dataset-query/{SKILL.md, references/cli.md, data/query_plan.schema.json, scripts/query_plan.py, scripts/agent_query_planner.py}；tests/skills/test_dataset_query_planner.py
+- **具体做了什么**：①_data_state_ready 兼容发布包形状（无 data_state 时以 dataset_count>0+核心索引文件佐证就绪，metadata_source 标记 skill_local/published_bundle）；②刷新合同增加 recovery_command/recovery_hint_zh 并透传 model_view，build_query_plan 增加 blocked 前一次自动升级兜底（subprocess 90s 超时，--no-auto-upgrade 可关）；③SKILL.md description 内嵌第一命令硬指令（lazy 模式防宿主提示词漂移），版本 1.2.3→1.2.4；④main 错误处理改 stdout JSON {error,retryable,next_action_zh}，错误码前缀映射下一步动作，兜底捕获未预期异常为 internal_error:*；⑤SKILL.md/cli.md 增加「未登录」处置边界（禁止交互式 auth login，等1分钟重试一次后停止并反馈）；⑥agent_query_planner 名称重复不再整体拒绝（仅别名重复硬失败，同名卡片后置标记 name_conflict，显式点名自然走多候选澄清）；⑦_next_action 接受组件 guidance_status=ready（QA 组件类目为 normal 的真实形态）。
+- **如何验证**：pytest tests/skills/test_dataset_query_planner.py 10/10 通过（新增 7 用例：发布包形状就绪/占位打回带恢复命令/空包不误判/自动升级重试/错误JSON带指引/未预期异常包装/normal类目组件可枚举）；QA 真实发布包副本上 CLI 实测：发货环比→planned table 2（1237字节合同）、即时销售显式点名→planned table 3（正解 e2e 错查缺陷）、同名数据集→clarify_required、亚马逊SC筛选→query_platform_permission_enum+组件 table 7、占位模板→blocked+recovery_command。tests/skills 整目录既有收集失败与本次无关（stash 基线复现同样失败）。
+- **影响范围**：仅 ops-dataset-query 技能模板与其回归测试；不涉服务端。发布 1.2.4 到 QA 广场后 system 分享全员自动同步；提示词 v18→v19 对齐为独立协同项，须在本改动发布后进行。
+- **回滚方式**：git checkout 恢复上述 6 个文件即可；广场侧回滚到 1.2.3 版本。
+
+## 2026-07-14 ops-dataset-query v1.3.0 第二三四批优化（合同补全+入口能力+一体化执行器）
+
+- **为什么要改**：延续 v1.2.4 管线激活修复，落地优化分析报告的 P0-1/P0-2/P0-3/P0-4/P0-5 与 P1-3/P1-4/P1-5、2-1/2-2、P2-1/P2-2/P2-5：合同缺日期字段/澄清空洞/枚举三步/排序零兜底/日期心算 是 e2e 实测的五大轮次放大器。
+- **改了哪些文件**：模板内 SKILL.md、QUERY_SPEC.md、references/{cli.md,simple-query-guide.md,chart-excel-guide.md}、data/{query_plan.schema.json,intent_rules.json,README-字段使用.md(新)}、scripts/{query_plan.py,dataset_guidance.py,core.py,evidence_contract.py,time_scope.py(新),run_query.py(新)}；tests/skills/test_dataset_query_planner.py
+- **具体做了什么**：①execution_ref 补全：date_fields 无条件输出、filter_components（部门/国家等组件引用进 contract 模式）、无点名字段时 recommended 字段（标注需确认）；②澄清弹药：dataset_candidates_zh 候选卡片 + unknown_requested_fields 回显 + 字符二元组近似字段建议；③时间口径本地解析 time_scope.py（近N天/昨天/本周/上周/本月/上月/环比/同比，Asia/Shanghai，默认近30天须披露）进 model_view.time_scope_zh 与 execution_ref.time_scope；④平台枚举一次收敛：--auto-enum 默认开（subprocess 45s 超时失败回落），合同内嵌 platform_enum_command 现成命令；扩充 intent_rules 平台别名表（补「亚马逊SC」等形态）；⑤query_template 预填骨架（实测形态：日期>=/<=两行、dataComparison、公式字段不带聚合）；⑥新增 run_query.py 一体化执行器：执行前硬校验（占位符/漏主周期/公式带聚合/desc形态归一为 direction）→ 执行 → 排序单调性校验+本地重排/放大重查兜底（服务端 orderBy 缺陷过渡方案）→ 全量落盘只回预览+披露+内嵌证据合同（stdout 8KB 限幅）；⑦evidence_contract +--input；query_plan +--query-file/stdin；chart 指南统一 python3；⑧SKILL.md 矛盾修订（每规划阶段一次/正向主线前置/读文档边界收敛/platform_semantic_members 中文化/执行确认分级：无歧义陈述式披露直接执行）；⑨answer_contract 去 *_codes 冗余；QUERY_SPEC 首行标注；discover_data_dir 补 .agents 候选。
+- **如何验证**：pytest 22/22（新增 12 用例：日期字段/时间合同/模板/推荐字段/候选卡片/近似建议/auto-enum 收敛/time_scope 三则/run_query 四则）；QA 真实发布包实弹五场景：发货环比合同 2.4KB 一步齐全、模板直填经 run_query 打真实后端取回真数据（美国 353040.70 降序正确）、**服务端 orderBy 缺陷现场复现两次且均被执行器单调性校验逮住并 requery_limit_15_then_local_sort 兜底披露**、同名数据集澄清带双候选卡片、平台筛选实弹 auto-enum 一次调用正确判定 block_platform_scope_not_authorized（enum_source=auto_enum_service）。
+- **影响范围**：仅技能模板与回归测试，不涉服务端；SKILL.md 版本 1.2.4→1.3.0。已知小瑕疵：QA 同名数据集 description 也相同导致候选卡片文案无法区分（数据侧问题，卡片机制本身正常）。
+- **回滚方式**：git checkout 恢复模板目录与测试文件；广场回滚旧版本。
+
+## 2026-07-14 ops-dataset-query v1.3.1 沙箱自愈修复（v19 验收发现的两个新形态）
+
+- **为什么改**：提示词 v19 上线后验收 e2e 发现：①用户从模板目录发布的 1.3.0 广场包带的是占位数据（data_state=placeholder、CSV 仅表头），上一版真实数据是 BI 数据发布管线灌入的，被覆盖；②沙箱内 `opscli skills upgrade` 写入 opscli 自己的发现目录（本机实测 ~/.claude/skills），而挂载的 .agents 是只读快照——升级成功但主目录依旧占位，恢复指引救不回；③upgrade 写入的 VERSION.json 是第三种形状（仅 name+version，无 data_state 无 dataset_count）。v19 提示词行为本身完全符合设计（按合同→按恢复→按排错预算→提交反馈）。
+- **具体做了什么**：①`_data_state_ready` 以「核心索引 CSV 含数据行」为统一就绪证据（新增 upgraded_local 形态；空包=CSV 仅表头判不就绪）；②新增 `_fallback_ready_data_dir`：升级后主目录仍未就绪时接管 cwd/.claude/skills、~/.claude/skills、$OPSCLI_SKILLS_DIR 中已就绪的数据目录（metadata_source 加 +fallback_dir 后缀，自愈动作统一受 auto_upgrade 开关约束）；③`effective_data_dir` 透传投影层，字段标签跟随实际生效目录；④升级超时 90s→60s（防组合入口撑爆单条 exec 超时，v19 验收实测首调超时）。
+- **验证**：pytest 23/23；本机模拟沙箱闭环（占位挂载包+真实 opscli upgrade）：blocked→自动升级→接管 ~/.claude/skills→`planned, metadata_source=upgraded_local+fallback_dir, table_id=2`。
+- **发布配套**：已组装带真实数据的发布包（模板 1.3.1 代码 + 1.2.3 包的 43 数据集真实数据）供重新发布，消除新沙箱的一次自愈开销；发布后建议与 BI 数据发布管线确认其重新发布数据时是否保留最新 scripts。
+- **回滚方式**：git checkout 恢复 query_plan.py 与测试文件。
+
+## 2026-07-13 后端 data-metrics - 同步队列仅返回当前用户自己发布的技能
+
+**变更原因**：`opscli skills install --sync-market` 原逻辑会把用户安装过的所有广场技能（含他人发布的）都纳入同步队列。新需求要求：非当前用户创建发布的技能默认不进入同步安装，他人发布的技能只能通过 `opscli skills install username@skill_name` 显式安装。
+**改动点**：后端 auto-scheduler 项目 `vendor/aukey/data-metrics`（非 opscli 仓库）：
+1. `src/Services/SkillMarketplaceService.php` — `getSyncQueue()` 查询新增 `->where('sm.user_id', $userId)` 过滤（仅返回当前用户发布的技能），并更新方法 docblock；
+2. `src/Http/Controllers/SkillSyncController.php` — `queue()` docstring 同步更新说明。
+opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表），旧版客户端自动获得新行为。
+**验证结果**：`php -l`（PHP 8.4，/opt/homebrew/opt/php@8.4）两文件均无语法错误。本机默认 PHP 7.4 对该包预存的 PHP 8 语法（nullsafe、构造器属性提升）报 parse error，与本次改动无关。待接口级验证：测试账号调 `GET /v1/skills/sync/queue` 确认不含他人发布的技能，`opscli skills install --sync-market --dry-run` 同步计划只剩自己发布的。
+**影响范围**：仅 `GET /v1/skills/sync/queue` 返回内容（--sync-market 同步范围收窄）；显式远程安装、排除名单、安装统计回调等链路不受影响。过滤后队列内全部为 creator，`is_downloadable` 恒为 true、`download_url` 恒非空（字段保留，兼容旧客户端）。
+**回滚方式**：删除 `getSyncQueue()` 中的 `->where('sm.user_id', $userId)` 一行及其注释，还原两处 docblock。
+---
+
+## 2026-07-14 ops-dataset-query v1.3.2 术语更名与超时处置（用户反馈两项）
+
+- **为什么改**：①「合同」用语在 agent 回复中易被误解为法律合同，按用户要求统一更名为「规划器」；②矩阵复跑实测规划器首次调用常撞默认 60s 执行超时（内部含自动升级 ≤60s + 自动枚举 ≤45s），模型需自行摸索「拉长等待重试」，浪费轮次。
+- **具体做了什么**：①全模板中文用语「合同/组合入口」→「规划器」（产物语境用「规划结果」），保护「证据合同」独立概念不受影响，英文 JSON 键（contract/answer_contract 等）不变；②SKILL.md/cli.md/description 增加执行超时预算指引：规划器首次运行设 ≥120s 超时、run_query 设 ≥180s，超时=原样重试一次并加大超时（规划器幂等二次秒回），禁止因超时改走旁路探查；③SKILL.md 版本 1.3.1→1.3.2。
+- **验证**：pytest 23/23；QA 真实数据包抽验 planned/table 2/time_scope 对比期正常。
+- **影响范围**：仅技能模板文案与指引；无逻辑变更（除 description）。需重新发布到 QA 广场并同步提示词 v20（更名+超时指引）。
+- **回滚方式**：git revert 本次 commit。
+
+## 2026-07-14 ops-dataset-query v1.3.3 规划器 30 秒窗口适配（超时结构性根治）
+
+- **为什么改**：四轮 e2e 实测确认平台单条命令有效等待硬顶约 30 秒（SDK PTY 钳制 PTY_YIELD_TIME_MS_MAX=30000，e2b 后端应用；模型自设 ≥120s 无效），而规划器「同步升级 60s+同步枚举 45s」预算与之结构性错配——占位数据/刷新器失败场景下首调必然超时，且曾实测升级进程被窗口切断致 VERSION.json 半写入（NUL 污染）。
+- **具体做了什么**：①自动升级改「前台 10s 宽限 + 超时转后台续跑」：Popen(start_new_session) 启动，宽限内完成即继续规划；未完成不杀进程、写 pid 标记立即返回 `status=blocked, recovery_state=refresh_in_progress`，恢复命令为 `sleep 25 && 原样重跑`（等待+重跑合并一条命令贴 30s 窗口）；下次调用凭标记与就绪检查接管（fallback 目录前置检查，后台产物就绪即秒级接管）；进程消亡仍未就绪判 refresh_failed 给手动指引；②自动枚举预算 45s→20s，且与升级不在同一次调用内叠加（升级发生则本次跳过 auto-enum、输出内嵌枚举命令走手动路径）——任意单次调用最坏 ~22s；③_refresh_contract 增加 recovery_state（in_progress/failed 两态差异化指引），model_view 透传，schema 同步；④SKILL.md/cli.md/description 撤换已证伪的「设 ≥120s」指引为 30 秒窗口叙事；版本 1.3.2→1.3.3。
+- **验证**：pytest 24/24（升级三态/宽限完成继续规划/转后台返回等待合同/fallback 前置不再发起升级）；本机活体闭环：占位包首调 10.2s 确定性返回 refresh_in_progress（慢速假 opscli 强制 18s 升级），sleep 后重跑 0.11s 接管 planned；就绪数据常态首调 0.14s。
+- **影响范围**：仅技能模板；行为向后兼容（数据就绪路径不变）。需发布 1.3.3 到 QA 广场并同步提示词 v21（撤换 ≥120s 超时段）。
+- **回滚方式**：git revert 本 commit；广场回滚 1.3.2。
+
+## 2026-07-14 ops-dataset-query v1.3.4 宽限微调（收敛默认命令窗超时临界）+ 更名语义修正
+
+- **为什么改**：v1.3.3 验收轮 DB 取证（48 次规划器调用/2 次超时）确认——超时全部发生在「模型未显式设 yield_time_ms、沿用 SDK 默认 10000ms」的命令上，而升级前台宽限恰好也是 10s，卡在临界点被外层命令窗切断；模型显式设 20/25/30s 的 7 次调用全部未超时。另修 v1.3.2 术语更名时几处过头走样（「拿规划器/确认口径规划器/权限规划器检查」应为「拿规划结果/权限合同检查」）。
+- **具体做了什么**：①_UPGRADE_GRACE_SECONDS 10s→8s，让 SDK 默认 10s 命令窗留出 ≥2s 安全边际、默认窗口下也能拿到 in_progress 返回而非被切成超时；②SKILL.md 修正 3 处更名语义走样 + 宽限文案 10→8s；版本 1.3.3→1.3.4。
+- **验证**：pytest 24/24；根因数据：验收轮 48 调用中显式设 ≥20s 窗的 7 次 0 超时、默认 10s 窗的 41 次 2 超时。
+- **不改**：未在提示词强制模型手设 yield_time_ms（实测 19/19 次调用均不显式设，加指令收效存疑），改用工程解（压宽限让默认窗自然兜住）。
+- **影响范围**：仅技能模板；需发布 1.3.4 到 QA 广场。
+- **回滚方式**：git revert 本 commit。
+
+## 2026-07-14 ops-dataset-query v1.3.5 自动枚举短超时（补齐命令窗盲区）
+
+- **为什么改**：v1.3.4 验收轮 DB 取证（33 次规划器调用 1 次超时=3.0%，较 v1.3.3 的 4.2% 下降但未归零），定位唯一残留超时=即时销售 S4「平台无授权」场景：该场景数据已就绪（不走升级宽限），但规划器要做**自动枚举**（调 opscli 拿平台值），枚举网络调用（上限 20s）超过模型给命令设的默认 10s 窗口被切断。v1.3.4 的 8s 宽限只覆盖升级路径，覆盖不到「已就绪+需枚举」这条路径——是遗留盲区。
+- **具体做了什么**：`_auto_enum_platform_values` 超时上限 20s→7s，贴合默认 10s 命令窗（与 8s 升级宽限一致的设计思路）；枚举短超时内未返回时回落到内嵌手动枚举命令（platform_enum_command，已有兜底路径），绝不阻塞命令窗口。附带修 build_model_query_plan docstring 更名走样（内部规划器→内部合同）。
+- **验证**：pytest 24/24（auto_enum mock 用例不受超时值影响）；DB 取证的唯一超时命令实测=默认 10000ms 命令墙钟 10.03s（枚举场景）。
+- **影响范围**：仅技能模板；平台枚举待收敛场景下超时改回落手动命令而非被切（原本被切后模型也会重跑，本改动让首调即返回可用合同）。需发布 1.3.5 到 QA 广场。
+- **回滚方式**：git revert 本 commit。
+## 2026-07-15 seller_sprite - 公共集成账号改为平台级全局缓存
+
+**变更原因**：卖家精灵集成账号是平台公共数据，不同合法用户请求返回相同账号；按认证主体分别缓存会让每个用户、每个进程都重复调用 `/api/v1/integration-accounts`。
+**改动点**：将卖家精灵远端账号缓存键从“平台 + 认证主体”收敛为平台 `seller_sprite`，不同 MCP 用户在同一进程和 600 秒 TTL 内复用同一份公共账号；保留 `refresh=True` 强制刷新和过期清理；移除不再使用的集成账号凭证指纹缓存接口及按用户容量淘汰逻辑。任务提交者校验、CredentialStore 隔离、空 Context worker 以及显式 session/JWT 拒绝逻辑保持不变。
+**验证结果**：TDD RED 确认不同认证用户原本各调用一次账号接口；GREEN 后同平台跨用户只调用一次。执行核心回归 `75 passed`；卖家精灵扩展回归 `151 passed, 2 failed`，两项失败均为仓库既有的 `seller-sprite-debug` 顶层命令未注册；`py_compile` 与 `git diff --check` 通过。
+**影响范围**：影响卖家精灵公共集成账号在单个进程内的缓存粒度和接口调用频率；不改变 MCP 用户认证、任务归属、额度、业务请求参数和返回结构。多进程或多 Pod 之间仍不共享内存缓存。
+**回滚方式**：恢复卖家精灵缓存键的认证主体指纹分区、`IntegrationAccountClient.cache_identity()` 及对应测试，并删除本条变更记录。
+---
+
+## 2026-07-15 seller_sprite - 修复公用 MCP 跨用户认证与账号缓存串用
+
+**变更原因**：卖家精灵全局后台调度器会继承首个 MCP 请求的 ContextVar，后续任务可能把新用户的 session/JWT 与首个用户的 API Key 混用；远端账号缓存也未按认证主体隔离。
+**改动点**：`IntegrationAccountClient` 在存在显式 session/JWT 时不再合并请求级 MCP API Key，并提供凭证指纹缓存身份；卖家精灵账号缓存按认证身份分区、主动清理过期项并限制容量，未知身份客户端禁用全局缓存；任务表只保存非敏感 CredentialStore 作用域引用、提交用户邮箱和显式凭证恢复标记，仅非 MCP 调用方显式提供的凭证按 `job_id` 短暂保存在内存，MCP 异步入口拒绝无法校验归属的显式 session/JWT；服务恢复普通任务时从统一加密凭证存储加载，显式凭证任务重启后严格失败；凭证缺失、审计探测异常或作用域用户与提交用户不一致时禁止执行，绝不回退服务器默认 CLI 账号；调度循环主动清理被外部中止任务的内存凭证；后台 worker 从空 Context 创建，不再保存全局可变用户认证；补充双用户认证、显式凭证、重启恢复、缺凭证失败关闭、用户一致性、调度上下文、缓存隔离、缓存淘汰和凭证引用清理回归测试。
+**验证结果**：RED：新增回归用例稳定复现显式 JWT/session 混入首请求 API Key、用户 B 命中用户 A 账号缓存、调度器无法接收逐任务认证共 4 个失败；GREEN：核心定向回归 `75 passed`，`py_compile` 与 `git diff --check` 通过；卖家精灵扩展回归 `151 passed, 2 failed`，MCP 最近一次回归 `205 passed, 15 failed`，Sif `44 passed`，Scrape.do `21 passed`，Keepa `42 passed, 1 failed`。剩余失败均为仓库既有的 debug CLI 注册、旧版本头断言、工具注册、额度默认值或内部参考缺失；全库测试仍被既有同名测试模块 collection mismatch 阻断。
+**影响范围**：影响卖家精灵 MCP 任务入队、后台执行时的 OPS 集成账号鉴权、任务队列表凭证引用字段及进程内账号缓存；不改变卖家精灵业务接口参数和外部返回结构。
+**回滚方式**：回退本条涉及的集成账号认证优先级、卖家精灵账号缓存键、调度器逐任务认证参数、MCP 入队调用及对应测试。
+**后续调整**：同日已确认卖家精灵账号属于平台公共数据，缓存分区随后由认证主体改为平台级全局；任务认证隔离修复保持不变。
 ---

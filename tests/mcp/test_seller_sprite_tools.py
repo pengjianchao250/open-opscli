@@ -22,11 +22,13 @@ class DummyManager:
 class DummyScheduler:
     last_request = None
     last_mcp_user_email = None
+    last_enqueue_kwargs = None
     enqueue_calls = 0
 
-    async def enqueue(self, request, *, mcp_user_email=None):
+    async def enqueue(self, request, **kwargs):
         self.__class__.last_request = request
-        self.__class__.last_mcp_user_email = mcp_user_email
+        self.__class__.last_mcp_user_email = kwargs.get("mcp_user_email")
+        self.__class__.last_enqueue_kwargs = kwargs
         self.__class__.enqueue_calls += 1
         return {
             "job_id": request.job_id or "job-async-1",
@@ -50,7 +52,7 @@ class DummyScheduler:
 
 
 class EnqueueOnlyScheduler:
-    async def enqueue(self, request, *, mcp_user_email=None):
+    async def enqueue(self, request, **kwargs):
         return {
             "job_id": request.job_id or "job-queued-1",
             "state": "queued",
@@ -64,7 +66,7 @@ class EnqueueOnlyScheduler:
 
 
 class FailingScheduler:
-    async def enqueue(self, request, *, mcp_user_email=None):
+    async def enqueue(self, request, **kwargs):
         raise RuntimeError("enqueue boom")
 
 
@@ -73,9 +75,9 @@ class NoNormalizeScheduler:
     last_mcp_user_email = None
     enqueue_calls = 0
 
-    async def enqueue(self, request, *, mcp_user_email=None):
+    async def enqueue(self, request, **kwargs):
         self.__class__.last_request = request
-        self.__class__.last_mcp_user_email = mcp_user_email
+        self.__class__.last_mcp_user_email = kwargs.get("mcp_user_email")
         self.__class__.enqueue_calls += 1
         return {
             "job_id": request.job_id,
@@ -1910,6 +1912,11 @@ def test_listing_analysis_submit_passes_owner_to_atomic_scheduler(monkeypatch):
 
     assert result["success"] is True
     assert DummyScheduler.last_mcp_user_email == "mcp-user@example.com"
+    assert DummyScheduler.last_enqueue_kwargs == {
+        "credential_scope": "default",
+        "expected_user_email": "mcp-user@example.com",
+        "mcp_user_email": "mcp-user@example.com",
+    }
 
 
 def test_seller_sprite_run_passes_owner_to_atomic_scheduler(monkeypatch):
@@ -1940,6 +1947,11 @@ def test_seller_sprite_run_passes_owner_to_atomic_scheduler(monkeypatch):
     assert DummyScheduler.enqueue_calls == 1
     assert DummyScheduler.last_mcp_user_email == "mcp-user@example.com"
     assert DummyScheduler.last_request.job_id == "mcp-job-run-1"
+    assert DummyScheduler.last_enqueue_kwargs == {
+        "credential_scope": "default",
+        "expected_user_email": "mcp-user@example.com",
+        "mcp_user_email": "mcp-user@example.com",
+    }
 
 
 def test_seller_sprite_run_rejects_whitespace_only_current_user_before_persisting(
@@ -1966,6 +1978,35 @@ def test_seller_sprite_run_rejects_whitespace_only_current_user_before_persistin
     assert DummyScheduler.enqueue_calls == 0
     with pytest.raises(ValueError, match="调用记录不存在"):
         store.get_mcp_run("job-whitespace-user")
+
+
+def test_seller_sprite_run_rejects_explicit_auth_from_mcp_caller(monkeypatch, tmp_path):
+    store = _make_store(tmp_path)
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_auth_pair",
+        lambda system, session_id, jwt: (session_id, jwt),
+    )
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
+    DummyScheduler.enqueue_calls = 0
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="keyword-reverse",
+            params={"asin": "B07YRMT36L"},
+            job_id="mcp-job-explicit-auth",
+            session_id="explicit-session",
+            jwt="explicit-jwt",
+        )
+    )
+
+    assert result["success"] is False
+    assert "不接受显式 session_id/jwt" in result["error"]["message"]
+    assert DummyScheduler.enqueue_calls == 0
+    with pytest.raises(ValueError, match="MCP 调用记录不存在"):
+        store.get_mcp_run("mcp-job-explicit-auth")
 
 
 def test_seller_sprite_run_enqueue_failure_does_not_create_owner_record(monkeypatch, tmp_path):

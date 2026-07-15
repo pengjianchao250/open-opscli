@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from opscli.auth import AuthClient
 from opscli.auth.config import get_ops_system_url
+from opscli.config import __version__
 from opscli.mcp.context import get_mcp_request_headers
 from opscli.shared.exceptions import RemoteError
 from opscli.shared.http import parse_remote_response
@@ -93,18 +94,22 @@ class IntegrationAccountClient:
         self.ops_system_url = get_ops_system_url().rstrip("/")
 
     def _get_auth(self, alias: str = "ops") -> tuple[dict[str, str], dict[str, str]]:
-        mcp_headers = get_mcp_request_headers()
+        # 显式任务凭证与请求级 MCP 上下文只能二选一，避免后台任务混用不同用户身份。
         if self.session_id:
             jwt = self.jwt
             if not jwt:
                 jwt = self.auth_client.get_token_by_session(self.session_id, alias)
-            headers = {"Authorization": f"Bearer {jwt}"}
-            headers.update(mcp_headers)
+            headers = {
+                "Authorization": f"Bearer {jwt}",
+                "X-Opscli-Version": __version__,
+            }
             return headers, {"polarisUserToken": self.session_id}
         if self.jwt:
-            headers = {"Authorization": f"Bearer {self.jwt}"}
-            headers.update(mcp_headers)
-            return headers, {}
+            return {
+                "Authorization": f"Bearer {self.jwt}",
+                "X-Opscli-Version": __version__,
+            }, {}
+        mcp_headers = get_mcp_request_headers()
         if _has_mcp_api_key(mcp_headers):
             return mcp_headers, {}
         headers, cookies = self.auth_client.build_request_auth(alias)
