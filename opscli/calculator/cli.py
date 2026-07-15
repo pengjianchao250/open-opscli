@@ -29,7 +29,8 @@ from opscli.calculator.draft import (
 from opscli.calculator.models import build_query_payload, read_json_file
 
 app = typer.Typer(help="新品计算器")
-console = Console()
+# 费用方案有多列长表头，固定渲染宽度可避免窄终端把完整费用数据替换为省略号。
+console = Console(width=240)
 
 CALCULATOR_TMP_DIR = Path("tmp-validation") / "calculator"
 DEFAULT_DRAFT_OUT = CALCULATOR_TMP_DIR / "calculator-draft"
@@ -101,22 +102,12 @@ def _sudo_from(data: dict, fallback: str | None = None) -> str | None:
     return _string_value(data.get("sudo") or fallback)
 
 
-def _detail_command_text(task_code: str, sudo: str | None = None, json_output: bool = False) -> str:
+def _detail_command_text(task_code: str, sudo: str | None = None) -> str:
     """生成详情查询命令文本。"""
     command = f"opscli calculator detail --task-code {task_code}"
     if sudo:
         command += f" --sudo {sudo}"
-    if json_output:
-        command += " --json"
     return command
-
-
-def _echo_web_detail_hint(task_code: str, sudo: str | None = None) -> None:
-    """输出 Web 详情页和原始 JSON 提示。"""
-    typer.echo("完整结果：")
-    typer.echo("- Web 页面包含基本信息、产品信息、成本费用、备货设置、试算结果、当前方案和方案切换。")
-    typer.echo(f"- Web详情页：{_calculator_detail_url(task_code, sudo)}")
-    typer.echo(f"- 原始JSON：{_detail_command_text(task_code, sudo, json_output=True)}")
 
 
 def _echo_draft_fill_hint(package_dir: Path) -> None:
@@ -512,7 +503,6 @@ def detail_command(
         return
     data = _extract_response_data(response, "查询任务详情")
     resolved_task_code = _task_code_from(data, task_code) or task_code
-    resolved_sudo = _sudo_from(data, sudo)
     base = _dict_value(data, "base")
 
     typer.echo("任务详情")
@@ -533,7 +523,6 @@ def detail_command(
     else:
         typer.echo("暂无方案数据。")
         typer.echo("")
-    _echo_web_detail_hint(resolved_task_code, resolved_sudo)
 
 
 @app.command("copy")

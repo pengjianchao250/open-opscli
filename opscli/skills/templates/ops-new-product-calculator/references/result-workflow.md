@@ -4,7 +4,7 @@
 
 ## 查询最终试算结果
 
-优先使用：
+只执行一次普通 `detail`：
 
 ```bash
 opscli calculator detail --task-code <TASK_CODE> --sudo "<SUDO>"
@@ -12,7 +12,9 @@ opscli calculator detail --task-code <TASK_CODE> --sudo "<SUDO>"
 
 - `--task-code` 与 `--sudo` 之间必须有空格。
 - `sudo` 很长时必须加引号。
-- 需要排查原始字段时才加 `--json`：
+- 默认忽略成本输入、利润和毛利，不得基于响应中的相关字段补充分析。
+- 不得自动追加 `--json`、重复执行 `detail` 或为了格式化表格再次读取原始响应。
+- 只有用户明确要求查看原始字段或诊断底层数据时才加 `--json`：
 
 ```bash
 opscli calculator detail --task-code <TASK_CODE> --sudo "<SUDO>" --json
@@ -54,37 +56,28 @@ https://bi.xenkee.com/#/calculatorResultList
 https://bi.xenkee.com/#/calculatorDatail?task_code=<TASK_CODE>&sudo=<SUDO>
 ```
 
-回复可以展示 Web 详情页，但不要在回复中泄露完整 JWT/Cookie，也不得复述其它内部认证信息。
+仅当用户明确要求页面入口时展示 Web 详情页。不要在回复中泄露完整 JWT/Cookie，也不得复述其它内部认证信息。
 
 ## 最终回复格式
 
-查询 `detail` 后，必须保留 `allPlans` 的全部方案和 `schemes` 线路。
+查询 `detail` 后，原样转述 CLI 输出，不得手工重建 Markdown 表格、二次解析费用或改写列顺序。CLI 已负责保留 `allPlans` 的全部方案和 `schemes` 线路。
 
 回复顺序：
 
 1. 任务状态和基本信息。
 2. 完整费用方案表格。
-3. Web 详情页和原始 JSON 查询提示。
+
+默认到此结束，不追加成本费用、利润、毛利、Web 详情页或原始 JSON 查询提示。
 
 表格必须包含：
 
 - 分区推荐。
 - 首单数量；全部为空或 `0` 时隐藏整列。
 - 分区线路。
-- 每 PCS 头程费用、目的仓费用、尾程费用、全程费用和全程平均费用。
+- `每PCS头程费用(CNY)`、`每PCS目的仓费用(CNY)`、`每PCS尾程费用(CNY)`、`每PCS全程费用(CNY)` 和 `每PCS全程平均费用(CNY)`。
 - 各项费用的区间。
 
 所有费用使用 CNY，保留 4 位小数。表格前说明费用不含头程清关税金。
-
-示例：
-
-```text
-注：费用计算结果不含头程清关税金。
-
-| 分区推荐 | 分区线路 | 每PCS头程费用(CNY) | 每PCS目的仓费用(CNY) | 每PCS尾程费用(CNY) | 每PCS全程费用(CNY) | 每PCS全程平均费用(CNY) |
-|---|---|---:|---:|---:|---:|---:|
-| 1区 | 美西南 | 2.3181<br>(2.2882~2.3583) | 0.1882<br>(0.1165~0.3013) | 86.4353<br>(63.4573~94.4781) | 88.9416<br>(65.8620~97.1377) | 88.9416 |
-```
 
 ## 常见错误
 

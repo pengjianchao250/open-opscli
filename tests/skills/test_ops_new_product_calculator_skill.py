@@ -141,6 +141,9 @@ def test_new_product_calculator_skill_repeats_missing_field_questions():
     assert "只追问仍为空或无效" in text
     assert "全部必填字段有效" in text
     assert "不得根据商品名称猜测" in text
+    assert "连续补充期间只更新并读取 CSV" in text
+    assert "不重复执行认证、`show`、下拉查询或 `validate`" in text
+    assert "只运行一次 `validate`" in text
 
 
 def test_new_product_calculator_skill_prevents_draft_overwrite():
@@ -171,6 +174,8 @@ def test_new_product_calculator_skill_requires_polaris_auth_preflight():
     assert "opscli auth login" in text
     assert "已登录但 Polaris Token 状态为无效/未获取" in text
     assert "申请 BI/Polaris 权限" in text
+    assert "同一连续任务只检查一次" in text
+    assert "不要在每轮补充字段前重复检查" in text
 
 
 def test_new_product_calculator_skill_guides_result_query_workflow():
@@ -180,15 +185,13 @@ def test_new_product_calculator_skill_guides_result_query_workflow():
     assert "calculator detail --task-code" in text
     assert "--sudo" in text
     assert "--json" in text
-    assert "trial-result-teble" in text
-    assert "费用" in text
-    assert "自发货(币种)" in text
-    assert "FBA(币种)" in text
-    assert "不要只摘要毛利/毛利率" in text
-    assert "不能把完整表格压缩成“方案/毛利/毛利率”三列" in text
-    for row_label in ("售价", "毛利", "毛利率", "非税采购价", "头程费用", "仓库费用", "尾程费用", "站内广告", "站外促销", "平台佣金", "退款费", "固定成本", "备注"):
-        assert row_label in text
-    assert "Web详情页" in text
+    assert "只执行一次普通 `detail`" in text
+    assert "不得自动追加 `--json`" in text
+    assert "忽略成本输入、利润和毛利" in text
+    assert "不得手工重建 Markdown 表格" in text
+    assert "完整费用方案表格" in text
+    assert "每PCS头程费用(CNY)" in text
+    assert "每PCS全程平均费用(CNY)" in text
     assert "unexpected extra argument" in text
     assert "不要在回复中泄露完整 JWT/Cookie" in text
 
