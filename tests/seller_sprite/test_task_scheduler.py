@@ -87,6 +87,24 @@ class ImmediateRunManager:
         )
 
 
+class AuthContextRecordingRunManager(ImmediateRunManager):
+    records = []
+
+    def __init__(self, *, settings, account_provider, jwt=None, session_id=None):
+        from opscli.mcp.context import get_current_api_key
+
+        super().__init__(settings=settings, account_provider=account_provider, jwt=jwt, session_id=session_id)
+        self.jwt = jwt
+        self.session_id = session_id
+        self.inherited_api_key = get_current_api_key()
+
+    async def run(self, request):
+        self.__class__.records.append(
+            (request.job_id, self.jwt, self.session_id, self.inherited_api_key)
+        )
+        return await super().run(request)
+
+
 class ResultFileRunManager:
     def __init__(self, *, settings, account_provider, jwt=None, session_id=None):
         self.settings = settings
@@ -296,6 +314,186 @@ def test_scheduler_requeues_stale_running_tasks_on_start(tmp_path: Path):
     asyncio.run(scenario())
 
 
+def test_scheduler_uses_each_tasks_auth_without_inheriting_first_request_context(tmp_path: Path):
+    async def scenario():
+        from opscli.auth.storage.credential_store import CredentialStore
+        from opscli.mcp.context import mcp_request_ctx
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        AuthContextRecordingRunManager.records = []
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=DummyAccountProvider(),
+            manager_factory=lambda **kwargs: AuthContextRecordingRunManager(**kwargs),
+        )
+        first_credential_dir = tmp_path / "credentials-user-a"
+        second_credential_dir = tmp_path / "credentials-user-b"
+        first_store = CredentialStore(base_dir=first_credential_dir)
+        first_store.save_session("session-user-a", "a@example.com", "2099-01-01T00:00:00+00:00")
+        first_store.save_token("ops", "jwt-user-a", 3600)
+        second_store = CredentialStore(base_dir=second_credential_dir)
+        second_store.save_session("session-user-b", "b@example.com", "2099-01-01T00:00:00+00:00")
+        second_store.save_token("ops", "jwt-user-b", 3600)
+
+        first_context = mcp_request_ctx.set({"api_key": "mcp-key-user-a"})
+        try:
+            await scheduler.enqueue(
+                _request("job-user-a", "B07YRMT36L"),
+                credential_scope=str(first_credential_dir),
+            )
+        finally:
+            mcp_request_ctx.reset(first_context)
+
+        second_context = mcp_request_ctx.set({"api_key": "mcp-key-user-b"})
+        try:
+            await scheduler.enqueue(
+                _request("job-user-b", "B00TEST222"),
+                credential_scope=str(second_credential_dir),
+            )
+        finally:
+            mcp_request_ctx.reset(second_context)
+
+        await _wait_for_state(scheduler, "job-user-b", "succeeded")
+
+        assert AuthContextRecordingRunManager.records == [
+            ("job-user-a", "jwt-user-a", "session-user-a", None),
+            ("job-user-b", "jwt-user-b", "session-user-b", None),
+        ]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_uses_explicit_task_auth_from_memory_without_persisting_secrets(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        AuthContextRecordingRunManager.records = []
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=DummyAccountProvider(),
+            manager_factory=lambda **kwargs: AuthContextRecordingRunManager(**kwargs),
+        )
+
+        await scheduler.enqueue(
+            _request("job-explicit-auth", "B07YRMT36L"),
+            credential_scope=str(tmp_path / "empty-credential-scope"),
+            session_id="explicit-session",
+            jwt="explicit-jwt",
+        )
+        await _wait_for_state(scheduler, "job-explicit-auth", "succeeded")
+
+        assert AuthContextRecordingRunManager.records == [
+            ("job-explicit-auth", "explicit-jwt", "explicit-session", None),
+        ]
+        assert store.get_task_context("job-explicit-auth") == {
+            "credential_scope": None,
+            "runtime_auth_required": False,
+            "expected_user_email": None,
+            "session_id": None,
+            "jwt": None,
+        }
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_fails_closed_when_credential_scope_has_no_session(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            manager_factory=lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("缺凭证时不应创建 Manager")
+            ),
+        )
+        request = _request("job-missing-auth", "B07YRMT36L")
+        store.create_mcp_run(request, "user@example.com")
+
+        await scheduler.enqueue(
+            request,
+            credential_scope=str(tmp_path / "empty-credential-scope"),
+        )
+        failed = await _wait_for_state(scheduler, "job-missing-auth", "failed")
+
+        assert failed["error"]["code"] == "SELLER_SPRITE_CONFIG_ERROR"
+        assert "凭证作用域未登录" in failed["error"]["message"]
+        assert store.get_mcp_run("job-missing-auth")["result_state"] == "failed"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_fails_closed_after_restart_loses_explicit_runtime_auth(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        first_scheduler = SellerSpriteTaskScheduler(store=store, settings=settings, auto_start=False)
+        request = _request("job-restart-explicit-auth", "B07YRMT36L")
+        store.create_mcp_run(request, "user@example.com")
+        await first_scheduler.enqueue(
+            request,
+            credential_scope=str(tmp_path / "credentials-user"),
+            session_id="explicit-session",
+            jwt="explicit-jwt",
+        )
+
+        restarted_scheduler = SellerSpriteTaskScheduler(store=store, settings=settings, auto_start=False)
+        await restarted_scheduler.start()
+        failed = await _wait_for_state(restarted_scheduler, "job-restart-explicit-auth", "failed")
+
+        assert "显式任务凭证已随服务重启丢失" in failed["error"]["message"]
+        first_scheduler._prune_runtime_auth()
+        assert first_scheduler._runtime_auth == {}
+        await restarted_scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_rejects_credential_scope_owned_by_another_user(tmp_path: Path):
+    async def scenario():
+        from opscli.auth.storage.credential_store import CredentialStore
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        credential_dir = tmp_path / "credentials-user-b"
+        credential_store = CredentialStore(base_dir=credential_dir)
+        credential_store.save_session(
+            "session-user-b",
+            "b@example.com",
+            "2099-01-01T00:00:00+00:00",
+        )
+        credential_store.save_token("ops", "jwt-user-b", 3600)
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(store=store, settings=settings, auto_start=False)
+        request = _request("job-user-mismatch", "B07YRMT36L")
+        await scheduler.enqueue(
+            request,
+            credential_scope=str(credential_dir),
+            expected_user_email="a@example.com",
+        )
+
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-user-mismatch", "failed")
+
+        assert "凭证用户与提交用户不一致" in failed["error"]["message"]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
 def test_scheduler_job_status_merges_result_file_after_success(tmp_path: Path):
     async def scenario():
         from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
@@ -337,7 +535,7 @@ def test_scheduler_updates_existing_mcp_run_to_succeeded(tmp_path: Path):
         )
 
         request = _request("job-mcp-success", "B07YRMT36L")
-        await scheduler.enqueue(request)
+        await scheduler.enqueue(request, session_id="test-session", jwt="test-jwt")
         created = store.create_mcp_run(request, "user@example.com")
 
         assert created["result_state"] == "queued"
@@ -377,7 +575,7 @@ def test_scheduler_marks_existing_mcp_run_running_before_finish(tmp_path: Path):
         )
 
         request = _request("job-mcp-running", "B07YRMT36L")
-        await scheduler.enqueue(request)
+        await scheduler.enqueue(request, session_id="test-session", jwt="test-jwt")
         store.create_mcp_run(request, "user@example.com")
 
         await scheduler.start()
@@ -410,7 +608,7 @@ def test_scheduler_updates_existing_mcp_run_to_failed(tmp_path: Path):
         )
 
         request = _request("job-mcp-failed", "B07YRMT36L")
-        await scheduler.enqueue(request)
+        await scheduler.enqueue(request, session_id="test-session", jwt="test-jwt")
         store.create_mcp_run(request, "user@example.com")
 
         await scheduler.start()
@@ -442,7 +640,7 @@ def test_scheduler_marks_task_failed_when_account_unavailable(tmp_path: Path):
         )
 
         request = _request("job-account-error", "B07YRMT36L")
-        await scheduler.enqueue(request)
+        await scheduler.enqueue(request, session_id="test-session", jwt="test-jwt")
         store.create_mcp_run(request, "user@example.com")
 
         await scheduler.start()
@@ -473,7 +671,7 @@ def test_scheduler_fails_job_when_existing_mcp_run_success_update_fails(tmp_path
         )
 
         request = _request("job-mcp-finish-error", "B07YRMT36L")
-        await scheduler.enqueue(request)
+        await scheduler.enqueue(request, session_id="test-session", jwt="test-jwt")
         store.create_mcp_run(request, "user@example.com")
 
         await scheduler.start()
@@ -514,6 +712,35 @@ def test_scheduler_keeps_running_when_probe_mcp_run_errors_for_normal_job(tmp_pa
     asyncio.run(scenario())
 
 
+def test_scheduler_fails_closed_when_probe_mcp_run_errors_for_mcp_job(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = ProbeErrorStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            manager_factory=lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("MCP 审计探测失败时不应创建 Manager")
+            ),
+            auto_start=False,
+        )
+
+        await scheduler.enqueue(
+            _request("job-mcp-probe-error", "B07YRMT36L"),
+            credential_scope=str(tmp_path / "credentials-user"),
+            expected_user_email="user@example.com",
+        )
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-mcp-probe-error", "failed")
+
+        assert failed["state"] == "failed"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
 def test_scheduler_continues_consuming_after_mcp_cleanup_error(tmp_path: Path):
     async def scenario():
         from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
@@ -530,7 +757,7 @@ def test_scheduler_continues_consuming_after_mcp_cleanup_error(tmp_path: Path):
 
         first_request = _request("job-mcp-cleanup-error", "B07YRMT36L")
         second_request = _request("job-after-cleanup-error", "B00TEST222")
-        await scheduler.enqueue(first_request)
+        await scheduler.enqueue(first_request, session_id="test-session", jwt="test-jwt")
         await scheduler.enqueue(second_request)
         store.create_mcp_run(first_request, "user@example.com")
 

@@ -182,7 +182,7 @@ def test_store_marks_task_finished_and_persists_result_metadata(tmp_path: Path):
     assert status["position"] is None
 
 
-def test_store_persists_task_auth_context(tmp_path: Path):
+def test_store_persists_only_non_sensitive_credential_scope(tmp_path: Path):
     from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
 
     store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
@@ -190,14 +190,71 @@ def test_store_persists_task_auth_context(tmp_path: Path):
         request=_request(job_id="job-auth"),
         queue_scope="seller_sprite",
         root_dir=tmp_path / "job-auth",
-        session_id="sid-1",
-        jwt="jwt-1",
+        credential_scope=str(tmp_path / "credentials-user-1"),
+        expected_user_email="user-1@example.com",
     )
 
     context = store.get_task_context("job-auth")
 
-    assert context["session_id"] == "sid-1"
-    assert context["jwt"] == "jwt-1"
+    assert context == {
+        "credential_scope": str(tmp_path / "credentials-user-1"),
+        "runtime_auth_required": False,
+        "expected_user_email": "user-1@example.com",
+        "session_id": None,
+        "jwt": None,
+    }
+
+
+def test_store_clears_task_auth_context_after_success(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_request(job_id="job-auth-success"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "job-auth-success",
+        credential_scope=str(tmp_path / "credentials-success"),
+    )
+
+    store.finish_task(
+        job_id="job-auth-success",
+        result_path=str(tmp_path / "job-auth-success" / "result.json"),
+        row_count=0,
+        export_payload=None,
+    )
+
+    assert store.get_task_context("job-auth-success") == {
+        "credential_scope": None,
+        "runtime_auth_required": False,
+        "expected_user_email": None,
+        "session_id": None,
+        "jwt": None,
+    }
+
+
+def test_store_clears_task_auth_context_after_failure(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_request(job_id="job-auth-failed"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "job-auth-failed",
+        credential_scope=str(tmp_path / "credentials-failed"),
+    )
+
+    store.fail_task(
+        job_id="job-auth-failed",
+        error_payload={"code": "TEST", "message": "failed"},
+    )
+
+    assert store.get_task_context("job-auth-failed") == {
+        "credential_scope": None,
+        "runtime_auth_required": False,
+        "expected_user_email": None,
+        "session_id": None,
+        "jwt": None,
+    }
 
 
 def test_store_create_mcp_run_persists_initial_record(tmp_path: Path):

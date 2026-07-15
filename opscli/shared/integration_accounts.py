@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from opscli.auth import AuthClient
 from opscli.auth.config import get_ops_system_url
+from opscli.config import __version__
 from opscli.mcp.context import get_mcp_request_headers
 from opscli.shared.exceptions import RemoteError
 from opscli.shared.http import parse_remote_response
@@ -93,23 +94,40 @@ class IntegrationAccountClient:
         self.ops_system_url = get_ops_system_url().rstrip("/")
 
     def _get_auth(self, alias: str = "ops") -> tuple[dict[str, str], dict[str, str]]:
-        mcp_headers = get_mcp_request_headers()
+        # 显式任务凭证与请求级 MCP 上下文只能二选一，避免后台任务混用不同用户身份。
         if self.session_id:
             jwt = self.jwt
             if not jwt:
                 jwt = self.auth_client.get_token_by_session(self.session_id, alias)
-            headers = {"Authorization": f"Bearer {jwt}"}
-            headers.update(mcp_headers)
+            headers = {
+                "Authorization": f"Bearer {jwt}",
+                "X-Opscli-Version": __version__,
+            }
             return headers, {"polarisUserToken": self.session_id}
         if self.jwt:
-            headers = {"Authorization": f"Bearer {self.jwt}"}
-            headers.update(mcp_headers)
-            return headers, {}
+            return {
+                "Authorization": f"Bearer {self.jwt}",
+                "X-Opscli-Version": __version__,
+            }, {}
+        mcp_headers = get_mcp_request_headers()
         if _has_mcp_api_key(mcp_headers):
             return mcp_headers, {}
         headers, cookies = self.auth_client.build_request_auth(alias)
         headers.update(mcp_headers)
         return headers, cookies
+
+    def cache_identity(self) -> str:
+        """返回不暴露凭证明文的缓存隔离标识。"""
+        if self.session_id:
+            return f"session:{_credential_fingerprint(self.session_id)}"
+        if self.jwt:
+            return f"jwt:{_credential_fingerprint(self.jwt)}"
+        mcp_headers = get_mcp_request_headers()
+        api_key = mcp_headers.get("X-MCP-API-Key")
+        if api_key:
+            return f"mcp:{_credential_fingerprint(api_key)}"
+        # CLI 模式是单用户本地进程，可在进程内安全复用同一份账号缓存。
+        return "cli"
 
     def get_accounts(self, platform: str) -> IntegrationAccountBundle:
         """拉取指定平台账号并解密。"""
@@ -183,3 +201,8 @@ def decrypt_integration_account_value(encrypted_b64: str, raw_key: str) -> str:
 
 def _has_mcp_api_key(headers: dict[str, str]) -> bool:
     return bool(headers.get("X-MCP-API-Key"))
+
+
+def _credential_fingerprint(value: str) -> str:
+    """生成仅用于内存缓存分区的凭证指纹。"""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
