@@ -112,7 +112,7 @@ CSV 可填写 `河北省`、`唐山市`、`算毛利`、`1区全部、指定分�
 - 不要求用户手写 `pick_up_province_code` / `pick_up_city_code`；CLI 提交前自动派生。
 - `checkbox_stock: ["one_zone_all", "specify_part"]` 对应 `1区全部、指定分区`。
 - US/CA 的 `two_zone_combine` 默认是 `["zone_1_2"]`，对应“美东+美西”。
-- 利润相关成本费用由 CLI 统一填 `0`，新版 `填写表格.csv` 不包含这些字段；旧版文件仅用于历史备份。
+- 利润相关成本费用由 CLI 统一填 `1`，避免 `0` 导致后端计算失败；新版 `填写表格.csv` 不包含这些字段，旧版文件仅用于历史备份。
 - `stock_qty_first_percent`、`stock_qty_second_percent`、`stock_qty_third_percent` 之和必须为 100。
 
 ## 空白物流字段结构

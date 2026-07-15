@@ -38,8 +38,8 @@ _BOOL_FALSE_VALUES = {"0", "false", "no", "n", "否"}
 _DEFAULT_CALC_METHOD = "GROSS_PROFIT"
 _DEFAULT_CHECKBOX_STOCK = ["one_zone_all", "specify_part"]
 _DEFAULT_TWO_ZONE_COMBINE = ["zone_1_2"]
-# 当前只计算仓配费用，利润试算输入统一归零。
-_ZERO_COST_FIELD_KEYS = {
+# 当前只计算仓配费用，利润试算输入统一使用非零占位值，避免后端拒绝计算。
+_DEFAULT_COST_FIELD_KEYS = {
     "product_price",
     "gross_profit_percent",
     "purchase_cost_with_tax",
@@ -112,8 +112,8 @@ def normalize_draft_data(data: dict[str, Any]) -> tuple[dict[str, Any], list[str
             number = float(value) if "." in value else int(value)
             normalized[key] = number
 
-    for key in _ZERO_COST_FIELD_KEYS:
-        normalized[key] = 0
+    for key in _DEFAULT_COST_FIELD_KEYS:
+        normalized[key] = 1
 
     if _is_empty(normalized.get("calc_method")):
         normalized["calc_method"] = _DEFAULT_CALC_METHOD
@@ -825,6 +825,9 @@ def build_summary_text(data: dict[str, Any]) -> str:
 def prepare_submit_payload(data: dict[str, Any]) -> dict[str, Any]:
     """生成提交 payload，提交前处理与前端一致的派生字段。"""
     payload = copy.deepcopy(data)
+    # 兼容已生成的旧草稿：提交前覆盖成本字段，避免历史 0 值导致后端计算失败。
+    for key in _DEFAULT_COST_FIELD_KEYS:
+        payload[key] = 1
     if payload.get("pick_up_province"):
         payload["pick_up_province_code"] = payload["pick_up_province"]
     if payload.get("pick_up_city"):

@@ -99,7 +99,7 @@ def test_new_product_calculator_skill_guides_second_stage_draft_completion():
     assert "two_zone_combine" in text
     assert "zone_1_2" in text
     assert "checkbox_stock" in text
-    assert "利润相关成本费用由 CLI 统一填 `0`" in text
+    assert "利润相关成本费用由 CLI 统一填 `1`" in text
     assert "不要把中文省市名写入 draft.json" in text
     assert "河北省" in text
     assert "唐山市" in text
