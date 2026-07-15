@@ -8,10 +8,10 @@ import re
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
-from opscli.seller_sprite.accounts import SellerSpriteAccountProvider
+from opscli.seller_sprite.accounts import SellerSpriteAccount, SellerSpriteAccountProvider
 from opscli.seller_sprite.api.categories import SellerSpriteCategoryResolver
 from opscli.seller_sprite.api.client import BASE_URL, SellerSpriteApiClient
 from opscli.seller_sprite.api.market_research import parse_market_research_html
@@ -54,10 +54,15 @@ class SellerSpriteApiManager:
         account_provider: SellerSpriteAccountProvider | None = None,
         jwt: str | None = None,
         session_id: str | None = None,
+        session_state_listener: Callable[
+            [SellerSpriteAccount, dict[str, Any]], None
+        ]
+        | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         self.jwt = jwt
         self.session_id = session_id
+        self.session_state_listener = session_state_listener
         self.account_provider = account_provider or SellerSpriteAccountProvider(
             self.settings,
             integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
@@ -200,6 +205,7 @@ class SellerSpriteApiManager:
                         if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload)
                         else None
                     ),
+                    session_state_listener=self.session_state_listener,
                 )
                 login = browser_result.login
                 main_response = browser_result.response
@@ -425,8 +431,13 @@ async def _run_browser_route_request(
     root_dir: Path,
     high_frequency_endpoint: str | None,
     high_frequency_payload: dict[str, Any] | None,
+    session_state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None,
 ):
-    worker = get_browser_route_worker(settings=settings, account=account)
+    worker = get_browser_route_worker(
+        settings=settings,
+        account=account,
+        state_listener=session_state_listener,
+    )
     return await worker.submit(
         BrowserRouteRequest(
             scenario=request.scenario,

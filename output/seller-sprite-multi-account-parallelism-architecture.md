@@ -93,6 +93,36 @@ browser-route 关闭时必须：
 4. 仅在凭证失效、移除或密码变化时清理旧认证状态；
 5. 正常 scheduler close 只释放资源，不删除有效登录态。
 
+会话采用“懒创建、空闲回收、到期轮换”生命周期：
+
+- browser context 首次任务到来时创建，冷备用账号不预热；
+- 最后一次任务完成后空闲满 30 分钟，从 registry 移除并关闭；
+- 会话自 browser context 创建起满 6 小时后，在当前任务完成边界轮换，不中断运行中任务；
+- 下一条任务按原 profile 懒创建新 context，保留仍有效的 Cookie/profile；
+- scheduler 正常关闭时统一关闭其事件循环中的健康 browser 会话；
+- 生命周期判断只使用单调时钟，审计时间继续使用 UTC 墙上时钟。
+
+会话状态机为：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Registered: worker 注册，尚未创建浏览器
+    Registered --> Ready: 首次任务创建 context
+    Ready --> Busy: 开始执行任务
+    Busy --> Idle: 任务完成且内部队列为空
+    Idle --> Busy: 新任务复用会话
+    Idle --> Recycling: 空闲 30 分钟或会话满 6 小时
+    Ready --> Closing: scheduler 关闭或账号退出
+    Recycling --> Closed: 资源释放成功
+    Closing --> Closed: 资源释放成功
+    Recycling --> CloseFailed: 资源释放失败
+    Closing --> CloseFailed: 资源释放失败
+```
+
+每次实际状态变化通过同一个 Recorder 写结构化日志和
+`seller_sprite_account_events`。事件记录账号键、脱敏用户名、前后状态、关闭原因、
+会话年龄、空闲时长和累计任务数；不得记录 Cookie、profile 内容或浏览器响应正文。
+
 ### QueueStore
 
 新增字段：
@@ -292,3 +322,5 @@ tests/seller_sprite/test_browser_route_worker.py
 6. `pytest tests/seller_sprite -v`。
 7. 全量 `pytest tests -v`。
 8. 双轴 code review：项目规范与本 PRD。
+9. 使用可控单调时钟验证 30 分钟空闲回收、6 小时任务边界轮换和 busy 会话保护。
+10. 验证 scheduler close 关闭全部健康会话，并可查询完整的 session state changed 审计链。

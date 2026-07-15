@@ -46,6 +46,305 @@ def test_close_browser_route_worker_closes_and_removes_account_session():
     _run(scenario())
 
 
+def test_close_all_browser_route_workers_releases_healthy_sessions(tmp_path):
+    """调度器关闭时应统一释放当前事件循环中的健康会话。"""
+
+    async def scenario():
+        worker_module._WORKERS.clear()
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        accounts = [
+            SellerSpriteAccount(name=f"account-{index}", username=f"user-{index}@example.com", password="secret")
+            for index in (1, 2)
+        ]
+        closed = []
+        transitions = []
+
+        class CloseProbe:
+            def __init__(self, account_name):
+                self.account_name = account_name
+
+            async def close(self):
+                closed.append(self.account_name)
+
+        for account in accounts:
+            worker = worker_module.get_browser_route_worker(
+                settings=settings,
+                account=account,
+                state_listener=lambda current_account, payload: transitions.append(
+                    (current_account.name, payload["state"], payload["reason"])
+                ),
+            )
+            worker.mark_session_ready(context=CloseProbe(account.name), page=object())
+
+        close_count = await worker_module.close_all_browser_route_workers(
+            settings=settings,
+            reason="scheduler_close",
+        )
+
+        assert close_count == 2
+        assert closed == ["account-1", "account-2"]
+        assert all(
+            worker_module.get_existing_browser_route_worker(settings=settings, account=account) is None
+            for account in accounts
+        )
+        assert transitions == [
+            ("account-1", "ready", "browser_context_opened"),
+            ("account-2", "ready", "browser_context_opened"),
+            ("account-1", "closing", "scheduler_close"),
+            ("account-1", "closed", "scheduler_close"),
+            ("account-2", "closing", "scheduler_close"),
+            ("account-2", "closed", "scheduler_close"),
+        ]
+
+    _run(scenario())
+
+
+def test_close_all_browser_route_workers_continues_cleanup_after_context_close_failure(tmp_path):
+    """context 关闭失败时仍应停止 Playwright，并报告 close_failed。"""
+
+    async def scenario():
+        worker_module._WORKERS.clear()
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        account = SellerSpriteAccount(name="account-1", username="user@example.com", password="secret")
+        transitions = []
+        worker = worker_module.get_browser_route_worker(
+            settings=settings,
+            account=account,
+            state_listener=lambda current_account, payload: transitions.append(payload),
+        )
+
+        class FailingContext:
+            async def close(self):
+                raise RuntimeError("context close failed")
+
+        class PlaywrightProbe:
+            def __init__(self):
+                self.stopped = False
+
+            async def stop(self):
+                self.stopped = True
+
+        playwright = PlaywrightProbe()
+        worker.mark_session_ready(context=FailingContext(), page=object())
+        worker._playwright = playwright
+
+        close_count = await worker_module.close_all_browser_route_workers(
+            settings=settings,
+            reason="scheduler_close",
+        )
+
+        assert close_count == 0
+        assert playwright.stopped is True
+        assert transitions[-1]["state"] == "close_failed"
+        assert transitions[-1]["error_code"] == "RuntimeError"
+        assert worker_module.get_existing_browser_route_worker(settings=settings, account=account) is None
+
+    _run(scenario())
+
+
+def test_reap_browser_route_workers_closes_session_after_thirty_idle_minutes(monkeypatch, tmp_path):
+    """空闲未满 30 分钟保持复用，达到阈值后关闭并从 registry 移除。"""
+
+    async def scenario():
+        worker_module._WORKERS.clear()
+        now = [100.0]
+        account = SellerSpriteAccount(name="account-1", username="user@example.com", password="secret")
+        settings = SellerSpriteSettings(
+            output_dir=tmp_path,
+            browser_idle_ttl_seconds=1800,
+            browser_max_lifetime_seconds=21600,
+        )
+        worker = worker_module.get_browser_route_worker(
+            settings=settings,
+            account=account,
+            clock=lambda: now[0],
+        )
+
+        class CloseProbe:
+            def __init__(self):
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        context = CloseProbe()
+
+        async def fake_run_one(request):
+            worker.mark_session_ready(context=context, page=object())
+            return worker_module.BrowserRouteResult(
+                login={"logged_in": True},
+                response={"code": "OK", "data": {"items": []}},
+                high_frequency_response=None,
+                warnings=[],
+            )
+
+        monkeypatch.setattr(worker, "_run_one", fake_run_one)
+        await worker.submit(
+            worker_module.BrowserRouteRequest(
+                scenario="keyword-reverse",
+                method="POST",
+                endpoint="/v3/api/keyword/reverse",
+                payload={"asin": "B0TEST"},
+                referer=worker_module.DEFAULT_PAGE_URL,
+                account=account,
+                root_dir=tmp_path,
+            )
+        )
+
+        now[0] = 1899.0
+        assert await worker_module.reap_browser_route_workers(settings=settings, now=now[0]) == []
+        assert context.closed is False
+
+        now[0] = 1900.0
+        recycled = await worker_module.reap_browser_route_workers(settings=settings, now=now[0])
+
+        assert recycled == [{"account_name": "account-1", "reason": "idle_timeout"}]
+        assert context.closed is True
+        assert worker_module.get_existing_browser_route_worker(settings=settings, account=account) is None
+
+    _run(scenario())
+
+
+def test_reap_browser_route_workers_rotates_six_hour_session_only_after_busy_task(monkeypatch, tmp_path):
+    """六小时轮换不得中断运行中任务，应在任务完成边界关闭。"""
+
+    async def scenario():
+        worker_module._WORKERS.clear()
+        now = [100.0]
+        account = SellerSpriteAccount(name="account-1", username="user@example.com", password="secret")
+        settings = SellerSpriteSettings(
+            output_dir=tmp_path,
+            browser_idle_ttl_seconds=1800,
+            browser_max_lifetime_seconds=21600,
+        )
+        worker = worker_module.get_browser_route_worker(
+            settings=settings,
+            account=account,
+            clock=lambda: now[0],
+        )
+
+        class CloseProbe:
+            def __init__(self):
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        context = CloseProbe()
+        request = worker_module.BrowserRouteRequest(
+            scenario="keyword-reverse",
+            method="POST",
+            endpoint="/v3/api/keyword/reverse",
+            payload={"asin": "B0TEST"},
+            referer=worker_module.DEFAULT_PAGE_URL,
+            account=account,
+            root_dir=tmp_path,
+        )
+
+        async def first_run(current_request):
+            worker.mark_session_ready(context=context, page=object())
+            return worker_module.BrowserRouteResult(
+                login={"logged_in": True},
+                response={"code": "OK", "data": {"items": []}},
+                high_frequency_response=None,
+                warnings=[],
+            )
+
+        monkeypatch.setattr(worker, "_run_one", first_run)
+        await worker.submit(request)
+
+        started = asyncio.Event()
+        allow_finish = asyncio.Event()
+
+        async def blocking_run(current_request):
+            started.set()
+            await allow_finish.wait()
+            return worker_module.BrowserRouteResult(
+                login={"logged_in": True},
+                response={"code": "OK", "data": {"items": []}},
+                high_frequency_response=None,
+                warnings=[],
+            )
+
+        monkeypatch.setattr(worker, "_run_one", blocking_run)
+        now[0] = 21700.0
+        running = asyncio.create_task(worker.submit(request))
+        await started.wait()
+
+        assert await worker_module.reap_browser_route_workers(settings=settings, now=now[0]) == []
+        assert context.closed is False
+
+        allow_finish.set()
+        await running
+        recycled = await worker_module.reap_browser_route_workers(settings=settings, now=now[0])
+
+        assert recycled == [{"account_name": "account-1", "reason": "max_lifetime"}]
+        assert context.closed is True
+
+    _run(scenario())
+
+
+def test_browser_route_worker_reports_real_session_state_changes_without_duplicates(monkeypatch, tmp_path):
+    """会话只报告真实状态变化，复用任务应产生 busy/idle 状态链。"""
+
+    async def scenario():
+        worker_module._WORKERS.clear()
+        now = [100.0]
+        transitions = []
+        account = SellerSpriteAccount(name="account-1", username="user@example.com", password="secret")
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        worker = worker_module.get_browser_route_worker(
+            settings=settings,
+            account=account,
+            state_listener=lambda current_account, payload: transitions.append(payload),
+            clock=lambda: now[0],
+        )
+
+        class CloseProbe:
+            async def close(self):
+                return None
+
+        context = CloseProbe()
+
+        async def fake_run_one(request):
+            worker.mark_session_ready(context=context, page=object())
+            return worker_module.BrowserRouteResult(
+                login={"logged_in": True},
+                response={"code": "OK", "data": {"items": []}},
+                high_frequency_response=None,
+                warnings=[],
+            )
+
+        monkeypatch.setattr(worker, "_run_one", fake_run_one)
+        request = worker_module.BrowserRouteRequest(
+            scenario="keyword-reverse",
+            method="POST",
+            endpoint="/v3/api/keyword/reverse",
+            payload={"asin": "B0TEST"},
+            referer=worker_module.DEFAULT_PAGE_URL,
+            account=account,
+            root_dir=tmp_path,
+        )
+        await worker.submit(request)
+        now[0] = 200.0
+        await worker.submit(request)
+        now[0] = 2000.0
+        await worker_module.reap_browser_route_workers(settings=settings, now=now[0])
+
+        assert [event["state"] for event in transitions] == [
+            "ready",
+            "idle",
+            "busy",
+            "idle",
+            "recycling",
+            "closed",
+        ]
+        assert transitions[-2]["reason"] == "idle_timeout"
+        assert transitions[-1]["task_count"] == 2
+
+    _run(scenario())
+
+
 def test_record_timing_keeps_diagnostic_data_without_warning_log(caplog, tmp_path):
     account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
     request = worker_module.BrowserRouteRequest(
@@ -538,12 +837,25 @@ def test_load_settings_reads_captcha_ocr_options(monkeypatch):
     assert settings.browser_captcha_ocr_max_attempts == 3
 
 
+def test_load_settings_reads_browser_session_lifecycle_options(monkeypatch):
+    """浏览器空闲回收和最大生命周期应支持环境变量覆盖。"""
+    monkeypatch.setenv("OPSCLI_SELLER_SPRITE_BROWSER_IDLE_TTL_SECONDS", "1200")
+    monkeypatch.setenv("OPSCLI_SELLER_SPRITE_BROWSER_MAX_LIFETIME_SECONDS", "14400")
+
+    settings = load_settings()
+
+    assert settings.browser_idle_ttl_seconds == 1200
+    assert settings.browser_max_lifetime_seconds == 14400
+
+
 def test_browser_runtime_defaults_to_patchright():
     assert DEFAULT_BROWSER_RUNTIME == "patchright"
     assert SellerSpriteSettings().browser_runtime == "patchright"
     assert SellerSpriteSettings().browser_cooldown_seconds == 10.0
     assert SellerSpriteSettings().browser_captcha_ocr_enabled is True
     assert SellerSpriteSettings().browser_captcha_ocr_max_attempts == 2
+    assert SellerSpriteSettings().browser_idle_ttl_seconds == 1800
+    assert SellerSpriteSettings().browser_max_lifetime_seconds == 21600
 
 
 def test_load_async_playwright_uses_patchright_runtime(monkeypatch):

@@ -23,6 +23,14 @@
 - [x] 关闭失效账号 browser/API 会话并从 registry 移除。
 - [x] 保持现有 ownership、quota、状态和导出兼容。
 
+## Session Lifecycle Revision
+
+- [x] 增加 30 分钟 browser-route 空闲回收配置和公共回收入口。
+- [x] 增加 6 小时最大会话生命周期，并只在安全任务边界轮换。
+- [x] scheduler close 统一释放健康 browser-route 会话。
+- [x] 会话 ready/busy/idle/recycling/closing/closed/close_failed 状态变化写日志和 SQLite 审计。
+- [x] 覆盖 busy 会话保护、懒重建、重复状态去重和关闭失败降级。
+
 ## Verification
 
 - [x] 定期运行单文件测试完成 red-green 循环。

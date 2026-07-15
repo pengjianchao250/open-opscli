@@ -133,3 +133,44 @@ def test_account_event_recorder_persists_account_fetch_failure(caplog, tmp_path:
         == "account_fetch_failed"
         for record in caplog.records
     )
+
+
+def test_account_event_recorder_persists_sanitized_session_state_change(caplog, tmp_path: Path):
+    """会话状态变化应以固定白名单同时写日志和 SQLite。"""
+    from opscli.seller_sprite.services.account_events import SellerSpriteAccountEventRecorder
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    recorder = SellerSpriteAccountEventRecorder(store=store)
+    account = SellerSpriteAccount(name="account-1", username="private@example.com", password="secret")
+
+    with caplog.at_level(logging.INFO):
+        recorder.record_session_state_change(
+            account=account,
+            previous_state="idle",
+            state="recycling",
+            reason="idle_timeout",
+            session_age_seconds=1900,
+            idle_seconds=1800,
+            task_count=12,
+            is_busy=False,
+        )
+
+    event = store.list_account_events()[0]
+    assert event["event_type"] == "account_session_state_changed"
+    assert event["next_action"] == "idle_timeout"
+    assert event["masked_username"] == "p***@example.com"
+    assert event["metadata"] == {
+        "previous_state": "idle",
+        "state": "recycling",
+        "reason": "idle_timeout",
+        "session_age_seconds": 1900,
+        "idle_seconds": 1800,
+        "task_count": 12,
+        "is_busy": False,
+    }
+    assert "private@example.com" not in repr(event)
+    assert any(
+        getattr(record, "seller_sprite_event", {}).get("event_type")
+        == "account_session_state_changed"
+        for record in caplog.records
+    )

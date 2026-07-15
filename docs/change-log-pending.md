@@ -2652,3 +2652,21 @@
 **影响范围**：影响 SellerSprite 多账号任务调度、认证错误分类、账号刷新/缩容、故障审计、任务输出目录、SQLite 队列迁移和 MCP 终态写回；外部 CLI/MCP 参数保持不变。
 **回滚方式**：回滚本次 `seller_sprite` 领域异常、请求模型、API/browser 登录分类、账号池、事件记录器、调度器、队列仓储及对应测试修改；已升级 SQLite 新列和表可保留，不影响旧代码读取已有字段。
 ---
+
+## 2026-07-15 SellerSprite - browser 会话生命周期配置与空闲回收
+
+**变更原因**：多账号 browser-route 会话在无任务时长期驻留，需要限制空闲资源占用并为定期轮换建立统一生命周期边界。
+**改动点**：新增默认 1800 秒空闲阈值和 21600 秒最大生命周期配置及环境变量覆盖；browser worker 维护创建时间、最后完成时间、任务数和状态；新增公共回收入口，在空闲达到阈值后先移出 registry 再关闭 context/playwright；补充 Super Dev 架构、设计规范、任务清单和 TDD 测试。
+**验证结果**：配置测试先观察到 2 项预期失败，实现后 2 passed；空闲回收测试先因公共生命周期接口缺失进入 red，实现后 1 passed。
+**影响范围**：影响 SellerSprite browser-route worker 的生命周期状态和配置读取；不会提前创建冷备用会话，不改变 API-direct 客户端生命周期。
+**回滚方式**：回滚 `config.py`、`browser_route/worker.py`、`browser_route/__init__.py`、对应测试及本次架构/规范修订。
+---
+
+## 2026-07-15 SellerSprite - 会话轮换、状态审计与统一释放
+
+**变更原因**：空闲回收之外，还需要保证六小时会话只在安全任务边界轮换、调度器退出释放健康会话，并能还原每次会话状态变化。
+**改动点**：browser worker 增加 ready/busy/idle/recycling/closing/closed/close_failed 状态通知和重复状态抑制；统一事件记录器将白名单生命周期指标写运行日志和 SQLite；调度器每分钟回收空闲会话、每条任务后检查最大生命周期，并在 close 时批量释放健康会话；context 关闭失败时仍继续停止 Playwright 和释放 Xvfb。
+**验证结果**：状态链测试先缺少 busy 状态进入 red，修复后通过；状态审计测试先因 Recorder 接口缺失进入 red，修复后通过；调度器统一关闭和周期空闲回收测试均先进入 red 后通过；半释放测试先观察到 Playwright 未停止，修复后通过；相关 API manager、调度器、browser worker 和账号事件组合测试 76 passed。
+**影响范围**：影响 SellerSprite browser-route 健康会话的回收、轮换、关闭和审计；运行中任务不被中断，下一任务继续按持久 profile 懒创建会话。
+**回滚方式**：回滚 browser worker 生命周期接口、ApiManager 状态监听器透传、TaskScheduler 回收/关闭编排、AccountEventRecorder 状态记录方法及对应测试。
+---

@@ -30,6 +30,15 @@ SellerSprite 通用任务当前通过 SQLite 队列执行，但队列层限制�
 - 不实现多服务进程共享账号池、leader lease、heartbeat 或自动崩溃恢复。
 - 不在普通 MCP 响应中暴露完整用户名、密码、Cookie、Token 或内部审计信息。
 
+### 2.3 会话生命周期补充
+
+- browser-route 会话空闲 30 分钟后自动回收；
+- browser-route 会话创建满 6 小时后，在任务完成边界轮换；
+- 回收或轮换不删除持久 profile，不把健康账号标记为 unavailable；
+- 运行中的会话不允许被空闲回收或定时轮换；
+- scheduler 正常关闭时释放全部健康 browser-route 资源；
+- 会话实际状态变化同时写结构化日志和 SQLite 账号事件表。
+
 ## 3. 运行约束
 
 本版本只支持一个活动 SellerSprite 服务进程消费同一个 SQLite 队列。`get_task_scheduler()` 在同一进程、同一数据库中必须复用唯一的调度器运行时；账号池、工作槽和会话 registry 都由该运行时持有。
@@ -218,6 +227,18 @@ await session_registry.close_account(account_key, purge_auth_state=False)
 - 清理失败记录 `account_session_close_failed`，但不覆盖任务原始错误。
 
 Cookie/profile 路径继续位于 `CONFIG_DIR/seller_sprite`，文件名不得包含完整用户名。
+
+会话 registry 额外维护 browser context 的创建时间、最后任务完成时间、累计任务数和当前状态。
+默认空闲阈值为 1800 秒，默认最大生命周期为 21600 秒，均可通过 SellerSprite 环境变量覆盖。
+回收器每分钟检查一次空闲会话，并在每条任务完成后检查最大生命周期：
+
+- `busy`、内部队列非空或已被新任务预留的会话一律跳过；
+- 空闲超时原因记为 `idle_timeout`；
+- 最大生命周期原因记为 `max_lifetime`；
+- scheduler 正常关闭记为 `scheduler_close`；
+- 账号认证失败或退出工作池沿用对应业务原因；
+- 先从 registry 移除，再关闭 context/playwright，防止关闭中的会话被再次取得；
+- 下一任务重新创建会话，不触发 failover，也不增加任务 generation。
 
 ## 8. SQLite 队列变更
 
@@ -418,8 +439,12 @@ claim_next_generic_for_account(
 - `account_relogin_failed`；
 - `account_failover_exhausted`；
 - `account_session_close_failed`。
+- `account_session_state_changed`。
 
 不记录正常任务分配、正常任务完成、API 子请求或正常会话关闭。备用接替成功合并到 `account_login_succeeded` 的白名单元数据，不增加“正常使用”事件。
+
+用户要求会话生命周期可观测后，browser-route 会话的实际状态变化作为例外记录。状态事件只记录
+`previous_state/state/reason/session_age_seconds/idle_seconds/task_count` 白名单元数据；相同状态不得重复写入。
 
 每次登录失败均必须记录，不做按账号或错误码去重：
 
@@ -560,6 +585,8 @@ SQLite 事件永久保留，不自动清理。运行日志保留和轮转沿用�
 - SQLite 审计写入失败不会覆盖任务主错误。
 - 首次登录、重登、新凭证和备用接替的每次登录失败均产生可关联 job、slot、generation 的日志和审计记录；
 - 登录失败记录包含失败阶段、错误码、耗时、failover 次数和下一动作，但不包含完整用户名或任何凭证。
+- 会话 ready/busy/idle/recycling/closing/closed/close_failed 状态变化可查询，重复状态不重复记录；
+- 30 分钟空闲回收和 6 小时轮换的关闭原因、会话年龄与累计任务数均为脱敏字段。
 
 ### 16.6 回归
 
@@ -580,3 +607,7 @@ SQLite 事件永久保留，不自动清理。运行日志保留和轮转沿用�
 8. 只有明确认证失败允许切账号重试；网络结果不确定时不重放。
 9. 账号登录失败、移除或密码变化后，旧 Cookie 和 browser 认证状态被清理。
 10. MCP ownership、quota、状态等待、CLI adapter 和人工恢复命令保持现有契约。
+11. 空闲未满 30 分钟的会话保持复用，满 30 分钟后自动关闭并从 registry 移除。
+12. 会话满 6 小时时不打断运行中任务，在任务完成边界关闭，并由下一任务懒创建新会话。
+13. scheduler 正常关闭后不存在其管理的 browser-route context/playwright 资源。
+14. 每次实际会话状态变化同时写结构化日志和 SQLite 审计，且不包含凭证或响应正文。

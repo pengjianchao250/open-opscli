@@ -28,6 +28,8 @@ from opscli.seller_sprite.services.task_status import error_to_dict
 
 QUEUE_SCOPE = "seller_sprite"
 DEFAULT_WORKER_KEY = "default"
+# 一分钟检查一次足以覆盖 30 分钟空闲阈值，同时避免高频扫描 browser registry。
+DEFAULT_SESSION_REAP_INTERVAL_SECONDS = 60.0
 _SCHEDULERS: dict[tuple[int, str], "SellerSpriteTaskScheduler"] = {}
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,7 @@ class SellerSpriteTaskScheduler:
         session_id: str | None = None,
         auto_start: bool = True,
         poll_interval_seconds: float = 0.05,
+        session_reap_interval_seconds: float = DEFAULT_SESSION_REAP_INTERVAL_SECONDS,
     ) -> None:
         self.settings = settings or load_settings()
         self.account_provider = account_provider
@@ -54,6 +57,7 @@ class SellerSpriteTaskScheduler:
         self.session_id = session_id
         self.auto_start = auto_start
         self.poll_interval_seconds = poll_interval_seconds
+        self.session_reap_interval_seconds = max(0.01, float(session_reap_interval_seconds))
         self.manager_factory = manager_factory or self._default_manager_factory
         self._runner_task: asyncio.Task | None = None
         self._generic_worker_tasks: dict[str, asyncio.Task] = {}
@@ -64,6 +68,7 @@ class SellerSpriteTaskScheduler:
         self._event_recorder = SellerSpriteAccountEventRecorder(store=self.store)
         self._next_worker_slot_number = 1
         self._last_account_refresh_at = 0.0
+        self._last_session_reap_at = 0.0
         self._start_lock = asyncio.Lock()
         self._stop_requested = False
         self._legacy_single_account_mode = bool(
@@ -139,6 +144,13 @@ class SellerSpriteTaskScheduler:
         ]
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        from opscli.seller_sprite.browser_route.worker import close_all_browser_route_workers
+
+        await close_all_browser_route_workers(
+            settings=self.settings,
+            reason="scheduler_close",
+            state_listener=self._record_browser_session_state_change,
+        )
         self._generic_worker_tasks.clear()
         self._generic_worker_accounts.clear()
         self._listing_worker_task = None
@@ -186,10 +198,13 @@ class SellerSpriteTaskScheduler:
         """维护账号工作槽生命周期，并在无账号时周期重试账号接口。"""
         while not self._stop_requested:
             self._remove_finished_generic_workers()
+            now = time.monotonic()
             refresh_interval = max(1.0, float(self.settings.account_cache_ttl_seconds))
-            refresh_due = time.monotonic() - self._last_account_refresh_at >= refresh_interval
+            refresh_due = now - self._last_account_refresh_at >= refresh_interval
             if refresh_due:
                 await self._refresh_account_pool()
+            if now - self._last_session_reap_at >= self.session_reap_interval_seconds:
+                await self._reap_browser_sessions()
             await asyncio.sleep(self.poll_interval_seconds)
 
     def _remove_finished_generic_workers(self) -> None:
@@ -236,7 +251,7 @@ class SellerSpriteTaskScheduler:
         account = initial_account
         while not self._stop_requested:
             if not self._is_working_account(account):
-                await self._close_account_session(account)
+                await self._close_account_session(account, reason="account_removed_or_rebalanced")
                 return
             claimed = self.store.claim_next_generic_for_account(
                 queue_scope=QUEUE_SCOPE,
@@ -252,6 +267,8 @@ class SellerSpriteTaskScheduler:
                 account=account,
                 worker_key=worker_key,
             )
+            # 每条任务结束后形成安全边界，使满 6 小时的会话无需等待下一分钟扫描。
+            await self._reap_browser_sessions()
             if replacement is None:
                 return
             account = replacement
@@ -343,7 +360,7 @@ class SellerSpriteTaskScheduler:
                         error=unavailable,
                         has_mcp_run=has_mcp_run,
                     )
-                    await self._close_account_session(account)
+                    await self._close_account_session(account, reason="authentication_failed")
                     return None
                 reassigned = self.store.reassign_task_for_failover(
                     job_id=job_id,
@@ -357,7 +374,7 @@ class SellerSpriteTaskScheduler:
                 )
                 if reassigned is None:
                     return None
-                await self._close_account_session(account)
+                await self._close_account_session(account, reason="authentication_failed")
                 account = replacement
                 status = reassigned
 
@@ -424,13 +441,34 @@ class SellerSpriteTaskScheduler:
                 await asyncio.sleep(self.poll_interval_seconds)
                 continue
             await self._run_one(str(claimed["job_id"]))
+            await self._reap_browser_sessions()
 
-    async def _close_account_session(self, account: SellerSpriteAccount) -> None:
+    async def _reap_browser_sessions(self) -> None:
+        """回收达到空闲或最大生命周期的 browser-route 会话。"""
+        from opscli.seller_sprite.browser_route.worker import reap_browser_route_workers
+
+        await reap_browser_route_workers(
+            settings=self.settings,
+            state_listener=self._record_browser_session_state_change,
+        )
+        self._last_session_reap_at = time.monotonic()
+
+    async def _close_account_session(
+        self,
+        account: SellerSpriteAccount,
+        *,
+        reason: str,
+    ) -> None:
         """关闭故障账号会话；会话 registry 接入前不影响任务主错误。"""
         try:
             from opscli.seller_sprite.browser_route.worker import close_browser_route_worker
 
-            await close_browser_route_worker(settings=self.settings, account=account)
+            await close_browser_route_worker(
+                settings=self.settings,
+                account=account,
+                reason=reason,
+                state_listener=self._record_browser_session_state_change,
+            )
         except ImportError:
             return
         except Exception:
@@ -524,7 +562,28 @@ class SellerSpriteTaskScheduler:
                 self.store.finish_mcp_run_failed(job_id, error_payload)
 
     def _default_manager_factory(self, **kwargs) -> SellerSpriteApiManager:
-        return SellerSpriteApiManager(**kwargs)
+        return SellerSpriteApiManager(
+            **kwargs,
+            session_state_listener=self._record_browser_session_state_change,
+        )
+
+    def _record_browser_session_state_change(
+        self,
+        account: SellerSpriteAccount,
+        payload: dict[str, Any],
+    ) -> None:
+        """把 browser worker 的白名单生命周期状态转交统一事件记录器。"""
+        self._event_recorder.record_session_state_change(
+            account=account,
+            previous_state=str(payload.get("previous_state") or "unknown"),
+            state=str(payload.get("state") or "unknown"),
+            reason=str(payload.get("reason") or "unknown"),
+            session_age_seconds=int(payload.get("session_age_seconds") or 0),
+            idle_seconds=int(payload.get("idle_seconds") or 0),
+            task_count=int(payload.get("task_count") or 0),
+            is_busy=bool(payload.get("is_busy")),
+            error_code=(str(payload["error_code"]) if payload.get("error_code") else None),
+        )
 
     def _assigned_account_name(self) -> str:
         """返回队列记录里的账号标识，不在领取任务前触发账号接口。"""

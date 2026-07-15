@@ -8,6 +8,7 @@ import base64
 import hashlib
 import importlib
 import json
+import logging
 import os
 import random
 import re
@@ -17,7 +18,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
@@ -44,6 +45,7 @@ ROBOT_CAPTCHA_DIALOG_SELECTORS = [
     "[role='dialog'][aria-label='机器人检测']",
     ".el-dialog:has-text('机器人检测')",
 ]
+logger = logging.getLogger(__name__)
 ROBOT_CAPTCHA_IMAGE_SELECTORS = [
     "img[src^='data:image/gif;base64,']",
     "img[src^='data:image/png;base64,']",
@@ -135,12 +137,25 @@ def _safe_timing_value(value: Any) -> Any:
 class SellerSpriteBrowserRouteWorker:
     """同账号串行消费 browser-route 任务，复用浏览器上下文。"""
 
-    def __init__(self, *, settings: SellerSpriteSettings, account: SellerSpriteAccount) -> None:
+    def __init__(
+        self,
+        *,
+        settings: SellerSpriteSettings,
+        account: SellerSpriteAccount,
+        state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        """创建账号隔离 worker；监听器接收脱敏会话状态变化。"""
         self.settings = settings
         self.account = account
+        self._clock = clock
+        self._state_listener = state_listener
         self._queue: asyncio.Queue[_QueuedTask] = asyncio.Queue()
         self._drain_lock = asyncio.Lock()
         self._last_finished_at = 0.0
+        self._opened_at = 0.0
+        self._task_count = 0
+        self._session_state = "registered"
         self._cooldown_until = 0.0
         self._playwright = None
         self._context = None
@@ -160,23 +175,51 @@ class SellerSpriteBrowserRouteWorker:
         """判断当前 worker 是否正在执行或已有排队任务。"""
         return self._drain_lock.locked() or not self._queue.empty()
 
-    async def close(self) -> None:
-        """关闭浏览器上下文。"""
+    async def close(self, *, reason: str = "manual_close") -> None:
+        """按指定原因关闭浏览器上下文，并报告关闭状态。"""
+        closing_state = "recycling" if reason in {"idle_timeout", "max_lifetime"} else "closing"
+        self._transition_state(closing_state, reason=reason)
+        errors: list[Exception] = []
         if self._context:
-            await self._context.close()
-            self._context = None
-            self._page = None
+            try:
+                await self._context.close()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                self._context = None
+                self._page = None
         if self._playwright:
-            await self._playwright.stop()
-            self._playwright = None
+            try:
+                await self._playwright.stop()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                self._playwright = None
         if self._auto_xvfb_attached:
-            _release_auto_xvfb()
-            self._auto_xvfb_attached = False
+            try:
+                _release_auto_xvfb()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                self._auto_xvfb_attached = False
+        if errors:
+            first_error = errors[0]
+            self._transition_state(
+                "close_failed",
+                reason=reason,
+                error_code=type(first_error).__name__,
+            )
+            self._opened_at = 0.0
+            raise first_error
+        self._transition_state("closed", reason=reason)
+        self._opened_at = 0.0
 
     async def _drain_queue(self) -> None:
         async with self._drain_lock:
             while not self._queue.empty():
                 task = await self._queue.get()
+                if self._opened_at:
+                    self._transition_state("busy", reason="task_started")
                 try:
                     result = await self._run_one(task.request)
                 except Exception as exc:
@@ -195,8 +238,67 @@ class SellerSpriteBrowserRouteWorker:
                     if not task.future.done():
                         task.future.set_result(result)
                 finally:
-                    self._last_finished_at = time.monotonic()
+                    self._last_finished_at = self._clock()
+                    self._task_count += 1
                     self._queue.task_done()
+            if self._opened_at:
+                self._transition_state("idle", reason="queue_drained")
+
+    def mark_session_ready(self, *, context: Any, page: Any) -> None:
+        """登记已创建的 browser context/page，并记录首次 ready 状态。"""
+        self._context = context
+        self._page = page
+        if not self._opened_at:
+            self._opened_at = self._clock()
+            self._transition_state("ready", reason="browser_context_opened")
+
+    def set_state_listener(
+        self,
+        listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None,
+    ) -> None:
+        """更新会话状态监听器，供共享 registry 接入当前调度器审计。"""
+        if listener is not None:
+            self._state_listener = listener
+
+    def session_snapshot(self, *, now: float | None = None) -> dict[str, Any]:
+        """返回不含凭证的会话生命周期快照。"""
+        current = self._clock() if now is None else now
+        idle_base = self._last_finished_at or self._opened_at
+        return {
+            "state": self._session_state,
+            "session_age_seconds": max(0, int(current - self._opened_at)) if self._opened_at else 0,
+            "idle_seconds": max(0, int(current - idle_base)) if idle_base else 0,
+            "task_count": self._task_count,
+            "is_busy": self.is_busy,
+            "has_open_session": bool(self._opened_at),
+        }
+
+    def recycle_reason(self, *, now: float | None = None) -> str | None:
+        """返回当前安全回收原因；忙碌或尚未打开的会话返回空。"""
+        snapshot = self.session_snapshot(now=now)
+        if not snapshot["has_open_session"] or snapshot["is_busy"]:
+            return None
+        if snapshot["session_age_seconds"] >= max(1, self.settings.browser_max_lifetime_seconds):
+            return "max_lifetime"
+        if snapshot["idle_seconds"] >= max(1, self.settings.browser_idle_ttl_seconds):
+            return "idle_timeout"
+        return None
+
+    def _transition_state(self, state: str, *, reason: str, **metadata: Any) -> None:
+        """仅在状态真实变化时同步通知生命周期监听器。"""
+        previous_state = self._session_state
+        if previous_state == state:
+            return
+        self._session_state = state
+        if self._state_listener is None:
+            return
+        payload = {
+            "previous_state": previous_state,
+            **self.session_snapshot(),
+            "reason": reason,
+            **metadata,
+        }
+        self._state_listener(self.account, payload)
 
     async def _run_one(self, request: BrowserRouteRequest) -> BrowserRouteResult:
         warnings: list[dict[str, Any]] = []
@@ -212,6 +314,8 @@ class SellerSpriteBrowserRouteWorker:
         stage_started_at = time.monotonic()
         had_page = bool(self._page and not self._page.is_closed())
         page = await self._ensure_page(request.account)
+        self.mark_session_ready(context=self._context, page=page)
+        self._transition_state("busy", reason="task_started")
         _record_timing(
             timings,
             request,
@@ -534,11 +638,12 @@ class SellerSpriteBrowserRouteWorker:
         profile_dir = _profile_dir(self.settings, account)
         profile_dir.mkdir(parents=True, exist_ok=True)
         launch_options = _build_launch_options(self.settings)
-        self._context = await self._playwright.chromium.launch_persistent_context(
+        context = await self._playwright.chromium.launch_persistent_context(
             str(profile_dir),
             **launch_options,
         )
-        self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+        page = context.pages[0] if context.pages else await context.new_page()
+        self.mark_session_ready(context=context, page=page)
         return self._page
 
     async def _open_referer_and_login(
@@ -847,15 +952,28 @@ class _NoQueryButtonError(Exception):
     pass
 
 
-def get_browser_route_worker(*, settings: SellerSpriteSettings, account: SellerSpriteAccount) -> SellerSpriteBrowserRouteWorker:
+def get_browser_route_worker(
+    *,
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+    state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> SellerSpriteBrowserRouteWorker:
     """按事件循环和账号获取常驻 browser worker。"""
     loop_key = id(asyncio.get_running_loop())
     account_key = f"{account.name}:{account.username}"
     key = (loop_key, account_key)
     worker = _WORKERS.get(key)
     if not worker:
-        worker = SellerSpriteBrowserRouteWorker(settings=settings, account=account)
+        worker = SellerSpriteBrowserRouteWorker(
+            settings=settings,
+            account=account,
+            state_listener=state_listener,
+            clock=clock,
+        )
         _WORKERS[key] = worker
+    else:
+        worker.set_state_listener(state_listener)
     return worker
 
 
@@ -874,6 +992,8 @@ async def close_browser_route_worker(
     *,
     settings: SellerSpriteSettings,
     account: SellerSpriteAccount,
+    reason: str = "account_unavailable",
+    state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
 ) -> bool:
     """关闭并移除指定账号在当前事件循环中的 browser worker。"""
     loop_key = id(asyncio.get_running_loop())
@@ -882,8 +1002,74 @@ async def close_browser_route_worker(
     if worker is None:
         return False
     # 必须先从 registry 移除，避免关闭期间新的调用继续取得即将失效的会话。
-    await worker.close()
+    if isinstance(worker, SellerSpriteBrowserRouteWorker):
+        worker.set_state_listener(state_listener)
+        await worker.close(reason=reason)
+    else:
+        await worker.close()
     return True
+
+
+async def reap_browser_route_workers(
+    *,
+    settings: SellerSpriteSettings,
+    now: float | None = None,
+    state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+) -> list[dict[str, str]]:
+    """回收当前事件循环中达到空闲或最大生命周期的安全会话。"""
+    loop_key = id(asyncio.get_running_loop())
+    recycled: list[dict[str, str]] = []
+    for key, worker in list(_WORKERS.items()):
+        if key[0] != loop_key or worker.settings != settings:
+            continue
+        reason = worker.recycle_reason(now=now)
+        if reason is None:
+            continue
+        # 先移除再关闭，确保下一任务只能取得全新的 worker。
+        if _WORKERS.pop(key, None) is not worker:
+            continue
+        worker.set_state_listener(state_listener)
+        try:
+            await worker.close(reason=reason)
+        except Exception as exc:
+            # 状态监听器已记录 close_failed；单个关闭失败不能阻断其他会话回收。
+            logger.warning(
+                "卖家精灵 browser 会话回收失败：account=%s error=%s",
+                worker.account.name,
+                type(exc).__name__,
+            )
+            continue
+        recycled.append({"account_name": worker.account.name, "reason": reason})
+    return recycled
+
+
+async def close_all_browser_route_workers(
+    *,
+    settings: SellerSpriteSettings,
+    reason: str = "scheduler_close",
+    state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+) -> int:
+    """关闭当前事件循环中属于该配置的全部 browser-route 会话。"""
+    loop_key = id(asyncio.get_running_loop())
+    closed_count = 0
+    for key, worker in list(_WORKERS.items()):
+        if key[0] != loop_key or worker.settings != settings:
+            continue
+        if _WORKERS.pop(key, None) is not worker:
+            continue
+        worker.set_state_listener(state_listener)
+        try:
+            await worker.close(reason=reason)
+        except Exception as exc:
+            # 继续关闭其他账号，失败账号已通过监听器报告 close_failed。
+            logger.warning(
+                "卖家精灵 browser 会话批量关闭失败：account=%s error=%s",
+                worker.account.name,
+                type(exc).__name__,
+            )
+            continue
+        closed_count += 1
+    return closed_count
 
 
 def _ensure_headed_browser_environment(settings: SellerSpriteSettings) -> bool:

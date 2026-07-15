@@ -117,6 +117,64 @@ class SellerSpriteAccountEventRecorder:
                 },
             )
 
+    def record_session_state_change(
+        self,
+        *,
+        account: SellerSpriteAccount,
+        previous_state: str,
+        state: str,
+        reason: str,
+        session_age_seconds: int,
+        idle_seconds: int,
+        task_count: int,
+        is_busy: bool,
+        error_code: str | None = None,
+    ) -> None:
+        """记录一次 browser-route 会话状态变化及其脱敏生命周期指标。"""
+        metadata = {
+            "previous_state": previous_state,
+            "state": state,
+            "reason": reason,
+            "session_age_seconds": max(0, int(session_age_seconds)),
+            "idle_seconds": max(0, int(idle_seconds)),
+            "task_count": max(0, int(task_count)),
+            "is_busy": bool(is_busy),
+        }
+        event = {
+            "event_type": "account_session_state_changed",
+            "account_key": seller_sprite_account_key(account),
+            "account_name": account.name,
+            "masked_username": mask_seller_sprite_username(account.username),
+            "job_id": None,
+            "worker_key": None,
+            "assignment_generation": None,
+            "execution_mode": "browser-route",
+            "login_stage": "session_lifecycle",
+            "error_code": error_code,
+            "error_summary": None,
+            "replacement_account_key": None,
+            "duration_ms": None,
+            "failover_count": None,
+            "next_action": reason,
+            "metadata": metadata,
+        }
+        logger.info("卖家精灵 browser 会话状态变化", extra={"seller_sprite_event": dict(event)})
+        try:
+            self.store.record_account_event(**event)
+        except Exception as audit_error:
+            # 生命周期审计是诊断旁路，关闭或轮换流程不能因 SQLite 写入失败而中断。
+            logger.error(
+                "卖家精灵 browser 会话状态审计写入失败",
+                extra={
+                    "seller_sprite_event": {
+                        "event_type": "account_audit_persistence_failed",
+                        "account_key": seller_sprite_account_key(account),
+                        "error_code": _error_code(audit_error),
+                        "error_summary": _sanitize_generic_summary(audit_error),
+                    }
+                },
+            )
+
 
 def _error_code(error: Exception) -> str:
     """优先使用业务错误码，否则使用异常类型名。"""

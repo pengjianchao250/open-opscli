@@ -411,6 +411,105 @@ def test_scheduler_runs_four_accounts_in_parallel_and_keeps_fifth_as_standby(tmp
     asyncio.run(scenario())
 
 
+def test_scheduler_close_releases_healthy_browser_sessions_and_audits_states(tmp_path: Path):
+    """调度器正常关闭应释放健康 browser 会话并记录 closing/closed。"""
+
+    async def scenario():
+        from opscli.seller_sprite.browser_route import worker as worker_module
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        worker_module._WORKERS.clear()
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(1)
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        await scheduler.start()
+        account = provider.accounts[0]
+        worker = worker_module.get_browser_route_worker(settings=settings, account=account)
+
+        class CloseProbe:
+            def __init__(self):
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        context = CloseProbe()
+        worker.mark_session_ready(context=context, page=object())
+
+        await scheduler.close()
+
+        assert context.closed is True
+        assert worker_module.get_existing_browser_route_worker(settings=settings, account=account) is None
+        states = [
+            event["metadata"]["state"]
+            for event in store.list_account_events()
+            if event["event_type"] == "account_session_state_changed"
+        ]
+        assert states == ["closed", "closing"]
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_reaps_idle_browser_session_and_next_task_can_recreate_worker(tmp_path: Path):
+    """supervisor 应周期回收空闲会话，registry 随后允许懒创建新 worker。"""
+
+    async def scenario():
+        from opscli.seller_sprite.browser_route import worker as worker_module
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        worker_module._WORKERS.clear()
+        settings = SellerSpriteSettings(
+            output_dir=tmp_path,
+            browser_idle_ttl_seconds=1,
+            browser_max_lifetime_seconds=21600,
+        )
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(1)
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+            session_reap_interval_seconds=0.01,
+        )
+        await scheduler.start()
+        account = provider.accounts[0]
+        original = worker_module.get_browser_route_worker(settings=settings, account=account)
+
+        class CloseProbe:
+            def __init__(self):
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        context = CloseProbe()
+        original.mark_session_ready(context=context, page=object())
+        await asyncio.sleep(1.1)
+
+        assert context.closed is True
+        assert worker_module.get_existing_browser_route_worker(settings=settings, account=account) is None
+        replacement = worker_module.get_browser_route_worker(settings=settings, account=account)
+        assert replacement is not original
+        reasons = [
+            event["metadata"]["reason"]
+            for event in store.list_account_events()
+            if event["event_type"] == "account_session_state_changed"
+        ]
+        assert reasons[:2] == ["idle_timeout", "idle_timeout"]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
 def test_scheduler_replaces_failed_working_account_with_cold_standby(tmp_path: Path):
     async def scenario():
         from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
