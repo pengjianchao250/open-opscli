@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-15 skills/scoped_dataset_reader - 解析字段 CSV filter_config 可选列（R5）
+
+**变更原因**：服务端计划在字段 CSV（dataset_fields.csv）行尾新增可选列 `filter_config`（JSON 字符串），记录字段级默认查询条件；需要在统一数据读取层解析该列，旧版 CSV 无此列时必须完全兼容（返回 None 不报错）。
+**改动点**：`opscli/skills/templates/ops-dataset-query/scripts/scoped_dataset_reader.py`：在文件头补 `import json`；在 SOURCE_FILES 常量区之后新增模块级函数 `parse_filter_config(raw: str | None) -> dict | None`（空/缺失返回 None，enabled 非真返回 None，非法 JSON 抛 ValueError）；在 `load_dataset_fields` 行循环末尾追加 `row["filter_config"] = parse_filter_config(row.get("filter_config"))` 一行；`FIELD_COLUMNS` 必需列 frozenset 保持不动（filter_config 是可选列）。新建 `tests/skills/test_scoped_reader_filter_config.py`（5 个测试）。
+**验证结果**：RED 阶段 `pytest tests/skills/test_scoped_reader_filter_config.py -v` 按预期 5 tests FAILED（AttributeError/KeyError/TypeError）；GREEN 阶段实现后同命令 5 tests PASSED；回归 `pytest tests/skills/ tests/query/ --ignore=tests/skills/test_packaging.py -v` 共 198 tests，新增 5 PASSED，6 FAILED 均为预先存在的失败（版本不匹配/模板缺失/依赖文件缺失），无回归。
+**影响范围**：仅影响 `load_dataset_fields()` 返回行结构（新增 `filter_config` 键，值为 dict 或 None）；旧版 CSV 无该列时全部行返回 None，完全向后兼容；上层消费方（scoped_metadata_index、dataset_guidance）Task 3 起才开始读取该键。
+**回滚方式**：回退 `opscli/skills/templates/ops-dataset-query/scripts/scoped_dataset_reader.py` 中的 `import json`、`parse_filter_config` 函数定义、行循环追加行，删除 `tests/skills/test_scoped_reader_filter_config.py` 和本条变更记录。
+
+---
+
 ## 2026-07-15 query - QueryMetadataResult 透传数据集默认条件 filter_configs（R4）
 
 **变更原因**：数据集默认条件（filter_config）从后台配置逐级下发到查询执行，opscli query 模块需要透传后端 query-metadata 接口返回的 `filter_configs`，支持远端直接获取和本地缓存回退，为上层 MCP 工具与 Skill 规划器提供元数据。

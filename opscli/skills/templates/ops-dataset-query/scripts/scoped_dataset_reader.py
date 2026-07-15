@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 from pathlib import Path
 from typing import NamedTuple
 
@@ -69,6 +70,25 @@ class SourceSnapshot(NamedTuple):
             if source_name == filename:
                 return content
         raise KeyError(filename)
+
+
+def parse_filter_config(raw: str | None) -> dict | None:
+    """解析字段 CSV filter_config 列（可选列，旧数据无此列）。
+
+    空值/缺列返回 None；enabled 非真视为未配置返回 None；
+    非法 JSON 抛 ValueError（与本模块 fail-fast 校验哲学一致，
+    坏数据应在升级链路暴露而非静默吞掉）。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        config = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("invalid_filter_config") from exc
+    if not isinstance(config, dict) or not config.get("enabled"):
+        return None
+    return config
 
 
 def _source_path(data_dir: Path, filename: str) -> Path:
@@ -269,6 +289,8 @@ def load_dataset_fields(
         if snapshot_flag not in {"", "0", "1"}:
             raise ValueError("invalid_snapshot_metric")
         row["snapshot_metric"] = snapshot_flag or "0"
+        # 字段级默认条件（可选列）：服务端 1.4.0+ 下发，旧 CSV 无此列时为 None
+        row["filter_config"] = parse_filter_config(row.get("filter_config"))
     return rows
 
 
