@@ -83,6 +83,69 @@ def _normalize_order_by(payload: dict) -> list[dict]:
     return normalized
 
 
+# filter_config 操作符 → 简化查询操作符（与规划器 query_template 预填映射一致）
+_DEFAULT_FILTER_OP_MAP = {
+    "equals": "=", "notEquals": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<=",
+}
+
+
+def _apply_default_filters(payload: dict, defaults: list[dict]) -> list[str]:
+    """把规划器下发的数据集默认条件注入 payload（需求 R5）。
+
+    语义与服务端保持一致（评审结论 1/2）：required 缺失即注入、
+    同值/子集去重、冲突不拦截静默 AND 合并但必须披露"同时生效"；
+    optional 用户已有同字段条件则跳过；filter_agg != none 的度量
+    条件服务端 having 兜底，本地不注入。返回中文披露行列表。
+    """
+    notes: list[str] = []
+    filters = payload.setdefault("filters", [])
+    for default in defaults or []:
+        # filter_agg != none 的度量条件由服务端 having 兜底，本地不注入
+        if default.get("filter_agg", "none") != "none":
+            continue
+        op = _DEFAULT_FILTER_OP_MAP.get(default.get("operator", "equals"))
+        if op is None:
+            # isEmpty/isNotEmpty 等暂不支持的操作符：服务端兜底，本地不注入
+            continue
+        field = default["field_name"]
+        values = default.get("values") or []
+        if not values:
+            continue
+        # 找出用户 payload 中已有的同字段条件（兼容 "table.field" 形式的 field 名）
+        user_conditions = [f for f in filters if isinstance(f, dict)
+                           and str(f.get("field", "")).split(".")[-1] == field]
+        label = default.get("label_zh") or field
+        value_text = "、".join(str(v) for v in values)
+
+        if default.get("type") == "optional":
+            # optional 类型：用户已有同字段条件时跳过，尊重用户的明确过滤
+            if user_conditions:
+                continue
+        elif user_conditions:
+            # required + 用户同字段：同值/子集去重，否则 AND 合并披露双条件生效
+            covered = any(
+                set(c["value"] if isinstance(c.get("value"), list) else [c.get("value")]) <= set(values)
+                for c in user_conditions
+            )
+            if covered:
+                notes.append(f"默认条件 {label}={value_text} 与你的条件一致，已去重")
+                continue
+            # 冲突：不拦截，与服务端静默 AND 合并行为一致，但必须披露
+            notes.append(
+                f"[!] 数据集强制默认条件 {label}={value_text} 与你的条件同时生效（AND），结果可能为空"
+            )
+        # 构造注入条件：多值 equals 用 in 操作符，单值或非 equals 用映射后的操作符
+        condition = (
+            {"field": field, "operator": "in", "value": values}
+            if len(values) > 1 and default.get("operator", "equals") == "equals"
+            else {"field": field, "operator": op, "value": values[0]}
+        )
+        filters.append(condition)
+        if not user_conditions:
+            notes.append(f"已自动应用数据集默认条件：{label} = {value_text}（{default.get('type', 'required')}）")
+    return notes
+
+
 def _precheck(payload: dict) -> None:
     """执行前静态校验：把 simple-query-guide 的「执行前检查」从提示词变成代码。"""
     blob = json.dumps(payload, ensure_ascii=False)
@@ -257,6 +320,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--result-dir", default=".", help="全量结果 JSON 落盘目录（默认当前目录）"
     )
+    parser.add_argument(
+        "--default-filters",
+        default="",
+        help="规划器 execution_ref.default_filters 的 JSON 数组，执行前自动注入缺失的 required 默认条件",
+    )
     return parser.parse_args(argv)
 
 
@@ -271,6 +339,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise PrecheckError("缺少 payload：用 --json 或 --json-file 传入查询参数。")
         payload = _parse_payload(raw)
         payload.setdefault("tableId", args.table_id)
+        # 注入规划器下发的数据集默认条件（required 缺失自动补全），须在 _precheck 之前执行，
+        # 因为 _precheck 会检查 dataComparison 的主周期日期条件是否存在
+        default_filters = json.loads(args.default_filters) if args.default_filters.strip() else []
+        default_notes = _apply_default_filters(payload, default_filters)
         _precheck(payload)
         order_by = payload.get("orderBy") or []
 
@@ -313,6 +385,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             disclosures["order_disclosure_zh"] = (
                 f"排序已生效：按 {order_by[0]['field']} {order_by[0]['direction']}"
             )
+        # 追加默认条件注入披露（有注入或冲突时才写入，保持 disclosures 简洁）
+        if default_notes:
+            disclosures["default_filters_zh"] = default_notes
 
         # 全量结果落盘：模型上下文只进预览，完整数据供导出/复核
         result_path = Path(args.result_dir) / f"query_result_{int(time.time())}.json"

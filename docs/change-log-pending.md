@@ -35,6 +35,23 @@
 
 ---
 
+## 2026-07-15 skills/run_query - 执行前注入 required 默认条件并强制披露（R5 Task5）
+
+**变更原因**：需求 R5 Task 5 要求 `run_query.py` 在执行前将规划器下发的数据集默认条件（`execution_ref["default_filters"]`）注入 payload，required 缺失时自动补全，同值/子集去重，冲突不拦截但强制披露"同时生效"，optional 有用户条件时跳过；注入结果通过 `disclosures["default_filters_zh"]` 输出到 stdout。
+**改动点**：
+1. `opscli/skills/templates/ops-dataset-query/scripts/run_query.py`：
+   - 在 `_precheck` 之前新增模块级常量 `_DEFAULT_FILTER_OP_MAP`（filter_config 原生操作符 → 简化查询操作符映射）和函数 `_apply_default_filters(payload, defaults)`（注入逻辑主体，返回中文披露行列表）。
+   - `_parse_args` 新增 `--default-filters` 参数（默认空字符串，接收规划器 JSON 数组）。
+   - `main()` 在 `_precheck(payload)` 之前插入 JSON 解析与注入调用（`default_filters = json.loads(...); default_notes = _apply_default_filters(...)`）。
+   - `disclosures` 组装处追加：`if default_notes: disclosures["default_filters_zh"] = default_notes`。
+   - 所有新增输出使用 GBK 安全字符，警示用 `[!]` 替代 `⚠️`（铁律23）。
+2. 新建 `tests/skills/test_run_query_default_filters.py`（4 个测试）。
+**验证结果**：RED 阶段 `pytest tests/skills/test_run_query_default_filters.py -v` 4 tests FAILED（AttributeError: module 'run_query' has no attribute '_apply_default_filters'）；GREEN 阶段实现后同命令 4 tests PASSED；回归 `pytest tests/skills/ tests/query/ --ignore=tests/skills/test_packaging.py -v` 共 206 tests，新增 4 PASSED，6 FAILED 均为预先存在的模板版本漂移/依赖缺失失败，无新增回归。
+**影响范围**：影响 `run_query.py` 的 CLI 接口（新增可选 `--default-filters` 参数）和 stdout 结构（有注入时新增 `disclosures.default_filters_zh` 键）；`_precheck` 本身未被修改；不影响现有测试和其他模块。
+**回滚方式**：删除 `_DEFAULT_FILTER_OP_MAP` 常量和 `_apply_default_filters` 函数，移除 `_parse_args` 中的 `--default-filters` 参数、`main()` 中的注入调用和 disclosures 追加；删除 `tests/skills/test_run_query_default_filters.py` 和本条变更记录。
+
+---
+
 ## 2026-07-15 skills/query_plan - 投影默认条件到 execution_ref 并强制中文披露（R5 Task4）
 
 **变更原因**：需求 R5 Task 4 要求规划器 `build_model_contract` 把 `guidance["default_filters"]` 投影到三处输出：`execution_ref["default_filters"]`（执行引用，供 Task 5 run_query 消费）、`model_view["default_filters_zh"]`（用户可见中文披露）、`answer_contract["required_disclosures_zh"]`（回答强制披露），并在 `query_template` 预填 required 默认条件。
