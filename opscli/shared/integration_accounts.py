@@ -116,19 +116,6 @@ class IntegrationAccountClient:
         headers.update(mcp_headers)
         return headers, cookies
 
-    def cache_identity(self) -> str:
-        """返回不暴露凭证明文的缓存隔离标识。"""
-        if self.session_id:
-            return f"session:{_credential_fingerprint(self.session_id)}"
-        if self.jwt:
-            return f"jwt:{_credential_fingerprint(self.jwt)}"
-        mcp_headers = get_mcp_request_headers()
-        api_key = mcp_headers.get("X-MCP-API-Key")
-        if api_key:
-            return f"mcp:{_credential_fingerprint(api_key)}"
-        # CLI 模式是单用户本地进程，可在进程内安全复用同一份账号缓存。
-        return "cli"
-
     def get_accounts(self, platform: str) -> IntegrationAccountBundle:
         """拉取指定平台账号并解密。"""
         headers, cookies = self._get_auth("ops")
@@ -201,8 +188,3 @@ def decrypt_integration_account_value(encrypted_b64: str, raw_key: str) -> str:
 
 def _has_mcp_api_key(headers: dict[str, str]) -> bool:
     return bool(headers.get("X-MCP-API-Key"))
-
-
-def _credential_fingerprint(value: str) -> str:
-    """生成仅用于内存缓存分区的凭证指纹。"""
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()

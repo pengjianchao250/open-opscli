@@ -77,22 +77,22 @@ def test_account_provider_refresh_bypasses_remote_bundle_cache():
     assert client.calls == 2
 
 
-def test_account_provider_cache_is_isolated_by_authenticated_user():
+def test_account_provider_reuses_platform_cache_across_authenticated_users():
     accounts_module._REMOTE_BUNDLE_CACHE.clear()
     settings = SellerSpriteSettings(account_cache_ttl_seconds=600)
-    first_client = FakeIntegrationClient(identity="user-a", username="a@example.com")
-    second_client = FakeIntegrationClient(identity="user-b", username="b@example.com")
+    first_client = FakeIntegrationClient(identity="user-a", username="shared@example.com")
+    second_client = FakeIntegrationClient(identity="user-b", username="shared@example.com")
 
     first = SellerSpriteAccountProvider(settings=settings, integration_client=first_client).get_default()
     second = SellerSpriteAccountProvider(settings=settings, integration_client=second_client).get_default()
 
-    assert first.username == "a@example.com"
-    assert second.username == "b@example.com"
+    assert first.username == "shared@example.com"
+    assert second.username == "shared@example.com"
     assert first_client.calls == 1
-    assert second_client.calls == 1
+    assert second_client.calls == 0
 
 
-def test_account_provider_without_identity_does_not_use_global_cache():
+def test_account_provider_without_identity_reuses_platform_cache():
     accounts_module._REMOTE_BUNDLE_CACHE.clear()
     settings = SellerSpriteSettings(account_cache_ttl_seconds=600)
     client = NoIdentityIntegrationClient()
@@ -100,24 +100,24 @@ def test_account_provider_without_identity_does_not_use_global_cache():
     SellerSpriteAccountProvider(settings=settings, integration_client=client).get_default()
     SellerSpriteAccountProvider(settings=settings, integration_client=client).get_default()
 
-    assert client.calls == 2
-    assert accounts_module._REMOTE_BUNDLE_CACHE == {}
+    assert client.calls == 1
 
 
-def test_account_provider_removes_expired_identity_cache(monkeypatch):
+def test_account_provider_removes_expired_platform_cache(monkeypatch):
     accounts_module._REMOTE_BUNDLE_CACHE.clear()
     expired_bundle = IntegrationAccountBundle(
         platform="seller_sprite",
         default_account="default",
         accounts=(),
     )
-    accounts_module._REMOTE_BUNDLE_CACHE[("seller_sprite", "expired-user")] = (0, expired_bundle)
+    accounts_module._REMOTE_BUNDLE_CACHE["seller_sprite"] = (0, expired_bundle)
     monkeypatch.setattr(accounts_module.time, "time", lambda: 1000)
     settings = SellerSpriteSettings(account_cache_ttl_seconds=600)
 
+    client = FakeIntegrationClient(identity="current-user")
     SellerSpriteAccountProvider(
         settings=settings,
-        integration_client=FakeIntegrationClient(identity="current-user"),
+        integration_client=client,
     ).get_default()
 
-    assert ("seller_sprite", "expired-user") not in accounts_module._REMOTE_BUNDLE_CACHE
+    assert client.calls == 1
