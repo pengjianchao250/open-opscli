@@ -1236,6 +1236,7 @@ def build_model_contract(
                 if len(ref["values"]) > 1 and ref["operator"] == "equals":
                     template_filters.append({"field": ref["field_name"], "operator": "in", "value": ref["values"]})
                 else:
+                    # 多值仅在 equals 时转 in；gt/lte 等比较操作符多值时取第一个值，业务层应保证此类配置只配单值
                     template_filters.append({"field": ref["field_name"], "operator": op, "value": ref["values"][0]})
             template["filters"] = template_filters
     # 回答合同：先构建基础版本，再追加默认条件强制披露

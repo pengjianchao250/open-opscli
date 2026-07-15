@@ -138,7 +138,7 @@ def _apply_default_filters(payload: dict, defaults: list[dict]) -> list[str]:
         condition = (
             {"field": field, "operator": "in", "value": values}
             if len(values) > 1 and default.get("operator", "equals") == "equals"
-            else {"field": field, "operator": op, "value": values[0]}
+            else {"field": field, "operator": op, "value": values[0]}  # 多值仅在 equals 时转 in；gt/lte 等比较操作符多值时取第一个值，业务层应保证此类配置只配单值
         )
         filters.append(condition)
         if not user_conditions:
