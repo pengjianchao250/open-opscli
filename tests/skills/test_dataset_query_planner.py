@@ -734,12 +734,14 @@ def test_query_plan_projects_default_filters(tmp_path: Path):
     assert any("QUARTER" in text for text in result["model_view"]["default_filters_zh"])
     # 回答合同强制披露
     assert any("默认条件" in text for text in result["answer_contract"]["required_disclosures_zh"])
-    # query_template 预填：required 默认条件必须已进入模板 filters
-    template_filters = result["execution_ref"]["query_template"]["filters"]
-    assert any(
-        f["field"] == "date_type" and f["operator"] == "=" and f["value"] == "QUARTER"
+    # query_template 不预填默认条件：服务端是唯一权威注入方，模型不得手动加入
+    # 注：date_type 可能作为时间维度合法出现在日期范围过滤（>=/<= scope），
+    # 但不应出现 equals/in + QUARTER 这类枚举型默认条件
+    template_filters = result["execution_ref"]["query_template"].get("filters", [])
+    assert not any(
+        f.get("field") == "date_type" and f.get("value") == "QUARTER"
         for f in template_filters
-    )
+    ), "query_template.filters 不应含 date_type=QUARTER 默认条件（由服务端自动应用）"
 
 
 def test_query_plan_no_default_filters_key_when_unconfigured(tmp_path: Path):
