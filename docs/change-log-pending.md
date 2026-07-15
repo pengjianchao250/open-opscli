@@ -1,5 +1,20 @@
 # 待归档变更记录
 
+## 2026-07-15 skills/dataset_guidance - 聚合数据集默认条件 default_filters（R5）
+
+**变更原因**：需求 R5 要求 `build_guidance()` 返回体顶层包含 `default_filters` 键，聚合"自身字段 + select_columns 关联组件字段"中 filter_config 已启用的条目，供 Task 4（query_plan 投影）消费。
+**改动点**：
+1. `opscli/skills/templates/ops-dataset-query/scripts/dataset_guidance.py`：
+   - `_load_target_metadata()` 返回值新增第 6 项 `snapshot`，供调用方复用快照（不额外读盘）。
+   - 新增模块级函数 `_default_filters(dataset_alias, fields, select_columns)`，分两路聚合：自身字段（dataset_alias 匹配 + filter_config 非 None）；组件关联字段（按 select_columns 回查全量字段索引）；filter_config 只保留六键（type/operator/filter_type/enum_value/value/filter_agg）防止体积超限。
+   - `build_guidance()` 中拆包新增 `snapshot`；用同一快照加载全量字段 `all_fields`（不带 alias 参数）；在 `result` 字典 `permission_scope` 之后追加 `"default_filters": _default_filters(dataset_alias, all_fields, select_columns)`。
+2. 新建 `tests/skills/test_dataset_guidance_default_filters.py`（2 个测试）。
+**验证结果**：RED 阶段 `pytest tests/skills/test_dataset_guidance_default_filters.py -v` 2 tests FAILED（KeyError: 'default_filters'）；GREEN 阶段实现后同命令 2 tests PASSED；回归 `pytest tests/skills/ tests/query/ --ignore=tests/skills/test_packaging.py -v` 共 200 tests，新增 2 PASSED，6 FAILED 均为预先存在的失败，无新增回归。
+**影响范围**：影响 `dataset_guidance.build_guidance()` 返回结构（新增 `default_filters` 列表键）；`_load_target_metadata` 返回元组长度从 5 变为 6（仅模块内部使用，无外部消费方）；不改 `_permission_scope` 等邻里函数。
+**回滚方式**：回退 `opscli/skills/templates/ops-dataset-query/scripts/dataset_guidance.py` 中的 `_default_filters` 函数定义、`_load_target_metadata` snapshot 返回、`build_guidance` 中 all_fields 加载与 default_filters 键追加；删除 `tests/skills/test_dataset_guidance_default_filters.py` 和本条变更记录。
+
+---
+
 ## 2026-07-15 skills/scoped_dataset_reader - 解析字段 CSV filter_config 可选列（R5）
 
 **变更原因**：服务端计划在字段 CSV（dataset_fields.csv）行尾新增可选列 `filter_config`（JSON 字符串），记录字段级默认查询条件；需要在统一数据读取层解析该列，旧版 CSV 无此列时必须完全兼容（返回 None 不报错）。

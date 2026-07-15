@@ -276,6 +276,64 @@ def _resolve_requested_fields(
     return selected, unknown
 
 
+def _default_filters(
+    dataset_alias: str,
+    fields: list[dict],
+    select_columns: list[dict],
+) -> list[dict]:
+    """聚合数据集的默认条件（需求 R5）。
+
+    范围 = 自身字段 + select_columns 关联的组件数据集字段中
+    filter_config 已启用的条目。来源与服务端 query-metadata 的
+    filter_configs 聚合口径一致（自身字段 source 取本数据集 alias）。
+
+    参数 fields 必须为全量字段表（不按 dataset_alias 过滤），
+    否则组件字段无法命中索引。
+    """
+    entries: list[dict] = []
+
+    def _entry(row: dict, source_alias: str) -> dict:
+        """将字段行压缩为 default_filters 条目结构。"""
+        fc = row["filter_config"]
+        # 按 brief 要求只保留六键，丢弃 enabled（防止输出体积超限）
+        compact_fc = {
+            k: fc[k]
+            for k in ("type", "operator", "filter_type", "enum_value", "value", "filter_agg")
+            if k in fc
+        }
+        return {
+            "field_name": row["field_name"],
+            "verbose_name": row.get("verbose_name", ""),
+            "field_type": row.get("field_type", "dimension"),
+            "source_dataset_alias": source_alias,
+            "filter_config": compact_fc,
+        }
+
+    # 自身字段：遍历全量字段表，筛选属于本数据集且 filter_config 已启用的条目
+    for row in fields:
+        if row.get("dataset_alias") == dataset_alias and row.get("filter_config"):
+            entries.append(_entry(row, dataset_alias))
+
+    # 组件关联字段：先建立"(组件 alias, 字段名) → 字段行"索引
+    # 只索引带 filter_config 的组件字段，减少无效查找
+    field_index = {
+        (row.get("dataset_alias"), row.get("field_name")): row
+        for row in fields
+        if row.get("filter_config") and row.get("dataset_alias") != dataset_alias
+    }
+    for relation in select_columns:
+        # 只处理当前数据集的关联关系
+        if relation["current_dataset_alias"] != dataset_alias:
+            continue
+        row = field_index.get(
+            (relation["component_dataset_alias"], relation["column_name"])
+        )
+        if row is not None:
+            entries.append(_entry(row, relation["component_dataset_alias"]))
+
+    return entries
+
+
 def _permission_scope(
     dataset_alias: str,
     datasets: list[dict],
@@ -396,7 +454,12 @@ def _validate_output_size(result: dict, output_mode: str) -> None:
 
 
 def _load_target_metadata(data_dir: Path, lookup: dict) -> tuple:
-    """基于同一份文件快照加载目标数据集的全部相关元数据，保证口径一致。"""
+    """基于同一份文件快照加载目标数据集的全部相关元数据，保证口径一致。
+
+    返回：(dataset, datasets, fields, select_columns, fingerprint, snapshot)
+    其中 snapshot 供调用方复用（避免 _default_filters 全量加载时二次读盘）。
+    fields 只含目标数据集字段（按 alias 过滤）；全量字段需调用方另行加载。
+    """
     snapshot = scoped_dataset_reader.read_source_snapshot(data_dir)
     datasets = scoped_dataset_reader.load_datasets(data_dir, snapshot=snapshot)
     dataset = _find_dataset(datasets, lookup)
@@ -410,7 +473,7 @@ def _load_target_metadata(data_dir: Path, lookup: dict) -> tuple:
     fingerprint = scoped_dataset_reader.source_fingerprint(
         data_dir, snapshot=snapshot
     )
-    return dataset, datasets, fields, select_columns, fingerprint
+    return dataset, datasets, fields, select_columns, fingerprint, snapshot
 
 
 def build_guidance(
@@ -440,10 +503,16 @@ def build_guidance(
     if any(type(value) is not int or value < 1 for value in (max_dimensions, max_metrics, max_components)):
         raise ValueError("invalid_output_limit")
 
-    dataset, datasets, fields, select_columns, fingerprint = _load_target_metadata(
+    dataset, datasets, fields, select_columns, fingerprint, snapshot = _load_target_metadata(
         Path(data_dir), lookup
     )
     dataset_alias = dataset["dataset_alias"]
+    # 全量字段表：_load_target_metadata 返回的 fields 按 alias 过滤，仅含目标数据集字段。
+    # _default_filters 需要回查组件数据集字段，因此用同一快照加载全量（不额外读盘）。
+    all_fields = scoped_dataset_reader.load_dataset_fields(
+        Path(data_dir),
+        snapshot=snapshot,
+    )
     dataset_fields = _validated_dataset_fields(fields, dataset)
     explicit_names, unknown_fields = _resolve_requested_fields(
         dataset_fields, requested_fields
@@ -518,6 +587,8 @@ def build_guidance(
             output_mode,
             max_components,
         ),
+        # 默认条件聚合（R5）：自身字段 + select_columns 关联组件字段中 filter_config 已启用的条目
+        "default_filters": _default_filters(dataset_alias, all_fields, select_columns),
         "missing_information": ["fields"] if unknown_fields else [],
         "next_action": (
             "clarify_fields"
