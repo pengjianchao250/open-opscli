@@ -67,6 +67,21 @@
 
 ---
 
+## 2026-07-15 skills/ops-dataset-query - Skill 文档更新 + 版本升级 1.4.0（R5 Task6）
+
+**变更原因**：R5 默认条件（filter_configs）接入完成 Task 1-5 后，需要更新 Skill 文档以描述新接口契约（model_view.default_filters_zh、execution_ref.default_filters、--default-filters 参数），并将版本升级至 1.4.0 作为本次 R5 发布的前置。
+**改动点**：
+1. `opscli/skills/templates/ops-dataset-query/SKILL.md`："构造与执行"小节第 5 条 CLI 执行器命令行之后，插入默认条件（filter_configs）披露与 --default-filters 参数说明。
+2. `opscli/skills/templates/ops-dataset-query/references/rules.md`：文末追加"禁止发明默认筛选"小节并补充例外条款（来自 filter_configs 的默认条件不属于"发明"，必须应用且披露）。
+3. `opscli/skills/templates/ops-dataset-query/references/simple-query-guide.md`：文末追加"默认条件（filter_configs）的自动应用与覆盖"新章节（表格 + 客户端行为说明）。
+4. `opscli/skills/templates/ops-dataset-query/QUERY_SPEC.md`：第 4 节（正式 query_simple）末尾追加 filter_configs 响应契约说明。
+5. `opscli/skills/templates/ops-dataset-query/data/VERSION.json`：version 从 1.3.5 升级至 1.4.0，其余键（name、data_state）保持原样。
+**验证结果**：`python3 -c "import json; print(json.load(open('opscli/skills/templates/ops-dataset-query/data/VERSION.json'))['version'])"` 输出 1.4.0；`pytest tests/skills/ tests/query/ -v --ignore=tests/skills/test_packaging.py` 201 passed，6 FAILED 均为预先存在的失败（test_install_dataset_fields_template、test_install_ops_amazon_template 等），无新增回归。
+**影响范围**：仅 Skill 文档和 VERSION.json，无生产代码变更；安装此版本 Skill 的 AI Agent 将获得默认条件相关使用契约指引。
+**回滚方式**：回退上述 5 个文件至修改前内容，删除本条变更记录。
+
+---
+
 ## 2026-07-14 asin-data - Polaris 鉴权回退与用户手册
 
 **变更原因**：ASIN 刊登实时取数在个人 Polaris JWT 和直接 exchange 均失败时缺少 BJX Token 自动兜底，同时 CLI/MCP 的公开命令、返回协议和 Polaris 开关说明尚未形成独立完整手册。

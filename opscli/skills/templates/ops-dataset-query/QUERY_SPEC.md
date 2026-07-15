@@ -63,6 +63,8 @@ query_simple(
 
 环比、同比或上期对比必须同时传主周期日期 `filters` 和 `data_comparison`。不将局部或截断结果表述为全量。
 
+`query_metadata` 返回的数据集对象含 `filter_configs` 数组（字段级默认条件，`required` 类型服务端强制应用）；`query_simple` 结果口径已含默认条件。
+
 ## 5. 证据导向分析
 
 MCP-only 场景没有本地 shell，按以下内联证据合同组织结论，输出顺序固定为：范围与口径、主要结论、关键贡献/异常、可执行观察、限制。
