@@ -140,6 +140,10 @@ def test_build_guidance_collects_default_filters(tmp_path):
     assert by_name["date_type"]["filter_config"]["enum_value"] == ["QUARTER"]
     # 组件关联字段：ds_comp.platform_name 通过 select_columns 关联，配置了 required 默认条件
     assert by_name["platform_name"]["source_dataset_alias"] == "ds_comp"
+    # 六键压缩契约：filter_config 不得携带 enabled 键（下游 query_plan 依赖此形态）
+    fc = by_name["date_type"]["filter_config"]
+    assert "enabled" not in fc
+    assert set(fc) <= {"type", "operator", "filter_type", "enum_value", "value", "filter_agg"}
 
 
 def test_build_guidance_default_filters_empty_when_unconfigured(tmp_path):
