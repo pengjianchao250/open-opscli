@@ -503,6 +503,7 @@ def detail_command(
         return
     data = _extract_response_data(response, "查询任务详情")
     resolved_task_code = _task_code_from(data, task_code) or task_code
+    resolved_sudo = _sudo_from(data, sudo)
     base = _dict_value(data, "base")
 
     typer.echo("任务详情")
@@ -523,6 +524,7 @@ def detail_command(
     else:
         typer.echo("暂无方案数据。")
         typer.echo("")
+    typer.echo(f"线上详情：{_calculator_detail_url(resolved_task_code, resolved_sudo)}")
 
 
 @app.command("copy")

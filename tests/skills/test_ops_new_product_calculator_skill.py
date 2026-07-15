@@ -189,6 +189,7 @@ def test_new_product_calculator_skill_guides_result_query_workflow():
     assert "不得自动追加 `--json`" in text
     assert "忽略成本输入、利润和毛利" in text
     assert "不得手工重建 Markdown 表格" in text
+    assert "线上详情链接" in text
     assert "完整费用方案表格" in text
     assert "每PCS头程费用(CNY)" in text
     assert "每PCS全程平均费用(CNY)" in text

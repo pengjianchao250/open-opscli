@@ -56,7 +56,7 @@ https://bi.xenkee.com/#/calculatorResultList
 https://bi.xenkee.com/#/calculatorDatail?task_code=<TASK_CODE>&sudo=<SUDO>
 ```
 
-仅当用户明确要求页面入口时展示 Web 详情页。不要在回复中泄露完整 JWT/Cookie，也不得复述其它内部认证信息。
+普通 `detail` 默认在费用方案表后展示线上详情链接。不要额外解释网页中的成本、利润或毛利，也不要在回复中泄露完整 JWT/Cookie 或其它内部认证信息。
 
 ## 最终回复格式
 
@@ -66,8 +66,9 @@ https://bi.xenkee.com/#/calculatorDatail?task_code=<TASK_CODE>&sudo=<SUDO>
 
 1. 任务状态和基本信息。
 2. 完整费用方案表格。
+3. CLI 返回的线上详情链接。
 
-默认到此结束，不追加成本费用、利润、毛利、Web 详情页或原始 JSON 查询提示。
+默认到此结束，不追加成本费用、利润、毛利或原始 JSON 查询提示。
 
 表格必须包含：
 

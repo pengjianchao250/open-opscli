@@ -466,7 +466,7 @@ def test_detail_command_prints_summary(monkeypatch):
     assert "售价" not in result.output
     assert "毛利" not in result.output
     assert "非税采购价" not in result.output
-    assert "Web详情页" not in result.output
+    assert "线上详情：https://bi.xenkee.com/#/calculatorDatail?task_code=NPC001&sudo=admin" in result.output
     assert "原始JSON" not in result.output
 
 
