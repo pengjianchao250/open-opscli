@@ -1,5 +1,17 @@
 # 待归档变更记录
 
+## 2026-07-15 skills/run_query - 默认条件改为只披露不预注入，服务端权威注入
+
+**变更原因**：`_apply_default_filters` 原先会把默认条件预注入进 `payload["filters"]` 再发送给服务端。对日期预设值（如 `beforeYesterday`/`thisQuarter`），客户端注入的是字面量字符串，服务端收到后同时注入自己解析后的真实日期，两者 AND 合并导致字面量永不匹配日期列，致使配置了日期默认条件的数据集经 Skill 查询恒返回 0 行（QA 实证）。服务端是默认条件注入的唯一权威方（评审结论 5），客户端预注入是冗余且有害的。
+**改动点**：
+1. `opscli/skills/templates/ops-dataset-query/scripts/run_query.py`：`_apply_default_filters` 重写为只读 `payload["filters"]`（不再写入），移除所有 `filters.append(...)` / `payload.setdefault("filters", [])` 的写入操作；保留并完善中文披露 notes 生成（required 缺失/同值/冲突/optional/having 均有对应文案）；日期预设值原样展示并注明"服务端解析为执行日"；更新 docstring 与 main() 调用处注释说明服务端权威注入语义。
+2. `tests/skills/test_run_query_default_filters.py`：所有断言从"payload 被注入"翻转为"payload 不变 + 正确披露"；测试函数重命名以反映新语义（`test_apply_injects_*` → `test_apply_discloses_*` 等）。
+**验证结果**：`pytest tests/skills/test_run_query_default_filters.py -v` 全部 6 tests PASSED；回归 `pytest tests/skills/ tests/query/ --ignore=tests/skills/test_packaging.py -v` 共 208 tests，无新增失败，6 个预存失败均为模板漂移与本次修改无关。
+**影响范围**：`_apply_default_filters` 函数行为根本改变——不再 mutate payload，由服务端统一注入默认条件；披露输出（disclosures["default_filters_zh"]）保持不变；main() 调用接线不变。
+**回滚方式**：将 `run_query.py` 中 `_apply_default_filters` 恢复为含 `filters.append(...)` 的旧版本，将测试文件中所有断言改回"payload 被注入"形式。
+
+---
+
 ## 2026-07-15 skills/run_query - 去重判定限定等值操作符族，防 required 被同值异操作符绕过
 
 **变更原因**：`_apply_default_filters` 中的 `covered` 判定只比较值集合，未检查操作符——当用户传 `date_type != QUARTER` 时，required 默认条件（`= QUARTER`）被错误判定为"已覆盖"而静默丢弃，击穿 required 不可绕过的语义保证。服务端已完成同源修复（去重仅限等值操作符族），opscli 侧需对齐。
@@ -2747,3 +2759,11 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 - **验证**：分目录全量回归 1133 passed，35 failed 全部为基线既有（改动面 diff 证明不相交）；本计划相关测试 tests/query 71/71、planner 26/26、guidance 3/3、reader 5/5、run_query 5/5。
 - **影响范围**：opscli query 元数据透传、ops-dataset-query Skill 1.4.0（未发布）。端到端验收待服务端 R1-R3 上线 QA。
 - **回滚方式**：git revert aaf8c2e..016a875 区间提交。备注：memory MCP 本会话不可用，恢复后按本文件补录。
+
+## 2026-07-15 服务端 - filter_config 服务端计划实施完成（收尾归档，跨仓库）
+
+- **为什么改**：按《数据集默认条件filter_config实施计划-服务端》以 subagent-driven 方式执行完 Task 1-7 及全分支终审（Task 8 QA 验收待后台配置与 JWT）。
+- **具体做了什么**：data-metrics 包（release 分支）16 个提交 f8f9613..4ac10db：FilterConfig/FilterDatePreset 纯函数类；buildExportPayloadForUser 统一挂载 + query-metadata filter_configs 下发（组件引用排除语义）；两 CSV 行尾新列；SimpleQueryBuilder 三数据源加载 + 六语义合并 + having 通道（原始 SQL 拼接面已加转义/白名单/字段校验）+ appendDefaultConditions 完整入口兜底（含 having/translate/innerWhere）；CliQueryService 接线。终审抓获并修复两处跨通道真缺陷：去重 operator-blind 绕过 required（同源波及 opscli run_query，已在 opscli 仓库 aab90fd 同步修复）、完整入口跳过 translate/support_like。
+- **验证**：包内 43 tests 全过（+3 个既有 oauth_apps Feature errors 与本分支无关）；opscli 侧 208 回归无新增失败。
+- **影响范围**：QA 上线后所有已配置 required 默认条件的数据集查询口径收敛（需求预期）；【技术债上报】既有图表路径 QueryBuilder::buildHavingConditionString(约4432行) 存在字符串值未转义的同类问题（先例缺陷，本计划未动）。
+- **回滚方式**：data-metrics 仓库 git revert f8f9613..4ac10db 区间；opscli 仓库 revert aab90fd。

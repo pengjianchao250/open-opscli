@@ -90,22 +90,36 @@ _DEFAULT_FILTER_OP_MAP = {
 
 
 def _apply_default_filters(payload: dict, defaults: list[dict]) -> list[str]:
-    """把规划器下发的数据集默认条件注入 payload（需求 R5）。
+    """生成数据集默认条件的中文披露说明（服务端权威注入，本函数只负责披露对齐，不改 payload）。
 
-    语义与服务端保持一致（评审结论 1/2）：required 缺失即注入、
-    同值/子集去重、冲突不拦截静默 AND 合并但必须披露"同时生效"；
-    optional 用户已有同字段条件则跳过；filter_agg != none 的度量
-    条件服务端 having 兜底，本地不注入。返回中文披露行列表。
+    架构背景（QA 评审结论 5）：服务端是默认条件注入的唯一权威方，日期预设值
+    （如 beforeYesterday / thisQuarter）只由服务端在执行时刻解析成真实日期，
+    客户端预注入会把字面量字符串写入 filters，服务端 AND 合并后永不匹配日期列
+    → 配置了日期默认条件的数据集恒返回 0 行。
+
+    本函数保留对用户的透明性披露：
+    - required 且用户无该字段 → 提示服务端将自动应用
+    - required 且用户同字段同值/子集 → 提示"与你的条件一致"
+    - required 且用户同字段冲突 → 提示"同时生效（AND），结果可能为空"
+    - optional 且用户已有 → 提示用户条件优先（跳过）
+    - filter_agg != none 的度量 having 条件 → 提示服务端将按聚合后过滤应用
+    - 日期预设值 → 原样展示，注明"服务端解析为执行日"
+
+    payload 不被修改。返回中文披露行列表。
     """
     notes: list[str] = []
-    filters = payload.setdefault("filters", [])
+    # 读取用户已有 filters（只读，不写入）
+    filters = payload.get("filters") or []
     for default in defaults or []:
-        # filter_agg != none 的度量条件由服务端 having 兜底，本地不注入
+        # filter_agg != none 的度量条件由服务端 having 兜底
         if default.get("filter_agg", "none") != "none":
+            value_text = "、".join(str(v) for v in (default.get("values") or []))
+            label = default.get("label_zh") or default.get("field_name", "")
+            notes.append(f"服务端将按聚合后过滤应用默认条件：{label} = {value_text}（having）")
             continue
         op = _DEFAULT_FILTER_OP_MAP.get(default.get("operator", "equals"))
         if op is None:
-            # isEmpty/isNotEmpty 等暂不支持的操作符：服务端兜底，本地不注入
+            # isEmpty/isNotEmpty 等暂不支持的操作符：服务端兜底，仅披露
             continue
         field = default["field_name"]
         values = default.get("values") or []
@@ -115,14 +129,27 @@ def _apply_default_filters(payload: dict, defaults: list[dict]) -> list[str]:
         user_conditions = [f for f in filters if isinstance(f, dict)
                            and str(f.get("field", "")).split(".")[-1] == field]
         label = default.get("label_zh") or field
-        value_text = "、".join(str(v) for v in values)
+        # 日期预设值（如 beforeYesterday/thisQuarter）原样展示，注明服务端解析
+        date_preset_keywords = {
+            "beforeYesterday", "yesterday", "today", "thisWeek", "lastWeek",
+            "thisMonth", "lastMonth", "thisQuarter", "lastQuarter", "thisYear", "lastYear",
+        }
+        value_texts = []
+        for v in values:
+            if str(v) in date_preset_keywords:
+                value_texts.append(f"{v}（服务端解析为执行日）")
+            else:
+                value_texts.append(str(v))
+        value_text = "、".join(value_texts)
 
         if default.get("type") == "optional":
-            # optional 类型：用户已有同字段条件时跳过，尊重用户的明确过滤
+            # optional 类型：用户已有同字段条件时，用户条件优先，不披露
             if user_conditions:
                 continue
+            # optional 且用户无该字段：服务端将应用
+            notes.append(f"服务端将自动应用可选默认条件：{label} = {value_text}")
         elif user_conditions:
-            # required + 用户同字段：同值/子集去重，否则 AND 合并披露双条件生效
+            # required + 用户同字段：判断是同值/子集（去重）还是冲突（AND 合并）
             # 去重仅适用等值语义（=/in）：异操作符（如 !=）属冲突场景，AND 合并保留并披露（终审修复）
             equality_ops = {"=", "==", "in"}
             covered = any(
@@ -132,20 +159,14 @@ def _apply_default_filters(payload: dict, defaults: list[dict]) -> list[str]:
             )
             if covered:
                 notes.append(f"默认条件 {label}={value_text} 与你的条件一致，已去重")
-                continue
-            # 冲突：不拦截，与服务端静默 AND 合并行为一致，但必须披露
-            notes.append(
-                f"[!] 数据集强制默认条件 {label}={value_text} 与你的条件同时生效（AND），结果可能为空"
-            )
-        # 构造注入条件：多值 equals 用 in 操作符，单值或非 equals 用映射后的操作符
-        condition = (
-            {"field": field, "operator": "in", "value": values}
-            if len(values) > 1 and default.get("operator", "equals") == "equals"
-            else {"field": field, "operator": op, "value": values[0]}  # 多值仅在 equals 时转 in；gt/lte 等比较操作符多值时取第一个值，业务层应保证此类配置只配单值
-        )
-        filters.append(condition)
-        if not user_conditions:
-            notes.append(f"已自动应用数据集默认条件：{label} = {value_text}（{default.get('type', 'required')}）")
+            else:
+                # 冲突：服务端将 AND 合并，必须披露
+                notes.append(
+                    f"[!] 数据集强制默认条件 {label}={value_text} 与你的条件同时生效（AND），结果可能为空"
+                )
+        else:
+            # required 且用户无该字段：服务端将自动注入
+            notes.append(f"服务端将自动应用数据集默认条件：{label} = {value_text}（{default.get('type', 'required')}）")
     return notes
 
 
@@ -342,8 +363,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise PrecheckError("缺少 payload：用 --json 或 --json-file 传入查询参数。")
         payload = _parse_payload(raw)
         payload.setdefault("tableId", args.table_id)
-        # 注入规划器下发的数据集默认条件（required 缺失自动补全），须在 _precheck 之前执行，
-        # 因为 _precheck 会检查 dataComparison 的主周期日期条件是否存在
+        # 生成规划器下发的数据集默认条件披露说明（服务端权威注入，本函数只读不写 payload）
+        # 注意：默认条件实际注入由服务端完成，客户端不预注入，避免日期预设字面量冲突
         default_filters = json.loads(args.default_filters) if args.default_filters.strip() else []
         default_notes = _apply_default_filters(payload, default_filters)
         _precheck(payload)
