@@ -100,17 +100,33 @@ def _field_score(
 
     优先级：技术字段名完整命中(100) > 中文全名子串命中(90+)
     > 去括号后的中文基础名命中(80+) > token 交集数量兜底。
+    展示名对主名与 alt_verbose_names（重复注册合并保留的旧标签）
+    逐一打分取最大值，保证用户用任一历史叫法都能命中。
     """
     field_name = _normalize(field.get("field_name"))
-    verbose_name = _normalize(field.get("verbose_name"))
-    base_name = re.split(r"[（(]", verbose_name, maxsplit=1)[0].strip()
     if field_name and _contains_identifier(normalized_query, field_name):
         return 100
-    if verbose_name and verbose_name in normalized_query:
-        return 90 + min(len(verbose_name), 9)
-    if len(base_name) >= 2 and base_name in normalized_query:
-        return 80 + min(len(base_name), 9)
-    return len(_tokens(base_name).intersection(query_tokens))
+    best = 0
+    for label in _field_labels(field):
+        verbose_name = _normalize(label)
+        base_name = re.split(r"[（(]", verbose_name, maxsplit=1)[0].strip()
+        if verbose_name and verbose_name in normalized_query:
+            score = 90 + min(len(verbose_name), 9)
+        elif len(base_name) >= 2 and base_name in normalized_query:
+            score = 80 + min(len(base_name), 9)
+        else:
+            score = len(_tokens(base_name).intersection(query_tokens))
+        best = max(best, score)
+    return best
+
+
+def _field_labels(field: dict) -> list[str]:
+    """字段的全部展示名：主 verbose_name + 合并重复注册时保留的备选名。"""
+    labels = [field.get("verbose_name", "")]
+    alt_labels = field.get("alt_verbose_names")
+    if isinstance(alt_labels, (list, tuple)):
+        labels.extend(str(item) for item in alt_labels)
+    return [label for label in labels if label]
 
 
 def _is_formula(field: dict) -> bool:
@@ -240,7 +256,8 @@ def _resolve_requested_fields(
 ) -> tuple[set[str], list[str]]:
     """把用户点名字段解析为技术字段名。
 
-    优先按 field_name 精确匹配，其次按 verbose_name 精确匹配；
+    优先按 field_name 精确匹配，其次按 verbose_name（含合并重复注册
+    保留的 alt_verbose_names 旧标签）精确匹配；
     无法唯一确定的点名进入 unknown 列表，触发字段澄清。
     """
     if isinstance(requested_fields, (str, bytes)):
@@ -267,7 +284,7 @@ def _resolve_requested_fields(
         matches = name_matches or [
             field
             for field in fields
-            if value == _normalize(field.get("verbose_name"))
+            if any(value == _normalize(label) for label in _field_labels(field))
         ]
         if len(matches) == 1:
             selected.add(matches[0]["field_name"])

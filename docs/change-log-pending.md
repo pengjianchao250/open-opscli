@@ -2772,3 +2772,15 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：仅 `_apply_default_filters` 披露文案（不改 payload，披露-only 语义不变）；用户侧体验：覆盖场景不再看到"结果可能为空"的误导提示。
 **回滚方式**：git revert 本次提交，或手动将 `_apply_default_filters` 中覆盖分支改回含 `covered`/`equality_ops` 的旧版本，并恢复测试文件。
 - **回滚方式**：服务端 revert c11150d；opscli revert 40538b0/bba32cd。
+
+## 2026-07-16 skills/ops-dataset-query v1.3.6 - duplicate_dataset_field 硬失败根治（同名字段双注册兼容性合并）
+
+**变更原因**：QA 实跑 SSE 日志（2222.txt）证实「即时综合数据集」（table_id=1）所有 query_plan 调用必现 `duplicate_dataset_field` 硬失败（retryable=false），单会话 8 次报错、模型陷入换措辞盲试与升级自救循环（升级也无法自愈，因为重复来自 BI 发布包数据源头）。根因取证：BI 发布包 v1.1.2 的 dataset_fields.csv 里 table_id=1 有 44 个 field_name 各注册两行——同一物理字段挂两个 global_alias。形态一（11 组）：仅 verbose_name/global_alias 不同的纯标签差异；形态二（33 组）：一行公式注册（has_formula_config=1 带表达式）+ 一行裸指标注册。`dataset_guidance._validated_dataset_fields` 对 field_name 唯一性硬校验，一票否决整个数据集。
+**改动点**：
+1. `scripts/scoped_dataset_reader.py`：`load_dataset_fields` 末尾新增 `_merge_duplicate_field_rows` 兼容性合并（统一数据层收口，所有消费方受益）。形态一：执行语义签名（field_type/表达式/快照/公式标记/filter_config）一致即合并，主行优先取「含中文且≠技术名」的展示名，其余展示名收进 `alt_verbose_names`（additive 键）；形态二：公式列以外语义一致且恰为公式+裸指标分裂时，优先采纳公式注册（公式表达式是服务端权威聚合口径，均值/比率字段按 SUM 裸聚合会产出错误业务数字）；其余冲突（如 dimension vs metric）不合并，保留下游硬失败。
+2. `scripts/dataset_guidance.py`：`_field_score` 对主名+alt_verbose_names 逐一打分取最大值；`_resolve_requested_fields` 点名精确匹配扩展到 alt 名（旧标签「交易额(自发货)」仍可命中 price_ds；同一旧标签挂多字段时正确进入澄清）。
+3. `scripts/query_plan.py`：ERROR_NEXT_ACTIONS 新增 `duplicate_dataset_field` 专属指引（升级/重跑均无法自愈，如实说明+提交反馈+停止重试），替代原默认「重跑→升级→反馈」误导链。
+4. 版本 bump 1.3.5→1.3.6（SKILL.md + data/VERSION.json）。
+**验证结果**：新增 `tests/skills/test_scoped_reader_duplicate_fields.py` 6 用例（两形态合并/语义冲突保留硬失败/幂等去重/alt 打分点名/多义澄清）全 PASS；相关既有测试 43/43 PASS（tests/skills 整目录收集失败为既有问题）。本机用真实 v1.1.2 发布包数据复现验证：修复前必现报错的「即时综合数据集近7天按渠道的销售额Top5」修复后 status=planned；公式字段 avg_price_cny 合并后 has_formula_config=1（公式口径胜出）。QA e2e：v1.3.6 已发布 QA 广场（skill 599490，version id=1442），矩阵验收 duplicate_dataset_field 零命中（详见 ops-agent 仓库测试报告）。
+**影响范围**：ops-dataset-query 字段元数据读取层全消费方（dataset_guidance/scoped_metadata_index/query_plan）；即时综合数据集从整库不可查恢复为可查；其余 42 个无重复数据集行为不变（签名唯一时合并是恒等操作）。
+**回滚方式**：git revert 本次提交；或广场回退到 1.3.5 版本包。备注：memory MCP 本会话不可用，恢复后按本文件补录。
