@@ -9,6 +9,7 @@ from opscli.calculator.draft import (
     build_field_options,
     build_missing_items_markdown,
     build_summary_text,
+    build_usage_markdown,
     create_draft_package,
     load_draft_data,
     normalize_draft_data,
@@ -353,3 +354,16 @@ def test_create_draft_package_writes_csv_usage_and_json(tmp_path):
     assert read_options_cache(tmp_path / "draft-pkg") == _option_cache()
     assert "河北省" in csv_text
     assert "zone_1_3" not in csv_text
+
+
+def test_usage_markdown_separates_sku_package_and_fba_inbound_box_references():
+    text = build_usage_markdown("tmp-validation/calculator/example/draft.json")
+
+    assert "单件 SKU 包装参考" in text
+    assert "SD 卡：3.2 × 2.4 × 0.2 cm / 0.03 kg" in text
+    assert "图书：24 × 16.2 × 3.5 cm / 0.15 kg" in text
+    assert "电子玩具：37 × 15.4 × 7 cm / 0.49 kg" in text
+    assert "FBA 入库外箱参考" in text
+    assert "91.44 × 63.5 × 63.5 cm / 22.68 kg" in text
+    assert "不会自动写入" in text
+    assert "单箱数量没有通用默认值" in text

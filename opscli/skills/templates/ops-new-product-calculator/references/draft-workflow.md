@@ -70,6 +70,41 @@ opscli calculator show <DRAFT_DIR>
 
 CSV 可填写 `河北省`、`唐山市`、`算毛利`、`1区全部、指定分区`、`美东+美西` 等中文值。目录模式的 `validate` / `submit` 会按下拉数据自动转换成后端 key/code 并写回 `draft.json`。
 
+### 单件 SKU 包装参考
+
+`包装长/宽/高` 和 `SKU毛重` 是一件商品完成销售包装后的实际数据，用于 FBA 配送尺寸分段和尾程费用。默认向用户提供以下选项：
+
+1. `按实物填写（推荐）`：继续询问实际长、宽、高和毛重，不代入任何参考值。
+2. `Amazon.sg 官方示例：SD 卡`：`3.2 × 2.4 × 0.2 cm / 0.03 kg`。
+3. `Amazon.sg 官方示例：图书`：`24 × 16.2 × 3.5 cm / 0.15 kg`。
+4. `Amazon.sg 官方示例：电子玩具`：`37 × 15.4 × 7 cm / 0.49 kg`。
+5. `自定义`：用户直接给出实际数据。
+
+后三个数值来自 [Amazon.sg FBA 官方费率资料](https://m.media-amazon.com/images/G/65/SG3P/FBA_fulfilment_fees_for_Amazon.sg_orders.pdf)，仅用于理解尺寸量级，不能当作目标站点的计费档位。用户明确选择官方示例后才可暂填，并立即复述尺寸、重量，要求用户确认或修改；未确认时仍视为未补全。
+
+### FBA 入库外箱参考
+
+`外箱长/宽/高`、`外箱毛重` 和 `单箱数量` 是多件 SKU 发往 FBA 仓的实际入库运输箱，用于亚马逊头程/入库运输费用，不能使用单件 SKU 包装数据替代。
+
+默认选项：
+
+1. `按实际装箱填写（推荐）`：询问供应商实际箱规、毛重和装箱数量。
+2. `查看美国 FBA 入库上限`：展示 `91.44 × 63.5 × 63.5 cm / 22.68 kg`，但不填入 CSV。
+3. `自定义`：用户直接给出实际外箱数据。
+
+美国上限来自 [Amazon FBA 官方公告](https://sellercentral.amazon.com/seller-forums/discussions/t/dae82165-50b2-4b52-99d9-a7e7db80caec)，其他站点必须重新核对。单箱数量没有通用默认值，必须让用户确认。
+
+### 多轮补齐
+
+1. 读取 CSV 的“当前值”和“请填写”，先收集所有仍为空或无效的必填字段。
+2. 第一轮优先询问单件包装长、宽、高和 SKU 毛重；每轮最多询问 3–5 个字段。
+3. 下一轮询问外箱长、宽、高、外箱毛重和单箱数量；仍遵守每轮 3–5 项。
+4. 后续轮次只追问仍为空或无效的地址、备货等必填字段，不重复询问已经确认的值。
+5. 用户每次回答后写入 CSV“请填写”列并重新读取；全部必填字段有效后才运行 `validate`。
+6. 用户选择参考模板时必须再次确认；用户未确认或明确取消时，不进入提交。
+
+不得根据商品名称猜测包装尺寸、重量、箱规或单箱数量，也不得把“示例”列复制到“当前值”或“请填写”列。
+
 ## 字段规则
 
 - `draft.json` 的 `pick_up_province` / `pick_up_city` 必须使用编码字符串，例如 `"130000"` / `"130200"`。
@@ -80,45 +115,21 @@ CSV 可填写 `河北省`、`唐山市`、`算毛利`、`1区全部、指定分�
 - 利润相关成本费用由 CLI 统一填 `0`，新版 `填写表格.csv` 不包含这些字段；旧版文件仅用于历史备份。
 - `stock_qty_first_percent`、`stock_qty_second_percent`、`stock_qty_third_percent` 之和必须为 100。
 
-## 最小烟测 JSON
+## 空白物流字段结构
 
-以下示例可通过当前本地校验。实际操作优先填写 CSV，不要整段覆盖 CLI 已生成的 `draft.json`：
+以下 JSON 只说明未知物流字段应保持空值，不可直接作为提交数据，也不要整段覆盖 CLI 已生成的 `draft.json`：
 
 ```json
 {
-  "country_code": "US",
-  "platforms": [1, 7],
-  "hs_code_id": 4,
-  "package_length": 12.5,
-  "package_width": 8.2,
-  "package_height": 4,
-  "box_length": 50,
-  "box_width": 40,
-  "box_height": 30,
-  "product_gross_weight": 0.65,
-  "box_gross_weight": 12,
-  "box_number": 20,
-  "pick_up_province": "130000",
-  "pick_up_city": "130200",
-  "calc_method": "GROSS_PROFIT",
-  "product_price": 0,
-  "gross_profit_percent": 0,
-  "purchase_cost_with_tax": 0,
-  "purchase_cost": 0,
-  "tax_rate_percent": 0,
-  "fee_percent": 0,
-  "advertising_percent": 0,
-  "marketing_percent": 0,
-  "refund_percent": 0,
-  "fixed_cost_percent": 0,
-  "tariff_rate": 0,
-  "stock_qty_first_percent": 50,
-  "stock_qty_second_percent": 30,
-  "stock_qty_third_percent": 20,
-  "checkbox_stock": ["specify_part", "one_zone_all"],
-  "two_zone_combine": ["zone_1_2"],
-  "three_zone_combine": [],
-  "baiyi_warehouse_ids": []
+  "package_length": null,
+  "package_width": null,
+  "package_height": null,
+  "product_gross_weight": null,
+  "box_length": null,
+  "box_width": null,
+  "box_height": null,
+  "box_gross_weight": null,
+  "box_number": null
 }
 ```
 

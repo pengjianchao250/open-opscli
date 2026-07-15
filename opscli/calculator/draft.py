@@ -20,6 +20,10 @@ DRAFT_CSV_FILENAME = "填写表格.csv"
 LEGACY_DRAFT_CSV_FILENAME = "填写表格-旧版.csv"
 OPTIONS_CACHE_FILENAME = ".dropdown-cache.json"
 WEB_CALCULATOR_URL = "https://bi.xenkee.com/#/newProductCalculator"
+# Amazon.sg 官方 FBA 费率资料，用于生成单件商品包装参考说明。
+_AMAZON_SG_FBA_FEES_URL = "https://m.media-amazon.com/images/G/65/SG3P/FBA_fulfilment_fees_for_Amazon.sg_orders.pdf"
+# Amazon 美国站 FBA 入库箱规公告，用于生成外箱合规上限提示。
+_AMAZON_US_FBA_BOX_URL = "https://sellercentral.amazon.com/seller-forums/discussions/t/dae82165-50b2-4b52-99d9-a7e7db80caec"
 DRAFT_CSV_COLUMNS = ("分组", "是否必填", "字段", "中文说明", "当前值", "请填写", "单位/格式", "示例", "备注")
 
 _NUMERIC_RE = re.compile(r"^[+-]?\d+(\.\d+)?$")
@@ -492,7 +496,7 @@ def build_draft_csv_text(data: dict[str, Any], field_options: dict[str, list[Dra
     return _build_draft_csv_text(
         data,
         visible_fields,
-        "如果不想在本地编辑 CSV/JSON，也可以直接使用网页端新品计算器",
+        "当前值仅来自接口或用户已确认数据，不会把示例自动写入；包装与箱规请按实物填写",
         field_options,
     )
 
@@ -725,7 +729,15 @@ def load_draft_data(
 
 
 def build_usage_markdown(draft_path: str, notes: list[str] | None = None) -> str:
-    """生成草稿包使用说明。"""
+    """生成包含包装参考的草稿使用说明。
+
+    Args:
+        draft_path: 草稿目录或 draft.json 路径。
+        notes: 需要附加到说明末尾的系统提示。
+
+    Returns:
+        可直接写入使用说明文件的 Markdown 文本。
+    """
     draft_path_obj = Path(draft_path)
     package_path = draft_path_obj.parent if draft_path_obj.name == DRAFT_JSON_FILENAME else draft_path_obj
     lines = [
@@ -738,6 +750,25 @@ def build_usage_markdown(draft_path: str, notes: list[str] | None = None) -> str
         f"3. 保存后执行 `opscli calculator validate {package_path}`。",
         f"4. 校验通过后执行 `opscli calculator submit {package_path}`。",
         f"5. `{LEGACY_DRAFT_CSV_FILENAME}` 已弃用，仅用于保留历史完整字段，不参与校验和提交。",
+        "",
+        "## 单件 SKU 包装参考",
+        "",
+        "以下是 Amazon.sg 官方商品示例，只用于帮助理解尺寸量级，不会自动写入；FBA 费用应以目标站点规则和实测数据为准：",
+        "",
+        "- 按实物填写（推荐）。",
+        "- SD 卡：3.2 × 2.4 × 0.2 cm / 0.03 kg。",
+        "- 图书：24 × 16.2 × 3.5 cm / 0.15 kg。",
+        "- 电子玩具：37 × 15.4 × 7 cm / 0.49 kg。",
+        f"- 官方资料：{_AMAZON_SG_FBA_FEES_URL}",
+        "",
+        "## FBA 入库外箱参考",
+        "",
+        "- 按实际装箱填写（推荐）。",
+        "- 美国 FBA 普通入库箱合规上限：91.44 × 63.5 × 63.5 cm / 22.68 kg；这是上限提示，不会自动写入。",
+        "- 单箱数量没有通用默认值，必须按供应商实际装箱确认。",
+        f"- 官方公告：{_AMAZON_US_FBA_BOX_URL}",
+        "",
+        "单件 SKU 包装用于 FBA 配送费用，入库外箱用于头程运输费用，两者不能混用。",
         "",
         "## 不想本地填写？",
         "",

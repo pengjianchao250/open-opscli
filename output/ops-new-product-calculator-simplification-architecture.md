@@ -17,6 +17,7 @@
 ```text
 queryCost 返回数据
   → normalize_draft_data 归一化
+  → 未返回的包装、重量、箱规字段保持为空
   → 利润成本字段覆盖为 0
   → two_zone_combine 默认写入 ["zone_1_2"]
   → draft.json 保留完整接口字段
@@ -32,7 +33,20 @@ queryCost 返回数据
 
 只处理用户明确指出的利润成本输入；`rate` 不归零，`calc_method` 不改为数值。
 
-### 2.2 指定二区策略
+### 2.2 包装与箱规参考策略
+
+包装参数分为两个独立对象：
+
+- `package_length/package_width/package_height/product_gross_weight` 表示单件 SKU 完成销售包装后的实际数据，用于 FBA 配送尺寸分段和尾程费用。
+- `box_length/box_width/box_height/box_gross_weight/box_number` 表示多件 SKU 发往 FBA 仓的实际入库外箱，用于头程/入库运输费用。
+
+接口未返回这些字段时保持空值，不使用字段示例、测试数据、商品名称或尺寸档位上限补齐。生成的 `使用说明.md` 仅展示两类参考：Amazon.sg 官方 SD 卡、图书、电子玩具示例作为单件包装候选；美国 FBA 入库箱 `91.44 × 63.5 × 63.5 cm / 22.68 kg` 作为合规上限提示。所有参考默认不选中、不写入 `draft.json` 或 CSV 当前值；单箱数量不提供默认值。
+
+Skill 读取草稿后按“单件包装 → 入库外箱 → 其他缺失必填项”分轮追问。每轮保留已确认值，只处理仍为空或无效的字段；选择参考模板后仍要求用户确认，全部必填项有效前不进入提交确认。
+
+新品计算器 Skill 在模板 manifest 的 `source/wheel/binary/binary_full` 四个目标中保持启用，确保更新后的补问流程随各发行形态交付。
+
+### 2.3 指定二区策略
 
 在草稿归一化阶段把 `two_zone_combine` 默认写为 `["zone_1_2"]`。该枚举已由业务确认，对应中文值“美东+美西”；字段示例和 Skill 草稿示例同步替换原 `zone_1_3`。
 
@@ -71,6 +85,6 @@ taskDetails 返回 data
 ## 5. 实施与验证约束
 
 - 精确修改现有函数，不新增外部依赖。
-- 不新增测试用例。
+- 只补充本需求相关的草稿说明与 Skill 契约测试。
 - 不运行 type-check、eslint 或格式化检查。
 - 实施后只做代码差异自检和针对样例数据的 CLI 输出核对。

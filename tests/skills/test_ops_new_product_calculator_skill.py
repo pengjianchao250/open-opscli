@@ -97,27 +97,50 @@ def test_new_product_calculator_skill_guides_second_stage_draft_completion():
     assert "130000" in text
     assert "130200" in text
     assert "two_zone_combine" in text
-    assert "zone_1_3" in text
+    assert "zone_1_2" in text
     assert "checkbox_stock" in text
-    assert "GROSS_PROFIT" in text
-    assert "product_price" in text
-    assert "PRICING" in text
-    assert "gross_profit_percent" in text
+    assert "利润相关成本费用由 CLI 统一填 `0`" in text
     assert "不要把中文省市名写入 draft.json" in text
     assert "河北省" in text
     assert "唐山市" in text
     assert "算毛利" in text
     assert "1区全部、指定分区" in text
-    assert "美东+美中" in text
+    assert "美东+美西" in text
     assert ".dropdown-cache.json" in text
     assert "自动转换成后端 key/code" in text
     assert "validate 通过后才允许进入 submit" in text
 
 
-def test_new_product_calculator_skill_json_example_passes_real_validation():
+def test_new_product_calculator_skill_does_not_seed_logistics_example_values():
     draft = _first_json_example(_reference_text(DRAFT_REFERENCE))
 
-    assert validate_draft_data(draft) == []
+    logistics_fields = (
+        "package_length",
+        "package_width",
+        "package_height",
+        "product_gross_weight",
+        "box_length",
+        "box_width",
+        "box_height",
+        "box_gross_weight",
+        "box_number",
+    )
+    assert all(draft[field] is None for field in logistics_fields)
+
+
+def test_new_product_calculator_skill_repeats_missing_field_questions():
+    text = _full_skill_text()
+
+    assert "按实物填写（推荐）" in text
+    assert "Amazon.sg 官方示例：SD 卡" in text
+    assert "Amazon.sg 官方示例：图书" in text
+    assert "Amazon.sg 官方示例：电子玩具" in text
+    assert "按实际装箱填写（推荐）" in text
+    assert "91.44 × 63.5 × 63.5 cm / 22.68 kg" in text
+    assert "每轮最多询问 3–5 个" in text
+    assert "只追问仍为空或无效" in text
+    assert "全部必填字段有效" in text
+    assert "不得根据商品名称猜测" in text
 
 
 def test_new_product_calculator_skill_prevents_draft_overwrite():
