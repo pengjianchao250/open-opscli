@@ -1,4 +1,4 @@
-"""Client for ASIN BI report data endpoints."""
+﻿"""Client for ASIN BI report data endpoints."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ DEFAULT_POLARIS_BJX_TOKEN_ENDPOINT = "/dataMetrics/v1/asin-report-files/polaris-
 DEFAULT_BI_LOGIN_USERNAME = "wanglintao@aukeys.com"
 DEFAULT_BI_LOGIN_PASSWORD = "wlt123456"
 BI_LOGIN_CONFIG_SECTION = "bi_login"
-LISTING_AUTH_EXPIRED_MARKERS = ("\u672a\u767b\u9646", "\u672a\u767b\u5f55")
+LISTING_AUTH_EXPIRED_MARKERS = ("未登陆", "未登录")
 
 BI_REPORT_DATA_SOURCES: dict[str, dict[str, str]] = {
     "listing_basic": {
@@ -62,6 +62,51 @@ BASIC_REPORT_SOURCE_KEYS = ("listing_basic", "crawler_details")
 BI_ONLY_REPORT_SOURCE_KEYS = tuple(
     key for key in BI_REPORT_DATA_SOURCES if key not in BASIC_REPORT_SOURCE_KEYS
 )
+SITE_CODE_ALIASES: dict[str, str] = {
+    "US": "US",
+    "USA": "US",
+    "美国": "US",
+    "美国站": "US",
+    "美区": "US",
+    "UK": "UK",
+    "GB": "UK",
+    "英国": "UK",
+    "英国站": "UK",
+    "CA": "CA",
+    "加拿大": "CA",
+    "加拿大站": "CA",
+    "DE": "DE",
+    "德国": "DE",
+    "德国站": "DE",
+    "FR": "FR",
+    "法国": "FR",
+    "法国站": "FR",
+    "IT": "IT",
+    "意大利": "IT",
+    "意大利站": "IT",
+    "ES": "ES",
+    "西班牙": "ES",
+    "西班牙站": "ES",
+    "JP": "JP",
+    "日本": "JP",
+    "日本站": "JP",
+    "AU": "AU",
+    "澳大利亚": "AU",
+    "澳大利亚站": "AU",
+    "澳洲": "AU",
+    "MX": "MX",
+    "墨西哥": "MX",
+    "墨西哥站": "MX",
+    "BR": "BR",
+    "巴西": "BR",
+    "巴西站": "BR",
+    "AE": "AE",
+    "阿联酋": "AE",
+    "阿联酋站": "AE",
+    "SA": "SA",
+    "沙特": "SA",
+    "沙特站": "SA",
+}
 
 ROW_CONTAINER_KEYS = ("rows", "items", "records", "list", "data", "result", "results")
 ASIN_KEYS = (
@@ -520,13 +565,24 @@ class AsinBiReportDataClient:
         raw_items: list[dict[str, Any]] = []
 
         def fetch_one(asin: str) -> dict[str, Any]:
-            return self._fetch_listing_basic_for_asin(
-                asin=asin,
-                site_code=_site_code_for_asin(asin, site_by_asin=site_by_asin, default_site=default_site),
-                config=config,
-                headers=headers,
-                cookies=cookies,
-            )
+            try:
+                return self._fetch_listing_basic_for_asin(
+                    asin=asin,
+                    site_code=_site_code_for_asin(asin, site_by_asin=site_by_asin, default_site=default_site),
+                    config=config,
+                    headers=headers,
+                    cookies=cookies,
+                )
+            except Exception as exc:
+                if _is_listing_auth_expired(exc):
+                    raise
+                return {
+                    "asin": asin,
+                    "status": "not_found" if _is_listing_not_found(exc) else "failed",
+                    "row": None,
+                    "error": _error_dict(exc),
+                    "error_message": str(exc),
+                }
 
         if len(asins) > 1:
             with ThreadPoolExecutor(max_workers=min(8, len(asins))) as executor:
@@ -540,15 +596,21 @@ class AsinBiReportDataClient:
             row = payload.get("row")
             if isinstance(row, dict):
                 rows.append(row)
+        errors = [
+            f"{payload.get('asin')}: {payload.get('error_message')}"
+            for payload in payloads
+            if payload.get("error_message")
+        ]
         return {
             "key": key,
             "label": config["label"],
             "endpoint": config["endpoint"],
             "list_endpoint": config.get("list_endpoint"),
-            "status": "success",
+            "status": "success" if not errors else "partial",
             "row_count": len(rows),
             "rows": rows,
             "raw": raw_items,
+            **({"errors": errors} if errors else {}),
         }
 
     def _fetch_listing_basic_for_asin(
@@ -1017,7 +1079,8 @@ def normalize_asin(value: Any) -> str:
 
 
 def _normalize_site_code(value: Any) -> str:
-    return str(value or "US").strip().upper()
+    text = str(value or "US").strip()
+    return SITE_CODE_ALIASES.get(text) or SITE_CODE_ALIASES.get(text.upper()) or text.upper()
 
 
 def _normalize_site_by_asin(site_by_asin: Mapping[str, str] | None) -> dict[str, str]:
@@ -1179,8 +1242,21 @@ def _is_listing_auth_expired(exc: Exception) -> bool:
     return any(marker in message for marker in LISTING_AUTH_EXPIRED_MARKERS)
 
 
+def _is_listing_not_found(exc: Exception) -> bool:
+    """判断单个 ASIN 是否仅是未命中刊登记录，这类错误不应中断整个批量。"""
+    code = str(getattr(exc, "business_code", "") or "").upper()
+    return code in {"LISTING_NOT_FOUND", "LISTING_ID_NOT_FOUND"}
+
+
+def _error_dict(exc: Exception) -> dict[str, Any]:
+    """把异常转换成可序列化的错误字典。"""
+    if hasattr(exc, "to_dict"):
+        return exc.to_dict()  # type: ignore[no-any-return, call-arg]
+    return {"code": type(exc).__name__, "message": str(exc)}
+
+
 def _failed_source(key: str, config: dict[str, str], exc: Exception) -> dict[str, Any]:
-    error = exc.to_dict() if hasattr(exc, "to_dict") else {"code": type(exc).__name__, "message": str(exc)}
+    error = _error_dict(exc)
     return {
         "key": key,
         "label": config["label"],
@@ -1237,7 +1313,7 @@ def _aggregate_status(sources: Any) -> str:
         return "skipped"
     if all(status == "success" for status in statuses):
         return "success"
-    if any(status == "success" for status in statuses):
+    if any(status in {"success", "partial"} for status in statuses):
         return "partial"
     if all(status == "planned" for status in statuses):
         return "planned"

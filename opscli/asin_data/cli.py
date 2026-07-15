@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
+import time
 from io import BytesIO
 from enum import Enum
 from pathlib import Path
@@ -17,6 +19,7 @@ from opscli.asin_data.services.bi_report_data import (
     BI_ONLY_REPORT_SOURCE_KEYS,
     LISTING_REPORT_SOURCE_KEYS,
 )
+from opscli.asin_data.services.category_top import AsinCategoryTopService
 from opscli.asin_data.services.collector import (
     DEFAULT_LISTING_ANALYSIS_POLL_ATTEMPTS,
     DEFAULT_LISTING_ANALYSIS_POLL_INTERVAL_SECONDS,
@@ -33,6 +36,14 @@ from opscli.asin_data.services.report_files import AsinReportFileClient, AsinRep
 from opscli.asin_data.services.split_package_builder import (
     FILE_FIELD_MAP,
     SPLIT_FILE_KEYS,
+)
+from opscli.asin_data.services.yicopy_keyword_engine import (
+    YicopyKeywordEngine,
+    YicopyRunOptions,
+    build_yicopy_ai_ready_response,
+    load_source_tokens_from_file,
+    normalize_yicopy_result_format,
+    render_yicopy_result,
 )
 from opscli.shared.file_uploads import FileUploadClient
 
@@ -771,6 +782,130 @@ def live_data(
         raise typer.Exit(1)
 
     _emit({"success": True, "command": "asin-data live-data", "data": result, "error": None}, pretty)
+
+
+@app.command("category-top")
+def category_top(
+    category: str = typer.Option(..., "--category", help="平台类目名称，精确匹配 amazon_cat"),
+    date_from: str | None = typer.Option(None, "--date-from", help="起始日期 YYYY-MM-DD，默认由后端使用当月 1 日"),
+    date_to: str | None = typer.Option(None, "--date-to", help="截止日期 YYYY-MM-DD，默认由后端使用当天"),
+    limit: int = typer.Option(10, "--limit", min=1, max=100, help="返回 Top ASIN 数量，范围 1-100"),
+    site: str = typer.Option("US", "--site", help="无法从渠道推断站点时使用的默认站点"),
+    output_dir: str = typer.Option("output/asin-data", "--output-dir", help="输出目录"),
+    run_id: str | None = typer.Option(None, "--run-id", help="本次运行 ID"),
+    upload: bool = typer.Option(True, "--upload/--no-upload", help="是否上传合并后的 JSON 文件到 OSS"),
+    enrich: bool = typer.Option(True, "--enrich/--no-enrich", help="是否补充查询刊登基础数据和爬虫详情数据"),
+    return_content: bool = typer.Option(False, "--return-content", help="是否在命令结果中返回完整 JSON 内容"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """查询内部类目 Top ASIN，并合并刊登基础数据和爬虫详情为单个 OSS JSON 文件。"""
+    try:
+        result = AsinCategoryTopService().run(
+            category=category,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+            site=site,
+            output_dir=output_dir,
+            run_id=run_id,
+            upload=upload,
+            enrich=enrich,
+            return_content=return_content,
+        )
+    except Exception as exc:
+        _emit(_error_payload("asin-data category-top", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit({"success": True, "command": "asin-data category-top", "data": result, "error": None}, pretty)
+
+
+@app.command("yicopy-keyword-engine")
+def yicopy_keyword_engine(
+    asin: list[str] | None = typer.Option(None, "--asin", "-a", help="ASIN 或包含 ASIN 的文本，可重复传入。"),
+    url: list[str] | None = typer.Option(None, "--url", "-u", help="Amazon 商品详情页 URL，可重复传入。"),
+    input_file: Path | None = typer.Option(None, "--input-file", "-i", help="包含 ASIN/URL 的 JSON、JSON 数组或文本文件。"),
+    site: str = typer.Option("US", "--site", help="Amazon 站点代码，默认 US。"),
+    locale: str = typer.Option("en_US", "--locale", help="Amazon completion API locale，默认 en_US。"),
+    result_format: str = typer.Option(
+        "keyword-reverse",
+        "--result-format",
+        help="输出格式：keyword-reverse 输出示例一致纯数组；full 输出全链路调试数据。",
+    ),
+    max_asins: int | None = typer.Option(None, "--max-asins", help="最多处理多少个 ASIN。"),
+    max_prefixes_per_asin: int | None = typer.Option(None, "--max-prefixes-per-asin", help="每个 ASIN 最多查询多少个标题前缀。"),
+    completion_limit: int = typer.Option(11, "--completion-limit", help="Amazon 自动补全每次返回上限。"),
+    timeout_seconds: float = typer.Option(30.0, "--timeout-seconds", help="HTTP 请求超时秒数。"),
+    request_delay_seconds: float = typer.Option(0.0, "--request-delay-seconds", help="每次补全请求后的等待秒数。"),
+    output_file: Path | None = typer.Option(None, "--output-file", "--output", "-o", help="把 JSON 结果写入 UTF-8 文件。"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """执行 yicopy 销词引擎流程，返回关键词反查和词频结果。"""
+
+    started = time.perf_counter()
+    try:
+        sources: list[str] = []
+        sources.extend(asin or [])
+        sources.extend(url or [])
+        if input_file is not None:
+            sources.extend(load_source_tokens_from_file(input_file))
+        if not sources:
+            raise ValueError("请通过 --asin、--url 或 --input-file 传入至少一个 ASIN 或 URL。")
+
+        normalized_format = normalize_yicopy_result_format(result_format)
+        result = asyncio.run(
+            YicopyKeywordEngine().run(
+                sources,
+                YicopyRunOptions(
+                    site=site,
+                    locale=locale,
+                    timeout_seconds=timeout_seconds,
+                    request_delay_seconds=request_delay_seconds,
+                    max_asins=max_asins,
+                    max_prefixes_per_asin=max_prefixes_per_asin,
+                    completion_limit=completion_limit,
+                ),
+            )
+        )
+        rendered = render_yicopy_result(result, normalized_format)
+        output_path: str | None = None
+        if output_file is not None:
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(json.dumps(rendered, indent=2, ensure_ascii=False), encoding="utf-8")
+            output_path = str(output_file)
+
+        request = {
+            "asin": asin or [],
+            "url": url or [],
+            "input_file": str(input_file) if input_file is not None else None,
+            "site": site,
+            "locale": locale,
+            "result_format": normalized_format,
+            "max_asins": max_asins,
+            "max_prefixes_per_asin": max_prefixes_per_asin,
+            "completion_limit": completion_limit,
+            "timeout_seconds": timeout_seconds,
+            "request_delay_seconds": request_delay_seconds,
+            "output_file": output_path,
+        }
+        data = build_yicopy_ai_ready_response(
+            tool_name="asin-data yicopy-keyword-engine",
+            request=request,
+            result=result,
+            rendered_result=rendered,
+            result_format=normalized_format,
+            site=site,
+            output_file=output_path,
+            elapsed_seconds=time.perf_counter() - started,
+        )
+        if output_file is None:
+            data["result"] = rendered
+        else:
+            data.pop("result", None)
+    except Exception as exc:
+        _emit(_error_payload("asin-data yicopy-keyword-engine", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit({"success": True, "command": "asin-data yicopy-keyword-engine", "data": data, "error": None}, pretty)
 
 
 @app.command("collect")
