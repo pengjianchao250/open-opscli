@@ -2921,3 +2921,11 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：默认行为完全不变（未设环境变量走正式渠道）；仅内部发版验证受影响
 **回滚方式**：回退本次 commit
 ---
+## 2026-07-16 shared - e2e 实测修复 self-update 三个真实缺陷
+
+**变更原因**：TestPyPI 端到端实测（0.0.140→0.0.141）暴露三个 bug：①skills 同步经 PATH 解析 opscli 跑错环境（解析到开发 venv 而非升级所在环境）②skills install 无 --yes 阻塞在交互式 TUI 选择③pip 因源缓存延迟未实际升级但返回 0，流程谎报升级完成
+**改动点**：opscli/shared/self_update.py：_resolve_opscli_command 改为优先 sys.executable 同目录（支持 opscli/opscli.exe），去掉 PATH 查找；skills install 追加 --yes；新增 _read_installed_version 升级后版本校验，版本未达目标时警告并返回 1
+**验证结果**：pytest tests/shared/test_self_update.py tests/shared/test_update_check.py 53 个测试全绿
+**影响范围**：self-update 命令的 skills 同步与结果校验
+**回滚方式**：回退本次 commit
+---

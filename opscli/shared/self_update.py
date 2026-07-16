@@ -14,9 +14,9 @@
 from __future__ import annotations
 
 import platform
-import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from rich.console import Console
 
@@ -89,13 +89,39 @@ def build_upgrade_command(method: str) -> list[str]:
 def _resolve_opscli_command() -> list[str]:
     """解析升级后执行 skills 同步所用的 opscli 命令前缀。
 
-    优先用 PATH 中的 opscli 可执行文件（升级后其指向新版本代码）；
-    找不到时回退为当前解释器直跑模块入口（等效 python -m opscli.cli）。
+    必须优先取当前解释器同目录下的 opscli 可执行文件：升级发生在
+    当前解释器所在环境，而 PATH 上的 opscli 可能属于另一个 Python
+    环境（e2e 实测踩坑：PATH 优先曾解析到开发 venv，导致 skills
+    同步跑错环境、用了旧版代码）。同目录找不到时回退为当前解释器
+    直跑模块入口（等效 python -m opscli.cli）。
     """
-    exe = shutil.which("opscli")
-    if exe:
-        return [exe]
+    bin_dir = Path(sys.executable).parent
+    # macOS/Linux 为 opscli，Windows 为 opscli.exe
+    for name in ("opscli", "opscli.exe"):
+        candidate = bin_dir / name
+        if candidate.exists():
+            return [str(candidate)]
     return [sys.executable, "-m", "opscli.cli"]
+
+
+def _read_installed_version(opscli_cmd: list[str]) -> str | None:
+    """通过子进程读取升级后环境中的 opscli 版本号。
+
+    输出形如 "opscli v0.0.141"，解析失败或执行异常均返回 None
+    （版本校验是尽力而为的增强，不因它阻断主流程）。
+    """
+    try:
+        result = subprocess.run(
+            opscli_cmd + ["--version"],
+            capture_output=True, text=True, timeout=30,
+        )
+        text = (result.stdout or "").strip()
+        # 取最后一个 "v" 之后的部分作为版本号
+        if "v" in text:
+            return text.rsplit("v", 1)[-1].strip()
+    except Exception:
+        pass
+    return None
 
 
 def run_self_update() -> int:
@@ -136,9 +162,22 @@ def run_self_update() -> int:
         )
         return result.returncode
 
-    # 第三步：同步 Skills。必须用新进程执行，确保跑的是升级后的代码
+    # 第三步：校验升级结果。pip 在源缓存延迟等场景下会输出
+    # already satisfied 并返回 0 但实际未升级，必须如实告知用户
     opscli_cmd = _resolve_opscli_command()
-    for args in (["skills", "install", "--force"], ["skills", "upgrade"]):
+    installed = _read_installed_version(opscli_cmd)
+    if installed is not None:
+        console.print(f"[dim]升级后版本: v{installed}[/dim]")
+        if latest is not None and is_newer_available(installed, latest):
+            console.print(
+                f"[yellow][!] 升级命令已执行，但当前版本 v{installed} "
+                f"仍低于目标 v{latest}，可能是安装源缓存延迟，请稍后重试[/yellow]"
+            )
+            return 1
+
+    # 第四步：同步 Skills。必须用新进程执行，确保跑的是升级后的代码；
+    # install 带 --yes 跳过交互式 TUI 选择（e2e 实测无 --yes 会阻塞在选择提示）
+    for args in (["skills", "install", "--force", "--yes"], ["skills", "upgrade"]):
         step = subprocess.run(opscli_cmd + args)
         if step.returncode != 0:
             console.print(

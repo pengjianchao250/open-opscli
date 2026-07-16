@@ -101,25 +101,39 @@ class TestRunSelfUpdate:
             mock_run.assert_not_called()
             assert "已是最新" in capsys.readouterr().out
 
+    def _mock_version_result(self, version: str):
+        """构造 opscli --version 子进程的返回桩（capture_output 模式）。"""
+        return MagicMock(returncode=0, stdout=f"opscli v{version}\n")
+
     def test_full_success_runs_upgrade_then_skills(self, capsys):
-        """正常升级：依次执行 升级命令 → skills install --force → skills upgrade。"""
-        mock_run = self._mock_run_factory([0, 0, 0])
+        """正常升级：升级命令 → 版本校验 → skills install --force --yes → skills upgrade。"""
+        mock_run = MagicMock(side_effect=[
+            MagicMock(returncode=0),              # 升级命令
+            self._mock_version_result("0.0.200"),  # 升级后版本校验
+            MagicMock(returncode=0),              # skills install
+            MagicMock(returncode=0),              # skills upgrade
+        ])
         with (
             patch("opscli.shared.self_update.get_version", return_value="0.0.139"),
             patch("opscli.shared.self_update._fetch_latest_version", return_value="0.0.200"),
             patch("opscli.shared.self_update.subprocess.run", mock_run),
-            patch("opscli.shared.self_update.shutil.which", return_value="/usr/local/bin/opscli"),
+            patch(
+                "opscli.shared.self_update._resolve_opscli_command",
+                return_value=["/usr/local/bin/opscli"],
+            ),
         ):
             assert run_self_update() == 0
-        assert mock_run.call_count == 3
+        assert mock_run.call_count == 4
         # 第 1 次调用是升级命令（pip 路径，因测试环境不命中 uv/pipx 特征）
         first_argv = mock_run.call_args_list[0].args[0]
         assert "--only-binary" in first_argv
-        # 第 2、3 次调用是 skills 同步，走 PATH 中解析到的 opscli 可执行文件
-        assert mock_run.call_args_list[1].args[0] == [
-            "/usr/local/bin/opscli", "skills", "install", "--force",
-        ]
+        # 第 2 次是升级后版本校验
+        assert mock_run.call_args_list[1].args[0] == ["/usr/local/bin/opscli", "--version"]
+        # 第 3、4 次是 skills 同步：install 必须带 --yes 跳过交互式 TUI 选择
         assert mock_run.call_args_list[2].args[0] == [
+            "/usr/local/bin/opscli", "skills", "install", "--force", "--yes",
+        ]
+        assert mock_run.call_args_list[3].args[0] == [
             "/usr/local/bin/opscli", "skills", "upgrade",
         ]
         assert "√ 升级完成" in capsys.readouterr().out
@@ -138,47 +152,112 @@ class TestRunSelfUpdate:
         assert "× 升级失败" in output
         assert "Python" in output  # 平台信息帮助定位 wheel 缺失问题
 
-    def test_skills_step_failure_returns_code_with_hint(self, capsys):
-        """CLI 升级成功但 skills 同步失败：返回失败码并提示手动重试。"""
-        mock_run = self._mock_run_factory([0, 1])
+    def test_upgrade_ran_but_version_unchanged_warns(self, capsys):
+        """升级命令返回 0 但版本未变化（如镜像缓存延迟）：警告并返回 1，不做 skills 同步。
+
+        真实场景：TestPyPI/镜像 simple 源缓存延迟时，pip 找不到新版本会
+        输出 already satisfied 并返回 0，此时必须如实告知用户而非谎报升级完成。
+        """
+        mock_run = MagicMock(side_effect=[
+            MagicMock(returncode=0),               # 升级命令"成功"
+            self._mock_version_result("0.0.139"),  # 但版本还是旧的
+        ])
         with (
             patch("opscli.shared.self_update.get_version", return_value="0.0.139"),
             patch("opscli.shared.self_update._fetch_latest_version", return_value="0.0.200"),
             patch("opscli.shared.self_update.subprocess.run", mock_run),
-            patch("opscli.shared.self_update.shutil.which", return_value="/usr/local/bin/opscli"),
+            patch(
+                "opscli.shared.self_update._resolve_opscli_command",
+                return_value=["/usr/local/bin/opscli"],
+            ),
         ):
             assert run_self_update() == 1
-        assert mock_run.call_count == 2
-        # 断言失败的是第二步（skills install --force），锁定步骤顺序
-        assert mock_run.call_args_list[1].args[0] == [
-            "/usr/local/bin/opscli", "skills", "install", "--force",
+        assert mock_run.call_count == 2  # 升级 + 版本校验，skills 同步未执行
+        output = capsys.readouterr().out
+        assert "[!]" in output
+        assert "0.0.200" in output  # 提示中包含目标版本
+
+    def test_skills_step_failure_returns_code_with_hint(self, capsys):
+        """CLI 升级成功但 skills 同步失败：返回失败码并提示手动重试。"""
+        mock_run = MagicMock(side_effect=[
+            MagicMock(returncode=0),
+            self._mock_version_result("0.0.200"),
+            MagicMock(returncode=1),               # skills install 失败
+        ])
+        with (
+            patch("opscli.shared.self_update.get_version", return_value="0.0.139"),
+            patch("opscli.shared.self_update._fetch_latest_version", return_value="0.0.200"),
+            patch("opscli.shared.self_update.subprocess.run", mock_run),
+            patch(
+                "opscli.shared.self_update._resolve_opscli_command",
+                return_value=["/usr/local/bin/opscli"],
+            ),
+        ):
+            assert run_self_update() == 1
+        assert mock_run.call_count == 3
+        # 断言失败的是 skills install 步骤（含 --yes），锁定步骤顺序
+        assert mock_run.call_args_list[2].args[0] == [
+            "/usr/local/bin/opscli", "skills", "install", "--force", "--yes",
         ]
         assert "手动重试" in capsys.readouterr().out
 
-    def test_fetch_failure_still_attempts_upgrade(self, capsys):
-        """版本查询失败（网络不可达）：不阻断，仍尝试执行升级。"""
-        mock_run = self._mock_run_factory([0, 0, 0])
+    def test_fetch_failure_still_attempts_upgrade(self):
+        """版本查询失败（网络不可达）：不阻断，仍尝试执行升级（无目标版本则跳过一致性判断）。"""
+        mock_run = MagicMock(side_effect=[
+            MagicMock(returncode=0),
+            self._mock_version_result("0.0.140"),
+            MagicMock(returncode=0),
+            MagicMock(returncode=0),
+        ])
         with (
             patch("opscli.shared.self_update.get_version", return_value="0.0.139"),
             patch("opscli.shared.self_update._fetch_latest_version", return_value=None),
             patch("opscli.shared.self_update.subprocess.run", mock_run),
-            patch("opscli.shared.self_update.shutil.which", return_value="/usr/local/bin/opscli"),
+            patch(
+                "opscli.shared.self_update._resolve_opscli_command",
+                return_value=["/usr/local/bin/opscli"],
+            ),
         ):
             assert run_self_update() == 0
-        assert mock_run.call_count == 3
+        assert mock_run.call_count == 4
 
-    def test_opscli_not_in_path_falls_back_to_module(self):
-        """PATH 找不到 opscli 时，回退为当前解释器直跑模块入口。"""
-        mock_run = self._mock_run_factory([0, 0, 0])
-        with (
-            patch("opscli.shared.self_update.get_version", return_value="0.0.139"),
-            patch("opscli.shared.self_update._fetch_latest_version", return_value="0.0.200"),
-            patch("opscli.shared.self_update.subprocess.run", mock_run),
-            patch("opscli.shared.self_update.shutil.which", return_value=None),
-        ):
-            assert run_self_update() == 0
-        assert mock_run.call_args_list[1].args[0] == [
-            sys.executable, "-m", "opscli.cli", "skills", "install", "--force",
+
+class TestResolveOpscliCommand:
+    """opscli 命令解析测试：必须优先当前解释器同目录，禁止 PATH 优先。
+
+    升级发生在当前解释器环境，PATH 上的 opscli 可能属于另一个 Python
+    环境（e2e 实测踩坑：PATH 解析到开发 venv 导致 skills 同步跑错环境）。
+    """
+
+    def test_prefers_sibling_of_sys_executable(self, tmp_path, monkeypatch):
+        """解释器同目录存在 opscli 时优先使用它。"""
+        from opscli.shared.self_update import _resolve_opscli_command
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "opscli").write_text("")
+        monkeypatch.setattr(sys, "executable", str(bin_dir / "python"))
+        assert _resolve_opscli_command() == [str(bin_dir / "opscli")]
+
+    def test_windows_exe_name_supported(self, tmp_path, monkeypatch):
+        """Windows 下识别同目录的 opscli.exe。"""
+        from opscli.shared.self_update import _resolve_opscli_command
+
+        bin_dir = tmp_path / "Scripts"
+        bin_dir.mkdir()
+        (bin_dir / "opscli.exe").write_text("")
+        monkeypatch.setattr(sys, "executable", str(bin_dir / "python.exe"))
+        assert _resolve_opscli_command() == [str(bin_dir / "opscli.exe")]
+
+    def test_falls_back_to_module_entry(self, tmp_path, monkeypatch):
+        """同目录找不到 opscli 时回退为当前解释器直跑模块入口。"""
+        from opscli.shared.self_update import _resolve_opscli_command
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        monkeypatch.setattr(sys, "executable", str(bin_dir / "python"))
+        assert _resolve_opscli_command() == [
+            str(bin_dir / "python"), "-m", "opscli.cli",
         ]
 
 
