@@ -1215,3 +1215,9 @@ def test_metadata_filter_configs_absent_for_legacy_payload(tmp_path, monkeypatch
     result = manager.metadata(dataset_alias="ds_xxx")
 
     assert result.filter_configs == []
+
+
+def test_manager_timeout_passes_to_client():
+    """构造时传入 timeout 应透传给 QueryClient；缺省时使用默认值 120 秒。"""
+    assert QueryManager(timeout=90).client.timeout == 90
+    assert QueryManager().client.timeout == 120

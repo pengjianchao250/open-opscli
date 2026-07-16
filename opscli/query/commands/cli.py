@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -13,6 +15,9 @@ from opscli.query.services.manager import QueryManager
 
 app = typer.Typer(help="数据查询入口，统一转发远端查询请求")
 
+# 结果落盘后 stdout 保留的预览行数，避免大结果集撑爆 AI 上下文
+RESULT_PREVIEW_ROWS = 10
+
 
 def _emit(payload: dict, pretty: bool) -> None:
     """统一输出 JSON。"""
@@ -20,6 +25,117 @@ def _emit(payload: dict, pretty: bool) -> None:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         typer.echo(json.dumps(payload, ensure_ascii=False))
+
+
+def _extract_result_rows(data: dict) -> tuple[list, int | None, int | None]:
+    """从查询结果 data 中提取行列表、本次返回行数与服务端总行数。
+
+    兼容三种返回形态：
+    - cli_query（run / build --run）：行在 rows，行数在 meta.rowCount
+    - cli_simple_query（simple --run）：行在 result.data，行数在 result.meta.rowCount，
+      总数在 result.meta.totalCount（分页场景总数会大于返回行数，两者必须区分披露）
+    - chart --run：合并行在 merged.rows
+
+    返回 (行列表, 返回行数, 总行数)；提不到行时返回 ([], None, None)，如 dry_run 场景。
+    """
+    if not isinstance(data, dict):
+        return [], None, None
+
+    def _get_path(node: dict, path: tuple[str, ...]):
+        """按路径逐层取值，任一层缺失返回 None。"""
+        current: object = node
+        for key in path:
+            if not isinstance(current, dict):
+                return None
+            current = current.get(key)
+        return current
+
+    # 嵌套路径必须优先于顶层键：run 的顶层 data 是 dict（manager 结果），
+    # 若先查顶层 ("data",) 会误命中非行数据
+    row_paths: tuple[tuple[str, ...], ...] = (
+        ("merged", "rows"),
+        ("result", "rows"),
+        ("result", "data"),
+        ("rows",),
+        ("data",),
+    )
+    rows: list = []
+    for path in row_paths:
+        candidate = _get_path(data, path)
+        # 只有命中 list 才采纳，避免同名 dict 字段误判
+        if isinstance(candidate, list):
+            rows = candidate
+            break
+
+    # 返回行数取各层 meta.rowCount（服务端口径的本次返回行数），回退实际行数；
+    # 总行数取各层 meta.totalCount（分页场景为匹配总数，可能大于返回行数），两者分开披露
+    row_count_paths: tuple[tuple[str, ...], ...] = (
+        ("merged", "meta", "rowCount"),
+        ("result", "meta", "rowCount"),
+        ("meta", "rowCount"),
+    )
+    total_count_paths: tuple[tuple[str, ...], ...] = (
+        ("merged", "meta", "totalCount"),
+        ("result", "meta", "totalCount"),
+        ("meta", "totalCount"),
+    )
+    row_count: int | None = None
+    for path in row_count_paths:
+        candidate = _get_path(data, path)
+        if isinstance(candidate, int):
+            row_count = candidate
+            break
+    if row_count is None and rows:
+        row_count = len(rows)
+    total_count: int | None = None
+    for path in total_count_paths:
+        candidate = _get_path(data, path)
+        if isinstance(candidate, int):
+            total_count = candidate
+            break
+    return rows, row_count, total_count
+
+
+def _maybe_save_result(payload: dict, *, result_file: str | None, save_result: bool) -> dict:
+    """按需将查询结果落盘为 JSON 文件，并返回瘦身后的输出包裹体。
+
+    两个开关均未启用时原样返回（保持既有 stdout 行为不变）；
+    --result-file 优先于 --save-result 的默认临时路径。
+    写文件失败（OSError）时异常向上抛出，走统一错误输出，不静默降级。
+    """
+    if not result_file and not save_result:
+        return payload
+
+    if result_file:
+        target = Path(result_file).expanduser()
+    else:
+        # 默认临时路径：系统临时目录下 opscli 专属子目录，文件名带微秒时间戳避免覆盖
+        target = (
+            Path(tempfile.gettempdir())
+            / "opscli"
+            / "query_results"
+            / f"query_result_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.json"
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # 落盘完整的标准输出包裹体，文件自包含
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    rows, row_count, total_count = _extract_result_rows(payload.get("data") or {})
+    return {
+        "success": payload.get("success"),
+        "command": payload.get("command"),
+        "data": {
+            "result_file": str(target),
+            "row_count": row_count,
+            "total_count": total_count,
+            "preview_rows": rows[:RESULT_PREVIEW_ROWS],
+            "hint": (
+                f"完整结果已保存到 result_file，preview_rows 仅为前 {RESULT_PREVIEW_ROWS} 行预览；"
+                "row_count 为本次返回并落盘的行数，total_count 为服务端匹配总行数（分页场景可能大于 row_count）"
+            ),
+        },
+        "error": payload.get("error"),
+    }
 
 
 def _error_payload(command: str, exc: Exception) -> dict:
@@ -155,10 +271,13 @@ def intent(
 @app.command("run")
 def run(
     payload_path: str = typer.Option(..., "--payload", help="查询 JSON 文件路径"),
+    timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
+    result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，stdout 仅输出预览"),
+    save_result: bool = typer.Option(False, "--save-result", help="将查询结果保存到默认临时路径，stdout 仅输出预览"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """执行查询并转发到服务端 cli-query。"""
-    manager = QueryManager()
+    manager = QueryManager(timeout=timeout)
     try:
         result = manager.run(payload_path=payload_path)
         payload = {
@@ -167,6 +286,7 @@ def run(
             "data": result,
             "error": None,
         }
+        payload = _maybe_save_result(payload, result_file=result_file, save_result=save_result)
     except Exception as exc:
         _emit(_error_payload("query run", exc), pretty)
         raise typer.Exit(1)
@@ -179,10 +299,13 @@ def chart(
     uuid: str = typer.Option(..., "--uuid", help="图表 UUID（chart_uuid）"),
     run: bool = typer.Option(False, "--run", help="获取后立即执行所有查询并合并输出"),
     dry_run: bool = typer.Option(False, "--dry-run", help="仅生成 SQL，不执行查询"),
+    timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
+    result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，仅与 --run 同用生效"),
+    save_result: bool = typer.Option(False, "--save-result", help="将查询结果保存到默认临时路径，仅与 --run 同用生效"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """通过 chart_uuid 获取图表查询结构，可选立即执行。"""
-    manager = QueryManager()
+    manager = QueryManager(timeout=timeout)
     try:
         if run or dry_run:
             result = manager.run_chart_queries(chart_uuid=uuid, dry_run=dry_run)
@@ -192,6 +315,7 @@ def chart(
                 "data": result,
                 "error": None,
             }
+            payload = _maybe_save_result(payload, result_file=result_file, save_result=save_result)
         else:
             chart_bundle = manager.fetch_chart_bundle(uuid)
             payload = {
@@ -267,11 +391,14 @@ def build(
         help="数据对比：field,start_date,end_date（例: date_id,2026-03-01,2026-03-22）",
     ),
     run: bool = typer.Option(False, "--run", help="构造后立即执行查询"),
+    timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
+    result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，仅与 --run 同用生效"),
+    save_result: bool = typer.Option(False, "--save-result", help="将查询结果保存到默认临时路径，仅与 --run 同用生效"),
     skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 目录"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """基于简化参数构造标准 query payload。"""
-    manager = QueryManager()
+    manager = QueryManager(timeout=timeout)
     try:
         common_kwargs = {
             "dataset_alias": dataset,
@@ -297,6 +424,9 @@ def build(
             "data": result,
             "error": None,
         }
+        # 仅执行查询时才有结果可落盘，纯构造 payload 时忽略保存参数
+        if run:
+            payload = _maybe_save_result(payload, result_file=result_file, save_result=save_result)
     except Exception as exc:
         _emit(_error_payload("query build-and-run" if run else "query build", exc), pretty)
         raise typer.Exit(1)
@@ -312,10 +442,13 @@ def simple(
     payload_json: str | None = typer.Option(None, "--json", help="简化查询 JSON 字符串（与 --payload 二选一）"),
     output: str | None = typer.Option(None, "--output", help="将 payload 写入指定文件"),
     run: bool = typer.Option(False, "--run", help="构造后立即执行查询"),
+    timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
+    result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，仅与 --run 同用生效"),
+    save_result: bool = typer.Option(False, "--save-result", help="将查询结果保存到默认临时路径，仅与 --run 同用生效"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """基于简化参数构造 simple query payload 并可选执行。"""
-    manager = QueryManager()
+    manager = QueryManager(timeout=timeout)
     try:
         if payload_file and payload_json:
             raise InvalidPayloadError("--payload 和 --json 只能使用一种")
@@ -378,6 +511,9 @@ def simple(
             "data": result,
             "error": None,
         }
+        # 仅执行查询时才有结果可落盘，纯构造 payload 时忽略保存参数
+        if run:
+            payload = _maybe_save_result(payload, result_file=result_file, save_result=save_result)
     except Exception as exc:
         _emit(_error_payload("query simple-run" if run else "query simple", exc), pretty)
         raise typer.Exit(1)
