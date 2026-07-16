@@ -30,7 +30,7 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 
 ## 普通任务编排
 
-1. 首次执行前完成 `auth_mcp_login`；不要把远端 MCP `api_key` 当成 OPS 登录态。
+1. SellerSprite Tool 会根据远端 MCP `api_key` 自动确保隔离 OPS 登录态；需要提前诊断认证时可显式调用一次 `auth_mcp_login`，但不要向业务 Tool 传 `session_id/jwt`。
 2. 根据参数手册确认普通场景和必填参数，只调用一次 `seller_sprite_run`。不得调用内部 start helper，也不要传 `mode`、`browser-route`、`api-direct` 或 `async_mode`。
 3. `seller_sprite_run` 会立即持久化入队。保存每个返回的 `job_id`，不要等待 `run` 自身给出最终结果。
 4. 只有一个 pending 普通任务时，调用 `seller_sprite_job_status(job_id, wait_seconds=30)`。
@@ -39,6 +39,15 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 7. 如果预算结束仍有 pending，保留全部未完成 `job_id`，告诉用户可说“继续”或“查结果”。未来用户只说 `继续` / `查结果` / `刚才那些好了没` 时，恢复完整 pending 集合；除非用户明确选择子集，否则不得只查最近一个 ID。
 8. pending 任务不得重新提交，不得再次调用 `seller_sprite_run` 查状态，也不得重新消耗额度。`run` 消耗额度；状态和导出不消耗额度。
 9. 普通任务终态为 `succeeded` 后，响应已有导出信息时直接展示；只需文件信息时调用 `seller_sprite_export(job_id)`。
+
+### 认证与运行环境
+
+- 远端 MCP 直连场景下，SellerSprite Tool 会在缺失或过期时调用一步登录，并把 OPS `session_id` 保存在当前 MCP 用户的隔离凭证里。
+- 旧客户端显式传入的 `session_id/jwt` 仅用于版本过渡，远端服务会忽略这些值并继续使用当前 API Key 的隔离凭证。
+- 正式 `opscli seller-sprite ...` CLI 代理链路不再透传本机 `session_id/jwt`，本机登录只用于取得当前用户的远端 MCP 配置。
+- SellerSprite 登录态由后端缓存；不要手动重复登录。
+- 集成账号也由后端缓存；只有 SellerSprite 登录本身失败时，才需要后端刷新账号或登录态。
+- 浏览器运行时由部署侧决定；Agent 不负责切换 Patchright / Playwright / Chrome。
 
 ### 单任务操作模板
 

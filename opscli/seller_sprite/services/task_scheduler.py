@@ -758,6 +758,16 @@ class SellerSpriteTaskScheduler:
             if state in {"succeeded", "failed", "cancelled"}:
                 self._runtime_auth.pop(job_id, None)
 
+    def _prune_runtime_auth(self) -> None:
+        """清理已被其他进程终止的排队任务凭证，避免敏感信息滞留内存。"""
+        for job_id in list(self._runtime_auth):
+            try:
+                state = str(self.store.get_status(job_id)["state"])
+            except Exception:
+                continue
+            if state in {"succeeded", "failed", "cancelled"}:
+                self._runtime_auth.pop(job_id, None)
+
     def _assigned_account_name(self) -> str:
         """返回队列记录里的账号标识，不在领取任务前触发账号接口。"""
         return self.settings.account_name or DEFAULT_WORKER_KEY

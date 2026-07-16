@@ -6,12 +6,39 @@ from types import SimpleNamespace
 
 import pytest
 
+from opscli.mcp import ops_credentials
 from opscli.mcp.tools import seller_sprite as seller_sprite_tools
 from opscli.mcp.server import _quota_wrap
 
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+@pytest.fixture(autouse=True)
+def _route_credential_test_seams(monkeypatch):
+    """让既有工具测试替身经统一凭证模块生效，且不读取真实本机凭证。"""
+    original_auth_pair = ops_credentials._get_auth_pair
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_auth_pair",
+        original_auth_pair,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ops_credentials,
+        "_get_auth_pair",
+        lambda system, session_id, jwt: seller_sprite_tools._get_auth_pair(
+            system,
+            session_id,
+            jwt,
+        ),
+    )
+    monkeypatch.setattr(
+        ops_credentials,
+        "_get_authenticated_user_email",
+        lambda: seller_sprite_tools._get_current_mcp_user_email(),
+    )
 
 
 class DummyManager:
@@ -588,6 +615,101 @@ def test_listing_analysis_history_status_uses_history_get_endpoint(monkeypatch):
     ]
 
 
+def test_listing_analysis_status_relogs_and_retries_expired_history_session(monkeypatch):
+    from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError
+
+    class SubmittedScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "scenario": "listing-analysis",
+                "state": "succeeded",
+                "data": [{"asin": "B08Z6X4NK3", "contentReady": False}],
+            }
+
+    class OwnerStore:
+        def get_mcp_run(self, job_id):
+            return {
+                "job_id": job_id,
+                "user_email": "mcp-user@example.com",
+                "params_json": {"asin": "B08Z6X4NK3", "station": "GLOBAL"},
+            }
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            self.account_provider = type(
+                "AccountProvider",
+                (),
+                {"get_default": lambda self: object()},
+            )()
+
+    class ExpiredThenReadyClient:
+        history_calls = 0
+        login_calls = 0
+
+        def __init__(self, *, account):
+            self.account = account
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def has_login_cookies(self):
+            return True
+
+        async def login(self):
+            self.__class__.login_calls += 1
+            return {"logged_in": True}
+
+        async def get_json(self, url, params, *, referer=None):
+            self.__class__.history_calls += 1
+            if self.__class__.history_calls == 1:
+                raise SellerSpriteApiError(
+                    "卖家精灵登录态失效",
+                    api_code="ERR_GLOBAL_SESSION_EXPIRED",
+                )
+            return {
+                "code": "OK",
+                "data": {
+                    "items": [
+                        {
+                            "taskId": "task-ready-after-relogin",
+                            "taskStatus": "COMPLETED",
+                            "tabTitle": "US(B08Z6X4NK3) | 全景分析 | Listing数据深度解析报告",
+                            "module": "LA",
+                        }
+                    ]
+                },
+            }
+
+    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", FakeManager)
+    monkeypatch.setattr(
+        "opscli.seller_sprite.api.client.SellerSpriteApiClient",
+        ExpiredThenReadyClient,
+    )
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_task_scheduler",
+        lambda **kwargs: SubmittedScheduler(),
+    )
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_current_mcp_user_email",
+        lambda: "mcp-user@example.com",
+    )
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: OwnerStore())
+
+    result = _run(seller_sprite_tools.seller_sprite_listing_analysis_status("listing-job-expired"))
+
+    assert result["success"] is True
+    assert result["data"]["ready"] is True
+    assert result["data"]["task_id"] == "task-ready-after-relogin"
+    assert ExpiredThenReadyClient.login_calls == 1
+    assert ExpiredThenReadyClient.history_calls == 2
+
+
 
 def test_listing_analysis_status_reads_history_by_asin(monkeypatch):
     class SubmittedScheduler:
@@ -921,6 +1043,11 @@ def test_listing_analysis_result_persists_ready_remote_payload(monkeypatch, tmp_
 def test_seller_sprite_start_returns_queued_job(monkeypatch):
     monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
     monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_current_mcp_user_email",
+        lambda: "mcp-user@example.com",
+    )
     DummyScheduler.enqueue_calls = 0
 
     result = _run(
@@ -1980,16 +2107,27 @@ def test_seller_sprite_run_rejects_whitespace_only_current_user_before_persistin
         store.get_mcp_run("job-whitespace-user")
 
 
-def test_seller_sprite_run_rejects_explicit_auth_from_mcp_caller(monkeypatch, tmp_path):
-    store = _make_store(tmp_path)
+def test_seller_sprite_run_ignores_legacy_explicit_auth_for_remote_mcp(monkeypatch):
+    from opscli.mcp.ops_credentials import OpsCredentialBinding
+
     monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
+
+    async def ensure_binding(*, provided_session, provided_jwt):
+        assert provided_session == "explicit-session"
+        assert provided_jwt == "explicit-jwt"
+        return OpsCredentialBinding(
+            credential_scope="isolated-user-scope",
+            user_email="mcp-user@example.com",
+            session_id="isolated-session",
+            jwt="isolated-jwt",
+        )
+
+    monkeypatch.setattr(seller_sprite_tools, "ensure_ops_credentials", ensure_binding)
     monkeypatch.setattr(
         seller_sprite_tools,
-        "_get_auth_pair",
-        lambda system, session_id, jwt: (session_id, jwt),
+        "_get_task_queue_store",
+        lambda: (_ for _ in ()).throw(AssertionError("入口不得独立写 owner")),
     )
-    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
-    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
     DummyScheduler.enqueue_calls = 0
 
     result = _run(
@@ -2002,11 +2140,13 @@ def test_seller_sprite_run_rejects_explicit_auth_from_mcp_caller(monkeypatch, tm
         )
     )
 
-    assert result["success"] is False
-    assert "不接受显式 session_id/jwt" in result["error"]["message"]
-    assert DummyScheduler.enqueue_calls == 0
-    with pytest.raises(ValueError, match="MCP 调用记录不存在"):
-        store.get_mcp_run("mcp-job-explicit-auth")
+    assert result["success"] is True
+    assert DummyScheduler.enqueue_calls == 1
+    assert DummyScheduler.last_enqueue_kwargs == {
+        "credential_scope": "isolated-user-scope",
+        "expected_user_email": "mcp-user@example.com",
+        "mcp_user_email": "mcp-user@example.com",
+    }
 
 
 def test_seller_sprite_run_enqueue_failure_does_not_create_owner_record(monkeypatch, tmp_path):

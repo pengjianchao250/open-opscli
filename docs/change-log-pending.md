@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-16 seller_sprite - 合并远端 master 隔离认证与续查修复
+
+**变更原因**：当前 `feature/sellersprite` 已包含原子 MCP 所有权入队、多账号并行调度和有界状态续查，远端 `master` 新增 CLI/MCP 隔离认证兼容及 Listing Analysis Session 过期重登，需要合并两侧意图并消除重复实现冲突。
+**改动点**：保留通用任务立即入队、队列与 MCP 所有权同事务写入、多账号池及安全后台 Context；接入 `OpsCredentialBinding`，远端调用忽略旧客户端显式凭证并使用 API Key 隔离作用域，stdio 显式凭证仅以内存逐任务传递；保留 Listing Analysis 通用入口前置拒绝和三段式续查，同时纳入历史页及报告页 Session 过期自动重登；同步合并 Skill 认证说明和回归测试。
+**验证结果**：`python -m py_compile` 验证合并涉及的生产 Python 文件通过；`.venv\\Scripts\\python.exe -m pytest -q tests/mcp/test_ops_credentials.py tests/mcp/test_seller_sprite_tools.py tests/seller_sprite/test_accounts.py tests/seller_sprite/test_browser_route_worker.py tests/seller_sprite/test_remote_adapter.py tests/seller_sprite/test_task_queue_store.py tests/seller_sprite/test_task_scheduler.py tests/shared/test_mcp_api_key_auth.py` 通过，结果为 `201 passed`；`git diff --check` 通过。
+**影响范围**：影响 SellerSprite MCP/CLI 的 OPS 凭证绑定、普通异步任务提交与所有权记录、Listing Analysis 续查，以及多账号后台调度；不改变普通任务立即返回 `job_id` 后由状态工具有界续查的公开契约。
+**回滚方式**：回退本次合并提交；如需局部回滚，需成组回退 `ops_credentials.py`、SellerSprite MCP 工具、RemoteAdapter、Listing Analysis browser worker、相关 Skill 文档和测试，避免认证链路与任务持久化契约不一致。
+---
+
 ## 2026-07-15 seller_sprite - 合并多账号调度与 MCP 多用户认证隔离
 
 **变更原因**：`feature/sellersprite` 的异步多账号池和 `master` 的逐任务认证隔离同时修改了 SellerSprite 队列、调度器与 MCP 入口，需要在保留两边能力的前提下解决合并冲突，并避免无效认证任务被账号池初始化长期阻塞。
@@ -26,6 +35,24 @@
 **验证结果**：Task 5 在旧 Skill/正式说明上新增文档契约测试，首次运行按预期失败于 `SKILL.md` 缺少“立即持久化入队”契约（`1 failed`）；更新后 SellerSprite MCP 工具测试 `69 passed`，MCP Schema 测试 `6 passed`，队列/调度器测试 `26 passed`，adapter/CLI 组合为 `22 passed, 2 failed`，失败仅为既有 `seller-sprite-debug` 顶级命令未注册。真实 stdio 子进程通过 `--transport stdio` 发现 65 个工具，确认单/批状态工具公开且 `seller_sprite_start` 隐藏，未调用业务工具。项目全量 `pytest -q` 被重复测试模块名收集冲突阻断；改用 `--import-mode=importlib` 后又被既有 `tests/query/test_manager.py:817-818` 缩进错误和 `tests/skills/test_packaging.py` 导入期关闭 pytest 捕获流阻断；排除两个收集阻断后其余测试实际执行为 `996 passed, 53 failed`，失败分布在多个既有非 SellerSprite 基线及两个已知 debug 节点。`git diff --check` 退出码为 0，仅提示 `opscli/seller_sprite/cli.py` 下次 Git 处理时可能从 LF 转为 CRLF。最终审查修复 RED：`test_seller_sprite_run_rejects_listing_analysis_before_any_side_effect` 按预期失败，证明通用入口仍在拒绝前调用认证 helper（`1 failed`）；通用入口最小修复后与专用 submit 回归通过（`2 passed`）。单/批状态观察者聚焦 RED 按预期出现 `10 failed`，均证明正数等待路径仍调用 `scheduler.start()`；最小修复后同一聚焦集通过（`10 passed`）。Store owned enqueue 的成功双表持久化与 queue-only `job_id` 碰撞回滚先按预期失败于方法缺失（`2 failed`），实现后通过（`2 passed`）；公共通用入口真实 SQLite 碰撞及 Listing Analysis 专用入口原子接口回归按预期失败（`2 failed`），分别证明旧实现遗留 owner 行、专用入口仍独立写 owner；统一改用 scheduler 原子入队后通过（`2 passed`）。既有 MCP 测试中 6 条“先建 owner、入队失败再标 failed”的旧断言已同步为原子同成同败契约，MCP 工具套件通过（`71 passed`）。新增跨 Store 同 scope 单 running 领取边界，以及 scheduler `start()` 不重排其他实例 running 行的回归；聚焦 RED 按预期 `2 failed`，证明第二实例仍可继续领取 queued，且普通 `start()` 会重排并再次领取既有 running；最小实现后聚焦通过（`2 passed`），队列/调度全套通过（`29 passed`）。已新增共享有效认证邮箱、context scope fallback、中间件 auth_mode 注入及 SellerSprite resolver 代理回归；首次 RED 在收集期按预期停止于 `get_current_auth_mode` 尚不存在（`1 error`）；补最小 transport getter 后聚焦 RED 为 `8 failed, 7 passed`，分别证明中间件未传播模式、共享 resolver 缺失及 SellerSprite 仍直读 transport 邮箱；最小实现后同一身份组 GREEN（`15 passed`），测试缓存全部使用 fake/monkeypatch，未读取真实 Keychain；自审补充 fixed/未知 keyed 模式携带未验证 transport 邮箱的回归，RED 为 `2 failed`，随后将 transport 邮箱信任严格限定到 `auth_mode=remote`，fixed 仍使用隔离 cache、未知 keyed 模式仍闭合失败。自审另补 Listing Analysis submit 空白 owner 回归，RED 为 `1 failed`，证明旧检查会把空白邮箱带到 scheduler 并可能降级 queue-only；专用 submit 现与 generic run 一样先规范化再判空，确保公共提交始终走 owned enqueue；另补 51 个重复原始 ID 回归并直接通过（`1 passed`），确认现有实现先按 raw 数量拒绝、再去重，未为该保留契约修改生产代码。正式文档契约 RED 按预期 `2 failed`，证明四份现有说明仍缺生产拒绝措辞；最小文案收紧后同一聚焦组 GREEN（`2 passed`）。首轮必跑 integration 组为 `26 passed, 4 failed`：两条既有 `seller-sprite-debug` 未注册基线外，`test_tools.py` 两条注册测试被既有 stdio 权限中间件读取默认本地登录态后过滤成 10 个 auth tools；为满足测试不得读真实 Keychain，注册/schema 契约用 autouse mock 将权限 resolver 固定为全量放行，不改生产权限逻辑；复跑 integration 组为 `28 passed, 2 failed`，剩余两项均为既有 `seller-sprite-debug` 顶级命令未注册。最终当前态验证：SellerSprite MCP 工具 `74 passed`；context/middleware/helper identity `14 passed`；queue/scheduler `29 passed`；integration 仍为 `28 passed, 2 failed` 且失败仅为上述既有 debug 注册基线；变更 Python 文件 `py_compile` 成功；`git diff --check` 退出码 0，仅提示既有 `opscli/seller_sprite/cli.py` LF→CRLF 转换警告。
 **影响范围**：影响普通 SellerSprite MCP/正式 CLI 的提交返回语义、单任务与 1–50 批量状态跟踪、导出归属校验，以及 Agent 跨轮续查方式；`run` 仍消耗额度，状态和导出不消耗额度；Listing Analysis 继续使用 submit/status/result，不进入普通批量状态工具。
 **回滚方式**：整体回退 Tasks 1–5 涉及的 SellerSprite MCP 工具、adapter、CLI、持久队列、scheduler、两份 Skill、正式接入说明、测试和本条记录；如仅回滚文档层，则恢复本次两份 Skill、正式说明及文档契约测试，但必须同时确保文档与实际生产签名保持一致。
+## 2026-07-16 seller_sprite - 恢复 Listing Analysis 续查登录态
+
+**变更原因**：CLI 的 Listing Analysis `status/result` 会复用卖家精灵网页 Cookie；Cookie 名仍存在但服务端 Session 已过期时，`task/history` 和报告详情页直接返回 `ERR_GLOBAL_SESSION_EXPIRED`，现有链路不会重新登录，导致已提交任务无法续查。
+**改动点**：保持 `task/history` 按 ASIN + `module=LA` 选择任务的原逻辑不变；历史任务查询遇到 Session 过期时自动登录并重试一次；报告详情页捕获遇到相同错误时重新登录、重新打开 Listing Analysis 历史页并重试一次；第二次仍过期或其他 API 错误继续原样返回，避免无限重试。
+**验证结果**：新增公开 `listing_analysis_status` 与 browser-route 报告读取回归测试，分别复现 Cookie 过期后历史接口不重试、报告页不重试的问题；修复后聚焦测试通过，`2 passed`，关联回归通过，`69 passed`；完整 SellerSprite + MCP 回归为 `148 passed, 2 failed`，两个失败均为 master 既有 `seller-sprite-debug` 顶层命令未注册，不属于本次改动。
+**影响范围**：影响 CLI/MCP Listing Analysis 的 `status/result` 续查登录态恢复；不改变提交任务、排队模型、ASIN 匹配规则及其他卖家精灵场景。
+**回滚方式**：回退 Listing Analysis 历史查询和报告页的 Session 重试、对应测试及本条记录。
+
+---
+
+## 2026-07-16 seller_sprite - 兼容旧 CLI 并自动绑定远端隔离凭证
+
+**变更原因**：正式 CLI 仍向远端 SellerSprite 异步工具注入本机 `session_id`，而 MCP 多用户隔离门禁已拒绝显式凭证，导致 CLI 代理链路失败、直接 MCP 链路正常；仅删除客户端参数又会使尚未执行远端登录的 CLI 用户缺少服务端隔离凭证。
+**改动点**：正式 CLI Adapter 停止向 `seller_sprite_run` 和 Listing Analysis submit 透传 `session_id/jwt`；新增 MCP OPS 凭证绑定模块，远端模式始终忽略旧客户端显式凭证，按 API Key + Agent 隔离作用域复用有效 Session，缺失或过期时自动调用 `auth_mcp_login`，并以作用域级 single-flight 锁避免并发重复登录；stdio 模式继续兼容本机 `opscli auth login` 和内部显式运行时凭证；SellerSprite run/start/Listing submit/status/result 统一消费可信绑定；同步更新 Skill 与直连接口契约。
+**验证结果**：CLI Adapter、MCP 凭证绑定、SellerSprite 工具、任务调度/队列、认证中间件及多用户隔离整合回归通过，`82 passed`；完整 `tests/seller_sprite` 为 `116 passed, 2 failed`，两个失败均为 master 既有 `seller-sprite-debug` 顶层命令未注册，不属于本次改动；生产文件 `py_compile` 与 `git diff --check` 通过。
+**影响范围**：影响正式 `opscli seller-sprite` 代理链路、SellerSprite MCP 首次认证与旧客户端显式凭证兼容；不回退多用户隔离，不保存或使用远端调用方传入的敏感凭证。
+**回滚方式**：回退 SellerSprite RemoteAdapter、MCP OPS 凭证绑定模块、SellerSprite MCP 工具接入、对应测试、Skill/接口文档和本条记录。
+
 ---
 
 ## 2026-07-10 asin-data/mcp - 合并 ASIN 实时取数服务到 master
