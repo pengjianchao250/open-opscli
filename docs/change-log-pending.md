@@ -2929,3 +2929,11 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：self-update 命令的 skills 同步与结果校验
 **回滚方式**：回退本次 commit
 ---
+## 2026-07-16 发版验证 - TestPyPI 端到端闭环通过 + 外部教程文档更新
+
+**变更原因**：验证 self-update 在真实发布渠道的完整闭环；同步更新用户侧教程
+**改动点**：TestPyPI 发布 0.0.140~0.0.143；e2e 干净 venv 实测 0.0.142→0.0.143 一键升级全链路通过（含 skills install --yes 非交互 + skills upgrade 真实成功）；更新 auto-scheduler storage/app/public 下 5 份教程文档脚本（更新升级指南新增一键更新章节、精简指南/从零指南加 self-update 入口、两个 setup 脚本加提示）
+**验证结果**：e2e exit 0，最终版本 0.0.143，"升级后版本" 校验行生效；bash -n 语法校验通过
+**影响范围**：教程文档在 auto-scheduler 项目（本仓库外），需随该项目发布生效
+**回滚方式**：教程文档按 git 历史回退（auto-scheduler 仓库）
+---
