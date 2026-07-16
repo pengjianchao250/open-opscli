@@ -96,10 +96,10 @@
       "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
     },
     "ops-new-product-calculator": {
-      "source": false,
-      "wheel": false,
-      "binary": false,
-      "binary_full": false,
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
       "tier": "experimental",
       "reason": "Polaris 新品计算器 CLI 草稿包引导 Skill，封装下拉选择、类目搜索和提交确认流程"
     },

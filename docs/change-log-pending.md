@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-16 calculator - 合并新品计算器简化分支
+
+**变更原因**：需要把 `feature/calculator-simplification` 的新品计算结果精简、多轮填写优化、FBA 包装参考、线上详情链接及 Polaris 默认启用配置合入当前 `feature/sellersprite`，同时保留当前分支已有的 SellerSprite 与 master 修复。
+**改动点**：完整合入计算器分支 10 个提交；代码、配置、Skill、测试和 Super Dev 文档均自动合并，仅对双方同时在顶部追加的变更记录进行并集处理，未改动计算器分支既定业务行为。
+**验证结果**：合并后的计算器相关文件与源分支逐文件对比无差异；生产 Python 文件 `py_compile` 通过；计算器 CLI、草稿和 Skill 聚焦回归为 `45 passed, 7 failed`，在源工作区复跑同样得到 `45 passed, 7 failed`，确认 7 项均为源分支已记录的旧契约基线失败；排除这 7 项后为 `45 passed, 7 deselected`；`git diff --check` 通过。
+**影响范围**：影响新品计算器草稿 CSV、字段校验、费用方案结果展示、Agent 多轮工作流、Skill 发行配置，以及 Polaris 默认启用状态；不改变当前分支的 SellerSprite 功能。
+**回滚方式**：回退本次合并提交；如需局部回滚，需同步回退 `opscli/calculator/`、新品计算器 Skill、manifest、认证默认配置、对应测试及 Super Dev 文档，避免代码与工作流契约不一致。
+---
+
 ## 2026-07-16 seller_sprite - 合并远端 master 隔离认证与续查修复
 
 **变更原因**：当前 `feature/sellersprite` 已包含原子 MCP 所有权入队、多账号并行调度和有界状态续查，远端 `master` 新增 CLI/MCP 隔离认证兼容及 Listing Analysis Session 过期重登，需要合并两侧意图并消除重复实现冲突。
@@ -17,6 +26,40 @@
 **影响范围**：影响 SellerSprite MCP 异步任务入队、逐任务 OPS 授权恢复、多账号池启动与终态凭证清理；业务请求参数和外部返回结构不变。
 **回滚方式**：回退本次 SellerSprite MCP 工具、队列 Store、TaskScheduler、账号测试与本条记录，并重新处理 `origin/master` 合并冲突。
 
+## 2026-07-15 calculator - 结果增加线上详情链接
+
+**变更原因**：费用方案结果需要提供对应 Polaris 线上页面入口，方便用户继续查看网页详情。
+**改动点**：`calculator detail` 在完整费用方案表后输出带 `task_code` 和代查标识的线上详情链接；同步新品计算器 Skill、Super Dev 文档和契约测试；不恢复原始 JSON、成本、利润或毛利提示。
+**验证结果**：详情命令聚焦测试 `2 passed`；新品计算器 Skill 契约测试 `12 passed`；`skill-creator` UTF-8 结构校验返回 `Skill is valid!`；`git diff --check` 无错误；Standards/Spec 双轴复审确认功能与文档一致，未恢复成本、利润、毛利或原始 JSON 提示。
+**影响范围**：仅影响新品计算器详情结果末尾提示，不改变 API 请求、费用表结构和显式 `--json` 行为。
+**回滚方式**：移除 `detail` 末尾线上链接并恢复对应 Skill、文档、测试和本条记录。
+---
+
+## 2026-07-15 calculator - 固化物流费用结果并精简多轮调用
+
+**变更原因**：新品计算器查看已完成任务仍会额外读取成本、利润和原始 JSON，多轮补充字段也会重复认证与校验，导致单轮等待约 1–2 分钟。
+**改动点**：`calculator detail` 默认只展示任务基本信息和完整 `allPlans` 物流费用表，使用固定渲染宽度避免窄终端省略表头和费用区间，并移除 Web 页面能力说明及原始 JSON 命令提示；新品计算器 Skill 改为同一连续任务只预检一次认证，补充字段期间只更新 CSV，全部必填后校验一次，并禁止普通结果查询自动使用 `--json` 或分析成本、利润、毛利；同步 Super Dev 架构、Proposal、任务和契约测试。
+**验证结果**：详情命令聚焦测试 `2 passed`；新品计算器 Skill 契约测试 `12 passed`；`skill-creator` UTF-8 结构校验返回 `Skill is valid!`；`git diff --check` 无错误。calculator 与 Skill 扩大回归为 `51 passed, 9 failed`，失败项均为既有旧契约，仍要求成本字段出现在新版 CSV、利润字段必填、税率保持旧默认值或 feedtask 根命令注册，与本次已确认需求无关，未扩范围修改。Standards/Spec 双轴复审发现的 PRD/UIUX 残留提示和 Skill 手工重建表格风险已修正。
+**影响范围**：影响新品计算器多轮草稿补充和默认结果展示；不改变 Polaris API、提交 payload、任务列表、Web 路由或显式 `detail --json` 行为。
+**回滚方式**：恢复 `opscli/calculator/cli.py` 的详情提示、还原新品计算器 Skill 两份工作流与对应测试、文档和本条记录。
+---
+
+## 2026-07-15 calculator - 成本占位值改为 1
+
+**变更原因**：隐藏成本费用字段统一填 `0` 后，后端仍会计算失败，需要改为非零占位值。
+**改动点**：将 11 个隐藏成本字段在草稿归一化阶段统一写为数值 `1`；提交 payload 再次覆盖为 `1`，兼容仍保存 `0` 的历史草稿；同步字段说明、新品计算器 Skill、Super Dev 文档及指定验证草稿。
+**验证结果**：归一化、历史草稿提交和 Skill 契约聚焦测试 `3 passed`；指定草稿 `draft.json` 的 11 个成本字段均为数值 `1`，新版 CSV 仍不展示成本费用分组，旧版 CSV 对应当前值均为 `1`。全量 pytest 仍在收集阶段受既有 `tests/skills/test_packaging.py` 关闭捕获流影响，以 `23 errors` 和 `I/O operation on closed file` 中断。
+**影响范围**：影响新品计算器草稿生成、复制与提交 payload 的隐藏成本字段；不改变新版 CSV 填写项、利润字段可见性和结果展示。
+**回滚方式**：回退 `opscli/calculator/fields.py`、`opscli/calculator/draft.py`、新品计算器 Skill、相关测试、文档及本条记录。
+---
+
+## 2026-07-14 calculator - 精简新品计算与费用方案展示
+
+**变更原因**：新品计算当前只关注仓配费用方案，不再需要用户填写利润相关成本字段；详情结果需要与 Polaris 结果页“方案切换”表格的信息保持一致。
+**改动点**：利润相关成本字段统一默认 `0` 并取消必填；新版 `填写表格.csv` 生成时过滤整个成本费用分组，同时生成包含完整历史字段并明确弃用的 `填写表格-旧版.csv`，校验和提交只读取新版文件，完整字段仍保留在 `draft.json` 和提交 payload；指定二区默认改为 `zone_1_2`（美东+美西）；`calculator detail` 改为只读展示 `allPlans` 全部方案、线路、费用值和区间，不提供方案切换；同步新品计算器 Skill 参考说明；代码审查后将首单数量列显隐对齐为 `allPlans[0].first_order_qty`，并内联单次抽象、补齐默认常量与线路对齐逻辑的中文注释。后续清除验证草稿中无接口依据的包装、重量、箱规和单箱数量样例；生成说明区分单件 SKU 包装与 FBA 入库外箱，提供 Amazon.sg 官方商品示例及美国 FBA 入库箱上限但不自动代入；Skill 改为每轮询问 3–5 个仍缺失或无效的必填字段，全部有效前不提交，并启用 source、wheel、binary、binary_full 四种发行目标。
+**验证结果**：未运行 type-check、eslint 或格式化检查；完成代码差异自检和本地样例输出核对，确认利润成本字段均为 `0`、默认试算方案为 `GROSS_PROFIT`、指定二区为 `["zone_1_2"]`、成本费用无校验问题、新版 CSV 不包含成本费用分组、旧版 CSV 保留完整成本字段及弃用说明，费用方案表完整显示多线路及费用区间；指定验证草稿的 9 个物流字段在 `draft.json`、新版和旧版 CSV 中均为空，生成说明包含两类参考且明确单箱数量无默认值；本需求、第二阶段 Skill 及发行契约测试 `5 passed`。全量 pytest 在收集阶段受既有 `tests/skills/test_packaging.py` 关闭捕获流影响，以 `23 errors` 和 `I/O operation on closed file` 中断；双轴代码审查的 Spec 项已清零，Standards 初审问题均已修正。
+**影响范围**：影响新品计算器草稿生成、校验提示、详情终端展示及对应 Skill 说明；不改变 Polaris API、认证、提交命令和网页功能。
+**回滚方式**：回退 `opscli/calculator/fields.py`、`draft.py`、`cli.py`、新品计算器两份参考说明及本条记录。
 ---
 
 ## 2026-07-14 Skill - 新增内部反馈全量查询工具
