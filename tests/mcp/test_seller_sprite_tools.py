@@ -406,6 +406,101 @@ def test_listing_analysis_history_status_uses_history_get_endpoint(monkeypatch):
     ]
 
 
+def test_listing_analysis_status_relogs_and_retries_expired_history_session(monkeypatch):
+    from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError
+
+    class SubmittedScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "scenario": "listing-analysis",
+                "state": "succeeded",
+                "data": [{"asin": "B08Z6X4NK3", "contentReady": False}],
+            }
+
+    class OwnerStore:
+        def get_mcp_run(self, job_id):
+            return {
+                "job_id": job_id,
+                "user_email": "mcp-user@example.com",
+                "params_json": {"asin": "B08Z6X4NK3", "station": "GLOBAL"},
+            }
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            self.account_provider = type(
+                "AccountProvider",
+                (),
+                {"get_default": lambda self: object()},
+            )()
+
+    class ExpiredThenReadyClient:
+        history_calls = 0
+        login_calls = 0
+
+        def __init__(self, *, account):
+            self.account = account
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def has_login_cookies(self):
+            return True
+
+        async def login(self):
+            self.__class__.login_calls += 1
+            return {"logged_in": True}
+
+        async def get_json(self, url, params, *, referer=None):
+            self.__class__.history_calls += 1
+            if self.__class__.history_calls == 1:
+                raise SellerSpriteApiError(
+                    "卖家精灵登录态失效",
+                    api_code="ERR_GLOBAL_SESSION_EXPIRED",
+                )
+            return {
+                "code": "OK",
+                "data": {
+                    "items": [
+                        {
+                            "taskId": "task-ready-after-relogin",
+                            "taskStatus": "COMPLETED",
+                            "tabTitle": "US(B08Z6X4NK3) | 全景分析 | Listing数据深度解析报告",
+                            "module": "LA",
+                        }
+                    ]
+                },
+            }
+
+    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", FakeManager)
+    monkeypatch.setattr(
+        "opscli.seller_sprite.api.client.SellerSpriteApiClient",
+        ExpiredThenReadyClient,
+    )
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_task_scheduler",
+        lambda **kwargs: SubmittedScheduler(),
+    )
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_current_mcp_user_email",
+        lambda: "mcp-user@example.com",
+    )
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: OwnerStore())
+
+    result = _run(seller_sprite_tools.seller_sprite_listing_analysis_status("listing-job-expired"))
+
+    assert result["success"] is True
+    assert result["data"]["ready"] is True
+    assert result["data"]["task_id"] == "task-ready-after-relogin"
+    assert ExpiredThenReadyClient.login_calls == 1
+    assert ExpiredThenReadyClient.history_calls == 2
+
+
 
 def test_listing_analysis_status_reads_history_by_asin(monkeypatch):
     class SubmittedScheduler:

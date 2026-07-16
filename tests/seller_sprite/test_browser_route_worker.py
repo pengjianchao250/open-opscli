@@ -763,6 +763,62 @@ def test_run_one_stops_after_second_session_expiry(monkeypatch, tmp_path):
     _run(scenario())
 
 
+def test_listing_analysis_report_relogs_and_retries_expired_session(monkeypatch, tmp_path):
+    async def scenario():
+        account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+        worker = SellerSpriteBrowserRouteWorker(
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account=account,
+        )
+        page = object()
+        capture_calls = []
+        login_calls = []
+        open_calls = []
+
+        async def fake_ensure_page(current_account):
+            return page
+
+        async def fake_open(current_page, request, **kwargs):
+            open_calls.append(request.referer)
+            return {"logged_in": True, "current_url": request.referer}
+
+        async def fake_login(current_page, current_account, *, callback, **kwargs):
+            login_calls.append(callback)
+
+        async def fake_capture(current_page, *, task_id, report_url, root_dir):
+            capture_calls.append(task_id)
+            if len(capture_calls) == 1:
+                raise SellerSpriteApiError("expired", api_code="ERR_GLOBAL_SESSION_EXPIRED")
+            return {
+                "code": "OK",
+                "success": True,
+                "data": {"taskId": task_id, "taskStatus": "COMPLETED"},
+            }
+
+        monkeypatch.setattr(worker, "_ensure_page", fake_ensure_page)
+        monkeypatch.setattr(worker, "_open_referer_and_login", fake_open)
+        monkeypatch.setattr(worker, "_login_with_account", fake_login)
+        monkeypatch.setattr(worker_module, "_open_listing_analysis_report_and_capture", fake_capture)
+
+        result = await worker.fetch_listing_analysis_report(
+            task_id="task-ready-after-relogin",
+            root_dir=tmp_path,
+            page_prepare=False,
+            task_interval_seconds=0,
+            cooldown_seconds=0,
+        )
+
+        assert result.response["data"]["taskStatus"] == "COMPLETED"
+        assert capture_calls == ["task-ready-after-relogin", "task-ready-after-relogin"]
+        assert login_calls == ["https://www.sellersprite.com/v3/ai-history?module=LA"]
+        assert open_calls == [
+            "https://www.sellersprite.com/v3/ai-history?module=LA",
+            "https://www.sellersprite.com/v3/ai-history?module=LA",
+        ]
+
+    _run(scenario())
+
+
 def test_run_one_retries_main_request_after_robot_captcha(monkeypatch, tmp_path):
     async def scenario():
         account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")

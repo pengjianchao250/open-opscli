@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-16 seller_sprite - 恢复 Listing Analysis 续查登录态
+
+**变更原因**：CLI 的 Listing Analysis `status/result` 会复用卖家精灵网页 Cookie；Cookie 名仍存在但服务端 Session 已过期时，`task/history` 和报告详情页直接返回 `ERR_GLOBAL_SESSION_EXPIRED`，现有链路不会重新登录，导致已提交任务无法续查。
+**改动点**：保持 `task/history` 按 ASIN + `module=LA` 选择任务的原逻辑不变；历史任务查询遇到 Session 过期时自动登录并重试一次；报告详情页捕获遇到相同错误时重新登录、重新打开 Listing Analysis 历史页并重试一次；第二次仍过期或其他 API 错误继续原样返回，避免无限重试。
+**验证结果**：新增公开 `listing_analysis_status` 与 browser-route 报告读取回归测试，分别复现 Cookie 过期后历史接口不重试、报告页不重试的问题；修复后聚焦测试通过，`2 passed`，关联回归通过，`69 passed`；完整 SellerSprite + MCP 回归为 `148 passed, 2 failed`，两个失败均为 master 既有 `seller-sprite-debug` 顶层命令未注册，不属于本次改动。
+**影响范围**：影响 CLI/MCP Listing Analysis 的 `status/result` 续查登录态恢复；不改变提交任务、排队模型、ASIN 匹配规则及其他卖家精灵场景。
+**回滚方式**：回退 Listing Analysis 历史查询和报告页的 Session 重试、对应测试及本条记录。
+
+---
+
 ## 2026-07-16 seller_sprite - 兼容旧 CLI 并自动绑定远端隔离凭证
 
 **变更原因**：正式 CLI 仍向远端 SellerSprite 异步工具注入本机 `session_id`，而 MCP 多用户隔离门禁已拒绝显式凭证，导致 CLI 代理链路失败、直接 MCP 链路正常；仅删除客户端参数又会使尚未执行远端登录的 CLI 用户缺少服务端隔离凭证。

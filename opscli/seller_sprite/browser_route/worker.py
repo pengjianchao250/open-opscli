@@ -390,36 +390,89 @@ class SellerSpriteBrowserRouteWorker:
                 await _prepare_page(page)
                 _record_timing(timings, request, "page_prepare", stage_started_at)
             report_url = _listing_analysis_report_url(task_id)
-            try:
-                stage_started_at = time.monotonic()
-                response = await _open_listing_analysis_report_and_capture(
-                    page,
-                    task_id=task_id,
-                    report_url=report_url,
-                    root_dir=root_dir,
-                )
-                _record_timing(timings, request, "listing_analysis_report.capture", stage_started_at)
-            except SellerSpriteApiError:
-                raise
-            except Exception as exc:
-                if await _has_visible_text(page, "正在分析中"):
-                    response = {
-                        "code": "OK",
-                        "success": True,
-                        "data": {
-                            "taskId": task_id,
-                            "taskStatus": "RUNNING",
-                            "analyzing": True,
-                        },
-                    }
+            # 报告页可能在任务生成期间失效，重新登录并恢复页面后仅重试一次捕获。
+            for attempt in range(2):
+                try:
+                    stage_started_at = time.monotonic()
+                    response = await _open_listing_analysis_report_and_capture(
+                        page,
+                        task_id=task_id,
+                        report_url=report_url,
+                        root_dir=root_dir,
+                    )
                     _record_timing(
                         timings,
                         request,
-                        "listing_analysis_report.analyzing",
+                        "listing_analysis_report.capture",
                         stage_started_at,
-                        error=type(exc).__name__,
+                        attempt=attempt + 1,
                     )
-                else:
+                    break
+                except SellerSpriteApiError as exc:
+                    _record_timing(
+                        timings,
+                        request,
+                        "listing_analysis_report.capture_error",
+                        stage_started_at,
+                        attempt=attempt + 1,
+                        api_code=exc.api_code,
+                        status_code=exc.status_code,
+                    )
+                    if not exc.is_session_expired() or attempt > 0:
+                        raise
+                    stage_started_at = time.monotonic()
+                    await self._login_with_account(
+                        page,
+                        request.account,
+                        callback=request.referer or DEFAULT_PAGE_URL,
+                        timings=timings,
+                        request=request,
+                    )
+                    _record_timing(timings, request, "listing_analysis_report.session_expired_relogin", stage_started_at)
+                    stage_started_at = time.monotonic()
+                    login = await self._open_referer_and_login(page, request, timings=timings)
+                    _record_timing(
+                        timings,
+                        request,
+                        "listing_analysis_report.session_expired_reopen",
+                        stage_started_at,
+                        current_url=getattr(page, "url", ""),
+                    )
+                    await self._handle_robot_captcha_if_enabled(
+                        page,
+                        request,
+                        warnings,
+                        timings,
+                        stage="after_listing_analysis_report_session_expired_reopen",
+                    )
+                    if page_prepare:
+                        stage_started_at = time.monotonic()
+                        await _prepare_page(page)
+                        _record_timing(
+                            timings,
+                            request,
+                            "listing_analysis_report.session_expired_page_prepare",
+                            stage_started_at,
+                        )
+                except Exception as exc:
+                    if await _has_visible_text(page, "正在分析中"):
+                        response = {
+                            "code": "OK",
+                            "success": True,
+                            "data": {
+                                "taskId": task_id,
+                                "taskStatus": "RUNNING",
+                                "analyzing": True,
+                            },
+                        }
+                        _record_timing(
+                            timings,
+                            request,
+                            "listing_analysis_report.analyzing",
+                            stage_started_at,
+                            error=type(exc).__name__,
+                        )
+                        break
                     raise SellerSpriteApiError(
                         "卖家精灵 Listing Analysis 报告页未捕获 competing-lookup 结构化数据",
                         response_excerpt=(f"task_id={task_id} url={report_url}\n{exc}")[:1000],

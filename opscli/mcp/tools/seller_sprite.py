@@ -255,16 +255,23 @@ async def _fetch_listing_analysis_history_status(
     """通过历史任务接口读取 Listing Analysis 任务状态。"""
     from opscli.seller_sprite.api.client import SellerSpriteApiClient
     from opscli.seller_sprite.services import SellerSpriteApiManager
+    from opscli.seller_sprite.services.api_manager import _request_with_session_retry
 
     manager = SellerSpriteApiManager(jwt=jwt, session_id=session_id)
     account = manager.account_provider.get_default()
     async with SellerSpriteApiClient(account=account) as client:
         if not client.has_login_cookies():
             await client.login()
-        response = await client.get_json(
-            "/v3/api/ai-analysis/task/history",
-            {"page": 1, "pageSize": 20, "keywords": "", "modules": ""},
-            referer="https://www.sellersprite.com/v3/ai-history?module=LA",
+        # Cookie 名存在不代表服务端 Session 仍有效，过期时重新登录并仅重试一次。
+        response = await _request_with_session_retry(
+            client=client,
+            warnings=[],
+            stage="listing_analysis_history",
+            action=lambda: client.get_json(
+                "/v3/api/ai-analysis/task/history",
+                {"page": 1, "pageSize": 20, "keywords": "", "modules": ""},
+                referer="https://www.sellersprite.com/v3/ai-history?module=LA",
+            ),
         )
     item = _select_listing_analysis_history_item(response, asin=asin)
     task_status = str((item or {}).get("taskStatus") or "").strip().upper()
