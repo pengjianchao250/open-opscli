@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-16 shared - 新增 run_self_update 升级编排流程
+
+**变更原因**：一期 T1-1，实现"升级 CLI + 自动同步 Skills"完整编排
+**改动点**：opscli/shared/self_update.py 追加 run_self_update() 与 _resolve_opscli_command()；复用 update_check 的版本查询与比较
+**验证结果**：pytest tests/shared/test_self_update.py -v 15 个测试全绿
+**影响范围**：纯新增函数，未被任何入口调用（Task 3 接线）
+**回滚方式**：回退本次 commit
+---
+
 ## 2026-07-16 shared - 新增自升级模块：安装方式检测与升级命令构造
 
 **变更原因**：一期升级体验优化（T1-1/T1-2），为 opscli self-update 命令提供实现层基础

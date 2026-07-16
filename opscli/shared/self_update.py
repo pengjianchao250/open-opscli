@@ -13,9 +13,15 @@
 
 from __future__ import annotations
 
+import platform
+import shutil
+import subprocess
 import sys
 
-from opscli.version import PACKAGE_NAME
+from rich.console import Console
+
+from opscli.shared.update_check import _fetch_latest_version, is_newer_available
+from opscli.version import PACKAGE_NAME, get_version
 
 # 安装方式常量：检测结果只会是这三种之一
 INSTALL_METHOD_UV_TOOL = "uv-tool"
@@ -64,3 +70,64 @@ def build_upgrade_command(method: str) -> list[str]:
         sys.executable, "-m", "pip", "install",
         "--upgrade", "--only-binary", ":all:", PACKAGE_NAME,
     ]
+
+
+def _resolve_opscli_command() -> list[str]:
+    """解析升级后执行 skills 同步所用的 opscli 命令前缀。
+
+    优先用 PATH 中的 opscli 可执行文件（升级后其指向新版本代码）；
+    找不到时回退为当前解释器直跑模块入口（等效 python -m opscli.cli）。
+    """
+    exe = shutil.which("opscli")
+    if exe:
+        return [exe]
+    return [sys.executable, "-m", "opscli.cli"]
+
+
+def run_self_update() -> int:
+    """执行完整自升级流程：版本预检 → 升级 CLI → 同步 Skills。
+
+    Returns:
+        进程退出码，0 为成功；升级或 skills 同步失败时透传子进程退出码。
+    """
+    console = Console()
+    current = get_version()
+
+    # 第一步：版本预检。已是最新则直接跳过，避免无意义的升级动作；
+    # 查询失败（返回 None，如离线）不阻断，交给包管理器自行判断
+    latest = _fetch_latest_version()
+    if latest is not None and not is_newer_available(current, latest):
+        console.print(f"[green]√ 已是最新版本 v{current}，无需升级[/green]")
+        return 0
+
+    # 第二步：识别安装方式并执行升级（子进程继承终端，实时展示进度）
+    method = detect_install_method()
+    target = f"v{latest}" if latest else "最新版本"
+    console.print(f"[cyan]检测到安装方式: {method}，开始升级 v{current} → {target}[/cyan]")
+    result = subprocess.run(build_upgrade_command(method))
+    if result.returncode != 0:
+        # 升级失败：附平台信息帮助定位 wheel 缺失类问题（T1-2 防护）
+        console.print(f"[red]× 升级失败（退出码 {result.returncode}）[/red]")
+        console.print(
+            f"[dim]当前平台: {platform.system()} {platform.machine()} / "
+            f"Python {platform.python_version()}[/dim]"
+        )
+        console.print(
+            "[dim]若提示找不到二进制包（wheel），说明当前平台/Python 版本"
+            "暂未提供预编译包，请联系维护者[/dim]"
+        )
+        return result.returncode
+
+    # 第三步：同步 Skills。必须用新进程执行，确保跑的是升级后的代码
+    opscli_cmd = _resolve_opscli_command()
+    for args in (["skills", "install", "--force"], ["skills", "upgrade"]):
+        step = subprocess.run(opscli_cmd + args)
+        if step.returncode != 0:
+            console.print(
+                f"[yellow]× CLI 已升级，但 `opscli {' '.join(args)}` 执行失败，"
+                "请手动重试该命令[/yellow]"
+            )
+            return step.returncode
+
+    console.print("[green]√ 升级完成：CLI 与 Skills 均已同步到最新版本[/green]")
+    return 0
