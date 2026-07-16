@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-16 release - 批量 cherry-pick master_pjc 的 19 个提交至 release
+
+**变更原因**：用户要求把 master_pjc 分支上从「feat(query): QueryMetadataResult 透传数据集默认条件 filter_configs（R4）」（aaf8c2e）到「feat(query): 查询超时可配置(默认30→120秒)并支持结果落盘 JSON 文件」（c81a177）的连续 19 个提交同步到 release 分支，覆盖数据集默认条件 filter_config 全链路（R4/R5）、ops-dataset-query v1.3.6/1.4.0、macOS Keychain 禁用改 AES 加密文件、查询超时可配置等能力。
+**改动点**：在 release 分支执行 `git cherry-pick a811d7b..c81a177`，19 个提交全部落地（f90e47b..180f6ce）。期间 `docs/change-log-pending.md` 发生多次同形态冲突（两分支各自在顶部追加记录，且 master_pjc 侧带有 release 不存在的「2026-07-10 合并 ASIN 实时取数服务到 master」上下文条目头），统一按"新条目置前 + 保留 release 已有的 2026-07-14 Polaris 条目 + 丢弃 master_pjc 独有上下文头"解决；代码文件均无冲突。
+**验证结果**：`git diff --check` 无冲突标记残留；`pytest tests/auth/ -q` 46 passed；`pytest tests/query/ -q` 76 passed + 2 failed（预存，release 屏蔽了 catalog/intent 命令所致，基线提交 2953760 上同样失败）；`pytest tests/skills/ --ignore=tests/skills/test_packaging.py -q` 138 passed + 4 failed（预存，基线上同样失败）；核心改动测试 `tests/skills/test_dataset_query_planner.py` 36 passed。与 master_pjc 对比，目标路径仅剩 release 预存独有差异（polaris_enabled 默认值、catalog/intent 临时屏蔽、release 独有测试文件）。
+**影响范围**：release 分支新增 19 个提交（领先 origin/release 20 个提交，未推送），涉及 query 模块、ops-dataset-query Skill 模板、auth 凭证存储、相关测试与文档。
+**回滚方式**：`git reset --hard 2953760`（cherry-pick 前的 release HEAD）。
+---
+
 ## 2026-07-16 query - 查询超时可配置（默认 30→120 秒）+ 查询结果落盘 JSON 文件
 
 **变更原因**：AI Agent 取数时大数据量查询频繁出现"数据量过大超时"。根因是 `QueryClient.cli_query`/`cli_simple_query` 的 HTTP 超时硬编码 30 秒，服务端处理大查询超过 30 秒即 ReadTimeout（skill 执行器 run_query.py 的 300 秒 subprocess 超时因内层 30 秒先触发而形同虚设）；同时查询结果只能全量打印到 stdout，无保存结果到文件的能力，大结果集会撑爆 AI 上下文。
