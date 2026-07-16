@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import unicodedata
@@ -145,6 +146,20 @@ MAX_CANDIDATE_CARDS = 3
 # 筛选组件引用上限（execution_ref.filter_components）
 MAX_FILTER_COMPONENTS = 6
 
+# 图表 UUID 既可能是标准 UUID，也可能是平台生成的短标识。只有请求中明确出现
+# “图表/chart”语义时才启用该路由，避免把工单、任务等其他 UUID 误判为图表。
+CHART_REFERENCE_PATTERN = re.compile(
+    r"(?:图表|chart)\s*(?:uuid|id|编号)?\s*(?:为|是|[:：=#])?\s*"
+    r"([A-Za-z0-9][A-Za-z0-9_-]{5,127})",
+    re.IGNORECASE,
+)
+STANDARD_UUID_PATTERN = re.compile(
+    r"(?<![0-9A-Fa-f])"
+    r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+    r"(?![0-9A-Fa-f])"
+)
+
 
 def _load_json_object(path: Path, error_code: str) -> dict:
     """加载 JSON 对象文件，任何读取/解析失败都归一为带错误码的 RuntimeError。"""
@@ -178,6 +193,133 @@ def _normalize(value: object) -> str:
 def _normalize_enum(value: str) -> str:
     """枚举值归一化：额外去除全部内部空白（"Amazon SC" 与 "amazonsc" 视为等价）。"""
     return "".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+def _extract_chart_uuids(query: str) -> list[str]:
+    """从显式图表语义中提取 UUID，保持原文顺序并去重。"""
+    normalized = unicodedata.normalize("NFKC", query)
+    has_chart_intent = "图表" in normalized or "chart" in normalized.casefold()
+    if not has_chart_intent:
+        return []
+
+    candidates = [match.group(1) for match in CHART_REFERENCE_PATTERN.finditer(normalized)]
+    # 标准 UUID 允许出现在“图表的数据，UUID 为 xxx”这类非相邻表达中。
+    candidates.extend(match.group(0) for match in STANDARD_UUID_PATTERN.finditer(normalized))
+    return _deduplicate(candidates)
+
+
+def _chart_action(query: str) -> str:
+    """根据用户原文选择图表查询动作；未点名执行时默认只取结构。"""
+    normalized = unicodedata.normalize("NFKC", query).casefold()
+    if "chart-doc" in normalized or any(
+        marker in normalized for marker in ("api文档", "调用文档", "查询文档")
+    ):
+        return "document"
+    if "dry-run" in normalized or "dry run" in normalized or any(
+        marker in normalized for marker in ("生成sql", "只生成sql", "仅生成sql")
+    ):
+        return "dry_run"
+    if any(
+        marker in normalized
+        for marker in ("查询结构", "获取结构", "只看结构", "仅看结构", "不执行")
+    ):
+        return "structure"
+    if any(
+        marker in normalized
+        for marker in ("数据", "结果", "执行", "分析", "导出", "落盘", "保存")
+    ):
+        return "run"
+    return "structure"
+
+
+def _build_chart_query_contract(query: str, chart_uuids: Sequence[str]) -> dict:
+    """构建图表 UUID 专用模型合同，不依赖本地数据集元数据。"""
+    base_model_view = {
+        "dataset_name_zh": "图表保存查询",
+        "dimensions": [],
+        "metrics": [],
+        "platform_semantic_members": [],
+        "platform_filter_state": "not_requested",
+        "clarification_reason_codes": [],
+        "clarification_messages_zh": [],
+        "next_action": "run_chart_query",
+    }
+    execution_ref: dict[str, Any] = {"user_visible": False}
+
+    if len(chart_uuids) != 1:
+        base_model_view["clarification_reason_codes"] = ["chart_uuid_identity"]
+        base_model_view["clarification_messages_zh"] = [
+            "检测到多个图表 UUID，需要确认本次只查询其中一个。"
+        ]
+        base_model_view["next_action"] = "clarify_chart_uuid"
+        execution_ref["chart_uuid_candidates"] = list(chart_uuids)
+        return {
+            "contract": MODEL_CONTRACT,
+            "query_mode": "chart_uuid",
+            "data_state": "not_required",
+            "metadata_source": "",
+            "metadata_version": "",
+            "status": "clarify_required",
+            "model_view": base_model_view,
+            "answer_contract": {
+                "required_disclosures_zh": ["需要说明检测到多个图表 UUID。"],
+                "forbidden_outputs_zh": ["不得静默选择其中一个图表 UUID 执行。"],
+                "technical_identifiers_user_visible": False,
+                "user_visible_language": "zh-CN",
+            },
+            "execution_ref": execution_ref,
+        }
+
+    chart_uuid = chart_uuids[0]
+    action = _chart_action(query)
+    command_parts = ["opscli", "query", "chart", "--uuid", chart_uuid]
+    if action == "run":
+        command_parts.append("--run")
+    elif action == "dry_run":
+        command_parts.append("--dry-run")
+    elif action == "document":
+        command_parts[2] = "chart-doc"
+    command_parts.append("--pretty")
+
+    execution_ref.update(
+        {
+            "chart_uuid": chart_uuid,
+            "chart_action": action,
+            "query_command": " ".join(command_parts),
+            "run": action == "run",
+            "dry_run": action == "dry_run",
+        }
+    )
+    action_disclosure = {
+        "structure": "本次只获取图表保存的查询结构，不执行数据查询。",
+        "run": "本次执行图表保存的全部查询，并合并返回结果。",
+        "dry_run": "本次只生成图表查询 SQL，不执行数据查询。",
+        "document": "本次生成图表查询 API 调用文档，不执行数据查询。",
+    }[action]
+    return {
+        "contract": MODEL_CONTRACT,
+        "query_mode": "chart_uuid",
+        "data_state": "not_required",
+        "metadata_source": "",
+        "metadata_version": "",
+        "status": "planned",
+        "model_view": base_model_view,
+        "answer_contract": {
+            "required_disclosures_zh": [
+                action_disclosure,
+                "图表包含多条查询时必须遍历全部查询，并按 _query_index 区分来源。",
+                "查询范围受当前认证账号权限约束。",
+            ],
+            "forbidden_outputs_zh": [
+                "不得把图表 UUID 查询改写为普通数据集查询。",
+                "不得只读取第一条查询后把局部结果表述为完整图表结果。",
+                "不得在本地累加明细行替代服务端返回的小计或总计。",
+            ],
+            "technical_identifiers_user_visible": False,
+            "user_visible_language": "zh-CN",
+        },
+        "execution_ref": execution_ref,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1317,6 +1459,7 @@ def build_model_contract(
         )
     return {
         "contract": MODEL_CONTRACT,
+        "query_mode": "dataset_query",
         "data_state": str(internal.get("data_state", "missing")),
         "metadata_source": str(internal.get("metadata_source", "")),
         "metadata_version": str(internal.get("metadata_version", "")),
@@ -1339,7 +1482,20 @@ def build_model_query_plan(
     自动执行一次枚举查询并回灌重规划（P0-3），把「枚举→回传→重规划」
     三步收敛为一次调用；枚举短超时（7s，贴合默认命令窗）内未返回或失败时，
     保留首版合同并内嵌现成枚举命令走手动路径，绝不阻塞命令窗口。
+
+    显式图表 UUID 请求在读取本地元数据前确定性分流，输出 chart_uuid 模式合同；
+    该模式直接使用 opscli query chart/chart-doc，不进入普通数据集选表流程。
     """
+    chart_uuids = _extract_chart_uuids(query)
+    if chart_uuids:
+        contract = _build_chart_query_contract(query, chart_uuids)
+        encoded = json.dumps(
+            contract, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        if len(encoded) > MAX_OUTPUT_BYTES:
+            raise RuntimeError("query_plan_output_too_large")
+        return contract
+
     auto_enum = bool(kwargs.pop("auto_enum", True))
     data_dir = Path(kwargs.get("data_dir", DATA_DIR))
     internal = build_query_plan(

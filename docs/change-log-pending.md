@@ -2859,3 +2859,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **验证结果**：新增 `tests/skills/test_scoped_reader_duplicate_fields.py` 6 用例（两形态合并/语义冲突保留硬失败/幂等去重/alt 打分点名/多义澄清）全 PASS；相关既有测试 43/43 PASS（tests/skills 整目录收集失败为既有问题）。本机用真实 v1.1.2 发布包数据复现验证：修复前必现报错的「即时综合数据集近7天按渠道的销售额Top5」修复后 status=planned；公式字段 avg_price_cny 合并后 has_formula_config=1（公式口径胜出）。QA e2e：v1.3.6 已发布 QA 广场（skill 599490，version id=1442），矩阵验收 duplicate_dataset_field 零命中（详见 ops-agent 仓库测试报告）。
 **影响范围**：ops-dataset-query 字段元数据读取层全消费方（dataset_guidance/scoped_metadata_index/query_plan）；即时综合数据集从整库不可查恢复为可查；其余 42 个无重复数据集行为不变（签名唯一时合并是恒等操作）。
 **回滚方式**：git revert 本次提交；或广场回退到 1.3.5 版本包。备注：memory MCP 本会话不可用，恢复后按本文件补录。
+
+## 2026-07-16 skills/ops-dataset-query v1.3.8 - 规划器新增图表 UUID 路由
+
+**变更原因**：`opscli query chart` 已能按图表 UUID 获取结构、生成 SQL 或执行全部查询，但 Skill 的统一入口 `query_plan.py` 仍只支持普通数据集选表，导致 Agent 必须绕过规划器才能查询图表。
+**改动点**：`query_plan.py` 新增显式图表 UUID/短标识识别、结构/执行/dry-run/文档动作规划和多 UUID 澄清合同；模型合同新增 `query_mode`，普通查询保持 `dataset_query`，图表查询输出 `chart_uuid`、`chart_action` 与可直接执行的 `query_command`；同步扩展严格 JSON Schema、SKILL 执行分支与版本号 1.3.8。
+**验证结果**：`test_dataset_query_planner.py`、`test_dataset_guidance_default_filters.py`、`test_cli.py` 共 56 项通过；`query_plan.py` py_compile 通过；图表与普通规划结果均通过严格 JSON Schema；opscli 发布一致性校验确认 `SKILL.md` 与 `data/VERSION.json` 均为 1.3.8。通用 skill-creator quick_validate 因 opscli 发布规范强制使用顶层 `version` 而报不支持该键，属于校验器规范差异，未删除项目必需版本字段。
+**影响范围**：仅 `ops-dataset-query` 规划入口和模型合同；普通数据集规划、字段/时间/权限规则与 `run_query.py` 执行绑定保持不变。
+**回滚方式**：回滚本次提交即可恢复到仅支持普通数据集规划的 1.3.7。
+---
