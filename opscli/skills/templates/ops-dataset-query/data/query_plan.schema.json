@@ -5,6 +5,7 @@
   "type": "object",
   "required": [
     "contract",
+    "query_mode",
     "data_state",
     "metadata_version",
     "status",
@@ -14,6 +15,10 @@
   ],
   "properties": {
     "contract": {"const": "query_plan_model_contract_v2"},
+    "query_mode": {
+      "description": "执行路由：普通数据集查询或显式图表 UUID 查询",
+      "enum": ["dataset_query", "chart_uuid"]
+    },
     "data_state": {"type": "string"},
     "metadata_source": {
       "description": "元数据来源形状：skill_local（updater 刷新，data_state=ready）/ published_bundle（技能广场发布包，无 data_state 字段）；blocked 时为空串",
@@ -143,6 +148,14 @@
       "required": ["user_visible"],
       "properties": {
         "user_visible": {"const": false},
+        "chart_uuid": {"type": "string"},
+        "chart_uuid_candidates": {"$ref": "#/$defs/string_array"},
+        "chart_action": {
+          "enum": ["structure", "run", "dry_run", "document"]
+        },
+        "query_command": {"type": "string"},
+        "run": {"type": "boolean"},
+        "dry_run": {"type": "boolean"},
         "dataset_alias": {"type": ["string", "null"]},
         "table_id": {"type": ["string", "integer", "null"]},
         "platform_component_alias": {"type": ["string", "null"]},

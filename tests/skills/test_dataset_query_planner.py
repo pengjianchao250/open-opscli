@@ -26,6 +26,7 @@ import scoped_metadata_index  # noqa: E402
 import time_scope  # noqa: E402
 
 RULES_PATH = SKILL_ROOT / "data" / "intent_rules.json"
+CHART_UUID = "e49a7298-67d7-4abb-a11f-284673297661"
 
 
 def _write_ready_metadata(data_dir: Path) -> None:
@@ -100,6 +101,76 @@ def _write_ready_metadata_with_filter_config(data_dir: Path) -> None:
         "ds_ads,platform_name,平台,ds_ads\n",
         encoding="utf-8",
     )
+
+
+def test_chart_uuid_data_request_bypasses_dataset_metadata(tmp_path: Path):
+    """图表数据请求应在读取本地元数据前分流，并生成可执行 Chart 命令。"""
+    result = query_plan.build_model_query_plan(
+        f"查询图表ID：{CHART_UUID} 的数据",
+        data_dir=tmp_path / "missing-data",
+        auto_upgrade=False,
+    )
+
+    assert result["query_mode"] == "chart_uuid"
+    assert result["data_state"] == "not_required"
+    assert result["status"] == "planned"
+    assert result["execution_ref"] == {
+        "user_visible": False,
+        "chart_uuid": CHART_UUID,
+        "chart_action": "run",
+        "query_command": f"opscli query chart --uuid {CHART_UUID} --run --pretty",
+        "run": True,
+        "dry_run": False,
+    }
+
+
+def test_chart_uuid_plans_structure_dry_run_and_document():
+    """图表入口应按用户原文区分结构、SQL 和文档三种非数据执行动作。"""
+    cases = [
+        ("只获取图表 UUID {uuid} 的查询结构，不执行", "structure", "query chart", "--run"),
+        ("图表 UUID {uuid} 只生成SQL", "dry_run", "--dry-run", "--run"),
+        ("为图表 UUID {uuid} 生成API文档", "document", "query chart-doc", "--run"),
+    ]
+    for prompt, action, command_marker, absent_marker in cases:
+        result = query_plan.build_model_query_plan(
+            prompt.format(uuid=CHART_UUID), auto_upgrade=False
+        )
+        command = result["execution_ref"]["query_command"]
+        assert result["execution_ref"]["chart_action"] == action
+        assert command_marker in command
+        assert absent_marker not in command
+
+
+def test_chart_uuid_multiple_candidates_require_clarification():
+    """同一请求含多个图表 UUID 时不得静默选择。"""
+    second_uuid = "11111111-2222-4333-8444-555555555555"
+    result = query_plan.build_model_query_plan(
+        f"对比图表 {CHART_UUID} 和图表 {second_uuid} 的数据",
+        auto_upgrade=False,
+    )
+
+    assert result["query_mode"] == "chart_uuid"
+    assert result["status"] == "clarify_required"
+    assert result["execution_ref"]["chart_uuid_candidates"] == [CHART_UUID, second_uuid]
+    assert "query_command" not in result["execution_ref"]
+
+
+def test_chart_uuid_contract_matches_strict_schema():
+    """图表规划结果必须通过与普通规划共用的严格模型合同 Schema。"""
+    result = query_plan.build_model_query_plan(
+        f"执行图表 chart_uuid: {CHART_UUID} 的数据", auto_upgrade=False
+    )
+    schema = json.loads((SKILL_ROOT / "data" / "query_plan.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(result)
+
+
+def test_chart_uuid_cli_default_output_uses_chart_route(capsys):
+    """query_plan.py 默认 CLI 输出应直接返回图表模型合同。"""
+    exit_code = query_plan.main([f"查询图表ID {CHART_UUID} 的数据", "--no-auto-upgrade"])
+    result = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert result["query_mode"] == "chart_uuid"
+    assert result["execution_ref"]["chart_action"] == "run"
 
 
 def test_query_plan_selects_acos_with_formula_policy(tmp_path: Path):
