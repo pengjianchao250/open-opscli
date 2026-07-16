@@ -9,7 +9,7 @@ description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自
 用于把卖家精灵自然语言需求映射成标准场景，并通过正式 MCP 入口完成查询、导出和任务续查。
 
 当前对用户公开的正式 CLI 入口是 `opscli seller-sprite ...`。
-该入口默认通过 CLI auth 获取远端 MCP 配置，再调用远端 `seller_sprite_*` tool 完成查询；本 Skill 也以这条正式链路作为默认执行口径。
+该入口默认通过 CLI auth 获取当前用户的远端 MCP 配置，再由远端根据 MCP API Key 自动建立隔离 OPS 登录态并调用 `seller_sprite_*` tool；本 Skill 也以这条正式链路作为默认执行口径。
 正式 CLI 依赖本机已完成 OPS 授权；若本机未登录或登录态过期，先完成 `opscli auth login` 再继续。
 
 授权排查先看链路类型：正式 CLI 代理链路优先用本机 `opscli auth login`；远端 MCP 直连链路优先用 MCP 授权工具完成当前 MCP 用户的 OPS 登录。两条链路不要混用判断。
@@ -57,7 +57,7 @@ opscli seller-sprite export <job_id>
 opscli auth login
 ```
 
-- 登录完成后再重试原命令。
+- 登录完成后再重试原命令；CLI Adapter 不向业务 Tool 透传本机 `session_id/jwt`。
 - 不要让用户手动传 `api_key`、远端 MCP URL、Cookie 或内部账号参数。
 - 不要把此链路的问题误判为卖家精灵业务账号异常；先确认 CLI 登录态。
 
@@ -70,10 +70,10 @@ opscli auth login
 
 判断规则：
 
-- 远端 MCP `api_key` 只表示“能连接 MCP 服务”，不等于当前 MCP 用户已有 OPS 登录态。
-- 如果只有 `api_key`，不要直接执行会消耗额度的 `seller_sprite_run`。
-- 先完成 MCP 授权登录，让当前 MCP 用户的远端凭证里存在可复用 OPS `session_id`；再调用 `seller_sprite_run`。
-- 如果工具返回需要 `session_id`、未授权、授权过期等错误，优先走 MCP 授权流程，而不是要求用户重新给业务参数。
+- 远端 MCP `api_key` 同时作为隔离 OPS 登录态的身份依据；SellerSprite 业务 Tool 会在凭证缺失或过期时自动完成一步绑定。
+- 可以先调用 `auth_mcp_login` 做显式认证检查，但不再是执行 `seller_sprite_run` 的强制前置步骤。
+- 不要向 `seller_sprite_run` 或 Listing Analysis 提交工具显式传递 `session_id/jwt`；旧客户端参数仅为过渡兼容，服务端会忽略。
+- 如果自动绑定仍返回未授权或授权过期，检查 MCP API Key 身份，而不是要求用户重新给业务参数。
 
 ### 快速判断表
 

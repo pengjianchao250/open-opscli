@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-16 seller_sprite - 兼容旧 CLI 并自动绑定远端隔离凭证
+
+**变更原因**：正式 CLI 仍向远端 SellerSprite 异步工具注入本机 `session_id`，而 MCP 多用户隔离门禁已拒绝显式凭证，导致 CLI 代理链路失败、直接 MCP 链路正常；仅删除客户端参数又会使尚未执行远端登录的 CLI 用户缺少服务端隔离凭证。
+**改动点**：正式 CLI Adapter 停止向 `seller_sprite_run` 和 Listing Analysis submit 透传 `session_id/jwt`；新增 MCP OPS 凭证绑定模块，远端模式始终忽略旧客户端显式凭证，按 API Key + Agent 隔离作用域复用有效 Session，缺失或过期时自动调用 `auth_mcp_login`，并以作用域级 single-flight 锁避免并发重复登录；stdio 模式继续兼容本机 `opscli auth login` 和内部显式运行时凭证；SellerSprite run/start/Listing submit/status/result 统一消费可信绑定；同步更新 Skill 与直连接口契约。
+**验证结果**：CLI Adapter、MCP 凭证绑定、SellerSprite 工具、任务调度/队列、认证中间件及多用户隔离整合回归通过，`82 passed`；完整 `tests/seller_sprite` 为 `116 passed, 2 failed`，两个失败均为 master 既有 `seller-sprite-debug` 顶层命令未注册，不属于本次改动；生产文件 `py_compile` 与 `git diff --check` 通过。
+**影响范围**：影响正式 `opscli seller-sprite` 代理链路、SellerSprite MCP 首次认证与旧客户端显式凭证兼容；不回退多用户隔离，不保存或使用远端调用方传入的敏感凭证。
+**回滚方式**：回退 SellerSprite RemoteAdapter、MCP OPS 凭证绑定模块、SellerSprite MCP 工具接入、对应测试、Skill/接口文档和本条记录。
+
+---
+
 ## 2026-07-10 asin-data/mcp - 合并 ASIN 实时取数服务到 master
 
 **变更原因**：用户需要把 ASIN 取数服务合并到 master，范围限定为 `asin-data` 实时取数、AI Ready 返回、MCP 取数工具、OSS xlsx 上传和服务端稳定性能力，避免把 release 分支中的 Rufus、Sif、西柚、Shopify 等无关改动带入 master。

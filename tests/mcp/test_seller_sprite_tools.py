@@ -2,12 +2,41 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
+from opscli.mcp import ops_credentials
 from opscli.mcp.tools import seller_sprite as seller_sprite_tools
 from opscli.mcp.server import _quota_wrap
 
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+@pytest.fixture(autouse=True)
+def _route_credential_test_seams(monkeypatch):
+    """让既有工具测试替身经统一凭证模块生效，且不读取真实本机凭证。"""
+    original_auth_pair = ops_credentials._get_auth_pair
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_auth_pair",
+        original_auth_pair,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ops_credentials,
+        "_get_auth_pair",
+        lambda system, session_id, jwt: seller_sprite_tools._get_auth_pair(
+            system,
+            session_id,
+            jwt,
+        ),
+    )
+    monkeypatch.setattr(
+        ops_credentials,
+        "_get_authenticated_user_email",
+        lambda: seller_sprite_tools._get_current_mcp_user_email(),
+    )
 
 
 class DummyManager:
@@ -956,16 +985,26 @@ def test_seller_sprite_run_creates_mcp_run_before_enqueue(monkeypatch, tmp_path)
     assert record["result_state"] == "queued"
 
 
-def test_seller_sprite_run_rejects_explicit_auth_from_mcp_caller(monkeypatch, tmp_path):
+def test_seller_sprite_run_ignores_legacy_explicit_auth_for_remote_mcp(monkeypatch, tmp_path):
+    from opscli.mcp import context as mcp_context
+    from opscli.mcp.ops_credentials import OpsCredentialBinding
+
     store = _make_store(tmp_path)
     _skip_wait_for_run(monkeypatch)
     monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
-    monkeypatch.setattr(
-        seller_sprite_tools,
-        "_get_auth_pair",
-        lambda system, session_id, jwt: (session_id, jwt),
-    )
-    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+
+    async def ensure_binding(*, provided_session, provided_jwt):
+        assert provided_session == "explicit-session"
+        assert provided_jwt == "explicit-jwt"
+        return OpsCredentialBinding(
+            credential_scope="isolated-user-scope",
+            user_email="mcp-user@example.com",
+            session_id="isolated-session",
+            jwt="isolated-jwt",
+        )
+
+    monkeypatch.setattr(seller_sprite_tools, "ensure_ops_credentials", ensure_binding)
+    monkeypatch.setattr(mcp_context, "get_current_api_key", lambda: "mcp-api-key")
     monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: store)
     DummyScheduler.enqueue_calls = 0
 
@@ -979,10 +1018,13 @@ def test_seller_sprite_run_rejects_explicit_auth_from_mcp_caller(monkeypatch, tm
         )
     )
 
-    assert result["success"] is False
-    assert "不接受显式 session_id/jwt" in result["error"]["message"]
-    assert DummyScheduler.enqueue_calls == 0
-    assert store.get_mcp_run("mcp-job-explicit-auth")["result_state"] == "failed"
+    assert result["success"] is True
+    assert DummyScheduler.enqueue_calls == 1
+    assert DummyScheduler.last_enqueue_kwargs == {
+        "credential_scope": "isolated-user-scope",
+        "expected_user_email": "mcp-user@example.com",
+    }
+    assert store.get_mcp_run("mcp-job-explicit-auth")["result_state"] == "queued"
 
 
 def test_seller_sprite_run_marks_mcp_run_failed_when_enqueue_raises(monkeypatch, tmp_path):

@@ -17,9 +17,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from opscli.mcp.ops_credentials import (
+    OpsCredentialBinding,
+    ensure_ops_credentials,
+)
 from opscli.mcp.quota import get_quota_limiter
 
-from .helpers import _err, _get_auth_pair, _get_credential_dir, _ok, _parse_json_arg
+from .helpers import _err, _ok, _parse_json_arg
 
 SELLER_SPRITE_RUN_POLL_INTERVAL_SECONDS = 5.0
 SELLER_SPRITE_RUN_RUNNING_TIMEOUT_SECONDS = 8 * 60
@@ -44,31 +48,19 @@ def _get_task_queue_store():
     return SellerSpriteTaskQueueStore()
 
 
-def _get_task_credential_scope() -> str:
-    """返回可持久化的非敏感凭证作用域引用。"""
-    credential_dir = _get_credential_dir()
-    return str(credential_dir) if credential_dir else "default"
-
-
 async def _enqueue_task_with_auth(
     scheduler: Any,
     request: Any,
     *,
-    runtime_auth_required: bool,
+    binding: OpsCredentialBinding,
 ) -> dict[str, Any]:
-    """仅用当前 MCP 用户的统一凭证作用域提交任务。"""
-    if runtime_auth_required:
-        raise ValueError(
-            "卖家精灵 MCP 异步任务不接受显式 session_id/jwt；"
-            "请使用当前 X-MCP-API-Key 对应的 OPS 授权凭证"
-        )
-    user_email = _get_current_mcp_user_email()
-    if not user_email:
-        raise ValueError("当前 MCP 用户邮箱缺失，无法安全提交卖家精灵任务")
+    """按可信凭证绑定提交任务，远端兼容参数不会进入任务运行时。"""
     kwargs: dict[str, Any] = {
-        "credential_scope": _get_task_credential_scope(),
-        "expected_user_email": user_email,
+        "credential_scope": binding.credential_scope,
+        "expected_user_email": binding.user_email,
     }
+    if binding.runtime_auth is not None:
+        kwargs["session_id"], kwargs["jwt"] = binding.runtime_auth
     return await scheduler.enqueue(request, **kwargs)
 
 
@@ -601,12 +593,17 @@ async def seller_sprite_run(
 ) -> dict:
     """执行卖家精灵场景并导出 XLS/JSON。
 
-    如果未提供 session_id / jwt，会自动尝试从当前 MCP 会话隔离凭证中加载。
+    HTTP/SSE 模式按 X-MCP-API-Key 自动确保隔离 OPS 凭证；旧客户端传入的
+    session_id / jwt 仅保留参数兼容并会被忽略。stdio 模式继续兼容本机凭证。
     """
-    sid, jw = _get_auth_pair("ops", session_id, jwt)
-    if not sid:
+    try:
+        binding = await ensure_ops_credentials(
+            provided_session=session_id,
+            provided_jwt=jwt,
+        )
+    except Exception as exc:
         return _err(
-            ValueError("无 session_id：请完成 OPS 授权，或传入有效的 session_id"),
+            exc,
             tool="MCP → seller_sprite_run(...)",
             call_params={
                 "scenario": scenario,
@@ -621,23 +618,7 @@ async def seller_sprite_run(
             },
         )
 
-    user_email = _get_current_mcp_user_email()
-    if not user_email:
-        return _err(
-            ValueError("当前 MCP 用户邮箱缺失，无法创建卖家精灵调用记录"),
-            tool="MCP → seller_sprite_run(...)",
-            call_params={
-                "scenario": scenario,
-                "site": site,
-                "period": period,
-                "page_size": page_size,
-                "export_format": export_format,
-                "page_prepare": page_prepare,
-                "task_interval_seconds": task_interval_seconds,
-                "cooldown_seconds": cooldown_seconds,
-                "job_id": job_id,
-            },
-        )
+    user_email = binding.user_email
 
     created_job_id: str | None = None
     mcp_run_created = False
@@ -666,7 +647,7 @@ async def seller_sprite_run(
         queued_status = await _enqueue_task_with_auth(
             scheduler,
             request,
-            runtime_auth_required=bool(session_id or jwt),
+            binding=binding,
         )
         return _ok(
             await _wait_for_seller_sprite_run_result(
@@ -717,10 +698,14 @@ async def seller_sprite_start(
     jwt: str | None = None,
 ) -> dict:
     """创建卖家精灵异步任务并立即返回 job_id。"""
-    sid, jw = _get_auth_pair("ops", session_id, jwt)
-    if not sid:
+    try:
+        binding = await ensure_ops_credentials(
+            provided_session=session_id,
+            provided_jwt=jwt,
+        )
+    except Exception as exc:
         return _err(
-            ValueError("无 session_id：请完成 OPS 授权，或传入有效的 session_id"),
+            exc,
             tool="MCP → seller_sprite_start(...)",
             call_params={
                 "scenario": scenario,
@@ -751,7 +736,7 @@ async def seller_sprite_start(
             await _enqueue_task_with_auth(
                 scheduler,
                 request,
-                runtime_auth_required=bool(session_id or jwt),
+                binding=binding,
             )
         )
     except Exception as exc:
@@ -783,20 +768,18 @@ async def seller_sprite_listing_analysis_submit(
     jwt: str | None = None,
 ) -> dict:
     """提交 Listing Analysis AI 任务并立即返回本地 job_id。"""
-    sid, jw = _get_auth_pair("ops", session_id, jwt)
-    if not sid:
+    try:
+        binding = await ensure_ops_credentials(
+            provided_session=session_id,
+            provided_jwt=jwt,
+        )
+    except Exception as exc:
         return _err(
-            ValueError("无 session_id：请完成 OPS 授权，或传入有效的 session_id"),
+            exc,
             tool="MCP → seller_sprite_listing_analysis_submit(...)",
             call_params={"asin": asin, "station": station, "site": site, "job_id": job_id},
         )
-    user_email = _get_current_mcp_user_email()
-    if not user_email:
-        return _err(
-            ValueError("当前 MCP 用户邮箱缺失，无法创建卖家精灵调用记录"),
-            tool="MCP → seller_sprite_listing_analysis_submit(...)",
-            call_params={"asin": asin, "station": station, "site": site, "job_id": job_id},
-        )
+    user_email = binding.user_email
 
     parsed_asin = str(asin or "").strip().upper()
     parsed_station = str(station or "GLOBAL").strip().upper()
@@ -833,7 +816,7 @@ async def seller_sprite_listing_analysis_submit(
             await _enqueue_task_with_auth(
                 scheduler,
                 request,
-                runtime_auth_required=bool(session_id or jwt),
+                binding=binding,
             )
         )
     except Exception as exc:
@@ -860,7 +843,11 @@ async def seller_sprite_listing_analysis_status(
     """读取 Listing Analysis 本地提交状态，并在可用时续查远端任务状态。"""
     try:
         owner_record = _ensure_listing_analysis_job_owner(job_id)
-        sid, jw = _get_auth_pair("ops", session_id, jwt)
+        binding = await ensure_ops_credentials(
+            provided_session=session_id,
+            provided_jwt=jwt,
+        )
+        sid, jw = binding.session_id, binding.jwt
         status = dict(_get_task_scheduler().job_status(job_id))
         task_id = _extract_listing_analysis_task_id(status)
         asin = _extract_listing_analysis_asin(status, owner_record)
@@ -891,7 +878,11 @@ async def seller_sprite_listing_analysis_result(
     """读取 Listing Analysis 远端任务结果；未完成时返回 ready=false。"""
     try:
         owner_record = _ensure_listing_analysis_job_owner(job_id)
-        sid, jw = _get_auth_pair("ops", session_id, jwt)
+        binding = await ensure_ops_credentials(
+            provided_session=session_id,
+            provided_jwt=jwt,
+        )
+        sid, jw = binding.session_id, binding.jwt
         status = dict(_get_task_scheduler().job_status(job_id))
         task_id = _extract_listing_analysis_task_id(status)
         asin = _extract_listing_analysis_asin(status, owner_record)

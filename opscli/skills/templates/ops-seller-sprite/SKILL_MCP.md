@@ -21,7 +21,7 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 
 ## 执行规则
 
-1. 如果当前宿主是通过远端 MCP `api_key` 直接连接 `seller_sprite_*` tools，首次执行前必须先完成 `auth_mcp_login`；不要在仅拿到 `api_key` 后直接调用 `seller_sprite_run`。
+1. SellerSprite Tool 会根据远端 MCP `api_key` 自动确保隔离 OPS 登录态；需要提前诊断认证时可显式调用一次 `auth_mcp_login`，但不要向业务 Tool 传 `session_id/jwt`。
 2. 拿不准场景或必填参数时，先调 `seller_sprite_scenarios` 或先回看参数手册。
 3. 普通场景真正执行只用 `seller_sprite_run`；不要调用内部 start helper。
 4. `listing-analysis` 必须走三段式：先 `seller_sprite_listing_analysis_submit`，等待约 3 分钟，再用 `seller_sprite_listing_analysis_status` / `seller_sprite_listing_analysis_result` 续查；后端会通过 `task/history` 获取真实报告 `taskId` 后再进入报告页，不要让 `seller_sprite_run` 同步阻塞等待 `listing-analysis` 完整结果。
@@ -37,8 +37,9 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 
 ## 认证与运行时边界
 
-- 远端 MCP 直连场景下，OPS `session_id` 由 `auth_mcp_login` 建立并保存在当前 MCP 用户的隔离凭证里；不要把“已拿到 MCP `api_key`”误当成“已经具备 `seller_sprite_run` 所需的 OPS 登录态”。
-- 正式 `opscli seller-sprite ...` CLI 代理链路不属于本文件的默认语境；如果宿主走的是 CLI 代理链路，可由 CLI 显式透传本机 `session_id`，因此不要求先单独执行 `auth_mcp_login`。
+- 远端 MCP 直连场景下，SellerSprite Tool 会在缺失或过期时调用一步登录，并把 OPS `session_id` 保存在当前 MCP 用户的隔离凭证里。
+- 旧客户端显式传入的 `session_id/jwt` 仅用于版本过渡，远端服务会忽略这些值并继续使用当前 API Key 的隔离凭证。
+- 正式 `opscli seller-sprite ...` CLI 代理链路不再透传本机 `session_id/jwt`，本机登录只用于取得当前用户的远端 MCP 配置。
 - SellerSprite 登录态由后端缓存；不要手动重复登录。
 - 集成账号也由后端缓存；只有 SellerSprite 登录本身失败时，才需要后端刷新账号或登录态。
 - 浏览器运行时由部署侧决定；Agent 不负责切换 Patchright / Playwright / Chrome。

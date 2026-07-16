@@ -5,7 +5,10 @@ from opscli.seller_sprite.remote_adapter import SellerSpriteRemoteAdapter
 
 
 class FakeAuthClient:
+    calls = 0
+
     def get_session(self, alias: str | None = None) -> str:
+        type(self).calls += 1
         assert alias == "ops"
         return "sid-cli-123"
 
@@ -80,7 +83,8 @@ def test_remote_adapter_maps_run_to_seller_sprite_run():
     assert result["data"]["arguments"]["params"] == {"asin": "B07YRMT36L"}
     assert result["data"]["arguments"]["page_size"] == 100
     assert result["data"]["arguments"]["export_format"] == "json"
-    assert result["data"]["arguments"]["session_id"] == "sid-cli-123"
+    assert "session_id" not in result["data"]["arguments"]
+    assert "jwt" not in result["data"]["arguments"]
     assert created_clients[0].calls == [
         (
             "seller_sprite_run",
@@ -91,7 +95,6 @@ def test_remote_adapter_maps_run_to_seller_sprite_run():
                 "params": {"asin": "B07YRMT36L"},
                 "page_size": 100,
                 "export_format": "json",
-                "session_id": "sid-cli-123",
             },
         )
     ]
@@ -99,6 +102,32 @@ def test_remote_adapter_maps_run_to_seller_sprite_run():
         ("fetch_remote_config",),
         ("select_server", {"data": {}}, "http", "BI运营系统"),
     ]
+
+
+def test_remote_adapter_keeps_legacy_auth_client_constructor_without_using_it():
+    auth_client = FakeAuthClient()
+    FakeAuthClient.calls = 0
+
+    adapter = SellerSpriteRemoteAdapter(
+        config_client=FakeConfigClient(),
+        remote_client_factory=FakeRemoteClient,
+        auth_client=auth_client,
+    )
+    result = adapter.run(
+        scenario="traffic-source",
+        site="US",
+        period="30d",
+        params={"asin": "B086YD9Z2X"},
+        page_size=20,
+        export_format="json",
+        output_dir=None,
+        job_id=None,
+    )
+
+    assert result["success"] is True
+    assert FakeAuthClient.calls == 0
+    assert "session_id" not in result["data"]["arguments"]
+    assert "jwt" not in result["data"]["arguments"]
 
 
 def test_remote_adapter_maps_listing_analysis_tools():
@@ -128,7 +157,8 @@ def test_remote_adapter_maps_listing_analysis_tools():
 
     assert submit["data"]["tool"] == "seller_sprite_listing_analysis_submit"
     assert submit["data"]["arguments"]["asin"] == "B0TEST123"
-    assert submit["data"]["arguments"]["session_id"] == "sid-cli-123"
+    assert "session_id" not in submit["data"]["arguments"]
+    assert "jwt" not in submit["data"]["arguments"]
     assert status["data"]["tool"] == "seller_sprite_listing_analysis_status"
     assert result["data"]["tool"] == "seller_sprite_listing_analysis_result"
 
@@ -200,7 +230,6 @@ def test_remote_adapter_preserves_explicit_output_dir_and_job_id():
                 "export_format": "xlsx",
                 "output_dir": "D:/exports",
                 "job_id": "job-keep-1",
-                "session_id": "sid-cli-123",
             },
         )
     ]
