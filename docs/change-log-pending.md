@@ -11,6 +11,48 @@
 **回滚方式**：`git revert` 本次对 `credential_store.py` 与 `test_credential_cache.py` 的提交即可，无数据迁移需回退。
 ---
 
+## 2026-07-16 skills/ops-dataset-query - 全量覆盖第四轮：执行状态、时间解析与 plan 强绑定
+
+**变更原因**：合同审计发现默认时间和系统推荐字段未确认时仍返回 planned；平台枚举未收敛时会提前给出 query_template；`run_query.py` 可接受任意 tableId/字段和空规划上下文；时间解析不覆盖绝对范围、季度和年份；执行器异常提示还鼓励绕过直连。
+**改动点**：
+1. `query_plan.py`：默认时间或推荐字段待确认时改为 `clarify_required`，输出 `pending_confirmations_zh`；只有内部下一步已为 `construct_query` 才生成 `query_template`，权限枚举中间态不再提前下发执行模板。
+2. `time_scope.py`：新增绝对日期范围、指定季度、本/上季度、指定年份、本年/去年解析，均输出 Asia/Shanghai 的确定性绝对日期。
+3. `run_query.py`：正式入口强制 `--plan-file`/`--plan-json`；校验 plan 合同与 planned 状态、CLI/payload/plan 三方 tableId、维度/指标/筛选/对比字段授权集合及 query_template 是否已下发；仅保留隐藏的测试维护开关；异常提示删除绕过执行器直连建议。
+4. Skill 文档、CLI 参考、Schema 与测试将同步到新合同。
+**验证结果**：本轮相关回归 51/51 PASS；真实快照 35/35 业务数据集在“明确字段+明确时间”时 planned 且有模板、35/35 默认时间进入 clarify 且无模板、35/35 仅推荐字段进入 clarify 且无模板；35/35 澄清合同通过严格 Schema；真实规划器合同可通过 plan 绑定，注入未授权字段会被拒绝；最终复跑 1,648/1,648 单字段和 73/73 个 32 字段批次全部 planned 且模板完整。`tests/skills` 扩大回归为 148 passed、6 failed，6 项均为仓库既有的版本旧断言、缺失其他 Skill 模板/资产或其他 Skill manifest/frontmatter 问题，与本轮文件无交叉。
+**影响范围**：ops-dataset-query 规划状态、时间口径、正式执行入口和文档；不修改 CSV/JSON 元数据，不新增索引。
+**回滚方式**：回退本轮脚本、Schema、Skill/参考文档、测试与本记录。
+
+---
+
+## 2026-07-16 skills/ops-dataset-query - 全量覆盖第三轮：身份 span、自然语义与组件兜底
+
+**变更原因**：第一轮批测发现 `VC报告【Manufacturing】` 的名称内 `VC` 被误当平台筛选；Walmart/Wayfair 完整字段标签导致自然字段查询错误 blocked；中文连续文本会因命中一个规则词而整段删除；空部门组件虽被 21 条关系引用却因自身无字段硬失败；两个同名候选卡片无法区分。
+**改动点**：
+1. `agent_query_planner.py`：精确命中数据集后，槽位抽取先遮蔽该候选的数据集身份和完整字段标签；中文残差改为只扣除已命中子串而非删除整段；无 domain/slot 时允许仅凭现有卡片 description/字段 CSV 做唯一高置信残差选表，分差不足仍澄清。
+2. `dataset_guidance.py`：仅对空 `query_component` 从现有 `dataset_select_columns.csv` 入站关系内存派生维度字段；普通空业务表仍硬失败。
+3. `query_plan.py` 与 Schema：同名候选卡片增加由现有字段 CSV 即时统计的维度数、指标数和代表字段摘要。
+4. 测试新增 VC/Walmart span、连续中文残差、空组件关系派生与同名候选区分用例。
+**验证结果**：本轮聚焦回归 43/43 PASS；真实快照 35/35 业务数据集中文完整说明按预期定表（唯一说明 planned、同名说明 clarify）；8/8 查询组件均可产出 `permission_enum_only` 指导，含原无字段部门组件；1,648 个业务字段自然中文矩阵为 1,646 个正确 planned + 2 个同标签 SPU 安全 clarify，错误静默绑定为 0；Walmart/Wayfair 字段不再触发平台 blocked；35 个去通用后缀的非精确短语中 21 个唯一直达，其余为业务上确有歧义或证据不足，未发现越权定表。
+**影响范围**：ops-dataset-query 选表、组件指导、候选投影及对应测试；只读取现有 CSV/JSON，不写回元数据、不新增索引。
+**回滚方式**：回退本条涉及的三个脚本、Schema、两个测试文件并删除本记录。
+
+---
+
+## 2026-07-16 skills/ops-dataset-query - 全量覆盖第二轮：字段身份、作用域与合同容量修复
+
+**变更原因**：基于现有 ready CSV/JSON 快照对 43 个数据集、1,677 个唯一字段进行批测，发现业务字段精确绑定仅 1,646/1,648；`SPU/spu` 被 casefold 合并、跨表标签污染 59/70、16～32 字段批次全部无法完整覆盖，且严格 JSON Schema 未声明已经输出的默认条件字段。
+**改动点**：
+1. `dataset_guidance.py`：字段点名改为“NFKC 大小写敏感技术名 → 大小写敏感展示名 → casefold 技术名 → casefold 展示名”四级解析；点名字段存在时减少无关 fallback；合同上限由 6,000 调至 16,000 字节以承载公开的最多 32 个显式字段。
+2. `query_plan.py`：授权标签仅从已选数据集加载并携带完整字段执行身份；显式字段按 `field_name` 去重且不参与展示标签包含吞并；跨维度/指标吞并也不得删除显式指标；模型合同上限由 12,000 调至 24,000 字节。
+3. `query_plan.schema.json`：补充 `model_view.default_filters_zh` 与 `execution_ref.default_filters` 的严格定义，消除运行时合同与 Schema 漂移。
+4. 测试新增 SPU/spu、VCPM 优先级、跨表标签隔离、显式字段身份保留和默认条件 Schema 校验。
+**验证结果**：聚焦回归 `pytest -q tests/skills/test_scoped_reader_duplicate_fields.py tests/skills/test_dataset_query_planner.py` 为 37/37 PASS；真实 ready 快照业务字段单字段精确绑定 1,648/1,648；分块矩阵 1/2/4/8/16/32 字段分别为 1,648/1,648、832/832、426/426、224/224、122/122、73/73 全部完整通过；35/35 业务数据集输出通过 Draft 2020-12 严格 Schema；70/70 跨表字段探针无外部标签进入 model_view，且 model_view 字段均可投影到 execution_ref。
+**影响范围**：仅 ops-dataset-query 模板规划器、严格输出 Schema 与对应测试；不新增或生成任何索引文件，不改现有 CSV/JSON 元数据内容。
+**回滚方式**：回退上述三个模板文件与两个测试文件，并删除本条变更记录。
+
+---
+
 ## 2026-07-15 skills/run_query - 默认条件改为只披露不预注入，服务端权威注入
 
 **变更原因**：`_apply_default_filters` 原先会把默认条件预注入进 `payload["filters"]` 再发送给服务端。对日期预设值（如 `beforeYesterday`/`thisQuarter`），客户端注入的是字面量字符串，服务端收到后同时注入自己解析后的真实日期，两者 AND 合并导致字面量永不匹配日期列，致使配置了日期默认条件的数据集经 Skill 查询恒返回 0 行（QA 实证）。服务端是默认条件注入的唯一权威方（评审结论 5），客户端预注入是冗余且有害的。

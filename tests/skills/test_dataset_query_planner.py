@@ -6,6 +6,8 @@ import json
 import sys
 from pathlib import Path
 
+import jsonschema
+
 
 SKILL_ROOT = (
     Path(__file__).parents[2]
@@ -107,7 +109,7 @@ def test_query_plan_selects_acos_with_formula_policy(tmp_path: Path):
 
     cards = scoped_metadata_index.build_cards(data_dir)
     result = query_plan.build_model_query_plan(
-        "SP 广告数据集 ACOS",
+        "SP 广告数据集 近7天 ACOS",
         data_dir=data_dir,
         rules_path=RULES_PATH,
     )
@@ -132,7 +134,7 @@ def test_snapshot_metric_gets_snapshot_aggregation_policy(tmp_path: Path):
     _write_ready_metadata(data_dir)
 
     result = query_plan.build_model_query_plan(
-        "库存快照数据集 库存量",
+        "库存快照数据集 近7天 库存量",
         data_dir=data_dir,
         rules_path=RULES_PATH,
     )
@@ -184,7 +186,7 @@ def test_published_bundle_version_shape_is_ready(tmp_path: Path):
     )
 
     result = query_plan.build_model_query_plan(
-        "SP 广告数据集 ACOS",
+        "SP 广告数据集 近7天 ACOS",
         data_dir=data_dir,
         rules_path=RULES_PATH,
         auto_upgrade=False,
@@ -205,7 +207,7 @@ def test_placeholder_blocked_contract_carries_recovery_command(tmp_path: Path):
     )
 
     result = query_plan.build_model_query_plan(
-        "SP 广告数据集 ACOS",
+        "SP 广告数据集 近7天 ACOS",
         data_dir=data_dir,
         rules_path=RULES_PATH,
         auto_upgrade=False,
@@ -231,7 +233,7 @@ def test_empty_bundle_without_data_state_stays_blocked(tmp_path: Path):
         (data_dir / name).write_text(header + "\n", encoding="utf-8")
 
     result = query_plan.build_model_query_plan(
-        "SP 广告数据集 ACOS",
+        "SP 广告数据集 近7天 ACOS",
         data_dir=data_dir,
         rules_path=RULES_PATH,
         auto_upgrade=False,
@@ -263,7 +265,7 @@ def test_fallback_data_dir_takes_over_readonly_mount(tmp_path: Path, monkeypatch
     monkeypatch.setattr(query_plan, "_try_metadata_upgrade", _must_not_upgrade)
 
     result = query_plan.build_model_query_plan(
-        "SP 广告数据集 ACOS",
+        "SP 广告数据集 近7天 ACOS",
         data_dir=primary,
         rules_path=RULES_PATH,
         auto_enum=False,
@@ -296,7 +298,7 @@ def test_auto_upgrade_completed_within_grace_continues_planning(tmp_path: Path, 
     monkeypatch.setattr(query_plan, "_try_metadata_upgrade", fake_upgrade)
 
     result = query_plan.build_model_query_plan(
-        "SP 广告数据集 ACOS",
+        "SP 广告数据集 近7天 ACOS",
         data_dir=data_dir,
         rules_path=RULES_PATH,
     )
@@ -372,7 +374,7 @@ def test_platform_enum_component_with_normal_category_is_usable(tmp_path: Path):
     )
 
     result = query_plan.build_model_query_plan(
-        "SP 广告数据集 ACOS 只看亚马逊SC",
+        "SP 广告数据集 近7天 ACOS 只看亚马逊SC",
         data_dir=data_dir,
         rules_path=RULES_PATH,
         auto_upgrade=False,
@@ -456,7 +458,9 @@ def test_recommended_fields_when_nothing_named(tmp_path: Path):
         auto_enum=False,
     )
 
-    assert result["status"] == "planned"
+    assert result["status"] == "clarify_required"
+    assert result["model_view"]["pending_confirmations_zh"]
+    assert "query_template" not in result["execution_ref"]
     assert result["model_view"]["recommended_metrics"]
     recommended = [
         item
@@ -481,7 +485,8 @@ def test_clarify_contract_carries_candidate_cards(tmp_path: Path):
         "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
         "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
         "52,ds_share_a,用户仪表盘分享明细,use_count,使用次数,f_uc_a,metric,,,,,0,0\n"
-        "61,ds_share_b,用户仪表盘分享明细,use_count,使用次数,f_uc_b,metric,,,,,0,0\n",
+        "52,ds_share_a,用户仪表盘分享明细,share_user,分享用户,f_su_a,dimension,,,,,0,0\n"
+        "61,ds_share_b,用户仪表盘分享明细,view_count,查看次数,f_vc_b,metric,,,,,0,0\n",
         encoding="utf-8",
     )
 
@@ -497,6 +502,114 @@ def test_clarify_contract_carries_candidate_cards(tmp_path: Path):
     cards = result["model_view"]["dataset_candidates_zh"]
     assert len(cards) == 2
     assert all(card["name_zh"] and card["reason_zh"] for card in cards)
+    assert len({card["summary_zh"] for card in cards}) == 2
+
+
+def test_exact_dataset_identity_does_not_become_platform_filter(tmp_path: Path):
+    """数据集名和完整字段标签里的 VC/Walmart 不得变成额外平台筛选。"""
+    data_dir = tmp_path / "data"
+    _write_ready_metadata(data_dir)
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "1,ds_ads,vc_report_set,normal,0,VC报告【Manufacturing】,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "1,ds_ads,vc_report_set,wmt_stock,Walmart可售库存,f_wmt,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n",
+        encoding="utf-8",
+    )
+    by_name = query_plan.build_model_query_plan(
+        "查询VC报告【Manufacturing】最近7天",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+    by_field = query_plan.build_model_query_plan(
+        "查询 ds_ads 最近7天，字段Walmart可售库存",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+    assert by_name["status"] == "clarify_required"
+    assert by_name["model_view"]["platform_filter_state"] == "not_requested"
+    assert by_field["status"] == "planned"
+    assert "Walmart可售库存" in by_field["model_view"]["metrics"]
+
+
+def test_continuous_chinese_residual_selects_unique_dataset(tmp_path: Path):
+    """“查即时销售额”扣除指标词后保留“即时”，可唯一命中即时综合表。"""
+    data_dir = tmp_path / "data"
+    _write_ready_metadata(data_dir)
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "1,ds_ads,广告数据集,normal,0,即时综合数据集,\n"
+        "2,ds_inv,库存数据集,normal,0,库存快照数据集,\n",
+        encoding="utf-8",
+    )
+    result = query_plan.build_model_query_plan(
+        "查即时销售额",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+    assert result["status"] == "clarify_required"
+    assert result["model_view"]["dataset_name_zh"] == "即时综合数据集"
+
+
+def test_natural_duplicate_label_requires_clarification(tmp_path: Path):
+    """同中文标签的不同物理字段不得静默绑定第一项；技术 --field 仍可区分。"""
+    data_dir = tmp_path / "data"
+    _write_ready_metadata(data_dir)
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "1,ds_ads,广告数据集,SPU,SPU,f_spu_a,dimension,,,,,0,0\n"
+        "1,ds_ads,广告数据集,spu,SPU,f_spu_b,dimension,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    natural = query_plan.build_model_query_plan(
+        "查询 ds_ads 字段SPU 最近7天",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+    exact = query_plan.build_model_query_plan(
+        "查询 ds_ads 最近7天",
+        requested_fields=["spu"],
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+    assert natural["status"] == "clarify_required"
+    assert natural["model_view"]["ambiguous_field_labels_zh"] == ["SPU"]
+    assert exact["status"] == "planned"
+    assert exact["execution_ref"]["dimensions"][0]["field_name"] == "spu"
+
+
+def test_explicit_dataset_still_enforces_external_domain_constraints(tmp_path: Path):
+    """alias 精确定表不等于允许忽略名称外明确提出的不兼容业务域。"""
+    data_dir = tmp_path / "data"
+    _write_ready_metadata(data_dir)
+    result = query_plan.build_model_query_plan(
+        "查询 ds_ads 近7天的库存量",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+    assert result["status"] == "clarify_required"
+    assert "dataset_constraints" in result["model_view"]["clarification_reason_codes"]
 
 
 def test_unknown_field_gets_similar_suggestions(tmp_path: Path):
@@ -550,7 +663,7 @@ def test_auto_enum_resolves_platform_in_single_call(tmp_path: Path, monkeypatch)
     )
 
     result = query_plan.build_model_query_plan(
-        "SP 广告数据集 ACOS 只看亚马逊SC",
+        "SP 广告数据集 近7天 ACOS 只看亚马逊SC",
         data_dir=data_dir,
         rules_path=RULES_PATH,
         auto_upgrade=False,
@@ -597,6 +710,22 @@ def test_time_scope_default_is_disclosed():
     assert (scope["start"], scope["end"]) == ("2026-06-14", "2026-07-13")
 
 
+def test_time_scope_absolute_range_quarter_and_year():
+    """绝对范围、自然季度和自然年必须确定性解析，不回退近30天。"""
+    from datetime import date
+
+    absolute = time_scope.parse("查询2026-07-01至2026-07-15销售额", today=date(2026, 7, 16))
+    quarter = time_scope.parse("复盘2026Q2广告费", today=date(2026, 7, 16))
+    last_quarter = time_scope.parse("上季度库存", today=date(2026, 7, 16))
+    year = time_scope.parse("2025年全年销售", today=date(2026, 7, 16))
+    assert (absolute["start"], absolute["end"], absolute["is_default"]) == (
+        "2026-07-01", "2026-07-15", False,
+    )
+    assert (quarter["start"], quarter["end"]) == ("2026-04-01", "2026-06-30")
+    assert (last_quarter["start"], last_quarter["end"]) == ("2026-04-01", "2026-06-30")
+    assert (year["start"], year["end"]) == ("2025-01-01", "2025-12-31")
+
+
 # ---------------------------------------------------------------------------
 # run_query 执行器（P0-4）
 # ---------------------------------------------------------------------------
@@ -619,7 +748,9 @@ def test_run_query_rejects_comparison_without_main_period(capsys):
             "dataComparison": {"field": "date_id", "startDate": "2026-06-30", "endDate": "2026-07-06"},
         }
     )
-    exit_code = run_query.main(["--table-id", "2", "--json", payload])
+    exit_code = run_query.main(
+        ["--table-id", "2", "--json", payload, "--unsafe-unbound-plan"]
+    )
     out = json.loads(capsys.readouterr().out.strip())
     assert exit_code == 2
     assert out["status"] == "precheck_failed"
@@ -629,11 +760,55 @@ def test_run_query_rejects_comparison_without_main_period(capsys):
 def test_run_query_rejects_leftover_placeholders(capsys):
     """占位符未替换必须阻断执行（执行前检查第5条代码化）。"""
     payload = json.dumps({"metrics": [{"field": "$AUTHORIZED_METRIC", "alias": "m"}]})
-    exit_code = run_query.main(["--table-id", "2", "--json", payload])
+    exit_code = run_query.main(
+        ["--table-id", "2", "--json", payload, "--unsafe-unbound-plan"]
+    )
     out = json.loads(capsys.readouterr().out.strip())
     assert exit_code == 2
     assert out["status"] == "precheck_failed"
     assert "占位符" in out["next_action_zh"]
+
+
+def test_run_query_requires_plan_binding(capsys):
+    """正式执行缺少规划器合同必须在调用 opscli 前阻断。"""
+    payload = json.dumps({"metrics": [{"field": "price", "alias": "price"}]})
+    exit_code = run_query.main(["--table-id", "2", "--json", payload])
+    out = json.loads(capsys.readouterr().out.strip())
+    assert exit_code == 2
+    assert out["status"] == "precheck_failed"
+    assert "规划器绑定" in out["next_action_zh"]
+
+
+def test_run_query_rejects_table_and_field_outside_plan(capsys):
+    """tableId 或字段超出 execution_ref 时必须硬拒绝。"""
+    plan = {
+        "contract": "query_plan_model_contract_v2",
+        "status": "planned",
+        "execution_ref": {
+            "table_id": "2",
+            "dimensions": [{"field_name": "country"}],
+            "metrics": [{"field_name": "price"}],
+            "date_fields": [{"field_name": "date_id"}],
+            "query_template": {},
+        },
+    }
+    bad_table = run_query.main(
+        [
+            "--table-id", "3", "--json", json.dumps({"metrics": []}),
+            "--plan-json", json.dumps(plan),
+        ]
+    )
+    table_out = json.loads(capsys.readouterr().out.strip())
+    bad_field = run_query.main(
+        [
+            "--table-id", "2",
+            "--json", json.dumps({"metrics": [{"field": "secret_metric"}]}),
+            "--plan-json", json.dumps(plan),
+        ]
+    )
+    field_out = json.loads(capsys.readouterr().out.strip())
+    assert bad_table == 2 and "不一致" in table_out["next_action_zh"]
+    assert bad_field == 2 and "未授权字段" in field_out["next_action_zh"]
 
 
 def test_run_query_order_fallback_requeries_and_resorts(tmp_path: Path, monkeypatch, capsys):
@@ -668,7 +843,7 @@ def test_run_query_order_fallback_requeries_and_resorts(tmp_path: Path, monkeypa
         }
     )
     exit_code = run_query.main(
-        ["--table-id", "2", "--json", payload, "--result-dir", str(tmp_path), "--no-evidence"]
+        ["--table-id", "2", "--json", payload, "--result-dir", str(tmp_path), "--no-evidence", "--unsafe-unbound-plan"]
     )
     out = json.loads(capsys.readouterr().out.strip())
 
@@ -697,8 +872,24 @@ def test_run_query_ok_path_discloses_effective_order(tmp_path: Path, monkeypatch
             "limit": 5,
         }
     )
+    plan = json.dumps(
+        {
+            "contract": "query_plan_model_contract_v2",
+            "status": "planned",
+            "execution_ref": {
+                "table_id": "2",
+                "dimensions": [],
+                "metrics": [{"field_name": "price"}],
+                "query_template": {},
+            },
+        }
+    )
     exit_code = run_query.main(
-        ["--table-id", "2", "--json", payload, "--result-dir", str(tmp_path), "--no-evidence"]
+        [
+            "--table-id", "2", "--json", payload,
+            "--plan-json", plan,
+            "--result-dir", str(tmp_path), "--no-evidence",
+        ]
     )
     out = json.loads(capsys.readouterr().out.strip())
 
@@ -719,7 +910,7 @@ def test_query_plan_projects_default_filters(tmp_path: Path):
     _write_ready_metadata_with_filter_config(data_dir)  # 新 fixture：ds_ads 的 date_type 配 required QUARTER
 
     result = query_plan.build_model_query_plan(
-        "SP 广告数据集 ACOS",
+        "SP 广告数据集 近7天 ACOS",
         data_dir=data_dir,
         rules_path=RULES_PATH,
     )
@@ -759,3 +950,63 @@ def test_query_plan_no_default_filters_key_when_unconfigured(tmp_path: Path):
         "默认条件" in text
         for text in result["answer_contract"]["required_disclosures_zh"]
     )
+
+
+def test_model_contract_schema_accepts_projected_default_filters(tmp_path: Path):
+    """严格 Schema 必须覆盖规划器已投影的默认条件两处字段。"""
+    data_dir = tmp_path / "data"
+    _write_ready_metadata_with_filter_config(data_dir)
+    result = query_plan.build_model_query_plan(
+        "SP 广告数据集 ACOS",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_enum=False,
+    )
+    schema = json.loads((SKILL_ROOT / "data" / "query_plan.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(result)
+
+
+def test_authorized_query_labels_are_scoped_to_selected_dataset(tmp_path: Path):
+    """外部数据集字段标签不得污染当前表，更不能产生无 field_name 的假执行字段。"""
+    data_dir = tmp_path / "data"
+    _write_ready_metadata(data_dir)
+    (data_dir / "dataset_fields.csv").write_text(
+        (data_dir / "dataset_fields.csv").read_text(encoding="utf-8")
+        + "2,ds_inv,库存数据集,days_sold,已售天数,f_days_sold,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    result = query_plan.build_model_query_plan(
+        "SP 广告数据集 已售天数",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+    assert "已售天数" not in result["model_view"]["metrics"]
+    assert all(
+        item.get("field_name") != "days_sold"
+        for item in result["execution_ref"].get("metrics", [])
+    )
+
+
+def test_explicit_fields_survive_label_dedup_and_containment():
+    """显式物理字段不因同标签或长短标签包含关系从 execution_ref 消失。"""
+    fields = [
+        {"field_name": "sales", "verbose_name": "销售额", "selection_source": "explicit"},
+        {
+            "field_name": "ad_sales",
+            "verbose_name": "广告销售额",
+            "selection_source": "explicit",
+        },
+        {
+            "field_name": "sales_copy",
+            "verbose_name": "销售额",
+            "selection_source": "explicit",
+        },
+    ]
+    selected = query_plan._longest_unique_labels(fields)
+    assert [item["field_name"] for item in selected] == [
+        "sales",
+        "ad_sales",
+        "sales_copy",
+    ]

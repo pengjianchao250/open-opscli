@@ -8,7 +8,7 @@ description: >
   规划器按 30 秒命令窗口设计，返回 refresh_in_progress 时按其 recovery_command
   等待重跑即可，禁止自行升级）；禁止绕过规划器直接扫描 data/ 目录、
   读脚本源码或凭记忆手拼查询参数。
-version: 1.3.6
+version: 1.3.7
 ---
 
 # ops-dataset-query
@@ -33,7 +33,7 @@ version: 1.3.6
 读完本文件后直接运行规划器；除「把枚举值回传取得终版规划结果」这一种情况外，每个规划阶段最多运行一次。不要预读 `data/VERSION.json`，不要列目录，不要检查脚本源码，不要扫描 `data/`、`scripts/` 或 `references/`；规划器已完成版本、选表、字段、公式、时间口径和权限合同检查。
 
 ```bash
-python3 scripts/query_plan.py "$USER_REQUEST"
+python3 scripts/query_plan.py "$USER_REQUEST" > "$PLAN_FILE"
 ```
 
 **命令窗口与等待（30 秒窗口设计）**：平台单条命令的有效等待上限约 30 秒（自行设置更大超时无效）。规划器内部已按此窗口设计——任意单次调用确定性返回：数据就绪时（常态）1~3 秒；需要刷新元数据时前台最多等 8 秒，未完成则**转后台续跑**并返回 `status=blocked, recovery_state=refresh_in_progress`，此时**直接执行其 `recovery_command`**（形如 `sleep 25 && python3 scripts/query_plan.py "<原文>"`，等待与重跑合并为一条命令）；连续 3 次仍未就绪才提交反馈并停止。禁止自行执行任何升级动作、禁止因等待改走旁路探查。若命令仍偶发窗口超时：原样重跑一次即可（规划器幂等）。
@@ -41,11 +41,11 @@ python3 scripts/query_plan.py "$USER_REQUEST"
 用户请求含引号等特殊字符时改用 `--query-file <文件|->`（stdin）。用户明确指定字段时追加重复的 `--field "$FIELD"`。只处理默认 `model_view`、`answer_contract` 和 `execution_ref`；不得读取内部合同补充回答：
 
 1. `data_state` 不是 `ready`：规划器已内置一次自动升级兜底；若仍返回 `status=blocked`，按规划结果中 `model_view.recovery_command`（即 `opscli skills upgrade ops-dataset-query`）执行后从头开始，刷新仍失败则向用户说明元数据异常并停止，不反复重试。登录或账号变更、元数据所有权不明或数据状态不匹配时也必须刷新或升级；客户端不推断账号身份。
-2. `status=clarify_required`：按 `clarification_messages_zh` 提问；规划结果给出 `dataset_candidates_zh`（候选卡片）或 `field_suggestions_zh`（近似字段建议）时，必须把它们作为选项呈现给用户点选，不问空泛问题；确认前停止。`blocked` 则按 `recovery_command`/阻断原因处置。
+2. `status=clarify_required`：按 `clarification_messages_zh` 提问；规划结果给出 `dataset_candidates_zh`（候选卡片）、`field_suggestions_zh`（近似字段建议）或 `pending_confirmations_zh` 时，必须把它们作为选项/口径呈现；确认后把明确口径写回用户请求并重新规划。`blocked` 则按 `recovery_command`/阻断原因处置。
 3. `model_view` 只含用户可见中文结论；最终回答必须覆盖 `answer_contract.required_disclosures_zh`，并遵守 `forbidden_outputs_zh`。
 4. **时间口径以规划结果为准**：`model_view.time_scope_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源（Asia/Shanghai），不自行心算日期；`is_default=true` 表示默认口径，必须向用户披露并确认后才可执行。
 5. `platform_semantic_members` 只表示请求语义：亚马逊包含 SC+VC，亚马逊 SC/SC 只含 SC，亚马逊 VC/VC 只含 VC。`platform_filter_state=requires_permission_enum` 时规划器默认已自动枚举并回灌（规划结果带 `platform_enum_source=auto_enum_service` 即已收敛）；仅当自动枚举未完成时，直接执行规划结果内嵌的 `execution_ref.platform_enum_command`，再把返回值作为重复的 `--authorized-platform-value` 传回规划器、取得终版规划结果。
-6. `execution_ref` 仅用于正式查询构造，禁止作为业务判断理由或向用户展示。`dimensions`/`metrics` 中 `selection_source=recommended` 的字段是系统推荐（用户未点名），采用前必须在确认摘要中说明来源。规划结果 ready 后立即进入构造；构造以 `execution_ref.query_template` 为基底填充，此阶段唯一允许读取的参考是 `references/simple-query-guide.md`（仅模板不能覆盖的特殊参数时），其余文档不再读取。
+6. `execution_ref` 仅用于正式查询构造，禁止作为业务判断理由或向用户展示。`dimensions`/`metrics` 中 `selection_source=recommended` 的字段是系统推荐（用户未点名），确认前规划器不会下发 `query_template`。只有 `status=planned` 且 `execution_ref.query_template` 存在时才能执行；构造以该模板为基底填充。
 
 `query_component` 只用于权限枚举，不是业务结果数据集。自然语言选表只依据当前账号元数据中的中文名称和中文说明；英文 key 仅在用户明确给出精确完整技术标识时精确匹配，不能从中文请求推断或模糊匹配。
 
@@ -62,16 +62,16 @@ python3 scripts/query_plan.py "$USER_REQUEST"
 5. CLI 执行只用一体化执行器（内含执行前校验、排序生效校验与兜底、截断披露和证据合同）：
 
 ```bash
-python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON"
+python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON" --plan-file "$PLAN_FILE"
 ```
 
    - 默认条件（filter_configs）：规划结果 model_view.default_filters_zh 存在时，
      必须在回答中向用户披露这些默认条件；执行时把 execution_ref.default_filters
      原样作为 --default-filters 参数传给执行器：
-     python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON" --default-filters "$DEFAULT_FILTERS_JSON"
-     强制（required）条件不可移除；用户条件与其冲突时两者同时生效（AND），须提示结果可能为空。
+     python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON" --plan-file "$PLAN_FILE" --default-filters "$DEFAULT_FILTERS_JSON"
+     默认条件由服务端权威应用；用户为同字段提供条件时覆盖默认值，执行器只做一致披露，不重复注入。
 
-   正式查询偶尔较慢（排序兜底还可能放大窗口重查一次），命令窗口超时不是失败：**原样重跑一次**即可（重复执行只是重发同一查询，无副作用）。执行器返回 `precheck_failed` 时按 `next_action_zh` 修正参数，禁止绕过执行器直连；`disclosures.order_fallback` 存在时必须在结论中披露「服务端排序未生效、已本地兜底」。MCP-only 用正式 `query_simple`。复杂图表和 Excel 导出才按 `references/chart-excel-guide.md` 走图表入口。
+   `--plan-file`/`--plan-json` 是强制执行绑定，执行器会校验规划状态、tableId、授权字段和模板就绪状态。正式查询偶尔较慢（排序兜底还可能放大窗口重查一次），命令窗口超时不是失败：**原样重跑一次**即可。执行器返回 `precheck_failed` 时按 `next_action_zh` 修正参数，禁止绕过执行器直连；`disclosures.order_fallback` 存在时必须披露本地兜底。MCP-only 用正式 `query_simple`。
 6. 保留用户要求的明细和全量范围。限制展示时声明排序、截断数量和总行数（执行器 `disclosures` 已给出），不把局部结果说成全量。
 
 ## 结果分析

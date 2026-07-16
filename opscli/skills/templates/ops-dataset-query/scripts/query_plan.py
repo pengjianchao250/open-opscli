@@ -32,7 +32,7 @@ MODEL_CONTRACT = "query_plan_model_contract_v2"
 SKILL_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = SKILL_DIR / "data"
 RULES_PATH = DATA_DIR / "intent_rules.json"
-MAX_OUTPUT_BYTES = 12000
+MAX_OUTPUT_BYTES = 24000
 
 # 澄清原因代码 → 面向用户的中文澄清话术
 CLARIFICATION_MESSAGES = {
@@ -41,6 +41,9 @@ CLARIFICATION_MESSAGES = {
     "platform_scope": "需要先确认平台范围。",
     "ad_type": "需要先确认广告类型。",
     "grain": "需要先确认查询粒度。",
+    "field_identity": "点名字段对应多个同名物理字段，当前中文标签无法唯一绑定。",
+    "time_scope_confirmation": "未识别到明确时间范围，需要确认是否使用默认近30天。",
+    "recommended_fields_confirmation": "用户未点名完整字段，需要确认是否采用系统推荐字段。",
 }
 # 披露代码 → 最终回答中必须覆盖的中文披露内容
 DISCLOSURE_MESSAGES = {
@@ -688,6 +691,22 @@ def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]
     return [item for _position, _index, item in sorted(selected)]
 
 
+def _ambiguous_natural_field_labels(guidance: dict, query: str) -> list[str]:
+    """识别自然语言命中的同标签多物理字段；显式 --field 不在此处拦截。"""
+    grouped: dict[str, set[str]] = {}
+    display: dict[str, str] = {}
+    for field_type in ("dimensions", "metrics"):
+        for item in _requested_fields(guidance, field_type, query):
+            if item.get("selection_source") == "explicit":
+                continue
+            label = _normalize(item.get("verbose_name"))
+            field_name = str(item.get("field_name", ""))
+            if label and field_name:
+                grouped.setdefault(label, set()).add(field_name)
+                display.setdefault(label, str(item.get("verbose_name", "")))
+    return [display[label] for label, names in grouped.items() if len(names) > 1]
+
+
 def _longest_unique_labels(fields: Iterable[dict]) -> list[dict]:
     """标签去重并做最长标签吞并：被更长标签完全包含的短标签让位。
 
@@ -695,16 +714,24 @@ def _longest_unique_labels(fields: Iterable[dict]) -> list[dict]:
     避免同一个文本片段产出两个字段结论。
     """
     unique = []
-    labels = []
+    identity_keys = set()
     for item in fields:
         label = _normalize(item.get("verbose_name"))
-        if label and label not in labels:
-            labels.append(label)
+        # 显式字段按物理 field_name 去重；非显式字段才按展示名去重。
+        # 这样同标签不同物理字段（以及包含关系）不会吞掉用户明确点名的身份。
+        identity = (
+            "field",
+            str(item.get("field_name", "")),
+        ) if item.get("selection_source") == "explicit" else ("label", label)
+        if label and identity not in identity_keys:
+            identity_keys.add(identity)
             unique.append(item)
+    labels = [_normalize(item.get("verbose_name")) for item in unique]
     return [
         item
         for item in unique
-        if not any(
+        if item.get("selection_source") == "explicit"
+        or not any(
             _normalize(item.get("verbose_name")) != other
             and _normalize(item.get("verbose_name")) in other
             for other in labels
@@ -715,7 +742,7 @@ def _longest_unique_labels(fields: Iterable[dict]) -> list[dict]:
 def _selected_fields(
     guidance: dict,
     query: str,
-    authorized_field_labels: dict[str, list[str]],
+    authorized_field_labels: dict[str, list[dict]],
 ) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     """确定模型可见的维度与指标列表。
 
@@ -730,28 +757,29 @@ def _selected_fields(
     normalized_query = _normalize(query)
     if not dimensions:
         dimensions = [
-            {"verbose_name": label, "selection_source": "authorized_query_label"}
-            for label in authorized_field_labels.get("dimensions", [])
-            if _normalize(label) in normalized_query
+            dict(item, selection_source="authorized_query_label")
+            for item in authorized_field_labels.get("dimensions", [])
+            if _normalize(item.get("verbose_name")) in normalized_query
         ]
     if not metrics:
         metrics = [
-            {"verbose_name": label, "selection_source": "authorized_query_label"}
-            for label in authorized_field_labels.get("metrics", [])
-            if _normalize(label) in normalized_query
+            dict(item, selection_source="authorized_query_label")
+            for item in authorized_field_labels.get("metrics", [])
+            if _normalize(item.get("verbose_name")) in normalized_query
         ]
     # 无点名字段时的推荐兜底（P0-1c）：把指导层已按打分选出的 top 字段
     # 以 recommended 来源标注供模型向用户提议，替代「全空无从下手→扫盘」
     field_guidance = guidance.get("field_guidance") or {}
     recommended_dimensions: list[dict] = []
     recommended_metrics: list[dict] = []
-    if not dimensions:
+    # 只有维度和指标都未点名时才给整套推荐。仅点名指标表示“整体聚合”，
+    # 仅点名维度也可能是明细诉求，不能强塞另一类型字段再制造确认门槛。
+    if not dimensions and not metrics:
         recommended_dimensions = [
             dict(item, selection_source="recommended")
             for item in (field_guidance.get("dimensions") or [])[:MAX_RECOMMENDED_FIELDS]
             if isinstance(item, dict)
         ]
-    if not metrics:
         recommended_metrics = [
             dict(item, selection_source="recommended")
             for item in (field_guidance.get("metrics") or [])[:MAX_RECOMMENDED_FIELDS]
@@ -780,7 +808,8 @@ def _selected_fields(
     metrics = [
         item
         for item in metrics
-        if not any(
+        if item.get("selection_source") == "explicit"
+        or not any(
             _normalize(item.get("verbose_name")) != dimension_label
             and _normalize(item.get("verbose_name")) in dimension_label
             for dimension_label in dimension_labels
@@ -895,7 +924,11 @@ def _reason_zh(reasons: Iterable[str]) -> str:
     return "语义相关"
 
 
-def _candidate_cards_zh(selection: dict, dataset_names_zh: dict[str, str]) -> list[dict]:
+def _candidate_cards_zh(
+    selection: dict,
+    dataset_names_zh: dict[str, str],
+    dataset_summaries_zh: dict[str, str],
+) -> list[dict]:
     """澄清态的候选卡片投影（P0-2）：中文名 + 命中原因，供带选项提问。"""
     cards = []
     for item in (selection.get("dataset_candidates") or [])[:MAX_CANDIDATE_CARDS]:
@@ -903,7 +936,11 @@ def _candidate_cards_zh(selection: dict, dataset_names_zh: dict[str, str]) -> li
         name_zh = dataset_names_zh.get(alias) or ""
         if not name_zh:
             continue
-        cards.append({"name_zh": name_zh, "reason_zh": _reason_zh(item.get("reasons") or [])})
+        card = {"name_zh": name_zh, "reason_zh": _reason_zh(item.get("reasons") or [])}
+        summary = dataset_summaries_zh.get(alias)
+        if summary:
+            card["summary_zh"] = summary
+        cards.append(card)
     return cards
 
 
@@ -917,15 +954,19 @@ def _bigrams(text: str) -> set[str]:
 
 def _field_suggestions(
     unknown_fields: Iterable[str],
-    authorized_field_labels: dict[str, list[str]],
+    authorized_field_labels: dict[str, list[dict]],
 ) -> list[dict]:
     """为未知点名字段生成「你是不是想要」近似建议（P0-2）。
 
     用字符二元组重合度做轻量相似排序，避免模型对拼错字段盲试。
     """
     labels = _deduplicate(
-        list(authorized_field_labels.get("dimensions", []))
-        + list(authorized_field_labels.get("metrics", []))
+        str(item.get("verbose_name", ""))
+        for item in (
+            list(authorized_field_labels.get("dimensions", []))
+            + list(authorized_field_labels.get("metrics", []))
+        )
+        if isinstance(item, dict)
     )
     suggestions = []
     for unknown in unknown_fields:
@@ -1078,8 +1119,9 @@ def _default_filters_zh(refs: list[dict]) -> list[str]:
 def build_model_contract(
     internal: dict,
     query: str = "",
-    authorized_field_labels: dict[str, list[str]] | None = None,
+    authorized_field_labels: dict[str, list[dict]] | None = None,
     dataset_names_zh: dict[str, str] | None = None,
+    dataset_summaries_zh: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """把内部规划器投影为模型可见的精简规划器。
 
@@ -1101,6 +1143,22 @@ def build_model_contract(
     dimensions, metrics, recommended_dims, recommended_mets = _selected_fields(
         guidance, query, authorized_field_labels or {"dimensions": [], "metrics": []}
     )
+    ambiguous_field_labels = _ambiguous_natural_field_labels(guidance, query)
+    if ambiguous_field_labels:
+        status = "clarify_required"
+        if "field_identity" not in clarification_reasons:
+            clarification_reasons.append("field_identity")
+        ambiguous_keys = {_normalize(item) for item in ambiguous_field_labels}
+        dimensions = [
+            item
+            for item in dimensions
+            if _normalize(item.get("verbose_name")) not in ambiguous_keys
+        ]
+        metrics = [
+            item
+            for item in metrics
+            if _normalize(item.get("verbose_name")) not in ambiguous_keys
+        ]
     # 时间口径本地解析（P0-5）：只在元数据就绪时计算，模型不再自算日期窗口
     scope = time_scope.parse(query) if data_ready else None
     field_guidance = guidance.get("field_guidance") or {}
@@ -1111,6 +1169,16 @@ def build_model_contract(
     unknown_fields = [
         str(item) for item in field_guidance.get("unknown_requested_fields") or []
     ]
+    pending_confirmations_zh: list[str] = []
+    execution_path_ready = str(internal.get("next_action", "")) == "construct_query"
+    if status == "planned" and execution_path_ready and scope and scope.get("is_default"):
+        status = "clarify_required"
+        clarification_reasons.append("time_scope_confirmation")
+        pending_confirmations_zh.append("确认是否采用默认近30天时间范围")
+    if status == "planned" and execution_path_ready and (recommended_dims or recommended_mets):
+        status = "clarify_required"
+        clarification_reasons.append("recommended_fields_confirmation")
+        pending_confirmations_zh.append("确认是否采用系统推荐的维度和指标")
     model_view: dict[str, Any] = {
         "dataset_name_zh": str(dataset.get("display_name_zh", "")),
         "dimensions": _field_names(dimensions),
@@ -1128,6 +1196,12 @@ def build_model_contract(
         ],
         "next_action": str(internal.get("next_action", "")),
     }
+    if ambiguous_field_labels:
+        model_view["ambiguous_field_labels_zh"] = ambiguous_field_labels
+        model_view["next_action"] = "ask_user_for_field_clarification"
+    if pending_confirmations_zh:
+        model_view["pending_confirmations_zh"] = pending_confirmations_zh
+        model_view["next_action"] = "ask_user_for_query_scope_confirmation"
     if scope:
         comparison = scope.get("comparison")
         scope_zh = f"{scope['label_zh']}：{scope['start']} ~ {scope['end']}（{scope['timezone']}）"
@@ -1143,7 +1217,11 @@ def build_model_contract(
         model_view["recommended_metrics"] = _field_names(recommended_mets)
     # 澄清弹药（P0-2）：候选卡片 + 未知字段回显与近似建议
     if status == "clarify_required":
-        cards = _candidate_cards_zh(selection, dataset_names_zh or {})
+        cards = _candidate_cards_zh(
+            selection,
+            dataset_names_zh or {},
+            dataset_summaries_zh or {},
+        )
         if cards:
             model_view["dataset_candidates_zh"] = cards
         if unknown_fields:
@@ -1206,7 +1284,7 @@ def build_model_contract(
                 "--authorized-platform-value 参数传回本规划命令，取得终版规划器"
             )
     # 查询模板骨架（P1-4）：status=planned 时给出可直接填充的 payload
-    if status == "planned":
+    if status == "planned" and str(internal.get("next_action", "")) == "construct_query":
         template = _build_query_template(
             dataset.get("table_id"),
             execution_dimensions,
@@ -1270,29 +1348,55 @@ def build_model_query_plan(
         authorized_platform_values=authorized_platform_values,
         **kwargs,
     )
-    # 收集全量授权字段中文标签，用于点名字段被指导截断时的兜底匹配
+    # 只收集已选数据集的授权字段。跨表全局标签会制造“展示层有字段、
+    # execution_ref 无物理身份”的假命中，必须在投影入口收紧作用域。
     authorized_fields = {"dimensions": [], "metrics": []}
     dataset_names_zh: dict[str, str] = {}
+    dataset_summaries_zh: dict[str, str] = {}
     if internal.get("data_state") == "ready":
         # fallback 接管数据目录后，标签读取必须跟随实际生效目录
         data_dir = Path(internal.get("effective_data_dir") or data_dir)
         rows = scoped_dataset_reader.load_dataset_fields(data_dir)
+        selected_alias = str(
+            (
+                (internal.get("selected_dataset_guidance") or {}).get("dataset")
+                or {}
+            ).get("dataset_alias", "")
+        )
         for row in rows:
+            if not selected_alias or row.get("dataset_alias") != selected_alias:
+                continue
             key = "dimensions" if row["field_type"] == "dimension" else "metrics"
-            label = str(row.get("verbose_name", ""))
-            if label and label not in authorized_fields[key]:
-                authorized_fields[key].append(label)
+            authorized_fields[key].append(
+                dataset_guidance._compact_field(
+                    row, "authorized_query_label", "contract"
+                )
+            )
         # 数据集 alias → 中文名映射：澄清候选卡片展示用（用户可见层只允许中文）
         for row in scoped_dataset_reader.load_datasets(data_dir):
             alias = str(row.get("dataset_alias", ""))
             name_zh = str(row.get("description", "") or row.get("dataset_name", ""))
             if alias and name_zh:
                 dataset_names_zh[alias] = name_zh
+        grouped: dict[str, dict[str, list[str]]] = {}
+        for row in rows:
+            alias = str(row.get("dataset_alias", ""))
+            key = "维度" if row.get("field_type") == "dimension" else "指标"
+            grouped.setdefault(alias, {"维度": [], "指标": []})[key].append(
+                str(row.get("verbose_name", ""))
+            )
+        for alias, groups in grouped.items():
+            examples = _deduplicate(groups["维度"] + groups["指标"])[:3]
+            dataset_summaries_zh[alias] = (
+                f"{len(groups['维度'])} 个维度、{len(groups['指标'])} 个指标"
+                + ("；代表字段：" + "、".join(examples) if examples else "")
+            )
     contract = build_model_contract(
         internal,
         query=query,
         authorized_field_labels=authorized_fields,
         dataset_names_zh=dataset_names_zh,
+        dataset_summaries_zh=dataset_summaries_zh,
     )
     # P0-3 二段收敛：待权限枚举时自动执行枚举查询并回灌重规划。
     # 本次调用已执行过自动升级时跳过（升级宽限+枚举叠加会撑破 30 秒命令窗口，
@@ -1301,7 +1405,7 @@ def build_model_query_plan(
         auto_enum
         and not internal.get("upgrade_performed_this_call")
         and not authorized_platform_values
-        and contract["model_view"]["next_action"] == "query_platform_permission_enum"
+        and internal.get("next_action") == "query_platform_permission_enum"
     ):
         values = _auto_enum_platform_values(
             contract["execution_ref"].get("platform_component_table_id")
@@ -1318,6 +1422,7 @@ def build_model_query_plan(
                 query=query,
                 authorized_field_labels=authorized_fields,
                 dataset_names_zh=dataset_names_zh,
+                dataset_summaries_zh=dataset_summaries_zh,
             )
             # 枚举来源标注：审计可区分自动枚举与人工回传
             contract["execution_ref"]["platform_enum_source"] = "auto_enum_service"
