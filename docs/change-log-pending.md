@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-16 shared - 新增自升级模块：安装方式检测与升级命令构造
+
+**变更原因**：一期升级体验优化（T1-1/T1-2），为 opscli self-update 命令提供实现层基础
+**改动点**：新增 opscli/shared/self_update.py（detect_install_method + build_upgrade_command），pip 路径强制 --only-binary :all: 防源码编译退化
+**验证结果**：pytest tests/shared/test_self_update.py -v 9 个测试全绿
+**影响范围**：纯新增模块，不影响现有功能
+**回滚方式**：删除 opscli/shared/self_update.py 与 tests/shared/test_self_update.py
+---
+
 ## 2026-07-16 release - 批量 cherry-pick master_pjc 的 19 个提交至 release
 
 **变更原因**：用户要求把 master_pjc 分支上从「feat(query): QueryMetadataResult 透传数据集默认条件 filter_configs（R4）」（aaf8c2e）到「feat(query): 查询超时可配置(默认30→120秒)并支持结果落盘 JSON 文件」（c81a177）的连续 19 个提交同步到 release 分支，覆盖数据集默认条件 filter_config 全链路（R4/R5）、ops-dataset-query v1.3.6/1.4.0、macOS Keychain 禁用改 AES 加密文件、查询超时可配置等能力。
