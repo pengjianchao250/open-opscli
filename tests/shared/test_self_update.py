@@ -225,3 +225,31 @@ class TestCliCommand:
             result = CliRunner().invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "self-update" in result.output
+
+
+class TestUpdateChannel:
+    """更新渠道测试：环境变量 OPSCLI_UPDATE_CHANNEL=test 切换到 TestPyPI（内部发版验证用）。"""
+
+    def test_pip_command_prod_by_default(self, monkeypatch):
+        """未设置渠道环境变量时，pip 命令不带任何 index 参数（走默认公网 PyPI）。"""
+        monkeypatch.delenv("OPSCLI_UPDATE_CHANNEL", raising=False)
+        command = build_upgrade_command(INSTALL_METHOD_PIP)
+        assert "--index-url" not in command
+        assert "--extra-index-url" not in command
+
+    def test_pip_command_test_channel_uses_testpypi(self, monkeypatch):
+        """test 渠道下 pip 命令指向 TestPyPI，并带公网 PyPI 兜底源解析依赖。"""
+        monkeypatch.setenv("OPSCLI_UPDATE_CHANNEL", "test")
+        command = build_upgrade_command(INSTALL_METHOD_PIP)
+        assert command[command.index("--index-url") + 1] == "https://test.pypi.org/simple/"
+        assert command[command.index("--extra-index-url") + 1] == "https://pypi.org/simple/"
+        # 基础约束不受渠道影响
+        assert "--only-binary" in command
+        assert command[-1] == "aukeys-opscli"
+
+    def test_uv_tool_command_ignores_test_channel(self, monkeypatch):
+        """uv tool / pipx 路径不支持测试渠道（内部验证统一走 pip 环境）。"""
+        monkeypatch.setenv("OPSCLI_UPDATE_CHANNEL", "test")
+        assert build_upgrade_command(INSTALL_METHOD_UV_TOOL) == [
+            "uv", "tool", "upgrade", "aukeys-opscli",
+        ]

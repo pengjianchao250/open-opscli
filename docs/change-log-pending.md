@@ -2913,3 +2913,11 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：仅启动时 stderr 提示文案
 **回滚方式**：回退本次 commit
 ---
+## 2026-07-16 shared - self-update/版本检查支持 TestPyPI 测试渠道
+
+**变更原因**：发版验证流程需要在 TestPyPI 上端到端测试 self-update；原实现只查公网 PyPI（最新停在 0.0.111），TestPyPI 安装的版本无法完成升级闭环
+**改动点**：opscli/shared/update_check.py 新增 _get_channel()（环境变量 OPSCLI_UPDATE_CHANNEL=test 切换渠道）、_fetch_latest_version 按渠道选 JSON API、check_and_notify test 渠道绕过缓存；opscli/shared/self_update.py 的 pip 升级命令 test 渠道追加 --index-url TestPyPI + --extra-index-url 公网兜底，升级输出标注测试渠道
+**验证结果**：pytest tests/shared/test_self_update.py tests/shared/test_update_check.py 50 个测试全绿（新增 6 个渠道测试）
+**影响范围**：默认行为完全不变（未设环境变量走正式渠道）；仅内部发版验证受影响
+**回滚方式**：回退本次 commit
+---

@@ -20,13 +20,18 @@ import sys
 
 from rich.console import Console
 
-from opscli.shared.update_check import _fetch_latest_version, is_newer_available
+from opscli.shared.update_check import _fetch_latest_version, _get_channel, is_newer_available
 from opscli.version import PACKAGE_NAME, get_version
 
 # 安装方式常量：检测结果只会是这三种之一
 INSTALL_METHOD_UV_TOOL = "uv-tool"
 INSTALL_METHOD_PIPX = "pipx"
 INSTALL_METHOD_PIP = "pip"
+
+# test 渠道的 pip 源：主源指向 TestPyPI，公网 PyPI 作为兜底源解析依赖
+# （typer/httpx 等依赖不在 TestPyPI 上，缺少兜底源会导致全新环境安装失败）
+_TESTPYPI_INDEX_URL = "https://test.pypi.org/simple/"
+_PYPI_INDEX_URL = "https://pypi.org/simple/"
 
 
 def detect_install_method(executable: str | None = None) -> str:
@@ -66,10 +71,19 @@ def build_upgrade_command(method: str) -> list[str]:
     if method == INSTALL_METHOD_PIPX:
         return ["pipx", "upgrade", PACKAGE_NAME]
     # pip 路径：用当前解释器的 pip，保证装进 opscli 所在环境而非别的 Python
-    return [
+    command = [
         sys.executable, "-m", "pip", "install",
-        "--upgrade", "--only-binary", ":all:", PACKAGE_NAME,
+        "--upgrade", "--only-binary", ":all:",
     ]
+    # test 渠道（内部发版验证）：切换到 TestPyPI 源；uv tool / pipx
+    # 路径不支持测试渠道，内部验证统一走 pip 环境
+    if _get_channel() == "test":
+        command += [
+            "--index-url", _TESTPYPI_INDEX_URL,
+            "--extra-index-url", _PYPI_INDEX_URL,
+        ]
+    command.append(PACKAGE_NAME)
+    return command
 
 
 def _resolve_opscli_command() -> list[str]:
@@ -103,7 +117,11 @@ def run_self_update() -> int:
     # 第二步：识别安装方式并执行升级（子进程继承终端，实时展示进度）
     method = detect_install_method()
     target = f"v{latest}" if latest else "最新版本"
-    console.print(f"[cyan]检测到安装方式: {method}，开始升级 v{current} → {target}[/cyan]")
+    # test 渠道显式标注，方便发版验证时确认走的是 TestPyPI
+    channel_note = "（测试渠道 TestPyPI）" if _get_channel() == "test" else ""
+    console.print(
+        f"[cyan]检测到安装方式: {method}{channel_note}，开始升级 v{current} → {target}[/cyan]"
+    )
     result = subprocess.run(build_upgrade_command(method))
     if result.returncode != 0:
         # 升级失败：附平台信息帮助定位 wheel 缺失类问题（T1-2 防护）
