@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-16 终审修复 - README 引号回归修复 + skills 失败测试断言加固
+
+**变更原因**：全分支终审发现 Task 5 docs 提交误将 README 第 129 行前引号"改为"；审查建议 skills 失败测试锁定失败步骤 argv
+**改动点**：README.md 恢复正确前引号；tests/shared/test_self_update.py 的 test_skills_step_failure_returns_code_with_hint 增加第二步 argv 断言
+**验证结果**：pytest tests/shared/test_self_update.py -v 18 个测试全绿
+**影响范围**：文档一字符 + 测试加固，无功能影响
+**回滚方式**：回退本次 commit
+---
+
 ## 2026-07-16 cli - 注册顶级 self-update 命令
 
 **变更原因**：一期 T1-1，向用户暴露一键升级入口

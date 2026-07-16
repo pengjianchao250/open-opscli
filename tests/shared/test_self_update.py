@@ -149,6 +149,10 @@ class TestRunSelfUpdate:
         ):
             assert run_self_update() == 1
         assert mock_run.call_count == 2
+        # 断言失败的是第二步（skills install --force），锁定步骤顺序
+        assert mock_run.call_args_list[1].args[0] == [
+            "/usr/local/bin/opscli", "skills", "install", "--force",
+        ]
         assert "手动重试" in capsys.readouterr().out
 
     def test_fetch_failure_still_attempts_upgrade(self, capsys):
