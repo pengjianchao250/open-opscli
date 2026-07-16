@@ -123,6 +123,7 @@ class AsinCategoryTopClient:
         self,
         *,
         category: str,
+        site: str = "US",
         date_from: str | None = None,
         date_to: str | None = None,
         limit: int = 10,
@@ -136,7 +137,11 @@ class AsinCategoryTopClient:
 
         headers, cookies = self.auth_client.build_request_auth("ops")
         headers.update(get_mcp_request_headers())
-        params: dict[str, Any] = {"category": normalized_category, "limit": limit}
+        params: dict[str, Any] = {
+            "category": normalized_category,
+            "site": _normalize_site(site),
+            "limit": limit,
+        }
         if date_from:
             params["date_from"] = date_from
         if date_to:

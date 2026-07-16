@@ -55,6 +55,10 @@ BI_REPORT_DATA_SOURCES: dict[str, dict[str, str]] = {
         "label": "SP广告搜索词数据",
         "endpoint": "/api/v1/sp-search-term/query",
     },
+    "sqp": {
+        "label": "Brand Analytics搜索查询表现数据",
+        "endpoint": "/api/v1/brand-analytics-search-query/query",
+    },
     "deals": {
         "label": "活动数据",
         "endpoint": "/dataMetrics/v1/asin-report-files/deals-data",
@@ -71,8 +75,10 @@ BI_REPORT_DATA_SOURCES: dict[str, dict[str, str]] = {
 LISTING_REPORT_SOURCE_KEYS = ("listing_basic",)
 BASIC_REPORT_SOURCE_KEYS = ("listing_basic", "crawler_details")
 BI_ONLY_REPORT_SOURCE_KEYS = tuple(
-    key for key in BI_REPORT_DATA_SOURCES if key not in BASIC_REPORT_SOURCE_KEYS
+    key for key in BI_REPORT_DATA_SOURCES if key not in BASIC_REPORT_SOURCE_KEYS and key != "sqp"
 )
+BI_QUERY_SOURCE_KEYS = (*BI_ONLY_REPORT_SOURCE_KEYS, "sqp")
+DEFAULT_BI_REPORT_SOURCE_KEYS = tuple(key for key in BI_REPORT_DATA_SOURCES if key != "sqp")
 SITE_CODE_ALIASES: dict[str, str] = {
     "US": "US",
     "USA": "US",
@@ -230,7 +236,10 @@ class AsinBiReportDataClient:
         normalized_asins = normalize_asins(asins)
         if not normalized_asins:
             raise ValueError("asins must not be empty")
-        source_configs = _filter_source_configs(self.sources, source_keys)
+        source_configs = _filter_source_configs(
+            self.sources,
+            DEFAULT_BI_REPORT_SOURCE_KEYS if source_keys is None else source_keys,
+        )
         normalized_site_by_asin = _normalize_site_by_asin(site_by_asin)
         normalized_listing_account_type_by_asin = _normalize_listing_account_type_by_asin(
             listing_account_type_by_asin
@@ -354,6 +363,16 @@ class AsinBiReportDataClient:
                     cookies=cookies,
                     site_by_asin=site_by_asin,
                     default_site=default_site,
+                )
+            if key == "sqp":
+                return self._fetch_sqp_source(
+                    key=key,
+                    config=config,
+                    asins=asins,
+                    start_date=start_date,
+                    end_date=end_date,
+                    headers=headers,
+                    cookies=cookies,
                 )
             params = {"asins": ",".join(asins)}
             params.update(_date_range_params(start_date=start_date, end_date=end_date))
@@ -686,6 +705,44 @@ class AsinBiReportDataClient:
             result["errors"] = errors
         return result
 
+    def _fetch_sqp_source(
+        self,
+        *,
+        key: str,
+        config: dict[str, str],
+        asins: list[str],
+        start_date: str | None,
+        end_date: str | None,
+        headers: dict[str, str],
+        cookies: dict[str, str],
+    ) -> dict[str, Any]:
+        """通过 Brand Analytics Search Query Performance 接口批量取数。"""
+        body = {"asins": ",".join(asins)}
+        body.update(_date_range_params(start_date=start_date, end_date=end_date))
+        response = self.http_post(
+            self._resolve_endpoint(config["endpoint"]),
+            json=body,
+            headers=headers,
+            cookies=cookies,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        payload = parse_remote_response(
+            response,
+            http_error_cls=AsinBiReportDataHttpError,
+            business_error_cls=AsinBiReportDataBusinessError,
+            bad_json_error_cls=AsinBiReportDataBadJsonError,
+        )
+        rows = extract_rows(payload.get("data") if isinstance(payload, dict) and "data" in payload else payload)
+        return {
+            "key": key,
+            "label": config["label"],
+            "endpoint": config["endpoint"],
+            "status": "success",
+            "row_count": len(rows),
+            "rows": rows,
+            "raw": payload,
+        }
+
     def _fetch_listing_basic_source(
         self,
         *,
@@ -702,25 +759,33 @@ class AsinBiReportDataClient:
         raw_items: list[dict[str, Any]] = []
 
         def fetch_one(asin: str) -> dict[str, Any]:
-            try:
-                return self._fetch_listing_basic_for_asin(
-                    asin=asin,
-                    site_code=_site_code_for_asin(asin, site_by_asin=site_by_asin, default_site=default_site),
-                    account_type=_listing_account_type_for_asin(asin, listing_account_type_by_asin),
-                    config=config,
-                    headers=headers,
-                    cookies=cookies,
-                )
-            except Exception as exc:
-                if _is_listing_auth_expired(exc):
-                    raise
-                return {
-                    "asin": asin,
-                    "status": "not_found" if _is_listing_not_found(exc) else "failed",
-                    "row": None,
-                    "error": _error_dict(exc),
-                    "error_message": str(exc),
-                }
+            explicit_account_type = listing_account_type_by_asin.get(normalize_asin(asin))
+            account_types = (explicit_account_type,) if explicit_account_type in {1, 2} else (1, 2)
+            last_error: Exception | None = None
+            for account_type in account_types:
+                try:
+                    return self._fetch_listing_basic_for_asin(
+                        asin=asin,
+                        site_code=_site_code_for_asin(asin, site_by_asin=site_by_asin, default_site=default_site),
+                        account_type=account_type,
+                        config=config,
+                        headers=headers,
+                        cookies=cookies,
+                    )
+                except Exception as exc:
+                    if _is_listing_auth_expired(exc):
+                        raise
+                    last_error = exc
+                    if not _is_listing_not_found(exc):
+                        break
+            assert last_error is not None
+            return {
+                "asin": asin,
+                "status": "not_found" if _is_listing_not_found(last_error) else "failed",
+                "row": None,
+                "error": _error_dict(last_error),
+                "error_message": str(last_error),
+            }
 
         if len(asins) > 1:
             with ThreadPoolExecutor(max_workers=min(8, len(asins))) as executor:

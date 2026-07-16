@@ -745,29 +745,109 @@ def test_live_data_url_only_uploads_without_parsing_inline_content(monkeypatch, 
     assert payload["data"]["split_file_uploads"]["files_uploaded"] == 2
 
 
-def test_category_top_command_uses_service(monkeypatch):
+def test_basic_command_returns_json_and_records_usage(monkeypatch):
     calls = {}
+    usage_events = []
 
-    class DummyCategoryTopService:
-        def run(self, **kwargs):
+    class DummyQueryService:
+        def fetch_basic(self, **kwargs):
             calls["kwargs"] = kwargs
             return {
-                "success": True,
-                "metadata": {"protocol": "asin_data_ai_response", "tool": "asin_data_category_top"},
-                "run": {"run_id": "run-1"},
-                "summary": {"asin_count": 1},
-                "items": [
-                    {
-                        "asin": "B0TEST1234",
-                        "artifacts": [{"file_key": "category_top_json", "uri": "https://example.oss/asin-data/category-top.json"}],
-                        "datasets": [],
-                        "diagnostics": [],
-                    }
-                ],
-                "diagnostics": [],
+                "asins": ["B086M58PQ3"],
+                "site": "US",
+                "sources": {"listing_basic": {"rows": [{"ASIN": "B086M58PQ3"}]}},
             }
 
-    monkeypatch.setattr(asin_cli, "AsinCategoryTopService", DummyCategoryTopService)
+    monkeypatch.setattr(asin_cli, "AsinDataQueryService", DummyQueryService)
+    monkeypatch.setattr(asin_cli, "append_usage_event", lambda **kwargs: usage_events.append(kwargs))
+
+    result = runner.invoke(
+        asin_cli.app,
+        ["basic", "--asin", "B086M58PQ3", "--site", "US", "--source", "listing"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["success"] is True
+    assert payload["command"] == "asin-data basic"
+    assert payload["data"]["sources"]["listing_basic"]["rows"][0]["ASIN"] == "B086M58PQ3"
+    assert calls["kwargs"] == {
+        "asins": ["B086M58PQ3"],
+        "site": "US",
+        "sources": ["listing"],
+    }
+    assert usage_events[0]["command"] == "basic"
+    assert usage_events[0]["status"] == "success"
+    assert usage_events[0]["params"]["asins"] == ["B086M58PQ3"]
+
+
+def test_bi_command_accepts_json_asin_list_and_domains(monkeypatch):
+    calls = {}
+
+    class DummyQueryService:
+        def fetch_bi(self, **kwargs):
+            calls["kwargs"] = kwargs
+            return {
+                "asins": kwargs["asins"],
+                "site": kwargs["site"],
+                "date_from": kwargs["date_from"],
+                "date_to": kwargs["date_to"],
+                "domains": kwargs["domains"],
+                "sources": {},
+            }
+
+    monkeypatch.setattr(asin_cli, "AsinDataQueryService", DummyQueryService)
+    monkeypatch.setattr(asin_cli, "append_usage_event", lambda **kwargs: None)
+
+    result = runner.invoke(
+        asin_cli.app,
+        [
+            "bi",
+            "--asins",
+            '["B086M58PQ3","B0TEST1234"]',
+            "--site",
+            "DE",
+            "--date-from",
+            "2026-07-01",
+            "--date-to",
+            "2026-07-15",
+            "--domain",
+            "sales_traffic",
+            "--domain",
+            "deals",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "asin-data bi"
+    assert calls["kwargs"] == {
+        "asins": ["B086M58PQ3", "B0TEST1234"],
+        "site": "DE",
+        "date_from": "2026-07-01",
+        "date_to": "2026-07-15",
+        "domains": ["sales_traffic", "deals"],
+    }
+
+
+def test_category_top_command_returns_only_category_top_json(monkeypatch):
+    calls = {}
+
+    class DummyQueryService:
+        def fetch_category_top(self, **kwargs):
+            calls["kwargs"] = kwargs
+            return {
+                "category": kwargs["category"],
+                "site": kwargs["site"],
+                "date_from": kwargs["date_from"],
+                "date_to": kwargs["date_to"],
+                "limit": kwargs["limit"],
+                "row_count": 1,
+                "category_top": [{"ASIN": "B0TEST1234", "排名": 1}],
+            }
+
+    monkeypatch.setattr(asin_cli, "AsinDataQueryService", DummyQueryService)
+    monkeypatch.setattr(asin_cli, "append_usage_event", lambda **kwargs: None)
 
     result = runner.invoke(
         asin_cli.app,
@@ -782,12 +862,7 @@ def test_category_top_command_uses_service(monkeypatch):
             "--limit",
             "5",
             "--site",
-            "US",
-            "--output-dir",
-            "output/asin-data",
-            "--run-id",
-            "run-1",
-            "--no-upload",
+            "DE",
         ],
     )
 
@@ -795,20 +870,42 @@ def test_category_top_command_uses_service(monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["success"] is True
     assert payload["command"] == "asin-data category-top"
-    assert payload["data"]["metadata"]["protocol"] == "asin_data_ai_response"
-    assert payload["data"]["items"][0]["artifacts"][0]["uri"] == "https://example.oss/asin-data/category-top.json"
+    assert payload["data"]["category_top"] == [{"ASIN": "B0TEST1234", "排名": 1}]
+    assert set(payload["data"]) == {
+        "category",
+        "site",
+        "date_from",
+        "date_to",
+        "limit",
+        "row_count",
+        "category_top",
+    }
     assert calls["kwargs"] == {
         "category": "Bed Frames",
         "date_from": "2026-07-01",
         "date_to": "2026-07-13",
         "limit": 5,
-        "site": "US",
-        "output_dir": "output/asin-data",
-        "run_id": "run-1",
-        "upload": False,
-        "enrich": True,
-        "return_content": False,
+        "site": "DE",
     }
+
+
+def test_basic_command_records_error_usage(monkeypatch):
+    usage_events = []
+
+    class DummyQueryService:
+        def fetch_basic(self, **kwargs):
+            raise ValueError("ASIN 格式无效")
+
+    monkeypatch.setattr(asin_cli, "AsinDataQueryService", DummyQueryService)
+    monkeypatch.setattr(asin_cli, "append_usage_event", lambda **kwargs: usage_events.append(kwargs))
+
+    result = runner.invoke(asin_cli.app, ["basic", "--asin", "bad"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["success"] is False
+    assert usage_events[0]["status"] == "error"
+    assert usage_events[0]["error"]["message"] == "ASIN 格式无效"
 
 
 def test_live_data_ai_ready_returns_dataset_manifest_without_inline_content(monkeypatch, tmp_path: Path):

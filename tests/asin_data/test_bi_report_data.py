@@ -67,6 +67,36 @@ class MissingPolarisAuthClient:
         return None
 
 
+def test_listing_basic_retries_vc_account_type_when_sc_has_no_row(monkeypatch):
+    client = object.__new__(AsinBiReportDataClient)
+    account_types: list[int] = []
+
+    def fake_fetch_one(**kwargs):
+        account_types.append(kwargs["account_type"])
+        if kwargs["account_type"] == 1:
+            raise AsinBiReportDataBusinessError("LISTING_NOT_FOUND", "SC listing not found")
+        return {
+            "asin": kwargs["asin"],
+            "row": {"ASIN": kwargs["asin"], "account_type": kwargs["account_type"]},
+        }
+
+    monkeypatch.setattr(client, "_fetch_listing_basic_for_asin", fake_fetch_one)
+
+    result = client._fetch_listing_basic_source(
+        key="listing_basic",
+        config={"label": "listing", "endpoint": "/detail"},
+        asins=["B086M58PQ3"],
+        headers={},
+        cookies={},
+        site_by_asin={"B086M58PQ3": "US"},
+        listing_account_type_by_asin={},
+        default_site="US",
+    )
+
+    assert account_types == [1, 2]
+    assert result["rows"] == [{"ASIN": "B086M58PQ3", "account_type": 2}]
+
+
 def test_normalize_listing_basic_maps_item_highlight_value():
     row = normalize_listing_basic(
         asin="B0TEST1234",
@@ -411,6 +441,46 @@ def test_bi_report_data_client_fetches_sp_search_terms_in_parallel():
         "B0TEST5678",
         "B0TEST9999",
     ]
+
+
+def test_bi_report_data_client_fetches_sqp_with_short_domain_name():
+    calls = []
+
+    def http_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "date_range": {"start_date": "2026-07-01", "end_date": "2026-07-15"},
+                    "total": 1,
+                    "list": [{"ASIN": "B086M58PQ3", "搜索词": "bed frame"}],
+                },
+            },
+        )
+
+    client = AsinBiReportDataClient(
+        auth_client=DummyAuthClient(),
+        ops_url="https://ops.example.com/api",
+        http_post=http_post,
+    )
+
+    bundle = client.fetch(
+        asins=["B086M58PQ3", "B0TEST1234"],
+        start_date="2026-07-01",
+        end_date="2026-07-15",
+        source_keys=["sqp"],
+    )
+
+    assert calls[0]["url"] == "https://ops.example.com/api/v1/brand-analytics-search-query/query"
+    assert calls[0]["json"] == {
+        "asins": "B086M58PQ3,B0TEST1234",
+        "start_date": "2026-07-01",
+        "end_date": "2026-07-15",
+    }
+    assert bundle["sources"]["sqp"]["status"] == "success"
+    assert bundle["sources"]["sqp"]["rows"] == [{"ASIN": "B086M58PQ3", "搜索词": "bed frame"}]
 
 
 def test_bi_report_data_client_fetches_listing_basic_asins_in_parallel():

@@ -45,6 +45,7 @@ def test_category_top_client_fetches_remote_rows():
 
     result = client.fetch(
         category="Bed Frames",
+        site="US",
         date_from="2026-07-01",
         date_to="2026-07-13",
         limit=10,
@@ -53,6 +54,7 @@ def test_category_top_client_fetches_remote_rows():
     assert calls["url"] == "https://ops.example.com/dataMetrics/v1/asin-report-files/internal-category-top10"
     assert calls["kwargs"]["params"] == {
         "category": "Bed Frames",
+        "site": "US",
         "date_from": "2026-07-01",
         "date_to": "2026-07-13",
         "limit": 10,

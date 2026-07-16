@@ -19,7 +19,6 @@ from opscli.asin_data.services.bi_report_data import (
     BI_ONLY_REPORT_SOURCE_KEYS,
     LISTING_REPORT_SOURCE_KEYS,
 )
-from opscli.asin_data.services.category_top import AsinCategoryTopService
 from opscli.asin_data.services.collector import (
     DEFAULT_LISTING_ANALYSIS_POLL_ATTEMPTS,
     DEFAULT_LISTING_ANALYSIS_POLL_INTERVAL_SECONDS,
@@ -27,16 +26,13 @@ from opscli.asin_data.services.collector import (
 )
 from opscli.asin_data.services.daily_pipeline import DailyAsinDataPipeline
 from opscli.asin_data.services.live_data import AsinLiveDataService, fetch_split_file
+from opscli.asin_data.services.query_service import AsinDataQueryService
 from opscli.asin_data.services.report_file_submitter import (
     DEFAULT_REPORT_TYPE,
     DEFAULT_SOURCE,
     AsinReportFileSubmitter,
 )
 from opscli.asin_data.services.report_files import AsinReportFileClient, AsinReportFileNotFoundError
-from opscli.asin_data.services.split_package_builder import (
-    FILE_FIELD_MAP,
-    SPLIT_FILE_KEYS,
-)
 from opscli.asin_data.services.yicopy_keyword_engine import (
     YicopyKeywordEngine,
     YicopyRunOptions,
@@ -45,6 +41,7 @@ from opscli.asin_data.services.yicopy_keyword_engine import (
     normalize_yicopy_result_format,
     render_yicopy_result,
 )
+from opscli.asin_data.services.usage_log import append_usage_event
 from opscli.shared.file_uploads import FileUploadClient
 
 
@@ -127,6 +124,21 @@ def _error_payload(command: str, exc: Exception) -> dict:
     else:
         error = {"code": "ASIN_DATA_ERROR", "message": str(exc)}
     return {"success": False, "command": command, "data": None, "error": error}
+
+
+def _parse_asin_options(asin: list[str] | None, asins_json: str | None) -> list[str]:
+    values = list(asin or [])
+    if asins_json:
+        try:
+            parsed = json.loads(asins_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError("--asins 必须是 JSON 数组") from exc
+        if not isinstance(parsed, list):
+            raise ValueError("--asins 必须是 JSON 数组")
+        values.extend(str(item) for item in parsed)
+    if not values:
+        raise ValueError("--asin 与 --asins 至少传入一个")
+    return values
 
 
 def _load_frontend_data(output_dir: str) -> dict[str, Any]:
@@ -290,8 +302,7 @@ def report_url(
     )
 
 
-@app.command("abtest-url")
-def abtest_url(
+def _abtest_url_compat(
     asin: str = typer.Option(..., "--asin", help="ASIN"),
     site: str = typer.Option("US", "--site", help="站点"),
     data_type: str = typer.Option("file", "--data-type", help="返回数据类型，默认 file 取报告文件地址"),
@@ -333,8 +344,7 @@ def abtest_url(
     )
 
 
-@app.command("file-url")
-def file_url(
+def _file_url_compat(
     asin: str = typer.Option(..., "--asin", help="ASIN"),
     site: str = typer.Option("US", "--site", help="站点"),
     file: FileKey | None = typer.Option(
@@ -413,8 +423,7 @@ def file_url(
     )
 
 
-@app.command("fetch-file")
-def fetch_file(
+def _fetch_file_compat(
     asin: str = typer.Option(..., "--asin", help="ASIN"),
     file: FileKey = typer.Option(..., "--file", help="文件类型"),
     site: str = typer.Option("US", "--site", help="站点"),
@@ -444,8 +453,113 @@ def fetch_file(
     )
 
 
-@app.command("live-data")
-def live_data(
+@app.command("basic")
+def basic(
+    asin: list[str] | None = typer.Option(None, "--asin", help="ASIN，可重复传入"),
+    asins_json: str | None = typer.Option(None, "--asins", help="ASIN JSON 数组"),
+    site: str = typer.Option("US", "--site", help="Amazon 站点代码"),
+    source: list[str] | None = typer.Option(
+        None,
+        "--source",
+        help="数据范围，可重复传入 listing 或 crawler；默认全部",
+    ),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """查询基础刊登和爬虫补充数据，默认返回 JSON。"""
+    started = time.perf_counter()
+    request: dict[str, Any] = {
+        "asins": list(asin or []),
+        "asins_json": asins_json,
+        "site": site,
+        "sources": list(source or []),
+    }
+    try:
+        resolved_asins = _parse_asin_options(asin, asins_json)
+        request["asins"] = resolved_asins
+        request.pop("asins_json", None)
+        data = AsinDataQueryService().fetch_basic(
+            asins=resolved_asins,
+            site=site,
+            sources=source,
+        )
+    except Exception as exc:
+        payload = _error_payload("asin-data basic", exc)
+        append_usage_event(
+            command="basic",
+            params=request,
+            status="error",
+            elapsed_seconds=time.perf_counter() - started,
+            error=payload["error"],
+        )
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+
+    append_usage_event(
+        command="basic",
+        params=request,
+        status="success",
+        elapsed_seconds=time.perf_counter() - started,
+    )
+    _emit({"success": True, "command": "asin-data basic", "data": data, "error": None}, pretty)
+
+
+@app.command("bi")
+def bi(
+    asin: list[str] | None = typer.Option(None, "--asin", help="ASIN，可重复传入"),
+    asins_json: str | None = typer.Option(None, "--asins", help="ASIN JSON 数组"),
+    site: str = typer.Option("US", "--site", help="Amazon 站点代码"),
+    date_from: str | None = typer.Option(None, "--date-from", help="开始日期 YYYY-MM-DD，默认最近30天"),
+    date_to: str | None = typer.Option(None, "--date-to", help="结束日期 YYYY-MM-DD，默认当天"),
+    domain: list[str] | None = typer.Option(
+        None,
+        "--domain",
+        help="BI 数据域，可重复传入；默认全部",
+    ),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+) -> None:
+    """查询销售、流量、广告、库存等 BI 数据，默认返回 JSON。"""
+    started = time.perf_counter()
+    request: dict[str, Any] = {
+        "asins": list(asin or []),
+        "asins_json": asins_json,
+        "site": site,
+        "date_from": date_from,
+        "date_to": date_to,
+        "domains": list(domain or []),
+    }
+    try:
+        resolved_asins = _parse_asin_options(asin, asins_json)
+        request["asins"] = resolved_asins
+        request.pop("asins_json", None)
+        data = AsinDataQueryService().fetch_bi(
+            asins=resolved_asins,
+            site=site,
+            date_from=date_from,
+            date_to=date_to,
+            domains=domain,
+        )
+    except Exception as exc:
+        payload = _error_payload("asin-data bi", exc)
+        append_usage_event(
+            command="bi",
+            params=request,
+            status="error",
+            elapsed_seconds=time.perf_counter() - started,
+            error=payload["error"],
+        )
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+
+    append_usage_event(
+        command="bi",
+        params=request,
+        status="success",
+        elapsed_seconds=time.perf_counter() - started,
+    )
+    _emit({"success": True, "command": "asin-data bi", "data": data, "error": None}, pretty)
+
+
+def _live_data_compat(
     input_path: str | None = typer.Option(None, "--input", "-i", help="CSV/XLSX/JSON/JSONL 输入文件"),
     asin: str | None = typer.Option(None, "--asin", help="单个 ASIN；与 --input 二选一"),
     keywords: list[str] | None = typer.Option(None, "--keyword", help="单个 ASIN 的关键词，可重复传入"),
@@ -708,7 +822,7 @@ def _read_xlsx_content(source: Any) -> dict[str, list[list[Any]]]:
     return sheets
 
 
-@app.command("live-data")
+@app.command("live-data", hidden=True, deprecated=True)
 def live_data(
     input_path: str | None = typer.Option(None, "--input", "-i", help="CSV/XLSX/JSON/JSONL 输入文件"),
     asin: str | None = typer.Option(None, "--asin", help="单个 ASIN；与 --input 二选一"),
@@ -787,39 +901,47 @@ def live_data(
 @app.command("category-top")
 def category_top(
     category: str = typer.Option(..., "--category", help="平台类目名称，精确匹配 amazon_cat"),
-    date_from: str | None = typer.Option(None, "--date-from", help="起始日期 YYYY-MM-DD，默认由后端使用当月 1 日"),
-    date_to: str | None = typer.Option(None, "--date-to", help="截止日期 YYYY-MM-DD，默认由后端使用当天"),
+    date_from: str | None = typer.Option(None, "--date-from", help="开始日期 YYYY-MM-DD，默认当月1日"),
+    date_to: str | None = typer.Option(None, "--date-to", help="结束日期 YYYY-MM-DD，默认当天"),
     limit: int = typer.Option(10, "--limit", min=1, max=100, help="返回 Top ASIN 数量，范围 1-100"),
-    site: str = typer.Option(
-        "US",
-        "--site",
-        help="无法从渠道推断站点时使用的默认站点，同时作为 crawler-details 的 country",
-    ),
-    output_dir: str = typer.Option("output/asin-data", "--output-dir", help="输出目录"),
-    run_id: str | None = typer.Option(None, "--run-id", help="本次运行 ID"),
-    upload: bool = typer.Option(True, "--upload/--no-upload", help="是否上传合并后的 JSON 文件到 OSS"),
-    enrich: bool = typer.Option(True, "--enrich/--no-enrich", help="是否补充查询刊登基础数据和爬虫详情数据"),
-    return_content: bool = typer.Option(False, "--return-content", help="是否在命令结果中返回完整 JSON 内容"),
+    site: str = typer.Option("US", "--site", help="Amazon 站点代码"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
 ) -> None:
-    """查询内部类目 Top ASIN，并合并刊登基础数据和爬虫详情为单个 OSS JSON 文件。"""
+    """查询内部类目 Top ASIN，仅返回 category_top JSON 数据。"""
+    started = time.perf_counter()
+    request = {
+        "category": category,
+        "date_from": date_from,
+        "date_to": date_to,
+        "limit": limit,
+        "site": site,
+    }
     try:
-        result = AsinCategoryTopService().run(
+        result = AsinDataQueryService().fetch_category_top(
             category=category,
             date_from=date_from,
             date_to=date_to,
             limit=limit,
             site=site,
-            output_dir=output_dir,
-            run_id=run_id,
-            upload=upload,
-            enrich=enrich,
-            return_content=return_content,
         )
     except Exception as exc:
-        _emit(_error_payload("asin-data category-top", exc), pretty)
+        payload = _error_payload("asin-data category-top", exc)
+        append_usage_event(
+            command="category-top",
+            params=request,
+            status="error",
+            elapsed_seconds=time.perf_counter() - started,
+            error=payload["error"],
+        )
+        _emit(payload, pretty)
         raise typer.Exit(1)
 
+    append_usage_event(
+        command="category-top",
+        params=request,
+        status="success",
+        elapsed_seconds=time.perf_counter() - started,
+    )
     _emit({"success": True, "command": "asin-data category-top", "data": result, "error": None}, pretty)
 
 
