@@ -61,7 +61,7 @@
 | `operator` | string | 比较操作符，按字段类型可选值不同，见 2.3 |
 | `filter_type` | string | `enum`（枚举）/ `text`（文本） |
 | `enum_value` | string[] | `filter_type=enum` 时的默认值列表 |
-| `value` | null / string[] | 文本值或日期值；日期字段选「自定义」时为 `[startDate, endDate]`，选预设时为预设标识（如 `thisQuarter`） |
+| `value` | null / string[] | 文本值或日期值；日期字段选「自定义(exact)」时为 `[startDate, endDate]`。**注意（QA 实测修正）**：日期字段选预设时，预设标识（如 `thisQuarter`）存在 `enum_value` 而非 `value`（`filter_type=enum`、`value=null`），这是后台表单的实际存储约定 |
 | `filter_agg` | string | 过滤聚合方式，`none` 表示普通条件；非 `none` 为聚合后过滤（having 语义） |
 
 ### 2.3 枚举值说明（来源：datasets.blade.php 后台配置表单）
@@ -132,7 +132,8 @@
    - 通过 `select_columns` 关联的组件数据集字段（带 `component_dataset_alias` 标识来源）；
 3. 条目携带 `field_type`（`dimension` / `metric`）标识，便于客户端区分 where / having 应用语义；
 4. 未配置任何默认条件的数据集返回空数组 `"filter_configs": []`，保证字段结构稳定；
-5. `enabled=false` 的配置不下发。
+5. `enabled=false` 的配置不下发；
+6. **组件引用排除**（实现阶段确认的语义细化）：被任一数据集通过 `select_columns` 引用为组件的字段，只出现在**引用方**数据集的 `filter_configs` 中，不再重复出现在其所属组件数据集（`query_component` 类别，仅作权限枚举源）自身的 `filter_configs`——避免同一条件在下游被重复应用的歧义。
 
 **返回结构示例**：
 
@@ -186,11 +187,19 @@
 
 **合并规则**：
 
-| 配置 | 用户未提供该字段条件 | 用户提供了该字段条件 |
+| 配置 | 用户未提供该字段条件 | 用户提供了该字段条件（任意值/操作符） |
 |------|---------------------|---------------------|
-| `type=required` | 服务端自动注入默认条件 | 默认条件仍强制生效，与用户条件**静默 AND 合并**，不报错、不拦截，与前台查询行为保持一致（评审结论 1）；同字段同值或子集时**合并去重**，去重后单条生效（评审结论 2） |
-| `type=optional` | 服务端自动注入默认条件 | 以用户条件为准，默认条件不注入 |
+| `type=required` | 服务端自动注入默认值（保证该维度必被过滤，防全量） | **以用户条件为准，覆盖默认值，不注入默认** |
+| `type=optional` | 服务端自动注入默认值（缺省建议） | **以用户条件为准，覆盖默认值，不注入默认** |
 | `enabled=false` | 不注入 | 不注入 |
+
+> **覆盖语义（业务复核后修正，取代原评审结论 1/2 的 AND 合并/去重）**：filter_config 默认条件是「**默认值，可被业务覆盖**」，不是「不可改的强制值」。用户对某字段提供任意条件（任何操作符/值）时，完全以用户条件为准、不注入该字段默认——保证业务能按需要查询非默认值（如默认 `report_period=QUARTER`，业务传 `MONTH` 即查月度，而非 `QUARTER AND MONTH` 恒空）。
+>
+> **required 与 optional 的区别**：查询逻辑一致（没传注入默认、传了覆盖）；`required` 语义强调「该字段必须被过滤、防全量」，`optional` 为「缺省建议」，区别仅体现在披露/后台标注，不影响查询构造。
+>
+> **逐字段独立**：覆盖某字段不影响其他字段——用户覆盖了 `report_period` 但没传 `end_date`，则 `end_date` 默认仍注入。
+>
+> **强制过滤 ≠ 权限强制**：若需「用户不可覆盖」的强制约束（如只能看本部门数据），那属于**权限过滤**（`query.from.permission`，由数据集权限自动生成），不走 filter_config。
 
 **操作符映射**（filter_config → 服务端 where 条件树）：
 
@@ -259,10 +268,10 @@ ops-dataset-query 规划器在 CLI 模式下**离线规划**，读取的本地�
    - `model_view` 新增中文披露字段（如 `default_filters_zh`：`[{"字段": "日期类型", "默认条件": "等于 QUARTER（强制）"}]`），要求回答中**必须向用户披露**已生效的默认条件；
    - `answer_contract.required_disclosures_zh` 追加默认条件披露项。
 
-3. **执行器校验**（`scripts/run_query.py` precheck）：
-   - `type=required` 且用户构造的 filters 未包含 → 自动注入并在披露中标记；
-   - `type=required` 且用户条件与默认条件冲突 → 与服务端行为一致，**不拦截**，默认条件与用户条件静默 AND 合并（评审结论 1）、同值/子集合并去重（评审结论 2）；但披露中必须说明两个条件同时生效，结果可能为空时需在回答中提示原因；
-   - `type=optional` 且用户已提供同字段条件 → 不注入。
+3. **执行器披露**（`scripts/run_query.py`，披露-only，不注入 payload——服务端权威注入）：
+   - 用户未提供该字段条件 → 披露"服务端将自动应用数据集默认条件 X"；
+   - 用户已提供该字段条件 → 披露"你的条件将覆盖数据集默认值 X"（覆盖语义，不再有"AND 同时生效"文案）；
+   - 度量 having 默认条件 → 披露"服务端将按聚合后过滤应用 X"。
 
 4. **规则文档衔接**（`references/rules.md`）：
    现有硬约束「禁止发明默认筛选」需补充例外说明——**来自服务端元数据 filter_configs 的默认条件不属于"发明"**，属于数据集口径的一部分，必须应用且必须披露；除此之外仍然禁止凭推断添加任何筛选。
@@ -291,7 +300,7 @@ ops-dataset-query 规划器在 CLI 模式下**离线规划**，读取的本地�
 | 9 | `skill/export-datasets` 导出的数据集 CSV 含 `filter_config_count` / `filter_config_names` 摘要列，计数与字段 CSV 明细一致 | 下载 CSV 交叉比对 |
 | 10 | `opscli skills upgrade` 后本地缓存包含 filter_config 数据，离线规划可感知 | 升级后运行规划器验证 |
 | 11 | 回归：未配置 filter_config 的数据集，查询/CSV 导出/规划行为与现状完全一致；旧版 opscli 解析新版 CSV 不报错 | 全量回归测试 + 旧版本兼容验证 |
-| 12 | required 默认条件与用户冲突条件静默 AND 合并（不报错），同值/子集条件合并去重后单条生效 | 构造冲突用例与重复用例，检查最终 where 条件树 |
+| 12 | 覆盖语义：用户传某字段任意值/操作符 → 只保留用户条件（默认不注入）；用户没传 → 注入默认；逐字段独立 | 构造 report_period=MONTH / end_date=特定日 / != 等用例，检查 where 树只含用户条件 |
 | 13 | 度量字段 `filter_agg != none` 的默认条件按聚合后过滤（having 语义）生效 | 构造聚合过滤用例，比对聚合前后数据 |
 | 14 | `enum_value` 多值默认条件翻译为 `in` 条件生效 | 构造多枚举值用例，检查 where 条件树与结果 |
 
@@ -301,8 +310,8 @@ ops-dataset-query 规划器在 CLI 模式下**离线规划**，读取的本地�
 
 | # | 问题 | 评审结论 |
 |---|------|---------|
-| 1 | `required` 默认条件与用户显式条件**冲突**时（如默认 `date_type=QUARTER`，用户传 `date_type=MONTH`）如何处理？ | **静默 AND 合并**，不报错、不拦截，与前台查询逻辑保持一致 |
-| 2 | `required` 且用户条件与默认条件**不冲突**（同字段同值或子集）时，是否去重合并？ | **合并去重**，去重后单条生效 |
+| 1 | `required` 默认条件与用户显式条件**冲突**时（如默认 `report_period=QUARTER`，用户传 `MONTH`）如何处理？ | ~~静默 AND 合并~~ → **已被业务复核推翻，改为覆盖语义**：用户传了就以用户为准、覆盖默认（否则业务永远查不了非默认值）。详见「四、4.2 覆盖语义」 |
+| 2 | `required` 且用户条件与默认条件**不冲突**（同字段同值或子集）时，是否去重合并？ | ~~合并去重~~ → **已并入覆盖语义**：用户传了该字段任意条件即以用户为准，不存在两条共存，无需去重 |
 | 3 | 度量字段的 `filter_config`（`filter_agg != none`，having 语义）是否纳入本期？ | **纳入本期**：维度字段与度量字段均处理，度量字段按 having 语义应用 |
 | 4 | `enum_value` 多值 + `operator=equals` 的 where 表达 | **支持 `in`**，多值直接翻译为 `in` 条件 |
 | 5 | 日期预设（`thisQuarter` 等）的解析归属 | **服务端执行时解析**，避免缓存过期口径漂移 |
