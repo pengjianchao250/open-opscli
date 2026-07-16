@@ -111,10 +111,8 @@ def _print_update_hint(current: str, latest: str) -> None:
     console.print(
         f"[yellow]opscli 有新版本可用，建议更新最新版本: v{current} → v{latest}[/yellow]"
     )
-    console.print("[dim]请按以下步骤更新：[/dim]")
-    console.print("[cyan]  1. pip install --upgrade aukeys-opscli[/cyan]")
-    console.print("[cyan]  2. opscli skills install --force[/cyan]")
-    console.print("[cyan]  3. opscli skills upgrade[/cyan]")
+    console.print("[dim]请运行以下命令一键更新（升级 CLI 并自动同步 Skills）：[/dim]")
+    console.print("[cyan]  opscli self-update[/cyan]")
     console.print()
 
 

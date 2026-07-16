@@ -194,7 +194,7 @@ class TestCheckAndNotify:
             captured = capsys.readouterr()
             assert "0.0.72" in captured.err
             assert "0.0.99" in captured.err
-            assert "pip install" in captured.err
+            assert "opscli self-update" in captured.err
 
     @respx.mock
     def test_no_cache_pypi_has_update(self, tmp_path, capsys):

@@ -2895,3 +2895,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：仅 `ops-dataset-query` 规划入口和模型合同；普通数据集规划、字段/时间/权限规则与 `run_query.py` 执行绑定保持不变。
 **回滚方式**：回滚本次提交即可恢复到仅支持普通数据集规划的 1.3.7。
 ---
+
+## 2026-07-16 shared - 版本更新提示语简化为 self-update 单命令
+
+**变更原因**：一期 T1-3，升级提示从三条手动命令简化为一条一键命令，降低升级摩擦
+**改动点**：opscli/shared/update_check.py 的 _print_update_hint 文案；tests/shared/test_update_check.py 对应断言
+**验证结果**：pytest tests/shared/test_update_check.py -v 全绿
+**影响范围**：仅启动时 stderr 提示文案
+**回滚方式**：回退本次 commit
+---
