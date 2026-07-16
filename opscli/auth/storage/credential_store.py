@@ -1,8 +1,13 @@
 """凭证存储模块。
 
-采用双层存储策略（铁律5）：
-- 优先使用系统 Keychain（macOS 钥匙串 / Linux Secret Service）
-- Keychain 不可用时兜底使用 AES-256-GCM 加密文件（credentials.bin）
+存储策略（铁律5）：
+- Windows / Linux：优先使用系统凭证后端（Credential Manager / Secret Service），
+  不可用时兜底使用 AES-256-GCM 加密文件（credentials.bin）
+- macOS：纯走 AES-256-GCM 加密文件。原因：钥匙串按应用二进制签名授权，而
+  pyenv/uv/Homebrew 安装的 Python 均为 ad-hoc 签名（无稳定签名标识），叠加
+  keyring 库写入时"先删除再重建"条目会反复重置授权 ACL，导致用户频繁遭遇
+  钥匙串密码弹窗。纯文件方案的威胁模型与 Windows 凭据管理器等价
+  （按用户隔离，不按应用隔离）。
 
 存储结构（JSON）：
 {
@@ -21,6 +26,8 @@
 """
 import json
 import logging
+import os
+import sys
 import threading
 import time
 import stat
@@ -75,8 +82,9 @@ _KEYRING_ACCOUNT = "credentials"
 class CredentialStore:
     """凭证存储管理器，负责 session 和 JWT 的持久化读写。
 
-    存储策略：Keychain 优先，AES-256-GCM 加密文件兜底。
-    测试环境通过传入 base_dir 参数跳过 Keychain（铁律8）。
+    存储策略：Windows/Linux 优先系统凭证后端、文件兜底；macOS 纯走
+    AES-256-GCM 加密文件（避免钥匙串弹窗，详见模块 docstring）。
+    测试环境通过传入 base_dir 参数跳过系统凭证后端（铁律8）。
     """
 
     def __init__(self, base_dir: Path | None = None):
@@ -85,8 +93,12 @@ class CredentialStore:
             base_dir: 存储目录，传入时跳过 Keychain（用于测试），
                       默认使用 CONFIG_DIR（~/.config/opscli/）
         """
-        # 仅默认路径启用 Keychain；显式传入 base_dir（如测试）走文件存储
-        self._use_keyring = _KEYRING_AVAILABLE and base_dir is None
+        # 仅默认路径启用系统凭证后端；显式传入 base_dir（如测试）走文件存储。
+        # keyring 可用性单独记录：macOS 上读写已禁用（见模块 docstring），
+        # 但 clear() 仍需用它清理历史版本遗留的钥匙串条目
+        self._keyring_available = _KEYRING_AVAILABLE and base_dir is None
+        # macOS 强制禁用 Keychain 读写，纯走 AES 加密文件，避免频繁密码弹窗
+        self._use_keyring = self._keyring_available and sys.platform != "darwin"
         from opscli.config import CONFIG_DIR
         self._dir = Path(base_dir or CONFIG_DIR)
         if self._dir.exists() and not self._dir.is_dir():
@@ -149,8 +161,12 @@ class CredentialStore:
                 pass
             except Exception as _kr_exc:
                 _logger.debug("Keychain 写入失败，降级到文件存储: %s", _kr_exc)
-        self._path.write_bytes(self._crypto.encrypt(raw))
-        self._path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        # 原子写入：先写 pid 后缀的临时文件再 os.replace 原子替换，
+        # 防止多进程并发写入时互相截断导致凭证文件损坏
+        tmp_path = self._path.parent / f"credentials.bin.{os.getpid()}.tmp"
+        tmp_path.write_bytes(self._crypto.encrypt(raw))
+        tmp_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        os.replace(tmp_path, self._path)
 
     def save_session(
         self,
@@ -213,8 +229,8 @@ class CredentialStore:
         return False
 
     def clear(self):
-        # 清除 Keychain
-        if self._use_keyring:
+        # 清除 Keychain：macOS 上读写虽已禁用，但仍需清理历史版本遗留的条目
+        if self._keyring_available:
             try:
                 keyring.delete_password(_KEYRING_SERVICE, _KEYRING_ACCOUNT)
             except Exception as _kr_exc:

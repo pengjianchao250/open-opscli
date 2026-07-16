@@ -1,5 +1,16 @@
 # 待归档变更记录
 
+## 2026-07-16 auth/storage - macOS 禁用 Keychain 改纯 AES 加密文件，消除频繁密码弹窗
+
+**变更原因**：macOS 钥匙串按应用二进制签名授权，而 uv/pyenv/Homebrew 安装的 Python 均为 ad-hoc 签名（`Identifier=-`、无 TeamIdentifier），无法形成稳定授权；叠加 keyring 25.7.0 的 `set_generic_password` 实现为"先删除再重建"条目（每次 JWT 刷新都重置授权 ACL），导致多解释器环境下用户频繁遭遇"Python 想访问钥匙串"密码弹窗。Windows 凭据管理器按用户会话授权无此问题。纯文件方案威胁模型与 Windows 现状等价（按用户隔离，不按应用隔离），且所存凭证均为短生命周期（session 有过期时间、JWT TTL ≤ 24h）。
+**改动点**：
+1. `opscli/auth/storage/credential_store.py`：`CredentialStore.__init__` 新增 `_keyring_available` 字段并使 `_use_keyring` 在 `sys.platform == "darwin"` 时恒为 False（macOS 纯走 AES-256-GCM 加密文件，Windows/Linux 不变）；`_save()` 文件写入改为 pid 后缀临时文件 + `os.replace` 原子替换（防多进程并发写坏）；`clear()` 改用 `_keyring_available` 判断，保证 macOS 上仍能清理历史遗留钥匙串条目；同步更新模块/类 docstring。
+2. `tests/mcp/test_credential_cache.py`：`test_credential_cache_default_base_dir` 补三处 monkeypatch（CONFIG_DIR 之外新增强制 `_KEYRING_AVAILABLE=False` 和清空 `_mcp_credential_caches` 缓存池）。该测试此前在 macOS 上实际写入开发者真实钥匙串（违反铁律8），旧行为下"通过"纯属写读恰好都走全局钥匙串的巧合。
+**验证结果**：`pytest tests/auth/ tests/mcp/ tests/query/` 失败清单与改动前基线完全一致（16 个存量失败，0 新增，comm 对比确认）；模块导入/读写冒烟通过；`opscli auth token status` 正常（因历史超时降级已在文件留有凭证副本，本机无需重新登录）。
+**影响范围**：仅 macOS 用户凭证存储路径；钥匙串中无文件副本的存量用户需重新 `opscli auth login` 一次；Windows/Linux 行为不变；钥匙串遗留条目在 logout 时仍会被清理。
+**回滚方式**：`git revert` 本次对 `credential_store.py` 与 `test_credential_cache.py` 的提交即可，无数据迁移需回退。
+---
+
 ## 2026-07-15 skills/run_query - 默认条件改为只披露不预注入，服务端权威注入
 
 **变更原因**：`_apply_default_filters` 原先会把默认条件预注入进 `payload["filters"]` 再发送给服务端。对日期预设值（如 `beforeYesterday`/`thisQuarter`），客户端注入的是字面量字符串，服务端收到后同时注入自己解析后的真实日期，两者 AND 合并导致字面量永不匹配日期列，致使配置了日期默认条件的数据集经 Skill 查询恒返回 0 行（QA 实证）。服务端是默认条件注入的唯一权威方（评审结论 5），客户端预注入是冗余且有害的。
