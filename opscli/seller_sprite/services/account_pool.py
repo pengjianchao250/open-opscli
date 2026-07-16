@@ -7,8 +7,8 @@ import hashlib
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 
 
-# 并发上限固定为四，避免账号接口返回过多账号时无界创建浏览器会话。
-DEFAULT_MAX_WORKING_ACCOUNTS = 4
+# 并发上限固定为3，避免账号接口返回过多账号时无界创建浏览器会话。
+DEFAULT_MAX_WORKING_ACCOUNTS = 3
 
 
 def seller_sprite_account_key(account: SellerSpriteAccount) -> str:
