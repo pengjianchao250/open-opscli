@@ -126,7 +126,17 @@ pip install -e .
 
 > 发行包名为 `aukeys-opscli`，安装后仍使用 `opscli` 作为命令入口。
 >
-> 当前现状说明：仓库代码仍按单包方式维护与发布，文档中若出现 extras、拆包或插件化表述，请优先按“设计预留”理解。
+> 当前现状说明：仓库代码仍按单包方式维护与发布，文档中若出现 extras、拆包或插件化表述，请优先按”设计预留”理解。
+
+---
+
+## 升级
+
+```bash
+opscli self-update
+```
+
+一条命令完成 CLI 升级与 Skills 同步。详见 [docs/guide/CLI升级指南.md](docs/guide/CLI升级指南.md)。
 
 ---
 

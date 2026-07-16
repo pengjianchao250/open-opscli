@@ -659,6 +659,7 @@ docs/
 | 技术设计 | 通用 Skill 版本控制架构    | `docs/design/通用Skill版本控制架构.md`      |
 | 使用指南 | Skills 基础开发培训手册    | `docs/guide/Skills基础开发培训手册.md`      |
 | 使用指南 | Amazon 抓取代理部署与使用指南 | `docs/guide/Amazon抓取代理部署与使用指南.md` |
+| 使用指南 | CLI 升级指南               | `docs/guide/CLI升级指南.md`                 |
 
 <!-- BEGIN SUPER DEV CLAUDE -->
 # Super Dev Claude Code Integration
