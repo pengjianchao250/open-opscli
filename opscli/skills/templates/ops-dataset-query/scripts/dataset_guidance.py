@@ -25,7 +25,7 @@ FORMULA_RULE = "formula_expression_without_extra_aggregation"
 SNAPSHOT_RULE = "latest_snapshot_no_period_aggregation"
 ASCII_WORD_RE = re.compile(r"[a-z0-9]+")
 CHINESE_RE = re.compile(r"[\u3400-\u9fff]+")
-MAX_CONTRACT_BYTES = 6000
+MAX_CONTRACT_BYTES = 16000
 MAX_FULL_BYTES = 16000
 MAX_QUERY_CHARS = 4096
 MAX_REQUESTED_FIELDS = 32
@@ -38,6 +38,13 @@ def _normalize(value: object) -> str:
     if not isinstance(value, str):
         return ""
     return unicodedata.normalize("NFKC", value).casefold().strip()
+
+
+def _normalize_case_sensitive(value: object) -> str:
+    """仅做 NFKC 与空白归一，不折叠大小写（技术字段精确匹配用）。"""
+    if not isinstance(value, str):
+        return ""
+    return unicodedata.normalize("NFKC", value).strip()
 
 
 def _tokens(value: object) -> set[str]:
@@ -214,7 +221,13 @@ def _select_fields(
         for index, field in enumerate(fields)
     ]
     explicit_count = sum(row[2]["field_name"] in explicit_names for row in ranked)
-    limit = max(limit, explicit_count)
+    # 点名字段存在时不再用无关 fallback 把当前类型机械填满到 8 个：
+    # 显式字段全部保留；另一字段类型最多给 3 个建议，既守住 32 字段公开上限，
+    # 也避免大字段表的指导合同被无关字段撑爆。
+    if explicit_names:
+        limit = max(explicit_count, min(limit, 3))
+    else:
+        limit = max(limit, explicit_count)
     matched = sorted((row for row in ranked if row[0] > 0), key=lambda row: (-row[0], row[1]))
     selected = matched[:limit]
     selected_indexes = {row[1] for row in selected}
@@ -251,6 +264,37 @@ def _validated_dataset_fields(fields: list[dict], dataset: dict) -> list[dict]:
     return selected
 
 
+def _derived_component_fields(dataset: dict, select_columns: list[dict]) -> list[dict]:
+    """从既有 select_columns 关系派生空查询组件的可枚举维度（仅内存）。"""
+    if dataset.get("dataset_category") != "query_component":
+        return []
+    derived = []
+    seen = set()
+    for relation in select_columns:
+        if relation.get("component_dataset_alias") != dataset.get("dataset_alias"):
+            continue
+        field_name = str(relation.get("column_name", ""))
+        if not field_name or field_name in seen:
+            continue
+        seen.add(field_name)
+        derived.append(
+            {
+                "dataset_alias": dataset["dataset_alias"],
+                "dataset_name": dataset["dataset_name"],
+                "field_name": field_name,
+                "verbose_name": relation.get("verbose_name", ""),
+                "field_type": "dimension",
+                "summary_expression": "",
+                "detail_expression": "",
+                "snapshot_metric": "0",
+                "has_formula_config": "0",
+                "filter_config": None,
+                "derived_from": "dataset_select_columns.csv",
+            }
+        )
+    return derived
+
+
 def _resolve_requested_fields(
     fields: list[dict], requested_fields: Iterable[str]
 ) -> tuple[set[str], list[str]]:
@@ -275,17 +319,40 @@ def _resolve_requested_fields(
     selected = set()
     unknown = []
     for raw_value in dict.fromkeys(requested):
-        value = _normalize(raw_value)
-        name_matches = [
+        exact_value = _normalize_case_sensitive(raw_value)
+        folded_value = _normalize(raw_value)
+        # 优先级不能一开始就 casefold：同一表允许 SPU/spu 两个不同技术字段，
+        # 同时 "VCPM" 可能是另一字段的精确展示名。先保留原始大小写身份，
+        # 再用大小写不敏感匹配兼容普通用户输入。
+        exact_name_matches = [
             field
             for field in fields
-            if value == _normalize(field.get("field_name"))
+            if exact_value == _normalize_case_sensitive(field.get("field_name"))
         ]
-        matches = name_matches or [
+        exact_label_matches = [
             field
             for field in fields
-            if any(value == _normalize(label) for label in _field_labels(field))
+            if any(
+                exact_value == _normalize_case_sensitive(label)
+                for label in _field_labels(field)
+            )
         ]
+        folded_name_matches = [
+            field
+            for field in fields
+            if folded_value == _normalize(field.get("field_name"))
+        ]
+        folded_label_matches = [
+            field
+            for field in fields
+            if any(folded_value == _normalize(label) for label in _field_labels(field))
+        ]
+        matches = (
+            exact_name_matches
+            or exact_label_matches
+            or folded_name_matches
+            or folded_label_matches
+        )
         if len(matches) == 1:
             selected.add(matches[0]["field_name"])
         else:
@@ -530,6 +597,11 @@ def build_guidance(
         Path(data_dir),
         snapshot=snapshot,
     )
+    if not fields:
+        all_select_columns = scoped_dataset_reader.load_select_columns(
+            Path(data_dir), snapshot=snapshot
+        )
+        fields = _derived_component_fields(dataset, all_select_columns)
     dataset_fields = _validated_dataset_fields(fields, dataset)
     explicit_names, unknown_fields = _resolve_requested_fields(
         dataset_fields, requested_fields

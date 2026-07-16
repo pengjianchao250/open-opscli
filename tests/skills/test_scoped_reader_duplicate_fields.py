@@ -142,3 +142,26 @@ def test_ambiguous_alt_label_triggers_clarification():
     selected, unknown = dataset_guidance._resolve_requested_fields(fields, ["销售价"])
     assert selected == set()
     assert unknown == ["销售价"]
+
+
+def test_requested_field_preserves_case_sensitive_technical_identity():
+    """同表 SPU/spu 技术字段先按原始大小写精确匹配，不被 casefold 合并。"""
+    fields = [
+        {"field_name": "SPU", "verbose_name": "SPU"},
+        {"field_name": "spu", "verbose_name": "spu"},
+    ]
+    assert dataset_guidance._resolve_requested_fields(fields, ["SPU"]) == ({"SPU"}, [])
+    assert dataset_guidance._resolve_requested_fields(fields, ["spu"]) == ({"spu"}, [])
+
+
+def test_exact_label_precedes_casefolded_technical_name():
+    """VCPM 展示名精确命中优先于另一字段 vcpm 的大小写不敏感技术名。"""
+    fields = [
+        {"field_name": "vcpm", "verbose_name": "VCPM(原币)"},
+        {"field_name": "vcpm_cny", "verbose_name": "VCPM"},
+    ]
+    assert dataset_guidance._resolve_requested_fields(fields, ["VCPM"]) == (
+        {"vcpm_cny"},
+        [],
+    )
+    assert dataset_guidance._resolve_requested_fields(fields, ["vcpm"]) == ({"vcpm"}, [])

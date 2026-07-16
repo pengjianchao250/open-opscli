@@ -17,7 +17,7 @@ query_plan.py -> 当前账号组件枚举 -> opscli query simple
 合并的一条命令）即可，禁止自行升级；偶发窗口超时原样重跑一次，规划器幂等）：
 
 ```bash
-python3 scripts/query_plan.py "$USER_REQUEST"
+python3 scripts/query_plan.py "$USER_REQUEST" > "$PLAN_FILE"
 ```
 
 不要重复读取版本、列目录、检查源码或扫描元数据。规划器只消费当前账号下发的 `data/`；元数据未就绪时规划器会先自动执行一次升级兜底，仍返回 `status=blocked` 时按规划器 `model_view.recovery_command`（`opscli skills upgrade ops-dataset-query`）手动刷新后重新规划。登录/账号/元数据所有权发生变化时同样先刷新再规划。
@@ -26,7 +26,7 @@ python3 scripts/query_plan.py "$USER_REQUEST"
 
 ## 1. 选表与字段
 
-- `status=planned`：数据集已确定，用 `model_view.dataset_name_zh` 与中文粒度向用户确认业务表。
+- `status=planned` 且 `execution_ref.query_template` 存在：数据集、字段、时间和权限动作均已就绪，可进入执行。
 - `status=clarify_required`：只按 `model_view.clarification_messages_zh` 提问，用户确认前停止。
 - 字段与聚合口径只采用 `model_view` 的中文字段和 `execution_ref` 中对应的授权执行字段；`execution_ref` 字段带 `aggregation_policy`（公式或快照口径）时按其执行，不再传普通 `aggregation`。
 
@@ -55,11 +55,13 @@ python3 scripts/query_plan.py "$USER_REQUEST" \
 
 ## 3. 正式查询
 
-按 `references/simple-query-guide.md` 构造参数，执行前展示并确认数据集、字段、时间、筛选、排序、行数和对比口径：
+以规划器 `execution_ref.query_template` 构造参数，正式执行必须绑定同一份规划器文件：
 
 ```bash
-opscli query simple --table-id "$TABLE_ID" --json "$QUERY_JSON" --run --pretty
+python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON" --plan-file "$PLAN_FILE"
 ```
+
+执行器会硬校验 plan 状态、tableId、维度/指标/筛选字段以及模板就绪状态，不得改用 `opscli query simple` 绕过绑定。
 
 - 公式字段不传额外 `aggregation`；快照类指标默认取最新快照，不跨期累加。
 - 环比、同比或上期对比同时传主周期日期 `filters` 和 `dataComparison`。

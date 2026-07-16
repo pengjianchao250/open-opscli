@@ -12,6 +12,7 @@ is_default=True，消费方必须向用户披露默认口径）。
 from __future__ import annotations
 
 import re
+from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
 
 try:  # zoneinfo 3.9+ 标准库；极端环境缺 tzdata 时回落固定 UTC+8
@@ -55,8 +56,72 @@ def _clamp_last_year(value: date) -> date:
         return value.replace(year=value.year - 1, day=28)
 
 
+def _quarter_window(year: int, quarter: int) -> tuple[date, date]:
+    """返回指定自然季度首尾日期。"""
+    month = (quarter - 1) * 3 + 1
+    return date(year, month, 1), date(year, month + 2, monthrange(year, month + 2)[1])
+
+
+def _parsed_date(year: str, month: str, day: str) -> date | None:
+    """安全解析日期，非法日历日期返回 None 交由后续规则处理。"""
+    try:
+        return date(int(year), int(month), int(day))
+    except ValueError:
+        return None
+
+
 def _window(query: str, today: date) -> tuple[date, date, str, bool]:
     """解析主周期窗口，返回 (start, end, 中文标签, 是否默认)。"""
+    # 明确绝对日期范围：2026-07-01 至 2026-07-15 / 2026年7月1日~7月15日
+    absolute = re.search(
+        r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\s*"
+        r"(?:至|到|~|～|—|–)\s*"
+        r"(?:(20\d{2})[-/.年])?(\d{1,2})[-/.月](\d{1,2})日?",
+        query,
+    )
+    if absolute:
+        start = _parsed_date(absolute.group(1), absolute.group(2), absolute.group(3))
+        end = _parsed_date(
+            absolute.group(4) or absolute.group(1),
+            absolute.group(5),
+            absolute.group(6),
+        )
+        if start and end and start <= end:
+            return start, end, f"明确日期范围 {_fmt(start)} 至 {_fmt(end)}", False
+
+    # 指定自然季度：2026Q2 / 2026年第2季度 / 2026年第二季度
+    quarter_match = re.search(
+        r"(20\d{2})\s*(?:年)?\s*(?:Q([1-4])|第?([一二三四1-4])季度)",
+        query,
+        re.IGNORECASE,
+    )
+    if quarter_match:
+        raw_quarter = quarter_match.group(2) or quarter_match.group(3)
+        quarter = _num(raw_quarter)
+        if quarter:
+            start, end = _quarter_window(int(quarter_match.group(1)), quarter)
+            return start, end, f"{start.year}年第{quarter}季度", False
+    current_quarter = (today.month - 1) // 3 + 1
+    if re.search(r"本季度|本季|这个季度", query):
+        start, _end = _quarter_window(today.year, current_quarter)
+        return start, today, "本季度（季度首日至今天）", False
+    if re.search(r"上季度|上个季度|上一季度", query):
+        year = today.year if current_quarter > 1 else today.year - 1
+        quarter = current_quarter - 1 if current_quarter > 1 else 4
+        start, end = _quarter_window(year, quarter)
+        return start, end, f"上季度（{year}年第{quarter}季度）", False
+
+    # 指定自然年与本年/去年。
+    year_match = re.search(r"(20\d{2})年(?:全年)?", query)
+    if year_match:
+        year = int(year_match.group(1))
+        return date(year, 1, 1), date(year, 12, 31), f"{year}年全年", False
+    if re.search(r"今年|本年", query):
+        return date(today.year, 1, 1), today, "今年（1月1日至今天）", False
+    if re.search(r"去年|上年", query):
+        year = today.year - 1
+        return date(year, 1, 1), date(year, 12, 31), f"去年（{year}年全年）", False
+
     m = re.search(r"[近最][近]?\s*([0-9]+|[一两二三四五六七八九十]+)\s*(天|日|周|个?月)", query)
     if m:
         count = _num(m.group(1))

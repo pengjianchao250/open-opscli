@@ -153,3 +153,38 @@ def test_build_guidance_default_filters_empty_when_unconfigured(tmp_path):
         data_dir, {"dataset_alias": "ds_a"}, query="按日期看GMV"
     )
     assert result["default_filters"] == []
+
+
+def test_empty_query_component_derives_fields_from_select_columns(tmp_path: Path):
+    """空组件从现有关系 CSV 内存派生枚举字段，不新增旁路索引。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        '{"name":"ops-dataset-query","version":"v1","data_state":"ready"}',
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "1,ds_main,main_set,normal,0,主数据集,\n"
+        "48,ds_dept,custom_dept_set,query_component,0,查询组件部门数据集,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "1,ds_main,main_set,amount,金额,f_amount,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n"
+        "ds_main,dept_name,部门,ds_dept\n",
+        encoding="utf-8",
+    )
+    result = dataset_guidance.build_guidance(
+        data_dir,
+        {"dataset_alias": "ds_dept"},
+        query="部门枚举值",
+        requested_fields=["dept_name"],
+    )
+    assert result["guidance_status"] == "permission_enum_only"
+    assert result["field_guidance"]["dimensions"][0]["field_name"] == "dept_name"

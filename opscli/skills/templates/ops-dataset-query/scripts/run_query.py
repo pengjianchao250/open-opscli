@@ -11,8 +11,8 @@
    stdout 只输出预览 + 披露 + 内嵌证据合同，单次输出限幅。
 
 用法（规划器 ready 后的唯一执行入口）：
-  python3 scripts/run_query.py --table-id 2 --json "$QUERY_JSON" [--preview-rows 20] [--no-evidence]
-  python3 scripts/run_query.py --table-id 2 --json-file payload.json
+  python3 scripts/run_query.py --table-id 2 --json "$QUERY_JSON" --plan-file query-plan.json
+  python3 scripts/run_query.py --table-id 2 --json-file payload.json --plan-file query-plan.json
 """
 
 from __future__ import annotations
@@ -188,6 +188,79 @@ def _precheck(payload: dict) -> None:
     _normalize_order_by(payload)
 
 
+def _field_name(value: object) -> str:
+    """归一 payload 字段引用，兼容 ``table.field`` 形态。"""
+    return str(value or "").split(".")[-1]
+
+
+def _validate_plan_binding(plan: dict, table_id: str, payload: dict) -> None:
+    """把执行请求硬绑定到规划器的表、状态和授权字段集合。"""
+    if plan.get("contract") != "query_plan_model_contract_v2":
+        raise PrecheckError("plan 不是 query_plan_model_contract_v2 规划器输出。")
+    if plan.get("status") != "planned":
+        raise PrecheckError("plan 尚未达到 planned 状态：先完成规划器要求的澄清或恢复动作。")
+    execution = plan.get("execution_ref")
+    if not isinstance(execution, dict):
+        raise PrecheckError("plan 缺少 execution_ref，禁止无授权引用执行。")
+    planned_table = execution.get("table_id")
+    if str(planned_table) != str(table_id):
+        raise PrecheckError(
+            f"--table-id 与规划器不一致：收到 {table_id}，规划器为 {planned_table}。"
+        )
+    payload_table = payload.get("tableId")
+    if payload_table not in (None, "") and str(payload_table) != str(planned_table):
+        raise PrecheckError(
+            f"payload.tableId 与规划器不一致：收到 {payload_table}，规划器为 {planned_table}。"
+        )
+    if not isinstance(execution.get("query_template"), dict):
+        raise PrecheckError(
+            "规划器尚未下发 query_template：先完成默认时间、推荐字段或权限枚举确认。"
+        )
+
+    planned_dimensions = {
+        str(item.get("field_name"))
+        for item in execution.get("dimensions") or []
+        if isinstance(item, dict) and item.get("field_name")
+    }
+    planned_metrics = {
+        str(item.get("field_name"))
+        for item in execution.get("metrics") or []
+        if isinstance(item, dict) and item.get("field_name")
+    }
+    filter_fields = planned_dimensions | planned_metrics
+    for key in ("date_fields", "filter_components", "default_filters"):
+        filter_fields.update(
+            str(item.get("field_name"))
+            for item in execution.get(key) or []
+            if isinstance(item, dict) and item.get("field_name")
+        )
+    platform_field = (execution.get("platform_component_alias") and "platform_name") or ""
+    if platform_field:
+        filter_fields.add(platform_field)
+
+    def _assert_fields(entries: object, allowed: set[str], label: str) -> None:
+        if entries is None:
+            return
+        if not isinstance(entries, list):
+            raise PrecheckError(f"payload.{label} 必须是数组。")
+        unknown = [
+            _field_name(item.get("field"))
+            for item in entries
+            if isinstance(item, dict) and _field_name(item.get("field")) not in allowed
+        ]
+        if unknown:
+            raise PrecheckError(
+                f"payload.{label} 含规划器未授权字段 {unknown[:3]}：只能使用 execution_ref 中的字段。"
+            )
+
+    _assert_fields(payload.get("dimensions"), planned_dimensions, "dimensions")
+    _assert_fields(payload.get("metrics"), planned_metrics, "metrics")
+    _assert_fields(payload.get("filters"), filter_fields, "filters")
+    comparison = payload.get("dataComparison")
+    if isinstance(comparison, dict) and _field_name(comparison.get("field")) not in filter_fields:
+        raise PrecheckError("dataComparison.field 不在规划器授权日期字段中。")
+
+
 def _run_opscli(table_id: str, payload: dict) -> dict:
     """执行正式查询并解析返回 JSON（剥离升级提示等前缀噪声）。"""
     try:
@@ -324,6 +397,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--table-id", required=True)
     parser.add_argument("--json", default="", help="查询 payload JSON 字符串")
     parser.add_argument("--json-file", default="", help="payload 文件路径（- 为 stdin）")
+    plan_group = parser.add_mutually_exclusive_group()
+    plan_group.add_argument("--plan-json", default="", help="query_plan.py 的完整模型合同 JSON")
+    plan_group.add_argument("--plan-file", default="", help="query_plan.py 模型合同文件路径")
+    parser.add_argument(
+        "--unsafe-unbound-plan",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--preview-rows", type=int, default=20)
     parser.add_argument("--no-evidence", action="store_true", help="不内嵌证据合同")
     parser.add_argument(
@@ -350,6 +431,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not raw.strip():
             raise PrecheckError("缺少 payload：用 --json 或 --json-file 传入查询参数。")
         payload = _parse_payload(raw)
+        if args.plan_file:
+            plan_raw = Path(args.plan_file).read_text(encoding="utf-8")
+        else:
+            plan_raw = args.plan_json
+        if plan_raw.strip():
+            plan = _parse_payload(plan_raw)
+            _validate_plan_binding(plan, args.table_id, payload)
+        elif not args.unsafe_unbound_plan:
+            raise PrecheckError(
+                "缺少规划器绑定：必须传 --plan-file 或 --plan-json，禁止绕过 query_plan.py 直接执行。"
+            )
+        if payload.get("tableId") not in (None, "") and str(payload["tableId"]) != str(args.table_id):
+            raise PrecheckError("payload.tableId 与 --table-id 不一致。")
         payload.setdefault("tableId", args.table_id)
         # 生成规划器下发的数据集默认条件披露说明（服务端权威注入，本函数只读不写 payload）
         # 注意：默认条件实际注入由服务端完成，客户端不预注入，避免日期预设字面量冲突
@@ -446,8 +540,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "status": "executor_error",
                     "error": str(error)[:200],
                     "next_action_zh": (
-                        "执行器异常：先原样重试一次；仍失败改用 opscli query simple 直连执行，"
-                        "并按 references/feedback-guide.md 提交一次反馈。"
+                        "执行器异常：先原样重试一次；仍失败按 references/feedback-guide.md "
+                        "提交一次反馈并停止，禁止绕过执行器直连。"
                     ),
                 },
                 ensure_ascii=False,

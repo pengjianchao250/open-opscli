@@ -61,6 +61,10 @@
           "description": "无点名指标时的系统推荐（需向用户确认后采用）",
           "$ref": "#/$defs/string_array"
         },
+        "default_filters_zh": {
+          "description": "数据集默认条件的中文披露，不写入执行 payload，由服务端权威应用",
+          "$ref": "#/$defs/string_array"
+        },
         "dataset_candidates_zh": {
           "description": "澄清态候选数据集卡片：中文名 + 命中原因，供带选项提问",
           "type": "array",
@@ -69,13 +73,25 @@
             "required": ["name_zh", "reason_zh"],
             "properties": {
               "name_zh": {"type": "string"},
-              "reason_zh": {"type": "string"}
+              "reason_zh": {"type": "string"},
+              "summary_zh": {
+                "description": "仅由当前 CSV 字段统计生成的候选区分摘要",
+                "type": "string"
+              }
             },
             "additionalProperties": false
           }
         },
         "unknown_requested_fields": {
           "description": "点名但未匹配到的字段回显",
+          "$ref": "#/$defs/string_array"
+        },
+        "ambiguous_field_labels_zh": {
+          "description": "自然语言同名多物理字段，禁止静默择一",
+          "$ref": "#/$defs/string_array"
+        },
+        "pending_confirmations_zh": {
+          "description": "默认时间或系统推荐字段等必须先确认的口径",
           "$ref": "#/$defs/string_array"
         },
         "field_suggestions_zh": {
@@ -194,6 +210,12 @@
           "type": "object"
         },
         "query_template_fill_rules_zh": {"type": "string"}
+        ,
+        "default_filters": {
+          "description": "服务端自动应用的默认条件执行引用，仅用于披露与审计",
+          "type": "array",
+          "items": {"$ref": "#/$defs/default_filter"}
+        }
       },
       "additionalProperties": false
     }
@@ -221,6 +243,28 @@
         },
         "additionalProperties": false
       }
+    },
+    "default_filter": {
+      "type": "object",
+      "required": [
+        "field_name",
+        "label_zh",
+        "operator",
+        "values",
+        "type",
+        "filter_type",
+        "filter_agg"
+      ],
+      "properties": {
+        "field_name": {"type": "string"},
+        "label_zh": {"type": "string"},
+        "operator": {"type": "string"},
+        "values": {"type": "array"},
+        "type": {"type": "string"},
+        "filter_type": {"type": "string"},
+        "filter_agg": {"type": "string"}
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
