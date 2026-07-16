@@ -7,6 +7,8 @@
 import sys
 from unittest.mock import MagicMock, patch
 
+from typer.testing import CliRunner
+
 from opscli.shared.self_update import (
     INSTALL_METHOD_PIP,
     INSTALL_METHOD_PIPX,
@@ -174,3 +176,48 @@ class TestRunSelfUpdate:
         assert mock_run.call_args_list[1].args[0] == [
             sys.executable, "-m", "opscli.cli", "skills", "install", "--force",
         ]
+
+
+class TestCliCommand:
+    """CLI 命令注册测试：通过 CliRunner 走完整 Typer 链路。
+
+    主回调中的版本检查与遥测均需打桩，避免测试发真实网络请求（铁律8）。
+    """
+
+    def _invoke(self, run_self_update_code: int):
+        """打桩后执行 opscli self-update，返回 CliRunner 结果。"""
+        from opscli.cli import app
+
+        with (
+            patch("opscli.shared.update_check.check_and_notify"),
+            patch("opscli.telemetry.reporter.TelemetryReporter.fire"),
+            patch(
+                "opscli.shared.self_update.run_self_update",
+                return_value=run_self_update_code,
+            ) as mock_update,
+        ):
+            result = CliRunner().invoke(app, ["self-update"])
+        return result, mock_update
+
+    def test_success_exit_zero(self):
+        """run_self_update 返回 0 时命令退出码为 0。"""
+        result, mock_update = self._invoke(0)
+        assert result.exit_code == 0
+        mock_update.assert_called_once()
+
+    def test_failure_propagates_exit_code(self):
+        """run_self_update 返回非 0 时命令退出码透传。"""
+        result, _ = self._invoke(1)
+        assert result.exit_code == 1
+
+    def test_help_lists_command(self):
+        """opscli --help 中能看到 self-update 命令。"""
+        from opscli.cli import app
+
+        with (
+            patch("opscli.shared.update_check.check_and_notify"),
+            patch("opscli.telemetry.reporter.TelemetryReporter.fire"),
+        ):
+            result = CliRunner().invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "self-update" in result.output

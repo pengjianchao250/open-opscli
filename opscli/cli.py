@@ -72,6 +72,17 @@ app.add_typer(skills_app, name="skills")
 app.add_typer(mcp_app, name="mcp")
 
 
+@app.command("self-update")
+def self_update():
+    """一键升级 opscli 并自动同步 Skills（等效于 pip 升级 + skills install/upgrade）。"""
+    # 延迟导入：避免拖慢所有命令的启动耗时
+    from opscli.shared.self_update import run_self_update
+
+    code = run_self_update()
+    if code != 0:
+        raise typer.Exit(code)
+
+
 def _get_current_user_email() -> str | None:
     """静默读取当前登录用户的 email，未登录或读取失败均返回 None。"""
     try:

@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-16 cli - 注册顶级 self-update 命令
+
+**变更原因**：一期 T1-1，向用户暴露一键升级入口
+**改动点**：opscli/cli.py 新增 @app.command("self-update")，薄壳调用 run_self_update 并透传退出码
+**验证结果**：pytest tests/shared/test_self_update.py -v 18 个测试全绿；真机 opscli self-update --help 冒测通过
+**影响范围**：新增顶级命令，不影响既有命令
+**回滚方式**：回退本次 commit
+---
+
 ## 2026-07-16 shared - 新增 run_self_update 升级编排流程
 
 **变更原因**：一期 T1-1，实现"升级 CLI + 自动同步 Skills"完整编排
