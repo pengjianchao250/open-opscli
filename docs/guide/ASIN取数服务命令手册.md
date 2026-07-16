@@ -10,9 +10,8 @@
 | 基础数据查询 | `opscli asin-data basic` | ASIN | 刊登基础数据和爬虫补充数据 JSON |
 | BI数据查询 | `opscli asin-data bi` | ASIN | 最近30天全部 BI 数据域 JSON |
 | 类目Top查询 | `opscli asin-data category-top` | 类目名称 | 当月类目 Top 10 JSON |
-| 历史拆分文件读取 | `opscli asin-data fetch-file` | ASIN、文件类型 | OSS历史文件内容 JSON |
 
-`basic`、`bi`、`category-top` 只返回 JSON，不生成 Excel、不上传 OSS。`fetch-file` 不执行实时取数，只读取已有 OSS 历史文件。
+`basic`、`bi`、`category-top` 只返回 JSON，不生成 Excel、不上传 OSS。
 
 快速示例：
 
@@ -20,7 +19,6 @@
 opscli asin-data basic --asin B086M58PQ3 --site US
 opscli asin-data bi --asin B086M58PQ3 --site US --domain sqp
 opscli asin-data category-top --category "Bed Frames" --site US --limit 10
-opscli asin-data fetch-file --asin B086M58PQ3 --file basic --site US
 ```
 
 ## 2. 公共输入规则
@@ -343,117 +341,7 @@ opscli asin-data category-top `
 }
 ```
 
-## 6. 历史拆分文件读取
-
-### 6.1 命令格式
-
-```text
-opscli asin-data fetch-file --asin ASIN --file FILE_KEY
-                              [--site SITE] [--pretty]
-```
-
-### 6.2 参数
-
-| 参数 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `--asin` | 是 | - | 目标ASIN |
-| `--file` | 是 | - | 历史拆分文件类型 |
-| `--site` | 否 | `US` | Amazon站点代码 |
-| `--pretty` | 否 | `false` | 格式化输出JSON |
-
-### 6.3 文件类型
-
-| file_key | 文件内容 | 返回方式 |
-| --- | --- | --- |
-| `basic` | 基础刊登和爬虫数据 | 下载XLSX并转换为JSON |
-| `bi` | BI经营数据 | 下载XLSX并转换为JSON |
-| `keyword_reverse` | 关键词反查数据 | 下载XLSX并转换为JSON |
-| `keyword_miner` | 关键词挖掘数据 | 下载XLSX并转换为JSON |
-| `competitor` | 竞品数据 | 下载XLSX并转换为JSON |
-| `rufus` | Rufus报告 | 下载Markdown并返回文本 |
-
-XLSX内容转换为以下结构：
-
-```json
-{
-  "工作表名称": [
-    ["字段1", "字段2"],
-    ["值1", "值2"]
-  ]
-}
-```
-
-### 6.4 取数来源
-
-1. 通过报告文件索引接口查询该ASIN和站点的最新记录：
-
-```text
-/dataMetrics/v1/asin-report-files
-```
-
-2. 从记录的以下字段中解析对应OSS地址：
-
-```text
-basic_data_url
-bi_data_url
-keyword_reverse_url
-keyword_miner_urls
-competitor_urls
-rufus_report_url
-```
-
-3. 下载OSS文件。文件地址为数组时读取第一个地址，下载超时为60秒。
-
-### 6.5 使用示例
-
-读取基础数据历史文件：
-
-```powershell
-opscli asin-data fetch-file `
-  --asin B086M58PQ3 `
-  --file basic `
-  --site US
-```
-
-读取BI历史文件：
-
-```powershell
-opscli asin-data fetch-file --asin B086M58PQ3 --file bi
-```
-
-读取Rufus文本报告：
-
-```powershell
-opscli asin-data fetch-file --asin B086M58PQ3 --file rufus
-```
-
-### 6.6 返回结构
-
-```json
-{
-  "success": true,
-  "command": "asin-data fetch-file",
-  "data": {
-    "asin": "B086M58PQ3",
-    "site": "US",
-    "file_key": "basic",
-    "file_url": "https://example.oss.aliyuncs.com/basic.xlsx",
-    "content": {
-      "基础汇总": []
-    }
-  },
-  "error": null
-}
-```
-
-### 6.7 注意事项
-
-- `fetch-file` 只读取已生成的历史文件，不会刷新数据。
-- 没有报告记录、没有对应 `file_key` 地址或OSS文件失效时，返回 `ASIN_REPORT_FILE_NOT_FOUND` 或下载错误。
-- 大型XLSX会完整转换到JSON，响应体可能较大。
-- `fetch-file` 会进入opscli全局中央遥测；当前不写入 `asin-data/usage.jsonl` 本地结构化日志。
-
-## 7. 状态与错误处理
+## 6. 状态与错误处理
 
 顶层成功结构：
 
@@ -499,9 +387,9 @@ opscli asin-data fetch-file --asin B086M58PQ3 --file rufus
 - 日期格式不正确、开始日期晚于结束日期或包含未来日期。
 - `--source` 或 `--domain` 不在允许范围内。
 
-## 8. 请求检测与日志
+## 7. 请求检测与日志
 
-### 8.1 本地结构化日志
+### 7.1 本地结构化日志
 
 每次执行 `basic`、`bi`、`category-top` 都会写入：
 
@@ -535,7 +423,7 @@ C:\Users\<用户名>\.config\opscli\asin-data\usage.jsonl
 | `OPSCLI_ASIN_DATA_USAGE_LOG_DISABLED=1` | 关闭本地日志 |
 | `OPSCLI_ASIN_DATA_USAGE_LOG_PATH` | 覆盖日志文件路径 |
 
-### 8.2 中央遥测
+### 7.2 中央遥测
 
 opscli 全局遥测会异步上报命令路径、原始CLI参数、状态、耗时、用户和设备标识：
 
@@ -545,7 +433,7 @@ opscli 全局遥测会异步上报命令路径、原始CLI参数、状态、耗�
 
 遥测网络失败不会影响命令执行。
 
-## 9. 兼容命令说明
+## 8. 兼容命令说明
 
 旧 `live-data` 已从帮助页隐藏，只作为兼容入口保留。新脚本和 Skill 不应继续生成 `live-data --data-scope`，应改用：
 
@@ -554,16 +442,14 @@ opscli 全局遥测会异步上报命令路径、原始CLI参数、状态、耗�
 | 基础刊登和爬虫数据 | `opscli asin-data basic` |
 | BI经营数据 | `opscli asin-data bi` |
 | 内部类目Top数据 | `opscli asin-data category-top` |
-| 读取已有拆分文件 | `opscli asin-data fetch-file` |
 
 `collect`、`stage-collect`、`merge-stages`、`daily-collect` 仍属于完整采集和流水线命令，不作为轻量取数服务的默认入口。
 
-## 10. 命令帮助
+## 9. 命令帮助
 
 ```powershell
 opscli asin-data --help
 opscli asin-data basic --help
 opscli asin-data bi --help
 opscli asin-data category-top --help
-opscli asin-data fetch-file --help
 ```
