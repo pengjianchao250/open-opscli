@@ -1,5 +1,18 @@
 # 待归档变更记录
 
+## 2026-07-16 query - 查询超时可配置（默认 30→120 秒）+ 查询结果落盘 JSON 文件
+
+**变更原因**：AI Agent 取数时大数据量查询频繁出现"数据量过大超时"。根因是 `QueryClient.cli_query`/`cli_simple_query` 的 HTTP 超时硬编码 30 秒，服务端处理大查询超过 30 秒即 ReadTimeout（skill 执行器 run_query.py 的 300 秒 subprocess 超时因内层 30 秒先触发而形同虚设）；同时查询结果只能全量打印到 stdout，无保存结果到文件的能力，大结果集会撑爆 AI 上下文。
+**改动点**：
+1. `opscli/query/transport/client.py`：新增模块常量 `DEFAULT_QUERY_TIMEOUT = 120`；`QueryClient.__init__` 新增 `timeout` 参数（None 或非正数回退默认值）；`cli_query`/`cli_simple_query` 的 `timeout=30` 改为 `timeout=self.timeout`。元数据类 GET 接口保持 20 秒不变。
+2. `opscli/query/services/manager.py`：`QueryManager.__init__` 新增 `timeout` 参数透传给 QueryClient。
+3. `opscli/query/commands/cli.py`：`run`/`simple`/`build`/`chart` 四个命令各新增 `--timeout`（HTTP 超时秒数）、`--result-file`（结果保存到指定 JSON 文件）、`--save-result`（保存到默认临时路径 `<系统临时目录>/opscli/query_results/query_result_<时间戳>.json`）三个参数；新增 `_extract_result_rows`（兼容 rows / result.data / merged.rows 三种返回形态）和 `_maybe_save_result` 两个 helper；保存后 stdout 输出瘦身为 result_file 路径 + row_count（本次返回并落盘行数，取 meta.rowCount 回退实际行数）+ total_count（服务端匹配总数，取 meta.totalCount，分页场景可能大于 row_count）+ 前 10 行预览（`RESULT_PREVIEW_ROWS = 10`）。两个保存参数仅与 --run 同用生效，均不传时 stdout 行为完全不变。row_count/total_count 分开披露是真实验收中发现的修正：limit=30 时 totalCount=574，若混用会误导 AI 以为落盘文件有 574 行。
+4. `tests/query/`：test_client.py 默认超时断言 30→120 并新增 2 个自定义超时测试；test_manager.py 新增透传测试；test_cli.py 受影响命令的 QueryManager 补丁改为 `lambda **kwargs:` 形式并新增 4 个新参数测试。
+**验证结果**：`pytest tests/query` 78/78 全部通过；`pytest tests/mcp` 失败清单与改动前基线完全一致（7 个存量失败，0 新增，git stash 对比确认）；四个命令 `--help` 冒烟确认新参数生效。真实环境验收（sale_trend_set / table_id=2，登录态）7 个场景全部通过：默认行为 stdout 不变、--save-result 落默认临时路径且预览 10 行/全量 30 行落盘一致、--result-file 指定路径含中文文件名和父目录自动创建、--timeout 300 正常执行、build --run 落盘链路正常、写只读目录失败走标准错误体 exit 1 不静默降级。验收中的 422 参数验证失败（小写 aggregation 所致）已按铁律提交反馈 feedback_uuid=4eccb524-f626-4a6c-a7f5-20c3cb0284fb。
+**影响范围**：默认超时 30→120 秒影响 CLI、MCP 工具与 ops-dataset-query skill 的全部查询执行链（均经同一 QueryClient）；若上游网关有更短超时则以网关为准；未传新参数时输出结构不变，skill 的 run_query.py stdout 解析不受影响；默认临时路径文件不自动清理，依赖系统 tmp 清理策略。
+**回滚方式**：`git revert` 本次对 `opscli/query/` 三个文件与 `tests/query/` 三个测试文件的提交即可，无数据迁移。
+---
+
 ## 2026-07-16 auth/storage - macOS 禁用 Keychain 改纯 AES 加密文件，消除频繁密码弹窗
 
 **变更原因**：macOS 钥匙串按应用二进制签名授权，而 uv/pyenv/Homebrew 安装的 Python 均为 ad-hoc 签名（`Identifier=-`、无 TeamIdentifier），无法形成稳定授权；叠加 keyring 25.7.0 的 `set_generic_password` 实现为"先删除再重建"条目（每次 JWT 刷新都重置授权 ACL），导致多解释器环境下用户频繁遭遇"Python 想访问钥匙串"密码弹窗。Windows 凭据管理器按用户会话授权无此问题。纯文件方案威胁模型与 Windows 现状等价（按用户隔离，不按应用隔离），且所存凭证均为短生命周期（session 有过期时间、JWT TTL ≤ 24h）。

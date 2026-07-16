@@ -43,8 +43,42 @@ def test_cli_query_sends_auth_headers_and_cookies(monkeypatch):
     assert captured["headers"]["Authorization"] == "Bearer jwt-token"
     assert captured["cookies"]["polarisUserToken"] == "session-123"
     assert captured["cookies"]["opscliDeviceCode"] == "dc-abc"
-    assert captured["timeout"] == 30
+    assert captured["timeout"] == 120
     assert result["meta"]["rowCount"] == 0
+
+
+def test_cli_query_uses_custom_timeout(monkeypatch):
+    """构造时传入 timeout 应透传到 cli-query 的 HTTP 请求。"""
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, cookies=None, timeout=None):
+        captured["timeout"] = timeout
+        return httpx.Response(200, json={"rows": [], "meta": {"rowCount": 0}})
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.post", fake_post)
+    client = QueryClient(auth_client=DummyAuthClient(), timeout=180)
+
+    client.cli_query({"tableId": 1103, "query": {"select": []}})
+
+    assert captured["timeout"] == 180
+
+
+def test_cli_simple_query_uses_custom_timeout(monkeypatch):
+    """构造时传入 timeout 应透传到 cli-query/simple 的 HTTP 请求。"""
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, cookies=None, timeout=None):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        return httpx.Response(200, json={"data": [], "meta": {"totalCount": 0}})
+
+    monkeypatch.setattr("opscli.query.transport.client.httpx.post", fake_post)
+    client = QueryClient(auth_client=DummyAuthClient(), timeout=180)
+
+    client.cli_simple_query({"tableId": 1103})
+
+    assert captured["url"].endswith("/v1/data-metrics/cli-query/simple")
+    assert captured["timeout"] == 180
 
 
 def test_cli_query_raises_business_error(monkeypatch):

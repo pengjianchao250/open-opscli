@@ -41,9 +41,11 @@ class QueryManager:
         auth_client: AuthClient | None = None,
         jwt: str | None = None,
         session_id: str | None = None,
+        timeout: float | None = None,
     ) -> None:
+        """初始化管理器。timeout 为查询执行接口的 HTTP 超时秒数，透传给 QueryClient，None 时使用默认值。"""
         self.detector = SkillDetector()
-        self.client = QueryClient(auth_client=auth_client, jwt=jwt, session_id=session_id)
+        self.client = QueryClient(auth_client=auth_client, jwt=jwt, session_id=session_id, timeout=timeout)
         self.template_dir = Path(__file__).resolve().parent.parent.parent / "skills" / "templates" / "ops-dataset-query" / "data"
 
     def list_datasets(self, *, skills_dir: str | None = None, cwd: Path | None = None) -> list[dict]:
