@@ -8,16 +8,19 @@ import re
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
-from opscli.seller_sprite.accounts import SellerSpriteAccountProvider
+from opscli.seller_sprite.accounts import SellerSpriteAccount, SellerSpriteAccountProvider
 from opscli.seller_sprite.api.categories import SellerSpriteCategoryResolver
 from opscli.seller_sprite.api.client import BASE_URL, SellerSpriteApiClient
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.api.scenarios import get_scenario, list_scenarios
 from opscli.seller_sprite.browser_route import (
     BrowserRouteRequest,
+    BrowserRouteResult,
+    BrowserRouteWorkerClosedError,
+    build_default_session_state_listener,
     get_browser_route_worker,
     get_existing_browser_route_worker,
 )
@@ -54,10 +57,32 @@ class SellerSpriteApiManager:
         account_provider: SellerSpriteAccountProvider | None = None,
         jwt: str | None = None,
         session_id: str | None = None,
+        session_state_listener: Callable[
+            [SellerSpriteAccount, dict[str, Any]], None
+        ]
+        | None = None,
+        session_owner_id: str = "default",
     ) -> None:
+        """创建卖家精灵场景执行器。
+
+        参数：
+            settings: 卖家精灵运行配置。
+            account_provider: 账号来源。
+            jwt: 当前调用者 JWT，仅用于账号接口。
+            session_id: 当前调用会话标识。
+            session_state_listener: browser 会话状态监听器。
+            session_owner_id: browser worker 所有权标识。
+
+        返回：
+            无。
+        """
         self.settings = settings or load_settings()
         self.jwt = jwt
         self.session_id = session_id
+        self.session_state_listener = session_state_listener or build_default_session_state_listener(
+            self.settings
+        )
+        self.session_owner_id = session_owner_id
         self.account_provider = account_provider or SellerSpriteAccountProvider(
             self.settings,
             integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
@@ -73,7 +98,11 @@ class SellerSpriteApiManager:
         if mode != "browser-route":
             return False
         account = self.account_provider.get_default()
-        worker = get_existing_browser_route_worker(settings=self.settings, account=account)
+        worker = get_existing_browser_route_worker(
+            settings=self.settings,
+            account=account,
+            owner_id=self.session_owner_id,
+        )
         return bool(worker and worker.is_busy)
 
     async def start(self, request: SellerSpriteScenarioRequest) -> dict[str, Any]:
@@ -200,6 +229,8 @@ class SellerSpriteApiManager:
                         if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload)
                         else None
                     ),
+                    session_state_listener=self.session_state_listener,
+                    session_owner_id=self.session_owner_id,
                 )
                 login = browser_result.login
                 main_response = browser_result.response
@@ -287,7 +318,7 @@ class SellerSpriteApiManager:
         }
         _write_json(raw_path, raw)
 
-        rows = _extract_items(main_response)
+        rows = _extract_items(main_response, scenario=request.scenario)
         high_frequency_rows = _extract_high_frequency_rows(high_frequency_response)
         export_format = _normalize_export_format(request.export_format)
         if export_format == "xlsx":
@@ -359,6 +390,11 @@ class SellerSpriteApiManager:
         return merged
 
     def _build_root_dir(self, request: SellerSpriteScenarioRequest, job_id: str) -> Path:
+        if request.attempt_output_dir:
+            attempt_dir = Path(request.attempt_output_dir).expanduser()
+            if not attempt_dir.is_absolute():
+                attempt_dir = Path.cwd() / attempt_dir
+            return attempt_dir.resolve()
         base_dir = Path(request.output_dir).expanduser() if request.output_dir else self.settings.output_dir
         if not base_dir.is_absolute():
             base_dir = Path.cwd() / base_dir
@@ -374,7 +410,7 @@ async def _run_main_request(
     referer: str,
     root_dir: Path,
 ) -> dict[str, Any]:
-    if method == "GET":
+    if method in {"GET", "PAGE_CAPTURE"}:
         return await client.get_json(endpoint, payload, referer=referer)
     if method == "POST_QUERY":
         return await client.request_json(
@@ -411,7 +447,7 @@ async def _run_main_request(
 async def _run_browser_route_request(
     *,
     settings: SellerSpriteSettings,
-    account,
+    account: SellerSpriteAccount,
     request: SellerSpriteScenarioRequest,
     scenario_method: str,
     endpoint: str,
@@ -420,34 +456,48 @@ async def _run_browser_route_request(
     root_dir: Path,
     high_frequency_endpoint: str | None,
     high_frequency_payload: dict[str, Any] | None,
-):
-    worker = get_browser_route_worker(settings=settings, account=account)
-    return await worker.submit(
-        BrowserRouteRequest(
-            scenario=request.scenario,
-            method=scenario_method,
-            endpoint=endpoint,
-            payload=payload,
-            referer=referer,
-            account=account,
-            root_dir=root_dir,
-            high_frequency_endpoint=high_frequency_endpoint,
-            high_frequency_payload=high_frequency_payload,
-            page_prepare=(
-                settings.browser_page_prepare if request.page_prepare is None else request.page_prepare
-            ),
-            task_interval_seconds=(
-                settings.browser_task_interval_seconds
-                if request.task_interval_seconds is None
-                else request.task_interval_seconds
-            ),
-            cooldown_seconds=(
-                settings.browser_cooldown_seconds
-                if request.cooldown_seconds is None
-                else request.cooldown_seconds
-            ),
-        )
+    session_state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None,
+    session_owner_id: str,
+) -> BrowserRouteResult:
+    """提交 browser-route 请求，遇到并发回收时仅重建并重试一次。"""
+    browser_request = BrowserRouteRequest(
+        scenario=request.scenario,
+        method=scenario_method,
+        endpoint=endpoint,
+        payload=payload,
+        referer=referer,
+        account=account,
+        root_dir=root_dir,
+        high_frequency_endpoint=high_frequency_endpoint,
+        high_frequency_payload=high_frequency_payload,
+        page_prepare=(
+            settings.browser_page_prepare if request.page_prepare is None else request.page_prepare
+        ),
+        task_interval_seconds=(
+            settings.browser_task_interval_seconds
+            if request.task_interval_seconds is None
+            else request.task_interval_seconds
+        ),
+        cooldown_seconds=(
+            settings.browser_cooldown_seconds
+            if request.cooldown_seconds is None
+            else request.cooldown_seconds
+        ),
     )
+    for attempt in range(2):
+        worker = get_browser_route_worker(
+            settings=settings,
+            account=account,
+            state_listener=session_state_listener,
+            owner_id=session_owner_id,
+        )
+        try:
+            return await worker.submit(browser_request)
+        except BrowserRouteWorkerClosedError:
+            # 回收先取得生命周期锁时，丢弃旧引用并从 registry 获取全新 worker。
+            if attempt > 0:
+                raise
+    raise BrowserRouteWorkerClosedError("browser worker 重建后仍不可用")
 
 
 def _resolve_request_mode(value: str) -> str:
@@ -622,9 +672,27 @@ def _without(payload: dict[str, Any], keys: set[str]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if key not in keys}
 
 
-def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
+def _extract_items(response: dict[str, Any], *, scenario: str | None = None) -> list[dict[str, Any]]:
     data = response.get("data") if isinstance(response, dict) else None
-    if isinstance(data, dict) and ("content" in data or "htmlContent" in data):
+    if scenario == "listing-analysis":
+        listing_rows = _extract_listing_analysis_rows(data)
+        if listing_rows:
+            return listing_rows
+    if isinstance(data, dict) and isinstance(data.get("items"), list):
+        return [item for item in data["items"] if isinstance(item, dict)]
+    if isinstance(data, dict) and isinstance(data.get("pager"), dict):
+        pager = data["pager"]
+        if isinstance(pager.get("items"), list):
+            return [item for item in pager["items"] if isinstance(item, dict)]
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
+
+
+def _extract_listing_analysis_rows(data: Any) -> list[dict[str, Any]]:
+    if not isinstance(data, dict):
+        return []
+    if "content" in data or "htmlContent" in data:
         return [
             {
                 "taskId": data.get("taskId"),
@@ -636,14 +704,26 @@ def _extract_items(response: dict[str, Any]) -> list[dict[str, Any]]:
                 "expiredTime": data.get("expiredTime"),
             }
         ]
-    if isinstance(data, dict) and isinstance(data.get("items"), list):
-        return [item for item in data["items"] if isinstance(item, dict)]
-    if isinstance(data, dict) and isinstance(data.get("pager"), dict):
-        pager = data["pager"]
-        if isinstance(pager.get("items"), list):
-            return [item for item in pager["items"] if isinstance(item, dict)]
-    if isinstance(data, list):
-        return [item for item in data if isinstance(item, dict)]
+    task_id = data.get("taskId") or data.get("task_id")
+    if task_id:
+        return [
+            {
+                "taskId": str(task_id),
+                "taskStatus": data.get("taskStatus") or data.get("status"),
+                "asin": data.get("asin"),
+                "station": data.get("station"),
+                "contentReady": bool(data.get("content") or data.get("htmlContent")),
+            }
+        ]
+    if data.get("asin"):
+        return [
+            {
+                "asin": data.get("asin"),
+                "station": data.get("station"),
+                "taskStatus": data.get("taskStatus") or data.get("status"),
+                "contentReady": bool(data.get("content") or data.get("htmlContent")),
+            }
+        ]
     return []
 
 

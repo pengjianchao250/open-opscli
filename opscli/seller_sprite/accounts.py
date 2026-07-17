@@ -11,6 +11,8 @@ from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 from opscli.shared.integration_accounts import IntegrationAccountBundle, IntegrationAccountClient, IntegrationAccountError
 
 
+# 卖家精灵账号是平台公共数据，仅按平台在当前进程内缓存。
+INTEGRATION_PLATFORM = "seller_sprite"
 _REMOTE_BUNDLE_CACHE: dict[str, tuple[float, IntegrationAccountBundle]] = {}
 
 
@@ -74,9 +76,13 @@ class SellerSpriteAccountProvider:
 
     def list_public(self) -> list[dict[str, Any]]:
         """列出可用账号摘要，不返回密码。"""
-        remote_accounts = self._list_remote_accounts()
+        return [account.to_public_dict() for account in self.list_accounts()]
+
+    def list_accounts(self, *, refresh: bool = False) -> list[SellerSpriteAccount]:
+        """按账号接口顺序返回全部可用账号凭证。"""
+        remote_accounts = self._list_remote_accounts(refresh=refresh)
         if remote_accounts:
-            return [account.to_public_dict() for account in remote_accounts]
+            return remote_accounts
 
         if self.settings.accounts:
             return [
@@ -84,18 +90,18 @@ class SellerSpriteAccountProvider:
                     name=item["name"],
                     username=item["username"],
                     password=item["password"],
-                ).to_public_dict()
+                )
                 for item in self.settings.accounts
             ]
 
-        if not self.settings.username:
+        if not self.settings.username or not self.settings.password:
             return []
         return [
-            {
-                "name": self.settings.account_name,
-                "username": self.settings.username,
-                "has_password": bool(self.settings.password),
-            }
+            SellerSpriteAccount(
+                name=self.settings.account_name,
+                username=self.settings.username,
+                password=self.settings.password,
+            )
         ]
 
     def _get_from_pool(self, name: str) -> SellerSpriteAccount | None:
@@ -122,9 +128,9 @@ class SellerSpriteAccountProvider:
 
         raise SellerSpriteConfigError(f"集成账号中不存在默认账号：{default_name}")
 
-    def _list_remote_accounts(self) -> list[SellerSpriteAccount]:
+    def _list_remote_accounts(self, *, refresh: bool = False) -> list[SellerSpriteAccount]:
         """列出远端账号。"""
-        bundle = self._load_remote_bundle()
+        bundle = self._load_remote_bundle(refresh=refresh)
         if not bundle:
             return []
         return [SellerSpriteAccount(name=item.name, username=item.username, password=item.password) for item in bundle.accounts]
@@ -133,17 +139,28 @@ class SellerSpriteAccountProvider:
         """加载远端集成账号。"""
         if not refresh and self._remote_bundle is not None:
             return self._remote_bundle
-        cache_key = "seller_sprite"
-        cached = _REMOTE_BUNDLE_CACHE.get(cache_key)
+        now = time.time()
+        _cleanup_remote_bundle_cache(now, self.settings.account_cache_ttl_seconds)
+        cached = _REMOTE_BUNDLE_CACHE.get(INTEGRATION_PLATFORM)
         if not refresh and cached and time.time() - cached[0] < self.settings.account_cache_ttl_seconds:
             self._remote_bundle = cached[1]
             self._remote_error = None
             return self._remote_bundle
         try:
-            self._remote_bundle = self.integration_client.get_accounts("seller_sprite")
+            self._remote_bundle = self.integration_client.get_accounts(INTEGRATION_PLATFORM)
             self._remote_error = None
-            _REMOTE_BUNDLE_CACHE[cache_key] = (time.time(), self._remote_bundle)
+            _REMOTE_BUNDLE_CACHE[INTEGRATION_PLATFORM] = (time.time(), self._remote_bundle)
         except IntegrationAccountError as exc:
             self._remote_error = exc
             self._remote_bundle = None
         return self._remote_bundle
+
+def _cleanup_remote_bundle_cache(now: float, ttl_seconds: int) -> None:
+    """主动清理过期的解密账号，避免公用 MCP 长期滞留敏感数据。"""
+    expired = [
+        key
+        for key, (created_at, _) in _REMOTE_BUNDLE_CACHE.items()
+        if now - created_at >= ttl_seconds
+    ]
+    for key in expired:
+        _REMOTE_BUNDLE_CACHE.pop(key, None)

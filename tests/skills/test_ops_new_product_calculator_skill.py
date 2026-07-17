@@ -1,0 +1,231 @@
+import json
+import re
+from pathlib import Path
+
+from opscli.calculator.draft import validate_draft_data
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SKILL = ROOT / "opscli" / "skills" / "templates" / "ops-new-product-calculator" / "SKILL.md"
+VERSION = ROOT / "opscli" / "skills" / "templates" / "ops-new-product-calculator" / "data" / "VERSION.json"
+MANIFEST = ROOT / "opscli" / "skills" / "templates" / "manifest.json"
+DRAFT_REFERENCE = SKILL.parent / "references" / "draft-workflow.md"
+RESULT_REFERENCE = SKILL.parent / "references" / "result-workflow.md"
+
+
+def _skill_text() -> str:
+    return SKILL.read_text(encoding="utf-8")
+
+
+def _reference_text(path: Path) -> str:
+    assert path.exists(), f"缺少参考文件：{path}"
+    return path.read_text(encoding="utf-8")
+
+
+def _full_skill_text() -> str:
+    text = _skill_text()
+    for path in (DRAFT_REFERENCE, RESULT_REFERENCE):
+        if path.exists():
+            text += "\n" + path.read_text(encoding="utf-8")
+    return text
+
+
+def _frontmatter(text: str) -> str:
+    return text.split("---", 2)[1]
+
+
+def _first_json_example(text: str) -> dict:
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    assert match is not None
+    return json.loads(match.group(1))
+
+
+def test_new_product_calculator_skill_uses_progressive_disclosure():
+    main_text = _skill_text()
+
+    assert len(main_text.splitlines()) <= 220
+    assert "references/draft-workflow.md" in main_text
+    assert "references/result-workflow.md" in main_text
+    assert "新建试算" in main_text
+    assert "继续已有草稿" in main_text
+    assert "查询或复用已有任务" in main_text
+    assert "```json" not in main_text
+    assert DRAFT_REFERENCE.exists()
+    assert RESULT_REFERENCE.exists()
+
+
+def test_new_product_calculator_skill_covers_existing_draft_and_copy_workflows():
+    draft_text = _reference_text(DRAFT_REFERENCE)
+    result_text = _reference_text(RESULT_REFERENCE)
+
+    assert "opscli calculator show" in draft_text
+    assert "opscli calculator validate" in draft_text
+    assert "opscli calculator submit" in draft_text
+    assert "opscli calculator list" in result_text
+    assert "opscli calculator detail" in result_text
+    assert "opscli calculator copy" in result_text
+    assert "新的空目录" in result_text
+
+
+def test_new_product_calculator_skill_guides_dropdown_workflow():
+    text = _full_skill_text()
+
+    assert "opscli calculator" in text
+    assert "search-category" in text
+    assert "opscli calculator dropdown-list --json" in text
+    assert "只向用户展示" in text
+    assert "draft" in text
+    assert "validate" in text
+    assert "submit" in text
+    assert "不得直接调用 Polaris" in text
+    assert "试算平台默认同时选择亚马逊和沃尔玛" in text
+    assert "--platform 1 --platform 7" in text
+    assert "submit 会创建真实试算任务" in text
+
+
+def test_new_product_calculator_skill_guides_second_stage_draft_completion():
+    text = _full_skill_text()
+
+    assert "第二阶段草稿补全" in text
+    assert "pick_up_province" in text
+    assert "pick_up_city" in text
+    assert "pick_up_province_code" in text
+    assert "填写表格.csv" in text
+    assert "请填写" in text
+    assert "https://bi.xenkee.com/#/newProductCalculator" in text
+    assert "pick_up_city_code" in text
+    assert "130000" in text
+    assert "130200" in text
+    assert "two_zone_combine" in text
+    assert "zone_1_2" in text
+    assert "checkbox_stock" in text
+    assert "利润相关成本费用由 CLI 统一填 `1`" in text
+    assert "不要把中文省市名写入 draft.json" in text
+    assert "河北省" in text
+    assert "唐山市" in text
+    assert "算毛利" in text
+    assert "1区全部、指定分区" in text
+    assert "美东+美西" in text
+    assert ".dropdown-cache.json" in text
+    assert "自动转换成后端 key/code" in text
+    assert "validate 通过后才允许进入 submit" in text
+
+
+def test_new_product_calculator_skill_does_not_seed_logistics_example_values():
+    draft = _first_json_example(_reference_text(DRAFT_REFERENCE))
+
+    logistics_fields = (
+        "package_length",
+        "package_width",
+        "package_height",
+        "product_gross_weight",
+        "box_length",
+        "box_width",
+        "box_height",
+        "box_gross_weight",
+        "box_number",
+    )
+    assert all(draft[field] is None for field in logistics_fields)
+
+
+def test_new_product_calculator_skill_repeats_missing_field_questions():
+    text = _full_skill_text()
+
+    assert "按实物填写（推荐）" in text
+    assert "Amazon.sg 官方示例：SD 卡" in text
+    assert "Amazon.sg 官方示例：图书" in text
+    assert "Amazon.sg 官方示例：电子玩具" in text
+    assert "按实际装箱填写（推荐）" in text
+    assert "91.44 × 63.5 × 63.5 cm / 22.68 kg" in text
+    assert "每轮最多询问 3–5 个" in text
+    assert "只追问仍为空或无效" in text
+    assert "全部必填字段有效" in text
+    assert "不得根据商品名称猜测" in text
+    assert "连续补充期间只更新并读取 CSV" in text
+    assert "不重复执行认证、`show`、下拉查询或 `validate`" in text
+    assert "只运行一次 `validate`" in text
+
+
+def test_new_product_calculator_skill_prevents_draft_overwrite():
+    text = _full_skill_text()
+
+    assert "输出目录必须是新的空目录" in text
+    assert "不得覆盖已有 draft.json" in text
+    assert "普通用户不建议手动替换整个 JSON" in text
+    assert "tmp-validation/calculator/calculator-draft-usb-cable-20260703" in text
+
+
+def test_new_product_calculator_skill_routes_failures_to_ops_feedback():
+    text = _full_skill_text()
+
+    assert "REQUIRED SUB-SKILL" in text
+    assert "ops-feedback" in text
+    assert "非认证类" in text
+    assert "立即提交结构化反馈" in text
+    assert "反馈完成后再继续原任务" in text
+
+
+def test_new_product_calculator_skill_requires_polaris_auth_preflight():
+    text = _full_skill_text()
+
+    assert "需要北极星 Polaris 权限" in text
+    assert "opscli auth token status" in text
+    assert "未登录" in text
+    assert "opscli auth login" in text
+    assert "已登录但 Polaris Token 状态为无效/未获取" in text
+    assert "申请 BI/Polaris 权限" in text
+    assert "同一连续任务只检查一次" in text
+    assert "不要在每轮补充字段前重复检查" in text
+
+
+def test_new_product_calculator_skill_guides_result_query_workflow():
+    text = _full_skill_text()
+
+    assert "查询最终试算结果" in text
+    assert "calculator detail --task-code" in text
+    assert "--sudo" in text
+    assert "--json" in text
+    assert "只执行一次普通 `detail`" in text
+    assert "不得自动追加 `--json`" in text
+    assert "忽略成本输入、利润和毛利" in text
+    assert "不得手工重建 Markdown 表格" in text
+    assert "线上详情链接" in text
+    assert "完整费用方案表格" in text
+    assert "每PCS头程费用(CNY)" in text
+    assert "每PCS全程平均费用(CNY)" in text
+    assert "unexpected extra argument" in text
+    assert "不要在回复中泄露完整 JWT/Cookie" in text
+
+
+def test_new_product_calculator_skill_documents_web_routes():
+    main_text = _skill_text()
+    draft_text = _reference_text(DRAFT_REFERENCE)
+    result_text = _reference_text(RESULT_REFERENCE)
+
+    create_url = "https://bi.xenkee.com/#/newProductCalculator"
+    list_url = "https://bi.xenkee.com/#/calculatorResultList"
+    detail_url = "https://bi.xenkee.com/#/calculatorDatail?task_code=<TASK_CODE>&sudo=<SUDO>"
+
+    assert create_url in main_text
+    assert list_url in main_text
+    assert detail_url in main_text
+    assert create_url in draft_text
+    assert list_url in result_text
+    assert detail_url in result_text
+
+
+def test_new_product_calculator_skill_has_version_and_manifest_entry():
+    version = json.loads(VERSION.read_text(encoding="utf-8"))
+    assert version["version"] == "v0.0.1"
+
+    frontmatter_keys = {
+        line.split(":", 1)[0].strip()
+        for line in _frontmatter(_skill_text()).splitlines()
+        if ":" in line
+    }
+    assert frontmatter_keys == {"name", "description"}
+
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    entry = manifest["skills"]["ops-new-product-calculator"]
+    assert entry["tier"] == "experimental"
+    assert all(entry[target] for target in ("source", "wheel", "binary", "binary_full"))

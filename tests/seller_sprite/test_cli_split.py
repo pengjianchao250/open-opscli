@@ -13,6 +13,7 @@ def test_public_seller_sprite_help_shows_remote_commands_only():
     result = runner.invoke(app, ["seller-sprite", "--help"])
     assert result.exit_code == 0
     assert "job-status" in result.stdout
+    assert "jobs-status" in result.stdout
     assert "export" in result.stdout
     assert "--mode" not in result.stdout
 
@@ -131,11 +132,181 @@ def test_public_seller_sprite_run_uses_public_contract_without_local_flags(monke
     assert '"job_id": "public-job"' in result.stdout
 
 
-def test_public_seller_sprite_job_status_and_export_use_remote_adapter(monkeypatch):
+def test_public_seller_sprite_listing_analysis_commands_use_remote_adapter(monkeypatch):
+    captured = {}
+
     class FakeAdapter:
-        def job_status(self, job_id):
+        def listing_analysis_submit(self, **kwargs):
+            captured["submit"] = kwargs
+            return {"success": True, "data": {"job_id": "listing-job-1"}}
+
+        def listing_analysis_status(self, job_id):
+            captured["status"] = job_id
+            return {"success": True, "data": {"job_id": job_id, "ready": False}}
+
+        def listing_analysis_result(self, job_id, *, export_format):
+            captured["result"] = {"job_id": job_id, "export_format": export_format}
+            return {"success": True, "data": {"job_id": job_id, "ready": True}}
+
+    monkeypatch.setattr(seller_sprite_cli, "SellerSpriteRemoteAdapter", lambda: FakeAdapter())
+
+    submit = runner.invoke(
+        app,
+        [
+            "seller-sprite",
+            "listing-analysis-submit",
+            "--asin",
+            "B0TEST123",
+            "--station",
+            "GLOBAL",
+            "--site",
+            "US",
+        ],
+    )
+    status = runner.invoke(app, ["seller-sprite", "listing-analysis-status", "listing-job-1"])
+    result = runner.invoke(
+        app,
+        [
+            "seller-sprite",
+            "listing-analysis-result",
+            "listing-job-1",
+            "--export-format",
+            "json",
+        ],
+    )
+
+    assert submit.exit_code == 0
+    assert status.exit_code == 0
+    assert result.exit_code == 0
+    assert captured["submit"]["asin"] == "B0TEST123"
+    assert captured["status"] == "listing-job-1"
+    assert captured["result"] == {"job_id": "listing-job-1", "export_format": "json"}
+
+
+
+def test_public_seller_sprite_job_status_uses_default_wait_seconds(monkeypatch):
+    captured = {}
+
+    class FakeAdapter:
+        def job_status(self, job_id, *, wait_seconds):
+            captured["job_status"] = {"job_id": job_id, "wait_seconds": wait_seconds}
             return {"success": True, "data": {"job_id": job_id, "state": "succeeded"}}
 
+    monkeypatch.setattr(seller_sprite_cli, "SellerSpriteRemoteAdapter", lambda: FakeAdapter())
+
+    result = runner.invoke(app, ["seller-sprite", "job-status", "job-1"])
+
+    assert result.exit_code == 0
+    assert captured["job_status"] == {"job_id": "job-1", "wait_seconds": 0}
+    assert '"job_id": "job-1"' in result.stdout
+
+
+def test_public_seller_sprite_job_status_forwards_explicit_wait_seconds(monkeypatch):
+    captured = {}
+
+    class FakeAdapter:
+        def job_status(self, job_id, *, wait_seconds):
+            captured["job_status"] = {"job_id": job_id, "wait_seconds": wait_seconds}
+            return {"success": True, "data": {"job_id": job_id, "state": "running"}}
+
+    monkeypatch.setattr(seller_sprite_cli, "SellerSpriteRemoteAdapter", lambda: FakeAdapter())
+
+    result = runner.invoke(
+        app,
+        ["seller-sprite", "job-status", "job-1", "--wait-seconds", "12"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["job_status"] == {"job_id": "job-1", "wait_seconds": 12}
+
+
+def test_public_seller_sprite_jobs_status_preserves_job_id_order(monkeypatch):
+    captured = {}
+
+    class FakeAdapter:
+        def jobs_status(self, job_ids, *, wait_seconds):
+            captured["jobs_status"] = {
+                "job_ids": job_ids,
+                "wait_seconds": wait_seconds,
+            }
+            return {"success": True, "data": {"jobs": [{"job_id": job_id} for job_id in job_ids]}}
+
+    monkeypatch.setattr(seller_sprite_cli, "SellerSpriteRemoteAdapter", lambda: FakeAdapter())
+
+    result = runner.invoke(
+        app,
+        ["seller-sprite", "jobs-status", "job-3", "job-1", "job-2"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["jobs_status"] == {
+        "job_ids": ["job-3", "job-1", "job-2"],
+        "wait_seconds": 0,
+    }
+
+
+def test_public_seller_sprite_jobs_status_forwards_explicit_wait_seconds(monkeypatch):
+    captured = {}
+
+    class FakeAdapter:
+        def jobs_status(self, job_ids, *, wait_seconds):
+            captured["jobs_status"] = {
+                "job_ids": job_ids,
+                "wait_seconds": wait_seconds,
+            }
+            return {"success": True, "data": {"jobs": []}}
+
+    monkeypatch.setattr(seller_sprite_cli, "SellerSpriteRemoteAdapter", lambda: FakeAdapter())
+
+    result = runner.invoke(
+        app,
+        ["seller-sprite", "jobs-status", "job-2", "job-1", "--wait-seconds", "30"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["jobs_status"] == {
+        "job_ids": ["job-2", "job-1"],
+        "wait_seconds": 30,
+    }
+
+
+def test_public_seller_sprite_status_help_documents_wait_range_and_batch_ids():
+    single_help = runner.invoke(app, ["seller-sprite", "job-status", "--help"])
+    batch_help = runner.invoke(app, ["seller-sprite", "jobs-status", "--help"])
+
+    assert single_help.exit_code == 0
+    assert batch_help.exit_code == 0
+    assert "JOB_ID" in single_help.stdout
+    assert "--wait-seconds" in single_help.stdout
+    assert "0<=x<=30" in single_help.stdout
+    assert "JOB_IDS..." in batch_help.stdout
+    assert "--wait-seconds" in batch_help.stdout
+    assert "0<=x<=30" in batch_help.stdout
+
+
+def test_public_seller_sprite_jobs_status_requires_at_least_one_job_id():
+    result = runner.invoke(app, ["seller-sprite", "jobs-status"])
+
+    assert result.exit_code == 2
+    assert "Missing argument" in result.output
+
+
+def test_public_seller_sprite_status_commands_reject_wait_outside_range():
+    invocations = [
+        ["seller-sprite", "job-status", "job-1", "--wait-seconds", "-1"],
+        ["seller-sprite", "job-status", "job-1", "--wait-seconds", "31"],
+        ["seller-sprite", "jobs-status", "job-1", "--wait-seconds", "-1"],
+        ["seller-sprite", "jobs-status", "job-1", "--wait-seconds", "31"],
+    ]
+
+    for invocation in invocations:
+        result = runner.invoke(app, invocation)
+        assert result.exit_code == 2
+        assert "0<=x<=30" in result.output
+
+
+def test_public_seller_sprite_export_uses_remote_adapter(monkeypatch):
+    class FakeAdapter:
         def export(self, job_id):
             return {
                 "success": True,
@@ -148,10 +319,7 @@ def test_public_seller_sprite_job_status_and_export_use_remote_adapter(monkeypat
 
     monkeypatch.setattr(seller_sprite_cli, "SellerSpriteRemoteAdapter", lambda: FakeAdapter())
 
-    status_result = runner.invoke(app, ["seller-sprite", "job-status", "job-1"])
-    export_result = runner.invoke(app, ["seller-sprite", "export", "job-1"])
+    result = runner.invoke(app, ["seller-sprite", "export", "job-1"])
 
-    assert status_result.exit_code == 0
-    assert '"job_id": "job-1"' in status_result.stdout
-    assert export_result.exit_code == 0
-    assert '"filename": "export.json"' in export_result.stdout
+    assert result.exit_code == 0
+    assert '"filename": "export.json"' in result.stdout

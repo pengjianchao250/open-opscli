@@ -25,7 +25,11 @@ ENV_BROWSER_RUNTIME = "OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME"
 ENV_BROWSER_CHANNEL = "OPSCLI_SELLER_SPRITE_BROWSER_CHANNEL"
 ENV_BROWSER_TASK_INTERVAL_SECONDS = "OPSCLI_SELLER_SPRITE_BROWSER_TASK_INTERVAL_SECONDS"
 ENV_BROWSER_COOLDOWN_SECONDS = "OPSCLI_SELLER_SPRITE_BROWSER_COOLDOWN_SECONDS"
+ENV_BROWSER_IDLE_TTL_SECONDS = "OPSCLI_SELLER_SPRITE_BROWSER_IDLE_TTL_SECONDS"
+ENV_BROWSER_MAX_LIFETIME_SECONDS = "OPSCLI_SELLER_SPRITE_BROWSER_MAX_LIFETIME_SECONDS"
 ENV_BROWSER_PAGE_PREPARE = "OPSCLI_SELLER_SPRITE_BROWSER_PAGE_PREPARE"
+ENV_BROWSER_CAPTCHA_OCR_ENABLED = "OPSCLI_SELLER_SPRITE_BROWSER_CAPTCHA_OCR_ENABLED"
+ENV_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS = "OPSCLI_SELLER_SPRITE_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS"
 
 DEFAULT_ACCOUNT_NAME = "default"
 DEFAULT_PAGE_SIZE = 100
@@ -38,6 +42,11 @@ DEFAULT_BROWSER_PROFILE_DIR = CONFIG_DIR / "seller_sprite" / "browser_profiles"
 DEFAULT_BROWSER_RUNTIME = "patchright"
 DEFAULT_BROWSER_TASK_INTERVAL_SECONDS = 5.0
 DEFAULT_BROWSER_COOLDOWN_SECONDS = 10.0
+# 30 分钟可覆盖常见短间隔批量任务，同时及时释放长期无任务的浏览器资源。
+DEFAULT_BROWSER_IDLE_TTL_SECONDS = 1800
+# 6 小时轮换可限制单个 Chromium 上下文的长期内存增长，并避开任务执行中的强制中断。
+DEFAULT_BROWSER_MAX_LIFETIME_SECONDS = 21600
+DEFAULT_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS = 2
 
 
 @dataclass(frozen=True)
@@ -60,7 +69,11 @@ class SellerSpriteSettings:
     browser_channel: str | None = None
     browser_task_interval_seconds: float = DEFAULT_BROWSER_TASK_INTERVAL_SECONDS
     browser_cooldown_seconds: float = DEFAULT_BROWSER_COOLDOWN_SECONDS
+    browser_idle_ttl_seconds: int = DEFAULT_BROWSER_IDLE_TTL_SECONDS
+    browser_max_lifetime_seconds: int = DEFAULT_BROWSER_MAX_LIFETIME_SECONDS
     browser_page_prepare: bool = True
+    browser_captcha_ocr_enabled: bool = True
+    browser_captcha_ocr_max_attempts: int = DEFAULT_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS
 
     def to_public_dict(self) -> dict[str, Any]:
         """返回不包含敏感字段的配置摘要。"""
@@ -106,7 +119,20 @@ def load_settings() -> SellerSpriteSettings:
             values.get(ENV_BROWSER_COOLDOWN_SECONDS),
             DEFAULT_BROWSER_COOLDOWN_SECONDS,
         ),
+        browser_idle_ttl_seconds=_parse_int(
+            values.get(ENV_BROWSER_IDLE_TTL_SECONDS),
+            DEFAULT_BROWSER_IDLE_TTL_SECONDS,
+        ),
+        browser_max_lifetime_seconds=_parse_int(
+            values.get(ENV_BROWSER_MAX_LIFETIME_SECONDS),
+            DEFAULT_BROWSER_MAX_LIFETIME_SECONDS,
+        ),
         browser_page_prepare=_parse_bool(values.get(ENV_BROWSER_PAGE_PREPARE), True),
+        browser_captcha_ocr_enabled=_parse_bool(values.get(ENV_BROWSER_CAPTCHA_OCR_ENABLED), True),
+        browser_captcha_ocr_max_attempts=_parse_int(
+            values.get(ENV_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS),
+            DEFAULT_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS,
+        ),
     )
 
 
@@ -128,7 +154,11 @@ def _load_env_values() -> dict[str, str]:
         ENV_BROWSER_CHANNEL,
         ENV_BROWSER_TASK_INTERVAL_SECONDS,
         ENV_BROWSER_COOLDOWN_SECONDS,
+        ENV_BROWSER_IDLE_TTL_SECONDS,
+        ENV_BROWSER_MAX_LIFETIME_SECONDS,
         ENV_BROWSER_PAGE_PREPARE,
+        ENV_BROWSER_CAPTCHA_OCR_ENABLED,
+        ENV_BROWSER_CAPTCHA_OCR_MAX_ATTEMPTS,
     ]:
         value = os.environ.get(key)
         if value:

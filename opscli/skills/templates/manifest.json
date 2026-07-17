@@ -31,6 +31,14 @@
       "tier": "ops",
       "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
     },
+    "ops-amazon-product-data": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "experimental",
+      "reason": "Amazon 商品结构化数据通用 Skill，隐藏底层第三方服务商信息，作为多数据源商品采集入口"
+    },
     "ops-asin-health-diagnoser": {
       "source": false,
       "wheel": false,
@@ -71,6 +79,14 @@
       "tier": "internal",
       "reason": "会注入工具侧规则，内部治理属性较强"
     },
+    "ops-feedback-query": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "内部开发人员反馈分诊工具，包含独立查询凭据，不进入公开发行物"
+    },
     "ops-mcp": {
       "source": false,
       "wheel": false,
@@ -78,6 +94,14 @@
       "binary_full": false,
       "tier": "core",
       "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
+    },
+    "ops-new-product-calculator": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "experimental",
+      "reason": "Polaris 新品计算器 CLI 草稿包引导 Skill，封装下拉选择、类目搜索和提交确认流程"
     },
     "ops-product-attribute-analyzer": {
       "source": false,
@@ -94,6 +118,14 @@
       "binary_full": true,
       "tier": "experimental",
       "reason": "卖家精灵已迁移到服务端账号托管的 MCP/CLI 接口直连模式，可作为实验 Skill 安装使用"
+    },
+    "ops-scrape-do": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "底层 Amazon 商品数据 provider 规范，仅供通用商品数据 Skill 内部编排，不直接对外发版"
     },
     "ops-skills": {
       "source": true,
@@ -126,22 +158,6 @@
       "binary_full": true,
       "tier": "experimental",
       "reason": "Keepa 已迁移到正式 CLI 代理远端 MCP 模式，可作为实验 Skill 安装使用"
-    },
-    "ops-google-trends": {
-      "source": true,
-      "wheel": true,
-      "binary": true,
-      "binary_full": true,
-      "tier": "experimental",
-      "reason": "Google Trends 已迁移到正式 CLI 代理远端 MCP 模式，可作为实验 Skill 安装使用"
-    },
-    "ops-canopy": {
-      "source": true,
-      "wheel": true,
-      "binary": true,
-      "binary_full": true,
-      "tier": "experimental",
-      "reason": "Canopy 已通过正式 CLI 代理 beta 远端 MCP 模式对外暴露，可作为实验 Skill 安装使用"
     },
     "ops-query-wizard": {
       "source": true,

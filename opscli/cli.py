@@ -11,6 +11,7 @@ from opscli.amazon_rufus.cli import app as amazon_rufus_app
 from opscli.asin_data.cli import app as asin_data_app
 from opscli.asin_review.cli import app as asin_review_app
 from opscli.auth.cli import app as auth_app
+from opscli.calculator.cli import app as calculator_app
 from opscli.canopy.cli import app as canopy_app
 from opscli.canopy_debug.cli import app as canopy_debug_app
 from opscli.feedback.cli import app as feedback_app
@@ -22,6 +23,7 @@ from opscli.keepa_debug.cli import app as keepa_debug_app
 from opscli.mcp.cli import app as mcp_app
 # from opscli.methods_card.cli import app as methods_card_app
 from opscli.query.cli import app as query_app
+from opscli.scrape_do.cli import app as scrape_do_app
 from opscli.shopify.cli import app as shopify_app
 from opscli.seller_sprite.cli import app as seller_sprite_app
 from opscli.seller_sprite_debug.cli import app as seller_sprite_debug_app
@@ -52,21 +54,24 @@ app.add_typer(auth_app, name="auth")
 app.add_typer(amazon_app, name="amazon")
 app.add_typer(amazon_rufus_app, name="amazon-rufus")
 app.add_typer(asin_data_app, name="asin-data")
-app.add_typer(asin_review_app, name="asin-review")
+app.add_typer(calculator_app, name="calculator")
+if asin_review_app is not None:
+    app.add_typer(asin_review_app, name="asin-review")
 app.add_typer(canopy_app, name="canopy")
-app.add_typer(canopy_debug_app, name="canopy-debug")
+# app.add_typer(canopy_debug_app, name="canopy-debug")
 app.add_typer(query_app, name="query")
-app.add_typer(shopify_app, name="shopify")
+app.add_typer(scrape_do_app, name="scrape-do")
+# app.add_typer(shopify_app, name="shopify")
 app.add_typer(feedback_app, name="feedback")
 app.add_typer(feedtask_app, name="feedtask")
 app.add_typer(google_trends_app, name="google-trends")
-app.add_typer(google_trends_debug_app, name="google-trends-debug")
+# app.add_typer(google_trends_debug_app, name="google-trends-debug")
 app.add_typer(keepa_app, name="keepa")
-app.add_typer(keepa_debug_app, name="keepa-debug")
+# app.add_typer(keepa_debug_app, name="keepa-debug")
 app.add_typer(seller_sprite_app, name="seller-sprite")
-app.add_typer(seller_sprite_debug_app, name="seller-sprite-debug")
-app.add_typer(sif_app, name="sif")
-app.add_typer(xiyou_app, name="xiyou")
+# app.add_typer(seller_sprite_debug_app, name="seller-sprite-debug")
+# app.add_typer(sif_app, name="sif")
+# app.add_typer(xiyou_app, name="xiyou")
 # app.add_typer(methods_card_app, name="methods-card")
 app.add_typer(skills_app, name="skills")
 app.add_typer(mcp_app, name="mcp")

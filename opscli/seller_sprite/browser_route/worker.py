@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import base64
 import hashlib
 import importlib
 import json
+import logging
 import os
 import random
 import re
@@ -16,13 +18,18 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.api.market_research import parse_market_research_html
-from opscli.seller_sprite.config import SellerSpriteSettings
-from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
+from opscli.seller_sprite.config import DEFAULT_OUTPUT_DIR, SellerSpriteSettings
+from opscli.seller_sprite.domain.exceptions import (
+    SellerSpriteApiError,
+    SellerSpriteAuthenticationError,
+    SellerSpriteConfigError,
+)
+from opscli.seller_sprite.browser_route.ocr import create_captcha_ocr_provider
 
 
 BASE_URL = "https://www.sellersprite.com"
@@ -30,6 +37,30 @@ HOME_URL = "https://www.sellersprite.com/"
 LOGIN_URL = "https://www.sellersprite.com/cn/w/user/login"
 DEFAULT_PAGE_URL = "https://www.sellersprite.com/v3/keyword-miner/"
 DEFAULT_TIMEOUT_MS = 120000
+LOGIN_SUCCESS_TIMEOUT_MS = 15000
+LOGIN_SETTLE_TIMEOUT_MS = 500
+TEXT_DETECT_TIMEOUT_MS = 300
+ROBOT_CAPTCHA_SETTLE_TIMEOUT_MS = 800
+ROBOT_CAPTCHA_DIALOG_SELECTORS = [
+    "[role='dialog'][aria-label='机器人检测']",
+    ".el-dialog:has-text('机器人检测')",
+]
+logger = logging.getLogger(__name__)
+ROBOT_CAPTCHA_IMAGE_SELECTORS = [
+    "img[src^='data:image/gif;base64,']",
+    "img[src^='data:image/png;base64,']",
+    "img[src^='data:image/jpeg;base64,']",
+    "img:visible",
+]
+ROBOT_CAPTCHA_INPUT_SELECTORS = [
+    "input.el-input__inner[type='text']",
+    "input[type='text']:visible",
+]
+ROBOT_CAPTCHA_CONFIRM_SELECTORS = [
+    "button.el-button--primary[type='button']",
+    "button:visible:has-text('确 定')",
+    "button:visible:has-text('确定')",
+]
 XVFB_DISPLAY_CANDIDATES = range(99, 110)
 TASK_INTERVAL_RANGE_SECONDS = (1.0, 5.0)
 NETWORK_COOLDOWN_RANGE_SECONDS = (3.0, 5.0)
@@ -74,51 +105,214 @@ class _QueuedTask:
     future: asyncio.Future
 
 
+class BrowserRouteWorkerClosedError(RuntimeError):
+    """表示任务提交时目标 browser worker 已进入关闭流程。"""
+
+
+def _record_timing(
+    timings: list[dict[str, Any]] | None,
+    request: BrowserRouteRequest | None,
+    stage: str,
+    started_at: float,
+    **details: Any,
+) -> dict[str, Any]:
+    """记录 browser-route 阶段耗时。"""
+    elapsed_ms = round((time.monotonic() - started_at) * 1000, 1)
+    event: dict[str, Any] = {"stage": stage, "elapsed_ms": elapsed_ms}
+    safe_details = {key: _safe_timing_value(value) for key, value in details.items() if value is not None}
+    event.update(safe_details)
+    if timings is not None:
+        timings.append(event)
+    return event
+
+
+def _safe_timing_value(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _safe_timing_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_safe_timing_value(item) for item in value]
+    return str(value)
+
+
 class SellerSpriteBrowserRouteWorker:
     """同账号串行消费 browser-route 任务，复用浏览器上下文。"""
 
-    def __init__(self, *, settings: SellerSpriteSettings, account: SellerSpriteAccount) -> None:
+    def __init__(
+        self,
+        *,
+        settings: SellerSpriteSettings,
+        account: SellerSpriteAccount,
+        state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        """创建账号隔离 worker。
+
+        参数：
+            settings: browser-route 运行配置。
+            account: 该 worker 独占的卖家精灵账号。
+            state_listener: 接收脱敏会话状态变化的同步监听器。
+            clock: 用于生命周期判断的单调时钟，测试可注入。
+
+        返回：
+            无。
+        """
         self.settings = settings
         self.account = account
+        self._clock = clock
+        self._state_listener = state_listener
         self._queue: asyncio.Queue[_QueuedTask] = asyncio.Queue()
+        # 生命周期锁只保护“是否接受新任务”的切换；绝不与 drain 锁同时持有，避免锁序反转。
+        self._lifecycle_lock = asyncio.Lock()
         self._drain_lock = asyncio.Lock()
+        self._reservation_count = 0
+        self._closing = False
+        self._closed = False
         self._last_finished_at = 0.0
+        self._opened_at = 0.0
+        self._task_count = 0
+        self._session_state = "registered"
         self._cooldown_until = 0.0
         self._playwright = None
         self._context = None
         self._page = None
         self._auto_xvfb_attached = False
+        self._automatic_reap_task: asyncio.Task | None = None
+        self._notify_state_change(
+            previous_state="none",
+            state="registered",
+            reason="worker_registered",
+        )
 
     async def submit(self, request: BrowserRouteRequest) -> BrowserRouteResult:
-        """入队并顺序执行任务。"""
+        """入队并顺序执行任务。
+
+        参数：
+            request: 待执行的 browser-route 请求。
+
+        返回：
+            browser-route 请求结果。
+
+        异常：
+            BrowserRouteWorkerClosedError: worker 已开始关闭，调用方应获取新 worker 重试。
+            Exception: 透传具体任务执行异常。
+        """
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        await self._queue.put(_QueuedTask(request=request, future=future))
+        # 先在生命周期锁内完成入队；关闭方一旦取得该锁并标记 closing，旧引用便不能复活会话。
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise BrowserRouteWorkerClosedError("browser worker 已进入关闭流程")
+            await self._queue.put(_QueuedTask(request=request, future=future))
         await self._drain_queue()
         return await future
 
     @property
     def is_busy(self) -> bool:
-        """判断当前 worker 是否正在执行或已有排队任务。"""
-        return self._drain_lock.locked() or not self._queue.empty()
+        """判断当前 worker 是否正在执行、排队或已被任务预留。"""
+        return (
+            self._reservation_count > 0
+            or self._drain_lock.locked()
+            or not self._queue.empty()
+        )
 
-    async def close(self) -> None:
-        """关闭浏览器上下文。"""
-        if self._context:
-            await self._context.close()
-            self._context = None
-            self._page = None
-        if self._playwright:
-            await self._playwright.stop()
-            self._playwright = None
-        if self._auto_xvfb_attached:
-            _release_auto_xvfb()
-            self._auto_xvfb_attached = False
+    @property
+    def accepts_tasks(self) -> bool:
+        """返回 worker 是否仍接受新任务。"""
+        return not self._closing and not self._closed
+
+    def reserve(self) -> bool:
+        """为已领取但尚未提交的任务预留会话。
+
+        返回：
+            预留成功返回 ``True``；worker 已关闭时返回 ``False``。
+        """
+        if not self.accepts_tasks:
+            return False
+        self._reservation_count += 1
+        return True
+
+    def release_reservation(self) -> None:
+        """释放一次任务预留；重复释放不会产生负数。
+
+        返回：
+            无。
+        """
+        self._reservation_count = max(0, self._reservation_count - 1)
+        if self._reservation_count == 0 and self._opened_at and self.accepts_tasks:
+            self._schedule_automatic_reap()
+
+    async def close(self, *, reason: str = "manual_close") -> None:
+        """等待内部队列排空后关闭浏览器上下文并报告状态。
+
+        参数：
+            reason: 关闭或轮换原因。
+
+        返回：
+            无。
+
+        异常：
+            Exception: 清理任一浏览器资源失败时，在完成其余清理后抛出首个异常。
+        """
+        async with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closing = True
+        if self._automatic_reap_task is not None:
+            current_task = asyncio.current_task()
+            if self._automatic_reap_task is not current_task:
+                self._automatic_reap_task.cancel()
+            self._automatic_reap_task = None
+        errors: list[Exception] = []
+        # close 与 drain 使用同一把锁：显式关闭会等待已入队任务完成，周期回收则只会选择非忙 worker。
+        async with self._drain_lock:
+            # 必须在队列排空后再进入 closing，避免任务收尾把状态从 closing 错误覆盖为 idle。
+            closing_state = "recycling" if reason in {"idle_timeout", "max_lifetime"} else "closing"
+            self._transition_state(closing_state, reason=reason)
+            if self._context:
+                try:
+                    await self._context.close()
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    self._context = None
+                    self._page = None
+            if self._playwright:
+                try:
+                    await self._playwright.stop()
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    self._playwright = None
+            if self._auto_xvfb_attached:
+                try:
+                    _release_auto_xvfb()
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    self._auto_xvfb_attached = False
+        self._closed = True
+        if errors:
+            first_error = errors[0]
+            self._transition_state(
+                "close_failed",
+                reason=reason,
+                error_code=type(first_error).__name__,
+            )
+            self._opened_at = 0.0
+            raise first_error
+        self._transition_state("closed", reason=reason)
+        self._opened_at = 0.0
 
     async def _drain_queue(self) -> None:
         async with self._drain_lock:
             while not self._queue.empty():
                 task = await self._queue.get()
+                if self._opened_at:
+                    self._transition_state("busy", reason="task_started")
                 try:
                     result = await self._run_one(task.request)
                 except Exception as exc:
@@ -137,20 +331,206 @@ class SellerSpriteBrowserRouteWorker:
                     if not task.future.done():
                         task.future.set_result(result)
                 finally:
-                    self._last_finished_at = time.monotonic()
+                    self._last_finished_at = self._clock()
+                    self._task_count += 1
                     self._queue.task_done()
+            if self._opened_at:
+                self._transition_state("idle", reason="queue_drained")
+                self._schedule_automatic_reap()
+
+    def _schedule_automatic_reap(self) -> None:
+        """按空闲阈值和剩余最大寿命安排 worker 自回收。"""
+        if self._closing or self._closed or not self._opened_at:
+            return
+        if self._automatic_reap_task is not None:
+            self._automatic_reap_task.cancel()
+        current = self._clock()
+        idle_base = self._last_finished_at or self._opened_at
+        idle_remaining = self.settings.browser_idle_ttl_seconds - (current - idle_base)
+        lifetime_remaining = self.settings.browser_max_lifetime_seconds - (
+            current - self._opened_at
+        )
+        delay = max(0.0, min(idle_remaining, lifetime_remaining))
+        self._automatic_reap_task = asyncio.create_task(
+            self._automatic_reap_after(delay),
+            name=f"seller-sprite-session-reaper-{self.account.name}",
+        )
+
+    async def _automatic_reap_after(self, delay: float) -> None:
+        """等待当前最早生命周期阈值，并安全移除和关闭自身。"""
+        try:
+            await asyncio.sleep(delay)
+            reason = self.recycle_reason()
+            if reason is None:
+                return
+            registry_entry = next(
+                ((key, worker) for key, worker in _WORKERS.items() if worker is self),
+                None,
+            )
+            if registry_entry is None:
+                return
+            key, worker = registry_entry
+            if _WORKERS.pop(key, None) is not worker:
+                return
+            await self.close(reason=reason)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            # close_failed 已由状态监听器审计；这里只记录异常类型并避免后台 Task 泄露异常。
+            logger.warning(
+                "卖家精灵 browser 会话自动回收失败：account=%s error=%s",
+                self.account.name,
+                type(exc).__name__,
+            )
+
+
+    def mark_session_ready(self, *, context: Any, page: Any) -> None:
+        """登记已创建的 browser context/page，并记录首次 ready 状态。
+
+        参数：
+            context: 当前持久化浏览器上下文。
+            page: 当前复用页面。
+
+        返回：
+            无。
+        """
+        self._context = context
+        self._page = page
+        if not self._opened_at:
+            self._opened_at = self._clock()
+            self._transition_state("ready", reason="browser_context_opened")
+
+    def set_state_listener(
+        self,
+        listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None,
+    ) -> None:
+        """更新会话状态监听器。
+
+        参数：
+            listener: 接收脱敏状态载荷的同步监听器；空值不会覆盖已有监听器。
+
+        返回：
+            无。
+        """
+        if listener is not None:
+            self._state_listener = listener
+
+    def session_snapshot(self, *, now: float | None = None) -> dict[str, Any]:
+        """返回不含凭证的会话生命周期快照。
+
+        参数：
+            now: 指定计算时刻；不传则读取注入的单调时钟。
+
+        返回：
+            包含状态、会话年龄、空闲时长和任务数的白名单字典。
+        """
+        current = self._clock() if now is None else now
+        idle_base = self._last_finished_at or self._opened_at
+        return {
+            "state": self._session_state,
+            "session_age_seconds": max(0, int(current - self._opened_at)) if self._opened_at else 0,
+            "idle_seconds": max(0, int(current - idle_base)) if idle_base else 0,
+            "task_count": self._task_count,
+            "is_busy": self.is_busy,
+            "has_open_session": bool(self._opened_at),
+        }
+
+    def recycle_reason(
+        self,
+        *,
+        settings: SellerSpriteSettings | None = None,
+        now: float | None = None,
+    ) -> str | None:
+        """返回当前安全回收原因。
+
+        参数：
+            settings: 当前调度器配置，用于配置热更新后的新阈值。
+            now: 指定计算时刻。
+
+        返回：
+            达到阈值时返回 ``idle_timeout`` 或 ``max_lifetime``；否则返回空。
+        """
+        snapshot = self.session_snapshot(now=now)
+        if not snapshot["has_open_session"] or snapshot["is_busy"]:
+            return None
+        lifecycle_settings = settings or self.settings
+        if snapshot["session_age_seconds"] >= max(1, lifecycle_settings.browser_max_lifetime_seconds):
+            return "max_lifetime"
+        if snapshot["idle_seconds"] >= max(1, lifecycle_settings.browser_idle_ttl_seconds):
+            return "idle_timeout"
+        return None
+
+    def _transition_state(self, state: str, *, reason: str, **metadata: Any) -> None:
+        """仅在状态真实变化时同步通知生命周期监听器。"""
+        previous_state = self._session_state
+        if previous_state == state:
+            return
+        self._session_state = state
+        if self._state_listener is None:
+            return
+        payload = {
+            "previous_state": previous_state,
+            **self.session_snapshot(),
+            "reason": reason,
+            **metadata,
+        }
+        self._state_listener(self.account, payload)
+
+    def _notify_state_change(self, *, previous_state: str, state: str, reason: str) -> None:
+        """在初始化阶段直接发送一次状态事件。"""
+        if self._state_listener is None:
+            return
+        payload = {
+            "previous_state": previous_state,
+            **self.session_snapshot(),
+            "state": state,
+            "reason": reason,
+        }
+        self._state_listener(self.account, payload)
 
     async def _run_one(self, request: BrowserRouteRequest) -> BrowserRouteResult:
         warnings: list[dict[str, Any]] = []
+        timings: list[dict[str, Any]] = []
+        total_started_at = time.monotonic()
         referer = request.referer or DEFAULT_PAGE_URL
+        stage_started_at = time.monotonic()
         await self._wait_for_cooldown(request, warnings)
+        _record_timing(timings, request, "wait_for_cooldown", stage_started_at)
+        stage_started_at = time.monotonic()
         await self._wait_for_rate_limit(request, warnings)
+        _record_timing(timings, request, "wait_for_rate_limit", stage_started_at)
+        stage_started_at = time.monotonic()
+        had_page = bool(self._page and not self._page.is_closed())
         page = await self._ensure_page(request.account)
-        login = await self._open_referer_and_login(page, request)
+        self.mark_session_ready(context=self._context, page=page)
+        self._transition_state("busy", reason="task_started")
+        _record_timing(
+            timings,
+            request,
+            "ensure_page",
+            stage_started_at,
+            reused=had_page,
+            url=getattr(page, "url", ""),
+        )
+        stage_started_at = time.monotonic()
+        login = await self._open_referer_and_login(page, request, timings=timings)
+        _record_timing(timings, request, "open_referer_and_login", stage_started_at, current_url=getattr(page, "url", ""))
+        await self._handle_robot_captcha_if_enabled(
+            page,
+            request,
+            warnings,
+            timings,
+            stage="after_open_referer",
+        )
         if request.page_prepare:
+            stage_started_at = time.monotonic()
             await _prepare_page(page)
+            _record_timing(timings, request, "page_prepare", stage_started_at)
+        else:
+            _record_timing(timings, request, "page_prepare", time.monotonic(), skipped=True)
         for attempt in range(2):
             try:
+                stage_started_at = time.monotonic()
                 response = await self._execute_route_fetch(
                     page=page,
                     method=request.method,
@@ -158,18 +538,61 @@ class SellerSpriteBrowserRouteWorker:
                     payload=request.payload,
                     root_dir=request.root_dir,
                     section="main",
+                    timings=timings,
+                    request=request,
                 )
+                _record_timing(timings, request, "execute_route_fetch.main", stage_started_at, attempt=attempt + 1)
                 break
             except SellerSpriteApiError as exc:
-                if attempt > 0 or not exc.is_session_expired():
-                    raise
-                await self._login_with_account(page, request.account, callback=referer)
-                login = await self._open_referer_and_login(page, request)
-                if request.page_prepare:
-                    await _prepare_page(page)
+                _record_timing(
+                    timings,
+                    request,
+                    "execute_route_fetch.main_error",
+                    stage_started_at,
+                    attempt=attempt + 1,
+                    api_code=exc.api_code,
+                    status_code=exc.status_code,
+                )
+                if exc.is_session_expired():
+                    if attempt > 0:
+                        raise
+                    stage_started_at = time.monotonic()
+                    await self._login_with_account(page, request.account, callback=referer, timings=timings, request=request)
+                    _record_timing(timings, request, "session_expired_relogin", stage_started_at)
+                    stage_started_at = time.monotonic()
+                    login = await self._open_referer_and_login(page, request, timings=timings)
+                    _record_timing(timings, request, "session_expired_reopen", stage_started_at, current_url=getattr(page, "url", ""))
+                    await self._handle_robot_captcha_if_enabled(
+                        page,
+                        request,
+                        warnings,
+                        timings,
+                        stage="after_session_expired_reopen",
+                    )
+                    if request.page_prepare:
+                        stage_started_at = time.monotonic()
+                        await _prepare_page(page)
+                        _record_timing(timings, request, "session_expired_page_prepare", stage_started_at)
+                    continue
+                if attempt == 0:
+                    captcha_result = await self._handle_robot_captcha_if_enabled(
+                        page,
+                        request,
+                        warnings,
+                        timings,
+                        stage="after_main_error",
+                    )
+                    if captcha_result:
+                        if request.page_prepare:
+                            stage_started_at = time.monotonic()
+                            await _prepare_page(page)
+                            _record_timing(timings, request, "robot_captcha_page_prepare", stage_started_at)
+                        continue
+                raise
         high_frequency_response = None
         if request.high_frequency_endpoint and request.high_frequency_payload:
             try:
+                stage_started_at = time.monotonic()
                 high_frequency_response = await self._execute_route_fetch(
                     page=page,
                     method="POST",
@@ -177,8 +600,19 @@ class SellerSpriteBrowserRouteWorker:
                     payload=request.high_frequency_payload,
                     root_dir=request.root_dir,
                     section="high_frequency",
+                    timings=timings,
+                    request=request,
                 )
+                _record_timing(timings, request, "execute_route_fetch.high_frequency", stage_started_at)
             except SellerSpriteApiError as exc:
+                _record_timing(
+                    timings,
+                    request,
+                    "execute_route_fetch.high_frequency_error",
+                    stage_started_at,
+                    api_code=exc.api_code,
+                    status_code=exc.status_code,
+                )
                 warnings.append(
                     {
                         "stage": "high_frequency",
@@ -186,12 +620,264 @@ class SellerSpriteBrowserRouteWorker:
                         "error": exc.to_dict(),
                     }
                 )
+        _record_timing(timings, request, "total", total_started_at)
+        warnings.append(
+            {
+                "stage": "browser_route_timing",
+                "message": "卖家精灵 browser-route 阶段耗时诊断",
+                "timings": timings,
+            }
+        )
         return BrowserRouteResult(
             login=login,
             response=response,
             high_frequency_response=high_frequency_response,
             warnings=warnings,
         )
+
+    async def fetch_listing_analysis_report(
+        self,
+        *,
+        task_id: str,
+        root_dir: Path,
+        page_prepare: bool = True,
+        task_interval_seconds: float = 5.0,
+        cooldown_seconds: float = 10.0,
+    ) -> BrowserRouteResult:
+        """打开 Listing Analysis 报告详情页并捕获结构化结果。
+
+        参数：
+            task_id: Listing Analysis 远端任务标识。
+            root_dir: 原始响应和诊断文件目录。
+            page_prepare: 是否执行页面准备脚本。
+            task_interval_seconds: 同账号任务间隔上限。
+            cooldown_seconds: 风控或网络失败冷却上限。
+
+        返回：
+            报告页捕获结果和诊断警告。
+
+        异常：
+            BrowserRouteWorkerClosedError: worker 已进入关闭流程。
+            Exception: 透传登录、验证码或报告捕获异常。
+        """
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise BrowserRouteWorkerClosedError("browser worker 已进入关闭流程")
+        try:
+            return await self._fetch_listing_analysis_report_once(
+                task_id=task_id,
+                root_dir=root_dir,
+                page_prepare=page_prepare,
+                task_interval_seconds=task_interval_seconds,
+                cooldown_seconds=cooldown_seconds,
+            )
+        finally:
+            # 成功和失败都形成任务边界，避免异常路径永久停在 busy 且没有自回收计时器。
+            self._last_finished_at = self._clock()
+            self._task_count += 1
+            if self._opened_at:
+                self._transition_state("idle", reason="queue_drained")
+                self._schedule_automatic_reap()
+
+    async def _fetch_listing_analysis_report_once(
+        self,
+        *,
+        task_id: str,
+        root_dir: Path,
+        page_prepare: bool,
+        task_interval_seconds: float,
+        cooldown_seconds: float,
+    ) -> BrowserRouteResult:
+        """在账号 drain 锁内执行一次 Listing Analysis 报告捕获。"""
+        request = BrowserRouteRequest(
+            scenario="listing-analysis",
+            method="PAGE_CAPTURE",
+            endpoint="/v3/api/competing-lookup",
+            payload={},
+            referer="https://www.sellersprite.com/v3/ai-history?module=LA",
+            account=self.account,
+            root_dir=root_dir,
+            page_prepare=page_prepare,
+            task_interval_seconds=task_interval_seconds,
+            cooldown_seconds=cooldown_seconds,
+        )
+        warnings: list[dict[str, Any]] = []
+        timings: list[dict[str, Any]] = []
+        total_started_at = time.monotonic()
+        async with self._drain_lock:
+            stage_started_at = time.monotonic()
+            await self._wait_for_cooldown(request, warnings)
+            _record_timing(timings, request, "wait_for_cooldown", stage_started_at)
+            stage_started_at = time.monotonic()
+            await self._wait_for_rate_limit(request, warnings)
+            _record_timing(timings, request, "wait_for_rate_limit", stage_started_at)
+            had_page = bool(self._page and not self._page.is_closed())
+            stage_started_at = time.monotonic()
+            page = await self._ensure_page(self.account)
+            self.mark_session_ready(context=self._context, page=page)
+            self._transition_state("busy", reason="task_started")
+            _record_timing(timings, request, "ensure_page", stage_started_at, reused=had_page)
+            stage_started_at = time.monotonic()
+            login = await self._open_referer_and_login(page, request, timings=timings)
+            _record_timing(timings, request, "open_referer_and_login", stage_started_at, current_url=getattr(page, "url", ""))
+            await self._handle_robot_captcha_if_enabled(
+                page,
+                request,
+                warnings,
+                timings,
+                stage="before_listing_analysis_report",
+            )
+            if page_prepare:
+                stage_started_at = time.monotonic()
+                await _prepare_page(page)
+                _record_timing(timings, request, "page_prepare", stage_started_at)
+            report_url = _listing_analysis_report_url(task_id)
+            # 报告页可能在任务生成期间失效，重新登录并恢复页面后仅重试一次捕获。
+            for attempt in range(2):
+                try:
+                    stage_started_at = time.monotonic()
+                    response = await _open_listing_analysis_report_and_capture(
+                        page,
+                        task_id=task_id,
+                        report_url=report_url,
+                        root_dir=root_dir,
+                    )
+                    _record_timing(
+                        timings,
+                        request,
+                        "listing_analysis_report.capture",
+                        stage_started_at,
+                        attempt=attempt + 1,
+                    )
+                    break
+                except SellerSpriteApiError as exc:
+                    _record_timing(
+                        timings,
+                        request,
+                        "listing_analysis_report.capture_error",
+                        stage_started_at,
+                        attempt=attempt + 1,
+                        api_code=exc.api_code,
+                        status_code=exc.status_code,
+                    )
+                    if not exc.is_session_expired() or attempt > 0:
+                        raise
+                    stage_started_at = time.monotonic()
+                    await self._login_with_account(
+                        page,
+                        request.account,
+                        callback=request.referer or DEFAULT_PAGE_URL,
+                        timings=timings,
+                        request=request,
+                    )
+                    _record_timing(timings, request, "listing_analysis_report.session_expired_relogin", stage_started_at)
+                    stage_started_at = time.monotonic()
+                    login = await self._open_referer_and_login(page, request, timings=timings)
+                    _record_timing(
+                        timings,
+                        request,
+                        "listing_analysis_report.session_expired_reopen",
+                        stage_started_at,
+                        current_url=getattr(page, "url", ""),
+                    )
+                    await self._handle_robot_captcha_if_enabled(
+                        page,
+                        request,
+                        warnings,
+                        timings,
+                        stage="after_listing_analysis_report_session_expired_reopen",
+                    )
+                    if page_prepare:
+                        stage_started_at = time.monotonic()
+                        await _prepare_page(page)
+                        _record_timing(
+                            timings,
+                            request,
+                            "listing_analysis_report.session_expired_page_prepare",
+                            stage_started_at,
+                        )
+                except Exception as exc:
+                    if await _has_visible_text(page, "正在分析中"):
+                        response = {
+                            "code": "OK",
+                            "success": True,
+                            "data": {
+                                "taskId": task_id,
+                                "taskStatus": "RUNNING",
+                                "analyzing": True,
+                            },
+                        }
+                        _record_timing(
+                            timings,
+                            request,
+                            "listing_analysis_report.analyzing",
+                            stage_started_at,
+                            error=type(exc).__name__,
+                        )
+                        break
+                    raise SellerSpriteApiError(
+                        "卖家精灵 Listing Analysis 报告页未捕获 competing-lookup 结构化数据",
+                        response_excerpt=(f"task_id={task_id} url={report_url}\n{exc}")[:1000],
+                        api_code="ERR_LISTING_ANALYSIS_REPORT_CAPTURE_MISSED",
+                    ) from exc
+            _record_timing(timings, request, "total", total_started_at)
+            warnings.append(
+                {
+                    "stage": "browser_route_timing",
+                    "message": "卖家精灵 Listing Analysis 报告页 browser-route 阶段耗时诊断",
+                    "timings": timings,
+                }
+            )
+            return BrowserRouteResult(login=login, response=response, warnings=warnings)
+
+    async def _handle_robot_captcha_if_enabled(
+        self,
+        page,
+        request: BrowserRouteRequest,
+        warnings: list[dict[str, Any]],
+        timings: list[dict[str, Any]],
+        *,
+        stage: str,
+    ) -> dict[str, Any] | None:
+        stage_started_at = time.monotonic()
+        try:
+            result = await _solve_robot_image_captcha(
+                page,
+                settings=self.settings,
+                stage=stage,
+            )
+        except Exception as exc:
+            _record_timing(
+                timings,
+                request,
+                f"robot_captcha.{stage}",
+                stage_started_at,
+                enabled=self.settings.browser_captcha_ocr_enabled,
+                error=type(exc).__name__,
+            )
+            raise
+        _record_timing(
+            timings,
+            request,
+            f"robot_captcha.{stage}",
+            stage_started_at,
+            enabled=self.settings.browser_captcha_ocr_enabled,
+            detected=bool(result),
+            attempts=result.get("attempts") if result else None,
+            provider=result.get("provider") if result else None,
+        )
+        if not result:
+            return None
+        warnings.append(
+            {
+                "stage": "robot_captcha",
+                "message": "卖家精灵机器人检测验证码已通过 ddddocr 尝试处理",
+                "trigger_stage": stage,
+                "provider": result["provider"],
+                "attempts": result["attempts"],
+            }
+        )
+        return result
 
     async def _wait_for_cooldown(self, request: BrowserRouteRequest, warnings: list[dict[str, Any]]) -> None:
         wait_seconds = self._cooldown_until - time.monotonic()
@@ -238,29 +924,65 @@ class SellerSpriteBrowserRouteWorker:
         profile_dir = _profile_dir(self.settings, account)
         profile_dir.mkdir(parents=True, exist_ok=True)
         launch_options = _build_launch_options(self.settings)
-        self._context = await self._playwright.chromium.launch_persistent_context(
+        context = await self._playwright.chromium.launch_persistent_context(
             str(profile_dir),
             **launch_options,
         )
-        self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+        page = context.pages[0] if context.pages else await context.new_page()
+        self.mark_session_ready(context=context, page=page)
         return self._page
 
-    async def _open_referer_and_login(self, page, request: BrowserRouteRequest) -> dict[str, Any]:
+    async def _open_referer_and_login(
+        self,
+        page,
+        request: BrowserRouteRequest,
+        timings: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         referer = request.referer or DEFAULT_PAGE_URL
+        just_logged_in = False
         if _is_login_url(page.url):
-            await self._login_with_account(page, request.account, callback=referer)
+            stage_started_at = time.monotonic()
+            await self._login_with_account(page, request.account, callback=referer, timings=timings, request=request)
+            _record_timing(timings, request, "login_from_login_url", stage_started_at, current_url=page.url)
+            just_logged_in = True
         if _same_page_url(page.url, referer):
-            await page.reload(wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+            if not just_logged_in:
+                stage_started_at = time.monotonic()
+                await page.reload(wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+                _record_timing(timings, request, "referer_reload", stage_started_at, current_url=page.url)
+                stage_started_at = time.monotonic()
+                await page.wait_for_timeout(1500)
+                _record_timing(timings, request, "referer_settle", stage_started_at, reason="reload")
+            else:
+                _record_timing(timings, request, "referer_reload", time.monotonic(), skipped=True, reason="just_logged_in")
         else:
+            stage_started_at = time.monotonic()
             await page.goto(referer, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
-        await page.wait_for_timeout(1500)
-        if not await _detect_logged_in(page):
-            await self._login_with_account(page, request.account, callback=referer)
-            await page.goto(referer, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+            _record_timing(timings, request, "referer_goto", stage_started_at, current_url=page.url)
+            stage_started_at = time.monotonic()
             await page.wait_for_timeout(1500)
+            _record_timing(timings, request, "referer_settle", stage_started_at, reason="goto")
+        stage_started_at = time.monotonic()
         logged_in = await _detect_logged_in(page)
+        _record_timing(timings, request, "detect_logged_in.initial", stage_started_at, logged_in=logged_in)
         if not logged_in:
-            raise SellerSpriteConfigError("卖家精灵浏览器登录失败，请检查账号或浏览器 profile 登录状态")
+            stage_started_at = time.monotonic()
+            await self._login_with_account(page, request.account, callback=referer, timings=timings, request=request)
+            _record_timing(timings, request, "login_after_referer", stage_started_at, current_url=page.url)
+            if not _same_page_url(page.url, referer):
+                stage_started_at = time.monotonic()
+                await page.goto(referer, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+                _record_timing(timings, request, "referer_goto_after_login", stage_started_at, current_url=page.url)
+                stage_started_at = time.monotonic()
+                await page.wait_for_timeout(1500)
+                _record_timing(timings, request, "referer_settle_after_login", stage_started_at)
+        stage_started_at = time.monotonic()
+        logged_in = await _detect_logged_in(page)
+        _record_timing(timings, request, "detect_logged_in.final", stage_started_at, logged_in=logged_in)
+        if not logged_in:
+            raise SellerSpriteAuthenticationError(
+                "卖家精灵浏览器登录失败，请检查账号或浏览器 profile 登录状态"
+            )
         return {
             "mode": "browser-route",
             "profile_dir": str(_profile_dir(self.settings, request.account)),
@@ -273,22 +995,45 @@ class SellerSpriteBrowserRouteWorker:
             "account": request.account.to_public_dict(),
         }
 
-    async def _login_with_account(self, page, account: SellerSpriteAccount, *, callback: str) -> None:
+    async def _login_with_account(
+        self,
+        page,
+        account: SellerSpriteAccount,
+        *,
+        callback: str,
+        timings: list[dict[str, Any]] | None = None,
+        request: BrowserRouteRequest | None = None,
+    ) -> None:
         callback_url = _callback_path(callback)
+        stage_started_at = time.monotonic()
         await page.goto(
             f"{LOGIN_URL}?callback={quote(callback_url)}",
             wait_until="domcontentloaded",
             timeout=DEFAULT_TIMEOUT_MS,
         )
+        _record_timing(timings, request, "login.goto", stage_started_at, current_url=page.url)
+        stage_started_at = time.monotonic()
         await page.wait_for_timeout(1000)
-        if await _detect_logged_in(page):
+        _record_timing(timings, request, "login.page_settle", stage_started_at)
+        stage_started_at = time.monotonic()
+        logged_in = await _detect_logged_in(page)
+        _record_timing(timings, request, "login.detect_existing", stage_started_at, logged_in=logged_in)
+        if logged_in:
             return
+        stage_started_at = time.monotonic()
         await _click_account_login_tab(page)
+        _record_timing(timings, request, "login.click_account_tab", stage_started_at)
         password_input = page.locator("input[type='password']:visible").first
         try:
+            stage_started_at = time.monotonic()
             await password_input.wait_for(state="visible", timeout=5000)
+            _record_timing(timings, request, "login.wait_password_input", stage_started_at)
         except Exception as exc:
-            if await _detect_logged_in(page):
+            _record_timing(timings, request, "login.wait_password_input_error", stage_started_at)
+            stage_started_at = time.monotonic()
+            logged_in = await _detect_logged_in(page)
+            _record_timing(timings, request, "login.detect_after_password_missing", stage_started_at, logged_in=logged_in)
+            if logged_in:
                 return
             raise SellerSpriteConfigError(
                 f"卖家精灵登录页未显示账号登录密码框，current_url={page.url}"
@@ -302,10 +1047,16 @@ class SellerSpriteBrowserRouteWorker:
             "input[type='email']:visible:not([readonly]):not([disabled]), "
             "input[type='text']:visible:not([readonly]):not([disabled])"
         ).first
+        stage_started_at = time.monotonic()
         await username_input.fill(account.username)
         await password_input.fill(account.password)
+        _record_timing(timings, request, "login.fill_credentials", stage_started_at)
+        stage_started_at = time.monotonic()
         await _click_login_submit(page)
-        await page.wait_for_timeout(3000)
+        _record_timing(timings, request, "login.click_submit", stage_started_at)
+        stage_started_at = time.monotonic()
+        await _wait_for_login_success(page, callback=callback)
+        _record_timing(timings, request, "login.wait_success", stage_started_at, current_url=page.url)
 
     async def _execute_route_fetch(
         self,
@@ -316,6 +1067,8 @@ class SellerSpriteBrowserRouteWorker:
         payload: dict[str, Any],
         root_dir: Path,
         section: str,
+        timings: list[dict[str, Any]] | None = None,
+        request: BrowserRouteRequest | None = None,
     ) -> dict[str, Any]:
         normalized_method = method.upper()
         pattern = _route_pattern(endpoint)
@@ -327,6 +1080,9 @@ class SellerSpriteBrowserRouteWorker:
                 return
             headers = {key: value for key, value in request.headers.items() if key.lower() != "content-length"}
             headers["accept"] = "application/json, text/plain, */*"
+            if normalized_method == "PAGE_CAPTURE":
+                await route.continue_()
+                return
             if normalized_method == "GET":
                 await route.continue_(
                     url=_url_with_query(endpoint, payload),
@@ -343,6 +1099,15 @@ class SellerSpriteBrowserRouteWorker:
                     post_data=urlencode(_query_pairs(payload), doseq=True),
                 )
                 return
+            if normalized_method == "POST_QUERY":
+                headers["content-type"] = "application/json;charset=UTF-8"
+                await route.continue_(
+                    url=_url_with_query(endpoint, payload),
+                    method="POST",
+                    headers=headers,
+                    post_data="{}",
+                )
+                return
             headers["content-type"] = "application/json;charset=UTF-8"
             await route.continue_(
                 url=_absolute_url(endpoint),
@@ -351,12 +1116,87 @@ class SellerSpriteBrowserRouteWorker:
                 post_data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
             )
 
+        stage_started_at = time.monotonic()
         await page.route(pattern, _handle)
+        _record_timing(timings, request, f"route_fetch.{section}.route_setup", stage_started_at, endpoint=endpoint)
         try:
-            response = await _trigger_request(page, endpoint=endpoint, method=normalized_method, payload=payload)
-            return await _parse_response(response, method=normalized_method, root_dir=root_dir, section=section)
+            response, transport = await _trigger_request(
+                page,
+                endpoint=endpoint,
+                method=normalized_method,
+                payload=payload,
+                timings=timings,
+                request=request,
+                section=section,
+            )
+            stage_started_at = time.monotonic()
+            parsed = await _parse_response(response, method=normalized_method, root_dir=root_dir, section=section)
+            _record_timing(
+                timings,
+                request,
+                f"route_fetch.{section}.parse_response",
+                stage_started_at,
+                transport=transport,
+                status=getattr(response, "status", None),
+            )
+            return parsed
         finally:
+            stage_started_at = time.monotonic()
             await page.unroute(pattern, _handle)
+            _record_timing(timings, request, f"route_fetch.{section}.unroute", stage_started_at)
+
+
+def build_default_session_state_listener(
+    settings: SellerSpriteSettings,
+) -> Callable[[SellerSpriteAccount, dict[str, Any]], None]:
+    """为非 scheduler 直调路径创建延迟初始化的 SQLite 状态监听器。
+
+    参数：
+        settings: 当前卖家精灵配置；自定义输出目录时审计库也落在该目录内。
+
+    返回：
+        可直接传给 browser worker 的同步状态监听器。
+    """
+    recorder = None
+    initialization_failed = False
+
+    def listener(account: SellerSpriteAccount, payload: dict[str, Any]) -> None:
+        nonlocal recorder, initialization_failed
+        if initialization_failed:
+            return
+        if recorder is None:
+            try:
+                from opscli.seller_sprite.services.account_events import (
+                    SellerSpriteAccountEventRecorder,
+                )
+                from opscli.seller_sprite.services.task_queue_store import (
+                    SellerSpriteTaskQueueStore,
+                )
+
+                if settings.output_dir == DEFAULT_OUTPUT_DIR:
+                    store = SellerSpriteTaskQueueStore()
+                else:
+                    store = SellerSpriteTaskQueueStore(
+                        db_path=settings.output_dir / ".seller_sprite_session_events.sqlite3"
+                    )
+                recorder = SellerSpriteAccountEventRecorder(store=store)
+            except Exception as exc:
+                initialization_failed = True
+                # 审计初始化是旁路；只记录异常类型，绝不能覆盖浏览器主任务。
+                logger.error(
+                    "卖家精灵 browser 会话审计初始化失败：error=%s",
+                    type(exc).__name__,
+                    extra={
+                        "seller_sprite_event": {
+                            "event_type": "account_audit_persistence_failed",
+                            "error_code": type(exc).__name__,
+                        }
+                    },
+                )
+                return
+        recorder.record_session_state_payload(account, payload)
+
+    return listener
 
 
 def _random_task_interval_seconds(max_seconds: float) -> float:
@@ -389,7 +1229,17 @@ def _is_risk_control_error(exc: Exception) -> bool:
     details = _error_details(exc)
     return any(
         marker in details
-        for marker in ("captcha", "验证码", "risk control", "risk_control", "rate limit", "rate_limit", "too many", "风控")
+        for marker in (
+            "captcha",
+            "验证码",
+            "机器人检测",
+            "risk control",
+            "risk_control",
+            "rate limit",
+            "rate_limit",
+            "too many",
+            "风控",
+        )
     )
 
 
@@ -417,6 +1267,13 @@ def _same_page_url(current_url: str, target_url: str) -> bool:
     return _normalized_page_url(current_url) == _normalized_page_url(target_url)
 
 
+def _absolute_callback_url(callback: str) -> str:
+    if callback.startswith("http"):
+        return callback
+    path = callback if callback.startswith("/") else f"/{callback}"
+    return f"{BASE_URL}{path}"
+
+
 def _normalized_page_url(url: str) -> tuple[str, str, str, tuple[tuple[str, str], ...]]:
     parsed = urlparse(url)
     return (
@@ -427,22 +1284,45 @@ def _normalized_page_url(url: str) -> tuple[str, str, str, tuple[tuple[str, str]
     )
 
 
-_WORKERS: dict[tuple[int, str], SellerSpriteBrowserRouteWorker] = {}
+_WORKERS: dict[tuple[int, str, str, str], SellerSpriteBrowserRouteWorker] = {}
 
 
 class _NoQueryButtonError(Exception):
     pass
 
 
-def get_browser_route_worker(*, settings: SellerSpriteSettings, account: SellerSpriteAccount) -> SellerSpriteBrowserRouteWorker:
-    """按事件循环和账号获取常驻 browser worker。"""
-    loop_key = id(asyncio.get_running_loop())
-    account_key = f"{account.name}:{account.username}"
-    key = (loop_key, account_key)
+def get_browser_route_worker(
+    *,
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+    state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    owner_id: str = "default",
+) -> SellerSpriteBrowserRouteWorker:
+    """按事件循环、所有者、浏览器配置和账号获取常驻 worker。
+
+    参数：
+        settings: browser-route 运行配置。
+        account: worker 独占账号。
+        state_listener: 会话状态监听器。
+        clock: 生命周期单调时钟。
+        owner_id: 调度器运行期所有权标识，用于隔离同配置的并发调度器。
+
+    返回：
+        可接受任务的账号隔离 worker。
+    """
+    key = _worker_registry_key(settings=settings, account=account, owner_id=owner_id)
     worker = _WORKERS.get(key)
-    if not worker:
-        worker = SellerSpriteBrowserRouteWorker(settings=settings, account=account)
+    if not worker or not worker.accepts_tasks:
+        worker = SellerSpriteBrowserRouteWorker(
+            settings=settings,
+            account=account,
+            state_listener=state_listener,
+            clock=clock,
+        )
         _WORKERS[key] = worker
+    else:
+        worker.set_state_listener(state_listener)
     return worker
 
 
@@ -450,11 +1330,216 @@ def get_existing_browser_route_worker(
     *,
     settings: SellerSpriteSettings,
     account: SellerSpriteAccount,
+    owner_id: str = "default",
 ) -> SellerSpriteBrowserRouteWorker | None:
-    """读取已存在的 browser worker，不存在时不创建新窗口或新队列。"""
-    loop_key = id(asyncio.get_running_loop())
+    """读取已存在且可接受任务的 browser worker。
+
+    参数：
+        settings: browser-route 运行配置。
+        account: 目标账号。
+        owner_id: 调度器运行期所有权标识。
+
+    返回：
+        已存在的 worker；不存在或正在关闭时返回空。
+    """
+    worker = _WORKERS.get(
+        _worker_registry_key(settings=settings, account=account, owner_id=owner_id)
+    )
+    return worker if worker and worker.accepts_tasks else None
+
+
+def reserve_browser_route_worker(
+    *,
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+    owner_id: str = "default",
+) -> SellerSpriteBrowserRouteWorker | None:
+    """预留已存在的 worker，避免已领取任务在提交前遭周期回收。
+
+    参数：
+        settings: browser-route 运行配置。
+        account: 已领取任务绑定的账号。
+        owner_id: 调度器运行期所有权标识。
+
+    返回：
+        预留成功的 worker；会话尚未创建或已关闭时返回空。
+    """
+    worker = get_existing_browser_route_worker(
+        settings=settings,
+        account=account,
+        owner_id=owner_id,
+    )
+    if worker is None or not worker.reserve():
+        return None
+    return worker
+
+
+async def close_browser_route_worker(
+    *,
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+    reason: str = "account_unavailable",
+    state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+    owner_id: str = "default",
+) -> bool:
+    """关闭并移除指定账号在当前所有者中的 browser worker。
+
+    参数：
+        settings: browser-route 运行配置。
+        account: 目标账号。
+        reason: 关闭原因。
+        state_listener: 会话状态监听器。
+        owner_id: 调度器运行期所有权标识。
+
+    返回：
+        实际找到并关闭 worker 时返回 ``True``，否则返回 ``False``。
+
+    异常：
+        Exception: 透传浏览器资源清理异常。
+    """
+    owner_prefix = _worker_owner_prefix(owner_id=owner_id)
     account_key = f"{account.name}:{account.username}"
-    return _WORKERS.get((loop_key, account_key))
+    selected = [
+        (key, worker)
+        for key, worker in list(_WORKERS.items())
+        if key[:2] == owner_prefix and key[3] == account_key
+    ]
+    if not selected:
+        return False
+    errors: list[Exception] = []
+    for key, worker in selected:
+        if _WORKERS.pop(key, None) is not worker:
+            continue
+        # 配置热更新可能留下不同启动命名空间的旧会话，因此按所有者和账号完整清理。
+        try:
+            if isinstance(worker, SellerSpriteBrowserRouteWorker):
+                worker.set_state_listener(state_listener)
+                await worker.close(reason=reason)
+            else:
+                await worker.close()
+        except Exception as exc:
+            errors.append(exc)
+    if errors:
+        raise errors[0]
+    return True
+
+
+async def reap_browser_route_workers(
+    *,
+    settings: SellerSpriteSettings,
+    now: float | None = None,
+    state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+    owner_id: str = "default",
+) -> list[dict[str, str]]:
+    """回收当前所有者中达到空闲或最大生命周期的安全会话。
+
+    参数：
+        settings: 当前生命周期阈值和浏览器配置。
+        now: 指定生命周期计算时刻。
+        state_listener: 会话状态监听器。
+        owner_id: 调度器运行期所有权标识。
+
+    返回：
+        成功回收的账号名和原因列表。
+    """
+    owner_prefix = _worker_owner_prefix(owner_id=owner_id)
+    recycled: list[dict[str, str]] = []
+    for key, worker in list(_WORKERS.items()):
+        if key[:2] != owner_prefix:
+            continue
+        reason = worker.recycle_reason(settings=settings, now=now)
+        if reason is None:
+            continue
+        # 先移除再关闭，确保下一任务只能取得全新的 worker。
+        if _WORKERS.pop(key, None) is not worker:
+            continue
+        worker.set_state_listener(state_listener)
+        try:
+            await worker.close(reason=reason)
+        except Exception as exc:
+            # 状态监听器已记录 close_failed；单个关闭失败不能阻断其他会话回收。
+            logger.warning(
+                "卖家精灵 browser 会话回收失败：account=%s error=%s",
+                worker.account.name,
+                type(exc).__name__,
+            )
+            continue
+        recycled.append({"account_name": worker.account.name, "reason": reason})
+    return recycled
+
+
+async def close_all_browser_route_workers(
+    *,
+    settings: SellerSpriteSettings,
+    reason: str = "scheduler_close",
+    state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+    owner_id: str = "default",
+) -> int:
+    """关闭当前所有者管理的全部 browser-route 会话。
+
+    参数：
+        settings: browser-route 运行配置。
+        reason: 批量关闭原因。
+        state_listener: 会话状态监听器。
+        owner_id: 调度器运行期所有权标识。
+
+    返回：
+        成功关闭的 worker 数量。
+    """
+    owner_prefix = _worker_owner_prefix(owner_id=owner_id)
+    closed_count = 0
+    for key, worker in list(_WORKERS.items()):
+        if key[:2] != owner_prefix:
+            continue
+        if _WORKERS.pop(key, None) is not worker:
+            continue
+        worker.set_state_listener(state_listener)
+        try:
+            await worker.close(reason=reason)
+        except Exception as exc:
+            # 继续关闭其他账号，失败账号已通过监听器报告 close_failed。
+            logger.warning(
+                "卖家精灵 browser 会话批量关闭失败：account=%s error=%s",
+                worker.account.name,
+                type(exc).__name__,
+            )
+            continue
+        closed_count += 1
+    return closed_count
+
+
+def _worker_registry_prefix(
+    *,
+    settings: SellerSpriteSettings,
+    owner_id: str,
+) -> tuple[int, str, str]:
+    """构造事件循环、所有者和浏览器启动配置组成的 registry 前缀。"""
+    launch_identity = {
+        "profile_dir": str(settings.browser_profile_dir.expanduser().resolve()),
+        "runtime": settings.browser_runtime.strip().lower(),
+        "channel": (settings.browser_channel or "").strip().lower(),
+        "headless": bool(settings.browser_headless),
+    }
+    namespace = hashlib.sha256(
+        json.dumps(launch_identity, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+    return (id(asyncio.get_running_loop()), str(owner_id or "default"), namespace)
+
+
+def _worker_owner_prefix(*, owner_id: str) -> tuple[int, str]:
+    """构造跨配置热更新稳定的事件循环与所有者前缀。"""
+    return (id(asyncio.get_running_loop()), str(owner_id or "default"))
+
+
+def _worker_registry_key(
+    *,
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+    owner_id: str,
+) -> tuple[int, str, str, str]:
+    """构造不写入日志的完整 worker registry 键。"""
+    account_key = f"{account.name}:{account.username}"
+    return (*_worker_registry_prefix(settings=settings, owner_id=owner_id), account_key)
 
 
 def _ensure_headed_browser_environment(settings: SellerSpriteSettings) -> bool:
@@ -600,21 +1685,117 @@ def _stop_auto_xvfb() -> None:
 atexit.register(_stop_auto_xvfb)
 
 
-async def _trigger_request(page, *, endpoint: str, method: str, payload: dict[str, Any]):
+async def fetch_listing_analysis_report_with_browser_route(
+    *,
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+    task_id: str,
+    root_dir: Path,
+    page_prepare: bool | None = None,
+) -> BrowserRouteResult:
+    """通过 browser-route 打开 Listing Analysis 报告详情页并捕获结果。"""
+    worker = get_browser_route_worker(
+        settings=settings,
+        account=account,
+        state_listener=build_default_session_state_listener(settings),
+    )
+    return await worker.fetch_listing_analysis_report(
+        task_id=task_id,
+        root_dir=root_dir,
+        page_prepare=settings.browser_page_prepare if page_prepare is None else page_prepare,
+        task_interval_seconds=settings.browser_task_interval_seconds,
+        cooldown_seconds=settings.browser_cooldown_seconds,
+    )
+
+
+async def _open_listing_analysis_report_and_capture(
+    page,
+    *,
+    task_id: str,
+    report_url: str,
+    root_dir: Path,
+) -> dict[str, Any]:
+    """进入 Listing Analysis 报告页并捕获 competing-lookup 响应。"""
+    async with page.expect_response(
+        lambda response: _same_endpoint(response.url, "/v3/api/competing-lookup"),
+        timeout=DEFAULT_TIMEOUT_MS,
+    ) as info:
+        await page.goto(report_url, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+    response = await info.value
+    payload = await _parse_response(response, method="PAGE_CAPTURE", root_dir=root_dir, section="listing_analysis_report")
+    if isinstance(payload.get("data"), dict):
+        payload["data"].setdefault("taskId", task_id)
+    return payload
+
+
+async def _trigger_request(
+    page,
+    *,
+    endpoint: str,
+    method: str,
+    payload: dict[str, Any],
+    timings: list[dict[str, Any]] | None = None,
+    request: BrowserRouteRequest | None = None,
+    section: str = "main",
+):
+    stage_started_at = time.monotonic()
+    wait_started_at = stage_started_at
+    listing_analysis_clicked = False
     try:
         async with page.expect_response(lambda response: _same_endpoint(response.url, endpoint), timeout=15000) as info:
-            if not await _click_query_button(page):
+            _record_timing(timings, request, f"route_fetch.{section}.expect_response_ready", stage_started_at)
+            stage_started_at = time.monotonic()
+            if request and request.scenario == "listing-analysis":
+                # Listing Analysis 必须先在页面输入 ASIN 再点击查询，避免只走静默接口提交。
+                listing_analysis_clicked = await _trigger_listing_analysis_query(page, payload)
+                clicked = listing_analysis_clicked
+            else:
+                clicked = await _click_query_button(page)
+            _record_timing(timings, request, f"route_fetch.{section}.click_query_button", stage_started_at, clicked=clicked)
+            if not clicked:
                 raise _NoQueryButtonError()
-        return await info.value
-    except Exception:
-        return await _request_with_browser_context(page, endpoint=endpoint, method=method, payload=payload)
+            wait_started_at = time.monotonic()
+        response = await info.value
+        _record_timing(
+            timings,
+            request,
+            f"route_fetch.{section}.wait_page_response",
+            wait_started_at,
+            status=getattr(response, "status", None),
+        )
+        return response, "page_response"
+    except Exception as exc:
+        _record_timing(
+            timings,
+            request,
+            f"route_fetch.{section}.page_response_fallback",
+            wait_started_at,
+            error=type(exc).__name__,
+        )
+        if request and request.scenario == "listing-analysis" and listing_analysis_clicked:
+            raise SellerSpriteApiError(
+                "卖家精灵 Listing Analysis 已点击提交但未捕获接口响应，请稍后确认结果，避免重复提交",
+                response_excerpt=f"endpoint={endpoint}",
+                api_code="ERR_LISTING_ANALYSIS_RESPONSE_MISSED",
+                api_message="已完成页面点击，不再自动 fallback 重复创建 AI 任务。",
+            ) from exc
+        stage_started_at = time.monotonic()
+        response = await _request_with_browser_context(page, endpoint=endpoint, method=method, payload=payload)
+        _record_timing(
+            timings,
+            request,
+            f"route_fetch.{section}.context_request",
+            stage_started_at,
+            status=getattr(response, "status", None),
+        )
+        return response, "context_request"
 
 
 async def _request_with_browser_context(page, *, endpoint: str, method: str, payload: dict[str, Any]):
     """使用浏览器上下文请求接口，复用当前 profile 的 cookie，避免页面内 fetch 被拦截。"""
     headers = _context_request_headers(page.url, method=method)
     try:
-        if method == "GET":
+        if method in {"GET", "PAGE_CAPTURE"}:
             return await page.context.request.get(
                 _url_with_query(endpoint, payload),
                 headers=headers,
@@ -626,6 +1807,14 @@ async def _request_with_browser_context(page, *, endpoint: str, method: str, pay
                 _absolute_url(endpoint),
                 headers=headers,
                 data=urlencode(_query_pairs(payload), doseq=True),
+                timeout=DEFAULT_TIMEOUT_MS,
+                fail_on_status_code=False,
+            )
+        if method == "POST_QUERY":
+            return await page.context.request.post(
+                _url_with_query(endpoint, payload),
+                headers=headers,
+                data="{}",
                 timeout=DEFAULT_TIMEOUT_MS,
                 fail_on_status_code=False,
             )
@@ -671,15 +1860,67 @@ async def _click_query_button(page) -> bool:
         ".el-button:visible:has-text('开始筛选')",
         ".ant-btn:visible:has-text('开始筛选')",
     ]
+    locator = await _first_visible_page_locator(page, selectors)
+    if locator is None:
+        return False
+    await locator.click(timeout=5000)
+    return True
+
+
+async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool:
+    """在 Listing Analysis 页面填写 ASIN 并点击查询按钮。"""
+    asin = str(payload.get("asin") or "").strip().upper()
+    if not asin:
+        return False
+    input_box = await _first_visible_page_locator(
+        page,
+        [
+            "input[placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='asin']:visible:not([readonly]):not([disabled])",
+            "input[type='text']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if input_box is None:
+        return False
+    await input_box.fill(asin)
+    try:
+        await input_box.press("Enter", timeout=5000)
+        return True
+    except Exception:
+        pass
+    button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('立即分析')",
+            "[role='button']:visible:has-text('立即分析')",
+            "button:visible:has-text('立即查询')",
+            "[role='button']:visible:has-text('立即查询')",
+            "button:visible:has-text('查询')",
+            "[role='button']:visible:has-text('查询')",
+            ".el-button:visible:has-text('立即分析')",
+            ".el-button:visible:has-text('立即查询')",
+            ".el-button:visible:has-text('查询')",
+            ".ant-btn:visible:has-text('立即分析')",
+            ".ant-btn:visible:has-text('立即查询')",
+            ".ant-btn:visible:has-text('查询')",
+        ],
+    )
+    if button is None:
+        return False
+    await button.click(timeout=5000)
+    return True
+
+
+async def _first_visible_page_locator(page, selectors: list[str]):
+    """返回页面中第一个可见 locator。"""
     for selector in selectors:
         locator = page.locator(selector).first
         try:
             if await locator.count() and await locator.is_visible(timeout=800):
-                await locator.click(timeout=5000)
-                return True
+                return locator
         except Exception:
             continue
-    return False
+    return None
 
 
 async def _trigger_fetch(page, *, endpoint: str, method: str) -> None:
@@ -719,6 +1960,86 @@ async def _trigger_fetch(page, *, endpoint: str, method: str) -> None:
 def _looks_like_browser_fetch_failed(exc: Exception) -> bool:
     message = str(exc)
     return "Failed to fetch" in message and ("Page.evaluate" in message or "TypeError" in message)
+
+
+async def _solve_robot_image_captcha(
+    page,
+    *,
+    settings: SellerSpriteSettings,
+    stage: str,
+) -> dict[str, Any] | None:
+    """检测并处理卖家精灵机器人检测图片验证码。"""
+    if not settings.browser_captcha_ocr_enabled:
+        return None
+    dialog = await _robot_captcha_dialog(page)
+    if dialog is None:
+        return None
+    provider = create_captcha_ocr_provider()
+    max_attempts = max(settings.browser_captcha_ocr_max_attempts, 1)
+    for attempt in range(1, max_attempts + 1):
+        image = await _first_visible_locator(dialog, ROBOT_CAPTCHA_IMAGE_SELECTORS)
+        input_box = await _first_visible_locator(dialog, ROBOT_CAPTCHA_INPUT_SELECTORS)
+        confirm_button = await _first_visible_locator(dialog, ROBOT_CAPTCHA_CONFIRM_SELECTORS)
+        if image is None or input_box is None or confirm_button is None:
+            raise SellerSpriteConfigError(f"卖家精灵机器人检测验证码结构不完整，stage={stage}")
+        image_bytes = await _captcha_image_bytes(image)
+        answer = provider.recognize(image_bytes)
+        if not answer:
+            if attempt < max_attempts:
+                await image.click(timeout=3000)
+                await page.wait_for_timeout(ROBOT_CAPTCHA_SETTLE_TIMEOUT_MS)
+                continue
+            raise SellerSpriteConfigError(f"卖家精灵机器人检测验证码 OCR 未返回有效结果，stage={stage} attempts={attempt}")
+        await input_box.fill(answer)
+        await confirm_button.click(timeout=5000)
+        await page.wait_for_timeout(ROBOT_CAPTCHA_SETTLE_TIMEOUT_MS)
+        if not await _robot_captcha_visible(page):
+            return {"provider": provider.name, "attempts": attempt}
+        if attempt < max_attempts:
+            await image.click(timeout=3000)
+            await page.wait_for_timeout(ROBOT_CAPTCHA_SETTLE_TIMEOUT_MS)
+    raise SellerSpriteConfigError(f"卖家精灵机器人检测验证码 OCR 处理后仍未通过，stage={stage} attempts={max_attempts}")
+
+
+async def _robot_captcha_visible(page) -> bool:
+    return await _robot_captcha_dialog(page) is not None
+
+
+async def _robot_captcha_dialog(page):
+    if not hasattr(page, "locator"):
+        return None
+    for selector in ROBOT_CAPTCHA_DIALOG_SELECTORS:
+        locator = page.locator(selector).first
+        try:
+            if await locator.count() and await locator.is_visible(timeout=TEXT_DETECT_TIMEOUT_MS):
+                return locator
+        except Exception:
+            continue
+    return None
+
+
+async def _first_visible_locator(scope, selectors: list[str]):
+    for selector in selectors:
+        locator = scope.locator(selector).first
+        try:
+            if await locator.count() and await locator.is_visible(timeout=800):
+                return locator
+        except Exception:
+            continue
+    return None
+
+
+async def _captcha_image_bytes(image) -> bytes:
+    try:
+        src = await image.get_attribute("src")
+    except Exception:
+        src = None
+    if src and src.startswith("data:image/") and "," in src:
+        try:
+            return base64.b64decode(src.split(",", 1)[1])
+        except Exception:
+            pass
+    return await image.screenshot()
 
 
 async def _prepare_page(page) -> None:
@@ -836,12 +2157,20 @@ async def _parse_response(response, *, method: str, root_dir: Path, section: str
     return payload
 
 
-async def _detect_logged_in(page) -> bool:
+async def _wait_for_login_success(page, *, callback: str) -> None:
+    callback_url = _absolute_callback_url(callback)
     try:
-        await page.wait_for_load_state("networkidle", timeout=8000)
+        await page.wait_for_url(
+            lambda url: not _is_login_url(str(url)) or _same_page_url(str(url), callback_url),
+            timeout=LOGIN_SUCCESS_TIMEOUT_MS,
+        )
     except Exception:
         pass
-    if "/w/user/login" in page.url or "/cn/w/user/login" in page.url:
+    await page.wait_for_timeout(LOGIN_SETTLE_TIMEOUT_MS)
+
+
+async def _detect_logged_in(page) -> bool:
+    if _is_login_url(page.url):
         return False
     if await _homepage_requires_login(page) or await _has_visible_text(page, "游客"):
         return False
@@ -859,7 +2188,7 @@ async def _homepage_requires_login(page) -> bool:
 async def _has_visible_text(page, text: str) -> bool:
     locator = page.get_by_text(text).first
     try:
-        return await locator.is_visible(timeout=1000)
+        return await locator.is_visible(timeout=TEXT_DETECT_TIMEOUT_MS)
     except Exception:
         return False
 
@@ -909,6 +2238,11 @@ def _profile_dir(settings: SellerSpriteSettings, account: SellerSpriteAccount) -
     key = hashlib.md5(f"{account.name}:{account.username}".encode("utf-8")).hexdigest()[:12]
     safe_name = _slug(account.name or "default")
     return settings.browser_profile_dir / f"{safe_name}-{key}"
+
+
+def _listing_analysis_report_url(task_id: str) -> str:
+    """构造 Listing Analysis 历史报告详情页地址。"""
+    return f"{BASE_URL}/v3/ai-report?id={quote(str(task_id).strip())}&from=history"
 
 
 def _absolute_url(url: str) -> str:
