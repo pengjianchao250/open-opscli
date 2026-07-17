@@ -33,6 +33,7 @@ class SellerSpriteScenarioRequest:
     page_size: int = 100
     job_id: str | None = None
     output_dir: str | None = None
+    attempt_output_dir: str | None = None
     export_format: str = "xls"
     mode: str | None = None
     page_prepare: bool | None = None

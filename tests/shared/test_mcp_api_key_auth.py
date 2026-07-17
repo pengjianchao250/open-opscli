@@ -33,7 +33,8 @@ def test_integration_accounts_use_mcp_api_key_without_cli_auth():
     finally:
         mcp_request_ctx.reset(token)
 
-    assert headers == {"X-MCP-API-Key": "mcp-key-1"}
+    assert headers["X-MCP-API-Key"] == "mcp-key-1"
+    assert headers["X-Opscli-Version"]
     assert cookies == {}
 
 
@@ -45,7 +46,8 @@ def test_file_upload_uses_mcp_api_key_without_cli_auth():
     finally:
         mcp_request_ctx.reset(token)
 
-    assert headers == {"X-MCP-API-Key": "mcp-key-2"}
+    assert headers["X-MCP-API-Key"] == "mcp-key-2"
+    assert headers["X-Opscli-Version"]
     assert cookies == {}
 
 
@@ -71,7 +73,7 @@ def test_integration_accounts_use_cli_auth_without_mcp_api_key():
     assert cookies == {"polarisUserToken": "cli-session"}
 
 
-def test_explicit_jwt_keeps_authorization_and_mcp_header():
+def test_explicit_jwt_does_not_mix_request_mcp_api_key():
     client = IntegrationAccountClient(auth_client=BlockingAuthClient(), jwt="jwt-1")
     token = mcp_request_ctx.set({"api_key": "mcp-key-3"})
     try:
@@ -79,5 +81,25 @@ def test_explicit_jwt_keeps_authorization_and_mcp_header():
     finally:
         mcp_request_ctx.reset(token)
 
-    assert headers == {"Authorization": "Bearer jwt-1", "X-MCP-API-Key": "mcp-key-3"}
+    assert headers["Authorization"] == "Bearer jwt-1"
+    assert headers["X-Opscli-Version"]
+    assert "X-MCP-API-Key" not in headers
     assert cookies == {}
+
+
+def test_explicit_session_and_jwt_do_not_mix_request_mcp_api_key():
+    client = IntegrationAccountClient(
+        auth_client=BlockingAuthClient(),
+        jwt="jwt-2",
+        session_id="session-2",
+    )
+    token = mcp_request_ctx.set({"api_key": "mcp-key-from-another-user"})
+    try:
+        headers, cookies = client._get_auth("ops")
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert headers["Authorization"] == "Bearer jwt-2"
+    assert headers["X-Opscli-Version"]
+    assert "X-MCP-API-Key" not in headers
+    assert cookies == {"polarisUserToken": "session-2"}

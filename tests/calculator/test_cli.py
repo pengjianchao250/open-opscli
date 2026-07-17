@@ -119,6 +119,22 @@ class FakeClient:
                         "remark": {"size": "Small standard", "first": "海运"},
                     },
                 },
+                "allPlans": [
+                    {
+                        "partition_recommend": "1区",
+                        "total_fee": 88.9416,
+                        "schemes": [
+                            {
+                                "lines": "美西南",
+                                "first_fee": {"value": 2.3181, "range": [2.2882, 2.3583]},
+                                "storage_fees": {"value": 0.1882, "range": [0.1165, 0.3013]},
+                                "freight": {"value": 86.4353, "range": [63.4573, 94.4781]},
+                                "scheme_fee": 88.9416,
+                                "scheme_range": [65.8620, 97.1377],
+                            }
+                        ],
+                    }
+                ],
             },
         }
 
@@ -436,32 +452,22 @@ def test_detail_command_prints_summary(monkeypatch):
     assert "测试试算" in result.output
     assert "已完成" in result.output
     assert "美国" in result.output
-    assert "39.99" in result.output
-    assert "推荐方案：fba" in result.output
-    assert "试算结果" in result.output
-    assert "费用" in result.output
-    assert "自发货(USD)" in result.output
-    assert "FBA(USD) 推荐" in result.output
-    assert "售价" in result.output
-    assert "毛利" in result.output
-    assert "毛利率" in result.output
-    assert "非税采购价" in result.output
-    assert "头程费用" in result.output
-    assert "仓库费用" in result.output
-    assert "尾程费用" in result.output
-    assert "站内广告" in result.output
-    assert "平台佣金" in result.output
-    assert "固定成本" in result.output
-    assert "备注" in result.output
-    assert "39.99" in result.output
-    assert "(35.00~45.00)" in result.output
-    assert "18.00%" in result.output
-    assert "(10.00%~30.00%)" in result.output
-    assert "(25.00%)" in result.output
-    assert "备货仓库：美西、美东" in result.output
-    assert "尺寸等级：Small standard; 头程路线：海运" in result.output
-    assert "Web详情页：https://bi.xenkee.com/#/calculatorDatail?task_code=NPC001&sudo=admin" in result.output
-    assert "原始JSON：opscli calculator detail --task-code NPC001 --sudo admin --json" in result.output
+    assert "费用方案" in result.output
+    assert "分区推荐" in result.output
+    assert "分区线路" in result.output
+    assert "每PCS头程费用(CNY)" in result.output
+    assert "每PCS目的仓费用(CNY)" in result.output
+    assert "每PCS尾程费用(CNY)" in result.output
+    assert "每PCS全程费用(CNY)" in result.output
+    assert "每PCS全程平均费用(CNY)" in result.output
+    assert "美西南" in result.output
+    assert "88.9416" in result.output
+    assert "(65.8620~97.1377)" in result.output
+    assert "售价" not in result.output
+    assert "毛利" not in result.output
+    assert "非税采购价" not in result.output
+    assert "线上详情：https://bi.xenkee.com/#/calculatorDatail?task_code=NPC001&sudo=admin" in result.output
+    assert "原始JSON" not in result.output
 
 
 def test_detail_command_prints_chinese_error_without_traceback(monkeypatch):

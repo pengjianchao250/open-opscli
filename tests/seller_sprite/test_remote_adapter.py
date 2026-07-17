@@ -5,7 +5,10 @@ from opscli.seller_sprite.remote_adapter import SellerSpriteRemoteAdapter
 
 
 class FakeAuthClient:
+    calls = 0
+
     def get_session(self, alias: str | None = None) -> str:
+        type(self).calls += 1
         assert alias == "ops"
         return "sid-cli-123"
 
@@ -80,7 +83,8 @@ def test_remote_adapter_maps_run_to_seller_sprite_run():
     assert result["data"]["arguments"]["params"] == {"asin": "B07YRMT36L"}
     assert result["data"]["arguments"]["page_size"] == 100
     assert result["data"]["arguments"]["export_format"] == "json"
-    assert result["data"]["arguments"]["session_id"] == "sid-cli-123"
+    assert "session_id" not in result["data"]["arguments"]
+    assert "jwt" not in result["data"]["arguments"]
     assert created_clients[0].calls == [
         (
             "seller_sprite_run",
@@ -91,7 +95,6 @@ def test_remote_adapter_maps_run_to_seller_sprite_run():
                 "params": {"asin": "B07YRMT36L"},
                 "page_size": 100,
                 "export_format": "json",
-                "session_id": "sid-cli-123",
             },
         )
     ]
@@ -99,6 +102,32 @@ def test_remote_adapter_maps_run_to_seller_sprite_run():
         ("fetch_remote_config",),
         ("select_server", {"data": {}}, "http", "BI运营系统"),
     ]
+
+
+def test_remote_adapter_keeps_legacy_auth_client_constructor_without_using_it():
+    auth_client = FakeAuthClient()
+    FakeAuthClient.calls = 0
+
+    adapter = SellerSpriteRemoteAdapter(
+        config_client=FakeConfigClient(),
+        remote_client_factory=FakeRemoteClient,
+        auth_client=auth_client,
+    )
+    result = adapter.run(
+        scenario="traffic-source",
+        site="US",
+        period="30d",
+        params={"asin": "B086YD9Z2X"},
+        page_size=20,
+        export_format="json",
+        output_dir=None,
+        job_id=None,
+    )
+
+    assert result["success"] is True
+    assert FakeAuthClient.calls == 0
+    assert "session_id" not in result["data"]["arguments"]
+    assert "jwt" not in result["data"]["arguments"]
 
 
 def test_remote_adapter_maps_listing_analysis_tools():
@@ -128,13 +157,14 @@ def test_remote_adapter_maps_listing_analysis_tools():
 
     assert submit["data"]["tool"] == "seller_sprite_listing_analysis_submit"
     assert submit["data"]["arguments"]["asin"] == "B0TEST123"
-    assert submit["data"]["arguments"]["session_id"] == "sid-cli-123"
+    assert "session_id" not in submit["data"]["arguments"]
+    assert "jwt" not in submit["data"]["arguments"]
     assert status["data"]["tool"] == "seller_sprite_listing_analysis_status"
     assert result["data"]["tool"] == "seller_sprite_listing_analysis_result"
 
 
 
-def test_remote_adapter_maps_job_status_and_export_tools():
+def test_remote_adapter_job_status_forwards_default_wait_seconds():
     config_client = FakeConfigClient()
     created_clients = []
 
@@ -149,16 +179,106 @@ def test_remote_adapter_maps_job_status_and_export_tools():
     )
 
     status = adapter.job_status("job-1")
-    export = adapter.export("job-1")
 
     assert status["data"]["tool"] == "seller_sprite_job_status"
-    assert status["data"]["arguments"] == {"job_id": "job-1"}
+    assert status["data"]["arguments"] == {"job_id": "job-1", "wait_seconds": 0}
+    assert created_clients[0].calls == [
+        ("seller_sprite_job_status", {"job_id": "job-1", "wait_seconds": 0})
+    ]
+
+
+def test_remote_adapter_job_status_forwards_explicit_wait_seconds():
+    config_client = FakeConfigClient()
+    created_clients = []
+
+    def make_remote_client(url: str):
+        client = FakeRemoteClient(url)
+        created_clients.append(client)
+        return client
+
+    adapter = SellerSpriteRemoteAdapter(
+        config_client=config_client,
+        remote_client_factory=make_remote_client,
+    )
+
+    status = adapter.job_status("job-1", wait_seconds=12)
+
+    assert status["data"]["arguments"] == {"job_id": "job-1", "wait_seconds": 12}
+
+
+def test_remote_adapter_jobs_status_preserves_job_id_order_and_default_wait():
+    config_client = FakeConfigClient()
+    created_clients = []
+
+    def make_remote_client(url: str):
+        client = FakeRemoteClient(url)
+        created_clients.append(client)
+        return client
+
+    adapter = SellerSpriteRemoteAdapter(
+        config_client=config_client,
+        remote_client_factory=make_remote_client,
+    )
+
+    status = adapter.jobs_status(["job-3", "job-1", "job-2"])
+
+    assert status["data"]["tool"] == "seller_sprite_jobs_status"
+    assert status["data"]["arguments"] == {
+        "job_ids": ["job-3", "job-1", "job-2"],
+        "wait_seconds": 0,
+    }
+    assert created_clients[0].calls == [
+        (
+            "seller_sprite_jobs_status",
+            {
+                "job_ids": ["job-3", "job-1", "job-2"],
+                "wait_seconds": 0,
+            },
+        )
+    ]
+
+
+def test_remote_adapter_jobs_status_forwards_explicit_wait_seconds():
+    config_client = FakeConfigClient()
+    created_clients = []
+
+    def make_remote_client(url: str):
+        client = FakeRemoteClient(url)
+        created_clients.append(client)
+        return client
+
+    adapter = SellerSpriteRemoteAdapter(
+        config_client=config_client,
+        remote_client_factory=make_remote_client,
+    )
+
+    status = adapter.jobs_status(["job-2", "job-1"], wait_seconds=30)
+
+    assert status["data"]["arguments"] == {
+        "job_ids": ["job-2", "job-1"],
+        "wait_seconds": 30,
+    }
+
+
+def test_remote_adapter_maps_export_tool():
+    config_client = FakeConfigClient()
+    created_clients = []
+
+    def make_remote_client(url: str):
+        client = FakeRemoteClient(url)
+        created_clients.append(client)
+        return client
+
+    adapter = SellerSpriteRemoteAdapter(
+        config_client=config_client,
+        remote_client_factory=make_remote_client,
+    )
+
+    export = adapter.export("job-1")
+
     assert export["data"]["tool"] == "seller_sprite_export"
     assert export["data"]["arguments"] == {"job_id": "job-1"}
-    assert [client.calls[0][0] for client in created_clients] == [
-        "seller_sprite_job_status",
-        "seller_sprite_export",
-    ]
+    assert created_clients[0].calls == [("seller_sprite_export", {"job_id": "job-1"})]
 
 
 def test_remote_adapter_preserves_explicit_output_dir_and_job_id():
@@ -200,7 +320,6 @@ def test_remote_adapter_preserves_explicit_output_dir_and_job_id():
                 "export_format": "xlsx",
                 "output_dir": "D:/exports",
                 "job_id": "job-keep-1",
-                "session_id": "sid-cli-123",
             },
         )
     ]

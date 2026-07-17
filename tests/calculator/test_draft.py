@@ -9,6 +9,7 @@ from opscli.calculator.draft import (
     build_field_options,
     build_missing_items_markdown,
     build_summary_text,
+    build_usage_markdown,
     create_draft_package,
     load_draft_data,
     normalize_draft_data,
@@ -94,6 +95,37 @@ def test_normalize_draft_data_converts_numeric_strings_and_default_tariff():
     assert "未找到参考数据" in "\n".join(notes)
 
 
+def test_normalize_draft_data_sets_hidden_cost_fields_to_one():
+    data, _ = normalize_draft_data({
+        "product_price": 0,
+        "gross_profit_percent": None,
+        "purchase_cost_with_tax": 99,
+        "purchase_cost": 0,
+        "tax_rate_percent": 0,
+        "fee_percent": 0,
+        "advertising_percent": 0,
+        "marketing_percent": 0,
+        "refund_percent": 0,
+        "fixed_cost_percent": 0,
+        "tariff_rate": 0,
+    })
+
+    for field in (
+        "product_price",
+        "gross_profit_percent",
+        "purchase_cost_with_tax",
+        "purchase_cost",
+        "tax_rate_percent",
+        "fee_percent",
+        "advertising_percent",
+        "marketing_percent",
+        "refund_percent",
+        "fixed_cost_percent",
+        "tariff_rate",
+    ):
+        assert data[field] == 1
+
+
 def test_validate_draft_data_reports_chinese_required_and_stock_errors():
     data = _valid_draft()
     data["package_length"] = None
@@ -161,6 +193,40 @@ def test_prepare_submit_payload_derives_pickup_address_code_fields():
     assert payload["pick_up_city"] == "130200"
     assert payload["pick_up_province_code"] == "130000"
     assert payload["pick_up_city_code"] == "130200"
+
+
+def test_prepare_submit_payload_upgrades_old_zero_cost_fields_to_one():
+    data = _valid_draft()
+    for field in (
+        "product_price",
+        "gross_profit_percent",
+        "purchase_cost_with_tax",
+        "purchase_cost",
+        "tax_rate_percent",
+        "fee_percent",
+        "advertising_percent",
+        "marketing_percent",
+        "refund_percent",
+        "fixed_cost_percent",
+        "tariff_rate",
+    ):
+        data[field] = 0
+
+    payload = prepare_submit_payload(data)
+
+    assert all(payload[field] == 1 for field in (
+        "product_price",
+        "gross_profit_percent",
+        "purchase_cost_with_tax",
+        "purchase_cost",
+        "tax_rate_percent",
+        "fee_percent",
+        "advertising_percent",
+        "marketing_percent",
+        "refund_percent",
+        "fixed_cost_percent",
+        "tariff_rate",
+    ))
 
 
 def test_markdown_and_summary_use_chinese_labels():
@@ -353,3 +419,16 @@ def test_create_draft_package_writes_csv_usage_and_json(tmp_path):
     assert read_options_cache(tmp_path / "draft-pkg") == _option_cache()
     assert "河北省" in csv_text
     assert "zone_1_3" not in csv_text
+
+
+def test_usage_markdown_separates_sku_package_and_fba_inbound_box_references():
+    text = build_usage_markdown("tmp-validation/calculator/example/draft.json")
+
+    assert "单件 SKU 包装参考" in text
+    assert "SD 卡：3.2 × 2.4 × 0.2 cm / 0.03 kg" in text
+    assert "图书：24 × 16.2 × 3.5 cm / 0.15 kg" in text
+    assert "电子玩具：37 × 15.4 × 7 cm / 0.49 kg" in text
+    assert "FBA 入库外箱参考" in text
+    assert "91.44 × 63.5 × 63.5 cm / 22.68 kg" in text
+    assert "不会自动写入" in text
+    assert "单箱数量没有通用默认值" in text

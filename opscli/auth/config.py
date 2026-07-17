@@ -24,7 +24,7 @@ DEFAULTS = {
     # 默认 false（正式发版中 polaris 暂时不参与）
     # 需要启用时在 .env 写 OPSCLI_POLARIS_ENABLED=true
     # 或在 ~/.config/opscli/config.ini [systems] 写入 polaris_enabled = true
-    "polaris_enabled": "false",
+    "polaris_enabled": "true",
 }
 
 # .env 环境变量名 → config 内部 key 的映射
