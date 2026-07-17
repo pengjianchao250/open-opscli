@@ -3817,3 +3817,11 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：release 分支获得 master 全部功能；asin_data 保持 release 演进版行为
 **回滚方式**：git reset --hard ORIG_HEAD（合并提交前）或 revert 合并提交
 ---
+## 2026-07-17 skills - upgrade 未登录时交互式引导登录并自动重试
+
+**变更原因**：skills upgrade 需登录，未登录用户（含 self-update 流程内）此前只能看报错后手动登录再重跑；交互终端下引导登录可保留用户原始意图一步完成
+**改动点**：opscli/skills/commands/cli.py 新增 _is_auth_failure（识别 AuthError 包装/401/407 三类认证失败）、_stdin_is_tty、_prompt_and_login（TTY 下询问 → 复用 auth login Device Flow → 仅一次机会）；upgrade 命令认证失败且登录成功后自动重试一次。非交互环境（AI Agent/管道/self-update 子进程）行为完全不变
+**验证结果**：tests/skills/test_upgrade_login_prompt.py 11 个测试全绿（TDD）；tests/skills 目录 stash 前后失败清单一致（5 个均预存）；真机干净 HOME + stdin 非 TTY 实测输出与改动前一致
+**影响范围**：仅 skills upgrade 命令交互终端场景；401/407 中途失效同样触发引导
+**回滚方式**：回退本次 commit
+---
