@@ -58,6 +58,39 @@ def _write_ready_metadata(data_dir: Path) -> None:
     )
 
 
+def _write_instant_comprehensive_metadata(data_dir: Path) -> None:
+    """写入即时综合、广告和平台组件，用于默认推荐与平台范围回归。"""
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v1.3.9", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "1,ds_instant,sales_primary_set,normal,0,即时综合数据集,\n"
+        "2,ds_ads,ads_set,normal,0,SP广告数据集,\n"
+        "7,ds_channel,query_channel_set,query_component,0,查询组件渠道数据集,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "1,ds_instant,sales_primary_set,date_id,日期,f_date_id,dimension,,,,,0,0\n"
+        "1,ds_instant,sales_primary_set,sku,SKU,f_sku,dimension,,,,,0,0\n"
+        "1,ds_instant,sales_primary_set,sales_amount,销售额,f_sales_amount,metric,,,,,0,0\n"
+        "2,ds_ads,ads_set,date_id,日期,f_ads_date,dimension,,,,,0,0\n"
+        "2,ds_ads,ads_set,acos,ACOS,f_acos,metric,ads_cost / sales,,广告成本销售比,,0,1\n"
+        "7,ds_channel,query_channel_set,platform_name,平台,f_platform,dimension,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n"
+        "ds_instant,platform_name,平台,ds_channel\n"
+        "ds_ads,platform_name,平台,ds_channel\n",
+        encoding="utf-8",
+    )
+
+
 def _write_ready_metadata_with_filter_config(data_dir: Path) -> None:
     """写入带 filter_config 的 data_state=ready 元数据。
 
@@ -539,6 +572,156 @@ def test_recommended_fields_when_nothing_named(tmp_path: Path):
         if item.get("selection_source") == "recommended"
     ]
     assert recommended, "推荐指标必须进入 execution_ref 并带 recommended 标注"
+
+
+def test_unspecified_dataset_recommends_compatible_instant_dataset(tmp_path: Path):
+    """未点名数据集时只推荐授权且兼容的即时综合数据集，并等待用户确认。"""
+    data_dir = tmp_path / "data"
+    _write_instant_comprehensive_metadata(data_dir)
+    result = query_plan.build_model_query_plan(
+        "查询近7天销售额",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "clarify_required"
+    assert result["model_view"]["dataset_name_zh"] == "即时综合数据集"
+    recommendation = result["model_view"]["default_dataset_recommendation_zh"]
+    assert recommendation["name_zh"] == "即时综合数据集"
+    assert recommendation["confirmation_required"] is True
+    assert result["model_view"]["next_action"] == "ask_user_for_default_dataset_confirmation"
+    assert "default_dataset_confirmation" in result["model_view"]["clarification_reason_codes"]
+    assert "query_template" not in result["execution_ref"]
+    schema = json.loads((SKILL_ROOT / "data" / "query_plan.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(result)
+
+
+def test_vague_query_recommends_instant_but_incompatible_query_does_not(tmp_path: Path):
+    """模糊请求可推荐即时综合；明确广告口径不兼容时不得强推。"""
+    data_dir = tmp_path / "data"
+    _write_instant_comprehensive_metadata(data_dir)
+    common = {
+        "data_dir": data_dir,
+        "rules_path": RULES_PATH,
+        "auto_upgrade": False,
+        "auto_enum": False,
+    }
+    vague = query_plan.build_model_query_plan("帮我查一下运营数据", **common)
+    incompatible = query_plan.build_model_query_plan("查询近7天ACOS", **common)
+
+    assert vague["model_view"]["default_dataset_recommendation_zh"]["name_zh"] == "即时综合数据集"
+    assert "default_dataset_recommendation_zh" not in incompatible["model_view"]
+    assert incompatible["model_view"]["dataset_name_zh"] != "即时综合数据集"
+
+
+def test_explicit_dataset_and_rejection_bypass_default_recommendation(tmp_path: Path):
+    """显式选表或拒绝即时综合时不得再次触发默认推荐。"""
+    data_dir = tmp_path / "data"
+    _write_instant_comprehensive_metadata(data_dir)
+    common = {
+        "data_dir": data_dir,
+        "rules_path": RULES_PATH,
+        "auto_upgrade": False,
+        "auto_enum": False,
+    }
+    confirmed = query_plan.build_model_query_plan("使用即时综合数据集查询近7天销售额", **common)
+    rejected = query_plan.build_model_query_plan("不要用即时综合数据集，查询近7天销售额", **common)
+
+    assert confirmed["status"] == "planned"
+    assert "default_dataset_recommendation_zh" not in confirmed["model_view"]
+    assert "query_template" in confirmed["execution_ref"]
+    assert "default_dataset_recommendation_zh" not in rejected["model_view"]
+    assert rejected["model_view"]["dataset_name_zh"] != "即时综合数据集"
+
+
+def test_missing_or_field_incompatible_instant_dataset_is_not_recommended(tmp_path: Path):
+    """未授权或无法覆盖 --field 的即时综合数据集不得进入默认推荐合同。"""
+    missing_data = tmp_path / "missing"
+    _write_ready_metadata(missing_data)
+    missing = query_plan.build_model_query_plan(
+        "查询近7天销售额",
+        data_dir=missing_data,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+    incompatible_data = tmp_path / "incompatible"
+    _write_instant_comprehensive_metadata(incompatible_data)
+    incompatible = query_plan.build_model_query_plan(
+        "查询近7天销售额",
+        requested_fields=["不存在字段"],
+        data_dir=incompatible_data,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert "default_dataset_recommendation_zh" not in missing["model_view"]
+    assert "default_dataset_recommendation_zh" not in incompatible["model_view"]
+
+
+def test_generic_amazon_defaults_to_sc_vc_and_queries_available_subset(tmp_path: Path):
+    """裸亚马逊默认 SC+VC；权限只有 SC 时直接查询 SC 并强制披露。"""
+    data_dir = tmp_path / "data"
+    _write_instant_comprehensive_metadata(data_dir)
+    result = query_plan.build_model_query_plan(
+        "使用即时综合数据集查询近7天亚马逊销售额",
+        authorized_platform_values=["亚马逊SC"],
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "planned"
+    assert result["model_view"]["platform_semantic_members"] == ["亚马逊SC", "亚马逊VC"]
+    assert result["model_view"]["platform_effective_members"] == ["亚马逊SC"]
+    assert result["execution_ref"]["resolved_platform_values"] == ["亚马逊SC"]
+    disclosures = result["model_view"]["platform_scope_disclosures_zh"]
+    assert any("默认按亚马逊SC + 亚马逊VC" in item for item in disclosures)
+    assert any("直接查询可用部分" in item and "亚马逊VC" in item for item in disclosures)
+    assert all(item in result["answer_contract"]["required_disclosures_zh"] for item in disclosures)
+    assert "query_template" in result["execution_ref"]
+    schema = json.loads((SKILL_ROOT / "data" / "query_plan.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(result)
+
+
+def test_generic_amazon_full_scope_and_explicit_sc_vc_remain_distinct(tmp_path: Path):
+    """完整权限执行 SC+VC；显式 SC/VC 不应用裸亚马逊默认披露。"""
+    data_dir = tmp_path / "data"
+    _write_instant_comprehensive_metadata(data_dir)
+    common = {
+        "data_dir": data_dir,
+        "rules_path": RULES_PATH,
+        "auto_upgrade": False,
+        "auto_enum": False,
+    }
+    generic = query_plan.build_model_query_plan(
+        "使用即时综合数据集查询近7天亚马逊销售额",
+        authorized_platform_values=["亚马逊SC", "亚马逊VC"],
+        **common,
+    )
+    sc = query_plan.build_model_query_plan(
+        "使用即时综合数据集查询近7天亚马逊SC销售额",
+        authorized_platform_values=["亚马逊SC", "亚马逊VC"],
+        **common,
+    )
+    vc = query_plan.build_model_query_plan(
+        "使用即时综合数据集查询近7天亚马逊VC销售额",
+        authorized_platform_values=["亚马逊SC", "亚马逊VC"],
+        **common,
+    )
+
+    assert generic["model_view"]["platform_effective_members"] == ["亚马逊SC", "亚马逊VC"]
+    assert generic["execution_ref"]["resolved_platform_values"] == ["亚马逊SC", "亚马逊VC"]
+    assert sc["model_view"]["platform_semantic_members"] == ["亚马逊SC"]
+    assert sc["execution_ref"]["resolved_platform_values"] == ["亚马逊SC"]
+    assert "platform_scope_disclosures_zh" not in sc["model_view"]
+    assert vc["model_view"]["platform_semantic_members"] == ["亚马逊VC"]
+    assert vc["execution_ref"]["resolved_platform_values"] == ["亚马逊VC"]
+    assert "platform_scope_disclosures_zh" not in vc["model_view"]
 
 
 def test_clarify_contract_carries_candidate_cards(tmp_path: Path):

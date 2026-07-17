@@ -48,6 +48,14 @@
           "description": "请求语义的中文标签（用户可见层只允许中文）",
           "$ref": "#/$defs/string_array"
         },
+        "platform_effective_members": {
+          "description": "当前账号权限枚举后本次实际执行的平台中文范围",
+          "$ref": "#/$defs/string_array"
+        },
+        "platform_scope_disclosures_zh": {
+          "description": "裸亚马逊默认 SC+VC 及部分权限降级时的强制披露",
+          "$ref": "#/$defs/string_array"
+        },
         "platform_filter_state": {
           "enum": ["unknown", "not_requested", "requires_permission_enum", "resolved", "blocked"]
         },
@@ -69,6 +77,17 @@
         "default_filters_zh": {
           "description": "数据集默认条件的中文披露，不写入执行 payload，由服务端权威应用",
           "$ref": "#/$defs/string_array"
+        },
+        "default_dataset_recommendation_zh": {
+          "description": "未明确指定数据集时，对已授权且兼容的即时综合数据集推荐",
+          "type": "object",
+          "required": ["name_zh", "reason_zh", "confirmation_required"],
+          "properties": {
+            "name_zh": {"type": "string"},
+            "reason_zh": {"type": "string"},
+            "confirmation_required": {"const": true}
+          },
+          "additionalProperties": false
         },
         "dataset_candidates_zh": {
           "description": "澄清态候选数据集卡片：中文名 + 命中原因，供带选项提问",
