@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import re
 import shutil
 import tempfile
@@ -23,7 +24,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from opscli.skills.domain.exceptions import error_to_dict
+from opscli.auth.exceptions import AuthError
+from opscli.skills.domain.exceptions import SkillRemoteError, error_to_dict
 from opscli.skills.domain.models import runtime_to_tool_name
 from opscli.skills.marketplace.client import MarketplaceClient
 from opscli.skills.marketplace.models import (
@@ -2023,6 +2025,54 @@ def report_usage(
     _emit(payload, pretty)
 
 
+def _is_auth_failure(exc: BaseException) -> bool:
+    """判断异常是否属于认证类失败（可通过重新登录恢复）。
+
+    覆盖两类信号：
+    - 预检未登录：SkillRemoteError 由 AuthError 包装而来（本地无凭证）
+    - 执行中鉴权失效：HTTP/业务 401，或业务 407（服务端 session 已登出，
+      本地凭证看似有效——长时间未使用的典型场景）
+    """
+    if not isinstance(exc, SkillRemoteError):
+        return False
+    if isinstance(exc.__cause__, AuthError):
+        return True
+    return exc.status_code in (401, 407)
+
+
+def _stdin_is_tty() -> bool:
+    """判断 stdin 是否为交互终端（独立函数便于测试打桩）。"""
+    return sys.stdin.isatty()
+
+
+def _prompt_and_login(progress: Console) -> bool:
+    """交互终端下询问用户是否登录，同意则内联执行 Device Flow 登录。
+
+    非交互环境（stdin 非 TTY，如 AI Agent / 管道 / self-update 子进程）
+    直接返回 False，绝不发起会阻塞等待浏览器授权的登录流程。
+    登录只给一次机会：失败（超时/拒绝/网络）不重试，返回 False 走原失败路径。
+
+    Returns:
+        True 表示登录成功、调用方可自动重试一次；False 表示保持原失败行为。
+    """
+    if not _stdin_is_tty():
+        return False
+    # 询问输出到 stderr（err=True），避免污染 stdout 的 JSON 结果
+    if not typer.confirm("检测到未登录或登录已失效，是否现在登录 ops？", default=False, err=True):
+        return False
+    try:
+        # 复用 auth login 命令的完整流程（打开浏览器 + 轮询授权 + 同步系统列表）
+        from opscli.auth.cli import login as _auth_login
+
+        _auth_login()
+    except typer.Exit:
+        # 登录命令内部失败（Device Flow 超时/用户拒绝）以 typer.Exit 退出，
+        # 此处转为"登录失败"信号，交由调用方按原失败路径处理
+        progress.print("[yellow]登录未完成，本次升级保持失败状态[/yellow]")
+        return False
+    return True
+
+
 @app.command("upgrade")
 def upgrade(
     name: str = typer.Argument("ops-dataset-query", help="Skill 名称"),
@@ -2041,7 +2091,15 @@ def upgrade(
     manager = SkillsManager()
     try:
         _progress.print(f"[bold]正在升级 {name}...[/bold]")
-        result = manager.upgrade(name=name, skills_dir=skills_dir, force=force, on_step=on_step)
+        try:
+            result = manager.upgrade(name=name, skills_dir=skills_dir, force=force, on_step=on_step)
+        except Exception as exc:
+            # 认证类失败且用户在交互终端完成登录时，自动重试一次；
+            # 其余情况（非交互 / 拒绝 / 登录失败 / 非认证错误）按原失败路径处理
+            if _is_auth_failure(exc) and _prompt_and_login(_progress):
+                result = manager.upgrade(name=name, skills_dir=skills_dir, force=force, on_step=on_step)
+            else:
+                raise
         _progress.print("[bold green]升级完成[/bold green]\n")
         payload = {
             "success": True,

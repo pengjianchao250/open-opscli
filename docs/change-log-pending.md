@@ -2246,6 +2246,47 @@
 **回滚方式**：回退上述 Skill 文档和 `output/ops-amazon-rufus-*.md` 中关于 `RUFUS_HEADLESS_CAPTURE_ERROR` 登录恢复的新增段落，并移除 `tests/skills/test_ops_amazon_rufus_updater.py` 中新增的恢复流程断言。
 
 ---
+## 2026-06-09 Amazon Rufus Skill - MCP-only 运行链路
+
+**变更原因**：用户要求 `ops-amazon-rufus` Skill 使用 MCP 后不再通过 opscli CLI 处理授权、登录态采集、恢复或获取，运行期全程走 MCP Tool，并在 MCP 鉴权失败时通过 MCP auth 工具处理。
+
+**改动点**：`opscli/mcp/tools/amazon_rufus.py` 新增 `amazon_rufus_remote_consent_status`、`amazon_rufus_remote_consent_set`、`amazon_rufus_login_status`、`amazon_rufus_watch_login`、`amazon_rufus_logout` 及脱敏响应；更新 `opscli/skills/templates/ops-amazon-rufus` 与 `.agents/skills/ops-amazon-rufus` 的 Skill 文档和 workflow，删除运行期 CLI fallback；更新 `opscli/skills/commands/cli.py` 安装后引导；补充 MCP 工具、Skill 文档和安装引导测试；新增 Super Dev MCP-only 文档和变更任务。
+
+**验证结果**：`python -m py_compile opscli/mcp/tools/amazon_rufus.py` 通过；`uv run pytest tests/mcp/test_amazon_rufus_tools.py tests/skills/test_cli.py tests/skills/test_ops_amazon_rufus_updater.py -q` 为 34 passed；`uv run pytest tests/amazon_rufus/test_transport.py tests/amazon_rufus/test_core.py -q` 为 91 passed。
+
+**影响范围**：影响 Rufus MCP Tool 暴露面、`ops-amazon-rufus` Skill 编排文档、安装后提示和相关测试；不删除现有 Rufus CLI 命令，不改变 `amazon_rufus_get` 的敏感字段过滤和报告输出契约。
+
+**回滚方式**：回退 `opscli/mcp/tools/amazon_rufus.py` 中新增 MCP wrapper 和注册项，恢复 `ops-amazon-rufus` Skill 文档、安装后引导和测试断言到 CLI fallback 版本，删除 `.super-dev/changes/amazon-rufus-mcp-only-flow` 与 `output/rufus-mcp-only-flow-*` 文档。
+
+---
+
+## 2026-06-10 Amazon Rufus MCP - 标准架构收敛
+
+**变更原因**：Rufus MCP 已完成 MCP-only，但 `opscli/mcp/tools/amazon_rufus.py` 仍承担 manager 工厂、remote-consent store 工厂、报告写入和响应 allowlist 等适配职责。为对齐 Keepa、SellerSprite、Query 等 MCP 工具的薄 Tool 层架构，需要将 MCP-facing 编排下沉到 Rufus service 层。
+
+**改动点**：新增 `opscli/amazon_rufus/domain/mcp_models.py`，定义 `RufusGetRequest`、`RufusWatchLoginRequest`、`RufusRemoteConsentRequest` 和 `RufusMcpResult`；新增 `opscli/amazon_rufus/services/mcp_manager.py`，集中处理 MCP 凭证目录、`AuthClient`/`RufusTransportClient`/`RufusManager`/`RemoteConsentStore` 创建、报告写入和 MCP-safe 脱敏响应；精简 `opscli/mcp/tools/amazon_rufus.py`，Tool 函数只构造 request、调用 `RufusMcpManager` 并返回 `_ok/_err`；新增 `tests/amazon_rufus/test_mcp_manager.py`，调整 `tests/mcp/test_amazon_rufus_tools.py` 聚焦 Tool 注册、schema 和参数转发；新增 Super Dev 标准架构文档和 change 任务。
+
+**验证结果**：`uv run pytest tests/amazon_rufus/test_mcp_manager.py -q` 为 9 passed；`uv run pytest tests/mcp/test_amazon_rufus_tools.py -q` 为 14 passed；`uv run pytest tests/amazon_rufus/test_transport.py -q` 为 8 passed；`uv run pytest tests/skills/test_ops_amazon_rufus_updater.py -q` 为 8 passed。
+
+**影响范围**：影响 Rufus MCP Tool 内部实现边界和测试分层；不改变现有 MCP Tool 名称、参数 schema、Skill MCP-only 流程、Rufus 报告格式、OPS 平台 Cookie API 契约或 CLI 可用性。MCP 成功响应仍不暴露 cookie、headers、payload、storage_state、seed request、upload_payload 或平台 Cookie content。
+
+**回滚方式**：回退 `opscli/amazon_rufus/domain/mcp_models.py`、`opscli/amazon_rufus/services/mcp_manager.py`、`opscli/mcp/tools/amazon_rufus.py` 和相关测试改动，恢复 Tool 层直接调用 `RufusManager`、`RemoteConsentStore` 与 `AnswerReportWriter` 的旧结构，并删除 `.super-dev/changes/amazon-rufus-mcp-standard-architecture` 与 `output/rufus-mcp-standard-architecture-*` 文档。
+
+---
+
+## 2026-06-10 Amazon Rufus - cURL 命令态登录状态
+
+**变更原因**：Rufus 后端请求状态原来保存为内部 `curl_data` 对象，并兼容旧 `storage_state` fallback；用户要求改为接近浏览器 Copy-as-cURL 的 cURL 命令格式，并移除旧结构解析兼容。
+
+**改动点**：`RufusBrowserStateStore` 将 streaming 请求材料保存为 `version=2` 和浏览器 cURL 命令态；`RufusBackendSecretProvider` 只解析新 `curl` 字段；`RufusManager.login_status()` 改为基于 cURL 可解析性判断 `can_get_backend`，并删除旧 streaming request helper；`RufusMcpManager` 将 `curl` 加入敏感字段拦截；同步更新 Rufus Skill 文档、Super Dev 文档和相关测试。
+
+**验证结果**：RED：新增目标测试先失败于缺少 `version/curl`、旧 `curl_data` 仍可读取、旧 `storage_state` 仍判定 ready、MCP 脱敏未拦截 `curl`、`RufusSecret` 仍暴露 `curl_data` 属性；GREEN：`uv run pytest "tests/amazon_rufus/test_core.py" -v` 为 85 passed；`uv run pytest "tests/amazon_rufus/test_mcp_manager.py" "tests/mcp/test_amazon_rufus_tools.py" "tests/skills/test_ops_amazon_rufus_updater.py" -v` 为 31 passed；`uv run python -m py_compile "opscli/amazon_rufus/services/browser_state_store.py" "opscli/amazon_rufus/services/backend_secret.py" "opscli/amazon_rufus/services/manager.py" "opscli/amazon_rufus/services/mcp_manager.py"` 通过；固定字符串检查确认旧解析 helper 和旧字段 fallback 无命中。
+
+**影响范围**：影响 Rufus 登录态保存结构、后端凭证读取、登录态状态判断和 Skill 文档说明。旧 `curl_data` 或仅 `storage_state` 的平台 Cookie content 会被视为不可用，需要重新执行登录采集或重新保存 Copy-as-cURL；CLI/MCP/报告仍不输出 cookie、headers、payload、storage_state、seed request、平台 Cookie content 或 cURL 命令。
+
+**回滚方式**：回退 `browser_state_store.py`、`backend_secret.py`、`manager.py`、`mcp_manager.py`、Rufus Skill 文档、Super Dev change 文档和相关测试改动，恢复 `curl_data` 对象保存与旧 `storage_state` fallback 解析。
+
+---
 ## 2026-06-08 西柚 - 接入运营后台凭据服务
 
 **变更原因**：正式环境不能依赖 `.env` 或本地 `credential.json` 保存西柚 token/cookie，需要从运营后台统一读取最新凭据，并支持补登成功后清理进程缓存。
@@ -2254,6 +2295,94 @@
 **影响范围**：西柚凭据读取、MCP/HTTP 模式下西柚任务启动前的 token 获取、补登成功后的缓存刷新。
 **回滚方式**：移除新增配置和 `credential_service.py`，恢复 `XiyouCredentialProvider` 只读取本地 `.env`，删除新增回调路由和后端服务文档。
 ---
+## 2026-06-11 skills - manifest 补齐 8 个未声明的 Skill 模板目录
+
+**变更原因**：Skill 发版检查（`validate_release_manifest`）报错"模板目录未在 manifest 声明"，`opscli/skills/templates/` 下 8 个新模板目录未在 `manifest.json` 中登记。
+**改动点**：在 `opscli/skills/templates/manifest.json` 的 `skills` 末尾追加 `ops-feed-task`、`ops-shopify-delete`、`ops-shopify-inventory`、`ops-shopify-price`、`ops-shopify-query`、`ops-shopify-status`、`ops-sif`、`ops-xiyou` 共 8 个条目，四个发版开关（source/wheel/binary/binary_full）全部为 false，tier 设为 internal。
+**验证结果**：`validate_release_manifest()` 返回空（通过）；`pytest tests/skills/test_packaging.py -q -s` 6 passed；目录与 manifest 双向对比无缺失无多余。
+**影响范围**：仅影响 Skill 发版打包白名单，新增条目均为 false，不改变任何现有发版产物内容。
+**回滚方式**：从 `manifest.json` 中删除上述 8 个新增条目。
+---
+## 2026-06-12 skills - ops-dataset-query 移除 catalog intents 意图匹配
+
+**变更原因**：后台暂未配置 catalog intents，远端意图匹配（`query_catalog` / `query_intent_match` / `opscli query intent`）无数据可用，强制要求先调用会导致流程空转。本版将数据集确定流程改为：本地意图路由（route_intent.py）→ 本地关键词搜索（search.py）→ MCP 模式用 query_metadata() 列表筛选。
+**改动点**：仅修改 ops-dataset-query Skill 模板文档，未改任何 Python 代码：
+- `SKILL.md`：铁律三改为"本地意图路由"，删除铁律三-A（Intent 约束优先）和铁律三-B（Catalog 回退链）的远端部分；标准工作流去除 query_intent_match 步骤
+- `QUERY_SPEC.md`：删除铁律 5 / 10-A 的 catalog 依赖，删除 query_catalog / query_intent_match 工具章节，工作流 B 改为 query_metadata() 列表筛选，自检清单去除 Intent 约束项
+- `references/cli.md`：删除 `opscli query catalog` / `opscli query intent` 命令章节，改为 route_intent.py 本地意图路由；典型工作流同步更新
+- `references/mcp.md`：删除 query_catalog / query_intent_match Tool 索引，字段存在性检查第 0 步改为 query_metadata() 列表筛选
+- `references/mcp-simple-guide.md`：删除 query_catalog / query_intent_match 参数说明章节
+- `references/rules.md`：第八章改为本地意图匹配规则，数据来源去除 dataset_catalog.json
+- `references/simple-query-guide.md` / `references/ask-user-question-guide.md`：去除 catalog 字样引用
+**验证结果**：`grep -rn -i "catalog|query_intent_match|opscli query intent|intent_constraints"` 在 Skill 模板所有 .md 中零残留；本地路由脚本 route_intent.py 与 intent_taxonomy.yml 数据文件保持不变，本地意图路由能力保留。
+**影响范围**：仅影响 AI Agent 阅读 ops-dataset-query Skill 后的数据集确定流程；MCP Server 端 query_catalog / query_intent_match 工具代码未删除，后台配置 intents 后可恢复文档。
+**回滚方式**：git checkout 恢复 opscli/skills/templates/ops-dataset-query/ 下的 SKILL.md、QUERY_SPEC.md 和 references/ 各文件。
+---
+## 2026-06-12 mcp - MCP 工具按用户角色权限动态过滤
+
+**变更原因**：此前任何用户连接 MCP Server 后默认可见/可用全部 60+ 工具。需求改为白名单制：由 OPS 后端按用户角色（运营系统角色 sys_roles + BI 角色 Doris mv_user_role）计算可用工具，opscli 在 list_tools 阶段过滤无权限工具（减少 AI 上下文开销）并在 call_tool 时拦截越权调用。
+**改动点**：
+- 新增 `opscli/mcp/permissions.py`：`ToolPermissionMiddleware`（fastmcp Middleware，on_list_tools 过滤 + on_call_tool 拦截）、`BASE_AUTH_TOOLS` 基础白名单（14 个 auth_* 工具，与后端 McpToolPermissionService::BASE_AUTH_TOOLS 双端一致）、`_resolve_allowed_tools()` 三模式自探测（HTTP 远程校验模式读上下文 allowed_tools / 固定 Key 模式或旧后端全量放行 / stdio 模式按本地 session 调 GET /v1/mcp/allowed-tools，缓存 300s，404 放行、401 仅基础工具、网络异常 stale-while-error 或 fail-closed）
+- `opscli/mcp/auth_middleware.py`：verify-key 响应中的 allowed_tools 注入 scope 和 contextvar
+- `opscli/mcp/server.py`：注册 `mcp.add_middleware(ToolPermissionMiddleware())`
+- `opscli/mcp/tools/auth.py`：auth_mcp_login / auth_login_poll / auth_logout 成功路径调用 invalidate_stdio_cache()
+- 后端配套（auto-scheduler）：新增 mcp_modules / mcp_tools / mcp_role_permissions 三表（ops_sys 库）+ McpToolPermissionService + verify-key 返回 allowed_tools + GET /v1/mcp/allowed-tools 端点
+**验证结果**：新增 `tests/mcp/test_tool_permissions.py` 15 个测试全部通过；tests/mcp/ 81 passed（5 个失败经 git stash 对比确认为历史遗留）；后端 tinker 验证三种授权情形（无绑定=14 基础工具/整模块=25/单工具=26）；curl 验证 verify-key 带 allowed_tools 字段、allowed-tools 端点 200/401 两条路径。
+**影响范围**：HTTP/SSE 远程校验模式和 stdio 模式的工具可见性按角色过滤；固定 API Key 单用户模式和旧后端全量放行不受影响（兼容语义：响应无 allowed_tools 字段=放行）。
+**回滚方式**：opscli 端删除 server.py 中 add_middleware 一行即恢复全量；后端回滚迁移 `php artisan migrate:rollback --path=database/migrations/2026_06_12_000001_create_mcp_tool_permission_tables.php`。
+---
+## 2026-06-12 mcp - MCP 工具清单启动自动上报后端（替代人工维护）
+
+**变更原因**：MCP 工具清单此前由管理后台人工维护，新增工具需手工录入且显示名/说明为空。改为 MCP Server 启动时自动上报清单，描述自动取自代码 docstring。
+**改动点**：
+- 新增 `opscli/mcp/tool_catalog.py`：`record_tool()` 注册时采集元数据（工具名优先取 name= 覆盖、模块取函数 __module__ 末段、描述取注册参数或 docstring 首行）；`sync_catalog_async()` HTTP/SSE 模式启动时守护线程 POST /v1/mcp/sync-tools（同步地址与 --auth-verify-url 同源，否则从 config.ini 推导；404/网络异常静默不影响启动）
+- `opscli/mcp/server.py`：`_TelemetryMcpProxy.tool()` 注册包裹时调用 record_tool；run() HTTP 分支启动时调用 sync_catalog_async
+- 后端（auto-scheduler）：新增 `McpToolSyncController::sync` + 路由 POST /v1/mcp/sync-tools。同步语义：只增不删（新模块/工具自动入库启用，缺失工具不自动停用），已有工具仅刷新 description 和 module_id，label/is_active 人工字段不覆盖
+- 管理页（auto-scheduler_debug mcp-tool-permissions.blade.php）：工具表格改 table-layout:fixed 固定列宽（22/12/42/7/17%），超长省略+title 提示
+- 数据修正：停用种子中 4 个代码注释未注册的预留工具（auth_login_start/auth_login_poll/auth_system_add/auth_system_remove）
+**验证结果**：新增 `tests/mcp/test_tool_catalog.py` 6 个测试通过（chatgpt 无前缀工具归属、seller_sprite 多段前缀、404/网络异常容错）；tests/mcp/ 87 passed（5 失败为历史遗留）；真实启动 E2E：清空 keepa_run 描述 → 启动服务 → 描述自动回填 docstring 首行；浏览器确认页面列宽对齐、53 个工具说明已自动填充。
+**影响范围**：HTTP/SSE 模式启动多一次后台上报（守护线程，失败仅日志）；stdio 模式不上报；管理后台 CRUD 保留可继续手动微调。
+**回滚方式**：opscli 删除 server.py 中 sync_catalog_async 调用；后端删除 sync-tools 路由。
+---
+## 2026-06-12 mcp - 管理后台工具清单移除显示名列
+
+**变更原因**：label（显示名）定位为纯人工维护的特殊别名字段，代码中无短中文名来源，自动同步刻意不覆盖该字段，导致列表中长期显示 "-"，视觉上像数据缺失。
+**改动点**：auto-scheduler_debug `mcp-tool-permissions.blade.php` 工具清单表格移除「显示名」列，改为 4 列（工具名 24% / 说明 52% / 状态 7% / 操作 17%）；label 字段保留在编辑弹窗中，需要特殊别名时仍可人工维护。
+**验证结果**：浏览器登录实测，表格 4 列对齐，说明列加宽展示完整 docstring 摘要。
+**影响范围**：仅管理后台清单展示，数据结构与同步逻辑不变。
+**回滚方式**：git checkout 恢复该 blade 文件。
+---
+## 2026-06-12 mcp - 角色绑定增加批量操作等快捷功能
+
+**变更原因**：角色绑定 Tab 一次只能配置一个角色，多角色相似授权需重复操作，且无法看出哪些角色已配置。
+**改动点**（均在 auto-scheduler_debug）：
+- `McpToolPermissionController` 新增 `bindingsOverview`（角色授权统计）和 `batchBindings`（批量 replace/add/remove，add 整模块自动归一化清散装工具记录、已有整模块时跳过单工具、remove 整模块连带删除工具行，insertOrIgnore 依赖 uk_grant 幂等）；routes/api.php 注册 GET bindings/overview、PUT bindings/batch
+- `mcp-tool-permissions.blade.php` 角色绑定 Tab 新增：全选整模块/清空（纯前端）、复制自角色（下拉只列已配置角色，载入后需手动保存）、批量操作弹窗（当前矩阵勾选为模板 + 多选角色 + 三模式）、角色下拉显示「N模块/M工具 / 未配置」统计；saveBindings 复用 collectGrants 并在保存后刷新统计
+**验证结果**：tinker 验证批量端点 6 场景（幂等 add、整模块覆盖跳过、remove 工具/整模块、replace、overview 统计）；浏览器实测批量添加 11 模块到 2 角色落库 22 条、批量移除清零、复制 common→purchase 矩阵正确载入、保存后下拉统计即时刷新。测试数据已清理。
+**影响范围**：仅管理后台角色绑定交互；单角色保存接口语义不变。
+**回滚方式**：git checkout 恢复控制器、路由和 blade 文件。
+---
+
+## 2026-06-13 skills - 新增 AuWork 安装路径支持（Windows 专属，多用户目录 fan-out）
+
+**变更原因**：需支持 AuWork Windows 客户端这一特殊安装路径 `C:\Users\<用户>\.auwork\{用户ID}\skills`，其中 `{用户ID}` 为纯数字目录，且同一机器可有多个登录用户对应多个数字目录，需把 Skill fan-out 安装到全部用户目录。AuWork 与现有 7 种运行时的本质区别是「一个运行时展开为 N 个目标目录」。
+**改动点**：
+- `opscli/skills/discovery/detector.py`：新增 `import sys` 与 `_auwork_targets()` 方法（Windows 专属，扫描 `~/.auwork` 下所有纯数字子目录的 skills/，非 Win/空目录返回空列表）；在 `detect_available_install_targets`、`detect_global_install_targets`、`detect_all_install_targets`、`detect_install_targets`（显式 auwork 分支）4 处织入；`candidate_dirs` 追加 auwork 目录使 list/upgrade 可发现；`_infer_runtime` 识别 `.auwork` 段。
+- `opscli/skills/domain/models.py`：`runtime_to_tool_name` 加 `"auwork": "auwork"`。
+- `opscli/skills/commands/cli.py`：`_TOOL_LABELS` 加 `"auwork": "AuWork"`；install `--runtime` help 文案补充 auwork；显式 `--runtime auwork` 但无数字目录时打印「已跳过」提示（GBK 兼容）。
+- `tests/skills/test_detector.py`：新增 8 个 AuWork 用例（monkeypatch `sys.platform=win32` + `Path.home`）。
+**验证结果**：`pytest tests/skills/test_detector.py` 新增 8 个 AuWork 用例全部 PASSED；`tests/skills/test_cli.py` 12 passed。`test_manager.py` 3 个失败、`test_detector` 中 1 个 `--runtime all` 失败、whole-dir 的 capture I/O error 经 `git stash` 验证均为改动前已存在，与本次无关。安装/链接主循环与 linker 未改动（管线本就按 list[(runtime,path)] 处理）。
+**影响范围**：仅 skills 安装目标探测；新增 auwork 运行时，非 Windows 平台 `_auwork_targets()` 恒为空，对 mac/linux 零影响；现有 7 种运行时行为不变。
+**回滚方式**：删除 detector 的 `_auwork_targets` 方法、4 处 `extend`/分支、candidate_dirs 与 _infer_runtime 增量，及 models/cli 的 2 处映射与提示；git checkout 恢复对应文件。
+---
+
+## 2026-06-13 skills - 修正 test_runtime_all_targets_all_supported_global_dirs 陈旧断言
+
+**变更原因**：该测试断言 `--runtime all` 仅返回 5 个运行时，但 `detect_all_install_targets` 早已新增 trae-cn、agents（本次又加 auwork），测试一直处于失败状态（改动前已失败）。
+**改动点**：`tests/skills/test_detector.py` —— 补全断言为 claude/openclaw/codex/opencode/workbuddy/trae-cn/agents/auwork 共 8 项；用例内 monkeypatch `sys.platform=win32` 并构造 `~/.auwork/1001` 数字目录以覆盖 auwork。
+**验证结果**：`pytest tests/skills/test_detector.py` 9 passed。
+**影响范围**：仅测试文件，无生产代码改动。
+**回滚方式**：git checkout 恢复 tests/skills/test_detector.py。
 
 ## 2026-06-15 MCP - 卖家精灵调用限额
 
@@ -2467,6 +2596,13 @@
 **回滚方式**：回退 `opscli/mcp/quota.py`、`opscli/mcp/tools/keepa.py`、`opscli/keepa/remote_adapter.py`、`opscli/keepa/cli.py`、`opscli/mcp/configs/mcp-quota.json`、对应四组测试和本条变更记录。
 
 ---
+## 2026-06-26 keepa / mcp - Keepa 接入 MCP 每日额度限制与额度查询入口
+
+**变更原因**：`opscli keepa` 仍缺少和 `seller_sprite` 一致的 MCP 外层每日额度限制与额度查询入口；同时 `opscli/mcp/configs/mcp-quota.json` 也未登记 `keepa_run` 的默认策略，导致 Keepa 无法被统一配额配置覆盖。
+**改动点**：`opscli/mcp/quota.py` 将 `keepa_run` 纳入内置默认限额策略（service=`keepa`，daily_limit=5），并同步放宽配置读取注释为“使用代码内置默认值”；`opscli/mcp/tools/keepa.py` 新增 `keepa_quota_status` 工具与当前 MCP 用户邮箱解析辅助函数，并把该工具注册到公开 MCP 列表；`opscli/keepa/remote_adapter.py` 新增 `quota_status()` 映射到远端 `keepa_quota_status`；`opscli/keepa/cli.py` 新增正式命令 `opscli keepa quota-status`；`opscli/mcp/configs/mcp-quota.json` 新增 `keepa_run` 配置项；测试侧补充 `tests/mcp/test_quota.py`、`tests/mcp/test_keepa_tools.py`、`tests/keepa/test_cli_remote.py`、`tests/keepa/test_remote_adapter.py` 回归，覆盖默认策略、MCP 快照读取、正式 CLI 和 remote adapter 映射。
+**验证结果**：RED：`D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_quota.py tests/mcp/test_keepa_tools.py tests/keepa/test_cli_remote.py tests/keepa/test_remote_adapter.py -q` 初始失败（5 failed），分别暴露 `keepa_run` 未进入默认策略、`keepa_quota_status` 工具缺失、正式 CLI 缺少 `quota-status`、remote adapter 缺少 `quota_status()`；GREEN：同命令复跑通过（36 passed）；补充回归 `D:\Gitlab\open-opscli\.venv\Scripts\python.exe -m pytest tests/mcp/test_quota.py tests/mcp/test_keepa_tools.py tests/mcp/test_tools.py tests/keepa/test_cli_remote.py tests/keepa/test_cli_split.py tests/keepa/test_remote_adapter.py -q` 通过（50 passed）。
+**影响范围**：影响 Keepa MCP 入口、Keepa 正式 CLI、远端 MCP 适配层与 MCP 配额默认配置；Keepa 业务执行逻辑、导出逻辑与内部 token 预检查逻辑保持不变。
+**回滚方式**：回退 `opscli/mcp/quota.py`、`opscli/mcp/tools/keepa.py`、`opscli/keepa/remote_adapter.py`、`opscli/keepa/cli.py`、`opscli/mcp/configs/mcp-quota.json`、对应四组测试和本条变更记录。
 
 ## 2026-06-24 ops-dataset-query Skill - 取消「发现新版本提示强制升级」约束
 
@@ -2486,6 +2622,13 @@
 **回滚方式**：git 还原 cli.py 与 mcp/server.py 即可（但会恢复崩溃，不建议）。
 ---
 
+## 2026-06-29 amazon_rufus - 拦截 watch-login 外部广告空白页
+
+**变更原因**：Rufus `watch-login` 打开 Amazon 后，Chrome 会反复出现并关闭短生命周期空白页；CDP 诊断确认其生命周期为 `about:blank -> https://s.amazon-adsystem.com/ -> destroyed`，不是 opscli 自建的 `ops-login` 或 `ops-product` 页签。
+**改动点**：`opscli/amazon_rufus/services/browser.py` 在 `watch_login_and_capture_seed_request()` 连接 CDP context 后安装 `https://s.amazon-adsystem.com/**` 请求拦截，并在外部页签导航到该广告域名时立即关闭；`tests/amazon_rufus/test_core.py` 新增回归测试，模拟外部广告页签反复开关并验证 Rufus 请求捕获不受影响。
+**验证结果**：RED：`.\\.venv\\Scripts\\python.exe -m pytest tests/amazon_rufus/test_core.py -k "blocks_external_amazon_ad_pages" -q` 初始失败，确认未注册广告域名拦截；GREEN：同命令复跑通过（1 passed）；定向回归 `.\\.venv\\Scripts\\python.exe -m pytest tests/amazon_rufus/test_core.py -k "watch_login or debug_pages or closed or blocks_external" -q` 通过（8 passed）；语法检查 `.\\.venv\\Scripts\\python.exe -m py_compile opscli/amazon_rufus/services/browser.py` 通过；全文件回归 `.\\.venv\\Scripts\\python.exe -m pytest tests/amazon_rufus/test_core.py -q` 通过（91 passed）；真实 CDP 短窗观测中 `adsystem_page_target_count=0`，未复现循环广告空白页。
+**影响范围**：仅影响 Amazon Rufus `watch-login` 登录监听阶段的外部广告请求和外部广告页签处理；登录页、商品页、Rufus streaming 请求捕获与后端获取流程不变。
+**回滚方式**：回退 `opscli/amazon_rufus/services/browser.py`、`tests/amazon_rufus/test_core.py` 和本条变更记录。
 ## 2026-06-29 skills(ops-query-wizard / ops-dataset-query) - 移除 catalog 相关描述与子命令
 
 **变更原因**：Agent 取数时总用 `query catalog` 找数据集，但 catalog 只是业务语义索引底座、且被 ops-query-wizard 错标成"做意图匹配"；正确做法是列数据集用 `query metadata`、意图匹配用 `query intent`。需把误导性的 catalog 描述去除。
@@ -2511,6 +2654,13 @@
 **回滚方式**：git 还原两个 VERSION.json（删除的 .c/.pyc 本就未跟踪，无需回滚）。
 ---
 
+## 2026-06-30 amazon_rufus - Rufus 自动启动浏览器时关闭 DevTools 自动打开偏好
+
+**变更原因**：用户反馈 Rufus Skill 打开 Amazon 页面时会自动打开控制台；当前启动参数虽未包含 `--auto-open-devtools-for-tabs`，但 opscli 复用固定 Rufus Chrome profile，旧 profile 中可能残留 DevTools 自动打开偏好。
+**改动点**：`opscli/amazon_rufus/services/browser.py` 在 `_start_new_chrome()` 启动 Chrome/Edge 前清理 opscli 自建 Rufus profile 的 DevTools 自动打开相关偏好；清理仅修改相关键，不删除 profile、Cookie、localStorage 或 Rufus 状态。`tests/amazon_rufus/test_core.py` 新增回归测试，覆盖偏好关闭、无关字段保留和损坏偏好文件不阻断启动。
+**验证结果**：RED：`uv run pytest tests/amazon_rufus/test_core.py -k "devtools or start_new_chrome" -v` 初始失败于 `autoOpenDevToolsForPopups` 仍为 `true`；GREEN：同命令通过（3 passed）；定向回归 `uv run pytest tests/amazon_rufus/test_core.py -k "devtools or start_new_chrome or watch_login" -v` 通过（11 passed）；语法检查 `uv run python -m py_compile opscli/amazon_rufus/services/browser.py` 通过。
+**影响范围**：仅影响 opscli 自动启动的 Rufus 调试 Chrome/Edge profile；已运行的外部 CDP Chrome、MCP 默认后端获取、登录态保存、题库与报告流程不变。
+**回滚方式**：回退 `opscli/amazon_rufus/services/browser.py`、`tests/amazon_rufus/test_core.py`、`.super-dev/changes/rufus-no-devtools-console/`、`output/rufus-no-devtools-console-*.md` 和本条变更记录。
 ## 2026-06-30 skills - publish/edit 的 summary 缺失时回退到 SKILL.md description
 
 **变更原因**：`opscli skills publish`（及 `edit --dir`）中 summary 仅回退到 frontmatter 的 `summary` 字段，而多数 SKILL.md 只写了 `description`、无 `summary`，导致客户端不传 `--summary` 时 summary 为空。
@@ -2525,6 +2675,276 @@
 **回滚方式**：git 还原 `cli.py` 与 `commands.md` 两个文件。
 ---
 
+## 2026-07-04 amazon - 增加代理反拦截与扩展字段采集
+
+**变更原因**：服务部署在阿里云（数据中心 IP 段），被 Amazon Bot 检测标记为高风险，抓取时频繁遭遇验证码/首页重定向；且原采集字段过少（仅标题/价格/评分/评论数/位置），无法满足更完整的商品信息需求。
+**改动点**：
+- 新增 `opscli/amazon/config.py`：从 `config.ini [amazon]` 段与 `OPSCLI_AMAZON_*` 环境变量读取代理（proxy_server/username/password）、max_retries、headless；内置 UA 池与视口池。代理是绕过机房 IP 被封的根因修复手段。
+- 重写 `opscli/amazon/scraping/scraper.py`（AmazonScraper）：
+  - launch 注入可选代理 + 反自动化 args（`--disable-blink-features=AutomationControlled`、`--no-sandbox` 等）。
+  - 每次上下文随机 UA + 随机视口；自注入 stealth 脚本（覆盖 navigator.webdriver/languages/plugins/window.chrome/permissions），不再依赖未在 pyproject 声明的 playwright_stealth。
+  - `scrape_product_async` 增加命中拦截时的退避重试（默认 3 次，每次换全新指纹上下文）；`_is_retryable` 区分可重试拦截与 404。
+  - 新增 `_extract_extended_fields`：单次 JS evaluate 提取品牌/库存/五点/描述/图片/BSR/类目/配送/发货方/卖家/优惠券。
+- 扩展 `opscli/amazon/domain/models.py`（AmazonProductSnapshot）：新增 11 个扩展字段，全部带默认值保持向后兼容。
+**验证结果**：`pytest tests/amazon/ -q` → 21 passed；导入冒烟测试通过，新字段与 config getter 正常。
+**影响范围**：仅 amazon 抓取模块；现有 CLI/manager 接口与测试不变（均 mock scraper）。默认不使用代理，需在 config.ini/环境变量显式配置后生效。
+**回滚方式**：git 还原 `opscli/amazon/scraping/scraper.py`、`opscli/amazon/domain/models.py`，删除 `opscli/amazon/config.py`。
+---
+
+## 2026-07-07 query/mcp - 临时屏蔽 catalog 与 intent 调用入口
+
+**变更原因**：按用户要求，临时屏蔽 dataset catalog（业务语义索引）与 intent（自然语言意图匹配）两个能力的对外调用入口，使其不可调用（CLI + MCP 双入口）。
+**改动点**：
+- `opscli/query/commands/cli.py`：注释掉 `@app.command("catalog")` 与 `@app.command("intent")` 装饰器（函数体保留，未注册到 Typer）。
+- `opscli/mcp/tools/query.py`：在 `_ALL_TOOLS` 注册列表中注释掉 `query_catalog` 与 `query_intent_match` 两项（函数体保留，未注册到 FastMCP）。
+**验证结果**：从源码导入验证——CLI 命令列表为 `['preferences', 'metadata', 'run', 'chart', 'chart-doc', 'build', 'simple']`（catalog/intent 已消失）；MCP `_ALL_TOOLS` 中已无 `query_catalog`/`query_intent_match`。另：验证过程中 `uv run` 自动同步项目环境，`.venv` 已从打包版 v0.0.91 替换为本地源码可编辑安装 v0.0.129，`opscli query --help` 实测两命令已消失，屏蔽在本机立即生效。
+**影响范围**：`opscli query catalog`、`opscli query intent` 命令及 MCP 工具 `query_catalog`、`query_intent_match` 在源码构建版本中不可调用；`manager.catalog()`/`intent_match()` 底层方法未删除，其他命令不受影响。
+**回滚方式**：取消上述两处文件中带【临时屏蔽】标记的注释即可恢复。
+---
+
+## 2026-07-10 skills/ops-feedback - 分级反馈策略随附问题修复（v1.0.16 → v1.0.17）
+
+**变更原因**：深度分析发现 v1.0.16 分级反馈改造存在规则源冲突、虚假脚本引用、零测试、英文注释违反铁律17、死代码等问题；用户确认后逐项修复。
+**改动点**：
+- `~/.claude/CLAUDE.md`：反馈铁律去重窗口 5 分钟 → 30 分钟，补充 `feedback_group_key` 聚合说明（消除与 FEEDBACK_RULE.md 的冲突）。
+- `opscli/skills/templates/ops-feedback/SKILL.md`、`data/FEEDBACK_RULE.md`：移除对不存在的 `evaluate_agent_traces.py` / `evaluate_wizard_traces.py` 的"参考实现"声称，改标注为待建设项并指向 `tests/skills/test_feedback_guard.py`；明示去重为滑动窗口语义（窗口内重复只刷新本地计数，不自动再次远端提交）。
+- `references/cli.md`、`references/mcp.md`：去重条目追加滑动窗口说明。
+- `scripts/feedback_guard.py`：全部改为中文 docstring 与段落注释（铁律17）；删除无调用方的 `fingerprint()` / `fingerprint_source()` 死代码（其中 `fingerprint()` 存在变量覆盖隐患）；`is_feedback_tool` 去除重复 marker；修复 Pyright 类型标注（list 分支变量名）。决策逻辑与 v1.0.16 完全一致。
+- 新增 `tests/skills/test_feedback_guard.py`：26 个用例覆盖事件分类（L0/L1/L2/L3、可疑数据不误报 L3）、L3 滑动窗口去重与窗口过期重提、`feedback_group_key` 跨参数聚合、L2 会话预算（放行/耗尽/按 session 隔离）、敏感字段脱敏、大事件瘦身（≤4096B）、认证轮询抑制、feedback 通道 fail-open、状态损坏兜底、过期清理、record 登记语义。
+- `data/VERSION.json`：v1.0.16 → v1.0.17。
+- 新增 `docs/analysis/ops-feedback与ops-query-wizard优化改动分析报告.md`：存档两个 Skill 的改动对比分析结论（含 ops-query-wizard Step 2–5 引用悬空的致命问题，建议暂缓合入）。
+**验证结果**：`uv run pytest tests/skills/test_feedback_guard.py tests/skills/test_ops_feedback_template.py` → 32 passed；重写后脚本 CLI 冒烟（decide L3 失败事件）输出 `submit_immediate_failure_feedback / submit_remote=true`，与修复前行为一致；`grep evaluate_agent_traces` 全仓库无残留。
+**影响范围**：仅 ops-feedback Skill 模板文档与 guard 脚本注释/死代码；决策行为无变化；guard 状态目录 `~/.opscli/` 未迁移（需单独评估）。ops-query-wizard 本次未改动。
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-feedback`，删除 `tests/skills/test_feedback_guard.py` 与分析报告；`~/.claude/CLAUDE.md` 将"30 分钟"改回"5 分钟"。
+---
+
+## 2026-07-13 skills/ops-dataset-query - 二代规划管线修正优化（死代码清理+结构简化+口径补回）
+
+**变更原因**：深度审查发现新一代 query_plan 规划管线存在约 220 行死代码、上一代方案残留未清理、磁盘缓存层过度设计（含 Windows fcntl 必崩点）、铁律17 全量违规（0 中文注释）、文档交叉引用矛盾及 4 类历史业务口径被删无承接。
+**改动点**：
+1. 删除上一代孤儿：scripts/route_intent.py、search.py，references/cli-simple-guide.md、mcp-simple-guide.md，data 下 5 个无消费 YAML（intent_taxonomy/dataset_profiles/field_semantic_index/dataset_relationships/routing_eval_cases），tests/test_route_intent.py、test_ops_dataset_query_search.py；图表/Excel 用法抢救为新参考 references/chart-excel-guide.md 并挂载到 SKILL.md。
+2. scoped_metadata_index.py 508→107 行：去掉磁盘 JSONL 缓存/fcntl 目录锁/manifest sha256/原子写回滚，改为进程内构建卡片，消除 Windows 崩溃点；数据层统一复用 scoped_dataset_reader（datasets.csv 必需列统一含 remarks）。
+3. 删除死代码：capability overlay 全家（typed_schema_linking + agent_query_planner 转发/CLI）、build_index、3 个未文档化脚本 CLI、evidence_contract 的 --input-json/--input-file、intent_rules.json 不可达的 filter_values.amazon（校验器改为 filter_values 键=成员值并集）。
+4. model_contract.py（271 行）并入 query_plan.py，模块数 8→6。
+5. 行为修正：非亚马逊平台筛选由 block_platform_enum_ambiguous 改为明确的 block_platform_scope_unsupported；接通 snapshot_metric 列（reader 校验 + guidance is_snapshot/latest_snapshot_no_period_aggregation + execution_ref 透传 + schema 增加 is_snapshot 必填）。
+6. 文档修复：cli.md 改用模型合同键并修正 --output-mode full 失效引用（internal 为维护者排错通道）；QUERY_SPEC §5 去除 MCP-only 场景引用本地脚本的矛盾（改内联证据合同）；反馈去重窗口 5→30 分钟对齐项目铁律；SKILL.md 统一 result-analysis.md 读取时机（MCP-only/复杂审计）。
+7. rules.md 补回口径：近N天=[今天-(N-1),今天] 公式、周/月/跨年边界、缺省近30天、快照指标不跨期累加、verbose_name 禁意译、小组/部门独立与 9部↔九部匹配、上下文范围继承。
+8. 铁律17 整改：全部脚本模块/公开函数中文 docstring、复杂逻辑段中文注释；GBK 扫描通过。
+**验证结果**：tests/skills/test_dataset_query_planner.py 重写为 3 用例（公式口径/快照口径/不支持平台阻断）全部通过；tests/skills 其余失败均与 HEAD 基线一致（8<12，零新增回归）；query_plan CLI 冒烟（placeholder 刷新合同）与 evidence_contract stdin 冒烟通过；模型合同输出通过 query_plan.schema.json jsonschema 校验；全部脚本 py_compile 通过。
+**影响范围**：ops-dataset-query Skill 模板（脚本/文档/数据/schema）与其回归测试；不影响 opscli 核心模块。
+**回滚方式**：git checkout HEAD -- opscli/skills/templates/ops-dataset-query tests/skills（注意会同时回滚用户此前未提交的二代重构改动，精确回滚需按文件挑选）。
+---
+
+## 2026-07-13 skills/sync - 修复 skills upgrade 因本地版本领先远端而跳过数据写入
+
+**变更原因**：`opscli skills upgrade` 后 `~/.opscli/skills/ops-dataset-query/data/datasets.csv` 等仍为占位表头。根因是 `apply_upgrade_data()` 的版本门槛 `compare_versions(current, remote) <= 0`：本地模板占位版本（1.1.1）与远端数据 manifest 版本（v1.0.3）属于两套版本空间，本地领先时被判为 already_latest，拉取到的数据从未落盘，与代码注释"始终执行更新"的意图不符。
+**改动点**：
+1. `opscli/skills/sync/updater.py`（类 SkillsUpdater，方法 apply_upgrade_data）：删除 needs_update 版本比较门槛与 updated=False 提前返回，始终覆盖写入远端数据；force 参数保留签名兼容，不再影响写入行为。
+2. `tests/skills/test_updater.py`：新增 test_upgrade_local_version_ahead_also_updates（本地 1.1.1 > 远端 v1.0.3 也必须写入）；为两个存量用例补齐 HEAD 已引入但未 mock 的 SELECT_COLUMNS_ENDPOINT 分支（存量红灯修复）。
+**验证结果**：tests/skills/test_updater.py 全部通过（19 passed 含新用例）；真实执行 `opscli skills upgrade`，datasets.csv 由 96B 占位变为 8032B 真实数据、dataset_fields.csv 259KB，结果归入 updated 而非 already_latest，VERSION.json 更新为远端 v1.1.2。test_manager.py 的 3 个模板安装失败为工作区模板重构 WIP 存量失败，与本次无关。
+**影响范围**：仅 ops-dataset-query 的 skills upgrade 数据写入行为（每次 upgrade 均覆盖刷新数据文件，含 VERSION.json 跟随远端 manifest 版本）；ops-amazon-rufus 升级路径不受影响。
+**回滚方式**：`git checkout HEAD -- opscli/skills/sync/updater.py`，并删除 tests/skills/test_updater.py 中新增用例与两处 SELECT_COLUMNS mock。
+---
+
+## 2026-07-13 ops-dataset-query v1.2.4 第一批优化（管线激活修复）
+
+- **为什么改**：2026-07-13 QA e2e 矩阵（6数据集×4场景24用例，报告在 ops-agent 仓库 docs/测试报告/ops-dataset-query-v1.2.3*）实锤 v1.2.3 二代规划管线双重失效：①广场发布包 VERSION.json 无 data_state 字段被 query_plan.py 无条件打回 blocked（14/14 尝试全打回、打回文案无恢复命令、0 会话按指引升级）；②QA 提示词 v18 固化旧流程叠加 lazy load_skill 只回 status/path。另发现真实包上的两个后继硬失败：同名数据集（用户仪表盘分享明细 table 52/61）触发 invalid_cards:duplicate_identifier 拒绝全账号规划；渠道组件 query_channel_set 发布类目为 normal 被 block_platform_filter_missing_component 阻断平台枚举。
+- **改了哪些文件**：opscli/skills/templates/ops-dataset-query/{SKILL.md, references/cli.md, data/query_plan.schema.json, scripts/query_plan.py, scripts/agent_query_planner.py}；tests/skills/test_dataset_query_planner.py
+- **具体做了什么**：①_data_state_ready 兼容发布包形状（无 data_state 时以 dataset_count>0+核心索引文件佐证就绪，metadata_source 标记 skill_local/published_bundle）；②刷新合同增加 recovery_command/recovery_hint_zh 并透传 model_view，build_query_plan 增加 blocked 前一次自动升级兜底（subprocess 90s 超时，--no-auto-upgrade 可关）；③SKILL.md description 内嵌第一命令硬指令（lazy 模式防宿主提示词漂移），版本 1.2.3→1.2.4；④main 错误处理改 stdout JSON {error,retryable,next_action_zh}，错误码前缀映射下一步动作，兜底捕获未预期异常为 internal_error:*；⑤SKILL.md/cli.md 增加「未登录」处置边界（禁止交互式 auth login，等1分钟重试一次后停止并反馈）；⑥agent_query_planner 名称重复不再整体拒绝（仅别名重复硬失败，同名卡片后置标记 name_conflict，显式点名自然走多候选澄清）；⑦_next_action 接受组件 guidance_status=ready（QA 组件类目为 normal 的真实形态）。
+- **如何验证**：pytest tests/skills/test_dataset_query_planner.py 10/10 通过（新增 7 用例：发布包形状就绪/占位打回带恢复命令/空包不误判/自动升级重试/错误JSON带指引/未预期异常包装/normal类目组件可枚举）；QA 真实发布包副本上 CLI 实测：发货环比→planned table 2（1237字节合同）、即时销售显式点名→planned table 3（正解 e2e 错查缺陷）、同名数据集→clarify_required、亚马逊SC筛选→query_platform_permission_enum+组件 table 7、占位模板→blocked+recovery_command。tests/skills 整目录既有收集失败与本次无关（stash 基线复现同样失败）。
+- **影响范围**：仅 ops-dataset-query 技能模板与其回归测试；不涉服务端。发布 1.2.4 到 QA 广场后 system 分享全员自动同步；提示词 v18→v19 对齐为独立协同项，须在本改动发布后进行。
+- **回滚方式**：git checkout 恢复上述 6 个文件即可；广场侧回滚到 1.2.3 版本。
+
+## 2026-07-14 ops-dataset-query v1.3.0 第二三四批优化（合同补全+入口能力+一体化执行器）
+
+- **为什么要改**：延续 v1.2.4 管线激活修复，落地优化分析报告的 P0-1/P0-2/P0-3/P0-4/P0-5 与 P1-3/P1-4/P1-5、2-1/2-2、P2-1/P2-2/P2-5：合同缺日期字段/澄清空洞/枚举三步/排序零兜底/日期心算 是 e2e 实测的五大轮次放大器。
+- **改了哪些文件**：模板内 SKILL.md、QUERY_SPEC.md、references/{cli.md,simple-query-guide.md,chart-excel-guide.md}、data/{query_plan.schema.json,intent_rules.json,README-字段使用.md(新)}、scripts/{query_plan.py,dataset_guidance.py,core.py,evidence_contract.py,time_scope.py(新),run_query.py(新)}；tests/skills/test_dataset_query_planner.py
+- **具体做了什么**：①execution_ref 补全：date_fields 无条件输出、filter_components（部门/国家等组件引用进 contract 模式）、无点名字段时 recommended 字段（标注需确认）；②澄清弹药：dataset_candidates_zh 候选卡片 + unknown_requested_fields 回显 + 字符二元组近似字段建议；③时间口径本地解析 time_scope.py（近N天/昨天/本周/上周/本月/上月/环比/同比，Asia/Shanghai，默认近30天须披露）进 model_view.time_scope_zh 与 execution_ref.time_scope；④平台枚举一次收敛：--auto-enum 默认开（subprocess 45s 超时失败回落），合同内嵌 platform_enum_command 现成命令；扩充 intent_rules 平台别名表（补「亚马逊SC」等形态）；⑤query_template 预填骨架（实测形态：日期>=/<=两行、dataComparison、公式字段不带聚合）；⑥新增 run_query.py 一体化执行器：执行前硬校验（占位符/漏主周期/公式带聚合/desc形态归一为 direction）→ 执行 → 排序单调性校验+本地重排/放大重查兜底（服务端 orderBy 缺陷过渡方案）→ 全量落盘只回预览+披露+内嵌证据合同（stdout 8KB 限幅）；⑦evidence_contract +--input；query_plan +--query-file/stdin；chart 指南统一 python3；⑧SKILL.md 矛盾修订（每规划阶段一次/正向主线前置/读文档边界收敛/platform_semantic_members 中文化/执行确认分级：无歧义陈述式披露直接执行）；⑨answer_contract 去 *_codes 冗余；QUERY_SPEC 首行标注；discover_data_dir 补 .agents 候选。
+- **如何验证**：pytest 22/22（新增 12 用例：日期字段/时间合同/模板/推荐字段/候选卡片/近似建议/auto-enum 收敛/time_scope 三则/run_query 四则）；QA 真实发布包实弹五场景：发货环比合同 2.4KB 一步齐全、模板直填经 run_query 打真实后端取回真数据（美国 353040.70 降序正确）、**服务端 orderBy 缺陷现场复现两次且均被执行器单调性校验逮住并 requery_limit_15_then_local_sort 兜底披露**、同名数据集澄清带双候选卡片、平台筛选实弹 auto-enum 一次调用正确判定 block_platform_scope_not_authorized（enum_source=auto_enum_service）。
+- **影响范围**：仅技能模板与回归测试，不涉服务端；SKILL.md 版本 1.2.4→1.3.0。已知小瑕疵：QA 同名数据集 description 也相同导致候选卡片文案无法区分（数据侧问题，卡片机制本身正常）。
+- **回滚方式**：git checkout 恢复模板目录与测试文件；广场回滚旧版本。
+
+## 2026-07-14 ops-dataset-query v1.3.1 沙箱自愈修复（v19 验收发现的两个新形态）
+
+- **为什么改**：提示词 v19 上线后验收 e2e 发现：①用户从模板目录发布的 1.3.0 广场包带的是占位数据（data_state=placeholder、CSV 仅表头），上一版真实数据是 BI 数据发布管线灌入的，被覆盖；②沙箱内 `opscli skills upgrade` 写入 opscli 自己的发现目录（本机实测 ~/.claude/skills），而挂载的 .agents 是只读快照——升级成功但主目录依旧占位，恢复指引救不回；③upgrade 写入的 VERSION.json 是第三种形状（仅 name+version，无 data_state 无 dataset_count）。v19 提示词行为本身完全符合设计（按合同→按恢复→按排错预算→提交反馈）。
+- **具体做了什么**：①`_data_state_ready` 以「核心索引 CSV 含数据行」为统一就绪证据（新增 upgraded_local 形态；空包=CSV 仅表头判不就绪）；②新增 `_fallback_ready_data_dir`：升级后主目录仍未就绪时接管 cwd/.claude/skills、~/.claude/skills、$OPSCLI_SKILLS_DIR 中已就绪的数据目录（metadata_source 加 +fallback_dir 后缀，自愈动作统一受 auto_upgrade 开关约束）；③`effective_data_dir` 透传投影层，字段标签跟随实际生效目录；④升级超时 90s→60s（防组合入口撑爆单条 exec 超时，v19 验收实测首调超时）。
+- **验证**：pytest 23/23；本机模拟沙箱闭环（占位挂载包+真实 opscli upgrade）：blocked→自动升级→接管 ~/.claude/skills→`planned, metadata_source=upgraded_local+fallback_dir, table_id=2`。
+- **发布配套**：已组装带真实数据的发布包（模板 1.3.1 代码 + 1.2.3 包的 43 数据集真实数据）供重新发布，消除新沙箱的一次自愈开销；发布后建议与 BI 数据发布管线确认其重新发布数据时是否保留最新 scripts。
+- **回滚方式**：git checkout 恢复 query_plan.py 与测试文件。
+
+## 2026-07-13 后端 data-metrics - 同步队列仅返回当前用户自己发布的技能
+
+**变更原因**：`opscli skills install --sync-market` 原逻辑会把用户安装过的所有广场技能（含他人发布的）都纳入同步队列。新需求要求：非当前用户创建发布的技能默认不进入同步安装，他人发布的技能只能通过 `opscli skills install username@skill_name` 显式安装。
+**改动点**：后端 auto-scheduler 项目 `vendor/aukey/data-metrics`（非 opscli 仓库）：
+1. `src/Services/SkillMarketplaceService.php` — `getSyncQueue()` 查询新增 `->where('sm.user_id', $userId)` 过滤（仅返回当前用户发布的技能），并更新方法 docblock；
+2. `src/Http/Controllers/SkillSyncController.php` — `queue()` docstring 同步更新说明。
+opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表），旧版客户端自动获得新行为。
+**验证结果**：`php -l`（PHP 8.4，/opt/homebrew/opt/php@8.4）两文件均无语法错误。本机默认 PHP 7.4 对该包预存的 PHP 8 语法（nullsafe、构造器属性提升）报 parse error，与本次改动无关。待接口级验证：测试账号调 `GET /v1/skills/sync/queue` 确认不含他人发布的技能，`opscli skills install --sync-market --dry-run` 同步计划只剩自己发布的。
+**影响范围**：仅 `GET /v1/skills/sync/queue` 返回内容（--sync-market 同步范围收窄）；显式远程安装、排除名单、安装统计回调等链路不受影响。过滤后队列内全部为 creator，`is_downloadable` 恒为 true、`download_url` 恒非空（字段保留，兼容旧客户端）。
+**回滚方式**：删除 `getSyncQueue()` 中的 `->where('sm.user_id', $userId)` 一行及其注释，还原两处 docblock。
+---
+
+## 2026-07-14 ops-dataset-query v1.3.2 术语更名与超时处置（用户反馈两项）
+
+- **为什么改**：①「合同」用语在 agent 回复中易被误解为法律合同，按用户要求统一更名为「规划器」；②矩阵复跑实测规划器首次调用常撞默认 60s 执行超时（内部含自动升级 ≤60s + 自动枚举 ≤45s），模型需自行摸索「拉长等待重试」，浪费轮次。
+- **具体做了什么**：①全模板中文用语「合同/组合入口」→「规划器」（产物语境用「规划结果」），保护「证据合同」独立概念不受影响，英文 JSON 键（contract/answer_contract 等）不变；②SKILL.md/cli.md/description 增加执行超时预算指引：规划器首次运行设 ≥120s 超时、run_query 设 ≥180s，超时=原样重试一次并加大超时（规划器幂等二次秒回），禁止因超时改走旁路探查；③SKILL.md 版本 1.3.1→1.3.2。
+- **验证**：pytest 23/23；QA 真实数据包抽验 planned/table 2/time_scope 对比期正常。
+- **影响范围**：仅技能模板文案与指引；无逻辑变更（除 description）。需重新发布到 QA 广场并同步提示词 v20（更名+超时指引）。
+- **回滚方式**：git revert 本次 commit。
+
+## 2026-07-14 ops-dataset-query v1.3.3 规划器 30 秒窗口适配（超时结构性根治）
+
+- **为什么改**：四轮 e2e 实测确认平台单条命令有效等待硬顶约 30 秒（SDK PTY 钳制 PTY_YIELD_TIME_MS_MAX=30000，e2b 后端应用；模型自设 ≥120s 无效），而规划器「同步升级 60s+同步枚举 45s」预算与之结构性错配——占位数据/刷新器失败场景下首调必然超时，且曾实测升级进程被窗口切断致 VERSION.json 半写入（NUL 污染）。
+- **具体做了什么**：①自动升级改「前台 10s 宽限 + 超时转后台续跑」：Popen(start_new_session) 启动，宽限内完成即继续规划；未完成不杀进程、写 pid 标记立即返回 `status=blocked, recovery_state=refresh_in_progress`，恢复命令为 `sleep 25 && 原样重跑`（等待+重跑合并一条命令贴 30s 窗口）；下次调用凭标记与就绪检查接管（fallback 目录前置检查，后台产物就绪即秒级接管）；进程消亡仍未就绪判 refresh_failed 给手动指引；②自动枚举预算 45s→20s，且与升级不在同一次调用内叠加（升级发生则本次跳过 auto-enum、输出内嵌枚举命令走手动路径）——任意单次调用最坏 ~22s；③_refresh_contract 增加 recovery_state（in_progress/failed 两态差异化指引），model_view 透传，schema 同步；④SKILL.md/cli.md/description 撤换已证伪的「设 ≥120s」指引为 30 秒窗口叙事；版本 1.3.2→1.3.3。
+- **验证**：pytest 24/24（升级三态/宽限完成继续规划/转后台返回等待合同/fallback 前置不再发起升级）；本机活体闭环：占位包首调 10.2s 确定性返回 refresh_in_progress（慢速假 opscli 强制 18s 升级），sleep 后重跑 0.11s 接管 planned；就绪数据常态首调 0.14s。
+- **影响范围**：仅技能模板；行为向后兼容（数据就绪路径不变）。需发布 1.3.3 到 QA 广场并同步提示词 v21（撤换 ≥120s 超时段）。
+- **回滚方式**：git revert 本 commit；广场回滚 1.3.2。
+
+## 2026-07-14 ops-dataset-query v1.3.4 宽限微调（收敛默认命令窗超时临界）+ 更名语义修正
+
+- **为什么改**：v1.3.3 验收轮 DB 取证（48 次规划器调用/2 次超时）确认——超时全部发生在「模型未显式设 yield_time_ms、沿用 SDK 默认 10000ms」的命令上，而升级前台宽限恰好也是 10s，卡在临界点被外层命令窗切断；模型显式设 20/25/30s 的 7 次调用全部未超时。另修 v1.3.2 术语更名时几处过头走样（「拿规划器/确认口径规划器/权限规划器检查」应为「拿规划结果/权限合同检查」）。
+- **具体做了什么**：①_UPGRADE_GRACE_SECONDS 10s→8s，让 SDK 默认 10s 命令窗留出 ≥2s 安全边际、默认窗口下也能拿到 in_progress 返回而非被切成超时；②SKILL.md 修正 3 处更名语义走样 + 宽限文案 10→8s；版本 1.3.3→1.3.4。
+- **验证**：pytest 24/24；根因数据：验收轮 48 调用中显式设 ≥20s 窗的 7 次 0 超时、默认 10s 窗的 41 次 2 超时。
+- **不改**：未在提示词强制模型手设 yield_time_ms（实测 19/19 次调用均不显式设，加指令收效存疑），改用工程解（压宽限让默认窗自然兜住）。
+- **影响范围**：仅技能模板；需发布 1.3.4 到 QA 广场。
+- **回滚方式**：git revert 本 commit。
+
+## 2026-07-14 ops-dataset-query v1.3.5 自动枚举短超时（补齐命令窗盲区）
+
+- **为什么改**：v1.3.4 验收轮 DB 取证（33 次规划器调用 1 次超时=3.0%，较 v1.3.3 的 4.2% 下降但未归零），定位唯一残留超时=即时销售 S4「平台无授权」场景：该场景数据已就绪（不走升级宽限），但规划器要做**自动枚举**（调 opscli 拿平台值），枚举网络调用（上限 20s）超过模型给命令设的默认 10s 窗口被切断。v1.3.4 的 8s 宽限只覆盖升级路径，覆盖不到「已就绪+需枚举」这条路径——是遗留盲区。
+- **具体做了什么**：`_auto_enum_platform_values` 超时上限 20s→7s，贴合默认 10s 命令窗（与 8s 升级宽限一致的设计思路）；枚举短超时内未返回时回落到内嵌手动枚举命令（platform_enum_command，已有兜底路径），绝不阻塞命令窗口。附带修 build_model_query_plan docstring 更名走样（内部规划器→内部合同）。
+- **验证**：pytest 24/24（auto_enum mock 用例不受超时值影响）；DB 取证的唯一超时命令实测=默认 10000ms 命令墙钟 10.03s（枚举场景）。
+- **影响范围**：仅技能模板；平台枚举待收敛场景下超时改回落手动命令而非被切（原本被切后模型也会重跑，本改动让首调即返回可用合同）。需发布 1.3.5 到 QA 广场。
+- **回滚方式**：git revert 本 commit。
+
+## 2026-07-15 docs - 新增数据集默认条件（filter_config）接入需求说明
+
+- **为什么改**：服务端 `polaris_ops_metrics_qa.dm_table_columns.field_config` 新增字段级默认条件配置 `filter_config`，需打通「后台配置 → query-metadata 下发 filter_configs → 查询/导出强制应用 → ops-dataset-query 规划器感知与披露」全链路，先整理需求文案供评审。
+- **具体做了什么**：新增 `docs/design/数据集默认条件filter_config接入需求.md`，含 filter_config 结构与枚举说明（type/operator/filter_type/filter_agg/日期预设，取证自 datasets.blade.php:4327-4402）、五个需求项（R1 query-metadata 返回 filter_configs、R2 查询导出强制应用、R3 Skill CSV 分发链路同步、R4 opscli query 透传、R5 规划器/执行器/rules.md 优化）、10 条验收标准、7 条待确认问题、关键代码位置附录。
+- **验证**：纯文档，无代码改动；关键代码路径与行号由两个探索 Agent 从 opscli 与 auto-scheduler vendor 包实际取证。
+- **影响范围**：仅新增文档，无功能影响。备注：本会话 memory-lancedb-pro-sse MCP 工具不可用（ToolSearch 两次检索未命中 memory_*），故按兜底规范记录于此，恢复后需补写 MCP 记忆。
+- **回滚方式**：删除该文档文件。
+
+## 2026-07-15 docs - filter_config 需求文档补充导出接口下发范围（用户评审反馈）
+
+- **为什么改**：用户评审指出下发范围不只 queryMetadata，DatasetSkillApiController 的导出方法（export 等）也需支持 filter_config。
+- **具体做了什么**：`docs/design/数据集默认条件filter_config接入需求.md` R3 改写为「DatasetSkillApiController 导出接口同步携带 filter_config」，实际读取控制器与 DatasetSkillService 取证：字段 CSV（export→createFieldExportResponseForUser:248-290）行尾新增 filter_config 列（字段级 JSON 原样下发，主要载体）；数据集 CSV（exportDatasets→createDatasetExportResponseForUser:292-330）新增 filter_config_count/filter_config_names 摘要列（复用 select_column_count 既有模式）；exportSelectColumns 结构不变；manifest 计数可选。同步更新范围总览图、R4 本地回退来源、R5 scoped_dataset_reader 解析新列、验收标准（10→12 条，含 CSV 比对与旧版兼容）、待确认问题 6、附录代码位置（补 4 个导出接口行号）。
+- **验证**：纯文档；CSV 现有列头逐一取证自 DatasetSkillService.php:264-278、308-318、360-365。
+- **影响范围**：仅文档。
+- **回滚方式**：git 恢复该文档上一版本。
+
+## 2026-07-15 docs - filter_config 需求文档定稿（7 条待确认问题评审定案回填）
+
+- **为什么改**：用户对 7 条待确认问题全部给出结论，需回填正文并定稿。
+- **具体做了什么**：`docs/design/数据集默认条件filter_config接入需求.md`：①冲突处理=静默 AND 合并（与前台一致）+同值/子集合并去重，更新 R2 合并规则表与 R5 run_query precheck（不拦截但必须披露双条件同时生效）；②度量字段 having（filter_agg!=none）纳入本期，更新本期范围、R1 汇总范围（条目新增 field_type 标识）、R2 新增聚合后过滤规则；③多枚举值确认翻译为 in；④日期预设确认服务端执行时解析；⑤manifest 计数不做，数据集 CSV 摘要列纳入；⑥导出侧本期仅覆盖图表导出链路；⑦「六、待确认问题」改为「六、评审结论（已确认）」，验收标准 12→15 条（新增 AND 合并去重、metric having、多值 in 三项），文档状态改为已评审定稿。
+- **验证**：纯文档；grep 确认正文无残留"待确认"引用。
+- **影响范围**：仅文档。
+- **回滚方式**：git 恢复该文档上一版本。
+
+## 2026-07-15 docs - filter_config 需求文档修正「导出」语义（用户澄清）
+
+- **为什么改**：用户澄清需求中的「导出」指数据集元数据 CSV 文件导出（export/exportDatasets 等接口，即 R3），并非把默认条件应用到图表导出等查询结果导出，此前 R2 纳入 ChartExportService 属于误读。
+- **具体做了什么**：`docs/design/数据集默认条件filter_config接入需求.md`：①需求目标处新增术语说明框（「导出」=元数据 CSV 导出）；②R2 标题改为「查询强制应用默认条件」，入口覆盖表移除图表导出行，改为范围外注记；③本期范围、背景问题清单、required 语义、范围总览图同步去掉查询结果导出表述；④删除原验收标准第 5 条（导出与查询口径一致），15 条重编号为 14 条；⑤评审结论 7 改写为「导出」含义澄清条目；⑥影响范围第 2 条去掉「导出结果」。
+- **验证**：grep 确认全文仅评审结论 7 与本期范围中以「范围外」口径提及图表导出，无残留将其作为改动面的表述。
+- **影响范围**：仅文档。
+- **回滚方式**：git 恢复该文档上一版本。
+
+## 2026-07-15 docs - filter_config 需求任务拆解（两份实施计划）
+
+- **为什么改**：需求文档已评审定稿，用户要求基于 superpowers:writing-plans 进行开发任务拆解。
+- **具体做了什么**：新增两份可独立交付的实施计划（按子系统拆分）：①`docs/plans/数据集默认条件filter_config实施计划-服务端.md`——8 个任务（FilterConfig 提取助手、日期预设解析器、buildExportPayloadForUser 统一挂载+query-metadata 下发、CSV 导出列、SimpleQueryBuilder 简化入口注入、度量 having 探查实现、CliQueryService 完整入口兜底、QA 验收回归），TDD 步骤含完整 PHP 代码与 PHPUnit 用例；②`docs/plans/数据集默认条件filter_config实施计划-opscli与Skill侧.md`——7 个任务（QueryMetadataResult 透传、scoped_dataset_reader 可选列解析、dataset_guidance 聚合、query_plan 投影+中文披露、run_query 注入、Skill 文档+1.4.0、端到端验收），全部 fixture 驱动可与服务端并行。计划代码基于两个探索 Agent 提取的函数原文（DatasetSkillService/SimpleQueryBuilder/CliQueryService/query 模块/skill 脚本逐字取证）。自审修正：PHP 闭包语法、匿名类返回类型、操作符映射缺口（notEquals/gt 等非 equals 操作符注入）、验收编号错位、DB 过滤条件与 loadColumns/loadMetrics 对齐。
+- **验证**：纯文档；Self-Review 三项检查（需求覆盖/占位符扫描/类型一致性）完成。
+- **影响范围**：仅新增文档。
+- **回滚方式**：删除两份计划文件。
+
+## 2026-07-15 skills/query - filter_config opscli 与 Skill 侧实施完成（收尾归档）
+
+- **为什么改**：按《数据集默认条件filter_config实施计划-opscli与Skill侧》以 subagent-driven 方式执行完 Task 1-6 及仓内回归，各任务已有独立变更记录，此条为收尾汇总。
+- **具体做了什么**：10 个提交（aaf8c2e..016a875）：QueryMetadataResult 透传 filter_configs；scoped_dataset_reader 可选列解析；dataset_guidance 聚合 default_filters（六键压缩契约）；query_plan 三处投影+query_template 预填；run_query --default-filters 注入去重披露；Skill 文档契约+版本 1.4.0；每任务均经独立审查+修复轮，终审（全分支）Ready to merge。
+- **验证**：分目录全量回归 1133 passed，35 failed 全部为基线既有（改动面 diff 证明不相交）；本计划相关测试 tests/query 71/71、planner 26/26、guidance 3/3、reader 5/5、run_query 5/5。
+- **影响范围**：opscli query 元数据透传、ops-dataset-query Skill 1.4.0（未发布）。端到端验收待服务端 R1-R3 上线 QA。
+- **回滚方式**：git revert aaf8c2e..016a875 区间提交。备注：memory MCP 本会话不可用，恢复后按本文件补录。
+
+## 2026-07-15 服务端 - filter_config 服务端计划实施完成（收尾归档，跨仓库）
+
+- **为什么改**：按《数据集默认条件filter_config实施计划-服务端》以 subagent-driven 方式执行完 Task 1-7 及全分支终审（Task 8 QA 验收待后台配置与 JWT）。
+- **具体做了什么**：data-metrics 包（release 分支）16 个提交 f8f9613..4ac10db：FilterConfig/FilterDatePreset 纯函数类；buildExportPayloadForUser 统一挂载 + query-metadata filter_configs 下发（组件引用排除语义）；两 CSV 行尾新列；SimpleQueryBuilder 三数据源加载 + 六语义合并 + having 通道（原始 SQL 拼接面已加转义/白名单/字段校验）+ appendDefaultConditions 完整入口兜底（含 having/translate/innerWhere）；CliQueryService 接线。终审抓获并修复两处跨通道真缺陷：去重 operator-blind 绕过 required（同源波及 opscli run_query，已在 opscli 仓库 aab90fd 同步修复）、完整入口跳过 translate/support_like。
+- **验证**：包内 43 tests 全过（+3 个既有 oauth_apps Feature errors 与本分支无关）；opscli 侧 208 回归无新增失败。
+- **影响范围**：QA 上线后所有已配置 required 默认条件的数据集查询口径收敛（需求预期）；【技术债上报】既有图表路径 QueryBuilder::buildHavingConditionString(约4432行) 存在字符串值未转义的同类问题（先例缺陷，本计划未动）。
+- **回滚方式**：data-metrics 仓库 git revert f8f9613..4ac10db 区间；opscli 仓库 revert aab90fd。
+
+## 2026-07-15 服务端+opscli - filter_config QA 验收完成（跨仓库收尾）
+
+- **为什么改**：真实 QA 环境（http://ops.cm，VC报告[Manufacturing] 数据集带默认条件）验收，抓到日期预设未解析真缺陷 + 客户端预注入字面量与服务端解析冲突的跨端架构问题。
+- **具体做了什么**：①服务端 c11150d：toSimpleFilters 补 enum_value 单元素日期解析（后台日期字段预设名存 enum_value 非 value）；②opscli 40538b0：run_query 改披露-only 不再 mutate payload；③opscli bba32cd：query_plan 移除 query_template 默认条件预填，确立"客户端只披露、服务端权威注入"架构；④需求文档 2.2 节修正 value/enum_value 存储约定；⑤新增 docs/plans/数据集默认条件filter_config验收记录.md。
+- **验证**：服务端 24 单测 + 真实 API/tinker 逐条验收（注入/解析/去重/冲突/CSV/回归全 PASS，VC 0 行=数据集空非缺陷）；opscli 32 相关测试全绿 review Approved；6 未配置数据集回归 where 无注入、端到端各返回 3 行。
+- **影响范围**：服务端 f8f9613..c11150d、opscli a811d7b..bba32cd，均本地未 push。VC 数据集待补数复验；opscli 端到端待服务端发 QA 后 skills upgrade。
+
+---
+
+## 2026-07-15 skills/run_query - _apply_default_filters 披露文案改为覆盖语义
+
+**变更原因**：服务端 filter_config 默认条件改为覆盖语义（用户对某字段传了任意条件→服务端用用户的、不注入默认；用户没传→服务端注入默认）。opscli 披露文案仍沿用旧"AND 冲突同时生效结果可能为空"语义，与服务端实际行为不符，需对齐。
+**改动点**：
+1. `opscli/skills/templates/ops-dataset-query/scripts/run_query.py`：`_apply_default_filters` 函数中，用户已传同字段条件时，原"冲突 AND 合并""已去重"等旧文案统一改为"你已为 {label} 指定条件，将覆盖数据集默认值（默认 {值}）"；用户未传时保持"服务端将自动应用数据集默认条件"不变；删除旧的 `covered`/`equality_ops` 冗余分支，整体简化为两路（有无用户条件）。更新 docstring 说明覆盖语义及旧 AND 语义废弃。
+2. `tests/skills/test_run_query_default_filters.py`：删除 `test_apply_dedupes_same_or_subset_value`（旧去重语义）、`test_apply_keeps_both_on_conflict`、`test_apply_not_deduped_on_operator_mismatch`（旧 AND 冲突语义），新增 `test_apply_user_condition_overrides_default`（覆盖语义三场景：同值/异值/异操作符，均断言 note 含"覆盖数据集默认值"且不含"同时生效"）。
+**验证结果**：`pytest tests/skills/test_run_query_default_filters.py -v` 全部 4 tests PASSED；回归 `pytest tests/skills/ tests/query/ --ignore=tests/skills/test_packaging.py -v` 无新增失败，预存失败均为模板漂移与本次修改无关。
+**影响范围**：仅 `_apply_default_filters` 披露文案（不改 payload，披露-only 语义不变）；用户侧体验：覆盖场景不再看到"结果可能为空"的误导提示。
+**回滚方式**：git revert 本次提交，或手动将 `_apply_default_filters` 中覆盖分支改回含 `covered`/`equality_ops` 的旧版本，并恢复测试文件。
+- **回滚方式**：服务端 revert c11150d；opscli revert 40538b0/bba32cd。
+
+## 2026-07-16 skills/ops-dataset-query v1.3.6 - duplicate_dataset_field 硬失败根治（同名字段双注册兼容性合并）
+
+**变更原因**：QA 实跑 SSE 日志（2222.txt）证实「即时综合数据集」（table_id=1）所有 query_plan 调用必现 `duplicate_dataset_field` 硬失败（retryable=false），单会话 8 次报错、模型陷入换措辞盲试与升级自救循环（升级也无法自愈，因为重复来自 BI 发布包数据源头）。根因取证：BI 发布包 v1.1.2 的 dataset_fields.csv 里 table_id=1 有 44 个 field_name 各注册两行——同一物理字段挂两个 global_alias。形态一（11 组）：仅 verbose_name/global_alias 不同的纯标签差异；形态二（33 组）：一行公式注册（has_formula_config=1 带表达式）+ 一行裸指标注册。`dataset_guidance._validated_dataset_fields` 对 field_name 唯一性硬校验，一票否决整个数据集。
+**改动点**：
+1. `scripts/scoped_dataset_reader.py`：`load_dataset_fields` 末尾新增 `_merge_duplicate_field_rows` 兼容性合并（统一数据层收口，所有消费方受益）。形态一：执行语义签名（field_type/表达式/快照/公式标记/filter_config）一致即合并，主行优先取「含中文且≠技术名」的展示名，其余展示名收进 `alt_verbose_names`（additive 键）；形态二：公式列以外语义一致且恰为公式+裸指标分裂时，优先采纳公式注册（公式表达式是服务端权威聚合口径，均值/比率字段按 SUM 裸聚合会产出错误业务数字）；其余冲突（如 dimension vs metric）不合并，保留下游硬失败。
+2. `scripts/dataset_guidance.py`：`_field_score` 对主名+alt_verbose_names 逐一打分取最大值；`_resolve_requested_fields` 点名精确匹配扩展到 alt 名（旧标签「交易额(自发货)」仍可命中 price_ds；同一旧标签挂多字段时正确进入澄清）。
+3. `scripts/query_plan.py`：ERROR_NEXT_ACTIONS 新增 `duplicate_dataset_field` 专属指引（升级/重跑均无法自愈，如实说明+提交反馈+停止重试），替代原默认「重跑→升级→反馈」误导链。
+4. 版本 bump 1.3.5→1.3.6（SKILL.md + data/VERSION.json）。
+**验证结果**：新增 `tests/skills/test_scoped_reader_duplicate_fields.py` 6 用例（两形态合并/语义冲突保留硬失败/幂等去重/alt 打分点名/多义澄清）全 PASS；相关既有测试 43/43 PASS（tests/skills 整目录收集失败为既有问题）。本机用真实 v1.1.2 发布包数据复现验证：修复前必现报错的「即时综合数据集近7天按渠道的销售额Top5」修复后 status=planned；公式字段 avg_price_cny 合并后 has_formula_config=1（公式口径胜出）。QA e2e：v1.3.6 已发布 QA 广场（skill 599490，version id=1442），矩阵验收 duplicate_dataset_field 零命中（详见 ops-agent 仓库测试报告）。
+**影响范围**：ops-dataset-query 字段元数据读取层全消费方（dataset_guidance/scoped_metadata_index/query_plan）；即时综合数据集从整库不可查恢复为可查；其余 42 个无重复数据集行为不变（签名唯一时合并是恒等操作）。
+**回滚方式**：git revert 本次提交；或广场回退到 1.3.5 版本包。备注：memory MCP 本会话不可用，恢复后按本文件补录。
+
+## 2026-07-16 skills/ops-dataset-query v1.3.8 - 规划器新增图表 UUID 路由
+
+**变更原因**：`opscli query chart` 已能按图表 UUID 获取结构、生成 SQL 或执行全部查询，但 Skill 的统一入口 `query_plan.py` 仍只支持普通数据集选表，导致 Agent 必须绕过规划器才能查询图表。
+**改动点**：`query_plan.py` 新增显式图表 UUID/短标识识别、结构/执行/dry-run/文档动作规划和多 UUID 澄清合同；模型合同新增 `query_mode`，普通查询保持 `dataset_query`，图表查询输出 `chart_uuid`、`chart_action` 与可直接执行的 `query_command`；同步扩展严格 JSON Schema、SKILL 执行分支与版本号 1.3.8。
+**验证结果**：`test_dataset_query_planner.py`、`test_dataset_guidance_default_filters.py`、`test_cli.py` 共 56 项通过；`query_plan.py` py_compile 通过；图表与普通规划结果均通过严格 JSON Schema；opscli 发布一致性校验确认 `SKILL.md` 与 `data/VERSION.json` 均为 1.3.8。通用 skill-creator quick_validate 因 opscli 发布规范强制使用顶层 `version` 而报不支持该键，属于校验器规范差异，未删除项目必需版本字段。
+**影响范围**：仅 `ops-dataset-query` 规划入口和模型合同；普通数据集规划、字段/时间/权限规则与 `run_query.py` 执行绑定保持不变。
+**回滚方式**：回滚本次提交即可恢复到仅支持普通数据集规划的 1.3.7。
+---
+
+## 2026-07-16 shared - 版本更新提示语简化为 self-update 单命令
+
+**变更原因**：一期 T1-3，升级提示从三条手动命令简化为一条一键命令，降低升级摩擦
+**改动点**：opscli/shared/update_check.py 的 _print_update_hint 文案；tests/shared/test_update_check.py 对应断言
+**验证结果**：pytest tests/shared/test_update_check.py -v 全绿
+**影响范围**：仅启动时 stderr 提示文案
+**回滚方式**：回退本次 commit
+---
+## 2026-07-16 shared - self-update/版本检查支持 TestPyPI 测试渠道
+
+**变更原因**：发版验证流程需要在 TestPyPI 上端到端测试 self-update；原实现只查公网 PyPI（最新停在 0.0.111），TestPyPI 安装的版本无法完成升级闭环
+**改动点**：opscli/shared/update_check.py 新增 _get_channel()（环境变量 OPSCLI_UPDATE_CHANNEL=test 切换渠道）、_fetch_latest_version 按渠道选 JSON API、check_and_notify test 渠道绕过缓存；opscli/shared/self_update.py 的 pip 升级命令 test 渠道追加 --index-url TestPyPI + --extra-index-url 公网兜底，升级输出标注测试渠道
+**验证结果**：pytest tests/shared/test_self_update.py tests/shared/test_update_check.py 50 个测试全绿（新增 6 个渠道测试）
+**影响范围**：默认行为完全不变（未设环境变量走正式渠道）；仅内部发版验证受影响
+**回滚方式**：回退本次 commit
+---
+## 2026-07-16 shared - e2e 实测修复 self-update 三个真实缺陷
+
+**变更原因**：TestPyPI 端到端实测（0.0.140→0.0.141）暴露三个 bug：①skills 同步经 PATH 解析 opscli 跑错环境（解析到开发 venv 而非升级所在环境）②skills install 无 --yes 阻塞在交互式 TUI 选择③pip 因源缓存延迟未实际升级但返回 0，流程谎报升级完成
+**改动点**：opscli/shared/self_update.py：_resolve_opscli_command 改为优先 sys.executable 同目录（支持 opscli/opscli.exe），去掉 PATH 查找；skills install 追加 --yes；新增 _read_installed_version 升级后版本校验，版本未达目标时警告并返回 1
+**验证结果**：pytest tests/shared/test_self_update.py tests/shared/test_update_check.py 53 个测试全绿
+**影响范围**：self-update 命令的 skills 同步与结果校验
+**回滚方式**：回退本次 commit
+---
+## 2026-07-16 发版验证 - TestPyPI 端到端闭环通过 + 外部教程文档更新
+
+**变更原因**：验证 self-update 在真实发布渠道的完整闭环；同步更新用户侧教程
+**改动点**：TestPyPI 发布 0.0.140~0.0.143；e2e 干净 venv 实测 0.0.142→0.0.143 一键升级全链路通过（含 skills install --yes 非交互 + skills upgrade 真实成功）；更新 auto-scheduler storage/app/public 下 5 份教程文档脚本（更新升级指南新增一键更新章节、精简指南/从零指南加 self-update 入口、两个 setup 脚本加提示）
+**验证结果**：e2e exit 0，最终版本 0.0.143，"升级后版本" 校验行生效；bash -n 语法校验通过
+**影响范围**：教程文档在 auto-scheduler 项目（本仓库外），需随该项目发布生效
+**回滚方式**：教程文档按 git 历史回退（auto-scheduler 仓库）
 ## 2026-07-02 calculator - 新品计算器 CLI 草稿包模式设计
 
 **变更原因**：确认将 Polaris 新品计算器优先封装为 opscli CLI 模式，并采用面向运营同学的草稿包交互。
@@ -3200,3 +3620,20 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **验证结果**：新增 `tests/skills/test_scoped_reader_duplicate_fields.py` 6 用例（两形态合并/语义冲突保留硬失败/幂等去重/alt 打分点名/多义澄清）全 PASS；相关既有测试 43/43 PASS（tests/skills 整目录收集失败为既有问题）。本机用真实 v1.1.2 发布包数据复现验证：修复前必现报错的「即时综合数据集近7天按渠道的销售额Top5」修复后 status=planned；公式字段 avg_price_cny 合并后 has_formula_config=1（公式口径胜出）。QA e2e：v1.3.6 已发布 QA 广场（skill 599490，version id=1442），矩阵验收 duplicate_dataset_field 零命中（详见 ops-agent 仓库测试报告）。
 **影响范围**：ops-dataset-query 字段元数据读取层全消费方（dataset_guidance/scoped_metadata_index/query_plan）；即时综合数据集从整库不可查恢复为可查；其余 42 个无重复数据集行为不变（签名唯一时合并是恒等操作）。
 **回滚方式**：git revert 本次提交；或广场回退到 1.3.5 版本包。备注：memory MCP 本会话不可用，恢复后按本文件补录。
+
+## 2026-07-17 合并 - master 分支合入 release
+
+**变更原因**：将 master 上 112 个提交（seller_sprite 异步任务、calculator 新品计算器、scrape_do、quota SQLite 化等）合入 release
+**改动点**：合并共产生 22 个冲突文件。解决原则：(1) 版本类文件（version.py 0.0.143、pyproject.toml、两个 Skill VERSION.json）取版本更高的 release 侧，并补入 master 的 ddddocr 依赖、移除已删除的 mcp-quota.json 资源引用；(2) asin_data 全组（cli/services/mcp tools/测试共 10 文件）取 release 侧——release 为 master 的严格超集（sqp 数据源、xlsx 工作簿、VC account_type、crawler country 分组、simplify 命令重构），master 侧 cli.py 还存在重复命令注册缺陷；(3) opscli/cli.py 合并两侧——保留 master 的 calculator 注册与 asin-review 守卫式注册，保留 release 启用的 feedtask；(4) mcp/server.py 清理 release 侧死的 sif import，与 master 对齐；(5) auth/config.py 取 release 注释（与实际值 polaris_enabled=true 一致）；(6) ops-dataset-query Skill 三文件取 release 侧（含图表 UUID 特性，v1.3.8）；(7) change-log-pending.md 做 union 合并；(8) uv lock 重新生成
+**验证结果**：tests/asin_data 117 passed、tests/auth 46 passed、tests/shared 89 passed、tests/query 76 passed（2 失败为 release 预存）、tests/mcp 293 passed（3 失败均为两侧预存：beta/google_trends spec 为 release 预存、quota daily_limit 为 master 预存）、planner 测试 41 passed；opscli --version / calculator / feedtask 冒烟通过；py_compile 通过
+**影响范围**：release 分支获得 master 全部功能；asin_data 保持 release 演进版行为
+**回滚方式**：git reset --hard ORIG_HEAD（合并提交前）或 revert 合并提交
+---
+## 2026-07-17 skills - upgrade 未登录时交互式引导登录并自动重试
+
+**变更原因**：skills upgrade 需登录，未登录用户（含 self-update 流程内）此前只能看报错后手动登录再重跑；交互终端下引导登录可保留用户原始意图一步完成
+**改动点**：opscli/skills/commands/cli.py 新增 _is_auth_failure（识别 AuthError 包装/401/407 三类认证失败）、_stdin_is_tty、_prompt_and_login（TTY 下询问 → 复用 auth login Device Flow → 仅一次机会）；upgrade 命令认证失败且登录成功后自动重试一次。非交互环境（AI Agent/管道/self-update 子进程）行为完全不变
+**验证结果**：tests/skills/test_upgrade_login_prompt.py 11 个测试全绿（TDD）；tests/skills 目录 stash 前后失败清单一致（5 个均预存）；真机干净 HOME + stdin 非 TTY 实测输出与改动前一致
+**影响范围**：仅 skills upgrade 命令交互终端场景；401/407 中途失效同样触发引导
+**回滚方式**：回退本次 commit
+---
