@@ -2,13 +2,13 @@
 name: ops-dataset-query
 description: >
   运营数据查询取数 Skill。用于按当前账号可见的数据集查询销售、库存、广告、物流、
-  流量等数据，支持趋势、环比同比、ACOS/ROAS 和导出。
+  流量等数据，支持趋势、环比同比、ACOS/ROAS、图表 UUID 查询和导出。
   加载本 Skill 后必须先读取本目录 SKILL.md 并遵循其流程：CLI 取数的唯一入口是
   规划器 python3 scripts/query_plan.py "<用户请求>"（先拿规划结果再构造正式命令；
   规划器按 30 秒命令窗口设计，返回 refresh_in_progress 时按其 recovery_command
   等待重跑即可，禁止自行升级）；禁止绕过规划器直接扫描 data/ 目录、
   读脚本源码或凭记忆手拼查询参数。
-version: 1.3.7
+version: 1.3.9
 ---
 
 # ops-dataset-query
@@ -26,7 +26,7 @@ version: 1.3.7
 
 ## 查询规划主线
 
-**主线只有三步：`query_plan.py` 拿规划结果 → 按规划结果确认口径 → `run_query.py` 执行。** 先做紧凑歧义预检。仅当命中具体歧义时才读取 `references/rules.md`，并按 `references/ask-user-question-guide.md` 澄清；无歧义继续。
+**主线只有三步：`query_plan.py` 拿规划结果 → 按规划结果确认口径 → 按 `query_mode` 执行。** `dataset_query` 使用 `run_query.py`；`chart_uuid` 直接执行规划结果的 `execution_ref.query_command`。先做紧凑歧义预检。仅当命中具体歧义时才读取 `references/rules.md`，并按 `references/ask-user-question-guide.md` 澄清；无歧义继续。
 
 ### CLI-only：一次本地规划
 
@@ -42,10 +42,12 @@ python3 scripts/query_plan.py "$USER_REQUEST" > "$PLAN_FILE"
 
 1. `data_state` 不是 `ready`：规划器已内置一次自动升级兜底；若仍返回 `status=blocked`，按规划结果中 `model_view.recovery_command`（即 `opscli skills upgrade ops-dataset-query`）执行后从头开始，刷新仍失败则向用户说明元数据异常并停止，不反复重试。登录或账号变更、元数据所有权不明或数据状态不匹配时也必须刷新或升级；客户端不推断账号身份。
 2. `status=clarify_required`：按 `clarification_messages_zh` 提问；规划结果给出 `dataset_candidates_zh`（候选卡片）、`field_suggestions_zh`（近似字段建议）或 `pending_confirmations_zh` 时，必须把它们作为选项/口径呈现；确认后把明确口径写回用户请求并重新规划。`blocked` 则按 `recovery_command`/阻断原因处置。
+   - 未明确指定数据集或问题描述不足时，规划器只会在当前账号已授权、且覆盖已明确业务与字段的前提下推荐“即时综合数据集”。出现 `default_dataset_recommendation_zh` 时必须先询问用户是否采用；确认前不得执行、不得生成或自行补造 `query_template`。用户确认后把“使用即时综合数据集”写回原请求重新规划；用户拒绝时让用户从 `dataset_candidates_zh` 选择其他数据集，不得循环推荐。
 3. `model_view` 只含用户可见中文结论；最终回答必须覆盖 `answer_contract.required_disclosures_zh`，并遵守 `forbidden_outputs_zh`。
 4. **时间口径以规划结果为准**：`model_view.time_scope_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源（Asia/Shanghai），不自行心算日期；`is_default=true` 表示默认口径，必须向用户披露并确认后才可执行。
-5. `platform_semantic_members` 只表示请求语义：亚马逊包含 SC+VC，亚马逊 SC/SC 只含 SC，亚马逊 VC/VC 只含 VC。`platform_filter_state=requires_permission_enum` 时规划器默认已自动枚举并回灌（规划结果带 `platform_enum_source=auto_enum_service` 即已收敛）；仅当自动枚举未完成时，直接执行规划结果内嵌的 `execution_ref.platform_enum_command`，再把返回值作为重复的 `--authorized-platform-value` 传回规划器、取得终版规划结果。
+5. `platform_semantic_members` 表示请求语义：用户只说“亚马逊”且未指定 SC/VC 时默认包含亚马逊SC + 亚马逊VC；明确亚马逊SC/SC 时只含 SC，明确亚马逊VC/VC 时只含 VC。`platform_filter_state=requires_permission_enum` 时规划器默认已自动枚举并回灌（规划结果带 `platform_enum_source=auto_enum_service` 即已收敛）；仅当自动枚举未完成时，直接执行规划结果内嵌的 `execution_ref.platform_enum_command`，再把返回值作为重复的 `--authorized-platform-value` 传回规划器、取得终版规划结果。裸“亚马逊”只枚举到部分成员时，直接按 `platform_effective_members` 和 `resolved_platform_values` 查询可用部分，但必须原样披露 `platform_scope_disclosures_zh`，不得把部分结果表述为完整亚马逊范围。
 6. `execution_ref` 仅用于正式查询构造，禁止作为业务判断理由或向用户展示。`dimensions`/`metrics` 中 `selection_source=recommended` 的字段是系统推荐（用户未点名），确认前规划器不会下发 `query_template`。只有 `status=planned` 且 `execution_ref.query_template` 存在时才能执行；构造以该模板为基底填充。
+7. `query_mode=chart_uuid` 时无需本地数据集元数据，规划器会输出 `chart_uuid`、`chart_action` 和可直接执行的 `query_command`。必须读取 `references/chart-excel-guide.md`，直接执行该命令；不得再用普通数据集选表或 `run_query.py` 改写。多个 UUID 时规划器返回 `clarify_required`，确认后把单个 UUID 写回原请求重跑规划器。
 
 `query_component` 只用于权限枚举，不是业务结果数据集。自然语言选表只依据当前账号元数据中的中文名称和中文说明；英文 key 仅在用户明确给出精确完整技术标识时精确匹配，不能从中文请求推断或模糊匹配。
 
@@ -59,7 +61,7 @@ python3 scripts/query_plan.py "$USER_REQUEST" > "$PLAN_FILE"
 2. 不发明默认筛选。未指定筛选时只说明 `current_authenticated_account` 可见范围；明确筛选必须先经组件枚举——平台走规划结果的自动枚举/`platform_enum_command`，部门/国家等其他筛选用 `execution_ref.filter_components` 中对应组件的 `component_table_id` 查枚举。无交集或歧义时停止并让用户重选，组件不可用时只阻断该筛选，不扩大范围。
 3. 环比、同比和上期对比必须同时传主周期日期 `filters` 与 `dataComparison`（模板已按 `time_scope` 预填，执行器也会硬校验）。
 4. **执行确认分级**：数据集、字段、时间、筛选、排序、行数全部无歧义时，用一段中文陈述式披露口径后**直接执行，不等待用户回复**；只有 `clarify_required`、默认时间口径未确认、或含 `recommended` 字段未说明时才通过提问等待确认。
-5. CLI 执行只用一体化执行器（内含执行前校验、排序生效校验与兜底、截断披露和证据合同）：
+5. `query_mode=dataset_query` 的 CLI 执行只用一体化执行器（内含执行前校验、排序生效校验与兜底、截断披露和证据合同）：
 
 ```bash
 python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON" --plan-file "$PLAN_FILE"
@@ -72,7 +74,8 @@ python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON" --plan-
      默认条件由服务端权威应用；用户为同字段提供条件时覆盖默认值，执行器只做一致披露，不重复注入。
 
    `--plan-file`/`--plan-json` 是强制执行绑定，执行器会校验规划状态、tableId、授权字段和模板就绪状态。正式查询偶尔较慢（排序兜底还可能放大窗口重查一次），命令窗口超时不是失败：**原样重跑一次**即可。执行器返回 `precheck_failed` 时按 `next_action_zh` 修正参数，禁止绕过执行器直连；`disclosures.order_fallback` 存在时必须披露本地兜底。MCP-only 用正式 `query_simple`。
-6. 保留用户要求的明细和全量范围。限制展示时声明排序、截断数量和总行数（执行器 `disclosures` 已给出），不把局部结果说成全量。
+6. `query_mode=chart_uuid` 时原样执行 `execution_ref.query_command`。`chart_action=run` 必须遍历所有 `queries`，保留服务端小计/总计并按 `_query_index` 区分来源；大结果按 `references/chart-excel-guide.md` 使用 `--save-result` 或 `--result-file` 落盘，随后补一次 `evidence_contract.py`。
+7. 保留用户要求的明细和全量范围。限制展示时声明排序、截断数量和总行数（执行器 `disclosures` 已给出），不把局部结果说成全量。
 
 ## 结果分析
 

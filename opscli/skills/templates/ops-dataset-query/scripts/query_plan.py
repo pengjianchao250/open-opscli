@@ -44,6 +44,7 @@ CLARIFICATION_MESSAGES = {
     "field_identity": "点名字段对应多个同名物理字段，当前中文标签无法唯一绑定。",
     "time_scope_confirmation": "未识别到明确时间范围，需要确认是否使用默认近30天。",
     "recommended_fields_confirmation": "用户未点名完整字段，需要确认是否采用系统推荐字段。",
+    "default_dataset_confirmation": "未明确指定数据集，建议使用已授权且兼容的即时综合数据集，需要确认是否采用。",
 }
 # 披露代码 → 最终回答中必须覆盖的中文披露内容
 DISCLOSURE_MESSAGES = {
@@ -131,6 +132,7 @@ PLATFORM_MEMBER_LABELS = {
 
 # 选表候选 reasons 前缀 → 中文短语（澄清话术展示用）
 CANDIDATE_REASON_LABELS = [
+    ("default_instant_comprehensive", "未指定数据集时的兼容优先推荐"),
     ("explicit_alias", "技术标识精确命中"),
     ("explicit_name", "数据集英文名精确命中"),
     ("explicit_chinese_description", "中文名称命中"),
@@ -204,6 +206,7 @@ def _resolve_platform_enum(
             "status": "not_applicable",
             "resolved_filter_values": [],
             "resolved_values_are_authorized": False,
+            "resolved_semantic_members": [],
             "missing_semantic_members": [],
         }
     if authorized_values is None:
@@ -211,6 +214,7 @@ def _resolve_platform_enum(
             "status": "required",
             "resolved_filter_values": [],
             "resolved_values_are_authorized": False,
+            "resolved_semantic_members": [],
             "missing_semantic_members": list(semantic_members),
         }
     if isinstance(authorized_values, (str, bytes)) or any(
@@ -247,6 +251,11 @@ def _resolve_platform_enum(
         "status": status,
         "resolved_filter_values": [] if ambiguous_values else resolved,
         "resolved_values_are_authorized": bool(resolved and not ambiguous_values),
+        "resolved_semantic_members": (
+            []
+            if ambiguous_values
+            else [member for member in semantic_members if member in resolved_members]
+        ),
         "missing_semantic_members": missing,
         "ambiguous_values": ambiguous_values,
     }
@@ -627,19 +636,40 @@ def build_query_plan(
     rules = schema.validate_rules(raw_rules)
     cards = planner.load_authorized_cards(data_dir)
     selection = planner.plan_query(query, cards, rules, top_n)
-    platform_scope = _platform_scope(
-        selection, raw_rules, authorized_platform_values
-    )
-    guidance = None
+
+    def selected_guidance(current_selection: dict) -> dict | None:
+        if current_selection.get("planner_status") != "candidate_ready":
+            return None
+        candidates = current_selection.get("dataset_candidates", [])
+        if not candidates:
+            return None
+        return dataset_guidance.build_guidance(
+            data_dir,
+            {"dataset_alias": candidates[0]["dataset_alias"]},
+            query=query,
+            requested_fields=requested_fields,
+        )
+
+    guidance = selected_guidance(selection)
+    # 默认推荐必须同时通过字段指导校验；无法解析点名字段时回到原选表流程。
+    if (
+        selection.get("default_dataset_recommendation")
+        and guidance is not None
+        and guidance.get("guidance_status") == "clarify_required"
+    ):
+        selection = planner.plan_query(
+            query,
+            cards,
+            rules,
+            top_n,
+            recommend_default_dataset=False,
+        )
+        guidance = selected_guidance(selection)
+
+    platform_scope = _platform_scope(selection, raw_rules, authorized_platform_values)
     if selection["planner_status"] == "candidate_ready":
         candidates = selection.get("dataset_candidates", [])
         if candidates:
-            guidance = dataset_guidance.build_guidance(
-                data_dir,
-                {"dataset_alias": candidates[0]["dataset_alias"]},
-                query=query,
-                requested_fields=requested_fields,
-            )
             if platform_scope["requires_permission_enum_validation"]:
                 platform_scope["component_lookup"] = _platform_component_lookup(
                     data_dir, candidates[0]["dataset_alias"], query
@@ -895,7 +925,10 @@ def _answer_contract(
     required = []
     if platform_filter_state == "requires_permission_enum":
         required.append("permission_enum_required")
-    if "dataset_constraints" in clarification_reasons:
+    if any(
+        reason in clarification_reasons
+        for reason in ("dataset_constraints", "default_dataset_confirmation")
+    ):
         required.append("dataset_confirmation_required")
     if guidance.get("guidance_status") == "clarify_required":
         required.append("field_confirmation_required")
@@ -913,6 +946,35 @@ def _answer_contract(
         "technical_identifiers_user_visible": False,
         "user_visible_language": "zh-CN",
     }
+
+
+def _platform_scope_disclosures(platform: dict) -> list[str]:
+    """生成裸“亚马逊”默认范围及部分权限降级的强制披露。"""
+    if "amazon" not in set(platform.get("requested_slots") or []):
+        return []
+
+    disclosures = ["用户未指定亚马逊SC或亚马逊VC，本次默认按亚马逊SC + 亚马逊VC处理。"]
+    resolution = platform.get("enum_resolution") or {}
+    if resolution.get("status") != "resolved":
+        return disclosures
+
+    effective = [
+        PLATFORM_MEMBER_LABELS.get(str(item), str(item))
+        for item in resolution.get("resolved_semantic_members") or []
+    ]
+    missing = [
+        PLATFORM_MEMBER_LABELS.get(str(item), str(item))
+        for item in resolution.get("missing_semantic_members") or []
+    ]
+    if effective and missing:
+        disclosures.append(
+            "当前账号实际可用范围为"
+            + " + ".join(effective)
+            + "，未枚举到"
+            + " + ".join(missing)
+            + "；本次直接查询可用部分，不把结果表述为完整亚马逊范围。"
+        )
+    return disclosures
 
 
 def _reason_zh(reasons: Iterable[str]) -> str:
@@ -1171,6 +1233,12 @@ def build_model_contract(
     ]
     pending_confirmations_zh: list[str] = []
     execution_path_ready = str(internal.get("next_action", "")) == "construct_query"
+    default_dataset_recommendation = selection.get("default_dataset_recommendation") or {}
+    if default_dataset_recommendation.get("confirmation_required"):
+        status = "clarify_required"
+        if "default_dataset_confirmation" not in clarification_reasons:
+            clarification_reasons.append("default_dataset_confirmation")
+        pending_confirmations_zh.append("确认是否使用推荐的即时综合数据集")
     if status == "planned" and execution_path_ready and scope and scope.get("is_default"):
         status = "clarify_required"
         clarification_reasons.append("time_scope_confirmation")
@@ -1196,10 +1264,28 @@ def build_model_contract(
         ],
         "next_action": str(internal.get("next_action", "")),
     }
+    resolved_platform_members = [
+        PLATFORM_MEMBER_LABELS.get(str(item), str(item))
+        for item in resolution.get("resolved_semantic_members") or []
+    ]
+    if resolved_platform_members:
+        model_view["platform_effective_members"] = resolved_platform_members
+    platform_disclosures = _platform_scope_disclosures(platform)
+    if platform_disclosures:
+        model_view["platform_scope_disclosures_zh"] = platform_disclosures
+    if default_dataset_recommendation.get("confirmation_required"):
+        model_view["default_dataset_recommendation_zh"] = {
+            "name_zh": str(dataset.get("display_name_zh", "")),
+            "reason_zh": "未明确指定数据集，且该数据集在当前授权范围内并覆盖已明确的业务与字段。",
+            "confirmation_required": True,
+        }
     if ambiguous_field_labels:
         model_view["ambiguous_field_labels_zh"] = ambiguous_field_labels
         model_view["next_action"] = "ask_user_for_field_clarification"
-    if pending_confirmations_zh:
+    if default_dataset_recommendation.get("confirmation_required"):
+        model_view["pending_confirmations_zh"] = pending_confirmations_zh
+        model_view["next_action"] = "ask_user_for_default_dataset_confirmation"
+    elif pending_confirmations_zh:
         model_view["pending_confirmations_zh"] = pending_confirmations_zh
         model_view["next_action"] = "ask_user_for_query_scope_confirmation"
     if scope:
@@ -1311,6 +1397,11 @@ def build_model_contract(
         model_view["default_filters_zh"] = _default_filters_zh(default_filters)
     # 回答合同：先构建基础版本，再追加默认条件强制披露
     answer_contract = _answer_contract(status, clarification_reasons, platform_state, guidance)
+    answer_contract["required_disclosures_zh"].extend(
+        item
+        for item in platform_disclosures
+        if item not in answer_contract["required_disclosures_zh"]
+    )
     if default_filters:
         answer_contract["required_disclosures_zh"].append(
             "本次查询已自动应用数据集默认条件：" + "；".join(model_view["default_filters_zh"])
