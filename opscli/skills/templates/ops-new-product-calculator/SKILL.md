@@ -23,13 +23,16 @@ description: Use when users need Polaris 新品计算器、新品试算、毛利
 ## 全局门禁
 
 - 必须通过 `opscli calculator` 工作，不得直接调用 Polaris 后端 API。
-- 执行任何 calculator 命令前，先检查 Polaris 登录与权限。
+- Polaris 登录与权限在同一连续任务只检查一次：首次执行远程 calculator 命令前检查；检查通过后不要在每轮补充字段前重复检查，只有出现 401、Token 过期或开始新的独立任务时才重新检查。
 - 如果出现未登录、Token 过期、401、JWT 获取失败，使用 `ops-auth` 处理认证。
 - **REQUIRED SUB-SKILL:** 任意 `opscli calculator` 命令发生非认证类失败后，立即提交结构化反馈，使用 `ops-feedback` 完成提交；反馈完成后再继续原任务，并返回 `feedback_uuid`。
 - `validate` 通过且用户明确确认后才允许 `submit`。固定提醒：`submit 会创建真实试算任务。确认要提交吗？`
 - 用户粘贴 curl、JWT、Cookie、`sudo` 等敏感信息时，不复述完整值；命令示例使用 `<SUDO>` 或带引号占位。
 - `draft` 和 `copy` 的输出目录必须是新的空目录；不得覆盖已有 draft.json。
 - 普通业务用户优先填写 `填写表格.csv` 的“请填写”列，不要求其整段编辑 `draft.json`。
+- `填写表格-旧版.csv` 已弃用，仅保留历史完整字段，不读取其中的修改。
+- 包装、重量、箱规和单箱数量必须来自接口或用户明确确认；不得根据商品名称、测试数据或示例值猜测。
+- 包装参考选项默认只展示不代入，Skill 必须持续补问到全部必填字段有效或用户取消。
 
 ## 认证前置
 
@@ -51,7 +54,8 @@ opscli auth token status
 读取 `references/draft-workflow.md`，然后按用户状态执行：
 
 - 新建试算：确认站点、平台和海关类目，生成草稿包。
-- 继续已有草稿：先 `show` 查看，再以草稿目录运行 `validate`。
+- 继续已有草稿：先 `show` 查看，再读取 `填写表格.csv`，分轮补齐仍为空或无效的必填字段。
+- 每轮最多询问 3–5 个字段，保留已确认值；连续补充期间只更新并读取 CSV，不重复执行认证、`show`、下拉查询或 `validate`；全部必填字段有效后只运行一次 `validate`。
 - 校验失败：按项目规则提交反馈，只解释最关键的 3–5 项并指导修改 CSV。
 - 校验通过：等待用户明确确认后才执行 `submit`。
 
@@ -59,10 +63,10 @@ opscli auth token status
 
 读取 `references/result-workflow.md`，然后按目标执行：
 
-- 查询明确任务：使用 `detail`。
+- 查询明确任务：只执行一次普通 `detail`，直接采用 CLI 输出。
 - 信息不足：使用 `list` 定位任务。
 - 复用已有任务：使用 `copy` 生成新的草稿目录。
-- 最终结果：保留 CLI 返回的所有方案列和主要费用行，并标出推荐方案。
+- 最终结果：保留 CLI 返回的全部费用方案和线上详情链接，默认忽略成本输入、利润和毛利，不自动读取原始 JSON。
 
 ## 命令速查
 

@@ -114,3 +114,32 @@ def test_skill_names_in_members_handles_wheel_paths(tmp_path: Path):
 
     with zipfile.ZipFile(wheel) as zf:
         assert skill_names_in_members(zf.namelist()) == {"ops-core"}
+
+
+def test_ops_feedback_query_is_internal_only():
+    templates_dir = Path("opscli/skills/templates")
+
+    assert "ops-feedback-query" in selected_skill_names(
+        profile="internal",
+        artifact="wheel",
+        templates_dir=templates_dir,
+    )
+    for profile, artifact in (
+        ("python-release", "wheel"),
+        ("python-release", "sdist"),
+        ("binary-minimal", "binary"),
+        ("binary-full", "binary"),
+    ):
+        assert "ops-feedback-query" not in selected_skill_names(
+            profile=profile,
+            artifact=artifact,
+            templates_dir=templates_dir,
+        )
+
+
+def test_ops_feedback_query_files_are_not_collected_for_binaries():
+    templates_dir = Path("opscli/skills/templates")
+
+    for profile in ("binary-minimal", "binary-full"):
+        datas = collect_skill_datas(profile=profile, templates_dir=templates_dir)
+        assert all("ops-feedback-query" not in source for source, _destination in datas)

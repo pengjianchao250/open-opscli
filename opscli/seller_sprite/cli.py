@@ -94,9 +94,22 @@ def listing_analysis_result(
 
 
 @app.command("job-status")
-def job_status(job_id: str = typer.Argument(..., help="任务 ID")) -> None:
-    """读取卖家精灵任务结果。"""
-    payload = SellerSpriteRemoteAdapter().job_status(job_id)
+def job_status(
+    job_id: str = typer.Argument(..., help="任务 ID"),
+    wait_seconds: int = typer.Option(0, "--wait-seconds", min=0, max=30, help="等待任务终态的秒数，范围 0 到 30"),
+) -> None:
+    """读取单个卖家精灵任务结果。"""
+    payload = SellerSpriteRemoteAdapter().job_status(job_id, wait_seconds=wait_seconds)
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@app.command("jobs-status")
+def jobs_status(
+    job_ids: list[str] = typer.Argument(..., help="一个或多个任务 ID"),
+    wait_seconds: int = typer.Option(0, "--wait-seconds", min=0, max=30, help="等待任务终态的秒数，范围 0 到 30"),
+) -> None:
+    """按输入顺序批量读取卖家精灵任务结果。"""
+    payload = SellerSpriteRemoteAdapter().jobs_status(job_ids, wait_seconds=wait_seconds)
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 

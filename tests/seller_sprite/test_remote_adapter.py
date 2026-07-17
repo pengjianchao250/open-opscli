@@ -164,7 +164,7 @@ def test_remote_adapter_maps_listing_analysis_tools():
 
 
 
-def test_remote_adapter_maps_job_status_and_export_tools():
+def test_remote_adapter_job_status_forwards_default_wait_seconds():
     config_client = FakeConfigClient()
     created_clients = []
 
@@ -179,16 +179,106 @@ def test_remote_adapter_maps_job_status_and_export_tools():
     )
 
     status = adapter.job_status("job-1")
-    export = adapter.export("job-1")
 
     assert status["data"]["tool"] == "seller_sprite_job_status"
-    assert status["data"]["arguments"] == {"job_id": "job-1"}
+    assert status["data"]["arguments"] == {"job_id": "job-1", "wait_seconds": 0}
+    assert created_clients[0].calls == [
+        ("seller_sprite_job_status", {"job_id": "job-1", "wait_seconds": 0})
+    ]
+
+
+def test_remote_adapter_job_status_forwards_explicit_wait_seconds():
+    config_client = FakeConfigClient()
+    created_clients = []
+
+    def make_remote_client(url: str):
+        client = FakeRemoteClient(url)
+        created_clients.append(client)
+        return client
+
+    adapter = SellerSpriteRemoteAdapter(
+        config_client=config_client,
+        remote_client_factory=make_remote_client,
+    )
+
+    status = adapter.job_status("job-1", wait_seconds=12)
+
+    assert status["data"]["arguments"] == {"job_id": "job-1", "wait_seconds": 12}
+
+
+def test_remote_adapter_jobs_status_preserves_job_id_order_and_default_wait():
+    config_client = FakeConfigClient()
+    created_clients = []
+
+    def make_remote_client(url: str):
+        client = FakeRemoteClient(url)
+        created_clients.append(client)
+        return client
+
+    adapter = SellerSpriteRemoteAdapter(
+        config_client=config_client,
+        remote_client_factory=make_remote_client,
+    )
+
+    status = adapter.jobs_status(["job-3", "job-1", "job-2"])
+
+    assert status["data"]["tool"] == "seller_sprite_jobs_status"
+    assert status["data"]["arguments"] == {
+        "job_ids": ["job-3", "job-1", "job-2"],
+        "wait_seconds": 0,
+    }
+    assert created_clients[0].calls == [
+        (
+            "seller_sprite_jobs_status",
+            {
+                "job_ids": ["job-3", "job-1", "job-2"],
+                "wait_seconds": 0,
+            },
+        )
+    ]
+
+
+def test_remote_adapter_jobs_status_forwards_explicit_wait_seconds():
+    config_client = FakeConfigClient()
+    created_clients = []
+
+    def make_remote_client(url: str):
+        client = FakeRemoteClient(url)
+        created_clients.append(client)
+        return client
+
+    adapter = SellerSpriteRemoteAdapter(
+        config_client=config_client,
+        remote_client_factory=make_remote_client,
+    )
+
+    status = adapter.jobs_status(["job-2", "job-1"], wait_seconds=30)
+
+    assert status["data"]["arguments"] == {
+        "job_ids": ["job-2", "job-1"],
+        "wait_seconds": 30,
+    }
+
+
+def test_remote_adapter_maps_export_tool():
+    config_client = FakeConfigClient()
+    created_clients = []
+
+    def make_remote_client(url: str):
+        client = FakeRemoteClient(url)
+        created_clients.append(client)
+        return client
+
+    adapter = SellerSpriteRemoteAdapter(
+        config_client=config_client,
+        remote_client_factory=make_remote_client,
+    )
+
+    export = adapter.export("job-1")
+
     assert export["data"]["tool"] == "seller_sprite_export"
     assert export["data"]["arguments"] == {"job_id": "job-1"}
-    assert [client.calls[0][0] for client in created_clients] == [
-        "seller_sprite_job_status",
-        "seller_sprite_export",
-    ]
+    assert created_clients[0].calls == [("seller_sprite_export", {"job_id": "job-1"})]
 
 
 def test_remote_adapter_preserves_explicit_output_dir_and_job_id():

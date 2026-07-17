@@ -14,6 +14,7 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .skill-dev-loop/
+.zcode/plans/
 
 # 虚拟环境
 .venv/

@@ -239,6 +239,134 @@ def test_asin_data_fetch_file_uses_report_client(monkeypatch, tmp_path):
     assert metric["artifact_uri_count"] == 1
 
 
+def test_asin_data_yicopy_keyword_engine_returns_rendered_result(monkeypatch, tmp_path):
+    """MCP yicopy 工具应返回渲染结果并可写本地输出文件。"""
+
+    calls = {}
+
+    class DummyEngine:
+        async def run(self, sources, options):
+            calls["sources"] = sources
+            calls["options"] = options
+            return {
+                "status": "succeeded",
+                "keywordRows": [
+                    {
+                        "keyword": "wireless mouse",
+                        "titleFrequency": 0,
+                        "bulletsFrequency": 0,
+                        "totalFrequency": 0,
+                    }
+                ],
+                "summary": {"asinCount": 1, "keywordReverseCount": 1},
+            }
+
+    from opscli.asin_data.services import yicopy_keyword_engine as engine_module
+
+    monkeypatch.setattr(engine_module, "YicopyKeywordEngine", lambda: DummyEngine())
+    output_path = tmp_path / "yicopy.json"
+
+    result = _run(
+        asin_data_tools.asin_data_yicopy_keyword_engine(
+            asin="B0TEST1234",
+            result_format="keyword-reverse",
+            max_prefixes_per_asin=1,
+            output_path=str(output_path),
+        )
+    )
+
+    assert result["success"] is True
+    data = result["data"]
+    assert data["status"] == "succeeded"
+    assert data["result"] == [
+        {
+            "keyword": "wireless mouse",
+            "titleFrequency": 0,
+            "bulletsFrequency": 0,
+            "totalFrequency": 0,
+        }
+    ]
+    assert data["output_file"] == str(output_path)
+    assert data["metadata"]["protocol"] == "asin_data_ai_response"
+    assert data["metadata"]["tool"] == "asin_data_yicopy_keyword_engine"
+    assert data["metadata"]["data_scope"] == "yicopy_keyword_reverse"
+    assert data["metadata"]["request"]["asin"] == "B0TEST1234"
+    assert data["run"]["output_dir"] == output_path.parent.as_posix()
+    assert data["summary"]["keywordReverseCount"] == 1
+    item = data["items"][0]
+    assert item["asin"] == "B0TEST1234"
+    assert item["artifacts"][0]["file_key"] == "yicopy_keyword_reverse"
+    assert item["datasets"][0]["source_key"] == "yicopy_keyword_reverse"
+    assert item["datasets"][0]["preview_rows"][0]["keyword"] == "wireless mouse"
+    assert data["diagnostics"] == []
+    assert json.loads(output_path.read_text(encoding="utf-8")) == data["result"]
+    assert calls["sources"] == ["B0TEST1234"]
+    assert calls["options"].max_prefixes_per_asin == 1
+
+
+def test_asin_data_category_top_uses_service(monkeypatch):
+    calls = {}
+
+    class DummyService:
+        def __init__(self, **kwargs):
+            calls["service_kwargs"] = kwargs
+
+        def run(self, **kwargs):
+            calls["run_kwargs"] = kwargs
+            return {
+                "success": True,
+                "metadata": {"protocol": "asin_data_ai_response", "tool": "asin_data_category_top"},
+                "run": {"run_id": "run-1"},
+                "summary": {"asin_count": 1},
+                "items": [
+                    {
+                        "asin": "B0TEST1234",
+                        "artifacts": [{"file_key": "category_top_json", "uri": "https://example.oss/asin-data/category-top.json"}],
+                        "datasets": [],
+                        "diagnostics": [],
+                    }
+                ],
+                "diagnostics": [],
+            }
+
+    from opscli.asin_data.services import category_top as category_top_module
+
+    monkeypatch.setattr(asin_data_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+    monkeypatch.setattr(asin_data_tools, "_build_auth_client", lambda session_id, jwt: "auth-client")
+    monkeypatch.setattr(category_top_module, "AsinCategoryTopService", DummyService)
+
+    result = _run(
+        asin_data_tools.asin_data_category_top(
+            category="Bed Frames",
+            date_from="2026-07-01",
+            date_to="2026-07-13",
+            limit=5,
+            site="US",
+            upload=True,
+            enrich=True,
+            return_content=False,
+            output_dir="output/asin-data",
+            run_id="run-1",
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["metadata"]["protocol"] == "asin_data_ai_response"
+    assert result["data"]["items"][0]["artifacts"][0]["uri"] == "https://example.oss/asin-data/category-top.json"
+    assert calls["run_kwargs"] == {
+        "category": "Bed Frames",
+        "date_from": "2026-07-01",
+        "date_to": "2026-07-13",
+        "limit": 5,
+        "site": "US",
+        "output_dir": "output/asin-data",
+        "run_id": "run-1",
+        "upload": True,
+        "enrich": True,
+        "return_content": False,
+    }
+
+
 def test_asin_data_registers_all_tools():
     registered = []
 
@@ -254,6 +382,8 @@ def test_asin_data_registers_all_tools():
 
     assert registered == [
         "asin_data_live_data",
+        "asin_data_category_top",
         "asin_data_fetch_file",
         "asin_data_report_url",
+        "asin_data_yicopy_keyword_engine",
     ]

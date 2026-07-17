@@ -1,6 +1,7 @@
 import asyncio
 
 import httpx
+import pytest
 import respx
 from fastmcp import Client
 
@@ -10,6 +11,15 @@ from opscli.mcp.tools.auth import auth_login_poll
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+@pytest.fixture(autouse=True)
+def _allow_all_tools_without_local_credentials(monkeypatch):
+    """注册契约测试不得读取真实本地凭证或受 stdio 权限状态影响。"""
+    async def allow_all():
+        return None
+
+    monkeypatch.setattr("opscli.mcp.permissions._resolve_allowed_tools", allow_all)
 
 
 def test_mcp_exposes_expected_tools():
@@ -56,15 +66,32 @@ def test_seller_sprite_internal_controls_are_not_exposed():
     tools = _run(scenario())
     names = [tool.name for tool in tools]
     run_tool = next(tool for tool in tools if tool.name == "seller_sprite_run")
-    properties = (run_tool.inputSchema or {}).get("properties", {})
+    job_status_tool = next(tool for tool in tools if tool.name == "seller_sprite_job_status")
+    jobs_status_tool = next(tool for tool in tools if tool.name == "seller_sprite_jobs_status")
+    run_properties = (run_tool.inputSchema or {}).get("properties", {})
+    job_status_schema = job_status_tool.inputSchema or {}
+    jobs_status_schema = jobs_status_tool.inputSchema or {}
+    job_status_properties = job_status_schema.get("properties", {})
+    jobs_status_properties = jobs_status_schema.get("properties", {})
 
     assert "seller_sprite_run" in names
     assert "seller_sprite_listing_analysis_submit" in names
     assert "seller_sprite_listing_analysis_status" in names
     assert "seller_sprite_listing_analysis_result" in names
+    assert "seller_sprite_job_status" in names
+    assert "seller_sprite_jobs_status" in names
     assert "seller_sprite_start" not in names
-    assert "mode" not in properties
-    assert "async_mode" not in properties
+    assert "mode" not in run_properties
+    assert "async_mode" not in run_properties
+    assert "wait" not in run_properties
+    assert "wait_seconds" not in run_properties
+    assert set(job_status_properties) == {"job_id", "wait_seconds"}
+    assert job_status_properties["wait_seconds"]["default"] == 0
+    assert job_status_schema["required"] == ["job_id"]
+    assert set(jobs_status_properties) == {"job_ids", "wait_seconds"}
+    assert jobs_status_properties["job_ids"]["items"]["type"] == "string"
+    assert jobs_status_properties["wait_seconds"]["default"] == 0
+    assert jobs_status_schema["required"] == ["job_ids"]
 
 
 def test_context_parameter_is_not_exposed_in_tool_schema():

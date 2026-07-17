@@ -1,249 +1,226 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://opscli.local/schemas/ops-dataset-query/query_plan.schema.json",
-  "title": "ops-dataset-query Query Plan",
+  "title": "ops-dataset-query Model Query Plan",
   "type": "object",
   "required": [
-    "user_query",
-    "intent",
-    "dataset",
-    "query",
-    "validation",
-    "execution_policy"
+    "contract",
+    "data_state",
+    "metadata_version",
+    "status",
+    "model_view",
+    "answer_contract",
+    "execution_ref"
   ],
   "properties": {
-    "user_query": {
-      "type": "string",
-      "description": "用户原始问题"
+    "contract": {"const": "query_plan_model_contract_v2"},
+    "data_state": {"type": "string"},
+    "metadata_source": {
+      "description": "元数据来源形状：skill_local（updater 刷新，data_state=ready）/ published_bundle（技能广场发布包，无 data_state 字段）；blocked 时为空串",
+      "type": "string"
     },
-    "intent": {
-      "type": "object",
-      "required": ["intent_id", "domain", "user_intent"],
-      "properties": {
-        "intent_id": {
-          "type": "string"
-        },
-        "domain": {
-          "type": "string"
-        },
-        "user_intent": {
-          "type": "string"
-        },
-        "confidence": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "matched_keywords": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "additionalProperties": false
+    "metadata_version": {"type": "string"},
+    "status": {
+      "enum": ["planned", "clarify_required", "blocked"]
     },
-    "dataset": {
+    "model_view": {
       "type": "object",
-      "required": ["standard_name"],
+      "required": [
+        "dataset_name_zh",
+        "dimensions",
+        "metrics",
+        "platform_semantic_members",
+        "platform_filter_state",
+        "clarification_reason_codes",
+        "clarification_messages_zh",
+        "next_action"
+      ],
       "properties": {
-        "standard_name": {
+        "dataset_name_zh": {"type": "string"},
+        "dimensions": {"$ref": "#/$defs/string_array"},
+        "metrics": {"$ref": "#/$defs/string_array"},
+        "platform_semantic_members": {
+          "description": "请求语义的中文标签（用户可见层只允许中文）",
+          "$ref": "#/$defs/string_array"
+        },
+        "platform_filter_state": {
+          "enum": ["unknown", "not_requested", "requires_permission_enum", "resolved", "blocked"]
+        },
+        "clarification_reason_codes": {"$ref": "#/$defs/string_array"},
+        "clarification_messages_zh": {"$ref": "#/$defs/string_array"},
+        "next_action": {"type": "string"},
+        "time_scope_zh": {
+          "description": "本地解析的时间口径中文描述（含对比期与默认口径提示）",
           "type": "string"
         },
-        "table_id": {
-          "type": ["integer", "null"]
+        "recommended_dimensions": {
+          "description": "无点名维度时的系统推荐（需向用户确认后采用）",
+          "$ref": "#/$defs/string_array"
         },
-        "dataset_alias": {
-          "type": ["string", "null"]
+        "recommended_metrics": {
+          "description": "无点名指标时的系统推荐（需向用户确认后采用）",
+          "$ref": "#/$defs/string_array"
         },
-        "dataset_name": {
-          "type": ["string", "null"]
-        },
-        "execution_dataset": {
-          "type": ["string", "null"],
-          "description": "当业务意图不直接对应独立数据集时，实际承接查询的数据集"
-        },
-        "grain": {
-          "type": ["string", "null"]
-        },
-        "primary_rule": {
-          "type": ["string", "null"]
-        }
-      },
-      "additionalProperties": false
-    },
-    "query": {
-      "type": "object",
-      "required": ["dimensions", "metrics", "filters"],
-      "properties": {
-        "dimensions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/field_ref"
-          }
-        },
-        "metrics": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/metric_ref"
-          }
-        },
-        "filters": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/filter_ref"
-          }
-        },
-        "data_comparison": {
-          "type": ["object", "null"]
-        },
-        "order_by": {
+        "dataset_candidates_zh": {
+          "description": "澄清态候选数据集卡片：中文名 + 命中原因，供带选项提问",
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["field"],
+            "required": ["name_zh", "reason_zh"],
             "properties": {
-              "field": {
-                "type": "string"
-              },
-              "desc": {
-                "type": "boolean"
-              }
+              "name_zh": {"type": "string"},
+              "reason_zh": {"type": "string"}
             },
             "additionalProperties": false
           }
         },
-        "limit": {
-          "type": ["integer", "null"],
-          "minimum": 1
+        "unknown_requested_fields": {
+          "description": "点名但未匹配到的字段回显",
+          "$ref": "#/$defs/string_array"
         },
-        "offset": {
-          "type": ["integer", "null"],
-          "minimum": 0
+        "field_suggestions_zh": {
+          "description": "未知字段的近似候选建议（你是不是想要）",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["requested", "candidates_zh"],
+            "properties": {
+              "requested": {"type": "string"},
+              "candidates_zh": {"$ref": "#/$defs/string_array"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "recovery_command": {
+          "description": "仅 status=blocked 且需要刷新元数据时出现：可直接执行的恢复命令原文",
+          "type": "string"
+        },
+        "recovery_hint_zh": {
+          "description": "与 recovery_command 配套的中文恢复指引",
+          "type": "string"
+        },
+        "recovery_state": {
+          "description": "刷新恢复状态：refresh_in_progress（后台刷新中，sleep 后重跑）/ refresh_failed（需手动刷新）",
+          "type": "string"
         }
       },
       "additionalProperties": false
     },
-    "validation": {
+    "answer_contract": {
       "type": "object",
       "required": [
-        "field_existence_checked",
-        "select_column_permission_checked",
-        "formula_metric_checked",
-        "hard_constraints_checked"
+        "required_disclosures_zh",
+        "forbidden_outputs_zh",
+        "technical_identifiers_user_visible",
+        "user_visible_language"
       ],
       "properties": {
-        "field_existence_checked": {
-          "type": "boolean"
-        },
-        "select_column_permission_checked": {
-          "type": "boolean"
-        },
-        "formula_metric_checked": {
-          "type": "boolean"
-        },
-        "hard_constraints_checked": {
-          "type": "boolean"
-        },
-        "requires_clarification": {
-          "type": "boolean"
-        },
-        "clarification_reasons": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
+        "required_disclosures_zh": {"$ref": "#/$defs/string_array"},
+        "forbidden_outputs_zh": {"$ref": "#/$defs/string_array"},
+        "technical_identifiers_user_visible": {"const": false},
+        "user_visible_language": {"const": "zh-CN"}
       },
       "additionalProperties": false
     },
-    "execution_policy": {
+    "execution_ref": {
       "type": "object",
-      "required": ["query_entry", "allow_execute"],
+      "required": ["user_visible"],
       "properties": {
-        "query_entry": {
-          "type": "string",
-          "enum": ["query_simple", "query_chart", "query_build_and_run"]
+        "user_visible": {"const": false},
+        "dataset_alias": {"type": ["string", "null"]},
+        "table_id": {"type": ["string", "integer", "null"]},
+        "platform_component_alias": {"type": ["string", "null"]},
+        "platform_component_table_id": {"type": ["string", "integer", "null"]},
+        "resolved_platform_values": {"$ref": "#/$defs/string_array"},
+        "platform_semantic_keys": {
+          "description": "平台语义成员的内部枚举名（构造引用，不向用户展示）",
+          "$ref": "#/$defs/string_array"
         },
-        "allow_execute": {
-          "type": "boolean"
+        "platform_enum_source": {
+          "description": "枚举值来源：auto_enum_service 表示规划器已自动枚举回灌",
+          "type": "string"
         },
-        "reason_if_blocked": {
-          "type": ["string", "null"]
+        "platform_enum_command": {
+          "description": "待枚举时可直接执行的枚举命令原文",
+          "type": "string"
         },
-        "feedback_required": {
-          "type": "boolean"
-        }
+        "platform_enum_return_hint_zh": {"type": "string"},
+        "dimensions": {"$ref": "#/$defs/execution_fields"},
+        "metrics": {"$ref": "#/$defs/execution_fields"},
+        "date_fields": {
+          "description": "授权日期字段引用（时间过滤与 dataComparison 的构造依据，无条件输出）",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["field_name", "label_zh"],
+            "properties": {
+              "field_name": {"type": "string"},
+              "label_zh": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "filter_components": {
+          "description": "可用显式筛选组件引用（部门/国家等非平台筛选的合规枚举入口）",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["field_name", "label_zh", "component_dataset_alias"],
+            "properties": {
+              "field_name": {"type": "string"},
+              "label_zh": {"type": "string"},
+              "component_dataset_alias": {"type": "string"},
+              "component_table_id": {"type": ["string", "integer"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "time_scope": {
+          "description": "本地解析的绝对日期窗口（Asia/Shanghai）",
+          "type": "object",
+          "required": ["start", "end", "is_default"],
+          "properties": {
+            "start": {"type": "string"},
+            "end": {"type": "string"},
+            "is_default": {"type": "boolean"},
+            "comparison_type": {"type": ["string", "null"]},
+            "comparison_start": {"type": ["string", "null"]},
+            "comparison_end": {"type": ["string", "null"]}
+          },
+          "additionalProperties": false
+        },
+        "query_template": {
+          "description": "可直接填充的正式查询 payload 骨架（实测形态）",
+          "type": "object"
+        },
+        "query_template_fill_rules_zh": {"type": "string"}
       },
       "additionalProperties": false
     }
   },
   "$defs": {
-    "field_ref": {
-      "type": "object",
-      "required": ["field"],
-      "properties": {
-        "field": {
-          "type": "string"
-        },
-        "verbose_name": {
-          "type": ["string", "null"]
-        },
-        "alias": {
-          "type": ["string", "null"]
-        }
-      },
-      "additionalProperties": false
+    "string_array": {
+      "type": "array",
+      "items": {"type": "string"}
     },
-    "metric_ref": {
-      "type": "object",
-      "required": ["field"],
-      "properties": {
-        "field": {
-          "type": "string"
+    "execution_fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field_name", "label_zh", "is_formula", "is_snapshot"],
+        "properties": {
+          "field_name": {"type": "string"},
+          "label_zh": {"type": "string"},
+          "is_formula": {"type": "boolean"},
+          "is_snapshot": {"type": "boolean"},
+          "aggregation_policy": {"type": "string"},
+          "selection_source": {
+            "description": "recommended 表示系统推荐字段（用户未点名，采用前须确认）",
+            "type": "string"
+          }
         },
-        "verbose_name": {
-          "type": ["string", "null"]
-        },
-        "alias": {
-          "type": ["string", "null"]
-        },
-        "aggregation": {
-          "type": ["string", "null"]
-        },
-        "is_formula": {
-          "type": "boolean"
-        },
-        "expression_source": {
-          "type": ["string", "null"],
-          "description": "summary_expression/detail_expression"
-        }
-      },
-      "additionalProperties": false
-    },
-    "filter_ref": {
-      "type": "object",
-      "required": ["field", "operator", "value"],
-      "properties": {
-        "field": {
-          "type": "string"
-        },
-        "operator": {
-          "type": "string"
-        },
-        "value": {},
-        "source": {
-          "type": ["string", "null"],
-          "description": "user/default/context/component"
-        }
-      },
-      "additionalProperties": false
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": false

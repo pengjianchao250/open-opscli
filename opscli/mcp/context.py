@@ -85,6 +85,23 @@ def get_current_api_key() -> str | None:
     return None
 
 
+def get_current_auth_mode() -> str | None:
+    """获取中间件已验证的认证模式（remote 或 fixed）。"""
+    ctx = mcp_request_ctx.get()
+    if ctx:
+        auth_mode = ctx.get("auth_mode")
+        if auth_mode:
+            return str(auth_mode)
+
+    scope = _get_scope_from_mcp_request_ctx()
+    if scope:
+        auth_mode = scope.get("mcp_auth_mode")
+        if auth_mode:
+            return str(auth_mode)
+
+    return None
+
+
 def get_current_user_id() -> str | None:
     """获取当前请求关联的用户 ID（来自 OPS 后端校验接口）。
 

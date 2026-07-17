@@ -106,9 +106,19 @@ class SellerSpriteRemoteAdapter(RemoteMcpAdapter):
             {"job_id": job_id, "export_format": export_format},
         )
 
-    def job_status(self, job_id: str) -> dict[str, Any]:
-        """查询卖家精灵远端任务状态。"""
-        return self.call_tool("seller_sprite_job_status", {"job_id": job_id})
+    def job_status(self, job_id: str, wait_seconds: int = 0) -> dict[str, Any]:
+        """查询单个卖家精灵远端任务状态。"""
+        return self.call_tool(
+            "seller_sprite_job_status",
+            {"job_id": job_id, "wait_seconds": wait_seconds},
+        )
+
+    def jobs_status(self, job_ids: list[str], wait_seconds: int = 0) -> dict[str, Any]:
+        """按输入顺序批量查询卖家精灵远端任务状态。"""
+        return self.call_tool(
+            "seller_sprite_jobs_status",
+            {"job_ids": job_ids, "wait_seconds": wait_seconds},
+        )
 
     def export(self, job_id: str) -> dict[str, Any]:
         """读取卖家精灵远端任务导出信息。"""

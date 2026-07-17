@@ -11,7 +11,10 @@ import httpx
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.config import DEFAULT_OUTPUT_DIR
-from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError
+from opscli.seller_sprite.domain.exceptions import (
+    SellerSpriteApiError,
+    SellerSpriteAuthenticationError,
+)
 
 
 DEFAULT_USER_AGENT = (
@@ -95,7 +98,7 @@ class SellerSpriteApiClient:
                 headers=self._browser_headers(referer=LOGIN_PAGE_URL),
             )
         if response.status_code >= 400:
-            raise SellerSpriteApiError(
+            raise SellerSpriteAuthenticationError(
                 "卖家精灵登录失败",
                 status_code=response.status_code,
                 response_excerpt=response.text[:1000],

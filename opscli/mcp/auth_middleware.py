@@ -139,8 +139,9 @@ class ApiKeyAuthMiddleware:
             if not user_info:
                 await self._send_401(scope, send, reason="invalid_api_key")
                 return
-            # 将用户信息注入 scope，供后续 Tool 函数读取
+            # 将用户信息和已验证认证模式注入 scope，供后续 Tool 函数读取。
             scope["mcp_api_key"] = token
+            scope["mcp_auth_mode"] = "remote"
             scope["mcp_user_id"] = user_info.get("user_id")
             scope["mcp_user_email"] = user_info.get("email")
             # 工具权限白名单：新后端 verify-key 返回 allowed_tools 字段；
@@ -152,6 +153,7 @@ class ApiKeyAuthMiddleware:
         elif self._api_key and token == self._api_key:
             # 固定 API Key 模式（向后兼容）
             scope["mcp_api_key"] = token
+            scope["mcp_auth_mode"] = "fixed"
         else:
             await self._send_401(scope, send, reason="invalid_api_key")
             return
@@ -161,6 +163,7 @@ class ApiKeyAuthMiddleware:
 
         ctx_token = mcp_request_ctx.set({
             "api_key": token,
+            "auth_mode": scope.get("mcp_auth_mode"),
             "user_id": scope.get("mcp_user_id"),
             "email": scope.get("mcp_user_email"),
             # None=固定 Key 模式/旧后端（全量放行）；list=按白名单过滤

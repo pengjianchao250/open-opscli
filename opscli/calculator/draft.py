@@ -12,13 +12,18 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from opscli.calculator.fields import FIELD_BY_KEY, FIELD_SPECS
+from opscli.calculator.fields import FIELD_BY_KEY, FIELD_SPECS, FieldSpec
 from opscli.calculator.models import read_json_file, write_json_file
 
 DRAFT_JSON_FILENAME = "draft.json"
 DRAFT_CSV_FILENAME = "填写表格.csv"
+LEGACY_DRAFT_CSV_FILENAME = "填写表格-旧版.csv"
 OPTIONS_CACHE_FILENAME = ".dropdown-cache.json"
 WEB_CALCULATOR_URL = "https://bi.xenkee.com/#/newProductCalculator"
+# Amazon.sg 官方 FBA 费率资料，用于生成单件商品包装参考说明。
+_AMAZON_SG_FBA_FEES_URL = "https://m.media-amazon.com/images/G/65/SG3P/FBA_fulfilment_fees_for_Amazon.sg_orders.pdf"
+# Amazon 美国站 FBA 入库箱规公告，用于生成外箱合规上限提示。
+_AMAZON_US_FBA_BOX_URL = "https://sellercentral.amazon.com/seller-forums/discussions/t/dae82165-50b2-4b52-99d9-a7e7db80caec"
 DRAFT_CSV_COLUMNS = ("分组", "是否必填", "字段", "中文说明", "当前值", "请填写", "单位/格式", "示例", "备注")
 
 _NUMERIC_RE = re.compile(r"^[+-]?\d+(\.\d+)?$")
@@ -29,7 +34,24 @@ _ARRAY_FIELD_KEYS = {"platforms", "checkbox_stock", "two_zone_combine", "three_z
 _STRING_FIELD_KEYS = {"country_code", "department", "reference", "reference_value", "pick_up_province", "pick_up_city", "calc_method", "task_name"}
 _BOOL_TRUE_VALUES = {"1", "true", "yes", "y", "是"}
 _BOOL_FALSE_VALUES = {"0", "false", "no", "n", "否"}
+# 新草稿缺少试算方案或分区时，沿用页面默认选择。
+_DEFAULT_CALC_METHOD = "GROSS_PROFIT"
 _DEFAULT_CHECKBOX_STOCK = ["one_zone_all", "specify_part"]
+_DEFAULT_TWO_ZONE_COMBINE = ["zone_1_2"]
+# 当前只计算仓配费用，利润试算输入统一使用非零占位值，避免后端拒绝计算。
+_DEFAULT_COST_FIELD_KEYS = {
+    "product_price",
+    "gross_profit_percent",
+    "purchase_cost_with_tax",
+    "purchase_cost",
+    "tax_rate_percent",
+    "fee_percent",
+    "advertising_percent",
+    "marketing_percent",
+    "refund_percent",
+    "fixed_cost_percent",
+    "tariff_rate",
+}
 _BUILTIN_OPTIONS = {
     "calc_method": [("GROSS_PROFIT", "算毛利"), ("PRICING", "算定价")],
     "checkbox_stock": [("one_zone_all", "1区全部"), ("specify_part", "指定分区"), ("specify_stock", "指定仓库")],
@@ -90,13 +112,21 @@ def normalize_draft_data(data: dict[str, Any]) -> tuple[dict[str, Any], list[str
             number = float(value) if "." in value else int(value)
             normalized[key] = number
 
-    if not normalized.get("tariff_rate"):
-        normalized["tariff_rate"] = 25
-        notes.append("关税率未返回，已默认填 25。")
+    for key in _DEFAULT_COST_FIELD_KEYS:
+        normalized[key] = 1
+
+    if _is_empty(normalized.get("calc_method")):
+        normalized["calc_method"] = _DEFAULT_CALC_METHOD
+        notes.append("试算方案未返回，已默认选择算毛利。")
 
     if _is_empty(normalized.get("checkbox_stock")):
         normalized["checkbox_stock"] = list(_DEFAULT_CHECKBOX_STOCK)
         notes.append("备货区域未返回，已默认选择 1区全部、指定分区。")
+
+    country_code = str(normalized.get("country_code") or "").upper()
+    if country_code in {"US", "CA"} and _is_empty(normalized.get("two_zone_combine")):
+        normalized["two_zone_combine"] = list(_DEFAULT_TWO_ZONE_COMBINE)
+        notes.append("指定二区未返回，已默认选择美东+美西。")
 
     bi_message = normalized.get("bi_message")
     if bi_message:
@@ -154,12 +184,6 @@ def validate_draft_data(data: dict[str, Any]) -> list[ValidationIssue]:
             _validate_pickup_code(issues, field.key, value)
         if field.positive or field.percent:
             _validate_number(issues, field.key, value, field.positive, field.percent)
-
-    calc_method = data.get("calc_method")
-    if calc_method == "GROSS_PROFIT" and _is_empty(data.get("product_price")):
-        issues.append(ValidationIssue("product_price", "商品售价：当前试算方案为算毛利，必须填写。", "成本费用"))
-    if calc_method == "PRICING" and _is_empty(data.get("gross_profit_percent")):
-        issues.append(ValidationIssue("gross_profit_percent", "目标毛利率：当前试算方案为算定价，必须填写。", "成本费用"))
 
     stock_values = [
         _to_decimal(data.get("stock_qty_first_percent")) or Decimal("0"),
@@ -426,11 +450,16 @@ def _csv_remark(field_key: str, issue_by_field: dict[str, str], field_options: d
     return "；".join(parts)
 
 
-def build_draft_csv_text(data: dict[str, Any], field_options: dict[str, list[DraftOption]] | None = None) -> str:
-    """生成给业务用户填写的 CSV 表格文本。"""
+def _build_draft_csv_text(
+    data: dict[str, Any],
+    field_specs: tuple[FieldSpec, ...],
+    notice: str,
+    field_options: dict[str, list[DraftOption]] | None = None,
+) -> str:
+    """按指定字段生成 CSV 表格文本。"""
     issues = validate_draft_data(data)
     issue_by_field = {issue.field: issue.message for issue in issues}
-    indexed_fields = list(enumerate(FIELD_SPECS))
+    indexed_fields = list(enumerate(field_specs))
     indexed_fields.sort(key=lambda item: (0 if item[1].key in issue_by_field else 1, item[0]))
 
     output = io.StringIO()
@@ -439,7 +468,7 @@ def build_draft_csv_text(data: dict[str, Any], field_options: dict[str, list[Dra
     writer.writerow(
         {
             "分组": "说明",
-            "中文说明": "如果不想在本地编辑 CSV/JSON，也可以直接使用网页端新品计算器",
+            "中文说明": notice,
             "备注": WEB_CALCULATOR_URL,
         }
     )
@@ -460,10 +489,34 @@ def build_draft_csv_text(data: dict[str, Any], field_options: dict[str, list[Dra
     return output.getvalue()
 
 
+def build_draft_csv_text(data: dict[str, Any], field_options: dict[str, list[DraftOption]] | None = None) -> str:
+    """生成不含成本费用的新版业务填写表格。"""
+    # 成本字段仍保留在 draft.json 提交给后端，但不再暴露给业务用户填写。
+    visible_fields = tuple(field for field in FIELD_SPECS if field.group != "成本费用")
+    return _build_draft_csv_text(
+        data,
+        visible_fields,
+        "当前值仅来自接口或用户已确认数据，不会把示例自动写入；包装与箱规请按实物填写",
+        field_options,
+    )
+
+
+def build_legacy_draft_csv_text(data: dict[str, Any], field_options: dict[str, list[DraftOption]] | None = None) -> str:
+    """生成保留完整字段但已弃用的旧版填写表格。"""
+    return _build_draft_csv_text(
+        data,
+        FIELD_SPECS,
+        "旧版填写表格已弃用，仅保留历史完整字段；校验和提交不会读取本文件",
+        field_options,
+    )
+
+
 def write_draft_csv(package_dir: str | Path, data: dict[str, Any], field_options: dict[str, list[DraftOption]] | None = None) -> Path:
-    """写入 UTF-8 BOM CSV，方便 Excel/WPS 直接打开中文。"""
+    """写入新版和已弃用旧版 CSV，返回新版文件路径。"""
     csv_path = Path(package_dir) / DRAFT_CSV_FILENAME
     csv_path.write_text(build_draft_csv_text(data, field_options), encoding="utf-8-sig")
+    legacy_csv_path = Path(package_dir) / LEGACY_DRAFT_CSV_FILENAME
+    legacy_csv_path.write_text(build_legacy_draft_csv_text(data, field_options), encoding="utf-8-sig")
     return csv_path
 
 
@@ -676,7 +729,15 @@ def load_draft_data(
 
 
 def build_usage_markdown(draft_path: str, notes: list[str] | None = None) -> str:
-    """生成草稿包使用说明。"""
+    """生成包含包装参考的草稿使用说明。
+
+    Args:
+        draft_path: 草稿目录或 draft.json 路径。
+        notes: 需要附加到说明末尾的系统提示。
+
+    Returns:
+        可直接写入使用说明文件的 Markdown 文本。
+    """
     draft_path_obj = Path(draft_path)
     package_path = draft_path_obj.parent if draft_path_obj.name == DRAFT_JSON_FILENAME else draft_path_obj
     lines = [
@@ -685,9 +746,29 @@ def build_usage_markdown(draft_path: str, notes: list[str] | None = None) -> str
         "## 推荐填写方式",
         "",
         f"1. 打开 `{DRAFT_CSV_FILENAME}`。",
-        "2. 只填写“请填写”这一列；省份、城市、试算方案、备货区域、分区和仓库可直接填中文名称，CLI 会自动转换为接口 key/code。",
+        "2. 只填写“请填写”这一列；省份、城市、备货区域、分区和仓库可直接填中文名称，CLI 会自动转换为接口 key/code。",
         f"3. 保存后执行 `opscli calculator validate {package_path}`。",
         f"4. 校验通过后执行 `opscli calculator submit {package_path}`。",
+        f"5. `{LEGACY_DRAFT_CSV_FILENAME}` 已弃用，仅用于保留历史完整字段，不参与校验和提交。",
+        "",
+        "## 单件 SKU 包装参考",
+        "",
+        "以下是 Amazon.sg 官方商品示例，只用于帮助理解尺寸量级，不会自动写入；FBA 费用应以目标站点规则和实测数据为准：",
+        "",
+        "- 按实物填写（推荐）。",
+        "- SD 卡：3.2 × 2.4 × 0.2 cm / 0.03 kg。",
+        "- 图书：24 × 16.2 × 3.5 cm / 0.15 kg。",
+        "- 电子玩具：37 × 15.4 × 7 cm / 0.49 kg。",
+        f"- 官方资料：{_AMAZON_SG_FBA_FEES_URL}",
+        "",
+        "## FBA 入库外箱参考",
+        "",
+        "- 按实际装箱填写（推荐）。",
+        "- 美国 FBA 普通入库箱合规上限：91.44 × 63.5 × 63.5 cm / 22.68 kg；这是上限提示，不会自动写入。",
+        "- 单箱数量没有通用默认值，必须按供应商实际装箱确认。",
+        f"- 官方公告：{_AMAZON_US_FBA_BOX_URL}",
+        "",
+        "单件 SKU 包装用于 FBA 配送费用，入库外箱用于头程运输费用，两者不能混用。",
         "",
         "## 不想本地填写？",
         "",
@@ -744,6 +825,9 @@ def build_summary_text(data: dict[str, Any]) -> str:
 def prepare_submit_payload(data: dict[str, Any]) -> dict[str, Any]:
     """生成提交 payload，提交前处理与前端一致的派生字段。"""
     payload = copy.deepcopy(data)
+    # 兼容已生成的旧草稿：提交前覆盖成本字段，避免历史 0 值导致后端计算失败。
+    for key in _DEFAULT_COST_FIELD_KEYS:
+        payload[key] = 1
     if payload.get("pick_up_province"):
         payload["pick_up_province_code"] = payload["pick_up_province"]
     if payload.get("pick_up_city"):

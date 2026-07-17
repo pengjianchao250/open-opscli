@@ -1,5 +1,83 @@
 # 待归档变更记录
 
+## 2026-07-16 calculator - 合并新品计算器简化分支
+
+**变更原因**：需要把 `feature/calculator-simplification` 的新品计算结果精简、多轮填写优化、FBA 包装参考、线上详情链接及 Polaris 默认启用配置合入当前 `feature/sellersprite`，同时保留当前分支已有的 SellerSprite 与 master 修复。
+**改动点**：完整合入计算器分支 10 个提交；代码、配置、Skill、测试和 Super Dev 文档均自动合并，仅对双方同时在顶部追加的变更记录进行并集处理，未改动计算器分支既定业务行为。
+**验证结果**：合并后的计算器相关文件与源分支逐文件对比无差异；生产 Python 文件 `py_compile` 通过；计算器 CLI、草稿和 Skill 聚焦回归为 `45 passed, 7 failed`，在源工作区复跑同样得到 `45 passed, 7 failed`，确认 7 项均为源分支已记录的旧契约基线失败；排除这 7 项后为 `45 passed, 7 deselected`；`git diff --check` 通过。
+**影响范围**：影响新品计算器草稿 CSV、字段校验、费用方案结果展示、Agent 多轮工作流、Skill 发行配置，以及 Polaris 默认启用状态；不改变当前分支的 SellerSprite 功能。
+**回滚方式**：回退本次合并提交；如需局部回滚，需同步回退 `opscli/calculator/`、新品计算器 Skill、manifest、认证默认配置、对应测试及 Super Dev 文档，避免代码与工作流契约不一致。
+---
+
+## 2026-07-16 seller_sprite - 合并远端 master 隔离认证与续查修复
+
+**变更原因**：当前 `feature/sellersprite` 已包含原子 MCP 所有权入队、多账号并行调度和有界状态续查，远端 `master` 新增 CLI/MCP 隔离认证兼容及 Listing Analysis Session 过期重登，需要合并两侧意图并消除重复实现冲突。
+**改动点**：保留通用任务立即入队、队列与 MCP 所有权同事务写入、多账号池及安全后台 Context；接入 `OpsCredentialBinding`，远端调用忽略旧客户端显式凭证并使用 API Key 隔离作用域，stdio 显式凭证仅以内存逐任务传递；保留 Listing Analysis 通用入口前置拒绝和三段式续查，同时纳入历史页及报告页 Session 过期自动重登；同步合并 Skill 认证说明和回归测试。
+**验证结果**：`python -m py_compile` 验证合并涉及的生产 Python 文件通过；`.venv\\Scripts\\python.exe -m pytest -q tests/mcp/test_ops_credentials.py tests/mcp/test_seller_sprite_tools.py tests/seller_sprite/test_accounts.py tests/seller_sprite/test_browser_route_worker.py tests/seller_sprite/test_remote_adapter.py tests/seller_sprite/test_task_queue_store.py tests/seller_sprite/test_task_scheduler.py tests/shared/test_mcp_api_key_auth.py` 通过，结果为 `201 passed`；`git diff --check` 通过。
+**影响范围**：影响 SellerSprite MCP/CLI 的 OPS 凭证绑定、普通异步任务提交与所有权记录、Listing Analysis 续查，以及多账号后台调度；不改变普通任务立即返回 `job_id` 后由状态工具有界续查的公开契约。
+**回滚方式**：回退本次合并提交；如需局部回滚，需成组回退 `ops_credentials.py`、SellerSprite MCP 工具、RemoteAdapter、Listing Analysis browser worker、相关 Skill 文档和测试，避免认证链路与任务持久化契约不一致。
+---
+
+## 2026-07-15 seller_sprite - 合并多账号调度与 MCP 多用户认证隔离
+
+**变更原因**：`feature/sellersprite` 的异步多账号池和 `master` 的逐任务认证隔离同时修改了 SellerSprite 队列、调度器与 MCP 入口，需要在保留两边能力的前提下解决合并冲突，并避免无效认证任务被账号池初始化长期阻塞。
+**改动点**：MCP 通用任务和 Listing Analysis 继续使用队列与所有权记录的原子持久化，并只保存 CredentialStore 作用域和提交用户；后台 worker 从空 Context 启动，执行时按任务恢复并校验 session/JWT；多账号池继续支持工作账号、冷备用、故障接替和会话回收；账号池初始化前增加排队任务认证预检，使缺凭证、服务重启丢失显式凭证、用户不匹配及 MCP 审计异常快速失败；多账号 CAS 成功/失败终态同步清除凭证引用。
+**验证结果**：核心账号、队列、调度器、MCP 工具及 API Key 认证组合回归 `139 passed`；新增 CAS 终态凭证清理后，队列与调度器回归 `52 passed`；账号池、账号事件、browser worker、MCP context 与认证中间件回归 `65 passed`；SellerSprite 全套 `170 passed, 2 failed`，两项失败均为既有 `seller-sprite-debug` 顶级命令未注册；变更模块 `py_compile` 通过。
+**影响范围**：影响 SellerSprite MCP 异步任务入队、逐任务 OPS 授权恢复、多账号池启动与终态凭证清理；业务请求参数和外部返回结构不变。
+**回滚方式**：回退本次 SellerSprite MCP 工具、队列 Store、TaskScheduler、账号测试与本条记录，并重新处理 `origin/master` 合并冲突。
+
+## 2026-07-15 calculator - 结果增加线上详情链接
+
+**变更原因**：费用方案结果需要提供对应 Polaris 线上页面入口，方便用户继续查看网页详情。
+**改动点**：`calculator detail` 在完整费用方案表后输出带 `task_code` 和代查标识的线上详情链接；同步新品计算器 Skill、Super Dev 文档和契约测试；不恢复原始 JSON、成本、利润或毛利提示。
+**验证结果**：详情命令聚焦测试 `2 passed`；新品计算器 Skill 契约测试 `12 passed`；`skill-creator` UTF-8 结构校验返回 `Skill is valid!`；`git diff --check` 无错误；Standards/Spec 双轴复审确认功能与文档一致，未恢复成本、利润、毛利或原始 JSON 提示。
+**影响范围**：仅影响新品计算器详情结果末尾提示，不改变 API 请求、费用表结构和显式 `--json` 行为。
+**回滚方式**：移除 `detail` 末尾线上链接并恢复对应 Skill、文档、测试和本条记录。
+---
+
+## 2026-07-15 calculator - 固化物流费用结果并精简多轮调用
+
+**变更原因**：新品计算器查看已完成任务仍会额外读取成本、利润和原始 JSON，多轮补充字段也会重复认证与校验，导致单轮等待约 1–2 分钟。
+**改动点**：`calculator detail` 默认只展示任务基本信息和完整 `allPlans` 物流费用表，使用固定渲染宽度避免窄终端省略表头和费用区间，并移除 Web 页面能力说明及原始 JSON 命令提示；新品计算器 Skill 改为同一连续任务只预检一次认证，补充字段期间只更新 CSV，全部必填后校验一次，并禁止普通结果查询自动使用 `--json` 或分析成本、利润、毛利；同步 Super Dev 架构、Proposal、任务和契约测试。
+**验证结果**：详情命令聚焦测试 `2 passed`；新品计算器 Skill 契约测试 `12 passed`；`skill-creator` UTF-8 结构校验返回 `Skill is valid!`；`git diff --check` 无错误。calculator 与 Skill 扩大回归为 `51 passed, 9 failed`，失败项均为既有旧契约，仍要求成本字段出现在新版 CSV、利润字段必填、税率保持旧默认值或 feedtask 根命令注册，与本次已确认需求无关，未扩范围修改。Standards/Spec 双轴复审发现的 PRD/UIUX 残留提示和 Skill 手工重建表格风险已修正。
+**影响范围**：影响新品计算器多轮草稿补充和默认结果展示；不改变 Polaris API、提交 payload、任务列表、Web 路由或显式 `detail --json` 行为。
+**回滚方式**：恢复 `opscli/calculator/cli.py` 的详情提示、还原新品计算器 Skill 两份工作流与对应测试、文档和本条记录。
+---
+
+## 2026-07-15 calculator - 成本占位值改为 1
+
+**变更原因**：隐藏成本费用字段统一填 `0` 后，后端仍会计算失败，需要改为非零占位值。
+**改动点**：将 11 个隐藏成本字段在草稿归一化阶段统一写为数值 `1`；提交 payload 再次覆盖为 `1`，兼容仍保存 `0` 的历史草稿；同步字段说明、新品计算器 Skill、Super Dev 文档及指定验证草稿。
+**验证结果**：归一化、历史草稿提交和 Skill 契约聚焦测试 `3 passed`；指定草稿 `draft.json` 的 11 个成本字段均为数值 `1`，新版 CSV 仍不展示成本费用分组，旧版 CSV 对应当前值均为 `1`。全量 pytest 仍在收集阶段受既有 `tests/skills/test_packaging.py` 关闭捕获流影响，以 `23 errors` 和 `I/O operation on closed file` 中断。
+**影响范围**：影响新品计算器草稿生成、复制与提交 payload 的隐藏成本字段；不改变新版 CSV 填写项、利润字段可见性和结果展示。
+**回滚方式**：回退 `opscli/calculator/fields.py`、`opscli/calculator/draft.py`、新品计算器 Skill、相关测试、文档及本条记录。
+---
+
+## 2026-07-14 calculator - 精简新品计算与费用方案展示
+
+**变更原因**：新品计算当前只关注仓配费用方案，不再需要用户填写利润相关成本字段；详情结果需要与 Polaris 结果页“方案切换”表格的信息保持一致。
+**改动点**：利润相关成本字段统一默认 `0` 并取消必填；新版 `填写表格.csv` 生成时过滤整个成本费用分组，同时生成包含完整历史字段并明确弃用的 `填写表格-旧版.csv`，校验和提交只读取新版文件，完整字段仍保留在 `draft.json` 和提交 payload；指定二区默认改为 `zone_1_2`（美东+美西）；`calculator detail` 改为只读展示 `allPlans` 全部方案、线路、费用值和区间，不提供方案切换；同步新品计算器 Skill 参考说明；代码审查后将首单数量列显隐对齐为 `allPlans[0].first_order_qty`，并内联单次抽象、补齐默认常量与线路对齐逻辑的中文注释。后续清除验证草稿中无接口依据的包装、重量、箱规和单箱数量样例；生成说明区分单件 SKU 包装与 FBA 入库外箱，提供 Amazon.sg 官方商品示例及美国 FBA 入库箱上限但不自动代入；Skill 改为每轮询问 3–5 个仍缺失或无效的必填字段，全部有效前不提交，并启用 source、wheel、binary、binary_full 四种发行目标。
+**验证结果**：未运行 type-check、eslint 或格式化检查；完成代码差异自检和本地样例输出核对，确认利润成本字段均为 `0`、默认试算方案为 `GROSS_PROFIT`、指定二区为 `["zone_1_2"]`、成本费用无校验问题、新版 CSV 不包含成本费用分组、旧版 CSV 保留完整成本字段及弃用说明，费用方案表完整显示多线路及费用区间；指定验证草稿的 9 个物流字段在 `draft.json`、新版和旧版 CSV 中均为空，生成说明包含两类参考且明确单箱数量无默认值；本需求、第二阶段 Skill 及发行契约测试 `5 passed`。全量 pytest 在收集阶段受既有 `tests/skills/test_packaging.py` 关闭捕获流影响，以 `23 errors` 和 `I/O operation on closed file` 中断；双轴代码审查的 Spec 项已清零，Standards 初审问题均已修正。
+**影响范围**：影响新品计算器草稿生成、校验提示、详情终端展示及对应 Skill 说明；不改变 Polaris API、认证、提交命令和网页功能。
+**回滚方式**：回退 `opscli/calculator/fields.py`、`draft.py`、`cli.py`、新品计算器两份参考说明及本条记录。
+---
+
+## 2026-07-14 Skill - 新增内部反馈全量查询工具
+
+**变更原因**：反馈分诊开发人员需要按条件读取全量反馈列表及批量详情，同时不能新增公开 CLI/MCP 查询入口，也不能让相关 Skill、脚本和独立密钥进入公开发行物。
+**改动点**：为 `ops-feedback-query` 增加仅限指定 feedback open-query API 的 Skill 直连规范豁免；新增独立内部 Skill 的发版 manifest 声明、使用文档、版本文件、明文凭据文件和 Python 查询脚本；脚本支持列表全量过滤及 1–100 个 UUID 批量详情，只发送 `X-Feedback-Api-Key`，并补充 Skill 结构、真实非占位凭据、凭据占位校验、请求契约、远端回显密钥脱敏、可信服务主机、业务错误、UUID、文本长度和分页边界回归测试；继续增加显式 `--output` 文件导出、父目录自动创建及两类命令参数契约测试；所有文件输出严格限制在 Git 项目根 `output/feedback-query/`，简单文件名和带专用目录前缀的相对路径统一归一化到该目录，拒绝父目录穿越、目录外绝对路径及无法定位项目根的执行环境。
+**验证结果**：初始 RED 按预期为 `10 failed`，失败均因 Skill 文档、凭据和脚本尚不存在；实现后转为 GREEN。文件导出回归也先按预期 RED（`2 failed`），证明脚本缺少 `write_json_file` 和 `--output`，随后补齐显式导出、父目录创建和终端摘要输出。代码审查进一步发现相对路径未锚定项目根、可信主机仍允许额外端口/路径及缺少 `main()` 级输出契约测试；对应回归先出现 `3 failed, 1 passed`，随后增加 Git 项目根定位、精确根地址校验、GBK 安全终端 JSON，以及有/无 `--output` 的主流程测试，聚焦复跑为 `4 passed`。后续发现凭据文件已由外部替换为真实非空密钥，结构测试不再输出或固定断言具体密钥值；占位值拒绝仍由临时文件独立覆盖。新增远端错误回显密钥安全回归，RED 按预期证明异常消息会原样保留测试密钥（`1 failed`），随后在响应解析边界增加递归脱敏；可信主机和参数边界回归也先按预期 RED（`2 failed`）再完成修复。最终补充输出目录安全边界测试，RED 为 `3 failed`，分别证明简单文件名曾落到项目根、路径可越过专用目录、无 Git 根时会回退任意工作目录；实现严格归一化与目录包含校验后，反馈查询 Skill 测试通过（`19 passed`），连同既有 feedback Skill 回归通过（`25 passed`）；internal/public Profile 和两类 binary 数据收集排除测试通过（`2 passed`）；Skill 发版 manifest 校验为 `0` 个问题；脚本 `py_compile` 与 `git diff --check` 均通过。真实 `--output` 烟雾测试将 1 条 bug 列表结果写入项目根 `output/feedback-query/smoke-test.json`，终端只返回绝对文件路径；文件存在、业务码 200、返回 1 条，未在终端输出反馈内容。使用 `python-release` Profile 成功生成 `aukeys_opscli-0.0.108` wheel 和 sdist，并检查归档成员，`ops-feedback-query`、`query_feedbacks.py`、`credentials.json` 命中数为 `0`。使用内部真实密钥完成只读烟雾测试：`list` 以 `feedback_type=bug,page=1,per_page=1` 返回业务码 200、总数 3747、当前页 1 条；取该条 UUID 调用 `batch-detail` 返回业务码 200、命中 1 条、缺失 0 条。烟雾测试只输出业务码、数量和字段名，未输出 API Key、UUID、邮箱、标题、正文、payload、context、附件或执行参数值。全量 `tests/skills/test_packaging.py` 仍受既有问题影响：导入期重包装并关闭 pytest 捕获流；使用 `-s` 后既有 PyInstaller destination 测试还因 Windows 路径分隔符期待值不一致失败，不属于本次新增断言。
+**影响范围**：仅影响内部开发人员反馈分诊 Skill；现有 `ops-feedback`、feedback CLI/MCP 及 JWT/session 认证链路保持不变。
+**回滚方式**：删除 `ops-feedback-query` 模板及测试，移除 manifest 声明和 `CLAUDE.md` 中的唯一内部豁免，并删除本条记录。
+---
+
+## 2026-07-10 seller_sprite - 普通 MCP 任务持久入队与有界单批跟踪
+
+**变更原因**：普通 SellerSprite MCP 任务需要从入口内长时间等待统一切换为立即、可靠的持久化入队，并为 Agent 和正式 CLI 提供有归属校验、可控等待时长的单任务及批量续查能力，避免 pending 任务被重复提交和重复消耗额度。
+**改动点**：Tasks 1–5 整体完成 `seller_sprite_run` 立即持久化入队并返回排队快照；新增当前 MCP 用户归属校验的 0–30 秒单任务状态/导出读取，以及完整集合预授权、1–50 个普通任务的批量状态工具；补齐 durable queue/scheduler 生命周期边界、远端 adapter 和正式 CLI `job-status --wait-seconds` / `jobs-status --wait-seconds` 契约；更新两份 SellerSprite Skill、正式 MCP 接入说明及历史异步优化方案的当前契约说明，明确同轮 3–4 个窗口、90–120 秒跟踪预算、跨轮完整 pending 集合复用、额度规则，以及 Listing Analysis 必须走专用三段式且不得进入普通批量状态工具；相关 MCP、adapter、CLI、队列、调度和文档契约测试同步覆盖。最终审查修复进一步让通用 `seller_sprite_run` 在认证、请求构造、持久化和 scheduler 获取前明确拒绝规范化后的 `listing-analysis`，并引导专用 submit 工具；单/批状态有界等待改为纯观察持久状态，不再调用 `scheduler.start()` 或取得任务生命周期；队列 Store 新增 `BEGIN IMMEDIATE` 原子 owned enqueue，在同一事务内写入 queue 与 MCP owner；scheduler `enqueue()` 新增内部 `mcp_user_email` 参数，有邮箱时使用原子 owned enqueue，无邮箱时保留普通 queue-only 入队；Store `claim_next()` 在原有 `BEGIN IMMEDIATE` 事务内增加同 queue scope 的 running 排他检查；普通 scheduler `start()` 不再无条件 `reset_running_tasks()`，恢复仅保留显式运维入口；MCP context 新增保持纯 transport 语义的 `get_current_auth_mode()`，支持 contextvar 和 ASGI scope 双路径；认证中间件把 `remote` / `fixed` 模式同时注入 ASGI scope 与 contextvar；共享 authenticated-email resolver 按已验证远端邮箱、无 Key 的 stdio 默认缓存、fixed API-key + Agent 隔离缓存的优先级解析身份，并让 remote 缺邮箱、未知 Key 模式闭合失败；SellerSprite 创建、归属检查、批量检查和额度状态共用该 resolver 代理；通用 MCP run 与 Listing Analysis submit 均不再预先独立创建或异常补偿 owner 行，统一把规范化邮箱交给 scheduler 原子入队；两份 SellerSprite Skill、正式 MCP 接入说明及既有异步方案中的 Listing Analysis 文案从建议性“不要”收紧为生产入口明确拒绝并引导专用 submit。
+**验证结果**：Task 5 在旧 Skill/正式说明上新增文档契约测试，首次运行按预期失败于 `SKILL.md` 缺少“立即持久化入队”契约（`1 failed`）；更新后 SellerSprite MCP 工具测试 `69 passed`，MCP Schema 测试 `6 passed`，队列/调度器测试 `26 passed`，adapter/CLI 组合为 `22 passed, 2 failed`，失败仅为既有 `seller-sprite-debug` 顶级命令未注册。真实 stdio 子进程通过 `--transport stdio` 发现 65 个工具，确认单/批状态工具公开且 `seller_sprite_start` 隐藏，未调用业务工具。项目全量 `pytest -q` 被重复测试模块名收集冲突阻断；改用 `--import-mode=importlib` 后又被既有 `tests/query/test_manager.py:817-818` 缩进错误和 `tests/skills/test_packaging.py` 导入期关闭 pytest 捕获流阻断；排除两个收集阻断后其余测试实际执行为 `996 passed, 53 failed`，失败分布在多个既有非 SellerSprite 基线及两个已知 debug 节点。`git diff --check` 退出码为 0，仅提示 `opscli/seller_sprite/cli.py` 下次 Git 处理时可能从 LF 转为 CRLF。最终审查修复 RED：`test_seller_sprite_run_rejects_listing_analysis_before_any_side_effect` 按预期失败，证明通用入口仍在拒绝前调用认证 helper（`1 failed`）；通用入口最小修复后与专用 submit 回归通过（`2 passed`）。单/批状态观察者聚焦 RED 按预期出现 `10 failed`，均证明正数等待路径仍调用 `scheduler.start()`；最小修复后同一聚焦集通过（`10 passed`）。Store owned enqueue 的成功双表持久化与 queue-only `job_id` 碰撞回滚先按预期失败于方法缺失（`2 failed`），实现后通过（`2 passed`）；公共通用入口真实 SQLite 碰撞及 Listing Analysis 专用入口原子接口回归按预期失败（`2 failed`），分别证明旧实现遗留 owner 行、专用入口仍独立写 owner；统一改用 scheduler 原子入队后通过（`2 passed`）。既有 MCP 测试中 6 条“先建 owner、入队失败再标 failed”的旧断言已同步为原子同成同败契约，MCP 工具套件通过（`71 passed`）。新增跨 Store 同 scope 单 running 领取边界，以及 scheduler `start()` 不重排其他实例 running 行的回归；聚焦 RED 按预期 `2 failed`，证明第二实例仍可继续领取 queued，且普通 `start()` 会重排并再次领取既有 running；最小实现后聚焦通过（`2 passed`），队列/调度全套通过（`29 passed`）。已新增共享有效认证邮箱、context scope fallback、中间件 auth_mode 注入及 SellerSprite resolver 代理回归；首次 RED 在收集期按预期停止于 `get_current_auth_mode` 尚不存在（`1 error`）；补最小 transport getter 后聚焦 RED 为 `8 failed, 7 passed`，分别证明中间件未传播模式、共享 resolver 缺失及 SellerSprite 仍直读 transport 邮箱；最小实现后同一身份组 GREEN（`15 passed`），测试缓存全部使用 fake/monkeypatch，未读取真实 Keychain；自审补充 fixed/未知 keyed 模式携带未验证 transport 邮箱的回归，RED 为 `2 failed`，随后将 transport 邮箱信任严格限定到 `auth_mode=remote`，fixed 仍使用隔离 cache、未知 keyed 模式仍闭合失败。自审另补 Listing Analysis submit 空白 owner 回归，RED 为 `1 failed`，证明旧检查会把空白邮箱带到 scheduler 并可能降级 queue-only；专用 submit 现与 generic run 一样先规范化再判空，确保公共提交始终走 owned enqueue；另补 51 个重复原始 ID 回归并直接通过（`1 passed`），确认现有实现先按 raw 数量拒绝、再去重，未为该保留契约修改生产代码。正式文档契约 RED 按预期 `2 failed`，证明四份现有说明仍缺生产拒绝措辞；最小文案收紧后同一聚焦组 GREEN（`2 passed`）。首轮必跑 integration 组为 `26 passed, 4 failed`：两条既有 `seller-sprite-debug` 未注册基线外，`test_tools.py` 两条注册测试被既有 stdio 权限中间件读取默认本地登录态后过滤成 10 个 auth tools；为满足测试不得读真实 Keychain，注册/schema 契约用 autouse mock 将权限 resolver 固定为全量放行，不改生产权限逻辑；复跑 integration 组为 `28 passed, 2 failed`，剩余两项均为既有 `seller-sprite-debug` 顶级命令未注册。最终当前态验证：SellerSprite MCP 工具 `74 passed`；context/middleware/helper identity `14 passed`；queue/scheduler `29 passed`；integration 仍为 `28 passed, 2 failed` 且失败仅为上述既有 debug 注册基线；变更 Python 文件 `py_compile` 成功；`git diff --check` 退出码 0，仅提示既有 `opscli/seller_sprite/cli.py` LF→CRLF 转换警告。
+**影响范围**：影响普通 SellerSprite MCP/正式 CLI 的提交返回语义、单任务与 1–50 批量状态跟踪、导出归属校验，以及 Agent 跨轮续查方式；`run` 仍消耗额度，状态和导出不消耗额度；Listing Analysis 继续使用 submit/status/result，不进入普通批量状态工具。
+**回滚方式**：整体回退 Tasks 1–5 涉及的 SellerSprite MCP 工具、adapter、CLI、持久队列、scheduler、两份 Skill、正式接入说明、测试和本条记录；如仅回滚文档层，则恢复本次两份 Skill、正式说明及文档契约测试，但必须同时确保文档与实际生产签名保持一致。
 ## 2026-07-16 seller_sprite - 恢复 Listing Analysis 续查登录态
 
 **变更原因**：CLI 的 Listing Analysis `status/result` 会复用卖家精灵网页 Cookie；Cookie 名仍存在但服务端 Session 已过期时，`task/history` 和报告详情页直接返回 `ERR_GLOBAL_SESSION_EXPIRED`，现有链路不会重新登录，导致已提交任务无法续查。
@@ -2491,6 +2569,195 @@
 **验证结果**：`.venv/Scripts/python.exe -m pytest tests/test_config.py -v` 通过，1 passed；`.venv/Scripts/python.exe -m pytest tests/mcp/test_quota.py -v` 通过，21 passed；`.venv/Scripts/python.exe -m pytest tests/mcp/test_seller_sprite_tools.py -v` 通过，29 passed；`.venv/Scripts/python.exe -m pytest tests/mcp/test_keepa_tools.py -v` 通过，14 passed；`rg -n "mcp-quota|load_quota_config|ENV_QUOTA_CONFIG_PATH|QuotaConfig|_find_quota_config_path" opscli tests pyproject.toml -g "!*.c"` 无输出；`git diff --check` 无输出；`git status --ignored --short | rg "(^!! |^\\?\\? )?(build/|dist/|opscli/mcp/quota\\.c|.*egg-info|uv.lock)" || true` 无输出，确认构建产物已清理且 `uv.lock` 未残留修改。此前可选执行 `.venv/Scripts/python.exe -m build` 失败，失败原因为 sdist wheel 构建阶段缺少 `opscli/skills/packaging.py`，该问题来自现有 `MANIFEST.in` 排除业务 `.py` 与 `setup.py` 构建时加载该文件之间的不一致，本次未纳入 quota 改造修复范围。
 **影响范围**：影响 MCP quota 策略加载、所有经 `_quota_wrap()` 包裹的外部服务 tool、开发模式 Python 3.14 版本读取测试入口；不改变 quota 响应顶层字段结构。
 **回滚方式**：回滚 `opscli/mcp/quota.py`、`tests/mcp/test_quota.py`、`pyproject.toml`、`opscli/mcp/configs/mcp-quota.json` 删除、`docs/design/MCP限额SQLite策略表设计.md`、`docs/plans/MCP限额SQLite策略表实施计划.md` 以及本变更记录；如需单独回滚 Python 3.14 版本读取修复，回滚 `opscli/config.py` 和 `tests/test_config.py`。
+---
+
+## 2026-07-14 SellerSprite - 多账号池首个 TDD 测试切片
+
+**变更原因**：卖家精灵集成账号接口已可返回多个账号，需要先用公共接口测试锁定有序账号列表、最多四工作账号和冷备用规则。
+**改动点**：扩展 `tests/seller_sprite/test_accounts.py` 覆盖远端多账号顺序及本地账号池降级；新增 `tests/seller_sprite/test_account_pool.py` 覆盖 0～6 账号分配、备用接替和密码变化恢复。
+**验证结果**：实现前目标测试按预期进入 red；实现后账号来源与账号池相关测试全部通过。
+**影响范围**：当前仅新增 SellerSprite 账号来源和账号池行为测试，不改变运行时代码。
+**回滚方式**：回滚上述两个测试文件中的本次新增内容。
+---
+
+## 2026-07-14 SellerSprite - 多账号来源与冷备用账号池
+
+**变更原因**：首个 TDD 测试已确认现有代码缺少完整账号列表入口和工作/备用账号池，需要提供多账号调度的最小领域能力。
+**改动点**：为 `SellerSpriteAccountProvider` 增加有序 `list_accounts()` 并复用到公开摘要；新增 `services/account_pool.py`，实现最多四工作账号、至少一冷备用、账号身份散列、用户名脱敏、失效凭证版本和密码变化恢复。
+**验证结果**：实现前目标测试为 5 failed、2 passed；实现后账号来源与账号池相关测试全部通过。
+**影响范围**：影响 SellerSprite 账号读取与新增的进程内账号池，不改变现有默认账号选择和外部工具签名。
+**回滚方式**：删除 `services/account_pool.py`，并回滚 `accounts.py` 的 `list_accounts()` 与 `list_public()` 调整。
+---
+
+## 2026-07-14 SellerSprite - 多账号队列与审计 TDD 测试
+
+**变更原因**：多账号工作池需要数据库层保证不同账号可并行、同账号串行，并在故障接替后拒绝旧执行代写回，同时保留登录失败审计。
+**改动点**：扩展 `test_task_queue_store.py`，覆盖账号级 generic claim、Listing Analysis 隔离、failover generation CAS 和账号登录失败事件查询。
+**验证结果**：实现前目标测试按预期因队列新字段和新接口缺失进入 red；实现后队列测试全部通过。
+**影响范围**：当前仅新增 SellerSprite 队列与审计行为测试。
+**回滚方式**：回滚 `test_task_queue_store.py` 中本次新增测试和模块 docstring。
+---
+
+## 2026-07-14 SellerSprite - 多账号队列约束与登录失败审计
+
+**变更原因**：数据库层必须允许不同账号并行领取、阻止同账号重复 running，并用 generation CAS 隔离故障接替前后的执行者。
+**改动点**：扩展任务表的 `task_kind`、账号键、generation、failover 和错误字段；增加 generic 账号级领取、Listing Analysis 独立领取、failover CAS、当前代 finish/fail；新增账号事件表及查询接口，并为历史任务回填任务类型。
+**验证结果**：实现前 `test_task_queue_store.py` 为 4 failed、18 passed；实现后队列测试全部通过。
+**影响范围**：影响 SellerSprite SQLite 队列 schema、任务领取与登录失败审计；保留旧 `claim_next()`、`finish_task()` 和 `fail_task()` 兼容入口。
+**回滚方式**：回滚 `task_queue_store.py` 的新 schema 与接口；新建数据库可直接删除，历史数据库需同步移除新增索引和列依赖。
+---
+
+## 2026-07-14 SellerSprite - 登录失败记录器 TDD 测试
+
+**变更原因**：用户要求账号登录失败增加日志和记录，必须先锁定结构化日志、SQLite 审计、敏感字段脱敏与审计降级行为。
+**改动点**：新增 `test_account_events.py`，覆盖登录失败同时写日志/审计、密码/用户名/Token 脱敏，以及 SQLite 审计失败时只记录降级事件且不抛出新错误。
+**验证结果**：实现前目标测试按预期因账号事件 Recorder 缺失进入 red；实现后事件记录测试全部通过。
+**影响范围**：当前仅新增 SellerSprite 登录失败可观测性测试。
+**回滚方式**：删除 `tests/seller_sprite/test_account_events.py`。
+---
+
+## 2026-07-14 SellerSprite - 账号登录失败结构化记录器
+
+**变更原因**：登录失败测试已确认缺少统一记录边界，需要保证日志与 SQLite 使用同一套脱敏白名单并在审计故障时安全降级。
+**改动点**：新增 `services/account_events.py`，实现首次登录/重登/备用接替失败事件、账号身份散列与用户名脱敏、常见凭证键值清理、运行日志优先写入和 SQLite 审计失败旁路日志。
+**验证结果**：实现前目标测试 2 failed；实现后账号事件记录测试全部通过。
+**影响范围**：新增 SellerSprite 登录失败可观测性组件，尚未接入任务调度器。
+**回滚方式**：删除 `opscli/seller_sprite/services/account_events.py`。
+---
+
+## 2026-07-14 SellerSprite - 多账号调度与备用接替 TDD 测试
+
+**变更原因**：需要通过调度器公共接口验证四账号并行、第五账号冷备用、认证失败接替和无备用关闭工作槽的核心用户行为。
+**改动点**：扩展 `test_task_scheduler.py`，增加多账号 provider、可控并行 manager 和故障 manager，覆盖 5 账号四路并发、2 账号备用接替、1 账号失败后槽关闭且后续任务保持 queued。
+**验证结果**：实现前目标测试按预期因单 runner 调度器进入 red；实现后多账号调度测试全部通过。
+**影响范围**：当前仅新增 SellerSprite 多账号调度行为测试。
+**回滚方式**：回滚 `test_task_scheduler.py` 中本次新增测试、辅助类和模块 docstring。
+---
+
+## 2026-07-14 SellerSprite - 多账号并行调度与备用接替
+
+**变更原因**：调度器测试已证明现有单 runner 无法使用多账号并行，也不能在账号认证失败时接替或关闭故障槽。
+**改动点**：新增账号不可用业务异常；调度器对正式多账号 provider 建立最多四个 generic 工作槽和独立 Listing Analysis 槽，使用显式账号 provider 执行任务；认证失败时写日志/审计、刷新账号、CAS 改绑备用账号，备用耗尽则失败任务并关闭该槽；旧单账号测试 provider 保持兼容路径。
+**验证结果**：实现前 `test_task_scheduler.py` 为 3 failed、11 passed；实现后调度器测试全部通过。
+**影响范围**：影响 SellerSprite 通用异步任务调度、账号认证失败处理和 Listing Analysis 队列分流；外部 MCP/CLI 工具签名不变。
+**回滚方式**：回滚 `task_scheduler.py` 的账号池路径及 `exceptions.py` 新异常，恢复单 `_run_loop()` 启动方式。
+---
+
+## 2026-07-14 SellerSprite - 故障账号 browser 会话关闭 TDD 测试
+
+**变更原因**：备用接替或无备用关闭槽时必须关闭失效账号浏览器资源并从进程 registry 移除，避免后续复用旧登录态。
+**改动点**：扩展 `test_browser_route_worker.py`，通过公开关闭入口验证账号 worker 被调用 `close()` 且 registry 不再返回旧实例。
+**验证结果**：实现前目标测试按预期因关闭入口缺失进入 red；实现后 browser-route 相关测试全部通过。
+**影响范围**：当前仅新增 browser-route 会话生命周期测试。
+**回滚方式**：回滚 `test_browser_route_worker.py` 中本次新增测试。
+---
+
+## 2026-07-14 SellerSprite - 关闭并移除故障账号 browser worker
+
+**变更原因**：会话生命周期测试已确认缺少按账号关闭并从 registry 移除 browser worker 的公开入口。
+**改动点**：新增并导出 `close_browser_route_worker()`；先从当前事件循环 registry 移除目标账号 worker，再等待其关闭 page/context/playwright 资源。
+**验证结果**：实现前目标测试 1 failed；实现后 browser-route 相关测试全部通过。
+**影响范围**：影响 browser-route worker 生命周期；正常获取与复用逻辑不变，调度器可在账号失效时调用此入口。
+**回滚方式**：回滚 `browser_route/worker.py` 与 `browser_route/__init__.py` 的关闭入口。
+---
+
+## 2026-07-14 SellerSprite - 新凭证版本补足空工作槽测试
+
+**变更原因**：账号失效且槽关闭后，账号接口若返回同身份的新密码版本，应允许该新凭证从备用候选补足空槽，旧失败版本仍不可恢复。
+**改动点**：扩展账号池密码变化测试，要求 `activate_standby_until_target()` 只提升刷新后的新凭证版本。
+**验证结果**：实现前目标测试按预期因补槽入口缺失进入 red；实现后账号池测试全部通过。
+**影响范围**：当前仅增加账号池动态恢复行为测试。
+**回滚方式**：回滚 `test_account_pool.py` 中补槽断言。
+---
+
+## 2026-07-14 SellerSprite - 新凭证版本动态补槽
+
+**变更原因**：补槽测试已确认账号池缺少把刷新后的可用备用账号提升为空工作槽的入口。
+**改动点**：新增 `SellerSpriteAccountPool.activate_standby_until_target()`，按接口顺序提升可用备用账号，直到达到当前目标工作槽数量或备用耗尽。
+**验证结果**：实现前账号池测试 1 failed、2 passed；实现后账号池测试全部通过。
+**影响范围**：影响账号池在刷新后的空槽恢复，不提前创建任何会话资源。
+**回滚方式**：回滚 `account_pool.py` 的补槽方法。
+---
+
+## 2026-07-14 SellerSprite - 关闭槽后的新账号恢复测试
+
+**变更原因**：备用耗尽关闭工作槽后，账号接口后续可能返回新账号，调度器应自动重建槽并继续处理未完成队列。
+**改动点**：扩展调度器测试，模拟首次故障刷新仍无备用、下一次刷新出现新账号，断言后续 queued 任务由新账号完成。
+**验证结果**：实现前目标测试按预期因 supervisor 未清理工作槽进入 red；实现后调度器测试全部通过。
+**影响范围**：当前仅新增动态账号恢复行为测试。
+**回滚方式**：回滚 `test_task_scheduler.py` 的 RecoveringAccountProvider 和对应测试。
+---
+
+## 2026-07-14 SellerSprite - 关闭槽后的账号刷新与自动重建
+
+**变更原因**：动态恢复测试已确认 supervisor 保留已结束 Task 引用，导致新账号出现后无法重建工作槽。
+**改动点**：调度器跟踪工作槽绑定账号并清理已结束 Task；账号池为空或 TTL 到期时刷新接口，保留健康账号、提升可用新账号/新凭证补槽并启动新消费协程；备用接替后同步更新槽账号映射。
+**验证结果**：实现前动态恢复测试 1 failed；实现后调度器测试全部通过。
+**影响范围**：影响多账号调度器长期运行时的账号刷新和空槽恢复；旧单账号兼容路径不变。
+**回滚方式**：回滚 `task_scheduler.py` 的工作槽账号映射、refresh supervisor 和补槽逻辑。
+---
+
+## 2026-07-14 SellerSprite - failover 队列范围校验与审计索引
+
+**变更原因**：failover 的备用账号占用检查应使用任务自身 queue scope，不能依赖固定常量；账号审计需要支持按账号和事件类型检索。
+**改动点**：`reassign_task_for_failover()` 先用当前 CAS 令牌读取真实 queue scope，再检查 replacement 占用；账号事件表补充 `(account_key, created_at)` 和 `(event_type, created_at)` 索引。
+**验证结果**：待随队列和 SellerSprite 回归测试验证。
+**影响范围**：影响非默认 queue scope 的 failover 互斥检查及账号审计查询性能。
+**回滚方式**：回滚 `task_queue_store.py` 的 current scope 查询和两个审计索引。
+---
+
+## 2026-07-14 SellerSprite - 多账号核心切片阶段验证
+
+**变更原因**：完成账号池、队列、审计、调度和会话关闭切片后，需要集中验证新增公共边界并清理 diff 格式问题。
+**改动点**：移除 `task_queue_store.py` 文件尾多余空行；汇总验证账号列表、账号池、事件记录、队列 CAS、多账号调度和 browser worker 关闭行为。
+**验证结果**：新增与相关核心测试共 47 passed；`compileall -q opscli/seller_sprite` 通过；首次 `git diff --check` 仅发现文件尾多余空行，现已修复。
+**影响范围**：仅格式清理和阶段验证记录，不改变业务行为。
+**回滚方式**：无需业务回滚；如需回滚记录，删除本节。
+---
+
+## 2026-07-14 SellerSprite - generic 与 Listing Analysis 独立排队位置测试
+
+**变更原因**：任务类型隔离不仅要求领取互不干扰，排队位置也应分别在各自子队列内计算。
+**改动点**：扩展任务类型隔离测试，要求先入队的 Listing Analysis 和后入队的 generic 任务均显示位置 1。
+**验证结果**：目标测试按预期观察到 generic 排队位置错误为 2；修复后队列测试全部通过。
+**影响范围**：当前仅新增任务排队位置语义测试。
+**回滚方式**：回滚 `test_task_queue_store.py` 的两个 position 断言。
+---
+
+## 2026-07-14 SellerSprite - 按任务类型计算独立排队位置
+
+**变更原因**：新增测试确认 generic 任务位置会被更早的 Listing Analysis 错误推后，违反两个子队列隔离语义。
+**改动点**：`_queue_position()` 同时读取并过滤 `queue_scope` 与 `task_kind`，让 generic 和 Listing Analysis 分别计算 FIFO 位置。
+**验证结果**：实现前目标测试 1 failed；实现后队列测试全部通过。
+**影响范围**：影响 SellerSprite queued 状态的 `position` 展示，不改变领取顺序和任务状态。
+**回滚方式**：回滚 `_queue_position()` 的 `task_kind` 过滤。
+---
+
+## 2026-07-14 SellerSprite - 多账号并行边界加固与双轴审查修复
+
+**变更原因**：Standards/Spec 双轴审查发现同身份新密码接替、配置错误分类、账号缩容、凭证脱敏、迁移原子性、执行代际文件隔离和 MCP 终态 CAS 仍有边界缺口。
+**改动点**：新增明确的账号认证异常；同身份新密码按凭证版本重新参与接替；账号缩容在任务边界关闭多余会话；账号接口失败写结构化日志和 SQLite 审计且按 TTL 重试；扩展 JSON/Token 脱敏；工作槽异常退出读取并记录 Task 异常；任务输出按 generation 隔离；SQLite schema 迁移增加版本并在单事务内完成；阻断 legacy running 与新版自动消费并按任务类型计算排队位置；队列与 MCP 终态通过账号键和 generation CAS 原子写回。
+**验证结果**：账号池、账号事件和调度器边界测试 24 passed；队列与事件测试 27 passed；任务队列与调度器测试 41 passed；API manager、browser-route、队列和调度器组合测试 86 passed；最终 `tests/seller_sprite` 与 `tests/mcp/test_seller_sprite_tools.py`（排除现有未注册 debug CLI 用例）回归为 215 passed、2 deselected。
+**影响范围**：影响 SellerSprite 多账号任务调度、认证错误分类、账号刷新/缩容、故障审计、任务输出目录、SQLite 队列迁移和 MCP 终态写回；外部 CLI/MCP 参数保持不变。
+**回滚方式**：回滚本次 `seller_sprite` 领域异常、请求模型、API/browser 登录分类、账号池、事件记录器、调度器、队列仓储及对应测试修改；已升级 SQLite 新列和表可保留，不影响旧代码读取已有字段。
+---
+
+## 2026-07-15 SellerSprite - browser 会话生命周期配置与空闲回收
+
+**变更原因**：多账号 browser-route 会话在无任务时长期驻留，需要限制空闲资源占用并为定期轮换建立统一生命周期边界。
+**改动点**：新增默认 1800 秒空闲阈值和 21600 秒最大生命周期配置及环境变量覆盖；browser worker 维护创建时间、最后完成时间、任务数和状态；新增公共回收入口，在空闲达到阈值后先移出 registry 再关闭 context/playwright；补充 Super Dev 架构、设计规范、任务清单和 TDD 测试。
+**验证结果**：配置测试先观察到 2 项预期失败，实现后 2 passed；空闲回收测试先因公共生命周期接口缺失进入 red，实现后 1 passed。
+**影响范围**：影响 SellerSprite browser-route worker 的生命周期状态和配置读取；不会提前创建冷备用会话，不改变 API-direct 客户端生命周期。
+**回滚方式**：回滚 `config.py`、`browser_route/worker.py`、`browser_route/__init__.py`、对应测试及本次架构/规范修订。
+---
+
+## 2026-07-15 SellerSprite - 会话轮换、状态审计与统一释放
+
+**变更原因**：空闲回收之外，还需要保证六小时会话只在安全任务边界轮换、调度器退出释放健康会话，并能还原每次会话状态变化。
+**改动点**：browser worker 增加 registered/ready/busy/idle/recycling/closing/closed/close_failed 状态通知和重复状态抑制；统一事件记录器将白名单生命周期指标写运行日志和 SQLite，关闭失败使用独立 `account_session_close_failed` 事件；调度器每分钟回收空闲会话、每条任务后检查最大生命周期，并在 close 时批量释放健康会话；context 关闭失败时仍继续停止 Playwright 和释放 Xvfb。双轴审查后补充 scheduler owner 隔离、配置热更新旧命名空间清理、通用与 Listing 已领取任务 reservation、生命周期锁、关闭等待内部队列及 closing worker 单次重建重试，防止跨调度器误关和旧引用复活未托管会话；worker 自身安排最早生命周期阈值回收，debug/Listing 等非 scheduler 直调路径也接入延迟初始化的脱敏 SQLite Recorder。
+**验证结果**：状态链测试先缺少 busy 状态进入 red，修复后通过；状态审计测试先因 Recorder 接口缺失进入 red，修复后通过；调度器统一关闭和周期空闲回收测试均先进入 red 后通过；半释放测试先观察到 Playwright 未停止，修复后通过；初版相关 API manager、调度器、browser worker 和账号事件组合测试 76 passed；审查修复新增所有权隔离、reservation、关闭队列竞态、直调 self-reap、异常路径 idle 收尾、审计初始化降级和独立关闭失败事件测试。最终 SellerSprite 与相关 MCP 回归 `233 passed, 2 deselected`，两项 deselected 为既有未注册 `seller-sprite-debug` 顶级命令测试；双轴 Standards/Spec 复审均 PASS。项目全量 pytest 仍被既有重复测试模块收集及 pytest 捕获流被导入期关闭问题阻断，`--import-mode=importlib` 同样在既有导入期捕获流关闭处停止；变更模块 `compileall` 与 `git diff --check` 通过。
+**影响范围**：影响 SellerSprite browser-route 健康会话的回收、轮换、关闭和审计；运行中任务不被中断，下一任务继续按持久 profile 懒创建会话。
+**回滚方式**：回滚 browser worker 生命周期接口、ApiManager 状态监听器透传、TaskScheduler 回收/关闭编排、AccountEventRecorder 状态记录方法及对应测试。
 ---
 
 ## 2026-07-10 ASIN取数 - 刊登基础数据默认使用托管北极星Token

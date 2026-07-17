@@ -182,19 +182,12 @@ class SkillsUpdater:
         manifest = data["manifest"]
         remote_version = str(manifest.get("version", "v0.0.0"))
         current_version = record.version
-        # 始终执行更新：数据集权限是动态的，不依赖版本号变化
-        needs_update = force or self.compare_versions(current_version, remote_version) <= 0
-
-        if not needs_update:
-            return SkillUpgradeResult(
-                name=record.name,
-                from_version=current_version,
-                to_version=remote_version,
-                runtime=record.runtime,
-                target_dir=record.root,
-                updated=False,
-                field_count=data.get("field_count", 0),
-            )
+        # 始终执行更新，不做版本比较门槛：
+        # 1. 数据集权限是动态的，同版本号下数据也可能变化；
+        # 2. 本地模板版本与远端数据 manifest 属于两套版本空间，
+        #    模板占位数据的版本号可能领先远端（如 1.1.1 > v1.0.3），
+        #    若按版本比较跳过，占位 CSV 将永远不会被真实数据填充。
+        # force 参数保留用于 CLI --force 的签名兼容，不再影响写入行为。
 
         data_dir = record.root / "data"
         data_dir.mkdir(parents=True, exist_ok=True)

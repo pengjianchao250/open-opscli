@@ -76,9 +76,13 @@ class SellerSpriteAccountProvider:
 
     def list_public(self) -> list[dict[str, Any]]:
         """列出可用账号摘要，不返回密码。"""
-        remote_accounts = self._list_remote_accounts()
+        return [account.to_public_dict() for account in self.list_accounts()]
+
+    def list_accounts(self, *, refresh: bool = False) -> list[SellerSpriteAccount]:
+        """按账号接口顺序返回全部可用账号凭证。"""
+        remote_accounts = self._list_remote_accounts(refresh=refresh)
         if remote_accounts:
-            return [account.to_public_dict() for account in remote_accounts]
+            return remote_accounts
 
         if self.settings.accounts:
             return [
@@ -86,18 +90,18 @@ class SellerSpriteAccountProvider:
                     name=item["name"],
                     username=item["username"],
                     password=item["password"],
-                ).to_public_dict()
+                )
                 for item in self.settings.accounts
             ]
 
-        if not self.settings.username:
+        if not self.settings.username or not self.settings.password:
             return []
         return [
-            {
-                "name": self.settings.account_name,
-                "username": self.settings.username,
-                "has_password": bool(self.settings.password),
-            }
+            SellerSpriteAccount(
+                name=self.settings.account_name,
+                username=self.settings.username,
+                password=self.settings.password,
+            )
         ]
 
     def _get_from_pool(self, name: str) -> SellerSpriteAccount | None:
@@ -124,9 +128,9 @@ class SellerSpriteAccountProvider:
 
         raise SellerSpriteConfigError(f"集成账号中不存在默认账号：{default_name}")
 
-    def _list_remote_accounts(self) -> list[SellerSpriteAccount]:
+    def _list_remote_accounts(self, *, refresh: bool = False) -> list[SellerSpriteAccount]:
         """列出远端账号。"""
-        bundle = self._load_remote_bundle()
+        bundle = self._load_remote_bundle(refresh=refresh)
         if not bundle:
             return []
         return [SellerSpriteAccount(name=item.name, username=item.username, password=item.password) for item in bundle.accounts]
