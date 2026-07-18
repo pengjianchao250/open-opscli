@@ -58,6 +58,7 @@ FORBIDDEN_OUTPUT_MESSAGES = [
     "不得向用户展示英文数据集标识或内部技术标识。",
     "不得把内部技术标识作为业务判断理由。",
     "未完成当前账号权限枚举校验时，不得声称正式平台筛选范围已确定。",
+    "筛选组件存在唯一精确或规范化等值命中时，不得把仅因名称包含该文本的其他枚举成员一并查询。",
 ]
 
 # 元数据刷新命令原文：blocked 规划器与错误指引统一引用，避免 Agent 需要翻参考文档才能自救
@@ -146,6 +147,27 @@ MAX_RECOMMENDED_FIELDS = 3
 MAX_CANDIDATE_CARDS = 3
 # 筛选组件引用上限（execution_ref.filter_components）
 MAX_FILTER_COMPONENTS = 6
+# 普通筛选组件枚举值的统一消歧合同。部门数字允许阿拉伯数字与中文数字等价，
+# 但等价后仍必须完整相等，不能把“九部”扩展为“项目九部”。
+FILTER_VALUE_MATCH_POLICY = {
+    "strategy": "exact_normalized_then_clarify",
+    "normalizations": [
+        "NFKC",
+        "trim",
+        "casefold",
+        "department_arabic_chinese_numeral_equivalence",
+    ],
+    "exact_match_is_exclusive": True,
+    "substring_match_allowed": False,
+    "no_exact_match_action": "clarify_required",
+    "rule_zh": (
+        "先对用户筛选值与当前账号组件枚举原值做规范化完整等值比较；"
+        "部门名称额外允许阿拉伯数字与中文数字等价。唯一等值命中时只使用该枚举原值，"
+        "不得加入仅包含请求文本的其他成员；无唯一等值命中时必须让用户澄清。"
+        "例如“9部”只匹配“九部”，不匹配“项目九部”；"
+        "“范泰克”不匹配“范泰克体系外”。"
+    ),
+}
 
 
 def _load_json_object(path: Path, error_code: str) -> dict:
@@ -1351,6 +1373,11 @@ def build_model_contract(
     components = _filter_components(guidance)
     if components:
         execution_ref["filter_components"] = components
+        # 枚举入口与成员消歧策略必须同时下发，避免模型把包含匹配误当成多个筛选目标。
+        execution_ref["filter_value_match_policy"] = {
+            **FILTER_VALUE_MATCH_POLICY,
+            "normalizations": list(FILTER_VALUE_MATCH_POLICY["normalizations"]),
+        }
     if scope:
         execution_ref["time_scope"] = {
             "start": scope["start"],

@@ -210,6 +210,27 @@
             "additionalProperties": false
           }
         },
+        "filter_value_match_policy": {
+          "description": "普通筛选组件枚举成员的精确匹配与消歧合同",
+          "type": "object",
+          "required": [
+            "strategy",
+            "normalizations",
+            "exact_match_is_exclusive",
+            "substring_match_allowed",
+            "no_exact_match_action",
+            "rule_zh"
+          ],
+          "properties": {
+            "strategy": {"const": "exact_normalized_then_clarify"},
+            "normalizations": {"$ref": "#/$defs/string_array"},
+            "exact_match_is_exclusive": {"const": true},
+            "substring_match_allowed": {"const": false},
+            "no_exact_match_action": {"const": "clarify_required"},
+            "rule_zh": {"type": "string"}
+          },
+          "additionalProperties": false
+        },
         "time_scope": {
           "description": "本地解析的绝对日期窗口（Asia/Shanghai）",
           "type": "object",

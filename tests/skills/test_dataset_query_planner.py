@@ -424,6 +424,34 @@ def test_platform_enum_component_with_normal_category_is_usable(tmp_path: Path):
     assert result["execution_ref"]["platform_enum_return_hint_zh"]
 
 
+def test_filter_component_contract_requires_exact_enum_member_match(tmp_path: Path):
+    """普通筛选组件必须禁止把精确成员扩展到仅名称包含的其他成员。"""
+    data_dir = tmp_path / "data"
+    _write_ready_metadata(data_dir)
+
+    result = query_plan.build_model_query_plan(
+        "SP 广告数据集近7天按平台分析ACOS",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["execution_ref"]["filter_components"]
+    policy = result["execution_ref"]["filter_value_match_policy"]
+    assert policy["strategy"] == "exact_normalized_then_clarify"
+    assert policy["exact_match_is_exclusive"] is True
+    assert policy["substring_match_allowed"] is False
+    assert policy["no_exact_match_action"] == "clarify_required"
+    assert "department_arabic_chinese_numeral_equivalence" in policy["normalizations"]
+    assert "9部”只匹配“九部" in policy["rule_zh"]
+    assert "范泰克”不匹配“范泰克体系外" in policy["rule_zh"]
+    assert any(
+        "仅因名称包含" in message
+        for message in result["answer_contract"]["forbidden_outputs_zh"]
+    )
+
+
 def test_main_unexpected_error_is_wrapped_not_traceback(monkeypatch, capsys):
     """未预期异常（预期五类之外，如 AttributeError）不得裸 traceback，应包装为 internal_error 错误 JSON。"""
 
