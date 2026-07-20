@@ -30,6 +30,18 @@ def _request(job_id: str, asin: str) -> SellerSpriteScenarioRequest:
     )
 
 
+def _listing_request(job_id: str, asin: str) -> SellerSpriteScenarioRequest:
+    """构造 Listing Analysis 队列请求。"""
+    return SellerSpriteScenarioRequest(
+        scenario="listing-analysis",
+        site="US",
+        period="30d",
+        params={"asin": asin, "station": "GLOBAL"},
+        job_id=job_id,
+        export_format="json",
+    )
+
+
 async def _wait_for_state(scheduler, job_id: str, expected_state: str, *, attempts: int = 50):
     for _ in range(attempts):
         status = scheduler.job_status(job_id)
@@ -384,6 +396,58 @@ def test_scheduler_runs_tasks_in_fifo_order(tmp_path: Path):
 
         assert second_done["state"] == "succeeded"
         assert manager.started == ["job-1", "job-2"]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_binds_listing_analysis_to_default_account(tmp_path: Path):
+    """Listing Analysis 执行器和队列记录必须绑定同一个默认账号。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.account_pool import seller_sprite_account_key
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        provider = MultiAccountProvider(2)
+        used_accounts = []
+
+        def manager_factory(**kwargs):
+            class Manager:
+                async def run(self, request):
+                    used_accounts.append(kwargs["account_provider"].get_default().name)
+                    root_dir = tmp_path / str(request.job_id)
+                    root_dir.mkdir(parents=True, exist_ok=True)
+                    return SellerSpriteScenarioResult.empty(
+                        job_id=str(request.job_id),
+                        scenario=request.scenario,
+                        site=request.site,
+                        period=request.period,
+                        root_dir=root_dir,
+                        params_path=root_dir / "params.json",
+                        raw_path=root_dir / "raw.json",
+                        result_path=root_dir / "result.json",
+                    )
+
+            return Manager()
+
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=provider,
+            manager_factory=manager_factory,
+            auto_start=False,
+        )
+        await scheduler.enqueue(_listing_request("listing-account", "B0LISTING"))
+        await scheduler.start()
+        succeeded = await _wait_for_state(scheduler, "listing-account", "succeeded")
+
+        assert used_accounts == ["account-1"]
+        assert succeeded["assigned_account"] == "account-1"
+        assert store.get_task_account_binding("listing-account") == {
+            "assigned_account": "account-1",
+            "assigned_account_key": seller_sprite_account_key(provider.accounts[0]),
+        }
         await scheduler.close()
 
     asyncio.run(scenario())

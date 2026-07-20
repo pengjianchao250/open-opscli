@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-20 seller_sprite - 绑定 Listing Analysis 异步续查账号
+
+**变更原因**：多账号启用后，Listing Analysis 状态与结果续查会重新选择默认账号，可能与任务提交账号不一致并读取错误历史任务。
+**改动点**：Listing Analysis worker 在领取任务时同步持久化账号名称和稳定账号键，执行器固定使用该账号；状态历史查询和报告结果页按任务绑定恢复原账号；旧任务优先按账号名称恢复，仅单账号时允许无绑定兼容，多账号无法唯一确认或绑定账号已不可用时明确失败；同账号普通任务运行期间，Listing Analysis 保持排队，避免共享浏览器会话并发冲突。
+**验证结果**：账号绑定聚焦回归 `110 passed`；SellerSprite 全套为 `251 passed, 6 failed`，其中 4 项是既有最大并发账号已从 4 调整为 3但测试仍保留旧断言，2 项是既有 `seller-sprite-debug` 顶级命令未注册，与本次变更无关；变更生产模块 `py_compile` 通过，`git diff --check` 通过。
+**影响范围**：影响 Listing Analysis 提交后的状态查询和结果获取；普通卖家精灵异步任务不变。
+**回滚方式**：回退本次 SellerSprite 队列、调度器、MCP 工具、测试及本条记录。
+---
+
 ## 2026-07-16 calculator - 合并新品计算器简化分支
 
 **变更原因**：需要把 `feature/calculator-simplification` 的新品计算结果精简、多轮填写优化、FBA 包装参考、线上详情链接及 Polaris 默认启用配置合入当前 `feature/sellersprite`，同时保留当前分支已有的 SellerSprite 与 master 修复。

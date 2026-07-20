@@ -213,13 +213,51 @@ def test_store_generic_claim_skips_listing_analysis_tasks(tmp_path: Path):
     listing = store.claim_next_listing_analysis(
         queue_scope="seller_sprite",
         worker_key="listing-slot",
-        assigned_account="default",
+        assigned_account="account-2",
+        account_key="account-key-2",
     )
 
     assert generic["job_id"] == "generic-job"
     assert generic["task_kind"] == "generic"
     assert listing["job_id"] == "listing-job"
     assert listing["task_kind"] == "listing_analysis"
+    assert store.get_task_account_binding("listing-job") == {
+        "assigned_account": "account-2",
+        "assigned_account_key": "account-key-2",
+    }
+
+
+def test_store_listing_claim_waits_for_same_account_generic_task(tmp_path: Path):
+    """Listing Analysis 不得与同账号普通任务并发使用同一浏览器会话。"""
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_request(job_id="generic-running"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "generic-running",
+    )
+    store.enqueue(
+        request=_listing_request(job_id="listing-waiting"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "listing-waiting",
+    )
+    store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key-1",
+        assigned_account="account-1",
+        worker_key="slot-1",
+    )
+
+    claimed = store.claim_next_listing_analysis(
+        queue_scope="seller_sprite",
+        worker_key="listing-slot",
+        assigned_account="account-1",
+        account_key="account-key-1",
+    )
+
+    assert claimed is None
+    assert store.get_status("listing-waiting")["state"] == "queued"
 
 
 def test_store_rejects_late_finish_after_failover_generation_changes(tmp_path: Path):

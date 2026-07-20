@@ -527,17 +527,24 @@ class SellerSpriteTaskScheduler:
         )
 
     async def _run_listing_worker(self) -> None:
-        """串行消费 Listing Analysis，不参与通用账号池 failover。"""
+        """使用固定默认账号串行消费 Listing Analysis，不参与故障接替。"""
         while not self._stop_requested:
+            try:
+                account = self._ensure_account_provider().get_default()
+            except Exception:
+                # 默认账号暂不可用时保持任务 queued，等待账号池下一轮刷新后恢复消费。
+                await asyncio.sleep(self.poll_interval_seconds)
+                continue
             claimed = self.store.claim_next_listing_analysis(
                 queue_scope=QUEUE_SCOPE,
                 worker_key="seller-sprite-listing-analysis",
-                assigned_account=self._assigned_account_name(),
+                assigned_account=account.name,
+                account_key=seller_sprite_account_key(account),
             )
             if claimed is None:
                 await asyncio.sleep(self.poll_interval_seconds)
                 continue
-            await self._run_one(str(claimed["job_id"]))
+            await self._run_one(str(claimed["job_id"]), account=account)
             await self._reap_browser_sessions()
 
     async def _reap_browser_sessions(self) -> None:
@@ -643,7 +650,13 @@ class SellerSpriteTaskScheduler:
             # 单条任务的审计收尾异常不能拖垮整个后台 worker，记录后继续消费后续任务。
             logger.exception("卖家精灵任务调度执行异常，继续消费后续任务：job_id=%s", job_id)
 
-    async def _run_one(self, job_id: str) -> None:
+    async def _run_one(
+        self,
+        job_id: str,
+        *,
+        account: SellerSpriteAccount | None = None,
+    ) -> None:
+        """执行单账号兼容任务或已显式绑定账号的 Listing Analysis 任务。"""
         has_mcp_run = False
         try:
             request = self.store.get_request(job_id)
@@ -664,7 +677,11 @@ class SellerSpriteTaskScheduler:
             )
             manager = self.manager_factory(
                 settings=self.settings,
-                account_provider=self.account_provider,
+                account_provider=(
+                    _FixedSellerSpriteAccountProvider(account)
+                    if account is not None
+                    else self.account_provider
+                ),
                 jwt=jwt,
                 session_id=session_id,
             )

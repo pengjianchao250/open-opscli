@@ -711,6 +711,185 @@ def test_listing_analysis_status_relogs_and_retries_expired_history_session(monk
 
 
 
+def test_listing_analysis_status_uses_task_bound_account(monkeypatch):
+    from opscli.seller_sprite.accounts import SellerSpriteAccount
+    from opscli.seller_sprite.services.account_pool import seller_sprite_account_key
+
+    account_1 = SellerSpriteAccount("account-1", "one@example.com", "secret-1")
+    account_2 = SellerSpriteAccount("account-2", "two@example.com", "secret-2")
+
+    class SubmittedScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "scenario": "listing-analysis",
+                "state": "succeeded",
+                "assigned_account": "account-2",
+                "data": [{"asin": "B0FQJR6RTS", "contentReady": False}],
+            }
+
+    class OwnerStore:
+        def get_mcp_run(self, job_id):
+            return {
+                "job_id": job_id,
+                "user_email": "mcp-user@example.com",
+                "scenario": "listing-analysis",
+                "params_json": {"asin": "B0FQJR6RTS", "station": "GLOBAL"},
+            }
+
+        def get_task_account_binding(self, job_id):
+            return {
+                "assigned_account": "account-2",
+                "assigned_account_key": seller_sprite_account_key(account_2),
+            }
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            self.account_provider = type(
+                "AccountProvider",
+                (),
+                {
+                    "get_default": lambda self: account_1,
+                    "list_accounts": lambda self: [account_1, account_2],
+                },
+            )()
+
+    used_accounts = []
+
+    class FakeClient:
+        def __init__(self, *, account):
+            used_accounts.append(account.name)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def has_login_cookies(self):
+            return True
+
+        async def login(self):
+            return None
+
+        async def get_json(self, url, params, *, referer=None):
+            return {"code": "OK", "data": {"items": []}}
+
+    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", FakeManager)
+    monkeypatch.setattr("opscli.seller_sprite.api.client.SellerSpriteApiClient", FakeClient)
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: SubmittedScheduler())
+    monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: "mcp-user@example.com")
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_queue_store", lambda: OwnerStore())
+    monkeypatch.setattr(seller_sprite_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
+
+    result = _run(seller_sprite_tools.seller_sprite_listing_analysis_status("listing-job-account-2"))
+
+    assert result["success"] is True
+    assert used_accounts == ["account-2"]
+
+
+def test_listing_analysis_report_result_uses_task_bound_account(monkeypatch, tmp_path):
+    from opscli.seller_sprite.accounts import SellerSpriteAccount
+    from opscli.seller_sprite.services.account_pool import seller_sprite_account_key
+
+    account_1 = SellerSpriteAccount("account-1", "one@example.com", "secret-1")
+    account_2 = SellerSpriteAccount("account-2", "two@example.com", "secret-2")
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            self.account_provider = type(
+                "AccountProvider",
+                (),
+                {
+                    "get_default": lambda self: account_1,
+                    "list_accounts": lambda self: [account_1, account_2],
+                },
+            )()
+
+    used_accounts = []
+
+    async def fake_fetch(*, settings, account, task_id, root_dir):
+        used_accounts.append(account.name)
+        return SimpleNamespace(
+            response={"data": {"taskId": task_id, "taskStatus": "RUNNING"}},
+            warnings=[],
+            login={"mode": "cached"},
+        )
+
+    monkeypatch.setattr("opscli.seller_sprite.services.SellerSpriteApiManager", FakeManager)
+    monkeypatch.setattr(
+        "opscli.seller_sprite.browser_route.fetch_listing_analysis_report_with_browser_route",
+        fake_fetch,
+    )
+    monkeypatch.setattr(
+        "opscli.seller_sprite.config.load_settings",
+        lambda: SimpleNamespace(output_dir=tmp_path),
+    )
+
+    result = _run(
+        seller_sprite_tools._fetch_listing_analysis_report_result(
+            task_id="task-account-2",
+            session_id="sid",
+            jwt="jwt",
+            account_binding={
+                "assigned_account": "account-2",
+                "assigned_account_key": seller_sprite_account_key(account_2),
+            },
+        )
+    )
+
+    assert result["task_id"] == "task-account-2"
+    assert used_accounts == ["account-2"]
+
+
+def test_listing_analysis_account_resolution_rejects_ambiguous_history_task():
+    from opscli.seller_sprite.accounts import SellerSpriteAccount
+    from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+
+    accounts = [
+        SellerSpriteAccount("account-1", "one@example.com", "secret-1"),
+        SellerSpriteAccount("account-2", "two@example.com", "secret-2"),
+    ]
+    manager = SimpleNamespace(
+        account_provider=SimpleNamespace(list_accounts=lambda: accounts)
+    )
+
+    with pytest.raises(SellerSpriteConfigError, match="缺少可确认的账号绑定"):
+        seller_sprite_tools._resolve_listing_analysis_account(manager, {})
+
+
+def test_listing_analysis_account_resolution_rejects_removed_bound_account():
+    from opscli.seller_sprite.accounts import SellerSpriteAccount
+    from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+
+    remaining = SellerSpriteAccount("account-1", "one@example.com", "secret-1")
+    manager = SimpleNamespace(
+        account_provider=SimpleNamespace(list_accounts=lambda: [remaining])
+    )
+
+    with pytest.raises(SellerSpriteConfigError, match="绑定账号已不可用"):
+        seller_sprite_tools._resolve_listing_analysis_account(
+            manager,
+            {
+                "assigned_account": "account-2",
+                "assigned_account_key": "removed-account-key",
+            },
+        )
+
+
+def test_listing_analysis_account_resolution_allows_single_account_history_task():
+    from opscli.seller_sprite.accounts import SellerSpriteAccount
+
+    account = SellerSpriteAccount("account-1", "one@example.com", "secret-1")
+    manager = SimpleNamespace(
+        account_provider=SimpleNamespace(list_accounts=lambda: [account])
+    )
+
+    resolved = seller_sprite_tools._resolve_listing_analysis_account(manager, {})
+
+    assert resolved == account
+
+
 def test_listing_analysis_status_reads_history_by_asin(monkeypatch):
     class SubmittedScheduler:
         def job_status(self, job_id):
@@ -730,7 +909,7 @@ def test_listing_analysis_status_reads_history_by_asin(monkeypatch):
                 "params_json": {"asin": "B0FQJR6RTS", "station": "GLOBAL"},
             }
 
-    async def fake_history_status(*, asin, session_id, jwt):
+    async def fake_history_status(*, asin, session_id, jwt, account_binding):
         assert asin == "B0FQJR6RTS"
         assert session_id == "sid"
         assert jwt == "jwt"
@@ -838,7 +1017,7 @@ def test_listing_analysis_result_prefers_history_task_id_over_submit_placeholder
                 "params_json": {"asin": "B0FQJR6RTS", "station": "GLOBAL"},
             }
 
-    async def fake_history_status(*, asin, session_id, jwt):
+    async def fake_history_status(*, asin, session_id, jwt, account_binding):
         assert asin == "B0FQJR6RTS"
         return {
             "task_id": "f1f297d499620bd41177fa5455ff8001",
@@ -854,7 +1033,7 @@ def test_listing_analysis_result_prefers_history_task_id_over_submit_placeholder
             "remote": {"code": "OK", "success": True},
         }
 
-    async def fake_report_result(*, task_id, session_id, jwt):
+    async def fake_report_result(*, task_id, session_id, jwt, account_binding):
         assert task_id == "f1f297d499620bd41177fa5455ff8001"
         return {"task_id": task_id, "ready": False, "failed": False, "analyzing": True, "remote": None}
 
@@ -893,11 +1072,11 @@ def test_listing_analysis_result_uses_report_page_when_history_task_ready(monkey
     async def fail_old_remote_status(*args, **kwargs):
         raise AssertionError("result must open ai-report through browser-route instead of old task API")
 
-    async def fake_history_status(*, asin, session_id, jwt):
+    async def fake_history_status(*, asin, session_id, jwt, account_binding):
         assert asin == "B0FQJR6RTS"
         return {"task_id": "task-1", "ready": True, "failed": False, "remote_status": "COMPLETED", "remote": {}}
 
-    async def fake_report_result(*, task_id, session_id, jwt):
+    async def fake_report_result(*, task_id, session_id, jwt, account_binding):
         assert task_id == "task-1"
         assert session_id == "sid"
         assert jwt == "jwt"
