@@ -66,6 +66,10 @@
           "description": "本地解析的时间口径中文描述（含对比期与默认口径提示）",
           "type": "string"
         },
+        "time_resolution_zh": {
+          "description": "Python 当前日期与当前年份解析基准，禁止模型自行推算",
+          "type": "string"
+        },
         "recommended_dimensions": {
           "description": "无点名维度时的系统推荐（需向用户确认后采用）",
           "$ref": "#/$defs/string_array"
@@ -247,11 +251,23 @@
         "time_scope": {
           "description": "本地解析的绝对日期窗口（Asia/Shanghai）",
           "type": "object",
-          "required": ["start", "end", "is_default"],
+          "required": [
+            "start",
+            "end",
+            "is_default",
+            "reference_date",
+            "reference_year",
+            "resolution_source",
+            "year_source"
+          ],
           "properties": {
             "start": {"type": "string"},
             "end": {"type": "string"},
             "is_default": {"type": "boolean"},
+            "reference_date": {"type": "string"},
+            "reference_year": {"type": "integer"},
+            "resolution_source": {"const": "python_datetime_asia_shanghai"},
+            "year_source": {"enum": ["explicit_query", "python_current_date"]},
             "comparison_type": {"type": ["string", "null"]},
             "comparison_start": {"type": ["string", "null"]},
             "comparison_end": {"type": ["string", "null"]}

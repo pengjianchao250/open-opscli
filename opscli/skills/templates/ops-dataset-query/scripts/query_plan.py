@@ -60,6 +60,7 @@ FORBIDDEN_OUTPUT_MESSAGES = [
     "不得把内部技术标识作为业务判断理由。",
     "未完成当前账号权限枚举校验时，不得声称正式平台筛选范围已确定。",
     "筛选组件存在唯一精确或规范化等值命中时，不得把仅因名称包含该文本的其他枚举成员一并查询。",
+    "不得自行心算、猜测或替换相对时间及年份；只能使用规划器由 Python 生成的绝对日期窗口。",
 ]
 
 # 元数据刷新命令原文：blocked 规划器与错误指引统一引用，避免 Agent 需要翻参考文档才能自救
@@ -1460,6 +1461,11 @@ def build_model_contract(
         if scope.get("is_default"):
             scope_zh += "。注意：未识别到明确时间表述，这是默认口径，必须向用户披露并确认"
         model_view["time_scope_zh"] = scope_zh
+        model_view["time_resolution_zh"] = (
+            f"时间由 Python 按 {scope['timezone']} 当前日期 {scope['reference_date']} 计算；"
+            f"用户未明确年份时以 {scope['reference_year']} 年为相对时间基准，"
+            "跨年窗口按真实日历处理，禁止自行推算或改写。"
+        )
     # 推荐字段（无点名字段时）：供向用户提议，采用前须在确认摘要中说明来源
     if recommended_dims:
         model_view["recommended_dimensions"] = _field_names(recommended_dims)
@@ -1525,6 +1531,10 @@ def build_model_contract(
             "start": scope["start"],
             "end": scope["end"],
             "is_default": scope["is_default"],
+            "reference_date": scope["reference_date"],
+            "reference_year": scope["reference_year"],
+            "resolution_source": scope["resolution_source"],
+            "year_source": scope["year_source"],
             "comparison_type": (scope.get("comparison") or {}).get("type"),
             "comparison_start": (scope.get("comparison") or {}).get("start"),
             "comparison_end": (scope.get("comparison") or {}).get("end"),
@@ -1551,6 +1561,7 @@ def build_model_contract(
             execution_ref["query_template"] = template
             execution_ref["query_template_fill_rules_zh"] = (
                 "模板已预填授权字段与时间窗（日期过滤为 >=/<= 两行实测形态）。"
+                "时间窗由 Python 按 execution_ref.time_scope 的参考日期生成，禁止自行心算、猜测年份或改写。"
                 "普通指标默认 SUM 按用户口径调整；公式/快照指标不带 aggregation。"
                 "排序填 orderBy=[{\"field\":\"<结果alias>\",\"direction\":\"DESC|ASC\"}]，"
                 "行数填 limit；不需要的键（null 值）必须删除后再执行。"

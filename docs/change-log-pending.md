@@ -3834,3 +3834,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：仅部门、国家、组织等普通筛选组件的枚举成员选择；不改变数据集选择、字段、指标、平台 SC/VC 解析或查询执行接口。
 **回滚方式**：回退本次提交即可恢复 1.3.9 的筛选组件合同。
 ---
+
+## 2026-07-20 ops-dataset-query - 相对时间统一由 Python 当前日期解析
+
+**变更原因**：虽然现有 `time_scope.py` 已计算本月、上月和近 N 天，但规划合同未暴露 Python 当前日期/年份基准，且 `近30tian` 会被误判为未指定时间并回退默认近30天，存在模型自行猜测年份或多余确认的风险。
+**改动点**：扩展 `time_scope.py` 支持 `tian/day/days` 中英文混写，并输出 `reference_date`、`reference_year`、`resolution_source`、`year_source`；`query_plan.py` 将这些字段投影到模型与执行合同并禁止模型自行心算或改写；同步更新严格 Schema、Skill 时间规则和版本 1.3.11，补充本月、上月、近7天、近30tian及一月跨年上月测试。
+**验证结果**：`tests/skills/test_dataset_query_planner.py` 50 passed（含严格 Schema 与新增时间用例）；`uvx ruff check`、`compileall`、`git diff --check` 均通过；版本一致性检查为 1.3.11；以 Python 实际参考日 2026-07-20 冒烟验证本月、上月、近7天、近30tian 均返回正确绝对日期且 `matched=true`。
+**影响范围**：仅相对时间解析和时间规划合同；不改变数据集选择、字段、筛选、指标或查询执行接口。
+**回滚方式**：回退本次提交即可恢复 1.3.10 时间合同。
+---

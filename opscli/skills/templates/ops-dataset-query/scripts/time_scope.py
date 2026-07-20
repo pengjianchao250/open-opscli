@@ -5,8 +5,9 @@
 沙箱多为 UTC 时区还会额外偏一天。本模块在规划合同内一次算出
 Asia/Shanghai 口径的绝对日期与对比窗口，模型只做展示与填充、不再自算。
 
-只用标准库；解析失败时返回 matched=False 并给出默认窗口（近30天含今天，
-is_default=True，消费方必须向用户披露默认口径）。
+只用 Python 标准库；未显式年份的相对时间统一以 Asia/Shanghai 当前日期与当前年份
+为计算基准，跨年边界按真实日历处理。解析失败时返回 matched=False 并给出默认窗口
+（近30天含今天，is_default=True，消费方必须向用户披露默认口径）。
 """
 
 from __future__ import annotations
@@ -122,12 +123,17 @@ def _window(query: str, today: date) -> tuple[date, date, str, bool]:
         year = today.year - 1
         return date(year, 1, 1), date(year, 12, 31), f"去年（{year}年全年）", False
 
-    m = re.search(r"[近最][近]?\s*([0-9]+|[一两二三四五六七八九十]+)\s*(天|日|周|个?月)", query)
+    m = re.search(
+        r"[近最][近]?\s*([0-9]+|[一两二三四五六七八九十]+)\s*"
+        r"(天|日|tian|days?|周|个?月)",
+        query,
+        re.IGNORECASE,
+    )
     if m:
         count = _num(m.group(1))
-        unit = m.group(2)
+        unit = m.group(2).casefold()
         if count:
-            if unit in ("天", "日"):
+            if unit in ("天", "日", "tian", "day", "days"):
                 start = today - timedelta(days=count - 1)
                 return start, today, f"近{count}天（含今天）", False
             if unit == "周":
@@ -167,17 +173,23 @@ def parse(query: str, *, today: date | None = None) -> dict:
     """
     if today is None:
         today = datetime.now(_TZ).date()
-    start, end, label, is_default = _window(query or "", today)
+    text = query or ""
+    start, end, label, is_default = _window(text, today)
     result: dict = {
         "start": _fmt(start),
         "end": _fmt(end),
         "label_zh": label,
         "timezone": TIMEZONE_NAME,
+        "reference_date": _fmt(today),
+        "reference_year": today.year,
+        "resolution_source": "python_datetime_asia_shanghai",
+        "year_source": (
+            "explicit_query" if re.search(r"20\d{2}", text) else "python_current_date"
+        ),
         "is_default": is_default,
         "matched": not is_default,
         "comparison": None,
     }
-    text = query or ""
     if _COMPARE_YOY_RE.search(text):
         result["comparison"] = {
             "type": "yoy",
