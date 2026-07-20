@@ -375,7 +375,7 @@ class AsinBiReportDataClient:
                     cookies=cookies,
                 )
             params = {"asins": ",".join(asins)}
-            params.update(_date_range_params(start_date=start_date, end_date=end_date))
+            params.update(_report_date_range_params(date_from=start_date, date_to=end_date))
             response = self.http_get(
                 self._resolve_endpoint(endpoint),
                 params=params,
@@ -1324,10 +1324,17 @@ def _listing_account_type_for_asin(asin: str, account_type_by_asin: Mapping[str,
 
 
 def _date_range_params(*, start_date: str | None, end_date: str | None) -> dict[str, str]:
-    """构造后端 ASIN BI 接口支持的日期范围参数。"""
+    """构造 POST 查询接口支持的日期范围参数。"""
     if not start_date or not end_date:
         return {}
     return {"start_date": start_date, "end_date": end_date}
+
+
+def _report_date_range_params(*, date_from: str | None, date_to: str | None) -> dict[str, str]:
+    """构造 GET 报表接口支持的日期范围参数。"""
+    if not date_from or not date_to:
+        return {}
+    return {"date_from": date_from, "date_to": date_to}
 
 
 def _source_configs(endpoints: Mapping[str, str] | None) -> dict[str, dict[str, str]]:

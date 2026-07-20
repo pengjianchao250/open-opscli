@@ -371,6 +371,70 @@ def test_bi_report_data_client_filters_sources():
     ]
 
 
+def test_bi_report_data_client_maps_date_params_by_endpoint_method():
+    get_calls = []
+    post_calls = []
+
+    def http_get(url, **kwargs):
+        get_calls.append({"url": url, **kwargs})
+        return httpx.Response(200, json={"code": 0, "data": {"rows": []}})
+
+    def http_post(url, **kwargs):
+        post_calls.append({"url": url, **kwargs})
+        return httpx.Response(200, json={"code": 0, "data": []})
+
+    client = AsinBiReportDataClient(
+        auth_client=DummyAuthClient(),
+        ops_url="https://ops.example.com/api",
+        http_get=http_get,
+        http_post=http_post,
+    )
+
+    client.fetch(
+        asins=["B0TEST1234"],
+        start_date="2026-06-01",
+        end_date="2026-06-16",
+        source_keys=[
+            "sales_traffic",
+            "deals",
+            "turnover_inventory",
+            "crawler_details",
+            "sp_search_term",
+        ],
+        default_site="US",
+    )
+
+    report_calls = {
+        call["url"].rsplit("/", 1)[-1]: call["params"]
+        for call in get_calls
+        if not call["url"].endswith("/crawler-details")
+    }
+    assert report_calls == {
+        "sales-traffic-data": {
+            "asins": "B0TEST1234",
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-16",
+        },
+        "deals-data": {
+            "asins": "B0TEST1234",
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-16",
+        },
+        "turnover-inventory-data": {
+            "asins": "B0TEST1234",
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-16",
+        },
+    }
+    crawler_call = next(call for call in get_calls if call["url"].endswith("/crawler-details"))
+    assert crawler_call["params"] == {"asins": "B0TEST1234", "country": "US"}
+    assert post_calls[0]["json"] == {
+        "asin": "B0TEST1234",
+        "start_date": "2026-06-01",
+        "end_date": "2026-06-16",
+    }
+
+
 def test_bi_report_data_client_fetches_bi_sources_in_parallel():
     state = {"active": 0, "max_active": 0}
     lock = threading.Lock()
