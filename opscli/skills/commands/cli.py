@@ -17,6 +17,7 @@ import re
 import shutil
 import tempfile
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 
 import typer
@@ -559,11 +560,11 @@ def _print_install_line(install: object) -> None:
     )
 
 
-def _inject_rules_for_installs(installs: list[object]) -> None:
+def _inject_rules_for_installs(installs: Sequence[object], *, verbose: bool = False) -> None:
     """对安装结果涉及的编辑器目录统一注入反馈铁律。
 
     按 (runtime, skills_dir) 去重，避免同一编辑器目录重复注入。
-    注入成功后打印提示信息。
+    verbose=True 时才打印每条注入提示（默认静默，仅执行注入动作）。
     """
     injector = RuleInjector()
     seen: set[tuple[str, str]] = set()
@@ -578,7 +579,7 @@ def _inject_rules_for_installs(installs: list[object]) -> None:
             continue
         seen.add(key)
         config_path = injector.inject(runtime, skills_parent)
-        if config_path:
+        if config_path and verbose:
             _console.print(
                 f"  [dim]⚙ 已追加反馈铁律到 {config_path}[/dim]"
             )
@@ -760,11 +761,13 @@ def _install_interactive(
     force: bool,
     yes: bool,
     pretty: bool,
+    verbose: bool = False,
 ) -> None:
     """TUI 交互安装：选择 Skills → 选择目标工具 → 批量安装。
 
     交互模式默认 force=True（覆盖已有安装），无需手动传 --force。
     yes=True 时跳过所有 prompt，直接全选 Skills 和全部检测到的工具。
+    verbose=True 时输出每个安装目标的逐条日志（默认仅输出最终汇总）。
     """
     force = True  # TUI 模式始终覆盖，避免因已安装而中断
 
@@ -809,15 +812,17 @@ def _install_interactive(
             )
             all_results.append(_with_post_install_guidance(result.to_dict(), skill_name))
             all_installs.extend(result.installs)
-            for install in result.installs:
-                _print_install_line(install)
+            # 默认不输出逐条安装日志，仅在 --verbose 时打印每个目标的详细行
+            if verbose:
+                for install in result.installs:
+                    _print_install_line(install)
         except Exception as exc:
             errors.append(f"{skill_name}: {exc}")
             _console.print(f"  [red]×[/red] [bold]{skill_name}[/bold] [red]{exc}[/red]")
 
     # 批量安装结束后：如果安装了 ops-feedback，统一注入铁律（去重）
     if "ops-feedback" in skill_names and not skills_dir and all_installs:
-        _inject_rules_for_installs(all_installs)
+        _inject_rules_for_installs(all_installs, verbose=verbose)
 
     _console.print()
     if errors:
@@ -1759,6 +1764,7 @@ def install_skill(
     sync_market: bool = typer.Option(False, "--sync-market", help="从市场安装记录同步：补装缺失 + 升级旧版"),
     dry_run: bool = typer.Option(False, "--dry-run", help="仅预览同步计划，不实际安装（需配合 --sync-market）"),
     share_code: str | None = typer.Option(None, "--share-code", help="分享码，绕过 personal/department 权限限制安装广场技能"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="输出每个安装目标的逐条日志（默认仅输出汇总）"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """安装 Skill 到本地目录。
@@ -1771,6 +1777,7 @@ def install_skill(
     - --dry-run 配合 --sync-market 仅预览同步计划，不实际安装。
 
     加 --yes / -y 可跳过确认，直接安装全部到所有检测到的工具。
+    加 --verbose / -v 可输出逐条安装日志（默认静默，仅输出最终汇总）。
     """
     # ── --sync-market 模式 ─────────────────────────────────
     if sync_market:
@@ -1796,7 +1803,15 @@ def install_skill(
             _console.print("[dim]未发现 AuWork 用户目录（~/.auwork 下无纯数字子目录），已跳过 AuWork 安装[/dim]")
     try:
         if name is None:
-            _install_interactive(manager, skills_dir=skills_dir, runtime=runtime, force=force, yes=yes, pretty=pretty)
+            _install_interactive(
+                manager,
+                skills_dir=skills_dir,
+                runtime=runtime,
+                force=force,
+                yes=yes,
+                pretty=pretty,
+                verbose=verbose,
+            )
             return
 
         # 远程广场安装（标识符含 @）；远程安装默认直接覆盖，无需 --force
@@ -1828,7 +1843,7 @@ def install_skill(
         )
         # CLI 层统一注入铁律：仅安装 ops-feedback 时触发
         if name == "ops-feedback" and not skills_dir:
-            _inject_rules_for_installs(result.installs)
+            _inject_rules_for_installs(result.installs, verbose=verbose)
 
         payload = {
             "success": True,

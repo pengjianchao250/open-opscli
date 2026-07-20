@@ -1,23 +1,48 @@
 # 待归档变更记录
 
+## 2026-07-20 skills - install 默认静默，新增 --verbose/-v 控制逐条日志
+
+**变更原因**：批量安装（10 个 Skill × 7 个工具）时逐条打印 70+ 行安装日志和逐条铁律注入提示，输出过于冗长；用户要求默认不输出日志，增加参数控制
+**改动点**：opscli/skills/commands/cli.py — install_skill 新增 --verbose/-v 选项（默认 False）；_install_interactive 增加 verbose 参数，仅在 verbose 时调用 _print_install_line；_inject_rules_for_installs 增加 verbose 参数（注入动作照常执行，仅提示行受控），签名同步改为 Sequence[object] 消除 Pyright 协变告警；单名安装路径的铁律注入同样透传 verbose。最终汇总行与 JSON payload 输出保持不变（机器解析契约不受影响）
+**验证结果**：opscli skills install --yes --skills-dir /tmp/opscli_vtest 默认无逐条日志，仅汇总 + JSON；加 -v 后恢复逐条 √/↑ 日志行；pytest tests/skills/ 退出阶段 capture 崩溃与 2026-07-17 基线一致（预存问题，与本次改动无关）
+**影响范围**：仅 skills install 命令的终端日志展示；JSON 输出、安装与铁律注入行为不变
+**回滚方式**：回退本次 commit（或删除 --verbose 参数并还原三处 verbose 判断）
+---
+
 ## 2026-07-20 seller_sprite - 限制持久队列单任务执行时间
 
-**变更原因**：通用任务只有页面和网络操作的局部超时，整条执行链没有时间上限；多个 worker 同时卡住后会长期占用全部工作账号，导致后续持久队列无法继续消费。
-**改动点**：新增默认 600 秒的 `OPSCLI_SELLER_SPRITE_TASK_TIMEOUT_SECONDS` 配置；generic 与 Listing Analysis 的本地执行统一通过硬超时边界；超时后取消执行、以 `SELLER_SPRITE_TASK_TIMEOUT` 写入任务和 MCP 失败态、关闭对应账号 browser 会话，并允许 worker 继续消费下一条任务；保留历史 running 的显式运维策略，不在 scheduler 启动时修改其他实例任务；同步账号池和调度器测试为最多 3 个工作账号，并修正账号池类说明。
-**验证结果**：新增超时配置、generic 超时后继续消费及 Listing Analysis 超时回归通过（`3 passed`）；账号池和调度器并发上限聚焦回归通过（`6 passed`）；SellerSprite 与 MCP 工具全套为 `259 passed, 2 failed`，剩余两项均为既有 `seller-sprite-debug` 顶级命令未注册，与本次修改无关；变更生产模块 `py_compile` 通过，`git diff --check` 通过。
-**影响范围**：影响 SellerSprite generic 与 Listing Analysis 持久任务的本地执行时限及超时后的会话生命周期；正常完成任务、排队顺序和历史 running 运维命令不变。
-**回滚方式**：回退 SellerSprite 超时配置、领域异常、调度器、测试、配置文档及本条记录。
+**变更原因**：一期 T1-1，向用户暴露一键升级入口
+**改动点**：opscli/cli.py 新增 @app.command("self-update")，薄壳调用 run_self_update 并透传退出码
+**验证结果**：pytest tests/shared/test_self_update.py -v 18 个测试全绿；真机 opscli self-update --help 冒测通过
+**影响范围**：新增顶级命令，不影响既有命令
+**回滚方式**：回退本次 commit
 ---
 
-## 2026-07-20 seller_sprite - 绑定 Listing Analysis 异步续查账号
+## 2026-07-16 shared - 新增 run_self_update 升级编排流程
 
-**变更原因**：多账号启用后，Listing Analysis 状态与结果续查会重新选择默认账号，可能与任务提交账号不一致并读取错误历史任务。
-**改动点**：Listing Analysis worker 在领取任务时同步持久化账号名称和稳定账号键，执行器固定使用该账号；状态历史查询和报告结果页按任务绑定恢复原账号；旧任务优先按账号名称恢复，仅单账号时允许无绑定兼容，多账号无法唯一确认或绑定账号已不可用时明确失败；同账号普通任务运行期间，Listing Analysis 保持排队，避免共享浏览器会话并发冲突。
-**验证结果**：账号绑定聚焦回归 `110 passed`；SellerSprite 全套为 `251 passed, 6 failed`，其中 4 项是既有最大并发账号已从 4 调整为 3但测试仍保留旧断言，2 项是既有 `seller-sprite-debug` 顶级命令未注册，与本次变更无关；变更生产模块 `py_compile` 通过，`git diff --check` 通过。
-**影响范围**：影响 Listing Analysis 提交后的状态查询和结果获取；普通卖家精灵异步任务不变。
-**回滚方式**：回退本次 SellerSprite 队列、调度器、MCP 工具、测试及本条记录。
+**变更原因**：一期 T1-1，实现"升级 CLI + 自动同步 Skills"完整编排
+**改动点**：opscli/shared/self_update.py 追加 run_self_update() 与 _resolve_opscli_command()；复用 update_check 的版本查询与比较
+**验证结果**：pytest tests/shared/test_self_update.py -v 15 个测试全绿
+**影响范围**：纯新增函数，未被任何入口调用（Task 3 接线）
+**回滚方式**：回退本次 commit
 ---
 
+## 2026-07-16 shared - 新增自升级模块：安装方式检测与升级命令构造
+
+**变更原因**：一期升级体验优化（T1-1/T1-2），为 opscli self-update 命令提供实现层基础
+**改动点**：新增 opscli/shared/self_update.py（detect_install_method + build_upgrade_command），pip 路径强制 --only-binary :all: 防源码编译退化
+**验证结果**：pytest tests/shared/test_self_update.py -v 9 个测试全绿
+**影响范围**：纯新增模块，不影响现有功能
+**回滚方式**：删除 opscli/shared/self_update.py 与 tests/shared/test_self_update.py
+---
+
+## 2026-07-16 release - 批量 cherry-pick master_pjc 的 19 个提交至 release
+
+**变更原因**：用户要求把 master_pjc 分支上从「feat(query): QueryMetadataResult 透传数据集默认条件 filter_configs（R4）」（aaf8c2e）到「feat(query): 查询超时可配置(默认30→120秒)并支持结果落盘 JSON 文件」（c81a177）的连续 19 个提交同步到 release 分支，覆盖数据集默认条件 filter_config 全链路（R4/R5）、ops-dataset-query v1.3.6/1.4.0、macOS Keychain 禁用改 AES 加密文件、查询超时可配置等能力。
+**改动点**：在 release 分支执行 `git cherry-pick a811d7b..c81a177`，19 个提交全部落地（f90e47b..180f6ce）。期间 `docs/change-log-pending.md` 发生多次同形态冲突（两分支各自在顶部追加记录，且 master_pjc 侧带有 release 不存在的「2026-07-10 合并 ASIN 实时取数服务到 master」上下文条目头），统一按"新条目置前 + 保留 release 已有的 2026-07-14 Polaris 条目 + 丢弃 master_pjc 独有上下文头"解决；代码文件均无冲突。
+**验证结果**：`git diff --check` 无冲突标记残留；`pytest tests/auth/ -q` 46 passed；`pytest tests/query/ -q` 76 passed + 2 failed（预存，release 屏蔽了 catalog/intent 命令所致，基线提交 2953760 上同样失败）；`pytest tests/skills/ --ignore=tests/skills/test_packaging.py -q` 138 passed + 4 failed（预存，基线上同样失败）；核心改动测试 `tests/skills/test_dataset_query_planner.py` 36 passed。与 master_pjc 对比，目标路径仅剩 release 预存独有差异（polaris_enabled 默认值、catalog/intent 临时屏蔽、release 独有测试文件）。
+**影响范围**：release 分支新增 19 个提交（领先 origin/release 20 个提交，未推送），涉及 query 模块、ops-dataset-query Skill 模板、auth 凭证存储、相关测试与文档。
+**回滚方式**：`git reset --hard 2953760`（cherry-pick 前的 release HEAD）。
 ## 2026-07-16 calculator - 合并新品计算器简化分支
 
 **变更原因**：需要把 `feature/calculator-simplification` 的新品计算结果精简、多轮填写优化、FBA 包装参考、线上详情链接及 Polaris 默认启用配置合入当前 `feature/sellersprite`，同时保留当前分支已有的 SellerSprite 与 master 修复。
@@ -300,6 +325,168 @@
 
 ---
 
+## 2026-07-14 asin-data - Polaris 鉴权回退与用户手册
+
+**变更原因**：ASIN 刊登实时取数在个人 Polaris JWT 和直接 exchange 均失败时缺少 BJX Token 自动兜底，同时 CLI/MCP 的公开命令、返回协议和 Polaris 开关说明尚未形成独立完整手册。
+**改动点**：默认 `user` 模式按当前用户 Polaris JWT、直接 `/api/auth/cli-token` exchange、OPS `/dataMetrics/v1/asin-report-files/polaris-bjx-token` 的顺序获取刊登鉴权，前一路成功即停止；三路均失败时返回 `POLARIS_USER_AUTH_MISSING`，错误只保留异常类型、业务码或 HTTP 状态，不包含 Token、Cookie、Session ID、账号、密码或远端敏感正文。显式 `managed`、`bi_login` 模式保持原语义。新增 `docs/guide/ASIN取数CLI命令手册.md` 和 `docs/guide/ASIN取数MCP工具手册.md`，完整说明 `live-data`、`fetch-file`、yicopy、类目 Top 的参数、成功/失败协议、Polaris 开关和恢复流程；类目 Top 补充 AI 顺序调用规范：先从实时 `listing_basic` 的 `类目` 字段按英文逗号取最后一个非空最小类目，再调用 Top10，空类目不得猜测；新增文档契约测试。
+**验证结果**：TDD 阶段新增 5 个鉴权测试，其中 4 个在实现前按预期失败；实现后 `tests/asin_data/test_bi_report_data.py` 结果为 `25 passed`，文档契约测试结果为 `3 passed`。运行全部 `tests/asin_data`、MCP ASIN 工具和限流测试，结果为 `112 passed`；执行 `python -m compileall -q opscli/asin_data opscli/mcp/tools/asin_data.py`、`git diff --check` 和手册敏感信息扫描均通过。
+**影响范围**：影响 `live-data --data-scope basic/listing/listing_basic/all`、MCP `asin_data_live_data` 和 `asin_data_category_top` 的刊登鉴权回退；个人 Polaris 可用时权限不变，BI-only、历史文件、yicopy、卖家精灵和 Rufus 取数逻辑不变。
+**回滚方式**：回退 `bi_report_data.py` 的 BJX 回退分支、对应鉴权测试、两份用户手册、文档契约测试、设计与实施计划及本条变更记录。
+
+---
+
+## 2026-07-14 asin-data - crawler-details 多站点取数
+
+**变更原因**：`crawler-details` 接口新增 `country` 参数，现有 ASIN live-data、MCP 和类目 Top10 链路需要统一支持默认 US、指定站点及批量多站点分组请求。
+**改动点**：`AsinBiReportDataClient` 为 `crawler_details` 增加按标准化站点分组的专用请求逻辑，每次请求携带 `country`，未提供站点时默认 `US`；不同站点并行获取并按站点首次出现顺序合并 `rows`，部分失败保留成功数据并返回 `country_errors`。CLI、MCP 和类目 Top10 继续复用现有 `site/site_by_asin` 参数，补充公开参数说明和站点透传回归测试；新增设计与实施计划文档。
+**验证结果**：先运行 `tests/asin_data/test_bi_report_data.py -k "crawler or fetches_all_sources" -q` 验证旧实现出现 4 个预期失败，完成实现后同命令 `4 passed`；运行 `tests/asin_data/test_bi_report_data.py tests/asin_data/test_category_top.py tests/asin_data/test_asin_data_cli.py tests/mcp/test_asin_data_tools.py -q` 通过，结果 `54 passed`；执行 `python -m py_compile` 检查 `bi_report_data.py`、`cli.py` 和 MCP `asin_data.py` 通过。
+**影响范围**：影响 `live-data --data-scope basic/all`、MCP `asin_data_live_data` 和 `asin_data_category_top` 中的爬虫详情请求；不改变公开参数、`crawler_details.rows` 数据结构、刊登数据、其他 BI 数据源、卖家精灵或 Rufus。
+**回滚方式**：回退 `bi_report_data.py` 的 crawler country 分组方法、CLI/MCP 参数说明、相关测试以及设计和实施计划文档。
+
+---
+
+## 2026-07-14 asin-data/mcp - 同步 ASIN 取数服务到 release
+
+**变更原因**：需要将 `codex/asin-data-service-merge` 中已经整理完成的 ASIN 取数 CLI/MCP 能力同步到 `release`，并保留 Top10/category-top 取数修复和默认当前用户北极星鉴权策略，便于后续 release 部署使用。
+**改动点**：同步 `opscli asin-data live-data/fetch-file/category-top/yicopy-keyword-engine` 相关服务、AI Ready 返回、xlsx/OSS 上传、MCP `asin_data_live_data`/`asin_data_fetch_file`/`asin_data_category_top`/`asin_data_yicopy_keyword_engine` 工具、ASIN MCP 限流与 health 工具；刊登取数默认使用当前用户 Polaris token，兼容 `OPSCLI_ASIN_DATA_LISTING_AUTH_MODE=managed/bi_login`；修复 token URL 拼接，避免系统 URL 和 endpoint 同时带斜杠时出现双斜杠；补充 ASIN、MCP、文件上传、auth 配置等测试。
+**验证结果**：执行 `D:\workspace\open-opscli\.venv\Scripts\python.exe -m pytest tests\auth\test_config.py tests\auth\test_token_manager.py tests\asin_data\test_ai_response.py tests\asin_data\test_asin_data_cli.py tests\asin_data\test_bi_report_data.py tests\asin_data\test_category_top.py tests\asin_data\test_category_top_workbook.py tests\asin_data\test_daily_pipeline.py tests\asin_data\test_direct_runner.py tests\asin_data\test_report_files.py tests\asin_data\test_single_asin_collect.py tests\asin_data\test_split_package_builder.py tests\asin_data\test_yicopy_keyword_engine.py tests\mcp\test_asin_data_limit.py tests\mcp\test_asin_data_tools.py tests\mcp\test_health_tool.py tests\shared\test_file_uploads.py -q` 通过，结果 `122 passed`；执行 `D:\workspace\open-opscli\.venv\Scripts\python.exe -m py_compile opscli\auth\config.py opscli\auth\core\token_manager.py opscli\asin_data\cli.py opscli\asin_data\services\bi_report_data.py opscli\asin_data\services\collector.py opscli\asin_data\services\daily_pipeline.py opscli\asin_data\services\split_package_builder.py opscli\asin_data\services\category_top.py opscli\asin_data\services\category_top_workbook.py opscli\asin_data\services\yicopy_keyword_engine.py opscli\mcp\asin_data_limit.py opscli\mcp\tools\asin_data.py opscli\mcp\tools\health.py opscli\shared\file_uploads.py` 通过。
+**影响范围**：影响 ASIN 取数 CLI、ASIN MCP 工具、ASIN 取数 Skill 模板、文件上传客户端和 Polaris 鉴权配置；不包含 seller_sprite、sif、scrape_do、shopify 等非 ASIN 改动。
+**回滚方式**：回退本次提交中 ASIN/MCP/文件上传/Skill 模板/测试文件以及本条 changelog 即可。
+---
+
+## 2026-07-10 ASIN 取数 - release 合入刊登授权回退
+
+**变更原因**：用户要求将 ASIN 取数服务中“默认走托管北极星 token，刊登接口未登录时再用固定 BI 账号登录回退”的修改合并回 release 并推送，避免部署到 MCP 后继续优先使用本地 BI_AUTH/BI_COOKIE 或旧 token。
+**改动点**：`opscli/asin_data/services/bi_report_data.py` 移除 `BI_AUTH` / `BI_COOKIE` 对刊登基础数据鉴权的优先级，新增默认 BI 登录账号常量和“未登陆/未登录”识别，在托管 token 被刊登接口判定失效时强制使用默认账号登录后重试；新增 `tests/asin_data/test_bi_report_data.py` 覆盖托管 token 优先和未登录回退登录两条路径。
+**验证结果**：已设置 `PYTHONPATH=当前工作区` 后运行 `python -m pytest tests/asin_data/test_bi_report_data.py -q`，结果 2 passed；已运行 `python -m compileall opscli/asin_data/services/bi_report_data.py opscli/mcp/tools/asin_data.py` 通过；已运行 `python -c "import importlib; importlib.import_module('opscli.mcp.server')"` 通过（导入时存在既有工具重复注册 warning，但退出码为 0）；已运行 `git diff --check` 通过。
+**影响范围**：影响 `asin-data live-data --data-scope basic/listing_basic` 及 MCP ASIN 基础刊登取数的授权选择；BI 数据、卖家精灵、Rufus 和非刊登数据源不受影响。
+**回滚方式**：回退 `opscli/asin_data/services/bi_report_data.py`、`tests/asin_data/test_bi_report_data.py` 和本条变更记录即可。
+
+---
+
+## 2026-06-29 Amazon Rufus - watch-login 页面生命周期诊断
+
+**变更原因**：用户反馈 `amazon-rufus watch-login` 打开浏览器后保留 Amazon 页面，但另一个页签会反复打开并关闭。静态代码无法直接确认该页签来源，需要增加可控诊断日志，并避免页面关闭时透出裸 Playwright 异常。
+
+**改动点**：`opscli/amazon_rufus/services/browser.py` 新增 `OPS_RUFUS_DEBUG_PAGES=1` 控制的 page 创建、导航、关闭诊断输出，按 `existing`、`external`、`ops-login`、`ops-product` 标记页签来源，并对诊断 URL 仅保留 scheme、host、path；`_wait_page_or_sleep()` 将 Playwright 页面关闭类错误转换为 `SeedRequestNotCapturedError`；`tests/amazon_rufus/test_core.py` 新增页面生命周期、URL query 脱敏和关闭异常包装回归测试。
+
+**验证结果**：RED 阶段新增用例在旧实现下失败：`./.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_core.py" -k "debug_pages or wraps_closed_page_wait_error" -q`，结果 3 failed；GREEN 后同命令通过，3 passed；运行 `./.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_core.py" -k "watch_login or debug_pages or closed" -q` 通过，7 passed；运行 `./.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_core.py" -q` 通过，90 passed；运行 `./.venv/Scripts/python.exe -m py_compile "opscli/amazon_rufus/services/browser.py"` 通过。
+
+**影响范围**：仅影响 Rufus `watch_login_and_capture_seed_request()` 的可选诊断输出和页面关闭错误口径；默认未设置 `OPS_RUFUS_DEBUG_PAGES` 时不输出诊断日志，不改变 MCP schema、CLI 参数、登录页打开次数、商品页打开次数或 headless 后端获取链路。
+
+**回滚方式**：回退 `opscli/amazon_rufus/services/browser.py`、`tests/amazon_rufus/test_core.py` 中本次页面生命周期诊断和关闭异常包装相关改动，并删除本条变更记录。
+
+---
+
+## 2026-06-22 Amazon Rufus - watch_login 单次触发与 DevTools 参数修复
+
+**变更原因**：亚马逊 Rufus 登录态失效时，同一次 Skill 调用内多个错误分支都可能再次触发 `watch_login`，导致浏览器反复打开登录页或商品页；同时 Chrome 启动参数会自动打开 DevTools 页签，增加额外页面干扰。
+
+**改动点**：移除 `opscli/amazon_rufus/services/browser.py` 中的 `--auto-open-devtools-for-tabs`；更新 `.agents/skills/ops-amazon-rufus` 与 `opscli/skills/templates/ops-amazon-rufus` 的 `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md`，新增 `watch_login_attempted` 约束，要求 MCP/CLI 登录采集在同一次 Skill 调用内最多触发一次；同步新增 `.super-dev/changes/amazon-rufus-watch-login-once` 与 `output/amazon-rufus-skill-*` 产物；补充 `tests/amazon_rufus/test_core.py` 和 `tests/skills/test_ops_amazon_rufus_updater.py` 回归测试。
+
+**验证结果**：已先运行新增测试并确认旧实现失败于 DevTools 参数仍存在、Skill 文档缺少 `watch_login_attempted`；修复后运行 `uv run pytest "tests/amazon_rufus/test_core.py" -q`，结果 86 passed；运行 `uv run pytest "tests/skills/test_ops_amazon_rufus_updater.py" -q`，结果 10 passed；运行 `uv run python -m py_compile "opscli/amazon_rufus/services/browser.py"` 通过；运行 pretty-mermaid 渲染命令重新生成 `output/amazon-rufus-skill-flow.svg` 成功。
+
+**影响范围**：影响 Rufus 自动启动调试浏览器的参数、Agent/Skill 登录采集编排、内置模板、已安装项目版 Skill、Super Dev 设计产物和文档契约测试；不改变 MCP Tool schema、远程授权偏好、CLI fallback 白名单、Rufus 后端请求逻辑或敏感字段隐藏规则。
+
+**回滚方式**：回退 `browser.py` 启动参数修改、上述 Skill 文档与 Super Dev 产物中的 `watch_login_attempted` 规则，以及新增/调整的回归测试和本变更记录。
+
+---
+
+## 2026-06-11 Amazon Rufus Skill - README 补充三条整体调用链
+
+**变更原因**：用户纠正应保存最初讨论的 Rufus 整体调用链，而不是只记录 OPS 平台 Cookie `content` 读取局部链路；README 中需要按三条链路说明 Skill、MCP 和 CLI 的调用关系。
+**改动点**：将 Rufus Skill 模板 README 中的局部 `content` 读取小节替换为“整体调用链（三条）”，分别描述 Skill 编排链、MCP 后端获取链、CLI fallback 链，并在 MCP 后端获取链中保留 `content` 裸 cURL 读取、旧 JSON record 兼容和旧 `curl_data` / 仅 `storage_state` 失效规则。
+**验证结果**：已运行 `uv run pytest tests/skills/test_ops_amazon_rufus_updater.py tests/skills/test_cli.py -q`，结果 20 passed。
+**影响范围**：仅影响 `opscli/skills/templates/ops-amazon-rufus/README.md` 文档说明和本变更记录，不改变代码行为、MCP schema、CLI 参数或后端 API 契约。
+**回滚方式**：删除 README 中新增的“整体调用链（三条）”小节，并移除此变更记录。
+
+---
+
+## 2026-06-22 ops-amazon-rufus Skill - 增加回答质量重试规则
+
+**变更原因**：Rufus 获取成功后可能出现无回答、拒答、答非所问，或用户询问评价/风险/适配性等复杂问题但回答退化为商品详情的情况；原 Skill 缺少问题改写和有限重试规则。
+
+**改动点**：更新 `.agents/skills/ops-amazon-rufus` 与 `opscli/skills/templates/ops-amazon-rufus` 的 `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md`，新增 `answer_rewrite_attempts_by_question`、回答质量判断、子 agent 固定提示词、同一个 Rufus 对话处理多问题、每个问题最多 10 次的问题改写重试规则；新增 `.super-dev/changes/amazon-rufus-answer-retry` 和 `output/amazon-rufus-skill-*` 文档与流程图；补充 `tests/skills/test_ops_amazon_rufus_updater.py` 文档契约测试。
+
+**验证结果**：新增测试先失败于缺少“回答质量判断”规则；补充文档后 `uv run pytest "tests/skills/test_ops_amazon_rufus_updater.py" -q` 为 9 passed。补充运行 `uv run pytest "tests/amazon_rufus" -q` 时发现既有失败：`test_get_platform_cookie_sends_platform_query` 期望 timeout 为 10，当前实际为 180；该失败与本次 Skill 文档变更无关，未在本次处理。
+
+**影响范围**：影响 `ops-amazon-rufus` Agent 编排规则、内置模板、已安装项目版 Skill、Super Dev 设计产物和文档契约测试；不改变 Rufus MCP 工具参数、Python 后端获取逻辑、登录恢复、远程授权偏好、CLI fallback 白名单或敏感字段隐藏规则。
+
+**回滚方式**：回退上述 Skill 文档、Super Dev change、`output/amazon-rufus-skill-*` 产物和 `tests/skills/test_ops_amazon_rufus_updater.py` 中新增的回答质量重试断言。
+
+**补充修正**：根据用户确认，将回答质量重试上限改为按问题独立计算，并明确 Rufus 获取会在同一个 Rufus 对话中处理多个问题；已同步项目版、模板版、Super Dev 文档和流程图。
+
+---
+
+## 2026-06-11 Amazon Rufus - 平台 Cookie content 直接保存 streaming cURL
+
+**变更原因**：用户确认从浏览器获取亚马逊 Rufus 登录态时，保存到后端 `/v1/platform-cookies` 的 `content` 应该直接是 `/rufus/cl/streaming` 浏览器 cURL 命令态，而不是包含 `storage_state`、`curl` 和请求种子摘要的 JSON 包装。
+**改动点**：`RufusBrowserStateStore.save()` 在远端平台 Cookie client 存在且已捕获 streaming seed 时，直接把构造出的 cURL 命令态写入 `content`；`_load_remote()` 支持裸 cURL content，并继续兼容旧 JSON record；`RufusBackendSecretProvider` 可从裸 cURL 的 payload 中恢复内部 `SeedRequestRecord`，避免默认 `get_backend` 因缺少 JSON 摘要重新 headless 捕获；同步更新 Rufus Skill 模板、`.agents` 副本、MCP/CLI 帮助文案和测试。
+**验证结果**：已先用更新后的目标用例验证旧实现失败于 `content` 仍为 JSON 包装和裸 cURL 读取无效；实现后运行 `uv run pytest tests/amazon_rufus/test_core.py -q`，结果 85 passed；运行 `uv run pytest tests/amazon_rufus/test_transport.py tests/amazon_rufus/test_mcp_manager.py tests/mcp/test_amazon_rufus_tools.py tests/skills/test_ops_amazon_rufus_updater.py tests/skills/test_cli.py -q`，结果 60 passed；文档同步后补跑 `uv run pytest tests/amazon_rufus/test_core.py tests/skills/test_ops_amazon_rufus_updater.py tests/skills/test_cli.py -q`，结果 105 passed。
+**影响范围**：影响 Rufus `watch_login`、`save_curl` 等默认远端保存链路以及 `login_status` / `get_backend` 读取远端 content 的行为；后端 API path 和 POST 字段仍保持 `platform`、`country`、`content` 三字段；本地 fallback `browser-state-<COUNTRY>.json` 仍保留内部 JSON record。
+**回滚方式**：回退 `opscli/amazon_rufus/services/browser_state_store.py`、`backend_secret.py`、`commands/cli.py`、`opscli/mcp/tools/amazon_rufus.py`、Rufus Skill 文档和相关测试中关于裸 cURL content 的修改，恢复远端 content JSON record 保存方式。
+
+---
+
+## 2026-06-11 Amazon Rufus Skill - 登录态术语改为亚马逊 Rufus 登录态
+
+**变更原因**：用户要求 Rufus Skill 中关于亚马逊登录态的描述统一改为“亚马逊 Rufus 登录态”，避免把实际保存为浏览器 cURL 命令态的状态误描述为普通 Cookie；后端接口名仍保留平台 Cookie 命名。
+**改动点**：更新 `opscli/skills/templates/ops-amazon-rufus/` 与 `.agents/skills/ops-amazon-rufus/` 的 `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md`，新增术语约定并把授权、登录态检查、登录采集和恢复路径改为“亚马逊 Rufus 登录态”；同步更新 Rufus MCP/CLI 帮助文案、401 错误提示和相关测试断言。
+**验证结果**：已运行 `uv run pytest tests/skills/test_ops_amazon_rufus_updater.py tests/skills/test_cli.py tests/amazon_rufus/test_transport.py -q`，结果 28 passed；已运行 `uv run pytest tests/amazon_rufus/test_core.py -q`，结果 85 passed；最终文档微调后重跑 `uv run pytest tests/skills/test_ops_amazon_rufus_updater.py tests/skills/test_cli.py -q`，结果 20 passed。
+**影响范围**：影响 Rufus Skill 文档、安装后引导、CLI/MCP 帮助文案和平台 Cookie 401 错误提示；不改变 `platform-cookie` 接口名、MCP Tool 名、CLI 命令、状态保存结构或 Rufus 获取逻辑。
+**回滚方式**：回退本次对 Rufus Skill 模板、`.agents` 安装副本、Rufus 帮助/错误文案、测试断言和本变更记录的修改。
+
+---
+
+## 2026-06-10 Amazon Rufus - CLI fallback 限域流程调整
+
+**变更原因**：用户要求 Rufus Skill 从绝对 MCP-only 调整为 MCP 优先，并仅在必需 MCP Tool 不可用或用户拒绝保存复用 Amazon 登录态两种场景回退 CLI；同时要求 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401 进入 MCP 登录采集。
+**改动点**：更新 `ops-amazon-rufus` 模板与 `.agents` 安装副本的 Skill/README/workflow 文档，明确 bounded CLI fallback、denied 分支 CLI 获取和 401 分支 MCP `amazon_rufus_watch_login`；更新安装后 `next_steps`；更新文档契约测试和当前流程图。
+**验证结果**：已完成 RED/GREEN 定向验证：旧实现下 `.venv/Scripts/python.exe -m pytest "tests/skills/test_ops_amazon_rufus_updater.py" "tests/skills/test_cli.py" -q` 失败 4 项；实现后定向回归 `.venv/Scripts/python.exe -m pytest "tests/skills/test_ops_amazon_rufus_updater.py" -q` 通过，8 passed；`.venv/Scripts/python.exe -m pytest "tests/skills/test_cli.py" -q` 通过，12 passed；`.venv/Scripts/python.exe -m pytest "tests/mcp/test_amazon_rufus_tools.py" -q` 通过，14 passed。
+**影响范围**：影响 Rufus Skill Agent 编排、安装后提示、报告流程图和文档契约测试；不新增 MCP Tool、不新增 CLI 命令、不暴露 cookie、localStorage、`storage_state`、headers、payload 或请求种子。
+**回滚方式**：回退本轮对 `opscli/skills/templates/ops-amazon-rufus/`、`.agents/skills/ops-amazon-rufus/`、`opscli/skills/commands/cli.py`、`tests/skills/`、`output/rufus-current-skill-flow.*` 和本变更记录的修改，恢复旧 MCP-only 文案与断言。
+
+---
+
+## 2026-06-09 Amazon Rufus - 默认状态读写切换到平台 Cookie content
+
+**变更原因**：用户要求替换默认 `browser-state-<COUNTRY>.json` 文件保存/获取方式，Rufus 登录态和请求种子默认必须使用线上 `/v1/platform-cookies` 保存与读取接口。
+**改动点**：`RufusManager.browser_state_store` 默认创建注入 `RufusTransportClient` 的 `RufusBrowserStateStore`，`save_state`、`watch_login`、`save_cookie`、`save_curl`、`login_status`、`get_backend`、`logout` 默认通过 `platform=amazon` 的平台 Cookie content 读写；`RufusBackendSecretProvider` 独立实例化时也默认使用线上 store；`RufusBrowserStateStore(base_dir=...)` 仅保留为显式 local fallback；同步更新 Rufus Skill 模板、`.agents` 副本、Super Dev PRD/Architecture/Tasks 和文档契约测试。
+**验证结果**：新增 RED/GREEN 测试证明默认 `save_cookie` / `cookie_status` 只调用线上 content 且不创建 `browser-state-<COUNTRY>.json`，默认 `get_backend` 可从线上 content 恢复 `seed_request`；定向回归 `.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_transport.py" "tests/amazon_rufus/test_core.py" "tests/mcp/test_amazon_rufus_tools.py" "tests/skills/test_ops_amazon_rufus_updater.py" -q` 通过，106 passed；Skill CLI 回归 `.venv/Scripts/python.exe -m pytest "tests/skills/test_cli.py" -q` 通过，12 passed。
+**影响范围**：影响 Rufus 默认状态读写、MCP/headless 后端凭证读取、登录恢复文档和测试；旧 `browser-state-<COUNTRY>.json` 不再作为默认读写源，如只有本地旧状态需要重新执行 `watch-login` 写入线上平台 Cookie content。
+**回滚方式**：回退 `opscli/amazon_rufus/services/manager.py`、`backend_secret.py`、`browser_state_store.py` 中默认线上 store 相关改动，恢复 Skill/README/reference 和测试中关于平台 Cookie content 默认读写的断言。
+
+---
+
+## 2026-06-09 Amazon Rufus - OPS 平台 Cookie 鉴权边界修复
+
+**变更原因**：平台 Cookie API HTTP 401 代表 OPS/MCP 鉴权失败，不是 Amazon 登录态缺失。旧逻辑暴露泛化 `RUFUS_REMOTE_HTTP_ERROR`，Skill 容易误触发 `logout -> watch-login`，导致用户重复登录 Amazon 但无法修复 OPS API 401。
+
+**改动点**：新增 `RufusPlatformCookieAuthError` 并只在平台 Cookie GET/POST 的 HTTP 401 上映射；MCP `amazon_rufus_get` 通过当前请求隔离凭证目录创建 Rufus manager；补充 transport、manager、MCP 和 Skill 文档契约测试；同步 `ops-amazon-rufus` 模板与 `.agents` 副本的禁止恢复规则。
+
+**验证结果**：已运行 `E:/code/work/open-opscli/.venv/Scripts/python.exe -m pytest tests/amazon_rufus/test_transport.py tests/amazon_rufus/test_core.py tests/mcp/test_amazon_rufus_tools.py tests/skills/test_ops_amazon_rufus_updater.py -q`，结果为 116 passed；已扫描 Rufus auth boundary 文档、Skill 模板和 `.agents` 副本，未发现真实 JWT、session、Cookie、CSRF 等敏感样例值。
+
+**影响范围**：影响 Rufus 平台 Cookie API 错误分类、MCP Rufus 当前请求凭证隔离、`ops-amazon-rufus` 错误恢复流程和相关测试；不改变 MCP schema、平台 Cookie API path、三字段保存契约或 Rufus upload 错误语义。
+
+**回滚方式**：回退 `opscli/amazon_rufus/domain/exceptions.py`、`opscli/amazon_rufus/transport/client.py`、`opscli/mcp/tools/amazon_rufus.py`、Rufus/Skill 测试以及 `ops-amazon-rufus` Skill 文档中的本轮改动。
+
+---
+
+## 2026-06-08 Amazon Rufus - 平台 Cookie content 远端读写 CLI
+
+**变更原因**：用户要求参考 Apifox `/v1/platform-cookies` 文档，为 Rufus Skill/CLI 接入平台 Cookie 保存与读取能力，并约束 CLI/API 只使用 `platform`、`country`、`content` 三个字段；除国家和平台外，Rufus 内部状态整合为大 JSON 存入 `content`。
+**改动点**：`RufusTransportClient` 新增 `save_platform_cookie()` / `get_platform_cookie()`，POST 只发送 `platform/country/content`，GET 只按 `platform` 查询；`RufusBrowserStateStore` 支持注入平台 Cookie client，把完整 Rufus record 序列化进远端 `content` 并反序列化供 `RufusBackendSecretProvider` 读取；`RufusManager` 新增 `save_platform_cookie()` / `get_platform_cookie()` 参数校验与 404 missing 映射；`opscli amazon-rufus` 新增 `platform-cookie save/get` 子命令；同步更新 `ops-amazon-rufus` 模板、已安装 Skill 和 Super Dev 文档。
+**验证结果**：已完成 RED/GREEN 定向测试：`.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_transport.py" "tests/amazon_rufus/test_core.py" -k "platform_cookie" -q` 通过，4 passed；完整定向回归 `.venv/Scripts/python.exe -m pytest "tests/amazon_rufus/test_transport.py" "tests/amazon_rufus/test_core.py" "tests/mcp/test_amazon_rufus_tools.py" "tests/skills/test_ops_amazon_rufus_updater.py" -q` 通过，104 passed；Skill CLI 引导回归 `.venv/Scripts/python.exe -m pytest "tests/skills/test_cli.py" -q` 通过，12 passed。
+**影响范围**：影响 Amazon Rufus transport、manager、browser state store 可注入远端 content 读写、CLI 子命令、Skill 文档和 Super Dev 文档；不新增 MCP Tool，不把 `cookie_content`、账号、域名、headers、payload、`storage_state` 或请求种子拆成 CLI/API 独立参数；后续 2026-06-09 变更已把默认状态链路切换为平台 Cookie content，本地 JSON 仅保留显式 fallback。
+**回滚方式**：回退 `opscli/amazon_rufus/transport/client.py`、`opscli/amazon_rufus/services/browser_state_store.py`、`opscli/amazon_rufus/services/manager.py`、`opscli/amazon_rufus/commands/cli.py`、`opscli/amazon_rufus/domain/exceptions.py`、Rufus Skill 模板和 `.agents/skills/ops-amazon-rufus` 文档、`output/rufus-platform-cookie-*.md`、相关测试与本变更记录。
+## 2026-06-16 MCP - 处理 server.py 工具注册冲突
+
+**变更原因**：`opscli/mcp/server.py` 在合并工具清单自动上报与卖家精灵限额切面时出现冲突，需要同时保留两侧能力。
+**改动点**：在 `_TelemetryMcpProxy.tool()` 的注册代理中保留 `record_tool()` 工具清单采集，并将注册函数按“限额切面 -> 遥测切面 -> FastMCP 注册”的顺序包裹。
+**验证结果**：`.\.venv\Scripts\python.exe -m pytest tests\mcp\test_tool_catalog.py tests\mcp\test_quota.py tests\mcp\test_seller_sprite_tools.py -q` 通过，25 passed in 1.57s；`rg -n "<<<<<<<|=======|>>>>>>>" opscli\mcp\server.py` 无匹配。附加回归 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_tool_catalog.py tests\mcp\test_quota.py tests\mcp\test_seller_sprite_tools.py tests\mcp\test_tools.py -q` 中 29 passed、1 failed，失败为 `test_mcp_exposes_expected_tools` 在当前 stdio 未登录/权限过滤环境下只返回基础 auth 工具，和本次冲突块无直接关系。
+**影响范围**：影响 MCP 工具注册链路；工具清单同步、遥测采集和受限工具限额逻辑会同时生效。
+**回滚方式**：回退 `opscli/mcp/server.py` 中本次冲突块合并，并删除本条变更记录。
+
 ## 2026-07-10 asin-data/mcp - 合并 ASIN 实时取数服务到 master
 
 **变更原因**：用户需要把 ASIN 取数服务合并到 master，范围限定为 `asin-data` 实时取数、AI Ready 返回、MCP 取数工具、OSS xlsx 上传和服务端稳定性能力，避免把 release 分支中的 Rufus、Sif、西柚、Shopify 等无关改动带入 master。
@@ -451,6 +638,7 @@
 **验证结果**：RED：`.\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_remote_adapter.py -q` 初始失败，`KeyError: 'session_id'`。GREEN：同命令复跑通过，`3 passed in 0.46s`；回归 `.\.venv\Scripts\python.exe -m pytest tests/seller_sprite -q` 通过，`82 passed in 9.33s`。
 **影响范围**：仅影响正式 `opscli seller-sprite` 远端调用参数；`seller-sprite-debug`、远端 MCP 凭证隔离模型、卖家精灵任务调度和导出逻辑不变。
 **回滚方式**：回退 `opscli/seller_sprite/remote_adapter.py`、`tests/seller_sprite/test_remote_adapter.py` 和本条变更记录。
+
 ---
 
 ## 2026-06-23 seller_sprite - 收紧登录等待与失败冷却上限
