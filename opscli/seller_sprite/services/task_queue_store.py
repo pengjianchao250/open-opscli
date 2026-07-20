@@ -240,8 +240,9 @@ class SellerSpriteTaskQueueStore:
         queue_scope: str,
         worker_key: str,
         assigned_account: str,
+        account_key: str,
     ) -> dict[str, Any] | None:
-        """沿用单工作槽语义领取最早的 Listing Analysis 任务。"""
+        """使用明确账号领取最早的 Listing Analysis 任务。"""
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -258,10 +259,22 @@ class SellerSpriteTaskQueueStore:
                         AND running.task_kind = ?
                         AND running.status = 'running'
                   )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM seller_sprite_task_queue AS account_running
+                      WHERE account_running.queue_scope = queued.queue_scope
+                        AND account_running.status = 'running'
+                        AND account_running.assigned_account_key = ?
+                  )
                 ORDER BY queued.id ASC
                 LIMIT 1
                 """,
-                (queue_scope, TASK_KIND_LISTING_ANALYSIS, TASK_KIND_LISTING_ANALYSIS),
+                (
+                    queue_scope,
+                    TASK_KIND_LISTING_ANALYSIS,
+                    TASK_KIND_LISTING_ANALYSIS,
+                    account_key,
+                ),
             ).fetchone()
             if row is None:
                 conn.commit()
@@ -272,12 +285,13 @@ class SellerSpriteTaskQueueStore:
                 SET status = 'running',
                     started_at = ?,
                     assigned_account = ?,
+                    assigned_account_key = ?,
                     worker_key = ?,
                     assignment_generation = assignment_generation + 1
                 WHERE id = ?
                   AND status = 'queued'
                 """,
-                (_now_iso(), assigned_account, worker_key, row["id"]),
+                (_now_iso(), assigned_account, account_key, worker_key, row["id"]),
             )
             if int(cursor.rowcount or 0) != 1:
                 conn.rollback()
@@ -819,6 +833,21 @@ class SellerSpriteTaskQueueStore:
             raise ValueError(f"任务不存在：{job_id}")
         payload = json.loads(str(row["request_json"]))
         return SellerSpriteScenarioRequest(**payload)
+
+    def get_task_account_binding(self, job_id: str) -> dict[str, str | None]:
+        """读取任务执行时持久化的卖家精灵账号绑定。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT assigned_account, assigned_account_key "
+                "FROM seller_sprite_task_queue WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"任务不存在：{job_id}")
+        return {
+            "assigned_account": row["assigned_account"],
+            "assigned_account_key": row["assigned_account_key"],
+        }
 
     def get_task_context(self, job_id: str) -> dict[str, Any]:
         """读取任务执行所需的附加上下文。"""

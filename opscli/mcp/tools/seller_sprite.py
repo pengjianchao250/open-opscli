@@ -244,6 +244,50 @@ def _ensure_listing_analysis_job_owner(job_id: str) -> dict[str, Any]:
     return _ensure_seller_sprite_job_owner(job_id, expected_scenario="listing-analysis")
 
 
+def _get_listing_analysis_account_binding(job_id: str, status: dict[str, Any]) -> dict[str, str | None]:
+    """读取 Listing Analysis 执行账号绑定，并兼容未实现绑定接口的旧仓储替身。"""
+    store = _get_task_queue_store()
+    getter = getattr(store, "get_task_account_binding", None)
+    if callable(getter):
+        return getter(job_id)
+    return {
+        "assigned_account": status.get("assigned_account"),
+        "assigned_account_key": status.get("assigned_account_key"),
+    }
+
+
+def _resolve_listing_analysis_account(manager: Any, binding: dict[str, str | None] | None):
+    """按持久化绑定恢复原账号，无法唯一确认时禁止回退到其他账号。"""
+    from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+    from opscli.seller_sprite.services.account_pool import seller_sprite_account_key
+
+    provider = manager.account_provider
+    list_accounts = getattr(provider, "list_accounts", None)
+    if not callable(list_accounts):
+        # 兼容只提供单账号接口的旧式 provider。
+        return provider.get_default()
+
+    accounts = list_accounts()
+    assigned_key = str((binding or {}).get("assigned_account_key") or "").strip()
+    assigned_name = str((binding or {}).get("assigned_account") or "").strip()
+    if assigned_key:
+        for account in accounts:
+            if seller_sprite_account_key(account) == assigned_key:
+                return account
+        raise SellerSpriteConfigError(f"Listing Analysis 绑定账号已不可用：{assigned_name or assigned_key[:12]}")
+
+    if assigned_name:
+        matches = [account for account in accounts if account.name.strip().casefold() == assigned_name.casefold()]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise SellerSpriteConfigError(f"Listing Analysis 历史任务账号名称不唯一：{assigned_name}")
+
+    if len(accounts) == 1:
+        return accounts[0]
+    raise SellerSpriteConfigError("Listing Analysis 历史任务缺少可确认的账号绑定，禁止在多账号间自动续查")
+
+
 def _listing_analysis_failure_payload(status: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any]:
     """构造 Listing Analysis 远端失败状态。"""
     response = remote.get("remote") if isinstance(remote.get("remote"), dict) else {}
@@ -287,6 +331,7 @@ async def _fetch_listing_analysis_history_status(
     asin: str,
     session_id: str | None,
     jwt: str | None,
+    account_binding: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """通过历史任务接口读取 Listing Analysis 任务状态。"""
     from opscli.seller_sprite.api.client import SellerSpriteApiClient
@@ -294,7 +339,7 @@ async def _fetch_listing_analysis_history_status(
     from opscli.seller_sprite.services.api_manager import _request_with_session_retry
 
     manager = SellerSpriteApiManager(jwt=jwt, session_id=session_id)
-    account = manager.account_provider.get_default()
+    account = _resolve_listing_analysis_account(manager, account_binding)
     async with SellerSpriteApiClient(account=account) as client:
         if not client.has_login_cookies():
             await client.login()
@@ -327,6 +372,7 @@ async def _fetch_listing_analysis_report_result(
     task_id: str,
     session_id: str | None,
     jwt: str | None,
+    account_binding: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """通过 browser-route 报告详情页读取 Listing Analysis 最终结果。"""
     from opscli.seller_sprite.browser_route import fetch_listing_analysis_report_with_browser_route
@@ -335,7 +381,7 @@ async def _fetch_listing_analysis_report_result(
 
     settings = load_settings()
     manager = SellerSpriteApiManager(settings=settings, jwt=jwt, session_id=session_id)
-    account = manager.account_provider.get_default()
+    account = _resolve_listing_analysis_account(manager, account_binding)
     root_dir = settings.output_dir / f"listing-analysis-report-{task_id}"
     browser_result = await fetch_listing_analysis_report_with_browser_route(
         settings=settings,
@@ -360,9 +406,15 @@ async def _fetch_listing_analysis_remote_status(
     task_id: str,
     session_id: str | None,
     jwt: str | None,
+    account_binding: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """兼容旧测试的 Listing Analysis 远端状态读取入口。"""
-    return await _fetch_listing_analysis_report_result(task_id=task_id, session_id=session_id, jwt=jwt)
+    return await _fetch_listing_analysis_report_result(
+        task_id=task_id,
+        session_id=session_id,
+        jwt=jwt,
+        account_binding=account_binding,
+    )
 
 
 def _persist_listing_analysis_remote_result(
@@ -836,12 +888,26 @@ async def seller_sprite_listing_analysis_status(
         )
         sid, jw = binding.session_id, binding.jwt
         status = dict(_get_task_scheduler().job_status(job_id))
+        account_binding = _get_listing_analysis_account_binding(job_id, status)
+        if status.get("state") == "queued" and not any(account_binding.values()):
+            status["ready"] = False
+            return _ok(status)
         task_id = _extract_listing_analysis_task_id(status)
         asin = _extract_listing_analysis_asin(status, owner_record)
         if asin:
-            remote = await _fetch_listing_analysis_history_status(asin=asin, session_id=sid, jwt=jw)
+            remote = await _fetch_listing_analysis_history_status(
+                asin=asin,
+                session_id=sid,
+                jwt=jw,
+                account_binding=account_binding,
+            )
         elif task_id:
-            remote = await _fetch_listing_analysis_remote_status(task_id=task_id, session_id=sid, jwt=jw)
+            remote = await _fetch_listing_analysis_remote_status(
+                task_id=task_id,
+                session_id=sid,
+                jwt=jw,
+                account_binding=account_binding,
+            )
         else:
             status["ready"] = False
             return _ok(status)
@@ -871,10 +937,19 @@ async def seller_sprite_listing_analysis_result(
         )
         sid, jw = binding.session_id, binding.jwt
         status = dict(_get_task_scheduler().job_status(job_id))
+        account_binding = _get_listing_analysis_account_binding(job_id, status)
+        if status.get("state") == "queued" and not any(account_binding.values()):
+            status["ready"] = False
+            return _ok(status)
         task_id = _extract_listing_analysis_task_id(status)
         asin = _extract_listing_analysis_asin(status, owner_record)
         if asin:
-            history = await _fetch_listing_analysis_history_status(asin=asin, session_id=sid, jwt=jw)
+            history = await _fetch_listing_analysis_history_status(
+                asin=asin,
+                session_id=sid,
+                jwt=jw,
+                account_binding=account_binding,
+            )
             if history.get("failed"):
                 return _ok(_mark_listing_analysis_remote_failed(job_id, status, history))
             if not history.get("task_id"):
@@ -885,7 +960,12 @@ async def seller_sprite_listing_analysis_result(
         if not task_id:
             status["ready"] = False
             return _ok(status)
-        remote = await _fetch_listing_analysis_report_result(task_id=task_id, session_id=sid, jwt=jw)
+        remote = await _fetch_listing_analysis_report_result(
+            task_id=task_id,
+            session_id=sid,
+            jwt=jw,
+            account_binding=account_binding,
+        )
         if remote.get("failed"):
             return _ok(_mark_listing_analysis_remote_failed(job_id, status, remote))
         if not remote.get("ready"):
