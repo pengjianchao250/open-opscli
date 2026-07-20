@@ -1,6 +1,6 @@
 # Canopy beta MCP 使用指南
 
-本文说明测试阶段 `beta` MCP 模块如何查询 Amazon 商品、评论、搜索、报价、类目、卖家和榜单数据。
+本文说明测试调研阶段 `beta` MCP 模块如何查询 Amazon 商品、评论、搜索、报价、类目、卖家和榜单数据。接口参数以 [Canopy REST API](https://rest.canopyapi.co/) 和 [OpenAPI](https://rest.canopyapi.co/api/v1/openapi.json) 为准。
 
 ## 1. 使用边界
 
@@ -10,13 +10,17 @@
 
 ## 2. MCP 工具
 
-测试阶段只对用户开放 3 个 MCP 工具：
+测试阶段对用户开放 5 个 MCP 工具：
 
 ```text
 beta_spec_must_read
 beta_canopy_scenarios
 beta_canopy_run
+beta_canopy_job_status
+beta_canopy_export
 ```
+
+完整 Agent 调用规范由 `opscli/mcp/references/canopy/SKILL_MCP.md` 维护。
 
 ### 2.1 读取内部规范
 
@@ -124,7 +128,7 @@ US, UK, CA, DE, FR, IT, ES, AU, IN, MX, BR, JP, PL
 `product-reviews` 常用参数：
 
 - `page`: 页码。
-- `rating`: 星级枚举，例如 `ONE_STAR`、`TWO_STAR`、`THREE_STAR`、`FOUR_STAR`、`FIVE_STAR`。
+- `rating`: 星级枚举：`ALL`、`ONE_STAR`、`TWO_STAR`、`THREE_STAR`、`FOUR_STAR`、`FIVE_STAR`。
 - `onlyVerifiedReviews`: 是否只看已验证购买评论。
 - `search`: 评论内容关键词。
 
@@ -149,5 +153,17 @@ US, UK, CA, DE, FR, IT, ES, AU, IN, MX, BR, JP, PL
 | --- | --- | --- |
 | 400 | 参数错误 | 检查 `params` 是否包含必填参数。 |
 | 401 | 认证配置异常 | 检查项目/服务端本地认证配置。 |
-| 402 | 套餐或额度问题 | 检查 Canopy 账号状态。 |
+| 402 | 部分端点的套餐或额度问题 | 当前官方 OpenAPI 仅在商品详情、ASIN 转 GTIN、GTIN 转 ASIN 端点明确声明。 |
 | 500 | 服务端异常 | 保留请求参数和响应摘要排障。 |
+
+## 8. MCP 服务开关
+
+Canopy 是测试调研服务，但为兼容现有调用默认开启。全局关闭时，在 MCP Server 进程环境设置：
+
+```text
+OPSCLI_MCP_CANOPY_ENABLED=0
+```
+
+`0`、`false`、`no`、`off` 均表示关闭；修改后必须重启 MCP 服务。恢复时删除该环境变量或设置为 `1`，然后重启服务。
+
+HTTP/SSE 部署还需在 MCP 后台停用或撤销 5 个 `beta_*` 工具的历史授权，因为工具目录同步不会自动删除历史记录。若只对部分用户关闭，可仅从对应用户或角色的 `allowed_tools` 中移除这些工具。
