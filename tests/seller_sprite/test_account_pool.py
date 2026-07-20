@@ -14,7 +14,7 @@ def _accounts(count: int, *, password_suffix: str = "") -> list[SellerSpriteAcco
     ]
 
 
-def test_account_pool_reserves_one_account_and_caps_workers_at_four():
+def test_account_pool_reserves_one_account_and_caps_workers_at_three():
     from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool
 
     expected = {
@@ -23,8 +23,8 @@ def test_account_pool_reserves_one_account_and_caps_workers_at_four():
         2: (1, 1),
         3: (2, 1),
         4: (3, 1),
-        5: (4, 1),
-        6: (4, 2),
+        5: (3, 2),
+        6: (3, 3),
     }
 
     for count, (working_count, standby_count) in expected.items():
@@ -48,14 +48,13 @@ def test_account_pool_promotes_cold_standby_after_working_account_fails():
     pool.mark_unavailable(accounts[0])
     replacement = pool.take_standby(attempted_accounts=set())
 
-    assert replacement == accounts[4]
+    assert replacement == accounts[3]
     assert [account.name for account in pool.working_accounts] == [
         "account-2",
         "account-3",
         "account-4",
-        "account-5",
     ]
-    assert pool.standby_accounts == ()
+    assert pool.standby_accounts == (accounts[4],)
 
 
 def test_account_pool_keeps_same_failed_credentials_unavailable_until_password_changes():

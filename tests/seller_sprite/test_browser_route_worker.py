@@ -8,7 +8,12 @@ from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.browser_route import ocr as ocr_module
 from opscli.seller_sprite.browser_route import worker as worker_module
 from opscli.seller_sprite.browser_route.worker import SellerSpriteBrowserRouteWorker
-from opscli.seller_sprite.config import DEFAULT_BROWSER_RUNTIME, SellerSpriteSettings, load_settings
+from opscli.seller_sprite.config import (
+    DEFAULT_BROWSER_RUNTIME,
+    DEFAULT_TASK_TIMEOUT_SECONDS,
+    SellerSpriteSettings,
+    load_settings,
+)
 from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
 
 
@@ -1105,6 +1110,15 @@ def test_load_settings_reads_browser_session_lifecycle_options(monkeypatch):
     assert settings.browser_max_lifetime_seconds == 14400
 
 
+def test_load_settings_reads_task_timeout(monkeypatch):
+    """单任务执行超时应支持环境变量覆盖。"""
+    monkeypatch.setenv("OPSCLI_SELLER_SPRITE_TASK_TIMEOUT_SECONDS", "300")
+
+    settings = load_settings()
+
+    assert settings.task_timeout_seconds == 300
+
+
 def test_browser_runtime_defaults_to_patchright():
     assert DEFAULT_BROWSER_RUNTIME == "patchright"
     assert SellerSpriteSettings().browser_runtime == "patchright"
@@ -1113,6 +1127,8 @@ def test_browser_runtime_defaults_to_patchright():
     assert SellerSpriteSettings().browser_captcha_ocr_max_attempts == 2
     assert SellerSpriteSettings().browser_idle_ttl_seconds == 1800
     assert SellerSpriteSettings().browser_max_lifetime_seconds == 21600
+    assert DEFAULT_TASK_TIMEOUT_SECONDS == 600
+    assert SellerSpriteSettings().task_timeout_seconds == 600
 
 
 def test_load_async_playwright_uses_patchright_runtime(monkeypatch):

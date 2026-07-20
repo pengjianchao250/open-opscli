@@ -5,6 +5,7 @@ from opscli.seller_sprite.domain.exceptions import (
     SellerSpriteAuthenticationError,
     SellerSpriteConfigError,
     SellerSpriteError,
+    SellerSpriteTaskTimeoutError,
 )
 from opscli.seller_sprite.domain.models import (
     SellerSpriteExportResult,
@@ -17,6 +18,7 @@ __all__ = [
     "SellerSpriteAuthenticationError",
     "SellerSpriteConfigError",
     "SellerSpriteError",
+    "SellerSpriteTaskTimeoutError",
     "SellerSpriteExportResult",
     "SellerSpriteScenarioRequest",
     "SellerSpriteScenarioResult",
