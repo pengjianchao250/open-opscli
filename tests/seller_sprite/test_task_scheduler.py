@@ -87,6 +87,33 @@ class ControlledRunManager:
         )
 
 
+class TimeoutThenSuccessHarness:
+    def __init__(self):
+        self.started = []
+        self.cancelled = asyncio.Event()
+
+    def manager_factory(self, **kwargs):
+        harness = self
+
+        class Manager:
+            async def run(self, request):
+                harness.started.append(str(request.job_id))
+                if str(request.job_id) == "job-timeout":
+                    try:
+                        await asyncio.Event().wait()
+                    except asyncio.CancelledError:
+                        harness.cancelled.set()
+                        raise
+                return _empty_result(kwargs["settings"], request)
+
+        return Manager()
+
+
+class HangingRunManager:
+    async def run(self, request):
+        await asyncio.Event().wait()
+
+
 class ImmediateRunManager:
     def __init__(self, *, settings, account_provider, jwt=None, session_id=None):
         self.settings = settings
@@ -401,6 +428,90 @@ def test_scheduler_runs_tasks_in_fifo_order(tmp_path: Path):
     asyncio.run(scenario())
 
 
+def test_scheduler_times_out_generic_task_and_continues_queue(tmp_path: Path):
+    """通用任务超时后应失败、回收账号会话并继续消费下一条任务。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path, task_timeout_seconds=0.02)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(2)
+        harness = TimeoutThenSuccessHarness()
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        closed_sessions = []
+
+        async def close_account_session(account, *, reason):
+            closed_sessions.append((account.name, reason))
+
+        scheduler._close_account_session = close_account_session
+        timeout_request = _request("job-timeout", "B07YRMT36L")
+        await scheduler.enqueue(timeout_request, session_id="test-session", jwt="test-jwt")
+        store.create_mcp_run(timeout_request, "user@example.com")
+        await scheduler.enqueue(_request("job-next", "B00TEST222"))
+
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-timeout", "failed")
+        succeeded = await _wait_for_state(scheduler, "job-next", "succeeded")
+
+        assert failed["error"] == {
+            "code": "SELLER_SPRITE_TASK_TIMEOUT",
+            "message": "卖家精灵任务执行超过 0.02 秒，已终止",
+        }
+        assert succeeded["state"] == "succeeded"
+        assert harness.started == ["job-timeout", "job-next"]
+        assert harness.cancelled.is_set()
+        assert closed_sessions == [("account-1", "task_timeout")]
+        mcp_run = store.get_mcp_run("job-timeout")
+        assert mcp_run["result_state"] == "failed"
+        assert mcp_run["error_json"] == failed["error"]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_times_out_listing_analysis_task(tmp_path: Path):
+    """Listing Analysis 本地执行阶段也应受统一任务超时保护。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path, task_timeout_seconds=0.02)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(2)
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=lambda **kwargs: HangingRunManager(),
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        closed_sessions = []
+
+        async def close_account_session(account, *, reason):
+            closed_sessions.append((account.name, reason))
+
+        scheduler._close_account_session = close_account_session
+        await scheduler.enqueue(_listing_request("listing-timeout", "B0LISTING"))
+
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "listing-timeout", "failed")
+
+        assert failed["error"]["code"] == "SELLER_SPRITE_TASK_TIMEOUT"
+        assert closed_sessions == [("account-1", "task_timeout")]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
 def test_scheduler_binds_listing_analysis_to_default_account(tmp_path: Path):
     """Listing Analysis 执行器和队列记录必须绑定同一个默认账号。"""
 
@@ -453,14 +564,14 @@ def test_scheduler_binds_listing_analysis_to_default_account(tmp_path: Path):
     asyncio.run(scenario())
 
 
-def test_scheduler_runs_four_accounts_in_parallel_and_keeps_fifth_as_standby(tmp_path: Path):
+def test_scheduler_runs_three_accounts_in_parallel_and_keeps_remaining_as_standby(tmp_path: Path):
     async def scenario():
         from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
 
         settings = SellerSpriteSettings(output_dir=tmp_path)
         store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
         provider = MultiAccountProvider(5)
-        harness = ParallelRunHarness(expected_started=4)
+        harness = ParallelRunHarness(expected_started=3)
         scheduler = SellerSpriteTaskScheduler(
             store=store,
             settings=settings,
@@ -474,16 +585,16 @@ def test_scheduler_runs_four_accounts_in_parallel_and_keeps_fifth_as_standby(tmp
         await scheduler.start()
         await asyncio.wait_for(harness.all_started.wait(), timeout=1)
 
-        statuses = [scheduler.job_status(f"parallel-{index}") for index in range(1, 5)]
-        assert {status["state"] for status in statuses} == {"running"}
-        assert {status["assigned_account"] for status in statuses} == {
+        running_statuses = [scheduler.job_status(f"parallel-{index}") for index in range(1, 4)]
+        assert {status["state"] for status in running_statuses} == {"running"}
+        assert {status["assigned_account"] for status in running_statuses} == {
             "account-1",
             "account-2",
             "account-3",
-            "account-4",
         }
-        assert scheduler.generic_worker_count == 4
-        assert scheduler.standby_account_count == 1
+        assert scheduler.job_status("parallel-4")["state"] == "queued"
+        assert scheduler.generic_worker_count == 3
+        assert scheduler.standby_account_count == 2
 
         harness.allow_finish.set()
         for index in range(1, 5):
@@ -711,7 +822,7 @@ def test_scheduler_retires_excess_idle_workers_after_account_refresh(tmp_path: P
         )
 
         await scheduler.start()
-        assert scheduler.generic_worker_count == 4
+        assert scheduler.generic_worker_count == 3
         provider.accounts = provider.accounts[:3]
         await asyncio.sleep(1.15)
 

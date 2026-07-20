@@ -37,7 +37,7 @@ def mask_seller_sprite_username(username: str) -> str:
 
 
 class SellerSpriteAccountPool:
-    """按接口顺序管理最多四个工作账号和冷备用账号。"""
+    """按接口顺序管理最多三个工作账号和冷备用账号。"""
 
     def __init__(self, *, max_working_accounts: int = DEFAULT_MAX_WORKING_ACCOUNTS) -> None:
         self.max_working_accounts = max(1, int(max_working_accounts))

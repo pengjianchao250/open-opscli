@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-20 seller_sprite - 限制持久队列单任务执行时间
+
+**变更原因**：通用任务只有页面和网络操作的局部超时，整条执行链没有时间上限；多个 worker 同时卡住后会长期占用全部工作账号，导致后续持久队列无法继续消费。
+**改动点**：新增默认 600 秒的 `OPSCLI_SELLER_SPRITE_TASK_TIMEOUT_SECONDS` 配置；generic 与 Listing Analysis 的本地执行统一通过硬超时边界；超时后取消执行、以 `SELLER_SPRITE_TASK_TIMEOUT` 写入任务和 MCP 失败态、关闭对应账号 browser 会话，并允许 worker 继续消费下一条任务；保留历史 running 的显式运维策略，不在 scheduler 启动时修改其他实例任务；同步账号池和调度器测试为最多 3 个工作账号，并修正账号池类说明。
+**验证结果**：新增超时配置、generic 超时后继续消费及 Listing Analysis 超时回归通过（`3 passed`）；账号池和调度器并发上限聚焦回归通过（`6 passed`）；SellerSprite 与 MCP 工具全套为 `259 passed, 2 failed`，剩余两项均为既有 `seller-sprite-debug` 顶级命令未注册，与本次修改无关；变更生产模块 `py_compile` 通过，`git diff --check` 通过。
+**影响范围**：影响 SellerSprite generic 与 Listing Analysis 持久任务的本地执行时限及超时后的会话生命周期；正常完成任务、排队顺序和历史 running 运维命令不变。
+**回滚方式**：回退 SellerSprite 超时配置、领域异常、调度器、测试、配置文档及本条记录。
+---
+
 ## 2026-07-20 seller_sprite - 绑定 Listing Analysis 异步续查账号
 
 **变更原因**：多账号启用后，Listing Analysis 状态与结果续查会重新选择默认账号，可能与任务提交账号不一致并读取错误历史任务。

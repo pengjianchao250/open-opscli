@@ -27,9 +27,10 @@ OPSCLI_SELLER_SPRITE_PASSWORD=your_password
 OPSCLI_SELLER_SPRITE_ACCOUNT_NAME=default
 OPSCLI_SELLER_SPRITE_OUTPUT_DIR=D:/seller_sprite_runs
 OPSCLI_SELLER_SPRITE_PAGE_SIZE=100
+OPSCLI_SELLER_SPRITE_TASK_TIMEOUT_SECONDS=600
 ```
 
-未配置 `OPSCLI_SELLER_SPRITE_OUTPUT_DIR` 时，默认输出到 `~/.config/opscli/seller_sprite/api_runs`。
+未配置 `OPSCLI_SELLER_SPRITE_OUTPUT_DIR` 时，默认输出到 `~/.config/opscli/seller_sprite/api_runs`。单个本地执行任务默认最多运行 600 秒；超时后任务及 MCP 调用记录会标记为 `failed`，错误码为 `SELLER_SPRITE_TASK_TIMEOUT`，对应账号浏览器会话会关闭并由后续任务重新创建。
 
 ## MCP 启动
 
