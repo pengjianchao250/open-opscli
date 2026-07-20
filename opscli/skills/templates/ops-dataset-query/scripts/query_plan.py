@@ -160,12 +160,13 @@ FILTER_VALUE_MATCH_POLICY = {
         "department_arabic_chinese_numeral_equivalence",
     ],
     "exact_match_is_exclusive": True,
+    "exact_match_confirmation_required": False,
     "substring_match_allowed": False,
     "no_exact_match_action": "clarify_required",
     "rule_zh": (
         "先对用户筛选值与当前账号组件枚举原值做规范化完整等值比较；"
-        "部门名称额外允许阿拉伯数字与中文数字等价。唯一等值命中时只使用该枚举原值，"
-        "不得加入仅包含请求文本的其他成员；无唯一等值命中时必须让用户澄清。"
+        "部门名称额外允许阿拉伯数字与中文数字等价。唯一等值命中时只使用该枚举原值并直接执行，"
+        "不得再次向用户确认，也不得加入仅包含请求文本的其他成员；无唯一等值命中时必须让用户澄清。"
         "例如“9部”只匹配“九部”，不匹配“项目九部”；"
         "“范泰克”不匹配“范泰克体系外”。"
     ),
@@ -1399,6 +1400,17 @@ def build_model_contract(
     pending_confirmations_zh: list[str] = []
     execution_path_ready = str(internal.get("next_action", "")) == "construct_query"
     default_dataset_recommendation = selection.get("default_dataset_recommendation") or {}
+    # 即时综合数据集已经通过当前账号授权、业务语义和字段指导三层校验，且原文确实
+    # 命中了至少一个查询字段时，默认选表本身已无歧义，不能再制造一次人工确认。
+    # 完全模糊、没有任何字段命中的请求仍保留推荐确认，避免擅自决定查询内容。
+    default_dataset_auto_selected = bool(
+        default_dataset_recommendation
+        and guidance.get("guidance_status") == "ready"
+        and (dimensions or metrics)
+    )
+    if default_dataset_auto_selected:
+        default_dataset_recommendation["confirmation_required"] = False
+        default_dataset_recommendation["auto_selected"] = True
     if default_dataset_recommendation.get("confirmation_required"):
         status = "clarify_required"
         if "default_dataset_confirmation" not in clarification_reasons:
@@ -1438,11 +1450,14 @@ def build_model_contract(
     platform_disclosures = _platform_scope_disclosures(platform)
     if platform_disclosures:
         model_view["platform_scope_disclosures_zh"] = platform_disclosures
-    if default_dataset_recommendation.get("confirmation_required"):
+    if default_dataset_recommendation:
         model_view["default_dataset_recommendation_zh"] = {
             "name_zh": str(dataset.get("display_name_zh", "")),
             "reason_zh": "未明确指定数据集，且该数据集在当前授权范围内并覆盖已明确的业务与字段。",
-            "confirmation_required": True,
+            "confirmation_required": bool(
+                default_dataset_recommendation.get("confirmation_required")
+            ),
+            "auto_selected": default_dataset_auto_selected,
         }
     if ambiguous_field_labels:
         model_view["ambiguous_field_labels_zh"] = ambiguous_field_labels
