@@ -495,6 +495,9 @@ def test_contract_carries_date_fields_time_scope_and_template(tmp_path: Path):
     # 时间口径本地解析：近7天 + 环比对比期，模型可见层带中文描述
     scope = result["execution_ref"]["time_scope"]
     assert scope["is_default"] is False
+    assert scope["resolution_source"] == "python_datetime_asia_shanghai"
+    assert scope["reference_year"] == int(scope["reference_date"][:4])
+    assert "Python" in result["model_view"]["time_resolution_zh"]
     assert scope["comparison_type"] == "period_over_period"
     assert "近7天" in result["model_view"]["time_scope_zh"]
     # 模板骨架：预填日期过滤（>=/<= 两行实测形态）与 dataComparison；公式指标不带聚合
@@ -900,6 +903,40 @@ def test_time_scope_recent_days_with_pop_comparison():
     comparison = scope["comparison"]
     assert comparison["type"] == "period_over_period"
     assert (comparison["start"], comparison["end"]) == ("2026-06-30", "2026-07-06")
+
+
+def test_time_scope_relative_phrases_use_python_current_date_and_year():
+    """本月、上月、近N天及 tian 混写都必须由 Python 当前日期确定性解析。"""
+    from datetime import date
+
+    today = date(2026, 7, 20)
+    cases = {
+        "分析【本月情况】": ("2026-07-01", "2026-07-20"),
+        "获取【上月情况】": ("2026-06-01", "2026-06-30"),
+        "分析近7天": ("2026-07-14", "2026-07-20"),
+        "获取近30tian情况": ("2026-06-21", "2026-07-20"),
+    }
+
+    for prompt, expected in cases.items():
+        scope = time_scope.parse(prompt, today=today)
+        assert (scope["start"], scope["end"]) == expected
+        assert scope["matched"] is True
+        assert scope["is_default"] is False
+        assert scope["reference_date"] == "2026-07-20"
+        assert scope["reference_year"] == 2026
+        assert scope["resolution_source"] == "python_datetime_asia_shanghai"
+        assert scope["year_source"] == "python_current_date"
+
+
+def test_time_scope_last_month_crosses_year_by_python_calendar():
+    """一月查询上月时按 Python 日历跨到上一年十二月，不得强塞当前年份。"""
+    from datetime import date
+
+    scope = time_scope.parse("上月情况", today=date(2026, 1, 5))
+
+    assert (scope["start"], scope["end"]) == ("2025-12-01", "2025-12-31")
+    assert scope["reference_year"] == 2026
+    assert scope["resolution_source"] == "python_datetime_asia_shanghai"
 
 
 def test_time_scope_last_week_and_yoy():

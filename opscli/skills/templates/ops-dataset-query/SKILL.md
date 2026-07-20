@@ -8,7 +8,7 @@ description: >
   规划器按 30 秒命令窗口设计，返回 refresh_in_progress 时按其 recovery_command
   等待重跑即可，禁止自行升级）；禁止绕过规划器直接扫描 data/ 目录、
   读脚本源码或凭记忆手拼查询参数。
-version: 1.3.10
+version: 1.3.11
 ---
 
 # ops-dataset-query
@@ -44,7 +44,7 @@ python3 scripts/query_plan.py "$USER_REQUEST" > "$PLAN_FILE"
 2. `status=clarify_required`：按 `clarification_messages_zh` 提问；规划结果给出 `dataset_candidates_zh`（候选卡片）、`field_suggestions_zh`（近似字段建议）或 `pending_confirmations_zh` 时，必须把它们作为选项/口径呈现；确认后把明确口径写回用户请求并重新规划。`blocked` 则按 `recovery_command`/阻断原因处置。
    - 未明确指定数据集或问题描述不足时，规划器只会在当前账号已授权、且覆盖已明确业务与字段的前提下推荐“即时综合数据集”。出现 `default_dataset_recommendation_zh` 时必须先询问用户是否采用；确认前不得执行、不得生成或自行补造 `query_template`。用户确认后把“使用即时综合数据集”写回原请求重新规划；用户拒绝时让用户从 `dataset_candidates_zh` 选择其他数据集，不得循环推荐。
 3. `model_view` 只含用户可见中文结论；最终回答必须覆盖 `answer_contract.required_disclosures_zh`，并遵守 `forbidden_outputs_zh`。
-4. **时间口径以规划结果为准**：`model_view.time_scope_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源（Asia/Shanghai），不自行心算日期；`is_default=true` 表示默认口径，必须向用户披露并确认后才可执行。
+4. **时间口径以规划结果为准**：`model_view.time_scope_zh`、`model_view.time_resolution_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源。`本月/上月/近7天/近30天/近30tian` 等未显式年份的相对描述，由规划器直接调用 Python `datetime`，按 Asia/Shanghai 当前日期和当前年份确定绝对日期；跨年边界以 Python 日历结果为准。禁止自行心算、猜测年份、使用模型知识截止时间或改写规划结果。`is_default=true` 仅表示未识别到明确时间描述，必须向用户披露并确认后才可执行。
 5. `platform_semantic_members` 表示请求语义：用户只说“亚马逊”且未指定 SC/VC 时默认包含亚马逊SC + 亚马逊VC；明确亚马逊SC/SC 时只含 SC，明确亚马逊VC/VC 时只含 VC。`platform_filter_state=requires_permission_enum` 时规划器默认已自动枚举并回灌（规划结果带 `platform_enum_source=auto_enum_service` 即已收敛）；仅当自动枚举未完成时，直接执行规划结果内嵌的 `execution_ref.platform_enum_command`，再把返回值作为重复的 `--authorized-platform-value` 传回规划器、取得终版规划结果。裸“亚马逊”只枚举到部分成员时，直接按 `platform_effective_members` 和 `resolved_platform_values` 查询可用部分，但必须原样披露 `platform_scope_disclosures_zh`，不得把部分结果表述为完整亚马逊范围。
 6. `execution_ref` 仅用于正式查询构造，禁止作为业务判断理由或向用户展示。`dimensions`/`metrics` 中 `selection_source=recommended` 的字段是系统推荐（用户未点名），确认前规划器不会下发 `query_template`。只有 `status=planned` 且 `execution_ref.query_template` 存在时才能执行；构造以该模板为基底填充。
 7. `query_mode=chart_uuid` 时无需本地数据集元数据，规划器会输出 `chart_uuid`、`chart_action` 和可直接执行的 `query_command`。必须读取 `references/chart-excel-guide.md`，直接执行该命令；不得再用普通数据集选表或 `run_query.py` 改写。多个 UUID 时规划器返回 `clarify_required`，确认后把单个 UUID 写回原请求重跑规划器。
