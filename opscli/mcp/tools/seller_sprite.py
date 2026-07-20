@@ -53,18 +53,48 @@ def _get_task_queue_store():
     return SellerSpriteTaskQueueStore()
 
 
+def _get_account_binding_store():
+    """返回卖家精灵用户专属账号绑定仓储。"""
+    from opscli.seller_sprite.services.account_bindings import (
+        SellerSpriteAccountBindingStore,
+    )
+
+    return SellerSpriteAccountBindingStore()
+
+
 async def _enqueue_task_with_auth(
     scheduler: Any,
     request: Any,
     *,
     binding: OpsCredentialBinding,
 ) -> dict[str, Any]:
-    """按可信凭证绑定提交任务，远端兼容参数不会进入任务运行时。"""
+    """按可信凭证和额度切面确认的账号路由提交任务。"""
+    from opscli.mcp.quota import get_quota_access_context
+    from opscli.seller_sprite.services.task_queue_store import (
+        ACCOUNT_ROUTE_USER_BINDING,
+    )
+
+    access_context = get_quota_access_context()
+    dedicated = bool(access_context and access_context.mode == "unlimited")
+    if dedicated and (
+        access_context.user_email != binding.user_email
+        or not access_context.account_id
+        or not access_context.account_key
+    ):
+        raise ValueError("卖家精灵专属账号访问上下文与当前用户不一致")
     kwargs: dict[str, Any] = {
         "credential_scope": binding.credential_scope,
         "expected_user_email": binding.user_email,
         "mcp_user_email": binding.user_email,
     }
+    if dedicated:
+        kwargs.update(
+            {
+                "account_route": ACCOUNT_ROUTE_USER_BINDING,
+                "requested_account_id": access_context.account_id,
+                "requested_account_key": access_context.account_key,
+            }
+        )
     if binding.runtime_auth is not None:
         kwargs["session_id"], kwargs["jwt"] = binding.runtime_auth
     return await scheduler.enqueue(request, **kwargs)
@@ -253,6 +283,9 @@ def _get_listing_analysis_account_binding(job_id: str, status: dict[str, Any]) -
     return {
         "assigned_account": status.get("assigned_account"),
         "assigned_account_key": status.get("assigned_account_key"),
+        "account_route": None,
+        "requested_account_id": None,
+        "requested_account_key": None,
     }
 
 
@@ -260,6 +293,29 @@ def _resolve_listing_analysis_account(manager: Any, binding: dict[str, str | Non
     """按持久化绑定恢复原账号，无法唯一确认时禁止回退到其他账号。"""
     from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
     from opscli.seller_sprite.services.account_pool import seller_sprite_account_key
+    from opscli.seller_sprite.services.task_queue_store import (
+        ACCOUNT_ROUTE_USER_BINDING,
+    )
+
+    account_route = str((binding or {}).get("account_route") or "").strip()
+    if account_route == ACCOUNT_ROUTE_USER_BINDING:
+        account_id = str((binding or {}).get("requested_account_id") or "").strip()
+        expected_key = str(
+            (binding or {}).get("requested_account_key")
+            or (binding or {}).get("assigned_account_key")
+            or ""
+        ).strip()
+        if not account_id or not expected_key:
+            raise SellerSpriteConfigError(
+                "Listing Analysis 专属账号任务缺少可确认的账号绑定"
+            )
+        dedicated = _get_account_binding_store().get_account(account_id)
+        if dedicated is None:
+            raise SellerSpriteConfigError("Listing Analysis 专属账号已不可用")
+        account = dedicated.to_account()
+        if seller_sprite_account_key(account) != expected_key:
+            raise SellerSpriteConfigError("Listing Analysis 专属账号绑定已变更")
+        return account
 
     provider = manager.account_provider
     list_accounts = getattr(provider, "list_accounts", None)
@@ -889,7 +945,9 @@ async def seller_sprite_listing_analysis_status(
         sid, jw = binding.session_id, binding.jwt
         status = dict(_get_task_scheduler().job_status(job_id))
         account_binding = _get_listing_analysis_account_binding(job_id, status)
-        if status.get("state") == "queued" and not any(account_binding.values()):
+        if status.get("state") == "queued" and not account_binding.get(
+            "assigned_account_key"
+        ):
             status["ready"] = False
             return _ok(status)
         task_id = _extract_listing_analysis_task_id(status)
@@ -938,7 +996,9 @@ async def seller_sprite_listing_analysis_result(
         sid, jw = binding.session_id, binding.jwt
         status = dict(_get_task_scheduler().job_status(job_id))
         account_binding = _get_listing_analysis_account_binding(job_id, status)
-        if status.get("state") == "queued" and not any(account_binding.values()):
+        if status.get("state") == "queued" and not account_binding.get(
+            "assigned_account_key"
+        ):
             status["ready"] = False
             return _ok(status)
         task_id = _extract_listing_analysis_task_id(status)

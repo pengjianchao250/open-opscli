@@ -421,6 +421,38 @@ def test_seller_sprite_quota_status_returns_snapshot(monkeypatch):
     assert result["data"]["remaining"] == 3
 
 
+def test_seller_sprite_quota_status_returns_unlimited_snapshot(monkeypatch):
+    class FakeLimiter:
+        async def quota_snapshot(self, tool_name, identity):
+            assert tool_name == "seller_sprite_run"
+            assert identity == "email:dedicated@example.com"
+            return {
+                "service": "seller_sprite",
+                "unlimited": True,
+                "limit": None,
+                "used": 0,
+                "remaining": None,
+                "failures": 0,
+                "reset_at": None,
+            }
+
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_current_mcp_user_email",
+        lambda: "dedicated@example.com",
+    )
+    monkeypatch.setattr(
+        "opscli.mcp.tools.seller_sprite.get_quota_limiter",
+        lambda: FakeLimiter(),
+    )
+
+    result = _run(seller_sprite_tools.seller_sprite_quota_status())
+
+    assert result["success"] is True
+    assert result["data"]["unlimited"] is True
+    assert result["data"]["remaining"] is None
+
+
 def test_seller_sprite_quota_status_returns_error_when_user_email_missing(monkeypatch):
     monkeypatch.setattr(seller_sprite_tools, "_get_current_mcp_user_email", lambda: None)
 
@@ -840,6 +872,45 @@ def test_listing_analysis_report_result_uses_task_bound_account(monkeypatch, tmp
 
     assert result["task_id"] == "task-account-2"
     assert used_accounts == ["account-2"]
+
+
+def test_listing_analysis_account_resolution_restores_dedicated_account(monkeypatch):
+    from opscli.seller_sprite.accounts import SellerSpriteAccount
+    from opscli.seller_sprite.services.account_pool import seller_sprite_account_key
+    from opscli.seller_sprite.services.task_queue_store import (
+        ACCOUNT_ROUTE_USER_BINDING,
+    )
+
+    dedicated = SellerSpriteAccount(
+        "dedicated-a",
+        "dedicated@example.com",
+        "dedicated-secret",
+    )
+    account = SimpleNamespace(to_account=lambda: dedicated)
+    provider = SimpleNamespace(
+        list_accounts=lambda: (_ for _ in ()).throw(
+            AssertionError("专属任务不得查询公共账号池")
+        )
+    )
+    manager = SimpleNamespace(account_provider=provider)
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_account_binding_store",
+        lambda: SimpleNamespace(get_account=lambda account_id: account),
+    )
+
+    resolved = seller_sprite_tools._resolve_listing_analysis_account(
+        manager,
+        {
+            "account_route": ACCOUNT_ROUTE_USER_BINDING,
+            "requested_account_id": "account-id",
+            "requested_account_key": seller_sprite_account_key(dedicated),
+            "assigned_account": "dedicated-a",
+            "assigned_account_key": seller_sprite_account_key(dedicated),
+        },
+    )
+
+    assert resolved == dedicated
 
 
 def test_listing_analysis_account_resolution_rejects_ambiguous_history_task():
@@ -2257,6 +2328,63 @@ def test_seller_sprite_run_passes_owner_to_atomic_scheduler(monkeypatch):
         "credential_scope": "default",
         "expected_user_email": "mcp-user@example.com",
         "mcp_user_email": "mcp-user@example.com",
+    }
+
+
+def test_seller_sprite_run_routes_dedicated_account_from_quota_context(monkeypatch):
+    """统一额度切面确认的专属账号引用必须原样进入原子入队。"""
+    from opscli.mcp.quota import (
+        QuotaAccessContext,
+        reset_quota_access_context,
+        set_quota_access_context,
+    )
+    from opscli.seller_sprite.services.task_queue_store import (
+        ACCOUNT_ROUTE_USER_BINDING,
+    )
+
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_task_scheduler",
+        lambda **kwargs: DummyScheduler(),
+    )
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_auth_pair",
+        lambda system, session_id, jwt: ("sid", "jwt"),
+    )
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_current_mcp_user_email",
+        lambda: "dedicated@example.com",
+    )
+    token = set_quota_access_context(
+        QuotaAccessContext(
+            mode="unlimited",
+            service="seller_sprite",
+            user_email="dedicated@example.com",
+            account_id="account-id",
+            account_key="account-key",
+        )
+    )
+    try:
+        result = _run(
+            seller_sprite_tools.seller_sprite_run(
+                scenario="keyword-reverse",
+                params={"asin": "B07YRMT36L"},
+                job_id="dedicated-mcp-job",
+            )
+        )
+    finally:
+        reset_quota_access_context(token)
+
+    assert result["success"] is True
+    assert DummyScheduler.last_enqueue_kwargs == {
+        "credential_scope": "default",
+        "expected_user_email": "dedicated@example.com",
+        "mcp_user_email": "dedicated@example.com",
+        "account_route": ACCOUNT_ROUTE_USER_BINDING,
+        "requested_account_id": "account-id",
+        "requested_account_key": "account-key",
     }
 
 

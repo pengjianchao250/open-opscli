@@ -20,6 +20,17 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 - `seller_sprite_listing_analysis_status`：按 `job_id` 续查 Listing Analysis 提交状态。
 - `seller_sprite_listing_analysis_result`：按 `job_id` 读取 Listing Analysis 结果；未完成时返回 `ready=false`。
 
+专属账号绑定不提供 MCP 管理工具。绑定、改绑和解绑只能由部署管理员在 MCP 服务所在主机通过本地 CLI 完成，Agent 不得向用户索取卖家精灵密码。
+
+## 专属账号路由
+
+- 已绑定专属账号的 OPS 邮箱会在统一 quota 切面中自动识别；`seller_sprite_run` 和 `seller_sprite_listing_analysis_submit` 不计入每日额度。
+- 专属账号 quota 快照返回 `unlimited=true`，且 `limit`、`remaining`、`reset_at` 为 `null`；不要将空值解释为额度耗尽。
+- 未绑定用户继续使用公共账号池和原每日额度策略。
+- 专属账号任务固定使用提交时确认的账号引用，不保存密码，也不会在登录失败、解绑或改绑后回退公共账号池。
+- 解绑只使尚未领取的 `queued` 专属任务失败；已经 `running` 的任务继续使用领取时账号完成。
+- 专属账号异常时应报告原任务失败并联系部署管理员检查绑定，不得重新提交以尝试切换公共账号。
+
 ## 工具信封与业务状态
 
 - 顶层 `success=true` 只表示工具请求成功，不表示后台业务已完成。
@@ -92,8 +103,8 @@ Listing Analysis 必须使用 submit/status/result 专用流程，不属于普�
 
 - 优先读取 `data.summary`、`data.job_id`、`data.row_count`、`data.export.filename`、`data.export.url`、`data.export.path` 和 `data.export.format`。
 - 批量状态优先展示 `data.ready` 与 `data.summary`；从 `data.jobs` 识别并保留每个 pending ID。
-- `seller_sprite_run` 顶层存在 `quota` 时补充：`今日额度：已用 used / limit，剩余 remaining，重置时间 reset_at`。
-- `seller_sprite_run` 和 `seller_sprite_listing_analysis_submit` 消耗次数；场景、额度、普通单/批状态、导出以及 Listing Analysis status/result 不消耗次数。
+- `seller_sprite_run` 顶层存在 `quota` 时，普通用户补充：`今日额度：已用 used / limit，剩余 remaining，重置时间 reset_at`；`unlimited=true` 时改为说明“当前用户使用专属账号，不受每日额度限制”，不要拼接空额度字段。
+- 未绑定专属账号时，`seller_sprite_run` 和 `seller_sprite_listing_analysis_submit` 消耗次数；专属账号用户不计次。场景、额度、普通单/批状态、导出以及 Listing Analysis status/result 不消耗次数。
 - 不要在最终回复中打印完整工具参数、原始 JSON、内部长路径或账号信息。
 - `row_count=0` 时，明确提示核对站点、ASIN、关键词、类目或筛选条件是否过窄。
 

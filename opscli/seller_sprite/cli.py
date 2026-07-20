@@ -13,7 +13,9 @@ from opscli.seller_sprite.remote_adapter import SellerSpriteRemoteAdapter
 
 app = typer.Typer(help="卖家精灵远端 MCP 正式命令面。")
 queue_app = typer.Typer(help="卖家精灵本地 SQLite 队列运维命令。")
+account_binding_app = typer.Typer(help="卖家精灵用户专属账号绑定命令。")
 app.add_typer(queue_app, name="queue")
+app.add_typer(account_binding_app, name="account-binding")
 
 
 @app.command("scenarios")
@@ -120,6 +122,58 @@ def export(job_id: str = typer.Argument(..., help="任务 ID")) -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+@account_binding_app.command("bind")
+def account_binding_bind(
+    user_email: str = typer.Option(..., "--user-email", help="需要使用专属账号的 OPS 用户邮箱"),
+    account_name: str = typer.Option(..., "--account-name", help="可复用的专属账号名称"),
+    username: str = typer.Option(..., "--username", help="卖家精灵登录用户名"),
+) -> None:
+    """绑定用户专属账号；密码使用隐藏输入并加密保存。"""
+    password = typer.prompt("卖家精灵密码", hide_input=True)
+    binding = _get_account_binding_store().bind(
+        user_email=user_email,
+        account_name=account_name,
+        username=username,
+        password=password,
+    )
+    typer.echo(json.dumps(binding.to_public_dict(), ensure_ascii=False, indent=2))
+
+
+@account_binding_app.command("list")
+def account_binding_list() -> None:
+    """列出全部用户专属账号绑定，不输出密码。"""
+    payload = _get_account_binding_store().list_bindings()
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@account_binding_app.command("unbind")
+def account_binding_unbind(
+    user_email: str = typer.Option(..., "--user-email", help="要解除绑定的 OPS 用户邮箱"),
+) -> None:
+    """解除用户专属账号绑定，并终止该用户尚未领取的专属任务。"""
+    store = _get_account_binding_store()
+    reference = store.get_binding_reference(user_email)
+    failed_queued_tasks = 0
+    if reference is not None:
+        # 先由队列事务划分 queued/running，再删除绑定；已领取任务继续使用内存账号完成。
+        failed_queued_tasks = _get_queue_store().fail_queued_user_binding_tasks(
+            user_email=reference.user_email,
+            reason="卖家精灵专属账号绑定已解除，请重新绑定后提交任务",
+        )
+    deleted = store.unbind(user_email) if reference is not None else False
+    typer.echo(
+        json.dumps(
+            {
+                "user_email": user_email.strip().lower(),
+                "deleted": deleted,
+                "failed_queued_tasks": failed_queued_tasks,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 @queue_app.command("status")
 def queue_status(
     stale_running_seconds: int = typer.Option(1800, "--stale-running-seconds", help="running 超时判定秒数"),
@@ -204,6 +258,13 @@ def _get_queue_store():
     from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
 
     return SellerSpriteTaskQueueStore()
+
+
+def _get_account_binding_store():
+    """延迟加载专属账号绑定仓储，避免普通远端命令创建本地密钥。"""
+    from opscli.seller_sprite.services.account_bindings import SellerSpriteAccountBindingStore
+
+    return SellerSpriteAccountBindingStore()
 
 
 def _minutes_ago_iso(minutes: int) -> str:

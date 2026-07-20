@@ -154,6 +154,195 @@ def test_store_claims_generic_tasks_in_parallel_for_distinct_accounts(tmp_path: 
     assert blocked is None
 
 
+def test_store_public_worker_does_not_claim_user_binding_task(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import (
+        ACCOUNT_ROUTE_USER_BINDING,
+        SellerSpriteTaskQueueStore,
+    )
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_request(job_id="dedicated-job"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "dedicated-job",
+        expected_user_email="user@example.com",
+        account_route=ACCOUNT_ROUTE_USER_BINDING,
+        requested_account_id="account-id",
+        requested_account_key="account-key",
+    )
+
+    claimed = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="public-account-key",
+        assigned_account="public-account",
+        worker_key="public-worker",
+    )
+
+    assert claimed is None
+    assert store.get_status("dedicated-job")["state"] == "queued"
+
+
+def test_store_unbind_failure_only_ends_queued_user_binding_tasks(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import (
+        ACCOUNT_ROUTE_USER_BINDING,
+        SellerSpriteTaskQueueStore,
+    )
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    for job_id in ("dedicated-running", "dedicated-queued"):
+        store.enqueue_owned_mcp_run(
+            request=_request(job_id=job_id),
+            queue_scope="seller_sprite",
+            root_dir=tmp_path / job_id,
+            user_email="user@example.com",
+            expected_user_email="user@example.com",
+            account_route=ACCOUNT_ROUTE_USER_BINDING,
+            requested_account_id="account-id",
+            requested_account_key="account-key",
+        )
+    running = store.claim_user_binding_task(
+        job_id="dedicated-running",
+        account_id="account-id",
+        account_key="account-key",
+        assigned_account="dedicated-a",
+        worker_key="dedicated-worker",
+    )
+
+    changed = store.fail_queued_user_binding_tasks(
+        user_email="USER@example.com",
+        reason="专属账号绑定已解除",
+    )
+
+    assert running["state"] == "running"
+    assert changed == 1
+    assert store.get_status("dedicated-running")["state"] == "running"
+    queued = store.get_status("dedicated-queued")
+    assert queued["state"] == "failed"
+    assert queued["error"]["code"] == "SELLER_SPRITE_DEDICATED_ACCOUNT_UNAVAILABLE"
+    assert store.get_mcp_run("dedicated-running")["result_state"] == "queued"
+    assert store.get_mcp_run("dedicated-queued")["result_state"] == "failed"
+
+
+def test_store_limits_user_binding_tasks_to_three_running_accounts(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import (
+        ACCOUNT_ROUTE_USER_BINDING,
+        SellerSpriteTaskQueueStore,
+    )
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    for index in range(1, 5):
+        store.enqueue(
+            request=_request(job_id=f"dedicated-{index}"),
+            queue_scope="seller_sprite",
+            root_dir=tmp_path / f"dedicated-{index}",
+            expected_user_email=f"user-{index}@example.com",
+            account_route=ACCOUNT_ROUTE_USER_BINDING,
+            requested_account_id=f"account-{index}",
+            requested_account_key=f"account-key-{index}",
+        )
+
+    claimed = [
+        store.claim_user_binding_task(
+            job_id=f"dedicated-{index}",
+            account_id=f"account-{index}",
+            account_key=f"account-key-{index}",
+            assigned_account=f"dedicated-{index}",
+            worker_key=f"worker-{index}",
+        )
+        for index in range(1, 5)
+    ]
+
+    assert [item is not None for item in claimed] == [True, True, True, False]
+    assert store.get_status("dedicated-4")["state"] == "queued"
+
+
+def test_store_migrates_v2_queue_to_shared_account_route(tmp_path: Path):
+    """v2 历史任务升级后应保留数据并明确归入公共账号池。"""
+    from opscli.seller_sprite.services.task_queue_store import (
+        ACCOUNT_ROUTE_SHARED_POOL,
+        QUEUE_SCHEMA_VERSION,
+        SellerSpriteTaskQueueStore,
+    )
+
+    db_path = tmp_path / "queue.sqlite3"
+    request = _request(job_id="legacy-v2-job")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE seller_sprite_task_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL UNIQUE,
+                queue_scope TEXT NOT NULL,
+                task_kind TEXT NOT NULL DEFAULT 'generic',
+                status TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                root_dir TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                started_at TEXT NULL,
+                finished_at TEXT NULL,
+                assigned_account TEXT NULL,
+                assigned_account_key TEXT NULL,
+                worker_key TEXT NULL,
+                assignment_generation INTEGER NOT NULL DEFAULT 0,
+                failover_count INTEGER NOT NULL DEFAULT 0,
+                last_error_code TEXT NULL,
+                last_failed_account_key TEXT NULL,
+                retry_reason TEXT NULL,
+                result_path TEXT NULL,
+                row_count INTEGER NOT NULL DEFAULT 0,
+                export_json TEXT NULL,
+                error_json TEXT NULL,
+                credential_scope TEXT NULL,
+                runtime_auth_required INTEGER NOT NULL DEFAULT 0,
+                expected_user_email TEXT NULL,
+                session_id TEXT NULL,
+                jwt TEXT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO seller_sprite_task_queue (
+                job_id, queue_scope, task_kind, status, request_json, root_dir,
+                created_at, row_count, runtime_auth_required
+            )
+            VALUES (?, 'seller_sprite', 'generic', 'queued', ?, ?, ?, 0, 0)
+            """,
+            (
+                request.job_id,
+                json.dumps(request.to_dict(), ensure_ascii=False),
+                str(tmp_path / "legacy-v2-job"),
+                "2026-07-20T10:00:00+08:00",
+            ),
+        )
+        conn.execute("PRAGMA user_version = 2")
+
+    store = SellerSpriteTaskQueueStore(db_path=db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT account_route, requested_account_id, requested_account_key "
+            "FROM seller_sprite_task_queue WHERE job_id = ?",
+            ("legacy-v2-job",),
+        ).fetchone()
+        user_version = conn.execute("PRAGMA user_version").fetchone()[0]
+
+    assert dict(row) == {
+        "account_route": ACCOUNT_ROUTE_SHARED_POOL,
+        "requested_account_id": None,
+        "requested_account_key": None,
+    }
+    assert user_version == QUEUE_SCHEMA_VERSION
+    claimed = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="public-account-key",
+        assigned_account="public-account",
+        worker_key="public-worker",
+    )
+    assert claimed["job_id"] == "legacy-v2-job"
+
+
 def test_store_does_not_auto_consume_while_legacy_generic_task_is_running(tmp_path: Path):
     """升级前领取且没有账号键的 running 任务应阻断新版 generic 自动消费。"""
     from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore

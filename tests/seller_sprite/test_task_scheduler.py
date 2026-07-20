@@ -1591,3 +1591,334 @@ def test_get_task_scheduler_supports_sync_cli_context():
     second = module.get_task_scheduler()
 
     assert first is second
+
+
+def test_scheduler_runs_user_binding_task_with_dedicated_account(tmp_path: Path):
+    """专属账号任务应固定使用绑定账号，不进入公共账号池。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.account_bindings import (
+            SellerSpriteAccountBindingStore,
+        )
+        from opscli.seller_sprite.services.task_queue_store import (
+            ACCOUNT_ROUTE_USER_BINDING,
+        )
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        binding_store = SellerSpriteAccountBindingStore(
+            db_path=tmp_path / "bindings.sqlite3",
+            key_path=tmp_path / "bindings.key",
+        )
+        binding = binding_store.bind(
+            user_email="User@Example.com",
+            account_name="dedicated-a",
+            username="dedicated@example.com",
+            password="dedicated-secret",
+        )
+        used_accounts = []
+
+        def manager_factory(**kwargs):
+            class Manager:
+                async def run(self, request):
+                    account = kwargs["account_provider"].get_default()
+                    used_accounts.append((account.name, account.username))
+                    return _empty_result(kwargs["settings"], request)
+
+            return Manager()
+
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=MultiAccountProvider(1),
+            account_binding_store=binding_store,
+            manager_factory=manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        await scheduler.enqueue(
+            _request("dedicated-job", "B07YRMT36L"),
+            mcp_user_email=binding.user_email,
+            expected_user_email=binding.user_email,
+            session_id="test-session",
+            jwt="test-jwt",
+            account_route=ACCOUNT_ROUTE_USER_BINDING,
+            requested_account_id=binding.account.account_id,
+            requested_account_key=binding.account_key,
+        )
+
+        await scheduler.start()
+        succeeded = await _wait_for_state(scheduler, "dedicated-job", "succeeded")
+
+        assert used_accounts == [("dedicated-a", "dedicated@example.com")]
+        assert succeeded["assigned_account"] == "dedicated-a"
+        assert succeeded["failover_count"] == 0
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_serializes_users_sharing_one_dedicated_account(tmp_path: Path):
+    """多个用户复用同一专属账号时必须串行执行。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.account_bindings import (
+            SellerSpriteAccountBindingStore,
+        )
+        from opscli.seller_sprite.services.task_queue_store import (
+            ACCOUNT_ROUTE_USER_BINDING,
+        )
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        binding_store = SellerSpriteAccountBindingStore(
+            db_path=tmp_path / "bindings.sqlite3",
+            key_path=tmp_path / "bindings.key",
+        )
+        first = binding_store.bind(
+            user_email="first@example.com",
+            account_name="dedicated-a",
+            username="dedicated@example.com",
+            password="secret",
+        )
+        second = binding_store.bind(
+            user_email="second@example.com",
+            account_name="dedicated-a",
+            username="dedicated@example.com",
+            password="secret",
+        )
+        manager = ControlledRunManager(
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=DummyAccountProvider(),
+        )
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=MultiAccountProvider(1),
+            account_binding_store=binding_store,
+            manager_factory=lambda **kwargs: manager,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        for job_id, binding in (("first-job", first), ("second-job", second)):
+            await scheduler.enqueue(
+                _request(job_id, "B07YRMT36L"),
+                mcp_user_email=binding.user_email,
+                expected_user_email=binding.user_email,
+                session_id="test-session",
+                jwt="test-jwt",
+                account_route=ACCOUNT_ROUTE_USER_BINDING,
+                requested_account_id=binding.account.account_id,
+                requested_account_key=binding.account_key,
+            )
+
+        await scheduler.start()
+        await manager.first_started.wait()
+
+        assert scheduler.job_status("first-job")["state"] == "running"
+        assert scheduler.job_status("second-job")["state"] == "queued"
+        manager.allow_finish.set()
+        await _wait_for_state(scheduler, "second-job", "succeeded")
+        assert manager.started == ["first-job", "second-job"]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_fails_malformed_user_binding_task_without_public_fallback(
+    tmp_path: Path,
+):
+    """缺少账号引用的专属任务必须失败，不能永久排队或进入公共池。"""
+    from opscli.seller_sprite.services.task_queue_store import (
+        ACCOUNT_ROUTE_USER_BINDING,
+    )
+    from opscli.seller_sprite.services.task_scheduler import (
+        SellerSpriteTaskScheduler,
+    )
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_request("malformed-dedicated", "B07YRMT36L"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "malformed-dedicated",
+        expected_user_email="user@example.com",
+        account_route=ACCOUNT_ROUTE_USER_BINDING,
+    )
+    scheduler = SellerSpriteTaskScheduler(
+        store=store,
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account_provider=MultiAccountProvider(1),
+        auto_start=False,
+    )
+
+    scheduler._start_user_binding_tasks()
+
+    failed = store.get_status("malformed-dedicated")
+    assert failed["state"] == "failed"
+    assert failed["error"]["code"] == (
+        "SELLER_SPRITE_DEDICATED_ACCOUNT_UNAVAILABLE"
+    )
+
+
+def test_scheduler_dedicated_stale_generation_does_not_overwrite_requeued_task(
+    tmp_path: Path,
+):
+    """专属任务被运维重排后，旧执行代际不得提交终态。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.account_bindings import (
+            SellerSpriteAccountBindingStore,
+        )
+        from opscli.seller_sprite.services.task_queue_store import (
+            ACCOUNT_ROUTE_USER_BINDING,
+        )
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        binding_store = SellerSpriteAccountBindingStore(
+            db_path=tmp_path / "bindings.sqlite3",
+            key_path=tmp_path / "bindings.key",
+        )
+        binding = binding_store.bind(
+            user_email="user@example.com",
+            account_name="dedicated-a",
+            username="dedicated@example.com",
+            password="secret",
+        )
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+
+        def manager_factory(**kwargs):
+            class Manager:
+                async def run(self, request):
+                    assert store.reset_running_tasks() == 1
+                    return _empty_result(kwargs["settings"], request)
+
+            return Manager()
+
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=MultiAccountProvider(1),
+            account_binding_store=binding_store,
+            manager_factory=manager_factory,
+            auto_start=False,
+        )
+        await scheduler.enqueue(
+            _request("dedicated-stale", "B07YRMT36L"),
+            mcp_user_email=binding.user_email,
+            expected_user_email=binding.user_email,
+            session_id="test-session",
+            jwt="test-jwt",
+            account_route=ACCOUNT_ROUTE_USER_BINDING,
+            requested_account_id=binding.account.account_id,
+            requested_account_key=binding.account_key,
+        )
+        claimed = store.claim_user_binding_task(
+            job_id="dedicated-stale",
+            account_id=binding.account.account_id,
+            account_key=binding.account_key,
+            assigned_account=binding.account.name,
+            worker_key="dedicated-worker",
+        )
+
+        async def skip_reap():
+            return None
+
+        scheduler._reap_browser_sessions = skip_reap
+        await scheduler._run_user_binding_task(
+            claimed=claimed,
+            account=binding.account.to_account(),
+        )
+
+        status = store.get_status("dedicated-stale")
+        assert status["state"] == "queued"
+        assert status["assignment_generation"] == 2
+        assert status["result_path"] is None
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_dedicated_authentication_failure_does_not_use_public_standby(
+    tmp_path: Path,
+):
+    """专属账号认证失败后应直接失败，禁止公共账号接替。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.account_bindings import (
+            SellerSpriteAccountBindingStore,
+        )
+        from opscli.seller_sprite.services.task_queue_store import (
+            ACCOUNT_ROUTE_USER_BINDING,
+        )
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        binding_store = SellerSpriteAccountBindingStore(
+            db_path=tmp_path / "bindings.sqlite3",
+            key_path=tmp_path / "bindings.key",
+        )
+        binding = binding_store.bind(
+            user_email="user@example.com",
+            account_name="dedicated-a",
+            username="dedicated@example.com",
+            password="bad-secret",
+        )
+        attempted_accounts = []
+
+        def manager_factory(**kwargs):
+            class Manager:
+                async def run(self, request):
+                    account = kwargs["account_provider"].get_default()
+                    attempted_accounts.append(account.name)
+                    raise SellerSpriteAuthenticationError("专属账号登录失败")
+
+            return Manager()
+
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=MultiAccountProvider(3),
+            account_binding_store=binding_store,
+            manager_factory=manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        closed_sessions = []
+
+        async def close_account_session(account, *, reason):
+            closed_sessions.append((account.name, reason))
+
+        scheduler._close_account_session = close_account_session
+        await scheduler.enqueue(
+            _request("dedicated-auth-failure", "B07YRMT36L"),
+            mcp_user_email=binding.user_email,
+            expected_user_email=binding.user_email,
+            session_id="test-session",
+            jwt="test-jwt",
+            account_route=ACCOUNT_ROUTE_USER_BINDING,
+            requested_account_id=binding.account.account_id,
+            requested_account_key=binding.account_key,
+        )
+
+        await scheduler.start()
+        failed = await _wait_for_state(
+            scheduler,
+            "dedicated-auth-failure",
+            "failed",
+        )
+
+        assert attempted_accounts == ["dedicated-a"]
+        assert failed["failover_count"] == 0
+        assert failed["error"]["code"] == "SELLER_SPRITE_AUTHENTICATION_ERROR"
+        assert closed_sessions == [("dedicated-a", "authentication_failed")]
+        await scheduler.close()
+
+    asyncio.run(scenario())

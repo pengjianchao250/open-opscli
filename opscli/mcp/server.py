@@ -92,14 +92,21 @@ def _quota_wrap(fn, *, limiter=None):
         if not decision.allowed:
             return decision.error_response
 
+        from opscli.mcp.quota import reset_quota_access_context, set_quota_access_context
+
+        # 账号路由只在当前 Tool 调用期间可见，finally 确保异常时也不会串到后续请求。
+        token = set_quota_access_context(getattr(decision, "access_context", None))
+        ticket = getattr(decision, "ticket", None)
         try:
             result = await fn(*args, **kwargs)
         except Exception:
-            await quota_limiter.after_exception(decision.ticket)
+            await quota_limiter.after_exception(ticket)
             raise
+        finally:
+            reset_quota_access_context(token)
 
         if isinstance(result, dict):
-            return await quota_limiter.after_call(decision.ticket, result)
+            return await quota_limiter.after_call(ticket, result)
         return result
 
     return _wrapper

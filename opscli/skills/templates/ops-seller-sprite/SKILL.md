@@ -30,6 +30,9 @@ description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自
 8. 当前 Skill 的参数词典、场景映射、别名、默认值统一以 [SCENARIO_PARAMS_ZH.md](SCENARIO_PARAMS_ZH.md) 为准。
 9. 面向 CLI 说明时，默认引用 `opscli seller-sprite ...` 这条正式命令路径；不要向用户展开底层远端 URL、`api_key` 或内部调试入口。
 10. 若返回授权类错误或提示先完成 OPS 授权，优先检查本机 CLI 登录态；不要先把问题归因为卖家精灵账号、场景参数或采集模式。
+11. 已由部署管理员绑定专属账号的 OPS 用户会自动使用该账号，`run` 和 Listing Analysis submit 均不消耗每日额度；未绑定用户继续使用公共账号池和原额度策略。
+12. 专属账号的绑定、改绑和解绑只能由部署管理员在服务端本机执行 `opscli seller-sprite account-binding ...`，MCP 不提供管理工具；Agent 不得向用户索取或输出卖家精灵密码。
+13. 专属账号登录失效时任务直接失败，不会回退公共账号池；不要通过重新提交任务尝试绕过账号异常。
 
 ## 链路区分
 
@@ -139,7 +142,7 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - 成功时只保留用户关心的信息：场景、关键条件、`job_id`、`row_count`、导出文件。
 - 若 `seller_sprite_run` 响应顶层存在 `quota`，补一句：
   - `今日额度：已用 used / limit，剩余 remaining，重置时间 reset_at`
-- `seller_sprite_run` 和 `seller_sprite_listing_analysis_submit` 会消耗次数；`seller_sprite_scenarios`、`seller_sprite_quota_status`、`seller_sprite_job_status`、`seller_sprite_jobs_status`、`seller_sprite_export` 以及 Listing Analysis 的 `status/result` 不消耗次数。
+- 未绑定专属账号时，`seller_sprite_run` 和 `seller_sprite_listing_analysis_submit` 会消耗次数；已绑定专属账号时不计次，quota 快照返回 `unlimited=true` 且 `limit/remaining/reset_at` 为空。`seller_sprite_scenarios`、`seller_sprite_quota_status`、`seller_sprite_job_status`、`seller_sprite_jobs_status`、`seller_sprite_export` 以及 Listing Analysis 的 `status/result` 不消耗次数。
 - 普通任务等待到期不会取消、标记失败或重新入队；继续保留全部未完成 `job_id`，不得重新提交，也不得调用 `run` 查状态。
 - `row_count=0` 时，要明确告诉用户没有查到数据，并提醒核对站点、ASIN、关键词、类目或筛选条件是否过窄。
 - 用户后来只说 `继续`、`查结果`、`刚才那个好了没` 时，恢复并查询完整 pending 集合；只有用户明确指定子集时才缩小范围。
