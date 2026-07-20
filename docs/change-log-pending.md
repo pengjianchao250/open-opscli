@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-20 skills - install 默认静默，新增 --verbose/-v 控制逐条日志
+
+**变更原因**：批量安装（10 个 Skill × 7 个工具）时逐条打印 70+ 行安装日志和逐条铁律注入提示，输出过于冗长；用户要求默认不输出日志，增加参数控制
+**改动点**：opscli/skills/commands/cli.py — install_skill 新增 --verbose/-v 选项（默认 False）；_install_interactive 增加 verbose 参数，仅在 verbose 时调用 _print_install_line；_inject_rules_for_installs 增加 verbose 参数（注入动作照常执行，仅提示行受控），签名同步改为 Sequence[object] 消除 Pyright 协变告警；单名安装路径的铁律注入同样透传 verbose。最终汇总行与 JSON payload 输出保持不变（机器解析契约不受影响）
+**验证结果**：opscli skills install --yes --skills-dir /tmp/opscli_vtest 默认无逐条日志，仅汇总 + JSON；加 -v 后恢复逐条 √/↑ 日志行；pytest tests/skills/ 退出阶段 capture 崩溃与 2026-07-17 基线一致（预存问题，与本次改动无关）
+**影响范围**：仅 skills install 命令的终端日志展示；JSON 输出、安装与铁律注入行为不变
+**回滚方式**：回退本次 commit（或删除 --verbose 参数并还原三处 verbose 判断）
+---
+
 ## 2026-07-16 终审修复 - README 引号回归修复 + skills 失败测试断言加固
 
 **变更原因**：全分支终审发现 Task 5 docs 提交误将 README 第 129 行前引号"改为"；审查建议 skills 失败测试锁定失败步骤 argv
