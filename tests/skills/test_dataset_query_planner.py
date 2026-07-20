@@ -441,6 +441,7 @@ def test_filter_component_contract_requires_exact_enum_member_match(tmp_path: Pa
     policy = result["execution_ref"]["filter_value_match_policy"]
     assert policy["strategy"] == "exact_normalized_then_clarify"
     assert policy["exact_match_is_exclusive"] is True
+    assert policy["exact_match_confirmation_required"] is False
     assert policy["substring_match_allowed"] is False
     assert policy["no_exact_match_action"] == "clarify_required"
     assert "department_arabic_chinese_numeral_equivalence" in policy["normalizations"]
@@ -535,7 +536,7 @@ def test_recommended_fields_when_nothing_named(tmp_path: Path):
 
 
 def test_unspecified_dataset_recommends_compatible_instant_dataset(tmp_path: Path):
-    """未点名数据集时只推荐授权且兼容的即时综合数据集，并等待用户确认。"""
+    """未点名数据集但字段完整覆盖时自动采用即时综合，不等待用户确认。"""
     data_dir = tmp_path / "data"
     _write_instant_comprehensive_metadata(data_dir)
     result = query_plan.build_model_query_plan(
@@ -546,16 +547,54 @@ def test_unspecified_dataset_recommends_compatible_instant_dataset(tmp_path: Pat
         auto_enum=False,
     )
 
-    assert result["status"] == "clarify_required"
+    assert result["status"] == "planned"
     assert result["model_view"]["dataset_name_zh"] == "即时综合数据集"
     recommendation = result["model_view"]["default_dataset_recommendation_zh"]
     assert recommendation["name_zh"] == "即时综合数据集"
-    assert recommendation["confirmation_required"] is True
-    assert result["model_view"]["next_action"] == "ask_user_for_default_dataset_confirmation"
-    assert "default_dataset_confirmation" in result["model_view"]["clarification_reason_codes"]
-    assert "query_template" not in result["execution_ref"]
+    assert recommendation["confirmation_required"] is False
+    assert recommendation["auto_selected"] is True
+    assert result["model_view"]["next_action"] == "construct_query"
+    assert "default_dataset_confirmation" not in result["model_view"]["clarification_reason_codes"]
+    assert "query_template" in result["execution_ref"]
     schema = json.loads((SKILL_ROOT / "data" / "query_plan.schema.json").read_text())
     jsonschema.Draft202012Validator(schema).validate(result)
+
+
+def test_current_month_and_compatible_default_dataset_execute_without_confirmation(
+    tmp_path: Path, monkeypatch
+):
+    """“本月”与字段覆盖的即时综合都已唯一确定时，规划结果必须直接可执行。"""
+    from datetime import date
+
+    data_dir = tmp_path / "data"
+    _write_instant_comprehensive_metadata(data_dir)
+    original_parse = time_scope.parse
+    monkeypatch.setattr(
+        query_plan.time_scope,
+        "parse",
+        lambda query: original_parse(query, today=date(2026, 7, 20)),
+    )
+
+    result = query_plan.build_model_query_plan(
+        "查询本月销售额",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "planned"
+    assert result["execution_ref"]["time_scope"]["is_default"] is False
+    assert result["execution_ref"]["time_scope"]["start"] == "2026-07-01"
+    assert result["execution_ref"]["time_scope"]["end"] == "2026-07-20"
+    assert result["model_view"]["default_dataset_recommendation_zh"] == {
+        "name_zh": "即时综合数据集",
+        "reason_zh": "未明确指定数据集，且该数据集在当前授权范围内并覆盖已明确的业务与字段。",
+        "confirmation_required": False,
+        "auto_selected": True,
+    }
+    assert "pending_confirmations_zh" not in result["model_view"]
+    assert "query_template" in result["execution_ref"]
 
 
 def test_vague_query_recommends_instant_but_incompatible_query_does_not(tmp_path: Path):
@@ -571,7 +610,11 @@ def test_vague_query_recommends_instant_but_incompatible_query_does_not(tmp_path
     vague = query_plan.build_model_query_plan("帮我查一下运营数据", **common)
     incompatible = query_plan.build_model_query_plan("查询近7天ACOS", **common)
 
-    assert vague["model_view"]["default_dataset_recommendation_zh"]["name_zh"] == "即时综合数据集"
+    recommendation = vague["model_view"]["default_dataset_recommendation_zh"]
+    assert recommendation["name_zh"] == "即时综合数据集"
+    assert recommendation["confirmation_required"] is True
+    assert recommendation["auto_selected"] is False
+    assert vague["status"] == "clarify_required"
     assert "default_dataset_recommendation_zh" not in incompatible["model_view"]
     assert incompatible["model_view"]["dataset_name_zh"] != "即时综合数据集"
 

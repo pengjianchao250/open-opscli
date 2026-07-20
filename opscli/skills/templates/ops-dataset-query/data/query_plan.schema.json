@@ -78,13 +78,14 @@
           "$ref": "#/$defs/string_array"
         },
         "default_dataset_recommendation_zh": {
-          "description": "未明确指定数据集时，对已授权且兼容的即时综合数据集推荐",
+          "description": "未明确指定数据集时，对已授权且兼容的即时综合数据集选择；字段完整覆盖时自动选择，否则等待确认",
           "type": "object",
-          "required": ["name_zh", "reason_zh", "confirmation_required"],
+          "required": ["name_zh", "reason_zh", "confirmation_required", "auto_selected"],
           "properties": {
             "name_zh": {"type": "string"},
             "reason_zh": {"type": "string"},
-            "confirmation_required": {"const": true}
+            "confirmation_required": {"type": "boolean"},
+            "auto_selected": {"type": "boolean"}
           },
           "additionalProperties": false
         },
@@ -221,6 +222,7 @@
             "strategy",
             "normalizations",
             "exact_match_is_exclusive",
+            "exact_match_confirmation_required",
             "substring_match_allowed",
             "no_exact_match_action",
             "rule_zh"
@@ -228,8 +230,9 @@
           "properties": {
             "strategy": {"const": "exact_normalized_then_clarify"},
             "normalizations": {"$ref": "#/$defs/string_array"},
-            "exact_match_is_exclusive": {"const": true},
-            "substring_match_allowed": {"const": false},
+          "exact_match_is_exclusive": {"const": true},
+          "exact_match_confirmation_required": {"const": false},
+          "substring_match_allowed": {"const": false},
             "no_exact_match_action": {"const": "clarify_required"},
             "rule_zh": {"type": "string"}
           },
