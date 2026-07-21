@@ -1119,7 +1119,6 @@ def normalize_listing_basic(
     bullets = [str(item).strip() for item in bullets if str(item or "").strip()]
     row = {
         "asin": asin,
-        "ASIN": asin,
         "渠道": _first_present(merged, "channel_name"),
         "平台SKU": _first_present(merged, "item_sku", "sell_sku"),
         "公司SKU": _first_present(merged, "sku"),
@@ -1144,6 +1143,8 @@ def normalize_listing_basic(
         "listid": _first_present(merged, "listid", "id"),
     }
     for key, value in listing_template_alias_values(merged, template or {}).items():
+        if key.casefold() == "asin":
+            continue
         if key not in row or not _has_value(row.get(key)):
             row[key] = value
     return {key: value for key, value in row.items() if _has_value(value)}
