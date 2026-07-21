@@ -21,6 +21,7 @@ from opscli.keepa.cli import app as keepa_app
 from opscli.keepa_debug.cli import app as keepa_debug_app
 from opscli.mcp.cli import app as mcp_app
 # from opscli.methods_card.cli import app as methods_card_app
+from opscli.notify.cli import app as notify_app
 from opscli.query.cli import app as query_app
 from opscli.scrape_do.cli import app as scrape_do_app
 from opscli.shopify.cli import app as shopify_app
@@ -62,6 +63,7 @@ app.add_typer(query_app, name="query")
 app.add_typer(scrape_do_app, name="scrape-do")
 # app.add_typer(shopify_app, name="shopify")
 app.add_typer(feedback_app, name="feedback")
+app.add_typer(notify_app, name="notify")
 # app.add_typer(feedtask_app, name="feedtask")
 app.add_typer(google_trends_app, name="google-trends")
 # app.add_typer(google_trends_debug_app, name="google-trends-debug")

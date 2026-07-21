@@ -1,6 +1,6 @@
 {
   "name": "ops-feedback-query",
-  "version": "v1.0.0",
-  "updated_at": "2026-07-14",
-  "notes": "新增内部反馈列表与批量详情查询能力。"
+  "version": "v1.1.0",
+  "updated_at": "2026-07-21",
+  "notes": "新增脱敏 Markdown 日报生成与企业微信群机器人 Markdown V2 摘要推送能力。"
 }
