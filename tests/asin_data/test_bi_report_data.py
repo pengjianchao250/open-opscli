@@ -119,6 +119,22 @@ def test_normalize_listing_basic_accepts_legacy_item_highlight_key():
     assert row["商品亮点"] == "Under-bed storage"
 
 
+def test_normalize_listing_basic_returns_only_lowercase_asin_field():
+    row = normalize_listing_basic(
+        asin="B0TEST1234",
+        list_row={"id": 123},
+        detail={"external_product_id": "B0TEST1234"},
+        template={
+            "fields": [
+                {"field": "external_product_id", "alias": "ASIN"},
+            ]
+        },
+    )
+
+    assert row["asin"] == "B0TEST1234"
+    assert [key for key in row if key.lower() == "asin"] == ["asin"]
+
+
 def test_bi_report_data_client_fetches_all_sources_and_filters_by_asin():
     get_calls = []
     post_calls = []
