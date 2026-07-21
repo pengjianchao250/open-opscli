@@ -50,6 +50,8 @@ opscli 负责认证、校验、请求后端，返回结果
 | Skill 名称 | 说明 | 支持远端升级 |
 |-----------|------|------------|
 | `ops-auth` | 认证授权管理（登录、Token 查看与刷新、系统管理） | 否 |
+| `ops-dashboard-ai-bridge` | 仪表盘页面编辑与写后核验 | 否 |
+| `ops-dashboard-data-analysis` | 仪表盘业务数据只读分析 | 否 |
 | `ops-dataset-query` | 数据集字段索引与查询转发 | **是** |
 | `ops-skills` | Skill 生命周期管理（安装、升级、状态查看） | 否 |
 
@@ -59,6 +61,8 @@ opscli 负责认证、校验、请求后端，返回结果
 opscli（Python 包）
 ├── opscli/skills/templates/   ← 内置 Skill 模板（源码）
 │   ├── ops-auth/
+│   ├── ops-dashboard-ai-bridge/
+│   ├── ops-dashboard-data-analysis/
 │   ├── ops-dataset-query/
 │   └── ops-skills/
 └── opscli/skills/             ← Skill 生命周期管理代码
@@ -70,6 +74,8 @@ opscli（Python 包）
 用户机器（安装后）
 ~/.claude/skills/              ← Skill 安装目标目录
 ├── ops-auth/
+├── ops-dashboard-ai-bridge/
+├── ops-dashboard-data-analysis/
 ├── ops-dataset-query/
 └── ops-skills/
 ```

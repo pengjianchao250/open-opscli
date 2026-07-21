@@ -285,6 +285,7 @@ from opscli.mcp.tools import auth as _auth_tools
 from opscli.mcp.tools import amazon_rufus as _amazon_rufus_tools
 from opscli.mcp.tools import beta as _beta_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
+from opscli.mcp.tools import dashboard as _dashboard_tools
 from opscli.mcp.tools import feedback as _feedback_tools
 from opscli.mcp.tools import google_trends as _google_trends_tools
 from opscli.mcp.tools import health as _health_tools
@@ -303,6 +304,7 @@ _auth_tools.register(_telemetry_mcp)
 _amazon_rufus_tools.register(_telemetry_mcp)
 _beta_tools.register(_telemetry_mcp)
 _chatgpt_tools.register(_telemetry_mcp)
+_dashboard_tools.register(_telemetry_mcp)
 _feedback_tools.register(_telemetry_mcp)
 _google_trends_tools.register(_telemetry_mcp)
 _health_tools.register(_telemetry_mcp)
