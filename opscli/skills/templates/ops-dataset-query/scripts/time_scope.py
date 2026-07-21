@@ -154,7 +154,10 @@ def _window(query: str, today: date) -> tuple[date, date, str, bool]:
         this_monday = today - timedelta(days=today.weekday())
         return this_monday - timedelta(days=7), this_monday - timedelta(days=1), "上周（周一至周日）", False
     if re.search(r"本月|这个月", query):
-        return today.replace(day=1), today, "本月（1日至今天）", False
+        # 整月口径：本月固定为 1 日至本月最后一天；月末未到时窗口尾部尚无数据，
+        # 由消费方在结果中披露数据更新进度，不因此改回「至今天」或要求用户确认
+        month_end = today.replace(day=monthrange(today.year, today.month)[1])
+        return today.replace(day=1), month_end, "本月（整月，1日至月末）", False
     if re.search(r"上月|上个月", query):
         first_this = today.replace(day=1)
         last_prev = first_this - timedelta(days=1)
@@ -198,14 +201,30 @@ def parse(query: str, *, today: date | None = None) -> dict:
             "label_zh": "同比（去年同期）",
         }
     elif _COMPARE_PREV_RE.search(text):
-        # 环比：紧邻的上一个等长周期
-        length = (end - start).days + 1
-        result["comparison"] = {
-            "type": "period_over_period",
-            "start": _fmt(start - timedelta(days=length)),
-            "end": _fmt(start - timedelta(days=1)),
-            "label_zh": f"环比（上一个等长{length}天周期）",
-        }
+        # 环比：整自然月窗口（如本月/上月）固定对比上一个自然月，整月对整月，
+        # 大小月天数差异属正常口径；其他窗口取紧邻的上一个等长周期
+        is_natural_month = (
+            start.day == 1
+            and start.year == end.year
+            and start.month == end.month
+            and end.day == monthrange(end.year, end.month)[1]
+        )
+        if is_natural_month:
+            prev_last = start - timedelta(days=1)
+            result["comparison"] = {
+                "type": "period_over_period",
+                "start": _fmt(prev_last.replace(day=1)),
+                "end": _fmt(prev_last),
+                "label_zh": "环比（上一个自然月）",
+            }
+        else:
+            length = (end - start).days + 1
+            result["comparison"] = {
+                "type": "period_over_period",
+                "start": _fmt(start - timedelta(days=length)),
+                "end": _fmt(start - timedelta(days=1)),
+                "label_zh": f"环比（上一个等长{length}天周期）",
+            }
     return result
 
 

@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-21 ops-dataset-query 1.3.13 - "本月"改为整自然月口径，自然月环比对比上一个自然月
+
+**变更原因**：诊断类场景（如"业务团队经营增长诊断"）按完整自然月建模，而"本月"此前解析为 1 日至今天（MTD），月中执行时产生"当月不完整、环比天数不等"的口径冲突，诱发模型向用户追加阻断式时间确认。用户指定将"本月"默认改为整月（1 日至月末）。
+**改动点**：scripts/time_scope.py — "本月/这个月"窗口改为 1 日至本月最后一天（monthrange），标签"本月（整月，1日至月末）"；环比新增整自然月分支：主周期为整自然月时对比周期固定为上一个自然月（整月对整月），其他窗口保持等长平移。references/rules.md — 月边界定义改为整月口径（月末未到只作数据更新披露）、紧凑口径规则明确自然月环比大小月天数差异不需补齐或确认。references/ask-user-question-guide.md — 明确本月为整自然月、自然月环比天数不等与当月数据未满均不是待确认项。SKILL.md 时间口径条目补充整月定义，版本 1.3.12→1.3.13，data/VERSION.json 同步。tests/skills/test_dataset_query_planner.py — 更新两处"本月"日期断言为月末，新增 test_time_scope_natural_month_pop_uses_previous_natural_month（本月/上月环比均对比上一个自然月）。
+**验证结果**：pytest tests/skills/test_dataset_query_planner.py 52 passed；逐文件跑 tests/skills/ 仅 test_manager 3 个、test_ops_feedback_template 1 个、test_ops_methods_card_xlsx_preview 1 个失败与 test_packaging capture 崩溃，经 git stash 对照确认全部为 HEAD 预存问题，与本次改动无关。真实日期冒烟：2026-07-21 解析"本月"= 2026-07-01~2026-07-31，"本月环比"对比 2026-06-01~2026-06-30。
+**影响范围**：所有经规划器解析"本月/这个月"的查询窗口（由 MTD 变为整月，月末未到部分自然无数据）；"本月/上月"带环比的对比周期（由等长平移变为上一个自然月）；其他时间表述不受影响。
+**回滚方式**：回退本次 commit（或将 time_scope.py 本月分支还原为 1 日至今天并删除自然月环比分支，同步还原文档与测试断言、版本号）。
+---
+
 ## 2026-07-20 skills - install 默认静默，新增 --verbose/-v 控制逐条日志
 
 **变更原因**：批量安装（10 个 Skill × 7 个工具）时逐条打印 70+ 行安装日志和逐条铁律注入提示，输出过于冗长；用户要求默认不输出日志，增加参数控制

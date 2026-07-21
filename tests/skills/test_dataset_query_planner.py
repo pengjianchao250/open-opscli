@@ -657,7 +657,7 @@ def test_current_month_and_compatible_default_dataset_execute_without_confirmati
     assert result["status"] == "planned"
     assert result["execution_ref"]["time_scope"]["is_default"] is False
     assert result["execution_ref"]["time_scope"]["start"] == "2026-07-01"
-    assert result["execution_ref"]["time_scope"]["end"] == "2026-07-20"
+    assert result["execution_ref"]["time_scope"]["end"] == "2026-07-31"
     assert result["model_view"]["default_dataset_recommendation_zh"] == {
         "name_zh": "即时综合数据集",
         "reason_zh": "未明确指定数据集，且该数据集在当前授权范围内并覆盖已明确的业务与字段。",
@@ -1019,13 +1019,33 @@ def test_time_scope_recent_days_with_pop_comparison():
     assert (comparison["start"], comparison["end"]) == ("2026-06-30", "2026-07-06")
 
 
+def test_time_scope_natural_month_pop_uses_previous_natural_month():
+    """整自然月窗口的环比固定对比上一个自然月，不做等长天数平移。"""
+    from datetime import date
+
+    # 本月（整月）环比：主周期为整个 7 月，对比周期为整个 6 月
+    scope = time_scope.parse("本月销售额环比", today=date(2026, 7, 20))
+    assert (scope["start"], scope["end"]) == ("2026-07-01", "2026-07-31")
+    comparison = scope["comparison"]
+    assert comparison["type"] == "period_over_period"
+    assert (comparison["start"], comparison["end"]) == ("2026-06-01", "2026-06-30")
+    assert comparison["label_zh"] == "环比（上一个自然月）"
+
+    # 上月（自然月）环比：主周期为整个 6 月，对比周期为整个 5 月（31 天，大小月不补齐）
+    scope = time_scope.parse("上月毛利环比", today=date(2026, 7, 20))
+    assert (scope["start"], scope["end"]) == ("2026-06-01", "2026-06-30")
+    comparison = scope["comparison"]
+    assert (comparison["start"], comparison["end"]) == ("2026-05-01", "2026-05-31")
+    assert comparison["label_zh"] == "环比（上一个自然月）"
+
+
 def test_time_scope_relative_phrases_use_python_current_date_and_year():
     """本月、上月、近N天及 tian 混写都必须由 Python 当前日期确定性解析。"""
     from datetime import date
 
     today = date(2026, 7, 20)
     cases = {
-        "分析【本月情况】": ("2026-07-01", "2026-07-20"),
+        "分析【本月情况】": ("2026-07-01", "2026-07-31"),
         "获取【上月情况】": ("2026-06-01", "2026-06-30"),
         "分析近7天": ("2026-07-14", "2026-07-20"),
         "获取近30tian情况": ("2026-06-21", "2026-07-20"),
