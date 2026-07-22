@@ -42,6 +42,7 @@ SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
 NOTIFY_COMMAND_TIMEOUT = 15.0
 # 企业微信 markdown_v2.content 官方上限为 4096 字节。
 WECOM_CONTENT_BYTES = 4096
+FEEDBACK_DETAIL_URL = "https://ops.xenkee.com/dashboard/share/3e2W4spQ"
 # 列表标题可能由用户或 Agent 生成，统一清理常见个人信息和凭据形态。
 EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 WINDOWS_USER_PATH_PATTERN = re.compile(r"(?i)\b[A-Z]:\\Users\\[^\\\s]+\\[^\s|]*")
@@ -356,6 +357,7 @@ def render_wecom_summary(feedbacks: list[dict[str, Any]], window: ReportWindow) 
             )
     else:
         lines.extend(["", "本期无 Critical / High 问题。"])
+    lines.extend(["", f"[详细文档查看]({FEEDBACK_DETAIL_URL})"])
     return _truncate_utf8("\n".join(lines), WECOM_CONTENT_BYTES)
 
 

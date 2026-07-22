@@ -170,6 +170,7 @@ def test_wecom_summary_groups_duplicate_severe_titles():
     assert summary.count("asin-data basic 批次失败（US）") == 1
     assert "asin-data basic 批次失败（US）（5 条）" in summary
     assert "另有 2 类 Critical / High 问题（共 2 条反馈）" in summary
+    assert "[详细文档查看](https://ops.xenkee.com/dashboard/share/3e2W4spQ)" in summary
 
 
 def test_send_option_calls_opscli_notify_with_markdown_file(

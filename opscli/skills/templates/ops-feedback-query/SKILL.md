@@ -127,7 +127,7 @@ python scripts/daily_feedback_report.py \
 | `--output` | 否 | Markdown 文件路径；只允许写入项目根 `output/feedback-query/` |
 | `--send` | 否 | 显式发送企业微信 Markdown 摘要；未传时绝不调用机器人 |
 
-日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表。群消息使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节，不使用仅旧版 Markdown 支持的字体颜色和成员 `@` 语法。报告与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据；群消息按“严重度 + 标题”聚合重复问题，最多展示 5 类 Critical/High 问题并标注每类反馈数，完整逐条记录保留在本地 Markdown 文件。
+日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表。群消息使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节，不使用仅旧版 Markdown 支持的字体颜色和成员 `@` 语法。报告与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据；群消息按“严重度 + 标题”聚合重复问题，最多展示 5 类 Critical/High 问题并标注每类反馈数，底部提供固定的“详细文档查看”入口，完整逐条记录保留在本地 Markdown 文件。
 
 ## 输出约定
 
