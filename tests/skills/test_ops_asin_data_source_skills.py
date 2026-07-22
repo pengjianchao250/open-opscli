@@ -27,3 +27,17 @@ def test_router_delegates_to_three_source_skills():
 
 def test_router_version_is_0_2_0():
     assert read_version("ops-asin-data-collector")["version"] == "0.2.0"
+
+
+def test_basic_skill_uses_only_basic_command_and_defines_source_precedence():
+    text = read_skill("ops-asin-data-basic")
+
+    assert "opscli asin-data basic" in text
+    assert "--source listing" in text
+    assert "--source crawler" in text
+    assert "listing" in text and "crawler" in text
+    assert "A+" in text and "QA" in text and "reviews" in text
+    assert "live-data" not in text
+    assert "fetch-file" not in text
+    assert "asin_data_" not in text
+    assert read_version("ops-asin-data-basic")["version"] == "0.1.0"
