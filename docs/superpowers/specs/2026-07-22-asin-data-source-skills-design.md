@@ -133,4 +133,3 @@ Development follows test-first skill authoring:
 - No Excel or OSS export workflow.
 - No historical SellerSprite or Rufus file workflow.
 - No automatic chaining from category Top into basic or BI queries.
-
