@@ -41,3 +41,23 @@ def test_basic_skill_uses_only_basic_command_and_defines_source_precedence():
     assert "fetch-file" not in text
     assert "asin_data_" not in text
     assert read_version("ops-asin-data-basic")["version"] == "0.1.0"
+
+
+def test_bi_skill_covers_domains_dates_and_empty_results():
+    text = read_skill("ops-asin-data-bi")
+
+    assert "opscli asin-data bi" in text
+    assert "--date-from" in text and "--date-to" in text
+    for domain in (
+        "sales_traffic",
+        "sp_search_term",
+        "sqp",
+        "deals",
+        "turnover_inventory",
+    ):
+        assert f"`{domain}`" in text
+    assert "row_count" in text
+    assert "0" in text and "success" in text
+    assert "live-data" not in text
+    assert "asin_data_" not in text
+    assert read_version("ops-asin-data-bi")["version"] == "0.1.0"
