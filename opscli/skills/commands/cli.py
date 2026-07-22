@@ -836,17 +836,21 @@ def _install_interactive(
                 "message": "; ".join(errors),
             },
         }
-        _emit(payload, pretty)
+        # 默认只输出成功/失败个数汇总；完整 JSON payload 仅在 --verbose 或 --pretty 显式要求时输出
+        if verbose or pretty:
+            _emit(payload, pretty)
         raise typer.Exit(1)
     else:
-        _console.print(f"[green]全部安装完成，共 {len(all_results)} 个 Skill[/green]")
+        _console.print(f"[green]全部安装完成：{len(all_results)} 个成功，0 个失败[/green]")
         payload = {
             "success": True,
             "command": "skills install",
             "data": {"results": all_results},
             "error": None,
         }
-        _emit(payload, pretty)
+        # 默认只输出成功/失败个数汇总；完整 JSON payload 仅在 --verbose 或 --pretty 显式要求时输出
+        if verbose or pretty:
+            _emit(payload, pretty)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
