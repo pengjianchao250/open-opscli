@@ -30,14 +30,19 @@ def _build_auth_client(session_id: str | None = None, jwt: str | None = None):
         """让仅传 session_id/jwt 的 MCP 调用也能复用现有 HTTP 客户端。"""
 
         def build_request_auth(self, alias: str) -> tuple[dict[str, str], dict[str, str]]:
-            token = jwt
-            if not token and session_id:
+            token = jwt if alias == "ops" else None
+            if session_id and not token:
                 token = base.get_token_by_session(session_id, alias)
             if token:
                 headers = {"Authorization": f"Bearer {token}"}
                 cookies = {"polarisUserToken": session_id} if session_id else {}
                 return headers, cookies
             return base.build_request_auth(alias)
+
+        def refresh_token(self, alias: str) -> str:
+            if session_id:
+                return base.get_token_by_session(session_id, alias)
+            return base.refresh_token(alias)
 
         def get_session(self, alias: str | None = None) -> str:
             if session_id:
@@ -104,7 +109,7 @@ async def asin_data_live_data(
 
     Args:
         asin: 单个 ASIN；与 input_path 二选一。
-        site: 站点，默认 US。
+        site: 站点，默认 US，同时作为 crawler-details 的 country 默认值。
         data_scope: 数据范围，支持 all/basic/bi/listing/listing_basic。
         sales_start: BI 销售开始日期，格式 YYYY-MM-DD。
         sales_end: BI 销售结束日期，格式 YYYY-MM-DD。
@@ -240,7 +245,7 @@ async def asin_data_category_top(
         date_from: 起始日期 YYYY-MM-DD；为空时由后端使用当月 1 日。
         date_to: 截止日期 YYYY-MM-DD；为空时由后端使用当天。
         limit: 返回 Top 数量，范围 1-100。
-        site: 无法从渠道推断站点时使用的默认站点。
+        site: 无法从渠道推断站点时使用的默认站点，同时作为 crawler-details 的 country。
         upload: 是否上传合并后的 JSON 文件到 OSS。
         enrich: 是否补充查询刊登基础数据和爬虫详情数据。
         return_content: 是否在 MCP 响应中返回完整文件内容；默认 false，避免大响应拖慢工具。
