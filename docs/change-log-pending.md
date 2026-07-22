@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-21 skills - install 交互模式收尾 JSON payload 默认静默，仅输出成功/失败个数
+
+**变更原因**：上一轮改动后交互批量安装收尾仍会打印完整 JSON payload（29 个 Skill 时长达数千字符），用户要求默认只输出安装成功和失败的个数
+**改动点**：opscli/skills/commands/cli.py — _install_interactive 收尾处两个 _emit 调用改为仅在 verbose 或 pretty 为 True 时执行；成功汇总行改为"全部安装完成：N 个成功，0 个失败"（失败分支原有"完成：X 个成功，Y 个失败"保持不变）。单名/远程/sync-market 路径的 JSON 输出不受影响（机器解析契约保留）
+**验证结果**：opscli skills install --yes --skills-dir /tmp/opscli_vtest 默认仅输出一行"全部安装完成：28 个成功，0 个失败"；加 -v 后 JSON payload 恢复输出
+**影响范围**：仅 skills install 交互模式（不带 NAME）的终端输出；安装行为与其他路径不变
+**回滚方式**：回退本次 commit（或还原两处 _emit 的 verbose/pretty 条件判断）
+---
+
 ## 2026-07-21 ops-dataset-query 1.3.13 - "本月"改为整自然月口径，自然月环比对比上一个自然月
 
 **变更原因**：诊断类场景（如"业务团队经营增长诊断"）按完整自然月建模，而"本月"此前解析为 1 日至今天（MTD），月中执行时产生"当月不完整、环比天数不等"的口径冲突，诱发模型向用户追加阻断式时间确认。用户指定将"本月"默认改为整月（1 日至月末）。
