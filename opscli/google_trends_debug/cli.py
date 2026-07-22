@@ -24,7 +24,7 @@ def scenarios() -> None:
 
 @app.command("run")
 def run_scenario(
-    scenario: str = typer.Argument(..., help="场景 ID，如 interest-over-time"),
+    scenario: str = typer.Argument(..., help="场景 ID：trends、autocomplete、trending-now"),
     geo: str = typer.Option("US", "--geo", help="地区代码，如 US；传空字符串查询全球"),
     params: str = typer.Option("{}", "--params", help="场景参数 JSON 字符串"),
     output_dir: str | None = typer.Option(None, "--output-dir", help="输出目录"),

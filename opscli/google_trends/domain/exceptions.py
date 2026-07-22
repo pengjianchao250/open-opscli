@@ -21,6 +21,12 @@ class GoogleTrendsConfigError(GoogleTrendsError):
     code = "GOOGLE_TRENDS_CONFIG_ERROR"
 
 
+class GoogleTrendsApiKeysExhaustedError(GoogleTrendsError):
+    """全部 SerpApi API Key 均不可用或已耗尽。"""
+
+    code = "GOOGLE_TRENDS_API_KEYS_EXHAUSTED"
+
+
 class GoogleTrendsApiError(GoogleTrendsError):
     """Google Trends API 请求错误。"""
 

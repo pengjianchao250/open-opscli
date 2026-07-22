@@ -1,5 +1,23 @@
 # 待归档变更记录
 
+## 2026-07-22 cli - 兼容 python 模块启动方式
+
+**变更原因**：运维通过虚拟环境执行 `python -m opscli` 时，因包内缺少 `__main__` 入口而无法运行正式 CLI。
+**改动点**：新增 `opscli/__main__.py`，将 `python -m opscli` 转发至现有 Typer CLI；新增 Python 模块入口回归测试，并同步 Google Trends SerpApi 运维启动示例。
+**验证结果**：`python -m opscli google-trends api-key --help` 已正常展示五个 Key 运维命令；模块入口与 Google Trends CLI 聚焦回归 `14 passed`；入口相关生产模块 `py_compile` 通过；`git diff --check` 无差异格式错误，仅提示用户已有 `ops-feedback-query` 文件的 LF/CRLF 警告。
+**影响范围**：仅增加 `python -m opscli` 兼容启动方式；现有 `opscli` 控制台脚本和各子命令契约不变。
+**回滚方式**：删除模块入口、回归测试和文档中的兼容启动示例。
+---
+
+## 2026-07-22 google_trends - 接入 SerpApi 三类趋势接口
+
+**变更原因**：原 pytrends 已归档且多个接口失效，需要停用旧场景并切换到 SerpApi 的 Trends、Autocomplete、Trending Now 三个正式接口，同时管理第三方 API Key 的有限额度。
+**改动点**：将公开场景收敛为 `trends`、`autocomplete`、`trending-now` 三个 SerpApi 原始接口，并按接口白名单校验参数、关键词数量和同步执行约束；新增 SQLite 多 Key 池及测试，保存 Key 状态、备注、账户额度快照、最近使用时间和耗尽原因，支持旧库自动增加 `remark` 列、active/exhausted/disabled 状态、最久未使用优先选择及账号名称查询；新增全部 Key 耗尽专用错误码；新增 SerpApi HTTP 客户端，每次搜索前同步 Account API、确认耗尽后自动轮换、搜索失败后复查额度，并统一移除响应和异常中的 API Key；增加指定账号 Account-only 验证能力，确保额度检查不发起搜索且不隐式恢复人工状态；增加本地 `google-trends api-key add/list/test/enable/disable` 运维命令，新增 Key 仅使用隐藏输入，所有输出使用公开摘要，账号测试只访问免费 Account API，不新增 MCP 管理工具；新增 Google Trends SerpApi 账号运维指南，说明五类命令、状态恢复、多账号流程、本地存储安全和常见问题；新增 `ops-google-trends` 正式 CLI Skill、内部 MCP 规范、版本标记和发版 manifest 声明，说明三个场景、参数、典型工作流与对外回复边界。
+**验证结果**：Google Trends 全目录回归 `48 passed`，Google Trends MCP 工具与注册回归 `11 passed`；Key Store、Account API 预检与指定账号测试、多 Key 轮换、耗尽后人工恢复、API Key CLI 隐藏输入及公开输出、响应/异常/公开摘要脱敏、三类结果提取及真实 XLSX 嵌套字段导出均有离线测试覆盖；生产模块 `py_compile` 通过，Skill manifest 完整性及 wheel/binary 准入验证通过；`git diff --check` 无差异格式错误，仅提示用户已有 `ops-feedback-query` 改动的 LF/CRLF 警告；`tests/skills/test_packaging.py` 为 `7 passed, 1 failed`，失败项是既有 Windows PyInstaller 目标路径分隔符断言，与本次 Skill 清单改动无关。
+**影响范围**：影响 Google Trends 服务端数据源、公开场景、任务导出和内部 API Key 管理；正式 CLI/MCP 工具名保持不变，CLI 帮助改为三个新场景；服务管理器已切换到 SerpApi 客户端并继续兼容公共 hl/tz 参数；时间序列、地域、相关主题/查询、自动补全和当前热点均转换为可导出行；旧 pytrends 文件仅保留为停用回滚参考。
+**回滚方式**：回退本条记录及 Google Trends SerpApi 相关代码和测试，恢复旧场景注册表。
+---
+
 ## 2026-07-20 seller_sprite - 增加用户专属账号绑定
 
 **变更原因**：卖家精灵服务需要让指定 OPS 用户使用各自绑定的专属账号，并对专属账号用户取消公共服务每日额度限制。

@@ -20,7 +20,7 @@ class DummyManager:
         pass
 
     def scenarios(self):
-        return [{"scenario_id": "interest-over-time", "title": "关键词趋势时间序列"}]
+        return [{"scenario_id": "trends", "title": "Google Trends 深度趋势分析"}]
 
     async def run(self, request):
         self.__class__.last_request = request
@@ -78,7 +78,7 @@ def test_google_trends_scenarios_uses_manager(monkeypatch):
     result = _run(google_trends_tools.google_trends_scenarios())
 
     assert result["success"] is True
-    assert result["data"][0]["scenario_id"] == "interest-over-time"
+    assert result["data"][0]["scenario_id"] == "trends"
 
 
 def test_google_trends_spec_reads_internal_reference():
@@ -96,22 +96,40 @@ def test_google_trends_run_accepts_params_json_string(monkeypatch):
 
     result = _run(
         google_trends_tools.google_trends_run(
-            scenario="interest-over-time",
+            scenario="trends",
             geo="US",
-            params='{"keyword":"flashlight"}',
+            params='{"q":"flashlight","data_type":"TIMESERIES"}',
             export_format="json",
         )
     )
 
     assert result["success"] is True
     assert result["data"]["job_id"] == "job-1"
-    assert DummyManager.last_request.params == {"keyword": "flashlight"}
+    assert DummyManager.last_request.params == {"q": "flashlight", "data_type": "TIMESERIES"}
     assert DummyManager.last_request.geo == "US"
     assert DummyManager.last_request.export_format == "json"
     assert "params_path" not in result["data"]
     assert "raw_path" not in result["data"]
     assert "raw_response" not in result["data"]
     assert result["data"]["warnings"][0]["message"] == "导出文件上传失败，已保留服务端本地文件"
+
+
+def test_public_result_recursively_strips_secret_fields():
+    """MCP 公共结果应递归移除常见凭证字段。"""
+    payload = google_trends_tools._public_result(
+        {
+            "data": [
+                {
+                    "api_key": "secret-key",
+                    "authorization": "Bearer secret",
+                    "token": "secret-token",
+                    "title": "safe",
+                }
+            ]
+        }
+    )
+
+    assert payload["data"] == [{"title": "safe"}]
 
 
 def test_google_trends_job_status_hides_internal_paths_and_raw(monkeypatch):
