@@ -61,3 +61,17 @@ def test_bi_skill_covers_domains_dates_and_empty_results():
     assert "live-data" not in text
     assert "asin_data_" not in text
     assert read_version("ops-asin-data-bi")["version"] == "0.1.0"
+
+
+def test_category_top_skill_covers_all_query_parameters_and_response_path():
+    text = read_skill("ops-asin-data-category-top")
+
+    assert "opscli asin-data category-top" in text
+    for flag in ("--category", "--site", "--date-from", "--date-to", "--limit"):
+        assert flag in text
+    assert "data.category_top" in text
+    assert "row_count" in text
+    assert "1-100" in text
+    assert "live-data" not in text
+    assert "asin_data_" not in text
+    assert read_version("ops-asin-data-category-top")["version"] == "0.1.0"
