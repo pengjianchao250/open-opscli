@@ -668,6 +668,32 @@ def test_current_month_and_compatible_default_dataset_execute_without_confirmati
     assert "query_template" in result["execution_ref"]
 
 
+def test_default_time_scope_emits_recovery_hint(tmp_path: Path):
+    """默认近30天窗口必须附带恢复指引，防止子步骤漏传时间后误向用户二次确认。"""
+    data_dir = tmp_path / "data"
+    _write_instant_comprehensive_metadata(data_dir)
+
+    result = query_plan.build_model_query_plan(
+        "查询销售额",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    # 原文未含时间表述：落入默认近30天，仍需向用户确认默认口径
+    assert result["status"] == "clarify_required"
+    assert result["execution_ref"]["time_scope"]["is_default"] is True
+    assert (
+        "确认是否采用默认近30天时间范围"
+        in result["model_view"]["pending_confirmations_zh"]
+    )
+    # 恢复指引必须存在：提示调用方先回看原文，漏传时间时带原文重跑而非向用户提问
+    recovery = result["model_view"]["time_scope_recovery_zh"]
+    assert "重新运行规划器" in recovery
+    assert "禁止就时间范围向用户提问" in recovery
+
+
 def test_vague_query_recommends_instant_but_incompatible_query_does_not(tmp_path: Path):
     """模糊请求可推荐即时综合；明确广告口径不兼容时不得强推。"""
     data_dir = tmp_path / "data"

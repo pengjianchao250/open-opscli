@@ -9,6 +9,15 @@
 **回滚方式**：回退本次 commit（或还原两处 _emit 的 verbose/pretty 条件判断）
 ---
 
+## 2026-07-21 ops-dataset-query 1.3.14 - 默认时间窗口附带恢复指引，阻断子步骤漏传时间导致的误确认
+
+**变更原因**：预发布环境实测日志显示，1.3.13 的整月口径之外仍有残余触发链——诊断类任务拆子步骤调用规划器时把"本月"从请求文本中改写丢失，规划器落入默认近30天（is_default=true），按规则需确认默认口径，模型进而把确认包装成"7月还是6月"的阻断式提问（agent 自述："规划器默认返回了近30天 2026-06-22~2026-07-21"）。
+**改动点**：scripts/query_plan.py — scope.is_default 时在 model_view 新增 time_scope_recovery_zh 恢复指引：默认窗口仅在用户原文完全未含时间表述时成立，原文含时间而本次调用漏传的必须带原文或绝对日期重跑规划器，禁止就时间范围向用户提问。data/query_plan.schema.json — 严格 Schema 注册 time_scope_recovery_zh。SKILL.md — 时间口径条目补充 is_default=true 的原文自检规则，版本 1.3.13→1.3.14（VERSION.json 同步）。tests — 新增 test_default_time_scope_emits_recovery_hint。
+**验证结果**：pytest tests/skills/test_dataset_query_planner.py 53 passed（含新增恢复指引断言与严格 Schema 校验）。端到端验收（2026-07-21，1.3.14 发布至技能广场 599490 并经 scripts/skill_review.py 手动补审 approved 后，本地 ops-agent 沙箱实测）："查项目二部本月销售额" 直接执行，窗口 2026-07-01~2026-07-31，标签"本月（整月，1日至月末）"，数据完整性仅作披露，0 次 ASK_USER_QUESTION；"查项目二部本月销售额环比" 对比期精确为 2026-06-01~2026-06-30（上一个自然月），0 次提问。
+**影响范围**：仅默认时间窗口（is_default=true）的规划结果新增一个提示字段与文档规则；唯一解析时间、明确日期等路径不受影响。
+**回滚方式**：回退本次 commit（或删除 query_plan.py 恢复指引块、Schema 键、SKILL.md 自检句并还原版本号与测试）。
+---
+
 ## 2026-07-21 ops-dataset-query 1.3.13 - "本月"改为整自然月口径，自然月环比对比上一个自然月
 
 **变更原因**：诊断类场景（如"业务团队经营增长诊断"）按完整自然月建模，而"本月"此前解析为 1 日至今天（MTD），月中执行时产生"当月不完整、环比天数不等"的口径冲突，诱发模型向用户追加阻断式时间确认。用户指定将"本月"默认改为整月（1 日至月末）。
