@@ -8,6 +8,46 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def test_build_auth_client_exchanges_polaris_token_by_session(monkeypatch):
+    calls = []
+
+    class DummyBaseAuthClient:
+        def __init__(self, **kwargs):
+            calls.append(("init", kwargs))
+
+        def get_token_by_session(self, session_id, alias):
+            calls.append(("get_token_by_session", session_id, alias))
+            return f"{alias}-jwt"
+
+        def build_request_auth(self, alias):
+            raise AssertionError(f"unexpected local auth fallback: {alias}")
+
+        def refresh_token(self, alias):
+            calls.append(("refresh_token", alias))
+            return f"{alias}-refreshed"
+
+        def get_session(self, alias=None):
+            return "local-session"
+
+        def get_device_code(self):
+            return None
+
+    monkeypatch.setattr("opscli.auth.AuthClient", DummyBaseAuthClient)
+
+    auth_client = asin_data_tools._build_auth_client("sid-1", "ops-jwt")
+
+    ops_headers, ops_cookies = auth_client.build_request_auth("ops")
+    polaris_headers, polaris_cookies = auth_client.build_request_auth("polaris")
+    refreshed = auth_client.refresh_token("polaris")
+
+    assert ops_headers["Authorization"] == "Bearer ops-jwt"
+    assert ops_cookies == {"polarisUserToken": "sid-1"}
+    assert polaris_headers["Authorization"] == "Bearer polaris-jwt"
+    assert polaris_cookies == {"polarisUserToken": "sid-1"}
+    assert refreshed == "polaris-jwt"
+    assert ("get_token_by_session", "sid-1", "polaris") in calls
+
+
 def test_asin_data_live_data_passes_realtime_params(monkeypatch, tmp_path):
     calls = {}
     metrics_path = tmp_path / "metrics.jsonl"
@@ -64,7 +104,7 @@ def test_asin_data_live_data_passes_realtime_params(monkeypatch, tmp_path):
     result = _run(
         asin_data_tools.asin_data_live_data(
             asin="B0TEST1234",
-            site="US",
+            site="CA",
             data_scope="basic",
             sales_start="2026-07-01",
             sales_end="2026-07-08",
@@ -81,7 +121,7 @@ def test_asin_data_live_data_passes_realtime_params(monkeypatch, tmp_path):
     assert calls["bi_client_kwargs"] == {"auth_client": "auth-client"}
     assert calls["collector_kwargs"]["bi_report_data_client"].__class__ is DummyBiClient
     assert calls["run_kwargs"]["asin"] == "B0TEST1234"
-    assert calls["run_kwargs"]["site"] == "US"
+    assert calls["run_kwargs"]["site"] == "CA"
     assert calls["run_kwargs"]["data_scope"] == "basic"
     assert calls["run_kwargs"]["sales_start"] == "2026-07-01"
     assert calls["run_kwargs"]["sales_end"] == "2026-07-08"
@@ -341,7 +381,7 @@ def test_asin_data_category_top_uses_service(monkeypatch):
             date_from="2026-07-01",
             date_to="2026-07-13",
             limit=5,
-            site="US",
+            site="CA",
             upload=True,
             enrich=True,
             return_content=False,
@@ -358,7 +398,7 @@ def test_asin_data_category_top_uses_service(monkeypatch):
         "date_from": "2026-07-01",
         "date_to": "2026-07-13",
         "limit": 5,
-        "site": "US",
+        "site": "CA",
         "output_dir": "output/asin-data",
         "run_id": "run-1",
         "upload": True,

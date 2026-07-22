@@ -17,6 +17,7 @@ PREFERRED_FIELDS = ["items[].artifacts", "items[].datasets", "items[].diagnostic
 PREVIEW_LIMITS = {
     "sales_traffic": 5,
     "sp_search_term": 10,
+    "sqp": 10,
     "deals": 5,
     "turnover_inventory": 5,
     "listing_basic": 1,
