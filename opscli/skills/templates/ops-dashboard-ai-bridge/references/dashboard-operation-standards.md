@@ -11,6 +11,7 @@
 - [操作总流程](#操作总流程)
 - [关键 result 读法](#关键-result-读法)
 - [创建图表流程](#创建图表流程)
+- [未指定类型的默认组合](#未指定类型的默认组合)
 - [数据集和字段](#数据集和字段)
 - [筛选和查询控件](#筛选和查询控件)
 - [错误恢复](#错误恢复)
@@ -38,6 +39,8 @@
 9. 数据集业务口径不确定时，先问用户或加载 `ops-dataset-query`，不硬猜。
 10. 比率类指标必须先确认分子、分母、粒度和筛选口径，再计算或配置。
 11. 禁止生成、修改、上传或导出任何文件产物。
+12. 同一轮新建的图表必须先整体规划，并使用同一个数据集；禁止跨数据集拼成一组图表。
+13. 创建完成后必须通过 `dashboard_editor_batch_configure_charts` 一次写入全部图表的数据集和字段；禁止退化为逐图选择数据集或逐字段试错。
 
 ## 写后核验门禁
 
@@ -88,15 +91,14 @@
 1. 调用 `dashboard_session_get_context({"include_selected_chart_config": true})`。
 2. 查看 `availableTools`、`pendingTools`、`charts` 和当前数据集摘要。
 3. 需要数据集时调用 `dashboard_session_search_datasets`；需要字段时读取选择数据集结果，或显式传 `include_dataset_fields=true`。
-4. 基于用户业务问题，先列出需要的维度、指标、筛选条件和计算口径。
+4. 基于用户业务问题，先列出需要的图表类型、统一数据集、维度、指标、筛选条件和计算口径。
 5. 如果字段名或口径不确定，说明判断依据并向用户确认，不做字段试错。
-6. 如果用户要新增图表，按工具 schema 的 `viewType` enum 调用 `dashboard_editor_add_component`，或使用 `dashboard_editor_add_chart_from_template`。
-7. 新增成功后，用返回的 `data.chartId` 调 `dashboard_drag_select_chart`。
-8. 需要数据时，从 `dashboard_session_search_datasets` 的唯一候选取真实 `datasetId`；仅当当前图表未绑定该数据集时调用 `dashboard_drag_select_dataset`。
-9. 数据集核验 `PASS` 后，从字段 result 中选择维度或指标，一次性配置到字段列表。
-10. 按需配置聚合、排序、格式、筛选、查询控件。
-11. 调用 `dashboard_drag_update_chart_config` 或对应提交工具。
-12. 读取最终写入摘要；需要精确核验时调用 context 或对应只读工具，再向用户说明完成项。
+6. 用户要新增图表但未指定类型时，按默认组合表选型；字段不足时在同一数据集内缩减或替换图表。
+7. 依次调用 `dashboard_editor_add_component` 或模板工具，收集全部 `data.chartId`，创建阶段不逐图配置字段。
+8. 调用一次 `dashboard_editor_batch_configure_charts`，传入唯一 `datasetId`、全部 `chart_id` 和每张图的完整 `fieldLists`。
+9. 核验批量结果覆盖全部图表，且 `changed=true`、`refreshed=true`；失败时停止后续写入。
+10. 按需对明确目标图表配置聚合、排序、格式、筛选、查询控件。
+11. 读取最终写入摘要；需要精确核验时调用 context 或对应只读工具，再向用户说明完成项。
 
 ## 关键 result 读法
 
@@ -125,18 +127,18 @@
 
 ## 创建图表流程
 
-新增普通组件：
+新增普通组件或组合：
 
 1. 从 `dashboard_editor_add_component` 的 `viewType` enum 确认合法类型。
-2. 调用 `dashboard_editor_add_component({"viewType": "<viewType>"})`。
-3. 从 result 取 `data.chartId`。
-4. 调用 `dashboard_drag_select_chart({"chart_id": "<chartId>", "scrollIntoView": true})`。
+2. 先确定本轮全部图表、统一数据集和完整字段列表。
+3. 依次调用 `dashboard_editor_add_component({"viewType": "<viewType>"})`，收集 result 的 `data.chartId`。
+4. 调用一次 `dashboard_editor_batch_configure_charts` 写入全部图表的数据集和字段。
 
 从模板新增：
 
 1. 确认模板参数来自用户或可信上下文。
 2. 调用 `dashboard_editor_add_chart_from_template`。
-3. 后续同样先 `selectChart`，再配置数据集和字段。
+3. 后续同样收集 `chartId`，并纳入一次批量配置。
 
 表格类自然语言映射：
 
@@ -147,17 +149,39 @@
 
 具体工具步骤见 `tool-flow.md`。
 
+## 未指定类型的默认组合
+
+用户明确指定图表类型时优先服从用户。用户只要求创建图表、看板或可视化但没有指定类型时，按业务归属选用下表；无法唯一判断业务归属时使用兜底组合。
+
+| 业务类型  | 识别线索                             | 默认组合                                                                 |
+| --------- | ------------------------------------ | ------------------------------------------------------------------------ |
+| 增长/机会 | 销售、市场、机会、增长               | 指标趋势图 + 基础柱状图 + 百分比堆叠图 + 交叉表                          |
+| 营销/转化 | 广告、流量、活动、转化               | KPI + 柱线组合图 + 基础柱状图 + 百分比堆叠图或漏斗图 + 明细表            |
+| 供应链    | 库存、物流、履约、供应               | 指标趋势图 + 基础柱状图 + 堆叠柱状图 + 明细表；存在目标字段时追加进度图  |
+| 问题/售后 | 退款、客诉、客服、质量问题           | 指标趋势图 + 基础柱状图 + 百分比堆叠条形图 + 明细表                      |
+| 性能/健康 | 性能、稳定性、健康度、监控           | KPI 或指标趋势图 + 基础折线图 + 基础柱状图 + 状态结构图或进度图 + 明细表 |
+| 部门兜底  | 仅给出部门或业务域，无法归入以上类型 | 指标趋势图 + 基础柱状图 + 百分比堆叠条形图 + 明细表                      |
+
+组合约束：
+
+- 图表数量限制为 1 到 5，表中“或”只选一种；超出上限时保留最能回答用户目标的图表。
+- 必须先用真实字段目录验证可行性；缺少时间、占比、目标值或状态字段时，删除或替换依赖该字段的图表。
+- 全部图表共享一个 `datasetId`。任何图表需要第二数据集才能成立时，停止并调整组合，不得跨数据集拼接。
+- 图表类型、数据集、字段必须在创建前确定；创建后只允许按已确认计划批量写入，不允许用页面结果反向试字段。
+
 ## 数据集和字段
+
+本轮新建图表使用页面级批量工具：先确定唯一数据集和全部字段，再由 `dashboard_editor_batch_configure_charts` 一次写入。下面的逐图 `selectDataset` 流程只用于修改既有单图，不用于组合创建。
 
 选择数据集：
 
 1. 调用 `dashboard_session_search_datasets`，按 `name` 或 `displayPath` 匹配唯一候选。
-2. 比较 context 中当前 `selectedChartDataset.datasetId/id` 与目标 `datasetId`；相同则跳过选择，直接复用当前字段目录和既有配置。
-3. 仅在数据集不同时调用 `dashboard_drag_select_dataset({"chart_id": "<chartId>", "datasetId": 123})`。
+2. 目标是当前选中图表时，比较 context 中 `selectedChartDataset.datasetId/id` 与目标 `datasetId`；相同则跳过选择并复用既有配置。
+3. 目标是未选中图表时，不用先选中；直接调用 `dashboard_drag_select_dataset({"chart_id": "<chartId>", "datasetId": 123})`，同数据集会幂等保留既有配置。
 4. 读取该 result 返回的字段摘要，并进入数据集核验。
 5. 选择前必须确认候选数据集唯一或业务语义明确；多个相似候选、同名候选或业务域不清时停止并询问用户。
-6. 选择后先核验 `selectedChartDataset`：其 `datasetId/id` 必须等于本次传入的 `datasetId`，`name/displayPath` 必须匹配用户业务问题。
-7. 继续配置字段前，确认 `selectedChartDatasetFields` 来自当前图表和当前数据集，并包含本次图表需要的维度、指标和筛选字段；缺失时不换字段试错。
+6. 当前选中图表可核验 `selectedChartDataset`；未选中目标必须核验本次工具 result 中的 `datasetId/datasetName`，不能读取当前选中图表代替目标。
+7. 继续配置字段前，确认本次选择数据集 result 的字段摘要包含所需维度、指标和筛选字段；当前选中图表也可用 `selectedChartDatasetFields` 复核，缺失时不换字段试错。
 
 字段选择纪律：
 
@@ -182,6 +206,14 @@
 - `yAxis`：指标、度量。
 - `drillFields`：下钻。
 - `shortcutFilter`：快捷筛选。
+
+显式目标规则：
+
+- `dashboard_drag_select_dataset` 和 `dashboard_drag_add_field_to_list` 在传入有效 `chart_id` 时直接作用于目标图表，不改变页面选中态、右侧设置面板、滚动或焦点。
+- 这两项工具缺省 `chart_id` 时回退当前选中图表；页面没有选中图表时必须显式传入。
+- 未选中图表的写入以当前工具 `result.data` 为核验证据，不能拿 context 中当前选中图表的 `selectedChartDataset` 或 `selectedChartConfig` 判断目标图表结果。
+- `replaceFieldList`、字段配置、筛选和查询控件等其他 drag 工具仍依赖当前设置面板；操作其他图表前先 `selectChart`。
+- 以上规则仅用于既有单图修改；同轮新建组合必须使用 `dashboard_editor_batch_configure_charts`。
 
 常用工具：
 
@@ -232,16 +264,16 @@
 
 ## 错误恢复
 
-| code | 处理 |
-| --- | --- |
-| `DASHBOARD_CONTEXT_MISSING` | 提示用户从仪表盘编辑页 AI 助手重新打开 |
-| `DASHBOARD_RUN_CONTEXT_INVALID` | 停止当前调用并排查 Runner 的 `run_id` 注入 |
-| `CAPABILITY_NOT_ALLOWED` | 当前页面能力不允许，不绕过 |
-| `UNSUPPORTED` | 先 `selectChart`，再重读 `availableTools/pendingTools` |
-| `VALIDATION_ERROR` | 补齐 `chart_id`、`listType`、`fieldId` 等参数 |
-| `INVALID_REQUEST` | 检查图表类型和工具适用范围 |
-| `TIMEOUT` | 写动作先重读 context，确认是否已生效，再决定是否重试 |
-| `NETWORK_ERROR` | 只读或幂等动作可重试，写动作先确认页面状态 |
+| code                            | 处理                                                   |
+| ------------------------------- | ------------------------------------------------------ |
+| `DASHBOARD_CONTEXT_MISSING`     | 提示用户从仪表盘编辑页 AI 助手重新打开                 |
+| `DASHBOARD_RUN_CONTEXT_INVALID` | 停止当前调用并排查 Runner 的 `run_id` 注入             |
+| `CAPABILITY_NOT_ALLOWED`        | 当前页面能力不允许，不绕过                             |
+| `UNSUPPORTED`                   | 先 `selectChart`，再重读 `availableTools/pendingTools` |
+| `VALIDATION_ERROR`              | 补齐 `chart_id`、`listType`、`fieldId` 等参数          |
+| `INVALID_REQUEST`               | 检查图表类型和工具适用范围                             |
+| `TIMEOUT`                       | 写动作先重读 context，确认是否已生效，再决定是否重试   |
+| `NETWORK_ERROR`                 | 只读或幂等动作可重试，写动作先确认页面状态             |
 
 ## 数据集取数约束
 

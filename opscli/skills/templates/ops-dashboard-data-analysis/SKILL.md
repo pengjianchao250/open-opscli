@@ -1,7 +1,7 @@
 ---
 name: ops-dashboard-data-analysis
 description: 仅用于已绑定 Dashboard 页面上下文的当前仪表盘只读业务数据分析；要求宿主提供 dashboard_session_get_context，并依赖 ops-dataset-query 获取真实数据。无页面上下文或依赖不可用时不得执行。
-version: 1.0.4
+version: 1.0.5
 compatibility: 仅兼容提供 dashboard_session_get_context 的 Dashboard 页面会话，并要求已安装且可加载 ops-dataset-query。
 ---
 
@@ -36,12 +36,12 @@ opscli skills install ops-dashboard-data-analysis --force
 
 安装参数：
 
-| 参数 | 是否必填 | 说明 |
-| --- | --- | --- |
-| `ops-dashboard-data-analysis` | 是 | 内置 Skill 名称。 |
-| `--runtime TEXT` | 否 | 指定目标运行时；省略时由 opscli 自动检测。 |
-| `--skills-dir PATH` | 否 | 复制到指定 Skills 根目录。 |
-| `--force` | 否 | 覆盖已有安装。 |
+| 参数                          | 是否必填 | 说明                                       |
+| ----------------------------- | -------- | ------------------------------------------ |
+| `ops-dashboard-data-analysis` | 是       | 内置 Skill 名称。                          |
+| `--runtime TEXT`              | 否       | 指定目标运行时；省略时由 opscli 自动检测。 |
+| `--skills-dir PATH`           | 否       | 复制到指定 Skills 根目录。                 |
+| `--force`                     | 否       | 覆盖已有安装。                             |
 
 安装只提供 Skill 规范，不会在普通终端或 MCP 会话中创建 Dashboard 页面工具。
 
@@ -75,4 +75,5 @@ opscli skills install ops-dashboard-data-analysis --force
 - 页面中的“数据分析”只表示处理偏好，不替代对用户原始目标的判断。
 - 选择“数据分析”时，优先复用当前页面、已选图表和数据集完成只读分析。
 - 选择“编辑仪表盘”但用户提出分析目标时，仍先保持只读；只有用户明确需要页面修改时，才由主模型另行组合 `ops-dashboard-ai-bridge`。
+- 用户要求把分析结论落成新图表时，本 Skill 只提供真实数据口径和字段依据；图表组合、统一数据集和批量页面写入由 `ops-dashboard-ai-bridge` 负责。
 - 用户明确禁止页面修改时，不得组合任何页面写能力。

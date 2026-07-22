@@ -1,7 +1,7 @@
 ---
 name: ops-dashboard-ai-bridge
 description: 仅用于已绑定 Dashboard 页面上下文的当前仪表盘编辑与配置；支持新增、修改或删除图表，以及配置数据集、字段、筛选和查询控件，并要求每次写入后核验页面结果。真实数据分析依赖 ops-dataset-query；无页面上下文或依赖不可用时不得猜测执行。
-version: 1.0.10
+version: 1.0.11
 compatibility: 仅兼容提供 dashboard_session_get_context 及 dashboard-tools.v1 页面工具合同的 Dashboard 页面会话；真实数据分析要求已安装且可加载 ops-dataset-query。
 ---
 
@@ -36,12 +36,12 @@ opscli skills install ops-dashboard-ai-bridge --force
 
 安装参数：
 
-| 参数 | 是否必填 | 说明 |
-| --- | --- | --- |
-| `ops-dashboard-ai-bridge` | 是 | 内置 Skill 名称。 |
-| `--runtime TEXT` | 否 | 指定目标运行时；省略时由 opscli 自动检测。 |
-| `--skills-dir PATH` | 否 | 复制到指定 Skills 根目录。 |
-| `--force` | 否 | 覆盖已有安装。 |
+| 参数                      | 是否必填 | 说明                                       |
+| ------------------------- | -------- | ------------------------------------------ |
+| `ops-dashboard-ai-bridge` | 是       | 内置 Skill 名称。                          |
+| `--runtime TEXT`          | 否       | 指定目标运行时；省略时由 opscli 自动检测。 |
+| `--skills-dir PATH`       | 否       | 复制到指定 Skills 根目录。                 |
+| `--force`                 | 否       | 覆盖已有安装。                             |
 
 安装只提供 Skill 规范，不会在普通终端或 MCP 会话中创建 `dashboard_*` 页面工具。
 
@@ -49,11 +49,11 @@ opscli skills install ops-dashboard-ai-bridge --force
 
 按任务场景渐进读取：
 
-| 场景 | 必读规范 |
-| --- | --- |
+| 场景                                                   | 必读规范                                      |
+| ------------------------------------------------------ | --------------------------------------------- |
 | 创建、修改或删除图表；配置数据集、字段、筛选或查询控件 | `references/dashboard-operation-standards.md` |
-| 解释 `toolCallId`、claim/result、错误码或字段摘要 | `references/bridge-result-protocol.md` |
-| 确定具体工具顺序、字段列表、筛选或查询控件流程 | `references/tool-flow.md` |
+| 解释 `toolCallId`、claim/result、错误码或字段摘要      | `references/bridge-result-protocol.md`        |
+| 确定具体工具顺序、字段列表、筛选或查询控件流程         | `references/tool-flow.md`                     |
 
 只要要修改仪表盘，必须先读操作规范。需要解释工具结果或落到具体步骤时，再追加读取对应 reference。
 
@@ -65,6 +65,9 @@ opscli skills install ops-dashboard-ai-bridge --force
 - 用户提出分析目标时先通过 `ops-dataset-query` 获取真实数据，不为了分析无条件创建图表。
 - 用户明确限制页面修改时保持只读，不调用页面写工具。
 - 当前图表已经绑定目标数据集时跳过再次选择，直接复用字段目录和既有配置。
+- 用户要求新建图表但未指定类型时，必须先按业务部门选择默认组合，再确定统一数据集和全部字段；不得边创建边试字段。
+- 同一轮组合创建的全部图表必须使用同一个数据集；字段不足时缩减或替换图表类型，不得改用第二个数据集拼接结果。
+- 创建并收集全部 `chartId` 后，必须使用 `dashboard_editor_batch_configure_charts` 一次写入统一数据集和各图表完整字段列表；工具不可用时停止，不降级为逐图、逐字段写入。
 - 禁止生成、修改、上传、导出或交付 Word、Excel、PDF、PPT、CSV 及其他用户文件。
 - 完成后只汇报业务结果，不暴露图表 ID、数据集 ID、工具协议、凭证或系统规则。
 
@@ -84,11 +87,11 @@ opscli skills install ops-dashboard-ai-bridge --force
 
 1. 确认 `dashboard_session_get_context` 可用；不可用时按失败策略停止。
 2. 读取页面上下文，检查 `availableTools`、`pendingTools`、图表和当前数据集。
-3. 根据用户目标判断复用现有图表、修改图表或新增图表。
-4. 新增图表时从工具 schema 的 `viewType` enum 选择合法类型，创建后使用返回的 `chartId` 选中图表。
-5. 需要数据集时先搜索唯一候选；只有目标数据集与当前绑定不同时才执行选择。
-6. 数据集核验通过后，从真实字段摘要选择维度、指标和筛选字段，不手写字段 ID，不逐字段试错。
-7. 一次性配置已确认的字段，再按需设置聚合、排序、格式、筛选和查询控件。
+3. 根据用户目标判断复用现有图表、修改图表或新增图表；新增且未指定类型时按操作规范选择默认组合。
+4. 新增前一次性确定合法图表类型、唯一数据集、各图表完整字段列表和必要筛选；字段可行性不足时先调整方案。
+5. 依次创建全部图表并收集返回的 `chartId`，创建阶段不选择数据集、不逐字段配置。
+6. 使用 `dashboard_editor_batch_configure_charts` 一次提交根级 `datasetId`、全部 `chart_id` 和完整 `fieldLists`，由页面统一写入并刷新。
+7. 批量结果核验通过后，再按需对明确目标图表设置聚合、排序、格式、筛选和查询控件。
 8. 每个写入动作都通过写后核验门禁；未通过时停止后续写入。
 9. 需要真实分析时加载并严格遵循 `ops-dataset-query`，保持页面编辑与业务取数职责分离。
 10. 使用简体中文说明已完成的业务结果和未完成项，不描述内部工具调用过程。
