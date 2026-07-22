@@ -1,7 +1,6 @@
 ---
 name: ops-asin-data-bi
 description: Use when users need ASIN sales, traffic, conversion, advertising search terms, SQP, deals, inventory, or turnover data from BI through opscli.
-version: 0.1.0
 ---
 
 # ASIN BI Data

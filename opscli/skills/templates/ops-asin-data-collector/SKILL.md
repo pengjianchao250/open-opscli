@@ -1,7 +1,6 @@
 ---
 name: ops-asin-data-collector
 description: Use when an AI agent must choose the correct opscli ASIN data source for listing, crawler, BI, advertising, inventory, SQP, or category Top ASIN requests.
-version: 0.2.0
 ---
 
 # ASIN Data Source Router

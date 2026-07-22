@@ -1,7 +1,6 @@
 ---
 name: ops-asin-data-category-top
 description: Use when users need internal category Top ASIN rankings, Top N products, category sales leaders, or dated Amazon category performance through opscli.
-version: 0.1.0
 ---
 
 # ASIN Category Top Data

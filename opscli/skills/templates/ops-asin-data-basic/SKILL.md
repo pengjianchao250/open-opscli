@@ -1,7 +1,6 @@
 ---
 name: ops-asin-data-basic
 description: Use when users need Amazon ASIN listing or crawler basic data, including title, bullets, description, brand, price, images, A+ content, QA, reviews, or product highlights through opscli.
-version: 0.1.0
 ---
 
 # ASIN Basic Data

@@ -75,3 +75,20 @@ def test_category_top_skill_covers_all_query_parameters_and_response_path():
     assert "live-data" not in text
     assert "asin_data_" not in text
     assert read_version("ops-asin-data-category-top")["version"] == "0.1.0"
+
+
+def test_all_asin_data_skills_are_in_every_release_artifact():
+    manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+
+    for name in (
+        "ops-asin-data-collector",
+        "ops-asin-data-basic",
+        "ops-asin-data-bi",
+        "ops-asin-data-category-top",
+    ):
+        config = manifest["skills"][name]
+        assert config["source"] is True
+        assert config["wheel"] is True
+        assert config["binary"] is True
+        assert config["binary_full"] is True
+        assert config["tier"] == "internal"
