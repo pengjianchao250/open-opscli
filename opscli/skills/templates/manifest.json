@@ -167,6 +167,22 @@
       "tier": "internal",
       "reason": "引导式查询向导，面向业务用户，依赖 ops-dataset-query，现阶段内部使用"
     },
+    "ops-dashboard-data-analysis": {
+      "source": true,
+      "wheel": true,
+      "binary": false,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "运营系统仪表盘只读分析 Skill，依赖页面侧 dashboard bridge 和 ops-dataset-query"
+    },
+    "ops-dashboard-ai-bridge": {
+      "source": true,
+      "wheel": true,
+      "binary": false,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "运营系统仪表盘页面编辑 Skill，依赖页面侧 dashboard bridge 工具"
+    },
     "ops-creator-skill": {
       "source": true,
       "wheel": true,

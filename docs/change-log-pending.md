@@ -1,5 +1,19 @@
 # 待归档变更记录
 
+## 2026-07-21 仪表盘双 Skills 接入
+
+**变更原因**：需要将 operation-frontend 的仪表盘只读分析与页面编辑领域规范纳入 opscli 内置 Skill 安装体系，并明确页面运行时依赖，避免普通 MCP 会话误判自身具备 Dashboard 页面工具。
+
+**改动点**：新增 `ops-dashboard-data-analysis` v1.0.4 和 `ops-dashboard-ai-bridge` v1.0.10；保留 Bridge 三份渐进加载参考合同；补充 Codex 展示元数据、Dashboard 页面上下文前置条件、`ops-dataset-query` 依赖和失败边界；新增 `dashboard_data_analysis_spec_must_read`、`dashboard_ai_bridge_spec_must_read` 两个只读 MCP 规范工具；发版清单配置为 source、wheel、binary-full 收录，binary-minimal 排除；新增模板结构、安装、MCP 和发行矩阵测试，并更新 Skill 用户文档。
+
+**验证结果**：待实现完成后补充。
+
+**影响范围**：影响内置 Skill 模板发现、安装、Python/完整二进制发行内容和 MCP 规范工具清单；新增工具只读取规范，不提供真实 `dashboard_*` 页面操作能力，不修改 Query、远端 Skill 升级逻辑和 operation-frontend 页面工具实现。
+
+**回滚方式**：删除两个新增模板及其 manifest 条目、测试和文档记录即可。
+
+---
+
 ## 2026-07-21 skills - install 交互模式收尾 JSON payload 默认静默，仅输出成功/失败个数
 
 **变更原因**：上一轮改动后交互批量安装收尾仍会打印完整 JSON payload（29 个 Skill 时长达数千字符），用户要求默认只输出安装成功和失败的个数
