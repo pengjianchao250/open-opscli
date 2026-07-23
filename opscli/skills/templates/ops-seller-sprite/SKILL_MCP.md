@@ -109,7 +109,7 @@ Listing Analysis 必须使用 submit/status/result 专用流程，不属于普�
 - `row_count=0` 时，明确提示核对站点、ASIN、关键词、类目或筛选条件是否过窄。
 - `keyword-research` 导出应按卖家精灵官方关键词选品工作簿对齐；实际文件是 `.xlsx`，若请求参数仍使用兼容值 `xls`，回复中以工具返回的真实文件名和格式为准。
 - `association-traffic` 固定查询全部变体并汇总全部分页；导出按官网关联流量 56 列主表对齐，只生成业务主表，不生成官网 `Notes` 页。
-- `association-traffic` 的 browser-route 首次查询必须把 ASIN 逐个写入页面输入框并按回车，点击“立即查询”后再点击“用全部变体查询”；不得用静默接口 fallback 冒充已完成页面交互。后续分页复用同一浏览器登录态，不重复录入 ASIN。
+- `association-traffic` 固定使用 `page_size=100`；browser-route 首次查询必须把 ASIN 逐个写入页面输入框并按回车，点击“立即查询”后再点击“用全部变体查询”；不得用静默接口 fallback 冒充已完成页面交互。后续分页复用同一浏览器登录态和当前页面，不重复录入 ASIN、不刷新结果页；若接口返回固定 20 条的游客数据，先恢复登录态并重试一次。
 
 终态成功模板：
 

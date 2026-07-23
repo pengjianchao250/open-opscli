@@ -317,7 +317,7 @@ def test_manager_collects_all_association_traffic_pages(monkeypatch, tmp_path: P
                 site="US",
                 period="30d",
                 params={"asins": ["B098T9ZFB5"]},
-                page_size=50,
+                page_size=100,
                 job_id="job-association-traffic",
                 export_format="json",
             )
@@ -331,6 +331,7 @@ def test_manager_collects_all_association_traffic_pages(monkeypatch, tmp_path: P
         "B0RESULT003",
     ]
     assert [call["payload"]["pageNum"] for call in AssociationTrafficApiClient.calls] == [1, 2]
+    assert all(call["payload"]["pageSize"] == 100 for call in AssociationTrafficApiClient.calls)
     assert all(call["url"] == "/v3/api/relation/traffic" for call in AssociationTrafficApiClient.calls)
     raw = json.loads((tmp_path / "job-association-traffic" / "raw.json").read_text(encoding="utf-8"))
     assert raw["response"]["data"]["pagerDto"]["total"] == 3
@@ -377,7 +378,7 @@ def test_manager_collects_association_pages_in_browser_route_mode(monkeypatch, t
                 site="US",
                 period="30d",
                 params={"asins": ["B098T9ZFB5"]},
-                page_size=50,
+                page_size=100,
                 job_id="job-association-browser-route",
                 export_format="json",
             )
@@ -386,6 +387,7 @@ def test_manager_collects_association_pages_in_browser_route_mode(monkeypatch, t
 
     assert result.row_count == 2
     assert [call["payload"]["pageNum"] for call in calls] == [1, 2]
+    assert all(call["payload"]["pageSize"] == 100 for call in calls)
     assert calls[1]["request"].page_prepare is False
     assert calls[1]["request"].task_interval_seconds == 0
 

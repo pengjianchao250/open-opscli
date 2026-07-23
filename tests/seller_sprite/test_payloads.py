@@ -165,7 +165,7 @@ def test_association_traffic_payload_uses_all_variants_and_normalizes_pasted_asi
     assert payload == {
         "market": 1,
         "pageNum": 1,
-        "pageSize": 50,
+        "pageSize": 100,
         "desc": True,
         "orderField": "createdTime",
         "relations": ["VAV", "SP"],

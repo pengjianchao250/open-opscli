@@ -1562,6 +1562,145 @@ def test_run_one_relogs_and_retries_main_request_once(monkeypatch, tmp_path):
     _run(scenario())
 
 
+def test_run_one_relogs_and_retries_guest_limited_association_response(monkeypatch, tmp_path):
+    async def scenario():
+        account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+        worker = SellerSpriteBrowserRouteWorker(
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account=account,
+        )
+        page = SimpleNamespace(url="https://www.sellersprite.com/v3/relation-keyword")
+        execute_calls = []
+        login_calls = []
+
+        async def fake_ensure_page(current_account):
+            return page
+
+        async def fake_open(current_page, request, **kwargs):
+            return {"logged_in": True, "current_url": request.referer}
+
+        async def fake_detect_logged_in(current_page):
+            return True
+
+        async def fake_login(current_page, current_account, *, callback, **kwargs):
+            login_calls.append(callback)
+
+        async def fake_execute(**kwargs):
+            execute_calls.append(kwargs["payload"]["pageNum"])
+            size = 20 if len(execute_calls) == 1 else 100
+            return {
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "pagerDto": {
+                        "page": kwargs["payload"]["pageNum"],
+                        "size": size,
+                        "total": 375,
+                        "items": [{"asin": f"B0RESULT{index:03d}"} for index in range(size)],
+                    }
+                },
+            }
+
+        monkeypatch.setattr(worker, "_ensure_page", fake_ensure_page)
+        monkeypatch.setattr(worker_module, "_detect_logged_in", fake_detect_logged_in)
+        monkeypatch.setattr(worker, "_open_referer_and_login", fake_open)
+        monkeypatch.setattr(worker, "_login_with_account", fake_login)
+        monkeypatch.setattr(worker, "_execute_route_fetch", fake_execute)
+
+        result = await worker._run_one(
+            worker_module.BrowserRouteRequest(
+                scenario="association-traffic",
+                method="POST",
+                endpoint="/v3/api/relation/traffic",
+                payload={
+                    "asinList": ["B098T9ZFB5"],
+                    "pageNum": 2,
+                    "pageSize": 100,
+                    "queryVariations": True,
+                },
+                referer="https://www.sellersprite.com/v3/relation-keyword",
+                account=account,
+                root_dir=tmp_path,
+                page_prepare=False,
+            )
+        )
+
+        assert result.response["data"]["pagerDto"]["size"] == 100
+        assert execute_calls == [2, 2]
+        assert login_calls == ["https://www.sellersprite.com/v3/relation-keyword"]
+
+    _run(scenario())
+
+
+def test_run_one_association_continuation_reuses_current_page_without_reload(monkeypatch, tmp_path):
+    async def scenario():
+        account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+        worker = SellerSpriteBrowserRouteWorker(
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account=account,
+        )
+        page = SimpleNamespace(url="https://www.sellersprite.com/v3/relation-keyword")
+        events = []
+
+        async def fake_ensure_page(current_account):
+            events.append("ensure_page")
+            return page
+
+        async def fake_detect_logged_in(current_page):
+            events.append("detect_logged_in")
+            return True
+
+        async def fail_open(current_page, request, **kwargs):
+            raise AssertionError("关联流量后续分页不应重新打开或刷新页面")
+
+        async def fake_captcha(current_page, request, warnings, timings, *, stage):
+            events.append(f"captcha:{stage}")
+
+        async def fake_execute(**kwargs):
+            events.append("execute")
+            return {
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "pagerDto": {
+                        "page": 2,
+                        "size": 100,
+                        "total": 175,
+                        "items": [{"asin": "B0RESULT001"}],
+                    }
+                },
+            }
+
+        monkeypatch.setattr(worker, "_ensure_page", fake_ensure_page)
+        monkeypatch.setattr(worker_module, "_detect_logged_in", fake_detect_logged_in)
+        monkeypatch.setattr(worker, "_open_referer_and_login", fail_open)
+        monkeypatch.setattr(worker, "_handle_robot_captcha_if_enabled", fake_captcha)
+        monkeypatch.setattr(worker, "_execute_route_fetch", fake_execute)
+
+        result = await worker._run_one(
+            worker_module.BrowserRouteRequest(
+                scenario="association-traffic",
+                method="POST",
+                endpoint="/v3/api/relation/traffic",
+                payload={
+                    "asinList": ["B098T9ZFB5"],
+                    "pageNum": 2,
+                    "pageSize": 100,
+                    "queryVariations": True,
+                },
+                referer="https://www.sellersprite.com/v3/relation-keyword?pageNum=2&pageSize=100",
+                account=account,
+                root_dir=tmp_path,
+                page_prepare=False,
+            )
+        )
+
+        assert result.response["data"]["pagerDto"]["page"] == 2
+        assert events == ["ensure_page", "detect_logged_in", "captcha:after_open_referer", "execute"]
+
+    _run(scenario())
+
+
 def test_run_one_stops_after_second_session_expiry(monkeypatch, tmp_path):
     async def scenario():
         account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")

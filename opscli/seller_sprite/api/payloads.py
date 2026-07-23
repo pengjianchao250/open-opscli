@@ -499,15 +499,15 @@ def make_association_traffic_payload(input_data: dict[str, Any]) -> dict[str, An
         raise SellerSpriteConfigError(f"association-traffic 暂不支持站点：{site}")
     requested_size = _positive_int(
         input_data.get("pageSize") or input_data.get("size"),
-        default=50,
+        default=100,
         field="pageSize",
     )
-    # 官网关联流量列表每页最多 50 条；全部变体是本场景固定业务语义。
+    # 关联流量与其他普通场景统一每页 100 条；全部变体是本场景固定业务语义。
     return {
         "market": _int(market, 1),
         # 业务任务始终从第一页开始，后续页由 Manager 在同一登录会话中汇总。
         "pageNum": 1,
-        "pageSize": min(requested_size, 50),
+        "pageSize": requested_size,
         "desc": order_desc(input_data.get("desc")),
         "orderField": str(input_data.get("orderField") or "createdTime"),
         "relations": relations,

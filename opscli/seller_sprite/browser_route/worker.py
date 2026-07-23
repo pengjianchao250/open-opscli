@@ -514,8 +514,32 @@ class SellerSpriteBrowserRouteWorker:
             url=getattr(page, "url", ""),
         )
         stage_started_at = time.monotonic()
-        login = await self._open_referer_and_login(page, request, timings=timings)
-        _record_timing(timings, request, "open_referer_and_login", stage_started_at, current_url=getattr(page, "url", ""))
+        reuse_association_page = (
+            request.scenario == "association-traffic"
+            and not request.page_prepare
+            and await _detect_logged_in(page)
+        )
+        if reuse_association_page:
+            # 后续分页直接复用当前页面的登录上下文，避免结果刚展示又被页面导航刷新。
+            login = self._login_snapshot(page, request, logged_in=True)
+            _record_timing(
+                timings,
+                request,
+                "open_referer_and_login",
+                stage_started_at,
+                current_url=getattr(page, "url", ""),
+                skipped=True,
+                reason="association_continuation",
+            )
+        else:
+            login = await self._open_referer_and_login(page, request, timings=timings)
+            _record_timing(
+                timings,
+                request,
+                "open_referer_and_login",
+                stage_started_at,
+                current_url=getattr(page, "url", ""),
+            )
         await self._handle_robot_captcha_if_enabled(
             page,
             request,
@@ -543,6 +567,19 @@ class SellerSpriteBrowserRouteWorker:
                     request=request,
                 )
                 _record_timing(timings, request, "execute_route_fetch.main", stage_started_at, attempt=attempt + 1)
+                if (
+                    request.scenario == "association-traffic"
+                    and _looks_like_guest_limited_association_response(
+                        response,
+                        page_size=request.payload.get("pageSize"),
+                    )
+                ):
+                    # 游客接口也返回 code=OK，但固定截断为 20 条；必须按登录失效处理后重试。
+                    raise SellerSpriteApiError(
+                        "卖家精灵关联流量返回游客限制数据",
+                        api_code="ERR_GLOBAL_SESSION_EXPIRED",
+                        api_message="检测到每页 20 条的游客响应，已尝试恢复登录态。",
+                    )
                 break
             except SellerSpriteApiError as exc:
                 _record_timing(
@@ -984,6 +1021,16 @@ class SellerSpriteBrowserRouteWorker:
             raise SellerSpriteAuthenticationError(
                 "卖家精灵浏览器登录失败，请检查账号或浏览器 profile 登录状态"
             )
+        return self._login_snapshot(page, request, logged_in=logged_in)
+
+    def _login_snapshot(
+        self,
+        page,
+        request: BrowserRouteRequest,
+        *,
+        logged_in: bool,
+    ) -> dict[str, Any]:
+        """返回当前 browser-route 会话的脱敏登录摘要。"""
         return {
             "mode": "browser-route",
             "profile_dir": str(_profile_dir(self.settings, request.account)),
@@ -2384,6 +2431,40 @@ def _route_pattern(endpoint: str) -> str:
 
 def _same_endpoint(url: str, endpoint: str) -> bool:
     return urlparse(url).path == urlparse(_absolute_url(endpoint)).path
+
+
+def _looks_like_guest_limited_association_response(
+    response: dict[str, Any],
+    *,
+    page_size: Any,
+) -> bool:
+    """判断关联流量响应是否被游客权限固定截断为 20 条。"""
+    try:
+        requested_size = int(page_size)
+    except (TypeError, ValueError):
+        requested_size = 100
+    if requested_size <= 20:
+        return False
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, dict):
+        return False
+    pager = data.get("pagerDto")
+    if not isinstance(pager, dict):
+        return False
+    items = pager.get("items")
+    try:
+        returned_size = int(pager.get("size"))
+    except (TypeError, ValueError):
+        returned_size = 0
+    return bool(
+        isinstance(items, list)
+        and len(items) == 20
+        and (
+            returned_size == 20
+            or data.get("guestId")
+            or data.get("guestVisited") is True
+        )
+    )
 
 
 def _url_with_query(endpoint: str, payload: dict[str, Any]) -> str:

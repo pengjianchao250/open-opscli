@@ -3000,3 +3000,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：仅影响 `association-traffic` 的 browser-route 首次页面交互和后续分页方式，不改变 API 直连、其他 SellerSprite 场景或 56 列导出契约。
 **回滚方式**：回退关联流量专用页面触发器、对应测试和 Skill/调研文档更新，恢复通用查询按钮与 context fallback 行为。
 ---
+
+## 2026-07-23 seller_sprite - 修复关联流量游客分页并统一每页数量
+
+**变更原因**：关联流量首次查询能展示数据，但游客限制响应仍被当作成功结果继续分页，后续返回第一页并触发 `ERR_ASSOCIATION_TRAFFIC_PAGINATION`；同时 Skill 把该场景限制为每页 50 条，与其他场景默认 100 条不一致。
+**改动点**：关联流量 payload 移除 50 条截断并统一默认 `pageSize=100`；browser worker 后续分页复用当前已登录页面的请求上下文，不再重新导航或刷新结果页；将 `pagerDto.size=20` 且仅返回 20 条的成功响应识别为游客限制，按登录失效流程恢复账号并重试一次；同步更新 `ops-seller-sprite` Skill、参数手册、MCP 规则、场景存档元数据和调研文档，Skill 版本升级至 `v0.0.6`；新增 payload、Manager 两种执行模式、无刷新续页和游客响应重登回归测试。
+**验证结果**：关联流量 payload、API/browser 两种分页、后续页不刷新和游客重登聚焦回归 `12 passed`；SellerSprite 与 MCP 工具全套 `305 passed, 2 failed`，两项仍为既有 `seller-sprite-debug` 顶级命令未注册；`ops-seller-sprite` Skill 校验通过，生产模块 `compileall` 和 `git diff --check` 通过，未残留调试标记。
+**影响范围**：仅影响 `association-traffic` 的分页大小、游客限制识别与浏览器登录恢复。
+**回滚方式**：回退本条关联流量分页测试、生产代码、Skill 和场景存档修改。
+---
