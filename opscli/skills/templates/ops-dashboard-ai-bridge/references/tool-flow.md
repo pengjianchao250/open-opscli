@@ -59,12 +59,13 @@
 用户未指定图表类型时，先按 `dashboard-operation-standards.md` 的默认组合完成规划，再执行：
 
 1. 确认 `dashboard_editor_batch_configure_charts` 在 `availableTools`，否则停止。
-2. 选择一个能覆盖全部图表的唯一数据集，读取真实字段目录。
-3. 一次确定 1 到 5 个 `viewType` 及每张图的完整 `fieldLists`；不得创建后再试字段。
-4. 依次调用 `dashboard_editor_add_component` 或模板工具，收集全部 `chartId`。
-5. 只调用一次 `dashboard_editor_batch_configure_charts`；根级只传一个 `datasetId`，`charts` 按创建结果填写。
-6. 只有 result 同时满足 `ok=true`、`changed=true`、`refreshed=true`，且返回全部 `chartIds`，本轮基础配置才算 `PASS`。
-7. 后续筛选、格式或标题操作使用明确的 `chart_id`；不得为了字段写入逐个选中图表。
+2. 选择一个能覆盖全部图表的唯一数据集；存在多个真实候选时必须通过 `ask_user_question` 选择。
+3. 按默认组合一次确定全部 `viewType`；营销/转化固定为 5 张，不得缩减为单图或部分组合。
+4. 依次调用 `dashboard_editor_add_component` 或模板工具，收集完整组合的全部 `chartId`。
+5. 需要真实字段目录时，只对其中一个新图表调用一次 `dashboard_drag_select_dataset`；使用返回的字段目录规划全部 `fieldLists`，不得调用逐字段写工具。
+6. 只调用一次 `dashboard_editor_batch_configure_charts`；根级只传一个 `datasetId`，`charts` 必须覆盖本轮全部创建结果。
+7. 只有 result 同时满足 `ok=true`、`changed=true`、`refreshed=true`，且返回全部 `chartIds`，本轮基础配置才算 `PASS`。
+8. 后续筛选、格式或标题操作使用明确的 `chart_id`；不得为了字段写入逐个选中图表。
 
 ## 表格和交叉表
 
@@ -88,7 +89,7 @@
 
 ## 数据集选择闸口
 
-目标为当前选中图表时，调用 `dashboard_drag_select_dataset` 前先比较 `selectedChartDataset.datasetId/id` 与目标 `datasetId`。目标为未选中图表时直接传显式 `chart_id`；页面会对同数据集幂等处理，不会重置既有配置。成功后先核验当前工具 result 中的数据集和字段摘要。数据集身份或业务语义不确定时停止并确认。
+目标为当前选中图表时，调用 `dashboard_drag_select_dataset` 前先比较 `selectedChartDataset.datasetId/id` 与目标 `datasetId`。目标为未选中图表时直接传显式 `chart_id`；页面会对同数据集幂等处理，不会重置既有配置。成功后先核验当前工具 result 中的数据集和字段摘要。数据集身份或业务语义不确定时停止；存在多个真实候选时调用 `ask_user_question` 提供 2 到 4 个候选并等待用户选择，禁止在正文中列选项或代选。
 
 核验要点：
 

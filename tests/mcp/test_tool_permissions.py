@@ -16,7 +16,9 @@ import respx
 from opscli.mcp import permissions
 from opscli.mcp.context import mcp_request_ctx
 from opscli.mcp.permissions import (
+    BASE_ALWAYS_ALLOWED_TOOLS,
     BASE_AUTH_TOOLS,
+    BASE_DASHBOARD_SPEC_TOOLS,
     ToolPermissionMiddleware,
     _resolve_allowed_tools,
     invalidate_stdio_cache,
@@ -69,10 +71,10 @@ def test_http_mode_without_allowed_tools_allows_all():
 
 
 def test_http_mode_empty_allowed_tools_keeps_base_auth():
-    """后端返回空白名单时仍保留基础 auth 工具（保证可登录）。"""
+    """后端返回空白名单时仍保留基础安全工具。"""
     _set_http_ctx([])
 
-    assert _run(_resolve_allowed_tools()) == BASE_AUTH_TOOLS
+    assert _run(_resolve_allowed_tools()) == BASE_ALWAYS_ALLOWED_TOOLS
 
 
 def test_http_mode_permission_disabled_allows_all():
@@ -189,6 +191,7 @@ def test_stdio_mode_fetches_allowed_tools(stdio_env):
 
     assert "query_simple" in first
     assert BASE_AUTH_TOOLS <= first
+    assert BASE_DASHBOARD_SPEC_TOOLS <= first
     assert first == second
     assert route.calls.call_count == 1
 
@@ -222,22 +225,22 @@ def test_stdio_mode_404_allows_all(stdio_env):
 
 @respx.mock
 def test_stdio_mode_401_falls_back_to_base(stdio_env):
-    """stdio 模式：session 失效（401）→ 仅基础 auth 工具。"""
+    """stdio 模式：session 失效（401）时保留基础安全工具。"""
     respx.get("https://ops.example.com/api/v1/mcp/allowed-tools").mock(
         return_value=httpx.Response(401, json={"success": False})
     )
 
-    assert _run(_resolve_allowed_tools()) == BASE_AUTH_TOOLS
+    assert _run(_resolve_allowed_tools()) == BASE_ALWAYS_ALLOWED_TOOLS
 
 
 @respx.mock
 def test_stdio_mode_network_error_without_cache(stdio_env):
-    """stdio 模式：网络异常且从未成功 → fail-closed 仅基础 auth 工具。"""
+    """stdio 模式：网络异常且从未成功时 fail-closed 到基础安全工具。"""
     respx.get("https://ops.example.com/api/v1/mcp/allowed-tools").mock(
         side_effect=httpx.ConnectError("connection refused")
     )
 
-    assert _run(_resolve_allowed_tools()) == BASE_AUTH_TOOLS
+    assert _run(_resolve_allowed_tools()) == BASE_ALWAYS_ALLOWED_TOOLS
 
 
 @respx.mock
@@ -262,11 +265,11 @@ def test_stdio_mode_network_error_uses_stale_cache(stdio_env, monkeypatch):
 
 
 def test_stdio_mode_without_login_returns_base(monkeypatch):
-    """stdio 模式：本地无登录态 → 仅基础 auth 工具（不发起网络请求）。"""
+    """stdio 模式：本地无登录态时仅返回基础安全工具且不发起网络请求。"""
     mcp_request_ctx.set(None)
     monkeypatch.setattr("opscli.mcp.tools.helpers._get_session_id", lambda: None)
 
-    assert _run(_resolve_allowed_tools()) == BASE_AUTH_TOOLS
+    assert _run(_resolve_allowed_tools()) == BASE_ALWAYS_ALLOWED_TOOLS
 
 
 def test_invalidate_stdio_cache(stdio_env):

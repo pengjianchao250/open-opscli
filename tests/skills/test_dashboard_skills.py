@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "opscli" / "skills" / "templates"
 SKILL_VERSIONS = {
     "ops-dashboard-data-analysis": "1.0.5",
-    "ops-dashboard-ai-bridge": "1.0.11",
+    "ops-dashboard-ai-bridge": "1.0.13",
 }
 SKILL_LIST_DESCRIPTIONS = {
     "ops-dashboard-data-analysis": "只读分析当前仪表盘的趋势、对比、异常、排名、贡献和业务原因。",
@@ -77,10 +77,26 @@ def test_dashboard_bridge_declares_batch_creation_contract():
     assert "未指定类型的默认组合" in content
     assert "增长/机会" in content
     assert "营销/转化" in content
+    assert "营销/转化组合固定为 5 张" in content
+    assert "不得缩减为单图或部分组合" in content
+    assert "禁止调用逐字段写工具" in content
     assert "供应链" in content
     assert "问题/售后" in content
     assert "性能/健康" in content
     assert "部门兜底" in content
+
+
+def test_dashboard_bridge_requires_selection_tool_for_real_candidates():
+    """多个真实候选必须通过人在回路选择工具确认，禁止正文代替交互。"""
+    skill_dir = TEMPLATES_DIR / "ops-dashboard-ai-bridge"
+    content = "\n".join(path.read_text(encoding="utf-8") for path in skill_dir.rglob("*.md"))
+
+    assert "ask_user_question" in content
+    assert "2 到 4 个真实候选" in content
+    assert "禁止只在正文中列选项" in content
+    assert "替用户选择" in content
+    assert "页面处于编辑偏好时" in content
+    assert "不调用 `ops-dataset-query` 获取真实数据" in content
 
 
 def test_dashboard_skills_declare_runtime_and_query_boundaries():
