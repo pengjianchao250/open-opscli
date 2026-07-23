@@ -70,9 +70,6 @@ def export_rows_to_xlsx(
 
     if high_frequency_rows:
         _add_high_frequency_sheet(workbook, high_frequency_rows)
-    if keyword_research:
-        _add_keyword_research_notes_sheet(workbook)
-
     workbook.save(output_path)
     resolved_output = output_path.resolve()
     return SellerSpriteExportResult(
@@ -205,20 +202,6 @@ def _apply_keyword_research_number_format(cell, column_index: int) -> None:
         26: "#,##0.00%",
     }
     cell.number_format = formats.get(column_index, "#,##0")
-
-
-def _add_keyword_research_notes_sheet(workbook) -> None:
-    sheet = workbook.create_sheet("Notes")
-    notes = [
-        "卖家精灵官网：https://www.sellersprite.com",
-        "客服电话：139-8227-0926(谭先生)",
-        "微信客服：",
-        "备注：评分，评论，问答，变体，卖家等数据都是取的“最近更新”当日的数字。",
-        "选 词 选 品 选 市 场，就 上 卖 家 精 灵",
-    ]
-    for row_index, value in enumerate(notes, start=1):
-        sheet.cell(row=row_index, column=1, value=value)
-    sheet.column_dimensions["A"].width = 90
 
 
 def _add_high_frequency_sheet(workbook, rows: list[dict[str, Any]]) -> None:

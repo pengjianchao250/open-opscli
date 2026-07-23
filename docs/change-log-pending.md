@@ -2973,3 +2973,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：新增卖家精灵普通异步任务场景 `keyword-research`，影响其页面请求、结果解析、本地导出和 Skill 路由；不改变既有关键词挖掘、关键词反查、流量来源或账号调度契约。页面单次查询最多返回 50 条，导出结构与官方 `.xlsx` 对齐但不替代官网 2,000 行异步原生导出。
 **回滚方式**：回退本条涉及的 SellerSprite 场景、客户端、payload、解析器、浏览器路由、导出、Skill、测试和调研/回归样本文件，并删除本条变更记录。
 ---
+
+## 2026-07-23 seller_sprite - 关键词选品导出移除 Notes 页
+
+**变更原因**：关键词选品本地导出只需要业务数据主表，官方参考文件中的客服和说明 `Notes` 页不属于 MCP 交付内容。
+**改动点**：移除关键词选品 XLSX 创建 `Notes` 工作表的逻辑；验收测试改为只允许 `Keywords(数据行数)` 一个工作表；同步修订 Skill、调研文档和本地导出契约，官方原始工作簿及其结构画像保持不变。
+**验证结果**：关键词选品导出与 HTML 解析聚焦回归 `5 passed`；Skill 格式校验、SellerSprite `compileall` 和 `git diff --check` 通过；SellerSprite 与 MCP 扩展回归 `500 passed, 7 failed`，失败项均位于未修改区域：2 项既有 `seller-sprite-debug` 顶层命令注册问题，以及 5 项 Amazon Rufus、Google Trends、Scrape.do 工具未在当前测试配置注册。
+**影响范围**：仅影响 `keyword-research` 新生成的 XLSX 工作表数量，不改变 28 列主表字段、顺序、格式或数据解析。
+**回滚方式**：恢复关键词选品导出中的 `Notes` 工作表创建函数和调用，并还原对应测试及文档契约。
+---

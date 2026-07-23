@@ -54,6 +54,6 @@
   "notes": [
     "本契约来自当前页面 DOM 与内联脚本，不代表 opscli 已实现。",
     "主列表导出只提交异步任务，文件下载发生在导出记录页。",
-    "后续实现必须将导出结果与 normalized-export-contract.json 的 28 列官方工作簿基线对齐。"
+    "后续实现必须将导出结果与 normalized-export-contract.json 的 28 列官方主表基线对齐，并只输出主工作表。"
   ]
 }

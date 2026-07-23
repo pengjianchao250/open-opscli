@@ -57,7 +57,7 @@ def test_keyword_export_writes_unique_words_sheet(tmp_path: Path):
     assert unique_words.cell(row=2, column=2).value == 10
 
 
-def test_keyword_research_export_matches_official_workbook_contract(tmp_path: Path):
+def test_keyword_research_export_matches_required_workbook_contract(tmp_path: Path):
     output = tmp_path / "keyword-research.xlsx"
     row = {
         "keyword": "fathers day gifts",
@@ -99,7 +99,7 @@ def test_keyword_research_export_matches_official_workbook_contract(tmp_path: Pa
     )
 
     workbook = load_workbook(output)
-    assert workbook.sheetnames == ["Keywords(1)", "Notes"]
+    assert workbook.sheetnames == ["Keywords(1)"]
     sheet = workbook["Keywords(1)"]
     assert [cell.value for cell in sheet[1]] == [
         "关键词", "关键词翻译", "ABA排名", "月搜索量", "搜索增长率", "月购买量", "购买率",
@@ -118,4 +118,3 @@ def test_keyword_research_export_matches_official_workbook_contract(tmp_path: Pa
     assert sheet["G2"].value == 0.0438
     assert sheet["Q2"].value == "$19.99"
     assert sheet["AB2"].value == "B0H6WT6Q8C,B0H4G1XJQD"
-    assert workbook["Notes"]["A1"].value == "卖家精灵官网：https://www.sellersprite.com"
