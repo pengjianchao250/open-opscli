@@ -112,19 +112,23 @@ API 边界规则：
 
 `dashboard_session_get_context` 成功后，常见 `data` 字段：
 
-| 字段 | 用途 |
-| --- | --- |
-| `dashboardId` | 当前仪表盘 ID |
-| `selectedChartId` | 当前选中图表 |
-| `charts` | 页面图表列表 |
-| `availableTools` | 当前已可执行工具 |
-| `pendingTools` | 当前暂未就绪工具 |
-| `selectedChartDataset` | 当前图表已绑定数据集 |
+| 字段                         | 用途                   |
+| ---------------------------- | ---------------------- |
+| `dashboardId`                | 当前仪表盘 ID          |
+| `selectedChartId`            | 当前选中图表           |
+| `charts`                     | 页面图表列表           |
+| `availableTools`             | 当前已可执行工具       |
+| `pendingTools`               | 当前暂未就绪工具       |
+| `selectedChartDataset`       | 当前图表已绑定数据集   |
 | `selectedChartDatasetFields` | 显式请求的完整字段目录 |
-| `selectedChartConfig` | 当前图表配置，按需返回 |
-| `contextWarnings` | 降级提示 |
+| `selectedChartConfig`        | 当前图表配置，按需返回 |
+| `contextWarnings`            | 降级提示               |
 
 数据集目录使用 `dashboard_session_search_datasets` 独立查询。字段目录只在选择数据集结果或 `include_dataset_fields=true` 时返回，避免每次 context 重复携带。
+
+`dashboard_editor_batch_configure_charts` 是页面级组合写入能力，不依赖当前选中图表。调用时根级传一个 `datasetId`，并为每个 `chart_id` 传完整 `fieldLists`；页面会在全部图表和字段校验通过后统一写入并刷新。不得把它拆成多次逐图调用。
+
+`dashboard_drag_select_dataset` 和 `dashboard_drag_add_field_to_list` 是页面级显式目标能力。只要页面存在支持的图表，它们可在没有当前选中图表时出现在 `availableTools` 中；调用时传 `chart_id` 即可。`selectedChartDataset`、`selectedChartDatasetFields` 和 `selectedChartConfig` 始终只描述当前选中图表，不代表显式目标图表。
 
 ## 字段摘要
 
@@ -155,13 +159,15 @@ API 边界规则：
 
 写工具成功后只返回下一步核验所需摘要，页面内部继续保留完整对象：
 
-| 工具类型 | result.data |
-| --- | --- |
-| 字段列表写 | `chartId`、`listType`、`fieldId/fieldIds`、`fieldCount`、`changed` |
-| 字段配置写 | `chartId`、`listType`、`fieldId`、`appliedKeys`、`changed` |
-| 图表配置确认 | `chartId`、`viewType`、`changed` |
-| 筛选写 | `chartId`、筛选定位信息或 `logic/ruleCount`、`changed` |
-| 查询控件值写 | `chartId`、`fieldId`、`changed` |
+| 工具类型     | result.data                                                                   |
+| ------------ | ----------------------------------------------------------------------------- |
+| 批量图表配置 | `datasetId`、`chartIds`、`chartCount`、各字段列表数量、`changed`、`refreshed` |
+| 数据集写     | `chartId`、`datasetId`、紧凑字段目录和 `selectedFieldIds`                     |
+| 字段列表写   | `chartId`、`listType`、`fieldId/fieldIds`、`fieldCount`、`changed`            |
+| 字段配置写   | `chartId`、`listType`、`fieldId`、`appliedKeys`、`changed`                    |
+| 图表配置确认 | `chartId`、`viewType`、`changed`                                              |
+| 筛选写       | `chartId`、筛选定位信息或 `logic/ruleCount`、`changed`                        |
+| 查询控件值写 | `chartId`、`fieldId`、`changed`                                               |
 
 写回不重复发送 `fields`、`field`、`filter`、`filterRule`、`previewFilter` 或 `chartConfig`。需要精确核验时，调用 `listConfiguredFields`、`listConfiguredFilters`、`getContext` 或对应读取工具。
 
@@ -212,17 +218,17 @@ API 边界规则：
 
 ## 常见失败码
 
-| code | 含义 | 推荐动作 |
-| --- | --- | --- |
-| `OK` | 成功 | 读取 `data` 继续 |
-| `DASHBOARD_CONTEXT_MISSING` | 未绑定编辑页 | 让用户从编辑页 AI 助手打开 |
-| `DASHBOARD_RUN_CONTEXT_INVALID` | 后端运行上下文不完整 | 停止当前调用并排查 Runner 注入 |
-| `CAPABILITY_NOT_ALLOWED` | 当前页面不允许该能力 | 停止对应操作 |
-| `UNSUPPORTED` | 工具或 handler 未注册 | 选中图表并重读 context |
-| `VALIDATION_ERROR` | 参数缺失或无效 | 从 context/result 补参数 |
-| `INVALID_REQUEST` | 工具不适用于当前图表 | 检查 viewType 和工具范围 |
-| `TIMEOUT` | 页面未按时回传 | 写动作先读 context 判断是否已生效 |
-| `NETWORK_ERROR` | 网络或接口异常 | 只读可重试，写动作先确认状态 |
+| code                            | 含义                  | 推荐动作                          |
+| ------------------------------- | --------------------- | --------------------------------- |
+| `OK`                            | 成功                  | 读取 `data` 继续                  |
+| `DASHBOARD_CONTEXT_MISSING`     | 未绑定编辑页          | 让用户从编辑页 AI 助手打开        |
+| `DASHBOARD_RUN_CONTEXT_INVALID` | 后端运行上下文不完整  | 停止当前调用并排查 Runner 注入    |
+| `CAPABILITY_NOT_ALLOWED`        | 当前页面不允许该能力  | 停止对应操作                      |
+| `UNSUPPORTED`                   | 工具或 handler 未注册 | 选中图表并重读 context            |
+| `VALIDATION_ERROR`              | 参数缺失或无效        | 从 context/result 补参数          |
+| `INVALID_REQUEST`               | 工具不适用于当前图表  | 检查 viewType 和工具范围          |
+| `TIMEOUT`                       | 页面未按时回传        | 写动作先读 context 判断是否已生效 |
+| `NETWORK_ERROR`                 | 网络或接口异常        | 只读可重试，写动作先确认状态      |
 
 ## 不要做
 

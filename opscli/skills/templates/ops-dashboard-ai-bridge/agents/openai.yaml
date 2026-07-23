@@ -1,5 +1,4 @@
 interface:
   display_name: "仪表盘智能编辑"
   short_description: "按目标新增或调整图表，并在每次写入后核验页面结果"
-  default_prompt: "根据我的目标编辑当前仪表盘，优先复用已有图表，并核验每次页面修改。"
-
+  default_prompt: "使用 $ops-dashboard-ai-bridge 根据我的目标编辑当前仪表盘；未指定图表类型时先规划默认组合，再批量写入同一数据集和字段并核验。"

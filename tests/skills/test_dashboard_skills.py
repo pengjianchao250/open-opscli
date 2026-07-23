@@ -15,8 +15,8 @@ from opscli.skills.packaging import selected_skill_names
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "opscli" / "skills" / "templates"
 SKILL_VERSIONS = {
-    "ops-dashboard-data-analysis": "1.0.4",
-    "ops-dashboard-ai-bridge": "1.0.10",
+    "ops-dashboard-data-analysis": "1.0.5",
+    "ops-dashboard-ai-bridge": "1.0.11",
 }
 SKILL_LIST_DESCRIPTIONS = {
     "ops-dashboard-data-analysis": "只读分析当前仪表盘的趋势、对比、异常、排名、贡献和业务原因。",
@@ -65,6 +65,22 @@ def test_dashboard_bridge_keeps_progressive_references():
     assert "dashboard_session_get_context" in content
     assert "dashboard-tools.v1" in content
     assert not re.search(r"(?<!ops-)dashboard-ai-bridge", content)
+
+
+def test_dashboard_bridge_declares_batch_creation_contract():
+    """组合创建必须使用统一数据集和页面级批量配置工具。"""
+    skill_dir = TEMPLATES_DIR / "ops-dashboard-ai-bridge"
+    content = "\n".join(path.read_text(encoding="utf-8") for path in skill_dir.rglob("*.md"))
+
+    assert "dashboard_editor_batch_configure_charts" in content
+    assert "同一个数据集" in content
+    assert "未指定类型的默认组合" in content
+    assert "增长/机会" in content
+    assert "营销/转化" in content
+    assert "供应链" in content
+    assert "问题/售后" in content
+    assert "性能/健康" in content
+    assert "部门兜底" in content
 
 
 def test_dashboard_skills_declare_runtime_and_query_boundaries():
