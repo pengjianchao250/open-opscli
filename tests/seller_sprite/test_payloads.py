@@ -2,6 +2,7 @@ import pytest
 
 from opscli.seller_sprite.api.payloads import (
     build_referer,
+    make_association_traffic_payload,
     make_competitor_payload,
     make_keyword_miner_payload,
     make_keyword_research_payload,
@@ -143,6 +144,57 @@ def test_keyword_research_payload_maps_public_filters_to_web_query():
 def test_keyword_research_payload_rejects_invalid_ranges(params, message):
     with pytest.raises(SellerSpriteConfigError, match=message):
         make_keyword_research_payload({"site": "US", "period": "2026-06", **params})
+
+
+def test_association_traffic_payload_uses_all_variants_and_normalizes_pasted_asins():
+    scenario = get_scenario("association-traffic")
+
+    payload = scenario.build_payload(
+        params={
+            "asins": "b098t9zfb5\r\nB09JW5FNVX\tB0B71DH45N",
+            "relations": ["VAV", "SP"],
+            "pageNum": 3,
+        },
+        site="US",
+        period="30d",
+        page_size=100,
+    )
+
+    assert scenario.endpoint == "/v3/api/relation/traffic"
+    assert scenario.method == "POST"
+    assert payload == {
+        "market": 1,
+        "pageNum": 1,
+        "pageSize": 50,
+        "desc": True,
+        "orderField": "createdTime",
+        "relations": ["VAV", "SP"],
+        "queryVariations": True,
+        "asinList": ["B098T9ZFB5", "B09JW5FNVX", "B0B71DH45N"],
+    }
+    assert build_referer(payload, "association-traffic").startswith(
+        "https://www.sellersprite.com/v3/relation-keyword?"
+    )
+
+
+@pytest.mark.parametrize(
+    ("asins", "message"),
+    [
+        ("", "至少需要 1 个 ASIN"),
+        ("B098T9ZFB5,INVALID", "INVALID"),
+        (",".join(f"B0000000{i:02d}" for i in range(21)), "最多支持 20 个 ASIN"),
+    ],
+)
+def test_association_traffic_payload_rejects_invalid_asin_input(asins, message):
+    with pytest.raises(SellerSpriteConfigError, match=message):
+        make_association_traffic_payload({"site": "US", "asins": asins})
+
+
+def test_association_traffic_payload_rejects_unknown_relation_type():
+    with pytest.raises(SellerSpriteConfigError, match="UNKNOWN"):
+        make_association_traffic_payload(
+            {"site": "US", "asins": ["B098T9ZFB5"], "relations": ["UNKNOWN"]}
+        )
 
 
 def test_keyword_reverse_payload_keeps_orchestration_fields_for_manager():

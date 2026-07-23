@@ -8,7 +8,7 @@ import re
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount, SellerSpriteAccountProvider
@@ -306,6 +306,57 @@ class SellerSpriteApiManager:
                                 "error": exc.to_dict(),
                             }
                         )
+            if request.scenario == "association-traffic":
+                if mode == "browser-route":
+                    # 后续分页复用已登录的同一 worker；不重复打开页面，也不把一个业务查询拆成多次冷却。
+                    continuation_request = replace(
+                        request,
+                        page_prepare=False,
+                        task_interval_seconds=0,
+                        cooldown_seconds=0,
+                    )
+
+                    async def fetch_association_page(page_payload: dict[str, Any]) -> dict[str, Any]:
+                        browser_page = await _run_browser_route_request(
+                            settings=self.settings,
+                            account=account,
+                            request=continuation_request,
+                            scenario_method=scenario.method,
+                            endpoint=scenario.endpoint_for(page_payload),
+                            payload=page_payload,
+                            referer=scenario.build_referer(page_payload),
+                            root_dir=root_dir,
+                            high_frequency_endpoint=None,
+                            high_frequency_payload=None,
+                            session_state_listener=self.session_state_listener,
+                            session_owner_id=self.session_owner_id,
+                        )
+                        warnings.extend(browser_page.warnings)
+                        return browser_page.response
+
+                else:
+
+                    async def fetch_association_page(page_payload: dict[str, Any]) -> dict[str, Any]:
+                        page_number = _int(page_payload.get("pageNum"), 1)
+                        return await _request_with_session_retry(
+                            client=client,
+                            warnings=warnings,
+                            stage=f"association_traffic_page_{page_number}",
+                            action=lambda: _run_main_request(
+                                client=client,
+                                method=scenario.method,
+                                endpoint=scenario.endpoint_for(page_payload),
+                                payload=page_payload,
+                                referer=scenario.build_referer(page_payload),
+                                root_dir=root_dir,
+                            ),
+                        )
+
+                main_response = await _collect_association_traffic_pages(
+                    first_response=main_response,
+                    initial_payload=payload,
+                    fetch_page=fetch_association_page,
+                )
 
         raw = {
             "job_id": job_id,
@@ -696,6 +747,10 @@ def _extract_items(response: dict[str, Any], *, scenario: str | None = None) -> 
         pager = data["pager"]
         if isinstance(pager.get("items"), list):
             return [item for item in pager["items"] if isinstance(item, dict)]
+    if isinstance(data, dict) and isinstance(data.get("pagerDto"), dict):
+        pager = data["pagerDto"]
+        if isinstance(pager.get("items"), list):
+            return [item for item in pager["items"] if isinstance(item, dict)]
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     return []
@@ -765,12 +820,13 @@ def _looks_like_guest_limited_response(response: dict[str, Any], *, page_size: i
     data = response.get("data") if isinstance(response, dict) else None
     if not isinstance(data, dict):
         return False
-    items = data.get("items")
+    pager = data.get("pagerDto") if isinstance(data.get("pagerDto"), dict) else data
+    items = pager.get("items")
     if not isinstance(items, list) or len(items) != 20:
         return False
-    total = _int(data.get("total"), 0)
-    pages = _int(data.get("pages"), 0)
-    size = _int(data.get("size"), 0)
+    total = _int(pager.get("total"), 0)
+    pages = _int(pager.get("pages"), 0)
+    size = _int(pager.get("size"), 0)
     return bool(
         data.get("guestId")
         or data.get("guestVisited") is True
@@ -778,6 +834,72 @@ def _looks_like_guest_limited_response(response: dict[str, Any], *, page_size: i
         or total > 20
         or pages > 1
     )
+
+
+async def _collect_association_traffic_pages(
+    *,
+    first_response: dict[str, Any],
+    initial_payload: dict[str, Any],
+    fetch_page: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
+    """分页汇总关联流量结果，供本地 JSON 和 XLSX 导出复用。
+
+    参数：
+        first_response: 第一页官网响应。
+        initial_payload: 已校验的场景 payload。
+        fetch_page: 使用当前 API 或浏览器会话抓取后续页的回调。
+
+    返回：
+        保留官网响应结构、但 ``pagerDto.items`` 已包含全部页的响应。
+
+    异常：
+        SellerSpriteApiError: 响应缺少分页结构或页码没有前进时抛出。
+    """
+    data = first_response.get("data") if isinstance(first_response, dict) else None
+    pager = data.get("pagerDto") if isinstance(data, dict) else None
+    if not isinstance(pager, dict) or not isinstance(pager.get("items"), list):
+        return first_response
+    items = [item for item in pager["items"] if isinstance(item, dict)]
+    total = _int(pager.get("total"), len(items))
+    current_page = _int(pager.get("page"), _int(initial_payload.get("pageNum"), 1))
+    if total <= len(items):
+        return first_response
+    if not items:
+        raise SellerSpriteApiError(
+            "关联流量分页响应为空",
+            api_code="ERR_ASSOCIATION_TRAFFIC_PAGINATION",
+        )
+
+    while len(items) < total:
+        next_page = current_page + 1
+        page_payload = {**initial_payload, "pageNum": next_page}
+        response = await fetch_page(page_payload)
+        page_data = response.get("data") if isinstance(response, dict) else None
+        page_pager = page_data.get("pagerDto") if isinstance(page_data, dict) else None
+        if not isinstance(page_pager, dict) or not isinstance(page_pager.get("items"), list):
+            raise SellerSpriteApiError(
+                "关联流量分页响应缺少 pagerDto.items",
+                api_code="ERR_ASSOCIATION_TRAFFIC_PAGINATION",
+            )
+        returned_page = _int(page_pager.get("page"), next_page)
+        page_items = [item for item in page_pager["items"] if isinstance(item, dict)]
+        if returned_page <= current_page or not page_items:
+            raise SellerSpriteApiError(
+                "关联流量分页未前进，可能仍处于游客限制状态",
+                api_code="ERR_ASSOCIATION_TRAFFIC_PAGINATION",
+            )
+        items.extend(page_items)
+        current_page = returned_page
+
+    # 原始总数是导出合同；若最后一页出现并发新增，只截取本次查询开始时的总量。
+    merged_response = dict(first_response)
+    merged_data = dict(data)
+    merged_pager = dict(pager)
+    merged_pager["items"] = items[:total]
+    merged_pager["total"] = total
+    merged_data["pagerDto"] = merged_pager
+    merged_response["data"] = merged_data
+    return merged_response
 
 
 def _extract_high_frequency_rows(response: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -811,6 +933,7 @@ def _scenario_label(scenario: str) -> str:
         "product-research": "ProductResearch",
         "keyword-miner": "KeywordMiner",
         "keyword-research": "KeywordResearch",
+        "association-traffic": "AssociationTraffic",
         "keyword-reverse": "ReverseASIN",
         "traffic-source": "TrafficSource",
         "market-research": "MarketResearch",
@@ -841,6 +964,8 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
             or params.get("keyword")
             or first_value(params.get("departments"))
         )
+    if scenario == "association-traffic":
+        return _sanitize_filename_part(first_value(params.get("asins") or params.get("asin")))
     if scenario == "traffic-source":
         return _sanitize_filename_part(
             params.get("keywordOrAsin")

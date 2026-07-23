@@ -1,6 +1,6 @@
 ---
 name: ops-seller-sprite
-description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自然语言需求映射为 seller_sprite_* 场景，处理关键词选品、缺参澄清、类目确认、任务续查和 Excel 导出。
+description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自然语言需求映射为 seller_sprite_* 场景，处理关键词选品、关联流量、缺参澄清、类目确认、任务续查和 Excel 导出。
 metadata:
   mcp-version: v1.0.0
 ---
@@ -25,6 +25,7 @@ metadata:
    - `page_size=100`
    - `export_format=xls`
    - `keyword-research` 例外：`period` 使用数据月份（`YYYY-MM`），不把 `30d` 当作月份；`page_size` 以当前场景契约为准。
+   - `association-traffic` 例外：`page_size` 最大为 `50`，查询固定使用全部变体，不允许改成当前变体。
 4. 用户给了明确条件，就原样带入 `params`；不要发明隐藏枚举值或额外筛选。
 5. `月份` / `数据月份` / `2026-04` 传顶层 `period`；只有“上架时间 / 上架月数 / 上架多久”才映射到 `params.putawayMonth`。
 6. 类目文本可以直接传；如果后端返回多个类目候选，必须停下来让用户确认，不能猜。
@@ -35,7 +36,7 @@ metadata:
 11. 已由部署管理员绑定专属账号的 OPS 用户会自动使用该账号，`run` 和 Listing Analysis submit 均不消耗每日额度；未绑定用户继续使用公共账号池和原额度策略。
 12. 专属账号的绑定、改绑和解绑只能由部署管理员在服务端本机执行 `opscli seller-sprite account-binding ...`，MCP 不提供管理工具；Agent 不得向用户索取或输出卖家精灵密码。
 13. 专属账号登录失效时任务直接失败，不会回退公共账号池；不要通过重新提交任务尝试绕过账号异常。
-14. Skill 文档出现新场景不等于当前 MCP 已部署；执行 `keyword-research` 前先确认 `seller_sprite_scenarios` 已返回该场景，未暴露时如实说明，不能改投其他场景冒充结果。
+14. Skill 文档出现新场景不等于当前 MCP 已部署；执行 `keyword-research` 或 `association-traffic` 前先确认 `seller_sprite_scenarios` 已返回该场景，未暴露时如实说明，不能改投其他场景冒充结果。
 
 ## 链路区分
 
@@ -123,6 +124,7 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 
 - `查关键词` 这类表达可能对应 `keyword-research`、`keyword-miner`、`keyword-reverse`、`traffic-source`，先让用户选场景。
 - `关键词选品`、`关键词研究`、`高需求低竞争词`、`市场周期筛选`通常对应 `keyword-research`；单一种子词扩词仍用 `keyword-miner`。
+- `关联流量`、`关联产品`、`查关联 ASIN`通常对应 `association-traffic`；必须提供 1—20 个父体或子体 ASIN，固定使用全部变体查询。
 - `查产品` 这类表达可能对应 `competitor-lookup` 或 `product-research`，先让用户确认目的。
 - `看市场/类目` 这类表达可能对应 `market-research` 或 `product-research`，先让用户确认。
 - `competitor-lookup` 不能无条件直接跑，至少要有 `keyword`、`brand`、`sellerName`、`asins` 或 Amazon 商品链接中的一种。
@@ -130,6 +132,7 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - `competitor-lookup` 缺少主筛选条件时，应直接报参数错误或继续澄清，不要等成 30 秒 MCP 超时。
 - `keyword-reverse` 必须有 ASIN。
 - `traffic-source` 必须有关键词或 ASIN。
+- `association-traffic` 必须有 1—20 个合法 ASIN；支持列表、逗号、换行、制表符或从 TXT/Excel 按列复制的文本。
 - `product-research`、`market-research` 和 `keyword-research` 虽然没有硬性必填，但用户条件明显不足时，仍应先确认意图，不要把“可空”误当成“随便跑”。
 
 可直接复用的话术：

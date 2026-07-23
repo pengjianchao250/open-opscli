@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from numbers import Real
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from opscli.seller_sprite.api.payloads import split_association_traffic_asins
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteExportResult
 from opscli.seller_sprite.export.columns import ExportColumn, columns_for_scenario, currency_label
+
 
 def export_rows_to_xlsx(
     *,
@@ -41,13 +44,15 @@ def export_rows_to_xlsx(
     sheet.title = _main_sheet_title(scenario=scenario, site=site, period=period, params=params or {}, rows=rows)
 
     keyword_research = scenario == "keyword-research"
-    header_fill = PatternFill("solid", fgColor="FFE98A00" if keyword_research else "EAF2F8")
-    header_font = Font(name="Calibri", size=10, bold=False) if keyword_research else Font(bold=True)
+    association_traffic = scenario == "association-traffic"
+    official_orange_header = keyword_research or association_traffic
+    header_fill = PatternFill("solid", fgColor="FFE98A00" if official_orange_header else "EAF2F8")
+    header_font = Font(name="Calibri", size=10, bold=False) if official_orange_header else Font(bold=True)
     for column_index, column in enumerate(columns, start=1):
         cell = sheet.cell(row=1, column=column_index, value=column.title)
         cell.font = header_font
         cell.fill = header_fill
-        if keyword_research:
+        if official_orange_header:
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
     for row_index, row in enumerate(rows, start=2):
@@ -56,16 +61,21 @@ def export_rows_to_xlsx(
             cell = sheet.cell(row=row_index, column=column_index, value=value)
             if keyword_research:
                 _apply_keyword_research_number_format(cell, column_index)
+            elif association_traffic:
+                _apply_association_traffic_number_format(cell, column_index)
             else:
                 _apply_number_format(cell)
+        if association_traffic:
+            _apply_association_traffic_hyperlinks(sheet, row_index, row)
 
     sheet.freeze_panes = "A2"
     for column_index, column in enumerate(columns, start=1):
-        width = (
-            KEYWORD_RESEARCH_COLUMN_WIDTHS[column_index - 1]
-            if keyword_research
-            else _column_width(column.title)
-        )
+        if keyword_research:
+            width = KEYWORD_RESEARCH_COLUMN_WIDTHS[column_index - 1]
+        elif association_traffic:
+            width = ASSOCIATION_TRAFFIC_COLUMN_WIDTHS[column_index - 1]
+        else:
+            width = _column_width(column.title)
         sheet.column_dimensions[get_column_letter(column_index)].width = width
 
     if high_frequency_rows:
@@ -145,8 +155,14 @@ def _apply_transform(value: Any, transform: str | None, row: dict[str, Any], *, 
         return _rank_page(value)
     if transform == "divide10":
         return "" if _is_blank(value) else float(value) / 10
+    if transform == "divide10Text":
+        return "" if _is_blank(value) else f"{float(value) / 10:.1f}"
+    if transform == "divide100":
+        return "" if _is_blank(value) else float(value) / 100
     if transform == "sellerNation":
         return _seller_nation(value)
+    if transform == "sellerAddress":
+        return _seller_address(value)
     if transform in {"currency", "yen"}:
         return "" if _is_blank(value) else f"{currency_label(site)}{float(value):.2f}"
     if transform == "bidRange":
@@ -163,6 +179,8 @@ def _apply_transform(value: Any, transform: str | None, row: dict[str, Any], *, 
         return _enum_list_join(value, TRAFFIC_KEYWORD_TYPE_LABELS)
     if transform == "conversionKeywordTypeLabels":
         return _enum_list_join(value, CONVERSION_KEYWORD_TYPE_LABELS)
+    if transform == "relationLabels":
+        return _enum_list_join(value, ASSOCIATION_RELATION_LABELS)
     return value
 
 
@@ -204,6 +222,60 @@ def _apply_keyword_research_number_format(cell, column_index: int) -> None:
     cell.number_format = formats.get(column_index, "#,##0")
 
 
+def _apply_association_traffic_number_format(cell, column_index: int) -> None:
+    """按官方关联流量工作簿设置数值显示格式。"""
+    if not isinstance(cell.value, Real) or isinstance(cell.value, bool):
+        return
+    formats = {
+        2: "#,##0_ ",
+        13: "#,##0",
+        14: "#,##0",
+        15: "#,##0%",
+        18: "#,##0",
+        19: "#,##0%",
+        20: "#,##0",
+        21: "#,##0_ ",
+        22: "#,##0_ ",
+        23: "#,##0.00",
+        24: "#,##0",
+        25: "#,##0%",
+        26: "#,##0.00",
+        27: "#,##0",
+        28: "#,##0.00%",
+        29: "#,##0.00",
+        30: "#,##0",
+        33: "#,##0.00",
+        34: "#,##0",
+        35: "#,##0",
+        36: "#,##0",
+    }
+    cell.number_format = formats.get(column_index, "#,##0")
+
+
+def _apply_association_traffic_hyperlinks(sheet, row_index: int, row: dict[str, Any]) -> None:
+    """补齐官方工作簿中 ASIN、主图、父体和大类目的可点击链接。"""
+    asin = row.get("asin")
+    if asin:
+        cell = sheet.cell(row=row_index, column=1)
+        cell.hyperlink = _amazon_product_url(asin, row)
+        cell.style = "Hyperlink"
+    image_url = row.get("bigImageUrl") or row.get("imageUrl")
+    if image_url:
+        cell = sheet.cell(row=row_index, column=9)
+        cell.hyperlink = str(image_url)
+        cell.style = "Hyperlink"
+    parent = row.get("parent")
+    if parent:
+        cell = sheet.cell(row=row_index, column=10)
+        cell.hyperlink = _amazon_product_url(parent, row)
+        cell.style = "Hyperlink"
+    category_url = _amazon_bestseller_url(row)
+    if row.get("bsrLabel") and category_url:
+        cell = sheet.cell(row=row_index, column=12)
+        cell.hyperlink = category_url
+        cell.style = "Hyperlink"
+
+
 def _add_high_frequency_sheet(workbook, rows: list[dict[str, Any]]) -> None:
     from openpyxl.styles import Font
 
@@ -232,6 +304,11 @@ def _main_sheet_title(*, scenario: str, site: str, period: str, params: dict[str
         title = f"{site.upper()}-{asin}-Keywords({len(rows)})_"
     elif scenario == "keyword-research":
         title = f"Keywords({len(rows)})"
+    elif scenario == "association-traffic":
+        asins = split_association_traffic_asins(params.get("asins") or params.get("asin"))
+        first_asin = asins[0] if asins else "ASIN"
+        # 官网批量导出的主表名以 ``(31`` 收尾，本地保持相同可见命名。
+        title = f"Related-{first_asin}-batch({len(asins)})(31"
     elif scenario == "product-research":
         title = f"Product-{site.upper()}-{_period_label(period)}"
     elif scenario == "competitor-lookup":
@@ -273,6 +350,15 @@ KEYWORD_RESEARCH_COLUMN_WIDTHS = [
     13,
     74,
     120,
+]
+
+
+# 列宽来自官方 RelatedProducts-US-B098T9ZFB5-batch(5)-260723.xlsx。
+ASSOCIATION_TRAFFIC_COLUMN_WIDTHS = [
+    14, 15, 15, 15, 15, 13, 35, 14, 13, 13, 19, 15, 10, 20, 13, 19, 10, 13, 13,
+    15, 11, 13.353982300885, 11, 10, 13, 11, 13, 13, 13, 15, 13, 11, 11.0088495575221,
+    9, 11, 13, 18, 13, 38, 12, 15, 13, 13, 10, 13, 13, 13.5132743362832, 13, 13,
+    13, 13, 13, 13, 13, 13.5132743362832, 12.7610619469027,
 ]
 
 
@@ -326,6 +412,23 @@ def _amazon_seller_url(value: Any, row: dict[str, Any]) -> str:
     return f"https://{_amazon_domain(row)}/gp/help/seller/at-a-glance.html?seller={value}"
 
 
+def _amazon_bestseller_url(row: dict[str, Any]) -> str:
+    """生成官方关联流量导出中的大类 Best Sellers 链接。"""
+    # 官网美国站使用产品组短路径；未命中时用 BSR 节点 ID，仍可落到对应榜单。
+    us_category_paths = {
+        "Beauty & Personal Care": "beauty",
+        "Clothing, Shoes & Jewelry": "fashion",
+        "Health & Household": "hpc",
+        "Home & Kitchen": "home-garden",
+        "Patio, Lawn & Garden": "lawn-garden",
+    }
+    domain = _amazon_domain(row)
+    label = str(row.get("bsrLabel") or "")
+    category = us_category_paths.get(label) if domain == "www.amazon.com" else None
+    category = category or row.get("bsrId")
+    return f"https://{domain}/gp/bestsellers/{category}" if category else ""
+
+
 def _amazon_domain(row: dict[str, Any]) -> str:
     station = str(row.get("station") or "").upper()
     market_id = row.get("marketId")
@@ -339,12 +442,14 @@ def _amazon_domain(row: dict[str, Any]) -> str:
         return "www.amazon.ca"
     if station == "FRANCE" or market_id == 5:
         return "www.amazon.fr"
-    if station == "ITALY" or market_id == 8:
+    if station == "ITALY" or market_id in {8, 35691}:
         return "www.amazon.it"
-    if station == "SPAIN" or market_id == 9:
+    if station == "SPAIN" or market_id in {9, 44551}:
         return "www.amazon.es"
-    if station == "INDIA" or market_id == 10:
+    if station == "INDIA" or market_id in {10, 44571}:
         return "www.amazon.in"
+    if station == "MEXICO" or market_id in {11, 771770}:
+        return "www.amazon.com.mx"
     return "www.amazon.com"
 
 
@@ -401,6 +506,14 @@ def _seller_nation(value: Any) -> str:
         return ""
     text = str(value)
     return "CN(HK)" if text == "HK" else text
+
+
+def _seller_address(value: Any) -> str:
+    """将接口中的 HTML 换行地址归一为官方导出的单行文本。"""
+    if _is_blank(value):
+        return ""
+    text = re.sub(r"<br\s*/?>", " ", str(value), flags=re.IGNORECASE)
+    return " ".join(text.split())
 
 
 def _bid_range(row: dict[str, Any], *, site: str) -> str:
@@ -515,6 +628,22 @@ CONVERSION_KEYWORD_TYPE_LABELS = {
     "lost": "转化流失词",
     "INVALID": "无效曝光词",
     "invalid": "无效曝光词",
+}
+
+# 关联类型 code 与官网筛选及官方导出中文值保持一致。
+ASSOCIATION_RELATION_LABELS = {
+    "VAV": "看了又看",
+    "CSI": "相似产品",
+    "AVP": "看了还看",
+    "BAV": "看了却买",
+    "MIB": "捆绑销售",
+    "FBT": "组合购买",
+    "MIE": "更多相关",
+    "BAB": "买了又买",
+    "COB": "品牌推荐",
+    "SP": "商品广告",
+    "FSA": "四星产品",
+    "BCA": "品牌广告",
 }
 
 

@@ -154,6 +154,67 @@ KEYWORD_RESEARCH_COLUMNS = [
 ]
 
 
+# 关联流量列名和顺序逐列对齐官方 RelatedProducts-US-B098T9ZFB5-batch(5)-260723.xlsx。
+ASSOCIATION_TRAFFIC_COLUMNS = [
+    ExportColumn("ASIN", "asin"),
+    ExportColumn("关联ASIN数", "count"),
+    ExportColumn("关联ASIN", "relationAsinDtoList", transform="asinList"),
+    ExportColumn("关联类型", "relationList", transform="relationLabels"),
+    ExportColumn("SKU", "sku"),
+    ExportColumn("品牌", "brand"),
+    ExportColumn("商品标题", "title"),
+    ExportColumn("商品详情链接", None),
+    ExportColumn("商品主图", "bigImageUrl", fallback="imageUrl"),
+    ExportColumn("父体", "parent"),
+    ExportColumn("类目路径", "nodeLabelPath"),
+    ExportColumn("大类目", "bsrLabel"),
+    ExportColumn("大类BSR", "bsrRank"),
+    ExportColumn("大类BSR增长数", "bsrRankCv"),
+    ExportColumn("大类BSR增长率", "bsrRankCr", transform="divide100"),
+    ExportColumn("小类目", "subcategories.0.label"),
+    ExportColumn("小类BSR", "subcategories.0.rank"),
+    ExportColumn("月销量", "totalUnits"),
+    ExportColumn("月销量增长率", "totalUnitsGrowth", transform="divide100"),
+    ExportColumn("__TOTAL_AMOUNT__", "totalAmount"),
+    ExportColumn("子体销量", "amzUnit"),
+    ExportColumn("__SUB_TOTAL_AMOUNT__", "subTotalAmount"),
+    ExportColumn("__PRICE__", "price"),
+    ExportColumn("Q&A", "questions"),
+    ExportColumn("毛利率", "profit", transform="divide100"),
+    ExportColumn("__FBA__", "fba"),
+    ExportColumn("评分数", "reviews"),
+    ExportColumn("留评率", "reviewsRate", transform="divide100"),
+    ExportColumn("评分", "rating"),
+    ExportColumn("月新增评分数", "reviewsIncreasement"),
+    ExportColumn("上架时间", "availableDate", transform="dateMillis"),
+    ExportColumn("配送方式", "sellerType"),
+    ExportColumn("__DELIVERY_PRICE__", "deliveryPrice", transform="emptyIfNegative"),
+    ExportColumn("LQS", "lqs", transform="divide10Text"),
+    ExportColumn("变体数", "variations"),
+    ExportColumn("卖家数", "sellers"),
+    ExportColumn("BuyBox卖家", "sellerName"),
+    ExportColumn("卖家所属地", "sellerNation", transform="sellerNation"),
+    ExportColumn("卖家信息", "sellerDto.businessAddress", transform="sellerAddress"),
+    ExportColumn("BuyBox类型", "sellerType"),
+    ExportColumn("Best Seller标识", "bestSeller", transform="badgeFlag"),
+    ExportColumn("Amazon's Choice", "amazonChoice", transform="badgeFlag"),
+    ExportColumn("New Release标识", "newRelease", transform="badgeFlag"),
+    ExportColumn("A+页面", "ebc"),
+    ExportColumn("视频介绍", "video"),
+    ExportColumn("AC关键词", "amazonChoiceKeyword"),
+    ExportColumn("商品重量", "weight"),
+    ExportColumn("商品重量（单位换算）", "weightTag"),
+    ExportColumn("商品尺寸", "dimensions"),
+    ExportColumn("商品尺寸（单位换算）", "dimensionsTag"),
+    ExportColumn("包装重量", "pkgWeight"),
+    ExportColumn("包装重量（单位换算）", "pkgWeightTag"),
+    ExportColumn("包装尺寸", "pkgDimensions"),
+    ExportColumn("包装尺寸（单位换算）", "pkgDimensionsTag"),
+    ExportColumn("包装尺寸分段", "pkgDimensionType"),
+    ExportColumn("引流时间", "createdTime", transform="dateMillis"),
+]
+
+
 KEYWORD_REVERSE_COLUMNS = [
     ExportColumn("关键词", "keywords"),
     ExportColumn("关键词翻译", "keywordCn"),
@@ -262,6 +323,8 @@ def columns_for_scenario(scenario: str, site: str) -> list[ExportColumn]:
         )
     if scenario == "keyword-research":
         return KEYWORD_RESEARCH_COLUMNS
+    if scenario == "association-traffic":
+        return _association_traffic_columns(currency)
     if scenario == "keyword-reverse":
         return _columns_with_currency_titles(
             KEYWORD_REVERSE_COLUMNS,
@@ -305,6 +368,26 @@ def currency_label(site: str) -> str:
         "MX": "MX$",
     }
     return currencies.get(site.upper(), "$")
+
+
+def _association_traffic_columns(currency: str) -> list[ExportColumn]:
+    """替换关联流量官方模板中的币种占位表头。"""
+    replacements = {
+        "__TOTAL_AMOUNT__": f"月销售额({currency})",
+        "__SUB_TOTAL_AMOUNT__": f"子体销售额({currency})",
+        "__PRICE__": f"价格({currency})",
+        "__FBA__": f"FBA运费({currency})",
+        "__DELIVERY_PRICE__": f"买家运费({currency})",
+    }
+    return [
+        ExportColumn(
+            replacements.get(column.title, column.title),
+            column.source,
+            transform=column.transform,
+            fallback=column.fallback,
+        )
+        for column in ASSOCIATION_TRAFFIC_COLUMNS
+    ]
 
 
 def _product_columns(

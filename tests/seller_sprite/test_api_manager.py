@@ -81,6 +81,49 @@ class KeywordResearchApiClient(DummyApiClient):
         return f'<table id="table-condition-search"><tbody><tr>{cells}</tr></tbody></table>'
 
 
+class AssociationTrafficApiClient(DummyApiClient):
+    """模拟关联流量分页接口，验证 Manager 汇总全部结果。"""
+
+    calls = []
+
+    async def post_json(self, url, payload, *, referer=None):
+        """按请求页码返回两页固定的关联流量测试数据。
+
+        参数：
+            url: 被测 Manager 提交的接口路径。
+            payload: 包含 ``pageNum`` 的关联流量请求体。
+            referer: 被测场景生成的页面来源地址。
+
+        返回：
+            包含 ``data.pagerDto`` 的固定分页响应。
+
+        异常：
+            本测试替身不主动抛出异常。
+        """
+        self.calls.append({"url": url, "payload": dict(payload), "referer": referer})
+        page = payload["pageNum"]
+        items = (
+            [{"asin": "B0RESULT001"}, {"asin": "B0RESULT002"}]
+            if page == 1
+            else [{"asin": "B0RESULT003"}]
+        )
+        return {
+            "code": "OK",
+            "success": True,
+            "data": {
+                "pagerDto": {
+                    "page": page,
+                    "size": 2,
+                    "total": 3,
+                    "items": items,
+                    "took": 1,
+                },
+                "queryTook": 1,
+                "monitorTook": 1,
+            },
+        }
+
+
 class SessionExpiredOnceApiClient(DummyApiClient):
     instance = None
 
@@ -254,6 +297,97 @@ def test_manager_runs_keyword_research_as_get_page(monkeypatch, tmp_path: Path):
     assert KeywordResearchApiClient.calls[0]["referer"].startswith(
         "https://www.sellersprite.com/v2/keyword-research?"
     )
+
+
+def test_manager_collects_all_association_traffic_pages(monkeypatch, tmp_path: Path):
+    AssociationTrafficApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", AssociationTrafficApiClient)
+    settings = SellerSpriteSettings(
+        output_dir=tmp_path,
+        username=None,
+        password=None,
+        default_mode="api-direct",
+    )
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="association-traffic",
+                site="US",
+                period="30d",
+                params={"asins": ["B098T9ZFB5"]},
+                page_size=50,
+                job_id="job-association-traffic",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.row_count == 3
+    assert [row["asin"] for row in result.data] == [
+        "B0RESULT001",
+        "B0RESULT002",
+        "B0RESULT003",
+    ]
+    assert [call["payload"]["pageNum"] for call in AssociationTrafficApiClient.calls] == [1, 2]
+    assert all(call["url"] == "/v3/api/relation/traffic" for call in AssociationTrafficApiClient.calls)
+    raw = json.loads((tmp_path / "job-association-traffic" / "raw.json").read_text(encoding="utf-8"))
+    assert raw["response"]["data"]["pagerDto"]["total"] == 3
+    assert len(raw["response"]["data"]["pagerDto"]["items"]) == 3
+
+
+def test_manager_collects_association_pages_in_browser_route_mode(monkeypatch, tmp_path: Path):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        page = kwargs["payload"]["pageNum"]
+        items = [{"asin": "B0RESULT001"}] if page == 1 else [{"asin": "B0RESULT002"}]
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "pagerDto": {
+                        "page": page,
+                        "size": 1,
+                        "total": 2,
+                        "items": items,
+                    }
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(api_manager_module, "_run_browser_route_request", fake_browser_route_request)
+    settings = SellerSpriteSettings(
+        output_dir=tmp_path,
+        username=None,
+        password=None,
+        default_mode="browser-route",
+    )
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="association-traffic",
+                site="US",
+                period="30d",
+                params={"asins": ["B098T9ZFB5"]},
+                page_size=50,
+                job_id="job-association-browser-route",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.row_count == 2
+    assert [call["payload"]["pageNum"] for call in calls] == [1, 2]
+    assert calls[1]["request"].page_prepare is False
+    assert calls[1]["request"].task_interval_seconds == 0
 
 
 def test_manager_normalizes_competitor_lookup_singular_asin_before_api_call(monkeypatch, tmp_path: Path):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 from urllib.parse import urlencode
 
@@ -268,6 +269,36 @@ KEYWORD_RESEARCH_MARKET_PERIODS = {
     "D",
 }
 
+# 关联类型枚举来自 2026-07-23 官网筛选项；顺序与页面保持一致，便于导出和 Skill 对照。
+ASSOCIATION_TRAFFIC_RELATION_TYPES = (
+    "VAV",
+    "CSI",
+    "AVP",
+    "BAV",
+    "MIB",
+    "FBT",
+    "MIE",
+    "BAB",
+    "COB",
+    "SP",
+    "FSA",
+    "BCA",
+)
+
+# 关联流量页面使用产品研究体系的 market id，而不是旧版关键词接口的连续编号。
+ASSOCIATION_TRAFFIC_MARKET_IDS = {
+    "US": 1,
+    "UK": 3,
+    "DE": 4,
+    "FR": 5,
+    "JP": 6,
+    "CA": 7,
+    "IT": 35691,
+    "ES": 44551,
+    "IN": 44571,
+    "MX": 771770,
+}
+
 
 def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造竞品查询 payload。"""
@@ -443,6 +474,48 @@ def make_keyword_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def make_association_traffic_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造关联流量全部变体查询 payload。
+
+    参数：
+        input_data: 公共场景参数，``asins`` 支持列表、逗号或换行分隔文本。
+
+    返回：
+        可提交至官网关联流量查询接口的 JSON payload。
+
+    异常：
+        SellerSpriteConfigError: ASIN、站点、关联类型或分页参数不符合页面约束时抛出。
+    """
+    asins = _association_traffic_asins(input_data.get("asins") or input_data.get("asin"))
+    relations = [value.upper() for value in csv(input_data.get("relations"))]
+    invalid_relations = [value for value in relations if value not in ASSOCIATION_TRAFFIC_RELATION_TYPES]
+    if invalid_relations:
+        raise SellerSpriteConfigError(
+            f"association-traffic 不支持关联类型：{', '.join(invalid_relations)}"
+        )
+    site = _market(input_data, default="US")
+    market = input_data.get("marketId") or ASSOCIATION_TRAFFIC_MARKET_IDS.get(site)
+    if market is None:
+        raise SellerSpriteConfigError(f"association-traffic 暂不支持站点：{site}")
+    requested_size = _positive_int(
+        input_data.get("pageSize") or input_data.get("size"),
+        default=50,
+        field="pageSize",
+    )
+    # 官网关联流量列表每页最多 50 条；全部变体是本场景固定业务语义。
+    return {
+        "market": _int(market, 1),
+        # 业务任务始终从第一页开始，后续页由 Manager 在同一登录会话中汇总。
+        "pageNum": 1,
+        "pageSize": min(requested_size, 50),
+        "desc": order_desc(input_data.get("desc")),
+        "orderField": str(input_data.get("orderField") or "createdTime"),
+        "relations": relations,
+        "queryVariations": True,
+        "asinList": asins,
+    }
+
+
 def make_keyword_reverse_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造关键词反查 payload。"""
     limit = _int(input_data.get("limit") or input_data.get("size") or input_data.get("pageSize"), 100)
@@ -532,6 +605,8 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
         return "https://www.sellersprite.com/v3/keyword-miner/"
     if scenario == "keyword-research":
         return f"https://www.sellersprite.com/v2/keyword-research?{urlencode(_flatten_query(payload))}"
+    if scenario == "association-traffic":
+        return f"https://www.sellersprite.com/v3/relation-keyword?{urlencode(_flatten_query(payload))}"
     if scenario == "keyword-reverse":
         query = {
             "q": payload.get("asin") or "",
@@ -669,6 +744,41 @@ def csv(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def _association_traffic_asins(value: Any) -> list[str]:
+    """归一化页面支持的 ASIN 列表、TXT 和 Excel 按列粘贴文本。"""
+    asins = split_association_traffic_asins(value)
+    if not asins:
+        raise SellerSpriteConfigError("association-traffic 至少需要 1 个 ASIN")
+    if len(asins) > 20:
+        raise SellerSpriteConfigError("association-traffic 最多支持 20 个 ASIN")
+    invalid_asins = [asin for asin in asins if not re.fullmatch(r"[A-Z0-9]{10}", asin)]
+    if invalid_asins:
+        raise SellerSpriteConfigError(
+            f"association-traffic ASIN 格式无效：{', '.join(invalid_asins)}"
+        )
+    return asins
+
+
+def split_association_traffic_asins(value: Any) -> list[str]:
+    """拆分并去重关联流量页面支持的 ASIN 文本。
+
+    参数：
+        value: ASIN 列表，或来自 TXT、Excel 单列和分隔文本的原始值。
+
+    返回：
+        已去空白、转大写并保持首次出现顺序的 ASIN 列表；本函数不做数量和格式校验。
+    """
+    raw_values = value if isinstance(value, (list, tuple, set)) else [value]
+    asins: list[str] = []
+    for raw_value in raw_values:
+        # 页面允许逗号、空白、换行和 Excel 制表符输入，MCP 统一在请求前拆分并去重。
+        for part in re.split(r"[\s,，;；]+", str(raw_value or "")):
+            asin = part.strip().upper()
+            if asin and asin not in asins:
+                asins.append(asin)
+    return asins
 
 
 def _query_text(value: Any) -> str:

@@ -10,6 +10,7 @@
 | 选产品 / product research | `product-research` |
 | 关键词挖掘 / keyword mining | `keyword-miner` |
 | 关键词选品 / 关键词研究 / keyword research | `keyword-research` |
+| 关联流量 / 关联产品 / 查关联 ASIN / association traffic | `association-traffic` |
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
 | 查流量来源 / traffic source | `traffic-source` |
 | 选市场 / market research | `market-research` |
@@ -36,6 +37,7 @@
 - `product-research` 里的“月份 / 数据月份 / 2026-04”应传顶层 `period`，不是 `putawayMonth`。
 - `keyword-research` 的 `period` 表示数据月份，使用 `YYYY-MM`；不要把公共默认 `30d` 当作月份。未指定时使用后端返回的最新可用月份，不硬编码页面月份选项。
 - `keyword-research` 的真实分页上限以 `seller_sprite_scenarios` 和当前服务端契约为准，不直接套用公共 `page_size=100`。
+- `association-traffic` 的 `page_size` 最大为 `50`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换。
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
 - `competitor-lookup` 收到 Amazon 商品链接时，应先提取 ASIN，再传 `params.asins`。
 - `competitor-lookup` 如果用户只给了单个 `asin`，也应先归一化成 `params.asins` 再执行。
@@ -49,8 +51,10 @@
 - `competitor-lookup` 缺少上述主筛选条件时，应在本地快速报错或继续澄清，不要把无效请求拖成 MCP 30 秒超时。
 - `keyword-reverse` 必须有 `asin`。
 - `traffic-source` 必须有关键词或 ASIN。
+- `association-traffic` 必须有 1—20 个合法 ASIN；可传数组，也可传逗号、换行、制表符或 TXT/Excel 按列复制文本。
 - `product-research`、`market-research`、`keyword-research` 虽然没有硬性必填，但用户只说“跑一下”“看下市场”时仍应先确认意图。
 - `keyword-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-miner` 冒充。
+- `association-traffic` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `traffic-source` 冒充。
 
 ## 场景参数速查
 
@@ -60,6 +64,7 @@
 | `product-research` | 无 | `recommendationMode`、类目参数、销量/价格/评分/卖家/关键词筛选 | `page=1`，`selectType=2`，按 `total_units` 倒序，`smallAndLight=N`，`lowPrice=N` |
 | `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
 | `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；分页以场景契约为准 |
+| `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；`page_size≤50`；自动汇总全部分页 |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
 | `traffic-source` | 关键词或 ASIN | `keyword`、`asin`、`asins`、`order`、`desc` | `pageNo=1`，`order=10`，`desc=true` |
 | `market-research` | 无 | `departmentKeyword` / `category`、`node` / `nodeIdPath`、`newReleaseNum`、`topn`、市场指标筛选 | `sampleNumber=1`，`topn=10`，`newReleaseNum=6`，按 `total_sales` 倒序 |
@@ -157,6 +162,48 @@
 - 不在官方 28 列中增加内部调试字段；百分比按页面 HTML 的数值口径输出且不二次换算，页面展示精度可能低于官网异步导出；站点货币、类目和页面 DOM 中的前 10 ASIN 保持官方展示口径。
 - 若业务要求底层数值与官网导出逐位一致，必须使用官网异步导出文件，不能从已舍入的页面 HTML 恢复精度。
 - 官方主列表导出是异步任务；受理成功不等于文件已生成，仍按普通任务的 `job_id/state/ready` 规则续查。
+
+## `association-traffic` 关联流量
+
+### 场景边界
+
+- 用于输入父体或子体 ASIN，查询全部变体带来的关联流量商品及关联类型。
+- 与 `traffic-source` 不同：`association-traffic` 关注输入 ASIN 的关联商品集合；`traffic-source` 查询关键词或 ASIN 的流量来源。
+- 点击查询后的页面弹窗固定选择“用全部变体查询”；公共参数不提供 `queryVariations=false`。
+
+### 输入与分页
+
+| 中文含义 | 公共字段 | 规则 |
+| --- | --- | --- |
+| ASIN | `asins`，兼容单个 `asin` | 1—20 个；每个为 10 位字母数字；支持数组、逗号、换行、制表符和 TXT/Excel 按列粘贴 |
+| 关联类型 | `relations` | 可省略；省略表示全部类型；可传下表 code 数组或分隔文本 |
+| 排序字段 | `orderField` | 默认 `createdTime`；可用 `relationCount` |
+| 倒序 | `desc` | 默认 `true` |
+| 每页数量 | 顶层 `page_size` | 最大 `50`；任务内部自动续查并汇总全部分页 |
+
+### 关联类型枚举
+
+| `relations` code | 页面名称 | 类型 |
+| --- | --- | --- |
+| `VAV` | 看了又看 | 自然关联 |
+| `CSI` | 相似产品 | 自然关联 |
+| `AVP` | 看了还看 | 自然关联 |
+| `BAV` | 看了却买 | 自然关联 |
+| `MIB` | 捆绑销售 | 自然关联 |
+| `FBT` | 组合购买 | 自然关联 |
+| `MIE` | 更多相关 | 自然关联 |
+| `BAB` | 买了又买 | 自然关联 |
+| `COB` | 品牌推荐 | 自然关联 |
+| `SP` | 商品广告 | 广告关联 |
+| `FSA` | 四星产品 | 广告关联 |
+| `BCA` | 品牌广告 | 广告关联 |
+
+### 导出对齐
+
+- MCP 导出对齐官网关联流量主表的 56 列、顺序、币种表头、百分比、关系类型中文名、列宽和超链接。
+- 工作表名复现官网批量导出的 `Related-首个ASIN-batch(输入数)(31` 可见格式。
+- 本地工作簿只生成业务主表，不生成官网导出中的 `Notes` 页。
+- 官方参考文件为 `.xlsx`；若请求仍使用兼容值 `export_format=xls`，以工具返回的真实文件名和格式为准。
 
 ## `product-research` 重点参数
 

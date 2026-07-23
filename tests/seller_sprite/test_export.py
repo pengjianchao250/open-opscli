@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -118,3 +119,128 @@ def test_keyword_research_export_matches_required_workbook_contract(tmp_path: Pa
     assert sheet["G2"].value == 0.0438
     assert sheet["Q2"].value == "$19.99"
     assert sheet["AB2"].value == "B0H6WT6Q8C,B0H4G1XJQD"
+
+
+def test_association_traffic_export_matches_official_main_sheet_without_notes(tmp_path: Path):
+    output = tmp_path / "association-traffic.xlsx"
+    asins = ["B098T9ZFB5", "B09JW5FNVX", "B0B71DH45N", "B07MHHM31K", "B08RYQR1CJ"]
+
+    export_rows_to_xlsx(
+        rows=[
+            {
+                "asin": "B0D9XRB6YF",
+                "count": 1,
+                "relationAsinDtoList": [{"asin": "B0DKH8RXV2"}],
+                "relationList": ["VAV"],
+                "sku": "Color: Green",
+                "brand": "Narwey",
+                "title": "Demo Product",
+                "bigImageUrl": "https://example.com/demo.jpg",
+                "parent": "B0FFH4FL98",
+                "nodeLabelPath": "Beauty & Personal Care:Toiletry Bags",
+                "bsrLabel": "Beauty & Personal Care",
+                "bsrId": "3760911",
+                "marketId": 1,
+                "bsrRank": 2305,
+                "bsrRankCv": 803,
+                "bsrRankCr": 25.84,
+                "subcategories": [{"label": "Toiletry Bags", "rank": 9}],
+                "totalUnits": 7151,
+                "totalUnitsGrowth": 1.35,
+                "totalAmount": 121495.49,
+                "amzUnit": 1000,
+                "subTotalAmount": 19570,
+                "price": 16.99,
+                "questions": 34,
+                "profit": 52.51,
+                "fba": 5.52,
+                "reviews": 4049,
+                "reviewsRate": 1.43,
+                "rating": 4.7,
+                "reviewsIncreasement": 102,
+                "availableDate": 1724706720000,
+                "sellerType": "FBA",
+                "deliveryPrice": -1,
+                "lqs": 100,
+                "variations": 40,
+                "sellers": 1,
+                "sellerName": "Narwey®",
+                "sellerNation": "US",
+                "sellerDto": {"businessAddress": "UPPER MARLBORO<br/>MD<br/>20774<br/>US"},
+                "ebc": "Y",
+                "video": "Y",
+                "weight": "0.79 pounds",
+                "weightTag": "358.34 g",
+                "dimensions": "10.8 x 5.5 x 8.1 inches",
+                "dimensionsTag": "27.43 x 13.97 x 20.57 cm",
+                "pkgWeight": "0.93 pounds",
+                "pkgWeightTag": "421.84 g",
+                "pkgDimensions": "11.6 x 8.7 x 1.9 inches",
+                "pkgDimensionsTag": "29.46 x 22.10 x 4.83 cm",
+                "pkgDimensionType": "大号标准尺寸",
+                "createdTime": 1784766462000,
+            }
+        ],
+        output_path=output,
+        scenario="association-traffic",
+        site="US",
+        params={"asins": asins},
+    )
+
+    workbook = load_workbook(output)
+    assert workbook.sheetnames == ["Related-B098T9ZFB5-batch(5)(31"]
+    sheet = workbook.active
+    assert sheet.max_column == 56
+    headers_path = (
+        Path(__file__).resolve().parents[2]
+        / "opscli/seller_sprite/reference/scenarios/association-traffic/official-headers.json"
+    )
+    official_headers = json.loads(headers_path.read_text(encoding="utf-8"))
+    assert [cell.value for cell in sheet[1]] == official_headers
+    assert [sheet.cell(row=1, column=index).value for index in (20, 22, 23, 26, 33)] == [
+        "月销售额($)",
+        "子体销售额($)",
+        "价格($)",
+        "FBA运费($)",
+        "买家运费($)",
+    ]
+    assert sheet.freeze_panes == "A2"
+    assert sheet["A1"].fill.fgColor.rgb == "FFE98A00"
+    assert sheet.column_dimensions["A"].width == 14
+    assert sheet.column_dimensions["G"].width == 35
+    assert sheet.column_dimensions["BD"].width == 12.7610619469027
+    assert sheet["A2"].hyperlink.target == "https://www.amazon.com/dp/B0D9XRB6YF"
+    assert sheet["J2"].hyperlink.target == "https://www.amazon.com/dp/B0FFH4FL98"
+    assert sheet["L2"].hyperlink.target == "https://www.amazon.com/gp/bestsellers/beauty"
+    assert sheet["C2"].value == "B0DKH8RXV2"
+    assert sheet["D2"].value == "看了又看"
+    assert sheet["O2"].value == 0.2584
+    assert sheet["S2"].value == 0.0135
+    assert sheet["Y2"].value == 0.5251
+    assert sheet["AB2"].value == 0.0143
+    assert sheet["AH2"].value == "10.0"
+    assert sheet["AM2"].value == "UPPER MARLBORO MD 20774 US"
+    assert sheet["BD2"].value == "2026-07-23"
+
+
+def test_association_traffic_export_keeps_official_batch_sheet_title(tmp_path: Path):
+    output = tmp_path / "association-traffic-375.xlsx"
+
+    export_rows_to_xlsx(
+        rows=[{"asin": "B0D9XRB6YF"} for _ in range(375)],
+        output_path=output,
+        scenario="association-traffic",
+        site="US",
+        params={
+            "asins": [
+                "B098T9ZFB5",
+                "B09JW5FNVX",
+                "B0B71DH45N",
+                "B07MHHM31K",
+                "B08RYQR1CJ",
+            ]
+        },
+    )
+
+    workbook = load_workbook(output, read_only=True)
+    assert workbook.sheetnames == ["Related-B098T9ZFB5-batch(5)(31"]

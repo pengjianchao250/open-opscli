@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from opscli.seller_sprite.api.payloads import (
     build_referer,
+    make_association_traffic_payload,
     make_competitor_payload,
     make_keyword_miner_payload,
     make_keyword_research_payload,
@@ -90,6 +91,14 @@ class SellerSpriteScenario:
 
 
 SCENARIOS: dict[str, SellerSpriteScenario] = {
+    "association-traffic": SellerSpriteScenario(
+        scenario_id="association-traffic",
+        title="关联流量",
+        endpoint="/v3/api/relation/traffic",
+        required_params=(),
+        required_any_params=("asin", "asins"),
+        payload_builder=make_association_traffic_payload,
+    ),
     "competitor-lookup": SellerSpriteScenario(
         scenario_id="competitor-lookup",
         title="选竞品",

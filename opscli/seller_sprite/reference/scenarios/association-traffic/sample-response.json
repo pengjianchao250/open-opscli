@@ -1,0 +1,71 @@
+{
+  "capture_date": "2026-07-23",
+  "request": {
+    "method": "POST",
+    "endpoint": "/v3/api/relation/traffic",
+    "body": {
+      "market": 1,
+      "pageNum": 1,
+      "pageSize": 50,
+      "desc": true,
+      "orderField": "createdTime",
+      "relations": [],
+      "queryVariations": true,
+      "asinList": [
+        "B098T9ZFB5",
+        "B09JW5FNVX",
+        "B0B71DH45N",
+        "B07MHHM31K",
+        "B08RYQR1CJ"
+      ]
+    }
+  },
+  "response": {
+    "code": "OK",
+    "success": true,
+    "data": {
+      "pagerDto": {
+        "page": 1,
+        "size": 20,
+        "total": 375,
+        "item_sample": {
+          "asin": "B0D9XRB6YF",
+          "relationList": [
+            "VAV"
+          ],
+          "relationAsinDtoList": [
+            {
+              "asin": "B0DKH8RXV2"
+            }
+          ],
+          "count": 1,
+          "title": "Narwey Hanging Toiletry Bag for Women Travel Checkered Makeup Bag Organizer Toiletries Bag for Travel Size Essentials, Accessories, Brushes, Cosmetics (Green Checkerboard (Medium))",
+          "createdTime": 1784766462000,
+          "totalUnits": 7151,
+          "amzUnit": 1000,
+          "totalAmount": 121495.49,
+          "subTotalAmount": 19570.0,
+          "price": 16.99,
+          "rating": 4.7,
+          "reviews": 4049,
+          "variations": 40,
+          "sellerName": "Narwey®",
+          "sellerType": "FBA",
+          "sellerNation": "US",
+          "bsrRank": 2305,
+          "bsrLabel": "Beauty & Personal Care",
+          "subcategories": [
+            {
+              "code": "387321011",
+              "rank": 9,
+              "label": "Toiletry Bags"
+            }
+          ]
+        }
+      },
+      "queryTook": 1,
+      "monitorTook": 1
+    }
+  },
+  "note": "游客响应把 pageSize=50 限制为 20；正式 MCP 会先恢复账号登录态，再按 pagerDto.total 分页汇总。"
+}

@@ -1,0 +1,105 @@
+{
+  "scenario_id": "association-traffic",
+  "title": "关联流量",
+  "web_route": "/v3/relation-keyword",
+  "api": {
+    "method": "POST",
+    "endpoint": "/v3/api/relation/traffic",
+    "body_fields": [
+      "market",
+      "pageNum",
+      "pageSize",
+      "desc",
+      "orderField",
+      "relations",
+      "queryVariations",
+      "asinList"
+    ]
+  },
+  "auxiliary_apis": [
+    {
+      "method": "POST",
+      "endpoint": "/v3/api/relation/traffic/prepare",
+      "purpose": "查询当前变体和全部变体的可用关联数"
+    },
+    {
+      "method": "POST",
+      "endpoint": "/v3/api/relation/traffic/variations/stat",
+      "purpose": "选择全部变体后获取各变体关联统计"
+    }
+  ],
+  "export_api": {
+    "method": "POST",
+    "endpoint": "/v3/api/relation/traffic/export",
+    "query_fields": [
+      "marketId",
+      "exportImage"
+    ],
+    "response_type": "blob",
+    "guest_behavior": "返回导出说明工作簿，正式导出必须使用有效登录态"
+  },
+  "required_params": [
+    "asins"
+  ],
+  "query_conditions": {
+    "asins": {
+      "type": "array",
+      "minimum": 1,
+      "maximum": 20,
+      "accepts": [
+        "list",
+        "comma-separated text",
+        "TXT lines",
+        "Excel column paste"
+      ]
+    },
+    "query_variations": {
+      "body_field": "queryVariations",
+      "fixed_value": true,
+      "meaning": "用全部变体查询"
+    },
+    "relations": {
+      "type": "array",
+      "enum": [
+        "VAV",
+        "CSI",
+        "AVP",
+        "BAV",
+        "MIB",
+        "FBT",
+        "MIE",
+        "BAB",
+        "COB",
+        "SP",
+        "FSA",
+        "BCA"
+      ]
+    }
+  },
+  "response": {
+    "row_path": "data.pagerDto.items",
+    "pagination_fields": [
+      "data.pagerDto.page",
+      "data.pagerDto.size",
+      "data.pagerDto.total",
+      "data.pagerDto.took"
+    ]
+  },
+  "official_template": {
+    "captured_workbook_name": "RelatedProducts-US-B098T9ZFB5-batch(5)-260723.xlsx",
+    "captured_workbook_path": "output/RelatedProducts-US-B098T9ZFB5-batch(5)-260723.xlsx",
+    "headers_file": "official-headers.json",
+    "captured_main_sheet": "Related-B098T9ZFB5-batch(5)(31",
+    "captured_notes_sheet": "Notes",
+    "header_count": 56,
+    "row_count": 375,
+    "local_export_sheets": [
+      "business_main_sheet_only"
+    ]
+  },
+  "capture_evidence": {
+    "captured_at": "2026-07-23",
+    "sample_response": "sample-response.json",
+    "official_workbook_sha256": "c06a014a4677857fe40d92fcb8f2aa77ca4966fc35628297aa8c51302b3fa7a9"
+  }
+}
