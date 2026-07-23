@@ -1203,8 +1203,43 @@ class SellerSpriteBrowserRouteWorker:
             return parsed
         finally:
             stage_started_at = time.monotonic()
-            await page.unroute(pattern, _handle)
-            _record_timing(timings, request, f"route_fetch.{section}.unroute", stage_started_at)
+            if page.is_closed():
+                # 页面关闭会自动移除 route；此时不再调用 unroute，避免清理异常覆盖主结果。
+                _record_timing(
+                    timings,
+                    request,
+                    f"route_fetch.{section}.unroute",
+                    stage_started_at,
+                    skipped=True,
+                    reason="target_closed",
+                )
+            else:
+                try:
+                    await page.unroute(pattern, _handle)
+                except Exception as exc:
+                    # is_closed 检查后仍可能发生关闭竞态，仅忽略明确的目标关闭异常。
+                    if not _is_target_closed_error(exc):
+                        raise
+                    _record_timing(
+                        timings,
+                        request,
+                        f"route_fetch.{section}.unroute",
+                        stage_started_at,
+                        skipped=True,
+                        reason="target_closed",
+                    )
+                else:
+                    _record_timing(
+                        timings,
+                        request,
+                        f"route_fetch.{section}.unroute",
+                        stage_started_at,
+                    )
+
+
+def _is_target_closed_error(exc: Exception) -> bool:
+    """判断异常是否为 Playwright/Patchright 明确的目标关闭错误。"""
+    return type(exc).__name__ == "TargetClosedError"
 
 
 def build_default_session_state_listener(
@@ -1753,19 +1788,34 @@ async def fetch_listing_analysis_report_with_browser_route(
     task_id: str,
     root_dir: Path,
     page_prepare: bool | None = None,
+    task_interval_seconds: float | None = None,
+    cooldown_seconds: float | None = None,
+    state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+    owner_id: str = "default",
 ) -> BrowserRouteResult:
     """通过 browser-route 打开 Listing Analysis 报告详情页并捕获结果。"""
     worker = get_browser_route_worker(
         settings=settings,
         account=account,
-        state_listener=build_default_session_state_listener(settings),
+        state_listener=(
+            state_listener or build_default_session_state_listener(settings)
+        ),
+        owner_id=owner_id,
     )
     return await worker.fetch_listing_analysis_report(
         task_id=task_id,
         root_dir=root_dir,
         page_prepare=settings.browser_page_prepare if page_prepare is None else page_prepare,
-        task_interval_seconds=settings.browser_task_interval_seconds,
-        cooldown_seconds=settings.browser_cooldown_seconds,
+        task_interval_seconds=(
+            settings.browser_task_interval_seconds
+            if task_interval_seconds is None
+            else task_interval_seconds
+        ),
+        cooldown_seconds=(
+            settings.browser_cooldown_seconds
+            if cooldown_seconds is None
+            else cooldown_seconds
+        ),
     )
 
 

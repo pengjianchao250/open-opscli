@@ -439,6 +439,7 @@ def _build_dual_endpoint_app(
 
     # 合并后的 Starlette 应用（不含中间件，中间件由外层 ASGI 包裹统一处理）
     combined = Starlette(routes=combined_routes, lifespan=_combined_lifespan)
+    combined = _with_seller_sprite_lifespan(combined)
 
     # 用 API Key 鉴权中间件统一包裹整个合并应用
     # 支持 Authorization: Bearer <key> 和 ?api_key=<key> 两种传入方式
@@ -500,6 +501,28 @@ def _print_http_startup_banner(
 
 
 # ── 启动入口 ─────────────────────────────────────────────────────────
+
+
+def _with_seller_sprite_lifespan(app: Any) -> Any:
+    """为 HTTP/SSE ASGI 应用接入持久队列调度器生命周期。"""
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(_app: Any):
+        from opscli.seller_sprite.services import get_task_scheduler
+
+        scheduler = get_task_scheduler()
+        async with original_lifespan(app):
+            try:
+                await scheduler.start()
+                yield
+            finally:
+                await scheduler.close()
+
+    # 原地扩展 lifespan，保留 FastMCP 子应用已有的 middleware、state 和其他配置。
+    app.router.lifespan_context = lifespan
+    return app
+
 
 def run() -> None:
     """MCP Server 启动入口，由 pyproject.toml scripts 注册为 opscli-mcp。
@@ -595,6 +618,7 @@ def run() -> None:
             transport_name = "sse" if transport_val == "sse" else "streamable-http"
             path = "/sse" if transport_val == "sse" else "/mcp"
             sub_app = mcp.http_app(path=path, transport=transport_name)
+            sub_app = _with_seller_sprite_lifespan(sub_app)
             asgi_app = ApiKeyAuthMiddleware(
                 sub_app,
                 api_key=api_key,

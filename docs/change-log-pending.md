@@ -9,6 +9,23 @@
 **回滚方式**：回退 `aba-reverse` 场景注册、参数构造、二进制下载分支、参考证据、测试及本条记录。
 ---
 
+## 2026-07-23 seller_sprite - 避免页面关闭异常覆盖任务结果
+
+**变更原因**：browser-route 主请求结束后若页面或浏览器已关闭，`page.unroute()` 会抛出 `TargetClosedError` 并覆盖原始成功结果或业务异常，可能导致线上队列任务异常。
+**改动点**：补充主请求成功和失败时页面恰在 route 清理阶段关闭的回归测试，以及真实目标关闭错误进入失败态后继续消费队列的调度回归；browser-route 在页面已关闭时跳过 `unroute`，并仅忽略检查后关闭竞态产生的明确 `TargetClosedError`，其他清理错误保持原行为。
+**验证结果**：SellerSprite browser worker 回归 `54 passed`，任务调度器回归 `34 passed`；变更生产模块 `py_compile` 通过；`git diff --check` 通过。
+**影响范围**：仅影响 browser-route 请求结束后的 route 清理，不改变请求参数、登录、分页、账号选择或队列顺序。
+**回滚方式**：回退 browser-route 清理逻辑、对应回归测试及本条记录。
+---
+
+## 2026-07-23 seller_sprite - 恢复服务重启中断的持久任务
+
+**变更原因**：MCP 服务重启会终止进程内超时和 worker，但 SQLite 中的任务仍停留在 `running`，长期占用账号槽并阻断后续 `queued`；Listing Analysis 若已提交远端任务，恢复时还需避免重复提交。
+**改动点**：队列 schema 升级至 v4，增加执行 owner、心跳、租约和 Listing Analysis 远端 taskId 检查点；所有领取操作原子写入短租约，scheduler 定期续租并仅回收历史无租约或已过期任务，重排时递增执行代际、清空旧运行态并同步 MCP run；HTTP/SSE MCP lifespan 启动时主动启动 scheduler，正常关闭时停止领取、取消执行并立即重排本实例任务，异常退出则由租约过期恢复；普通任务采用 at-least-once 语义并继续由账号键和执行代际 CAS 防止旧结果覆盖；Listing Analysis 捕获远端 taskId 后立即持久化，恢复时直接读取原任务报告而不重复提交。
+**验证结果**：队列 Store `35 passed`、scheduler `36 passed`、API Manager `23 passed`、browser worker `57 passed`、MCP lifespan `3 passed`；SellerSprite 全量 `250 passed, 2 failed`，两项失败均为既有 `seller-sprite-debug` 顶级命令未注册；SellerSprite MCP 相关回归 `87 passed`；变更生产模块 `py_compile` 和 `git diff --check` 通过。
+**影响范围**：影响 SellerSprite 持久任务领取、MCP HTTP/SSE 服务启动关闭、进程中断恢复及 Listing Analysis 远端任务续跑；stdio 生命周期和正常任务业务参数不变。
+**回滚方式**：回退队列 v4 租约字段、scheduler 生命周期、MCP lifespan、Listing Analysis taskId 检查点、对应测试及本条记录。
+---
 
 ## 2026-07-22 cli - 兼容 python 模块启动方式
 

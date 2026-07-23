@@ -67,6 +67,8 @@ class SellerSpriteApiManager:
         ]
         | None = None,
         session_owner_id: str = "default",
+        listing_remote_task_id: str | None = None,
+        listing_task_id_listener: Callable[[str], None] | None = None,
     ) -> None:
         """创建卖家精灵场景执行器。
 
@@ -88,6 +90,8 @@ class SellerSpriteApiManager:
             self.settings
         )
         self.session_owner_id = session_owner_id
+        self.listing_remote_task_id = listing_remote_task_id
+        self.listing_task_id_listener = listing_task_id_listener
         self.account_provider = account_provider or SellerSpriteAccountProvider(
             self.settings,
             integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
@@ -218,28 +222,61 @@ class SellerSpriteApiManager:
                 },
             )
             if mode == "browser-route":
-                browser_result = await _run_browser_route_request(
-                    settings=self.settings,
-                    account=account,
-                    request=request,
-                    scenario_method=scenario.method,
-                    endpoint=scenario.endpoint_for(payload),
-                    payload=_main_payload(request.scenario, payload),
-                    referer=scenario.build_referer(payload),
-                    root_dir=root_dir,
-                    high_frequency_endpoint=(
-                        scenario.high_frequency_endpoint_for(payload)
-                        if payload.get("includeHighFrequency")
-                        else None
-                    ),
-                    high_frequency_payload=(
-                        _high_frequency_payload(request.scenario, payload)
-                        if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload)
-                        else None
-                    ),
-                    session_state_listener=self.session_state_listener,
-                    session_owner_id=self.session_owner_id,
-                )
+                if request.scenario == "listing-analysis" and self.listing_remote_task_id:
+                    from opscli.seller_sprite.browser_route import (
+                        fetch_listing_analysis_report_with_browser_route,
+                    )
+
+                    browser_result = await fetch_listing_analysis_report_with_browser_route(
+                        settings=self.settings,
+                        account=account,
+                        task_id=self.listing_remote_task_id,
+                        root_dir=root_dir,
+                        page_prepare=(
+                            self.settings.browser_page_prepare
+                            if request.page_prepare is None
+                            else request.page_prepare
+                        ),
+                        task_interval_seconds=(
+                            self.settings.browser_task_interval_seconds
+                            if request.task_interval_seconds is None
+                            else request.task_interval_seconds
+                        ),
+                        cooldown_seconds=(
+                            self.settings.browser_cooldown_seconds
+                            if request.cooldown_seconds is None
+                            else request.cooldown_seconds
+                        ),
+                        state_listener=self.session_state_listener,
+                        owner_id=self.session_owner_id,
+                    )
+                else:
+                    browser_result = await _run_browser_route_request(
+                        settings=self.settings,
+                        account=account,
+                        request=request,
+                        scenario_method=scenario.method,
+                        endpoint=scenario.endpoint_for(payload),
+                        payload=_main_payload(request.scenario, payload),
+                        referer=scenario.build_referer(payload),
+                        root_dir=root_dir,
+                        high_frequency_endpoint=(
+                            scenario.high_frequency_endpoint_for(payload)
+                            if payload.get("includeHighFrequency")
+                            else None
+                        ),
+                        high_frequency_payload=(
+                            _high_frequency_payload(request.scenario, payload)
+                            if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload)
+                            else None
+                        ),
+                        session_state_listener=self.session_state_listener,
+                        session_owner_id=self.session_owner_id,
+                    )
+                    if request.scenario == "listing-analysis":
+                        task_id = _extract_task_id(browser_result.response)
+                        if task_id and self.listing_task_id_listener:
+                            self.listing_task_id_listener(task_id)
                 login = browser_result.login
                 main_response = browser_result.response
                 high_frequency_response = browser_result.high_frequency_response

@@ -322,7 +322,8 @@ def test_store_migrates_v2_queue_to_shared_account_route(tmp_path: Path):
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT account_route, requested_account_id, requested_account_key "
+            "SELECT account_route, requested_account_id, requested_account_key, "
+            "execution_owner, heartbeat_at, lease_expires_at, remote_task_id "
             "FROM seller_sprite_task_queue WHERE job_id = ?",
             ("legacy-v2-job",),
         ).fetchone()
@@ -332,6 +333,10 @@ def test_store_migrates_v2_queue_to_shared_account_route(tmp_path: Path):
         "account_route": ACCOUNT_ROUTE_SHARED_POOL,
         "requested_account_id": None,
         "requested_account_key": None,
+        "execution_owner": None,
+        "heartbeat_at": None,
+        "lease_expires_at": None,
+        "remote_task_id": None,
     }
     assert user_version == QUEUE_SCHEMA_VERSION
     claimed = store.claim_next_generic_for_account(
@@ -547,6 +552,10 @@ def test_store_rejects_stale_generation_without_updating_mcp_terminal_state(tmp_
 
     assert stale_committed is False
     assert current_committed is True
+    status = store.get_status("job-mcp-cas")
+    assert status["execution_owner"] is None
+    assert status["heartbeat_at"] is None
+    assert status["lease_expires_at"] is None
     assert store.get_mcp_run("job-mcp-cas")["result_export_filename"] == "current.json"
     assert store.get_task_context("job-mcp-cas") == {
         "credential_scope": None,
@@ -586,6 +595,10 @@ def test_store_clears_auth_when_current_generation_fails_atomically(tmp_path: Pa
     )
 
     assert committed is True
+    status = store.get_status("job-mcp-auth-failed")
+    assert status["execution_owner"] is None
+    assert status["heartbeat_at"] is None
+    assert status["lease_expires_at"] is None
     assert store.get_task_context("job-mcp-auth-failed") == {
         "credential_scope": None,
         "runtime_auth_required": False,
@@ -714,6 +727,126 @@ def test_store_requeues_only_stale_running_tasks(tmp_path: Path):
     assert changed == 1
     assert store.get_status("old-running")["state"] == "queued"
     assert store.get_status("new-running")["state"] == "running"
+
+
+def test_store_recovers_only_expired_execution_lease_and_syncs_mcp_run(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    active = _request(job_id="active-running")
+    expired = _request(job_id="expired-running")
+    store.enqueue_owned_mcp_run(
+        request=active,
+        queue_scope="seller_sprite-active",
+        root_dir=tmp_path / "active-running",
+        user_email="user@example.com",
+    )
+    store.enqueue_owned_mcp_run(
+        request=expired,
+        queue_scope="seller_sprite-expired",
+        root_dir=tmp_path / "expired-running",
+        user_email="user@example.com",
+    )
+    store.claim_next(
+        queue_scope="seller_sprite-active",
+        worker_key="active-worker",
+        assigned_account="active",
+        execution_owner="active-owner",
+        lease_seconds=60,
+    )
+    store.claim_next(
+        queue_scope="seller_sprite-expired",
+        worker_key="expired-worker",
+        assigned_account="expired",
+        execution_owner="expired-owner",
+        lease_seconds=60,
+    )
+    store.mark_mcp_run_running("active-running")
+    store.mark_mcp_run_running("expired-running")
+    with sqlite3.connect(tmp_path / "queue.sqlite3") as conn:
+        conn.execute(
+            "UPDATE seller_sprite_task_queue SET lease_expires_at = ? WHERE job_id = ?",
+            ("2000-01-01T00:00:00+00:00", "expired-running"),
+        )
+
+    changed = store.recover_expired_running_tasks()
+
+    assert changed == 1
+    assert store.get_status("active-running")["state"] == "running"
+    recovered = store.get_status("expired-running")
+    assert recovered["state"] == "queued"
+    assert recovered["retry_reason"] == "lease_expired"
+    assert recovered["assignment_generation"] == 2
+    assert recovered["execution_owner"] is None
+    assert store.get_mcp_run("active-running")["result_state"] == "running"
+    assert store.get_mcp_run("expired-running")["result_state"] == "queued"
+
+
+def test_store_renews_and_releases_owner_lease(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_request(job_id="job-owned"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "job-owned",
+    )
+    claimed = store.claim_next(
+        queue_scope="seller_sprite",
+        worker_key="worker",
+        assigned_account="default",
+        execution_owner="owner-1",
+        lease_seconds=1,
+    )
+
+    renewed = store.renew_execution_leases(
+        execution_owner="owner-1",
+        lease_seconds=60,
+    )
+    released = store.release_running_tasks(execution_owner="owner-1")
+    status = store.get_status("job-owned")
+
+    assert claimed["execution_owner"] == "owner-1"
+    assert renewed == 1
+    assert released == 1
+    assert status["state"] == "queued"
+    assert status["retry_reason"] == "service_restart"
+    assert status["assignment_generation"] == 2
+
+
+def test_store_persists_listing_task_id_only_for_current_generation(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_listing_request(job_id="listing-job"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "listing-job",
+    )
+    claimed = store.claim_next_listing_analysis(
+        queue_scope="seller_sprite",
+        worker_key="listing-worker",
+        assigned_account="default",
+        account_key="account-key",
+        execution_owner="owner-1",
+    )
+
+    stale = store.save_listing_analysis_task_id(
+        job_id="listing-job",
+        task_id="remote-stale",
+        execution_owner="owner-1",
+        assignment_generation=0,
+    )
+    current = store.save_listing_analysis_task_id(
+        job_id="listing-job",
+        task_id="remote-current",
+        execution_owner="owner-1",
+        assignment_generation=claimed["assignment_generation"],
+    )
+
+    assert stale is False
+    assert current is True
+    assert store.get_listing_analysis_task_id("listing-job") == "remote-current"
 
 
 def test_store_marks_task_finished_and_persists_result_metadata(tmp_path: Path):

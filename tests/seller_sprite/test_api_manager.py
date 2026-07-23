@@ -812,6 +812,108 @@ def test_extract_items_prefers_traffic_source_pager_items_over_context_asin():
     assert rows == items
 
 
+def test_browser_listing_analysis_persists_captured_remote_task_id(monkeypatch, tmp_path: Path):
+    captured = []
+
+    async def fake_browser_route_request(**kwargs):
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "taskId": "remote-task-1",
+                    "taskStatus": "RUNNING",
+                    "asin": "B0D3845MWD",
+                    "station": "GLOBAL",
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(
+        api_manager_module,
+        "_run_browser_route_request",
+        fake_browser_route_request,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+        listing_task_id_listener=captured.append,
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="listing-analysis",
+                site="US",
+                period="30d",
+                params={"asin": "B0D3845MWD"},
+                job_id="job-listing-checkpoint",
+                export_format="json",
+            )
+        )
+    )
+
+    assert captured == ["remote-task-1"]
+    assert result.data[0]["taskId"] == "remote-task-1"
+
+
+def test_browser_listing_analysis_resumes_remote_task_without_resubmit(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from opscli.seller_sprite import browser_route
+
+    report_calls = []
+
+    async def fail_submit(**kwargs):
+        raise AssertionError("已有远端 taskId 时不得重新提交 Listing Analysis")
+
+    async def fake_fetch_report(**kwargs):
+        report_calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "taskId": kwargs["task_id"],
+                    "taskStatus": "COMPLETED",
+                    "content": "completed report",
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(api_manager_module, "_run_browser_route_request", fail_submit)
+    monkeypatch.setattr(
+        browser_route,
+        "fetch_listing_analysis_report_with_browser_route",
+        fake_fetch_report,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+        listing_remote_task_id="remote-task-existing",
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="listing-analysis",
+                site="US",
+                period="30d",
+                params={"asin": "B0D3845MWD"},
+                job_id="job-listing-resume",
+                export_format="json",
+            )
+        )
+    )
+
+    assert len(report_calls) == 1
+    assert report_calls[0]["task_id"] == "remote-task-existing"
+    assert result.data[0]["content"] == "completed report"
+
+
 def test_manager_records_listing_analysis_submit_state(monkeypatch, tmp_path: Path):
     ListingAnalysisApiClient.calls = []
     ListingAnalysisApiClient.instance = None

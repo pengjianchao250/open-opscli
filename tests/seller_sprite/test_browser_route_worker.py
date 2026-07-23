@@ -11,6 +11,9 @@ from opscli.seller_sprite.browser_route import worker as worker_module
 from opscli.seller_sprite.browser_route.worker import SellerSpriteBrowserRouteWorker
 from opscli.seller_sprite.config import (
     DEFAULT_BROWSER_RUNTIME,
+    DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
+    DEFAULT_TASK_HEARTBEAT_SECONDS,
+    DEFAULT_TASK_LEASE_SECONDS,
     DEFAULT_TASK_TIMEOUT_SECONDS,
     SellerSpriteSettings,
     load_settings,
@@ -633,6 +636,106 @@ def test_record_timing_keeps_diagnostic_data_without_warning_log(caplog, tmp_pat
     assert event["stage"] == "test"
     assert timings == [event]
     assert "卖家精灵 browser-route 耗时" not in caplog.text
+
+
+def test_route_fetch_keeps_success_when_page_closes_during_unroute(monkeypatch, tmp_path):
+    """主请求成功后页面关闭时，unroute 清理不得覆盖成功结果。"""
+
+    class TargetClosedError(Exception):
+        """模拟 Playwright/Patchright 目标关闭异常。"""
+
+    class ClosingPage:
+        async def route(self, pattern, handler):
+            return None
+
+        def is_closed(self):
+            return False
+
+        async def unroute(self, pattern, handler):
+            raise TargetClosedError(
+                "Page.unroute: Target page, context or browser has been closed"
+            )
+
+    async def fake_trigger(*args, **kwargs):
+        return SimpleNamespace(status=200), "page_response"
+
+    async def fake_parse(*args, **kwargs):
+        return {"code": "OK", "data": {"items": []}}
+
+    monkeypatch.setattr(worker_module, "_trigger_request", fake_trigger)
+    monkeypatch.setattr(worker_module, "_parse_response", fake_parse)
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=SellerSpriteAccount(
+            name="default",
+            username="user@example.com",
+            password="secret",
+        ),
+    )
+
+    result = _run(
+        worker._execute_route_fetch(
+            page=ClosingPage(),
+            method="POST",
+            endpoint="/v3/api/keyword/reverse",
+            payload={"asin": "B0TEST"},
+            root_dir=tmp_path,
+            section="main",
+        )
+    )
+
+    assert result == {"code": "OK", "data": {"items": []}}
+
+
+def test_route_fetch_keeps_primary_error_when_page_closes_during_unroute(
+    monkeypatch, tmp_path
+):
+    """主请求失败且页面关闭时，unroute 清理不得覆盖主异常。"""
+
+    class TargetClosedError(Exception):
+        """模拟 Playwright/Patchright 目标关闭异常。"""
+
+    class ClosingPage:
+        async def route(self, pattern, handler):
+            return None
+
+        def is_closed(self):
+            return False
+
+        async def unroute(self, pattern, handler):
+            raise TargetClosedError(
+                "Page.unroute: Target page, context or browser has been closed"
+            )
+
+    async def fail_trigger(*args, **kwargs):
+        raise SellerSpriteApiError(
+            "卖家精灵主请求失败",
+            api_code="ERR_BROWSER_FETCH_FAILED",
+        )
+
+    monkeypatch.setattr(worker_module, "_trigger_request", fail_trigger)
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=SellerSpriteAccount(
+            name="default",
+            username="user@example.com",
+            password="secret",
+        ),
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker._execute_route_fetch(
+                page=ClosingPage(),
+                method="POST",
+                endpoint="/v3/api/keyword/reverse",
+                payload={"asin": "B0TEST"},
+                root_dir=tmp_path,
+                section="main",
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_BROWSER_FETCH_FAILED"
 
 
 class FakePage:
@@ -1407,6 +1510,18 @@ def test_load_settings_reads_task_timeout(monkeypatch):
     assert settings.task_timeout_seconds == 300
 
 
+def test_load_settings_reads_task_lease_lifecycle(monkeypatch):
+    monkeypatch.setenv("OPSCLI_SELLER_SPRITE_TASK_LEASE_SECONDS", "90")
+    monkeypatch.setenv("OPSCLI_SELLER_SPRITE_TASK_HEARTBEAT_SECONDS", "15")
+    monkeypatch.setenv("OPSCLI_SELLER_SPRITE_SHUTDOWN_TIMEOUT_SECONDS", "8")
+
+    settings = load_settings()
+
+    assert settings.task_lease_seconds == 90
+    assert settings.task_heartbeat_seconds == 15
+    assert settings.shutdown_timeout_seconds == 8
+
+
 def test_browser_runtime_defaults_to_patchright():
     assert DEFAULT_BROWSER_RUNTIME == "patchright"
     assert SellerSpriteSettings().browser_runtime == "patchright"
@@ -1416,7 +1531,13 @@ def test_browser_runtime_defaults_to_patchright():
     assert SellerSpriteSettings().browser_idle_ttl_seconds == 1800
     assert SellerSpriteSettings().browser_max_lifetime_seconds == 21600
     assert DEFAULT_TASK_TIMEOUT_SECONDS == 600
+    assert DEFAULT_TASK_LEASE_SECONDS == 60
+    assert DEFAULT_TASK_HEARTBEAT_SECONDS == 20
+    assert DEFAULT_SHUTDOWN_TIMEOUT_SECONDS == 15
     assert SellerSpriteSettings().task_timeout_seconds == 600
+    assert SellerSpriteSettings().task_lease_seconds == 60
+    assert SellerSpriteSettings().task_heartbeat_seconds == 20
+    assert SellerSpriteSettings().shutdown_timeout_seconds == 15
 
 
 def test_load_async_playwright_uses_patchright_runtime(monkeypatch):

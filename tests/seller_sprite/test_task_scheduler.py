@@ -114,6 +114,30 @@ class HangingRunManager:
         await asyncio.Event().wait()
 
 
+class TargetClosedThenSuccessHarness:
+    """模拟首条浏览器目标关闭、后续任务正常执行。"""
+
+    def __init__(self):
+        self.started = []
+
+    def manager_factory(self, **kwargs):
+        harness = self
+
+        class TargetClosedError(Exception):
+            """模拟 Playwright/Patchright 目标关闭异常。"""
+
+        class Manager:
+            async def run(self, request):
+                harness.started.append(str(request.job_id))
+                if str(request.job_id) == "job-target-closed":
+                    raise TargetClosedError(
+                        "Page.unroute: Target page, context or browser has been closed"
+                    )
+                return _empty_result(kwargs["settings"], request)
+
+        return Manager()
+
+
 class ImmediateRunManager:
     def __init__(self, *, settings, account_provider, jwt=None, session_id=None):
         self.settings = settings
@@ -274,7 +298,7 @@ class ControlledMcpRunManager:
 
 
 class FailingFinishMcpStore(SellerSpriteTaskQueueStore):
-    def finish_mcp_run_success(self, job_id: str, row_count: int, export_payload: dict[str, str]) -> None:
+    def finish_task_and_mcp_run_if_current(self, **kwargs):
         raise RuntimeError("MCP 成功态写回失败")
 
 
@@ -284,11 +308,16 @@ class ProbeErrorStore(SellerSpriteTaskQueueStore):
 
 
 class FailingMcpCleanupStore(SellerSpriteTaskQueueStore):
-    def finish_mcp_run_success(self, job_id: str, row_count: int, export_payload: dict[str, str]) -> None:
-        raise RuntimeError("MCP 成功态写回失败")
+    def finish_task_and_mcp_run_if_current(self, **kwargs):
+        if kwargs.get("mcp_export_payload") is not None:
+            raise RuntimeError("MCP 成功态写回失败")
+        return super().finish_task_and_mcp_run_if_current(**kwargs)
 
-    def finish_mcp_run_failed(self, job_id: str, error_payload: dict[str, str]) -> None:
-        raise RuntimeError("MCP 失败态写回失败")
+    def fail_task_and_mcp_run_if_current(self, **kwargs):
+        committed = super().fail_task_and_mcp_run_if_current(**kwargs)
+        if kwargs["error_payload"].get("message") == "MCP 成功态写回失败":
+            raise RuntimeError("MCP 失败态写回失败")
+        return committed
 
 
 class MultiAccountProvider:
@@ -428,6 +457,97 @@ def test_scheduler_runs_tasks_in_fifo_order(tmp_path: Path):
     asyncio.run(scenario())
 
 
+def test_scheduler_recovers_expired_running_and_continues_queued(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(
+            output_dir=tmp_path,
+            task_lease_seconds=1,
+            task_heartbeat_seconds=0.1,
+        )
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        manager = ControlledRunManager(
+            settings=settings,
+            account_provider=DummyAccountProvider(),
+        )
+        store.enqueue(
+            request=_request("job-interrupted", "B07YRMT36L"),
+            queue_scope="seller_sprite",
+            root_dir=tmp_path / "job-interrupted",
+        )
+        store.enqueue(
+            request=_request("job-next", "B00TEST222"),
+            queue_scope="seller_sprite",
+            root_dir=tmp_path / "job-next",
+        )
+        store.claim_next(
+            queue_scope="seller_sprite",
+            worker_key="dead-worker",
+            assigned_account="default",
+            execution_owner="dead-owner",
+            lease_seconds=60,
+        )
+        with sqlite3.connect(tmp_path / "queue.sqlite3") as conn:
+            conn.execute(
+                "UPDATE seller_sprite_task_queue SET lease_expires_at = ? WHERE job_id = ?",
+                ("2000-01-01T00:00:00+00:00", "job-interrupted"),
+            )
+
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=DummyAccountProvider(),
+            manager_factory=lambda **kwargs: manager,
+            auto_start=False,
+        )
+        await scheduler.start()
+        await manager.first_started.wait()
+        recovered_running = scheduler.job_status("job-interrupted")
+        assert recovered_running["assignment_generation"] == 3
+        assert recovered_running["execution_owner"] == scheduler._session_owner_id
+
+        manager.allow_finish.set()
+        await _wait_for_state(scheduler, "job-next", "succeeded")
+        assert manager.started == ["job-interrupted", "job-next"]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_close_requeues_current_running_task(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path, shutdown_timeout_seconds=0.2)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        manager = ControlledRunManager(
+            settings=settings,
+            account_provider=DummyAccountProvider(),
+        )
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=DummyAccountProvider(),
+            manager_factory=lambda **kwargs: manager,
+            auto_start=False,
+        )
+        await scheduler.enqueue(_request("job-running", "B07YRMT36L"))
+        await scheduler.start()
+        await manager.first_started.wait()
+
+        generation = scheduler.job_status("job-running")["assignment_generation"]
+        await scheduler.close()
+        recovered = scheduler.job_status("job-running")
+
+        assert recovered["state"] == "queued"
+        assert recovered["retry_reason"] == "service_restart"
+        assert recovered["assignment_generation"] == generation + 1
+        assert recovered["execution_owner"] is None
+
+    asyncio.run(scenario())
+
+
 def test_scheduler_times_out_generic_task_and_continues_queue(tmp_path: Path):
     """通用任务超时后应失败、回收账号会话并继续消费下一条任务。"""
 
@@ -472,6 +592,45 @@ def test_scheduler_times_out_generic_task_and_continues_queue(tmp_path: Path):
         mcp_run = store.get_mcp_run("job-timeout")
         assert mcp_run["result_state"] == "failed"
         assert mcp_run["error_json"] == failed["error"]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_marks_target_closed_failed_and_continues_queue(tmp_path: Path):
+    """真实目标关闭错误应形成失败终态，且不能阻断后续任务。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        harness = TargetClosedThenSuccessHarness()
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=MultiAccountProvider(1),
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        await scheduler.enqueue(_request("job-target-closed", "B07YRMT36L"))
+        await scheduler.enqueue(_request("job-after-target-closed", "B00TEST222"))
+
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-target-closed", "failed")
+        succeeded = await _wait_for_state(
+            scheduler,
+            "job-after-target-closed",
+            "succeeded",
+        )
+
+        assert failed["error"] == {
+            "code": "TargetClosedError",
+            "message": "Page.unroute: Target page, context or browser has been closed",
+        }
+        assert succeeded["state"] == "succeeded"
+        assert harness.started == ["job-target-closed", "job-after-target-closed"]
         await scheduler.close()
 
     asyncio.run(scenario())
