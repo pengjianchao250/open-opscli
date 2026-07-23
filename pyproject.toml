@@ -33,7 +33,7 @@ dev = [
 ]
 
 [project.scripts]
-opscli = "opscli.cli:app"
+opscli = "opscli.cli:run"
 opscli-mcp = "opscli.mcp.server:run"
 
 [build-system]
