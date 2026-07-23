@@ -23,6 +23,7 @@ from typing import Any, Iterable, Sequence
 
 import agent_query_planner as planner
 import dataset_guidance
+import plan_integrity
 import scoped_dataset_reader
 import time_scope
 import typed_schema_linking as schema
@@ -172,6 +173,27 @@ FILTER_VALUE_MATCH_POLICY = {
     ),
 }
 
+_DEPARTMENT_NUMBER_RE = re.compile(r"(?:项目)?[零〇一二三四五六七八九十百\d]+部")
+_DEPARTMENT_LABEL_RE = re.compile(
+    r"部门\s*(?:为|是|=|：|:)?\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,30})"
+)
+_DEPARTMENT_ANALYSIS_RE = re.compile(
+    r"(?:分析|查询|获取|查看)\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,30}?)的(?:数据|情况)"
+)
+_CHINESE_DIGITS = {
+    "零": "0",
+    "〇": "0",
+    "一": "1",
+    "二": "2",
+    "三": "3",
+    "四": "4",
+    "五": "5",
+    "六": "6",
+    "七": "7",
+    "八": "8",
+    "九": "9",
+}
+
 # 图表 UUID 既可能是标准 UUID，也可能是平台生成的短标识。只有请求中明确出现
 # “图表/chart”语义时才启用该路由，避免把工单、任务等其他 UUID 误判为图表。
 CHART_REFERENCE_PATTERN = re.compile(
@@ -219,6 +241,41 @@ def _normalize(value: object) -> str:
 def _normalize_enum(value: str) -> str:
     """枚举值归一化：额外去除全部内部空白（"Amazon SC" 与 "amazonsc" 视为等价）。"""
     return "".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+def _normalize_department_value(value: str) -> str:
+    """部门值规范化：只做空白/NFKC/大小写与部门数字等价，不做子串扩展。"""
+    normalized = _normalize_enum(value)
+    match = re.fullmatch(r"(项目)?([零〇一二三四五六七八九十百\d]+)部", normalized)
+    if not match:
+        return normalized
+    prefix, number = match.groups()
+    if number in _CHINESE_DIGITS:
+        number = _CHINESE_DIGITS[number]
+    elif number == "十":
+        number = "10"
+    elif len(number) == 2 and number.startswith("十") and number[1] in _CHINESE_DIGITS:
+        number = "1" + _CHINESE_DIGITS[number[1]]
+    elif len(number) == 2 and number.endswith("十") and number[0] in _CHINESE_DIGITS:
+        number = _CHINESE_DIGITS[number[0]] + "0"
+    return f"{prefix or ''}{number}部"
+
+
+def _extract_requested_department_value(query: str) -> str:
+    """从明确部门表达或“分析某组织的数据”中提取单个部门筛选值。"""
+    number_match = _DEPARTMENT_NUMBER_RE.search(query)
+    if number_match:
+        return number_match.group(0)
+    label_match = _DEPARTMENT_LABEL_RE.search(query)
+    if label_match:
+        return label_match.group(1)
+    analysis_match = _DEPARTMENT_ANALYSIS_RE.search(query)
+    if not analysis_match:
+        return ""
+    candidate = analysis_match.group(1)
+    if re.fullmatch(r"(?:本|上|下)?(?:月|周|季度|年)|近\d+(?:天|日)", candidate):
+        return ""
+    return candidate
 
 
 def _extract_chart_uuids(query: str) -> list[str]:
@@ -881,8 +938,12 @@ def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]
             continue
         source = item.get("selection_source")
         label = _normalize(item.get("verbose_name"))
-        if source == "explicit" or (label and label in normalized_query):
+        if source in {"explicit", "semantic_alias"} or (
+            label and label in normalized_query
+        ):
             position = normalized_query.find(label) if label else len(normalized_query)
+            if position < 0:
+                position = len(normalized_query)
             selected.append((position, index, item))
     return [item for _position, _index, item in sorted(selected)]
 
@@ -1475,6 +1536,12 @@ def build_model_contract(
             scope_zh += f"；对比期 {comparison['label_zh']}：{comparison['start']} ~ {comparison['end']}"
         if scope.get("is_default"):
             scope_zh += "。注意：未识别到明确时间表述，这是默认口径，必须向用户披露并确认"
+            model_view["time_scope_recovery_zh"] = (
+                "默认近30天窗口仅在用户原文完全未含时间表述时成立。确认前先回看"
+                "用户原始请求：若原文含本月、上月、本周、近N天、指定月份或具体日期，"
+                "说明本次规划调用漏传了时间，必须携带用户原文或已锁定的绝对起止日期"
+                "重新运行规划器，禁止就时间范围向用户提问。"
+            )
         model_view["time_scope_zh"] = scope_zh
         model_view["time_resolution_zh"] = (
             f"时间由 Python 按 {scope['timezone']} 当前日期 {scope['reference_date']} 计算；"
@@ -1726,6 +1793,10 @@ def build_model_query_plan(
             )
             # 枚举来源标注：审计可区分自动枚举与人工回传
             contract["execution_ref"]["platform_enum_source"] = "auto_enum_service"
+    contract = _resolve_department_filter(contract, query, auto_enum=auto_enum)
+    # planned 合同生成后立即封存，执行器据此拒绝规划与执行之间的手工改写。
+    if contract.get("status") == "planned" and contract.get("query_mode") == "dataset_query":
+        plan_integrity.attach(contract)
     # 模型规划器体积守卫：新增投影（模板/组件/时间规划器）不得撑爆模型上下文
     if len(json.dumps(contract, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_OUTPUT_BYTES:
         raise RuntimeError("query_plan_output_too_large")
@@ -1795,6 +1866,148 @@ def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: f
     if values:
         print(f"[query_plan] 自动枚举取得平台值：{values}", file=sys.stderr)
     return values
+
+
+def _auto_enum_component_values(
+    component_table_id: object,
+    field_name: str,
+    *,
+    timeout_seconds: float = 7.0,
+) -> list[str]:
+    """枚举普通筛选组件字段；任何远端异常均返回空列表，由规划合同阻断扩大查询。"""
+    if component_table_id in (None, "") or not field_name:
+        return []
+    enum_json = json.dumps(
+        {
+            "tableId": component_table_id,
+            "dimensions": [{"field": field_name, "alias": field_name}],
+            "metrics": [],
+            "limit": 500,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    try:
+        result = subprocess.run(
+            [
+                "opscli",
+                "query",
+                "simple",
+                "--table-id",
+                str(component_table_id),
+                "--json",
+                enum_json,
+                "--run",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"[query_plan] 普通筛选组件枚举未完成：{error}", file=sys.stderr)
+        return []
+    if result.returncode != 0:
+        print(
+            f"[query_plan] 普通筛选组件枚举失败：{(result.stderr or result.stdout or '')[:200]}",
+            file=sys.stderr,
+        )
+        return []
+    try:
+        payload = json.loads(result.stdout[result.stdout.index("{") :])
+    except (ValueError, json.JSONDecodeError):
+        print("[query_plan] 普通筛选组件枚举返回无法解析", file=sys.stderr)
+        return []
+    if payload.get("success") is False:
+        print(
+            f"[query_plan] 普通筛选组件枚举业务失败：{str(payload.get('error'))[:200]}",
+            file=sys.stderr,
+        )
+        return []
+    rows: list = []
+    for path in (("data", "result", "data"), ("result", "data"), ("data", "data")):
+        node: Any = payload
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, list):
+            rows = node
+            break
+    return _deduplicate(
+        str(row.get(field_name, "")).strip()
+        for row in rows
+        if isinstance(row, dict) and row.get(field_name) not in (None, "")
+    )
+
+
+def _resolve_department_filter(contract: dict, query: str, *, auto_enum: bool) -> dict:
+    """把用户明确的部门值在当前账号组件中唯一等值解析并写入查询模板。"""
+    requested = _extract_requested_department_value(query)
+    if not requested or contract.get("status") != "planned":
+        return contract
+    execution = contract.get("execution_ref")
+    if not isinstance(execution, dict):
+        return contract
+    component = next(
+        (
+            item
+            for item in execution.get("filter_components") or []
+            if isinstance(item, dict) and item.get("field_name") == "dept_name"
+        ),
+        None,
+    )
+    if not component:
+        return contract
+
+    values = (
+        _auto_enum_component_values(
+            component.get("component_table_id"),
+            "dept_name",
+        )
+        if auto_enum
+        else []
+    )
+    if not values:
+        contract["status"] = "blocked"
+        contract["model_view"]["component_filter_state"] = "enum_unavailable"
+        contract["model_view"]["next_action"] = "retry_component_permission_enum"
+        contract["model_view"]["clarification_messages_zh"].append(
+            f"当前未能枚举部门“{requested}”的授权原值，已阻止扩大为全范围查询；请原样重试一次。"
+        )
+        execution.pop("query_template", None)
+        return contract
+
+    target = _normalize_department_value(requested)
+    matched = [value for value in values if _normalize_department_value(value) == target]
+    if len(matched) != 1:
+        contract["status"] = "clarify_required"
+        contract["model_view"]["component_filter_state"] = "clarify_required"
+        contract["model_view"]["next_action"] = "ask_user_for_component_filter"
+        contract["model_view"]["clarification_messages_zh"].append(
+            f"部门“{requested}”没有唯一完整等值的授权成员，请指定当前账号可见的准确部门名称。"
+        )
+        execution.pop("query_template", None)
+        return contract
+
+    template = execution.get("query_template")
+    if not isinstance(template, dict):
+        return contract
+    template.setdefault("filters", []).append(
+        {"field": "dept_name", "operator": "=", "value": matched[0]}
+    )
+    execution["resolved_component_filters"] = [
+        {
+            "field_name": "dept_name",
+            "label_zh": "部门",
+            "requested_value": requested,
+            "resolved_value": matched[0],
+            "match_strategy": "exact_normalized",
+        }
+    ]
+    contract["model_view"]["component_filter_state"] = "resolved"
+    contract["model_view"]["component_filter_disclosures_zh"] = [
+        f"部门按当前账号授权枚举完整等值匹配为“{matched[0]}”。"
+    ]
+    return contract
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

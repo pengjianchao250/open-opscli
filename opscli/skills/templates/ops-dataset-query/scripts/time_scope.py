@@ -36,6 +36,11 @@ _CN_NUM = {
 # 环比/上期 与 同比 的触发词
 _COMPARE_PREV_RE = re.compile(r"环比|上一个|上期|前一?周期|较上|与上|对比上")
 _COMPARE_YOY_RE = re.compile(r"同比|去年同期")
+_MONTH_RE = re.compile(
+    r"(?:(20\d{2})\s*年\s*)?(1[0-2]|[1-9])\s*月份?",
+    re.IGNORECASE,
+)
+_COMPARISON_CUE_RE = re.compile(r"对比期?|比较|与|较|vs\.?", re.IGNORECASE)
 
 
 def _num(text: str) -> int | None:
@@ -69,6 +74,54 @@ def _parsed_date(year: str, month: str, day: str) -> date | None:
         return date(int(year), int(month), int(day))
     except ValueError:
         return None
+
+
+def _month_window(year: int, month: int) -> tuple[date, date]:
+    """返回指定自然月首尾日期。"""
+    return date(year, month, 1), date(year, month, monthrange(year, month)[1])
+
+
+def _explicit_comparison(query: str, today: date) -> dict | None:
+    """解析用户明确给出的第二个对比日期范围或自然月。
+
+    显式对比优先于“环比”自动平移，避免“2026年6月与2026年5月对比”
+    被误算成全年或等长365天窗口。
+    """
+    cue = _COMPARISON_CUE_RE.search(query)
+    if not cue:
+        return None
+    comparison_text = query[cue.end() :]
+    absolute = re.search(
+        r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\s*"
+        r"(?:至|到|~|～|—|–)\s*"
+        r"(?:(20\d{2})[-/.年])?(\d{1,2})[-/.月](\d{1,2})日?",
+        comparison_text,
+    )
+    if absolute:
+        start = _parsed_date(absolute.group(1), absolute.group(2), absolute.group(3))
+        end = _parsed_date(
+            absolute.group(4) or absolute.group(1),
+            absolute.group(5),
+            absolute.group(6),
+        )
+        if start and end and start <= end:
+            return {
+                "type": "explicit_period",
+                "start": _fmt(start),
+                "end": _fmt(end),
+                "label_zh": "显式对比周期",
+            }
+    month_match = _MONTH_RE.search(comparison_text)
+    if not month_match:
+        return None
+    year = int(month_match.group(1) or today.year)
+    start, end = _month_window(year, int(month_match.group(2)))
+    return {
+        "type": "explicit_period",
+        "start": _fmt(start),
+        "end": _fmt(end),
+        "label_zh": "显式对比自然月",
+    }
 
 
 def _window(query: str, today: date) -> tuple[date, date, str, bool]:
@@ -111,6 +164,14 @@ def _window(query: str, today: date) -> tuple[date, date, str, bool]:
         quarter = current_quarter - 1 if current_quarter > 1 else 4
         start, end = _quarter_window(year, quarter)
         return start, end, f"上季度（{year}年第{quarter}季度）", False
+
+    # 指定自然月必须优先于自然年匹配，否则“2026年6月”会被截断成全年。
+    month_match = _MONTH_RE.search(query)
+    if month_match:
+        year = int(month_match.group(1) or today.year)
+        month = int(month_match.group(2))
+        start, end = _month_window(year, month)
+        return start, end, f"{year}年{month}月（自然月）", False
 
     # 指定自然年与本年/去年。
     year_match = re.search(r"(20\d{2})年(?:全年)?", query)
@@ -193,7 +254,10 @@ def parse(query: str, *, today: date | None = None) -> dict:
         "matched": not is_default,
         "comparison": None,
     }
-    if _COMPARE_YOY_RE.search(text):
+    explicit_comparison = _explicit_comparison(text, today)
+    if explicit_comparison:
+        result["comparison"] = explicit_comparison
+    elif _COMPARE_YOY_RE.search(text):
         result["comparison"] = {
             "type": "yoy",
             "start": _fmt(_clamp_last_year(start)),

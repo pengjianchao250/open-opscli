@@ -15,6 +15,7 @@ import unicodedata
 from pathlib import Path
 from typing import Iterable
 
+import field_semantics
 import scoped_dataset_reader
 
 
@@ -31,6 +32,11 @@ MAX_QUERY_CHARS = 4096
 MAX_REQUESTED_FIELDS = 32
 MAX_FIELD_TEXT_CHARS = 256
 ASCII_IDENTIFIER_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+DEPARTMENT_VALUE_RE = re.compile(
+    r"(?:项目)?[零〇一二三四五六七八九十百\d]+部"
+    r"|部门\s*(?:为|是|=|：|:)?\s*[\u4e00-\u9fffA-Za-z0-9_-]{2,30}"
+    r"|(?:分析|查询|获取|查看)\s*[\u4e00-\u9fffA-Za-z0-9_-]{2,30}?的(?:数据|情况)"
+)
 
 
 def _normalize(value: object) -> str:
@@ -208,12 +214,19 @@ def _select_fields(
     """
     normalized_query = _normalize(query)
     query_tokens = _tokens(normalized_query)
+    # 业务别名只在当前授权字段中兑现：例如用户说“销量”，表中存在
+    # order_qty 时选中该字段；字段不存在时不会凭映射创造新字段。
+    semantic_fields = field_semantics.requested_canonical_fields(normalized_query)
     ranked = [
         (
             (
                 1000
                 if field["field_name"] in explicit_names
-                else _field_score(field, normalized_query, query_tokens)
+                else (
+                    950
+                    if field["field_name"] in semantic_fields
+                    else _field_score(field, normalized_query, query_tokens)
+                )
             ),
             index,
             field,
@@ -242,7 +255,11 @@ def _select_fields(
             (
                 "explicit"
                 if field["field_name"] in explicit_names
-                else ("query" if score > 0 else "fallback")
+                else (
+                    "semantic_alias"
+                    if field["field_name"] in semantic_fields
+                    else ("query" if score > 0 else "fallback")
+                )
             ),
             output_mode,
         )
@@ -452,7 +469,13 @@ def _permission_scope(
         (
             (
                 1000
-                if row["column_name"] in explicit_names
+                if (
+                    row["column_name"] in explicit_names
+                    or (
+                        row["column_name"] == "dept_name"
+                        and DEPARTMENT_VALUE_RE.search(query)
+                    )
+                )
                 else _field_score(
                     {
                         "field_name": row["column_name"],

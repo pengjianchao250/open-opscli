@@ -1,0 +1,108 @@
+"""ops-dataset-query 低调用一体化执行入口测试。"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+SKILL_ROOT = (
+    Path(__file__).parents[2]
+    / "opscli"
+    / "skills"
+    / "templates"
+    / "ops-dataset-query"
+)
+SCRIPTS_DIR = SKILL_ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+import query_flow  # noqa: E402
+
+
+def test_skill_defaults_to_bounded_single_flow_entry():
+    """Skill 正常路径必须固定为一体化入口，并禁止重复探查与手工改计划。"""
+    text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "version: 1.3.14" in text
+    assert "正常路径工具调用预算" in text
+    assert "最多 3 次工具调用" in text
+    assert "非正常路径最多 7 次" in text
+    assert 'python3 scripts/query_flow.py "$USER_REQUEST"' in text
+    assert "禁止为了“确认环境/字段/语法”调用 `opscli query catalog`" in text
+    assert "禁止手工修改 plan" in text
+    assert "`query_plan.py` + `run_query.py` 仅保留给维护者复现与审计" in text
+
+
+def test_query_flow_plans_and_executes_once(monkeypatch, tmp_path: Path):
+    """无歧义路径应各调用一次规划器与执行器，且不传手工 payload。"""
+    calls = {"plan": 0, "run": 0}
+    plan = {
+        "contract": "query_plan_model_contract_v2",
+        "query_mode": "dataset_query",
+        "data_state": "ready",
+        "metadata_version": "1.3.14",
+        "status": "planned",
+        "model_view": {},
+        "answer_contract": {},
+        "execution_ref": {
+            "user_visible": False,
+            "table_id": "1",
+            "query_template": {"tableId": "1", "dimensions": [], "metrics": []},
+        },
+    }
+
+    def fake_plan(*_args, **_kwargs):
+        calls["plan"] += 1
+        return plan
+
+    def fake_run(argv):
+        calls["run"] += 1
+        assert "--plan-file" in argv
+        assert "--json" not in argv
+        assert "--json-file" not in argv
+        return 0
+
+    monkeypatch.setattr(query_flow.query_plan, "build_model_query_plan", fake_plan)
+    monkeypatch.setattr(query_flow.run_query, "main", fake_run)
+
+    exit_code = query_flow.execute_flow(
+        "查询2026年6月销量",
+        result_dir=tmp_path,
+    )
+
+    assert exit_code == 0
+    assert calls == {"plan": 1, "run": 1}
+
+
+def test_query_flow_returns_clarification_without_execution(
+    monkeypatch, capsys, tmp_path: Path
+):
+    """澄清态只返回规划合同，不得尝试正式查询。"""
+    plan = {
+        "contract": "query_plan_model_contract_v2",
+        "query_mode": "dataset_query",
+        "data_state": "ready",
+        "metadata_version": "1.3.14",
+        "status": "clarify_required",
+        "model_view": {"next_action": "ask_user_for_clarification"},
+        "answer_contract": {},
+        "execution_ref": {"user_visible": False},
+    }
+    monkeypatch.setattr(
+        query_flow.query_plan,
+        "build_model_query_plan",
+        lambda *_args, **_kwargs: plan,
+    )
+
+    def must_not_run(_argv):
+        raise AssertionError("澄清态不得调用执行器")
+
+    monkeypatch.setattr(query_flow.run_query, "main", must_not_run)
+
+    exit_code = query_flow.execute_flow("查询运营数据", result_dir=tmp_path)
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert output["status"] == "clarify_required"

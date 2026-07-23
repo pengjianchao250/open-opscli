@@ -13,6 +13,7 @@ import json
 import re
 from pathlib import Path
 
+import field_semantics
 import scoped_metadata_index
 import typed_schema_linking as schema
 
@@ -394,7 +395,27 @@ def _default_dataset_candidate(
 
     profile = matches[0]
     card = profile["card"]
-    if not domains.issubset(profile["domains"]):
+    # 即时综合的说明通常只写“即时综合数据集”，真实覆盖范围体现在字段卡片。
+    # 默认选表仍须逐领域找到字段证据，不能仅因名称是默认表就放宽。
+    card_field_terms = {
+        _normalize(term)
+        for key in FIELD_TERM_KEYS
+        for term in card.get(key, [])
+    }
+    covered_domains = set(profile["domains"])
+    for domain in domains - covered_domains:
+        record = rules["domains"][domain]
+        patterns = [
+            _normalize(item)
+            for key in ("terms", "description_patterns")
+            for item in record[key]
+        ]
+        if any(
+            pattern and any(pattern in field_term for field_term in card_field_terms)
+            for pattern in patterns
+        ):
+            covered_domains.add(domain)
+    if not domains.issubset(covered_domains):
         return None
 
     # 平台可由查询组件承接，实际可用值仍由 query_plan 权限枚举收敛。
@@ -407,8 +428,10 @@ def _default_dataset_candidate(
             continue
         return None
 
-    card_metric_terms = {_normalize(item) for item in card["metric_terms"]}
-    if any(_normalize(metric) not in card_metric_terms for metric in metrics):
+    if any(
+        not field_semantics.metric_term_is_covered(metric, card["metric_terms"])
+        for metric in metrics
+    ):
         return None
 
     return {
