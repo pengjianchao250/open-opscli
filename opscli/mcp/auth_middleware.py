@@ -37,11 +37,26 @@ try:
 except ImportError:
     _CLIENT_DISCONNECT_ERRORS = ()
 
-# 远程 API Key 校验缓存时间：缩短轮询链路耗时，同时保留较快的吊销生效窗口。
+# 远程 API Key 校验结果缓存时长（新鲜期）：此窗口内直接复用上次成功结果，降低轮询链路耗时。
 _VERIFY_CACHE_TTL_SECONDS = 60
 
-# API Key 校验请求超时：不能接近 ChatGPT 外层 MCP 调用超时，否则工具尚未执行就会失败。
-_VERIFY_REQUEST_TIMEOUT_SECONDS = 3
+# 过期缓存宽限时长（stale-on-error）：新鲜期结束后、此窗口内，若远程校验因超时/连接/5xx 等
+# 临时故障失败，则降级复用最后一次成功结果放行，避免后端抖动导致有效 Key 被批量误判 401。
+# 仅对"临时故障"生效；后端明确返回无效（valid=false / 401 / 403）时不宽限，保证吊销及时生效。
+_VERIFY_STALE_GRACE_SECONDS = 300
+
+# API Key 校验连接超时：仅覆盖 TCP+TLS 建连阶段，建连慢往往是网络/端口资源问题。
+_VERIFY_CONNECT_TIMEOUT_SECONDS = 3.0
+
+# API Key 校验读取超时：覆盖后端处理+响应阶段，略放宽以容忍后端瞬时变慢，
+# 但整体仍需远低于 ChatGPT 外层 MCP 调用超时，否则工具尚未执行就会失败。
+_VERIFY_READ_TIMEOUT_SECONDS = 5.0
+
+# 共享 httpx 连接池上限：复用长连接，杜绝"每请求新建 TCP+TLS 连接"导致的
+# 临时端口耗尽 / TIME_WAIT 堆积（该问题曾造成校验链路整体卡死、必须重启才恢复）。
+_VERIFY_MAX_CONNECTIONS = 20
+_VERIFY_MAX_KEEPALIVE = 10
+_VERIFY_KEEPALIVE_EXPIRY_SECONDS = 30.0
 
 
 class ApiKeyAuthMiddleware:
@@ -72,7 +87,11 @@ class ApiKeyAuthMiddleware:
         self.app = app
         self._api_key = api_key
         self._auth_verify_url = auth_verify_url
+        # 缓存结构：api_key -> (last_verified_ts, user_data)
+        # last_verified_ts 为最近一次远程校验成功的时间戳，用于计算新鲜期与宽限期。
         self._verify_cache: dict[str, tuple[float, dict]] = {}
+        # 共享 httpx.AsyncClient（懒加载），带连接池，供所有远程校验请求复用。
+        self._client: Any = None
 
         if auth_verify_url:
             _logger.info("MCP Server 运行在远程校验模式，校验地址: %s", auth_verify_url)
@@ -203,46 +222,99 @@ class ApiKeyAuthMiddleware:
                 except BaseException:
                     pass
 
+    def _get_client(self) -> Any:
+        """获取共享的 httpx.AsyncClient（懒加载）。
+
+        中间件在进程生命周期内长期存活，因此复用同一个带连接池的 client，
+        避免每次远程校验都新建 TCP+TLS 连接造成的临时端口耗尽 / TIME_WAIT 堆积
+        （该问题曾导致校验链路整体卡死、必须重启服务才能恢复）。
+        """
+        if self._client is None:
+            import httpx
+
+            self._client = httpx.AsyncClient(
+                # 拆分连接/读取超时：建连阶段短、读取阶段略宽，兼顾快速失败与容忍后端瞬时变慢
+                timeout=httpx.Timeout(
+                    _VERIFY_READ_TIMEOUT_SECONDS,
+                    connect=_VERIFY_CONNECT_TIMEOUT_SECONDS,
+                ),
+                # 连接池：控制并发连接与长连接复用，防止连接资源被短连接打满
+                limits=httpx.Limits(
+                    max_connections=_VERIFY_MAX_CONNECTIONS,
+                    max_keepalive_connections=_VERIFY_MAX_KEEPALIVE,
+                    keepalive_expiry=_VERIFY_KEEPALIVE_EXPIRY_SECONDS,
+                ),
+            )
+        return self._client
+
     async def _verify_remote(self, api_key: str | None) -> dict | None:
         """调用 OPS 后端远程校验 API Key。
 
-        将 API Key 同时作为 query param 和 header 传参，
-        兼容后端不同接入方式。
+        将 API Key 同时作为 query param 和 header 传参，兼容后端不同接入方式。
+
+        缓存与降级策略：
+        - 新鲜期（_VERIFY_CACHE_TTL_SECONDS）内：直接复用上次成功结果，不回源。
+        - 回源遇到临时故障（超时/连接错误/5xx）：若存在宽限期
+          （_VERIFY_STALE_GRACE_SECONDS）内的历史成功结果，降级放行，
+          避免后端抖动导致有效 Key 被批量误判为 401。
+        - 后端明确判定无效（HTTP 200 且 valid=false，或 401/403）：视为权威结果，
+          清除缓存并返回 None，保证吊销及时生效（不走宽限）。
 
         Args:
             api_key: 待校验的明文 API Key
 
         Returns:
-            校验通过时返回 OPS 后端响应的 user 信息 dict
-            校验失败时返回 None
+            校验通过时返回 OPS 后端响应的 user 信息 dict；失败时返回 None。
         """
         if not api_key or not self._auth_verify_url:
             return None
+
         now = time.time()
         cached = self._verify_cache.get(api_key)
-        if cached and cached[0] > now:
-            # 同一 API Key 在短时间内会连续轮询，直接复用校验结果降低整体延迟。
+        if cached and (now - cached[0]) < _VERIFY_CACHE_TTL_SECONDS:
+            # 新鲜期内：同一 API Key 会连续高频轮询，直接复用结果降低整体延迟。
             return cached[1]
-        try:
-            import httpx
 
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    self._auth_verify_url,
-                    params={"api_key": api_key},
-                    headers={"X-MCP-API-Key": api_key, "X-Opscli-Version": __version__},
-                    timeout=_VERIFY_REQUEST_TIMEOUT_SECONDS,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("valid"):
-                        self._verify_cache[api_key] = (
-                            now + _VERIFY_CACHE_TTL_SECONDS,
-                            data,
-                        )
-                        return data
+        # transient_failure 标记本次回源是否为"临时故障"（可宽限降级），
+        # 与"后端权威判定无效"（不可宽限）区分开。
+        transient_failure = False
+        failure_desc = ""
+        try:
+            client = self._get_client()
+            resp = await client.get(
+                self._auth_verify_url,
+                params={"api_key": api_key},
+                headers={"X-MCP-API-Key": api_key, "X-Opscli-Version": __version__},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("valid"):
+                    # 校验成功：刷新缓存时间戳
+                    self._verify_cache[api_key] = (now, data)
+                    return data
+                # 200 但 valid=false：Key 已被吊销/无效，权威结果，清缓存且不宽限
+                self._verify_cache.pop(api_key, None)
+                return None
+            if resp.status_code in (401, 403):
+                # 后端明确拒绝：权威结果，清缓存且不宽限
+                self._verify_cache.pop(api_key, None)
+                return None
+            # 其他状态码（尤其 5xx）视为后端临时故障，进入宽限降级判断
+            transient_failure = True
+            failure_desc = f"HTTP {resp.status_code}"
         except Exception as exc:
-            _logger.warning("远程校验 API Key 失败: %s", exc)
+            # 超时/连接类异常的 str(exc) 常为空，这里记录异常类型名以便定性排查
+            transient_failure = True
+            failure_desc = f"{type(exc).__name__}: {exc!r}"
+
+        if transient_failure:
+            if cached and (now - cached[0]) < _VERIFY_STALE_GRACE_SECONDS:
+                # 临时故障 + 宽限期内有历史成功结果：降级放行，避免批量误判 401
+                _logger.warning(
+                    "远程校验 API Key 临时失败(%s)，命中过期缓存宽限放行", failure_desc
+                )
+                return cached[1]
+            _logger.warning("远程校验 API Key 失败且无可用缓存宽限: %s", failure_desc)
         return None
 
     async def _send_401(self, _scope: Scope, send: Send, reason: str = "invalid_api_key") -> None:
