@@ -1,0 +1,62 @@
+{
+  "scenario_id": "aba-reverse",
+  "title": "出单词反查",
+  "web_route": "/v2/aba/reverse/search",
+  "export_api": {
+    "method": "GET",
+    "endpoint": "/v2/aba/reverse/export",
+    "response_type": "xlsx",
+    "query_fields": [
+      "station",
+      "table",
+      "asin",
+      "order.field",
+      "order.desc",
+      "conversionType",
+      "loadVariations",
+      "reverseType",
+      "monthlyTable",
+      "textareaValue"
+    ]
+  },
+  "required_params": [
+    "asin_or_amazon_product_url"
+  ],
+  "query_conditions": {
+    "asins": {
+      "minimum": 1,
+      "maximum": 20,
+      "accepts": [
+        "ASIN",
+        "Amazon product URL",
+        "list",
+        "whitespace or comma separated text"
+      ]
+    },
+    "period_type": {
+      "field": "reverseType",
+      "enum": [
+        "W",
+        "M"
+      ]
+    }
+  },
+  "result": {
+    "source": "official_xlsx",
+    "transform": false,
+    "auto_pagination": false
+  },
+  "official_template": {
+    "captured_workbook_name": "ABA-Reverse-B00000JBNX-US-20260723.xlsx",
+    "captured_workbook_path": "output/ABA-Reverse-B00000JBNX-US-20260723.xlsx",
+    "headers_file": "official-headers.json",
+    "captured_main_sheet": "ABA-Reverse-US-B00000JBNX",
+    "captured_notes_sheet": "Notes",
+    "header_count": 12,
+    "row_count": 183
+  },
+  "capture_evidence": {
+    "captured_at": "2026-07-23",
+    "sample_request": "sample-request.json"
+  }
+}

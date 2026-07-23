@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import math
 import re
+from datetime import datetime, timedelta
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 
@@ -516,6 +517,52 @@ def make_association_traffic_payload(input_data: dict[str, Any]) -> dict[str, An
     }
 
 
+def make_aba_reverse_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造出单词反查官方 Excel 导出参数。"""
+    asins = _aba_reverse_asins(
+        input_data.get("asins")
+        or input_data.get("asin")
+        or input_data.get("textareaValue")
+        or input_data.get("keywordOrAsin")
+        or input_data.get("q")
+    )
+    reverse_type = _aba_reverse_type(input_data)
+    if reverse_type == "W":
+        period = input_data.get("table") or input_data.get("period") or input_data.get("month")
+        table = _aba_week_table(period)
+        monthly_table = _aba_month_table(
+            input_data.get("monthlyTable") or _previous_complete_month(table)
+        )
+    else:
+        period = input_data.get("monthlyTable") or input_data.get("period") or input_data.get("month")
+        monthly_table = _aba_month_table(period)
+        table = monthly_table
+    order_desc_value = (
+        input_data["orderDesc"]
+        if "orderDesc" in input_data
+        else input_data.get("order.desc", False)
+    )
+    textarea_value = ",".join(asins)
+    return {
+        "station": _market(input_data, default="US"),
+        "table": table,
+        "asin": asins[0],
+        "order.field": str(
+            input_data.get("orderField")
+            or input_data.get("order.field")
+            or "searchRank"
+        ),
+        "order.desc": str(order_desc(order_desc_value)).lower(),
+        "conversionType": str(input_data.get("conversionType") or ""),
+        "loadVariations": str(
+            truthy(input_data.get("loadVariations"), default=False)
+        ).lower(),
+        "reverseType": reverse_type,
+        "monthlyTable": monthly_table,
+        "textareaValue": textarea_value,
+    }
+
+
 def make_keyword_reverse_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造关键词反查 payload。"""
     limit = _int(input_data.get("limit") or input_data.get("size") or input_data.get("pageSize"), 100)
@@ -605,6 +652,10 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
         return "https://www.sellersprite.com/v3/keyword-miner/"
     if scenario == "keyword-research":
         return f"https://www.sellersprite.com/v2/keyword-research?{urlencode(_flatten_query(payload))}"
+    if scenario == "aba-reverse":
+        query = dict(payload)
+        query["asin"] = ""
+        return f"https://www.sellersprite.com/v2/aba/reverse/search?{urlencode(_flatten_query(query))}"
     if scenario == "association-traffic":
         return f"https://www.sellersprite.com/v3/relation-keyword?{urlencode(_flatten_query(payload))}"
     if scenario == "keyword-reverse":
@@ -779,6 +830,102 @@ def split_association_traffic_asins(value: Any) -> list[str]:
             if asin and asin not in asins:
                 asins.append(asin)
     return asins
+
+
+def _aba_reverse_asins(value: Any) -> list[str]:
+    """从 ASIN 或 Amazon 产品链接中提取并去重 ASIN。"""
+    raw_values = value if isinstance(value, (list, tuple, set)) else [value]
+    asins: list[str] = []
+    invalid_values: list[str] = []
+    for raw_value in raw_values:
+        for part in re.split(r"[\s,，;；]+", str(raw_value or "")):
+            text = part.strip()
+            if not text:
+                continue
+            asin = _asin_from_product_input(text)
+            if not asin:
+                invalid_values.append(text)
+                continue
+            if asin not in asins:
+                asins.append(asin)
+    if invalid_values:
+        raise SellerSpriteConfigError(
+            f"aba-reverse ASIN 或产品链接格式无效：{', '.join(invalid_values)}"
+        )
+    if not asins:
+        raise SellerSpriteConfigError("aba-reverse 至少需要 1 个 ASIN 或 Amazon 产品链接")
+    if len(asins) > 20:
+        raise SellerSpriteConfigError("aba-reverse 最多支持 20 个 ASIN")
+    return asins
+
+
+def _asin_from_product_input(value: str) -> str:
+    text = value.strip()
+    upper = text.upper()
+    if re.fullmatch(r"[A-Z0-9]{10}", upper):
+        return upper
+    candidate = text if "://" in text else f"https://{text}"
+    parsed = urlparse(candidate)
+    hostname = (parsed.hostname or "").lower()
+    if not re.fullmatch(r"(?:[a-z0-9-]+\.)*amazon\.[a-z.]+", hostname):
+        return ""
+    match = re.search(r"/(?:dp|gp/product|product)/([A-Z0-9]{10})(?:[/?]|$)", parsed.path, re.I)
+    return match.group(1).upper() if match else ""
+
+
+def _aba_reverse_type(input_data: dict[str, Any]) -> str:
+    value = str(
+        input_data.get("reverseType")
+        or input_data.get("periodType")
+        or input_data.get("cycle")
+        or ""
+    ).strip().lower()
+    aliases = {
+        "w": "W",
+        "week": "W",
+        "weekly": "W",
+        "每周": "W",
+        "m": "M",
+        "month": "M",
+        "monthly": "M",
+        "每月": "M",
+    }
+    if value:
+        reverse_type = aliases.get(value)
+        if not reverse_type:
+            raise SellerSpriteConfigError(f"aba-reverse 不支持周期类型：{value}")
+        return reverse_type
+    period = str(input_data.get("period") or input_data.get("month") or "").strip()
+    return "M" if re.fullmatch(r"(?:ara_)?\d{4}-?\d{2}", period) else "W"
+
+
+def _aba_week_table(value: Any) -> str:
+    text = str(value or "").strip()
+    normalized = text.removeprefix("ara_").replace("-", "")
+    if re.fullmatch(r"\d{8}", normalized):
+        return f"ara_{normalized}"
+    label = re.fullmatch(r"(\d{4})第\d+周\([^~]*~(\d{2})/(\d{2})\)", text)
+    if label:
+        return f"ara_{label.group(1)}{label.group(2)}{label.group(3)}"
+    raise SellerSpriteConfigError(
+        "aba-reverse 每周周期必须为 YYYY-MM-DD、YYYYMMDD、ara_YYYYMMDD 或官网周标签"
+    )
+
+
+def _aba_month_table(value: Any) -> str:
+    text = str(value or "").strip()
+    normalized = text.removeprefix("ara_").replace("-", "")
+    if re.fullmatch(r"\d{6}", normalized):
+        return f"ara_{normalized}"
+    raise SellerSpriteConfigError(
+        "aba-reverse 每月周期必须为 YYYY-MM、YYYYMM 或 ara_YYYYMM"
+    )
+
+
+def _previous_complete_month(week_table: str) -> str:
+    week_end = datetime.strptime(week_table.removeprefix("ara_"), "%Y%m%d")
+    previous_month = week_end.replace(day=1) - timedelta(days=1)
+    return previous_month.strftime("%Y%m")
 
 
 def _query_text(value: Any) -> str:

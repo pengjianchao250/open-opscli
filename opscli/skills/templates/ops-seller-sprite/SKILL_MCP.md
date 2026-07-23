@@ -42,7 +42,7 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 ## 普通任务编排
 
 1. SellerSprite Tool 会根据远端 MCP `api_key` 自动确保隔离 OPS 登录态；需要提前诊断认证时可显式调用一次 `auth_mcp_login`，但不要向业务 Tool 传 `session_id/jwt`。
-2. 根据参数手册确认普通场景和必填参数，只调用一次 `seller_sprite_run`。新增的 `keyword-research` 和 `association-traffic` 在执行前必须先确认 `seller_sprite_scenarios` 已返回对应场景；Skill 与服务端版本可能不同，未暴露时不得提交或改投其他场景。不得调用内部 start helper，也不要传 `mode`、`browser-route`、`api-direct` 或 `async_mode`。
+2. 根据参数手册确认普通场景和必填参数，只调用一次 `seller_sprite_run`。新增的 `keyword-research`、`association-traffic` 和 `aba-reverse` 在执行前必须先确认 `seller_sprite_scenarios` 已返回对应场景；Skill 与服务端版本可能不同，未暴露时不得提交或改投其他场景。不得调用内部 start helper，也不要传 `mode`、`browser-route`、`api-direct` 或 `async_mode`。
 3. `seller_sprite_run` 会立即持久化入队。保存每个返回的 `job_id`，不要等待 `run` 自身给出最终结果。
 4. 只有一个 pending 普通任务时，调用 `seller_sprite_job_status(job_id, wait_seconds=30)`。
 5. 有多个 pending 普通任务时，优先每个窗口调用一次 `seller_sprite_jobs_status(job_ids, wait_seconds=30)`，不要逐个轮询。
@@ -106,11 +106,12 @@ Listing Analysis 必须使用 submit/status/result 专用流程，不属于普�
 - `seller_sprite_run` 顶层存在 `quota` 时，普通用户补充：`今日额度：已用 used / limit，剩余 remaining，重置时间 reset_at`；`unlimited=true` 时改为说明“当前用户使用专属账号，不受每日额度限制”，不要拼接空额度字段。
 - 未绑定专属账号时，`seller_sprite_run` 和 `seller_sprite_listing_analysis_submit` 消耗次数；专属账号用户不计次。场景、额度、普通单/批状态、导出以及 Listing Analysis status/result 不消耗次数。
 - 不要在最终回复中打印完整工具参数、原始 JSON、内部长路径或账号信息。
-- `row_count=0` 时，明确提示核对站点、ASIN、关键词、类目或筛选条件是否过窄。
+- 一般场景 `row_count=0` 时，明确提示核对查询条件；`aba-reverse` 例外，其官方 XLSX 不做本地解析，`row_count=0` 不代表工作簿为空，应以导出文件为准。
 - `keyword-research` 导出应按卖家精灵官方关键词选品工作簿对齐；实际文件是 `.xlsx`，若请求参数仍使用兼容值 `xls`，回复中以工具返回的真实文件名和格式为准。
 - `keyword-research` 默认使用 `page=1/page_size=100`，只获取第一页后完成任务，不自动请求后续分页。
 - `association-traffic` 固定查询全部变体，只获取第一页 100 条即完成任务，不自动请求后续分页；导出按官网关联流量 56 列主表格式对齐，只生成业务主表，不生成官网 `Notes` 页。
 - `association-traffic` 固定使用 `page_size=100`；browser-route 必须把 ASIN 逐个写入页面输入框并按回车，点击“立即查询”后再点击“用全部变体查询”；不得用静默接口 fallback 冒充已完成页面交互。若接口返回固定 20 条的游客数据，先恢复登录态并重试一次。
+- `aba-reverse` 必须提供具体周/月周期和 1—20 个 ASIN 或 Amazon 产品链接，只使用 `xls` / `xlsx` 导出。后端直接下载并原样保存官网 `/v2/aba/reverse/export` 返回的完整 XLSX，不截取、解析或重建工作簿。
 
 终态成功模板：
 

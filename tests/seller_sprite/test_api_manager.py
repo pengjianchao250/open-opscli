@@ -81,6 +81,15 @@ class KeywordResearchApiClient(DummyApiClient):
         return f'<table id="table-condition-search"><tbody><tr>{cells}</tr></tbody></table>'
 
 
+class AbaReverseApiClient(DummyApiClient):
+    calls = []
+    content = b"PK\x03\x04official-xlsx-content"
+
+    async def get_bytes(self, url, params, *, referer=None):
+        self.calls.append({"url": url, "params": dict(params), "referer": referer})
+        return self.content, "ABA-Reverse-B00000JBNX-US-20260723.xlsx"
+
+
 class AssociationTrafficApiClient(DummyApiClient):
     """模拟存在多页的关联流量接口，验证 Manager 只请求第一页。"""
 
@@ -299,6 +308,117 @@ def test_manager_runs_keyword_research_as_get_page(monkeypatch, tmp_path: Path):
     assert KeywordResearchApiClient.calls[0]["referer"].startswith(
         "https://www.sellersprite.com/v2/keyword-research?"
     )
+
+
+def test_manager_saves_official_aba_reverse_xlsx_without_rebuilding(monkeypatch, tmp_path: Path):
+    AbaReverseApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", AbaReverseApiClient)
+    settings = SellerSpriteSettings(
+        output_dir=tmp_path,
+        username=None,
+        password=None,
+        default_mode="api-direct",
+    )
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="aba-reverse",
+                site="US",
+                period="2026-07-18",
+                params={"asin": "B00000JBNX", "reverseType": "W"},
+                job_id="job-aba-reverse",
+            )
+        )
+    )
+
+    assert result.row_count == 0
+    assert result.data == []
+    assert result.export is not None
+    assert result.export.filename == "ABA-Reverse-B00000JBNX-US-20260723.xlsx"
+    assert Path(result.export.path).read_bytes() == AbaReverseApiClient.content
+    assert len(AbaReverseApiClient.calls) == 1
+    call = AbaReverseApiClient.calls[0]
+    assert call["url"] == "/v2/aba/reverse/export"
+    assert call["params"]["asin"] == "B00000JBNX"
+    assert call["params"]["table"] == "ara_20260718"
+    assert call["params"]["monthlyTable"] == "ara_202606"
+    assert call["referer"].startswith(
+        "https://www.sellersprite.com/v2/aba/reverse/search?"
+    )
+
+
+def test_manager_keeps_browser_route_aba_reverse_xlsx_unchanged(monkeypatch, tmp_path: Path):
+    content = b"PK\x03\x04browser-official-xlsx"
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        output_path = kwargs["root_dir"] / "official-export.xlsx"
+        output_path.write_bytes(content)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "official_xlsx_path": str(output_path),
+                    "official_filename": "ABA-Reverse-B00000JBNX-US.xlsx",
+                    "content_length": len(content),
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(
+        api_manager_module,
+        "_run_browser_route_request",
+        fake_browser_route_request,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="aba-reverse",
+                site="US",
+                period="2026-07-18",
+                params={"asin": "B00000JBNX"},
+                job_id="job-aba-browser-route",
+            )
+        )
+    )
+
+    assert result.export is not None
+    assert result.export.filename == "ABA-Reverse-B00000JBNX-US.xlsx"
+    assert Path(result.export.path).read_bytes() == content
+    assert len(calls) == 1
+    assert calls[0]["scenario_method"] == "GET_XLSX"
+    assert calls[0]["endpoint"] == "/v2/aba/reverse/export"
+
+
+def test_manager_rejects_json_export_for_aba_reverse(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", AbaReverseApiClient)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="api-direct"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    with pytest.raises(SellerSpriteConfigError, match="仅支持 xls 或 xlsx"):
+        _run(
+            manager.run(
+                SellerSpriteScenarioRequest(
+                    scenario="aba-reverse",
+                    site="US",
+                    period="2026-07-18",
+                    params={"asin": "B00000JBNX"},
+                    export_format="json",
+                )
+            )
+        )
 
 
 def test_manager_returns_only_first_association_traffic_page(monkeypatch, tmp_path: Path):

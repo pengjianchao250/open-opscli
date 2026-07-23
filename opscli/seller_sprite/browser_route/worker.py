@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.api.keyword_research import parse_keyword_research_html
@@ -66,6 +66,7 @@ XVFB_DISPLAY_CANDIDATES = range(99, 110)
 TASK_INTERVAL_RANGE_SECONDS = (1.0, 5.0)
 NETWORK_COOLDOWN_RANGE_SECONDS = (3.0, 5.0)
 RISK_COOLDOWN_RANGE_SECONDS = (15.0, 20.0)
+WINDOWS_COMPAT_EXPORT_PATH_LIMIT = 240
 
 _AUTO_XVFB_PROCESS: subprocess.Popen | None = None
 _AUTO_XVFB_DISPLAY: str | None = None
@@ -1101,6 +1102,28 @@ class SellerSpriteBrowserRouteWorker:
         request: BrowserRouteRequest | None = None,
     ) -> dict[str, Any]:
         normalized_method = method.upper()
+        if normalized_method == "GET_XLSX":
+            stage_started_at = time.monotonic()
+            response = await _request_with_browser_context(
+                page,
+                endpoint=endpoint,
+                method=normalized_method,
+                payload=payload,
+            )
+            parsed = await _parse_response(
+                response,
+                method=normalized_method,
+                root_dir=root_dir,
+                section=section,
+            )
+            _record_timing(
+                timings,
+                request,
+                f"route_fetch.{section}.context_xlsx",
+                stage_started_at,
+                status=getattr(response, "status", None),
+            )
+            return parsed
         pattern = _route_pattern(endpoint)
 
         async def _handle(route) -> None:
@@ -1852,7 +1875,7 @@ async def _request_with_browser_context(page, *, endpoint: str, method: str, pay
     """使用浏览器上下文请求接口，复用当前 profile 的 cookie，避免页面内 fetch 被拦截。"""
     headers = _context_request_headers(page.url, method=method)
     try:
-        if method in {"GET", "GET_PAGE", "PAGE_CAPTURE"}:
+        if method in {"GET", "GET_PAGE", "GET_XLSX", "PAGE_CAPTURE"}:
             return await page.context.request.get(
                 _url_with_query(endpoint, payload),
                 headers=headers,
@@ -1902,6 +1925,11 @@ def _context_request_headers(referer: str, *, method: str) -> dict[str, str]:
         headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         if method == "FORM":
             headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif method == "GET_XLSX":
+        headers["Accept"] = (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+            "application/octet-stream,*/*"
+        )
     elif method != "GET":
         headers["Content-Type"] = "application/json;charset=UTF-8"
     return headers
@@ -2246,6 +2274,54 @@ async def _find_blank_point(page) -> dict[str, float]:
 
 
 async def _parse_response(response, *, method: str, root_dir: Path, section: str) -> dict[str, Any]:
+    if method == "GET_XLSX":
+        content = await response.body()
+        headers = getattr(response, "headers", {}) or {}
+        content_type = str(headers.get("content-type") or "").lower()
+        text_excerpt = (
+            content[:1000].decode("utf-8", errors="replace")
+            if "text" in content_type or "html" in content_type or "json" in content_type
+            else ""
+        )
+        if _looks_like_session_expired(response.url, response.status, text_excerpt):
+            raise SellerSpriteApiError(
+                "卖家精灵浏览器登录态失效",
+                status_code=response.status,
+                response_excerpt=text_excerpt,
+                api_code="ERR_GLOBAL_SESSION_EXPIRED",
+            )
+        if response.status >= 400:
+            raise SellerSpriteApiError(
+                "卖家精灵浏览器文件下载失败",
+                status_code=response.status,
+                response_excerpt=text_excerpt or f"content_type={content_type} content_length={len(content)}",
+            )
+        if not content.startswith(b"PK"):
+            raise SellerSpriteApiError(
+                "卖家精灵浏览器文件下载未返回 XLSX",
+                status_code=response.status,
+                response_excerpt=text_excerpt or f"content_type={content_type} content_length={len(content)}",
+                api_code="ERR_SELLER_SPRITE_XLSX_INVALID",
+            )
+        official_filename = _safe_response_filename(
+            _response_filename(headers.get("content-disposition"))
+        )
+        if section == "main":
+            response_filename = official_filename
+            if len(str(root_dir / response_filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+                response_filename = "export.xlsx"
+        else:
+            response_filename = f"{section}.xlsx"
+        response_path = root_dir / response_filename
+        response_path.write_bytes(content)
+        return {
+            "code": "OK",
+            "data": {
+                "official_xlsx_path": str(response_path),
+                "official_filename": official_filename,
+                "content_length": len(content),
+            },
+        }
     if method in {"FORM", "GET_PAGE"}:
         text = await response.text()
         if _looks_like_session_expired(response.url, response.status, text):
@@ -2475,6 +2551,29 @@ def _callback_path(url: str) -> str:
 def _looks_like_session_expired(url: str, status: int, text: str) -> bool:
     normalized = text[:1000].lower()
     return status in {301, 302, 303, 307, 308} or "user/login" in url.lower() or "user/login" in normalized
+
+
+def _safe_response_filename(value: str | None) -> str:
+    filename = Path(str(value or "")).name.strip()
+    filename = re.sub(r'[<>:"/\\|?*]+', "-", filename).rstrip(". ")
+    if not filename:
+        return "official-export.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        filename = f"{filename}.xlsx"
+    return filename
+
+
+def _response_filename(value: str | None) -> str | None:
+    if not value:
+        return None
+    encoded = re.search(r"filename\*=UTF-8''([^;]+)", value, re.I)
+    quoted = re.search(r'filename="([^"]+)"', value, re.I)
+    plain = re.search(r"filename=([^;]+)", value, re.I)
+    match = encoded or quoted or plain
+    if not match:
+        return None
+    filename = unquote(match.group(1).strip().strip('"'))
+    return Path(filename).name or None
 
 
 def _slug(value: str) -> str:

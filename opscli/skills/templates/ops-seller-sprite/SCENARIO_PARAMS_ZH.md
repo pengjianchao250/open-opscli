@@ -11,6 +11,7 @@
 | 关键词挖掘 / keyword mining | `keyword-miner` |
 | 关键词选品 / 关键词研究 / keyword research | `keyword-research` |
 | 关联流量 / 关联产品 / 查关联 ASIN / association traffic | `association-traffic` |
+| 出单词反查 / ABA 反查 / ABA reverse | `aba-reverse` |
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
 | 查流量来源 / traffic source | `traffic-source` |
 | 选市场 / market research | `market-research` |
@@ -38,6 +39,7 @@
 - `keyword-research` 的 `period` 表示数据月份，使用 `YYYY-MM`；不要把公共默认 `30d` 当作月份。未指定时使用后端返回的最新可用月份，不硬编码页面月份选项。
 - `keyword-research` 默认使用 `page=1/page_size=100`，只获取第一页后完成任务，不自动续页。
 - `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换。
+- `aba-reverse` 的 `period` 必须是具体周结束日或月份，不使用公共默认 `30d`；只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
 - `competitor-lookup` 收到 Amazon 商品链接时，应先提取 ASIN，再传 `params.asins`。
 - `competitor-lookup` 如果用户只给了单个 `asin`，也应先归一化成 `params.asins` 再执行。
@@ -52,9 +54,11 @@
 - `keyword-reverse` 必须有 `asin`。
 - `traffic-source` 必须有关键词或 ASIN。
 - `association-traffic` 必须有 1—20 个合法 ASIN；可传数组，也可传逗号、换行、制表符或 TXT/Excel 按列复制文本。
+- `aba-reverse` 必须有具体周/月周期，以及 1—20 个 ASIN 或 Amazon 产品链接。
 - `product-research`、`market-research`、`keyword-research` 虽然没有硬性必填，但用户只说“跑一下”“看下市场”时仍应先确认意图。
 - `keyword-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-miner` 冒充。
 - `association-traffic` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `traffic-source` 冒充。
+- `aba-reverse` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-reverse` 冒充。
 
 ## 场景参数速查
 
@@ -65,6 +69,7 @@
 | `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
 | `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认只取第一页 100 条 |
 | `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；只取第一页；`page_size=100` |
+| `aba-reverse` | `asin` / `asins` / 产品链接，1—20 个；具体 `period` | `reverseType`、`orderField`、`orderDesc`、`conversionType`、`loadVariations` | `reverseType=W/M`；直接保存官方完整 XLSX |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
 | `traffic-source` | 关键词或 ASIN | `keyword`、`asin`、`asins`、`order`、`desc` | `pageNo=1`，`order=10`，`desc=true` |
 | `market-research` | 无 | `departmentKeyword` / `category`、`node` / `nodeIdPath`、`newReleaseNum`、`topn`、市场指标筛选 | `sampleNumber=1`，`topn=10`，`newReleaseNum=6`，按 `total_sales` 倒序 |
@@ -212,6 +217,48 @@
 - 工作表名复现官网批量导出的 `Related-首个ASIN-batch(输入数)(31` 可见格式。
 - 本地工作簿只生成业务主表，不生成官网导出中的 `Notes` 页。
 - 官方参考文件为 `.xlsx`；若请求仍使用兼容值 `export_format=xls`，以工具返回的真实文件名和格式为准。
+
+## `aba-reverse` 出单词反查
+
+### 场景边界
+
+- 用于按 Amazon Brand Analytics 周期，从父体或子体 ASIN 反查出单关键词。
+- 与 `keyword-reverse` 隔离：`aba-reverse` 下载 ABA 官方 Excel，`keyword-reverse` 继续使用关键词反查接口和本地导出逻辑。
+- Skill 中存在此场景不代表当前 MCP 已部署；执行前必须以 `seller_sprite_scenarios` 返回结果为准。
+
+### 输入与周期
+
+| 中文含义 | 公共字段 | 规则 |
+| --- | --- | --- |
+| 站点 | 顶层 `site` | 默认 `US` |
+| ASIN / 产品链接 | `params.asin` 或 `params.asins` | 1—20 个；支持父体/子体 ASIN、Amazon `/dp/`、`/gp/product/`、`/product/` 链接；支持数组、空格、中英文逗号、分号、换行和制表符；按首次出现顺序去重 |
+| 周期 | 顶层 `period` | 每周传 `YYYY-MM-DD`、`YYYYMMDD`、`ara_YYYYMMDD` 或官网周标签；日期为该周结束日。每月传 `YYYY-MM`、`YYYYMM` 或 `ara_YYYYMM` |
+| 周期类型 | `params.reverseType` | `W` / `week` / `weekly` / `每周`，或 `M` / `month` / `monthly` / `每月`；省略时按 `period` 格式推断 |
+| 排序字段 | `params.orderField` | 默认 `searchRank` |
+| 倒序 | `params.orderDesc` | 默认 `false` |
+| 转化类型 | `params.conversionType` | 可省略 |
+| 加载变体 | `params.loadVariations` | 默认 `false` |
+
+周模式会自动使用该周结束日前的上一个完整月份作为 `monthlyTable`；月模式的 `table` 与 `monthlyTable` 使用同一月份。
+
+### 调用示例
+
+```text
+seller_sprite_run(
+  scenario="aba-reverse",
+  site="US",
+  period="2026-07-18",
+  params={"asin": "B00000JBNX", "reverseType": "W"},
+  export_format="xls"
+)
+```
+
+### 导出规则
+
+- 只支持 `export_format=xls` 或 `xlsx`，两者最终都以官网实际返回的 `.xlsx` 文件为准。
+- 后端直接调用官网导出接口，官方 XLSX 原样保存；接口返回多少条就保留多少条，不分页、不截取、不解析、不重建。
+- 官方列名、顺序、样式、工作表和 `Notes` 页全部保留。
+- 因工作簿不做本地解析，任务结果的 `row_count=0` 和 `data=[]` 不表示没有数据；应以 `export.filename`、`export.url` 或 `export.path` 指向的文件为准。
 
 ## `product-research` 重点参数
 

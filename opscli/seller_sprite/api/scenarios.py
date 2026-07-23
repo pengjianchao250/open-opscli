@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from opscli.seller_sprite.api.payloads import (
     build_referer,
+    make_aba_reverse_payload,
     make_association_traffic_payload,
     make_competitor_payload,
     make_keyword_miner_payload,
@@ -91,6 +92,15 @@ class SellerSpriteScenario:
 
 
 SCENARIOS: dict[str, SellerSpriteScenario] = {
+    "aba-reverse": SellerSpriteScenario(
+        scenario_id="aba-reverse",
+        title="出单词反查",
+        endpoint="/v2/aba/reverse/export",
+        method="GET_XLSX",
+        required_params=(),
+        required_any_params=("asin", "asins", "textareaValue", "keywordOrAsin", "q"),
+        payload_builder=make_aba_reverse_payload,
+    ),
     "association-traffic": SellerSpriteScenario(
         scenario_id="association-traffic",
         title="关联流量",

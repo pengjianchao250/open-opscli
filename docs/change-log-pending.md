@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-23 seller_sprite - 增加出单词反查场景
+
+**变更原因**：需要接入卖家精灵 ABA 出单词反查，并让任务直接取得官网 Excel，避免自行解析页面或重建工作簿导致导出格式不一致。
+**改动点**：新增独立 `aba-reverse` 场景，支持站点、周/月具体周期、最多 20 个 ASIN 或 Amazon 产品链接及多分隔符输入；API-direct 和 browser-route 均直接请求 `/v2/aba/reverse/export`，校验并原样保存官方 XLSX 和官方文件名，不解析或重建工作簿；同步 `ops-seller-sprite` Skill 的场景映射、参数口径、MCP 执行规则和版本；补充场景接口、表头和脱敏请求证据，以及参数、登录失效、二进制下载和两种执行模式的离线回归测试。
+**验证结果**：ABA 相关聚焦回归 `110 passed`；SellerSprite MCP 工具回归 `84 passed`；SellerSprite 全量回归 `238 passed, 2 failed`，两项失败均为既有 `seller-sprite-debug` 顶级命令未注册；Skill 本地安装校验、变更生产模块 `py_compile` 和 `git diff --check` 通过。
+**影响范围**：新增出单词反查查询及官方 Excel 下载；现有关键词反查、其他场景分页和本地工作簿导出逻辑不变。
+**回滚方式**：回退 `aba-reverse` 场景注册、参数构造、二进制下载分支、参考证据、测试及本条记录。
+---
+
+
 ## 2026-07-22 cli - 兼容 python 模块启动方式
 
 **变更原因**：运维通过虚拟环境执行 `python -m opscli` 时，因包内缺少 `__main__` 入口而无法运行正式 CLI。

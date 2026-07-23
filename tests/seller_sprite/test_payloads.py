@@ -2,6 +2,7 @@ import pytest
 
 from opscli.seller_sprite.api.payloads import (
     build_referer,
+    make_aba_reverse_payload,
     make_association_traffic_payload,
     make_competitor_payload,
     make_keyword_miner_payload,
@@ -195,6 +196,75 @@ def test_association_traffic_payload_rejects_unknown_relation_type():
         make_association_traffic_payload(
             {"site": "US", "asins": ["B098T9ZFB5"], "relations": ["UNKNOWN"]}
         )
+
+
+def test_aba_reverse_week_payload_accepts_asins_and_amazon_links():
+    scenario = get_scenario("aba-reverse")
+
+    payload = scenario.build_payload(
+        params={
+            "asins": (
+                "b00000jbnx，https://www.amazon.com/dp/B08DRS8MNF "
+                "https://amazon.com/gp/product/B00000JBNX?th=1"
+            ),
+            "reverseType": "每周",
+        },
+        site="US",
+        period="2026第29周(07/12~07/18)",
+        page_size=100,
+    )
+
+    assert scenario.endpoint == "/v2/aba/reverse/export"
+    assert scenario.method == "GET_XLSX"
+    assert payload == {
+        "station": "US",
+        "table": "ara_20260718",
+        "asin": "B00000JBNX",
+        "order.field": "searchRank",
+        "order.desc": "false",
+        "conversionType": "",
+        "loadVariations": "false",
+        "reverseType": "W",
+        "monthlyTable": "ara_202606",
+        "textareaValue": "B00000JBNX,B08DRS8MNF",
+    }
+    referer = build_referer(payload, "aba-reverse")
+    assert referer.startswith("https://www.sellersprite.com/v2/aba/reverse/search?")
+    assert "asin=&" in referer
+    assert "textareaValue=B00000JBNX%2CB08DRS8MNF" in referer
+
+
+def test_aba_reverse_month_payload_uses_month_table_for_both_fields():
+    payload = make_aba_reverse_payload(
+        {
+            "asin": "B00000JBNX",
+            "site": "JP",
+            "period": "2026-06",
+            "periodType": "monthly",
+        }
+    )
+
+    assert payload["reverseType"] == "M"
+    assert payload["table"] == "ara_202606"
+    assert payload["monthlyTable"] == "ara_202606"
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"asins": ""}, "至少需要"),
+        ({"asins": "not-an-asin"}, "格式无效"),
+        (
+            {"asins": ",".join(f"B0000000{i:02d}" for i in range(21))},
+            "最多支持 20 个",
+        ),
+        ({"asin": "B00000JBNX", "period": "2026-06", "reverseType": "W"}, "每周周期"),
+        ({"asin": "B00000JBNX", "period": "20260718", "reverseType": "quarter"}, "周期类型"),
+    ],
+)
+def test_aba_reverse_payload_rejects_invalid_input(params, message):
+    with pytest.raises(SellerSpriteConfigError, match=message):
+        make_aba_reverse_payload({"site": "US", **params})
 
 
 def test_keyword_reverse_payload_keeps_orchestration_fields_for_manager():

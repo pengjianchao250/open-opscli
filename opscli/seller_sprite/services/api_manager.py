@@ -27,7 +27,11 @@ from opscli.seller_sprite.browser_route import (
 )
 from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
 from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
-from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, SellerSpriteScenarioResult
+from opscli.seller_sprite.domain.models import (
+    SellerSpriteExportResult,
+    SellerSpriteScenarioRequest,
+    SellerSpriteScenarioResult,
+)
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
 from opscli.seller_sprite.services.task_status import (
     base_status,
@@ -174,6 +178,9 @@ class SellerSpriteApiManager:
         root_dir = self._build_root_dir(request, job_id)
         root_dir.mkdir(parents=True, exist_ok=True)
         page_size = request.page_size or self.settings.page_size
+        export_format = _normalize_export_format(request.export_format)
+        if request.scenario == "aba-reverse" and export_format != "xlsx":
+            raise SellerSpriteConfigError("aba-reverse 仅支持 xls 或 xlsx 官方文件导出")
         account = self.account_provider.get_default()
         warnings: list[dict[str, Any]] = []
         mode = _resolve_request_mode(request.mode or self.settings.default_mode)
@@ -320,8 +327,9 @@ class SellerSpriteApiManager:
 
         rows = _extract_items(main_response, scenario=request.scenario)
         high_frequency_rows = _extract_high_frequency_rows(high_frequency_response)
-        export_format = _normalize_export_format(request.export_format)
-        if export_format == "xlsx":
+        if request.scenario == "aba-reverse":
+            export = _official_xlsx_export(main_response, root_dir=root_dir)
+        elif export_format == "xlsx":
             export = export_rows_to_xlsx(
                 rows=rows,
                 output_path=_export_output_path(root_dir, job_id, "xlsx"),
@@ -412,6 +420,21 @@ async def _run_main_request(
 ) -> dict[str, Any]:
     if method in {"GET", "PAGE_CAPTURE"}:
         return await client.get_json(endpoint, payload, referer=referer)
+    if method == "GET_XLSX":
+        content, filename = await client.get_bytes(endpoint, payload, referer=referer)
+        safe_filename = _safe_official_filename(filename)
+        if len(str(root_dir / safe_filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+            safe_filename = "export.xlsx"
+        response_path = root_dir / safe_filename
+        response_path.write_bytes(content)
+        return {
+            "code": "OK",
+            "data": {
+                "official_xlsx_path": str(response_path),
+                "official_filename": filename,
+                "content_length": len(content),
+            },
+        }
     if method == "GET_PAGE":
         response_html = await client.get_html(endpoint, payload, referer=referer)
         response_html_path = root_dir / "response.html"
@@ -816,6 +839,7 @@ def _scenario_label(scenario: str) -> str:
         "keyword-miner": "KeywordMiner",
         "keyword-research": "KeywordResearch",
         "association-traffic": "AssociationTraffic",
+        "aba-reverse": "ABAReverse",
         "keyword-reverse": "ReverseASIN",
         "traffic-source": "TrafficSource",
         "market-research": "MarketResearch",
@@ -833,8 +857,10 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
             return str(value[0])
         return str(value) if value is not None else ""
 
-    if scenario == "keyword-reverse":
-        return _sanitize_filename_part(params.get("asin"))
+    if scenario in {"keyword-reverse", "aba-reverse"}:
+        return _sanitize_filename_part(
+            params.get("asin") or first_value(params.get("asins"))
+        )
     if scenario == "listing-analysis":
         return _sanitize_filename_part(params.get("asin"))
     if scenario == "keyword-miner":
@@ -909,6 +935,53 @@ def _sanitize_filename_part(value: Any) -> str:
     text = re.sub(r"[^A-Za-z0-9\-]+", "-", text)
     text = re.sub(r"-{2,}", "-", text).strip("-")
     return text[:64]
+
+
+def _official_xlsx_export(
+    response: dict[str, Any],
+    *,
+    root_dir: Path,
+) -> SellerSpriteExportResult:
+    data = response.get("data") if isinstance(response, dict) else None
+    source_value = data.get("official_xlsx_path") if isinstance(data, dict) else None
+    if not source_value:
+        raise SellerSpriteApiError(
+            "卖家精灵官方 Excel 下载结果缺少文件路径",
+            api_code="ERR_SELLER_SPRITE_XLSX_PATH_MISSING",
+        )
+    source = Path(str(source_value))
+    signature = b""
+    if source.exists():
+        with source.open("rb") as file:
+            signature = file.read(2)
+    if signature != b"PK":
+        raise SellerSpriteApiError(
+            "卖家精灵官方 Excel 文件无效",
+            api_code="ERR_SELLER_SPRITE_XLSX_INVALID",
+        )
+    official_filename = data.get("official_filename") if isinstance(data, dict) else None
+    filename = _safe_official_filename(official_filename)
+    if len(str(root_dir / filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+        filename = "export.xlsx"
+    target = root_dir / filename
+    if source.resolve() != target.resolve():
+        source.replace(target)
+    resolved = target.resolve()
+    return SellerSpriteExportResult(
+        path=str(resolved),
+        filename=resolved.name,
+        url=resolved.as_uri(),
+    )
+
+
+def _safe_official_filename(value: Any) -> str:
+    filename = Path(str(value or "")).name.strip()
+    filename = re.sub(r'[<>:"/\\|?*]+', "-", filename).rstrip(". ")
+    if not filename:
+        return "official-export.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        filename = f"{filename}.xlsx"
+    return filename
 
 
 def _export_output_path(root_dir: Path, job_id: str, extension: str) -> Path:

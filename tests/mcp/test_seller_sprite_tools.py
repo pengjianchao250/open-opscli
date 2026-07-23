@@ -271,6 +271,8 @@ def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
     assert "`seller_sprite_run` 生产入口会明确拒绝 `listing-analysis`" in result["data"]["spec"]
     assert "`association-traffic` 关联流量" in result["data"]["spec"]
     assert "本地工作簿只生成业务主表，不生成官网导出中的 `Notes` 页" in result["data"]["spec"]
+    assert "`aba-reverse` 出单词反查" in result["data"]["spec"]
+    assert "官方 XLSX 原样保存" in result["data"]["spec"]
 
 
 def test_seller_sprite_skill_and_formal_docs_require_durable_bounded_tracking():

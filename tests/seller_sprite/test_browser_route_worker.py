@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 import subprocess
 
@@ -1049,6 +1050,61 @@ def test_keyword_research_context_request_uses_get_page_html_headers():
     )
     assert call["kwargs"]["headers"]["Accept"].startswith("text/html")
     assert "Content-Type" not in call["kwargs"]["headers"]
+
+
+def test_aba_reverse_context_request_uses_xlsx_get_headers():
+    page = FakeContextPage()
+
+    response = _run(
+        worker_module._request_with_browser_context(
+            page,
+            endpoint="/v2/aba/reverse/export",
+            method="GET_XLSX",
+            payload={"station": "US", "table": "ara_20260718", "asin": "B00000JBNX"},
+        )
+    )
+
+    assert response.status == 200
+    call = page.context.request.get_calls[0]
+    assert call["url"].startswith(
+        "https://www.sellersprite.com/v2/aba/reverse/export?station=US"
+    )
+    assert "spreadsheetml.sheet" in call["kwargs"]["headers"]["Accept"]
+    assert "Content-Type" not in call["kwargs"]["headers"]
+
+
+def test_browser_response_saves_official_xlsx_bytes(tmp_path):
+    content = b"PK\x03\x04official-workbook"
+
+    class XlsxResponse:
+        status = 200
+        url = "https://www.sellersprite.com/v2/aba/reverse/export"
+        headers = {
+            "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "content-disposition": (
+                "attachment; filename*=UTF-8''ABA-Reverse-B00000JBNX-US-20260723.xlsx"
+            ),
+        }
+
+        async def body(self):
+            return content
+
+    result = _run(
+        worker_module._parse_response(
+            XlsxResponse(),
+            method="GET_XLSX",
+            root_dir=tmp_path,
+            section="main",
+        )
+    )
+
+    path = Path(result["data"]["official_xlsx_path"])
+    assert path.name == "ABA-Reverse-B00000JBNX-US-20260723.xlsx"
+    assert path.read_bytes() == content
+    assert result["data"]["official_filename"] == (
+        "ABA-Reverse-B00000JBNX-US-20260723.xlsx"
+    )
+    assert result["data"]["content_length"] == len(content)
 
 
 def test_listing_analysis_trigger_fills_asin_and_submits_with_enter_first():
