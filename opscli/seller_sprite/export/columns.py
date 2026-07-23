@@ -154,6 +154,30 @@ KEYWORD_RESEARCH_COLUMNS = [
 ]
 
 
+# ABA 数据选品列名和顺序逐列对齐官方 ABAKeywordTrend-US-2026第29周-690875.xlsx。
+ABA_RESEARCH_COLUMNS = [
+    ExportColumn("关键词", "keyword"),
+    ExportColumn("关键词翻译", "keywordCn"),
+    ExportColumn("周搜索量", "searches"),
+    ExportColumn("现排名", "searchRank"),
+    ExportColumn("历史排名", "w1SearchRank", transform="abaHistoricalRanks"),
+    ExportColumn("周变化量", "w1RankGrowthValue", transform="abaRankGrowthValues"),
+    ExportColumn("周变化率", "w1RankGrowthRate", transform="abaRankGrowthRates"),
+    ExportColumn("PPC价格", "bid", transform="currency"),
+    ExportColumn("建议竞价范围", "bidMin", transform="abaBidRange"),
+    ExportColumn("展示量", "impressions"),
+    ExportColumn("点击量", "clicks"),
+    ExportColumn("SPR", "cprExact", fallback="spr"),
+    ExportColumn("标题密度", "titleDensityExact", fallback="titleDensity"),
+    ExportColumn("点击占比", "top3AsinDtoList", transform="abaClickShares"),
+    ExportColumn("转化占比", "top3AsinDtoList", transform="abaConversionShares"),
+    ExportColumn("点击前三ASIN", "top3AsinDtoList", transform="abaTopAsins"),
+    ExportColumn("点击前三品牌", "top3Brands", transform="abaBrands"),
+    ExportColumn("所属类目", "departments", transform="abaDepartments"),
+    ExportColumn("前10ASIN", "gkDatas", transform="asinList"),
+]
+
+
 # 关联流量列名和顺序逐列对齐官方 RelatedProducts-US-B098T9ZFB5-batch(5)-260723.xlsx。
 ASSOCIATION_TRAFFIC_COLUMNS = [
     ExportColumn("ASIN", "asin"),
@@ -323,6 +347,8 @@ def columns_for_scenario(scenario: str, site: str) -> list[ExportColumn]:
         )
     if scenario == "keyword-research":
         return KEYWORD_RESEARCH_COLUMNS
+    if scenario == "aba-research":
+        return ABA_RESEARCH_COLUMNS
     if scenario == "association-traffic":
         return _association_traffic_columns(currency)
     if scenario == "keyword-reverse":

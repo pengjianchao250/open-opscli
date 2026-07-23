@@ -44,8 +44,9 @@ def export_rows_to_xlsx(
     sheet.title = _main_sheet_title(scenario=scenario, site=site, period=period, params=params or {}, rows=rows)
 
     keyword_research = scenario == "keyword-research"
+    aba_research = scenario == "aba-research"
     association_traffic = scenario == "association-traffic"
-    official_orange_header = keyword_research or association_traffic
+    official_orange_header = keyword_research or aba_research or association_traffic
     header_fill = PatternFill("solid", fgColor="FFE98A00" if official_orange_header else "EAF2F8")
     header_font = Font(name="Calibri", size=10, bold=False) if official_orange_header else Font(bold=True)
     for column_index, column in enumerate(columns, start=1):
@@ -61,6 +62,8 @@ def export_rows_to_xlsx(
             cell = sheet.cell(row=row_index, column=column_index, value=value)
             if keyword_research:
                 _apply_keyword_research_number_format(cell, column_index)
+            elif aba_research:
+                _apply_aba_research_style(cell, column_index)
             elif association_traffic:
                 _apply_association_traffic_number_format(cell, column_index)
             else:
@@ -72,12 +75,16 @@ def export_rows_to_xlsx(
     for column_index, column in enumerate(columns, start=1):
         if keyword_research:
             width = KEYWORD_RESEARCH_COLUMN_WIDTHS[column_index - 1]
+        elif aba_research:
+            width = ABA_RESEARCH_COLUMN_WIDTHS[column_index - 1]
         elif association_traffic:
             width = ASSOCIATION_TRAFFIC_COLUMN_WIDTHS[column_index - 1]
         else:
             width = _column_width(column.title)
         sheet.column_dimensions[get_column_letter(column_index)].width = width
 
+    if aba_research:
+        _apply_aba_research_sheet_style(sheet)
     if high_frequency_rows:
         _add_high_frequency_sheet(workbook, high_frequency_rows)
     workbook.save(output_path)
@@ -167,6 +174,24 @@ def _apply_transform(value: Any, transform: str | None, row: dict[str, Any], *, 
         return "" if _is_blank(value) else f"{currency_label(site)}{float(value):.2f}"
     if transform == "bidRange":
         return _bid_range(row, site=site)
+    if transform == "abaBidRange":
+        return _aba_bid_range(row, site=site)
+    if transform == "abaHistoricalRanks":
+        return _aba_period_lines(row, "SearchRank", value_kind="rank")
+    if transform == "abaRankGrowthValues":
+        return _aba_period_lines(row, "RankGrowthValue", value_kind="signed")
+    if transform == "abaRankGrowthRates":
+        return _aba_period_lines(row, "RankGrowthRate", value_kind="percentage")
+    if transform == "abaClickShares":
+        return _aba_share_lines(value, field="clickRate")
+    if transform == "abaConversionShares":
+        return _aba_share_lines(value, field="conversionRate")
+    if transform == "abaTopAsins":
+        return _aba_top_asins(value)
+    if transform == "abaBrands":
+        return _aba_list_text(value, separator="、")
+    if transform == "abaDepartments":
+        return _aba_list_text(value, separator="; ")
     if transform == "asinList":
         return _asin_list(value)
     if transform == "listJoin":
@@ -220,6 +245,49 @@ def _apply_keyword_research_number_format(cell, column_index: int) -> None:
         26: "#,##0.00%",
     }
     cell.number_format = formats.get(column_index, "#,##0")
+
+
+def _apply_aba_research_style(cell, column_index: int) -> None:
+    """按官方 ABA 数据选品主表设置数据样式。"""
+    from openpyxl.styles import Alignment, Font
+
+    cell.font = Font(name="等线", size=10, bold=False)
+    cell.alignment = Alignment(
+        horizontal="justify" if column_index in {5, 6, 7, 14, 15} else (
+            "right" if column_index in {3, 4, 8, 10, 11, 12} else (
+                "center" if column_index in {9, 13} else "left"
+            )
+        ),
+        vertical="center",
+    )
+    formats = {
+        3: "#,##0_ ",
+        4: "#,##0_ ",
+        5: "#,##0",
+        6: "#,##0",
+        7: "#,##0.00%",
+        8: "0.00_ ",
+        9: "#,##0",
+        10: "#,##0_ ",
+        11: "#,##0_ ",
+        12: "#,##0",
+        13: "#,##0",
+        14: "#,##0.0%",
+        15: "#,##0.0%",
+    }
+    cell.number_format = formats.get(column_index, "General")
+
+
+def _apply_aba_research_sheet_style(sheet) -> None:
+    """补齐 ABA 数据选品主表行高及官方表头字体差异。"""
+    from openpyxl.styles import Font
+
+    sheet.row_dimensions[1].height = 20
+    for row_index in range(2, sheet.max_row + 1):
+        sheet.row_dimensions[row_index].height = 20
+    # 官方模板中部分表头使用白色字体，其余沿用 indexed 颜色；统一白色可保证橙底可读性。
+    for cell in sheet[1]:
+        cell.font = Font(name="Calibri", size=10, bold=False, color="FFFFFFFF")
 
 
 def _apply_association_traffic_number_format(cell, column_index: int) -> None:
@@ -304,6 +372,8 @@ def _main_sheet_title(*, scenario: str, site: str, period: str, params: dict[str
         title = f"{site.upper()}-{asin}-Keywords({len(rows)})_"
     elif scenario == "keyword-research":
         title = f"Keywords({len(rows)})"
+    elif scenario == "aba-research":
+        title = f"ABAKeyword({len(rows)})"
     elif scenario == "association-traffic":
         asins = split_association_traffic_asins(params.get("asins") or params.get("asin"))
         first_asin = asins[0] if asins else "ASIN"
@@ -349,6 +419,30 @@ KEYWORD_RESEARCH_COLUMN_WIDTHS = [
     13,
     13,
     74,
+    120,
+]
+
+
+# 列宽来自官方 ABAKeywordTrend-US-2026第29周-690875.xlsx。
+ABA_RESEARCH_COLUMN_WIDTHS = [
+    18.3362831858407,
+    17.3362831858407,
+    12,
+    9.15929203539823,
+    17.9115044247788,
+    15,
+    13,
+    15,
+    15,
+    15,
+    13,
+    15,
+    15,
+    15,
+    13,
+    36,
+    25.6637168141593,
+    46,
     120,
 ]
 
@@ -523,6 +617,86 @@ def _bid_range(row: dict[str, Any], *, site: str) -> str:
         return "-"
     currency = currency_label(site)
     return f"{currency}{float(bid_min):.2f}-{currency}{float(bid_max):.2f}"
+
+
+def _aba_bid_range(row: dict[str, Any], *, site: str) -> str:
+    """按 ABA 官方模板拼接建议竞价范围。"""
+    bid_min = row.get("bidMin")
+    bid_max = row.get("bidMax")
+    if _is_blank(bid_min) or _is_blank(bid_max):
+        return "-"
+    currency = currency_label(site)
+    return f"{currency}{float(bid_min):.2f} - {currency}{float(bid_max):.2f}"
+
+
+def _aba_period_lines(row: dict[str, Any], suffix: str, *, value_kind: str) -> str:
+    """把 ABA 的上周、4 周前和 12 周前指标拼为官方多行文本。"""
+    periods = (("上周", "w1"), ("4周前", "w4"), ("12周前", "w12"))
+    lines = []
+    for label, prefix in periods:
+        value = row.get(f"{prefix}{suffix}")
+        lines.append(f"{label}: {_aba_metric_text(value, value_kind=value_kind)}")
+    return "\n".join(lines)
+
+
+def _aba_metric_text(value: Any, *, value_kind: str) -> str:
+    """格式化 ABA 排名、变化值和百分比。"""
+    if _is_blank(value):
+        return "-"
+    number = float(value)
+    if value_kind == "percentage":
+        sign = "+" if number > 0 else ""
+        return f"{sign}{number:.2f}%"
+    integer = int(number)
+    sign = "+" if value_kind == "signed" and integer > 0 else ""
+    return f"{sign}{integer:,}"
+
+
+def _aba_share_lines(value: Any, *, field: str) -> str:
+    """拼接前三 ASIN 占比及合计，接口百分比值保持原始口径。"""
+    items = value if isinstance(value, list) else []
+    rates = []
+    for index in range(3):
+        item = items[index] if index < len(items) and isinstance(items[index], dict) else {}
+        raw_rate = item.get(field)
+        # 历史响应中的转化字段可能使用 conversionShareRate，兼容后仍按页面数值输出。
+        if field == "conversionRate" and _is_blank(raw_rate):
+            raw_rate = item.get("conversionShareRate")
+        try:
+            rates.append(float(raw_rate or 0))
+        except (TypeError, ValueError):
+            rates.append(0.0)
+    lines = [f"TOP{index}: {rate:.2f}%" for index, rate in enumerate(rates, start=1)]
+    lines.append(f"合计: {sum(rates):.2f}%")
+    return "\n".join(lines)
+
+
+def _aba_top_asins(value: Any) -> str:
+    """按官方分隔符拼接点击前三 ASIN。"""
+    if not isinstance(value, list):
+        return ""
+    return "、".join(
+        str(item.get("asin"))
+        for item in value[:3]
+        if isinstance(item, dict) and item.get("asin")
+    )
+
+
+def _aba_list_text(value: Any, *, separator: str) -> str:
+    """兼容字符串和对象列表并保持接口顺序。"""
+    if _is_blank(value):
+        return ""
+    if not isinstance(value, list):
+        return str(value)
+    parts = []
+    for item in value:
+        if isinstance(item, dict):
+            text = item.get("label") or item.get("name") or item.get("brand") or item.get("value")
+        else:
+            text = item
+        if not _is_blank(text):
+            parts.append(str(text))
+    return separator.join(parts)
 
 
 SITE_TIME_LABELS = {

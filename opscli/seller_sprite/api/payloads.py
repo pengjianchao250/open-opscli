@@ -300,6 +300,58 @@ ASSOCIATION_TRAFFIC_MARKET_IDS = {
     "MX": 771770,
 }
 
+# ABA 数据选品接口使用站点公开 code，其中美国站使用 COM。
+ABA_RESEARCH_MARKETS = {
+    "US": "COM",
+    "COM": "COM",
+    "UK": "UK",
+    "DE": "DE",
+    "FR": "FR",
+    "JP": "JP",
+    "CA": "CA",
+    "IT": "IT",
+    "ES": "ES",
+}
+
+# 页面搜索结果过滤区允许提交的成对数值字段。
+ABA_RESEARCH_RANGE_FIELDS = (
+    "Searches",
+    "SearchRank",
+    "RankGrowthRate",
+    "Impressions",
+    "Clicks",
+    "MonopolyClickRate",
+    "ConversionRate",
+    "SPR",
+    "TitleDensity",
+    "WordCount",
+)
+
+# 页面输入框要求整数的范围字段，百分比字段仍按页面原始数值口径传递。
+ABA_RESEARCH_INTEGER_RANGES = {
+    "Searches",
+    "SearchRank",
+    "Impressions",
+    "Clicks",
+    "SPR",
+    "TitleDensity",
+    "WordCount",
+}
+
+# 排序字段来自 ABA 数据选品页面的结果指标。
+ABA_RESEARCH_ORDER_FIELDS = {
+    "searchfrequencyrank",
+    "searches",
+    "rankGrowthValue",
+    "rankGrowthRate",
+    "impressions",
+    "clicks",
+    "monopolyClickRate",
+    "conversionRate",
+    "cprExact",
+    "titleDensityExact",
+}
+
 
 def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造竞品查询 payload。"""
@@ -517,6 +569,97 @@ def make_association_traffic_payload(input_data: dict[str, Any]) -> dict[str, An
     }
 
 
+def make_aba_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造 ABA 数据选品单页查询 payload。
+
+    参数：
+        input_data: 场景公共参数及 ABA 页面筛选字段。
+
+    返回：
+        可直接提交至 ABA 数据选品查询接口的 JSON payload。
+
+    异常：
+        SellerSpriteConfigError: 站点、周期、排序或数值筛选不符合页面约束时抛出。
+    """
+    site = _market(input_data, default="US")
+    market = ABA_RESEARCH_MARKETS.get(site)
+    if not market:
+        raise SellerSpriteConfigError(f"aba-research 暂不支持站点：{site}")
+
+    reverse_type = _aba_research_type(input_data)
+    period = input_data.get("table") or input_data.get("period") or input_data.get("month")
+    if reverse_type == "W":
+        if _is_default_aba_period(period):
+            period = _latest_completed_aba_week()
+        table = _aba_research_week_table(period)
+    else:
+        table = _aba_research_month_table(period)
+
+    rank_growth_type = str(input_data.get("rankGrowthType") or "W1").strip().upper()
+    if rank_growth_type not in {"W1", "W2", "W3", "W4"}:
+        raise SellerSpriteConfigError(
+            f"aba-research rankGrowthType 不支持：{rank_growth_type}"
+        )
+
+    order_value = input_data.get("order")
+    order_payload = order_value if isinstance(order_value, dict) else {}
+    order_field = str(
+        input_data.get("orderField")
+        or input_data.get("order.field")
+        or order_payload.get("field")
+        or "searchfrequencyrank"
+    ).strip()
+    if order_field not in ABA_RESEARCH_ORDER_FIELDS:
+        raise SellerSpriteConfigError(f"aba-research order.field 不支持：{order_field}")
+    if "orderDesc" in input_data:
+        order_desc_value = input_data["orderDesc"]
+    elif "order.desc" in input_data:
+        order_desc_value = input_data["order.desc"]
+    else:
+        order_desc_value = order_payload.get("desc", False)
+
+    _validate_aba_research_ranges(input_data)
+    payload: dict[str, Any] = {
+        "rankGrowthType": rank_growth_type,
+        # 本场景固定只取第一页 100 条，忽略公共分页参数和调用方覆盖值。
+        "size": 100,
+        "page": 1,
+        "market": market,
+        "q": _query_text(
+            input_data.get("q")
+            or input_data.get("keywordOrAsin")
+            or input_data.get("keyword")
+            or input_data.get("asin")
+        ),
+        "table": table,
+        "reverseType": reverse_type,
+        "departments": csv(input_data.get("departments") or input_data.get("department")),
+        "keywordBidMatchType": str(input_data.get("keywordBidMatchType") or "exact"),
+        "order": {
+            "field": order_field,
+            "desc": order_desc(order_desc_value),
+        },
+    }
+    for suffix in ABA_RESEARCH_RANGE_FIELDS:
+        for prefix in ("min", "max"):
+            field = f"{prefix}{suffix}"
+            value = _aba_research_number(input_data.get(field), field=field, integer=suffix in ABA_RESEARCH_INTEGER_RANGES)
+            if value is not None:
+                payload[field] = value
+    rank_growth_value = _aba_research_number(
+        input_data.get("rankGrowthValue"),
+        field="rankGrowthValue",
+        integer=False,
+    )
+    if rank_growth_value is not None:
+        payload["rankGrowthValue"] = rank_growth_value
+    for field in ("includeKeywords", "excludeKeywords"):
+        values = csv(input_data.get(field))
+        if values:
+            payload[field] = ",".join(values)
+    return payload
+
+
 def make_aba_reverse_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造出单词反查官方 Excel 导出参数。"""
     asins = _aba_reverse_asins(
@@ -654,6 +797,8 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
         return "https://www.sellersprite.com/v3/keyword-miner/"
     if scenario == "keyword-research":
         return f"https://www.sellersprite.com/v2/keyword-research?{urlencode(_flatten_query(payload))}"
+    if scenario == "aba-research":
+        return "https://www.sellersprite.com/v3/aba-research"
     if scenario == "aba-reverse":
         query = dict(payload)
         query["asin"] = ""
@@ -875,6 +1020,38 @@ def _asin_from_product_input(value: str) -> str:
     return match.group(1).upper() if match else ""
 
 
+def _aba_research_type(input_data: dict[str, Any]) -> str:
+    """解析 ABA 数据选品周/月周期。"""
+    value = str(
+        input_data.get("reverseType")
+        or input_data.get("periodType")
+        or input_data.get("cycle")
+        or ""
+    ).strip().lower()
+    aliases = {
+        "w": "W",
+        "week": "W",
+        "weekly": "W",
+        "每周": "W",
+        "m": "M",
+        "month": "M",
+        "monthly": "M",
+        "每月": "M",
+    }
+    if value:
+        reverse_type = aliases.get(value)
+        if not reverse_type:
+            raise SellerSpriteConfigError(f"aba-research 不支持周期类型：{value}")
+        return reverse_type
+    period = str(
+        input_data.get("table")
+        or input_data.get("period")
+        or input_data.get("month")
+        or ""
+    ).strip()
+    return "M" if re.fullmatch(r"(?:ara_)?\d{4}-?\d{2}", period) else "W"
+
+
 def _aba_reverse_type(input_data: dict[str, Any]) -> str:
     value = str(
         input_data.get("reverseType")
@@ -920,6 +1097,26 @@ def _latest_completed_aba_week(today: date | None = None) -> str:
     return (current_date - timedelta(days=days_since_saturday)).strftime("%Y%m%d")
 
 
+def _aba_research_week_table(value: Any) -> str:
+    """转换 ABA 数据选品每周 table 参数。"""
+    try:
+        return _aba_week_table(value)
+    except SellerSpriteConfigError as exc:
+        raise SellerSpriteConfigError(
+            "aba-research 每周周期必须为 YYYY-MM-DD、YYYYMMDD、ara_YYYYMMDD 或官网周标签"
+        ) from exc
+
+
+def _aba_research_month_table(value: Any) -> str:
+    """转换 ABA 数据选品每月 table 参数。"""
+    try:
+        return _aba_month_table(value)
+    except SellerSpriteConfigError as exc:
+        raise SellerSpriteConfigError(
+            "aba-research 每月周期必须为 YYYY-MM、YYYYMM 或 ara_YYYYMM"
+        ) from exc
+
+
 def _aba_week_table(value: Any) -> str:
     text = str(value or "").strip()
     normalized = text.removeprefix("ara_").replace("-", "")
@@ -953,6 +1150,48 @@ def _query_text(value: Any) -> str:
     if isinstance(value, list):
         return ",".join(str(item).strip() for item in value if str(item).strip())
     return str(value or "").strip()
+
+
+def _validate_aba_research_ranges(input_data: dict[str, Any]) -> None:
+    """校验 ABA 数据选品筛选范围。"""
+    for suffix in ABA_RESEARCH_RANGE_FIELDS:
+        integer = suffix in ABA_RESEARCH_INTEGER_RANGES
+        minimum = _aba_research_number(
+            input_data.get(f"min{suffix}"),
+            field=f"min{suffix}",
+            integer=integer,
+        )
+        maximum = _aba_research_number(
+            input_data.get(f"max{suffix}"),
+            field=f"max{suffix}",
+            integer=integer,
+        )
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise SellerSpriteConfigError(
+                f"aba-research min{suffix} 不能大于 max{suffix}"
+            )
+
+
+def _aba_research_number(
+    value: Any,
+    *,
+    field: str,
+    integer: bool,
+) -> float | int | None:
+    """把页面数值筛选转换为有限数值，并保留百分比原始口径。"""
+    if value is None or str(value).strip() == "":
+        return None
+    if isinstance(value, bool):
+        raise SellerSpriteConfigError(f"aba-research {field} 必须是数值")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise SellerSpriteConfigError(f"aba-research {field} 必须是数值") from exc
+    if not math.isfinite(number):
+        raise SellerSpriteConfigError(f"aba-research {field} 必须是有限数值")
+    if integer and not number.is_integer():
+        raise SellerSpriteConfigError(f"aba-research {field} 必须是整数")
+    return int(number) if number.is_integer() else number
 
 
 def _validate_keyword_research_ranges(input_data: dict[str, Any]) -> None:

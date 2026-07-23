@@ -5,6 +5,7 @@ import pytest
 from opscli.seller_sprite.api import payloads as payloads_module
 from opscli.seller_sprite.api.payloads import (
     build_referer,
+    make_aba_research_payload,
     make_aba_reverse_payload,
     make_association_traffic_payload,
     make_competitor_payload,
@@ -199,6 +200,97 @@ def test_association_traffic_payload_rejects_unknown_relation_type():
         make_association_traffic_payload(
             {"site": "US", "asins": ["B098T9ZFB5"], "relations": ["UNKNOWN"]}
         )
+
+
+def test_aba_research_payload_maps_week_filters_and_forces_first_page():
+    scenario = get_scenario("aba-research")
+
+    payload = scenario.build_payload(
+        params={
+            "q": "B06XZTZ7GB",
+            "departments": ["electronics", "kitchen"],
+            "rankGrowthType": "W2",
+            "page": 3,
+            "size": 20,
+            "minSearches": 1000,
+            "maxSearches": 2000,
+            "minConversionRate": 12.5,
+            "maxConversionRate": 20,
+            "orderField": "searches",
+            "orderDesc": True,
+        },
+        site="US",
+        period="2026第29周(07/12~07/18)",
+        page_size=20,
+    )
+
+    assert scenario.endpoint == "/v3/api/aba-research"
+    assert scenario.method == "POST"
+    assert payload == {
+        "rankGrowthType": "W2",
+        "size": 100,
+        "page": 1,
+        "market": "COM",
+        "q": "B06XZTZ7GB",
+        "table": "ara_20260718",
+        "reverseType": "W",
+        "departments": ["electronics", "kitchen"],
+        "keywordBidMatchType": "exact",
+        "order": {"field": "searches", "desc": True},
+        "minSearches": 1000,
+        "maxSearches": 2000,
+        "minConversionRate": 12.5,
+        "maxConversionRate": 20,
+    }
+    assert build_referer(payload, "aba-research") == "https://www.sellersprite.com/v3/aba-research"
+
+
+def test_aba_research_payload_maps_month_and_defaults_to_latest_week(monkeypatch):
+    monthly = make_aba_research_payload(
+        {
+            "q": "iphone charger",
+            "site": "JP",
+            "period": "2026-06",
+            "reverseType": "M",
+        }
+    )
+    assert monthly["market"] == "JP"
+    assert monthly["table"] == "ara_202606"
+    assert monthly["reverseType"] == "M"
+
+    monthly_table = make_aba_research_payload(
+        {
+            "q": "iphone charger",
+            "site": "US",
+            "table": "ara_202606",
+            "includeKeywords": ["usb c", "fast charger"],
+            "excludeKeywords": "case,stand",
+        }
+    )
+    assert monthly_table["reverseType"] == "M"
+    assert monthly_table["includeKeywords"] == "usb c,fast charger"
+    assert monthly_table["excludeKeywords"] == "case,stand"
+
+    monkeypatch.setattr(payloads_module, "_latest_completed_aba_week", lambda: "20260718")
+    weekly = make_aba_research_payload({"q": "iphone charger", "site": "US", "period": "30d"})
+    assert weekly["table"] == "ara_20260718"
+    assert weekly["reverseType"] == "W"
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"q": "x", "site": "MX", "period": "2026-07-18"}, "暂不支持站点"),
+        ({"q": "x", "period": "2026-07", "reverseType": "W"}, "每周周期"),
+        ({"q": "x", "period": "2026-07", "rankGrowthType": "W5"}, "rankGrowthType"),
+        ({"q": "x", "period": "2026-07", "orderField": "unknown"}, "order.field"),
+        ({"q": "x", "period": "2026-07", "minSearches": 2, "maxSearches": 1}, "minSearches"),
+        ({"q": "x", "period": "2026-07", "minClicks": 1.5}, "minClicks"),
+    ],
+)
+def test_aba_research_payload_rejects_invalid_input(params, message):
+    with pytest.raises(SellerSpriteConfigError, match=message):
+        make_aba_research_payload({"site": "US", **params})
 
 
 def test_aba_reverse_week_payload_accepts_asins_and_amazon_links():

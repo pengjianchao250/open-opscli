@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-23 seller_sprite - 增加 ABA 数据选品场景
+
+**变更原因**：需要接入卖家精灵 ABA 数据选品查询，同时避开官网有限的导出次数并在本地生成与官方参考文件一致的工作簿。
+**改动点**：新增独立 `aba-research` 场景，固定只查询第一页 100 条，支持站点、周/月 ABA 周期、关键词或 ASIN、类目、排序和搜索结果筛选；查询接口 JSON 后在本地生成官方 19 列业务主表，不生成官网 `Notes` 页和二维码图片，也不调用官网导出接口；同步场景证据、离线测试和 `ops-seller-sprite` Skill。
+**验证结果**：ABA 参数、Manager、browser-route、XLSX 与 MCP 组合回归 `158 passed`；SellerSprite 全量 `261 passed, 2 failed`，两项均为既有 `seller-sprite-debug` 顶级命令未注册；生产模块 `py_compile` 和 `git diff --check` 通过。Skill 打包规则为 `7 passed, 1 failed`，失败项是既有 Windows PyInstaller 目标路径分隔符断言。
+**影响范围**：新增 ABA 数据选品查询和本地 XLSX 导出；现有关键词选品、关键词反查和 ABA 出单词反查保持隔离且行为不变。
+**回滚方式**：回退 `aba-research` 场景、参数构造、导出规则、场景证据、测试、Skill 文档及本条记录。
+---
+
 ## 2026-07-23 seller_sprite - 增加出单词反查场景
 
 **变更原因**：需要接入卖家精灵 ABA 出单词反查，并让任务直接取得官网 Excel，避免自行解析页面或重建工作簿导致导出格式不一致。

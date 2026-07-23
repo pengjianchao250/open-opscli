@@ -121,6 +121,79 @@ def test_keyword_research_export_matches_required_workbook_contract(tmp_path: Pa
     assert sheet["AB2"].value == "B0H6WT6Q8C,B0H4G1XJQD"
 
 
+def test_aba_research_export_matches_official_main_sheet_without_notes(tmp_path: Path):
+    output = tmp_path / "aba-research.xlsx"
+    row = {
+        "keyword": "obsession",
+        "keywordCn": "痴迷",
+        "searches": 34822,
+        "searchRank": 1,
+        "w1SearchRank": 1,
+        "w4SearchRank": 506,
+        "w12SearchRank": 74457,
+        "w1RankGrowthValue": 0,
+        "w4RankGrowthValue": 505,
+        "w12RankGrowthValue": 74456,
+        "w1RankGrowthRate": 0,
+        "w4RankGrowthRate": 99.8,
+        "w12RankGrowthRate": 100,
+        "bid": 1.23,
+        "bidMin": 0.84,
+        "bidMax": 1.62,
+        "impressions": 150000,
+        "clicks": 32000,
+        "cprExact": 12,
+        "titleDensityExact": 4,
+        "top3AsinDtoList": [
+            {"asin": "B000000001", "clickRate": 93.81, "conversionRate": 92.5},
+            {"asin": "B000000002", "clickRate": 1.78, "conversionShareRate": 2.25},
+            {"asin": "B000000003", "clickRate": 1.64, "conversionRate": 1.5},
+        ],
+        "top3Brands": [{"brand": "Brand A"}, {"brand": "Brand B"}],
+        "departments": [{"label": "Home & Kitchen"}, {"label": "Office Products"}],
+        "gkDatas": [{"asin": "B000000001"}, {"asin": "B000000004"}],
+    }
+
+    export_rows_to_xlsx(
+        rows=[row],
+        output_path=output,
+        scenario="aba-research",
+        site="US",
+        period="2026第29周(07/12~07/18)",
+    )
+
+    workbook = load_workbook(output)
+    assert workbook.sheetnames == ["ABAKeyword(1)"]
+    sheet = workbook["ABAKeyword(1)"]
+    assert [cell.value for cell in sheet[1]] == [
+        "关键词", "关键词翻译", "周搜索量", "现排名", "历史排名", "周变化量", "周变化率",
+        "PPC价格", "建议竞价范围", "展示量", "点击量", "SPR", "标题密度", "点击占比",
+        "转化占比", "点击前三ASIN", "点击前三品牌", "所属类目", "前10ASIN",
+    ]
+    assert sheet.max_column == 19
+    assert sheet.freeze_panes == "A2"
+    assert sheet.auto_filter.ref is None
+    assert sheet["A1"].fill.fgColor.rgb == "FFE98A00"
+    assert sheet["A1"].font.color.rgb == "FFFFFFFF"
+    assert sheet.row_dimensions[1].height == 20
+    assert sheet.row_dimensions[2].height == 20
+    assert sheet.column_dimensions["A"].width == 18.3362831858407
+    assert sheet.column_dimensions["S"].width == 120
+    assert sheet["C2"].value == 34822
+    assert sheet["C2"].number_format == "#,##0_ "
+    assert sheet["E2"].value == "上周: 1\n4周前: 506\n12周前: 74,457"
+    assert sheet["F2"].value == "上周: 0\n4周前: +505\n12周前: +74,456"
+    assert sheet["G2"].value == "上周: 0.00%\n4周前: +99.80%\n12周前: +100.00%"
+    assert sheet["H2"].value == "$1.23"
+    assert sheet["I2"].value == "$0.84 - $1.62"
+    assert sheet["N2"].value == "TOP1: 93.81%\nTOP2: 1.78%\nTOP3: 1.64%\n合计: 97.23%"
+    assert sheet["O2"].value == "TOP1: 92.50%\nTOP2: 2.25%\nTOP3: 1.50%\n合计: 96.25%"
+    assert sheet["P2"].value == "B000000001、B000000002、B000000003"
+    assert sheet["Q2"].value == "Brand A、Brand B"
+    assert sheet["R2"].value == "Home & Kitchen; Office Products"
+    assert sheet["S2"].value == "B000000001,B000000004"
+
+
 def test_association_traffic_export_matches_official_main_sheet_without_notes(tmp_path: Path):
     output = tmp_path / "association-traffic.xlsx"
     asins = ["B098T9ZFB5", "B09JW5FNVX", "B0B71DH45N", "B07MHHM31K", "B08RYQR1CJ"]

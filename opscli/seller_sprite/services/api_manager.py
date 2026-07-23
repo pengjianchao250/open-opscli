@@ -369,7 +369,11 @@ class SellerSpriteApiManager:
         elif export_format == "xlsx":
             export = export_rows_to_xlsx(
                 rows=rows,
-                output_path=_export_output_path(root_dir, job_id, "xlsx"),
+                output_path=(
+                    _aba_research_output_path(root_dir, site=site, payload=payload)
+                    if request.scenario == "aba-research"
+                    else _export_output_path(root_dir, job_id, "xlsx")
+                ),
                 scenario=request.scenario,
                 site=site,
                 period=period,
@@ -875,6 +879,7 @@ def _scenario_label(scenario: str) -> str:
         "product-research": "ProductResearch",
         "keyword-miner": "KeywordMiner",
         "keyword-research": "KeywordResearch",
+        "aba-research": "ABAResearch",
         "association-traffic": "AssociationTraffic",
         "aba-reverse": "ABAReverse",
         "keyword-reverse": "ReverseASIN",
@@ -902,11 +907,13 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
         return _sanitize_filename_part(params.get("asin"))
     if scenario == "keyword-miner":
         return _sanitize_filename_part(params.get("keyword"))
-    if scenario == "keyword-research":
+    if scenario in {"keyword-research", "aba-research"}:
         return _sanitize_filename_part(
-            params.get("keywords")
+            params.get("q")
+            or params.get("keywords")
             or params.get("includeKeywords")
             or params.get("keyword")
+            or params.get("asin")
             or first_value(params.get("departments"))
         )
     if scenario == "association-traffic":
@@ -1019,6 +1026,29 @@ def _safe_official_filename(value: Any) -> str:
     if not filename.lower().endswith(".xlsx"):
         filename = f"{filename}.xlsx"
     return filename
+
+
+def _aba_research_output_path(
+    root_dir: Path,
+    *,
+    site: str,
+    payload: dict[str, Any],
+) -> Path:
+    """生成 ABA 数据选品官方语义文件名。"""
+    table = str(payload.get("table") or "").removeprefix("ara_")
+    reverse_type = str(payload.get("reverseType") or "W").upper()
+    if reverse_type == "M" and re.fullmatch(r"\d{6}", table):
+        period_label = f"{table[:4]}年{int(table[4:])}月"
+    elif re.fullmatch(r"\d{8}", table):
+        week_end = datetime.strptime(table, "%Y%m%d")
+        week_number = int(week_end.strftime("%U")) + 1
+        period_label = f"{week_end.year}第{week_number}周"
+    else:
+        period_label = table or "latest"
+    filename = f"ABAKeywordTrend-{site.upper()}-{period_label}.xlsx"
+    if len(str(root_dir / filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+        filename = "ABAKeywordTrend.xlsx"
+    return root_dir / filename
 
 
 def _export_output_path(root_dir: Path, job_id: str, extension: str) -> Path:

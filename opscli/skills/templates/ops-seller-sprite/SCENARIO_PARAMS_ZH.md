@@ -10,6 +10,7 @@
 | 选产品 / product research | `product-research` |
 | 关键词挖掘 / keyword mining | `keyword-miner` |
 | 关键词选品 / 关键词研究 / keyword research | `keyword-research` |
+| ABA 数据选品 / ABA 关键词趋势 / ABA research | `aba-research` |
 | 关联流量 / 关联产品 / 查关联 ASIN / association traffic | `association-traffic` |
 | 出单词反查 / ABA 反查 / ABA reverse | `aba-reverse` |
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
@@ -39,6 +40,7 @@
 - `keyword-research` 的 `period` 表示数据月份，使用 `YYYY-MM`；不要把公共默认 `30d` 当作月份。未指定时使用后端返回的最新可用月份，不硬编码页面月份选项。
 - `keyword-research` 默认使用 `page=1/page_size=100`，只获取第一页后完成任务，不自动续页。
 - `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换。
+- `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；固定只请求第一页 100 条，忽略公共分页覆盖值，并在本地生成 `.xlsx`。
 - `aba-reverse` 未提供 `period`（或收到公共默认 `30d`）时，默认选择每周和最近完整周；显式周期可传具体周结束日或月份。只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
 - `competitor-lookup` 收到 Amazon 商品链接时，应先提取 ASIN，再传 `params.asins`。
@@ -54,10 +56,12 @@
 - `keyword-reverse` 必须有 `asin`。
 - `traffic-source` 必须有关键词或 ASIN。
 - `association-traffic` 必须有 1—20 个合法 ASIN；可传数组，也可传逗号、换行、制表符或 TXT/Excel 按列复制文本。
+- `aba-research` 必须有父/子 ASIN 或关键词，可使用 `q`、`keywordOrAsin`、`keyword` 或 `asin`。
 - `aba-reverse` 必须有 1—20 个 ASIN 或 Amazon 产品链接；周期可省略，默认使用每周和最近完整周。
 - `product-research`、`market-research`、`keyword-research` 虽然没有硬性必填，但用户只说“跑一下”“看下市场”时仍应先确认意图。
 - `keyword-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-miner` 冒充。
 - `association-traffic` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `traffic-source` 冒充。
+- `aba-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-research` 或 `aba-reverse` 冒充。
 - `aba-reverse` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-reverse` 冒充。
 
 ## 场景参数速查
@@ -68,6 +72,7 @@
 | `product-research` | 无 | `recommendationMode`、类目参数、销量/价格/评分/卖家/关键词筛选 | `page=1`，`selectType=2`，按 `total_units` 倒序，`smallAndLight=N`，`lowPrice=N` |
 | `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
 | `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认只取第一页 100 条 |
+| `aba-research` | 父/子 ASIN 或关键词 | `departments`、`rankGrowthType`、排序、搜索结果范围筛选 | 周/月 ABA 周期；固定第一页 100 条；本地生成 XLSX |
 | `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；只取第一页；`page_size=100` |
 | `aba-reverse` | `asin` / `asins` / 产品链接，1—20 个 | `period`、`reverseType`、`orderField`、`orderDesc`、`conversionType`、`loadVariations` | 默认每周和最近完整周；直接保存官方完整 XLSX |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
@@ -172,6 +177,60 @@
 - 不在官方 28 列中增加内部调试字段；百分比按页面 HTML 的数值口径输出且不二次换算，页面展示精度可能低于官网异步导出；站点货币、类目和页面 DOM 中的前 10 ASIN 保持官方展示口径。
 - 若业务要求底层数值与官网导出逐位一致，必须使用官网异步导出文件，不能从已舍入的页面 HTML 恢复精度。
 - 官方主列表导出是异步任务；受理成功不等于文件已生成，仍按普通任务的 `job_id/state/ready` 规则续查。
+
+## `aba-research` ABA 数据选品
+
+### 场景边界
+
+- 用于按 Amazon Brand Analytics 周期，通过父/子 ASIN 或关键词筛选 ABA 关键词趋势。
+- 与 `keyword-research`、`keyword-reverse`、`aba-reverse` 完全隔离；不得改投其他场景，也不调用 `aba-reverse` 的官方导出接口。
+- 不支持页面六种推荐模式，用户未提供的筛选条件保持为空。
+- Skill 中存在此场景不代表当前 MCP 已部署；执行前必须以 `seller_sprite_scenarios` 返回结果为准。
+
+### 基础参数
+
+| 中文含义 | 公共字段 | 规则 |
+| --- | --- | --- |
+| 站点 | 顶层 `site` | 支持 `US`、`UK`、`DE`、`FR`、`JP`、`CA`、`IT`、`ES`；美国站映射为 `market=COM` |
+| 父/子 ASIN 或关键词 | `params.q` | 兼容 `keywordOrAsin`、`keyword`、`asin`；四者至少提供一个 |
+| 周期 | 顶层 `period` | 周模式支持 `YYYY-MM-DD`、`YYYYMMDD`、`ara_YYYYMMDD` 或官网周标签；月模式支持 `YYYY-MM`、`YYYYMM`、`ara_YYYYMM` |
+| 周期类型 | `params.reverseType` | `W` / `week` / `每周`，或 `M` / `month` / `每月`；省略时按周期格式推断，未提供周期则默认最近完整周 |
+| 类目多选 | `params.departments` | 页面类目 code 数组或逗号分隔文本；不得根据自然语言类目名称猜 code |
+| 排名对比周期 | `params.rankGrowthType` | `W1`、`W2`、`W3`、`W4`，默认 `W1` |
+| 包含关键词 | `params.includeKeywords` | 字符串或列表；列表按逗号拼接 |
+| 排除关键词 | `params.excludeKeywords` | 字符串或列表；列表按逗号拼接 |
+| 排名变化量 | `params.rankGrowthValue` | 有限数值 |
+
+### 排序
+
+- `params.orderField` 支持：`searchfrequencyrank`、`searches`、`rankGrowthValue`、`rankGrowthRate`、`impressions`、`clicks`、`monopolyClickRate`、`conversionRate`、`cprExact`、`titleDensityExact`。
+- `params.orderDesc` 控制倒序，默认 `false`；也兼容对象形式 `params.order={"field": "...", "desc": true}`。
+
+### 搜索结果范围筛选
+
+| 中文含义 | 最小值 / 最大值 |
+| --- | --- |
+| 搜索量 | `minSearches` / `maxSearches` |
+| ABA 排名 | `minSearchRank` / `maxSearchRank` |
+| 排名变化率 | `minRankGrowthRate` / `maxRankGrowthRate` |
+| 展示量 | `minImpressions` / `maxImpressions` |
+| 点击量 | `minClicks` / `maxClicks` |
+| 点击集中度 | `minMonopolyClickRate` / `maxMonopolyClickRate` |
+| 转化率 | `minConversionRate` / `maxConversionRate` |
+| SPR | `minSPR` / `maxSPR` |
+| 标题密度 | `minTitleDensity` / `maxTitleDensity` |
+| 单词个数 | `minWordCount` / `maxWordCount` |
+
+- 搜索量、ABA 排名、展示量、点击量、SPR、标题密度和单词个数只接受整数。
+- 变化率、点击集中度和转化率接受有限数值，并保持页面原始百分比口径，例如页面输入 `12.5` 就传 `12.5`，不自动除以 `100`。
+- 最小值和最大值都可省略；两侧都有值时最小值不能大于最大值。
+
+### 分页与导出
+
+- 后端固定提交一次 `POST /v3/api/aba-research`，强制使用 `page=1`、`size=100`；调用方传入的 `page`、`size` 或顶层 `page_size` 不会改变这一约束。
+- 只保存第一页实际返回的数据，不请求或合并后续页；`row_count` 等于第一页 `data.items` 的实际数量。
+- 不调用官网导出接口，不消耗官网有限导出次数；根据查询 JSON 在本地生成 `ABAKeywordTrend-{站点}-{周期}.xlsx`。
+- 本地工作簿对齐官方 19 列业务主表、橙色表头、冻结窗格、列宽和数字格式；不生成官网 `Notes` 页及二维码图片。
 
 ## `association-traffic` 关联流量
 

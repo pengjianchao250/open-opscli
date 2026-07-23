@@ -1,0 +1,60 @@
+{
+  "code": "OK",
+  "success": true,
+  "data": {
+    "page": 1,
+    "size": 100,
+    "total": 138,
+    "items": [
+      {
+        "keyword": "sample keyword",
+        "keywordCn": "示例关键词",
+        "searches": 34822,
+        "searchRank": 1,
+        "w1SearchRank": 1,
+        "w4SearchRank": 506,
+        "w12SearchRank": 74457,
+        "w1RankGrowthValue": 0,
+        "w4RankGrowthValue": 505,
+        "w12RankGrowthValue": 74456,
+        "w1RankGrowthRate": 0,
+        "w4RankGrowthRate": 99.8,
+        "w12RankGrowthRate": 100,
+        "bid": 1.23,
+        "bidMin": 0.84,
+        "bidMax": 1.62,
+        "impressions": 150000,
+        "clicks": 32000,
+        "cprExact": 12,
+        "titleDensityExact": 4,
+        "top3AsinDtoList": [
+          {
+            "asin": "B000000001",
+            "clickRate": 93.81,
+            "conversionRate": 92.5
+          },
+          {
+            "asin": "B000000002",
+            "clickRate": 1.78,
+            "conversionShareRate": 2.25
+          }
+        ],
+        "top3Brands": [
+          {
+            "brand": "Sample Brand"
+          }
+        ],
+        "departments": [
+          {
+            "label": "Home & Kitchen"
+          }
+        ],
+        "gkDatas": [
+          {
+            "asin": "B000000001"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -81,6 +81,28 @@ class KeywordResearchApiClient(DummyApiClient):
         return f'<table id="table-condition-search"><tbody><tr>{cells}</tr></tbody></table>'
 
 
+class AbaResearchApiClient(DummyApiClient):
+    """模拟 ABA 数据选品分页响应，验证 Manager 不请求第二页。"""
+
+    calls = []
+
+    async def post_json(self, url, payload, *, referer=None):
+        self.calls.append({"url": url, "payload": dict(payload), "referer": referer})
+        return {
+            "code": "OK",
+            "data": {
+                "pages": 5,
+                "page": 1,
+                "size": 100,
+                "total": 227,
+                "items": [
+                    {"keyword": "obsession", "searchRank": 1},
+                    {"keyword": "paper towels", "searchRank": 2},
+                ],
+            },
+        }
+
+
 class AbaReverseApiClient(DummyApiClient):
     calls = []
     content = b"PK\x03\x04official-xlsx-content"
@@ -308,6 +330,97 @@ def test_manager_runs_keyword_research_as_get_page(monkeypatch, tmp_path: Path):
     assert KeywordResearchApiClient.calls[0]["referer"].startswith(
         "https://www.sellersprite.com/v2/keyword-research?"
     )
+
+
+def test_manager_returns_only_first_aba_research_page(monkeypatch, tmp_path: Path):
+    AbaResearchApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", AbaResearchApiClient)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="api-direct"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="aba-research",
+                site="US",
+                period="2026第29周(07/12~07/18)",
+                params={"q": "paper towels", "page": 4, "size": 20},
+                page_size=20,
+                job_id="job-aba-research",
+            )
+        )
+    )
+
+    assert result.row_count == 2
+    assert [row["keyword"] for row in result.data] == ["obsession", "paper towels"]
+    assert result.export is not None
+    assert result.export.filename == "ABAKeywordTrend-US-2026第29周.xlsx"
+    assert Path(result.export.path).exists()
+    assert len(AbaResearchApiClient.calls) == 1
+    call = AbaResearchApiClient.calls[0]
+    assert call["url"] == "/v3/api/aba-research"
+    assert call["payload"]["page"] == 1
+    assert call["payload"]["size"] == 100
+    assert call["payload"]["market"] == "COM"
+    assert call["payload"]["q"] == "paper towels"
+    assert call["referer"] == "https://www.sellersprite.com/v3/aba-research"
+
+    raw = json.loads((tmp_path / "job-aba-research" / "raw.json").read_text(encoding="utf-8"))
+    assert raw["response"]["data"]["total"] == 227
+    assert len(raw["response"]["data"]["items"]) == 2
+
+
+def test_manager_returns_only_first_aba_research_page_in_browser_route_mode(
+    monkeypatch,
+    tmp_path: Path,
+):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "page": 1,
+                    "size": 100,
+                    "total": 138,
+                    "items": [{"keyword": "obsession", "searchRank": 1}],
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(api_manager_module, "_run_browser_route_request", fake_browser_route_request)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="aba-research",
+                site="US",
+                period="2026-07-18",
+                params={"q": "obsession", "page": 2, "size": 10},
+                job_id="job-aba-browser-route",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert result.export is not None
+    assert result.export.filename == "ABAKeywordTrend-US-2026第29周.xlsx"
+    assert len(calls) == 1
+    assert calls[0]["scenario_method"] == "POST"
+    assert calls[0]["endpoint"] == "/v3/api/aba-research"
+    assert calls[0]["payload"]["page"] == 1
+    assert calls[0]["payload"]["size"] == 100
+    assert calls[0]["payload"]["q"] == "obsession"
 
 
 def test_manager_saves_official_aba_reverse_xlsx_without_rebuilding(monkeypatch, tmp_path: Path):
