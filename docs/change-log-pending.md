@@ -1,5 +1,21 @@
 # 待归档变更记录
 
+## 2026-07-23 auth - 新增显式授权中间件（--ops-jwt-token / --polaris-jwt-token / --session-id）
+
+**变更原因**：需要支持在任意子命令尾部显式传入授权凭证（如 `opscli query simple ... --ops-jwt-token=x --session-id=y`），用于脚本化/外部托管场景，且要求"一处中间件覆盖全部命令"，不逐个命令改造。
+**改动点**：
+- 新增 `opscli/auth/context.py`：`ExplicitCredentials`（session_id/ops_jwt/polaris_jwt，按 alias 取 JWT）+ 基于 `contextvars` 的读写接口，请求级、进程内、**不落盘**。
+- `opscli/auth/__init__.py`（`AuthClient`，唯一注入点）：`get_token`/`get_session`/`is_authenticated` 优先读显式凭证——有对应系统 JWT 直接用；仅有 session_id 则用 `get_token_by_session` 无状态换取；否则回退本地存储。新增 `get_me()` 调 `GET {ops_system_url}/api/v1/auth/me`。因几乎所有子模块都经 `AuthClient.build_request_auth(alias)` 取凭证，故单点覆盖 ops/polaris 双系统全部命令。
+- `opscli/cli.py`：新增 `_extract_explicit_credentials()`（argv 预解析，支持 `--flag=v` 与 `--flag v` 两种写法，强制 session-id 校验）+ `run()` 进程入口（摘参→注入上下文→清理 argv→交给 Typer）。
+- `opscli/auth/cli.py`：新增 `opscli auth me` 命令。
+- `pyproject.toml`：console_scripts 入口 `opscli` 由 `opscli.cli:app` 改为 `opscli.cli:run`。
+**验证结果**：新增 20 个测试（`tests/auth/test_explicit_credentials.py` 14 项 + `test_explicit_argv.py`，含 respx mock 与 CliRunner），`tests/auth/` 全量 62 passed。回归：query 仍为 2 个既有失败（catalog/intent 已屏蔽）、calculator 经 git stash 对比确认 8 failed 为既有基线、feedback/asin_data/amazon/shared 通过——本次改动零回归。端到端：`opscli --version`、`opscli auth --help`（含 me）、强制 session-id 校验均正常。
+**影响范围**：所有经 `AuthClient` 取凭证的 CLI 命令新增显式授权能力；未传显式参数时行为完全不变。MCP 入口（opscli-mcp）不受影响。
+**回滚方式**：还原 `opscli/auth/context.py`（删除）、`opscli/auth/__init__.py`、`opscli/cli.py`、`opscli/auth/cli.py`、`pyproject.toml` 的本次改动，并删除两个新增测试文件。
+**遗留（非本次范围）**：`opscli/auth/cli.py` 的 `token_get` 错误路径 `console.print(..., err=True)` 为既有 latent bug（rich Console.print 不接受 err 参数，触发即 TypeError），未在本次修改。
+
+---
+
 ## 2026-07-23 ops-dataset-query - 降低销量趋势分析工具调用次数
 
 **变更原因**：最新 SSE 显示一次销量趋势诊断产生 67 次工具调用，主要由月份与对比期误解析、销量字段未映射及规划后旁路探查放大。
