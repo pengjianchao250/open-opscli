@@ -4019,3 +4019,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：仅 MCP 远程校验模式（`--auth-verify-url`）的鉴权链路；固定 Key 模式不受影响。
 **回滚方式**：回退本次对 `auth_middleware.py` 的提交即可恢复原逐请求新建 client + 单一超时 + 仅成功缓存的行为。
 ---
+
+## 2026-07-23 打包(pyproject/setup) - 修复正式 wheel 丢失所有 Skill 模板 scripts/*.py
+
+**变更原因**：用户反馈 Windows 上 `opscli skills install` 后所有 Skill 的 `scripts/` 目录不存在（macOS 因用 editable 源码安装才看似正常）。排查确认：`pyproject.toml` 的 `[tool.setuptools.packages.find]` 默认 `namespaces=true`，将 `opscli/skills/templates/ops-xxx/scripts/`（无 `__init__.py`）误判为命名空间包，使模板 `.py` 被当作"模块"；生产 Cython 构建的 `BuildPyExcludeSource` 为源码保护剥离非白名单模块，而这些模板脚本又被排除在 cythonize 之外，两头落空导致 `scripts/*.py` 从 wheel 中彻底丢失。已发布的 Windows 与 macOS wheel（0.0.115）经直接解包核实均为 0 个模板脚本。
+**改动点**：`pyproject.toml` 的 `[tool.setuptools.packages.find]` 增加 `exclude = ["opscli.skills.templates*"]`，使模板目录不再被当作包，模板文件回归纯 `package_data` 数据随 wheel 打包。未改动 `setup.py`。
+**验证结果**：本地以 `OPSCLI_SKILL_PROFILE=python-release python -m build --wheel`（完整 Cython 生产构建）重构 wheel，解包核对：模板 scripts.py 由修复前的 0 个恢复为 34 个；业务源码保护不变（保留 58 个白名单源 + 242 个 `.so`）；模板总文件 137（修复前 103）。对照实验：仅本改动即让 scripts 从 0→34。
+**影响范围**：仅正式 Cython wheel 的打包内容（补回被误删的模板脚本）；sdist、SKIP_CYTHON 纯 Python wheel、editable 安装不受影响。所有历史已发布 wheel 均缺模板脚本，需重新发版。
+**回滚方式**：删除 `pyproject.toml` 中新增的 `exclude = ["opscli.skills.templates*"]` 一行即可。
+---
