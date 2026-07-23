@@ -1,6 +1,17 @@
 # 待归档变更记录
 
-## 2026-07-21 skills - install 交互模式收尾 JSON payload 默认静默，仅输出成功/失败个数
+## 2026-07-23 skills - install 中央存储版本不一致即覆盖（允许降级）
+
+**变更原因**：升级 opscli 包后，普通 `opscli skills install <name>`（非 --force）遇到已存在的中央副本（`~/.opscli/skills/<name>`）时只判断"目录是否存在"就直接复用，从不比较版本，导致 `data/VERSION.json` 不更新；用户须第二次带 --force 或走交互模式才刷新。要求 install 始终与当前发行包模板对齐。
+**改动点**：`opscli/skills/services/manager.py`
+- `_install_central` Step 1：非 force 时新增版本比较，**只要模板与中央副本版本号不一致就 `rmtree`+`copytree` 覆盖（允许降级）**；版本号完全相同才复用旧副本，避免多余删除重拷。
+- `_install_central` Step 3：链接已有效指向中央副本时，将该目标的链接重建提升为 force（仅删链接不动中央内容），幂等刷新，避免普通 install 因"目标已存在"报错；链接缺失或指向异常时保持原 force 语义。
+- 新增 `_template_version_differs(template_dir, central_skill_dir)` 辅助方法，复用 `updater.compare_versions`（返回非 0 即不一致），读版本失败时保守返回 False。
+- `--skills-dir` 旧复制模式（`_install_copy`）契约不变，仍需 --force 覆盖。
+**验证结果**：新增 `tests/skills/test_manager.py::test_install_central_overwrites_stale_copy_by_version`（旧版本→升级覆盖）、`test_install_central_overwrites_newer_copy_allows_downgrade`（高版本→降级覆盖）、`test_install_central_reuses_same_version_copy`（同版本→复用不重拷，标记文件保留）均通过（test_manager 10 passed）；端到端脚本验证已链接场景普通 install 刷新 v0.0.0→1.3.13 且不报错、符号链接透明反映新版。预存失败（test_manager 3 个 + test_cli 1 个、skills 整目录 capture 崩溃）经 git stash 对比确认与本次改动无关。
+**影响范围**：仅默认中央存储安装路径的覆盖时机；不改变 upgrade、link、--skills-dir 复制模式、远程广场安装。
+**回滚方式**：回退本次 `manager.py` 与 `test_manager.py` 改动即可恢复"存在即复用"的旧行为。
+---
 
 **变更原因**：上一轮改动后交互批量安装收尾仍会打印完整 JSON payload（29 个 Skill 时长达数千字符），用户要求默认只输出安装成功和失败的个数
 **改动点**：opscli/skills/commands/cli.py — _install_interactive 收尾处两个 _emit 调用改为仅在 verbose 或 pretty 为 True 时执行；成功汇总行改为"全部安装完成：N 个成功，0 个失败"（失败分支原有"完成：X 个成功，Y 个失败"保持不变）。单名/远程/sync-market 路径的 JSON 输出不受影响（机器解析契约保留）

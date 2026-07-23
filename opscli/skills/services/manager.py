@@ -234,11 +234,13 @@ class SkillsManager:
         """中央存储模式：复制到 ~/.opscli/skills，再在各工具目录建链接。"""
         central_skill_dir = self._central_skills_dir / skill_name
 
-        # Step 1：将模板写入中央存储（已存在且非 force 时直接复用）
+        # Step 1：将模板写入中央存储
+        # force 时无条件覆盖；否则比较内置模板与已有中央副本的版本，
+        # 只要版本号不一致就以模板为准覆盖（允许降级），保证 install 始终与当前发行包模板对齐；
+        # 版本号完全相同时复用旧副本，避免多余的删除重拷。
         if central_skill_dir.exists():
-            if force:
+            if force or self._template_version_differs(template_dir, central_skill_dir):
                 shutil.rmtree(central_skill_dir)
-            # 非 force 时复用已有中央副本，不报错（链接步骤仍会继续）
         if not central_skill_dir.exists():
             self._central_skills_dir.mkdir(parents=True, exist_ok=True)
             shutil.copytree(
@@ -260,11 +262,17 @@ class SkillsManager:
         # Step 3：在各工具目录下创建链接
         installs: list[SkillInstallResult] = []
         for target_runtime, tool_skills_dir in targets:
+            # 链接已存在且正确指向中央副本时：中央内容刚按版本刷新过，
+            # 符号链接会自动反映新版本。此处用 force 重建（仅删链接、不动中央内容），
+            # 幂等刷新，避免普通 install 因"目标已存在"报错；
+            # 若链接缺失或指向异常，则保持原有 force 语义（非 force 时报错以防误删未知内容）。
+            link_path = tool_skills_dir / skill_name
+            link_force = force or self.linker.is_link_valid(link_path, central_skill_dir)
             link_result = self.linker.link(
                 skill_name,
                 central_skill_dir,
                 tool_skills_dir,
-                force=force,
+                force=link_force,
             )
             self._record_install(
                 skill_name,
@@ -478,6 +486,21 @@ class SkillsManager:
         version_file = target_dir / "data" / "VERSION.json"
         payload = json.loads(version_file.read_text(encoding="utf-8"))
         return str(payload.get("version", "unknown"))
+
+    def _template_version_differs(self, template_dir: Path, central_skill_dir: Path) -> bool:
+        """比较内置模板与中央副本的版本，版本号不一致时返回 True。
+
+        用于 install 非 force 场景判断是否需要用模板覆盖已有中央副本：
+        只要版本号不同（模板更高或更低）就以当前发行包模板为准覆盖（允许降级）。
+        任一 VERSION.json 读取失败时返回 False，保守复用旧副本，避免误覆盖。
+        """
+        try:
+            template_version = self._read_version(template_dir)
+            central_version = self._read_version(central_skill_dir)
+        except Exception:
+            return False
+        # compare_versions 返回 0 表示两版本相等；非 0 即不一致，需要以模板覆盖
+        return self.updater.compare_versions(template_version, central_version) != 0
 
     @property
     def _registry_path(self) -> Path:
