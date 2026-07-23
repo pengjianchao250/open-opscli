@@ -805,6 +805,211 @@ class FakeListingPage:
         return FakeListingLocator(self, "submit")
 
 
+class _AssociationResponseWaiter:
+    """模拟 Playwright 的响应等待上下文。"""
+
+    def __init__(self, endpoint):
+        self.value = asyncio.get_running_loop().create_future()
+        self.value.set_result(
+            SimpleNamespace(
+                url=f"https://www.sellersprite.com{endpoint}",
+                status=200,
+            )
+        )
+
+    async def __aenter__(self):
+        """进入响应等待上下文并返回自身。"""
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        """退出响应等待上下文，不吞掉测试异常。"""
+        return False
+
+
+class _AssociationLocator:
+    """记录关联流量页面输入、回车和按钮点击。"""
+
+    def __init__(self, page, kind):
+        self.page = page
+        self.kind = kind
+        self.first = self
+
+    async def count(self):
+        """返回当前测试 locator 是否存在。"""
+        return int(self.kind != "missing")
+
+    async def is_visible(self, **kwargs):
+        """返回当前测试 locator 是否可见。"""
+        return self.kind != "missing"
+
+    async def fill(self, value):
+        """记录输入框填充值。"""
+        self.page.fills.append(value)
+
+    async def press(self, key, **kwargs):
+        """记录输入框按键。"""
+        self.page.presses.append(key)
+
+    async def click(self, **kwargs):
+        """记录按钮点击。"""
+        self.page.clicks.append(self.kind)
+
+    async def get_attribute(self, name):
+        """返回按回车次数生成的 ASIN 计数占位符。"""
+        if self.kind == "asin" and name == "placeholder":
+            return f"已录入{len(self.page.presses)}/20个ASIN"
+        return None
+
+
+class _AssociationPage:
+    """模拟关联流量查询入口页。"""
+
+    def __init__(self, endpoint):
+        self.endpoint = endpoint
+        self.fills = []
+        self.presses = []
+        self.clicks = []
+        self.timeout_calls = []
+
+    def expect_response(self, predicate, **kwargs):
+        """返回主接口响应等待上下文。"""
+        return _AssociationResponseWaiter(self.endpoint)
+
+    def locator(self, selector):
+        """按页面选择器返回对应的测试 locator。"""
+        if "input" in selector and "ASIN" in selector:
+            return _AssociationLocator(self, "asin")
+        if "清除" in selector:
+            return _AssociationLocator(self, "clear")
+        if "用全部变体查询" in selector:
+            return _AssociationLocator(self, "all_variants")
+        if "立即查询" in selector:
+            return _AssociationLocator(self, "query")
+        return _AssociationLocator(self, "missing")
+
+    async def wait_for_timeout(self, timeout):
+        """记录页面等待时间。"""
+        self.timeout_calls.append(timeout)
+
+
+class _AssociationPageWithoutVariantButton(_AssociationPage):
+    """模拟弹窗未提供全部变体按钮的异常页面。"""
+
+    def locator(self, selector):
+        """让全部变体按钮保持不可见，其余控件沿用正常页面。"""
+        if "用全部变体查询" in selector:
+            return _AssociationLocator(self, "missing")
+        return super().locator(selector)
+
+
+def test_association_traffic_route_fills_asins_and_selects_all_variants(tmp_path):
+    endpoint = "/v3/api/relation/traffic"
+    page = _AssociationPage(endpoint)
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="association-traffic",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asinList": [
+                "B098T9ZFB5",
+                "B09JW5FNVX",
+                "B0B71DH45N",
+                "B07MHHM31K",
+                "B08RYQR1CJ",
+            ],
+            "queryVariations": True,
+        },
+        referer="https://www.sellersprite.com/v3/relation-keyword",
+        account=account,
+        root_dir=tmp_path,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "page_response"
+    assert page.fills == request.payload["asinList"]
+    assert page.presses == ["Enter"] * 5
+    assert page.clicks == ["clear", "query", "all_variants"]
+
+
+def test_association_traffic_route_does_not_silently_fallback_when_variant_dialog_is_missing(tmp_path):
+    endpoint = "/v3/api/relation/traffic"
+    page = _AssociationPageWithoutVariantButton(endpoint)
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="association-traffic",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asinList": ["B098T9ZFB5"],
+            "queryVariations": True,
+        },
+        referer="https://www.sellersprite.com/v3/relation-keyword",
+        account=account,
+        root_dir=tmp_path,
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker_module._trigger_request(
+                page,
+                endpoint=endpoint,
+                method="POST",
+                payload=request.payload,
+                request=request,
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_ASSOCIATION_TRAFFIC_VARIANT_DIALOG"
+    assert page.clicks == ["clear", "query"]
+
+
+def test_association_traffic_continuation_page_uses_browser_context_without_ui(tmp_path):
+    endpoint = "/v3/api/relation/traffic"
+    page = FakeContextPage()
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="association-traffic",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asinList": ["B098T9ZFB5"],
+            "queryVariations": True,
+            "pageNum": 2,
+        },
+        referer="https://www.sellersprite.com/v3/relation-keyword",
+        account=account,
+        root_dir=tmp_path,
+        page_prepare=False,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "context_request"
+    call = page.context.request.post_calls[0]
+    assert call["url"] == "https://www.sellersprite.com/v3/api/relation/traffic"
+    assert '"pageNum":2' in call["kwargs"]["data"]
+
+
 def test_post_query_context_request_uses_query_and_empty_json_body():
     page = FakeContextPage()
 

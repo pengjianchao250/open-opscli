@@ -170,6 +170,7 @@
 - 用于输入父体或子体 ASIN，查询全部变体带来的关联流量商品及关联类型。
 - 与 `traffic-source` 不同：`association-traffic` 关注输入 ASIN 的关联商品集合；`traffic-source` 查询关键词或 ASIN 的流量来源。
 - 点击查询后的页面弹窗固定选择“用全部变体查询”；公共参数不提供 `queryVariations=false`。
+- browser-route 首次查询会逐个填写 ASIN 并按回车，页面计数必须达到输入数量后才点击“立即查询”和“用全部变体查询”；后续分页不重复页面录入。
 
 ### 输入与分页
 

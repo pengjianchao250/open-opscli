@@ -1750,14 +1750,34 @@ async def _trigger_request(
     stage_started_at = time.monotonic()
     wait_started_at = stage_started_at
     listing_analysis_clicked = False
+    association_traffic_interaction = bool(
+        request
+        and request.scenario == "association-traffic"
+        and request.page_prepare
+    )
+    if request and request.scenario == "association-traffic" and not request.page_prepare:
+        response = await _request_with_browser_context(
+            page,
+            endpoint=endpoint,
+            method=method,
+            payload=payload,
+        )
+        return response, "context_request"
+    response_timeout = 30000 if association_traffic_interaction else 15000
     try:
-        async with page.expect_response(lambda response: _same_endpoint(response.url, endpoint), timeout=15000) as info:
+        async with page.expect_response(
+            lambda response: _same_endpoint(response.url, endpoint),
+            timeout=response_timeout,
+        ) as info:
             _record_timing(timings, request, f"route_fetch.{section}.expect_response_ready", stage_started_at)
             stage_started_at = time.monotonic()
             if request and request.scenario == "listing-analysis":
                 # Listing Analysis 必须先在页面输入 ASIN 再点击查询，避免只走静默接口提交。
                 listing_analysis_clicked = await _trigger_listing_analysis_query(page, payload)
                 clicked = listing_analysis_clicked
+            elif association_traffic_interaction:
+                # 关联流量必须让页面接收 ASIN，并在弹窗中显式选择全部变体。
+                clicked = await _trigger_association_traffic_query(page, payload)
             else:
                 clicked = await _click_query_button(page)
             _record_timing(timings, request, f"route_fetch.{section}.click_query_button", stage_started_at, clicked=clicked)
@@ -1787,6 +1807,15 @@ async def _trigger_request(
                 response_excerpt=f"endpoint={endpoint}",
                 api_code="ERR_LISTING_ANALYSIS_RESPONSE_MISSED",
                 api_message="已完成页面点击，不再自动 fallback 重复创建 AI 任务。",
+            ) from exc
+        if association_traffic_interaction:
+            if isinstance(exc, SellerSpriteApiError):
+                raise
+            raise SellerSpriteApiError(
+                "卖家精灵关联流量页面交互后未捕获主查询响应",
+                response_excerpt=f"endpoint={endpoint}",
+                api_code="ERR_ASSOCIATION_TRAFFIC_RESPONSE_MISSED",
+                api_message="页面交互已完成，不再自动 fallback 重复查询。",
             ) from exc
         stage_started_at = time.monotonic()
         response = await _request_with_browser_context(page, endpoint=endpoint, method=method, payload=payload)
@@ -1918,6 +1947,88 @@ async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool
     if button is None:
         return False
     await button.click(timeout=5000)
+    return True
+
+
+async def _trigger_association_traffic_query(page, payload: dict[str, Any]) -> bool:
+    """在关联流量页面逐个录入 ASIN，并选择全部变体查询。"""
+    asin_values = payload.get("asinList")
+    asins: list[str] = []
+    if isinstance(asin_values, list):
+        asins = [
+            str(value).strip().upper()
+            for value in asin_values
+            if str(value).strip()
+        ]
+    if not asins:
+        return False
+    input_box = await _first_visible_page_locator(
+        page,
+        [
+            "input[placeholder*='已录入'][placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if input_box is None:
+        return False
+
+    clear_button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('清除')",
+            "[role='button']:visible:has-text('清除')",
+            ".el-button:visible:has-text('清除')",
+        ],
+    )
+    if clear_button is not None:
+        await clear_button.click(timeout=5000)
+        await page.wait_for_timeout(200)
+
+    for asin in asins:
+        await input_box.fill(asin)
+        await input_box.press("Enter", timeout=5000)
+        await page.wait_for_timeout(100)
+
+    placeholder = await input_box.get_attribute("placeholder")
+    expected_count = f"已录入{len(asins)}/20个ASIN"
+    if placeholder and "已录入" in placeholder and expected_count != placeholder.strip():
+        raise SellerSpriteApiError(
+            "关联流量 ASIN 未完整写入页面输入框",
+            response_excerpt=f"expected={expected_count} actual={placeholder}",
+            api_code="ERR_ASSOCIATION_TRAFFIC_ASIN_INPUT",
+        )
+
+    query_button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('立即查询')",
+            "[role='button']:visible:has-text('立即查询')",
+            ".el-button:visible:has-text('立即查询')",
+        ],
+    )
+    if query_button is None:
+        return False
+    await query_button.click(timeout=5000)
+
+    all_variants_button = None
+    for _ in range(30):
+        all_variants_button = await _first_visible_page_locator(
+            page,
+            [
+                "button:visible:has-text('用全部变体查询')",
+                "[role='button']:visible:has-text('用全部变体查询')",
+                ".el-button:visible:has-text('用全部变体查询')",
+            ],
+        )
+        if all_variants_button is not None:
+            break
+        await page.wait_for_timeout(500)
+    if all_variants_button is None:
+        raise SellerSpriteApiError(
+            "关联流量页面未出现“用全部变体查询”按钮",
+            api_code="ERR_ASSOCIATION_TRAFFIC_VARIANT_DIALOG",
+        )
+    await all_variants_button.click(timeout=5000)
     return True
 
 

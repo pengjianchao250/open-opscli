@@ -2991,3 +2991,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：新增独立 SellerSprite 普通异步任务场景 `association-traffic`，影响其请求、全部分页汇总、本地导出和 Skill 路由；不改变既有关键词、选品、流量来源和账号调度契约。
 **回滚方式**：回退本条涉及的关联流量场景、分页、导出、Skill、测试和回归基线文件，并删除本条变更记录。
 ---
+
+## 2026-07-23 seller_sprite - 修复关联流量页面未录入 ASIN
+
+**变更原因**：本地 MCP 执行 `association-traffic` 时，browser-route 只打开带参数的页面并点击通用查询按钮，没有把 ASIN 写入页面输入框，也没有处理“用全部变体查询”弹窗，导致页面看不到输入且无法触发正式查询。
+**改动点**：新增关联流量专用页面触发器，首次查询先清除旧值，再逐个填写 ASIN、按回车并核对页面录入计数，随后点击“立即查询”和“用全部变体查询”；页面交互失败或主响应丢失时禁止静默 fallback 冒充成功；后续分页明确复用浏览器上下文接口，不重复页面录入；同步更新 Skill、调研文档和版本。
+**验证结果**：回归测试先稳定复现旧路径 `page.fills == []`，修复后确认 5 个 ASIN 输入、5 次回车、清除/立即查询/全部变体三个按钮动作完整发生，并验证弹窗按钮缺失时不会静默 fallback；browser-route 单文件回归 `50 passed`，连同 payload、导出、API Manager 和 MCP 文档契约的聚焦回归 `181 passed`；SellerSprite 全量回归为 `219 passed, 2 failed`，失败仍是未修改区域既有的 `seller-sprite-debug` 顶层命令未注册问题；Skill 格式校验、SellerSprite `compileall`、无残留调试标记检查和 `git diff --check` 通过。
+**影响范围**：仅影响 `association-traffic` 的 browser-route 首次页面交互和后续分页方式，不改变 API 直连、其他 SellerSprite 场景或 56 列导出契约。
+**回滚方式**：回退关联流量专用页面触发器、对应测试和 Skill/调研文档更新，恢复通用查询按钮与 context fallback 行为。
+---
