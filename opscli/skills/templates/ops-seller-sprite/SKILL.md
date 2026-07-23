@@ -26,7 +26,7 @@ metadata:
    - `export_format=xls`
    - `keyword-research` 例外：`period` 使用数据月份（`YYYY-MM`），不把 `30d` 当作月份；默认 `page=1/page_size=100`，只获取第一页。
    - `association-traffic` 使用公共默认 `page_size=100`，查询固定使用全部变体，不允许改成当前变体。
-   - `aba-reverse` 必须提供具体周或月周期，不使用公共默认 `30d`；只支持 `xls` / `xlsx`，由后端原样保存官方 XLSX。
+   - `aba-reverse` 未提供周期时默认选择每周和最近完整周；显式周期仍支持具体周结束日或月份。只支持 `xls` / `xlsx`，由后端原样保存官方 XLSX。
 4. 用户给了明确条件，就原样带入 `params`；不要发明隐藏枚举值或额外筛选。
 5. `月份` / `数据月份` / `2026-04` 传顶层 `period`；只有“上架时间 / 上架月数 / 上架多久”才映射到 `params.putawayMonth`。
 6. 类目文本可以直接传；如果后端返回多个类目候选，必须停下来让用户确认，不能猜。
@@ -126,7 +126,7 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - `查关键词` 这类表达可能对应 `keyword-research`、`keyword-miner`、`keyword-reverse`、`traffic-source`，先让用户选场景。
 - `关键词选品`、`关键词研究`、`高需求低竞争词`、`市场周期筛选`通常对应 `keyword-research`；单一种子词扩词仍用 `keyword-miner`。
 - `关联流量`、`关联产品`、`查关联 ASIN`通常对应 `association-traffic`；必须提供 1—20 个父体或子体 ASIN，固定使用全部变体查询。
-- `出单词反查`、`ABA 反查`对应 `aba-reverse`；必须提供具体周/月周期，以及 1—20 个父体或子体 ASIN 或 Amazon 产品链接。
+- `出单词反查`、`ABA 反查`对应 `aba-reverse`；必须提供 1—20 个父体或子体 ASIN 或 Amazon 产品链接。周期可省略，默认使用每周和最近完整周。
 - `查产品` 这类表达可能对应 `competitor-lookup` 或 `product-research`，先让用户确认目的。
 - `看市场/类目` 这类表达可能对应 `market-research` 或 `product-research`，先让用户确认。
 - `competitor-lookup` 不能无条件直接跑，至少要有 `keyword`、`brand`、`sellerName`、`asins` 或 Amazon 商品链接中的一种。
@@ -135,7 +135,7 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - `keyword-reverse` 必须有 ASIN。
 - `traffic-source` 必须有关键词或 ASIN。
 - `association-traffic` 必须有 1—20 个合法 ASIN；支持列表、逗号、换行、制表符或从 TXT/Excel 按列复制的文本。
-- `aba-reverse` 必须有具体周/月周期及 1—20 个 ASIN 或 Amazon 产品链接；周周期使用周结束日，月周期使用 `YYYY-MM`。
+- `aba-reverse` 必须有 1—20 个 ASIN 或 Amazon 产品链接；周期省略时默认最近完整周，显式周周期使用周结束日，月周期使用 `YYYY-MM`。
 - `product-research`、`market-research` 和 `keyword-research` 虽然没有硬性必填，但用户条件明显不足时，仍应先确认意图，不要把“可空”误当成“随便跑”。
 
 可直接复用的话术：

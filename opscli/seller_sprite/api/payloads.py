@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
@@ -529,6 +529,8 @@ def make_aba_reverse_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     reverse_type = _aba_reverse_type(input_data)
     if reverse_type == "W":
         period = input_data.get("table") or input_data.get("period") or input_data.get("month")
+        if _is_default_aba_period(period):
+            period = _latest_completed_aba_week()
         table = _aba_week_table(period)
         monthly_table = _aba_month_table(
             input_data.get("monthlyTable") or _previous_complete_month(table)
@@ -897,6 +899,25 @@ def _aba_reverse_type(input_data: dict[str, Any]) -> str:
         return reverse_type
     period = str(input_data.get("period") or input_data.get("month") or "").strip()
     return "M" if re.fullmatch(r"(?:ara_)?\d{4}-?\d{2}", period) else "W"
+
+
+def _is_default_aba_period(value: Any) -> bool:
+    return str(value or "").strip().lower() in {
+        "",
+        "30d",
+        "nearly",
+        "latest30",
+        "last30",
+    }
+
+
+def _latest_completed_aba_week(today: date | None = None) -> str:
+    """返回最近一个完整 ABA 周的周六日期。"""
+    current_date = today or date.today()
+    days_since_saturday = (current_date.weekday() - 5) % 7
+    if days_since_saturday == 0:
+        days_since_saturday = 7
+    return (current_date - timedelta(days=days_since_saturday)).strftime("%Y%m%d")
 
 
 def _aba_week_table(value: Any) -> str:

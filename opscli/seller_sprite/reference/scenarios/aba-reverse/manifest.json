@@ -38,7 +38,11 @@
       "enum": [
         "W",
         "M"
-      ]
+      ],
+      "default": "W"
+    },
+    "period": {
+      "default": "latest_completed_week"
     }
   },
   "result": {

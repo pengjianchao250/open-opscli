@@ -39,7 +39,7 @@
 - `keyword-research` 的 `period` 表示数据月份，使用 `YYYY-MM`；不要把公共默认 `30d` 当作月份。未指定时使用后端返回的最新可用月份，不硬编码页面月份选项。
 - `keyword-research` 默认使用 `page=1/page_size=100`，只获取第一页后完成任务，不自动续页。
 - `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换。
-- `aba-reverse` 的 `period` 必须是具体周结束日或月份，不使用公共默认 `30d`；只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
+- `aba-reverse` 未提供 `period`（或收到公共默认 `30d`）时，默认选择每周和最近完整周；显式周期可传具体周结束日或月份。只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
 - `competitor-lookup` 收到 Amazon 商品链接时，应先提取 ASIN，再传 `params.asins`。
 - `competitor-lookup` 如果用户只给了单个 `asin`，也应先归一化成 `params.asins` 再执行。
@@ -54,7 +54,7 @@
 - `keyword-reverse` 必须有 `asin`。
 - `traffic-source` 必须有关键词或 ASIN。
 - `association-traffic` 必须有 1—20 个合法 ASIN；可传数组，也可传逗号、换行、制表符或 TXT/Excel 按列复制文本。
-- `aba-reverse` 必须有具体周/月周期，以及 1—20 个 ASIN 或 Amazon 产品链接。
+- `aba-reverse` 必须有 1—20 个 ASIN 或 Amazon 产品链接；周期可省略，默认使用每周和最近完整周。
 - `product-research`、`market-research`、`keyword-research` 虽然没有硬性必填，但用户只说“跑一下”“看下市场”时仍应先确认意图。
 - `keyword-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-miner` 冒充。
 - `association-traffic` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `traffic-source` 冒充。
@@ -69,7 +69,7 @@
 | `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
 | `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认只取第一页 100 条 |
 | `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；只取第一页；`page_size=100` |
-| `aba-reverse` | `asin` / `asins` / 产品链接，1—20 个；具体 `period` | `reverseType`、`orderField`、`orderDesc`、`conversionType`、`loadVariations` | `reverseType=W/M`；直接保存官方完整 XLSX |
+| `aba-reverse` | `asin` / `asins` / 产品链接，1—20 个 | `period`、`reverseType`、`orderField`、`orderDesc`、`conversionType`、`loadVariations` | 默认每周和最近完整周；直接保存官方完整 XLSX |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
 | `traffic-source` | 关键词或 ASIN | `keyword`、`asin`、`asins`、`order`、`desc` | `pageNo=1`，`order=10`，`desc=true` |
 | `market-research` | 无 | `departmentKeyword` / `category`、`node` / `nodeIdPath`、`newReleaseNum`、`topn`、市场指标筛选 | `sampleNumber=1`，`topn=10`，`newReleaseNum=6`，按 `total_sales` 倒序 |
@@ -232,14 +232,14 @@
 | --- | --- | --- |
 | 站点 | 顶层 `site` | 默认 `US` |
 | ASIN / 产品链接 | `params.asin` 或 `params.asins` | 1—20 个；支持父体/子体 ASIN、Amazon `/dp/`、`/gp/product/`、`/product/` 链接；支持数组、空格、中英文逗号、分号、换行和制表符；按首次出现顺序去重 |
-| 周期 | 顶层 `period` | 每周传 `YYYY-MM-DD`、`YYYYMMDD`、`ara_YYYYMMDD` 或官网周标签；日期为该周结束日。每月传 `YYYY-MM`、`YYYYMM` 或 `ara_YYYYMM` |
-| 周期类型 | `params.reverseType` | `W` / `week` / `weekly` / `每周`，或 `M` / `month` / `monthly` / `每月`；省略时按 `period` 格式推断 |
+| 周期 | 顶层 `period` | 可省略，默认最近完整周。每周可传 `YYYY-MM-DD`、`YYYYMMDD`、`ara_YYYYMMDD` 或官网周标签；日期为该周结束日。每月传 `YYYY-MM`、`YYYYMM` 或 `ara_YYYYMM` |
+| 周期类型 | `params.reverseType` | 可省略；未提供周期时默认 `W`。显式值支持 `W` / `week` / `weekly` / `每周`，或 `M` / `month` / `monthly` / `每月`；仅省略类型时按 `period` 格式推断 |
 | 排序字段 | `params.orderField` | 默认 `searchRank` |
 | 倒序 | `params.orderDesc` | 默认 `false` |
 | 转化类型 | `params.conversionType` | 可省略 |
 | 加载变体 | `params.loadVariations` | 默认 `false` |
 
-周模式会自动使用该周结束日前的上一个完整月份作为 `monthlyTable`；月模式的 `table` 与 `monthlyTable` 使用同一月份。
+未提供周期时，周模式自动选取当前日期之前最近一个已经完整结束的周六；周六当天仍选择上一周，避免使用尚未结束的当周。周模式会自动使用该周结束日前的上一个完整月份作为 `monthlyTable`；月模式的 `table` 与 `monthlyTable` 使用同一月份。
 
 ### 调用示例
 

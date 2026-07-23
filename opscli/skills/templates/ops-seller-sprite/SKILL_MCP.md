@@ -111,7 +111,7 @@ Listing Analysis 必须使用 submit/status/result 专用流程，不属于普�
 - `keyword-research` 默认使用 `page=1/page_size=100`，只获取第一页后完成任务，不自动请求后续分页。
 - `association-traffic` 固定查询全部变体，只获取第一页 100 条即完成任务，不自动请求后续分页；导出按官网关联流量 56 列主表格式对齐，只生成业务主表，不生成官网 `Notes` 页。
 - `association-traffic` 固定使用 `page_size=100`；browser-route 必须把 ASIN 逐个写入页面输入框并按回车，点击“立即查询”后再点击“用全部变体查询”；不得用静默接口 fallback 冒充已完成页面交互。若接口返回固定 20 条的游客数据，先恢复登录态并重试一次。
-- `aba-reverse` 必须提供具体周/月周期和 1—20 个 ASIN 或 Amazon 产品链接，只使用 `xls` / `xlsx` 导出。后端直接下载并原样保存官网 `/v2/aba/reverse/export` 返回的完整 XLSX，不截取、解析或重建工作簿。
+- `aba-reverse` 必须提供 1—20 个 ASIN 或 Amazon 产品链接；周期省略时默认 `reverseType=W` 和最近完整周。只使用 `xls` / `xlsx` 导出，后端直接下载并原样保存官网 `/v2/aba/reverse/export` 返回的完整 XLSX，不截取、解析或重建工作簿。
 
 终态成功模板：
 

@@ -1,5 +1,8 @@
+from datetime import date
+
 import pytest
 
+from opscli.seller_sprite.api import payloads as payloads_module
 from opscli.seller_sprite.api.payloads import (
     build_referer,
     make_aba_reverse_payload,
@@ -247,6 +250,38 @@ def test_aba_reverse_month_payload_uses_month_table_for_both_fields():
     assert payload["reverseType"] == "M"
     assert payload["table"] == "ara_202606"
     assert payload["monthlyTable"] == "ara_202606"
+
+
+def test_aba_reverse_defaults_to_latest_completed_week(monkeypatch):
+    monkeypatch.setattr(
+        payloads_module,
+        "_latest_completed_aba_week",
+        lambda: "20260718",
+    )
+
+    payload = make_aba_reverse_payload(
+        {
+            "asin": "B00000JBNX",
+            "site": "US",
+            "period": "30d",
+        }
+    )
+
+    assert payload["reverseType"] == "W"
+    assert payload["table"] == "ara_20260718"
+    assert payload["monthlyTable"] == "ara_202606"
+
+
+@pytest.mark.parametrize(
+    ("today", "expected"),
+    [
+        (date(2026, 7, 23), "20260718"),
+        (date(2026, 7, 18), "20260711"),
+        (date(2026, 7, 19), "20260718"),
+    ],
+)
+def test_latest_completed_aba_week_excludes_current_saturday(today, expected):
+    assert payloads_module._latest_completed_aba_week(today) == expected
 
 
 @pytest.mark.parametrize(
