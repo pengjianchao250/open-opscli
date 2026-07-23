@@ -3009,3 +3009,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：仅影响 `association-traffic` 的分页大小、游客限制识别与浏览器登录恢复。
 **回滚方式**：回退本条关联流量分页测试、生产代码、Skill 和场景存档修改。
 ---
+
+## 2026-07-23 seller_sprite - 关联流量与关键词选品只返回第一页
+
+**变更原因**：关联流量和关键词选品任务都只需默认获取第一页 100 条数据即完成，不再自动请求并汇总后续分页。
+**改动点**：移除 API Manager 的关联流量自动续页与结果合并逻辑，只保留第一次 `pageNum=1/pageSize=100` 响应；移除关联流量 `page_prepare=false` 绕过可见页面交互的旧续页通道；关键词选品移除 50 条截断，固定默认 `page=1/size=100` 且只保留当前页结果；同步更新 `ops-seller-sprite` Skill、参数手册、MCP 规则、场景存档说明和两份调研文档，Skill 版本升级至 `v0.0.7`；API 与 browser-route 回归均断言不请求后续页并只返回第一页。
+**验证结果**：关联流量与关键词选品聚焦回归 `22 passed`；SellerSprite/MCP 全量回归 `305 passed, 2 failed`，两项失败均为既有 `seller-sprite-debug` 顶层命令缺失；`ops-seller-sprite` Skill 校验通过；`compileall` 与 `git diff --check` 通过，未发现调试标记。
+**影响范围**：影响 `association-traffic` 和 `keyword-research` 的默认分页大小、结果范围与请求次数；页面筛选条件、关联流量全部变体语义以及两场景导出格式不变。
+**回滚方式**：恢复关联流量自动分页汇总、关键词选品 50 条限制，以及对应测试和 Skill 文档。
+---

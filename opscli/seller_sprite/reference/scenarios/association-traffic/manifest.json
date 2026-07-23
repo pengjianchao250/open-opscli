@@ -80,6 +80,8 @@
     "row_path": "data.pagerDto.items",
     "default_page_size": 100,
     "guest_limited_page_size": 20,
+    "result_scope": "first_page",
+    "auto_pagination": false,
     "pagination_fields": [
       "data.pagerDto.page",
       "data.pagerDto.size",
@@ -104,6 +106,7 @@
     "sample_response": "sample-response.json",
     "sample_request_page_size": 50,
     "runtime_page_size": 100,
+    "runtime_result_limit": 100,
     "official_workbook_sha256": "c06a014a4677857fe40d92fcb8f2aa77ca4966fc35628297aa8c51302b3fa7a9"
   }
 }

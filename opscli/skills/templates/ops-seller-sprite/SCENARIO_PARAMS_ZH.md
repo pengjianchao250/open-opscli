@@ -36,7 +36,7 @@
 
 - `product-research` 里的“月份 / 数据月份 / 2026-04”应传顶层 `period`，不是 `putawayMonth`。
 - `keyword-research` 的 `period` 表示数据月份，使用 `YYYY-MM`；不要把公共默认 `30d` 当作月份。未指定时使用后端返回的最新可用月份，不硬编码页面月份选项。
-- `keyword-research` 的真实分页上限以 `seller_sprite_scenarios` 和当前服务端契约为准，不直接套用公共 `page_size=100`。
+- `keyword-research` 默认使用 `page=1/page_size=100`，只获取第一页后完成任务，不自动续页。
 - `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换。
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
 - `competitor-lookup` 收到 Amazon 商品链接时，应先提取 ASIN，再传 `params.asins`。
@@ -63,8 +63,8 @@
 | `competitor-lookup` | `keyword` / `brand` / `sellerName` / `asins` / 商品链接 五选一；单个 `asin` 需先转成 `asins` | `node` / `category` / `nodeIdPath` / `nodeIdPaths` | `page=1`，按销量倒序，`lowPrice=N` |
 | `product-research` | 无 | `recommendationMode`、类目参数、销量/价格/评分/卖家/关键词筛选 | `page=1`，`selectType=2`，按 `total_units` 倒序，`smallAndLight=N`，`lowPrice=N` |
 | `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
-| `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；分页以场景契约为准 |
-| `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；`page_size=100`；自动汇总全部分页 |
+| `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认只取第一页 100 条 |
+| `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；只取第一页；`page_size=100` |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
 | `traffic-source` | 关键词或 ASIN | `keyword`、`asin`、`asins`、`order`、`desc` | `pageNo=1`，`order=10`，`desc=true` |
 | `market-research` | 无 | `departmentKeyword` / `category`、`node` / `nodeIdPath`、`newReleaseNum`、`topn`、市场指标筛选 | `sampleNumber=1`，`topn=10`，`newReleaseNum=6`，按 `total_sales` 倒序 |
@@ -133,6 +133,11 @@
 
 展示量、SPR、点击量、标题密度和转化总占比由当前 `keyword-research` Web 场景直接接收；它们不应被转发到卖家精灵开放 API 的同名场景，两个接口契约不能混用。
 
+### 分页与结果范围
+
+- 默认传 `page=1`、`page_size=100`，映射为页面查询参数 `page=1`、`size=100`。
+- 每个任务只保留当前页结果；默认任务返回第一页，最多 100 条，不自动请求或合并后续页。
+
 ### 范围校验
 
 - 最小值和最大值都可省略；空值不传，不自动补 `0`。
@@ -170,7 +175,7 @@
 - 用于输入父体或子体 ASIN，查询全部变体带来的关联流量商品及关联类型。
 - 与 `traffic-source` 不同：`association-traffic` 关注输入 ASIN 的关联商品集合；`traffic-source` 查询关键词或 ASIN 的流量来源。
 - 点击查询后的页面弹窗固定选择“用全部变体查询”；公共参数不提供 `queryVariations=false`。
-- browser-route 首次查询会逐个填写 ASIN 并按回车，页面计数必须达到输入数量后才点击“立即查询”和“用全部变体查询”；后续分页直接复用当前页面的登录上下文，不重复页面录入，也不刷新结果页。
+- browser-route 会逐个填写 ASIN 并按回车，页面计数必须达到输入数量后才点击“立即查询”和“用全部变体查询”。
 
 ### 输入与分页
 
@@ -180,9 +185,9 @@
 | 关联类型 | `relations` | 可省略；省略表示全部类型；可传下表 code 数组或分隔文本 |
 | 排序字段 | `orderField` | 默认 `createdTime`；可用 `relationCount` |
 | 倒序 | `desc` | 默认 `true` |
-| 每页数量 | 顶层 `page_size` | 固定按公共默认 `100` 执行；任务内部自动续查并汇总全部分页 |
+| 每页数量 | 顶层 `page_size` | 固定按公共默认 `100` 执行；只返回第一页，最多 100 条 |
 
-若主接口返回 `pagerDto.size=20` 且实际只有 20 条数据，视为游客限制响应。browser-route 会恢复登录态并重试一次，不再把游客第一页继续送入分页汇总。
+若主接口返回 `pagerDto.size=20` 且实际只有 20 条数据，视为游客限制响应。browser-route 会恢复登录态并重试一次；登录成功后仍只获取第一页 100 条。
 
 ### 关联类型枚举
 

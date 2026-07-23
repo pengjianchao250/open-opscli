@@ -67,5 +67,5 @@
       "monitorTook": 1
     }
   },
-  "note": "游客响应把 pageSize=50 限制为 20；正式 MCP 会先恢复账号登录态，再按 pagerDto.total 分页汇总。"
+  "note": "游客响应把 pageSize=50 限制为 20；正式 MCP 会先恢复账号登录态，再以 pageSize=100 获取第一页并完成任务。"
 }

@@ -974,9 +974,9 @@ def test_association_traffic_route_does_not_silently_fallback_when_variant_dialo
     assert page.clicks == ["clear", "query"]
 
 
-def test_association_traffic_continuation_page_uses_browser_context_without_ui(tmp_path):
+def test_association_traffic_page_prepare_false_still_uses_visible_ui(tmp_path):
     endpoint = "/v3/api/relation/traffic"
-    page = FakeContextPage()
+    page = _AssociationPage(endpoint)
     account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
     request = worker_module.BrowserRouteRequest(
         scenario="association-traffic",
@@ -985,7 +985,7 @@ def test_association_traffic_continuation_page_uses_browser_context_without_ui(t
         payload={
             "asinList": ["B098T9ZFB5"],
             "queryVariations": True,
-            "pageNum": 2,
+            "pageNum": 1,
         },
         referer="https://www.sellersprite.com/v3/relation-keyword",
         account=account,
@@ -1004,10 +1004,10 @@ def test_association_traffic_continuation_page_uses_browser_context_without_ui(t
     )
 
     assert response.status == 200
-    assert transport == "context_request"
-    call = page.context.request.post_calls[0]
-    assert call["url"] == "https://www.sellersprite.com/v3/api/relation/traffic"
-    assert '"pageNum":2' in call["kwargs"]["data"]
+    assert transport == "page_response"
+    assert page.fills == ["B098T9ZFB5"]
+    assert page.presses == ["Enter"]
+    assert page.clicks == ["clear", "query", "all_variants"]
 
 
 def test_post_query_context_request_uses_query_and_empty_json_body():
@@ -1632,7 +1632,9 @@ def test_run_one_relogs_and_retries_guest_limited_association_response(monkeypat
     _run(scenario())
 
 
-def test_run_one_association_continuation_reuses_current_page_without_reload(monkeypatch, tmp_path):
+def test_run_one_association_page_prepare_disabled_still_opens_referer(
+    monkeypatch, tmp_path
+):
     async def scenario():
         account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
         worker = SellerSpriteBrowserRouteWorker(
@@ -1646,12 +1648,9 @@ def test_run_one_association_continuation_reuses_current_page_without_reload(mon
             events.append("ensure_page")
             return page
 
-        async def fake_detect_logged_in(current_page):
-            events.append("detect_logged_in")
-            return True
-
-        async def fail_open(current_page, request, **kwargs):
-            raise AssertionError("关联流量后续分页不应重新打开或刷新页面")
+        async def fake_open(current_page, request, **kwargs):
+            events.append("open_referer")
+            return {"logged_in": True}
 
         async def fake_captcha(current_page, request, warnings, timings, *, stage):
             events.append(f"captcha:{stage}")
@@ -1672,8 +1671,7 @@ def test_run_one_association_continuation_reuses_current_page_without_reload(mon
             }
 
         monkeypatch.setattr(worker, "_ensure_page", fake_ensure_page)
-        monkeypatch.setattr(worker_module, "_detect_logged_in", fake_detect_logged_in)
-        monkeypatch.setattr(worker, "_open_referer_and_login", fail_open)
+        monkeypatch.setattr(worker, "_open_referer_and_login", fake_open)
         monkeypatch.setattr(worker, "_handle_robot_captcha_if_enabled", fake_captcha)
         monkeypatch.setattr(worker, "_execute_route_fetch", fake_execute)
 
@@ -1696,7 +1694,7 @@ def test_run_one_association_continuation_reuses_current_page_without_reload(mon
         )
 
         assert result.response["data"]["pagerDto"]["page"] == 2
-        assert events == ["ensure_page", "detect_logged_in", "captcha:after_open_referer", "execute"]
+        assert events == ["ensure_page", "open_referer", "captcha:after_open_referer", "execute"]
 
     _run(scenario())
 

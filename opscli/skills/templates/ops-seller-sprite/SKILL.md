@@ -24,7 +24,7 @@ metadata:
    - `period=30d`
    - `page_size=100`
    - `export_format=xls`
-   - `keyword-research` 例外：`period` 使用数据月份（`YYYY-MM`），不把 `30d` 当作月份；`page_size` 以当前场景契约为准。
+   - `keyword-research` 例外：`period` 使用数据月份（`YYYY-MM`），不把 `30d` 当作月份；默认 `page=1/page_size=100`，只获取第一页。
    - `association-traffic` 使用公共默认 `page_size=100`，查询固定使用全部变体，不允许改成当前变体。
 4. 用户给了明确条件，就原样带入 `params`；不要发明隐藏枚举值或额外筛选。
 5. `月份` / `数据月份` / `2026-04` 传顶层 `period`；只有“上架时间 / 上架月数 / 上架多久”才映射到 `params.putawayMonth`。

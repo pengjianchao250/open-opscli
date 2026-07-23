@@ -514,32 +514,14 @@ class SellerSpriteBrowserRouteWorker:
             url=getattr(page, "url", ""),
         )
         stage_started_at = time.monotonic()
-        reuse_association_page = (
-            request.scenario == "association-traffic"
-            and not request.page_prepare
-            and await _detect_logged_in(page)
+        login = await self._open_referer_and_login(page, request, timings=timings)
+        _record_timing(
+            timings,
+            request,
+            "open_referer_and_login",
+            stage_started_at,
+            current_url=getattr(page, "url", ""),
         )
-        if reuse_association_page:
-            # 后续分页直接复用当前页面的登录上下文，避免结果刚展示又被页面导航刷新。
-            login = self._login_snapshot(page, request, logged_in=True)
-            _record_timing(
-                timings,
-                request,
-                "open_referer_and_login",
-                stage_started_at,
-                current_url=getattr(page, "url", ""),
-                skipped=True,
-                reason="association_continuation",
-            )
-        else:
-            login = await self._open_referer_and_login(page, request, timings=timings)
-            _record_timing(
-                timings,
-                request,
-                "open_referer_and_login",
-                stage_started_at,
-                current_url=getattr(page, "url", ""),
-            )
         await self._handle_robot_captcha_if_enabled(
             page,
             request,
@@ -1798,18 +1780,8 @@ async def _trigger_request(
     wait_started_at = stage_started_at
     listing_analysis_clicked = False
     association_traffic_interaction = bool(
-        request
-        and request.scenario == "association-traffic"
-        and request.page_prepare
+        request and request.scenario == "association-traffic"
     )
-    if request and request.scenario == "association-traffic" and not request.page_prepare:
-        response = await _request_with_browser_context(
-            page,
-            endpoint=endpoint,
-            method=method,
-            payload=payload,
-        )
-        return response, "context_request"
     response_timeout = 30000 if association_traffic_interaction else 15000
     try:
         async with page.expect_response(

@@ -82,12 +82,12 @@ class KeywordResearchApiClient(DummyApiClient):
 
 
 class AssociationTrafficApiClient(DummyApiClient):
-    """模拟关联流量分页接口，验证 Manager 汇总全部结果。"""
+    """模拟存在多页的关联流量接口，验证 Manager 只请求第一页。"""
 
     calls = []
 
     async def post_json(self, url, payload, *, referer=None):
-        """按请求页码返回两页固定的关联流量测试数据。
+        """按请求页码提供两页固定的关联流量测试数据。
 
         参数：
             url: 被测 Manager 提交的接口路径。
@@ -284,22 +284,24 @@ def test_manager_runs_keyword_research_as_get_page(monkeypatch, tmp_path: Path):
                 site="US",
                 period="2026-06",
                 params={"minWordCount": 1, "maxWordCount": 5},
-                page_size=50,
                 job_id="job-keyword-research",
             )
         )
     )
 
     assert result.row_count == 1
+    assert len(KeywordResearchApiClient.calls) == 1
     assert KeywordResearchApiClient.calls[0]["url"] == "/v2/keyword-research"
     assert KeywordResearchApiClient.calls[0]["params"]["month"] == "202606"
+    assert KeywordResearchApiClient.calls[0]["params"]["page"] == "1"
+    assert KeywordResearchApiClient.calls[0]["params"]["size"] == "100"
     assert KeywordResearchApiClient.calls[0]["params"]["minWordCount"] == "1"
     assert KeywordResearchApiClient.calls[0]["referer"].startswith(
         "https://www.sellersprite.com/v2/keyword-research?"
     )
 
 
-def test_manager_collects_all_association_traffic_pages(monkeypatch, tmp_path: Path):
+def test_manager_returns_only_first_association_traffic_page(monkeypatch, tmp_path: Path):
     AssociationTrafficApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", AssociationTrafficApiClient)
     settings = SellerSpriteSettings(
@@ -324,21 +326,20 @@ def test_manager_collects_all_association_traffic_pages(monkeypatch, tmp_path: P
         )
     )
 
-    assert result.row_count == 3
+    assert result.row_count == 2
     assert [row["asin"] for row in result.data] == [
         "B0RESULT001",
         "B0RESULT002",
-        "B0RESULT003",
     ]
-    assert [call["payload"]["pageNum"] for call in AssociationTrafficApiClient.calls] == [1, 2]
+    assert [call["payload"]["pageNum"] for call in AssociationTrafficApiClient.calls] == [1]
     assert all(call["payload"]["pageSize"] == 100 for call in AssociationTrafficApiClient.calls)
     assert all(call["url"] == "/v3/api/relation/traffic" for call in AssociationTrafficApiClient.calls)
     raw = json.loads((tmp_path / "job-association-traffic" / "raw.json").read_text(encoding="utf-8"))
     assert raw["response"]["data"]["pagerDto"]["total"] == 3
-    assert len(raw["response"]["data"]["pagerDto"]["items"]) == 3
+    assert len(raw["response"]["data"]["pagerDto"]["items"]) == 2
 
 
-def test_manager_collects_association_pages_in_browser_route_mode(monkeypatch, tmp_path: Path):
+def test_manager_returns_only_first_association_page_in_browser_route_mode(monkeypatch, tmp_path: Path):
     calls = []
 
     async def fake_browser_route_request(**kwargs):
@@ -385,11 +386,9 @@ def test_manager_collects_association_pages_in_browser_route_mode(monkeypatch, t
         )
     )
 
-    assert result.row_count == 2
-    assert [call["payload"]["pageNum"] for call in calls] == [1, 2]
+    assert result.row_count == 1
+    assert [call["payload"]["pageNum"] for call in calls] == [1]
     assert all(call["payload"]["pageSize"] == 100 for call in calls)
-    assert calls[1]["request"].page_prepare is False
-    assert calls[1]["request"].task_interval_seconds == 0
 
 
 def test_manager_normalizes_competitor_lookup_singular_asin_before_api_call(monkeypatch, tmp_path: Path):

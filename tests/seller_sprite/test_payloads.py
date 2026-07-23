@@ -117,7 +117,7 @@ def test_keyword_research_payload_maps_public_filters_to_web_query():
     assert payload["station"] == "US"
     assert payload["month"] == "202606"
     assert payload["page"] == "1"
-    assert payload["size"] == "50"
+    assert payload["size"] == "100"
     assert payload["departments[0]"] == "kitchen"
     assert payload["departments[1]"] == "tools"
     assert payload["includeKeywords"] == "bed frame"

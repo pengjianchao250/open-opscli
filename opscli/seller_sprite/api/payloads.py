@@ -424,11 +424,11 @@ def make_keyword_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     page = _positive_int(normalized.get("page") or normalized.get("startPage"), default=1, field="page")
     requested_size = _positive_int(
         normalized.get("size") or normalized.get("pageSize"),
-        default=50,
+        default=100,
         field="size",
     )
-    # 官网当前每页最多返回 50 条；保留请求成功优先，不把较大的公共默认值直接透传。
-    size = min(requested_size, 50)
+    # 关键词选品与其他普通场景统一默认每页 100 条，Manager 只执行当前页一次查询。
+    size = requested_size
     site = _market(normalized, default="US")
     month = history_date(normalized.get("month") or normalized.get("period"))
     market_period = str(normalized.get("marketPeriod") or "").strip()
@@ -505,7 +505,7 @@ def make_association_traffic_payload(input_data: dict[str, Any]) -> dict[str, An
     # 关联流量与其他普通场景统一每页 100 条；全部变体是本场景固定业务语义。
     return {
         "market": _int(market, 1),
-        # 业务任务始终从第一页开始，后续页由 Manager 在同一登录会话中汇总。
+        # 业务任务始终从第一页开始，Manager 只解析该页后完成任务。
         "pageNum": 1,
         "pageSize": requested_size,
         "desc": order_desc(input_data.get("desc")),
