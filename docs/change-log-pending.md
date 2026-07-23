@@ -1,5 +1,86 @@
 # 待归档变更记录
 
+## 2026-07-23 skills - install 中央存储版本不一致即覆盖（允许降级）
+
+**变更原因**：升级 opscli 包后，普通 `opscli skills install <name>`（非 --force）遇到已存在的中央副本（`~/.opscli/skills/<name>`）时只判断"目录是否存在"就直接复用，从不比较版本，导致 `data/VERSION.json` 不更新；用户须第二次带 --force 或走交互模式才刷新。要求 install 始终与当前发行包模板对齐。
+**改动点**：`opscli/skills/services/manager.py`
+- `_install_central` Step 1：非 force 时新增版本比较，**只要模板与中央副本版本号不一致就 `rmtree`+`copytree` 覆盖（允许降级）**；版本号完全相同才复用旧副本，避免多余删除重拷。
+- `_install_central` Step 3：链接已有效指向中央副本时，将该目标的链接重建提升为 force（仅删链接不动中央内容），幂等刷新，避免普通 install 因"目标已存在"报错；链接缺失或指向异常时保持原 force 语义。
+- 新增 `_template_version_differs(template_dir, central_skill_dir)` 辅助方法，复用 `updater.compare_versions`（返回非 0 即不一致），读版本失败时保守返回 False。
+- `--skills-dir` 旧复制模式（`_install_copy`）契约不变，仍需 --force 覆盖。
+**验证结果**：新增 `tests/skills/test_manager.py::test_install_central_overwrites_stale_copy_by_version`（旧版本→升级覆盖）、`test_install_central_overwrites_newer_copy_allows_downgrade`（高版本→降级覆盖）、`test_install_central_reuses_same_version_copy`（同版本→复用不重拷，标记文件保留）均通过（test_manager 10 passed）；端到端脚本验证已链接场景普通 install 刷新 v0.0.0→1.3.13 且不报错、符号链接透明反映新版。预存失败（test_manager 3 个 + test_cli 1 个、skills 整目录 capture 崩溃）经 git stash 对比确认与本次改动无关。
+**影响范围**：仅默认中央存储安装路径的覆盖时机；不改变 upgrade、link、--skills-dir 复制模式、远程广场安装。
+**回滚方式**：回退本次 `manager.py` 与 `test_manager.py` 改动即可恢复"存在即复用"的旧行为。
+---
+
+**变更原因**：上一轮改动后交互批量安装收尾仍会打印完整 JSON payload（29 个 Skill 时长达数千字符），用户要求默认只输出安装成功和失败的个数
+**改动点**：opscli/skills/commands/cli.py — _install_interactive 收尾处两个 _emit 调用改为仅在 verbose 或 pretty 为 True 时执行；成功汇总行改为"全部安装完成：N 个成功，0 个失败"（失败分支原有"完成：X 个成功，Y 个失败"保持不变）。单名/远程/sync-market 路径的 JSON 输出不受影响（机器解析契约保留）
+**验证结果**：opscli skills install --yes --skills-dir /tmp/opscli_vtest 默认仅输出一行"全部安装完成：28 个成功，0 个失败"；加 -v 后 JSON payload 恢复输出
+**影响范围**：仅 skills install 交互模式（不带 NAME）的终端输出；安装行为与其他路径不变
+**回滚方式**：回退本次 commit（或还原两处 _emit 的 verbose/pretty 条件判断）
+---
+
+## 2026-07-21 ops-dataset-query 1.3.13 - "本月"改为整自然月口径，自然月环比对比上一个自然月
+
+**变更原因**：诊断类场景（如"业务团队经营增长诊断"）按完整自然月建模，而"本月"此前解析为 1 日至今天（MTD），月中执行时产生"当月不完整、环比天数不等"的口径冲突，诱发模型向用户追加阻断式时间确认。用户指定将"本月"默认改为整月（1 日至月末）。
+**改动点**：scripts/time_scope.py — "本月/这个月"窗口改为 1 日至本月最后一天（monthrange），标签"本月（整月，1日至月末）"；环比新增整自然月分支：主周期为整自然月时对比周期固定为上一个自然月（整月对整月），其他窗口保持等长平移。references/rules.md — 月边界定义改为整月口径（月末未到只作数据更新披露）、紧凑口径规则明确自然月环比大小月天数差异不需补齐或确认。references/ask-user-question-guide.md — 明确本月为整自然月、自然月环比天数不等与当月数据未满均不是待确认项。SKILL.md 时间口径条目补充整月定义，版本 1.3.12→1.3.13，data/VERSION.json 同步。tests/skills/test_dataset_query_planner.py — 更新两处"本月"日期断言为月末，新增 test_time_scope_natural_month_pop_uses_previous_natural_month（本月/上月环比均对比上一个自然月）。
+**验证结果**：pytest tests/skills/test_dataset_query_planner.py 52 passed；逐文件跑 tests/skills/ 仅 test_manager 3 个、test_ops_feedback_template 1 个、test_ops_methods_card_xlsx_preview 1 个失败与 test_packaging capture 崩溃，经 git stash 对照确认全部为 HEAD 预存问题，与本次改动无关。真实日期冒烟：2026-07-21 解析"本月"= 2026-07-01~2026-07-31，"本月环比"对比 2026-06-01~2026-06-30。
+**影响范围**：所有经规划器解析"本月/这个月"的查询窗口（由 MTD 变为整月，月末未到部分自然无数据）；"本月/上月"带环比的对比周期（由等长平移变为上一个自然月）；其他时间表述不受影响。
+**回滚方式**：回退本次 commit（或将 time_scope.py 本月分支还原为 1 日至今天并删除自然月环比分支，同步还原文档与测试断言、版本号）。
+---
+
+## 2026-07-20 skills - install 默认静默，新增 --verbose/-v 控制逐条日志
+
+**变更原因**：批量安装（10 个 Skill × 7 个工具）时逐条打印 70+ 行安装日志和逐条铁律注入提示，输出过于冗长；用户要求默认不输出日志，增加参数控制
+**改动点**：opscli/skills/commands/cli.py — install_skill 新增 --verbose/-v 选项（默认 False）；_install_interactive 增加 verbose 参数，仅在 verbose 时调用 _print_install_line；_inject_rules_for_installs 增加 verbose 参数（注入动作照常执行，仅提示行受控），签名同步改为 Sequence[object] 消除 Pyright 协变告警；单名安装路径的铁律注入同样透传 verbose。最终汇总行与 JSON payload 输出保持不变（机器解析契约不受影响）
+**验证结果**：opscli skills install --yes --skills-dir /tmp/opscli_vtest 默认无逐条日志，仅汇总 + JSON；加 -v 后恢复逐条 √/↑ 日志行；pytest tests/skills/ 退出阶段 capture 崩溃与 2026-07-17 基线一致（预存问题，与本次改动无关）
+**影响范围**：仅 skills install 命令的终端日志展示；JSON 输出、安装与铁律注入行为不变
+**回滚方式**：回退本次 commit（或删除 --verbose 参数并还原三处 verbose 判断）
+---
+
+## 2026-07-20 ops-dataset-query 1.3.12 - 收敛已明确查询的重复确认
+
+**变更原因**：实际复杂诊断中，规划器会对已唯一解析的“本月”、字段完整覆盖的即时综合数据集及唯一精确命中的部门枚举再次提问，造成范围被默认近 30 天覆盖并增加无意义交互。
+**改动点**：字段指导确认即时综合数据集覆盖至少一个原文点名字段时自动选表并直接生成查询模板；完全模糊、没有字段命中的请求仍保留推荐确认。Skill 明确相对时间唯一解析后直接执行、复杂子步骤必须继承原始时间范围、唯一精确枚举命中不得二次确认；同步更新严格 Schema、版本与回归测试。
+**验证结果**：`tests/skills/test_dataset_query_planner.py` 51 passed（含“本月 + 自动选即时综合”直接生成模板及唯一枚举免确认合同）；Ruff、compileall、`git diff --check` 全部通过；严格 Schema 可解析，`SKILL.md` 与 `data/VERSION.json` 版本一致为 1.3.12。
+**影响范围**：ops-dataset-query 的默认选表、时间继承与筛选确认策略；不改变存在真实多候选、默认时间、未知字段或无字段模糊请求的澄清行为。
+**回滚方式**：回退本次提交即可恢复 1.3.11 的默认数据集确认策略。
+---
+
+## 2026-07-20 seller_sprite - 限制持久队列单任务执行时间
+
+**变更原因**：一期 T1-1，向用户暴露一键升级入口
+**改动点**：opscli/cli.py 新增 @app.command("self-update")，薄壳调用 run_self_update 并透传退出码
+**验证结果**：pytest tests/shared/test_self_update.py -v 18 个测试全绿；真机 opscli self-update --help 冒测通过
+**影响范围**：新增顶级命令，不影响既有命令
+**回滚方式**：回退本次 commit
+---
+
+## 2026-07-16 shared - 新增 run_self_update 升级编排流程
+
+**变更原因**：一期 T1-1，实现"升级 CLI + 自动同步 Skills"完整编排
+**改动点**：opscli/shared/self_update.py 追加 run_self_update() 与 _resolve_opscli_command()；复用 update_check 的版本查询与比较
+**验证结果**：pytest tests/shared/test_self_update.py -v 15 个测试全绿
+**影响范围**：纯新增函数，未被任何入口调用（Task 3 接线）
+**回滚方式**：回退本次 commit
+---
+
+## 2026-07-16 shared - 新增自升级模块：安装方式检测与升级命令构造
+
+**变更原因**：一期升级体验优化（T1-1/T1-2），为 opscli self-update 命令提供实现层基础
+**改动点**：新增 opscli/shared/self_update.py（detect_install_method + build_upgrade_command），pip 路径强制 --only-binary :all: 防源码编译退化
+**验证结果**：pytest tests/shared/test_self_update.py -v 9 个测试全绿
+**影响范围**：纯新增模块，不影响现有功能
+**回滚方式**：删除 opscli/shared/self_update.py 与 tests/shared/test_self_update.py
+---
+
+## 2026-07-16 release - 批量 cherry-pick master_pjc 的 19 个提交至 release
+
+**变更原因**：用户要求把 master_pjc 分支上从「feat(query): QueryMetadataResult 透传数据集默认条件 filter_configs（R4）」（aaf8c2e）到「feat(query): 查询超时可配置(默认30→120秒)并支持结果落盘 JSON 文件」（c81a177）的连续 19 个提交同步到 release 分支，覆盖数据集默认条件 filter_config 全链路（R4/R5）、ops-dataset-query v1.3.6/1.4.0、macOS Keychain 禁用改 AES 加密文件、查询超时可配置等能力。
+**改动点**：在 release 分支执行 `git cherry-pick a811d7b..c81a177`，19 个提交全部落地（f90e47b..180f6ce）。期间 `docs/change-log-pending.md` 发生多次同形态冲突（两分支各自在顶部追加记录，且 master_pjc 侧带有 release 不存在的「2026-07-10 合并 ASIN 实时取数服务到 master」上下文条目头），统一按"新条目置前 + 保留 release 已有的 2026-07-14 Polaris 条目 + 丢弃 master_pjc 独有上下文头"解决；代码文件均无冲突。
+**验证结果**：`git diff --check` 无冲突标记残留；`pytest tests/auth/ -q` 46 passed；`pytest tests/query/ -q` 76 passed + 2 failed（预存，release 屏蔽了 catalog/intent 命令所致，基线提交 2953760 上同样失败）；`pytest tests/skills/ --ignore=tests/skills/test_packaging.py -q` 138 passed + 4 failed（预存，基线上同样失败）；核心改动测试 `tests/skills/test_dataset_query_planner.py` 36 passed。与 master_pjc 对比，目标路径仅剩 release 预存独有差异（polaris_enabled 默认值、catalog/intent 临时屏蔽、release 独有测试文件）。
+**影响范围**：release 分支新增 19 个提交（领先 origin/release 20 个提交，未推送），涉及 query 模块、ops-dataset-query Skill 模板、auth 凭证存储、相关测试与文档。
+**回滚方式**：`git reset --hard 2953760`（cherry-pick 前的 release HEAD）。
 ## 2026-07-21 仪表盘双 Skills 接入
 
 **变更原因**：需要将 operation-frontend 的仪表盘只读分析与页面编辑领域规范纳入 opscli 内置 Skill 安装体系，并明确页面运行时依赖，避免普通 MCP 会话误判自身具备 Dashboard 页面工具。
@@ -697,7 +778,6 @@
 **验证结果**：RED：`.\.venv\Scripts\python.exe -m pytest tests/seller_sprite/test_remote_adapter.py -q` 初始失败，`KeyError: 'session_id'`。GREEN：同命令复跑通过，`3 passed in 0.46s`；回归 `.\.venv\Scripts\python.exe -m pytest tests/seller_sprite -q` 通过，`82 passed in 9.33s`。
 **影响范围**：仅影响正式 `opscli seller-sprite` 远端调用参数；`seller-sprite-debug`、远端 MCP 凭证隔离模型、卖家精灵任务调度和导出逻辑不变。
 **回滚方式**：回退 `opscli/seller_sprite/remote_adapter.py`、`tests/seller_sprite/test_remote_adapter.py` 和本条变更记录。
-
 ---
 
 ## 2026-06-23 seller_sprite - 收紧登录等待与失败冷却上限

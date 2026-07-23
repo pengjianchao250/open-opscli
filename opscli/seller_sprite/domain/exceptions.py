@@ -25,6 +25,12 @@ class SellerSpriteAccountUnavailableError(SellerSpriteError):
     code = "SELLER_SPRITE_ACCOUNT_UNAVAILABLE"
 
 
+class SellerSpriteTaskTimeoutError(SellerSpriteError):
+    """卖家精灵任务超过允许的最长执行时间。"""
+
+    code = "SELLER_SPRITE_TASK_TIMEOUT"
+
+
 class SellerSpriteApiError(SellerSpriteError):
     """卖家精灵接口请求错误。"""
 

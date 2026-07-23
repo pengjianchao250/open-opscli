@@ -48,12 +48,36 @@
       "reason": "强依赖内部数据口径和健康诊断阈值，暂不随公开产物发版"
     },
     "ops-asin-data-collector": {
-      "source": false,
-      "wheel": false,
-      "binary": false,
-      "binary_full": false,
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
       "tier": "internal",
-      "reason": "面向内部运营 Codex 的 ASIN 批量取数编排 Skill，强依赖内部 BI/爬虫数据集和 SellerSprite/Amazon 采集入口，暂不随公开产物发版"
+      "reason": "Routes ASIN data requests to source-specific CLI skills"
+    },
+    "ops-asin-data-basic": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "Queries internal listing and crawler basic ASIN data"
+    },
+    "ops-asin-data-bi": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "Queries source-specific ASIN BI domains"
+    },
+    "ops-asin-data-category-top": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "Queries internal category Top ASIN rankings"
     },
     "ops-auth": {
       "source": true,

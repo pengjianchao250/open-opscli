@@ -248,6 +248,104 @@ def test_install_central_no_ai_tools_uses_central_store(tmp_path: Path):
     assert "ops-dataset-query" in payload["central_path"]
 
 
+def _empty_detector() -> MagicMock:
+    """构造无 AI 工具的 detector，隔离真实 ~/.claude 等目录。"""
+    mock_detector = MagicMock()
+    mock_detector.detect_available_install_targets.return_value = []
+    mock_detector.detect_global_install_targets.return_value = []
+    mock_detector.discover.return_value = []
+    return mock_detector
+
+
+def test_install_central_overwrites_stale_copy_by_version(tmp_path: Path):
+    """普通 install（非 force）遇到版本更旧的中央副本时，应按版本自动覆盖刷新。"""
+    central = tmp_path / "central"
+    # 预置一个版本更旧的中央副本（模拟升级 opscli 包前的残留）
+    stale_dir = central / "ops-dataset-query" / "data"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "VERSION.json").write_text(
+        '{"name":"ops-dataset-query","version":"v0.0.0"}', encoding="utf-8"
+    )
+
+    manager = SkillsManager(
+        registry_path=tmp_path / "registry.json",
+        central_skills_dir=central,
+        detector=_empty_detector(),
+    )
+
+    # 内置模板的真实版本（动态读取，避免随模板升级而漂移）
+    template_version = json.loads(
+        (manager.templates_dir / "ops-dataset-query" / "data" / "VERSION.json").read_text(encoding="utf-8")
+    )["version"]
+
+    result = manager.install("ops-dataset-query", cwd=tmp_path, force=False)
+
+    # 中央副本已被内置模板覆盖：版本号从 v0.0.0 刷新为模板版本，且模板文件补齐
+    payload = json.loads(
+        (central / "ops-dataset-query" / "data" / "VERSION.json").read_text(encoding="utf-8")
+    )
+    assert payload["version"] == template_version
+    assert payload["version"] != "v0.0.0"
+    assert result.to_dict()["version"] == template_version
+    assert (central / "ops-dataset-query" / "SKILL.md").exists()
+
+
+def test_install_central_overwrites_newer_copy_allows_downgrade(tmp_path: Path):
+    """普通 install（非 force）遇到版本更高的中央副本时，应以模板为准覆盖（允许降级）。"""
+    central = tmp_path / "central"
+    # 预置一个版本更高的中央副本（模拟本地残留了更高版本）
+    newer_dir = central / "ops-dataset-query" / "data"
+    newer_dir.mkdir(parents=True)
+    (newer_dir / "VERSION.json").write_text(
+        '{"name":"ops-dataset-query","version":"v9.9.9"}', encoding="utf-8"
+    )
+
+    manager = SkillsManager(
+        registry_path=tmp_path / "registry.json",
+        central_skills_dir=central,
+        detector=_empty_detector(),
+    )
+    template_version = json.loads(
+        (manager.templates_dir / "ops-dataset-query" / "data" / "VERSION.json").read_text(encoding="utf-8")
+    )["version"]
+
+    manager.install("ops-dataset-query", cwd=tmp_path, force=False)
+
+    # 版本号不一致即覆盖：高版本被降级为模板版本
+    payload = json.loads(
+        (central / "ops-dataset-query" / "data" / "VERSION.json").read_text(encoding="utf-8")
+    )
+    assert payload["version"] == template_version
+    assert payload["version"] != "v9.9.9"
+
+
+def test_install_central_reuses_same_version_copy(tmp_path: Path):
+    """普通 install（非 force）遇到版本号相同的中央副本时，复用旧副本、不做删除重拷。"""
+    central = tmp_path / "central"
+    manager = SkillsManager(
+        registry_path=tmp_path / "registry.json",
+        central_skills_dir=central,
+        detector=_empty_detector(),
+    )
+    template_version = json.loads(
+        (manager.templates_dir / "ops-dataset-query" / "data" / "VERSION.json").read_text(encoding="utf-8")
+    )["version"]
+
+    # 预置一个与模板同版本的中央副本，并放一个标记文件用于检测是否被 rmtree
+    same_dir = central / "ops-dataset-query" / "data"
+    same_dir.mkdir(parents=True)
+    (same_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": template_version}), encoding="utf-8"
+    )
+    marker = central / "ops-dataset-query" / "_marker.txt"
+    marker.write_text("keep-me", encoding="utf-8")
+
+    manager.install("ops-dataset-query", cwd=tmp_path, force=False)
+
+    # 版本相同 → 未删除重拷，标记文件仍在
+    assert marker.exists()
+
+
 def test_upgrade_central_no_ai_tools_reads_central_store(tmp_path: Path, monkeypatch):
     """无 AI 工具时，upgrade 应从中央存储读取记录并执行升级。"""
     # 先在中央存储写入一个模拟 Skill 目录

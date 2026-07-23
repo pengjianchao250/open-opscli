@@ -28,6 +28,14 @@ def disable_real_file_upload_client(monkeypatch):
     monkeypatch.setattr(canopy_api_manager, "FileUploadClient", DisabledUploadClient)
 
 
+@pytest.fixture(autouse=True)
+def allow_all_tools_without_local_credentials(monkeypatch):
+    async def allow_all():
+        return None
+
+    monkeypatch.setattr("opscli.mcp.permissions._resolve_allowed_tools", allow_all)
+
+
 def test_mcp_exposes_beta_tools():
     async def scenario():
         async with Client(mcp) as client:
@@ -50,17 +58,60 @@ def test_beta_spec_reads_internal_reference():
     result = _run(beta_tools.beta_spec_must_read())
 
     assert result["success"] is True
-    assert "ops-beta Canopy MCP" in result["data"]["spec"]
-    assert result["data"]["source"].endswith("opscli\\skills\\templates\\ops-canopy\\SKILL_MCP.md") or result["data"]["source"].endswith("opscli/skills/templates/ops-canopy/SKILL_MCP.md")
+    assert "Canopy 测试调研服务 MCP 说明" in result["data"]["spec"]
+    assert "OPSCLI_MCP_CANOPY_ENABLED" in result["data"]["spec"]
+    source = result["data"]["source"].replace("\\", "/")
+    assert source.endswith("opscli/mcp/references/canopy/SKILL_MCP.md")
+    assert result["data"]["sources"] == [result["data"]["source"]]
 
 
 def test_beta_canopy_scenarios_returns_all_openapi_endpoints():
     result = _run(beta_tools.beta_canopy_scenarios())
 
     assert result["success"] is True
-    scenario_ids = {item["scenario_id"] for item in result["data"]}
-    assert len(scenario_ids) == 17
-    assert {"product", "search", "product-reviews"}.issubset(scenario_ids)
+    scenarios = {item["scenario_id"]: item for item in result["data"]}
+    assert len(scenarios) == 17
+    assert {"product", "search", "product-reviews"}.issubset(scenarios)
+    assert scenarios["search"]["optional_params"] == [
+        "page",
+        "limit",
+        "categoryId",
+        "minPrice",
+        "maxPrice",
+        "conditions",
+        "sort",
+    ]
+
+
+class RecordingMcp:
+    def __init__(self):
+        self.registered = []
+
+    def tool(self, **kwargs):
+        def decorator(fn):
+            self.registered.append((fn.__name__, kwargs))
+            return fn
+
+        return decorator
+
+
+def test_beta_registers_canopy_tools_by_default(monkeypatch):
+    monkeypatch.delenv(beta_tools.ENV_CANOPY_ENABLED, raising=False)
+    mcp = RecordingMcp()
+
+    beta_tools.register(mcp)
+
+    assert [name for name, _ in mcp.registered] == [fn.__name__ for fn in beta_tools._ALL_TOOLS]
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", " FALSE "])
+def test_beta_does_not_register_canopy_tools_when_disabled(monkeypatch, value):
+    monkeypatch.setenv(beta_tools.ENV_CANOPY_ENABLED, value)
+    mcp = RecordingMcp()
+
+    beta_tools.register(mcp)
+
+    assert mcp.registered == []
 
 
 def test_beta_canopy_job_status_hides_local_paths(monkeypatch):

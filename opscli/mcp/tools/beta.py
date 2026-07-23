@@ -5,6 +5,8 @@
 """
 
 from __future__ import annotations
+
+import os
 from pathlib import Path
 from typing import Any
 
@@ -19,12 +21,12 @@ from opscli.beta.canopy.domain.exceptions import CanopyConfigError
 from opscli.beta.canopy.domain.models import CanopyScenarioRequest
 from opscli.beta.canopy.services import CanopyApiManager
 from opscli.beta.canopy.services.api_manager import request_canopy_api
-from opscli.skills.packaging import get_builtin_templates_dir
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 
 DEFAULT_TIMEOUT_SECONDS = 60
+ENV_CANOPY_ENABLED = "OPSCLI_MCP_CANOPY_ENABLED"
 MAX_PUBLIC_DATA_PREVIEW_ROWS = 20
 SUPPORTED_DOMAINS = {"US", "UK", "CA", "DE", "FR", "IT", "ES", "AU", "IN", "MX", "BR", "JP", "PL"}
 
@@ -99,7 +101,15 @@ CANOPY_SCENARIOS: dict[str, dict[str, Any]] = {
         "method": "GET",
         "path": "/api/amazon/search",
         "required_params": ["searchTerm"],
-        "optional_params": ["page", "limit", "categoryId", "sort"],
+        "optional_params": [
+            "page",
+            "limit",
+            "categoryId",
+            "minPrice",
+            "maxPrice",
+            "conditions",
+            "sort",
+        ],
         "description": "按关键词搜索 Amazon 商品。",
     },
     "autocomplete": {
@@ -169,35 +179,25 @@ CANOPY_SCENARIOS: dict[str, dict[str, Any]] = {
 }
 
 
-def _canopy_skill_dir() -> Path:
-    """返回 Canopy Skill 模板目录。"""
-    return get_builtin_templates_dir() / "ops-canopy"
+def _canopy_spec_path() -> Path:
+    """返回 Canopy MCP 内部说明文件路径。"""
+    return Path(__file__).resolve().parents[1] / "references" / "canopy" / "SKILL_MCP.md"
 
 
 async def beta_spec_must_read() -> dict:
-    """仅当用户明确提到 beta/Canopy/测试服务时，读取 beta MCP 使用规范。
-
-    规范内容统一收口到 opscli 内置 Skill 模板：
-    - opscli/skills/templates/ops-canopy/SKILL_MCP.md
-    - opscli/skills/templates/ops-canopy/references/OFFICIAL.md
-    """
-    skill_dir = _canopy_skill_dir()
-    spec_path = skill_dir / "SKILL_MCP.md"
-    official_path = skill_dir / "references" / "OFFICIAL.md"
-    required_paths = [spec_path, official_path]
-
-    for path in required_paths:
-        if not path.exists():
-            return _err(
-                FileNotFoundError(f"beta MCP 规范文档不存在：{path}。请检查 opscli 安装是否完整。"),
-                tool="MCP → beta_spec_must_read()",
-            )
+    """仅当用户明确提到 beta/Canopy/测试服务时，读取 beta MCP 使用规范。"""
+    spec_path = _canopy_spec_path()
+    if not spec_path.exists():
+        return _err(
+            FileNotFoundError(f"beta MCP 规范文档不存在：{spec_path}。请检查 opscli 安装是否完整。"),
+            tool="MCP → beta_spec_must_read()",
+        )
     try:
         return _ok(
             {
-                "spec": "\n\n".join(path.read_text(encoding="utf-8") for path in required_paths),
+                "spec": spec_path.read_text(encoding="utf-8"),
                 "source": str(spec_path),
-                "sources": [str(path) for path in required_paths],
+                "sources": [str(spec_path)],
             }
         )
     except Exception as exc:
@@ -592,7 +592,15 @@ _ALL_TOOLS = [
 ]
 
 
+def _canopy_enabled() -> bool:
+    """读取 Canopy MCP 总开关，默认启用。"""
+    value = os.environ.get(ENV_CANOPY_ENABLED, "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def register(mcp) -> None:
-    """向指定 MCP 实例注册 beta 工具。"""
+    """启用时向指定 MCP 实例注册 beta Canopy 工具。"""
+    if not _canopy_enabled():
+        return
     for fn in _ALL_TOOLS:
         mcp.tool(annotations=_NETWORK_READ_ANNOTATIONS)(fn)
