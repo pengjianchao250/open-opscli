@@ -69,6 +69,18 @@ class DummyApiClient:
         }
 
 
+class KeywordResearchApiClient(DummyApiClient):
+    calls = []
+
+    async def get_html(self, url, params, *, referer=None):
+        self.calls.append({"url": url, "params": params, "referer": referer})
+        cells = "".join(f"<td>{value}</td>" for value in [
+            "", "1", "desk lamp", "", "", "1,000", "10|1%", "100|20",
+            "2%", "3 (4%)|5 (6%)", "7%|8%", "9", "10%", "", "", "11|12", "$13.00|14 (4.5)", "",
+        ])
+        return f'<table id="table-condition-search"><tbody><tr>{cells}</tr></tbody></table>'
+
+
 class SessionExpiredOnceApiClient(DummyApiClient):
     instance = None
 
@@ -214,6 +226,34 @@ def test_manager_writes_job_files_and_xlsx(monkeypatch, tmp_path: Path):
     assert saved["export"]["filename"] == "job-offline-regression.xlsx"
     assert DummyApiClient.calls[0]["payload"]["asin"] == "B07YRMT36L"
     assert "market" not in DummyApiClient.calls[0]["payload"]
+
+
+def test_manager_runs_keyword_research_as_get_page(monkeypatch, tmp_path: Path):
+    KeywordResearchApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", KeywordResearchApiClient)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None, default_mode="api-direct")
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-research",
+                site="US",
+                period="2026-06",
+                params={"minWordCount": 1, "maxWordCount": 5},
+                page_size=50,
+                job_id="job-keyword-research",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert KeywordResearchApiClient.calls[0]["url"] == "/v2/keyword-research"
+    assert KeywordResearchApiClient.calls[0]["params"]["month"] == "202606"
+    assert KeywordResearchApiClient.calls[0]["params"]["minWordCount"] == "1"
+    assert KeywordResearchApiClient.calls[0]["referer"].startswith(
+        "https://www.sellersprite.com/v2/keyword-research?"
+    )
 
 
 def test_manager_normalizes_competitor_lookup_singular_asin_before_api_call(monkeypatch, tmp_path: Path):

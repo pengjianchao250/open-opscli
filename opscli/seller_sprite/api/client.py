@@ -175,6 +175,43 @@ class SellerSpriteApiClient:
         )
         return self._parse_json_response(response)
 
+    async def get_html(self, url: str, params: dict[str, Any], *, referer: str | None = None) -> str:
+        """GET 卖家精灵页面并返回 HTML 文本。
+
+        参数：
+            url: 页面路径或完整 URL。
+            params: 随请求发送的查询参数。
+            referer: 可选来源页面，用于构造浏览器请求头。
+
+        返回：
+            页面响应的原始 HTML 文本。
+
+        异常：
+            SellerSpriteApiError: 登录态失效或页面返回 HTTP 错误时抛出。
+        """
+        response = await self._client.get(
+            _absolute_url(url),
+            params=params,
+            headers={
+                **self._browser_headers(referer=referer),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+        )
+        if _looks_like_session_expired_response(response):
+            raise SellerSpriteApiError(
+                "卖家精灵登录态失效",
+                status_code=response.status_code,
+                response_excerpt=response.text[:1000],
+                api_code="ERR_GLOBAL_SESSION_EXPIRED",
+            )
+        if response.status_code >= 400:
+            raise SellerSpriteApiError(
+                "卖家精灵页面请求失败",
+                status_code=response.status_code,
+                response_excerpt=response.text[:1000],
+            )
+        return response.text
+
     async def category_nodes(
         self,
         *,

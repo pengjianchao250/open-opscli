@@ -26,7 +26,7 @@ def export_rows_to_xlsx(
     """将接口 rows 导出为 XLSX。"""
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill
+        from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.utils import get_column_letter
     except ModuleNotFoundError as exc:
         raise SellerSpriteConfigError("缺少 openpyxl 依赖，无法导出 XLSX") from exc
@@ -40,25 +40,38 @@ def export_rows_to_xlsx(
     sheet = workbook.active
     sheet.title = _main_sheet_title(scenario=scenario, site=site, period=period, params=params or {}, rows=rows)
 
-    header_fill = PatternFill("solid", fgColor="EAF2F8")
-    header_font = Font(bold=True)
+    keyword_research = scenario == "keyword-research"
+    header_fill = PatternFill("solid", fgColor="FFE98A00" if keyword_research else "EAF2F8")
+    header_font = Font(name="Calibri", size=10, bold=False) if keyword_research else Font(bold=True)
     for column_index, column in enumerate(columns, start=1):
         cell = sheet.cell(row=1, column=column_index, value=column.title)
         cell.font = header_font
         cell.fill = header_fill
+        if keyword_research:
+            cell.alignment = Alignment(horizontal="center", vertical="center")
 
     for row_index, row in enumerate(rows, start=2):
         for column_index, column in enumerate(columns, start=1):
-            cell = sheet.cell(row=row_index, column=column_index, value=_cell_value(_column_value(row, column, site=site)))
-            _apply_number_format(cell)
+            value = _cell_value(_column_value(row, column, site=site))
+            cell = sheet.cell(row=row_index, column=column_index, value=value)
+            if keyword_research:
+                _apply_keyword_research_number_format(cell, column_index)
+            else:
+                _apply_number_format(cell)
 
     sheet.freeze_panes = "A2"
     for column_index, column in enumerate(columns, start=1):
-        width = _column_width(column.title)
+        width = (
+            KEYWORD_RESEARCH_COLUMN_WIDTHS[column_index - 1]
+            if keyword_research
+            else _column_width(column.title)
+        )
         sheet.column_dimensions[get_column_letter(column_index)].width = width
 
     if high_frequency_rows:
         _add_high_frequency_sheet(workbook, high_frequency_rows)
+    if keyword_research:
+        _add_keyword_research_notes_sheet(workbook)
 
     workbook.save(output_path)
     resolved_output = output_path.resolve()
@@ -171,6 +184,43 @@ def _apply_number_format(cell) -> None:
     cell.number_format = "#,##0" if float(value).is_integer() else "#,##0.00"
 
 
+def _apply_keyword_research_number_format(cell, column_index: int) -> None:
+    if not isinstance(cell.value, Real) or isinstance(cell.value, bool):
+        return
+    # 列序号与官方 28 列主表一一对应，保留百分比、小数位和整数的显示口径。
+    formats = {
+        5: "#,##0.00%",
+        7: "#,##0.00%",
+        8: "#,##0_ ",
+        9: "#,##0_ ",
+        11: "#,##0.0",
+        14: "#,##0.00%",
+        15: "#,##0.00%",
+        16: "#,##0.0%",
+        19: "#,##0.0",
+        20: "#,##0.00_ ",
+        21: "#,##0.00_ ",
+        22: "#,##0.00_ ",
+        24: "#,##0.00%",
+        26: "#,##0.00%",
+    }
+    cell.number_format = formats.get(column_index, "#,##0")
+
+
+def _add_keyword_research_notes_sheet(workbook) -> None:
+    sheet = workbook.create_sheet("Notes")
+    notes = [
+        "卖家精灵官网：https://www.sellersprite.com",
+        "客服电话：139-8227-0926(谭先生)",
+        "微信客服：",
+        "备注：评分，评论，问答，变体，卖家等数据都是取的“最近更新”当日的数字。",
+        "选 词 选 品 选 市 场，就 上 卖 家 精 灵",
+    ]
+    for row_index, value in enumerate(notes, start=1):
+        sheet.cell(row=row_index, column=1, value=value)
+    sheet.column_dimensions["A"].width = 90
+
+
 def _add_high_frequency_sheet(workbook, rows: list[dict[str, Any]]) -> None:
     from openpyxl.styles import Font
 
@@ -197,6 +247,8 @@ def _main_sheet_title(*, scenario: str, site: str, period: str, params: dict[str
     elif scenario == "keyword-reverse":
         asin = params.get("asin") or params.get("q") or "ASIN"
         title = f"{site.upper()}-{asin}-Keywords({len(rows)})_"
+    elif scenario == "keyword-research":
+        title = f"Keywords({len(rows)})"
     elif scenario == "product-research":
         title = f"Product-{site.upper()}-{_period_label(period)}"
     elif scenario == "competitor-lookup":
@@ -206,6 +258,39 @@ def _main_sheet_title(*, scenario: str, site: str, period: str, params: dict[str
     else:
         title = scenario
     return _safe_sheet_title(title)
+
+
+# 列宽来自官方 KeywordResearch-US-202606-667951.xlsx，用于保证本地导出视觉一致。
+KEYWORD_RESEARCH_COLUMN_WIDTHS = [
+    28,
+    13,
+    14,
+    13,
+    11,
+    14,
+    12,
+    13,
+    13,
+    13,
+    11,
+    13,
+    13,
+    11,
+    13,
+    11,
+    13,
+    13,
+    13,
+    13,
+    12.6637168141593,
+    13.0530973451327,
+    18,
+    13,
+    13,
+    13,
+    74,
+    120,
+]
 
 
 def _safe_sheet_title(value: str) -> str:

@@ -4,6 +4,7 @@ from opscli.seller_sprite.api.payloads import (
     build_referer,
     make_competitor_payload,
     make_keyword_miner_payload,
+    make_keyword_research_payload,
     make_keyword_reverse_payload,
     make_listing_analysis_payload,
     make_product_research_payload,
@@ -87,6 +88,61 @@ def test_keyword_miner_payload_maps_root_word_and_amazon_choice():
     assert payload["pageSize"] == 100
     assert payload["filterRootWord"] == 1
     assert payload["amazonChoice"] is True
+
+
+def test_keyword_research_payload_maps_public_filters_to_web_query():
+    scenario = get_scenario("keyword-research")
+
+    payload = scenario.build_payload(
+        params={
+            "departments": ["kitchen", "tools"],
+            "keywords": "bed frame",
+            "minSearchesCr": 20,
+            "maxSearchesCr": 30,
+            "minWordCount": 1,
+            "maxWordCount": 9,
+            "minRating": 0,
+            "maxRating": 5,
+            "marketPeriod": "S4,S5,S6",
+            "orderDesc": False,
+        },
+        site="US",
+        period="2026-06",
+        page_size=100,
+    )
+
+    assert scenario.endpoint == "/v2/keyword-research"
+    assert scenario.method == "GET_PAGE"
+    assert payload["station"] == "US"
+    assert payload["month"] == "202606"
+    assert payload["page"] == "1"
+    assert payload["size"] == "50"
+    assert payload["departments[0]"] == "kitchen"
+    assert payload["departments[1]"] == "tools"
+    assert payload["includeKeywords"] == "bed frame"
+    assert payload["minGrowth"] == "20"
+    assert payload["maxGrowth"] == "30"
+    assert payload["minAvgRating"] == "0"
+    assert payload["maxAvgRating"] == "5"
+    assert payload["marketPeriod"] == "S4,S5,S6"
+    assert payload["order.desc"] == "false"
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"minWordCount": 0}, "minWordCount"),
+        ({"minWordCount": 6}, "minWordCount"),
+        ({"maxWordCount": 10}, "maxWordCount"),
+        ({"minRating": -0.1}, "minRating"),
+        ({"maxRating": 5.1}, "maxRating"),
+        ({"minSearches": 20, "maxSearches": 10}, "minSearches"),
+        ({"marketPeriod": "S13"}, "marketPeriod"),
+    ],
+)
+def test_keyword_research_payload_rejects_invalid_ranges(params, message):
+    with pytest.raises(SellerSpriteConfigError, match=message):
+        make_keyword_research_payload({"site": "US", "period": "2026-06", **params})
 
 
 def test_keyword_reverse_payload_keeps_orchestration_fields_for_manager():

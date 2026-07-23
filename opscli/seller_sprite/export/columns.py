@@ -121,6 +121,39 @@ KEYWORD_MINER_COLUMNS = [
 ]
 
 
+# 关键词选品列名和顺序逐列对齐官方 KeywordResearch-US-202606-667951.xlsx。
+KEYWORD_RESEARCH_COLUMNS = [
+    ExportColumn("关键词", "keyword"),
+    ExportColumn("关键词翻译", "keywordCn"),
+    ExportColumn("ABA排名", "searchRank"),
+    ExportColumn("月搜索量", "searches"),
+    ExportColumn("搜索增长率", "searchesCr"),
+    ExportColumn("月购买量", "purchases"),
+    ExportColumn("购买率", "purchaseRate"),
+    ExportColumn("展示量", "impressions"),
+    ExportColumn("点击量", "clicks"),
+    ExportColumn("商品数", "products"),
+    ExportColumn("需供比", "supplyDemandRatio"),
+    ExportColumn("SPR", "spr"),
+    ExportColumn("标题密度", "titleDensity"),
+    ExportColumn("点击总占比", "monopolyClickRate"),
+    ExportColumn("转化总占比", "cvsShareRate"),
+    ExportColumn("货流值", "goodsValue"),
+    ExportColumn("均价", "avgPrice"),
+    ExportColumn("评分数", "avgReviews"),
+    ExportColumn("评分值", "avgRating"),
+    ExportColumn("PPC竞价-最低($)", "bidMin"),
+    ExportColumn("PPC竞价-推荐($)", "bid"),
+    ExportColumn("PPC竞价-最高($)", "bidMax"),
+    ExportColumn("同比增长值", "searchMonthCv"),
+    ExportColumn("同比增长率", "searchMonthCr"),
+    ExportColumn("近3个月增长值", "searchNearlyCv"),
+    ExportColumn("近3个月增长率", "searchNearlyCr"),
+    ExportColumn("所属类目", "departments"),
+    ExportColumn("前10ASIN", "gkDatas", transform="asinList"),
+]
+
+
 KEYWORD_REVERSE_COLUMNS = [
     ExportColumn("关键词", "keywords"),
     ExportColumn("关键词翻译", "keywordCn"),
@@ -227,6 +260,8 @@ def columns_for_scenario(scenario: str, site: str) -> list[ExportColumn]:
             currency,
             {"PPC竞价", "建议竞价范围", "均价"},
         )
+    if scenario == "keyword-research":
+        return KEYWORD_RESEARCH_COLUMNS
     if scenario == "keyword-reverse":
         return _columns_with_currency_titles(
             KEYWORD_REVERSE_COLUMNS,

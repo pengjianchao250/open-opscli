@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 from urllib.parse import urlencode
 
@@ -194,6 +195,79 @@ MARKET_RESEARCH_HIDDEN_FIELDS = [
     "maxNewAvgSales",
 ]
 
+# 关键词选品公共字段与页面表单字段的映射，取值来自 2026-07-23 官网页面实测。
+KEYWORD_RESEARCH_FIELD_ALIASES: dict[str, str] = {
+    "minSearchesCr": "minGrowth",
+    "maxSearchesCr": "maxGrowth",
+    "minSearchMonthCv": "minYearlyGrowth",
+    "maxSearchMonthCv": "maxYearlyGrowth",
+    "minSearchMonthCr": "minYearlyGrowthRate",
+    "maxSearchMonthCr": "maxYearlyGrowthRate",
+    "minSearchNearlyCv": "minGrowthTrendMin",
+    "maxSearchNearlyCv": "maxGrowthTrendMin",
+    "minSearchNearlyCr": "minGrowthRateTrendMin",
+    "maxSearchNearlyCr": "maxGrowthRateTrendMin",
+    "minRatings": "minAvgReviews",
+    "maxRatings": "maxAvgReviews",
+    "minRating": "minAvgRating",
+    "maxRating": "maxAvgRating",
+    "minAraClickRate": "minMonopolyClickRate",
+    "maxAraClickRate": "maxMonopolyClickRate",
+}
+
+# 页面允许成对提交的范围字段后缀；构造器据此统一处理最小值、最大值和大小关系。
+KEYWORD_RESEARCH_RANGE_FIELDS = (
+    "Searches",
+    "YearlyGrowth",
+    "GrowthTrendMin",
+    "Products",
+    "Purchases",
+    "Impressions",
+    "SPR",
+    "GoodsValue",
+    "AvgPrice",
+    "AvgReviews",
+    "WordCount",
+    "Growth",
+    "YearlyGrowthRate",
+    "GrowthRateTrendMin",
+    "SupplyDemandRatio",
+    "PurchaseRate",
+    "Clicks",
+    "TitleDensity",
+    "MonopolyClickRate",
+    "CvsShareRate",
+    "Bid",
+    "AvgRating",
+)
+
+# 官网仅接受整数的范围字段，避免把小数静默传给页面后再由页面丢弃。
+KEYWORD_RESEARCH_INTEGER_RANGES = {
+    "Searches",
+    "YearlyGrowth",
+    "GrowthTrendMin",
+    "Products",
+    "Purchases",
+    "Impressions",
+    "SPR",
+    "AvgReviews",
+    "WordCount",
+    "Clicks",
+    "TitleDensity",
+}
+
+# 市场周期枚举来自官网下拉框；空字符串表示“不限”。
+KEYWORD_RESEARCH_MARKET_PERIODS = {
+    "",
+    "N",
+    "S1,S2,S3",
+    "S4,S5,S6",
+    "S7,S8,S9",
+    "S10,S11,S12",
+    "I",
+    "D",
+}
+
 
 def make_competitor_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造竞品查询 payload。"""
@@ -297,6 +371,78 @@ def make_keyword_miner_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def make_keyword_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造关键词选品页面 GET 查询参数。
+
+    参数：
+        input_data: 公共场景参数，兼容已记录的页面字段别名。
+
+    返回：
+        可直接用于官网关键词选品页面 GET 请求的查询参数。
+
+    异常：
+        SellerSpriteConfigError: 范围、分页或市场周期参数不符合页面约束时抛出。
+    """
+    # 先归一化公共字段，确保校验和最终页面参数只处理一套名称。
+    normalized = dict(input_data)
+    for source, target in KEYWORD_RESEARCH_FIELD_ALIASES.items():
+        if source in normalized and target not in normalized:
+            normalized[target] = normalized[source]
+    _validate_keyword_research_ranges(normalized)
+
+    page = _positive_int(normalized.get("page") or normalized.get("startPage"), default=1, field="page")
+    requested_size = _positive_int(
+        normalized.get("size") or normalized.get("pageSize"),
+        default=50,
+        field="size",
+    )
+    # 官网当前每页最多返回 50 条；保留请求成功优先，不把较大的公共默认值直接透传。
+    size = min(requested_size, 50)
+    site = _market(normalized, default="US")
+    month = history_date(normalized.get("month") or normalized.get("period"))
+    market_period = str(normalized.get("marketPeriod") or "").strip()
+    if market_period not in KEYWORD_RESEARCH_MARKET_PERIODS:
+        raise SellerSpriteConfigError(f"keyword-research marketPeriod 不支持：{market_period}")
+    order_desc_value = normalized["orderDesc"] if "orderDesc" in normalized else normalized.get("order.desc")
+
+    payload: dict[str, Any] = {
+        "station": site,
+        "order.field": str(normalized.get("orderField") or normalized.get("order.field") or "searches"),
+        "order.desc": str(order_desc(order_desc_value)).lower(),
+        "supplement": str(normalized.get("supplement") or "N"),
+        "usestatic": str(normalized.get("usestatic") or "R"),
+        "exportGkImages": str(truthy(normalized.get("exportGkImages"))).lower(),
+        "marketId": str(normalized.get("marketId") or market_id(site)),
+        "limitUserStatic": str(truthy(normalized.get("limitUserStatic"), default=True)).lower(),
+        "adminDes": str(normalized.get("adminDes") or "S"),
+        "presetMode": str(normalized.get("presetMode") or ""),
+        "itemImageRange": str(normalized.get("itemImageRange") or 2),
+        "keywordBidMatchType": str(normalized.get("keywordBidMatchType") or "exact"),
+        "marketPeriod": market_period,
+        "page": str(page),
+        "size": str(size),
+    }
+    if month:
+        payload["month"] = month
+    departments = csv(normalized.get("departments") or normalized.get("department"))
+    for index, department in enumerate(departments):
+        payload[f"departments[{index}]"] = department
+
+    keyword = normalized.get("keywords") or normalized.get("includeKeywords") or normalized.get("keyword")
+    if keyword:
+        payload["includeKeywords"] = _query_text(keyword)
+    if normalized.get("excludeKeywords"):
+        payload["excludeKeywords"] = _query_text(normalized.get("excludeKeywords"))
+    if normalized.get("withYearlyGrowth") is not None:
+        payload["withYearlyGrowth"] = str(truthy(normalized.get("withYearlyGrowth"))).lower()
+    for suffix in KEYWORD_RESEARCH_RANGE_FIELDS:
+        for prefix in ("min", "max"):
+            field = f"{prefix}{suffix}"
+            if normalized.get(field) is not None and str(normalized[field]).strip() != "":
+                payload[field] = _number_text(normalized[field])
+    return payload
+
+
 def make_keyword_reverse_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造关键词反查 payload。"""
     limit = _int(input_data.get("limit") or input_data.get("size") or input_data.get("pageSize"), 100)
@@ -384,6 +530,8 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
         return "https://www.sellersprite.com/v3/ai-history?module=LA"
     if scenario == "keyword-miner":
         return "https://www.sellersprite.com/v3/keyword-miner/"
+    if scenario == "keyword-research":
+        return f"https://www.sellersprite.com/v2/keyword-research?{urlencode(_flatten_query(payload))}"
     if scenario == "keyword-reverse":
         query = {
             "q": payload.get("asin") or "",
@@ -527,6 +675,83 @@ def _query_text(value: Any) -> str:
     if isinstance(value, list):
         return ",".join(str(item).strip() for item in value if str(item).strip())
     return str(value or "").strip()
+
+
+def _validate_keyword_research_ranges(input_data: dict[str, Any]) -> None:
+    # 通用范围先检查数值类型和左右边界，再补充页面对词数、评分值的特殊限制。
+    for suffix in KEYWORD_RESEARCH_RANGE_FIELDS:
+        minimum = _keyword_research_number(input_data.get(f"min{suffix}"), suffix=suffix, side="min")
+        maximum = _keyword_research_number(input_data.get(f"max{suffix}"), suffix=suffix, side="max")
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise SellerSpriteConfigError(
+                f"keyword-research min{suffix} 不能大于 max{suffix}"
+            )
+    _validate_bounded_number(input_data.get("minWordCount"), "minWordCount", 1, 5, integer=True)
+    _validate_bounded_number(input_data.get("maxWordCount"), "maxWordCount", 1, 9, integer=True)
+    _validate_bounded_number(input_data.get("minAvgRating"), "minRating", 0, 5)
+    _validate_bounded_number(input_data.get("maxAvgRating"), "maxRating", 0, 5)
+
+
+def _keyword_research_number(value: Any, *, suffix: str, side: str) -> float | int | None:
+    if value is None or str(value).strip() == "":
+        return None
+    field = f"{side}{suffix}"
+    if isinstance(value, bool):
+        raise SellerSpriteConfigError(f"keyword-research {field} 必须是数值")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise SellerSpriteConfigError(f"keyword-research {field} 必须是数值") from exc
+    if not math.isfinite(number):
+        raise SellerSpriteConfigError(f"keyword-research {field} 必须是有限数值")
+    if suffix in KEYWORD_RESEARCH_INTEGER_RANGES and not number.is_integer():
+        raise SellerSpriteConfigError(f"keyword-research {field} 必须是整数")
+    return int(number) if number.is_integer() else number
+
+
+def _validate_bounded_number(
+    value: Any,
+    field: str,
+    minimum: float,
+    maximum: float,
+    *,
+    integer: bool = False,
+) -> None:
+    if value is None or str(value).strip() == "":
+        return
+    if isinstance(value, bool):
+        raise SellerSpriteConfigError(f"keyword-research {field} 必须是数值")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise SellerSpriteConfigError(f"keyword-research {field} 必须是数值") from exc
+    if not math.isfinite(number):
+        raise SellerSpriteConfigError(f"keyword-research {field} 必须是有限数值")
+    if integer and not number.is_integer():
+        raise SellerSpriteConfigError(f"keyword-research {field} 必须是整数")
+    if number < minimum or number > maximum:
+        raise SellerSpriteConfigError(
+            f"keyword-research {field} 必须在 {minimum:g}—{maximum:g} 之间"
+        )
+
+
+def _positive_int(value: Any, *, default: int, field: str) -> int:
+    if value is None or str(value).strip() == "":
+        return default
+    if isinstance(value, bool):
+        raise SellerSpriteConfigError(f"keyword-research {field} 必须是正整数")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise SellerSpriteConfigError(f"keyword-research {field} 必须是正整数") from exc
+    if str(value).strip() not in {str(parsed), f"{parsed}.0"} or parsed <= 0:
+        raise SellerSpriteConfigError(f"keyword-research {field} 必须是正整数")
+    return parsed
+
+
+def _number_text(value: Any) -> str:
+    number = float(value)
+    return str(int(number)) if number.is_integer() else str(number)
 
 
 def order_desc(value: Any) -> bool:

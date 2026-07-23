@@ -9,6 +9,7 @@
 | 查竞品 / 查产品 / 选竞品 / competitor lookup | `competitor-lookup` |
 | 选产品 / product research | `product-research` |
 | 关键词挖掘 / keyword mining | `keyword-miner` |
+| 关键词选品 / 关键词研究 / keyword research | `keyword-research` |
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
 | 查流量来源 / traffic source | `traffic-source` |
 | 选市场 / market research | `market-research` |
@@ -33,6 +34,8 @@
 关键注意：
 
 - `product-research` 里的“月份 / 数据月份 / 2026-04”应传顶层 `period`，不是 `putawayMonth`。
+- `keyword-research` 的 `period` 表示数据月份，使用 `YYYY-MM`；不要把公共默认 `30d` 当作月份。未指定时使用后端返回的最新可用月份，不硬编码页面月份选项。
+- `keyword-research` 的真实分页上限以 `seller_sprite_scenarios` 和当前服务端契约为准，不直接套用公共 `page_size=100`。
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
 - `competitor-lookup` 收到 Amazon 商品链接时，应先提取 ASIN，再传 `params.asins`。
 - `competitor-lookup` 如果用户只给了单个 `asin`，也应先归一化成 `params.asins` 再执行。
@@ -46,7 +49,8 @@
 - `competitor-lookup` 缺少上述主筛选条件时，应在本地快速报错或继续澄清，不要把无效请求拖成 MCP 30 秒超时。
 - `keyword-reverse` 必须有 `asin`。
 - `traffic-source` 必须有关键词或 ASIN。
-- `product-research`、`market-research` 虽然没有硬性必填，但用户只说“跑一下”“看下市场”时仍应先确认意图。
+- `product-research`、`market-research`、`keyword-research` 虽然没有硬性必填，但用户只说“跑一下”“看下市场”时仍应先确认意图。
+- `keyword-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-miner` 冒充。
 
 ## 场景参数速查
 
@@ -55,10 +59,104 @@
 | `competitor-lookup` | `keyword` / `brand` / `sellerName` / `asins` / 商品链接 五选一；单个 `asin` 需先转成 `asins` | `node` / `category` / `nodeIdPath` / `nodeIdPaths` | `page=1`，按销量倒序，`lowPrice=N` |
 | `product-research` | 无 | `recommendationMode`、类目参数、销量/价格/评分/卖家/关键词筛选 | `page=1`，`selectType=2`，按 `total_units` 倒序，`smallAndLight=N`，`lowPrice=N` |
 | `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
+| `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；分页以场景契约为准 |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
 | `traffic-source` | 关键词或 ASIN | `keyword`、`asin`、`asins`、`order`、`desc` | `pageNo=1`，`order=10`，`desc=true` |
 | `market-research` | 无 | `departmentKeyword` / `category`、`node` / `nodeIdPath`、`newReleaseNum`、`topn`、市场指标筛选 | `sampleNumber=1`，`topn=10`，`newReleaseNum=6`，按 `total_sales` 倒序 |
 | `listing-analysis` | `asin` | `station` | `station=GLOBAL`；用 submit/status/result 三段式续查 |
+
+## `keyword-research` 关键词选品
+
+### 场景边界
+
+- 用于在关键词市场中按需求、增长、竞争、转化、成本和市场周期筛选机会词。
+- 单一种子词扩词使用 `keyword-miner`；从 ASIN 找词使用 `keyword-reverse`；查关键词或 ASIN 的流量去向使用 `traffic-source`。
+- 返回值属于第三方市场估算或外部情报，不等同于自有账号的搜索、订单或广告第一方数据。
+- Skill 中存在此节不代表服务端已经部署。运行前必须以 `seller_sprite_scenarios` 的返回为准。
+
+### 基础参数
+
+| 中文含义 | 公共字段 | 页面字段 / 备注 |
+| --- | --- | --- |
+| 站点 | 顶层 `site` | 页面字段 `station`，由适配层映射 |
+| 数据月份 | 顶层 `period` | 使用 `YYYY-MM`；页面字段 `month` 为 `YYYYMM` |
+| 类目 | `departments` | 类目 code 列表；随站点变化，不按显示文案猜 code |
+| 包含关键词 | `keywords` | 页面别名 `includeKeywords` |
+| 排除关键词 | `excludeKeywords` | 多值分隔或数组口径以当前场景契约为准 |
+| 新细分市场 | `withYearlyGrowth` | 页面布尔语义存在历史差异，以当前场景契约为准 |
+| 市场周期 | `marketPeriod` | 枚举见下表；不限时省略或传空字符串 |
+
+### 常用范围字段
+
+| 中文含义 | 最小值 / 最大值 |
+| --- | --- |
+| 月搜索量 | `minSearches` / `maxSearches` |
+| 搜索增长率 | `minSearchesCr` / `maxSearchesCr` |
+| 同比增长值 | `minSearchMonthCv` / `maxSearchMonthCv` |
+| 同比增长率 | `minSearchMonthCr` / `maxSearchMonthCr` |
+| 近 3 个月增长值 | `minSearchNearlyCv` / `maxSearchNearlyCv` |
+| 近 3 个月增长率 | `minSearchNearlyCr` / `maxSearchNearlyCr` |
+| 商品数 | `minProducts` / `maxProducts` |
+| 购买量 | `minPurchases` / `maxPurchases` |
+| 购买率 | `minPurchaseRate` / `maxPurchaseRate` |
+| 展示量 | `minImpressions` / `maxImpressions` |
+| 点击量 | `minClicks` / `maxClicks` |
+| SPR | `minSPR` / `maxSPR` |
+| 标题密度 | `minTitleDensity` / `maxTitleDensity` |
+| 货流值 | `minGoodsValue` / `maxGoodsValue` |
+| 均价 | `minAvgPrice` / `maxAvgPrice` |
+| 评分数 | `minRatings` / `maxRatings` |
+| 评分值 | `minRating` / `maxRating` |
+| PPC 竞价 | `minBid` / `maxBid` |
+| 点击总占比 | `minAraClickRate` / `maxAraClickRate` |
+| 转化总占比 | `minCvsShareRate` / `maxCvsShareRate` |
+| 需供比 | `minSupplyDemandRatio` / `maxSupplyDemandRatio` |
+| 单词个数 | `minWordCount` / `maxWordCount` |
+
+页面别名归一规则：
+
+| 页面字段 | 公共字段 |
+| --- | --- |
+| `minGrowth` / `maxGrowth` | `minSearchesCr` / `maxSearchesCr` |
+| `minYearlyGrowth` / `maxYearlyGrowth` | `minSearchMonthCv` / `maxSearchMonthCv` |
+| `minYearlyGrowthRate` / `maxYearlyGrowthRate` | `minSearchMonthCr` / `maxSearchMonthCr` |
+| `minGrowthTrendMin` / `maxGrowthTrendMin` | `minSearchNearlyCv` / `maxSearchNearlyCv` |
+| `minGrowthRateTrendMin` / `maxGrowthRateTrendMin` | `minSearchNearlyCr` / `maxSearchNearlyCr` |
+| `minAvgReviews` / `maxAvgReviews` | `minRatings` / `maxRatings` |
+| `minAvgRating` / `maxAvgRating` | `minRating` / `maxRating` |
+| `minMonopolyClickRate` / `maxMonopolyClickRate` | `minAraClickRate` / `maxAraClickRate` |
+
+展示量、SPR、点击量、标题密度和转化总占比由当前 `keyword-research` Web 场景直接接收；它们不应被转发到卖家精灵开放 API 的同名场景，两个接口契约不能混用。
+
+### 范围校验
+
+- 最小值和最大值都可省略；空值不传，不自动补 `0`。
+- 允许只传一侧；两侧都有值时必须满足最小值不大于最大值。
+- 整数字段拒绝小数和布尔值；小数字段只接受有限数值。
+- `minWordCount` 只能是 `1—5` 的整数；`maxWordCount` 只能是 `1—9` 的整数。
+- `minRating` 和 `maxRating` 都只能是 `0—5` 的数值。
+- 百分比字段的传值口径由当前场景契约负责，不根据页面显示自行除以或乘以 `100`。
+
+### 市场周期枚举
+
+| 用户表达 | `marketPeriod` |
+| --- | --- |
+| 不限 | 省略或空字符串 |
+| 一般性市场 | `N` |
+| 1—3 月旺季 | `S1,S2,S3` |
+| 4—6 月旺季 | `S4,S5,S6` |
+| 7—9 月旺季 | `S7,S8,S9` |
+| 10—12 月旺季 | `S10,S11,S12` |
+| 持续增长市场 | `I` |
+| 持续衰退市场 | `D` |
+
+### 导出对齐
+
+- 官方关键词选品文件的实际格式是 `.xlsx`。如果公共请求仍使用兼容值 `export_format=xls`，最终文件名、扩展名和 MIME 信息必须以工具真实返回为准。
+- MCP 导出对齐官方主表的 28 列及顺序，主工作表使用 `Keywords(数据行数)`，冻结窗格为 `A2`，并保留 `Notes` 工作表。
+- 不在官方 28 列中增加内部调试字段；百分比按页面 HTML 的数值口径输出且不二次换算，页面展示精度可能低于官网异步导出；站点货币、类目和页面 DOM 中的前 10 ASIN 保持官方展示口径。
+- 若业务要求底层数值与官网导出逐位一致，必须使用官网异步导出文件，不能从已舍入的页面 HTML 恢复精度。
+- 官方主列表导出是异步任务；受理成功不等于文件已生成，仍按普通任务的 `job_id/state/ready` 规则续查。
 
 ## `product-research` 重点参数
 

@@ -754,9 +754,14 @@ class FakeCaptchaPage:
 class FakeContextRequest:
     def __init__(self):
         self.post_calls = []
+        self.get_calls = []
 
     async def post(self, url, **kwargs):
         self.post_calls.append({"url": url, "kwargs": kwargs})
+        return SimpleNamespace(status=200)
+
+    async def get(self, url, **kwargs):
+        self.get_calls.append({"url": url, "kwargs": kwargs})
         return SimpleNamespace(status=200)
 
 
@@ -817,6 +822,28 @@ def test_post_query_context_request_uses_query_and_empty_json_body():
     assert call["url"] == "https://www.sellersprite.com/v3/api/ai-workflow/listing-analysis?asin=B0TEST&station=GLOBAL"
     assert call["kwargs"]["data"] == "{}"
     assert call["kwargs"]["headers"]["Content-Type"] == "application/json;charset=UTF-8"
+
+
+def test_keyword_research_context_request_uses_get_page_html_headers():
+    page = FakeContextPage()
+
+    response = _run(
+        worker_module._request_with_browser_context(
+            page,
+            endpoint="/v2/keyword-research",
+            method="GET_PAGE",
+            payload={"station": "US", "month": "202606", "page": "1", "size": "50"},
+        )
+    )
+
+    assert response.status == 200
+    call = page.context.request.get_calls[0]
+    assert call["url"] == (
+        "https://www.sellersprite.com/v2/keyword-research"
+        "?station=US&month=202606&page=1&size=50"
+    )
+    assert call["kwargs"]["headers"]["Accept"].startswith("text/html")
+    assert "Content-Type" not in call["kwargs"]["headers"]
 
 
 def test_listing_analysis_trigger_fills_asin_and_submits_with_enter_first():

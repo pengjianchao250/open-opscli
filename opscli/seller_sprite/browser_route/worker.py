@@ -22,6 +22,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
+from opscli.seller_sprite.api.keyword_research import parse_keyword_research_html
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.config import DEFAULT_OUTPUT_DIR, SellerSpriteSettings
 from opscli.seller_sprite.domain.exceptions import (
@@ -1090,6 +1091,14 @@ class SellerSpriteBrowserRouteWorker:
                     headers=headers,
                 )
                 return
+            if normalized_method == "GET_PAGE":
+                headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                await route.continue_(
+                    url=_url_with_query(endpoint, payload),
+                    method="GET",
+                    headers=headers,
+                )
+                return
             if normalized_method == "FORM":
                 headers["content-type"] = "application/x-www-form-urlencoded"
                 await route.continue_(
@@ -1795,7 +1804,7 @@ async def _request_with_browser_context(page, *, endpoint: str, method: str, pay
     """使用浏览器上下文请求接口，复用当前 profile 的 cookie，避免页面内 fetch 被拦截。"""
     headers = _context_request_headers(page.url, method=method)
     try:
-        if method in {"GET", "PAGE_CAPTURE"}:
+        if method in {"GET", "GET_PAGE", "PAGE_CAPTURE"}:
             return await page.context.request.get(
                 _url_with_query(endpoint, payload),
                 headers=headers,
@@ -1841,9 +1850,10 @@ def _context_request_headers(referer: str, *, method: str) -> dict[str, str]:
         "Referer": referer if referer.startswith("http") else DEFAULT_PAGE_URL,
         "X-Requested-With": "XMLHttpRequest",
     }
-    if method == "FORM":
+    if method in {"FORM", "GET_PAGE"}:
         headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
+        if method == "FORM":
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
     elif method != "GET":
         headers["Content-Type"] = "application/json;charset=UTF-8"
     return headers
@@ -2106,7 +2116,7 @@ async def _find_blank_point(page) -> dict[str, float]:
 
 
 async def _parse_response(response, *, method: str, root_dir: Path, section: str) -> dict[str, Any]:
-    if method == "FORM":
+    if method in {"FORM", "GET_PAGE"}:
         text = await response.text()
         if _looks_like_session_expired(response.url, response.status, text):
             raise SellerSpriteApiError(
@@ -2116,10 +2126,15 @@ async def _parse_response(response, *, method: str, root_dir: Path, section: str
                 api_code="ERR_GLOBAL_SESSION_EXPIRED",
             )
         if response.status >= 400:
-            raise SellerSpriteApiError("卖家精灵浏览器表单请求失败", status_code=response.status, response_excerpt=text[:1000])
+            request_kind = "页面" if method == "GET_PAGE" else "表单"
+            raise SellerSpriteApiError(
+                f"卖家精灵浏览器{request_kind}请求失败",
+                status_code=response.status,
+                response_excerpt=text[:1000],
+            )
         response_html_path = root_dir / ("response.html" if section == "main" else f"{section}.html")
         response_html_path.write_text(text, encoding="utf-8")
-        rows = parse_market_research_html(text)
+        rows = parse_keyword_research_html(text) if method == "GET_PAGE" else parse_market_research_html(text)
         return {
             "code": "OK",
             "data": {"items": rows},

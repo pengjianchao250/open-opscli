@@ -14,6 +14,7 @@ from uuid import uuid4
 from opscli.seller_sprite.accounts import SellerSpriteAccount, SellerSpriteAccountProvider
 from opscli.seller_sprite.api.categories import SellerSpriteCategoryResolver
 from opscli.seller_sprite.api.client import BASE_URL, SellerSpriteApiClient
+from opscli.seller_sprite.api.keyword_research import parse_keyword_research_html
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.api.scenarios import get_scenario, list_scenarios
 from opscli.seller_sprite.browser_route import (
@@ -412,6 +413,17 @@ async def _run_main_request(
 ) -> dict[str, Any]:
     if method in {"GET", "PAGE_CAPTURE"}:
         return await client.get_json(endpoint, payload, referer=referer)
+    if method == "GET_PAGE":
+        response_html = await client.get_html(endpoint, payload, referer=referer)
+        response_html_path = root_dir / "response.html"
+        response_html_path.write_text(response_html, encoding="utf-8")
+        rows = parse_keyword_research_html(response_html)
+        return {
+            "code": "OK",
+            "data": {"items": rows},
+            "response_html_path": str(response_html_path),
+            "response_html_length": len(response_html),
+        }
     if method == "POST_QUERY":
         return await client.request_json(
             "POST",
@@ -798,6 +810,7 @@ def _scenario_label(scenario: str) -> str:
         "competitor-lookup": "CompetitorLookup",
         "product-research": "ProductResearch",
         "keyword-miner": "KeywordMiner",
+        "keyword-research": "KeywordResearch",
         "keyword-reverse": "ReverseASIN",
         "traffic-source": "TrafficSource",
         "market-research": "MarketResearch",
@@ -821,6 +834,13 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
         return _sanitize_filename_part(params.get("asin"))
     if scenario == "keyword-miner":
         return _sanitize_filename_part(params.get("keyword"))
+    if scenario == "keyword-research":
+        return _sanitize_filename_part(
+            params.get("keywords")
+            or params.get("includeKeywords")
+            or params.get("keyword")
+            or first_value(params.get("departments"))
+        )
     if scenario == "traffic-source":
         return _sanitize_filename_part(
             params.get("keywordOrAsin")

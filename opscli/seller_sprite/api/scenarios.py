@@ -9,6 +9,7 @@ from opscli.seller_sprite.api.payloads import (
     build_referer,
     make_competitor_payload,
     make_keyword_miner_payload,
+    make_keyword_research_payload,
     make_keyword_reverse_payload,
     make_listing_analysis_payload,
     make_market_research_payload,
@@ -111,6 +112,14 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         high_frequency_endpoint="/v3/api/keyword-miner/high/frequency-new",
         required_params=("keyword",),
         payload_builder=make_keyword_miner_payload,
+    ),
+    "keyword-research": SellerSpriteScenario(
+        scenario_id="keyword-research",
+        title="关键词选品",
+        endpoint="/v2/keyword-research",
+        method="GET_PAGE",
+        required_params=(),
+        payload_builder=make_keyword_research_payload,
     ),
     "keyword-reverse": SellerSpriteScenario(
         scenario_id="keyword-reverse",
