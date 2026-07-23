@@ -59,6 +59,14 @@
         "platform_filter_state": {
           "enum": ["unknown", "not_requested", "requires_permission_enum", "resolved", "blocked"]
         },
+        "component_filter_state": {
+          "description": "普通筛选组件的自动枚举解析状态",
+          "enum": ["resolved", "clarify_required", "enum_unavailable"]
+        },
+        "component_filter_disclosures_zh": {
+          "description": "普通筛选值按当前账号枚举完整等值解析后的披露",
+          "$ref": "#/$defs/string_array"
+        },
         "clarification_reason_codes": {"$ref": "#/$defs/string_array"},
         "clarification_messages_zh": {"$ref": "#/$defs/string_array"},
         "next_action": {"type": "string"},
@@ -68,6 +76,10 @@
         },
         "time_resolution_zh": {
           "description": "Python 当前日期与当前年份解析基准，禁止模型自行推算",
+          "type": "string"
+        },
+        "time_scope_recovery_zh": {
+          "description": "默认时间出现时的原文恢复指引，避免复杂子步骤漏传时间后重复询问",
           "type": "string"
         },
         "recommended_dimensions": {
@@ -251,6 +263,28 @@
           },
           "additionalProperties": false
         },
+        "resolved_component_filters": {
+          "description": "普通筛选组件唯一完整等值命中的执行引用",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "field_name",
+              "label_zh",
+              "requested_value",
+              "resolved_value",
+              "match_strategy"
+            ],
+            "properties": {
+              "field_name": {"type": "string"},
+              "label_zh": {"type": "string"},
+              "requested_value": {"type": "string"},
+              "resolved_value": {"type": "string"},
+              "match_strategy": {"const": "exact_normalized"}
+            },
+            "additionalProperties": false
+          }
+        },
         "time_scope": {
           "description": "本地解析的绝对日期窗口（Asia/Shanghai）",
           "type": "object",
@@ -280,6 +314,19 @@
         "query_template": {
           "description": "可直接填充的正式查询 payload 骨架（实测形态）",
           "type": "object"
+        },
+        "plan_integrity": {
+          "description": "规划器生成的完整合同摘要；执行器据此拒绝被手工改写的计划",
+          "type": "object",
+          "required": ["algorithm", "digest"],
+          "properties": {
+            "algorithm": {"const": "sha256"},
+            "digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "additionalProperties": false
         },
         "query_template_fill_rules_zh": {"type": "string"}
         ,

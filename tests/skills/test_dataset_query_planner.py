@@ -91,6 +91,41 @@ def _write_instant_comprehensive_metadata(data_dir: Path) -> None:
     )
 
 
+def _write_sales_trend_metadata(data_dir: Path) -> None:
+    """写入 SSE 销量趋势诊断所需的即时综合字段与部门组件。"""
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "1.3.14", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "1,ds_instant,sales_primary_set,normal,0,即时综合数据集,\n"
+        "48,ds_dept,query_department_set,query_component,0,查询组件部门数据集,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "1,ds_instant,sales_primary_set,date_id,日期,f_date_id,dimension,,,,,0,0\n"
+        "1,ds_instant,sales_primary_set,dept_name,部门,f_dept_name,dimension,,,,,0,0\n"
+        "1,ds_instant,sales_primary_set,asin,ASIN,f_asin,dimension,,,,,0,0\n"
+        "1,ds_instant,sales_primary_set,product_name,产品名称,f_product_name,dimension,,,,,0,0\n"
+        "1,ds_instant,sales_primary_set,order_qty,订单量,f_order_qty,metric,,,,,0,0\n"
+        "1,ds_instant,sales_primary_set,price,销售额,f_price,metric,,,,,0,0\n"
+        "1,ds_instant,sales_primary_set,advertising_fee,广告费,f_advertising_fee,metric,,,,,0,0\n"
+        "1,ds_instant,sales_primary_set,gross_profit,毛利,f_gross_profit,metric,,,,,0,0\n"
+        "1,ds_instant,sales_primary_set,purchase_cost,采购成本,f_purchase_cost,metric,,,,,0,0\n"
+        "48,ds_dept,query_department_set,dept_name,部门,f_dept_component,dimension,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n"
+        "ds_instant,dept_name,部门,ds_dept\n",
+        encoding="utf-8",
+    )
+
+
 def _write_ready_metadata_with_filter_config(data_dir: Path) -> None:
     """写入带 filter_config 的 data_state=ready 元数据。
 
@@ -1086,6 +1121,303 @@ def test_time_scope_relative_phrases_use_python_current_date_and_year():
         assert scope["reference_year"] == 2026
         assert scope["resolution_source"] == "python_datetime_asia_shanghai"
         assert scope["year_source"] == "python_current_date"
+
+
+def test_time_scope_explicit_month_and_comparison_month_are_deterministic():
+    """指定月份和“与上个月份对比”必须一次生成主周期与对比周期。"""
+    from datetime import date
+
+    cases = {
+        "6月份BI即时销售趋势，与5月对比": (
+            "2026-06-01",
+            "2026-06-30",
+            "2026-05-01",
+            "2026-05-31",
+        ),
+        "2026年6月按ASIN分析，与2026年5月环比对比": (
+            "2026-06-01",
+            "2026-06-30",
+            "2026-05-01",
+            "2026-05-31",
+        ),
+        "2026年6月1日至6月30日，对比期2026年5月1日至5月31日": (
+            "2026-06-01",
+            "2026-06-30",
+            "2026-05-01",
+            "2026-05-31",
+        ),
+    }
+
+    for prompt, expected in cases.items():
+        scope = time_scope.parse(prompt, today=date(2026, 7, 23))
+        comparison = scope["comparison"]
+        assert (scope["start"], scope["end"]) == expected[:2]
+        assert (comparison["start"], comparison["end"]) == expected[2:]
+        assert comparison["type"] == "explicit_period"
+        assert scope["is_default"] is False
+
+
+def test_sales_trend_prompt_selects_months_and_semantic_metric_aliases(
+    tmp_path: Path, monkeypatch
+):
+    """SSE 原始销量趋势表达必须一次规划出正确月份、字段和对比模板。"""
+    from datetime import date
+
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    original_parse = time_scope.parse
+    monkeypatch.setattr(
+        query_plan.time_scope,
+        "parse",
+        lambda query: original_parse(query, today=date(2026, 7, 23)),
+    )
+    monkeypatch.setattr(
+        query_plan,
+        "_auto_enum_component_values",
+        lambda *_args, **_kwargs: ["项目二部", "九部", "项目九部"],
+    )
+
+    result = query_plan.build_model_query_plan(
+        "即时综合数据集，项目二部，2026年6月按ASIN和产品名称分析销量、销售额、"
+        "广告费、毛利率、采购成本占比，与2026年5月对比",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=True,
+    )
+
+    assert result["status"] == "planned"
+    assert result["execution_ref"]["time_scope"]["start"] == "2026-06-01"
+    assert result["execution_ref"]["time_scope"]["end"] == "2026-06-30"
+    assert result["execution_ref"]["time_scope"]["comparison_start"] == "2026-05-01"
+    assert result["execution_ref"]["time_scope"]["comparison_end"] == "2026-05-31"
+    metric_names = {
+        item["field_name"] for item in result["execution_ref"]["metrics"]
+    }
+    assert {
+        "order_qty",
+        "price",
+        "advertising_fee",
+        "gross_profit",
+        "purchase_cost",
+    }.issubset(metric_names)
+    template = result["execution_ref"]["query_template"]
+    assert {"field": "dept_name", "operator": "=", "value": "项目二部"} in template["filters"]
+    assert template["dataComparison"] == {
+        "field": "date_id",
+        "startDate": "2026-05-01",
+        "endDate": "2026-05-31",
+    }
+
+
+def test_sales_trend_prompt_auto_selects_compatible_instant_dataset(
+    tmp_path: Path, monkeypatch
+):
+    """未点名数据集但字段均被即时综合覆盖时，不得旁路扫描 catalog/metadata。"""
+    from datetime import date
+
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    original_parse = time_scope.parse
+    monkeypatch.setattr(
+        query_plan.time_scope,
+        "parse",
+        lambda query: original_parse(query, today=date(2026, 7, 23)),
+    )
+    monkeypatch.setattr(
+        query_plan,
+        "_auto_enum_component_values",
+        lambda *_args, **_kwargs: ["项目二部", "九部", "项目九部"],
+    )
+
+    result = query_plan.build_model_query_plan(
+        "项目二部，6月份BI即时销售趋势按ASIN/产品名称分析销量变化，"
+        "含毛利率、广告占比、采购成本占比，与5月对比",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=True,
+    )
+
+    assert result["status"] == "planned"
+    assert result["model_view"]["dataset_name_zh"] == "即时综合数据集"
+    recommendation = result["model_view"]["default_dataset_recommendation_zh"]
+    assert recommendation["auto_selected"] is True
+    assert result["execution_ref"]["time_scope"]["start"] == "2026-06-01"
+    assert result["execution_ref"]["time_scope"]["comparison_start"] == "2026-05-01"
+    assert {
+        "field": "dept_name",
+        "operator": "=",
+        "value": "项目二部",
+    } in result["execution_ref"]["query_template"]["filters"]
+
+
+def test_department_filter_auto_enum_uses_only_unique_exact_member(
+    tmp_path: Path, monkeypatch
+):
+    """9部/范泰克只能命中完整等值成员，禁止加入名称包含项。"""
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    monkeypatch.setattr(
+        query_plan,
+        "_auto_enum_component_values",
+        lambda *_args, **_kwargs: ["九部", "项目九部", "范泰克", "范泰克体系外"],
+    )
+
+    cases = {
+        "即时综合数据集，分析9部的数据，2026年6月销量": "九部",
+        "即时综合数据集，分析范泰克的数据，2026年6月销量": "范泰克",
+    }
+    for prompt, expected in cases.items():
+        result = query_plan.build_model_query_plan(
+            prompt,
+            data_dir=data_dir,
+            rules_path=RULES_PATH,
+            auto_upgrade=False,
+            auto_enum=True,
+        )
+
+        assert result["status"] == "planned"
+        department_filters = [
+            item
+            for item in result["execution_ref"]["query_template"]["filters"]
+            if item["field"] == "dept_name"
+        ]
+        assert department_filters == [
+            {"field": "dept_name", "operator": "=", "value": expected}
+        ]
+
+
+def test_executor_rejects_removing_resolved_department_filter(
+    tmp_path: Path, monkeypatch
+):
+    """完整性合同必须把已解析部门筛选绑定到执行 payload，不能手工删掉。"""
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    monkeypatch.setattr(
+        query_plan,
+        "_auto_enum_component_values",
+        lambda *_args, **_kwargs: ["项目二部", "项目九部"],
+    )
+    plan = query_plan.build_model_query_plan(
+        "即时综合数据集，项目二部，2026年6月销量",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=True,
+    )
+    payload = json.loads(json.dumps(plan["execution_ref"]["query_template"]))
+    payload["filters"] = [
+        item for item in payload["filters"] if item["field"] != "dept_name"
+    ]
+
+    try:
+        run_query._validate_plan_binding(plan, "1", payload)
+    except run_query.PrecheckError as error:
+        assert "禁止删除筛选" in str(error)
+    else:
+        raise AssertionError("删除规划器已解析的部门筛选必须被拒绝")
+
+
+def test_generated_plan_integrity_rejects_manual_plan_edit(tmp_path: Path):
+    """规划器生成的执行引用被手改后，执行器必须在远端查询前拒绝。"""
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    result = query_plan.build_model_query_plan(
+        "即时综合数据集，2026年6月查询销量",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    integrity = result["execution_ref"]["plan_integrity"]
+    assert integrity["algorithm"] == "sha256"
+    assert len(integrity["digest"]) == 64
+    payload = json.loads(json.dumps(result["execution_ref"]["query_template"]))
+    result["execution_ref"]["metrics"].append(
+        {
+            "field_name": "not_planned",
+            "label_zh": "未规划字段",
+            "is_formula": False,
+            "is_snapshot": False,
+        }
+    )
+
+    try:
+        run_query._validate_plan_binding(result, "1", payload)
+    except run_query.PrecheckError as error:
+        assert "完整性" in str(error)
+    else:
+        raise AssertionError("手改规划结果必须被完整性校验拒绝")
+
+
+def test_run_query_executes_query_template_directly_from_plan(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """执行器只接收 plan 时应直接使用 query_template，不再要求模型拼 payload。"""
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    plan = query_plan.build_model_query_plan(
+        "即时综合数据集，2026年6月查询销量",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+    captured: dict = {}
+
+    def fake_run(table_id: str, payload: dict) -> dict:
+        captured["table_id"] = table_id
+        captured["payload"] = payload
+        return {
+            "success": True,
+            "data": {
+                "result": {
+                    "data": [{"order_qty": 3}],
+                    "meta": {"totalCount": 1},
+                }
+            },
+        }
+
+    monkeypatch.setattr(run_query, "_run_opscli", fake_run)
+    exit_code = run_query.main(
+        [
+            "--plan-json",
+            json.dumps(plan, ensure_ascii=False),
+            "--result-dir",
+            str(tmp_path),
+        ]
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert captured["table_id"] == "1"
+    assert captured["payload"] == plan["execution_ref"]["query_template"]
+    assert output["plan_execution"]["payload_source"] == "query_template"
+    assert output["plan_execution"]["integrity_verified"] is True
+
+
+def test_manual_payload_cannot_change_planned_time_scope(tmp_path: Path):
+    """兼容的手动 payload 只允许调排序/行数，不得改写规划器日期范围。"""
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    plan = query_plan.build_model_query_plan(
+        "即时综合数据集，2026年6月查询销量",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+    payload = json.loads(json.dumps(plan["execution_ref"]["query_template"]))
+    payload["filters"][0]["value"] = "2026-01-01"
+
+    try:
+        run_query._validate_plan_binding(plan, "1", payload)
+    except run_query.PrecheckError as error:
+        assert "时间范围" in str(error)
+    else:
+        raise AssertionError("手动 payload 改写时间范围必须被拒绝")
 
 
 def test_time_scope_last_month_crosses_year_by_python_calendar():

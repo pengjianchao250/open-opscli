@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import evidence_contract
+import plan_integrity
 
 # stdout 输出限幅：预览+披露+证据合同的总字节数护栏
 MAX_STDOUT_BYTES = 8000
@@ -202,6 +203,8 @@ def _validate_plan_binding(plan: dict, table_id: str, payload: dict) -> None:
     execution = plan.get("execution_ref")
     if not isinstance(execution, dict):
         raise PrecheckError("plan 缺少 execution_ref，禁止无授权引用执行。")
+    if execution.get("plan_integrity") and not plan_integrity.verify(plan):
+        raise PrecheckError("plan 完整性校验失败：禁止手工修改规划结果，请重新运行规划器。")
     planned_table = execution.get("table_id")
     if str(planned_table) != str(table_id):
         raise PrecheckError(
@@ -216,6 +219,37 @@ def _validate_plan_binding(plan: dict, table_id: str, payload: dict) -> None:
         raise PrecheckError(
             "规划器尚未下发 query_template：先完成默认时间、推荐字段或权限枚举确认。"
         )
+    template = execution["query_template"]
+
+    # 手工 payload 只允许补充排序、行数等执行参数；规划器确定的主周期和
+    # 对比周期必须原样执行，避免“本月”在拼参时漂移成近 30 天。
+    date_fields = {
+        str(item.get("field_name"))
+        for item in execution.get("date_fields") or []
+        if isinstance(item, dict) and item.get("field_name")
+    }
+
+    def _time_filters(value: dict) -> list[dict]:
+        return [
+            item
+            for item in value.get("filters") or []
+            if isinstance(item, dict) and _field_name(item.get("field")) in date_fields
+        ]
+
+    if (
+        _time_filters(payload) != _time_filters(template)
+        or payload.get("dataComparison") != template.get("dataComparison")
+    ):
+        raise PrecheckError(
+            "payload 时间范围与规划器不一致：主周期和对比周期禁止改写，请直接执行 query_template。"
+        )
+    if execution.get("plan_integrity"):
+        for key in ("dimensions", "metrics", "filters"):
+            if payload.get(key) != template.get(key):
+                raise PrecheckError(
+                    f"payload.{key} 与规划器原始模板不一致：只允许调整 orderBy 和 limit，"
+                    "禁止删除筛选或改写字段。"
+                )
 
     planned_dimensions = {
         str(item.get("field_name"))
@@ -394,7 +428,7 @@ def _compact_preview(rows: list[dict], preview_rows: int) -> list[dict]:
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--table-id", required=True)
+    parser.add_argument("--table-id", default="")
     parser.add_argument("--json", default="", help="查询 payload JSON 字符串")
     parser.add_argument("--json-file", default="", help="payload 文件路径（- 为 stdin）")
     plan_group = parser.add_mutually_exclusive_group()
@@ -424,35 +458,61 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
-        if args.json_file:
-            raw = sys.stdin.read() if args.json_file == "-" else Path(args.json_file).read_text(encoding="utf-8")
-        else:
-            raw = args.json
-        if not raw.strip():
-            raise PrecheckError("缺少 payload：用 --json 或 --json-file 传入查询参数。")
-        payload = _parse_payload(raw)
         if args.plan_file:
             plan_raw = Path(args.plan_file).read_text(encoding="utf-8")
         else:
             plan_raw = args.plan_json
-        if plan_raw.strip():
-            plan = _parse_payload(plan_raw)
-            _validate_plan_binding(plan, args.table_id, payload)
+        plan = _parse_payload(plan_raw) if plan_raw.strip() else None
+
+        if args.json_file:
+            raw = sys.stdin.read() if args.json_file == "-" else Path(args.json_file).read_text(encoding="utf-8")
+        else:
+            raw = args.json
+        if raw.strip():
+            payload = _parse_payload(raw)
+            payload_source = "manual_payload"
+        elif plan:
+            execution = plan.get("execution_ref")
+            template = execution.get("query_template") if isinstance(execution, dict) else None
+            if not isinstance(template, dict):
+                raise PrecheckError(
+                    "规划器尚未下发 query_template：先完成规划器要求的澄清或恢复动作。"
+                )
+            payload = json.loads(json.dumps(template, ensure_ascii=False))
+            payload_source = "query_template"
+        else:
+            raise PrecheckError(
+                "缺少 payload：传入 --plan-file 直接执行规划器模板，或用 --json/--json-file 传入查询参数。"
+            )
+
+        table_id = str(args.table_id or "")
+        if plan:
+            execution = plan.get("execution_ref")
+            planned_table = execution.get("table_id") if isinstance(execution, dict) else None
+            table_id = table_id or str(planned_table or "")
+            _validate_plan_binding(plan, table_id, payload)
         elif not args.unsafe_unbound_plan:
             raise PrecheckError(
                 "缺少规划器绑定：必须传 --plan-file 或 --plan-json，禁止绕过 query_plan.py 直接执行。"
             )
-        if payload.get("tableId") not in (None, "") and str(payload["tableId"]) != str(args.table_id):
+        if not table_id:
+            raise PrecheckError("缺少 table-id：规划合同和 --table-id 均未提供数据集标识。")
+        if payload.get("tableId") not in (None, "") and str(payload["tableId"]) != table_id:
             raise PrecheckError("payload.tableId 与 --table-id 不一致。")
-        payload.setdefault("tableId", args.table_id)
+        payload.setdefault("tableId", table_id)
         # 生成规划器下发的数据集默认条件披露说明（服务端权威注入，本函数只读不写 payload）
         # 注意：默认条件实际注入由服务端完成，客户端不预注入，避免日期预设字面量冲突
-        default_filters = json.loads(args.default_filters) if args.default_filters.strip() else []
+        if args.default_filters.strip():
+            default_filters = json.loads(args.default_filters)
+        elif plan and isinstance(plan.get("execution_ref"), dict):
+            default_filters = plan["execution_ref"].get("default_filters") or []
+        else:
+            default_filters = []
         default_notes = _apply_default_filters(payload, default_filters)
         _precheck(payload)
         order_by = payload.get("orderBy") or []
 
-        response = _run_opscli(args.table_id, payload)
+        response = _run_opscli(table_id, payload)
         if response.get("success") is False:
             error = response.get("error") or {}
             print(
@@ -479,7 +539,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         order_note = None
         if order_by and not args.no_order_fallback and rows:
-            rows, order_note = _apply_order_fallback(args.table_id, payload, rows, order_by)
+            rows, order_note = _apply_order_fallback(table_id, payload, rows, order_by)
             if order_note:
                 disclosures["order_fallback"] = order_note
                 disclosures["order_disclosure_zh"] = (
@@ -507,6 +567,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         output: dict[str, Any] = {
             "status": "ok",
+            "plan_execution": {
+                "payload_source": payload_source,
+                "integrity_verified": bool(
+                    plan
+                    and isinstance(plan.get("execution_ref"), dict)
+                    and plan["execution_ref"].get("plan_integrity")
+                    and plan_integrity.verify(plan)
+                ),
+            },
             "disclosures": disclosures,
             "preview_rows": _compact_preview(rows, args.preview_rows),
         }
