@@ -14,9 +14,9 @@
 
 **变更原因**：仪表盘 AI 在用户未指定图表类型时缺少稳定选型规则，旧流程还会逐图选择数据集、逐字段写入，无法保证同一轮图表使用统一数据集。
 
-**改动点**：包版本由 v0.0.147 升至 v0.0.148；`ops-dashboard-ai-bridge` 升至 v1.0.11，新增六类业务默认组合、创建前图表/数据集/字段整体规划、统一数据集和 `dashboard_editor_batch_configure_charts` 一次批量提交约束；同步更新三份渐进参考合同和 Codex 默认提示词。`ops-dashboard-data-analysis` 升至 v1.0.5，明确分析结论落图时只提供数据口径与字段依据，由编辑 Skill 承担组合创建，并补齐显式 Skill 调用提示词。
+**改动点**：包版本由 v0.0.147 升至 v0.0.148；`ops-dashboard-ai-bridge` 升至 v1.0.13，新增六类业务默认组合、创建前图表/数据集/字段整体规划、统一数据集和 `dashboard_editor_batch_configure_charts` 一次批量提交约束；营销/转化组合固定创建 `indicator`、`combo_bar_line`、`hbar_basic`、百分比堆叠图或漏斗图、`detail_table` 共 5 张；多个真实候选强制通过 `ask_user_question` 选择。Dashboard 两个静态规范 MCP 工具不再受用户登录权限过滤，确保仪表盘会话可以从线上 MCP 必读规范。`ops-dashboard-data-analysis` 升至 v1.0.5，明确分析结论落图时只提供数据口径与字段依据，由编辑 Skill 承担组合创建，并补齐显式 Skill 调用提示词。
 
-**验证结果**：前端 Dashboard 定向单测 120 个通过；open-opscli Dashboard Skill 与版本一致性测试 9 个通过；ops-agent 批量工具清单定向测试通过；Playwright 成功收集营销默认组合、供应链默认组合和显式明细表三条真实数据集场景，完整 E2E 待本地服务和配置就绪后执行。
+**验证结果**：open-opscli Dashboard Skill、MCP 权限与版本一致性测试 27 个通过；ops-agent Dashboard 规范读取、编辑偏好和批量配置定向测试通过；线上 MCP 发布后继续执行 Playwright 广告场景验证。
 
 **影响范围**：影响两个内置 Dashboard Skill 的安装版本与模型执行规范；不改变只读分析边界，不允许跨数据集拼接组合图表。
 
