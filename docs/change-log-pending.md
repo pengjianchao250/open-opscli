@@ -3881,3 +3881,16 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：仅相对时间解析和时间规划合同；不改变数据集选择、字段、筛选、指标或查询执行接口。
 **回滚方式**：回退本次提交即可恢复 1.3.10 时间合同。
 ---
+
+## 2026-07-23 mcp - 修复远程校验 API Key 因超时批量误判 401（P0+P1）
+
+**变更原因**：线上 MCP 服务突发批量 `远程校验 API Key 失败:`（错误信息为空）→ 有效 Key 被误判 401，且必须重启服务才能恢复。根因：`ApiKeyAuthMiddleware._verify_remote` 每个请求新建 `httpx.AsyncClient`（新 TCP+TLS 连接），高频轮询下导致临时端口耗尽/TIME_WAIT 堆积，连接卡死；空异常来自 httpx 超时类异常（str 为空）无法定性；且缓存只存成功不存失败，后端一抖动即雪崩式 401。
+**改动点**：`opscli/mcp/auth_middleware.py`
+- P0-1：校验失败日志改为记录 `type(exc).__name__ + repr(exc)`，空异常也能定性（超时/连接/5xx）。
+- P0-2：新增 `_get_client()`，改用进程内共享的 `httpx.AsyncClient`（带连接池 `limits`），杜绝每请求新建连接。
+- P1-1：过期缓存宽限（stale-on-error）——缓存结构由"过期时间戳"改为"最近成功时间戳"，回源遇临时故障（超时/连接/5xx）且在宽限期（300s）内时降级复用历史成功结果放行；后端权威判定无效（200+valid=false / 401 / 403）时清缓存且不宽限，保证吊销及时生效。
+- P1-2：拆分 connect(3s)/read(5s) 超时，替换原单一 3s 超时。
+**验证结果**：`pytest tests/mcp/test_auth_middleware.py -v` 5 passed（新增 stale 降级放行、吊销不宽限两条用例）；`tests/mcp/ tests/auth/` 除 3 个与本次无关的既有失败（google_trends/quota/token_manager，已 git stash 复核为 HEAD 基线问题）外全部通过。
+**影响范围**：仅 MCP 远程校验模式（`--auth-verify-url`）的鉴权链路；固定 Key 模式不受影响。
+**回滚方式**：回退本次对 `auth_middleware.py` 的提交即可恢复原逐请求新建 client + 单一超时 + 仅成功缓存的行为。
+---
