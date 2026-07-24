@@ -12,7 +12,7 @@ def test_fire_sends_event_to_correct_url(monkeypatch):
 
     sent = []
 
-    def fake_post(url, *, json, timeout):
+    def fake_post(url, *, json, headers, timeout):
         sent.append({"url": url, "body": json})
 
     monkeypatch.setattr("httpx.post", fake_post)
@@ -39,7 +39,7 @@ def test_fire_is_nonblocking(monkeypatch):
     import threading
     block_event = threading.Event()
 
-    def blocking_post(url, *, json, timeout):
+    def blocking_post(url, *, json, headers, timeout):
         block_event.wait(timeout=2)  # 短暂等待后释放
 
     monkeypatch.setattr("httpx.post", blocking_post)
@@ -61,7 +61,7 @@ def test_fire_silently_ignores_network_error(monkeypatch):
     import httpx
     import opscli.telemetry.reporter as reporter
 
-    def fail_post(url, *, json, timeout):
+    def fail_post(url, *, json, headers, timeout):
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr("httpx.post", fail_post)
@@ -71,13 +71,45 @@ def test_fire_silently_ignores_network_error(monkeypatch):
     time.sleep(0.1)  # 等后台线程执行完
 
 
+def test_exit_wait_is_bounded(monkeypatch):
+    """在途遥测发送长时间阻塞时，退出等待不超过 _EXIT_WAIT_TIMEOUT 上限。"""
+    import threading
+
+    import opscli.telemetry.reporter as reporter
+
+    release = threading.Event()
+
+    def blocking_post(url, *, json, headers, timeout):
+        # 模拟长时间阻塞的发送（远超退出等待上限）
+        release.wait(timeout=10)
+
+    monkeypatch.setattr("httpx.post", blocking_post)
+    # 缩短退出等待上限以加速测试
+    monkeypatch.setattr(reporter, "_EXIT_WAIT_TIMEOUT", 0.3)
+
+    reporter.TelemetryReporter.fire(command="query run", status="success")
+
+    start = time.monotonic()
+    reporter._wait_inflight_on_exit()
+    elapsed = time.monotonic() - start
+
+    # 释放后台线程，避免污染后续测试
+    release.set()
+    time.sleep(0.05)
+
+    # 应在 ~0.3s 达到上限后放行，远小于 post 的 10s 阻塞
+    assert elapsed < 1.0
+    # 确实等待到了上限附近（下限留出调度余量）
+    assert elapsed >= 0.25
+
+
 def test_fire_wraps_payload_in_events_array(monkeypatch):
     """fire() 发送的 payload 应将事件包装在 events 数组中。"""
     import opscli.telemetry.reporter as reporter
 
     received = []
 
-    def capture_post(url, *, json, timeout):
+    def capture_post(url, *, json, headers, timeout):
         received.append(json)
 
     monkeypatch.setattr("httpx.post", capture_post)

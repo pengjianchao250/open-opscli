@@ -4044,3 +4044,33 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：仅正式 Cython wheel 的打包内容（补回被误删的模板脚本）；sdist、SKIP_CYTHON 纯 Python wheel、editable 安装不受影响。所有历史已发布 wheel 均缺模板脚本，需重新发版。
 **回滚方式**：删除 `pyproject.toml` 中新增的 `exclude = ["opscli.skills.templates*"]` 一行即可。
 ---
+
+## 2026-07-24 shared/update_check - PyPI 版本检查后台化，消除首次启动阻塞
+
+**变更原因**：CLI 主回调 `cli.py:main` 同步调用 `check_and_notify()`，缓存缺失（刚 pip install/升级后必然缺失）时在主线程同步请求 pypi.org（外网，国内常慢/超时），阻塞命令启动到 httpx 5s 超时，表现为"第一次启动 opscli 卡很久"。
+**改动点**：
+- `opscli/shared/update_check.py`：新增 `_refresh_cache_async()`，用 `daemon=True` 后台线程执行 PyPI 请求 + 写缓存；`check_and_notify()` 缓存命中时仍同步提示（无网络开销），缓存缺失/过期时改为仅触发后台刷新，本次不阻塞、不提示，提示在下次命令生效。
+- `tests/shared/test_update_check.py`：替换 `test_no_cache_pypi_has_update` / `test_no_cache_pypi_unreachable` 两个旧集成测试为 `test_no_cache_triggers_background_refresh_no_output`、`test_refresh_cache_async_writes_cache`、`test_refresh_cache_async_unreachable_no_write`，匹配后台化后的契约。
+**验证结果**：`pytest tests/shared/test_update_check.py -q` → 27 passed；模拟 fetch 卡 10s 时 `check_and_notify()` 同步耗时仅 0.8ms，证明主线程不再被阻塞。
+**影响范围**：仅 CLI 启动路径的版本更新提示；MCP 入口不经过此处。首次安装/升级后第一次命令不再显示更新提示（缓存写入后下次命令显示），此为可接受的行为变化。
+**回滚方式**：`git checkout opscli/shared/update_check.py tests/shared/test_update_check.py`。
+---
+
+## 2026-07-24 telemetry/reporter - 遥测退出等待加上限，消除进程退出阻塞
+
+**变更原因**：遥测原用模块级 `ThreadPoolExecutor(max_workers=1)`，`concurrent.futures` 注册的 atexit 钩子会在进程退出时"无上限" join 工作线程，导致在途遥测 POST（timeout=5，端点缓慢/不可达时更久）阻塞命令退出。
+**改动点**：
+- `opscli/telemetry/reporter.py`：弃用 ThreadPoolExecutor，改为每次 `fire()` 起一个 `daemon=True` 后台线程发送，并用 `_inflight_threads` 集合跟踪在途线程；新增常量 `_EXIT_WAIT_TIMEOUT=2.0` 与 `_wait_inflight_on_exit()`，通过自注册的 atexit 钩子以"总截止时间"约束累计 join，最多等待 2s 便强制放行，剩余在途发送随进程退出丢弃。`fire()` 仍立即返回、非阻塞；`_do_send` 逻辑不变（结束时从在途集合移除自身）。
+- `tests/telemetry/test_reporter.py`：新增 `test_exit_wait_is_bounded` 验证退出等待受上限约束；顺带修复既有测试桩缺陷——所有 `httpx.post` 桩签名补上 `headers` 形参（原签名不接受 `headers`，会使 `_do_send` 的 post 调用抛 TypeError 被静默吞掉，此前仅因加载未重编译的旧 `.so` 而"通过"）。
+**验证结果**：`pytest tests/telemetry/ tests/shared/test_update_check.py -q` → 44 passed；模拟遥测端点卡 30s 时 `_wait_inflight_on_exit()` 实测 2.01s 放行。
+**影响范围**：CLI（`cli.py`）与 MCP（`mcp/server.py`）两处 `TelemetryReporter.fire` 调用；进程退出最多因遥测多等 2s（原为最坏 5s+）。遥测发送成功率与之前一致（正常内网 <1s 完成）。
+**回滚方式**：`git checkout opscli/telemetry/reporter.py tests/telemetry/test_reporter.py`。
+
+## 2026-07-24 构建产物 - 清理工作树内残留 .so（开发环境修正）
+
+**变更原因**：工作树内残留 214 个未跟踪的 Cython 编译产物 `*.so`，导入时优先于源码 `.py` 被加载，导致源码修改不生效、且新旧不一致引发 ImportError（如 `SellerSpriteAuthenticationError`）。项目开发流程本为 `SKIP_CYTHON=1` 纯 Python 模式。
+**改动点**：`find opscli -name '*.so' -delete`（均为未跟踪构建产物，不影响 git 跟踪文件）。
+**验证结果**：删除后导入链恢复正常，测试可正常收集运行。
+**影响范围**：仅本地开发环境；生产构建（`python -m build`）仍会正常编译生成 `.so`，不受影响。
+**回滚方式**：重新执行 `SKIP_CYTHON=... python -m build` 或按需重编译即可再生成。
+---
