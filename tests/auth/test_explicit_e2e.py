@@ -25,7 +25,7 @@ class _MockBackendHandler(BaseHTTPRequestHandler):
     # 类级列表：收集各次请求的 (method, path, authorization) 供断言
     records: list[tuple[str, str, str]] = []
 
-    def log_message(self, *args):  # 静默 http.server 默认日志
+    def log_message(self, format, *args):  # 静默 http.server 默认日志
         pass
 
     def _respond(self, code: int, body: dict):
@@ -49,9 +49,13 @@ class _MockBackendHandler(BaseHTTPRequestHandler):
         _ = self.rfile.read(length)  # 读掉请求体
         auth = self.headers.get("Authorization", "")
         type(self).records.append(("POST", self.path, auth))
+        # ops 与 polaris 的 token 换取端点路径不同，返回可区分的 JWT
         if self.path.endswith("/api/v1/auth/cli-token"):
-            # session 换取 JWT
-            self._respond(200, {"jwt": "exchanged-jwt", "expires_in": 3600})
+            # ops：session 换取 JWT
+            self._respond(200, {"jwt": "exchanged-ops-jwt", "expires_in": 3600})
+        elif self.path.endswith("/api/auth/cli-token"):
+            # polaris：session 换取 JWT
+            self._respond(200, {"jwt": "exchanged-polaris-jwt", "expires_in": 3600})
         else:
             self._respond(404, {"error": "not found"})
 
@@ -71,16 +75,28 @@ def mock_backend():
         thread.join(timeout=5)
 
 
-def _run_opscli(args: list[str], base_url: str) -> subprocess.CompletedProcess:
-    """以子进程运行 opscli，环境变量将 ops 系统地址指向 mock 后端。"""
+def _run_opscli(
+    args: list[str], base_url: str, *, polaris_url: str | None = None
+) -> subprocess.CompletedProcess:
+    """以子进程运行 opscli，环境变量将系统地址指向 mock 后端。
+
+    Args:
+        args:        opscli 子命令参数
+        base_url:    ops 系统地址（同时用于 get_ops_system_url / 内置 ops 系统）
+        polaris_url: polaris 系统地址；提供时启用 polaris 并指向该地址，
+                     否则关闭 polaris，避免触及未 mock 的 polaris 端点
+    """
     import os
 
     env = os.environ.copy()
     # 覆盖 ops 系统地址：get_builtin_systems / get_ops_system_url 均读此变量
     env["OPSCLI_OPS_SYSTEM_URL"] = base_url
     env["OPSCLI_OPS_URL"] = f"{base_url}/api"
-    # 关闭 polaris，避免 e2e 触及未 mock 的 polaris 端点
-    env["OPSCLI_POLARIS_ENABLED"] = "false"
+    if polaris_url is not None:
+        env["OPSCLI_POLARIS_ENABLED"] = "true"
+        env["OPSCLI_POLARIS_SYSTEM_URL"] = polaris_url
+    else:
+        env["OPSCLI_POLARIS_ENABLED"] = "false"
     return subprocess.run(
         [sys.executable, "-m", "opscli.cli", *args],
         capture_output=True,
@@ -118,7 +134,7 @@ def test_e2e_auth_me_session_only_triggers_exchange(mock_backend):
     assert any(r[1].endswith("/cli-token") for r in _MockBackendHandler.records)
     # /me 带的是换取回来的 JWT
     me_calls = [r for r in _MockBackendHandler.records if r[1].endswith("/auth/me")]
-    assert me_calls and me_calls[-1][2] == "Bearer exchanged-jwt"
+    assert me_calls and me_calls[-1][2] == "Bearer exchanged-ops-jwt"
 
 
 def test_e2e_missing_session_id_is_rejected(mock_backend):
@@ -129,3 +145,58 @@ def test_e2e_missing_session_id_is_rejected(mock_backend):
     )
     assert result.returncode != 0
     assert "必须同时提供 --session-id" in (result.stdout + result.stderr)
+
+
+# ── polaris 双 JWT 端到端 ─────────────────────────────────
+# 用 `auth token get -s <system>`：其 stdout 为纯 JWT，最适合断言 per-alias 路由。
+
+
+def test_e2e_polaris_direct_jwt(mock_backend):
+    """直接提供 polaris JWT：token get -s polaris 应原样输出该 JWT，不发网络换取。"""
+    result = _run_opscli(
+        ["auth", "token", "get", "-s", "polaris",
+         "--polaris-jwt-token=direct-polaris", "--session-id=sid-p"],
+        mock_backend,
+        polaris_url=mock_backend,
+    )
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert result.stdout.strip() == "direct-polaris"
+    # 直接给 JWT 时不应触发任何 token 换取
+    assert not any(r[1].endswith("/cli-token") for r in _MockBackendHandler.records)
+
+
+def test_e2e_dual_jwt_routes_per_system(mock_backend):
+    """同时提供 ops 与 polaris 两个 JWT：按 -s 别名各自返回对应系统的 JWT。"""
+    common = ["--ops-jwt-token=OO", "--polaris-jwt-token=PP", "--session-id=sid-d"]
+
+    ops_result = _run_opscli(
+        ["auth", "token", "get", "-s", "ops", *common],
+        mock_backend,
+        polaris_url=mock_backend,
+    )
+    assert ops_result.returncode == 0, ops_result.stderr
+    assert ops_result.stdout.strip() == "OO"
+
+    pol_result = _run_opscli(
+        ["auth", "token", "get", "-s", "polaris", *common],
+        mock_backend,
+        polaris_url=mock_backend,
+    )
+    assert pol_result.returncode == 0, pol_result.stderr
+    assert pol_result.stdout.strip() == "PP"
+
+
+def test_e2e_polaris_session_exchange(mock_backend):
+    """仅提供 session_id：token get -s polaris 应走 polaris 端点换取并输出换取的 JWT。"""
+    result = _run_opscli(
+        ["auth", "token", "get", "-s", "polaris", "--session-id=sid-pe"],
+        mock_backend,
+        polaris_url=mock_backend,
+    )
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert result.stdout.strip() == "exchanged-polaris-jwt"
+    # 换取走的是 polaris 专属端点（/api/auth/cli-token，区别于 ops 的 /api/v1/auth/cli-token）
+    pol_token_calls = [
+        r for r in _MockBackendHandler.records if r[1].endswith("/api/auth/cli-token")
+    ]
+    assert pol_token_calls, _MockBackendHandler.records

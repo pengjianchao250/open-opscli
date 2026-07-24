@@ -9,7 +9,7 @@
 - `opscli/cli.py`：新增 `_extract_explicit_credentials()`（argv 预解析，支持 `--flag=v` 与 `--flag v` 两种写法，强制 session-id 校验）+ `run()` 进程入口（摘参→注入上下文→清理 argv→交给 Typer）。
 - `opscli/auth/cli.py`：新增 `opscli auth me` 命令。
 - `pyproject.toml`：console_scripts 入口 `opscli` 由 `opscli.cli:app` 改为 `opscli.cli:run`。
-**验证结果**：新增 20 个测试（`tests/auth/test_explicit_credentials.py` 14 项 + `test_explicit_argv.py`，含 respx mock 与 CliRunner），`tests/auth/` 全量 62 passed。回归：query 仍为 2 个既有失败（catalog/intent 已屏蔽）、calculator 经 git stash 对比确认 8 failed 为既有基线、feedback/asin_data/amazon/shared 通过——本次改动零回归。端到端：`opscli --version`、`opscli auth --help`（含 me）、强制 session-id 校验均正常。
+**验证结果**：新增测试覆盖单元（respx mock + CliRunner）、token_get 错误落 stderr 回归、以及真实子进程 e2e（本地 mock 后端 + OPSCLI_*_SYSTEM_URL 环境覆盖）：ops 直接 JWT / 仅 session 换取、polaris 直接 JWT / 仅 session 换取（走 polaris 专属 /api/auth/cli-token 端点）、ops+polaris 双 JWT 按 -s 别名各自路由、缺 session-id 拒绝。`tests/auth/` 全量 69 passed。回归：query 仍为 2 个既有失败（catalog/intent 已屏蔽）、calculator 经 git stash 对比确认 8 failed 为既有基线、feedback/asin_data/amazon/shared 通过——本次改动零回归。端到端：`opscli --version`、`opscli auth --help`（含 me）、强制 session-id 校验均正常。
 **影响范围**：所有经 `AuthClient` 取凭证的 CLI 命令新增显式授权能力；未传显式参数时行为完全不变。MCP 入口（opscli-mcp）不受影响。
 **回滚方式**：还原 `opscli/auth/context.py`（删除）、`opscli/auth/__init__.py`、`opscli/cli.py`、`opscli/auth/cli.py`、`pyproject.toml` 的本次改动，并删除两个新增测试文件。
 **遗留（非本次范围）**：`opscli/auth/cli.py` 的 `token_get` 错误路径 `console.print(..., err=True)` 为既有 latent bug（rich Console.print 不接受 err 参数，触发即 TypeError），未在本次修改。
