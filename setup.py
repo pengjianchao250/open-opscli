@@ -67,9 +67,16 @@ class BuildPyExcludeSource(BuildPyPruneSkillTemplates):
 
     # 不编译、需保留源码的文件名集合（Typer/FastMCP 依赖运行时反射）
     # report_skill_usage 需保留 .py 源文件，因其作为 hook 脚本部署到用户目录
-    _KEEP_SOURCE = {"__init__", "cli", "server", "report_skill_usage"}
+    _KEEP_SOURCE = {
+        "__init__",
+        "app_factory",
+        "cli",
+        "instrumentation",
+        "server",
+        "report_skill_usage",
+    }
     # 不编译、需保留源码的目录路径片段
-    _KEEP_SOURCE_DIRS = {"mcp/tools"}
+    _KEEP_SOURCE_DIRS = {"mcp/tools", "collector_mcp", "seller_sprite/mcp_bundle"}
 
     def find_package_modules(self, package, package_dir):
         modules = super().find_package_modules(package, package_dir)
@@ -139,9 +146,18 @@ def get_extensions():
         if _basename == "cli.py" or _basename.endswith("_cli.py"):
             continue
 
-        # 排除 MCP server 和 tools —— FastMCP 用 Pydantic TypeAdapter 解析函数类型注解，
-        # Cython 编译后 cyfunction 无法被 Pydantic 生成 schema，导致启动报错
-        if "opscli/mcp/server.py" in f_unix or "opscli/mcp/tools/" in f_unix:
+        # 排除 MCP server、tools 和 Collector 公开 Tool —— FastMCP 用 Pydantic
+        # TypeAdapter 解析函数注解，Cython 编译后 cyfunction 无法生成 schema。
+        if (
+            f_unix in {
+                "opscli/mcp/app_factory.py",
+                "opscli/mcp/instrumentation.py",
+                "opscli/mcp/server.py",
+                "opscli/seller_sprite/mcp_bundle.py",
+            }
+            or "opscli/mcp/tools/" in f_unix
+            or "opscli/collector_mcp/" in f_unix
+        ):
             continue
 
         # 排除 skills/hooks/report_skill_usage.py —— 该文件是 hook 脚本，

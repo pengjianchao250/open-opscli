@@ -35,6 +35,7 @@ dev = [
 [project.scripts]
 opscli = "opscli.cli:app"
 opscli-mcp = "opscli.mcp.server:run"
+opscli-collector-mcp = "opscli.collector_mcp.server:run"
 
 [build-system]
 # 切换为 setuptools + Cython，支持编译二进制 wheel

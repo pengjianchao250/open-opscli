@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-24 collector_mcp - 接入通用 MCP 静默代理
+
+**变更原因**：通用 MCP 仍在本地注册并执行 SellerSprite，导致 Collector 停止后卖家精灵仍可访问，不符合 Collector 独立部署和单一对外入口设计。
+**改动点**：通用 MCP 的 10 个 `seller_sprite_*` Tool 改为读取 `OPSCLI_COLLECTOR_MCP_URL` 并代理 Collector 同名 Tool，使用 Bearer Header 透传当前用户 API Key；移除通用 MCP 的 SellerSprite scheduler 生命周期，本地代理跳过额度扣减并由 Collector 统一执行额度、权限和凭证隔离；`opscli seller-sprite` 继续使用 OPS 配置接口下发的通用 MCP 地址，不直接发现 Collector；新增精简运维说明及代理回归测试。
+**验证结果**：通用 MCP 代理、CLI 通用 MCP 路由、Remote MCP Header、工具注册、生命周期、额度权限及 Collector 边界定向回归 `192 passed`；`git diff --check` 通过。
+**影响范围**：通用 MCP 不再本地执行 SellerSprite；未配置或无法连接 Collector 时卖家精灵调用明确失败，Collector 本身和 `opscli seller-sprite` 远端调用保持不变。
+**回滚方式**：将通用 MCP 恢复注册本地 SellerSprite Tool 和 scheduler lifespan，移除代理模块、Header 透传、测试、运维说明及本条记录。
+---
+
 ## 2026-07-23 seller_sprite - 增加场景接入规范
 
 **变更原因**：需要将卖家精灵场景调研、接口取证、分页和导出对齐经验固化为可复用的开发规范，避免后续接入依赖字段猜测或复制官网非业务内容。
@@ -7,6 +16,15 @@
 **验证结果**：文档关键契约检查和 `git diff --check` 通过。
 **影响范围**：仅新增卖家精灵后续场景的开发与验收规范，不改变现有场景运行行为。
 **回滚方式**：删除 `opscli/seller_sprite/卖家精灵场景接入规范.md` 并移除本条记录。
+---
+
+## 2026-07-21 collector_mcp - 新增统一数据采集服务
+
+**变更原因**：SellerSprite 需要迁移至独立服务器运行，同时复用现有 MCP 鉴权、权限、额度和遥测能力，并为后续数据采集模块保留统一扩展入口。
+**改动点**：提取共享 MCP App Factory 和服务级隔离 Tool Catalog；新增 `opscli-collector-mcp` 入口、静态 Profile/Bundle Registry、服务及模块健康工具，并将 SellerSprite 作为首个显式 Bundle 接入持久队列生命周期；Collector 首期仅公开 2 个最小认证工具、2 个公共工具和 10 个 SellerSprite 工具；SellerSprite CLI 继续严格选择配置中心的 `BI运营系统` 通用 MCP，由通用 MCP 静默代理 Collector；HTTP/SSE 模式拒绝客户端 `output_dir`、隐藏服务器路径且仅返回 HTTPS 导出地址，stdio 保留本地路径兼容；通用 MCP 不再本地执行 SellerSprite，scheduler 仅由 Collector 管理并按租约恢复过期任务。
+**验证结果**：迁移定向回归 `129 passed`；Collector、SellerSprite 与 MCP 综合回归 `572 passed, 7 failed`，其中 2 项为既有 `seller-sprite-debug` 顶级命令未注册，另外 5 项为既有 stdio 权限过滤或当前 Skill Profile 资源裁剪基线；Collector 独立 Catalog 确认为 14 个工具；使用 `SKIP_CYTHON=1` 的 uv 环境完成项目构建和测试安装。
+**影响范围**：新增可独立部署的统一数据采集 MCP 服务，并改变 SellerSprite 的服务端执行位置和 HTTP/SSE 文件边界；SellerSprite CLI 仍访问 OPS 通用 MCP，其他 Remote Adapter、现有任务数据和 stdio 本地调用保持兼容。本次不迁移或删除生产 SQLite、凭证、浏览器 Profile 和结果文件。
+**回滚方式**：停止部署并移除 `opscli-collector-mcp` 入口及 Collector 包，将 SellerSprite Adapter 恢复默认服务选择，同时回退共享 Factory、Bundle、安全边界、测试、文档及本条记录；原通用 MCP 和任务数据无需调整。
 ---
 
 ## 2026-07-23 seller_sprite - 增加 ABA 数据选品场景

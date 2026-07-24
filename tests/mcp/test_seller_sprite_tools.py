@@ -1383,6 +1383,29 @@ def test_seller_sprite_run_returns_complete_queued_status_without_polling(monkey
     }
 
 
+def test_seller_sprite_remote_run_rejects_output_dir_before_auth(monkeypatch):
+    from opscli.mcp.context import mcp_request_ctx
+
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "ensure_ops_credentials",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("拒绝路径后不得认证")),
+    )
+    token = mcp_request_ctx.set({"api_key": "remote-key"})
+    try:
+        result = _run(
+            seller_sprite_tools.seller_sprite_run(
+                scenario="keyword-reverse",
+                output_dir="D:/client/exports",
+            )
+        )
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["success"] is False
+    assert "不接受 output_dir" in result["error"]["message"]
+
+
 def test_seller_sprite_export_returns_owned_export_info(monkeypatch):
     _patch_job_owner(monkeypatch)
     monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
@@ -1392,6 +1415,53 @@ def test_seller_sprite_export_returns_owned_export_info(monkeypatch):
     assert result["success"] is True
     assert result["data"]["path"] == "/tmp/job-1.xlsx"
     assert result["data"]["url"].startswith("file://")
+
+
+def test_seller_sprite_remote_export_requires_https_and_hides_server_path(monkeypatch):
+    from opscli.mcp.context import mcp_request_ctx
+
+    class HttpsExportScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "export": {
+                    "path": "/srv/private/job-1.xlsx",
+                    "filename": "job-1.xlsx",
+                    "url": "https://files.example.com/job-1.xlsx",
+                },
+            }
+
+    _patch_job_owner(monkeypatch)
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_task_scheduler",
+        lambda **kwargs: HttpsExportScheduler(),
+    )
+    token = mcp_request_ctx.set({"api_key": "remote-key"})
+    try:
+        result = _run(seller_sprite_tools.seller_sprite_export("job-1"))
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["success"] is True
+    assert result["data"]["url"] == "https://files.example.com/job-1.xlsx"
+    assert "path" not in result["data"]
+
+
+def test_seller_sprite_remote_export_rejects_local_file_url(monkeypatch):
+    from opscli.mcp.context import mcp_request_ctx
+
+    _patch_job_owner(monkeypatch)
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
+    token = mcp_request_ctx.set({"api_key": "remote-key"})
+    try:
+        result = _run(seller_sprite_tools.seller_sprite_export("job-1"))
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["success"] is False
+    assert "HTTPS" in result["error"]["message"]
+    assert "/tmp/job-1.xlsx" not in str(result)
 
 
 def test_seller_sprite_export_does_not_mutate_scheduler_export_mapping(monkeypatch):

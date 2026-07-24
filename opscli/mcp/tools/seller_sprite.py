@@ -109,6 +109,54 @@ def _get_current_mcp_user_email() -> str | None:
     return _get_authenticated_user_email()
 
 
+def _is_remote_mcp_request() -> bool:
+    """判断当前 Tool 是否由 HTTP/SSE API Key 请求触发。"""
+    from opscli.mcp.context import get_current_api_key
+
+    return bool(get_current_api_key())
+
+
+def _validate_output_dir(output_dir: str | None) -> None:
+    """禁止远端调用方把客户端路径解释为服务器输出目录。"""
+    if output_dir and _is_remote_mcp_request():
+        raise ValueError("HTTP/SSE 模式不接受 output_dir，导出目录由数据采集服务统一管理")
+
+
+def _sanitize_export(export: dict[str, Any]) -> dict[str, Any]:
+    """远端仅返回 HTTPS 导出地址，stdio 保留本地文件兼容行为。"""
+    normalized = dict(export)
+    if not _is_remote_mcp_request():
+        if normalized.get("path") and not normalized.get("url"):
+            normalized["url"] = Path(normalized["path"]).expanduser().resolve().as_uri()
+        return normalized
+
+    url = str(normalized.get("url") or "").strip()
+    if not url.lower().startswith("https://"):
+        raise ValueError("导出文件尚未上传到 HTTPS 地址，请稍后重试")
+    normalized.pop("path", None)
+    normalized["url"] = url
+    return normalized
+
+
+def _sanitize_status(status: dict[str, Any]) -> dict[str, Any]:
+    """移除远端任务状态中的服务器路径并校验成功态导出地址。"""
+    normalized = dict(status)
+    if not _is_remote_mcp_request():
+        return normalized
+    export = normalized.get("export")
+    if isinstance(export, dict):
+        normalized["export"] = _sanitize_export(export)
+    for key in (
+        "root_dir",
+        "params_path",
+        "raw_path",
+        "result_path",
+        "attempt_output_dir",
+    ):
+        normalized.pop(key, None)
+    return normalized
+
+
 def _build_request(
     *,
     scenario: str,
@@ -720,6 +768,15 @@ async def seller_sprite_run(
     HTTP/SSE 模式按 X-MCP-API-Key 自动确保隔离 OPS 凭证；旧客户端传入的
     session_id / jwt 仅保留参数兼容并会被忽略。stdio 模式继续兼容本机凭证。
     """
+    try:
+        _validate_output_dir(output_dir)
+    except Exception as exc:
+        return _err(
+            exc,
+            tool="MCP → seller_sprite_run(...)",
+            call_params={"scenario": scenario, "job_id": job_id},
+        )
+
     # Listing Analysis 有独立的三段式入口，必须在认证和队列副作用前拒绝通用提交。
     if str(scenario or "").strip().lower() == "listing-analysis":
         return _err(
@@ -774,7 +831,7 @@ async def seller_sprite_run(
             request,
             binding=binding,
         )
-        return _ok(queued_status)
+        return _ok(_sanitize_status(queued_status))
     except Exception as exc:
         return _err(
             exc,
@@ -880,6 +937,15 @@ async def seller_sprite_listing_analysis_submit(
 ) -> dict:
     """提交 Listing Analysis AI 任务并立即返回本地 job_id。"""
     try:
+        _validate_output_dir(output_dir)
+    except Exception as exc:
+        return _err(
+            exc,
+            tool="MCP → seller_sprite_listing_analysis_submit(...)",
+            call_params={"asin": asin, "station": station, "site": site, "job_id": job_id},
+        )
+
+    try:
         binding = await ensure_ops_credentials(
             provided_session=session_id,
             provided_jwt=jwt,
@@ -949,7 +1015,7 @@ async def seller_sprite_listing_analysis_status(
             "assigned_account_key"
         ):
             status["ready"] = False
-            return _ok(status)
+            return _ok(_sanitize_status(status))
         task_id = _extract_listing_analysis_task_id(status)
         asin = _extract_listing_analysis_asin(status, owner_record)
         if asin:
@@ -968,10 +1034,12 @@ async def seller_sprite_listing_analysis_status(
             )
         else:
             status["ready"] = False
-            return _ok(status)
+            return _ok(_sanitize_status(status))
         if remote.get("failed"):
-            return _ok(_listing_analysis_failure_payload(status, remote))
-        return _ok({**status, **remote})
+            return _ok(
+                _sanitize_status(_listing_analysis_failure_payload(status, remote))
+            )
+        return _ok(_sanitize_status({**status, **remote}))
     except Exception as exc:
         return _err(
             exc,
@@ -1000,7 +1068,7 @@ async def seller_sprite_listing_analysis_result(
             "assigned_account_key"
         ):
             status["ready"] = False
-            return _ok(status)
+            return _ok(_sanitize_status(status))
         task_id = _extract_listing_analysis_task_id(status)
         asin = _extract_listing_analysis_asin(status, owner_record)
         if asin:
@@ -1011,15 +1079,27 @@ async def seller_sprite_listing_analysis_result(
                 account_binding=account_binding,
             )
             if history.get("failed"):
-                return _ok(_mark_listing_analysis_remote_failed(job_id, status, history))
+                return _ok(
+                    _sanitize_status(
+                        _mark_listing_analysis_remote_failed(job_id, status, history)
+                    )
+                )
             if not history.get("task_id"):
-                return _ok({**status, **history, "ready": False, "export_format": export_format})
+                return _ok(
+                    _sanitize_status(
+                        {**status, **history, "ready": False, "export_format": export_format}
+                    )
+                )
             task_id = str(history["task_id"])
             if not history.get("ready"):
-                return _ok({**status, **history, "ready": False, "export_format": export_format})
+                return _ok(
+                    _sanitize_status(
+                        {**status, **history, "ready": False, "export_format": export_format}
+                    )
+                )
         if not task_id:
             status["ready"] = False
-            return _ok(status)
+            return _ok(_sanitize_status(status))
         remote = await _fetch_listing_analysis_report_result(
             task_id=task_id,
             session_id=sid,
@@ -1027,9 +1107,15 @@ async def seller_sprite_listing_analysis_result(
             account_binding=account_binding,
         )
         if remote.get("failed"):
-            return _ok(_mark_listing_analysis_remote_failed(job_id, status, remote))
+            return _ok(
+                _sanitize_status(
+                    _mark_listing_analysis_remote_failed(job_id, status, remote)
+                )
+            )
         if not remote.get("ready"):
-            return _ok({**status, **remote, "export_format": export_format})
+            return _ok(
+                _sanitize_status({**status, **remote, "export_format": export_format})
+            )
         persisted = _persist_listing_analysis_remote_result(
             job_id=job_id,
             status=status,
@@ -1038,7 +1124,7 @@ async def seller_sprite_listing_analysis_result(
             session_id=sid,
             jwt=jw,
         )
-        return _ok(persisted)
+        return _ok(_sanitize_status(persisted))
     except Exception as exc:
         return _err(
             exc,
@@ -1057,7 +1143,7 @@ async def seller_sprite_job_status(job_id: str, wait_seconds: int = 0) -> dict:
             job_ids=[job_id],
             wait_seconds=wait_seconds,
         )
-        return _ok(statuses[0])
+        return _ok(_sanitize_status(statuses[0]))
     except Exception as exc:
         return _err(
             exc,
@@ -1126,7 +1212,7 @@ async def seller_sprite_jobs_status(job_ids: list[str], wait_seconds: int = 0) -
             {
                 "ready": all(state in SELLER_SPRITE_TERMINAL_STATES for state in states),
                 "summary": summary,
-                "jobs": statuses,
+                "jobs": [_sanitize_status(status) for status in statuses],
             }
         )
     except Exception as exc:
@@ -1145,10 +1231,7 @@ async def seller_sprite_export(job_id: str) -> dict:
         export = status.get("export")
         if not export:
             raise ValueError(f"任务无导出文件：{job_id}")
-        export = dict(export)
-        if export.get("path") and not export.get("url"):
-            export["url"] = Path(export["path"]).expanduser().resolve().as_uri()
-        return _ok(export)
+        return _ok(_sanitize_export(dict(export)))
     except Exception as exc:
         return _err(exc, tool="MCP → seller_sprite_export(...)", call_params={"job_id": job_id})
 
