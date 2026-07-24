@@ -1006,6 +1006,252 @@ class _AssociationPageWithoutVariantButton(_AssociationPage):
         return super().locator(selector)
 
 
+class _KeywordMinerLocator:
+    """记录关键词挖掘页面输入和按钮点击。"""
+
+    def __init__(self, page, kind):
+        self.page = page
+        self.kind = kind
+        self.first = self
+
+    def locator(self, selector):
+        if self.kind == "query" and selector.startswith("xpath=ancestor::"):
+            return _KeywordMinerLocator(self.page, "container")
+        if self.kind == "container" and selector.startswith("input:visible"):
+            return _KeywordMinerLocator(
+                self.page,
+                "keyword" if self.page.input_mode == "scoped" else "missing",
+            )
+        return _KeywordMinerLocator(self.page, "missing")
+
+    async def count(self):
+        return int(self.kind != "missing")
+
+    async def is_visible(self, **kwargs):
+        return self.kind != "missing"
+
+    async def fill(self, value):
+        self.page.fills.append(value)
+
+    async def click(self, **kwargs):
+        self.page.clicks.append(self.kind)
+
+
+class _KeywordMinerPage:
+    """模拟关键词输入框文案和页面结构变化。"""
+
+    def __init__(self, endpoint, *, input_mode):
+        self.endpoint = endpoint
+        self.input_mode = input_mode
+        self.url = worker_module.DEFAULT_PAGE_URL
+        self.context = SimpleNamespace(request=FakeContextRequest())
+        self.fills = []
+        self.clicks = []
+
+    def expect_response(self, predicate, **kwargs):
+        return _AssociationResponseWaiter(self.endpoint)
+
+    def locator(self, selector):
+        if "立即查询" in selector and not selector.startswith("input"):
+            return _KeywordMinerLocator(self, "query")
+        if self.input_mode == "placeholder_cn" and "placeholder" in selector and "关键词" in selector:
+            return _KeywordMinerLocator(self, "keyword")
+        if self.input_mode == "placeholder_example" and "placeholder" in selector and "flashlight" in selector:
+            return _KeywordMinerLocator(self, "keyword")
+        if self.input_mode == "aria" and "aria-label" in selector and "keyword" in selector.lower():
+            return _KeywordMinerLocator(self, "keyword")
+        if self.input_mode == "name" and "name" in selector and "keyword" in selector.lower():
+            return _KeywordMinerLocator(self, "keyword")
+        return _KeywordMinerLocator(self, "missing")
+
+
+@pytest.mark.parametrize(
+    "input_mode",
+    ["placeholder_cn", "placeholder_example", "aria", "name", "scoped"],
+)
+def test_keyword_miner_route_fills_compatible_input_before_query(input_mode, tmp_path):
+    endpoint = "/v3/api/keyword-miner"
+    page = _KeywordMinerPage(endpoint, input_mode=input_mode)
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-miner",
+        method="POST",
+        endpoint=endpoint,
+        payload={"keyword": "bed"},
+        referer=worker_module.DEFAULT_PAGE_URL,
+        account=account,
+        root_dir=tmp_path,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "page_response"
+    assert page.fills == ["bed"]
+    assert page.clicks == ["query"]
+
+
+def test_keyword_miner_missing_input_falls_back_without_empty_query_click(tmp_path):
+    endpoint = "/v3/api/keyword-miner"
+    page = _KeywordMinerPage(endpoint, input_mode="missing")
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-miner",
+        method="POST",
+        endpoint=endpoint,
+        payload={"keyword": "bed"},
+        referer=worker_module.DEFAULT_PAGE_URL,
+        account=account,
+        root_dir=tmp_path,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "context_request"
+    assert page.fills == []
+    assert page.clicks == []
+    assert len(page.context.request.post_calls) == 1
+
+
+def test_keyword_miner_high_frequency_uses_context_request_without_second_page_query(monkeypatch, tmp_path):
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=account,
+    )
+    page = SimpleNamespace(url=worker_module.DEFAULT_PAGE_URL)
+    route_sections = []
+    context_calls = []
+
+    async def no_wait(*args, **kwargs):
+        return None
+
+    async def ensure_page(current_account):
+        return page
+
+    async def open_referer(current_page, request, **kwargs):
+        return {"logged_in": True}
+
+    async def execute_route_fetch(**kwargs):
+        route_sections.append(kwargs["section"])
+        return {"code": "OK", "data": {"items": [{"keyword": "bed"}]}}
+
+    async def request_with_context(current_page, *, endpoint, method, payload):
+        context_calls.append({"endpoint": endpoint, "method": method, "payload": payload})
+        return SimpleNamespace(status=200)
+
+    async def parse_response(response, **kwargs):
+        return {"code": "OK", "data": {"items": [{"keyword": "bed frame"}]}}
+
+    monkeypatch.setattr(worker, "_wait_for_cooldown", no_wait)
+    monkeypatch.setattr(worker, "_wait_for_rate_limit", no_wait)
+    monkeypatch.setattr(worker, "_ensure_page", ensure_page)
+    monkeypatch.setattr(worker, "_open_referer_and_login", open_referer)
+    monkeypatch.setattr(worker, "_handle_robot_captcha_if_enabled", no_wait)
+    monkeypatch.setattr(worker, "_execute_route_fetch", execute_route_fetch)
+    monkeypatch.setattr(worker_module, "_prepare_page", no_wait)
+    monkeypatch.setattr(worker_module, "_request_with_browser_context", request_with_context)
+    monkeypatch.setattr(worker_module, "_parse_response", parse_response)
+
+    result = _run(
+        worker._run_one(
+            worker_module.BrowserRouteRequest(
+                scenario="keyword-miner",
+                method="POST",
+                endpoint="/v3/api/keyword-miner",
+                payload={"keyword": "bed"},
+                referer=worker_module.DEFAULT_PAGE_URL,
+                account=account,
+                root_dir=tmp_path,
+                high_frequency_endpoint="/v3/api/keyword-miner/high/frequency-new",
+                high_frequency_payload={"keyword": "bed"},
+            )
+        )
+    )
+
+    assert route_sections == ["main"]
+    assert context_calls == [
+        {
+            "endpoint": "/v3/api/keyword-miner/high/frequency-new",
+            "method": "POST",
+            "payload": {"keyword": "bed"},
+        }
+    ]
+    assert result.high_frequency_response["data"]["items"] == [{"keyword": "bed frame"}]
+    timing_warning = next(item for item in result.warnings if item["stage"] == "browser_route_timing")
+    stages = [item["stage"] for item in timing_warning["timings"]]
+    assert "route_fetch.high_frequency.context_request" in stages
+    assert "route_fetch.high_frequency.parse_response" in stages
+    assert "route_fetch.high_frequency.route_setup" not in stages
+    assert "route_fetch.high_frequency.page_response_fallback" not in stages
+
+
+def test_non_keyword_miner_high_frequency_keeps_page_route_path(monkeypatch, tmp_path):
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=account,
+    )
+    page = SimpleNamespace(url=worker_module.DEFAULT_PAGE_URL)
+    route_sections = []
+
+    async def no_wait(*args, **kwargs):
+        return None
+
+    async def ensure_page(current_account):
+        return page
+
+    async def open_referer(current_page, request, **kwargs):
+        return {"logged_in": True}
+
+    async def execute_route_fetch(**kwargs):
+        route_sections.append(kwargs["section"])
+        return {"code": "OK", "data": {"items": []}}
+
+    monkeypatch.setattr(worker, "_wait_for_cooldown", no_wait)
+    monkeypatch.setattr(worker, "_wait_for_rate_limit", no_wait)
+    monkeypatch.setattr(worker, "_ensure_page", ensure_page)
+    monkeypatch.setattr(worker, "_open_referer_and_login", open_referer)
+    monkeypatch.setattr(worker, "_handle_robot_captcha_if_enabled", no_wait)
+    monkeypatch.setattr(worker, "_execute_route_fetch", execute_route_fetch)
+    monkeypatch.setattr(worker_module, "_prepare_page", no_wait)
+
+    _run(
+        worker._run_one(
+            worker_module.BrowserRouteRequest(
+                scenario="competitor-lookup",
+                method="POST",
+                endpoint="/v3/api/competing-lookup",
+                payload={"keyword": "bed"},
+                referer=worker_module.DEFAULT_PAGE_URL,
+                account=account,
+                root_dir=tmp_path,
+                high_frequency_endpoint="/v3/api/example/high-frequency",
+                high_frequency_payload={"keyword": "bed"},
+            )
+        )
+    )
+
+    assert route_sections == ["main", "high_frequency"]
+
+
 def test_association_traffic_route_fills_asins_and_selects_all_variants(tmp_path):
     endpoint = "/v3/api/relation/traffic"
     page = _AssociationPage(endpoint)

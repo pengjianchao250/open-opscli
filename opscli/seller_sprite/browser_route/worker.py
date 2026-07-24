@@ -614,16 +614,29 @@ class SellerSpriteBrowserRouteWorker:
         if request.high_frequency_endpoint and request.high_frequency_payload:
             try:
                 stage_started_at = time.monotonic()
-                high_frequency_response = await self._execute_route_fetch(
-                    page=page,
-                    method="POST",
-                    endpoint=request.high_frequency_endpoint,
-                    payload=request.high_frequency_payload,
-                    root_dir=request.root_dir,
-                    section="high_frequency",
-                    timings=timings,
-                    request=request,
-                )
+                if request.scenario == "keyword-miner":
+                    # 页面一次查询已完成主词交互；高频词直接复用浏览器登录态，避免重复点击和等待页面响应。
+                    high_frequency_response = await self._execute_context_fetch(
+                        page=page,
+                        method="POST",
+                        endpoint=request.high_frequency_endpoint,
+                        payload=request.high_frequency_payload,
+                        root_dir=request.root_dir,
+                        section="high_frequency",
+                        timings=timings,
+                        request=request,
+                    )
+                else:
+                    high_frequency_response = await self._execute_route_fetch(
+                        page=page,
+                        method="POST",
+                        endpoint=request.high_frequency_endpoint,
+                        payload=request.high_frequency_payload,
+                        root_dir=request.root_dir,
+                        section="high_frequency",
+                        timings=timings,
+                        request=request,
+                    )
                 _record_timing(timings, request, "execute_route_fetch.high_frequency", stage_started_at)
             except SellerSpriteApiError as exc:
                 _record_timing(
@@ -1088,6 +1101,51 @@ class SellerSpriteBrowserRouteWorker:
         stage_started_at = time.monotonic()
         await _wait_for_login_success(page, callback=callback)
         _record_timing(timings, request, "login.wait_success", stage_started_at, current_url=page.url)
+
+    async def _execute_context_fetch(
+        self,
+        *,
+        page,
+        method: str,
+        endpoint: str,
+        payload: dict[str, Any],
+        root_dir: Path,
+        section: str,
+        timings: list[dict[str, Any]] | None = None,
+        request: BrowserRouteRequest | None = None,
+    ) -> dict[str, Any]:
+        """复用浏览器登录态直接请求接口，并保留分阶段耗时诊断。"""
+        normalized_method = method.upper()
+        stage_started_at = time.monotonic()
+        response = await _request_with_browser_context(
+            page,
+            endpoint=endpoint,
+            method=normalized_method,
+            payload=payload,
+        )
+        _record_timing(
+            timings,
+            request,
+            f"route_fetch.{section}.context_request",
+            stage_started_at,
+            status=getattr(response, "status", None),
+        )
+        stage_started_at = time.monotonic()
+        parsed = await _parse_response(
+            response,
+            method=normalized_method,
+            root_dir=root_dir,
+            section=section,
+        )
+        _record_timing(
+            timings,
+            request,
+            f"route_fetch.{section}.parse_response",
+            stage_started_at,
+            transport="context_request",
+            status=getattr(response, "status", None),
+        )
+        return parsed
 
     async def _execute_route_fetch(
         self,
@@ -1852,6 +1910,9 @@ async def _trigger_request(
     stage_started_at = time.monotonic()
     wait_started_at = stage_started_at
     listing_analysis_clicked = False
+    keyword_miner_interaction = bool(
+        request and request.scenario == "keyword-miner"
+    )
     association_traffic_interaction = bool(
         request and request.scenario == "association-traffic"
     )
@@ -1867,6 +1928,9 @@ async def _trigger_request(
                 # Listing Analysis 必须先在页面输入 ASIN 再点击查询，避免只走静默接口提交。
                 listing_analysis_clicked = await _trigger_listing_analysis_query(page, payload)
                 clicked = listing_analysis_clicked
+            elif keyword_miner_interaction:
+                # 关键词挖掘必须先填写关键词；空点查询只会触发页面校验且不会发送接口请求。
+                clicked = await _trigger_keyword_miner_query(page, payload)
             elif association_traffic_interaction:
                 # 关联流量必须让页面接收 ASIN，并在弹窗中显式选择全部变体。
                 clicked = await _trigger_association_traffic_query(page, payload)
@@ -2001,6 +2065,66 @@ async def _click_query_button(page) -> bool:
         return False
     await locator.click(timeout=5000)
     return True
+
+
+async def _trigger_keyword_miner_query(page, payload: dict[str, Any]) -> bool:
+    """在关键词挖掘页面填写关键词并点击查询按钮。"""
+    keyword = str(payload.get("keyword") or "").strip()
+    if not keyword:
+        return False
+    query_button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('立即查询')",
+            "[role='button']:visible:has-text('立即查询')",
+            ".el-button:visible:has-text('立即查询')",
+            ".ant-btn:visible:has-text('立即查询')",
+        ],
+    )
+    if query_button is None:
+        return False
+    input_box = await _first_visible_page_locator(
+        page,
+        [
+            "input[placeholder*='输入关键词']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='搜索关键词']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='关键词']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='keyword' i]:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='flashlight' i]:visible:not([readonly]):not([disabled])",
+            "input[aria-label*='输入关键词']:visible:not([readonly]):not([disabled])",
+            "input[aria-label*='关键词']:visible:not([readonly]):not([disabled])",
+            "input[aria-label*='keyword' i]:visible:not([readonly]):not([disabled])",
+            "input[name*='keyword' i]:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if input_box is None:
+        # 页面文案变化时，从查询按钮逐层向上寻找最近的可见文本框，避免误填下方筛选项。
+        input_box = await _keyword_miner_input_near_button(query_button)
+    if input_box is None:
+        return False
+    await input_box.fill(keyword)
+    await query_button.click(timeout=5000)
+    return True
+
+
+async def _keyword_miner_input_near_button(query_button):
+    """从查询按钮最近祖先开始寻找唯一可见文本框。"""
+    input_selector = (
+        "input:visible:not([readonly]):not([disabled])"
+        ":is(:not([type]), [type='text'], [type='search'])"
+    )
+    for depth in range(1, 7):
+        container = query_button.locator(f"xpath=ancestor::*[{depth}]")
+        locator = container.locator(input_selector)
+        try:
+            count = await locator.count()
+            if count == 1:
+                candidate = locator.first
+                if await candidate.is_visible(timeout=800):
+                    return candidate
+        except Exception:
+            continue
+    return None
 
 
 async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool:
