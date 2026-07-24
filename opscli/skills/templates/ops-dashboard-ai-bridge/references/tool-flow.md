@@ -1,6 +1,6 @@
 # Dashboard Tool Flow
 
-适用 Skill：`ops-dashboard-ai-bridge`。兼容工具合同：`dashboard-tools.v1`；具体参数 schema 以 Dashboard 页面宿主本轮注册结果为准。
+适用 Skill：`ops-dashboard-ai-bridge`。兼容工具合同：`dashboard-tools.v2`；具体参数 schema 以 Dashboard 页面宿主本轮注册结果为准。
 
 ## 目录
 
@@ -10,6 +10,7 @@
 - [表格和交叉表](#表格和交叉表)
 - [数据集选择闸口](#数据集选择闸口)
 - [显式目标单图写入](#显式目标单图写入)
+- [标题样式和位置](#标题样式和位置)
 - [字段定位来源](#字段定位来源)
 - [字段选择纪律](#字段选择纪律)
 - [筛选流程](#筛选流程)
@@ -32,6 +33,9 @@
 | 调整字段顺序       | `dashboard_drag_reorder_field_list`             | `dashboard_drag_update_chart_config`                                                 |
 | 查看已配字段       | `dashboard_drag_list_configured_fields`         | 字段配置工具                                                                         |
 | 配置字段           | `dashboard_drag_get_field_config_options`       | 聚合、排序、格式等工具                                                               |
+| 修改图表标题       | `dashboard_drag_set_chart_title`                | 核验最终 `title` 和 `changed`                                                        |
+| 局部修改样式       | `dashboard_drag_patch_chart_style`              | 一次只改一个 `styleKey`，核验 `appliedFields`                                        |
+| 移动图表           | `dashboard_drag_move_chart`                     | 读取 `gridColumn` 后传 `x/y`，核验 `finalPosition`                                   |
 | 配置筛选           | `dashboard_drag_get_filter_field_capability`    | `dashboard_drag_apply_filter_rule`                                                   |
 | 设置查询控件       | `dashboard_drag_get_query_control_item_options` | `dashboard_drag_set_query_control_item_value`、`dashboard_drag_submit_query_control` |
 
@@ -47,7 +51,7 @@
 
 1. `dashboard_session_get_context({"include_selected_chart_config": true})`
 2. 从 `dashboard_editor_add_component` 的 schema enum 选择趋势图对应 `viewType`。
-3. `dashboard_editor_add_component({"viewType": "line_basic"})`
+3. `dashboard_editor_add_component({"viewType": "line_basic", "title": "近 30 天销售额趋势"})`
 4. 从 result 取 `data.chartId`。
 5. 调用 `dashboard_session_search_datasets` 选择唯一销售数据集，并从真实字段目录确认日期维度和销售额指标。
 6. `dashboard_editor_batch_configure_charts({"datasetId": 123, "charts": [{"chart_id": "<chartId>", "fieldLists": [{"listType": "xAxis", "fields": [{"fieldId": "<日期 actionFieldId>", "fieldSourceType": "dimensions"}]}, {"listType": "yAxis", "fields": [{"fieldId": "<销售额 actionFieldId>", "fieldSourceType": "metrics"}]}]}]})`
@@ -61,7 +65,7 @@
 1. 确认 `dashboard_editor_batch_configure_charts` 在 `availableTools`，否则停止。
 2. 选择一个能覆盖全部图表的唯一数据集；存在多个真实候选时必须通过 `ask_user_question` 选择。
 3. 按默认组合一次确定全部 `viewType`；营销/转化固定为 5 张，不得缩减为单图或部分组合。
-4. 依次调用 `dashboard_editor_add_component` 或模板工具，收集完整组合的全部 `chartId`。
+4. 为每张图表确定业务标题，依次调用 `dashboard_editor_add_component` 或模板工具，收集完整组合的全部 `chartId`。
 5. 需要真实字段目录时，只对其中一个新图表调用一次 `dashboard_drag_select_dataset`；使用返回的字段目录规划全部 `fieldLists`，不得调用逐字段写工具。
 6. 只调用一次 `dashboard_editor_batch_configure_charts`；根级只传一个 `datasetId`，`charts` 必须覆盖本轮全部创建结果。
 7. 只有 result 同时满足 `ok=true`、`changed=true`、`refreshed=true`，且返回全部 `chartIds`，本轮基础配置才算 `PASS`。
@@ -112,6 +116,24 @@ dashboard_drag_add_field_to_list({"chart_id": "<目标图表>", "listType": "yAx
 
 执行后页面继续保持原图表选中。未传 `chart_id` 时，两项工具使用当前选中图表。其他字段列表、字段配置、筛选和查询控件工具仍按原流程先选中目标图表。组合创建不得使用该流程，必须走一次 `dashboard_editor_batch_configure_charts`。
 
+## 标题样式和位置
+
+已知目标 `chart_id` 时直接使用：
+
+```text
+dashboard_drag_set_chart_title({"chart_id": "<目标图表>", "title": "区域销售额趋势"})
+dashboard_drag_patch_chart_style({"chart_id": "<目标图表>", "styleKey": "legend", "fields": [{"field": "showLegend", "value": false}]})
+dashboard_drag_move_chart({"chart_id": "<目标图表>", "x": 0, "y": 6})
+```
+
+约束：
+
+- 标题去除首尾空白后长度为 1 到 100；修改标题不改变显隐。
+- 样式字段必须来自当前 `viewType` 的现有或默认 `styleConfig`；一次只补丁一个 `styleKey`，标题文本仍用标题工具。
+- 移动前读取 context 的 `gridColumn` 和目标布局；`x/y` 为非负整数，不硬编码 12 列。
+- 根画布和当前可见子看板可移动；Tab 子图或其他子看板返回 `UNSUPPORTED` 时停止，不跨容器重试。
+- 以工具返回的 `finalPosition`、`affectedCharts` 和 `changed` 核验 GridStack 最终结果。
+
 ## 字段定位来源
 
 合法来源：
@@ -124,6 +146,8 @@ dashboard_drag_add_field_to_list({"chart_id": "<目标图表>", "listType": "yAx
 不要手写字段 ID。写工具使用字段目录中的 `actionFieldId` 作为 `fieldId`，并按外层分组填写 `fieldSourceType`；页面会从当前数据集字段池还原完整字段。
 
 ## 字段选择纪律
+
+字段目录的外层 `dimensions/metrics` 是真实角色来源。写入前先确认目标字段区允许维度、度量或两者；角色不兼容时不得依赖模型声明或字段名猜测绕过页面校验。
 
 执行字段配置前必须先完成判断：
 
@@ -177,6 +201,8 @@ dashboard_drag_add_field_to_list({"chart_id": "<目标图表>", "listType": "yAx
 如果要恢复默认，使用 `dashboard_drag_reset_query_control`。
 
 ## 重试规则
+
+- 字段角色 `VALIDATION_ERROR`：基于真实字段目录修正一次；仍失败时停止。
 
 - 只读工具失败：可以重试一次。
 - 幂等写工具失败：先读 context，再决定是否重试。

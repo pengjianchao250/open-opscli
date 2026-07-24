@@ -1,6 +1,6 @@
 # Dashboard Operation Standards
 
-适用 Skill：`ops-dashboard-ai-bridge`。兼容工具合同：`dashboard-tools.v1`；具体参数 schema 以 Dashboard 页面宿主本轮注册结果为准。
+适用 Skill：`ops-dashboard-ai-bridge`。兼容工具合同：`dashboard-tools.v2`；具体参数 schema 以 Dashboard 页面宿主本轮注册结果为准。
 
 ## 目录
 
@@ -42,6 +42,9 @@
 12. 同一轮新建的图表必须先整体规划，并使用同一个数据集；禁止跨数据集拼成一组图表。
 13. 创建完成后必须通过 `dashboard_editor_batch_configure_charts` 一次写入全部图表的数据集和字段；禁止退化为逐图选择数据集或逐字段试错。
 14. 多个真实候选会改变结果时必须调用 `ask_user_question`，提供 2 到 4 个来自页面结果的候选并等待用户选择；禁止只在正文中列选项、要求用户手输序号或替用户选择。
+15. 普通图表创建前确定 1 到 100 字的业务标题，通过 `dashboard_editor_add_component.title` 首次写入；标题不得依赖创建后的补偿修改。
+16. 字段角色以页面字段目录和图表规则为准：维度、度量分别进入当前字段区允许的角色；页面返回角色校验失败时只允许基于真实元数据修正一次。
+17. 修改标题、局部样式和位置时使用三个显式目标工具；样式一次只改一个 `styleKey`，移动前读取 `gridColumn` 和当前布局，不硬编码列数。
 
 ## 写后核验门禁
 
@@ -95,12 +98,20 @@
 4. 基于用户业务问题，先列出需要的图表类型、统一数据集、维度、指标、筛选条件和计算口径。
 5. 如果字段名或口径不确定，说明判断依据并向用户确认，不做字段试错。
 6. 用户要新增图表但未指定类型时，按默认组合表选型并保持规定数量；营销/转化必须创建 5 张。
-7. 依次调用 `dashboard_editor_add_component` 或模板工具，收集全部 `data.chartId`；不得交付部分组合。
+7. 为每张图表确定业务标题，依次调用 `dashboard_editor_add_component` 或模板工具，收集全部 `data.chartId`；不得交付部分组合。
 8. 需要字段目录时，只对一个新图表调用一次 `dashboard_drag_select_dataset`，禁止调用逐字段写工具。
 9. 调用一次 `dashboard_editor_batch_configure_charts`，传入唯一 `datasetId`、全部 `chart_id` 和每张图的完整 `fieldLists`。
 10. 核验批量结果覆盖全部图表，且 `changed=true`、`refreshed=true`；失败时停止后续写入。
 11. 按需对明确目标图表配置聚合、排序、格式、筛选、查询控件。
 12. 读取最终写入摘要；需要精确核验时调用 context 或对应只读工具，再向用户说明完成项。
+
+标题、样式和移动的目标必须由 `chart_id` 明确指定：
+
+- 标题：`dashboard_drag_set_chart_title({"chart_id":"<chartId>","title":"转化率趋势"})`。
+- 样式：`dashboard_drag_patch_chart_style({"chart_id":"<chartId>","styleKey":"legend","fields":[{"field":"showLegend","value":false}]})`。
+- 位置：先读取 `gridColumn` 和 `charts` 布局，再调用 `dashboard_drag_move_chart({"chart_id":"<chartId>","x":0,"y":6})`。
+
+三类写入均需核验 `changed` 和返回的最终状态；移动以 `finalPosition` 为准，不把请求坐标当作 GridStack 最终坐标。
 
 ## 关键 result 读法
 
@@ -172,6 +183,8 @@
 - 图表类型、数据集、字段必须在创建前确定；创建后只允许按已确认计划批量写入，不允许用页面结果反向试字段。
 
 ## 数据集和字段
+
+字段角色以页面字段目录的外层分组为准：`dimensions` 是维度，`metrics` 是度量。写入前必须确认目标字段区允许该真实角色；只有同时允许两种角色的字段区才能混用。角色不兼容返回 `VALIDATION_ERROR` 时，基于真实元数据修正一次，仍失败则停止。
 
 本轮新建图表使用页面级批量工具：先确定唯一数据集并创建完整组合；需要字段目录时，只允许对一个新图表调用一次 `selectDataset` 作为锚点，随后由 `dashboard_editor_batch_configure_charts` 一次写入全部图表。下面的逐图字段写入流程只用于修改既有单图，不用于组合创建。
 
@@ -265,6 +278,8 @@
 如果普通图表调用查询控件工具，页面会返回 `INVALID_REQUEST`。
 
 ## 错误恢复
+
+字段角色 `VALIDATION_ERROR` 只允许按真实字段目录修正一次；仍失败时停止，不换字段反复试错。
 
 | code                            | 处理                                                   |
 | ------------------------------- | ------------------------------------------------------ |

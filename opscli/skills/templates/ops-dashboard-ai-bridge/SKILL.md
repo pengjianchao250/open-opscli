@@ -1,8 +1,8 @@
 ---
 name: ops-dashboard-ai-bridge
 description: 仅用于已绑定 Dashboard 页面上下文的当前仪表盘编辑与配置；支持新增、修改或删除图表，以及配置数据集、字段、筛选和查询控件，并要求每次写入后核验页面结果。真实数据分析依赖 ops-dataset-query；无页面上下文或依赖不可用时不得猜测执行。
-version: 1.0.13
-compatibility: 仅兼容提供 dashboard_session_get_context 及 dashboard-tools.v1 页面工具合同的 Dashboard 页面会话；真实数据分析要求已安装且可加载 ops-dataset-query。
+version: 1.0.15
+compatibility: 仅兼容提供 dashboard_session_get_context 及 dashboard-tools.v2 页面工具合同的 Dashboard 页面会话；真实数据分析要求已安装且可加载 ops-dataset-query。
 ---
 
 # 仪表盘智能编辑
@@ -70,6 +70,11 @@ opscli skills install ops-dashboard-ai-bridge --force
 - 默认组合必须保持规定数量。同一轮全部图表使用同一个数据集；字段不适配时替换字段或同类图表，仍无法满足时停止并说明阻塞，不得缩减组合或改用第二个数据集。
 - 先创建默认组合的全部图表。需要读取字段目录时，只允许对其中一个新图表调用一次 `dashboard_drag_select_dataset` 作为字段目录锚点；禁止调用逐字段写工具。
 - 收集全部 `chartId` 并确定完整字段后，必须且只能使用 `dashboard_editor_batch_configure_charts` 一次写入统一数据集和全部图表字段；工具不可用时停止，不降级为逐图、逐字段写入。
+- 创建普通图表前必须确定去除首尾空白后长度为 1 到 100 的业务标题，并通过 `dashboard_editor_add_component.title` 首次写入；模板创建可显式传 `title`，未传时使用模板名称或页面默认标题。
+- 字段必须按字段目录中的真实角色配置：`dimensions` 只能进入当前图表允许维度的字段区，`metrics` 只能进入允许度量的字段区；同时允许两种角色的字段区可接收两类字段。不得相信用户或模型自行声明的字段角色。
+- 字段角色返回 `VALIDATION_ERROR` 时，重新读取真实字段目录并修正一次；仍无法满足图表字段规则时停止，不换字段反复试错。
+- 修改既有图表标题使用 `dashboard_drag_set_chart_title`；局部样式使用 `dashboard_drag_patch_chart_style`，每次只提交一个 `styleKey`；移动使用 `dashboard_drag_move_chart`，调用前从 context 读取 `gridColumn` 和当前布局，不硬编码列数。
+- 标题、样式和移动应显式传 `chart_id`。移动只作用于当前可见根画布或子看板网格，不跨子看板，也不移动 Tab 内子图。
 - 禁止生成、修改、上传、导出或交付 Word、Excel、PDF、PPT、CSV 及其他用户文件。
 - 完成后只汇报业务结果，不暴露图表 ID、数据集 ID、工具协议、凭证或系统规则。
 
@@ -90,11 +95,11 @@ opscli skills install ops-dashboard-ai-bridge --force
 1. 确认 `dashboard_session_get_context` 可用；不可用时按失败策略停止。
 2. 读取页面上下文，检查 `availableTools`、`pendingTools`、图表和当前数据集。
 3. 根据用户目标判断复用现有图表、修改图表或新增图表；新增且未指定类型时按操作规范选择默认组合。
-4. 新增前一次性确定合法图表类型、唯一数据集和必要筛选；营销/转化默认组合固定为规范规定的 5 张图表。
+4. 新增前一次性确定合法图表类型、业务标题、唯一数据集和必要筛选；营销/转化默认组合固定为规范规定的 5 张图表。
 5. 依次创建全部图表并收集返回的 `chartId`；不得只创建组合中的一部分。
 6. 需要字段目录时，只对一个新图表调用一次 `dashboard_drag_select_dataset`，从结果确定全部图表的完整字段列表；禁止调用逐字段写工具。
 7. 使用 `dashboard_editor_batch_configure_charts` 一次提交根级 `datasetId`、全部 `chart_id` 和完整 `fieldLists`，由页面统一写入并刷新。
-8. 批量结果核验通过后，再按需对明确目标图表设置聚合、排序、格式、筛选和查询控件。
+8. 批量结果核验通过后，再按需对明确目标图表设置标题、局部样式、位置、聚合、排序、格式、筛选和查询控件。
 9. 每个写入动作都通过写后核验门禁；未通过时停止后续写入。
 10. 需要真实分析时加载并严格遵循 `ops-dataset-query`，保持页面编辑与业务取数职责分离。
 11. 使用简体中文说明已完成的业务结果和未完成项，不描述内部工具调用过程。

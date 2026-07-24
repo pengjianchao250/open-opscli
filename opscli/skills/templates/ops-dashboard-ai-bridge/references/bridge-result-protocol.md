@@ -1,6 +1,6 @@
 # Bridge Result Protocol
 
-适用 Skill：`ops-dashboard-ai-bridge`。兼容工具合同：`dashboard-tools.v1`；具体参数 schema 以 Dashboard 页面宿主本轮注册结果为准。
+适用 Skill：`ops-dashboard-ai-bridge`。兼容工具合同：`dashboard-tools.v2`；具体参数 schema 以 Dashboard 页面宿主本轮注册结果为准。
 
 ## 目录
 
@@ -122,6 +122,8 @@ API 边界规则：
 | `selectedChartDataset`       | 当前图表已绑定数据集   |
 | `selectedChartDatasetFields` | 显式请求的完整字段目录 |
 | `selectedChartConfig`        | 当前图表配置，按需返回 |
+| `gridColumn`                 | 当前 GridStack 列数    |
+| `activeSubDashboardId`       | 当前可见子看板         |
 | `contextWarnings`            | 降级提示               |
 
 数据集目录使用 `dashboard_session_search_datasets` 独立查询。字段目录只在选择数据集结果或 `include_dataset_fields=true` 时返回，避免每次 context 重复携带。
@@ -165,6 +167,9 @@ API 边界规则：
 | 数据集写     | `chartId`、`datasetId`、紧凑字段目录和 `selectedFieldIds`                     |
 | 字段列表写   | `chartId`、`listType`、`fieldId/fieldIds`、`fieldCount`、`changed`            |
 | 字段配置写   | `chartId`、`listType`、`fieldId`、`appliedKeys`、`changed`                    |
+| 标题写       | `chartId`、最终 `title`、`changed`                                           |
+| 局部样式写   | `chartId`、`styleKey`、`appliedFields`、`changed`                            |
+| 位置写       | `chartId`、`requestedPosition`、`finalPosition`、`affectedCharts`、`changed`  |
 | 图表配置确认 | `chartId`、`viewType`、`changed`                                              |
 | 筛选写       | `chartId`、筛选定位信息或 `logic/ruleCount`、`changed`                        |
 | 查询控件值写 | `chartId`、`fieldId`、`changed`                                               |
@@ -184,6 +189,8 @@ API 边界规则：
 5. 任一项不清楚时，停止字段配置并确认；不要用字段试错代替核验。
 
 ## 字段决策
+
+目标字段区必须接受字段目录给出的真实角色。`dimensions` 不得写入仅允许度量的字段区，`metrics` 不得写入仅允许维度的字段区；双角色字段区可以接收两类字段。
 
 字段配置前先从 result 读这些信息：
 
@@ -206,6 +213,7 @@ API 边界规则：
 - 不把 `metrics` 里的相似字段轮流放入 `yAxis`。
 - 不把比率字段、金额字段、数量字段混着试。
 - 不用失败结果驱动换字段，除非失败明确说明字段无效。
+- 角色不兼容的 `VALIDATION_ERROR` 只允许按真实字段元数据重算一次。
 
 字段重排只接收当前完整字段集合的 `fieldId + fieldSourceType` 定位器。数量、唯一性、来源和完整覆盖必须一致；页面只调整已有对象顺序，聚合、排序、格式、筛选和重命名等配置必须保留。增删字段使用 replace/add 工具。
 

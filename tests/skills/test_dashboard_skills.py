@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "opscli" / "skills" / "templates"
 SKILL_VERSIONS = {
     "ops-dashboard-data-analysis": "1.0.5",
-    "ops-dashboard-ai-bridge": "1.0.13",
+    "ops-dashboard-ai-bridge": "1.0.15",
 }
 SKILL_LIST_DESCRIPTIONS = {
     "ops-dashboard-data-analysis": "只读分析当前仪表盘的趋势、对比、异常、排名、贡献和业务原因。",
@@ -63,7 +63,7 @@ def test_dashboard_bridge_keeps_progressive_references():
     assert {path.name for path in (skill_dir / "references").glob("*.md")} == references
     content = "\n".join(path.read_text(encoding="utf-8") for path in skill_dir.rglob("*.md"))
     assert "dashboard_session_get_context" in content
-    assert "dashboard-tools.v1" in content
+    assert "dashboard-tools.v2" in content
     assert not re.search(r"(?<!ops-)dashboard-ai-bridge", content)
 
 
@@ -97,6 +97,19 @@ def test_dashboard_bridge_requires_selection_tool_for_real_candidates():
     assert "替用户选择" in content
     assert "页面处于编辑偏好时" in content
     assert "不调用 `ops-dataset-query` 获取真实数据" in content
+
+
+def test_dashboard_bridge_declares_field_roles_and_targeted_chart_mutations():
+    """Bridge 应约束字段角色，并声明标题、局部样式和位置工具。"""
+    skill_dir = TEMPLATES_DIR / "ops-dashboard-ai-bridge"
+    content = "\n".join(path.read_text(encoding="utf-8") for path in skill_dir.rglob("*.md"))
+
+    assert "真实角色" in content
+    assert "dashboard_drag_set_chart_title" in content
+    assert "dashboard_drag_patch_chart_style" in content
+    assert "dashboard_drag_move_chart" in content
+    assert "gridColumn" in content
+    assert "不硬编码" in content
 
 
 def test_dashboard_skills_declare_runtime_and_query_boundaries():
