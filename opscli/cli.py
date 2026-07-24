@@ -150,5 +150,96 @@ def main(
     ctx.call_on_close(_report_telemetry)
 
 
-if __name__ == "__main__":
+# 显式授权参数 → 内部字段名的映射（全局参数，可加在任意子命令尾部）
+_EXPLICIT_AUTH_FLAGS = {
+    "--ops-jwt-token": "ops_jwt",
+    "--polaris-jwt-token": "polaris_jwt",
+    "--session-id": "session_id",
+}
+
+
+def _extract_explicit_credentials(argv: list[str]):
+    """从 argv 中摘出显式授权参数，返回 (清理后的 argv, ExplicitCredentials | None)。
+
+    这是"显式授权中间件"的参数捕获层：在 Typer 解析前先把三个全局参数
+    （--ops-jwt-token / --polaris-jwt-token / --session-id）从命令行摘除并注入上下文，
+    使其可加在任意子命令尾部（如 opscli query simple ... --ops-jwt-token=x --session-id=y）
+    而无需逐个命令改造。
+
+    支持两种写法：
+    - --flag=value
+    - --flag value（空格分隔）
+
+    校验规则（强制 session-id）：只要提供了任一 JWT，就必须同时提供 --session-id，
+    否则打印错误并以退出码 2 终止。
+
+    Args:
+        argv: 去掉程序名后的参数列表（即 sys.argv[1:]）
+
+    Returns:
+        (cleaned_argv, creds)：cleaned_argv 为移除显式参数后的 argv；
+        creds 为解析出的 ExplicitCredentials，未提供任何显式参数时为 None。
+    """
+    from opscli.auth.context import ExplicitCredentials
+
+    collected: dict[str, str] = {}
+    cleaned: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        # 形式一：--flag=value
+        if arg.startswith("--") and "=" in arg:
+            name, _, value = arg.partition("=")
+            if name in _EXPLICIT_AUTH_FLAGS:
+                collected[_EXPLICIT_AUTH_FLAGS[name]] = value
+                i += 1
+                continue
+        # 形式二：--flag value（下一个参数为值）
+        if arg in _EXPLICIT_AUTH_FLAGS:
+            if i + 1 < len(argv):
+                collected[_EXPLICIT_AUTH_FLAGS[arg]] = argv[i + 1]
+                i += 2
+                continue
+            # 缺少值：不拦截，交回 Typer 走标准报错
+        cleaned.append(arg)
+        i += 1
+
+    # 未提供任何显式参数 → 走本地存储常规流程
+    if not collected:
+        return cleaned, None
+
+    session_id = collected.get("session_id")
+    # 强制 session-id：提供了 JWT 却缺 session_id 时直接终止
+    if not session_id:
+        typer.echo(
+            "错误：使用 --ops-jwt-token / --polaris-jwt-token 时必须同时提供 --session-id",
+            err=True,
+        )
+        raise SystemExit(2)
+
+    creds = ExplicitCredentials(
+        session_id=session_id,
+        ops_jwt=collected.get("ops_jwt"),
+        polaris_jwt=collected.get("polaris_jwt"),
+    )
+    return cleaned, creds
+
+
+def run() -> None:
+    """opscli 进程入口：先摘取显式授权参数注入上下文，再交给 Typer 处理。
+
+    注意：与 `@app.callback()` 装饰的 `main` 回调是两个不同角色——
+    `main` 是 Typer 顶层回调（每条命令执行前运行），`run` 是 console_scripts 进程入口。
+    """
+    from opscli.auth.context import set_explicit_credentials
+
+    cleaned, creds = _extract_explicit_credentials(sys.argv[1:])
+    if creds is not None:
+        set_explicit_credentials(creds)
+        # 用清理后的 argv 覆盖，避免 Typer 因未知选项报错
+        sys.argv = [sys.argv[0], *cleaned]
     app()
+
+
+if __name__ == "__main__":
+    run()

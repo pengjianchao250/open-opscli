@@ -112,6 +112,24 @@ def logout():
     console.print("[green]√ 已退出，本地凭证已清除[/green]")
 
 
+@app.command()
+def me(
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+):
+    """查看当前授权用户信息（调用 /api/v1/auth/me）。
+
+    支持显式授权：opscli auth me --session-id=xxx [--ops-jwt-token=xxx]
+    未传显式凭证时使用本地登录态。
+    """
+    try:
+        info = _client().get_me()
+    except Exception as e:
+        console.print(f"[red]× 获取用户信息失败: {e}[/red]")
+        raise typer.Exit(1)
+    # 纯 JSON 输出，便于脚本消费；--pretty 时缩进美化
+    typer.echo(_json.dumps(info, ensure_ascii=False, indent=2 if pretty else None))
+
+
 @token_app.command("status")
 def status():
     """查看当前登录状态与各系统 Token 情况"""
@@ -152,7 +170,10 @@ def token_get(
     try:
         typer.echo(_client().get_token(system))
     except (NotAuthenticatedError, SystemNotFoundError) as e:
-        console.print(f"[red]{e}[/red]", err=True)
+        # 错误必须走 stderr：本命令 stdout 是纯 JWT，供脚本 $(...) 捕获，
+        # 错误混入 stdout 会污染捕获结果。rich Console.print 不支持 err 参数（会抛
+        # TypeError），故改用 typer.echo(..., err=True) 输出到 stderr。
+        typer.echo(f"{e}", err=True)
         raise typer.Exit(1)
 
 
