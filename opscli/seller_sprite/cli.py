@@ -14,8 +14,8 @@ from opscli.seller_sprite.remote_adapter import SellerSpriteRemoteAdapter
 app = typer.Typer(help="卖家精灵远端 MCP 正式命令面。")
 queue_app = typer.Typer(help="卖家精灵本地 SQLite 队列运维命令。")
 account_binding_app = typer.Typer(help="卖家精灵用户专属账号绑定命令。")
-app.add_typer(queue_app, name="queue")
-app.add_typer(account_binding_app, name="account-binding")
+app.add_typer(queue_app, name="queue", hidden=True)
+app.add_typer(account_binding_app, name="account-binding", hidden=True)
 
 
 @app.command("scenarios")

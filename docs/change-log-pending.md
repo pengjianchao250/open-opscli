@@ -1,9 +1,18 @@
 # 待归档变更记录
 
+## 2026-07-24 seller_sprite - 隐藏部署运维命令组
+
+**变更原因**：SellerSprite 正式 CLI 帮助会展示本地队列和专属账号绑定命令，容易让普通用户误认为这些部署运维能力属于公共命令契约。
+**改动点**：从 `opscli seller-sprite --help` 隐藏 `queue` 和 `account-binding` 整组命令，同时保留完整命令路径供服务主机运维使用；补充帮助可见性回归测试。
+**验证结果**：正式帮助已确认不再显示两个运维命令组，完整命令路径仍可执行；相关 CLI 回归 `19 passed, 2 deselected`，生产模块 `py_compile` 和 `git diff --check` 通过；未排除执行为 `19 passed, 2 failed`，两项均为既有 `seller-sprite-debug` 顶级命令未注册基线。
+**影响范围**：仅调整正式 CLI 帮助展示，不改变队列和账号绑定命令的调用方式与执行行为。
+**回滚方式**：移除两个命令组注册时的 `hidden=True`、对应测试及本条记录。
+---
+
 ## 2026-07-24 collector_mcp - 接入通用 MCP 静默代理
 
 **变更原因**：通用 MCP 仍在本地注册并执行 SellerSprite，导致 Collector 停止后卖家精灵仍可访问，不符合 Collector 独立部署和单一对外入口设计。
-**改动点**：通用 MCP 的 10 个 `seller_sprite_*` Tool 改为读取 `OPSCLI_COLLECTOR_MCP_URL` 并代理 Collector 同名 Tool，使用 Bearer Header 透传当前用户 API Key；移除通用 MCP 的 SellerSprite scheduler 生命周期，本地代理跳过额度扣减并由 Collector 统一执行额度、权限和凭证隔离；`opscli seller-sprite` 继续使用 OPS 配置接口下发的通用 MCP 地址，不直接发现 Collector；新增精简运维说明及代理回归测试。
+**改动点**：通用 MCP 的 10 个 `seller_sprite_*` Tool 改为读取 `OPSCLI_COLLECTOR_MCP_URL` 并代理 Collector 同名 Tool，使用 Bearer Header 透传当前用户 API Key；移除通用 MCP 的 SellerSprite scheduler 生命周期，本地代理跳过额度扣减并由 Collector 统一执行额度、权限和凭证隔离；`opscli seller-sprite` 继续使用 OPS 配置接口下发的通用 MCP 地址，不直接发现 Collector；新增 `docs/release/Collector MCP运维说明.md` 及代理回归测试。
 **验证结果**：通用 MCP 代理、CLI 通用 MCP 路由、Remote MCP Header、工具注册、生命周期、额度权限及 Collector 边界定向回归 `192 passed`；`git diff --check` 通过。
 **影响范围**：通用 MCP 不再本地执行 SellerSprite；未配置或无法连接 Collector 时卖家精灵调用明确失败，Collector 本身和 `opscli seller-sprite` 远端调用保持不变。
 **回滚方式**：将通用 MCP 恢复注册本地 SellerSprite Tool 和 scheduler lifespan，移除代理模块、Header 透传、测试、运维说明及本条记录。
@@ -15,7 +24,7 @@
 **改动点**：新增《卖家精灵场景接入规范》，统一真实页面参数与枚举接口取证、默认第一页 100 条、API-direct 与 browser-route 一致性、本地业务主表及官方 XLSX 原样保存两种导出策略、默认排除 Notes 和二维码、reference 脱敏证据、离线测试矩阵及 Skill 版本同步要求。
 **验证结果**：文档关键契约检查和 `git diff --check` 通过。
 **影响范围**：仅新增卖家精灵后续场景的开发与验收规范，不改变现有场景运行行为。
-**回滚方式**：删除 `opscli/seller_sprite/卖家精灵场景接入规范.md` 并移除本条记录。
+**回滚方式**：删除 `docs/spec/卖家精灵场景接入规范.md` 并移除本条记录。
 ---
 
 ## 2026-07-21 collector_mcp - 新增统一数据采集服务
