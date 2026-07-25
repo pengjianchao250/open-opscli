@@ -4109,3 +4109,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：新增能力，现有 metadata()/查询路径不变。后端 include_all_fields 参数上线前，全量字段依赖后端就绪（客户端逻辑已就绪且向后兼容）。
 **回滚方式**：撤销 client.py 参数与 manager.py 方法。
 ---
+
+## 2026-07-25 auth/mcp - 登录/登出失效用户级元数据缓存
+
+**变更原因**：授权范围随账号变化，登录/登出后须强制重新拉取元数据（1h TTL 之外的强失效）。
+**改动点**：`opscli/auth/cli.py` login 成功/logout 处、`opscli/mcp/tools/auth.py` 两处登录成功(save_session)与登出(clear)处，调用 `invalidate_metadata_cache`（惰性导入避免 auth→query 环依赖）；token 刷新路径不失效；新增 `tests/auth/test_login_cache_invalidation.py`。
+**验证结果**：`pytest tests/auth/ tests/query/ tests/shared/` 254 passed（2 个 catalog/intent 失败为屏蔽命令的预存失败，与本次无关）。
+**影响范围**：登录/登出多一次缓存清理，无副作用。
+**回滚方式**：移除各处 invalidate_metadata_cache 调用与测试文件。
+---
