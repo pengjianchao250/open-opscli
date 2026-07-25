@@ -29,6 +29,7 @@ payload 结构（后端全量元数据）：
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 
@@ -246,6 +247,25 @@ class MetadataAdapter:
             row["filter_config"] = parse_filter_config(field.get("filter_config"))
             normalized.append(row)
         return _merge_duplicate_field_rows(normalized)
+
+    def fingerprint(self) -> str:
+        """计算三类同形行的稳定 SHA256 指纹，标识本次元数据快照。
+
+        替代旧 CSV 路径的 source_fingerprint：对 datasets/fields/select_columns
+        三类行做键有序 JSON 序列化后哈希，同一 payload 产出稳定指纹，
+        供 dataset_guidance 的 metadata_fingerprint 与合同一致性使用。
+        """
+        digest = hashlib.sha256()
+        for label, rows in (
+            ("datasets", self.datasets_rows()),
+            ("fields", self.fields_rows()),
+            ("select_columns", self.select_columns_rows()),
+        ):
+            digest.update(label.encode("utf-8"))
+            digest.update(
+                json.dumps(rows, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            )
+        return digest.hexdigest()
 
     def select_columns_rows(self) -> list[dict]:
         """返回查询组件列行，同形于 dataset_select_columns.csv 列。

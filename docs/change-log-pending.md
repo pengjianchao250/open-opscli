@@ -1,5 +1,18 @@
 # 待归档变更记录
 
+## 2026-07-25 query/planner - Task4 移植字段/权限指导 dataset_guidance（数据源改 adapter）
+
+**变更原因**：规划器内核化 Phase 4。把字段/权限指导迁入内核，数据源从 CSV（scoped_dataset_reader + 文件快照/指纹）改为 MetadataAdapter，指导语义保持不变。
+**改动点**：
+- 新建 `planner/dataset_guidance.py`：`build_guidance` 首参改 `adapter: MetadataAdapter`、第二参改 `dataset_alias: str`（内部构造 lookup 复用 `_find_dataset`）；`_load_target_metadata` 改吃 adapter，一次性取全量行后在内存按 alias 过滤，额外返回 all_fields/all_select_columns 供 _default_filters 回查与空数据集派生；删除 scoped_dataset_reader 依赖与 `from pathlib import Path`。字段打分/公式/快照口径/权限范围/默认条件逻辑逐字保留。
+- `metadata_adapter.py` 新增 `fingerprint()`：对三类同形行做键有序 JSON 稳定 SHA256，替代旧 CSV source_fingerprint 作为 metadata_fingerprint（additive 扩展，不影响 Task2 已有方法）。
+- 新建测试 `tests/query/planner/test_guidance.py`（3 用例：ready 含维度/指标/日期字段/指纹、snapshot_metric→SNAPSHOT_RULE、未知点名→clarify_required）。
+**验证结果**：`python -m pytest tests/query/planner/ -q` → 15 passed（含 Task1-3）。无残留 scoped_dataset_reader/Path 代码引用。
+**影响范围**：纯新增 dataset_guidance.py + adapter additive 方法，不改动现有模块。
+**回滚方式**：删除 dataset_guidance.py 与 test_guidance.py，回退 adapter.fingerprint。
+
+---
+
 ## 2026-07-25 query/planner - Task3 移植选表引擎（scoped_metadata_index+agent_query_planner+typed_schema_linking）
 
 **变更原因**：规划器内核化 Phase 4。把选表三件套迁入内核，数据源从 CSV（scoped_dataset_reader）改为 MetadataAdapter，选表语义保持不变。
