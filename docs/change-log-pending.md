@@ -1,5 +1,19 @@
 # 待归档变更记录
 
+## 2026-07-25 query/planner - Task2 元数据适配器 query-metadata JSON→行字典
+
+**变更原因**：规划器内核化 Phase 4 核心步骤。取数规划器数据源从 Skill data/*.csv 改为后端 query-metadata（经用户级元数据缓存），需一个适配器把 payload 映射为与旧 scoped_dataset_reader 同形的行字典，从而下游选表/字段指导逻辑近乎逐字移植。
+**改动点**：
+- 新建 `opscli/query/services/planner/metadata_adapter.py`：`MetadataAdapter(payload)` 提供 `datasets_rows()`（同形 datasets.csv，派生 select_column_count/names）、`fields_rows()`（同形 dataset_fields.csv，归一 has_formula_config/snapshot_metric 为字符串、经去重合并）、`select_columns_rows()`（展平内嵌 select_columns 补 current_dataset_alias）。
+- 从 scoped_dataset_reader 逐字移植 `parse_filter_config` / `_merge_duplicate_field_rows` / `_mergeable_rows` / `_field_semantic_signature` / `_contains_cjk` / `_FIELD_SEMANTIC_KEYS` 进适配器（自包含）。parse_filter_config 增补兼容后端已反序列化为 dict 的情形。
+- 职责边界：只做数据整形，不搬 CSV 完整性校验（数据源由后端+metadata_cache 保证，Task 9 对拍兜底）。
+- 新建测试 `tests/query/planner/test_metadata_adapter.py`（4 用例：datasets 形态/fields 保列/select_columns 展平/双注册合并）。
+**验证结果**：`python -m pytest tests/query/planner/test_metadata_adapter.py -v` → 4 passed。
+**影响范围**：纯新增，不改动现有模块。
+**回滚方式**：删除 metadata_adapter.py 与 test_metadata_adapter.py。
+
+---
+
 ## 2026-07-25 query/planner - Task1 移植纯逻辑单元与静态资源到内核
 
 **变更原因**：规划器内核化 Phase 4 第一步。把 ops-dataset-query Skill 规划器中零后端依赖的纯逻辑单元与静态资源迁入 opscli 内核，为后续选表/字段指导/主编排移植打底。
