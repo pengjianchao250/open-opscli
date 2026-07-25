@@ -35,6 +35,8 @@
 对用户确认的数据集调用 `query_metadata(dataset="<alias>")`，然后：
 
 - 维度、指标、字段类型、聚合方式和输出名称只来自该响应。
+- **字段标识一律用 `field_name`**：`query_simple` 各处 `field` 只填该响应里的 `field_name`，**不要填 `global_alias`**（后端不接受 `global_alias` 作查询字段标识，会报"字段不存在"）。
+- **同名双注册自动消歧**：同一物理字段可能出现同名双注册——「英中双名」（同 `field_name`、`verbose_name` 一中一英）或「公式 vs 裸指标」（同 `field_name`，一条带公式配置、一条为裸指标）。此时仍按 `field_name` 传参即可，后端与 `query_simple` 会稳定解析：**公式注册优先**（均值/比率类字段用其汇总表达式聚合，不会被误 `SUM`）。无需、也不应为区分同名字段而改用 `global_alias`。
 - 公式字段含 `formula_config`、`summary_expression` 或 `detail_expression` 时，不再传普通 `aggregation`。聚合/分组使用汇总表达式，明细使用明细表达式。
 - 不发明默认筛选。用户明确筛选命中 `select_columns` 关系时，只读取该关系返回的 `component_dataset_alias`。
 - 组件 alias 缺失时只阻断该筛选。alias 存在时，调用 `query_metadata(dataset=component_alias)` 取得当前账号的组件 `table_id` 和字段，再用 `query_simple` 查询合法枚举。
