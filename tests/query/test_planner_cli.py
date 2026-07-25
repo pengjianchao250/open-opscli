@@ -73,6 +73,31 @@ def test_flow_command_executes(monkeypatch):
     assert payload["data"]["result"]["data"]["result"]["data"] == [{"销售额": 100}]
 
 
+def test_metadata_all_fields_command(monkeypatch):
+    """query metadata --all-fields：走 metadata_all，输出全量字段数。"""
+    class _R:
+        payload = {"datasets": [{"table_id": 1}], "fields": [{"field_name": "a"}, {"field_name": "b"}]}
+        stale = False
+        from_cache = False
+
+    captured = {}
+
+    def _fake_all(self, *, user_email, base_dir=None):
+        captured["email"] = user_email
+        return _R()
+
+    monkeypatch.setattr(query_cli, "_current_email", lambda: "u@x.com")
+    monkeypatch.setattr(query_cli.QueryManager, "metadata_all", _fake_all)
+
+    result = runner.invoke(query_cli.app, ["metadata", "--all-fields"])
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "query metadata --all-fields"
+    assert payload["data"]["field_count"] == 2
+    assert payload["data"]["dataset_count"] == 1
+    assert captured["email"] == "u@x.com"
+
+
 def test_plan_command_query_file(monkeypatch, tmp_path):
     """--query-file 读取含特殊字符的请求原文。"""
     qf = tmp_path / "req.txt"
