@@ -305,7 +305,7 @@ def _derived_component_fields(dataset: dict, select_columns: list[dict]) -> list
                 "snapshot_metric": "0",
                 "has_formula_config": "0",
                 "filter_config": None,
-                "derived_from": "dataset_select_columns.csv",
+                "derived_from": "backend_query_metadata_select_columns",
             }
         )
     return derived

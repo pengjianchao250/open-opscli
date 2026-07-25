@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-25 query/planner - 修正 derived_from 审计标签命名（CSV→后端）
+
+**变更原因**：内核规划器已彻底解耦 CSV、数据源为后端全量元数据，但 dataset_guidance 逐字移植时残留 `derived_from: "dataset_select_columns.csv"` 审计标签，名不副实易误导。
+**改动点**：`opscli/query/services/planner/dataset_guidance.py` `_derived_component_fields` 中 `derived_from` 由 `"dataset_select_columns.csv"` 改为 `"backend_query_metadata_select_columns"`。该字段为纯审计标签、全仓无任何读取/判断消费方（grep 确认），改动零风险。旧 Skill 脚本同名标签不动（其仍读 CSV，标签仍准确）。
+**验证结果**：`pytest tests/query/planner/test_guidance.py -q` → 3 passed。
+**影响范围**：仅审计标签文本，无功能影响。
+**回滚方式**：还原该字符串。
+
+---
+
 ## 2026-07-25 query/planner - Task10 全量回归验收（SKILL.md 切换按用户决定暂停）
 
 **变更原因**：规划器内核化 Phase 4 收尾验收。全量回归 + 依赖方向 + SDK 双导入 + help 冒烟。
