@@ -4118,3 +4118,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：登录/登出多一次缓存清理，无副作用。
 **回滚方式**：移除各处 invalidate_metadata_cache 调用与测试文件。
 ---
+
+## 2026-07-25 query - 修复 invalidate_metadata_cache 池冷启动 no-op
+
+**变更原因**：最终代码审查发现——CLI auth login/logout 是短生命进程，从未实例化缓存池，旧 invalidate_metadata_cache 只查已有池条目会静默 no-op，无法清除别的进程写在磁盘的缓存，破坏"登录/登出强制失效"保证。
+**改动点**：`invalidate_metadata_cache` 改为 `get_metadata_cache(base_dir).invalidate(user_email)`，必要时新建实例以确保磁盘清扫必然执行；新增 test_invalidate_clears_disk_when_pool_cold 复现并守卫该场景。
+**验证结果**：`pytest tests/auth/test_login_cache_invalidation.py tests/query/test_metadata_cache.py` 16/16 通过。
+**影响范围**：登录/登出跨进程失效恢复正确；无其他行为变化。
+**回滚方式**：还原该函数体与删除新增测试。
+---

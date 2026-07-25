@@ -230,9 +230,11 @@ def get_metadata_cache(
 def invalidate_metadata_cache(
     base_dir: Path | None = None, user_email: str | None = None
 ) -> None:
-    """失效指定 base_dir 池的缓存（登录/登出时调用）。"""
-    key = str(base_dir) if base_dir else None
-    with _pool_lock:
-        cache = _caches.get(key)
-    if cache:
-        cache.invalidate(user_email)
+    """失效指定 base_dir 的缓存（登录/登出时调用）。
+
+    必须通过 get_metadata_cache 拿到（必要时新建）实例再失效：
+    CLI auth login/logout 是短生命进程，本进程从未实例化过缓存池，
+    若只查已有池条目会静默 no-op，无法清除别的进程（如 MCP 服务）
+    写在磁盘上的缓存，破坏"登录/登出强制失效"保证。
+    """
+    get_metadata_cache(base_dir).invalidate(user_email)
