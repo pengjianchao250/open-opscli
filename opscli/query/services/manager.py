@@ -15,6 +15,7 @@ from opscli.auth import AuthClient
 from opscli.query.domain.exceptions import DatasetNotFoundError, InvalidPayloadError, QueryMetadataNotReadyError
 from opscli.query.domain.models import QueryMetadataResult
 from opscli.query.services.intent_matcher import match_catalog_intents
+from opscli.query.services.metadata_cache import MetadataCacheResult, get_metadata_cache
 from opscli.query.transport.client import QueryClient
 from opscli.skills.discovery.detector import SkillDetector
 
@@ -47,6 +48,28 @@ class QueryManager:
         self.detector = SkillDetector()
         self.client = QueryClient(auth_client=auth_client, jwt=jwt, session_id=session_id, timeout=timeout)
         self.template_dir = Path(__file__).resolve().parent.parent.parent / "skills" / "templates" / "ops-dataset-query" / "data"
+
+    def metadata_all(
+        self, *, user_email: str, base_dir: Path | None = None
+    ) -> MetadataCacheResult:
+        """获取当前用户的全量元数据（全部数据集全部字段），经用户级缓存。
+
+        缓存未命中/过期时向后端 query-metadata?include_all_fields=1 拉取一次并落盘；
+        1 小时内复用；后端失败时回退过期缓存并标 stale。
+
+        Args:
+            user_email: 当前用户邮箱（缓存隔离维度，由 CLI/MCP 调用方注入）。
+            base_dir: 缓存根目录；CLI 默认 CONFIG_DIR，MCP 传隔离目录。
+
+        Returns:
+            MetadataCacheResult。
+        """
+        cache = get_metadata_cache(base_dir)
+        # fetch_fn 惰性拉取全量：仅在缓存未命中/过期时才真正打后端
+        return cache.get(
+            user_email,
+            lambda: self.client.fetch_query_metadata(include_all_fields=True),
+        )
 
     def list_datasets(self, *, skills_dir: str | None = None, cwd: Path | None = None) -> list[dict]:
         """列出所有可用的数据集（从本地 query_metadata.json 读取）。"""

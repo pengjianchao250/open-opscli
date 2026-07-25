@@ -4100,3 +4100,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：新增模块，未改动现有取数路径；等待 Task 7/8 接入。
 **回滚方式**：删除 metadata_cache.py 与对应测试。
 ---
+
+## 2026-07-25 query - QueryClient/Manager 全量字段支持并接入缓存
+
+**变更原因**：A 方案需一次性拉取全部授权数据集全部字段，并经用户级缓存复用。
+**改动点**：`QueryClient.fetch_query_metadata` 增加 `include_all_fields` 参数（透传 include_all_fields=1）；`QueryManager` 新增 `metadata_all(user_email, base_dir)`，经 MetadataCache 返回全量 payload；新增 `tests/query/test_metadata_all.py`。
+**验证结果**：`pytest tests/query/test_metadata_all.py` 2/2 通过。
+**影响范围**：新增能力，现有 metadata()/查询路径不变。后端 include_all_fields 参数上线前，全量字段依赖后端就绪（客户端逻辑已就绪且向后兼容）。
+**回滚方式**：撤销 client.py 参数与 manager.py 方法。
+---
