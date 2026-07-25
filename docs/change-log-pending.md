@@ -1,5 +1,20 @@
 # 待归档变更记录
 
+## 2026-07-25 query/planner - Task3 移植选表引擎（scoped_metadata_index+agent_query_planner+typed_schema_linking）
+
+**变更原因**：规划器内核化 Phase 4。把选表三件套迁入内核，数据源从 CSV（scoped_dataset_reader）改为 MetadataAdapter，选表语义保持不变。
+**改动点**：
+- 新建 `planner/typed_schema_linking.py`（逐字复制，纯标准库，rules 由调用方传入，无改动）。
+- 新建 `planner/scoped_metadata_index.py`：`build_cards` 签名从 `(data_dir)` 改为 `(adapter: MetadataAdapter)`，改用 `adapter.datasets_rows/fields_rows/select_columns_rows()`，删除 scoped_dataset_reader 快照读取；`_build_cards` 聚合逻辑逐字保留。
+- 新建 `planner/agent_query_planner.py`：import 改为 `from opscli.query.services.planner import ...`；`load_authorized_cards` 签名从 `(data_dir)` 改为 `(adapter)`；删除未用的 `from pathlib import Path`；其余选表打分逻辑逐字保留。
+- 新建测试 `tests/query/planner/test_selection.py`（2 用例：adapter→卡片、销售额诉求→planner_status candidate_ready）。
+- **计划偏离说明**：计划 Task3 File 列表含 `core.py`，但 selection 三件套不引用 core（agent_query_planner 无 import core），core 的消费方是 query_plan 主编排。为守 TDD 纪律（不引入无测试覆盖的代码）+ 铁律20，core.py 推迟到 Task5 与 query_plan 一并迁移并配测试。
+**验证结果**：`python -m pytest tests/query/planner/ -v` → 12 passed（含 Task1/2）。py_compile 全包 OK，无残留 scoped_dataset_reader 代码引用。
+**影响范围**：纯新增，不改动现有模块。
+**回滚方式**：删除三个新文件与 test_selection.py。
+
+---
+
 ## 2026-07-25 query/planner - Task2 元数据适配器 query-metadata JSON→行字典
 
 **变更原因**：规划器内核化 Phase 4 核心步骤。取数规划器数据源从 Skill data/*.csv 改为后端 query-metadata（经用户级元数据缓存），需一个适配器把 payload 映射为与旧 scoped_dataset_reader 同形的行字典，从而下游选表/字段指导逻辑近乎逐字移植。
