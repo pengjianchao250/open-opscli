@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-25 skills - QUERY_SPEC 补字段标识与同名双注册消歧指导
+
+**变更原因**：同名双注册字段消歧修复（5405517）后，query_simple 的字段标识用法有了明确落地口径，需在 MCP 契约中给 Agent 明确指导，避免其误用 global_alias 或为同名字段困惑。
+**改动点**：`opscli/skills/templates/ops-dataset-query/QUERY_SPEC.md` §3「已选数据集」新增两条——①字段标识一律用 `field_name`（不要用 global_alias，后端不接受）；②同名双注册（英中双名 / 公式vs裸指标）自动消歧，仍按 field_name 传参、公式注册优先，不必改用 global_alias。与 SKILL.md 主线（scripts/query_flow.py）保持一致，未引入内核 query_plan/query_flow 工具（SKILL.md 切换仍暂停）。
+**验证结果**：纯文档，无代码改动；核对与 §4 query_simple 模板一致。
+**影响范围**：仅 ops-dataset-query 的 MCP 契约文档。
+**回滚方式**：还原 QUERY_SPEC.md §3 本次两条新增。
+
+---
+
 ## 2026-07-25 query - 修复 query_simple 同名双注册字段消歧（e2e 验收发现）
 
 **变更原因**：e2e 多维矩阵验收（全数据集，张培良账号 id=59，后端 ops.cm）发现真实异常——数据集 1 有 44 组同一物理字段的双注册（英中双名 / 公式vs裸指标同名，如 avg_price_cny 一为裸指标一为 `ROUND(SUM(price)/SUM(order_qty))` 公式）。后端按 field_name 稳定解析（形态二命中公式口径，实测 SUM/无聚合返回同值），但 `QueryManager._resolve_simple_field` 对同名 field_name 一律报歧义并建议「改用 global_alias」——而后端不接受 global_alias（返回"字段不存在"），导致这 44 个字段经 query_simple/query_build_and_run（CLI+MCP 共用）**完全无法查询**。规划器 `_merge_duplicate_field_rows` 早已正确消歧，query_simple 却缺该逻辑，两者不一致。
