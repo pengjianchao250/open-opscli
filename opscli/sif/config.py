@@ -22,6 +22,9 @@ DEFAULT_FEATURE_OUTPUT_DIRS = {
     "sales": CONFIG_DIR / "sif" / "sales" / "runs",
     "traffic": CONFIG_DIR / "sif" / "traffic" / "runs",
     "compare": CONFIG_DIR / "sif" / "compare" / "runs",
+    "ranking": CONFIG_DIR / "sif" / "ranking" / "runs",
+    "operation_time_machine": CONFIG_DIR / "sif" / "operation_time_machine" / "runs",
+    "product_time_machine": CONFIG_DIR / "sif" / "product_time_machine" / "runs",
 }
 
 

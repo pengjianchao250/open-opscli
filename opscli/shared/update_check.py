@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 
@@ -21,6 +22,18 @@ from opscli.version import get_version
 
 # PyPI JSON API 地址，返回包的完整元数据
 _PYPI_JSON_URL = "https://pypi.org/pypi/aukeys-opscli/json"
+
+# TestPyPI JSON API 地址，仅供内部发版验证渠道使用（OPSCLI_UPDATE_CHANNEL=test）
+_TESTPYPI_JSON_URL = "https://test.pypi.org/pypi/aukeys-opscli/json"
+
+
+def _get_channel() -> str:
+    """读取更新渠道。
+
+    环境变量 OPSCLI_UPDATE_CHANNEL=test 时走 TestPyPI（内部发版验证专用），
+    其余任何取值或未设置均为正式渠道（公网 PyPI），保证普通用户行为不变。
+    """
+    return "test" if os.environ.get("OPSCLI_UPDATE_CHANNEL") == "test" else "prod"
 
 # 缓存文件路径，与 CONFIG_DIR 一致
 _CACHE_FILE = CONFIG_DIR / "pypi_version_cache.json"
@@ -91,13 +104,15 @@ def _write_cache(latest_version: str) -> None:
 
 
 def _fetch_latest_version() -> str | None:
-    """从 PyPI JSON API 获取最新版本号。
+    """从 PyPI JSON API 获取最新版本号（按渠道选择正式 / TestPyPI）。
 
     Returns:
         最新版本号字符串，请求失败或解析失败时返回 None。
     """
     try:
-        response = httpx.get(_PYPI_JSON_URL, timeout=5)
+        # test 渠道查询 TestPyPI，正式渠道查询公网 PyPI
+        url = _TESTPYPI_JSON_URL if _get_channel() == "test" else _PYPI_JSON_URL
+        response = httpx.get(url, timeout=5)
         response.raise_for_status()
         data = response.json()
         return data.get("info", {}).get("version")
@@ -112,10 +127,8 @@ def _print_update_hint(current: str, latest: str) -> None:
     console.print(
         f"[yellow]opscli 有新版本可用，建议更新最新版本: v{current} → v{latest}[/yellow]"
     )
-    console.print("[dim]请按以下步骤更新：[/dim]")
-    console.print("[cyan]  1. pip install --upgrade aukeys-opscli[/cyan]")
-    console.print("[cyan]  2. opscli skills install --force[/cyan]")
-    console.print("[cyan]  3. opscli skills upgrade[/cyan]")
+    console.print("[dim]请运行以下命令一键更新（升级 CLI 并自动同步 Skills）：[/dim]")
+    console.print("[cyan]  opscli self-update[/cyan]")
     console.print()
 
 
@@ -159,6 +172,14 @@ def check_and_notify() -> None:
     """
     try:
         current = get_version()
+
+        # test 渠道绕过缓存：直连 TestPyPI 且不写缓存，
+        # 避免测试渠道版本号污染正式渠道的 24 小时缓存判断
+        if _get_channel() == "test":
+            latest = _fetch_latest_version()
+            if latest is not None and is_newer_available(current, latest):
+                _print_update_hint(current, latest)
+            return
 
         # 优先从缓存读取，避免每次都请求 PyPI
         cached = _read_cache()

@@ -97,24 +97,24 @@ opscli skills
 
 ### 关键路径
 
-| 职责 | 文件 |
-|------|------|
-| 顶级 CLI 挂载 | `opscli/cli.py` |
-| auth 子命令 | `opscli/auth/cli.py` |
-| SDK 入口 | `opscli/auth/__init__.py`（AuthClient） |
-| 全局配置路径 | `opscli/config.py`（CONFIG_DIR） |
-| auth 服务地址 | `opscli/auth/config.py`（DEFAULTS + load_config） |
-| Token 管理 | `opscli/auth/core/token_manager.py` |
-| 凭证存储 | `opscli/auth/storage/credential_store.py` |
-| MCP 服务入口 | `opscli/mcp/server.py`（FastMCP 实例） |
-| MCP 凭证缓存 | `opscli/mcp/credential_cache.py`（McpCredentialCache） |
-| MCP auth 工具 | `opscli/mcp/tools/auth.py`（auth_* 工具集） |
-| query 业务编排 | `opscli/query/manager.py`（QueryManager） |
-| query HTTP 转发 | `opscli/query/client.py`（QueryClient） |
-| Skill 管理协调 | `opscli/skills/manager.py`（SkillsManager） |
-| Skill 发现 | `opscli/skills/detector.py`（SkillDetector） |
-| Skill 远端升级 | `opscli/skills/updater.py`（SkillsUpdater） |
-| Skill 模板目录 | `opscli/skills/templates/` |
+| 职责            | 文件                                                   |
+| --------------- | ------------------------------------------------------ |
+| 顶级 CLI 挂载   | `opscli/cli.py`                                        |
+| auth 子命令     | `opscli/auth/cli.py`                                   |
+| SDK 入口        | `opscli/auth/__init__.py`（AuthClient）                |
+| 全局配置路径    | `opscli/config.py`（CONFIG_DIR）                       |
+| auth 服务地址   | `opscli/auth/config.py`（DEFAULTS + load_config）      |
+| Token 管理      | `opscli/auth/core/token_manager.py`                    |
+| 凭证存储        | `opscli/auth/storage/credential_store.py`              |
+| MCP 服务入口    | `opscli/mcp/server.py`（FastMCP 实例）                 |
+| MCP 凭证缓存    | `opscli/mcp/credential_cache.py`（McpCredentialCache） |
+| MCP auth 工具   | `opscli/mcp/tools/auth.py`（auth_* 工具集）            |
+| query 业务编排  | `opscli/query/manager.py`（QueryManager）              |
+| query HTTP 转发 | `opscli/query/client.py`（QueryClient）                |
+| Skill 管理协调  | `opscli/skills/manager.py`（SkillsManager）            |
+| Skill 发现      | `opscli/skills/detector.py`（SkillDetector）           |
+| Skill 远端升级  | `opscli/skills/updater.py`（SkillsUpdater）            |
+| Skill 模板目录  | `opscli/skills/templates/`                             |
 
 ### 本地配置存储
 
@@ -170,11 +170,11 @@ from opscli.auth import AuthClient   # 直接导入子模块
 
 代码中所有面向用户的错误提示必须使用当前命令名，**禁止**出现旧名称残留：
 
-| 位置 | 正确写法 |
-|------|---------|
-| `token_manager.py` 未登录提示 | `opscli auth login` |
-| `device_flow.py` 超时提示 | `opscli auth login` |
-| `auth/cli.py` 各提示语 | `opscli auth login` / `opscli auth token status` |
+| 位置                          | 正确写法                                         |
+| ----------------------------- | ------------------------------------------------ |
+| `token_manager.py` 未登录提示 | `opscli auth login`                              |
+| `device_flow.py` 超时提示     | `opscli auth login`                              |
+| `auth/cli.py` 各提示语        | `opscli auth login` / `opscli auth token status` |
 
 ### 【铁律5】Keychain 服务名不可随意更改
 
@@ -189,10 +189,10 @@ from opscli.auth import AuthClient   # 直接导入子模块
 
 ### 【铁律7】Token 生命周期常量不可随意调整
 
-| 常量 | 值 | 说明 |
-|------|----|------|
-| `REFRESH_THRESHOLD` | 300s（5分钟） | 提前刷新阈值，过大会导致频繁刷新 |
-| `MAX_JWT_TTL` | 86400s（24小时） | 防止后端返回异常超长 TTL |
+| 常量                | 值               | 说明                             |
+| ------------------- | ---------------- | -------------------------------- |
+| `REFRESH_THRESHOLD` | 300s（5分钟）    | 提前刷新阈值，过大会导致频繁刷新 |
+| `MAX_JWT_TTL`       | 86400s（24小时） | 防止后端返回异常超长 TTL         |
 
 调整前必须充分评估对用户侧的影响，并在 PR 描述中说明原因。
 
@@ -273,12 +273,12 @@ invalidate_credential_cache()  # 刷新内存缓存
 
 涉及数据查询的 Skill 文档（`reference/*.md`、`SKILL.md`）和脚本，**禁止**手写以下字段：
 
-| 禁止手写字段 | 原因 | 正确做法 |
-|-------------|------|---------|
-| `userEmail` | 涉及当前登录用户隐私 | 由 `opscli query build` 自动填充 |
-| `query.from.table` | 包含子查询 SQL 和权限占位符，手写易错 | 由 `opscli query build` 根据数据集 metadata 自动生成 |
-| `query.from.permission` | 涉及权限维度配置，不同数据集不同 | 由 `opscli query build` 根据数据集 metadata 自动生成 |
-| `query.from.database` | 通常为空字符串，无需关注 | 由 `opscli query build` 自动填充 |
+| 禁止手写字段            | 原因                                  | 正确做法                                             |
+| ----------------------- | ------------------------------------- | ---------------------------------------------------- |
+| `userEmail`             | 涉及当前登录用户隐私                  | 由 `opscli query build` 自动填充                     |
+| `query.from.table`      | 包含子查询 SQL 和权限占位符，手写易错 | 由 `opscli query build` 根据数据集 metadata 自动生成 |
+| `query.from.permission` | 涉及权限维度配置，不同数据集不同      | 由 `opscli query build` 根据数据集 metadata 自动生成 |
+| `query.from.database`   | 通常为空字符串，无需关注              | 由 `opscli query build` 自动填充                     |
 
 **正确示例**（Skill 文档中只写业务关心的部分）：
 
@@ -315,11 +315,11 @@ invalidate_credential_cache()  # 刷新内存缓存
 
 所有内置 Skill（`opscli/skills/templates/` 下的子目录）命名必须以 `ops-` 开头：
 
-| 正确 | 错误 |
-|------|------|
-| `ops-auth` | `auth` |
+| 正确                | 错误                              |
+| ------------------- | --------------------------------- |
+| `ops-auth`          | `auth`                            |
 | `ops-dataset-query` | `dataset-fields`、`dataset-query` |
-| `ops-skills` | `skills` |
+| `ops-skills`        | `skills`                          |
 
 **规则**：
 - `ops-` 前缀标识该 Skill 属于 Aukeys 运营工具体系，便于与用户自定义 Skill 区分
@@ -385,14 +385,14 @@ invalidate_credential_cache()  # 刷新内存缓存
 
 **分类目录（6 类）**：
 
-| 目录 | 用途 | 示例 |
-|------|------|------|
-| `docs/guide/` | 用户使用指南 | `认证模块使用指南.md` |
-| `docs/spec/` | 开发规范 | `开发规范.md` |
+| 目录             | 用途         | 示例                      |
+| ---------------- | ------------ | ------------------------- |
+| `docs/guide/`    | 用户使用指南 | `认证模块使用指南.md`     |
+| `docs/spec/`     | 开发规范     | `开发规范.md`             |
 | `docs/analysis/` | 分析调研报告 | `授权模式对比分析报告.md` |
-| `docs/release/` | 发布与运维 | `打包发布指南.md` |
-| `docs/plans/` | 方案与计划 | `取数底座一期开发计划.md` |
-| `docs/design/` | 技术设计文档 | `query模块设计.md` |
+| `docs/release/`  | 发布与运维   | `打包发布指南.md`         |
+| `docs/plans/`    | 方案与计划   | `取数底座一期开发计划.md` |
+| `docs/design/`   | 技术设计文档 | `query模块设计.md`        |
 
 **命名规则**：
 1. 文件名**必须使用中文**，禁止使用英文命名（纯技术术语如 `query`、`Skill`、`API` 可保留英文）
@@ -412,16 +412,16 @@ invalidate_credential_cache()  # 刷新内存缓存
 
 **注释粒度要求**：
 
-| 代码位置 | 注释要求 |
-|----------|----------|
-| 模块顶部 | 必须，说明模块职责和主要类/函数 |
-| 类定义 | 必须，说明类的用途和主要状态 |
-| 公开方法 | 必须，docstring 说明参数、返回值、异常 |
-| 私有方法 | 建议，说明内部逻辑意图 |
-| 重要业务逻辑块 | 必须，段落注释说明"为什么这样做" |
-| 复杂条件判断 | 必须，说明分支含义和边界条件 |
-| 常量定义 | 必须，说明常量的用途和取值依据 |
-| 并发/锁相关代码 | 必须，详细说明锁的作用和顺序 |
+| 代码位置        | 注释要求                               |
+| --------------- | -------------------------------------- |
+| 模块顶部        | 必须，说明模块职责和主要类/函数        |
+| 类定义          | 必须，说明类的用途和主要状态           |
+| 公开方法        | 必须，docstring 说明参数、返回值、异常 |
+| 私有方法        | 建议，说明内部逻辑意图                 |
+| 重要业务逻辑块  | 必须，段落注释说明"为什么这样做"       |
+| 复杂条件判断    | 必须，说明分支含义和边界条件           |
+| 常量定义        | 必须，说明常量的用途和取值依据         |
+| 并发/锁相关代码 | 必须，详细说明锁的作用和顺序           |
 
 **示例（正确写法）**：
 ```python
@@ -524,25 +524,25 @@ CLI 命令和 Skill 脚本中所有通过 `console.print()` / `typer.echo()` / `
 
 **GBK 不安全字符黑名单**（禁止在终端输出路径中使用）：
 
-| 禁止字符 | Unicode | 说明 |
-|----------|---------|------|
-| `✓` `✗` `✔` `✘` | U+2713/U+2717/U+2714/U+2718 | Dingbats 区，GBK 不含 |
-| `✅` `❌` `❓` | U+2705/U+274C/U+2753 | Dingbats 区，GBK 不含 |
-| `⚠️` `⚠` | U+26A0 | Misc Symbols 区，GBK 不含 |
-| `↻` `↺` `⟳` | U+21BB/U+21BA/U+27F3 | 箭头区部分字符 |
-| `🔴` `⭐` 等表情符号 | U+1Fxxx | 完全不在 GBK |
+| 禁止字符           | Unicode                     | 说明                      |
+| ------------------ | --------------------------- | ------------------------- |
+| `✓` `✗` `✔` `✘`    | U+2713/U+2717/U+2714/U+2718 | Dingbats 区，GBK 不含     |
+| `✅` `❌` `❓`        | U+2705/U+274C/U+2753        | Dingbats 区，GBK 不含     |
+| `⚠️` `⚠`            | U+26A0                      | Misc Symbols 区，GBK 不含 |
+| `↻` `↺` `⟳`        | U+21BB/U+21BA/U+27F3        | 箭头区部分字符            |
+| `🔴` `⭐` 等表情符号 | U+1Fxxx                     | 完全不在 GBK              |
 
 **GBK 安全替代字符**：
 
-| 用途 | 禁止 | 替代 |
-|------|------|------|
-| 成功 | `✓` | `√` (U+221A) |
-| 失败 | `✗` | `×` (U+00D7) |
-| 更新/替换 | `↻` | `↑` (U+2191) |
-| 警告 | `⚠️` | `[!]` |
-| 状态良好 | `✅` | `√` |
-| 状态严重 | `🔴` | `X` |
-| 未知 | `❓` | `?` |
+| 用途      | 禁止 | 替代         |
+| --------- | ---- | ------------ |
+| 成功      | `✓`  | `√` (U+221A) |
+| 失败      | `✗`  | `×` (U+00D7) |
+| 更新/替换 | `↻`  | `↑` (U+2191) |
+| 警告      | `⚠️`  | `[!]`        |
+| 状态良好  | `✅`  | `√`          |
+| 状态严重  | `🔴`  | `X`          |
+| 未知      | `❓`  | `?`          |
 
 **豁免区域**（不要求 GBK 兼容）：
 - MCP 工具的 docstring（仅 AI Agent 读取，不输出到终端）
@@ -551,6 +551,9 @@ CLI 命令和 Skill 脚本中所有通过 `console.print()` / `typer.echo()` / `
 - `docs/` 目录下的 Markdown 文档
 
 **兜底机制**：`opscli/cli.py` 入口已设置 `sys.stdout/stderr.reconfigure(errors='replace')`（仅 Windows），作为最后防线避免崩溃。
+
+### 【铁律24】项目中运行 ops cli 时判断应该使用 uv 还是全局环境处理
+默认应该使用项目内的 uv 环境运行 ops cli 命令
 
 ---
 
@@ -645,27 +648,29 @@ docs/
 
 ### 文档索引
 
-| 分类 | 文档 | 路径 |
-|------|------|------|
-| 使用指南 | 认证模块使用指南 | `docs/guide/认证模块使用指南.md` |
-| 发布运维 | 打包发布指南 | `docs/release/打包发布指南.md` |
-| 分析调研 | 授权模式对比分析报告 | `docs/analysis/授权模式对比分析报告.md` |
-| 开发规范 | opscli 开发规范 | `docs/spec/开发规范.md` |
-| 项目说明 | README | `README.md` |
-| 方案计划 | 认证模块设计方案 | `docs/plans/认证模块设计方案.md` |
-| 方案计划 | 认证模块实施计划 | `docs/plans/认证模块实施计划.md` |
-| 方案计划 | 取数底座一期开发计划 | `docs/plans/取数底座一期开发计划.md` |
-| 方案计划 | 取数底座一期验收手册 | `docs/plans/取数底座一期验收手册.md` |
-| 方案计划 | 取数底座一期联调记录 | `docs/plans/取数底座一期联调记录.md` |
-| 方案计划 | 取数底座一期发布检查清单 | `docs/plans/取数底座一期发布检查清单.md` |
-| 方案计划 | 取数底座一期剩余任务 | `docs/plans/取数底座一期剩余任务.md` |
-| 技术设计 | query 模块设计 | `docs/design/query模块设计.md` |
-| 技术设计 | Skills 多工具调研规划 | `docs/design/Skills多工具调研规划.md` |
-| 技术设计 | AI 取数能力底座开发需求 | `docs/design/AI取数能力底座开发需求.md` |
-| 技术设计 | 数据查询服务开发说明 | `docs/design/数据查询服务开发说明文档.md` |
+| 分类     | 文档                       | 路径                                        |
+| -------- | -------------------------- | ------------------------------------------- |
+| 使用指南 | 认证模块使用指南           | `docs/guide/认证模块使用指南.md`            |
+| 发布运维 | 打包发布指南               | `docs/release/打包发布指南.md`              |
+| 分析调研 | 授权模式对比分析报告       | `docs/analysis/授权模式对比分析报告.md`     |
+| 开发规范 | opscli 开发规范            | `docs/spec/开发规范.md`                     |
+| 项目说明 | README                     | `README.md`                                 |
+| 方案计划 | 认证模块设计方案           | `docs/plans/认证模块设计方案.md`            |
+| 方案计划 | 认证模块实施计划           | `docs/plans/认证模块实施计划.md`            |
+| 方案计划 | 取数底座一期开发计划       | `docs/plans/取数底座一期开发计划.md`        |
+| 方案计划 | 取数底座一期验收手册       | `docs/plans/取数底座一期验收手册.md`        |
+| 方案计划 | 取数底座一期联调记录       | `docs/plans/取数底座一期联调记录.md`        |
+| 方案计划 | 取数底座一期发布检查清单   | `docs/plans/取数底座一期发布检查清单.md`    |
+| 方案计划 | 取数底座一期剩余任务       | `docs/plans/取数底座一期剩余任务.md`        |
+| 技术设计 | query 模块设计             | `docs/design/query模块设计.md`              |
+| 技术设计 | Skills 多工具调研规划      | `docs/design/Skills多工具调研规划.md`       |
+| 技术设计 | AI 取数能力底座开发需求    | `docs/design/AI取数能力底座开发需求.md`     |
+| 技术设计 | 数据查询服务开发说明       | `docs/design/数据查询服务开发说明文档.md`   |
 | 技术设计 | 数据集字段技能系统技术方案 | `docs/design/数据集字段技能系统技术方案.md` |
-| 技术设计 | 通用 Skill 版本控制架构 | `docs/design/通用Skill版本控制架构.md` |
-| 使用指南 | Skills 基础开发培训手册 | `docs/guide/Skills基础开发培训手册.md` |
+| 技术设计 | 通用 Skill 版本控制架构    | `docs/design/通用Skill版本控制架构.md`      |
+| 使用指南 | Skills 基础开发培训手册    | `docs/guide/Skills基础开发培训手册.md`      |
+| 使用指南 | Amazon 抓取代理部署与使用指南 | `docs/guide/Amazon抓取代理部署与使用指南.md` |
+| 使用指南 | CLI 升级指南               | `docs/guide/CLI升级指南.md`                 |
 
 <!-- BEGIN SUPER DEV CLAUDE -->
 # Super Dev Claude Code Integration

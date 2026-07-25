@@ -8,6 +8,7 @@ import os
 import re
 import glob
 import importlib.util
+import sys
 from pathlib import Path
 from setuptools import setup, find_packages
 from setuptools.command.build_py import build_py
@@ -15,9 +16,11 @@ from setuptools.command.sdist import sdist
 from Cython.Build import cythonize
 from setuptools.extension import Extension
 
-# 本地开发时设置 SKIP_CYTHON=1 跳过 Cython 编译，加速安装
-# 用法：SKIP_CYTHON=1 pip install -e .
-_SKIP_CYTHON = os.environ.get("SKIP_CYTHON", "").strip() in ("1", "true", "yes")
+# editable 安装属于本地开发流程，自动跳过 Cython；环境变量保留给其他开发命令。
+_SKIP_CYTHON = (
+    os.environ.get("SKIP_CYTHON", "").strip() in ("1", "true", "yes")
+    or any(command in {"develop", "editable_wheel"} for command in sys.argv)
+)
 _REPO_ROOT = Path(__file__).resolve().parent
 _PACKAGING_MODULE = _REPO_ROOT / "opscli" / "skills" / "packaging.py"
 

@@ -26,34 +26,21 @@ def local_tmp_path():
 
 
 def test_notify_status_hides_webhook(monkeypatch, local_tmp_path: Path):
-    notify_path = local_tmp_path / "notify.yaml"
-    notify_path.write_text(
-        "\n".join(
-            [
-                "dedupe_minutes: 5",
-                "quick_login_url: https://admin.example.com/xiyou/credential",
-                "wechat_work:",
-                "  webhook_url: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=secret",
-                "mentions:",
-                "  mentioned_mobile_list:",
-                "    - '13800138000'",
-            ]
-        ),
-        encoding="utf-8",
-    )
     settings = XiyouSettings(
-        notify_path=notify_path,
+        credential_path=local_tmp_path / "credential.json",
     )
     monkeypatch.setattr(cli_module, "load_settings", lambda: settings)
 
     result = runner.invoke(app, ["notify", "status"])
 
     assert result.exit_code == 0
-    assert "key=secret" not in result.output
+    assert "key=397e7465-06ab-4a65-8844-22822e3ac0bb" not in result.output
     payload = json.loads(result.output)
     assert payload["enabled"] is True
     assert payload["has_webhook_url"] is True
-    assert payload["mentioned_mobile_list"] == ["13800138000"]
+    assert payload["mentioned_mobile_list"] == ["13717101951"]
+    assert payload["source"] == "builtin"
+    assert payload["state_path"].endswith("notify_state.json")
 
 
 def test_notify_test_prints_send_result(monkeypatch):

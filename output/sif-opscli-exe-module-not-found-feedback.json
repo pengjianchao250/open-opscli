@@ -1,0 +1,38 @@
+{
+  "source": "cli",
+  "feedback_type": "bug",
+  "severity": "medium",
+  "title": "opscli.exe 入口无法导入 opscli 包",
+  "content": "在本地验收 SIF 功能时调用 .venv\\Scripts\\opscli.exe sif features --pretty 失败，入口脚本抛出 ModuleNotFoundError: No module named 'opscli'，导致用户无法直接使用 opscli.exe 验收。",
+  "payload": {
+    "expected": "opscli.exe sif features --pretty 能正常列出 SIF 功能",
+    "actual": "ModuleNotFoundError: No module named 'opscli'"
+  },
+  "skill_name": "ops-sif",
+  "skill_version": "0.2.0",
+  "command_name": "opscli sif features",
+  "context": {
+    "cwd": "E:\\WorkProjects\\open-opscli",
+    "agent": "Codex",
+    "workflow": "sif-ranking-timemachine-expansion"
+  },
+  "execution_summary": {
+    "summary": "调用 opscli.exe 入口验收 SIF features 失败，自动提交反馈。",
+    "failed_calls": [
+      {
+        "tool": "PowerShell -> .\\.venv\\Scripts\\opscli.exe sif features --pretty",
+        "call_params": {
+          "command": "sif features",
+          "pretty": true,
+          "entrypoint": ".venv\\Scripts\\opscli.exe"
+        },
+        "error_message": "ModuleNotFoundError: No module named 'opscli'",
+        "reason": "推测当前虚拟环境的 console script 没有安装 editable 包，或安装元数据指向的源码路径不可用，导致 opscli.exe 启动时无法从 sys.path 解析 opscli 包。",
+        "fix_suggestion": "使用 .\\.venv\\Scripts\\python.exe -m opscli.cli ... 作为当前源码入口，或重新执行可用的 editable 安装/修复 venv 后再使用 opscli.exe。"
+      }
+    ],
+    "successful_calls": [],
+    "final_resolution": "已记录反馈，下一步排查本地 venv console script 与源码安装状态。"
+  },
+  "attachments": []
+}

@@ -9,6 +9,7 @@ import typer
 from opscli.amazon.cli import app as amazon_app
 from opscli.amazon_rufus.cli import app as amazon_rufus_app
 from opscli.asin_data.cli import app as asin_data_app
+from opscli.asin_review.cli import app as asin_review_app
 from opscli.auth.cli import app as auth_app
 from opscli.calculator.cli import app as calculator_app
 from opscli.canopy.cli import app as canopy_app
@@ -62,7 +63,7 @@ app.add_typer(query_app, name="query")
 app.add_typer(scrape_do_app, name="scrape-do")
 # app.add_typer(shopify_app, name="shopify")
 app.add_typer(feedback_app, name="feedback")
-# app.add_typer(feedtask_app, name="feedtask")
+app.add_typer(feedtask_app, name="feedtask")
 app.add_typer(google_trends_app, name="google-trends")
 # app.add_typer(google_trends_debug_app, name="google-trends-debug")
 app.add_typer(keepa_app, name="keepa")
@@ -74,6 +75,17 @@ app.add_typer(seller_sprite_app, name="seller-sprite")
 # app.add_typer(methods_card_app, name="methods-card")
 app.add_typer(skills_app, name="skills")
 app.add_typer(mcp_app, name="mcp")
+
+
+@app.command("self-update")
+def self_update():
+    """一键升级 opscli 并自动同步 Skills（等效于 pip 升级 + skills install/upgrade）。"""
+    # 延迟导入：避免拖慢所有命令的启动耗时
+    from opscli.shared.self_update import run_self_update
+
+    code = run_self_update()
+    if code != 0:
+        raise typer.Exit(code)
 
 
 def _get_current_user_email() -> str | None:
