@@ -1,5 +1,18 @@
 # 待归档变更记录
 
+## 2026-07-25 mcp - Task8 MCP 工具 query_plan / query_flow
+
+**变更原因**：规划器内核化 Phase 4。把内核入口 run_plan/run_flow 暴露为 MCP 工具，供 AI Agent 直接调用取数规划/一体化取数。
+**改动点**：
+- `opscli/mcp/tools/query.py`：新增 async 工具 `query_plan`（request/requested_fields/top_n/session_id/jwt）与 `query_flow`（request/requested_fields/session_id/jwt）；身份经 `_get_authenticated_user_email()`（无法确认已验证身份则失败闭合，不调规划器）+ `_get_credential_dir()`（隔离 base_dir）；凭证经 `_get_auth_pair` 构造 `_query_manager(jwt, session_id)` 注入 run_plan/run_flow（显式凭证模式）；requested_fields 兼容 JSON 字符串（_parse_json_arg）；`_ok/_err` 包裹。两工具加入 `_ALL_TOOLS`。
+- 依赖方向：mcp → query.services.planner（允许方向），planner 不反向 import mcp。
+- 新建测试 `tests/mcp/test_query_planner_tools.py`（5 用例：query_plan 合同+透传身份/字段/top_n、无身份失败闭合、query_flow 结果、注册入 _ALL_TOOLS、JSON 字符串字段兼容）。
+**验证结果**：`pytest tests/mcp/test_query_planner_tools.py -q` → 5 passed；`pytest tests/mcp/{test_query_tools,test_tool_catalog,test_tool_permissions,test_query_planner_tools}.py -q` → 30 passed（catalog/permissions 接受新增工具，无回归）。
+**影响范围**：MCP 新增两工具；不改动现有工具行为。
+**回滚方式**：删除 query_plan/query_flow 及 _ALL_TOOLS 两项、顶层 import 与 test_query_planner_tools.py。
+
+---
+
 ## 2026-07-25 query - Task7 CLI 命令 query plan / query flow
 
 **变更原因**：规划器内核化 Phase 4。把内核入口 run_plan/run_flow 暴露为 CLI 命令，供用户/Agent 直接调用。

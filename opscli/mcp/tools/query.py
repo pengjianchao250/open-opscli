@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+from opscli.query.services.planner import run_flow, run_plan
+
 from .helpers import _err, _ok, _parse_json_arg, _query_manager
 
 
@@ -587,6 +589,109 @@ async def query_chart_doc(
         return _err(exc)
 
 
+async def query_plan(
+    request: str,
+    requested_fields: list[str] | str | None = None,
+    top_n: int | None = None,
+    session_id: str | None = None,
+    jwt: str | None = None,
+) -> dict:
+    """自然语言取数请求 → 规划合同（只规划不执行，输出 query_plan_model_contract_v2）。
+
+    规划器内核化入口：读取当前账号可见的全量授权元数据（经用户级缓存），完成选表、
+    字段/权限指导、时间口径解析与平台/组件权限枚举，产出模型可见的规划合同。
+    合同 status=planned 时可用 query_flow 一步执行，或据 execution_ref.query_template
+    自行填充后走 query_simple；status=clarify_required/blocked 时按 model_view 澄清。
+
+    【前置条件】调用前须已登录（auth_is_authenticated 确认；未登录调 auth_mcp_login）。
+    session_id/jwt 可留空自动加载本地凭证；身份以已验证的当前账号邮箱为准。
+
+    Args:
+        request:          用户查询原文（自然语言）。
+        requested_fields: 可选，用户点名字段列表（可传 JSON 字符串）。
+        top_n:            可选，选表候选上限。
+        session_id:       可选，OAuth 授权后的 Session ID（为空则自动加载）。
+        jwt:              可选，已有 JWT（为空则自动加载）。
+    """
+    from opscli.mcp.tools.helpers import (
+        _get_auth_pair,
+        _get_authenticated_user_email,
+        _get_credential_dir,
+    )
+
+    email = _get_authenticated_user_email()
+    if not email:
+        return _err(ValueError("无法确认当前登录账号：请先 auth_mcp_login 登录，或传入有效凭证"))
+    try:
+        fields = _parse_json_arg(requested_fields, list) or []
+    except ValueError as exc:
+        return _err(exc)
+    sid, jw = _get_auth_pair("ops", session_id, jwt)
+    base_dir = _get_credential_dir()
+    try:
+        contract = run_plan(
+            request,
+            user_email=email,
+            base_dir=base_dir,
+            requested_fields=fields,
+            top_n=top_n,
+            query_manager=_query_manager(jwt=jw, session_id=sid),
+        )
+        return _ok(contract)
+    except Exception as exc:
+        return _err(exc)
+
+
+async def query_flow(
+    request: str,
+    requested_fields: list[str] | str | None = None,
+    session_id: str | None = None,
+    jwt: str | None = None,
+) -> dict:
+    """一体化取数：规划 + planned 数据集查询时按 query_template 执行一次并回传结果。
+
+    非 planned（需澄清/被阻断/图表 UUID 等）合同原样返回，交调用方按 model_view 处置。
+    执行段为最小实现：清理模板 null 占位键后执行一次；orderBy 服务端缺陷的本地兜底/
+    加量重查与结果落盘暂未内核化，见返回体 execution_notes 披露。
+
+    【前置条件】同 query_plan，须已登录。
+
+    【查询完成后必须执行】执行完成后（无论成败）调用 feedback_submit 提交结果反馈。
+
+    Args:
+        request:          用户查询原文（自然语言）。
+        requested_fields: 可选，用户点名字段列表（可传 JSON 字符串）。
+        session_id:       可选，OAuth 授权后的 Session ID（为空则自动加载）。
+        jwt:              可选，已有 JWT（为空则自动加载）。
+    """
+    from opscli.mcp.tools.helpers import (
+        _get_auth_pair,
+        _get_authenticated_user_email,
+        _get_credential_dir,
+    )
+
+    email = _get_authenticated_user_email()
+    if not email:
+        return _err(ValueError("无法确认当前登录账号：请先 auth_mcp_login 登录，或传入有效凭证"))
+    try:
+        fields = _parse_json_arg(requested_fields, list) or []
+    except ValueError as exc:
+        return _err(exc)
+    sid, jw = _get_auth_pair("ops", session_id, jwt)
+    base_dir = _get_credential_dir()
+    try:
+        result = run_flow(
+            request,
+            user_email=email,
+            base_dir=base_dir,
+            requested_fields=fields,
+            query_manager=_query_manager(jwt=jw, session_id=sid),
+        )
+        return _ok(result)
+    except Exception as exc:
+        return _err(exc)
+
+
 async def query_preferences(
     session_id: str | None = None,
     jwt: str | None = None,
@@ -635,6 +740,8 @@ _ALL_TOOLS = [
     query_build_and_run,
     query_chart,
     query_chart_doc,
+    query_plan,
+    query_flow,
     query_preferences,
 ]
 
