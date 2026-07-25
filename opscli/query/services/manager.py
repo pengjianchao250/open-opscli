@@ -612,6 +612,15 @@ class QueryManager:
             if len(matches) == 1:
                 return matches[0]
             if len(matches) > 1:
+                # field_name 双注册（同一物理字段的英中双名，或公式 vs 裸指标同名）与
+                # 规划器 _merge_duplicate_field_rows 口径一致地消歧：可合并则返回规范字段
+                # （形态一纯标签差异任取其一；形态二采纳公式注册以保证聚合口径正确），
+                # 后端按 field_name 自行解析（实测同名字段后端稳定命中公式口径）。
+                # 仅真正的多口径冲突（多个不同公式）才报歧义错误。
+                if key == "field_name":
+                    merged = self._merge_ambiguous_field_name(matches)
+                    if merged is not None:
+                        return merged
                 raise InvalidPayloadError(
                     self._format_field_ambiguity_error(context, identifier, key, matches)
                 )
@@ -628,6 +637,50 @@ class QueryManager:
             )
 
         raise InvalidPayloadError(f"{context} 字段不存在于当前数据集 metadata 中: {identifier}")
+
+    @staticmethod
+    def _merge_ambiguous_field_name(matches: list[dict]) -> dict | None:
+        """对同名（field_name 重复）字段做与规划器一致的双注册消歧。
+
+        返回规范字段：
+        - 形态一「纯标签差异」：除展示名外执行语义完全一致 → 任取首个；
+        - 形态二「公式 vs 裸指标」：field_type/快照一致，一为公式注册一为裸指标 →
+          采纳公式注册（公式表达式是服务端权威聚合口径，避免均值/比率被误 SUM）；
+        - 其余（多个不同公式表达式等真口径冲突）→ 返回 None，由调用方报歧义。
+
+        与 planner.metadata_adapter._merge_duplicate_field_rows 的裁决规则对齐，
+        保证 query_simple 与规划器对同名双注册的处理一致。
+        """
+        def _base(f: dict) -> tuple:
+            # 公式列以外的执行语义（类型 + 快照标记）必须一致才可能合并
+            snap = f.get("snapshot_metric")
+            snap = "0" if snap in (None, "") else str(snap).strip()
+            return (str(f.get("field_type") or "").strip().lower(), snap)
+
+        if len({_base(f) for f in matches}) != 1:
+            return None
+
+        def _is_formula(f: dict) -> bool:
+            return (
+                str(f.get("has_formula_config")) == "1"
+                or bool(str(f.get("summary_expression") or "").strip())
+                or bool(str(f.get("detail_expression") or "").strip())
+            )
+
+        formula_rows = [f for f in matches if _is_formula(f)]
+        plain_rows = [f for f in matches if not _is_formula(f)]
+        # 形态一：无公式差异，纯标签差异 → 任取
+        if not formula_rows:
+            return matches[0]
+        # 形态二：公式 + 裸指标，且公式表达式唯一 → 采纳公式
+        if plain_rows and len(
+            {
+                (str(f.get("summary_expression") or ""), str(f.get("detail_expression") or ""))
+                for f in formula_rows
+            }
+        ) == 1:
+            return formula_rows[0]
+        return None
 
     @staticmethod
     def _normalize_simple_field_identifier(identifier: str) -> str:
@@ -657,7 +710,9 @@ class QueryManager:
         suffix = "；候选过多，仅展示前 8 个" if len(matches) > 8 else ""
         return (
             f"{context} 字段标识存在歧义（{key} 命中 {len(matches)} 条）: {identifier}。"
-            f"请改用唯一的 global_alias 或完整 field_name。候选: "
+            f"同名双注册（英中双名 / 公式vs裸指标）已自动消歧；若仍报此错，"
+            f"说明该字段名在当前数据集对应多个不同聚合口径，属元数据异常，"
+            f"请按 feedback 规范反馈。候选: "
             + "；".join(candidates)
             + suffix
         )

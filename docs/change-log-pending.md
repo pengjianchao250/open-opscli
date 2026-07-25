@@ -1,5 +1,19 @@
 # 待归档变更记录
 
+## 2026-07-25 query - 修复 query_simple 同名双注册字段消歧（e2e 验收发现）
+
+**变更原因**：e2e 多维矩阵验收（全数据集，张培良账号 id=59，后端 ops.cm）发现真实异常——数据集 1 有 44 组同一物理字段的双注册（英中双名 / 公式vs裸指标同名，如 avg_price_cny 一为裸指标一为 `ROUND(SUM(price)/SUM(order_qty))` 公式）。后端按 field_name 稳定解析（形态二命中公式口径，实测 SUM/无聚合返回同值），但 `QueryManager._resolve_simple_field` 对同名 field_name 一律报歧义并建议「改用 global_alias」——而后端不接受 global_alias（返回"字段不存在"），导致这 44 个字段经 query_simple/query_build_and_run（CLI+MCP 共用）**完全无法查询**。规划器 `_merge_duplicate_field_rows` 早已正确消歧，query_simple 却缺该逻辑，两者不一致。
+**改动点**：`opscli/query/services/manager.py`
+- 新增 `_merge_ambiguous_field_name(matches)`：与规划器口径一致地消歧——形态一（纯英中双名，执行等价）任取其一；形态二（公式 vs 裸指标，类型/快照一致）采纳公式注册；真口径冲突（多个不同公式）返回 None。
+- `_resolve_simple_field` 的 field_name 层多命中时先尝试合并，可合并返回规范字段（后端按 field_name 解析，形态二经既有 line-482 逻辑自动移除 SUM 并填公式 expr，保证聚合口径正确），仅真冲突才报歧义。
+- 修正 `_format_field_ambiguity_error` 提示：删除误导性的「改用 global_alias」（后端不接受），改为说明同名多口径属元数据异常、走 feedback。
+- 新增单测 `tests/query/test_field_disambiguation.py`（5 用例：形态一/形态二消歧、真冲突仍报错、提示不再荐 global_alias、唯一名无回归）。
+**验证结果**：真实后端验证——development_type（形态一）validate=True 查询成功；avg_price_cny+SUM（形态二）成功且 payload 自动改为 `expr=ROUND(SUM(price)/SUM(order_qty),4)`（SUM 移除，口径正确）。`pytest tests/query/test_field_disambiguation.py tests/query/test_manager.py` → 47 passed。
+**影响范围**：CLI（query simple/build-and-run）与 MCP（query_simple/query_build_and_run）共用路径；解锁同名双注册字段查询，保证正确聚合口径；唯一 field_name 行为不变。
+**回滚方式**：还原 _resolve_simple_field 多命中分支、删除 _merge_ambiguous_field_name 与测试、还原提示文案。
+
+---
+
 ## 2026-07-25 query/planner - 修正 derived_from 审计标签命名（CSV→后端）
 
 **变更原因**：内核规划器已彻底解耦 CSV、数据源为后端全量元数据，但 dataset_guidance 逐字移植时残留 `derived_from: "dataset_select_columns.csv"` 审计标签，名不副实易误导。
