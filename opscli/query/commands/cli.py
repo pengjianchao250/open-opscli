@@ -12,6 +12,7 @@ import typer
 
 from opscli.query.domain.exceptions import InvalidPayloadError, QueryError
 from opscli.query.services.manager import QueryManager
+from opscli.query.services.planner import run_flow, run_plan
 
 app = typer.Typer(help="数据查询入口，统一转发远端查询请求")
 
@@ -153,6 +154,87 @@ def _error_payload(command: str, exc: Exception) -> dict:
         "data": None,
         "error": error,
     }
+
+
+def _current_email() -> str:
+    """读取当前登录账号邮箱（规划器缓存隔离维度）；未登录时抛出可读错误。"""
+    from opscli.auth.storage.credential_store import CredentialStore
+
+    data = CredentialStore().load()
+    email = (data or {}).get("email")
+    if not email:
+        raise QueryError("未检测到登录账号，请先执行 opscli auth login 登录后重试")
+    return str(email)
+
+
+def _resolve_request(request: str, query_file: str | None) -> str:
+    """解析查询原文：优先读 --query-file（含特殊字符时用），否则用位置参数。"""
+    if query_file:
+        text = Path(query_file).expanduser().read_text(encoding="utf-8").strip()
+    else:
+        text = (request or "").strip()
+    if not text:
+        raise InvalidPayloadError("缺少查询原文：作为位置参数传入，或用 --query-file <文件> 传入")
+    return text
+
+
+@app.command("plan")
+def plan(
+    request: str = typer.Argument("", help="自然语言查询原文"),
+    query_file: str | None = typer.Option(None, "--query-file", help="从 UTF-8 文件读取查询原文（含特殊字符时用）"),
+    field: list[str] | None = typer.Option(None, "--field", help="补充点名字段，可重复"),
+    top_n: int | None = typer.Option(None, "--top-n", help="选表候选上限"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """自然语言请求 → 规划合同（只规划不执行，输出 query_plan_model_contract_v2）。"""
+    try:
+        text = _resolve_request(request, query_file)
+        email = _current_email()
+        contract = run_plan(
+            text, user_email=email, requested_fields=field or [], top_n=top_n
+        )
+        payload = {
+            "success": True,
+            "command": "query plan",
+            "data": contract,
+            "error": None,
+        }
+    except Exception as exc:
+        _emit(_error_payload("query plan", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
+@app.command("flow")
+def flow(
+    request: str = typer.Argument("", help="自然语言查询原文"),
+    query_file: str | None = typer.Option(None, "--query-file", help="从 UTF-8 文件读取查询原文（含特殊字符时用）"),
+    field: list[str] | None = typer.Option(None, "--field", help="补充点名字段，可重复"),
+    result_dir: str | None = typer.Option(None, "--result-dir", help="结果落盘目录（能力延后，当前忽略）"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """一体化：规划 + planned 时执行一次取数（输出合同 + 结果）。"""
+    try:
+        text = _resolve_request(request, query_file)
+        email = _current_email()
+        contract = run_flow(
+            text,
+            user_email=email,
+            requested_fields=field or [],
+            result_dir=Path(result_dir).expanduser() if result_dir else None,
+        )
+        payload = {
+            "success": True,
+            "command": "query flow",
+            "data": contract,
+            "error": None,
+        }
+    except Exception as exc:
+        _emit(_error_payload("query flow", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
 
 
 @app.command("preferences")

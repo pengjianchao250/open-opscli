@@ -1,5 +1,181 @@
 # 待归档变更记录
 
+## 2026-07-25 query - 修复 query_simple 同名双注册字段消歧（e2e 验收发现）
+
+**变更原因**：e2e 多维矩阵验收（全数据集，张培良账号 id=59，后端 ops.cm）发现真实异常——数据集 1 有 44 组同一物理字段的双注册（英中双名 / 公式vs裸指标同名，如 avg_price_cny 一为裸指标一为 `ROUND(SUM(price)/SUM(order_qty))` 公式）。后端按 field_name 稳定解析（形态二命中公式口径，实测 SUM/无聚合返回同值），但 `QueryManager._resolve_simple_field` 对同名 field_name 一律报歧义并建议「改用 global_alias」——而后端不接受 global_alias（返回"字段不存在"），导致这 44 个字段经 query_simple/query_build_and_run（CLI+MCP 共用）**完全无法查询**。规划器 `_merge_duplicate_field_rows` 早已正确消歧，query_simple 却缺该逻辑，两者不一致。
+**改动点**：`opscli/query/services/manager.py`
+- 新增 `_merge_ambiguous_field_name(matches)`：与规划器口径一致地消歧——形态一（纯英中双名，执行等价）任取其一；形态二（公式 vs 裸指标，类型/快照一致）采纳公式注册；真口径冲突（多个不同公式）返回 None。
+- `_resolve_simple_field` 的 field_name 层多命中时先尝试合并，可合并返回规范字段（后端按 field_name 解析，形态二经既有 line-482 逻辑自动移除 SUM 并填公式 expr，保证聚合口径正确），仅真冲突才报歧义。
+- 修正 `_format_field_ambiguity_error` 提示：删除误导性的「改用 global_alias」（后端不接受），改为说明同名多口径属元数据异常、走 feedback。
+- 新增单测 `tests/query/test_field_disambiguation.py`（5 用例：形态一/形态二消歧、真冲突仍报错、提示不再荐 global_alias、唯一名无回归）。
+**验证结果**：真实后端验证——development_type（形态一）validate=True 查询成功；avg_price_cny+SUM（形态二）成功且 payload 自动改为 `expr=ROUND(SUM(price)/SUM(order_qty),4)`（SUM 移除，口径正确）。`pytest tests/query/test_field_disambiguation.py tests/query/test_manager.py` → 47 passed。
+**影响范围**：CLI（query simple/build-and-run）与 MCP（query_simple/query_build_and_run）共用路径；解锁同名双注册字段查询，保证正确聚合口径；唯一 field_name 行为不变。
+**回滚方式**：还原 _resolve_simple_field 多命中分支、删除 _merge_ambiguous_field_name 与测试、还原提示文案。
+
+---
+
+## 2026-07-25 query/planner - 修正 derived_from 审计标签命名（CSV→后端）
+
+**变更原因**：内核规划器已彻底解耦 CSV、数据源为后端全量元数据，但 dataset_guidance 逐字移植时残留 `derived_from: "dataset_select_columns.csv"` 审计标签，名不副实易误导。
+**改动点**：`opscli/query/services/planner/dataset_guidance.py` `_derived_component_fields` 中 `derived_from` 由 `"dataset_select_columns.csv"` 改为 `"backend_query_metadata_select_columns"`。该字段为纯审计标签、全仓无任何读取/判断消费方（grep 确认），改动零风险。旧 Skill 脚本同名标签不动（其仍读 CSV，标签仍准确）。
+**验证结果**：`pytest tests/query/planner/test_guidance.py -q` → 3 passed。
+**影响范围**：仅审计标签文本，无功能影响。
+**回滚方式**：还原该字符串。
+
+---
+
+## 2026-07-25 query/planner - Task10 全量回归验收（SKILL.md 切换按用户决定暂停）
+
+**变更原因**：规划器内核化 Phase 4 收尾验收。全量回归 + 依赖方向 + SDK 双导入 + help 冒烟。
+**改动点**：无产品代码改动（纯验收 + 进度归档）。
+**用户决策**：SKILL.md 主线入口切换（python3 scripts/query_flow.py → opscli query flow）**暂停**，待执行段内核化（result-dir 落盘 / orderBy 本地兜底 / evidence_contract）完成后再切；老脚本继续作为一体化主线，新内核 flow 执行段为最小实现。此项另开后续任务。
+**验证结果**：
+- 分目录回归：tests/auth 73 passed；tests/query 121 passed（仅 catalog/intent 2 既有基线失败）；tests/mcp 315 passed（排除 shopify 收集错误后，7 失败 amazon_rufus/google_trends/quota/scrape_do/server_google_trends 经 checkout 基线 b624dc9 复跑确认为**预存基线**，与本改动无关）；tests/skills capture 崩溃为既有基线。
+- 新增交付测试全绿：tests/query/planner 25 + test_planner_cli 4 + mcp test_query_planner_tools 5 = 35 passed。
+- 依赖方向：`opscli/query/services/planner/*.py` 无 import opscli.mcp。
+- SDK 双导入 OK（from opscli / from opscli.auth）；planner re-export run_plan/run_flow OK。
+- 冒烟：opscli query plan/flow --help OK；真实后端端到端产出正确合同（见 Task9 对拍报告）。
+**影响范围**：无。
+**回滚方式**：N/A（无代码改动）。
+
+---
+
+## 2026-07-25 query/planner - Task9 回归对拍（安全网）+ 修复 enum 结果形状真实回归
+
+**变更原因**：规划器内核化 Phase 4 安全网。对同一批代表性请求对拍迁移前后规划合同关键字段，确认未改变规划语义；对拍过程捕获并修复一处真实回归。
+**改动点**：
+- 新建对拍工具 `scripts/regression/planner_parity.py`：对 6 个代表性请求（明确数据集/相对时间、需澄清、平台枚举、环比、快照指标、chart_uuid）分别运行旧 Skill 规划器（scripts/query_plan.py 经 ~/.claude/skills CSV fallback）与新内核规划器（opscli query plan），比对 model_view+execution_ref 关键字段，落盘黄金样例。
+- 新建黄金样例 `tests/query/planner/golden/*.json`（6 个）。
+- 新建报告 `docs/analysis/规划器内核化对拍报告.md`。
+- **修复真实回归**：`entry._extract_enum_values` 只兜底多级嵌套形状（data.result.data），漏了 build_simple_and_run().result 的真实一级形状 `{success, data:[行], meta}`（行直接在 result["data"]），导致平台/组件权限枚举 enum_fn 恒返回空 → 二段收敛静默失效。路径新增一级 `("data",)`（优先）。新增回归单测 `test_extract_enum_values_from_raw_simple_result`。
+- 归因记录：execution_ref.table_id 旧 CSV 为字符串"1"、新为 int 1（新更规范，build_simple 期望 int），按字符串归一比对，非回归。
+**验证结果**：对拍 6/6 一致（修复前 platform_enum 因 enum 空误判 requires_permission_enum，修复后正确 blocked——账号仅授权 Temu、请求 Amazon 无重叠）；`pytest tests/query/planner tests/query/test_planner_cli tests/mcp/test_query_planner_tools -q` → 35 passed。真实后端验证 enum_fn(7,'platform_name')=['Temu']。
+**影响范围**：修复影响所有需权限枚举的平台/部门筛选查询（生产高频路径），修复前会静默拿不到授权值。对拍工具与黄金样例为新增，不影响产品代码。
+**回滚方式**：回退 _extract_enum_values 路径改动；删除对拍脚本/黄金样例/报告。
+
+---
+
+## 2026-07-25 mcp - Task8 MCP 工具 query_plan / query_flow
+
+**变更原因**：规划器内核化 Phase 4。把内核入口 run_plan/run_flow 暴露为 MCP 工具，供 AI Agent 直接调用取数规划/一体化取数。
+**改动点**：
+- `opscli/mcp/tools/query.py`：新增 async 工具 `query_plan`（request/requested_fields/top_n/session_id/jwt）与 `query_flow`（request/requested_fields/session_id/jwt）；身份经 `_get_authenticated_user_email()`（无法确认已验证身份则失败闭合，不调规划器）+ `_get_credential_dir()`（隔离 base_dir）；凭证经 `_get_auth_pair` 构造 `_query_manager(jwt, session_id)` 注入 run_plan/run_flow（显式凭证模式）；requested_fields 兼容 JSON 字符串（_parse_json_arg）；`_ok/_err` 包裹。两工具加入 `_ALL_TOOLS`。
+- 依赖方向：mcp → query.services.planner（允许方向），planner 不反向 import mcp。
+- 新建测试 `tests/mcp/test_query_planner_tools.py`（5 用例：query_plan 合同+透传身份/字段/top_n、无身份失败闭合、query_flow 结果、注册入 _ALL_TOOLS、JSON 字符串字段兼容）。
+**验证结果**：`pytest tests/mcp/test_query_planner_tools.py -q` → 5 passed；`pytest tests/mcp/{test_query_tools,test_tool_catalog,test_tool_permissions,test_query_planner_tools}.py -q` → 30 passed（catalog/permissions 接受新增工具，无回归）。
+**影响范围**：MCP 新增两工具；不改动现有工具行为。
+**回滚方式**：删除 query_plan/query_flow 及 _ALL_TOOLS 两项、顶层 import 与 test_query_planner_tools.py。
+
+---
+
+## 2026-07-25 query - Task7 CLI 命令 query plan / query flow
+
+**变更原因**：规划器内核化 Phase 4。把内核入口 run_plan/run_flow 暴露为 CLI 命令，供用户/Agent 直接调用。
+**改动点**：
+- `opscli/query/commands/cli.py`：新增 `plan`/`flow` 两个子命令；`_current_email()`（读 CredentialStore().load()["email"]，未登录抛 QueryError 提示 opscli auth login）、`_resolve_request()`（--query-file 优先，含特殊字符请求；空则报错）。沿用现有 `{success, command, data, error}` 包裹与 _emit/_error_payload/typer.Exit(1) 错误风格。plan 支持 --field(可重复)/--top-n/--query-file/--pretty；flow 另有 --result-dir（能力延后，当前忽略）。
+- `entry.py`：run_plan/run_flow 增加 `requested_fields` 形参（透传 build_model_query_plan），供 CLI --field / MCP 使用。
+- 新建测试 `tests/query/test_planner_cli.py`（4 用例：plan 输出含 model_view+透传字段、未登录报错、flow 执行、--query-file 读取）。
+**验证结果**：`pytest tests/query/planner -q` → 25 passed（entry 回归绿）；`pytest tests/query -q` → 120 passed（仅 catalog/intent 2 既有基线失败）；`opscli query plan/flow --help` 冒烟正常。
+**影响范围**：query CLI 新增两命令 + entry additive 形参；不改动现有命令。
+**回滚方式**：删除 plan/flow 命令与 _current_email/_resolve_request、test_planner_cli.py，回退 entry requested_fields。
+
+---
+
+## 2026-07-25 query/planner - Task6 内核入口 entry.py（run_plan/run_flow 组装）
+
+**变更原因**：规划器内核化 Phase 4。提供统一入口，把用户级元数据缓存/适配器/规划器/执行组装起来，供 CLI(Task7) 与 MCP(Task8) 复用。
+**改动点**：
+- 新建 `planner/entry.py`：
+  - `run_plan(request, *, user_email, base_dir, top_n, query_manager)`：metadata_all→MetadataAdapter→build_model_query_plan，注入 refresh_fn（invalidate_metadata_cache + 重取全量）/enum_fn（build_simple_and_run + 抽取字段值）。
+  - `run_flow(...)`：run_plan → planned 数据集查询时经 QueryManager.run_query_template 执行一次；非 planned 原样返回。
+  - `_extract_enum_values`（多版本返回形状兜底 + 去重去空）、`_make_callbacks`。
+  - 加 `query_manager` 注入形参：CLI 缺省新建、MCP 显式凭证/测试用注入（auth 线程接缝）。
+- `manager.py` 新增薄方法 `QueryManager.run_query_template(execution_ref)`：清理 query_template 的 None 占位键后经 client.cli_simple_query 执行。
+- `planner/__init__.py` re-export run_plan/run_flow。
+- 新建测试 `tests/query/planner/test_entry.py`（5 用例：run_plan 模型合同、run_flow 非 planned 透传/planned 执行、模板清 null、枚举提取去重）。
+**用户决策与计划修正**：run_flow 执行段采用「最小执行 + 披露延后」（用户选定）。**但纠正选项中"注入 default_filters"的措辞**：query_plan._build_query_template 填充规则与 R5 明确 default_filters 由服务端权威注入，客户端预填会与服务端日期 AND 合并导致恒 0 行（旧 query_flow→run_query 路径也不注入）。故 run_query_template **不注入** default_filters，仅清 null 后转发。orderBy 本地兜底/加量重查、结果落盘 result_dir 暂未内核化，经 execution_notes + docstring 显式披露。
+**验证结果**：`python -m pytest tests/query/planner/ -q` → 25 passed；顶层 re-export 冒烟 OK；依赖方向 planner 无 import opscli.mcp。
+**影响范围**：新增 entry.py + __init__ re-export；manager.py additive 一个薄方法，不改动现有行为。
+**回滚方式**：删除 entry.py、test_entry.py，回退 __init__ re-export 与 manager.run_query_template。
+
+---
+
+## 2026-07-25 query/planner - Task5 移植 query_plan 主编排 + 3 处 subprocess 换注入回调
+
+**变更原因**：规划器内核化 Phase 4 核心。把 2109 行主编排 query_plan 迁入内核，数据源从 CSV（scoped_dataset_reader + VERSION.json + data_dir 多目录 fallback）改为 MetadataAdapter，3 处 subprocess（skills upgrade / query simple 平台枚举 / query simple 组件枚举）换为注入回调 refresh_fn / enum_fn。
+**改动点**：
+- 新建 `planner/query_plan.py`。import 改包内引用，去 scoped_dataset_reader/argparse/subprocess/os/sys/Path；常量去 SKILL_DIR/DATA_DIR/RULES_PATH，新增 `_load_rules_resource()`（importlib.resources 读 intent_rules.json）。
+- 就绪/升级机制：删除 `_data_state_ready`/`_csv_has_rows`/`_fallback_ready_data_dir`/`_upgrade_marker_path`/`_pid_alive`/`_try_metadata_upgrade`（约167行），替换为 `_ensure_ready_adapter(adapter, refresh_fn)`（datasets/fields 空判定→触发 refresh_fn 重取全量→重建 adapter，返回 (adapter, ready, upgraded)）。`_refresh_contract` 去 version 参数；`_REFRESH_RECOVERY` 恢复命令 `python3 scripts/query_plan.py` → `opscli query plan`。
+- `build_query_plan` 首参改 `adapter`，去 data_dir/rules_path/auto_upgrade，加 `rules=None`（缺省从资源加载）/`refresh_fn=None`；结果去 effective_data_dir，加 `metadata_fingerprint`=adapter.fingerprint()、metadata_source 恒 backend_query_metadata。
+- `build_model_query_plan` 首参改 `adapter`，显式参 refresh_fn/enum_fn/auto_enum/rules/top_n（去 **kwargs）；就绪判定上提至投影入口（保证标签收集与选表同一份就绪元数据）；标签收集 `scoped_dataset_reader.load_dataset_fields/load_datasets` → `adapter.fields_rows()/datasets_rows()`。
+- 枚举：`_auto_enum_platform_values`/`_auto_enum_component_values` 去 subprocess，改 `enum_fn(table_id, field_name, *, limit)->list[str]`；`_resolve_department_filter` 加 enum_fn 形参。
+- 删除 CLI 层 `_parse_args`/`_resolve_query_text`/`_error_next_action`/`main`/`__main__`（约97行，内核 service 直接暴露 build_*）；清理因删 _error_next_action 而孤立的 ERROR_NEXT_ACTIONS/DEFAULT_ERROR_NEXT_ACTION（错误映射属 CLI 层，Task7 自理）与未用 _load_json_object。
+- chart_uuid 分流、_platform_scope、_platform_component_lookup（改吃 adapter）、build_model_contract、时间口径等逐字保留。
+- **计划修正（重要）**：结构地图证实 query_plan.py **完全不 import core.py**，core 的真实消费方是 chart_map/chart_analyze/excel_export（Phase 4 明确范围外的 chart/Excel 支线）。故 core.py **无任何本计划范围内的消费方**，从计划中整体剔除（Task3 曾误将其归为"query_plan 消费"而推迟——该理由作废）。
+- 新建测试 `tests/query/planner/test_query_plan.py`（5 用例：模型合同 v2 顶层键、refresh_fn 触发/失败合同/无回调、enum_fn 平台枚举包装去重）。
+**验证结果**：`python -m pytest tests/query/planner/ -q` → 20 passed；`tests/query/ -q` → 111 passed（仅 catalog/intent 2 既有基线失败，与本改动无关）。AST 未用导入检查仅 annotations（正常）；依赖方向 planner 无 import opscli.mcp。
+**影响范围**：纯新增 planner/query_plan.py，不改动现有模块；旧 Skill 脚本保持可用。
+**回滚方式**：删除 planner/query_plan.py 与 test_query_plan.py。
+
+---
+
+## 2026-07-25 query/planner - Task4 移植字段/权限指导 dataset_guidance（数据源改 adapter）
+
+**变更原因**：规划器内核化 Phase 4。把字段/权限指导迁入内核，数据源从 CSV（scoped_dataset_reader + 文件快照/指纹）改为 MetadataAdapter，指导语义保持不变。
+**改动点**：
+- 新建 `planner/dataset_guidance.py`：`build_guidance` 首参改 `adapter: MetadataAdapter`、第二参改 `dataset_alias: str`（内部构造 lookup 复用 `_find_dataset`）；`_load_target_metadata` 改吃 adapter，一次性取全量行后在内存按 alias 过滤，额外返回 all_fields/all_select_columns 供 _default_filters 回查与空数据集派生；删除 scoped_dataset_reader 依赖与 `from pathlib import Path`。字段打分/公式/快照口径/权限范围/默认条件逻辑逐字保留。
+- `metadata_adapter.py` 新增 `fingerprint()`：对三类同形行做键有序 JSON 稳定 SHA256，替代旧 CSV source_fingerprint 作为 metadata_fingerprint（additive 扩展，不影响 Task2 已有方法）。
+- 新建测试 `tests/query/planner/test_guidance.py`（3 用例：ready 含维度/指标/日期字段/指纹、snapshot_metric→SNAPSHOT_RULE、未知点名→clarify_required）。
+**验证结果**：`python -m pytest tests/query/planner/ -q` → 15 passed（含 Task1-3）。无残留 scoped_dataset_reader/Path 代码引用。
+**影响范围**：纯新增 dataset_guidance.py + adapter additive 方法，不改动现有模块。
+**回滚方式**：删除 dataset_guidance.py 与 test_guidance.py，回退 adapter.fingerprint。
+
+---
+
+## 2026-07-25 query/planner - Task3 移植选表引擎（scoped_metadata_index+agent_query_planner+typed_schema_linking）
+
+**变更原因**：规划器内核化 Phase 4。把选表三件套迁入内核，数据源从 CSV（scoped_dataset_reader）改为 MetadataAdapter，选表语义保持不变。
+**改动点**：
+- 新建 `planner/typed_schema_linking.py`（逐字复制，纯标准库，rules 由调用方传入，无改动）。
+- 新建 `planner/scoped_metadata_index.py`：`build_cards` 签名从 `(data_dir)` 改为 `(adapter: MetadataAdapter)`，改用 `adapter.datasets_rows/fields_rows/select_columns_rows()`，删除 scoped_dataset_reader 快照读取；`_build_cards` 聚合逻辑逐字保留。
+- 新建 `planner/agent_query_planner.py`：import 改为 `from opscli.query.services.planner import ...`；`load_authorized_cards` 签名从 `(data_dir)` 改为 `(adapter)`；删除未用的 `from pathlib import Path`；其余选表打分逻辑逐字保留。
+- 新建测试 `tests/query/planner/test_selection.py`（2 用例：adapter→卡片、销售额诉求→planner_status candidate_ready）。
+- **计划偏离说明**：计划 Task3 File 列表含 `core.py`，但 selection 三件套不引用 core（agent_query_planner 无 import core），core 的消费方是 query_plan 主编排。为守 TDD 纪律（不引入无测试覆盖的代码）+ 铁律20，core.py 推迟到 Task5 与 query_plan 一并迁移并配测试。
+**验证结果**：`python -m pytest tests/query/planner/ -v` → 12 passed（含 Task1/2）。py_compile 全包 OK，无残留 scoped_dataset_reader 代码引用。
+**影响范围**：纯新增，不改动现有模块。
+**回滚方式**：删除三个新文件与 test_selection.py。
+
+---
+
+## 2026-07-25 query/planner - Task2 元数据适配器 query-metadata JSON→行字典
+
+**变更原因**：规划器内核化 Phase 4 核心步骤。取数规划器数据源从 Skill data/*.csv 改为后端 query-metadata（经用户级元数据缓存），需一个适配器把 payload 映射为与旧 scoped_dataset_reader 同形的行字典，从而下游选表/字段指导逻辑近乎逐字移植。
+**改动点**：
+- 新建 `opscli/query/services/planner/metadata_adapter.py`：`MetadataAdapter(payload)` 提供 `datasets_rows()`（同形 datasets.csv，派生 select_column_count/names）、`fields_rows()`（同形 dataset_fields.csv，归一 has_formula_config/snapshot_metric 为字符串、经去重合并）、`select_columns_rows()`（展平内嵌 select_columns 补 current_dataset_alias）。
+- 从 scoped_dataset_reader 逐字移植 `parse_filter_config` / `_merge_duplicate_field_rows` / `_mergeable_rows` / `_field_semantic_signature` / `_contains_cjk` / `_FIELD_SEMANTIC_KEYS` 进适配器（自包含）。parse_filter_config 增补兼容后端已反序列化为 dict 的情形。
+- 职责边界：只做数据整形，不搬 CSV 完整性校验（数据源由后端+metadata_cache 保证，Task 9 对拍兜底）。
+- 新建测试 `tests/query/planner/test_metadata_adapter.py`（4 用例：datasets 形态/fields 保列/select_columns 展平/双注册合并）。
+**验证结果**：`python -m pytest tests/query/planner/test_metadata_adapter.py -v` → 4 passed。
+**影响范围**：纯新增，不改动现有模块。
+**回滚方式**：删除 metadata_adapter.py 与 test_metadata_adapter.py。
+
+---
+
+## 2026-07-25 query/planner - Task1 移植纯逻辑单元与静态资源到内核
+
+**变更原因**：规划器内核化 Phase 4 第一步。把 ops-dataset-query Skill 规划器中零后端依赖的纯逻辑单元与静态资源迁入 opscli 内核，为后续选表/字段指导/主编排移植打底。
+**改动点**：
+- 新建包 `opscli/query/services/planner/`（`__init__.py` 声明依赖方向约束）。
+- 从 `scripts/` 逐字复制 `time_scope.py`（时间口径解析）、`plan_integrity.py`（合同 HMAC 摘要）、`field_semantics.py`（中文业务说法→字段名映射）——三者仅依赖标准库、无跨脚本 import，无需改 import。
+- 从 `data/` 复制 `intent_rules.json`、`query_plan.schema.json` 到 `planner/resources/`，经 importlib.resources 读取。
+- `pyproject.toml` 新增 `[tool.setuptools.package-data]` 声明 `opscli.query.services.planner.resources/*.json`，确保随 wheel 打包。
+- 新建测试 `tests/query/planner/test_pure_units.py`（6 用例）。
+**验证结果**：`python -m pytest tests/query/planner/test_pure_units.py -v` → 6 passed。
+**影响范围**：纯新增，不改动任何现有模块；旧 Skill 脚本保持原样可用。
+**回滚方式**：删除 `opscli/query/services/planner/` 与 `tests/query/planner/`，还原 pyproject.toml package-data 段。
+
+---
+
 ## 2026-07-24 skills - ops-dataset-query QUERY_SPEC 补显式授权说明
 
 **变更原因**：MCP 已支持显式授权调用（query_* 工具接受 session_id/jwt，新增 auth_me），但 ops-dataset-query 的 MCP 契约 QUERY_SPEC.md §1 仅把认证描述为"登录/已认证账号"，未说明显式凭证也可确立当前账号，也未提 auth_me 核验身份。

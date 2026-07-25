@@ -1,0 +1,57 @@
+{
+  "request": "查询各仓库库存量 昨天",
+  "new": {
+    "status": "clarify_required",
+    "query_mode": "dataset_query",
+    "dataset_name_zh": "即时综合数据集",
+    "dimensions": [],
+    "metrics": [],
+    "platform_filter_state": "not_requested",
+    "next_action": "ask_user_for_default_dataset_confirmation",
+    "clarification_reason_codes": [
+      "default_dataset_confirmation"
+    ],
+    "exec_dataset_alias": "ds_d35ac6f3910c",
+    "exec_table_id": "1",
+    "exec_dim_fields": [
+      null,
+      null,
+      null
+    ],
+    "exec_metric_fields": [
+      null,
+      null,
+      null
+    ],
+    "time_scope_start": "2026-07-24",
+    "time_scope_end": "2026-07-24",
+    "time_comparison_type": null
+  },
+  "old": {
+    "status": "clarify_required",
+    "query_mode": "dataset_query",
+    "dataset_name_zh": "即时综合数据集",
+    "dimensions": [],
+    "metrics": [],
+    "platform_filter_state": "not_requested",
+    "next_action": "ask_user_for_default_dataset_confirmation",
+    "clarification_reason_codes": [
+      "default_dataset_confirmation"
+    ],
+    "exec_dataset_alias": "ds_d35ac6f3910c",
+    "exec_table_id": "1",
+    "exec_dim_fields": [
+      null,
+      null,
+      null
+    ],
+    "exec_metric_fields": [
+      null,
+      null,
+      null
+    ],
+    "time_scope_start": "2026-07-24",
+    "time_scope_end": "2026-07-24",
+    "time_comparison_type": null
+  }
+}
