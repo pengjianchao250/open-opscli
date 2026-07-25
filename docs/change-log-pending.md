@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-25 shared - 抽取可复用 file_lock 跨进程文件锁
+
+**变更原因**：从 `auth/core/token_manager.py` 内联的 fcntl.flock 逻辑抽取为独立 context manager，供元数据缓存等需要跨进程串行化刷新的场景复用。
+**改动点**：新增 `opscli/shared/file_lock.py`（跨进程独占文件锁工具，POSIX 用 fcntl、Windows 降级为空操作）；新增 `tests/shared/test_file_lock.py`（2 个单测：基础获取/释放、顺序重入）。纯新增，无改动现存代码。
+**验证结果**：`pytest tests/shared/test_file_lock.py -v` 2 passed；两个测试分别验证锁上下文进入/退出、父目录自动创建、以及同路径先后两次获取锁成功（释放后可再获取）。
+**影响范围**：新增工具模块，无副作用；后续任务 4/5 在此基础上使用。
+**回滚方式**：删除 `opscli/shared/file_lock.py` 和 `tests/shared/test_file_lock.py` 两个文件。
+
+---
+
 ## 2026-07-24 docs - 显式授权 E2E 验收 + "环境须一致"运维提示
 
 **变更原因**：对真实后端完成显式授权端到端验收，并沉淀验收中发现的关键运维事实（显式凭证须发往签发它的同一环境）。
