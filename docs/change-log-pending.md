@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-24 docs - 显式授权 E2E 验收 + "环境须一致"运维提示
+
+**变更原因**：对真实后端完成显式授权端到端验收，并沉淀验收中发现的关键运维事实（显式凭证须发往签发它的同一环境）。
+**改动点**：`docs/guide/认证模块使用指南.md` 新增"显式授权（外部凭证）"章节（全局参数说明、`auth me` 命令、环境一致警示）；`docs/design/显式授权中间件设计.md` 新增"九、运维注意"章节（含 QA 验收结果）。纯文档，无代码改动。
+**验证结果**：QA 环境（`ops.api.qa.aukeyit.com`，user 59）真实后端四路径验收全部通过——CLI `auth me` 200、MCP `auth_me` 200、CLI `query metadata` source=remote/44 数据集、仅 session 经 cli-token 换取 200。此前对生产 xenkee.com 发 QA token 的失败均为环境错配（非缺陷）。
+**影响范围**：仅文档。
+**回滚方式**：还原上述两个 md 文件本次改动。
+
+---
+
 ## 2026-07-24 mcp/auth - MCP 侧显式授权对等：auth_me 工具 + polaris_jwt 参数
 
 **变更原因**：CLI 已支持显式授权（`--ops-jwt-token`/`--polaris-jwt-token`/`--session-id` + `auth me`），需在 MCP 侧补齐对等能力。MCP 业务凭证层本已支持逐工具 `session_id`/`jwt`，但缺 `auth_me` 工具、且单 jwt 写死当 ops 用（无法显式传 polaris JWT）。
