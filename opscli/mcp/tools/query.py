@@ -83,6 +83,7 @@ async def query_metadata(
     dataset: str | None = None,
     table_id: int | None = None,
     skills_dir: str | None = None,
+    include_all_fields: bool = False,
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
@@ -96,22 +97,55 @@ async def query_metadata(
     指定 dataset 或 table_id 时，优先从远端拉取最新字段信息；
     远端失败则回退到本地缓存。未指定任何参数时返回本地数据集列表。
 
+    `include_all_fields=True` 时改走**全量元数据**（一次返回全部授权数据集的全部字段，
+    经用户级缓存，忽略 dataset/table_id/skills_dir）——用于批量索引/诊断后端是否支持
+    include_all_fields（Phase 0）：返回 `field_count` 非 0 表示后端已支持，为 0 表示未上线。
+
     【典型工作流】
     1. 不传任何参数 → 返回本地全部数据集列表，找到目标数据集名称或 table_id
     2. 传入 dataset 或 table_id → 返回该数据集的完整维度/指标字段列表
     3. 根据返回的字段信息，再调用 query_simple 执行实际查询
 
     Args:
-        dataset:    数据集别名（与 table_id 二选一）
-        table_id:   数据表 ID（与 dataset 二选一）
-        skills_dir: 可选，自定义 Skills 目录（用于读取本地缓存 metadata）
-        session_id: 可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
-        jwt:        可选，已有 JWT（为空则自动加载本地缓存的）
+        dataset:            数据集别名（与 table_id 二选一）
+        table_id:           数据表 ID（与 dataset 二选一）
+        skills_dir:         可选，自定义 Skills 目录（用于读取本地缓存 metadata）
+        include_all_fields: 为 True 时返回全部数据集全部字段（全量元数据，经缓存）
+        session_id:         可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
+        jwt:                可选，已有 JWT（为空则自动加载本地缓存的）
     """
-    from opscli.mcp.tools.helpers import _get_auth_pair
+    from opscli.mcp.tools.helpers import (
+        _get_auth_pair,
+        _get_authenticated_user_email,
+        _get_credential_dir,
+    )
 
     sid, jw = _get_auth_pair("ops", session_id, jwt)
     try:
+        if include_all_fields:
+            # 全量元数据需已验证账号（缓存隔离维度）与隔离目录，同 query_plan 身份解析
+            email = _get_authenticated_user_email()
+            if not email:
+                return _err(
+                    ValueError(
+                        "include_all_fields 需已验证账号：请先 auth_mcp_login 登录，或传入有效凭证"
+                    )
+                )
+            result = _query_manager(jwt=jw, session_id=sid).metadata_all(
+                user_email=email, base_dir=_get_credential_dir()
+            )
+            datasets = result.payload.get("datasets") or []
+            fields = result.payload.get("fields") or []
+            return _ok(
+                {
+                    "datasets": datasets,
+                    "fields": fields,
+                    "dataset_count": len(datasets),
+                    "field_count": len(fields),
+                    "stale": result.stale,
+                    "from_cache": result.from_cache,
+                }
+            )
         result = _query_manager(jwt=jw, session_id=sid).metadata(
             dataset_alias=dataset,
             table_id=table_id,

@@ -263,11 +263,38 @@ def metadata(
     dataset: str | None = typer.Option(None, "--dataset", help="dataset_alias"),
     table_id: int | None = typer.Option(None, "--table-id", help="table_id"),
     skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 目录"),
+    all_fields: bool = typer.Option(
+        False, "--all-fields",
+        help="拉取全部数据集全部字段（全量元数据 include_all_fields，经用户级缓存；忽略 --dataset/--table-id）",
+    ),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """读取指定数据集的 query metadata，不传任何参数时默认获取所有数据集"""
     manager = QueryManager()
     try:
+        # 全量元数据：一次返回全部授权数据集的全部字段（诊断后端 include_all_fields 支持）
+        if all_fields:
+            email = _current_email()
+            result = manager.metadata_all(user_email=email)
+            datasets = result.payload.get("datasets") or []
+            fields = result.payload.get("fields") or []
+            payload = {
+                "success": True,
+                "command": "query metadata --all-fields",
+                "data": {
+                    "datasets": datasets,
+                    "fields": fields,
+                    "dataset_count": len(datasets),
+                    "field_count": len(fields),
+                    "stale": result.stale,
+                    "from_cache": result.from_cache,
+                },
+                "error": None,
+            }
+            if not fields:
+                payload["hint"] = "field_count=0：当前后端未返回全量字段，可能是取数后端未上线 include_all_fields（Phase 0）"
+            _emit(payload, pretty)
+            return
         result = manager.metadata(dataset_alias=dataset, table_id=table_id, skills_dir=skills_dir)
         payload = {
             "success": True,

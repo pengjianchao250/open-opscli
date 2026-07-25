@@ -1,5 +1,18 @@
 # 待归档变更记录
 
+## 2026-07-26 query/mcp - query metadata 新增全量字段入口（CLI --all-fields / MCP include_all_fields）
+
+**变更原因**：metadata_all（include_all_fields 全量元数据）此前只被规划器 query plan/flow 内部调用，无独立入口直接触发/查看，不便验证或诊断后端是否支持 include_all_fields（Phase 0）。补一个直连入口。
+**改动点**：
+- **MCP** `opscli/mcp/tools/query.py`：`query_metadata` 新增 `include_all_fields: bool=False` 参数；为 True 时走 `metadata_all`（身份经 _get_authenticated_user_email + _get_credential_dir，同 query_plan），返回 `{datasets, fields, dataset_count, field_count, stale, from_cache}`；无已验证账号则失败闭合。忽略 dataset/table_id/skills_dir。
+- **CLI** `opscli/query/commands/cli.py`：`query metadata` 新增 `--all-fields` 标志；走 `metadata_all`（`_current_email` 读登录账号），输出 dataset_count/field_count，field_count=0 时给"后端可能未上线 include_all_fields"提示。
+- 新增测试：CLI test_metadata_all_fields_command、MCP test_query_metadata_include_all_fields / _requires_email。
+**验证结果**：新增 3 测试通过；`pytest tests/query/test_planner_cli tests/query/test_cli tests/mcp/test_query_planner_tools tests/mcp/test_query_tools` → 31 passed（仅 catalog/intent 2 既有基线）。真实后端 `opscli query metadata --all-fields` → dataset_count=44 field_count=1739。
+**影响范围**：query metadata 的 CLI/MCP 入口新增可选参数（默认 False，不改变既有行为）。
+**回滚方式**：还原两处新增参数分支与 3 个测试。
+
+---
+
 ## 2026-07-25 skills - QUERY_SPEC 补字段标识与同名双注册消歧指导
 
 **变更原因**：同名双注册字段消歧修复（5405517）后，query_simple 的字段标识用法有了明确落地口径，需在 MCP 契约中给 Agent 明确指导，避免其误用 global_alias 或为同名字段困惑。

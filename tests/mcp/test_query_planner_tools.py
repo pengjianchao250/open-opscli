@@ -82,6 +82,35 @@ def test_planner_tools_registered():
     assert "query_flow" in names
 
 
+def test_query_metadata_include_all_fields(monkeypatch):
+    """query_metadata(include_all_fields=True)：走 metadata_all，返回全量字段计数。"""
+    _patch_identity(monkeypatch)
+
+    class _R:
+        payload = {"datasets": [{"table_id": 1}], "fields": [{"field_name": "x"}, {"field_name": "y"}]}
+        stale = False
+        from_cache = True
+
+    class _QM:
+        def metadata_all(self, *, user_email, base_dir=None):
+            return _R()
+
+    monkeypatch.setattr(query_tools, "_query_manager", lambda jwt=None, session_id=None: _QM())
+    result = _run(query_tools.query_metadata(include_all_fields=True))
+    assert result["success"] is True
+    assert result["data"]["field_count"] == 2
+    assert result["data"]["dataset_count"] == 1
+    assert result["data"]["from_cache"] is True
+
+
+def test_query_metadata_all_fields_requires_email(monkeypatch):
+    """include_all_fields 无已验证账号 → 失败闭合。"""
+    monkeypatch.setattr(helpers, "_get_authenticated_user_email", lambda: None)
+    monkeypatch.setattr(helpers, "_get_auth_pair", lambda system, session_id, jwt: (None, None))
+    result = _run(query_tools.query_metadata(include_all_fields=True))
+    assert result["success"] is False
+
+
 def test_requested_fields_accepts_json_string(monkeypatch):
     """requested_fields 以 JSON 字符串传入时兼容解析。"""
     _patch_identity(monkeypatch)
