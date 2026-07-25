@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-24 skills - ops-dataset-query QUERY_SPEC 补显式授权说明
+
+**变更原因**：MCP 已支持显式授权调用（query_* 工具接受 session_id/jwt，新增 auth_me），但 ops-dataset-query 的 MCP 契约 QUERY_SPEC.md §1 仅把认证描述为"登录/已认证账号"，未说明显式凭证也可确立当前账号，也未提 auth_me 核验身份。
+**改动点**：`opscli/skills/templates/ops-dataset-query/QUERY_SPEC.md` §1「授权元数据」新增两条——「认证来源（两种，等价）」说明 session_id/jwt 显式传入优先、且归属同一账号不跨用；「身份核验（可选）」说明 auth_me 核验有效身份 + 显式凭证须与后端环境一致（否则 407 按认证失败处理）。仅描述 query 工具实际存在的 session_id/jwt（不含 polaris_jwt，数据查询走 ops）。保留原有"唯一权威来源/失败阻断/MCP-only"约束不变。
+**验证结果**：核对 query.py 确认 query_metadata/query_simple 均有 session_id/jwt 参数、无 polaris_jwt，描述与实现一致。纯文档，无代码改动。
+**影响范围**：仅 ops-dataset-query 的 MCP 契约文档。未 bump VERSION.json（远端升级分发需服务端协同，另行处理）。
+**回滚方式**：还原 QUERY_SPEC.md §1 本次改动。
+
+---
+
 ## 2026-07-25 shared - 抽取可复用 file_lock 跨进程文件锁
 
 **变更原因**：从 `auth/core/token_manager.py` 内联的 fcntl.flock 逻辑抽取为独立 context manager，供元数据缓存等需要跨进程串行化刷新的场景复用。
@@ -4080,4 +4090,13 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **验证结果**：本地以 `OPSCLI_SKILL_PROFILE=python-release python -m build --wheel`（完整 Cython 生产构建）重构 wheel，解包核对：模板 scripts.py 由修复前的 0 个恢复为 34 个；业务源码保护不变（保留 58 个白名单源 + 242 个 `.so`）；模板总文件 137（修复前 103）。对照实验：仅本改动即让 scripts 从 0→34。
 **影响范围**：仅正式 Cython wheel 的打包内容（补回被误删的模板脚本）；sdist、SKIP_CYTHON 纯 Python wheel、editable 安装不受影响。所有历史已发布 wheel 均缺模板脚本，需重新发版。
 **回滚方式**：删除 `pyproject.toml` 中新增的 `exclude = ["opscli.skills.templates*"]` 一行即可。
+---
+
+## 2026-07-25 query - 新增用户级元数据缓存 MetadataCache
+
+**变更原因**：A 方案规划器内核化需要按用户缓存全量元数据，避免 CLI/MCP 每次向后端拉全量数据（实测 ~1.14MB）。
+**改动点**：新增 `opscli/query/services/metadata_cache.py`（MetadataCache 两层缓存 + 信封/TTL 1h/email 哈希命名 + 双层锁防惊群 + stale 兜底 + 模块级池）；新增 `tests/query/test_metadata_cache.py`。
+**验证结果**：`pytest tests/query/test_metadata_cache.py` 13/13 通过。
+**影响范围**：新增模块，未改动现有取数路径；等待 Task 7/8 接入。
+**回滚方式**：删除 metadata_cache.py 与对应测试。
 ---
