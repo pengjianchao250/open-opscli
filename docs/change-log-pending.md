@@ -1,5 +1,18 @@
 # 待归档变更记录
 
+## 2026-07-25 query - Task7 CLI 命令 query plan / query flow
+
+**变更原因**：规划器内核化 Phase 4。把内核入口 run_plan/run_flow 暴露为 CLI 命令，供用户/Agent 直接调用。
+**改动点**：
+- `opscli/query/commands/cli.py`：新增 `plan`/`flow` 两个子命令；`_current_email()`（读 CredentialStore().load()["email"]，未登录抛 QueryError 提示 opscli auth login）、`_resolve_request()`（--query-file 优先，含特殊字符请求；空则报错）。沿用现有 `{success, command, data, error}` 包裹与 _emit/_error_payload/typer.Exit(1) 错误风格。plan 支持 --field(可重复)/--top-n/--query-file/--pretty；flow 另有 --result-dir（能力延后，当前忽略）。
+- `entry.py`：run_plan/run_flow 增加 `requested_fields` 形参（透传 build_model_query_plan），供 CLI --field / MCP 使用。
+- 新建测试 `tests/query/test_planner_cli.py`（4 用例：plan 输出含 model_view+透传字段、未登录报错、flow 执行、--query-file 读取）。
+**验证结果**：`pytest tests/query/planner -q` → 25 passed（entry 回归绿）；`pytest tests/query -q` → 120 passed（仅 catalog/intent 2 既有基线失败）；`opscli query plan/flow --help` 冒烟正常。
+**影响范围**：query CLI 新增两命令 + entry additive 形参；不改动现有命令。
+**回滚方式**：删除 plan/flow 命令与 _current_email/_resolve_request、test_planner_cli.py，回退 entry requested_fields。
+
+---
+
 ## 2026-07-25 query/planner - Task6 内核入口 entry.py（run_plan/run_flow 组装）
 
 **变更原因**：规划器内核化 Phase 4。提供统一入口，把用户级元数据缓存/适配器/规划器/执行组装起来，供 CLI(Task7) 与 MCP(Task8) 复用。

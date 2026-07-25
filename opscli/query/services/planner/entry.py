@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +85,7 @@ def run_plan(
     *,
     user_email: str,
     base_dir: Path | None = None,
+    requested_fields: Sequence[str] = (),
     top_n: int | None = None,
     query_manager: QueryManager | None = None,
 ) -> dict:
@@ -93,6 +95,7 @@ def run_plan(
         request: 用户查询原文。
         user_email: 当前账号邮箱（元数据缓存隔离维度，由 CLI/MCP 注入）。
         base_dir: 缓存根目录；CLI 默认 CONFIG_DIR，MCP 传隔离目录。
+        requested_fields: 用户点名字段（CLI --field / MCP 传入）。
         top_n: 选表候选上限（缺省用规划器默认）。
         query_manager: 可注入的 QueryManager（MCP 显式凭证模式/测试用）；缺省新建。
     """
@@ -105,7 +108,12 @@ def run_plan(
     if top_n is not None:
         kwargs["top_n"] = top_n
     return query_plan.build_model_query_plan(
-        adapter, request, refresh_fn=refresh_fn, enum_fn=enum_fn, **kwargs
+        adapter,
+        request,
+        requested_fields=requested_fields,
+        refresh_fn=refresh_fn,
+        enum_fn=enum_fn,
+        **kwargs,
     )
 
 
@@ -114,6 +122,7 @@ def run_flow(
     *,
     user_email: str,
     base_dir: Path | None = None,
+    requested_fields: Sequence[str] = (),
     result_dir: Path | None = None,
     query_manager: QueryManager | None = None,
 ) -> dict:
@@ -128,7 +137,11 @@ def run_flow(
     """
     qm = query_manager or QueryManager()
     contract = run_plan(
-        request, user_email=user_email, base_dir=base_dir, query_manager=qm
+        request,
+        user_email=user_email,
+        base_dir=base_dir,
+        requested_fields=requested_fields,
+        query_manager=qm,
     )
     if contract.get("query_mode") != "dataset_query" or contract.get("status") != "planned":
         return contract
