@@ -1,5 +1,24 @@
 # 待归档变更记录
 
+## 2026-07-25 query/planner - Task6 内核入口 entry.py（run_plan/run_flow 组装）
+
+**变更原因**：规划器内核化 Phase 4。提供统一入口，把用户级元数据缓存/适配器/规划器/执行组装起来，供 CLI(Task7) 与 MCP(Task8) 复用。
+**改动点**：
+- 新建 `planner/entry.py`：
+  - `run_plan(request, *, user_email, base_dir, top_n, query_manager)`：metadata_all→MetadataAdapter→build_model_query_plan，注入 refresh_fn（invalidate_metadata_cache + 重取全量）/enum_fn（build_simple_and_run + 抽取字段值）。
+  - `run_flow(...)`：run_plan → planned 数据集查询时经 QueryManager.run_query_template 执行一次；非 planned 原样返回。
+  - `_extract_enum_values`（多版本返回形状兜底 + 去重去空）、`_make_callbacks`。
+  - 加 `query_manager` 注入形参：CLI 缺省新建、MCP 显式凭证/测试用注入（auth 线程接缝）。
+- `manager.py` 新增薄方法 `QueryManager.run_query_template(execution_ref)`：清理 query_template 的 None 占位键后经 client.cli_simple_query 执行。
+- `planner/__init__.py` re-export run_plan/run_flow。
+- 新建测试 `tests/query/planner/test_entry.py`（5 用例：run_plan 模型合同、run_flow 非 planned 透传/planned 执行、模板清 null、枚举提取去重）。
+**用户决策与计划修正**：run_flow 执行段采用「最小执行 + 披露延后」（用户选定）。**但纠正选项中"注入 default_filters"的措辞**：query_plan._build_query_template 填充规则与 R5 明确 default_filters 由服务端权威注入，客户端预填会与服务端日期 AND 合并导致恒 0 行（旧 query_flow→run_query 路径也不注入）。故 run_query_template **不注入** default_filters，仅清 null 后转发。orderBy 本地兜底/加量重查、结果落盘 result_dir 暂未内核化，经 execution_notes + docstring 显式披露。
+**验证结果**：`python -m pytest tests/query/planner/ -q` → 25 passed；顶层 re-export 冒烟 OK；依赖方向 planner 无 import opscli.mcp。
+**影响范围**：新增 entry.py + __init__ re-export；manager.py additive 一个薄方法，不改动现有行为。
+**回滚方式**：删除 entry.py、test_entry.py，回退 __init__ re-export 与 manager.run_query_template。
+
+---
+
 ## 2026-07-25 query/planner - Task5 移植 query_plan 主编排 + 3 处 subprocess 换注入回调
 
 **变更原因**：规划器内核化 Phase 4 核心。把 2109 行主编排 query_plan 迁入内核，数据源从 CSV（scoped_dataset_reader + VERSION.json + data_dir 多目录 fallback）改为 MetadataAdapter，3 处 subprocess（skills upgrade / query simple 平台枚举 / query simple 组件枚举）换为注入回调 refresh_fn / enum_fn。

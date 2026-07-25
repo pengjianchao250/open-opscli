@@ -408,6 +408,33 @@ class QueryManager:
             "result": query_result,
         }
 
+    def run_query_template(self, execution_ref: dict) -> dict:
+        """按规划器 execution_ref.query_template 直接执行查询（一体化 run_flow 用）。
+
+        query_template 已是就绪的 simple query payload 骨架（tableId/dimensions/
+        metrics/filters/dataComparison，以及未填的 orderBy/limit 占位）。执行前删除
+        值为 None 的占位键。
+
+        注意：数据集默认条件（default_filters）由服务端在查询时权威注入，
+        禁止在客户端预填——客户端预填会与服务端解析后的真实日期 AND 合并导致恒 0 行
+        （见 query_plan._build_query_template 的填充规则与 R5 说明）。
+
+        Args:
+            execution_ref: 规划合同的 execution_ref，须含 query_template。
+
+        Returns:
+            服务端查询结果 dict。
+
+        Raises:
+            InvalidPayloadError: execution_ref 缺少可执行的 query_template。
+        """
+        template = (execution_ref or {}).get("query_template")
+        if not isinstance(template, dict):
+            raise InvalidPayloadError("execution_ref 缺少 query_template，无法执行")
+        # 删除 None 占位键（orderBy/limit 未填时不下发），其余键原样转发
+        payload = {key: value for key, value in template.items() if value is not None}
+        return self.client.cli_simple_query(payload)
+
     def _validate_simple_fields(
         self,
         fields: list[dict],

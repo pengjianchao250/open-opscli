@@ -7,3 +7,7 @@ run_plan / run_flow（见 entry.py，后续任务补齐）。
 依赖方向约束（铁律2）：本包只依赖 opscli.query.* + opscli.config +
 opscli.shared + 标准库，禁止 import opscli.mcp。
 """
+
+from opscli.query.services.planner.entry import run_flow, run_plan
+
+__all__ = ["run_plan", "run_flow"]

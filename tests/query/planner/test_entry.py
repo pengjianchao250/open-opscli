@@ -1,0 +1,146 @@
+"""规划器内核入口 entry：组装缓存/适配器/规划器/执行。
+
+覆盖 run_plan（metadata_all→adapter→build_model_query_plan）、run_flow（planned 时
+经 QueryManager.run_query_template 执行一次），以及枚举值提取与模板 null 清理。
+"""
+
+from pathlib import Path
+
+import httpx
+import respx
+
+from opscli.query.services.manager import QueryManager
+from opscli.query.services.planner import entry
+
+
+def _sales_metadata():
+    """后端 query-metadata 全量返回的 data 段（销售数据集）。"""
+    return {
+        "datasets": [
+            {
+                "table_id": 100,
+                "dataset_alias": "ds_sales",
+                "dataset_name": "即时综合数据集",
+                "dataset_category": "normal",
+                "description": "即时综合数据集",
+                "remarks": "销售 库存 广告",
+                "select_columns": [],
+            }
+        ],
+        "fields": [
+            {
+                "table_id": 100,
+                "dataset_alias": "ds_sales",
+                "dataset_name": "即时综合数据集",
+                "field_name": "stat_date",
+                "verbose_name": "统计日期",
+                "global_alias": "f_d",
+                "field_type": "dimension",
+                "has_formula_config": 0,
+            },
+            {
+                "table_id": 100,
+                "dataset_alias": "ds_sales",
+                "dataset_name": "即时综合数据集",
+                "field_name": "sales_amount",
+                "verbose_name": "销售额",
+                "global_alias": "f_sa",
+                "field_type": "metric",
+                "summary_expression": "sum(sales_amount)",
+                "detail_expression": "sales_amount",
+                "has_formula_config": 1,
+            },
+        ],
+    }
+
+
+@respx.mock
+def test_run_plan_returns_model_contract(tmp_path: Path):
+    """run_plan：拉全量元数据→适配→规划，产出模型合同 v2。"""
+    respx.get(url__regex=r".*/datasets/query-metadata.*").mock(
+        return_value=httpx.Response(200, json={"code": 0, "data": _sales_metadata()})
+    )
+    qm = QueryManager()
+    qm.client._get_auth = lambda system: ({}, {})  # type: ignore[method-assign]
+    contract = entry.run_plan(
+        "查询销售额 近7天", user_email="u@x.com", base_dir=tmp_path, query_manager=qm
+    )
+    assert contract["contract"] == "query_plan_model_contract_v2"
+    assert contract["data_state"] == "ready"
+
+
+def test_run_flow_passthrough_when_not_planned(monkeypatch):
+    """run_flow：非 planned 合同原样返回，不触发执行。"""
+    clarify = {
+        "contract": "query_plan_model_contract_v2",
+        "query_mode": "dataset_query",
+        "status": "clarify_required",
+    }
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: clarify)
+    out = entry.run_flow("随便", user_email="u@x.com")
+    assert out is clarify
+
+
+def test_run_flow_executes_template_when_planned(monkeypatch):
+    """run_flow：planned 合同经 run_query_template 执行一次并回灌结果 + 披露延后项。"""
+    planned = {
+        "contract": "query_plan_model_contract_v2",
+        "query_mode": "dataset_query",
+        "status": "planned",
+        "execution_ref": {
+            "query_template": {"tableId": 1, "dimensions": [{"field": "x", "alias": "x"}]}
+        },
+    }
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: planned)
+
+    class _FakeQM:
+        def run_query_template(self, execution_ref):
+            return {"data": {"result": {"data": [{"x": 1}]}}}
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_FakeQM())
+    assert out["result"]["data"]["result"]["data"] == [{"x": 1}]
+    # 披露：本地兜底/加量重查/结果落盘暂未内核化
+    assert out["execution_notes"]
+
+
+def test_run_query_template_drops_null_keys():
+    """QueryManager.run_query_template 删除 None 占位键（orderBy/limit）后转发。"""
+    captured: dict = {}
+
+    def _fake_post(payload):
+        captured["payload"] = payload
+        return {"data": {"result": {"data": []}}}
+
+    qm = QueryManager()
+    qm.client.cli_simple_query = _fake_post  # type: ignore[method-assign]
+    ref = {
+        "query_template": {
+            "tableId": 1,
+            "dimensions": [{"field": "x", "alias": "x"}],
+            "metrics": [],
+            "filters": [],
+            "orderBy": None,
+            "limit": None,
+        }
+    }
+    qm.run_query_template(ref)
+    assert "orderBy" not in captured["payload"]
+    assert "limit" not in captured["payload"]
+    assert captured["payload"]["tableId"] == 1
+
+
+def test_extract_enum_values_dedup():
+    """枚举值提取：多版本返回形状兜底 + 去重 + 去空。"""
+    result = {
+        "data": {
+            "result": {
+                "data": [
+                    {"platform_name": "Amazon"},
+                    {"platform_name": "Amazon"},
+                    {"platform_name": ""},
+                    {"platform_name": "Walmart"},
+                ]
+            }
+        }
+    }
+    assert entry._extract_enum_values(result, "platform_name") == ["Amazon", "Walmart"]
