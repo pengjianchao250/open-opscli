@@ -1,0 +1,45 @@
+{
+  "request": "查询销售额 本月 环比",
+  "new": {
+    "status": "planned",
+    "query_mode": "dataset_query",
+    "dataset_name_zh": "即时综合数据集",
+    "dimensions": [],
+    "metrics": [
+      "销售额"
+    ],
+    "platform_filter_state": "not_requested",
+    "next_action": "construct_query",
+    "clarification_reason_codes": [],
+    "exec_dataset_alias": "ds_d35ac6f3910c",
+    "exec_table_id": "1",
+    "exec_dim_fields": [],
+    "exec_metric_fields": [
+      null
+    ],
+    "time_scope_start": "2026-07-01",
+    "time_scope_end": "2026-07-31",
+    "time_comparison_type": "period_over_period"
+  },
+  "old": {
+    "status": "planned",
+    "query_mode": "dataset_query",
+    "dataset_name_zh": "即时综合数据集",
+    "dimensions": [],
+    "metrics": [
+      "销售额"
+    ],
+    "platform_filter_state": "not_requested",
+    "next_action": "construct_query",
+    "clarification_reason_codes": [],
+    "exec_dataset_alias": "ds_d35ac6f3910c",
+    "exec_table_id": "1",
+    "exec_dim_fields": [],
+    "exec_metric_fields": [
+      null
+    ],
+    "time_scope_start": "2026-07-01",
+    "time_scope_end": "2026-07-31",
+    "time_comparison_type": "period_over_period"
+  }
+}

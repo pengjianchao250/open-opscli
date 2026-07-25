@@ -130,7 +130,7 @@ def test_run_query_template_drops_null_keys():
 
 
 def test_extract_enum_values_dedup():
-    """枚举值提取：多版本返回形状兜底 + 去重 + 去空。"""
+    """枚举值提取：多版本嵌套形状兜底 + 去重 + 去空。"""
     result = {
         "data": {
             "result": {
@@ -144,3 +144,17 @@ def test_extract_enum_values_dedup():
         }
     }
     assert entry._extract_enum_values(result, "platform_name") == ["Amazon", "Walmart"]
+
+
+def test_extract_enum_values_from_raw_simple_result():
+    """build_simple_and_run().result 的真实形状：行直接在 result['data']（一级）。
+
+    回归对拍发现：旧实现只兜底多级嵌套（data.result.data），漏了一级 data 形状，
+    导致平台/组件权限枚举恒返回空 → 二段收敛失效。锁定真实形状。
+    """
+    result = {
+        "success": True,
+        "data": [{"platform_name": "Temu"}, {"platform_name": "Temu"}],
+        "meta": {"rowCount": 2},
+    }
+    assert entry._extract_enum_values(result, "platform_name") == ["Temu"]

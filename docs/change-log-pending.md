@@ -1,5 +1,20 @@
 # 待归档变更记录
 
+## 2026-07-25 query/planner - Task9 回归对拍（安全网）+ 修复 enum 结果形状真实回归
+
+**变更原因**：规划器内核化 Phase 4 安全网。对同一批代表性请求对拍迁移前后规划合同关键字段，确认未改变规划语义；对拍过程捕获并修复一处真实回归。
+**改动点**：
+- 新建对拍工具 `scripts/regression/planner_parity.py`：对 6 个代表性请求（明确数据集/相对时间、需澄清、平台枚举、环比、快照指标、chart_uuid）分别运行旧 Skill 规划器（scripts/query_plan.py 经 ~/.claude/skills CSV fallback）与新内核规划器（opscli query plan），比对 model_view+execution_ref 关键字段，落盘黄金样例。
+- 新建黄金样例 `tests/query/planner/golden/*.json`（6 个）。
+- 新建报告 `docs/analysis/规划器内核化对拍报告.md`。
+- **修复真实回归**：`entry._extract_enum_values` 只兜底多级嵌套形状（data.result.data），漏了 build_simple_and_run().result 的真实一级形状 `{success, data:[行], meta}`（行直接在 result["data"]），导致平台/组件权限枚举 enum_fn 恒返回空 → 二段收敛静默失效。路径新增一级 `("data",)`（优先）。新增回归单测 `test_extract_enum_values_from_raw_simple_result`。
+- 归因记录：execution_ref.table_id 旧 CSV 为字符串"1"、新为 int 1（新更规范，build_simple 期望 int），按字符串归一比对，非回归。
+**验证结果**：对拍 6/6 一致（修复前 platform_enum 因 enum 空误判 requires_permission_enum，修复后正确 blocked——账号仅授权 Temu、请求 Amazon 无重叠）；`pytest tests/query/planner tests/query/test_planner_cli tests/mcp/test_query_planner_tools -q` → 35 passed。真实后端验证 enum_fn(7,'platform_name')=['Temu']。
+**影响范围**：修复影响所有需权限枚举的平台/部门筛选查询（生产高频路径），修复前会静默拿不到授权值。对拍工具与黄金样例为新增，不影响产品代码。
+**回滚方式**：回退 _extract_enum_values 路径改动；删除对拍脚本/黄金样例/报告。
+
+---
+
 ## 2026-07-25 mcp - Task8 MCP 工具 query_plan / query_flow
 
 **变更原因**：规划器内核化 Phase 4。把内核入口 run_plan/run_flow 暴露为 MCP 工具，供 AI Agent 直接调用取数规划/一体化取数。

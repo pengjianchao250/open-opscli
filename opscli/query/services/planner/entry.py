@@ -34,12 +34,14 @@ _FLOW_DEFERRED_NOTES = [
 def _extract_enum_values(result: Any, field_name: str) -> list[str]:
     """从 simple 查询结果中提取某字段的去重非空值。
 
-    不同版本服务端返回形状可能是 data.result.data / result.data / data.data，
-    逐一兜底遍历取第一个非空行列表，再按 field_name 抽取字符串值、去空去重保序。
+    enum_fn 传入的是 cli_simple_query 的原始结果 {success, data:[行...], meta}，
+    行直接位于 result["data"]（一级）；兼容个别版本/CLI 包裹层的多级嵌套形状
+    （data.result.data / result.data / data.data），逐一兜底取第一个非空行列表，
+    再按 field_name 抽取字符串值、去空去重保序。
     """
     rows: list = []
     root = result if isinstance(result, dict) else {}
-    for path in (("data", "result", "data"), ("result", "data"), ("data", "data")):
+    for path in (("data",), ("data", "result", "data"), ("result", "data"), ("data", "data")):
         node: Any = root
         for key in path:
             node = node.get(key) if isinstance(node, dict) else None
