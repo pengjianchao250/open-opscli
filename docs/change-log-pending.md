@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-24 skills - ops-dataset-query QUERY_SPEC 补显式授权说明
+
+**变更原因**：MCP 已支持显式授权调用（query_* 工具接受 session_id/jwt，新增 auth_me），但 ops-dataset-query 的 MCP 契约 QUERY_SPEC.md §1 仅把认证描述为"登录/已认证账号"，未说明显式凭证也可确立当前账号，也未提 auth_me 核验身份。
+**改动点**：`opscli/skills/templates/ops-dataset-query/QUERY_SPEC.md` §1「授权元数据」新增两条——「认证来源（两种，等价）」说明 session_id/jwt 显式传入优先、且归属同一账号不跨用；「身份核验（可选）」说明 auth_me 核验有效身份 + 显式凭证须与后端环境一致（否则 407 按认证失败处理）。仅描述 query 工具实际存在的 session_id/jwt（不含 polaris_jwt，数据查询走 ops）。保留原有"唯一权威来源/失败阻断/MCP-only"约束不变。
+**验证结果**：核对 query.py 确认 query_metadata/query_simple 均有 session_id/jwt 参数、无 polaris_jwt，描述与实现一致。纯文档，无代码改动。
+**影响范围**：仅 ops-dataset-query 的 MCP 契约文档。未 bump VERSION.json（远端升级分发需服务端协同，另行处理）。
+**回滚方式**：还原 QUERY_SPEC.md §1 本次改动。
+
+---
+
 ## 2026-07-25 shared - 抽取可复用 file_lock 跨进程文件锁
 
 **变更原因**：从 `auth/core/token_manager.py` 内联的 fcntl.flock 逻辑抽取为独立 context manager，供元数据缓存等需要跨进程串行化刷新的场景复用。
@@ -4110,4 +4120,38 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **验证结果**：删除后导入链恢复正常，测试可正常收集运行。
 **影响范围**：仅本地开发环境；生产构建（`python -m build`）仍会正常编译生成 `.so`，不受影响。
 **回滚方式**：重新执行 `SKIP_CYTHON=... python -m build` 或按需重编译即可再生成。
+## 2026-07-25 query - 新增用户级元数据缓存 MetadataCache
+
+**变更原因**：A 方案规划器内核化需要按用户缓存全量元数据，避免 CLI/MCP 每次向后端拉全量数据（实测 ~1.14MB）。
+**改动点**：新增 `opscli/query/services/metadata_cache.py`（MetadataCache 两层缓存 + 信封/TTL 1h/email 哈希命名 + 双层锁防惊群 + stale 兜底 + 模块级池）；新增 `tests/query/test_metadata_cache.py`。
+**验证结果**：`pytest tests/query/test_metadata_cache.py` 13/13 通过。
+**影响范围**：新增模块，未改动现有取数路径；等待 Task 7/8 接入。
+**回滚方式**：删除 metadata_cache.py 与对应测试。
+---
+
+## 2026-07-25 query - QueryClient/Manager 全量字段支持并接入缓存
+
+**变更原因**：A 方案需一次性拉取全部授权数据集全部字段，并经用户级缓存复用。
+**改动点**：`QueryClient.fetch_query_metadata` 增加 `include_all_fields` 参数（透传 include_all_fields=1）；`QueryManager` 新增 `metadata_all(user_email, base_dir)`，经 MetadataCache 返回全量 payload；新增 `tests/query/test_metadata_all.py`。
+**验证结果**：`pytest tests/query/test_metadata_all.py` 2/2 通过。
+**影响范围**：新增能力，现有 metadata()/查询路径不变。后端 include_all_fields 参数上线前，全量字段依赖后端就绪（客户端逻辑已就绪且向后兼容）。
+**回滚方式**：撤销 client.py 参数与 manager.py 方法。
+---
+
+## 2026-07-25 auth/mcp - 登录/登出失效用户级元数据缓存
+
+**变更原因**：授权范围随账号变化，登录/登出后须强制重新拉取元数据（1h TTL 之外的强失效）。
+**改动点**：`opscli/auth/cli.py` login 成功/logout 处、`opscli/mcp/tools/auth.py` 两处登录成功(save_session)与登出(clear)处，调用 `invalidate_metadata_cache`（惰性导入避免 auth→query 环依赖）；token 刷新路径不失效；新增 `tests/auth/test_login_cache_invalidation.py`。
+**验证结果**：`pytest tests/auth/ tests/query/ tests/shared/` 254 passed（2 个 catalog/intent 失败为屏蔽命令的预存失败，与本次无关）。
+**影响范围**：登录/登出多一次缓存清理，无副作用。
+**回滚方式**：移除各处 invalidate_metadata_cache 调用与测试文件。
+---
+
+## 2026-07-25 query - 修复 invalidate_metadata_cache 池冷启动 no-op
+
+**变更原因**：最终代码审查发现——CLI auth login/logout 是短生命进程，从未实例化缓存池，旧 invalidate_metadata_cache 只查已有池条目会静默 no-op，无法清除别的进程写在磁盘的缓存，破坏"登录/登出强制失效"保证。
+**改动点**：`invalidate_metadata_cache` 改为 `get_metadata_cache(base_dir).invalidate(user_email)`，必要时新建实例以确保磁盘清扫必然执行；新增 test_invalidate_clears_disk_when_pool_cold 复现并守卫该场景。
+**验证结果**：`pytest tests/auth/test_login_cache_invalidation.py tests/query/test_metadata_cache.py` 16/16 通过。
+**影响范围**：登录/登出跨进程失效恢复正确；无其他行为变化。
+**回滚方式**：还原该函数体与删除新增测试。
 ---

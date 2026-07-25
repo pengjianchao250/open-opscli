@@ -185,6 +185,9 @@ async def auth_mcp_login(agent_name: str | None = None) -> dict:
             store.save_session(session_id, email, expires_at)
             from opscli.mcp.credential_cache import invalidate_credential_cache
             invalidate_credential_cache(base_dir=_get_credential_dir())
+            # 登录成功，失效该用户元数据缓存（授权范围可能随账号变化）
+            from opscli.query.services.metadata_cache import invalidate_metadata_cache
+            invalidate_metadata_cache(base_dir=_get_credential_dir(), user_email=email)
             # 登录用户变化，清空 stdio 模式的工具权限缓存使新权限立即生效
             from opscli.mcp.permissions import invalidate_stdio_cache
             invalidate_stdio_cache()
@@ -280,6 +283,9 @@ async def auth_login_poll(device_code: str, timeout: int = 30) -> dict:
                 # 刷新内存缓存，确保后续 Tool 调用立即可见
                 from opscli.mcp.credential_cache import invalidate_credential_cache
                 invalidate_credential_cache(base_dir=_get_credential_dir())
+                # 登录成功，失效该用户元数据缓存（授权范围可能随账号变化）
+                from opscli.query.services.metadata_cache import invalidate_metadata_cache
+                invalidate_metadata_cache(base_dir=_get_credential_dir(), user_email=email)
                 # 登录用户变化，清空 stdio 模式的工具权限缓存使新权限立即生效
                 from opscli.mcp.permissions import invalidate_stdio_cache
                 invalidate_stdio_cache()
@@ -546,6 +552,9 @@ async def auth_logout(system: str = "__all__") -> dict:
             store.remove_token(system)
         from opscli.mcp.credential_cache import invalidate_credential_cache
         invalidate_credential_cache(base_dir=_get_credential_dir())
+        # 登出即失效该隔离目录下的元数据缓存
+        from opscli.query.services.metadata_cache import invalidate_metadata_cache
+        invalidate_metadata_cache(base_dir=_get_credential_dir())
         # 登出后清空 stdio 模式的工具权限缓存，回退到仅基础 auth 工具
         from opscli.mcp.permissions import invalidate_stdio_cache
         invalidate_stdio_cache()

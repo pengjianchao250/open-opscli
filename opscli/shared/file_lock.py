@@ -11,13 +11,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-# fcntl 仅 POSIX 可用；Windows 上导入失败则跳过跨进程锁
+# fcntl 仅 POSIX 可用；Windows 上导入失败则置 None（用 is None 判断可降级）
 try:
     import fcntl
-
-    _FCNTL_AVAILABLE = True
 except ImportError:  # pragma: no cover - Windows 分支
-    _FCNTL_AVAILABLE = False
+    fcntl = None  # type: ignore[assignment]
 
 
 @contextmanager
@@ -31,7 +29,7 @@ def file_lock(path: Path) -> Iterator[None]:
         - POSIX：以独占方式 flock，退出时解锁。
         - Windows（无 fcntl）：直接进入/退出，不加跨进程锁。
     """
-    if not _FCNTL_AVAILABLE:
+    if fcntl is None:
         # Windows 降级：无跨进程锁，直接放行
         yield
         return

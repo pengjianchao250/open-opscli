@@ -99,6 +99,11 @@ def login():
         except Exception as _refresh_exc:
             import logging
             logging.getLogger("opscli.auth").debug("登录后 Token 预刷新失败（不影响登录）: %s", _refresh_exc)
+        # 登录成功后失效元数据缓存：授权范围可能随账号变化，强制下次重新拉取
+        # 惰性导入避免 auth→query 的模块级环依赖
+        from opscli.query.services.metadata_cache import invalidate_metadata_cache
+
+        invalidate_metadata_cache(user_email=result.get("email") or None)
         console.print(f"[green]√ 授权成功！账号：{result.get('email', '')}[/green]")
     except (DeviceFlowExpiredError, DeviceFlowDeniedError) as e:
         console.print(f"[red]× {e}[/red]")
@@ -109,6 +114,11 @@ def login():
 def logout():
     """清除本地所有凭证"""
     CredentialStore().clear()
+    # 登出即失效元数据缓存（避免残留上一个账号的授权数据）
+    # 惰性导入避免 auth→query 的模块级环依赖
+    from opscli.query.services.metadata_cache import invalidate_metadata_cache
+
+    invalidate_metadata_cache()
     console.print("[green]√ 已退出，本地凭证已清除[/green]")
 
 
