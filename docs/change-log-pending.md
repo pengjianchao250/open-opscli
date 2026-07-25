@@ -1,5 +1,20 @@
 # 待归档变更记录
 
+## 2026-07-25 query/planner - Task1 移植纯逻辑单元与静态资源到内核
+
+**变更原因**：规划器内核化 Phase 4 第一步。把 ops-dataset-query Skill 规划器中零后端依赖的纯逻辑单元与静态资源迁入 opscli 内核，为后续选表/字段指导/主编排移植打底。
+**改动点**：
+- 新建包 `opscli/query/services/planner/`（`__init__.py` 声明依赖方向约束）。
+- 从 `scripts/` 逐字复制 `time_scope.py`（时间口径解析）、`plan_integrity.py`（合同 HMAC 摘要）、`field_semantics.py`（中文业务说法→字段名映射）——三者仅依赖标准库、无跨脚本 import，无需改 import。
+- 从 `data/` 复制 `intent_rules.json`、`query_plan.schema.json` 到 `planner/resources/`，经 importlib.resources 读取。
+- `pyproject.toml` 新增 `[tool.setuptools.package-data]` 声明 `opscli.query.services.planner.resources/*.json`，确保随 wheel 打包。
+- 新建测试 `tests/query/planner/test_pure_units.py`（6 用例）。
+**验证结果**：`python -m pytest tests/query/planner/test_pure_units.py -v` → 6 passed。
+**影响范围**：纯新增，不改动任何现有模块；旧 Skill 脚本保持原样可用。
+**回滚方式**：删除 `opscli/query/services/planner/` 与 `tests/query/planner/`，还原 pyproject.toml package-data 段。
+
+---
+
 ## 2026-07-24 skills - ops-dataset-query QUERY_SPEC 补显式授权说明
 
 **变更原因**：MCP 已支持显式授权调用（query_* 工具接受 session_id/jwt，新增 auth_me），但 ops-dataset-query 的 MCP 契约 QUERY_SPEC.md §1 仅把认证描述为"登录/已认证账号"，未说明显式凭证也可确立当前账号，也未提 auth_me 核验身份。
