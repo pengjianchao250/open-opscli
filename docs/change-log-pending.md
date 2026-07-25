@@ -1,5 +1,24 @@
 # 待归档变更记录
 
+## 2026-07-25 query/planner - Task5 移植 query_plan 主编排 + 3 处 subprocess 换注入回调
+
+**变更原因**：规划器内核化 Phase 4 核心。把 2109 行主编排 query_plan 迁入内核，数据源从 CSV（scoped_dataset_reader + VERSION.json + data_dir 多目录 fallback）改为 MetadataAdapter，3 处 subprocess（skills upgrade / query simple 平台枚举 / query simple 组件枚举）换为注入回调 refresh_fn / enum_fn。
+**改动点**：
+- 新建 `planner/query_plan.py`。import 改包内引用，去 scoped_dataset_reader/argparse/subprocess/os/sys/Path；常量去 SKILL_DIR/DATA_DIR/RULES_PATH，新增 `_load_rules_resource()`（importlib.resources 读 intent_rules.json）。
+- 就绪/升级机制：删除 `_data_state_ready`/`_csv_has_rows`/`_fallback_ready_data_dir`/`_upgrade_marker_path`/`_pid_alive`/`_try_metadata_upgrade`（约167行），替换为 `_ensure_ready_adapter(adapter, refresh_fn)`（datasets/fields 空判定→触发 refresh_fn 重取全量→重建 adapter，返回 (adapter, ready, upgraded)）。`_refresh_contract` 去 version 参数；`_REFRESH_RECOVERY` 恢复命令 `python3 scripts/query_plan.py` → `opscli query plan`。
+- `build_query_plan` 首参改 `adapter`，去 data_dir/rules_path/auto_upgrade，加 `rules=None`（缺省从资源加载）/`refresh_fn=None`；结果去 effective_data_dir，加 `metadata_fingerprint`=adapter.fingerprint()、metadata_source 恒 backend_query_metadata。
+- `build_model_query_plan` 首参改 `adapter`，显式参 refresh_fn/enum_fn/auto_enum/rules/top_n（去 **kwargs）；就绪判定上提至投影入口（保证标签收集与选表同一份就绪元数据）；标签收集 `scoped_dataset_reader.load_dataset_fields/load_datasets` → `adapter.fields_rows()/datasets_rows()`。
+- 枚举：`_auto_enum_platform_values`/`_auto_enum_component_values` 去 subprocess，改 `enum_fn(table_id, field_name, *, limit)->list[str]`；`_resolve_department_filter` 加 enum_fn 形参。
+- 删除 CLI 层 `_parse_args`/`_resolve_query_text`/`_error_next_action`/`main`/`__main__`（约97行，内核 service 直接暴露 build_*）；清理因删 _error_next_action 而孤立的 ERROR_NEXT_ACTIONS/DEFAULT_ERROR_NEXT_ACTION（错误映射属 CLI 层，Task7 自理）与未用 _load_json_object。
+- chart_uuid 分流、_platform_scope、_platform_component_lookup（改吃 adapter）、build_model_contract、时间口径等逐字保留。
+- **计划修正（重要）**：结构地图证实 query_plan.py **完全不 import core.py**，core 的真实消费方是 chart_map/chart_analyze/excel_export（Phase 4 明确范围外的 chart/Excel 支线）。故 core.py **无任何本计划范围内的消费方**，从计划中整体剔除（Task3 曾误将其归为"query_plan 消费"而推迟——该理由作废）。
+- 新建测试 `tests/query/planner/test_query_plan.py`（5 用例：模型合同 v2 顶层键、refresh_fn 触发/失败合同/无回调、enum_fn 平台枚举包装去重）。
+**验证结果**：`python -m pytest tests/query/planner/ -q` → 20 passed；`tests/query/ -q` → 111 passed（仅 catalog/intent 2 既有基线失败，与本改动无关）。AST 未用导入检查仅 annotations（正常）；依赖方向 planner 无 import opscli.mcp。
+**影响范围**：纯新增 planner/query_plan.py，不改动现有模块；旧 Skill 脚本保持可用。
+**回滚方式**：删除 planner/query_plan.py 与 test_query_plan.py。
+
+---
+
 ## 2026-07-25 query/planner - Task4 移植字段/权限指导 dataset_guidance（数据源改 adapter）
 
 **变更原因**：规划器内核化 Phase 4。把字段/权限指导迁入内核，数据源从 CSV（scoped_dataset_reader + 文件快照/指纹）改为 MetadataAdapter，指导语义保持不变。
