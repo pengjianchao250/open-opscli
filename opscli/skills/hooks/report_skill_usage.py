@@ -50,6 +50,7 @@ _MCP_TOOL_TO_SKILL: dict[str, str] = {
     "auth_check_token": "ops-auth",
     "auth_is_authenticated": "ops-auth",
     "auth_token_refresh": "ops-auth",
+    "auth_me": "ops-auth",
     "auth_system_list": "ops-auth",
     "auth_system_add": "ops-auth",
     "auth_system_remove": "ops-auth",

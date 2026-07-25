@@ -94,7 +94,7 @@ def test_asin_data_live_data_passes_realtime_params(monkeypatch, tmp_path):
 
     monkeypatch.setenv("OPSCLI_ASIN_DATA_METRICS_PATH", str(metrics_path))
     monkeypatch.setattr(asin_data_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
-    monkeypatch.setattr(asin_data_tools, "_build_auth_client", lambda session_id, jwt: "auth-client")
+    monkeypatch.setattr(asin_data_tools, "_build_auth_client", lambda session_id, jwt, polaris_jwt=None: "auth-client")
     monkeypatch.setattr("opscli.mcp.asin_data_limit.acquire_asin_data_slot", fake_acquire_slot)
     monkeypatch.setattr("opscli.asin_data.services.bi_report_data.AsinBiReportDataClient", DummyBiClient)
     monkeypatch.setattr("opscli.asin_data.services.collector.AsinDataCollector", DummyCollector)
@@ -166,7 +166,7 @@ def test_asin_data_live_data_passes_return_mode(monkeypatch, tmp_path):
 
     monkeypatch.setenv("OPSCLI_ASIN_DATA_METRICS_PATH", str(tmp_path / "metrics.jsonl"))
     monkeypatch.setattr(asin_data_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
-    monkeypatch.setattr(asin_data_tools, "_build_auth_client", lambda session_id, jwt: "auth-client")
+    monkeypatch.setattr(asin_data_tools, "_build_auth_client", lambda session_id, jwt, polaris_jwt=None: "auth-client")
     monkeypatch.setattr("opscli.asin_data.services.bi_report_data.AsinBiReportDataClient", DummyBiClient)
     monkeypatch.setattr("opscli.asin_data.services.collector.AsinDataCollector", DummyCollector)
     monkeypatch.setattr("opscli.asin_data.services.live_data.AsinLiveDataService", DummyService)
@@ -223,7 +223,7 @@ def test_asin_data_live_data_records_error_metric_and_releases_slot(monkeypatch,
 
     monkeypatch.setenv("OPSCLI_ASIN_DATA_METRICS_PATH", str(metrics_path))
     monkeypatch.setattr(asin_data_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
-    monkeypatch.setattr(asin_data_tools, "_build_auth_client", lambda session_id, jwt: "auth-client")
+    monkeypatch.setattr(asin_data_tools, "_build_auth_client", lambda session_id, jwt, polaris_jwt=None: "auth-client")
     monkeypatch.setattr("opscli.mcp.asin_data_limit.acquire_asin_data_slot", fake_acquire_slot)
     monkeypatch.setattr("opscli.asin_data.services.bi_report_data.AsinBiReportDataClient", DummyBiClient)
     monkeypatch.setattr("opscli.asin_data.services.collector.AsinDataCollector", DummyCollector)
@@ -261,7 +261,7 @@ def test_asin_data_fetch_file_uses_report_client(monkeypatch, tmp_path):
 
     monkeypatch.setenv("OPSCLI_ASIN_DATA_METRICS_PATH", str(metrics_path))
     monkeypatch.setattr(asin_data_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
-    monkeypatch.setattr(asin_data_tools, "_build_auth_client", lambda session_id, jwt: "auth-client")
+    monkeypatch.setattr(asin_data_tools, "_build_auth_client", lambda session_id, jwt, polaris_jwt=None: "auth-client")
     monkeypatch.setattr("opscli.asin_data.services.report_files.AsinReportFileClient", DummyReportClient)
     monkeypatch.setattr("opscli.asin_data.services.live_data.fetch_split_file", fake_fetch_split_file)
 
@@ -372,7 +372,7 @@ def test_asin_data_category_top_uses_service(monkeypatch):
     from opscli.asin_data.services import category_top as category_top_module
 
     monkeypatch.setattr(asin_data_tools, "_get_auth_pair", lambda system, session_id, jwt: ("sid", "jwt"))
-    monkeypatch.setattr(asin_data_tools, "_build_auth_client", lambda session_id, jwt: "auth-client")
+    monkeypatch.setattr(asin_data_tools, "_build_auth_client", lambda session_id, jwt, polaris_jwt=None: "auth-client")
     monkeypatch.setattr(category_top_module, "AsinCategoryTopService", DummyService)
 
     result = _run(

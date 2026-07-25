@@ -45,6 +45,7 @@ BASE_AUTH_TOOLS: frozenset[str] = frozenset({
     "auth_doctor",
     "auth_get_token",
     "auth_token_refresh",
+    "auth_me",
     "auth_build_request_auth",
     "auth_system_list",
     "auth_system_sync",

@@ -97,10 +97,18 @@ class AuthClient:
         except Exception:
             return False
 
-    def get_me(self) -> dict:
+    def get_me(self, session_id: str | None = None, jwt: str | None = None) -> dict:
         """获取当前授权用户信息（GET /api/v1/auth/me）。
 
-        使用 ops 系统凭证鉴权；显式凭证模式下会自动携带命令行传入的凭证。
+        两种凭证来源：
+        - 传入 session_id（MCP 无状态模式）：用外部 session_id/jwt 构造请求头，
+          不依赖本实例的默认凭证目录——解决 MCP 多用户下按 API Key 隔离 session 的问题；
+        - 不传 session_id（CLI 模式）：走 build_request_auth("ops")，
+          显式凭证上下文或本地登录态在此处自动生效。
+
+        Args:
+            session_id: 可选，外部传入的 Session ID（MCP 无状态模式）
+            jwt:        可选，外部传入的 ops JWT（为空时用 session_id 向后端换取）
 
         Returns:
             后端返回的用户信息 JSON（原样透传，通常形如 {"data": {...}}）
@@ -112,8 +120,12 @@ class AuthClient:
 
         from opscli.auth.config import get_ops_system_url
 
-        # 复用统一认证参数构造：显式凭证或本地凭证在此处自动生效
-        headers, cookies = self.build_request_auth("ops")
+        # 有 session_id → 无状态模式，用外部凭证构造请求头（jwt 缺失时自动用 session 换取）；
+        # 无 session_id → CLI 模式，复用统一构造（显式上下文/本地凭证自动生效）
+        if session_id:
+            headers, cookies = self.build_request_auth_with_session(session_id, jwt, "ops")
+        else:
+            headers, cookies = self.build_request_auth("ops")
         # /api/v1/auth/me 挂在 ops 系统根地址下（与 cli-token 端点同源）
         url = f"{get_ops_system_url().rstrip('/')}/api/v1/auth/me"
         resp = httpx.get(url, headers=headers, cookies=cookies, timeout=10)

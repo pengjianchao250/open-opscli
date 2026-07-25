@@ -1,5 +1,22 @@
 # 待归档变更记录
 
+## 2026-07-24 mcp/auth - MCP 侧显式授权对等：auth_me 工具 + polaris_jwt 参数
+
+**变更原因**：CLI 已支持显式授权（`--ops-jwt-token`/`--polaris-jwt-token`/`--session-id` + `auth me`），需在 MCP 侧补齐对等能力。MCP 业务凭证层本已支持逐工具 `session_id`/`jwt`，但缺 `auth_me` 工具、且单 jwt 写死当 ops 用（无法显式传 polaris JWT）。
+**改动点**：
+- `opscli/auth/__init__.py`：`get_me` 扩展为 session-aware（`get_me(session_id=None, jwt=None)`），有 session 走 `build_request_auth_with_session`，无则维持 `build_request_auth("ops")`——解决 MCP 无状态实例拿不到按 API Key 隔离 session 的问题；CLI 无参调用行为不变。
+- `opscli/mcp/tools/auth.py`：新增 `auth_me` 工具（先 `_get_auth_pair("ops",…)` 解析隔离凭证再调 get_me），import 补 `_get_auth_pair`，加入 `_ALL_TOOLS`。
+- `opscli/mcp/permissions.py`：`BASE_AUTH_TOOLS` 加 `"auth_me"`（全模式可用，`permissions.py:111` 本地无条件并入，零后端变更）。
+- `opscli/skills/hooks/report_skill_usage.py`：加 `"auth_me": "ops-auth"` 映射。
+- `opscli/mcp/tools/asin_data.py`：`_build_auth_client`/`_ProvidedAuthClient` 按 alias 选 JWT（`token = jwt(ops) / polaris_jwt(polaris)`），4 个工具（live_data/category_top/fetch_file/report_url）签名加 `polaris_jwt` 并透传，更新 docstring。
+- 测试：`tests/mcp/test_tools.py` 加 auth_me 暴露+直调用例（respx）、`tests/mcp/test_asin_data_polaris_jwt.py` 新增、`tests/auth/test_explicit_credentials.py` 加 get_me session 单测；因签名变更同步 `tests/mcp/test_asin_data_tools.py` 的 5 处 `_build_auth_client` stub 为 3 参。
+**验证结果**：`tests/auth/` 70 passed；`tests/mcp/` 经 git stash 对比：基线 `2 failed/311 passed/1 error` → 本次 `2 failed/315 passed/1 error`（+4 新增，既有失败 google_trends/quota/shopify-死代码 与本次无关，零回归）。导入/注册/签名断言通过。
+**影响范围**：MCP 新增 auth_me 工具与 asin_data 的显式 polaris_jwt 能力；未传显式参数时行为不变。CLI 与后端不受影响。
+**回滚方式**：还原上述 6 个源文件与 4 个测试文件的本次改动，删除 `tests/mcp/test_asin_data_polaris_jwt.py`。
+**遗留（非本次范围）**：后端 `McpToolPermissionService::BASE_AUTH_TOOLS` 可选同步 `"auth_me"`（功能不依赖）；shopify/feedtask MCP 死代码未触碰。
+
+---
+
 ## 2026-07-23 auth - 新增显式授权中间件（--ops-jwt-token / --polaris-jwt-token / --session-id）
 
 **变更原因**：需要支持在任意子命令尾部显式传入授权凭证（如 `opscli query simple ... --ops-jwt-token=x --session-id=y`），用于脚本化/外部托管场景，且要求"一处中间件覆盖全部命令"，不逐个命令改造。
