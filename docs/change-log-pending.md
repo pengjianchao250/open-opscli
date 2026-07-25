@@ -1,5 +1,21 @@
 # 待归档变更记录
 
+## 2026-07-25 query/planner - Task10 全量回归验收（SKILL.md 切换按用户决定暂停）
+
+**变更原因**：规划器内核化 Phase 4 收尾验收。全量回归 + 依赖方向 + SDK 双导入 + help 冒烟。
+**改动点**：无产品代码改动（纯验收 + 进度归档）。
+**用户决策**：SKILL.md 主线入口切换（python3 scripts/query_flow.py → opscli query flow）**暂停**，待执行段内核化（result-dir 落盘 / orderBy 本地兜底 / evidence_contract）完成后再切；老脚本继续作为一体化主线，新内核 flow 执行段为最小实现。此项另开后续任务。
+**验证结果**：
+- 分目录回归：tests/auth 73 passed；tests/query 121 passed（仅 catalog/intent 2 既有基线失败）；tests/mcp 315 passed（排除 shopify 收集错误后，7 失败 amazon_rufus/google_trends/quota/scrape_do/server_google_trends 经 checkout 基线 b624dc9 复跑确认为**预存基线**，与本改动无关）；tests/skills capture 崩溃为既有基线。
+- 新增交付测试全绿：tests/query/planner 25 + test_planner_cli 4 + mcp test_query_planner_tools 5 = 35 passed。
+- 依赖方向：`opscli/query/services/planner/*.py` 无 import opscli.mcp。
+- SDK 双导入 OK（from opscli / from opscli.auth）；planner re-export run_plan/run_flow OK。
+- 冒烟：opscli query plan/flow --help OK；真实后端端到端产出正确合同（见 Task9 对拍报告）。
+**影响范围**：无。
+**回滚方式**：N/A（无代码改动）。
+
+---
+
 ## 2026-07-25 query/planner - Task9 回归对拍（安全网）+ 修复 enum 结果形状真实回归
 
 **变更原因**：规划器内核化 Phase 4 安全网。对同一批代表性请求对拍迁移前后规划合同关键字段，确认未改变规划语义；对拍过程捕获并修复一处真实回归。
