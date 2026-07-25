@@ -130,6 +130,16 @@ pip install -e .
 
 ---
 
+## 升级
+
+```bash
+opscli self-update
+```
+
+一条命令完成 CLI 升级与 Skills 同步。详见 [docs/guide/CLI升级指南.md](docs/guide/CLI升级指南.md)。
+
+---
+
 ## 快速开始
 
 ```bash

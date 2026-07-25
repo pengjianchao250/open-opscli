@@ -51,11 +51,15 @@ async def sif_accounts(
 async def sif_run(
     feature: str,
     asin: str = "",
+    keyword: str = "",
     site: str = "US",
     sections: list[str] | str | None = None,
     asins: list[str] | str | None = None,
     time_piece_type: str | None = None,
     time_piece_value: str | None = None,
+    granularity: str | None = None,
+    last_months: int | None = None,
+    change_type: str | None = None,
     my_asin: str | None = None,
     page_num: int = 1,
     page_size: int | None = None,
@@ -71,10 +75,14 @@ async def sif_run(
     call_params = {
         "feature": feature,
         "asin": asin,
+        "keyword": keyword,
         "site": site,
         "sections": sections,
         "time_piece_type": time_piece_type,
         "time_piece_value": time_piece_value,
+        "granularity": granularity,
+        "last_months": last_months,
+        "change_type": change_type,
         "page_num": page_num,
         "page_size": page_size,
         "job_id": job_id,
@@ -95,8 +103,12 @@ async def sif_run(
             asin=asin_value,
             site=site,
             asins=parsed_asins,
+            keyword=keyword.strip() if isinstance(keyword, str) else "",
             time_piece_type=time_piece_type or _default_time_piece_type(feature),
             time_piece_value=str(time_piece_value or _default_time_piece_value(feature)),
+            granularity=granularity or _default_granularity(feature),
+            last_months=last_months or _default_last_months(feature),
+            change_type=change_type,
             sections=parsed_sections,
             my_asin=my_asin,
             page_num=page_num,
@@ -181,6 +193,22 @@ def _default_time_piece_value(feature: str) -> str:
     if normalized in {"查销量", "sales"}:
         return "30"
     return "7"
+
+
+def _default_granularity(feature: str) -> str | None:
+    normalized = (feature or "").strip().lower()
+    if normalized in {"查排名", "每日排名", "推排名", "查坑位", "ranking"}:
+        return "week"
+    if normalized in {"运营时光机", "运营流量趋势", "流量变化", "流量词数量变化", "operation-time-machine"}:
+        return "day"
+    return None
+
+
+def _default_last_months(feature: str) -> int | None:
+    normalized = (feature or "").strip().lower()
+    if normalized in {"运营时光机", "运营流量趋势", "流量变化", "流量词数量变化", "operation-time-machine"}:
+        return 6
+    return None
 
 
 _ALL_TOOLS = [

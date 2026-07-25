@@ -4,6 +4,7 @@ from unittest.mock import patch
 from opscli.auth import AuthClient
 from opscli.auth.core.token_manager import TokenManager
 from opscli.auth.exceptions import NotAuthenticatedError
+from opscli.config import __version__
 
 BUILTINS = [
     {"alias": "ops", "system_key": "ops", "url": "https://ops.example.com",
@@ -102,7 +103,7 @@ def test_auth_client_build_session_headers_returns_x_session_id(tmp_path):
 
     headers = client.build_session_headers("ops")
 
-    assert headers == {"X-Session-Id": "uuid-1234"}
+    assert headers == {"X-Session-Id": "uuid-1234", "X-Opscli-Version": __version__}
 
 
 def test_auth_client_get_session_raises_when_not_authenticated(tmp_path):

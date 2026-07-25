@@ -256,7 +256,6 @@ class _TelemetryMcpProxy:
         real_decorator = self._real.tool(*args, **kwargs)
 
         def wrap(fn):
-
             # 采集工具清单元数据：
             # - 工具名优先取 name= 覆盖（如 chatgpt 模块的 fetch/search）
             # - 模块取注册函数 __module__ 末段（精确归属，避免按前缀切分出错）
@@ -267,7 +266,7 @@ class _TelemetryMcpProxy:
                 module=fn.__module__.rsplit(".", 1)[-1],
                 description=extract_description(fn, kwargs),
             )
-            # 先包裹遥测，再注册到 FastMCP
+            # 先插入限额切面，再包裹遥测，最终注册到 FastMCP
             return real_decorator(_telemetry_wrap(_quota_wrap(fn)))
 
 
@@ -285,6 +284,7 @@ from opscli.mcp.tools import auth as _auth_tools
 from opscli.mcp.tools import amazon_rufus as _amazon_rufus_tools
 from opscli.mcp.tools import beta as _beta_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
+from opscli.mcp.tools import dashboard as _dashboard_tools
 from opscli.mcp.tools import feedback as _feedback_tools
 from opscli.mcp.tools import google_trends as _google_trends_tools
 from opscli.mcp.tools import health as _health_tools
@@ -293,8 +293,8 @@ from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import scrape_do as _scrape_do_tools
 from opscli.mcp.tools import seller_sprite as _seller_sprite_tools
 from opscli.mcp.tools import asin_data as _asin_data_tools
-from opscli.mcp.tools import skills as _skills_tools
 from opscli.mcp.tools import asin_review as _asin_review_tools
+from opscli.mcp.tools import skills as _skills_tools
 # Sif / 西柚暂不开放 MCP 工具：保留工具模块代码，待业务确认后再恢复注册。
 # from opscli.mcp.tools import sif as _sif_tools
 # from opscli.mcp.tools import xiyou as _xiyou_tools
@@ -303,6 +303,7 @@ _auth_tools.register(_telemetry_mcp)
 _amazon_rufus_tools.register(_telemetry_mcp)
 _beta_tools.register(_telemetry_mcp)
 _chatgpt_tools.register(_telemetry_mcp)
+_dashboard_tools.register(_telemetry_mcp)
 _feedback_tools.register(_telemetry_mcp)
 _google_trends_tools.register(_telemetry_mcp)
 _health_tools.register(_telemetry_mcp)

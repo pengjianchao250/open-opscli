@@ -626,8 +626,9 @@ async def query_preferences(
 _ALL_TOOLS = [
     query_spec_must_read,
     query_metadata,
-    query_catalog,
-    query_intent_match,
+    # 【临时屏蔽】catalog / intent 能力暂停对外暴露，恢复时取消下两行注释即可
+    # query_catalog,
+    # query_intent_match,
     query_simple,
     query_build,
     query_run,

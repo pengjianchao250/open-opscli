@@ -72,11 +72,14 @@ _TOOL_LABELS = {
 # ops-amazon-rufus 安装后引导信息
 _AMAZON_RUFUS_SKILL_NAME = "ops-amazon-rufus"
 _AMAZON_RUFUS_NEXT_STEPS = [
-    "先执行 opscli amazon-rufus remote-consent status <country> --pretty 读取该站点远程授权偏好。",
+    "进入 Skill 后先调用 auth_is_authenticated；未登录时调用 auth_mcp_login，Token 失效时调用 auth_token_refresh(system=\"ops\")。",
+    "调用 amazon_rufus_remote_consent_status(country) 读取该站点远程授权偏好。",
     "未询问过时让用户明确回复“允许”或“拒绝”；请建议使用独立干净的 Amazon 账号，且不建议绑定信用卡或支付方式。",
-    "发起 Rufus 获取前执行 opscli amazon-rufus login-status <country> --pretty；没有可用登录态时执行 opscli amazon-rufus watch-login <asin> <country> --launch-if-needed --close-browser。",
-    "允许远程授权且登录态可用时调用 amazon_rufus_get；如需恢复登录态，执行 watch-login 后重试 MCP 获取。",
-    "拒绝远程授权且登录态可用时调用 opscli amazon-rufus get-backend <asin> <country>。",
+    "发起 Rufus 获取前调用 amazon_rufus_login_status(country)；没有可用亚马逊 Rufus 登录态时调用 amazon_rufus_watch_login(asin, country, close_browser=true)。",
+    "允许远程授权且登录态可用时调用 amazon_rufus_get；MCP Tool 不可用时进入 CLI fallback，使用 opscli amazon-rufus login-status / watch-login / get-backend。",
+    "用户拒绝保存并复用亚马逊 Rufus 登录态时记录拒绝偏好，并改用本机 opscli CLI 获取；本路径使用 opscli amazon-rufus login-status 和 opscli amazon-rufus get-backend。",
+    "OPS 平台 Cookie 鉴权错误、RUFUS_PLATFORM_COOKIE_AUTH_ERROR 或 401 时调用 amazon_rufus_watch_login(asin, country, close_browser=true)，本分支不允许 CLI fallback。",
+    "只有上述两种情况允许 CLI fallback；其他错误不允许 CLI fallback，也不得读取历史报告兜底。",
 ]
 
 # marketplace list 命令的参数枚举与面板标题

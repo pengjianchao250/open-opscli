@@ -10,7 +10,12 @@ import respx
 from httpx import Response
 
 from opscli.xiyou.config import XiyouSettings
-from opscli.xiyou.notify import load_notify_config, notify_token_required
+from opscli.xiyou.notify import (
+    DEFAULT_NOTIFY_MENTIONED_MOBILE_LIST,
+    DEFAULT_NOTIFY_WEBHOOK_URL,
+    load_notify_config,
+    notify_token_required,
+)
 
 
 @pytest.fixture
@@ -37,52 +42,30 @@ def _b64(payload: dict) -> str:
 def _settings(local_tmp_path: Path) -> XiyouSettings:
     return XiyouSettings(
         credential_path=local_tmp_path / "credential.json",
-        notify_path=local_tmp_path / "notify.yaml",
     )
 
 
-def _write_notify_yaml(path: Path) -> str:
-    webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
-    path.write_text(
-        "\n".join(
-            [
-                "dedupe_minutes: 5",
-                "quick_login_url: https://admin.example.com/xiyou/credential",
-                "wechat_work:",
-                f"  webhook_url: {webhook}",
-                "mentions:",
-                "  mentioned_list:",
-                "    - zhangsan",
-                "  mentioned_mobile_list:",
-                "    - '13800138000'",
-                "  mention_all: true",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    return webhook
-
-
-def test_load_notify_config_reads_mentions(local_tmp_path: Path):
+def test_load_notify_config_returns_builtin_values(local_tmp_path: Path):
     settings = _settings(local_tmp_path)
-    _write_notify_yaml(settings.notify_path)
 
     config = load_notify_config(settings)
 
     assert config.enabled is True
-    assert config.quick_login_url == "https://admin.example.com/xiyou/credential"
-    assert config.mentioned_list == ("zhangsan", "@all")
-    assert config.mentioned_mobile_list == ("13800138000",)
+    assert config.source == "builtin"
+    assert config.webhook_url == DEFAULT_NOTIFY_WEBHOOK_URL
+    assert config.quick_login_url is None
+    assert config.mentioned_list == ()
+    assert config.mentioned_mobile_list == DEFAULT_NOTIFY_MENTIONED_MOBILE_LIST
+    assert config.state_path == local_tmp_path / "notify_state.json"
 
 
 @respx.mock
 def test_notify_token_required_sends_and_dedupes(local_tmp_path: Path):
     settings = XiyouSettings(
         authorization=_jwt(),
-        notify_path=local_tmp_path / "notify.yaml",
+        credential_path=local_tmp_path / "credential.json",
     )
-    webhook = _write_notify_yaml(settings.notify_path)
-    route = respx.post(webhook).mock(return_value=Response(200, json={"errcode": 0}))
+    route = respx.post(DEFAULT_NOTIFY_WEBHOOK_URL).mock(return_value=Response(200, json={"errcode": 0}))
 
     first = notify_token_required(
         reason="http_401",
@@ -104,18 +87,17 @@ def test_notify_token_required_sends_and_dedupes(local_tmp_path: Path):
     assert second["reason"] == "deduped"
     assert route.calls.call_count == 1
     body = json.loads(route.calls.last.request.content)
-    assert body["text"]["mentioned_list"] == ["zhangsan", "@all"]
+    assert body["text"]["mentioned_mobile_list"] == list(DEFAULT_NOTIFY_MENTIONED_MOBILE_LIST)
     assert "TokenInvalid" in body["text"]["content"]
     assert "job-1" in body["text"]["content"]
     assert "当前过期时间" in body["text"]["content"]
-    assert "https://admin.example.com/xiyou/credential" in body["text"]["content"]
+    assert "人工更新西柚 token/cookie" in body["text"]["content"]
 
 
 @respx.mock
 def test_notify_token_required_force_skips_dedupe(local_tmp_path: Path):
     settings = _settings(local_tmp_path)
-    webhook = _write_notify_yaml(settings.notify_path)
-    route = respx.post(webhook).mock(return_value=Response(200, json={"errcode": 0}))
+    route = respx.post(DEFAULT_NOTIFY_WEBHOOK_URL).mock(return_value=Response(200, json={"errcode": 0}))
 
     first = notify_token_required(
         reason="manual_verify",
@@ -140,8 +122,9 @@ def test_notify_token_required_force_skips_dedupe(local_tmp_path: Path):
 @respx.mock
 def test_notify_token_required_reports_wecom_errcode(local_tmp_path: Path):
     settings = _settings(local_tmp_path)
-    webhook = _write_notify_yaml(settings.notify_path)
-    respx.post(webhook).mock(return_value=Response(200, json={"errcode": 93000, "errmsg": "invalid webhook"}))
+    respx.post(DEFAULT_NOTIFY_WEBHOOK_URL).mock(
+        return_value=Response(200, json={"errcode": 93000, "errmsg": "invalid webhook"})
+    )
 
     result = notify_token_required(
         reason="manual_verify",
@@ -154,4 +137,3 @@ def test_notify_token_required_reports_wecom_errcode(local_tmp_path: Path):
     assert result["sent"] is False
     assert result["reason"] == "wecom_error"
     assert result["errcode"] == 93000
-

@@ -12,6 +12,9 @@ from rich.table import Table
 from opscli.sif.compare.provider import SifCompareProvider
 from opscli.sif.config import DEFAULT_FEATURE_OUTPUT_DIRS, SifSettings, default_output_dir_for_feature, load_settings
 from opscli.sif.domain.models import SifRunRequest
+from opscli.sif.operation_time_machine.provider import SifOperationTimeMachineProvider
+from opscli.sif.product_time_machine.provider import SifProductTimeMachineProvider
+from opscli.sif.ranking.provider import SifRankingProvider
 from opscli.sif.sales.models import SifSalesRunRequest
 from opscli.sif.sales.provider import SifSalesProvider
 from opscli.sif.sites import normalize_site
@@ -25,6 +28,17 @@ FEATURE_DEFINITIONS = {
     "查销量": {"key": "sales", "provider": SifSalesProvider, "aliases": ["查销量", "sales"]},
     "查流量": {"key": "traffic", "provider": SifTrafficProvider, "aliases": ["查流量", "查流量词", "查流量(词)", "traffic", "traffic-keywords"]},
     "多产品对比": {"key": "compare", "provider": SifCompareProvider, "aliases": ["多产品对比", "compare"]},
+    "查排名": {"key": "ranking", "provider": SifRankingProvider, "aliases": ["查排名", "每日排名", "推排名", "查坑位", "ranking"]},
+    "运营时光机": {
+        "key": "operation_time_machine",
+        "provider": SifOperationTimeMachineProvider,
+        "aliases": ["运营时光机", "运营流量趋势", "流量变化", "流量词数量变化", "operation-time-machine"],
+    },
+    "产品时光机": {
+        "key": "product_time_machine",
+        "provider": SifProductTimeMachineProvider,
+        "aliases": ["产品时光机", "关键词产品时光机", "keyword-product-time-machine"],
+    },
 }
 
 FEATURE_ALIASES = {
@@ -47,11 +61,15 @@ def features(pretty: bool = typer.Option(False, "--pretty", help="格式化 JSON
 @app.command("run")
 def run(
     feature: str = typer.Argument(..., help="功能名称，如：查销量"),
-    asin: str = typer.Option(..., "--asin", help="目标 ASIN"),
+    asin: str | None = typer.Option(None, "--asin", help="目标 ASIN"),
+    keyword: str | None = typer.Option(None, "--keyword", help="目标关键词，产品时光机必填"),
     site: str = typer.Option("US", "--site", help="站点，如 US、JP、DE"),
     range_value: str | None = typer.Option(None, "--range", help="查询维度，默认 asin"),
     time_piece_type: str = typer.Option("latelyDay", "--time-piece-type", help="Sif 时间范围类型"),
     time_piece_value: str = typer.Option("7", "--time-piece-value", help="Sif 时间范围值"),
+    granularity: str | None = typer.Option(None, "--granularity", help="趋势粒度，如 day、week、month"),
+    last_months: int | None = typer.Option(None, "--last-months", help="运营时光机最近月份数，如 3、6、12、24"),
+    change_type: str | None = typer.Option(None, "--change-type", help="运营时光机变化类型；all 表示流量词数量变化"),
     sections: str | None = typer.Option(None, "--sections", help="逗号分隔子模块；默认 all"),
     my_asin: str | None = typer.Option(None, "--my-asin", help="多产品对比中我的 ASIN"),
     page_num: int = typer.Option(1, "--page-num", min=1, help="下载列表页码，默认 1"),
@@ -76,7 +94,7 @@ def run(
             request = SifSalesRunRequest(
                 feature=canonical_feature,
                 provider="sif",
-                asin=asin,
+                asin=asin or "",
                 site=normalize_site(site),
                 range_value=range_value,
                 time_piece_type=time_piece_type,
@@ -94,10 +112,14 @@ def run(
         else:
             request = SifRunRequest(
                 feature=canonical_feature,
-                asin=asin,
+                asin=asin or "",
                 site=site,
+                keyword=keyword,
                 time_piece_type=time_piece_type,
                 time_piece_value=str(time_piece_value),
+                granularity=granularity,
+                last_months=last_months,
+                change_type=change_type,
                 sections=[sections] if sections else [],
                 my_asin=my_asin,
                 page_num=page_num,
@@ -212,6 +234,8 @@ def _emit_run_success(result, *, pretty: bool, json_output: bool) -> None:
     table.add_row("功能", result.feature)
     if getattr(result, "asin", None):
         table.add_row("ASIN", result.asin)
+    if getattr(result, "keyword", None):
+        table.add_row("关键词", result.keyword)
     asins = getattr(result, "asins", None) or []
     if asins and not getattr(result, "asin", None):
         table.add_row("ASIN 数量", str(len(asins)))
@@ -227,6 +251,10 @@ def _emit_run_success(result, *, pretty: bool, json_output: bool) -> None:
         ("对比流量分", "compare_traffic_score_xlsx"),
         ("重点流量词", "compare_my_traffic_keywords_xlsx"),
         ("重点广告词", "compare_my_ad_keywords_xlsx"),
+        ("每日排名", "daily_ranking_xlsx"),
+        ("运营时光机-流量变化", "operation_traffic_change_xlsx"),
+        ("运营时光机-流量词数量变化", "operation_keyword_count_change_xlsx"),
+        ("产品时光机", "product_time_machine_xlsx"),
     ):
         export = result.exports.get(export_key)
         if export:

@@ -18,6 +18,7 @@ from opscli.xiyou.api.client import XiyouApiClient, _normalize_oss_url
 from opscli.xiyou.config import XiyouSettings
 from opscli.xiyou.credentials import XiyouCredential
 from opscli.xiyou.domain.exceptions import XiyouApiError, XiyouCredentialExpiredError
+from opscli.xiyou.notify import DEFAULT_NOTIFY_WEBHOOK_URL
 
 
 @pytest.fixture
@@ -185,24 +186,9 @@ def test_user_info_merges_credential_service_headers():
 
 def test_http_401_triggers_token_required_notification(local_tmp_path: Path):
     """西柚 HTTP 401 应触发补登通知。"""
-    webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=client"
-    notify_path = local_tmp_path / "notify.yaml"
-    notify_path.write_text(
-        "\n".join(
-            [
-                "wechat_work:",
-                f"  webhook_url: {webhook}",
-                "mentions:",
-                "  mentioned_list:",
-                "    - zhangsan",
-            ]
-        ),
-        encoding="utf-8",
-    )
     settings = XiyouSettings(
         authorization=_jwt(seconds=7200),
         credential_path=local_tmp_path / "credential.json",
-        notify_path=notify_path,
     )
     client = XiyouApiClient(
         credential=XiyouCredential(authorization=_jwt(seconds=7200)),
@@ -213,7 +199,9 @@ def test_http_401_triggers_token_required_notification(local_tmp_path: Path):
             api_route = mock.get("https://api.xydc.com/user/info").mock(
                 return_value=httpx.Response(401, json={"code": "TokenInvalid"})
             )
-            notify_route = mock.post(webhook).mock(return_value=httpx.Response(200, json={"errcode": 0}))
+            notify_route = mock.post(DEFAULT_NOTIFY_WEBHOOK_URL).mock(
+                return_value=httpx.Response(200, json={"errcode": 0})
+            )
             with pytest.raises(XiyouCredentialExpiredError) as exc_info:
                 _run(client.get_json("/user/info"))
     finally:
@@ -228,21 +216,9 @@ def test_http_401_triggers_token_required_notification(local_tmp_path: Path):
 
 def test_business_token_expired_returns_terminal_credential_error(local_tmp_path: Path):
     """西柚业务码 TokenExpired 应被识别为补登终态错误。"""
-    webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=token-expired"
-    notify_path = local_tmp_path / "notify.yaml"
-    notify_path.write_text(
-        "\n".join(
-            [
-                "wechat_work:",
-                f"  webhook_url: {webhook}",
-            ]
-        ),
-        encoding="utf-8",
-    )
     settings = XiyouSettings(
         authorization=_jwt(seconds=7200),
         credential_path=local_tmp_path / "credential.json",
-        notify_path=notify_path,
     )
     client = XiyouApiClient(
         credential=XiyouCredential(authorization=_jwt(seconds=7200)),
@@ -253,7 +229,9 @@ def test_business_token_expired_returns_terminal_credential_error(local_tmp_path
             api_route = mock.get("https://api.xydc.com/user/info").mock(
                 return_value=httpx.Response(200, json={"code": "TokenExpired"})
             )
-            notify_route = mock.post(webhook).mock(return_value=httpx.Response(200, json={"errcode": 0}))
+            notify_route = mock.post(DEFAULT_NOTIFY_WEBHOOK_URL).mock(
+                return_value=httpx.Response(200, json={"errcode": 0})
+            )
             with pytest.raises(XiyouCredentialExpiredError) as exc_info:
                 _run(client.get_json("/user/info"))
     finally:
@@ -268,24 +246,9 @@ def test_business_token_expired_returns_terminal_credential_error(local_tmp_path
 
 def test_expired_jwt_triggers_token_required_notification_and_stops_request(local_tmp_path: Path):
     """本地 JWT 已过期时，请求前应通知补登并终止当前任务。"""
-    webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=expired"
-    notify_path = local_tmp_path / "notify.yaml"
-    notify_path.write_text(
-        "\n".join(
-            [
-                "wechat_work:",
-                f"  webhook_url: {webhook}",
-                "mentions:",
-                "  mentioned_mobile_list:",
-                "    - '13800138000'",
-            ]
-        ),
-        encoding="utf-8",
-    )
     settings = XiyouSettings(
         authorization=_jwt(seconds=-60),
         credential_path=local_tmp_path / "credential.json",
-        notify_path=notify_path,
     )
     client = XiyouApiClient(
         credential=XiyouCredential(authorization=_jwt(seconds=-60)),
@@ -296,7 +259,9 @@ def test_expired_jwt_triggers_token_required_notification_and_stops_request(loca
             api_route = mock.get("https://api.xydc.com/user/info").mock(
                 return_value=httpx.Response(200, json={"code": 200})
             )
-            notify_route = mock.post(webhook).mock(return_value=httpx.Response(200, json={"errcode": 0}))
+            notify_route = mock.post(DEFAULT_NOTIFY_WEBHOOK_URL).mock(
+                return_value=httpx.Response(200, json={"errcode": 0})
+            )
             with pytest.raises(XiyouCredentialExpiredError) as exc_info:
                 _run(client.get_json("/user/info"))
     finally:

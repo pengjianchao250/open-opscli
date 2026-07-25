@@ -194,7 +194,7 @@ class TestCheckAndNotify:
             captured = capsys.readouterr()
             assert "0.0.72" in captured.err
             assert "0.0.99" in captured.err
-            assert "pip install" in captured.err
+            assert "opscli self-update" in captured.err
 
     @respx.mock
     def test_no_cache_pypi_has_update(self, tmp_path, capsys):
@@ -242,3 +242,48 @@ class TestCheckAndNotify:
             check_and_notify()
             captured = capsys.readouterr()
             assert captured.err == ""
+
+
+class TestUpdateChannelFetch:
+    """更新渠道测试：环境变量 OPSCLI_UPDATE_CHANNEL=test 时查询 TestPyPI 且绕过缓存。"""
+
+    @respx.mock
+    def test_fetch_test_channel_queries_testpypi(self, monkeypatch):
+        """test 渠道下版本查询指向 test.pypi.org。"""
+        monkeypatch.setenv("OPSCLI_UPDATE_CHANNEL", "test")
+        respx.get("https://test.pypi.org/pypi/aukeys-opscli/json").mock(
+            return_value=httpx.Response(200, json={"info": {"version": "0.0.140"}})
+        )
+        assert _fetch_latest_version() == "0.0.140"
+
+    @respx.mock
+    def test_fetch_default_still_queries_pypi(self, monkeypatch):
+        """未设置渠道时行为不变：仍查询公网 pypi.org。"""
+        monkeypatch.delenv("OPSCLI_UPDATE_CHANNEL", raising=False)
+        respx.get("https://pypi.org/pypi/aukeys-opscli/json").mock(
+            return_value=httpx.Response(200, json={"info": {"version": "0.0.99"}})
+        )
+        assert _fetch_latest_version() == "0.0.99"
+
+    @respx.mock
+    def test_check_and_notify_test_channel_bypasses_cache(self, tmp_path, capsys, monkeypatch):
+        """test 渠道下即使存在有效缓存也直连 TestPyPI，且不写缓存（避免污染正式渠道判断）。"""
+        monkeypatch.setenv("OPSCLI_UPDATE_CHANNEL", "test")
+        cache_file = tmp_path / "pypi_version_cache.json"
+        cache_file.write_text(json.dumps({
+            "latest_version": "0.0.72",
+            "checked_at": time.time(),
+        }))
+        respx.get("https://test.pypi.org/pypi/aukeys-opscli/json").mock(
+            return_value=httpx.Response(200, json={"info": {"version": "0.0.99"}})
+        )
+        with (
+            patch("opscli.shared.update_check._CACHE_FILE", cache_file),
+            patch("opscli.shared.update_check.get_version", return_value="0.0.72"),
+        ):
+            check_and_notify()
+            captured = capsys.readouterr()
+            # 提示的是 TestPyPI 上的新版本，而非缓存里的旧值
+            assert "0.0.99" in captured.err
+        # 缓存内容未被 test 渠道覆盖
+        assert json.loads(cache_file.read_text())["latest_version"] == "0.0.72"
