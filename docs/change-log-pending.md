@@ -1,5 +1,22 @@
 # 待归档变更记录
 
+## 2026-07-26 query/planner - 三项修复合入 release 后的 e2e 联合验收
+
+对应本轮三个提交：`9395f1d` 对比期跳过主周期、`7f2b8ac` 补齐 6 条澄清文案、`683e5ca` 组件枚举失败可重试性区分。合入 release 后在 QA 账号（zhangpeiliang@aukeys.com）实测：
+
+| 验收项 | 结果 |
+|---|---|
+| 对比期修复（生产 conv=44289 原文） | 主周期 2026-06-01~06-30、对比期 **2026-05-01~05-31**，`execution_ref.time_scope` 中对比期 ≠ 主周期（修复前两者相同） |
+| 枚举失败语义（同一请求） | `component_filter_state=enum_failed`、`next_action=report_component_enum_defect`，文案透出「RemoteBusinessError: 字段不存在: dept_name……重试无效」 |
+| 新增澄清文案 | 「从 custom_not_exist_set 查询销售额 近7天」→ `dataset_not_available_in_current_scope`，返回专属文案（修复前为兜底「需要补充查询条件。」） |
+| 成功路径未受影响（conv=42790 原文） | `query flow` → `status=planned`、`result.success=true`、**20 行**真实数据，主周期 2026-06-25~07-24 / 对比期 2026-05-26~06-24 正确 |
+| 单测回归 | `tests/query` 140 passed、`tests/skills/test_dataset_query_planner.py` 61 passed、`tests/mcp` 322 passed |
+| 对拍回归 | `planner_parity.py` 在**同一 checkout** 内控制变量重跑：修复前 5/6、修复后 5/6 逐条一致；差异项 `platform_enum` 两侧相同（脚本 env 指向 ops.cm 后端的环境差异） |
+
+**存量失败（与本轮无关，已在修复起点 1d7ddcb 上复现确认）**：`tests/query/test_cli.py` 的 catalog/intent 两项（工具临时屏蔽）、`tests/skills/test_dataset_query_flow.py::test_skill_defaults_to_bounded_single_flow_entry`（SKILL.md 版本已升至 1.3.15 但测试仍断言 1.3.14，系他人提交升版未同步测试）、`tests/mcp/test_quota.py`。其中 SKILL.md 版本断言建议单独修。
+
+**未修复项**：部门枚举失败的**根因在后端**——查询组件表 `custom_dept_set`(table_id=48) 在 query-metadata 中字段数为 0，`dept_name` 系客户端按 select_columns 派生猜测，后端不认。已提交 opscli feedback 报障：**feedback_uuid `e2f48e76-331a-4d9e-9ed7-b37b13d7ab02`**（bug/high）。客户端只做了失败语义区分，未做字段名猜测硬修。
+
 ## 2026-07-26 query/planner - 区分组件枚举失败的可重试性，停止诱导徒劳重试
 
 **变更原因**：dataset_constraints 修复后 e2e 暴露——含部门筛选的请求卡在 `blocked` + `retry_component_permission_enum` + 文案「请原样重试一次」。诊断发现**重试永远不会成功**：QA 组件表 `custom_dept_set`（table_id=48）在后端元数据里**字段数为 0**，`dept_name` 是 `_derived_component_fields` 从 `select_columns` 派生**猜测**出来的，后端直接报 `字段不存在: dept_name`。
