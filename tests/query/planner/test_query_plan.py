@@ -7,7 +7,7 @@
 """
 
 from opscli.query.services.planner.metadata_adapter import MetadataAdapter
-from opscli.query.services.planner import query_plan
+from opscli.query.services.planner import agent_query_planner, query_plan
 
 
 def _sales_payload():
@@ -116,3 +116,52 @@ def test_platform_enum_wrapper_uses_injected_enum_fn():
     assert seen["args"] == (200, "platform_name", 100)
     # 未注入 enum_fn 时安全回落空列表（走手动枚举命令）
     assert query_plan._auto_enum_platform_values(None, 200) == []
+
+
+# ── 澄清文案完备性（Agent 盲重试的直接诱因）──────────────────────────────────
+#
+# clarification_messages_zh 由 CLARIFICATION_MESSAGES.get(code, 兜底文案) 生成。
+# 缺配文案的 code 会静默退化成「需要补充查询条件。」，不告诉调用方到底缺什么，
+# Agent 只能反复改写请求盲重试（生产两周 76 次澄清落在缺文案的 code 上）。
+# 本用例用 AST 提取选表器实际产出的全部 code，保证新增分支不会漏配文案。
+
+
+def _planner_missing_information_codes() -> set[str]:
+    """AST 提取 agent_query_planner 中 _result(...) 实际产出的 missing 值。"""
+    import ast
+    from pathlib import Path
+
+    source = Path(agent_query_planner.__file__).read_text("utf-8")
+    codes: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", "") == "_result"
+            and node.args
+        ):
+            last = node.args[-1]
+            if isinstance(last, ast.Constant) and isinstance(last.value, str):
+                codes.add(last.value)
+    return codes
+
+
+def test_every_clarification_code_has_dedicated_message():
+    """所有可能产出的澄清 code 都必须配有专属中文文案，不得落到兜底。"""
+    # 合同层在选表 code 之外追加的确认类 code
+    contract_level = {
+        "field_identity",
+        "time_scope_confirmation",
+        "recommended_fields_confirmation",
+        "default_dataset_confirmation",
+    }
+    produced = _planner_missing_information_codes() | contract_level
+    missing = sorted(produced - set(query_plan.CLARIFICATION_MESSAGES))
+    assert not missing, f"以下澄清 code 缺专属文案，会退化为兜底提示：{missing}"
+
+
+def test_clarification_messages_are_actionable():
+    """每条澄清文案须为非空中文，且不得与兜底文案雷同。"""
+    for code, message in query_plan.CLARIFICATION_MESSAGES.items():
+        assert isinstance(message, str) and message.strip(), f"{code} 文案为空"
+        assert message != "需要补充查询条件。", f"{code} 文案与兜底雷同"
+        assert any("一" <= ch <= "鿿" for ch in message), f"{code} 文案非中文"

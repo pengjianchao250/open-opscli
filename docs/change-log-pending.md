@@ -1,5 +1,19 @@
 # 待归档变更记录
 
+## 2026-07-26 query/planner - 补齐 6 个缺失的澄清文案，消除盲重试诱因
+
+**变更原因**：`clarification_messages_zh` 由 `CLARIFICATION_MESSAGES.get(code, "需要补充查询条件。")` 生成，缺配文案的 code 会**静默退化为兜底提示**，不告诉调用方到底缺什么，Agent 只能反复改写请求盲重试。AST 精确比对确认选表器实际产出 7 个 `missing_information` 值 + 合同层 4 个确认类 code，其中 **6 个无专属文案**：`query`、`business_scope`、`dataset_selection`、`business_dataset`、`dataset_not_available_in_current_scope`、`incompatible_scope`。QA 生产两周实测这些 code 合计出现 76 次（business_scope 48 / dataset_selection 19 / business_dataset 5 / dataset_not_available_in_current_scope 4），全部退化为空泛提示。
+
+**改动点**：
+- `opscli/query/services/planner/query_plan.py`：`CLARIFICATION_MESSAGES` 补齐上述 6 条，每条写明「缺什么 + 下一步做什么」（如 dataset_selection 指明"在候选中确认哪一个，可直接在请求中写明数据集名称"），并加注释说明缺文案的后果。
+- `tests/query/planner/test_query_plan.py` 新增 2 个测试：**结构性护栏**（AST 提取 `_result(...)` 实参 + 合同层 code，断言全部配有专属文案——将来新增澄清分支漏配会被自动测出）、文案质量（非空中文且不与兜底雷同）。
+
+**验证结果**：护栏测试先失败（精确列出 6 个缺失 code）后通过；`tests/query` 135 → **137 passed**（2 个 catalog/intent 存量失败不变）。
+
+**影响范围**：仅 `model_view.clarification_messages_zh` 的文案内容，不改变 status/reason_codes/选表与执行逻辑。既有 9 条文案未改动（含 `dataset_constraints`）。
+
+**回滚方式**：删除 `CLARIFICATION_MESSAGES` 本次新增的 6 个键与注释、删除 2 个新增测试。
+
 ## 2026-07-26 query/planner - 修复显式对比期误取主周期导致的环比静默失真
 
 **变更原因**：dataset_constraints 修复后的 e2e 中发现——生产原文「对比6月(2026-06-01~2026-06-30)与5月(2026-05-01~2026-05-31)的销量变化」解析出的对比期是 `2026-06-01 ~ 2026-06-30`，**与主周期完全相同**。后果是环比差值恒为 0/空且不报任何错，属静默出错数（比澄清类问题更危险）。
