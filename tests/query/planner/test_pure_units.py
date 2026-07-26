@@ -55,6 +55,85 @@ def test_time_scope_default_window_when_unmatched():
     assert scope["matched"] is False
 
 
+# ── 显式对比周期不得与主周期重合（生产环比失真）────────────────────────────
+#
+# "对比A与B" 结构里对比线索词位于主周期之前，_explicit_comparison 从线索词之后
+# 取第一个日期区间时会取到主周期自身，导致对比期 == 主周期、环比恒为 0 且不报错
+# （静默出错数）。对比期必须跳过与主周期重合的区间，取下一个候选。
+
+
+def test_explicit_comparison_skips_primary_window_absolute():
+    """对比线索词在主周期之前时，绝对区间对比期须取到第二个区间。"""
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    scope = time_scope.parse(
+        "项目二部，按ASIN对比6月(2026-06-01~2026-06-30)与5月(2026-05-01~2026-05-31)的销量变化",
+        today=date(2026, 7, 26),
+    )
+    assert (scope["start"], scope["end"]) == ("2026-06-01", "2026-06-30")
+    comparison = scope["comparison"]
+    assert comparison is not None
+    assert (comparison["start"], comparison["end"]) == ("2026-05-01", "2026-05-31")
+    # 对比期与主周期重合即为失真，必须显式拒绝
+    assert (comparison["start"], comparison["end"]) != (scope["start"], scope["end"])
+
+
+def test_explicit_comparison_skips_primary_window_natural_month():
+    """自然月写法下同样跳过主周期月份，取真正的对比月。"""
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    scope = time_scope.parse("对比6月与5月的销量", today=date(2026, 7, 26))
+    assert (scope["start"], scope["end"]) == ("2026-06-01", "2026-06-30")
+    comparison = scope["comparison"]
+    assert comparison is not None
+    assert (comparison["start"], comparison["end"]) == ("2026-05-01", "2026-05-31")
+
+
+def test_explicit_comparison_keeps_existing_trailing_forms():
+    """线索词在主周期之后的既有写法不得因本次修复改变结论。"""
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    trailing = time_scope.parse(
+        "查询2026-06-25至2026-07-24的销售额，对比2026-05-26至2026-06-24",
+        today=date(2026, 7, 26),
+    )
+    assert (trailing["start"], trailing["end"]) == ("2026-06-25", "2026-07-24")
+    assert (trailing["comparison"]["start"], trailing["comparison"]["end"]) == (
+        "2026-05-26",
+        "2026-06-24",
+    )
+
+    month_form = time_scope.parse("查询2026年6月与2026年5月的销售额对比", today=date(2026, 7, 26))
+    assert (month_form["start"], month_form["end"]) == ("2026-06-01", "2026-06-30")
+    assert (month_form["comparison"]["start"], month_form["comparison"]["end"]) == (
+        "2026-05-01",
+        "2026-05-31",
+    )
+
+
+def test_explicit_comparison_absent_when_only_primary_window_present():
+    """句中只有主周期一个区间时不得伪造对比期（无第二区间可用）。"""
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    scope = time_scope.parse(
+        "对比查询2026-06-01~2026-06-30的销量", today=date(2026, 7, 26)
+    )
+    assert (scope["start"], scope["end"]) == ("2026-06-01", "2026-06-30")
+    comparison = scope["comparison"] or {}
+    assert (comparison.get("start"), comparison.get("end")) != (
+        scope["start"],
+        scope["end"],
+    )
+
+
 def test_plan_integrity_attach_and_verify_roundtrip():
     """attach 附加摘要后 verify 通过；篡改执行引用后 verify 失败。"""
     from opscli.query.services.planner import plan_integrity

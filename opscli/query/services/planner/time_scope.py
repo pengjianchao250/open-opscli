@@ -41,6 +41,12 @@ _MONTH_RE = re.compile(
     re.IGNORECASE,
 )
 _COMPARISON_CUE_RE = re.compile(r"对比期?|比较|与|较|vs\.?", re.IGNORECASE)
+# 绝对日期区间：2026-07-01 至 2026-07-15 / 2026年7月1日~7月15日（主周期与对比期共用）
+_ABSOLUTE_RANGE_RE = re.compile(
+    r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\s*"
+    r"(?:至|到|~|～|—|–)\s*"
+    r"(?:(20\d{2})[-/.年])?(\d{1,2})[-/.月](\d{1,2})日?"
+)
 
 
 def _num(text: str) -> int | None:
@@ -81,58 +87,62 @@ def _month_window(year: int, month: int) -> tuple[date, date]:
     return date(year, month, 1), date(year, month, monthrange(year, month)[1])
 
 
-def _explicit_comparison(query: str, today: date) -> dict | None:
+def _explicit_comparison(
+    query: str, today: date, primary: tuple[date, date] | None = None
+) -> dict | None:
     """解析用户明确给出的第二个对比日期范围或自然月。
 
     显式对比优先于“环比”自动平移，避免“2026年6月与2026年5月对比”
     被误算成全年或等长365天窗口。
+
+    为什么要跳过主周期：对比线索词可能出现在主周期**之前**（“对比6月(2026-06-01
+    ~2026-06-30)与5月(2026-05-01~2026-05-31)”），此时线索词之后的第一个区间正是
+    主周期自身。若直接采纳，对比期将等于主周期——环比恒为 0、差值恒为空，且不报
+    任何错（静默出错数）。故逐个遍历候选区间，跳过与主周期完全重合者取下一个；
+    没有第二个可用区间时返回 None，交由上层的环比/同比规则处理，绝不伪造对比期。
+
+    Args:
+        primary: 已解析出的主周期 (start, end)，用于排除重合候选；None 表示不排除。
     """
     cue = _COMPARISON_CUE_RE.search(query)
     if not cue:
         return None
     comparison_text = query[cue.end() :]
-    absolute = re.search(
-        r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\s*"
-        r"(?:至|到|~|～|—|–)\s*"
-        r"(?:(20\d{2})[-/.年])?(\d{1,2})[-/.月](\d{1,2})日?",
-        comparison_text,
-    )
-    if absolute:
+    for absolute in _ABSOLUTE_RANGE_RE.finditer(comparison_text):
         start = _parsed_date(absolute.group(1), absolute.group(2), absolute.group(3))
         end = _parsed_date(
             absolute.group(4) or absolute.group(1),
             absolute.group(5),
             absolute.group(6),
         )
-        if start and end and start <= end:
-            return {
-                "type": "explicit_period",
-                "start": _fmt(start),
-                "end": _fmt(end),
-                "label_zh": "显式对比周期",
-            }
-    month_match = _MONTH_RE.search(comparison_text)
-    if not month_match:
-        return None
-    year = int(month_match.group(1) or today.year)
-    start, end = _month_window(year, int(month_match.group(2)))
-    return {
-        "type": "explicit_period",
-        "start": _fmt(start),
-        "end": _fmt(end),
-        "label_zh": "显式对比自然月",
-    }
+        if not (start and end and start <= end):
+            continue
+        if primary is not None and (start, end) == primary:
+            continue
+        return {
+            "type": "explicit_period",
+            "start": _fmt(start),
+            "end": _fmt(end),
+            "label_zh": "显式对比周期",
+        }
+    for month_match in _MONTH_RE.finditer(comparison_text):
+        year = int(month_match.group(1) or today.year)
+        start, end = _month_window(year, int(month_match.group(2)))
+        if primary is not None and (start, end) == primary:
+            continue
+        return {
+            "type": "explicit_period",
+            "start": _fmt(start),
+            "end": _fmt(end),
+            "label_zh": "显式对比自然月",
+        }
+    return None
 
 
 def _window(query: str, today: date) -> tuple[date, date, str, bool]:
     """解析主周期窗口，返回 (start, end, 中文标签, 是否默认)。"""
     # 明确绝对日期范围：2026-07-01 至 2026-07-15 / 2026年7月1日~7月15日
-    absolute = re.search(
-        r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\s*"
-        r"(?:至|到|~|～|—|–)\s*"
-        r"(?:(20\d{2})[-/.年])?(\d{1,2})[-/.月](\d{1,2})日?",
-        query,
-    )
+    absolute = _ABSOLUTE_RANGE_RE.search(query)
     if absolute:
         start = _parsed_date(absolute.group(1), absolute.group(2), absolute.group(3))
         end = _parsed_date(
@@ -254,7 +264,8 @@ def parse(query: str, *, today: date | None = None) -> dict:
         "matched": not is_default,
         "comparison": None,
     }
-    explicit_comparison = _explicit_comparison(text, today)
+    # 传入主周期，避免把主周期自身当成对比期（“对比A与B”结构线索词在主周期之前）
+    explicit_comparison = _explicit_comparison(text, today, primary=(start, end))
     if explicit_comparison:
         result["comparison"] = explicit_comparison
     elif _COMPARE_YOY_RE.search(text):
