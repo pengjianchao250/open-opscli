@@ -1,5 +1,21 @@
 # 待归档变更记录
 
+## 2026-07-26 tests/docs - 修复 SKILL.md 版本断言脆弱写法，归档澄清增强方案
+
+**变更原因**：
+1. `tests/skills/test_dataset_query_flow.py::test_skill_defaults_to_bounded_single_flow_entry` 长期失败。查证：该测试与版本升级同在提交 `496c770` 引入，作者把 SKILL.md 与 `data/VERSION.json` 都升到 `1.3.15`，但测试里硬编码断言 `version: 1.3.14`（笔误）。两个版本源本身一致，是断言写错。且这种硬编码字面量的写法**每次正常升版都会误报**，同时拦不住真正该拦的「SKILL.md 与 VERSION.json 版本分叉」。
+2. 前期讨论产出的《取数规划器澄清增强方案》一直游离在工作区未入库。
+
+**改动点**：
+- `tests/skills/test_dataset_query_flow.py`：拆出独立用例 `test_skill_version_matches_version_json`，从 `data/VERSION.json` 读取版本再断言 SKILL.md frontmatter 与之一致（守住真正的不变量：两处版本源不得分叉）；原 `test_skill_defaults_to_bounded_single_flow_entry` 移除版本字面量断言，其余入口/预算断言保持不变。
+- 新增 `docs/plans/取数规划器澄清增强方案.md`（按【铁律16】归入 `docs/plans/`）：`clarify_required` 且规划器给不出候选时，投影授权数据集目录供模型生成**更准的澄清选项**，仍由用户确认后回灌规划器；含前置门槛（A 类澄清占比 ≥20% 才实施）、相关性排序投影算法、触发条件、回灌协议、闭环语料与分阶段计划。**该方案尚未实施**，其 §3 前置统计已由本轮 dataset_constraints 修复的实测数据部分回答（A 类占 84.8%，但主力 dataset_constraints 已由 `910c983` 直接修掉，方案性价比需重算）。
+
+**验证结果**：`tests/skills/test_dataset_query_flow.py` 4 passed（此前 1 failed）。反向验证新断言的检测力：把 VERSION.json 临时改为 `9.9.9` → 用例如期失败，随即还原。方案文档已扫描确认不含账号邮箱、数据集 alias、部门名等内部标识。
+
+**影响范围**：仅测试与文档，无生产代码改动。
+
+**回滚方式**：还原 `test_dataset_query_flow.py` 的两个用例、删除 `docs/plans/取数规划器澄清增强方案.md`。
+
 ## 2026-07-26 query/planner - 三项修复合入 release 后的 e2e 联合验收
 
 对应本轮三个提交：`9395f1d` 对比期跳过主周期、`7f2b8ac` 补齐 6 条澄清文案、`683e5ca` 组件枚举失败可重试性区分。合入 release 后在 QA 账号（zhangpeiliang@aukeys.com）实测：

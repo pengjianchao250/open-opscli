@@ -21,11 +21,26 @@ if str(SCRIPTS_DIR) not in sys.path:
 import query_flow  # noqa: E402
 
 
+def test_skill_version_matches_version_json():
+    """SKILL.md frontmatter 版本须与 data/VERSION.json 一致。
+
+    原先此断言把版本号硬编码为字面量（写作 1.3.14，而 SKILL.md 与 VERSION.json
+    实为 1.3.15），既拦不住真正该拦的「两处版本源分叉」，又会在每次正常升版时
+    误报失败。改为断言两个版本源一致——这才是需要守住的不变量。
+    """
+    text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    declared = json.loads((SKILL_ROOT / "data" / "VERSION.json").read_text(encoding="utf-8"))
+    version = str(declared["version"])
+
+    assert f"version: {version}" in text, (
+        f"SKILL.md frontmatter 版本与 VERSION.json({version}) 不一致"
+    )
+
+
 def test_skill_defaults_to_bounded_single_flow_entry():
     """Skill 正常路径必须固定为一体化入口，并禁止重复探查与手工改计划。"""
     text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
-    assert "version: 1.3.14" in text
     assert "正常路径工具调用预算" in text
     assert "最多 3 次工具调用" in text
     assert "非正常路径最多 7 次" in text
