@@ -1,5 +1,28 @@
 # 待归档变更记录
 
+## 2026-07-26 query/planner - 修复领域覆盖误判导致的 dataset_constraints 澄清死循环
+
+**变更原因**：QA 生产数据实证（`polaris_ops_metrics_qa.dm_agent_messages`，07-13~07-26 解析出 767 份规划合同）显示：`clarify_required` 占 46.3%（355 次），其中 `dataset_constraints` 独占 229 次（澄清的 64.5%）；再下钻，**93 次是 `dataset_candidates_zh` 只有 1 个候选**——规划器已唯一定位到数据集却仍打回澄清。取原始入参确认为澄清死循环：conv=44289 连续三次调用，Agent 把数据集写得越来越明确（甚至补上 `table_id=1`），三次返回同一句空泛文案「需要先澄清并确认满足所需业务范围、维度和指标的数据集。」（conv=42790 同样复现两次）。
+
+根因：`profile["domains"]` 只由数据集 description/remarks 匹配 `description_patterns` 推出，而「即时综合数据集」这类说明并不枚举自身覆盖的业务领域——真实覆盖能力体现在字段（表里确有 `advertising_fee`）。当请求含派生比例词（毛利率/广告占比/采购成本占比——表中无同名字段，故不会被 `_semantic_query_without_candidate_identity` 的候选身份剥离逻辑消掉）时，语义层提取出 `advertising` 领域，而 `_description_candidates_cover_constraints` 与 `_covers` 的**纯 domain 子集判定**即误判为不覆盖。该场景的字段证据补偿逻辑此前**只存在于 `_default_dataset_candidate` 一条路径**，另两条缺失，形成反直觉失效模式：**用户越明确点名数据集，越走说明命中路径，越绕开补偿，越必然失败**。
+
+**改动点**：`opscli/query/services/planner/agent_query_planner.py`
+- 新增 `_domains_are_covered(profile, domains, rules)`：说明推出的领域优先，未覆盖的领域回退到卡片字段词表（`FIELD_TERM_KEYS`）找 `terms`/`description_patterns` 证据；逐领域校验，任一领域无字段证据即判不覆盖。
+- `_description_candidates_cover_constraints`（阶段1/2 显式与说明命中）改用该判定。
+- `_covers`（阶段3 eligible 过滤）改用该判定。
+- `_default_dataset_candidate` 内原地重复的同款补偿逻辑（约 20 行）删除并复用该函数，消除三路径口径分叉。
+- 新增 4 个测试（`tests/query/planner/test_selection.py`）：字段证据覆盖说明缺口、**两路径判定一致性对照**（本缺陷的判定性证据）、无字段证据仍须阻断（防止退化为无条件放宽）、`_covers` 同口径。
+
+**验证结果**：修复前后逐目录对拍主仓基线——`tests/query/planner` 26 passed → **30 passed**（新增 4 个先失败后通过，TDD）；`tests/query` 主仓 2 failed/127 passed vs 修复 2 failed/**131** passed（失败集合逐条相同，为 catalog/intent 工具临时屏蔽导致的存量失败）；`tests/mcp`（排除既坏的 test_shopify_tools.py）两侧同为 7 failed/317 passed。`tests/` 全量的 24 个 collection error 与 `test_manager.py` 重名冲突为既有问题，主仓基线一致。**未跑** `scripts/regression/planner_parity.py`（需登录态与后端可达），亦**未做**真实账号 e2e 回放。
+
+**影响范围**：选表阶段1/2/3 的领域覆盖判定统一放宽——仅当卡片字段词表中存在该领域证据时才放行，不影响槽位（slot）判定与打分常量。预期直接改善生产 229 次 `dataset_constraints` 中的说明缺口类误判；136 次「无候选」（阶段3 eligible 空）为同一判定所致，预期一并改善但**未经量化验证**。放宽后阶段3 的 eligible 集合可能变大、进入打分的候选增多，理论上可改变个别选表结果，现有 golden 与选表测试未见变化。
+
+**遗留（本次刻意不做，避免混入单一修复）**：①`CLARIFICATION_MESSAGES` 缺 `business_scope`/`dataset_selection`/`business_dataset` 等 5 个 code 的文案，现全部 fallback 成「需要补充查询条件。」，是 Agent 盲重试的直接诱因，应独立补齐；②澄清文案未说明具体缺哪个 domain/slot。
+
+**回滚方式**：还原 `agent_query_planner.py` 三处判定（`_description_candidates_cover_constraints`、`_covers` 改回 `domains.issubset(profile["domains"])`，`_default_dataset_candidate` 恢复内联补偿），删除 `_domains_are_covered` 与 `tests/query/planner/test_selection.py` 中本次新增的 4 个测试及 `_instant_all_payload` 夹具。
+
+---
+
 ## 2026-07-26 query/mcp - query metadata 新增全量字段入口（CLI --all-fields / MCP include_all_fields）
 
 **变更原因**：metadata_all（include_all_fields 全量元数据）此前只被规划器 query plan/flow 内部调用，无独立入口直接触发/查看，不便验证或诊断后端是否支持 include_all_fields（Phase 0）。补一个直连入口。

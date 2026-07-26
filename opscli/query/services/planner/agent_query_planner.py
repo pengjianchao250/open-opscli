@@ -255,6 +255,39 @@ def _semantic_query_without_candidate_identity(
     return masked
 
 
+def _domains_are_covered(profile: dict, domains: set[str], rules: dict) -> bool:
+    """判断画像是否覆盖请求领域：说明推出的领域优先，未覆盖的再看字段证据。
+
+    为什么需要字段证据回退：profile["domains"] 只由数据集 description/remarks
+    匹配 description_patterns 推出，而"即时综合数据集"这类说明并不枚举自身
+    覆盖的业务领域——真实覆盖能力体现在字段上（表里确有 advertising_fee）。
+    只按说明判定会把"字段齐备但说明没写"的数据集误判为不覆盖，进而把已唯一
+    定位到的数据集打回澄清，且用户越是明确点名数据集越必然失败（越走说明命中
+    路径、越绕开默认推荐里的补偿）。字段是比说明更硬的覆盖证据，故在此回退。
+    """
+    missing = domains - profile["domains"]
+    if not missing:
+        return True
+    card = profile["card"]
+    # 卡片字段词表（字段中文名 + 技术名 + 组件列名等），领域证据的兜底来源
+    card_field_terms = {
+        _normalize(term) for key in FIELD_TERM_KEYS for term in card.get(key, [])
+    }
+    for domain in missing:
+        record = rules["domains"][domain]
+        patterns = [
+            _normalize(item)
+            for key in ("terms", "description_patterns")
+            for item in record[key]
+        ]
+        if not any(
+            pattern and any(pattern in field_term for field_term in card_field_terms)
+            for pattern in patterns
+        ):
+            return False
+    return True
+
+
 def _description_candidates_cover_constraints(
     candidates: list[dict],
     profiles: list[dict],
@@ -263,7 +296,7 @@ def _description_candidates_cover_constraints(
     rules: dict,
 ) -> bool:
     return all(
-        domains.issubset(profile["domains"])
+        _domains_are_covered(profile, domains, rules)
         and all(
             _slot_is_covered(profile, name, values, rules)
             for name, values in slots.items()
@@ -365,7 +398,8 @@ def _slot_is_covered(profile: dict, name: str, requested: set[str], rules: dict)
 
 
 def _covers(profile: dict, domains: set[str], slots: dict[str, set[str]], rules: dict) -> bool:
-    if not domains.issubset(profile["domains"]):
+    # 领域覆盖与说明命中路径共用同一判定（含字段证据回退），避免同一事实两条路径结论相反
+    if not _domains_are_covered(profile, domains, rules):
         return False
     return all(
         _slot_is_covered(profile, name, values, rules) for name, values in slots.items()
@@ -396,26 +430,9 @@ def _default_dataset_candidate(
     profile = matches[0]
     card = profile["card"]
     # 即时综合的说明通常只写“即时综合数据集”，真实覆盖范围体现在字段卡片。
-    # 默认选表仍须逐领域找到字段证据，不能仅因名称是默认表就放宽。
-    card_field_terms = {
-        _normalize(term)
-        for key in FIELD_TERM_KEYS
-        for term in card.get(key, [])
-    }
-    covered_domains = set(profile["domains"])
-    for domain in domains - covered_domains:
-        record = rules["domains"][domain]
-        patterns = [
-            _normalize(item)
-            for key in ("terms", "description_patterns")
-            for item in record[key]
-        ]
-        if any(
-            pattern and any(pattern in field_term for field_term in card_field_terms)
-            for pattern in patterns
-        ):
-            covered_domains.add(domain)
-    if not domains.issubset(covered_domains):
+    # 默认选表仍须逐领域找到字段证据，不能仅因名称是默认表就放宽——
+    # 该判定已抽为 _domains_are_covered，与说明命中路径/_covers 共用同一口径。
+    if not _domains_are_covered(profile, domains, rules):
         return None
 
     # 平台可由查询组件承接，实际可用值仍由 query_plan 权限枚举收敛。
