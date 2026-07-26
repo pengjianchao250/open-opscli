@@ -1,5 +1,22 @@
 # 待归档变更记录
 
+## 2026-07-26 query/planner - 区分组件枚举失败的可重试性，停止诱导徒劳重试
+
+**变更原因**：dataset_constraints 修复后 e2e 暴露——含部门筛选的请求卡在 `blocked` + `retry_component_permission_enum` + 文案「请原样重试一次」。诊断发现**重试永远不会成功**：QA 组件表 `custom_dept_set`（table_id=48）在后端元数据里**字段数为 0**，`dept_name` 是 `_derived_component_fields` 从 `select_columns` 派生**猜测**出来的，后端直接报 `字段不存在: dept_name`。
+
+对照实验（全部 query_component 组件表按其被引用列名实测枚举）：table_id=8/9/10/11（元数据字段数 8/11/2/3）**枚举全部成功**，唯独 table_id=48（字段数 0）失败。**根因在后端元数据配置**（该组件表未暴露任何字段），客户端无法猜出后端认什么字段名，不应也不能在客户端硬修字段名。客户端该做的是：不把配置类故障伪装成可重试故障。
+
+**改动点**：`opscli/query/services/planner/query_plan.py`
+- `_auto_enum_component_values` 新增**可选** `errors: list[str] | None` 出参，枚举调用抛异常时 append 异常摘要；不传时行为与既有逐字一致（向后兼容，`tests/skills` 中以 `lambda *_args, **_kwargs` 打桩的用例不受影响）。
+- `_resolve_department_filter` 据此分流：枚举调用**自身报错** → `component_filter_state=enum_failed`、`next_action=report_component_enum_defect`，文案透出原始错误并写明「重试无效，请提交反馈由平台侧核查」；枚举**成功但返回空**（确无授权值）→ 保留原有 `retry_component_permission_enum` 语义。两种情况均照常删除 `query_template` 阻断查询，绝不放大为全范围。
+- 新增 3 个测试：远端错误不得标为可重试且须透出真实错误、空结果保留重试语义、**成功路径照常写入筛选条件**（护栏）。
+
+**验证结果**：新增 3 测试先失败后通过；`tests/query` 137 → **140 passed**（2 个 catalog/intent 存量失败不变）；`tests/skills/test_dataset_query_planner.py` 61 passed 无回归。真实 QA 环境实测生产原文（conv=44289）：`status=blocked`、`component_filter_state=enum_failed`、`next_action=report_component_enum_defect`，文案含「RemoteBusinessError: 字段不存在: dept_name……重试无效」。
+
+**影响范围**：仅部门筛选枚举失败时的合同语义与文案；成功路径与「无授权值」路径不变。**未修复枚举本身**——该故障根因在后端组件表元数据配置，已另行提交 opscli feedback 报障。
+
+**回滚方式**：还原 `_resolve_department_filter` 的失败分流为单一 `enum_unavailable` 分支、去掉 `_auto_enum_component_values` 的 `errors` 参数、删除 3 个新增测试。
+
 ## 2026-07-26 query/planner - 补齐 6 个缺失的澄清文案，消除盲重试诱因
 
 **变更原因**：`clarification_messages_zh` 由 `CLARIFICATION_MESSAGES.get(code, "需要补充查询条件。")` 生成，缺配文案的 code 会**静默退化为兜底提示**，不告诉调用方到底缺什么，Agent 只能反复改写请求盲重试。AST 精确比对确认选表器实际产出 7 个 `missing_information` 值 + 合同层 4 个确认类 code，其中 **6 个无专属文案**：`query`、`business_scope`、`dataset_selection`、`business_dataset`、`dataset_not_available_in_current_scope`、`incompatible_scope`。QA 生产两周实测这些 code 合计出现 76 次（business_scope 48 / dataset_selection 19 / business_dataset 5 / dataset_not_available_in_current_scope 4），全部退化为空泛提示。

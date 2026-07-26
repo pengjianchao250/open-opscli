@@ -165,3 +165,77 @@ def test_clarification_messages_are_actionable():
         assert isinstance(message, str) and message.strip(), f"{code} 文案为空"
         assert message != "需要补充查询条件。", f"{code} 文案与兜底雷同"
         assert any("一" <= ch <= "鿿" for ch in message), f"{code} 文案非中文"
+
+
+# ── 组件枚举失败的可重试性区分（避免 Agent 徒劳重试）────────────────────────
+#
+# 部门枚举失败时合同一律给出 retry_component_permission_enum + "请原样重试一次"。
+# 但实测 QA 组件表 custom_dept_set（table_id=48）在后端元数据里字段数为 0，
+# dept_name 是 _derived_component_fields 从 select_columns 派生猜测出来的，
+# 后端直接报"字段不存在: dept_name"——这是配置类故障，重试多少次都不会成功。
+# 客户端无法猜出后端认什么字段名（根因在后端），但必须把"重试无用"如实告知，
+# 否则 Agent 会按 next_action 反复重试。
+
+
+def _dept_contract() -> dict:
+    """构造一个待解析部门筛选的 planned 合同骨架。"""
+    return {
+        "status": "planned",
+        "query_mode": "dataset_query",
+        "model_view": {"clarification_messages_zh": [], "next_action": "construct_query"},
+        "execution_ref": {
+            "filter_components": [
+                {
+                    "field_name": "dept_name",
+                    "label_zh": "部门",
+                    "component_dataset_alias": "ds_dept",
+                    "component_table_id": 48,
+                }
+            ],
+            "query_template": {"tableId": 1, "dimensions": [], "metrics": [], "filters": []},
+        },
+    }
+
+
+def test_component_enum_remote_error_is_not_advertised_as_retryable():
+    """枚举调用本身报错（组件表未暴露该字段）时不得建议原样重试。"""
+
+    def enum_fn(_table_id, _field_name, *, limit):
+        raise RuntimeError("字段不存在: dept_name")
+
+    contract = query_plan._resolve_department_filter(
+        _dept_contract(), "查询项目二部的销量", enum_fn, auto_enum=True
+    )
+    view = contract["model_view"]
+    assert contract["status"] == "blocked"
+    # 仍须阻断查询，绝不放大为全范围
+    assert "query_template" not in contract["execution_ref"]
+    assert view["next_action"] != "retry_component_permission_enum"
+    message = " ".join(view["clarification_messages_zh"])
+    assert "重试" not in message or "重试无效" in message or "重试无用" in message
+    # 真实错误必须透出，便于定位与报障
+    assert "字段不存在" in message
+
+
+def test_component_enum_empty_result_keeps_retry_semantics():
+    """枚举调用成功但返回空（当前账号无授权部门）时保留原有重试语义。"""
+    contract = query_plan._resolve_department_filter(
+        _dept_contract(), "查询项目二部的销量", lambda *_a, **_k: [], auto_enum=True
+    )
+    view = contract["model_view"]
+    assert contract["status"] == "blocked"
+    assert view["next_action"] == "retry_component_permission_enum"
+    assert "query_template" not in contract["execution_ref"]
+
+
+def test_component_enum_success_still_resolves_filter():
+    """枚举成功且唯一等值命中时照常写入筛选条件（成功路径不受影响）。"""
+    contract = query_plan._resolve_department_filter(
+        _dept_contract(),
+        "查询项目二部的销量",
+        lambda *_a, **_k: ["项目二部", "项目九部"],
+        auto_enum=True,
+    )
+    assert contract["status"] == "planned"
+    filters = contract["execution_ref"]["query_template"]["filters"]
+    assert {"field": "dept_name", "operator": "=", "value": "项目二部"} in filters

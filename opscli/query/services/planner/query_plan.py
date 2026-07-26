@@ -1624,13 +1624,27 @@ def _auto_enum_platform_values(enum_fn, component_table_id: object) -> list[str]
     return _deduplicate(str(value).strip() for value in values or [] if str(value).strip())
 
 
-def _auto_enum_component_values(enum_fn, component_table_id: object, field_name: str) -> list[str]:
-    """经注入的 enum_fn 枚举普通筛选组件字段值；任何异常返回空列表，由合同阻断扩大查询。"""
+def _auto_enum_component_values(
+    enum_fn,
+    component_table_id: object,
+    field_name: str,
+    errors: list[str] | None = None,
+) -> list[str]:
+    """经注入的 enum_fn 枚举普通筛选组件字段值；任何异常返回空列表，由合同阻断扩大查询。
+
+    Args:
+        errors: 可选出参，传入列表时把枚举调用自身的异常摘要 append 进去。
+            调用方据此区分「调用失败」（如组件表未暴露该字段，属配置故障，重试无用）
+            与「调用成功但无授权值」（可重试/确属无权限），避免一律建议原样重试
+            导致调用方徒劳重试。不传时行为与既有完全一致（向后兼容）。
+    """
     if enum_fn is None or component_table_id in (None, "") or not field_name:
         return []
     try:
         values = enum_fn(component_table_id, field_name, limit=500)
-    except Exception:  # noqa: BLE001 枚举失败不阻塞，交由合同阻断
+    except Exception as exc:  # noqa: BLE001 枚举失败不阻塞，交由合同阻断
+        if errors is not None:
+            errors.append(f"{type(exc).__name__}: {exc}"[:200])
         return []
     return _deduplicate(str(value).strip() for value in values or [] if str(value).strip())
 
@@ -1654,23 +1668,37 @@ def _resolve_department_filter(contract: dict, query: str, enum_fn, *, auto_enum
     if not component:
         return contract
 
+    enum_errors: list[str] = []
     values = (
         _auto_enum_component_values(
             enum_fn,
             component.get("component_table_id"),
             "dept_name",
+            enum_errors,
         )
         if auto_enum
         else []
     )
     if not values:
         contract["status"] = "blocked"
+        execution.pop("query_template", None)
+        if enum_errors:
+            # 枚举调用自身报错（实测形态：组件表元数据未暴露该字段，后端报“字段不存在”，
+            # 此时字段名系由 select_columns 派生猜测）。属配置类故障，重试多少次都不会
+            # 成功，必须如实告知并透出原始错误，否则调用方会按 next_action 反复重试。
+            contract["model_view"]["component_filter_state"] = "enum_failed"
+            contract["model_view"]["next_action"] = "report_component_enum_defect"
+            contract["model_view"]["clarification_messages_zh"].append(
+                f"部门“{requested}”的授权枚举调用失败（{enum_errors[0]}），"
+                "重试无效——通常是该筛选组件的元数据配置异常，请提交反馈由平台侧核查；"
+                "已阻止扩大为全范围查询。"
+            )
+            return contract
         contract["model_view"]["component_filter_state"] = "enum_unavailable"
         contract["model_view"]["next_action"] = "retry_component_permission_enum"
         contract["model_view"]["clarification_messages_zh"].append(
             f"当前未能枚举部门“{requested}”的授权原值，已阻止扩大为全范围查询；请原样重试一次。"
         )
-        execution.pop("query_template", None)
         return contract
 
     target = _normalize_department_value(requested)
