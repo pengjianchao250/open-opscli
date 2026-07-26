@@ -13,7 +13,13 @@
 - `_default_dataset_candidate` 内原地重复的同款补偿逻辑（约 20 行）删除并复用该函数，消除三路径口径分叉。
 - 新增 4 个测试（`tests/query/planner/test_selection.py`）：字段证据覆盖说明缺口、**两路径判定一致性对照**（本缺陷的判定性证据）、无字段证据仍须阻断（防止退化为无条件放宽）、`_covers` 同口径。
 
-**验证结果**：修复前后逐目录对拍主仓基线——`tests/query/planner` 26 passed → **30 passed**（新增 4 个先失败后通过，TDD）；`tests/query` 主仓 2 failed/127 passed vs 修复 2 failed/**131** passed（失败集合逐条相同，为 catalog/intent 工具临时屏蔽导致的存量失败）；`tests/mcp`（排除既坏的 test_shopify_tools.py）两侧同为 7 failed/317 passed。`tests/` 全量的 24 个 collection error 与 `test_manager.py` 重名冲突为既有问题，主仓基线一致。**未跑** `scripts/regression/planner_parity.py`（需登录态与后端可达），亦**未做**真实账号 e2e 回放。
+**验证结果**：
+1. **单测**：`tests/query/planner` 26 passed → **30 passed**（新增 4 个先失败后通过，TDD）；`tests/query` 主仓 2 failed/127 passed vs 修复 2 failed/**131** passed（失败集合逐条相同，为 catalog/intent 工具临时屏蔽导致的存量失败）；`tests/mcp`（排除既坏的 test_shopify_tools.py）两侧同为 7 failed/317 passed。`tests/` 全量的 24 个 collection error 源于 `test_manager.py` 重名冲突，主仓基线一致。
+2. **e2e 修复前后对照**（QA 账号 zhangpeiliang@aukeys.com，同一元数据快照，回放生产死循环原文）：
+   - conv=44289 原文：修复前 `clarify_required`+`['dataset_constraints']`+数据集空+维度指标全空 → 修复后成功选中「即时综合数据集」，维度 ASIN/产品名称、指标 订单销量/销售额/广告费/毛利率/采购成本，`reason_codes=[]`（推进到部门枚举 `retry_component_permission_enum`，属另一问题）。
+   - conv=42790 原文：修复前 `clarify_required`+`['dataset_constraints']`+无 query_template → 修复后 **`planned`**，query_template 完整（tableId=1，1 维度/4 指标/2 日期 filter/dataComparison=True）。
+3. **e2e 真实取数闭环**：对 conv=42790 原文执行 `opscli query flow` → `result.success=true`，返回 **20 行**真实数据，含环比对比列（order_qty/last_order_qty/diff_order_qty/pct_order_qty），时间口径主周期 2026-06-25~07-24、对比期 2026-05-26~06-24 正确。
+4. **对拍回归**：`scripts/regression/planner_parity.py` 在**同一 checkout 内**控制变量重跑，修复前 5/6、修复后 5/6，逐条一致；唯一差异 `platform_enum` 修复前后同为 blocked/`block_platform_scope_not_authorized`（该脚本 env 默认指向 ops.cm 后端，与直连 QA 后端的平台权限枚举结果不同，属环境差异非代码回归）。跑该脚本会覆写 `tests/query/planner/golden/`（日期窗口随当天漂移 + 后端差异），本次已还原未提交。
 
 **影响范围**：选表阶段1/2/3 的领域覆盖判定统一放宽——仅当卡片字段词表中存在该领域证据时才放行，不影响槽位（slot）判定与打分常量。预期直接改善生产 229 次 `dataset_constraints` 中的说明缺口类误判；136 次「无候选」（阶段3 eligible 空）为同一判定所致，预期一并改善但**未经量化验证**。放宽后阶段3 的 eligible 集合可能变大、进入打分的候选增多，理论上可改变个别选表结果，现有 golden 与选表测试未见变化。
 
