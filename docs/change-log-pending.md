@@ -1,5 +1,16 @@
 # 待归档变更记录
 
+## 2026-07-27 query/planner - run_flow execution_notes 改为按需披露（消除误导）
+
+**变更原因**：run_flow 无条件返回两条延后项披露（orderBy 服务端缺陷本地兜底、result_dir 落盘），但本次已补 order_by/limit 可控——用户对「只 limit 不排序」的查询仍看到「orderBy…未内核化」的提示，误以为排序功能没做。这两条延后项与「能否下发 orderBy/limit」是两码事（前者是服务端 orderBy 缺陷的客户端纠错安全网、后者是结果落盘），且无条件显示对无关查询产生误导。
+**改动点**：`opscli/query/services/planner/entry.py`
+- `_FLOW_DEFERRED_NOTES` 静态列表拆为 `_NOTE_ORDER_BY` / `_NOTE_RESULT_DIR` 两条常量，措辞纠正（orderBy 那条改为「orderBy 已下发给服务端；但服务端 orderBy 缺陷的本地兜底/加量重查暂未内核化」，不再让人误读为「orderBy 不支持」）。
+- `run_flow` 改为**按需披露**：仅当传了 `order_by` 才加 orderBy 那条、仅当传了 `result_dir` 才加落盘那条；两者都没有则**不含 execution_notes 键**。
+- 更新测试：无 order_by/result_dir → 无 execution_notes；传 order_by → 仅 orderBy 一条；传 result_dir → 仅落盘一条。
+**验证结果**：单测 24 passed；真实后端 ops.cm：`run_flow(limit=30)` 无 execution_notes；`run_flow(limit=30, order_by=...)` 出 orderBy 披露一条。
+**影响范围**：仅 run_flow 返回体 execution_notes 的显示口径（按需），不影响查询结果与其他参数。
+**回滚方式**：还原 _FLOW_DEFERRED_NOTES 静态列表与无条件披露。
+
 ## 2026-07-27 query/mcp - query_flow 补齐 limit/order_by/offset（一体化取数可控行数与排序）
 
 **变更原因**：一体化 query_flow 执行段最小实现只按 query_template 直接执行，而模板 orderBy/limit 为 None 占位、无 offset 键，run_query_template 剔除 None 键 → 不下发。后端 SimpleQueryBuilder.build() 对未传 limit 用 `?? 20`、orderBy 用空数组，导致 query_flow 恒吃默认 limit=20、无排序——AI 取数频繁「数据被截断 20/77」且无法控制行数/排序。后端已支持客户端传 limit/orderBy/offset（limit 无 max），只需改客户端。

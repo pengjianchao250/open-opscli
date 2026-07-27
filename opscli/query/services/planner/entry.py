@@ -23,13 +23,16 @@ from opscli.query.services.planner import plan_integrity, query_plan
 from opscli.query.services.planner.metadata_adapter import MetadataAdapter
 
 
-# run_flow 已知延后项：limit/order_by/offset 已可控（见 run_flow 参数），但 orderBy
-# 服务端缺陷的本地兜底/加量重查、完整结果落盘 result_dir 仍未内核化（属旧 run_query.py
-# 的结果后处理，作为独立后续任务补齐），执行时如实披露。
-_FLOW_DEFERRED_NOTES = [
-    "orderBy 服务端缺陷的本地兜底/加量重查暂未内核化（TopN 过渡方案，后续任务补齐）",
-    "完整结果落盘 result_dir 暂未内核化，本次仅返回服务端查询结果",
-]
+# run_flow 已知延后项披露：limit/order_by/offset 本身已可控（见 run_flow 参数），
+# 以下两条是尚未内核化的独立后续项，且**仅在本次调用真正用到相关能力时**才披露，
+# 避免对无关查询产生误导：
+# - 传了 order_by 时：服务端 orderBy 缺陷的本地兜底/加量重查（TopN 结果校正）未做；
+# - 传了 result_dir 时：完整结果落盘未做。
+_NOTE_ORDER_BY = (
+    "orderBy 已下发给服务端；但服务端 orderBy 缺陷的本地兜底/加量重查（TopN 结果校正）"
+    "暂未内核化——若服务端未真正生效排序，本次不做客户端纠正"
+)
+_NOTE_RESULT_DIR = "完整结果落盘 result_dir 暂未内核化，本次仅返回服务端查询结果"
 
 
 def _extract_enum_values(result: Any, field_name: str) -> list[str]:
@@ -173,8 +176,13 @@ def run_flow(
         if changed:
             plan_integrity.attach(contract)
     run_result = qm.run_query_template(execution_ref)
-    return {
-        **contract,
-        "result": run_result,
-        "execution_notes": list(_FLOW_DEFERRED_NOTES),
-    }
+    # 按需披露：仅在本次真正用到相关能力时提示对应的延后项，避免对无关查询误导
+    execution_notes: list[str] = []
+    if order_by:
+        execution_notes.append(_NOTE_ORDER_BY)
+    if result_dir is not None:
+        execution_notes.append(_NOTE_RESULT_DIR)
+    out = {**contract, "result": run_result}
+    if execution_notes:
+        out["execution_notes"] = execution_notes
+    return out

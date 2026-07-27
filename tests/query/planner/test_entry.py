@@ -99,8 +99,8 @@ def test_run_flow_executes_template_when_planned(monkeypatch):
 
     out = entry.run_flow("查询", user_email="u@x.com", query_manager=_FakeQM())
     assert out["result"]["data"]["result"]["data"] == [{"x": 1}]
-    # 披露：本地兜底/加量重查/结果落盘暂未内核化
-    assert out["execution_notes"]
+    # 未传 order_by / result_dir → 无任何延后项披露（避免对无关查询误导）
+    assert "execution_notes" not in out
 
 
 def _planned_with_template():
@@ -146,6 +146,21 @@ def test_run_flow_fills_limit_order_offset(monkeypatch):
     assert "plan_integrity" in out["execution_ref"]
     sealed = {k: v for k, v in out.items() if k not in ("result", "execution_notes")}
     assert plan_integrity.verify(sealed) is True
+    # 传了 order_by → 仅出 orderBy 一条披露（未传 result_dir 不出落盘那条）
+    assert out["execution_notes"] == [entry._NOTE_ORDER_BY]
+
+
+def test_run_flow_result_dir_note_only_when_passed(monkeypatch):
+    """传 result_dir（未传 order_by）→ 仅出落盘一条披露。"""
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            return {"data": []}
+
+    from pathlib import Path
+    out = entry.run_flow("查询", user_email="u@x.com", result_dir=Path("/tmp/x"), query_manager=_QM())
+    assert out["execution_notes"] == [entry._NOTE_RESULT_DIR]
 
 
 def test_run_flow_no_params_keeps_defaults(monkeypatch):
