@@ -1,6 +1,6 @@
 {
   "name": "ops-feedback-query",
-  "version": "v1.1.0",
-  "updated_at": "2026-07-21",
-  "notes": "新增脱敏 Markdown 日报生成与企业微信群机器人 Markdown V2 摘要推送能力。"
+  "version": "v1.2.0",
+  "updated_at": "2026-07-27",
+  "notes": "新增 Linux systemd 每日 09:00 自动推送部署包。"
 }

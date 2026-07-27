@@ -3108,3 +3108,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：影响 Google Trends SerpApi Account/Search 错误判断、Key 状态持久化及账号级错误故障转移，不改变正常请求参数和结果结构。
 **回滚方式**：回退 SerpApi 客户端错误分类、相关测试和运维文档，并删除本条变更记录。
 ---
+
+## 2026-07-27 ops-feedback-query - 增加反馈日报定时推送部署包
+
+**变更原因**：反馈日报已支持生成脱敏摘要和企业微信推送，需要在 Linux 服务器每天 09:00 自动执行并支持错过后补跑。
+**改动点**：增加 systemd oneshot 服务、上海时区 timer 和幂等安装脚本；服务使用专用账号与虚拟环境执行，限制项目目录只读且只开放日报输出目录写权限；安装时校验路径、账号、凭据、运行程序和 unit，收紧凭据及输出目录权限并启用 timer；临时 Markdown 改为写入系统临时目录，以配合服务加固；同步补充运维指南、部署契约测试与 Skill 说明。
+**验证结果**：systemd 部署契约、反馈日报、反馈查询 Skill 与通知模块聚焦回归 `33 passed`；反馈 Skill 内部发行隔离测试 `2 passed`；公开 wheel Skill 发版准入检查、安装脚本 `bash -n`、Python `compileall`、部署文件尾随空格检查和 `git diff --check` 均通过。额外反馈模板回归有 1 项既有失败：`ops-feedback/SKILL.md` 已含不受支持的 `version` frontmatter，与本次变更无关。
+**影响范围**：仅影响内部 `ops-feedback-query` v1.2.0 的 Linux 定时部署和推送执行，不改变反馈查询 API、脱敏规则及公开发行边界。
+**回滚方式**：停用并删除 `ops-feedback-report.timer/service`，回退本条部署文件、日报临时文件调整、测试和文档。
+---

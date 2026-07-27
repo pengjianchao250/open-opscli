@@ -129,6 +129,19 @@ python scripts/daily_feedback_report.py \
 
 日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表。群消息使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节，不使用仅旧版 Markdown 支持的字体颜色和成员 `@` 语法。报告与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据；群消息按“严重度 + 标题”聚合重复问题，最多展示 5 类 Critical/High 问题并标注每类反馈数，底部提供固定的“详细文档查看”入口，完整逐条记录保留在本地 Markdown 文件。
 
+## Linux 每日自动推送
+
+Skill 内置 `deploy/` systemd 部署包，可在 Linux 服务器以专用服务账号每天 09:00（Asia/Shanghai）推送完整昨日的反馈日报：
+
+```bash
+sudo bash deploy/install_systemd.sh \
+  --project-root /opt/open-opscli \
+  --venv /opt/open-opscli/.venv \
+  --user ops-feedback
+```
+
+安装脚本会校验项目、虚拟环境、日报脚本和凭据文件，收紧凭据与输出目录权限，安装 `ops-feedback-report.service/timer` 并立即启用 timer。首次部署后应手动执行 `sudo systemctl start ops-feedback-report.service` 验证真实推送；完整安装、巡检、排障与回滚步骤见 `docs/release/反馈日报定时推送运维指南.md`。
+
 ## 输出约定
 
 - 不传 `--output` 时，完整 JSON 信封输出到终端。

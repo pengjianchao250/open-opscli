@@ -395,7 +395,6 @@ def send_wecom_summary(content: str) -> None:
         suffix=".md",
         encoding="utf-8",
         delete=False,
-        dir=SCRIPT_DIR,
     ) as content_file:
         content_file.write(content)
         content_path = Path(content_file.name)
