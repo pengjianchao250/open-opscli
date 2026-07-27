@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "opscli" / "skills" / "templates"
 SKILL_VERSIONS = {
     "ops-dashboard-data-analysis": "1.0.5",
-    "ops-dashboard-ai-bridge": "1.0.15",
+    "ops-dashboard-ai-bridge": "1.0.16",
 }
 SKILL_LIST_DESCRIPTIONS = {
     "ops-dashboard-data-analysis": "只读分析当前仪表盘的趋势、对比、异常、排名、贡献和业务原因。",
@@ -84,6 +84,29 @@ def test_dashboard_bridge_declares_batch_creation_contract():
     assert "问题/售后" in content
     assert "性能/健康" in content
     assert "部门兜底" in content
+
+
+def test_dashboard_bridge_declares_balanced_marketing_layout_contract():
+    """营销默认组合必须冻结精确五型、动态布局、字段基数和逐张核验。"""
+    skill_dir = TEMPLATES_DIR / "ops-dashboard-ai-bridge"
+    content = "\n".join(
+        path.read_text(encoding="utf-8") for path in skill_dir.rglob("*.md")
+    )
+
+    assert (
+        "`indicator`、`pie_circle`、`combo_bar_line`、`hbar_basic`、`detail_table`"
+        in content
+    )
+    assert "summaryWidth = floor(gridColumn / 3)" in content
+    assert '`{"w": summaryWidth, "h": 16}`' in content
+    assert '`{"w": gridColumn - summaryWidth, "h": 16}`' in content
+    assert '`{"w": gridColumn, "h": 30}`' in content
+    assert "必须等待当前 result" in content
+    assert "data.layout.x/y/w/h" in content
+    assert "`indicator` 只配置 1 个度量" in content
+    assert "`pie_circle` 只配置 1 个类别维度和 1 个度量" in content
+    assert "逐张核验精确 `viewType`、最终布局、字段区和字段数量" in content
+    assert "只核验聚合 `chartIds/changed/refreshed` 不足以完成交付" in content
 
 
 def test_dashboard_bridge_requires_selection_tool_for_real_candidates():

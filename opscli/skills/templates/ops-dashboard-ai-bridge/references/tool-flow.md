@@ -64,12 +64,22 @@
 
 1. 确认 `dashboard_editor_batch_configure_charts` 在 `availableTools`，否则停止。
 2. 选择一个能覆盖全部图表的唯一数据集；存在多个真实候选时必须通过 `ask_user_question` 选择。
-3. 按默认组合一次确定全部 `viewType`；营销/转化固定为 5 张，不得缩减为单图或部分组合。
-4. 为每张图表确定业务标题，依次调用 `dashboard_editor_add_component` 或模板工具，收集完整组合的全部 `chartId`。
-5. 需要真实字段目录时，只对其中一个新图表调用一次 `dashboard_drag_select_dataset`；使用返回的字段目录规划全部 `fieldLists`，不得调用逐字段写工具。
-6. 只调用一次 `dashboard_editor_batch_configure_charts`；根级只传一个 `datasetId`，`charts` 必须覆盖本轮全部创建结果。
-7. 只有 result 同时满足 `ok=true`、`changed=true`、`refreshed=true`，且返回全部 `chartIds`，本轮基础配置才算 `PASS`。
-8. 后续筛选、格式或标题操作使用明确的 `chart_id`；不得为了字段写入逐个选中图表。
+3. 按默认组合一次确定全部 `viewType`；营销/转化固定按 `indicator`、`pie_circle`、`combo_bar_line`、`hbar_basic`、`detail_table` 创建 5 张，不得调整顺序或缩减为部分组合。
+4. 营销/转化组合从 context 读取 `gridColumn`，计算 `summaryWidth = floor(gridColumn / 3)`；尺寸计划如下：
+
+| `viewType`       | `layout`                                    |
+| ---------------- | ------------------------------------------- |
+| `indicator`      | `{"w": summaryWidth, "h": 16}`              |
+| `pie_circle`     | `{"w": gridColumn - summaryWidth, "h": 16}` |
+| `combo_bar_line` | `{"w": gridColumn, "h": 30}`                |
+| `hbar_basic`     | `{"w": gridColumn, "h": 30}`                |
+| `detail_table`   | `{"w": gridColumn, "h": 30}`                |
+
+5. 为每张图表确定业务标题，按计划依次调用 `dashboard_editor_add_component`，每次显式传 `viewType`、`title` 和完整 `layout`；必须等待当前 result，核验 `ok=true`、精确 `data.viewType` 和最终 `data.layout.x/y/w/h` 后，才能收集 `chartId` 并创建下一张。
+6. 需要真实字段目录时，只对其中一个新图表调用一次 `dashboard_drag_select_dataset`；使用返回的字段目录规划全部 `fieldLists`，不得调用逐字段写工具。`indicator` 只使用 1 个度量，`pie_circle` 只使用 1 个类别维度和 1 个度量。
+7. 只调用一次 `dashboard_editor_batch_configure_charts`；根级只传一个 `datasetId`，`charts` 必须覆盖本轮全部创建结果。
+8. result 同时满足 `ok=true`、`changed=true`、`refreshed=true` 且返回全部 `chartIds` 后，还要逐张核验精确 `viewType`、最终布局、字段区和字段数量；五张图无矩形重叠，本轮基础配置才算 `PASS`。
+9. 后续筛选、格式或标题操作使用明确的 `chart_id`；不得为了字段写入逐个选中图表。
 
 ## 表格和交叉表
 

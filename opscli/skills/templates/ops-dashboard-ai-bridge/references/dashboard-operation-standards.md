@@ -93,15 +93,15 @@
 ## 操作总流程
 
 1. 调用 `dashboard_session_get_context({"include_selected_chart_config": true})`。
-2. 查看 `availableTools`、`pendingTools`、`charts` 和当前数据集摘要。
+2. 查看 `availableTools`、`pendingTools`、`charts`、`gridColumn` 和当前数据集摘要。
 3. 需要数据集时调用 `dashboard_session_search_datasets`；需要字段时读取选择数据集结果，或显式传 `include_dataset_fields=true`。
 4. 基于用户业务问题，先列出需要的图表类型、统一数据集、维度、指标、筛选条件和计算口径。
 5. 如果字段名或口径不确定，说明判断依据并向用户确认，不做字段试错。
 6. 用户要新增图表但未指定类型时，按默认组合表选型并保持规定数量；营销/转化必须创建 5 张。
-7. 为每张图表确定业务标题，依次调用 `dashboard_editor_add_component` 或模板工具，收集全部 `data.chartId`；不得交付部分组合。
+7. 为每张图表确定业务标题；营销/转化组合先按 `gridColumn` 计算两小三大尺寸，再依次调用 `dashboard_editor_add_component`。每次必须等待当前 result 并核验最终布局后收集 `data.chartId`，不得并发创建或交付部分组合。
 8. 需要字段目录时，只对一个新图表调用一次 `dashboard_drag_select_dataset`，禁止调用逐字段写工具。
 9. 调用一次 `dashboard_editor_batch_configure_charts`，传入唯一 `datasetId`、全部 `chart_id` 和每张图的完整 `fieldLists`。
-10. 核验批量结果覆盖全部图表，且 `changed=true`、`refreshed=true`；失败时停止后续写入。
+10. 核验批量结果覆盖全部图表，且 `changed=true`、`refreshed=true`；再逐张核验精确 `viewType`、最终布局、字段区和字段数量，失败时停止后续写入。
 11. 按需对明确目标图表配置聚合、排序、格式、筛选、查询控件。
 12. 读取最终写入摘要；需要精确核验时调用 context 或对应只读工具，再向用户说明完成项。
 
@@ -144,7 +144,7 @@
 
 1. 从 `dashboard_editor_add_component` 的 `viewType` enum 确认合法类型。
 2. 先确定本轮全部图表、统一数据集和完整字段列表。
-3. 依次调用 `dashboard_editor_add_component({"viewType": "<viewType>"})`，收集 result 的 `data.chartId`。
+3. 依次调用 `dashboard_editor_add_component({"viewType": "<viewType>", "title": "<业务标题>"})`，等待并核验当前 result 后收集 `data.chartId`；营销/转化组合还必须显式传完整 `layout:{w,h}`。
 4. 调用一次 `dashboard_editor_batch_configure_charts` 写入全部图表的数据集和字段。
 
 从模板新增：
@@ -166,14 +166,14 @@
 
 用户明确指定图表类型时优先服从用户。用户只要求创建图表、看板或可视化但没有指定类型时，按业务归属选用下表；无法唯一判断业务归属时使用兜底组合。
 
-| 业务类型  | 识别线索                             | 默认组合                                                                                                                                       |
-| --------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 增长/机会 | 销售、市场、机会、增长               | 指标趋势图 + 基础柱状图 + 百分比堆叠图 + 交叉表                                                                                                |
-| 营销/转化 | 广告、流量、活动、转化               | `indicator` + `combo_bar_line` + `hbar_basic` + `bar_stacked_percent`/`hbar_stacked_percent`/`funnel_basic` 三选一 + `detail_table`，固定 5 张 |
-| 供应链    | 库存、物流、履约、供应               | 指标趋势图 + 基础柱状图 + 堆叠柱状图 + 明细表；存在目标字段时追加进度图                                                                        |
-| 问题/售后 | 退款、客诉、客服、质量问题           | 指标趋势图 + 基础柱状图 + 百分比堆叠条形图 + 明细表                                                                                            |
-| 性能/健康 | 性能、稳定性、健康度、监控           | KPI 或指标趋势图 + 基础折线图 + 基础柱状图 + 状态结构图或进度图 + 明细表                                                                       |
-| 部门兜底  | 仅给出部门或业务域，无法归入以上类型 | 指标趋势图 + 基础柱状图 + 百分比堆叠条形图 + 明细表                                                                                            |
+| 业务类型  | 识别线索                             | 默认组合                                                                                 |
+| --------- | ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| 增长/机会 | 销售、市场、机会、增长               | 指标趋势图 + 基础柱状图 + 百分比堆叠图 + 交叉表                                          |
+| 营销/转化 | 广告、流量、活动、转化               | `indicator` + `pie_circle` + `combo_bar_line` + `hbar_basic` + `detail_table`，固定 5 张 |
+| 供应链    | 库存、物流、履约、供应               | 指标趋势图 + 基础柱状图 + 堆叠柱状图 + 明细表；存在目标字段时追加进度图                  |
+| 问题/售后 | 退款、客诉、客服、质量问题           | 指标趋势图 + 基础柱状图 + 百分比堆叠条形图 + 明细表                                      |
+| 性能/健康 | 性能、稳定性、健康度、监控           | KPI 或指标趋势图 + 基础折线图 + 基础柱状图 + 状态结构图或进度图 + 明细表                 |
+| 部门兜底  | 仅给出部门或业务域，无法归入以上类型 | 指标趋势图 + 基础柱状图 + 百分比堆叠条形图 + 明细表                                      |
 
 组合约束：
 
@@ -181,6 +181,29 @@
 - 必须用真实字段目录验证可行性；缺少时间、占比、目标值或状态字段时优先替换字段或同类图表，仍无法满足规定数量时停止并说明阻塞。
 - 全部图表共享一个 `datasetId`。任何图表需要第二数据集才能成立时，停止并调整组合，不得跨数据集拼接。
 - 图表类型、数据集、字段必须在创建前确定；创建后只允许按已确认计划批量写入，不允许用页面结果反向试字段。
+
+### 营销/转化两小三大布局
+
+从 `dashboard_session_get_context.data.gridColumn` 读取当前画布列数，按以下公式规划，不硬编码 12 列：
+
+```text
+gridColumn = C
+summaryWidth = floor(gridColumn / 3)
+indicator = summaryWidth × 16
+pie_circle = (gridColumn - summaryWidth) × 16
+combo_bar_line = gridColumn × 30
+hbar_basic = gridColumn × 30
+detail_table = gridColumn × 30
+```
+
+创建规则：
+
+1. 创建前确认两张紧凑图的宽度满足各自组件最小宽度，三张大图的宽度不超过 `gridColumn`；不满足时停止，不缩小到会产生滚动或遮挡的尺寸。
+2. 固定按 `indicator`、`pie_circle`、`combo_bar_line`、`hbar_basic`、`detail_table` 顺序串行创建，每次 `dashboard_editor_add_component` 都显式传 `title` 和完整 `layout:{w,h}`。
+3. 每次新增必须等待当前 result；只有 `ok=true`，`data.viewType` 与计划一致，且最终 `data.layout.x/y/w/h` 可解析、宽高等于计划值，才能收集 `chartId` 并创建下一张。
+4. 五张图创建完成后，核验指标卡与环形图同高且位于同一行、宽度之和等于 `gridColumn`；三张大图均全宽并依次排列；任意矩形重叠都判定为 `FAIL`。
+5. `indicator` 只配置 1 个度量；`pie_circle` 只配置 1 个类别维度和 1 个度量；三张大图按各自图表字段规则配置。
+6. 单次批量配置通过后，逐张核验精确 `viewType`、最终布局、字段区和字段数量；只核验聚合 `chartIds/changed/refreshed` 不足以完成交付。
 
 ## 数据集和字段
 
