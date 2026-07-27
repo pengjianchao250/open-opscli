@@ -150,3 +150,66 @@ def test_account_snapshot_updates_quota_fields(tmp_path: Path):
     assert updated.this_month_usage == 8
     assert updated.plan_name == "Developer"
     assert updated.plan_renewal_date == "2026-08-01"
+
+
+def test_key_store_selects_only_due_exhausted_account(tmp_path: Path):
+    """续期复查只应选择已到续期日的 exhausted 账号。"""
+    store = SerpApiKeyStore(tmp_path / "serpapi.sqlite3")
+    due = store.add_key(name="due", api_key="secret-due")
+    future = store.add_key(name="future", api_key="secret-future")
+    no_date = store.add_key(name="no-date", api_key="secret-no-date")
+    disabled = store.add_key(name="disabled", api_key="secret-disabled")
+    for key in (due, future, no_date, disabled):
+        store.mark_exhausted(key.key_id, reason="额度耗尽")
+    store.set_status(disabled.key_id, "disabled")
+    with sqlite3.connect(store.db_path) as conn:
+        conn.executemany(
+            "UPDATE google_trends_serpapi_keys SET plan_renewal_date = ? WHERE key_id = ?",
+            [
+                ("2000-01-01", due.key_id),
+                ("2999-01-01", future.key_id),
+                (None, no_date.key_id),
+                ("2000-01-01", disabled.key_id),
+            ],
+        )
+
+    selected = store.next_due_exhausted_key()
+
+    assert selected is not None
+    assert selected.key_id == due.key_id
+    assert store.next_due_exhausted_key(exclude_key_ids={due.key_id}) is None
+
+
+def test_key_store_applies_renewal_recheck_cooldown(tmp_path: Path):
+    """最近检查过的耗尽账号应在一小时冷却内跳过。"""
+    store = SerpApiKeyStore(tmp_path / "serpapi.sqlite3")
+    key = store.add_key(name="cooldown", api_key="secret-cooldown")
+    store.mark_exhausted(key.key_id, reason="额度耗尽")
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            """
+            UPDATE google_trends_serpapi_keys
+            SET plan_renewal_date = '2000-01-01',
+                last_checked_at = '2999-01-01T00:00:00+00:00'
+            WHERE key_id = ?
+            """,
+            (key.key_id,),
+        )
+
+    assert store.next_due_exhausted_key() is None
+
+
+def test_key_store_restores_exhausted_account_without_enabling_disabled(tmp_path: Path):
+    """自动恢复只应修改 exhausted，不应绕过 disabled 状态。"""
+    store = SerpApiKeyStore(tmp_path / "serpapi.sqlite3")
+    exhausted = store.add_key(name="exhausted", api_key="secret-exhausted")
+    disabled = store.add_key(name="disabled", api_key="secret-disabled")
+    store.mark_exhausted(exhausted.key_id, reason="额度耗尽")
+    store.set_status(disabled.key_id, "disabled")
+
+    store.restore_active(exhausted.key_id)
+    store.restore_active(disabled.key_id)
+
+    assert store.get(exhausted.key_id).status == "active"
+    assert store.get(exhausted.key_id).exhausted_at is None
+    assert store.get(disabled.key_id).status == "disabled"

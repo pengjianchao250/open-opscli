@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -18,6 +18,7 @@ from opscli.config import CONFIG_DIR
 
 DEFAULT_SERPAPI_DB_PATH = Path(CONFIG_DIR) / "google_trends" / "serpapi.sqlite3"
 VALID_KEY_STATUSES = frozenset({"active", "exhausted", "disabled"})
+RENEWAL_RECHECK_COOLDOWN = timedelta(hours=1)
 
 
 @dataclass(frozen=True)
@@ -154,26 +155,57 @@ class SerpApiKeyStore:
             row = conn.execute(sql, params).fetchone()
         return _record_from_row(row) if row else None
 
+    def next_due_exhausted_key(
+        self,
+        *,
+        exclude_key_ids: set[str] | None = None,
+    ) -> SerpApiKeyRecord | None:
+        """返回续期日已到且超过检查冷却时间的耗尽账号。"""
+        now = datetime.now(UTC)
+        excluded = sorted(exclude_key_ids or set())
+        sql = """
+            SELECT * FROM google_trends_serpapi_keys
+            WHERE status = 'exhausted'
+              AND plan_renewal_date IS NOT NULL
+              AND plan_renewal_date <= ?
+              AND (last_checked_at IS NULL OR last_checked_at <= ?)
+        """
+        params: list[Any] = [
+            now.date().isoformat(),
+            (now - RENEWAL_RECHECK_COOLDOWN).isoformat(timespec="microseconds"),
+        ]
+        if excluded:
+            placeholders = ",".join("?" for _ in excluded)
+            sql += f" AND key_id NOT IN ({placeholders})"
+            params.extend(excluded)
+        sql += " ORDER BY plan_renewal_date, last_checked_at, exhausted_at, key_id LIMIT 1"
+        with self._connect() as conn:
+            row = conn.execute(sql, params).fetchone()
+        return _record_from_row(row) if row else None
+
     def update_account_snapshot(
         self,
         key_id: str,
         payload: dict[str, Any],
+        *,
+        preserve_plan_renewal_date: bool = False,
     ) -> SerpApiKeyRecord:
-        """写入 Account API 返回的白名单额度字段。"""
+        """写入 Account API 白名单字段，可在续期复查期间保留原续期日。"""
         now = _now_iso()
         with self._connect() as conn:
             conn.execute(
                 """
                 UPDATE google_trends_serpapi_keys
                 SET total_searches_left = ?, this_month_usage = ?, plan_name = ?,
-                    plan_renewal_date = ?, last_checked_at = ?, last_error = NULL,
-                    updated_at = ?
+                    plan_renewal_date = CASE WHEN ? THEN plan_renewal_date ELSE ? END,
+                    last_checked_at = ?, last_error = NULL, updated_at = ?
                 WHERE key_id = ?
                 """,
                 (
                     _optional_int(payload.get("total_searches_left")),
                     _optional_int(payload.get("this_month_usage")),
                     _optional_text(payload.get("plan_name")),
+                    preserve_plan_renewal_date,
                     _optional_text(payload.get("plan_renewal_date")),
                     now,
                     now,
@@ -184,6 +216,33 @@ class SerpApiKeyStore:
         if record is None:
             raise ValueError(f"SerpApi API Key 不存在：{key_id}")
         return record
+
+    def restore_active(self, key_id: str) -> None:
+        """额度续期确认后恢复耗尽账号，并清除旧耗尽状态。"""
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE google_trends_serpapi_keys
+                SET status = 'active', exhausted_at = NULL, last_error = NULL,
+                    updated_at = ?
+                WHERE key_id = ? AND status = 'exhausted'
+                """,
+                (now, _required_text(key_id, "key_id")),
+            )
+
+    def record_account_check_error(self, key_id: str, *, reason: str) -> None:
+        """记录 Account API 复查错误和检查时间，用于限制重复请求。"""
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE google_trends_serpapi_keys
+                SET last_checked_at = ?, last_error = ?, updated_at = ?
+                WHERE key_id = ?
+                """,
+                (now, str(reason)[:500], now, _required_text(key_id, "key_id")),
+            )
 
     def mark_used(self, key_id: str) -> None:
         """记录最近一次发起搜索的时间，用于轮换排序。"""

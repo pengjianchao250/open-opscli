@@ -3099,3 +3099,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：影响 `association-traffic` 和 `keyword-research` 的默认分页大小、结果范围与请求次数；页面筛选条件、关联流量全部变体语义以及两场景导出格式不变。
 **回滚方式**：恢复关联流量自动分页汇总、关键词选品 50 条限制，以及对应测试和 Skill 文档。
 ---
+
+## 2026-07-27 google_trends - 完善 SerpApi 错误判断与账号故障转移
+
+**变更原因**：SerpApi Search API 会按 HTTP 状态和 `search_metadata.status` 表达不同故障，现有逻辑未完整区分账号错误、吞吐限流和成功空结果，无法稳定切换备用账号。
+**改动点**：按 SerpApi 官方状态规则分类账号级错误；额度耗尽切换并标记 `exhausted`，401/403 切换并禁用账号，429 吞吐限流仅本轮跳过，参数及服务端错误直接返回；同时保留成功空结果。增加按 `plan_renewal_date` 惰性复查耗尽账号、恢复月度额度和一小时检查冷却，并新增 Account/Search 账号禁用、额度耗尽、吞吐限流、续期恢复、非账号错误和搜索状态错误回归测试及运维说明。
+**验证结果**：Google Trends 全量回归 `70 passed`；SerpApi 客户端与 Key 仓储聚焦回归 `37 passed`；Google Trends MCP 行为测试 `7 passed, 1 deselected`；生产模块 `compileall` 和 `git diff --check` 通过。MCP 注册测试仍有当前分支既有的 Google Trends 工具未注册问题，本次未改动 MCP 注册链。
+**影响范围**：影响 Google Trends SerpApi Account/Search 错误判断、Key 状态持久化及账号级错误故障转移，不改变正常请求参数和结果结构。
+**回滚方式**：回退 SerpApi 客户端错误分类、相关测试和运维文档，并删除本条变更记录。
+---
