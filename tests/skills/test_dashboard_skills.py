@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "opscli" / "skills" / "templates"
 SKILL_VERSIONS = {
     "ops-dashboard-data-analysis": "1.0.5",
-    "ops-dashboard-ai-bridge": "1.0.16",
+    "ops-dashboard-ai-bridge": "1.0.17",
 }
 SKILL_LIST_DESCRIPTIONS = {
     "ops-dashboard-data-analysis": "只读分析当前仪表盘的趋势、对比、异常、排名、贡献和业务原因。",
@@ -68,11 +68,12 @@ def test_dashboard_bridge_keeps_progressive_references():
 
 
 def test_dashboard_bridge_declares_batch_creation_contract():
-    """组合创建必须使用统一数据集和页面级批量配置工具。"""
+    """组合创建必须先读字段，再使用统一数据集一次批量创建。"""
     skill_dir = TEMPLATES_DIR / "ops-dashboard-ai-bridge"
     content = "\n".join(path.read_text(encoding="utf-8") for path in skill_dir.rglob("*.md"))
 
-    assert "dashboard_editor_batch_configure_charts" in content
+    assert "dashboard_session_get_dataset_fields" in content
+    assert "dashboard_editor_batch_create_charts" in content
     assert "同一个数据集" in content
     assert "未指定类型的默认组合" in content
     assert "增长/机会" in content
@@ -80,6 +81,7 @@ def test_dashboard_bridge_declares_batch_creation_contract():
     assert "营销/转化组合固定为 5 张" in content
     assert "不得缩减为单图或部分组合" in content
     assert "禁止调用逐字段写工具" in content
+    assert "禁止先创建空图再试字段" in content
     assert "供应链" in content
     assert "问题/售后" in content
     assert "性能/健康" in content
@@ -101,12 +103,13 @@ def test_dashboard_bridge_declares_balanced_marketing_layout_contract():
     assert '`{"w": summaryWidth, "h": 16}`' in content
     assert '`{"w": gridColumn - summaryWidth, "h": 16}`' in content
     assert '`{"w": gridColumn, "h": 30}`' in content
-    assert "必须等待当前 result" in content
-    assert "data.layout.x/y/w/h" in content
+    assert "只调用一次 `dashboard_editor_batch_create_charts`" in content
+    assert "x+w=gridColumn" in content
     assert "`indicator` 只配置 1 个度量" in content
     assert "`pie_circle` 只配置 1 个类别维度和 1 个度量" in content
-    assert "逐张核验精确 `viewType`、最终布局、字段区和字段数量" in content
+    assert "逐张核验精确 `chartId/viewType/title/layout/fieldLists`" in content
     assert "只核验聚合 `chartIds/changed/refreshed` 不足以完成交付" in content
+    assert "不得先调用 `dashboard_drag_select_chart`" in content
 
 
 def test_dashboard_bridge_requires_selection_tool_for_real_candidates():

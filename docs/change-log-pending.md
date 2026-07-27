@@ -1,5 +1,22 @@
 # 待归档变更记录
 
+## 2026-07-27 dashboard/skill - 创建前读字段并单次批量创建图表
+
+**变更原因**：旧流程先逐张创建空图，再选择数据集并批量配置字段，模型需要编排多次写调用，容易出现顺序漂移、部分创建和选中态变化。
+
+**改动点**：
+- `ops-dashboard-ai-bridge` 升级到 `1.0.17`，默认组合改为“确定数据集 -> 读取字段 -> 整组规划 -> 单次批量创建”。
+- 新增 `dashboard_session_get_dataset_fields` 和 `dashboard_editor_batch_create_charts` 使用规范，禁止默认组合降级为逐图新增。
+- 两小三大布局继续按网格列数计算；指标卡与环形图同高，环形图覆盖摘要行剩余宽度。
+- 显式标题、样式和移动操作禁止先切换选中图表。
+- 更新 Skill 契约测试，覆盖新工具链、版本、布局和选中态规则。
+
+**验证结果**：`uv run pytest tests/skills/test_dashboard_skills.py -q`，11 passed。
+
+**影响范围**：Dashboard 编辑 Skill 规范和版本元数据；不修改 opscli MCP 实现或其他 Skill。
+
+**回滚方式**：还原到 `ops-dashboard-ai-bridge 1.0.16` 的逐图创建规范，并恢复对应契约测试。
+
 ## 2026-07-27 query/planner - run_flow execution_notes 改为按需披露（消除误导）
 
 **变更原因**：run_flow 无条件返回两条延后项披露（orderBy 服务端缺陷本地兜底、result_dir 落盘），但本次已补 order_by/limit 可控——用户对「只 limit 不排序」的查询仍看到「orderBy…未内核化」的提示，误以为排序功能没做。这两条延后项与「能否下发 orderBy/limit」是两码事（前者是服务端 orderBy 缺陷的客户端纠错安全网、后者是结果落盘），且无条件显示对无关查询产生误导。

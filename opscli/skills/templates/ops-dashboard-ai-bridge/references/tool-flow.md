@@ -26,7 +26,8 @@
 | 查看当前能做什么   | `dashboard_session_get_context`                 | 无                                                                                   |
 | 新增组件           | `dashboard_editor_add_component`                | `dashboard_drag_select_chart`                                                        |
 | 从模板新增图表     | `dashboard_editor_add_chart_from_template`      | `dashboard_drag_select_chart`                                                        |
-| 批量配置本轮新图表 | `dashboard_editor_batch_configure_charts`       | 核验全部 `chartIds` 和 `refreshed`                                                   |
+| 读取数据集字段     | `dashboard_session_get_dataset_fields`          | 基于完整字段目录规划所有图表                                                         |
+| 批量创建本轮图表   | `dashboard_editor_batch_create_charts`           | 逐张核验 `chartId/viewType/title/layout/fieldLists`                                   |
 | 绑定数据集         | `dashboard_drag_select_dataset`                 | 数据集选择闸口，通过后进入字段列表工具                                               |
 | 添加维度或指标     | `dashboard_drag_add_field_to_list`              | `dashboard_drag_update_chart_config`                                                 |
 | 批量替换字段       | `dashboard_drag_replace_field_list`             | `dashboard_drag_update_chart_config`                                                 |
@@ -50,19 +51,18 @@
 推荐流程：
 
 1. `dashboard_session_get_context({"include_selected_chart_config": true})`
-2. 从 `dashboard_editor_add_component` 的 schema enum 选择趋势图对应 `viewType`。
-3. `dashboard_editor_add_component({"viewType": "line_basic", "title": "近 30 天销售额趋势"})`
-4. 从 result 取 `data.chartId`。
-5. 调用 `dashboard_session_search_datasets` 选择唯一销售数据集，并从真实字段目录确认日期维度和销售额指标。
-6. `dashboard_editor_batch_configure_charts({"datasetId": 123, "charts": [{"chart_id": "<chartId>", "fieldLists": [{"listType": "xAxis", "fields": [{"fieldId": "<日期 actionFieldId>", "fieldSourceType": "dimensions"}]}, {"listType": "yAxis", "fields": [{"fieldId": "<销售额 actionFieldId>", "fieldSourceType": "metrics"}]}]}]})`
-7. 核验 result 中 `chartIds`、`changed=true`、`refreshed=true` 和字段数量。
-8. 需要近 30 天筛选时，再对该 `chart_id` 读取筛选能力并应用规则。
+2. 调用 `dashboard_session_search_datasets` 选择唯一销售数据集。
+3. 调用 `dashboard_session_get_dataset_fields({"datasetId": 123})`，从真实字段目录确认日期维度和销售额指标。
+4. 从 `dashboard_editor_batch_create_charts` 的 `charts[].viewType` enum 选择 `line_basic`，一次确定标题、布局和字段列表。
+5. `dashboard_editor_batch_create_charts({"datasetId": 123, "charts": [{"viewType": "line_basic", "title": "近 30 天销售额趋势", "layout": {"w": 12, "h": 30}, "fieldLists": [{"listType": "xAxis", "fields": [{"fieldId": "<日期 actionFieldId>", "fieldSourceType": "dimensions"}]}, {"listType": "yAxis", "fields": [{"fieldId": "<销售额 actionFieldId>", "fieldSourceType": "metrics"}]}]}]})`
+6. 核验 result 中逐张图表摘要、`changed=true`、`refreshed=true` 和字段数量。
+7. 需要近 30 天筛选时，再对返回的 `chartId` 读取筛选能力并应用规则。
 
 ## 组合创建流程
 
 用户未指定图表类型时，先按 `dashboard-operation-standards.md` 的默认组合完成规划，再执行：
 
-1. 确认 `dashboard_editor_batch_configure_charts` 在 `availableTools`，否则停止。
+1. 确认 `dashboard_session_get_dataset_fields` 和 `dashboard_editor_batch_create_charts` 都在 `availableTools`，否则停止。
 2. 选择一个能覆盖全部图表的唯一数据集；存在多个真实候选时必须通过 `ask_user_question` 选择。
 3. 按默认组合一次确定全部 `viewType`；营销/转化固定按 `indicator`、`pie_circle`、`combo_bar_line`、`hbar_basic`、`detail_table` 创建 5 张，不得调整顺序或缩减为部分组合。
 4. 营销/转化组合从 context 读取 `gridColumn`，计算 `summaryWidth = floor(gridColumn / 3)`；尺寸计划如下：
@@ -75,11 +75,11 @@
 | `hbar_basic`     | `{"w": gridColumn, "h": 30}`                |
 | `detail_table`   | `{"w": gridColumn, "h": 30}`                |
 
-5. 为每张图表确定业务标题，按计划依次调用 `dashboard_editor_add_component`，每次显式传 `viewType`、`title` 和完整 `layout`；必须等待当前 result，核验 `ok=true`、精确 `data.viewType` 和最终 `data.layout.x/y/w/h` 后，才能收集 `chartId` 并创建下一张。
-6. 需要真实字段目录时，只对其中一个新图表调用一次 `dashboard_drag_select_dataset`；使用返回的字段目录规划全部 `fieldLists`，不得调用逐字段写工具。`indicator` 只使用 1 个度量，`pie_circle` 只使用 1 个类别维度和 1 个度量。
-7. 只调用一次 `dashboard_editor_batch_configure_charts`；根级只传一个 `datasetId`，`charts` 必须覆盖本轮全部创建结果。
-8. result 同时满足 `ok=true`、`changed=true`、`refreshed=true` 且返回全部 `chartIds` 后，还要逐张核验精确 `viewType`、最终布局、字段区和字段数量；五张图无矩形重叠，本轮基础配置才算 `PASS`。
-9. 后续筛选、格式或标题操作使用明确的 `chart_id`；不得为了字段写入逐个选中图表。
+5. 调用一次 `dashboard_session_get_dataset_fields({"datasetId": 123})`，使用完整真实字段目录规划全部 `fieldLists`；`indicator` 只使用 1 个度量，`pie_circle` 只使用 1 个类别维度和 1 个度量。
+6. 在写入前校验每张图表的字段规则、业务标题和布局；任一项不满足时停止，不创建部分组合。
+7. 只调用一次 `dashboard_editor_batch_create_charts`；根级只传一个 `datasetId`，`charts` 必须覆盖完整五图计划。
+8. result 同时满足 `ok=true`、`changed=true`、`refreshed=true` 后，逐张核验精确 `chartId/viewType/title/layout/fieldLists`；指标卡与环形图同为 `h=16`，环形图满足 `x+w=gridColumn`，五张图无矩形重叠，本轮才算 `PASS`。
+9. 后续筛选、格式或标题操作使用明确的 `chart_id`；不得为了显式目标写入逐个选中图表。
 
 ## 表格和交叉表
 
@@ -124,11 +124,13 @@ dashboard_drag_select_dataset({"chart_id": "<目标图表>", "datasetId": 123})
 dashboard_drag_add_field_to_list({"chart_id": "<目标图表>", "listType": "yAxis", "fieldId": "<actionFieldId>", "fieldSourceType": "metrics"})
 ```
 
-执行后页面继续保持原图表选中。未传 `chart_id` 时，两项工具使用当前选中图表。其他字段列表、字段配置、筛选和查询控件工具仍按原流程先选中目标图表。组合创建不得使用该流程，必须走一次 `dashboard_editor_batch_configure_charts`。
+执行后页面继续保持原图表选中。未传 `chart_id` 时，两项工具使用当前选中图表。其他字段列表、字段配置、筛选和查询控件工具仍按原流程先选中目标图表。组合创建不得使用该流程，必须走一次 `dashboard_editor_batch_create_charts`。
 
 ## 标题样式和位置
 
 已知目标 `chart_id` 时直接使用：
+
+禁止先调用 `dashboard_drag_select_chart`；标题、样式和移动工具必须直接作用于显式目标，并保持原选中图表不变。
 
 ```text
 dashboard_drag_set_chart_title({"chart_id": "<目标图表>", "title": "区域销售额趋势"})
@@ -148,6 +150,7 @@ dashboard_drag_move_chart({"chart_id": "<目标图表>", "x": 0, "y": 6})
 
 合法来源：
 
+- `dashboard_session_get_dataset_fields` 返回的字段摘要。
 - `dashboard_drag_select_dataset` 返回的字段摘要。
 - `selectedChartDatasetFields.dimensions`。
 - `selectedChartDatasetFields.metrics`。

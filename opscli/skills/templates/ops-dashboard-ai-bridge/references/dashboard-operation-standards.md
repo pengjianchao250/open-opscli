@@ -40,11 +40,12 @@
 10. 比率类指标必须先确认分子、分母、粒度和筛选口径，再计算或配置。
 11. 禁止生成、修改、上传或导出任何文件产物。
 12. 同一轮新建的图表必须先整体规划，并使用同一个数据集；禁止跨数据集拼成一组图表。
-13. 创建完成后必须通过 `dashboard_editor_batch_configure_charts` 一次写入全部图表的数据集和字段；禁止退化为逐图选择数据集或逐字段试错。
+13. 确定数据集后必须先通过 `dashboard_session_get_dataset_fields` 读取完整字段目录，再规划图表；禁止先创建空图再试字段。
 14. 多个真实候选会改变结果时必须调用 `ask_user_question`，提供 2 到 4 个来自页面结果的候选并等待用户选择；禁止只在正文中列选项、要求用户手输序号或替用户选择。
-15. 普通图表创建前确定 1 到 100 字的业务标题，通过 `dashboard_editor_add_component.title` 首次写入；标题不得依赖创建后的补偿修改。
+15. 普通图表创建前确定 1 到 100 字的业务标题，通过 `dashboard_editor_batch_create_charts.charts[].title` 首次写入；标题不得依赖创建后的补偿修改。
 16. 字段角色以页面字段目录和图表规则为准：维度、度量分别进入当前字段区允许的角色；页面返回角色校验失败时只允许基于真实元数据修正一次。
 17. 修改标题、局部样式和位置时使用三个显式目标工具；样式一次只改一个 `styleKey`，移动前读取 `gridColumn` 和当前布局，不硬编码列数。
+18. 默认组合必须且只能调用一次 `dashboard_editor_batch_create_charts`；不得拆成逐图新增、逐图选集或独立字段配置。
 
 ## 写后核验门禁
 
@@ -94,18 +95,20 @@
 
 1. 调用 `dashboard_session_get_context({"include_selected_chart_config": true})`。
 2. 查看 `availableTools`、`pendingTools`、`charts`、`gridColumn` 和当前数据集摘要。
-3. 需要数据集时调用 `dashboard_session_search_datasets`；需要字段时读取选择数据集结果，或显式传 `include_dataset_fields=true`。
+3. 需要数据集时调用 `dashboard_session_search_datasets`；确定唯一数据集后调用 `dashboard_session_get_dataset_fields` 读取完整字段目录。
 4. 基于用户业务问题，先列出需要的图表类型、统一数据集、维度、指标、筛选条件和计算口径。
 5. 如果字段名或口径不确定，说明判断依据并向用户确认，不做字段试错。
 6. 用户要新增图表但未指定类型时，按默认组合表选型并保持规定数量；营销/转化必须创建 5 张。
-7. 为每张图表确定业务标题；营销/转化组合先按 `gridColumn` 计算两小三大尺寸，再依次调用 `dashboard_editor_add_component`。每次必须等待当前 result 并核验最终布局后收集 `data.chartId`，不得并发创建或交付部分组合。
-8. 需要字段目录时，只对一个新图表调用一次 `dashboard_drag_select_dataset`，禁止调用逐字段写工具。
-9. 调用一次 `dashboard_editor_batch_configure_charts`，传入唯一 `datasetId`、全部 `chart_id` 和每张图的完整 `fieldLists`。
-10. 核验批量结果覆盖全部图表，且 `changed=true`、`refreshed=true`；再逐张核验精确 `viewType`、最终布局、字段区和字段数量，失败时停止后续写入。
+7. 为每张图表确定业务标题；营销/转化组合按 `gridColumn` 计算两小三大尺寸，其中指标卡和环形图同高，环形图占据摘要行剩余宽度。
+8. 使用字段目录一次规划全部图表的完整 `fieldLists`，并在任何页面写入前完成图表字段规则校验。
+9. 只调用一次 `dashboard_editor_batch_create_charts`，传入唯一 `datasetId` 和完整 `charts`；禁止调用旧的逐图新增、选集或独立批量配置链路。
+10. 核验批量结果覆盖全部图表，且 `changed=true`、`refreshed=true`；再逐张核验精确 `chartId/viewType/title/layout/fieldLists`，失败时停止后续写入。
 11. 按需对明确目标图表配置聚合、排序、格式、筛选、查询控件。
 12. 读取最终写入摘要；需要精确核验时调用 context 或对应只读工具，再向用户说明完成项。
 
 标题、样式和移动的目标必须由 `chart_id` 明确指定：
+
+这三类操作不得先调用 `dashboard_drag_select_chart`；工具必须直接作用于显式目标，并保持原选中图表不变。
 
 - 标题：`dashboard_drag_set_chart_title({"chart_id":"<chartId>","title":"转化率趋势"})`。
 - 样式：`dashboard_drag_patch_chart_style({"chart_id":"<chartId>","styleKey":"legend","fields":[{"field":"showLegend","value":false}]})`。
@@ -142,10 +145,10 @@
 
 新增普通组件或组合：
 
-1. 从 `dashboard_editor_add_component` 的 `viewType` enum 确认合法类型。
-2. 先确定本轮全部图表、统一数据集和完整字段列表。
-3. 依次调用 `dashboard_editor_add_component({"viewType": "<viewType>", "title": "<业务标题>"})`，等待并核验当前 result 后收集 `data.chartId`；营销/转化组合还必须显式传完整 `layout:{w,h}`。
-4. 调用一次 `dashboard_editor_batch_configure_charts` 写入全部图表的数据集和字段。
+1. 从 `dashboard_editor_batch_create_charts` 的 `charts[].viewType` enum 确认合法类型。
+2. 确定本轮全部图表和统一数据集，再调用 `dashboard_session_get_dataset_fields` 读取完整字段目录。
+3. 一次确定每张图表的 `viewType/title/layout/fieldLists`，字段不满足图表规则时在写入前停止。
+4. 只调用一次 `dashboard_editor_batch_create_charts` 创建并配置全部图表，不降级为逐图写入。
 
 从模板新增：
 
@@ -199,17 +202,17 @@ detail_table = gridColumn × 30
 创建规则：
 
 1. 创建前确认两张紧凑图的宽度满足各自组件最小宽度，三张大图的宽度不超过 `gridColumn`；不满足时停止，不缩小到会产生滚动或遮挡的尺寸。
-2. 固定按 `indicator`、`pie_circle`、`combo_bar_line`、`hbar_basic`、`detail_table` 顺序串行创建，每次 `dashboard_editor_add_component` 都显式传 `title` 和完整 `layout:{w,h}`。
-3. 每次新增必须等待当前 result；只有 `ok=true`，`data.viewType` 与计划一致，且最终 `data.layout.x/y/w/h` 可解析、宽高等于计划值，才能收集 `chartId` 并创建下一张。
-4. 五张图创建完成后，核验指标卡与环形图同高且位于同一行、宽度之和等于 `gridColumn`；三张大图均全宽并依次排列；任意矩形重叠都判定为 `FAIL`。
+2. 固定按 `indicator`、`pie_circle`、`combo_bar_line`、`hbar_basic`、`detail_table` 顺序规划，五张图一次提交给 `dashboard_editor_batch_create_charts`。
+3. 指标卡布局为 `{"w": summaryWidth, "h": 16}`；环形图布局为 `{"w": gridColumn - summaryWidth, "h": 16}`，并满足 `x+w=gridColumn`；三张大图均为 `{"w": gridColumn, "h": 30}`。
+4. 批量返回后核验指标卡与环形图同高且位于同一行、宽度之和等于 `gridColumn`；三张大图均全宽并依次排列；任意矩形重叠都判定为 `FAIL`。
 5. `indicator` 只配置 1 个度量；`pie_circle` 只配置 1 个类别维度和 1 个度量；三张大图按各自图表字段规则配置。
-6. 单次批量配置通过后，逐张核验精确 `viewType`、最终布局、字段区和字段数量；只核验聚合 `chartIds/changed/refreshed` 不足以完成交付。
+6. 逐张核验精确 `chartId/viewType/title/layout/fieldLists`；只核验聚合 `chartIds/changed/refreshed` 不足以完成交付。
 
 ## 数据集和字段
 
 字段角色以页面字段目录的外层分组为准：`dimensions` 是维度，`metrics` 是度量。写入前必须确认目标字段区允许该真实角色；只有同时允许两种角色的字段区才能混用。角色不兼容返回 `VALIDATION_ERROR` 时，基于真实元数据修正一次，仍失败则停止。
 
-本轮新建图表使用页面级批量工具：先确定唯一数据集并创建完整组合；需要字段目录时，只允许对一个新图表调用一次 `selectDataset` 作为锚点，随后由 `dashboard_editor_batch_configure_charts` 一次写入全部图表。下面的逐图字段写入流程只用于修改既有单图，不用于组合创建。
+本轮新建图表使用页面级批量工具：确定唯一数据集后先调用 `dashboard_session_get_dataset_fields`，再由 `dashboard_editor_batch_create_charts` 一次创建并配置完整组合。下面的逐图字段写入流程只用于修改既有单图，不用于组合创建。
 
 选择数据集：
 
@@ -251,7 +254,7 @@ detail_table = gridColumn × 30
 - 这两项工具缺省 `chart_id` 时回退当前选中图表；页面没有选中图表时必须显式传入。
 - 未选中图表的写入以当前工具 `result.data` 为核验证据，不能拿 context 中当前选中图表的 `selectedChartDataset` 或 `selectedChartConfig` 判断目标图表结果。
 - `replaceFieldList`、字段配置、筛选和查询控件等其他 drag 工具仍依赖当前设置面板；操作其他图表前先 `selectChart`。
-- 以上规则仅用于既有单图修改；同轮新建组合必须使用 `dashboard_editor_batch_configure_charts`。
+- 以上规则仅用于既有单图修改；同轮新建组合必须使用 `dashboard_editor_batch_create_charts`。
 
 常用工具：
 

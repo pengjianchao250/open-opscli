@@ -126,9 +126,9 @@ API 边界规则：
 | `activeSubDashboardId`       | 当前可见子看板         |
 | `contextWarnings`            | 降级提示               |
 
-数据集目录使用 `dashboard_session_search_datasets` 独立查询。字段目录只在选择数据集结果或 `include_dataset_fields=true` 时返回，避免每次 context 重复携带。
+数据集目录使用 `dashboard_session_search_datasets` 独立查询。组合创建确定唯一数据集后，使用 `dashboard_session_get_dataset_fields` 按 `datasetId` 读取完整字段目录；该工具不要求页面先存在或选中图表。
 
-`dashboard_editor_batch_configure_charts` 是页面级组合写入能力，不依赖当前选中图表。调用时根级传一个 `datasetId`，并为每个 `chart_id` 传完整 `fieldLists`；页面会在全部图表和字段校验通过后统一写入并刷新。不得把它拆成多次逐图调用。
+`dashboard_editor_batch_create_charts` 是页面级组合写入能力，不依赖当前选中图表。调用时根级传一个 `datasetId`，并为每个计划图表传 `viewType/title/layout/fieldLists`；页面会先校验完整计划，再创建、配置和刷新全部图表。不得把它拆成多次逐图调用。
 
 `dashboard_drag_select_dataset` 和 `dashboard_drag_add_field_to_list` 是页面级显式目标能力。只要页面存在支持的图表，它们可在没有当前选中图表时出现在 `availableTools` 中；调用时传 `chart_id` 即可。`selectedChartDataset`、`selectedChartDatasetFields` 和 `selectedChartConfig` 始终只描述当前选中图表，不代表显式目标图表。
 
@@ -163,7 +163,7 @@ API 边界规则：
 
 | 工具类型     | result.data                                                                   |
 | ------------ | ----------------------------------------------------------------------------- |
-| 批量图表配置 | `datasetId`、`chartIds`、`chartCount`、各字段列表数量、`changed`、`refreshed` |
+| 批量图表创建 | `datasetId`、`chartIds`、`chartCount`、逐张图表摘要、`changed`、`refreshed`  |
 | 数据集写     | `chartId`、`datasetId`、紧凑字段目录和 `selectedFieldIds`                     |
 | 字段列表写   | `chartId`、`listType`、`fieldId/fieldIds`、`fieldCount`、`changed`            |
 | 字段配置写   | `chartId`、`listType`、`fieldId`、`appliedKeys`、`changed`                    |
