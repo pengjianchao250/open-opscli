@@ -1,5 +1,26 @@
 # 待归档变更记录
 
+## 2026-07-27 skills - QUERY_SPEC 恢复 MCP 完整取数指南并按新管线优化
+
+**变更原因**：`opscli/mcp/tools/query.py` 的 `query_spec_must_read()` 直接读取 QUERY_SPEC.md 返回给**未安装/已禁用 Skill** 的 MCP 客户端，其 docstring 承诺返回「核心铁律、各查询工具参数规范与示例、字段歧义澄清规则、错误处理速查、典型工作流」。但 2026-07-13 提交 `1a45bc6`（二代规划管线收敛，主题是 CLI 侧规划器）单次 -886/+53 行，把该文档从 917 行压到 84 行并降级为「MCP 部署契约存档」，属 CLI 改造误伤 MCP 契约：参数表、调用示例、公式字段处理、时间口径、权限枚举校验、错误速查、自检清单、反馈规范全部丢失，文档与工具 docstring 承诺严重不符，纯 MCP 用户失去可操作指南。
+**改动点**：`opscli/skills/templates/ops-dataset-query/QUERY_SPEC.md` 重写（100 → 596 行），结构化重组为 16 章：
+- **恢复**（对照 1a45bc6^ 历史版本 + `references/mcp-simple-guide.md` 逐条核过现行代码仍有效）：核心铁律总览、query_simple 完整参数表与四类示例（普通聚合/data_comparison 环比/MOY 趋势/公式字段）、dimensions/metrics 双格式、filters 操作符表、比较类查询优先级、select_columns 两条规则与权限枚举四步流程、字段匹配两级优先级、常见歧义类型表、时间表述边界表、库存快照规则、错误处理速查、查询前自检清单、结果证据合同五节、反馈边界。
+- **新增/更新**（按最近取数改动）：query_plan/query_flow 规划器路线（用户确认纳入并作为首选，见下）及其合同状态处置（planned/clarify_required/blocked）、`limit`/`order_by`/`offset` 与 `rowCount < totalCount` 加大 limit 重查、`execution_notes` 按需披露语义（07-27）、`refresh_in_progress` 等 25 秒原样重调且 MCP 侧不执行 CLI 形态 recovery_command、字段标识只用 `field_name` 与同名双注册公式注册优先（07-25）、`filter_configs` 默认条件服务端权威且客户端禁止重复注入、显式凭证 session_id/jwt 与 auth_me/407、`query_metadata(include_all_fields=True)`（07-26）、`query_preferences` 字段优先级、order_by 只认 `desc` 布尔值、组件枚举完整等值匹配策略（9部≠项目九部）、快照指标禁止跨日累加。
+- **删除**（已失效）：innerWhere 相关残留、旧工具名 `feedbackSubmit`、post-hook 假设章节、依赖 Skill 目录内脚本的工作流（chart_map_mcp.py / excel_export_mcp.py / updater_mcp.py，纯 MCP 用户无此目录）、`data_state=placeholder` + `skills_upgrade` 的旧本地索引流程、重复三遍的时间口径章节。
+- 路线纳入 query_flow 系用户明确决策（对应 2026-07-25 记录中「未引入内核 query_plan/query_flow（SKILL.md 切换仍暂停）」的口径变更，仅作用于 MCP 契约文档，SKILL.md 未改）。
+**验证结果**：`uv run pytest tests/skills/test_dataset_query_flow.py tests/mcp/test_query_tools.py -q` → 5 passed（无测试引用 QUERY_SPEC，纯文档变更）。GBK 兼容性扫描（【铁律23】）→ 无不兼容字符。文中所有工具名与参数逐一核对现行代码：query_plan/query_flow/query_simple/query_metadata/query_preferences/query_chart/query_chart_doc/query_build/query_build_and_run/query_run（`opscli/mcp/tools/query.py`）、auth_mcp_login/auth_is_authenticated/auth_me/auth_token_refresh（`auth.py`）、feedback_submit 及其 execution_summary.failed_calls 字段（`feedback.py`）均存在且签名一致；已屏蔽的 query_catalog/query_intent_match 未写入。
+**影响范围**：仅 MCP 客户端调用 `query_spec_must_read()` 时拿到的指南内容；不改动任何代码、不影响 CLI 与已安装 Skill 的 SKILL.md 主线。
+**遗留（本次刻意未做，需另行确认）**：`opscli/mcp/tools/query.py` 中 `query_spec_must_read` / `query_simple` / `query_run` 的 docstring 仍描述「innerWhere 数据集误用 query_run」「10 条核心铁律」等已失效内容，与重写后的文档不一致；按用户指定的改动范围（仅 QUERY_SPEC.md）未修改，建议后续单独提交。
+**回滚方式**：`git checkout HEAD -- opscli/skills/templates/ops-dataset-query/QUERY_SPEC.md`。
+
+**补充修订（同日，用户纠错）**：原稿【铁律1】写成「认证前置：远端查询前确认已登录」，把登录描述为必需前置，与实现不符。核对 `opscli/mcp/tools/helpers.py`：`_get_auth_pair` 为显式优先（`provided_session or _get_session_id()`），调用方直接传 `session_id`（+可选 `jwt`）即可鉴权，**无需任何前置登录调用**。据此改：
+- 【铁律1】改为「鉴权两条等价路径」，明确登录非必需、显式传参优先。
+- §2 重写为「鉴权与身份」，新增两条路径对照表与**各工具凭证要求差异表**：`query_metadata`/`query_preferences` 单 `jwt` 可用；`query_simple`/`query_run`/`query_build_and_run`/`query_chart`/`query_chart_doc` 有 `if not sid` 硬校验故 `session_id` 必填；`query_build` 无需凭证；**`query_plan`/`query_flow` 显式凭证不足**——身份走 `_get_authenticated_user_email()`，只认传输层已验证账号（remote transport 邮箱 / fixed 隔离缓存 / stdio 默认 CredentialStore），不读显式参数。
+- §3 路线选择补「路线 A 前提：需传输层已验证账号，只有显式凭证的调用方直接走路线 B」；§4.1、§7 参数表、§13 错误速查（新增「无 session_id」「无法确认当前登录账号」两行）、§14 自检清单同步更新。
+**补充验证**：文档 614 行，「认证前置」残留 0 处；GBK 扫描无不兼容字符；`tests/skills/test_dataset_query_flow.py tests/mcp/test_query_tools.py` 5 passed。
+
+---
+
 ## 2026-07-27 dashboard/skill - 创建前读字段并单次批量创建图表
 
 **变更原因**：旧流程先逐张创建空图，再选择数据集并批量配置字段，模型需要编排多次写调用，容易出现顺序漂移、部分创建和选中态变化。
