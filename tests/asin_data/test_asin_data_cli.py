@@ -882,10 +882,59 @@ def test_category_top_command_returns_only_category_top_json(monkeypatch):
     }
     assert calls["kwargs"] == {
         "category": "Bed Frames",
+        "data_type": "asin",
         "date_from": "2026-07-01",
         "date_to": "2026-07-13",
         "limit": 5,
         "site": "DE",
+    }
+
+
+def test_category_top_traffic_command_allows_all_categories(monkeypatch):
+    calls = {}
+
+    class DummyQueryService:
+        def fetch_category_top(self, **kwargs):
+            calls["kwargs"] = kwargs
+            return {
+                "data_type": "traffic",
+                "category": None,
+                "date_from": kwargs["date_from"],
+                "date_to": kwargs["date_to"],
+                "row_count": 1,
+                "category_total": 3289,
+                "category_names": ["3D Wall Panels"],
+                "ranking_metric": "page_views",
+                "top_n": 10,
+                "category_traffic": [{"category": "3D Wall Panels"}],
+            }
+
+    monkeypatch.setattr(asin_cli, "AsinDataQueryService", DummyQueryService)
+    monkeypatch.setattr(asin_cli, "append_usage_event", lambda **kwargs: None)
+
+    result = runner.invoke(
+        asin_cli.app,
+        [
+            "category-top",
+            "--data-type",
+            "traffic",
+            "--date-from",
+            "2026-07-01",
+            "--date-to",
+            "2026-07-27",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["category_traffic"] == [{"category": "3D Wall Panels"}]
+    assert calls["kwargs"] == {
+        "category": None,
+        "data_type": "traffic",
+        "date_from": "2026-07-01",
+        "date_to": "2026-07-27",
+        "limit": 10,
+        "site": "US",
     }
 
 

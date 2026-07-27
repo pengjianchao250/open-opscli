@@ -7,6 +7,8 @@ description: Use when users need Amazon ASIN listing or crawler basic data, incl
 
 Use `opscli asin-data basic` for listing facts and Amazon-page crawler supplements. This skill is read-only.
 
+The `listing` source is retrieved through the OPS proxy endpoint `/api/v1/data-metrics/amazon-listing/basic` with the current user's OPS authorization. The `crawler` source remains independent.
+
 ## Source Selection
 
 | Need | Source |
