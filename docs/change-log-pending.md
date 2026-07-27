@@ -1,5 +1,21 @@
 # 待归档变更记录
 
+## 2026-07-27 skills - QUERY_SPEC 补手工查询硬门禁、query_metadata 三形态选用与禁止猜字段名重试
+
+**变更原因**：ops-agent 侧 DatasetQueryAgent 在不走规划器的轮次里会反复调 `query_simple`，字段名全靠模型凭记忆猜（`amount` / `sale_amount` / `total_amount` / `revenue` 等），后端一律报「字段不存在」，模型再换一个猜名重试，形成死循环。QUERY_SPEC 恢复版（本文件上一条）虽已有铁律 2「规划器优先，不得跳过元数据凭记忆拼参」与铁律 4「字段标识只用 field_name」，但两条都是**描述性**约束：既没有「发 query_simple 之前必须先做过什么」的硬检查点，也没有禁止「报错后换个名字再试一次」这一具体死循环动作；`include_all_fields=True` 只写了机制（第五章）没写选用定位，弱模型会当默认拉全量。
+
+**改动点**：`opscli/skills/templates/ops-dataset-query/QUERY_SPEC.md`，四处增量（+16 行 / -2 行，不改既有结构与章节编号）：
+- **第一章 核心铁律总览**：新增铁律 2.1「手工查询硬门禁」——凡要调 `query_simple` / `query_build` / `query_build_and_run` / `query_run`，无论出于什么原因（无规划器、规划器 blocked、需要二次查询），必须先 ①读完本规范 ②调用 `query_metadata(...)` 拿到目标数据集真实字段清单，缺任一步禁止发起查询；新增铁律 4.1「字段名禁止推断、失败禁止换名重试」。
+- **第五章 路线 B 步骤 1**：新增「三种调用形态怎么选」表格，明确无参→数据集卡片列表（不含 select_columns）、`dataset=`/`table_id=`→该数据集完整字段（**默认取字段方式**）、`include_all_fields=True`→**备选加速器不是默认**（仅在不确定字段归属或跨数据集比对时用，payload 大会挤占上下文）；并补「无已验证账号时失败闭合、返回错误而非空结果」「field_count=0 时退回两步法」。
+- **第六章 字段标识**：新增两条置顶——「字段名唯一来源」（每个 field 必须逐字出现在本次 query_metadata 响应，禁止凭命名习惯推断，想不起来就再调一次）与「失败后禁止换名重试」（回 query_metadata 核对，不确定归属用 include_all_fields 定位，连续两次找不到即停止并如实说明）。
+- **第十三章错误速查**「字段不存在」行与**第十四章自检清单**同步加固（新增门禁勾选项与「无一个 field 是猜的」勾选项）。
+
+**验证方式与结果**：`python -c "asyncio.run(query_spec_must_read())"` 实读工具返回内容，7 个关键锚点串（手工查询硬门禁 / 字段名禁止推断、失败禁止换名重试 / 三种调用形态怎么选 / 备选加速器，不是默认 / 字段名唯一来源 / 失败后禁止换名重试 / 手工查询门禁）**全部 OK**，`source` 指向本包内 QUERY_SPEC.md。
+
+**影响范围**：仅未安装/已禁用 `ops-dataset-query` Skill 的 MCP 客户端所读的规范文本（含 ops-agent 零沙箱取数入口）。与 ops-agent 侧同日落地的取数助手提示词 v3（迁移 `zzzp20260727_dsq_v3`）措辞对齐、互为强化。⚠️ **本文件改动需 opscli 发版 + 远端 opscli-MCP 服务重新部署后线上才会读到**（见文末「部署注记」）。
+
+**回滚方式**：`git revert` 本提交，或还原 QUERY_SPEC.md 上述四处增量。
+
 ## 2026-07-27 skills - QUERY_SPEC 恢复 MCP 完整取数指南并按新管线优化
 
 **变更原因**：`opscli/mcp/tools/query.py` 的 `query_spec_must_read()` 直接读取 QUERY_SPEC.md 返回给**未安装/已禁用 Skill** 的 MCP 客户端，其 docstring 承诺返回「核心铁律、各查询工具参数规范与示例、字段歧义澄清规则、错误处理速查、典型工作流」。但 2026-07-13 提交 `1a45bc6`（二代规划管线收敛，主题是 CLI 侧规划器）单次 -886/+53 行，把该文档从 917 行压到 84 行并降级为「MCP 部署契约存档」，属 CLI 改造误伤 MCP 契约：参数表、调用示例、公式字段处理、时间口径、权限枚举校验、错误速查、自检清单、反馈规范全部丢失，文档与工具 docstring 承诺严重不符，纯 MCP 用户失去可操作指南。

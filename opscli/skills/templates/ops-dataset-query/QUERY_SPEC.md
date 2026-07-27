@@ -14,8 +14,10 @@
 |---|------|---------|
 | 1 | **鉴权两条等价路径** | **登录不是前置必需**：调用方可直接用工具参数显式传入 `session_id`（+可选 `jwt`）完成鉴权；留空时才使用平台注入或本地已保存的登录态。仅 `query_plan` / `query_flow` 需要已验证账号（见第二章） |
 | 2 | **规划器优先** | 自然语言取数首选 `query_flow`（一次规划并执行）；手工构造 `query_simple` 是次选路线，不得跳过元数据凭记忆拼参 |
+| 2.1 | **手工查询硬门禁** | 凡要调用 `query_simple` / `query_build` / `query_build_and_run` / `query_run`，无论出于什么原因（无规划器、规划器 `blocked`、需要二次查询），**必须先完成**：① 读完本规范；② 调用 `query_metadata(...)` 拿到目标数据集的真实字段清单。缺任一步禁止发起查询 |
 | 3 | **元数据是唯一来源** | 数据集、字段、公式、聚合、`select_columns` 只能来自**本次请求链**中当前已认证账号的响应；禁止用本地文件、历史结果、其他账号响应或模型知识补齐 |
 | 4 | **字段标识只用 `field_name`** | `query_simple` 各处 `field` 一律填 `field_name`；**不要填 `global_alias`**（后端不接受，报"字段不存在"） |
+| 4.1 | **字段名禁止推断、失败禁止换名重试** | 每个 `field` 都必须**逐字**出现在本次 `query_metadata` 响应里；报"字段不存在"时**禁止换一个自己想的名字重试**，必须回到 `query_metadata` 重新核对（见第六章） |
 | 5 | **公式字段禁止再聚合** | 含 `formula_config` / `summary_expression` / `detail_expression` 的字段（ACOS、ROAS、毛利率、均价等）不传普通 `aggregation`，改传 `expr` |
 | 6 | **对比必带主周期** | 用 `data_comparison` 时 `filters` 必须同时含主周期日期，否则报 `QS-EXE-005` |
 | 7 | **快照类指标不跨日累加** | 库存等快照指标默认取最新快照日的值；需要趋势时按日展示快照序列，不求和 |
@@ -181,7 +183,15 @@ query_metadata(table_id=1)
 query_metadata(include_all_fields=True)  # 全量元数据（所有授权数据集的所有字段，经用户级缓存）
 ```
 
-`include_all_fields=True` 需要已验证账号，返回 `{datasets, fields, dataset_count, field_count, stale, from_cache}`；`field_count=0` 表示后端尚未上线该能力。它忽略 `dataset` / `table_id` / `skills_dir`。
+### 三种调用形态怎么选
+
+| 形态 | 返回内容 | 何时用 |
+|------|---------|--------|
+| `query_metadata()`（不传参数） | 当前账号授权的**数据集卡片列表**（中文名称、说明、别名、`table_id`）；**不含** `select_columns` | 路线 B 步骤 1 选数据集。据此挑针对性数据集，避免默认落到综合大杂烩数据集 |
+| `query_metadata(dataset="<alias>")` / `query_metadata(table_id=<id>)` | **该数据集的完整字段信息** + `select_columns` + `filter_configs` | **默认的取字段方式**（路线 B 步骤 2）。数据集确定后取精确 `field_name`，也用于取组件数据集的枚举字段 |
+| `query_metadata(include_all_fields=True)` | **全量元数据**：全部授权数据集的全部字段 | **备选加速器，不是默认**。仅在不确定目标字段属于哪个数据集、或需跨数据集比对字段时用；payload 很大会挤占上下文 |
+
+`include_all_fields=True` 需要已验证账号（无已验证账号时失败闭合、返回错误而非空结果），返回 `{datasets, fields, dataset_count, field_count, stale, from_cache}`；`field_count=0` 表示后端尚未上线该能力，此时退回上面的两步法。它忽略 `dataset` / `table_id` / `skills_dir`。
 
 ### 选择规则
 
@@ -201,6 +211,8 @@ query_metadata(include_all_fields=True)  # 全量元数据（所有授权数据�
 
 ### 字段标识
 
+- **字段名唯一来源**：`query_simple` 里每一个 `field`（维度、指标、筛选、排序）都必须**逐字**出现在本次 `query_metadata` 响应中。**禁止**凭记忆、凭命名习惯（`amount` / `sale_amount` 之类）、凭其它数据集经验推断字段名——想不起来就再调一次 `query_metadata`，不要猜。
+- **失败后禁止换名重试**：查询报"字段不存在"或参数非法时，**不得换一个自己想的字段名再试一次**（这只会变成猜名死循环）。必须回到 `query_metadata` 重新核对确切 `field_name`；不确定字段属于哪个数据集时用 `query_metadata(include_all_fields=True)` 定位。连续两次仍无法在元数据中找到对应字段，就如实说明该字段在当前授权范围内不可用并停止，不要无限重试。
 - `query_simple` 各处 `field` **一律填 `field_name`**。后端不接受 `global_alias` 作查询字段标识，会报"字段不存在"。
 - **同名双注册自动消歧**：同一物理字段可能出现同名双注册——「英中双名」（同 `field_name`、`verbose_name` 一中一英）或「公式 vs 裸指标」（同 `field_name`，一条带公式配置、一条为裸指标）。此时**仍按 `field_name` 传参即可**，后端与 `query_simple` 会稳定解析：**公式注册优先**（均值/比率类字段用其汇总表达式聚合，不会被误 `SUM`）。无需、也不应为区分同名字段改用 `global_alias`。
 
@@ -499,7 +511,7 @@ query_build_and_run(
 |--------------|------|------|
 | `QS-EXE-005 missing ')' at '{'` | 用了 `data_comparison` 但缺主周期 `filters` | 补主周期日期 filters 后重试 |
 | `Unexpected keyword argument` | 参数用了 camelCase | 改 snake_case：`table_id` 而非 `tableId` |
-| "字段不存在" | 用 `global_alias` 当字段标识，或字段名拼错 | 改用 `field_name`；重新核对 `query_metadata` 响应 |
+| "字段不存在" | 用 `global_alias` 当字段标识，或字段名靠猜/拼错 | 改用 `field_name`；**回到 `query_metadata` 重新核对，禁止换一个自己想的名字直接重试**；不确定字段归属时用 `include_all_fields=True` 定位。连续两次找不到即停止并如实说明 |
 | 指标数值异常放大 | 公式字段被套 `SUM` 二次聚合 | 改传 `expr`，不传 `aggregation` |
 | 库存数值膨胀数倍 | 快照指标跨日累加 | 取最新快照日，不做时间聚合 |
 | 结果只有 20 行 | 未传 `limit`，沿用后端默认 | `query_flow` / `query_simple` 传更大 `limit` 重查 |
@@ -522,7 +534,9 @@ query_build_and_run(
 □ 若要用 query_plan / query_flow：是否存在传输层已验证账号？（显式凭证不满足该要求）
 □ 路线：自然语言请求是否优先走了 query_flow，而不是凭记忆手拼 query_simple
 □ 数据集：是否唯一确认？业务领域词是否搜索了数据集列表本身而非只靠字段命中
+□ 手工查询门禁：要发 query_simple 系列前，是否已读完本规范 + 已调用过 query_metadata（缺一不可）
 □ 字段：是否来自本次 query_metadata(dataset=...) 响应？是否用的 field_name（不是 global_alias）
+□ 字段：每个 field 是否逐字来自元数据（无一个是猜的）？上一次"字段不存在"是否回查了元数据而非换名重试
 □ 公式字段：summary_expression / formula_config 非空 → 传 expr，不传 aggregation
 □ 默认条件：filter_configs 是否已交由服务端应用（客户端未重复注入），并已准备披露
 □ 筛选权限：filters 字段是否在 select_columns？→ 已查组件枚举并完整等值命中
