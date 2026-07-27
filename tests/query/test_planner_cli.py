@@ -60,7 +60,7 @@ def test_plan_command_requires_login(monkeypatch):
 
 def test_flow_command_executes(monkeypatch):
     """query flow：调 run_flow 输出带 result 的合同。"""
-    def _fake_run_flow(request, *, user_email, requested_fields=(), result_dir=None):
+    def _fake_run_flow(request, *, user_email, requested_fields=(), result_dir=None, **kwargs):
         return {**_sample_contract(), "result": {"data": {"result": {"data": [{"销售额": 100}]}}}}
 
     monkeypatch.setattr(query_cli, "run_flow", _fake_run_flow)
@@ -71,6 +71,39 @@ def test_flow_command_executes(monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["command"] == "query flow"
     assert payload["data"]["result"]["data"]["result"]["data"] == [{"销售额": 100}]
+
+
+def test_flow_command_limit_order_offset(monkeypatch):
+    """query flow --limit/--order-by/--offset 解析并透传给 run_flow。"""
+    captured = {}
+
+    def _fake_run_flow(request, *, user_email, requested_fields=(), limit=None,
+                       order_by=None, offset=None, result_dir=None, **kwargs):
+        captured.update(limit=limit, order_by=order_by, offset=offset)
+        return {**_sample_contract(), "result": {}}
+
+    monkeypatch.setattr(query_cli, "run_flow", _fake_run_flow)
+    monkeypatch.setattr(query_cli, "_current_email", lambda: "u@x.com")
+
+    result = runner.invoke(
+        query_cli.app,
+        ["flow", "查销售额", "--limit", "100", "--order-by", "f_x:desc", "--order-by", "f_y", "--offset", "10"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert captured["limit"] == 100
+    assert captured["offset"] == 10
+    # f_x:desc → desc True；f_y 无方向 → 默认升序 desc False
+    assert captured["order_by"] == [{"field": "f_x", "desc": True}, {"field": "f_y", "desc": False}]
+
+
+def test_flow_command_invalid_order_direction(monkeypatch):
+    """--order-by 方向非法 → 统一错误输出，退出码 1。"""
+    monkeypatch.setattr(query_cli, "run_flow", lambda *a, **k: _sample_contract())
+    monkeypatch.setattr(query_cli, "_current_email", lambda: "u@x.com")
+    result = runner.invoke(query_cli.app, ["flow", "查销售额", "--order-by", "f_x:bad"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["success"] is False
 
 
 def test_metadata_all_fields_command(monkeypatch):

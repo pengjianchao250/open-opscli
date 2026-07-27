@@ -65,7 +65,7 @@ def test_query_flow_returns_result(monkeypatch):
     """query_flow：调 run_flow→_ok 包裹（含 result）。"""
     _patch_identity(monkeypatch)
 
-    def _fake_run_flow(request, *, user_email, base_dir, requested_fields, query_manager):
+    def _fake_run_flow(request, *, user_email, base_dir, requested_fields, query_manager, **kwargs):
         return {**_contract(), "result": {"data": {"result": {"data": [{"销售额": 1}]}}}}
 
     monkeypatch.setattr(query_tools, "run_flow", _fake_run_flow)
@@ -73,6 +73,26 @@ def test_query_flow_returns_result(monkeypatch):
     result = _run(query_tools.query_flow("查销售额 近7天"))
     assert result["success"] is True
     assert result["data"]["result"]["data"]["result"]["data"] == [{"销售额": 1}]
+
+
+def test_query_flow_limit_order_offset(monkeypatch):
+    """query_flow 的 limit/order_by(JSON串)/offset 解析并透传 run_flow。"""
+    _patch_identity(monkeypatch)
+    captured = {}
+
+    def _fake_run_flow(request, *, user_email, base_dir, requested_fields,
+                       limit=None, order_by=None, offset=None, query_manager=None, **kwargs):
+        captured.update(limit=limit, order_by=order_by, offset=offset)
+        return {**_contract(), "result": {}}
+
+    monkeypatch.setattr(query_tools, "run_flow", _fake_run_flow)
+    out = _run(query_tools.query_flow(
+        "查销售额", limit=100, order_by='[{"field":"f_x","desc":true}]', offset=5
+    ))
+    assert out["success"] is True
+    assert captured["limit"] == 100
+    assert captured["offset"] == 5
+    assert captured["order_by"] == [{"field": "f_x", "desc": True}]
 
 
 def test_planner_tools_registered():

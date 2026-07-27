@@ -103,6 +103,68 @@ def test_run_flow_executes_template_when_planned(monkeypatch):
     assert out["execution_notes"]
 
 
+def _planned_with_template():
+    return {
+        "contract": "query_plan_model_contract_v2",
+        "query_mode": "dataset_query",
+        "status": "planned",
+        "execution_ref": {
+            "query_template": {
+                "tableId": 1,
+                "dimensions": [{"field": "x", "alias": "x"}],
+                "metrics": [],
+                "filters": [],
+                "orderBy": None,
+                "limit": None,
+            }
+        },
+    }
+
+
+def test_run_flow_fills_limit_order_offset(monkeypatch):
+    """run_flow 把 limit/order_by/offset 填入 query_template 并重挂 plan_integrity。"""
+    from opscli.query.services.planner import plan_integrity
+
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+    captured = {}
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            captured["template"] = execution_ref["query_template"]
+            return {"data": []}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com",
+        limit=200, order_by=[{"field": "x", "desc": True}], offset=5,
+        query_manager=_QM(),
+    )
+    t = captured["template"]
+    assert t["limit"] == 200
+    assert t["offset"] == 5
+    assert t["orderBy"] == [{"field": "x", "desc": True}]
+    # 改写模板后重挂完整性：合同层（去掉 run_flow 追加的 result/execution_notes）自洽
+    assert "plan_integrity" in out["execution_ref"]
+    sealed = {k: v for k, v in out.items() if k not in ("result", "execution_notes")}
+    assert plan_integrity.verify(sealed) is True
+
+
+def test_run_flow_no_params_keeps_defaults(monkeypatch):
+    """run_flow 不传 limit/order_by/offset → 模板 limit/orderBy 保持 None、不加 offset（沿用后端默认）。"""
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+    captured = {}
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            captured["template"] = execution_ref["query_template"]
+            return {"data": []}
+
+    entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+    t = captured["template"]
+    assert t["limit"] is None
+    assert t["orderBy"] is None
+    assert "offset" not in t
+
+
 def test_run_query_template_drops_null_keys():
     """QueryManager.run_query_template 删除 None 占位键（orderBy/limit）后转发。"""
     captured: dict = {}

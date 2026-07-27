@@ -1,6 +1,17 @@
 # 待归档变更记录
 
-## 2026-07-26 query/mcp - query metadata 新增全量字段入口（CLI --all-fields / MCP include_all_fields）
+## 2026-07-27 query/mcp - query_flow 补齐 limit/order_by/offset（一体化取数可控行数与排序）
+
+**变更原因**：一体化 query_flow 执行段最小实现只按 query_template 直接执行，而模板 orderBy/limit 为 None 占位、无 offset 键，run_query_template 剔除 None 键 → 不下发。后端 SimpleQueryBuilder.build() 对未传 limit 用 `?? 20`、orderBy 用空数组，导致 query_flow 恒吃默认 limit=20、无排序——AI 取数频繁「数据被截断 20/77」且无法控制行数/排序。后端已支持客户端传 limit/orderBy/offset（limit 无 max），只需改客户端。
+**改动点**：
+- `entry.run_flow` 增 `limit`/`order_by`/`offset` 形参；planned 时按需填入 execution_ref.query_template（未传保持 None → 沿用后端默认），改写后重挂 `plan_integrity.attach(contract)` 保持自洽（仅在实际改写时）。order_by 内部形态 `[{"field","desc":bool}]`。
+- CLI `query flow` 增 `--limit`/`--order-by <字段>[:asc|desc]`(可重复)/`--offset`；新增 `_parse_flow_order_by` 把字符串解析为 `{field,desc}`（非法方向报错）。
+- MCP `query_flow` 增 `limit`/`order_by`(兼容 JSON 串,`_parse_json_arg`)/`offset`；docstring 增截断重查提示。
+- 文案修正：`query_plan._build_query_template` docstring 与 fill_rules 把 orderBy `{field,direction:"DESC|ASC"}` 改为后端正确的 `{field,desc:bool}`（direction 会被后端忽略、恒升序）。
+- 默认口径（用户确认 A）：不设客户端默认，不传 limit 沿用后端 20。
+**验证结果**：单测 43 passed（含 run_flow 注入+plan_integrity 自洽、CLI --limit/--order-by 解析+非法方向报错、MCP JSON 串兼容）；回归 query+mcp 140 passed（仅 catalog/intent 2 既有基线）。真实后端 ops.cm：默认 20/298→`--limit 500` 拿满 298 行、`--order-by price:desc` 单调递减、MCP query_flow(limit=100) 100 行、CLI 命令 execution_ref.query_template.limit=500 orderBy 正确注入。
+**影响范围**：query_flow（CLI/MCP/entry）新增可选参数，默认行为不变；query plan / query simple 不受影响。
+**回滚方式**：还原 run_flow/flow/query_flow 三处新增参数与 _parse_flow_order_by、文案，删除新增测试。
 
 **变更原因**：metadata_all（include_all_fields 全量元数据）此前只被规划器 query plan/flow 内部调用，无独立入口直接触发/查看，不便验证或诊断后端是否支持 include_all_fields（Phase 0）。补一个直连入口。
 **改动点**：

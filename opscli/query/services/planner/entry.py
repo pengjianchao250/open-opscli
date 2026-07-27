@@ -19,14 +19,15 @@ from typing import Any
 
 from opscli.query.services.manager import QueryManager
 from opscli.query.services.metadata_cache import invalidate_metadata_cache
-from opscli.query.services.planner import query_plan
+from opscli.query.services.planner import plan_integrity, query_plan
 from opscli.query.services.planner.metadata_adapter import MetadataAdapter
 
 
-# run_flow 已知延后项：orderBy 服务端缺陷的本地兜底/加量重查、完整结果落盘 result_dir
-# 暂未内核化（属旧 run_query.py 的结果后处理，作为独立后续任务补齐），执行时如实披露。
+# run_flow 已知延后项：limit/order_by/offset 已可控（见 run_flow 参数），但 orderBy
+# 服务端缺陷的本地兜底/加量重查、完整结果落盘 result_dir 仍未内核化（属旧 run_query.py
+# 的结果后处理，作为独立后续任务补齐），执行时如实披露。
 _FLOW_DEFERRED_NOTES = [
-    "orderBy 本地兜底/加量重查暂未内核化（服务端 orderBy 缺陷的过渡方案，后续任务补齐）",
+    "orderBy 服务端缺陷的本地兜底/加量重查暂未内核化（TopN 过渡方案，后续任务补齐）",
     "完整结果落盘 result_dir 暂未内核化，本次仅返回服务端查询结果",
 ]
 
@@ -125,16 +126,22 @@ def run_flow(
     user_email: str,
     base_dir: Path | None = None,
     requested_fields: Sequence[str] = (),
+    limit: int | None = None,
+    order_by: list[dict] | None = None,
+    offset: int | None = None,
     result_dir: Path | None = None,
     query_manager: QueryManager | None = None,
 ) -> dict:
     """一体化：规划 + planned 数据集查询时按 query_template 执行一次取数。
 
     非 planned（clarify/blocked/chart_uuid 等）合同原样返回交调用方处置。
-    执行段为最小实现：清理 query_template 的 null 占位键后执行一次；orderBy 本地兜底/
-    加量重查与结果落盘 result_dir 暂未内核化，见 execution_notes 披露。
+    planned 时把 limit/order_by/offset 填入 query_template 再执行（未传则保持 None、
+    执行时被剔除 → 沿用后端默认：limit=20、无排序、offset=0）。
 
     Args:
+        limit: 返回行数上限；不传则用后端默认（20）。
+        order_by: 排序，形态 [{"field": "<结果字段>", "desc": bool}]（与 query_simple 一致）。
+        offset: 分页偏移；不传则后端默认 0。
         result_dir: 预留的结果落盘目录（当前未使用，落盘能力延后）。
     """
     qm = query_manager or QueryManager()
@@ -147,7 +154,25 @@ def run_flow(
     )
     if contract.get("query_mode") != "dataset_query" or contract.get("status") != "planned":
         return contract
-    run_result = qm.run_query_template(contract.get("execution_ref") or {})
+    execution_ref = contract.get("execution_ref") or {}
+    template = execution_ref.get("query_template")
+    if isinstance(template, dict):
+        # 把用户/Agent 指定的 limit/order_by/offset 填进模板（未指定的保持 None，
+        # run_query_template 会剔除 None 键 → 沿用后端默认）
+        changed = False
+        if limit is not None:
+            template["limit"] = limit
+            changed = True
+        if offset is not None:
+            template["offset"] = offset
+            changed = True
+        if order_by:
+            template["orderBy"] = order_by
+            changed = True
+        # 仅当模板被改写时重挂完整性摘要，保持「规划=执行」自洽（attach 覆盖整个 contract）
+        if changed:
+            plan_integrity.attach(contract)
+    run_result = qm.run_query_template(execution_ref)
     return {
         **contract,
         "result": run_result,

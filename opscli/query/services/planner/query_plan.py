@@ -1057,7 +1057,7 @@ def _build_query_template(
 
     形状与已验证的 opscli query simple --json 实测形态一致：
     日期过滤为 >=/<= 两行、对比为 dataComparison{field,startDate,endDate}、
-    排序为 orderBy[{field,direction}]。普通指标默认 SUM；
+    排序为 orderBy[{field,desc}]（desc 为布尔，true 降序）。普通指标默认 SUM；
     公式/快照指标不带 aggregation（由服务端口径处理）。
     """
     if table_id in (None, ""):
@@ -1417,7 +1417,7 @@ def build_model_contract(
                 "模板已预填授权字段与时间窗（日期过滤为 >=/<= 两行实测形态）。"
                 "时间窗由 Python 按 execution_ref.time_scope 的参考日期生成，禁止自行心算、猜测年份或改写。"
                 "普通指标默认 SUM 按用户口径调整；公式/快照指标不带 aggregation。"
-                "排序填 orderBy=[{\"field\":\"<结果alias>\",\"direction\":\"DESC|ASC\"}]，"
+                "排序填 orderBy=[{\"field\":\"<结果alias>\",\"desc\":true/false}]（desc 布尔，true 降序），"
                 "行数填 limit；不需要的键（null 值）必须删除后再执行。"
                 "selection_source=recommended 的字段须先向用户说明再采用。"
                 "数据集默认条件（若有）由服务端查询时自动应用，请勿手动加入 filters；"
