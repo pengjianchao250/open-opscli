@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-07-27 asin-data - 增加全类目流量 Top10 查询
+
+**变更原因**：类目取数除 Top ASIN 排名外，还需要按指定日期范围查询单个或全部类目的流量 Top10 漏斗均值。
+**改动点**：`opscli asin-data category-top` 新增 `--data-type traffic`，调用 `/dataMetrics/v1/asin-report-files/all-category-traffic-top10`；traffic 模式允许省略 `--category` 查询全部类目，且仅透传接口支持的 `category/date_from/date_to`。默认 `asin` 模式及原返回结构保持不变。同步更新 category-top Skill，并在 basic Skill 中注明刊登数据使用 OPS 代理接口。
+**验证结果**：新增 HTTP 参数、查询服务、CLI 和 Skill 模板测试；ASIN 定向测试与 Skill 测试通过。
+**影响范围**：仅增加 `asin-data category-top` 的可选流量模式并更新 ASIN 数据 Skill；不修改默认类目 Top ASIN、BI 或 crawler 行为。
+**回滚方式**：移除 `fetch_traffic`、`--data-type` 分流及对应测试和 Skill 文档。
+
+---
+
 ## 2026-07-23 auth - 新增显式授权中间件（--ops-jwt-token / --polaris-jwt-token / --session-id）
 
 **变更原因**：需要支持在任意子命令尾部显式传入授权凭证（如 `opscli query simple ... --ops-jwt-token=x --session-id=y`），用于脚本化/外部托管场景，且要求"一处中间件覆盖全部命令"，不逐个命令改造。

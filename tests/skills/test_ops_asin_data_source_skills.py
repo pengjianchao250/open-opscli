@@ -37,10 +37,11 @@ def test_basic_skill_uses_only_basic_command_and_defines_source_precedence():
     assert "--source crawler" in text
     assert "listing" in text and "crawler" in text
     assert "A+" in text and "QA" in text and "reviews" in text
+    assert "/api/v1/data-metrics/amazon-listing/basic" in text
     assert "live-data" not in text
     assert "fetch-file" not in text
     assert "asin_data_" not in text
-    assert read_version("ops-asin-data-basic")["version"] == "0.1.0"
+    assert read_version("ops-asin-data-basic")["version"] == "0.1.1"
 
 
 def test_bi_skill_covers_domains_dates_and_empty_results():
@@ -70,11 +71,14 @@ def test_category_top_skill_covers_all_query_parameters_and_response_path():
     for flag in ("--category", "--site", "--date-from", "--date-to", "--limit"):
         assert flag in text
     assert "data.category_top" in text
+    assert "--data-type traffic" in text
+    assert "data.category_traffic" in text
+    assert "all-category-traffic-top10" in text
     assert "row_count" in text
     assert "1-100" in text
     assert "live-data" not in text
     assert "asin_data_" not in text
-    assert read_version("ops-asin-data-category-top")["version"] == "0.1.0"
+    assert read_version("ops-asin-data-category-top")["version"] == "0.2.0"
 
 
 def test_all_asin_data_skills_are_in_every_release_artifact():

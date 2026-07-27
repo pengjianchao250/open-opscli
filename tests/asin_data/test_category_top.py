@@ -64,6 +64,77 @@ def test_category_top_client_fetches_remote_rows():
     assert result["rows"][0]["ASIN"] == "B0TEST1234"
 
 
+def test_category_top_client_fetches_all_category_traffic_with_optional_category():
+    calls = {}
+
+    def fake_get(url, **kwargs):
+        calls["url"] = url
+        calls["kwargs"] = kwargs
+        return httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "data": {
+                    "category_filter": "3D Wall Panels",
+                    "category_total": 1,
+                    "category_names": ["3D Wall Panels"],
+                    "ranking_metric": "page_views",
+                    "top_n": 10,
+                    "categories": [
+                        {
+                            "category": "3D Wall Panels",
+                            "category_product_count": 47,
+                            "top_product_count": 10,
+                            "funnel_average": {"sessions": 1961, "page_views": 2834.2},
+                        }
+                    ],
+                },
+            },
+        )
+
+    client = AsinCategoryTopClient(
+        auth_client=DummyAuthClient(),
+        http_get=fake_get,
+        ops_url="https://ops.example.com/",
+    )
+
+    result = client.fetch_traffic(
+        category="3D Wall Panels",
+        date_from="2026-07-01",
+        date_to="2026-07-27",
+    )
+
+    assert calls["url"] == "https://ops.example.com/dataMetrics/v1/asin-report-files/all-category-traffic-top10"
+    assert calls["kwargs"]["params"] == {
+        "category": "3D Wall Panels",
+        "date_from": "2026-07-01",
+        "date_to": "2026-07-27",
+    }
+    assert calls["kwargs"]["headers"]["Authorization"] == "Bearer ops-jwt"
+    assert result["row_count"] == 1
+    assert result["rows"][0]["category"] == "3D Wall Panels"
+    assert result["metadata"]["ranking_metric"] == "page_views"
+
+
+def test_category_top_client_normalizes_null_traffic_containers():
+    def fake_get(url, **kwargs):
+        return httpx.Response(
+            200,
+            json={"code": 200, "data": {"categories": None, "category_names": None}},
+        )
+
+    client = AsinCategoryTopClient(
+        auth_client=DummyAuthClient(),
+        http_get=fake_get,
+        ops_url="https://ops.example.com/",
+    )
+
+    result = client.fetch_traffic()
+
+    assert result["rows"] == []
+    assert result["metadata"]["category_names"] == []
+
+
 def test_category_top_service_writes_and_uploads_xlsx_artifact(tmp_path):
     calls = {
         "source_keys": [],
