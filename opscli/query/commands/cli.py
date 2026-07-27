@@ -206,11 +206,36 @@ def plan(
     _emit(payload, pretty)
 
 
+def _parse_flow_order_by(order_by: list[str]) -> list[dict]:
+    """解析 --order-by "<结果字段>[:asc|desc]" → [{"field": <字段>, "desc": bool}]。
+
+    与后端 SimpleQueryBuilder.buildOrderBy 期望的 {field, desc} 形态一致。
+    字段即 query_template 的结果列 alias（默认等于 field_name）。
+    """
+    result: list[dict] = []
+    for item in order_by or []:
+        parts = str(item).split(":", 1)
+        field = parts[0].strip()
+        if not field:
+            raise InvalidPayloadError("--order-by 缺少字段名，格式：<结果字段>[:asc|desc]")
+        desc = False
+        if len(parts) == 2:
+            direction = parts[1].strip().lower()
+            if direction not in ("asc", "desc"):
+                raise InvalidPayloadError(f"--order-by 方向只能是 asc|desc，收到 {parts[1]!r}")
+            desc = direction == "desc"
+        result.append({"field": field, "desc": desc})
+    return result
+
+
 @app.command("flow")
 def flow(
     request: str = typer.Argument("", help="自然语言查询原文"),
     query_file: str | None = typer.Option(None, "--query-file", help="从 UTF-8 文件读取查询原文（含特殊字符时用）"),
     field: list[str] | None = typer.Option(None, "--field", help="补充点名字段，可重复"),
+    limit: int | None = typer.Option(None, "--limit", help="返回行数上限（不传则用后端默认 20）"),
+    order_by: list[str] | None = typer.Option(None, "--order-by", help="排序：<结果字段>[:asc|desc]，可重复"),
+    offset: int | None = typer.Option(None, "--offset", help="分页偏移（不传则后端默认 0）"),
     result_dir: str | None = typer.Option(None, "--result-dir", help="结果落盘目录（能力延后，当前忽略）"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
@@ -222,6 +247,9 @@ def flow(
             text,
             user_email=email,
             requested_fields=field or [],
+            limit=limit,
+            order_by=_parse_flow_order_by(order_by or []),
+            offset=offset,
             result_dir=Path(result_dir).expanduser() if result_dir else None,
         )
         payload = {

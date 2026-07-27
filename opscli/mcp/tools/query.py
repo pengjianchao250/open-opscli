@@ -679,22 +679,32 @@ async def query_plan(
 async def query_flow(
     request: str,
     requested_fields: list[str] | str | None = None,
+    limit: int | None = None,
+    order_by: list[dict] | str | None = None,
+    offset: int | None = None,
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
     """一体化取数：规划 + planned 数据集查询时按 query_template 执行一次并回传结果。
 
     非 planned（需澄清/被阻断/图表 UUID 等）合同原样返回，交调用方按 model_view 处置。
-    执行段为最小实现：清理模板 null 占位键后执行一次；orderBy 服务端缺陷的本地兜底/
-    加量重查与结果落盘暂未内核化，见返回体 execution_notes 披露。
+    planned 时把 limit/order_by/offset 填入 query_template 再执行（不传则沿用后端默认：
+    limit=20、无排序、offset=0）。orderBy 服务端缺陷的本地兜底/加量重查与结果落盘
+    暂未内核化，见返回体 execution_notes 披露。
 
     【前置条件】同 query_plan，须已登录。
+
+    【结果被截断时】返回结果元数据显示只回了部分行（rowCount < totalCount）时，
+    传更大的 limit 重新调用本工具即可取全（后端 limit 无上限）。
 
     【查询完成后必须执行】执行完成后（无论成败）调用 feedback_submit 提交结果反馈。
 
     Args:
         request:          用户查询原文（自然语言）。
         requested_fields: 可选，用户点名字段列表（可传 JSON 字符串）。
+        limit:            可选，返回行数上限；不传则用后端默认 20。
+        order_by:         可选，排序 [{"field": "<结果字段>", "desc": true}]（可传 JSON 字符串）。
+        offset:           可选，分页偏移；不传则后端默认 0。
         session_id:       可选，OAuth 授权后的 Session ID（为空则自动加载）。
         jwt:              可选，已有 JWT（为空则自动加载）。
     """
@@ -709,6 +719,7 @@ async def query_flow(
         return _err(ValueError("无法确认当前登录账号：请先 auth_mcp_login 登录，或传入有效凭证"))
     try:
         fields = _parse_json_arg(requested_fields, list) or []
+        norm_order_by = _parse_json_arg(order_by, list)
     except ValueError as exc:
         return _err(exc)
     sid, jw = _get_auth_pair("ops", session_id, jwt)
@@ -719,6 +730,9 @@ async def query_flow(
             user_email=email,
             base_dir=base_dir,
             requested_fields=fields,
+            limit=limit,
+            order_by=norm_order_by,
+            offset=offset,
             query_manager=_query_manager(jwt=jw, session_id=sid),
         )
         return _ok(result)
