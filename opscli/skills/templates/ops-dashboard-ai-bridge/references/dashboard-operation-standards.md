@@ -44,7 +44,7 @@
 14. 多个真实候选会改变结果时必须调用 `ask_user_question`，提供 2 到 4 个来自页面结果的候选并等待用户选择；禁止只在正文中列选项、要求用户手输序号或替用户选择。
 15. 普通图表创建前确定 1 到 100 字的业务标题，通过 `dashboard_editor_batch_create_charts.charts[].title` 首次写入；标题不得依赖创建后的补偿修改。
 16. 字段角色以页面字段目录和图表规则为准：维度、度量分别进入当前字段区允许的角色；页面返回角色校验失败时只允许基于真实元数据修正一次。
-17. 修改标题、局部样式和位置时使用三个显式目标工具；样式一次只改一个 `styleKey`，移动前读取 `gridColumn` 和当前布局，不硬编码列数。
+17. 修改标题、局部样式和位置时使用三个显式目标工具；样式一次只改一个 `styleKey`，移动前读取当前布局，固定 12 列边界由运行合同和页面校验。
 18. 默认组合必须且只能调用一次 `dashboard_editor_batch_create_charts`；不得拆成逐图新增、逐图选集或独立字段配置。
 
 ## 写后核验门禁
@@ -94,12 +94,12 @@
 ## 操作总流程
 
 1. 调用 `dashboard_session_get_context({"include_selected_chart_config": true})`。
-2. 查看 `availableTools`、`pendingTools`、`charts`、`gridColumn` 和当前数据集摘要。
+2. 查看 `availableTools`、`pendingTools`、`charts` 和当前数据集摘要；`gridColumn` 仅作为固定 12 列边界的只读诊断事实。
 3. 需要数据集时调用 `dashboard_session_search_datasets`；确定唯一数据集后调用 `dashboard_session_get_dataset_fields` 读取完整字段目录。
 4. 基于用户业务问题，先列出需要的图表类型、统一数据集、维度、指标、筛选条件和计算口径。
 5. 如果字段名或口径不确定，说明判断依据并向用户确认，不做字段试错。
 6. 用户要新增图表但未指定类型时，按默认组合表选型并保持规定数量；营销/转化必须创建 5 张。
-7. 为每张图表确定业务标题；营销/转化组合按 `gridColumn` 计算两小三大尺寸，其中指标卡和环形图同高，环形图占据摘要行剩余宽度。
+7. 为每张图表确定业务标题；受控模板的图表类型、顺序和布局直接取自运行合同，不在提示词中重复计算。
 8. 使用字段目录一次规划全部图表的完整 `fieldLists`，并在任何页面写入前完成图表字段规则校验。
 9. 只调用一次 `dashboard_editor_batch_create_charts`，传入唯一 `datasetId` 和完整 `charts`；禁止调用旧的逐图新增、选集或独立批量配置链路。
 10. 核验批量结果覆盖全部图表，且 `changed=true`、`refreshed=true`；再逐张核验精确 `chartId/viewType/title/layout/fieldLists`，失败时停止后续写入。
@@ -112,7 +112,7 @@
 
 - 标题：`dashboard_drag_set_chart_title({"chart_id":"<chartId>","title":"转化率趋势"})`。
 - 样式：`dashboard_drag_patch_chart_style({"chart_id":"<chartId>","styleKey":"legend","fields":[{"field":"showLegend","value":false}]})`。
-- 位置：先读取 `gridColumn` 和 `charts` 布局，再调用 `dashboard_drag_move_chart({"chart_id":"<chartId>","x":0,"y":6})`。
+- 位置：先读取 `charts` 布局，再调用 `dashboard_drag_move_chart({"chart_id":"<chartId>","x":0,"y":6})`；页面按固定 12 列边界校验。
 
 三类写入均需核验 `changed` 和返回的最终状态；移动以 `finalPosition` 为准，不把请求坐标当作 GridStack 最终坐标。
 
@@ -147,7 +147,7 @@
 
 1. 从 `dashboard_editor_batch_create_charts` 的 `charts[].viewType` enum 确认合法类型。
 2. 确定本轮全部图表和统一数据集，再调用 `dashboard_session_get_dataset_fields` 读取完整字段目录。
-3. 一次确定每张图表的 `viewType/title/layout/fieldLists`，字段不满足图表规则时在写入前停止。
+3. 一次确定每张图表的 `viewType/title/fieldLists`；受控模板布局由后端按运行合同注入，显式单图可按用户要求传入布局，未指定时使用页面默认尺寸。
 4. 只调用一次 `dashboard_editor_batch_create_charts` 创建并配置全部图表，不降级为逐图写入。
 
 从模板新增：
@@ -167,46 +167,32 @@
 
 ## 未指定类型的默认组合
 
-用户明确指定图表类型时优先服从用户。用户只要求创建图表、看板或可视化但没有指定类型时，按业务归属选用下表；无法唯一判断业务归属时使用兜底组合。
+用户明确指定图表类型时优先服从用户。未指定类型时，只选择 `data/dashboard-runtime-contract.json` 定义的受控模板：
 
-| 业务类型  | 识别线索                             | 默认组合                                                                                 |
-| --------- | ------------------------------------ | ---------------------------------------------------------------------------------------- |
-| 增长/机会 | 销售、市场、机会、增长               | 指标趋势图 + 基础柱状图 + 百分比堆叠图 + 交叉表                                          |
-| 营销/转化 | 广告、流量、活动、转化               | `indicator` + `pie_circle` + `combo_bar_line` + `hbar_basic` + `detail_table`，固定 5 张 |
-| 供应链    | 库存、物流、履约、供应               | 指标趋势图 + 基础柱状图 + 堆叠柱状图 + 明细表；存在目标字段时追加进度图                  |
-| 问题/售后 | 退款、客诉、客服、质量问题           | 指标趋势图 + 基础柱状图 + 百分比堆叠条形图 + 明细表                                      |
-| 性能/健康 | 性能、稳定性、健康度、监控           | KPI 或指标趋势图 + 基础折线图 + 基础柱状图 + 状态结构图或进度图 + 明细表                 |
-| 部门兜底  | 仅给出部门或业务域，无法归入以上类型 | 指标趋势图 + 基础柱状图 + 百分比堆叠条形图 + 明细表                                      |
+| 模板键                 | 识别线索                 | 类型与布局来源                                 |
+| ---------------------- | ------------------------ | ---------------------------------------------- |
+| `marketing_conversion` | 广告、流量、活动、营销、转化 | `dashboard-runtime-contract.json` 对应模板     |
+| `supply_chain`         | 库存、物流、履约、供应链 | `dashboard-runtime-contract.json` 对应模板     |
+
+无法唯一判断模板时询问用户；不创建合同外的兜底组合，也不在参考文档中复制类型和尺寸列表。
 
 组合约束：
 
-- 默认组合按表中列出的数量完整创建，表中“或”只选一种；营销/转化组合固定为 5 张，不得缩减为单图或部分组合。
-- 必须用真实字段目录验证可行性；缺少时间、占比、目标值或状态字段时优先替换字段或同类图表，仍无法满足规定数量时停止并说明阻塞。
+- 默认组合按合同中的数量和顺序完整创建，不得缩减为单图或部分组合。
+- 必须用真实字段目录验证可行性；缺少合同图表所需字段时停止并说明阻塞，不擅自替换类型。
 - 全部图表共享一个 `datasetId`。任何图表需要第二数据集才能成立时，停止并调整组合，不得跨数据集拼接。
 - 图表类型、数据集、字段必须在创建前确定；创建后只允许按已确认计划批量写入，不允许用页面结果反向试字段。
 
-### 营销/转化两小三大布局
+### 合同模板布局
 
-从 `dashboard_session_get_context.data.gridColumn` 读取当前画布列数，按以下公式规划，不硬编码 12 列：
-
-```text
-gridColumn = C
-summaryWidth = floor(gridColumn / 3)
-indicator = summaryWidth × 16
-pie_circle = (gridColumn - summaryWidth) × 16
-combo_bar_line = gridColumn × 30
-hbar_basic = gridColumn × 30
-detail_table = gridColumn × 30
-```
+画布固定为 12 列。精确图表类型、顺序和宽高只在 `data/dashboard-runtime-contract.json` 维护，由后端在批量创建时注入；模型不读取用户输入的列数，也不计算尺寸。
 
 创建规则：
 
-1. 创建前确认两张紧凑图的宽度满足各自组件最小宽度，三张大图的宽度不超过 `gridColumn`；不满足时停止，不缩小到会产生滚动或遮挡的尺寸。
-2. 固定按 `indicator`、`pie_circle`、`combo_bar_line`、`hbar_basic`、`detail_table` 顺序规划，五张图一次提交给 `dashboard_editor_batch_create_charts`。
-3. 指标卡布局为 `{"w": summaryWidth, "h": 16}`；环形图布局为 `{"w": gridColumn - summaryWidth, "h": 16}`，并满足 `x+w=gridColumn`；三张大图均为 `{"w": gridColumn, "h": 30}`。
-4. 批量返回后核验指标卡与环形图同高且位于同一行、宽度之和等于 `gridColumn`；三张大图均全宽并依次排列；任意矩形重叠都判定为 `FAIL`。
-5. `indicator` 只配置 1 个度量；`pie_circle` 只配置 1 个类别维度和 1 个度量；三张大图按各自图表字段规则配置。
-6. 逐张核验精确 `chartId/viewType/title/layout/fieldLists`；只核验聚合 `chartIds/changed/refreshed` 不足以完成交付。
+1. 选择唯一匹配的模板键，并保持合同给出的图表数量和顺序。
+2. 营销/转化模板保持两张摘要图同高、三张分析图全宽；供应链模板保持两张摘要图同高、两张分析图全宽。
+3. `indicator` 只配置 1 个度量；`pie_circle` 只配置 1 个类别维度和 1 个度量；其他图表按各自字段规则配置。
+4. 批量返回后逐张核验 `chartId/viewType/title/layout/fieldLists` 与运行合同一致；任意矩形重叠都判定为 `FAIL`。
 
 ## 数据集和字段
 

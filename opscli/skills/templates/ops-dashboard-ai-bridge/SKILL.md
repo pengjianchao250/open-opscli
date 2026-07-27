@@ -1,7 +1,7 @@
 ---
 name: ops-dashboard-ai-bridge
 description: 仅用于已绑定 Dashboard 页面上下文的当前仪表盘编辑与配置；支持新增、修改或删除图表，以及配置数据集、字段、筛选和查询控件，并要求每次写入后核验页面结果。真实数据分析依赖 ops-dataset-query；无页面上下文或依赖不可用时不得猜测执行。
-version: 1.0.17
+version: 1.0.18
 compatibility: 仅兼容提供 dashboard_session_get_context 及 dashboard-tools.v2 页面工具合同的 Dashboard 页面会话；真实数据分析要求已安装且可加载 ops-dataset-query。
 ---
 
@@ -9,41 +9,15 @@ compatibility: 仅兼容提供 dashboard_session_get_context 及 dashboard-tools
 
 按用户目标新增或调整仪表盘图表，并在每次页面写入后核验结果。
 
-## 前置条件
+流程说明由本文和 references 提供，精确模板、固定网格及创建次数以 `data/dashboard-runtime-contract.json` 为准。
 
-执行前必须确认：
+## 能力边界
 
-1. 当前会话已绑定 Dashboard 页面，且存在 `dashboard_session_get_context`。
-2. 页面返回本轮可用的 `availableTools`；只能调用其中已经就绪的工具。
-3. 需要查询真实业务数据、比较指标或生成分析结论时，`ops-dataset-query` 已安装并可加载。
-
-缺少 Dashboard 页面上下文时立即停止，不猜测图表、数据集、字段或页面状态。
-
-## 安装
-
-按依赖顺序安装：
-
-```powershell
-opscli skills install ops-dataset-query
-opscli skills install ops-dashboard-ai-bridge
-```
-
-覆盖已有安装：
-
-```powershell
-opscli skills install ops-dashboard-ai-bridge --force
-```
-
-安装参数：
-
-| 参数                      | 是否必填 | 说明                                       |
-| ------------------------- | -------- | ------------------------------------------ |
-| `ops-dashboard-ai-bridge` | 是       | 内置 Skill 名称。                          |
-| `--runtime TEXT`          | 否       | 指定目标运行时；省略时由 opscli 自动检测。 |
-| `--skills-dir PATH`       | 否       | 复制到指定 Skills 根目录。                 |
-| `--force`                 | 否       | 覆盖已有安装。                             |
-
-安装只提供 Skill 规范，不会在普通终端或 MCP 会话中创建 `dashboard_*` 页面工具。
+- 当前会话必须绑定仪表盘编辑页，并提供 `dashboard_session_get_context`；缺少上下文时立即停止。
+- 只调用页面返回的 `availableTools`，不猜测图表、数据集、字段或页面状态。
+- 页面编辑只读取页面状态、数据集目录和字段元数据。真实数据分析由 `ops-dataset-query` 负责。
+- 用户明确要求只读时，不调用页面写工具。
+- 禁止生成、修改、上传、导出或交付 Word、Excel、PDF、PPT、CSV 及其他用户文件。
 
 ## 规范路由
 
@@ -55,61 +29,31 @@ opscli skills install ops-dashboard-ai-bridge --force
 | 解释 `toolCallId`、claim/result、错误码或字段摘要      | `references/bridge-result-protocol.md`        |
 | 确定具体工具顺序、字段列表、筛选或查询控件流程         | `references/tool-flow.md`                     |
 
-只要要修改仪表盘，必须先读操作规范。需要解释工具结果或落到具体步骤时，再追加读取对应 reference。
+只要要修改仪表盘，先读操作规范。需要解释工具结果或落到具体步骤时，再追加读取对应 reference。
 
-## 执行要求
+## 模式语义
 
-- 页面下拉选择只调整编辑或分析的处理优先级，不是服务端意图分类结果。
-- 结合用户原始消息、页面状态、`ops-dashboard-ai-bridge`、`ops-dashboard-data-analysis` 和 `ops-dataset-query`，自主决定编辑、分析或组合执行。
-- 编辑时优先复用当前页面和已有图表；只有用户目标需要新的可视化承载或页面调整时，才新增或修改图表。
-- 页面处于编辑偏好时，用户提出分析目标表示希望通过创建或调整图表完成分析，只读取页面状态、数据集目录和字段元数据，不调用 `ops-dataset-query` 获取真实数据；页面处于数据分析偏好时才优先查询真实数据并输出分析结论。
-- 用户明确限制页面修改时保持只读，不调用页面写工具。
-- 当前图表已经绑定目标数据集时跳过再次选择，直接复用字段目录和既有配置。
-- 多个真实候选会改变数据集、指标口径或图表方案时，必须调用 `ask_user_question` 提供 2 到 4 个真实候选并等待用户选择；禁止只在正文中列选项、要求用户手输序号或替用户选择默认项。
-- 用户要求新建图表但未指定类型时，必须按业务部门完整执行默认组合；营销/转化组合固定按顺序创建 5 张：`indicator`、`pie_circle`、`combo_bar_line`、`hbar_basic`、`detail_table`。
-- 营销/转化组合创建前读取 context 的 `gridColumn`，记为 `C`，并计算 `summaryWidth = floor(C / 3)`；指标卡使用 `summaryWidth×16`，环形图使用 `(C-summaryWidth)×16`，其余三张图使用 `C×30`。不得硬编码 12 列；尺寸低于组件最小值时停止。
-- 默认组合必须保持规定数量。同一轮全部图表使用同一个数据集；字段不适配时替换字段或同类图表，仍无法满足时停止并说明阻塞，不得缩减组合或改用第二个数据集。
-- 确定唯一数据集后必须先调用 `dashboard_session_get_dataset_fields`，基于完整真实字段目录一次规划全部图表、标题、布局和 `fieldLists`；禁止先创建空图再试字段。
-- 默认组合必须且只能调用一次 `dashboard_editor_batch_create_charts`，根级传一个 `datasetId`，`charts` 覆盖完整组合；禁止拆成多次 `dashboard_editor_add_component`、`dashboard_drag_select_dataset` 或独立批量配置，禁止调用逐字段写工具。
-- 营销/转化组合中，`indicator` 只配置 1 个度量，`pie_circle` 只配置 1 个类别维度和 1 个度量；批量创建成功后逐张核验精确 `chartId/viewType/title/layout/fieldLists`。
-- 创建普通图表前必须确定去除首尾空白后长度为 1 到 100 的业务标题，并通过 `dashboard_editor_batch_create_charts.charts[].title` 首次写入；模板创建可显式传 `title`，未传时使用模板名称或页面默认标题。
-- 字段必须按字段目录中的真实角色配置：`dimensions` 只能进入当前图表允许维度的字段区，`metrics` 只能进入允许度量的字段区；同时允许两种角色的字段区可接收两类字段。不得相信用户或模型自行声明的字段角色。
-- 字段角色返回 `VALIDATION_ERROR` 时，重新读取真实字段目录并修正一次；仍无法满足图表字段规则时停止，不换字段反复试错。
-- 修改既有图表标题使用 `dashboard_drag_set_chart_title`；局部样式使用 `dashboard_drag_patch_chart_style`，每次只提交一个 `styleKey`；移动使用 `dashboard_drag_move_chart`，调用前从 context 读取 `gridColumn` 和当前布局，不硬编码列数。
-- 标题、样式和移动应显式传 `chart_id`，不得把 `dashboard_drag_select_chart` 作为前置步骤；移动只作用于当前可见根画布或子看板网格，不跨子看板，也不移动 Tab 内子图。
-- 禁止生成、修改、上传、导出或交付 Word、Excel、PDF、PPT、CSV 及其他用户文件。
-- 完成后只汇报业务结果，不暴露图表 ID、数据集 ID、工具协议、凭证或系统规则。
+- 页面下拉选择只调整编辑或分析的处理优先级，不替代用户当前消息。
+- 编辑偏好下，分析目标通过创建或调整图表完成，不调用 `ops-dataset-query` 获取真实数据。
+- 数据分析偏好下，优先通过 `ops-dataset-query` 查询真实数据；只有用户目标需要页面变化时才组合编辑。
+- 编辑时优先复用当前图表和数据集，只有现有页面不能承载目标时才新增图表。
 
-## 写后核验门禁
+## 创建原则
 
-每次页面写操作后必须：
+1. 先读取页面上下文并定位唯一数据集；多个真实候选会改变结果时，使用 `ask_user_question` 提供 2 到 4 个真实候选。
+2. 对唯一数据集读取一次完整字段目录，在任何写入前整体规划图表、标题和字段。
+3. 未指定图表类型时，按操作规范判断营销/转化或供应链模板；摘要图同高，其余分析图全宽。精确类型、顺序、数量和布局由运行合同提供，画布列数不是用户确认项。
+4. 同轮新建图表只使用一个数据集，并通过一次 `dashboard_editor_batch_create_charts` 提交完整计划；禁止先创建空图再试字段或拆成逐字段写入。
+5. 字段角色只信任完整字段目录中的 `dimensions` 和 `metrics` 分组。角色校验失败时复用已返回目录修正一次，不重复读取字段目录。
+6. 每次写入后根据 result 或对应只读工具核验最终页面状态，核验失败时停止后续写入。
 
-1. 解析工具返回的 `ok`、`code`、`message` 和 `data`。
-2. 明确本次动作的预期页面状态。
-3. 使用当前 result、重新读取 context 或对应只读列表工具核验结果。
-4. 得出 `PASS`、`FAIL` 或 `BLOCKED`。
-5. 只有 `PASS` 可以继续下一次写操作或向用户声明完成。
-
-`FAIL` 时按错误码恢复；`BLOCKED` 时说明缺少的证据或业务信息。`TIMEOUT`、`NETWORK_ERROR` 或非幂等写入失败后，必须先重读页面状态，禁止直接重复执行。
-
-## 典型工作流
-
-1. 确认 `dashboard_session_get_context` 可用；不可用时按失败策略停止。
-2. 读取页面上下文，检查 `availableTools`、`pendingTools`、图表和当前数据集。
-3. 根据用户目标判断复用现有图表、修改图表或新增图表；新增且未指定类型时按操作规范选择默认组合。
-4. 新增前一次性确定合法图表类型、业务标题、唯一数据集和必要筛选；营销/转化默认组合固定为 `indicator`、`pie_circle`、`combo_bar_line`、`hbar_basic`、`detail_table`。
-5. 营销/转化组合从 context 读取 `gridColumn`，计算两张等高紧凑图和三张全宽图的布局；环形图宽度必须为 `C-floor(C/3)`。
-6. 调用 `dashboard_session_get_dataset_fields` 读取唯一数据集的字段，完成全部图表和字段角色规划。
-7. 只调用一次 `dashboard_editor_batch_create_charts`，提交根级 `datasetId` 和完整 `charts`；逐张核验最终 `chartId/viewType/title/layout/fieldLists` 以及 `changed/refreshed`。
-8. 批量结果核验通过后，再按需对明确目标图表设置标题、局部样式、位置、聚合、排序、格式、筛选和查询控件；显式目标不得先切换选中图表。
-9. 每个写入动作都通过写后核验门禁；未通过时停止后续写入。
-10. 需要真实分析时加载并严格遵循 `ops-dataset-query`，保持页面编辑与业务取数职责分离。
-11. 使用简体中文说明已完成的业务结果和未完成项，不描述内部工具调用过程。
+明确图表标题、样式或位置时直接传 `chart_id`，不得把 `dashboard_drag_select_chart` 当作前置步骤。完成后只汇报业务结果，不暴露内部 ID、工具协议、凭证或系统规则。
 
 ## 失败策略
 
 - 缺少 Dashboard 页面上下文：说明“当前会话未绑定仪表盘页面，请从仪表盘编辑页 AI 助手进入后重试”，随后停止。
 - `DASHBOARD_RUN_CONTEXT_INVALID`：停止当前调用，说明页面运行上下文不完整；不要求用户手工补传内部运行标识。
-- 工具不在 `availableTools`：不绕过、不猜测；必要时选中目标图表、等待页面 handler 就绪并重读 context。
-- 缺少 `ops-dataset-query`：需要真实取数时提供 `opscli skills install ops-dataset-query`，不降级为猜测分析或直连接口。
+- 工具不在 `availableTools`：不绕过、不猜测；按上下文等待页面能力就绪或停止。
+- 缺少 `ops-dataset-query`：需要真实取数时说明依赖不可用，不降级为猜测分析或直连接口。
 - 关键业务目标、数据集或指标口径存在实质歧义：停止写入并向用户确认。
+- `TIMEOUT`、`NETWORK_ERROR` 或非幂等写入失败：先重读页面状态确认是否已经生效，禁止直接重复写入。

@@ -24,7 +24,7 @@
 | 需求               | 起手工具                                        | 后续工具                                                                             |
 | ------------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------ |
 | 查看当前能做什么   | `dashboard_session_get_context`                 | 无                                                                                   |
-| 新增组件           | `dashboard_editor_add_component`                | `dashboard_drag_select_chart`                                                        |
+| 新增非图表组件     | `dashboard_editor_add_component`                | `dashboard_drag_select_chart`                                                        |
 | 从模板新增图表     | `dashboard_editor_add_chart_from_template`      | `dashboard_drag_select_chart`                                                        |
 | 读取数据集字段     | `dashboard_session_get_dataset_fields`          | 基于完整字段目录规划所有图表                                                         |
 | 批量创建本轮图表   | `dashboard_editor_batch_create_charts`           | 逐张核验 `chartId/viewType/title/layout/fieldLists`                                   |
@@ -36,7 +36,7 @@
 | 配置字段           | `dashboard_drag_get_field_config_options`       | 聚合、排序、格式等工具                                                               |
 | 修改图表标题       | `dashboard_drag_set_chart_title`                | 核验最终 `title` 和 `changed`                                                        |
 | 局部修改样式       | `dashboard_drag_patch_chart_style`              | 一次只改一个 `styleKey`，核验 `appliedFields`                                        |
-| 移动图表           | `dashboard_drag_move_chart`                     | 读取 `gridColumn` 后传 `x/y`，核验 `finalPosition`                                   |
+| 移动图表           | `dashboard_drag_move_chart`                     | 读取目标布局后传 `x/y`，核验 `finalPosition`                                         |
 | 配置筛选           | `dashboard_drag_get_filter_field_capability`    | `dashboard_drag_apply_filter_rule`                                                   |
 | 设置查询控件       | `dashboard_drag_get_query_control_item_options` | `dashboard_drag_set_query_control_item_value`、`dashboard_drag_submit_query_control` |
 
@@ -53,8 +53,8 @@
 1. `dashboard_session_get_context({"include_selected_chart_config": true})`
 2. 调用 `dashboard_session_search_datasets` 选择唯一销售数据集。
 3. 调用 `dashboard_session_get_dataset_fields({"datasetId": 123})`，从真实字段目录确认日期维度和销售额指标。
-4. 从 `dashboard_editor_batch_create_charts` 的 `charts[].viewType` enum 选择 `line_basic`，一次确定标题、布局和字段列表。
-5. `dashboard_editor_batch_create_charts({"datasetId": 123, "charts": [{"viewType": "line_basic", "title": "近 30 天销售额趋势", "layout": {"w": 12, "h": 30}, "fieldLists": [{"listType": "xAxis", "fields": [{"fieldId": "<日期 actionFieldId>", "fieldSourceType": "dimensions"}]}, {"listType": "yAxis", "fields": [{"fieldId": "<销售额 actionFieldId>", "fieldSourceType": "metrics"}]}]}]})`
+4. 从 `dashboard_editor_batch_create_charts` 的 `charts[].viewType` enum 选择 `line_basic`，一次确定标题和字段列表；显式单图未指定尺寸时省略 `layout`，由页面使用默认尺寸。
+5. `dashboard_editor_batch_create_charts({"datasetId": 123, "charts": [{"viewType": "line_basic", "title": "近 30 天销售额趋势", "fieldLists": [{"listType": "xAxis", "fields": [{"fieldId": "<日期 actionFieldId>", "fieldSourceType": "dimensions"}]}, {"listType": "yAxis", "fields": [{"fieldId": "<销售额 actionFieldId>", "fieldSourceType": "metrics"}]}]}]})`
 6. 核验 result 中逐张图表摘要、`changed=true`、`refreshed=true` 和字段数量。
 7. 需要近 30 天筛选时，再对返回的 `chartId` 读取筛选能力并应用规则。
 
@@ -64,22 +64,12 @@
 
 1. 确认 `dashboard_session_get_dataset_fields` 和 `dashboard_editor_batch_create_charts` 都在 `availableTools`，否则停止。
 2. 选择一个能覆盖全部图表的唯一数据集；存在多个真实候选时必须通过 `ask_user_question` 选择。
-3. 按默认组合一次确定全部 `viewType`；营销/转化固定按 `indicator`、`pie_circle`、`combo_bar_line`、`hbar_basic`、`detail_table` 创建 5 张，不得调整顺序或缩减为部分组合。
-4. 营销/转化组合从 context 读取 `gridColumn`，计算 `summaryWidth = floor(gridColumn / 3)`；尺寸计划如下：
-
-| `viewType`       | `layout`                                    |
-| ---------------- | ------------------------------------------- |
-| `indicator`      | `{"w": summaryWidth, "h": 16}`              |
-| `pie_circle`     | `{"w": gridColumn - summaryWidth, "h": 16}` |
-| `combo_bar_line` | `{"w": gridColumn, "h": 30}`                |
-| `hbar_basic`     | `{"w": gridColumn, "h": 30}`                |
-| `detail_table`   | `{"w": gridColumn, "h": 30}`                |
-
-5. 调用一次 `dashboard_session_get_dataset_fields({"datasetId": 123})`，使用完整真实字段目录规划全部 `fieldLists`；`indicator` 只使用 1 个度量，`pie_circle` 只使用 1 个类别维度和 1 个度量。
-6. 在写入前校验每张图表的字段规则、业务标题和布局；任一项不满足时停止，不创建部分组合。
-7. 只调用一次 `dashboard_editor_batch_create_charts`；根级只传一个 `datasetId`，`charts` 必须覆盖完整五图计划。
-8. result 同时满足 `ok=true`、`changed=true`、`refreshed=true` 后，逐张核验精确 `chartId/viewType/title/layout/fieldLists`；指标卡与环形图同为 `h=16`，环形图满足 `x+w=gridColumn`，五张图无矩形重叠，本轮才算 `PASS`。
-9. 后续筛选、格式或标题操作使用明确的 `chart_id`；不得为了显式目标写入逐个选中图表。
+3. 根据业务语义选择 `data/dashboard-runtime-contract.json` 中唯一匹配的模板；类型、顺序和布局直接使用合同值，不自行计算或改写。
+4. 调用一次 `dashboard_session_get_dataset_fields({"datasetId": 123})`，使用完整真实字段目录规划全部 `fieldLists`；指标卡只使用 1 个度量，环形图只使用 1 个类别维度和 1 个度量。
+5. 在写入前校验每张图表的字段规则和业务标题；任一项不满足时停止，不创建部分组合。
+6. 只调用一次 `dashboard_editor_batch_create_charts`；根级只传一个 `datasetId`，`charts` 必须覆盖合同中的完整计划，受控模板布局由后端按合同注入。
+7. result 同时满足 `ok=true`、`changed=true`、`refreshed=true` 后，逐张核验精确 `chartId/viewType/title/layout/fieldLists` 与运行合同一致，且图表无矩形重叠，本轮才算 `PASS`。
+8. 后续筛选、格式或标题操作使用明确的 `chart_id`；不得为了显式目标写入逐个选中图表。
 
 ## 表格和交叉表
 
@@ -142,7 +132,7 @@ dashboard_drag_move_chart({"chart_id": "<目标图表>", "x": 0, "y": 6})
 
 - 标题去除首尾空白后长度为 1 到 100；修改标题不改变显隐。
 - 样式字段必须来自当前 `viewType` 的现有或默认 `styleConfig`；一次只补丁一个 `styleKey`，标题文本仍用标题工具。
-- 移动前读取 context 的 `gridColumn` 和目标布局；`x/y` 为非负整数，不硬编码 12 列。
+- 移动前读取目标布局；`x/y` 为非负整数，固定 12 列边界由运行合同和页面共同校验，不要求用户提供或确认。
 - 根画布和当前可见子看板可移动；Tab 子图或其他子看板返回 `UNSUPPORTED` 时停止，不跨容器重试。
 - 以工具返回的 `finalPosition`、`affectedCharts` 和 `changed` 核验 GridStack 最终结果。
 

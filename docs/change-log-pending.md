@@ -4560,3 +4560,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：登录/登出跨进程失效恢复正确；无其他行为变化。
 **回滚方式**：还原该函数体与删除新增测试。
 ---
+
+## 2026-07-27 dashboard - Bridge 结构化运行合同与紧凑 MCP 规范
+
+**变更原因**：Dashboard 固定网格、默认模板和创建次数同时散落在系统提示词与 Skill 文档中，存在重复计算、规则漂移和无图表时误向用户索要网格列数的问题。
+**改动点**：新增 `dashboard-runtime-contract.json`，统一维护 12 列网格、营销/转化与供应链模板，以及一次读字段、一次批量创建合同；MCP 只返回紧凑入口、结构合同和 reference 清单，并校验包版本与合同结构；精简 Skill 和三份 reference 中重复的公式与冲突流程；Skill 版本更新为 `1.0.18`。
+**验证结果**：`.venv/Scripts/python.exe -m pytest tests/mcp/test_dashboard_tools.py tests/skills/test_dashboard_skills.py -q` → `17 passed in 2.12s`。
+**影响范围**：`ops-dashboard-ai-bridge` 内置模板、Dashboard 规范读取 MCP 和对应测试；不改变数据分析 Skill，也不发布线上版本。
+**回滚方式**：移除运行合同及 MCP 校验，恢复 Bridge Skill `1.0.17` 和原 reference 内容。
+---
