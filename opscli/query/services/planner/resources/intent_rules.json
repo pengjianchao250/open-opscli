@@ -1,0 +1,181 @@
+{
+  "schema_version": 3,
+  "domains": {
+    "sales": {
+      "terms": ["销售", "发货", "sales"],
+      "description_patterns": ["销售", "销量", "发货", "即时综合"]
+    },
+    "advertising": {
+      "terms": ["广告", "广告费", "投放", "acos", "roas", "cpc", "advertising", "ads"],
+      "description_patterns": ["广告", "SBV"]
+    },
+    "inventory": {
+      "terms": ["库存", "inventory", "stock"],
+      "description_patterns": ["库存", "库龄", "仓租"]
+    },
+    "traffic": {
+      "terms": ["流量", "traffic"],
+      "description_patterns": ["流量转化率", "目录绩效", "搜索词绩效"]
+    },
+    "refund": {
+      "terms": ["退款", "退货", "refund", "return"],
+      "description_patterns": ["退款", "退货"]
+    },
+    "logistics": {
+      "terms": ["物流", "海运", "在途", "运费", "logistics", "shipment", "shipping"],
+      "description_patterns": ["物流", "海运在途", "自发货包裹", "调拨出单", "CG渠道发货"]
+    },
+    "product": {
+      "terms": ["商品", "产品", "product", "listing"],
+      "description_patterns": ["商品", "产品", "SKU", "ASIN", "捆绑"]
+    },
+    "finance": {
+      "terms": ["财务", "净利", "利润", "成本", "费用", "finance", "profit", "cost"],
+      "description_patterns": ["净利", "费用", "成本"]
+    }
+  },
+  "metric_terms": ["销售额", "销量", "转化率", "revenue", "conversion"],
+  "slots": {
+    "platform": {
+      "amazon": {
+        "terms": ["amazon", "亚马逊"],
+        "description_patterns": ["亚马逊"]
+      },
+      "amazon_sc": {
+        "terms": ["amazon sc", "amazon_sc", "亚马逊sc", "亚马逊 sc", "sc"],
+        "description_patterns": ["亚马逊SC", "亚马逊 SC"]
+      },
+      "amazon_vc": {
+        "terms": ["amazon vc", "amazon_vc", "亚马逊vc", "亚马逊 vc", "vc"],
+        "description_patterns": ["亚马逊VC", "亚马逊 VC"]
+      },
+      "tiktok": {
+        "terms": ["tiktok", "tik tok", "tk"],
+        "description_patterns": ["TikTok"]
+      },
+      "walmart": {
+        "terms": ["walmart", "沃尔玛"],
+        "description_patterns": ["Walmart", "沃尔玛"]
+      },
+      "wayfair": {
+        "terms": ["wayfair"],
+        "description_patterns": ["Wayfair"]
+      },
+      "temu": {
+        "terms": ["temu"],
+        "description_patterns": ["Temu"]
+      },
+      "shopify": {
+        "terms": ["shopify"],
+        "description_patterns": ["Shopify"]
+      },
+      "shein": {
+        "terms": ["shein"],
+        "description_patterns": ["Shein"]
+      },
+      "sams": {
+        "terms": ["sams", "sam's", "山姆"],
+        "description_patterns": ["Sams", "山姆"]
+      }
+    },
+    "ad_type": {
+      "sp": {
+        "terms": ["sp", "sponsored products"],
+        "description_patterns": ["SP", "广告类型"]
+      },
+      "sd": {
+        "terms": ["sd", "sponsored display"],
+        "description_patterns": ["SD", "广告类型"]
+      },
+      "sb": {
+        "terms": ["sb", "sponsored brands"],
+        "description_patterns": ["SB", "广告类型"]
+      },
+      "sbv": {
+        "terms": ["sbv", "sponsored brands video", "视频广告"],
+        "description_patterns": ["SBV", "广告类型"]
+      }
+    },
+    "grain": {
+      "keyword": {
+        "terms": ["关键词", "keyword"],
+        "description_patterns": ["关键词"]
+      },
+      "search_term": {
+        "terms": ["搜索词", "search query", "search queries"],
+        "description_patterns": ["搜索词"]
+      },
+      "target": {
+        "terms": ["投放词", "投放目标", "target"],
+        "description_patterns": ["投放词"]
+      },
+      "campaign": {
+        "terms": ["广告活动", "品牌广告", "campaign", "campaigns"],
+        "description_patterns": ["广告数据集"]
+      },
+      "budget": {
+        "terms": ["广告预算", "预算", "campaign budget", "campaign budgets", "budget", "budgets"],
+        "description_patterns": ["广告预算"]
+      },
+      "placement": {
+        "terms": ["广告位", "campaign placement", "campaign placements", "placement", "placements"],
+        "description_patterns": ["广告位"]
+      },
+      "catalog": {
+        "terms": ["目录绩效", "catalog"],
+        "description_patterns": ["目录绩效"]
+      },
+      "activity": {
+        "terms": ["deals活动", "coupons活动", "秒杀", "促销活动", "deal", "deals", "coupon", "coupons"],
+        "description_patterns": ["活动数据集"]
+      },
+      "inventory_age": {
+        "terms": ["库龄", "inventory age"],
+        "description_patterns": ["库龄"]
+      },
+      "turnover": {
+        "terms": ["周转", "turnover"],
+        "description_patterns": ["库存周转"]
+      },
+      "profit_breakdown": {
+        "terms": ["净利", "净利分解", "net profit"],
+        "description_patterns": ["净利分解"]
+      },
+      "logistics_fee": {
+        "terms": ["物流费用", "物流费", "logistics fee"],
+        "description_patterns": ["物流费用账单"]
+      },
+      "sea_shipment": {
+        "terms": ["海运在途", "sea shipment"],
+        "description_patterns": ["海运在途"]
+      },
+      "sales_primary": {
+        "terms": ["销售主口径", "primary sales scope"],
+        "description_patterns": ["即时综合数据集"]
+      }
+    }
+  },
+  "filter_fields": {
+    "platform": ["平台"],
+    "ad_type": ["广告类型"]
+  },
+  "platform_scope": {
+    "members": {
+      "amazon": ["amazon_sc", "amazon_vc"],
+      "amazon_sc": ["amazon_sc"],
+      "amazon_vc": ["amazon_vc"]
+    },
+    "filter_values": {
+      "amazon_sc": ["亚马逊", "亚马逊SC", "亚马逊 SC", "Amazon", "Amazon SC", "AmazonSC", "SC"],
+      "amazon_vc": ["亚马逊VC", "亚马逊 VC", "Amazon VC", "AmazonVC", "VC"]
+    }
+  },
+  "compatibility": {
+    "ad_type_platform": {
+      "sp": ["amazon_sc", "amazon_vc"],
+      "sd": ["amazon_sc", "amazon_vc"],
+      "sb": ["amazon_sc", "amazon_vc"],
+      "sbv": ["amazon_sc", "amazon_vc"]
+    }
+  }
+}

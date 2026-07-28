@@ -39,6 +39,7 @@ from .helpers import (
     _auth_client,
     _decode_jwt_payload,
     _err,
+    _get_auth_pair,
     _get_credential_dir,
     _ok,
     _registry,
@@ -184,6 +185,9 @@ async def auth_mcp_login(agent_name: str | None = None) -> dict:
             store.save_session(session_id, email, expires_at)
             from opscli.mcp.credential_cache import invalidate_credential_cache
             invalidate_credential_cache(base_dir=_get_credential_dir())
+            # 登录成功，失效该用户元数据缓存（授权范围可能随账号变化）
+            from opscli.query.services.metadata_cache import invalidate_metadata_cache
+            invalidate_metadata_cache(base_dir=_get_credential_dir(), user_email=email)
             # 登录用户变化，清空 stdio 模式的工具权限缓存使新权限立即生效
             from opscli.mcp.permissions import invalidate_stdio_cache
             invalidate_stdio_cache()
@@ -279,6 +283,9 @@ async def auth_login_poll(device_code: str, timeout: int = 30) -> dict:
                 # 刷新内存缓存，确保后续 Tool 调用立即可见
                 from opscli.mcp.credential_cache import invalidate_credential_cache
                 invalidate_credential_cache(base_dir=_get_credential_dir())
+                # 登录成功，失效该用户元数据缓存（授权范围可能随账号变化）
+                from opscli.query.services.metadata_cache import invalidate_metadata_cache
+                invalidate_metadata_cache(base_dir=_get_credential_dir(), user_email=email)
                 # 登录用户变化，清空 stdio 模式的工具权限缓存使新权限立即生效
                 from opscli.mcp.permissions import invalidate_stdio_cache
                 invalidate_stdio_cache()
@@ -545,6 +552,9 @@ async def auth_logout(system: str = "__all__") -> dict:
             store.remove_token(system)
         from opscli.mcp.credential_cache import invalidate_credential_cache
         invalidate_credential_cache(base_dir=_get_credential_dir())
+        # 登出即失效该隔离目录下的元数据缓存
+        from opscli.query.services.metadata_cache import invalidate_metadata_cache
+        invalidate_metadata_cache(base_dir=_get_credential_dir())
         # 登出后清空 stdio 模式的工具权限缓存，回退到仅基础 auth 工具
         from opscli.mcp.permissions import invalidate_stdio_cache
         invalidate_stdio_cache()
@@ -610,6 +620,30 @@ async def auth_doctor(session_id: str | None = None) -> dict:
         return _err(exc)
 
 
+async def auth_me(session_id: str | None = None, jwt: str | None = None) -> dict:
+    """获取当前授权用户信息（调用后端 /api/v1/auth/me）。
+
+    【前置条件】需已完成登录授权：
+    - 调用 auth_is_authenticated 确认登录状态；未登录时先调用 auth_mcp_login。
+    - session_id 和 jwt 可留空，工具会按当前 API Key 隔离自动加载已保存的凭证。
+
+    Args:
+        session_id: 可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
+        jwt:        可选，已有 ops JWT（为空则用 session_id 向后端换取）
+
+    Returns:
+        {"success": true, "data": {<用户信息，通常形如后端 me 响应体>}}
+        或 {"success": false, "error": {...}}
+    """
+    # 先按 API Key 隔离解析出 (session_id, jwt)，再传给无状态 get_me，
+    # 避免无状态 AuthClient 读默认凭证目录拿不到隔离后的 session。
+    sid, jw = _get_auth_pair("ops", session_id, jwt)
+    try:
+        return _ok(_auth_client().get_me(session_id=sid, jwt=jw))
+    except Exception as exc:
+        return _err(exc)
+
+
 # ── 工具函数列表（供 register() 批量注册使用）────────────────────────
 _ALL_TOOLS = [
     # 登录方式 A（推荐）：HTTP/SSE 模式一步登录，API Key 即身份，无需浏览器
@@ -620,6 +654,7 @@ _ALL_TOOLS = [
     auth_check_token,
     auth_is_authenticated,
     auth_token_refresh,
+    auth_me,
     # 系统管理
     auth_system_list,
     # auth_system_add,

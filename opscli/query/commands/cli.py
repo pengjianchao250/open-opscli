@@ -12,6 +12,7 @@ import typer
 
 from opscli.query.domain.exceptions import InvalidPayloadError, QueryError
 from opscli.query.services.manager import QueryManager
+from opscli.query.services.planner import run_flow, run_plan
 
 app = typer.Typer(help="数据查询入口，统一转发远端查询请求")
 
@@ -155,6 +156,115 @@ def _error_payload(command: str, exc: Exception) -> dict:
     }
 
 
+def _current_email() -> str:
+    """读取当前登录账号邮箱（规划器缓存隔离维度）；未登录时抛出可读错误。"""
+    from opscli.auth.storage.credential_store import CredentialStore
+
+    data = CredentialStore().load()
+    email = (data or {}).get("email")
+    if not email:
+        raise QueryError("未检测到登录账号，请先执行 opscli auth login 登录后重试")
+    return str(email)
+
+
+def _resolve_request(request: str, query_file: str | None) -> str:
+    """解析查询原文：优先读 --query-file（含特殊字符时用），否则用位置参数。"""
+    if query_file:
+        text = Path(query_file).expanduser().read_text(encoding="utf-8").strip()
+    else:
+        text = (request or "").strip()
+    if not text:
+        raise InvalidPayloadError("缺少查询原文：作为位置参数传入，或用 --query-file <文件> 传入")
+    return text
+
+
+@app.command("plan")
+def plan(
+    request: str = typer.Argument("", help="自然语言查询原文"),
+    query_file: str | None = typer.Option(None, "--query-file", help="从 UTF-8 文件读取查询原文（含特殊字符时用）"),
+    field: list[str] | None = typer.Option(None, "--field", help="补充点名字段，可重复"),
+    top_n: int | None = typer.Option(None, "--top-n", help="选表候选上限"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """自然语言请求 → 规划合同（只规划不执行，输出 query_plan_model_contract_v2）。"""
+    try:
+        text = _resolve_request(request, query_file)
+        email = _current_email()
+        contract = run_plan(
+            text, user_email=email, requested_fields=field or [], top_n=top_n
+        )
+        payload = {
+            "success": True,
+            "command": "query plan",
+            "data": contract,
+            "error": None,
+        }
+    except Exception as exc:
+        _emit(_error_payload("query plan", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
+def _parse_flow_order_by(order_by: list[str]) -> list[dict]:
+    """解析 --order-by "<结果字段>[:asc|desc]" → [{"field": <字段>, "desc": bool}]。
+
+    与后端 SimpleQueryBuilder.buildOrderBy 期望的 {field, desc} 形态一致。
+    字段即 query_template 的结果列 alias（默认等于 field_name）。
+    """
+    result: list[dict] = []
+    for item in order_by or []:
+        parts = str(item).split(":", 1)
+        field = parts[0].strip()
+        if not field:
+            raise InvalidPayloadError("--order-by 缺少字段名，格式：<结果字段>[:asc|desc]")
+        desc = False
+        if len(parts) == 2:
+            direction = parts[1].strip().lower()
+            if direction not in ("asc", "desc"):
+                raise InvalidPayloadError(f"--order-by 方向只能是 asc|desc，收到 {parts[1]!r}")
+            desc = direction == "desc"
+        result.append({"field": field, "desc": desc})
+    return result
+
+
+@app.command("flow")
+def flow(
+    request: str = typer.Argument("", help="自然语言查询原文"),
+    query_file: str | None = typer.Option(None, "--query-file", help="从 UTF-8 文件读取查询原文（含特殊字符时用）"),
+    field: list[str] | None = typer.Option(None, "--field", help="补充点名字段，可重复"),
+    limit: int | None = typer.Option(None, "--limit", help="返回行数上限（不传则用后端默认 20）"),
+    order_by: list[str] | None = typer.Option(None, "--order-by", help="排序：<结果字段>[:asc|desc]，可重复"),
+    offset: int | None = typer.Option(None, "--offset", help="分页偏移（不传则后端默认 0）"),
+    result_dir: str | None = typer.Option(None, "--result-dir", help="结果落盘目录（能力延后，当前忽略）"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """一体化：规划 + planned 时执行一次取数（输出合同 + 结果）。"""
+    try:
+        text = _resolve_request(request, query_file)
+        email = _current_email()
+        contract = run_flow(
+            text,
+            user_email=email,
+            requested_fields=field or [],
+            limit=limit,
+            order_by=_parse_flow_order_by(order_by or []),
+            offset=offset,
+            result_dir=Path(result_dir).expanduser() if result_dir else None,
+        )
+        payload = {
+            "success": True,
+            "command": "query flow",
+            "data": contract,
+            "error": None,
+        }
+    except Exception as exc:
+        _emit(_error_payload("query flow", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
 @app.command("preferences")
 def preferences(
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
@@ -181,11 +291,38 @@ def metadata(
     dataset: str | None = typer.Option(None, "--dataset", help="dataset_alias"),
     table_id: int | None = typer.Option(None, "--table-id", help="table_id"),
     skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 目录"),
+    all_fields: bool = typer.Option(
+        False, "--all-fields",
+        help="拉取全部数据集全部字段（全量元数据 include_all_fields，经用户级缓存；忽略 --dataset/--table-id）",
+    ),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """读取指定数据集的 query metadata，不传任何参数时默认获取所有数据集"""
     manager = QueryManager()
     try:
+        # 全量元数据：一次返回全部授权数据集的全部字段（诊断后端 include_all_fields 支持）
+        if all_fields:
+            email = _current_email()
+            result = manager.metadata_all(user_email=email)
+            datasets = result.payload.get("datasets") or []
+            fields = result.payload.get("fields") or []
+            payload = {
+                "success": True,
+                "command": "query metadata --all-fields",
+                "data": {
+                    "datasets": datasets,
+                    "fields": fields,
+                    "dataset_count": len(datasets),
+                    "field_count": len(fields),
+                    "stale": result.stale,
+                    "from_cache": result.from_cache,
+                },
+                "error": None,
+            }
+            if not fields:
+                payload["hint"] = "field_count=0：当前后端未返回全量字段，可能是取数后端未上线 include_all_fields（Phase 0）"
+            _emit(payload, pretty)
+            return
         result = manager.metadata(dataset_alias=dataset, table_id=table_id, skills_dir=skills_dir)
         payload = {
             "success": True,

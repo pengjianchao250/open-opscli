@@ -1,0 +1,37 @@
+{
+  "request": "查询图表 12345678-abcd-1234-abcd-1234567890ab 的数据",
+  "new": {
+    "status": "planned",
+    "query_mode": "chart_uuid",
+    "dataset_name_zh": "图表保存查询",
+    "dimensions": [],
+    "metrics": [],
+    "platform_filter_state": "not_requested",
+    "next_action": "run_chart_query",
+    "clarification_reason_codes": [],
+    "exec_dataset_alias": null,
+    "exec_table_id": null,
+    "exec_dim_fields": [],
+    "exec_metric_fields": [],
+    "time_scope_start": null,
+    "time_scope_end": null,
+    "time_comparison_type": null
+  },
+  "old": {
+    "status": "planned",
+    "query_mode": "chart_uuid",
+    "dataset_name_zh": "图表保存查询",
+    "dimensions": [],
+    "metrics": [],
+    "platform_filter_state": "not_requested",
+    "next_action": "run_chart_query",
+    "clarification_reason_codes": [],
+    "exec_dataset_alias": null,
+    "exec_table_id": null,
+    "exec_dim_fields": [],
+    "exec_metric_fields": [],
+    "time_scope_start": null,
+    "time_scope_end": null,
+    "time_comparison_type": null
+  }
+}

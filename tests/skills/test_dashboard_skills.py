@@ -16,11 +16,11 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "opscli" / "skills" / "templates"
 SKILL_VERSIONS = {
     "ops-dashboard-data-analysis": "1.0.5",
-    "ops-dashboard-ai-bridge": "1.0.15",
+    "ops-dashboard-ai-bridge": "1.0.20",
 }
 SKILL_LIST_DESCRIPTIONS = {
     "ops-dashboard-data-analysis": "只读分析当前仪表盘的趋势、对比、异常、排名、贡献和业务原因。",
-    "ops-dashboard-ai-bridge": "按用户目标新增或调整仪表盘图表，并在每次页面写入后核验结果。",
+    "ops-dashboard-ai-bridge": "按用户目标新增或调整仪表盘图表。业务规则和操作流程由本 Skill 负责，页面工具只负责执行与返回结果。",
 }
 
 
@@ -52,15 +52,18 @@ def test_dashboard_skill_metadata_is_consistent(skill_name: str, version: str):
 
 
 def test_dashboard_bridge_keeps_progressive_references():
-    """Bridge 必须保留三份渐进加载规范并使用新 Skill 名称。"""
+    """Bridge 必须保留两份职责单一且可完整读取的渐进加载规范。"""
     skill_dir = TEMPLATES_DIR / "ops-dashboard-ai-bridge"
     references = {
-        "bridge-result-protocol.md",
         "dashboard-operation-standards.md",
-        "tool-flow.md",
+        "dashboard-tool-contract.md",
     }
 
     assert {path.name for path in (skill_dir / "references").glob("*.md")} == references
+    assert all(
+        len(path.read_text(encoding="utf-8")) < 6000
+        for path in (skill_dir / "references").glob("*.md")
+    )
     content = "\n".join(path.read_text(encoding="utf-8") for path in skill_dir.rglob("*.md"))
     assert "dashboard_session_get_context" in content
     assert "dashboard-tools.v2" in content
@@ -68,22 +71,55 @@ def test_dashboard_bridge_keeps_progressive_references():
 
 
 def test_dashboard_bridge_declares_batch_creation_contract():
-    """组合创建必须使用统一数据集和页面级批量配置工具。"""
+    """主文件只保留组合创建主流程，详细规则由 reference 承载。"""
     skill_dir = TEMPLATES_DIR / "ops-dashboard-ai-bridge"
-    content = "\n".join(path.read_text(encoding="utf-8") for path in skill_dir.rglob("*.md"))
+    skill = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    standards = (skill_dir / "references" / "dashboard-operation-standards.md").read_text(
+        encoding="utf-8"
+    )
+    tool_contract = (skill_dir / "references" / "dashboard-tool-contract.md").read_text(
+        encoding="utf-8"
+    )
 
-    assert "dashboard_editor_batch_configure_charts" in content
-    assert "同一个数据集" in content
-    assert "未指定类型的默认组合" in content
-    assert "增长/机会" in content
-    assert "营销/转化" in content
-    assert "营销/转化组合固定为 5 张" in content
-    assert "不得缩减为单图或部分组合" in content
-    assert "禁止调用逐字段写工具" in content
-    assert "供应链" in content
-    assert "问题/售后" in content
-    assert "性能/健康" in content
-    assert "部门兜底" in content
+    assert "## 主流程" in skill
+    assert "## Reference 路由" in skill
+    assert "dashboard_session_get_dataset_fields" in skill
+    assert "dashboard_editor_batch_create_charts" in skill
+    assert "数据集和字段必须真实存在" in standards
+    assert "字段必须属于本轮选定的数据集" in standards
+    assert "禁止先创建空图再试字段" in standards
+    assert "营销/转化" in standards
+    assert "供应链" in standards
+    assert "通过一个 `dashboard_editor_batch_create_charts` 请求" in tool_contract
+    assert "indicator(w=" not in skill
+    assert not (skill_dir / "data" / "dashboard-runtime-contract.json").exists()
+
+
+def test_dashboard_bridge_keeps_default_layout_rules_in_operation_reference():
+    """默认组合和布局规则必须只由操作规范维护，主文件不重复。"""
+    skill_dir = TEMPLATES_DIR / "ops-dashboard-ai-bridge"
+    skill = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    content = (skill_dir / "references" / "dashboard-operation-standards.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "`indicator(w=4,h=16)`" in content
+    assert "`pie_circle(w=8,h=16)`" in content
+    assert "`combo_bar_line(w=12,h=30)`" in content
+    assert "`metric_trend(w=4,h=20)`" in content
+    assert "`hbar_basic(w=8,h=20)`" in content
+    assert "固定 12 列" in content
+    assert "x + w <= 12" in content
+    assert "原子、幂等并可回滚" in content
+    assert "指标卡只配置 1 个度量" in content
+    assert "环形图只配置 1 个类别维度和 1 个度量" in content
+    assert "`chart_id` 定向修改不能误改其他图表" in content
+    assert "默认组合不固定顺序、行或坐标" in content
+    assert "indicator(w=" not in skill
+    assert "两张摘要图同高" not in content
+    assert "summaryWidth" not in content
+    assert "floor(" not in content
+    assert "gridColumn = C" not in content
 
 
 def test_dashboard_bridge_requires_selection_tool_for_real_candidates():
@@ -95,7 +131,7 @@ def test_dashboard_bridge_requires_selection_tool_for_real_candidates():
     assert "2 到 4 个真实候选" in content
     assert "禁止只在正文中列选项" in content
     assert "替用户选择" in content
-    assert "页面处于编辑偏好时" in content
+    assert "编辑偏好下" in content
     assert "不调用 `ops-dataset-query` 获取真实数据" in content
 
 
@@ -108,8 +144,8 @@ def test_dashboard_bridge_declares_field_roles_and_targeted_chart_mutations():
     assert "dashboard_drag_set_chart_title" in content
     assert "dashboard_drag_patch_chart_style" in content
     assert "dashboard_drag_move_chart" in content
-    assert "gridColumn" in content
-    assert "不硬编码" in content
+    assert "固定 12 列" in content
+    assert "不询问或接受其他列数" in content
 
 
 def test_dashboard_skills_declare_runtime_and_query_boundaries():
@@ -162,7 +198,8 @@ def test_dashboard_skills_are_discoverable_and_installable(tmp_path: Path):
         )
 
     bridge_path = tmp_path / "skills" / "ops-dashboard-ai-bridge"
-    assert (bridge_path / "references" / "tool-flow.md").exists()
+    assert (bridge_path / "references" / "dashboard-tool-contract.md").exists()
+    assert not (bridge_path / "data" / "dashboard-runtime-contract.json").exists()
 
 
 def test_dashboard_skills_follow_release_profile_matrix():

@@ -116,6 +116,23 @@ def test_get_me_calls_auth_me_endpoint(tmp_path):
 
 
 @respx.mock
+def test_get_me_with_explicit_session_param(tmp_path):
+    """get_me(session_id=, jwt=) 应走 build_request_auth_with_session（MCP 无状态路径）。"""
+    # 不设置显式上下文：直接通过参数传入，验证无状态分支
+    client = AuthClient(base_dir=tmp_path)
+    route = respx.get(url__regex=r".*/api/v1/auth/me$").mock(
+        return_value=httpx.Response(200, json={"data": {"email": "sess@example.com"}})
+    )
+    result = client.get_me(session_id="sid-x", jwt="jw-x")
+    assert route.called
+    req = route.calls.last.request
+    assert req.headers["Authorization"] == "Bearer jw-x"
+    # session_id 应作为 polarisUserToken cookie 携带
+    assert "sid-x" in req.headers.get("cookie", "")
+    assert result["data"]["email"] == "sess@example.com"
+
+
+@respx.mock
 def test_auth_me_cli_outputs_json(tmp_path, monkeypatch):
     """opscli auth me 命令在显式模式下应输出用户信息 JSON。"""
     import json as _json

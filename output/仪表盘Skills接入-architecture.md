@@ -47,7 +47,8 @@ opscli MCP Server
 | `dashboard-data-analysis/agents/openai.yaml` | 同级目标 | 保留展示信息，更新默认提示词 |
 | `dashboard-data-analysis/data/VERSION.json` | 同级目标 | 名称改为 `ops-*`，版本 `v1.0.4` |
 | `dashboard-ai-bridge/SKILL.md` | `ops-dashboard-ai-bridge/SKILL.md` | 名称、版本、兼容性和前置检查 |
-| `dashboard-ai-bridge/references/*` | 同级目标 | 完整复制，校准 Skill 名称和兼容标记 |
+| `dashboard-ai-bridge/references/dashboard-operation-standards.md` | 同级目标 | 只维护业务、字段、组合和布局约束 |
+| `dashboard-ai-bridge/references/dashboard-tool-contract.md` | 同级目标 | 合并工具顺序、结果读取、写后核验和页面错误处理 |
 | 无 | `ops-dashboard-ai-bridge/agents/openai.yaml` | 新增 Codex 展示元数据 |
 | 无 | `opscli/mcp/tools/dashboard.py` | 新增两个只读规范读取 MCP Tool |
 
@@ -66,7 +67,7 @@ opscli MCP Server
 
 ### 4.2 页面编辑
 
-1. 读取 `references/dashboard-operation-standards.md`。
+1. 读取 `SKILL.md` 主流程和 `references/dashboard-operation-standards.md`。
 2. 调用 `dashboard_session_get_context`，只使用 `availableTools`。
 3. 根据用户目标选择现有图表复用或新增图表。
 4. 数据集、字段和筛选只使用工具返回的真实标识。
@@ -109,12 +110,13 @@ server.py
        │    └─ ops-dashboard-data-analysis/SKILL.md
        └─ dashboard_ai_bridge_spec_must_read()
             ├─ ops-dashboard-ai-bridge/SKILL.md
-            └─ references/*.md
+            ├─ references/dashboard-operation-standards.md
+            └─ references/dashboard-tool-contract.md
 ```
 
 路径统一通过 `get_builtin_templates_dir()` 解析，兼容普通 Python 包、测试覆盖和 PyInstaller。成功响应使用 `_ok()`；缺文件和读取异常使用 `_err(..., tool="MCP → ...")`。两个函数不接收凭证、不调用 QueryManager、不发网络请求。
 
-Bridge 规范按固定顺序合并：入口、操作规范、结果协议、工具流程。响应同时返回主入口 `source` 和所有文件的 `sources`，调用方可审计实际来源。
+Bridge 规范按固定顺序合并：入口主流程、操作规范、工具合同。工具合同只保留模型可执行的页面工具参数、结果读取、写后核验和错误处理；claim token、HTTP 重试、run 事件终态等后端传输细节不进入 Skill。响应同时返回主入口 `source` 和所有文件的 `sources`，调用方可审计实际来源。
 
 ## 7. 发行架构
 
@@ -141,7 +143,7 @@ manifest 配置：
 
 新增 `tests/skills/test_dashboard_skills.py`，覆盖：
 
-- 文件结构与 references 完整性。
+- 两份 references 的职责、长度和完整性。
 - 目录、frontmatter、VERSION 名称和版本一致性。
 - 跨 Skill 引用和 Dashboard 前置条件。
 - 禁止直连 HTTP、敏感查询字段和本机路径。

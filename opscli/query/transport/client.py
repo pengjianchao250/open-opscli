@@ -128,6 +128,7 @@ class QueryClient:
         *,
         dataset_alias: str | None = None,
         table_id: int | None = None,
+        include_all_fields: bool = False,
     ) -> dict:
         """从远端拉取最新的数据集与字段元数据。
 
@@ -146,6 +147,10 @@ class QueryClient:
             params["dataset_alias"] = dataset_alias
         if table_id is not None:
             params["table_id"] = str(table_id)
+        # include_all_fields=1：让后端一次性返回全部授权数据集的全部字段
+        # （规划器全量取数用；默认 false 保持裸调用"只列数据集"契约）
+        if include_all_fields:
+            params["include_all_fields"] = "1"
 
         response = httpx.get(
             f"{self.ops_url}/v1/data-metrics/datasets/query-metadata",

@@ -58,3 +58,8 @@ exclude = ["opscli.skills.templates*"]
 "opscli" = [
     "skills/hooks/report_skill_usage.py",
 ]
+# 规划器静态资源：领域意图规则与规划合同 schema，经 importlib.resources 读取，
+# 非编译对象，必须随 wheel 原样打包
+"opscli.query.services.planner.resources" = [
+    "*.json",
+]
