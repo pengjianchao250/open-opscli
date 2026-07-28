@@ -4895,3 +4895,14 @@
 **影响范围**：影响 `ops-dashboard-ai-bridge` 文档组织、Dashboard 规范读取 MCP 及对应定向测试；未发布线上版本。
 **回滚方式**：回退本次 Skill 文档、Dashboard MCP 聚合逻辑、定向测试和本条变更记录。
 ---
+
+## 2026-07-28 skills/ops-dataset-query - 清理上一代孤儿文件 + core.py 搜索死代码
+
+**变更原因**：ops-dataset-query 目录残留 2026-07-13「二代规划管线收敛」时应删未删的上一代孤儿——9 个 worktree 磁盘残骸（HEAD 已删除、追踪外），以及删除 search.py 后 core.py 内失去唯一消费者的关键词搜索死代码。
+**改动点**：
+1. 删除 9 个未追踪孤儿：scripts/route_intent.py、scripts/search.py、references/cli-simple-guide.md、references/mcp-simple-guide.md、data 下 5 个无消费 YAML（intent_taxonomy/dataset_profiles/field_semantic_index/dataset_relationships/routing_eval_cases）。
+2. core.py（关键词搜索死代码）：删除 filter_rows_by_dataset、search_rows、_tokenize、_score_row、_token_match_score 共 5 个函数（原仅服务已删的 search.py）；连带删除仅 _tokenize 使用的 `import re`；同步修正模块 docstring 与 section 注释（去除"过滤/搜索打分"表述）。保留 load_csv_rows（被 load_local_index 复用）。
+**验证结果**：`python3 -m py_compile core.py` 通过；grep 确认 5 个函数 + core.py 的 re 引用零残留；chart_map/chart_analyze/excel_export（及 _core/_mcp 变体）、updater_mcp 语法解析全部 OK；git status 该目录已无 untracked。
+**影响范围**：仅 ops-dataset-query Skill 模板；core.py 对外导出的图表/Excel/别名/升级/格式化函数全部保留，下游脚本不受影响。
+**回滚方式**：`git checkout HEAD -- opscli/skills/templates/ops-dataset-query/scripts/core.py`；被删的 9 个孤儿如需恢复，从 HEAD 之前含 route_intent.py 的历史提交（如 cfa964f 之前）checkout。
+---
