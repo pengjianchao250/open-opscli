@@ -337,8 +337,8 @@ class QueryManager:
         filters: list[dict] | None = None,
         data_comparison: dict | None = None,
         order_by: list[dict] | None = None,
-        limit: int = 20,
-        offset: int = 0,
+        limit: int | None = 20,
+        offset: int | None = 0,
         dry_run: bool = False,
         output_path: str | None = None,
         validate_fields: bool = False,
@@ -353,6 +353,10 @@ class QueryManager:
         - filters: [{"field": "ds_xxx.platform_name", "operator": "in", "value": ["Amazon"]}, ...]
         - data_comparison: {"field": "ds_xxx.date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"}
         - order_by: [{"field": "f_xxx", "desc": true}, ...]
+
+        未显式提供 alias 的 dimension/metric，会自动以 field 末段补齐
+        （如 ds_xxx.dept_name → dept_name），与规划器 alias=field_name 约定一致，
+        避免后端 simple 接口因 dimensions.*.alias / metrics.*.alias 必填而报 422。
         """
         if not dimensions and not metrics:
             raise InvalidPayloadError("至少需要提供一个 dimension 或 metric")
@@ -367,6 +371,11 @@ class QueryManager:
                 data_comparison=data_comparison,
                 select_columns=metadata.select_columns or [],
             )
+
+        # 后端 simple 接口要求每个 dimension/metric 必带 alias（且 alias 即返回结果集的键名）。
+        # 此处对缺失/空 alias 的项统一以 field 末段兜底补齐，覆盖 CLI 与 MCP 两条 simple 手工路线。
+        dimensions = self._fill_simple_alias(dimensions)
+        metrics = self._fill_simple_alias(metrics)
 
         payload: dict[str, object] = {
             "tableId": table_id,
@@ -383,8 +392,10 @@ class QueryManager:
         if order_by:
             payload["orderBy"] = order_by
 
-        payload["limit"] = limit
-        payload["offset"] = offset
+        # None 容错：limit/offset 为 None 时回落默认值，避免 None 进入 payload
+        # （编译版 Cython 的 int 参数拒绝 None；此处对任意调用方兜底，沿用后端默认）
+        payload["limit"] = 20 if limit is None else limit
+        payload["offset"] = 0 if offset is None else offset
 
         if dry_run:
             payload["dryRun"] = True
@@ -518,6 +529,38 @@ class QueryManager:
         if not field_ref:
             raise InvalidPayloadError(f"{context} 缺少 field")
         return field_ref
+
+    @classmethod
+    def _fill_simple_alias(cls, items: list[dict] | None) -> list[dict] | None:
+        """为缺失/空 alias 的 dimension/metric 项以 field 末段兜底补齐 alias。
+
+        后端 simple 接口强制 dimensions.*.alias / metrics.*.alias 必填，且 alias
+        直接作为返回结果集的键名。simple 手工路线（CLI --json / MCP query_simple）
+        常只传 field 不传 alias，故在此统一补齐：取 field 末段（ds_xxx.dept_name →
+        dept_name），保留原大小写，与规划器 _build_query_template 的 alias=field_name
+        约定一致。
+
+        已显式提供非空 alias 的项原样保留；返回新列表 + 新 dict，不原地修改入参。
+
+        Args:
+            items: dimension 或 metric 列表，元素为 dict（如 {"field": ..., "alias"?: ...}）
+
+        Returns:
+            补齐 alias 后的新列表；入参为空时原样返回。
+        """
+        if not items:
+            return items
+        result: list[dict] = []
+        for item in items:
+            # 已带非空 alias 的项无需处理，直接沿用原引用
+            if not isinstance(item, dict) or str(item.get("alias") or "").strip():
+                result.append(item)
+                continue
+            # 取 field 末段作为 alias（复用 _extract_simple_field_ref 兼容 str/dict 并做非空校验）
+            field_ref = cls._extract_simple_field_ref(item, context="dimensions/metrics")
+            alias = field_ref.rsplit(".", 1)[-1]
+            result.append({**item, "alias": alias})
+        return result
 
     @staticmethod
     def _extract_simple_metric_aggregation(item: str) -> str | None:

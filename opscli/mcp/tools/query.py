@@ -1,16 +1,27 @@
 """Query 工具模块。
 
 将 opscli query 子模块的核心能力暴露为 MCP 工具：
-- query_spec_must_read  — ！！！【重要】读取查询规范文档（先检测 Skill 状态，未安装或已禁用时必须调用）
-- query_metadata        — 查询数据集 metadata（维度/指标字段）
-- query_catalog         — 读取数据集业务语义索引（自然语言匹配数据集）
-- query_intent_match    — 根据自然语言需求匹配 catalog intents 并返回约束
-- query_build           — 构造标准 query payload（不执行）
+
+规范入口：
+- query_spec_must_read  — ！！！【重要】读取 MCP 取数规范（未安装或已禁用 Skill 时必须先调用）
+
+规划器路线（自然语言取数首选，需传输层已验证账号）：
+- query_plan            — 自然语言请求 → 规划合同（只规划不执行）
+- query_flow            — 一体化：规划 + planned 时按 query_template 执行一次并回传结果
+
+手工构造路线（先取元数据再查）：
+- query_metadata        — 查询数据集 metadata（维度/指标字段、select_columns、filter_configs）
+- query_preferences     — 查询当前用户的图表字段偏好
+- query_simple          — 基于简化参数直接执行查询
+- query_build           — 构造标准 query payload（不执行，无需凭证）
 - query_run             — 读取本地 payload 文件并执行查询
 - query_build_and_run   — 构造 payload 并立即执行，一步返回结果
-- query_simple          — 基于简化参数直接执行查询（推荐优先使用）
+
+图表路线：
 - query_chart           — 通过 chart_uuid 获取/执行图表查询
 - query_chart_doc       — 通过 chart_uuid 生成图表 API 调用 Markdown 文档
+
+内部暂时屏蔽（不对外注册）：query_catalog、query_intent_match。
 
 所有工具函数定义在模块级，可直接导入调用（测试友好）。
 调用 register(mcp) 将以上工具批量注册到指定 MCP 实例。
@@ -24,29 +35,33 @@ from .helpers import _err, _ok, _parse_json_arg, _query_manager
 
 
 async def query_spec_must_read() -> dict:
-    """读取 ops-dataset-query 查询规范文档（QUERY_SPEC.md）。
+    """读取 MCP 取数规范（QUERY_SPEC.md）——未安装 Skill 时的完整取数指南。
 
     【调用前必须完成的检测步骤】
     1. 调用 skills_list MCP 工具，确认 ops-dataset-query Skill 是否存在且启用（disable != true）
-    2. 如果 Skill 存在且启用 → 优先加载 Skill 目录内的 SKILL.md（文档更完整，含 17+ 规范文件）
+    2. 如果 Skill 存在且启用 → 优先加载 Skill 目录内的 SKILL.md，不必调用本工具
     3. 如果 Skill 不存在 或 disable=true → 必须调用本工具，不可跳过
 
     【跳过规范的已知风险】
-    - 库存字段误用 SUM 聚合（数据膨胀 2-10 倍）
-    - 公式字段（ACOS/ROAS）二次聚合导致指标失真
-    - dataComparison 缺少主周期导致 QS-EXE-005 报错
-    - innerWhere 数据集误用 query_run 导致查询异常
-    - 字段歧义未澄清导致错误维度/指标
+    - 公式字段（ACOS/ROAS/毛利率）被套 SUM 二次聚合，指标失真
+    - 库存等快照类指标跨日累加，数值膨胀数倍
+    - data_comparison 缺少主周期 filters，报 QS-EXE-005
+    - 字段标识误用 global_alias、或凭记忆猜字段名，报"字段不存在"后换名盲重试
+    - 筛选值未过 select_columns 权限枚举，把无权限值当成查询条件
+    - 客户端重复注入服务端 filter_configs 默认条件，结果恒 0 行
+    - 未传 limit 时沿用后端默认 20 行，把截断结果当成全量
 
     规范内容包括：
-    - 10 条核心铁律（认证、优先级、innerWhere、公式字段、dataComparison 等）
-    - 各查询工具（query_simple / query_build_and_run / query_run / query_chart）的参数规范与示例
-    - 字段歧义澄清规则（数据集选择、公式字段、币种、人员歧义等）
-    - 常见错误处理速查
-    - 典型工作流（直接查询 / 意图匹配 / 图表分析 / 数据更新）
+    - 14 条核心铁律（鉴权、规划器优先、元数据唯一来源、字段标识、公式字段、对比周期、
+      快照指标、默认筛选、权限枚举、歧义澄清、输出与证据、反馈边界等）
+    - 两条取数路线：query_plan / query_flow 规划器路线，query_metadata + query_simple 手工路线
+    - 各查询工具的参数规范与调用示例（普通聚合 / 环比对比 / MOY 趋势 / 公式字段）
+    - 查询组件权限枚举校验、字段与数据集歧义澄清规则、时间口径规范
+    - 常见错误处理速查、查询前自检清单、结果证据合同、反馈边界
 
     【完整工作流说明】
-    每次查询的标准流程：检测 Skill 状态 → 读取规范 → 执行查询 → 调用 feedback_submit 提交结果反馈。
+    标准流程：检测 Skill 状态 → 读取本规范 → 按规范取数 → 仅在意外失败时提交一次 feedback_submit
+    （0 行、需要澄清、认证未就绪、用户取消都不是反馈事件，成功查询不自动提交反馈）。
 
     Returns:
         {"success": true, "data": {"spec": "<Markdown 文档内容>", "source": "<文件路径>"}}
@@ -87,12 +102,12 @@ async def query_metadata(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """查询指定数据集的 metadata（维度/指标字段列表）。
+    """查询指定数据集的 metadata（维度/指标字段列表、select_columns、filter_configs）。
 
-    【前置条件】调用本工具前，必须已完成登录授权：
-    - 调用 auth_is_authenticated 确认当前登录状态
-    - 若未登录，调用 auth_mcp_login 完成一步登录（无需浏览器交互）
-    - session_id 和 jwt 可留空，工具会自动从本地加载已保存的凭证
+    【鉴权：两条等价路径，登录不是前置必需】
+    - 显式凭证：直接传 session_id / jwt 即可，无需先调用 auth_is_authenticated 或 auth_mcp_login
+    - 隐式登录态：两者留空时自动加载平台注入或本地已保存的凭证
+    本工具无 session_id 非空校验，单传 jwt 也可用。
 
     指定 dataset 或 table_id 时，优先从远端拉取最新字段信息；
     远端失败则回退到本地缓存。未指定任何参数时返回本地数据集列表。
@@ -346,20 +361,27 @@ async def query_simple(
 ) -> dict:
     """基于简化参数直接执行查询。服务端自动处理 innerWhere、translate、MOY 展开等技术细节。
 
-    【前置条件 - 调用本工具前必须完成以下步骤】
-    1. 确认登录状态：调用 auth_is_authenticated 检查是否已登录
-       - 若未登录，调用 auth_mcp_login 完成一步登录（无需浏览器交互）
-    2. 获取可用数据集：调用 query_metadata（不传参数）获取本地数据集列表，确认目标数据集存在
-    3. 获取字段信息：调用 query_metadata（传入 dataset 或 table_id）获取该数据集的维度/指标字段列表
-    4. 根据步骤 3 返回的字段名称，组装 dimensions、metrics、filters 参数后再调用本工具
+    【前置条件 - 硬门禁，缺任一步禁止发起查询】
+    1. 已读 query_spec_must_read() 返回的取数规范（未安装 ops-dataset-query Skill 时）
+    2. 调用 query_metadata（传入 dataset 或 table_id）拿到该数据集的**真实字段清单**，
+       dimensions / metrics / filters 中每个 field 都必须逐字出现在该响应里
+    3. 凭证就绪：显式传 session_id（+可选 jwt），或使用已保存的登录态；
+       本工具有 session_id 非空硬校验，只传 jwt 会报"无 session_id"
 
-    跳过上述步骤直接调用将因字段名错误或 table_id 不存在而失败。
+    凭记忆拼字段名会报"字段不存在"；此时禁止换一个自己想的名字重试，必须回到 query_metadata
+    重新核对。字段标识一律用 field_name，不要用 global_alias（后端不接受）。
 
-    【首次使用提示】首次执行查询前，请先调用 query_spec_must_read() 阅读完整查询规范，
-    了解铁律、公式字段处理、innerWhere 限制、dataComparison 用法等关键规则。
+    【规划器路线更省事】自然语言取数可直接用 query_flow 一次完成规划与执行（需传输层已验证账号）；
+    本工具用于规划器不可用、需要精确控制 payload、组件权限枚举查询等场景。
 
     推荐优先使用本工具替代 query_build_and_run，无需理解 innerWhere、translate、
     cacl_type 等复杂概念，仅需 7 个纯业务参数即可完成聚合、对比、趋势分析。
+
+    【常见错误】
+    - 公式字段（含 summary_expression / formula_config）不传 aggregation，改传 expr
+    - 用 data_comparison 时 filters 必须同时含主周期日期，否则报 QS-EXE-005
+    - 服务端 filter_configs 默认条件由服务端强制应用，客户端重复注入会导致恒 0 行
+    - 不传 limit 时沿用后端默认 20 行，需要全量时显式传更大的 limit
 
     dimensions 和 metrics 支持两种传入格式：
     - 字符串格式（兼容 query_build 习惯）：
@@ -383,8 +405,9 @@ async def query_simple(
         session_id:      可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:             可选，已有 JWT（为空则自动加载本地缓存的）
 
-    【查询完成后必须执行】
-    每次查询执行完成后（无论成功或失败），必须调用 feedback_submit MCP 工具提交执行结果反馈。
+    【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
+    在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、
+    预期内的认证未就绪和用户取消都不是反馈事件，成功查询不自动提交反馈。
     """
     from opscli.mcp.tools.helpers import _get_auth_pair
 
@@ -433,18 +456,24 @@ async def query_run(
 ) -> dict:
     """读取本地 payload JSON 文件并转发至服务端执行查询。
 
-    【首次使用提示】首次执行查询前，请先调用 query_spec_must_read() 阅读完整查询规范，
-    了解手写 payload 的必填字段（expr + alias）以及 innerWhere 数据集的禁用限制。
+    【前置条件】先调用 query_spec_must_read() 阅读取数规范（未安装 Skill 时），
+    了解手写 payload 的必填字段（expr + alias）与字段标识规则。
 
-    如果未提供 session_id / jwt，会自动尝试从本地加载已保存的凭据。
+    【禁止手写的字段】userEmail、query.from.table、query.from.permission、query.from.database
+    由构造层根据数据集 metadata 自动生成（涉及用户隐私、子查询 SQL 与权限占位符），手写必错。
+    需要这些字段时改用 query_build / query_build_and_run / query_simple 生成。
+
+    显式传 session_id（+可选 jwt）即可执行，无需前置登录调用；两者留空时自动加载本地凭据。
+    本工具有 session_id 非空硬校验。
 
     Args:
         payload_path: 本地 payload JSON 文件路径
         session_id:   可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:          可选，已有 JWT 可直接使用（为空则自动加载本地缓存的）
 
-    【查询完成后必须执行】
-    每次查询执行完成后（无论成功或失败），必须调用 feedback_submit MCP 工具提交执行结果反馈。
+    【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
+    在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、
+    预期内的认证未就绪和用户取消都不是反馈事件，成功查询不自动提交反馈。
     """
     from opscli.mcp.tools.helpers import _get_auth_pair
 
@@ -477,11 +506,16 @@ async def query_build_and_run(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """构造 query payload 并立即执行，一步返回数据结果。
+    """构造 query payload 并立即执行，一步返回数据结果（CLI 风格字符串参数）。
 
-    【首次使用提示】首次执行查询前，请先调用 query_spec_must_read() 阅读完整查询规范。
+    【前置条件 - 硬门禁】① 先读 query_spec_must_read() 返回的取数规范（未安装 Skill 时）；
+    ② 先用 query_metadata 拿到目标数据集的真实字段清单，dimensions / metrics /
+    where_conditions 中的字段名必须逐字来自该响应，不得凭记忆拼写或报错后换名重试。
 
-    如果未提供 session_id / jwt，会自动尝试从本地加载已保存的凭据。
+    一般优先使用 query_simple（dict 参数，语义更清晰）；本工具适用于已习惯 CLI 字符串格式的场景。
+
+    显式传 session_id（+可选 jwt）即可执行，无需前置登录调用；两者留空时自动加载本地凭据。
+    本工具有 session_id 非空硬校验。
 
     Args:
         dataset:           数据集别名（与 table_id 二选一）
@@ -504,8 +538,9 @@ async def query_build_and_run(
         session_id:        可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:               可选，已有 JWT（为空则自动加载本地缓存的）
 
-    【查询完成后必须执行】
-    每次查询执行完成后（无论成功或失败），必须调用 feedback_submit MCP 工具提交执行结果反馈。
+    【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
+    在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、
+    预期内的认证未就绪和用户取消都不是反馈事件，成功查询不自动提交反馈。
     """
     from opscli.mcp.tools.helpers import _get_auth_pair
 
@@ -562,8 +597,9 @@ async def query_chart(
         session_id: 可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:        可选，已有 JWT（为空则自动加载本地缓存的）
 
-    【查询完成后必须执行】
-    每次查询执行完成后（无论成功或失败），必须调用 feedback_submit MCP 工具提交执行结果反馈。
+    【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
+    在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、
+    预期内的认证未就绪和用户取消都不是反馈事件，成功查询不自动提交反馈。
     """
     from opscli.mcp.tools.helpers import _get_auth_pair
 
@@ -637,8 +673,11 @@ async def query_plan(
     合同 status=planned 时可用 query_flow 一步执行，或据 execution_ref.query_template
     自行填充后走 query_simple；status=clarify_required/blocked 时按 model_view 澄清。
 
-    【前置条件】调用前须已登录（auth_is_authenticated 确认；未登录调 auth_mcp_login）。
-    session_id/jwt 可留空自动加载本地凭证；身份以已验证的当前账号邮箱为准。
+    【前置条件 - 身份要求与其他 query_* 工具不同】本工具用当前账号邮箱做元数据缓存隔离，
+    身份**只来自传输层已验证账号**（remote 模式的 transport 邮箱 / fixed 模式的隔离凭证缓存 /
+    stdio 默认 CredentialStore），**不读显式传入的 session_id 与 jwt**——只持有显式凭证的调用方
+    在此会失败，需改走 auth_mcp_login() 登录，或改用 query_metadata + query_simple 手工路线。
+    session_id/jwt 仅用于后续查询执行，留空时自动加载本地凭证。
 
     Args:
         request:          用户查询原文（自然语言）。
@@ -689,21 +728,29 @@ async def query_flow(
 
     非 planned（需澄清/被阻断/图表 UUID 等）合同原样返回，交调用方按 model_view 处置。
     planned 时把 limit/order_by/offset 填入 query_template 再执行（不传则沿用后端默认：
-    limit=20、无排序、offset=0）。orderBy 服务端缺陷的本地兜底/加量重查与结果落盘
-    暂未内核化，见返回体 execution_notes 披露。
+    limit=20、无排序、offset=0）。返回体的 execution_notes 是**按需披露**的已知延后项，
+    仅在本次真正用到相关能力时出现（传了 order_by 才提示服务端 orderBy 缺陷的本地兜底/加量重查
+    未内核化）；未出现该键属正常，不是异常。
 
-    【前置条件】同 query_plan，须已登录。
+    【前置条件】同 query_plan：身份只来自传输层已验证账号，不读显式传入的 session_id / jwt。
+
+    【非 planned 时的处置】status=clarify_required 按 model_view.clarification_messages_zh 提问，
+    确认后把明确口径写回 request 原文重新调用；status=blocked 且 recovery_state=refresh_in_progress
+    时等待约 25 秒后用相同参数原样重调（合同里的 recovery_command 是 CLI 形态，MCP 场景取其语义即可，
+    不要执行该命令，也不要自行升级），连续 3 次仍未就绪才提交反馈并停止。
 
     【结果被截断时】返回结果元数据显示只回了部分行（rowCount < totalCount）时，
     传更大的 limit 重新调用本工具即可取全（后端 limit 无上限）。
 
-    【查询完成后必须执行】执行完成后（无论成败）调用 feedback_submit 提交结果反馈。
+    【反馈边界】仅在本工具意外失败时提交一次 feedback_submit；0 行、需要澄清、
+    认证未就绪和用户取消都不是反馈事件，成功查询不自动提交反馈。
 
     Args:
         request:          用户查询原文（自然语言）。
         requested_fields: 可选，用户点名字段列表（可传 JSON 字符串）。
         limit:            可选，返回行数上限；不传则用后端默认 20。
-        order_by:         可选，排序 [{"field": "<结果字段>", "desc": true}]（可传 JSON 字符串）。
+        order_by:         可选，排序 [{"field": "<结果字段>", "desc": true}]（可传 JSON 字符串）；
+                          只认 desc 布尔值，写成 {"direction": "DESC"} 会被后端忽略并恒按升序返回。
         offset:           可选，分页偏移；不传则后端默认 0。
         session_id:       可选，OAuth 授权后的 Session ID（为空则自动加载）。
         jwt:              可选，已有 JWT（为空则自动加载）。

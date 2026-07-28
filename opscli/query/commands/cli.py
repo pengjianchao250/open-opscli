@@ -631,9 +631,12 @@ def simple(
             if key in simple_params:
                 kwargs[kwarg_key] = simple_params[key]
 
-        if "limit" in simple_params:
+        # payload 中 limit/offset 为 null 时视为"未指定"，跳过不透传：
+        # 规划器模板可能带 "limit": null，若原样透传，None 会落入 build_simple 的
+        # int 参数——编译版（Cython）会抛 "expected int, got NoneType"，此处剔除后沿用后端默认。
+        if simple_params.get("limit") is not None:
             kwargs["limit"] = simple_params["limit"]
-        if "offset" in simple_params:
+        if simple_params.get("offset") is not None:
             kwargs["offset"] = simple_params["offset"]
         if "dryRun" in simple_params:
             kwargs["dry_run"] = simple_params["dryRun"]
