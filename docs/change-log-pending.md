@@ -4906,3 +4906,14 @@
 **影响范围**：仅 ops-dataset-query Skill 模板；core.py 对外导出的图表/Excel/别名/升级/格式化函数全部保留，下游脚本不受影响。
 **回滚方式**：`git checkout HEAD -- opscli/skills/templates/ops-dataset-query/scripts/core.py`；被删的 9 个孤儿如需恢复，从 HEAD 之前含 route_intent.py 的历史提交（如 cfa964f 之前）checkout。
 ---
+
+## 2026-07-28 query/manager - simple 查询自动补齐 alias 修复后端 422
+
+**变更原因**：部门枚举等 simple 手工路线（CLI `query simple --json` / MCP `query_simple`）常只传 field 不传 alias，构建出的 dimensions/metrics 项缺 alias，后端 `/api/v1/data-metrics/cli-query/simple` 因 `dimensions.*.alias`/`metrics.*.alias` 必填（required_with）返回 422；规划器路线因 `_build_query_template` 自带 alias 而正常，掩盖了 simple 路线缺陷。
+**改动点**：
+1. `opscli/query/services/manager.py`（类 ScopedQueryManager）：新增 `_fill_simple_alias()` classmethod，对缺失/空 alias 的项以 field 末段兜底补齐（`ds_xxx.dept_name`→`dept_name`，保留原大小写，与规划器 `alias=field_name` 约定一致，无 f_ 前缀）；`build_simple()` 在组装 payload 前调用，覆盖 CLI+MCP 两条 simple 收敛点；复用现有 `_extract_simple_field_ref`；同步补 docstring。已显式 alias 的项原样保留，返回新 dict 不改入参。
+2. `tests/query/test_manager.py`：新增 3 个回归测试（缺 alias 自动补 / 带前缀取末段保留大小写 / 显式 alias 不覆盖）。
+**验证结果**：`pytest tests/query/test_manager.py -k "alias"` 相关 3 新测试全通过；`pytest tests/query/` 148 passed，仅 2 个既存基线失败（test_cli 的 catalog/intent，已 git stash 验证与本次无关）；manager.py import OK。
+**影响范围**：仅 simple 查询构建路径；规划器 `run_query_template`（template 已带 alias）不受影响；后端不改。
+**回滚方式**：`git checkout HEAD -- opscli/query/services/manager.py tests/query/test_manager.py`。
+---
