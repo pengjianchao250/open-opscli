@@ -4907,3 +4907,14 @@
 **影响范围**：影响 `ops-dashboard-ai-bridge` 文档组织、Dashboard 规范读取 MCP 及对应定向测试；未发布线上版本。
 **回滚方式**：回退本次 Skill 文档、Dashboard MCP 聚合逻辑、定向测试和本条变更记录。
 ---
+
+## 2026-07-28 ci - 发布流程排障：twine 增加 --verbose 并新增临时 debug workflow
+
+**变更原因**：v0.0.119 / v0.0.120 / v0.0.121 连续三次发布被 PyPI 以 400 拒绝，但 CI 日志只有 `400 Bad Request / Bad Request` 这一句，看不到根因。经本地实测确认：twine 6.2.0 在非 verbose 模式下只打印 HTTP 状态短语，服务端返回的真实拒绝原因仅出现在 `--verbose` 的响应体中（用错误 token 复现时，非 verbose 结尾行同样只有 `403 Forbidden / Forbidden`）。
+**改动点**：
+- `.github/workflows/build-and-publish.yml`：`twine upload` 增加 `--verbose`，并注释说明不可删除的原因。
+- `.github/workflows/debug-publish-verbose.yml`（新增，临时排障用）：`workflow_dispatch` 触发，通过 `actions/download-artifact@v4` 的 `run-id` 跨 run 复用已有构建产物，不重新编译，直接以 verbose 模式重跑上传以捕获原始报错；排障结束后应删除。
+**验证结果**：本地已验证产物本身无问题——`twine check --strict` 对 v0.0.121 全部 8 个 macOS wheel 全部 PASSED；v0.0.121 与已成功发布的 v0.0.119 的 METADATA 逐行比对仅差版本号与 README 新增章节；847 字节探针 wheel（0.0.121.dev999）上传返回 200 OK，证明 token 与项目写权限正常。workflow 改动待 debug workflow 实跑验证。
+**影响范围**：仅影响 GitHub Actions 发布流程的日志输出，不改变构建产物、上传参数语义和发布结果；`--verbose` 不会打印 token（twine 输出 `password: <hidden>`）。
+**回滚方式**：移除 `build-and-publish.yml` 中的 `--verbose`，删除 `.github/workflows/debug-publish-verbose.yml`。
+---

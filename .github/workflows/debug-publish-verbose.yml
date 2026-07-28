@@ -1,0 +1,59 @@
+name: Debug Publish (verbose)
+
+# 临时排障用 workflow：复用已有构建产物重跑一次 PyPI 上传，并强制开启 --verbose
+# 背景：twine 6.x 在非 verbose 模式下只打印 HTTP 状态短语（如 "400 Bad Request"），
+#       服务端返回的真实拒绝原因只出现在 --verbose 的响应体里，导致 v0.0.119~v0.0.121
+#       连续三次发布失败都看不到根因。本 workflow 不重新构建，直接下载指定 run 的
+#       产物再上传，2 分钟内即可拿到原始报错文本。
+# 排障结束后应删除本文件。
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "提供构建产物的 workflow run id（例如 v0.0.121 的 30341841851）"
+        required: true
+        default: "30341841851"
+
+jobs:
+  debug_publish:
+    name: Re-upload with verbose
+    runs-on: ubuntu-latest
+    permissions:
+      # 跨 run 下载产物需要 actions:read 权限
+      actions: read
+
+    steps:
+      - name: Download wheel artifacts from previous run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "wheels-*"
+          merge-multiple: true
+          path: dist/
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download sdist artifact from previous run (optional)
+        # sdist 可能不存在，失败不阻塞排障
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist/
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: List dist contents
+        run: ls -lh dist/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upload to PyPI (verbose)
+        run: |
+          pip install --quiet twine
+          twine upload dist/* --username __token__ --password "$PYPI_TOKEN" --skip-existing --verbose
+        env:
+          PYPI_TOKEN: ${{ secrets.PIPY_OPEN_OPSCLI }}

@@ -149,8 +149,11 @@ jobs:
 
       - name: Publish to PyPI
         # 直接用最新 twine 上传，彻底绕开 action 内置的旧版 twine（不支持 Metadata-Version 2.4）
+        # --verbose 必须保留：twine 6.x 非 verbose 模式只打印 HTTP 状态短语（如 "400 Bad Request"），
+        # 服务端给出的真实拒绝原因（容量超限、文件超大、元数据非法等）只在 verbose 的响应体里，
+        # 缺了它会导致发布失败时 CI 日志完全看不出根因（v0.0.119~v0.0.121 即因此排查困难）
         run: |
           pip install --quiet twine
-          twine upload dist/* --username __token__ --password "$PYPI_TOKEN" --skip-existing
+          twine upload dist/* --username __token__ --password "$PYPI_TOKEN" --skip-existing --verbose
         env:
           PYPI_TOKEN: ${{ secrets.PIPY_OPEN_OPSCLI }}
