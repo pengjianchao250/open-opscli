@@ -4895,3 +4895,12 @@
 **影响范围**：影响 `ops-dashboard-ai-bridge` 文档组织、Dashboard 规范读取 MCP 及对应定向测试；未发布线上版本。
 **回滚方式**：回退本次 Skill 文档、Dashboard MCP 聚合逻辑、定向测试和本条变更记录。
 ---
+
+## 2026-07-28 dashboard - 批量队列合同与编辑分析边界
+
+**变更原因**：旧编辑规范仍要求模型规划宽度、坐标和创建后移动，并把真实数据分析与页面编辑混在同一流程，导致模型逐图调用和分析模式写页面。
+**改动点**：`ops-dashboard-ai-bridge` 升级到 `1.0.21`，新建图表统一为单次批量调用，输入只保留可选高度；选图合同改为 editor 工具；`ops-dashboard-data-analysis` 升级到 `1.0.6` 并收敛为严格只读；新增大小、重复流程和冲突扫描；本地包版本准备为 `0.0.150`。
+**验证结果**：`tests/skills/test_dashboard_skills.py` 9 项通过；版本一致性与 Dashboard MCP 规范测试 7 项通过。通用 Skill 快速校验器因不接受项目发布所需的 `version/compatibility` frontmatter 报规则不兼容。完整 wheel/sdist 清单检查被本机无 Git 跟踪文件的残留目录 `ops-methods-card`、`ops-test-form` 阻断；Dashboard 两个 Skill 的发布 profile 矩阵已由定向测试验证通过。
+**影响范围**：两个 Dashboard 内置 Skill、对应模板测试和本地 release 版本元数据；未修改 MCP/ops-agent 逻辑，未发布线上版本。
+**回滚方式**：回退本次四份 Skill 文档、两个 VERSION、模板测试、包版本和本条变更记录。
+---
