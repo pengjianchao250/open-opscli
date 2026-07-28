@@ -1,7 +1,7 @@
 ---
 name: ops-dashboard-ai-bridge
 description: 仅用于已绑定 Dashboard 页面上下文的当前仪表盘编辑与配置；支持新增、修改或删除图表，以及配置数据集、字段、筛选和查询控件，并要求每次写入后核验页面结果。真实数据分析依赖 ops-dataset-query；无页面上下文或依赖不可用时不得猜测执行。
-version: 1.0.19
+version: 1.0.20
 compatibility: 仅兼容提供 dashboard_session_get_context 及 dashboard-tools.v2 页面工具合同的 Dashboard 页面会话；真实数据分析要求已安装且可加载 ops-dataset-query。
 ---
 
@@ -43,7 +43,7 @@ compatibility: 仅兼容提供 dashboard_session_get_context 及 dashboard-tools
 1. 数据集和字段必须真实存在，并来自本轮页面工具返回的目录；禁止猜测或手写 ID。
 2. 字段必须属于本轮选定的数据集；不得复用其他数据集、历史轮次或其他图表返回的字段 ID。
 3. 维度、度量与图表槽位必须兼容：`dimensions` 只进入维度槽位，`metrics` 只进入度量槽位；双角色槽位才允许两者。
-4. 画布固定 12 列，不询问或接受其他列数；每张图必须满足 `x >= 0`、`w > 0`、`x + w <= 12`、`y >= 0`、`h > 0`，且同一画布内矩形不得重叠。
+4. 画布固定 12 列，不询问或接受其他列数；默认组合只固定宽度 `w`，`x/y` 由模型结合当前画布和本轮全部图表决定。最终每张图必须满足 `x >= 0`、`w > 0`、`x + w <= 12`、`y >= 0`、`h > 0`，且同一画布内矩形不得重叠。
 5. 批量创建必须原子、幂等并可回滚：写入前完成整批校验；任一图表失败时不得保留部分结果；结果不确定时先重读页面状态，确认未生效后才能重试同一计划。
 6. `chart_id` 定向修改不能误改其他图表：已知目标图表时必须直接传 `chart_id`，不得把选择其他图表作为前置步骤，也不得改变非目标图表的标题、样式、位置、数据集或字段。
 
@@ -52,12 +52,12 @@ compatibility: 仅兼容提供 dashboard_session_get_context 及 dashboard-tools
 1. 调用 `dashboard_session_get_context` 读取当前页面、图表和 `availableTools`。
 2. 调用 `dashboard_session_search_datasets` 获取真实数据集；候选不唯一且会改变结果时，用 `ask_user_question` 展示 2 到 4 个真实候选。
 3. 选定唯一数据集后调用 `dashboard_session_get_dataset_fields`，保存本轮 `datasetId`、`dimensions` 和 `metrics`，后续只使用这份字段目录。
-4. 在任何写入前一次性规划全部图表的 `viewType/title/layout/fieldLists`，逐项检查六条强制规则；禁止先创建空图再试字段。
-5. 用户未指定类型时按业务语义选择默认组合：
-   - 营销/转化：`indicator(4x16)`、`pie_circle(8x16)`、`combo_bar_line(12x30)`、`hbar_basic(12x30)`、`detail_table(12x30)`。
-   - 供应链：`metric_trend(4x20)`、`hbar_basic(8x20)`、`bar_stacked(12x30)`、`detail_table(12x30)`。
+4. 在任何写入前一次性规划全部图表的 `viewType/title/layout/fieldLists`，逐项检查六条强制规则；模型结合当前画布决定期望 `x/y`，但调用时只能提交工具 schema 实际声明的布局字段。批量创建 schema 若只接受 `w/h`，不得附加 `x/y`；先按 `w/h` 创建并核验页面实际落位，需要调整时再调用移动工具。禁止先创建空图再试字段。
+5. 用户未指定类型时按业务语义选择默认组合；括号内明确标注默认宽度 `w` 和建议高度 `h`，`x/y` 不固定：
+   - 营销/转化：`indicator(w=4,h=16)`、`pie_circle(w=8,h=16)`、`combo_bar_line(w=12,h=30)`、`hbar_basic(w=12,h=30)`、`detail_table(w=12,h=30)`。
+   - 供应链：`metric_trend(w=4,h=20)`、`hbar_basic(w=8,h=20)`、`bar_stacked(w=12,h=30)`、`detail_table(w=12,h=30)`。
    - 无法唯一判断组合时询问用户，不自行删减或替换图表。
-6. 摘要图放在同一行且等高；指标卡只配置 1 个度量，环形图只配置 1 个类别维度和 1 个度量；其余图表按页面工具 schema 的字段槽位规则配置。
+6. 指标卡只配置 1 个度量，环形图只配置 1 个类别维度和 1 个度量；其余图表按页面工具 schema 的字段槽位规则配置。默认宽度不要求固定排序、固定行或固定坐标。
 7. 通过一个 `dashboard_editor_batch_create_charts` 请求提交唯一 `datasetId` 和完整 `charts` 计划；不得拆成逐图创建、逐图选数据集或逐字段试写。
 8. 核验返回的图表数量、`viewType/title/layout/fieldLists`、`changed/refreshed`；任一项失败或部分成功时按返回结果或重读上下文确认回滚，不继续追加写入。
 
