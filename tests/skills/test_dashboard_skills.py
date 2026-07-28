@@ -16,11 +16,11 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "opscli" / "skills" / "templates"
 SKILL_VERSIONS = {
     "ops-dashboard-data-analysis": "1.0.6",
-    "ops-dashboard-ai-bridge": "1.0.25",
+    "ops-dashboard-ai-bridge": "1.0.26",
 }
 SKILL_LIST_DESCRIPTIONS = {
     "ops-dashboard-data-analysis": "只读分析当前仪表盘的趋势、对比、异常、排名、贡献和业务原因。",
-    "ops-dashboard-ai-bridge": "按用户目标新增或调整仪表盘图表。业务规则和操作流程由本 Skill 负责，页面工具只负责执行与返回结果。",
+    "ops-dashboard-ai-bridge": "按用户目标新增或调整图表。Skill 负责流程，页面工具负责执行与返回结果。",
 }
 
 
@@ -74,8 +74,8 @@ def test_dashboard_skills_keep_compact_progressive_content():
     assert len([line for line in analysis.splitlines() if line.strip()]) <= 50
 
 
-def test_dashboard_bridge_has_one_batch_creation_flow():
-    """新建图表只保留一个批量流程，参数不再包含布局坐标或宽度。"""
+def test_dashboard_bridge_routes_intents_without_forcing_one_creation_tool():
+    """编辑 Skill 必须按意图选择流程，不得把所有请求收敛为单一批量工具。"""
     bridge_dir = TEMPLATES_DIR / "ops-dashboard-ai-bridge"
     skill = (bridge_dir / "SKILL.md").read_text(encoding="utf-8")
     standards = (bridge_dir / "references" / "dashboard-operation-standards.md").read_text(
@@ -85,38 +85,55 @@ def test_dashboard_bridge_has_one_batch_creation_flow():
         encoding="utf-8"
     )
 
-    assert skill.count("## 新建图表") == 1
-    creation = skill.split("## 新建图表", 1)[1].split("## 修改已有图表", 1)[0]
-    assert "用户场景、分析主题和指定对象提取数据集搜索关键词" in creation
-    assert "调用一次 `dashboard_session_get_dataset_fields`" in creation
-    assert "用户指定图表类型时" in creation
-    assert "用户未指定图表类型时" in creation
-    assert "一次规划 4 到 5 张有序图表" in creation
-    assert "有序 `charts`" in creation
-    assert "已确认的 `datasetId`" in creation
-    assert "只调用一次 `dashboard_editor_batch_create_charts`" in creation
-    assert "图表 ID 创建、数据集绑定、字段批量配置和刷新" in creation
-    assert "全部 `chartIds`" in creation
-    assert "结束本次新建流程" in creation
-    for forbidden in (
-        "dashboard_editor_add_component",
-        "dashboard_drag_select_dataset",
-        "dashboard_drag_move_chart",
+    assert skill.count("## 意图路由") == 1
+    routing = skill.split("## 意图路由", 1)[1].split("## 新建图表", 1)[0]
+    for intent in (
+        "场景分析建图",
+        "明确新建图表",
+        "修改已有图表",
+        "分析主题、总览、趋势、对比或复盘目标",
+        "创建、添加、批量创建",
+        "移动、改名、换数据集、增删替换或重排字段",
     ):
-        assert forbidden not in creation
+        assert intent in skill
+    assert "禁止新建图表代替修改" in routing
 
-    batch_contract = contract.split("## 批量创建合同", 1)[1].split("## 已有图表工具", 1)[0]
-    assert '"datasetId": 101' in batch_contract
-    assert '"charts": [' in batch_contract
-    assert '"height"' in batch_contract
-    assert '"layout"' not in batch_contract
-    assert '"x"' not in batch_contract
-    assert '"y"' not in batch_contract
-    assert '"w"' not in batch_contract
+    creation = skill.split("## 新建图表", 1)[1].split("## 修改已有图表", 1)[0]
+    assert "未要求数据集或字段" in creation
+    assert "未配置图表" in creation
+    assert "指定数据集时" in creation
+    assert "指定字段、填充方式" in creation
+    assert "dashboard_editor_batch_create_charts" in creation
+    assert "dashboard_editor_batch_configure_charts" in creation
+    assert "不得编造 `templateUuid`" in creation
+    assert "不强制使用唯一工具或固定次数" in routing
+    for forbidden in ("只调用一次 `dashboard_editor_batch_create_charts`", "统一使用批量流程"):
+        assert forbidden not in skill
+
+    create_contract = contract.split("## 创建与配置合同", 1)[1].split("## 已有图表工具", 1)[0]
+    assert create_contract.count('"datasetId": 101') == 2
+    assert '"chart_id": "<createdChartId>"' in create_contract
+    assert '"height"' in create_contract
+    assert '"layout"' not in create_contract
+    assert '"x"' not in create_contract
+    assert '"y"' not in create_contract
+    assert '"w"' not in create_contract
+    for tool_name in (
+        "dashboard_editor_add_component",
+        "dashboard_editor_batch_create_charts",
+        "dashboard_editor_batch_configure_charts",
+        "dashboard_editor_add_chart_from_template",
+        "dashboard_drag_move_chart",
+        "dashboard_drag_set_chart_title",
+        "dashboard_drag_replace_field_list",
+    ):
+        assert tool_name in contract
     assert "模型不计算坐标或宽度" in standards
-    assert "页面按计划队列自动落位" in standards
+    assert "位置和宽度由页面按计划队列处理" in standards
     assert "字段计划必须来自所选数据集在本轮返回的完整字段目录" in standards
     assert "仅为规划建议，不构成页面固定模板" in standards
+    assert "用户指定类型和数量时服从用户" in standards
+    assert "最终数量由目标和字段决定" in standards
 
     chart_selection = standards.split("## 图表选择", 1)[1].split("## 修改安全", 1)[0]
     priorities = (
@@ -174,16 +191,15 @@ def test_dashboard_bridge_has_one_batch_creation_flow():
     ):
         assert f"`{unavailable_view_type}`" not in chart_selection
     for field_guard in (
-        "日期或连续时间字段",
-        "离散对象和数值指标",
+        "时间趋势",
+        "离散对象比较",
         "部分—整体且类别不超过 5–8 个",
         "多系列共同分类轴",
-        "同群体严格有序阶段",
+        "严格阶段",
         "目标、预算、阈值或 SLA",
-        "记录主键和处理字段",
-        "以 4 到 5 张合法图表为目标",
-        "无法得到至少 4 张合法图表时询问或停止",
-        "不伪造分析关系",
+        "记录级字段",
+        "分析场景通常选 4 到 5 张",
+        "不为凑数伪造关系",
     ):
         assert field_guard in chart_selection
 
@@ -198,7 +214,8 @@ def test_dashboard_bridge_keeps_real_dataset_and_field_guards():
     assert "数据集和字段必须来自本轮页面工具结果" in content
     assert "完整字段目录" in content
     assert "真实角色" in content
-    assert "整批计划任一字段不合法时不得创建任何图表" in content
+    assert "字段写入前必须完成整批校验" in content
+    assert "任一字段不合法时不得提交字段配置" in content
     assert "VALIDATION_ERROR" in content
     assert "修正一次" in content
     assert "ask_user_question" in content
@@ -218,12 +235,14 @@ def test_dashboard_select_tool_and_skill_boundaries_do_not_conflict():
     assert "dashboard_editor_select_chart" in bridge
     assert "dashboard_drag_select_chart" not in bridge
     assert "opscli query" not in bridge
-    assert "分析、洞察、趋势或对比等意图" in bridge
-    assert "进入“新建图表”流程" in bridge
+    assert "场景分析建图" in bridge
+    assert "明确新建图表" in bridge
+    assert "修改已有图表" in bridge
     assert "不要求切换模式" in bridge
     assert "提示切换到“数据分析”模式" not in bridge
     assert "停止页面写入" not in bridge
-    assert "用户明确指向已有图表时进入修改流程" in bridge
+    assert "用户明确指向已有图表或使用移动、改名、换字段等修改动词" in bridge
+    assert "修改请求必须保持图表 ID 集合不变" in bridge
     assert "ops-dataset-query" in analysis
     assert "只读工具" in analysis
     assert "设置面板" in analysis
