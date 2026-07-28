@@ -10,10 +10,22 @@ name: Debug Publish (verbose)
 on:
   workflow_dispatch:
     inputs:
-      run_id:
-        description: "提供构建产物的 workflow run id（例如 v0.0.121 的 30341841851）"
+      mode:
+        description: "artifacts=重传已有构建产物；probe=只传一个几百字节的探针 wheel"
         required: true
+        type: choice
+        options:
+          - artifacts
+          - probe
+        default: artifacts
+      run_id:
+        description: "artifacts 模式下提供构建产物的 workflow run id"
+        required: false
         default: "30341841851"
+      probe_version:
+        description: "probe 模式下使用的版本号（必须是从未用过的预发布号）"
+        required: false
+        default: "0.0.121.dev1000"
 
 jobs:
   debug_publish:
@@ -25,6 +37,7 @@ jobs:
 
     steps:
       - name: Download wheel artifacts from previous run
+        if: inputs.mode == 'artifacts'
         uses: actions/download-artifact@v4
         with:
           pattern: "wheels-*"
@@ -35,6 +48,7 @@ jobs:
 
       - name: Download sdist artifact from previous run (optional)
         # sdist 可能不存在，失败不阻塞排障
+        if: inputs.mode == 'artifacts'
         uses: actions/download-artifact@v4
         with:
           name: sdist
@@ -43,13 +57,58 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
 
-      - name: List dist contents
-        run: ls -lh dist/
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Build tiny probe wheel
+        # probe 模式：构造一个几百字节的合法 wheel，用从未使用过的预发布版本号上传，
+        # 用来验证"上传是否会被接受、接受后文件是否真的落在 PyPI 上"，
+        # 与产物体积、编译内容完全无关
+        if: inputs.mode == 'probe'
+        env:
+          PROBE_VERSION: ${{ inputs.probe_version }}
+        run: |
+          python - <<'PY'
+          import base64, hashlib, os, zipfile
+
+          version = os.environ["PROBE_VERSION"]
+          distinfo = f"aukeys_opscli-{version}.dist-info"
+          os.makedirs("dist", exist_ok=True)
+          whl = f"dist/aukeys_opscli-{version}-py3-none-any.whl"
+
+          files = {
+              f"{distinfo}/METADATA": (
+                  "Metadata-Version: 2.1\n"
+                  "Name: aukeys-opscli\n"
+                  f"Version: {version}\n"
+                  "Summary: upload probe\n"
+              ),
+              f"{distinfo}/WHEEL": (
+                  "Wheel-Version: 1.0\n"
+                  "Generator: probe 1.0\n"
+                  "Root-Is-Purelib: true\n"
+                  "Tag: py3-none-any\n"
+              ),
+          }
+          # RECORD 需要列出前面每个文件的 sha256 与长度，否则部分工具会判定 wheel 非法
+          record = []
+          for name, text in files.items():
+              raw = text.encode()
+              digest = base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).rstrip(b"=").decode()
+              record.append(f"{name},sha256={digest},{len(raw)}")
+          record.append(f"{distinfo}/RECORD,,")
+          files[f"{distinfo}/RECORD"] = "\n".join(record) + "\n"
+
+          with zipfile.ZipFile(whl, "w", zipfile.ZIP_DEFLATED) as zf:
+              for name, text in files.items():
+                  zf.writestr(name, text)
+          print(f"built {whl} ({os.path.getsize(whl)} bytes)")
+          PY
+
+      - name: List dist contents
+        run: ls -lh dist/
 
       - name: Upload to PyPI (verbose)
         run: |
