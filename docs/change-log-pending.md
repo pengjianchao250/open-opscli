@@ -4864,3 +4864,12 @@
 **影响范围**：`ops-dashboard-ai-bridge` 内置模板、Dashboard Skill 规范读取 MCP 及对应定向测试；未发布线上版本。
 **回滚方式**：回退本次提交，恢复 `1.0.18` 运行合同文件和 MCP 合同校验。
 ---
+
+## 2026-07-28 dashboard - 精简并重构 Bridge Skill 文档
+
+**变更原因**：Bridge Skill 三份 reference 重复主流程且包含过期布局规则，单文件超过模型工具结果截断阈值，可能造成规则缺失或互相覆盖。
+**改动点**：`SKILL.md` 只保留 reference 路由、主流程和停止条件；业务约束由 `dashboard-operation-standards.md` 维护，工具顺序、结果读取、写后核验和错误处理合并到 `dashboard-tool-contract.md`；删除固定顺序、同高、固定坐标以及 claim/run 等后端传输细节；MCP 改为按固定顺序合并主流程和两份 reference；同步更新 Skill 与 MCP 契约测试，并约束单份 reference 小于 6000 字符。
+**验证结果**：`python -m pytest tests/skills/test_dashboard_skills.py tests/mcp/test_dashboard_tools.py -q -p no:cacheprovider --basetemp <workspace-temp>`，结果为 `17 passed in 1.34s`；主文件 1686 字符，两份 reference 分别为 2208 和 4548 字符。
+**影响范围**：影响 `ops-dashboard-ai-bridge` 文档组织、Dashboard 规范读取 MCP 及对应定向测试；未发布线上版本。
+**回滚方式**：回退本次 Skill 文档、Dashboard MCP 聚合逻辑、定向测试和本条变更记录。
+---

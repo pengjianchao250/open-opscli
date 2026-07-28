@@ -29,15 +29,14 @@ def test_dashboard_data_analysis_spec_reads_skill():
 
 
 def test_dashboard_ai_bridge_spec_returns_skill_rules():
-    """Bridge 规范工具应返回包含完整业务规则的 Skill 和渐进 reference 清单。"""
+    """Bridge 规范工具应按固定顺序合并主流程和两份 reference。"""
     result = _run(dashboard_tools.dashboard_ai_bridge_spec_must_read())
 
     assert result["success"] is True
     assert result["error"] is None
     assert "# 仪表盘智能编辑" in result["data"]["spec"]
-    assert "# Dashboard Operation Standards" not in result["data"]["spec"]
-    assert "# Bridge Result Protocol" not in result["data"]["spec"]
-    assert "# Dashboard Tool Flow" not in result["data"]["spec"]
+    assert "# Dashboard Operation Standards" in result["data"]["spec"]
+    assert "# Dashboard Tool Contract" in result["data"]["spec"]
     assert "数据集和字段必须真实存在" in result["data"]["spec"]
     assert "固定 12 列" in result["data"]["spec"]
     assert "原子、幂等并可回滚" in result["data"]["spec"]
@@ -45,10 +44,10 @@ def test_dashboard_ai_bridge_spec_returns_skill_rules():
     assert "contract" not in result["data"]
     assert "contractSource" not in result["data"]
     assert Path(result["data"]["source"]).name == "SKILL.md"
-    assert result["data"]["references"] == [
-        "dashboard-operation-standards",
-        "bridge-result-protocol",
-        "tool-flow",
+    assert [Path(path).name for path in result["data"]["sources"]] == [
+        "SKILL.md",
+        "dashboard-operation-standards.md",
+        "dashboard-tool-contract.md",
     ]
 
 
@@ -72,22 +71,22 @@ def _write_bridge_fixture(
         json.dumps({"name": "ops-dashboard-ai-bridge", "version": packaged_version}),
         encoding="utf-8",
     )
-    for reference_name in dashboard_tools._DASHBOARD_BRIDGE_REFERENCES:
-        (references_dir / f"{reference_name}.md").write_text("# reference\n", encoding="utf-8")
+    for reference_name in dashboard_tools._DASHBOARD_BRIDGE_REFERENCE_FILES:
+        (references_dir / reference_name).write_text("# reference\n", encoding="utf-8")
     return skill_dir
 
 
 def test_dashboard_ai_bridge_spec_rejects_missing_reference(monkeypatch, tmp_path: Path):
     """渐进规范缺失时应返回统一错误，禁止暴露不完整 Skill。"""
     skill_dir = _write_bridge_fixture(tmp_path)
-    (skill_dir / "references" / "tool-flow.md").unlink()
+    (skill_dir / "references" / "dashboard-tool-contract.md").unlink()
     monkeypatch.setattr(dashboard_tools, "_dashboard_skill_dir", lambda _name: skill_dir)
 
     result = _run(dashboard_tools.dashboard_ai_bridge_spec_must_read())
 
     assert result["success"] is False
     assert result["error"]["code"] == "FileNotFoundError"
-    assert "tool-flow.md" in result["error"]["message"]
+    assert "dashboard-tool-contract.md" in result["error"]["message"]
 
 
 def test_dashboard_ai_bridge_spec_rejects_version_mismatch(monkeypatch, tmp_path: Path):

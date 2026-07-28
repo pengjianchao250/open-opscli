@@ -11,12 +11,11 @@ from opscli.skills.packaging import get_builtin_templates_dir
 from .helpers import _err, _ok
 
 
-_DASHBOARD_BRIDGE_REFERENCES = (
-    "dashboard-operation-standards",
-    "bridge-result-protocol",
-    "tool-flow",
+_DASHBOARD_BRIDGE_REFERENCE_FILES = (
+    "dashboard-operation-standards.md",
+    "dashboard-tool-contract.md",
 )
-"""Bridge 入口响应返回的渐进规范名称，默认不读取完整正文。"""
+"""Bridge 入口按固定顺序合并的参考规范文件。"""
 
 _SKILL_VERSION_RE = re.compile(r"^version:\s*([^\s]+)\s*$", re.MULTILINE)
 """提取 Skill frontmatter 版本号，供包内版本一致性校验。"""
@@ -54,8 +53,8 @@ def _read_dashboard_bridge_spec(skill_dir: Path, *, tool: str) -> dict:
     skill_path = skill_dir / "SKILL.md"
     version_path = skill_dir / "data" / "VERSION.json"
     reference_paths = [
-        skill_dir / "references" / f"{reference_name}.md"
-        for reference_name in _DASHBOARD_BRIDGE_REFERENCES
+        skill_dir / "references" / reference_name
+        for reference_name in _DASHBOARD_BRIDGE_REFERENCE_FILES
     ]
     required_paths = [skill_path, version_path, *reference_paths]
     for path in required_paths:
@@ -76,15 +75,11 @@ def _read_dashboard_bridge_spec(skill_dir: Path, *, tool: str) -> dict:
         if skill_version != packaged_version:
             raise ValueError("Dashboard Skill 与 VERSION.json 版本不一致")
 
-        return _ok(
-            {
-                "spec": spec,
-                "source": str(skill_path),
-                "references": list(_DASHBOARD_BRIDGE_REFERENCES),
-            }
-        )
     except Exception as exc:
         return _err(exc, tool=tool)
+
+    # 后端只注入 data.spec，因此必须在 MCP 层合并主流程和参考规范。
+    return _read_spec_files([skill_path, *reference_paths], tool=tool)
 
 
 async def dashboard_data_analysis_spec_must_read() -> dict:
@@ -104,7 +99,7 @@ async def dashboard_data_analysis_spec_must_read() -> dict:
 async def dashboard_ai_bridge_spec_must_read() -> dict:
     """读取仪表盘编辑与 Bridge 协议规范。
 
-    返回 `ops-dashboard-ai-bridge` 的入口规范和渐进 reference 清单。本工具
+    返回 `ops-dashboard-ai-bridge` 的主流程和两份 reference 合并正文。本工具
     不会提供或执行 `dashboard_*` 页面工具；实际页面操作仍要求
     operation-frontend 为当前会话注入合法 Dashboard 页面上下文。
     """
