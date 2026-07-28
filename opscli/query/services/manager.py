@@ -337,8 +337,8 @@ class QueryManager:
         filters: list[dict] | None = None,
         data_comparison: dict | None = None,
         order_by: list[dict] | None = None,
-        limit: int = 20,
-        offset: int = 0,
+        limit: int | None = 20,
+        offset: int | None = 0,
         dry_run: bool = False,
         output_path: str | None = None,
         validate_fields: bool = False,
@@ -392,8 +392,10 @@ class QueryManager:
         if order_by:
             payload["orderBy"] = order_by
 
-        payload["limit"] = limit
-        payload["offset"] = offset
+        # None 容错：limit/offset 为 None 时回落默认值，避免 None 进入 payload
+        # （编译版 Cython 的 int 参数拒绝 None；此处对任意调用方兜底，沿用后端默认）
+        payload["limit"] = 20 if limit is None else limit
+        payload["offset"] = 0 if offset is None else offset
 
         if dry_run:
             payload["dryRun"] = True
