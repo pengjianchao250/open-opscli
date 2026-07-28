@@ -1,7 +1,7 @@
 ---
 name: ops-dashboard-ai-bridge
 description: 仅用于已绑定 Dashboard 页面上下文的当前仪表盘编辑；支持批量新建图表和按真实 chart_id 修改已有图表，并要求字段写入前校验、写入后核验。无页面上下文、真实数据集或完整字段目录时停止。
-version: 1.0.21
+version: 1.0.23
 compatibility: 仅兼容提供 dashboard_session_get_context 及 dashboard-tools.v2 页面工具合同的 Dashboard 页面会话。
 ---
 
@@ -27,11 +27,11 @@ compatibility: 仅兼容提供 dashboard_session_get_context 及 dashboard-tools
 
 1. 调用 `dashboard_session_search_datasets` 查找真实候选；多个候选会改变结果时，用 `ask_user_question` 让用户选择。
 2. 确定唯一数据集后调用一次 `dashboard_session_get_dataset_fields`，取得本轮完整字段目录。
-3. 一次规划全部图表的 `viewType/title/height/fieldLists`。显式单图也作为单元素批次处理。
-4. 整批字段计划通过业务规则后，只调用一次 `dashboard_editor_batch_create_charts`。
-5. 按返回顺序核验图表数量、标题、类型、最终布局、字段数量、`changed` 和 `refreshed`。
+3. 一次规划全部图表的有序 `charts`，包含 `viewType/title/height/fieldLists`；数组顺序就是创建与自动落位顺序。显式单图也作为单元素批次处理。
+4. 整批字段计划通过业务规则后，将已确认的 `datasetId` 与有序 `charts` 作为根级参数，只调用一次 `dashboard_editor_batch_create_charts`。该调用完成图表创建、数据集绑定、字段配置和刷新。
+5. 正常成功返回后，按返回顺序核验图表数量、标题、类型、最终布局、字段数量、`changed` 和 `refreshed`，结束本次新建流程；失败结果进入“失败与停止”。
 
-禁止拆成逐图页面工具调用，禁止先创建空图再试数据集或字段，禁止创建后补偿移动。
+普通数据图表统一使用批量流程，页面负责按计划顺序自动落位。
 
 ## 修改已有图表
 

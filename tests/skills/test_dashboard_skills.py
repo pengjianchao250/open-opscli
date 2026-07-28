@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "opscli" / "skills" / "templates"
 SKILL_VERSIONS = {
     "ops-dashboard-data-analysis": "1.0.6",
-    "ops-dashboard-ai-bridge": "1.0.21",
+    "ops-dashboard-ai-bridge": "1.0.23",
 }
 SKILL_LIST_DESCRIPTIONS = {
     "ops-dashboard-data-analysis": "只读分析当前仪表盘的趋势、对比、异常、排名、贡献和业务原因。",
@@ -66,7 +66,7 @@ def test_dashboard_skills_keep_compact_progressive_content():
         "dashboard-operation-standards.md",
         "dashboard-tool-contract.md",
     }
-    assert sum(len(path.read_bytes()) for path in bridge_files) <= 10_000
+    assert sum(len(path.read_bytes()) for path in bridge_files) <= 14_000
 
     analysis = (
         TEMPLATES_DIR / "ops-dashboard-data-analysis" / "SKILL.md"
@@ -88,7 +88,11 @@ def test_dashboard_bridge_has_one_batch_creation_flow():
     assert skill.count("## 新建图表") == 1
     creation = skill.split("## 新建图表", 1)[1].split("## 修改已有图表", 1)[0]
     assert "调用一次 `dashboard_session_get_dataset_fields`" in creation
+    assert "有序 `charts`" in creation
+    assert "已确认的 `datasetId`" in creation
     assert "只调用一次 `dashboard_editor_batch_create_charts`" in creation
+    assert "数据集绑定、字段配置和刷新" in creation
+    assert "结束本次新建流程" in creation
     for forbidden in (
         "dashboard_editor_add_component",
         "dashboard_drag_select_dataset",
@@ -104,6 +108,75 @@ def test_dashboard_bridge_has_one_batch_creation_flow():
     assert '"w"' not in batch_contract
     assert "模型不计算坐标或宽度" in standards
     assert "页面按计划队列自动落位" in standards
+    assert "字段计划必须来自所选数据集在本轮返回的完整字段目录" in standards
+    assert "仅为规划建议，不构成页面固定模板" in standards
+
+    chart_selection = standards.split("## 图表选择", 1)[1].split("## 修改安全", 1)[0]
+    priorities = (
+        "增长与机会",
+        "营销与转化",
+        "供应链执行",
+        "问题与售后",
+        "绩效与健康监控",
+        "部门工作台兜底",
+    )
+    assert [chart_selection.index(priority) for priority in priorities] == sorted(
+        chart_selection.index(priority) for priority in priorities
+    )
+    for category in (
+        "销售",
+        "市场",
+        "广告",
+        "流量",
+        "活动",
+        "库存",
+        "物流",
+        "退款",
+        "客服",
+        "监控提醒",
+        "平台报告",
+        "运营监控",
+        "部门数据",
+    ):
+        assert category in chart_selection
+
+    expected_view_types = {
+        "metric_trend",
+        "hbar_basic",
+        "hbar_stacked_percent",
+        "crosstab_table",
+        "indicator",
+        "combo_bar_line",
+        "bar_stacked_percent",
+        "pivot_table",
+        "detail_table",
+        "bar_stacked",
+        "line_basic",
+        "bar_basic",
+        "progress_chart",
+        "funnel_basic",
+        "pie_circle",
+        "hbar_stacked",
+    }
+    assert set(re.findall(r"`([a-z][a-z0-9_]*)`", chart_selection)) == expected_view_types
+    for unavailable_view_type in (
+        "scatter_basic",
+        "radar_basic",
+        "indicator_trend",
+        "matrix_table",
+    ):
+        assert f"`{unavailable_view_type}`" not in chart_selection
+    for field_guard in (
+        "日期或连续时间字段",
+        "离散对象和数值指标",
+        "部分—整体且类别不超过 5–8 个",
+        "多系列共同分类轴",
+        "同群体严格有序阶段",
+        "目标、预算、阈值或 SLA",
+        "记录主键和处理字段",
+        "不为凑满 5 张伪造分析关系",
+    ):
+        assert field_guard in chart_selection
 
 
 def test_dashboard_bridge_keeps_real_dataset_and_field_guards():
