@@ -64,11 +64,11 @@
 
 1. 确认 `dashboard_session_get_dataset_fields` 和 `dashboard_editor_batch_create_charts` 都在 `availableTools`，否则停止。
 2. 选择一个能覆盖全部图表的唯一数据集；存在多个真实候选时必须通过 `ask_user_question` 选择。
-3. 根据业务语义选择 `data/dashboard-runtime-contract.json` 中唯一匹配的模板；类型、顺序和布局直接使用合同值，不自行计算或改写。
+3. 根据业务语义选择 `SKILL.md` 中唯一匹配的默认组合；类型、顺序和布局直接使用 Skill 定义，不自行计算或改写。
 4. 调用一次 `dashboard_session_get_dataset_fields({"datasetId": 123})`，使用完整真实字段目录规划全部 `fieldLists`；指标卡只使用 1 个度量，环形图只使用 1 个类别维度和 1 个度量。
 5. 在写入前校验每张图表的字段规则和业务标题；任一项不满足时停止，不创建部分组合。
-6. 只调用一次 `dashboard_editor_batch_create_charts`；根级只传一个 `datasetId`，`charts` 必须覆盖合同中的完整计划，受控模板布局由后端按合同注入。
-7. result 同时满足 `ok=true`、`changed=true`、`refreshed=true` 后，逐张核验精确 `chartId/viewType/title/layout/fieldLists` 与运行合同一致，且图表无矩形重叠，本轮才算 `PASS`。
+6. 用一个 `dashboard_editor_batch_create_charts` 请求提交；根级只传一个 `datasetId`，`charts` 必须覆盖完整计划并显式携带 Skill 定义的布局。
+7. result 同时满足 `ok=true`、`changed=true`、`refreshed=true` 后，逐张核验精确 `chartId/viewType/title/layout/fieldLists` 与本轮计划一致，且图表无矩形重叠，本轮才算 `PASS`。
 8. 后续筛选、格式或标题操作使用明确的 `chart_id`；不得为了显式目标写入逐个选中图表。
 
 ## 表格和交叉表
@@ -132,7 +132,7 @@ dashboard_drag_move_chart({"chart_id": "<目标图表>", "x": 0, "y": 6})
 
 - 标题去除首尾空白后长度为 1 到 100；修改标题不改变显隐。
 - 样式字段必须来自当前 `viewType` 的现有或默认 `styleConfig`；一次只补丁一个 `styleKey`，标题文本仍用标题工具。
-- 移动前读取目标布局；`x/y` 为非负整数，固定 12 列边界由运行合同和页面共同校验，不要求用户提供或确认。
+- 移动前读取目标布局；`x/y` 为非负整数，按 Skill 的固定 12 列规则和页面结果共同校验，不要求用户提供或确认。
 - 根画布和当前可见子看板可移动；Tab 子图或其他子看板返回 `UNSUPPORTED` 时停止，不跨容器重试。
 - 以工具返回的 `finalPosition`、`affectedCharts` 和 `changed` 核验 GridStack 最终结果。
 

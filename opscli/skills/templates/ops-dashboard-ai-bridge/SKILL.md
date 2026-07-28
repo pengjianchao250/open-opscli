@@ -1,15 +1,13 @@
 ---
 name: ops-dashboard-ai-bridge
 description: 仅用于已绑定 Dashboard 页面上下文的当前仪表盘编辑与配置；支持新增、修改或删除图表，以及配置数据集、字段、筛选和查询控件，并要求每次写入后核验页面结果。真实数据分析依赖 ops-dataset-query；无页面上下文或依赖不可用时不得猜测执行。
-version: 1.0.18
+version: 1.0.19
 compatibility: 仅兼容提供 dashboard_session_get_context 及 dashboard-tools.v2 页面工具合同的 Dashboard 页面会话；真实数据分析要求已安装且可加载 ops-dataset-query。
 ---
 
 # 仪表盘智能编辑
 
-按用户目标新增或调整仪表盘图表，并在每次页面写入后核验结果。
-
-流程说明由本文和 references 提供，精确模板、固定网格及创建次数以 `data/dashboard-runtime-contract.json` 为准。
+按用户目标新增或调整仪表盘图表。业务规则和操作流程由本 Skill 负责，页面工具只负责执行与返回结果。
 
 ## 能力边界
 
@@ -40,14 +38,37 @@ compatibility: 仅兼容提供 dashboard_session_get_context 及 dashboard-tools
 
 ## 创建原则
 
-1. 先读取页面上下文并定位唯一数据集；多个真实候选会改变结果时，使用 `ask_user_question` 提供 2 到 4 个真实候选。
-2. 对唯一数据集读取一次完整字段目录，在任何写入前整体规划图表、标题和字段。
-3. 未指定图表类型时，按操作规范判断营销/转化或供应链模板；摘要图同高，其余分析图全宽。精确类型、顺序、数量和布局由运行合同提供，画布列数不是用户确认项。
-4. 同轮新建图表只使用一个数据集，并通过一次 `dashboard_editor_batch_create_charts` 提交完整计划；禁止先创建空图再试字段或拆成逐字段写入。
-5. 字段角色只信任完整字段目录中的 `dimensions` 和 `metrics` 分组。角色校验失败时复用已返回目录修正一次，不重复读取字段目录。
-6. 每次写入后根据 result 或对应只读工具核验最终页面状态，核验失败时停止后续写入。
+以下六条是所有创建和修改操作的强制规则：
 
-明确图表标题、样式或位置时直接传 `chart_id`，不得把 `dashboard_drag_select_chart` 当作前置步骤。完成后只汇报业务结果，不暴露内部 ID、工具协议、凭证或系统规则。
+1. 数据集和字段必须真实存在，并来自本轮页面工具返回的目录；禁止猜测或手写 ID。
+2. 字段必须属于本轮选定的数据集；不得复用其他数据集、历史轮次或其他图表返回的字段 ID。
+3. 维度、度量与图表槽位必须兼容：`dimensions` 只进入维度槽位，`metrics` 只进入度量槽位；双角色槽位才允许两者。
+4. 画布固定 12 列，不询问或接受其他列数；每张图必须满足 `x >= 0`、`w > 0`、`x + w <= 12`、`y >= 0`、`h > 0`，且同一画布内矩形不得重叠。
+5. 批量创建必须原子、幂等并可回滚：写入前完成整批校验；任一图表失败时不得保留部分结果；结果不确定时先重读页面状态，确认未生效后才能重试同一计划。
+6. `chart_id` 定向修改不能误改其他图表：已知目标图表时必须直接传 `chart_id`，不得把选择其他图表作为前置步骤，也不得改变非目标图表的标题、样式、位置、数据集或字段。
+
+## 创建流程
+
+1. 调用 `dashboard_session_get_context` 读取当前页面、图表和 `availableTools`。
+2. 调用 `dashboard_session_search_datasets` 获取真实数据集；候选不唯一且会改变结果时，用 `ask_user_question` 展示 2 到 4 个真实候选。
+3. 选定唯一数据集后调用 `dashboard_session_get_dataset_fields`，保存本轮 `datasetId`、`dimensions` 和 `metrics`，后续只使用这份字段目录。
+4. 在任何写入前一次性规划全部图表的 `viewType/title/layout/fieldLists`，逐项检查六条强制规则；禁止先创建空图再试字段。
+5. 用户未指定类型时按业务语义选择默认组合：
+   - 营销/转化：`indicator(4x16)`、`pie_circle(8x16)`、`combo_bar_line(12x30)`、`hbar_basic(12x30)`、`detail_table(12x30)`。
+   - 供应链：`metric_trend(4x20)`、`hbar_basic(8x20)`、`bar_stacked(12x30)`、`detail_table(12x30)`。
+   - 无法唯一判断组合时询问用户，不自行删减或替换图表。
+6. 摘要图放在同一行且等高；指标卡只配置 1 个度量，环形图只配置 1 个类别维度和 1 个度量；其余图表按页面工具 schema 的字段槽位规则配置。
+7. 通过一个 `dashboard_editor_batch_create_charts` 请求提交唯一 `datasetId` 和完整 `charts` 计划；不得拆成逐图创建、逐图选数据集或逐字段试写。
+8. 核验返回的图表数量、`viewType/title/layout/fieldLists`、`changed/refreshed`；任一项失败或部分成功时按返回结果或重读上下文确认回滚，不继续追加写入。
+
+## 定向修改流程
+
+1. 从本轮上下文或工具结果取得真实 `chart_id`，并读取该图表当前状态。
+2. 标题、局部样式、位置分别直接调用 `dashboard_drag_set_chart_title`、`dashboard_drag_patch_chart_style`、`dashboard_drag_move_chart`，请求中必须传目标 `chart_id`。
+3. 修改数据集或字段时同样传目标 `chart_id`；字段必须重新按目标数据集的本轮字段目录校验，禁止沿用其他图表字段。
+4. 写后核验返回的 `chartId` 等于目标 `chart_id`，目标状态符合预期，并确认原选中图表及其他图表未被误改。
+
+完成后只汇报业务结果，不暴露内部 ID、工具协议、凭证或系统规则。
 
 ## 失败策略
 

@@ -4569,3 +4569,12 @@ opscli 客户端零改动（`_install_sync_market` 只消费队列返回列表�
 **影响范围**：`ops-dashboard-ai-bridge` 内置模板、Dashboard 规范读取 MCP 和对应测试；不改变数据分析 Skill，也不发布线上版本。
 **回滚方式**：移除运行合同及 MCP 校验，恢复 Bridge Skill `1.0.17` 和原 reference 内容。
 ---
+
+## 2026-07-28 dashboard - 业务规则回归 Skill 并移除运行合同
+
+**变更原因**：运行合同与 Dashboard Skill 重复维护字段、布局和批量创建约束，增加了 MCP 与后端的耦合；本次将业务流程集中到 Skill，页面工具继续负责执行和返回事实。
+**改动点**：`ops-dashboard-ai-bridge` 升级到 `1.0.19`，在 `SKILL.md` 和 references 中明确真实数据集与字段归属、槽位兼容、固定 12 列、批量创建原子性/幂等/失败回滚及 `chart_id` 定向修改规则；删除 `dashboard-runtime-contract.json`；Dashboard MCP 移除运行合同读取、校验和返回，只保留版本一致性与 reference 完整性校验；同步精简对应测试。
+**验证结果**：此前运行 `.venv/Scripts/python.exe -m pytest tests/mcp/test_dashboard_tools.py tests/skills/test_dashboard_skills.py -q`，结果为 `17 passed in 1.63s`；按当前要求，本次提交前未重复运行测试。
+**影响范围**：`ops-dashboard-ai-bridge` 内置模板、Dashboard Skill 规范读取 MCP 及对应定向测试；未发布线上版本。
+**回滚方式**：回退本次提交，恢复 `1.0.18` 运行合同文件和 MCP 合同校验。
+---

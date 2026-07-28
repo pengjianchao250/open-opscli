@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
 
 from opscli.skills.packaging import get_builtin_templates_dir
 
@@ -50,79 +49,15 @@ def _read_spec_files(paths: list[Path], *, tool: str) -> dict:
         return _err(exc, tool=tool)
 
 
-def _validate_dashboard_runtime_contract(contract: object) -> dict[str, Any]:
-    """校验 Dashboard 运行合同的公共结构和基础数值边界。"""
-    if not isinstance(contract, dict):
-        raise ValueError("Dashboard 运行合同必须是 JSON 对象")
-
-    contract_version = contract.get("contractVersion")
-    if not isinstance(contract_version, str) or not re.fullmatch(
-        r"\d+\.\d+\.\d+", contract_version
-    ):
-        raise ValueError("Dashboard 运行合同缺少合法 contractVersion")
-
-    grid_columns = contract.get("gridColumns")
-    if not isinstance(grid_columns, int) or isinstance(grid_columns, bool) or grid_columns <= 0:
-        raise ValueError("Dashboard 运行合同 gridColumns 必须是正整数")
-
-    templates = contract.get("templates")
-    if not isinstance(templates, dict) or not templates:
-        raise ValueError("Dashboard 运行合同 templates 必须是非空对象")
-    for template_name, template in templates.items():
-        if not isinstance(template_name, str) or not template_name or not isinstance(template, dict):
-            raise ValueError("Dashboard 运行合同模板名称和配置必须合法")
-        chart_types = template.get("chartTypes")
-        layouts = template.get("layouts")
-        if (
-            not isinstance(chart_types, list)
-            or not chart_types
-            or not all(isinstance(item, str) and item for item in chart_types)
-            or len(set(chart_types)) != len(chart_types)
-        ):
-            raise ValueError(f"Dashboard 模板 {template_name} 的 chartTypes 不合法")
-        if not isinstance(layouts, list) or len(layouts) != len(chart_types):
-            raise ValueError(f"Dashboard 模板 {template_name} 的 layouts 数量不匹配")
-        for layout in layouts:
-            if not isinstance(layout, dict):
-                raise ValueError(f"Dashboard 模板 {template_name} 的 layout 必须是对象")
-            width = layout.get("w")
-            height = layout.get("h")
-            if (
-                not isinstance(width, int)
-                or isinstance(width, bool)
-                or width <= 0
-                or width > grid_columns
-                or not isinstance(height, int)
-                or isinstance(height, bool)
-                or height <= 0
-            ):
-                raise ValueError(f"Dashboard 模板 {template_name} 的 layout 超出网格边界")
-
-    creation_workflow = contract.get("creationWorkflow")
-    required_workflow_tools = {
-        "dashboard_session_get_dataset_fields",
-        "dashboard_editor_batch_create_charts",
-    }
-    if not isinstance(creation_workflow, dict) or set(creation_workflow) != required_workflow_tools:
-        raise ValueError("Dashboard 运行合同 creationWorkflow 工具集合不合法")
-    if any(
-        not isinstance(count, int) or isinstance(count, bool) or count <= 0
-        for count in creation_workflow.values()
-    ):
-        raise ValueError("Dashboard 运行合同 creationWorkflow 次数必须是正整数")
-    return contract
-
-
 def _read_dashboard_bridge_spec(skill_dir: Path, *, tool: str) -> dict:
-    """读取紧凑 Bridge 入口规范、结构合同和渐进 reference 清单。"""
+    """读取 Bridge 入口规范，并校验包内版本和 reference 完整性。"""
     skill_path = skill_dir / "SKILL.md"
     version_path = skill_dir / "data" / "VERSION.json"
-    contract_path = skill_dir / "data" / "dashboard-runtime-contract.json"
     reference_paths = [
         skill_dir / "references" / f"{reference_name}.md"
         for reference_name in _DASHBOARD_BRIDGE_REFERENCES
     ]
-    required_paths = [skill_path, version_path, contract_path, *reference_paths]
+    required_paths = [skill_path, version_path, *reference_paths]
     for path in required_paths:
         if not path.exists():
             return _err(
@@ -141,15 +76,10 @@ def _read_dashboard_bridge_spec(skill_dir: Path, *, tool: str) -> dict:
         if skill_version != packaged_version:
             raise ValueError("Dashboard Skill 与 VERSION.json 版本不一致")
 
-        contract = _validate_dashboard_runtime_contract(
-            json.loads(contract_path.read_text(encoding="utf-8"))
-        )
         return _ok(
             {
                 "spec": spec,
-                "contract": contract,
                 "source": str(skill_path),
-                "contractSource": str(contract_path),
                 "references": list(_DASHBOARD_BRIDGE_REFERENCES),
             }
         )
@@ -174,9 +104,9 @@ async def dashboard_data_analysis_spec_must_read() -> dict:
 async def dashboard_ai_bridge_spec_must_read() -> dict:
     """读取仪表盘编辑与 Bridge 协议规范。
 
-    返回 `ops-dashboard-ai-bridge` 的紧凑入口规范、机器运行合同和渐进
-    reference 清单。本工具不会提供或执行 `dashboard_*` 页面工具；实际页面
-    操作仍要求 operation-frontend 为当前会话注入合法 Dashboard 页面上下文。
+    返回 `ops-dashboard-ai-bridge` 的入口规范和渐进 reference 清单。本工具
+    不会提供或执行 `dashboard_*` 页面工具；实际页面操作仍要求
+    operation-frontend 为当前会话注入合法 Dashboard 页面上下文。
     """
     skill_dir = _dashboard_skill_dir("ops-dashboard-ai-bridge")
     return _read_dashboard_bridge_spec(

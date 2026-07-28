@@ -16,11 +16,11 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "opscli" / "skills" / "templates"
 SKILL_VERSIONS = {
     "ops-dashboard-data-analysis": "1.0.5",
-    "ops-dashboard-ai-bridge": "1.0.18",
+    "ops-dashboard-ai-bridge": "1.0.19",
 }
 SKILL_LIST_DESCRIPTIONS = {
     "ops-dashboard-data-analysis": "只读分析当前仪表盘的趋势、对比、异常、排名、贡献和业务原因。",
-    "ops-dashboard-ai-bridge": "按用户目标新增或调整仪表盘图表，并在每次页面写入后核验结果。",
+    "ops-dashboard-ai-bridge": "按用户目标新增或调整仪表盘图表。业务规则和操作流程由本 Skill 负责，页面工具只负责执行与返回结果。",
 }
 
 
@@ -35,17 +35,6 @@ def _frontmatter_value(skill_md: Path, key: str) -> str:
 def _listed_description(description: str) -> str:
     """按 SkillsManager 的列表规则生成预期简介。"""
     return description[:30] + ("…" if len(description) > 30 else "")
-
-
-def _bridge_runtime_contract() -> dict:
-    """读取 Bridge 唯一结构化运行合同。"""
-    contract_path = (
-        TEMPLATES_DIR
-        / "ops-dashboard-ai-bridge"
-        / "data"
-        / "dashboard-runtime-contract.json"
-    )
-    return json.loads(contract_path.read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize(("skill_name", "version"), SKILL_VERSIONS.items())
@@ -79,79 +68,38 @@ def test_dashboard_bridge_keeps_progressive_references():
 
 
 def test_dashboard_bridge_declares_batch_creation_contract():
-    """组合创建必须先读字段，再使用统一数据集一次批量创建。"""
+    """组合创建规则必须由 Skill 直接定义，禁止依赖外部运行合同。"""
     skill_dir = TEMPLATES_DIR / "ops-dashboard-ai-bridge"
-    content = "\n".join(path.read_text(encoding="utf-8") for path in skill_dir.rglob("*.md"))
-    contract = _bridge_runtime_contract()
+    skill = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
 
-    assert "dashboard_session_get_dataset_fields" in content
-    assert "dashboard_editor_batch_create_charts" in content
-    assert contract["creationWorkflow"] == {
-        "dashboard_session_get_dataset_fields": 1,
-        "dashboard_editor_batch_create_charts": 1,
-    }
-    assert "一个数据集" in content
-    assert "未指定类型的默认组合" in content
-    assert "营销/转化" in content
-    assert "不得缩减为单图或部分组合" in content
-    assert "禁止先创建空图再试字段" in content
-    assert "供应链" in content
-    assert "兜底组合" in content
+    assert "dashboard_session_get_dataset_fields" in skill
+    assert "dashboard_editor_batch_create_charts" in skill
+    assert "数据集和字段必须真实存在" in skill
+    assert "字段必须属于本轮选定的数据集" in skill
+    assert "一个 `dashboard_editor_batch_create_charts` 请求" in skill
+    assert "禁止先创建空图再试字段" in skill
+    assert "营销/转化" in skill
+    assert "供应链" in skill
+    assert not (skill_dir / "data" / "dashboard-runtime-contract.json").exists()
 
 
-def test_dashboard_bridge_declares_balanced_marketing_layout_contract():
-    """运行合同必须冻结两套模板、固定网格、字段基数和逐张核验。"""
+def test_dashboard_bridge_declares_balanced_default_layout_rules():
+    """Skill 必须直接冻结默认组合、固定网格、字段基数和逐张核验。"""
     skill_dir = TEMPLATES_DIR / "ops-dashboard-ai-bridge"
-    content = "\n".join(
-        path.read_text(encoding="utf-8") for path in skill_dir.rglob("*.md")
-    )
-    contract = _bridge_runtime_contract()
+    content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
 
-    assert contract == {
-        "contractVersion": "1.0.0",
-        "gridColumns": 12,
-        "templates": {
-            "marketing_conversion": {
-                "chartTypes": [
-                    "indicator",
-                    "pie_circle",
-                    "combo_bar_line",
-                    "hbar_basic",
-                    "detail_table",
-                ],
-                "layouts": [
-                    {"w": 4, "h": 16},
-                    {"w": 8, "h": 16},
-                    {"w": 12, "h": 30},
-                    {"w": 12, "h": 30},
-                    {"w": 12, "h": 30},
-                ],
-            },
-            "supply_chain": {
-                "chartTypes": [
-                    "metric_trend",
-                    "hbar_basic",
-                    "bar_stacked",
-                    "detail_table",
-                ],
-                "layouts": [
-                    {"w": 4, "h": 20},
-                    {"w": 8, "h": 20},
-                    {"w": 12, "h": 30},
-                    {"w": 12, "h": 30},
-                ],
-            },
-        },
-        "creationWorkflow": {
-            "dashboard_session_get_dataset_fields": 1,
-            "dashboard_editor_batch_create_charts": 1,
-        },
-    }
-    assert "只调用一次 `dashboard_editor_batch_create_charts`" in content
-    assert "`indicator` 只配置 1 个度量" in content
-    assert "`pie_circle` 只配置 1 个类别维度和 1 个度量" in content
-    assert "逐张核验 `chartId/viewType/title/layout/fieldLists`" in content
-    assert "不得先调用 `dashboard_drag_select_chart`" in content
+    assert "`indicator(4x16)`" in content
+    assert "`pie_circle(8x16)`" in content
+    assert "`combo_bar_line(12x30)`" in content
+    assert "`metric_trend(4x20)`" in content
+    assert "`hbar_basic(8x20)`" in content
+    assert "固定 12 列" in content
+    assert "x + w <= 12" in content
+    assert "原子、幂等并可回滚" in content
+    assert "指标卡只配置 1 个度量" in content
+    assert "环形图只配置 1 个类别维度和 1 个度量" in content
+    assert "核验返回的图表数量" in content
+    assert "`chart_id` 定向修改不能误改其他图表" in content
     assert "summaryWidth" not in content
     assert "floor(" not in content
     assert "gridColumn = C" not in content
@@ -180,9 +128,8 @@ def test_dashboard_bridge_declares_field_roles_and_targeted_chart_mutations():
     assert "dashboard_drag_set_chart_title" in content
     assert "dashboard_drag_patch_chart_style" in content
     assert "dashboard_drag_move_chart" in content
-    assert "gridColumn" in content
-    assert _bridge_runtime_contract()["gridColumns"] == 12
-    assert "画布列数不是用户确认项" in content
+    assert "固定 12 列" in content
+    assert "不询问或接受其他列数" in content
 
 
 def test_dashboard_skills_declare_runtime_and_query_boundaries():
@@ -236,7 +183,7 @@ def test_dashboard_skills_are_discoverable_and_installable(tmp_path: Path):
 
     bridge_path = tmp_path / "skills" / "ops-dashboard-ai-bridge"
     assert (bridge_path / "references" / "tool-flow.md").exists()
-    assert (bridge_path / "data" / "dashboard-runtime-contract.json").exists()
+    assert not (bridge_path / "data" / "dashboard-runtime-contract.json").exists()
 
 
 def test_dashboard_skills_follow_release_profile_matrix():
