@@ -54,6 +54,14 @@ jobs:
           # 构建前安装 Cython 和 setuptools（编译依赖）
           CIBW_BEFORE_BUILD: "pip install cython>=3 setuptools>=68 wheel"
 
+          # Linux：修复 wheel 时剥离调试符号
+          # 原因：setuptools 在 Linux 下默认带 -g 编译，auditwheel 默认又不 strip，
+          # 导致 232 个 .so 的调试符号全部打进 wheel —— 同样内容 macOS 解压后 30 MB，
+          # Linux 达 238 MB，manylinux wheel 体积冲到 103~109 MB，超过 PyPI 单文件
+          # 100 MB 上限被拒（v0.0.119~v0.0.122 发布失败的根因）。
+          # --strip 只去掉调试符号，不影响运行，是 cibuildwheel 官方推荐做法。
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel} --strip"
+
           # 发版时按 python-release profile 裁剪内置 Skill 模板
           CIBW_ENVIRONMENT: "OPSCLI_SKILL_PROFILE=python-release"
 
@@ -141,6 +149,29 @@ jobs:
 
       - name: List dist contents
         run: ls -lh dist/
+
+      - name: Check file size limit before upload
+        # 上传前先卡一道单文件 100 MB 的门禁，避免"传了一半才失败"。
+        # 必要性：twine 是逐个文件顺序上传，中途失败时前面的文件已经落到 PyPI 上，
+        # 而 PyPI 的文件名一旦使用过就永久不可复用（删除后重传会报
+        # "This filename was previously used by a file that has since been deleted"），
+        # 等于把这个版本号彻底废掉、只能跳版本重发。宁可一个都不传，也不要传一半。
+        run: |
+          limit=$((100 * 1024 * 1024))
+          oversized=0
+          for f in dist/*; do
+            size=$(wc -c < "$f")
+            if [ "$size" -gt "$limit" ]; then
+              echo "X 超过 PyPI 单文件 100 MB 上限: $f ($((size / 1024 / 1024)) MB)"
+              oversized=1
+            fi
+          done
+          if [ "$oversized" -ne 0 ]; then
+            echo "已中止上传，未向 PyPI 发送任何文件，本次版本号仍可继续使用。"
+            echo "请先缩减产物体积（或申请提高上限）后重新发版。"
+            exit 1
+          fi
+          echo "√ 全部产物均未超过 100 MB"
 
       - name: Set up Python for publish
         uses: actions/setup-python@v5

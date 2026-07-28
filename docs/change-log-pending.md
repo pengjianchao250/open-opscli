@@ -4918,3 +4918,14 @@
 **影响范围**：仅影响 GitHub Actions 发布流程的日志输出，不改变构建产物、上传参数语义和发布结果；`--verbose` 不会打印 token（twine 输出 `password: <hidden>`）。
 **回滚方式**：移除 `build-and-publish.yml` 中的 `--verbose`，删除 `.github/workflows/debug-publish-verbose.yml`。
 ---
+
+## 2026-07-28 ci - Linux wheel 剥离调试符号 + 上传前单文件体积门禁
+
+**变更原因**：v0.0.119~v0.0.122 连续四次发布失败，经 CI verbose 日志确认根因为 `400 File too large. Limit for project 'aukeys-opscli' is 100 MB`。逐条目比对 v0.0.119 的 Linux 与 macOS wheel（内容完全相同、均为 232 个 .so）：macOS 解压后 30.1 MB、压缩后 11.1 MB，Linux 解压后 238.5 MB、压缩后 66.7 MB，相差 8 倍，系 setuptools 在 Linux 下默认带 `-g` 编译且 auditwheel 默认不 strip，调试符号被打进 wheel，导致 manylinux wheel 涨到 103~109 MB 超过 PyPI 单文件上限。
+**改动点**：
+- `.github/workflows/build-and-publish.yml`：新增 `CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel} --strip"`，仅对 Linux 生效，剥离调试符号，不影响运行。
+- 同文件 publish job 新增 `Check file size limit before upload` 步骤：上传前逐个校验产物不超过 100 MB，超限则中止且不向 PyPI 发送任何文件。必要性是 twine 顺序上传、中途失败会留下已上传文件，而 PyPI 文件名用过即永久不可复用（删除后重传报 `previously used by a file that has since been deleted`），会直接废掉一个版本号。
+**验证结果**：改动前 v0.0.122 实测 4 个 manylinux wheel 分别为 103M/107M/109M/107M，全部超限；macOS 38M、Windows 36~37M、sdist 25M 均正常。strip 后的实际体积以本次 v0.0.123 构建日志的 `List dist contents` 为准。
+**影响范围**：仅影响 Linux wheel 的构建产物（不含调试符号，无法用于 gdb 符号级调试）和发布流程的前置校验；macOS/Windows 产物与包内容不变。
+**回滚方式**：删除 `CIBW_REPAIR_WHEEL_COMMAND_LINUX` 与 `Check file size limit before upload` 两处改动。
+---
