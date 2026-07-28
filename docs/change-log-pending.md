@@ -31,6 +31,28 @@
 
 **回滚方式**：`git revert` 本提交，或还原 QUERY_SPEC.md 上述四处增量。
 
+## 2026-07-28 mcp/query - query.py docstring 与重写后的 QUERY_SPEC 对齐
+
+**变更原因**：QUERY_SPEC.md 重写（596→628 行）后，`opscli/mcp/tools/query.py` 的工具 docstring 仍停留在旧口径，且 docstring 就是 MCP 工具描述、直接决定 Agent 行为。三类不一致：①`query_spec_must_read` 承诺"10 条核心铁律""innerWhere 数据集误用 query_run""典型工作流（意图匹配/数据更新）"，文档里已不存在；②`query_metadata`/`query_simple` 写"必须已完成登录授权"，与实际实现不符——`_get_auth_pair` 显式优先，传 session_id/jwt 即可鉴权，登录非前置必需；③五处"每次查询执行完成后（无论成功或失败），必须调用 feedback_submit"与【铁律14】「仅意外失败才反馈」直接冲突，会诱导 Agent 对成功查询和 0 行结果刷反馈。
+
+**改动点**：`opscli/mcp/tools/query.py`（仅 docstring 与模块注释，无逻辑改动）
+- **模块 docstring**：工具清单按四类重排（规范入口 / 规划器路线 / 手工构造路线 / 图表路线），补上遗漏的 `query_plan`、`query_flow`、`query_preferences`，注明 `query_catalog`/`query_intent_match` 已屏蔽不注册。
+- **`query_spec_must_read`**：风险清单改为当前真实高频错误（公式字段二次聚合、快照指标跨日累加、QS-EXE-005、误用 global_alias 与猜字段名盲重试、跳过权限枚举、重复注入 filter_configs 致恒 0 行、默认 limit=20 当全量）；内容清单改为 14 条铁律 + 两条取数路线 + 权限枚举 + 时间口径 + 自检清单 + 证据合同 + 反馈边界；工作流末段改为"仅意外失败才反馈"。
+- **鉴权口径统一**：`query_metadata` 改为「两条等价路径，登录不是前置必需」并注明单 `jwt` 可用；`query_simple`/`query_run`/`query_build_and_run` 注明 `session_id` 非空硬校验；`query_plan`/`query_flow` 明确身份**只来自传输层已验证账号，不读显式 session_id/jwt**，并给出两条替代路径。
+- **手工查询硬门禁**：`query_simple`/`query_build_and_run` 前置条件改为「先读规范 + 先 query_metadata 拿真实字段清单」，并写明报"字段不存在"时禁止换名重试、字段标识只用 `field_name`；补常见错误四条。
+- **`query_run`**：删除已失效的 innerWhere 禁用限制，改为【铁律12】禁止手写 `userEmail`/`from.table`/`from.permission`/`from.database`。
+- **`query_flow`**：`execution_notes` 改为「按需披露，未出现属正常」（对齐 07-27 改动）；补非 planned 状态处置（clarify 写回原文重调、`refresh_in_progress` 等 25 秒原样重调且不执行 CLI 形态 recovery_command）；`order_by` 补「只认 desc 布尔值，direction 会被忽略」。
+- 五处反馈措辞统一替换为「仅意外失败才提交一次、30 分钟去重、0 行/澄清/认证未就绪/用户取消不算」。
+- 保留 `query_simple` 中"服务端自动处理 innerWhere/translate/MOY"的表述（该行为属实，删除的只是已废止的客户端禁用限制）。
+
+**验证结果**：`uv run pytest tests/mcp/test_query_tools.py tests/mcp/test_query_planner_tools.py tests/query tests/skills/test_dataset_query_flow.py -q` → **158 passed, 2 failed**；2 项失败为 `test_cli.py` 的 catalog/intent 既有基线（工具临时屏蔽），已用 `git stash` 在 HEAD 上对照复现（同为 2 failed/18 passed），与本次无关。`uv run python -c "import opscli.mcp.tools.query"` 遍历 `_ALL_TOOLS` 首行描述全部正常。无测试断言这些 docstring。
+
+**影响范围**：MCP 客户端看到的 11 个 query_* 工具描述文本；无任何函数签名或逻辑改动，CLI 与 Skill 不受影响。
+
+**回滚方式**：`git checkout HEAD -- opscli/mcp/tools/query.py`。
+
+---
+
 ## 2026-07-27 skills - QUERY_SPEC 恢复 MCP 完整取数指南并按新管线优化
 
 **变更原因**：`opscli/mcp/tools/query.py` 的 `query_spec_must_read()` 直接读取 QUERY_SPEC.md 返回给**未安装/已禁用 Skill** 的 MCP 客户端，其 docstring 承诺返回「核心铁律、各查询工具参数规范与示例、字段歧义澄清规则、错误处理速查、典型工作流」。但 2026-07-13 提交 `1a45bc6`（二代规划管线收敛，主题是 CLI 侧规划器）单次 -886/+53 行，把该文档从 917 行压到 84 行并降级为「MCP 部署契约存档」，属 CLI 改造误伤 MCP 契约：参数表、调用示例、公式字段处理、时间口径、权限枚举校验、错误速查、自检清单、反馈规范全部丢失，文档与工具 docstring 承诺严重不符，纯 MCP 用户失去可操作指南。
