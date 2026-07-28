@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -912,10 +913,11 @@ class FakeListingPage:
 class _AssociationResponseWaiter:
     """模拟 Playwright 的响应等待上下文。"""
 
-    def __init__(self, endpoint):
+    def __init__(self, endpoint, response=None):
         self.value = asyncio.get_running_loop().create_future()
         self.value.set_result(
-            SimpleNamespace(
+            response
+            or SimpleNamespace(
                 url=f"https://www.sellersprite.com{endpoint}",
                 status=200,
             )
@@ -965,6 +967,17 @@ class _AssociationLocator:
         return None
 
 
+class _AssociationSuccessResponse:
+    """模拟关联流量准备接口成功响应。"""
+
+    url = "https://www.sellersprite.com/v3/api/relation/traffic/prepare"
+    status = 200
+
+    async def text(self):
+        """返回准备接口成功 JSON。"""
+        return json.dumps({"code": "OK", "data": {}}, ensure_ascii=False)
+
+
 class _AssociationPage:
     """模拟关联流量查询入口页。"""
 
@@ -976,7 +989,10 @@ class _AssociationPage:
         self.timeout_calls = []
 
     def expect_response(self, predicate, **kwargs):
-        """返回主接口响应等待上下文。"""
+        """按监听路径返回准备接口或主接口响应。"""
+        prepare_response = _AssociationSuccessResponse()
+        if predicate(prepare_response):
+            return _AssociationResponseWaiter(self.endpoint, response=prepare_response)
         return _AssociationResponseWaiter(self.endpoint)
 
     def locator(self, selector):
@@ -996,6 +1012,23 @@ class _AssociationPage:
         self.timeout_calls.append(timeout)
 
 
+class _AssociationPrepareErrorResponse:
+    """模拟关联流量准备接口返回业务错误。"""
+
+    url = "https://www.sellersprite.com/v3/api/relation/traffic/prepare"
+    status = 200
+
+    async def text(self):
+        """返回卖家精灵准备接口业务错误 JSON。"""
+        return json.dumps(
+            {
+                "message": "处理请求出现错误,请稍后重试。",
+                "code": "ERR_GLOBAL_500",
+            },
+            ensure_ascii=False,
+        )
+
+
 class _AssociationPageWithoutVariantButton(_AssociationPage):
     """模拟弹窗未提供全部变体按钮的异常页面。"""
 
@@ -1004,6 +1037,17 @@ class _AssociationPageWithoutVariantButton(_AssociationPage):
         if "用全部变体查询" in selector:
             return _AssociationLocator(self, "missing")
         return super().locator(selector)
+
+
+class _AssociationPageWithPrepareError(_AssociationPage):
+    """模拟准备接口报错且主接口不会发起的关联流量页面。"""
+
+    def expect_response(self, predicate, **kwargs):
+        """仅准备接口命中响应，主接口等待由准备错误提前中断。"""
+        response = _AssociationPrepareErrorResponse()
+        if predicate(response):
+            return _AssociationResponseWaiter(self.endpoint, response=response)
+        return _AssociationResponseWaiter(self.endpoint)
 
 
 class _KeywordMinerLocator:
@@ -1290,6 +1334,40 @@ def test_association_traffic_route_fills_asins_and_selects_all_variants(tmp_path
     assert page.fills == request.payload["asinList"]
     assert page.presses == ["Enter"] * 5
     assert page.clicks == ["clear", "query", "all_variants"]
+
+
+def test_association_traffic_route_propagates_prepare_business_error(tmp_path):
+    endpoint = "/v3/api/relation/traffic"
+    page = _AssociationPageWithPrepareError(endpoint)
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="association-traffic",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asinList": ["B0GS9B1X5X"],
+            "queryVariations": True,
+        },
+        referer="https://www.sellersprite.com/v3/relation-keyword",
+        account=account,
+        root_dir=tmp_path,
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker_module._trigger_request(
+                page,
+                endpoint=endpoint,
+                method="POST",
+                payload=request.payload,
+                request=request,
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_GLOBAL_500"
+    assert exc_info.value.api_message == "处理请求出现错误,请稍后重试。"
+    assert "ERR_GLOBAL_500" in (exc_info.value.response_excerpt or "")
+    assert page.clicks == ["clear", "query"]
 
 
 def test_association_traffic_route_does_not_silently_fallback_when_variant_dialog_is_missing(tmp_path):

@@ -1932,8 +1932,12 @@ async def _trigger_request(
                 # 关键词挖掘必须先填写关键词；空点查询只会触发页面校验且不会发送接口请求。
                 clicked = await _trigger_keyword_miner_query(page, payload)
             elif association_traffic_interaction:
-                # 关联流量必须让页面接收 ASIN，并在弹窗中显式选择全部变体。
-                clicked = await _trigger_association_traffic_query(page, payload)
+                # 关联流量必须先校验准备接口，再在弹窗中显式选择全部变体。
+                clicked = await _trigger_association_traffic_query(
+                    page,
+                    payload,
+                    root_dir=request.root_dir,
+                )
             else:
                 clicked = await _click_query_button(page)
             _record_timing(timings, request, f"route_fetch.{section}.click_query_button", stage_started_at, clicked=clicked)
@@ -2171,8 +2175,13 @@ async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool
     return True
 
 
-async def _trigger_association_traffic_query(page, payload: dict[str, Any]) -> bool:
-    """在关联流量页面逐个录入 ASIN，并选择全部变体查询。"""
+async def _trigger_association_traffic_query(
+    page,
+    payload: dict[str, Any],
+    *,
+    root_dir: Path,
+) -> bool:
+    """在关联流量页面录入 ASIN，校验准备响应并选择全部变体查询。"""
     asin_values = payload.get("asinList")
     asins: list[str] = []
     if isinstance(asin_values, list):
@@ -2229,7 +2238,22 @@ async def _trigger_association_traffic_query(page, payload: dict[str, Any]) -> b
     )
     if query_button is None:
         return False
-    await query_button.click(timeout=5000)
+    # 官网仅在准备接口成功后展示查询方式弹窗；先解析该响应可保留真实业务错误。
+    async with page.expect_response(
+        lambda response: _same_endpoint(
+            response.url,
+            "/v3/api/relation/traffic/prepare",
+        ),
+        timeout=15000,
+    ) as prepare_info:
+        await query_button.click(timeout=5000)
+    prepare_response = await prepare_info.value
+    await _parse_response(
+        prepare_response,
+        method="POST",
+        root_dir=root_dir,
+        section="association_traffic_prepare",
+    )
 
     all_variants_button = None
     for _ in range(30):
