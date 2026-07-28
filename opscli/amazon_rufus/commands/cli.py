@@ -7,7 +7,12 @@ import json
 import typer
 
 from opscli.amazon_rufus.constants import DEFAULT_RUFUS_TIMEOUT_SECONDS
-from opscli.amazon_rufus.domain.exceptions import InvalidRufusCookieError, InvalidRufusCurlError, RufusError
+from opscli.amazon_rufus.domain.exceptions import (
+    InvalidRufusCookieError,
+    InvalidRufusCurlError,
+    InvalidRufusPlatformError,
+    RufusError,
+)
 from opscli.amazon_rufus.services.answer_report_writer import AnswerReportWriter
 from opscli.amazon_rufus.services.manager import RufusManager
 from opscli.amazon_rufus.services.remote_consent import RemoteConsentStore
@@ -16,9 +21,11 @@ app = typer.Typer(help="Amazon Rufus 自动问答采集")
 cookie_app = typer.Typer(help="管理 Rufus 本地 Cookie 状态")
 curl_app = typer.Typer(help="管理 Rufus 本地 cURL 请求状态")
 remote_consent_app = typer.Typer(help="管理 Rufus 远程授权偏好")
+platform_cookie_app = typer.Typer(help="管理 OPS 平台 Cookie 接口中的亚马逊 Rufus 登录态 content")
 app.add_typer(cookie_app, name="cookie")
 app.add_typer(curl_app, name="curl")
 app.add_typer(remote_consent_app, name="remote-consent")
+app.add_typer(platform_cookie_app, name="platform-cookie")
 
 
 @app.callback()
@@ -56,47 +63,6 @@ def _split_question_options(question: list[str] | None) -> tuple[str | None, lis
     if len(question) == 1:
         return question[0], None
     return None, question
-
-
-@app.command("get")
-def get(
-    asin: str = typer.Argument(..., help="目标 ASIN"),
-    country: str = typer.Argument(..., help="国家名，如 US、UK、DE、JP"),
-    question: list[str] | None = typer.Option(None, "--question", "-q", help="指定 Rufus 问题，可多次传入；传入后跳过默认题库"),
-    skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 根目录"),
-    cdp_url: str = typer.Option("http://127.0.0.1:9222", "--cdp-url", help="Chrome DevTools 地址"),
-    new_chrome: bool = typer.Option(False, "--new-chrome", help="先新开 Chrome 调试窗口再连接"),
-    keep_chrome_open: bool = typer.Option(False, "--keep-chrome-open", help="保留本次新开的 Chrome 调试窗口"),
-    chrome_path: str | None = typer.Option(None, "--chrome-path", help="指定 Chrome 可执行文件路径"),
-    launch_if_needed: bool = typer.Option(False, "--launch-if-needed", help="当 CDP 不可用时自动启动 Chrome"),
-    timeout_seconds: int = typer.Option(DEFAULT_RUFUS_TIMEOUT_SECONDS, "--timeout", min=1, help="Rufus 获取超时秒数（每题）"),
-    include_upload_payload: bool = typer.Option(True, "--upload-payload/--no-upload-payload", help="是否输出上传 payload"),
-    submit_upload: bool = typer.Option(False, "--submit-upload", help="显式提交 Rufus upload_payload 到配置的后端接口"),
-    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
-):
-    """获取指定 ASIN 在 Rufus 中的题库回答。"""
-    manager = RufusManager()
-    single_question, multiple_questions = _split_question_options(question)
-    try:
-        data = manager.get(
-            asin=asin,
-            country=country,
-            question=single_question,
-            questions=multiple_questions,
-            skills_dir=skills_dir,
-            cdp_url=cdp_url,
-            new_chrome=new_chrome,
-            keep_chrome_open=keep_chrome_open,
-            chrome_path=chrome_path,
-            launch_if_needed=launch_if_needed,
-            timeout_seconds=timeout_seconds,
-            include_upload_payload=include_upload_payload or submit_upload,
-            submit_upload=submit_upload,
-        )
-    except Exception as exc:
-        _emit(_error_payload("amazon-rufus get", exc), pretty)
-        raise typer.Exit(1)
-    _emit_answer_report(data)
 
 
 @app.command("get-backend")
@@ -259,7 +225,7 @@ def login_status(
     country: str = typer.Argument(..., help="国家名，如 US、UK、DE、JP"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
-    """读取 Rufus 获取前可用的 Amazon 登录态脱敏摘要。"""
+    """读取 Rufus 获取前可用的亚马逊 Rufus 登录态脱敏摘要。"""
     manager = RufusManager()
     try:
         data = manager.login_status(country=country)
@@ -302,8 +268,8 @@ def remote_consent_status(
 @remote_consent_app.command("set")
 def remote_consent_set(
     country: str = typer.Argument(..., help="国家名，如 US、UK、DE、JP"),
-    allow: bool = typer.Option(False, "--allow", help="允许 MCP/headless 链路复用 Amazon 登录态"),
-    deny: bool = typer.Option(False, "--deny", help="拒绝 MCP/headless 链路复用 Amazon 登录态"),
+    allow: bool = typer.Option(False, "--allow", help="允许 MCP/headless 链路复用亚马逊 Rufus 登录态"),
+    deny: bool = typer.Option(False, "--deny", help="拒绝 MCP/headless 链路复用亚马逊 Rufus 登录态"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """保存指定国家站点的远程授权偏好。"""
@@ -318,6 +284,59 @@ def remote_consent_set(
         {
             "success": True,
             "command": "amazon-rufus remote-consent set",
+            "data": data,
+            "error": None,
+        },
+        pretty,
+    )
+
+
+@platform_cookie_app.command("save")
+def platform_cookie_save(
+    platform: str = typer.Argument(..., help="平台标识，如 amazon"),
+    country: str = typer.Argument(..., help="国家代码，如 US、DE、JP"),
+    from_stdin: bool = typer.Option(False, "--from-stdin", help="从标准输入读取 content"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """保存或覆盖 OPS 平台 Cookie 接口中的亚马逊 Rufus 登录态 content。"""
+    manager = RufusManager()
+    try:
+        if not from_stdin:
+            raise InvalidRufusPlatformError("请使用 --from-stdin 从标准输入读取 content")
+        # content 可能包含完整 Rufus 状态，只允许从 stdin 读取，避免进入 shell history。
+        content = typer.get_text_stream("stdin").read()
+        data = manager.save_platform_cookie(platform=platform, country=country, content=content)
+    except Exception as exc:
+        _emit(_error_payload("amazon-rufus platform-cookie save", exc), pretty)
+        raise typer.Exit(1)
+    _emit(
+        {
+            "success": True,
+            "command": "amazon-rufus platform-cookie save",
+            "data": data,
+            "error": None,
+        },
+        pretty,
+    )
+
+
+@platform_cookie_app.command("get")
+def platform_cookie_get(
+    platform: str = typer.Argument(..., help="平台标识，如 amazon"),
+    country: str = typer.Argument(..., help="国家代码，如 US、DE、JP"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """读取 OPS 平台 Cookie 接口中的亚马逊 Rufus 登录态 content。"""
+    manager = RufusManager()
+    try:
+        data = manager.get_platform_cookie(platform=platform, country=country)
+    except Exception as exc:
+        _emit(_error_payload("amazon-rufus platform-cookie get", exc), pretty)
+        raise typer.Exit(1)
+    _emit(
+        {
+            "success": True,
+            "command": "amazon-rufus platform-cookie get",
             "data": data,
             "error": None,
         },

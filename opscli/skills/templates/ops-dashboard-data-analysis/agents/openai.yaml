@@ -1,0 +1,4 @@
+interface:
+  display_name: "仪表盘数据分析"
+  short_description: "只读分析当前仪表盘的趋势、对比、异常和业务原因"
+  default_prompt: "使用 $ops-dashboard-data-analysis 分析当前仪表盘业务数据；保持页面只读，不生成用户文件。"

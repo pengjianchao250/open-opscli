@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import unicodedata
@@ -22,6 +23,7 @@ from typing import Any, Iterable, Sequence
 
 import agent_query_planner as planner
 import dataset_guidance
+import plan_integrity
 import scoped_dataset_reader
 import time_scope
 import typed_schema_linking as schema
@@ -32,7 +34,7 @@ MODEL_CONTRACT = "query_plan_model_contract_v2"
 SKILL_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = SKILL_DIR / "data"
 RULES_PATH = DATA_DIR / "intent_rules.json"
-MAX_OUTPUT_BYTES = 12000
+MAX_OUTPUT_BYTES = 24000
 
 # 澄清原因代码 → 面向用户的中文澄清话术
 CLARIFICATION_MESSAGES = {
@@ -41,6 +43,10 @@ CLARIFICATION_MESSAGES = {
     "platform_scope": "需要先确认平台范围。",
     "ad_type": "需要先确认广告类型。",
     "grain": "需要先确认查询粒度。",
+    "field_identity": "点名字段对应多个同名物理字段，当前中文标签无法唯一绑定。",
+    "time_scope_confirmation": "未识别到明确时间范围，需要确认是否使用默认近30天。",
+    "recommended_fields_confirmation": "用户未点名完整字段，需要确认是否采用系统推荐字段。",
+    "default_dataset_confirmation": "未明确指定数据集，建议使用已授权且兼容的即时综合数据集，需要确认是否采用。",
 }
 # 披露代码 → 最终回答中必须覆盖的中文披露内容
 DISCLOSURE_MESSAGES = {
@@ -54,6 +60,8 @@ FORBIDDEN_OUTPUT_MESSAGES = [
     "不得向用户展示英文数据集标识或内部技术标识。",
     "不得把内部技术标识作为业务判断理由。",
     "未完成当前账号权限枚举校验时，不得声称正式平台筛选范围已确定。",
+    "筛选组件存在唯一精确或规范化等值命中时，不得把仅因名称包含该文本的其他枚举成员一并查询。",
+    "不得自行心算、猜测或替换相对时间及年份；只能使用规划器由 Python 生成的绝对日期窗口。",
 ]
 
 # 元数据刷新命令原文：blocked 规划器与错误指引统一引用，避免 Agent 需要翻参考文档才能自救
@@ -101,6 +109,13 @@ ERROR_NEXT_ACTIONS: list[tuple[str, str, bool]] = [
         False,
     ),
     (
+        "duplicate_dataset_field",
+        "该数据集存在同名字段的冲突注册（执行语义不一致，v1.3.6 起语义一致的"
+        "重复注册已自动合并），重跑与升级均无法自愈；向用户如实说明该数据集"
+        "暂不可查，并按 references/feedback-guide.md 提交一次反馈后停止重试。",
+        False,
+    ),
+    (
         "dataset_has_no_fields",
         "该数据集没有可用查询字段，向用户如实说明并建议更换数据集；"
         "如确认属元数据异常，按 references/feedback-guide.md 提交一次反馈。",
@@ -121,6 +136,7 @@ PLATFORM_MEMBER_LABELS = {
 
 # 选表候选 reasons 前缀 → 中文短语（澄清话术展示用）
 CANDIDATE_REASON_LABELS = [
+    ("default_instant_comprehensive", "未指定数据集时的兼容优先推荐"),
     ("explicit_alias", "技术标识精确命中"),
     ("explicit_name", "数据集英文名精确命中"),
     ("explicit_chinese_description", "中文名称命中"),
@@ -134,6 +150,63 @@ MAX_RECOMMENDED_FIELDS = 3
 MAX_CANDIDATE_CARDS = 3
 # 筛选组件引用上限（execution_ref.filter_components）
 MAX_FILTER_COMPONENTS = 6
+# 普通筛选组件枚举值的统一消歧合同。部门数字允许阿拉伯数字与中文数字等价，
+# 但等价后仍必须完整相等，不能把“九部”扩展为“项目九部”。
+FILTER_VALUE_MATCH_POLICY = {
+    "strategy": "exact_normalized_then_clarify",
+    "normalizations": [
+        "NFKC",
+        "trim",
+        "casefold",
+        "department_arabic_chinese_numeral_equivalence",
+    ],
+    "exact_match_is_exclusive": True,
+    "exact_match_confirmation_required": False,
+    "substring_match_allowed": False,
+    "no_exact_match_action": "clarify_required",
+    "rule_zh": (
+        "先对用户筛选值与当前账号组件枚举原值做规范化完整等值比较；"
+        "部门名称额外允许阿拉伯数字与中文数字等价。唯一等值命中时只使用该枚举原值并直接执行，"
+        "不得再次向用户确认，也不得加入仅包含请求文本的其他成员；无唯一等值命中时必须让用户澄清。"
+        "例如“9部”只匹配“九部”，不匹配“项目九部”；"
+        "“范泰克”不匹配“范泰克体系外”。"
+    ),
+}
+
+_DEPARTMENT_NUMBER_RE = re.compile(r"(?:项目)?[零〇一二三四五六七八九十百\d]+部")
+_DEPARTMENT_LABEL_RE = re.compile(
+    r"部门\s*(?:为|是|=|：|:)?\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,30})"
+)
+_DEPARTMENT_ANALYSIS_RE = re.compile(
+    r"(?:分析|查询|获取|查看)\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,30}?)的(?:数据|情况)"
+)
+_CHINESE_DIGITS = {
+    "零": "0",
+    "〇": "0",
+    "一": "1",
+    "二": "2",
+    "三": "3",
+    "四": "4",
+    "五": "5",
+    "六": "6",
+    "七": "7",
+    "八": "8",
+    "九": "9",
+}
+
+# 图表 UUID 既可能是标准 UUID，也可能是平台生成的短标识。只有请求中明确出现
+# “图表/chart”语义时才启用该路由，避免把工单、任务等其他 UUID 误判为图表。
+CHART_REFERENCE_PATTERN = re.compile(
+    r"(?:图表|chart)\s*(?:uuid|id|编号)?\s*(?:为|是|[:：=#])?\s*"
+    r"([A-Za-z0-9][A-Za-z0-9_-]{5,127})",
+    re.IGNORECASE,
+)
+STANDARD_UUID_PATTERN = re.compile(
+    r"(?<![0-9A-Fa-f])"
+    r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+    r"(?![0-9A-Fa-f])"
+)
 
 
 def _load_json_object(path: Path, error_code: str) -> dict:
@@ -170,6 +243,168 @@ def _normalize_enum(value: str) -> str:
     return "".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
+def _normalize_department_value(value: str) -> str:
+    """部门值规范化：只做空白/NFKC/大小写与部门数字等价，不做子串扩展。"""
+    normalized = _normalize_enum(value)
+    match = re.fullmatch(r"(项目)?([零〇一二三四五六七八九十百\d]+)部", normalized)
+    if not match:
+        return normalized
+    prefix, number = match.groups()
+    if number in _CHINESE_DIGITS:
+        number = _CHINESE_DIGITS[number]
+    elif number == "十":
+        number = "10"
+    elif len(number) == 2 and number.startswith("十") and number[1] in _CHINESE_DIGITS:
+        number = "1" + _CHINESE_DIGITS[number[1]]
+    elif len(number) == 2 and number.endswith("十") and number[0] in _CHINESE_DIGITS:
+        number = _CHINESE_DIGITS[number[0]] + "0"
+    return f"{prefix or ''}{number}部"
+
+
+def _extract_requested_department_value(query: str) -> str:
+    """从明确部门表达或“分析某组织的数据”中提取单个部门筛选值。"""
+    number_match = _DEPARTMENT_NUMBER_RE.search(query)
+    if number_match:
+        return number_match.group(0)
+    label_match = _DEPARTMENT_LABEL_RE.search(query)
+    if label_match:
+        return label_match.group(1)
+    analysis_match = _DEPARTMENT_ANALYSIS_RE.search(query)
+    if not analysis_match:
+        return ""
+    candidate = analysis_match.group(1)
+    if re.fullmatch(r"(?:本|上|下)?(?:月|周|季度|年)|近\d+(?:天|日)", candidate):
+        return ""
+    return candidate
+
+
+def _extract_chart_uuids(query: str) -> list[str]:
+    """从显式图表语义中提取 UUID，保持原文顺序并去重。"""
+    normalized = unicodedata.normalize("NFKC", query)
+    has_chart_intent = "图表" in normalized or "chart" in normalized.casefold()
+    if not has_chart_intent:
+        return []
+
+    candidates = [match.group(1) for match in CHART_REFERENCE_PATTERN.finditer(normalized)]
+    # 标准 UUID 允许出现在“图表的数据，UUID 为 xxx”这类非相邻表达中。
+    candidates.extend(match.group(0) for match in STANDARD_UUID_PATTERN.finditer(normalized))
+    return _deduplicate(candidates)
+
+
+def _chart_action(query: str) -> str:
+    """根据用户原文选择图表查询动作；未点名执行时默认只取结构。"""
+    normalized = unicodedata.normalize("NFKC", query).casefold()
+    if "chart-doc" in normalized or any(
+        marker in normalized for marker in ("api文档", "调用文档", "查询文档")
+    ):
+        return "document"
+    if "dry-run" in normalized or "dry run" in normalized or any(
+        marker in normalized for marker in ("生成sql", "只生成sql", "仅生成sql")
+    ):
+        return "dry_run"
+    if any(
+        marker in normalized
+        for marker in ("查询结构", "获取结构", "只看结构", "仅看结构", "不执行")
+    ):
+        return "structure"
+    if any(
+        marker in normalized
+        for marker in ("数据", "结果", "执行", "分析", "导出", "落盘", "保存")
+    ):
+        return "run"
+    return "structure"
+
+
+def _build_chart_query_contract(query: str, chart_uuids: Sequence[str]) -> dict:
+    """构建图表 UUID 专用模型合同，不依赖本地数据集元数据。"""
+    base_model_view = {
+        "dataset_name_zh": "图表保存查询",
+        "dimensions": [],
+        "metrics": [],
+        "platform_semantic_members": [],
+        "platform_filter_state": "not_requested",
+        "clarification_reason_codes": [],
+        "clarification_messages_zh": [],
+        "next_action": "run_chart_query",
+    }
+    execution_ref: dict[str, Any] = {"user_visible": False}
+
+    if len(chart_uuids) != 1:
+        base_model_view["clarification_reason_codes"] = ["chart_uuid_identity"]
+        base_model_view["clarification_messages_zh"] = [
+            "检测到多个图表 UUID，需要确认本次只查询其中一个。"
+        ]
+        base_model_view["next_action"] = "clarify_chart_uuid"
+        execution_ref["chart_uuid_candidates"] = list(chart_uuids)
+        return {
+            "contract": MODEL_CONTRACT,
+            "query_mode": "chart_uuid",
+            "data_state": "not_required",
+            "metadata_source": "",
+            "metadata_version": "",
+            "status": "clarify_required",
+            "model_view": base_model_view,
+            "answer_contract": {
+                "required_disclosures_zh": ["需要说明检测到多个图表 UUID。"],
+                "forbidden_outputs_zh": ["不得静默选择其中一个图表 UUID 执行。"],
+                "technical_identifiers_user_visible": False,
+                "user_visible_language": "zh-CN",
+            },
+            "execution_ref": execution_ref,
+        }
+
+    chart_uuid = chart_uuids[0]
+    action = _chart_action(query)
+    command_parts = ["opscli", "query", "chart", "--uuid", chart_uuid]
+    if action == "run":
+        command_parts.append("--run")
+    elif action == "dry_run":
+        command_parts.append("--dry-run")
+    elif action == "document":
+        command_parts[2] = "chart-doc"
+    command_parts.append("--pretty")
+
+    execution_ref.update(
+        {
+            "chart_uuid": chart_uuid,
+            "chart_action": action,
+            "query_command": " ".join(command_parts),
+            "run": action == "run",
+            "dry_run": action == "dry_run",
+        }
+    )
+    action_disclosure = {
+        "structure": "本次只获取图表保存的查询结构，不执行数据查询。",
+        "run": "本次执行图表保存的全部查询，并合并返回结果。",
+        "dry_run": "本次只生成图表查询 SQL，不执行数据查询。",
+        "document": "本次生成图表查询 API 调用文档，不执行数据查询。",
+    }[action]
+    return {
+        "contract": MODEL_CONTRACT,
+        "query_mode": "chart_uuid",
+        "data_state": "not_required",
+        "metadata_source": "",
+        "metadata_version": "",
+        "status": "planned",
+        "model_view": base_model_view,
+        "answer_contract": {
+            "required_disclosures_zh": [
+                action_disclosure,
+                "图表包含多条查询时必须遍历全部查询，并按 _query_index 区分来源。",
+                "查询范围受当前认证账号权限约束。",
+            ],
+            "forbidden_outputs_zh": [
+                "不得把图表 UUID 查询改写为普通数据集查询。",
+                "不得只读取第一条查询后把局部结果表述为完整图表结果。",
+                "不得在本地累加明细行替代服务端返回的小计或总计。",
+            ],
+            "technical_identifiers_user_visible": False,
+            "user_visible_language": "zh-CN",
+        },
+        "execution_ref": execution_ref,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 内部规划器：平台权限枚举解析
 # ---------------------------------------------------------------------------
@@ -194,6 +429,7 @@ def _resolve_platform_enum(
             "status": "not_applicable",
             "resolved_filter_values": [],
             "resolved_values_are_authorized": False,
+            "resolved_semantic_members": [],
             "missing_semantic_members": [],
         }
     if authorized_values is None:
@@ -201,6 +437,7 @@ def _resolve_platform_enum(
             "status": "required",
             "resolved_filter_values": [],
             "resolved_values_are_authorized": False,
+            "resolved_semantic_members": [],
             "missing_semantic_members": list(semantic_members),
         }
     if isinstance(authorized_values, (str, bytes)) or any(
@@ -237,6 +474,11 @@ def _resolve_platform_enum(
         "status": status,
         "resolved_filter_values": [] if ambiguous_values else resolved,
         "resolved_values_are_authorized": bool(resolved and not ambiguous_values),
+        "resolved_semantic_members": (
+            []
+            if ambiguous_values
+            else [member for member in semantic_members if member in resolved_members]
+        ),
         "missing_semantic_members": missing,
         "ambiguous_values": ambiguous_values,
     }
@@ -617,19 +859,40 @@ def build_query_plan(
     rules = schema.validate_rules(raw_rules)
     cards = planner.load_authorized_cards(data_dir)
     selection = planner.plan_query(query, cards, rules, top_n)
-    platform_scope = _platform_scope(
-        selection, raw_rules, authorized_platform_values
-    )
-    guidance = None
+
+    def selected_guidance(current_selection: dict) -> dict | None:
+        if current_selection.get("planner_status") != "candidate_ready":
+            return None
+        candidates = current_selection.get("dataset_candidates", [])
+        if not candidates:
+            return None
+        return dataset_guidance.build_guidance(
+            data_dir,
+            {"dataset_alias": candidates[0]["dataset_alias"]},
+            query=query,
+            requested_fields=requested_fields,
+        )
+
+    guidance = selected_guidance(selection)
+    # 默认推荐必须同时通过字段指导校验；无法解析点名字段时回到原选表流程。
+    if (
+        selection.get("default_dataset_recommendation")
+        and guidance is not None
+        and guidance.get("guidance_status") == "clarify_required"
+    ):
+        selection = planner.plan_query(
+            query,
+            cards,
+            rules,
+            top_n,
+            recommend_default_dataset=False,
+        )
+        guidance = selected_guidance(selection)
+
+    platform_scope = _platform_scope(selection, raw_rules, authorized_platform_values)
     if selection["planner_status"] == "candidate_ready":
         candidates = selection.get("dataset_candidates", [])
         if candidates:
-            guidance = dataset_guidance.build_guidance(
-                data_dir,
-                {"dataset_alias": candidates[0]["dataset_alias"]},
-                query=query,
-                requested_fields=requested_fields,
-            )
             if platform_scope["requires_permission_enum_validation"]:
                 platform_scope["component_lookup"] = _platform_component_lookup(
                     data_dir, candidates[0]["dataset_alias"], query
@@ -675,10 +938,30 @@ def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]
             continue
         source = item.get("selection_source")
         label = _normalize(item.get("verbose_name"))
-        if source == "explicit" or (label and label in normalized_query):
+        if source in {"explicit", "semantic_alias"} or (
+            label and label in normalized_query
+        ):
             position = normalized_query.find(label) if label else len(normalized_query)
+            if position < 0:
+                position = len(normalized_query)
             selected.append((position, index, item))
     return [item for _position, _index, item in sorted(selected)]
+
+
+def _ambiguous_natural_field_labels(guidance: dict, query: str) -> list[str]:
+    """识别自然语言命中的同标签多物理字段；显式 --field 不在此处拦截。"""
+    grouped: dict[str, set[str]] = {}
+    display: dict[str, str] = {}
+    for field_type in ("dimensions", "metrics"):
+        for item in _requested_fields(guidance, field_type, query):
+            if item.get("selection_source") == "explicit":
+                continue
+            label = _normalize(item.get("verbose_name"))
+            field_name = str(item.get("field_name", ""))
+            if label and field_name:
+                grouped.setdefault(label, set()).add(field_name)
+                display.setdefault(label, str(item.get("verbose_name", "")))
+    return [display[label] for label, names in grouped.items() if len(names) > 1]
 
 
 def _longest_unique_labels(fields: Iterable[dict]) -> list[dict]:
@@ -688,16 +971,24 @@ def _longest_unique_labels(fields: Iterable[dict]) -> list[dict]:
     避免同一个文本片段产出两个字段结论。
     """
     unique = []
-    labels = []
+    identity_keys = set()
     for item in fields:
         label = _normalize(item.get("verbose_name"))
-        if label and label not in labels:
-            labels.append(label)
+        # 显式字段按物理 field_name 去重；非显式字段才按展示名去重。
+        # 这样同标签不同物理字段（以及包含关系）不会吞掉用户明确点名的身份。
+        identity = (
+            "field",
+            str(item.get("field_name", "")),
+        ) if item.get("selection_source") == "explicit" else ("label", label)
+        if label and identity not in identity_keys:
+            identity_keys.add(identity)
             unique.append(item)
+    labels = [_normalize(item.get("verbose_name")) for item in unique]
     return [
         item
         for item in unique
-        if not any(
+        if item.get("selection_source") == "explicit"
+        or not any(
             _normalize(item.get("verbose_name")) != other
             and _normalize(item.get("verbose_name")) in other
             for other in labels
@@ -708,7 +999,7 @@ def _longest_unique_labels(fields: Iterable[dict]) -> list[dict]:
 def _selected_fields(
     guidance: dict,
     query: str,
-    authorized_field_labels: dict[str, list[str]],
+    authorized_field_labels: dict[str, list[dict]],
 ) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     """确定模型可见的维度与指标列表。
 
@@ -723,28 +1014,29 @@ def _selected_fields(
     normalized_query = _normalize(query)
     if not dimensions:
         dimensions = [
-            {"verbose_name": label, "selection_source": "authorized_query_label"}
-            for label in authorized_field_labels.get("dimensions", [])
-            if _normalize(label) in normalized_query
+            dict(item, selection_source="authorized_query_label")
+            for item in authorized_field_labels.get("dimensions", [])
+            if _normalize(item.get("verbose_name")) in normalized_query
         ]
     if not metrics:
         metrics = [
-            {"verbose_name": label, "selection_source": "authorized_query_label"}
-            for label in authorized_field_labels.get("metrics", [])
-            if _normalize(label) in normalized_query
+            dict(item, selection_source="authorized_query_label")
+            for item in authorized_field_labels.get("metrics", [])
+            if _normalize(item.get("verbose_name")) in normalized_query
         ]
     # 无点名字段时的推荐兜底（P0-1c）：把指导层已按打分选出的 top 字段
     # 以 recommended 来源标注供模型向用户提议，替代「全空无从下手→扫盘」
     field_guidance = guidance.get("field_guidance") or {}
     recommended_dimensions: list[dict] = []
     recommended_metrics: list[dict] = []
-    if not dimensions:
+    # 只有维度和指标都未点名时才给整套推荐。仅点名指标表示“整体聚合”，
+    # 仅点名维度也可能是明细诉求，不能强塞另一类型字段再制造确认门槛。
+    if not dimensions and not metrics:
         recommended_dimensions = [
             dict(item, selection_source="recommended")
             for item in (field_guidance.get("dimensions") or [])[:MAX_RECOMMENDED_FIELDS]
             if isinstance(item, dict)
         ]
-    if not metrics:
         recommended_metrics = [
             dict(item, selection_source="recommended")
             for item in (field_guidance.get("metrics") or [])[:MAX_RECOMMENDED_FIELDS]
@@ -773,7 +1065,8 @@ def _selected_fields(
     metrics = [
         item
         for item in metrics
-        if not any(
+        if item.get("selection_source") == "explicit"
+        or not any(
             _normalize(item.get("verbose_name")) != dimension_label
             and _normalize(item.get("verbose_name")) in dimension_label
             for dimension_label in dimension_labels
@@ -859,7 +1152,10 @@ def _answer_contract(
     required = []
     if platform_filter_state == "requires_permission_enum":
         required.append("permission_enum_required")
-    if "dataset_constraints" in clarification_reasons:
+    if any(
+        reason in clarification_reasons
+        for reason in ("dataset_constraints", "default_dataset_confirmation")
+    ):
         required.append("dataset_confirmation_required")
     if guidance.get("guidance_status") == "clarify_required":
         required.append("field_confirmation_required")
@@ -879,6 +1175,35 @@ def _answer_contract(
     }
 
 
+def _platform_scope_disclosures(platform: dict) -> list[str]:
+    """生成裸“亚马逊”默认范围及部分权限降级的强制披露。"""
+    if "amazon" not in set(platform.get("requested_slots") or []):
+        return []
+
+    disclosures = ["用户未指定亚马逊SC或亚马逊VC，本次默认按亚马逊SC + 亚马逊VC处理。"]
+    resolution = platform.get("enum_resolution") or {}
+    if resolution.get("status") != "resolved":
+        return disclosures
+
+    effective = [
+        PLATFORM_MEMBER_LABELS.get(str(item), str(item))
+        for item in resolution.get("resolved_semantic_members") or []
+    ]
+    missing = [
+        PLATFORM_MEMBER_LABELS.get(str(item), str(item))
+        for item in resolution.get("missing_semantic_members") or []
+    ]
+    if effective and missing:
+        disclosures.append(
+            "当前账号实际可用范围为"
+            + " + ".join(effective)
+            + "，未枚举到"
+            + " + ".join(missing)
+            + "；本次直接查询可用部分，不把结果表述为完整亚马逊范围。"
+        )
+    return disclosures
+
+
 def _reason_zh(reasons: Iterable[str]) -> str:
     """把选表 reasons 代码翻成一句中文短语（取首个可翻译原因）。"""
     for reason in reasons:
@@ -888,7 +1213,11 @@ def _reason_zh(reasons: Iterable[str]) -> str:
     return "语义相关"
 
 
-def _candidate_cards_zh(selection: dict, dataset_names_zh: dict[str, str]) -> list[dict]:
+def _candidate_cards_zh(
+    selection: dict,
+    dataset_names_zh: dict[str, str],
+    dataset_summaries_zh: dict[str, str],
+) -> list[dict]:
     """澄清态的候选卡片投影（P0-2）：中文名 + 命中原因，供带选项提问。"""
     cards = []
     for item in (selection.get("dataset_candidates") or [])[:MAX_CANDIDATE_CARDS]:
@@ -896,7 +1225,11 @@ def _candidate_cards_zh(selection: dict, dataset_names_zh: dict[str, str]) -> li
         name_zh = dataset_names_zh.get(alias) or ""
         if not name_zh:
             continue
-        cards.append({"name_zh": name_zh, "reason_zh": _reason_zh(item.get("reasons") or [])})
+        card = {"name_zh": name_zh, "reason_zh": _reason_zh(item.get("reasons") or [])}
+        summary = dataset_summaries_zh.get(alias)
+        if summary:
+            card["summary_zh"] = summary
+        cards.append(card)
     return cards
 
 
@@ -910,15 +1243,19 @@ def _bigrams(text: str) -> set[str]:
 
 def _field_suggestions(
     unknown_fields: Iterable[str],
-    authorized_field_labels: dict[str, list[str]],
+    authorized_field_labels: dict[str, list[dict]],
 ) -> list[dict]:
     """为未知点名字段生成「你是不是想要」近似建议（P0-2）。
 
     用字符二元组重合度做轻量相似排序，避免模型对拼错字段盲试。
     """
     labels = _deduplicate(
-        list(authorized_field_labels.get("dimensions", []))
-        + list(authorized_field_labels.get("metrics", []))
+        str(item.get("verbose_name", ""))
+        for item in (
+            list(authorized_field_labels.get("dimensions", []))
+            + list(authorized_field_labels.get("metrics", []))
+        )
+        if isinstance(item, dict)
     )
     suggestions = []
     for unknown in unknown_fields:
@@ -1028,11 +1365,52 @@ def _filter_components(guidance: dict) -> list[dict]:
     return components
 
 
+# filter_config 操作符 → 中文描述（披露文案用，与后台配置表单 label 一致）
+_FILTER_OPERATOR_ZH = {
+    "equals": "等于", "notEquals": "不等于", "gt": "大于", "gte": "大于等于",
+    "lt": "小于", "lte": "小于等于", "isEmpty": "为空", "isNotEmpty": "不为空",
+}
+
+
+def _default_filters_ref(guidance: dict) -> list[dict]:
+    """把 guidance.default_filters 投影为执行引用形态（模型直接填充查询用）。"""
+    refs = []
+    for item in guidance.get("default_filters") or []:
+        config = item.get("filter_config") or {}
+        # 优先取枚举值列表；没有则把 value 归一化为列表
+        values = config.get("enum_value") or []
+        if not values and config.get("value") not in (None, ""):
+            raw = config["value"]
+            values = raw if isinstance(raw, list) else [raw]
+        refs.append({
+            "field_name": item["field_name"],
+            "label_zh": item.get("verbose_name", ""),
+            "operator": config.get("operator", "equals"),
+            "values": values,
+            "type": config.get("type", "required"),
+            "filter_type": config.get("filter_type", "enum"),
+            "filter_agg": config.get("filter_agg", "none"),
+        })
+    return refs
+
+
+def _default_filters_zh(refs: list[dict]) -> list[str]:
+    """默认条件的用户可见中文描述（回答披露用）。"""
+    lines = []
+    for ref in refs:
+        op_zh = _FILTER_OPERATOR_ZH.get(ref["operator"], ref["operator"])
+        value_text = "、".join(str(v) for v in ref["values"]) or "-"
+        type_zh = "强制" if ref["type"] == "required" else "可选"
+        lines.append(f"{ref['label_zh'] or ref['field_name']} {op_zh} {value_text}（{type_zh}）")
+    return lines
+
+
 def build_model_contract(
     internal: dict,
     query: str = "",
-    authorized_field_labels: dict[str, list[str]] | None = None,
+    authorized_field_labels: dict[str, list[dict]] | None = None,
     dataset_names_zh: dict[str, str] | None = None,
+    dataset_summaries_zh: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """把内部规划器投影为模型可见的精简规划器。
 
@@ -1054,6 +1432,22 @@ def build_model_contract(
     dimensions, metrics, recommended_dims, recommended_mets = _selected_fields(
         guidance, query, authorized_field_labels or {"dimensions": [], "metrics": []}
     )
+    ambiguous_field_labels = _ambiguous_natural_field_labels(guidance, query)
+    if ambiguous_field_labels:
+        status = "clarify_required"
+        if "field_identity" not in clarification_reasons:
+            clarification_reasons.append("field_identity")
+        ambiguous_keys = {_normalize(item) for item in ambiguous_field_labels}
+        dimensions = [
+            item
+            for item in dimensions
+            if _normalize(item.get("verbose_name")) not in ambiguous_keys
+        ]
+        metrics = [
+            item
+            for item in metrics
+            if _normalize(item.get("verbose_name")) not in ambiguous_keys
+        ]
     # 时间口径本地解析（P0-5）：只在元数据就绪时计算，模型不再自算日期窗口
     scope = time_scope.parse(query) if data_ready else None
     field_guidance = guidance.get("field_guidance") or {}
@@ -1064,6 +1458,33 @@ def build_model_contract(
     unknown_fields = [
         str(item) for item in field_guidance.get("unknown_requested_fields") or []
     ]
+    pending_confirmations_zh: list[str] = []
+    execution_path_ready = str(internal.get("next_action", "")) == "construct_query"
+    default_dataset_recommendation = selection.get("default_dataset_recommendation") or {}
+    # 即时综合数据集已经通过当前账号授权、业务语义和字段指导三层校验，且原文确实
+    # 命中了至少一个查询字段时，默认选表本身已无歧义，不能再制造一次人工确认。
+    # 完全模糊、没有任何字段命中的请求仍保留推荐确认，避免擅自决定查询内容。
+    default_dataset_auto_selected = bool(
+        default_dataset_recommendation
+        and guidance.get("guidance_status") == "ready"
+        and (dimensions or metrics)
+    )
+    if default_dataset_auto_selected:
+        default_dataset_recommendation["confirmation_required"] = False
+        default_dataset_recommendation["auto_selected"] = True
+    if default_dataset_recommendation.get("confirmation_required"):
+        status = "clarify_required"
+        if "default_dataset_confirmation" not in clarification_reasons:
+            clarification_reasons.append("default_dataset_confirmation")
+        pending_confirmations_zh.append("确认是否使用推荐的即时综合数据集")
+    if status == "planned" and execution_path_ready and scope and scope.get("is_default"):
+        status = "clarify_required"
+        clarification_reasons.append("time_scope_confirmation")
+        pending_confirmations_zh.append("确认是否采用默认近30天时间范围")
+    if status == "planned" and execution_path_ready and (recommended_dims or recommended_mets):
+        status = "clarify_required"
+        clarification_reasons.append("recommended_fields_confirmation")
+        pending_confirmations_zh.append("确认是否采用系统推荐的维度和指标")
     model_view: dict[str, Any] = {
         "dataset_name_zh": str(dataset.get("display_name_zh", "")),
         "dimensions": _field_names(dimensions),
@@ -1081,6 +1502,33 @@ def build_model_contract(
         ],
         "next_action": str(internal.get("next_action", "")),
     }
+    resolved_platform_members = [
+        PLATFORM_MEMBER_LABELS.get(str(item), str(item))
+        for item in resolution.get("resolved_semantic_members") or []
+    ]
+    if resolved_platform_members:
+        model_view["platform_effective_members"] = resolved_platform_members
+    platform_disclosures = _platform_scope_disclosures(platform)
+    if platform_disclosures:
+        model_view["platform_scope_disclosures_zh"] = platform_disclosures
+    if default_dataset_recommendation:
+        model_view["default_dataset_recommendation_zh"] = {
+            "name_zh": str(dataset.get("display_name_zh", "")),
+            "reason_zh": "未明确指定数据集，且该数据集在当前授权范围内并覆盖已明确的业务与字段。",
+            "confirmation_required": bool(
+                default_dataset_recommendation.get("confirmation_required")
+            ),
+            "auto_selected": default_dataset_auto_selected,
+        }
+    if ambiguous_field_labels:
+        model_view["ambiguous_field_labels_zh"] = ambiguous_field_labels
+        model_view["next_action"] = "ask_user_for_field_clarification"
+    if default_dataset_recommendation.get("confirmation_required"):
+        model_view["pending_confirmations_zh"] = pending_confirmations_zh
+        model_view["next_action"] = "ask_user_for_default_dataset_confirmation"
+    elif pending_confirmations_zh:
+        model_view["pending_confirmations_zh"] = pending_confirmations_zh
+        model_view["next_action"] = "ask_user_for_query_scope_confirmation"
     if scope:
         comparison = scope.get("comparison")
         scope_zh = f"{scope['label_zh']}：{scope['start']} ~ {scope['end']}（{scope['timezone']}）"
@@ -1088,7 +1536,18 @@ def build_model_contract(
             scope_zh += f"；对比期 {comparison['label_zh']}：{comparison['start']} ~ {comparison['end']}"
         if scope.get("is_default"):
             scope_zh += "。注意：未识别到明确时间表述，这是默认口径，必须向用户披露并确认"
+            model_view["time_scope_recovery_zh"] = (
+                "默认近30天窗口仅在用户原文完全未含时间表述时成立。确认前先回看"
+                "用户原始请求：若原文含本月、上月、本周、近N天、指定月份或具体日期，"
+                "说明本次规划调用漏传了时间，必须携带用户原文或已锁定的绝对起止日期"
+                "重新运行规划器，禁止就时间范围向用户提问。"
+            )
         model_view["time_scope_zh"] = scope_zh
+        model_view["time_resolution_zh"] = (
+            f"时间由 Python 按 {scope['timezone']} 当前日期 {scope['reference_date']} 计算；"
+            f"用户未明确年份时以 {scope['reference_year']} 年为相对时间基准，"
+            "跨年窗口按真实日历处理，禁止自行推算或改写。"
+        )
     # 推荐字段（无点名字段时）：供向用户提议，采用前须在确认摘要中说明来源
     if recommended_dims:
         model_view["recommended_dimensions"] = _field_names(recommended_dims)
@@ -1096,7 +1555,11 @@ def build_model_contract(
         model_view["recommended_metrics"] = _field_names(recommended_mets)
     # 澄清弹药（P0-2）：候选卡片 + 未知字段回显与近似建议
     if status == "clarify_required":
-        cards = _candidate_cards_zh(selection, dataset_names_zh or {})
+        cards = _candidate_cards_zh(
+            selection,
+            dataset_names_zh or {},
+            dataset_summaries_zh or {},
+        )
         if cards:
             model_view["dataset_candidates_zh"] = cards
         if unknown_fields:
@@ -1140,11 +1603,20 @@ def build_model_contract(
     components = _filter_components(guidance)
     if components:
         execution_ref["filter_components"] = components
+        # 枚举入口与成员消歧策略必须同时下发，避免模型把包含匹配误当成多个筛选目标。
+        execution_ref["filter_value_match_policy"] = {
+            **FILTER_VALUE_MATCH_POLICY,
+            "normalizations": list(FILTER_VALUE_MATCH_POLICY["normalizations"]),
+        }
     if scope:
         execution_ref["time_scope"] = {
             "start": scope["start"],
             "end": scope["end"],
             "is_default": scope["is_default"],
+            "reference_date": scope["reference_date"],
+            "reference_year": scope["reference_year"],
+            "resolution_source": scope["resolution_source"],
+            "year_source": scope["year_source"],
             "comparison_type": (scope.get("comparison") or {}).get("type"),
             "comparison_start": (scope.get("comparison") or {}).get("start"),
             "comparison_end": (scope.get("comparison") or {}).get("end"),
@@ -1159,7 +1631,7 @@ def build_model_contract(
                 "--authorized-platform-value 参数传回本规划命令，取得终版规划器"
             )
     # 查询模板骨架（P1-4）：status=planned 时给出可直接填充的 payload
-    if status == "planned":
+    if status == "planned" and str(internal.get("next_action", "")) == "construct_query":
         template = _build_query_template(
             dataset.get("table_id"),
             execution_dimensions,
@@ -1171,21 +1643,40 @@ def build_model_contract(
             execution_ref["query_template"] = template
             execution_ref["query_template_fill_rules_zh"] = (
                 "模板已预填授权字段与时间窗（日期过滤为 >=/<= 两行实测形态）。"
+                "时间窗由 Python 按 execution_ref.time_scope 的参考日期生成，禁止自行心算、猜测年份或改写。"
                 "普通指标默认 SUM 按用户口径调整；公式/快照指标不带 aggregation。"
                 "排序填 orderBy=[{\"field\":\"<结果alias>\",\"direction\":\"DESC|ASC\"}]，"
                 "行数填 limit；不需要的键（null 值）必须删除后再执行。"
                 "selection_source=recommended 的字段须先向用户说明再采用。"
+                "数据集默认条件（若有）由服务端查询时自动应用，请勿手动加入 filters；"
+                "仅需在回答中向用户披露 default_filters_zh。"
             )
+    # 默认条件投影（R5）：把 guidance.default_filters 投影到披露输出，不预填 query_template
+    # 服务端是默认条件注入的唯一权威方，客户端预填会与服务端解析后的真实日期 AND 合并 → 恒 0 行
+    default_filters = _default_filters_ref(guidance)
+    if default_filters:
+        execution_ref["default_filters"] = default_filters
+        model_view["default_filters_zh"] = _default_filters_zh(default_filters)
+    # 回答合同：先构建基础版本，再追加默认条件强制披露
+    answer_contract = _answer_contract(status, clarification_reasons, platform_state, guidance)
+    answer_contract["required_disclosures_zh"].extend(
+        item
+        for item in platform_disclosures
+        if item not in answer_contract["required_disclosures_zh"]
+    )
+    if default_filters:
+        answer_contract["required_disclosures_zh"].append(
+            "本次查询已自动应用数据集默认条件：" + "；".join(model_view["default_filters_zh"])
+        )
     return {
         "contract": MODEL_CONTRACT,
+        "query_mode": "dataset_query",
         "data_state": str(internal.get("data_state", "missing")),
         "metadata_source": str(internal.get("metadata_source", "")),
         "metadata_version": str(internal.get("metadata_version", "")),
         "status": status,
         "model_view": model_view,
-        "answer_contract": _answer_contract(
-            status, clarification_reasons, platform_state, guidance
-        ),
+        "answer_contract": answer_contract,
         "execution_ref": execution_ref,
     }
 
@@ -1202,7 +1693,20 @@ def build_model_query_plan(
     自动执行一次枚举查询并回灌重规划（P0-3），把「枚举→回传→重规划」
     三步收敛为一次调用；枚举短超时（7s，贴合默认命令窗）内未返回或失败时，
     保留首版合同并内嵌现成枚举命令走手动路径，绝不阻塞命令窗口。
+
+    显式图表 UUID 请求在读取本地元数据前确定性分流，输出 chart_uuid 模式合同；
+    该模式直接使用 opscli query chart/chart-doc，不进入普通数据集选表流程。
     """
+    chart_uuids = _extract_chart_uuids(query)
+    if chart_uuids:
+        contract = _build_chart_query_contract(query, chart_uuids)
+        encoded = json.dumps(
+            contract, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        if len(encoded) > MAX_OUTPUT_BYTES:
+            raise RuntimeError("query_plan_output_too_large")
+        return contract
+
     auto_enum = bool(kwargs.pop("auto_enum", True))
     data_dir = Path(kwargs.get("data_dir", DATA_DIR))
     internal = build_query_plan(
@@ -1211,29 +1715,55 @@ def build_model_query_plan(
         authorized_platform_values=authorized_platform_values,
         **kwargs,
     )
-    # 收集全量授权字段中文标签，用于点名字段被指导截断时的兜底匹配
+    # 只收集已选数据集的授权字段。跨表全局标签会制造“展示层有字段、
+    # execution_ref 无物理身份”的假命中，必须在投影入口收紧作用域。
     authorized_fields = {"dimensions": [], "metrics": []}
     dataset_names_zh: dict[str, str] = {}
+    dataset_summaries_zh: dict[str, str] = {}
     if internal.get("data_state") == "ready":
         # fallback 接管数据目录后，标签读取必须跟随实际生效目录
         data_dir = Path(internal.get("effective_data_dir") or data_dir)
         rows = scoped_dataset_reader.load_dataset_fields(data_dir)
+        selected_alias = str(
+            (
+                (internal.get("selected_dataset_guidance") or {}).get("dataset")
+                or {}
+            ).get("dataset_alias", "")
+        )
         for row in rows:
+            if not selected_alias or row.get("dataset_alias") != selected_alias:
+                continue
             key = "dimensions" if row["field_type"] == "dimension" else "metrics"
-            label = str(row.get("verbose_name", ""))
-            if label and label not in authorized_fields[key]:
-                authorized_fields[key].append(label)
+            authorized_fields[key].append(
+                dataset_guidance._compact_field(
+                    row, "authorized_query_label", "contract"
+                )
+            )
         # 数据集 alias → 中文名映射：澄清候选卡片展示用（用户可见层只允许中文）
         for row in scoped_dataset_reader.load_datasets(data_dir):
             alias = str(row.get("dataset_alias", ""))
             name_zh = str(row.get("description", "") or row.get("dataset_name", ""))
             if alias and name_zh:
                 dataset_names_zh[alias] = name_zh
+        grouped: dict[str, dict[str, list[str]]] = {}
+        for row in rows:
+            alias = str(row.get("dataset_alias", ""))
+            key = "维度" if row.get("field_type") == "dimension" else "指标"
+            grouped.setdefault(alias, {"维度": [], "指标": []})[key].append(
+                str(row.get("verbose_name", ""))
+            )
+        for alias, groups in grouped.items():
+            examples = _deduplicate(groups["维度"] + groups["指标"])[:3]
+            dataset_summaries_zh[alias] = (
+                f"{len(groups['维度'])} 个维度、{len(groups['指标'])} 个指标"
+                + ("；代表字段：" + "、".join(examples) if examples else "")
+            )
     contract = build_model_contract(
         internal,
         query=query,
         authorized_field_labels=authorized_fields,
         dataset_names_zh=dataset_names_zh,
+        dataset_summaries_zh=dataset_summaries_zh,
     )
     # P0-3 二段收敛：待权限枚举时自动执行枚举查询并回灌重规划。
     # 本次调用已执行过自动升级时跳过（升级宽限+枚举叠加会撑破 30 秒命令窗口，
@@ -1242,7 +1772,7 @@ def build_model_query_plan(
         auto_enum
         and not internal.get("upgrade_performed_this_call")
         and not authorized_platform_values
-        and contract["model_view"]["next_action"] == "query_platform_permission_enum"
+        and internal.get("next_action") == "query_platform_permission_enum"
     ):
         values = _auto_enum_platform_values(
             contract["execution_ref"].get("platform_component_table_id")
@@ -1259,9 +1789,14 @@ def build_model_query_plan(
                 query=query,
                 authorized_field_labels=authorized_fields,
                 dataset_names_zh=dataset_names_zh,
+                dataset_summaries_zh=dataset_summaries_zh,
             )
             # 枚举来源标注：审计可区分自动枚举与人工回传
             contract["execution_ref"]["platform_enum_source"] = "auto_enum_service"
+    contract = _resolve_department_filter(contract, query, auto_enum=auto_enum)
+    # planned 合同生成后立即封存，执行器据此拒绝规划与执行之间的手工改写。
+    if contract.get("status") == "planned" and contract.get("query_mode") == "dataset_query":
+        plan_integrity.attach(contract)
     # 模型规划器体积守卫：新增投影（模板/组件/时间规划器）不得撑爆模型上下文
     if len(json.dumps(contract, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_OUTPUT_BYTES:
         raise RuntimeError("query_plan_output_too_large")
@@ -1331,6 +1866,148 @@ def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: f
     if values:
         print(f"[query_plan] 自动枚举取得平台值：{values}", file=sys.stderr)
     return values
+
+
+def _auto_enum_component_values(
+    component_table_id: object,
+    field_name: str,
+    *,
+    timeout_seconds: float = 7.0,
+) -> list[str]:
+    """枚举普通筛选组件字段；任何远端异常均返回空列表，由规划合同阻断扩大查询。"""
+    if component_table_id in (None, "") or not field_name:
+        return []
+    enum_json = json.dumps(
+        {
+            "tableId": component_table_id,
+            "dimensions": [{"field": field_name, "alias": field_name}],
+            "metrics": [],
+            "limit": 500,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    try:
+        result = subprocess.run(
+            [
+                "opscli",
+                "query",
+                "simple",
+                "--table-id",
+                str(component_table_id),
+                "--json",
+                enum_json,
+                "--run",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"[query_plan] 普通筛选组件枚举未完成：{error}", file=sys.stderr)
+        return []
+    if result.returncode != 0:
+        print(
+            f"[query_plan] 普通筛选组件枚举失败：{(result.stderr or result.stdout or '')[:200]}",
+            file=sys.stderr,
+        )
+        return []
+    try:
+        payload = json.loads(result.stdout[result.stdout.index("{") :])
+    except (ValueError, json.JSONDecodeError):
+        print("[query_plan] 普通筛选组件枚举返回无法解析", file=sys.stderr)
+        return []
+    if payload.get("success") is False:
+        print(
+            f"[query_plan] 普通筛选组件枚举业务失败：{str(payload.get('error'))[:200]}",
+            file=sys.stderr,
+        )
+        return []
+    rows: list = []
+    for path in (("data", "result", "data"), ("result", "data"), ("data", "data")):
+        node: Any = payload
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, list):
+            rows = node
+            break
+    return _deduplicate(
+        str(row.get(field_name, "")).strip()
+        for row in rows
+        if isinstance(row, dict) and row.get(field_name) not in (None, "")
+    )
+
+
+def _resolve_department_filter(contract: dict, query: str, *, auto_enum: bool) -> dict:
+    """把用户明确的部门值在当前账号组件中唯一等值解析并写入查询模板。"""
+    requested = _extract_requested_department_value(query)
+    if not requested or contract.get("status") != "planned":
+        return contract
+    execution = contract.get("execution_ref")
+    if not isinstance(execution, dict):
+        return contract
+    component = next(
+        (
+            item
+            for item in execution.get("filter_components") or []
+            if isinstance(item, dict) and item.get("field_name") == "dept_name"
+        ),
+        None,
+    )
+    if not component:
+        return contract
+
+    values = (
+        _auto_enum_component_values(
+            component.get("component_table_id"),
+            "dept_name",
+        )
+        if auto_enum
+        else []
+    )
+    if not values:
+        contract["status"] = "blocked"
+        contract["model_view"]["component_filter_state"] = "enum_unavailable"
+        contract["model_view"]["next_action"] = "retry_component_permission_enum"
+        contract["model_view"]["clarification_messages_zh"].append(
+            f"当前未能枚举部门“{requested}”的授权原值，已阻止扩大为全范围查询；请原样重试一次。"
+        )
+        execution.pop("query_template", None)
+        return contract
+
+    target = _normalize_department_value(requested)
+    matched = [value for value in values if _normalize_department_value(value) == target]
+    if len(matched) != 1:
+        contract["status"] = "clarify_required"
+        contract["model_view"]["component_filter_state"] = "clarify_required"
+        contract["model_view"]["next_action"] = "ask_user_for_component_filter"
+        contract["model_view"]["clarification_messages_zh"].append(
+            f"部门“{requested}”没有唯一完整等值的授权成员，请指定当前账号可见的准确部门名称。"
+        )
+        execution.pop("query_template", None)
+        return contract
+
+    template = execution.get("query_template")
+    if not isinstance(template, dict):
+        return contract
+    template.setdefault("filters", []).append(
+        {"field": "dept_name", "operator": "=", "value": matched[0]}
+    )
+    execution["resolved_component_filters"] = [
+        {
+            "field_name": "dept_name",
+            "label_zh": "部门",
+            "requested_value": requested,
+            "resolved_value": matched[0],
+            "match_strategy": "exact_normalized",
+        }
+    ]
+    contract["model_view"]["component_filter_state"] = "resolved"
+    contract["model_view"]["component_filter_disclosures_zh"] = [
+        f"部门按当前账号授权枚举完整等值匹配为“{matched[0]}”。"
+    ]
+    return contract
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 import time
 
 import httpx
@@ -20,6 +22,18 @@ from opscli.version import get_version
 
 # PyPI JSON API 地址，返回包的完整元数据
 _PYPI_JSON_URL = "https://pypi.org/pypi/aukeys-opscli/json"
+
+# TestPyPI JSON API 地址，仅供内部发版验证渠道使用（OPSCLI_UPDATE_CHANNEL=test）
+_TESTPYPI_JSON_URL = "https://test.pypi.org/pypi/aukeys-opscli/json"
+
+
+def _get_channel() -> str:
+    """读取更新渠道。
+
+    环境变量 OPSCLI_UPDATE_CHANNEL=test 时走 TestPyPI（内部发版验证专用），
+    其余任何取值或未设置均为正式渠道（公网 PyPI），保证普通用户行为不变。
+    """
+    return "test" if os.environ.get("OPSCLI_UPDATE_CHANNEL") == "test" else "prod"
 
 # 缓存文件路径，与 CONFIG_DIR 一致
 _CACHE_FILE = CONFIG_DIR / "pypi_version_cache.json"
@@ -90,13 +104,15 @@ def _write_cache(latest_version: str) -> None:
 
 
 def _fetch_latest_version() -> str | None:
-    """从 PyPI JSON API 获取最新版本号。
+    """从 PyPI JSON API 获取最新版本号（按渠道选择正式 / TestPyPI）。
 
     Returns:
         最新版本号字符串，请求失败或解析失败时返回 None。
     """
     try:
-        response = httpx.get(_PYPI_JSON_URL, timeout=5)
+        # test 渠道查询 TestPyPI，正式渠道查询公网 PyPI
+        url = _TESTPYPI_JSON_URL if _get_channel() == "test" else _PYPI_JSON_URL
+        response = httpx.get(url, timeout=5)
         response.raise_for_status()
         data = response.json()
         return data.get("info", {}).get("version")
@@ -111,11 +127,36 @@ def _print_update_hint(current: str, latest: str) -> None:
     console.print(
         f"[yellow]opscli 有新版本可用，建议更新最新版本: v{current} → v{latest}[/yellow]"
     )
-    console.print("[dim]请按以下步骤更新：[/dim]")
-    console.print("[cyan]  1. pip install --upgrade aukeys-opscli[/cyan]")
-    console.print("[cyan]  2. opscli skills install --force[/cyan]")
-    console.print("[cyan]  3. opscli skills upgrade[/cyan]")
+    console.print("[dim]请运行以下命令一键更新（升级 CLI 并自动同步 Skills）：[/dim]")
+    console.print("[cyan]  opscli self-update[/cyan]")
     console.print()
+
+
+def _refresh_cache_async() -> threading.Thread:
+    """在后台守护线程中请求 PyPI 并刷新版本缓存，不阻塞主流程。
+
+    首次安装/升级后本地无缓存，若在主线程同步请求 PyPI（外网）会一直阻塞到
+    超时，拖慢命令首次启动（尤其国内网络访问 pypi.org 较慢）。改为后台刷新：
+    本次命令立即放行，缓存写入后，下次命令即可从缓存读取并提示新版本。
+
+    使用 daemon=True：进程退出时不 join 该线程，保证不拖慢命令退出；
+    即便线程在写缓存途中被中断，下次 _read_cache 解析失败会静默返回 None 并重试。
+
+    Returns:
+        已启动的后台线程对象（供测试确定性 join，业务侧忽略即可）。
+    """
+    def _worker() -> None:
+        # 后台执行：请求 PyPI 成功才写缓存，任何异常静默丢弃
+        try:
+            latest = _fetch_latest_version()
+            if latest is not None:
+                _write_cache(latest)
+        except Exception:
+            pass
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    return thread
 
 
 def check_and_notify() -> None:
@@ -124,27 +165,32 @@ def check_and_notify() -> None:
     全流程静默：任何异常（网络、文件、解析）均不抛出，
     不影响 CLI 命令的正常执行。仅从 CLI 入口调用，
     MCP 模式天然不经过此处（独立进程入口）。
+
+    分两条路径：
+    - 缓存命中：纯本地判断，无网络开销，可同步提示新版本；
+    - 缓存缺失/过期：仅触发后台刷新，本次不阻塞、不提示，提示在下次命令生效。
     """
     try:
         current = get_version()
 
+        # test 渠道绕过缓存：直连 TestPyPI 且不写缓存，
+        # 避免测试渠道版本号污染正式渠道的 24 小时缓存判断
+        if _get_channel() == "test":
+            latest = _fetch_latest_version()
+            if latest is not None and is_newer_available(current, latest):
+                _print_update_hint(current, latest)
+            return
+
         # 优先从缓存读取，避免每次都请求 PyPI
         cached = _read_cache()
         if cached:
-            # 缓存有效：基于缓存数据判断，不重复请求
+            # 缓存有效：基于缓存数据判断，不重复请求（无网络开销，同步提示）
             if is_newer_available(current, cached["latest_version"]):
                 _print_update_hint(current, cached["latest_version"])
             return
 
-        # 缓存过期或不存在，请求 PyPI 刷新
-        latest = _fetch_latest_version()
-        if latest is None:
-            return
-
-        _write_cache(latest)
-
-        if is_newer_available(current, latest):
-            _print_update_hint(current, latest)
+        # 缓存过期或不存在：后台刷新，避免同步请求 PyPI 阻塞命令启动
+        _refresh_cache_async()
     except Exception:
         # 兜底：任何未预期的异常静默吞掉，不影响正常命令执行
         pass

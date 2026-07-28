@@ -16,6 +16,9 @@ from opscli.sif.compare.provider import SifCompareProvider
 from opscli.sif.config import DEFAULT_FEATURE_OUTPUT_DIRS, SifSettings, default_output_dir_for_feature, load_settings
 from opscli.sif.domain.exceptions import SifConfigError
 from opscli.sif.domain.models import SifRunRequest
+from opscli.sif.operation_time_machine.provider import SifOperationTimeMachineProvider
+from opscli.sif.product_time_machine.provider import SifProductTimeMachineProvider
+from opscli.sif.ranking.provider import SifRankingProvider
 from opscli.sif.sales.models import SifSalesRunRequest
 from opscli.sif.sales.provider import SifSalesProvider
 from opscli.sif.sites import normalize_site
@@ -41,6 +44,30 @@ FEATURE_SCENARIOS: dict[str, dict[str, Any]] = {
         "key": "compare",
         "aliases": ["多产品对比", "compare"],
         "sections": ["对比销量", "对比流量词", "对比流量分", "重点流量词", "重点广告词"],
+        "default_time_piece_type": "latelyDay",
+        "default_time_piece_value": "7",
+    },
+    "查排名": {
+        "key": "ranking",
+        "aliases": ["查排名", "每日排名", "推排名", "查坑位", "ranking"],
+        "sections": ["每日排名"],
+        "default_time_piece_type": "latelyDay",
+        "default_time_piece_value": "7",
+        "default_granularity": "week",
+    },
+    "运营时光机": {
+        "key": "operation_time_machine",
+        "aliases": ["运营时光机", "运营流量趋势", "流量变化", "流量词数量变化", "operation-time-machine"],
+        "sections": ["流量变化", "流量词数量变化"],
+        "default_time_piece_type": "latelyDay",
+        "default_time_piece_value": "7",
+        "default_granularity": "day",
+        "default_last_months": 6,
+    },
+    "产品时光机": {
+        "key": "product_time_machine",
+        "aliases": ["产品时光机", "关键词产品时光机", "keyword-product-time-machine"],
+        "sections": ["产品时光机"],
         "default_time_piece_type": "latelyDay",
         "default_time_piece_value": "7",
     },
@@ -82,6 +109,8 @@ class SifServiceManager:
                 "sections": definition["sections"],
                 "default_time_piece_type": definition["default_time_piece_type"],
                 "default_time_piece_value": definition["default_time_piece_value"],
+                **({"default_granularity": definition["default_granularity"]} if definition.get("default_granularity") else {}),
+                **({"default_last_months": definition["default_last_months"]} if definition.get("default_last_months") else {}),
             }
             for feature, definition in FEATURE_SCENARIOS.items()
         ]
@@ -105,7 +134,7 @@ class SifServiceManager:
             )
         else:
             generic_request = _to_generic_request(request, canonical_feature)
-            provider = SifTrafficProvider() if canonical_feature == "查流量" else SifCompareProvider()
+            provider = _provider_for_feature(canonical_feature)
             result = provider.run(
                 generic_request,
                 default_output_dir=default_output_dir_for_feature(feature_key),
@@ -179,6 +208,20 @@ def normalize_feature(value: str) -> str:
     raise SifConfigError(f"不支持的 Sif 功能：{value}；可用功能：{supported}")
 
 
+def _provider_for_feature(feature: str):
+    if feature == "查流量":
+        return SifTrafficProvider()
+    if feature == "多产品对比":
+        return SifCompareProvider()
+    if feature == "查排名":
+        return SifRankingProvider()
+    if feature == "运营时光机":
+        return SifOperationTimeMachineProvider()
+    if feature == "产品时光机":
+        return SifProductTimeMachineProvider()
+    raise SifConfigError(f"不支持的 Sif 功能：{feature}")
+
+
 def _to_sales_request(request: SifRunRequest | SifSalesRunRequest, feature: str) -> SifSalesRunRequest:
     if isinstance(request, SifSalesRunRequest):
         request.feature = feature
@@ -217,8 +260,12 @@ def _to_generic_request(request: SifRunRequest | SifSalesRunRequest, feature: st
         feature=feature,
         asin=request.asin,
         site=normalize_site(request.site),
+        keyword=getattr(request, "keyword", None),
         time_piece_type=request.time_piece_type or "latelyDay",
         time_piece_value=str(request.time_piece_value or "7"),
+        granularity=getattr(request, "granularity", None),
+        last_months=getattr(request, "last_months", None),
+        change_type=getattr(request, "change_type", None),
         sections=request.sections,
         page_num=request.page_num,
         page_size=request.page_size,

@@ -89,16 +89,8 @@ def _validate_date(value: str, name: str) -> None:
 def _parse_response(request: ReviewRequest, response: dict) -> ReviewResult:
     """解析后端响应，构造 ReviewResult。
 
-    后端实际返回结构：
-    {
-        "code": 200,
-        "data": {
-            "asin": "10043986503",
-            "date_range": {"start_date": "...", "end_date": "..."},
-            "summary": { "order_qty": 11, "price": 7598.56, ... },  // 汇总指标
-            "daily_data": [ { "date_id": "...", "orders": 3, ... }, ... ]  // 按日明细
-        }
-    }
+    透传后端 data 层全部字段（summary、daily_data、events 等），
+    仅追加 opscli 自身计算的辅助字段 daily_rows 和 columns。
     """
     result = ReviewResult(request=request.to_dict())
 
@@ -108,24 +100,24 @@ def _parse_response(request: ReviewRequest, response: dict) -> ReviewResult:
         result.errors.append("后端返回数据结构异常：缺少 data 字段或格式不正确")
         return result
 
-    # 直接提取 summary 和 daily_data，透传后端结构
-    summary = data.get("summary")
-    daily_data = data.get("daily_data")
+    # 透传后端 data 层全部字段，不遗漏任何后端返回的内容
+    result.data = dict(data)
 
-    if not isinstance(summary, dict):
+    # 补充 opscli 自身计算的辅助字段
+    daily_data = data.get("daily_data")
+    if isinstance(daily_data, list):
+        result.data["daily_rows"] = len(daily_data)
+        if daily_data:
+            result.data["columns"] = list(daily_data[0].keys())
+    else:
+        result.data["daily_rows"] = 0
+
+    # 对已知的后端字段做基本格式校验，异常时记录 warning 但不阻断
+    if not isinstance(data.get("summary"), dict):
         result.warnings.append("后端返回缺少 summary 汇总数据")
 
-    if not isinstance(daily_data, list):
+    if not isinstance(data.get("daily_data"), list):
         result.warnings.append("后端返回缺少 daily_data 按日明细数据")
-
-    # 将解析后的数据存入 result.data
-    result.data = {
-        "summary": summary,
-        "daily_data": daily_data,
-        "daily_rows": len(daily_data) if isinstance(daily_data, list) else 0,
-    }
-    if isinstance(daily_data, list) and daily_data:
-        result.data["columns"] = list(daily_data[0].keys())
 
     result.success = True
     return result

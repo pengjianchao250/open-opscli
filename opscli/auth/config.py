@@ -8,6 +8,7 @@ auth 模块配置加载器。
 """
 
 import configparser
+import os
 from pathlib import Path
 
 from opscli.config import CONFIG_DIR
@@ -21,9 +22,9 @@ DEFAULTS = {
     "polaris_token_endpoint": "/api/auth/cli-token",
     "amazon_submit_endpoint": "",
     # 控制 polaris 系统是否参与授权请求和 Token 刷新
-    # 默认 false（正式发版中 polaris 暂时不参与）
-    # 需要启用时在 .env 写 OPSCLI_POLARIS_ENABLED=true
-    # 或在 ~/.config/opscli/config.ini [systems] 写入 polaris_enabled = true
+    # 默认启用，asin-data 刊登取数会按当前登录用户的北极星权限请求数据
+    # 如需临时关闭，可在 .env 写 OPSCLI_POLARIS_ENABLED=false
+    # 或在 ~/.config/opscli/config.ini [systems] 写入 polaris_enabled = false
     "polaris_enabled": "true",
 }
 
@@ -113,6 +114,11 @@ def load_config() -> dict:
         for env_name, config_key in _ENV_VAR_MAP.items():
             if env_name in env_vars and env_vars[env_name]:
                 result[config_key] = env_vars[env_name]
+
+    for env_name, config_key in _ENV_VAR_MAP.items():
+        env_value = os.environ.get(env_name, "").strip()
+        if env_value:
+            result[config_key] = env_value
 
     return result
 

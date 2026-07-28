@@ -33,6 +33,7 @@ from opscli.asin_data.services.bi_report_data import (
     normalize_asins,
     rows_for_asin,
 )
+from opscli.asin_data.services.category_top_workbook import write_category_top_workbook
 from opscli.asin_data.services.report_files import _report_files_base_url
 from opscli.mcp.context import get_mcp_request_headers
 from opscli.shared.exceptions import RemoteError
@@ -41,9 +42,10 @@ from opscli.shared.http import parse_remote_response
 
 
 DEFAULT_INTERNAL_CATEGORY_TOP_ENDPOINT = "/dataMetrics/v1/asin-report-files/internal-category-top10"
+DEFAULT_ALL_CATEGORY_TRAFFIC_TOP_ENDPOINT = "/dataMetrics/v1/asin-report-files/all-category-traffic-top10"
 DEFAULT_TIMEOUT = 20
 CATEGORY_TOP_DATA_SCOPE = "internal_category_top"
-CATEGORY_TOP_FILE_KEY = "category_top_json"
+CATEGORY_TOP_FILE_KEY = "category_top_xlsx"
 ENRICH_SOURCE_KEYS = ("listing_basic", "crawler_details")
 DATASET_PREVIEW_LIMITS = {
     "category_top": 10,
@@ -102,6 +104,7 @@ class AsinCategoryTopClient:
         *,
         auth_client: AuthClient | None = None,
         endpoint: str = DEFAULT_INTERNAL_CATEGORY_TOP_ENDPOINT,
+        traffic_endpoint: str = DEFAULT_ALL_CATEGORY_TRAFFIC_TOP_ENDPOINT,
         http_get: Callable[..., httpx.Response] | None = None,
         ops_url: str | None = None,
     ) -> None:
@@ -115,6 +118,7 @@ class AsinCategoryTopClient:
         """
         self.auth_client = auth_client or AuthClient()
         self.endpoint = endpoint
+        self.traffic_endpoint = traffic_endpoint
         self.http_get = http_get or httpx.get
         self.ops_url = _report_files_base_url(ops_url or OPS_URL)
 
@@ -122,6 +126,7 @@ class AsinCategoryTopClient:
         self,
         *,
         category: str,
+        site: str = "US",
         date_from: str | None = None,
         date_to: str | None = None,
         limit: int = 10,
@@ -135,7 +140,11 @@ class AsinCategoryTopClient:
 
         headers, cookies = self.auth_client.build_request_auth("ops")
         headers.update(get_mcp_request_headers())
-        params: dict[str, Any] = {"category": normalized_category, "limit": limit}
+        params: dict[str, Any] = {
+            "category": normalized_category,
+            "site": _normalize_site(site),
+            "limit": limit,
+        }
         if date_from:
             params["date_from"] = date_from
         if date_to:
@@ -164,9 +173,64 @@ class AsinCategoryTopClient:
             "raw": payload,
         }
 
-    def _resolve_endpoint(self) -> str:
+    def fetch_traffic(
+        self,
+        *,
+        category: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, Any]:
+        """Query category traffic Top10 funnel averages, optionally for one category."""
+        normalized_category = str(category or "").strip() or None
+        _validate_date_range(date_from=date_from, date_to=date_to)
+
+        headers, cookies = self.auth_client.build_request_auth("ops")
+        headers.update(get_mcp_request_headers())
+        params: dict[str, Any] = {}
+        if normalized_category:
+            params["category"] = normalized_category
+        if date_from:
+            params["date_from"] = date_from
+        if date_to:
+            params["date_to"] = date_to
+
+        response = self.http_get(
+            self._resolve_endpoint(self.traffic_endpoint),
+            params=params,
+            headers=headers,
+            cookies=cookies,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        payload = parse_remote_response(
+            response,
+            http_error_cls=AsinCategoryTopHttpError,
+            business_error_cls=AsinCategoryTopBusinessError,
+            bad_json_error_cls=AsinCategoryTopBadJsonError,
+        )
+        data = payload.get("data") if isinstance(payload, dict) else None
+        data = data if isinstance(data, dict) else {}
+        raw_rows = data.get("categories")
+        rows = [item for item in raw_rows if isinstance(item, dict)] if isinstance(raw_rows, list) else []
+        category_names = data.get("category_names")
+        return {
+            "status": "success",
+            "endpoint": self.traffic_endpoint,
+            "params": params,
+            "row_count": len(rows),
+            "rows": rows,
+            "metadata": {
+                "category_filter": data.get("category_filter"),
+                "category_total": data.get("category_total"),
+                "category_names": category_names if isinstance(category_names, list) else [],
+                "ranking_metric": data.get("ranking_metric"),
+                "top_n": data.get("top_n"),
+            },
+            "raw": payload,
+        }
+
+    def _resolve_endpoint(self, endpoint: str | None = None) -> str:
         """把相对路径转换为完整 OPS URL。"""
-        text = self.endpoint.strip()
+        text = (endpoint or self.endpoint).strip()
         if text.startswith(("http://", "https://")):
             return text
         if not text.startswith("/"):
@@ -203,7 +267,7 @@ class AsinCategoryTopService:
         enrich: bool = True,
         return_content: bool = False,
     ) -> dict[str, Any]:
-        """查询类目 Top ASIN 并生成一个可上传到 OSS 的 JSON 文件。"""
+        """查询类目 Top ASIN 并生成一个可上传到 OSS 的 Excel 文件。"""
         started_at = time.perf_counter()
         normalized_category = category.strip()
         normalized_site = _normalize_site(site)
@@ -218,22 +282,25 @@ class AsinCategoryTopService:
         top_rows = top_result.get("rows") if isinstance(top_result.get("rows"), list) else []
         asins = _top_asins(top_rows)
         site_by_asin = _site_by_asin(top_rows, default_site=normalized_site)
+        listing_account_type_by_asin = _listing_account_type_by_asin(top_rows)
         enrichment = (
             self._fetch_enrichment(
                 asins=asins,
                 date_from=date_from,
                 date_to=date_to,
                 site_by_asin=site_by_asin,
+                listing_account_type_by_asin=listing_account_type_by_asin,
                 default_site=normalized_site,
             )
             if enrich and asins
             else _empty_enrichment(asins)
         )
 
-        output_path = _document_path(output_dir=output_dir, run_id=normalized_run_id)
+        workbook_path = _workbook_path(output_dir=output_dir, run_id=normalized_run_id)
+        document_path = _document_path(output_dir=output_dir, run_id=normalized_run_id)
         file_info: dict[str, Any] = {
-            "file_path": output_path.as_posix(),
-            "file_name": output_path.name,
+            "file_path": workbook_path.as_posix(),
+            "file_name": workbook_path.name,
         }
         response = _build_ai_ready_document(
             category=normalized_category,
@@ -249,14 +316,14 @@ class AsinCategoryTopService:
             file_info=file_info,
             elapsed_seconds=time.perf_counter() - started_at,
         )
-        _write_document(response, path=output_path)
+        write_category_top_workbook(workbook_path, response)
         if upload:
             upload_result = self._file_upload_client_factory().upload(
-                output_path,
-                purpose="asin_data_category_top_json",
+                workbook_path,
+                purpose="asin_data_category_top_xlsx",
                 folder="asin-data",
                 public="1",
-                filename=output_path.name,
+                filename=workbook_path.name,
                 metadata={
                     "run_id": normalized_run_id,
                     "category": normalized_category,
@@ -271,6 +338,7 @@ class AsinCategoryTopService:
             _attach_file_url(response, file_info)
 
         response["summary"]["file_url"] = file_info.get("file_url")
+        _write_document(response, path=document_path)
         return response if return_content else _compact_response(response)
 
     def _fetch_enrichment(
@@ -280,6 +348,7 @@ class AsinCategoryTopService:
         date_from: str | None,
         date_to: str | None,
         site_by_asin: Mapping[str, str],
+        listing_account_type_by_asin: Mapping[str, int],
         default_site: str,
     ) -> dict[str, dict[str, Any]]:
         """并发查询刊登基础数据和爬虫详情数据。"""
@@ -292,6 +361,7 @@ class AsinCategoryTopService:
                     date_from=date_from,
                     date_to=date_to,
                     site_by_asin=site_by_asin,
+                    listing_account_type_by_asin=listing_account_type_by_asin,
                     default_site=default_site,
                 )
                 for key in ENRICH_SOURCE_KEYS
@@ -306,6 +376,7 @@ class AsinCategoryTopService:
         date_from: str | None,
         date_to: str | None,
         site_by_asin: Mapping[str, str],
+        listing_account_type_by_asin: Mapping[str, int],
         default_site: str,
     ) -> dict[str, Any]:
         """查询单个补充数据源，失败时返回结构化 source 错误而不中断整体文件生成。"""
@@ -316,6 +387,9 @@ class AsinCategoryTopService:
                 end_date=date_to,
                 source_keys=(source_key,),
                 site_by_asin=site_by_asin,
+                listing_account_type_by_asin=(
+                    listing_account_type_by_asin if source_key == "listing_basic" else None
+                ),
                 default_site=default_site,
             )
         except Exception as exc:
@@ -459,14 +533,14 @@ def _artifact(*, file_info: Mapping[str, Any]) -> dict[str, Any]:
     local_path = str(file_info.get("file_path") or "")
     path = Path(local_path) if local_path else None
     return {
-        "artifact_id": "internal_category_top_json",
+        "artifact_id": "internal_category_top_xlsx",
         "file_key": CATEGORY_TOP_FILE_KEY,
-        "type": "json",
+        "type": "xlsx",
         "uri": file_info.get("file_url"),
         "local_path": path.as_posix() if path else "",
         "complete": bool(path),
         "source_filename": path.name if path else "",
-        "report_filename": path.name if path else "internal-category-top-asin-data.json",
+        "report_filename": path.name if path else "internal-category-top-asin-data.xlsx",
     }
 
 
@@ -615,6 +689,11 @@ def _document_path(*, output_dir: str, run_id: str) -> Path:
     return Path(output_dir) / run_id / "internal-category-top-asin-data.json"
 
 
+def _workbook_path(*, output_dir: str, run_id: str) -> Path:
+    """生成类目 Top Excel 文件路径。"""
+    return Path(output_dir) / run_id / "internal-category-top-asin-data.xlsx"
+
+
 def _write_document(document: dict[str, Any], *, path: Path) -> None:
     """将合并后的 JSON 文档写入本地文件。"""
     root = path.parent
@@ -664,6 +743,19 @@ def _site_by_asin(rows: Sequence[dict[str, Any]], *, default_site: str) -> dict[
 def _row_asin(row: Mapping[str, Any]) -> str:
     """兼容中英文字段名提取 ASIN。"""
     return normalize_asin(_first_present(row, "ASIN", "asin", "f_asin", "amazon_asin"))
+
+
+def _listing_account_type_by_asin(rows: Sequence[dict[str, Any]]) -> dict[str, int]:
+    """根据 Top 行渠道判断 listing 查询账号类型，VC 渠道使用 account_type=2。"""
+    result: dict[str, int] = {}
+    for row in rows:
+        asin = _row_asin(row)
+        if not asin:
+            continue
+        channel = str(_first_present(row, "渠道", "channel", "channel_name") or "")
+        if "VC" in channel.upper():
+            result[asin] = 2
+    return result
 
 
 def _infer_site(row: Mapping[str, Any], *, default_site: str) -> str:

@@ -21,7 +21,8 @@ class RufusParserService:
         card_recommendations: dict[str, dict] = {}
         footer_descriptions: dict[str, str] = {}
         thread_id: str | None = None
-        for index, event in enumerate(self._iter_sse_data(raw_text)):
+        events = self._iter_sse_data(raw_text)
+        for index, event in enumerate(events):
             if thread_id is None:
                 thread_id = self._extract_thread_id(event)
             self._collect_json_patch_text_snapshots(event, index, json_patch_text_snapshots_by_group_id)
@@ -52,6 +53,7 @@ class RufusParserService:
         html_text = "".join(html_parts)
         if not text and html_text:
             text = self._html_to_text(html_text)
+        has_done_marker = self._has_done_marker(raw_text)
         return AnswerData(
             text=text,
             html=html_text,
@@ -61,6 +63,10 @@ class RufusParserService:
             blocks=blocks,
             is_success=bool(text or html_text),
             thread_id=thread_id,
+            has_done_marker=has_done_marker,
+            raw_length=len(raw_text or ""),
+            text_length=len(text or ""),
+            event_count=len(events),
         )
 
     def _iter_sse_data(self, raw_text: str) -> list[dict[str, Any]]:
@@ -79,6 +85,13 @@ class RufusParserService:
             if isinstance(value, dict):
                 events.append(value)
         return events
+
+    def _has_done_marker(self, raw_text: str) -> bool:
+        """判断 SSE 是否包含结束标记。"""
+        for line in str(raw_text or "").splitlines():
+            if line.startswith("data:") and line.removeprefix("data:").strip() == "[DONE]":
+                return True
+        return False
 
     def _extract_text(self, event: dict[str, Any]) -> str:
         """从常见 Rufus 字段中提取文本。"""

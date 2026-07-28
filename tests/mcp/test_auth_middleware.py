@@ -98,3 +98,78 @@ def test_remote_verify_uses_short_cache():
     assert first == second
     assert first["user_id"] == "u-1"
     assert route.calls.call_count == 1
+
+
+class _FakeClock:
+    """可控时钟：仅替换 auth_middleware 模块内的 time 名字，隔离对全局 time 的影响。"""
+
+    def __init__(self, start: float = 1000.0):
+        self.now = start
+
+    def time(self) -> float:
+        return self.now
+
+
+@respx.mock
+def test_remote_verify_stale_cache_on_transient_failure(monkeypatch):
+    """回源临时故障（5xx）时，宽限期内应降级复用历史成功结果，避免误判 401。"""
+    from opscli.mcp import auth_middleware
+
+    clock = _FakeClock()
+    monkeypatch.setattr(auth_middleware, "time", clock)
+
+    middleware = ApiKeyAuthMiddleware(
+        _empty_app,
+        auth_verify_url="https://ops.example.com/v1/mcp/verify-key",
+    )
+    route = respx.get("https://ops.example.com/v1/mcp/verify-key")
+
+    # 首次校验成功并写入缓存
+    route.mock(
+        return_value=httpx.Response(
+            200, json={"valid": True, "user_id": "u-1", "email": "user@example.com"}
+        )
+    )
+    first = _run(middleware._verify_remote("mcp_key_1"))
+    assert first["user_id"] == "u-1"
+
+    # 越过新鲜期(60s)、仍在宽限期(300s)内，后端返回 5xx 临时故障 → 降级放行
+    clock.now += 70
+    route.mock(return_value=httpx.Response(503))
+    stale = _run(middleware._verify_remote("mcp_key_1"))
+    assert stale == first
+
+    # 越过宽限期后，临时故障不再降级 → 返回 None
+    clock.now += 300
+    assert _run(middleware._verify_remote("mcp_key_1")) is None
+
+
+@respx.mock
+def test_remote_verify_revoked_key_not_served_from_stale(monkeypatch):
+    """后端明确判定无效(valid=false)属权威结果：清缓存、不走宽限降级。"""
+    from opscli.mcp import auth_middleware
+
+    clock = _FakeClock()
+    monkeypatch.setattr(auth_middleware, "time", clock)
+
+    middleware = ApiKeyAuthMiddleware(
+        _empty_app,
+        auth_verify_url="https://ops.example.com/v1/mcp/verify-key",
+    )
+    route = respx.get("https://ops.example.com/v1/mcp/verify-key")
+
+    route.mock(
+        return_value=httpx.Response(
+            200, json={"valid": True, "user_id": "u-1", "email": "user@example.com"}
+        )
+    )
+    assert _run(middleware._verify_remote("mcp_key_1"))["user_id"] == "u-1"
+
+    # 越过新鲜期后，后端判定 Key 已被吊销 → 权威 None，且清除缓存
+    clock.now += 70
+    route.mock(return_value=httpx.Response(200, json={"valid": False}))
+    assert _run(middleware._verify_remote("mcp_key_1")) is None
+
+    # 缓存已清：即便随后遇到临时故障也不应降级放行
+    route.mock(return_value=httpx.Response(503))
+    assert _run(middleware._verify_remote("mcp_key_1")) is None

@@ -17,27 +17,44 @@ from pathlib import Path
 from .helpers import _err, _get_auth_pair, _get_credential_dir, _ok, _parse_json_arg
 
 
-def _build_auth_client(session_id: str | None = None, jwt: str | None = None):
-    """创建 MCP 隔离凭证感知的 AuthClient。"""
+def _build_auth_client(
+    session_id: str | None = None,
+    jwt: str | None = None,
+    polaris_jwt: str | None = None,
+):
+    """创建 MCP 隔离凭证感知的 AuthClient。
+
+    Args:
+        session_id:  外部传入的 Session ID（缺失某系统 JWT 时用它换取）
+        jwt:         外部传入的 ops JWT（仅当 alias=="ops" 时生效）
+        polaris_jwt: 外部传入的 polaris JWT（仅当 alias=="polaris" 时生效）
+    """
     from opscli.auth import AuthClient
 
     cred_dir = _get_credential_dir()
     base = AuthClient(base_dir=cred_dir) if cred_dir else AuthClient()
-    if not session_id and not jwt:
+    if not session_id and not jwt and not polaris_jwt:
         return base
 
     class _ProvidedAuthClient:
         """让仅传 session_id/jwt 的 MCP 调用也能复用现有 HTTP 客户端。"""
 
         def build_request_auth(self, alias: str) -> tuple[dict[str, str], dict[str, str]]:
-            token = jwt
-            if not token and session_id:
+            # 按 alias 选对应系统的显式 JWT：ops→jwt、polaris→polaris_jwt；
+            # 未显式提供时用 session_id 向该系统换取（不落盘）
+            token = jwt if alias == "ops" else (polaris_jwt if alias == "polaris" else None)
+            if session_id and not token:
                 token = base.get_token_by_session(session_id, alias)
             if token:
                 headers = {"Authorization": f"Bearer {token}"}
                 cookies = {"polarisUserToken": session_id} if session_id else {}
                 return headers, cookies
             return base.build_request_auth(alias)
+
+        def refresh_token(self, alias: str) -> str:
+            if session_id:
+                return base.get_token_by_session(session_id, alias)
+            return base.refresh_token(alias)
 
         def get_session(self, alias: str | None = None) -> str:
             if session_id:
@@ -99,12 +116,13 @@ async def asin_data_live_data(
     query_chunk_size: int = 100,
     session_id: str | None = None,
     jwt: str | None = None,
+    polaris_jwt: str | None = None,
 ) -> dict:
     """实时获取 ASIN 基础数据和/或 BI 数据。
 
     Args:
         asin: 单个 ASIN；与 input_path 二选一。
-        site: 站点，默认 US。
+        site: 站点，默认 US，同时作为 crawler-details 的 country 默认值。
         data_scope: 数据范围，支持 all/basic/bi/listing/listing_basic。
         sales_start: BI 销售开始日期，格式 YYYY-MM-DD。
         sales_end: BI 销售结束日期，格式 YYYY-MM-DD。
@@ -120,6 +138,7 @@ async def asin_data_live_data(
         query_chunk_size: 每批 ASIN 数。
         session_id: 可选 OAuth session_id；为空则读取 MCP 隔离凭证。
         jwt: 可选 OPS JWT；为空则读取 MCP 隔离凭证。
+        polaris_jwt: 可选 polaris JWT；为空则用 session_id 向 polaris 换取。
     """
     call_params = {
         "asin": asin,
@@ -148,7 +167,7 @@ async def asin_data_live_data(
 
         slot = await acquire_asin_data_slot()
         sid, jw = _get_auth_pair("ops", session_id, jwt)
-        auth_client = _build_auth_client(sid, jw)
+        auth_client = _build_auth_client(sid, jw, polaris_jwt)
 
         from opscli.asin_data.services.bi_report_data import AsinBiReportDataClient
         from opscli.asin_data.services.collector import AsinDataCollector
@@ -232,6 +251,7 @@ async def asin_data_category_top(
     run_id: str | None = None,
     session_id: str | None = None,
     jwt: str | None = None,
+    polaris_jwt: str | None = None,
 ) -> dict:
     """查询内部类目 Top ASIN，并合并刊登基础数据和爬虫详情为单个 OSS JSON 文件。
 
@@ -240,7 +260,7 @@ async def asin_data_category_top(
         date_from: 起始日期 YYYY-MM-DD；为空时由后端使用当月 1 日。
         date_to: 截止日期 YYYY-MM-DD；为空时由后端使用当天。
         limit: 返回 Top 数量，范围 1-100。
-        site: 无法从渠道推断站点时使用的默认站点。
+        site: 无法从渠道推断站点时使用的默认站点，同时作为 crawler-details 的 country。
         upload: 是否上传合并后的 JSON 文件到 OSS。
         enrich: 是否补充查询刊登基础数据和爬虫详情数据。
         return_content: 是否在 MCP 响应中返回完整文件内容；默认 false，避免大响应拖慢工具。
@@ -248,6 +268,7 @@ async def asin_data_category_top(
         run_id: 可选运行 ID。
         session_id: 可选 OAuth session_id；为空则读取 MCP 隔离凭证。
         jwt: 可选 OPS JWT；为空则读取 MCP 隔离凭证。
+        polaris_jwt: 可选 polaris JWT；为空则用 session_id 向 polaris 换取。
     """
     call_params = {
         "category": category,
@@ -263,7 +284,7 @@ async def asin_data_category_top(
     }
     try:
         sid, jw = _get_auth_pair("ops", session_id, jwt)
-        auth_client = _build_auth_client(sid, jw)
+        auth_client = _build_auth_client(sid, jw, polaris_jwt)
 
         from opscli.asin_data.services.bi_report_data import AsinBiReportDataClient
         from opscli.asin_data.services.category_top import AsinCategoryTopClient, AsinCategoryTopService
@@ -408,6 +429,7 @@ async def asin_data_fetch_file(
     site: str = "US",
     session_id: str | None = None,
     jwt: str | None = None,
+    polaris_jwt: str | None = None,
 ) -> dict:
     """读取历史 ASIN 拆包文件并返回内容。
 
@@ -417,12 +439,13 @@ async def asin_data_fetch_file(
         site: 站点，默认 US。
         session_id: 可选 OAuth session_id；为空则读取 MCP 隔离凭证。
         jwt: 可选 OPS JWT；为空则读取 MCP 隔离凭证。
+        polaris_jwt: 可选 polaris JWT；为空则用 session_id 向 polaris 换取。
     """
     call_params = {"asin": asin, "site": site, "file_key": file_key}
     started = time.perf_counter()
     try:
         sid, jw = _get_auth_pair("ops", session_id, jwt)
-        auth_client = _build_auth_client(sid, jw)
+        auth_client = _build_auth_client(sid, jw, polaris_jwt)
 
         from opscli.asin_data.services.live_data import fetch_split_file
         from opscli.asin_data.services.report_files import AsinReportFileClient
@@ -475,12 +498,13 @@ async def asin_data_report_url(
     report_type: str | None = None,
     session_id: str | None = None,
     jwt: str | None = None,
+    polaris_jwt: str | None = None,
 ) -> dict:
     """查询历史 ASIN 报告文件 URL。"""
     call_params = {"asin": asin, "site": site, "report_type": report_type}
     try:
         sid, jw = _get_auth_pair("ops", session_id, jwt)
-        auth_client = _build_auth_client(sid, jw)
+        auth_client = _build_auth_client(sid, jw, polaris_jwt)
 
         from opscli.asin_data.services.report_files import AsinReportFileClient, AsinReportFileNotFoundError
 

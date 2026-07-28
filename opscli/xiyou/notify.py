@@ -1,4 +1,4 @@
-"""西柚补登通知。"""
+"""Xiyou token expiry notifications."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import yaml
 
 from opscli.xiyou.config import XiyouSettings, load_settings
 from opscli.xiyou.credentials import decode_jwt_payload
@@ -19,11 +18,13 @@ from opscli.xiyou.credentials import decode_jwt_payload
 
 DEFAULT_DEDUPE_MINUTES = 5
 TOKEN_INVALID_CODES = {"TokenInvalid", "TokenExpired", "TokenFreeTrialExpired"}
+DEFAULT_NOTIFY_WEBHOOK_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=397e7465-06ab-4a65-8844-22822e3ac0bb"
+DEFAULT_NOTIFY_MENTIONED_MOBILE_LIST = ()
 
 
 @dataclass(frozen=True)
 class XiyouNotifyConfig:
-    """西柚补登通知配置。"""
+    """Built-in notification config for Xiyou auth failures."""
 
     path: Path
     webhook_url: str | None = None
@@ -32,7 +33,7 @@ class XiyouNotifyConfig:
     mention_all: bool = False
     quick_login_url: str | None = None
     dedupe_minutes: int = DEFAULT_DEDUPE_MINUTES
-    source: str = "local"
+    source: str = "builtin"
 
     @property
     def enabled(self) -> bool:
@@ -40,36 +41,18 @@ class XiyouNotifyConfig:
 
     @property
     def state_path(self) -> Path:
-        return self.path.with_name("notify_state.json")
+        return self.path / "notify_state.json"
 
 
 def load_notify_config(settings: XiyouSettings | None = None) -> XiyouNotifyConfig:
-    """读取西柚登录超期企微通知配置。"""
+    """Return the built-in notification config."""
     active_settings = settings or load_settings()
-    return _load_local_notify_config(active_settings)
-
-
-def _load_local_notify_config(active_settings: XiyouSettings) -> XiyouNotifyConfig:
-    """读取 ~/.config/opscli/xiyou/notify.yaml。"""
-    path = active_settings.notify_path.expanduser()
-    payload = _read_yaml(path)
-    wechat = payload.get("wechat_work") if isinstance(payload.get("wechat_work"), dict) else {}
-    mentions = payload.get("mentions") if isinstance(payload.get("mentions"), dict) else {}
-    webhook_url = _optional_str(wechat.get("webhook_url") or payload.get("webhook_url"))
-    quick_login_url = _optional_str(payload.get("quick_login_url") or payload.get("admin_login_url"))
-    dedupe_minutes = _positive_int(payload.get("dedupe_minutes"), DEFAULT_DEDUPE_MINUTES)
-    mentioned_list = _string_tuple(mentions.get("mentioned_list"))
-    if mentions.get("mention_all"):
-        mentioned_list = (*mentioned_list, "@all")
     return XiyouNotifyConfig(
-        path=path,
-        webhook_url=webhook_url,
-        mentioned_list=mentioned_list,
-        mentioned_mobile_list=_string_tuple(mentions.get("mentioned_mobile_list")),
-        mention_all=bool(mentions.get("mention_all")),
-        quick_login_url=quick_login_url,
-        dedupe_minutes=dedupe_minutes,
-        source="local",
+        path=active_settings.credential_path.expanduser().parent,
+        webhook_url=DEFAULT_NOTIFY_WEBHOOK_URL,
+        mentioned_mobile_list=DEFAULT_NOTIFY_MENTIONED_MOBILE_LIST,
+        dedupe_minutes=DEFAULT_DEDUPE_MINUTES,
+        source="builtin",
     )
 
 
@@ -84,7 +67,7 @@ def notify_token_required(
     http_post: Any | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    """发送 token 失效/即将过期通知，带 5 分钟去重。"""
+    """Send a token-expiry notification with dedupe protection."""
     active_settings = settings or load_settings()
     config = load_notify_config(active_settings)
     if not config.enabled:
@@ -108,14 +91,13 @@ def notify_token_required(
     return {"sent": True, "dedupe_key": dedupe_key}
 
 
-
 def _send_wecom(
     config: XiyouNotifyConfig,
     payload: dict[str, Any],
     *,
     http_post: Any | None = None,
 ) -> dict[str, Any]:
-    """发送企微机器人消息，并识别 HTTP 200 但 errcode 非 0 的失败。"""
+    """Send to WeCom and normalize common error shapes."""
     try:
         post = http_post or httpx.post
         response = post(config.webhook_url, json=payload, timeout=5.0)
@@ -140,7 +122,7 @@ def _send_wecom(
 
 
 def is_token_invalid_signal(status_code: int | None, business_code: Any) -> bool:
-    """判断响应是否属于西柚 token 失效信号。"""
+    """Return whether the response indicates an invalid Xiyou token."""
     return status_code == 401 or str(business_code or "") in TOKEN_INVALID_CODES
 
 
@@ -216,13 +198,6 @@ def _write_state(path: Path, payload: dict[str, Any]) -> None:
             pass
 
 
-def _read_yaml(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return payload if isinstance(payload, dict) else {}
-
-
 def _dedupe_key(reason: str, status_code: int | None, business_code: str | None) -> str:
     if reason == "jwt_expired" or is_token_invalid_signal(status_code, business_code):
         return "token_required"
@@ -240,28 +215,3 @@ def _current_expires_at(active_settings: XiyouSettings) -> str | None:
     except Exception:
         return None
     return None
-
-
-def _string_tuple(value: Any) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, str):
-        return (value.strip(),) if value.strip() else ()
-    if isinstance(value, list):
-        return tuple(str(item).strip() for item in value if str(item).strip())
-    return ()
-
-
-def _optional_str(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _positive_int(value: Any, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return parsed if parsed > 0 else default

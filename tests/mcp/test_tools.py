@@ -6,7 +6,7 @@ import respx
 from fastmcp import Client
 
 from opscli.mcp.server import mcp
-from opscli.mcp.tools.auth import auth_login_poll
+from opscli.mcp.tools.auth import auth_login_poll, auth_me
 
 
 def _run(coro):
@@ -35,9 +35,12 @@ def test_mcp_exposes_expected_tools():
     assert len(names) >= 21
     assert "auth_mcp_login" in names
     assert "auth_token_refresh" in names
+    assert "auth_me" in names
     assert "skills_install" in names
     assert "query_simple" in names
     assert "query_chart" in names
+    assert "dashboard_data_analysis_spec_must_read" in names
+    assert "dashboard_ai_bridge_spec_must_read" in names
     assert "mcp_user_list" not in names
 
 
@@ -130,3 +133,34 @@ def test_auth_login_poll_pending_returns_without_saving(monkeypatch):
 
     assert result["success"] is True
     assert result["data"]["status"] == "pending"
+
+
+@respx.mock
+def test_auth_me_returns_user_info_with_explicit_jwt():
+    """显式传 session_id + ops jwt 时，auth_me 应携带该 JWT 调 /me 并返回用户信息。"""
+    route = respx.get(url__regex=r".*/api/v1/auth/me$").mock(
+        return_value=httpx.Response(200, json={"data": {"email": "mcp@example.com"}})
+    )
+    result = _run(auth_me(session_id="sid", jwt="ops-jwt"))
+    assert result["success"] is True
+    assert result["data"]["data"]["email"] == "mcp@example.com"
+    assert route.called
+    assert route.calls.last.request.headers["Authorization"] == "Bearer ops-jwt"
+
+
+@respx.mock
+def test_auth_me_exchanges_via_session_when_jwt_missing(monkeypatch):
+    """仅传 session_id 时，auth_me 应先经 cli-token 换取 JWT，再调 /me。"""
+    # 隔离本地凭证：强制未提供 jwt 时不读本机缓存，走 session 换取路径（铁律8）
+    monkeypatch.setattr("opscli.mcp.tools.helpers._get_jwt", lambda *a, **k: None)
+    token_route = respx.post(url__regex=r".*/api/v1/auth/cli-token$").mock(
+        return_value=httpx.Response(200, json={"jwt": "exchanged-jwt"})
+    )
+    me_route = respx.get(url__regex=r".*/api/v1/auth/me$").mock(
+        return_value=httpx.Response(200, json={"data": {"email": "mcp@example.com"}})
+    )
+    result = _run(auth_me(session_id="sid-only"))
+    assert result["success"] is True
+    assert token_route.called
+    assert me_route.called
+    assert me_route.calls.last.request.headers["Authorization"] == "Bearer exchanged-jwt"

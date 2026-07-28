@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import typer
 
 from opscli.query.domain.exceptions import InvalidPayloadError, QueryError
 from opscli.query.services.manager import QueryManager
+from opscli.query.services.planner import run_flow, run_plan
 
 app = typer.Typer(help="数据查询入口，统一转发远端查询请求")
+
+# 结果落盘后 stdout 保留的预览行数，避免大结果集撑爆 AI 上下文
+RESULT_PREVIEW_ROWS = 10
 
 
 def _emit(payload: dict, pretty: bool) -> None:
@@ -20,6 +26,117 @@ def _emit(payload: dict, pretty: bool) -> None:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         typer.echo(json.dumps(payload, ensure_ascii=False))
+
+
+def _extract_result_rows(data: dict) -> tuple[list, int | None, int | None]:
+    """从查询结果 data 中提取行列表、本次返回行数与服务端总行数。
+
+    兼容三种返回形态：
+    - cli_query（run / build --run）：行在 rows，行数在 meta.rowCount
+    - cli_simple_query（simple --run）：行在 result.data，行数在 result.meta.rowCount，
+      总数在 result.meta.totalCount（分页场景总数会大于返回行数，两者必须区分披露）
+    - chart --run：合并行在 merged.rows
+
+    返回 (行列表, 返回行数, 总行数)；提不到行时返回 ([], None, None)，如 dry_run 场景。
+    """
+    if not isinstance(data, dict):
+        return [], None, None
+
+    def _get_path(node: dict, path: tuple[str, ...]):
+        """按路径逐层取值，任一层缺失返回 None。"""
+        current: object = node
+        for key in path:
+            if not isinstance(current, dict):
+                return None
+            current = current.get(key)
+        return current
+
+    # 嵌套路径必须优先于顶层键：run 的顶层 data 是 dict（manager 结果），
+    # 若先查顶层 ("data",) 会误命中非行数据
+    row_paths: tuple[tuple[str, ...], ...] = (
+        ("merged", "rows"),
+        ("result", "rows"),
+        ("result", "data"),
+        ("rows",),
+        ("data",),
+    )
+    rows: list = []
+    for path in row_paths:
+        candidate = _get_path(data, path)
+        # 只有命中 list 才采纳，避免同名 dict 字段误判
+        if isinstance(candidate, list):
+            rows = candidate
+            break
+
+    # 返回行数取各层 meta.rowCount（服务端口径的本次返回行数），回退实际行数；
+    # 总行数取各层 meta.totalCount（分页场景为匹配总数，可能大于返回行数），两者分开披露
+    row_count_paths: tuple[tuple[str, ...], ...] = (
+        ("merged", "meta", "rowCount"),
+        ("result", "meta", "rowCount"),
+        ("meta", "rowCount"),
+    )
+    total_count_paths: tuple[tuple[str, ...], ...] = (
+        ("merged", "meta", "totalCount"),
+        ("result", "meta", "totalCount"),
+        ("meta", "totalCount"),
+    )
+    row_count: int | None = None
+    for path in row_count_paths:
+        candidate = _get_path(data, path)
+        if isinstance(candidate, int):
+            row_count = candidate
+            break
+    if row_count is None and rows:
+        row_count = len(rows)
+    total_count: int | None = None
+    for path in total_count_paths:
+        candidate = _get_path(data, path)
+        if isinstance(candidate, int):
+            total_count = candidate
+            break
+    return rows, row_count, total_count
+
+
+def _maybe_save_result(payload: dict, *, result_file: str | None, save_result: bool) -> dict:
+    """按需将查询结果落盘为 JSON 文件，并返回瘦身后的输出包裹体。
+
+    两个开关均未启用时原样返回（保持既有 stdout 行为不变）；
+    --result-file 优先于 --save-result 的默认临时路径。
+    写文件失败（OSError）时异常向上抛出，走统一错误输出，不静默降级。
+    """
+    if not result_file and not save_result:
+        return payload
+
+    if result_file:
+        target = Path(result_file).expanduser()
+    else:
+        # 默认临时路径：系统临时目录下 opscli 专属子目录，文件名带微秒时间戳避免覆盖
+        target = (
+            Path(tempfile.gettempdir())
+            / "opscli"
+            / "query_results"
+            / f"query_result_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.json"
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # 落盘完整的标准输出包裹体，文件自包含
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    rows, row_count, total_count = _extract_result_rows(payload.get("data") or {})
+    return {
+        "success": payload.get("success"),
+        "command": payload.get("command"),
+        "data": {
+            "result_file": str(target),
+            "row_count": row_count,
+            "total_count": total_count,
+            "preview_rows": rows[:RESULT_PREVIEW_ROWS],
+            "hint": (
+                f"完整结果已保存到 result_file，preview_rows 仅为前 {RESULT_PREVIEW_ROWS} 行预览；"
+                "row_count 为本次返回并落盘的行数，total_count 为服务端匹配总行数（分页场景可能大于 row_count）"
+            ),
+        },
+        "error": payload.get("error"),
+    }
 
 
 def _error_payload(command: str, exc: Exception) -> dict:
@@ -37,6 +154,115 @@ def _error_payload(command: str, exc: Exception) -> dict:
         "data": None,
         "error": error,
     }
+
+
+def _current_email() -> str:
+    """读取当前登录账号邮箱（规划器缓存隔离维度）；未登录时抛出可读错误。"""
+    from opscli.auth.storage.credential_store import CredentialStore
+
+    data = CredentialStore().load()
+    email = (data or {}).get("email")
+    if not email:
+        raise QueryError("未检测到登录账号，请先执行 opscli auth login 登录后重试")
+    return str(email)
+
+
+def _resolve_request(request: str, query_file: str | None) -> str:
+    """解析查询原文：优先读 --query-file（含特殊字符时用），否则用位置参数。"""
+    if query_file:
+        text = Path(query_file).expanduser().read_text(encoding="utf-8").strip()
+    else:
+        text = (request or "").strip()
+    if not text:
+        raise InvalidPayloadError("缺少查询原文：作为位置参数传入，或用 --query-file <文件> 传入")
+    return text
+
+
+@app.command("plan")
+def plan(
+    request: str = typer.Argument("", help="自然语言查询原文"),
+    query_file: str | None = typer.Option(None, "--query-file", help="从 UTF-8 文件读取查询原文（含特殊字符时用）"),
+    field: list[str] | None = typer.Option(None, "--field", help="补充点名字段，可重复"),
+    top_n: int | None = typer.Option(None, "--top-n", help="选表候选上限"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """自然语言请求 → 规划合同（只规划不执行，输出 query_plan_model_contract_v2）。"""
+    try:
+        text = _resolve_request(request, query_file)
+        email = _current_email()
+        contract = run_plan(
+            text, user_email=email, requested_fields=field or [], top_n=top_n
+        )
+        payload = {
+            "success": True,
+            "command": "query plan",
+            "data": contract,
+            "error": None,
+        }
+    except Exception as exc:
+        _emit(_error_payload("query plan", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
+def _parse_flow_order_by(order_by: list[str]) -> list[dict]:
+    """解析 --order-by "<结果字段>[:asc|desc]" → [{"field": <字段>, "desc": bool}]。
+
+    与后端 SimpleQueryBuilder.buildOrderBy 期望的 {field, desc} 形态一致。
+    字段即 query_template 的结果列 alias（默认等于 field_name）。
+    """
+    result: list[dict] = []
+    for item in order_by or []:
+        parts = str(item).split(":", 1)
+        field = parts[0].strip()
+        if not field:
+            raise InvalidPayloadError("--order-by 缺少字段名，格式：<结果字段>[:asc|desc]")
+        desc = False
+        if len(parts) == 2:
+            direction = parts[1].strip().lower()
+            if direction not in ("asc", "desc"):
+                raise InvalidPayloadError(f"--order-by 方向只能是 asc|desc，收到 {parts[1]!r}")
+            desc = direction == "desc"
+        result.append({"field": field, "desc": desc})
+    return result
+
+
+@app.command("flow")
+def flow(
+    request: str = typer.Argument("", help="自然语言查询原文"),
+    query_file: str | None = typer.Option(None, "--query-file", help="从 UTF-8 文件读取查询原文（含特殊字符时用）"),
+    field: list[str] | None = typer.Option(None, "--field", help="补充点名字段，可重复"),
+    limit: int | None = typer.Option(None, "--limit", help="返回行数上限（不传则用后端默认 20）"),
+    order_by: list[str] | None = typer.Option(None, "--order-by", help="排序：<结果字段>[:asc|desc]，可重复"),
+    offset: int | None = typer.Option(None, "--offset", help="分页偏移（不传则后端默认 0）"),
+    result_dir: str | None = typer.Option(None, "--result-dir", help="结果落盘目录（能力延后，当前忽略）"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """一体化：规划 + planned 时执行一次取数（输出合同 + 结果）。"""
+    try:
+        text = _resolve_request(request, query_file)
+        email = _current_email()
+        contract = run_flow(
+            text,
+            user_email=email,
+            requested_fields=field or [],
+            limit=limit,
+            order_by=_parse_flow_order_by(order_by or []),
+            offset=offset,
+            result_dir=Path(result_dir).expanduser() if result_dir else None,
+        )
+        payload = {
+            "success": True,
+            "command": "query flow",
+            "data": contract,
+            "error": None,
+        }
+    except Exception as exc:
+        _emit(_error_payload("query flow", exc), pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
 
 
 @app.command("preferences")
@@ -65,11 +291,38 @@ def metadata(
     dataset: str | None = typer.Option(None, "--dataset", help="dataset_alias"),
     table_id: int | None = typer.Option(None, "--table-id", help="table_id"),
     skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 目录"),
+    all_fields: bool = typer.Option(
+        False, "--all-fields",
+        help="拉取全部数据集全部字段（全量元数据 include_all_fields，经用户级缓存；忽略 --dataset/--table-id）",
+    ),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """读取指定数据集的 query metadata，不传任何参数时默认获取所有数据集"""
     manager = QueryManager()
     try:
+        # 全量元数据：一次返回全部授权数据集的全部字段（诊断后端 include_all_fields 支持）
+        if all_fields:
+            email = _current_email()
+            result = manager.metadata_all(user_email=email)
+            datasets = result.payload.get("datasets") or []
+            fields = result.payload.get("fields") or []
+            payload = {
+                "success": True,
+                "command": "query metadata --all-fields",
+                "data": {
+                    "datasets": datasets,
+                    "fields": fields,
+                    "dataset_count": len(datasets),
+                    "field_count": len(fields),
+                    "stale": result.stale,
+                    "from_cache": result.from_cache,
+                },
+                "error": None,
+            }
+            if not fields:
+                payload["hint"] = "field_count=0：当前后端未返回全量字段，可能是取数后端未上线 include_all_fields（Phase 0）"
+            _emit(payload, pretty)
+            return
         result = manager.metadata(dataset_alias=dataset, table_id=table_id, skills_dir=skills_dir)
         payload = {
             "success": True,
@@ -92,7 +345,8 @@ def metadata(
     _emit(payload, pretty)
 
 
-@app.command("catalog")
+# 【临时屏蔽】catalog 命令暂停对外暴露，恢复时取消下一行注释即可
+# @app.command("catalog")
 def catalog(
     source: str = typer.Option("remote", "--source", help="数据来源: remote 或 local"),
     fallback_local: bool = typer.Option(True, "--fallback-local/--no-fallback-local", help="远端失败时回退本地缓存"),
@@ -120,7 +374,8 @@ def catalog(
     _emit(payload, pretty)
 
 
-@app.command("intent")
+# 【临时屏蔽】intent 命令暂停对外暴露，恢复时取消下一行注释即可
+# @app.command("intent")
 def intent(
     query: str = typer.Option(..., "--query", "-q", help="自然语言查询需求"),
     source: str = typer.Option("remote", "--source", help="数据来源: remote 或 local"),
@@ -153,10 +408,13 @@ def intent(
 @app.command("run")
 def run(
     payload_path: str = typer.Option(..., "--payload", help="查询 JSON 文件路径"),
+    timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
+    result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，stdout 仅输出预览"),
+    save_result: bool = typer.Option(False, "--save-result", help="将查询结果保存到默认临时路径，stdout 仅输出预览"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """执行查询并转发到服务端 cli-query。"""
-    manager = QueryManager()
+    manager = QueryManager(timeout=timeout)
     try:
         result = manager.run(payload_path=payload_path)
         payload = {
@@ -165,6 +423,7 @@ def run(
             "data": result,
             "error": None,
         }
+        payload = _maybe_save_result(payload, result_file=result_file, save_result=save_result)
     except Exception as exc:
         _emit(_error_payload("query run", exc), pretty)
         raise typer.Exit(1)
@@ -177,10 +436,13 @@ def chart(
     uuid: str = typer.Option(..., "--uuid", help="图表 UUID（chart_uuid）"),
     run: bool = typer.Option(False, "--run", help="获取后立即执行所有查询并合并输出"),
     dry_run: bool = typer.Option(False, "--dry-run", help="仅生成 SQL，不执行查询"),
+    timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
+    result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，仅与 --run 同用生效"),
+    save_result: bool = typer.Option(False, "--save-result", help="将查询结果保存到默认临时路径，仅与 --run 同用生效"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """通过 chart_uuid 获取图表查询结构，可选立即执行。"""
-    manager = QueryManager()
+    manager = QueryManager(timeout=timeout)
     try:
         if run or dry_run:
             result = manager.run_chart_queries(chart_uuid=uuid, dry_run=dry_run)
@@ -190,6 +452,7 @@ def chart(
                 "data": result,
                 "error": None,
             }
+            payload = _maybe_save_result(payload, result_file=result_file, save_result=save_result)
         else:
             chart_bundle = manager.fetch_chart_bundle(uuid)
             payload = {
@@ -265,11 +528,14 @@ def build(
         help="数据对比：field,start_date,end_date（例: date_id,2026-03-01,2026-03-22）",
     ),
     run: bool = typer.Option(False, "--run", help="构造后立即执行查询"),
+    timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
+    result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，仅与 --run 同用生效"),
+    save_result: bool = typer.Option(False, "--save-result", help="将查询结果保存到默认临时路径，仅与 --run 同用生效"),
     skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定 Skill 目录"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """基于简化参数构造标准 query payload。"""
-    manager = QueryManager()
+    manager = QueryManager(timeout=timeout)
     try:
         common_kwargs = {
             "dataset_alias": dataset,
@@ -295,6 +561,9 @@ def build(
             "data": result,
             "error": None,
         }
+        # 仅执行查询时才有结果可落盘，纯构造 payload 时忽略保存参数
+        if run:
+            payload = _maybe_save_result(payload, result_file=result_file, save_result=save_result)
     except Exception as exc:
         _emit(_error_payload("query build-and-run" if run else "query build", exc), pretty)
         raise typer.Exit(1)
@@ -310,10 +579,13 @@ def simple(
     payload_json: str | None = typer.Option(None, "--json", help="简化查询 JSON 字符串（与 --payload 二选一）"),
     output: str | None = typer.Option(None, "--output", help="将 payload 写入指定文件"),
     run: bool = typer.Option(False, "--run", help="构造后立即执行查询"),
+    timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
+    result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，仅与 --run 同用生效"),
+    save_result: bool = typer.Option(False, "--save-result", help="将查询结果保存到默认临时路径，仅与 --run 同用生效"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """基于简化参数构造 simple query payload 并可选执行。"""
-    manager = QueryManager()
+    manager = QueryManager(timeout=timeout)
     try:
         if payload_file and payload_json:
             raise InvalidPayloadError("--payload 和 --json 只能使用一种")
@@ -376,6 +648,9 @@ def simple(
             "data": result,
             "error": None,
         }
+        # 仅执行查询时才有结果可落盘，纯构造 payload 时忽略保存参数
+        if run:
+            payload = _maybe_save_result(payload, result_file=result_file, save_result=save_result)
     except Exception as exc:
         _emit(_error_payload("query simple-run" if run else "query simple", exc), pretty)
         raise typer.Exit(1)

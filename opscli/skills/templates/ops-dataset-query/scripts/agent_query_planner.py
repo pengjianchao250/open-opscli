@@ -13,6 +13,7 @@ import json
 import re
 from pathlib import Path
 
+import field_semantics
 import scoped_metadata_index
 import typed_schema_linking as schema
 
@@ -37,6 +38,7 @@ MAX_OUTPUT_BYTES = 6000
 MAX_TEXT_LENGTH = schema.MAX_TEXT_LENGTH
 FIELD_TERM_KEYS = schema.FIELD_TERM_KEYS
 ALIAS_REFERENCE_RE = schema.ALIAS_REFERENCE_RE
+DEFAULT_DATASET_DISPLAY_NAME = "即时综合数据集"
 TECHNICAL_DATASET_NAME_RE = re.compile(
     r"(?<![a-z0-9_])(?:custom_[a-z0-9_]+|[a-z0-9][a-z0-9_]*_set)(?![a-z0-9_])",
     re.IGNORECASE,
@@ -63,6 +65,13 @@ PERMISSION_ENUM_TERMS = (
     "权限值",
     "enumerate",
     "enum",
+)
+DEFAULT_DATASET_REJECTION_TERMS = (
+    "不使用即时综合数据集",
+    "不要使用即时综合数据集",
+    "不要用即时综合数据集",
+    "不用即时综合数据集",
+    "排除即时综合数据集",
 )
 
 
@@ -216,17 +225,49 @@ def _description_candidate_profiles(
     ]
 
 
-def _description_candidates_cover_platform(
+def _semantic_query_without_candidate_identity(
+    query: str,
     candidates: list[dict],
     profiles: list[dict],
+) -> str:
+    """遮蔽精确命中的数据集身份与完整字段标签，再抽取业务槽位。
+
+    名称或字段中的 ``VC`` / ``Walmart`` 是身份文本，不等于用户额外提出
+    平台筛选。只遮蔽完整片段，因此名称外另写的“只看 Walmart”仍会保留。
+    """
+    selected = _description_candidate_profiles(candidates, profiles)
+    terms = []
+    for profile in selected:
+        card = profile["card"]
+        terms.extend(
+            str(card.get(key, ""))
+            for key in ("dataset_alias", "dataset_name", "description")
+        )
+        terms.extend(
+            str(term)
+            for key in FIELD_TERM_KEYS
+            for term in card.get(key, [])
+        )
+    masked = query
+    for term in sorted({_normalize(item) for item in terms if item}, key=len, reverse=True):
+        if term:
+            masked = masked.replace(term, " " * len(term))
+    return masked
+
+
+def _description_candidates_cover_constraints(
+    candidates: list[dict],
+    profiles: list[dict],
+    domains: set[str],
     slots: dict[str, set[str]],
     rules: dict,
 ) -> bool:
     return all(
-        all(
+        domains.issubset(profile["domains"])
+        and all(
             _slot_is_covered(profile, name, values, rules)
             for name, values in slots.items()
-            if name == "platform"
+            if name != "platform"
         )
         for profile in _description_candidate_profiles(candidates, profiles)
     )
@@ -273,16 +314,29 @@ def _query_tokens(query: str, matched_terms: set[str]) -> list[str]:
             if token.endswith(suffix):
                 token = token[: -len(suffix)]
                 break
-        if (
-            len(token) < 2
-            or token.isdigit()
-            or token in STOP_TOKENS
-            or token in seen
-            or any(term in token or token in term for term in matched_terms)
-        ):
-            continue
-        seen.add(token)
-        tokens.append(token)
+        # 连续中文不能因包含一个命中词就整段删除：“查即时销售额”扣除
+        # “销售额”后仍应保留“即时”，作为即时综合表的独立证据。
+        residuals = [token]
+        if not token.isascii():
+            remainder = token
+            for term in sorted({_normalize(item) for item in matched_terms}, key=len, reverse=True):
+                if term and not term.isascii():
+                    remainder = remainder.replace(term, " ")
+            residuals = remainder.split()
+        for residual in residuals:
+            if (
+                len(residual) < 2
+                or residual.isdigit()
+                or residual in STOP_TOKENS
+                or residual in seen
+                or (
+                    residual.isascii()
+                    and any(residual == _normalize(term) for term in matched_terms)
+                )
+            ):
+                continue
+            seen.add(residual)
+            tokens.append(residual)
     return tokens
 
 
@@ -316,6 +370,96 @@ def _covers(profile: dict, domains: set[str], slots: dict[str, set[str]], rules:
     return all(
         _slot_is_covered(profile, name, values, rules) for name, values in slots.items()
     )
+
+
+def _is_default_dataset_profile(profile: dict) -> bool:
+    target = _normalize(DEFAULT_DATASET_DISPLAY_NAME)
+    card = profile["card"]
+    return card["dataset_category"] == "normal" and target in {
+        _normalize(card.get("dataset_name")),
+        _normalize(card.get("description")),
+    }
+
+
+def _default_dataset_candidate(
+    profiles: list[dict],
+    domains: set[str],
+    slots: dict[str, set[str]],
+    metrics: list[str],
+    rules: dict,
+) -> dict | None:
+    """返回唯一、已授权且覆盖当前明确语义的即时综合数据集候选。"""
+    matches = [profile for profile in profiles if _is_default_dataset_profile(profile)]
+    if len(matches) != 1:
+        return None
+
+    profile = matches[0]
+    card = profile["card"]
+    # 即时综合的说明通常只写“即时综合数据集”，真实覆盖范围体现在字段卡片。
+    # 默认选表仍须逐领域找到字段证据，不能仅因名称是默认表就放宽。
+    card_field_terms = {
+        _normalize(term)
+        for key in FIELD_TERM_KEYS
+        for term in card.get(key, [])
+    }
+    covered_domains = set(profile["domains"])
+    for domain in domains - covered_domains:
+        record = rules["domains"][domain]
+        patterns = [
+            _normalize(item)
+            for key in ("terms", "description_patterns")
+            for item in record[key]
+        ]
+        if any(
+            pattern and any(pattern in field_term for field_term in card_field_terms)
+            for pattern in patterns
+        ):
+            covered_domains.add(domain)
+    if not domains.issubset(covered_domains):
+        return None
+
+    # 平台可由查询组件承接，实际可用值仍由 query_plan 权限枚举收敛。
+    platform_filter_terms = set(rules["filter_fields"]["platform"])
+    card_select_terms = {_normalize(item) for item in card["select_column_terms"]}
+    for name, values in slots.items():
+        if _slot_is_covered(profile, name, values, rules):
+            continue
+        if name == "platform" and card_select_terms.intersection(platform_filter_terms):
+            continue
+        return None
+
+    if any(
+        not field_semantics.metric_term_is_covered(metric, card["metric_terms"])
+        for metric in metrics
+    ):
+        return None
+
+    return {
+        "dataset_alias": card["dataset_alias"],
+        "dataset_name": card["dataset_name"],
+        "dataset_category": card["dataset_category"],
+        "score": EXPLICIT_DESCRIPTION_SCORE,
+        "reasons": ["default_instant_comprehensive"],
+        "_semantic_rank": 0,
+    }
+
+
+def _with_default_dataset_recommendation(result: dict, candidate: dict | None) -> dict:
+    """把默认候选标为必须确认的推荐，而不是可直接执行的静默选表。"""
+    if candidate is None:
+        return result
+    recommended = _result(
+        "candidate_ready",
+        str(result.get("intent", "typed_selection")),
+        dict(result.get("slots") or {}),
+        [candidate],
+        None,
+    )
+    recommended["default_dataset_recommendation"] = {
+        "kind": "instant_comprehensive",
+        "confirmation_required": True,
+    }
+    return recommended
 
 
 def _slot_extra_count(
@@ -469,7 +613,14 @@ def _result(
     return result
 
 
-def plan_query(query: str, cards: list[dict], rules: dict, top_n: int = 3) -> dict:
+def plan_query(
+    query: str,
+    cards: list[dict],
+    rules: dict,
+    top_n: int = 3,
+    *,
+    recommend_default_dataset: bool = True,
+) -> dict:
     """在当前授权卡片范围内产出紧凑的选表计划。
 
     返回 planner_contract_v2 合同：candidate_ready（已定表）或
@@ -504,13 +655,15 @@ def plan_query(query: str, cards: list[dict], rules: dict, top_n: int = 3) -> di
             "dataset_not_available_in_current_scope",
         )
 
-    semantics = extract_query_semantics(query, validated_rules)
-    domains = set(semantics["domains"])
-    slots = {name: set(values) for name, values in semantics["slots"].items()}
-
     # 阶段 1：显式标识匹配（alias / 英文名），唯一命中即定表
     explicit = _explicit_candidates(normalized_query, profiles)
     if explicit:
+        semantic_query = _semantic_query_without_candidate_identity(
+            normalized_query, explicit, profiles
+        )
+        semantics = extract_query_semantics(semantic_query, validated_rules)
+        domains = set(semantics["domains"])
+        slots = {name: set(values) for name, values in semantics["slots"].items()}
         top = explicit[0]
         component_blocked = top["dataset_category"] == "query_component" and not _permission_enum_requested(query)
         if len(explicit) > 1 or component_blocked:
@@ -521,6 +674,16 @@ def plan_query(query: str, cards: list[dict], rules: dict, top_n: int = 3) -> di
                 explicit[:candidate_limit],
                 "business_dataset",
             )
+        if not _description_candidates_cover_constraints(
+            explicit, profiles, domains, slots, validated_rules
+        ):
+            return _result(
+                "clarify_required",
+                "direct_dataset",
+                semantics["slots"],
+                explicit[:candidate_limit],
+                "dataset_constraints",
+            )
         return _result(
             "candidate_ready",
             "direct_dataset",
@@ -530,8 +693,28 @@ def plan_query(query: str, cards: list[dict], rules: dict, top_n: int = 3) -> di
         )
 
     # 阶段 2：中文说明精确匹配，命中多个或平台约束不覆盖时澄清
+    default_dataset_rejected = any(
+        term in normalized_query for term in DEFAULT_DATASET_REJECTION_TERMS
+    )
     description_matches = _description_candidates(normalized_query, profiles)
+    if default_dataset_rejected:
+        default_aliases = {
+            profile["card"]["dataset_alias"]
+            for profile in profiles
+            if _is_default_dataset_profile(profile)
+        }
+        description_matches = [
+            candidate
+            for candidate in description_matches
+            if candidate.get("dataset_alias") not in default_aliases
+        ]
     if description_matches:
+        semantic_query = _semantic_query_without_candidate_identity(
+            normalized_query, description_matches, profiles
+        )
+        semantics = extract_query_semantics(semantic_query, validated_rules)
+        domains = set(semantics["domains"])
+        slots = {name: set(values) for name, values in semantics["slots"].items()}
         top = description_matches[0]
         if len(description_matches) > 1:
             return _result(
@@ -541,8 +724,8 @@ def plan_query(query: str, cards: list[dict], rules: dict, top_n: int = 3) -> di
                 description_matches[:candidate_limit],
                 "dataset_selection",
             )
-        if not _description_candidates_cover_platform(
-            description_matches, profiles, slots, validated_rules
+        if not _description_candidates_cover_constraints(
+            description_matches, profiles, domains, slots, validated_rules
         ):
             return _result(
                 "clarify_required",
@@ -568,16 +751,88 @@ def plan_query(query: str, cards: list[dict], rules: dict, top_n: int = 3) -> di
             None,
         )
 
+    semantics = extract_query_semantics(query, validated_rules)
+    domains = set(semantics["domains"])
+    slots = {name: set(values) for name, values in semantics["slots"].items()}
+    default_candidate = None
+    if recommend_default_dataset and not default_dataset_rejected:
+        default_candidate = _default_dataset_candidate(
+            profiles,
+            domains,
+            slots,
+            list(semantics["metrics"]),
+            validated_rules,
+        )
+
     # 阶段 3：语义覆盖判断 + 打分。证据不足（无领域无槽位、只有平台词等）先澄清
     intent = next(iter(domains)) if len(domains) == 1 else ("mixed" if domains else "typed_selection")
     has_metric = bool(semantics["metrics"])
 
+    matched_terms = {
+        term
+        for domain in domains
+        for term in validated_rules["domains"][domain]["terms"]
+        if _term_matches(term, query)
+    }
+    matched_terms.update(str(term) for term in semantics["metrics"])
+    for slot_name, values in slots.items():
+        for value in values:
+            matched_terms.update(
+                term
+                for term in validated_rules["slots"][slot_name][value]["terms"]
+                if _term_matches(term, query)
+            )
+    residual_terms = _query_tokens(query, matched_terms)
     if not domains and not slots:
-        return _result("clarify_required", intent, semantics["slots"], [], "business_scope")
+        residual_scored = [
+            _score_profile(profile, set(), {}, residual_terms, validated_rules, query)
+            for profile in profiles
+            if profile["card"]["dataset_category"] == "normal"
+        ]
+        residual_scored.sort(
+            key=lambda item: (-item["score"], item["dataset_alias"].casefold())
+        )
+        if residual_scored and residual_scored[0]["score"] > 0:
+            gap = (
+                residual_scored[0]["score"] - residual_scored[1]["score"]
+                if len(residual_scored) > 1
+                else residual_scored[0]["score"]
+            )
+            if gap >= CLARIFY_SCORE_GAP:
+                return _with_default_dataset_recommendation(
+                    _result(
+                        "candidate_ready",
+                        intent,
+                        semantics["slots"],
+                        residual_scored[:candidate_limit],
+                        None,
+                    ),
+                    default_candidate,
+                )
+            return _with_default_dataset_recommendation(
+                _result(
+                    "clarify_required",
+                    intent,
+                    semantics["slots"],
+                    residual_scored[:candidate_limit],
+                    "dataset_selection",
+                ),
+                default_candidate,
+            )
+        return _with_default_dataset_recommendation(
+            _result("clarify_required", intent, semantics["slots"], [], "business_scope"),
+            default_candidate,
+        )
     if not has_metric and not domains and set(slots) == {"platform"}:
-        return _result("clarify_required", intent, semantics["slots"], [], "business_scope")
+        return _with_default_dataset_recommendation(
+            _result("clarify_required", intent, semantics["slots"], [], "business_scope"),
+            default_candidate,
+        )
     if not has_metric and not slots and len(domains) <= 1:
-        return _result("clarify_required", intent, semantics["slots"], [], "business_scope")
+        return _with_default_dataset_recommendation(
+            _result("clarify_required", intent, semantics["slots"], [], "business_scope"),
+            default_candidate,
+        )
     if not _semantics_are_compatible(slots, validated_rules):
         return _result("clarify_required", intent, semantics["slots"], [], "incompatible_scope")
     eligible = [
@@ -587,26 +842,18 @@ def plan_query(query: str, cards: list[dict], rules: dict, top_n: int = 3) -> di
         and _covers(profile, domains, slots, validated_rules)
     ]
     if not eligible:
-        return _result("clarify_required", intent, semantics["slots"], [], "dataset_constraints")
+        return _with_default_dataset_recommendation(
+            _result("clarify_required", intent, semantics["slots"], [], "dataset_constraints"),
+            default_candidate,
+        )
     if not set(slots).intersection({"ad_type", "grain"}) and all(
         _unrequested_business_specificity(profile, slots) for profile in eligible
     ):
-        return _result("clarify_required", intent, semantics["slots"], [], "dataset_constraints")
+        return _with_default_dataset_recommendation(
+            _result("clarify_required", intent, semantics["slots"], [], "dataset_constraints"),
+            default_candidate,
+        )
 
-    matched_terms = {
-        term
-        for domain in domains
-        for term in validated_rules["domains"][domain]["terms"]
-        if _term_matches(term, query)
-    }
-    for slot_name, values in slots.items():
-        for value in values:
-            matched_terms.update(
-                term
-                for term in validated_rules["slots"][slot_name][value]["terms"]
-                if _term_matches(term, query)
-            )
-    residual_terms = _query_tokens(query, matched_terms)
     scored = [
         _score_profile(
             profile, domains, slots, residual_terms, validated_rules, query
@@ -618,15 +865,21 @@ def plan_query(query: str, cards: list[dict], rules: dict, top_n: int = 3) -> di
     contenders.sort(key=lambda item: (-item["score"], item["dataset_alias"].casefold()))
 
     if len(contenders) == 1:
-        return _result("candidate_ready", intent, semantics["slots"], contenders, None)
+        return _with_default_dataset_recommendation(
+            _result("candidate_ready", intent, semantics["slots"], contenders, None),
+            default_candidate,
+        )
     gap = contenders[0]["score"] - contenders[1]["score"]
     status = "candidate_ready" if gap >= CLARIFY_SCORE_GAP else "clarify_required"
-    return _result(
-        status,
-        intent,
-        semantics["slots"],
-        contenders[:candidate_limit],
-        None if status == "candidate_ready" else "dataset_selection",
+    return _with_default_dataset_recommendation(
+        _result(
+            status,
+            intent,
+            semantics["slots"],
+            contenders[:candidate_limit],
+            None if status == "candidate_ready" else "dataset_selection",
+        ),
+        default_candidate,
     )
 
 

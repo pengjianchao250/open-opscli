@@ -29,6 +29,7 @@ from opscli.mcp.tools import asin_review as _asin_review_tools
 from opscli.mcp.tools import auth as _auth_tools
 from opscli.mcp.tools import beta as _beta_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
+from opscli.mcp.tools import dashboard as _dashboard_tools
 from opscli.mcp.tools import feedback as _feedback_tools
 from opscli.mcp.tools import google_trends as _google_trends_tools
 from opscli.mcp.tools import health as _health_tools
@@ -69,6 +70,7 @@ _REGISTRARS = [
     _amazon_rufus_tools.register,
     _beta_tools.register,
     _chatgpt_tools.register,
+    _dashboard_tools.register,
     _feedback_tools.register,
     _google_trends_tools.register,
     _health_tools.register,

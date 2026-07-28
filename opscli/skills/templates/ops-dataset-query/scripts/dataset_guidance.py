@@ -15,6 +15,7 @@ import unicodedata
 from pathlib import Path
 from typing import Iterable
 
+import field_semantics
 import scoped_dataset_reader
 
 
@@ -25,12 +26,17 @@ FORMULA_RULE = "formula_expression_without_extra_aggregation"
 SNAPSHOT_RULE = "latest_snapshot_no_period_aggregation"
 ASCII_WORD_RE = re.compile(r"[a-z0-9]+")
 CHINESE_RE = re.compile(r"[\u3400-\u9fff]+")
-MAX_CONTRACT_BYTES = 6000
+MAX_CONTRACT_BYTES = 16000
 MAX_FULL_BYTES = 16000
 MAX_QUERY_CHARS = 4096
 MAX_REQUESTED_FIELDS = 32
 MAX_FIELD_TEXT_CHARS = 256
 ASCII_IDENTIFIER_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+DEPARTMENT_VALUE_RE = re.compile(
+    r"(?:项目)?[零〇一二三四五六七八九十百\d]+部"
+    r"|部门\s*(?:为|是|=|：|:)?\s*[\u4e00-\u9fffA-Za-z0-9_-]{2,30}"
+    r"|(?:分析|查询|获取|查看)\s*[\u4e00-\u9fffA-Za-z0-9_-]{2,30}?的(?:数据|情况)"
+)
 
 
 def _normalize(value: object) -> str:
@@ -38,6 +44,13 @@ def _normalize(value: object) -> str:
     if not isinstance(value, str):
         return ""
     return unicodedata.normalize("NFKC", value).casefold().strip()
+
+
+def _normalize_case_sensitive(value: object) -> str:
+    """仅做 NFKC 与空白归一，不折叠大小写（技术字段精确匹配用）。"""
+    if not isinstance(value, str):
+        return ""
+    return unicodedata.normalize("NFKC", value).strip()
 
 
 def _tokens(value: object) -> set[str]:
@@ -100,17 +113,33 @@ def _field_score(
 
     优先级：技术字段名完整命中(100) > 中文全名子串命中(90+)
     > 去括号后的中文基础名命中(80+) > token 交集数量兜底。
+    展示名对主名与 alt_verbose_names（重复注册合并保留的旧标签）
+    逐一打分取最大值，保证用户用任一历史叫法都能命中。
     """
     field_name = _normalize(field.get("field_name"))
-    verbose_name = _normalize(field.get("verbose_name"))
-    base_name = re.split(r"[（(]", verbose_name, maxsplit=1)[0].strip()
     if field_name and _contains_identifier(normalized_query, field_name):
         return 100
-    if verbose_name and verbose_name in normalized_query:
-        return 90 + min(len(verbose_name), 9)
-    if len(base_name) >= 2 and base_name in normalized_query:
-        return 80 + min(len(base_name), 9)
-    return len(_tokens(base_name).intersection(query_tokens))
+    best = 0
+    for label in _field_labels(field):
+        verbose_name = _normalize(label)
+        base_name = re.split(r"[（(]", verbose_name, maxsplit=1)[0].strip()
+        if verbose_name and verbose_name in normalized_query:
+            score = 90 + min(len(verbose_name), 9)
+        elif len(base_name) >= 2 and base_name in normalized_query:
+            score = 80 + min(len(base_name), 9)
+        else:
+            score = len(_tokens(base_name).intersection(query_tokens))
+        best = max(best, score)
+    return best
+
+
+def _field_labels(field: dict) -> list[str]:
+    """字段的全部展示名：主 verbose_name + 合并重复注册时保留的备选名。"""
+    labels = [field.get("verbose_name", "")]
+    alt_labels = field.get("alt_verbose_names")
+    if isinstance(alt_labels, (list, tuple)):
+        labels.extend(str(item) for item in alt_labels)
+    return [label for label in labels if label]
 
 
 def _is_formula(field: dict) -> bool:
@@ -185,12 +214,19 @@ def _select_fields(
     """
     normalized_query = _normalize(query)
     query_tokens = _tokens(normalized_query)
+    # 业务别名只在当前授权字段中兑现：例如用户说“销量”，表中存在
+    # order_qty 时选中该字段；字段不存在时不会凭映射创造新字段。
+    semantic_fields = field_semantics.requested_canonical_fields(normalized_query)
     ranked = [
         (
             (
                 1000
                 if field["field_name"] in explicit_names
-                else _field_score(field, normalized_query, query_tokens)
+                else (
+                    950
+                    if field["field_name"] in semantic_fields
+                    else _field_score(field, normalized_query, query_tokens)
+                )
             ),
             index,
             field,
@@ -198,7 +234,13 @@ def _select_fields(
         for index, field in enumerate(fields)
     ]
     explicit_count = sum(row[2]["field_name"] in explicit_names for row in ranked)
-    limit = max(limit, explicit_count)
+    # 点名字段存在时不再用无关 fallback 把当前类型机械填满到 8 个：
+    # 显式字段全部保留；另一字段类型最多给 3 个建议，既守住 32 字段公开上限，
+    # 也避免大字段表的指导合同被无关字段撑爆。
+    if explicit_names:
+        limit = max(explicit_count, min(limit, 3))
+    else:
+        limit = max(limit, explicit_count)
     matched = sorted((row for row in ranked if row[0] > 0), key=lambda row: (-row[0], row[1]))
     selected = matched[:limit]
     selected_indexes = {row[1] for row in selected}
@@ -213,7 +255,11 @@ def _select_fields(
             (
                 "explicit"
                 if field["field_name"] in explicit_names
-                else ("query" if score > 0 else "fallback")
+                else (
+                    "semantic_alias"
+                    if field["field_name"] in semantic_fields
+                    else ("query" if score > 0 else "fallback")
+                )
             ),
             output_mode,
         )
@@ -235,12 +281,44 @@ def _validated_dataset_fields(fields: list[dict], dataset: dict) -> list[dict]:
     return selected
 
 
+def _derived_component_fields(dataset: dict, select_columns: list[dict]) -> list[dict]:
+    """从既有 select_columns 关系派生空查询组件的可枚举维度（仅内存）。"""
+    if dataset.get("dataset_category") != "query_component":
+        return []
+    derived = []
+    seen = set()
+    for relation in select_columns:
+        if relation.get("component_dataset_alias") != dataset.get("dataset_alias"):
+            continue
+        field_name = str(relation.get("column_name", ""))
+        if not field_name or field_name in seen:
+            continue
+        seen.add(field_name)
+        derived.append(
+            {
+                "dataset_alias": dataset["dataset_alias"],
+                "dataset_name": dataset["dataset_name"],
+                "field_name": field_name,
+                "verbose_name": relation.get("verbose_name", ""),
+                "field_type": "dimension",
+                "summary_expression": "",
+                "detail_expression": "",
+                "snapshot_metric": "0",
+                "has_formula_config": "0",
+                "filter_config": None,
+                "derived_from": "dataset_select_columns.csv",
+            }
+        )
+    return derived
+
+
 def _resolve_requested_fields(
     fields: list[dict], requested_fields: Iterable[str]
 ) -> tuple[set[str], list[str]]:
     """把用户点名字段解析为技术字段名。
 
-    优先按 field_name 精确匹配，其次按 verbose_name 精确匹配；
+    优先按 field_name 精确匹配，其次按 verbose_name（含合并重复注册
+    保留的 alt_verbose_names 旧标签）精确匹配；
     无法唯一确定的点名进入 unknown 列表，触发字段澄清。
     """
     if isinstance(requested_fields, (str, bytes)):
@@ -258,22 +336,103 @@ def _resolve_requested_fields(
     selected = set()
     unknown = []
     for raw_value in dict.fromkeys(requested):
-        value = _normalize(raw_value)
-        name_matches = [
+        exact_value = _normalize_case_sensitive(raw_value)
+        folded_value = _normalize(raw_value)
+        # 优先级不能一开始就 casefold：同一表允许 SPU/spu 两个不同技术字段，
+        # 同时 "VCPM" 可能是另一字段的精确展示名。先保留原始大小写身份，
+        # 再用大小写不敏感匹配兼容普通用户输入。
+        exact_name_matches = [
             field
             for field in fields
-            if value == _normalize(field.get("field_name"))
+            if exact_value == _normalize_case_sensitive(field.get("field_name"))
         ]
-        matches = name_matches or [
+        exact_label_matches = [
             field
             for field in fields
-            if value == _normalize(field.get("verbose_name"))
+            if any(
+                exact_value == _normalize_case_sensitive(label)
+                for label in _field_labels(field)
+            )
         ]
+        folded_name_matches = [
+            field
+            for field in fields
+            if folded_value == _normalize(field.get("field_name"))
+        ]
+        folded_label_matches = [
+            field
+            for field in fields
+            if any(folded_value == _normalize(label) for label in _field_labels(field))
+        ]
+        matches = (
+            exact_name_matches
+            or exact_label_matches
+            or folded_name_matches
+            or folded_label_matches
+        )
         if len(matches) == 1:
             selected.add(matches[0]["field_name"])
         else:
             unknown.append(raw_value)
     return selected, unknown
+
+
+def _default_filters(
+    dataset_alias: str,
+    fields: list[dict],
+    select_columns: list[dict],
+) -> list[dict]:
+    """聚合数据集的默认条件（需求 R5）。
+
+    范围 = 自身字段 + select_columns 关联的组件数据集字段中
+    filter_config 已启用的条目。来源与服务端 query-metadata 的
+    filter_configs 聚合口径一致（自身字段 source 取本数据集 alias）。
+
+    参数 fields 必须为全量字段表（不按 dataset_alias 过滤），
+    否则组件字段无法命中索引。
+    """
+    entries: list[dict] = []
+
+    def _entry(row: dict, source_alias: str) -> dict:
+        """将字段行压缩为 default_filters 条目结构。"""
+        fc = row["filter_config"]
+        # 按 brief 要求只保留六键，丢弃 enabled（防止输出体积超限）
+        compact_fc = {
+            k: fc[k]
+            for k in ("type", "operator", "filter_type", "enum_value", "value", "filter_agg")
+            if k in fc
+        }
+        return {
+            "field_name": row["field_name"],
+            "verbose_name": row.get("verbose_name", ""),
+            "field_type": row.get("field_type", "dimension"),
+            "source_dataset_alias": source_alias,
+            "filter_config": compact_fc,
+        }
+
+    # 自身字段：遍历全量字段表，筛选属于本数据集且 filter_config 已启用的条目
+    for row in fields:
+        if row.get("dataset_alias") == dataset_alias and row.get("filter_config"):
+            entries.append(_entry(row, dataset_alias))
+
+    # 组件关联字段：先建立"(组件 alias, 字段名) → 字段行"索引
+    # 只索引带 filter_config 的组件字段，减少无效查找
+    field_index = {
+        (row.get("dataset_alias"), row.get("field_name")): row
+        for row in fields
+        if row.get("filter_config") and row.get("dataset_alias") != dataset_alias
+    }
+    for relation in select_columns:
+        # 只处理当前数据集的关联关系
+        if relation["current_dataset_alias"] != dataset_alias:
+            continue
+        row = field_index.get(
+            (relation["component_dataset_alias"], relation["column_name"])
+        )
+        if row is not None:
+            entries.append(_entry(row, relation["component_dataset_alias"]))
+
+    return entries
 
 
 def _permission_scope(
@@ -310,7 +469,13 @@ def _permission_scope(
         (
             (
                 1000
-                if row["column_name"] in explicit_names
+                if (
+                    row["column_name"] in explicit_names
+                    or (
+                        row["column_name"] == "dept_name"
+                        and DEPARTMENT_VALUE_RE.search(query)
+                    )
+                )
                 else _field_score(
                     {
                         "field_name": row["column_name"],
@@ -396,7 +561,12 @@ def _validate_output_size(result: dict, output_mode: str) -> None:
 
 
 def _load_target_metadata(data_dir: Path, lookup: dict) -> tuple:
-    """基于同一份文件快照加载目标数据集的全部相关元数据，保证口径一致。"""
+    """基于同一份文件快照加载目标数据集的全部相关元数据，保证口径一致。
+
+    返回：(dataset, datasets, fields, select_columns, fingerprint, snapshot)
+    其中 snapshot 供调用方复用（避免 _default_filters 全量加载时二次读盘）。
+    fields 只含目标数据集字段（按 alias 过滤）；全量字段需调用方另行加载。
+    """
     snapshot = scoped_dataset_reader.read_source_snapshot(data_dir)
     datasets = scoped_dataset_reader.load_datasets(data_dir, snapshot=snapshot)
     dataset = _find_dataset(datasets, lookup)
@@ -410,7 +580,7 @@ def _load_target_metadata(data_dir: Path, lookup: dict) -> tuple:
     fingerprint = scoped_dataset_reader.source_fingerprint(
         data_dir, snapshot=snapshot
     )
-    return dataset, datasets, fields, select_columns, fingerprint
+    return dataset, datasets, fields, select_columns, fingerprint, snapshot
 
 
 def build_guidance(
@@ -440,10 +610,21 @@ def build_guidance(
     if any(type(value) is not int or value < 1 for value in (max_dimensions, max_metrics, max_components)):
         raise ValueError("invalid_output_limit")
 
-    dataset, datasets, fields, select_columns, fingerprint = _load_target_metadata(
+    dataset, datasets, fields, select_columns, fingerprint, snapshot = _load_target_metadata(
         Path(data_dir), lookup
     )
     dataset_alias = dataset["dataset_alias"]
+    # 全量字段表：_load_target_metadata 返回的 fields 按 alias 过滤，仅含目标数据集字段。
+    # _default_filters 需要回查组件数据集字段，因此用同一快照加载全量（不额外读盘）。
+    all_fields = scoped_dataset_reader.load_dataset_fields(
+        Path(data_dir),
+        snapshot=snapshot,
+    )
+    if not fields:
+        all_select_columns = scoped_dataset_reader.load_select_columns(
+            Path(data_dir), snapshot=snapshot
+        )
+        fields = _derived_component_fields(dataset, all_select_columns)
     dataset_fields = _validated_dataset_fields(fields, dataset)
     explicit_names, unknown_fields = _resolve_requested_fields(
         dataset_fields, requested_fields
@@ -518,6 +699,8 @@ def build_guidance(
             output_mode,
             max_components,
         ),
+        # 默认条件聚合（R5）：自身字段 + select_columns 关联组件字段中 filter_config 已启用的条目
+        "default_filters": _default_filters(dataset_alias, all_fields, select_columns),
         "missing_information": ["fields"] if unknown_fields else [],
         "next_action": (
             "clarify_fields"

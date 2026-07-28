@@ -18,8 +18,8 @@ config('opscli.tool_permission_enabled')）。显式为 False 时表示后端未
 
 stdio 模式网络兜底策略：
 - 404（旧后端未部署该端点）→ 全量放行（灰度兼容）
-- 401（session 失效）→ 仅基础 auth 工具（用户需重新登录）
-- 网络异常 → 有过期旧缓存则沿用旧值，否则仅基础 auth 工具（fail-closed，
+- 401（session 失效）→ 仅基础安全工具（用户仍可登录或读取 Dashboard 静态规范）
+- 网络异常 → 有过期旧缓存则沿用旧值，否则仅基础安全工具（fail-closed，
   避免断网绕过权限；其他工具本身也依赖后端，离线时锁死代价低）
 """
 
@@ -45,12 +45,22 @@ BASE_AUTH_TOOLS: frozenset[str] = frozenset({
     "auth_doctor",
     "auth_get_token",
     "auth_token_refresh",
+    "auth_me",
     "auth_build_request_auth",
     "auth_system_list",
     "auth_system_sync",
     "auth_system_add",
     "auth_system_remove",
 })
+
+# Dashboard 规范工具只读取包内静态 Skill，不依赖登录态或用户业务数据。
+BASE_DASHBOARD_SPEC_TOOLS: frozenset[str] = frozenset({
+    "dashboard_ai_bridge_spec_must_read",
+    "dashboard_data_analysis_spec_must_read",
+})
+
+BASE_ALWAYS_ALLOWED_TOOLS = BASE_AUTH_TOOLS | BASE_DASHBOARD_SPEC_TOOLS
+"""未登录或权限接口不可用时仍可调用的基础安全工具。"""
 
 # stdio 模式权限结果缓存时间（秒）：与后端 60s 缓存叠加，权限变更最长约 6 分钟生效
 _STDIO_CACHE_TTL_SECONDS = 300
@@ -99,7 +109,7 @@ async def _resolve_allowed_tools() -> frozenset[str] | None:
         if allowed is None:
             # 固定 API Key 模式 / 旧后端（verify-key 响应无 allowed_tools 字段）→ 全量放行
             return None
-        return frozenset(allowed) | BASE_AUTH_TOOLS
+        return frozenset(allowed) | BASE_ALWAYS_ALLOWED_TOOLS
 
     # ── stdio 模式：无 API Key，按本地登录用户查询 ──────────────────
     return await _stdio_allowed_tools()
@@ -123,7 +133,7 @@ async def _stdio_allowed_tools() -> frozenset[str] | None:
     session_id = _get_session_id()
     if not session_id:
         # 未登录：只开放基础 auth 工具引导用户完成登录
-        result: frozenset[str] | None = BASE_AUTH_TOOLS
+        result: frozenset[str] | None = BASE_ALWAYS_ALLOWED_TOOLS
         _stdio_cache = (now + _STDIO_CACHE_TTL_SECONDS, result)
         return result
 
@@ -147,15 +157,18 @@ async def _stdio_allowed_tools() -> frozenset[str] | None:
                     # 后端关闭权限管控 → 全量放行
                     result = None
                 else:
-                    result = frozenset(data.get("allowed_tools") or []) | BASE_AUTH_TOOLS
+                    result = (
+                        frozenset(data.get("allowed_tools") or [])
+                        | BASE_ALWAYS_ALLOWED_TOOLS
+                    )
             else:
-                result = BASE_AUTH_TOOLS
+                result = BASE_ALWAYS_ALLOWED_TOOLS
         elif resp.status_code == 404:
             # 旧后端未部署 allowed-tools 端点 → 全量放行（灰度兼容）
             result = None
         elif resp.status_code == 401:
-            # session 失效 → 仅基础 auth 工具，引导重新登录
-            result = BASE_AUTH_TOOLS
+            # session 失效 → 仅基础安全工具，引导重新登录或读取 Dashboard 静态规范
+            result = BASE_ALWAYS_ALLOWED_TOOLS
         else:
             # 其他异常状态码按网络异常处理
             raise RuntimeError(f"allowed-tools 返回异常状态码 {resp.status_code}")
@@ -170,7 +183,7 @@ async def _stdio_allowed_tools() -> frozenset[str] | None:
             _stdio_cache = (now + _STDIO_CACHE_TTL_SECONDS, stale)
             return stale
         # 从未成功过 → fail-closed，仅开放基础 auth 工具
-        return BASE_AUTH_TOOLS
+        return BASE_ALWAYS_ALLOWED_TOOLS
 
 
 class ToolPermissionMiddleware(Middleware):

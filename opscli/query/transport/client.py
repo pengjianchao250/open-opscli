@@ -9,6 +9,12 @@ from opscli.mcp.context import get_mcp_request_headers
 from opscli.query.domain.exceptions import BadRemoteJsonError, RemoteBusinessError, RemoteHttpError
 from opscli.shared.http import parse_remote_response
 
+# 查询执行接口（cli-query / cli-query/simple）的默认 HTTP 超时秒数。
+# 由 30 秒提升到 120 秒：大数据量查询服务端处理经常超过 30 秒导致 ReadTimeout，
+# 参考 beta 模块同因先例（docs/change-log-pending.md 2026-06-16 条目曾调到 60 秒）。
+# 元数据类 GET 接口不受此常量影响，仍保持 20 秒。
+DEFAULT_QUERY_TIMEOUT = 120
+
 
 class QueryClient:
     """统一封装 query 模块的远端请求。
@@ -22,11 +28,22 @@ class QueryClient:
         auth_client: AuthClient | None = None,
         jwt: str | None = None,
         session_id: str | None = None,
+        timeout: float | None = None,
     ) -> None:
+        """初始化客户端。
+
+        参数：
+            auth_client: 认证客户端，缺省时自动创建
+            jwt: 无状态模式下外部传入的 JWT
+            session_id: 无状态模式下外部传入的会话 ID
+            timeout: 查询执行接口的 HTTP 超时秒数，None 或非正数时回退默认值 120 秒
+        """
         self.auth_client = auth_client or AuthClient()
         self.jwt = jwt
         self.session_id = session_id
         self.ops_url = OPS_URL.rstrip("/")
+        # 仅作用于 cli_query / cli_simple_query 两个查询执行接口
+        self.timeout = timeout if timeout and timeout > 0 else DEFAULT_QUERY_TIMEOUT
 
     def _get_auth(self, alias: str = "ops") -> tuple[dict[str, str], dict[str, str]]:
         """获取请求认证头。优先使用外部传入的凭证，否则回退到本地存储。
@@ -111,6 +128,7 @@ class QueryClient:
         *,
         dataset_alias: str | None = None,
         table_id: int | None = None,
+        include_all_fields: bool = False,
     ) -> dict:
         """从远端拉取最新的数据集与字段元数据。
 
@@ -129,6 +147,10 @@ class QueryClient:
             params["dataset_alias"] = dataset_alias
         if table_id is not None:
             params["table_id"] = str(table_id)
+        # include_all_fields=1：让后端一次性返回全部授权数据集的全部字段
+        # （规划器全量取数用；默认 false 保持裸调用"只列数据集"契约）
+        if include_all_fields:
+            params["include_all_fields"] = "1"
 
         response = httpx.get(
             f"{self.ops_url}/v1/data-metrics/datasets/query-metadata",
@@ -360,7 +382,7 @@ class QueryClient:
             json=payload,
             headers=headers,
             cookies=cookies,
-            timeout=30,
+            timeout=self.timeout,
         )
         return parse_remote_response(
             response,
@@ -377,7 +399,7 @@ class QueryClient:
             json=payload,
             headers=headers,
             cookies=cookies,
-            timeout=30,
+            timeout=self.timeout,
         )
         return parse_remote_response(
             response,

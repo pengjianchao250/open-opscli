@@ -12,10 +12,12 @@
 from __future__ import annotations
 
 import json
+import sys
 import re
 import shutil
 import tempfile
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 
 import typer
@@ -23,7 +25,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from opscli.skills.domain.exceptions import error_to_dict
+from opscli.auth.exceptions import AuthError
+from opscli.skills.domain.exceptions import SkillRemoteError, error_to_dict
 from opscli.skills.domain.models import runtime_to_tool_name
 from opscli.skills.marketplace.client import MarketplaceClient
 from opscli.skills.marketplace.models import (
@@ -69,11 +72,14 @@ _TOOL_LABELS = {
 # ops-amazon-rufus 安装后引导信息
 _AMAZON_RUFUS_SKILL_NAME = "ops-amazon-rufus"
 _AMAZON_RUFUS_NEXT_STEPS = [
-    "先执行 opscli amazon-rufus remote-consent status <country> --pretty 读取该站点远程授权偏好。",
+    "进入 Skill 后先调用 auth_is_authenticated；未登录时调用 auth_mcp_login，Token 失效时调用 auth_token_refresh(system=\"ops\")。",
+    "调用 amazon_rufus_remote_consent_status(country) 读取该站点远程授权偏好。",
     "未询问过时让用户明确回复“允许”或“拒绝”；请建议使用独立干净的 Amazon 账号，且不建议绑定信用卡或支付方式。",
-    "发起 Rufus 获取前执行 opscli amazon-rufus login-status <country> --pretty；没有可用登录态时执行 opscli amazon-rufus watch-login <asin> <country> --launch-if-needed --close-browser。",
-    "允许远程授权且登录态可用时调用 amazon_rufus_get；如需恢复登录态，执行 watch-login 后重试 MCP 获取。",
-    "拒绝远程授权且登录态可用时调用 opscli amazon-rufus get-backend <asin> <country>。",
+    "发起 Rufus 获取前调用 amazon_rufus_login_status(country)；没有可用亚马逊 Rufus 登录态时调用 amazon_rufus_watch_login(asin, country, close_browser=true)。",
+    "允许远程授权且登录态可用时调用 amazon_rufus_get；MCP Tool 不可用时进入 CLI fallback，使用 opscli amazon-rufus login-status / watch-login / get-backend。",
+    "用户拒绝保存并复用亚马逊 Rufus 登录态时记录拒绝偏好，并改用本机 opscli CLI 获取；本路径使用 opscli amazon-rufus login-status 和 opscli amazon-rufus get-backend。",
+    "OPS 平台 Cookie 鉴权错误、RUFUS_PLATFORM_COOKIE_AUTH_ERROR 或 401 时调用 amazon_rufus_watch_login(asin, country, close_browser=true)，本分支不允许 CLI fallback。",
+    "只有上述两种情况允许 CLI fallback；其他错误不允许 CLI fallback，也不得读取历史报告兜底。",
 ]
 
 # marketplace list 命令的参数枚举与面板标题
@@ -557,11 +563,11 @@ def _print_install_line(install: object) -> None:
     )
 
 
-def _inject_rules_for_installs(installs: list[object]) -> None:
+def _inject_rules_for_installs(installs: Sequence[object], *, verbose: bool = False) -> None:
     """对安装结果涉及的编辑器目录统一注入反馈铁律。
 
     按 (runtime, skills_dir) 去重，避免同一编辑器目录重复注入。
-    注入成功后打印提示信息。
+    verbose=True 时才打印每条注入提示（默认静默，仅执行注入动作）。
     """
     injector = RuleInjector()
     seen: set[tuple[str, str]] = set()
@@ -576,7 +582,7 @@ def _inject_rules_for_installs(installs: list[object]) -> None:
             continue
         seen.add(key)
         config_path = injector.inject(runtime, skills_parent)
-        if config_path:
+        if config_path and verbose:
             _console.print(
                 f"  [dim]⚙ 已追加反馈铁律到 {config_path}[/dim]"
             )
@@ -758,11 +764,13 @@ def _install_interactive(
     force: bool,
     yes: bool,
     pretty: bool,
+    verbose: bool = False,
 ) -> None:
     """TUI 交互安装：选择 Skills → 选择目标工具 → 批量安装。
 
     交互模式默认 force=True（覆盖已有安装），无需手动传 --force。
     yes=True 时跳过所有 prompt，直接全选 Skills 和全部检测到的工具。
+    verbose=True 时输出每个安装目标的逐条日志（默认仅输出最终汇总）。
     """
     force = True  # TUI 模式始终覆盖，避免因已安装而中断
 
@@ -807,15 +815,17 @@ def _install_interactive(
             )
             all_results.append(_with_post_install_guidance(result.to_dict(), skill_name))
             all_installs.extend(result.installs)
-            for install in result.installs:
-                _print_install_line(install)
+            # 默认不输出逐条安装日志，仅在 --verbose 时打印每个目标的详细行
+            if verbose:
+                for install in result.installs:
+                    _print_install_line(install)
         except Exception as exc:
             errors.append(f"{skill_name}: {exc}")
             _console.print(f"  [red]×[/red] [bold]{skill_name}[/bold] [red]{exc}[/red]")
 
     # 批量安装结束后：如果安装了 ops-feedback，统一注入铁律（去重）
     if "ops-feedback" in skill_names and not skills_dir and all_installs:
-        _inject_rules_for_installs(all_installs)
+        _inject_rules_for_installs(all_installs, verbose=verbose)
 
     _console.print()
     if errors:
@@ -829,17 +839,21 @@ def _install_interactive(
                 "message": "; ".join(errors),
             },
         }
-        _emit(payload, pretty)
+        # 默认只输出成功/失败个数汇总；完整 JSON payload 仅在 --verbose 或 --pretty 显式要求时输出
+        if verbose or pretty:
+            _emit(payload, pretty)
         raise typer.Exit(1)
     else:
-        _console.print(f"[green]全部安装完成，共 {len(all_results)} 个 Skill[/green]")
+        _console.print(f"[green]全部安装完成：{len(all_results)} 个成功，0 个失败[/green]")
         payload = {
             "success": True,
             "command": "skills install",
             "data": {"results": all_results},
             "error": None,
         }
-        _emit(payload, pretty)
+        # 默认只输出成功/失败个数汇总；完整 JSON payload 仅在 --verbose 或 --pretty 显式要求时输出
+        if verbose or pretty:
+            _emit(payload, pretty)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1757,6 +1771,7 @@ def install_skill(
     sync_market: bool = typer.Option(False, "--sync-market", help="从市场安装记录同步：补装缺失 + 升级旧版"),
     dry_run: bool = typer.Option(False, "--dry-run", help="仅预览同步计划，不实际安装（需配合 --sync-market）"),
     share_code: str | None = typer.Option(None, "--share-code", help="分享码，绕过 personal/department 权限限制安装广场技能"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="输出每个安装目标的逐条日志（默认仅输出汇总）"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """安装 Skill 到本地目录。
@@ -1769,6 +1784,7 @@ def install_skill(
     - --dry-run 配合 --sync-market 仅预览同步计划，不实际安装。
 
     加 --yes / -y 可跳过确认，直接安装全部到所有检测到的工具。
+    加 --verbose / -v 可输出逐条安装日志（默认静默，仅输出最终汇总）。
     """
     # ── --sync-market 模式 ─────────────────────────────────
     if sync_market:
@@ -1794,7 +1810,15 @@ def install_skill(
             _console.print("[dim]未发现 AuWork 用户目录（~/.auwork 下无纯数字子目录），已跳过 AuWork 安装[/dim]")
     try:
         if name is None:
-            _install_interactive(manager, skills_dir=skills_dir, runtime=runtime, force=force, yes=yes, pretty=pretty)
+            _install_interactive(
+                manager,
+                skills_dir=skills_dir,
+                runtime=runtime,
+                force=force,
+                yes=yes,
+                pretty=pretty,
+                verbose=verbose,
+            )
             return
 
         # 远程广场安装（标识符含 @）；远程安装默认直接覆盖，无需 --force
@@ -1826,7 +1850,7 @@ def install_skill(
         )
         # CLI 层统一注入铁律：仅安装 ops-feedback 时触发
         if name == "ops-feedback" and not skills_dir:
-            _inject_rules_for_installs(result.installs)
+            _inject_rules_for_installs(result.installs, verbose=verbose)
 
         payload = {
             "success": True,
@@ -2023,6 +2047,54 @@ def report_usage(
     _emit(payload, pretty)
 
 
+def _is_auth_failure(exc: BaseException) -> bool:
+    """判断异常是否属于认证类失败（可通过重新登录恢复）。
+
+    覆盖两类信号：
+    - 预检未登录：SkillRemoteError 由 AuthError 包装而来（本地无凭证）
+    - 执行中鉴权失效：HTTP/业务 401，或业务 407（服务端 session 已登出，
+      本地凭证看似有效——长时间未使用的典型场景）
+    """
+    if not isinstance(exc, SkillRemoteError):
+        return False
+    if isinstance(exc.__cause__, AuthError):
+        return True
+    return exc.status_code in (401, 407)
+
+
+def _stdin_is_tty() -> bool:
+    """判断 stdin 是否为交互终端（独立函数便于测试打桩）。"""
+    return sys.stdin.isatty()
+
+
+def _prompt_and_login(progress: Console) -> bool:
+    """交互终端下询问用户是否登录，同意则内联执行 Device Flow 登录。
+
+    非交互环境（stdin 非 TTY，如 AI Agent / 管道 / self-update 子进程）
+    直接返回 False，绝不发起会阻塞等待浏览器授权的登录流程。
+    登录只给一次机会：失败（超时/拒绝/网络）不重试，返回 False 走原失败路径。
+
+    Returns:
+        True 表示登录成功、调用方可自动重试一次；False 表示保持原失败行为。
+    """
+    if not _stdin_is_tty():
+        return False
+    # 询问输出到 stderr（err=True），避免污染 stdout 的 JSON 结果
+    if not typer.confirm("检测到未登录或登录已失效，是否现在登录 ops？", default=False, err=True):
+        return False
+    try:
+        # 复用 auth login 命令的完整流程（打开浏览器 + 轮询授权 + 同步系统列表）
+        from opscli.auth.cli import login as _auth_login
+
+        _auth_login()
+    except typer.Exit:
+        # 登录命令内部失败（Device Flow 超时/用户拒绝）以 typer.Exit 退出，
+        # 此处转为"登录失败"信号，交由调用方按原失败路径处理
+        progress.print("[yellow]登录未完成，本次升级保持失败状态[/yellow]")
+        return False
+    return True
+
+
 @app.command("upgrade")
 def upgrade(
     name: str = typer.Argument("ops-dataset-query", help="Skill 名称"),
@@ -2041,7 +2113,15 @@ def upgrade(
     manager = SkillsManager()
     try:
         _progress.print(f"[bold]正在升级 {name}...[/bold]")
-        result = manager.upgrade(name=name, skills_dir=skills_dir, force=force, on_step=on_step)
+        try:
+            result = manager.upgrade(name=name, skills_dir=skills_dir, force=force, on_step=on_step)
+        except Exception as exc:
+            # 认证类失败且用户在交互终端完成登录时，自动重试一次；
+            # 其余情况（非交互 / 拒绝 / 登录失败 / 非认证错误）按原失败路径处理
+            if _is_auth_failure(exc) and _prompt_and_login(_progress):
+                result = manager.upgrade(name=name, skills_dir=skills_dir, force=force, on_step=on_step)
+            else:
+                raise
         _progress.print("[bold green]升级完成[/bold green]\n")
         payload = {
             "success": True,

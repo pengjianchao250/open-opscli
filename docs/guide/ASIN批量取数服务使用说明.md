@@ -146,6 +146,18 @@ opscli asin-data collect \
   --url-only
 ```
 
+如果每日任务需要在采集完成后把报告文件记录保存到后端 `ops_asin_data_report_files`，使用：
+
+```bash
+opscli asin-data collect \
+  --asin B0FDG9NFQM \
+  --site US \
+  --no-fetch-report-files \
+  --submit-report-files \
+  --report-date 2026-06-10 \
+  --pretty
+```
+
 ## 5. 常用跳过参数
 
 只查 BI 和爬虫，不跑外部采集：
@@ -241,6 +253,12 @@ opscli asin-data collect \
 | `--crawler-field-mode` | `full` | 爬虫字段模式；必要时用 `compatible` |
 | `--fetch-report-files/--no-fetch-report-files` | `--fetch-report-files` | 是否先从 `/dataMetrics/v1/asin-report-files` 获取最新报告地址；无 URL 时直接报错 |
 | `--upload/--no-upload` | `--upload` | 是否上传 UTF-8 BOM 的 `ASIN-asin-data-report.txt` |
+| `--submit-report-files/--no-submit-report-files` | `--no-submit-report-files` | 采集完成后是否 POST 保存到 `/dataMetrics/v1/asin-report-files` |
+| `--report-date` | 空 | 保存报告文件记录时使用的报告日期，默认当天 |
+| `--report-type` | `asin_data_merged_report_txt` | 保存报告文件记录时使用的报告类型 |
+| `--report-source` | `asin_data_collect` | 保存报告文件记录时使用的来源 |
+| `--register-endpoint` | 空 | 保存接口地址，默认 `/dataMetrics/v1/asin-report-files`，也可传完整 URL |
+| `--include-report-content/--no-include-report-content` | `--no-include-report-content` | 保存接口 payload 是否包含报告 txt 内容和明细 JSON |
 | `--url-only` | `false` | 只输出报告地址；单 ASIN 使用报告文件接口 URL |
 | `--pretty` | `false` | 格式化 JSON 输出 |
 

@@ -15,6 +15,7 @@ from opscli.auth import AuthClient
 from opscli.query.domain.exceptions import DatasetNotFoundError, InvalidPayloadError, QueryMetadataNotReadyError
 from opscli.query.domain.models import QueryMetadataResult
 from opscli.query.services.intent_matcher import match_catalog_intents
+from opscli.query.services.metadata_cache import MetadataCacheResult, get_metadata_cache
 from opscli.query.transport.client import QueryClient
 from opscli.skills.discovery.detector import SkillDetector
 
@@ -41,10 +42,34 @@ class QueryManager:
         auth_client: AuthClient | None = None,
         jwt: str | None = None,
         session_id: str | None = None,
+        timeout: float | None = None,
     ) -> None:
+        """初始化管理器。timeout 为查询执行接口的 HTTP 超时秒数，透传给 QueryClient，None 时使用默认值。"""
         self.detector = SkillDetector()
-        self.client = QueryClient(auth_client=auth_client, jwt=jwt, session_id=session_id)
+        self.client = QueryClient(auth_client=auth_client, jwt=jwt, session_id=session_id, timeout=timeout)
         self.template_dir = Path(__file__).resolve().parent.parent.parent / "skills" / "templates" / "ops-dataset-query" / "data"
+
+    def metadata_all(
+        self, *, user_email: str, base_dir: Path | None = None
+    ) -> MetadataCacheResult:
+        """获取当前用户的全量元数据（全部数据集全部字段），经用户级缓存。
+
+        缓存未命中/过期时向后端 query-metadata?include_all_fields=1 拉取一次并落盘；
+        1 小时内复用；后端失败时回退过期缓存并标 stale。
+
+        Args:
+            user_email: 当前用户邮箱（缓存隔离维度，由 CLI/MCP 调用方注入）。
+            base_dir: 缓存根目录；CLI 默认 CONFIG_DIR，MCP 传隔离目录。
+
+        Returns:
+            MetadataCacheResult。
+        """
+        cache = get_metadata_cache(base_dir)
+        # fetch_fn 惰性拉取全量：仅在缓存未命中/过期时才真正打后端
+        return cache.get(
+            user_email,
+            lambda: self.client.fetch_query_metadata(include_all_fields=True),
+        )
 
     def list_datasets(self, *, skills_dir: str | None = None, cwd: Path | None = None) -> list[dict]:
         """列出所有可用的数据集（从本地 query_metadata.json 读取）。"""
@@ -147,11 +172,16 @@ class QueryManager:
                     cwd=cwd,
                 )
 
+        # 提取数据集默认条件：远端响应与本地 query_metadata.json（远端同源缓存）
+        # 均在 dataset 对象内嵌 filter_configs，旧缓存缺该字段时回退空列表
+        filter_configs = list(matched.get("filter_configs") or [])
+
         return QueryMetadataResult(
             dataset=matched,
             fields=matched_fields,
             source=source,
             select_columns=select_columns,
+            filter_configs=filter_configs,
         )
 
     def user_preferences(self) -> list[dict]:
@@ -378,6 +408,33 @@ class QueryManager:
             "result": query_result,
         }
 
+    def run_query_template(self, execution_ref: dict) -> dict:
+        """按规划器 execution_ref.query_template 直接执行查询（一体化 run_flow 用）。
+
+        query_template 已是就绪的 simple query payload 骨架（tableId/dimensions/
+        metrics/filters/dataComparison，以及未填的 orderBy/limit 占位）。执行前删除
+        值为 None 的占位键。
+
+        注意：数据集默认条件（default_filters）由服务端在查询时权威注入，
+        禁止在客户端预填——客户端预填会与服务端解析后的真实日期 AND 合并导致恒 0 行
+        （见 query_plan._build_query_template 的填充规则与 R5 说明）。
+
+        Args:
+            execution_ref: 规划合同的 execution_ref，须含 query_template。
+
+        Returns:
+            服务端查询结果 dict。
+
+        Raises:
+            InvalidPayloadError: execution_ref 缺少可执行的 query_template。
+        """
+        template = (execution_ref or {}).get("query_template")
+        if not isinstance(template, dict):
+            raise InvalidPayloadError("execution_ref 缺少 query_template，无法执行")
+        # 删除 None 占位键（orderBy/limit 未填时不下发），其余键原样转发
+        payload = {key: value for key, value in template.items() if value is not None}
+        return self.client.cli_simple_query(payload)
+
     def _validate_simple_fields(
         self,
         fields: list[dict],
@@ -555,6 +612,15 @@ class QueryManager:
             if len(matches) == 1:
                 return matches[0]
             if len(matches) > 1:
+                # field_name 双注册（同一物理字段的英中双名，或公式 vs 裸指标同名）与
+                # 规划器 _merge_duplicate_field_rows 口径一致地消歧：可合并则返回规范字段
+                # （形态一纯标签差异任取其一；形态二采纳公式注册以保证聚合口径正确），
+                # 后端按 field_name 自行解析（实测同名字段后端稳定命中公式口径）。
+                # 仅真正的多口径冲突（多个不同公式）才报歧义错误。
+                if key == "field_name":
+                    merged = self._merge_ambiguous_field_name(matches)
+                    if merged is not None:
+                        return merged
                 raise InvalidPayloadError(
                     self._format_field_ambiguity_error(context, identifier, key, matches)
                 )
@@ -571,6 +637,50 @@ class QueryManager:
             )
 
         raise InvalidPayloadError(f"{context} 字段不存在于当前数据集 metadata 中: {identifier}")
+
+    @staticmethod
+    def _merge_ambiguous_field_name(matches: list[dict]) -> dict | None:
+        """对同名（field_name 重复）字段做与规划器一致的双注册消歧。
+
+        返回规范字段：
+        - 形态一「纯标签差异」：除展示名外执行语义完全一致 → 任取首个；
+        - 形态二「公式 vs 裸指标」：field_type/快照一致，一为公式注册一为裸指标 →
+          采纳公式注册（公式表达式是服务端权威聚合口径，避免均值/比率被误 SUM）；
+        - 其余（多个不同公式表达式等真口径冲突）→ 返回 None，由调用方报歧义。
+
+        与 planner.metadata_adapter._merge_duplicate_field_rows 的裁决规则对齐，
+        保证 query_simple 与规划器对同名双注册的处理一致。
+        """
+        def _base(f: dict) -> tuple:
+            # 公式列以外的执行语义（类型 + 快照标记）必须一致才可能合并
+            snap = f.get("snapshot_metric")
+            snap = "0" if snap in (None, "") else str(snap).strip()
+            return (str(f.get("field_type") or "").strip().lower(), snap)
+
+        if len({_base(f) for f in matches}) != 1:
+            return None
+
+        def _is_formula(f: dict) -> bool:
+            return (
+                str(f.get("has_formula_config")) == "1"
+                or bool(str(f.get("summary_expression") or "").strip())
+                or bool(str(f.get("detail_expression") or "").strip())
+            )
+
+        formula_rows = [f for f in matches if _is_formula(f)]
+        plain_rows = [f for f in matches if not _is_formula(f)]
+        # 形态一：无公式差异，纯标签差异 → 任取
+        if not formula_rows:
+            return matches[0]
+        # 形态二：公式 + 裸指标，且公式表达式唯一 → 采纳公式
+        if plain_rows and len(
+            {
+                (str(f.get("summary_expression") or ""), str(f.get("detail_expression") or ""))
+                for f in formula_rows
+            }
+        ) == 1:
+            return formula_rows[0]
+        return None
 
     @staticmethod
     def _normalize_simple_field_identifier(identifier: str) -> str:
@@ -600,7 +710,9 @@ class QueryManager:
         suffix = "；候选过多，仅展示前 8 个" if len(matches) > 8 else ""
         return (
             f"{context} 字段标识存在歧义（{key} 命中 {len(matches)} 条）: {identifier}。"
-            f"请改用唯一的 global_alias 或完整 field_name。候选: "
+            f"同名双注册（英中双名 / 公式vs裸指标）已自动消歧；若仍报此错，"
+            f"说明该字段名在当前数据集对应多个不同聚合口径，属元数据异常，"
+            f"请按 feedback 规范反馈。候选: "
             + "；".join(candidates)
             + suffix
         )

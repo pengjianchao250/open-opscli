@@ -21,11 +21,15 @@ class SifRunRequest:
     """Generic Sif feature runtime request."""
 
     feature: str
-    asin: str
+    asin: str = ""
     site: str = "US"
     asins: list[str] = field(default_factory=list)
+    keyword: str | None = None
     time_piece_type: str = "latelyDay"
     time_piece_value: str = "7"
+    granularity: str | None = None
+    last_months: int | None = None
+    change_type: str | None = None
     sections: list[str] = field(default_factory=list)
     my_asin: str | None = None
     page_num: int = 1
@@ -69,6 +73,7 @@ class SifRunResult:
     result_path: str
     asin: str | None = None
     asins: list[str] = field(default_factory=list)
+    keyword: str | None = None
     exports: dict[str, SifExportResult] = field(default_factory=dict)
     summary: dict[str, Any] = field(default_factory=dict)
     warnings: list[dict[str, Any]] = field(default_factory=list)

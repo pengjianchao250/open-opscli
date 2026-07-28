@@ -71,6 +71,12 @@ def test_credential_cache_default_base_dir(tmp_path, monkeypatch):
     # credential_store.py 内部在方法调用时动态导入 opscli.config，
     # 因此只需 monkeypatch 配置模块即可生效
     monkeypatch.setattr("opscli.config.CONFIG_DIR", tmp_path)
+    # 强制禁用 keyring：base_dir=None 时 Windows/Linux 仍会走系统凭证后端，
+    # 会污染开发者真实凭证（铁律8：测试不得依赖真实 Keychain）
+    monkeypatch.setattr("opscli.auth.storage.credential_store._KEYRING_AVAILABLE", False)
+    # 清空模块级缓存池：批量运行时更早的测试可能已用真实 CONFIG_DIR
+    # 创建过默认缓存实例，必须清空后重建才能让上面的 monkeypatch 生效
+    monkeypatch.setattr("opscli.mcp.credential_cache._mcp_credential_caches", {})
 
     cache = get_credential_cache()  # base_dir=None
     CredentialStore().save_session("default-sess", "user@example.com", "2099-01-01T00:00:00+00:00")

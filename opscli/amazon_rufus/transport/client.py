@@ -6,6 +6,7 @@ import httpx
 
 from opscli.amazon_rufus.domain.exceptions import (
     RufusBadRemoteJsonError,
+    RufusPlatformCookieAuthError,
     RufusRemoteBusinessError,
     RufusRemoteHttpError,
 )
@@ -17,6 +18,7 @@ from opscli.shared.http import parse_remote_response
 
 # Rufus 上传接口 path 是后端固定契约，环境切换只覆盖 ops_url。
 RUFUS_UPLOAD_ENDPOINT = "/v1/rufus/upload"
+PLATFORM_COOKIE_ENDPOINT = "/v1/platform-cookies"
 
 
 class RufusTransportClient:
@@ -47,3 +49,48 @@ class RufusTransportClient:
             business_error_cls=RufusRemoteBusinessError,
             bad_json_error_cls=RufusBadRemoteJsonError,
         )
+
+    def save_platform_cookie(self, *, platform: str, country: str, content: str) -> dict:
+        """保存或覆盖当前用户指定平台的 Cookie content。"""
+        headers, cookies = self.auth_client.build_request_auth("ops")
+        headers.update(get_mcp_request_headers())
+        response = httpx.post(
+            f"{self.ops_url}{PLATFORM_COOKIE_ENDPOINT}",
+            json={
+                "platform": platform,
+                "country": country,
+                "content": content,
+            },
+            headers=headers,
+            cookies=cookies,
+            timeout=10,
+        )
+        return self._parse_platform_cookie_response(response)
+
+    def get_platform_cookie(self, *, platform: str) -> dict:
+        """读取当前用户指定平台保存的 Cookie content。"""
+        headers, cookies = self.auth_client.build_request_auth("ops")
+        headers.update(get_mcp_request_headers())
+        response = httpx.get(
+            f"{self.ops_url}{PLATFORM_COOKIE_ENDPOINT}",
+            params={"platform": platform},
+            headers=headers,
+            cookies=cookies,
+            timeout=180,
+        )
+        return self._parse_platform_cookie_response(response)
+
+    def _parse_platform_cookie_response(self, response: httpx.Response) -> dict:
+        """解析平台 Cookie 响应，并把 401 固定归类为 OPS 鉴权失败。"""
+        try:
+            return parse_remote_response(
+                response,
+                http_error_cls=RufusRemoteHttpError,
+                business_error_cls=RufusRemoteBusinessError,
+                bad_json_error_cls=RufusBadRemoteJsonError,
+            )
+        except RufusRemoteHttpError as exc:
+            if exc.status_code == 401:
+                # 平台 Cookie API 401 代表 OPS/MCP 鉴权失败，不代表亚马逊 Rufus 登录态缺失。
+                raise RufusPlatformCookieAuthError(status_code=exc.status_code) from exc
+            raise

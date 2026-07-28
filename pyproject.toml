@@ -1,6 +1,6 @@
 [project]
 name = "aukeys-opscli"
-version = "0.0.112"
+version = "0.0.120"
 description = "Aukeys 运营 CLI 工具集"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,7 +33,7 @@ dev = [
 ]
 
 [project.scripts]
-opscli = "opscli.cli:app"
+opscli = "opscli.cli:run"
 opscli-mcp = "opscli.mcp.server:run"
 opscli-collector-mcp = "opscli.collector_mcp.server:run"
 
@@ -46,9 +46,21 @@ build-backend = "setuptools.build_meta"
 # setuptools 自动发现所有子包
 where = ["."]
 include = ["opscli*"]
+# 排除 Skill 模板目录：其下的 scripts/ 等子目录无 __init__.py，
+# 会被 setuptools 命名空间包发现（namespaces 默认为 true）误判为 Python 包，
+# 导致模板里的 *.py 被当作"模块"。Cython 生产构建用 BuildPyExcludeSource
+# 剥离非白名单模块作源码保护，而这些模板脚本又被排除在 cythonize 之外，
+# 两头落空后 scripts/*.py 会从 wheel 中彻底丢失（Windows/macOS wheel 均受影响）。
+# 排除后模板文件回归纯 package_data 数据，随 wheel 原样打包，供 skills install 使用。
+exclude = ["opscli.skills.templates*"]
 
 [tool.setuptools.package-data]
 # Hook 脚本作为资源文件保留（非编译对象，由 settings_injector.py 部署到用户目录）
 "opscli" = [
     "skills/hooks/report_skill_usage.py",
+]
+# 规划器静态资源：领域意图规则与规划合同 schema，经 importlib.resources 读取，
+# 非编译对象，必须随 wheel 原样打包
+"opscli.query.services.planner.resources" = [
+    "*.json",
 ]

@@ -11,6 +11,7 @@ import respx
 from opscli.shared.update_check import (
     _CACHE_TTL,
     _fetch_latest_version,
+    _refresh_cache_async,
     _parse_version,
     _read_cache,
     _write_cache,
@@ -194,42 +195,51 @@ class TestCheckAndNotify:
             captured = capsys.readouterr()
             assert "0.0.72" in captured.err
             assert "0.0.99" in captured.err
-            assert "pip install" in captured.err
+            assert "opscli self-update" in captured.err
+
+    def test_no_cache_triggers_background_refresh_no_output(self, tmp_path, capsys):
+        """无缓存：仅触发后台刷新，本次不阻塞、不同步输出提示。
+
+        后台化改造后，缓存缺失时 check_and_notify 不再同步请求 PyPI，
+        而是委托 _refresh_cache_async 后台刷新，故本次调用无 stderr 输出。
+        """
+        cache_file = tmp_path / "pypi_version_cache.json"
+        with (
+            patch("opscli.shared.update_check._CACHE_FILE", cache_file),
+            patch("opscli.shared.update_check.get_version", return_value="0.0.72"),
+            patch("opscli.shared.update_check._refresh_cache_async") as mock_refresh,
+        ):
+            check_and_notify()
+            # 确认走了后台刷新分支，且本次未同步打印提示
+            mock_refresh.assert_called_once()
+            captured = capsys.readouterr()
+            assert captured.err == ""
 
     @respx.mock
-    def test_no_cache_pypi_has_update(self, tmp_path, capsys):
-        """无缓存 + PyPI 返回新版本 → 查询 PyPI 并输出提示。"""
+    def test_refresh_cache_async_writes_cache(self, tmp_path):
+        """后台刷新线程：PyPI 返回新版本时异步写入缓存。"""
         cache_file = tmp_path / "pypi_version_cache.json"
         respx.get("https://pypi.org/pypi/aukeys-opscli/json").mock(
             return_value=httpx.Response(200, json={
                 "info": {"version": "0.0.80"},
             })
         )
-        with (
-            patch("opscli.shared.update_check._CACHE_FILE", cache_file),
-            patch("opscli.shared.update_check.get_version", return_value="0.0.72"),
-        ):
-            check_and_notify()
-            captured = capsys.readouterr()
-            assert "0.0.80" in captured.err
-            # 验证缓存已写入
+        with patch("opscli.shared.update_check._CACHE_FILE", cache_file):
+            # 显式 join 后台线程，确保断言时刷新已完成（生产为 daemon 不 join）
+            _refresh_cache_async().join(timeout=5)
             data = json.loads(cache_file.read_text())
             assert data["latest_version"] == "0.0.80"
 
     @respx.mock
-    def test_no_cache_pypi_unreachable(self, tmp_path, capsys):
-        """无缓存 + PyPI 不可达 → 静默无输出。"""
+    def test_refresh_cache_async_unreachable_no_write(self, tmp_path):
+        """后台刷新线程：PyPI 不可达时不写缓存、不抛异常。"""
         cache_file = tmp_path / "pypi_version_cache.json"
         respx.get("https://pypi.org/pypi/aukeys-opscli/json").mock(
             side_effect=httpx.ConnectError("不可达")
         )
-        with (
-            patch("opscli.shared.update_check._CACHE_FILE", cache_file),
-            patch("opscli.shared.update_check.get_version", return_value="0.0.72"),
-        ):
-            check_and_notify()
-            captured = capsys.readouterr()
-            assert captured.err == ""
+        with patch("opscli.shared.update_check._CACHE_FILE", cache_file):
+            _refresh_cache_async().join(timeout=5)
+            assert not cache_file.exists()
 
     def test_exception_silent(self, tmp_path, capsys):
         """get_version 抛异常时静默无输出，不影响命令执行。"""
@@ -242,3 +252,48 @@ class TestCheckAndNotify:
             check_and_notify()
             captured = capsys.readouterr()
             assert captured.err == ""
+
+
+class TestUpdateChannelFetch:
+    """更新渠道测试：环境变量 OPSCLI_UPDATE_CHANNEL=test 时查询 TestPyPI 且绕过缓存。"""
+
+    @respx.mock
+    def test_fetch_test_channel_queries_testpypi(self, monkeypatch):
+        """test 渠道下版本查询指向 test.pypi.org。"""
+        monkeypatch.setenv("OPSCLI_UPDATE_CHANNEL", "test")
+        respx.get("https://test.pypi.org/pypi/aukeys-opscli/json").mock(
+            return_value=httpx.Response(200, json={"info": {"version": "0.0.140"}})
+        )
+        assert _fetch_latest_version() == "0.0.140"
+
+    @respx.mock
+    def test_fetch_default_still_queries_pypi(self, monkeypatch):
+        """未设置渠道时行为不变：仍查询公网 pypi.org。"""
+        monkeypatch.delenv("OPSCLI_UPDATE_CHANNEL", raising=False)
+        respx.get("https://pypi.org/pypi/aukeys-opscli/json").mock(
+            return_value=httpx.Response(200, json={"info": {"version": "0.0.99"}})
+        )
+        assert _fetch_latest_version() == "0.0.99"
+
+    @respx.mock
+    def test_check_and_notify_test_channel_bypasses_cache(self, tmp_path, capsys, monkeypatch):
+        """test 渠道下即使存在有效缓存也直连 TestPyPI，且不写缓存（避免污染正式渠道判断）。"""
+        monkeypatch.setenv("OPSCLI_UPDATE_CHANNEL", "test")
+        cache_file = tmp_path / "pypi_version_cache.json"
+        cache_file.write_text(json.dumps({
+            "latest_version": "0.0.72",
+            "checked_at": time.time(),
+        }))
+        respx.get("https://test.pypi.org/pypi/aukeys-opscli/json").mock(
+            return_value=httpx.Response(200, json={"info": {"version": "0.0.99"}})
+        )
+        with (
+            patch("opscli.shared.update_check._CACHE_FILE", cache_file),
+            patch("opscli.shared.update_check.get_version", return_value="0.0.72"),
+        ):
+            check_and_notify()
+            captured = capsys.readouterr()
+            # 提示的是 TestPyPI 上的新版本，而非缓存里的旧值
+            assert "0.0.99" in captured.err
+        # 缓存内容未被 test 渠道覆盖
+        assert json.loads(cache_file.read_text())["latest_version"] == "0.0.72"

@@ -59,6 +59,26 @@ def _dummy_generic_result(feature="查流量"):
     )
 
 
+def _dummy_keyword_result():
+    export = _export(
+        "产品时光机_balloon_pump_1780000000000.xlsx",
+        "output/sif-manual/job-product/产品时光机_balloon_pump_1780000000000.xlsx",
+    )
+    return SimpleNamespace(
+        job_id="job-product",
+        feature="产品时光机",
+        provider="sif",
+        asin=None,
+        asins=[],
+        keyword="balloon pump",
+        site="US",
+        root_dir="output/sif-manual/job-product",
+        result_path="output/sif-manual/job-product/result.json",
+        exports={"product_time_machine_xlsx": export},
+        to_dict=lambda: {"job_id": "job-product", "feature": "产品时光机", "provider": "sif", "keyword": "balloon pump"},
+    )
+
+
 def test_sif_run_outputs_human_summary(monkeypatch):
     class DummyProvider:
         def run(self, request, *, default_output_dir):
@@ -135,6 +155,45 @@ def test_sif_run_routes_traffic_feature(monkeypatch):
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["data"]["feature"] == traffic_feature
+
+
+def test_sif_run_routes_ranking_feature_with_granularity(monkeypatch):
+    ranking_feature = FEATURE_ALIASES["ranking"]
+
+    class DummyProvider:
+        def run(self, request, *, default_output_dir):
+            assert request.feature == ranking_feature
+            assert request.asin == "B0BMW2985V"
+            assert request.site == "US"
+            assert request.granularity == "month"
+            assert default_output_dir == DEFAULT_FEATURE_OUTPUT_DIRS["ranking"]
+            return _dummy_generic_result(ranking_feature)
+
+    monkeypatch.setitem(FEATURE_DEFINITIONS["查排名"], "provider", lambda: DummyProvider())
+
+    result = runner.invoke(app, ["run", "ranking", "--asin", "B0BMW2985V", "--granularity", "month", "--json"])
+
+    assert result.exit_code == 0
+
+
+def test_sif_run_routes_product_time_machine_without_asin(monkeypatch):
+    product_feature = FEATURE_ALIASES["产品时光机"]
+
+    class DummyProvider:
+        def run(self, request, *, default_output_dir):
+            assert request.feature == product_feature
+            assert request.asin == ""
+            assert request.keyword == "balloon pump"
+            assert default_output_dir == DEFAULT_FEATURE_OUTPUT_DIRS["product_time_machine"]
+            return _dummy_keyword_result()
+
+    monkeypatch.setitem(FEATURE_DEFINITIONS["产品时光机"], "provider", lambda: DummyProvider())
+
+    result = runner.invoke(app, ["run", "产品时光机", "--keyword", "balloon pump", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["keyword"] == "balloon pump"
 
 
 def test_sif_run_passes_sections_and_page_size(monkeypatch):

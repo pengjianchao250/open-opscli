@@ -954,6 +954,8 @@ opscli query chart-doc --uuid 32f660fd-f62a-45c4-a443-e21f2edb0779 --output char
 | `ops-amazon-listing-analysis` | Amazon Listing 表达与一致性优化分析 Skill |
 | `ops-asin-health-diagnoser` | ASIN 运行状况诊断 Skill |
 | `ops-auth` | 认证授权辅助 Skill |
+| `ops-dashboard-ai-bridge` | 仪表盘页面编辑与写后核验 Skill，仅在仪表盘页面上下文中运行 |
+| `ops-dashboard-data-analysis` | 仪表盘业务数据只读分析 Skill，依赖 `ops-dataset-query` |
 | `ops-dataset-query` | 数据集查询辅助 Skill |
 | `ops-mcp` | MCP Server 管理辅助 Skill |
 | `ops-product-attribute-analyzer` | 产品属性标签体系分析 Skill |
@@ -984,6 +986,16 @@ opscli skills list
 opscli skills list --pretty
 opscli skills list --skills-dir ~/.claude/skills --pretty
 ```
+
+安装仪表盘分析与编辑 Skill 时，先安装数据查询依赖：
+
+```bash
+opscli skills install ops-dataset-query
+opscli skills install ops-dashboard-data-analysis
+opscli skills install ops-dashboard-ai-bridge
+```
+
+两项仪表盘 Skill 只在运营系统仪表盘编辑页注入 `dashboard_*` 工具后具备执行能力；普通终端会话只能安装和读取 Skill 规范。
 
 ### 7.3 `opscli skills install`
 

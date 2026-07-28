@@ -814,7 +814,6 @@ def test_build_simple_auto_fixes_formula_metric_aggregation(tmp_path, monkeypatc
     assert result["payload"]["tableId"] == 3
 
 
-def test_build_simple_rejects_formula_metric_aggregation(tmp_path, monkeypatch):
 def test_build_simple_auto_fixes_formula_metric_aggregation(tmp_path, monkeypatch):
     """公式字段传入 aggregation 时，自动修正为 expr + 移除 aggregation，不再报错。"""
     manager = QueryManager()
@@ -1171,3 +1170,54 @@ def test_generate_chart_doc_falls_back_when_field_mappings_missing(monkeypatch):
     assert "| `channel_name` | `f_channel` | `ds_sales.channel_name` | `f_channel` |" in markdown
     # 7.2 条件字段映射：fallback 时 field_name 从 origin_name 末段提取（date_id），不为 -
     assert "| `where` | `ds_sales.date_id` | - | `-` | `date_id` | `ds_sales.date_id` | `-` |" in markdown
+
+
+def test_metadata_passes_through_filter_configs(tmp_path, monkeypatch):
+    """数据集对象携带的 filter_configs 应透传到 QueryMetadataResult 与 to_dict。"""
+    manager = QueryManager()
+    filter_configs = [
+        {
+            "column_name": "date_type",
+            "verbose_name": "日期类型",
+            "field_type": "dimension",
+            "component_dataset_alias": "ds_xxx",
+            "filter_config": {
+                "type": "required", "enabled": True, "operator": "equals",
+                "filter_type": "enum", "enum_value": ["QUARTER"],
+                "value": None, "filter_agg": "none",
+            },
+        }
+    ]
+    payload = {
+        "datasets": [{
+            "table_id": 1103, "dataset_alias": "ds_xxx",
+            "filter_configs": filter_configs,
+        }],
+        "fields": [{"table_id": 1103, "field_name": "date_id"}],
+    }
+    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
+
+    result = manager.metadata(dataset_alias="ds_xxx")
+
+    assert result.filter_configs == filter_configs
+    assert result.to_dict()["filter_configs"] == filter_configs
+
+
+def test_metadata_filter_configs_absent_for_legacy_payload(tmp_path, monkeypatch):
+    """旧缓存无 filter_configs 字段时返回空列表，不报错（兼容验收标准 12）。"""
+    manager = QueryManager()
+    payload = {
+        "datasets": [{"table_id": 1103, "dataset_alias": "ds_xxx"}],
+        "fields": [],
+    }
+    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
+
+    result = manager.metadata(dataset_alias="ds_xxx")
+
+    assert result.filter_configs == []
+
+
+def test_manager_timeout_passes_to_client():
+    """构造时传入 timeout 应透传给 QueryClient；缺省时使用默认值 120 秒。"""
+    assert QueryManager(timeout=90).client.timeout == 90
+    assert QueryManager().client.timeout == 120

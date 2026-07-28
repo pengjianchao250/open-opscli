@@ -4,25 +4,135 @@ from types import MethodType
 from typing import Any
 
 import httpx
+import pytest
 
 from opscli.asin_data.services import bi_report_data
 from opscli.asin_data.services.bi_report_data import (
     BI_REPORT_DATA_SOURCES,
+    LISTING_AUTH_MODE_ENV,
     AsinBiReportDataBusinessError,
     AsinBiReportDataClient,
+    normalize_listing_basic,
     select_bi_report_data_for_asin,
 )
 
 
 class DummyAuthClient:
+    def __init__(self) -> None:
+        self.polaris_token = "user-token"
+        self.build_calls: list[str] = []
+        self.refresh_calls: list[str] = []
+
     def build_request_auth(self, scope: str):
-        assert scope == "ops"
-        return {"Authorization": "Bearer test"}, {"ops_token": "test"}
+        self.build_calls.append(scope)
+        if scope == "ops":
+            return {"Authorization": "Bearer test"}, {"ops_token": "test"}
+        if scope == "polaris":
+            return {"Authorization": f"Bearer {self.polaris_token}"}, {"polarisUserToken": "user-session"}
+        raise AssertionError(f"unexpected auth scope: {scope}")
+
+    def refresh_token(self, scope: str) -> str:
+        self.refresh_calls.append(scope)
+        if scope != "polaris":
+            raise AssertionError(f"unexpected refresh scope: {scope}")
+        self.polaris_token = "user-token-refreshed"
+        return self.polaris_token
 
 
 class NoOpsAuthClient:
     def build_request_auth(self, scope: str):
         raise AssertionError(f"unexpected auth scope: {scope}")
+
+
+class MissingPolarisAuthClient:
+    def __init__(self, *, session_error: Exception | None = None) -> None:
+        self.session_error = session_error
+        self.build_calls: list[str] = []
+
+    def build_request_auth(self, scope: str):
+        self.build_calls.append(scope)
+        if scope == "polaris":
+            raise RuntimeError("polaris system is not registered")
+        if scope == "ops":
+            return {"Authorization": "Bearer ops-token"}, {"ops_token": "ops-cookie"}
+        raise AssertionError(f"unexpected auth scope: {scope}")
+
+    def get_session(self, scope: str) -> str:
+        assert scope == "polaris"
+        if self.session_error is not None:
+            raise self.session_error
+        return "private-session-id"
+
+    def get_device_code(self) -> None:
+        return None
+
+
+def test_listing_basic_retries_vc_account_type_when_sc_has_no_row(monkeypatch):
+    client = object.__new__(AsinBiReportDataClient)
+    account_types: list[int] = []
+
+    def fake_fetch_one(**kwargs):
+        account_types.append(kwargs["account_type"])
+        if kwargs["account_type"] == 1:
+            raise AsinBiReportDataBusinessError("LISTING_NOT_FOUND", "SC listing not found")
+        return {
+            "asin": kwargs["asin"],
+            "row": {"ASIN": kwargs["asin"], "account_type": kwargs["account_type"]},
+        }
+
+    monkeypatch.setattr(client, "_fetch_listing_basic_for_asin", fake_fetch_one)
+
+    result = client._fetch_listing_basic_source(
+        key="listing_basic",
+        config={"label": "listing", "endpoint": "/detail"},
+        asins=["B086M58PQ3"],
+        headers={},
+        cookies={},
+        site_by_asin={"B086M58PQ3": "US"},
+        listing_account_type_by_asin={},
+        default_site="US",
+    )
+
+    assert account_types == [1, 2]
+    assert result["rows"] == [{"ASIN": "B086M58PQ3", "account_type": 2}]
+
+
+def test_normalize_listing_basic_maps_item_highlight_value():
+    row = normalize_listing_basic(
+        asin="B0TEST1234",
+        list_row={"id": 123},
+        detail={"title_differentiation.value": "Quiet metal platform"},
+        template={},
+    )
+
+    assert row["商品亮点"] == "Quiet metal platform"
+
+
+def test_normalize_listing_basic_accepts_legacy_item_highlight_key():
+    row = normalize_listing_basic(
+        asin="B0TEST1234",
+        list_row={"id": 123},
+        detail={"title_differentiation": "Under-bed storage"},
+        template={},
+    )
+
+    assert row["商品亮点"] == "Under-bed storage"
+
+
+def test_normalize_listing_basic_returns_only_lowercase_asin_field():
+    row = normalize_listing_basic(
+        asin="B0TEST1234",
+        list_row={"id": 123},
+        detail={"external_product_id": "B0TEST1234"},
+        template={
+            "fields": [
+                {"field": "external_product_id", "alias": "ASIN"},
+            ]
+        },
+    )
+
+    assert row["asin"] == "B0TEST1234"
+    assert [key for key in row if key.lower() == "asin"] == ["asin"]
 
 
 def test_bi_report_data_client_fetches_all_sources_and_filters_by_asin():
@@ -70,6 +180,28 @@ def test_bi_report_data_client_fetches_all_sources_and_filters_by_asin():
 
     def http_post(url, **kwargs):
         post_calls.append({"url": url, **kwargs})
+        if url.endswith("/amazon-listing/basic"):
+            asin = kwargs["json"]["asin"]
+            return httpx.Response(
+                200,
+                json={
+                    "code": 200,
+                    "data": {
+                        "asin": asin,
+                        "site": kwargs["json"]["site"],
+                        "total": 1,
+                        "list": [
+                            {
+                                "asin": asin,
+                                "ASIN": asin,
+                                "商品标题": "Listing Endpoint Title",
+                                "关键词搜索": "storage bed frame search terms",
+                                "generic_keyword.value": "storage bed frame search terms",
+                            }
+                        ],
+                    },
+                },
+            )
         data = [
             {"ASIN": kwargs["json"]["asin"], "keyword": "bed frame"},
             {"ASIN": "B0OTHER123", "keyword": "desk"},
@@ -79,6 +211,7 @@ def test_bi_report_data_client_fetches_all_sources_and_filters_by_asin():
     client = AsinBiReportDataClient(
         auth_client=DummyAuthClient(),
         ops_url="https://ops.api.qa.aukeyit.com/api",
+        ops_system_url="https://ops.api.qa.aukeyit.com",
         http_get=http_get,
         http_post=http_post,
     )
@@ -88,22 +221,23 @@ def test_bi_report_data_client_fetches_all_sources_and_filters_by_asin():
 
     assert bundle["status"] == "success"
     assert bundle["asins"] == ["B0TEST1234", "B0OTHER123"]
-    assert len(get_calls) == 9
-    assert len(post_calls) == 2
-    assert get_calls[0]["url"] == "https://ops.api.qa.aukeyit.com/dataMetrics/v1/asin-report-files/polaris-bjx-token"
-    assert get_calls[1]["url"] == "https://bi.api.xenkee.com/listing/getAmazonListing"
-    assert get_calls[1]["headers"]["Authorization"] == "Bearer remote-listing-token"
-    assert get_calls[1]["params"]["asin"] == "B0TEST1234"
-    assert get_calls[1]["params"]["site_code"] == "US"
-    assert get_calls[2]["url"] == "https://bi.api.xenkee.com/listing/amazonlisdet"
-    assert get_calls[2]["params"]["listid"] == 3418337
-    assert "_t" in get_calls[2]["params"]
-    assert get_calls[5]["url"] == "https://ops.api.qa.aukeyit.com/dataMetrics/v1/asin-report-files/sales-traffic-data"
-    assert get_calls[5]["params"] == {"asins": "B0TEST1234,B0OTHER123"}
-    assert post_calls[0]["url"] == "https://ops.api.qa.aukeyit.com/api/v1/sp-search-term/query"
-    assert post_calls[0]["json"]["asin"] == "B0TEST1234"
+    assert len(get_calls) == 4
+    assert len(post_calls) == 4
+    listing_calls = [call for call in post_calls if call["url"].endswith("/amazon-listing/basic")]
+    search_term_calls = [call for call in post_calls if call["url"].endswith("/sp-search-term/query")]
+    sales_call = next(call for call in get_calls if call["url"].endswith("/sales-traffic-data"))
+    assert len(listing_calls) == 2
+    assert listing_calls[0]["headers"]["Authorization"] == "Bearer test"
+    assert listing_calls[0]["json"] == {"asin": "B0TEST1234", "site": "US"}
+    assert sales_call["url"] == "https://ops.api.qa.aukeyit.com/dataMetrics/v1/asin-report-files/sales-traffic-data"
+    assert sales_call["params"] == {"asins": "B0TEST1234,B0OTHER123"}
+    assert search_term_calls[0]["url"] == "https://ops.api.qa.aukeyit.com/api/v1/sp-search-term/query"
+    assert search_term_calls[0]["json"]["asin"] == "B0TEST1234"
     assert get_calls[-1]["url"] == "https://ops.api.qa.aukeyit.com/dataMetrics/v1/asin-report-files/crawler-details"
-    assert get_calls[-1]["params"] == {"asins": "B0TEST1234,B0OTHER123"}
+    assert get_calls[-1]["params"] == {
+        "asins": "B0TEST1234,B0OTHER123",
+        "country": "US",
+    }
     assert asin_bundle["sources"]["listing_basic"]["rows"][0]["关键词搜索"] == "storage bed frame search terms"
     assert asin_bundle["sources"]["listing_basic"]["rows"][0]["generic_keyword.value"] == "storage bed frame search terms"
     assert asin_bundle["sources"]["sales_traffic"]["rows"] == [{"asin": "B0TEST1234", "salesAmount": 123.45}]
@@ -115,6 +249,106 @@ def test_bi_report_data_client_fetches_all_sources_and_filters_by_asin():
     assert asin_bundle["sources"]["crawler_details"]["rows"] == [
         {"asin": "B0TEST1234", "商品标题": "Crawler Endpoint Title"}
     ]
+
+
+def test_crawler_details_groups_asins_by_country_and_merges_rows():
+    calls = []
+    lock = threading.Lock()
+
+    def http_get(url, **kwargs):
+        with lock:
+            calls.append(dict(kwargs["params"]))
+        country = kwargs["params"]["country"]
+        rows = [
+            {"asin": asin, "country": country}
+            for asin in kwargs["params"]["asins"].split(",")
+        ]
+        return httpx.Response(200, json={"code": 0, "data": {"rows": rows}})
+
+    client = AsinBiReportDataClient(
+        auth_client=DummyAuthClient(),
+        ops_url="https://ops.example.com/api",
+        http_get=http_get,
+    )
+
+    bundle = client.fetch(
+        asins=["B0TEST1234", "B0TEST5678", "B0TEST9999"],
+        source_keys=["crawler_details"],
+        site_by_asin={"B0TEST5678": "CA", "B0TEST9999": "美国"},
+        default_site="US",
+    )
+
+    source = bundle["sources"]["crawler_details"]
+    calls_by_country = {call["country"]: call for call in calls}
+    assert calls_by_country == {
+        "US": {"asins": "B0TEST1234,B0TEST9999", "country": "US"},
+        "CA": {"asins": "B0TEST5678", "country": "CA"},
+    }
+    assert source["status"] == "success"
+    assert [row["asin"] for row in source["rows"]] == [
+        "B0TEST1234",
+        "B0TEST9999",
+        "B0TEST5678",
+    ]
+    assert set(source["raw"]) == {"US", "CA"}
+    assert source["country_errors"] == {}
+
+
+def test_crawler_details_keeps_successful_country_when_another_country_fails():
+    def http_get(url, **kwargs):
+        country = kwargs["params"]["country"]
+        if country == "CA":
+            return httpx.Response(500, json={"message": "CA unavailable"})
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"rows": [{"asin": "B0TEST1234", "country": country}]}},
+        )
+
+    client = AsinBiReportDataClient(
+        auth_client=DummyAuthClient(),
+        ops_url="https://ops.example.com/api",
+        http_get=http_get,
+    )
+
+    bundle = client.fetch(
+        asins=["B0TEST1234", "B0TEST5678"],
+        source_keys=["crawler_details"],
+        site_by_asin={"B0TEST5678": "CA"},
+    )
+
+    source = bundle["sources"]["crawler_details"]
+    assert bundle["status"] == "partial"
+    assert source["status"] == "partial"
+    assert source["rows"] == [{"asin": "B0TEST1234", "country": "US"}]
+    assert source["country_errors"]["CA"] == {
+        "code": "ASIN_BI_REPORT_DATA_HTTP_ERROR",
+        "message": "CA unavailable",
+        "status_code": 500,
+    }
+
+
+def test_crawler_details_returns_failed_when_all_countries_fail():
+    def http_get(url, **kwargs):
+        country = kwargs["params"]["country"]
+        return httpx.Response(500, json={"message": f"{country} unavailable"})
+
+    client = AsinBiReportDataClient(
+        auth_client=DummyAuthClient(),
+        ops_url="https://ops.example.com/api",
+        http_get=http_get,
+    )
+
+    bundle = client.fetch(
+        asins=["B0TEST1234", "B0TEST5678"],
+        source_keys=["crawler_details"],
+        site_by_asin={"B0TEST5678": "CA"},
+    )
+
+    source = bundle["sources"]["crawler_details"]
+    assert bundle["status"] == "failed"
+    assert source["status"] == "failed"
+    assert source["rows"] == []
+    assert set(source["country_errors"]) == {"US", "CA"}
 
 
 def test_select_bi_report_data_filters_chinese_asin_group_rows():
@@ -170,6 +404,70 @@ def test_bi_report_data_client_filters_sources():
         "https://ops.example.com/dataMetrics/v1/asin-report-files/sales-traffic-data",
         "https://ops.example.com/dataMetrics/v1/asin-report-files/deals-data",
     ]
+
+
+def test_bi_report_data_client_maps_date_params_by_endpoint_method():
+    get_calls = []
+    post_calls = []
+
+    def http_get(url, **kwargs):
+        get_calls.append({"url": url, **kwargs})
+        return httpx.Response(200, json={"code": 0, "data": {"rows": []}})
+
+    def http_post(url, **kwargs):
+        post_calls.append({"url": url, **kwargs})
+        return httpx.Response(200, json={"code": 0, "data": []})
+
+    client = AsinBiReportDataClient(
+        auth_client=DummyAuthClient(),
+        ops_url="https://ops.example.com/api",
+        http_get=http_get,
+        http_post=http_post,
+    )
+
+    client.fetch(
+        asins=["B0TEST1234"],
+        start_date="2026-06-01",
+        end_date="2026-06-16",
+        source_keys=[
+            "sales_traffic",
+            "deals",
+            "turnover_inventory",
+            "crawler_details",
+            "sp_search_term",
+        ],
+        default_site="US",
+    )
+
+    report_calls = {
+        call["url"].rsplit("/", 1)[-1]: call["params"]
+        for call in get_calls
+        if not call["url"].endswith("/crawler-details")
+    }
+    assert report_calls == {
+        "sales-traffic-data": {
+            "asins": "B0TEST1234",
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-16",
+        },
+        "deals-data": {
+            "asins": "B0TEST1234",
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-16",
+        },
+        "turnover-inventory-data": {
+            "asins": "B0TEST1234",
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-16",
+        },
+    }
+    crawler_call = next(call for call in get_calls if call["url"].endswith("/crawler-details"))
+    assert crawler_call["params"] == {"asins": "B0TEST1234", "country": "US"}
+    assert post_calls[0]["json"] == {
+        "asin": "B0TEST1234",
+        "start_date": "2026-06-01",
+        "end_date": "2026-06-16",
+    }
 
 
 def test_bi_report_data_client_fetches_bi_sources_in_parallel():
@@ -244,41 +542,72 @@ def test_bi_report_data_client_fetches_sp_search_terms_in_parallel():
     ]
 
 
-def test_bi_report_data_client_fetches_listing_basic_asins_in_parallel(monkeypatch):
-    monkeypatch.setenv("BI_AUTH", "Bearer listing-token")
-    state = {"active": 0, "max_active": 0, "site_codes": {}}
-    lock = threading.Lock()
+def test_bi_report_data_client_fetches_sqp_with_short_domain_name():
+    calls = []
 
-    def http_get(url, **kwargs):
-        if url.endswith("/listing/getAmazonListing"):
-            asin = kwargs["params"]["asin"]
-            with lock:
-                state["active"] += 1
-                state["max_active"] = max(state["max_active"], state["active"])
-                state["site_codes"][asin] = kwargs["params"].get("site_code")
-            try:
-                time.sleep(0.05)
-            finally:
-                with lock:
-                    state["active"] -= 1
-            return httpx.Response(200, json={"code": 0, "data": [{"id": f"list-{asin}", "asin": asin}]})
-        listid = kwargs["params"]["listid"]
-        asin = str(listid).replace("list-", "")
+    def http_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
         return httpx.Response(
             200,
             json={
                 "code": 0,
                 "data": {
-                    "listid": listid,
-                    "item_name.value": f"Title {asin}",
-                    "generic_keyword.value": "bed frame",
+                    "date_range": {"start_date": "2026-07-01", "end_date": "2026-07-15"},
+                    "total": 1,
+                    "list": [{"ASIN": "B086M58PQ3", "搜索词": "bed frame"}],
                 },
             },
         )
 
     client = AsinBiReportDataClient(
-        auth_client=NoOpsAuthClient(),
-        http_get=http_get,
+        auth_client=DummyAuthClient(),
+        ops_url="https://ops.example.com/api",
+        http_post=http_post,
+    )
+
+    bundle = client.fetch(
+        asins=["B086M58PQ3", "B0TEST1234"],
+        start_date="2026-07-01",
+        end_date="2026-07-15",
+        source_keys=["sqp"],
+    )
+
+    assert calls[0]["url"] == "https://ops.example.com/api/v1/brand-analytics-search-query/query"
+    assert calls[0]["json"] == {
+        "asins": "B086M58PQ3,B0TEST1234",
+        "start_date": "2026-07-01",
+        "end_date": "2026-07-15",
+    }
+    assert bundle["sources"]["sqp"]["status"] == "success"
+    assert bundle["sources"]["sqp"]["rows"] == [{"ASIN": "B086M58PQ3", "搜索词": "bed frame"}]
+
+
+def test_bi_report_data_client_fetches_listing_basic_asins_in_parallel():
+    state = {"active": 0, "max_active": 0, "site_codes": {}}
+    lock = threading.Lock()
+
+    def http_post(url, **kwargs):
+        asin = kwargs["json"]["asin"]
+        with lock:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            state["site_codes"][asin] = kwargs["json"]["site"]
+        try:
+            time.sleep(0.05)
+        finally:
+            with lock:
+                state["active"] -= 1
+        return httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "data": {"list": [{"ASIN": asin, "商品标题": f"Title {asin}"}]},
+            },
+        )
+
+    client = AsinBiReportDataClient(
+        auth_client=DummyAuthClient(),
+        http_post=http_post,
     )
 
     bundle = client.fetch(
@@ -297,117 +626,145 @@ def test_bi_report_data_client_fetches_listing_basic_asins_in_parallel(monkeypat
     assert state["site_codes"] == {"B0TEST1234": "US", "B0TEST5678": "CA"}
 
 
-def test_bi_report_data_client_listing_only_uses_remote_polaris_bjx_token(monkeypatch, tmp_path):
-    monkeypatch.delenv("BI_LOGIN_USERNAME", raising=False)
-    monkeypatch.delenv("BI_LOGIN_PASSWORD", raising=False)
-    monkeypatch.delenv("BI_LOGIN_ENDPOINT", raising=False)
-    monkeypatch.delenv("BI_LOGIN_COOKIE", raising=False)
-    monkeypatch.setattr(bi_report_data, "CONFIG_DIR", tmp_path)
-    get_calls = []
+def test_bi_report_data_client_proxy_ignores_legacy_account_type_per_asin():
+    bodies_by_asin = {}
 
-    def http_get(url, **kwargs):
-        get_calls.append({"url": url, **kwargs})
-        if url.endswith("/polaris-bjx-token"):
-            assert kwargs["headers"]["Authorization"] == "Bearer test"
-            assert kwargs["cookies"] == {"ops_token": "test"}
-            return httpx.Response(
-                200,
-                json={"code": 200, "msg": "获取北极星token成功", "data": {"id": 1, "polaris_bjx_token": "bjx-token"}},
-            )
-        assert kwargs["headers"]["Authorization"] == "Bearer bjx-token"
-        if url.endswith("/listing/getAmazonListing"):
-            return httpx.Response(
-                200,
-                json={"code": 0, "data": [{"id": 3418337, "asin": "B0TEST1234"}]},
-            )
+    def http_post(url, **kwargs):
+        asin = kwargs["json"]["asin"]
+        bodies_by_asin[asin] = dict(kwargs["json"])
         return httpx.Response(
             200,
-            json={
-                "code": 0,
-                "data": {
-                    "item_name.value": "Listing Endpoint Title",
-                    "generic_keyword.value": "storage bed frame search terms",
-                },
-            },
+            json={"code": 200, "data": {"list": [{"ASIN": asin, "商品标题": f"Title {asin}"}]}},
         )
 
     client = AsinBiReportDataClient(
         auth_client=DummyAuthClient(),
+        http_post=http_post,
+    )
+
+    bundle = client.fetch(
+        asins=["B0FY4QV7DR", "B0TEST1234"],
+        source_keys=["listing_basic"],
+        listing_account_type_by_asin={"B0FY4QV7DR": 2},
+    )
+
+    assert bundle["status"] == "success"
+    assert bodies_by_asin == {
+        "B0FY4QV7DR": {"asin": "B0FY4QV7DR", "site": "US"},
+        "B0TEST1234": {"asin": "B0TEST1234", "site": "US"},
+    }
+
+
+def test_listing_auth_user_mode_stops_after_personal_polaris_success(monkeypatch):
+    monkeypatch.delenv(LISTING_AUTH_MODE_ENV, raising=False)
+    auth_client = DummyAuthClient()
+
+    def http_get(url, **kwargs):
+        raise AssertionError(f"managed BJX token endpoint must not be called: {url}")
+
+    client = AsinBiReportDataClient(auth_client=auth_client, http_get=http_get)
+
+    headers, cookies = client._build_listing_request_auth(fallback_headers={}, fallback_cookies={})
+
+    assert headers["Authorization"] == "Bearer user-token"
+    assert cookies == {"polarisUserToken": "user-session"}
+    assert auth_client.build_calls == ["polaris"]
+
+
+def test_listing_auth_falls_back_to_bjx_when_polaris_is_unregistered(monkeypatch):
+    monkeypatch.delenv(LISTING_AUTH_MODE_ENV, raising=False)
+    auth_client = MissingPolarisAuthClient(session_error=RuntimeError("no polaris session"))
+    get_calls = []
+
+    def http_get(url, **kwargs):
+        get_calls.append({"url": url, **kwargs})
+        return httpx.Response(200, json={"code": 200, "data": {"polaris_bjx_token": "managed-token"}})
+
+    client = AsinBiReportDataClient(
+        auth_client=auth_client,
         ops_url="https://ops.example.com/api",
         http_get=http_get,
     )
 
-    bundle = client.fetch(asins=["B0TEST1234"], source_keys=["listing_basic"])
+    headers, cookies = client._build_listing_request_auth(fallback_headers={}, fallback_cookies={})
 
-    assert bundle["status"] == "success"
-    assert list(bundle["sources"]) == ["listing_basic"]
-    assert [call["url"] for call in get_calls] == [
-        "https://ops.example.com/dataMetrics/v1/asin-report-files/polaris-bjx-token",
-        "https://bi.api.xenkee.com/listing/getAmazonListing",
-        "https://bi.api.xenkee.com/listing/amazonlisdet",
-    ]
+    assert headers["Authorization"] == "Bearer managed-token"
+    assert cookies == {}
+    assert auth_client.build_calls == ["polaris", "ops"]
+    assert get_calls[0]["url"].endswith("/polaris-bjx-token")
 
 
-def test_bi_report_data_client_logs_in_with_default_account_when_listing_auth_expired(monkeypatch, tmp_path):
-    monkeypatch.delenv("BI_LOGIN_USERNAME", raising=False)
-    monkeypatch.delenv("BI_LOGIN_PASSWORD", raising=False)
-    monkeypatch.delenv("BI_LOGIN_ENDPOINT", raising=False)
-    monkeypatch.delenv("BI_LOGIN_COOKIE", raising=False)
-    monkeypatch.setattr(bi_report_data, "CONFIG_DIR", tmp_path)
-    get_calls = []
+def test_listing_auth_falls_back_to_bjx_when_direct_exchange_returns_500(monkeypatch):
+    monkeypatch.delenv(LISTING_AUTH_MODE_ENV, raising=False)
+    monkeypatch.setattr(
+        bi_report_data,
+        "load_config",
+        lambda: {
+            "polaris_system_url": "https://polaris.example.com",
+            "polaris_token_endpoint": "/api/auth/cli-token",
+        },
+    )
+    auth_client = MissingPolarisAuthClient()
     post_calls = []
-
-    def http_get(url, **kwargs):
-        get_calls.append({"url": url, **kwargs})
-        if url.endswith("/polaris-bjx-token"):
-            return httpx.Response(200, json={"code": 200, "data": {"polaris_bjx_token": "stale-token"}})
-        if url.endswith("/listing/getAmazonListing") and kwargs["headers"]["Authorization"] == "Bearer stale-token":
-            return httpx.Response(200, json={"code": 401, "msg": "\u672a\u767b\u9646"})
-        assert kwargs["headers"]["Authorization"] == "Bearer login-token"
-        if url.endswith("/listing/getAmazonListing"):
-            return httpx.Response(200, json={"code": 0, "data": [{"id": 3418337, "asin": "B0TEST1234"}]})
-        return httpx.Response(
-            200,
-            json={
-                "code": 0,
-                "data": {
-                    "item_name.value": "Listing Endpoint Title",
-                    "generic_keyword.value": "storage bed frame search terms",
-                },
-            },
-        )
 
     def http_post(url, **kwargs):
         post_calls.append({"url": url, **kwargs})
-        return httpx.Response(
-            200,
-            headers={"set-cookie": "aukeypolarissystem_session=session-1; Path=/"},
-            json={"code": 0, "data": {"access_token": "login-token"}},
-        )
+        request = httpx.Request("POST", url)
+        return httpx.Response(500, request=request, json={"message": "exchange unavailable"})
+
+    def http_get(url, **kwargs):
+        return httpx.Response(200, json={"code": 200, "data": {"polaris_bjx_token": "managed-token"}})
 
     client = AsinBiReportDataClient(
-        auth_client=DummyAuthClient(),
+        auth_client=auth_client,
         ops_url="https://ops.example.com/api",
         http_get=http_get,
         http_post=http_post,
     )
 
-    bundle = client.fetch(asins=["B0TEST1234"], source_keys=["listing_basic"])
+    headers, cookies = client._build_listing_request_auth(fallback_headers={}, fallback_cookies={})
 
-    assert bundle["status"] == "success", bundle
-    assert [call["url"] for call in get_calls] == [
-        "https://ops.example.com/dataMetrics/v1/asin-report-files/polaris-bjx-token",
-        "https://bi.api.xenkee.com/listing/getAmazonListing",
-        "https://bi.api.xenkee.com/listing/getAmazonListing",
-        "https://bi.api.xenkee.com/listing/amazonlisdet",
-    ]
-    assert len(post_calls) == 1
-    assert post_calls[0]["url"] == "https://bi.api.xenkee.com/auth/login"
-    assert post_calls[0]["json"]["username"] == "wanglintao@aukeys.com"
-    assert post_calls[0]["json"]["password"] == "wlt123456"
+    assert headers["Authorization"] == "Bearer managed-token"
+    assert cookies == {}
+    assert post_calls[0]["url"] == "https://polaris.example.com/api/auth/cli-token"
+    assert post_calls[0]["json"] == {"session_id": "private-session-id"}
+
+
+def test_listing_auth_reports_three_sanitized_failures(monkeypatch):
+    monkeypatch.delenv(LISTING_AUTH_MODE_ENV, raising=False)
+    client = AsinBiReportDataClient(auth_client=DummyAuthClient())
+    monkeypatch.setattr(
+        client,
+        "_build_user_polaris_request_auth",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("private-user-token")),
+    )
+    monkeypatch.setattr(
+        client,
+        "_build_direct_polaris_request_auth",
+        lambda: (_ for _ in ()).throw(RuntimeError("private-session-id")),
+    )
+    monkeypatch.setattr(
+        client,
+        "_build_remote_polaris_bjx_request_auth",
+        lambda: (_ for _ in ()).throw(RuntimeError("private-managed-token")),
+    )
+
+    with pytest.raises(AsinBiReportDataBusinessError) as exc_info:
+        client._build_listing_request_auth(fallback_headers={}, fallback_cookies={})
+
+    error = exc_info.value
+    assert error.business_code == "POLARIS_USER_AUTH_MISSING"
+    message = str(error)
+    assert "Polaris user auth is missing or invalid" in message
+    assert "direct token exchange failed" in message
+    assert "managed BJX token fallback failed" in message
+    assert "private-user-token" not in message
+    assert "private-session-id" not in message
+    assert "private-managed-token" not in message
 
 
 def test_bi_report_data_client_listing_basic_maps_template_alias_fields(monkeypatch, tmp_path):
+    monkeypatch.setenv(LISTING_AUTH_MODE_ENV, "managed")
     monkeypatch.delenv("BI_LOGIN_USERNAME", raising=False)
     monkeypatch.delenv("BI_LOGIN_PASSWORD", raising=False)
     monkeypatch.delenv("BI_LOGIN_ENDPOINT", raising=False)
@@ -490,15 +847,25 @@ def test_bi_report_data_client_listing_basic_maps_template_alias_fields(monkeypa
         http_get=http_get,
     )
 
-    bundle = client.fetch(asins=["B0TEST1234"], source_keys=["listing_basic"])
-    row = bundle["sources"]["listing_basic"]["rows"][0]
+    payload = client._fetch_listing_basic_for_asin(
+        asin="B0TEST1234",
+        site_code="US",
+        account_type=1,
+        config={
+            "endpoint": "https://bi.api.xenkee.com/listing/amazonlisdet",
+            "list_endpoint": "https://bi.api.xenkee.com/listing/getAmazonListing",
+            "template_endpoint": "https://bi.api.xenkee.com/amazon/feed/getTemplate",
+        },
+        headers={"Authorization": "Bearer bjx-token"},
+        cookies={},
+    )
+    row = payload["row"]
 
     assert row["产品标题"] == "Listing Endpoint Title"
     assert row["品牌名"] == "TemplateBrand"
     assert row["厂商建议零售价"] == 299.99
     assert row["厂商建议零售价币种"] == "USD"
     assert [call["url"] for call in get_calls] == [
-        "https://ops.example.com/dataMetrics/v1/asin-report-files/polaris-bjx-token",
         "https://bi.api.xenkee.com/listing/getAmazonListing",
         "https://bi.api.xenkee.com/listing/amazonlisdet",
         "https://bi.api.xenkee.com/amazon/feed/getTemplate",
@@ -506,6 +873,7 @@ def test_bi_report_data_client_listing_basic_maps_template_alias_fields(monkeypa
 
 
 def test_bi_report_data_client_listing_only_uses_bi_login_without_ops_auth(monkeypatch):
+    monkeypatch.setenv(LISTING_AUTH_MODE_ENV, "bi_login")
     monkeypatch.setenv("BI_LOGIN_USERNAME", "service@example.com")
     monkeypatch.setenv("BI_LOGIN_PASSWORD", "secret-from-env")
     monkeypatch.setenv("BI_LOGIN_COOKIE", "seed_cookie=seed")
@@ -547,20 +915,23 @@ def test_bi_report_data_client_listing_only_uses_bi_login_without_ops_auth(monke
         http_post=http_post,
     )
 
-    bundle = client.fetch(asins=["B0TEST1234"], source_keys=["listing_basic"])
+    auth = client._build_bi_login_request_auth()
 
-    assert bundle["status"] == "success"
-    assert list(bundle["sources"]) == ["listing_basic"]
-    assert bundle["sources"]["listing_basic"]["row_count"] == 1
+    assert auth is not None
+    headers, cookies = auth
+    assert headers["Authorization"] == "Bearer login-token"
+    assert cookies["seed_cookie"] == "seed"
+    assert cookies["aukeypolarissystem_session"] == "session-1"
     assert len(post_calls) == 1
     assert post_calls[0]["url"] == "https://bi.api.xenkee.com/auth/login"
     assert post_calls[0]["json"]["username"] == "service@example.com"
     assert post_calls[0]["json"]["password"] == "secret-from-env"
     assert post_calls[0]["cookies"] == {"seed_cookie": "seed"}
-    assert len(get_calls) == 2
+    assert get_calls == []
 
 
 def test_bi_report_data_client_uses_local_bi_login_config(monkeypatch, tmp_path):
+    monkeypatch.setenv(LISTING_AUTH_MODE_ENV, "bi_login")
     monkeypatch.delenv("BI_LOGIN_USERNAME", raising=False)
     monkeypatch.delenv("BI_LOGIN_PASSWORD", raising=False)
     monkeypatch.delenv("BI_LOGIN_ENDPOINT", raising=False)
@@ -614,9 +985,13 @@ def test_bi_report_data_client_uses_local_bi_login_config(monkeypatch, tmp_path)
         http_post=http_post,
     )
 
-    bundle = client.fetch(asins=["B0TEST1234"], source_keys=["listing_basic"])
+    auth = client._build_bi_login_request_auth()
 
-    assert bundle["status"] == "success"
+    assert auth is not None
+    headers, cookies = auth
+    assert headers["Authorization"] == "Bearer config-token"
+    assert cookies["seed_cookie"] == "seed-from-config"
+    assert cookies["aukeypolarissystem_session"] == "session-from-config"
     assert len(post_calls) == 1
     assert post_calls[0]["url"] == "https://bi.example.com/auth/login"
     assert post_calls[0]["json"]["username"] == "service@example.com"
@@ -672,6 +1047,7 @@ def test_listing_basic_source_keeps_rows_when_one_asin_is_missing():
         headers={},
         cookies={},
         site_by_asin={},
+        listing_account_type_by_asin={},
         default_site="US",
     )
 

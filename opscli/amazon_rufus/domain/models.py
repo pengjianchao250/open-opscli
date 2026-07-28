@@ -84,6 +84,12 @@ class AnswerData:
     blocks: list[dict] = field(default_factory=list)
     is_success: bool = True
     thread_id: str | None = None
+    has_done_marker: bool = False
+    raw_length: int = 0
+    text_length: int = 0
+    event_count: int = 0
+    error_reason: str = ""
+    attempt_count: int = 1
 
     def to_dict(self) -> dict:
         """转换为前端兼容字段。"""
@@ -96,4 +102,10 @@ class AnswerData:
             "blocks": self.blocks,
             "isSuccess": self.is_success,
             "threadId": self.thread_id,
+            "hasDoneMarker": self.has_done_marker,
+            "rawLength": self.raw_length,
+            "textLength": self.text_length,
+            "eventCount": self.event_count,
+            "errorReason": self.error_reason,
+            "attemptCount": self.attempt_count,
         }

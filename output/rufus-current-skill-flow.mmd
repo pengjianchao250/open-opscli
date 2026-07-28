@@ -1,0 +1,74 @@
+%% 当前 ops-amazon-rufus Skill 的 MCP-first 与限域 CLI fallback 编排流程。
+flowchart TD
+    A["用户提出 Rufus 或 Listing 问答需求"] --> B["解析 ASIN、国家站点、问题来源；初始化 login_recovery_attempted=false"]
+    B --> C{"必需 MCP Tool 是否可用"}
+    C -->|"否：CLI fallback 1"| CLI0["原因：MCP Tool 不可用；进入 CLI fallback"]
+    C -->|"是"| D["MCP: auth_is_authenticated()"]
+
+    D --> E{"MCP 会话是否已登录"}
+    E -->|"否"| F["MCP: auth_mcp_login()"]
+    E -->|"是"| G["MCP: auth_check_token(system='ops')"]
+    F --> G
+    G --> H{"ops Token 是否有效"}
+    H -->|"否"| I["MCP: auth_token_refresh(system='ops')；失败再 auth_mcp_login()"]
+    H -->|"是"| J["MCP: amazon_rufus_remote_consent_status(country)"]
+    I --> J
+
+    J --> K{"remote-consent 状态"}
+    K -->|"unknown 或 invalid"| L["询问用户是否允许保存并复用该站点 Amazon 登录态"]
+    L --> M{"用户选择"}
+    M -->|"拒绝：CLI fallback 2"| N["MCP: amazon_rufus_remote_consent_set(country, allowed=false)"]
+    M -->|"允许"| O["MCP: amazon_rufus_remote_consent_set(country, allowed=true)"]
+    K -->|"denied：CLI fallback 2"| CLI1["原因：用户拒绝复用登录态；进入 CLI fallback"]
+    K -->|"allowed"| P["MCP: amazon_rufus_login_status(country)"]
+    N --> CLI1
+    O --> P
+
+    P --> Q{"OPS 平台 Cookie 鉴权错误、RUFUS_PLATFORM_COOKIE_AUTH_ERROR 或 401"}
+    Q -->|"是：不允许 CLI fallback"| W1["MCP: amazon_rufus_watch_login(asin, country, close_browser=true)"]
+    Q -->|"否"| S{"can_get_backend=true 且 status=ready"}
+
+    S -->|"否"| W1
+    W1 --> T1["工具打开或连接 Chrome；等待用户登录；捕获 /rufus/cl/streaming"]
+    T1 --> T2["保存 Amazon 登录态和请求种子到 OPS 平台 Cookie content"]
+    T2 --> U["MCP: amazon_rufus_login_status(country) 再次确认"]
+    U --> R["MCP: amazon_rufus_get(...)"]
+
+    S -->|"是"| V{"问题来源"}
+    V -->|"单题"| R1["MCP: amazon_rufus_get(asin, country, question)"]
+    V -->|"多题"| R2["MCP: amazon_rufus_get(asin, country, questions)"]
+    V -->|"默认题库"| R3["MCP: amazon_rufus_get(asin, country, skills_dir='.agents/skills')"]
+    R1 --> R
+    R2 --> R
+    R3 --> R
+
+    R --> Z["内部: RufusMcpManager.get 调用 RufusManager.get_backend"]
+    Z --> AA["内部: 从 OPS 平台 Cookie content 读取 Rufus 状态；解析临时问题或默认题库"]
+    AA --> AB{"是否存在同 ASIN、同国家的可复用 streaming seed"}
+    AB -->|"是"| AC["复用已保存 seed"]
+    AB -->|"否"| AD["Headless 捕获 /rufus/cl/streaming"]
+    AC --> AE["HeadlessRufusClient.query 逐题请求 Rufus SSE"]
+    AD --> AE
+
+    AE --> AF{"获取是否成功"}
+    AF -->|"成功"| AG["AnswerReportWriter.write 写 output/amazon-rufus 报告"]
+    AG --> AH["返回本次 report_path；最终只读取本次路径"]
+    AF -->|"平台 Cookie 鉴权错误或 401"| W1
+    AF -->|"三类登录态错误且未恢复过"| AJ["标记 login_recovery_attempted=true"]
+    AJ --> AK["MCP: amazon_rufus_logout(country)"]
+    AK --> AL["MCP: amazon_rufus_watch_login(asin, country, close_browser=true)"]
+    AL --> R
+    AF -->|"已恢复过或其他错误"| AM["直接返回错误；其他错误不允许 CLI fallback"]
+
+    CLI0 --> C0["CLI: opscli amazon-rufus login-status COUNTRY --pretty"]
+    CLI1 --> C0
+    C0 --> C1{"can_get_backend=true"}
+    C1 -->|"否"| C2["CLI: opscli amazon-rufus watch-login ASIN COUNTRY --close-browser --pretty"]
+    C1 -->|"是"| C3{"问题来源"}
+    C2 --> C3
+    C3 -->|"单题"| C4["CLI: opscli amazon-rufus get-backend ASIN COUNTRY -q 问题"]
+    C3 -->|"多题"| C5["CLI: opscli amazon-rufus get-backend ASIN COUNTRY -q 问题1 -q 问题2"]
+    C3 -->|"默认题库"| C6["CLI: opscli amazon-rufus get-backend ASIN COUNTRY --skills-dir .agents/skills"]
+    C4 --> AH
+    C5 --> AH
+    C6 --> AH

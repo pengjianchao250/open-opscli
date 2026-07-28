@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 from pathlib import Path
 from typing import NamedTuple
 
@@ -69,6 +70,25 @@ class SourceSnapshot(NamedTuple):
             if source_name == filename:
                 return content
         raise KeyError(filename)
+
+
+def parse_filter_config(raw: str | None) -> dict | None:
+    """解析字段 CSV filter_config 列（可选列，旧数据无此列）。
+
+    空值/缺列返回 None；enabled 非真视为未配置返回 None；
+    非法 JSON 抛 ValueError（与本模块 fail-fast 校验哲学一致，
+    坏数据应在升级链路暴露而非静默吞掉）。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        config = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("invalid_filter_config") from exc
+    if not isinstance(config, dict) or not config.get("enabled"):
+        return None
+    return config
 
 
 def _source_path(data_dir: Path, filename: str) -> Path:
@@ -269,7 +289,134 @@ def load_dataset_fields(
         if snapshot_flag not in {"", "0", "1"}:
             raise ValueError("invalid_snapshot_metric")
         row["snapshot_metric"] = snapshot_flag or "0"
-    return rows
+        # 字段级默认条件（可选列）：服务端 1.4.0+ 下发，旧 CSV 无此列时为 None
+        row["filter_config"] = parse_filter_config(row.get("filter_config"))
+    return _merge_duplicate_field_rows(rows)
+
+
+# 判定重复字段行「执行语义一致」的列集合：这些列决定查询构造与聚合口径，
+# 任何一列不一致都不允许自动合并（verbose_name/global_alias 等仅是展示别名）
+_FIELD_SEMANTIC_KEYS = (
+    "field_type",
+    "summary_expression",
+    "detail_expression",
+    "snapshot_metric",
+    "has_formula_config",
+)
+
+
+def _contains_cjk(text: str) -> bool:
+    """判断文本是否包含中日韩统一表意文字（用于挑选中文展示名主行）。"""
+    return any("㐀" <= char <= "鿿" for char in text)
+
+
+def _field_semantic_signature(row: dict) -> tuple:
+    """提取字段行的执行语义签名（含 filter_config 的稳定序列化）。"""
+    config = row.get("filter_config")
+    return tuple(str(row.get(key, "")).strip() for key in _FIELD_SEMANTIC_KEYS) + (
+        json.dumps(config, ensure_ascii=False, sort_keys=True) if config else "",
+    )
+
+
+def _merge_duplicate_field_rows(rows: list[dict]) -> list[dict]:
+    """合并同数据集内 field_name 重复且执行语义一致的字段行。
+
+    为什么需要：BI 侧同一物理字段可以挂多个全局别名（global_alias），
+    发布包 dataset_fields.csv 会为其导出多行——field_name 相同、
+    verbose_name/global_alias 不同（2026-07-15 实测即时综合数据集
+    44 个字段双注册），曾令下游 duplicate_dataset_field 硬失败、
+    整个数据集不可查且升级无法自愈。
+
+    合并规则（2026-07-15 实测双注册两种形态全覆盖）：
+    - 形态一「纯标签差异」：执行语义（_FIELD_SEMANTIC_KEYS + filter_config）
+      完全一致，仅 verbose_name/global_alias 不同——直接合并，
+      主行优先取「含中文且不同于技术字段名」的展示名（利于中文点名匹配），
+      并列时保留 CSV 首次出现的行（确定性）；
+    - 形态二「公式 vs 裸指标」：同名字段一行带公式配置、一行是裸指标，
+      且 field_type/snapshot_metric/filter_config 一致——优先采纳公式注册。
+      为什么：公式表达式是服务端权威配置的聚合口径（均值/比率类字段），
+      把公式字段当普通指标 SUM 聚合会产出错误业务数字（均值/比率不可再累加），
+      宁可信公式口径也不能信裸注册；
+    - 其余行的 verbose_name 收进主行 alt_verbose_names（去重、保序），
+      供字段打分与点名解析识别旧标签；
+    - 以上两种形态之外的冲突（field_type/快照标记/默认条件不一致等）
+      原样保留全部行，由下游唯一性校验硬失败
+      （真正无法自动裁决的元数据异常，须人工反馈处理）。
+    """
+    groups: dict[tuple[str, str], list[dict]] = {}
+    order: list[tuple[str, str]] = []
+    for row in rows:
+        key = (row["dataset_alias"], row["field_name"])
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+    merged: list[dict] = []
+    for key in order:
+        group = groups[key]
+        if len(group) == 1:
+            merged.append(group[0])
+            continue
+        candidates = _mergeable_rows(group)
+        if candidates is None:
+            # 无法自动裁决的语义冲突：保留全部行让下游唯一性校验硬失败
+            merged.extend(group)
+            continue
+        primary = next(
+            (
+                row
+                for row in candidates
+                if _contains_cjk(row.get("verbose_name", ""))
+                and row.get("verbose_name", "").strip().casefold()
+                != row["field_name"].casefold()
+            ),
+            candidates[0],
+        )
+        primary_label = primary.get("verbose_name", "").strip()
+        alt_labels: list[str] = []
+        for row in group:
+            label = row.get("verbose_name", "").strip()
+            if label and label != primary_label and label not in alt_labels:
+                alt_labels.append(label)
+        if alt_labels:
+            # 备选展示名仅用于匹配增强，additive 键不影响既有消费方
+            primary["alt_verbose_names"] = alt_labels
+        merged.append(primary)
+    return merged
+
+
+def _mergeable_rows(group: list[dict]) -> list[dict] | None:
+    """判定一组同名字段行是否可自动合并，可合并时返回主行候选列表。
+
+    返回值语义：
+    - 形态一（纯标签差异）：全组语义签名一致，任意行都可当主行，返回全组；
+    - 形态二（公式 vs 裸指标）：返回公式注册行（主行只能从公式行里选）；
+    - None：语义冲突无法自动裁决，调用方保留原始行触发下游硬失败。
+    """
+    signatures = {_field_semantic_signature(row) for row in group}
+    if len(signatures) == 1:
+        return group
+    # 公式列以外的语义（field_type/快照/默认条件）必须一致才可能是形态二
+    base_signatures = {
+        (
+            row["field_type"],
+            str(row.get("snapshot_metric", "")).strip() or "0",
+            json.dumps(row.get("filter_config"), ensure_ascii=False, sort_keys=True)
+            if row.get("filter_config")
+            else "",
+        )
+        for row in group
+    }
+    if len(base_signatures) != 1:
+        return None
+    formula_rows = [row for row in group if row.get("has_formula_config") == "1"]
+    plain_rows = [row for row in group if row.get("has_formula_config") == "0"]
+    if not formula_rows or not plain_rows:
+        return None
+    # 多行公式注册且表达式不一致时同样无法裁决（实测恒为 1 公式 + 1 裸指标）
+    if len({_field_semantic_signature(row) for row in formula_rows}) != 1:
+        return None
+    return formula_rows
 
 
 def load_select_columns(

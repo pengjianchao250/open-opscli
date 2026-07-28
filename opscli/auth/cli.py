@@ -99,6 +99,11 @@ def login():
         except Exception as _refresh_exc:
             import logging
             logging.getLogger("opscli.auth").debug("登录后 Token 预刷新失败（不影响登录）: %s", _refresh_exc)
+        # 登录成功后失效元数据缓存：授权范围可能随账号变化，强制下次重新拉取
+        # 惰性导入避免 auth→query 的模块级环依赖
+        from opscli.query.services.metadata_cache import invalidate_metadata_cache
+
+        invalidate_metadata_cache(user_email=result.get("email") or None)
         console.print(f"[green]√ 授权成功！账号：{result.get('email', '')}[/green]")
     except (DeviceFlowExpiredError, DeviceFlowDeniedError) as e:
         console.print(f"[red]× {e}[/red]")
@@ -109,7 +114,30 @@ def login():
 def logout():
     """清除本地所有凭证"""
     CredentialStore().clear()
+    # 登出即失效元数据缓存（避免残留上一个账号的授权数据）
+    # 惰性导入避免 auth→query 的模块级环依赖
+    from opscli.query.services.metadata_cache import invalidate_metadata_cache
+
+    invalidate_metadata_cache()
     console.print("[green]√ 已退出，本地凭证已清除[/green]")
+
+
+@app.command()
+def me(
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
+):
+    """查看当前授权用户信息（调用 /api/v1/auth/me）。
+
+    支持显式授权：opscli auth me --session-id=xxx [--ops-jwt-token=xxx]
+    未传显式凭证时使用本地登录态。
+    """
+    try:
+        info = _client().get_me()
+    except Exception as e:
+        console.print(f"[red]× 获取用户信息失败: {e}[/red]")
+        raise typer.Exit(1)
+    # 纯 JSON 输出，便于脚本消费；--pretty 时缩进美化
+    typer.echo(_json.dumps(info, ensure_ascii=False, indent=2 if pretty else None))
 
 
 @token_app.command("status")
@@ -152,7 +180,10 @@ def token_get(
     try:
         typer.echo(_client().get_token(system))
     except (NotAuthenticatedError, SystemNotFoundError) as e:
-        console.print(f"[red]{e}[/red]", err=True)
+        # 错误必须走 stderr：本命令 stdout 是纯 JWT，供脚本 $(...) 捕获，
+        # 错误混入 stdout 会污染捕获结果。rich Console.print 不支持 err 参数（会抛
+        # TypeError），故改用 typer.echo(..., err=True) 输出到 stderr。
+        typer.echo(f"{e}", err=True)
         raise typer.Exit(1)
 
 

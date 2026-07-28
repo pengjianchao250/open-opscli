@@ -11,8 +11,8 @@
    stdout 只输出预览 + 披露 + 内嵌证据合同，单次输出限幅。
 
 用法（规划器 ready 后的唯一执行入口）：
-  python3 scripts/run_query.py --table-id 2 --json "$QUERY_JSON" [--preview-rows 20] [--no-evidence]
-  python3 scripts/run_query.py --table-id 2 --json-file payload.json
+  python3 scripts/run_query.py --table-id 2 --json "$QUERY_JSON" --plan-file query-plan.json
+  python3 scripts/run_query.py --table-id 2 --json-file payload.json --plan-file query-plan.json
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import evidence_contract
+import plan_integrity
 
 # stdout 输出限幅：预览+披露+证据合同的总字节数护栏
 MAX_STDOUT_BYTES = 8000
@@ -83,6 +84,81 @@ def _normalize_order_by(payload: dict) -> list[dict]:
     return normalized
 
 
+# filter_config 操作符 → 简化查询操作符（与规划器 query_template 预填映射一致）
+_DEFAULT_FILTER_OP_MAP = {
+    "equals": "=", "notEquals": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<=",
+}
+
+
+def _apply_default_filters(payload: dict, defaults: list[dict]) -> list[str]:
+    """生成数据集默认条件的中文披露说明（服务端权威注入，本函数只负责披露对齐，不改 payload）。
+
+    架构背景（QA 评审结论 5）：服务端是默认条件注入的唯一权威方，日期预设值
+    （如 beforeYesterday / thisQuarter）只由服务端在执行时刻解析成真实日期，
+    客户端预注入会把字面量字符串写入 filters，服务端 AND 合并后永不匹配日期列
+    → 配置了日期默认条件的数据集恒返回 0 行。
+
+    本函数保留对用户的透明性披露（覆盖语义，2026-07 评审定稿）：
+    - 用户没传该字段 → 提示服务端将自动应用数据集默认条件
+    - 用户传了该字段（任意条件） → 提示用户条件将覆盖默认值
+    - filter_agg != none 的度量 having 条件 → 提示服务端将按聚合后过滤应用
+    - 日期预设值 → 原样展示，注明"服务端解析为执行日"
+
+    旧"AND 冲突同时生效结果可能为空"语义已废弃：服务端改为覆盖语义，
+    用户对某字段传了任意条件 → 服务端用用户的，不注入默认。
+
+    payload 不被修改。返回中文披露行列表。
+    """
+    notes: list[str] = []
+    # 读取用户已有 filters（只读，不写入）
+    filters = payload.get("filters") or []
+    for default in defaults or []:
+        # filter_agg != none 的度量条件由服务端 having 兜底
+        if default.get("filter_agg", "none") != "none":
+            value_text = "、".join(str(v) for v in (default.get("values") or []))
+            label = default.get("label_zh") or default.get("field_name", "")
+            notes.append(f"服务端将按聚合后过滤应用默认条件：{label} = {value_text}（having）")
+            continue
+        op = _DEFAULT_FILTER_OP_MAP.get(default.get("operator", "equals"))
+        if op is None:
+            # isEmpty/isNotEmpty 等暂不支持的操作符：服务端兜底，仅披露
+            continue
+        field = default["field_name"]
+        values = default.get("values") or []
+        if not values:
+            continue
+        # 找出用户 payload 中已有的同字段条件（兼容 "table.field" 形式的 field 名）
+        user_conditions = [f for f in filters if isinstance(f, dict)
+                           and str(f.get("field", "")).split(".")[-1] == field]
+        label = default.get("label_zh") or field
+        # 日期预设值（如 beforeYesterday/thisQuarter）原样展示，注明服务端解析
+        date_preset_keywords = {
+            "beforeYesterday", "yesterday", "today", "thisWeek", "lastWeek",
+            "thisMonth", "lastMonth", "thisQuarter", "lastQuarter", "thisYear", "lastYear",
+        }
+        value_texts = []
+        for v in values:
+            if str(v) in date_preset_keywords:
+                value_texts.append(f"{v}（服务端解析为执行日）")
+            else:
+                value_texts.append(str(v))
+        value_text = "、".join(value_texts)
+
+        if default.get("type") == "optional":
+            # optional 类型：用户已有同字段条件时，服务端用用户的（覆盖语义），不披露
+            if user_conditions:
+                continue
+            # optional 且用户无该字段：服务端将应用默认
+            notes.append(f"服务端将自动应用可选默认条件：{label} = {value_text}")
+        elif user_conditions:
+            # 覆盖语义：用户传了该字段的任意条件，服务端用用户的、不注入默认
+            notes.append(f"你已为 {label} 指定条件，将覆盖数据集默认值（默认 {value_text}）")
+        else:
+            # required 且用户无该字段：服务端将自动应用默认条件
+            notes.append(f"服务端将自动应用数据集默认条件：{label} = {value_text}（{default.get('type', 'required')}）")
+    return notes
+
+
 def _precheck(payload: dict) -> None:
     """执行前静态校验：把 simple-query-guide 的「执行前检查」从提示词变成代码。"""
     blob = json.dumps(payload, ensure_ascii=False)
@@ -111,6 +187,112 @@ def _precheck(payload: dict) -> None:
                 "公式字段不传普通聚合，删除 aggregation 后重试。"
             )
     _normalize_order_by(payload)
+
+
+def _field_name(value: object) -> str:
+    """归一 payload 字段引用，兼容 ``table.field`` 形态。"""
+    return str(value or "").split(".")[-1]
+
+
+def _validate_plan_binding(plan: dict, table_id: str, payload: dict) -> None:
+    """把执行请求硬绑定到规划器的表、状态和授权字段集合。"""
+    if plan.get("contract") != "query_plan_model_contract_v2":
+        raise PrecheckError("plan 不是 query_plan_model_contract_v2 规划器输出。")
+    if plan.get("status") != "planned":
+        raise PrecheckError("plan 尚未达到 planned 状态：先完成规划器要求的澄清或恢复动作。")
+    execution = plan.get("execution_ref")
+    if not isinstance(execution, dict):
+        raise PrecheckError("plan 缺少 execution_ref，禁止无授权引用执行。")
+    if execution.get("plan_integrity") and not plan_integrity.verify(plan):
+        raise PrecheckError("plan 完整性校验失败：禁止手工修改规划结果，请重新运行规划器。")
+    planned_table = execution.get("table_id")
+    if str(planned_table) != str(table_id):
+        raise PrecheckError(
+            f"--table-id 与规划器不一致：收到 {table_id}，规划器为 {planned_table}。"
+        )
+    payload_table = payload.get("tableId")
+    if payload_table not in (None, "") and str(payload_table) != str(planned_table):
+        raise PrecheckError(
+            f"payload.tableId 与规划器不一致：收到 {payload_table}，规划器为 {planned_table}。"
+        )
+    if not isinstance(execution.get("query_template"), dict):
+        raise PrecheckError(
+            "规划器尚未下发 query_template：先完成默认时间、推荐字段或权限枚举确认。"
+        )
+    template = execution["query_template"]
+
+    # 手工 payload 只允许补充排序、行数等执行参数；规划器确定的主周期和
+    # 对比周期必须原样执行，避免“本月”在拼参时漂移成近 30 天。
+    date_fields = {
+        str(item.get("field_name"))
+        for item in execution.get("date_fields") or []
+        if isinstance(item, dict) and item.get("field_name")
+    }
+
+    def _time_filters(value: dict) -> list[dict]:
+        return [
+            item
+            for item in value.get("filters") or []
+            if isinstance(item, dict) and _field_name(item.get("field")) in date_fields
+        ]
+
+    if (
+        _time_filters(payload) != _time_filters(template)
+        or payload.get("dataComparison") != template.get("dataComparison")
+    ):
+        raise PrecheckError(
+            "payload 时间范围与规划器不一致：主周期和对比周期禁止改写，请直接执行 query_template。"
+        )
+    if execution.get("plan_integrity"):
+        for key in ("dimensions", "metrics", "filters"):
+            if payload.get(key) != template.get(key):
+                raise PrecheckError(
+                    f"payload.{key} 与规划器原始模板不一致：只允许调整 orderBy 和 limit，"
+                    "禁止删除筛选或改写字段。"
+                )
+
+    planned_dimensions = {
+        str(item.get("field_name"))
+        for item in execution.get("dimensions") or []
+        if isinstance(item, dict) and item.get("field_name")
+    }
+    planned_metrics = {
+        str(item.get("field_name"))
+        for item in execution.get("metrics") or []
+        if isinstance(item, dict) and item.get("field_name")
+    }
+    filter_fields = planned_dimensions | planned_metrics
+    for key in ("date_fields", "filter_components", "default_filters"):
+        filter_fields.update(
+            str(item.get("field_name"))
+            for item in execution.get(key) or []
+            if isinstance(item, dict) and item.get("field_name")
+        )
+    platform_field = (execution.get("platform_component_alias") and "platform_name") or ""
+    if platform_field:
+        filter_fields.add(platform_field)
+
+    def _assert_fields(entries: object, allowed: set[str], label: str) -> None:
+        if entries is None:
+            return
+        if not isinstance(entries, list):
+            raise PrecheckError(f"payload.{label} 必须是数组。")
+        unknown = [
+            _field_name(item.get("field"))
+            for item in entries
+            if isinstance(item, dict) and _field_name(item.get("field")) not in allowed
+        ]
+        if unknown:
+            raise PrecheckError(
+                f"payload.{label} 含规划器未授权字段 {unknown[:3]}：只能使用 execution_ref 中的字段。"
+            )
+
+    _assert_fields(payload.get("dimensions"), planned_dimensions, "dimensions")
+    _assert_fields(payload.get("metrics"), planned_metrics, "metrics")
+    _assert_fields(payload.get("filters"), filter_fields, "filters")
+    comparison = payload.get("dataComparison")
+    if isinstance(comparison, dict) and _field_name(comparison.get("field")) not in filter_fields:
+        raise PrecheckError("dataComparison.field 不在规划器授权日期字段中。")
 
 
 def _run_opscli(table_id: str, payload: dict) -> dict:
@@ -246,9 +428,17 @@ def _compact_preview(rows: list[dict], preview_rows: int) -> list[dict]:
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--table-id", required=True)
+    parser.add_argument("--table-id", default="")
     parser.add_argument("--json", default="", help="查询 payload JSON 字符串")
     parser.add_argument("--json-file", default="", help="payload 文件路径（- 为 stdin）")
+    plan_group = parser.add_mutually_exclusive_group()
+    plan_group.add_argument("--plan-json", default="", help="query_plan.py 的完整模型合同 JSON")
+    plan_group.add_argument("--plan-file", default="", help="query_plan.py 模型合同文件路径")
+    parser.add_argument(
+        "--unsafe-unbound-plan",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--preview-rows", type=int, default=20)
     parser.add_argument("--no-evidence", action="store_true", help="不内嵌证据合同")
     parser.add_argument(
@@ -257,24 +447,72 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--result-dir", default=".", help="全量结果 JSON 落盘目录（默认当前目录）"
     )
+    parser.add_argument(
+        "--default-filters",
+        default="",
+        help="规划器 execution_ref.default_filters 的 JSON 数组，执行前自动注入缺失的 required 默认条件",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
+        if args.plan_file:
+            plan_raw = Path(args.plan_file).read_text(encoding="utf-8")
+        else:
+            plan_raw = args.plan_json
+        plan = _parse_payload(plan_raw) if plan_raw.strip() else None
+
         if args.json_file:
             raw = sys.stdin.read() if args.json_file == "-" else Path(args.json_file).read_text(encoding="utf-8")
         else:
             raw = args.json
-        if not raw.strip():
-            raise PrecheckError("缺少 payload：用 --json 或 --json-file 传入查询参数。")
-        payload = _parse_payload(raw)
-        payload.setdefault("tableId", args.table_id)
+        if raw.strip():
+            payload = _parse_payload(raw)
+            payload_source = "manual_payload"
+        elif plan:
+            execution = plan.get("execution_ref")
+            template = execution.get("query_template") if isinstance(execution, dict) else None
+            if not isinstance(template, dict):
+                raise PrecheckError(
+                    "规划器尚未下发 query_template：先完成规划器要求的澄清或恢复动作。"
+                )
+            payload = json.loads(json.dumps(template, ensure_ascii=False))
+            payload_source = "query_template"
+        else:
+            raise PrecheckError(
+                "缺少 payload：传入 --plan-file 直接执行规划器模板，或用 --json/--json-file 传入查询参数。"
+            )
+
+        table_id = str(args.table_id or "")
+        if plan:
+            execution = plan.get("execution_ref")
+            planned_table = execution.get("table_id") if isinstance(execution, dict) else None
+            table_id = table_id or str(planned_table or "")
+            _validate_plan_binding(plan, table_id, payload)
+        elif not args.unsafe_unbound_plan:
+            raise PrecheckError(
+                "缺少规划器绑定：必须传 --plan-file 或 --plan-json，禁止绕过 query_plan.py 直接执行。"
+            )
+        if not table_id:
+            raise PrecheckError("缺少 table-id：规划合同和 --table-id 均未提供数据集标识。")
+        if payload.get("tableId") not in (None, "") and str(payload["tableId"]) != table_id:
+            raise PrecheckError("payload.tableId 与 --table-id 不一致。")
+        payload.setdefault("tableId", table_id)
+        # 生成规划器下发的数据集默认条件披露说明（服务端权威注入，本函数只读不写 payload）
+        # 注意：默认条件实际注入由服务端完成，客户端不预注入，避免日期预设字面量冲突
+        if args.default_filters.strip():
+            default_filters = json.loads(args.default_filters)
+        elif plan and isinstance(plan.get("execution_ref"), dict):
+            default_filters = plan["execution_ref"].get("default_filters") or []
+        else:
+            default_filters = []
+        default_notes = _apply_default_filters(payload, default_filters)
         _precheck(payload)
         order_by = payload.get("orderBy") or []
 
-        response = _run_opscli(args.table_id, payload)
+        response = _run_opscli(table_id, payload)
         if response.get("success") is False:
             error = response.get("error") or {}
             print(
@@ -301,7 +539,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         order_note = None
         if order_by and not args.no_order_fallback and rows:
-            rows, order_note = _apply_order_fallback(args.table_id, payload, rows, order_by)
+            rows, order_note = _apply_order_fallback(table_id, payload, rows, order_by)
             if order_note:
                 disclosures["order_fallback"] = order_note
                 disclosures["order_disclosure_zh"] = (
@@ -313,6 +551,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             disclosures["order_disclosure_zh"] = (
                 f"排序已生效：按 {order_by[0]['field']} {order_by[0]['direction']}"
             )
+        # 追加默认条件注入披露（有注入或冲突时才写入，保持 disclosures 简洁）
+        if default_notes:
+            disclosures["default_filters_zh"] = default_notes
 
         # 全量结果落盘：模型上下文只进预览，完整数据供导出/复核
         result_path = Path(args.result_dir) / f"query_result_{int(time.time())}.json"
@@ -326,6 +567,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         output: dict[str, Any] = {
             "status": "ok",
+            "plan_execution": {
+                "payload_source": payload_source,
+                "integrity_verified": bool(
+                    plan
+                    and isinstance(plan.get("execution_ref"), dict)
+                    and plan["execution_ref"].get("plan_integrity")
+                    and plan_integrity.verify(plan)
+                ),
+            },
             "disclosures": disclosures,
             "preview_rows": _compact_preview(rows, args.preview_rows),
         }
@@ -359,8 +609,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "status": "executor_error",
                     "error": str(error)[:200],
                     "next_action_zh": (
-                        "执行器异常：先原样重试一次；仍失败改用 opscli query simple 直连执行，"
-                        "并按 references/feedback-guide.md 提交一次反馈。"
+                        "执行器异常：先原样重试一次；仍失败按 references/feedback-guide.md "
+                        "提交一次反馈并停止，禁止绕过执行器直连。"
                     ),
                 },
                 ensure_ascii=False,

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -215,10 +215,11 @@ def collect_skill_datas(
         skill_dir = root / name
         for file_path in sorted(p for p in skill_dir.rglob("*") if _is_packable_file(p)):
             relative_parent = file_path.parent.relative_to(root)
-            datas.append((str(file_path), str(Path("opscli") / "skills" / "templates" / relative_parent)))
+            destination = PurePosixPath("opscli", "skills", "templates", *relative_parent.parts)
+            datas.append((str(file_path), str(destination)))
     manifest_file = root / MANIFEST_FILENAME
     if manifest_file.exists():
-        datas.append((str(manifest_file), str(Path("opscli") / "skills" / "templates")))
+        datas.append((str(manifest_file), "opscli/skills/templates"))
     return datas
 
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from opscli.config import __version__
+from opscli.auth.context import get_explicit_credentials
 from opscli.auth.storage.credential_store import CredentialStore
 from opscli.auth.core.system_registry import SystemRegistry
 from opscli.auth.core.token_manager import TokenManager
@@ -23,16 +24,33 @@ class AuthClient:
         self._tm = TokenManager(store=self._store, registry=self._registry)
 
     def get_token(self, alias: str) -> str:
-        """获取指定系统的有效 JWT（自动刷新）"""
+        """获取指定系统的有效 JWT（自动刷新）。
+
+        显式凭证模式优先（中间件注入点）：
+        - 命令行显式传入了该系统的 JWT → 直接返回，不读本地存储、不发网络；
+        - 仅传了 session_id、未给该系统 JWT → 用 session_id 向后端实时换取（不落盘）；
+        - 未启用显式模式 → 回退本地 CredentialStore 常规流程（带缓存与自动刷新）。
+        """
+        creds = get_explicit_credentials()
+        if creds is not None:
+            jwt = creds.jwt_for(alias)
+            if jwt:
+                return jwt
+            # 显式模式但未直接给该系统 JWT：用 session_id 无状态换取，不读写本地存储
+            return self._tm.get_token_by_session(creds.session_id, alias)
         return self._tm.get_token(alias)
 
     def get_session(self, alias: str | None = None) -> str:
         """获取当前登录态对应的 session_id。
 
+        显式凭证模式优先返回命令行传入的 session_id；否则读取本地登录态。
         参数 `alias` 当前仅用于保持调用语义与 `get_token(alias)` 一致，
         session 本身为全局登录态，不区分具体业务系统。
         """
         _ = alias
+        creds = get_explicit_credentials()
+        if creds is not None:
+            return creds.session_id
         return self._tm.get_session_id()
 
     def get_device_code(self) -> str | None:
@@ -67,12 +85,52 @@ class AuthClient:
         return self._tm.check_token(alias)
 
     def is_authenticated(self) -> bool:
-        """是否已登录（session_id 存在且未过期）"""
+        """是否已登录（session_id 存在且未过期）。
+
+        显式凭证模式下只要传入了 session_id 即视为已认证，无需本地登录态。
+        """
+        if get_explicit_credentials() is not None:
+            return True
         try:
             self._tm.get_session_id()
             return True
         except Exception:
             return False
+
+    def get_me(self, session_id: str | None = None, jwt: str | None = None) -> dict:
+        """获取当前授权用户信息（GET /api/v1/auth/me）。
+
+        两种凭证来源：
+        - 传入 session_id（MCP 无状态模式）：用外部 session_id/jwt 构造请求头，
+          不依赖本实例的默认凭证目录——解决 MCP 多用户下按 API Key 隔离 session 的问题；
+        - 不传 session_id（CLI 模式）：走 build_request_auth("ops")，
+          显式凭证上下文或本地登录态在此处自动生效。
+
+        Args:
+            session_id: 可选，外部传入的 Session ID（MCP 无状态模式）
+            jwt:        可选，外部传入的 ops JWT（为空时用 session_id 向后端换取）
+
+        Returns:
+            后端返回的用户信息 JSON（原样透传，通常形如 {"data": {...}}）
+
+        Raises:
+            httpx.HTTPStatusError: 后端返回非 2xx 状态码
+        """
+        import httpx
+
+        from opscli.auth.config import get_ops_system_url
+
+        # 有 session_id → 无状态模式，用外部凭证构造请求头（jwt 缺失时自动用 session 换取）；
+        # 无 session_id → CLI 模式，复用统一构造（显式上下文/本地凭证自动生效）
+        if session_id:
+            headers, cookies = self.build_request_auth_with_session(session_id, jwt, "ops")
+        else:
+            headers, cookies = self.build_request_auth("ops")
+        # /api/v1/auth/me 挂在 ops 系统根地址下（与 cli-token 端点同源）
+        url = f"{get_ops_system_url().rstrip('/')}/api/v1/auth/me"
+        resp = httpx.get(url, headers=headers, cookies=cookies, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
 
     def refresh_token(self, alias: str) -> str:
         """强制刷新指定系统 JWT"""
