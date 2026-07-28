@@ -16,17 +16,22 @@
 
 ## 批量创建合同
 
-根级只提交唯一 `datasetId` 和有序 `charts`。每张图表只接受：
+根级只提交唯一 `datasetId` 和有序 `charts`。完整请求示例：
 
 ```json
 {
-  "viewType": "bar_basic",
-  "title": "区域销售额趋势",
-  "height": 30,
-  "fieldLists": [
+  "datasetId": 101,
+  "charts": [
     {
-      "listType": "xAxis",
-      "fields": [{"fieldId": "<actionFieldId>", "fieldSourceType": "dimensions"}]
+      "viewType": "bar_basic",
+      "title": "区域销售额趋势",
+      "height": 30,
+      "fieldLists": [
+        {
+          "listType": "xAxis",
+          "fields": [{"fieldId": "<actionFieldId>", "fieldSourceType": "dimensions"}]
+        }
+      ]
     }
   ]
 }

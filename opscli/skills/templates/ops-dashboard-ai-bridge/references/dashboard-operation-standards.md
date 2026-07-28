@@ -5,8 +5,7 @@
 ## 能力边界
 
 - 只编辑当前页面，不用字段元数据推断真实业务数据。
-- 用户只要求数据分析时，提示切换到“数据分析”模式并停止写入。
-- 优先修改已有图表；页面无法承载目标时才新增。
+- 用户明确指向已有图表时进入修改流程；要求分析主题、总览或新增视图时进入新建流程。
 - 页面固定 12 列，但模型不计算坐标或宽度；创建顺序、默认宽度和位置由页面处理。
 
 ## 数据集
@@ -39,7 +38,7 @@
 | 5 | 绩效与健康监控：监控提醒、平台报告、运营监控 | 提醒：`indicator`、`line_basic`、`hbar_basic`、`hbar_stacked_percent`、`detail_table`；平台：`metric_trend`、`progress_chart`、`hbar_basic`、`detail_table`；运营：`metric_trend`、`bar_basic`、`hbar_stacked_percent`、`detail_table` | 提醒仅单指标时用 `metric_trend` 替换指标卡和折线；平台无目标时用结构图替换进度图；运营有健康目标时增加 `progress_chart` |
 | 6 | 部门工作台兜底：部门数据 | `metric_trend`、`hbar_basic`、`hbar_stacked_percent`、`detail_table` | 无法归入前 5 族时使用，生成前尽量细分业务主题 |
 
-只使用本轮工具 schema 允许的 `viewType`，最多规划 5 张图。日期或连续时间字段可用 `line_basic`、`metric_trend` 或 `combo_bar_line`；离散对象和数值指标用 `bar_basic`，类别名较长时用 `hbar_basic`；部分—整体且类别不超过 5–8 个时用 `pie_circle`，更多类别用 `bar_stacked_percent` 或 `hbar_stacked_percent`；多系列共同分类轴用 `bar_stacked` 或 `hbar_stacked`，比较比例时用对应百分比类型；同群体严格有序阶段用 `funnel_basic`；明确目标、预算、阈值或 SLA 时用 `progress_chart`；有记录主键和处理字段时用 `detail_table`，只有聚合维度和指标时用 `pivot_table` 或 `crosstab_table`。字段条件不成立时删除或替换，不为凑满 5 张伪造分析关系。模型不指定位置或宽度，页面按计划队列自动落位。
+只使用本轮工具 schema 允许的 `viewType`。用户未指定类型时，以 4 到 5 张合法图表为目标；字段不满足时优先按表中规则替换，无法得到至少 4 张合法图表时询问或停止，不伪造分析关系。日期或连续时间字段可用 `line_basic`、`metric_trend` 或 `combo_bar_line`；离散对象和数值指标用 `bar_basic`，类别名较长时用 `hbar_basic`；部分—整体且类别不超过 5–8 个时用 `pie_circle`，更多类别用 `bar_stacked_percent` 或 `hbar_stacked_percent`；多系列共同分类轴用 `bar_stacked` 或 `hbar_stacked`，比较比例时用对应百分比类型；同群体严格有序阶段用 `funnel_basic`；明确目标、预算、阈值或 SLA 时用 `progress_chart`；有记录主键和处理字段时用 `detail_table`，只有聚合维度和指标时用 `pivot_table` 或 `crosstab_table`。模型不指定位置或宽度，页面按计划队列自动落位。
 
 ## 修改安全
 

@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "opscli" / "skills" / "templates"
 SKILL_VERSIONS = {
     "ops-dashboard-data-analysis": "1.0.6",
-    "ops-dashboard-ai-bridge": "1.0.23",
+    "ops-dashboard-ai-bridge": "1.0.25",
 }
 SKILL_LIST_DESCRIPTIONS = {
     "ops-dashboard-data-analysis": "只读分析当前仪表盘的趋势、对比、异常、排名、贡献和业务原因。",
@@ -87,11 +87,16 @@ def test_dashboard_bridge_has_one_batch_creation_flow():
 
     assert skill.count("## 新建图表") == 1
     creation = skill.split("## 新建图表", 1)[1].split("## 修改已有图表", 1)[0]
+    assert "用户场景、分析主题和指定对象提取数据集搜索关键词" in creation
     assert "调用一次 `dashboard_session_get_dataset_fields`" in creation
+    assert "用户指定图表类型时" in creation
+    assert "用户未指定图表类型时" in creation
+    assert "一次规划 4 到 5 张有序图表" in creation
     assert "有序 `charts`" in creation
     assert "已确认的 `datasetId`" in creation
     assert "只调用一次 `dashboard_editor_batch_create_charts`" in creation
-    assert "数据集绑定、字段配置和刷新" in creation
+    assert "图表 ID 创建、数据集绑定、字段批量配置和刷新" in creation
+    assert "全部 `chartIds`" in creation
     assert "结束本次新建流程" in creation
     for forbidden in (
         "dashboard_editor_add_component",
@@ -101,6 +106,8 @@ def test_dashboard_bridge_has_one_batch_creation_flow():
         assert forbidden not in creation
 
     batch_contract = contract.split("## 批量创建合同", 1)[1].split("## 已有图表工具", 1)[0]
+    assert '"datasetId": 101' in batch_contract
+    assert '"charts": [' in batch_contract
     assert '"height"' in batch_contract
     assert '"layout"' not in batch_contract
     assert '"x"' not in batch_contract
@@ -174,7 +181,9 @@ def test_dashboard_bridge_has_one_batch_creation_flow():
         "同群体严格有序阶段",
         "目标、预算、阈值或 SLA",
         "记录主键和处理字段",
-        "不为凑满 5 张伪造分析关系",
+        "以 4 到 5 张合法图表为目标",
+        "无法得到至少 4 张合法图表时询问或停止",
+        "不伪造分析关系",
     ):
         assert field_guard in chart_selection
 
@@ -209,6 +218,12 @@ def test_dashboard_select_tool_and_skill_boundaries_do_not_conflict():
     assert "dashboard_editor_select_chart" in bridge
     assert "dashboard_drag_select_chart" not in bridge
     assert "opscli query" not in bridge
+    assert "分析、洞察、趋势或对比等意图" in bridge
+    assert "进入“新建图表”流程" in bridge
+    assert "不要求切换模式" in bridge
+    assert "提示切换到“数据分析”模式" not in bridge
+    assert "停止页面写入" not in bridge
+    assert "用户明确指向已有图表时进入修改流程" in bridge
     assert "ops-dataset-query" in analysis
     assert "只读工具" in analysis
     assert "设置面板" in analysis
