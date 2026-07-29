@@ -23,6 +23,15 @@ _SKIP_CYTHON = (
 )
 _REPO_ROOT = Path(__file__).resolve().parent
 _PACKAGING_MODULE = _REPO_ROOT / "opscli" / "skills" / "packaging.py"
+_KEEP_SOURCE_MODULE_NAMES = {
+    "__init__",
+    "app_factory",
+    "cli",
+    "instrumentation",
+    "server",
+    "report_skill_usage",
+}
+_KEEP_SOURCE_PATH_PARTS = {"mcp/tools", "collector_mcp", "seller_sprite/mcp_bundle"}
 
 
 def _load_skill_packaging():
@@ -70,16 +79,9 @@ class BuildPyExcludeSource(BuildPyPruneSkillTemplates):
 
     # 不编译、需保留源码的文件名集合（Typer/FastMCP 依赖运行时反射）
     # report_skill_usage 需保留 .py 源文件，因其作为 hook 脚本部署到用户目录
-    _KEEP_SOURCE = {
-        "__init__",
-        "app_factory",
-        "cli",
-        "instrumentation",
-        "server",
-        "report_skill_usage",
-    }
+    _KEEP_SOURCE = _KEEP_SOURCE_MODULE_NAMES
     # 不编译、需保留源码的目录路径片段
-    _KEEP_SOURCE_DIRS = {"mcp/tools", "collector_mcp", "seller_sprite/mcp_bundle"}
+    _KEEP_SOURCE_DIRS = _KEEP_SOURCE_PATH_PARTS
 
     def find_package_modules(self, package, package_dir):
         modules = super().find_package_modules(package, package_dir)
@@ -88,8 +90,7 @@ class BuildPyExcludeSource(BuildPyPruneSkillTemplates):
         return [
             (pkg, mod, filepath)
             for pkg, mod, filepath in modules
-            if mod in self._KEEP_SOURCE
-            or any(d in filepath.replace(os.sep, "/") for d in self._KEEP_SOURCE_DIRS)
+            if _keep_python_source(filepath)
         ]
 
 
@@ -111,68 +112,39 @@ class SdistPruneSkillTemplates(sdist):
             print(f"Skill templates profile={profile} artifact=sdist kept={','.join(kept)}")
 
 
+def _keep_python_source(path: str) -> bool:
+    """判断模块是否依赖运行时反射或作为独立脚本保留源码。"""
+    normalized = path.replace(os.sep, "/")
+    module_name = Path(normalized).stem
+    return (
+        module_name in _KEEP_SOURCE_MODULE_NAMES
+        or module_name.endswith("_cli")
+        or any(part in normalized for part in _KEEP_SOURCE_PATH_PARTS)
+    )
+
+
 def get_extensions():
-    """收集所有需要 Cython 编译的 .py 文件。
-
-    当环境变量 SKIP_CYTHON=1 时返回空列表，跳过编译（本地开发用）。
-    生产构建（GitHub Actions）不设置此变量，正常编译。
-
-    排除规则：
-    - __init__.py：保留为纯 Python，保证包结构和双路径导入（铁律3）
-    - skills/templates/**：Skill 独立脚本，面向用户安装后直接使用，不应编译
-    - cli.py / *_cli.py：Typer 依赖运行时签名反射，Cython 编译后会破坏
-    - mcp/server.py / mcp/tools/*.py：FastMCP 依赖类型注解反射
-    """
+    """收集源码树 .py 或生产 sdist .c 中需要注册的 Cython 扩展。"""
     if _SKIP_CYTHON:
         return []
-    py_files = glob.glob("opscli/**/*.py", recursive=True)
-    extensions = []
+    sources_by_module = {}
+    # 同一模块同时有 .py/.c 时优先 .py；sdist 排除业务源码后自动回退到 .c。
+    for suffix in ("c", "py"):
+        for source in glob.glob(f"opscli/**/*.{suffix}", recursive=True):
+            normalized = source.replace(os.sep, "/")
+            logical_path = normalized.rsplit(".", 1)[0] + ".py"
+            if (
+                "opscli/skills/templates/" in logical_path
+                or _keep_python_source(logical_path)
+            ):
+                continue
+            module_name = logical_path[:-3].replace("/", ".")
+            sources_by_module[module_name] = normalized
 
-    for f in py_files:
-        # 统一使用正斜杠便于跨平台路径判断
-        f_unix = f.replace(os.sep, "/")
-
-        # 排除 __init__.py（铁律3：保留包结构 + 两种导入方式）
-        if os.path.basename(f) == "__init__.py":
-            continue
-
-        # 排除 skills/templates 下的独立脚本（安装后供用户直接运行，不作为模块导入）
-        if "opscli/skills/templates/" in f_unix:
-            continue
-
-        # 排除所有 cli.py / *_cli.py —— Typer 依赖 inspect.signature() 解析参数默认值，
-        # Cython 编译后 cyfunction 丢失签名信息，导致 typer.Option() 无法被正确识别。
-        # marketplace_cli.py / publish_cli.py / sync_exclude_cli.py 等子命令文件同理，
-        # 必须一并排除，否则 @app.command() 在模块初始化时抛出：
-        #   TypeError: Expected str, got OptionInfo
-        _basename = os.path.basename(f)
-        if _basename == "cli.py" or _basename.endswith("_cli.py"):
-            continue
-
-        # 排除 MCP server、tools 和 Collector 公开 Tool —— FastMCP 用 Pydantic
-        # TypeAdapter 解析函数注解，Cython 编译后 cyfunction 无法生成 schema。
-        if (
-            f_unix in {
-                "opscli/mcp/app_factory.py",
-                "opscli/mcp/instrumentation.py",
-                "opscli/mcp/server.py",
-                "opscli/seller_sprite/mcp_bundle.py",
-            }
-            or "opscli/mcp/tools/" in f_unix
-            or "opscli/collector_mcp/" in f_unix
-        ):
-            continue
-
-        # 排除 skills/hooks/report_skill_usage.py —— 该文件是 hook 脚本，
-        # 部署到用户 ~/.opscli/hooks/ 后由 Python 解释器直接执行（不是被 import 的模块）。
-        # 必须保留 .py 源文件，否则 settings_injector.py 通过 pkg_files() 读不到该脚本。
-        if f_unix == "opscli/skills/hooks/report_skill_usage.py":
-            continue
-
-        # 路径转模块名：opscli/auth/cli.py → opscli.auth.cli
-        module_name = f_unix.replace("/", ".")[:-3]
-        extensions.append(Extension(module_name, [f]))
-
+    extensions = [
+        Extension(module_name, [source])
+        for module_name, source in sorted(sources_by_module.items())
+    ]
     return cythonize(
         extensions,
         compiler_directives={

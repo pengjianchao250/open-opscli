@@ -69,6 +69,7 @@ class SellerSpriteApiManager:
         session_owner_id: str = "default",
         listing_remote_task_id: str | None = None,
         listing_task_id_listener: Callable[[str], None] | None = None,
+        progress_listener: Callable[[str, dict[str, Any] | None], None] | None = None,
     ) -> None:
         """创建卖家精灵场景执行器。
 
@@ -79,6 +80,9 @@ class SellerSpriteApiManager:
             session_id: 当前调用会话标识。
             session_state_listener: browser 会话状态监听器。
             session_owner_id: browser worker 所有权标识。
+            listing_remote_task_id: Listing Analysis 已持久化远端任务标识。
+            listing_task_id_listener: 远端任务标识持久化监听器。
+            progress_listener: 仅接收阶段与脱敏白名单元数据的进度监听器。
 
         返回：
             无。
@@ -92,6 +96,7 @@ class SellerSpriteApiManager:
         self.session_owner_id = session_owner_id
         self.listing_remote_task_id = listing_remote_task_id
         self.listing_task_id_listener = listing_task_id_listener
+        self.progress_listener = progress_listener
         self.account_provider = account_provider or SellerSpriteAccountProvider(
             self.settings,
             integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
@@ -175,6 +180,7 @@ class SellerSpriteApiManager:
 
     async def run(self, request: SellerSpriteScenarioRequest) -> SellerSpriteScenarioResult:
         """执行一个接口场景。"""
+        self._emit_progress("resolving")
         scenario = get_scenario(request.scenario)
         site = (request.site or self.settings.default_site).upper()
         period = request.period or self.settings.default_period
@@ -223,6 +229,7 @@ class SellerSpriteApiManager:
             )
             if mode == "browser-route":
                 if request.scenario == "listing-analysis" and self.listing_remote_task_id:
+                    self._emit_progress("remote_poll")
                     from opscli.seller_sprite.browser_route import (
                         fetch_listing_analysis_report_with_browser_route,
                     )
@@ -251,6 +258,7 @@ class SellerSpriteApiManager:
                         owner_id=self.session_owner_id,
                     )
                 else:
+                    self._emit_progress("browser_wait")
                     browser_result = await _run_browser_route_request(
                         settings=self.settings,
                         account=account,
@@ -282,6 +290,7 @@ class SellerSpriteApiManager:
                 high_frequency_response = browser_result.high_frequency_response
                 warnings.extend(browser_result.warnings)
             else:
+                self._emit_progress("requesting")
                 main_response = await _request_with_session_retry(
                     client=client,
                     warnings=warnings,
@@ -306,6 +315,7 @@ class SellerSpriteApiManager:
                             result_endpoint_template=scenario.task_result_endpoint or "",
                             referer=scenario.build_referer(payload),
                             params=request.params,
+                            progress_listener=self.progress_listener,
                         ),
                     )
                 if _looks_like_guest_limited_response(main_response, page_size=page_size):
@@ -362,8 +372,10 @@ class SellerSpriteApiManager:
         }
         _write_json(raw_path, raw)
 
+        self._emit_progress("processing")
         rows = _extract_items(main_response, scenario=request.scenario)
         high_frequency_rows = _extract_high_frequency_rows(high_frequency_response)
+        self._emit_progress("exporting")
         if request.scenario == "aba-reverse":
             export = _official_xlsx_export(main_response, root_dir=root_dir)
         elif export_format == "xlsx":
@@ -391,6 +403,7 @@ class SellerSpriteApiManager:
                 high_frequency_rows=high_frequency_rows,
                 warnings=warnings,
             )
+        self._emit_progress("uploading")
         _upload_export_if_enabled(
             export=export,
             job_id=job_id,
@@ -401,6 +414,7 @@ class SellerSpriteApiManager:
             jwt=self.jwt,
             session_id=self.session_id,
         )
+        self._emit_progress("finalizing")
         result = SellerSpriteScenarioResult(
             job_id=job_id,
             scenario=request.scenario,
@@ -437,6 +451,15 @@ class SellerSpriteApiManager:
         merged.setdefault("state", status.get("state") or "succeeded")
         merged.setdefault("stage", status.get("stage") or "finished")
         return merged
+
+    def _emit_progress(
+        self,
+        stage: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """向可选监听器报告粗粒度阶段及脱敏白名单元数据。"""
+        if self.progress_listener is not None:
+            self.progress_listener(stage, metadata)
 
     def _build_root_dir(self, request: SellerSpriteScenarioRequest, job_id: str) -> Path:
         if request.attempt_output_dir:
@@ -589,6 +612,7 @@ async def _poll_ai_task_result(
     result_endpoint_template: str,
     referer: str,
     params: dict[str, Any],
+    progress_listener: Callable[[str, dict[str, Any] | None], None] | None = None,
 ) -> dict[str, Any]:
     task_id = _extract_task_id(submit_response)
     if not task_id:
@@ -606,9 +630,26 @@ async def _poll_ai_task_result(
     )
     endpoint = result_endpoint_template.format(task_id=task_id)
     last_response: dict[str, Any] | None = None
+    last_reported_status = ""
     for attempt in range(attempts):
         task_response = await client.get_json(endpoint, {}, referer=referer)
         last_response = task_response
+        poll_status = _ai_task_status(task_response) or "PENDING"
+        report_due = (
+            attempt == 0
+            or poll_status != last_reported_status
+            or (attempt + 1) % 10 == 0
+        )
+        if progress_listener is not None and report_due:
+            progress_listener(
+                "remote_poll",
+                {
+                    "poll_attempt": attempt + 1,
+                    "poll_total": attempts,
+                    "poll_status": poll_status,
+                },
+            )
+            last_reported_status = poll_status
         if _ai_task_has_content(task_response) or _ai_task_is_done(task_response):
             return _merge_ai_task_response(
                 submit_response=submit_response,

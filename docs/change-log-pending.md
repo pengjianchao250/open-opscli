@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-29 collector_monitor - 新增采集任务监控与提醒服务
+
+**变更原因**：Collector 与卖家精灵任务偶发卡住时缺少独立监督、可视化定位和主动提醒，现有 owner 级心跳也无法证明具体任务仍在推进。
+**改动点**：新增独立 Collector Monitor 服务、只读监控 API/网页/CLI、任务进度与调度器运行时监督、卡住和无人消费判定、企业微信去重及恢复提醒；复审加固多调度器全局账号占用容量、故障接替 CAS 冲突收口、业务库与状态库已打开连接物理身份隔离、只读查询错误语义、阻塞存储线程边界、API Key 探测总超时及禁止密钥重定向、通知正文安全、严格整数配置和公开方法类型合同；首期不提供任务取消、重试或自动恢复。
+**验证结果**：状态库身份、账号池与故障接替聚焦回归 `15 passed`，SellerSprite 监督回归 `97 passed`，Monitor 与 Remote MCP 回归 `89 passed`，构建/入口合同 `5 passed`；组合回归排除 3 项已在基线复现的失败后为 `386 passed, 3 deselected`（1 项既有导出文件名断言受未授权上传影响，2 项既有 `seller-sprite-debug` 顶级命令未注册）。`uv lock --check`、`compileall`、新增行敏感凭证扫描、新增公开方法返回类型检查、生成 C 文件污染检查和 `git diff --check` 通过。生产 sdist 构建成功并包含 269 个 C 源及 Monitor 必需入口；Windows 环境因未安装 MSVC 未构建正式 Cython wheel；另以 `SKIP_CYTHON=1` 构建并安装验证 wheel，确认 `opscli collector-monitor`、`opscli-collector-monitor`、五个 CLI 子命令、七个 HTTP/UI 路径、安全响应头和三条查询命令均可用。
+**影响范围**：新增独立监控进程及 SellerSprite 脱敏监督字段；不改变已有任务提交协议，不允许监控服务修改业务队列。
+**回滚方式**：停止并移除 Collector Monitor 服务，回退监控模块、SellerSprite 监督字段、依赖、测试、文档及本条记录；增量 SQLite 监督字段可保留且不影响旧版本读取。
+---
+
 ## 2026-07-28 seller_sprite - 透传关联流量准备接口错误
 
 **变更原因**：部分 ASIN 调用关联流量准备接口时返回 `ERR_GLOBAL_500`，官网不展示全部变体选择弹窗，browser-route 因未监听准备接口而误报弹窗缺失。

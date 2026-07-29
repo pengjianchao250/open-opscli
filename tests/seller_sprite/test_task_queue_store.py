@@ -84,6 +84,37 @@ def test_store_claim_next_updates_waiting_position(tmp_path: Path):
     assert waiting["position"] == 1
 
 
+def test_claim_returns_committed_attempt_without_reopening_status(tmp_path: Path, monkeypatch):
+    """领取结果必须在领取事务内构造，提交后不得再经过可失败的状态读取。"""
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_request(job_id="job-claim"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "job-claim",
+    )
+    monkeypatch.setattr(
+        store,
+        "get_status",
+        lambda _job_id: (_ for _ in ()).throw(RuntimeError("unexpected status reopen")),
+    )
+
+    claimed = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key-1",
+        assigned_account="account-1",
+        worker_key="slot-1",
+        execution_owner="owner-1",
+    )
+
+    assert claimed is not None
+    assert claimed["job_id"] == "job-claim"
+    assert claimed["state"] == "running"
+    assert claimed["progress_stage"] == "claimed"
+    assert claimed["assignment_generation"] == 1
+
+
 def test_store_claim_next_enforces_one_running_task_per_queue_scope(tmp_path: Path):
     """同一 SQLite 队列范围已有 running 时，其他实例不得继续领取。"""
     from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
@@ -323,7 +354,8 @@ def test_store_migrates_v2_queue_to_shared_account_route(tmp_path: Path):
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT account_route, requested_account_id, requested_account_key, "
-            "execution_owner, heartbeat_at, lease_expires_at, remote_task_id "
+            "execution_owner, heartbeat_at, lease_expires_at, remote_task_id, "
+            "progress_stage, progress_at, progress_sequence "
             "FROM seller_sprite_task_queue WHERE job_id = ?",
             ("legacy-v2-job",),
         ).fetchone()
@@ -337,6 +369,9 @@ def test_store_migrates_v2_queue_to_shared_account_route(tmp_path: Path):
         "heartbeat_at": None,
         "lease_expires_at": None,
         "remote_task_id": None,
+        "progress_stage": "queued",
+        "progress_at": "2026-07-20T10:00:00+08:00",
+        "progress_sequence": 0,
     }
     assert user_version == QUEUE_SCHEMA_VERSION
     claimed = store.claim_next_generic_for_account(
@@ -346,6 +381,79 @@ def test_store_migrates_v2_queue_to_shared_account_route(tmp_path: Path):
         worker_key="public-worker",
     )
     assert claimed["job_id"] == "legacy-v2-job"
+
+
+def test_store_migrates_v5_runtime_capacity_columns(tmp_path: Path):
+    """v5 聚合容量升级后应保留原数据，并以零值等待精确容量心跳。"""
+    from opscli.seller_sprite.services.task_queue_store import (
+        QUEUE_SCHEMA_VERSION,
+        SellerSpriteTaskQueueStore,
+    )
+
+    db_path = tmp_path / "queue.sqlite3"
+    SellerSpriteTaskQueueStore(db_path=db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            DROP TABLE seller_sprite_runtime_heartbeats;
+            CREATE TABLE seller_sprite_runtime_heartbeats (
+                execution_owner TEXT NOT NULL PRIMARY KEY,
+                lifecycle_state TEXT NOT NULL,
+                heartbeat_at TEXT NOT NULL,
+                generic_workers_alive INTEGER NOT NULL DEFAULT 0,
+                listing_worker_alive INTEGER NOT NULL DEFAULT 0,
+                available_capacity INTEGER NOT NULL DEFAULT 0,
+                standby_capacity INTEGER NOT NULL DEFAULT 0,
+                last_claim_at TEXT NULL,
+                last_progress_at TEXT NULL
+            );
+            PRAGMA user_version = 5;
+            """
+        )
+        conn.execute(
+            "INSERT INTO seller_sprite_runtime_heartbeats VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "owner-v5",
+                "running",
+                "2026-07-29T10:00:02+08:00",
+                2,
+                1,
+                2,
+                3,
+                "2026-07-29T10:00:00+08:00",
+                "2026-07-29T10:00:01+08:00",
+            ),
+        )
+
+    migrated = SellerSpriteTaskQueueStore(db_path=db_path)
+    runtime = migrated.get_runtime_heartbeat("owner-v5")
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            str(row[1])
+            for row in conn.execute(
+                "PRAGMA table_info(seller_sprite_runtime_heartbeats)"
+            )
+        }
+        user_version = conn.execute("PRAGMA user_version").fetchone()[0]
+
+    assert user_version == QUEUE_SCHEMA_VERSION == 6
+    assert {
+        "generic_available_capacity",
+        "listing_available_capacity",
+    } <= columns
+    assert runtime == {
+        "execution_owner": "owner-v5",
+        "lifecycle_state": "running",
+        "heartbeat_at": "2026-07-29T10:00:02+08:00",
+        "generic_workers_alive": 2,
+        "listing_worker_alive": 1,
+        "generic_available_capacity": 0,
+        "listing_available_capacity": 0,
+        "available_capacity": 2,
+        "standby_capacity": 3,
+        "last_claim_at": "2026-07-29T10:00:00+08:00",
+        "last_progress_at": "2026-07-29T10:00:01+08:00",
+    }
 
 
 def test_store_does_not_auto_consume_while_legacy_generic_task_is_running(tmp_path: Path):
@@ -466,7 +574,7 @@ def test_store_rejects_late_finish_after_failover_generation_changes(tmp_path: P
         worker_key="slot-1",
     )
 
-    replacement = store.reassign_task_for_failover(
+    reassignment = store.reassign_task_for_failover(
         job_id="job-failover",
         current_account_key="account-key-1",
         current_generation=claimed["assignment_generation"],
@@ -476,6 +584,9 @@ def test_store_rejects_late_finish_after_failover_generation_changes(tmp_path: P
         error_code="SELLER_SPRITE_ACCOUNT_LOGIN_FAILED",
         retry_reason="account_login_failed",
     )
+    assert reassignment.outcome == "reassigned"
+    replacement = reassignment.status
+    assert replacement is not None
     late_finish = store.finish_task_if_current(
         job_id="job-failover",
         account_key="account-key-1",
@@ -498,6 +609,94 @@ def test_store_rejects_late_finish_after_failover_generation_changes(tmp_path: P
     assert late_finish is False
     assert current_finish is True
     assert store.get_status("job-failover")["row_count"] == 2
+    events = store.list_task_progress_events(job_id="job-failover")
+    assert [(event["stage"], event["assignment_generation"]) for event in events] == [
+        ("claimed", 1),
+        ("reassigned", 2),
+        ("succeeded", 2),
+    ]
+    assert events[-2]["metadata"] == {"outcome": "reassigned"}
+    assert events[-1]["metadata"] == {"outcome": "succeeded"}
+
+
+def test_store_failover_distinguishes_busy_and_stale_without_reopening_status(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """改绑必须区分备用占用和旧代际，并在事务内返回成功快照。"""
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_request(job_id="job-current"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "job-current",
+    )
+    store.enqueue(
+        request=_request(job_id="job-occupied"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "job-occupied",
+    )
+    claimed = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key-1",
+        assigned_account="account-1",
+        worker_key="slot-1",
+    )
+    occupied = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key-2",
+        assigned_account="account-2",
+        worker_key="external-slot",
+    )
+    assert claimed is not None
+    assert occupied is not None
+
+    busy = store.reassign_task_for_failover(
+        job_id="job-current",
+        current_account_key="account-key-1",
+        current_generation=claimed["assignment_generation"],
+        replacement_account_key="account-key-2",
+        replacement_account="account-2",
+        worker_key="slot-1",
+        error_code="SELLER_SPRITE_AUTHENTICATION_ERROR",
+        retry_reason="account_authentication_failed",
+    )
+    assert busy.outcome == "replacement_busy"
+    assert busy.status is None
+
+    monkeypatch.setattr(
+        store,
+        "get_status",
+        lambda _job_id: (_ for _ in ()).throw(RuntimeError("unexpected status reopen")),
+    )
+    reassigned = store.reassign_task_for_failover(
+        job_id="job-current",
+        current_account_key="account-key-1",
+        current_generation=claimed["assignment_generation"],
+        replacement_account_key="account-key-3",
+        replacement_account="account-3",
+        worker_key="slot-1",
+        error_code="SELLER_SPRITE_AUTHENTICATION_ERROR",
+        retry_reason="account_authentication_failed",
+    )
+    assert reassigned.outcome == "reassigned"
+    assert reassigned.status is not None
+    assert reassigned.status["assigned_account_key"] == "account-key-3"
+    assert reassigned.status["assignment_generation"] == 2
+
+    stale = store.reassign_task_for_failover(
+        job_id="job-current",
+        current_account_key="account-key-1",
+        current_generation=claimed["assignment_generation"],
+        replacement_account_key="account-key-4",
+        replacement_account="account-4",
+        worker_key="slot-1",
+        error_code="SELLER_SPRITE_AUTHENTICATION_ERROR",
+        retry_reason="account_authentication_failed",
+    )
+    assert stale.outcome == "stale_attempt"
+    assert stale.status is None
 
 
 def test_store_rejects_stale_generation_without_updating_mcp_terminal_state(tmp_path: Path):
@@ -520,7 +719,7 @@ def test_store_rejects_stale_generation_without_updating_mcp_terminal_state(tmp_
         assigned_account="account-1",
         worker_key="slot-1",
     )
-    replacement = store.reassign_task_for_failover(
+    reassignment = store.reassign_task_for_failover(
         job_id="job-mcp-cas",
         current_account_key="account-key-1",
         current_generation=claimed["assignment_generation"],
@@ -530,6 +729,9 @@ def test_store_rejects_stale_generation_without_updating_mcp_terminal_state(tmp_
         error_code="SELLER_SPRITE_AUTHENTICATION_ERROR",
         retry_reason="account_authentication_failed",
     )
+    assert reassignment.outcome == "reassigned"
+    replacement = reassignment.status
+    assert replacement is not None
 
     stale_committed = store.finish_task_and_mcp_run_if_current(
         job_id="job-mcp-cas",
@@ -599,6 +801,13 @@ def test_store_clears_auth_when_current_generation_fails_atomically(tmp_path: Pa
     assert status["execution_owner"] is None
     assert status["heartbeat_at"] is None
     assert status["lease_expires_at"] is None
+    assert status["progress_stage"] == "failed"
+    events = store.list_task_progress_events(job_id="job-mcp-auth-failed")
+    assert [(event["stage"], event["assignment_generation"]) for event in events] == [
+        ("claimed", 1),
+        ("failed", 1),
+    ]
+    assert events[-1]["metadata"] == {"outcome": "failed"}
     assert store.get_task_context("job-mcp-auth-failed") == {
         "credential_scope": None,
         "runtime_auth_required": False,
@@ -780,6 +989,12 @@ def test_store_recovers_only_expired_execution_lease_and_syncs_mcp_run(tmp_path:
     assert recovered["execution_owner"] is None
     assert store.get_mcp_run("active-running")["result_state"] == "running"
     assert store.get_mcp_run("expired-running")["result_state"] == "queued"
+    events = store.list_task_progress_events(job_id="expired-running")
+    assert [(event["stage"], event["assignment_generation"]) for event in events] == [
+        ("claimed", 1),
+        ("queued", 2),
+    ]
+    assert events[-1]["metadata"] == {"outcome": "queued"}
 
 
 def test_store_renews_and_releases_owner_lease(tmp_path: Path):
@@ -812,6 +1027,47 @@ def test_store_renews_and_releases_owner_lease(tmp_path: Path):
     assert status["state"] == "queued"
     assert status["retry_reason"] == "service_restart"
     assert status["assignment_generation"] == 2
+
+
+def test_store_renews_only_explicitly_active_attempts(tmp_path: Path):
+    """活动尝试续租不得顺带续期同 owner 下未跟踪的运行行。"""
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    for job_id, scope, account_key in (
+        ("tracked-job", "tracked-scope", "tracked-account"),
+        ("orphan-job", "orphan-scope", "orphan-account"),
+    ):
+        store.enqueue(
+            request=_request(job_id=job_id),
+            queue_scope=scope,
+            root_dir=tmp_path / job_id,
+        )
+        store.claim_next(
+            queue_scope=scope,
+            worker_key=f"worker-{job_id}",
+            assigned_account=account_key,
+            account_key=account_key,
+            execution_owner="owner-1",
+            lease_seconds=60,
+        )
+
+    before_orphan = store.get_status("orphan-job")["heartbeat_at"]
+    renewed = store.renew_active_execution_leases(
+        execution_owner="owner-1",
+        attempts=[
+            {
+                "job_id": "tracked-job",
+                "account_key": "tracked-account",
+                "assignment_generation": 1,
+            }
+        ],
+        lease_seconds=120,
+    )
+
+    assert renewed == 1
+    assert store.get_status("tracked-job")["heartbeat_at"] is not None
+    assert store.get_status("orphan-job")["heartbeat_at"] == before_orphan
 
 
 def test_store_persists_listing_task_id_only_for_current_generation(tmp_path: Path):
@@ -847,6 +1103,115 @@ def test_store_persists_listing_task_id_only_for_current_generation(tmp_path: Pa
     assert stale is False
     assert current is True
     assert store.get_listing_analysis_task_id("listing-job") == "remote-current"
+
+
+def test_store_claim_initializes_progress_and_rejects_stale_progress_update(tmp_path: Path):
+    """领取任务应写入 claimed 时间线，旧代际不得推进当前进度。"""
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.enqueue(
+        request=_request(job_id="job-progress"),
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "job-progress",
+    )
+    claimed = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key-1",
+        assigned_account="account-1",
+        worker_key="slot-1",
+        execution_owner="owner-1",
+    )
+
+    stale = store.update_task_progress(
+        job_id="job-progress",
+        account_key="account-key-1",
+        assignment_generation=0,
+        execution_owner="owner-1",
+        stage="requesting",
+    )
+    current = store.update_task_progress(
+        job_id="job-progress",
+        account_key="account-key-1",
+        assignment_generation=claimed["assignment_generation"],
+        execution_owner="owner-1",
+        stage="requesting",
+        metadata={
+            "poll_attempt": 3,
+            "poll_status": "RUNNING",
+            "request_params": {"asin": "B0SECRET"},
+            "credential": "secret-token",
+            "path": str(tmp_path / "private.json"),
+            "source": str(tmp_path / "private-source"),
+            "outcome": str(tmp_path / "private-outcome"),
+        },
+    )
+
+    assert stale is False
+    assert current is True
+    status = store.get_status("job-progress")
+    assert status["stage"] == "requesting"
+    assert status["progress_stage"] == "requesting"
+    assert status["progress_at"] is not None
+    assert status["progress_sequence"] == 2
+    assert store.list_task_progress_events(job_id="job-progress") == [
+        {
+            "job_id": "job-progress",
+            "stage": "claimed",
+            "progress_at": claimed["progress_at"],
+            "sequence": 1,
+            "assignment_generation": 1,
+            "metadata": {},
+        },
+        {
+            "job_id": "job-progress",
+            "stage": "requesting",
+            "progress_at": status["progress_at"],
+            "sequence": 2,
+            "assignment_generation": 1,
+            "metadata": {"poll_attempt": 3, "poll_status": "RUNNING"},
+        },
+    ]
+
+
+def test_store_publishes_and_stops_runtime_heartbeat(tmp_path: Path):
+    """运行态心跳应保留监控容量字段，并可明确进入 stopped 生命周期。"""
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    store.publish_runtime_heartbeat(
+        execution_owner="owner-1",
+        lifecycle_state="running",
+        generic_workers_alive=2,
+        listing_worker_alive=1,
+        generic_available_capacity=1,
+        listing_available_capacity=0,
+        available_capacity=1,
+        standby_capacity=3,
+        last_claim_at="2026-07-29T10:00:00+08:00",
+        last_progress_at="2026-07-29T10:00:01+08:00",
+    )
+
+    running = store.get_runtime_heartbeat("owner-1")
+    assert running["execution_owner"] == "owner-1"
+    assert running["lifecycle_state"] == "running"
+    assert running["generic_workers_alive"] == 2
+    assert running["listing_worker_alive"] == 1
+    assert running["generic_available_capacity"] == 1
+    assert running["listing_available_capacity"] == 0
+    assert running["available_capacity"] == 1
+    assert running["standby_capacity"] == 3
+    assert running["last_claim_at"] == "2026-07-29T10:00:00+08:00"
+    assert running["last_progress_at"] == "2026-07-29T10:00:01+08:00"
+
+    assert store.mark_runtime_stopped(execution_owner="owner-1") is True
+    stopped = store.get_runtime_heartbeat("owner-1")
+    assert stopped["lifecycle_state"] == "stopped"
+    assert stopped["generic_workers_alive"] == 0
+    assert stopped["listing_worker_alive"] == 0
+    assert stopped["generic_available_capacity"] == 0
+    assert stopped["listing_available_capacity"] == 0
+    assert stopped["available_capacity"] == 0
 
 
 def test_store_marks_task_finished_and_persists_result_metadata(tmp_path: Path):

@@ -44,6 +44,7 @@ class SellerSpriteAccountPool:
         self._working: list[SellerSpriteAccount] = []
         self._standby: list[SellerSpriteAccount] = []
         self._unavailable_versions: set[tuple[str, str]] = set()
+        self._account_order: dict[str, int] = {}
         self._target_working_count = 0
 
     @property
@@ -64,6 +65,10 @@ class SellerSpriteAccountPool:
     def load(self, accounts: list[SellerSpriteAccount]) -> None:
         """使用首次账号接口结果建立工作池和冷备用池。"""
         ordered = _deduplicate_accounts(accounts)
+        self._account_order = {
+            seller_sprite_account_key(account): index
+            for index, account in enumerate(ordered)
+        }
         count = len(ordered)
         self._target_working_count = (
             0 if count == 0 else min(self.max_working_accounts, max(1, count - 1))
@@ -74,6 +79,10 @@ class SellerSpriteAccountPool:
     def refresh(self, accounts: list[SellerSpriteAccount]) -> None:
         """合并刷新结果，并让密码已变化的失效账号恢复候选资格。"""
         ordered = _deduplicate_accounts(accounts)
+        self._account_order = {
+            seller_sprite_account_key(account): index
+            for index, account in enumerate(ordered)
+        }
         count = len(ordered)
         self._target_working_count = (
             0 if count == 0 else min(self.max_working_accounts, max(1, count - 1))
@@ -127,6 +136,24 @@ class SellerSpriteAccountPool:
             self._working.append(replacement)
             return replacement
         return None
+
+    def defer_working_account(self, account: SellerSpriteAccount) -> None:
+        """将暂不可领取任务的健康账号归还冷备用池。"""
+        key = seller_sprite_account_key(account)
+        self._working = [
+            item for item in self._working if seller_sprite_account_key(item) != key
+        ]
+        if self._is_unavailable(account) or any(
+            seller_sprite_account_key(item) == key for item in self._standby
+        ):
+            return
+        self._standby.append(account)
+        self._standby.sort(
+            key=lambda item: self._account_order.get(
+                seller_sprite_account_key(item),
+                len(self._account_order),
+            )
+        )
 
     def activate_standby_until_target(self) -> tuple[SellerSpriteAccount, ...]:
         """按接口顺序使用可用备用账号补足当前目标工作槽。"""

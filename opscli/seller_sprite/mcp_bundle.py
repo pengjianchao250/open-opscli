@@ -12,6 +12,19 @@ _MODULE_STATE: dict[str, Any] = {
         "scheduler": "not_started",
     },
 }
+_PUBLIC_RUNTIME_FIELDS = (
+    "lifecycle_state",
+    "heartbeat_at",
+    "generic_workers_alive",
+    "listing_worker_alive",
+    "generic_available_capacity",
+    "listing_available_capacity",
+    "available_capacity",
+    "standby_capacity",
+    "last_claim_at",
+    "last_progress_at",
+    "heartbeat_fresh",
+)
 
 
 def register(mcp) -> None:
@@ -54,11 +67,54 @@ async def lifespan():
 
 
 async def health_check() -> dict[str, Any]:
-    """返回不包含账号、路径和任务参数的模块健康状态。"""
+    """返回不包含账号、路径和任务参数的实时模块健康状态。"""
+    if _MODULE_STATE["status"] not in {"ready", "degraded"}:
+        return {
+            "bundle_id": "seller_sprite",
+            "status": _MODULE_STATE["status"],
+            "checks": dict(_MODULE_STATE["checks"]),
+        }
+
+    from opscli.seller_sprite.services import get_task_scheduler
+
+    scheduler = get_task_scheduler()
+    runtime_health = getattr(scheduler, "runtime_health", None)
+    if not callable(runtime_health):
+        return {
+            "bundle_id": "seller_sprite",
+            "status": _MODULE_STATE["status"],
+            "checks": dict(_MODULE_STATE["checks"]),
+        }
+
+    try:
+        health = runtime_health()
+    except Exception:
+        return {
+            "bundle_id": "seller_sprite",
+            "status": "degraded",
+            "checks": {"queue": "error", "scheduler": "health_check_failed"},
+            "runtime": {},
+        }
+    runtime = health.get("runtime")
+    public_runtime = (
+        {
+            field: runtime[field]
+            for field in _PUBLIC_RUNTIME_FIELDS
+            if field in runtime
+        }
+        if isinstance(runtime, dict)
+        else {}
+    )
     return {
         "bundle_id": "seller_sprite",
-        "status": _MODULE_STATE["status"],
-        "checks": dict(_MODULE_STATE["checks"]),
+        "status": str(health.get("status") or "not_ready"),
+        "checks": {
+            "queue": str((health.get("checks") or {}).get("queue") or "error"),
+            "scheduler": str(
+                (health.get("checks") or {}).get("scheduler") or "not_started"
+            ),
+        },
+        "runtime": public_runtime,
     }
 
 

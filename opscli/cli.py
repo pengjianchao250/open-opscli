@@ -13,6 +13,7 @@ from opscli.auth.cli import app as auth_app
 from opscli.calculator.cli import app as calculator_app
 from opscli.canopy.cli import app as canopy_app
 from opscli.canopy_debug.cli import app as canopy_debug_app
+from opscli.collector_monitor.cli import app as collector_monitor_app
 from opscli.feedback.cli import app as feedback_app
 from opscli.feedtask.cli import app as feedtask_app
 from opscli.google_trends.cli import app as google_trends_app
@@ -59,6 +60,7 @@ if asin_review_app is not None:
     app.add_typer(asin_review_app, name="asin-review")
 app.add_typer(canopy_app, name="canopy")
 # app.add_typer(canopy_debug_app, name="canopy-debug")
+app.add_typer(collector_monitor_app, name="collector-monitor")
 app.add_typer(query_app, name="query")
 app.add_typer(scrape_do_app, name="scrape-do")
 # app.add_typer(shopify_app, name="shopify")

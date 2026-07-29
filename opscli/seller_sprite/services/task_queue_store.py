@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from opscli.config import CONFIG_DIR
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
@@ -18,8 +19,61 @@ TASK_KIND_GENERIC = "generic"
 TASK_KIND_LISTING_ANALYSIS = "listing_analysis"
 ACCOUNT_ROUTE_SHARED_POOL = "shared_pool"
 ACCOUNT_ROUTE_USER_BINDING = "user_binding"
-# 版本 4 引入执行租约和 Listing Analysis 远端任务检查点。
-QUEUE_SCHEMA_VERSION = 4
+# 版本 6 增加按任务类型拆分的运行时可用容量。
+QUEUE_SCHEMA_VERSION = 6
+TASK_PROGRESS_STAGES = {
+    "claimed",
+    "resolving",
+    "requesting",
+    "browser_wait",
+    "remote_poll",
+    "processing",
+    "exporting",
+    "uploading",
+    "finalizing",
+    "succeeded",
+    "failed",
+    "queued",
+    "reassigned",
+}
+TASK_PROGRESS_METADATA_FIELDS = (
+    "poll_attempt",
+    "poll_total",
+    "poll_status",
+    "outcome",
+)
+TASK_PROGRESS_POLL_STATUSES = {
+    "PENDING",
+    "SUBMITTED",
+    "RUNNING",
+    "PROCESSING",
+    "COMPLETED",
+    "COMPLETE",
+    "SUCCESS",
+    "SUCCEEDED",
+    "FINISHED",
+    "DONE",
+    "FAILED",
+    "FAIL",
+    "ERROR",
+    "CANCELED",
+    "CANCELLED",
+    "EXPIRED",
+}
+TASK_PROGRESS_OUTCOMES = {
+    "queued",
+    "reassigned",
+    "succeeded",
+    "failed",
+}
+
+
+@dataclass(frozen=True)
+class FailoverReassignmentResult:
+    """描述故障接替 CAS 的明确结果，避免混淆账号冲突与旧代际。"""
+
+    outcome: Literal["reassigned", "replacement_busy", "stale_attempt"]
+    status: dict[str, Any] | None = None
 
 
 class SellerSpriteTaskQueueStore:
@@ -44,6 +98,7 @@ class SellerSpriteTaskQueueStore:
         requested_account_key: str | None = None,
     ) -> dict[str, Any]:
         """写入一条排队任务并返回当前排队状态。"""
+        now = _now_iso()
         with self._connect() as conn:
             conn.execute(
                 """
@@ -53,9 +108,9 @@ class SellerSpriteTaskQueueStore:
                     worker_key, result_path, row_count, export_json, error_json,
                     credential_scope, runtime_auth_required, expected_user_email,
                     account_route, requested_account_id, requested_account_key,
-                    session_id, jwt
+                    session_id, jwt, progress_stage, progress_at, progress_sequence
                 )
-                VALUES (?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                VALUES (?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL, 'queued', ?, 0)
                 """,
                 (
                     request.job_id,
@@ -63,13 +118,14 @@ class SellerSpriteTaskQueueStore:
                     _task_kind_for_request(request),
                     json.dumps(request.to_dict(), ensure_ascii=False),
                     str(root_dir),
-                    _now_iso(),
+                    now,
                     credential_scope,
                     int(runtime_auth_required),
                     expected_user_email,
                     account_route,
                     requested_account_id,
                     requested_account_key,
+                    now,
                 ),
             )
         return self.get_status(str(request.job_id))
@@ -100,9 +156,9 @@ class SellerSpriteTaskQueueStore:
                     worker_key, result_path, row_count, export_json, error_json,
                     credential_scope, runtime_auth_required, expected_user_email,
                     account_route, requested_account_id, requested_account_key,
-                    session_id, jwt
+                    session_id, jwt, progress_stage, progress_at, progress_sequence
                 )
-                VALUES (?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, 0, ?, ?, ?, ?, NULL, NULL)
+                VALUES (?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, 0, ?, ?, ?, ?, NULL, NULL, 'queued', ?, 0)
                 """,
                 (
                     request.job_id,
@@ -116,6 +172,7 @@ class SellerSpriteTaskQueueStore:
                     account_route,
                     requested_account_id,
                     requested_account_key,
+                    now,
                 ),
             )
             conn.execute(
@@ -200,8 +257,10 @@ class SellerSpriteTaskQueueStore:
                     row["id"],
                 ),
             )
+            self._record_claim_progress(conn, int(row["id"]))
+            claimed = self._status_from_connection(conn, str(row["job_id"]))
             conn.commit()
-        return self.get_status(str(row["job_id"]))
+        return claimed
 
     def claim_next_generic_for_account(
         self,
@@ -280,8 +339,10 @@ class SellerSpriteTaskQueueStore:
             if int(cursor.rowcount or 0) != 1:
                 conn.rollback()
                 return None
+            self._record_claim_progress(conn, int(row["id"]))
+            claimed = self._status_from_connection(conn, str(row["job_id"]))
             conn.commit()
-        return self.get_status(str(row["job_id"]))
+        return claimed
 
     def claim_next_listing_analysis(
         self,
@@ -360,8 +421,10 @@ class SellerSpriteTaskQueueStore:
             if int(cursor.rowcount or 0) != 1:
                 conn.rollback()
                 return None
+            self._record_claim_progress(conn, int(row["id"]))
+            claimed = self._status_from_connection(conn, str(row["job_id"]))
             conn.commit()
-        return self.get_status(str(row["job_id"]))
+        return claimed
 
     def next_user_binding_candidate(self, *, queue_scope: str) -> dict[str, Any] | None:
         """读取最早且其专属账号当前未被占用的待执行任务引用。"""
@@ -452,8 +515,14 @@ class SellerSpriteTaskQueueStore:
             if int(cursor.rowcount or 0) != 1:
                 conn.rollback()
                 return None
+            row = conn.execute(
+                "SELECT id FROM seller_sprite_task_queue WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            self._record_claim_progress(conn, int(row["id"]))
+            claimed = self._status_from_connection(conn, job_id)
             conn.commit()
-        return self.get_status(job_id)
+        return claimed
 
     def fail_queued_user_binding_task(
         self,
@@ -517,10 +586,12 @@ class SellerSpriteTaskQueueStore:
                 UPDATE seller_sprite_task_queue
                 SET status = 'failed', finished_at = ?, error_json = ?,
                     credential_scope = NULL, runtime_auth_required = 0,
-                    expected_user_email = NULL, session_id = NULL, jwt = NULL
+                    expected_user_email = NULL, session_id = NULL, jwt = NULL,
+                    progress_stage = 'failed', progress_at = ?,
+                    progress_sequence = progress_sequence + 1
                 WHERE job_id IN ({placeholders})
                 """,
-                [now, error_json, *job_ids],
+                [now, error_json, now, *job_ids],
             )
             conn.execute(
                 f"""
@@ -531,6 +602,14 @@ class SellerSpriteTaskQueueStore:
                 """,
                 [error_json, now, now, *job_ids],
             )
+            for job_id in job_ids:
+                self._append_current_progress_event(
+                    conn,
+                    job_id=job_id,
+                    stage="failed",
+                    progress_at=now,
+                    metadata={"outcome": "failed"},
+                )
             conn.commit()
         return len(job_ids)
 
@@ -542,48 +621,10 @@ class SellerSpriteTaskQueueStore:
         row_count: int,
         export_payload: dict[str, Any] | None,
     ) -> None:
-        """标记任务成功完成。"""
+        """标记任务成功完成，并原子追加脱敏终态时间线。"""
+        now = _now_iso()
         with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE seller_sprite_task_queue
-                SET status = 'succeeded',
-                    finished_at = ?,
-                    result_path = ?,
-                    row_count = ?,
-                    export_json = ?,
-                    error_json = NULL,
-                    credential_scope = NULL,
-                    runtime_auth_required = 0,
-                    expected_user_email = NULL,
-                    session_id = NULL,
-                    jwt = NULL,
-                    execution_owner = NULL,
-                    heartbeat_at = NULL,
-                    lease_expires_at = NULL
-                WHERE job_id = ?
-                """,
-                (
-                    _now_iso(),
-                    result_path,
-                    row_count,
-                    json.dumps(export_payload, ensure_ascii=False) if export_payload is not None else None,
-                    job_id,
-                ),
-            )
-
-    def finish_task_if_current(
-        self,
-        *,
-        job_id: str,
-        account_key: str,
-        assignment_generation: int,
-        result_path: str,
-        row_count: int,
-        export_payload: dict[str, Any] | None,
-    ) -> bool:
-        """仅允许当前账号和执行代际提交成功结果。"""
-        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cursor = conn.execute(
                 """
                 UPDATE seller_sprite_task_queue
@@ -600,23 +641,93 @@ class SellerSpriteTaskQueueStore:
                     jwt = NULL,
                     execution_owner = NULL,
                     heartbeat_at = NULL,
-                    lease_expires_at = NULL
+                    lease_expires_at = NULL,
+                    progress_stage = 'succeeded',
+                    progress_at = ?,
+                    progress_sequence = progress_sequence + 1
+                WHERE job_id = ?
+                """,
+                (
+                    now,
+                    result_path,
+                    row_count,
+                    json.dumps(export_payload, ensure_ascii=False) if export_payload is not None else None,
+                    now,
+                    job_id,
+                ),
+            )
+            if int(cursor.rowcount or 0) == 1:
+                self._append_current_progress_event(
+                    conn,
+                    job_id=job_id,
+                    stage="succeeded",
+                    progress_at=now,
+                    metadata={"outcome": "succeeded"},
+                )
+            conn.commit()
+
+    def finish_task_if_current(
+        self,
+        *,
+        job_id: str,
+        account_key: str,
+        assignment_generation: int,
+        result_path: str,
+        row_count: int,
+        export_payload: dict[str, Any] | None,
+    ) -> bool:
+        """仅允许当前账号和执行代际提交成功结果及终态时间线。"""
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """
+                UPDATE seller_sprite_task_queue
+                SET status = 'succeeded',
+                    finished_at = ?,
+                    result_path = ?,
+                    row_count = ?,
+                    export_json = ?,
+                    error_json = NULL,
+                    credential_scope = NULL,
+                    runtime_auth_required = 0,
+                    expected_user_email = NULL,
+                    session_id = NULL,
+                    jwt = NULL,
+                    execution_owner = NULL,
+                    heartbeat_at = NULL,
+                    lease_expires_at = NULL,
+                    progress_stage = 'succeeded',
+                    progress_at = ?,
+                    progress_sequence = progress_sequence + 1
                 WHERE job_id = ?
                   AND status = 'running'
                   AND assigned_account_key = ?
                   AND assignment_generation = ?
                 """,
                 (
-                    _now_iso(),
+                    now,
                     result_path,
                     row_count,
                     json.dumps(export_payload, ensure_ascii=False) if export_payload is not None else None,
+                    now,
                     job_id,
                     account_key,
                     assignment_generation,
                 ),
             )
-        return int(cursor.rowcount or 0) == 1
+            if int(cursor.rowcount or 0) != 1:
+                conn.rollback()
+                return False
+            self._append_current_progress_event(
+                conn,
+                job_id=job_id,
+                stage="succeeded",
+                progress_at=now,
+                metadata={"outcome": "succeeded"},
+            )
+            conn.commit()
+        return True
 
     def finish_task_and_mcp_run_if_current(
         self,
@@ -641,7 +752,8 @@ class SellerSpriteTaskQueueStore:
                     credential_scope = NULL, runtime_auth_required = 0,
                     expected_user_email = NULL, session_id = NULL, jwt = NULL,
                     execution_owner = NULL, heartbeat_at = NULL,
-                    lease_expires_at = NULL
+                    lease_expires_at = NULL, progress_stage = 'succeeded',
+                    progress_at = ?, progress_sequence = progress_sequence + 1
                 WHERE job_id = ? AND status = 'running'
                   AND assigned_account_key = ? AND assignment_generation = ?
                 """,
@@ -652,6 +764,7 @@ class SellerSpriteTaskQueueStore:
                     json.dumps(export_payload, ensure_ascii=False)
                     if export_payload is not None
                     else None,
+                    now,
                     job_id,
                     account_key,
                     assignment_generation,
@@ -683,13 +796,22 @@ class SellerSpriteTaskQueueStore:
                 if int(mcp_cursor.rowcount or 0) != 1:
                     conn.rollback()
                     raise ValueError(f"MCP 调用记录不存在：{job_id}")
+            self._append_current_progress_event(
+                conn,
+                job_id=job_id,
+                stage="succeeded",
+                progress_at=now,
+                metadata={"outcome": "succeeded"},
+            )
             conn.commit()
         return True
 
     def fail_task(self, *, job_id: str, error_payload: dict[str, Any]) -> None:
-        """标记任务执行失败。"""
+        """标记任务执行失败，并原子追加脱敏终态时间线。"""
+        now = _now_iso()
         with self._connect() as conn:
-            conn.execute(
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
                 """
                 UPDATE seller_sprite_task_queue
                 SET status = 'failed',
@@ -702,11 +824,28 @@ class SellerSpriteTaskQueueStore:
                     jwt = NULL,
                     execution_owner = NULL,
                     heartbeat_at = NULL,
-                    lease_expires_at = NULL
+                    lease_expires_at = NULL,
+                    progress_stage = 'failed',
+                    progress_at = ?,
+                    progress_sequence = progress_sequence + 1
                 WHERE job_id = ?
                 """,
-                (_now_iso(), json.dumps(error_payload, ensure_ascii=False), job_id),
+                (
+                    now,
+                    json.dumps(error_payload, ensure_ascii=False),
+                    now,
+                    job_id,
+                ),
             )
+            if int(cursor.rowcount or 0) == 1:
+                self._append_current_progress_event(
+                    conn,
+                    job_id=job_id,
+                    stage="failed",
+                    progress_at=now,
+                    metadata={"outcome": "failed"},
+                )
+            conn.commit()
 
     def fail_task_if_current(
         self,
@@ -716,8 +855,10 @@ class SellerSpriteTaskQueueStore:
         assignment_generation: int,
         error_payload: dict[str, Any],
     ) -> bool:
-        """仅允许当前账号和执行代际标记任务失败。"""
+        """仅允许当前账号和执行代际标记任务失败及终态时间线。"""
+        now = _now_iso()
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cursor = conn.execute(
                 """
                 UPDATE seller_sprite_task_queue
@@ -732,22 +873,37 @@ class SellerSpriteTaskQueueStore:
                     jwt = NULL,
                     execution_owner = NULL,
                     heartbeat_at = NULL,
-                    lease_expires_at = NULL
+                    lease_expires_at = NULL,
+                    progress_stage = 'failed',
+                    progress_at = ?,
+                    progress_sequence = progress_sequence + 1
                 WHERE job_id = ?
                   AND status = 'running'
                   AND assigned_account_key = ?
                   AND assignment_generation = ?
                 """,
                 (
-                    _now_iso(),
+                    now,
                     json.dumps(error_payload, ensure_ascii=False),
                     str(error_payload.get("code") or ""),
+                    now,
                     job_id,
                     account_key,
                     assignment_generation,
                 ),
             )
-        return int(cursor.rowcount or 0) == 1
+            if int(cursor.rowcount or 0) != 1:
+                conn.rollback()
+                return False
+            self._append_current_progress_event(
+                conn,
+                job_id=job_id,
+                stage="failed",
+                progress_at=now,
+                metadata={"outcome": "failed"},
+            )
+            conn.commit()
+        return True
 
     def fail_task_and_mcp_run_if_current(
         self,
@@ -770,7 +926,9 @@ class SellerSpriteTaskQueueStore:
                     last_error_code = ?, credential_scope = NULL,
                     runtime_auth_required = 0, expected_user_email = NULL,
                     session_id = NULL, jwt = NULL, execution_owner = NULL,
-                    heartbeat_at = NULL, lease_expires_at = NULL
+                    heartbeat_at = NULL, lease_expires_at = NULL,
+                    progress_stage = 'failed', progress_at = ?,
+                    progress_sequence = progress_sequence + 1
                 WHERE job_id = ? AND status = 'running'
                   AND assigned_account_key = ? AND assignment_generation = ?
                 """,
@@ -778,6 +936,7 @@ class SellerSpriteTaskQueueStore:
                     now,
                     error_json,
                     str(error_payload.get("code") or ""),
+                    now,
                     job_id,
                     account_key,
                     assignment_generation,
@@ -799,6 +958,13 @@ class SellerSpriteTaskQueueStore:
                 if int(mcp_cursor.rowcount or 0) != 1:
                     conn.rollback()
                     raise ValueError(f"MCP 调用记录不存在：{job_id}")
+            self._append_current_progress_event(
+                conn,
+                job_id=job_id,
+                stage="failed",
+                progress_at=now,
+                metadata={"outcome": "failed"},
+            )
             conn.commit()
         return True
 
@@ -813,8 +979,9 @@ class SellerSpriteTaskQueueStore:
         worker_key: str,
         error_code: str,
         retry_reason: str,
-    ) -> dict[str, Any] | None:
-        """使用 CAS 将运行任务改绑到尚未占用的备用账号。"""
+    ) -> FailoverReassignmentResult:
+        """使用 CAS 改绑运行任务，并区分备用冲突和旧代际。"""
+        now = _now_iso()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             current = conn.execute(
@@ -830,7 +997,7 @@ class SellerSpriteTaskQueueStore:
             ).fetchone()
             if current is None:
                 conn.commit()
-                return None
+                return FailoverReassignmentResult("stale_attempt")
             occupied = conn.execute(
                 """
                 SELECT 1
@@ -845,44 +1012,142 @@ class SellerSpriteTaskQueueStore:
             ).fetchone()
             if occupied is not None:
                 conn.commit()
-                return None
-            try:
-                cursor = conn.execute(
-                    """
-                    UPDATE seller_sprite_task_queue
-                    SET assigned_account = ?,
-                        assigned_account_key = ?,
-                        worker_key = ?,
-                        assignment_generation = assignment_generation + 1,
-                        failover_count = failover_count + 1,
-                        last_error_code = ?,
-                        last_failed_account_key = ?,
-                        retry_reason = ?
-                    WHERE job_id = ?
-                      AND status = 'running'
-                      AND assigned_account_key = ?
-                      AND assignment_generation = ?
-                    """,
-                    (
-                        replacement_account,
-                        replacement_account_key,
-                        worker_key,
-                        error_code,
-                        current_account_key,
-                        retry_reason,
-                        job_id,
-                        current_account_key,
-                        current_generation,
-                    ),
-                )
-            except sqlite3.IntegrityError:
-                conn.rollback()
-                return None
+                return FailoverReassignmentResult("replacement_busy")
+            cursor = conn.execute(
+                """
+                UPDATE seller_sprite_task_queue
+                SET assigned_account = ?,
+                    assigned_account_key = ?,
+                    worker_key = ?,
+                    assignment_generation = assignment_generation + 1,
+                    failover_count = failover_count + 1,
+                    last_error_code = ?,
+                    last_failed_account_key = ?,
+                    retry_reason = ?,
+                    progress_stage = 'reassigned',
+                    progress_at = ?,
+                    progress_sequence = progress_sequence + 1
+                WHERE job_id = ?
+                  AND status = 'running'
+                  AND assigned_account_key = ?
+                  AND assignment_generation = ?
+                """,
+                (
+                    replacement_account,
+                    replacement_account_key,
+                    worker_key,
+                    error_code,
+                    current_account_key,
+                    retry_reason,
+                    now,
+                    job_id,
+                    current_account_key,
+                    current_generation,
+                ),
+            )
             if int(cursor.rowcount or 0) != 1:
                 conn.rollback()
-                return None
+                return FailoverReassignmentResult("stale_attempt")
+            self._append_current_progress_event(
+                conn,
+                job_id=job_id,
+                stage="reassigned",
+                progress_at=now,
+                metadata={"outcome": "reassigned"},
+            )
+            status = self._status_from_connection(conn, job_id)
             conn.commit()
-        return self.get_status(job_id)
+        return FailoverReassignmentResult("reassigned", status=status)
+
+    def update_task_progress(
+        self,
+        *,
+        job_id: str,
+        account_key: str,
+        assignment_generation: int,
+        execution_owner: str,
+        stage: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """仅允许当前执行尝试推进进度，并追加一条脱敏时间线事件。"""
+        normalized_stage = str(stage or "").strip().lower()
+        if normalized_stage not in TASK_PROGRESS_STAGES:
+            raise ValueError(f"不支持的卖家精灵任务进度阶段：{stage}")
+        now = _now_iso()
+        safe_metadata = _sanitize_task_progress_metadata(metadata)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """
+                UPDATE seller_sprite_task_queue
+                SET progress_stage = ?, progress_at = ?,
+                    progress_sequence = progress_sequence + 1
+                WHERE job_id = ? AND status = 'running'
+                  AND assigned_account_key = ?
+                  AND assignment_generation = ?
+                  AND execution_owner = ?
+                """,
+                (
+                    normalized_stage,
+                    now,
+                    job_id,
+                    account_key,
+                    int(assignment_generation),
+                    execution_owner,
+                ),
+            )
+            if int(cursor.rowcount or 0) != 1:
+                conn.rollback()
+                return False
+            row = conn.execute(
+                """
+                SELECT progress_sequence, assignment_generation
+                FROM seller_sprite_task_queue
+                WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO seller_sprite_task_progress_events (
+                    job_id, progress_stage, progress_at, progress_sequence,
+                    assignment_generation, metadata_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    normalized_stage,
+                    now,
+                    int(row["progress_sequence"]),
+                    int(row["assignment_generation"]),
+                    json.dumps(safe_metadata, ensure_ascii=False),
+                ),
+            )
+            conn.commit()
+        return True
+
+    def list_task_progress_events(
+        self,
+        *,
+        job_id: str,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """按发生顺序返回单个任务的脱敏进度时间线。"""
+        safe_limit = max(1, min(int(limit), 500))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT job_id, progress_stage, progress_at, progress_sequence,
+                       assignment_generation, metadata_json
+                FROM seller_sprite_task_progress_events
+                WHERE job_id = ?
+                ORDER BY progress_sequence ASC, id ASC
+                LIMIT ?
+                """,
+                (job_id, safe_limit),
+            ).fetchall()
+        return [_task_progress_event_to_dict(row) for row in rows]
 
     def renew_execution_leases(
         self,
@@ -890,7 +1155,7 @@ class SellerSpriteTaskQueueStore:
         execution_owner: str,
         lease_seconds: float,
     ) -> int:
-        """续期指定调度器当前持有的全部运行任务。"""
+        """兼容旧调用，续期指定调度器当前持有的全部运行任务。"""
         now = _now_iso()
         with self._connect() as conn:
             cursor = conn.execute(
@@ -902,6 +1167,152 @@ class SellerSpriteTaskQueueStore:
                 (now, _future_iso(lease_seconds), execution_owner),
             )
         return int(cursor.rowcount or 0)
+
+    def renew_active_execution_leases(
+        self,
+        *,
+        execution_owner: str,
+        attempts: list[dict[str, Any]],
+        lease_seconds: float,
+    ) -> int:
+        """仅续期调度器内存中仍被主动跟踪的执行尝试。"""
+        if not attempts:
+            return 0
+        now = _now_iso()
+        lease_expires_at = _future_iso(lease_seconds)
+        renewed = 0
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for attempt in attempts:
+                cursor = conn.execute(
+                    """
+                    UPDATE seller_sprite_task_queue
+                    SET heartbeat_at = ?, lease_expires_at = ?
+                    WHERE job_id = ? AND status = 'running'
+                      AND assigned_account_key = ?
+                      AND assignment_generation = ?
+                      AND execution_owner = ?
+                    """,
+                    (
+                        now,
+                        lease_expires_at,
+                        str(attempt.get("job_id") or ""),
+                        str(attempt.get("account_key") or ""),
+                        int(attempt.get("assignment_generation") or 0),
+                        execution_owner,
+                    ),
+                )
+                renewed += int(cursor.rowcount or 0)
+            conn.commit()
+        return renewed
+
+    def running_account_keys(self, *, queue_scope: str) -> set[str]:
+        """返回队列范围内所有调度器正在占用的账号键。"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT assigned_account_key
+                FROM seller_sprite_task_queue
+                WHERE queue_scope = ? AND status = 'running'
+                  AND assigned_account_key IS NOT NULL
+                """,
+                (queue_scope,),
+            ).fetchall()
+        return {
+            str(row["assigned_account_key"])
+            for row in rows
+            if row["assigned_account_key"]
+        }
+
+    def publish_runtime_heartbeat(
+        self,
+        *,
+        execution_owner: str,
+        lifecycle_state: str,
+        generic_workers_alive: int,
+        listing_worker_alive: int,
+        generic_available_capacity: int,
+        listing_available_capacity: int,
+        available_capacity: int,
+        standby_capacity: int,
+        last_claim_at: str | None,
+        last_progress_at: str | None,
+    ) -> dict[str, Any]:
+        """发布调度器运行态快照，不记录账号、请求或文件信息。"""
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO seller_sprite_runtime_heartbeats (
+                    execution_owner, lifecycle_state, heartbeat_at,
+                    generic_workers_alive, listing_worker_alive,
+                    generic_available_capacity, listing_available_capacity,
+                    available_capacity, standby_capacity,
+                    last_claim_at, last_progress_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(execution_owner) DO UPDATE SET
+                    lifecycle_state = excluded.lifecycle_state,
+                    heartbeat_at = excluded.heartbeat_at,
+                    generic_workers_alive = excluded.generic_workers_alive,
+                    listing_worker_alive = excluded.listing_worker_alive,
+                    generic_available_capacity = excluded.generic_available_capacity,
+                    listing_available_capacity = excluded.listing_available_capacity,
+                    available_capacity = excluded.available_capacity,
+                    standby_capacity = excluded.standby_capacity,
+                    last_claim_at = COALESCE(excluded.last_claim_at, last_claim_at),
+                    last_progress_at = COALESCE(excluded.last_progress_at, last_progress_at)
+                """,
+                (
+                    execution_owner,
+                    str(lifecycle_state or "unknown"),
+                    now,
+                    max(0, int(generic_workers_alive)),
+                    max(0, int(listing_worker_alive)),
+                    max(0, int(generic_available_capacity)),
+                    max(0, int(listing_available_capacity)),
+                    max(0, int(available_capacity)),
+                    max(0, int(standby_capacity)),
+                    last_claim_at,
+                    last_progress_at,
+                ),
+            )
+        return self.get_runtime_heartbeat(execution_owner)
+
+    def mark_runtime_stopped(self, *, execution_owner: str) -> bool:
+        """将指定调度器心跳标记为已停止并清空活跃容量。"""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE seller_sprite_runtime_heartbeats
+                SET lifecycle_state = 'stopped', heartbeat_at = ?,
+                    generic_workers_alive = 0, listing_worker_alive = 0,
+                    generic_available_capacity = 0,
+                    listing_available_capacity = 0, available_capacity = 0
+                WHERE execution_owner = ?
+                """,
+                (_now_iso(), execution_owner),
+            )
+        return int(cursor.rowcount or 0) == 1
+
+    def get_runtime_heartbeat(self, execution_owner: str) -> dict[str, Any]:
+        """读取指定调度器的脱敏运行态心跳。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT execution_owner, lifecycle_state, heartbeat_at,
+                       generic_workers_alive, listing_worker_alive,
+                       generic_available_capacity, listing_available_capacity,
+                       available_capacity, standby_capacity,
+                       last_claim_at, last_progress_at
+                FROM seller_sprite_runtime_heartbeats
+                WHERE execution_owner = ?
+                """,
+                (execution_owner,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"卖家精灵调度器运行态不存在：{execution_owner}")
+        return _runtime_heartbeat_to_dict(row)
 
     def recover_expired_running_tasks(self) -> int:
         """原子重排历史无租约或租约已过期的运行任务。"""
@@ -966,10 +1377,11 @@ class SellerSpriteTaskQueueStore:
                     last_error_code = NULL, last_failed_account_key = NULL,
                     retry_reason = ?, error_json = NULL,
                     execution_owner = NULL, heartbeat_at = NULL,
-                    lease_expires_at = NULL
+                    lease_expires_at = NULL, progress_stage = 'queued',
+                    progress_at = ?, progress_sequence = progress_sequence + 1
                 WHERE job_id IN ({placeholders}) AND status = 'running'
                 """,
-                [retry_reason, *job_ids],
+                [retry_reason, now, *job_ids],
             )
             conn.execute(
                 f"""
@@ -981,6 +1393,14 @@ class SellerSpriteTaskQueueStore:
                 """,
                 [now, *job_ids],
             )
+            for job_id in job_ids:
+                self._append_current_progress_event(
+                    conn,
+                    job_id=job_id,
+                    stage="queued",
+                    progress_at=now,
+                    metadata={"outcome": "queued"},
+                )
             conn.commit()
         return len(job_ids)
 
@@ -1033,7 +1453,8 @@ class SellerSpriteTaskQueueStore:
                        assigned_account_key, worker_key, assignment_generation,
                        failover_count, last_error_code, last_failed_account_key,
                        retry_reason, result_path, row_count, export_json, error_json,
-                       execution_owner, heartbeat_at, lease_expires_at, remote_task_id
+                       execution_owner, heartbeat_at, lease_expires_at, remote_task_id,
+                       progress_stage, progress_at, progress_sequence
                 FROM seller_sprite_task_queue
                 {where}
                 ORDER BY id DESC
@@ -1140,10 +1561,13 @@ class SellerSpriteTaskQueueStore:
                     runtime_auth_required = 0,
                     expected_user_email = NULL,
                     session_id = NULL,
-                    jwt = NULL
+                    jwt = NULL,
+                    progress_stage = 'failed',
+                    progress_at = ?,
+                    progress_sequence = progress_sequence + 1
                 WHERE job_id IN ({job_placeholders})
                 """,
-                [now, error_json, *matched_job_ids],
+                [now, error_json, now, *matched_job_ids],
             )
             conn.execute(
                 f"""
@@ -1156,25 +1580,42 @@ class SellerSpriteTaskQueueStore:
                 """,
                 [error_json, now, now, *matched_job_ids],
             )
+            for job_id in matched_job_ids:
+                self._append_current_progress_event(
+                    conn,
+                    job_id=job_id,
+                    stage="failed",
+                    progress_at=now,
+                    metadata={"outcome": "failed"},
+                )
             conn.commit()
         return len(matched_job_ids)
 
     def get_status(self, job_id: str) -> dict[str, Any]:
         """读取任务当前状态。"""
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT id, job_id, queue_scope, task_kind, status, request_json, root_dir,
-                       created_at, started_at, finished_at, assigned_account,
-                       assigned_account_key, worker_key, assignment_generation,
-                       failover_count, last_error_code, last_failed_account_key,
-                       retry_reason, result_path, row_count, export_json, error_json,
-                       execution_owner, heartbeat_at, lease_expires_at, remote_task_id
-                FROM seller_sprite_task_queue
-                WHERE job_id = ?
-                """,
-                (job_id,),
-            ).fetchone()
+            return self._status_from_connection(conn, job_id)
+
+    def _status_from_connection(
+        self,
+        conn: sqlite3.Connection,
+        job_id: str,
+    ) -> dict[str, Any]:
+        """在现有事务中构造任务状态，避免领取提交后重新读取失败。"""
+        row = conn.execute(
+            """
+            SELECT id, job_id, queue_scope, task_kind, status, request_json, root_dir,
+                   created_at, started_at, finished_at, assigned_account,
+                   assigned_account_key, worker_key, assignment_generation,
+                   failover_count, last_error_code, last_failed_account_key,
+                   retry_reason, result_path, row_count, export_json, error_json,
+                   execution_owner, heartbeat_at, lease_expires_at, remote_task_id,
+                   progress_stage, progress_at, progress_sequence
+            FROM seller_sprite_task_queue
+            WHERE job_id = ?
+            """,
+            (job_id,),
+        ).fetchone()
         if row is None:
             raise ValueError(f"任务不存在：{job_id}")
         return self._row_to_status(row)
@@ -1434,6 +1875,83 @@ class SellerSpriteTaskQueueStore:
             ).fetchall()
         return [_account_event_to_dict(row) for row in rows]
 
+    def _record_claim_progress(self, conn: sqlite3.Connection, task_id: int) -> None:
+        """在领取事务中初始化 claimed 进度并追加首条时间线。"""
+        now = _now_iso()
+        conn.execute(
+            """
+            UPDATE seller_sprite_task_queue
+            SET progress_stage = 'claimed', progress_at = ?,
+                progress_sequence = progress_sequence + 1
+            WHERE id = ? AND status = 'running'
+            """,
+            (now, task_id),
+        )
+        row = conn.execute(
+            """
+            SELECT job_id, assignment_generation, progress_sequence
+            FROM seller_sprite_task_queue
+            WHERE id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        conn.execute(
+            """
+            INSERT INTO seller_sprite_task_progress_events (
+                job_id, progress_stage, progress_at, progress_sequence,
+                assignment_generation, metadata_json
+            )
+            VALUES (?, 'claimed', ?, ?, ?, '{}')
+            """,
+            (
+                str(row["job_id"]),
+                now,
+                int(row["progress_sequence"]),
+                int(row["assignment_generation"]),
+            ),
+        )
+
+    def _append_current_progress_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        job_id: str,
+        stage: str,
+        progress_at: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """在状态更新事务中追加当前代际的脱敏进度事件。"""
+        row = conn.execute(
+            """
+            SELECT assignment_generation, progress_sequence
+            FROM seller_sprite_task_queue
+            WHERE job_id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"任务不存在：{job_id}")
+        conn.execute(
+            """
+            INSERT INTO seller_sprite_task_progress_events (
+                job_id, progress_stage, progress_at, progress_sequence,
+                assignment_generation, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                stage,
+                progress_at,
+                int(row["progress_sequence"]),
+                int(row["assignment_generation"]),
+                json.dumps(
+                    _sanitize_task_progress_metadata(metadata),
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+
     def _ensure_schema(self) -> None:
         """在单个立即事务内初始化或升级 SQLite 表结构。"""
         with self._connect() as conn:
@@ -1475,7 +1993,10 @@ class SellerSpriteTaskQueueStore:
                     execution_owner TEXT NULL,
                     heartbeat_at TEXT NULL,
                     lease_expires_at TEXT NULL,
-                    remote_task_id TEXT NULL
+                    remote_task_id TEXT NULL,
+                    progress_stage TEXT NOT NULL DEFAULT 'queued',
+                    progress_at TEXT NULL,
+                    progress_sequence INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -1544,6 +2065,36 @@ class SellerSpriteTaskQueueStore:
                 conn.execute("ALTER TABLE seller_sprite_task_queue ADD COLUMN last_failed_account_key TEXT NULL")
             if "retry_reason" not in columns:
                 conn.execute("ALTER TABLE seller_sprite_task_queue ADD COLUMN retry_reason TEXT NULL")
+            if "progress_stage" not in columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_task_queue "
+                    "ADD COLUMN progress_stage TEXT NOT NULL DEFAULT 'queued'"
+                )
+            if "progress_at" not in columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_task_queue ADD COLUMN progress_at TEXT NULL"
+                )
+            if "progress_sequence" not in columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_task_queue "
+                    "ADD COLUMN progress_sequence INTEGER NOT NULL DEFAULT 0"
+                )
+            conn.execute(
+                """
+                UPDATE seller_sprite_task_queue
+                SET progress_stage = CASE status
+                        WHEN 'queued' THEN 'queued'
+                        WHEN 'running' THEN 'claimed'
+                        WHEN 'succeeded' THEN 'finished'
+                        WHEN 'failed' THEN 'failed'
+                        ELSE status
+                    END,
+                    progress_at = COALESCE(
+                        progress_at, finished_at, started_at, created_at
+                    )
+                WHERE progress_at IS NULL OR progress_stage IS NULL
+                """
+            )
             self._backfill_task_kinds(conn)
             conn.execute(
                 """
@@ -1634,6 +2185,60 @@ class SellerSpriteTaskQueueStore:
                 "CREATE INDEX IF NOT EXISTS ix_seller_sprite_account_events_event_type "
                 "ON seller_sprite_account_events(event_type, created_at)"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS seller_sprite_task_progress_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    progress_stage TEXT NOT NULL,
+                    progress_at TEXT NOT NULL,
+                    progress_sequence INTEGER NOT NULL,
+                    assignment_generation INTEGER NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_seller_sprite_progress_job_sequence "
+                "ON seller_sprite_task_progress_events(job_id, progress_sequence)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS seller_sprite_runtime_heartbeats (
+                    execution_owner TEXT NOT NULL PRIMARY KEY,
+                    lifecycle_state TEXT NOT NULL,
+                    heartbeat_at TEXT NOT NULL,
+                    generic_workers_alive INTEGER NOT NULL DEFAULT 0,
+                    listing_worker_alive INTEGER NOT NULL DEFAULT 0,
+                    generic_available_capacity INTEGER NOT NULL DEFAULT 0,
+                    listing_available_capacity INTEGER NOT NULL DEFAULT 0,
+                    available_capacity INTEGER NOT NULL DEFAULT 0,
+                    standby_capacity INTEGER NOT NULL DEFAULT 0,
+                    last_claim_at TEXT NULL,
+                    last_progress_at TEXT NULL
+                )
+                """
+            )
+            runtime_columns = {
+                row[1]
+                for row in conn.execute(
+                    "PRAGMA table_info(seller_sprite_runtime_heartbeats)"
+                )
+            }
+            if "generic_available_capacity" not in runtime_columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_runtime_heartbeats "
+                    "ADD COLUMN generic_available_capacity INTEGER NOT NULL DEFAULT 0"
+                )
+            if "listing_available_capacity" not in runtime_columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_runtime_heartbeats "
+                    "ADD COLUMN listing_available_capacity INTEGER NOT NULL DEFAULT 0"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_seller_sprite_runtime_heartbeat_at "
+                "ON seller_sprite_runtime_heartbeats(heartbeat_at)"
+            )
             conn.execute(f"PRAGMA user_version = {QUEUE_SCHEMA_VERSION}")
             conn.commit()
 
@@ -1686,7 +2291,14 @@ class SellerSpriteTaskQueueStore:
             "site": payload["site"],
             "period": payload["period"],
             "state": status,
-            "stage": _stage_for_status(status),
+            "stage": (
+                str(row["progress_stage"] or "running")
+                if status == "running"
+                else _stage_for_status(status)
+            ),
+            "progress_stage": str(row["progress_stage"] or _stage_for_status(status)),
+            "progress_at": row["progress_at"],
+            "progress_sequence": int(row["progress_sequence"] or 0),
             "position": position,
             "created_at": row["created_at"],
             "started_at": row["started_at"],
@@ -1798,6 +2410,60 @@ def _task_kind_for_request(request: SellerSpriteScenarioRequest) -> str:
         if request.scenario.strip().lower() == "listing-analysis"
         else TASK_KIND_GENERIC
     )
+
+
+def _sanitize_task_progress_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """仅保留监控所需的固定枚举与非负轮询计数。"""
+    if not isinstance(metadata, dict):
+        return {}
+    safe: dict[str, Any] = {}
+    for key in TASK_PROGRESS_METADATA_FIELDS:
+        value = metadata.get(key)
+        if key in {"poll_attempt", "poll_total"}:
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                safe[key] = value
+        elif key == "poll_status":
+            normalized = str(value or "").strip().upper()
+            if normalized in TASK_PROGRESS_POLL_STATUSES:
+                safe[key] = normalized
+        elif key == "outcome":
+            normalized = str(value or "").strip().lower()
+            if normalized in TASK_PROGRESS_OUTCOMES:
+                safe[key] = normalized
+    return safe
+
+
+def _task_progress_event_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    """将进度事件行转换为固定的脱敏监控结构。"""
+    return {
+        "job_id": str(row["job_id"]),
+        "stage": str(row["progress_stage"]),
+        "progress_at": row["progress_at"],
+        "sequence": int(row["progress_sequence"]),
+        "assignment_generation": int(row["assignment_generation"]),
+        "metadata": json.loads(str(row["metadata_json"] or "{}")),
+    }
+
+
+def _runtime_heartbeat_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    """将运行态心跳行转换为不含账号与任务载荷的结构。"""
+    return {
+        "execution_owner": str(row["execution_owner"]),
+        "lifecycle_state": str(row["lifecycle_state"]),
+        "heartbeat_at": row["heartbeat_at"],
+        "generic_workers_alive": int(row["generic_workers_alive"] or 0),
+        "listing_worker_alive": int(row["listing_worker_alive"] or 0),
+        "generic_available_capacity": int(
+            row["generic_available_capacity"] or 0
+        ),
+        "listing_available_capacity": int(
+            row["listing_available_capacity"] or 0
+        ),
+        "available_capacity": int(row["available_capacity"] or 0),
+        "standby_capacity": int(row["standby_capacity"] or 0),
+        "last_claim_at": row["last_claim_at"],
+        "last_progress_at": row["last_progress_at"],
+    }
 
 
 def _account_event_to_dict(row: sqlite3.Row) -> dict[str, Any]:

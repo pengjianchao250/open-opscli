@@ -103,3 +103,23 @@ def test_account_pool_prioritizes_changed_password_for_same_identity():
     replacement = pool.take_standby(attempted_accounts={failed})
 
     assert replacement == changed
+
+
+def test_account_pool_defers_busy_healthy_account_without_duplication():
+    """暂时冲突的健康账号应按接口顺序归还，且不得重复登记。"""
+    from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool
+
+    pool = SellerSpriteAccountPool()
+    accounts = _accounts(6)
+    pool.load(accounts)
+    pool.mark_unavailable(accounts[0])
+    replacement = pool.take_standby(attempted_accounts=set())
+
+    pool.defer_working_account(replacement)
+    pool.defer_working_account(replacement)
+
+    working = set(pool.working_accounts)
+    assert replacement not in working
+    assert pool.standby_accounts.count(replacement) == 1
+    assert not working.intersection(pool.standby_accounts)
+    assert pool.standby_accounts == (accounts[3], accounts[4], accounts[5])

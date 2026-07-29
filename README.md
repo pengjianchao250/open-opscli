@@ -2,7 +2,7 @@
 
 Aukeys 运营 CLI 工具集
 
-> 当前模块：auth（认证授权）、query（数据查询）、skills（Skill 生命周期管理）、amazon（Amazon 数据采集）、seller-sprite（卖家精灵关键词与 Listing 分析材料采集）；后续可扩展更多模块（deploy、notify 等）
+> 当前模块：auth（认证授权）、query（数据查询）、skills（Skill 生命周期管理）、amazon（Amazon 数据采集）、seller-sprite（卖家精灵关键词与 Listing 分析材料采集）、collector-monitor（采集任务只读监控与提醒）；后续可扩展更多模块（deploy、notify 等）
 >
 > 说明：本文档中涉及 `aukeys-opscli[amazon]`、`opscli-core`、独立模块包、动态插件化等内容，部分属于预留设计或未来演进方向。**截至当前仓库版本，请以单包 `aukeys-opscli` + 仓库内静态注册模块为准，不要将这些内容视为已落地的发布承诺。**
 
@@ -53,6 +53,14 @@ Aukeys 运营 CLI 工具集
 - **默认 50 条**：关键词挖掘默认采集 50 条，支持通过 `--limit` 控制
 - **验证码预留**：一期检测并留痕验证码，后续可接入超级鹰图形验证码 provider
 - **浏览器运行时**：`browser-route` 默认使用 Patchright，安装 `aukeys-opscli[seller-sprite]` 后执行 `python -m patchright install chromium`；现有 Playwright 页面、定位、路由和 request API 无需替换，可通过 `OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME=playwright` 回退
+
+### collector-monitor 模块
+
+- **独立只读服务**：与 Collector MCP 分进程运行，严格只读 SellerSprite 任务库，监控私有状态写入独立 SQLite
+- **任务与队列健康**：综合业务进度、执行租约、runtime 心跳、Generic/Listing 精确容量和领取活动，识别 `stalled`、`orphaned`、`queue_starved`、`worker_unavailable`
+- **网页、API 与 CLI**：提供本机只读仪表盘、Collector 状态、活动/已恢复事故历史、健康探针、JSON API 和 `opscli collector-monitor` 查询命令
+- **企业微信提醒**：支持事故首次告警、升级、冷却提醒和恢复通知；Webhook 只从受保护文件读取
+- **安全边界**：一期不修改任务状态，不提供取消、重试、重新入队或浏览器控制
 
 ---
 
@@ -186,6 +194,32 @@ opscli seller-sprite login-status --output-dir ./seller_sprite_runs --pretty
 # 14. 退出登录
 opscli auth logout
 ```
+
+### Collector Monitor 快速开始
+
+Collector Monitor 是独立长运行服务，默认监听 `127.0.0.1:8767`：
+
+```bash
+# 启动服务
+opscli collector-monitor serve
+# 或使用独立入口
+opscli-collector-monitor
+
+# 查询缓存状态
+opscli collector-monitor status
+opscli collector-monitor tasks --health stalled
+opscli collector-monitor show <JOB_ID>
+opscli collector-monitor incidents
+```
+
+浏览器访问 `http://127.0.0.1:8767/`。默认读取 `~/.config/opscli/seller_sprite/task_queue.sqlite3`，使用 SQLite `mode=ro` 与 `query_only`，不会迁移或修改业务任务；Monitor 自有事故状态写入 `~/.config/opscli/collector_monitor/state.sqlite3`。两者必须是不同物理文件，也不能通过符号链接或硬链接指向同一文件。
+
+企业微信 Webhook 和可选 Collector MCP API Key 必须放在权限受限的普通文件中，再分别配置 `OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE` 和 `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_API_KEY_FILE`；禁止把密钥原文写入环境变量或命令参数。配置 API Key 文件时，Collector MCP 远端地址必须使用 HTTPS，仅明确回环地址允许 HTTP；携带密钥的探测不跟随重定向，文件读取与远端调用共用探测总超时。容量按任务类型计算，并扣除 SQLite 全局运行任务和本实例活跃尝试中的 Generic、Listing、专属任务及其他调度器共享账号占用。默认服务没有应用层认证，不应直接暴露公网。
+
+完整配置、部署和判定合同见：
+
+- [采集任务监控服务设计](docs/design/采集任务监控服务设计.md)
+- [Collector Monitor 运维说明](docs/release/Collector%20Monitor运维说明.md)
 
 ---
 

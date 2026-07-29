@@ -1,5 +1,6 @@
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -180,6 +181,30 @@ class SessionExpiredOnceApiClient(DummyApiClient):
         return {"code": "OK", "data": {"items": [{"asin": "B00TEST"}]}}
 
 
+class ProgressPollingApiClient(DummyApiClient):
+    """模拟远端任务轮询，并保留足够次数验证进度节流。"""
+
+    calls = []
+
+    async def post_json(self, url, payload, *, referer=None):
+        """返回待轮询远端任务。"""
+        return {
+            "code": "OK",
+            "data": {"taskId": "remote-task-progress", "taskStatus": "SUBMITTED"},
+        }
+
+    async def get_json(self, url, params, *, referer=None):
+        """前十次保持运行，第十一次完成。"""
+        self.calls.append({"url": url, "params": params, "referer": referer})
+        attempt = len(self.calls)
+        if attempt < 11:
+            return {"code": "OK", "data": {"taskStatus": "RUNNING"}}
+        return {
+            "code": "OK",
+            "data": {"taskStatus": "COMPLETED", "content": "done"},
+        }
+
+
 class ListingAnalysisApiClient(DummyApiClient):
     calls = []
     instance = None
@@ -265,6 +290,150 @@ class ControlledAsyncManager(SellerSpriteApiManager):
 class FailingAsyncManager(SellerSpriteApiManager):
     async def run(self, request):
         raise ValueError("boom from async seller sprite")
+
+
+def test_manager_reports_coarse_progress_without_payloads(monkeypatch, tmp_path: Path):
+    """Manager 应按公开监听器报告粗粒度阶段，不携带请求与文件内容。"""
+    DummyApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    stages = []
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="api-direct"),
+        account_provider=DummyAccountProvider(),
+        progress_listener=lambda stage, metadata=None: stages.append((stage, metadata or {})),
+    )
+
+    _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-reverse",
+                site="US",
+                period="30d",
+                params={"asin": "B0PRIVATE123"},
+                job_id="job-progress-listener",
+                export_format="json",
+            )
+        )
+    )
+
+    assert [stage for stage, _ in stages] == [
+        "resolving",
+        "requesting",
+        "processing",
+        "exporting",
+        "uploading",
+        "finalizing",
+    ]
+    assert all(metadata == {} for _, metadata in stages)
+    assert "B0PRIVATE123" not in json.dumps(stages)
+    assert str(tmp_path) not in json.dumps(stages)
+
+
+def test_manager_reports_browser_wait_without_payloads(monkeypatch, tmp_path: Path):
+    """browser-route 请求等待应仅报告阶段，不暴露请求参数。"""
+    calls = []
+    stages = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={"code": "OK", "data": {"items": [{"asin": "B0RESULT001"}]}},
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(
+        api_manager_module,
+        "_run_browser_route_request",
+        fake_browser_route_request,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+        progress_listener=lambda stage, metadata=None: stages.append((stage, metadata or {})),
+    )
+
+    _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-reverse",
+                site="US",
+                period="30d",
+                params={"asin": "B0PRIVATE123"},
+                job_id="job-browser-progress",
+                export_format="json",
+            )
+        )
+    )
+
+    assert [stage for stage, _ in stages] == [
+        "resolving",
+        "browser_wait",
+        "processing",
+        "exporting",
+        "uploading",
+        "finalizing",
+    ]
+    assert all(metadata == {} for _, metadata in stages)
+    assert len(calls) == 1
+    assert "B0PRIVATE123" not in json.dumps(stages)
+    assert str(tmp_path) not in json.dumps(stages)
+
+
+def test_manager_throttles_remote_poll_progress(monkeypatch, tmp_path: Path):
+    """远端轮询仅在首次、状态变化和每十次检查时报告脱敏进度。"""
+    from opscli.seller_sprite.api import scenarios as scenarios_module
+
+    ProgressPollingApiClient.calls = []
+    stages = []
+    base_scenario = scenarios_module.SCENARIOS["keyword-reverse"]
+    polling_scenario = replace(
+        base_scenario,
+        task_result_endpoint="/v3/api/ai-result/{task_id}",
+    )
+    monkeypatch.setitem(
+        scenarios_module.SCENARIOS,
+        "keyword-reverse",
+        polling_scenario,
+    )
+    monkeypatch.setattr(
+        api_manager_module,
+        "SellerSpriteApiClient",
+        ProgressPollingApiClient,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="api-direct"),
+        account_provider=DummyAccountProvider(),
+        progress_listener=lambda stage, metadata=None: stages.append((stage, metadata or {})),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-reverse",
+                site="US",
+                period="30d",
+                params={
+                    "asin": "B0PRIVATE123",
+                    "pollAttempts": 11,
+                    "pollInterval": 0,
+                },
+                job_id="job-poll-progress",
+                export_format="json",
+            )
+        )
+    )
+
+    poll_events = [metadata for stage, metadata in stages if stage == "remote_poll"]
+    assert poll_events == [
+        {"poll_attempt": 1, "poll_total": 11, "poll_status": "RUNNING"},
+        {"poll_attempt": 10, "poll_total": 11, "poll_status": "RUNNING"},
+        {"poll_attempt": 11, "poll_total": 11, "poll_status": "COMPLETED"},
+    ]
+    assert result.row_count == 0
+    assert "remote-task-progress" not in json.dumps(poll_events)
+    assert "B0PRIVATE123" not in json.dumps(poll_events)
+    assert str(tmp_path) not in json.dumps(poll_events)
 
 
 def test_manager_writes_job_files_and_xlsx(monkeypatch, tmp_path: Path):
