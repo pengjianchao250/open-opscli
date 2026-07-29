@@ -43,3 +43,47 @@ def test_short_text_is_not_matched():
     """单字与空串不参与模糊匹配，否则任意查询都会命中一堆字段。"""
     assert skill_completion.bigram_similarity("点", "点击份额") == 0.0
     assert skill_completion.bigram_similarity("", "点击份额") == 0.0
+
+
+import dataset_guidance as skill_guidance  # noqa: E402
+
+
+def _field(field_name: str, verbose_name: str) -> dict:
+    return {
+        "field_name": field_name,
+        "verbose_name": verbose_name,
+        "field_type": "metric",
+        "dataset_alias": "ds_test",
+    }
+
+
+def test_fuzzy_match_rescues_zero_score_field():
+    """业务词与字段中文名部分重叠时不能再得 0 分。
+
+    实测形态：「搜索词的点击份额和购买份额」在当前实现下零候选，
+    因为打分末端只有 token 交集。
+    """
+    field = _field("buy_share", "购买份额")
+    score = skill_guidance._field_score(
+        field, "看一下搜索词的点击份额", {"点击", "份额", "搜索"}
+    )
+    assert score > 0
+
+
+def test_fuzzy_score_never_outranks_exact_match():
+    """模糊分必须低于任何精确命中，否则会把准确字段挤下去。"""
+    exact = skill_guidance._field_score(
+        _field("buy_share", "购买份额"), "查购买份额", {"购买", "份额"}
+    )
+    fuzzy = skill_guidance._field_score(
+        _field("buy_share", "购买份额"), "查点击份额", {"点击", "份额"}
+    )
+    assert fuzzy < exact
+
+
+def test_unrelated_field_stays_zero():
+    """完全无关的字段不能因为模糊匹配被拉进候选。"""
+    score = skill_guidance._field_score(
+        _field("stock_qty", "总库存"), "查点击份额", {"点击", "份额"}
+    )
+    assert score == 0

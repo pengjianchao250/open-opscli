@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Iterable
 
 import field_semantics
+import schema_completion
 import scoped_dataset_reader
 
 
@@ -130,7 +131,16 @@ def _field_score(
         else:
             score = len(_tokens(base_name).intersection(query_tokens))
         best = max(best, score)
-    return best
+    if best:
+        return best
+    # 精确与 token 交集都落空时的最后一层：字符二元组模糊匹配。
+    # 上限压到 50，确保任何精确命中（80/90/100 档）都排在它前面；
+    # 这条规则的目的是不让「点击份额」这类业务词零候选，
+    # 而不是替代精确匹配。
+    fuzzy = schema_completion.best_fuzzy_score(
+        normalized_query, [_normalize(label) for label in _field_labels(field)]
+    )
+    return int(fuzzy * 50)
 
 
 def _field_labels(field: dict) -> list[str]:
