@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Iterable
 
 import field_semantics
-import schema_completion
 import scoped_dataset_reader
 
 
@@ -113,8 +112,7 @@ def _field_score(
     """字段与查询的匹配打分。
 
     优先级：技术字段名完整命中(100) > 中文全名子串命中(90+)
-    > 去括号后的中文基础名命中(80+) > token 交集数量兜底
-    > 字符二元组模糊匹配兜底(上限 50，与前面各档取最大值，不短路)。
+    > 去括号后的中文基础名命中(80+) > token 交集数量兜底。
     展示名对主名与 alt_verbose_names（重复注册合并保留的旧标签）
     逐一打分取最大值，保证用户用任一历史叫法都能命中。
     """
@@ -132,21 +130,6 @@ def _field_score(
         else:
             score = len(_tokens(base_name).intersection(query_tokens))
         best = max(best, score)
-    # 模糊分与既有分数取最大值而非短路返回：token 交集哪怕只命中一个二元组
-    # 也会得到 1~3 的非零分，短路会让模糊兜底永远走不到——
-    # 实测字段「ASIN点击份额」对用户词「点击份额」只拿 3 分，
-    # 而它本该是强命中。模糊分上限 50，精确命中的 80/90/100 档仍然优先。
-    # best 一旦达到 50，模糊分（上限恰好也是 50）不可能再把 max(best, fuzzy)
-    # 抬高，提前判断可以省掉这个分支下每个字段一次分段 + 二元组比较的开销，
-    # 不改变任何输出。
-    if best < 50:
-        fuzzy = int(
-            schema_completion.best_fuzzy_score(
-                normalized_query, [_normalize(label) for label in _field_labels(field)]
-            )
-            * 50
-        )
-        return max(best, fuzzy)
     return best
 
 
