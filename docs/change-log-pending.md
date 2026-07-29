@@ -4940,3 +4940,15 @@
 **影响范围**：两个 Dashboard 内置 Skill、对应模板测试和本地 release 版本元数据；未修改 MCP/ops-agent 逻辑，未发布线上版本。
 **回滚方式**：回退本次四份 Skill 文档、两个 VERSION、模板测试、包版本和本条变更记录。
 ---
+
+## 2026-07-29 skills/ops-dataset-query - 修复 Windows GBK 环境下的编码崩溃
+
+**变更原因**：Windows 中文用户（codepage 936）在 Codex 上运行 ops-dataset-query 报 `UnicodeDecodeError: 'gbk' codec can't decode byte 0xa6`。根因是 skill 脚本用 `subprocess.run(..., text=True)` 调用 opscli 却未指定 encoding，`text=True` 在 Windows 上按 locale（GBK）解码子进程 stdout，而 opscli 的 stdout 已被强制重配为 UTF-8（`opscli/cli.py:112-118`），UTF-8 中文字节被 GBK 解码必然失败；同时脚本自身 stdout 在 Windows 管道下也走 GBK，中文 JSON 回传给 Agent 会乱码，遇 GBK 外字符还会抛 UnicodeEncodeError。
+**改动点**：
+1. `scripts/core.py`：新增 `force_utf8_stdio()`（Windows 上把本进程 stdout/stderr reconfigure 为 UTF-8，非 Windows 无操作，与 opscli/cli.py 策略一致）与 `utf8_subprocess_kwargs()`（返回 `encoding="utf-8"` + `errors="replace"` + 子进程 `PYTHONIOENCODING=utf-8`，取代 `text=True`）；`try_upgrade()` 改用新参数。
+2. 5 个 opscli 子进程调用点改用 `utf8_subprocess_kwargs()`：`run_query.py:301 _run_opscli`、`query_plan.py:1826 _auto_enum_platform_values`、`query_plan.py:1891 _auto_enum_component_values`、`core.py:173 try_upgrade`、`chart_data_loader.py:69 load_chart_data_from_uuid`。
+3. 3 个入口 `main()` 开头调用 `force_utf8_stdio()`：`query_flow.py`、`run_query.py`、`query_plan.py`；对应文件新增 `import core`。
+**验证结果**：专项脚本 5 项断言全通过（子进程 stdout encoding=utf-8；UTF-8 中文 `{"渠道":"傲彼瑞"}` 正确解码；注入 0xa6 坏字节降级为替换符不再抛异常；非 Windows 上 stdio 不被改动；4 个入口模块可正常导入）。`pytest tests/skills/test_run_query_default_filters.py tests/skills/test_dataset_query_planner.py tests/skills/test_dataset_guidance_default_filters.py tests/skills/test_scoped_reader_duplicate_fields.py tests/mcp/test_query_planner_tools.py` 84 passed。`pytest tests/query` 150 passed / 2 failed（test_cli 的 catalog/intent，已 git stash 验证为既存基线失败，与本次无关）。`python query_flow.py "查一下数据" --no-auto-enum --no-auto-upgrade` 正常返回合同 JSON。
+**影响范围**：仅 ops-dataset-query skill 脚本；非 Windows 平台行为不变（`force_utf8_stdio` 直接 return，`encoding="utf-8"` 与原 locale 解码结果一致）。scripts/ 不在远端升级替换范围内（`sync/updater.py` 只替换 data/ 的 CSV/JSON），Windows 用户需升级 opscli 包后重装该 skill 才能拿到修复。
+**回滚方式**：`git checkout HEAD -- opscli/skills/templates/ops-dataset-query/scripts/{core.py,run_query.py,query_plan.py,chart_data_loader.py,query_flow.py}`。
+---

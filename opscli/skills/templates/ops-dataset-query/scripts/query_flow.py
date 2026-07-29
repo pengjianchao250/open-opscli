@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Sequence
 
+import core
 import query_plan
 import run_query
 
@@ -65,6 +66,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """命令行入口：失败时返回简洁中文 JSON，避免裸 traceback。"""
+    # 入口先切 UTF-8 stdio：一体化流程的中文 JSON 需被 Agent 原样读取
+    core.force_utf8_stdio()
     args = _parse_args(argv)
     try:
         query = (

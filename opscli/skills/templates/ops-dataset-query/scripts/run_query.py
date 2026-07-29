@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
+import core
 import evidence_contract
 import plan_integrity
 
@@ -306,9 +307,9 @@ def _run_opscli(table_id: str, payload: dict) -> dict:
                 "--run",
             ],
             capture_output=True,
-            text=True,
             check=False,
             timeout=EXEC_TIMEOUT_SECONDS,
+            **core.utf8_subprocess_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError(f"opscli_exec_failed:{error}") from error
@@ -456,6 +457,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # 入口先切 UTF-8 stdio：后续所有中文 JSON 输出都要能被 Agent 正确读取
+    core.force_utf8_stdio()
     args = _parse_args(argv)
     try:
         if args.plan_file:

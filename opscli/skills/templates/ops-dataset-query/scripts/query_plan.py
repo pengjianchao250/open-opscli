@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import agent_query_planner as planner
+import core
 import dataset_guidance
 import plan_integrity
 import scoped_dataset_reader
@@ -1831,9 +1832,9 @@ def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: f
                 "--run",
             ],
             capture_output=True,
-            text=True,
             check=False,
             timeout=timeout_seconds,
+            **core.utf8_subprocess_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"[query_plan] 自动枚举未完成：{error}", file=sys.stderr)
@@ -1900,9 +1901,9 @@ def _auto_enum_component_values(
                 "--run",
             ],
             capture_output=True,
-            text=True,
             check=False,
             timeout=timeout_seconds,
+            **core.utf8_subprocess_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"[query_plan] 普通筛选组件枚举未完成：{error}", file=sys.stderr)
@@ -2061,6 +2062,8 @@ def _error_next_action(code: str) -> tuple[str, bool]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # 入口先切 UTF-8 stdio：规划合同与 stderr 诊断都含中文，Windows 管道下不能走 GBK
+    core.force_utf8_stdio()
     args = _parse_args(argv)
     try:
         query = _resolve_query_text(args)

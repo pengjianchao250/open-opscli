@@ -15,6 +15,49 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
+# 跨平台编码兜底（Windows GBK 环境）
+# ---------------------------------------------------------------------------
+
+
+def force_utf8_stdio() -> None:
+    """Windows 上把本进程 stdout/stderr 切成 UTF-8，避免中文输出被 GBK 编码。
+
+    为什么需要：Windows 管道场景下 Python 默认用 locale 编码（cp936/GBK）写 stdout，
+    调用方（Codex / Claude Code 等 Agent）按 UTF-8 读会得到乱码；
+    输出中一旦出现 GBK 字符集外的字符还会直接抛 UnicodeEncodeError 中断脚本。
+    与 opscli/cli.py 的 Windows 兜底策略保持一致；非 Windows 平台不做任何处理。
+    """
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001 —— 兜底本身不能反过来打断主流程
+                pass
+
+
+def utf8_subprocess_kwargs() -> dict:
+    """返回调用 opscli 子进程时的文本参数，强制父子两端都走 UTF-8。
+
+    为什么需要：subprocess 的 text=True 在 Windows 上按 locale 编码（GBK）解码
+    子进程 stdout，而 opscli 输出的是 UTF-8，中文会触发
+    UnicodeDecodeError: 'gbk' codec can't decode byte 0xa6。
+
+    - encoding/errors：本进程按 UTF-8 解码，个别坏字节降级为替换符而不是崩溃
+    - PYTHONIOENCODING：强制子进程按 UTF-8 输出，兼容尚未做 stdout 兜底的旧版 opscli
+
+    Returns:
+        可直接展开到 subprocess.run(**kwargs) 的参数字典（取代 text=True）
+    """
+    return {
+        "encoding": "utf-8",
+        "errors": "replace",
+        "env": {**os.environ, "PYTHONIOENCODING": "utf-8"},
+    }
+
+
+# ---------------------------------------------------------------------------
 # CSV 加载
 # ---------------------------------------------------------------------------
 
@@ -172,7 +215,8 @@ def try_upgrade(data_dir: Path | None = None, *, caller: str = "core") -> bool:
     print(f"[{caller}] 本地字段映射未命中，尝试 opscli skills upgrade 更新数据...", file=sys.stderr)
     result = subprocess.run(
         ["opscli", "skills", "upgrade", "ops-dataset-query", "--force"],
-        capture_output=True, text=True, check=False,
+        capture_output=True, check=False,
+        **utf8_subprocess_kwargs(),
     )
     if result.returncode != 0:
         print(f"[{caller}] upgrade 失败: {result.stderr}", file=sys.stderr)
