@@ -26,6 +26,23 @@ except Exception:  # noqa: BLE001
 TIMEZONE_NAME = "Asia/Shanghai"
 DEFAULT_DAYS = 30
 
+# 全时段触发词：命中后返回空窗口，上层不注入任何日期筛选。
+# 只收明确指向时间维度的表述——「全部数据」「全部ASIN」这类泛指不在其中，
+# 否则「查傲彼瑞的全部ASIN」会被误判成不限时间。
+_ALL_TIME_RE = re.compile(
+    r"历史以来|有史以来|所有时间|全部时间|全时段|全部历史|历史全量|全量历史|"
+    r"不限时间|不限日期|不卡时间|不卡日期|"
+    r"不[加添]加?(?:任何)?(?:日期|时间)|不需要(?:任何)?(?:日期|时间)筛选"
+)
+
+# 否定语境：用户明确拒绝某个时间口径时，该口径不能被当成显式请求。
+# 典型踩坑：「用户已明确拒绝默认近30天」里的「近30天」曾被识别为显式要求近30天，
+# 导致越强调不要越被锁死。屏蔽范围只到最近的标点，
+# 保证「不要近30天，查上月」的后半句仍能正常识别。
+_NEGATED_SPAN_RE = re.compile(
+    r"(?:拒绝|排除|不要|不用|不加|不添加|不需要|无需|禁止|别用|别加)[^，。；！？,;!?]{0,12}"
+)
+
 # 中文数字（时间表达常用范围）
 _CN_NUM = {
     "一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
@@ -124,8 +141,17 @@ def _explicit_comparison(query: str, today: date) -> dict | None:
     }
 
 
-def _window(query: str, today: date) -> tuple[date, date, str, bool]:
-    """解析主周期窗口，返回 (start, end, 中文标签, 是否默认)。"""
+def _window(query: str, today: date) -> tuple[date | None, date | None, str, bool]:
+    """解析主周期窗口，返回 (start, end, 中文标签, 是否默认)。
+
+    start/end 为 None 表示用户明确要求全时段，上层据此不注入日期筛选。
+    """
+    # 全时段判断必须在否定屏蔽之前：「不加日期筛选」「不限时间」本身就是否定形式，
+    # 先屏蔽会把这类表述连同否定词一起清掉，导致全时段请求反被当成未识别。
+    if _ALL_TIME_RE.search(query):
+        return None, None, "全部时间（用户明确要求不加日期筛选）", False
+    # 再剔除否定语境里的时间口径，避免「拒绝近30天」被当成「要近30天」
+    query = _NEGATED_SPAN_RE.sub(" ", query)
     # 明确绝对日期范围：2026-07-01 至 2026-07-15 / 2026年7月1日~7月15日
     absolute = re.search(
         r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\s*"
@@ -240,8 +266,9 @@ def parse(query: str, *, today: date | None = None) -> dict:
     text = query or ""
     start, end, label, is_default = _window(text, today)
     result: dict = {
-        "start": _fmt(start),
-        "end": _fmt(end),
+        "start": None if start is None else _fmt(start),
+        "end": None if end is None else _fmt(end),
+        "unbounded": start is None or end is None,
         "label_zh": label,
         "timezone": TIMEZONE_NAME,
         "reference_date": _fmt(today),
@@ -254,6 +281,9 @@ def parse(query: str, *, today: date | None = None) -> dict:
         "matched": not is_default,
         "comparison": None,
     }
+    # 全时段：没有起止日期就没有环比/同比基准，直接返回空窗口合同
+    if start is None or end is None:
+        return result
     explicit_comparison = _explicit_comparison(text, today)
     if explicit_comparison:
         result["comparison"] = explicit_comparison

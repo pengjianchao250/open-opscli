@@ -5182,3 +5182,16 @@
 **影响范围**：仅 ops-dataset-query skill 脚本；非 Windows 平台行为不变（`force_utf8_stdio` 直接 return，`encoding="utf-8"` 与原 locale 解码结果一致）。scripts/ 不在远端升级替换范围内（`sync/updater.py` 只替换 data/ 的 CSV/JSON），Windows 用户需升级 opscli 包后重装该 skill 才能拿到修复。
 **回滚方式**：`git checkout HEAD -- opscli/skills/templates/ops-dataset-query/scripts/{core.py,run_query.py,query_plan.py,chart_data_loader.py,query_flow.py}`。
 ---
+
+## 2026-07-29 query/planner + skills/ops-dataset-query - 支持全时段查询，移除仅维度查询的默认30天限制
+
+**变更原因**：两版规划器（Skill 版 scripts/、内核版 opscli/query/services/planner/）都以 DEFAULT_DAYS=30 兜底，且存在两个缺陷：(1) 没有「全部时间」这一档，「历史以来/所有时间/不限时间」等表述全部落到默认近30天；(2) 否定语境被反向识别——用户原文「已明确拒绝默认近30天」中的「近30天」被正则命中，返回 is_default=False，规划器当成用户显式要求近30天，连确认门都不触发直接按30天执行（线上 Windows 用户与本地 e2e 均复现）。另据用户要求，只查维度不查指标的请求（如「某渠道下全部 ASIN」）本质是取去重维度全集，卡30天只会漏掉更早出现过的值，不应加日期筛选。
+**改动点**：
+1. 两版 `time_scope.py`：新增 `_ALL_TIME_RE`（全时段触发词，只收明确指向时间维度的表述，「全部ASIN」这类泛指不收）与 `_NEGATED_SPAN_RE`（否定语境屏蔽，范围只到最近标点，保证「不要近30天，查上月」后半句仍生效）；`_window()` 返回类型放宽为 `date | None`，全时段返回空窗口；顺序上全时段判断必须先于否定屏蔽（否则「不加日期筛选」这类本身是否定形式的表述会被连带清掉，测试已捕获）；`parse()` 输出新增 `unbounded` 字段，空窗口时早返回，不生成环比/同比。
+2. 两版 `query_plan.py`：新增「仅维度无指标 + 原文未给时间」→ 改写 scope 为空窗口且不触发时间确认门；`scope_zh` 增加空窗口分支（避免输出 None ~ None）；`execution_ref.time_scope` 新增 `unbounded`。日期筛选注入点 `_build_query_template` 原有 `if date_field and scope.get("start")` 守卫无需改动，空窗口天然不注入。
+3. 两版 `query_plan.schema.json`：`time_scope.start/end` 放宽为 `["string","null"]`，新增 `unbounded` 属性。
+4. 新增 `tests/skills/test_time_scope_unbounded.py`：28 项回归，对 Skill/内核两版参数化，覆盖全时段识别、否定语境、泛指不误判、显式窗口不受影响、空窗口无对比期，以及规划器层的「仅维度不限时间」「带指标仍确认默认窗口」。
+**验证结果**：新增测试 28 passed；两版行为对照脚本 11 项全一致；`pytest tests/query tests/mcp/test_query_planner_tools.py tests/skills/test_dataset_query_planner.py tests/skills/test_run_query_default_filters.py tests/skills/test_dataset_guidance_default_filters.py tests/skills/test_scoped_reader_duplicate_fields.py tests/skills/test_time_scope_unbounded.py` → 262 passed / 2 failed（test_cli 的 catalog/intent，既存基线失败，已 git stash 验证与本次无关）。隔离目录规划器 e2e 四场景符合预期：原 Windows 用户请求→planned 无日期筛选；仅维度无时间→planned 无日期筛选；维度+指标无时间→clarify_required 保留确认门；维度+指标近7天→正常注入 date_id 区间。
+**影响范围**：两版规划器的时间口径解析与日期筛选注入。带指标且未给时间的请求行为不变（仍是默认近30天 + 用户确认）。注意：服务端是数据集默认条件注入的唯一权威方（见 run_query.py 架构说明），若数据集本身配置了服务端默认日期条件，客户端不注入日期筛选不等于一定返回全历史，需按数据集单独核对。
+**回滚方式**：`git checkout HEAD -- opscli/query/services/planner/{time_scope.py,query_plan.py,resources/query_plan.schema.json} opscli/skills/templates/ops-dataset-query/scripts/{time_scope.py,query_plan.py} opscli/skills/templates/ops-dataset-query/data/query_plan.schema.json && rm tests/skills/test_time_scope_unbounded.py`。
+---
