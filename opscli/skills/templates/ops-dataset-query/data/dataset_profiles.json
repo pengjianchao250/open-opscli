@@ -470,7 +470,8 @@
         "非亚马逊平台"
       ],
       "certified": false,
-      "reviewed_at": ""
+      "reviewed_at": "",
+      "stale_reason": "dataset_alias 与 standard_name 均在当前元数据中查不到对应数据集，需人工改绑或确认该数据集已下线"
     },
     {
       "dataset_alias": "ds_baXwUQEexPWS",
@@ -530,7 +531,8 @@
       ],
       "avoid_when": [],
       "certified": false,
-      "reviewed_at": ""
+      "reviewed_at": "",
+      "stale_reason": "dataset_alias 与 standard_name 均在当前元数据中查不到对应数据集，需人工改绑或确认该数据集已下线"
     },
     {
       "dataset_alias": "ds_K9ThRY57lzxC",
