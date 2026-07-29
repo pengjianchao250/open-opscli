@@ -115,6 +115,26 @@ def test_unrelated_label_stays_zero_after_segmentation():
     assert skill_completion.best_fuzzy_score("查近30天各渠道销售额", ["广告费"]) == 0.0
 
 
+def test_de_particle_is_not_a_split_boundary():
+    """「X的Y」不能切在「的」上，否则裸的中心词会无差别命中一大批同字段。
+
+    审查者复现：把「点击的份额」切成「点击」「份额」两段后，裸片段
+    「份额」按双向包含会命中任何含「份额」的字段——「退货份额」
+    「曝光份额」都会被错误判定为强命中。必须把「的」当噪声剔除、
+    保留「点击份额」这个完整片段参与比对，才能既保住召回、又不丢判别力。
+
+    这条测试在「的」被改回分段边界时会失败：分段退化为
+    ['看一下点击', '份额', '购买', '份额']，裸片段「份额」是
+    「退货份额」「曝光份额」的子串，双向包含按 0.9 计，
+    高于 FUZZY_MATCH_THRESHOLD，与下面「必须为 0」的断言矛盾。
+    """
+    query = "看一下点击的份额和购买的份额"
+    assert skill_completion.best_fuzzy_score(query, ["点击份额"]) >= skill_completion.FUZZY_MATCH_THRESHOLD
+    assert skill_completion.best_fuzzy_score(query, ["购买份额"]) >= skill_completion.FUZZY_MATCH_THRESHOLD
+    assert skill_completion.best_fuzzy_score(query, ["退货份额"]) == 0.0
+    assert skill_completion.best_fuzzy_score(query, ["曝光份额"]) == 0.0
+
+
 def test_field_score_max_beats_weak_token_short_circuit():
     """`_field_score` 不能在 token 交集非零时短路，否则修好的模糊分永远走不到。
 

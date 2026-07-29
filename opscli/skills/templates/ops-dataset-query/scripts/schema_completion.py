@@ -53,17 +53,46 @@ def bigram_similarity(left: str, right: str) -> float:
     return intersection / len(left_grams | right_grams)
 
 
-# 查询分段用的分隔符：中文助词、连词与标点。分段是为了不让长句稀释相似度
-_SEGMENT_SPLIT_RE = re.compile(r"[的和与及或，,。.；;、\s]+")
+# 查询按连词/标点切成「分句」用的分隔符。这里不含「的」——「X的Y」是极常见
+# 的中文修饰结构（如「点击的份额」），如果把「的」当分句边界，会把修饰语
+# 和中心词切断，剩下裸的「份额」这类短片段，靠双向包含会命中任何含
+# 「份额」的字段（「退货份额」「曝光份额」都会被判定为 0.9 强命中），
+# 判别力直接归零。因此分句阶段先不动「的」，交给 `_query_segments` 内部
+# 针对每个分句单独处理。
+_CLAUSE_SPLIT_RE = re.compile(r"[和与及或，,。.；;、\s]+")
+_DE_RE = re.compile(r"的")
 
 
 def _query_segments(query_text: str) -> list:
-    """把查询切成候选业务词片段，过滤掉短到无判别力的碎片。"""
-    return [
-        segment
-        for segment in _SEGMENT_SPLIT_RE.split(_normalize(query_text))
-        if len(segment) >= MIN_FUZZY_LENGTH
-    ]
+    """把查询切成候选业务词片段：每个分句生成「粘连版」+「核心词版」两类候选。
+
+    - 粘连版：把分句内的「的」直接删掉拼接（「点击的份额」→「点击份额」）。
+      保住「X的Y」整体语义的同时，避免裸「份额」这种通用词单独出现造成
+      的误命中——「份额」不会再作为独立候选参与比对。
+    - 核心词版：只取分句里最后一个「的」之后的部分（「搜索词的点击份额」
+      →「点击份额」）。这一版是为了不让粘连版因为带上前面无关的修饰语
+      （「搜索词」）而变长，进而在与更长字段名（如「ASIN点击份额」）
+      比对时被稀释——粘连版整句拿去比对，长度差一拉大就会重演 Task 9
+      最初要修的「整句稀释」问题，只是缩小到了分句级别。
+
+    核心词版只有长度**大于** MIN_FUZZY_LENGTH（即至少 3 个字）才纳入候选：
+    像「份额」这种长度正好等于 MIN_FUZZY_LENGTH 的通用业务名词单独拿出来
+    几乎不具备判别力，任何以它结尾的字段都会被双向包含误判命中
+    （这正是本函数要修的缺陷本身）；「点击份额」这种 4 字复合词判别力
+    足够，可以放行。
+    """
+    segments = []
+    for clause in _CLAUSE_SPLIT_RE.split(_normalize(query_text)):
+        if not clause:
+            continue
+        glued = _DE_RE.sub("", clause)
+        if len(glued) >= MIN_FUZZY_LENGTH:
+            segments.append(glued)
+        if "的" in clause:
+            core = clause.rsplit("的", 1)[-1]
+            if len(core) > MIN_FUZZY_LENGTH:
+                segments.append(core)
+    return segments
 
 
 def best_fuzzy_score(query_text: str, labels: list) -> float:
