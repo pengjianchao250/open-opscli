@@ -203,7 +203,7 @@ def test_component_enum_remote_error_is_not_advertised_as_retryable():
     def enum_fn(_table_id, _field_name, *, limit):
         raise RuntimeError("字段不存在: dept_name")
 
-    contract = query_plan._resolve_department_filter(
+    contract = query_plan._resolve_component_filters(
         _dept_contract(), "查询项目二部的销量", enum_fn, auto_enum=True
     )
     view = contract["model_view"]
@@ -219,7 +219,7 @@ def test_component_enum_remote_error_is_not_advertised_as_retryable():
 
 def test_component_enum_empty_result_keeps_retry_semantics():
     """枚举调用成功但返回空（当前账号无授权部门）时保留原有重试语义。"""
-    contract = query_plan._resolve_department_filter(
+    contract = query_plan._resolve_component_filters(
         _dept_contract(), "查询项目二部的销量", lambda *_a, **_k: [], auto_enum=True
     )
     view = contract["model_view"]
@@ -230,7 +230,7 @@ def test_component_enum_empty_result_keeps_retry_semantics():
 
 def test_component_enum_success_still_resolves_filter():
     """枚举成功且唯一等值命中时照常写入筛选条件（成功路径不受影响）。"""
-    contract = query_plan._resolve_department_filter(
+    contract = query_plan._resolve_component_filters(
         _dept_contract(),
         "查询项目二部的销量",
         lambda *_a, **_k: ["项目二部", "项目九部"],

@@ -1262,10 +1262,26 @@ def build_model_contract(
         if "default_dataset_confirmation" not in clarification_reasons:
             clarification_reasons.append("default_dataset_confirmation")
         pending_confirmations_zh.append("确认是否使用推荐的即时综合数据集")
-    # 注意：曾在此处让「仅维度无指标 + 原文未给时间」自动转全时段并跳过时间确认门。
-    # 该规则已临时收回——组件字段（渠道/ASIN 等）的筛选值目前不会被写入 query_template，
-    # 跳过确认门会让 query_flow 直接执行未带筛选的模板，静默返回全范围数据。
-    # 待组件筛选值解析落地（参考 _resolve_department_filter 的枚举-等值-阻断机制）后再恢复。
+    # 只查维度、不查指标（如「某渠道下全部 ASIN」）时，默认时间窗口没有业务意义：
+    # 用户要的是去重维度全集，卡近 30 天只会漏掉更早出现过的值。
+    # 该规则一度因「筛选值不写入模板导致静默全量」收回，现由组件筛选值解析
+    # （_resolve_component_filters 的锁定/澄清/阻断三态）兜底后恢复。
+    if (
+        scope
+        and scope.get("is_default")
+        and dimensions
+        and not (metrics or recommended_mets)
+    ):
+        scope = {
+            **scope,
+            "start": None,
+            "end": None,
+            "unbounded": True,
+            "is_default": False,
+            "matched": False,
+            "comparison": None,
+            "label_zh": "全部时间（仅维度查询，原文未限定时间，不加日期筛选）",
+        }
     if status == "planned" and execution_path_ready and scope and scope.get("is_default"):
         status = "clarify_required"
         clarification_reasons.append("time_scope_confirmation")
@@ -1608,7 +1624,9 @@ def build_model_query_plan(
             )
             # 枚举来源标注：审计可区分自动枚举与人工回传
             contract["execution_ref"]["platform_enum_source"] = "auto_enum_service"
-    contract = _resolve_department_filter(contract, query, enum_fn, auto_enum=auto_enum)
+    contract = _resolve_component_filters(
+        contract, query, enum_fn, auto_enum=auto_enum, adapter=adapter
+    )
     # planned 合同生成后立即封存，执行器据此拒绝规划与执行之间的手工改写。
     if contract.get("status") == "planned" and contract.get("query_mode") == "dataset_query":
         plan_integrity.attach(contract)
@@ -1659,87 +1677,364 @@ def _auto_enum_component_values(
     return _deduplicate(str(value).strip() for value in values or [] if str(value).strip())
 
 
-def _resolve_department_filter(contract: dict, query: str, enum_fn, *, auto_enum: bool) -> dict:
-    """把用户明确的部门值在当前账号组件中唯一等值解析并写入查询模板。"""
-    requested = _extract_requested_department_value(query)
-    if not requested or contract.get("status") != "planned":
-        return contract
-    execution = contract.get("execution_ref")
-    if not isinstance(execution, dict):
-        return contract
-    component = next(
+# ── 组件筛选值解析（部门/渠道走授权枚举，ASIN 走字面格式）──────────────────
+# 标签形态必须带系词，避免把「渠道和ASIN」这类维度点名误当成筛选值；
+# 非贪婪 + 边界前瞻，防止把「傲彼瑞的所有ASIN」整段吞成筛选值
+_CHANNEL_LABEL_RE = re.compile(
+    r"渠道\s*(?:为|是|=|＝|：|:|等于)\s*"
+    r"([一-鿿A-Za-z0-9_\-]{2,30}?)"
+    r"(?=的|地|，|,|。|；|;|、|\s|和|与|下|里|中|所有|全部|$)"
+)
+# ASIN 字面形态固定：B0 + 8 位大写字母数字
+_ASIN_VALUE_RE = re.compile(r"B0[A-Z0-9]{8}")
+
+
+def _normalize_component_value(value: str) -> str:
+    """组件值归一化：NFKC + 去空白 + casefold，与 filter_value_match_policy 声明一致。"""
+    return unicodedata.normalize("NFKC", str(value)).strip().casefold()
+
+
+def _extract_requested_channel_value(query: str) -> str:
+    """从「渠道是X/渠道为X」形态提取渠道筛选值；裸值形态由枚举反查兜底。"""
+    match = _CHANNEL_LABEL_RE.search(query)
+    return match.group(1).strip() if match else ""
+
+
+def _reverse_lookup_component_values(query: str, values: list, normalize) -> list:
+    """用授权枚举原值反查原文，返回全部候选。
+
+    为什么需要：用户常直接说「查傲彼瑞的所有ASIN」，原文根本不含「渠道」二字，
+    标签正则抽不到值，会被当成没有筛选意图而放行——这正是静默返回全渠道数据的成因。
+    这里反过来拿当前账号的授权原值去原文里找，原值本身或其主段（连字符前）
+    出现即算候选，「傲彼瑞」因此能同时命中「傲彼瑞-美国」「傲彼瑞-加拿大」并转澄清。
+    """
+    normalized_query = normalize(query)
+    hits = []
+    for value in values:
+        norm = normalize(value)
+        if not norm:
+            continue
+        base = norm.split("-")[0]
+        if norm in normalized_query or (len(base) >= 2 and base in normalized_query):
+            hits.append(value)
+    return _deduplicate(hits)
+
+
+def _shared_prefix(values: list) -> str:
+    """多候选时取共同前缀作回显（「傲彼瑞-美国」「傲彼瑞-加拿大」→「傲彼瑞」）。"""
+    if not values:
+        return ""
+    prefix = str(values[0])
+    for value in values[1:]:
+        while prefix and not str(value).startswith(prefix):
+            prefix = prefix[:-1]
+    return prefix.rstrip("-_ ") or str(values[0])
+
+
+
+# 走授权枚举的组件筛选字段。reverse_lookup=True 表示该字段还要用枚举原值反查原文，
+# 用于兜住不含字段名的裸值表达；ASIN 形态固定，不走枚举，单独由 _resolve_asin_filter 处理。
+_ENUM_COMPONENT_SPECS = (
+    {
+        "field_name": "dept_name",
+        "label_zh": "部门",
+        "extract": _extract_requested_department_value,
+        "normalize": _normalize_department_value,
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "channel_name",
+        "label_zh": "渠道",
+        "extract": _extract_requested_channel_value,
+        "normalize": _normalize_component_value,
+        "reverse_lookup": True,
+    },
+)
+
+
+def _component_of(execution: dict, field_name: str) -> dict | None:
+    """在合同的 filter_components 中查找指定字段的组件配置。"""
+    return next(
         (
             item
             for item in execution.get("filter_components") or []
-            if isinstance(item, dict) and item.get("field_name") == "dept_name"
+            if isinstance(item, dict) and item.get("field_name") == field_name
         ),
         None,
     )
+
+
+def _lookup_component(
+    execution: dict, field_name: str, adapter: MetadataAdapter | None
+) -> dict | None:
+    """查组件配置：优先用合同里的 filter_components，缺失时回落到全量组件表。
+
+    为什么必须回落：filter_components 是按查询相关性排序后截断的，用户原文不含
+    「渠道」二字时该组件会被裁掉——而裸值请求（「查傲彼瑞的所有ASIN」）恰恰是
+    最需要枚举校验的场景，靠合同里的裁剪结果会漏掉。
+    """
+    hit = _component_of(execution, field_name)
+    if hit:
+        return hit
+    dataset_alias = str(execution.get("dataset_alias") or "")
+    if not dataset_alias or adapter is None:
+        return None
+    column = next(
+        (
+            row
+            for row in adapter.select_columns_rows()
+            if str(row.get("current_dataset_alias", "")) == dataset_alias
+            and str(row.get("column_name", "")) == field_name
+        ),
+        None,
+    )
+    if not column:
+        return None
+    component_alias = str(column.get("component_dataset_alias", ""))
+    table_id = next(
+        (
+            row.get("table_id", "")
+            for row in adapter.datasets_rows()
+            if str(row.get("dataset_alias", "")) == component_alias
+        ),
+        "",
+    )
+    if not table_id:
+        return None
+    return {
+        "field_name": field_name,
+        "label_zh": str(column.get("verbose_name", "")),
+        "component_dataset_alias": component_alias,
+        "component_table_id": table_id,
+    }
+
+
+def _dataset_has_field(
+    execution: dict, field_name: str, adapter: MetadataAdapter | None
+) -> bool:
+    """判断已选数据集是否含指定字段（ASIN 字面筛选的前置条件）。"""
+    dataset_alias = str(execution.get("dataset_alias") or "")
+    if not dataset_alias or adapter is None:
+        return False
+    return any(
+        str(row.get("dataset_alias", "")) == dataset_alias
+        and str(row.get("field_name", "")) == field_name
+        for row in adapter.fields_rows()
+    )
+
+
+def _block_component_filter(
+    contract: dict, execution: dict, *, status: str, state: str, next_action: str, message_zh: str
+) -> dict:
+    """筛选值无法锁定时统一收口：撤下可执行模板并给出中文恢复指引。
+
+    为什么必须撤模板：run_flow 在 status=planned 时会原样执行 query_template，
+    而模板里没有用户要的筛选条件——放行等于把「查某渠道」悄悄变成「查全部渠道」，
+    静默错数比查不到数据危险得多。这里一律 fail-closed。
+    """
+    contract["status"] = status
+    contract["model_view"]["component_filter_state"] = state
+    contract["model_view"]["next_action"] = next_action
+    contract["model_view"].setdefault("clarification_messages_zh", []).append(message_zh)
+    execution.pop("query_template", None)
+    return contract
+
+
+def _write_component_filter(
+    contract: dict,
+    execution: dict,
+    *,
+    field_name: str,
+    label_zh: str,
+    requested: str,
+    resolved: str,
+) -> None:
+    """把已锁定的授权原值写入查询模板，并登记披露信息。"""
+    template = execution.get("query_template")
+    if not isinstance(template, dict):
+        return
+    template.setdefault("filters", []).append(
+        {"field": field_name, "operator": "=", "value": resolved}
+    )
+    execution.setdefault("resolved_component_filters", []).append(
+        {
+            "field_name": field_name,
+            "label_zh": label_zh,
+            "requested_value": requested,
+            "resolved_value": resolved,
+            "match_strategy": "exact_normalized",
+        }
+    )
+    contract["model_view"]["component_filter_state"] = "resolved"
+    contract["model_view"].setdefault("component_filter_disclosures_zh", []).append(
+        f"{label_zh}按当前账号授权枚举完整等值匹配为“{resolved}”。"
+    )
+
+
+def _resolve_enum_component_filter(
+    contract: dict,
+    query: str,
+    spec: dict,
+    enum_fn,
+    *,
+    auto_enum: bool,
+    adapter: MetadataAdapter | None,
+) -> dict:
+    """把原文里的组件筛选值在当前账号授权枚举中唯一等值解析并写入模板。
+
+    两条识别路径互补：标签形态（「渠道是傲彼瑞」）由 spec["extract"] 抽取；
+    裸值形态（原文不含字段名）由授权枚举原值反查原文。任一环节无法唯一锁定
+    都不放行：枚举调用失败 → blocked（配置类故障，重试无用时另给指引）；
+    命中不唯一或零命中 → clarify_required。两种情况都撤下 query_template。
+    """
+    execution = contract.get("execution_ref")
+    if not isinstance(execution, dict):
+        return contract
+    field_name = spec["field_name"]
+    label_zh = spec["label_zh"]
+    requested = spec["extract"](query)
+    # 只认标签形态的字段（如部门）原文没提就没有筛选意图，不必付出一次枚举调用
+    if not requested and not spec.get("reverse_lookup"):
+        return contract
+    component = _lookup_component(execution, field_name, adapter)
     if not component:
         return contract
 
     enum_errors: list[str] = []
     values = (
         _auto_enum_component_values(
-            enum_fn,
-            component.get("component_table_id"),
-            "dept_name",
-            enum_errors,
+            enum_fn, component.get("component_table_id"), field_name, enum_errors
         )
         if auto_enum
         else []
     )
     if not values:
-        contract["status"] = "blocked"
-        execution.pop("query_template", None)
+        shown = f"“{requested}”" if requested else ""
         if enum_errors:
-            # 枚举调用自身报错（实测形态：组件表元数据未暴露该字段，后端报“字段不存在”，
-            # 此时字段名系由 select_columns 派生猜测）。属配置类故障，重试多少次都不会
-            # 成功，必须如实告知并透出原始错误，否则调用方会按 next_action 反复重试。
-            contract["model_view"]["component_filter_state"] = "enum_failed"
-            contract["model_view"]["next_action"] = "report_component_enum_defect"
-            contract["model_view"]["clarification_messages_zh"].append(
-                f"部门“{requested}”的授权枚举调用失败（{enum_errors[0]}），"
-                "重试无效——通常是该筛选组件的元数据配置异常，请提交反馈由平台侧核查；"
-                "已阻止扩大为全范围查询。"
+            # 枚举调用自身报错（实测形态：组件表元数据未暴露该字段，后端报「字段不存在」）。
+            # 属配置类故障，重试多少次都不会成功，必须如实告知并透出原始错误。
+            return _block_component_filter(
+                contract,
+                execution,
+                status="blocked",
+                state="enum_failed",
+                next_action="report_component_enum_defect",
+                message_zh=(
+                    f"{label_zh}{shown}的授权枚举调用失败（{enum_errors[0]}），"
+                    "重试无效——通常是该筛选组件的元数据配置异常，请提交反馈由平台侧核查；"
+                    "已阻止扩大为全范围查询。"
+                ),
             )
+        return _block_component_filter(
+            contract,
+            execution,
+            status="blocked",
+            state="enum_unavailable",
+            next_action="retry_component_permission_enum",
+            message_zh=(
+                f"当前未能枚举{label_zh}{shown}的授权原值，"
+                "已阻止扩大为全范围查询；请原样重试一次。"
+            ),
+        )
+
+    normalize = spec["normalize"]
+    if requested:
+        target = normalize(requested)
+        matched = [value for value in values if normalize(value) == target]
+    else:
+        matched = _reverse_lookup_component_values(query, values, normalize)
+        if not matched:
             return contract
-        contract["model_view"]["component_filter_state"] = "enum_unavailable"
-        contract["model_view"]["next_action"] = "retry_component_permission_enum"
-        contract["model_view"]["clarification_messages_zh"].append(
-            f"当前未能枚举部门“{requested}”的授权原值，已阻止扩大为全范围查询；请原样重试一次。"
-        )
-        return contract
+        requested = matched[0] if len(matched) == 1 else _shared_prefix(matched)
 
-    target = _normalize_department_value(requested)
-    matched = [value for value in values if _normalize_department_value(value) == target]
     if len(matched) != 1:
-        contract["status"] = "clarify_required"
-        contract["model_view"]["component_filter_state"] = "clarify_required"
-        contract["model_view"]["next_action"] = "ask_user_for_component_filter"
-        contract["model_view"]["clarification_messages_zh"].append(
-            f"部门“{requested}”没有唯一完整等值的授权成员，请指定当前账号可见的准确部门名称。"
+        # 零命中时用包含关系找近似成员，让用户直接从可见成员里挑，省一轮往返
+        approx = matched or [
+            value
+            for value in values
+            if normalize(requested) and normalize(requested) in normalize(value)
+        ]
+        hint = "、".join(f"“{value}”" for value in approx[:8]) if approx else ""
+        return _block_component_filter(
+            contract,
+            execution,
+            status="clarify_required",
+            state="clarify_required",
+            next_action="ask_user_for_component_filter",
+            message_zh=(
+                f"{label_zh}“{requested}”没有唯一完整等值的授权成员，"
+                + (f"当前账号可见的近似成员：{hint}；" if hint else "")
+                + f"请指定当前账号可见的准确{label_zh}名称。"
+            ),
         )
-        execution.pop("query_template", None)
-        return contract
 
+    _write_component_filter(
+        contract,
+        execution,
+        field_name=field_name,
+        label_zh=label_zh,
+        requested=requested,
+        resolved=matched[0],
+    )
+    return contract
+
+
+def _resolve_asin_filter(
+    contract: dict, query: str, adapter: MetadataAdapter | None
+) -> dict:
+    """ASIN 形态固定（B0+8 位），直接从原文锁定，无需枚举。"""
+    execution = contract.get("execution_ref")
+    if not isinstance(execution, dict):
+        return contract
+    if not _dataset_has_field(execution, "asin", adapter):
+        return contract
+    asins = _deduplicate(_ASIN_VALUE_RE.findall(unicodedata.normalize("NFKC", query)))
+    if not asins:
+        return contract
     template = execution.get("query_template")
     if not isinstance(template, dict):
         return contract
-    template.setdefault("filters", []).append(
-        {"field": "dept_name", "operator": "=", "value": matched[0]}
+    condition = (
+        {"field": "asin", "operator": "=", "value": asins[0]}
+        if len(asins) == 1
+        else {"field": "asin", "operator": "in", "value": asins}
     )
-    execution["resolved_component_filters"] = [
+    template.setdefault("filters", []).append(condition)
+    execution.setdefault("resolved_component_filters", []).append(
         {
-            "field_name": "dept_name",
-            "label_zh": "部门",
-            "requested_value": requested,
-            "resolved_value": matched[0],
-            "match_strategy": "exact_normalized",
+            "field_name": "asin",
+            "label_zh": "ASIN",
+            "requested_value": "、".join(asins),
+            "resolved_value": asins[0] if len(asins) == 1 else asins,
+            "match_strategy": "asin_literal_format",
         }
-    ]
-    contract["model_view"]["component_filter_state"] = "resolved"
-    contract["model_view"]["component_filter_disclosures_zh"] = [
-        f"部门按当前账号授权枚举完整等值匹配为“{matched[0]}”。"
-    ]
+    )
+    contract["model_view"].setdefault("component_filter_disclosures_zh", []).append(
+        f"ASIN 按原文字面锁定为 {'、'.join(asins)}。"
+    )
+    return contract
+
+
+def _resolve_component_filters(
+    contract: dict,
+    query: str,
+    enum_fn,
+    *,
+    auto_enum: bool,
+    adapter: MetadataAdapter | None = None,
+) -> dict:
+    """解析原文中的组件字段筛选值（部门/渠道走授权枚举，ASIN 走字面格式）。
+
+    只在 planned 的数据集查询上生效；任一字段无法唯一锁定即撤下模板，
+    避免 run_flow 执行不含用户筛选条件的「骨架」。
+    """
+    if contract.get("status") != "planned":
+        return contract
+    contract = _resolve_asin_filter(contract, query, adapter)
+    for spec in _ENUM_COMPONENT_SPECS:
+        if contract.get("status") != "planned":
+            break
+        contract = _resolve_enum_component_filter(
+            contract, query, spec, enum_fn, auto_enum=auto_enum, adapter=adapter
+        )
     return contract

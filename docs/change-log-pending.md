@@ -5204,3 +5204,17 @@
 **影响范围**：仅维度且未给时间的查询恢复为需用户确认；显式全时段（历史以来/不限时间）仍可用。带筛选值 + 显式时间的既有漏筛缺陷不在本次范围，由后续组件筛选值解析修复。
 **回滚方式**：`git revert` 本次提交即可恢复自动不限时间行为（但会重新引入静默错数风险）。
 ---
+
+## 2026-07-29 query/planner + skills/ops-dataset-query - 组件筛选值解析一期（渠道 + ASIN + fail-closed 闸门）
+
+**变更原因**：规划器的 `_build_query_template()` 没有筛选值入参，组件字段（渠道/ASIN/渠道SKU）的筛选值从不写入 query_template，`filter_value_match_policy` 只是给模型看的文字策略；而 query_flow / run_flow 在 status=planned 时原样执行该「骨架」，导致「查渠道是傲彼瑞的所有ASIN」静默返回全部渠道的数据。仓库里已有 `_resolve_department_filter` 实现了正确机制（抽值→枚举→规范化等值→唯一命中写入/否则阻断），但只服务部门一个字段。
+**改动点**：
+1. 两版 `query_plan.py`：把 `_resolve_department_filter` 泛化为 `_resolve_component_filters`，按 `_ENUM_COMPONENT_SPECS` 配置驱动（dept_name 仅标签形态；channel_name 标签形态 + 枚举反查）；新增 `_lookup_component`（filter_components 缺失时回落全量组件表——该列表按查询相关性截断，用户不提「渠道」二字时会被裁掉，而这正是最需要校验的裸值场景）、`_reverse_lookup_component_values`（用授权原值反查原文，兜住不含字段名的裸值）、`_shared_prefix`、`_dataset_has_field`、`_block_component_filter`（统一撤模板 + 中文恢复指引）、`_write_component_filter`、`_resolve_asin_filter`（ASIN 形态固定 B0+8 位，字面锁定不走枚举）。渠道标签正则用非贪婪 + 边界前瞻，避免把「傲彼瑞的所有ASIN」整段吞成筛选值。内核版保留原有 `enum_errors` 语义（枚举调用失败 → enum_failed / report_component_enum_defect，不建议无效重试）。
+2. 两版 `query_plan.py`：恢复 7a85d69 的「仅维度无指标 + 未给时间 → 不加日期筛选」规则（b8aa59b 曾因静默错数风险收回），现由组件筛选值解析的锁定/澄清/阻断三态兜底。
+3. `tests/query/planner/test_query_plan.py`：三处 `_resolve_department_filter` 调用改名。
+4. 新增 `tests/skills/test_component_filter_resolution.py`：14 项，对两版参数化，覆盖精确值写入、模糊值澄清、裸值反查拦截、唯一裸值锁定、无筛选值放行、枚举失败 fail-closed、标签抽取边界。
+5. `tests/skills/test_time_scope_unbounded.py`：仅维度用例改回断言 unbounded。
+**验证结果**：新增 14 项 + 时间口径 28 项全通过；`tests/skills/test_dataset_query_planner.py`(61) + `tests/query/planner`(49) + `tests/mcp/test_query_planner_tools.py` 全通过；`tests/query tests/mcp` 7 failed / 495 passed，已 git stash 比对确认与改动前逐条一致（既存基线）。真实后端实测四场景：模糊渠道值→clarify 且不下发模板；精确值→planned 且写入 `channel_name = 傲彼瑞-美国`；裸值「查傲彼瑞的所有ASIN」→clarify；无筛选值→正常放行。改动已同步到 ~/.opscli、~/.codex、~/.claude、~/.openclaw。
+**影响范围**：带组件筛选值的查询不再静默漏筛；代价是渠道字段每次规划多一次枚举查询（复用既有 `_auto_enum_component_values`，7s 超时）。渠道SKU（sell_sku）等其余组件字段仍未覆盖，属二期。
+**回滚方式**：`git revert` 本次提交；回滚后「仅维度不限时间」也会随之撤回到 b8aa59b 的保守状态。
+---

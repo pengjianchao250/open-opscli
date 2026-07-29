@@ -3,11 +3,10 @@
 覆盖三条行为，Skill 版与内核版必须完全一致：
 1. 用户明确要求全时段（历史以来/所有时间/不限时间）→ 空窗口，不注入日期筛选；
 2. 否定语境里的时间口径不得被当成显式请求（「拒绝默认近30天」曾被识别成要近30天）；
-3. 未给时间口径时仍走默认近30天确认门——包括只查维度的请求。
+3. 只查维度不查指标时，原文未给时间口径也不加日期筛选（去重维度全集不该被卡 30 天）。
 
-第 3 条原本放开为「仅维度自动不限时间」，现已临时收回：组件字段（渠道/ASIN）的
-筛选值目前不会写入 query_template，跳过确认门会让 query_flow 直接执行未带筛选的
-模板并静默返回全范围数据。待组件筛选值解析落地后再恢复。
+第 3 条依赖组件筛选值解析（_resolve_component_filters）兜底：跳过时间确认门后，
+带筛选值的请求由「锁定 / 澄清 / 阻断」三态保证不会执行未带筛选的模板。
 """
 
 from __future__ import annotations
@@ -143,12 +142,21 @@ def _write_dimension_only_metadata(data_dir: Path) -> None:
     )
 
 
-def test_dimension_only_query_without_time_still_confirms(tmp_path: Path):
-    """仅维度且未给时间时，暂时仍走时间确认门（止血措施）。
+def _date_filters(result: dict) -> list:
+    """取出执行模板里的日期筛选条件。"""
+    template = (result.get("execution_ref") or {}).get("query_template") or {}
+    return [
+        item
+        for item in template.get("filters") or []
+        if "date" in str(item.get("field"))
+    ]
 
-    组件字段（渠道/ASIN）的筛选值目前不会写入 query_template，
-    一旦跳过确认门，query_flow 会直接执行未带筛选的模板并静默返回全范围数据。
-    待组件筛选值解析落地后，本用例应改回断言 unbounded。
+
+def test_dimension_only_query_without_time_is_unbounded(tmp_path: Path):
+    """只查维度不查指标时不加日期筛选，也不再就时间口径追问。
+
+    这类请求要的是去重维度全集（如某渠道下全部 ASIN），
+    卡近 30 天只会漏掉更早出现过的值。
     """
     data_dir = tmp_path / "data"
     _write_dimension_only_metadata(data_dir)
@@ -159,8 +167,10 @@ def test_dimension_only_query_without_time_still_confirms(tmp_path: Path):
         rules_path=RULES_PATH,
     )
 
-    assert result["status"] == "clarify_required"
-    assert "time_scope_confirmation" in result["model_view"]["clarification_reason_codes"]
+    assert result["status"] == "planned"
+    assert result["execution_ref"]["time_scope"]["unbounded"] is True
+    assert _date_filters(result) == []
+    assert "不加日期筛选" in result["model_view"]["time_scope_zh"]
 
 
 def test_metric_query_without_time_still_confirms_default_window(tmp_path: Path):
