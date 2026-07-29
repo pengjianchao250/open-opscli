@@ -1,5 +1,19 @@
 # 待归档变更记录
 
+## 2026-07-28 dashboard/skill - 按用户意图选择建图与修改流程
+
+**变更原因**：Dashboard 编辑 Skill 将分析建图、显式单图、多图创建和已有图表修改统一收敛为一次原子批量创建，无法表达创建空图、创建后批量配置或只修改目标图表的请求。
+
+**改动点**：`ops-dashboard-ai-bridge` 升级到 `1.0.26`；新增场景分析建图、明确新建和已有图表修改三类意图路由；允许按实时 schema 选择原子创建配置或先创建后批量配置；明确只有真实模板 UUID 才能使用页面图表模板；移动、改名和字段修改必须保持图表集合不变。同步更新工具合同、业务规范、Agent 默认提示和静态契约测试。
+
+**验证结果**：`uv run pytest tests/skills/test_dashboard_skills.py tests/mcp/test_dashboard_tools.py tests/test_version_consistency.py -q` 通过（16 passed）；通用 `quick_validate.py` 只因不认识仓库发布协议必需的 `version`、`compatibility` 扩展键而拒绝，仓库定向元数据与安装测试均通过。真实 E2E 结果记录在运营前端仓库本轮报告。
+
+**影响范围**：仅 Dashboard 编辑 Skill 的规划与工具选择，不修改页面工具 schema、前端 interface 或 ops-agent Python 逻辑；发布前线上仍使用上一版本。
+
+**回滚方式**：还原 `ops-dashboard-ai-bridge` 的 Skill、两份 reference、Agent 元数据、VERSION、静态测试和本条记录。
+
+---
+
 ## 2026-07-28 dashboard/skill - 默认宽度与模型坐标职责对齐
 
 **变更原因**：Dashboard Skill 同时要求规划 `x/y/w/h`，而批量创建工具只接受 `w/h`，模型会先提交非法坐标再重试。默认组合也未明确区分默认宽度与模型自行决定的坐标。

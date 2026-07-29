@@ -1,6 +1,6 @@
 # Dashboard Tool Contract
 
-本文件定义 `dashboard-tools.v2` 的参数、结果和错误动作。业务规则见 `dashboard-operation-standards.md`，流程见 `../SKILL.md`。具体参数始终服从本轮工具 schema。
+本文件定义 `dashboard-tools.v2` 参数、结果和错误动作。规则见 `dashboard-operation-standards.md`，流程见 `../SKILL.md`。参数服从本轮工具 schema。
 
 ## 工具入口
 
@@ -9,30 +9,61 @@
 | 页面上下文 | `dashboard_session_get_context` |
 | 数据集候选 | `dashboard_session_search_datasets` |
 | 完整字段目录 | `dashboard_session_get_dataset_fields` |
-| 新建图表批次 | `dashboard_editor_batch_create_charts` |
+| 单张未配置图表 | `dashboard_editor_add_component` |
+| 原子创建并配置 | `dashboard_editor_batch_create_charts` |
+| 已知图表批量配置 | `dashboard_editor_batch_configure_charts` |
+| 页面图表模板 | `dashboard_editor_add_chart_from_template` |
 | 选中已有图表 | `dashboard_editor_select_chart` |
 
-`availableTools` 是可执行清单；`pendingTools` 只能等待或重读上下文。所有 `chart_id` 必须来自上下文或页面工具结果。
+`availableTools` 可执行；`pendingTools` 只能等待或重读上下文。`chart_id` 必须来自页面结果。
 
-## 批量创建合同
+按用户目标和实时 schema 选择能力，不为固定流程重复创建或写入。
 
-根级只提交唯一 `datasetId` 和有序 `charts`。每张图表只接受：
+## 创建与配置合同
+
+数据集和字段计划已就绪时，可原子批量创建。根级提交唯一 `datasetId` 和有序 `charts`：
 
 ```json
 {
-  "viewType": "bar_basic",
-  "title": "区域销售额趋势",
-  "height": 30,
-  "fieldLists": [
+  "datasetId": 101,
+  "charts": [
     {
-      "listType": "xAxis",
-      "fields": [{"fieldId": "<actionFieldId>", "fieldSourceType": "dimensions"}]
+      "viewType": "bar_basic",
+      "title": "区域销售额趋势",
+      "height": 30,
+      "fieldLists": [
+        {
+          "listType": "xAxis",
+          "fields": [{"fieldId": "<actionFieldId>", "fieldSourceType": "dimensions"}]
+        }
+      ]
     }
   ]
 }
 ```
 
-`height` 可省略。创建请求不提交布局对象、坐标或宽度。结果中的最终布局仅用于核验，不回填为下一次创建参数。
+`height` 可省略。创建不提交布局、坐标或宽度；结果布局只用于核验。
+
+需要先创建再配置时，保存真实 `chartId`，再提交批量配置：
+
+```json
+{
+  "datasetId": 101,
+  "charts": [
+    {
+      "chart_id": "<createdChartId>",
+      "fieldLists": [
+        {
+          "listType": "xAxis",
+          "fields": [{"fieldId": "<actionFieldId>", "fieldSourceType": "dimensions"}]
+        }
+      ]
+    }
+  ]
+}
+```
+
+批量配置要求完整且非空的 `fieldLists`。空图不强配；只指定数据集时补齐最小合法字段计划。
 
 ## 已有图表工具
 
@@ -53,7 +84,7 @@
 ```
 
 - 按 `ok -> code -> data` 读取，不能只凭 `message` 判断成功。
-- 新建批次按输入顺序核验每张图表的 `chartId/title/viewType/layout/fieldLists`，并核验 `changed/refreshed`。
+- 新建按用户目标核验 `chartId/title/viewType/layout`；要求数据集或字段时再核验最终数据集、`fieldLists`、`changed/refreshed`。
 - 定向修改核验返回 `chartId` 等于目标，且非目标图表未变化。
 - 证据完整为 `PASS`；明确失败为 `FAIL`；证据不足或结果不确定为 `BLOCKED`。只有 `PASS` 可继续写入或声明完成。
 
@@ -73,6 +104,6 @@
 
 ## 非普通图表
 
-- 可信模板：`dashboard_editor_add_chart_from_template`。
-- 用户明确要求的非图表组件：`dashboard_editor_add_component`。
-- 普通数据图表包含显式单图，统一使用批量创建工具。
+- 可信页面模板：只有上下文提供真实 `templateUuid` 和类型时使用 `dashboard_editor_add_chart_from_template`。
+- 未配置字段的图表或非图表组件：使用 `dashboard_editor_add_component`。
+- 场景组合模板由业务规范维护，最终可用原子批量创建，也可先创建再批量配置。

@@ -39,7 +39,7 @@ def test_dashboard_ai_bridge_spec_returns_skill_rules():
     assert "# Dashboard Tool Contract" in result["data"]["spec"]
     assert "数据集和字段必须来自本轮页面工具结果" in result["data"]["spec"]
     assert "模型不计算坐标或宽度" in result["data"]["spec"]
-    assert "整批计划任一字段不合法时不得创建任何图表" in result["data"]["spec"]
+    assert "任一字段不合法时不得提交字段配置" in result["data"]["spec"]
     assert "`chart_id` 定向修改不得误改其他图表" in result["data"]["spec"]
     assert "dashboard_editor_batch_create_charts" in result["data"]["spec"]
     assert "dashboard_editor_select_chart" in result["data"]["spec"]
