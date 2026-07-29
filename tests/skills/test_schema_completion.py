@@ -87,3 +87,29 @@ def test_unrelated_field_stays_zero():
         _field("stock_qty", "总库存"), "查点击份额", {"点击", "份额"}
     )
     assert score == 0
+
+
+def test_long_query_still_matches_short_label():
+    """整句比对会被长度稀释：完全同名的字段也只有 0.214，模糊分永不触发。
+
+    这是 Task 2 交付即空操作的直接成因，必须按分段比对修正。
+    """
+    query = "看一下搜索词的点击份额和购买份额"
+    assert skill_completion.bigram_similarity(query, "点击份额") < skill_completion.FUZZY_MATCH_THRESHOLD
+    assert skill_completion.best_fuzzy_score(query, ["点击份额"]) >= skill_completion.FUZZY_MATCH_THRESHOLD
+
+
+def test_field_label_longer_than_user_phrase_matches():
+    """字段名比用户说法长时也要命中——现有单向包含在这里失效。
+
+    实测字段「ASIN点击份额」对用户词「点击份额」仅靠 token 交集拿 3 分。
+    """
+    query = "看一下搜索词的点击份额和购买份额"
+    assert skill_completion.best_fuzzy_score(query, ["ASIN点击份额"]) >= skill_completion.FUZZY_MATCH_THRESHOLD
+
+
+def test_unrelated_label_stays_zero_after_segmentation():
+    """分段不能把无关字段拉进来，否则召回优先变成没有判别力。"""
+    query = "看一下搜索词的点击份额和购买份额"
+    assert skill_completion.best_fuzzy_score(query, ["总库存"]) == 0.0
+    assert skill_completion.best_fuzzy_score("查近30天各渠道销售额", ["广告费"]) == 0.0

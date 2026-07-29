@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 import unicodedata
 
 # 低于该相似度不视为命中：0.5 以下基本是偶然共享一两个字，
@@ -52,11 +53,42 @@ def bigram_similarity(left: str, right: str) -> float:
     return intersection / len(left_grams | right_grams)
 
 
+# 查询分段用的分隔符：中文助词、连词与标点。分段是为了不让长句稀释相似度
+_SEGMENT_SPLIT_RE = re.compile(r"[的和与及或，,。.；;、\s]+")
+
+
+def _query_segments(query_text: str) -> list:
+    """把查询切成候选业务词片段，过滤掉短到无判别力的碎片。"""
+    return [
+        segment
+        for segment in _SEGMENT_SPLIT_RE.split(_normalize(query_text))
+        if len(segment) >= MIN_FUZZY_LENGTH
+    ]
+
+
 def best_fuzzy_score(query_text: str, labels: list) -> float:
-    """取查询文本与一组字段标签的最高相似度，低于阈值归零。"""
+    """取查询与一组字段标签的最高匹配度，低于阈值归零。
+
+    为什么按片段而不是整句比对：整句会被长度稀释——实测
+    「看一下搜索词的点击份额和购买份额」对完全同名的字段「点击份额」
+    相似度只有 0.214，远低于 0.5 阈值，模糊分因此永不触发。
+
+    为什么要双向包含：字段中文名常比用户说法长（字段「ASIN点击份额」
+    对用户词「点击份额」），规划器既有的单向判断「字段名 in 查询」在这里
+    不成立，只能靠 token 交集拿个位数分。双向包含按 0.9 计，
+    仍低于 _field_score 的精确命中档位，不会挤掉准确字段。
+    """
+    segments = _query_segments(query_text)
+    if not segments:
+        return 0.0
     best = 0.0
     for label in labels:
-        score = bigram_similarity(query_text, label)
-        if score > best:
-            best = score
+        normalized_label = _normalize(label)
+        if len(normalized_label) < MIN_FUZZY_LENGTH:
+            continue
+        for segment in segments:
+            if segment in normalized_label or normalized_label in segment:
+                best = max(best, 0.9)
+                continue
+            best = max(best, bigram_similarity(segment, normalized_label))
     return best if best >= FUZZY_MATCH_THRESHOLD else 0.0
