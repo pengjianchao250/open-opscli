@@ -5276,3 +5276,152 @@
 **影响范围**：仅 `dataset_guidance._field_score()` 内部打分末端逻辑；对已有精确匹配/token 交集命中的字段无影响（`best` 非零时提前 return，不会走到新分支）。真正受影响的是此前 token 交集=0 的字段候选场景。已复制到 `~/.claude/skills/ops-dataset-query/scripts/`（与源文件 diff 一致）。
 **回滚方式**：`git revert 2bebd27`；或手动删除 `_field_score()` 末尾新增的 fuzzy 分支与顶部 `import schema_completion`，并移除 `tests/skills/test_schema_completion.py` 追加的 3 个测试。
 ---
+
+## 2026-07-30 query/planner - Task 4：内核版镜像固定槽位放开与粒度强制披露
+
+**变更原因**：《取数规划器通用化优化开发计划》Task 4（改写版）。Skill 版此前已修复
+`_slot_is_covered()` 的固定槽位过约束故障（要求数据集支持取值与请求完全相等，导致
+覆盖粒度更广的数据集反被拒——「亚马逊搜索词绩效」支持 grain={keyword, search_term}，
+用户只说「搜索词」时零候选），但内核版（MCP 路径）一直未同步，导致同一句话在 CLI
+路径能出结果、在 MCP 路径仍是零候选，两版行为不一致。
+**改动的类/方法**：`_slot_is_covered()`（放开为 requested ⊆ supported 语义）、
+新增 `_extra_slot_terms()`（列出多出的固定槽位取值供披露）、`_score_profile()`
+（返回字典新增 `grain_coverage` 键）。
+**改动点**：
+1. `opscli/query/services/planner/agent_query_planner.py`：镜像上述三处，与 Skill 版
+   函数体逐字一致（已用 diff 核对）。
+2. `opscli/query/services/planner/query_plan.py`：在 `model_view` 构建阶段镜像
+   `grain_disclosure_zh` 写入逻辑（按 `dataset_alias` 匹配 `selection["dataset_candidates"]`
+   中已选中候选，取其 `grain_coverage`），并在 `answer_contract["required_disclosures_zh"]`
+   追加同一披露文案；插入点变量名（`dataset`/`selection`）与 Skill 版完全相同，按字面镜像。
+3. `opscli/query/services/planner/resources/query_plan.schema.json`：追加
+   `model_view.properties.grain_disclosure_zh` 定义，与 Skill 版逐字相同。
+4. `tests/skills/test_slot_coverage.py`：按 brief 改为 `[skill]`/`[kernel]` 两版参数化，
+   5 个测试用例共 10 条。
+**验证结果**：
+1. RED：`pytest tests/skills/test_slot_coverage.py -v` → 3 个 `[kernel]` 用例 FAIL
+   （`_extra_slot_terms` 不存在；覆盖判定仍是完全相等语义），7 passed。
+2. GREEN：镜像实现后同一命令 → 10 passed。
+3. 两版对齐回归：`pytest tests/skills/test_slot_coverage.py tests/query/planner
+   tests/skills/test_dataset_query_planner.py tests/mcp/test_query_planner_tools.py -q`
+   → 123 passed。
+4. 全量回归：`pytest tests/skills/test_slot_coverage.py tests/skills/test_dataset_query_planner.py
+   tests/skills/test_local_fallback.py tests/skills/test_component_filter_resolution.py
+   tests/skills/test_run_query_server_paging.py tests/query tests/mcp/test_query_planner_tools.py -q`
+   → 325 passed, 5 xfailed（与既有基线一致）。
+5. 额外发现：`pytest tests/ -q`（全量目录）出现 25 个 pytest capture 崩溃错误
+   （`ValueError: I/O operation on closed file`）；用 `git stash` 还原改动前重跑同样
+   25 个错误，证明是既有基线问题（见 `opscli-test-baseline.md`：skills 目录 capture
+   崩溃），与本次改动无关，未做处理。
+**影响范围**：仅内核版规划器（`opscli/query/services/planner/`），供 MCP 工具进程内
+调用路径使用；CLI/Skill 路径（`opscli/skills/templates/ops-dataset-query/scripts/`）
+未改动。行为变化：MCP 路径现在与 CLI 路径一致，覆盖粒度更广的数据集不再被误拒，
+多出的粒度会在 `model_view.grain_disclosure_zh` 与 `answer_contract.required_disclosures_zh`
+中强制披露。
+**回滚方式**：`git revert f2593c0`。
+---
+
+## 2026-07-30 skills/tests - Task 5：评测用例补充字段期望（路由质量三层度量）
+
+**变更原因**：《取数规划器通用化优化开发计划》Task 5。现有 21 条路由回归用例只测
+「选中了哪个数据集」，缺「所有必需字段是否都被召回」这一层（EDBT'26/AutoLink 的严格
+schema-linking 召回定义：漏一个必需字段就必然失败），导致字段召回质量无法量化、任何
+改动都无法归因。本任务补齐这一层度量，并建立基线（非让测试全绿）。
+**改动的文件**：
+1. `tests/skills/data/routing_eval_cases.json`：21 条用例统一补 `expected_fields: []`；
+   手工核对并填充 4 条（case_001/004/014/020），第 5 条（case_018）实测发现所属数据集
+   物控版库存周转（画像 table_id=29）在当前生产 `dataset_fields.csv` 中查无任何字段
+   （画像与后端已不同步，疑似后端已改名或下线），按规范留空并在 `note` 写明原因，
+   未凭猜填相近字段名。
+2. `tests/skills/test_routing_eval.py`（新建）：`test_strict_field_recall` 对
+   `FIELD_CASES`（`expected_fields` 非空的用例）做严格召回断言——期望字段必须全部
+   出现在 `query_plan.build_model_query_plan()` 的 `model_view.dimensions ∪ metrics`
+   里，漏一个即失败。
+**关键设计决策（偏离 brief 给出的字面 Step 2 代码，原因如下）**：
+   brief 给的示例代码直接调用 `build_model_query_plan(case["user_query"], auto_upgrade=False,
+   auto_enum=False)`，不传 `data_dir`。实测发现该函数默认 `DATA_DIR` 指向仓库内的占位
+   元数据（`opscli/skills/templates/ops-dataset-query/data/`，`VERSION.json` 的
+   `data_state` 恒为 `"placeholder"`），若不覆盖 `data_dir`，5 条用例会 100% 因「元数据
+   未就绪」统一阻断失败，无法反映规划器真实的字段召回能力，测试沦为无意义的 xfail 堆砌。
+   因此改为每条用例在 `tmp_path` 下构造一个只含其 `expected_dataset` 对应单一数据集的
+   `ready` 元数据目录（`_write_isolated_dataset`），使数据集选择正确性与字段召回解耦
+   （前者已由 `test_local_fallback.py` 的 21 条历史用例单独回归）。字段中文名
+   （`verbose_name`）与数据集 `description`/`remarks` 均取自当前生产环境真实元数据，
+   已通过 `~/.claude/skills/ops-dataset-query/data/dataset_fields.csv` 按 `table_id`
+   逐条核对存在性；`field_name`/`global_alias`/`dataset_alias`/`table_id` 为测试合成
+   标识，不代表真实后端标识。断言本身（漏一个即失败）未做任何放宽。
+**验证结果**：
+1. 首次运行（Step 3 建基线）：`pytest tests/skills/test_routing_eval.py -v` →
+   1 passed（case_014），3 failed（case_001/case_004/case_020）。
+2. 逐条核实 3 个失败均为规划器真实行为（非基础设施问题）后标记 `strict xfail`：
+   - case_001：用户原文未用与字段中文名完全一致的写法，逐字子串匹配漏选
+     销售额/广告费/总库存；且「销售」误命中同数据集下的销售负责人维度字段。
+   - case_004：「ACOS」不在 `intent_rules.json` 全局 `metric_terms` 词表中，且
+     「各平台」未命中具体平台槽位值，触发 `agent_query_planner.plan_query` 的
+     `has_metric=False` 且 `domains<=1` 早停规则，规划器直接返回 `business_scope`
+     澄清、不产出任何候选数据集，0 个字段被选中。
+   - case_020：用户原文只写「活动」未出现「类型」，逐字子串匹配未命中「活动类型」；
+     数据集本身选对，「售出量」正确命中，只漏一个字段。
+3. 最终确认：`pytest tests/skills/test_routing_eval.py -q` → `1 passed, 3 xfailed`，
+   无 failed。
+4. 回归：`pytest tests/skills/test_routing_eval.py tests/skills/test_local_fallback.py
+   tests/skills/test_dataset_query_planner.py -q` → `89 passed, 8 xfailed`。
+5. 已知问题（与本次改动无关）：`pytest tests/skills/ -q`（整目录）触发既有的
+   pytest capture 崩溃（`ValueError: I/O operation on closed file`），`git stash`
+   还原后同样复现，属于既有基线问题（见 `opscli-test-baseline.md`），未做处理。
+**影响范围**：仅新增测试与用例数据文件，未改动规划器实现（`agent_query_planner.py`/
+`query_plan.py`/`dataset_guidance.py` 等均未修改）。
+**回滚方式**：`git revert <本次提交>`；或删除 `tests/skills/test_routing_eval.py`
+并将 `tests/skills/data/routing_eval_cases.json` 的 `expected_fields` 字段全部还原为
+不存在（`git checkout -- tests/skills/data/routing_eval_cases.json`）。
+---
+
+## 2026-07-30 skills/ops-dataset-query - Task 6：画像改为按 alias 索引并删除可派生字段
+
+**变更原因**：《取数规划器通用化优化开发计划》Task 6。降级路径画像文件此前按中文名
+（`standard_name`）索引，数据集改名即静默腐烂；实测后端 60 个数据集，画像覆盖 15 个，
+其中 5 个的 `standard_name` 与当前元数据 CSV 的 `description` 已对不上（好在旧文件里
+已手工写死了 `dataset_alias`，实际路由未受影响，但字段本身已失去自描述可信度）。同时
+`default_dimensions`/`default_metrics` 属于可从 `dataset_fields.csv` 实时派生的字段，
+留在人工文件里只会与后端漂移。
+**改动的类/方法**：`local_fallback._dataset_candidates()`（新增 `profile_by_alias` 索引
++ `certified` 审核态分流）、新增 `local_fallback._default_field_labels()`（实时读
+CSV 取默认维度指标中文名）。
+**改动点**：
+1. `opscli/skills/templates/ops-dataset-query/data/dataset_profiles.json`：一次性迁移
+   脚本（未入库，跑完即删）按已安装目录 `~/.claude/skills/ops-dataset-query/data/datasets.csv`
+   的真实 alias 重新绑定 15 份画像的 `dataset_alias`；删除全部 `default_dimensions`/
+   `default_metrics`/`table_id`；新增 `certified`（全部置 `false`，未经人工复核）、
+   `reviewed_at`（空）；`schema_version` 升到 2。“即时销售数据集”（embedded_intent，
+   无独立物理表）查不到 alias，保留条目并标 `stale_reason`，同时手动补回被迁移脚本
+   连带删除的 `routing_status`/`execution_dataset` 字段，否则 `_resolve_profile_target()`
+   的 embedded_intent 链式解析会失效。
+2. `opscli/skills/templates/ops-dataset-query/scripts/local_fallback.py`：
+   `_dataset_candidates()` 新增按 `dataset_alias` 索引的 `profile_by_alias`（`profile_by_name`
+   保留，用于意图 `primary_dataset` 到画像条目的内部关联，这层关联是同文件内部维护，
+   不受后端改名影响）；候选字典的 `hard_constraints`/`avoid_when`/`clarify_when` 改为
+   经 `profile_by_alias` 查到的 `profile_entry` 提供；`certified=false` 时约束降级为新增的
+   `uncertified_hints_zh` 字段，不再混进 `hard_constraints`；`default_dimensions`/
+   `default_metrics` 改由新增的 `_default_field_labels()` 实时读 `dataset_fields.csv` 生成。
+3. `tests/skills/test_local_fallback.py`：新增 3 条画像结构测试（alias 索引、审核态、
+   不含可派生字段）；`test_profiles_are_indexed_by_alias` 放宽为“有 alias 或标了
+   `stale_reason`”（对齐 brief 的“查不到 alias 的条目保留不删除”约定，而不是强制 100%
+   都有 alias）；`test_hard_constraints_ride_along_with_candidates` 改为断言
+   `hard_constraints == []` 且约束出现在 `uncertified_hints_zh`（migrate 后全部
+   `certified=false`，这是本次改造的直接预期行为，不是回归）。
+**验证结果**：`pytest tests/skills/test_local_fallback.py -v` 28 passed + 5 xfailed（含
+既有 5 条 strict xfail 路由缺口用例，无回归）；TDD 证据：Step1 新增 3 测试先跑
+`-k profiles` 确认 3 FAIL（RED），迁移+适配后再跑确认 3 PASS（GREEN）。`tests/skills/`
+下另有 `test_cli.py`/`test_manager.py`/`test_ops_feedback_template.py`/
+`test_ops_methods_card_xlsx_preview.py`/`test_packaging.py` 的预存失败与 capture 崩溃，
+与本次改动的文件无关（同名断言/子进程失败与本次未改动的模块相关），且与
+`memory/opscli-test-baseline.md` 记录的既有基线一致。
+**影响范围**：仅 `local_fallback.py` 的降级路径画像消费逻辑与画像数据文件本身；
+不影响规划器主链路（`agent_query_planner.py`/`query_plan.py` 等未改动）。降级路径
+输出新增 `uncertified_hints_zh` 字段，`hard_constraints` 语义收紧为“仅已审核画像才
+出现”，消费该字段的 Agent 侧提示文案若依赖 `hard_constraints` 非空需注意此行为变化
+（`default_dimensions`/`default_metrics` 输出内容不变，仅来源从画像文件改为实时读 CSV）。
+**回滚方式**：`git revert <本次提交>`；或分别 `git checkout` 还原
+`data/dataset_profiles.json`、`scripts/local_fallback.py`、
+`tests/skills/test_local_fallback.py` 三个文件到上一版本。
+---
