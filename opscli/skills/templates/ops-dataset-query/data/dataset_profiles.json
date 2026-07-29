@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "artifact": "dataset_profiles",
   "purpose": "规划器降级时的本地数据集画像与意图触发词：只存变化慢的业务约束，字段清单一律实时读 CSV",
   "migrated_from": "ops-dataset-query v1.0.2 的 dataset_profiles.yml + intent_taxonomy.yml",
@@ -289,45 +289,8 @@
   ],
   "datasets": [
     {
-      "standard_name": "即时综合数据集",
-      "routing_status": "direct_intent",
-      "table_id": 1,
       "dataset_alias": "ds_d35ac6f3910c",
-      "domain": "综合运营域",
-      "min_grain": "部门 + 渠道 + 渠道SKU + 天",
-      "time_basis": "天；销售主口径来自 BI系统即时销量趋势",
-      "best_for": "销售、广告、流量、库存联动的综合运营监控",
-      "default_dimensions": [
-        "日期",
-        "部门",
-        "大组",
-        "销售小组",
-        "销售",
-        "开发",
-        "平台",
-        "国家",
-        "渠道",
-        "ASIN",
-        "公司SKU",
-        "渠道SKU",
-        "SPU"
-      ],
-      "default_metrics": [
-        "销售额",
-        "销量",
-        "订单数",
-        "毛利",
-        "毛利率",
-        "广告费",
-        "广告销售额",
-        "ACOS",
-        "点击量",
-        "曝光量",
-        "平均CPC",
-        "流量",
-        "转化率",
-        "总库存"
-      ],
+      "standard_name": "即时综合数据集",
       "hard_constraints": [
         "开发类型、SKU等级、物控编码等级、父公司SKU、风格化名称、保护等级(风格化)字段仅项目二部专属维度可用",
         "已售天数字段只能用于明细表或无聚合过滤条件",
@@ -343,41 +306,15 @@
         "亚马逊广告活动、广告组等明细深挖",
         "亚马逊目录绩效或搜索词绩效",
         "纯物控库存、库龄、补货计划分析"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
+      "dataset_alias": "",
       "standard_name": "即时销售数据集",
       "routing_status": "embedded_intent",
       "execution_dataset": "即时综合数据集",
-      "domain": "销售分析域",
-      "min_grain": "部门 + 渠道 + 渠道SKU + 天",
-      "time_basis": "订单下单时间",
-      "best_for": "今日、实时、近几天、大促期间销售监控和异常波动排查",
-      "default_dimensions": [
-        "日期",
-        "部门",
-        "大组",
-        "销售小组",
-        "销售",
-        "平台",
-        "国家",
-        "渠道",
-        "ASIN",
-        "公司SKU",
-        "渠道SKU",
-        "SPU"
-      ],
-      "default_metrics": [
-        "销售额",
-        "销量",
-        "订单数",
-        "自发货销量",
-        "平台发货销量",
-        "退款金额",
-        "毛利",
-        "毛利率",
-        "总库存"
-      ],
       "hard_constraints": [
         "当前无独立 dataset_alias；后续开放独立入口后再补 dataset_alias/table_id",
         "已售天数字段只能用于明细表或无聚合过滤条件",
@@ -389,47 +326,14 @@
       ],
       "avoid_when": [
         "月度、季度、年度账单销售复盘"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": "",
+      "stale_reason": "embedded_intent 无独立物理数据集，本身不承接 dataset_alias；实际执行落在 execution_dataset 指向的即时综合数据集"
     },
     {
-      "standard_name": "账单销售数据集",
-      "routing_status": "direct_intent",
-      "table_id": 2,
       "dataset_alias": "ds_9e288aa0df06",
-      "domain": "销售分析域",
-      "min_grain": "部门 + 渠道 + 渠道SKU + 天",
-      "time_basis": "包裹发货时间",
-      "best_for": "月度、季度、年度销售复盘、趋势分析、销售预测和目标考核",
-      "default_dimensions": [
-        "日期",
-        "周",
-        "月",
-        "季度",
-        "年度",
-        "部门",
-        "大组",
-        "销售小组",
-        "销售",
-        "平台",
-        "国家",
-        "渠道",
-        "ASIN",
-        "公司SKU",
-        "渠道SKU"
-      ],
-      "default_metrics": [
-        "销售额",
-        "销量",
-        "订单数",
-        "毛利",
-        "毛利率",
-        "退款金额",
-        "退款量",
-        "采购成本",
-        "运费",
-        "手续费",
-        "仓租"
-      ],
+      "standard_name": "账单销售数据集",
       "hard_constraints": [
         "已售天数字段只能用于明细表或无聚合过滤条件",
         "总库存字段属于库存快照字段，只能用于明细表或无聚合过滤条件"
@@ -439,43 +343,13 @@
       ],
       "avoid_when": [
         "今日、实时、大促、短期波动销售监控"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
-      "standard_name": "广告费数据集",
-      "routing_status": "direct_intent",
-      "table_id": 12,
       "dataset_alias": "ds_bnEtG5ehYA6N",
-      "domain": "广告投放域",
-      "min_grain": "部门 + 渠道 + 渠道SKU + 天",
-      "time_basis": "天",
-      "best_for": "全平台、全广告类型的汇总级广告表现总览和跨平台对比；非亚马逊广告查询也回到该数据集",
-      "default_dimensions": [
-        "日期",
-        "平台",
-        "国家",
-        "渠道",
-        "部门",
-        "小组",
-        "销售",
-        "开发",
-        "ASIN",
-        "公司SKU",
-        "渠道SKU"
-      ],
-      "default_metrics": [
-        "广告费",
-        "广告销售额",
-        "广告销量",
-        "点击量",
-        "曝光量",
-        "ACOS",
-        "点击率",
-        "平均CPC",
-        "CPC转化率",
-        "总销售额",
-        "总销量"
-      ],
+      "standard_name": "广告费数据集",
       "hard_constraints": [
         "包含SP、SD、SB、SBV类型广告相关汇总字段和销售字段",
         "总销售额和总销量字段来自即时销量趋势数据集",
@@ -488,44 +362,13 @@
       "avoid_when": [
         "亚马逊SP/SD/SB广告深度明细",
         "广告类型投入结构拆解"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
-      "standard_name": "广告类型费数据集",
-      "routing_status": "direct_intent",
-      "table_id": 15,
       "dataset_alias": "ds_YRzc8pqOX2Fx",
-      "domain": "广告投放域",
-      "min_grain": "部门 + 渠道 + 渠道SKU + 天 + 广告类型",
-      "time_basis": "天",
-      "best_for": "分平台、分广告类型的SP/SD/SB/SBV投入占比、ACOS、CPC、转化率等中观对比",
-      "default_dimensions": [
-        "日期",
-        "平台",
-        "国家",
-        "渠道",
-        "广告类型",
-        "部门",
-        "小组",
-        "ASIN",
-        "公司SKU",
-        "渠道SKU"
-      ],
-      "default_metrics": [
-        "广告费",
-        "广告销售额",
-        "广告销量",
-        "点击量",
-        "曝光量",
-        "ACOS",
-        "点击率",
-        "平均CPC",
-        "CPC转化率",
-        "总销售额",
-        "总销量",
-        "总销售额分摊",
-        "总销量分摊"
-      ],
+      "standard_name": "广告类型费数据集",
       "hard_constraints": [
         "总销售额和总销量字段来自即时销量趋势数据集",
         "总销售额(分摊)和总销量(分摊)按各广告类型广告费比例分摊",
@@ -538,42 +381,13 @@
       ],
       "avoid_when": [
         "公司级全平台广告总览"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
-      "standard_name": "SP广告数据集",
-      "routing_status": "direct_intent",
-      "table_id": 22,
       "dataset_alias": "ds_1U7bcb5Z0ja8",
-      "domain": "广告投放域",
-      "min_grain": "部门 + 渠道 + 渠道SKU + 天",
-      "time_basis": "天",
-      "best_for": "亚马逊SP广告活动、广告组、直接/间接订单销量和销售额拆解",
-      "default_dimensions": [
-        "日期",
-        "部门",
-        "渠道",
-        "渠道SKU",
-        "ASIN",
-        "广告活动",
-        "广告组"
-      ],
-      "default_metrics": [
-        "曝光量",
-        "点击量",
-        "花费",
-        "广告订单量",
-        "广告直接订单量",
-        "广告间接订单量",
-        "广告销量",
-        "广告直接销量",
-        "广告间接销量",
-        "广告销售额",
-        "广告直接销售额",
-        "广告间接销售额",
-        "ACOS",
-        "ROAS"
-      ],
+      "standard_name": "SP广告数据集",
       "hard_constraints": [
         "仅亚马逊平台可用",
         "只包含广告活动和广告组相关数据",
@@ -586,42 +400,13 @@
       "avoid_when": [
         "非亚马逊平台",
         "SP词组分析"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
-      "standard_name": "SD广告数据集",
-      "routing_status": "direct_intent",
-      "table_id": 23,
       "dataset_alias": "ds_dxGi9Yfh9yzs",
-      "domain": "广告投放域",
-      "min_grain": "部门 + 渠道 + 渠道SKU + 天",
-      "time_basis": "天",
-      "best_for": "亚马逊SD展示、再营销、新买家、加购、视频播放等明细分析",
-      "default_dimensions": [
-        "日期",
-        "部门",
-        "渠道",
-        "渠道SKU",
-        "ASIN",
-        "广告活动",
-        "广告组",
-        "策略"
-      ],
-      "default_metrics": [
-        "曝光量",
-        "可见展示次数",
-        "点击量",
-        "花费",
-        "广告订单量",
-        "广告销售额",
-        "新买家销量",
-        "新买家销售额",
-        "视频播放",
-        "品牌搜索",
-        "加购物",
-        "ACOS",
-        "ROAS"
-      ],
+      "standard_name": "SD广告数据集",
       "hard_constraints": [
         "仅亚马逊平台可用"
       ],
@@ -630,42 +415,13 @@
       ],
       "avoid_when": [
         "非亚马逊平台"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
-      "standard_name": "SB广告数据集",
-      "routing_status": "direct_intent",
-      "table_id": 24,
       "dataset_alias": "ds_cO0SnIAvcfh3",
-      "domain": "广告投放域",
-      "min_grain": "渠道 + 广告活动ID + 天",
-      "time_basis": "天",
-      "best_for": "亚马逊SB品牌广告明细分析",
-      "default_dimensions": [
-        "日期",
-        "渠道",
-        "广告活动ID",
-        "广告活动",
-        "广告组",
-        "平台",
-        "国家",
-        "花费类型"
-      ],
-      "default_metrics": [
-        "曝光量",
-        "可见展示次数",
-        "点击量",
-        "花费",
-        "广告订单量",
-        "广告销量",
-        "广告销售额",
-        "新买家销量",
-        "新买家销售额",
-        "品牌搜索",
-        "加购物",
-        "ACOS",
-        "ROAS"
-      ],
+      "standard_name": "SB广告数据集",
       "hard_constraints": [
         "仅亚马逊平台可用",
         "只包含SB广告，不包含SBV",
@@ -678,37 +434,13 @@
       "avoid_when": [
         "非亚马逊平台",
         "SBV明细"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
-      "standard_name": "SP+SD广告数据集",
-      "routing_status": "direct_intent",
-      "table_id": 25,
       "dataset_alias": "ds_a1VJjnXaAhlx",
-      "domain": "广告投放域",
-      "min_grain": "部门 + 渠道 + 渠道SKU + 天 + 广告类型",
-      "time_basis": "天",
-      "best_for": "亚马逊SP+SD组合投放效果评估",
-      "default_dimensions": [
-        "日期",
-        "广告类型",
-        "部门",
-        "渠道",
-        "渠道SKU",
-        "ASIN",
-        "广告活动",
-        "广告组"
-      ],
-      "default_metrics": [
-        "曝光量",
-        "点击量",
-        "花费",
-        "广告订单量",
-        "广告销量",
-        "广告销售额",
-        "ACOS",
-        "ROAS"
-      ],
+      "standard_name": "SP+SD广告数据集",
       "hard_constraints": [
         "仅亚马逊平台可用",
         "只问SP或只问SD时，应使用对应单类型数据集"
@@ -718,40 +450,13 @@
       ],
       "avoid_when": [
         "非亚马逊平台"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
-      "standard_name": "SP+SD+SB广告数据集",
-      "routing_status": "direct_intent",
-      "table_id": 26,
       "dataset_alias": "ds_xSQ0DFxpLPLC",
-      "domain": "广告投放域",
-      "min_grain": "渠道 + 广告活动ID + 天 + 广告类型",
-      "time_basis": "天",
-      "best_for": "亚马逊SP+SD+SB全广告类型合并分析",
-      "default_dimensions": [
-        "日期",
-        "广告类型",
-        "渠道",
-        "广告活动ID",
-        "广告活动",
-        "广告组",
-        "平台",
-        "国家"
-      ],
-      "default_metrics": [
-        "曝光量",
-        "可见展示次数",
-        "点击量",
-        "花费",
-        "广告订单量",
-        "广告销量",
-        "广告销售额",
-        "新买家销量",
-        "新买家销售额",
-        "ACOS",
-        "ROAS"
-      ],
+      "standard_name": "SP+SD+SB广告数据集",
       "hard_constraints": [
         "仅亚马逊平台可用",
         "不包含SBV明细",
@@ -763,68 +468,26 @@
       ],
       "avoid_when": [
         "非亚马逊平台"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
-      "standard_name": "流量转化率数据集",
-      "routing_status": "direct_intent",
-      "table_id": 14,
       "dataset_alias": "ds_baXwUQEexPWS",
-      "domain": "流量转化域",
-      "min_grain": "国家 + ASIN + 天",
-      "time_basis": "天",
-      "best_for": "亚马逊ASIN流量、浏览量、页面转化和转化漏斗分析",
-      "default_dimensions": [
-        "日期",
-        "国家",
-        "平台",
-        "ASIN",
-        "渠道",
-        "部门",
-        "小组",
-        "SKU"
-      ],
-      "default_metrics": [
-        "销售额",
-        "销量",
-        "流量",
-        "浏览量",
-        "移动端流量",
-        "浏览器流量",
-        "转化率"
-      ],
+      "standard_name": "流量转化率数据集",
+      "hard_constraints": [],
       "clarify_when": [
         "用户问销售主口径转化率"
       ],
       "avoid_when": [
         "销售主口径转化率，应优先即时综合数据集"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
-      "standard_name": "亚马逊目录绩效",
-      "routing_status": "direct_intent",
-      "table_id": 33,
       "dataset_alias": "ds_9CIW3RitXNUS",
-      "domain": "流量转化域",
-      "min_grain": "国家 + 平台 + ASIN + 报告周期",
-      "time_basis": "报告周期",
-      "best_for": "亚马逊目录曝光、点击、加购、购买表现分析",
-      "default_dimensions": [
-        "报告周期",
-        "国家",
-        "平台",
-        "ASIN"
-      ],
-      "default_metrics": [
-        "展示量",
-        "点击量",
-        "点击率",
-        "加购量",
-        "加购率",
-        "购买量",
-        "购买率",
-        "搜索流量销售额"
-      ],
+      "standard_name": "亚马逊目录绩效",
       "hard_constraints": [
         "必须选择报告周期"
       ],
@@ -833,35 +496,13 @@
       ],
       "avoid_when": [
         "搜索词份额，应转亚马逊搜索词绩效"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
-      "standard_name": "亚马逊搜索词绩效",
-      "routing_status": "direct_intent",
-      "table_id": 34,
       "dataset_alias": "ds_ixwjp0bstGTd",
-      "domain": "流量转化域",
-      "min_grain": "国家 + 平台 + ASIN + 搜索词 + 报告周期",
-      "time_basis": "报告周期",
-      "best_for": "自然搜索词流量、点击份额、加购份额、购买份额和SEO优化",
-      "default_dimensions": [
-        "报告周期",
-        "国家",
-        "平台",
-        "ASIN",
-        "搜索词"
-      ],
-      "default_metrics": [
-        "搜索词分数",
-        "搜索量",
-        "总点击量",
-        "ASIN点击量",
-        "ASIN点击份额",
-        "总加购量",
-        "ASIN加购份额",
-        "总购买量",
-        "ASIN购买份额"
-      ],
+      "standard_name": "亚马逊搜索词绩效",
       "hard_constraints": [
         "必须选择报告周期"
       ],
@@ -871,37 +512,13 @@
       ],
       "avoid_when": [
         "广告搜索词、广告关键词或投放词分析"
-      ]
+      ],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
-      "standard_name": "物控版库存周转",
-      "routing_status": "direct_intent",
-      "table_id": 29,
       "dataset_alias": "ds_X2aBDzKIMf66",
-      "domain": "库存管理域",
-      "min_grain": "部门 + 公司SKU",
-      "time_basis": "天；最新日期为昨天",
-      "best_for": "物控库存、库龄、补货计划、近7天销量、近30天销量和供应链协同",
-      "default_dimensions": [
-        "日期",
-        "部门",
-        "公司SKU",
-        "物控组织",
-        "集团销售大组",
-        "销售小组",
-        "平台",
-        "国家"
-      ],
-      "default_metrics": [
-        "库存",
-        "平均日销量",
-        "周转天数",
-        "近7天销量",
-        "近30天销量",
-        "可售库存",
-        "在途库存",
-        "库龄库存"
-      ],
+      "standard_name": "物控版库存周转",
       "hard_constraints": [
         "只能按天查看",
         "日期是确切某天时可升维聚合",
@@ -910,47 +527,24 @@
       "clarify_when": [
         "物控组织与普通销售组织不明确",
         "用户只说库存但未说明是否为物控视角"
-      ]
+      ],
+      "avoid_when": [],
+      "certified": false,
+      "reviewed_at": ""
     },
     {
-      "standard_name": "活动数据集",
-      "routing_status": "direct_intent",
-      "table_id": 21,
       "dataset_alias": "ds_K9ThRY57lzxC",
-      "domain": "活动运营域",
-      "min_grain": "部门 + 渠道 + 渠道SKU + 活动ID + 天",
-      "time_basis": "天；活动开始/结束时间用于活动生命周期分析",
-      "best_for": "Deals/Coupons活动资源、执行进度、活动状态和促销策略复盘",
-      "default_dimensions": [
-        "日期",
-        "活动ID",
-        "活动标题",
-        "活动状态",
-        "活动类型",
-        "促销类型",
-        "平台",
-        "国家",
-        "渠道",
-        "部门",
-        "小组",
-        "ASIN",
-        "SKU"
-      ],
-      "default_metrics": [
-        "手续费",
-        "秒杀价格",
-        "单件折扣",
-        "秒杀数量",
-        "售出量",
-        "浏览量"
-      ],
+      "standard_name": "活动数据集",
       "hard_constraints": [
         "Coupons 统一写法",
         "活动数据集不能直接代表活动销售增量"
       ],
       "clarify_when": [
         "用户问活动带来的销售增量，需要联动销售数据"
-      ]
+      ],
+      "avoid_when": [],
+      "certified": false,
+      "reviewed_at": ""
     }
   ]
 }

@@ -219,7 +219,11 @@ def test_result_carries_no_guess_and_filter_value_policy(tmp_path: Path):
 
 
 def test_hard_constraints_ride_along_with_candidates(tmp_path: Path):
-    """数据集业务约束必须跟着候选一起交出去，降级路径才不会重蹈旧版覆辙。"""
+    """数据集业务约束必须跟着候选一起交出去，降级路径才不会重蹈旧版覆辙。
+
+    迁移后画像全部 certified=False（未经人工复核的旧口径），因此约束不能混进
+    hard_constraints 冒充权威规则，只能降级为 uncertified_hints_zh 提示。
+    """
     data_dir = tmp_path / "data"
     _write_ready_data_dir(data_dir)
 
@@ -227,8 +231,9 @@ def test_hard_constraints_ride_along_with_candidates(tmp_path: Path):
         "看一下近30天整体经营情况，销售广告库存流量一起看", data_dir=data_dir
     )
     top = result["dataset_candidates"][0]
-    assert top["hard_constraints"], "即时综合数据集的硬约束丢失"
-    assert any("库存快照" in item for item in top["hard_constraints"])
+    assert top["hard_constraints"] == [], "未审核的业务约束不能混入 hard_constraints"
+    assert top["uncertified_hints_zh"], "即时综合数据集的业务约束提示丢失"
+    assert any("库存快照" in item for item in top["uncertified_hints_zh"])
 
 
 def test_emit_plan_produces_executor_consumable_plan(tmp_path: Path):
@@ -253,3 +258,42 @@ def test_emit_plan_produces_executor_consumable_plan(tmp_path: Path):
     assert {item["field"] for item in template["dimensions"]} == {"channel_name", "asin"}
     # 降级模板不预填任何筛选与时间条件，避免替用户做主
     assert template["filters"] == []
+
+
+# ---------------------------------------------------------------------------
+# 画像结构：按 alias 索引 + 删除可派生字段（Task 6）
+# ---------------------------------------------------------------------------
+
+
+def test_profiles_are_indexed_by_alias(tmp_path: Path):
+    """画像必须按 dataset_alias 索引：按中文名索引会在数据集改名时静默腐烂。
+
+    实测：现有 15 份画像里有 5 份的 standard_name 已对不上后端。
+    查不到 alias 的条目不删除，但必须标 stale_reason 让巡检能看见腐烂。
+    """
+    profiles = json.loads(
+        (SKILL_ROOT / "data" / "dataset_profiles.json").read_text(encoding="utf-8")
+    )
+    for item in profiles["datasets"]:
+        assert item.get("dataset_alias") or item.get("stale_reason"), (
+            f"画像缺少 dataset_alias 且未标 stale_reason：{item.get('standard_name')}"
+        )
+
+
+def test_profiles_carry_certification_state(tmp_path: Path):
+    """每份画像必须带审核状态，未审核的只能作提示不能作硬约束。"""
+    profiles = json.loads(
+        (SKILL_ROOT / "data" / "dataset_profiles.json").read_text(encoding="utf-8")
+    )
+    for item in profiles["datasets"]:
+        assert item.get("certified") in (True, False), item.get("dataset_alias")
+
+
+def test_profiles_do_not_carry_derivable_fields(tmp_path: Path):
+    """默认维度指标可由 CSV 实时生成，留在画像里只会与元数据漂移。"""
+    profiles = json.loads(
+        (SKILL_ROOT / "data" / "dataset_profiles.json").read_text(encoding="utf-8")
+    )
+    for item in profiles["datasets"]:
+        assert "default_dimensions" not in item
+        assert "default_metrics" not in item

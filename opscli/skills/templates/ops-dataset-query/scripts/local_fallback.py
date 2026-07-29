@@ -110,12 +110,39 @@ def _resolve_profile_target(profile: dict, profiles: dict) -> dict:
     return profile
 
 
+def _default_field_labels(data_dir: Path, dataset_alias: str, field_type: str, limit: int = 8) -> list:
+    """实时从 CSV 取该数据集的代表性字段中文名。
+
+    为什么不再写进画像：默认维度指标完全可由元数据派生，
+    写进人工文件只会与后端漂移——实测 15 份画像已有 5 份对不上。
+    """
+    if not dataset_alias:
+        return []
+    labels = [
+        str(row.get("verbose_name", ""))
+        for row in core.load_csv_rows(Path(data_dir) / "dataset_fields.csv")
+        if str(row.get("dataset_alias", "")) == dataset_alias
+        and str(row.get("field_type", "")) == field_type
+        and row.get("verbose_name")
+    ]
+    return list(dict.fromkeys(labels))[:limit]
+
+
 def _dataset_candidates(query: str, data_dir: Path, profiles: dict) -> list[dict]:
     """本地确定数据集候选：先意图路由，未命中再退关键词匹配数据集描述。"""
     rows = _dataset_rows(data_dir)
     by_alias = {str(row.get("dataset_alias", "")): row for row in rows}
+    # profile_by_name：intent.primary_dataset -> 画像条目，两者同属本文件人工维护，
+    # 不受后端改名影响，因此仍按 standard_name 索引即可
     profile_by_name = {
         str(item.get("standard_name", "")): item for item in profiles.get("datasets") or []
+    }
+    # 按 alias 索引：按中文名索引会在数据集改名时静默腐烂，
+    # 实测现有 15 份画像里有 5 份的 standard_name 已对不上后端
+    profile_by_alias = {
+        str(item.get("dataset_alias", "")): item
+        for item in profiles.get("datasets") or []
+        if item.get("dataset_alias")
     }
 
     scored: list[dict] = []
@@ -127,6 +154,8 @@ def _dataset_candidates(query: str, data_dir: Path, profiles: dict) -> list[dict
         target = _resolve_profile_target(profile, profiles)
         alias = str(target.get("dataset_alias") or "")
         row = by_alias.get(alias, {})
+        profile_entry = profile_by_alias.get(alias, {})
+        certified = bool(profile_entry.get("certified"))
         scored.append(
             {
                 "source": "intent_route",
@@ -137,15 +166,18 @@ def _dataset_candidates(query: str, data_dir: Path, profiles: dict) -> list[dict
                 "name_zh": intent.get("primary_dataset"),
                 "execution_dataset": target.get("standard_name"),
                 "dataset_alias": alias or None,
-                "table_id": target.get("table_id") or row.get("table_id"),
+                "table_id": row.get("table_id"),
                 "routing_status": profile.get("routing_status", "direct_intent"),
-                # 业务约束必须随候选一起交给 Agent，否则降级路径会踩旧版早就踩过的坑
-                "hard_constraints": target.get("hard_constraints") or [],
-                "avoid_when": target.get("avoid_when") or [],
+                # 已审核的业务约束才作硬约束；未审核的降级为提示，
+                # 避免没人复核过的旧口径被当成权威规则执行
+                "hard_constraints": profile_entry.get("hard_constraints") or [] if certified else [],
+                "uncertified_hints_zh": [] if certified else (profile_entry.get("hard_constraints") or []),
+                "avoid_when": profile_entry.get("avoid_when") or [],
                 "clarify_when": (intent.get("clarify_when") or [])
-                + (target.get("clarify_when") or []),
-                "default_dimensions": target.get("default_dimensions") or [],
-                "default_metrics": target.get("default_metrics") or [],
+                + (profile_entry.get("clarify_when") or []),
+                # 默认维度指标改为实时取，不再从画像读
+                "default_dimensions": _default_field_labels(data_dir, alias, "dimension"),
+                "default_metrics": _default_field_labels(data_dir, alias, "metric"),
             }
         )
 
