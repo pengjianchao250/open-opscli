@@ -43,9 +43,11 @@ def test_internal_feedback_query_skill_structure_and_manifest():
     assert "description: Use when" in frontmatter
     assert "version:" not in frontmatter
     assert version["name"] == "ops-feedback-query"
-    assert version["version"] == "v1.0.0"
+    assert version["version"] == "v1.2.0"
     assert isinstance(credentials["feedback_api_key"], str)
     assert credentials["feedback_api_key"].strip()
+    assert isinstance(credentials["wecom_webhook_url"], str)
+    assert credentials["wecom_webhook_url"].strip()
     assert row["tier"] == "internal"
     assert all(row[key] is False for key in ("source", "wheel", "binary", "binary_full"))
     assert SCRIPT_PATH.is_file()

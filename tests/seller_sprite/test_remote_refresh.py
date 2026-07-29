@@ -30,10 +30,19 @@ def test_remote_adapter_refetches_config_once_on_unauthorized():
                 }
             }
 
-        def select_server(self, payload, *, transport="http", preferred_name=None):
-            server = payload["data"]["http"]["mcpServers"]["BI运营系统"]
+        def select_server(
+            self,
+            payload,
+            *,
+            transport="http",
+            preferred_name=None,
+            require_preferred=False,
+        ):
+            assert preferred_name == "BI运营系统"
+            assert require_preferred is True
+            server = payload["data"]["http"]["mcpServers"][preferred_name]
             return RemoteMcpServerConfig(
-                name="BI运营系统",
+                name=preferred_name,
                 transport="http",
                 url=server["url"],
             )

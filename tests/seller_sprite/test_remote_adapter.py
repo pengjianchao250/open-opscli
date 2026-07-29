@@ -23,8 +23,17 @@ class FakeConfigClient:
         self.calls.append(("fetch_remote_config",))
         return self.payload
 
-    def select_server(self, payload, *, transport="http", preferred_name=None):
-        self.calls.append(("select_server", payload, transport, preferred_name))
+    def select_server(
+        self,
+        payload,
+        *,
+        transport="http",
+        preferred_name=None,
+        require_preferred=False,
+    ):
+        self.calls.append(
+            ("select_server", payload, transport, preferred_name, require_preferred)
+        )
         return RemoteMcpServerConfig(
             name="BI运营系统",
             transport="http",
@@ -100,7 +109,7 @@ def test_remote_adapter_maps_run_to_seller_sprite_run():
     ]
     assert config_client.calls == [
         ("fetch_remote_config",),
-        ("select_server", {"data": {}}, "http", "BI运营系统"),
+        ("select_server", {"data": {}}, "http", "BI运营系统", True),
     ]
 
 
@@ -281,7 +290,7 @@ def test_remote_adapter_maps_export_tool():
     assert created_clients[0].calls == [("seller_sprite_export", {"job_id": "job-1"})]
 
 
-def test_remote_adapter_preserves_explicit_output_dir_and_job_id():
+def test_remote_adapter_ignores_local_output_dir_and_preserves_job_id():
     config_client = FakeConfigClient()
     created_clients = []
 
@@ -306,7 +315,7 @@ def test_remote_adapter_preserves_explicit_output_dir_and_job_id():
         job_id="job-keep-1",
     )
 
-    assert result["data"]["arguments"]["output_dir"] == "D:/exports"
+    assert "output_dir" not in result["data"]["arguments"]
     assert result["data"]["arguments"]["job_id"] == "job-keep-1"
     assert created_clients[0].calls == [
         (
@@ -318,7 +327,6 @@ def test_remote_adapter_preserves_explicit_output_dir_and_job_id():
                 "params": {"asin": "B0TEST123"},
                 "page_size": 20,
                 "export_format": "xlsx",
-                "output_dir": "D:/exports",
                 "job_id": "job-keep-1",
             },
         )

@@ -1,4 +1,4 @@
-"""Google Trends XLSX export."""
+"""Google Trends XLSX 导出。"""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ def export_rows_to_xlsx(
     geo: str = "US",
     params: dict[str, Any] | None = None,
 ) -> GoogleTrendsExportResult:
-    """Export Google Trends rows to a user-friendly XLSX workbook."""
+    """将 Google Trends 结果行导出为便于阅读的 XLSX 工作簿。"""
     try:
         from openpyxl import Workbook  # type: ignore[import-not-found]
         from openpyxl.styles import Font, PatternFill  # type: ignore[import-not-found]
@@ -146,9 +146,8 @@ def _generic_columns(rows: list[dict[str, Any]]) -> list[ExportColumn]:
 def _fields(rows: list[dict[str, Any]]) -> list[str]:
     fields: list[str] = []
     for row in rows:
-        for key, value in row.items():
-            if isinstance(value, (dict, list)):
-                continue
+        for key in row:
+            # 嵌套字段由写单元格阶段转为 JSON，避免分类和趋势拆解信息丢失。
             if key not in fields:
                 fields.append(key)
             if len(fields) >= 24:
@@ -203,7 +202,13 @@ def _apply_number_format(cell) -> None:
 
 
 def _sheet_title(*, scenario: str, geo: str, params: dict[str, Any], rows: list[Any]) -> str:
-    target = params.get("keyword") or _first(params.get("keywords")) or _first(params.get("kw_list")) or ""
+    target = (
+        _first(params.get("q"))
+        or params.get("keyword")
+        or _first(params.get("keywords"))
+        or _first(params.get("kw_list"))
+        or ""
+    )
     suffix = f"-{target}" if target else ""
     return f"Trends-{geo or 'GLOBAL'}-{scenario}{suffix}({len(rows)})"
 

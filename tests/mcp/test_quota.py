@@ -6,6 +6,7 @@ import pytest
 
 from opscli.mcp.context import mcp_request_ctx
 from opscli.mcp.quota import (
+    QuotaAccessContext,
     QuotaIdentityResolver,
     QuotaLimiter,
     QuotaPolicy,
@@ -142,7 +143,7 @@ def test_sqlite_quota_store_initializes_default_policy_table(tmp_path):
     assert policy == QuotaPolicy(
         tool_name="seller_sprite_run",
         service="seller_sprite",
-        daily_limit=5,
+        daily_limit=100,
     )
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
@@ -154,9 +155,9 @@ def test_sqlite_quota_store_initializes_default_policy_table(tmp_path):
         ).fetchall()
 
     assert rows == [
-        ("keepa_run", "keepa", 5, 1, "Asia/Shanghai"),
+        ("keepa_run", "keepa", 200, 1, "Asia/Shanghai"),
         ("seller_sprite_listing_analysis_submit", "seller_sprite", 5, 1, "Asia/Shanghai"),
-        ("seller_sprite_run", "seller_sprite", 5, 1, "Asia/Shanghai"),
+        ("seller_sprite_run", "seller_sprite", 100, 1, "Asia/Shanghai"),
     ]
 
 
@@ -497,3 +498,78 @@ def test_quota_module_no_longer_exposes_json_config_loader():
     ]
     for name in removed_names:
         assert not hasattr(quota_module, name)
+
+
+def test_limiter_does_not_meter_dedicated_seller_sprite_account():
+    store = MemoryQuotaStore()
+    access = QuotaAccessContext(
+        mode="unlimited",
+        service="seller_sprite",
+        user_email="user@example.com",
+        account_id="account-id",
+        account_key="account-key",
+    )
+    limiter = QuotaLimiter(
+        store=store,
+        identity_resolver=lambda: "email:user@example.com",
+        access_resolver=lambda tool_name, identity: access,
+    )
+
+    decision = _run(limiter.before_call("seller_sprite_run"))
+    response = _run(
+        limiter.after_call(
+            decision.ticket,
+            {"success": True, "data": {}, "error": None},
+        )
+    )
+
+    assert decision.allowed is True
+    assert decision.access_context == access
+    assert decision.ticket.metered is False
+    assert store.calls == 0
+    assert response["quota"] == {
+        "service": "seller_sprite",
+        "unlimited": True,
+        "limit": None,
+        "used": 0,
+        "remaining": None,
+        "failures": 0,
+        "reset_at": None,
+    }
+
+
+def test_limiter_keeps_dedicated_account_route_when_quota_is_disabled():
+    access = QuotaAccessContext(
+        mode="unlimited",
+        service="seller_sprite",
+        user_email="user@example.com",
+        account_id="account-id",
+        account_key="account-key",
+    )
+    limiter = QuotaLimiter(
+        store=MemoryQuotaStore(),
+        identity_resolver=lambda: "email:user@example.com",
+        quota_enabled=lambda: False,
+        access_resolver=lambda tool_name, identity: access,
+    )
+
+    decision = _run(limiter.before_call("seller_sprite_run"))
+
+    assert decision.allowed is True
+    assert decision.ticket is None
+    assert decision.access_context == access
+
+
+def test_limiter_fails_closed_when_dedicated_binding_store_is_unavailable():
+    limiter = QuotaLimiter(
+        store=MemoryQuotaStore(),
+        identity_resolver=lambda: "email:user@example.com",
+        access_resolver=lambda tool_name, identity: (_ for _ in ()).throw(
+            sqlite3.OperationalError("binding db unavailable")
+        ),
+    )
+
+    decision = _run(limiter.before_call("seller_sprite_run"))
+
+    assert decision.allowed is False
+    assert decision.error_response["error"]["code"] == "MCP_QUOTA_ACCESS_UNAVAILABLE"

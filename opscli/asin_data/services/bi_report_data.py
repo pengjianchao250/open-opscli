@@ -13,7 +13,7 @@ from typing import Any, Callable, Mapping, Sequence
 import httpx
 
 from opscli.auth import AuthClient, OPS_URL
-from opscli.auth.config import load_config
+from opscli.auth.config import get_ops_system_url, load_config
 from opscli.asin_data.services.report_files import _report_files_base_url
 from opscli.config import CONFIG_DIR, __version__
 from opscli.mcp.context import get_mcp_request_headers
@@ -24,6 +24,7 @@ from opscli.shared.http import parse_remote_response
 DEFAULT_TIMEOUT = 30
 DEFAULT_BI_LOGIN_ENDPOINT = "https://bi.api.xenkee.com/auth/login"
 DEFAULT_POLARIS_BJX_TOKEN_ENDPOINT = "/dataMetrics/v1/asin-report-files/polaris-bjx-token"
+DEFAULT_AMAZON_LISTING_BASIC_ENDPOINT = "/api/v1/data-metrics/amazon-listing/basic"
 DEFAULT_BI_LOGIN_USERNAME = "wanglintao@aukeys.com"
 DEFAULT_BI_LOGIN_PASSWORD = "wlt123456"
 BI_LOGIN_CONFIG_SECTION = "bi_login"
@@ -43,7 +44,7 @@ LISTING_AUTH_EXPIRED_MARKERS = ("未登陆", "未登录")
 BI_REPORT_DATA_SOURCES: dict[str, dict[str, str]] = {
     "listing_basic": {
         "label": "刊登基础数据",
-        "endpoint": "https://bi.api.xenkee.com/listing/amazonlisdet",
+        "endpoint": DEFAULT_AMAZON_LISTING_BASIC_ENDPOINT,
         "list_endpoint": "https://bi.api.xenkee.com/listing/getAmazonListing",
         "template_endpoint": "https://bi.api.xenkee.com/amazon/feed/getTemplate",
     },
@@ -214,12 +215,14 @@ class AsinBiReportDataClient:
         http_get: Callable[..., httpx.Response] | None = None,
         http_post: Callable[..., httpx.Response] | None = None,
         ops_url: str | None = None,
+        ops_system_url: str | None = None,
     ) -> None:
         self.auth_client = auth_client or AuthClient()
         self.sources = _source_configs(endpoints)
         self.http_get = http_get or httpx.get
         self.http_post = http_post or httpx.post
         self.ops_url = _report_files_base_url(ops_url or OPS_URL)
+        self.ops_system_url = (ops_system_url or get_ops_system_url()).rstrip("/")
         self._listing_auth_cache: tuple[dict[str, str], dict[str, str]] | None = None
 
     def fetch(
@@ -249,7 +252,7 @@ class AsinBiReportDataClient:
         headers: dict[str, str] = {}
         cookies: dict[str, str] = {}
         ops_auth_error: Exception | None = None
-        needs_ops_auth = any(key not in LISTING_REPORT_SOURCE_KEYS for key in source_configs)
+        needs_ops_auth = bool(source_configs)
         if needs_ops_auth:
             try:
                 headers, cookies = self.auth_client.build_request_auth("ops")
@@ -262,7 +265,7 @@ class AsinBiReportDataClient:
         def fetch_one(key: str, config: dict[str, str]) -> dict[str, Any]:
             return (
                 _failed_source(key, config, ops_auth_error)
-                if ops_auth_error is not None and key not in LISTING_REPORT_SOURCE_KEYS
+                if ops_auth_error is not None
                 else self._fetch_source(
                     key=key,
                     config=config,
@@ -310,40 +313,15 @@ class AsinBiReportDataClient:
         endpoint = config["endpoint"]
         try:
             if key == "listing_basic":
-                listing_headers, listing_cookies = self._build_listing_request_auth(
-                    fallback_headers=headers,
-                    fallback_cookies=cookies,
+                return self._fetch_listing_basic_proxy_source(
+                    key=key,
+                    config=config,
+                    asins=asins,
+                    headers=headers,
+                    cookies=cookies,
+                    site_by_asin=site_by_asin,
+                    default_site=default_site,
                 )
-                try:
-                    return self._fetch_listing_basic_source(
-                        key=key,
-                        config=config,
-                        asins=asins,
-                        headers=listing_headers,
-                        cookies=listing_cookies,
-                        site_by_asin=site_by_asin,
-                        listing_account_type_by_asin=listing_account_type_by_asin,
-                        default_site=default_site,
-                    )
-                except Exception as exc:
-                    if not _is_listing_auth_expired(exc):
-                        raise
-                    self._listing_auth_cache = None
-                    listing_headers, listing_cookies = self._build_listing_request_auth(
-                        fallback_headers=headers,
-                        fallback_cookies=cookies,
-                        refresh_auth=True,
-                    )
-                    return self._fetch_listing_basic_source(
-                        key=key,
-                        config=config,
-                        asins=asins,
-                        headers=listing_headers,
-                        cookies=listing_cookies,
-                        site_by_asin=site_by_asin,
-                        listing_account_type_by_asin=listing_account_type_by_asin,
-                        default_site=default_site,
-                    )
             if key == "sp_search_term":
                 return self._fetch_sp_search_term_source(
                     key=key,
@@ -743,6 +721,95 @@ class AsinBiReportDataClient:
             "raw": payload,
         }
 
+    def _fetch_listing_basic_proxy_source(
+        self,
+        *,
+        key: str,
+        config: dict[str, str],
+        asins: list[str],
+        headers: dict[str, str],
+        cookies: dict[str, str],
+        site_by_asin: Mapping[str, str],
+        default_site: str,
+    ) -> dict[str, Any]:
+        """通过 OPS 代理按 ASIN 并发获取刊登基础数据。"""
+
+        def fetch_one(asin: str) -> dict[str, Any]:
+            site = _site_code_for_asin(
+                asin,
+                site_by_asin=site_by_asin,
+                default_site=default_site,
+            )
+            try:
+                response = self.http_post(
+                    self._resolve_listing_basic_endpoint(config["endpoint"]),
+                    json={"asin": asin, "site": site},
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=DEFAULT_TIMEOUT,
+                )
+                payload = parse_remote_response(
+                    response,
+                    http_error_cls=AsinBiReportDataHttpError,
+                    business_error_cls=AsinBiReportDataBusinessError,
+                    bad_json_error_cls=AsinBiReportDataBadJsonError,
+                )
+                data = payload.get("data") if isinstance(payload, dict) else None
+                items = data.get("list") if isinstance(data, dict) else None
+                rows = [
+                    _normalize_listing_proxy_row(item, request_asin=asin, site=site)
+                    for item in items or []
+                    if isinstance(item, dict)
+                ]
+                return {"asin": asin, "status": "success", "rows": rows, "raw": payload}
+            except Exception as exc:
+                return {"asin": asin, "status": "failed", "error": _error_dict(exc)}
+
+        if len(asins) > 1:
+            with ThreadPoolExecutor(max_workers=min(8, len(asins))) as executor:
+                futures = [executor.submit(fetch_one, asin) for asin in asins]
+                results = [future.result() for future in futures]
+        else:
+            results = [fetch_one(asin) for asin in asins]
+
+        rows: list[dict[str, Any]] = []
+        raw_by_asin: dict[str, Any] = {}
+        errors_by_asin: dict[str, Any] = {}
+        successful_requests = 0
+        for result in results:
+            asin = str(result["asin"])
+            if result["status"] == "success":
+                successful_requests += 1
+                raw_by_asin[asin] = result["raw"]
+                rows.extend(result["rows"])
+            else:
+                errors_by_asin[asin] = result["error"]
+
+        if not errors_by_asin:
+            status = "success"
+        elif successful_requests:
+            status = "partial"
+        else:
+            status = "failed"
+        return {
+            "key": key,
+            "label": config["label"],
+            "endpoint": config["endpoint"],
+            "status": status,
+            "row_count": len(rows),
+            "rows": rows,
+            "raw": raw_by_asin,
+            "errors_by_asin": errors_by_asin,
+        }
+
+    def _resolve_listing_basic_endpoint(self, endpoint: str) -> str:
+        text = endpoint.strip()
+        if text.startswith(("http://", "https://")):
+            return text
+        if not text.startswith("/"):
+            text = f"/{text}"
+        return f"{self.ops_system_url}{text}"
+
     def _fetch_listing_basic_source(
         self,
         *,
@@ -1097,6 +1164,25 @@ def _listing_row_priority(row: dict[str, Any]) -> tuple[int, int]:
     active_rank = 0 if status == "active" else 1
     deleted_rank = 1 if status in {"delete", "deleted", "inactive"} else 0
     return active_rank, deleted_rank
+
+
+def _normalize_listing_proxy_row(
+    row: Mapping[str, Any],
+    *,
+    request_asin: str,
+    site: str,
+) -> dict[str, Any]:
+    """保留代理字段，只统一 ASIN 键并按需补充站点。"""
+    resolved_asin = normalize_asin(_first_present(row, "asin", "ASIN") or request_asin)
+    normalized = {
+        str(key): value
+        for key, value in row.items()
+        if str(key).lower() != "asin"
+    }
+    result = {"asin": resolved_asin, **normalized}
+    if "site" not in result and "站点" not in result:
+        result["site"] = site
+    return result
 
 
 def normalize_listing_basic(

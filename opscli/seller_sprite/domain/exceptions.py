@@ -25,6 +25,12 @@ class SellerSpriteAccountUnavailableError(SellerSpriteError):
     code = "SELLER_SPRITE_ACCOUNT_UNAVAILABLE"
 
 
+class SellerSpriteDedicatedAccountUnavailableError(SellerSpriteError):
+    """用户专属账号绑定已失效或无法安全恢复。"""
+
+    code = "SELLER_SPRITE_DEDICATED_ACCOUNT_UNAVAILABLE"
+
+
 class SellerSpriteTaskTimeoutError(SellerSpriteError):
     """卖家精灵任务超过允许的最长执行时间。"""
 

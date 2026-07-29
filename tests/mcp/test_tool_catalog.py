@@ -1,10 +1,11 @@
 """MCP 工具清单采集与同步测试。"""
 
 import httpx
+import pytest
 import respx
 
 from opscli.mcp import tool_catalog
-from opscli.mcp.tool_catalog import _do_sync, extract_description, get_catalog
+from opscli.mcp.tool_catalog import ToolCatalog, _do_sync, extract_description, get_catalog
 
 
 def test_extract_description_prefers_kwargs():
@@ -26,6 +27,14 @@ def test_extract_description_falls_back_to_docstring_first_line():
         """
 
     assert extract_description(fn, {}) == "工具摘要在首行。"
+
+
+def test_isolated_catalog_rejects_duplicate_tool_name():
+    catalog = ToolCatalog()
+    catalog.record(name="demo_tool", module="demo", description="演示")
+
+    with pytest.raises(ValueError, match="工具名重复"):
+        catalog.record(name="demo_tool", module="other", description="重复")
 
 
 def test_extract_description_handles_missing_doc():

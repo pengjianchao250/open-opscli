@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from typer.testing import CliRunner
 
 from opscli.cli import app
@@ -103,3 +105,112 @@ def test_public_seller_sprite_queue_commands_use_local_store(monkeypatch):
     assert '"changed": 1' in failed.stdout
     assert '"changed": 3' in requeued.stdout
     assert '"worker_state": "no_heartbeat"' in health.stdout
+
+
+def test_account_binding_cli_hides_password_and_outputs_masked_binding(monkeypatch):
+    calls = {}
+
+    class FakeStore:
+        def bind(self, **kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(
+                to_public_dict=lambda: {
+                    "user_email": "user@example.com",
+                    "account_name": "team-a",
+                    "username": "s***@example.com",
+                }
+            )
+
+    monkeypatch.setattr(
+        seller_sprite_cli,
+        "_get_account_binding_store",
+        lambda: FakeStore(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "seller-sprite",
+            "account-binding",
+            "bind",
+            "--user-email",
+            "User@Example.com",
+            "--account-name",
+            "team-a",
+            "--username",
+            "seller@example.com",
+        ],
+        input="dedicated-secret\n",
+    )
+
+    assert result.exit_code == 0
+    assert calls["password"] == "dedicated-secret"
+    assert "dedicated-secret" not in result.stdout
+    assert '"username": "s***@example.com"' in result.stdout
+
+
+def test_account_binding_cli_lists_masked_bindings(monkeypatch):
+    monkeypatch.setattr(
+        seller_sprite_cli,
+        "_get_account_binding_store",
+        lambda: SimpleNamespace(
+            list_bindings=lambda: [
+                {
+                    "user_email": "user@example.com",
+                    "account_name": "team-a",
+                    "username": "s***@example.com",
+                }
+            ]
+        ),
+    )
+
+    result = runner.invoke(app, ["seller-sprite", "account-binding", "list"])
+
+    assert result.exit_code == 0
+    assert '"username": "s***@example.com"' in result.stdout
+    assert "password" not in result.stdout
+
+
+def test_account_binding_cli_unbinds_after_failing_queued_tasks(monkeypatch):
+    calls = []
+
+    class FakeBindingStore:
+        def get_binding_reference(self, user_email):
+            calls.append(("reference", user_email))
+            return SimpleNamespace(user_email="user@example.com")
+
+        def unbind(self, user_email):
+            calls.append(("unbind", user_email))
+            return True
+
+    class FakeQueueStore:
+        def fail_queued_user_binding_tasks(self, *, user_email, reason):
+            calls.append(("fail_queued", user_email, reason))
+            return 2
+
+    monkeypatch.setattr(
+        seller_sprite_cli,
+        "_get_account_binding_store",
+        lambda: FakeBindingStore(),
+    )
+    monkeypatch.setattr(
+        seller_sprite_cli,
+        "_get_queue_store",
+        lambda: FakeQueueStore(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "seller-sprite",
+            "account-binding",
+            "unbind",
+            "--user-email",
+            "User@Example.com",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert [call[0] for call in calls] == ["reference", "fail_queued", "unbind"]
+    assert '"deleted": true' in result.stdout
+    assert '"failed_queued_tasks": 2' in result.stdout

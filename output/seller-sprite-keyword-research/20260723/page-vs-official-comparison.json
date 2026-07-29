@@ -1,0 +1,10 @@
+{
+  "capturedAt": "2026-07-23T02:03:08.347Z",
+  "pageRecordCount": 50,
+  "officialWorkbookDataRows": 2000,
+  "comparedRows": 20,
+  "comparedFields": 18,
+  "matchingRows": 20,
+  "mismatchRows": [],
+  "note": "前 20 条的 18 个核心字段全部一致。页面展示值存在百分比和小数舍入；页面列表序号不等于 ABA 排名；页面均价 N/A 在官方导出中规范化为 $0.00。"
+}

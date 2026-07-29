@@ -19,6 +19,9 @@ ENV_OUTPUT_DIR = "OPSCLI_SELLER_SPRITE_OUTPUT_DIR"
 ENV_PAGE_SIZE = "OPSCLI_SELLER_SPRITE_PAGE_SIZE"
 ENV_ACCOUNT_CACHE_TTL_SECONDS = "OPSCLI_SELLER_SPRITE_ACCOUNT_CACHE_TTL_SECONDS"
 ENV_TASK_TIMEOUT_SECONDS = "OPSCLI_SELLER_SPRITE_TASK_TIMEOUT_SECONDS"
+ENV_TASK_LEASE_SECONDS = "OPSCLI_SELLER_SPRITE_TASK_LEASE_SECONDS"
+ENV_TASK_HEARTBEAT_SECONDS = "OPSCLI_SELLER_SPRITE_TASK_HEARTBEAT_SECONDS"
+ENV_SHUTDOWN_TIMEOUT_SECONDS = "OPSCLI_SELLER_SPRITE_SHUTDOWN_TIMEOUT_SECONDS"
 ENV_MODE = "OPSCLI_SELLER_SPRITE_MODE"
 ENV_BROWSER_PROFILE_DIR = "OPSCLI_SELLER_SPRITE_BROWSER_PROFILE_DIR"
 ENV_BROWSER_HEADLESS = "OPSCLI_SELLER_SPRITE_BROWSER_HEADLESS"
@@ -39,6 +42,9 @@ DEFAULT_PERIOD = "30d"
 DEFAULT_OUTPUT_DIR = CONFIG_DIR / "seller_sprite" / "api_runs"
 DEFAULT_ACCOUNT_CACHE_TTL_SECONDS = 600
 DEFAULT_TASK_TIMEOUT_SECONDS = 600
+DEFAULT_TASK_LEASE_SECONDS = 60
+DEFAULT_TASK_HEARTBEAT_SECONDS = 20
+DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 15
 DEFAULT_MODE = "browser-route"
 DEFAULT_BROWSER_PROFILE_DIR = CONFIG_DIR / "seller_sprite" / "browser_profiles"
 DEFAULT_BROWSER_RUNTIME = "patchright"
@@ -65,6 +71,9 @@ class SellerSpriteSettings:
     default_period: str = DEFAULT_PERIOD
     account_cache_ttl_seconds: int = DEFAULT_ACCOUNT_CACHE_TTL_SECONDS
     task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS
+    task_lease_seconds: float = DEFAULT_TASK_LEASE_SECONDS
+    task_heartbeat_seconds: float = DEFAULT_TASK_HEARTBEAT_SECONDS
+    shutdown_timeout_seconds: float = DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
     default_mode: str = DEFAULT_MODE
     browser_profile_dir: Path = DEFAULT_BROWSER_PROFILE_DIR
     browser_headless: bool = False
@@ -113,6 +122,18 @@ def load_settings() -> SellerSpriteSettings:
             values.get(ENV_TASK_TIMEOUT_SECONDS),
             DEFAULT_TASK_TIMEOUT_SECONDS,
         ),
+        task_lease_seconds=_parse_float(
+            values.get(ENV_TASK_LEASE_SECONDS),
+            DEFAULT_TASK_LEASE_SECONDS,
+        ),
+        task_heartbeat_seconds=_parse_float(
+            values.get(ENV_TASK_HEARTBEAT_SECONDS),
+            DEFAULT_TASK_HEARTBEAT_SECONDS,
+        ),
+        shutdown_timeout_seconds=_parse_float(
+            values.get(ENV_SHUTDOWN_TIMEOUT_SECONDS),
+            DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
+        ),
         default_mode=_normalize_mode(values.get(ENV_MODE)),
         browser_profile_dir=browser_profile_dir,
         browser_headless=_parse_bool(values.get(ENV_BROWSER_HEADLESS), _default_browser_headless()),
@@ -155,6 +176,9 @@ def _load_env_values() -> dict[str, str]:
         ENV_PAGE_SIZE,
         ENV_ACCOUNT_CACHE_TTL_SECONDS,
         ENV_TASK_TIMEOUT_SECONDS,
+        ENV_TASK_LEASE_SECONDS,
+        ENV_TASK_HEARTBEAT_SECONDS,
+        ENV_SHUTDOWN_TIMEOUT_SECONDS,
         ENV_MODE,
         ENV_BROWSER_PROFILE_DIR,
         ENV_BROWSER_HEADLESS,

@@ -16,8 +16,10 @@ DEFAULT_QUEUE_DB_PATH = Path(CONFIG_DIR) / "seller_sprite" / "task_queue.sqlite3
 DEFAULT_MCP_RUN_MODE = "browser-route"
 TASK_KIND_GENERIC = "generic"
 TASK_KIND_LISTING_ANALYSIS = "listing_analysis"
-# 版本 2 引入账号级领取、执行代际、故障接替和账号事件审计。
-QUEUE_SCHEMA_VERSION = 2
+ACCOUNT_ROUTE_SHARED_POOL = "shared_pool"
+ACCOUNT_ROUTE_USER_BINDING = "user_binding"
+# 版本 4 引入执行租约和 Listing Analysis 远端任务检查点。
+QUEUE_SCHEMA_VERSION = 4
 
 
 class SellerSpriteTaskQueueStore:
@@ -37,6 +39,9 @@ class SellerSpriteTaskQueueStore:
         credential_scope: str | None = None,
         runtime_auth_required: bool = False,
         expected_user_email: str | None = None,
+        account_route: str = ACCOUNT_ROUTE_SHARED_POOL,
+        requested_account_id: str | None = None,
+        requested_account_key: str | None = None,
     ) -> dict[str, Any]:
         """写入一条排队任务并返回当前排队状态。"""
         with self._connect() as conn:
@@ -47,9 +52,10 @@ class SellerSpriteTaskQueueStore:
                     created_at, started_at, finished_at, assigned_account,
                     worker_key, result_path, row_count, export_json, error_json,
                     credential_scope, runtime_auth_required, expected_user_email,
+                    account_route, requested_account_id, requested_account_key,
                     session_id, jwt
                 )
-                VALUES (?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, ?, ?, NULL, NULL)
+                VALUES (?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL)
                 """,
                 (
                     request.job_id,
@@ -61,6 +67,9 @@ class SellerSpriteTaskQueueStore:
                     credential_scope,
                     int(runtime_auth_required),
                     expected_user_email,
+                    account_route,
+                    requested_account_id,
+                    requested_account_key,
                 ),
             )
         return self.get_status(str(request.job_id))
@@ -74,6 +83,9 @@ class SellerSpriteTaskQueueStore:
         user_email: str,
         credential_scope: str | None = None,
         expected_user_email: str | None = None,
+        account_route: str = ACCOUNT_ROUTE_SHARED_POOL,
+        requested_account_id: str | None = None,
+        requested_account_key: str | None = None,
     ) -> dict[str, Any]:
         """在同一事务中写入队列任务及其 MCP 所有权记录。"""
         now = _now_iso()
@@ -87,9 +99,10 @@ class SellerSpriteTaskQueueStore:
                     created_at, started_at, finished_at, assigned_account,
                     worker_key, result_path, row_count, export_json, error_json,
                     credential_scope, runtime_auth_required, expected_user_email,
+                    account_route, requested_account_id, requested_account_key,
                     session_id, jwt
                 )
-                VALUES (?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, 0, ?, NULL, NULL)
+                VALUES (?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, ?, 0, ?, ?, ?, ?, NULL, NULL)
                 """,
                 (
                     request.job_id,
@@ -100,6 +113,9 @@ class SellerSpriteTaskQueueStore:
                     now,
                     credential_scope,
                     expected_user_email or user_email,
+                    account_route,
+                    requested_account_id,
+                    requested_account_key,
                 ),
             )
             conn.execute(
@@ -131,6 +147,9 @@ class SellerSpriteTaskQueueStore:
         queue_scope: str,
         worker_key: str,
         assigned_account: str,
+        account_key: str | None = None,
+        execution_owner: str | None = None,
+        lease_seconds: float = 60.0,
     ) -> dict[str, Any] | None:
         """按 FIFO 取出下一条待执行任务并标记为运行中。"""
         with self._connect() as conn:
@@ -141,6 +160,7 @@ class SellerSpriteTaskQueueStore:
                 FROM seller_sprite_task_queue AS queued
                 WHERE queued.queue_scope = ?
                   AND queued.status = 'queued'
+                  AND queued.account_route = 'shared_pool'
                   AND NOT EXISTS (
                       SELECT 1
                       FROM seller_sprite_task_queue AS running
@@ -161,10 +181,24 @@ class SellerSpriteTaskQueueStore:
                 SET status = 'running',
                     started_at = ?,
                     assigned_account = ?,
-                    worker_key = ?
+                    assigned_account_key = ?,
+                    worker_key = ?,
+                    assignment_generation = assignment_generation + 1,
+                    execution_owner = ?,
+                    heartbeat_at = ?,
+                    lease_expires_at = ?
                 WHERE id = ?
                 """,
-                (_now_iso(), assigned_account, worker_key, row["id"]),
+                (
+                    _now_iso(),
+                    assigned_account,
+                    account_key,
+                    worker_key,
+                    _claim_owner(execution_owner, worker_key),
+                    _now_iso(),
+                    _future_iso(lease_seconds),
+                    row["id"],
+                ),
             )
             conn.commit()
         return self.get_status(str(row["job_id"]))
@@ -176,6 +210,8 @@ class SellerSpriteTaskQueueStore:
         account_key: str,
         assigned_account: str,
         worker_key: str,
+        execution_owner: str | None = None,
+        lease_seconds: float = 60.0,
     ) -> dict[str, Any] | None:
         """为指定账号原子领取最早的通用任务。"""
         with self._connect() as conn:
@@ -187,6 +223,7 @@ class SellerSpriteTaskQueueStore:
                 WHERE queued.queue_scope = ?
                   AND queued.task_kind = ?
                   AND queued.status = 'queued'
+                  AND queued.account_route = 'shared_pool'
                   AND NOT EXISTS (
                       SELECT 1
                       FROM seller_sprite_task_queue AS legacy_running
@@ -219,11 +256,23 @@ class SellerSpriteTaskQueueStore:
                         assigned_account = ?,
                         assigned_account_key = ?,
                         worker_key = ?,
-                        assignment_generation = assignment_generation + 1
+                        assignment_generation = assignment_generation + 1,
+                        execution_owner = ?,
+                        heartbeat_at = ?,
+                        lease_expires_at = ?
                     WHERE id = ?
                       AND status = 'queued'
                     """,
-                    (_now_iso(), assigned_account, account_key, worker_key, row["id"]),
+                    (
+                        _now_iso(),
+                        assigned_account,
+                        account_key,
+                        worker_key,
+                        _claim_owner(execution_owner, worker_key),
+                        _now_iso(),
+                        _future_iso(lease_seconds),
+                        row["id"],
+                    ),
                 )
             except sqlite3.IntegrityError:
                 conn.rollback()
@@ -241,6 +290,8 @@ class SellerSpriteTaskQueueStore:
         worker_key: str,
         assigned_account: str,
         account_key: str,
+        execution_owner: str | None = None,
+        lease_seconds: float = 60.0,
     ) -> dict[str, Any] | None:
         """使用明确账号领取最早的 Listing Analysis 任务。"""
         with self._connect() as conn:
@@ -252,6 +303,7 @@ class SellerSpriteTaskQueueStore:
                 WHERE queued.queue_scope = ?
                   AND queued.task_kind = ?
                   AND queued.status = 'queued'
+                  AND queued.account_route = 'shared_pool'
                   AND NOT EXISTS (
                       SELECT 1
                       FROM seller_sprite_task_queue AS running
@@ -287,17 +339,200 @@ class SellerSpriteTaskQueueStore:
                     assigned_account = ?,
                     assigned_account_key = ?,
                     worker_key = ?,
-                    assignment_generation = assignment_generation + 1
+                    assignment_generation = assignment_generation + 1,
+                    execution_owner = ?,
+                    heartbeat_at = ?,
+                    lease_expires_at = ?
                 WHERE id = ?
                   AND status = 'queued'
                 """,
-                (_now_iso(), assigned_account, account_key, worker_key, row["id"]),
+                (
+                    _now_iso(),
+                    assigned_account,
+                    account_key,
+                    worker_key,
+                    _claim_owner(execution_owner, worker_key),
+                    _now_iso(),
+                    _future_iso(lease_seconds),
+                    row["id"],
+                ),
             )
             if int(cursor.rowcount or 0) != 1:
                 conn.rollback()
                 return None
             conn.commit()
         return self.get_status(str(row["job_id"]))
+
+    def next_user_binding_candidate(self, *, queue_scope: str) -> dict[str, Any] | None:
+        """读取最早且其专属账号当前未被占用的待执行任务引用。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT job_id, task_kind, expected_user_email,
+                       requested_account_id, requested_account_key
+                FROM seller_sprite_task_queue AS queued
+                WHERE queue_scope = ?
+                  AND status = 'queued'
+                  AND account_route = 'user_binding'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM seller_sprite_task_queue AS running
+                      WHERE running.queue_scope = queued.queue_scope
+                        AND running.status = 'running'
+                        AND running.assigned_account_key = queued.requested_account_key
+                  )
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                (queue_scope,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def claim_user_binding_task(
+        self,
+        *,
+        job_id: str,
+        account_id: str,
+        account_key: str,
+        assigned_account: str,
+        worker_key: str,
+        max_active_tasks: int = 3,
+        execution_owner: str | None = None,
+        lease_seconds: float = 60.0,
+    ) -> dict[str, Any] | None:
+        """按提交时账号引用原子领取一条专属账号任务。"""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = conn.execute(
+                    """
+                    UPDATE seller_sprite_task_queue
+                    SET status = 'running', started_at = ?,
+                        assigned_account = ?, assigned_account_key = ?,
+                        worker_key = ?, assignment_generation = assignment_generation + 1,
+                        execution_owner = ?, heartbeat_at = ?, lease_expires_at = ?
+                    WHERE job_id = ?
+                      AND status = 'queued'
+                      AND account_route = 'user_binding'
+                      AND requested_account_id = ?
+                      AND requested_account_key = ?
+                      AND (
+                          SELECT COUNT(*)
+                          FROM seller_sprite_task_queue AS dedicated_running
+                          WHERE dedicated_running.queue_scope = seller_sprite_task_queue.queue_scope
+                            AND dedicated_running.status = 'running'
+                            AND dedicated_running.account_route = 'user_binding'
+                      ) < ?
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM seller_sprite_task_queue AS running
+                          WHERE running.queue_scope = seller_sprite_task_queue.queue_scope
+                            AND running.status = 'running'
+                            AND running.assigned_account_key = ?
+                      )
+                    """,
+                    (
+                        _now_iso(),
+                        assigned_account,
+                        account_key,
+                        worker_key,
+                        _claim_owner(execution_owner, worker_key),
+                        _now_iso(),
+                        _future_iso(lease_seconds),
+                        job_id,
+                        account_id,
+                        account_key,
+                        max(1, int(max_active_tasks)),
+                        account_key,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                return None
+            if int(cursor.rowcount or 0) != 1:
+                conn.rollback()
+                return None
+            conn.commit()
+        return self.get_status(job_id)
+
+    def fail_queued_user_binding_task(
+        self,
+        *,
+        job_id: str,
+        reason: str,
+    ) -> bool:
+        """把无法恢复绑定的单条排队专属任务标记为失败。"""
+        return self._fail_queued_user_binding_tasks(
+            where="job_id = ?",
+            params=[job_id],
+            reason=reason,
+        ) == 1
+
+    def fail_queued_user_binding_tasks(
+        self,
+        *,
+        user_email: str,
+        reason: str,
+    ) -> int:
+        """解除绑定后失败该用户所有尚未领取的专属账号任务。"""
+        return self._fail_queued_user_binding_tasks(
+            where="LOWER(expected_user_email) = LOWER(?)",
+            params=[user_email.strip()],
+            reason=reason,
+        )
+
+    def _fail_queued_user_binding_tasks(
+        self,
+        *,
+        where: str,
+        params: list[Any],
+        reason: str,
+    ) -> int:
+        """原子结束匹配的排队专属任务及 MCP 所有权记录。"""
+        error_payload = {
+            "code": "SELLER_SPRITE_DEDICATED_ACCOUNT_UNAVAILABLE",
+            "message": reason,
+        }
+        error_json = json.dumps(error_payload, ensure_ascii=False)
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                f"""
+                SELECT job_id
+                FROM seller_sprite_task_queue
+                WHERE status = 'queued'
+                  AND account_route = 'user_binding'
+                  AND {where}
+                """,
+                params,
+            ).fetchall()
+            job_ids = [str(row["job_id"]) for row in rows]
+            if not job_ids:
+                conn.commit()
+                return 0
+            placeholders = ", ".join("?" for _ in job_ids)
+            conn.execute(
+                f"""
+                UPDATE seller_sprite_task_queue
+                SET status = 'failed', finished_at = ?, error_json = ?,
+                    credential_scope = NULL, runtime_auth_required = 0,
+                    expected_user_email = NULL, session_id = NULL, jwt = NULL
+                WHERE job_id IN ({placeholders})
+                """,
+                [now, error_json, *job_ids],
+            )
+            conn.execute(
+                f"""
+                UPDATE seller_sprite_mcp_runs
+                SET result_state = 'failed', error_json = ?,
+                    finished_at = ?, updated_at = ?
+                WHERE job_id IN ({placeholders})
+                """,
+                [error_json, now, now, *job_ids],
+            )
+            conn.commit()
+        return len(job_ids)
 
     def finish_task(
         self,
@@ -322,7 +557,10 @@ class SellerSpriteTaskQueueStore:
                     runtime_auth_required = 0,
                     expected_user_email = NULL,
                     session_id = NULL,
-                    jwt = NULL
+                    jwt = NULL,
+                    execution_owner = NULL,
+                    heartbeat_at = NULL,
+                    lease_expires_at = NULL
                 WHERE job_id = ?
                 """,
                 (
@@ -359,7 +597,10 @@ class SellerSpriteTaskQueueStore:
                     runtime_auth_required = 0,
                     expected_user_email = NULL,
                     session_id = NULL,
-                    jwt = NULL
+                    jwt = NULL,
+                    execution_owner = NULL,
+                    heartbeat_at = NULL,
+                    lease_expires_at = NULL
                 WHERE job_id = ?
                   AND status = 'running'
                   AND assigned_account_key = ?
@@ -398,7 +639,9 @@ class SellerSpriteTaskQueueStore:
                 SET status = 'succeeded', finished_at = ?, result_path = ?,
                     row_count = ?, export_json = ?, error_json = NULL,
                     credential_scope = NULL, runtime_auth_required = 0,
-                    expected_user_email = NULL, session_id = NULL, jwt = NULL
+                    expected_user_email = NULL, session_id = NULL, jwt = NULL,
+                    execution_owner = NULL, heartbeat_at = NULL,
+                    lease_expires_at = NULL
                 WHERE job_id = ? AND status = 'running'
                   AND assigned_account_key = ? AND assignment_generation = ?
                 """,
@@ -456,7 +699,10 @@ class SellerSpriteTaskQueueStore:
                     runtime_auth_required = 0,
                     expected_user_email = NULL,
                     session_id = NULL,
-                    jwt = NULL
+                    jwt = NULL,
+                    execution_owner = NULL,
+                    heartbeat_at = NULL,
+                    lease_expires_at = NULL
                 WHERE job_id = ?
                 """,
                 (_now_iso(), json.dumps(error_payload, ensure_ascii=False), job_id),
@@ -483,7 +729,10 @@ class SellerSpriteTaskQueueStore:
                     runtime_auth_required = 0,
                     expected_user_email = NULL,
                     session_id = NULL,
-                    jwt = NULL
+                    jwt = NULL,
+                    execution_owner = NULL,
+                    heartbeat_at = NULL,
+                    lease_expires_at = NULL
                 WHERE job_id = ?
                   AND status = 'running'
                   AND assigned_account_key = ?
@@ -520,7 +769,8 @@ class SellerSpriteTaskQueueStore:
                 SET status = 'failed', finished_at = ?, error_json = ?,
                     last_error_code = ?, credential_scope = NULL,
                     runtime_auth_required = 0, expected_user_email = NULL,
-                    session_id = NULL, jwt = NULL
+                    session_id = NULL, jwt = NULL, execution_owner = NULL,
+                    heartbeat_at = NULL, lease_expires_at = NULL
                 WHERE job_id = ? AND status = 'running'
                   AND assigned_account_key = ? AND assignment_generation = ?
                 """,
@@ -634,32 +884,137 @@ class SellerSpriteTaskQueueStore:
             conn.commit()
         return self.get_status(job_id)
 
+    def renew_execution_leases(
+        self,
+        *,
+        execution_owner: str,
+        lease_seconds: float,
+    ) -> int:
+        """续期指定调度器当前持有的全部运行任务。"""
+        now = _now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE seller_sprite_task_queue
+                SET heartbeat_at = ?, lease_expires_at = ?
+                WHERE status = 'running' AND execution_owner = ?
+                """,
+                (now, _future_iso(lease_seconds), execution_owner),
+            )
+        return int(cursor.rowcount or 0)
+
+    def recover_expired_running_tasks(self) -> int:
+        """原子重排历史无租约或租约已过期的运行任务。"""
+        now = _now_iso()
+        return self._requeue_running_tasks(
+            where=(
+                "status = 'running' AND (execution_owner IS NULL "
+                "OR lease_expires_at IS NULL OR lease_expires_at <= ?)"
+            ),
+            params=[now],
+            retry_reason="lease_expired",
+        )
+
+    def release_running_tasks(self, *, execution_owner: str) -> int:
+        """在优雅关闭时原子释放当前调度器持有的运行任务。"""
+        return self._requeue_running_tasks(
+            where="status = 'running' AND execution_owner = ?",
+            params=[execution_owner],
+            retry_reason="service_restart",
+        )
+
     def reset_running_tasks(self, *, before_started_at: str | None = None) -> int:
-        """将异常中断留下的运行中任务重新放回队列。"""
+        """将人工确认异常中断的运行任务重新放回队列。"""
         where = "status = 'running'"
         params: list[Any] = []
         if before_started_at:
             where += " AND started_at IS NOT NULL AND started_at <= ?"
             params.append(before_started_at)
+        return self._requeue_running_tasks(
+            where=where,
+            params=params,
+            retry_reason="manual_requeue",
+        )
+
+    def _requeue_running_tasks(
+        self,
+        *,
+        where: str,
+        params: list[Any],
+        retry_reason: str,
+    ) -> int:
+        """重排匹配运行任务，并在同一事务中同步 MCP 调用状态。"""
+        now = _now_iso()
         with self._connect() as conn:
-            cursor = conn.execute(
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                f"SELECT job_id FROM seller_sprite_task_queue WHERE {where}",
+                params,
+            ).fetchall()
+            job_ids = [str(row["job_id"]) for row in rows]
+            if not job_ids:
+                conn.commit()
+                return 0
+            placeholders = ", ".join("?" for _ in job_ids)
+            conn.execute(
                 f"""
                 UPDATE seller_sprite_task_queue
-                SET status = 'queued',
-                    started_at = NULL,
-                    finished_at = NULL,
-                    assigned_account = NULL,
-                    assigned_account_key = NULL,
+                SET status = 'queued', started_at = NULL, finished_at = NULL,
+                    assigned_account = NULL, assigned_account_key = NULL,
                     worker_key = NULL,
                     assignment_generation = assignment_generation + 1,
-                    last_error_code = NULL,
-                    last_failed_account_key = NULL,
-                    retry_reason = NULL
-                WHERE {where}
+                    last_error_code = NULL, last_failed_account_key = NULL,
+                    retry_reason = ?, error_json = NULL,
+                    execution_owner = NULL, heartbeat_at = NULL,
+                    lease_expires_at = NULL
+                WHERE job_id IN ({placeholders}) AND status = 'running'
                 """,
-                params,
+                [retry_reason, *job_ids],
             )
-            return int(cursor.rowcount or 0)
+            conn.execute(
+                f"""
+                UPDATE seller_sprite_mcp_runs
+                SET result_state = 'queued', started_at = NULL,
+                    finished_at = NULL, error_json = NULL, updated_at = ?
+                WHERE job_id IN ({placeholders})
+                  AND result_state = 'running'
+                """,
+                [now, *job_ids],
+            )
+            conn.commit()
+        return len(job_ids)
+
+    def save_listing_analysis_task_id(
+        self,
+        *,
+        job_id: str,
+        task_id: str,
+        execution_owner: str,
+        assignment_generation: int,
+    ) -> bool:
+        """仅为当前执行代际持久化 Listing Analysis 远端任务标识。"""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE seller_sprite_task_queue
+                SET remote_task_id = ?
+                WHERE job_id = ? AND status = 'running'
+                  AND execution_owner = ? AND assignment_generation = ?
+                """,
+                (task_id, job_id, execution_owner, assignment_generation),
+            )
+        return int(cursor.rowcount or 0) == 1
+
+    def get_listing_analysis_task_id(self, job_id: str) -> str | None:
+        """读取 Listing Analysis 已持久化的远端任务标识。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT remote_task_id FROM seller_sprite_task_queue WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"任务不存在：{job_id}")
+        return str(row["remote_task_id"]) if row["remote_task_id"] else None
 
     def list_tasks(self, *, state: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         """按状态列出最近任务，用于队列运维排查。"""
@@ -677,7 +1032,8 @@ class SellerSpriteTaskQueueStore:
                        created_at, started_at, finished_at, assigned_account,
                        assigned_account_key, worker_key, assignment_generation,
                        failover_count, last_error_code, last_failed_account_key,
-                       retry_reason, result_path, row_count, export_json, error_json
+                       retry_reason, result_path, row_count, export_json, error_json,
+                       execution_owner, heartbeat_at, lease_expires_at, remote_task_id
                 FROM seller_sprite_task_queue
                 {where}
                 ORDER BY id DESC
@@ -812,7 +1168,8 @@ class SellerSpriteTaskQueueStore:
                        created_at, started_at, finished_at, assigned_account,
                        assigned_account_key, worker_key, assignment_generation,
                        failover_count, last_error_code, last_failed_account_key,
-                       retry_reason, result_path, row_count, export_json, error_json
+                       retry_reason, result_path, row_count, export_json, error_json,
+                       execution_owner, heartbeat_at, lease_expires_at, remote_task_id
                 FROM seller_sprite_task_queue
                 WHERE job_id = ?
                 """,
@@ -838,16 +1195,26 @@ class SellerSpriteTaskQueueStore:
         """读取任务执行时持久化的卖家精灵账号绑定。"""
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT assigned_account, assigned_account_key "
+                "SELECT assigned_account, assigned_account_key, account_route, "
+                "requested_account_id, requested_account_key "
                 "FROM seller_sprite_task_queue WHERE job_id = ?",
                 (job_id,),
             ).fetchone()
         if row is None:
             raise ValueError(f"任务不存在：{job_id}")
-        return {
+        binding = {
             "assigned_account": row["assigned_account"],
             "assigned_account_key": row["assigned_account_key"],
         }
+        if str(row["account_route"]) == ACCOUNT_ROUTE_USER_BINDING:
+            binding.update(
+                {
+                    "account_route": ACCOUNT_ROUTE_USER_BINDING,
+                    "requested_account_id": row["requested_account_id"],
+                    "requested_account_key": row["requested_account_key"],
+                }
+            )
+        return binding
 
     def get_task_context(self, job_id: str) -> dict[str, Any]:
         """读取任务执行所需的附加上下文。"""
@@ -1100,8 +1467,15 @@ class SellerSpriteTaskQueueStore:
                     credential_scope TEXT NULL,
                     runtime_auth_required INTEGER NOT NULL DEFAULT 0,
                     expected_user_email TEXT NULL,
+                    account_route TEXT NOT NULL DEFAULT 'shared_pool',
+                    requested_account_id TEXT NULL,
+                    requested_account_key TEXT NULL,
                     session_id TEXT NULL,
-                    jwt TEXT NULL
+                    jwt TEXT NULL,
+                    execution_owner TEXT NULL,
+                    heartbeat_at TEXT NULL,
+                    lease_expires_at TEXT NULL,
+                    remote_task_id TEXT NULL
                 )
                 """
             )
@@ -1117,10 +1491,39 @@ class SellerSpriteTaskQueueStore:
                 conn.execute(
                     "ALTER TABLE seller_sprite_task_queue ADD COLUMN expected_user_email TEXT NULL"
                 )
+            if "account_route" not in columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_task_queue "
+                    "ADD COLUMN account_route TEXT NOT NULL DEFAULT 'shared_pool'"
+                )
+            if "requested_account_id" not in columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_task_queue ADD COLUMN requested_account_id TEXT NULL"
+                )
+            if "requested_account_key" not in columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_task_queue ADD COLUMN requested_account_key TEXT NULL"
+                )
             if "session_id" not in columns:
                 conn.execute("ALTER TABLE seller_sprite_task_queue ADD COLUMN session_id TEXT NULL")
             if "jwt" not in columns:
                 conn.execute("ALTER TABLE seller_sprite_task_queue ADD COLUMN jwt TEXT NULL")
+            if "execution_owner" not in columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_task_queue ADD COLUMN execution_owner TEXT NULL"
+                )
+            if "heartbeat_at" not in columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_task_queue ADD COLUMN heartbeat_at TEXT NULL"
+                )
+            if "lease_expires_at" not in columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_task_queue ADD COLUMN lease_expires_at TEXT NULL"
+                )
+            if "remote_task_id" not in columns:
+                conn.execute(
+                    "ALTER TABLE seller_sprite_task_queue ADD COLUMN remote_task_id TEXT NULL"
+                )
             if "task_kind" not in columns:
                 conn.execute(
                     "ALTER TABLE seller_sprite_task_queue ADD COLUMN task_kind TEXT NOT NULL DEFAULT 'generic'"
@@ -1291,11 +1694,16 @@ class SellerSpriteTaskQueueStore:
             "root_dir": row["root_dir"],
             "task_kind": row["task_kind"],
             "assigned_account": row["assigned_account"],
+            "assigned_account_key": row["assigned_account_key"],
             "worker_key": row["worker_key"],
             "assignment_generation": int(row["assignment_generation"] or 0),
             "failover_count": int(row["failover_count"] or 0),
             "last_error_code": row["last_error_code"],
             "retry_reason": row["retry_reason"],
+            "execution_owner": row["execution_owner"],
+            "heartbeat_at": row["heartbeat_at"],
+            "lease_expires_at": row["lease_expires_at"],
+            "remote_task_id": row["remote_task_id"],
             "result_path": row["result_path"],
             "row_count": int(row["row_count"] or 0),
             "export": json.loads(str(row["export_json"])) if row["export_json"] else None,
@@ -1368,6 +1776,19 @@ def _now_iso() -> str:
 def _seconds_ago_iso(seconds: int) -> str:
     """返回当前时间向前偏移指定秒数后的本地 ISO 字符串。"""
     return (datetime.now(timezone.utc).astimezone() - timedelta(seconds=seconds)).isoformat(timespec="seconds")
+
+
+def _future_iso(seconds: float) -> str:
+    """返回当前时间向后偏移指定秒数的本地 ISO 字符串。"""
+    return (
+        datetime.now(timezone.utc).astimezone()
+        + timedelta(seconds=max(0.01, float(seconds)))
+    ).isoformat(timespec="seconds")
+
+
+def _claim_owner(execution_owner: str | None, worker_key: str) -> str:
+    """兼容直接调用 store 的领取方，并确保新领取任务始终拥有租约 owner。"""
+    return execution_owner or f"worker:{worker_key}"
 
 
 def _task_kind_for_request(request: SellerSpriteScenarioRequest) -> str:

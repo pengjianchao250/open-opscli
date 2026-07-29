@@ -125,6 +125,30 @@ def test_select_server_falls_back_to_first_http_server():
     assert server.url == "https://default.example.com/mcp?api_key=default"
 
 
+def test_select_server_strict_mode_rejects_missing_preferred_server():
+    client = McpConfigClient(auth_client=DummyAuthClient(), ops_url="https://ops.example.com/api")
+    payload = {
+        "data": {
+            "http": {
+                "mcpServers": {
+                    "备用服务": {
+                        "type": "http",
+                        "url": "https://backup.example.com/mcp?api_key=default",
+                    }
+                }
+            }
+        }
+    }
+
+    with pytest.raises(BadRemoteConfigError, match="BI运营系统"):
+        client.select_server(
+            payload,
+            transport="http",
+            preferred_name="BI运营系统",
+            require_preferred=True,
+        )
+
+
 def test_select_server_raises_when_http_servers_missing():
     client = McpConfigClient(auth_client=DummyAuthClient(), ops_url="https://ops.example.com/api")
 

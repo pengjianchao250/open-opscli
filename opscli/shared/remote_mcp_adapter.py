@@ -19,10 +19,12 @@ class RemoteMcpAdapter:
         remote_client_factory=None,
         *,
         preferred_name: str = "BI运营系统",
+        require_preferred: bool = False,
     ) -> None:
         self.config_client = config_client or McpConfigClient()
         self.remote_client_factory = remote_client_factory or RemoteMcpClient
         self.preferred_name = preferred_name
+        self.require_preferred = require_preferred
 
     def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """调用远端工具，遇到 401 时刷新配置后重试一次。"""
@@ -40,11 +42,13 @@ class RemoteMcpAdapter:
     def _build_remote_client(self) -> RemoteMcpClient:
         """读取远端配置并构造远端 MCP 客户端。"""
         payload = self.config_client.fetch_remote_config()
-        server = self.config_client.select_server(
-            payload,
-            transport="http",
-            preferred_name=self.preferred_name,
-        )
+        select_kwargs = {
+            "transport": "http",
+            "preferred_name": self.preferred_name,
+        }
+        if self.require_preferred:
+            select_kwargs["require_preferred"] = True
+        server = self.config_client.select_server(payload, **select_kwargs)
         return self.remote_client_factory(server.url)
 
     def _filter_none_values(self, arguments: dict[str, Any]) -> dict[str, Any]:

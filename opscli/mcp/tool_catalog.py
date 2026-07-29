@@ -21,28 +21,46 @@ from opscli.config import __version__
 
 _logger = logging.getLogger("opscli.mcp.tool_catalog")
 
-# 进程内工具清单：注册代理在工具注册时逐条填充
+# 通用 MCP 的进程内默认工具清单，保留供现有调用方兼容访问。
 _CATALOG: list[dict] = []
 
 
-def record_tool(*, name: str, module: str, description: str | None) -> None:
-    """记录一个已注册的 MCP 工具元数据。
+class ToolCatalog:
+    """隔离保存单个 MCP 服务已注册的工具清单。"""
 
-    Args:
-        name: 工具名（含 name= 覆盖后的最终注册名，如 fetch/search）
-        module: 所属模块名（取自注册函数的 __module__ 末段，如 keepa）
-        description: 工具描述（注册参数 description 优先，否则 docstring 首行）
-    """
-    _CATALOG.append({
+    def __init__(self) -> None:
+        self._items: list[dict] = []
+        self._names: set[str] = set()
+
+    def record(self, *, name: str, module: str, description: str | None) -> None:
+        """记录工具元数据，重复工具名直接失败关闭。"""
+        if name in self._names:
+            raise ValueError(f"MCP 工具名重复：{name}")
+        self._names.add(name)
+        self._items.append(_build_catalog_item(name, module, description))
+
+    def get_catalog(self) -> list[dict]:
+        """返回当前服务工具清单的副本。"""
+        return list(self._items)
+
+
+def _build_catalog_item(name: str, module: str, description: str | None) -> dict:
+    """构造后端工具清单使用的稳定元数据。"""
+    return {
         "name": name,
         "module": module,
         # 后端 description 字段上限 255，超长截断
         "description": (description or "").strip()[:255],
-    })
+    }
+
+
+def record_tool(*, name: str, module: str, description: str | None) -> None:
+    """记录通用 MCP 工具元数据，保留原有全局接口和注册语义。"""
+    _CATALOG.append(_build_catalog_item(name, module, description))
 
 
 def get_catalog() -> list[dict]:
-    """返回当前进程已采集的工具清单（副本）。"""
+    """返回通用 MCP 已采集的工具清单（副本）。"""
     return list(_CATALOG)
 
 
@@ -62,14 +80,15 @@ def extract_description(fn, kwargs: dict) -> str | None:
     return None
 
 
-def _do_sync(sync_url: str) -> None:
+def _do_sync(sync_url: str, catalog: list[dict] | None = None) -> None:
     """同步执行清单上报（在守护线程中调用，失败仅记日志不影响服务启动）。"""
+    tools = list(_CATALOG if catalog is None else catalog)
     try:
         import httpx
 
         resp = httpx.post(
             sync_url,
-            json={"tools": _CATALOG, "opscli_version": __version__},
+            json={"tools": tools, "opscli_version": __version__},
             headers={"X-Opscli-Version": __version__},
             timeout=10,
         )
@@ -91,17 +110,14 @@ def _do_sync(sync_url: str) -> None:
         _logger.warning("MCP 工具清单同步异常: %s", exc)
 
 
-def sync_catalog_async(auth_verify_url: str | None = None) -> None:
-    """启动守护线程上报工具清单（fire-and-forget，不阻塞服务启动）。
-
-    由 server.run() 在 HTTP/SSE 模式启动时调用。
-
-    Args:
-        auth_verify_url: 远程校验地址（如 .../v1/mcp/verify-key）。
-            提供时同步地址与之同源（保证上报到同一后端）；
-            否则从 config.ini 的 ops_url 推导。
-    """
-    if not _CATALOG:
+def sync_catalog_async(
+    auth_verify_url: str | None = None,
+    *,
+    catalog: list[dict] | None = None,
+) -> None:
+    """启动守护线程上报指定服务工具清单。"""
+    tools = list(_CATALOG if catalog is None else catalog)
+    if not tools:
         return
     try:
         if auth_verify_url and auth_verify_url.endswith("/verify-key"):
@@ -116,5 +132,8 @@ def sync_catalog_async(auth_verify_url: str | None = None) -> None:
         return
 
     threading.Thread(
-        target=_do_sync, args=(sync_url,), daemon=True, name="mcp-tool-sync"
+        target=_do_sync,
+        args=(sync_url, tools),
+        daemon=True,
+        name="mcp-tool-sync",
     ).start()

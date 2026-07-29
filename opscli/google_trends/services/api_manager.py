@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from opscli.google_trends.api.client import GoogleTrendsApiClient
 from opscli.google_trends.api.scenarios import get_scenario, list_scenarios
+from opscli.google_trends.api.serpapi_client import SerpApiGoogleTrendsClient
 from opscli.google_trends.config import GoogleTrendsSettings, load_settings
 from opscli.google_trends.domain.exceptions import GoogleTrendsConfigError
 from opscli.google_trends.domain.models import (
@@ -56,6 +56,12 @@ class GoogleTrendsApiManager:
         effective_geo = normalized_params.get("geo") if "geo" in normalized_params else geo
         warnings: list[dict[str, Any]] = []
 
+        # hl/tz 仍保留在公共请求模型中；仅对支持这些参数的 SerpApi 场景补入。
+        if request.hl and request.scenario in {"trends", "autocomplete", "trending-now"}:
+            normalized_params.setdefault("hl", request.hl.split("-", 1)[0])
+        if request.tz is not None and request.scenario == "trends":
+            normalized_params.setdefault("tz", str(request.tz))
+
         _write_json(
             params_path,
             {
@@ -66,8 +72,11 @@ class GoogleTrendsApiManager:
             },
         )
 
-        client = GoogleTrendsApiClient(settings=self.settings, hl=request.hl, tz=request.tz)
-        raw_response = await asyncio.to_thread(client.run, request.scenario, normalized_params)
+        client = SerpApiGoogleTrendsClient()
+        try:
+            raw_response = await asyncio.to_thread(client.run, request.scenario, normalized_params)
+        finally:
+            client.close()
         raw_payload = {
             "job_id": job_id,
             "scenario": request.scenario,
@@ -142,33 +151,96 @@ class GoogleTrendsApiManager:
 
 
 def extract_rows(scenario: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """从 Google Trends 原始响应中提取主要结果列表。"""
+    """从三类 SerpApi 原始响应中提取主要结果列表。"""
     if not isinstance(payload, dict):
         return []
-    if scenario in {"related-queries", "related-topics"}:
-        return _extract_related_rows(payload)
-    records = payload.get("records")
-    if not isinstance(records, list):
-        return []
-    if scenario in {"trending-searches", "realtime-trending"}:
+    if scenario == "autocomplete":
+        return _normalize_records(payload.get("suggestions"))
+    if scenario == "trending-now":
+        records = _normalize_records(payload.get("trending_searches"))
         return [_normalize_trending_row(row, index) for index, row in enumerate(records, start=1)]
-    return [_normalize_row(row) for row in records]
+    if scenario == "trends":
+        return _extract_trends_rows(payload)
+    return []
 
 
-def _extract_related_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _extract_trends_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """按 SerpApi Trends 响应类型提取时间、地域或相关结果。"""
+    interest_over_time = payload.get("interest_over_time")
+    if isinstance(interest_over_time, dict):
+        return _normalize_timeseries_rows(interest_over_time.get("timeline_data"))
+
+    compared_records = payload.get("compared_breakdown_by_region")
+    if isinstance(compared_records, list):
+        return _normalize_region_comparison_rows(compared_records)
+
+    region_records = payload.get("interest_by_region")
+    if isinstance(region_records, list):
+        return _normalize_records(region_records)
+
+    for field in ("related_topics", "related_queries"):
+        groups = payload.get(field)
+        if isinstance(groups, dict):
+            return _normalize_related_groups(groups)
+    return []
+
+
+def _normalize_timeseries_rows(value: Any) -> list[dict[str, Any]]:
+    """展开时间序列 values，使不同查询词成为独立列。"""
     rows: list[dict[str, Any]] = []
-    for keyword, groups in payload.items():
-        if not isinstance(groups, dict):
-            continue
-        for group_name, records in groups.items():
-            if not isinstance(records, list):
-                continue
-            for record in records:
-                row = _normalize_row(record)
-                row.setdefault("keyword", keyword)
-                row.setdefault("type", group_name)
-                rows.append(row)
+    for record in value if isinstance(value, list) else []:
+        row = _normalize_row(record)
+        values = row.pop("values", None)
+        if isinstance(values, list):
+            for index, item in enumerate(values, start=1):
+                if not isinstance(item, dict):
+                    continue
+                query = str(item.get("query") or f"query_{index}")
+                row[query] = item.get("extracted_value", item.get("value"))
+        rows.append(row)
     return rows
+
+
+def _normalize_region_comparison_rows(records: list[Any]) -> list[dict[str, Any]]:
+    """展开地域对比 values，使各查询词占比成为独立列。"""
+    rows: list[dict[str, Any]] = []
+    for record in records:
+        row = _normalize_row(record)
+        values = row.pop("values", None)
+        if isinstance(values, list):
+            for index, item in enumerate(values, start=1):
+                if not isinstance(item, dict):
+                    continue
+                query = str(item.get("query") or f"query_{index}")
+                row[query] = item.get("extracted_value", item.get("value"))
+        rows.append(row)
+    return rows
+
+
+def _normalize_related_groups(groups: dict[str, Any]) -> list[dict[str, Any]]:
+    """将 top/rising 相关主题或查询合并并展开 Topic 信息。"""
+    rows: list[dict[str, Any]] = []
+    for group_name in ("top", "rising"):
+        records = groups.get(group_name)
+        if not isinstance(records, list):
+            continue
+        for record in records:
+            row = _normalize_row(record)
+            topic = row.pop("topic", None)
+            if isinstance(topic, dict):
+                row["topic_id"] = topic.get("value")
+                row["topic_title"] = topic.get("title")
+                row["topic_type"] = topic.get("type")
+            row.setdefault("type", group_name)
+            rows.append(row)
+    return rows
+
+
+def _normalize_records(value: Any) -> list[dict[str, Any]]:
+    """将列表中的任意值统一为字典行。"""
+    if not isinstance(value, list):
+        return []
+    return [_normalize_row(item) for item in value]
 
 
 def _normalize_trending_row(row: Any, rank: int) -> dict[str, Any]:
@@ -186,8 +258,9 @@ def _normalize_trending_row(row: Any, rank: int) -> dict[str, Any]:
 
 
 def _normalize_row(row: Any) -> dict[str, Any]:
+    """复制字典记录，避免行展开时修改原始 SerpApi 响应。"""
     if isinstance(row, dict):
-        return row
+        return dict(row)
     return {"value": row}
 
 
@@ -210,7 +283,13 @@ def _scenario_label(scenario: str) -> str:
 def _build_target_label(params: dict[str, Any] | None) -> str:
     if not isinstance(params, dict):
         return ""
-    value = params.get("keyword") or _first(params.get("keywords")) or _first(params.get("kw_list")) or params.get("pn")
+    value = (
+        _first(params.get("q"))
+        or params.get("keyword")
+        or _first(params.get("keywords"))
+        or _first(params.get("kw_list"))
+        or params.get("pn")
+    )
     return _sanitize_filename_part(value)
 
 

@@ -183,6 +183,14 @@
       "tier": "experimental",
       "reason": "Keepa 已迁移到正式 CLI 代理远端 MCP 模式，可作为实验 Skill 安装使用"
     },
+    "ops-google-trends": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "experimental",
+      "reason": "Google Trends 已切换到服务端 SerpApi Key 池并通过正式 CLI 代理远端 MCP，可作为实验 Skill 安装使用"
+    },
     "ops-query-wizard": {
       "source": true,
       "wheel": true,

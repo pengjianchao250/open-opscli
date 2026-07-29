@@ -42,6 +42,7 @@ from opscli.shared.http import parse_remote_response
 
 
 DEFAULT_INTERNAL_CATEGORY_TOP_ENDPOINT = "/dataMetrics/v1/asin-report-files/internal-category-top10"
+DEFAULT_ALL_CATEGORY_TRAFFIC_TOP_ENDPOINT = "/dataMetrics/v1/asin-report-files/all-category-traffic-top10"
 DEFAULT_TIMEOUT = 20
 CATEGORY_TOP_DATA_SCOPE = "internal_category_top"
 CATEGORY_TOP_FILE_KEY = "category_top_xlsx"
@@ -103,6 +104,7 @@ class AsinCategoryTopClient:
         *,
         auth_client: AuthClient | None = None,
         endpoint: str = DEFAULT_INTERNAL_CATEGORY_TOP_ENDPOINT,
+        traffic_endpoint: str = DEFAULT_ALL_CATEGORY_TRAFFIC_TOP_ENDPOINT,
         http_get: Callable[..., httpx.Response] | None = None,
         ops_url: str | None = None,
     ) -> None:
@@ -116,6 +118,7 @@ class AsinCategoryTopClient:
         """
         self.auth_client = auth_client or AuthClient()
         self.endpoint = endpoint
+        self.traffic_endpoint = traffic_endpoint
         self.http_get = http_get or httpx.get
         self.ops_url = _report_files_base_url(ops_url or OPS_URL)
 
@@ -170,9 +173,64 @@ class AsinCategoryTopClient:
             "raw": payload,
         }
 
-    def _resolve_endpoint(self) -> str:
+    def fetch_traffic(
+        self,
+        *,
+        category: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, Any]:
+        """Query category traffic Top10 funnel averages, optionally for one category."""
+        normalized_category = str(category or "").strip() or None
+        _validate_date_range(date_from=date_from, date_to=date_to)
+
+        headers, cookies = self.auth_client.build_request_auth("ops")
+        headers.update(get_mcp_request_headers())
+        params: dict[str, Any] = {}
+        if normalized_category:
+            params["category"] = normalized_category
+        if date_from:
+            params["date_from"] = date_from
+        if date_to:
+            params["date_to"] = date_to
+
+        response = self.http_get(
+            self._resolve_endpoint(self.traffic_endpoint),
+            params=params,
+            headers=headers,
+            cookies=cookies,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        payload = parse_remote_response(
+            response,
+            http_error_cls=AsinCategoryTopHttpError,
+            business_error_cls=AsinCategoryTopBusinessError,
+            bad_json_error_cls=AsinCategoryTopBadJsonError,
+        )
+        data = payload.get("data") if isinstance(payload, dict) else None
+        data = data if isinstance(data, dict) else {}
+        raw_rows = data.get("categories")
+        rows = [item for item in raw_rows if isinstance(item, dict)] if isinstance(raw_rows, list) else []
+        category_names = data.get("category_names")
+        return {
+            "status": "success",
+            "endpoint": self.traffic_endpoint,
+            "params": params,
+            "row_count": len(rows),
+            "rows": rows,
+            "metadata": {
+                "category_filter": data.get("category_filter"),
+                "category_total": data.get("category_total"),
+                "category_names": category_names if isinstance(category_names, list) else [],
+                "ranking_metric": data.get("ranking_metric"),
+                "top_n": data.get("top_n"),
+            },
+            "raw": payload,
+        }
+
+    def _resolve_endpoint(self, endpoint: str | None = None) -> str:
         """把相对路径转换为完整 OPS URL。"""
-        text = self.endpoint.strip()
+        text = (endpoint or self.endpoint).strip()
         if text.startswith(("http://", "https://")):
             return text
         if not text.startswith("/"):

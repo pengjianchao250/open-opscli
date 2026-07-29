@@ -71,7 +71,9 @@ class DummyManagedHttpClient:
 def install_remote_client_mocks(monkeypatch, calls: dict, result: DummyResult) -> None:
     monkeypatch.setattr(
         "opscli.mcp_client.remote_client.create_mcp_http_client",
-        lambda: DummyManagedHttpClient(calls),
+        lambda headers=None: (
+            calls.update({"headers": headers}) or DummyManagedHttpClient(calls)
+        ),
     )
     monkeypatch.setattr(
         "opscli.mcp_client.remote_client.streamable_http_client",
@@ -92,8 +94,9 @@ def test_call_tool_returns_first_text_json(monkeypatch):
     calls = {}
     result = DummyResult([DummyTextContent(json.dumps({"success": True, "data": {"value": 1}}))])
 
-    def fake_create_mcp_http_client():
+    def fake_create_mcp_http_client(headers=None):
         calls["http_client_created"] = True
+        calls["headers"] = headers
         return DummyManagedHttpClient(calls)
 
     def fake_streamable_http_client(url, *, http_client):
@@ -122,6 +125,7 @@ def test_call_tool_returns_first_text_json(monkeypatch):
 
     assert payload == {"success": True, "data": {"value": 1}}
     assert calls["http_client_created"] is True
+    assert calls["headers"] is None
     assert calls["http_client_entered"] is True
     assert calls["http_client_exited"] is True
     assert calls["url"] == "https://ops.mcp.xenkee.com/mcp?api_key=mcp_demo"
@@ -132,6 +136,21 @@ def test_call_tool_returns_first_text_json(monkeypatch):
     assert calls["transport_exited"] is True
     assert calls["session_entered"] is True
     assert calls["session_exited"] is True
+
+
+def test_call_tool_passes_http_headers(monkeypatch):
+    calls = {}
+    result = DummyResult([DummyTextContent(json.dumps({"success": True}))])
+    install_remote_client_mocks(monkeypatch, calls, result)
+
+    client = RemoteMcpClient(
+        url="https://collector.example.com/mcp",
+        headers={"Authorization": "Bearer mcp-user-key"},
+    )
+    payload = asyncio.run(client.call_tool("seller_sprite_scenarios", {}))
+
+    assert payload == {"success": True}
+    assert calls["headers"] == {"Authorization": "Bearer mcp-user-key"}
 
 
 def test_call_tool_raises_remote_tool_error_with_remote_text(monkeypatch):
