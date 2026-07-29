@@ -1316,6 +1316,22 @@ def build_model_contract(
     platform_disclosures = _platform_scope_disclosures(platform)
     if platform_disclosures:
         model_view["platform_scope_disclosures_zh"] = platform_disclosures
+    # 放开固定槽位后，选中数据集的粒度可能比用户要求更细，必须如实告知，
+    # 否则用户会把「关键词×搜索词」级明细当成「搜索词」级汇总。
+    # 按 dataset_alias 匹配当前实际选中的候选（而非默认取 candidates[0]），
+    # 避免候选列表顺序与最终选中项不一致时误取到别的候选的粒度披露。
+    selected_alias = dataset.get("dataset_alias")
+    grain_extra: dict = {}
+    for candidate in selection.get("dataset_candidates") or []:
+        if candidate.get("dataset_alias") == selected_alias:
+            grain_extra = candidate.get("grain_coverage") or {}
+            break
+    if grain_extra:
+        model_view["grain_disclosure_zh"] = [
+            f"所选数据集的{name}粒度比请求更细，额外覆盖：{'、'.join(terms)}；"
+            "结论中必须说明这一口径差异，不得把更细粒度的明细当成请求粒度的汇总。"
+            for name, terms in grain_extra.items()
+        ]
     if default_dataset_recommendation:
         model_view["default_dataset_recommendation_zh"] = {
             "name_zh": str(dataset.get("display_name_zh", "")),
@@ -1479,6 +1495,8 @@ def build_model_contract(
         answer_contract["required_disclosures_zh"].append(
             "本次查询已自动应用数据集默认条件：" + "；".join(model_view["default_filters_zh"])
         )
+    if grain_extra:
+        answer_contract["required_disclosures_zh"].extend(model_view["grain_disclosure_zh"])
     return {
         "contract": MODEL_CONTRACT,
         "query_mode": "dataset_query",

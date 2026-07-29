@@ -75,6 +75,10 @@
           "description": "裸亚马逊默认 SC+VC 及部分权限降级时的强制披露",
           "$ref": "#/$defs/string_array"
         },
+        "grain_disclosure_zh": {
+          "description": "所选数据集粒度比请求更细时的强制披露",
+          "$ref": "#/$defs/string_array"
+        },
         "platform_filter_state": {
           "enum": [
             "unknown",

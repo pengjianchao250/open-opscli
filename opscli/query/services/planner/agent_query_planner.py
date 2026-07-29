@@ -383,8 +383,11 @@ def _expanded_values(name: str, values: set[str], rules: dict) -> set[str]:
 def _slot_is_covered(profile: dict, name: str, requested: set[str], rules: dict) -> bool:
     """判断数据集画像是否覆盖请求的槽位取值。
 
-    固定口径（fixed）要求数据集口径与请求完全一致；
-    可筛选（filterable）只要求请求值是数据集覆盖范围的子集。
+    只要求数据集覆盖用户请求（requested ⊆ supported）。曾额外要求固定口径
+    必须与请求完全相等，导致覆盖粒度更广的数据集被拒——实测「搜索词的点击份额」
+    因此零候选，而「搜索词和关键词的点击份额」反而能命中三个正确数据集，
+    形成「说得越具体候选越少」的反常行为。按召回优先原则放开，
+    多出的粒度改由 _extra_slot_terms 交给合同强制披露。
     """
     raw_supported = profile["slots"][name]
     mode = profile["slot_modes"][name]
@@ -392,9 +395,27 @@ def _slot_is_covered(profile: dict, name: str, requested: set[str], rules: dict)
         return False
     supported = _expanded_values(name, raw_supported, rules)
     requested = _expanded_values(name, requested, rules)
-    if not requested.issubset(supported):
-        return False
-    return not supported.difference(requested) or mode == "filterable"
+    return requested.issubset(supported)
+
+
+def _extra_slot_terms(profile: dict, slots: dict, rules: dict) -> dict:
+    """列出数据集比用户请求多覆盖的固定槽位取值，供强制披露。
+
+    放开覆盖判定后，选中的数据集粒度可能比用户要的更细（如用户要搜索词级，
+    数据集是关键词×搜索词级），直接汇总会与用户预期的口径不一致。
+    风险不靠拒绝候选规避，而是如实告知——这是「放开 + 强制披露」的后半段。
+    """
+    extra: dict = {}
+    for name, requested in (slots or {}).items():
+        if name not in profile.get("slots", {}):
+            continue
+        if profile.get("slot_modes", {}).get(name) != "fixed":
+            continue
+        supported = _expanded_values(name, profile["slots"][name], rules)
+        surplus = sorted(supported.difference(_expanded_values(name, requested, rules)))
+        if surplus:
+            extra[name] = surplus
+    return extra
 
 
 def _covers(profile: dict, domains: set[str], slots: dict[str, set[str]], rules: dict) -> bool:
@@ -595,6 +616,7 @@ def _score_profile(
         "dataset_category": card["dataset_category"],
         "score": score,
         "reasons": reasons,
+        "grain_coverage": _extra_slot_terms(profile, slots, rules),
         "_semantic_rank": _semantic_rank(profile, domains, slots, rules),
     }
 
