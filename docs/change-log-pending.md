@@ -5262,3 +5262,17 @@
 **影响范围**：所有带组件筛选值的查询。低基数字段每次规划最多按 6 张组件表各枚举一次（Skill 版合并 subprocess，内核版进程内）；高基数字段仅在原文命中形态时才枚举。
 **回滚方式**：`git revert` 本次提交，回退到一期只覆盖部门/渠道/ASIN 的状态。
 ---
+
+## 2026-07-29 skills/ops-dataset-query - 字段打分末端接入模糊匹配（Task 2）
+
+**变更原因**：《取数规划器通用化优化开发计划》Task 2，接续 Task 1 已完成的字符二元组相似度模块。`dataset_guidance._field_score()` 打分末端此前只有 token 集合交集兜底，业务词与字段中文名只是部分重叠时会直接得 0 分，导致整条查询零候选。
+**改动的类/方法**：`dataset_guidance._field_score()`（函数）；顶部新增 `import schema_completion`。
+**改动点**：`opscli/skills/templates/ops-dataset-query/scripts/dataset_guidance.py`、`tests/skills/test_schema_completion.py`（追加 3 个测试，与 brief 逐字一致）。`_field_score()` 在精确命中与 token 交集都为 0 时，调用 `schema_completion.best_fuzzy_score(normalized_query, 字段展示名列表)`，`return int(fuzzy * 50)`——上限 50，低于 80/90/100 三档精确命中，确保不会挤掉精确匹配。
+**验证结果**：
+1. `pytest tests/skills/test_schema_completion.py -v` → 7 passed。
+2. `pytest tests/skills/test_dataset_query_planner.py tests/skills/test_dataset_guidance_default_filters.py -q` → 64 passed，无回归。
+3. **重要发现**：brief Step 1 给出的三个测试用例在改动前就已经 PASS（因为测试里手动传入的 `query_tokens` 恰好与字段 verbose_name 的中文二元组有交集，走的是原有 token 交集分支，未触达新增模糊分支），不构成严格 RED→GREEN 证据。已用独立脚本在真实字段数据（988 条 verbose_name）上验证模糊分支确实能在 token 交集为 0 时被触发（如「销量(自发货)」vs「运费(自发货)」，靠共享括号渠道后缀命中，fuzzy=0.5，score=25）。
+4. **Step 5 实测未达成预期**：按 brief 命令查询「看一下搜索词的点击份额和购买份额」，改动前后 `query_plan.py` 输出完全一致（`status=clarify_required, 候选=[], reason=dataset_constraints`）。根因排查：该查询在 `agent_query_planner.py` 的语义抽取阶段就因 `intent_rules.json` 未登记"点击份额/购买份额"为指标词而拿到 `domains=[] metrics=[]`，在到达 `dataset_guidance._field_score()` 之前就已经因 `dataset_constraints` 走向 `clarify_required`——是本任务改动范围之外的另一套匹配逻辑（选表阶段 vs 字段打分阶段）。这与计划文档第 45 行"实测依据"的成因描述不符，已在任务报告与本记录中如实标注，留待人工核实。
+**影响范围**：仅 `dataset_guidance._field_score()` 内部打分末端逻辑；对已有精确匹配/token 交集命中的字段无影响（`best` 非零时提前 return，不会走到新分支）。真正受影响的是此前 token 交集=0 的字段候选场景。已复制到 `~/.claude/skills/ops-dataset-query/scripts/`（与源文件 diff 一致）。
+**回滚方式**：`git revert 2bebd27`；或手动删除 `_field_score()` 末尾新增的 fuzzy 分支与顶部 `import schema_completion`，并移除 `tests/skills/test_schema_completion.py` 追加的 3 个测试。
+---
