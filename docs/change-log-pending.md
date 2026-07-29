@@ -5233,3 +5233,17 @@
 **影响范围**：规划器主路径行为不变（仅非 planned 时多补信息字段）；新增降级路径为可选，不改变既有调用方。
 **回滚方式**：`git revert` 本次提交；`local_fallback.py`、`dataset_profiles.json`、`routing_eval_cases.json` 为纯新增文件，删除即可。
 ---
+
+## 2026-07-29 skills/ops-dataset-query - 修复服务端默认分页导致的静默丢数
+
+**变更原因**：codex 矩阵 e2e 发现「查渠道傲彼瑞-美国的所有ASIN」被 Agent 报成「共 20 个，未截断」，而实际是 38 个。实测确认根因：服务端在 payload 不带 limit 时只返回默认页（20 行），`meta.totalCount` 却是全量行数（38）；规划器模板恒填 `limit=null`，因此**任何结果超过 20 行的查询都会静默只回首页**。更糟的是 `truncated` 的判定要求 `payload.limit` 非空，导致这种截断被报成 `truncated=false`，模型据此把首页写成全量结论。附带问题：`--result-dir` 指向不存在的子目录时 `write_text` 抛 OSError 被吞成 `full_result_file=null`，Agent 既拿不到全量文件也不知道原因，只能改写请求反复重查（实测一次查询膨胀到 19 次工具调用）。
+**改动点**：
+1. `scripts/run_query.py`：新增 `_complete_server_paged_rows()`——用户未指定 limit 且 `len(rows) < total_count` 时自动重查一次（`limit=min(total, AUTO_COMPLETE_LIMIT_CAP=5000)`）并补齐，结果写入 `disclosures.server_paging` + `server_paging_disclosure_zh`；补齐失败或重查未拿到更多行时显式标记 `auto_complete_applied=false`，绝不把首页当全量。用户明确传 limit 时按其口径执行，不擅自放大。
+2. `scripts/run_query.py`：`truncated` 判定改为只比较 `len(rows) < total_count`，去掉「payload 必须带 limit」的前提。
+3. `scripts/run_query.py`：落盘前 `mkdir(parents=True, exist_ok=True)`；OSError 时除 `full_result_file=null` 外补 `full_result_file_error` 透出原因；落盘内容附带补齐后的 `rows_after_auto_complete`。
+4. `SKILL.md`：第 8 条改为按 `row_count_returned` / `total_count` / `truncated` / `server_paging` 四个字段判断口径，禁止用预览行数下结论；禁止为凑全量改写请求重查或绕过执行器手拼 payload。
+5. 新增 `tests/skills/test_run_query_server_paging.py`：6 项，覆盖自动补齐、显式 limit 不放大、已满不重查、补齐失败标记、重查无增量标记、截断判定只比行数。
+**验证结果**：`pytest tests/skills/{test_run_query_server_paging,test_run_query_default_filters,test_local_fallback,test_component_filter_resolution,test_dataset_query_planner}.py tests/query` → 273 passed / 5 xfailed。真实后端验证：同一查询 `row_count_returned` 由 20 变 38，`server_paging.auto_complete_applied=true`；`--result-dir` 指向不存在的多级目录可自动创建。codex 复跑同一提示词：工具调用由 19 次降到 4 次，结论改为「服务端初次仅返回默认页，系统已自动补查至全部 38 条」。
+**影响范围**：所有未显式指定 limit 且结果超过服务端默认页的查询，此前静默丢数，现在自动补齐并披露；补齐上限 5000 行。已同步到 ~/.opscli、~/.codex、~/.claude、~/.openclaw。
+**回滚方式**：`git revert` 本次提交；回滚后静默丢数问题会复现。
+---

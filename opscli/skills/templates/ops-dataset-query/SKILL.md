@@ -74,6 +74,12 @@ python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"
    `query_plan.py` + `run_query.py` 仅保留给维护者复现与审计，不是 Agent 正常路径。执行器会校验规划摘要、状态、tableId、授权字段、模板及时间范围。正式查询偶尔较慢（排序兜底还可能放大窗口重查一次），命令窗口超时不是失败：**原样重跑一次**即可。流程返回 `precheck_failed` 时按 `next_action_zh` 重新运行规划器，禁止编辑 plan 或绕过执行器直连；`disclosures.order_fallback` 存在时必须披露本地兜底。MCP-only 用正式 `query_simple`。
 6. `query_mode=chart_uuid` 时原样执行 `execution_ref.query_command`。`chart_action=run` 必须遍历所有 `queries`，保留服务端小计/总计并按 `_query_index` 区分来源；大结果按 `references/chart-excel-guide.md` 使用 `--save-result` 或 `--result-file` 落盘，随后补一次 `evidence_contract.py`。
 7. 保留用户要求的明细和全量范围。限制展示时声明排序、截断数量和总行数（执行器 `disclosures` 已给出），不把局部结果说成全量。
+8. **预览只是抽样，行数口径以 `disclosures` 为准**：`preview_rows` 只展示前若干行，完整结果写在 `disclosures.full_result_file`。判断口径按下面三个字段，**不要**用预览行数下结论：
+   - `row_count_returned` = 本次实际拿到的行数，`total_count` = 服务端报的总行数；结论里的"共 N 条"必须用 `row_count_returned`，并在两者不等时说明。
+   - `truncated=true` 表示拿到的是**部分结果**，必须如实声明，禁止说成全量。
+   - 出现 `server_paging` 时按 `server_paging_disclosure_zh` 披露：服务端不带 `limit` 时只回默认页，执行器已自动重查补齐；补齐失败（`auto_complete_applied=false`）时结论必须声明这是部分结果。
+
+   需要逐行数据时直接读 `full_result_file`（该文件含补齐后的 `rows_after_auto_complete`）；`full_result_file` 为 null 时看 `full_result_file_error`。**禁止**为了凑齐剩余行而改写请求重查、分批排除已见值、或绕过执行器手拼 payload 直连 `opscli query simple`——那样既浪费调用预算，又丢掉执行器的授权字段校验。
 
 ## 结果分析
 
