@@ -79,7 +79,14 @@ def _resolve(module, query: str, enum_values, monkeypatch) -> dict:
             return []
         return enum_values
 
+    def fake_group(_table_id, field_names, **_kwargs):
+        # 批量枚举同样要打桩，否则反查路径会真的发起网络请求
+        if isinstance(enum_values, Exception):
+            return {}
+        return {name: (enum_values if name == "channel_name" else []) for name in field_names}
+
     monkeypatch.setattr(skill_query_plan, "_auto_enum_component_values", fake_enum)
+    monkeypatch.setattr(skill_query_plan, "_auto_enum_component_field_group", fake_group)
     return module._resolve_component_filters(contract, query, auto_enum=True)
 
 
@@ -186,7 +193,154 @@ def test_asin_shapes_are_recognized(module, query: str, expected: list):
 @BOTH_VERSIONS
 def test_channel_label_does_not_swallow_trailing_words(module, monkeypatch):
     """标签抽取必须在助词处收住，不能把「傲彼瑞的所有ASIN」整段当成筛选值。"""
-    assert module._extract_requested_channel_value("查渠道是傲彼瑞的所有ASIN") == "傲彼瑞"
-    assert module._extract_requested_channel_value("渠道为傲彼瑞-美国，近7天") == "傲彼瑞-美国"
+    terms = ("渠道", "channel")
+    assert module._extract_labeled_value("查渠道是傲彼瑞的所有ASIN", terms) == "傲彼瑞"
+    assert module._extract_labeled_value("渠道为傲彼瑞-美国，近7天", terms) == "傲彼瑞-美国"
     # 维度点名不是筛选值
-    assert module._extract_requested_channel_value("查渠道和ASIN") == ""
+    assert module._extract_labeled_value("查渠道和ASIN", terms) == ""
+
+
+@BOTH_VERSIONS
+def test_longer_label_wins_over_prefix(module):
+    """「渠道SKU」不能被「渠道」抢先匹配掉——标签必须按长度降序尝试。"""
+    value = module._extract_labeled_value(
+        "查渠道SKU是ON-OB-JL-007-68157的销量", ("渠道", "渠道sku")
+    )
+    assert value == "ON-OB-JL-007-68157"
+
+
+@BOTH_VERSIONS
+@pytest.mark.parametrize(
+    "field_name, query, expected",
+    [
+        ("sell_sku", "查 ON-OB-JL-007-68157 的销量", "ON-OB-JL-007-68157"),
+        ("pmc_code", "查 32.002946 的库存", "32.002946"),
+        ("spu", "查 BKC-107 的销量", "BKC-107"),
+        ("model", "查 COT-135-WA 的销量", "COT-135-WA"),
+    ],
+)
+def test_code_shaped_bare_values_are_extracted(module, field_name, query, expected):
+    """编码型字段的裸值靠形态抽取兜底（这些字段基数太大，不适合枚举反查）。"""
+    spec = next(
+        item for item in module._ENUM_COMPONENT_SPECS if item["field_name"] == field_name
+    )
+    assert module._extract_patterned_value(query, spec["value_pattern"]) == expected
+
+
+# ---------------------------------------------------------------------------
+# 二期：其余组件字段（sell_sku / 国家 / 品牌 / 销售 等）
+# ---------------------------------------------------------------------------
+
+
+@BOTH_VERSIONS
+def test_all_value_component_fields_are_covered(module):
+    """17 个值类组件字段必须全部纳入 specs——漏一个就是一条静默漏筛的路径。
+
+    date_id 归时间口径、platform_name 归平台范围逻辑，两者不在此表内。
+    """
+    covered = {item["field_name"] for item in module._ENUM_COMPONENT_SPECS}
+    expected = {
+        "dept_name", "channel_name", "country_name", "brand_name",
+        "team_username", "develop_username", "team_name", "large_team_name",
+        "category", "amazon_cat", "sell_sku", "ed_sku", "model",
+        "pmc_code", "spu", "product_name",
+    }
+    assert expected - covered == set(), f"未覆盖的组件字段：{expected - covered}"
+
+
+@BOTH_VERSIONS
+def test_only_low_cardinality_fields_use_reverse_lookup(module):
+    """反查只给低基数字段开：高基数字段枚举不完整，反查会给出错误的「无命中」。
+
+    实测基数：渠道 9 / 国家 2 / 品牌 3 / 销售 12 属低基数；
+    公司SKU 466、产品名称 376、渠道SKU 152 属高基数，改用形态抽取。
+    """
+    reverse = {
+        item["field_name"]
+        for item in module._ENUM_COMPONENT_SPECS
+        if item.get("reverse_lookup")
+    }
+    high_cardinality = {"sell_sku", "ed_sku", "product_name", "model", "pmc_code", "spu", "asin"}
+    assert reverse & high_cardinality == set(), f"高基数字段不应开反查：{reverse & high_cardinality}"
+    assert "channel_name" in reverse
+
+
+@BOTH_VERSIONS
+@pytest.mark.parametrize(
+    "query, field_name, expected",
+    [
+        ("查渠道SKU是ON-OB-JL-007-68157的销量", "sell_sku", "ON-OB-JL-007-68157"),
+        ("查国家为美国的销量", "country_name", "美国"),
+        ("查品牌是OHWILL的销量", "brand_name", "OHWILL"),
+        ("查销售是史子涵的业绩", "team_username", "史子涵"),
+        ("查大组为OR-C的销量", "large_team_name", "OR-C"),
+        ("查物控编码是32.002946的库存", "pmc_code", "32.002946"),
+    ],
+)
+def test_labeled_values_across_component_fields(module, query, field_name, expected):
+    """各组件字段的标签形态都要能抽出值，抽不到就等于静默漏筛。"""
+    spec = next(
+        item for item in module._ENUM_COMPONENT_SPECS if item["field_name"] == field_name
+    )
+    assert module._spec_extract(spec, query) == expected
+
+
+@BOTH_VERSIONS
+def test_spec_extract_prefers_label_over_pattern(module):
+    """同时命中标签与形态时以标签为准，避免形态误抽走用户明确指定的值。"""
+    spec = next(
+        item for item in module._ENUM_COMPONENT_SPECS if item["field_name"] == "sell_sku"
+    )
+    assert module._spec_extract(spec, "查渠道SKU是ON-OB-JL-007-68157的销量") == "ON-OB-JL-007-68157"
+
+
+@BOTH_VERSIONS
+def test_consumed_value_is_not_reclaimed_by_pattern_of_another_field(module):
+    """一个值只能被一个字段消费：SPU 的形态不得从渠道SKU 里抠子串再澄清一次。
+
+    实测形态：「渠道SKU是ON-OB-JL-007-68157」被 SPU 的 `[A-Z]{2,}-[0-9]{2,}`
+    抠出「JL-007」，二次澄清还会撤掉已经生成的模板。
+    """
+    spu = next(
+        item for item in module._ENUM_COMPONENT_SPECS if item["field_name"] == "spu"
+    )
+    consumed = {module._normalize_component_value("ON-OB-JL-007-68157")}
+    assert module._spec_extract(
+        spu, "查渠道SKU是ON-OB-JL-007-68157的销量", consumed=consumed
+    ) == ""
+    # 未被消费时仍要能抽出
+    assert module._spec_extract(spu, "查 BKC-107 的销量", consumed=set()) == "BKC-107"
+
+
+@BOTH_VERSIONS
+def test_reverse_lookup_prefers_exact_value_over_base_segment(module):
+    """原文写了完整枚举值就锁定它，不因主段同时命中多个成员而退化成澄清。"""
+    values = ["傲彼瑞-美国", "傲彼瑞-加拿大", "傲彼瑞-tiktok"]
+    hits = module._reverse_lookup_component_values(
+        "查傲彼瑞-加拿大的所有ASIN", values, module._normalize_component_value
+    )
+    assert hits == ["傲彼瑞-加拿大"]
+
+
+@BOTH_VERSIONS
+def test_reverse_lookup_skips_values_contained_in_consumed_ones(module):
+    """渠道锁定「傲彼瑞-加拿大」后，其中的「加拿大」不该再被国家反查抓走。"""
+    consumed = {module._normalize_component_value("傲彼瑞-加拿大")}
+    assert module._value_already_consumed(
+        module._normalize_component_value("加拿大"), consumed
+    )
+    assert not module._value_already_consumed(
+        module._normalize_component_value("美国"), consumed
+    )
+
+
+@BOTH_VERSIONS
+def test_empty_enum_without_requested_value_does_not_block(module, monkeypatch):
+    """字段在当前账号下无授权值时跳过即可，不能把所有查询都阻断。
+
+    「开发」在部分账号下枚举就是 0 条；早期实现把「枚举成功但为空」当成
+    「枚举失败」，导致每一条查询都返回 blocked。
+    """
+    contract = _resolve(module, "查渠道和ASIN的明细", [], monkeypatch)
+    # 渠道字段有显式值时才阻断；此处原文无任何筛选值，应正常放行
+    assert contract["status"] == "planned"

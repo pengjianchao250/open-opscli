@@ -1903,8 +1903,14 @@ def _auto_enum_component_values(
     field_name: str,
     *,
     timeout_seconds: float = 7.0,
+    errors: list | None = None,
 ) -> list[str]:
-    """枚举普通筛选组件字段；任何远端异常均返回空列表，由规划合同阻断扩大查询。"""
+    """枚举普通筛选组件字段；远端异常返回空列表并把原因写入 errors。
+
+    调用方必须区分两种空：调用失败（errors 非空，无法校验，须阻断）与
+    调用成功但当前账号无授权值（errors 为空，该字段不可能成为筛选条件，跳过即可）。
+    混为一谈会让「开发」这类本账号无授权值的字段把所有查询都阻断。
+    """
     if component_table_id in (None, "") or not field_name:
         return []
     enum_json = json.dumps(
@@ -1936,12 +1942,14 @@ def _auto_enum_component_values(
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"[query_plan] 普通筛选组件枚举未完成：{error}", file=sys.stderr)
+        if errors is not None:
+            errors.append(f"{type(error).__name__}: {error}"[:200])
         return []
     if result.returncode != 0:
-        print(
-            f"[query_plan] 普通筛选组件枚举失败：{(result.stderr or result.stdout or '')[:200]}",
-            file=sys.stderr,
-        )
+        detail = (result.stderr or result.stdout or "")[:200]
+        print(f"[query_plan] 普通筛选组件枚举失败：{detail}", file=sys.stderr)
+        if errors is not None:
+            errors.append(detail)
         return []
     try:
         payload = json.loads(result.stdout[result.stdout.index("{") :])
@@ -1970,12 +1978,6 @@ def _auto_enum_component_values(
 
 
 # ── 组件筛选值解析（部门/渠道走授权枚举，ASIN 走字面格式）──────────────────
-# 标签形态必须带系词，避免把「渠道和ASIN」这类维度点名误当成筛选值
-_CHANNEL_LABEL_RE = re.compile(
-    r"渠道\s*(?:为|是|=|＝|：|:|等于)\s*"
-    r"([\u4e00-\u9fffA-Za-z0-9_\-]{2,30}?)"
-    r"(?=的|地|，|,|。|；|;|、|\s|和|与|下|里|中|所有|全部|$)"
-)
 # ASIN/商品ID 字面形态：宽松切词后再逐个判形，不能写死单一形态。
 # 实测该列并非只存标准 Amazon ASIN：TEMU 渠道存的是 10~11 位纯数字商品 ID，
 # 另见 14 位纯数字；图书 ASIN 则是 ISBN-10。写死 B0+8 位会漏掉这些值，
@@ -2013,10 +2015,77 @@ def _normalize_component_value(value: str) -> str:
     return unicodedata.normalize("NFKC", str(value)).strip().casefold()
 
 
-def _extract_requested_channel_value(query: str) -> str:
-    """从「渠道是X/渠道为X」形态提取渠道筛选值；裸值形态由枚举反查兜底。"""
-    match = _CHANNEL_LABEL_RE.search(query)
-    return match.group(1).strip() if match else ""
+def _extract_labeled_value(query: str, label_terms: Sequence[str]) -> str:
+    """按「字段名 + 系词 + 值」形态提取筛选值，适用于全部组件字段。
+
+    系词是必需的：没有它，「渠道和ASIN」这类维度点名会被当成筛选值。
+    标签按长度降序尝试，避免「渠道」抢先匹配掉「渠道SKU」。
+    值用非贪婪 + 边界前瞻收住，否则「渠道是傲彼瑞的所有ASIN」会整段被吞。
+    """
+    for term in sorted(label_terms, key=len, reverse=True):
+        pattern = re.compile(
+            re.escape(term)
+            + r"\s*(?:为|是|=|＝|：|:|等于)\s*"
+            + r"([\u4e00-\u9fffA-Za-z0-9_\-\.]{2,40}?)"
+            + r"(?=的|地|，|,|。|；|;|、|\s|和|与|下|里|中|所有|全部|$)",
+            re.IGNORECASE,
+        )
+        match = pattern.search(query)
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def _extract_patterned_value(query: str, pattern: str) -> str:
+    """按编码形态从原文抽裸值（SKU/型号/物控编码/SPU 这类有固定长相的字段）。
+
+    形态命中只当候选，仍要走枚举完整等值校验；命中不了不代表没有筛选意图，
+    因此不能据此放行——高基数字段的裸值兜底属已知残留，见 SKILL.md 降级章节。
+    """
+    match = re.search(pattern, unicodedata.normalize("NFKC", query))
+    return match.group(0).strip() if match else ""
+
+
+def _spec_extract(spec: dict, query: str, *, labeled_only: bool = False, consumed=()) -> str:
+    """按 spec 配置抽取该字段的筛选值：自定义抽取器 > 标签形态 > 编码形态。
+
+    labeled_only=True 时只认用户显式点名的形态。解析分两趟正是为此：
+    第一趟先把「渠道SKU是X」这类显式意图落实并登记 X 已被消费，第二趟才轮到
+    形态抽取与枚举反查。否则同一个值会被多个字段重复消费——实测
+    「渠道SKU是ON-OB-JL-007-68157」会被产品型号的形态正则再抢一次并误报澄清，
+    「品牌是OHWILL」会被渠道反查匹配到 ohwill-shopify-美国而多加一条渠道筛选。
+    """
+    custom = spec.get("extract")
+    if custom is not None:
+        return custom(query)
+    value = _extract_labeled_value(query, spec.get("label_terms") or ())
+    if value:
+        return value
+    if labeled_only:
+        return ""
+    pattern = spec.get("value_pattern")
+    if not pattern:
+        return ""
+    candidate = _extract_patterned_value(query, pattern)
+    normalized = _normalize_component_value(candidate)
+    # 已消费值的子串也要跳过：SPU 的形态会从渠道SKU「ON-OB-JL-007-68157」里
+    # 抠出「JL-007」，若不拦就会对同一个值二次澄清并撤掉已生成的模板
+    if normalized and any(
+        normalized == used or normalized in used for used in consumed
+    ):
+        return ""
+    return candidate
+
+
+def _value_already_consumed(normalized_value: str, consumed) -> bool:
+    """判断某个枚举值是否已被其他字段消费（整值相同或是已消费值的一部分）。"""
+    if not normalized_value:
+        return True
+    base = normalized_value.split("-")[0]
+    return any(
+        normalized_value == used or normalized_value in used or base == used
+        for used in consumed
+    )
 
 
 def _reverse_lookup_component_values(query: str, values: list, normalize) -> list:
@@ -2028,15 +2097,20 @@ def _reverse_lookup_component_values(query: str, values: list, normalize) -> lis
     出现即算候选，"傲彼瑞" 因此能同时命中「傲彼瑞-美国」「傲彼瑞-加拿大」并转澄清。
     """
     normalized_query = normalize(query)
-    hits = []
+    exact_hits, base_hits = [], []
     for value in values:
         norm = normalize(value)
         if not norm:
             continue
+        if norm in normalized_query:
+            exact_hits.append(value)
+            continue
         base = norm.split("-")[0]
-        if norm in normalized_query or (len(base) >= 2 and base in normalized_query):
-            hits.append(value)
-    return _deduplicate(hits)
+        if len(base) >= 2 and base in normalized_query:
+            base_hits.append(value)
+    # 整值命中优先：原文写了「傲彼瑞-加拿大」就该锁定它，而不是因为主段
+    # 「傲彼瑞」同时命中三个地区渠道而退化成澄清
+    return _deduplicate(exact_hits or base_hits)
 
 
 def _shared_prefix(values: list) -> str:
@@ -2050,8 +2124,73 @@ def _shared_prefix(values: list) -> str:
     return prefix.rstrip("-_ ") or str(values[0])
 
 
-# 走授权枚举的组件筛选字段。reverse_lookup=True 表示该字段还要用枚举原值反查原文，
-# 用于兜住不含字段名的裸值表达；ASIN 形态固定，不走枚举，单独由 _resolve_asin_filter 处理。
+
+def _auto_enum_component_field_group(
+    component_table_id: object, field_names: list, *, timeout_seconds: float = 7.0
+) -> dict:
+    """一次查询取组件表多个字段的授权枚举值，按列返回去重结果。
+
+    组件表返回的是各字段的组合行，行数受 limit 限制；低基数字段（渠道 9、
+    国家 2、销售 12 之类）在 500 行内可完整覆盖，这也是只给低基数字段开
+    反查的原因。任何异常都返回空字典，由上层按 fail-closed 阻断。
+    """
+    if component_table_id in (None, "") or not field_names:
+        return {}
+    enum_json = json.dumps(
+        {
+            "tableId": component_table_id,
+            "dimensions": [{"field": name, "alias": name} for name in field_names],
+            "metrics": [],
+            "limit": 500,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    try:
+        result = subprocess.run(
+            ["opscli", "query", "simple", "--table-id", str(component_table_id),
+             "--json", enum_json, "--run"],
+            capture_output=True,
+            check=False,
+            timeout=timeout_seconds,
+            **core.utf8_subprocess_kwargs(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"[query_plan] 组件批量枚举未完成：{error}", file=sys.stderr)
+        return {}
+    if result.returncode != 0:
+        return {}
+    try:
+        payload = json.loads(result.stdout[result.stdout.index("{"):])
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    rows: list = []
+    for path in (("data", "result", "data"), ("result", "data"), ("data", "data")):
+        node = payload
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, list) and node:
+            rows = node
+            break
+    return {
+        name: _deduplicate(
+            str(row.get(name, "")).strip()
+            for row in rows
+            if isinstance(row, dict) and str(row.get(name, "")).strip()
+        )
+        for name in field_names
+    }
+
+
+# 组件筛选字段总表（值类字段，date_id 归时间口径、platform_name 归平台范围逻辑）。
+#
+# 三个开关的取舍依据是实测基数与裸值出现概率：
+# - label_terms：标签形态抽取用的说法集合，命中标签才发起枚举，零额外网络成本。
+# - reverse_lookup：拿授权枚举原值反查原文，用于兜住不带字段名的裸值
+#   （「查傲彼瑞的ASIN」「查史子涵的销量」）。只给低基数字段开——实测渠道 9、
+#   国家 2、品牌 3、销售 12，枚举一次就能覆盖全集；SKU/产品名这类几百上千的
+#   字段开反查既慢又不可能枚举完整，改用形态抽取。
+# - value_pattern：编码型字段的裸值形态，抽到候选后仍要枚举校验权限。
 _ENUM_COMPONENT_SPECS = (
     {
         "field_name": "dept_name",
@@ -2063,9 +2202,102 @@ _ENUM_COMPONENT_SPECS = (
     {
         "field_name": "channel_name",
         "label_zh": "渠道",
-        "extract": _extract_requested_channel_value,
-        "normalize": _normalize_component_value,
+        "label_terms": ("渠道", "channel", "channel_name"),
         "reverse_lookup": True,
+    },
+    {
+        "field_name": "country_name",
+        "label_zh": "国家",
+        "label_terms": ("国家", "站点", "country", "country_name"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "brand_name",
+        "label_zh": "品牌",
+        "label_terms": ("品牌", "brand", "brand_name"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "team_username",
+        "label_zh": "销售",
+        "label_terms": ("销售员", "销售负责人", "销售", "team_username"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "develop_username",
+        "label_zh": "开发",
+        "label_terms": ("开发员", "开发负责人", "开发", "develop_username"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "team_name",
+        "label_zh": "销售小组",
+        "label_terms": ("销售小组", "小组", "team_name"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "large_team_name",
+        "label_zh": "大组",
+        "label_terms": ("大组", "large_team_name"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "category",
+        "label_zh": "品类",
+        "label_terms": ("品类", "category"),
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "amazon_cat",
+        "label_zh": "平台类目",
+        "label_terms": ("平台类目", "类目", "amazon_cat"),
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "sell_sku",
+        "label_zh": "渠道SKU",
+        "label_terms": ("渠道sku", "卖家sku", "sell_sku", "sellsku"),
+        # 形如 ON-OB-JL-007-68157：字母数字段以连字符相连，至少三段
+        "value_pattern": r"[A-Za-z0-9]{2,}(?:-[A-Za-z0-9]{2,}){2,}",
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "ed_sku",
+        "label_zh": "公司SKU",
+        "label_terms": ("公司sku", "ed_sku", "edsku"),
+        # 形如 USAN1051789WF：纯字母数字混合且长度较长
+        "value_pattern": r"[A-Z]{2,}[0-9]{4,}[A-Z0-9]*",
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "model",
+        "label_zh": "产品型号",
+        "label_terms": ("产品型号", "型号", "model"),
+        # 形如 COT-135-WA
+        "value_pattern": r"[A-Za-z]{2,}-[A-Za-z0-9]{2,}(?:-[A-Za-z0-9]{1,})*",
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "pmc_code",
+        "label_zh": "物控编码",
+        "label_terms": ("物控编码", "物控码", "pmc_code", "pmc"),
+        # 形如 32.002946
+        "value_pattern": r"[0-9]{2,}\.[0-9]{4,}",
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "spu",
+        "label_zh": "SPU",
+        "label_terms": ("spu",),
+        # 形如 BKC-107
+        "value_pattern": r"[A-Z]{2,}-[0-9]{2,}",
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "product_name",
+        "label_zh": "产品名称",
+        "label_terms": ("产品名称", "商品名称", "product_name"),
+        "reverse_lookup": False,
     },
 )
 
@@ -2188,7 +2420,15 @@ def _write_component_filter(
 
 
 def _resolve_enum_component_filter(
-    contract: dict, query: str, spec: dict, *, auto_enum: bool, data_dir
+    contract: dict,
+    query: str,
+    spec: dict,
+    *,
+    auto_enum: bool,
+    data_dir,
+    enum_cache: dict,
+    labeled_only: bool = False,
+    consumed: set | None = None,
 ) -> dict:
     """把用户原文里的组件筛选值在当前账号授权枚举中唯一等值解析并写入模板。
 
@@ -2204,14 +2444,24 @@ def _resolve_enum_component_filter(
     execution = contract.get("execution_ref")
     if not isinstance(execution, dict):
         return contract
+    consumed = consumed if consumed is not None else set()
     field_name = spec["field_name"]
     label_zh = spec["label_zh"]
     component = _lookup_component(execution, field_name, data_dir)
     if not component:
         return contract
 
-    requested = spec["extract"](query)
-    # 只认标签形态的字段（如部门）原文没提就没有筛选意图，不必付出一次枚举调用
+    # 该字段本趟之前已解析过就不再重复（两趟循环会把同一 spec 走两遍）
+    if any(
+        isinstance(item, dict) and item.get("field_name") == field_name
+        for item in execution.get("resolved_component_filters") or []
+    ):
+        return contract
+    requested = _spec_extract(spec, query, labeled_only=labeled_only, consumed=consumed)
+    # 第一趟只落实用户显式点名的字段，反查与形态抽取留到第二趟
+    if labeled_only and not requested:
+        return contract
+    # 只认标签形态的字段原文没提就没有筛选意图，不必付出一次枚举调用
     if not requested and not spec.get("reverse_lookup"):
         return contract
     # 未开启自动枚举时无从校验：抽到了值才阻断，否则保持原状供维护者排查
@@ -2229,9 +2479,14 @@ def _resolve_enum_component_filter(
             )
         return contract
 
-    values = _auto_enum_component_values(
-        component.get("component_table_id"), field_name
+    enum_errors: list = []
+    values = _cached_enum_values(
+        enum_cache, component.get("component_table_id"), field_name, enum_errors
     )
+    if not values and not requested and not enum_errors:
+        # 枚举成功但当前账号无授权值：该字段不可能成为筛选条件，跳过即可。
+        # 「开发」在部分账号下就是 0 条，若按失败阻断会把所有查询挡死。
+        return contract
     if not values:
         # 枚举失败时无法判断原文里有没有筛选值，一律不放行（宁可错杀）
         return _block_component_filter(
@@ -2246,13 +2501,22 @@ def _resolve_enum_component_filter(
             ),
         )
 
-    normalize = spec["normalize"]
+    # 未单独声明归一化的字段走通用规则（NFKC + trim + casefold）；
+    # 部门有中文数字等价这类特殊口径，才单独挂自己的归一化器
+    normalize = spec.get("normalize") or _normalize_component_value
     if requested:
         target = normalize(requested)
         matched = [value for value in values if normalize(value) == target]
     else:
         # 裸值反查：授权原值本身或其主段（连字符前）出现在原文即算候选
-        matched = _reverse_lookup_component_values(query, values, normalize)
+        matched = [
+            value
+            for value in _reverse_lookup_component_values(query, values, normalize)
+            # 已被其他字段消费掉的值（含其子串）不再算命中：
+            # 「品牌是OHWILL」不该连带匹配渠道 ohwill-shopify-美国；
+            # 渠道锁定「傲彼瑞-加拿大」后，其中的「加拿大」也不该再被国家反查抓走
+            if not _value_already_consumed(normalize(value), consumed)
+        ]
         if not matched:
             return contract
         requested = matched[0] if len(matched) == 1 else _shared_prefix(matched)
@@ -2285,7 +2549,56 @@ def _resolve_enum_component_filter(
         requested=requested,
         resolved=matched[0],
     )
+    consumed.add(_normalize_component_value(requested))
+    consumed.add(_normalize_component_value(matched[0]))
     return contract
+
+
+def _cached_enum_values(
+    cache: dict, table_id: object, field_name: str, errors: list | None = None
+) -> list:
+    """带缓存的组件枚举：同一次规划里同一 (表, 字段) 只查一次。
+
+    缓存同时记住「本次枚举是否报错」，供调用方区分调用失败与无授权值。
+    """
+    key = (str(table_id), field_name)
+    if key not in cache:
+        local_errors: list = []
+        cache[key] = _auto_enum_component_values(table_id, field_name, errors=local_errors)
+        cache[("error", *key)] = local_errors
+    if errors is not None:
+        errors.extend(cache.get(("error", *key)) or [])
+    return cache[key]
+
+
+def _batch_enum_reverse_lookup_fields(
+    contract: dict, data_dir, enum_cache: dict
+) -> None:
+    """把需要裸值反查的字段按组件表合并成一次查询，避免逐字段各发一次网络请求。
+
+    实测 17 个值类字段只落在 6 张组件表上（渠道/国家/平台同表，销售/小组/大组同表），
+    合并后反查成本从「字段数」降到「表数」。组件表一次返回的是各字段的组合行，
+    按列取去重值即可。
+    """
+    execution = contract.get("execution_ref")
+    if not isinstance(execution, dict):
+        return
+    by_table: dict[str, list[str]] = {}
+    for spec in _ENUM_COMPONENT_SPECS:
+        if not spec.get("reverse_lookup"):
+            continue
+        component = _lookup_component(execution, spec["field_name"], data_dir)
+        if not component:
+            continue
+        table_id = str(component.get("component_table_id") or "")
+        if table_id:
+            by_table.setdefault(table_id, []).append(spec["field_name"])
+    for table_id, fields in by_table.items():
+        if all((table_id, field) in enum_cache for field in fields):
+            continue
+        grouped = _auto_enum_component_field_group(table_id, fields)
+        for field in fields:
+            enum_cache.setdefault((table_id, field), grouped.get(field, []))
 
 
 def _resolve_asin_filter(contract: dict, query: str, data_dir) -> dict:
@@ -2389,12 +2702,25 @@ def _resolve_component_filters(
     if contract.get("status") != "planned":
         return contract
     contract = _resolve_asin_filter(contract, query, data_dir)
-    for spec in _ENUM_COMPONENT_SPECS:
-        if contract.get("status") != "planned":
-            break
-        contract = _resolve_enum_component_filter(
-            contract, query, spec, auto_enum=auto_enum, data_dir=data_dir
-        )
+    enum_cache: dict = {}
+    consumed: set = set()
+    if auto_enum and contract.get("status") == "planned":
+        _batch_enum_reverse_lookup_fields(contract, data_dir, enum_cache)
+    # 两趟：先落实用户显式点名的字段并登记已消费的值，再做形态抽取与枚举反查
+    for labeled_only in (True, False):
+        for spec in _ENUM_COMPONENT_SPECS:
+            if contract.get("status") != "planned":
+                break
+            contract = _resolve_enum_component_filter(
+                contract,
+                query,
+                spec,
+                auto_enum=auto_enum,
+                data_dir=data_dir,
+                enum_cache=enum_cache,
+                labeled_only=labeled_only,
+                consumed=consumed,
+            )
     return contract
 
 
