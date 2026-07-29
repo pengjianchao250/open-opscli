@@ -1823,6 +1823,7 @@ def build_model_query_plan(
     contract = _resolve_component_filters(
         contract, query, auto_enum=auto_enum, data_dir=data_dir
     )
+    contract = _attach_fallback_guidance(contract)
     # planned 合同生成后立即封存，执行器据此拒绝规划与执行之间的手工改写。
     if contract.get("status") == "planned" and contract.get("query_mode") == "dataset_query":
         plan_integrity.attach(contract)
@@ -1975,8 +1976,36 @@ _CHANNEL_LABEL_RE = re.compile(
     r"([\u4e00-\u9fffA-Za-z0-9_\-]{2,30}?)"
     r"(?=的|地|，|,|。|；|;|、|\s|和|与|下|里|中|所有|全部|$)"
 )
-# ASIN 字面形态固定：B0 + 8 位大写字母数字
-_ASIN_VALUE_RE = re.compile(r"B0[A-Z0-9]{8}")
+# ASIN/商品ID 字面形态：宽松切词后再逐个判形，不能写死单一形态。
+# 实测该列并非只存标准 Amazon ASIN：TEMU 渠道存的是 10~11 位纯数字商品 ID，
+# 另见 14 位纯数字；图书 ASIN 则是 ISBN-10。写死 B0+8 位会漏掉这些值，
+# 而漏掉的后果与不解析筛选值一样——静默返回全范围数据。
+# 长度下限取 9，避开年份、数量、limit 这类普通数字。
+_ASIN_TOKEN_RE = re.compile(r"(?<![0-9A-Za-z])[0-9A-Za-z]{9,20}(?![0-9A-Za-z])")
+
+
+def _is_asin_like(token: str) -> bool:
+    """判断切出的 token 是否为商品 ID 形态。"""
+    value = token.upper()
+    if re.fullmatch(r"B[0-9A-Z]{9}", value):  # 标准 Amazon ASIN：B + 9 位
+        return True
+    if value.isdigit():  # 各平台数字商品 ID（TEMU 实测 10/11/14 位）
+        return True
+    # 10 位字母数字混合（须同时含字母与数字，避免吃掉纯英文单词）
+    return (
+        len(value) == 10
+        and value.isalnum()
+        and any(char.isdigit() for char in value)
+        and any(char.isalpha() for char in value)
+    )
+
+
+def _extract_asin_values(query: str) -> list:
+    """从原文提取商品 ID 字面值，统一转大写（授权原值恒为大写）。"""
+    normalized = unicodedata.normalize("NFKC", query)
+    return _deduplicate(
+        token.upper() for token in _ASIN_TOKEN_RE.findall(normalized) if _is_asin_like(token)
+    )
 
 
 def _normalize_component_value(value: str) -> str:
@@ -2122,6 +2151,8 @@ def _block_component_filter(
     contract["model_view"]["next_action"] = next_action
     contract["model_view"].setdefault("clarification_messages_zh", []).append(message_zh)
     execution.pop("query_template", None)
+    # 模板已撤下，填充说明再留着会让 Agent 去找一个不存在的模板
+    execution.pop("query_template_fill_rules_zh", None)
     return contract
 
 
@@ -2258,13 +2289,18 @@ def _resolve_enum_component_filter(
 
 
 def _resolve_asin_filter(contract: dict, query: str, data_dir) -> dict:
-    """ASIN 形态固定（B0+8 位），直接从原文锁定，无需枚举。"""
+    """商品 ID 直接从原文字面锁定，不走枚举。
+
+    为什么不枚举：ASIN/商品 ID 基数几万起，500 条枚举覆盖不了，也太慢。
+    代价是只能靠形态识别，认错时查询返回 0 行（响亮失败），
+    比认不出而静默返回全范围数据安全。
+    """
     execution = contract.get("execution_ref")
     if not isinstance(execution, dict):
         return contract
     if not _dataset_has_field(execution, "asin", data_dir):
         return contract
-    asins = _deduplicate(_ASIN_VALUE_RE.findall(unicodedata.normalize("NFKC", query)))
+    asins = _extract_asin_values(query)
     if not asins:
         return contract
     template = execution.get("query_template")
@@ -2286,7 +2322,58 @@ def _resolve_asin_filter(contract: dict, query: str, data_dir) -> dict:
         }
     )
     contract["model_view"].setdefault("component_filter_disclosures_zh", []).append(
-        f"ASIN 按原文字面锁定为 {'、'.join(asins)}。"
+        f"商品 ID 按原文字面锁定为 {'、'.join(asins)}。"
+    )
+    return contract
+
+
+def _attach_fallback_guidance(contract: dict) -> dict:
+    """非 planned 合同补降级信息：权威字段目录 + 禁止猜测声明。
+
+    为什么需要：规划器没产出可执行模板时，Agent 手上若没有权威的表名与字段名，
+    就会凭记忆或推测构造查询（线上实测形态：转投其他 Skill、或直接改用 MCP 重来，
+    过程中自行编造数据集与字段）。这里把「唯一可用的字段来源」显式交给它。
+
+    只补信息、不改状态：澄清与阻断的判定仍由各自的规则负责。
+    """
+    if contract.get("status") == "planned":
+        return contract
+    if contract.get("query_mode") != "dataset_query":
+        return contract
+    execution = contract.get("execution_ref")
+    model_view = contract.get("model_view")
+    if not isinstance(execution, dict) or not isinstance(model_view, dict):
+        return contract
+
+    def _names(items) -> list:
+        return [
+            {
+                "field_name": str(item.get("field_name", "")),
+                "label_zh": str(item.get("label_zh", "")),
+            }
+            for item in items or []
+            if isinstance(item, dict) and item.get("field_name")
+        ]
+
+    dimensions = _names(execution.get("dimensions"))
+    metrics = _names(execution.get("metrics"))
+    date_fields = _names(execution.get("date_fields"))
+    has_catalog = bool(dimensions or metrics)
+    catalog = {
+        "source": "planner_contract" if has_catalog else "unavailable",
+        "metadata_version": str(contract.get("metadata_version", "")),
+        "table_id": execution.get("table_id"),
+        "dataset_alias": execution.get("dataset_alias"),
+        "dimensions": dimensions,
+        "metrics": metrics,
+        "date_fields": date_fields,
+    }
+    execution["fallback_catalog"] = catalog
+    model_view["fallback_level"] = "L1_contract_catalog" if has_catalog else "L3_metadata_refresh"
+    model_view["no_guess_policy_zh"] = (
+        "本次未下发可执行模板。若要继续取数，只能使用 execution_ref.fallback_catalog 中"
+        "出现的 table_id、dataset_alias 与 field_name；禁止凭记忆或推测编造数据集名、"
+        "字段名与枚举值。目录为空时不得构造任何查询，先按 next_action 恢复元数据。"
     )
     return contract
 

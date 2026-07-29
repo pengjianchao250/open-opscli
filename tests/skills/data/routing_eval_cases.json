@@ -1,0 +1,152 @@
+{
+  "migrated_from": "ops-dataset-query v1.0.2 routing_eval_cases.yml",
+  "cases": [
+    {
+      "id": "case_001",
+      "user_query": "看一下近30天整体经营情况，销售广告库存流量一起看",
+      "expected_dataset": "即时综合数据集",
+      "expected_execution_dataset": "即时综合数据集",
+      "note": ""
+    },
+    {
+      "id": "case_002",
+      "user_query": "今天销售怎么样，有没有异常波动",
+      "expected_dataset": "即时销售数据集",
+      "expected_execution_dataset": "即时综合数据集",
+      "note": "即时销售按订单下单时间，实际使用 order_sale_trend_set 口径"
+    },
+    {
+      "id": "case_003",
+      "user_query": "做一下上季度销售复盘",
+      "expected_dataset": "账单销售数据集",
+      "expected_execution_dataset": "账单销售数据集",
+      "note": "账单销售按包裹发货时间，实际使用 sale_trend_set"
+    },
+    {
+      "id": "case_004",
+      "user_query": "看一下各平台广告整体投入和ACOS",
+      "expected_dataset": "广告费数据集",
+      "expected_execution_dataset": "广告费数据集",
+      "note": ""
+    },
+    {
+      "id": "case_005",
+      "user_query": "亚马逊平台SP、SD、SB、SBV各广告类型投入占比是否合理",
+      "expected_dataset": "广告类型费数据集",
+      "expected_execution_dataset": "广告类型费数据集",
+      "note": ""
+    },
+    {
+      "id": "case_006",
+      "user_query": "SP广告活动和广告组的ACOS排行",
+      "expected_dataset": "SP广告数据集",
+      "expected_execution_dataset": "SP广告数据集",
+      "note": ""
+    },
+    {
+      "id": "case_007",
+      "user_query": "SP关键词表现怎么样",
+      "expected_dataset": "SP广告数据集",
+      "expected_execution_dataset": "SP广告数据集",
+      "note": "SP广告数据集不包含搜索词、关键词、投放词"
+    },
+    {
+      "id": "case_008",
+      "user_query": "SD广告可见展示和新买家销售额",
+      "expected_dataset": "SD广告数据集",
+      "expected_execution_dataset": "SD广告数据集",
+      "note": ""
+    },
+    {
+      "id": "case_009",
+      "user_query": "SB品牌广告效果",
+      "expected_dataset": "SB广告数据集",
+      "expected_execution_dataset": "SB广告数据集",
+      "note": ""
+    },
+    {
+      "id": "case_010",
+      "user_query": "SBV视频广告明细",
+      "expected_dataset": "广告类型费数据集",
+      "expected_execution_dataset": "广告类型费数据集",
+      "note": "SB广告数据集不包含SBV明细，只能做汇总分析"
+    },
+    {
+      "id": "case_011",
+      "user_query": "SP+SD组合投放效果",
+      "expected_dataset": "SP+SD广告数据集",
+      "expected_execution_dataset": "SP+SD广告数据集",
+      "note": ""
+    },
+    {
+      "id": "case_012",
+      "user_query": "亚马逊SP+SD+SB全广告类型效果",
+      "expected_dataset": "SP+SD+SB广告数据集",
+      "expected_execution_dataset": "SP+SD+SB广告数据集",
+      "note": ""
+    },
+    {
+      "id": "case_013",
+      "user_query": "沃尔玛平台广告活动明细",
+      "expected_dataset": "广告费数据集",
+      "expected_execution_dataset": "广告费数据集",
+      "note": "非亚马逊平台广告明细只能使用广告费数据集，若不支持活动粒度需说明限制"
+    },
+    {
+      "id": "case_014",
+      "user_query": "ASIN流量和转化率",
+      "expected_dataset": "流量转化率数据集",
+      "expected_execution_dataset": "流量转化率数据集",
+      "note": ""
+    },
+    {
+      "id": "case_015",
+      "user_query": "销售主口径下的转化率",
+      "expected_dataset": "即时综合数据集",
+      "expected_execution_dataset": "即时综合数据集",
+      "note": "即时综合转化率订单销量来自即时销量趋势，不来自流量转化率销量字段"
+    },
+    {
+      "id": "case_016",
+      "user_query": "亚马逊目录绩效点击率",
+      "expected_dataset": "亚马逊目录绩效",
+      "expected_execution_dataset": "亚马逊目录绩效",
+      "note": "必须选择报告周期"
+    },
+    {
+      "id": "case_017",
+      "user_query": "搜索词点击份额和购买份额",
+      "expected_dataset": "亚马逊搜索词绩效",
+      "expected_execution_dataset": "亚马逊搜索词绩效",
+      "note": "必须选择报告周期"
+    },
+    {
+      "id": "case_018",
+      "user_query": "物控库龄超180天库存金额",
+      "expected_dataset": "物控版库存周转",
+      "expected_execution_dataset": "物控版库存周转",
+      "note": ""
+    },
+    {
+      "id": "case_019",
+      "user_query": "近30天每天物控库存周转趋势",
+      "expected_dataset": "物控版库存周转",
+      "expected_execution_dataset": "物控版库存周转",
+      "note": "日期区间查询必须包含日期天字段"
+    },
+    {
+      "id": "case_020",
+      "user_query": "Deal和Coupons活动售出量",
+      "expected_dataset": "活动数据集",
+      "expected_execution_dataset": "活动数据集",
+      "note": ""
+    },
+    {
+      "id": "case_021",
+      "user_query": "活动带来的销售增量",
+      "expected_dataset": "活动数据集",
+      "expected_execution_dataset": "活动数据集",
+      "note": "活动数据集不能直接代表销售增量，需要联动销售数据"
+    }
+  ]
+}

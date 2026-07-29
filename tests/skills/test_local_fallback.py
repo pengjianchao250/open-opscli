@@ -1,0 +1,255 @@
+"""规划器降级路径回归测试。
+
+守住的核心行为：规划器失败时 Agent 仍有一条**只用本地权威数据**的路可走，
+且这条路在任何不确定的地方都停下来问，而不是替用户做主。
+
+路由用例迁移自旧版 ops-dataset-query v1.0.2 的 routing_eval_cases.yml，
+是目前唯一能量化路由质量的资产。
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+SKILL_ROOT = (
+    Path(__file__).parents[2]
+    / "opscli"
+    / "skills"
+    / "templates"
+    / "ops-dataset-query"
+)
+SCRIPTS_DIR = SKILL_ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+import local_fallback  # noqa: E402
+
+EVAL_CASES = json.loads(
+    (Path(__file__).parent / "data" / "routing_eval_cases.json").read_text(encoding="utf-8")
+)["cases"]
+
+# 旧版 route_intent.py 本身也路由不中的用例（已逐条跑过旧实现对照，结论一致）。
+# 迁移时保留为 xfail 而不是删除：这是意图触发词覆盖不足的真实缺口，
+# 删了就再也没人知道差在哪；本次移植的目标是「行为等价」，不是顺手改口径。
+KNOWN_ROUTING_GAPS = {
+    "case_002": "「今天销售」未进即时销售触发词，新旧版都路由到即时综合数据集",
+    "case_004": "「各平台广告整体投入」被即时综合的 user_intent 加权压过广告费数据集",
+    "case_007": "「SP关键词表现」无任何触发词命中，新旧版都产不出候选",
+    "case_013": "「沃尔玛平台广告活动明细」被活动数据集的「活动」触发词抢走",
+    "case_015": "「销售主口径下的转化率」被流量转化率数据集抢走",
+}
+
+PROFILES = json.loads(
+    (SKILL_ROOT / "data" / "dataset_profiles.json").read_text(encoding="utf-8")
+)
+
+
+def _write_ready_data_dir(data_dir: Path) -> None:
+    """写一套 ready 的最小本地索引，附带真实画像文件。"""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v9.9.9", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "1,ds_instant,order_sale_trend_adv_traffic_inv_set,normal,0,即时综合数据集,\n"
+        "12,ds_ads_fee,ads_fee_set,normal,0,广告费数据集,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "1,ds_instant,即时综合数据集,channel_name,渠道,f_channel,dimension,,,,,0,0\n"
+        "1,ds_instant,即时综合数据集,asin,ASIN,f_asin,dimension,,,,,0,0\n"
+        "1,ds_instant,即时综合数据集,sales,销售额,f_sales,metric,,,,,0,0\n"
+        "12,ds_ads_fee,广告费数据集,acos,ACOS,f_acos,metric,cost/sales,,,,0,1\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n"
+        "ds_instant,channel_name,渠道,ds_channel\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_profiles.json").write_text(
+        json.dumps(PROFILES, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 意图路由质量（迁移自旧版 eval 用例）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            case,
+            marks=pytest.mark.xfail(
+                reason=KNOWN_ROUTING_GAPS[case["id"]], strict=True
+            ),
+        )
+        if case["id"] in KNOWN_ROUTING_GAPS
+        else case
+        for case in EVAL_CASES
+    ],
+    ids=[case["id"] for case in EVAL_CASES],
+)
+def test_intent_routing_hits_expected_dataset(case: dict, tmp_path: Path):
+    """每条历史用例都应把期望数据集路由进候选，且排在首位。
+
+    只断言「命中且居首」，不断言唯一——降级路径本就允许多候选后交用户选择。
+    """
+    data_dir = tmp_path / "data"
+    _write_ready_data_dir(data_dir)
+
+    result = local_fallback.build_fallback(case["user_query"], data_dir=data_dir)
+    names = [item.get("name_zh") for item in result.get("dataset_candidates") or []]
+    assert names, f"{case['id']} 未产出任何候选：{case['user_query']}"
+    assert names[0] == case["expected_dataset"], (
+        f"{case['id']} 首选数据集不符：期望 {case['expected_dataset']}，实际 {names}"
+    )
+
+
+def test_embedded_intent_maps_to_execution_dataset(tmp_path: Path):
+    """embedded_intent 必须落到承接它的父数据集，并保留原意图名供披露口径差异。"""
+    data_dir = tmp_path / "data"
+    _write_ready_data_dir(data_dir)
+
+    result = local_fallback.build_fallback("即时销售今天怎么样", data_dir=data_dir)
+    top = (result.get("dataset_candidates") or [{}])[0]
+    assert top.get("name_zh") == "即时销售数据集"
+    assert top.get("execution_dataset") == "即时综合数据集"
+    assert top.get("routing_status") == "embedded_intent"
+
+
+# ---------------------------------------------------------------------------
+# 降级链路：不许猜
+# ---------------------------------------------------------------------------
+
+
+def test_placeholder_data_blocks_instead_of_guessing(tmp_path: Path):
+    """本地索引是空模板时必须阻断——此时任何数据集名字段名都只能是猜的。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v0", "data_state": "placeholder"}),
+        encoding="utf-8",
+    )
+
+    result = local_fallback.build_fallback("查渠道和ASIN", data_dir=data_dir)
+    assert result["status"] == "blocked"
+    assert result["fallback_level"] == "L3_metadata_refresh"
+    assert "opscli skills upgrade" in result["recovery_command"]
+    assert "dataset_candidates" not in result
+
+
+def test_missing_data_dir_blocks(tmp_path: Path):
+    """数据目录不存在同样阻断，不得回退到凭空构造。"""
+    result = local_fallback.build_fallback("查渠道", data_dir=tmp_path / "nope")
+    assert result["status"] == "blocked"
+    assert result["fallback_level"] == "L3_metadata_refresh"
+
+
+def test_ambiguous_candidates_require_clarification(tmp_path: Path):
+    """候选不唯一时必须转澄清，不允许默默取第一个。"""
+    data_dir = tmp_path / "data"
+    _write_ready_data_dir(data_dir)
+
+    result = local_fallback.build_fallback(
+        "看一下整体经营情况和各平台广告投入ACOS", data_dir=data_dir
+    )
+    assert len(result["dataset_candidates"]) > 1
+    assert result["status"] == "clarify_required"
+    assert result["selected_dataset_alias"] is None
+    assert "AskUserQuestion" in result["next_action_zh"]
+
+
+def test_explicit_dataset_is_confirmed_from_csv(tmp_path: Path):
+    """用户点名数据集时按 CSV 权威记录确认，字段范围收敛到该表。"""
+    data_dir = tmp_path / "data"
+    _write_ready_data_dir(data_dir)
+
+    result = local_fallback.build_fallback(
+        "查渠道和ASIN",
+        requested_fields=["渠道", "ASIN"],
+        dataset_alias="ds_instant",
+        data_dir=data_dir,
+    )
+    assert result["status"] == "ready"
+    assert result["dataset_candidates"][0]["source"] == "user_specified"
+    assert {item["field_name"] for item in result["field_candidates"]} == {
+        "channel_name",
+        "asin",
+    }
+
+
+def test_unknown_requested_field_does_not_get_invented(tmp_path: Path):
+    """点名字段在本地不存在时返回空候选并转澄清，绝不编一个字段名出来。"""
+    data_dir = tmp_path / "data"
+    _write_ready_data_dir(data_dir)
+
+    result = local_fallback.build_fallback(
+        "查一下并不存在的字段",
+        requested_fields=["根本不存在的字段"],
+        dataset_alias="ds_instant",
+        data_dir=data_dir,
+    )
+    assert result["field_candidates"] == []
+    assert result["status"] == "clarify_required"
+
+
+def test_result_carries_no_guess_and_filter_value_policy(tmp_path: Path):
+    """降级结果必须随身带「不许猜」与「筛选值须枚举校验」两条硬规则。"""
+    data_dir = tmp_path / "data"
+    _write_ready_data_dir(data_dir)
+
+    result = local_fallback.build_fallback(
+        "查渠道和ASIN", dataset_alias="ds_instant", data_dir=data_dir
+    )
+    assert "禁止凭记忆或推测" in result["no_guess_policy_zh"]
+    assert "枚举" in result["filter_value_policy_zh"]
+    # 查询组件必须随附，否则 Agent 不知道哪些筛选值需要权限校验
+    assert [item["field_name"] for item in result["filter_components"]] == ["channel_name"]
+
+
+def test_hard_constraints_ride_along_with_candidates(tmp_path: Path):
+    """数据集业务约束必须跟着候选一起交出去，降级路径才不会重蹈旧版覆辙。"""
+    data_dir = tmp_path / "data"
+    _write_ready_data_dir(data_dir)
+
+    result = local_fallback.build_fallback(
+        "看一下近30天整体经营情况，销售广告库存流量一起看", data_dir=data_dir
+    )
+    top = result["dataset_candidates"][0]
+    assert top["hard_constraints"], "即时综合数据集的硬约束丢失"
+    assert any("库存快照" in item for item in top["hard_constraints"])
+
+
+def test_emit_plan_produces_executor_consumable_plan(tmp_path: Path):
+    """降级 plan 必须能被 run_query.py 消费，从而保留字段校验闸。"""
+    data_dir = tmp_path / "data"
+    _write_ready_data_dir(data_dir)
+    plan_path = tmp_path / "plan.json"
+
+    result = local_fallback.build_fallback(
+        "查渠道和ASIN",
+        requested_fields=["渠道", "ASIN"],
+        dataset_alias="ds_instant",
+        data_dir=data_dir,
+    )
+    local_fallback._emit_plan(result, plan_path)
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+
+    assert plan["status"] == "planned"
+    assert plan["plan_source"] == "local_fallback"
+    # 执行器要求 plan 带 query_template 才放行
+    template = plan["execution_ref"]["query_template"]
+    assert {item["field"] for item in template["dimensions"]} == {"channel_name", "asin"}
+    # 降级模板不预填任何筛选与时间条件，避免替用户做主
+    assert template["filters"] == []

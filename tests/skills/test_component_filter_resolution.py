@@ -164,6 +164,26 @@ def test_enum_failure_is_fail_closed(module, monkeypatch):
 
 
 @BOTH_VERSIONS
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        # 标准 Amazon ASIN：B + 9 位
+        ("查 B0FWR9Y2NV 的销量", ["B0FWR9Y2NV"]),
+        # TEMU 等平台的纯数字商品 ID（实测 10/11/14 位都存在于 asin 列）
+        ("查 61594716002 的销量", ["61594716002"]),
+        ("查 48657686364417 的销量", ["48657686364417"]),
+        # 多个值一并锁定，并统一大写
+        ("查 b0fwr9y2nv 和 61594716002", ["B0FWR9Y2NV", "61594716002"]),
+        # 年份、数量、limit 这类普通数字不得被误吃
+        ("近30天销量，2026 年，limit 1000", []),
+    ],
+)
+def test_asin_shapes_are_recognized(module, query: str, expected: list):
+    """商品 ID 形态不是固定的 B0+8 位，写死会漏值并退化成静默全量。"""
+    assert module._extract_asin_values(query) == expected
+
+
+@BOTH_VERSIONS
 def test_channel_label_does_not_swallow_trailing_words(module, monkeypatch):
     """标签抽取必须在助词处收住，不能把「傲彼瑞的所有ASIN」整段当成筛选值。"""
     assert module._extract_requested_channel_value("查渠道是傲彼瑞的所有ASIN") == "傲彼瑞"

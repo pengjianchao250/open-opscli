@@ -96,6 +96,34 @@ MCP-only（无本地 shell）、复杂审计或用户明确要求完整披露证
 
 仅发生意外 opscli/MCP 失败时读取 `references/feedback-guide.md` 并立即提交一次去重的结构化反馈；成功查询不自动提交反馈。
 
+## 规划器不可用时的降级路径
+
+规划器返回非 `planned`（`clarify_required` / `blocked`）时**不要自行编造数据集或字段**，按下面的层级走。合同里的 `model_view.fallback_level`、`model_view.no_guess_policy_zh` 与 `execution_ref.fallback_catalog` 会指明当前处在哪一层。
+
+| 层级 | 判断依据 | 动作 |
+| --- | --- | --- |
+| L1 | `execution_ref.fallback_catalog` 有 dimensions/metrics | 只用该目录里的 `table_id`、`dataset_alias`、`field_name` 构造查询；澄清点按 `clarification_messages_zh` 向用户提问 |
+| L2 | 目录为空或选表失败 | 跑 `python3 scripts/local_fallback.py "<用户原文>"` 拿本地候选，按其 `next_action_zh` 处置 |
+| L3 | `data_state` 为 `placeholder`/`empty`，或目录不存在 | 执行返回的 `recovery_command` 刷新元数据后重跑；**此前不得构造任何查询** |
+| L4 | 上述都失败 | 停止取数，如实告知用户，按 `references/feedback-guide.md` 提交一次反馈 |
+
+降级态下前述「禁止本地探索」的限制放宽为：**允许**读 `data/*.csv`、`data/dataset_profiles.json` 与运行 `scripts/local_fallback.py`；仍然**禁止** `rg`/`ls`/`find`、读脚本源码、生成临时查询脚本。降级路径额外预算 3 次工具调用。
+
+`local_fallback.py` 常用形态：
+
+```bash
+python3 scripts/local_fallback.py "<用户原文>"                                  # 出候选
+python3 scripts/local_fallback.py "<用户原文>" --field 渠道 --field ASIN         # 带点名字段
+python3 scripts/local_fallback.py "<用户原文>" --dataset <alias> --emit-plan /tmp/fb-plan.json
+```
+
+拿到候选后：
+
+1. `status=clarify_required` → 用 `AskUserQuestion` 让用户在候选里选，**不要默认取第一个**
+2. `status=ready` → 优先带 `--emit-plan` 产出 plan，再走 `python3 scripts/run_query.py --plan-file <plan> --json '<payload>'`。走执行器能保留字段校验闸：payload 里出现目录之外的字段会被直接拒绝。确有必要时才直连 `opscli query simple`，但那样就失去这道校验
+3. 候选里的 `hard_constraints` / `avoid_when` 必须遵守（如库存快照字段只能用于明细表），`clarify_when` 命中时先问用户
+4. `filter_components` 中字段的筛选值，必须先查 `component_dataset_alias` 组件表枚举当前账号授权原值，完整等值命中后才写入 `filters`；枚举不到就停止，**不得放大为全范围查询**
+
 ## 按需参考
 
 - `references/rules.md`：歧义和口径检查。

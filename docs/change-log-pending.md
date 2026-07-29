@@ -5218,3 +5218,18 @@
 **影响范围**：带组件筛选值的查询不再静默漏筛；代价是渠道字段每次规划多一次枚举查询（复用既有 `_auto_enum_component_values`，7s 超时）。渠道SKU（sell_sku）等其余组件字段仍未覆盖，属二期。
 **回滚方式**：`git revert` 本次提交；回滚后「仅维度不限时间」也会随之撤回到 b8aa59b 的保守状态。
 ---
+
+## 2026-07-29 skills/ops-dataset-query + query/planner - 规划器降级方案（移植旧版本地索引能力）
+
+**变更原因**：规划器返回非 planned 时，Agent 既无合法的本地退路（新版删除了旧版的 route_intent.py / search.py 与五个 YAML 索引），又被 SKILL.md 明令禁止本地探索，实测结果是现场编造数据集与字段（转投其他 Skill 或改用 MCP 重来）。同时发现 ASIN 形态识别写死为 B0+8 位是错的：实测该列还存 TEMU 的 10/11 位与 14 位纯数字商品 ID，写死会漏值并退化成静默全量。
+**改动点**：
+1. 两版 `query_plan.py`：ASIN 识别改为宽松切词 + 逐个判形（`B+9位` / 纯数字 9~20 位 / 10 位字母数字混合），新增 `_is_asin_like`、`_extract_asin_values`；新增 `_attach_fallback_guidance`，非 planned 合同补 `execution_ref.fallback_catalog`、`model_view.fallback_level`、`model_view.no_guess_policy_zh`；`_block_component_filter` 撤模板时一并撤 `query_template_fill_rules_zh`（模板已撤还留填充说明会诱导 Agent 去找不存在的模板）。
+2. 两版 `query_plan.schema.json`：登记上述三个新字段。
+3. 新增 `data/dataset_profiles.json`：从旧版 `dataset_profiles.yml` + `intent_taxonomy.yml` 迁出 16 个意图与 15 个数据集画像（table_id/alias/hard_constraints/avoid_when/clarify_when/默认维度指标），转 JSON 以免引入 pyyaml 依赖；`dataset_relationships.yml` 与 `field_semantic_index.yml` 不迁（已被规划器选表逻辑与 field_semantics.py 覆盖，迁了是双份维护）。
+4. 新增 `scripts/local_fallback.py`：纯标准库，合并旧版 route_intent + search 能力（意图路由 + 字段搜索 + 组件清单），逐条沿用旧版评分（触发词 +1.0、user_intent 词 +0.3、按 score/(触发词数*0.5) 归一化排序）；候选不唯一即转澄清；`data_state=placeholder` 或目录缺失即 blocked；`--emit-plan` 产出可被 `run_query.py --plan-file` 消费的最小 plan，从而保留 `_assert_fields` 字段校验闸。
+5. `SKILL.md` 新增「规划器不可用时的降级路径」章节：L1 合同目录 / L2 本地索引 / L3 元数据刷新 / L4 停止并反馈；降级态放宽本地探索限制（允许读 data/*.csv 与跑 local_fallback.py），额外预算 3 次工具调用。
+6. 测试：新增 `tests/skills/test_local_fallback.py`（25 passed + 5 xfail）与 `tests/skills/data/routing_eval_cases.json`（旧版 21 条路由用例迁移）；`test_component_filter_resolution.py` 补 ASIN 形态用例；删除 `tests/query/test_cli.py` 中测已删除 catalog/intent 命令的 2 个化石测试。
+**验证结果**：`pytest tests/skills/{test_local_fallback,test_component_filter_resolution,test_time_scope_unbounded,test_dataset_query_planner}.py tests/query tests/mcp/test_query_planner_tools.py` → 296 passed / 5 xfailed。路由质量已逐条与旧实现对照：21 条用例中新版通过 16 条，5 条未过的旧版同样未过（零回归，故标记 strict xfail 并记录成因）。降级 plan 真实执行验证：合法字段 payload 正常返回 125 行；编造字段被执行器拒绝（`payload.dimensions 含规划器未授权字段 ['made_up_field']`）。ASIN 形态实测：B0FWR9Y2NV / 61594716002 / 48657686364417 均识别，年份 2026 与 limit 1000 不误吃。已同步到 ~/.opscli、~/.codex、~/.claude、~/.openclaw。
+**影响范围**：规划器主路径行为不变（仅非 planned 时多补信息字段）；新增降级路径为可选，不改变既有调用方。
+**回滚方式**：`git revert` 本次提交；`local_fallback.py`、`dataset_profiles.json`、`routing_eval_cases.json` 为纯新增文件，删除即可。
+---

@@ -14,19 +14,32 @@
     "execution_ref"
   ],
   "properties": {
-    "contract": {"const": "query_plan_model_contract_v2"},
+    "contract": {
+      "const": "query_plan_model_contract_v2"
+    },
     "query_mode": {
       "description": "执行路由：普通数据集查询或显式图表 UUID 查询",
-      "enum": ["dataset_query", "chart_uuid"]
+      "enum": [
+        "dataset_query",
+        "chart_uuid"
+      ]
     },
-    "data_state": {"type": "string"},
+    "data_state": {
+      "type": "string"
+    },
     "metadata_source": {
       "description": "元数据来源形状：skill_local（updater 刷新，data_state=ready）/ published_bundle（技能广场发布包，无 data_state 字段）；blocked 时为空串",
       "type": "string"
     },
-    "metadata_version": {"type": "string"},
+    "metadata_version": {
+      "type": "string"
+    },
     "status": {
-      "enum": ["planned", "clarify_required", "blocked"]
+      "enum": [
+        "planned",
+        "clarify_required",
+        "blocked"
+      ]
     },
     "model_view": {
       "type": "object",
@@ -41,9 +54,15 @@
         "next_action"
       ],
       "properties": {
-        "dataset_name_zh": {"type": "string"},
-        "dimensions": {"$ref": "#/$defs/string_array"},
-        "metrics": {"$ref": "#/$defs/string_array"},
+        "dataset_name_zh": {
+          "type": "string"
+        },
+        "dimensions": {
+          "$ref": "#/$defs/string_array"
+        },
+        "metrics": {
+          "$ref": "#/$defs/string_array"
+        },
         "platform_semantic_members": {
           "description": "请求语义的中文标签（用户可见层只允许中文）",
           "$ref": "#/$defs/string_array"
@@ -57,19 +76,35 @@
           "$ref": "#/$defs/string_array"
         },
         "platform_filter_state": {
-          "enum": ["unknown", "not_requested", "requires_permission_enum", "resolved", "blocked"]
+          "enum": [
+            "unknown",
+            "not_requested",
+            "requires_permission_enum",
+            "resolved",
+            "blocked"
+          ]
         },
         "component_filter_state": {
           "description": "普通筛选组件的自动枚举解析状态",
-          "enum": ["resolved", "clarify_required", "enum_unavailable"]
+          "enum": [
+            "resolved",
+            "clarify_required",
+            "enum_unavailable"
+          ]
         },
         "component_filter_disclosures_zh": {
           "description": "普通筛选值按当前账号枚举完整等值解析后的披露",
           "$ref": "#/$defs/string_array"
         },
-        "clarification_reason_codes": {"$ref": "#/$defs/string_array"},
-        "clarification_messages_zh": {"$ref": "#/$defs/string_array"},
-        "next_action": {"type": "string"},
+        "clarification_reason_codes": {
+          "$ref": "#/$defs/string_array"
+        },
+        "clarification_messages_zh": {
+          "$ref": "#/$defs/string_array"
+        },
+        "next_action": {
+          "type": "string"
+        },
         "time_scope_zh": {
           "description": "本地解析的时间口径中文描述（含对比期与默认口径提示）",
           "type": "string"
@@ -97,12 +132,25 @@
         "default_dataset_recommendation_zh": {
           "description": "未明确指定数据集时，对已授权且兼容的即时综合数据集选择；字段完整覆盖时自动选择，否则等待确认",
           "type": "object",
-          "required": ["name_zh", "reason_zh", "confirmation_required", "auto_selected"],
+          "required": [
+            "name_zh",
+            "reason_zh",
+            "confirmation_required",
+            "auto_selected"
+          ],
           "properties": {
-            "name_zh": {"type": "string"},
-            "reason_zh": {"type": "string"},
-            "confirmation_required": {"type": "boolean"},
-            "auto_selected": {"type": "boolean"}
+            "name_zh": {
+              "type": "string"
+            },
+            "reason_zh": {
+              "type": "string"
+            },
+            "confirmation_required": {
+              "type": "boolean"
+            },
+            "auto_selected": {
+              "type": "boolean"
+            }
           },
           "additionalProperties": false
         },
@@ -111,10 +159,17 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["name_zh", "reason_zh"],
+            "required": [
+              "name_zh",
+              "reason_zh"
+            ],
             "properties": {
-              "name_zh": {"type": "string"},
-              "reason_zh": {"type": "string"},
+              "name_zh": {
+                "type": "string"
+              },
+              "reason_zh": {
+                "type": "string"
+              },
               "summary_zh": {
                 "description": "仅由当前 CSV 字段统计生成的候选区分摘要",
                 "type": "string"
@@ -140,10 +195,17 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["requested", "candidates_zh"],
+            "required": [
+              "requested",
+              "candidates_zh"
+            ],
             "properties": {
-              "requested": {"type": "string"},
-              "candidates_zh": {"$ref": "#/$defs/string_array"}
+              "requested": {
+                "type": "string"
+              },
+              "candidates_zh": {
+                "$ref": "#/$defs/string_array"
+              }
             },
             "additionalProperties": false
           }
@@ -159,6 +221,18 @@
         "recovery_state": {
           "description": "刷新恢复状态：refresh_in_progress（后台刷新中，sleep 后重跑）/ refresh_failed（需手动刷新）",
           "type": "string"
+        },
+        "fallback_level": {
+          "description": "降级层级：L1 用合同内授权目录；L3 需先恢复元数据",
+          "enum": [
+            "L1_contract_catalog",
+            "L2_local_index",
+            "L3_metadata_refresh"
+          ]
+        },
+        "no_guess_policy_zh": {
+          "description": "未下发可执行模板时的禁止猜测声明：只能用 fallback_catalog 中的表名与字段名",
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -172,31 +246,82 @@
         "user_visible_language"
       ],
       "properties": {
-        "required_disclosures_zh": {"$ref": "#/$defs/string_array"},
-        "forbidden_outputs_zh": {"$ref": "#/$defs/string_array"},
-        "technical_identifiers_user_visible": {"const": false},
-        "user_visible_language": {"const": "zh-CN"}
+        "required_disclosures_zh": {
+          "$ref": "#/$defs/string_array"
+        },
+        "forbidden_outputs_zh": {
+          "$ref": "#/$defs/string_array"
+        },
+        "technical_identifiers_user_visible": {
+          "const": false
+        },
+        "user_visible_language": {
+          "const": "zh-CN"
+        }
       },
       "additionalProperties": false
     },
     "execution_ref": {
       "type": "object",
-      "required": ["user_visible"],
+      "required": [
+        "user_visible"
+      ],
       "properties": {
-        "user_visible": {"const": false},
-        "chart_uuid": {"type": "string"},
-        "chart_uuid_candidates": {"$ref": "#/$defs/string_array"},
-        "chart_action": {
-          "enum": ["structure", "run", "dry_run", "document"]
+        "user_visible": {
+          "const": false
         },
-        "query_command": {"type": "string"},
-        "run": {"type": "boolean"},
-        "dry_run": {"type": "boolean"},
-        "dataset_alias": {"type": ["string", "null"]},
-        "table_id": {"type": ["string", "integer", "null"]},
-        "platform_component_alias": {"type": ["string", "null"]},
-        "platform_component_table_id": {"type": ["string", "integer", "null"]},
-        "resolved_platform_values": {"$ref": "#/$defs/string_array"},
+        "chart_uuid": {
+          "type": "string"
+        },
+        "chart_uuid_candidates": {
+          "$ref": "#/$defs/string_array"
+        },
+        "chart_action": {
+          "enum": [
+            "structure",
+            "run",
+            "dry_run",
+            "document"
+          ]
+        },
+        "query_command": {
+          "type": "string"
+        },
+        "run": {
+          "type": "boolean"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "dataset_alias": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "table_id": {
+          "type": [
+            "string",
+            "integer",
+            "null"
+          ]
+        },
+        "platform_component_alias": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platform_component_table_id": {
+          "type": [
+            "string",
+            "integer",
+            "null"
+          ]
+        },
+        "resolved_platform_values": {
+          "$ref": "#/$defs/string_array"
+        },
         "platform_semantic_keys": {
           "description": "平台语义成员的内部枚举名（构造引用，不向用户展示）",
           "$ref": "#/$defs/string_array"
@@ -209,18 +334,31 @@
           "description": "待枚举时可直接执行的枚举命令原文",
           "type": "string"
         },
-        "platform_enum_return_hint_zh": {"type": "string"},
-        "dimensions": {"$ref": "#/$defs/execution_fields"},
-        "metrics": {"$ref": "#/$defs/execution_fields"},
+        "platform_enum_return_hint_zh": {
+          "type": "string"
+        },
+        "dimensions": {
+          "$ref": "#/$defs/execution_fields"
+        },
+        "metrics": {
+          "$ref": "#/$defs/execution_fields"
+        },
         "date_fields": {
           "description": "授权日期字段引用（时间过滤与 dataComparison 的构造依据，无条件输出）",
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["field_name", "label_zh"],
+            "required": [
+              "field_name",
+              "label_zh"
+            ],
             "properties": {
-              "field_name": {"type": "string"},
-              "label_zh": {"type": "string"}
+              "field_name": {
+                "type": "string"
+              },
+              "label_zh": {
+                "type": "string"
+              }
             },
             "additionalProperties": false
           }
@@ -230,12 +368,27 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["field_name", "label_zh", "component_dataset_alias"],
+            "required": [
+              "field_name",
+              "label_zh",
+              "component_dataset_alias"
+            ],
             "properties": {
-              "field_name": {"type": "string"},
-              "label_zh": {"type": "string"},
-              "component_dataset_alias": {"type": "string"},
-              "component_table_id": {"type": ["string", "integer"]}
+              "field_name": {
+                "type": "string"
+              },
+              "label_zh": {
+                "type": "string"
+              },
+              "component_dataset_alias": {
+                "type": "string"
+              },
+              "component_table_id": {
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              }
             },
             "additionalProperties": false
           }
@@ -253,13 +406,27 @@
             "rule_zh"
           ],
           "properties": {
-            "strategy": {"const": "exact_normalized_then_clarify"},
-            "normalizations": {"$ref": "#/$defs/string_array"},
-          "exact_match_is_exclusive": {"const": true},
-          "exact_match_confirmation_required": {"const": false},
-          "substring_match_allowed": {"const": false},
-            "no_exact_match_action": {"const": "clarify_required"},
-            "rule_zh": {"type": "string"}
+            "strategy": {
+              "const": "exact_normalized_then_clarify"
+            },
+            "normalizations": {
+              "$ref": "#/$defs/string_array"
+            },
+            "exact_match_is_exclusive": {
+              "const": true
+            },
+            "exact_match_confirmation_required": {
+              "const": false
+            },
+            "substring_match_allowed": {
+              "const": false
+            },
+            "no_exact_match_action": {
+              "const": "clarify_required"
+            },
+            "rule_zh": {
+              "type": "string"
+            }
           },
           "additionalProperties": false
         },
@@ -276,11 +443,21 @@
               "match_strategy"
             ],
             "properties": {
-              "field_name": {"type": "string"},
-              "label_zh": {"type": "string"},
-              "requested_value": {"type": "string"},
-              "resolved_value": {"type": "string"},
-              "match_strategy": {"const": "exact_normalized"}
+              "field_name": {
+                "type": "string"
+              },
+              "label_zh": {
+                "type": "string"
+              },
+              "requested_value": {
+                "type": "string"
+              },
+              "resolved_value": {
+                "type": "string"
+              },
+              "match_strategy": {
+                "const": "exact_normalized"
+              }
             },
             "additionalProperties": false
           }
@@ -298,17 +475,57 @@
             "year_source"
           ],
           "properties": {
-            "start": {"type": ["string", "null"]},
-            "end": {"type": ["string", "null"]},
-            "unbounded": {"type": "boolean"},
-            "is_default": {"type": "boolean"},
-            "reference_date": {"type": "string"},
-            "reference_year": {"type": "integer"},
-            "resolution_source": {"const": "python_datetime_asia_shanghai"},
-            "year_source": {"enum": ["explicit_query", "python_current_date"]},
-            "comparison_type": {"type": ["string", "null"]},
-            "comparison_start": {"type": ["string", "null"]},
-            "comparison_end": {"type": ["string", "null"]}
+            "start": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "end": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "unbounded": {
+              "type": "boolean"
+            },
+            "is_default": {
+              "type": "boolean"
+            },
+            "reference_date": {
+              "type": "string"
+            },
+            "reference_year": {
+              "type": "integer"
+            },
+            "resolution_source": {
+              "const": "python_datetime_asia_shanghai"
+            },
+            "year_source": {
+              "enum": [
+                "explicit_query",
+                "python_current_date"
+              ]
+            },
+            "comparison_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "comparison_start": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "comparison_end": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           },
           "additionalProperties": false
         },
@@ -319,9 +536,14 @@
         "plan_integrity": {
           "description": "规划器生成的完整合同摘要；执行器据此拒绝被手工改写的计划",
           "type": "object",
-          "required": ["algorithm", "digest"],
+          "required": [
+            "algorithm",
+            "digest"
+          ],
           "properties": {
-            "algorithm": {"const": "sha256"},
+            "algorithm": {
+              "const": "sha256"
+            },
             "digest": {
               "type": "string",
               "pattern": "^[0-9a-f]{64}$"
@@ -329,12 +551,49 @@
           },
           "additionalProperties": false
         },
-        "query_template_fill_rules_zh": {"type": "string"}
-        ,
+        "query_template_fill_rules_zh": {
+          "type": "string"
+        },
         "default_filters": {
           "description": "服务端自动应用的默认条件执行引用，仅用于披露与审计",
           "type": "array",
-          "items": {"$ref": "#/$defs/default_filter"}
+          "items": {
+            "$ref": "#/$defs/default_filter"
+          }
+        },
+        "fallback_catalog": {
+          "description": "降级取数时唯一可用的权威目录（表 + 字段），来源与元数据版本随附",
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string"
+            },
+            "metadata_version": {
+              "type": "string"
+            },
+            "table_id": {
+              "type": [
+                "integer",
+                "string",
+                "null"
+              ]
+            },
+            "dataset_alias": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "dimensions": {
+              "type": "array"
+            },
+            "metrics": {
+              "type": "array"
+            },
+            "date_fields": {
+              "type": "array"
+            }
+          }
         }
       },
       "additionalProperties": false
@@ -343,19 +602,36 @@
   "$defs": {
     "string_array": {
       "type": "array",
-      "items": {"type": "string"}
+      "items": {
+        "type": "string"
+      }
     },
     "execution_fields": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["field_name", "label_zh", "is_formula", "is_snapshot"],
+        "required": [
+          "field_name",
+          "label_zh",
+          "is_formula",
+          "is_snapshot"
+        ],
         "properties": {
-          "field_name": {"type": "string"},
-          "label_zh": {"type": "string"},
-          "is_formula": {"type": "boolean"},
-          "is_snapshot": {"type": "boolean"},
-          "aggregation_policy": {"type": "string"},
+          "field_name": {
+            "type": "string"
+          },
+          "label_zh": {
+            "type": "string"
+          },
+          "is_formula": {
+            "type": "boolean"
+          },
+          "is_snapshot": {
+            "type": "boolean"
+          },
+          "aggregation_policy": {
+            "type": "string"
+          },
           "selection_source": {
             "description": "recommended 表示系统推荐字段（用户未点名，采用前须确认）",
             "type": "string"
@@ -376,13 +652,27 @@
         "filter_agg"
       ],
       "properties": {
-        "field_name": {"type": "string"},
-        "label_zh": {"type": "string"},
-        "operator": {"type": "string"},
-        "values": {"type": "array"},
-        "type": {"type": "string"},
-        "filter_type": {"type": "string"},
-        "filter_agg": {"type": "string"}
+        "field_name": {
+          "type": "string"
+        },
+        "label_zh": {
+          "type": "string"
+        },
+        "operator": {
+          "type": "string"
+        },
+        "values": {
+          "type": "array"
+        },
+        "type": {
+          "type": "string"
+        },
+        "filter_type": {
+          "type": "string"
+        },
+        "filter_agg": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     }
