@@ -1750,3 +1750,120 @@ def test_explicit_fields_survive_label_dedup_and_containment():
         "ad_sales",
         "sales_copy",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Task 8: 放开固定槽位过约束并强制披露更细粒度
+# ---------------------------------------------------------------------------
+
+
+def _write_grain_surplus_metadata(data_dir: Path) -> None:
+    """写入一张固定 grain 槽位同时支持 search_term + keyword 的数据集。
+
+    说明文案同时命中「搜索词」「关键词」两个 grain 取值模式，
+    模拟线上「亚马逊搜索词绩效」实际形态：用户只要 search_term 级，
+    数据集却是 keyword×search_term 级——粒度比请求更细。
+    """
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v1.4.0", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "10,ds_kw_st,关键词搜索词双维度表,normal,0,"
+        "用于分析亚马逊消费者搜索词与关键词维度下的转化情况，支持选品优化。,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "10,ds_kw_st,关键词搜索词双维度表,date_id,日期,f_kw_date,dimension,,,,,0,0\n"
+        "10,ds_kw_st,关键词搜索词双维度表,conv_rate,转化率,f_conv_rate,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n",
+        encoding="utf-8",
+    )
+
+
+def _write_grain_exact_match_metadata(data_dir: Path) -> None:
+    """写入一张固定 grain 槽位只支持 search_term 的数据集（与请求恰好相等）。
+
+    说明文案只命中「搜索词」一个 grain 取值，用户也只要 search_term 级，
+    数据集覆盖范围与请求完全一致——不该产生任何多余粒度披露。
+    """
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v1.4.1", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "11,ds_st_only,搜索词专表,normal,0,"
+        "用于分析亚马逊消费者搜索词维度下的转化情况，支持选品优化。,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "11,ds_st_only,搜索词专表,date_id,日期,f_st_date,dimension,,,,,0,0\n"
+        "11,ds_st_only,搜索词专表,conv_rate,转化率,f_st_conv_rate,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n",
+        encoding="utf-8",
+    )
+
+
+def test_grain_surplus_triggers_disclosure_in_both_locations(tmp_path: Path):
+    """数据集粒度比请求更细时，两处强制披露都必须写入（正例）。
+
+    审查发现：披露只受 Step 8 一次性手工命令行验证保护，未入库不可重跑。
+    照 platform_scope_disclosures_zh / default_filters_zh 的既有先例补端到端测试，
+    覆盖 model_view["grain_disclosure_zh"] 与
+    answer_contract["required_disclosures_zh"] 两处写入，防止今后重构
+    build_model_contract 的变量赋值顺序或候选截断逻辑时悄悄打断这条链路。
+    """
+    data_dir = tmp_path / "data"
+    _write_grain_surplus_metadata(data_dir)
+
+    result = query_plan.build_model_query_plan(
+        "查询近7天搜索词的转化率",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "planned"
+    assert result["execution_ref"]["dataset_alias"] == "ds_kw_st"
+    disclosures = result["model_view"]["grain_disclosure_zh"]
+    assert any("keyword" in item for item in disclosures)
+    assert all(item in result["answer_contract"]["required_disclosures_zh"] for item in disclosures)
+    schema = json.loads((SKILL_ROOT / "data" / "query_plan.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(result)
+
+
+def test_grain_exact_match_produces_no_disclosure_noise(tmp_path: Path):
+    """粒度正好相等（无多余覆盖）时，不产生披露，也不污染强制披露列表（反例）。"""
+    data_dir = tmp_path / "data"
+    _write_grain_exact_match_metadata(data_dir)
+
+    result = query_plan.build_model_query_plan(
+        "查询近7天搜索词的转化率",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "planned"
+    assert result["execution_ref"]["dataset_alias"] == "ds_st_only"
+    assert "grain_disclosure_zh" not in result["model_view"]
+    assert not any(
+        "粒度比请求更细" in text
+        for text in result["answer_contract"]["required_disclosures_zh"]
+    )
