@@ -5195,3 +5195,12 @@
 **影响范围**：两版规划器的时间口径解析与日期筛选注入。带指标且未给时间的请求行为不变（仍是默认近30天 + 用户确认）。注意：服务端是数据集默认条件注入的唯一权威方（见 run_query.py 架构说明），若数据集本身配置了服务端默认日期条件，客户端不注入日期筛选不等于一定返回全历史，需按数据集单独核对。
 **回滚方式**：`git checkout HEAD -- opscli/query/services/planner/{time_scope.py,query_plan.py,resources/query_plan.schema.json} opscli/skills/templates/ops-dataset-query/scripts/{time_scope.py,query_plan.py} opscli/skills/templates/ops-dataset-query/data/query_plan.schema.json && rm tests/skills/test_time_scope_unbounded.py`。
 ---
+
+## 2026-07-29 query/planner + skills/ops-dataset-query - 止血：收回「仅维度自动不限时间」
+
+**变更原因**：7a85d69 放开「仅维度无指标 + 未给时间」自动转全时段并跳过时间确认门后，线上 Codex 实测出现静默错数：查询「渠道是傲彼瑞的所有ASIN」返回了傲创-美国、莱福特-美国等其他渠道的数据。根因是规划器的 `_build_query_template()` 签名里根本没有筛选值入参（只能产出日期筛选），组件字段（渠道/ASIN/渠道SKU）的筛选值从不写入 query_template，`filter_value_match_policy` 只是给模型看的文字策略、代码层无强制；而 query_flow 在 status=planned 时原样执行该模板。此缺陷为既有问题（实测「查渠道傲彼瑞近7天的销量」在改动前后输出逐字相同，都是 planned + 仅日期筛选），但时间确认门此前意外挡住了仅维度这条路径，放开后变成静默执行。
+**改动点**：两版 `query_plan.py` 移除「仅维度转全时段」分支，恢复时间确认门（保留显式全时段关键词识别与否定语境防误判，这两项不涉及筛选值风险）；`tests/skills/test_time_scope_unbounded.py` 同步调整第 3 条断言与文档说明，删除因此空置的 `_date_filters` 辅助函数。
+**验证结果**：原失败查询现返回 `clarify_required` 且不下发 query_template（query_flow 无法执行）；`pytest tests/skills/test_time_scope_unbounded.py tests/query/planner tests/skills/test_dataset_query_planner.py tests/mcp/test_query_planner_tools.py` 全通过；改动已同步到 ~/.opscli、~/.codex、~/.claude、~/.openclaw 四个安装目录。
+**影响范围**：仅维度且未给时间的查询恢复为需用户确认；显式全时段（历史以来/不限时间）仍可用。带筛选值 + 显式时间的既有漏筛缺陷不在本次范围，由后续组件筛选值解析修复。
+**回滚方式**：`git revert` 本次提交即可恢复自动不限时间行为（但会重新引入静默错数风险）。
+---

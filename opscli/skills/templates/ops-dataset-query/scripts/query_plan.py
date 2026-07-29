@@ -1478,25 +1478,10 @@ def build_model_contract(
         if "default_dataset_confirmation" not in clarification_reasons:
             clarification_reasons.append("default_dataset_confirmation")
         pending_confirmations_zh.append("确认是否使用推荐的即时综合数据集")
-    # 只查维度、不查指标（如「某渠道下全部 ASIN」）时，默认时间窗口没有业务意义：
-    # 用户要的是去重维度全集，卡近 30 天只会漏掉更早出现过的值，且这类查询没有
-    # 需要按周期聚合的度量。故原文未给时间口径时改为不加日期筛选，也不再追问时间。
-    if (
-        scope
-        and scope.get("is_default")
-        and dimensions
-        and not (metrics or recommended_mets)
-    ):
-        scope = {
-            **scope,
-            "start": None,
-            "end": None,
-            "unbounded": True,
-            "is_default": False,
-            "matched": False,
-            "comparison": None,
-            "label_zh": "全部时间（仅维度查询，原文未限定时间，不加日期筛选）",
-        }
+    # 注意：曾在此处让「仅维度无指标 + 原文未给时间」自动转全时段并跳过时间确认门。
+    # 该规则已临时收回——组件字段（渠道/ASIN 等）的筛选值目前不会被写入 query_template，
+    # 跳过确认门会让 query_flow 直接执行未带筛选的模板，静默返回全范围数据。
+    # 待组件筛选值解析落地（参考 _resolve_department_filter 的枚举-等值-阻断机制）后再恢复。
     if status == "planned" and execution_path_ready and scope and scope.get("is_default"):
         status = "clarify_required"
         clarification_reasons.append("time_scope_confirmation")
