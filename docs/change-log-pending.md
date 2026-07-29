@@ -1,5 +1,19 @@
 # 待归档变更记录
 
+## 2026-07-30 ops-dataset-query/local_fallback - 新增画像覆盖率巡检命令
+
+**变更原因**：`local_fallback.py` 的人工画像（`data/dataset_profiles.json`）靠人工维护，覆盖率和腐烂情况此前无人可见——后端 60 个数据集只有 15 份画像，其中 2 份 alias 已查不到对应数据集；意图表 `intents[].primary_dataset` 按中文名指向数据集，同样没有 alias 保护，改名后会静默断链。没有巡检就只能等出错才发现，需要一条随时可跑的只读命令把维护缺口变可见。
+
+**改动点**：`opscli/skills/templates/ops-dataset-query/scripts/local_fallback.py` 新增 `audit_profiles()`，统计 `total_datasets/profiled/certified/missing_profiles/stale_profiles`，并追加 `broken_intent_links`（核查 `intents[].primary_dataset` 是否能在画像 `datasets[].standard_name` 中找到对应条目）；`main()` 新增 `--audit` 命令行开关，命中时直接输出巡检结果并返回，不构建降级合同、不做任何查询。测试新增 `test_audit_reports_coverage_gap`（brief 给定用例）、`test_audit_blocks_when_data_dir_missing`、`test_audit_reports_broken_intent_links` 三条。
+
+**验证结果**：TDD RED→GREEN，新增 3 条测试 + 原有 33 条共 36 passed（5 xfailed 为既有已知路由缺口）。真实数据巡检（模板目录与 `~/.claude/skills/ops-dataset-query` 安装目录各跑一次，结果一致）：`total_datasets=60, profiled=12, certified=0, stale_profiles=["ds_X2aBDzKIMf66","ds_xSQ0DFxpLPLC"], broken_intent_links=[]`；数量级与已知情况（60 个数据集、15 条画像）吻合，stale 从 brief 提到的 3 条降为 2 条（Task 6 已修复 1 条）。`tests/skills/` 整目录跑（排除已知会导致 pytest capture 崩溃的 `test_packaging.py`）为 `380 passed, 6 failed, 8 xfailed`，6 个失败分布在 `test_cli.py`/`test_manager.py`/`test_ops_feedback_template.py`/`test_ops_methods_card_xlsx_preview.py`，均与本次改动的文件无关，判定为既有基线问题。
+
+**影响范围**：仅新增只读巡检能力，不修改 `build_fallback()` 现有行为、不修改任何画像或元数据文件；不影响其他 Skill 目录（`~/.opscli`/`~/.codex`/`~/.openclaw` 未同名安装，`~/.claude/skills` 已按铁律要求只逐文件覆盖 `local_fallback.py`）。
+
+**回滚方式**：`git revert` 本次提交；已同步到 `~/.claude/skills/ops-dataset-query/scripts/local_fallback.py` 的文件需手动改回上一版本或重新执行 `opscli skills upgrade ops-dataset-query`。
+
+---
+
 ## 2026-07-28 dashboard/skill - 按用户意图选择建图与修改流程
 
 **变更原因**：Dashboard 编辑 Skill 将分析建图、显式单图、多图创建和已有图表修改统一收敛为一次原子批量创建，无法表达创建空图、创建后批量配置或只修改目标图表的请求。
@@ -5424,4 +5438,30 @@ CSV 取默认维度指标中文名）。
 **回滚方式**：`git revert <本次提交>`；或分别 `git checkout` 还原
 `data/dataset_profiles.json`、`scripts/local_fallback.py`、
 `tests/skills/test_local_fallback.py` 三个文件到上一版本。
+---
+
+## 2026-07-30 skills/ops-dataset-query - Task 6 补充：确认 2 条画像失效并补 stale_reason
+
+**变更原因**：Task 6 完成时曾在报告里如实标注"SP+SD+SB广告数据集"
+（`ds_xSQ0DFxpLPLC`）、"物控版库存周转"（`ds_X2aBDzKIMf66`）这两条画像的
+`dataset_alias` 因安装目录被并发进程覆盖为 placeholder 而无法核实是否仍有效。
+用户恢复元数据（60 个数据集，与事故前一致）后，协调者用恢复后的真实数据复核，
+确认这两条 alias 与 standard_name 均在当前元数据中查不到对应数据集，属实失效。
+进一步溯源发现：这两个 alias 值是 Task 6 迁移脚本从**迁移前的旧画像文件**里原样
+带过来的（不是当时从 `datasets.csv` 现查出来的），说明在本次迁移之前这两条画像
+就已经腐烂，不是快照作用域不一致导致的假阳性。
+**改动的类/方法**：无代码改动，仅数据文件。
+**改动点**：`opscli/skills/templates/ops-dataset-query/data/dataset_profiles.json`
+——给"SP+SD+SB广告数据集"和"物控版库存周转"两条画像各补一个 `stale_reason`
+字段（"dataset_alias 与 standard_name 均在当前元数据中查不到对应数据集，需人工
+改绑或确认该数据集已下线"），`dataset_alias` 字段本身保留原值不清空（便于人工
+巡检直接定位是哪个 alias 失效），其余字段不变。
+**验证结果**：`pytest tests/skills/test_local_fallback.py -q` → 28 passed,
+5 xfailed，无回归（`stale_reason` 是纯数据字段，不参与任何断言路径）。
+**影响范围**：仅这两条画像的数据质量标注；不改变任何运行时逻辑（`stale_reason`
+当前未被 `local_fallback.py` 读取，纯供人工/后续巡检脚本使用）。遗留问题：
+巡检机制目前只在"迁移那一次"检查过 alias 有效性，建议后续补一个独立于迁移的
+定期核对脚本/测试，持续比对画像 `dataset_alias` 与已安装 `datasets.csv` 的存在性。
+**回滚方式**：`git revert <本次提交>`；或手动删除这两条画像新增的 `stale_reason`
+字段。
 ---

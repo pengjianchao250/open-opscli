@@ -281,6 +281,61 @@ def _filter_components(data_dir: Path, dataset_alias: str | None) -> list[dict]:
     ]
 
 
+def audit_profiles(*, data_dir: Path | None = None) -> dict:
+    """巡检人工语义覆盖率：哪些数据集没有画像、哪些画像已对不上元数据。
+
+    为什么需要：画像靠人工维护，没有巡检就只能等出错才发现。
+    实测本仓库 60 个数据集只有 15 份画像、其中 2 份的 alias 已查不到对应数据集。
+
+    这是只读巡检，不做任何查询、不修改任何画像或元数据文件。
+    """
+    resolved = Path(data_dir) if data_dir else core.discover_data_dir()
+    if resolved is None or not resolved.is_dir():
+        return {
+            "status": "blocked",
+            "next_action_zh": "本地数据目录不存在，先执行 opscli skills upgrade ops-dataset-query。",
+        }
+    state = _data_state(resolved)
+    if state in ("placeholder", "empty"):
+        # 占位态下 datasets.csv 是空模板，统计出来的覆盖率数字全是假的（分子分母同时
+        # 归零），必须先挡住并给出恢复指引，否则巡检结果会被误读成"画像已全部失效"
+        return {
+            "status": "blocked",
+            "data_state": state,
+            "next_action_zh": "本地索引是空模板，无法统计真实覆盖率。先执行 opscli skills upgrade ops-dataset-query 刷新后重跑。",
+        }
+    datasets = core.load_csv_rows(resolved / "datasets.csv")
+    aliases = {str(row.get("dataset_alias", "")) for row in datasets if row.get("dataset_alias")}
+    profile_payload = _load_profiles(resolved)
+    profiles = profile_payload.get("datasets") or []
+    profiled = {str(item.get("dataset_alias", "")) for item in profiles if item.get("dataset_alias")}
+    # 追加范围：intents[].primary_dataset 按中文名指向数据集，这条链接没有 alias
+    # 保护，数据集改名后会静默断裂——巡检必须把这类断链也报出来，不能只查数据集覆盖率
+    standard_names = {
+        str(item.get("standard_name", "")) for item in profiles if item.get("standard_name")
+    }
+    broken_intent_links = [
+        {"intent_id": intent.get("intent_id"), "primary_dataset": intent.get("primary_dataset")}
+        for intent in profile_payload.get("intents") or []
+        if str(intent.get("primary_dataset", "")) not in standard_names
+    ]
+    return {
+        "status": "ok",
+        "total_datasets": len(aliases),
+        "profiled": len(profiled & aliases),
+        "certified": sum(1 for item in profiles if item.get("certified")),
+        "missing_profiles": sorted(aliases - profiled),
+        "stale_profiles": sorted(profiled - aliases),
+        "broken_intent_links": broken_intent_links,
+        "next_action_zh": (
+            "missing_profiles 中的数据集尚无人工语义，按需补充并置 certified=true；"
+            "stale_profiles 已对不上元数据，应删除或改绑 alias；"
+            "broken_intent_links 中的意图 primary_dataset 对不上任何画像 standard_name，"
+            "需要修复画像或同步改名。"
+        ),
+    }
+
+
 def build_fallback(
     query: str,
     *,
@@ -467,7 +522,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dataset", default=None, help="已确认的 dataset_alias")
     parser.add_argument("--data-dir", default=None, help="指定本地数据目录")
     parser.add_argument("--emit-plan", default=None, help="把结果写成 plan 文件路径")
+    parser.add_argument("--audit", action="store_true", help="巡检画像覆盖率，不做查询")
     args = parser.parse_args(argv)
+
+    # 巡检模式：只读检查画像覆盖率与断链意图，不构造降级合同、不做任何查询
+    if args.audit:
+        print(
+            json.dumps(
+                audit_profiles(data_dir=Path(args.data_dir) if args.data_dir else None),
+                ensure_ascii=False,
+            )
+        )
+        return 0
 
     try:
         result = build_fallback(

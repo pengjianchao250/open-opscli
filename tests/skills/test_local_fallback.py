@@ -297,3 +297,75 @@ def test_profiles_do_not_carry_derivable_fields(tmp_path: Path):
     for item in profiles["datasets"]:
         assert "default_dimensions" not in item
         assert "default_metrics" not in item
+
+
+# ---------------------------------------------------------------------------
+# 覆盖率巡检（Task 7）：画像靠人工维护，没有巡检就只能等出错才发现
+# ---------------------------------------------------------------------------
+
+
+def test_audit_reports_coverage_gap(tmp_path: Path):
+    """巡检必须报出未建画像与已腐烂的画像，让维护成本可见而不是靠人想起来。"""
+    data_dir = tmp_path / "data"
+    _write_ready_data_dir(data_dir)
+
+    report = local_fallback.audit_profiles(data_dir=data_dir)
+    assert report["total_datasets"] >= 1
+    assert "missing_profiles" in report and "stale_profiles" in report
+    assert isinstance(report["certified"], int)
+
+
+def test_audit_blocks_when_data_dir_missing(tmp_path: Path):
+    """数据目录缺失时巡检要给可操作的恢复指引，而不是崩溃或裸报错。"""
+    report = local_fallback.audit_profiles(data_dir=tmp_path / "nope")
+    assert report["status"] == "blocked"
+    assert "opscli skills upgrade" in report["next_action_zh"]
+
+
+def test_audit_blocks_when_data_is_placeholder(tmp_path: Path):
+    """数据目录存在但是空模板时也要挡住，不能把 0/0 误报成"画像已全覆盖"。
+
+    真实巡检时命中过：安装目录被并发进程覆盖为 placeholder 后，datasets.csv
+    是空表，若不挡住会把 total_datasets=0 误读成覆盖率数字，而不是数据未就绪。
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v0", "data_state": "placeholder"}),
+        encoding="utf-8",
+    )
+
+    report = local_fallback.audit_profiles(data_dir=data_dir)
+    assert report["status"] == "blocked"
+    assert "opscli skills upgrade" in report["next_action_zh"]
+
+
+def test_audit_reports_broken_intent_links(tmp_path: Path):
+    """巡检必须报出 primary_dataset 对不上任何画像 standard_name 的意图。
+
+    intents[].primary_dataset 按中文名指向数据集，这条链接没有 alias 保护，
+    数据集改名后会静默断裂——巡检必须让这个问题可见，而不是只查数据集覆盖率。
+    """
+    data_dir = tmp_path / "data"
+    _write_ready_data_dir(data_dir)
+    broken_profiles = {
+        "intents": [
+            {"intent_id": "intent_ok", "primary_dataset": "即时综合数据集"},
+            {"intent_id": "intent_broken", "primary_dataset": "已改名的数据集"},
+        ],
+        "datasets": [
+            {
+                "dataset_alias": "ds_instant",
+                "standard_name": "即时综合数据集",
+                "certified": True,
+            }
+        ],
+    }
+    (data_dir / "dataset_profiles.json").write_text(
+        json.dumps(broken_profiles, ensure_ascii=False), encoding="utf-8"
+    )
+
+    report = local_fallback.audit_profiles(data_dir=data_dir)
+    assert report["broken_intent_links"] == [
+        {"intent_id": "intent_broken", "primary_dataset": "已改名的数据集"}
+    ]
