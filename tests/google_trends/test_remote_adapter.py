@@ -63,9 +63,9 @@ def test_remote_adapter_maps_run_to_google_trends_run():
     )
 
     result = adapter.run(
-        scenario="interest-over-time",
+        scenario="trends",
         geo="JP",
-        params={"keyword": "flashlight"},
+        params={"q": "flashlight", "data_type": "TIMESERIES"},
         job_id=None,
         export_format="json",
         hl="ja-JP",
@@ -75,9 +75,9 @@ def test_remote_adapter_maps_run_to_google_trends_run():
     assert result["success"] is True
     assert result["data"]["tool"] == "google_trends_run"
     assert result["data"]["arguments"] == {
-        "scenario": "interest-over-time",
+        "scenario": "trends",
         "geo": "JP",
-        "params": {"keyword": "flashlight"},
+        "params": {"q": "flashlight", "data_type": "TIMESERIES"},
         "export_format": "json",
         "hl": "ja-JP",
         "tz": 540,
@@ -86,9 +86,9 @@ def test_remote_adapter_maps_run_to_google_trends_run():
         (
             "google_trends_run",
             {
-                "scenario": "interest-over-time",
+                "scenario": "trends",
                 "geo": "JP",
-                "params": {"keyword": "flashlight"},
+                "params": {"q": "flashlight", "data_type": "TIMESERIES"},
                 "export_format": "json",
                 "hl": "ja-JP",
                 "tz": 540,
@@ -113,9 +113,9 @@ def test_remote_adapter_preserves_explicit_job_id():
     )
 
     result = adapter.run(
-        scenario="related-queries",
+        scenario="trends",
         geo="US",
-        params={"keyword": "aukey"},
+        params={"q": "aukey", "data_type": "RELATED_QUERIES"},
         job_id="gt-job-1",
         export_format="xlsx",
         hl=None,
@@ -127,9 +127,9 @@ def test_remote_adapter_preserves_explicit_job_id():
         (
             "google_trends_run",
             {
-                "scenario": "related-queries",
+                "scenario": "trends",
                 "geo": "US",
-                "params": {"keyword": "aukey"},
+                "params": {"q": "aukey", "data_type": "RELATED_QUERIES"},
                 "job_id": "gt-job-1",
                 "export_format": "xlsx",
             },

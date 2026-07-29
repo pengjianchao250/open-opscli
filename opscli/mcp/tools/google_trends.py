@@ -182,6 +182,9 @@ def _strip_sensitive(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
     blocked = {
+        "api_key",
+        "authorization",
+        "token",
         "raw_response",
         "request_params",
         "normalized_params",

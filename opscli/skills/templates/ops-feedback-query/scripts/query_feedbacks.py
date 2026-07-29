@@ -96,6 +96,29 @@ def _uuid(value: str) -> str:
         raise argparse.ArgumentTypeError("必须是有效 UUID") from exc
 
 
+def load_credentials(credentials_path: Path = CREDENTIALS_PATH) -> dict[str, Any]:
+    """读取 Skill 本地凭据 JSON 对象。
+
+    Args:
+        credentials_path: Skill 内部凭据 JSON 文件路径。
+
+    Returns:
+        凭据 JSON 对象。
+
+    Raises:
+        FeedbackQueryError: 文件缺失、格式非法或根节点不是对象。
+    """
+    try:
+        payload = json.loads(credentials_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise FeedbackQueryError(f"未找到内部反馈查询凭据文件: {credentials_path}") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FeedbackQueryError(f"无法读取内部反馈查询凭据文件: {credentials_path}") from exc
+    if not isinstance(payload, dict):
+        raise FeedbackQueryError(f"内部反馈查询凭据必须是 JSON 对象: {credentials_path}")
+    return payload
+
+
 def load_api_key(credentials_path: Path = CREDENTIALS_PATH) -> str:
     """从 Skill 凭据文件读取反馈查询 API Key。
 
@@ -108,14 +131,8 @@ def load_api_key(credentials_path: Path = CREDENTIALS_PATH) -> str:
     Raises:
         FeedbackQueryError: 文件缺失、格式非法或仍为占位值。
     """
-    try:
-        payload = json.loads(credentials_path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise FeedbackQueryError(f"未找到内部反馈查询凭据文件: {credentials_path}") from exc
-    except (OSError, json.JSONDecodeError) as exc:
-        raise FeedbackQueryError(f"无法读取内部反馈查询凭据文件: {credentials_path}") from exc
-
-    api_key = payload.get("feedback_api_key") if isinstance(payload, dict) else None
+    payload = load_credentials(credentials_path)
+    api_key = payload.get("feedback_api_key")
     if not isinstance(api_key, str) or not api_key.strip() or api_key.strip() == PLACEHOLDER_API_KEY:
         raise FeedbackQueryError(f"尚未配置内部反馈查询密钥: {credentials_path}")
     return api_key.strip()

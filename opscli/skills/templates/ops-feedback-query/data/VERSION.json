@@ -1,6 +1,6 @@
 {
   "name": "ops-feedback-query",
-  "version": "v1.0.0",
-  "updated_at": "2026-07-14",
-  "notes": "新增内部反馈列表与批量详情查询能力。"
+  "version": "v1.2.0",
+  "updated_at": "2026-07-27",
+  "notes": "新增 Linux systemd 每日 09:00 自动推送部署包。"
 }

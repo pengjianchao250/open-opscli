@@ -15,6 +15,8 @@ def test_public_seller_sprite_help_shows_remote_commands_only():
     assert "job-status" in result.stdout
     assert "jobs-status" in result.stdout
     assert "export" in result.stdout
+    assert "queue" not in result.stdout
+    assert "account-binding" not in result.stdout
     assert "--mode" not in result.stdout
 
 

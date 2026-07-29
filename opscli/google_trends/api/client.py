@@ -1,4 +1,8 @@
-"""pytrends 轻量客户端封装。"""
+"""已停用的 pytrends 客户端实现。
+
+正式 Google Trends 执行链已切换到 SerpApi；本文件暂时保留旧代码，仅供历史
+排障和回滚参考，不再由场景管理器导入或调用。
+"""
 
 from __future__ import annotations
 

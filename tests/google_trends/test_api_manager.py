@@ -6,7 +6,7 @@ from opscli.google_trends.config import GoogleTrendsSettings
 from opscli.google_trends.domain.models import GoogleTrendsExportResult
 from opscli.google_trends.domain.models import GoogleTrendsScenarioRequest
 from opscli.google_trends.services import api_manager as api_manager_module
-from opscli.google_trends.services.api_manager import GoogleTrendsApiManager
+from opscli.google_trends.services.api_manager import GoogleTrendsApiManager, extract_rows
 
 
 def _run(coro):
@@ -14,16 +14,28 @@ def _run(coro):
 
 
 class DummyGoogleTrendsClient:
+    """模拟 SerpApi Google Trends 客户端。"""
+
     requests = []
 
-    def __init__(self, *, settings=None, hl=None, tz=None):
-        self.settings = settings
-        self.hl = hl
-        self.tz = tz
-
     def run(self, scenario, params):
-        self.__class__.requests.append({"scenario": scenario, "params": params, "hl": self.hl, "tz": self.tz})
-        return {"records": [{"date": "2026-01-01", "flashlight": 42, "isPartial": False}]}
+        """记录请求并返回 SerpApi 时间序列结构。"""
+        self.__class__.requests.append({"scenario": scenario, "params": params})
+        return {
+            "interest_over_time": {
+                "timeline_data": [
+                    {
+                        "date": "2026-01-01",
+                        "values": [
+                            {"query": "flashlight", "value": "42", "extracted_value": 42}
+                        ],
+                    }
+                ]
+            }
+        }
+
+    def close(self):
+        """模拟关闭 HTTP 客户端。"""
 
 
 class DisabledUploadClient:
@@ -33,7 +45,7 @@ class DisabledUploadClient:
 
 def test_manager_writes_params_raw_result_and_json_export(monkeypatch, tmp_path: Path):
     DummyGoogleTrendsClient.requests = []
-    monkeypatch.setattr(api_manager_module, "GoogleTrendsApiClient", DummyGoogleTrendsClient)
+    monkeypatch.setattr(api_manager_module, "SerpApiGoogleTrendsClient", DummyGoogleTrendsClient)
     monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
     settings = GoogleTrendsSettings(output_dir=tmp_path)
     manager = GoogleTrendsApiManager(settings=settings)
@@ -41,9 +53,9 @@ def test_manager_writes_params_raw_result_and_json_export(monkeypatch, tmp_path:
     result = _run(
         manager.run(
             GoogleTrendsScenarioRequest(
-                scenario="interest-over-time",
+                scenario="trends",
                 geo="US",
-                params={"keyword": "flashlight", "timeframe": "today 12-m"},
+                params={"q": "flashlight", "date": "today 12-m"},
                 job_id="google-trends-offline-regression",
                 export_format="json",
                 hl="en-US",
@@ -66,18 +78,22 @@ def test_manager_writes_params_raw_result_and_json_export(monkeypatch, tmp_path:
     result_payload = json.loads((root_dir / "result.json").read_text(encoding="utf-8"))
     export_payload = json.loads((root_dir / "google-trends-offline-regression.json").read_text(encoding="utf-8"))
 
-    assert params_payload["normalized_params"]["kw_list"] == ["flashlight"]
-    assert raw_payload["request_params"]["timeframe"] == "today 12-m"
+    assert params_payload["normalized_params"]["q"] == "flashlight"
+    assert params_payload["normalized_params"]["hl"] == "en"
+    assert params_payload["normalized_params"]["tz"] == "360"
+    assert raw_payload["request_params"]["date"] == "today 12-m"
+    assert raw_payload["response"]["interest_over_time"]["timeline_data"][0]["values"]
     assert result_payload["row_count"] == 1
     assert export_payload["rows"][0]["flashlight"] == 42
-    assert DummyGoogleTrendsClient.requests[0]["scenario"] == "interest-over-time"
-    assert DummyGoogleTrendsClient.requests[0]["hl"] == "en-US"
-    assert DummyGoogleTrendsClient.requests[0]["tz"] == 360
+    assert export_payload["raw_response"]["interest_over_time"]["timeline_data"][0]["values"]
+    assert DummyGoogleTrendsClient.requests[0]["scenario"] == "trends"
+    assert DummyGoogleTrendsClient.requests[0]["params"]["hl"] == "en"
+    assert DummyGoogleTrendsClient.requests[0]["params"]["tz"] == "360"
 
 
 def test_manager_uses_xlsx_export_by_default(monkeypatch, tmp_path: Path):
     DummyGoogleTrendsClient.requests = []
-    monkeypatch.setattr(api_manager_module, "GoogleTrendsApiClient", DummyGoogleTrendsClient)
+    monkeypatch.setattr(api_manager_module, "SerpApiGoogleTrendsClient", DummyGoogleTrendsClient)
     monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
 
     def fake_export_rows_to_xlsx(*, rows, output_path, scenario, geo, params):
@@ -92,9 +108,9 @@ def test_manager_uses_xlsx_export_by_default(monkeypatch, tmp_path: Path):
     result = _run(
         manager.run(
             GoogleTrendsScenarioRequest(
-                scenario="interest-over-time",
+                scenario="trends",
                 geo="US",
-                params={"keyword": "flashlight"},
+                params={"q": "flashlight"},
                 job_id="google-trends-xlsx-regression",
             )
         )
@@ -106,3 +122,76 @@ def test_manager_uses_xlsx_export_by_default(monkeypatch, tmp_path: Path):
     status = manager.job_status("google-trends-xlsx-regression")
     assert status["job_id"] == "google-trends-xlsx-regression"
     assert status["export"]["filename"] == "google-trends-xlsx-regression.xlsx"
+
+
+def test_extract_rows_supports_all_serpapi_result_shapes():
+    """三类 SerpApi 接口及 Trends 相关查询都应生成可导出行。"""
+    suggestions = extract_rows(
+        "autocomplete",
+        {"suggestions": [{"q": "/m/apple", "title": "Apple", "type": "Company"}]},
+    )
+    trending = extract_rows(
+        "trending-now",
+        {"trending_searches": [{"query": "flashlight", "search_volume": 20000}]},
+    )
+    related = extract_rows(
+        "trends",
+        {
+            "related_queries": {
+                "top": [{"query": "led flashlight", "extracted_value": 100}],
+                "rising": [{"query": "rechargeable flashlight", "extracted_value": 900}],
+            }
+        },
+    )
+    regions = extract_rows(
+        "trends",
+        {
+            "compared_breakdown_by_region": [
+                {
+                    "geo": "US-CA",
+                    "location": "California",
+                    "values": [
+                        {"query": "flashlight", "extracted_value": 60},
+                        {"query": "lantern", "extracted_value": 40},
+                    ],
+                }
+            ]
+        },
+    )
+    topics = extract_rows(
+        "trends",
+        {
+            "related_topics": {
+                "top": [
+                    {
+                        "topic": {
+                            "value": "/m/01fdzj",
+                            "title": "Flashlight",
+                            "type": "Topic",
+                        },
+                        "extracted_value": 100,
+                    }
+                ]
+            }
+        },
+    )
+
+    assert suggestions[0]["q"] == "/m/apple"
+    assert trending[0]["search_term"] == "flashlight"
+    assert trending[0]["rank"] == 1
+    assert related == [
+        {"query": "led flashlight", "extracted_value": 100, "type": "top"},
+        {"query": "rechargeable flashlight", "extracted_value": 900, "type": "rising"},
+    ]
+    assert regions == [
+        {"geo": "US-CA", "location": "California", "flashlight": 60, "lantern": 40}
+    ]
+    assert topics == [
+        {
+            "extracted_value": 100,
+            "topic_id": "/m/01fdzj",
+            "topic_title": "Flashlight",
+            "topic_type": "Topic",
+            "type": "top",
+        }
+    ]

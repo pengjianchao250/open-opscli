@@ -12,15 +12,16 @@ from opscli.google_trends_debug import cli as google_trends_debug_cli
 runner = CliRunner()
 
 
-def test_public_google_trends_help_keeps_remote_commands():
-    """正式 CLI 帮助中应只展示远端公共命令。"""
+def test_public_google_trends_help_keeps_remote_and_local_operations():
+    """正式 CLI 帮助中应展示远端场景和本地 Key 运维命令。"""
     result = runner.invoke(google_trends_cli.app, ["--help"])
 
     assert result.exit_code == 0
-    assert "Google Trends 远端 MCP 正式命令面。" in result.stdout
+    assert "Google Trends 正式场景与本地运维命令。" in result.stdout
     assert "scenarios" in result.stdout
     assert "job-status" in result.stdout
     assert "export" in result.stdout
+    assert "api-key" in result.stdout
 
 
 def test_public_google_trends_run_help_hides_output_dir():
@@ -56,7 +57,7 @@ def test_debug_google_trends_run_keeps_local_execution_path(monkeypatch):
         """模拟本地 Google Trends 管理器。"""
 
         def scenarios(self):
-            return [{"id": "interest-over-time"}]
+            return [{"id": "trends"}]
 
         async def run(self, request):
             captured["request"] = request
@@ -71,17 +72,17 @@ def test_debug_google_trends_run_keeps_local_execution_path(monkeypatch):
         google_trends_debug_cli.app,
         [
             "run",
-            "interest-over-time",
+            "trends",
             "--params",
-            json.dumps({"keyword": "flashlight"}),
+            json.dumps({"q": "flashlight", "data_type": "TIMESERIES"}),
             "--hl",
             "en-US",
         ],
     )
 
     assert result.exit_code == 0
-    assert captured["request"].scenario == "interest-over-time"
-    assert captured["request"].params == {"keyword": "flashlight"}
+    assert captured["request"].scenario == "trends"
+    assert captured["request"].params == {"q": "flashlight", "data_type": "TIMESERIES"}
     assert captured["request"].hl == "en-US"
     assert '"job_id": "debug-job"' in result.stdout
 
@@ -103,11 +104,11 @@ def test_debug_google_trends_export_fails_when_export_payload_missing(monkeypatc
     assert "任务未生成导出文件：job-no-export" in result.output
 
 
-def test_root_cli_import_registers_google_trends_debug_without_callback_side_effects():
-    """根 CLI 应注册 google-trends 与 google-trends-debug。"""
+def test_root_cli_only_registers_public_google_trends_command():
+    """根 CLI 应启用正式命令，并保持旧本地调试命令停用。"""
     root_cli = importlib.import_module("opscli.cli")
 
     registered_names = [group.name for group in root_cli.app.registered_groups]
 
     assert "google-trends" in registered_names
-    assert "google-trends-debug" in registered_names
+    assert "google-trends-debug" not in registered_names

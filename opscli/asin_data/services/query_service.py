@@ -106,22 +106,47 @@ class AsinDataQueryService:
     def fetch_category_top(
         self,
         *,
-        category: str,
+        category: str | None,
+        data_type: str = "asin",
         site: str = "US",
         date_from: str | None = None,
         date_to: str | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
-        normalized_category = category.strip()
-        if not normalized_category:
-            raise ValueError("类目名称不能为空")
-        normalized_site = normalize_site(site)
+        normalized_data_type = str(data_type).strip().lower()
+        if normalized_data_type not in {"asin", "traffic"}:
+            raise ValueError("data_type 仅支持 asin 或 traffic")
+        normalized_category = str(category or "").strip() or None
+        if normalized_data_type == "asin" and not normalized_category:
+            raise ValueError("data_type=asin 时必须传入 category")
         start, end = _date_range(
             date_from=date_from,
             date_to=date_to,
             default_start=lambda today: today.replace(day=1),
             today=self._today_factory(),
         )
+        if normalized_data_type == "traffic":
+            result = self._top_client.fetch_traffic(
+                category=normalized_category,
+                date_from=start,
+                date_to=end,
+            )
+            rows = result.get("rows") if isinstance(result.get("rows"), list) else []
+            metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+            return {
+                "data_type": "traffic",
+                "category": normalized_category,
+                "date_from": start,
+                "date_to": end,
+                "row_count": len(rows),
+                "category_total": metadata.get("category_total"),
+                "category_names": metadata.get("category_names", []),
+                "ranking_metric": metadata.get("ranking_metric"),
+                "top_n": metadata.get("top_n"),
+                "category_traffic": rows,
+            }
+
+        normalized_site = normalize_site(site)
         result = self._top_client.fetch(
             category=normalized_category,
             site=normalized_site,

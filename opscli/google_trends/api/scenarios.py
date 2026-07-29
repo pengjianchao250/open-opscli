@@ -1,4 +1,8 @@
-"""Google Trends 场景注册表。"""
+"""SerpApi Google Trends 场景注册表。
+
+当前仅启用 SerpApi 的 Trends、Autocomplete、Trending Now 三个原始接口。
+旧 pytrends 场景已停用，不再进入公开注册表或执行路径。
+"""
 
 from __future__ import annotations
 
@@ -8,55 +12,20 @@ from typing import Any, Callable
 from opscli.google_trends.domain.exceptions import GoogleTrendsConfigError
 
 
-GPROP_VALUES = {"", "images", "news", "youtube", "froogle"}
-GPROP_ALIASES = {
-    "web": "",
-    "search": "",
-    "image": "images",
-    "images": "images",
-    "news": "news",
-    "youtube": "youtube",
-    "shopping": "froogle",
-    "froogle": "froogle",
-}
-
-TRENDING_PN_MAP = {
-    "US": "united_states",
-    "GB": "united_kingdom",
-    "UK": "united_kingdom",
-    "JP": "japan",
-    "CA": "canada",
-    "DE": "germany",
-    "FR": "france",
-    "IT": "italy",
-    "ES": "spain",
-    "IN": "india",
-    "BR": "brazil",
-    "MX": "mexico",
-    "AU": "australia",
-}
-
-REALTIME_PN_MAP = {
-    "UNITED_STATES": "US",
-    "UNITED_KINGDOM": "GB",
-    "JAPAN": "JP",
-    "CANADA": "CA",
-    "GERMANY": "DE",
-    "FRANCE": "FR",
-    "ITALY": "IT",
-    "SPAIN": "ES",
-    "INDIA": "IN",
-    "BRAZIL": "BR",
-    "MEXICO": "MX",
-    "AUSTRALIA": "AU",
-}
+TRENDS_DATA_TYPES = frozenset(
+    {"TIMESERIES", "GEO_MAP", "GEO_MAP_0", "RELATED_TOPICS", "RELATED_QUERIES"}
+)
+TRENDS_GPROPS = frozenset({"", "images", "news", "froogle", "youtube"})
+TRENDS_REGIONS = frozenset({"COUNTRY", "REGION", "DMA", "CITY"})
+TRENDING_NOW_HOURS = frozenset({"4", "24", "48", "168"})
+FORBIDDEN_PARAMS = frozenset({"engine", "api_key", "output", "async"})
 
 ScenarioBuilder = Callable[[dict[str, Any], str], dict[str, Any]]
 
 
 @dataclass(frozen=True)
 class GoogleTrendsScenario:
-    """单个 Google Trends 场景定义。"""
+    """单个 SerpApi Google Trends 场景定义。"""
 
     scenario_id: str
     title: str
@@ -75,216 +44,235 @@ class GoogleTrendsScenario:
         return payload
 
     def build_params(self, *, params: dict[str, Any], geo: str) -> dict[str, Any]:
-        """构造 pytrends 场景参数。"""
-        return self.param_builder(params, geo)
+        """校验并构造 SerpApi 请求参数。"""
+        return self.param_builder(dict(params or {}), geo)
 
 
 def list_scenarios() -> list[dict[str, Any]]:
-    """列出可用场景。"""
+    """列出当前启用的三个 SerpApi 场景。"""
     return [scenario.to_public_dict() for scenario in SCENARIOS.values()]
 
 
 def get_scenario(scenario_id: str) -> GoogleTrendsScenario:
-    """获取场景定义。"""
+    """按场景 ID 获取定义；旧 pytrends 场景视为未知。"""
     scenario = SCENARIOS.get(str(scenario_id or "").strip())
     if not scenario:
         raise GoogleTrendsConfigError(f"未知 Google Trends 场景：{scenario_id}")
     return scenario
 
 
-def _payload_params(params: dict[str, Any], geo: str) -> dict[str, Any]:
-    geo_value = params["geo"] if "geo" in params else geo
-    return {
-        "kw_list": _keyword_list(params, max_keywords=5),
-        "cat": _parse_int(params.get("cat"), 0),
-        "timeframe": str(params.get("timeframe") or "today 12-m").strip(),
-        "geo": _normalize_geo(geo_value),
-        "gprop": _normalize_gprop(params.get("gprop")),
-    }
-
-
-def _interest_by_region_params(params: dict[str, Any], geo: str) -> dict[str, Any]:
-    payload = _payload_params(params, geo)
-    payload.update(
+def _trends_params(params: dict[str, Any], geo: str) -> dict[str, Any]:
+    """构造 `engine=google_trends` 的业务参数。"""
+    _reject_forbidden_params(params)
+    _reject_unknown_params(
+        params,
         {
-            "resolution": str(params.get("resolution") or "COUNTRY").strip().upper(),
-            "inc_low_vol": _parse_bool(params.get("inc_low_vol"), True),
-            "inc_geo_code": _parse_bool(params.get("inc_geo_code"), False),
-        }
+            "q",
+            "data_type",
+            "geo",
+            "date",
+            "tz",
+            "cat",
+            "gprop",
+            "region",
+            "include_low_search_volume",
+            "hl",
+            "no_cache",
+        },
     )
-    return payload
+    data_type = str(params.get("data_type") or "TIMESERIES").strip().upper()
+    if data_type not in TRENDS_DATA_TYPES:
+        raise GoogleTrendsConfigError(f"不支持的 data_type：{data_type}")
+
+    keywords = _query_list(params.get("q"))
+    if not keywords and params.get("cat") in {None, ""}:
+        raise GoogleTrendsConfigError("trends 场景缺少 q；仅分类趋势查询可只提供 cat")
+    _validate_keyword_count(data_type, keywords)
+
+    result: dict[str, Any] = {}
+    if keywords:
+        result["q"] = ",".join(keywords)
+    result["data_type"] = data_type
+    _copy_text(result, params, "date")
+    _copy_int(result, params, "tz")
+    _copy_int(result, params, "cat")
+    _copy_text(result, params, "hl")
+
+    gprop = str(params.get("gprop") or "").strip().lower()
+    if "gprop" in params:
+        if gprop not in TRENDS_GPROPS:
+            raise GoogleTrendsConfigError(f"不支持的 gprop：{params.get('gprop')}")
+        result["gprop"] = gprop
+
+    if "region" in params:
+        region = str(params.get("region") or "").strip().upper()
+        if region not in TRENDS_REGIONS:
+            raise GoogleTrendsConfigError(f"不支持的 region：{params.get('region')}")
+        if data_type not in {"GEO_MAP", "GEO_MAP_0"}:
+            raise GoogleTrendsConfigError("region 仅适用于 GEO_MAP 或 GEO_MAP_0")
+        result["region"] = region
+
+    if "include_low_search_volume" in params:
+        if data_type not in {"GEO_MAP", "GEO_MAP_0"}:
+            raise GoogleTrendsConfigError(
+                "include_low_search_volume 仅适用于 GEO_MAP 或 GEO_MAP_0"
+            )
+        result["include_low_search_volume"] = _bool_text(
+            params["include_low_search_volume"], "include_low_search_volume"
+        )
+    if "no_cache" in params:
+        result["no_cache"] = _bool_text(params["no_cache"], "no_cache")
+
+    effective_geo = params.get("geo") if "geo" in params else geo
+    normalized_geo = _normalize_geo(effective_geo)
+    if normalized_geo:
+        result["geo"] = normalized_geo
+    return result
 
 
-def _suggestions_params(params: dict[str, Any], geo: str) -> dict[str, Any]:
-    keywords = _keyword_list(params, max_keywords=1)
-    return {"keyword": keywords[0]}
+def _autocomplete_params(params: dict[str, Any], geo: str) -> dict[str, Any]:
+    """构造 `engine=google_trends_autocomplete` 的业务参数。"""
+    del geo
+    _reject_forbidden_params(params)
+    _reject_unknown_params(params, {"q", "hl", "no_cache"})
+    query = str(params.get("q") or "").strip()
+    if not query:
+        raise GoogleTrendsConfigError("autocomplete 场景缺少 q")
+    if len(query) > 100:
+        raise GoogleTrendsConfigError("q 最长 100 个字符")
+    result = {"q": query}
+    _copy_text(result, params, "hl")
+    if "no_cache" in params:
+        result["no_cache"] = _bool_text(params["no_cache"], "no_cache")
+    return result
 
 
-def _trending_searches_params(params: dict[str, Any], geo: str) -> dict[str, Any]:
-    pn = params.get("pn") or params.get("geo") or geo or "US"
-    return {"pn": _normalize_trending_pn(pn)}
+def _trending_now_params(params: dict[str, Any], geo: str) -> dict[str, Any]:
+    """构造 `engine=google_trends_trending_now` 的业务参数。"""
+    _reject_forbidden_params(params)
+    _reject_unknown_params(
+        params,
+        {"geo", "category_id", "hours", "only_active", "hl", "no_cache"},
+    )
+    effective_geo = params.get("geo") if "geo" in params else geo
+    result: dict[str, Any] = {"geo": _normalize_geo(effective_geo) or "US"}
+    if "hours" in params:
+        hours = str(params.get("hours") or "").strip()
+        if hours not in TRENDING_NOW_HOURS:
+            raise GoogleTrendsConfigError("hours 仅支持 4、24、48、168")
+        result["hours"] = hours
+    _copy_int(result, params, "category_id")
+    if "only_active" in params:
+        result["only_active"] = _bool_text(params["only_active"], "only_active")
+    _copy_text(result, params, "hl")
+    if "no_cache" in params:
+        result["no_cache"] = _bool_text(params["no_cache"], "no_cache")
+    return result
 
 
-def _realtime_trending_params(params: dict[str, Any], geo: str) -> dict[str, Any]:
-    pn = params.get("pn") or params.get("geo") or geo or "US"
-    return {"pn": _normalize_realtime_pn(pn)}
+def _reject_forbidden_params(params: dict[str, Any]) -> None:
+    """禁止调用方覆盖认证、引擎及同步执行约束。"""
+    normalized = {str(key).replace("-", "_").lower() for key in params}
+    forbidden = sorted(FORBIDDEN_PARAMS.intersection(normalized))
+    if forbidden:
+        raise GoogleTrendsConfigError(f"参数不允许传入：{forbidden[0]}")
 
 
-def _keyword_list(params: dict[str, Any], *, max_keywords: int) -> list[str]:
-    value = params.get("kw_list")
-    if value is None:
-        value = params.get("keywords")
-    if value is None:
-        value = params.get("keyword")
-    if value is None:
-        value = params.get("q")
-    keywords = _list_text(value)
-    if not keywords:
-        raise GoogleTrendsConfigError("缺少关键词参数：keyword、keywords 或 kw_list")
-    if len(keywords) > max_keywords:
-        raise GoogleTrendsConfigError(f"Google Trends 单次最多支持 {max_keywords} 个关键词")
-    return keywords
+def _reject_unknown_params(params: dict[str, Any], allowed: set[str]) -> None:
+    """拒绝未声明参数，避免拼写错误消耗第三方额度。"""
+    unknown = sorted(str(key) for key in params if str(key) not in allowed)
+    if unknown:
+        raise GoogleTrendsConfigError(f"不支持的参数：{unknown[0]}")
 
 
-def _list_text(value: Any) -> list[str]:
+def _query_list(value: Any) -> list[str]:
+    """将 q 规范化为最多五个非空查询词。"""
     if value is None:
         return []
     if isinstance(value, str):
-        parts = value.split(",") if "," in value else [value]
+        parts = value.split(",")
     elif isinstance(value, (list, tuple, set)):
         parts = list(value)
     else:
         parts = [value]
-    return [str(item).strip() for item in parts if str(item).strip()]
+    queries = [str(item).strip() for item in parts if str(item).strip()]
+    if len(queries) > 5:
+        raise GoogleTrendsConfigError("Google Trends 单次最多支持 5 个关键词")
+    if any(len(query) > 100 for query in queries):
+        raise GoogleTrendsConfigError("每个 q 最长 100 个字符")
+    return queries
+
+
+def _validate_keyword_count(data_type: str, keywords: list[str]) -> None:
+    """按 SerpApi data_type 约束关键词数量。"""
+    if data_type == "GEO_MAP" and not 2 <= len(keywords) <= 5:
+        raise GoogleTrendsConfigError("GEO_MAP 需要 2 到 5 个关键词")
+    if data_type in {"GEO_MAP_0", "RELATED_TOPICS", "RELATED_QUERIES"} and len(keywords) != 1:
+        raise GoogleTrendsConfigError(f"{data_type} 仅支持 1 个关键词")
+
+
+def _copy_text(result: dict[str, Any], params: dict[str, Any], field: str) -> None:
+    """复制非空文本参数。"""
+    if field not in params:
+        return
+    value = str(params.get(field) or "").strip()
+    if value:
+        result[field] = value
+
+
+def _copy_int(result: dict[str, Any], params: dict[str, Any], field: str) -> None:
+    """校验整数参数并以字符串传给 SerpApi。"""
+    if field not in params or params.get(field) in {None, ""}:
+        return
+    try:
+        result[field] = str(int(params[field]))
+    except (TypeError, ValueError) as exc:
+        raise GoogleTrendsConfigError(f"{field} 需要整数") from exc
+
+
+def _bool_text(value: Any, field: str) -> str:
+    """将布尔参数转换为 SerpApi 接受的小写字符串。"""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return "true"
+    if text in {"0", "false", "no", "n", "off"}:
+        return "false"
+    raise GoogleTrendsConfigError(f"{field} 需要布尔值")
 
 
 def _normalize_geo(value: Any) -> str:
-    if value is None:
-        return "US"
-    text = str(value).strip()
-    if not text:
-        return ""
-    return text.upper()
-
-
-def _normalize_gprop(value: Any) -> str:
-    if value is None:
-        return ""
-    text = str(value).strip().lower()
-    normalized = GPROP_ALIASES.get(text, text)
-    if normalized not in GPROP_VALUES:
-        raise GoogleTrendsConfigError(f"不支持的 gprop：{value}")
-    return normalized
-
-
-def _normalize_trending_pn(value: Any) -> str:
-    text = str(value or "US").strip()
-    if not text:
-        return "united_states"
-    upper = text.upper().replace("-", "_")
-    if upper in TRENDING_PN_MAP:
-        return TRENDING_PN_MAP[upper]
-    return text.lower().replace(" ", "_").replace("-", "_")
-
-
-def _normalize_realtime_pn(value: Any) -> str:
-    text = str(value or "US").strip()
-    if not text:
-        return "US"
-    upper = text.upper().replace("-", "_").replace(" ", "_")
-    return REALTIME_PN_MAP.get(upper, upper)
-
-
-def _parse_int(value: Any, default: int) -> int:
-    if value is None or value == "":
-        return default
-    try:
-        return int(value)
-    except (TypeError, ValueError) as exc:
-        raise GoogleTrendsConfigError(f"参数需要整数：{value}") from exc
-
-
-def _parse_bool(value: Any, default: bool) -> bool:
-    if value is None or value == "":
-        return default
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "y", "on"}:
-        return True
-    if text in {"0", "false", "no", "n", "off"}:
-        return False
-    raise GoogleTrendsConfigError(f"参数需要布尔值：{value}")
+    """将地区代码规范化为大写；空字符串表示全球。"""
+    return str(value or "").strip().upper()
 
 
 SCENARIOS: dict[str, GoogleTrendsScenario] = {
-    "interest-over-time": GoogleTrendsScenario(
-        scenario_id="interest-over-time",
-        title="关键词趋势时间序列",
-        method="interest_over_time",
-        required_params=("keyword",),
-        param_builder=_payload_params,
-        description="按关键词、地区、时间范围获取 Google Trends 搜索指数时间序列，最多 5 个关键词。",
-        sample_params={"keyword": "flashlight", "timeframe": "today 12-m", "geo": "US"},
+    "trends": GoogleTrendsScenario(
+        scenario_id="trends",
+        title="Google Trends 深度趋势分析",
+        method="google_trends",
+        required_params=("q",),
+        param_builder=_trends_params,
+        description="查询时间趋势、地域热度、相关主题或相关查询，最多比较 5 个查询词。",
+        sample_params={"q": "flashlight", "data_type": "TIMESERIES", "date": "today 12-m"},
     ),
-    "interest-by-region": GoogleTrendsScenario(
-        scenario_id="interest-by-region",
-        title="关键词地区热度",
-        method="interest_by_region",
-        required_params=("keyword",),
-        param_builder=_interest_by_region_params,
-        description="按地区拆分关键词搜索热度，支持 resolution、inc_low_vol、inc_geo_code。",
-        sample_params={"keyword": "flashlight", "geo": "US", "resolution": "REGION"},
+    "autocomplete": GoogleTrendsScenario(
+        scenario_id="autocomplete",
+        title="Google Trends 主题自动补全",
+        method="google_trends_autocomplete",
+        required_params=("q",),
+        param_builder=_autocomplete_params,
+        description="获取普通搜索词和 Google Trends Topic 候选，用于实体消歧。",
+        sample_params={"q": "Apple", "hl": "en"},
     ),
-    "related-queries": GoogleTrendsScenario(
-        scenario_id="related-queries",
-        title="相关查询",
-        method="related_queries",
-        required_params=("keyword",),
-        param_builder=_payload_params,
-        description="获取关键词相关搜索词 top/rising 列表，最多 5 个关键词。",
-        sample_params={"keyword": "flashlight", "geo": "US"},
-    ),
-    "related-topics": GoogleTrendsScenario(
-        scenario_id="related-topics",
-        title="相关主题",
-        method="related_topics",
-        required_params=("keyword",),
-        param_builder=_payload_params,
-        description="已知不可用：pytrends 相关主题解析当前会触发 list index out of range。",
-        sample_params={"keyword": "flashlight", "geo": "US"},
-        availability="unavailable",
-        notes="2026-06-09 自测 flashlight、iphone、taylor swift 均在 pytrends related_topics 内部抛出 list index out of range。",
-    ),
-    "suggestions": GoogleTrendsScenario(
-        scenario_id="suggestions",
-        title="关键词建议",
-        method="suggestions",
-        required_params=("keyword",),
-        param_builder=_suggestions_params,
-        description="获取单个关键词的 Google Trends 主题建议。",
-        sample_params={"keyword": "flashlight"},
-    ),
-    "trending-searches": GoogleTrendsScenario(
-        scenario_id="trending-searches",
-        title="每日热搜",
-        method="trending_searches",
+    "trending-now": GoogleTrendsScenario(
+        scenario_id="trending-now",
+        title="Google Trends 当前热点",
+        method="google_trends_trending_now",
         required_params=(),
-        param_builder=_trending_searches_params,
-        description="已知不可用：pytrends 每日热搜端点当前会返回 Google 404。",
-        sample_params={"pn": "US"},
-        availability="unavailable",
-        notes="2026-06-09 自测 pn=US/united_states 均返回 404；不要作为“今日热搜”查询入口。",
-    ),
-    "realtime-trending": GoogleTrendsScenario(
-        scenario_id="realtime-trending",
-        title="实时热搜",
-        method="realtime_trending_searches",
-        required_params=(),
-        param_builder=_realtime_trending_params,
-        description="已知不可用：pytrends 实时热搜端点当前会返回 Google 404。",
-        sample_params={"pn": "US"},
-        availability="unavailable",
-        notes="2026-06-09 自测 pn=US 返回 404；不要作为 daily 热搜失败后的回退入口。",
+        param_builder=_trending_now_params,
+        description="按地区、时间和分类发现当前热门搜索，可只返回仍活跃的趋势。",
+        sample_params={"geo": "US", "hours": 24, "only_active": True},
     ),
 }

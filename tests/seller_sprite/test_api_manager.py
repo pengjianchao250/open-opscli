@@ -69,6 +69,92 @@ class DummyApiClient:
         }
 
 
+class KeywordResearchApiClient(DummyApiClient):
+    calls = []
+
+    async def get_html(self, url, params, *, referer=None):
+        self.calls.append({"url": url, "params": params, "referer": referer})
+        cells = "".join(f"<td>{value}</td>" for value in [
+            "", "1", "desk lamp", "", "", "1,000", "10|1%", "100|20",
+            "2%", "3 (4%)|5 (6%)", "7%|8%", "9", "10%", "", "", "11|12", "$13.00|14 (4.5)", "",
+        ])
+        return f'<table id="table-condition-search"><tbody><tr>{cells}</tr></tbody></table>'
+
+
+class AbaResearchApiClient(DummyApiClient):
+    """模拟 ABA 数据选品分页响应，验证 Manager 不请求第二页。"""
+
+    calls = []
+
+    async def post_json(self, url, payload, *, referer=None):
+        self.calls.append({"url": url, "payload": dict(payload), "referer": referer})
+        return {
+            "code": "OK",
+            "data": {
+                "pages": 5,
+                "page": 1,
+                "size": 100,
+                "total": 227,
+                "items": [
+                    {"keyword": "obsession", "searchRank": 1},
+                    {"keyword": "paper towels", "searchRank": 2},
+                ],
+            },
+        }
+
+
+class AbaReverseApiClient(DummyApiClient):
+    calls = []
+    content = b"PK\x03\x04official-xlsx-content"
+
+    async def get_bytes(self, url, params, *, referer=None):
+        self.calls.append({"url": url, "params": dict(params), "referer": referer})
+        return self.content, "ABA-Reverse-B00000JBNX-US-20260723.xlsx"
+
+
+class AssociationTrafficApiClient(DummyApiClient):
+    """模拟存在多页的关联流量接口，验证 Manager 只请求第一页。"""
+
+    calls = []
+
+    async def post_json(self, url, payload, *, referer=None):
+        """按请求页码提供两页固定的关联流量测试数据。
+
+        参数：
+            url: 被测 Manager 提交的接口路径。
+            payload: 包含 ``pageNum`` 的关联流量请求体。
+            referer: 被测场景生成的页面来源地址。
+
+        返回：
+            包含 ``data.pagerDto`` 的固定分页响应。
+
+        异常：
+            本测试替身不主动抛出异常。
+        """
+        self.calls.append({"url": url, "payload": dict(payload), "referer": referer})
+        page = payload["pageNum"]
+        items = (
+            [{"asin": "B0RESULT001"}, {"asin": "B0RESULT002"}]
+            if page == 1
+            else [{"asin": "B0RESULT003"}]
+        )
+        return {
+            "code": "OK",
+            "success": True,
+            "data": {
+                "pagerDto": {
+                    "page": page,
+                    "size": 2,
+                    "total": 3,
+                    "items": items,
+                    "took": 1,
+                },
+                "queryTook": 1,
+                "monitorTook": 1,
+            },
+        }
+
+
 class SessionExpiredOnceApiClient(DummyApiClient):
     instance = None
 
@@ -214,6 +300,328 @@ def test_manager_writes_job_files_and_xlsx(monkeypatch, tmp_path: Path):
     assert saved["export"]["filename"] == "job-offline-regression.xlsx"
     assert DummyApiClient.calls[0]["payload"]["asin"] == "B07YRMT36L"
     assert "market" not in DummyApiClient.calls[0]["payload"]
+
+
+def test_manager_runs_keyword_research_as_get_page(monkeypatch, tmp_path: Path):
+    KeywordResearchApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", KeywordResearchApiClient)
+    settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None, default_mode="api-direct")
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-research",
+                site="US",
+                period="2026-06",
+                params={"minWordCount": 1, "maxWordCount": 5},
+                job_id="job-keyword-research",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert len(KeywordResearchApiClient.calls) == 1
+    assert KeywordResearchApiClient.calls[0]["url"] == "/v2/keyword-research"
+    assert KeywordResearchApiClient.calls[0]["params"]["month"] == "202606"
+    assert KeywordResearchApiClient.calls[0]["params"]["page"] == "1"
+    assert KeywordResearchApiClient.calls[0]["params"]["size"] == "100"
+    assert KeywordResearchApiClient.calls[0]["params"]["minWordCount"] == "1"
+    assert KeywordResearchApiClient.calls[0]["referer"].startswith(
+        "https://www.sellersprite.com/v2/keyword-research?"
+    )
+
+
+def test_manager_returns_only_first_aba_research_page(monkeypatch, tmp_path: Path):
+    AbaResearchApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", AbaResearchApiClient)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="api-direct"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="aba-research",
+                site="US",
+                period="2026第29周(07/12~07/18)",
+                params={"q": "paper towels", "page": 4, "size": 20},
+                page_size=20,
+                job_id="job-aba-research",
+            )
+        )
+    )
+
+    assert result.row_count == 2
+    assert [row["keyword"] for row in result.data] == ["obsession", "paper towels"]
+    assert result.export is not None
+    assert result.export.filename == "ABAKeywordTrend-US-2026第29周.xlsx"
+    assert Path(result.export.path).exists()
+    assert len(AbaResearchApiClient.calls) == 1
+    call = AbaResearchApiClient.calls[0]
+    assert call["url"] == "/v3/api/aba-research"
+    assert call["payload"]["page"] == 1
+    assert call["payload"]["size"] == 100
+    assert call["payload"]["market"] == "COM"
+    assert call["payload"]["q"] == "paper towels"
+    assert call["referer"] == "https://www.sellersprite.com/v3/aba-research"
+
+    raw = json.loads((tmp_path / "job-aba-research" / "raw.json").read_text(encoding="utf-8"))
+    assert raw["response"]["data"]["total"] == 227
+    assert len(raw["response"]["data"]["items"]) == 2
+
+
+def test_manager_returns_only_first_aba_research_page_in_browser_route_mode(
+    monkeypatch,
+    tmp_path: Path,
+):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "page": 1,
+                    "size": 100,
+                    "total": 138,
+                    "items": [{"keyword": "obsession", "searchRank": 1}],
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(api_manager_module, "_run_browser_route_request", fake_browser_route_request)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="aba-research",
+                site="US",
+                period="2026-07-18",
+                params={"q": "obsession", "page": 2, "size": 10},
+                job_id="job-aba-browser-route",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert result.export is not None
+    assert result.export.filename == "ABAKeywordTrend-US-2026第29周.xlsx"
+    assert len(calls) == 1
+    assert calls[0]["scenario_method"] == "POST"
+    assert calls[0]["endpoint"] == "/v3/api/aba-research"
+    assert calls[0]["payload"]["page"] == 1
+    assert calls[0]["payload"]["size"] == 100
+    assert calls[0]["payload"]["q"] == "obsession"
+
+
+def test_manager_saves_official_aba_reverse_xlsx_without_rebuilding(monkeypatch, tmp_path: Path):
+    AbaReverseApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", AbaReverseApiClient)
+    settings = SellerSpriteSettings(
+        output_dir=tmp_path,
+        username=None,
+        password=None,
+        default_mode="api-direct",
+    )
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="aba-reverse",
+                site="US",
+                period="2026-07-18",
+                params={"asin": "B00000JBNX", "reverseType": "W"},
+                job_id="job-aba-reverse",
+            )
+        )
+    )
+
+    assert result.row_count == 0
+    assert result.data == []
+    assert result.export is not None
+    assert result.export.filename == "ABA-Reverse-B00000JBNX-US-20260723.xlsx"
+    assert Path(result.export.path).read_bytes() == AbaReverseApiClient.content
+    assert len(AbaReverseApiClient.calls) == 1
+    call = AbaReverseApiClient.calls[0]
+    assert call["url"] == "/v2/aba/reverse/export"
+    assert call["params"]["asin"] == "B00000JBNX"
+    assert call["params"]["table"] == "ara_20260718"
+    assert call["params"]["monthlyTable"] == "ara_202606"
+    assert call["referer"].startswith(
+        "https://www.sellersprite.com/v2/aba/reverse/search?"
+    )
+
+
+def test_manager_keeps_browser_route_aba_reverse_xlsx_unchanged(monkeypatch, tmp_path: Path):
+    content = b"PK\x03\x04browser-official-xlsx"
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        output_path = kwargs["root_dir"] / "official-export.xlsx"
+        output_path.write_bytes(content)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "official_xlsx_path": str(output_path),
+                    "official_filename": "ABA-Reverse-B00000JBNX-US.xlsx",
+                    "content_length": len(content),
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(
+        api_manager_module,
+        "_run_browser_route_request",
+        fake_browser_route_request,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="aba-reverse",
+                site="US",
+                period="2026-07-18",
+                params={"asin": "B00000JBNX"},
+                job_id="job-aba-browser-route",
+            )
+        )
+    )
+
+    assert result.export is not None
+    assert result.export.filename == "ABA-Reverse-B00000JBNX-US.xlsx"
+    assert Path(result.export.path).read_bytes() == content
+    assert len(calls) == 1
+    assert calls[0]["scenario_method"] == "GET_XLSX"
+    assert calls[0]["endpoint"] == "/v2/aba/reverse/export"
+
+
+def test_manager_rejects_json_export_for_aba_reverse(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", AbaReverseApiClient)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="api-direct"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    with pytest.raises(SellerSpriteConfigError, match="仅支持 xls 或 xlsx"):
+        _run(
+            manager.run(
+                SellerSpriteScenarioRequest(
+                    scenario="aba-reverse",
+                    site="US",
+                    period="2026-07-18",
+                    params={"asin": "B00000JBNX"},
+                    export_format="json",
+                )
+            )
+        )
+
+
+def test_manager_returns_only_first_association_traffic_page(monkeypatch, tmp_path: Path):
+    AssociationTrafficApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", AssociationTrafficApiClient)
+    settings = SellerSpriteSettings(
+        output_dir=tmp_path,
+        username=None,
+        password=None,
+        default_mode="api-direct",
+    )
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="association-traffic",
+                site="US",
+                period="30d",
+                params={"asins": ["B098T9ZFB5"]},
+                page_size=100,
+                job_id="job-association-traffic",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.row_count == 2
+    assert [row["asin"] for row in result.data] == [
+        "B0RESULT001",
+        "B0RESULT002",
+    ]
+    assert [call["payload"]["pageNum"] for call in AssociationTrafficApiClient.calls] == [1]
+    assert all(call["payload"]["pageSize"] == 100 for call in AssociationTrafficApiClient.calls)
+    assert all(call["url"] == "/v3/api/relation/traffic" for call in AssociationTrafficApiClient.calls)
+    raw = json.loads((tmp_path / "job-association-traffic" / "raw.json").read_text(encoding="utf-8"))
+    assert raw["response"]["data"]["pagerDto"]["total"] == 3
+    assert len(raw["response"]["data"]["pagerDto"]["items"]) == 2
+
+
+def test_manager_returns_only_first_association_page_in_browser_route_mode(monkeypatch, tmp_path: Path):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        page = kwargs["payload"]["pageNum"]
+        items = [{"asin": "B0RESULT001"}] if page == 1 else [{"asin": "B0RESULT002"}]
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "pagerDto": {
+                        "page": page,
+                        "size": 1,
+                        "total": 2,
+                        "items": items,
+                    }
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(api_manager_module, "_run_browser_route_request", fake_browser_route_request)
+    settings = SellerSpriteSettings(
+        output_dir=tmp_path,
+        username=None,
+        password=None,
+        default_mode="browser-route",
+    )
+    manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="association-traffic",
+                site="US",
+                period="30d",
+                params={"asins": ["B098T9ZFB5"]},
+                page_size=100,
+                job_id="job-association-browser-route",
+                export_format="json",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert [call["payload"]["pageNum"] for call in calls] == [1]
+    assert all(call["payload"]["pageSize"] == 100 for call in calls)
 
 
 def test_manager_normalizes_competitor_lookup_singular_asin_before_api_call(monkeypatch, tmp_path: Path):
@@ -515,6 +923,108 @@ def test_extract_items_prefers_traffic_source_pager_items_over_context_asin():
     )
 
     assert rows == items
+
+
+def test_browser_listing_analysis_persists_captured_remote_task_id(monkeypatch, tmp_path: Path):
+    captured = []
+
+    async def fake_browser_route_request(**kwargs):
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "taskId": "remote-task-1",
+                    "taskStatus": "RUNNING",
+                    "asin": "B0D3845MWD",
+                    "station": "GLOBAL",
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(
+        api_manager_module,
+        "_run_browser_route_request",
+        fake_browser_route_request,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+        listing_task_id_listener=captured.append,
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="listing-analysis",
+                site="US",
+                period="30d",
+                params={"asin": "B0D3845MWD"},
+                job_id="job-listing-checkpoint",
+                export_format="json",
+            )
+        )
+    )
+
+    assert captured == ["remote-task-1"]
+    assert result.data[0]["taskId"] == "remote-task-1"
+
+
+def test_browser_listing_analysis_resumes_remote_task_without_resubmit(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from opscli.seller_sprite import browser_route
+
+    report_calls = []
+
+    async def fail_submit(**kwargs):
+        raise AssertionError("已有远端 taskId 时不得重新提交 Listing Analysis")
+
+    async def fake_fetch_report(**kwargs):
+        report_calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "taskId": kwargs["task_id"],
+                    "taskStatus": "COMPLETED",
+                    "content": "completed report",
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(api_manager_module, "_run_browser_route_request", fail_submit)
+    monkeypatch.setattr(
+        browser_route,
+        "fetch_listing_analysis_report_with_browser_route",
+        fake_fetch_report,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+        listing_remote_task_id="remote-task-existing",
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="listing-analysis",
+                site="US",
+                period="30d",
+                params={"asin": "B0D3845MWD"},
+                job_id="job-listing-resume",
+                export_format="json",
+            )
+        )
+    )
+
+    assert len(report_calls) == 1
+    assert report_calls[0]["task_id"] == "remote-task-existing"
+    assert result.data[0]["content"] == "completed report"
 
 
 def test_manager_records_listing_analysis_submit_state(monkeypatch, tmp_path: Path):

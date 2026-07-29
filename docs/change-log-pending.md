@@ -14,6 +14,122 @@
 
 ---
 
+## 2026-07-28 seller_sprite - 透传关联流量准备接口错误
+
+**变更原因**：部分 ASIN 调用关联流量准备接口时返回 `ERR_GLOBAL_500`，官网不展示全部变体选择弹窗，browser-route 因未监听准备接口而误报弹窗缺失。
+**改动点**：补充关联流量准备接口业务错误的 browser-route 回归测试；实现准备响应监听和结构化错误透传，成功时保持原有全部变体查询流程。
+**验证结果**：新增用例修复前稳定失败、修复后关联流量定向回归 `4 passed`，browser worker 单文件回归 `66 passed`，Manager 关联流量回归 `2 passed`；变更文件 `py_compile` 和 `git diff --check` 通过。
+**影响范围**：仅调整 `association-traffic` 页面交互中准备接口失败时的错误识别；正常查询和其他卖家精灵场景不变。
+**回滚方式**：回退准备响应监听、对应测试及本条记录。
+---
+
+## 2026-07-24 seller_sprite - 修复关键词挖掘空查询与重复超时
+
+**变更原因**：关键词挖掘 browser-route 未将请求关键词填入页面输入框，空点“立即查询”后页面只提示输入关键词，主接口与高频词接口各等待约 15 秒才回退浏览器上下文请求。
+**改动点**：主接口新增关键词挖掘专用页面交互，兼容关键词 placeholder、aria-label、name 及查询按钮邻近唯一文本框定位，填入关键词后再点击查询；无法可靠定位输入框时不空点按钮并立即回退；高频词接口改为直接复用浏览器登录态请求，不再二次点击页面和等待响应；保留其他场景原有 route 行为及分阶段耗时诊断。
+**验证结果**：关键词输入兼容、缺失输入框立即回退、高频词直连及其他场景隔离回归 `8 passed`；browser worker 全量回归 `65 passed`；SellerSprite 全量为 `269 passed, 2 failed`，两项均为既有 `seller-sprite-debug` 顶级命令未注册基线；变更文件 `py_compile` 和 `git diff --check` 通过。
+**影响范围**：仅调整 `keyword-miner` 的页面主查询和高频词补充请求；不改变 Association Traffic、其他场景、请求 payload、共享账号串行调度或全局页面响应超时。
+**回滚方式**：回退关键词挖掘专用页面交互、高频词 context request 分支、对应测试及本条记录。
+---
+
+## 2026-07-24 seller_sprite - 隐藏部署运维命令组
+
+**变更原因**：SellerSprite 正式 CLI 帮助会展示本地队列和专属账号绑定命令，容易让普通用户误认为这些部署运维能力属于公共命令契约。
+**改动点**：从 `opscli seller-sprite --help` 隐藏 `queue` 和 `account-binding` 整组命令，同时保留完整命令路径供服务主机运维使用；补充帮助可见性回归测试。
+**验证结果**：正式帮助已确认不再显示两个运维命令组，完整命令路径仍可执行；相关 CLI 回归 `19 passed, 2 deselected`，生产模块 `py_compile` 和 `git diff --check` 通过；未排除执行为 `19 passed, 2 failed`，两项均为既有 `seller-sprite-debug` 顶级命令未注册基线。
+**影响范围**：仅调整正式 CLI 帮助展示，不改变队列和账号绑定命令的调用方式与执行行为。
+**回滚方式**：移除两个命令组注册时的 `hidden=True`、对应测试及本条记录。
+---
+
+## 2026-07-24 collector_mcp - 接入通用 MCP 静默代理
+
+**变更原因**：通用 MCP 仍在本地注册并执行 SellerSprite，导致 Collector 停止后卖家精灵仍可访问，不符合 Collector 独立部署和单一对外入口设计。
+**改动点**：通用 MCP 的 10 个 `seller_sprite_*` Tool 改为读取 `OPSCLI_COLLECTOR_MCP_URL` 并代理 Collector 同名 Tool，使用 Bearer Header 透传当前用户 API Key；移除通用 MCP 的 SellerSprite scheduler 生命周期，本地代理跳过额度扣减并由 Collector 统一执行额度、权限和凭证隔离；`opscli seller-sprite` 继续使用 OPS 配置接口下发的通用 MCP 地址，不直接发现 Collector；新增 `docs/release/Collector MCP运维说明.md` 及代理回归测试。
+**验证结果**：通用 MCP 代理、CLI 通用 MCP 路由、Remote MCP Header、工具注册、生命周期、额度权限及 Collector 边界定向回归 `192 passed`；`git diff --check` 通过。
+**影响范围**：通用 MCP 不再本地执行 SellerSprite；未配置或无法连接 Collector 时卖家精灵调用明确失败，Collector 本身和 `opscli seller-sprite` 远端调用保持不变。
+**回滚方式**：将通用 MCP 恢复注册本地 SellerSprite Tool 和 scheduler lifespan，移除代理模块、Header 透传、测试、运维说明及本条记录。
+---
+
+## 2026-07-23 seller_sprite - 增加场景接入规范
+
+**变更原因**：需要将卖家精灵场景调研、接口取证、分页和导出对齐经验固化为可复用的开发规范，避免后续接入依赖字段猜测或复制官网非业务内容。
+**改动点**：新增《卖家精灵场景接入规范》，统一真实页面参数与枚举接口取证、默认第一页 100 条、API-direct 与 browser-route 一致性、本地业务主表及官方 XLSX 原样保存两种导出策略、默认排除 Notes 和二维码、reference 脱敏证据、离线测试矩阵及 Skill 版本同步要求。
+**验证结果**：文档关键契约检查和 `git diff --check` 通过。
+**影响范围**：仅新增卖家精灵后续场景的开发与验收规范，不改变现有场景运行行为。
+**回滚方式**：删除 `docs/spec/卖家精灵场景接入规范.md` 并移除本条记录。
+---
+
+## 2026-07-21 collector_mcp - 新增统一数据采集服务
+
+**变更原因**：SellerSprite 需要迁移至独立服务器运行，同时复用现有 MCP 鉴权、权限、额度和遥测能力，并为后续数据采集模块保留统一扩展入口。
+**改动点**：提取共享 MCP App Factory 和服务级隔离 Tool Catalog；新增 `opscli-collector-mcp` 入口、静态 Profile/Bundle Registry、服务及模块健康工具，并将 SellerSprite 作为首个显式 Bundle 接入持久队列生命周期；Collector 首期仅公开 2 个最小认证工具、2 个公共工具和 10 个 SellerSprite 工具；SellerSprite CLI 继续严格选择配置中心的 `BI运营系统` 通用 MCP，由通用 MCP 静默代理 Collector；HTTP/SSE 模式拒绝客户端 `output_dir`、隐藏服务器路径且仅返回 HTTPS 导出地址，stdio 保留本地路径兼容；通用 MCP 不再本地执行 SellerSprite，scheduler 仅由 Collector 管理并按租约恢复过期任务。
+**验证结果**：迁移定向回归 `129 passed`；Collector、SellerSprite 与 MCP 综合回归 `572 passed, 7 failed`，其中 2 项为既有 `seller-sprite-debug` 顶级命令未注册，另外 5 项为既有 stdio 权限过滤或当前 Skill Profile 资源裁剪基线；Collector 独立 Catalog 确认为 14 个工具；使用 `SKIP_CYTHON=1` 的 uv 环境完成项目构建和测试安装。
+**影响范围**：新增可独立部署的统一数据采集 MCP 服务，并改变 SellerSprite 的服务端执行位置和 HTTP/SSE 文件边界；SellerSprite CLI 仍访问 OPS 通用 MCP，其他 Remote Adapter、现有任务数据和 stdio 本地调用保持兼容。本次不迁移或删除生产 SQLite、凭证、浏览器 Profile 和结果文件。
+**回滚方式**：停止部署并移除 `opscli-collector-mcp` 入口及 Collector 包，将 SellerSprite Adapter 恢复默认服务选择，同时回退共享 Factory、Bundle、安全边界、测试、文档及本条记录；原通用 MCP 和任务数据无需调整。
+---
+
+## 2026-07-23 seller_sprite - 增加 ABA 数据选品场景
+
+**变更原因**：需要接入卖家精灵 ABA 数据选品查询，同时避开官网有限的导出次数并在本地生成与官方参考文件一致的工作簿。
+**改动点**：新增独立 `aba-research` 场景，固定只查询第一页 100 条，支持站点、周/月 ABA 周期、关键词或 ASIN、类目、排序和搜索结果筛选；查询接口 JSON 后在本地生成官方 19 列业务主表，不生成官网 `Notes` 页和二维码图片，也不调用官网导出接口；同步场景证据、离线测试和 `ops-seller-sprite` Skill。
+**验证结果**：ABA 参数、Manager、browser-route、XLSX 与 MCP 组合回归 `158 passed`；SellerSprite 全量 `261 passed, 2 failed`，两项均为既有 `seller-sprite-debug` 顶级命令未注册；生产模块 `py_compile` 和 `git diff --check` 通过。Skill 打包规则为 `7 passed, 1 failed`，失败项是既有 Windows PyInstaller 目标路径分隔符断言。
+**影响范围**：新增 ABA 数据选品查询和本地 XLSX 导出；现有关键词选品、关键词反查和 ABA 出单词反查保持隔离且行为不变。
+**回滚方式**：回退 `aba-research` 场景、参数构造、导出规则、场景证据、测试、Skill 文档及本条记录。
+---
+
+## 2026-07-23 seller_sprite - 增加出单词反查场景
+
+**变更原因**：需要接入卖家精灵 ABA 出单词反查，并让任务直接取得官网 Excel，避免自行解析页面或重建工作簿导致导出格式不一致。
+**改动点**：新增独立 `aba-reverse` 场景，支持站点、周/月具体周期、最多 20 个 ASIN 或 Amazon 产品链接及多分隔符输入；未提供周期时默认选择每周及最近完整周；API-direct 和 browser-route 均直接请求 `/v2/aba/reverse/export`，校验并原样保存官方 XLSX 和官方文件名，不解析或重建工作簿；同步 `ops-seller-sprite` Skill 的场景映射、参数口径、MCP 执行规则和版本；补充场景接口、表头和脱敏请求证据，以及参数、登录失效、二进制下载和两种执行模式的离线回归测试。
+**验证结果**：默认最近周优化相关回归 `140 passed`；SellerSprite 全量回归此前为 `238 passed, 2 failed`，两项失败均为既有 `seller-sprite-debug` 顶级命令未注册；Skill 本地安装校验、变更生产模块 `py_compile` 和 `git diff --check` 通过。
+**影响范围**：新增出单词反查查询及官方 Excel 下载；现有关键词反查、其他场景分页和本地工作簿导出逻辑不变。
+**回滚方式**：回退 `aba-reverse` 场景注册、参数构造、二进制下载分支、参考证据、测试及本条记录。
+---
+
+## 2026-07-23 seller_sprite - 避免页面关闭异常覆盖任务结果
+
+**变更原因**：browser-route 主请求结束后若页面或浏览器已关闭，`page.unroute()` 会抛出 `TargetClosedError` 并覆盖原始成功结果或业务异常，可能导致线上队列任务异常。
+**改动点**：补充主请求成功和失败时页面恰在 route 清理阶段关闭的回归测试，以及真实目标关闭错误进入失败态后继续消费队列的调度回归；browser-route 在页面已关闭时跳过 `unroute`，并仅忽略检查后关闭竞态产生的明确 `TargetClosedError`，其他清理错误保持原行为。
+**验证结果**：SellerSprite browser worker 回归 `54 passed`，任务调度器回归 `34 passed`；变更生产模块 `py_compile` 通过；`git diff --check` 通过。
+**影响范围**：仅影响 browser-route 请求结束后的 route 清理，不改变请求参数、登录、分页、账号选择或队列顺序。
+**回滚方式**：回退 browser-route 清理逻辑、对应回归测试及本条记录。
+---
+
+## 2026-07-23 seller_sprite - 恢复服务重启中断的持久任务
+
+**变更原因**：MCP 服务重启会终止进程内超时和 worker，但 SQLite 中的任务仍停留在 `running`，长期占用账号槽并阻断后续 `queued`；Listing Analysis 若已提交远端任务，恢复时还需避免重复提交。
+**改动点**：队列 schema 升级至 v4，增加执行 owner、心跳、租约和 Listing Analysis 远端 taskId 检查点；所有领取操作原子写入短租约，scheduler 定期续租并仅回收历史无租约或已过期任务，重排时递增执行代际、清空旧运行态并同步 MCP run；HTTP/SSE MCP lifespan 启动时主动启动 scheduler，正常关闭时停止领取、取消执行并立即重排本实例任务，异常退出则由租约过期恢复；普通任务采用 at-least-once 语义并继续由账号键和执行代际 CAS 防止旧结果覆盖；Listing Analysis 捕获远端 taskId 后立即持久化，恢复时直接读取原任务报告而不重复提交。
+**验证结果**：队列 Store `35 passed`、scheduler `36 passed`、API Manager `23 passed`、browser worker `57 passed`、MCP lifespan `3 passed`；SellerSprite 全量 `250 passed, 2 failed`，两项失败均为既有 `seller-sprite-debug` 顶级命令未注册；SellerSprite MCP 相关回归 `87 passed`；变更生产模块 `py_compile` 和 `git diff --check` 通过。
+**影响范围**：影响 SellerSprite 持久任务领取、MCP HTTP/SSE 服务启动关闭、进程中断恢复及 Listing Analysis 远端任务续跑；stdio 生命周期和正常任务业务参数不变。
+**回滚方式**：回退队列 v4 租约字段、scheduler 生命周期、MCP lifespan、Listing Analysis taskId 检查点、对应测试及本条记录。
+---
+
+## 2026-07-22 cli - 兼容 python 模块启动方式
+
+**变更原因**：运维通过虚拟环境执行 `python -m opscli` 时，因包内缺少 `__main__` 入口而无法运行正式 CLI。
+**改动点**：新增 `opscli/__main__.py`，将 `python -m opscli` 转发至现有 Typer CLI；新增 Python 模块入口回归测试，并同步 Google Trends SerpApi 运维启动示例。
+**验证结果**：`python -m opscli google-trends api-key --help` 已正常展示五个 Key 运维命令；模块入口与 Google Trends CLI 聚焦回归 `14 passed`；入口相关生产模块 `py_compile` 通过；`git diff --check` 无差异格式错误，仅提示用户已有 `ops-feedback-query` 文件的 LF/CRLF 警告。
+**影响范围**：仅增加 `python -m opscli` 兼容启动方式；现有 `opscli` 控制台脚本和各子命令契约不变。
+**回滚方式**：删除模块入口、回归测试和文档中的兼容启动示例。
+---
+
+## 2026-07-22 google_trends - 接入 SerpApi 三类趋势接口
+
+**变更原因**：原 pytrends 已归档且多个接口失效，需要停用旧场景并切换到 SerpApi 的 Trends、Autocomplete、Trending Now 三个正式接口，同时管理第三方 API Key 的有限额度。
+**改动点**：将公开场景收敛为 `trends`、`autocomplete`、`trending-now` 三个 SerpApi 原始接口，并按接口白名单校验参数、关键词数量和同步执行约束；新增 SQLite 多 Key 池及测试，保存 Key 状态、备注、账户额度快照、最近使用时间和耗尽原因，支持旧库自动增加 `remark` 列、active/exhausted/disabled 状态、最久未使用优先选择及账号名称查询；新增全部 Key 耗尽专用错误码；新增 SerpApi HTTP 客户端，每次搜索前同步 Account API、确认耗尽后自动轮换、搜索失败后复查额度，并统一移除响应和异常中的 API Key；增加指定账号 Account-only 验证能力，确保额度检查不发起搜索且不隐式恢复人工状态；增加本地 `google-trends api-key add/list/test/enable/disable` 运维命令，新增 Key 仅使用隐藏输入，所有输出使用公开摘要，账号测试只访问免费 Account API，不新增 MCP 管理工具；新增 Google Trends SerpApi 账号运维指南，说明五类命令、状态恢复、多账号流程、本地存储安全和常见问题；新增 `ops-google-trends` 正式 CLI Skill、内部 MCP 规范、版本标记和发版 manifest 声明，说明三个场景、参数、典型工作流与对外回复边界。
+**验证结果**：Google Trends 全目录回归 `48 passed`，Google Trends MCP 工具与注册回归 `11 passed`；Key Store、Account API 预检与指定账号测试、多 Key 轮换、耗尽后人工恢复、API Key CLI 隐藏输入及公开输出、响应/异常/公开摘要脱敏、三类结果提取及真实 XLSX 嵌套字段导出均有离线测试覆盖；生产模块 `py_compile` 通过，Skill manifest 完整性及 wheel/binary 准入验证通过；`git diff --check` 无差异格式错误，仅提示用户已有 `ops-feedback-query` 改动的 LF/CRLF 警告；`tests/skills/test_packaging.py` 为 `7 passed, 1 failed`，失败项是既有 Windows PyInstaller 目标路径分隔符断言，与本次 Skill 清单改动无关。
+**影响范围**：影响 Google Trends 服务端数据源、公开场景、任务导出和内部 API Key 管理；正式 CLI/MCP 工具名保持不变，CLI 帮助改为三个新场景；服务管理器已切换到 SerpApi 客户端并继续兼容公共 hl/tz 参数；时间序列、地域、相关主题/查询、自动补全和当前热点均转换为可导出行；旧 pytrends 文件仅保留为停用回滚参考。
+**回滚方式**：回退本条记录及 Google Trends SerpApi 相关代码和测试，恢复旧场景注册表。
+---
+
+## 2026-07-20 seller_sprite - 增加用户专属账号绑定
+
+**变更原因**：卖家精灵服务需要让指定 OPS 用户使用各自绑定的专属账号，并对专属账号用户取消公共服务每日额度限制。
+**改动点**：新增专属账号 AES-256-GCM 加密 SQLite 存储及独立密钥、用户邮箱一对一绑定和命名账号多用户复用；增加本地 `account-binding bind/list/unbind` 管理命令，密码隐藏输入、列表脱敏且不开放 MCP 管理入口；quota 切面为绑定用户提供结构化无限额快照并通过 ContextVar 固定账号路由，绑定库异常时失败关闭；队列 schema 升级至 v3，持久化非敏感账号引用，公共与专属 worker 隔离，同账号串行、不同账号最多 3 个并发；专属账号认证失败禁止公共池接替，解绑只失败 queued，running 继续；Listing Analysis 状态和结果按原专属账号恢复；终态按账号键和领取代际 CAS 写回，异常绑定任务稳定失败。
+**验证结果**：SellerSprite 绑定、CLI、队列、调度、MCP quota 与工具聚焦回归 `183 passed`；SellerSprite MCP/Skill 契约单文件回归 `84 passed`；变更生产模块 `py_compile` 通过，`git diff --check` 通过；Standards/Spec 双轴直接审查发现的改绑时间展示、专属任务终态非 CAS 和异常绑定任务滞留问题已修正并补充回归测试。
+**影响范围**：影响 SellerSprite MCP 提交额度判断、异步任务账号选择及本地运维命令；未绑定用户继续使用公共账号池和原额度策略。
+**回滚方式**：回退专属账号存储、CLI、quota、SellerSprite 队列与调度器、测试、文档及本条记录。
+
 ## 2026-07-28 dashboard/skill - 默认宽度与模型坐标职责对齐
 
 **变更原因**：Dashboard Skill 同时要求规划 `x/y/w/h`，而批量创建工具只接受 `w/h`，模型会先提交非法坐标再重试。默认组合也未明确区分默认宽度与模型自行决定的坐标。
@@ -529,6 +645,16 @@
 
 ---
 
+## 2026-07-27 asin-data - 增加全类目流量 Top10 查询
+
+**变更原因**：类目取数除 Top ASIN 排名外，还需要按指定日期范围查询单个或全部类目的流量 Top10 漏斗均值。
+**改动点**：`opscli asin-data category-top` 新增 `--data-type traffic`，调用 `/dataMetrics/v1/asin-report-files/all-category-traffic-top10`；traffic 模式允许省略 `--category` 查询全部类目，且仅透传接口支持的 `category/date_from/date_to`。默认 `asin` 模式及原返回结构保持不变。同步更新 category-top Skill，并在 basic Skill 中注明刊登数据使用 OPS 代理接口。
+**验证结果**：新增 HTTP 参数、查询服务、CLI 和 Skill 模板测试；ASIN 定向测试与 Skill 测试通过。
+**影响范围**：仅增加 `asin-data category-top` 的可选流量模式并更新 ASIN 数据 Skill；不修改默认类目 Top ASIN、BI 或 crawler 行为。
+**回滚方式**：移除 `fetch_traffic`、`--data-type` 分流及对应测试和 Skill 文档。
+
+---
+
 ## 2026-07-23 auth - 新增显式授权中间件（--ops-jwt-token / --polaris-jwt-token / --session-id）
 
 **变更原因**：需要支持在任意子命令尾部显式传入授权凭证（如 `opscli query simple ... --ops-jwt-token=x --session-id=y`），用于脚本化/外部托管场景，且要求"一处中间件覆盖全部命令"，不逐个命令改造。
@@ -560,9 +686,9 @@
 
 **变更原因**：仪表盘 AI 在用户未指定图表类型时缺少稳定选型规则，旧流程还会逐图选择数据集、逐字段写入，无法保证同一轮图表使用统一数据集。
 
-**改动点**：包版本由 v0.0.147 升至 v0.0.148；`ops-dashboard-ai-bridge` 升至 v1.0.13，新增六类业务默认组合、创建前图表/数据集/字段整体规划、统一数据集和 `dashboard_editor_batch_configure_charts` 一次批量提交约束；营销/转化组合固定创建 `indicator`、`combo_bar_line`、`hbar_basic`、百分比堆叠图或漏斗图、`detail_table` 共 5 张；多个真实候选强制通过 `ask_user_question` 选择。Dashboard 两个静态规范 MCP 工具不再受用户登录权限过滤，确保仪表盘会话可以从线上 MCP 必读规范。`ops-dashboard-data-analysis` 升至 v1.0.5，明确分析结论落图时只提供数据口径与字段依据，由编辑 Skill 承担组合创建，并补齐显式 Skill 调用提示词。
+**改动点**：包版本由 v0.0.147 升至 v0.0.148；`ops-dashboard-ai-bridge` 升至 v1.0.11，新增六类业务默认组合、创建前图表/数据集/字段整体规划、统一数据集和 `dashboard_editor_batch_configure_charts` 一次批量提交约束；同步更新三份渐进参考合同和 Codex 默认提示词。`ops-dashboard-data-analysis` 升至 v1.0.5，明确分析结论落图时只提供数据口径与字段依据，由编辑 Skill 承担组合创建，并补齐显式 Skill 调用提示词。
 
-**验证结果**：open-opscli Dashboard Skill、MCP 权限与版本一致性测试 27 个通过；ops-agent Dashboard 规范读取、编辑偏好和批量配置定向测试通过；线上 MCP 发布后继续执行 Playwright 广告场景验证。
+**验证结果**：前端 Dashboard 定向单测 120 个通过；open-opscli Dashboard Skill 与版本一致性测试 9 个通过；ops-agent 批量工具清单定向测试通过；Playwright 成功收集营销默认组合、供应链默认组合和显式明细表三条真实数据集场景，完整 E2E 待本地服务和配置就绪后执行。
 
 **影响范围**：影响两个内置 Dashboard Skill 的安装版本与模型执行规范；不改变只读分析边界，不允许跨数据集拼接组合图表。
 
@@ -4037,7 +4163,6 @@
 **影响范围**：仅启动时 stderr 提示文案
 **回滚方式**：回退本次 commit
 ---
-
 ## 2026-07-16 shared - self-update/版本检查支持 TestPyPI 测试渠道
 
 **变更原因**：发版验证流程需要在 TestPyPI 上端到端测试 self-update；原实现只查公网 PyPI（最新停在 0.0.111），TestPyPI 安装的版本无法完成升级闭环
@@ -4046,7 +4171,6 @@
 **影响范围**：默认行为完全不变（未设环境变量走正式渠道）；仅内部发版验证受影响
 **回滚方式**：回退本次 commit
 ---
-
 ## 2026-07-16 shared - e2e 实测修复 self-update 三个真实缺陷
 
 **变更原因**：TestPyPI 端到端实测（0.0.140→0.0.141）暴露三个 bug：①skills 同步经 PATH 解析 opscli 跑错环境（解析到开发 venv 而非升级所在环境）②skills install 无 --yes 阻塞在交互式 TUI 选择③pip 因源缓存延迟未实际升级但返回 0，流程谎报升级完成
@@ -4055,7 +4179,6 @@
 **影响范围**：self-update 命令的 skills 同步与结果校验
 **回滚方式**：回退本次 commit
 ---
-
 ## 2026-07-16 发版验证 - TestPyPI 端到端闭环通过 + 外部教程文档更新
 
 **变更原因**：验证 self-update 在真实发布渠道的完整闭环；同步更新用户侧教程
@@ -4063,7 +4186,6 @@
 **验证结果**：e2e exit 0，最终版本 0.0.143，"升级后版本" 校验行生效；bash -n 语法校验通过
 **影响范围**：教程文档在 auto-scheduler 项目（本仓库外），需随该项目发布生效
 **回滚方式**：教程文档按 git 历史回退（auto-scheduler 仓库）
-
 ## 2026-07-02 calculator - 新品计算器 CLI 草稿包模式设计
 
 **变更原因**：确认将 Polaris 新品计算器优先封装为 opscli CLI 模式，并采用面向运营同学的草稿包交互。
@@ -4197,7 +4319,6 @@
 **验证结果**：权限契约目标测试通过；最终 Skill 与 calculator 回归结果见本次交付验证。
 **影响范围**：影响新品计算器 Skill 的执行前置流程，不改变 CLI 实现。
 **回滚方式**：移除 `SKILL.md` 的权限与登录前置检查、对应测试和本变更记录。
-
 ## 2026-07-04 amazon - 增加代理反拦截与扩展字段采集
 
 **变更原因**：服务部署在阿里云（数据中心 IP 段），被 Amazon Bot 检测标记为高风险，抓取时频繁遭遇验证码/首页重定向；且原采集字段过少（仅标题/价格/评分/评论数/位置），无法满足更完整的商品信息需求。
@@ -4664,6 +4785,86 @@
 **后续调整**：同日已确认卖家精灵账号属于平台公共数据，缓存分区随后由认证主体改为平台级全局；任务认证隔离修复保持不变。
 ---
 
+## 2026-07-21 ops-feedback-query - 增加企业微信 Markdown 日报
+
+**变更原因**：内部反馈查询结果需要先以手动任务生成脱敏 Markdown 日报，并通过企业微信群机器人发送摘要，为后续每日调度和工单闭环验证内容口径。
+**改动点**：新增反馈日报脚本与契约测试，支持默认昨日、自动分页去重、Markdown 脱敏落地、标题敏感信息清理和显式发送；新增通用 `opscli notify wecom-markdown` 命令及契约测试，由正式 opscli 模块负责 Webhook 校验与企业微信 HTTP/业务错误处理，Skill 仅通过子进程调用；发送协议按企业微信官方文档使用 `markdown_v2`，请求字段为 `markdown_v2.content`，严格限制为 4096 个 UTF-8 字节，并移除新版不支持的字体颜色语法；企微重点问题按“严重度 + 标题”聚合重复反馈、展示聚合条数，并增加固定的详细文档查看入口，完整报告仍保留逐条 UUID；抽取可复用的本地凭据读取方法，保持原反馈查询入口兼容；本地凭据增加企微 Webhook 配置，Skill 版本更新为 v1.1.0。
+**验证结果**：TDD RED 已确认日报脚本与通用 notify 模块不存在，并额外复现标题泄露邮箱、个人路径和 Markdown 链接；对照官方文档增加 Markdown V2 请求契约后，RED 证明实现仍发送旧 `markdown` payload 和字体颜色标签，修复后 notify、日报及原查询兼容回归合计 `28 passed`，重复重点问题聚合及 4096/4097 字节边界已覆盖；相关模块 `py_compile` 和 `git diff --check` 通过；顶级 `opscli notify --help` 已显示 `wecom-markdown`；真实查询生成 2026-07-20 日报成功，共 552 条反馈且未发送消息。Skills 显式全量回归为 `146 passed, 7 failed`，7 项均为未修改区域的既有版本断言、缺失模板、Windows 路径断言和 frontmatter 问题。
+**影响范围**：新增通用 `notify` CLI 模块，并增加 `ops-feedback-query` 内部 Skill 的日报生成和企业微信通知；不影响现有反馈提交与查询入口。
+**回滚方式**：删除 `opscli/notify/`、日报脚本及其测试，回退顶级 CLI 注册、Skill 文档、版本和凭据字段。
+---
+
+## 2026-07-23 seller_sprite - 增加关键词选品场景与官方导出契约
+
+**变更原因**：卖家精灵 MCP 缺少官网“关键词选品”页面的独立场景，现有关键词挖掘和反查无法表达其多维筛选、市场周期及官方工作簿导出契约。
+**改动点**：新增 `keyword-research` 场景注册、GET 页面请求、参数归一与边界校验、HTML 表格解析和官方 28 列 XLSX 导出；补充市场周期枚举、页面字段映射、官方工作簿与页面响应回归样本；更新 `ops-seller-sprite` Skill 场景路由、参数手册、MCP 编排说明和版本，并增加 payload、解析、任务执行、浏览器路由及导出测试。
+**验证结果**：关键词选品 payload、解析、导出和 API 管理器聚焦回归 40 项通过，浏览器路由回归 47 项通过；SellerSprite 与 MCP 扩展回归 505 项通过、2 项既有 `seller-sprite-debug` 顶层命令注册用例失败；Skill 格式校验、SellerSprite 文档契约、Skill 探测 9 项、`compileall` 和 `git diff --check` 通过。Skill 打包回归 7 项通过、1 项既有 Windows 路径分隔符断言失败。浏览器复核首行完整 DOM 含 10 个 ASIN 链接，解析器会全部提取；页面百分比没有隐藏高精度属性，因此本地导出明确以 HTML 展示精度为上限。全库测试仍被既有 `tests/query/test_manager.py:817` 缩进错误阻断。
+**影响范围**：新增卖家精灵普通异步任务场景 `keyword-research`，影响其页面请求、结果解析、本地导出和 Skill 路由；不改变既有关键词挖掘、关键词反查、流量来源或账号调度契约。页面单次查询最多返回 50 条，导出结构与官方 `.xlsx` 对齐但不替代官网 2,000 行异步原生导出。
+**回滚方式**：回退本条涉及的 SellerSprite 场景、客户端、payload、解析器、浏览器路由、导出、Skill、测试和调研/回归样本文件，并删除本条变更记录。
+---
+
+## 2026-07-23 seller_sprite - 关键词选品导出移除 Notes 页
+
+**变更原因**：关键词选品本地导出只需要业务数据主表，官方参考文件中的客服和说明 `Notes` 页不属于 MCP 交付内容。
+**改动点**：移除关键词选品 XLSX 创建 `Notes` 工作表的逻辑；验收测试改为只允许 `Keywords(数据行数)` 一个工作表；同步修订 Skill、调研文档和本地导出契约，官方原始工作簿及其结构画像保持不变。
+**验证结果**：关键词选品导出与 HTML 解析聚焦回归 `5 passed`；Skill 格式校验、SellerSprite `compileall` 和 `git diff --check` 通过；SellerSprite 与 MCP 扩展回归 `500 passed, 7 failed`，失败项均位于未修改区域：2 项既有 `seller-sprite-debug` 顶层命令注册问题，以及 5 项 Amazon Rufus、Google Trends、Scrape.do 工具未在当前测试配置注册。
+**影响范围**：仅影响 `keyword-research` 新生成的 XLSX 工作表数量，不改变 28 列主表字段、顺序、格式或数据解析。
+**回滚方式**：恢复关键词选品导出中的 `Notes` 工作表创建函数和调用，并还原对应测试及文档契约。
+---
+
+## 2026-07-23 seller_sprite - 增加关联流量场景与官方导出契约
+
+**变更原因**：卖家精灵 MCP 缺少官网“关联流量”场景，无法按 1—20 个父/子体 ASIN 查询全部变体的关联商品，也没有与官方 56 列工作簿一致的本地导出。
+**改动点**：新增 `association-traffic` 场景注册、官网主查询路由和 payload 构造；固定从第一页使用全部变体查询，支持 1—20 个 ASIN 的列表、逗号、换行或 Excel 按列粘贴文本，校验 12 种关联类型并限制每页最多 50 条；API 直连和默认 browser-route 都按 `data.pagerDto` 汇总全部结果，浏览器后续页复用同一登录会话且不重复页面准备；新增官方 56 列顺序、币种表头、百分比换算、关系类型中文映射、地址清洗、ASIN/主图/父体/大类目超链接、工作表命名和列宽格式，本地工作簿只保留业务主表；更新 `ops-seller-sprite` Skill 参数手册、MCP 规则和版本，并保留官方原件、结构画像及脱敏响应样本用于回归。
+**验证结果**：TDD RED 先确认场景 payload、分页汇总和官方主表导出接缝均不存在，并复现币种表头仍输出内部占位符；实现及审查修复后，payload、XLSX、API Manager、browser-route 和 MCP 文档契约聚焦回归 `178 passed`，Skill 格式校验、SellerSprite `compileall` 和 `git diff --check` 通过；双轴审查发现并修复非首页全量分页越界、ASIN 拆分重复逻辑、缺失中文说明，以及官方父体/大类目超链接遗漏。SellerSprite 全量回归为 `216 passed, 2 failed`，失败均是未修改区域的既有 `seller-sprite-debug` 顶层命令未注册问题。
+**影响范围**：新增独立 SellerSprite 普通异步任务场景 `association-traffic`，影响其请求、全部分页汇总、本地导出和 Skill 路由；不改变既有关键词、选品、流量来源和账号调度契约。
+**回滚方式**：回退本条涉及的关联流量场景、分页、导出、Skill、测试和回归基线文件，并删除本条变更记录。
+---
+
+## 2026-07-23 seller_sprite - 修复关联流量页面未录入 ASIN
+
+**变更原因**：本地 MCP 执行 `association-traffic` 时，browser-route 只打开带参数的页面并点击通用查询按钮，没有把 ASIN 写入页面输入框，也没有处理“用全部变体查询”弹窗，导致页面看不到输入且无法触发正式查询。
+**改动点**：新增关联流量专用页面触发器，首次查询先清除旧值，再逐个填写 ASIN、按回车并核对页面录入计数，随后点击“立即查询”和“用全部变体查询”；页面交互失败或主响应丢失时禁止静默 fallback 冒充成功；后续分页明确复用浏览器上下文接口，不重复页面录入；同步更新 Skill、调研文档和版本。
+**验证结果**：回归测试先稳定复现旧路径 `page.fills == []`，修复后确认 5 个 ASIN 输入、5 次回车、清除/立即查询/全部变体三个按钮动作完整发生，并验证弹窗按钮缺失时不会静默 fallback；browser-route 单文件回归 `50 passed`，连同 payload、导出、API Manager 和 MCP 文档契约的聚焦回归 `181 passed`；SellerSprite 全量回归为 `219 passed, 2 failed`，失败仍是未修改区域既有的 `seller-sprite-debug` 顶层命令未注册问题；Skill 格式校验、SellerSprite `compileall`、无残留调试标记检查和 `git diff --check` 通过。
+**影响范围**：仅影响 `association-traffic` 的 browser-route 首次页面交互和后续分页方式，不改变 API 直连、其他 SellerSprite 场景或 56 列导出契约。
+**回滚方式**：回退关联流量专用页面触发器、对应测试和 Skill/调研文档更新，恢复通用查询按钮与 context fallback 行为。
+---
+
+## 2026-07-23 seller_sprite - 修复关联流量游客分页并统一每页数量
+
+**变更原因**：关联流量首次查询能展示数据，但游客限制响应仍被当作成功结果继续分页，后续返回第一页并触发 `ERR_ASSOCIATION_TRAFFIC_PAGINATION`；同时 Skill 把该场景限制为每页 50 条，与其他场景默认 100 条不一致。
+**改动点**：关联流量 payload 移除 50 条截断并统一默认 `pageSize=100`；browser worker 后续分页复用当前已登录页面的请求上下文，不再重新导航或刷新结果页；将 `pagerDto.size=20` 且仅返回 20 条的成功响应识别为游客限制，按登录失效流程恢复账号并重试一次；同步更新 `ops-seller-sprite` Skill、参数手册、MCP 规则、场景存档元数据和调研文档，Skill 版本升级至 `v0.0.6`；新增 payload、Manager 两种执行模式、无刷新续页和游客响应重登回归测试。
+**验证结果**：关联流量 payload、API/browser 两种分页、后续页不刷新和游客重登聚焦回归 `12 passed`；SellerSprite 与 MCP 工具全套 `305 passed, 2 failed`，两项仍为既有 `seller-sprite-debug` 顶级命令未注册；`ops-seller-sprite` Skill 校验通过，生产模块 `compileall` 和 `git diff --check` 通过，未残留调试标记。
+**影响范围**：仅影响 `association-traffic` 的分页大小、游客限制识别与浏览器登录恢复。
+**回滚方式**：回退本条关联流量分页测试、生产代码、Skill 和场景存档修改。
+---
+
+## 2026-07-23 seller_sprite - 关联流量与关键词选品只返回第一页
+
+**变更原因**：关联流量和关键词选品任务都只需默认获取第一页 100 条数据即完成，不再自动请求并汇总后续分页。
+**改动点**：移除 API Manager 的关联流量自动续页与结果合并逻辑，只保留第一次 `pageNum=1/pageSize=100` 响应；移除关联流量 `page_prepare=false` 绕过可见页面交互的旧续页通道；关键词选品移除 50 条截断，固定默认 `page=1/size=100` 且只保留当前页结果；同步更新 `ops-seller-sprite` Skill、参数手册、MCP 规则、场景存档说明和两份调研文档，Skill 版本升级至 `v0.0.7`；API 与 browser-route 回归均断言不请求后续页并只返回第一页。
+**验证结果**：关联流量与关键词选品聚焦回归 `22 passed`；SellerSprite/MCP 全量回归 `305 passed, 2 failed`，两项失败均为既有 `seller-sprite-debug` 顶层命令缺失；`ops-seller-sprite` Skill 校验通过；`compileall` 与 `git diff --check` 通过，未发现调试标记。
+**影响范围**：影响 `association-traffic` 和 `keyword-research` 的默认分页大小、结果范围与请求次数；页面筛选条件、关联流量全部变体语义以及两场景导出格式不变。
+**回滚方式**：恢复关联流量自动分页汇总、关键词选品 50 条限制，以及对应测试和 Skill 文档。
+---
+
+## 2026-07-27 google_trends - 完善 SerpApi 错误判断与账号故障转移
+
+**变更原因**：SerpApi Search API 会按 HTTP 状态和 `search_metadata.status` 表达不同故障，现有逻辑未完整区分账号错误、吞吐限流和成功空结果，无法稳定切换备用账号。
+**改动点**：按 SerpApi 官方状态规则分类账号级错误；额度耗尽切换并标记 `exhausted`，401/403 切换并禁用账号，429 吞吐限流仅本轮跳过，参数及服务端错误直接返回；同时保留成功空结果。增加按 `plan_renewal_date` 惰性复查耗尽账号、恢复月度额度和一小时检查冷却，并新增 Account/Search 账号禁用、额度耗尽、吞吐限流、续期恢复、非账号错误和搜索状态错误回归测试及运维说明。
+**验证结果**：Google Trends 全量回归 `70 passed`；SerpApi 客户端与 Key 仓储聚焦回归 `37 passed`；Google Trends MCP 行为测试 `7 passed, 1 deselected`；生产模块 `compileall` 和 `git diff --check` 通过。MCP 注册测试仍有当前分支既有的 Google Trends 工具未注册问题，本次未改动 MCP 注册链。
+**影响范围**：影响 Google Trends SerpApi Account/Search 错误判断、Key 状态持久化及账号级错误故障转移，不改变正常请求参数和结果结构。
+**回滚方式**：回退 SerpApi 客户端错误分类、相关测试和运维文档，并删除本条变更记录。
+---
+
+## 2026-07-27 ops-feedback-query - 增加反馈日报定时推送部署包
+
+**变更原因**：反馈日报已支持生成脱敏摘要和企业微信推送，需要在 Linux 服务器每天 09:00 自动执行并支持错过后补跑。
+**改动点**：增加 systemd oneshot 服务、上海时区 timer 和幂等安装脚本；服务使用专用账号与虚拟环境执行，限制项目目录只读且只开放日报输出目录写权限；安装时校验路径、账号、凭据、运行程序和 unit，收紧凭据及输出目录权限并启用 timer；临时 Markdown 改为写入系统临时目录，以配合服务加固；同步补充运维指南、部署契约测试与 Skill 说明。
+**验证结果**：systemd 部署契约、反馈日报、反馈查询 Skill 与通知模块聚焦回归 `33 passed`；反馈 Skill 内部发行隔离测试 `2 passed`；公开 wheel Skill 发版准入检查、安装脚本 `bash -n`、Python `compileall`、部署文件尾随空格检查和 `git diff --check` 均通过。额外反馈模板回归有 1 项既有失败：`ops-feedback/SKILL.md` 已含不受支持的 `version` frontmatter，与本次变更无关。
+**影响范围**：仅影响内部 `ops-feedback-query` v1.2.0 的 Linux 定时部署和推送执行，不改变反馈查询 API、脱敏规则及公开发行边界。
+**回滚方式**：停用并删除 `ops-feedback-report.timer/service`，回退本条部署文件、日报临时文件调整、测试和文档。
+
 ## 2026-07-15 docs - 新增数据集默认条件（filter_config）接入需求说明
 
 - **为什么改**：服务端 `polaris_ops_metrics_qa.dm_table_columns.field_config` 新增字段级默认条件配置 `filter_config`，需打通「后台配置 → query-metadata 下发 filter_configs → 查询/导出强制应用 → ops-dataset-query 规划器感知与披露」全链路，先整理需求文案供评审。
@@ -4763,7 +4964,6 @@
 **影响范围**：release 分支获得 master 全部功能；asin_data 保持 release 演进版行为
 **回滚方式**：git reset --hard ORIG_HEAD（合并提交前）或 revert 合并提交
 ---
-
 ## 2026-07-17 skills - upgrade 未登录时交互式引导登录并自动重试
 
 **变更原因**：skills upgrade 需登录，未登录用户（含 self-update 流程内）此前只能看报错后手动登录再重跑；交互终端下引导登录可保留用户原始意图一步完成
@@ -4813,6 +5013,36 @@
 **验证结果**：本地以 `OPSCLI_SKILL_PROFILE=python-release python -m build --wheel`（完整 Cython 生产构建）重构 wheel，解包核对：模板 scripts.py 由修复前的 0 个恢复为 34 个；业务源码保护不变（保留 58 个白名单源 + 242 个 `.so`）；模板总文件 137（修复前 103）。对照实验：仅本改动即让 scripts 从 0→34。
 **影响范围**：仅正式 Cython wheel 的打包内容（补回被误删的模板脚本）；sdist、SKIP_CYTHON 纯 Python wheel、editable 安装不受影响。所有历史已发布 wheel 均缺模板脚本，需重新发版。
 **回滚方式**：删除 `pyproject.toml` 中新增的 `exclude = ["opscli.skills.templates*"]` 一行即可。
+---
+
+## 2026-07-24 shared/update_check - PyPI 版本检查后台化，消除首次启动阻塞
+
+**变更原因**：CLI 主回调 `cli.py:main` 同步调用 `check_and_notify()`，缓存缺失（刚 pip install/升级后必然缺失）时在主线程同步请求 pypi.org（外网，国内常慢/超时），阻塞命令启动到 httpx 5s 超时，表现为"第一次启动 opscli 卡很久"。
+**改动点**：
+- `opscli/shared/update_check.py`：新增 `_refresh_cache_async()`，用 `daemon=True` 后台线程执行 PyPI 请求 + 写缓存；`check_and_notify()` 缓存命中时仍同步提示（无网络开销），缓存缺失/过期时改为仅触发后台刷新，本次不阻塞、不提示，提示在下次命令生效。
+- `tests/shared/test_update_check.py`：替换 `test_no_cache_pypi_has_update` / `test_no_cache_pypi_unreachable` 两个旧集成测试为 `test_no_cache_triggers_background_refresh_no_output`、`test_refresh_cache_async_writes_cache`、`test_refresh_cache_async_unreachable_no_write`，匹配后台化后的契约。
+**验证结果**：`pytest tests/shared/test_update_check.py -q` → 27 passed；模拟 fetch 卡 10s 时 `check_and_notify()` 同步耗时仅 0.8ms，证明主线程不再被阻塞。
+**影响范围**：仅 CLI 启动路径的版本更新提示；MCP 入口不经过此处。首次安装/升级后第一次命令不再显示更新提示（缓存写入后下次命令显示），此为可接受的行为变化。
+**回滚方式**：`git checkout opscli/shared/update_check.py tests/shared/test_update_check.py`。
+---
+
+## 2026-07-24 telemetry/reporter - 遥测退出等待加上限，消除进程退出阻塞
+
+**变更原因**：遥测原用模块级 `ThreadPoolExecutor(max_workers=1)`，`concurrent.futures` 注册的 atexit 钩子会在进程退出时"无上限" join 工作线程，导致在途遥测 POST（timeout=5，端点缓慢/不可达时更久）阻塞命令退出。
+**改动点**：
+- `opscli/telemetry/reporter.py`：弃用 ThreadPoolExecutor，改为每次 `fire()` 起一个 `daemon=True` 后台线程发送，并用 `_inflight_threads` 集合跟踪在途线程；新增常量 `_EXIT_WAIT_TIMEOUT=2.0` 与 `_wait_inflight_on_exit()`，通过自注册的 atexit 钩子以"总截止时间"约束累计 join，最多等待 2s 便强制放行，剩余在途发送随进程退出丢弃。`fire()` 仍立即返回、非阻塞；`_do_send` 逻辑不变（结束时从在途集合移除自身）。
+- `tests/telemetry/test_reporter.py`：新增 `test_exit_wait_is_bounded` 验证退出等待受上限约束；顺带修复既有测试桩缺陷——所有 `httpx.post` 桩签名补上 `headers` 形参（原签名不接受 `headers`，会使 `_do_send` 的 post 调用抛 TypeError 被静默吞掉，此前仅因加载未重编译的旧 `.so` 而"通过"）。
+**验证结果**：`pytest tests/telemetry/ tests/shared/test_update_check.py -q` → 44 passed；模拟遥测端点卡 30s 时 `_wait_inflight_on_exit()` 实测 2.01s 放行。
+**影响范围**：CLI（`cli.py`）与 MCP（`mcp/server.py`）两处 `TelemetryReporter.fire` 调用；进程退出最多因遥测多等 2s（原为最坏 5s+）。遥测发送成功率与之前一致（正常内网 <1s 完成）。
+**回滚方式**：`git checkout opscli/telemetry/reporter.py tests/telemetry/test_reporter.py`。
+
+## 2026-07-24 构建产物 - 清理工作树内残留 .so（开发环境修正）
+
+**变更原因**：工作树内残留 214 个未跟踪的 Cython 编译产物 `*.so`，导入时优先于源码 `.py` 被加载，导致源码修改不生效、且新旧不一致引发 ImportError（如 `SellerSpriteAuthenticationError`）。项目开发流程本为 `SKIP_CYTHON=1` 纯 Python 模式。
+**改动点**：`find opscli -name '*.so' -delete`（均为未跟踪构建产物，不影响 git 跟踪文件）。
+**验证结果**：删除后导入链恢复正常，测试可正常收集运行。
+**影响范围**：仅本地开发环境；生产构建（`python -m build`）仍会正常编译生成 `.so`，不受影响。
+**回滚方式**：重新执行 `SKIP_CYTHON=... python -m build` 或按需重编译即可再生成。
 ---
 
 ## 2026-07-24 shared/update_check - PyPI 版本检查后台化，消除首次启动阻塞

@@ -31,7 +31,7 @@ The caller must already have a valid OPS login handled by the existing CLI auth 
       "mcpServers": {
         "BI运营系统": {
           "type": "http",
-          "url": "https://<remote-mcp-host>/mcp?api_key=<issued_key>"
+          "url": "https://<ops-mcp-host>/mcp?api_key=<issued_key>"
         }
       }
     }
@@ -43,13 +43,15 @@ The caller must already have a valid OPS login handled by the existing CLI auth 
 
 - `data.http.mcpServers`: remote MCP server registry for streamable HTTP transport
 - `data.http.mcpServers.<name>.type`: transport type; the current gate freezes `"type": "http"`
-- `data.http.mcpServers.<name>.url`: fully qualified remote MCP URL, including the backend-issued `api_key` query parameter
+- `data.http.mcpServers.<name>.url`: OPS general MCP URL, including the backend-issued user `api_key` query parameter
 
 ## Gate Rules
 
 - public `opscli seller-sprite` only consumes `GET /api/v1/mcp-api-keys/config` for remote MCP discovery
 - CLI auth is handled elsewhere; this contract does not introduce any dedicated auth-bridge endpoint
 - public `opscli seller-sprite` CLI path is frozen to `data.http.mcpServers`
+- the CLI must select `data.http.mcpServers.BI运营系统`; this is the OPS general MCP, not Collector MCP
+- SellerSprite calls are forwarded from the OPS general MCP to Collector MCP; the CLI neither discovers nor configures the Collector address
 - the public path only accepts HTTP transport entries from `data.http.mcpServers`
 - URL logs and error messages must redact the `api_key` query value before output
 
