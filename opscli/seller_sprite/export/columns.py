@@ -121,6 +121,124 @@ KEYWORD_MINER_COLUMNS = [
 ]
 
 
+# 关键词选品列名和顺序逐列对齐官方 KeywordResearch-US-202606-667951.xlsx。
+KEYWORD_RESEARCH_COLUMNS = [
+    ExportColumn("关键词", "keyword"),
+    ExportColumn("关键词翻译", "keywordCn"),
+    ExportColumn("ABA排名", "searchRank"),
+    ExportColumn("月搜索量", "searches"),
+    ExportColumn("搜索增长率", "searchesCr"),
+    ExportColumn("月购买量", "purchases"),
+    ExportColumn("购买率", "purchaseRate"),
+    ExportColumn("展示量", "impressions"),
+    ExportColumn("点击量", "clicks"),
+    ExportColumn("商品数", "products"),
+    ExportColumn("需供比", "supplyDemandRatio"),
+    ExportColumn("SPR", "spr"),
+    ExportColumn("标题密度", "titleDensity"),
+    ExportColumn("点击总占比", "monopolyClickRate"),
+    ExportColumn("转化总占比", "cvsShareRate"),
+    ExportColumn("货流值", "goodsValue"),
+    ExportColumn("均价", "avgPrice"),
+    ExportColumn("评分数", "avgReviews"),
+    ExportColumn("评分值", "avgRating"),
+    ExportColumn("PPC竞价-最低($)", "bidMin"),
+    ExportColumn("PPC竞价-推荐($)", "bid"),
+    ExportColumn("PPC竞价-最高($)", "bidMax"),
+    ExportColumn("同比增长值", "searchMonthCv"),
+    ExportColumn("同比增长率", "searchMonthCr"),
+    ExportColumn("近3个月增长值", "searchNearlyCv"),
+    ExportColumn("近3个月增长率", "searchNearlyCr"),
+    ExportColumn("所属类目", "departments"),
+    ExportColumn("前10ASIN", "gkDatas", transform="asinList"),
+]
+
+
+# ABA 数据选品列名和顺序逐列对齐官方 ABAKeywordTrend-US-2026第29周-690875.xlsx。
+ABA_RESEARCH_COLUMNS = [
+    ExportColumn("关键词", "keyword"),
+    ExportColumn("关键词翻译", "keywordCn"),
+    ExportColumn("周搜索量", "searches"),
+    ExportColumn("现排名", "searchRank"),
+    ExportColumn("历史排名", "w1SearchRank", transform="abaHistoricalRanks"),
+    ExportColumn("周变化量", "w1RankGrowthValue", transform="abaRankGrowthValues"),
+    ExportColumn("周变化率", "w1RankGrowthRate", transform="abaRankGrowthRates"),
+    ExportColumn("PPC价格", "bid", transform="currency"),
+    ExportColumn("建议竞价范围", "bidMin", transform="abaBidRange"),
+    ExportColumn("展示量", "impressions"),
+    ExportColumn("点击量", "clicks"),
+    ExportColumn("SPR", "cprExact", fallback="spr"),
+    ExportColumn("标题密度", "titleDensityExact", fallback="titleDensity"),
+    ExportColumn("点击占比", "top3AsinDtoList", transform="abaClickShares"),
+    ExportColumn("转化占比", "top3AsinDtoList", transform="abaConversionShares"),
+    ExportColumn("点击前三ASIN", "top3AsinDtoList", transform="abaTopAsins"),
+    ExportColumn("点击前三品牌", "top3Brands", transform="abaBrands"),
+    ExportColumn("所属类目", "departments", transform="abaDepartments"),
+    ExportColumn("前10ASIN", "gkDatas", transform="asinList"),
+]
+
+
+# 关联流量列名和顺序逐列对齐官方 RelatedProducts-US-B098T9ZFB5-batch(5)-260723.xlsx。
+ASSOCIATION_TRAFFIC_COLUMNS = [
+    ExportColumn("ASIN", "asin"),
+    ExportColumn("关联ASIN数", "count"),
+    ExportColumn("关联ASIN", "relationAsinDtoList", transform="asinList"),
+    ExportColumn("关联类型", "relationList", transform="relationLabels"),
+    ExportColumn("SKU", "sku"),
+    ExportColumn("品牌", "brand"),
+    ExportColumn("商品标题", "title"),
+    ExportColumn("商品详情链接", None),
+    ExportColumn("商品主图", "bigImageUrl", fallback="imageUrl"),
+    ExportColumn("父体", "parent"),
+    ExportColumn("类目路径", "nodeLabelPath"),
+    ExportColumn("大类目", "bsrLabel"),
+    ExportColumn("大类BSR", "bsrRank"),
+    ExportColumn("大类BSR增长数", "bsrRankCv"),
+    ExportColumn("大类BSR增长率", "bsrRankCr", transform="divide100"),
+    ExportColumn("小类目", "subcategories.0.label"),
+    ExportColumn("小类BSR", "subcategories.0.rank"),
+    ExportColumn("月销量", "totalUnits"),
+    ExportColumn("月销量增长率", "totalUnitsGrowth", transform="divide100"),
+    ExportColumn("__TOTAL_AMOUNT__", "totalAmount"),
+    ExportColumn("子体销量", "amzUnit"),
+    ExportColumn("__SUB_TOTAL_AMOUNT__", "subTotalAmount"),
+    ExportColumn("__PRICE__", "price"),
+    ExportColumn("Q&A", "questions"),
+    ExportColumn("毛利率", "profit", transform="divide100"),
+    ExportColumn("__FBA__", "fba"),
+    ExportColumn("评分数", "reviews"),
+    ExportColumn("留评率", "reviewsRate", transform="divide100"),
+    ExportColumn("评分", "rating"),
+    ExportColumn("月新增评分数", "reviewsIncreasement"),
+    ExportColumn("上架时间", "availableDate", transform="dateMillis"),
+    ExportColumn("配送方式", "sellerType"),
+    ExportColumn("__DELIVERY_PRICE__", "deliveryPrice", transform="emptyIfNegative"),
+    ExportColumn("LQS", "lqs", transform="divide10Text"),
+    ExportColumn("变体数", "variations"),
+    ExportColumn("卖家数", "sellers"),
+    ExportColumn("BuyBox卖家", "sellerName"),
+    ExportColumn("卖家所属地", "sellerNation", transform="sellerNation"),
+    ExportColumn("卖家信息", "sellerDto.businessAddress", transform="sellerAddress"),
+    ExportColumn("BuyBox类型", "sellerType"),
+    ExportColumn("Best Seller标识", "bestSeller", transform="badgeFlag"),
+    ExportColumn("Amazon's Choice", "amazonChoice", transform="badgeFlag"),
+    ExportColumn("New Release标识", "newRelease", transform="badgeFlag"),
+    ExportColumn("A+页面", "ebc"),
+    ExportColumn("视频介绍", "video"),
+    ExportColumn("AC关键词", "amazonChoiceKeyword"),
+    ExportColumn("商品重量", "weight"),
+    ExportColumn("商品重量（单位换算）", "weightTag"),
+    ExportColumn("商品尺寸", "dimensions"),
+    ExportColumn("商品尺寸（单位换算）", "dimensionsTag"),
+    ExportColumn("包装重量", "pkgWeight"),
+    ExportColumn("包装重量（单位换算）", "pkgWeightTag"),
+    ExportColumn("包装尺寸", "pkgDimensions"),
+    ExportColumn("包装尺寸（单位换算）", "pkgDimensionsTag"),
+    ExportColumn("包装尺寸分段", "pkgDimensionType"),
+    ExportColumn("引流时间", "createdTime", transform="dateMillis"),
+]
+
+
 KEYWORD_REVERSE_COLUMNS = [
     ExportColumn("关键词", "keywords"),
     ExportColumn("关键词翻译", "keywordCn"),
@@ -227,6 +345,12 @@ def columns_for_scenario(scenario: str, site: str) -> list[ExportColumn]:
             currency,
             {"PPC竞价", "建议竞价范围", "均价"},
         )
+    if scenario == "keyword-research":
+        return KEYWORD_RESEARCH_COLUMNS
+    if scenario == "aba-research":
+        return ABA_RESEARCH_COLUMNS
+    if scenario == "association-traffic":
+        return _association_traffic_columns(currency)
     if scenario == "keyword-reverse":
         return _columns_with_currency_titles(
             KEYWORD_REVERSE_COLUMNS,
@@ -270,6 +394,26 @@ def currency_label(site: str) -> str:
         "MX": "MX$",
     }
     return currencies.get(site.upper(), "$")
+
+
+def _association_traffic_columns(currency: str) -> list[ExportColumn]:
+    """替换关联流量官方模板中的币种占位表头。"""
+    replacements = {
+        "__TOTAL_AMOUNT__": f"月销售额({currency})",
+        "__SUB_TOTAL_AMOUNT__": f"子体销售额({currency})",
+        "__PRICE__": f"价格({currency})",
+        "__FBA__": f"FBA运费({currency})",
+        "__DELIVERY_PRICE__": f"买家运费({currency})",
+    }
+    return [
+        ExportColumn(
+            replacements.get(column.title, column.title),
+            column.source,
+            transform=column.transform,
+            fallback=column.fallback,
+        )
+        for column in ASSOCIATION_TRAFFIC_COLUMNS
+    ]
 
 
 def _product_columns(

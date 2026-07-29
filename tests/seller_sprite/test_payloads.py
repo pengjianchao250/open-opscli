@@ -1,9 +1,16 @@
+from datetime import date
+
 import pytest
 
+from opscli.seller_sprite.api import payloads as payloads_module
 from opscli.seller_sprite.api.payloads import (
     build_referer,
+    make_aba_research_payload,
+    make_aba_reverse_payload,
+    make_association_traffic_payload,
     make_competitor_payload,
     make_keyword_miner_payload,
+    make_keyword_research_payload,
     make_keyword_reverse_payload,
     make_listing_analysis_payload,
     make_product_research_payload,
@@ -87,6 +94,304 @@ def test_keyword_miner_payload_maps_root_word_and_amazon_choice():
     assert payload["pageSize"] == 100
     assert payload["filterRootWord"] == 1
     assert payload["amazonChoice"] is True
+
+
+def test_keyword_research_payload_maps_public_filters_to_web_query():
+    scenario = get_scenario("keyword-research")
+
+    payload = scenario.build_payload(
+        params={
+            "departments": ["kitchen", "tools"],
+            "keywords": "bed frame",
+            "minSearchesCr": 20,
+            "maxSearchesCr": 30,
+            "minWordCount": 1,
+            "maxWordCount": 9,
+            "minRating": 0,
+            "maxRating": 5,
+            "marketPeriod": "S4,S5,S6",
+            "orderDesc": False,
+        },
+        site="US",
+        period="2026-06",
+        page_size=100,
+    )
+
+    assert scenario.endpoint == "/v2/keyword-research"
+    assert scenario.method == "GET_PAGE"
+    assert payload["station"] == "US"
+    assert payload["month"] == "202606"
+    assert payload["page"] == "1"
+    assert payload["size"] == "100"
+    assert payload["departments[0]"] == "kitchen"
+    assert payload["departments[1]"] == "tools"
+    assert payload["includeKeywords"] == "bed frame"
+    assert payload["minGrowth"] == "20"
+    assert payload["maxGrowth"] == "30"
+    assert payload["minAvgRating"] == "0"
+    assert payload["maxAvgRating"] == "5"
+    assert payload["marketPeriod"] == "S4,S5,S6"
+    assert payload["order.desc"] == "false"
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"minWordCount": 0}, "minWordCount"),
+        ({"minWordCount": 6}, "minWordCount"),
+        ({"maxWordCount": 10}, "maxWordCount"),
+        ({"minRating": -0.1}, "minRating"),
+        ({"maxRating": 5.1}, "maxRating"),
+        ({"minSearches": 20, "maxSearches": 10}, "minSearches"),
+        ({"marketPeriod": "S13"}, "marketPeriod"),
+    ],
+)
+def test_keyword_research_payload_rejects_invalid_ranges(params, message):
+    with pytest.raises(SellerSpriteConfigError, match=message):
+        make_keyword_research_payload({"site": "US", "period": "2026-06", **params})
+
+
+def test_association_traffic_payload_uses_all_variants_and_normalizes_pasted_asins():
+    scenario = get_scenario("association-traffic")
+
+    payload = scenario.build_payload(
+        params={
+            "asins": "b098t9zfb5\r\nB09JW5FNVX\tB0B71DH45N",
+            "relations": ["VAV", "SP"],
+            "pageNum": 3,
+        },
+        site="US",
+        period="30d",
+        page_size=100,
+    )
+
+    assert scenario.endpoint == "/v3/api/relation/traffic"
+    assert scenario.method == "POST"
+    assert payload == {
+        "market": 1,
+        "pageNum": 1,
+        "pageSize": 100,
+        "desc": True,
+        "orderField": "createdTime",
+        "relations": ["VAV", "SP"],
+        "queryVariations": True,
+        "asinList": ["B098T9ZFB5", "B09JW5FNVX", "B0B71DH45N"],
+    }
+    assert build_referer(payload, "association-traffic").startswith(
+        "https://www.sellersprite.com/v3/relation-keyword?"
+    )
+
+
+@pytest.mark.parametrize(
+    ("asins", "message"),
+    [
+        ("", "至少需要 1 个 ASIN"),
+        ("B098T9ZFB5,INVALID", "INVALID"),
+        (",".join(f"B0000000{i:02d}" for i in range(21)), "最多支持 20 个 ASIN"),
+    ],
+)
+def test_association_traffic_payload_rejects_invalid_asin_input(asins, message):
+    with pytest.raises(SellerSpriteConfigError, match=message):
+        make_association_traffic_payload({"site": "US", "asins": asins})
+
+
+def test_association_traffic_payload_rejects_unknown_relation_type():
+    with pytest.raises(SellerSpriteConfigError, match="UNKNOWN"):
+        make_association_traffic_payload(
+            {"site": "US", "asins": ["B098T9ZFB5"], "relations": ["UNKNOWN"]}
+        )
+
+
+def test_aba_research_payload_maps_week_filters_and_forces_first_page():
+    scenario = get_scenario("aba-research")
+
+    payload = scenario.build_payload(
+        params={
+            "q": "B06XZTZ7GB",
+            "departments": ["electronics", "kitchen"],
+            "rankGrowthType": "W2",
+            "page": 3,
+            "size": 20,
+            "minSearches": 1000,
+            "maxSearches": 2000,
+            "minConversionRate": 12.5,
+            "maxConversionRate": 20,
+            "orderField": "searches",
+            "orderDesc": True,
+        },
+        site="US",
+        period="2026第29周(07/12~07/18)",
+        page_size=20,
+    )
+
+    assert scenario.endpoint == "/v3/api/aba-research"
+    assert scenario.method == "POST"
+    assert payload == {
+        "rankGrowthType": "W2",
+        "size": 100,
+        "page": 1,
+        "market": "COM",
+        "q": "B06XZTZ7GB",
+        "table": "ara_20260718",
+        "reverseType": "W",
+        "departments": ["electronics", "kitchen"],
+        "keywordBidMatchType": "exact",
+        "order": {"field": "searches", "desc": True},
+        "minSearches": 1000,
+        "maxSearches": 2000,
+        "minConversionRate": 12.5,
+        "maxConversionRate": 20,
+    }
+    assert build_referer(payload, "aba-research") == "https://www.sellersprite.com/v3/aba-research"
+
+
+def test_aba_research_payload_maps_month_and_defaults_to_latest_week(monkeypatch):
+    monthly = make_aba_research_payload(
+        {
+            "q": "iphone charger",
+            "site": "JP",
+            "period": "2026-06",
+            "reverseType": "M",
+        }
+    )
+    assert monthly["market"] == "JP"
+    assert monthly["table"] == "ara_202606"
+    assert monthly["reverseType"] == "M"
+
+    monthly_table = make_aba_research_payload(
+        {
+            "q": "iphone charger",
+            "site": "US",
+            "table": "ara_202606",
+            "includeKeywords": ["usb c", "fast charger"],
+            "excludeKeywords": "case,stand",
+        }
+    )
+    assert monthly_table["reverseType"] == "M"
+    assert monthly_table["includeKeywords"] == "usb c,fast charger"
+    assert monthly_table["excludeKeywords"] == "case,stand"
+
+    monkeypatch.setattr(payloads_module, "_latest_completed_aba_week", lambda: "20260718")
+    weekly = make_aba_research_payload({"q": "iphone charger", "site": "US", "period": "30d"})
+    assert weekly["table"] == "ara_20260718"
+    assert weekly["reverseType"] == "W"
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"q": "x", "site": "MX", "period": "2026-07-18"}, "暂不支持站点"),
+        ({"q": "x", "period": "2026-07", "reverseType": "W"}, "每周周期"),
+        ({"q": "x", "period": "2026-07", "rankGrowthType": "W5"}, "rankGrowthType"),
+        ({"q": "x", "period": "2026-07", "orderField": "unknown"}, "order.field"),
+        ({"q": "x", "period": "2026-07", "minSearches": 2, "maxSearches": 1}, "minSearches"),
+        ({"q": "x", "period": "2026-07", "minClicks": 1.5}, "minClicks"),
+    ],
+)
+def test_aba_research_payload_rejects_invalid_input(params, message):
+    with pytest.raises(SellerSpriteConfigError, match=message):
+        make_aba_research_payload({"site": "US", **params})
+
+
+def test_aba_reverse_week_payload_accepts_asins_and_amazon_links():
+    scenario = get_scenario("aba-reverse")
+
+    payload = scenario.build_payload(
+        params={
+            "asins": (
+                "b00000jbnx，https://www.amazon.com/dp/B08DRS8MNF "
+                "https://amazon.com/gp/product/B00000JBNX?th=1"
+            ),
+            "reverseType": "每周",
+        },
+        site="US",
+        period="2026第29周(07/12~07/18)",
+        page_size=100,
+    )
+
+    assert scenario.endpoint == "/v2/aba/reverse/export"
+    assert scenario.method == "GET_XLSX"
+    assert payload == {
+        "station": "US",
+        "table": "ara_20260718",
+        "asin": "B00000JBNX",
+        "order.field": "searchRank",
+        "order.desc": "false",
+        "conversionType": "",
+        "loadVariations": "false",
+        "reverseType": "W",
+        "monthlyTable": "ara_202606",
+        "textareaValue": "B00000JBNX,B08DRS8MNF",
+    }
+    referer = build_referer(payload, "aba-reverse")
+    assert referer.startswith("https://www.sellersprite.com/v2/aba/reverse/search?")
+    assert "asin=&" in referer
+    assert "textareaValue=B00000JBNX%2CB08DRS8MNF" in referer
+
+
+def test_aba_reverse_month_payload_uses_month_table_for_both_fields():
+    payload = make_aba_reverse_payload(
+        {
+            "asin": "B00000JBNX",
+            "site": "JP",
+            "period": "2026-06",
+            "periodType": "monthly",
+        }
+    )
+
+    assert payload["reverseType"] == "M"
+    assert payload["table"] == "ara_202606"
+    assert payload["monthlyTable"] == "ara_202606"
+
+
+def test_aba_reverse_defaults_to_latest_completed_week(monkeypatch):
+    monkeypatch.setattr(
+        payloads_module,
+        "_latest_completed_aba_week",
+        lambda: "20260718",
+    )
+
+    payload = make_aba_reverse_payload(
+        {
+            "asin": "B00000JBNX",
+            "site": "US",
+            "period": "30d",
+        }
+    )
+
+    assert payload["reverseType"] == "W"
+    assert payload["table"] == "ara_20260718"
+    assert payload["monthlyTable"] == "ara_202606"
+
+
+@pytest.mark.parametrize(
+    ("today", "expected"),
+    [
+        (date(2026, 7, 23), "20260718"),
+        (date(2026, 7, 18), "20260711"),
+        (date(2026, 7, 19), "20260718"),
+    ],
+)
+def test_latest_completed_aba_week_excludes_current_saturday(today, expected):
+    assert payloads_module._latest_completed_aba_week(today) == expected
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"asins": ""}, "至少需要"),
+        ({"asins": "not-an-asin"}, "格式无效"),
+        (
+            {"asins": ",".join(f"B0000000{i:02d}" for i in range(21))},
+            "最多支持 20 个",
+        ),
+        ({"asin": "B00000JBNX", "period": "2026-06", "reverseType": "W"}, "每周周期"),
+        ({"asin": "B00000JBNX", "period": "20260718", "reverseType": "quarter"}, "周期类型"),
+    ],
+)
+def test_aba_reverse_payload_rejects_invalid_input(params, message):
+    with pytest.raises(SellerSpriteConfigError, match=message):
+        make_aba_reverse_payload({"site": "US", **params})
 
 
 def test_keyword_reverse_payload_keeps_orchestration_fields_for_manager():

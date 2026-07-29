@@ -10,6 +10,9 @@ from opscli.mcp_client import McpConfigClient, RemoteMcpClient
 from opscli.shared.remote_mcp_adapter import RemoteMcpAdapter
 
 
+OPS_REMOTE_MCP_SERVER_NAME = "BI运营系统"
+
+
 class SellerSpriteRemoteAdapter(RemoteMcpAdapter):
     """将正式 CLI 动作映射到远端卖家精灵 MCP 工具。"""
 
@@ -30,6 +33,8 @@ class SellerSpriteRemoteAdapter(RemoteMcpAdapter):
         super().__init__(
             config_client=config_client,
             remote_client_factory=remote_client_factory,
+            preferred_name=OPS_REMOTE_MCP_SERVER_NAME,
+            require_preferred=True,
         )
         self.auth_client = (
             auth_client
@@ -63,7 +68,6 @@ class SellerSpriteRemoteAdapter(RemoteMcpAdapter):
                 "params": params,
                 "page_size": page_size,
                 "export_format": export_format,
-                "output_dir": output_dir,
                 "job_id": job_id,
             },
         )
@@ -90,7 +94,6 @@ class SellerSpriteRemoteAdapter(RemoteMcpAdapter):
                 "station": station,
                 "site": site,
                 "export_format": export_format,
-                "output_dir": output_dir,
                 "job_id": job_id,
             },
         )

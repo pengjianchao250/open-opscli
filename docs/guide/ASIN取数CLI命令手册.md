@@ -426,6 +426,15 @@ opscli asin-data yicopy-keyword-engine --asin B0F9F6B6VK --site US --result-form
 
 ## 8. `category-top`
 
+`category-top` 支持两种数据类型：默认 `--data-type asin` 查询指定类目的 Top ASIN；`--data-type traffic` 查询类目流量 Top10 漏斗均值。traffic 模式的 `--category` 可选，省略时返回全部类目。
+
+```powershell
+opscli asin-data category-top --data-type traffic --category "3D Wall Panels" --date-from 2026-07-01 --date-to 2026-07-27 --pretty
+opscli asin-data category-top --data-type traffic --date-from 2026-07-01 --date-to 2026-07-27 --pretty
+```
+
+traffic 模式调用 `/dataMetrics/v1/asin-report-files/all-category-traffic-top10`，返回记录位于 `data.category_traffic`；`site` 和 `limit` 仅用于默认的 asin 模式。
+
 ### 8.1 AI 自动确定最小类目流程
 
 用户只提供 ASIN、未直接提供类目时，AI 必须先从实时刊登数据确定类目，再调用 Top10：

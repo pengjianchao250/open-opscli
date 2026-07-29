@@ -1,0 +1,59 @@
+{
+  "capturedAt": "2026-07-23",
+  "mainListExport": {
+    "purpose": "关键词选品当前筛选结果异步导出",
+    "method": "GET",
+    "endpoint": "/v2/keyword/async/list-export-research",
+    "module": "EKR",
+    "request": {
+      "base": "序列化 #form-condition-search 的全部筛选字段",
+      "extraFields": {
+        "mainImage": "来自 localStorage.export-picture，布尔字符串",
+        "module": "EKR",
+        "keywordBidMatchType": "新 PPC 口径启用时追加"
+      },
+      "encoding": "URL query string"
+    },
+    "response": {
+      "type": "application/json",
+      "success": "data.code === 'OK'",
+      "failure": "data.message",
+      "delivery": "异步生成，随后从 /v2/export-log 下载"
+    },
+    "limitsObserved": {
+      "fastExportRows": 2000,
+      "offPeakExportRows": 3000,
+      "offPeakWindow": "19:00 至次日 08:00",
+      "quota": "页面动态展示剩余次数，不应写死"
+    }
+  },
+  "selectedKeywordDetailExport": {
+    "purpose": "批量导出所选关键词近 3 年明细",
+    "method": "POST",
+    "endpoint": "/v2/keyword/keywords-batch-export",
+    "contentType": "application/json",
+    "request": {
+      "station": "站点代码",
+      "keywords": "已选关键词列表，1 至 50 个",
+      "keywordBidMatchType": "新 PPC 口径启用时追加"
+    },
+    "response": {
+      "type": "binary blob",
+      "filename": "从 Content-Disposition 读取"
+    },
+    "module": "EKDA"
+  },
+  "singleKeywordDetailExport": {
+    "method": "GET",
+    "endpoint": "/v2/keyword/keywords-export",
+    "query": {
+      "station": "Amazon 站点代码，例如美国站页面为 COM",
+      "q": "关键词"
+    }
+  },
+  "notes": [
+    "本契约来自当前页面 DOM 与内联脚本，不代表 opscli 已实现。",
+    "主列表导出只提交异步任务，文件下载发生在导出记录页。",
+    "后续实现必须将导出结果与 normalized-export-contract.json 的 28 列官方主表基线对齐，并只输出主工作表。"
+  ]
+}

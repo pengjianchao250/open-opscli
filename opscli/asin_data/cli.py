@@ -900,17 +900,19 @@ def live_data(
 
 @app.command("category-top")
 def category_top(
-    category: str = typer.Option(..., "--category", help="平台类目名称，精确匹配 amazon_cat"),
+    category: str | None = typer.Option(None, "--category", help="平台类目名称；traffic 模式可不传以查询全部类目"),
+    data_type: str = typer.Option("asin", "--data-type", help="数据类型：asin 或 traffic"),
     date_from: str | None = typer.Option(None, "--date-from", help="开始日期 YYYY-MM-DD，默认当月1日"),
     date_to: str | None = typer.Option(None, "--date-to", help="结束日期 YYYY-MM-DD，默认当天"),
     limit: int = typer.Option(10, "--limit", min=1, max=100, help="返回 Top ASIN 数量，范围 1-100"),
     site: str = typer.Option("US", "--site", help="Amazon 站点代码"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出 JSON"),
 ) -> None:
-    """查询内部类目 Top ASIN，仅返回 category_top JSON 数据。"""
+    """查询类目 Top ASIN 或类目流量 Top10 汇总，默认返回 JSON。"""
     started = time.perf_counter()
     request = {
         "category": category,
+        "data_type": data_type,
         "date_from": date_from,
         "date_to": date_to,
         "limit": limit,
@@ -919,6 +921,7 @@ def category_top(
     try:
         result = AsinDataQueryService().fetch_category_top(
             category=category,
+            data_type=data_type,
             date_from=date_from,
             date_to=date_to,
             limit=limit,

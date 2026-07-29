@@ -114,15 +114,19 @@ class McpConfigClient:
         *,
         transport: str = "http",
         preferred_name: str | None = None,
+        require_preferred: bool = False,
     ) -> RemoteMcpServerConfig:
-        """从配置载荷中选择一个远端 MCP HTTP 服务。"""
+        """从配置载荷中选择远端 MCP 服务，可要求首选服务必须存在。"""
         servers = self._extract_servers(payload, transport)
 
-        # 优先返回调用方明确指定的服务名，保证 CLI 路由可控。
         if preferred_name and preferred_name in servers:
             return self._build_server_config(preferred_name, servers[preferred_name], transport)
+        if preferred_name and require_preferred:
+            raise BadRemoteConfigError(
+                f"remote MCP config 缺少指定服务：{preferred_name}"
+            )
 
-        # 未指定或未命中时，按后端返回顺序取首个服务，保持实现最小化。
+        # 默认保留现有回退行为，避免影响其他远端 Adapter。
         for name, item in servers.items():
             return self._build_server_config(str(name), item, transport)
 

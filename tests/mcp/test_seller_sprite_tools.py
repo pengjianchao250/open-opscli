@@ -269,6 +269,13 @@ def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
     assert "# 卖家精灵场景参数手册" in result["data"]["spec"]
     assert "seller_sprite_listing_analysis_submit" in result["data"]["spec"]
     assert "`seller_sprite_run` 生产入口会明确拒绝 `listing-analysis`" in result["data"]["spec"]
+    assert "`aba-research` ABA 数据选品" in result["data"]["spec"]
+    assert "固定提交一次 `POST /v3/api/aba-research`" in result["data"]["spec"]
+    assert "不生成官网 `Notes` 页及二维码图片" in result["data"]["spec"]
+    assert "`association-traffic` 关联流量" in result["data"]["spec"]
+    assert "本地工作簿只生成业务主表，不生成官网导出中的 `Notes` 页" in result["data"]["spec"]
+    assert "`aba-reverse` 出单词反查" in result["data"]["spec"]
+    assert "官方 XLSX 原样保存" in result["data"]["spec"]
 
 
 def test_seller_sprite_skill_and_formal_docs_require_durable_bounded_tracking():
@@ -419,6 +426,38 @@ def test_seller_sprite_quota_status_returns_snapshot(monkeypatch):
 
     assert result["success"] is True
     assert result["data"]["remaining"] == 3
+
+
+def test_seller_sprite_quota_status_returns_unlimited_snapshot(monkeypatch):
+    class FakeLimiter:
+        async def quota_snapshot(self, tool_name, identity):
+            assert tool_name == "seller_sprite_run"
+            assert identity == "email:dedicated@example.com"
+            return {
+                "service": "seller_sprite",
+                "unlimited": True,
+                "limit": None,
+                "used": 0,
+                "remaining": None,
+                "failures": 0,
+                "reset_at": None,
+            }
+
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_current_mcp_user_email",
+        lambda: "dedicated@example.com",
+    )
+    monkeypatch.setattr(
+        "opscli.mcp.tools.seller_sprite.get_quota_limiter",
+        lambda: FakeLimiter(),
+    )
+
+    result = _run(seller_sprite_tools.seller_sprite_quota_status())
+
+    assert result["success"] is True
+    assert result["data"]["unlimited"] is True
+    assert result["data"]["remaining"] is None
 
 
 def test_seller_sprite_quota_status_returns_error_when_user_email_missing(monkeypatch):
@@ -840,6 +879,45 @@ def test_listing_analysis_report_result_uses_task_bound_account(monkeypatch, tmp
 
     assert result["task_id"] == "task-account-2"
     assert used_accounts == ["account-2"]
+
+
+def test_listing_analysis_account_resolution_restores_dedicated_account(monkeypatch):
+    from opscli.seller_sprite.accounts import SellerSpriteAccount
+    from opscli.seller_sprite.services.account_pool import seller_sprite_account_key
+    from opscli.seller_sprite.services.task_queue_store import (
+        ACCOUNT_ROUTE_USER_BINDING,
+    )
+
+    dedicated = SellerSpriteAccount(
+        "dedicated-a",
+        "dedicated@example.com",
+        "dedicated-secret",
+    )
+    account = SimpleNamespace(to_account=lambda: dedicated)
+    provider = SimpleNamespace(
+        list_accounts=lambda: (_ for _ in ()).throw(
+            AssertionError("专属任务不得查询公共账号池")
+        )
+    )
+    manager = SimpleNamespace(account_provider=provider)
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_account_binding_store",
+        lambda: SimpleNamespace(get_account=lambda account_id: account),
+    )
+
+    resolved = seller_sprite_tools._resolve_listing_analysis_account(
+        manager,
+        {
+            "account_route": ACCOUNT_ROUTE_USER_BINDING,
+            "requested_account_id": "account-id",
+            "requested_account_key": seller_sprite_account_key(dedicated),
+            "assigned_account": "dedicated-a",
+            "assigned_account_key": seller_sprite_account_key(dedicated),
+        },
+    )
+
+    assert resolved == dedicated
 
 
 def test_listing_analysis_account_resolution_rejects_ambiguous_history_task():
@@ -1305,6 +1383,29 @@ def test_seller_sprite_run_returns_complete_queued_status_without_polling(monkey
     }
 
 
+def test_seller_sprite_remote_run_rejects_output_dir_before_auth(monkeypatch):
+    from opscli.mcp.context import mcp_request_ctx
+
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "ensure_ops_credentials",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("拒绝路径后不得认证")),
+    )
+    token = mcp_request_ctx.set({"api_key": "remote-key"})
+    try:
+        result = _run(
+            seller_sprite_tools.seller_sprite_run(
+                scenario="keyword-reverse",
+                output_dir="D:/client/exports",
+            )
+        )
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["success"] is False
+    assert "不接受 output_dir" in result["error"]["message"]
+
+
 def test_seller_sprite_export_returns_owned_export_info(monkeypatch):
     _patch_job_owner(monkeypatch)
     monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
@@ -1314,6 +1415,53 @@ def test_seller_sprite_export_returns_owned_export_info(monkeypatch):
     assert result["success"] is True
     assert result["data"]["path"] == "/tmp/job-1.xlsx"
     assert result["data"]["url"].startswith("file://")
+
+
+def test_seller_sprite_remote_export_requires_https_and_hides_server_path(monkeypatch):
+    from opscli.mcp.context import mcp_request_ctx
+
+    class HttpsExportScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "export": {
+                    "path": "/srv/private/job-1.xlsx",
+                    "filename": "job-1.xlsx",
+                    "url": "https://files.example.com/job-1.xlsx",
+                },
+            }
+
+    _patch_job_owner(monkeypatch)
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_task_scheduler",
+        lambda **kwargs: HttpsExportScheduler(),
+    )
+    token = mcp_request_ctx.set({"api_key": "remote-key"})
+    try:
+        result = _run(seller_sprite_tools.seller_sprite_export("job-1"))
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["success"] is True
+    assert result["data"]["url"] == "https://files.example.com/job-1.xlsx"
+    assert "path" not in result["data"]
+
+
+def test_seller_sprite_remote_export_rejects_local_file_url(monkeypatch):
+    from opscli.mcp.context import mcp_request_ctx
+
+    _patch_job_owner(monkeypatch)
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda **kwargs: DummyScheduler())
+    token = mcp_request_ctx.set({"api_key": "remote-key"})
+    try:
+        result = _run(seller_sprite_tools.seller_sprite_export("job-1"))
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["success"] is False
+    assert "HTTPS" in result["error"]["message"]
+    assert "/tmp/job-1.xlsx" not in str(result)
 
 
 def test_seller_sprite_export_does_not_mutate_scheduler_export_mapping(monkeypatch):
@@ -2257,6 +2405,63 @@ def test_seller_sprite_run_passes_owner_to_atomic_scheduler(monkeypatch):
         "credential_scope": "default",
         "expected_user_email": "mcp-user@example.com",
         "mcp_user_email": "mcp-user@example.com",
+    }
+
+
+def test_seller_sprite_run_routes_dedicated_account_from_quota_context(monkeypatch):
+    """统一额度切面确认的专属账号引用必须原样进入原子入队。"""
+    from opscli.mcp.quota import (
+        QuotaAccessContext,
+        reset_quota_access_context,
+        set_quota_access_context,
+    )
+    from opscli.seller_sprite.services.task_queue_store import (
+        ACCOUNT_ROUTE_USER_BINDING,
+    )
+
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_task_scheduler",
+        lambda **kwargs: DummyScheduler(),
+    )
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_auth_pair",
+        lambda system, session_id, jwt: ("sid", "jwt"),
+    )
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_current_mcp_user_email",
+        lambda: "dedicated@example.com",
+    )
+    token = set_quota_access_context(
+        QuotaAccessContext(
+            mode="unlimited",
+            service="seller_sprite",
+            user_email="dedicated@example.com",
+            account_id="account-id",
+            account_key="account-key",
+        )
+    )
+    try:
+        result = _run(
+            seller_sprite_tools.seller_sprite_run(
+                scenario="keyword-reverse",
+                params={"asin": "B07YRMT36L"},
+                job_id="dedicated-mcp-job",
+            )
+        )
+    finally:
+        reset_quota_access_context(token)
+
+    assert result["success"] is True
+    assert DummyScheduler.last_enqueue_kwargs == {
+        "credential_scope": "default",
+        "expected_user_email": "dedicated@example.com",
+        "mcp_user_email": "dedicated@example.com",
+        "account_route": ACCOUNT_ROUTE_USER_BINDING,
+        "requested_account_id": "account-id",
+        "requested_account_key": "account-key",
     }
 
 
