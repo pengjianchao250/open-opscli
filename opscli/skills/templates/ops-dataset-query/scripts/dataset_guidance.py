@@ -131,16 +131,17 @@ def _field_score(
         else:
             score = len(_tokens(base_name).intersection(query_tokens))
         best = max(best, score)
-    if best:
-        return best
-    # 精确与 token 交集都落空时的最后一层：字符二元组模糊匹配。
-    # 上限压到 50，确保任何精确命中（80/90/100 档）都排在它前面；
-    # 这条规则的目的是不让「点击份额」这类业务词零候选，
-    # 而不是替代精确匹配。
-    fuzzy = schema_completion.best_fuzzy_score(
-        normalized_query, [_normalize(label) for label in _field_labels(field)]
+    # 模糊分与既有分数取最大值而非短路返回：token 交集哪怕只命中一个二元组
+    # 也会得到 1~3 的非零分，短路会让模糊兜底永远走不到——
+    # 实测字段「ASIN点击份额」对用户词「点击份额」只拿 3 分，
+    # 而它本该是强命中。模糊分上限 50，精确命中的 80/90/100 档仍然优先。
+    fuzzy = int(
+        schema_completion.best_fuzzy_score(
+            normalized_query, [_normalize(label) for label in _field_labels(field)]
+        )
+        * 50
     )
-    return int(fuzzy * 50)
+    return max(best, fuzzy)
 
 
 def _field_labels(field: dict) -> list[str]:

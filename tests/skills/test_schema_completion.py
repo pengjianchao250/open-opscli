@@ -113,3 +113,53 @@ def test_unrelated_label_stays_zero_after_segmentation():
     query = "看一下搜索词的点击份额和购买份额"
     assert skill_completion.best_fuzzy_score(query, ["总库存"]) == 0.0
     assert skill_completion.best_fuzzy_score("查近30天各渠道销售额", ["广告费"]) == 0.0
+
+
+def test_field_score_max_beats_weak_token_short_circuit():
+    """`_field_score` 不能在 token 交集非零时短路，否则修好的模糊分永远走不到。
+
+    实测字段「ASIN点击份额」对查询「看一下搜索词的点击份额和购买份额」
+    此前只靠 token 交集（点击/击份/份额三个二元组）拿 3 分就直接 return，
+    修好的 best_fuzzy_score 在集成路径上完全是空操作。改为取最大值后
+    应显著高于 3（预期在 40 上下）。
+    """
+    query = "看一下搜索词的点击份额和购买份额"
+    normalized_query = skill_guidance._normalize(query)
+    field = _field("asin_click_share", "ASIN点击份额")
+    score = skill_guidance._field_score(
+        field, normalized_query, skill_guidance._tokens(normalized_query)
+    )
+    assert score > 30
+
+
+def test_field_score_exact_still_outranks_fuzzy_after_max_fix():
+    """短路改为取最大值后，精确子串命中仍必须排在模糊分之上。
+
+    fuzzy_score 断言 >=30 是为了确保本用例在短路被改回去时也会失败——
+    只比较 exact > fuzzy 不够，短路下 fuzzy 恒为 3，比较仍会「假通过」。
+    """
+    query = "看一下搜索词的点击份额和购买份额"
+    normalized_query = skill_guidance._normalize(query)
+    tokens = skill_guidance._tokens(normalized_query)
+
+    exact_score = skill_guidance._field_score(
+        _field("click_share", "点击份额"), normalized_query, tokens
+    )
+    fuzzy_score = skill_guidance._field_score(
+        _field("asin_click_share", "ASIN点击份额"), normalized_query, tokens
+    )
+
+    assert fuzzy_score >= 30
+    assert exact_score >= 80
+    assert exact_score > fuzzy_score
+
+
+def test_field_score_unrelated_stays_zero_after_max_fix():
+    """取最大值不能把无关字段从 0 分拉起来。"""
+    query = "看一下搜索词的点击份额和购买份额"
+    normalized_query = skill_guidance._normalize(query)
+    field = _field("stock_qty", "总库存")
+    score = skill_guidance._field_score(
+        field, normalized_query, skill_guidance._tokens(normalized_query)
+    )
+    assert score == 0
