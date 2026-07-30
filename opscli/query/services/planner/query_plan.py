@@ -2202,6 +2202,54 @@ def _block_component_filter(
     return contract
 
 
+def _cross_field_candidates(
+    owner_spec: dict,
+    value: str,
+    execution: dict,
+    enum_fn,
+    enum_cache: dict,
+    adapter,
+) -> list[str]:
+    """裸值在其他字段的授权枚举里也存在时，返回全部候选字段的中文标签。
+
+    为什么只对裸值判：用户显式写「产品型号是BKC-107」或「SPU是BKC-107」时
+    字段已由标签确定，两种写法实测都能正确落到各自字段；只有裸值
+    （靠编码形态抽出来）才存在歧义。碰撞扫描在真实枚举里找到 10 个同值跨字段的
+    情形（产品型号∩SPU 8 个、渠道SKU∩公司SKU 2 个），原先按
+    _ENUM_COMPONENT_SPECS 顺序静默绑到靠前的字段——值在错字段里同样合法，
+    等值校验兜不住，用户拿到另一个口径的数据且无从察觉。
+
+    检查范围限定为「同样带编码形态的字段」（当前 5 个），不按形态是否命中该值
+    再缩小——`USAN1088833` 同属渠道SKU 与公司SKU，但渠道SKU 的形态要求三段
+    连字符、匹配不上它，按形态缩范围会漏掉这一对。5 次枚举有上限且走缓存。
+    """
+    normalized = _normalize_component_value(value)
+    labels = [owner_spec.get("label_zh") or owner_spec["field_name"]]
+    for spec in _ENUM_COMPONENT_SPECS:
+        if spec["field_name"] == owner_spec["field_name"]:
+            continue
+        if not spec.get("value_pattern"):
+            continue
+        component = _lookup_component(execution, spec["field_name"], adapter)
+        if not component:
+            continue
+        cache_key = (str(component.get("component_table_id")), spec["field_name"])
+        if cache_key in enum_cache:
+            others = enum_cache[cache_key]
+        else:
+            errors: list[str] = []
+            others = _auto_enum_component_values(
+                enum_fn, component.get("component_table_id"), spec["field_name"], errors
+            )
+            enum_cache[cache_key] = others
+            enum_cache[("error", *cache_key)] = list(errors)
+            if errors:
+                continue
+        if any(_normalize_component_value(item) == normalized for item in others):
+            labels.append(spec.get("label_zh") or spec["field_name"])
+    return labels
+
+
 def _write_component_filter(
     contract: dict,
     execution: dict,
@@ -2390,6 +2438,26 @@ def _resolve_enum_component_filter(
                 + f"请指定当前账号可见的准确{label_zh}名称。"
             ),
         )
+
+    # 裸值（无字段标签）且该值在别的字段枚举里也存在时不得静默绑定：
+    # 值在错字段里同样合法，等值校验兜不住，只能让用户点明是哪个字段
+    if not labeled_first and not exact_multi and auto_enum:
+        candidates = _cross_field_candidates(
+            spec, matched[0], execution, enum_fn, enum_cache, adapter
+        )
+        if len(candidates) > 1:
+            listed = "、".join(f"“{item}”" for item in candidates)
+            return _block_component_filter(
+                contract,
+                execution,
+                status="clarify_required",
+                state="clarify_required",
+                next_action="ask_user_for_component_filter",
+                message_zh=(
+                    f"“{matched[0]}”同时是{listed}的授权值，无法确定你要按哪个字段筛选；"
+                    f"请指明字段，例如「{candidates[0]}是{matched[0]}」。"
+                ),
+            )
 
     _write_component_filter(
         contract,

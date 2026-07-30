@@ -6101,3 +6101,40 @@ merge-base 复现完全相同的 filters，属既存缺陷。
 
 **回滚方式**：`git revert <本次提交>`。
 ---
+
+## 2026-07-30 planner - 同值跨字段的裸值不再静默绑定
+
+**变更原因**：碰撞扫描在本账号真实枚举里找到 10 个同值跨字段的情形——
+产品型号∩SPU 8 个（bkc-102/bkc-107/cot-102/cot-114/cot-165/mks-111/tv-101/tv-140）、
+渠道SKU∩公司SKU 2 个（usan1088833/usan1077714）。裸值原先按
+`_ENUM_COMPONENT_SPECS` 顺序静默绑到靠前的字段（实测「查BKC-107的近7天销量」
+绑到 model）。危险点在于值在错字段里同样是合法枚举值，完整等值校验不会报错，
+因此没有任何 fail-closed 兜底，用户拿到另一字段口径的数据且无从察觉。
+
+**改动点**（skill 版 + 内核版同步）：
+- `query_plan.py`：新增 `_cross_field_candidates()`，检查该值是否同时存在于
+  其他带编码形态字段的授权枚举；`_resolve_enum_component_filter()` 在写入前
+  对裸值路径做该判定，多字段命中即 clarify 并列出候选字段与示例话术
+
+**只对裸值生效**：标签形态已由字段名确定，「产品型号是BKC-107」与「SPU是BKC-107」
+实测各自正确落到 model / spu，不应打扰。
+
+**检查范围不按形态缩小**：第一版按"形态也命中该值"缩范围，漏掉了
+渠道SKU∩公司SKU 这一对——渠道SKU 形态要求三段连字符、匹配不上 USAN1088833。
+改为检查全部带编码形态的字段（当前 5 个，有上限且走枚举缓存）。
+该教训已写成测试 `test_check_scope_is_not_narrowed_by_pattern` 锁住。
+
+**验证结果**：
+- 新增 `tests/skills/test_cross_field_value_ambiguity.py` 10 条全绿
+  （枚举与组件查找走本地桩，不依赖真实网络，符合铁律8）
+- 改动范围全量回归 475 passed / 8 xfailed；内核版 tests/query/planner 45 passed
+- 两版端到端实测：裸值 BKC-107 / USAN1088833 / USAN1077714 均转澄清并列出候选字段；
+  「产品型号是BKC-107」「SPU是BKC-107」「公司SKU是USAN1088833」「渠道SKU是USAN1088833」
+  四种标签写法各自正确；只属单一字段的值不受影响
+- 碰撞扫描高危项 10 → 0
+
+**影响范围**：仅裸值 + 编码形态字段路径。标签形态、枚举反查、多值 IN、
+主段歧义 fail-closed 语义均不变。
+
+**回滚方式**：`git revert <本次提交>`。
+---
