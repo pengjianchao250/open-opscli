@@ -2179,13 +2179,22 @@ def _generic_slot_terms() -> set:
     return {term for term in terms if term}
 
 
-def _reverse_lookup_component_values(query: str, values: list, normalize) -> list:
-    """用授权枚举原值反查原文，返回全部候选。
+def _reverse_lookup_component_matches(
+    query: str, values: list, normalize
+) -> tuple[list, str]:
+    """用授权枚举原值反查原文，返回 (候选, 命中类型)。
 
     为什么需要：用户常直接说「查傲彼瑞的所有ASIN」，原文根本不含「渠道」二字，
     标签正则抽不到值，会被当成没有筛选意图而放行——这正是静默返回全渠道数据的成因。
     这里反过来拿当前账号的授权原值去原文里找，原值本身或其主段（连字符前）
     出现即算候选，"傲彼瑞" 因此能同时命中「傲彼瑞-美国」「傲彼瑞-加拿大」并转澄清。
+
+    命中类型必须回传给调用方，因为两类命中的语义完全不同：
+    - exact：原文逐个写出了完整授权原值，是用户点名的准确值，多个也应全部锁定；
+    - base：原文只出现主段，天然歧义，必须按 fail-closed 转澄清。
+    原先两类被拍平成一个列表返回，调用方只能统一要求"唯一命中"，
+    于是用户显式给出的三个准确渠道名被当成主段歧义，回显还退化成共同前缀「傲彼瑞」，
+    反过来要求用户"请指定准确渠道名称"——而用户给的本来就是准确全名。
     """
     normalized_query = normalize(query)
     generic = _generic_slot_terms()
@@ -2204,7 +2213,16 @@ def _reverse_lookup_component_values(query: str, values: list, normalize) -> lis
             base_hits.append(value)
     # 整值命中优先：原文写了「傲彼瑞-加拿大」就该锁定它，而不是因为主段
     # 「傲彼瑞」同时命中三个地区渠道而退化成澄清
-    return _deduplicate(exact_hits or base_hits)
+    if exact_hits:
+        return _deduplicate(exact_hits), "exact"
+    if base_hits:
+        return _deduplicate(base_hits), "base"
+    return [], ""
+
+
+def _reverse_lookup_component_values(query: str, values: list, normalize) -> list:
+    """反查授权枚举原值，只取候选列表（不关心命中类型的调用方用这个）。"""
+    return _reverse_lookup_component_matches(query, values, normalize)[0]
 
 
 def _shared_prefix(values: list) -> str:
@@ -2489,27 +2507,38 @@ def _write_component_filter(
     field_name: str,
     label_zh: str,
     requested: str,
-    resolved: str,
+    resolved: str | list,
 ) -> None:
-    """把已锁定的授权原值写入查询模板，并登记披露信息。"""
+    """把已锁定的授权原值写入查询模板，并登记披露信息。
+
+    resolved 传列表表示用户点名了多个准确值，按 IN 语义下发
+    （服务端支持 {"operator": "in", "value": [...]}），单值仍用 `=`，
+    避免为单值场景改变既有 payload 形状。
+    """
     template = execution.get("query_template")
     if not isinstance(template, dict):
         return
+    multi = isinstance(resolved, list)
+    values = list(resolved) if multi else [resolved]
     template.setdefault("filters", []).append(
-        {"field": field_name, "operator": "=", "value": resolved}
+        {"field": field_name, "operator": "in", "value": values}
+        if multi
+        else {"field": field_name, "operator": "=", "value": resolved}
     )
     execution.setdefault("resolved_component_filters", []).append(
         {
             "field_name": field_name,
             "label_zh": label_zh,
             "requested_value": requested,
-            "resolved_value": resolved,
+            "resolved_value": values if multi else resolved,
             "match_strategy": "exact_normalized",
         }
     )
     contract["model_view"]["component_filter_state"] = "resolved"
+    shown = "、".join(f"“{value}”" for value in values) if multi else f"“{resolved}”"
     contract["model_view"].setdefault("component_filter_disclosures_zh", []).append(
-        f"{label_zh}按当前账号授权枚举完整等值匹配为“{resolved}”。"
+        f"{label_zh}按当前账号授权枚举完整等值匹配为{shown}"
+        + ("（任一命中）。" if multi else "。")
     )
 
 
@@ -2598,14 +2627,18 @@ def _resolve_enum_component_filter(
     # 未单独声明归一化的字段走通用规则（NFKC + trim + casefold）；
     # 部门有中文数字等价这类特殊口径，才单独挂自己的归一化器
     normalize = spec.get("normalize") or _normalize_component_value
+    # 整值多命中：原文逐个写出了完整授权原值，是用户点名的准确值集合，
+    # 全部锁定并以 IN 下发，不再因为"命中不唯一"退化成澄清
+    exact_multi = False
     if requested:
         target = normalize(requested)
         matched = [value for value in values if normalize(value) == target]
     else:
         # 裸值反查：授权原值本身或其主段（连字符前）出现在原文即算候选
+        candidates, match_kind = _reverse_lookup_component_matches(query, values, normalize)
         matched = [
             value
-            for value in _reverse_lookup_component_values(query, values, normalize)
+            for value in candidates
             # 已被其他字段消费掉的值（含其子串）不再算命中：
             # 「品牌是OHWILL」不该连带匹配渠道 ohwill-shopify-美国；
             # 渠道锁定「傲彼瑞-加拿大」后，其中的「加拿大」也不该再被国家反查抓走
@@ -2613,9 +2646,13 @@ def _resolve_enum_component_filter(
         ]
         if not matched:
             return contract
-        requested = matched[0] if len(matched) == 1 else _shared_prefix(matched)
+        exact_multi = len(matched) > 1 and match_kind == "exact"
+        if exact_multi:
+            requested = "、".join(matched)
+        else:
+            requested = matched[0] if len(matched) == 1 else _shared_prefix(matched)
 
-    if len(matched) != 1:
+    if len(matched) != 1 and not exact_multi:
         # 零命中时用包含关系找近似成员，让用户直接从可见成员里挑，省一轮往返
         approx = matched or [
             value
@@ -2641,10 +2678,12 @@ def _resolve_enum_component_filter(
         field_name=field_name,
         label_zh=label_zh,
         requested=requested,
-        resolved=matched[0],
+        resolved=matched if exact_multi else matched[0],
     )
     consumed.add(_normalize_component_value(requested))
-    consumed.add(_normalize_component_value(matched[0]))
+    # 多值时每个已锁定的值都要登记，避免其中某个值的子串被后续字段反查抓走
+    for value in matched if exact_multi else [matched[0]]:
+        consumed.add(_normalize_component_value(value))
     return contract
 
 

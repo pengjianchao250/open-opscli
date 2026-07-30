@@ -5883,3 +5883,37 @@ merge-base 复现相同行为，属既存缺陷。
 
 **回滚方式**：`git revert <本次提交>`。
 ---
+
+## 2026-07-30 planner - 显式多值组件筛选走 IN，不再误判为歧义
+
+**变更原因**：codex 实测「查询渠道为“傲彼瑞-美国”、“傲彼瑞-tiktok”、“傲彼瑞-加拿大”
+三个准确渠道名称中任意一个」被判为"没有唯一完整等值的授权成员"并转澄清，回显还退化成
+共同前缀「傲彼瑞」，反过来要求用户"请指定准确渠道名称"——而用户给的本来就是准确全名。
+codex 只能退化成逐个查询再本地取并集。根因是 `_reverse_lookup_component_values`
+内部已分开算 exact_hits（原文写了完整原值）与 base_hits（只出现主段），
+但返回时拍平成一个列表，调用方只能统一要求 `len(matched) == 1`，
+无法区分「三个准确值」与「一个模糊主段」。merge-base 复现相同行为，属既存缺陷
+（源 6e3e375 组件筛选值解析一期的 fail-closed 门）。
+
+**改动点**（skill 版 + 内核版同步）：
+- `query_plan.py`：新增 `_reverse_lookup_component_matches()` 返回 (候选, 命中类型)；
+  `_reverse_lookup_component_values()` 保留原签名委托给它，既有调用方与测试不受影响
+- `_resolve_enum_component_filter()`：整值多命中（`match_kind == "exact"`）放行，
+  绕过唯一命中门；主段命中保持 fail-closed 澄清；多值时每个已锁定值都登记进 consumed
+- `_write_component_filter()`：`resolved` 接受 `str | list`，多值按服务端支持的
+  `{"operator": "in", "value": [...]}` 下发（开发说明文档 141/259 行），单值仍用 `=`
+
+**验证结果**：
+- 新增 `tests/skills/test_multi_value_component_filter.py` 9 条全绿
+- 既有 `tests/skills/test_component_filter_resolution.py` 66 passed，未破坏
+- 真实元数据实测三种形态：单值 `=`、双值 `in`（披露列出两个值并标注"任一命中"）、
+  只提基段仍 clarify_required
+- 两版逐条一致性核验通过（命中类型、候选数、写入 operator 均相同）
+- 执行器 `_apply_default_filters` 按字段名匹配用户条件、不看操作符，
+  `in` 不影响数据集默认条件的覆盖语义
+
+**影响范围**：仅裸值反查路径的多命中判定。标签抽取路径（用户写「字段渠道等于X」）
+仍是单值完整等值，未改动；主段歧义的 fail-closed 语义保持不变。
+
+**回滚方式**：`git revert <本次提交>`。
+---
