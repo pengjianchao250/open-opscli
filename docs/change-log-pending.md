@@ -5760,3 +5760,46 @@ tests/query tests/mcp/test_query_planner_tools.py -q` → 280 passed, 8 xfailed�
 这两条路径现在会新增披露，是修复目标。
 **回滚方式**：`git revert <本次提交>`。
 ---
+
+## 2026-07-30 query/skills - 修复枚举反查的主段误判（Task 10）
+
+**变更原因**：二期为兜住裸值筛选加的枚举反查规则「授权枚举原值本身或其主段（连字符前）
+出现在原文即算候选」，对同源多地区渠道（傲彼瑞-美国/傲彼瑞-加拿大）是必要的，但当主段
+是通用业务词时会误判——销售小组授权值形如「亚马逊-运营C组」，主段是「亚马逊」，导致
+任何提到亚马逊的查询都被当成指定了销售小组。真实元数据下已观察到 `team_name` 被静默
+注入 filters，属于会缩小数据范围的误判路径。
+**改动的类/方法**：两版 `query_plan.py` 新增 `_generic_slot_terms()`；
+`_reverse_lookup_component_values()` 主段匹配分支增加排除判断。
+**改动点**（两版逐字同步，仅规则加载方式因内核资源化而不同）：
+- `opscli/skills/templates/ops-dataset-query/scripts/query_plan.py`：新增
+  `_generic_slot_terms()`，经 `_load_json_object(RULES_PATH, ...)` 读取
+  `data/intent_rules.json`，汇总 `slots.*.*.terms` + `filter_fields.*` +
+  `domains.*.terms` 三类现有词表（不新造词表），规则不可读时返回空集退回旧行为。
+- `opscli/query/services/planner/query_plan.py`：同一函数改用内核已有的
+  `_load_rules_resource()`（importlib.resources 读包内 `resources/intent_rules.json`），
+  词表汇总逻辑与过滤条件逐字一致。
+- `_reverse_lookup_component_values()` 主段分支由 `base in normalized_query` 改为
+  `base not in generic and base in normalized_query`，整值命中优先级不变。
+- `tests/skills/test_component_filter_resolution.py` 新增 3 条参数化（skill+kernel）
+  测试：主段是平台名不命中、主段是业务专名仍命中、`_generic_slot_terms()` 区分两者。
+**验证结果**：
+- RED：`pytest tests/skills/test_component_filter_resolution.py -k "generic_platform_base or generic_slot_terms" -v`
+  → 4 failed（销售小组两个候选误判命中；`_generic_slot_terms` 属性不存在）。
+- GREEN：`pytest tests/skills/test_component_filter_resolution.py -v` → 66 passed。
+- 全量回归：`pytest tests/skills/test_component_filter_resolution.py
+  tests/skills/test_slot_coverage.py tests/skills/test_routing_eval.py
+  tests/skills/test_local_fallback.py tests/skills/test_dataset_query_planner.py
+  tests/query tests/mcp/test_query_planner_tools.py -q` → 349 passed, 8 xfailed。
+- 词表实测：`_generic_slot_terms()` 命中 120 个词，含「亚马逊」不含「傲彼瑞」，
+  与控制者原型验证结果一致。
+- 真实元数据验证（`~/.claude/skills/ops-dataset-query/scripts`，逐文件 `cp` 覆盖
+  `query_plan.py`，未做整目录同步）：
+  `"查亚马逊近7天的销售额"` → `status=planned 非日期筛选=[]`（不再命中 team_name）；
+  `"查傲彼瑞的所有ASIN"` → `status=clarify_required 非日期筛选=[]`（渠道反查能力不损）。
+- 两版一致性：`diff` 新增函数块，除规则加载调用与预先存在的引号风格差异
+  （`_reverse_lookup_component_values` 原有 docstring 中 `"傲彼瑞"` vs `「傲彼瑞」`，
+  非本次改动引入）外逐字一致。
+**影响范围**：仅枚举反查的主段匹配分支；整值命中路径、二期已有的渠道反查（裸值/全名/
+唯一命中三种形态）、高基数字段的形态抽取路径均未改动。
+**回滚方式**：`git revert 1e65139`。
+---
