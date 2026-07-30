@@ -1881,6 +1881,53 @@ def test_grain_disclosure_survives_explicit_dataset_reference(tmp_path: Path):
         ), query
 
 
+def test_grain_disclosure_survives_default_dataset_recommendation(tmp_path: Path):
+    """默认「即时综合数据集」推荐路径同样必须带强制披露。
+
+    这是四条候选构造路径里的第三条（`_default_dataset_candidate`）：
+    实测把它的 `grain_coverage` 键去掉，披露立刻变 None。
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v1.4.3", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    # dataset_name 命中默认表身份，description 提供 keyword+search_term 两个 grain 取值
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "40,ds_inst,即时综合数据集,normal,0,"
+        "亚马逊消费者搜索词与关键词维度的即时综合明细，含转化情况。,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "40,ds_inst,即时综合数据集,date_id,日期,f_inst_date,dimension,,,,,0,0\n"
+        "40,ds_inst,即时综合数据集,conv_rate,转化率,f_inst_conv,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n",
+        encoding="utf-8",
+    )
+
+    result = query_plan.build_model_query_plan(
+        "近7天搜索词的转化率",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["model_view"]["default_dataset_recommendation_zh"]
+    disclosures = result["model_view"].get("grain_disclosure_zh") or []
+    assert any("关键词" in item for item in disclosures), "默认表推荐路径丢失强制披露"
+    assert all(
+        item in result["answer_contract"]["required_disclosures_zh"] for item in disclosures
+    )
+
+
 def _write_ad_type_surplus_metadata(data_dir: Path) -> None:
     """写入一张 ad_type 固定为 SP+SD+SB 且没有「广告类型」筛选字段的数据集。
 

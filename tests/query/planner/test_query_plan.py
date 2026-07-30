@@ -362,3 +362,25 @@ def test_ad_type_surplus_disclosure_says_cannot_filter():
     assert "不得当作纯 SP 的数据汇报" in text
     assert "粒度比请求更细" not in text
     assert "ad_type" not in text
+
+
+def test_grain_disclosure_survives_default_dataset_recommendation():
+    """默认「即时综合数据集」推荐路径（第三条候选构造路径）也必须带强制披露。"""
+    payload = _grain_surplus_payload()
+    dataset = payload["datasets"][0]
+    # dataset_name 命中默认表身份，description 仍提供 keyword+search_term 两个 grain 取值
+    dataset["dataset_name"] = "即时综合数据集"
+    dataset["description"] = "亚马逊消费者搜索词与关键词维度的即时综合明细，含转化情况。"
+    for field in payload["fields"]:
+        field["dataset_name"] = "即时综合数据集"
+
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(payload), "近7天搜索词的转化率", enum_fn=lambda *a, **k: []
+    )
+
+    assert contract["model_view"]["default_dataset_recommendation_zh"]
+    disclosures = contract["model_view"].get("grain_disclosure_zh") or []
+    assert any("关键词" in item for item in disclosures), "默认表推荐路径丢失强制披露"
+    assert all(
+        item in contract["answer_contract"]["required_disclosures_zh"] for item in disclosures
+    )

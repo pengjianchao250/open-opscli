@@ -5686,3 +5686,29 @@ tests/mcp/test_query_planner_tools.py -q` → 全绿。
 **影响范围**：仅文档可读性与后续执行者的判断依据；无运行时影响。
 **回滚方式**：`git revert <本次提交>`；或 `git checkout HEAD~1 --` 还原两个文档文件。
 ---
+
+## 2026-07-30 skills/ops-dataset-query + query/planner - 补默认表推荐路径的披露回归与 schema 描述
+
+**变更原因**：Self-review 发现四条候选路径里第三条（`_default_dataset_candidate`）
+虽已补上 `grain_coverage` 键，但没有任何测试守护——实测把该键去掉，
+默认表推荐路径的披露立刻变 `None` 且没有一条测试转红。另外
+`query_plan.schema.json` 里 `grain_disclosure_zh` 的描述仍写「粒度比请求更细」，
+放开同时作用于 platform / ad_type 后该描述已不完整。
+**改动的类/方法**：无运行时代码改动（仅测试 + schema 描述字符串）。
+**改动点**：
+- `tests/skills/test_dataset_query_planner.py` 与 `tests/query/planner/test_query_plan.py`
+  各新增 `test_grain_disclosure_survives_default_dataset_recommendation`
+  （两版各守一条：Skill 版走 data_dir + CSV，内核版走 MetadataAdapter）。
+- 两版 `query_plan.schema.json`（`.../data/` 与 `.../resources/`）逐字同步，
+  `grain_disclosure_zh` 描述改为「所选数据集覆盖的口径比请求更宽时的强制披露
+  （粒度更细，或多余的平台/广告类型筛不掉）」。
+**验证结果**：变异检查——删掉 `_default_dataset_candidate` 的 `grain_coverage` 键，
+两版新用例分别 FAIL；还原后
+`pytest tests/skills/test_slot_coverage.py tests/skills/test_routing_eval.py
+tests/skills/test_local_fallback.py tests/skills/test_dataset_query_planner.py
+tests/query tests/mcp/test_query_planner_tools.py -q` → 280 passed, 8 xfailed。
+另做 GBK 自检：三个槽位的披露文案均可 `.encode('gbk')` 通过（【铁律23】）。
+两版 schema 文件 `diff` 完全相同。
+**影响范围**：仅测试覆盖与 schema 描述文案；无行为变化。
+**回滚方式**：`git revert <本次提交>`。
+---

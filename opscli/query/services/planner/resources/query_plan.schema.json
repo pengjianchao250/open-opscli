@@ -76,7 +76,7 @@
           "$ref": "#/$defs/string_array"
         },
         "grain_disclosure_zh": {
-          "description": "所选数据集粒度比请求更细时的强制披露",
+          "description": "所选数据集覆盖的口径比请求更宽时的强制披露（粒度更细，或多余的平台/广告类型筛不掉）",
           "$ref": "#/$defs/string_array"
         },
         "platform_filter_state": {
