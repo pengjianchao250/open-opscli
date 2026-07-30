@@ -2498,6 +2498,23 @@ def _attach_fallback_guidance(contract: dict) -> dict:
     return contract
 
 
+def _time_literals_consumed(contract: dict) -> set:
+    """把时间解析已经用掉的日期字面量登记为已消费。
+
+    为什么需要：渠道SKU 的编码形态是 `[A-Za-z0-9]{2,}(-[A-Za-z0-9]{2,}){2,}`，
+    ISO 日期「2026-07-01」正好命中。实测「沿用 2026-07-01 至 2026-07-30 的口径」
+    被误读成渠道SKU 筛选值并转澄清，用户的日期口径反而落不了地。
+    日期已被时间解析消费，不该再被组件形态抽取二次消费——这正是 consumed 的语义。
+    """
+    time_scope = (contract.get("execution_ref") or {}).get("time_scope") or {}
+    literals = set()
+    for key in ("start", "end", "comparison_start", "comparison_end"):
+        value = time_scope.get(key)
+        if value:
+            literals.add(_normalize_component_value(value))
+    return literals
+
+
 def _resolve_component_filters(
     contract: dict,
     query: str,
@@ -2515,7 +2532,7 @@ def _resolve_component_filters(
         return contract
     contract = _resolve_asin_filter(contract, query, adapter)
     enum_cache: dict = {}
-    consumed: set = set()
+    consumed: set = _time_literals_consumed(contract)
     # 两趟：先落实用户显式点名的字段并登记已消费的值，再做形态抽取与枚举反查
     for labeled_only in (True, False):
         for spec in _ENUM_COMPONENT_SPECS:

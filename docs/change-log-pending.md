@@ -6023,3 +6023,39 @@ merge-base 复现完全相同的 filters，属既存缺陷。
 
 **回滚方式**：`git revert <本次提交>`。
 ---
+
+## 2026-07-30 planner - 时间解析已消费的日期不再被组件形态抽取
+
+**变更原因**：codex 实测「沿用 2026-07-01 至 2026-07-30 的口径，按渠道+ASIN
+汇总销量、销售额和毛利」转澄清，提示「渠道SKU“2026-07-01”没有唯一完整等值的
+授权成员」。根因是渠道SKU 的编码形态 `[A-Za-z0-9]{2,}(-[A-Za-z0-9]{2,}){2,}`
+正好命中 ISO 日期的三段连字符结构，日期被当成渠道SKU 筛选值。
+渠道三值本身已正确锁定（IN），但整条查询因这个误判撤下模板，
+用户的日期口径落不了地。
+
+**改动点**（skill 版 + 内核版同步）：
+- `query_plan.py`：新增 `_time_literals_consumed()`，从
+  `execution_ref.time_scope` 取 start / end / comparison_start / comparison_end
+  登记进 consumed；`_resolve_component_filters()` 以它初始化 consumed
+  （原先初始化为空集合）
+
+**为什么不新造"日期形态"判断**：consumed 的语义本来就是"这段文本已被别的解释
+占用"，日期已被时间解析消费，登记进去即可，无需再加一套形态规则。
+
+**验证结果**：
+- 新增 `tests/skills/test_date_literal_not_component_value.py` 8 条全绿，
+  含一条前提固定测试（渠道SKU 形态确实命中 ISO 日期，形态若收紧会失败提示重评）
+  与一条直接回归点（同一 query 在有/无 guard 下分别抽到 `2026-07-01` 与 `""`）
+- 改动范围全量回归 454 passed / 8 xfailed
+- 两版逐条一致
+- 两版端到端均验证：用户原句 planned，filters 含
+  `date_id >= 2026-07-01`、`date_id <= 2026-07-30`、
+  `channel_name in [三个渠道]`，无 sell_sku 误判；
+  真实渠道SKU「ON-OB-JL-007-68157」仍正常识别
+
+**影响范围**：仅组件形态抽取的候选过滤。标签形态、枚举反查、真实编码类字段
+（渠道SKU/公司SKU/产品型号/物控编码/SPU）的识别均不变；
+全时段查询无日期字面量，不登记任何值。
+
+**回滚方式**：`git revert <本次提交>`。
+---
