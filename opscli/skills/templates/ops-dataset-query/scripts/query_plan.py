@@ -2103,7 +2103,28 @@ def _normalize_component_value(value: str) -> str:
 
 
 def _extract_labeled_value(query: str, label_terms: Sequence[str]) -> str:
-    """按「字段名 + 系词 + 值」形态提取筛选值，适用于全部组件字段。
+    """按标签形态提取单个筛选值（不关心是否为列举的调用方用这个）。"""
+    return _labeled_value_match(query, label_terms)[0]
+
+
+# 显式列举的分隔符只收列举标点与「或」。不收「和」「与」：
+# 「渠道为傲彼瑞-美国和所有ASIN」里的「和」后面接的不是同类枚举值。
+_VALUE_SEPARATOR = re.compile(r"\s*(?:、|,|，|/|或)\s*")
+
+
+def _labeled_value_match(query: str, label_terms: Sequence[str]) -> tuple[str, bool]:
+    """按「字段名 + 系词 + 值」形态提取筛选值，并判断其后是否紧跟显式列举。
+
+    返回 (首个值, 是否为显式列举)。只检测列举、不负责把其余值抽出来：
+    其余值交给授权枚举反查做完整等值匹配。为什么不在这里抽：末位值后面往往
+    接自由描述（「…傲彼瑞-加拿大三个当前账号授权渠道中的任意一个」），
+    靠边界前瞻猜结尾必然过度捕获成「傲彼瑞-加拿大三个当前账号授权渠道」。
+
+    为什么需要这个判断：原先只取第一个值就落地筛选，
+    「筛选渠道为傲彼瑞-美国、傲彼瑞-tiktok、傲彼瑞-加拿大中任意一个」
+    会静默把三渠道缩成一个；而剩下两个值没被登记成已消费，
+    其中的「加拿大」又被国家字段反查抓走，最终下发
+    channel=傲彼瑞-美国 AND country=加拿大 这种用户从未表达的条件。
 
     系词是必需的：没有它，「渠道和ASIN」这类维度点名会被当成筛选值。
     标签按长度降序尝试，避免「渠道」抢先匹配掉「渠道SKU」。
@@ -2114,13 +2135,18 @@ def _extract_labeled_value(query: str, label_terms: Sequence[str]) -> str:
             re.escape(term)
             + r"\s*(?:为|是|=|＝|：|:|等于)\s*"
             + r"([\u4e00-\u9fffA-Za-z0-9_\-\.]{2,40}?)"
-            + r"(?=的|地|，|,|。|；|;|、|\s|和|与|下|里|中|所有|全部|$)",
+            + r"(?=的|地|，|,|。|；|;|、|/|\s|和|与|或|下|里|中|所有|全部|$)",
             re.IGNORECASE,
         )
         match = pattern.search(query)
-        if match:
-            return match.group(1).strip()
-    return ""
+        if not match:
+            continue
+        # 值之后紧跟列举分隔符即判定为显式列举。
+        # 这里必须用 Pattern.match(s, pos)（已锚定在 pos），不能再加 ^——
+        # ^ 只认字符串真开头，叠加后续接判断永远为假
+        enumerated = bool(_VALUE_SEPARATOR.match(query, match.end(1)))
+        return match.group(1).strip(), enumerated
+    return "", False
 
 
 def _extract_patterned_value(query: str, pattern: str) -> str:
@@ -2608,6 +2634,14 @@ def _resolve_enum_component_filter(
     ):
         return contract
     requested = _spec_extract(spec, query, labeled_only=labeled_only, consumed=consumed)
+    # 标签形态的值后面紧跟列举分隔符时，用户点名的是一组值而不是一个值。
+    # 此时不能拿抽到的首个值去做单值等值匹配——那会静默把三渠道缩成一个渠道，
+    # 且其余值不会登记为已消费，其中的「加拿大」会被国家字段反查抓走。
+    # 改走下面的枚举反查分支：由授权枚举做完整等值匹配，不靠边界前瞻猜结尾。
+    labeled_first, labeled_enumeration = _labeled_value_match(
+        query, spec.get("label_terms") or ()
+    )
+    enumerated = bool(labeled_enumeration and requested and requested == labeled_first)
     # 第一趟只落实用户显式点名的字段，反查与形态抽取留到第二趟
     if labeled_only and not requested:
         return contract
@@ -2657,7 +2691,7 @@ def _resolve_enum_component_filter(
     # 整值多命中：原文逐个写出了完整授权原值，是用户点名的准确值集合，
     # 全部锁定并以 IN 下发，不再因为"命中不唯一"退化成澄清
     exact_multi = False
-    if requested:
+    if requested and not enumerated:
         target = normalize(requested)
         matched = [value for value in values if normalize(value) == target]
     else:
