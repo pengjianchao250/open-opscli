@@ -5539,3 +5539,43 @@ CSV 取默认维度指标中文名）。
 **回滚方式**：`git revert <本次提交>`；或按文件 `git checkout HEAD~1 --`
 还原两版各 3 个脚本与 4 个测试文件。
 ---
+
+## 2026-07-30 skills/ops-dataset-query - 登记 uncertified_hints_zh 并把巡检测试从纯形状断言改为具体集合
+
+**变更原因**：终审发现两处缺陷。
+1. C3：`local_fallback.py:173-174` 把未审核画像的业务约束从 `hard_constraints`
+   降级到新键 `uncertified_hints_zh`，而迁移后 15 份画像 `certified` 全为 false，
+   于是 `hard_constraints` 恒为空；`SKILL.md` 只教 Agent 遵守 `hard_constraints`，
+   `uncertified_hints_zh` 在 SKILL.md、其它脚本、任何文档里零引用——被吞掉的
+   正是防静默错数的护栏（「总库存、海外仓库存…属于库存快照字段，只能用于明细表
+   或无聚合过滤条件」，以及 Task 8 新放开的「亚马逊搜索词绩效」唯一硬约束
+   「必须选择报告周期」）。
+2. I3：`test_audit_reports_coverage_gap` 只断 `total_datasets >= 1`、键存在、
+   `isinstance(certified, int)`。把 `missing_profiles`/`stale_profiles` 的集合差
+   算反、或 `profiled` 用 `len(profiled)` 而非 `len(profiled & aliases)`，全部照过。
+**改动的类/方法**：无运行时代码改动（`local_fallback.py` 未改）；仅
+`SKILL.md` 文档与 `tests/skills/test_local_fallback.py` 测试。
+**改动点**：
+- `opscli/skills/templates/ops-dataset-query/SKILL.md`：降级路径处置清单新增第 4 条，
+  与 `hard_constraints` 同段登记 `uncertified_hints_zh`——说明它是**未经人工审核的
+  业务约束提示**，Agent 必须先向用户复述确认再套用，不得当作已确认口径静默应用，
+  也不得因为它不是 `hard_constraints` 就忽略；原第 4 条顺延为第 5 条。
+- `tests/skills/test_local_fallback.py`：新增
+  `test_business_constraints_reach_agent_under_at_least_one_key`（只锁「约束不能一个键
+  都不到」这条不变量，不锁落在哪个键，因此后续把 `certified` 改成 true 也不会误伤；
+  用例同时覆盖即时综合数据集与 Task 8 新可达的亚马逊搜索词绩效）与
+  `test_skill_md_registers_uncertified_hints_key`（键名 + 「未经人工审核」措辞都要在
+  SKILL.md 里）；`test_audit_reports_coverage_gap` 改为断具体集合内容，期望值从真实
+  画像文件派生（画像增删时自动跟随）。
+**验证结果**：
+- 变异检查：把 `uncertified_hints_zh` 改成恒空 → 新用例与
+  `test_hard_constraints_ride_along_with_candidates` 同时 FAIL；把
+  `profiled` 改成 `len(profiled)` 且 missing/stale 集合差互换 →
+  `test_audit_reports_coverage_gap` FAIL。
+- `pytest tests/skills/test_local_fallback.py -q` → 34 passed, 5 xfailed。
+**影响范围**：Agent 侧行为——降级路径下会多复述一次未审核约束并向用户确认
+（这是修复目标）。不改变任何脚本输出结构。**未**自行把画像 `certified` 改成 true，
+那是待用户裁决的事项。
+**回滚方式**：`git revert <本次提交>`；或 `git checkout HEAD~1 --` 还原
+`SKILL.md` 与 `tests/skills/test_local_fallback.py`。
+---

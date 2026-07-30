@@ -236,6 +236,59 @@ def test_hard_constraints_ride_along_with_candidates(tmp_path: Path):
     assert any("库存快照" in item for item in top["uncertified_hints_zh"])
 
 
+def test_business_constraints_reach_agent_under_at_least_one_key(tmp_path: Path):
+    """画像的业务约束必须至少经某个键抵达 Agent，两键同时为空等于护栏被静默吞掉。
+
+    审查发现的形态：迁移后 15 份画像 `certified` 全为 false，于是
+    `hard_constraints` 恒为空、内容改落在 `uncertified_hints_zh`，而 SKILL.md
+    当时只教 Agent 遵守 `hard_constraints`——防静默错数的护栏（库存快照字段
+    只能用于明细表、亚马逊搜索词绩效「必须选择报告周期」）就此无人消费。
+    本用例只锁「约束不能一个键都不到」这条不变量，不锁它落在哪个键，
+    因此后续把画像 certified 改成 true 也不会误伤。
+    """
+    data_dir = tmp_path / "data"
+    _write_ready_data_dir(data_dir)
+    # 追加 Task 8 放开后新可达的「亚马逊搜索词绩效」，其唯一硬约束是「必须选择报告周期」
+    (data_dir / "datasets.csv").write_text(
+        (data_dir / "datasets.csv").read_text(encoding="utf-8")
+        + "31,ds_ixwjp0bstGTd,amazon_search_query_set,normal,0,亚马逊搜索词绩效,\n",
+        encoding="utf-8",
+    )
+    constrained = {
+        str(item.get("standard_name")): item.get("hard_constraints") or []
+        for item in PROFILES["datasets"]
+        if item.get("hard_constraints")
+    }
+
+    for query in ("看一下近30天整体经营情况，销售广告库存流量一起看", "搜索词的点击份额"):
+        candidates = local_fallback.build_fallback(query, data_dir=data_dir)[
+            "dataset_candidates"
+        ]
+        assert candidates, query
+        top = candidates[0]
+        if top.get("name_zh") not in constrained:
+            continue
+        delivered = (top.get("hard_constraints") or []) + (
+            top.get("uncertified_hints_zh") or []
+        )
+        assert delivered, f"{query} → {top.get('name_zh')} 的业务约束一个键都没抵达 Agent"
+        assert delivered == constrained[top["name_zh"]], (
+            f"{query} → {top.get('name_zh')} 的业务约束在传递中被截断或改写"
+        )
+
+
+def test_skill_md_registers_uncertified_hints_key(tmp_path: Path):
+    """降级路径实际产出的约束键必须在 SKILL.md 里有登记，否则 Agent 不会消费它。
+
+    `uncertified_hints_zh` 曾在 SKILL.md、其它脚本、任何文档里零引用——
+    键存在但无人消费，等于约束没交付。
+    """
+    skill_md = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    assert "uncertified_hints_zh" in skill_md
+    # 只登记键名不够：必须写明「先复述确认再套用」，否则会被当成已确认口径直接用
+    assert "未经人工审核" in skill_md
+
+
 def test_emit_plan_produces_executor_consumable_plan(tmp_path: Path):
     """降级 plan 必须能被 run_query.py 消费，从而保留字段校验闸。"""
     data_dir = tmp_path / "data"
@@ -305,14 +358,34 @@ def test_profiles_do_not_carry_derivable_fields(tmp_path: Path):
 
 
 def test_audit_reports_coverage_gap(tmp_path: Path):
-    """巡检必须报出未建画像与已腐烂的画像，让维护成本可见而不是靠人想起来。"""
+    """巡检必须报出未建画像与已腐烂的画像，让维护成本可见而不是靠人想起来。
+
+    断具体集合内容而不是只断形状：`_write_ready_data_dir` 的两个 alias
+    （ds_instant / ds_ads_fee）与真实画像文件的关系是已知的——两者都没有画像，
+    画像里的 alias 一个都不在这两张表里。只断 `total_datasets >= 1`、键存在、
+    `isinstance(certified, int)` 的话，把 missing/stale 的集合差算反、或
+    `profiled` 写成 `len(profiled)` 而不是 `len(profiled & aliases)`，全部照过。
+    """
     data_dir = tmp_path / "data"
     _write_ready_data_dir(data_dir)
+    # 期望值从真实画像文件派生，画像增删时自动跟随，不会因数据更新而假红
+    profile_aliases = sorted(
+        str(item["dataset_alias"]) for item in PROFILES["datasets"] if item.get("dataset_alias")
+    )
 
     report = local_fallback.audit_profiles(data_dir=data_dir)
-    assert report["total_datasets"] >= 1
-    assert "missing_profiles" in report and "stale_profiles" in report
-    assert isinstance(report["certified"], int)
+
+    assert report["status"] == "ok"
+    assert report["total_datasets"] == 2
+    # 两张表都没有画像：算反差集会让这里变成 14 份画像 alias
+    assert report["missing_profiles"] == ["ds_ads_fee", "ds_instant"]
+    # 画像 alias 一个都不在本次元数据里：漏掉 & aliases 会让 profiled 变成 14
+    assert report["profiled"] == 0
+    assert report["stale_profiles"] == profile_aliases
+    assert report["certified"] == sum(
+        1 for item in PROFILES["datasets"] if item.get("certified")
+    )
+    assert report["broken_intent_links"] == []
 
 
 def test_audit_blocks_when_data_dir_missing(tmp_path: Path):
