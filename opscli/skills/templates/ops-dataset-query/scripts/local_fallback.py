@@ -291,9 +291,13 @@ def audit_profiles(*, data_dir: Path | None = None) -> dict:
     """
     resolved = Path(data_dir) if data_dir else core.discover_data_dir()
     if resolved is None or not resolved.is_dir():
+        # blocked 载荷字段形状对齐 build_fallback() 的同类分支（data_state +
+        # recovery_command），避免同一文件里两份 blocked 合同长得不一样让人误读
         return {
             "status": "blocked",
+            "data_state": "missing",
             "next_action_zh": "本地数据目录不存在，先执行 opscli skills upgrade ops-dataset-query。",
+            "recovery_command": "opscli skills upgrade ops-dataset-query",
         }
     state = _data_state(resolved)
     if state in ("placeholder", "empty"):
@@ -303,6 +307,7 @@ def audit_profiles(*, data_dir: Path | None = None) -> dict:
             "status": "blocked",
             "data_state": state,
             "next_action_zh": "本地索引是空模板，无法统计真实覆盖率。先执行 opscli skills upgrade ops-dataset-query 刷新后重跑。",
+            "recovery_command": "opscli skills upgrade ops-dataset-query",
         }
     datasets = core.load_csv_rows(resolved / "datasets.csv")
     aliases = {str(row.get("dataset_alias", "")) for row in datasets if row.get("dataset_alias")}

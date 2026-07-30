@@ -316,17 +316,24 @@ def test_audit_reports_coverage_gap(tmp_path: Path):
 
 
 def test_audit_blocks_when_data_dir_missing(tmp_path: Path):
-    """数据目录缺失时巡检要给可操作的恢复指引，而不是崩溃或裸报错。"""
+    """数据目录缺失时巡检要给可操作的恢复指引，而不是崩溃或裸报错。
+
+    blocked 载荷字段形状对齐 build_fallback() 的同类分支，同一文件里
+    两份 blocked 合同不能长得不一样。
+    """
     report = local_fallback.audit_profiles(data_dir=tmp_path / "nope")
     assert report["status"] == "blocked"
+    assert report["data_state"] == "missing"
     assert "opscli skills upgrade" in report["next_action_zh"]
+    assert report["recovery_command"] == "opscli skills upgrade ops-dataset-query"
 
 
 def test_audit_blocks_when_data_is_placeholder(tmp_path: Path):
     """数据目录存在但是空模板时也要挡住，不能把 0/0 误报成"画像已全覆盖"。
 
-    真实巡检时命中过：安装目录被并发进程覆盖为 placeholder 后，datasets.csv
-    是空表，若不挡住会把 total_datasets=0 误读成覆盖率数字，而不是数据未就绪。
+    真实巡检时命中过：安装目录被 `opscli skills install --force` 整体覆盖回
+    仓库模板（模板自带占位数据）后，datasets.csv 是空表，若不挡住会把
+    total_datasets=0 误读成覆盖率数字，而不是数据未就绪。
     """
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True)
@@ -337,7 +344,9 @@ def test_audit_blocks_when_data_is_placeholder(tmp_path: Path):
 
     report = local_fallback.audit_profiles(data_dir=data_dir)
     assert report["status"] == "blocked"
+    assert report["data_state"] == "placeholder"
     assert "opscli skills upgrade" in report["next_action_zh"]
+    assert report["recovery_command"] == "opscli skills upgrade ops-dataset-query"
 
 
 def test_audit_reports_broken_intent_links(tmp_path: Path):

@@ -4,13 +4,19 @@
 
 **变更原因**：`local_fallback.py` 的人工画像（`data/dataset_profiles.json`）靠人工维护，覆盖率和腐烂情况此前无人可见——后端 60 个数据集只有 15 份画像，其中 2 份 alias 已查不到对应数据集；意图表 `intents[].primary_dataset` 按中文名指向数据集，同样没有 alias 保护，改名后会静默断链。没有巡检就只能等出错才发现，需要一条随时可跑的只读命令把维护缺口变可见。
 
-**改动点**：`opscli/skills/templates/ops-dataset-query/scripts/local_fallback.py` 新增 `audit_profiles()`，统计 `total_datasets/profiled/certified/missing_profiles/stale_profiles`，并追加 `broken_intent_links`（核查 `intents[].primary_dataset` 是否能在画像 `datasets[].standard_name` 中找到对应条目）；`main()` 新增 `--audit` 命令行开关，命中时直接输出巡检结果并返回，不构建降级合同、不做任何查询。测试新增 `test_audit_reports_coverage_gap`（brief 给定用例）、`test_audit_blocks_when_data_dir_missing`、`test_audit_reports_broken_intent_links` 三条。
+**改动点**：`opscli/skills/templates/ops-dataset-query/scripts/local_fallback.py` 新增 `audit_profiles()`，统计 `total_datasets/profiled/certified/missing_profiles/stale_profiles`，并追加 `broken_intent_links`（核查 `intents[].primary_dataset` 是否能在画像 `datasets[].standard_name` 中找到对应条目）；`main()` 新增 `--audit` 命令行开关，命中时直接输出巡检结果并返回，不构建降级合同、不做任何查询。另补两处 blocked 分支（数据目录缺失 / `data_state` 为 `placeholder`\|`empty`）字段形状对齐 `build_fallback()` 同类分支，均带 `data_state` 与 `recovery_command`。测试新增 4 条：`test_audit_reports_coverage_gap`（brief 给定用例）、`test_audit_blocks_when_data_dir_missing`、`test_audit_blocks_when_data_is_placeholder`（占位态阻断，实测时发现原始实现缺失该分支后补）、`test_audit_reports_broken_intent_links`（追加范围）。
 
-**验证结果**：TDD RED→GREEN，新增 3 条测试 + 原有 33 条共 36 passed（5 xfailed 为既有已知路由缺口）。真实数据巡检（模板目录与 `~/.claude/skills/ops-dataset-query` 安装目录各跑一次，结果一致）：`total_datasets=60, profiled=12, certified=0, stale_profiles=["ds_X2aBDzKIMf66","ds_xSQ0DFxpLPLC"], broken_intent_links=[]`；数量级与已知情况（60 个数据集、15 条画像）吻合，stale 从 brief 提到的 3 条降为 2 条（Task 6 已修复 1 条）。`tests/skills/` 整目录跑（排除已知会导致 pytest capture 崩溃的 `test_packaging.py`）为 `380 passed, 6 failed, 8 xfailed`，6 个失败分布在 `test_cli.py`/`test_manager.py`/`test_ops_feedback_template.py`/`test_ops_methods_card_xlsx_preview.py`，均与本次改动的文件无关，判定为既有基线问题。
+**验证结果**：TDD RED→GREEN。`pytest tests/skills/test_local_fallback.py -q` → `32 passed, 5 xfailed`（原有 33 条 + 新增 4 条 = 37 条收集，其中 5 条为既有已知路由缺口 xfail，与本次改动无关）。
 
-**影响范围**：仅新增只读巡检能力，不修改 `build_fallback()` 现有行为、不修改任何画像或元数据文件；不影响其他 Skill 目录（`~/.opscli`/`~/.codex`/`~/.openclaw` 未同名安装，`~/.claude/skills` 已按铁律要求只逐文件覆盖 `local_fallback.py`）。
+真实数据巡检——如实记录实际跑过的两种数据状态，不合并叙述：
+1. `ready` 态（`~/.claude/skills/ops-dataset-query` 尚未被覆盖前）：不带 `--data-dir` 从该目录下的 `scripts/` 直接执行 `python3 local_fallback.py --audit x`，输出 `total_datasets=60, profiled=12, certified=0, stale_profiles=["ds_X2aBDzKIMf66","ds_xSQ0DFxpLPLC"], broken_intent_links=[]`；数量级与已知情况（60 个数据集、15 条画像）吻合，stale 从 brief 提到的 3 条降为 2 条（Task 6 已修复 1 条）。同一批不带 `--data-dir` 从仓库模板目录 `opscli/skills/templates/ops-dataset-query/scripts/` 执行也得到相同数字——**但这不是"模板自带数据也是 60"**：`core.discover_data_dir()` 的搜索顺序里用户主目录 `~/.claude/skills` 排在脚本自身相对路径回退之前，只要该目录下 `dataset_fields.csv` 存在（不判断是否为占位内容）就会被优先选中，因此两次调用实际读的是同一份 `~/.claude/skills` 安装数据，并非独立验证了模板本地占位数据。
+2. `placeholder` 态：显式加 `--data-dir ../data` 强制读模板自带的占位数据（`VERSION.json` 的 `data_state` 为 `placeholder`，`datasets.csv` 只有表头）→ 正确返回 `{"status": "blocked", "data_state": "placeholder", ...}`，验证了占位守卫分支。之后 `~/.claude/skills`、`~/.opscli/skills`、`~/.codex/skills`、`~/.openclaw/skills` 四个安装目录均被 `opscli skills install --force`（用 `copy2` 整体覆盖安装目录为仓库模板，模板自带占位数据）重置为 `placeholder`，复测不带 `--data-dir` 的 `--audit` 在四处均一致返回 `blocked/placeholder`，未再出现误报的 0 值覆盖率。
 
-**回滚方式**：`git revert` 本次提交；已同步到 `~/.claude/skills/ops-dataset-query/scripts/local_fallback.py` 的文件需手动改回上一版本或重新执行 `opscli skills upgrade ops-dataset-query`。
+`tests/skills/` 整目录跑（排除已知会导致 pytest capture 崩溃的 `test_packaging.py`）为 `380 passed, 6 failed, 8 xfailed`，6 个失败分布在 `test_cli.py`/`test_manager.py`/`test_ops_feedback_template.py`/`test_ops_methods_card_xlsx_preview.py`，均与本次改动的文件无关，判定为既有基线问题。
+
+**影响范围**：仅新增只读巡检能力，不修改 `build_fallback()` 现有行为、不修改任何画像或元数据文件。`~/.opscli`/`~/.codex`/`~/.claude`/`~/.openclaw` 四个安装目录均已安装 `ops-dataset-query`，已按铁律要求逐文件（非整目录）同步 `local_fallback.py` 到四处的 `scripts/`；四处当前均处于 `opscli skills install --force` 覆盖后的 `placeholder` 态，等待用户执行 `opscli skills upgrade ops-dataset-query` 恢复真实数据。
+
+**回滚方式**：`git revert` 本次提交；已同步到四个安装目录 `ops-dataset-query/scripts/local_fallback.py` 的文件需手动改回上一版本，或重新执行 `opscli skills upgrade ops-dataset-query`。
 
 ---
 
