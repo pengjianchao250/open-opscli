@@ -5803,3 +5803,83 @@ tests/query tests/mcp/test_query_planner_tools.py -q` → 280 passed, 8 xfailed�
 唯一命中三种形态）、高基数字段的形态抽取路径均未改动。
 **回滚方式**：`git revert 1e65139`。
 ---
+
+## 2026-07-30 skills - 修复 install 抹掉运行时元数据
+
+**变更原因**：`opscli skills install ops-dataset-query` 会把用户通过 `skills upgrade`
+从远端拉取的真实元数据（近 600KB / 60 数据集 / 2517 字段）换成内置模板的占位符
+（CSV 仅表头、JSON 空集合）。触发面比 `--force` 更宽：模板版本（1.3.15）与 upgrade
+写入的数据版本（v1.1.23）属于两套版本空间、永远不相等，`_template_version_differs()`
+每次都为真，因此普通 install 同样会走到 `rmtree`。次生后果是模板 `VERSION.json` 的
+`data_state=placeholder` 覆盖过去后，规划器 `_data_state_ready()` 判定未就绪，
+整个 Skill 直接 blocked 不可用。本次会话真实丢失过两次。
+
+**改动点**：
+- `opscli/skills/sync/updater.py`：将原子替换的 6 个文件名提为模块常量
+  `UPGRADE_MANAGED_FILES`（运行时产出文件的单一事实来源），原写入循环改为引用它
+- `opscli/skills/services/manager.py`：新增 `_template_data_is_placeholder()`
+  （读模板 `VERSION.json` 的 `data_state` 声明）、`_has_real_metadata()`
+  （datasets.csv 是否含表头外数据行，只读两行）、`_stash_runtime_metadata()`
+  与 `_restore_runtime_metadata()`；`_install_copy` 与 `_install_central` 两条
+  安装路径在 rmtree 前暂存、copytree 后写回
+- `opscli/skills/domain/models.py`：`SkillInstallResult` 增 `preserved_data_files`
+  字段，`to_dict()` 的 `installed_paths` 一并暴露（AI Agent 走 JSON 通道需要）
+- `opscli/skills/commands/cli.py`：`_print_install_line()` 在保留发生时补一行提示
+- `tests/skills/test_manager.py`：`test_install_dataset_fields_template_to_multiple_runtimes`
+  补 `central_skills_dir=tmp_path/"central"` 隔离——它此前不传该参数，默认写用户
+  真实 `~/.opscli/skills`，是本次元数据丢失的实际扳机（违反铁律8）
+- `tests/skills/test_install_preserves_metadata.py`：新增 5 条回归测试
+
+**验证结果**：
+- 新增 5 条测试全绿；回退生产代码后 2 条要害测试失败，失败原因为真实数据行
+  `1,ds_real,真实数据集` 消失，与生产缺陷同形（另 2 条因新字段报 AttributeError，
+  属副产品不算缺陷信号）
+- 用真实元数据做破坏性复验：跑 `test_install_dataset_fields_template_to_multiple_runtimes`
+  时，带修复则 60 数据集 / 2517 字段 / v1.1.23 完好无损；回退修复后同一条测试
+  把数据集抹成 0、VERSION 变 `data_state=placeholder`
+- 端到端 `opscli skills install --skills-dir /tmp/opscli-e2e --force`：运行时元数据
+  存活（60/2517/v1.1.23），同时模板权威内容正常更新（`dataset_profiles.json`
+  已带本次的 `certified` 字段）
+- JSON 通道输出含 `preserved_data_files: 3`
+- 隔离性静态扫描：高危项（未隔离 central + 走中央安装）由 1 条降为 0 条
+- `test_manager.py` 3 条既存失败（断言 `version == "v0.0.1"`，模板版本已演进）
+  修复前后完全一致，非本次引入
+
+**影响范围**：仅 install 覆盖既有安装的路径。模板声明 `data_state=ready` 的 Skill
+（ops-asin-data-bi / ops-seller-sprite / ops-asin-data-collector）行为不变，数据仍随
+模板覆盖；首次安装、无真实元数据的安装、upgrade 与 link 逻辑均未改动。
+
+**回滚方式**：`git revert <本次提交>`；回滚后 install 恢复整体覆盖语义，需重跑
+`opscli skills upgrade ops-dataset-query` 找回元数据。
+---
+
+## 2026-07-30 planner - 否定语境不再把字段标签当成点名维度
+
+**变更原因**：codex 实测「找到渠道是傲彼瑞-美国的所有ASIN；全部时间，不加日期筛选」
+返回 9625 行并被服务端截断在 5000 行。根因是字段标签匹配对原文做子串包含
+（`query_plan.py` 的 `label in normalized_query`），「不加日期筛选」里的「日期」
+命中日期维度标签而被加成分组维度——用户越明确要求不加日期，规划器越确定按日期分组。
+实测「不加/不要按/无需/忽略」四种说法全部踩中；不提日期时同一查询只有 38 行。
+merge-base 复现相同行为，属既存缺陷。
+
+**改动点**：
+- `time_scope.py`（skill 版 + 内核版）：`_NEGATED_SPAN_RE` 补「忽略/去掉/去除」，
+  新增 `mask_negated_spans()` 对外暴露，供字段标签匹配复用同一份词表
+- `query_plan.py`（skill 版 + 内核版）：新增 `_label_match_text()`，
+  `_requested_fields()` 与 `_field_selection()` 的授权标签兜底路径改用它
+
+**验证结果**：
+- 新增 `tests/skills/test_negated_field_labels.py` 18 条全绿：四种否定说法均不再
+  误加日期；正面提及（「按日期看…」）照常识别；屏蔽范围只到标点，
+  「不要按日期拆分，按渠道汇总」仍能识别渠道；显式 `--field` 不受屏蔽影响
+- 真实元数据实测：「不加日期筛选」等四种说法 dims 由 `[渠道,ASIN,日期]` 回到 `[渠道,ASIN]`
+- 两版逐条一致性核验通过（kernel 与 skill 对四个用例输出相同）
+- `tests/skills/test_time_scope_unbounded.py` + `tests/query` 共 181 passed，
+  扩充否定词表未破坏原有时间口径识别
+
+**影响范围**：仅字段标签的子串匹配路径。有意保留的区分：「不加日期筛选/不限日期」
+是不要时间筛选（全时段），「忽略日期/不要按日期拆分」是不要分组维度、时间窗口未表态
+仍走默认近30天，两者不混同。
+
+**回滚方式**：`git revert <本次提交>`。
+---

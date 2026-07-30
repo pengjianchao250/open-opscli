@@ -708,6 +708,17 @@ def build_query_plan(
 # ---------------------------------------------------------------------------
 
 
+def _label_match_text(query: str) -> str:
+    """字段标签匹配专用的归一化文本：先屏蔽否定语境，再做通用归一。
+
+    为什么不能直接用原文：标签匹配是子串包含，「不加日期筛选」里的「日期」
+    会被当成用户点名的分组维度，于是用户越明确要求不加日期，规划器越确定
+    按日期分组——实测 38 行的 ASIN 明细因此膨胀到 9625 行并触发服务端截断。
+    否定词表复用 time_scope 的同一份，避免时间口径与字段标签两处判定漂移。
+    """
+    return _normalize(time_scope.mask_negated_spans(query))
+
+
 def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]:
     """从字段指导结果中筛出用户真正点名的字段。
 
@@ -716,7 +727,7 @@ def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]
     """
     field_guidance = guidance.get("field_guidance") or {}
     fields = field_guidance.get(field_type) or []
-    normalized_query = _normalize(query)
+    normalized_query = _label_match_text(query)
     selected = []
     for index, item in enumerate(fields):
         if not isinstance(item, dict):
@@ -796,7 +807,9 @@ def _selected_fields(
     """
     dimensions = _requested_fields(guidance, "dimensions", query)
     metrics = _requested_fields(guidance, "metrics", query)
-    normalized_query = _normalize(query)
+    # 授权标签兜底同样是子串包含，必须走屏蔽否定后的文本，否则
+    # 「不加日期筛选」仍会从这条兜底路径把「日期」捞回来
+    normalized_query = _label_match_text(query)
     if not dimensions:
         dimensions = [
             dict(item, selection_source="authorized_query_label")
