@@ -6138,3 +6138,49 @@ merge-base 复现完全相同的 filters，属既存缺陷。
 
 **回滚方式**：删除这两个脚本。
 ---
+
+## 2026-07-30 skills(ops-dataset-query) - 规划器由硬性规定改为优先路径
+
+**变更原因**：SKILL.md 把 `query_flow.py` 写成"唯一入口 / 禁止绕过规划器"，
+但降级通道（L1~L4 + `local_fallback.py --emit-plan`）只在规划器返回
+`clarify_required` / `blocked` 时才允许进入。规划器自身报错（`flow_error` / exit 2）、
+命令窗口连续超时、运行环境缺 `python3` 这几类客观失败下，Agent 无任何出口，
+只能提交反馈并停止取数。同时 MCP 侧 `QUERY_SPEC.md` 早已是"规划器优先、手工构造次选"，
+CLI 侧与之口径打架。
+
+**改动点**：
+- `SKILL.md`：frontmatter 描述"唯一入口"→"默认且优先的入口"；主线、工具预算、
+  本地探索限制、命令窗口等段落把无条件禁令限定为"规划器路径下"；
+  降级章节新增「降级触发条件」表（澄清/阻断、`flow_error`/exit 2 重跑仍失败、
+  不可重试的 exit 2、累计 3 次窗口超时、运行环境不可用），并显式排除主观理由；
+  降级执行通道改为 `run_query.py --plan-file` 与直连 `opscli query simple` 并列
+  （后者须声明未经执行器字段校验）；版本 1.3.16 → 1.3.17
+- `references/cli.md`："## 唯一路由"→"## 首选路由"并指向降级章节；
+  exit 2 段补 `retryable=false` 无可执行动作时的降级出口
+- `data/VERSION.json`：版本同步到 1.3.17（与 SKILL.md frontmatter 保持一致，测试有断言）
+- `tests/skills/test_dataset_query_flow.py`：更新失效的措辞断言，
+  新增 `test_skill_allows_fallback_only_on_objective_failure` 守住
+  "触发条件必须显式列举 + 主观理由被排除 + 字段来源护栏不放宽"
+
+**未改动（有意保留）**：`run_query.py` 的 plan 绑定门禁不变，降级 plan 仍走
+`local_fallback.py --emit-plan` 产出的 contract v2（不带 `plan_integrity`，
+因此允许手工 payload，同时保留授权字段白名单校验）。
+
+**验证结果**：
+- `pytest tests/skills/test_dataset_query_flow.py tests/skills/test_local_fallback.py`
+  → 39 passed, 5 xfailed
+- `test_dataset_query_planner.py` 67 passed、`test_detector.py` 9 passed、
+  `test_updater.py` 12 passed、`test_install_preserves_metadata.py` 5 passed、
+  `test_routing_eval.py` / `test_slot_coverage.py` 全通过
+- 预存失败（与本次改动无关，stash 后对照复现）：`tests/skills` 整目录 collection
+  capture 崩溃；`test_manager.py` 3 failed（断言硬编码 `v0.0.1`）；
+  `test_packaging.py` no tests ran
+
+**影响范围**：仅 ops-dataset-query 的 Agent 行为契约文档与版本号，不改任何运行时代码。
+CLI/MCP 执行路径、执行器校验、规划器逻辑均未变动。
+
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/SKILL.md
+opscli/skills/templates/ops-dataset-query/references/cli.md
+opscli/skills/templates/ops-dataset-query/data/VERSION.json
+tests/skills/test_dataset_query_flow.py`
+---
