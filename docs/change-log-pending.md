@@ -5917,3 +5917,34 @@ codex 只能退化成逐个查询再本地取并集。根因是 `_reverse_lookup
 
 **回滚方式**：`git revert <本次提交>`。
 ---
+
+## 2026-07-30 planner - 复合字面值后段不再被读成槽位诉求
+
+**变更原因**：codex 实测「字段“渠道”精确等于“傲彼瑞-tiktok”」被判 blocked。
+渠道值里的 tiktok 命中 `slots.platform` 词表（terms = tiktok / tik tok / tk），
+而 `platform_scope.members` 只映射 amazon*，非 amazon 平台展开为空，
+于是整条查询被判 `block_platform_scope_unsupported`——用户给的是渠道值，
+从未提出平台诉求。与 Task 10 反查主段误判同类：值里的词被读成槽位诉求。
+merge-base 复现相同行为，属既存缺陷。
+
+**改动点**（skill 版 + 内核版同步）：
+- `typed_schema_linking.py`：`_matched_values()` 新增 `drop_value_fragments` 开关，
+  剔除紧跟在连字符/下划线之后的命中（复合字面值后段）；
+  `extract_query_semantics()` 的槽位读取启用该开关。
+  `profile_card()` 的数据集说明画像匹配不启用，画像语义不变。
+
+**验证结果**：
+- 新增 `tests/skills/test_value_fragment_slots.py` 10 条全绿
+- 真实元数据实测：「傲彼瑞-tiktok」由 blocked 变 planned 并正确写出渠道筛选；
+  用户原句三值（含 tiktok）走 IN 全部锁定；「查tiktok平台」仍按设计阻断；
+  「查亚马逊平台近7天销售额」仍 platform_filter_state=resolved
+- 改动范围全量回归 428 passed / 8 xfailed
+- 两版槽位读取逐条一致
+
+**影响范围**：仅查询原文的槽位读取。判据是「命中紧跟连字符/下划线」，
+因此平台词自身含分隔符的情形不受影响（amazon-vc 仍识别为 amazon_vc，
+其匹配区间从 amazon 起算、前面无连字符）。已知未覆盖：平台词位于复合值首段时
+（如渠道值 tiktok-美国）仍会被读成平台诉求，本次未处理。
+
+**回滚方式**：`git revert <本次提交>`。
+---

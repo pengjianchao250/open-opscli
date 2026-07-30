@@ -112,11 +112,19 @@ def _matched_values(
     values: dict,
     record_key: str,
     span_finder: SpanFinder,
+    *,
+    drop_value_fragments: bool = False,
 ) -> list[str]:
     """返回命中的槽位取值，命中区间被更长的其他取值完全覆盖时让位。
 
     例："亚马逊vc" 同时命中 amazon（亚马逊）与 amazon_vc（亚马逊vc），
     amazon 的匹配区间被 amazon_vc 完全包含且更短，因此只保留 amazon_vc。
+
+    drop_value_fragments=True 时额外剔除紧跟在连字符/下划线之后的命中，
+    这类命中只是用户给出的复合字面值的后段，不是独立的槽位诉求：
+    渠道值「傲彼瑞-tiktok」里的 tiktok 原先命中平台槽位，而平台语义只映射
+    amazon*，导致整条查询被判 block_platform_scope_unsupported 而无法执行。
+    只对查询原文的槽位读取启用；数据集说明的画像匹配不受影响。
     """
     occurrences = [
         (start, end, value_name)
@@ -124,6 +132,13 @@ def _matched_values(
         for pattern in record[record_key]
         for start, end in span_finder(pattern, text)
     ]
+    if drop_value_fragments:
+        normalized_text = normalize(text)
+        occurrences = [
+            (start, end, value_name)
+            for start, end, value_name in occurrences
+            if not (0 < start <= len(normalized_text) and normalized_text[start - 1] in "-_")
+        ]
     surviving = {
         value_name
         for start, end, value_name in occurrences
@@ -302,7 +317,11 @@ def extract_query_semantics(query: str, rules: dict) -> dict:
             domains.append(name)
     slots = {}
     for slot_name, values in rules["slots"].items():
-        matched = _matched_values(query, values, "terms", _term_spans)
+        # 查询原文里的槽位读取要剔除复合字面值后段（「傲彼瑞-tiktok」里的 tiktok），
+        # 否则用户给出的渠道值会被读成平台诉求并把整条查询判为不支持
+        matched = _matched_values(
+            query, values, "terms", _term_spans, drop_value_fragments=True
+        )
         if matched:
             slots[slot_name] = matched
     return {"domains": domains, "metrics": metrics, "slots": slots}
