@@ -10,6 +10,7 @@ from opscli.amazon.cli import app as amazon_app
 from opscli.amazon_rufus.cli import app as amazon_rufus_app
 from opscli.asin_data.cli import app as asin_data_app
 from opscli.auth.cli import app as auth_app
+from opscli.baiyi.cli import app as baiyi_app
 from opscli.calculator.cli import app as calculator_app
 from opscli.canopy.cli import app as canopy_app
 from opscli.canopy_debug.cli import app as canopy_debug_app
@@ -76,6 +77,7 @@ app.add_typer(seller_sprite_app, name="seller-sprite")
 # app.add_typer(methods_card_app, name="methods-card")
 app.add_typer(skills_app, name="skills")
 app.add_typer(mcp_app, name="mcp")
+app.add_typer(baiyi_app, name="baiyi")
 
 
 @app.command("self-update")

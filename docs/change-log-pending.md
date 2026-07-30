@@ -6215,3 +6215,12 @@ opscli/skills/templates/ops-dataset-query/references/cli.md
 opscli/skills/templates/ops-dataset-query/data/VERSION.json
 tests/skills/test_dataset_query_flow.py`
 ---
+
+## 2026-07-27 baiyi - 新增公司 SKU 产品信息查询命令
+
+**变更原因**：AI Agent 与 Skill 需要通过正式 opscli 入口读取佰易数据源的捆绑 SKU 映射、海关、产品中心、封样和实时库存信息，避免 Skill 直接访问后端接口；通用 `product-info` 顶层名称无法区分数据来源，Polaris 又只是北极星网关和认证系统，不能代表佰易业务数据。
+**改动点**：新增 `opscli baiyi product-info --company-sku <SKU> [--pretty]` 命令界面、稳定 JSON 信封、佰易专用请求/结果模型和异常，并在顶层 CLI 注册 `baiyi` 命名空间；manager 完成 SKU 规范化校验、响应透传和 `found` 推导；transport 动态读取 `ops_system_url`（支持 `OPSCLI_OPS_SYSTEM_URL` 覆盖），复用 OPS JWT 调用固定接口，并映射 HTTP、业务码、JSON 和网络异常。真实联调发现旧实现误用 Polaris 主机并收到 404 HTML，已修正服务边界，且非 JSON 的 HTTP 错误现在保留状态码。新增 CLI、manager、transport 契约测试及顶层 CLI 到 mock HTTP 的贯通测试。
+**验证结果**：`tests/baiyi/` 31 passed（含动态 OPS 地址、非 JSON HTTP 错误和顶层 CLI 到 mock HTTP 的贯通用例）；`tests/auth/test_config.py` 与 Baiyi 联合回归 37 passed，显式认证、Token 构造、CLI 入口和共享响应解析定向回归 55 passed，`tests/shared/` 90 passed；当前 `.env` 的 `OPSCLI_OPS_SYSTEM_URL=http://10.6.53.59:8080` 被 `load_config()["ops_system_url"]` 正确解析。编译检查、两种 `AuthClient` 导入和 editable 安装后的 help smoke 均通过。真实 OPS 联调确认 v0.0.119 使用有效 OPS JWT 请求正确地址，但当前 auto-scheduler 实例返回路由级 404；后端接口提交 `dec577f` 仅存在于 data-metrics 的 `master_fg_dev_mm`，运行中的 `release_fg_temp_merge` 未包含该提交，需后端合入并重新加载后再做成功数据验收。`tests/auth/` 仍有 1 个既存 Windows 文件权限断言失败，全量 pytest 仍受仓库既存同名测试模块冲突、Shopify MCP helper 缺失及 capture 关闭异常阻断，与本次改动路径无关。
+**影响范围**：新增佰易只读命令命名空间，通过当前环境的 OPS 服务和认证访问接口；现有 auth、query、MCP 和 Skill 行为不变。
+**回滚方式**：删除 `opscli/baiyi/` 与 `tests/baiyi/`，并撤销 `opscli/cli.py` 中 Baiyi app 的 import 和注册。
+---
