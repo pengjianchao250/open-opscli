@@ -4,6 +4,7 @@
 适合在 Skill 目录内直接运行：
 
 - `python query.py metadata --dataset ds_xxx`
+- `python query.py catalog --pretty`
 - `python query.py intent --query "查看库存周转" --pretty`
 - `python query.py simple --table-id 1 --json '{"dimensions":[]}' --run`
 - `python query.py chart --uuid <chart_uuid> --run`
@@ -47,7 +48,14 @@ def build_command(args: argparse.Namespace) -> list[str]:
     """根据脚本参数构造最终的 opscli query 命令。"""
     command = [*build_opscli_prefix(), "query", args.command]
 
-    if args.command == "intent":
+    if args.command == "catalog":
+        if args.source:
+            command.extend(["--source", args.source])
+        if not args.fallback_local:
+            command.append("--no-fallback-local")
+        if args.skills_dir:
+            command.extend(["--skills-dir", args.skills_dir])
+    elif args.command == "intent":
         command.extend(["--query", args.query])
         if args.source:
             command.extend(["--source", args.source])
@@ -113,6 +121,13 @@ def main() -> None:
     metadata.add_argument("--table-id", type=int, help="table_id")
     metadata.add_argument("--skills-dir", help="指定 Skill 目录")
     metadata.add_argument("--pretty", action="store_true", help="格式化输出")
+
+    catalog = subparsers.add_parser("catalog")
+    catalog.add_argument("--source", default="remote", choices=["remote", "local"], help="数据来源")
+    catalog.add_argument("--no-fallback-local", dest="fallback_local", action="store_false", help="远端失败时不回退本地缓存")
+    catalog.set_defaults(fallback_local=True)
+    catalog.add_argument("--skills-dir", help="指定 Skill 目录")
+    catalog.add_argument("--pretty", action="store_true", help="格式化输出")
 
     intent = subparsers.add_parser("intent")
     intent.add_argument("--query", "-q", required=True, help="自然语言查询需求")

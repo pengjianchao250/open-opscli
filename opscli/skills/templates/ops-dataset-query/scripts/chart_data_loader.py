@@ -11,8 +11,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import core
-
 
 def load_chart_data_from_file(input_path: str) -> tuple[list[dict], str | None, dict | None]:
     """从文件加载 chart 数据（CLI / MCP 共用）。
@@ -68,9 +66,7 @@ def load_chart_data_from_uuid(uuid_str: str, *, run: bool = True) -> tuple[list[
     if run:
         cmd.append("--run")
 
-    result = subprocess.run(
-        cmd, capture_output=True, check=False, **core.utf8_subprocess_kwargs()
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         print(f"opscli 调用失败: {result.stderr}", file=sys.stderr)
         raise SystemExit(1)
