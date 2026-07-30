@@ -1836,6 +1836,38 @@ def _value_already_consumed(normalized_value: str, consumed) -> bool:
     )
 
 
+def _generic_slot_terms() -> set:
+    """收集通用业务词，用于排除枚举值主段的误判匹配。
+
+    为什么需要：反查规则「枚举原值的主段出现在原文即算命中」对同源多地区渠道
+    （傲彼瑞-美国 / 傲彼瑞-加拿大）是必要的，但当主段本身是通用业务词时就会误判——
+    销售小组的授权值形如「亚马逊-运营C组」，主段是「亚马逊」，于是任何提到亚马逊
+    的查询都被当成指定了销售小组，真实元数据下已观察到 team_name 被注入 filters。
+
+    词表全部取自 intent_rules.json 现有内容（槽位取值 terms、筛选字段名、业务域词），
+    不新造词表——新造就等于把本计划想消灭的人工维护成本又加回来。
+    内核化后规则改由 importlib.resources 随包分发读取（见 _load_rules_resource），
+    规则文件不可读时返回空集：宁可退回旧行为，也不因排除集缺失而漏掉真实命中。
+    """
+    try:
+        rules = _load_rules_resource()
+    except (OSError, ValueError):
+        return set()
+    terms: set = set()
+    for slot in (rules.get("slots") or {}).values():
+        if not isinstance(slot, dict):
+            continue
+        for spec in slot.values():
+            if isinstance(spec, dict):
+                terms |= {_normalize_component_value(t) for t in spec.get("terms") or []}
+    for field_terms in (rules.get("filter_fields") or {}).values():
+        terms |= {_normalize_component_value(t) for t in field_terms or []}
+    for domain in (rules.get("domains") or {}).values():
+        if isinstance(domain, dict):
+            terms |= {_normalize_component_value(t) for t in domain.get("terms") or []}
+    return {term for term in terms if term}
+
+
 def _reverse_lookup_component_values(query: str, values: list, normalize) -> list:
     """用授权枚举原值反查原文，返回全部候选。
 
@@ -1845,6 +1877,7 @@ def _reverse_lookup_component_values(query: str, values: list, normalize) -> lis
     出现即算候选，「傲彼瑞」因此能同时命中「傲彼瑞-美国」「傲彼瑞-加拿大」并转澄清。
     """
     normalized_query = normalize(query)
+    generic = _generic_slot_terms()
     exact_hits, base_hits = [], []
     for value in values:
         norm = normalize(value)
@@ -1854,7 +1887,9 @@ def _reverse_lookup_component_values(query: str, values: list, normalize) -> lis
             exact_hits.append(value)
             continue
         base = norm.split("-")[0]
-        if len(base) >= 2 and base in normalized_query:
+        # 主段是通用业务词（平台名/业务域/筛选字段名）时不做主段匹配：
+        # 用户说「亚马逊」指的是平台，不是主段恰好叫「亚马逊」的销售小组
+        if len(base) >= 2 and base not in generic and base in normalized_query:
             base_hits.append(value)
     # 整值命中优先：原文写了「傲彼瑞-加拿大」就该锁定它，而不是因为主段
     # 「傲彼瑞」同时命中三个地区渠道而退化成澄清

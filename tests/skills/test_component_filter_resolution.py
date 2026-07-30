@@ -344,3 +344,44 @@ def test_empty_enum_without_requested_value_does_not_block(module, monkeypatch):
     contract = _resolve(module, "查渠道和ASIN的明细", [], monkeypatch)
     # 渠道字段有显式值时才阻断；此处原文无任何筛选值，应正常放行
     assert contract["status"] == "planned"
+
+
+# ---------------------------------------------------------------------------
+# Task 10：枚举反查排除通用业务词主段（修复「亚马逊」被当成销售小组）
+# ---------------------------------------------------------------------------
+
+
+@BOTH_VERSIONS
+def test_reverse_lookup_skips_generic_platform_base(module):
+    """枚举值主段是平台名时不得靠主段命中。
+
+    实测缺陷：销售小组授权值形如「亚马逊-运营C组」，主段是「亚马逊」，
+    于是任何提到亚马逊的查询都会被当成指定了销售小组，
+    真实元数据下已观察到 team_name 被注入 filters。
+    """
+    teams = ["亚马逊-运营C组", "亚马逊-运营A组", "沃尔玛-运营B组"]
+    hits = module._reverse_lookup_component_values(
+        "查亚马逊近7天的销售额", teams, module._normalize_component_value
+    )
+    assert hits == []
+
+
+@BOTH_VERSIONS
+def test_reverse_lookup_keeps_business_specific_base(module):
+    """主段是业务专名时主段匹配必须保留——这是反查存在的理由。
+
+    「傲彼瑞」不在任何槽位词表里，应继续命中三个地区渠道并转澄清。
+    """
+    channels = ["傲彼瑞-美国", "傲彼瑞-加拿大", "傲彼瑞-tiktok", "莱福特-美国"]
+    hits = module._reverse_lookup_component_values(
+        "查傲彼瑞的所有ASIN", channels, module._normalize_component_value
+    )
+    assert set(hits) == {"傲彼瑞-美国", "傲彼瑞-加拿大", "傲彼瑞-tiktok"}
+
+
+@BOTH_VERSIONS
+def test_generic_slot_terms_covers_platform_not_business_name(module):
+    """排除集必须来自 intent_rules.json 现有词表，且区分通用词与业务专名。"""
+    generic = module._generic_slot_terms()
+    assert module._normalize_component_value("亚马逊") in generic
+    assert module._normalize_component_value("傲彼瑞") not in generic
