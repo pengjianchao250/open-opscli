@@ -67,6 +67,22 @@ TASK_INTERVAL_RANGE_SECONDS = (1.0, 5.0)
 NETWORK_COOLDOWN_RANGE_SECONDS = (3.0, 5.0)
 RISK_COOLDOWN_RANGE_SECONDS = (15.0, 20.0)
 WINDOWS_COMPAT_EXPORT_PATH_LIMIT = 240
+# XLSX 是 ZIP 容器；128 字节下限用于拦截短错误页，同时兼容最小测试工作簿。
+MIN_XLSX_CONTENT_LENGTH = 128
+# 官网导出实测会返回标准 XLSX、旧 Excel 或二进制流 MIME，统一按白名单接收。
+XLSX_CONTENT_TYPES = frozenset(
+    {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/msexcel",
+        "application/vnd.ms-excel",
+        "application/octet-stream",
+    }
+)
+# Windows 保留设备名即使带扩展名也不能作为文件名。
+WINDOWS_RESERVED_FILENAME_PATTERN = re.compile(
+    r"CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]",
+    re.I,
+)
 
 _AUTO_XVFB_PROCESS: subprocess.Popen | None = None
 _AUTO_XVFB_DISPLAY: str | None = None
@@ -89,6 +105,7 @@ class BrowserRouteRequest:
     page_prepare: bool = True
     task_interval_seconds: float = 5.0
     cooldown_seconds: float = 10.0
+    replay_safe: bool = True
 
 
 @dataclass
@@ -536,7 +553,8 @@ class SellerSpriteBrowserRouteWorker:
             _record_timing(timings, request, "page_prepare", stage_started_at)
         else:
             _record_timing(timings, request, "page_prepare", time.monotonic(), skipped=True)
-        for attempt in range(2):
+        # 额度型导出没有幂等键；请求发出后结果不明时禁止在当前 worker 内重放。
+        for attempt in range(2 if request.replay_safe else 1):
             try:
                 stage_started_at = time.monotonic()
                 response = await self._execute_route_fetch(
@@ -574,6 +592,8 @@ class SellerSpriteBrowserRouteWorker:
                     api_code=exc.api_code,
                     status_code=exc.status_code,
                 )
+                if not request.replay_safe:
+                    raise
                 if exc.is_session_expired():
                     if attempt > 0:
                         raise
@@ -1160,7 +1180,7 @@ class SellerSpriteBrowserRouteWorker:
         request: BrowserRouteRequest | None = None,
     ) -> dict[str, Any]:
         normalized_method = method.upper()
-        if normalized_method == "GET_XLSX":
+        if normalized_method in {"GET_XLSX", "POST_XLSX"}:
             stage_started_at = time.monotonic()
             response = await _request_with_browser_context(
                 page,
@@ -2043,11 +2063,13 @@ def _context_request_headers(referer: str, *, method: str) -> dict[str, str]:
         headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         if method == "FORM":
             headers["Content-Type"] = "application/x-www-form-urlencoded"
-    elif method == "GET_XLSX":
+    elif method in {"GET_XLSX", "POST_XLSX"}:
         headers["Accept"] = (
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
-            "application/octet-stream,*/*"
+            "application/msexcel,application/octet-stream,*/*"
         )
+        if method == "POST_XLSX":
+            headers["Content-Type"] = "application/json;charset=UTF-8"
     elif method != "GET":
         headers["Content-Type"] = "application/json;charset=UTF-8"
     return headers
@@ -2472,7 +2494,7 @@ async def _find_blank_point(page) -> dict[str, float]:
 
 
 async def _parse_response(response, *, method: str, root_dir: Path, section: str) -> dict[str, Any]:
-    if method == "GET_XLSX":
+    if method in {"GET_XLSX", "POST_XLSX"}:
         content = await response.body()
         headers = getattr(response, "headers", {}) or {}
         content_type = str(headers.get("content-type") or "").lower()
@@ -2494,7 +2516,13 @@ async def _parse_response(response, *, method: str, root_dir: Path, section: str
                 status_code=response.status,
                 response_excerpt=text_excerpt or f"content_type={content_type} content_length={len(content)}",
             )
-        if not content.startswith(b"PK"):
+        normalized_content_type = content_type.partition(";")[0].strip()
+        # 同时校验 MIME、最小长度和 ZIP 签名，避免把登录页或 JSON 错误体保存成 XLSX。
+        if (
+            normalized_content_type not in XLSX_CONTENT_TYPES
+            or len(content) < MIN_XLSX_CONTENT_LENGTH
+            or not content.startswith(b"PK")
+        ):
             raise SellerSpriteApiError(
                 "卖家精灵浏览器文件下载未返回 XLSX",
                 status_code=response.status,
@@ -2752,12 +2780,17 @@ def _looks_like_session_expired(url: str, status: int, text: str) -> bool:
 
 
 def _safe_response_filename(value: str | None) -> str:
-    filename = Path(str(value or "")).name.strip()
-    filename = re.sub(r'[<>:"/\\|?*]+', "-", filename).rstrip(". ")
-    if not filename:
+    filename = re.split(r"[/\\]", str(value or ""))[-1].strip()
+    filename = re.sub(r"[\x00-\x1f\x7f]", "", filename)
+    filename = re.sub(r'[<>:"|?*]+', "-", filename).rstrip(". ")
+    if not filename or filename in {".", ".."}:
         return "official-export.xlsx"
     if not filename.lower().endswith(".xlsx"):
         filename = f"{filename}.xlsx"
+    stem = filename[:-5].rstrip(". ")
+    reserved_name = stem.split(".", 1)[0]
+    if WINDOWS_RESERVED_FILENAME_PATTERN.fullmatch(reserved_name):
+        filename = f"official-{filename}"
     return filename
 
 

@@ -17,6 +17,16 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+@pytest.fixture(autouse=True)
+def disable_export_upload(monkeypatch):
+    """Manager 测试不得读取真实认证或访问文件上传服务。"""
+    monkeypatch.setattr(
+        api_manager_module,
+        "_upload_export_if_enabled",
+        lambda **kwargs: None,
+    )
+
+
 class DummyAccountProvider:
     def get_default(self, *, refresh=False):
         return SellerSpriteAccount(name="default", username="user@example.com", password="secret")
@@ -680,6 +690,98 @@ def test_manager_keeps_browser_route_aba_reverse_xlsx_unchanged(monkeypatch, tmp
     assert len(calls) == 1
     assert calls[0]["scenario_method"] == "GET_XLSX"
     assert calls[0]["endpoint"] == "/v2/aba/reverse/export"
+
+
+def test_manager_keeps_browser_route_branddb_xlsx_unchanged(monkeypatch, tmp_path: Path):
+    content = b"PK\x03\x04" + b"branddb-official-xlsx" * 20
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        output_path = kwargs["root_dir"] / "official-branddb.xlsx"
+        output_path.write_bytes(content)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "official_xlsx_path": str(output_path),
+                    "official_filename": "Branddb-ANKER(2000)-20260730.xlsx",
+                    "content_length": len(content),
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(api_manager_module, "_run_browser_route_request", fake_browser_route_request)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="branddb",
+                site="US",
+                period="30d",
+                params={"text": "ANKER", "status": ["已注册"]},
+                job_id="job-branddb",
+            )
+        )
+    )
+
+    assert result.row_count == 0
+    assert result.data == []
+    assert result.export is not None
+    assert result.export.filename == "Branddb-ANKER(2000)-20260730.xlsx"
+    assert Path(result.export.path).read_bytes() == content
+    assert len(calls) == 1
+    assert calls[0]["scenario_method"] == "POST_XLSX"
+    assert calls[0]["endpoint"] == "/v3/api/branddb/export-syn"
+    assert calls[0]["payload"]["status"] == ["Registered"]
+    assert calls[0]["replay_safe"] is False
+
+
+def test_manager_rejects_non_xlsx_export_for_branddb(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    with pytest.raises(SellerSpriteConfigError, match="仅支持 xls 或 xlsx"):
+        _run(
+            manager.run(
+                SellerSpriteScenarioRequest(
+                    scenario="branddb",
+                    site="US",
+                    period="30d",
+                    params={"text": "ANKER"},
+                    export_format="json",
+                )
+            )
+        )
+
+
+def test_manager_rejects_api_direct_for_branddb(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="api-direct"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    with pytest.raises(SellerSpriteConfigError, match="仅支持 browser-route"):
+        _run(
+            manager.run(
+                SellerSpriteScenarioRequest(
+                    scenario="branddb",
+                    site="US",
+                    period="30d",
+                    params={"text": "ANKER"},
+                )
+            )
+        )
 
 
 def test_manager_rejects_json_export_for_aba_reverse(monkeypatch, tmp_path: Path):

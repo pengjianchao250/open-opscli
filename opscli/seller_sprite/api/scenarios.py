@@ -10,6 +10,7 @@ from opscli.seller_sprite.api.payloads import (
     make_aba_research_payload,
     make_aba_reverse_payload,
     make_association_traffic_payload,
+    make_branddb_payload,
     make_competitor_payload,
     make_keyword_miner_payload,
     make_keyword_research_payload,
@@ -38,6 +39,8 @@ class SellerSpriteScenario:
     method: str = "POST"
     high_frequency_endpoint: str | None = None
     task_result_endpoint: str | None = None
+    browser_context_only: bool = False
+    replay_safe: bool = True
 
     def to_public_dict(self) -> dict[str, Any]:
         """返回 MCP 可公开的场景说明。"""
@@ -54,7 +57,11 @@ class SellerSpriteScenario:
             "period": period,
             "month": params.get("month") or period,
             "size": params.get("size") or page_size,
-            "pageSize": params.get("pageSize") or page_size,
+            "pageSize": (
+                params.get("pageSize")
+                if "pageSize" in params
+                else (20 if self.scenario_id == "branddb" else page_size)
+            ),
             "keywordOrAsin": (
                 params.get("keywordOrAsin")
                 or params.get("keyword")
@@ -109,6 +116,16 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         required_params=(),
         required_any_params=("asin", "asins", "textareaValue", "keywordOrAsin", "q"),
         payload_builder=make_aba_reverse_payload,
+    ),
+    "branddb": SellerSpriteScenario(
+        scenario_id="branddb",
+        title="全球商标库",
+        endpoint="/v3/api/branddb/export-syn",
+        method="POST_XLSX",
+        required_params=("text",),
+        payload_builder=make_branddb_payload,
+        browser_context_only=True,
+        replay_safe=False,
     ),
     "association-traffic": SellerSpriteScenario(
         scenario_id="association-traffic",

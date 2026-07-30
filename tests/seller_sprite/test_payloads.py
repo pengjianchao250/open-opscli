@@ -8,6 +8,7 @@ from opscli.seller_sprite.api.payloads import (
     make_aba_research_payload,
     make_aba_reverse_payload,
     make_association_traffic_payload,
+    make_branddb_payload,
     make_competitor_payload,
     make_keyword_miner_payload,
     make_keyword_research_payload,
@@ -17,6 +18,106 @@ from opscli.seller_sprite.api.payloads import (
 )
 from opscli.seller_sprite.api.scenarios import get_scenario
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+
+
+def test_branddb_scenario_builds_official_export_payload():
+    scenario = get_scenario("branddb")
+
+    payload = scenario.build_payload(
+        params={"text": "ANKER"},
+        site="US",
+        period="30d",
+        page_size=100,
+    )
+
+    assert scenario.endpoint == "/v3/api/branddb/export-syn"
+    assert scenario.method == "POST_XLSX"
+    assert scenario.browser_context_only is True
+    assert scenario.replay_safe is False
+    assert payload == {
+        "text": "ANKER",
+        "feature": "",
+        "office": [],
+        "brandName": [],
+        "status": [],
+        "applicant": [],
+        "niceClass": [],
+        "applicationYear": [],
+        "expiryYear": [],
+        "desc": True,
+        "orderField": "",
+        "pageNum": 1,
+        "pageSize": 20,
+        "ids": [],
+    }
+    assert scenario.build_referer(payload) == "https://www.sellersprite.com/v3/branddb"
+
+
+def test_branddb_payload_normalizes_all_filters_and_keeps_false_desc():
+    payload = make_branddb_payload(
+        {
+            "text": "Anker",
+            "feature": "word",
+            "office": ["US", "US", " CN "],
+            "brandName": "ANKER, Soundcore",
+            "status": ["已注册", "Expired", "已结束", "待审核", "未知"],
+            "applicant": ["Anker Innovations Limited", ""],
+            "niceClass": ["9", 35, 9],
+            "applicationYear": [2022, "2022", "2023"],
+            "expiryYear": "2032,2033",
+            "desc": False,
+            "orderField": "applicationDate",
+            "pageNum": 2,
+            "pageSize": 50,
+            "ids": [123, "123", "456"],
+        }
+    )
+
+    assert payload == {
+        "text": "Anker",
+        "feature": "word",
+        "office": ["US", "CN"],
+        "brandName": ["ANKER", "Soundcore"],
+        "status": ["Registered", "Expired", "Ended", "Pending", "Unknown"],
+        "applicant": ["Anker Innovations Limited"],
+        "niceClass": [9, 35],
+        "applicationYear": ["2022", "2023"],
+        "expiryYear": ["2032", "2033"],
+        "desc": False,
+        "orderField": "applicationDate",
+        "pageNum": 2,
+        "pageSize": 50,
+        "ids": [123, 456],
+    }
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"text": "ANKER", "status": ["无效状态"]}, "status"),
+        ({"text": "ANKER", "niceClass": [0]}, "niceClass"),
+        ({"text": "ANKER", "applicationYear": ["20x2"]}, "applicationYear"),
+        ({"text": "ANKER", "pageNum": 0}, "pageNum"),
+        ({"text": "ANKER", "office": {"code": "US"}}, "office"),
+        ({"text": "ANKER", "brandName": [["ANKER"]]}, "brandName"),
+        ({"text": {"brand": "ANKER"}}, "text"),
+        ({"text": "ANKER", "feature": ["word"]}, "feature"),
+        ({"text": "ANKER", "orderField": {"name": "applicationDate"}}, "orderField"),
+        ({"text": "ANKER", "desc": [False]}, "desc"),
+    ],
+)
+def test_branddb_payload_rejects_invalid_filters(params, message):
+    with pytest.raises(SellerSpriteConfigError, match=message):
+        make_branddb_payload(params)
+
+
+@pytest.mark.parametrize("text", [None, "", "   "])
+def test_branddb_scenario_requires_non_blank_text(text):
+    scenario = get_scenario("branddb")
+    params = {} if text is None else {"text": text}
+
+    with pytest.raises(SellerSpriteConfigError, match="text"):
+        scenario.build_payload(params=params, site="US", period="30d", page_size=100)
 
 
 def test_competitor_payload_requires_primary_filter_before_request():

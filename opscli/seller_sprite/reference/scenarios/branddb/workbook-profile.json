@@ -1,0 +1,9 @@
+{
+  "source": "official_xlsx",
+  "preserve_bytes": true,
+  "parse_workbook": false,
+  "rebuild_workbook": false,
+  "observed_filename": "Branddb-ANKER(2000)-20260730.xlsx",
+  "observed_filename_note": "文件名中的 2000 是本次取证现象，不作为所有查询的固定条数保证",
+  "content_omitted": true
+}

@@ -189,11 +189,15 @@ class SellerSpriteApiManager:
         root_dir.mkdir(parents=True, exist_ok=True)
         page_size = request.page_size or self.settings.page_size
         export_format = _normalize_export_format(request.export_format)
-        if request.scenario == "aba-reverse" and export_format != "xlsx":
-            raise SellerSpriteConfigError("aba-reverse 仅支持 xls 或 xlsx 官方文件导出")
+        if scenario.method in {"GET_XLSX", "POST_XLSX"} and export_format != "xlsx":
+            raise SellerSpriteConfigError(
+                f"{request.scenario} 仅支持 xls 或 xlsx 官方文件导出"
+            )
         account = self.account_provider.get_default()
         warnings: list[dict[str, Any]] = []
         mode = _resolve_request_mode(request.mode or self.settings.default_mode)
+        if scenario.browser_context_only and mode != "browser-route":
+            raise SellerSpriteConfigError(f"{request.scenario} 仅支持 browser-route 模式")
         async with SellerSpriteApiClient(account=account) as client:
             login = {"mode": "cached", "cookie_names": client.cookie_names()}
             if mode == "api-direct" and not client.has_login_cookies():
@@ -280,6 +284,7 @@ class SellerSpriteApiManager:
                         ),
                         session_state_listener=self.session_state_listener,
                         session_owner_id=self.session_owner_id,
+                        replay_safe=scenario.replay_safe,
                     )
                     if request.scenario == "listing-analysis":
                         task_id = _extract_task_id(browser_result.response)
@@ -376,7 +381,7 @@ class SellerSpriteApiManager:
         rows = _extract_items(main_response, scenario=request.scenario)
         high_frequency_rows = _extract_high_frequency_rows(high_frequency_response)
         self._emit_progress("exporting")
-        if request.scenario == "aba-reverse":
+        if scenario.method in {"GET_XLSX", "POST_XLSX"}:
             export = _official_xlsx_export(main_response, root_dir=root_dir)
         elif export_format == "xlsx":
             export = export_rows_to_xlsx(
@@ -556,6 +561,7 @@ async def _run_browser_route_request(
     high_frequency_payload: dict[str, Any] | None,
     session_state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None,
     session_owner_id: str,
+    replay_safe: bool = True,
 ) -> BrowserRouteResult:
     """提交 browser-route 请求，遇到并发回收时仅重建并重试一次。"""
     browser_request = BrowserRouteRequest(
@@ -581,6 +587,7 @@ async def _run_browser_route_request(
             if request.cooldown_seconds is None
             else request.cooldown_seconds
         ),
+        replay_safe=replay_safe,
     )
     for attempt in range(2):
         worker = get_browser_route_worker(

@@ -1,6 +1,6 @@
 ---
 name: ops-seller-sprite
-description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自然语言需求映射为 seller_sprite_* 场景，处理关键词选品、ABA 数据选品、关联流量、ABA 出单词反查、缺参澄清、类目确认、任务续查和 Excel 导出。
+description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自然语言需求映射为 seller_sprite_* 场景，处理关键词选品、ABA 数据选品、全球商标库、关联流量、ABA 出单词反查、缺参澄清、类目确认、任务续查和 Excel 导出。
 metadata:
   mcp-version: v1.0.0
 ---

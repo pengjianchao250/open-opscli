@@ -11,6 +11,7 @@
 | 关键词挖掘 / keyword mining | `keyword-miner` |
 | 关键词选品 / 关键词研究 / keyword research | `keyword-research` |
 | ABA 数据选品 / ABA 关键词趋势 / ABA research | `aba-research` |
+| 全球商标库 / 商标查询 / brand database | `branddb` |
 | 关联流量 / 关联产品 / 查关联 ASIN / association traffic | `association-traffic` |
 | 出单词反查 / ABA 反查 / ABA reverse | `aba-reverse` |
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
@@ -42,6 +43,7 @@
 - `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换。
 - `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；固定只请求第一页 100 条，忽略公共分页覆盖值，并在本地生成 `.xlsx`。
 - `aba-reverse` 未提供 `period`（或收到公共默认 `30d`）时，默认选择每周和最近完整周；显式周期可传具体周结束日或月份。只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
+- `branddb` 固定使用 `browser-route`，`text` 必填，接口等待上限 120 秒；只支持 `xls` / `xlsx`，官方文件原样保存。请求发出后遇到超时、登录失效或结果不明时不会自动重试或换账号，避免重复消耗导出额度。
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
 - `competitor-lookup` 收到 Amazon 商品链接时，应先提取 ASIN，再传 `params.asins`。
 - `competitor-lookup` 如果用户只给了单个 `asin`，也应先归一化成 `params.asins` 再执行。
@@ -58,6 +60,7 @@
 - `association-traffic` 必须有 1—20 个合法 ASIN；可传数组，也可传逗号、换行、制表符或 TXT/Excel 按列复制文本。
 - `aba-research` 必须有父/子 ASIN 或关键词，可使用 `q`、`keywordOrAsin`、`keyword` 或 `asin`。
 - `aba-reverse` 必须有 1—20 个 ASIN 或 Amazon 产品链接；周期可省略，默认使用每周和最近完整周。
+- `branddb` 必须有品牌名称、所有人或注册号搜索文本，统一传 `params.text`。
 - `product-research`、`market-research`、`keyword-research` 虽然没有硬性必填，但用户只说“跑一下”“看下市场”时仍应先确认意图。
 - `keyword-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-miner` 冒充。
 - `association-traffic` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `traffic-source` 冒充。
@@ -73,6 +76,7 @@
 | `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
 | `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认只取第一页 100 条 |
 | `aba-research` | 父/子 ASIN 或关键词 | `departments`、`rankGrowthType`、排序、搜索结果范围筛选 | 周/月 ABA 周期；固定第一页 100 条；本地生成 XLSX |
+| `branddb` | `text` | `feature`、`office`、`brandName`、`status`、`applicant`、`niceClass`、`applicationYear`、`expiryYear`、排序、`ids` | browser-route 直接请求；120 秒；官方 XLSX；不可自动重试 |
 | `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；只取第一页；`page_size=100` |
 | `aba-reverse` | `asin` / `asins` / 产品链接，1—20 个 | `period`、`reverseType`、`orderField`、`orderDesc`、`conversionType`、`loadVariations` | 默认每周和最近完整周；直接保存官方完整 XLSX |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
@@ -318,6 +322,33 @@ seller_sprite_run(
 - 后端直接调用官网导出接口，官方 XLSX 原样保存；接口返回多少条就保留多少条，不分页、不截取、不解析、不重建。
 - 官方列名、顺序、样式、工作表和 `Notes` 页全部保留。
 - 因工作簿不做本地解析，任务结果的 `row_count=0` 和 `data=[]` 不表示没有数据；应以 `export.filename`、`export.url` 或 `export.path` 指向的文件为准。
+
+## `branddb` 全球商标库
+
+### 输入与筛选
+
+| 中文含义 | `params` 字段 | 规则 |
+| --- | --- | --- |
+| 搜索文本 | `text` | 必填；品牌名称、所有人或注册号 |
+| 商标特征 | `feature` | 可省略，默认空字符串 |
+| 注册局 | `office` | 单值、数组或逗号分隔，多值去空去重 |
+| 品牌名称 | `brandName` | 单值、数组或逗号分隔 |
+| 状态 | `status` | `Registered`、`Expired`、`Ended`、`Pending`、`Unknown`；也支持已注册、已过期、已结束、待审核、未知 |
+| 申请人 | `applicant` | 单值、数组或逗号分隔 |
+| 尼斯分类 | `niceClass` | 1—45 的整数列表 |
+| 申请年份 | `applicationYear` | 四位年份列表 |
+| 到期年份 | `expiryYear` | 四位年份列表 |
+| 倒序 | `desc` | 默认 `true`；显式 `false` 会保留 |
+| 排序字段 | `orderField` | 默认空字符串 |
+| 页码 / 页面数量 | `pageNum` / `pageSize` | 默认 `1` / `20`，与官网导出请求一致 |
+| 指定记录 | `ids` | 正整数 ID 列表；默认空数组表示按当前筛选导出 |
+
+### 导出规则
+
+- 仅支持 `browser-route` 和 `export_format=xls/xlsx`；先打开 `/v3/branddb` 建立登录态，再通过同一浏览器上下文直接 `POST /v3/api/branddb/export-syn`，不点击页面导出按钮。
+- 单次接口等待上限为 120 秒。请求一旦发出，登录失效、验证码、401/403、超时或结果不明均直接失败，不自动重新发送，也不换账号故障转移。
+- 官方 XLSX 的文件名和字节原样保留，不分页、不解析、不重建；`row_count=0`、`data=[]` 时应以导出文件为准。
+- 进程崩溃恢复仍沿用通用持久队列的 at-least-once 模型；第三方接口无幂等键，因此不承诺严格 exactly-once。
 
 ## `product-research` 重点参数
 

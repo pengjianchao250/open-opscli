@@ -1247,6 +1247,86 @@ def test_keyword_miner_high_frequency_uses_context_request_without_second_page_q
     assert "route_fetch.high_frequency.page_response_fallback" not in stages
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        SellerSpriteApiError(
+            "登录态失效",
+            status_code=401,
+            api_code="ERR_GLOBAL_SESSION_EXPIRED",
+        ),
+        SellerSpriteApiError("未授权", status_code=401),
+        SellerSpriteApiError("禁止访问", status_code=403),
+        SellerSpriteApiError(
+            "浏览器上下文请求超时",
+            api_code="ERR_BROWSER_CONTEXT_REQUEST_FAILED",
+        ),
+        SellerSpriteApiError(
+            "未返回 XLSX",
+            api_code="ERR_SELLER_SPRITE_XLSX_INVALID",
+        ),
+    ],
+    ids=["session_expired", "401", "403", "timeout", "invalid_xlsx"],
+)
+def test_non_replayable_request_does_not_repeat_after_failure(monkeypatch, tmp_path, error):
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=account,
+    )
+    page = SimpleNamespace(
+        url="https://www.sellersprite.com/v3/branddb",
+        is_closed=lambda: False,
+    )
+    execute_calls = []
+    relogin_calls = []
+
+    async def no_wait(*args, **kwargs):
+        return None
+
+    async def ensure_page(current_account):
+        return page
+
+    async def open_referer(current_page, request, **kwargs):
+        return {"logged_in": True}
+
+    async def execute_route_fetch(**kwargs):
+        execute_calls.append(kwargs)
+        raise error
+
+    async def relogin(*args, **kwargs):
+        relogin_calls.append(kwargs)
+
+    monkeypatch.setattr(worker, "_wait_for_cooldown", no_wait)
+    monkeypatch.setattr(worker, "_wait_for_rate_limit", no_wait)
+    monkeypatch.setattr(worker, "_ensure_page", ensure_page)
+    monkeypatch.setattr(worker, "_open_referer_and_login", open_referer)
+    monkeypatch.setattr(worker, "_handle_robot_captcha_if_enabled", no_wait)
+    monkeypatch.setattr(worker, "_execute_route_fetch", execute_route_fetch)
+    monkeypatch.setattr(worker, "_login_with_account", relogin)
+
+    with pytest.raises(SellerSpriteApiError) as raised:
+        _run(
+            worker._run_one(
+                worker_module.BrowserRouteRequest(
+                    scenario="branddb",
+                    method="POST_XLSX",
+                    endpoint="/v3/api/branddb/export-syn",
+                    payload={"text": "ANKER"},
+                    referer=page.url,
+                    account=account,
+                    root_dir=tmp_path,
+                    page_prepare=False,
+                    replay_safe=False,
+                )
+            )
+        )
+
+    assert raised.value is error
+    assert len(execute_calls) == 1
+    assert relogin_calls == []
+
+
 def test_non_keyword_miner_high_frequency_keeps_page_route_path(monkeypatch, tmp_path):
     account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
     worker = SellerSpriteBrowserRouteWorker(
@@ -1457,6 +1537,82 @@ def test_post_query_context_request_uses_query_and_empty_json_body():
     assert call["kwargs"]["headers"]["Content-Type"] == "application/json;charset=UTF-8"
 
 
+def test_branddb_context_request_posts_xlsx_json_once():
+    page = FakeContextPage()
+    payload = {"text": "ANKER", "office": [], "ids": []}
+
+    response = _run(
+        worker_module._request_with_browser_context(
+            page,
+            endpoint="/v3/api/branddb/export-syn",
+            method="POST_XLSX",
+            payload=payload,
+        )
+    )
+
+    assert response.status == 200
+    assert len(page.context.request.post_calls) == 1
+    call = page.context.request.post_calls[0]
+    assert call["url"] == "https://www.sellersprite.com/v3/api/branddb/export-syn"
+    assert json.loads(call["kwargs"]["data"]) == payload
+    assert call["kwargs"]["timeout"] == 120000
+    assert call["kwargs"]["fail_on_status_code"] is False
+    assert "spreadsheetml.sheet" in call["kwargs"]["headers"]["Accept"]
+    assert call["kwargs"]["headers"]["Content-Type"] == "application/json;charset=UTF-8"
+
+
+def test_branddb_route_fetch_bypasses_page_trigger(monkeypatch, tmp_path):
+    content = b"PK\x03\x04" + b"official-branddb-workbook" * 20
+    context_calls = []
+    trigger_calls = []
+
+    class XlsxResponse:
+        status = 200
+        url = "https://www.sellersprite.com/v3/api/branddb/export-syn"
+        headers = {
+            "content-type": "application/msexcel;charset=utf-8",
+            "content-disposition": "attachment; filename=Branddb-ANKER.xlsx",
+        }
+
+        async def body(self):
+            return content
+
+    async def fake_context_request(page, **kwargs):
+        context_calls.append(kwargs)
+        return XlsxResponse()
+
+    async def fail_page_trigger(*args, **kwargs):
+        trigger_calls.append(kwargs)
+        raise AssertionError("POST_XLSX 不应进入页面监听路径")
+
+    monkeypatch.setattr(worker_module, "_request_with_browser_context", fake_context_request)
+    monkeypatch.setattr(worker_module, "_trigger_request", fail_page_trigger)
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=SellerSpriteAccount(
+            name="default",
+            username="user@example.com",
+            password="secret",
+        ),
+    )
+
+    result = _run(
+        worker._execute_route_fetch(
+            page=FakeContextPage(),
+            method="POST_XLSX",
+            endpoint="/v3/api/branddb/export-syn",
+            payload={"text": "ANKER"},
+            root_dir=tmp_path,
+            section="main",
+        )
+    )
+
+    assert len(context_calls) == 1
+    assert context_calls[0]["method"] == "POST_XLSX"
+    assert trigger_calls == []
+    assert Path(result["data"]["official_xlsx_path"]).read_bytes() == content
+
+
 def test_keyword_research_context_request_uses_get_page_html_headers():
     page = FakeContextPage()
 
@@ -1501,7 +1657,7 @@ def test_aba_reverse_context_request_uses_xlsx_get_headers():
 
 
 def test_browser_response_saves_official_xlsx_bytes(tmp_path):
-    content = b"PK\x03\x04official-workbook"
+    content = b"PK\x03\x04" + b"official-workbook" * 20
 
     class XlsxResponse:
         status = 200
@@ -1532,6 +1688,77 @@ def test_browser_response_saves_official_xlsx_bytes(tmp_path):
         "ABA-Reverse-B00000JBNX-US-20260723.xlsx"
     )
     assert result["data"]["content_length"] == len(content)
+
+
+def test_browser_response_accepts_branddb_xlsx_and_preserves_bytes(tmp_path):
+    content = b"PK\x03\x04" + b"official-branddb-workbook" * 20
+
+    class XlsxResponse:
+        status = 200
+        url = "https://www.sellersprite.com/v3/api/branddb/export-syn"
+        headers = {
+            "content-type": "application/msexcel;charset=utf-8",
+            "content-disposition": "attachment; filename=Branddb-ANKER%282000%29-20260730.xlsx",
+        }
+
+        async def body(self):
+            return content
+
+    result = _run(
+        worker_module._parse_response(
+            XlsxResponse(),
+            method="POST_XLSX",
+            root_dir=tmp_path,
+            section="main",
+        )
+    )
+
+    path = Path(result["data"]["official_xlsx_path"])
+    assert path.name == "Branddb-ANKER(2000)-20260730.xlsx"
+    assert path.read_bytes() == content
+
+
+@pytest.mark.parametrize(
+    ("content_type", "content"),
+    [
+        ("application/json", b'PK{"code":"ERR"}' + b"x" * 300),
+        ("text/application/msexcel", b"PK\x03\x04" + b"x" * 300),
+        ("application/msexcel", b"PK\x03\x04short"),
+        ("application/msexcel", b"not-a-zip-workbook" * 20),
+    ],
+)
+def test_branddb_xlsx_rejects_invalid_content_type_or_length(tmp_path, content_type, content):
+    class XlsxResponse:
+        status = 200
+        url = "https://www.sellersprite.com/v3/api/branddb/export-syn"
+        headers = {"content-type": content_type}
+
+        async def body(self):
+            return content
+
+    with pytest.raises(SellerSpriteApiError, match="未返回 XLSX"):
+        _run(
+            worker_module._parse_response(
+                XlsxResponse(),
+                method="POST_XLSX",
+                root_dir=tmp_path,
+                section="main",
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("../../evil.xlsx", "evil.xlsx"),
+        ("..\\..\\evil.xlsx", "evil.xlsx"),
+        ("unsafe\x00\x1fname.xlsx", "unsafename.xlsx"),
+        ("CON.xlsx", "official-CON.xlsx"),
+        ("lpt9", "official-lpt9.xlsx"),
+    ],
+)
+def test_xlsx_response_filename_is_safe_on_windows(value, expected):
+    assert worker_module._safe_response_filename(value) == expected
 
 
 def test_listing_analysis_trigger_fills_asin_and_submits_with_enter_first():

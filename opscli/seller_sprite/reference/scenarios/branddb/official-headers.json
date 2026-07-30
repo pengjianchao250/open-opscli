@@ -1,0 +1,11 @@
+{
+  "request": {
+    "accept": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/msexcel,application/octet-stream,*/*",
+    "content-type": "application/json;charset=UTF-8",
+    "authenticated_headers_omitted": true
+  },
+  "response": {
+    "content-type": "application/msexcel;charset=utf-8",
+    "content-disposition": "attachment; filename=Branddb-ANKER%282000%29-20260730.xlsx"
+  }
+}

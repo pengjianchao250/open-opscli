@@ -30,6 +30,18 @@ def _request(job_id: str, asin: str) -> SellerSpriteScenarioRequest:
     )
 
 
+def _branddb_request(job_id: str) -> SellerSpriteScenarioRequest:
+    """构造全球商标库不可重放队列请求。"""
+    return SellerSpriteScenarioRequest(
+        scenario="branddb",
+        site="US",
+        period="30d",
+        params={"text": "ANKER"},
+        job_id=job_id,
+        export_format="xlsx",
+    )
+
+
 def _listing_request(job_id: str, asin: str) -> SellerSpriteScenarioRequest:
     """构造 Listing Analysis 队列请求。"""
     return SellerSpriteScenarioRequest(
@@ -913,6 +925,34 @@ def test_scheduler_replaces_failed_working_account_with_cold_standby(tmp_path: P
         assert succeeded["failover_count"] == 1
         assert Path(succeeded["result_path"]).parent.name == "generation-2"
         assert store.list_account_events(job_id="job-failover")[0]["event_type"] == "account_login_failed"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_does_not_failover_non_replayable_branddb_request(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(2)
+        harness = FailoverRunHarness()
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+        )
+
+        await scheduler.enqueue(_branddb_request("job-branddb-no-replay"))
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-branddb-no-replay", "failed")
+
+        assert harness.attempted_accounts == ["account-1"]
+        assert failed["failover_count"] == 0
+        assert failed["assigned_account"] == "account-1"
         await scheduler.close()
 
     asyncio.run(scenario())

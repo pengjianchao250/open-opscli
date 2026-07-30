@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount, SellerSpriteAccountProvider
+from opscli.seller_sprite.api.scenarios import get_scenario
 from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
 from opscli.seller_sprite.domain.exceptions import (
     SellerSpriteAccountUnavailableError,
@@ -823,7 +824,11 @@ class SellerSpriteTaskScheduler:
                 )
                 return account
             except Exception as exc:
-                if not _is_account_authentication_failure(exc):
+                # 认证失败通常可切换账号重试；额度型导出可能已成功派发，必须直接失败以免重复扣额。
+                replay_safe = bool(
+                    request is None or get_scenario(request.scenario).replay_safe
+                )
+                if not _is_account_authentication_failure(exc) or not replay_safe:
                     committed = await self._fail_generic_job(
                         job_id=job_id,
                         account_key=account_key,

@@ -11,6 +11,17 @@ from urllib.parse import urlencode, urlparse
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 
 
+# 官网筛选状态使用英文枚举，中文别名供 CLI/MCP 调用方直接传入。
+BRANDDB_STATUS_ALIASES = {
+    "已注册": "Registered",
+    "已过期": "Expired",
+    "已结束": "Ended",
+    "待审核": "Pending",
+    "未知": "Unknown",
+}
+BRANDDB_STATUSES = frozenset(BRANDDB_STATUS_ALIASES.values())
+
+
 PRODUCT_RESEARCH_RECOMMENDATION_PRESETS: dict[str, dict[str, Any]] = {
     "低价长尾选品": {
         "minRanking": "10000",
@@ -569,6 +580,155 @@ def make_association_traffic_payload(input_data: dict[str, Any]) -> dict[str, An
     }
 
 
+def make_branddb_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造全球商标库官方 Excel 导出 payload。
+
+    参数：
+        input_data: 商标检索词、筛选条件、排序及分页参数。
+
+    返回：
+        符合官网导出接口固定字段契约的请求体。
+
+    异常：
+        SellerSpriteConfigError: 必填项为空或筛选参数类型、取值不合法时抛出。
+    """
+    text = _branddb_scalar_text(input_data.get("text"), field="text")
+    if not text:
+        raise SellerSpriteConfigError("branddb text 不能为空")
+    statuses = [
+        BRANDDB_STATUS_ALIASES.get(value, value)
+        for value in _branddb_text_list(input_data.get("status"), field="status")
+    ]
+    invalid_statuses = [value for value in statuses if value not in BRANDDB_STATUSES]
+    if invalid_statuses:
+        raise SellerSpriteConfigError(f"branddb status 不支持：{', '.join(invalid_statuses)}")
+    return {
+        "text": text,
+        "feature": _branddb_scalar_text(
+            input_data.get("feature"), field="feature"
+        ),
+        "office": _branddb_text_list(input_data.get("office"), field="office"),
+        "brandName": _branddb_text_list(
+            input_data.get("brandName"), field="brandName"
+        ),
+        "status": statuses,
+        "applicant": _branddb_text_list(
+            input_data.get("applicant"), field="applicant"
+        ),
+        "niceClass": _branddb_int_list(
+            input_data.get("niceClass"), field="niceClass", minimum=1, maximum=45
+        ),
+        "applicationYear": _branddb_year_list(
+            input_data.get("applicationYear"), field="applicationYear"
+        ),
+        "expiryYear": _branddb_year_list(
+            input_data.get("expiryYear"), field="expiryYear"
+        ),
+        "desc": _branddb_bool(
+            input_data.get("desc"), field="desc", default=True
+        ),
+        "orderField": _branddb_scalar_text(
+            input_data.get("orderField"), field="orderField"
+        ),
+        "pageNum": _branddb_positive_int(
+            input_data.get("pageNum"), field="pageNum", default=1
+        ),
+        "pageSize": _branddb_positive_int(
+            input_data.get("pageSize"), field="pageSize", default=20
+        ),
+        "ids": _branddb_int_list(input_data.get("ids"), field="ids", minimum=1),
+    }
+
+
+def _branddb_scalar_text(value: Any, *, field: str) -> str:
+    """校验并归一化商标库单值文本参数。"""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple, set, bytes, bytearray)):
+        raise SellerSpriteConfigError(f"branddb {field} 必须是单值")
+    return str(value).strip()
+
+
+def _branddb_bool(value: Any, *, field: str, default: bool) -> bool:
+    """校验并归一化商标库布尔参数。"""
+    if isinstance(value, (dict, list, tuple, set, bytes, bytearray)):
+        raise SellerSpriteConfigError(f"branddb {field} 必须是布尔值")
+    return truthy(value, default=default)
+
+
+def _branddb_raw_list(value: Any, *, field: str) -> list[Any]:
+    """拆分商标库列表参数并保留调用顺序。"""
+    if value is None:
+        return []
+    if isinstance(value, (dict, set, bytes, bytearray)):
+        raise SellerSpriteConfigError(f"branddb {field} 必须是单值或数组")
+    values = value if isinstance(value, (list, tuple)) else [value]
+    result: list[Any] = []
+    for item in values:
+        if isinstance(item, (dict, list, tuple, set, bytes, bytearray)):
+            raise SellerSpriteConfigError(f"branddb {field} 数组元素必须是单值")
+        if isinstance(item, str):
+            result.extend(part.strip() for part in re.split(r"[,，\n\r;；]+", item))
+        else:
+            result.append(item)
+    return [item for item in result if str(item).strip()]
+
+
+def _branddb_text_list(value: Any, *, field: str) -> list[str]:
+    """归一化商标库文本列表，去空并保持首次出现顺序。"""
+    result: list[str] = []
+    for item in _branddb_raw_list(value, field=field):
+        text = str(item).strip()
+        if text not in result:
+            result.append(text)
+    return result
+
+
+def _branddb_int_list(
+    value: Any,
+    *,
+    field: str,
+    minimum: int,
+    maximum: int | None = None,
+) -> list[int]:
+    """校验商标库整数列表。"""
+    result: list[int] = []
+    for item in _branddb_raw_list(value, field=field):
+        if isinstance(item, bool) or not re.fullmatch(r"[+-]?\d+", str(item).strip()):
+            raise SellerSpriteConfigError(f"branddb {field} 必须是整数列表")
+        parsed = int(item)
+        if parsed < minimum or (maximum is not None and parsed > maximum):
+            range_text = f"{minimum}—{maximum}" if maximum is not None else f"不小于 {minimum}"
+            raise SellerSpriteConfigError(f"branddb {field} 必须在 {range_text} 范围内")
+        if parsed not in result:
+            result.append(parsed)
+    return result
+
+
+def _branddb_year_list(value: Any, *, field: str) -> list[str]:
+    """校验商标库年份列表。"""
+    result: list[str] = []
+    for item in _branddb_raw_list(value, field=field):
+        text = str(item).strip()
+        if not re.fullmatch(r"\d{4}", text):
+            raise SellerSpriteConfigError(f"branddb {field} 必须是四位年份列表")
+        if text not in result:
+            result.append(text)
+    return result
+
+
+def _branddb_positive_int(value: Any, *, field: str, default: int) -> int:
+    """校验商标库正整数参数。"""
+    if value is None or str(value).strip() == "":
+        return default
+    if isinstance(value, bool) or not re.fullmatch(r"\d+", str(value).strip()):
+        raise SellerSpriteConfigError(f"branddb {field} 必须是正整数")
+    parsed = int(value)
+    if parsed <= 0:
+        raise SellerSpriteConfigError(f"branddb {field} 必须是正整数")
+    return parsed
+
+
 def make_aba_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造 ABA 数据选品单页查询 payload。
 
@@ -799,6 +959,8 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
         return f"https://www.sellersprite.com/v2/keyword-research?{urlencode(_flatten_query(payload))}"
     if scenario == "aba-research":
         return "https://www.sellersprite.com/v3/aba-research"
+    if scenario == "branddb":
+        return "https://www.sellersprite.com/v3/branddb"
     if scenario == "aba-reverse":
         query = dict(payload)
         query["asin"] = ""
