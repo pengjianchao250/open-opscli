@@ -1881,6 +1881,57 @@ def test_grain_disclosure_survives_explicit_dataset_reference(tmp_path: Path):
         ), query
 
 
+def test_grain_disclosure_survives_when_masking_eats_the_grain_word(tmp_path: Path):
+    """身份遮蔽把用户说出口的粒度词一起抹掉时，披露仍然必须存在。
+
+    真实元数据形态（审查者实测的原案）：数据集中文说明是「亚马逊搜索词绩效」，
+    字段里也有「搜索词」，于是 `_semantic_query_without_candidate_identity` 的全局
+    replace 把 '亚马逊搜索词绩效 近7天搜索词的点击份额' 里第二个（用户真正说出口的）
+    「搜索词」也一起抹掉 → 遮蔽后槽位为空 → 无请求可比 → 披露又消失。
+    披露侧必须同时看未遮蔽的读法。
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v1.4.4", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    # description 即用户会报出的中文名，且自身含「搜索词」；remarks 提供 keyword 覆盖
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "50,ds_sqp,custom_search_query_set,normal,0,亚马逊搜索词绩效,含关键词与搜索词双维度明细\n",
+        encoding="utf-8",
+    )
+    # 字段里也有「搜索词」标签，遮蔽会连用户原话里的粒度词一起抹掉
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "50,ds_sqp,custom_search_query_set,date_id,日期,f_sqp_date,dimension,,,,,0,0\n"
+        "50,ds_sqp,custom_search_query_set,search_term,搜索词,f_sqp_st,dimension,,,,,0,0\n"
+        "50,ds_sqp,custom_search_query_set,click_share,点击份额,f_sqp_cs,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n",
+        encoding="utf-8",
+    )
+
+    result = query_plan.build_model_query_plan(
+        "亚马逊搜索词绩效 近7天搜索词的点击份额",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["execution_ref"]["dataset_alias"] == "ds_sqp"
+    disclosures = result["model_view"].get("grain_disclosure_zh") or []
+    assert any("关键词" in item for item in disclosures), "身份遮蔽吃掉粒度词后披露丢失"
+    assert all(
+        item in result["answer_contract"]["required_disclosures_zh"] for item in disclosures
+    )
+
+
 def test_grain_disclosure_survives_default_dataset_recommendation(tmp_path: Path):
     """默认「即时综合数据集」推荐路径同样必须带强制披露。
 

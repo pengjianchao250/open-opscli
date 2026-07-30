@@ -5712,3 +5712,51 @@ tests/query tests/mcp/test_query_planner_tools.py -q` → 280 passed, 8 xfailed�
 **影响范围**：仅测试覆盖与 schema 描述文案；无行为变化。
 **回滚方式**：`git revert <本次提交>`。
 ---
+
+## 2026-07-30 skills/ops-dataset-query + query/planner - 披露侧补「未遮蔽」槽位读法，闭合审查者实测原案
+
+**变更原因**：C1 修完后在**真实元数据**（`~/.claude/skills/ops-dataset-query/data`，
+60 个数据集）上复验，发现审查者报告里的那句原案仍然没有披露：
+`'亚马逊搜索词绩效 近7天搜索词的点击份额' -> planned | 披露 None`。
+根因是 `_semantic_query_without_candidate_identity()` 的遮蔽是**全局 replace**：
+该数据集的中文说明是「亚马逊搜索词绩效」、字段里也有「搜索词」标签，于是用户
+原话里第二个（真正表达粒度诉求的）「搜索词」被当成字段标签一起抹掉，
+遮蔽后 `slots` 为空 → 没有请求可比 → surplus 为空 → 披露又消失。
+即 C1 的四条路径已经全部接上，但其中两条喂进去的槽位读法本身丢了信息。
+**改动的类/方法**：`agent_query_planner._raw_slot_reading()`（新增）、
+`agent_query_planner._attach_slot_coverage()`（形参改为多份槽位读法）、
+`agent_query_planner.plan_query()`（两处调用点）。
+**改动点**（两版逐字同步）：
+- 新增 `_raw_slot_reading()`：不遮蔽身份文本的槽位读法，**只允许披露侧使用**——
+  拿它做覆盖判定会把数据集名里的「VC」「Walmart」当成用户额外提出的筛选条件，
+  那正是遮蔽函数存在的理由。
+- `_attach_slot_coverage()` 收一个「槽位读法列表」，逐槽位取**披露更多的一方**
+  （surplus 更长者胜），`requested_zh` 与 `surplus_zh` 同取自被选中的那份读法，
+  保证句子内部自洽。为什么取更多的一方：两种读法各自自洽且各有盲区——遮蔽后的
+  读法能看出「亚马逊销售表 只看VC的销售额」这种用户把口径收窄的情形，未遮蔽的
+  读法能救回被字段标签吃掉的粒度词；静默错数比响亮失败危险得多，宁可多披露一条。
+  另外身份文本推出的槽位取值必然 ⊆ 数据集支持值，因此加入未遮蔽读法只会缩小
+  surplus、不会凭空造出一条假披露。
+**验证结果**：
+- 真实元数据复验（`~/.claude/skills/ops-dataset-query`，只读跑规划器）：
+  `'近7天搜索词的点击份额'`、`'亚马逊搜索词绩效 近7天搜索词的点击份额'`、
+  `'亚马逊搜索词绩效 的点击份额'` 三句全部 `planned` 且都带
+  「统计粒度比请求更细，额外覆盖：关键词」披露，且都进了
+  `answer_contract.required_disclosures_zh`。
+- 变异检查：把调用点改回只传遮蔽后的读法 →
+  `test_grain_disclosure_survives_when_masking_eats_the_grain_word` FAIL。
+- 新增测试：`tests/skills/test_dataset_query_planner.py` 复刻真实形态的端到端用例；
+  `tests/skills/test_slot_coverage.py` 两版参数化的「取披露更多的一方且与读法顺序无关」。
+- 回归：`pytest tests/skills/test_slot_coverage.py tests/skills/test_routing_eval.py
+  tests/skills/test_local_fallback.py tests/skills/test_dataset_query_planner.py
+  tests/query tests/mcp/test_query_planner_tools.py -q` → 283 passed, 8 xfailed。
+- 安装目录同步：只逐文件 `cp` 了 `scripts/agent_query_planner.py`、
+  `scripts/query_plan.py`、`scripts/typed_schema_linking.py`、`SKILL.md`、
+  `data/query_plan.schema.json` 到 4 个安装目录（`~/.opscli`、`~/.codex`、
+  `~/.claude`、`~/.openclaw`），**未做任何整目录同步**；同步前后各目录
+  `data/datasets.csv` 均为 76 行真实元数据，未被覆盖。
+**影响范围**：仅显式标识命中与中文说明命中两条路径的**披露计算**；覆盖判定与选表
+结果完全不变（`_raw_slot_reading` 不参与任何 `_covers` / `_slot_is_covered` 调用）。
+这两条路径现在会新增披露，是修复目标。
+**回滚方式**：`git revert <本次提交>`。
+---

@@ -140,8 +140,33 @@ def test_attach_slot_coverage_fills_every_candidate(module):
     profile["card"] = {"dataset_alias": "ds_kw_st"}
     candidates = [{"dataset_alias": "ds_kw_st"}, {"dataset_alias": "ds_unknown"}]
 
-    module._attach_slot_coverage(candidates, [profile], {"grain": {"search_term"}}, RULES)
+    module._attach_slot_coverage(
+        candidates, [profile], [{"grain": {"search_term"}}], RULES
+    )
 
     assert candidates[0]["grain_coverage"]["grain"]["surplus_zh"] == ["关键词"]
     # 画像里找不到的候选保持原样，不臆造覆盖信息
     assert "grain_coverage" not in candidates[1]
+
+
+@BOTH_VERSIONS
+def test_attach_slot_coverage_keeps_the_more_disclosing_reading(module):
+    """多份槽位读法逐槽位取「披露更多的一方」，不能被披露更少的读法盖掉。
+
+    真实元数据实测：'亚马逊搜索词绩效 近7天搜索词的点击份额' 遮蔽身份文本后
+    槽位为空（第二个「搜索词」也被当字段标签抹掉）→ 无请求可比 → 披露消失。
+    未遮蔽的读法能看出用户要 search_term 级，必须让它胜出。
+    """
+    profile = _profile({"keyword", "search_term"}, "fixed")
+    profile["card"] = {"dataset_alias": "ds_kw_st"}
+    masked_reading: dict = {}  # 遮蔽后什么都没剩下
+    raw_reading = {"grain": {"search_term"}}
+
+    # 读法顺序不能影响结果：披露更多的一方总该胜出
+    for readings in ([masked_reading, raw_reading], [raw_reading, masked_reading]):
+        candidates = [{"dataset_alias": "ds_kw_st"}]
+        module._attach_slot_coverage(candidates, [profile], readings, RULES)
+        coverage = candidates[0]["grain_coverage"]["grain"]
+        assert coverage["surplus_zh"] == ["关键词"]
+        # 句子内部自洽：requested 与 surplus 同取自被选中的那份读法
+        assert coverage["requested_zh"] == ["搜索词"]

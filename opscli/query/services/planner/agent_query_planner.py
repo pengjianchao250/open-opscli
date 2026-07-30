@@ -442,7 +442,7 @@ def _extra_slot_terms(profile: dict, slots: dict, rules: dict) -> dict:
 def _attach_slot_coverage(
     candidates: list[dict],
     profiles: list[dict],
-    slots: dict[str, set[str]],
+    slot_readings: list[dict[str, set[str]]],
     rules: dict,
 ) -> list[dict]:
     """为已构造的候选补齐固定槽位多余覆盖信息（强制披露的唯一数据来源）。
@@ -452,14 +452,42 @@ def _attach_slot_coverage(
     漏补的后果是 query_plan 取到空 grain_coverage → model_view 与
     answer_contract 两处披露一起静默消失，形成「用户报出表名反而丢掉安全披露」
     的反常行为（说得越具体反而越危险）。
+
+    为什么要收多份槽位读法（slot_readings）而不是只用一份：这两条路径的槽位算在
+    **遮蔽过数据集身份与字段标签之后**的文本上，而遮蔽是全局 replace。真实元数据
+    实测：'亚马逊搜索词绩效 近7天搜索词的点击份额' 里第二个「搜索词」也被当成字段
+    标签一起抹掉，遮蔽后 slots 为空 → 无请求可比 → 披露又没了。反过来，
+    「亚马逊销售表 只看VC的销售额」这类只有遮蔽后的读法才能看出用户把口径收窄。
+    两种读法各自自洽，因此逐槽位取「披露更多的一方」——静默错数比响亮失败危险
+    得多，宁可多披露一条口径差异。requested_zh 与 surplus_zh 同取自被选中的那份
+    读法，句子内部始终自洽。
     """
     by_alias = {profile["card"]["dataset_alias"]: profile for profile in profiles}
     for candidate in candidates:
         profile = by_alias.get(candidate.get("dataset_alias"))
         if profile is None:
             continue
-        candidate["grain_coverage"] = _extra_slot_terms(profile, slots, rules)
+        merged: dict = {}
+        for slots in slot_readings:
+            for name, detail in _extra_slot_terms(profile, slots, rules).items():
+                current = merged.get(name)
+                if current is None or len(detail["surplus_zh"]) > len(current["surplus_zh"]):
+                    merged[name] = detail
+        candidate["grain_coverage"] = merged
     return candidates
+
+
+def _raw_slot_reading(query: str, rules: dict) -> dict[str, set[str]]:
+    """不遮蔽数据集身份文本的槽位读法，仅供强制披露使用。
+
+    只能用于披露：拿它做覆盖判定会把数据集名称里的「VC」「Walmart」当成用户
+    额外提出的筛选条件（这正是 _semantic_query_without_candidate_identity 存在
+    的原因）。但披露侧需要它——遮蔽会把用户真正说出口的粒度词一起抹掉。
+    """
+    return {
+        name: set(values)
+        for name, values in extract_query_semantics(query, rules)["slots"].items()
+    }
 
 
 def _covers(profile: dict, domains: set[str], slots: dict[str, set[str]], rules: dict) -> bool:
@@ -750,7 +778,13 @@ def plan_query(
         semantics = extract_query_semantics(semantic_query, validated_rules)
         domains = set(semantics["domains"])
         slots = {name: set(values) for name, values in semantics["slots"].items()}
-        _attach_slot_coverage(explicit, profiles, slots, validated_rules)
+        # 披露侧同时看「遮蔽后」与「未遮蔽」两种槽位读法，取披露更多的一方
+        _attach_slot_coverage(
+            explicit,
+            profiles,
+            [slots, _raw_slot_reading(normalized_query, validated_rules)],
+            validated_rules,
+        )
         top = explicit[0]
         component_blocked = top["dataset_category"] == "query_component" and not _permission_enum_requested(query)
         if len(explicit) > 1 or component_blocked:
@@ -802,7 +836,13 @@ def plan_query(
         semantics = extract_query_semantics(semantic_query, validated_rules)
         domains = set(semantics["domains"])
         slots = {name: set(values) for name, values in semantics["slots"].items()}
-        _attach_slot_coverage(description_matches, profiles, slots, validated_rules)
+        # 披露侧同时看「遮蔽后」与「未遮蔽」两种槽位读法，取披露更多的一方
+        _attach_slot_coverage(
+            description_matches,
+            profiles,
+            [slots, _raw_slot_reading(normalized_query, validated_rules)],
+            validated_rules,
+        )
         top = description_matches[0]
         if len(description_matches) > 1:
             return _result(
