@@ -52,6 +52,16 @@ def _guidance(*labels: str) -> dict:
         "找到渠道是傲彼瑞-美国的所有ASIN，忽略日期",
         "找到渠道是傲彼瑞-美国的所有ASIN，去掉日期维度",
         "全部时间，不加日期筛选，仅返回去重后的ASIN列表",
+        # 以下形态由 codex 真实改写产生：它把用户原句重述成「不按日期拆分」，
+        # 词表原先只有「不要」没有「不按」，一处漏屏蔽就足以把日期捞回来，
+        # 结果 e2e 又出现 9625 行 / 截断在 5000 行
+        "查询渠道精确等于傲彼瑞-美国的所有ASIN，不按日期拆分，不需要日期维度",
+        "查所有ASIN，不按日期拆分",
+        "查所有ASIN，非日期维度",
+        "查所有ASIN，不含日期",
+        "查所有ASIN，不带日期",
+        "查所有ASIN，不分日期",
+        "查所有ASIN，不显示日期",
     ],
 )
 def test_negated_label_is_not_requested(query: str):
@@ -60,6 +70,29 @@ def test_negated_label_is_not_requested(query: str):
     labels = {item["verbose_name"] for item in picked}
 
     assert "日期" not in labels, f"「日期」被误当成点名维度：{query}"
+
+
+@pytest.mark.parametrize(
+    "query, label",
+    [
+        # 真实元数据里自带否定词的合法标签：判定必须用区间包含，
+        # 直接把否定语境替换掉会把标签自身撕开、反而漏掉用户点名的字段
+        ("查周转天数(不含在途)", "周转天数(不含在途)"),
+        ("查周转天数(不含在途)，不含日期", "周转天数(不含在途)"),
+        # 裸「别」会让「查税别和日期」从「别」起屏蔽并连带吃掉日期，
+        # 因此词表只收「别用」「别加」——这两条锁住该约束
+        ("查税别和日期", "税别"),
+        ("查税别和日期", "日期"),
+        ("查TEMU物流费用币别", "TEMU物流费用币别"),
+    ],
+)
+def test_label_containing_negation_word_survives(query: str, label: str):
+    """标签自身含否定词时不得被误判为否定。"""
+    guidance = _guidance("日期", "税别", "周转天数(不含在途)", "TEMU物流费用币别")
+    picked = query_plan._requested_fields(guidance, "dimensions", query)
+    labels = {item["verbose_name"] for item in picked}
+
+    assert label in labels, f"自带否定词的标签被误屏蔽：{query} → 期望包含 {label}"
 
 
 @pytest.mark.parametrize(

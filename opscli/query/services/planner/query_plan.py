@@ -708,15 +708,28 @@ def build_query_plan(
 # ---------------------------------------------------------------------------
 
 
-def _label_match_text(query: str) -> str:
-    """字段标签匹配专用的归一化文本：先屏蔽否定语境，再做通用归一。
+def _label_is_negated(normalized_query: str, label: str, negated: list) -> bool:
+    """标签在原文中的每一次出现是否都落在否定语境区间内。
 
-    为什么不能直接用原文：标签匹配是子串包含，「不加日期筛选」里的「日期」
+    为什么不能直接用原文匹配：标签匹配是子串包含，「不加日期筛选」里的「日期」
     会被当成用户点名的分组维度，于是用户越明确要求不加日期，规划器越确定
     按日期分组——实测 38 行的 ASIN 明细因此膨胀到 9625 行并触发服务端截断。
+
+    为什么用区间包含而不是把否定语境替换掉：真实元数据里存在
+    「周转天数(不含在途)」这类自带否定词的合法标签，替换会把标签撕开、
+    使用户点名的字段反而漏掉。只有标签整体落在否定区间内才算否定，
+    标签起点早于否定词时（自带否定词的情形）照常识别。
     否定词表复用 time_scope 的同一份，避免时间口径与字段标签两处判定漂移。
     """
-    return _normalize(time_scope.mask_negated_spans(query))
+    occurrences = [
+        match.span() for match in re.finditer(re.escape(label), normalized_query)
+    ]
+    if not occurrences:
+        return False
+    return all(
+        any(span_start <= start and end <= span_end for span_start, span_end in negated)
+        for start, end in occurrences
+    )
 
 
 def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]:
@@ -727,7 +740,9 @@ def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]
     """
     field_guidance = guidance.get("field_guidance") or {}
     fields = field_guidance.get(field_type) or []
-    normalized_query = _label_match_text(query)
+    normalized_query = _normalize(query)
+    # 否定语境区间：落在其中的标签不算用户点名（「不按日期拆分」里的「日期」）
+    negated = time_scope.negated_spans(normalized_query)
     selected = []
     for index, item in enumerate(fields):
         if not isinstance(item, dict):
@@ -735,7 +750,9 @@ def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]
         source = item.get("selection_source")
         label = _normalize(item.get("verbose_name"))
         if source in {"explicit", "semantic_alias"} or (
-            label and label in normalized_query
+            label
+            and label in normalized_query
+            and not _label_is_negated(normalized_query, label, negated)
         ):
             position = normalized_query.find(label) if label else len(normalized_query)
             if position < 0:
@@ -807,20 +824,30 @@ def _selected_fields(
     """
     dimensions = _requested_fields(guidance, "dimensions", query)
     metrics = _requested_fields(guidance, "metrics", query)
-    # 授权标签兜底同样是子串包含，必须走屏蔽否定后的文本，否则
-    # 「不加日期筛选」仍会从这条兜底路径把「日期」捞回来
-    normalized_query = _label_match_text(query)
+    normalized_query = _normalize(query)
+    # 授权标签兜底同样是子串包含，必须同样排除否定语境，否则
+    # 「不按日期拆分」仍会从这条兜底路径把「日期」捞回来
+    negated = time_scope.negated_spans(normalized_query)
+
+    def _hit(item: dict) -> bool:
+        label = _normalize(item.get("verbose_name"))
+        return bool(
+            label
+            and label in normalized_query
+            and not _label_is_negated(normalized_query, label, negated)
+        )
+
     if not dimensions:
         dimensions = [
             dict(item, selection_source="authorized_query_label")
             for item in authorized_field_labels.get("dimensions", [])
-            if _normalize(item.get("verbose_name")) in normalized_query
+            if _hit(item)
         ]
     if not metrics:
         metrics = [
             dict(item, selection_source="authorized_query_label")
             for item in authorized_field_labels.get("metrics", [])
-            if _normalize(item.get("verbose_name")) in normalized_query
+            if _hit(item)
         ]
     # 无点名字段时的推荐兜底（P0-1c）：把指导层已按打分选出的 top 字段
     # 以 recommended 来源标注供模型向用户提议，替代「全空无从下手→扫盘」
