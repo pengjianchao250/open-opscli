@@ -118,6 +118,24 @@ def test_platform_enum_wrapper_uses_injected_enum_fn():
     assert query_plan._auto_enum_platform_values(None, 200) == []
 
 
+def test_platform_scope_subtracts_explicit_vc_exclusion():
+    """正向 Amazon 范围减去否定语境中的 Amazon VC 后，只能保留 SC。"""
+    rules = query_plan._load_rules_resource()
+    selection = {"slots": {"platform": ["amazon", "amazon_vc"]}}
+
+    scope = query_plan._platform_scope(
+        selection,
+        rules,
+        ["Amazon", "Amazon VC"],
+        query="仅取platform_name=Amazon，排除 Amazon VC",
+    )
+
+    assert scope["requested_slots"] == ["amazon"]
+    assert scope["excluded_slots"] == ["amazon_vc"]
+    assert scope["semantic_members"] == ["amazon_sc"]
+    assert scope["enum_resolution"]["resolved_filter_values"] == ["Amazon"]
+
+
 # ── 澄清文案完备性（Agent 盲重试的直接诱因）──────────────────────────────────
 #
 # clarification_messages_zh 由 CLARIFICATION_MESSAGES.get(code, 兜底文案) 生成。

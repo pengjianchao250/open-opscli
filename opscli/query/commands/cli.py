@@ -233,7 +233,7 @@ def flow(
     request: str = typer.Argument("", help="自然语言查询原文"),
     query_file: str | None = typer.Option(None, "--query-file", help="从 UTF-8 文件读取查询原文（含特殊字符时用）"),
     field: list[str] | None = typer.Option(None, "--field", help="补充点名字段，可重复"),
-    limit: int | None = typer.Option(None, "--limit", help="返回行数上限（不传则用后端默认 20）"),
+    limit: int | None = typer.Option(None, "--limit", help="返回行数上限（不传则自动补齐默认页，最多 5000 行）"),
     order_by: list[str] | None = typer.Option(None, "--order-by", help="排序：<结果字段>[:asc|desc]，可重复"),
     offset: int | None = typer.Option(None, "--offset", help="分页偏移（不传则后端默认 0）"),
     result_dir: str | None = typer.Option(None, "--result-dir", help="结果落盘目录（能力延后，当前忽略）"),

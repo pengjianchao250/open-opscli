@@ -82,6 +82,12 @@ _MONTH_RE = re.compile(
     re.IGNORECASE,
 )
 _COMPARISON_CUE_RE = re.compile(r"对比期?|比较|与|较|vs\.?", re.IGNORECASE)
+_MONTH_THRESHOLD_LEFT_RE = re.compile(
+    r"(?:超(?:过)?|大于|高于|多于|不少于|至少|库龄|账龄|货龄|周转)\s*$"
+)
+_MONTH_THRESHOLD_RIGHT_RE = re.compile(
+    r"^\s*(?:个|以上|以下|以内|区间|分段|数量|采购金额)"
+)
 
 
 def _num(text: str) -> int | None:
@@ -122,6 +128,20 @@ def _month_window(year: int, month: int) -> tuple[date, date]:
     return date(year, month, 1), date(year, month, monthrange(year, month)[1])
 
 
+def _calendar_month_matches(query: str):
+    """只返回自然月表达，排除“超6月/库龄6个月以上”等业务阈值。"""
+    for match in _MONTH_RE.finditer(query):
+        # 显式年份足以证明是日历月份，不受附近业务词影响。
+        if match.group(1):
+            yield match
+            continue
+        left = query[max(0, match.start() - 8) : match.start()]
+        right = query[match.end() : match.end() + 8]
+        if _MONTH_THRESHOLD_LEFT_RE.search(left) or _MONTH_THRESHOLD_RIGHT_RE.search(right):
+            continue
+        yield match
+
+
 def _explicit_comparison(query: str, today: date) -> dict | None:
     """解析用户明确给出的第二个对比日期范围或自然月。
 
@@ -152,7 +172,7 @@ def _explicit_comparison(query: str, today: date) -> dict | None:
                 "end": _fmt(end),
                 "label_zh": "显式对比周期",
             }
-    month_match = _MONTH_RE.search(comparison_text)
+    month_match = next(_calendar_month_matches(comparison_text), None)
     if not month_match:
         return None
     year = int(month_match.group(1) or today.year)
@@ -216,7 +236,7 @@ def _window(query: str, today: date) -> tuple[date | None, date | None, str, boo
         return start, end, f"上季度（{year}年第{quarter}季度）", False
 
     # 指定自然月必须优先于自然年匹配，否则“2026年6月”会被截断成全年。
-    month_match = _MONTH_RE.search(query)
+    month_match = next(_calendar_month_matches(query), None)
     if month_match:
         year = int(month_match.group(1) or today.year)
         month = int(month_match.group(2))

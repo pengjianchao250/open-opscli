@@ -142,9 +142,13 @@ def test_run_flow_fills_limit_order_offset(monkeypatch):
     assert t["limit"] == 200
     assert t["offset"] == 5
     assert t["orderBy"] == [{"field": "x", "desc": True}]
-    # 改写模板后重挂完整性：合同层（去掉 run_flow 追加的 result/execution_notes）自洽
+    # 改写模板后重挂完整性：剥离 run_flow 追加的运行时结果/披露后，规划合同仍自洽
     assert "plan_integrity" in out["execution_ref"]
-    sealed = {k: v for k, v in out.items() if k not in ("result", "execution_notes")}
+    sealed = {
+        k: v
+        for k, v in out.items()
+        if k not in ("result", "result_disclosures", "execution_notes")
+    }
     assert plan_integrity.verify(sealed) is True
     # 传了 order_by → 仅出 orderBy 一条披露（未传 result_dir 不出落盘那条）
     assert out["execution_notes"] == [entry._NOTE_ORDER_BY]
@@ -178,6 +182,37 @@ def test_run_flow_no_params_keeps_defaults(monkeypatch):
     assert t["limit"] is None
     assert t["orderBy"] is None
     assert "offset" not in t
+
+
+def test_run_flow_auto_completes_server_default_page(monkeypatch):
+    """未显式传 limit 时，服务端默认 20 行不得被当成 totalCount=145 的全量。"""
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+    calls: list[int | None] = []
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            current_limit = execution_ref["query_template"].get("limit")
+            calls.append(current_limit)
+            row_count = 20 if current_limit is None else 145
+            return {
+                "data": {
+                    "result": {
+                        "data": [{"asin": f"A{i}"} for i in range(row_count)],
+                        "meta": {"totalCount": 145},
+                    }
+                }
+            }
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+
+    assert calls == [None, 145]
+    assert len(out["result"]["data"]["result"]["data"]) == 145
+    assert out["result_disclosures"] == {
+        "row_count_returned": 145,
+        "total_count": 145,
+        "truncated": False,
+        "auto_complete_applied": True,
+    }
 
 
 def test_run_query_template_drops_null_keys():

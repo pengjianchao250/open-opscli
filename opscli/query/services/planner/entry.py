@@ -33,6 +33,7 @@ _NOTE_ORDER_BY = (
     "暂未内核化——若服务端未真正生效排序，本次不做客户端纠正"
 )
 _NOTE_RESULT_DIR = "完整结果落盘 result_dir 暂未内核化，本次仅返回服务端查询结果"
+_AUTO_COMPLETE_LIMIT_CAP = 5000
 
 
 def _extract_enum_values(result: Any, field_name: str) -> list[str]:
@@ -60,6 +61,42 @@ def _extract_enum_values(result: Any, field_name: str) -> list[str]:
         if value and value not in values:
             values.append(value)
     return values
+
+
+def _extract_result_page(result: Any) -> tuple[list[dict], int | None]:
+    """从 simple 查询结果中提取当前页行与服务端总行数。"""
+    root = result if isinstance(result, dict) else {}
+    rows: list[dict] = []
+    for path in (("data", "result", "data"), ("result", "data"), ("data",)):
+        node: Any = root
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, list):
+            rows = [row for row in node if isinstance(row, dict)]
+            break
+
+    containers: list[dict] = []
+    data = root.get("data")
+    nested_result = data.get("result") if isinstance(data, dict) else None
+    for value in (
+        nested_result.get("meta") if isinstance(nested_result, dict) else None,
+        nested_result,
+        data,
+        root.get("meta"),
+        root,
+    ):
+        if isinstance(value, dict):
+            containers.append(value)
+    for key in ("totalCount", "total_count", "total"):
+        for container in containers:
+            value = container.get(key)
+            if value is None:
+                continue
+            try:
+                return rows, int(value)
+            except (TypeError, ValueError):
+                continue
+    return rows, None
 
 
 def _make_callbacks(qm: QueryManager, user_email: str, base_dir: Path | None):
@@ -138,11 +175,12 @@ def run_flow(
     """一体化：规划 + planned 数据集查询时按 query_template 执行一次取数。
 
     非 planned（clarify/blocked/chart_uuid 等）合同原样返回交调用方处置。
-    planned 时把 limit/order_by/offset 填入 query_template 再执行（未传则保持 None、
-    执行时被剔除 → 沿用后端默认：limit=20、无排序、offset=0）。
+    planned 时把 limit/order_by/offset 填入 query_template 再执行。未传 limit 且
+    服务端默认页少于 totalCount 时自动按总数补查一次（最多 5000 行），防止首页被
+    误当全量；用户显式传 limit/offset 时严格按用户分页口径执行。
 
     Args:
-        limit: 返回行数上限；不传则用后端默认（20）。
+        limit: 返回行数上限；不传时自动补齐服务端默认页（最多 5000 行）。
         order_by: 排序，形态 [{"field": "<结果字段>", "desc": bool}]（与 query_simple 一致）。
         offset: 分页偏移；不传则后端默认 0。
         result_dir: 预留的结果落盘目录（当前未使用，落盘能力延后）。
@@ -176,13 +214,37 @@ def run_flow(
         if changed:
             plan_integrity.attach(contract)
     run_result = qm.run_query_template(execution_ref)
+    rows, total = _extract_result_page(run_result)
+    auto_complete_applied = False
+    if (
+        limit is None
+        and offset in (None, 0)
+        and total is not None
+        and total > len(rows)
+        and isinstance(template, dict)
+    ):
+        template["limit"] = min(total, _AUTO_COMPLETE_LIMIT_CAP)
+        plan_integrity.attach(contract)
+        run_result = qm.run_query_template(execution_ref)
+        rows, total = _extract_result_page(run_result)
+        auto_complete_applied = True
+    result_disclosures = {
+        "row_count_returned": len(rows),
+        "total_count": total,
+        "truncated": total is not None and len(rows) < total,
+        "auto_complete_applied": auto_complete_applied,
+    }
     # 按需披露：仅在本次真正用到相关能力时提示对应的延后项，避免对无关查询误导
     execution_notes: list[str] = []
     if order_by:
         execution_notes.append(_NOTE_ORDER_BY)
     if result_dir is not None:
         execution_notes.append(_NOTE_RESULT_DIR)
-    out = {**contract, "result": run_result}
+    out = {
+        **contract,
+        "result": run_result,
+        "result_disclosures": result_disclosures,
+    }
     if execution_notes:
         out["execution_notes"] = execution_notes
     return out

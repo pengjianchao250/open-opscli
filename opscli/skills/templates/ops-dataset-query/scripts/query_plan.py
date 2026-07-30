@@ -489,6 +489,8 @@ def _platform_scope(
     selection: dict,
     rules: dict,
     authorized_platform_values: Sequence[str] | None,
+    *,
+    query: str = "",
 ) -> dict:
     """构建请求的平台范围规划器。
 
@@ -499,22 +501,40 @@ def _platform_scope(
     slots = selection.get("slots", {}).get("platform", [])
     if not isinstance(slots, list):
         slots = []
+    excluded_slots: list[str] = []
+    for start, end in time_scope.negated_spans(query):
+        negated_semantics = schema.extract_query_semantics(query[start:end], rules)
+        excluded_slots.extend(
+            negated_semantics.get("slots", {}).get("platform", [])
+        )
+    excluded_slots = _deduplicate(excluded_slots)
+    slots = [slot for slot in slots if slot not in excluded_slots]
     members = rules["platform_scope"]["members"]
+    excluded_members = {
+        member for slot in excluded_slots for member in members.get(slot, [])
+    }
     semantic_members = _deduplicate(
-        [member for slot in slots for member in members.get(slot, [])]
+        [
+            member
+            for slot in slots
+            for member in members.get(slot, [])
+            if member not in excluded_members
+        ]
     )
     return {
         "requested_slots": slots,
+        "excluded_slots": excluded_slots,
+        "excluded_semantic_members": sorted(excluded_members),
         "semantic_members": semantic_members,
-        "requires_permission_enum_validation": bool(slots),
-        "permission_field": "platform_name" if slots else "",
+        "requires_permission_enum_validation": bool(slots or excluded_slots),
+        "permission_field": "platform_name" if slots or excluded_slots else "",
         "component_lookup": None,
         "enum_resolution": _resolve_platform_enum(
             semantic_members, authorized_platform_values, rules
         ),
         "authorization_rule": (
             "resolve_only_from_current_account_component_enum"
-            if slots
+            if slots or excluded_slots
             else "not_applicable"
         ),
     }
@@ -890,7 +910,12 @@ def build_query_plan(
         )
         guidance = selected_guidance(selection)
 
-    platform_scope = _platform_scope(selection, raw_rules, authorized_platform_values)
+    platform_scope = _platform_scope(
+        selection,
+        raw_rules,
+        authorized_platform_values,
+        query=query,
+    )
     if selection["planner_status"] == "candidate_ready":
         candidates = selection.get("dataset_candidates", [])
         if candidates:
@@ -1218,6 +1243,10 @@ def _answer_contract(
 
 def _platform_scope_disclosures(platform: dict) -> list[str]:
     """生成裸“亚马逊”默认范围及部分权限降级的强制披露。"""
+    excluded = platform.get("excluded_semantic_members") or []
+    if excluded:
+        labels = [PLATFORM_MEMBER_LABELS.get(member, member) for member in excluded]
+        return [f"已按用户要求排除{'、'.join(labels)}，未将排除项重新扩入查询范围。"]
     if "amazon" not in set(platform.get("requested_slots") or []):
         return []
 
@@ -1321,6 +1350,7 @@ def _build_query_template(
     metrics: list[dict],
     date_fields: list[dict],
     scope: dict | None,
+    platform_values: list[str] | None = None,
 ) -> dict | None:
     """生成可直接填充的正式查询 payload 骨架（P1-4）。
 
@@ -1361,6 +1391,21 @@ def _build_query_template(
                 "startDate": comparison["start"],
                 "endDate": comparison["end"],
             }
+    resolved_platforms = [
+        str(value).strip() for value in (platform_values or []) if str(value).strip()
+    ]
+    if resolved_platforms:
+        filters.append(
+            {
+                "field": "platform_name",
+                "operator": "=" if len(resolved_platforms) == 1 else "in",
+                "value": (
+                    resolved_platforms[0]
+                    if len(resolved_platforms) == 1
+                    else resolved_platforms
+                ),
+            }
+        )
     return template
 
 
@@ -1750,6 +1795,7 @@ def build_model_contract(
             execution_metrics,
             date_fields,
             scope,
+            resolution.get("resolved_filter_values", []),
         )
         if template is not None:
             execution_ref["query_template"] = template

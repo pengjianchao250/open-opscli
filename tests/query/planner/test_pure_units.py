@@ -55,6 +55,20 @@ def test_time_scope_default_window_when_unmatched():
     assert scope["matched"] is False
 
 
+def test_time_scope_age_threshold_does_not_shadow_today():
+    """库龄“超6月”不是自然月；后文“当天”才是本次查询时间口径。"""
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    scope = time_scope.parse(
+        "超6月采购金额按181天以上库龄计算，当天查询销售",
+        today=date(2026, 7, 30),
+    )
+    assert (scope["start"], scope["end"]) == ("2026-07-30", "2026-07-30")
+    assert scope["label_zh"] == "今天"
+
+
 # ── 显式对比周期不得与主周期重合（生产环比失真）────────────────────────────
 #
 # "对比A与B" 结构里对比线索词位于主周期之前，_explicit_comparison 从线索词之后

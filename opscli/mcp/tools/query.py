@@ -727,8 +727,9 @@ async def query_flow(
     """一体化取数：规划 + planned 数据集查询时按 query_template 执行一次并回传结果。
 
     非 planned（需澄清/被阻断/图表 UUID 等）合同原样返回，交调用方按 model_view 处置。
-    planned 时把 limit/order_by/offset 填入 query_template 再执行（不传则沿用后端默认：
-    limit=20、无排序、offset=0）。返回体的 execution_notes 是**按需披露**的已知延后项，
+    planned 时把 limit/order_by/offset 填入 query_template 再执行；不传 limit 且
+    服务端默认页少于 totalCount 时会自动补齐一次（最多 5000 行）。返回体的
+    result_disclosures 明确给出实际行数、总数和截断状态；execution_notes 是**按需披露**的已知延后项，
     仅在本次真正用到相关能力时出现（传了 order_by 才提示服务端 orderBy 缺陷的本地兜底/加量重查
     未内核化）；未出现该键属正常，不是异常。
 
@@ -739,8 +740,9 @@ async def query_flow(
     时等待约 25 秒后用相同参数原样重调（合同里的 recovery_command 是 CLI 形态，MCP 场景取其语义即可，
     不要执行该命令，也不要自行升级），连续 3 次仍未就绪才提交反馈并停止。
 
-    【结果被截断时】返回结果元数据显示只回了部分行（rowCount < totalCount）时，
-    传更大的 limit 重新调用本工具即可取全（后端 limit 无上限）。
+    【结果被截断时】先看 result_disclosures：truncated=false 才可按全量陈述；
+    truncated=true 表示总数超过自动补齐上限或服务端仍未返回完整结果，此时显式传更大
+    limit 重新调用，拿到全量前必须声明当前仅为部分结果。
 
     【反馈边界】仅在本工具意外失败时提交一次 feedback_submit；0 行、需要澄清、
     认证未就绪和用户取消都不是反馈事件，成功查询不自动提交反馈。
@@ -748,7 +750,7 @@ async def query_flow(
     Args:
         request:          用户查询原文（自然语言）。
         requested_fields: 可选，用户点名字段列表（可传 JSON 字符串）。
-        limit:            可选，返回行数上限；不传则用后端默认 20。
+        limit:            可选，返回行数上限；不传时自动补齐默认页，最多 5000 行。
         order_by:         可选，排序 [{"field": "<结果字段>", "desc": true}]（可传 JSON 字符串）；
                           只认 desc 布尔值，写成 {"direction": "DESC"} 会被后端忽略并恒按升序返回。
         offset:           可选，分页偏移；不传则后端默认 0。

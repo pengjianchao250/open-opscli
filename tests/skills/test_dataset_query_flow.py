@@ -66,6 +66,25 @@ def test_skill_allows_fallback_only_on_objective_failure():
     assert "仍禁止凭记忆手拼" in text
 
 
+def test_skill_defines_multi_dataset_excel_orchestration_contract():
+    """多表 Excel 请求必须保留逐表时间、全量和 LEFT JOIN 语义。
+
+    本次真实异常把库龄“超6月”错当自然月，又把“未售出”反向改成销量大于 0。
+    这些不是单字段解析问题，而是多表编排边界；用静态合同测试防止后续精简文档时
+    再删除关键口径。
+    """
+    text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "多数据集计算与 Excel 交付" in text
+    assert "181 天以上" in text
+    assert "执行当天" in text
+    assert "LEFT JOIN" in text
+    assert "无销售记录按 `order_qty=0`" in text
+    assert "禁止改写成 `order_qty>0`" in text
+    assert "`truncated=false`" in text
+    assert "每张快照表独立" in text
+
+
 def test_query_flow_plans_and_executes_once(monkeypatch, tmp_path: Path):
     """无歧义路径应各调用一次规划器与执行器，且不传手工 payload。"""
     calls = {"plan": 0, "run": 0}

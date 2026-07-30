@@ -859,6 +859,29 @@ def test_generic_amazon_full_scope_and_explicit_sc_vc_remain_distinct(tmp_path: 
     assert "platform_scope_disclosures_zh" not in vc["model_view"]
 
 
+def test_generic_amazon_can_explicitly_exclude_vc(tmp_path: Path):
+    """裸 Amazon 后显式排除 Amazon VC 时只能保留 SC，不能再次扩成 SC+VC。"""
+    data_dir = tmp_path / "data"
+    _write_instant_comprehensive_metadata(data_dir)
+    result = query_plan.build_model_query_plan(
+        "使用即时综合数据集查询当天销售额，仅取platform_name=Amazon，排除 Amazon VC",
+        authorized_platform_values=["Amazon", "Amazon VC"],
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "planned"
+    assert result["model_view"]["platform_semantic_members"] == ["亚马逊SC"]
+    assert result["execution_ref"]["resolved_platform_values"] == ["Amazon"]
+    assert {
+        "field": "platform_name",
+        "operator": "=",
+        "value": "Amazon",
+    } in result["execution_ref"]["query_template"]["filters"]
+
+
 def test_clarify_contract_carries_candidate_cards(tmp_path: Path):
     """同名冲突显式点名时，澄清合同必须携带候选卡片供带选项提问（P0-2）。"""
     data_dir = tmp_path / "data"
@@ -1448,6 +1471,19 @@ def test_time_scope_default_is_disclosed():
     scope = time_scope.parse("看看销售情况", today=date(2026, 7, 13))
     assert scope["is_default"] is True
     assert (scope["start"], scope["end"]) == ("2026-06-14", "2026-07-13")
+
+
+def test_time_scope_age_threshold_is_not_calendar_month():
+    """“超6月”是库龄阈值；句中另有“当天”时主周期必须仍解析为当天。"""
+    from datetime import date
+
+    scope = time_scope.parse(
+        "超6月数量=181天以上九个库龄分段之和，当天查询销售",
+        today=date(2026, 7, 30),
+    )
+
+    assert (scope["start"], scope["end"]) == ("2026-07-30", "2026-07-30")
+    assert scope["label_zh"] == "今天"
 
 
 def test_time_scope_absolute_range_quarter_and_year():
