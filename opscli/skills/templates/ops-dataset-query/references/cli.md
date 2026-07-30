@@ -5,11 +5,13 @@ description: 当前账号元数据的 CLI-only 规划、权限枚举与查询路
 
 # CLI-only 运行契约
 
-## 唯一路由
+## 首选路由
 
 ```text
 query_plan.py -> 当前账号组件枚举 -> opscli query simple
 ```
+
+该路由是默认且优先路径。只有命中 `SKILL.md`「规划器不可用时的降级路径」列出的客观失败条件（规划器澄清/阻断、脚本报错重跑仍失败、命令窗口连续超时、运行环境缺 python3）时才转降级章节，其余情况一律走本路由。
 
 若当前请求尚未运行规划器，直接在 Skill 目录执行（规划器按平台 30 秒命令窗口设计：
 常态 1~3 秒返回；需要刷新元数据时前台最多等 8 秒、未完成即转后台续跑并返回
@@ -75,4 +77,4 @@ python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON" --plan-
 
 「未登录」错误的处置边界：沙箱/托管环境凭证由平台注入，禁止交互式 `opscli auth login`（Device Flow 在无人环境无法完成）。等待约 1 分钟原样重试一次；仍未登录即停止取数、向用户说明凭证异常并提交一次反馈。
 
-规划器异常退出（exit 2）时输出为 stdout 上的错误 JSON：`{"error","retryable","next_action_zh"}`。`retryable=true` 直接原样重跑一次；否则严格按 `next_action_zh` 执行，禁止盲目重试或翻脚本源码。
+规划器异常退出（exit 2）时输出为 stdout 上的错误 JSON：`{"error","retryable","next_action_zh"}`。`retryable=true` 直接原样重跑一次；否则严格按 `next_action_zh` 执行。`retryable=false` 且 `next_action_zh` 无可执行动作，或重跑后仍报同一错误时，转 `SKILL.md`「规划器不可用时的降级路径」；无论哪条路径都禁止盲目重试或翻脚本源码。
