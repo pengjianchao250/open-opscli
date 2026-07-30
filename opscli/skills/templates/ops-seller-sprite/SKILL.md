@@ -1,6 +1,6 @@
 ---
 name: ops-seller-sprite
-description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自然语言需求映射为 seller_sprite_* 场景，处理关键词选品、ABA 数据选品、全球商标库、关联流量、ABA 出单词反查、缺参澄清、类目确认、任务续查和 Excel 导出。
+description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自然语言需求映射为 seller_sprite_* 场景，处理关键词选品、ABA 数据选品、全球商标库、关联流量、流量词对比、ABA 出单词反查、缺参澄清、类目确认、任务续查和 Excel 导出。
 metadata:
   mcp-version: v1.0.0
 ---
@@ -26,6 +26,7 @@ metadata:
    - `export_format=xls`
    - `keyword-research` 例外：`period` 使用数据月份（`YYYY-MM`），不把 `30d` 当作月份；默认 `page=1/page_size=100`，只获取第一页。
    - `association-traffic` 使用公共默认 `page_size=100`，查询固定使用全部变体，不允许改成当前变体。
+   - `keyword-comparison` 固定使用默认“流量占比”和第一页 100 条；自动选择“用畅销变体拓词”，查询 JSON 后在本地生成动态 XLSX，不调用官网额度型导出。
    - `aba-research` 未提供周期时默认最近完整周；固定 `page=1/size=100` 且只查一次，捕获查询 JSON 后在本地生成官方 19 列 XLSX，不调用官网导出接口。
    - `aba-reverse` 未提供周期时默认选择每周和最近完整周；显式周期仍支持具体周结束日或月份。只支持 `xls` / `xlsx`，由后端原样保存官方 XLSX。
 4. 用户给了明确条件，就原样带入 `params`；不要发明隐藏枚举值或额外筛选。
@@ -38,7 +39,7 @@ metadata:
 11. 已由部署管理员绑定专属账号的 OPS 用户会自动使用该账号，`run` 和 Listing Analysis submit 均不消耗每日额度；未绑定用户继续使用公共账号池和原额度策略。
 12. 专属账号的绑定、改绑和解绑只能由部署管理员在服务端本机执行 `opscli seller-sprite account-binding ...`，MCP 不提供管理工具；Agent 不得向用户索取或输出卖家精灵密码。
 13. 专属账号登录失效时任务直接失败，不会回退公共账号池；不要通过重新提交任务尝试绕过账号异常。
-14. Skill 文档出现新场景不等于当前 MCP 已部署；执行 `keyword-research`、`aba-research`、`association-traffic` 或 `aba-reverse` 前先确认 `seller_sprite_scenarios` 已返回该场景，未暴露时如实说明，不能改投其他场景冒充结果。
+14. Skill 文档出现新场景不等于当前 MCP 已部署；执行 `keyword-research`、`aba-research`、`association-traffic`、`keyword-comparison` 或 `aba-reverse` 前先确认 `seller_sprite_scenarios` 已返回该场景，未暴露时如实说明，不能改投其他场景冒充结果。
 
 ## 链路区分
 
@@ -128,6 +129,7 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - `关键词选品`、`关键词研究`、`高需求低竞争词`、`市场周期筛选`通常对应 `keyword-research`；单一种子词扩词仍用 `keyword-miner`。
 - `ABA 数据选品`、`ABA 关键词趋势`对应 `aba-research`；必须提供父/子 ASIN 或关键词，支持周/月周期、类目 code 多选和搜索结果筛选。不要实现或映射六种推荐模式。
 - `关联流量`、`关联产品`、`查关联 ASIN`通常对应 `association-traffic`；必须提供 1—20 个父体或子体 ASIN，固定使用全部变体查询。
+- `流量词对比`、`竞品关键词对比`、`竞品关键词差距`对应 `keyword-comparison`；必须分别提供 1 个自己的 ASIN 和 1—10 个竞品 ASIN，竞品不得包含自己的 ASIN。
 - `出单词反查`、`ABA 反查`对应 `aba-reverse`；必须提供 1—20 个父体或子体 ASIN 或 Amazon 产品链接。周期可省略，默认使用每周和最近完整周。
 - `查产品` 这类表达可能对应 `competitor-lookup` 或 `product-research`，先让用户确认目的。
 - `看市场/类目` 这类表达可能对应 `market-research` 或 `product-research`，先让用户确认。
@@ -137,6 +139,7 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - `keyword-reverse` 必须有 ASIN。
 - `traffic-source` 必须有关键词或 ASIN。
 - `association-traffic` 必须有 1—20 个合法 ASIN；支持列表、逗号、换行、制表符或从 TXT/Excel 按列复制的文本。
+- `keyword-comparison` 必须有 1 个自己的 ASIN 和 1—10 个竞品 ASIN；支持列表、空格、中英文逗号、换行或制表符，必须保留两类 ASIN 的角色，不得混成一个列表。
 - `aba-research` 必须有父/子 ASIN 或关键词，可用 `q`、`keywordOrAsin`、`keyword` 或 `asin`；类目必须使用页面类目 code，不按自然语言猜 code。
 - `aba-reverse` 必须有 1—20 个 ASIN 或 Amazon 产品链接；周期省略时默认最近完整周，显式周周期使用周结束日，月周期使用 `YYYY-MM`。
 - `product-research`、`market-research` 和 `keyword-research` 虽然没有硬性必填，但用户条件明显不足时，仍应先确认意图，不要把“可空”误当成“随便跑”。
@@ -158,5 +161,6 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - 未绑定专属账号时，`seller_sprite_run` 和 `seller_sprite_listing_analysis_submit` 会消耗次数；已绑定专属账号时不计次，quota 快照返回 `unlimited=true` 且 `limit/remaining/reset_at` 为空。`seller_sprite_scenarios`、`seller_sprite_quota_status`、`seller_sprite_job_status`、`seller_sprite_jobs_status`、`seller_sprite_export` 以及 Listing Analysis 的 `status/result` 不消耗次数。
 - 普通任务等待到期不会取消、标记失败或重新入队；继续保留全部未完成 `job_id`，不得重新提交，也不得调用 `run` 查状态。
 - `aba-research` 固定只取第一页 100 条，`row_count` 是第一页实际返回行数；本地 XLSX 不消耗官网导出次数。
+- `keyword-comparison` 仅返回默认“流量占比”第一页最多 100 条；本地 XLSX 包含动态业务主表和 `ASIN` 辅助表，不包含 `Notes`，不得宣称已取得自然排名、广告排名、转化效果或曝光位置视图。
 - 一般场景 `row_count=0` 时，要明确告诉用户没有查到数据；`aba-reverse` 例外，其官方 XLSX 不做本地解析，`row_count=0` 不代表工作簿为空，应以导出文件为准。
 - 用户后来只说 `继续`、`查结果`、`刚才那个好了没` 时，恢复并查询完整 pending 集合；只有用户明确指定子集时才缩小范围。

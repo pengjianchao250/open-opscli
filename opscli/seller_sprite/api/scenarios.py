@@ -12,6 +12,7 @@ from opscli.seller_sprite.api.payloads import (
     make_association_traffic_payload,
     make_branddb_payload,
     make_competitor_payload,
+    make_keyword_comparison_payload,
     make_keyword_miner_payload,
     make_keyword_research_payload,
     make_keyword_reverse_payload,
@@ -149,6 +150,15 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         endpoint="/v3/api/product-research",
         required_params=(),
         payload_builder=make_product_research_payload,
+    ),
+    "keyword-comparison": SellerSpriteScenario(
+        scenario_id="keyword-comparison",
+        title="流量词对比",
+        endpoint="/v3/api/keyword-comparison/asin",
+        required_params=(),
+        required_any_params=("asin", "ownAsin", "myAsin"),
+        payload_builder=make_keyword_comparison_payload,
+        browser_context_only=True,
     ),
     "keyword-miner": SellerSpriteScenario(
         scenario_id="keyword-miner",

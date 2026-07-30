@@ -843,6 +843,82 @@ def test_manager_returns_only_first_association_traffic_page(monkeypatch, tmp_pa
     assert len(raw["response"]["data"]["pagerDto"]["items"]) == 2
 
 
+def test_manager_exports_first_keyword_comparison_page_with_effective_asins(
+    monkeypatch, tmp_path: Path
+):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "total": 2057,
+                    "items": [
+                        {
+                            "keyword": "phone stand",
+                            "keywordCn": "手机支架",
+                            "competitorList": [
+                                {
+                                    "asin": "B0949DWJCV",
+                                    "trafficPercentage": 0.0686,
+                                    "trafficKeywordTypes": ["PRIMARY"],
+                                }
+                            ],
+                        },
+                        *[
+                            {"keyword": f"keyword-{index}", "competitorList": []}
+                            for index in range(1, 101)
+                        ],
+                    ],
+                },
+            },
+            effective_asin_list=["B0949DWJCV", "B0744DM3Y3"],
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(
+        api_manager_module, "_run_browser_route_request", fake_browser_route_request
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(
+            output_dir=tmp_path,
+            default_mode="browser-route",
+        ),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-comparison",
+                site="US",
+                period="30d",
+                params={
+                    "asin": "B0949DWJCV",
+                    "competitorAsins": "B014INJCT4 B0BRN58CXR",
+                },
+                page_size=20,
+                job_id="job-keyword-comparison",
+                export_format="xlsx",
+            )
+        )
+    )
+
+    assert result.row_count == 100
+    assert len(result.data) == 100
+    assert result.data[-1]["keyword"] == "keyword-99"
+    assert result.export.filename.startswith("CompareKeywords-US-B0949DWJCV-")
+    assert result.export.filename.endswith(".xlsx")
+    assert len(calls) == 1
+    assert calls[0]["payload"]["page"] == 1
+    assert calls[0]["payload"]["size"] == 100
+    assert calls[0]["endpoint"] == "/v3/api/keyword-comparison/asin"
+
+
 def test_manager_returns_only_first_association_page_in_browser_route_mode(monkeypatch, tmp_path: Path):
     calls = []
 

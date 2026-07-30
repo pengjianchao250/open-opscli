@@ -3,6 +3,9 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
+from opscli.seller_sprite.export.keyword_comparison_xlsx import (
+    export_keyword_comparison_to_xlsx,
+)
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
 
 
@@ -56,6 +59,91 @@ def test_keyword_export_writes_unique_words_sheet(tmp_path: Path):
     assert unique_words.cell(row=1, column=1).value == "词语"
     assert unique_words.cell(row=2, column=1).value == "flashlight"
     assert unique_words.cell(row=2, column=2).value == 10
+
+
+def test_keyword_comparison_export_builds_dynamic_business_sheets(tmp_path: Path):
+    output = tmp_path / "CompareKeywords-US-B0949DWJCV.xlsx"
+
+    export_keyword_comparison_to_xlsx(
+        rows=[
+            {
+                "keyword": "phone stand",
+                "keywordCn": "手机支架",
+                "competitors": 3,
+                "searchesRank": 2488,
+                "searches": 201870,
+                "purchases": 8680,
+                "purchaseRate": 0.043,
+                "impressions": 99123,
+                "clicks": 4321,
+                "products": 93795,
+                "supplyDemandRatio": 2.15,
+                "competitorList": [
+                    {
+                        "asin": "B0949DWJCV",
+                        "trafficPercentage": 0.0686,
+                        "trafficKeywordTypes": ["PRIMARY"],
+                    },
+                    {
+                        "asin": "B0744DM3Y3",
+                        "trafficPercentage": 0.00001,
+                        "trafficKeywordTypes": ["PRECISE", "PRECISE_LONG_TAIL"],
+                    },
+                ],
+            }
+        ],
+        output_path=output,
+        site="US",
+        own_asin="B0949DWJCV",
+        asin_list=["B0949DWJCV", "B0744DM3Y3"],
+    )
+
+    workbook = load_workbook(output)
+    assert workbook.sheetnames == [
+        "US-流量占比对比-B0949DWJCVB0744DM3Y3",
+        "ASIN",
+    ]
+    assert "Notes" not in workbook.sheetnames
+    sheet = workbook.active
+    assert [cell.value for cell in sheet[1]] == [
+        "关键词",
+        "关键词翻译",
+        "B0949DWJCV(我的)",
+        "B0949DWJCV流量词类型",
+        "B0744DM3Y3",
+        "B0744DM3Y3流量词类型",
+        "有效竞品数",
+        "ABA排名(周)",
+        "月搜索量",
+        "月购买量",
+        "购买率",
+        "展示量",
+        "点击量",
+        "商品数",
+        "需供比",
+    ]
+    assert sheet["C2"].value == "6.86%"
+    assert sheet["D2"].value == "主要流量词"
+    assert sheet["E2"].value == "<0.01%"
+    assert sheet["F2"].value == "精准流量词、精准长尾词"
+    assert sheet["K2"].value == 0.043
+    assert sheet.freeze_panes is None
+    assert sheet.auto_filter.ref is None
+    assert sheet.sheet_view.showGridLines is False
+    assert sheet.row_dimensions[1].height == 20
+    assert sheet.row_dimensions[2].height == 20
+    assert sheet.column_dimensions["A"].width == 25
+    assert sheet["A1"].fill.fgColor.rgb == "FFE98A00"
+    assert sheet["A1"].font.name == "等线"
+    assert sheet["A1"].font.sz == 10
+    assert sheet.merged_cells.ranges == set()
+    asin_sheet = workbook["ASIN"]
+    assert [asin_sheet.cell(row=index, column=1).value for index in range(1, 5)] == [
+        "asin",
+        "B0949DWJCV(我的)",
+        "B0949DWJCV",
+        "B0744DM3Y3",
+    ]
 
 
 def test_keyword_research_export_matches_required_workbook_contract(tmp_path: Path):

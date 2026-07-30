@@ -957,8 +957,10 @@ class _AssociationLocator:
         self.page.presses.append(key)
 
     async def click(self, **kwargs):
-        """记录按钮点击。"""
+        """记录按钮点击及流量词对比主查询触发次数。"""
         self.page.clicks.append(self.kind)
+        if self.kind == "sell_well" and hasattr(self.page, "main_query_calls"):
+            self.page.main_query_calls += 1
 
     async def get_attribute(self, name):
         """返回按回车次数生成的 ASIN 计数占位符。"""
@@ -1048,6 +1050,60 @@ class _AssociationPageWithPrepareError(_AssociationPage):
         if predicate(response):
             return _AssociationResponseWaiter(self.endpoint, response=response)
         return _AssociationResponseWaiter(self.endpoint)
+
+
+class _KeywordComparisonPrepareResponse:
+    """模拟流量词对比准备接口响应。"""
+
+    url = "https://www.sellersprite.com/v3/api/keyword-comparison/prepare"
+
+    def __init__(self, payload, *, status=200, raw_text=None):
+        self.payload = payload
+        self.status = status
+        self.raw_text = raw_text
+
+    async def text(self):
+        if self.raw_text is not None:
+            return self.raw_text
+        return json.dumps(self.payload, ensure_ascii=False)
+
+
+class _KeywordComparisonPage:
+    """模拟流量词对比页面及畅销变体弹窗。"""
+
+    def __init__(self, endpoint, prepare_payload, *, prepare_status=200, prepare_text=None):
+        self.endpoint = endpoint
+        self.prepare_payload = prepare_payload
+        self.prepare_status = prepare_status
+        self.prepare_text = prepare_text
+        self.fills = []
+        self.clicks = []
+        self.timeout_calls = []
+        self.main_query_calls = 0
+
+    def expect_response(self, predicate, **kwargs):
+        prepare_response = _KeywordComparisonPrepareResponse(
+            self.prepare_payload,
+            status=self.prepare_status,
+            raw_text=self.prepare_text,
+        )
+        if predicate(prepare_response):
+            return _AssociationResponseWaiter(self.endpoint, response=prepare_response)
+        return _AssociationResponseWaiter(self.endpoint)
+
+    def locator(self, selector):
+        if "自己的ASIN" in selector:
+            return _AssociationLocator(self, "own_asin")
+        if "竞品ASIN" in selector:
+            return _AssociationLocator(self, "competitor_asins")
+        if "用畅销变体拓词" in selector:
+            return _AssociationLocator(self, "sell_well")
+        if "立即查询" in selector:
+            return _AssociationLocator(self, "query")
+        return _AssociationLocator(self, "missing")
+
+    async def wait_for_timeout(self, timeout):
+        self.timeout_calls.append(timeout)
 
 
 class _KeywordMinerLocator:
@@ -1374,6 +1430,345 @@ def test_non_keyword_miner_high_frequency_keeps_page_route_path(monkeypatch, tmp
     )
 
     assert route_sections == ["main", "high_frequency"]
+
+
+def test_keyword_comparison_route_payload_only_keeps_page_asin_list():
+    payload = {
+        "asin": "B0949DWJCV",
+        "asinList": ["B014INJCT4"],
+        "station": "US",
+        "page": 1,
+        "size": 100,
+        "desc": True,
+    }
+
+    effective = worker_module._keyword_comparison_route_payload(
+        payload,
+        json.dumps(
+            {
+                "asinList": ["B0949DWJCV", "B0744DM3Y3", "B0BRN58CXR"],
+                "page": 9,
+                "size": 5,
+                "station": "JP",
+                "diamondList": ["SHOULD_NOT_PASS"],
+            }
+        ),
+    )
+
+    assert effective == {
+        **payload,
+        "asinList": ["B0949DWJCV", "B0744DM3Y3", "B0BRN58CXR"],
+        "page": 1,
+        "size": 100,
+    }
+    assert "diamondList" not in effective
+
+
+def test_keyword_comparison_route_sends_effective_asin_list(monkeypatch, tmp_path):
+    """主请求只接受页面生成的畅销变体列表，并同步记录最终顺序。"""
+    endpoint = "/v3/api/keyword-comparison/asin"
+    route_calls = []
+    route_metadata = {}
+
+    class RouteProbe:
+        def __init__(self):
+            self.request = SimpleNamespace(
+                url=f"https://www.sellersprite.com{endpoint}",
+                headers={"content-type": "application/json"},
+                post_data=json.dumps(
+                    {
+                        "asinList": ["B0949DWJCV", "B0744DM3Y3"],
+                        "page": 9,
+                        "size": 5,
+                        "station": "JP",
+                    }
+                ),
+            )
+
+        async def continue_(self, **kwargs):
+            route_calls.append(kwargs)
+
+    class PageProbe:
+        def __init__(self):
+            self.handler = None
+
+        async def route(self, pattern, handler):
+            self.handler = handler
+
+        async def unroute(self, pattern, handler):
+            assert handler is self.handler
+
+        def is_closed(self):
+            return False
+
+    page = PageProbe()
+
+    async def fake_trigger(*args, **kwargs):
+        await page.handler(RouteProbe())
+        return SimpleNamespace(status=200), "page_response"
+
+    async def fake_parse(*args, **kwargs):
+        return {"code": "OK", "data": {"items": []}}
+
+    monkeypatch.setattr(worker_module, "_trigger_request", fake_trigger)
+    monkeypatch.setattr(worker_module, "_parse_response", fake_parse)
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+    )
+    payload = {
+        "asin": "B0949DWJCV",
+        "asinList": ["B014INJCT4"],
+        "station": "US",
+        "page": 1,
+        "size": 100,
+        "desc": True,
+    }
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-comparison",
+        method="POST",
+        endpoint=endpoint,
+        payload=payload,
+        referer="https://www.sellersprite.com/v3/keyword-comparison",
+        account=worker.account,
+        root_dir=tmp_path,
+    )
+
+    result = _run(
+        worker._execute_route_fetch(
+            page=page,
+            method="POST",
+            endpoint=endpoint,
+            payload=payload,
+            root_dir=tmp_path,
+            section="main",
+            request=request,
+            route_metadata=route_metadata,
+        )
+    )
+
+    sent_body = json.loads(route_calls[0]["post_data"])
+    assert result == {"code": "OK", "data": {"items": []}}
+    assert sent_body == {
+        **payload,
+        "asinList": ["B0949DWJCV", "B0744DM3Y3"],
+        "page": 1,
+        "size": 100,
+    }
+    assert route_metadata == {"asinList": ["B0949DWJCV", "B0744DM3Y3"]}
+
+
+def test_keyword_comparison_retry_does_not_reuse_failed_asin_list(monkeypatch, tmp_path):
+    """重试成功但未捕获最终列表时，不得沿用失败尝试的 ASIN 顺序。"""
+    account = SellerSpriteAccount(
+        name="default", username="user@example.com", password="secret"
+    )
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=account,
+    )
+    page = SimpleNamespace(
+        url="https://www.sellersprite.com/v3/keyword-comparison",
+        is_closed=lambda: False,
+    )
+    calls = []
+
+    async def no_wait(*args, **kwargs):
+        return None
+
+    async def ensure_page(current_account):
+        return page
+
+    async def open_referer(current_page, request, **kwargs):
+        return {"logged_in": True}
+
+    async def execute_route_fetch(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            kwargs["route_metadata"]["asinList"] = [
+                "B0949DWJCV",
+                "B0744DM3Y3",
+            ]
+            raise SellerSpriteApiError(
+                "登录态失效",
+                status_code=401,
+                api_code="ERR_GLOBAL_SESSION_EXPIRED",
+            )
+        return {"code": "OK", "data": {"items": []}}
+
+    monkeypatch.setattr(worker, "_wait_for_cooldown", no_wait)
+    monkeypatch.setattr(worker, "_wait_for_rate_limit", no_wait)
+    monkeypatch.setattr(worker, "_ensure_page", ensure_page)
+    monkeypatch.setattr(worker, "_open_referer_and_login", open_referer)
+    monkeypatch.setattr(worker, "_handle_robot_captcha_if_enabled", no_wait)
+    monkeypatch.setattr(worker, "_login_with_account", no_wait)
+    monkeypatch.setattr(worker, "_execute_route_fetch", execute_route_fetch)
+    monkeypatch.setattr(worker_module, "_prepare_page", no_wait)
+
+    result = _run(
+        worker._run_one(
+            worker_module.BrowserRouteRequest(
+                scenario="keyword-comparison",
+                method="POST",
+                endpoint="/v3/api/keyword-comparison/asin",
+                payload={
+                    "asin": "B0949DWJCV",
+                    "asinList": ["B0744DM3Y3"],
+                    "page": 1,
+                    "size": 100,
+                },
+                referer=page.url,
+                account=account,
+                root_dir=tmp_path,
+            )
+        )
+    )
+
+    assert len(calls) == 2
+    assert result.effective_asin_list is None
+
+
+@pytest.mark.parametrize("post_data", [None, "not-json", "{}", '{"asinList": []}'])
+def test_keyword_comparison_route_payload_rejects_invalid_page_body(post_data):
+    with pytest.raises(SellerSpriteApiError, match="流量词对比"):
+        worker_module._keyword_comparison_route_payload(
+            {"asin": "B0949DWJCV", "page": 1, "size": 100},
+            post_data,
+        )
+
+
+def test_keyword_comparison_route_selects_sell_well_variant(tmp_path):
+    endpoint = "/v3/api/keyword-comparison/asin"
+    page = _KeywordComparisonPage(
+        endpoint,
+        {
+            "code": "OK",
+            "success": True,
+            "data": {
+                "diamondList": ["B0949DWJCV", "B0744DM3Y3", "B0BRN58CXR"]
+            },
+        },
+    )
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-comparison",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asin": "B0949DWJCV",
+            "asinList": ["B014INJCT4", "B0BRN58CXR"],
+            "page": 1,
+            "size": 100,
+        },
+        referer="https://www.sellersprite.com/v3/keyword-comparison",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "page_response"
+    assert page.fills == ["B0949DWJCV", "B014INJCT4 B0BRN58CXR"]
+    assert page.clicks == ["query", "sell_well"]
+
+
+@pytest.mark.parametrize(
+    ("prepare_payload", "page_kwargs", "api_code", "status_code"),
+    [
+        (
+            {"code": "ERR_GLOBAL_500", "message": "处理请求出现错误,请稍后重试。"},
+            {},
+            "ERR_GLOBAL_500",
+            200,
+        ),
+        (
+            {"code": "OK", "success": False, "message": "ASIN 无效", "data": None},
+            {},
+            "ERR_KEYWORD_COMPARISON_PREPARE",
+            200,
+        ),
+        (
+            {"code": "OK", "data": {"diamondList": ["B0949DWJCV"]}},
+            {},
+            "ERR_KEYWORD_COMPARISON_PREPARE",
+            200,
+        ),
+        (
+            {"success": True, "data": {"diamondList": ["B0949DWJCV"]}},
+            {},
+            "ERR_KEYWORD_COMPARISON_PREPARE",
+            200,
+        ),
+        (
+            {"code": "OK", "success": True, "data": {}},
+            {},
+            "ERR_KEYWORD_COMPARISON_PREPARE_DATA",
+            200,
+        ),
+        (
+            {"code": "OK", "success": True, "data": {"diamondList": ["B0949DWJCV"]}},
+            {"prepare_status": 500},
+            None,
+            500,
+        ),
+        (
+            {},
+            {"prepare_text": "not-json"},
+            None,
+            200,
+        ),
+    ],
+)
+def test_keyword_comparison_prepare_error_stops_before_dialog(
+    tmp_path, prepare_payload, page_kwargs, api_code, status_code
+):
+    endpoint = "/v3/api/keyword-comparison/asin"
+    page = _KeywordComparisonPage(endpoint, prepare_payload, **page_kwargs)
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-comparison",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asin": "B0949DWJCV",
+            "asinList": ["B0744DM3Y3"],
+            "page": 1,
+            "size": 100,
+        },
+        referer="https://www.sellersprite.com/v3/keyword-comparison",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker_module._trigger_request(
+                page,
+                endpoint=endpoint,
+                method="POST",
+                payload=request.payload,
+                request=request,
+            )
+        )
+
+    assert exc_info.value.api_code == api_code
+    assert exc_info.value.status_code == status_code
+    assert page.clicks == ["query"]
+    assert page.timeout_calls == []
+    assert page.main_query_calls == 0
 
 
 def test_association_traffic_route_fills_asins_and_selects_all_variants(tmp_path):

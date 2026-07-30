@@ -580,6 +580,74 @@ def make_association_traffic_payload(input_data: dict[str, Any]) -> dict[str, An
     }
 
 
+def make_keyword_comparison_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造流量词对比默认流量占比查询 payload。
+
+    参数：
+        input_data: 站点、自己的 ASIN 和竞品 ASIN 等场景参数。
+
+    返回：
+        固定第一页 100 条的流量占比主列表请求体。
+
+    异常：
+        SellerSpriteConfigError: ASIN 数量、格式、角色或保留字段不合法时抛出。
+    """
+    own_asins = split_association_traffic_asins(
+        input_data.get("ownAsin")
+        or input_data.get("myAsin")
+        or input_data.get("asin")
+    )
+    if not own_asins:
+        raise SellerSpriteConfigError("keyword-comparison 必须输入自己的 ASIN")
+    if len(own_asins) != 1:
+        raise SellerSpriteConfigError("keyword-comparison 自己的 ASIN 只能输入 1 个")
+    own_asin = own_asins[0]
+    if not re.fullmatch(r"[A-Z0-9]{10}", own_asin):
+        raise SellerSpriteConfigError(
+            f"keyword-comparison 自己的 ASIN 格式无效：{own_asin}"
+        )
+
+    competitor_asins = split_association_traffic_asins(
+        input_data.get("competitorAsins")
+        or input_data.get("competitorAsin")
+        or input_data.get("asins")
+    )
+    if not competitor_asins:
+        raise SellerSpriteConfigError("keyword-comparison 至少需要 1 个竞品 ASIN")
+    if len(competitor_asins) > 10:
+        raise SellerSpriteConfigError("keyword-comparison 最多支持 10 个竞品 ASIN")
+    invalid_asins = [
+        asin
+        for asin in competitor_asins
+        if not re.fullmatch(r"[A-Z0-9]{10}", asin)
+    ]
+    if invalid_asins:
+        raise SellerSpriteConfigError(
+            f"keyword-comparison 竞品 ASIN 格式无效：{', '.join(invalid_asins)}"
+        )
+    if own_asin in competitor_asins:
+        raise SellerSpriteConfigError(
+            "keyword-comparison 竞品 ASIN 不得包含自己的 ASIN"
+        )
+    if input_data.get("diamondList") is not None:
+        raise SellerSpriteConfigError(
+            "keyword-comparison diamondList 由官网页面生成，不允许手动传入"
+        )
+
+    # 官网主列表不接收 type；畅销变体列表由页面 prepare 流程动态替换 asinList。
+    return {
+        "page": 1,
+        "size": 100,
+        "exactly": False,
+        "orderColumn": 22,
+        "desc": True,
+        "asin": own_asin,
+        "asinList": competitor_asins,
+        "station": _market(input_data, default="US"),
+        "sortAsin": "",
+    }
+
+
 def make_branddb_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造全球商标库官方 Excel 导出 payload。
 
@@ -957,6 +1025,8 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
         return "https://www.sellersprite.com/v3/keyword-miner/"
     if scenario == "keyword-research":
         return f"https://www.sellersprite.com/v2/keyword-research?{urlencode(_flatten_query(payload))}"
+    if scenario == "keyword-comparison":
+        return "https://www.sellersprite.com/v3/keyword-comparison"
     if scenario == "aba-research":
         return "https://www.sellersprite.com/v3/aba-research"
     if scenario == "branddb":

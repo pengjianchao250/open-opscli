@@ -1,0 +1,40 @@
+{
+  "scenario_id": "keyword-comparison",
+  "site": "US",
+  "input": {
+    "ownAsin": "B0949DWJCV",
+    "competitorAsins": [
+      "B0744DM3Y3",
+      "B0BRN58CXR"
+    ]
+  },
+  "interaction": {
+    "prepare": {
+      "method": "POST",
+      "endpoint": "/v3/api/keyword-comparison/prepare",
+      "request_body_omitted": true,
+      "note": "准备请求由官网页面提交；运行时校验响应后自动选择用畅销变体拓词。"
+    },
+    "query": {
+      "method": "POST",
+      "endpoint": "/v3/api/keyword-comparison/asin",
+      "body": {
+        "page": 1,
+        "size": 100,
+        "exactly": false,
+        "orderColumn": 22,
+        "desc": true,
+        "asin": "B0949DWJCV",
+        "asinList": [
+          "B0949DWJCV",
+          "B0744DM3Y3",
+          "B0BRN58CXR"
+        ],
+        "station": "US",
+        "sortAsin": ""
+      },
+      "note": "asinList 由页面根据 prepare 结果生成；路由只接受该动态字段，分页、站点和排序保持后端固定值。"
+    }
+  },
+  "sanitized": true
+}

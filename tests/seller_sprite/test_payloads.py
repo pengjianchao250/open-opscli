@@ -10,6 +10,7 @@ from opscli.seller_sprite.api.payloads import (
     make_association_traffic_payload,
     make_branddb_payload,
     make_competitor_payload,
+    make_keyword_comparison_payload,
     make_keyword_miner_payload,
     make_keyword_research_payload,
     make_keyword_reverse_payload,
@@ -175,6 +176,75 @@ def test_competitor_payload_accepts_singular_node_id_path():
     )
 
     assert payload["nodeIdPaths"] == ["3375251:3386071:375519011:375540011"]
+
+
+def test_keyword_comparison_payload_normalizes_inputs_and_forces_first_page():
+    scenario = get_scenario("keyword-comparison")
+
+    payload = scenario.build_payload(
+        params={
+            "asin": "b0949dwjcv",
+            "competitorAsins": "b0744dm3y3， B0BRN58CXR\nB0744DM3Y3",
+            "page": 8,
+            "size": 20,
+        },
+        site="US",
+        period="30d",
+        page_size=20,
+    )
+
+    assert scenario.endpoint == "/v3/api/keyword-comparison/asin"
+    assert scenario.method == "POST"
+    assert scenario.browser_context_only is True
+    assert payload == {
+        "page": 1,
+        "size": 100,
+        "exactly": False,
+        "orderColumn": 22,
+        "desc": True,
+        "asin": "B0949DWJCV",
+        "asinList": ["B0744DM3Y3", "B0BRN58CXR"],
+        "station": "US",
+        "sortAsin": "",
+    }
+    assert scenario.build_referer(payload) == (
+        "https://www.sellersprite.com/v3/keyword-comparison"
+    )
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"asin": "", "competitorAsins": "B0744DM3Y3"}, "自己的 ASIN"),
+        (
+            {"asin": "B0949DWJCV B0744DM3Y3", "competitorAsins": "B0BRN58CXR"},
+            "自己的 ASIN 只能输入 1 个",
+        ),
+        ({"asin": "B0949DWJCV", "competitorAsins": ""}, "至少需要 1 个竞品 ASIN"),
+        (
+            {
+                "asin": "B0949DWJCV",
+                "competitorAsins": [f"B0000000{i:02d}" for i in range(11)],
+            },
+            "最多支持 10 个竞品 ASIN",
+        ),
+        (
+            {"asin": "B0949DWJCV", "competitorAsins": "B0949DWJCV"},
+            "不得包含自己的 ASIN",
+        ),
+        (
+            {"asin": "INVALID", "competitorAsins": "B0744DM3Y3"},
+            "自己的 ASIN 格式无效",
+        ),
+        (
+            {"asin": "B0949DWJCV", "competitorAsins": "INVALID"},
+            "竞品 ASIN 格式无效",
+        ),
+    ],
+)
+def test_keyword_comparison_payload_rejects_invalid_asins(params, message):
+    with pytest.raises(SellerSpriteConfigError, match=message):
+        make_keyword_comparison_payload({"site": "US", **params})
 
 
 def test_keyword_miner_payload_maps_root_word_and_amazon_choice():

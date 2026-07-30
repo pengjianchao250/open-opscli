@@ -43,7 +43,10 @@ def _route_credential_test_seams(monkeypatch):
 
 class DummyManager:
     def scenarios(self):
-        return [{"scenario_id": "keyword-reverse", "title": "关键词反查"}]
+        return [
+            {"scenario_id": "keyword-reverse", "title": "关键词反查"},
+            {"scenario_id": "keyword-comparison", "title": "流量词对比"},
+        ]
 
 
 class DummyScheduler:
@@ -260,6 +263,10 @@ def test_seller_sprite_scenarios_uses_manager(monkeypatch):
 
     assert result["success"] is True
     assert result["data"][0]["scenario_id"] == "keyword-reverse"
+    assert {item["scenario_id"] for item in result["data"]} >= {
+        "keyword-reverse",
+        "keyword-comparison",
+    }
 
 
 def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
@@ -274,6 +281,12 @@ def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
     assert "不生成官网 `Notes` 页及二维码图片" in result["data"]["spec"]
     assert "`association-traffic` 关联流量" in result["data"]["spec"]
     assert "本地工作簿只生成业务主表，不生成官网导出中的 `Notes` 页" in result["data"]["spec"]
+    assert "`keyword-comparison` 流量词对比" in result["data"]["spec"]
+    assert "必填 1—10 个" in result["data"]["spec"]
+    assert "固定 `page=1`、`size=100`" in result["data"]["spec"]
+    assert "自动点击“用畅销变体拓词”" in result["data"]["spec"]
+    assert "动态业务主表和 `ASIN` 辅助表" in result["data"]["spec"]
+    assert "不调用官网额度型导出" in result["data"]["spec"]
     assert "`aba-reverse` 出单词反查" in result["data"]["spec"]
     assert "官方 XLSX 原样保存" in result["data"]["spec"]
 

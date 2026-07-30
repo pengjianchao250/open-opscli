@@ -1,0 +1,30 @@
+{
+  "dynamic": true,
+  "sample_final_asin_order": [
+    "B0949DWJCV",
+    "B0744DM3Y3",
+    "B0BRN58CXR"
+  ],
+  "main_headers": [
+    "关键词",
+    "关键词翻译",
+    "B0949DWJCV(我的)",
+    "B0949DWJCV流量词类型",
+    "B0744DM3Y3",
+    "B0744DM3Y3流量词类型",
+    "B0BRN58CXR",
+    "B0BRN58CXR流量词类型",
+    "有效竞品数",
+    "ABA排名(周)",
+    "月搜索量",
+    "月购买量",
+    "购买率",
+    "展示量",
+    "点击量",
+    "商品数",
+    "需供比"
+  ],
+  "header_formula": "2 + 2 * final_asin_count + 9",
+  "dynamic_value_source": "data.items[].competitorList[]",
+  "asin_sheet_headers": ["asin"]
+}

@@ -32,6 +32,9 @@ from opscli.seller_sprite.domain.models import (
     SellerSpriteScenarioRequest,
     SellerSpriteScenarioResult,
 )
+from opscli.seller_sprite.export.keyword_comparison_xlsx import (
+    export_keyword_comparison_to_xlsx,
+)
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
 from opscli.seller_sprite.services.task_status import (
     base_status,
@@ -195,6 +198,7 @@ class SellerSpriteApiManager:
             )
         account = self.account_provider.get_default()
         warnings: list[dict[str, Any]] = []
+        effective_asin_list: list[str] | None = None
         mode = _resolve_request_mode(request.mode or self.settings.default_mode)
         if scenario.browser_context_only and mode != "browser-route":
             raise SellerSpriteConfigError(f"{request.scenario} 仅支持 browser-route 模式")
@@ -293,6 +297,7 @@ class SellerSpriteApiManager:
                 login = browser_result.login
                 main_response = browser_result.response
                 high_frequency_response = browser_result.high_frequency_response
+                effective_asin_list = browser_result.effective_asin_list
                 warnings.extend(browser_result.warnings)
             else:
                 self._emit_progress("requesting")
@@ -379,24 +384,45 @@ class SellerSpriteApiManager:
 
         self._emit_progress("processing")
         rows = _extract_items(main_response, scenario=request.scenario)
+        if request.scenario == "keyword-comparison":
+            # 即使上游异常返回超过分页大小，也只导出首期约定的第一页 100 条。
+            rows = rows[:100]
         high_frequency_rows = _extract_high_frequency_rows(high_frequency_response)
         self._emit_progress("exporting")
         if scenario.method in {"GET_XLSX", "POST_XLSX"}:
             export = _official_xlsx_export(main_response, root_dir=root_dir)
         elif export_format == "xlsx":
-            export = export_rows_to_xlsx(
-                rows=rows,
-                output_path=(
-                    _aba_research_output_path(root_dir, site=site, payload=payload)
-                    if request.scenario == "aba-research"
-                    else _export_output_path(root_dir, job_id, "xlsx")
-                ),
-                scenario=request.scenario,
-                site=site,
-                period=period,
-                params=request.params,
-                high_frequency_rows=high_frequency_rows,
-            )
+            if request.scenario == "keyword-comparison":
+                if not effective_asin_list:
+                    raise SellerSpriteApiError(
+                        "卖家精灵流量词对比缺少最终畅销变体顺序",
+                        api_code="ERR_KEYWORD_COMPARISON_ASIN_LIST_MISSING",
+                    )
+                export = export_keyword_comparison_to_xlsx(
+                    rows=rows,
+                    output_path=_keyword_comparison_output_path(
+                        root_dir,
+                        site=site,
+                        own_asin=str(payload.get("asin") or ""),
+                    ),
+                    site=site,
+                    own_asin=str(payload.get("asin") or ""),
+                    asin_list=effective_asin_list,
+                )
+            else:
+                export = export_rows_to_xlsx(
+                    rows=rows,
+                    output_path=(
+                        _aba_research_output_path(root_dir, site=site, payload=payload)
+                        if request.scenario == "aba-research"
+                        else _export_output_path(root_dir, job_id, "xlsx")
+                    ),
+                    scenario=request.scenario,
+                    site=site,
+                    period=period,
+                    params=request.params,
+                    high_frequency_rows=high_frequency_rows,
+                )
         else:
             export = _export_rows_to_json(
                 output_path=_export_output_path(root_dir, job_id, "json"),
@@ -925,6 +951,7 @@ def _scenario_label(scenario: str) -> str:
     labels = {
         "competitor-lookup": "CompetitorLookup",
         "product-research": "ProductResearch",
+        "keyword-comparison": "CompareKeywords",
         "keyword-miner": "KeywordMiner",
         "keyword-research": "KeywordResearch",
         "aba-research": "ABAResearch",
@@ -951,8 +978,10 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
         return _sanitize_filename_part(
             params.get("asin") or first_value(params.get("asins"))
         )
-    if scenario == "listing-analysis":
-        return _sanitize_filename_part(params.get("asin"))
+    if scenario in {"listing-analysis", "keyword-comparison"}:
+        return _sanitize_filename_part(
+            params.get("ownAsin") or params.get("myAsin") or params.get("asin")
+        )
     if scenario == "keyword-miner":
         return _sanitize_filename_part(params.get("keyword"))
     if scenario in {"keyword-research", "aba-research"}:
@@ -1074,6 +1103,23 @@ def _safe_official_filename(value: Any) -> str:
     if not filename.lower().endswith(".xlsx"):
         filename = f"{filename}.xlsx"
     return filename
+
+
+def _keyword_comparison_output_path(
+    root_dir: Path,
+    *,
+    site: str,
+    own_asin: str,
+) -> Path:
+    """生成流量词对比官方语义文件名。"""
+    timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
+    filename = (
+        f"CompareKeywords-{site.upper()}-"
+        f"{_sanitize_filename_part(own_asin)}-{timestamp}.xlsx"
+    )
+    if len(str(root_dir / filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+        filename = "CompareKeywords.xlsx"
+    return root_dir / filename
 
 
 def _aba_research_output_path(
