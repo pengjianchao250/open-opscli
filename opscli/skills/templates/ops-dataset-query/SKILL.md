@@ -8,7 +8,7 @@ description: >
   规划器按 30 秒命令窗口设计，返回 refresh_in_progress 时按其 recovery_command
   等待重跑即可，禁止自行升级）；禁止绕过规划器直接扫描 data/ 目录、
   读脚本源码或凭记忆手拼查询参数。
-version: 1.3.15
+version: 1.3.16
 ---
 
 # ops-dataset-query
@@ -74,6 +74,12 @@ python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"
    `query_plan.py` + `run_query.py` 仅保留给维护者复现与审计，不是 Agent 正常路径。执行器会校验规划摘要、状态、tableId、授权字段、模板及时间范围。正式查询偶尔较慢（排序兜底还可能放大窗口重查一次），命令窗口超时不是失败：**原样重跑一次**即可。流程返回 `precheck_failed` 时按 `next_action_zh` 重新运行规划器，禁止编辑 plan 或绕过执行器直连；`disclosures.order_fallback` 存在时必须披露本地兜底。MCP-only 用正式 `query_simple`。
 6. `query_mode=chart_uuid` 时原样执行 `execution_ref.query_command`。`chart_action=run` 必须遍历所有 `queries`，保留服务端小计/总计并按 `_query_index` 区分来源；大结果按 `references/chart-excel-guide.md` 使用 `--save-result` 或 `--result-file` 落盘，随后补一次 `evidence_contract.py`。
 7. 保留用户要求的明细和全量范围。限制展示时声明排序、截断数量和总行数（执行器 `disclosures` 已给出），不把局部结果说成全量。
+8. **预览只是抽样，行数口径以 `disclosures` 为准**：`preview_rows` 只展示前若干行，完整结果写在 `disclosures.full_result_file`。判断口径按下面三个字段，**不要**用预览行数下结论：
+   - `row_count_returned` = 本次实际拿到的行数，`total_count` = 服务端报的总行数；结论里的"共 N 条"必须用 `row_count_returned`，并在两者不等时说明。
+   - `truncated=true` 表示拿到的是**部分结果**，必须如实声明，禁止说成全量。
+   - 出现 `server_paging` 时按 `server_paging_disclosure_zh` 披露：服务端不带 `limit` 时只回默认页，执行器已自动重查补齐；补齐失败（`auto_complete_applied=false`）时结论必须声明这是部分结果。
+
+   需要逐行数据时直接读 `full_result_file`（该文件含补齐后的 `rows_after_auto_complete`）；`full_result_file` 为 null 时看 `full_result_file_error`。**禁止**为了凑齐剩余行而改写请求重查、分批排除已见值、或绕过执行器手拼 payload 直连 `opscli query simple`——那样既浪费调用预算，又丢掉执行器的授权字段校验。
 
 ## 结果分析
 
@@ -95,6 +101,35 @@ MCP-only（无本地 shell）、复杂审计或用户明确要求完整披露证
 查询返回「未登录，请运行: opscli auth login」时：沙箱/托管环境的 opscli 凭证由平台自动注入，**禁止执行交互式 `opscli auth login`**（无人环境的 Device Flow 永远无法完成，只会空耗时间）。正确处置：等待约 1 分钟后原样重试同一查询一次；仍未登录则停止取数，向用户如实说明环境凭证异常，并按 `references/feedback-guide.md` 提交一次反馈。
 
 仅发生意外 opscli/MCP 失败时读取 `references/feedback-guide.md` 并立即提交一次去重的结构化反馈；成功查询不自动提交反馈。
+
+## 规划器不可用时的降级路径
+
+规划器返回非 `planned`（`clarify_required` / `blocked`）时**不要自行编造数据集或字段**，按下面的层级走。合同里的 `model_view.fallback_level`、`model_view.no_guess_policy_zh` 与 `execution_ref.fallback_catalog` 会指明当前处在哪一层。
+
+| 层级 | 判断依据 | 动作 |
+| --- | --- | --- |
+| L1 | `execution_ref.fallback_catalog` 有 dimensions/metrics | 只用该目录里的 `table_id`、`dataset_alias`、`field_name` 构造查询；澄清点按 `clarification_messages_zh` 向用户提问 |
+| L2 | 目录为空或选表失败 | 跑 `python3 scripts/local_fallback.py "<用户原文>"` 拿本地候选，按其 `next_action_zh` 处置 |
+| L3 | `data_state` 为 `placeholder`/`empty`，或目录不存在 | 执行返回的 `recovery_command` 刷新元数据后重跑；**此前不得构造任何查询** |
+| L4 | 上述都失败 | 停止取数，如实告知用户，按 `references/feedback-guide.md` 提交一次反馈 |
+
+降级态下前述「禁止本地探索」的限制放宽为：**允许**读 `data/*.csv`、`data/dataset_profiles.json` 与运行 `scripts/local_fallback.py`；仍然**禁止** `rg`/`ls`/`find`、读脚本源码、生成临时查询脚本。降级路径额外预算 3 次工具调用。
+
+`local_fallback.py` 常用形态：
+
+```bash
+python3 scripts/local_fallback.py "<用户原文>"                                  # 出候选
+python3 scripts/local_fallback.py "<用户原文>" --field 渠道 --field ASIN         # 带点名字段
+python3 scripts/local_fallback.py "<用户原文>" --dataset <alias> --emit-plan /tmp/fb-plan.json
+```
+
+拿到候选后：
+
+1. `status=clarify_required` → 用 `AskUserQuestion` 让用户在候选里选，**不要默认取第一个**
+2. `status=ready` → 优先带 `--emit-plan` 产出 plan，再走 `python3 scripts/run_query.py --plan-file <plan> --json '<payload>'`。走执行器能保留字段校验闸：payload 里出现目录之外的字段会被直接拒绝。确有必要时才直连 `opscli query simple`，但那样就失去这道校验
+3. 候选里的 `hard_constraints` / `avoid_when` 必须遵守（如库存快照字段只能用于明细表），`clarify_when` 命中时先问用户
+4. 候选里的 `uncertified_hints_zh` 是**未经人工审核的业务约束提示**（当前多数画像 `certified=false`，其业务约束都落在这个键里而不是 `hard_constraints`）。处置方式与 `hard_constraints` 不同：**必须先向用户复述该条提示并确认，再决定是否套用**，不得当作已确认口径静默应用，也不得因为它不是 `hard_constraints` 就忽略——被降级的往往正是防错数的护栏（如「总库存、海外仓库存属于库存快照字段，只能用于明细表或无聚合过滤条件」「必须选择报告周期」）
+5. `filter_components` 中字段的筛选值，必须先查 `component_dataset_alias` 组件表枚举当前账号授权原值，完整等值命中后才写入 `filters`；枚举不到就停止，**不得放大为全范围查询**
 
 ## 按需参考
 

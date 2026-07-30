@@ -1,4 +1,6 @@
 import asyncio
+import json
+from pathlib import Path
 from types import SimpleNamespace
 import subprocess
 
@@ -10,6 +12,9 @@ from opscli.seller_sprite.browser_route import worker as worker_module
 from opscli.seller_sprite.browser_route.worker import SellerSpriteBrowserRouteWorker
 from opscli.seller_sprite.config import (
     DEFAULT_BROWSER_RUNTIME,
+    DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
+    DEFAULT_TASK_HEARTBEAT_SECONDS,
+    DEFAULT_TASK_LEASE_SECONDS,
     DEFAULT_TASK_TIMEOUT_SECONDS,
     SellerSpriteSettings,
     load_settings,
@@ -634,6 +639,106 @@ def test_record_timing_keeps_diagnostic_data_without_warning_log(caplog, tmp_pat
     assert "卖家精灵 browser-route 耗时" not in caplog.text
 
 
+def test_route_fetch_keeps_success_when_page_closes_during_unroute(monkeypatch, tmp_path):
+    """主请求成功后页面关闭时，unroute 清理不得覆盖成功结果。"""
+
+    class TargetClosedError(Exception):
+        """模拟 Playwright/Patchright 目标关闭异常。"""
+
+    class ClosingPage:
+        async def route(self, pattern, handler):
+            return None
+
+        def is_closed(self):
+            return False
+
+        async def unroute(self, pattern, handler):
+            raise TargetClosedError(
+                "Page.unroute: Target page, context or browser has been closed"
+            )
+
+    async def fake_trigger(*args, **kwargs):
+        return SimpleNamespace(status=200), "page_response"
+
+    async def fake_parse(*args, **kwargs):
+        return {"code": "OK", "data": {"items": []}}
+
+    monkeypatch.setattr(worker_module, "_trigger_request", fake_trigger)
+    monkeypatch.setattr(worker_module, "_parse_response", fake_parse)
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=SellerSpriteAccount(
+            name="default",
+            username="user@example.com",
+            password="secret",
+        ),
+    )
+
+    result = _run(
+        worker._execute_route_fetch(
+            page=ClosingPage(),
+            method="POST",
+            endpoint="/v3/api/keyword/reverse",
+            payload={"asin": "B0TEST"},
+            root_dir=tmp_path,
+            section="main",
+        )
+    )
+
+    assert result == {"code": "OK", "data": {"items": []}}
+
+
+def test_route_fetch_keeps_primary_error_when_page_closes_during_unroute(
+    monkeypatch, tmp_path
+):
+    """主请求失败且页面关闭时，unroute 清理不得覆盖主异常。"""
+
+    class TargetClosedError(Exception):
+        """模拟 Playwright/Patchright 目标关闭异常。"""
+
+    class ClosingPage:
+        async def route(self, pattern, handler):
+            return None
+
+        def is_closed(self):
+            return False
+
+        async def unroute(self, pattern, handler):
+            raise TargetClosedError(
+                "Page.unroute: Target page, context or browser has been closed"
+            )
+
+    async def fail_trigger(*args, **kwargs):
+        raise SellerSpriteApiError(
+            "卖家精灵主请求失败",
+            api_code="ERR_BROWSER_FETCH_FAILED",
+        )
+
+    monkeypatch.setattr(worker_module, "_trigger_request", fail_trigger)
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=SellerSpriteAccount(
+            name="default",
+            username="user@example.com",
+            password="secret",
+        ),
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker._execute_route_fetch(
+                page=ClosingPage(),
+                method="POST",
+                endpoint="/v3/api/keyword/reverse",
+                payload={"asin": "B0TEST"},
+                root_dir=tmp_path,
+                section="main",
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_BROWSER_FETCH_FAILED"
+
+
 class FakePage:
     def __init__(self, *, url="", logged_in=False):
         self.url = url
@@ -754,9 +859,14 @@ class FakeCaptchaPage:
 class FakeContextRequest:
     def __init__(self):
         self.post_calls = []
+        self.get_calls = []
 
     async def post(self, url, **kwargs):
         self.post_calls.append({"url": url, "kwargs": kwargs})
+        return SimpleNamespace(status=200)
+
+    async def get(self, url, **kwargs):
+        self.get_calls.append({"url": url, "kwargs": kwargs})
         return SimpleNamespace(status=200)
 
 
@@ -800,6 +910,534 @@ class FakeListingPage:
         return FakeListingLocator(self, "submit")
 
 
+class _AssociationResponseWaiter:
+    """模拟 Playwright 的响应等待上下文。"""
+
+    def __init__(self, endpoint, response=None):
+        self.value = asyncio.get_running_loop().create_future()
+        self.value.set_result(
+            response
+            or SimpleNamespace(
+                url=f"https://www.sellersprite.com{endpoint}",
+                status=200,
+            )
+        )
+
+    async def __aenter__(self):
+        """进入响应等待上下文并返回自身。"""
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        """退出响应等待上下文，不吞掉测试异常。"""
+        return False
+
+
+class _AssociationLocator:
+    """记录关联流量页面输入、回车和按钮点击。"""
+
+    def __init__(self, page, kind):
+        self.page = page
+        self.kind = kind
+        self.first = self
+
+    async def count(self):
+        """返回当前测试 locator 是否存在。"""
+        return int(self.kind != "missing")
+
+    async def is_visible(self, **kwargs):
+        """返回当前测试 locator 是否可见。"""
+        return self.kind != "missing"
+
+    async def fill(self, value):
+        """记录输入框填充值。"""
+        self.page.fills.append(value)
+
+    async def press(self, key, **kwargs):
+        """记录输入框按键。"""
+        self.page.presses.append(key)
+
+    async def click(self, **kwargs):
+        """记录按钮点击。"""
+        self.page.clicks.append(self.kind)
+
+    async def get_attribute(self, name):
+        """返回按回车次数生成的 ASIN 计数占位符。"""
+        if self.kind == "asin" and name == "placeholder":
+            return f"已录入{len(self.page.presses)}/20个ASIN"
+        return None
+
+
+class _AssociationSuccessResponse:
+    """模拟关联流量准备接口成功响应。"""
+
+    url = "https://www.sellersprite.com/v3/api/relation/traffic/prepare"
+    status = 200
+
+    async def text(self):
+        """返回准备接口成功 JSON。"""
+        return json.dumps({"code": "OK", "data": {}}, ensure_ascii=False)
+
+
+class _AssociationPage:
+    """模拟关联流量查询入口页。"""
+
+    def __init__(self, endpoint):
+        self.endpoint = endpoint
+        self.fills = []
+        self.presses = []
+        self.clicks = []
+        self.timeout_calls = []
+
+    def expect_response(self, predicate, **kwargs):
+        """按监听路径返回准备接口或主接口响应。"""
+        prepare_response = _AssociationSuccessResponse()
+        if predicate(prepare_response):
+            return _AssociationResponseWaiter(self.endpoint, response=prepare_response)
+        return _AssociationResponseWaiter(self.endpoint)
+
+    def locator(self, selector):
+        """按页面选择器返回对应的测试 locator。"""
+        if "input" in selector and "ASIN" in selector:
+            return _AssociationLocator(self, "asin")
+        if "清除" in selector:
+            return _AssociationLocator(self, "clear")
+        if "用全部变体查询" in selector:
+            return _AssociationLocator(self, "all_variants")
+        if "立即查询" in selector:
+            return _AssociationLocator(self, "query")
+        return _AssociationLocator(self, "missing")
+
+    async def wait_for_timeout(self, timeout):
+        """记录页面等待时间。"""
+        self.timeout_calls.append(timeout)
+
+
+class _AssociationPrepareErrorResponse:
+    """模拟关联流量准备接口返回业务错误。"""
+
+    url = "https://www.sellersprite.com/v3/api/relation/traffic/prepare"
+    status = 200
+
+    async def text(self):
+        """返回卖家精灵准备接口业务错误 JSON。"""
+        return json.dumps(
+            {
+                "message": "处理请求出现错误,请稍后重试。",
+                "code": "ERR_GLOBAL_500",
+            },
+            ensure_ascii=False,
+        )
+
+
+class _AssociationPageWithoutVariantButton(_AssociationPage):
+    """模拟弹窗未提供全部变体按钮的异常页面。"""
+
+    def locator(self, selector):
+        """让全部变体按钮保持不可见，其余控件沿用正常页面。"""
+        if "用全部变体查询" in selector:
+            return _AssociationLocator(self, "missing")
+        return super().locator(selector)
+
+
+class _AssociationPageWithPrepareError(_AssociationPage):
+    """模拟准备接口报错且主接口不会发起的关联流量页面。"""
+
+    def expect_response(self, predicate, **kwargs):
+        """仅准备接口命中响应，主接口等待由准备错误提前中断。"""
+        response = _AssociationPrepareErrorResponse()
+        if predicate(response):
+            return _AssociationResponseWaiter(self.endpoint, response=response)
+        return _AssociationResponseWaiter(self.endpoint)
+
+
+class _KeywordMinerLocator:
+    """记录关键词挖掘页面输入和按钮点击。"""
+
+    def __init__(self, page, kind):
+        self.page = page
+        self.kind = kind
+        self.first = self
+
+    def locator(self, selector):
+        if self.kind == "query" and selector.startswith("xpath=ancestor::"):
+            return _KeywordMinerLocator(self.page, "container")
+        if self.kind == "container" and selector.startswith("input:visible"):
+            return _KeywordMinerLocator(
+                self.page,
+                "keyword" if self.page.input_mode == "scoped" else "missing",
+            )
+        return _KeywordMinerLocator(self.page, "missing")
+
+    async def count(self):
+        return int(self.kind != "missing")
+
+    async def is_visible(self, **kwargs):
+        return self.kind != "missing"
+
+    async def fill(self, value):
+        self.page.fills.append(value)
+
+    async def click(self, **kwargs):
+        self.page.clicks.append(self.kind)
+
+
+class _KeywordMinerPage:
+    """模拟关键词输入框文案和页面结构变化。"""
+
+    def __init__(self, endpoint, *, input_mode):
+        self.endpoint = endpoint
+        self.input_mode = input_mode
+        self.url = worker_module.DEFAULT_PAGE_URL
+        self.context = SimpleNamespace(request=FakeContextRequest())
+        self.fills = []
+        self.clicks = []
+
+    def expect_response(self, predicate, **kwargs):
+        return _AssociationResponseWaiter(self.endpoint)
+
+    def locator(self, selector):
+        if "立即查询" in selector and not selector.startswith("input"):
+            return _KeywordMinerLocator(self, "query")
+        if self.input_mode == "placeholder_cn" and "placeholder" in selector and "关键词" in selector:
+            return _KeywordMinerLocator(self, "keyword")
+        if self.input_mode == "placeholder_example" and "placeholder" in selector and "flashlight" in selector:
+            return _KeywordMinerLocator(self, "keyword")
+        if self.input_mode == "aria" and "aria-label" in selector and "keyword" in selector.lower():
+            return _KeywordMinerLocator(self, "keyword")
+        if self.input_mode == "name" and "name" in selector and "keyword" in selector.lower():
+            return _KeywordMinerLocator(self, "keyword")
+        return _KeywordMinerLocator(self, "missing")
+
+
+@pytest.mark.parametrize(
+    "input_mode",
+    ["placeholder_cn", "placeholder_example", "aria", "name", "scoped"],
+)
+def test_keyword_miner_route_fills_compatible_input_before_query(input_mode, tmp_path):
+    endpoint = "/v3/api/keyword-miner"
+    page = _KeywordMinerPage(endpoint, input_mode=input_mode)
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-miner",
+        method="POST",
+        endpoint=endpoint,
+        payload={"keyword": "bed"},
+        referer=worker_module.DEFAULT_PAGE_URL,
+        account=account,
+        root_dir=tmp_path,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "page_response"
+    assert page.fills == ["bed"]
+    assert page.clicks == ["query"]
+
+
+def test_keyword_miner_missing_input_falls_back_without_empty_query_click(tmp_path):
+    endpoint = "/v3/api/keyword-miner"
+    page = _KeywordMinerPage(endpoint, input_mode="missing")
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-miner",
+        method="POST",
+        endpoint=endpoint,
+        payload={"keyword": "bed"},
+        referer=worker_module.DEFAULT_PAGE_URL,
+        account=account,
+        root_dir=tmp_path,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "context_request"
+    assert page.fills == []
+    assert page.clicks == []
+    assert len(page.context.request.post_calls) == 1
+
+
+def test_keyword_miner_high_frequency_uses_context_request_without_second_page_query(monkeypatch, tmp_path):
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=account,
+    )
+    page = SimpleNamespace(url=worker_module.DEFAULT_PAGE_URL)
+    route_sections = []
+    context_calls = []
+
+    async def no_wait(*args, **kwargs):
+        return None
+
+    async def ensure_page(current_account):
+        return page
+
+    async def open_referer(current_page, request, **kwargs):
+        return {"logged_in": True}
+
+    async def execute_route_fetch(**kwargs):
+        route_sections.append(kwargs["section"])
+        return {"code": "OK", "data": {"items": [{"keyword": "bed"}]}}
+
+    async def request_with_context(current_page, *, endpoint, method, payload):
+        context_calls.append({"endpoint": endpoint, "method": method, "payload": payload})
+        return SimpleNamespace(status=200)
+
+    async def parse_response(response, **kwargs):
+        return {"code": "OK", "data": {"items": [{"keyword": "bed frame"}]}}
+
+    monkeypatch.setattr(worker, "_wait_for_cooldown", no_wait)
+    monkeypatch.setattr(worker, "_wait_for_rate_limit", no_wait)
+    monkeypatch.setattr(worker, "_ensure_page", ensure_page)
+    monkeypatch.setattr(worker, "_open_referer_and_login", open_referer)
+    monkeypatch.setattr(worker, "_handle_robot_captcha_if_enabled", no_wait)
+    monkeypatch.setattr(worker, "_execute_route_fetch", execute_route_fetch)
+    monkeypatch.setattr(worker_module, "_prepare_page", no_wait)
+    monkeypatch.setattr(worker_module, "_request_with_browser_context", request_with_context)
+    monkeypatch.setattr(worker_module, "_parse_response", parse_response)
+
+    result = _run(
+        worker._run_one(
+            worker_module.BrowserRouteRequest(
+                scenario="keyword-miner",
+                method="POST",
+                endpoint="/v3/api/keyword-miner",
+                payload={"keyword": "bed"},
+                referer=worker_module.DEFAULT_PAGE_URL,
+                account=account,
+                root_dir=tmp_path,
+                high_frequency_endpoint="/v3/api/keyword-miner/high/frequency-new",
+                high_frequency_payload={"keyword": "bed"},
+            )
+        )
+    )
+
+    assert route_sections == ["main"]
+    assert context_calls == [
+        {
+            "endpoint": "/v3/api/keyword-miner/high/frequency-new",
+            "method": "POST",
+            "payload": {"keyword": "bed"},
+        }
+    ]
+    assert result.high_frequency_response["data"]["items"] == [{"keyword": "bed frame"}]
+    timing_warning = next(item for item in result.warnings if item["stage"] == "browser_route_timing")
+    stages = [item["stage"] for item in timing_warning["timings"]]
+    assert "route_fetch.high_frequency.context_request" in stages
+    assert "route_fetch.high_frequency.parse_response" in stages
+    assert "route_fetch.high_frequency.route_setup" not in stages
+    assert "route_fetch.high_frequency.page_response_fallback" not in stages
+
+
+def test_non_keyword_miner_high_frequency_keeps_page_route_path(monkeypatch, tmp_path):
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=account,
+    )
+    page = SimpleNamespace(url=worker_module.DEFAULT_PAGE_URL)
+    route_sections = []
+
+    async def no_wait(*args, **kwargs):
+        return None
+
+    async def ensure_page(current_account):
+        return page
+
+    async def open_referer(current_page, request, **kwargs):
+        return {"logged_in": True}
+
+    async def execute_route_fetch(**kwargs):
+        route_sections.append(kwargs["section"])
+        return {"code": "OK", "data": {"items": []}}
+
+    monkeypatch.setattr(worker, "_wait_for_cooldown", no_wait)
+    monkeypatch.setattr(worker, "_wait_for_rate_limit", no_wait)
+    monkeypatch.setattr(worker, "_ensure_page", ensure_page)
+    monkeypatch.setattr(worker, "_open_referer_and_login", open_referer)
+    monkeypatch.setattr(worker, "_handle_robot_captcha_if_enabled", no_wait)
+    monkeypatch.setattr(worker, "_execute_route_fetch", execute_route_fetch)
+    monkeypatch.setattr(worker_module, "_prepare_page", no_wait)
+
+    _run(
+        worker._run_one(
+            worker_module.BrowserRouteRequest(
+                scenario="competitor-lookup",
+                method="POST",
+                endpoint="/v3/api/competing-lookup",
+                payload={"keyword": "bed"},
+                referer=worker_module.DEFAULT_PAGE_URL,
+                account=account,
+                root_dir=tmp_path,
+                high_frequency_endpoint="/v3/api/example/high-frequency",
+                high_frequency_payload={"keyword": "bed"},
+            )
+        )
+    )
+
+    assert route_sections == ["main", "high_frequency"]
+
+
+def test_association_traffic_route_fills_asins_and_selects_all_variants(tmp_path):
+    endpoint = "/v3/api/relation/traffic"
+    page = _AssociationPage(endpoint)
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="association-traffic",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asinList": [
+                "B098T9ZFB5",
+                "B09JW5FNVX",
+                "B0B71DH45N",
+                "B07MHHM31K",
+                "B08RYQR1CJ",
+            ],
+            "queryVariations": True,
+        },
+        referer="https://www.sellersprite.com/v3/relation-keyword",
+        account=account,
+        root_dir=tmp_path,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "page_response"
+    assert page.fills == request.payload["asinList"]
+    assert page.presses == ["Enter"] * 5
+    assert page.clicks == ["clear", "query", "all_variants"]
+
+
+def test_association_traffic_route_propagates_prepare_business_error(tmp_path):
+    endpoint = "/v3/api/relation/traffic"
+    page = _AssociationPageWithPrepareError(endpoint)
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="association-traffic",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asinList": ["B0GS9B1X5X"],
+            "queryVariations": True,
+        },
+        referer="https://www.sellersprite.com/v3/relation-keyword",
+        account=account,
+        root_dir=tmp_path,
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker_module._trigger_request(
+                page,
+                endpoint=endpoint,
+                method="POST",
+                payload=request.payload,
+                request=request,
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_GLOBAL_500"
+    assert exc_info.value.api_message == "处理请求出现错误,请稍后重试。"
+    assert "ERR_GLOBAL_500" in (exc_info.value.response_excerpt or "")
+    assert page.clicks == ["clear", "query"]
+
+
+def test_association_traffic_route_does_not_silently_fallback_when_variant_dialog_is_missing(tmp_path):
+    endpoint = "/v3/api/relation/traffic"
+    page = _AssociationPageWithoutVariantButton(endpoint)
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="association-traffic",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asinList": ["B098T9ZFB5"],
+            "queryVariations": True,
+        },
+        referer="https://www.sellersprite.com/v3/relation-keyword",
+        account=account,
+        root_dir=tmp_path,
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker_module._trigger_request(
+                page,
+                endpoint=endpoint,
+                method="POST",
+                payload=request.payload,
+                request=request,
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_ASSOCIATION_TRAFFIC_VARIANT_DIALOG"
+    assert page.clicks == ["clear", "query"]
+
+
+def test_association_traffic_page_prepare_false_still_uses_visible_ui(tmp_path):
+    endpoint = "/v3/api/relation/traffic"
+    page = _AssociationPage(endpoint)
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="association-traffic",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asinList": ["B098T9ZFB5"],
+            "queryVariations": True,
+            "pageNum": 1,
+        },
+        referer="https://www.sellersprite.com/v3/relation-keyword",
+        account=account,
+        root_dir=tmp_path,
+        page_prepare=False,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "page_response"
+    assert page.fills == ["B098T9ZFB5"]
+    assert page.presses == ["Enter"]
+    assert page.clicks == ["clear", "query", "all_variants"]
+
+
 def test_post_query_context_request_uses_query_and_empty_json_body():
     page = FakeContextPage()
 
@@ -817,6 +1455,83 @@ def test_post_query_context_request_uses_query_and_empty_json_body():
     assert call["url"] == "https://www.sellersprite.com/v3/api/ai-workflow/listing-analysis?asin=B0TEST&station=GLOBAL"
     assert call["kwargs"]["data"] == "{}"
     assert call["kwargs"]["headers"]["Content-Type"] == "application/json;charset=UTF-8"
+
+
+def test_keyword_research_context_request_uses_get_page_html_headers():
+    page = FakeContextPage()
+
+    response = _run(
+        worker_module._request_with_browser_context(
+            page,
+            endpoint="/v2/keyword-research",
+            method="GET_PAGE",
+            payload={"station": "US", "month": "202606", "page": "1", "size": "50"},
+        )
+    )
+
+    assert response.status == 200
+    call = page.context.request.get_calls[0]
+    assert call["url"] == (
+        "https://www.sellersprite.com/v2/keyword-research"
+        "?station=US&month=202606&page=1&size=50"
+    )
+    assert call["kwargs"]["headers"]["Accept"].startswith("text/html")
+    assert "Content-Type" not in call["kwargs"]["headers"]
+
+
+def test_aba_reverse_context_request_uses_xlsx_get_headers():
+    page = FakeContextPage()
+
+    response = _run(
+        worker_module._request_with_browser_context(
+            page,
+            endpoint="/v2/aba/reverse/export",
+            method="GET_XLSX",
+            payload={"station": "US", "table": "ara_20260718", "asin": "B00000JBNX"},
+        )
+    )
+
+    assert response.status == 200
+    call = page.context.request.get_calls[0]
+    assert call["url"].startswith(
+        "https://www.sellersprite.com/v2/aba/reverse/export?station=US"
+    )
+    assert "spreadsheetml.sheet" in call["kwargs"]["headers"]["Accept"]
+    assert "Content-Type" not in call["kwargs"]["headers"]
+
+
+def test_browser_response_saves_official_xlsx_bytes(tmp_path):
+    content = b"PK\x03\x04official-workbook"
+
+    class XlsxResponse:
+        status = 200
+        url = "https://www.sellersprite.com/v2/aba/reverse/export"
+        headers = {
+            "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "content-disposition": (
+                "attachment; filename*=UTF-8''ABA-Reverse-B00000JBNX-US-20260723.xlsx"
+            ),
+        }
+
+        async def body(self):
+            return content
+
+    result = _run(
+        worker_module._parse_response(
+            XlsxResponse(),
+            method="GET_XLSX",
+            root_dir=tmp_path,
+            section="main",
+        )
+    )
+
+    path = Path(result["data"]["official_xlsx_path"])
+    assert path.name == "ABA-Reverse-B00000JBNX-US-20260723.xlsx"
+    assert path.read_bytes() == content
+    assert result["data"]["official_filename"] == (
+        "ABA-Reverse-B00000JBNX-US-20260723.xlsx"
+    )
+    assert result["data"]["content_length"] == len(content)
 
 
 def test_listing_analysis_trigger_fills_asin_and_submits_with_enter_first():
@@ -1119,6 +1834,18 @@ def test_load_settings_reads_task_timeout(monkeypatch):
     assert settings.task_timeout_seconds == 300
 
 
+def test_load_settings_reads_task_lease_lifecycle(monkeypatch):
+    monkeypatch.setenv("OPSCLI_SELLER_SPRITE_TASK_LEASE_SECONDS", "90")
+    monkeypatch.setenv("OPSCLI_SELLER_SPRITE_TASK_HEARTBEAT_SECONDS", "15")
+    monkeypatch.setenv("OPSCLI_SELLER_SPRITE_SHUTDOWN_TIMEOUT_SECONDS", "8")
+
+    settings = load_settings()
+
+    assert settings.task_lease_seconds == 90
+    assert settings.task_heartbeat_seconds == 15
+    assert settings.shutdown_timeout_seconds == 8
+
+
 def test_browser_runtime_defaults_to_patchright():
     assert DEFAULT_BROWSER_RUNTIME == "patchright"
     assert SellerSpriteSettings().browser_runtime == "patchright"
@@ -1128,7 +1855,13 @@ def test_browser_runtime_defaults_to_patchright():
     assert SellerSpriteSettings().browser_idle_ttl_seconds == 1800
     assert SellerSpriteSettings().browser_max_lifetime_seconds == 21600
     assert DEFAULT_TASK_TIMEOUT_SECONDS == 600
+    assert DEFAULT_TASK_LEASE_SECONDS == 60
+    assert DEFAULT_TASK_HEARTBEAT_SECONDS == 20
+    assert DEFAULT_SHUTDOWN_TIMEOUT_SECONDS == 15
     assert SellerSpriteSettings().task_timeout_seconds == 600
+    assert SellerSpriteSettings().task_lease_seconds == 60
+    assert SellerSpriteSettings().task_heartbeat_seconds == 20
+    assert SellerSpriteSettings().shutdown_timeout_seconds == 15
 
 
 def test_load_async_playwright_uses_patchright_runtime(monkeypatch):
@@ -1326,6 +2059,143 @@ def test_run_one_relogs_and_retries_main_request_once(monkeypatch, tmp_path):
         assert execute_calls == ["main", "main"]
         assert login_calls == [worker_module.DEFAULT_PAGE_URL]
         assert open_calls == [worker_module.DEFAULT_PAGE_URL, worker_module.DEFAULT_PAGE_URL]
+
+    _run(scenario())
+
+
+def test_run_one_relogs_and_retries_guest_limited_association_response(monkeypatch, tmp_path):
+    async def scenario():
+        account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+        worker = SellerSpriteBrowserRouteWorker(
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account=account,
+        )
+        page = SimpleNamespace(url="https://www.sellersprite.com/v3/relation-keyword")
+        execute_calls = []
+        login_calls = []
+
+        async def fake_ensure_page(current_account):
+            return page
+
+        async def fake_open(current_page, request, **kwargs):
+            return {"logged_in": True, "current_url": request.referer}
+
+        async def fake_detect_logged_in(current_page):
+            return True
+
+        async def fake_login(current_page, current_account, *, callback, **kwargs):
+            login_calls.append(callback)
+
+        async def fake_execute(**kwargs):
+            execute_calls.append(kwargs["payload"]["pageNum"])
+            size = 20 if len(execute_calls) == 1 else 100
+            return {
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "pagerDto": {
+                        "page": kwargs["payload"]["pageNum"],
+                        "size": size,
+                        "total": 375,
+                        "items": [{"asin": f"B0RESULT{index:03d}"} for index in range(size)],
+                    }
+                },
+            }
+
+        monkeypatch.setattr(worker, "_ensure_page", fake_ensure_page)
+        monkeypatch.setattr(worker_module, "_detect_logged_in", fake_detect_logged_in)
+        monkeypatch.setattr(worker, "_open_referer_and_login", fake_open)
+        monkeypatch.setattr(worker, "_login_with_account", fake_login)
+        monkeypatch.setattr(worker, "_execute_route_fetch", fake_execute)
+
+        result = await worker._run_one(
+            worker_module.BrowserRouteRequest(
+                scenario="association-traffic",
+                method="POST",
+                endpoint="/v3/api/relation/traffic",
+                payload={
+                    "asinList": ["B098T9ZFB5"],
+                    "pageNum": 2,
+                    "pageSize": 100,
+                    "queryVariations": True,
+                },
+                referer="https://www.sellersprite.com/v3/relation-keyword",
+                account=account,
+                root_dir=tmp_path,
+                page_prepare=False,
+            )
+        )
+
+        assert result.response["data"]["pagerDto"]["size"] == 100
+        assert execute_calls == [2, 2]
+        assert login_calls == ["https://www.sellersprite.com/v3/relation-keyword"]
+
+    _run(scenario())
+
+
+def test_run_one_association_page_prepare_disabled_still_opens_referer(
+    monkeypatch, tmp_path
+):
+    async def scenario():
+        account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+        worker = SellerSpriteBrowserRouteWorker(
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account=account,
+        )
+        page = SimpleNamespace(url="https://www.sellersprite.com/v3/relation-keyword")
+        events = []
+
+        async def fake_ensure_page(current_account):
+            events.append("ensure_page")
+            return page
+
+        async def fake_open(current_page, request, **kwargs):
+            events.append("open_referer")
+            return {"logged_in": True}
+
+        async def fake_captcha(current_page, request, warnings, timings, *, stage):
+            events.append(f"captcha:{stage}")
+
+        async def fake_execute(**kwargs):
+            events.append("execute")
+            return {
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "pagerDto": {
+                        "page": 2,
+                        "size": 100,
+                        "total": 175,
+                        "items": [{"asin": "B0RESULT001"}],
+                    }
+                },
+            }
+
+        monkeypatch.setattr(worker, "_ensure_page", fake_ensure_page)
+        monkeypatch.setattr(worker, "_open_referer_and_login", fake_open)
+        monkeypatch.setattr(worker, "_handle_robot_captcha_if_enabled", fake_captcha)
+        monkeypatch.setattr(worker, "_execute_route_fetch", fake_execute)
+
+        result = await worker._run_one(
+            worker_module.BrowserRouteRequest(
+                scenario="association-traffic",
+                method="POST",
+                endpoint="/v3/api/relation/traffic",
+                payload={
+                    "asinList": ["B098T9ZFB5"],
+                    "pageNum": 2,
+                    "pageSize": 100,
+                    "queryVariations": True,
+                },
+                referer="https://www.sellersprite.com/v3/relation-keyword?pageNum=2&pageSize=100",
+                account=account,
+                root_dir=tmp_path,
+                page_prepare=False,
+            )
+        )
+
+        assert result.response["data"]["pagerDto"]["page"] == 2
+        assert events == ["ensure_page", "open_referer", "captcha:after_open_referer", "execute"]
 
     _run(scenario())
 

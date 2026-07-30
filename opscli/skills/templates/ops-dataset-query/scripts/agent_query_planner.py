@@ -350,8 +350,11 @@ def _expanded_values(name: str, values: set[str], rules: dict) -> set[str]:
 def _slot_is_covered(profile: dict, name: str, requested: set[str], rules: dict) -> bool:
     """判断数据集画像是否覆盖请求的槽位取值。
 
-    固定口径（fixed）要求数据集口径与请求完全一致；
-    可筛选（filterable）只要求请求值是数据集覆盖范围的子集。
+    只要求数据集覆盖用户请求（requested ⊆ supported）。曾额外要求固定口径
+    必须与请求完全相等，导致覆盖粒度更广的数据集被拒——实测「搜索词的点击份额」
+    因此零候选，而「搜索词和关键词的点击份额」反而能命中三个正确数据集，
+    形成「说得越具体候选越少」的反常行为。按召回优先原则放开，
+    多出的粒度改由 _extra_slot_terms 交给合同强制披露。
     """
     raw_supported = profile["slots"][name]
     mode = profile["slot_modes"][name]
@@ -359,9 +362,99 @@ def _slot_is_covered(profile: dict, name: str, requested: set[str], rules: dict)
         return False
     supported = _expanded_values(name, raw_supported, rules)
     requested = _expanded_values(name, requested, rules)
-    if not requested.issubset(supported):
-        return False
-    return not supported.difference(requested) or mode == "filterable"
+    return requested.issubset(supported)
+
+
+def _extra_slot_terms(profile: dict, slots: dict, rules: dict) -> dict:
+    """列出数据集比用户请求多覆盖的固定槽位取值，供强制披露。
+
+    放开覆盖判定后，选中的数据集口径可能比用户要的更宽（如用户要搜索词级，
+    数据集是关键词×搜索词级；用户只要 SP，数据集是 SP+SD+SB 合计），
+    直接汇总会与用户预期的口径不一致。
+    风险不靠拒绝候选规避，而是如实告知——这是「放开 + 强制披露」的后半段。
+
+    只收 slot_modes == "fixed" 的槽位：filterable 表示数据集带该槽位的筛选
+    字段（rules["filter_fields"] 只有 platform / ad_type 两项），多余取值能被
+    筛掉，不构成口径风险；grain 在 filter_fields 里没有对应项，永远不会是
+    filterable。这条不变量是下游披露文案分语义的唯一依据，改动 profile_card
+    的 slot_modes 推导时必须同步复核 query_plan._slot_surplus_disclosure_zh。
+
+    返回值按槽位名索引（技术名，仅用于下游分语义，不展示给用户），
+    值里只放中文标签——披露句必须是纯中文，不能回落到内部枚举名。
+    """
+    extra: dict = {}
+    for name, requested in (slots or {}).items():
+        if name not in profile.get("slots", {}):
+            continue
+        if profile.get("slot_modes", {}).get(name) != "fixed":
+            continue
+        supported = _expanded_values(name, profile["slots"][name], rules)
+        surplus = sorted(supported.difference(_expanded_values(name, requested, rules)))
+        if surplus:
+            extra[name] = {
+                "slot_label_zh": schema.slot_label(name),
+                # 请求侧用用户原本说出的取值（不做平台成员展开），
+                # 披露句里的「不能当作纯 X」才与用户的问法对得上
+                "requested_zh": [
+                    schema.slot_value_label(rules, name, value)
+                    for value in sorted(requested)
+                ],
+                "surplus_zh": [
+                    schema.slot_value_label(rules, name, value) for value in surplus
+                ],
+            }
+    return extra
+
+
+def _attach_slot_coverage(
+    candidates: list[dict],
+    profiles: list[dict],
+    slot_readings: list[dict[str, set[str]]],
+    rules: dict,
+) -> list[dict]:
+    """为已构造的候选补齐固定槽位多余覆盖信息（强制披露的唯一数据来源）。
+
+    为什么要后置补齐：显式标识命中与中文说明命中这两条路径在构造候选字典时
+    还没抽取槽位——槽位要先遮蔽数据集身份文本才能算准，只能等算完再回填。
+    漏补的后果是 query_plan 取到空 grain_coverage → model_view 与
+    answer_contract 两处披露一起静默消失，形成「用户报出表名反而丢掉安全披露」
+    的反常行为（说得越具体反而越危险）。
+
+    为什么要收多份槽位读法（slot_readings）而不是只用一份：这两条路径的槽位算在
+    **遮蔽过数据集身份与字段标签之后**的文本上，而遮蔽是全局 replace。真实元数据
+    实测：'亚马逊搜索词绩效 近7天搜索词的点击份额' 里第二个「搜索词」也被当成字段
+    标签一起抹掉，遮蔽后 slots 为空 → 无请求可比 → 披露又没了。反过来，
+    「亚马逊销售表 只看VC的销售额」这类只有遮蔽后的读法才能看出用户把口径收窄。
+    两种读法各自自洽，因此逐槽位取「披露更多的一方」——静默错数比响亮失败危险
+    得多，宁可多披露一条口径差异。requested_zh 与 surplus_zh 同取自被选中的那份
+    读法，句子内部始终自洽。
+    """
+    by_alias = {profile["card"]["dataset_alias"]: profile for profile in profiles}
+    for candidate in candidates:
+        profile = by_alias.get(candidate.get("dataset_alias"))
+        if profile is None:
+            continue
+        merged: dict = {}
+        for slots in slot_readings:
+            for name, detail in _extra_slot_terms(profile, slots, rules).items():
+                current = merged.get(name)
+                if current is None or len(detail["surplus_zh"]) > len(current["surplus_zh"]):
+                    merged[name] = detail
+        candidate["grain_coverage"] = merged
+    return candidates
+
+
+def _raw_slot_reading(query: str, rules: dict) -> dict[str, set[str]]:
+    """不遮蔽数据集身份文本的槽位读法，仅供强制披露使用。
+
+    只能用于披露：拿它做覆盖判定会把数据集名称里的「VC」「Walmart」当成用户
+    额外提出的筛选条件（这正是 _semantic_query_without_candidate_identity 存在
+    的原因）。但披露侧需要它——遮蔽会把用户真正说出口的粒度词一起抹掉。
+    """
+    return {
+        name: set(values)
+        for name, values in extract_query_semantics(query, rules)["slots"].items()
+    }
 
 
 def _covers(profile: dict, domains: set[str], slots: dict[str, set[str]], rules: dict) -> bool:
@@ -440,6 +533,9 @@ def _default_dataset_candidate(
         "dataset_category": card["dataset_category"],
         "score": EXPLICIT_DESCRIPTION_SCORE,
         "reasons": ["default_instant_comprehensive"],
+        # 默认表同样受放开覆盖判定影响（如即时综合表覆盖多个粒度），
+        # 少了这一键会让默认推荐路径丢掉强制披露
+        "grain_coverage": _extra_slot_terms(profile, slots, rules),
         "_semantic_rank": 0,
     }
 
@@ -578,6 +674,7 @@ def _score_profile(
         "dataset_category": card["dataset_category"],
         "score": score,
         "reasons": reasons,
+        "grain_coverage": _extra_slot_terms(profile, slots, rules),
         "_semantic_rank": _semantic_rank(profile, domains, slots, rules),
     }
 
@@ -664,6 +761,13 @@ def plan_query(
         semantics = extract_query_semantics(semantic_query, validated_rules)
         domains = set(semantics["domains"])
         slots = {name: set(values) for name, values in semantics["slots"].items()}
+        # 披露侧同时看「遮蔽后」与「未遮蔽」两种槽位读法，取披露更多的一方
+        _attach_slot_coverage(
+            explicit,
+            profiles,
+            [slots, _raw_slot_reading(normalized_query, validated_rules)],
+            validated_rules,
+        )
         top = explicit[0]
         component_blocked = top["dataset_category"] == "query_component" and not _permission_enum_requested(query)
         if len(explicit) > 1 or component_blocked:
@@ -715,6 +819,13 @@ def plan_query(
         semantics = extract_query_semantics(semantic_query, validated_rules)
         domains = set(semantics["domains"])
         slots = {name: set(values) for name, values in semantics["slots"].items()}
+        # 披露侧同时看「遮蔽后」与「未遮蔽」两种槽位读法，取披露更多的一方
+        _attach_slot_coverage(
+            description_matches,
+            profiles,
+            [slots, _raw_slot_reading(normalized_query, validated_rules)],
+            validated_rules,
+        )
         top = description_matches[0]
         if len(description_matches) > 1:
             return _result(

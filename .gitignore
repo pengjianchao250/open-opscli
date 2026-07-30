@@ -45,3 +45,5 @@ calculator-draft-*/
 tmp-calculator-*.json
 output/scrape-do-real-api/
 output/feedback-query/
+output/test-artifacts/
+output/google-trends/

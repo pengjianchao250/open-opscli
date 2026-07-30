@@ -1,0 +1,19 @@
+{
+  "rankGrowthType": "W1",
+  "size": 100,
+  "page": 1,
+  "market": "COM",
+  "q": "paper towels",
+  "table": "ara_20260718",
+  "reverseType": "W",
+  "departments": [
+    "home-kitchen"
+  ],
+  "keywordBidMatchType": "exact",
+  "order": {
+    "field": "searchfrequencyrank",
+    "desc": false
+  },
+  "minSearches": 1000,
+  "maxConversionRate": 20
+}

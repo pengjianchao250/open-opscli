@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import agent_query_planner as planner
+import core
 import dataset_guidance
 import plan_integrity
 import scoped_dataset_reader
@@ -923,6 +924,30 @@ def build_query_plan(
 # ---------------------------------------------------------------------------
 
 
+def _label_is_negated(normalized_query: str, label: str, negated: list) -> bool:
+    """标签在原文中的每一次出现是否都落在否定语境区间内。
+
+    为什么不能直接用原文匹配：标签匹配是子串包含，「不加日期筛选」里的「日期」
+    会被当成用户点名的分组维度，于是用户越明确要求不加日期，规划器越确定
+    按日期分组——实测 38 行的 ASIN 明细因此膨胀到 9625 行并触发服务端截断。
+
+    为什么用区间包含而不是把否定语境替换掉：真实元数据里存在
+    「周转天数(不含在途)」这类自带否定词的合法标签，替换会把标签撕开、
+    使用户点名的字段反而漏掉。只有标签整体落在否定区间内才算否定，
+    标签起点早于否定词时（自带否定词的情形）照常识别。
+    否定词表复用 time_scope 的同一份，避免时间口径与字段标签两处判定漂移。
+    """
+    occurrences = [
+        match.span() for match in re.finditer(re.escape(label), normalized_query)
+    ]
+    if not occurrences:
+        return False
+    return all(
+        any(span_start <= start and end <= span_end for span_start, span_end in negated)
+        for start, end in occurrences
+    )
+
+
 def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]:
     """从字段指导结果中筛出用户真正点名的字段。
 
@@ -932,6 +957,8 @@ def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]
     field_guidance = guidance.get("field_guidance") or {}
     fields = field_guidance.get(field_type) or []
     normalized_query = _normalize(query)
+    # 否定语境区间：落在其中的标签不算用户点名（「不按日期拆分」里的「日期」）
+    negated = time_scope.negated_spans(normalized_query)
     selected = []
     for index, item in enumerate(fields):
         if not isinstance(item, dict):
@@ -939,7 +966,9 @@ def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]
         source = item.get("selection_source")
         label = _normalize(item.get("verbose_name"))
         if source in {"explicit", "semantic_alias"} or (
-            label and label in normalized_query
+            label
+            and label in normalized_query
+            and not _label_is_negated(normalized_query, label, negated)
         ):
             position = normalized_query.find(label) if label else len(normalized_query)
             if position < 0:
@@ -1012,17 +1041,29 @@ def _selected_fields(
     dimensions = _requested_fields(guidance, "dimensions", query)
     metrics = _requested_fields(guidance, "metrics", query)
     normalized_query = _normalize(query)
+    # 授权标签兜底同样是子串包含，必须同样排除否定语境，否则
+    # 「不按日期拆分」仍会从这条兜底路径把「日期」捞回来
+    negated = time_scope.negated_spans(normalized_query)
+
+    def _hit(item: dict) -> bool:
+        label = _normalize(item.get("verbose_name"))
+        return bool(
+            label
+            and label in normalized_query
+            and not _label_is_negated(normalized_query, label, negated)
+        )
+
     if not dimensions:
         dimensions = [
             dict(item, selection_source="authorized_query_label")
             for item in authorized_field_labels.get("dimensions", [])
-            if _normalize(item.get("verbose_name")) in normalized_query
+            if _hit(item)
         ]
     if not metrics:
         metrics = [
             dict(item, selection_source="authorized_query_label")
             for item in authorized_field_labels.get("metrics", [])
-            if _normalize(item.get("verbose_name")) in normalized_query
+            if _hit(item)
         ]
     # 无点名字段时的推荐兜底（P0-1c）：把指导层已按打分选出的 top 字段
     # 以 recommended 来源标注供模型向用户提议，替代「全空无从下手→扫盘」
@@ -1405,6 +1446,36 @@ def _default_filters_zh(refs: list[dict]) -> list[str]:
     return lines
 
 
+def _slot_surplus_disclosure_zh(slot_name: str, detail: dict) -> str:
+    """把「数据集覆盖得比请求多」翻成一句语义正确的中文强制披露。
+
+    必须按槽位语义分文案，两类风险的正确应对方式相反：
+
+    - grain（统计粒度）：多出的取值是数据集里另一个维度字段（如请求搜索词级、
+      数据集是关键词×搜索词级）。不选该维度即按请求粒度聚合，风险在于份额、
+      比率这类非可加指标不能直接汇总 → 说「粒度更细」，提醒不要把明细当汇总。
+    - platform / ad_type：能进到这里说明 slot_modes 是 fixed，即数据集**没有**
+      该槽位的筛选字段（filterable 的槽位根本不会产出 surplus，见
+      agent_query_planner._extra_slot_terms）。多出的取值筛不掉，交付的是合计
+      → 必须说「无法按 X 筛选、结果含 Y」。原先照 grain 语义写成「粒度更细、
+      不得把明细当汇总」，会引导模型把 SP+SD+SB 合计当成纯 SP 汇报，
+      正好是最危险的静默错数方向。
+    """
+    label = str(detail.get("slot_label_zh") or slot_name)
+    surplus = "、".join(str(item) for item in detail.get("surplus_zh") or [])
+    requested = "、".join(str(item) for item in detail.get("requested_zh") or [])
+    if slot_name == "grain":
+        return (
+            f"所选数据集的{label}比请求更细，额外覆盖：{surplus}；"
+            "结论中必须说明这一口径差异，不得把更细粒度的明细当成请求粒度的汇总。"
+        )
+    return (
+        f"所选数据集无法按{label}筛选，返回数据已包含 {surplus}，"
+        f"是把这些一起算进来的合计；结论中必须说明这一范围差异，"
+        f"不得当作纯 {requested} 的数据汇报。"
+    )
+
+
 def build_model_contract(
     internal: dict,
     query: str = "",
@@ -1477,6 +1548,26 @@ def build_model_contract(
         if "default_dataset_confirmation" not in clarification_reasons:
             clarification_reasons.append("default_dataset_confirmation")
         pending_confirmations_zh.append("确认是否使用推荐的即时综合数据集")
+    # 只查维度、不查指标（如「某渠道下全部 ASIN」）时，默认时间窗口没有业务意义：
+    # 用户要的是去重维度全集，卡近 30 天只会漏掉更早出现过的值。
+    # 该规则一度因「筛选值不写入模板导致静默全量」收回，现由组件筛选值解析
+    # （_resolve_component_filters 的锁定/澄清/阻断三态）兜底后恢复。
+    if (
+        scope
+        and scope.get("is_default")
+        and dimensions
+        and not (metrics or recommended_mets)
+    ):
+        scope = {
+            **scope,
+            "start": None,
+            "end": None,
+            "unbounded": True,
+            "is_default": False,
+            "matched": False,
+            "comparison": None,
+            "label_zh": "全部时间（仅维度查询，原文未限定时间，不加日期筛选）",
+        }
     if status == "planned" and execution_path_ready and scope and scope.get("is_default"):
         status = "clarify_required"
         clarification_reasons.append("time_scope_confirmation")
@@ -1511,6 +1602,21 @@ def build_model_contract(
     platform_disclosures = _platform_scope_disclosures(platform)
     if platform_disclosures:
         model_view["platform_scope_disclosures_zh"] = platform_disclosures
+    # 放开固定槽位后，选中数据集覆盖的口径可能比用户要求更宽，必须如实告知，
+    # 否则用户会把「关键词×搜索词」级明细当成「搜索词」级汇总，
+    # 或把 SP+SD+SB 合计当成纯 SP 数据。
+    # 按 dataset_alias 匹配当前实际选中的候选（而非默认取 candidates[0]），
+    # 避免候选列表顺序与最终选中项不一致时误取到别的候选的粒度披露。
+    selected_alias = dataset.get("dataset_alias")
+    grain_extra: dict = {}
+    for candidate in selection.get("dataset_candidates") or []:
+        if candidate.get("dataset_alias") == selected_alias:
+            grain_extra = candidate.get("grain_coverage") or {}
+            break
+    if grain_extra:
+        model_view["grain_disclosure_zh"] = [
+            _slot_surplus_disclosure_zh(name, detail) for name, detail in grain_extra.items()
+        ]
     if default_dataset_recommendation:
         model_view["default_dataset_recommendation_zh"] = {
             "name_zh": str(dataset.get("display_name_zh", "")),
@@ -1531,7 +1637,12 @@ def build_model_contract(
         model_view["next_action"] = "ask_user_for_query_scope_confirmation"
     if scope:
         comparison = scope.get("comparison")
-        scope_zh = f"{scope['label_zh']}：{scope['start']} ~ {scope['end']}（{scope['timezone']}）"
+        # 全时段没有起止日期可展示，只声明不加日期筛选，避免出现 None ~ None
+        scope_zh = (
+            f"{scope['label_zh']}：不限起止日期，查询不含任何日期筛选"
+            if scope.get("unbounded")
+            else f"{scope['label_zh']}：{scope['start']} ~ {scope['end']}（{scope['timezone']}）"
+        )
         if comparison:
             scope_zh += f"；对比期 {comparison['label_zh']}：{comparison['start']} ~ {comparison['end']}"
         if scope.get("is_default"):
@@ -1612,6 +1723,7 @@ def build_model_contract(
         execution_ref["time_scope"] = {
             "start": scope["start"],
             "end": scope["end"],
+            "unbounded": bool(scope.get("unbounded")),
             "is_default": scope["is_default"],
             "reference_date": scope["reference_date"],
             "reference_year": scope["reference_year"],
@@ -1668,6 +1780,8 @@ def build_model_contract(
         answer_contract["required_disclosures_zh"].append(
             "本次查询已自动应用数据集默认条件：" + "；".join(model_view["default_filters_zh"])
         )
+    if grain_extra:
+        answer_contract["required_disclosures_zh"].extend(model_view["grain_disclosure_zh"])
     return {
         "contract": MODEL_CONTRACT,
         "query_mode": "dataset_query",
@@ -1793,7 +1907,10 @@ def build_model_query_plan(
             )
             # 枚举来源标注：审计可区分自动枚举与人工回传
             contract["execution_ref"]["platform_enum_source"] = "auto_enum_service"
-    contract = _resolve_department_filter(contract, query, auto_enum=auto_enum)
+    contract = _resolve_component_filters(
+        contract, query, auto_enum=auto_enum, data_dir=data_dir
+    )
+    contract = _attach_fallback_guidance(contract)
     # planned 合同生成后立即封存，执行器据此拒绝规划与执行之间的手工改写。
     if contract.get("status") == "planned" and contract.get("query_mode") == "dataset_query":
         plan_integrity.attach(contract)
@@ -1831,9 +1948,9 @@ def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: f
                 "--run",
             ],
             capture_output=True,
-            text=True,
             check=False,
             timeout=timeout_seconds,
+            **core.utf8_subprocess_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"[query_plan] 自动枚举未完成：{error}", file=sys.stderr)
@@ -1873,8 +1990,14 @@ def _auto_enum_component_values(
     field_name: str,
     *,
     timeout_seconds: float = 7.0,
+    errors: list | None = None,
 ) -> list[str]:
-    """枚举普通筛选组件字段；任何远端异常均返回空列表，由规划合同阻断扩大查询。"""
+    """枚举普通筛选组件字段；远端异常返回空列表并把原因写入 errors。
+
+    调用方必须区分两种空：调用失败（errors 非空，无法校验，须阻断）与
+    调用成功但当前账号无授权值（errors 为空，该字段不可能成为筛选条件，跳过即可）。
+    混为一谈会让「开发」这类本账号无授权值的字段把所有查询都阻断。
+    """
     if component_table_id in (None, "") or not field_name:
         return []
     enum_json = json.dumps(
@@ -1900,18 +2023,20 @@ def _auto_enum_component_values(
                 "--run",
             ],
             capture_output=True,
-            text=True,
             check=False,
             timeout=timeout_seconds,
+            **core.utf8_subprocess_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"[query_plan] 普通筛选组件枚举未完成：{error}", file=sys.stderr)
+        if errors is not None:
+            errors.append(f"{type(error).__name__}: {error}"[:200])
         return []
     if result.returncode != 0:
-        print(
-            f"[query_plan] 普通筛选组件枚举失败：{(result.stderr or result.stdout or '')[:200]}",
-            file=sys.stderr,
-        )
+        detail = (result.stderr or result.stdout or "")[:200]
+        print(f"[query_plan] 普通筛选组件枚举失败：{detail}", file=sys.stderr)
+        if errors is not None:
+            errors.append(detail)
         return []
     try:
         payload = json.loads(result.stdout[result.stdout.index("{") :])
@@ -1939,74 +2064,931 @@ def _auto_enum_component_values(
     )
 
 
-def _resolve_department_filter(contract: dict, query: str, *, auto_enum: bool) -> dict:
-    """把用户明确的部门值在当前账号组件中唯一等值解析并写入查询模板。"""
-    requested = _extract_requested_department_value(query)
-    if not requested or contract.get("status") != "planned":
-        return contract
-    execution = contract.get("execution_ref")
-    if not isinstance(execution, dict):
-        return contract
-    component = next(
+# ── 组件筛选值解析（部门/渠道走授权枚举，ASIN 走字面格式）──────────────────
+# ASIN/商品ID 字面形态：宽松切词后再逐个判形，不能写死单一形态。
+# 实测该列并非只存标准 Amazon ASIN：TEMU 渠道存的是 10~11 位纯数字商品 ID，
+# 另见 14 位纯数字；图书 ASIN 则是 ISBN-10。写死 B0+8 位会漏掉这些值，
+# 而漏掉的后果与不解析筛选值一样——静默返回全范围数据。
+# 长度下限取 9，避开年份、数量、limit 这类普通数字。
+_ASIN_TOKEN_RE = re.compile(r"(?<![0-9A-Za-z])[0-9A-Za-z]{9,20}(?![0-9A-Za-z])")
+
+
+def _is_asin_like(token: str) -> bool:
+    """判断切出的 token 是否为商品 ID 形态。"""
+    value = token.upper()
+    if re.fullmatch(r"B[0-9A-Z]{9}", value):  # 标准 Amazon ASIN：B + 9 位
+        return True
+    if value.isdigit():  # 各平台数字商品 ID（TEMU 实测 10/11/14 位）
+        return True
+    # 10 位字母数字混合（须同时含字母与数字，避免吃掉纯英文单词）
+    return (
+        len(value) == 10
+        and value.isalnum()
+        and any(char.isdigit() for char in value)
+        and any(char.isalpha() for char in value)
+    )
+
+
+def _extract_asin_values(query: str) -> list:
+    """从原文提取商品 ID 字面值，统一转大写（授权原值恒为大写）。"""
+    normalized = unicodedata.normalize("NFKC", query)
+    return _deduplicate(
+        token.upper() for token in _ASIN_TOKEN_RE.findall(normalized) if _is_asin_like(token)
+    )
+
+
+def _normalize_component_value(value: str) -> str:
+    """组件值归一化：NFKC + 去空白 + casefold，与 filter_value_match_policy 声明一致。"""
+    return unicodedata.normalize("NFKC", str(value)).strip().casefold()
+
+
+def _extract_labeled_value(query: str, label_terms: Sequence[str]) -> str:
+    """按标签形态提取单个筛选值（不关心是否为列举的调用方用这个）。"""
+    return _labeled_value_match(query, label_terms)[0]
+
+
+# 显式列举的分隔符只收列举标点与「或」。不收「和」「与」：
+# 「渠道为傲彼瑞-美国和所有ASIN」里的「和」后面接的不是同类枚举值。
+_VALUE_SEPARATOR = re.compile(r"\s*(?:、|,|，|/|或)\s*")
+
+
+def _labeled_value_match(query: str, label_terms: Sequence[str]) -> tuple[str, bool]:
+    """按「字段名 + 系词 + 值」形态提取筛选值，并判断其后是否紧跟显式列举。
+
+    返回 (首个值, 是否为显式列举)。只检测列举、不负责把其余值抽出来：
+    其余值交给授权枚举反查做完整等值匹配。为什么不在这里抽：末位值后面往往
+    接自由描述（「…傲彼瑞-加拿大三个当前账号授权渠道中的任意一个」），
+    靠边界前瞻猜结尾必然过度捕获成「傲彼瑞-加拿大三个当前账号授权渠道」。
+
+    为什么需要这个判断：原先只取第一个值就落地筛选，
+    「筛选渠道为傲彼瑞-美国、傲彼瑞-tiktok、傲彼瑞-加拿大中任意一个」
+    会静默把三渠道缩成一个；而剩下两个值没被登记成已消费，
+    其中的「加拿大」又被国家字段反查抓走，最终下发
+    channel=傲彼瑞-美国 AND country=加拿大 这种用户从未表达的条件。
+
+    系词是必需的：没有它，「渠道和ASIN」这类维度点名会被当成筛选值。
+    标签按长度降序尝试，避免「渠道」抢先匹配掉「渠道SKU」。
+    值用非贪婪 + 边界前瞻收住，否则「渠道是傲彼瑞的所有ASIN」会整段被吞。
+    """
+    for term in sorted(label_terms, key=len, reverse=True):
+        pattern = re.compile(
+            re.escape(term)
+            + r"\s*(?:为|是|=|＝|：|:|等于)\s*"
+            + r"([\u4e00-\u9fffA-Za-z0-9_\-\.]{2,40}?)"
+            + r"(?=的|地|，|,|。|；|;|、|/|\s|和|与|或|下|里|中|所有|全部|$)",
+            re.IGNORECASE,
+        )
+        match = pattern.search(query)
+        if not match:
+            continue
+        # 值之后紧跟列举分隔符即判定为显式列举。
+        # 这里必须用 Pattern.match(s, pos)（已锚定在 pos），不能再加 ^——
+        # ^ 只认字符串真开头，叠加后续接判断永远为假
+        enumerated = bool(_VALUE_SEPARATOR.match(query, match.end(1)))
+        return match.group(1).strip(), enumerated
+    return "", False
+
+
+def _extract_patterned_value(query: str, pattern: str) -> str:
+    """按编码形态从原文抽裸值（SKU/型号/物控编码/SPU 这类有固定长相的字段）。
+
+    形态命中只当候选，仍要走枚举完整等值校验；命中不了不代表没有筛选意图，
+    因此不能据此放行——高基数字段的裸值兜底属已知残留，见 SKILL.md 降级章节。
+    """
+    match = re.search(pattern, unicodedata.normalize("NFKC", query))
+    return match.group(0).strip() if match else ""
+
+
+def _spec_extract(spec: dict, query: str, *, labeled_only: bool = False, consumed=()) -> str:
+    """按 spec 配置抽取该字段的筛选值：自定义抽取器 > 标签形态 > 编码形态。
+
+    labeled_only=True 时只认用户显式点名的形态。解析分两趟正是为此：
+    第一趟先把「渠道SKU是X」这类显式意图落实并登记 X 已被消费，第二趟才轮到
+    形态抽取与枚举反查。否则同一个值会被多个字段重复消费——实测
+    「渠道SKU是ON-OB-JL-007-68157」会被产品型号的形态正则再抢一次并误报澄清，
+    「品牌是OHWILL」会被渠道反查匹配到 ohwill-shopify-美国而多加一条渠道筛选。
+    """
+    custom = spec.get("extract")
+    if custom is not None:
+        return custom(query)
+    value = _extract_labeled_value(query, spec.get("label_terms") or ())
+    if value:
+        return value
+    if labeled_only:
+        return ""
+    pattern = spec.get("value_pattern")
+    if not pattern:
+        return ""
+    candidate = _extract_patterned_value(query, pattern)
+    normalized = _normalize_component_value(candidate)
+    # 已消费值的子串也要跳过：SPU 的形态会从渠道SKU「ON-OB-JL-007-68157」里
+    # 抠出「JL-007」，若不拦就会对同一个值二次澄清并撤掉已生成的模板
+    if normalized and any(
+        normalized == used or normalized in used for used in consumed
+    ):
+        return ""
+    return candidate
+
+
+def _value_already_consumed(normalized_value: str, consumed) -> bool:
+    """判断某个枚举值是否已被其他字段消费（整值相同或是已消费值的一部分）。"""
+    if not normalized_value:
+        return True
+    base = normalized_value.split("-")[0]
+    return any(
+        normalized_value == used or normalized_value in used or base == used
+        for used in consumed
+    )
+
+
+def _generic_slot_terms() -> set:
+    """收集通用业务词，用于排除枚举值主段的误判匹配。
+
+    为什么需要：反查规则「枚举原值的主段出现在原文即算命中」对同源多地区渠道
+    （傲彼瑞-美国 / 傲彼瑞-加拿大）是必要的，但当主段本身是通用业务词时就会误判——
+    销售小组的授权值形如「亚马逊-运营C组」，主段是「亚马逊」，于是任何提到亚马逊
+    的查询都被当成指定了销售小组，真实元数据下已观察到 team_name 被注入 filters。
+
+    词表全部取自 intent_rules.json 现有内容（槽位取值 terms、筛选字段名、业务域词），
+    不新造词表——新造就等于把本计划想消灭的人工维护成本又加回来。
+    规则文件不可读时返回空集：宁可退回旧行为，也不因排除集缺失而漏掉真实命中。
+    """
+    try:
+        rules = _load_json_object(RULES_PATH, "invalid_rules_file")
+    except (RuntimeError, OSError):
+        return set()
+    terms: set = set()
+    for slot in (rules.get("slots") or {}).values():
+        if not isinstance(slot, dict):
+            continue
+        for spec in slot.values():
+            if isinstance(spec, dict):
+                terms |= {_normalize_component_value(t) for t in spec.get("terms") or []}
+    for field_terms in (rules.get("filter_fields") or {}).values():
+        terms |= {_normalize_component_value(t) for t in field_terms or []}
+    for domain in (rules.get("domains") or {}).values():
+        if isinstance(domain, dict):
+            terms |= {_normalize_component_value(t) for t in domain.get("terms") or []}
+    return {term for term in terms if term}
+
+
+def _reverse_lookup_component_matches(
+    query: str, values: list, normalize
+) -> tuple[list, str]:
+    """用授权枚举原值反查原文，返回 (候选, 命中类型)。
+
+    为什么需要：用户常直接说「查傲彼瑞的所有ASIN」，原文根本不含「渠道」二字，
+    标签正则抽不到值，会被当成没有筛选意图而放行——这正是静默返回全渠道数据的成因。
+    这里反过来拿当前账号的授权原值去原文里找，原值本身或其主段（连字符前）
+    出现即算候选，"傲彼瑞" 因此能同时命中「傲彼瑞-美国」「傲彼瑞-加拿大」并转澄清。
+
+    命中类型必须回传给调用方，因为两类命中的语义完全不同：
+    - exact：原文逐个写出了完整授权原值，是用户点名的准确值，多个也应全部锁定；
+    - base：原文只出现主段，天然歧义，必须按 fail-closed 转澄清。
+    原先两类被拍平成一个列表返回，调用方只能统一要求"唯一命中"，
+    于是用户显式给出的三个准确渠道名被当成主段歧义，回显还退化成共同前缀「傲彼瑞」，
+    反过来要求用户"请指定准确渠道名称"——而用户给的本来就是准确全名。
+    """
+    normalized_query = normalize(query)
+    generic = _generic_slot_terms()
+    exact_hits, base_hits = [], []
+    for value in values:
+        norm = normalize(value)
+        if not norm:
+            continue
+        if norm in normalized_query:
+            exact_hits.append(value)
+            continue
+        base = norm.split("-")[0]
+        # 主段是通用业务词（平台名/业务域/筛选字段名）时不做主段匹配：
+        # 用户说「亚马逊」指的是平台，不是主段恰好叫「亚马逊」的销售小组
+        if len(base) >= 2 and base not in generic and base in normalized_query:
+            base_hits.append(value)
+    # 整值命中优先：原文写了「傲彼瑞-加拿大」就该锁定它，而不是因为主段
+    # 「傲彼瑞」同时命中三个地区渠道而退化成澄清
+    if exact_hits:
+        return _deduplicate(exact_hits), "exact"
+    if base_hits:
+        return _deduplicate(base_hits), "base"
+    return [], ""
+
+
+def _reverse_lookup_component_values(query: str, values: list, normalize) -> list:
+    """反查授权枚举原值，只取候选列表（不关心命中类型的调用方用这个）。"""
+    return _reverse_lookup_component_matches(query, values, normalize)[0]
+
+
+def _shared_prefix(values: list) -> str:
+    """多候选时取共同前缀作回显（「傲彼瑞-美国」「傲彼瑞-加拿大」→「傲彼瑞」）。"""
+    if not values:
+        return ""
+    prefix = str(values[0])
+    for value in values[1:]:
+        while prefix and not str(value).startswith(prefix):
+            prefix = prefix[:-1]
+    return prefix.rstrip("-_ ") or str(values[0])
+
+
+
+def _auto_enum_component_field_group(
+    component_table_id: object, field_names: list, *, timeout_seconds: float = 7.0
+) -> dict:
+    """一次查询取组件表多个字段的授权枚举值，按列返回去重结果。
+
+    组件表返回的是各字段的组合行，行数受 limit 限制；低基数字段（渠道 9、
+    国家 2、销售 12 之类）在 500 行内可完整覆盖，这也是只给低基数字段开
+    反查的原因。任何异常都返回空字典，由上层按 fail-closed 阻断。
+    """
+    if component_table_id in (None, "") or not field_names:
+        return {}
+    enum_json = json.dumps(
+        {
+            "tableId": component_table_id,
+            "dimensions": [{"field": name, "alias": name} for name in field_names],
+            "metrics": [],
+            "limit": 500,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    try:
+        result = subprocess.run(
+            ["opscli", "query", "simple", "--table-id", str(component_table_id),
+             "--json", enum_json, "--run"],
+            capture_output=True,
+            check=False,
+            timeout=timeout_seconds,
+            **core.utf8_subprocess_kwargs(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"[query_plan] 组件批量枚举未完成：{error}", file=sys.stderr)
+        return {}
+    if result.returncode != 0:
+        return {}
+    try:
+        payload = json.loads(result.stdout[result.stdout.index("{"):])
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    rows: list = []
+    for path in (("data", "result", "data"), ("result", "data"), ("data", "data")):
+        node = payload
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, list) and node:
+            rows = node
+            break
+    return {
+        name: _deduplicate(
+            str(row.get(name, "")).strip()
+            for row in rows
+            if isinstance(row, dict) and str(row.get(name, "")).strip()
+        )
+        for name in field_names
+    }
+
+
+# 组件筛选字段总表（值类字段，date_id 归时间口径、platform_name 归平台范围逻辑）。
+#
+# 三个开关的取舍依据是实测基数与裸值出现概率：
+# - label_terms：标签形态抽取用的说法集合，命中标签才发起枚举，零额外网络成本。
+# - reverse_lookup：拿授权枚举原值反查原文，用于兜住不带字段名的裸值
+#   （「查傲彼瑞的ASIN」「查史子涵的销量」）。只给低基数字段开——实测渠道 9、
+#   国家 2、品牌 3、销售 12，枚举一次就能覆盖全集；SKU/产品名这类几百上千的
+#   字段开反查既慢又不可能枚举完整，改用形态抽取。
+# - value_pattern：编码型字段的裸值形态，抽到候选后仍要枚举校验权限。
+_ENUM_COMPONENT_SPECS = (
+    {
+        "field_name": "dept_name",
+        "label_zh": "部门",
+        "extract": _extract_requested_department_value,
+        "normalize": _normalize_department_value,
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "channel_name",
+        "label_zh": "渠道",
+        "label_terms": ("渠道", "channel", "channel_name"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "country_name",
+        "label_zh": "国家",
+        "label_terms": ("国家", "站点", "country", "country_name"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "brand_name",
+        "label_zh": "品牌",
+        "label_terms": ("品牌", "brand", "brand_name"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "team_username",
+        "label_zh": "销售",
+        "label_terms": ("销售员", "销售负责人", "销售", "team_username"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "develop_username",
+        "label_zh": "开发",
+        "label_terms": ("开发员", "开发负责人", "开发", "develop_username"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "team_name",
+        "label_zh": "销售小组",
+        "label_terms": ("销售小组", "小组", "team_name"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "large_team_name",
+        "label_zh": "大组",
+        "label_terms": ("大组", "large_team_name"),
+        "reverse_lookup": True,
+    },
+    {
+        "field_name": "category",
+        "label_zh": "品类",
+        "label_terms": ("品类", "category"),
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "amazon_cat",
+        "label_zh": "平台类目",
+        "label_terms": ("平台类目", "类目", "amazon_cat"),
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "sell_sku",
+        "label_zh": "渠道SKU",
+        "label_terms": ("渠道sku", "卖家sku", "sell_sku", "sellsku"),
+        # 形如 ON-OB-JL-007-68157：字母数字段以连字符相连，至少三段
+        "value_pattern": r"[A-Za-z0-9]{2,}(?:-[A-Za-z0-9]{2,}){2,}",
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "ed_sku",
+        "label_zh": "公司SKU",
+        "label_terms": ("公司sku", "ed_sku", "edsku"),
+        # 形如 USAN1051789WF：纯字母数字混合且长度较长
+        "value_pattern": r"[A-Z]{2,}[0-9]{4,}[A-Z0-9]*",
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "model",
+        "label_zh": "产品型号",
+        "label_terms": ("产品型号", "型号", "model"),
+        # 形如 COT-135-WA
+        "value_pattern": r"[A-Za-z]{2,}-[A-Za-z0-9]{2,}(?:-[A-Za-z0-9]{1,})*",
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "pmc_code",
+        "label_zh": "物控编码",
+        "label_terms": ("物控编码", "物控码", "pmc_code", "pmc"),
+        # 形如 32.002946
+        "value_pattern": r"[0-9]{2,}\.[0-9]{4,}",
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "spu",
+        "label_zh": "SPU",
+        "label_terms": ("spu",),
+        # 形如 BKC-107
+        "value_pattern": r"[A-Z]{2,}-[0-9]{2,}",
+        "reverse_lookup": False,
+    },
+    {
+        "field_name": "product_name",
+        "label_zh": "产品名称",
+        "label_terms": ("产品名称", "商品名称", "product_name"),
+        "reverse_lookup": False,
+    },
+)
+
+
+def _component_of(execution: dict, field_name: str) -> dict | None:
+    """在合同的 filter_components 中查找指定字段的组件配置。"""
+    return next(
         (
             item
             for item in execution.get("filter_components") or []
-            if isinstance(item, dict) and item.get("field_name") == "dept_name"
+            if isinstance(item, dict) and item.get("field_name") == field_name
         ),
         None,
     )
+
+
+def _lookup_component(execution: dict, field_name: str, data_dir) -> dict | None:
+    """查组件配置：优先用合同里的 filter_components，缺失时回落到全量组件表。
+
+    为什么必须回落：filter_components 是按查询相关性排序后截断的，用户原文不含
+    「渠道」二字时该组件会被裁掉——而裸值请求（「查傲彼瑞的所有ASIN」）恰恰是
+    最需要枚举校验的场景，靠合同里的裁剪结果会漏掉。
+    """
+    hit = _component_of(execution, field_name)
+    if hit:
+        return hit
+    dataset_alias = str(execution.get("dataset_alias") or "")
+    if not dataset_alias or data_dir is None:
+        return None
+    column = next(
+        (
+            row
+            for row in scoped_dataset_reader.load_select_columns(Path(data_dir))
+            if str(row.get("current_dataset_alias", "")) == dataset_alias
+            and str(row.get("column_name", "")) == field_name
+        ),
+        None,
+    )
+    if not column:
+        return None
+    component_alias = str(column.get("component_dataset_alias", ""))
+    table_id = next(
+        (
+            row.get("table_id", "")
+            for row in scoped_dataset_reader.load_datasets(Path(data_dir))
+            if str(row.get("dataset_alias", "")) == component_alias
+        ),
+        "",
+    )
+    if not table_id:
+        return None
+    return {
+        "field_name": field_name,
+        "label_zh": str(column.get("verbose_name", "")),
+        "component_dataset_alias": component_alias,
+        "component_table_id": table_id,
+    }
+
+
+def _dataset_has_field(execution: dict, field_name: str, data_dir) -> bool:
+    """判断已选数据集是否含指定字段（ASIN 字面筛选的前置条件）。"""
+    dataset_alias = str(execution.get("dataset_alias") or "")
+    if not dataset_alias or data_dir is None:
+        return False
+    return any(
+        str(row.get("dataset_alias", "")) == dataset_alias
+        and str(row.get("field_name", "")) == field_name
+        for row in scoped_dataset_reader.load_dataset_fields(Path(data_dir))
+    )
+
+
+def _block_component_filter(
+    contract: dict, execution: dict, *, state: str, next_action: str, message_zh: str
+) -> dict:
+    """筛选值无法锁定时统一收口：撤下可执行模板并给出中文恢复指引。
+
+    为什么必须撤模板：query_flow 在 status=planned 时会原样执行 query_template，
+    而模板里没有用户要的筛选条件——放行等于把「查某渠道」悄悄变成「查全部渠道」，
+    静默错数比查不到数据危险得多。这里一律 fail-closed。
+    """
+    contract["status"] = "blocked" if state == "enum_unavailable" else "clarify_required"
+    contract["model_view"]["component_filter_state"] = state
+    contract["model_view"]["next_action"] = next_action
+    contract["model_view"].setdefault("clarification_messages_zh", []).append(message_zh)
+    execution.pop("query_template", None)
+    # 模板已撤下，填充说明再留着会让 Agent 去找一个不存在的模板
+    execution.pop("query_template_fill_rules_zh", None)
+    return contract
+
+
+def _write_component_filter(
+    contract: dict,
+    execution: dict,
+    *,
+    field_name: str,
+    label_zh: str,
+    requested: str,
+    resolved: str | list,
+) -> None:
+    """把已锁定的授权原值写入查询模板，并登记披露信息。
+
+    resolved 传列表表示用户点名了多个准确值，按 IN 语义下发
+    （服务端支持 {"operator": "in", "value": [...]}），单值仍用 `=`，
+    避免为单值场景改变既有 payload 形状。
+    """
+    template = execution.get("query_template")
+    if not isinstance(template, dict):
+        return
+    multi = isinstance(resolved, list)
+    values = list(resolved) if multi else [resolved]
+    template.setdefault("filters", []).append(
+        {"field": field_name, "operator": "in", "value": values}
+        if multi
+        else {"field": field_name, "operator": "=", "value": resolved}
+    )
+    execution.setdefault("resolved_component_filters", []).append(
+        {
+            "field_name": field_name,
+            "label_zh": label_zh,
+            "requested_value": requested,
+            "resolved_value": values if multi else resolved,
+            "match_strategy": "exact_normalized",
+        }
+    )
+    contract["model_view"]["component_filter_state"] = "resolved"
+    shown = "、".join(f"“{value}”" for value in values) if multi else f"“{resolved}”"
+    contract["model_view"].setdefault("component_filter_disclosures_zh", []).append(
+        f"{label_zh}按当前账号授权枚举完整等值匹配为{shown}"
+        + ("（任一命中）。" if multi else "。")
+    )
+
+
+def _resolve_enum_component_filter(
+    contract: dict,
+    query: str,
+    spec: dict,
+    *,
+    auto_enum: bool,
+    data_dir,
+    enum_cache: dict,
+    labeled_only: bool = False,
+    consumed: set | None = None,
+) -> dict:
+    """把用户原文里的组件筛选值在当前账号授权枚举中唯一等值解析并写入模板。
+
+    两条识别路径互补：
+    1. 标签形态（「渠道是傲彼瑞」）由 spec["extract"] 正则抽取；
+    2. 裸值形态（「查傲彼瑞的所有ASIN」，原文不含字段名）由授权枚举原值反查原文。
+       没有第 2 条时，裸值请求会因抽不到值而被当成「没有筛选意图」直接放行，
+       正是静默返回全范围数据的成因。
+
+    任一环节无法唯一锁定都不放行：枚举拿不到 → blocked；命中不唯一或零命中 →
+    clarify_required，并撤下 query_template。
+    """
+    execution = contract.get("execution_ref")
+    if not isinstance(execution, dict):
+        return contract
+    consumed = consumed if consumed is not None else set()
+    field_name = spec["field_name"]
+    label_zh = spec["label_zh"]
+    component = _lookup_component(execution, field_name, data_dir)
     if not component:
         return contract
 
-    values = (
-        _auto_enum_component_values(
-            component.get("component_table_id"),
-            "dept_name",
-        )
-        if auto_enum
-        else []
+    # 该字段本趟之前已解析过就不再重复（两趟循环会把同一 spec 走两遍）
+    if any(
+        isinstance(item, dict) and item.get("field_name") == field_name
+        for item in execution.get("resolved_component_filters") or []
+    ):
+        return contract
+    requested = _spec_extract(spec, query, labeled_only=labeled_only, consumed=consumed)
+    # 标签形态的值后面紧跟列举分隔符时，用户点名的是一组值而不是一个值。
+    # 此时不能拿抽到的首个值去做单值等值匹配——那会静默把三渠道缩成一个渠道，
+    # 且其余值不会登记为已消费，其中的「加拿大」会被国家字段反查抓走。
+    # 改走下面的枚举反查分支：由授权枚举做完整等值匹配，不靠边界前瞻猜结尾。
+    labeled_first, labeled_enumeration = _labeled_value_match(
+        query, spec.get("label_terms") or ()
     )
+    enumerated = bool(labeled_enumeration and requested and requested == labeled_first)
+    # 第一趟只落实用户显式点名的字段，反查与形态抽取留到第二趟
+    if labeled_only and not requested:
+        return contract
+    # 只认标签形态的字段原文没提就没有筛选意图，不必付出一次枚举调用
+    if not requested and not spec.get("reverse_lookup"):
+        return contract
+    # 未开启自动枚举时无从校验：抽到了值才阻断，否则保持原状供维护者排查
+    if not auto_enum:
+        if requested:
+            return _block_component_filter(
+                contract,
+                execution,
+                state="enum_unavailable",
+                next_action="retry_component_permission_enum",
+                message_zh=(
+                    f"当前未能枚举{label_zh}“{requested}”的授权原值，"
+                    "已阻止扩大为全范围查询；请原样重试一次。"
+                ),
+            )
+        return contract
+
+    enum_errors: list = []
+    values = _cached_enum_values(
+        enum_cache, component.get("component_table_id"), field_name, enum_errors
+    )
+    if not values and not requested and not enum_errors:
+        # 枚举成功但当前账号无授权值：该字段不可能成为筛选条件，跳过即可。
+        # 「开发」在部分账号下就是 0 条，若按失败阻断会把所有查询挡死。
+        return contract
     if not values:
-        contract["status"] = "blocked"
-        contract["model_view"]["component_filter_state"] = "enum_unavailable"
-        contract["model_view"]["next_action"] = "retry_component_permission_enum"
-        contract["model_view"]["clarification_messages_zh"].append(
-            f"当前未能枚举部门“{requested}”的授权原值，已阻止扩大为全范围查询；请原样重试一次。"
+        # 枚举失败时无法判断原文里有没有筛选值，一律不放行（宁可错杀）
+        return _block_component_filter(
+            contract,
+            execution,
+            state="enum_unavailable",
+            next_action="retry_component_permission_enum",
+            message_zh=(
+                f"当前未能枚举{label_zh}"
+                + (f"“{requested}”" if requested else "")
+                + "的授权原值，已阻止扩大为全范围查询；请原样重试一次。"
+            ),
         )
-        execution.pop("query_template", None)
-        return contract
 
-    target = _normalize_department_value(requested)
-    matched = [value for value in values if _normalize_department_value(value) == target]
-    if len(matched) != 1:
-        contract["status"] = "clarify_required"
-        contract["model_view"]["component_filter_state"] = "clarify_required"
-        contract["model_view"]["next_action"] = "ask_user_for_component_filter"
-        contract["model_view"]["clarification_messages_zh"].append(
-            f"部门“{requested}”没有唯一完整等值的授权成员，请指定当前账号可见的准确部门名称。"
+    # 未单独声明归一化的字段走通用规则（NFKC + trim + casefold）；
+    # 部门有中文数字等价这类特殊口径，才单独挂自己的归一化器
+    normalize = spec.get("normalize") or _normalize_component_value
+    # 整值多命中：原文逐个写出了完整授权原值，是用户点名的准确值集合，
+    # 全部锁定并以 IN 下发，不再因为"命中不唯一"退化成澄清
+    exact_multi = False
+    if requested and not enumerated:
+        target = normalize(requested)
+        matched = [value for value in values if normalize(value) == target]
+    else:
+        # 裸值反查：授权原值本身或其主段（连字符前）出现在原文即算候选
+        candidates, match_kind = _reverse_lookup_component_matches(query, values, normalize)
+        matched = [
+            value
+            for value in candidates
+            # 已被其他字段消费掉的值（含其子串）不再算命中：
+            # 「品牌是OHWILL」不该连带匹配渠道 ohwill-shopify-美国；
+            # 渠道锁定「傲彼瑞-加拿大」后，其中的「加拿大」也不该再被国家反查抓走
+            if not _value_already_consumed(normalize(value), consumed)
+        ]
+        if not matched:
+            return contract
+        exact_multi = len(matched) > 1 and match_kind == "exact"
+        if exact_multi:
+            requested = "、".join(matched)
+        else:
+            requested = matched[0] if len(matched) == 1 else _shared_prefix(matched)
+
+    if len(matched) != 1 and not exact_multi:
+        # 零命中时用包含关系找近似成员，让用户直接从可见成员里挑，省一轮往返
+        approx = matched or [
+            value
+            for value in values
+            if normalize(requested) and normalize(requested) in normalize(value)
+        ]
+        hint = "、".join(f"“{value}”" for value in approx[:8]) if approx else ""
+        return _block_component_filter(
+            contract,
+            execution,
+            state="clarify_required",
+            next_action="ask_user_for_component_filter",
+            message_zh=(
+                f"{label_zh}“{requested}”没有唯一完整等值的授权成员，"
+                + (f"当前账号可见的近似成员：{hint}；" if hint else "")
+                + f"请指定当前账号可见的准确{label_zh}名称。"
+            ),
         )
-        execution.pop("query_template", None)
-        return contract
 
+    # 裸值（无字段标签）且该值在别的字段枚举里也存在时不得静默绑定：
+    # 值在错字段里同样合法，等值校验兜不住，只能让用户点明是哪个字段
+    if not labeled_first and not exact_multi:
+        candidates = _cross_field_candidates(
+            spec, matched[0], execution, data_dir, enum_cache
+        )
+        if len(candidates) > 1:
+            listed = "、".join(f"“{item}”" for item in candidates)
+            return _block_component_filter(
+                contract,
+                execution,
+                state="clarify_required",
+                next_action="ask_user_for_component_filter",
+                message_zh=(
+                    f"“{matched[0]}”同时是{listed}的授权值，无法确定你要按哪个字段筛选；"
+                    f"请指明字段，例如「{candidates[0]}是{matched[0]}」。"
+                ),
+            )
+
+    _write_component_filter(
+        contract,
+        execution,
+        field_name=field_name,
+        label_zh=label_zh,
+        requested=requested,
+        resolved=matched if exact_multi else matched[0],
+    )
+    consumed.add(_normalize_component_value(requested))
+    # 多值时每个已锁定的值都要登记，避免其中某个值的子串被后续字段反查抓走
+    for value in matched if exact_multi else [matched[0]]:
+        consumed.add(_normalize_component_value(value))
+    return contract
+
+
+def _cross_field_candidates(
+    owner_spec: dict, value: str, execution: dict, data_dir, enum_cache: dict
+) -> list[str]:
+    """裸值在其他字段的授权枚举里也存在时，返回全部候选字段的中文标签。
+
+    为什么只对裸值判：用户显式写「产品型号是BKC-107」或「SPU是BKC-107」时
+    字段已由标签确定，两种写法实测都能正确落到各自字段；只有裸值
+    （靠编码形态抽出来）才存在歧义。碰撞扫描在本账号真实枚举里找到 10 个
+    同值跨字段的情形（产品型号∩SPU 8 个、渠道SKU∩公司SKU 2 个），
+    原先按 _ENUM_COMPONENT_SPECS 顺序静默绑到靠前的字段——
+    值在错字段里同样合法，因此没有任何 fail-closed 兜底，用户拿到的是
+    另一个口径的数据且无从察觉。
+
+    检查范围限定为「同样带编码形态的字段」（当前 5 个），不按形态是否命中该值
+    再缩小——`USAN1088833` 同属渠道SKU 与公司SKU，但渠道SKU 的形态要求三段
+    连字符、匹配不上它，按形态缩范围会漏掉这一对。5 次枚举有上限且走缓存。
+    """
+    normalized = _normalize_component_value(value)
+    labels = [owner_spec.get("label_zh") or owner_spec["field_name"]]
+    for spec in _ENUM_COMPONENT_SPECS:
+        if spec["field_name"] == owner_spec["field_name"]:
+            continue
+        if not spec.get("value_pattern"):
+            continue
+        component = _lookup_component(execution, spec["field_name"], data_dir)
+        if not component:
+            continue
+        errors: list = []
+        others = _cached_enum_values(
+            enum_cache, component.get("component_table_id"), spec["field_name"], errors
+        )
+        if errors:
+            continue
+        if any(_normalize_component_value(item) == normalized for item in others):
+            labels.append(spec.get("label_zh") or spec["field_name"])
+    return labels
+
+
+def _cached_enum_values(
+    cache: dict, table_id: object, field_name: str, errors: list | None = None
+) -> list:
+    """带缓存的组件枚举：同一次规划里同一 (表, 字段) 只查一次。
+
+    缓存同时记住「本次枚举是否报错」，供调用方区分调用失败与无授权值。
+    """
+    key = (str(table_id), field_name)
+    if key not in cache:
+        local_errors: list = []
+        cache[key] = _auto_enum_component_values(table_id, field_name, errors=local_errors)
+        cache[("error", *key)] = local_errors
+    if errors is not None:
+        errors.extend(cache.get(("error", *key)) or [])
+    return cache[key]
+
+
+def _batch_enum_reverse_lookup_fields(
+    contract: dict, data_dir, enum_cache: dict
+) -> None:
+    """把需要裸值反查的字段按组件表合并成一次查询，避免逐字段各发一次网络请求。
+
+    实测 17 个值类字段只落在 6 张组件表上（渠道/国家/平台同表，销售/小组/大组同表），
+    合并后反查成本从「字段数」降到「表数」。组件表一次返回的是各字段的组合行，
+    按列取去重值即可。
+    """
+    execution = contract.get("execution_ref")
+    if not isinstance(execution, dict):
+        return
+    by_table: dict[str, list[str]] = {}
+    for spec in _ENUM_COMPONENT_SPECS:
+        if not spec.get("reverse_lookup"):
+            continue
+        component = _lookup_component(execution, spec["field_name"], data_dir)
+        if not component:
+            continue
+        table_id = str(component.get("component_table_id") or "")
+        if table_id:
+            by_table.setdefault(table_id, []).append(spec["field_name"])
+    for table_id, fields in by_table.items():
+        if all((table_id, field) in enum_cache for field in fields):
+            continue
+        grouped = _auto_enum_component_field_group(table_id, fields)
+        for field in fields:
+            enum_cache.setdefault((table_id, field), grouped.get(field, []))
+
+
+def _resolve_asin_filter(contract: dict, query: str, data_dir) -> dict:
+    """商品 ID 直接从原文字面锁定，不走枚举。
+
+    为什么不枚举：ASIN/商品 ID 基数几万起，500 条枚举覆盖不了，也太慢。
+    代价是只能靠形态识别，认错时查询返回 0 行（响亮失败），
+    比认不出而静默返回全范围数据安全。
+    """
+    execution = contract.get("execution_ref")
+    if not isinstance(execution, dict):
+        return contract
+    if not _dataset_has_field(execution, "asin", data_dir):
+        return contract
+    asins = _extract_asin_values(query)
+    if not asins:
+        return contract
     template = execution.get("query_template")
     if not isinstance(template, dict):
         return contract
-    template.setdefault("filters", []).append(
-        {"field": "dept_name", "operator": "=", "value": matched[0]}
+    condition = (
+        {"field": "asin", "operator": "=", "value": asins[0]}
+        if len(asins) == 1
+        else {"field": "asin", "operator": "in", "value": asins}
     )
-    execution["resolved_component_filters"] = [
+    template.setdefault("filters", []).append(condition)
+    execution.setdefault("resolved_component_filters", []).append(
         {
-            "field_name": "dept_name",
-            "label_zh": "部门",
-            "requested_value": requested,
-            "resolved_value": matched[0],
-            "match_strategy": "exact_normalized",
+            "field_name": "asin",
+            "label_zh": "ASIN",
+            "requested_value": "、".join(asins),
+            "resolved_value": asins[0] if len(asins) == 1 else asins,
+            "match_strategy": "asin_literal_format",
         }
-    ]
-    contract["model_view"]["component_filter_state"] = "resolved"
-    contract["model_view"]["component_filter_disclosures_zh"] = [
-        f"部门按当前账号授权枚举完整等值匹配为“{matched[0]}”。"
-    ]
+    )
+    contract["model_view"].setdefault("component_filter_disclosures_zh", []).append(
+        f"商品 ID 按原文字面锁定为 {'、'.join(asins)}。"
+    )
+    return contract
+
+
+def _attach_fallback_guidance(contract: dict) -> dict:
+    """非 planned 合同补降级信息：权威字段目录 + 禁止猜测声明。
+
+    为什么需要：规划器没产出可执行模板时，Agent 手上若没有权威的表名与字段名，
+    就会凭记忆或推测构造查询（线上实测形态：转投其他 Skill、或直接改用 MCP 重来，
+    过程中自行编造数据集与字段）。这里把「唯一可用的字段来源」显式交给它。
+
+    只补信息、不改状态：澄清与阻断的判定仍由各自的规则负责。
+    """
+    if contract.get("status") == "planned":
+        return contract
+    if contract.get("query_mode") != "dataset_query":
+        return contract
+    execution = contract.get("execution_ref")
+    model_view = contract.get("model_view")
+    if not isinstance(execution, dict) or not isinstance(model_view, dict):
+        return contract
+
+    def _names(items) -> list:
+        return [
+            {
+                "field_name": str(item.get("field_name", "")),
+                "label_zh": str(item.get("label_zh", "")),
+            }
+            for item in items or []
+            if isinstance(item, dict) and item.get("field_name")
+        ]
+
+    dimensions = _names(execution.get("dimensions"))
+    metrics = _names(execution.get("metrics"))
+    date_fields = _names(execution.get("date_fields"))
+    has_catalog = bool(dimensions or metrics)
+    catalog = {
+        "source": "planner_contract" if has_catalog else "unavailable",
+        "metadata_version": str(contract.get("metadata_version", "")),
+        "table_id": execution.get("table_id"),
+        "dataset_alias": execution.get("dataset_alias"),
+        "dimensions": dimensions,
+        "metrics": metrics,
+        "date_fields": date_fields,
+    }
+    execution["fallback_catalog"] = catalog
+    model_view["fallback_level"] = "L1_contract_catalog" if has_catalog else "L3_metadata_refresh"
+    model_view["no_guess_policy_zh"] = (
+        "本次未下发可执行模板。若要继续取数，只能使用 execution_ref.fallback_catalog 中"
+        "出现的 table_id、dataset_alias 与 field_name；禁止凭记忆或推测编造数据集名、"
+        "字段名与枚举值。目录为空时不得构造任何查询，先按 next_action 恢复元数据。"
+    )
+    return contract
+
+
+def _time_literals_consumed(contract: dict) -> set:
+    """把时间解析已经用掉的日期字面量登记为已消费。
+
+    为什么需要：渠道SKU 的编码形态是 `[A-Za-z0-9]{2,}(-[A-Za-z0-9]{2,}){2,}`，
+    ISO 日期「2026-07-01」正好命中。实测「沿用 2026-07-01 至 2026-07-30 的口径」
+    被误读成渠道SKU 筛选值并转澄清，用户的日期口径反而落不了地。
+    日期已被时间解析消费，不该再被组件形态抽取二次消费——这正是 consumed 的语义。
+    """
+    time_scope = (contract.get("execution_ref") or {}).get("time_scope") or {}
+    literals = set()
+    for key in ("start", "end", "comparison_start", "comparison_end"):
+        value = time_scope.get(key)
+        if value:
+            literals.add(_normalize_component_value(value))
+    return literals
+
+
+def _resolve_component_filters(
+    contract: dict, query: str, *, auto_enum: bool, data_dir=None
+) -> dict:
+    """解析原文中的组件字段筛选值（部门/渠道走授权枚举，ASIN 走字面格式）。
+
+    只在 planned 的数据集查询上生效；任一字段无法唯一锁定即撤下模板，
+    避免 query_flow 执行不含用户筛选条件的「骨架」。
+    """
+    if contract.get("status") != "planned":
+        return contract
+    contract = _resolve_asin_filter(contract, query, data_dir)
+    enum_cache: dict = {}
+    consumed: set = _time_literals_consumed(contract)
+    if auto_enum and contract.get("status") == "planned":
+        _batch_enum_reverse_lookup_fields(contract, data_dir, enum_cache)
+    # 两趟：先落实用户显式点名的字段并登记已消费的值，再做形态抽取与枚举反查
+    for labeled_only in (True, False):
+        for spec in _ENUM_COMPONENT_SPECS:
+            if contract.get("status") != "planned":
+                break
+            contract = _resolve_enum_component_filter(
+                contract,
+                query,
+                spec,
+                auto_enum=auto_enum,
+                data_dir=data_dir,
+                enum_cache=enum_cache,
+                labeled_only=labeled_only,
+                consumed=consumed,
+            )
     return contract
 
 
@@ -2061,6 +3043,8 @@ def _error_next_action(code: str) -> tuple[str, bool]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # 入口先切 UTF-8 stdio：规划合同与 stderr 诊断都含中文，Windows 管道下不能走 GBK
+    core.force_utf8_stdio()
     args = _parse_args(argv)
     try:
         query = _resolve_query_text(args)

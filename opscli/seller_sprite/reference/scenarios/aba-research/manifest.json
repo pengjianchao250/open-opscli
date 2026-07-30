@@ -1,0 +1,61 @@
+{
+  "scenario_id": "aba-research",
+  "title": "ABA数据选品",
+  "web_route": "/v3/aba-research",
+  "api": {
+    "method": "POST",
+    "endpoint": "/v3/api/aba-research",
+    "response_type": "json",
+    "row_path": "data.items"
+  },
+  "required_any_params": [
+    "q",
+    "keywordOrAsin",
+    "keyword",
+    "asin"
+  ],
+  "query_conditions": {
+    "period_type": {
+      "field": "reverseType",
+      "enum": [
+        "W",
+        "M"
+      ],
+      "default": "W"
+    },
+    "period": {
+      "default": "latest_completed_week"
+    },
+    "departments": {
+      "type": "array",
+      "value": "page_category_code"
+    }
+  },
+  "response": {
+    "result_scope": "first_page",
+    "fixed_page": 1,
+    "fixed_size": 100,
+    "auto_pagination": false
+  },
+  "result": {
+    "source": "query_json",
+    "local_xlsx": true,
+    "official_export_api": false
+  },
+  "official_template": {
+    "captured_workbook_name": "ABAKeywordTrend-US-2026第29周-690875.xlsx",
+    "captured_workbook_path": "output/ABAKeywordTrend-US-2026第29周-690875.xlsx",
+    "headers_file": "official-headers.json",
+    "workbook_profile": "workbook-profile.json",
+    "captured_main_sheet": "ABAKeyword(2000)",
+    "captured_notes_sheet": "Notes",
+    "header_count": 19,
+    "row_count": 2000
+  },
+  "capture_evidence": {
+    "captured_at": "2026-07-23",
+    "sample_request": "sample-request.json",
+    "sample_response": "sample-response.json",
+    "official_workbook_sha256": "5089786528779fedbec4bb802340249656502ee8415237425a94e8e209255fda"
+  }
+}

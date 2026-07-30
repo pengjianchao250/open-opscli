@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
+import core
 import evidence_contract
 import plan_integrity
 
@@ -34,6 +35,10 @@ MAX_STDOUT_BYTES = 8000
 # 排序兜底重查时 limit 的放大倍数与硬上限
 ORDER_REQUERY_MULTIPLIER = 3
 ORDER_REQUERY_LIMIT_CAP = 5000
+# 服务端默认分页补齐的硬上限：不传 limit 时服务端只回默认页（实测 20 行），
+# 而合同里的 total_count 是全量行数——两者不一致时必须补齐，否则模型会把
+# 「首页」当成「全量」写进结论（实测：38 行的结果被报成「共 20 个，未截断」）
+AUTO_COMPLETE_LIMIT_CAP = 5000
 # opscli 执行超时（秒）
 EXEC_TIMEOUT_SECONDS = 300.0
 
@@ -306,9 +311,9 @@ def _run_opscli(table_id: str, payload: dict) -> dict:
                 "--run",
             ],
             capture_output=True,
-            text=True,
             check=False,
             timeout=EXEC_TIMEOUT_SECONDS,
+            **core.utf8_subprocess_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError(f"opscli_exec_failed:{error}") from error
@@ -413,6 +418,50 @@ def _apply_order_fallback(
     return wide_rows[: int(limit)], note
 
 
+def _complete_server_paged_rows(
+    table_id: str, payload: dict, rows: list[dict], total: object
+) -> tuple[list[dict], dict | None]:
+    """用户未指定行数时，补齐服务端默认分页之外的剩余行。
+
+    为什么必须补：服务端在 payload 不带 limit 时只返回默认页（实测 20 行），
+    但 meta.totalCount 给的是全量行数。规划器模板恒填 limit=null，于是任何
+    超过一页的查询都会静默只回首页——而模型拿到的 rows 看起来是完整的。
+    这里显式重查一次并披露，避免把首页当全量。
+
+    返回 (补齐后的行, 披露信息或 None)。
+    """
+    if payload.get("limit"):
+        return rows, None  # 用户明确要了行数，按其口径执行，不擅自放大
+    if not isinstance(total, int) or total <= len(rows):
+        return rows, None
+    requery = dict(payload)
+    requery["limit"] = min(int(total), AUTO_COMPLETE_LIMIT_CAP)
+    try:
+        response = _run_opscli(table_id, requery)
+    except RuntimeError as error:
+        # 补齐失败不能把首页当全量，如实标记让上层披露
+        return rows, {
+            "auto_complete_applied": False,
+            "reason": str(error)[:120],
+            "server_default_page_rows": len(rows),
+            "total_count": total,
+        }
+    full_rows, _total = _extract_rows(response)
+    if len(full_rows) <= len(rows):
+        return rows, {
+            "auto_complete_applied": False,
+            "reason": "requery_returned_no_more_rows",
+            "server_default_page_rows": len(rows),
+            "total_count": total,
+        }
+    return full_rows, {
+        "auto_complete_applied": True,
+        "server_default_page_rows": len(rows),
+        "requery_limit": requery["limit"],
+        "row_count_after_complete": len(full_rows),
+    }
+
+
 def _compact_preview(rows: list[dict], preview_rows: int) -> list[dict]:
     """预览行截断：只输出前 N 行，长字符串截断防撑爆。"""
     preview = []
@@ -456,6 +505,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # 入口先切 UTF-8 stdio：后续所有中文 JSON 输出都要能被 Agent 正确读取
+    core.force_utf8_stdio()
     args = _parse_args(argv)
     try:
         if args.plan_file:
@@ -531,12 +582,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 3
 
         rows, total = _extract_rows(response)
+        # 服务端默认分页补齐必须在披露之前完成，否则 row_count_returned 是首页行数
+        rows, auto_complete_note = _complete_server_paged_rows(table_id, payload, rows, total)
         disclosures: dict[str, Any] = {
             "row_count_returned": len(rows),
             "total_count": total,
             "limit": payload.get("limit"),
-            "truncated": bool(payload.get("limit")) and total is not None and len(rows) < (total or 0),
+            # 截断判定只看「返回行数是否少于总行数」。旧实现要求 payload 必须带
+            # limit 才算截断，导致服务端默认分页的截断被报成 truncated=false，
+            # 模型据此把首页写成全量结论
+            "truncated": total is not None and len(rows) < (total or 0),
         }
+        if auto_complete_note:
+            disclosures["server_paging"] = auto_complete_note
+            disclosures["server_paging_disclosure_zh"] = (
+                "服务端未按 limit 返回全量：已自动重查补齐，结论按补齐后的行数陈述"
+                if auto_complete_note.get("auto_complete_applied")
+                else "服务端只返回了默认页且补齐失败：结论必须声明这是部分结果，禁止当作全量"
+            )
         order_note = None
         if order_by and not args.no_order_fallback and rows:
             rows, order_note = _apply_order_fallback(table_id, payload, rows, order_by)
@@ -558,12 +621,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         # 全量结果落盘：模型上下文只进预览，完整数据供导出/复核
         result_path = Path(args.result_dir) / f"query_result_{int(time.time())}.json"
         try:
+            # 调用方常传一个尚不存在的子目录，旧实现直接 OSError 后把路径写成
+            # null，模型既拿不到全量文件也不知道为什么，只能改写请求反复重查
+            result_path.parent.mkdir(parents=True, exist_ok=True)
             result_path.write_text(
-                json.dumps(response, ensure_ascii=False, indent=1), encoding="utf-8"
+                json.dumps({**response, "rows_after_auto_complete": rows}, ensure_ascii=False, indent=1),
+                encoding="utf-8",
             )
             disclosures["full_result_file"] = str(result_path)
-        except OSError:
+        except OSError as error:
             disclosures["full_result_file"] = None
+            disclosures["full_result_file_error"] = str(error)[:160]
 
         output: dict[str, Any] = {
             "status": "ok",

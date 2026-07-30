@@ -28,17 +28,23 @@ class RemoteMcpToolError(Exception):
 class RemoteMcpClient:
     """封装最小化的远端 MCP HTTP 调用。"""
 
-    def __init__(self, url: str) -> None:
+    def __init__(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         normalized_url = url.strip()
         if not normalized_url:
             raise ValueError("remote MCP url is required")
         self.url = normalized_url
+        self.headers = dict(headers) if headers else None
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """初始化 MCP 会话后调用工具，并解析首个文本结果。"""
         # `create_mcp_http_client()` 返回的是需要显式关闭的 AsyncClient。
         # 这里由当前封装拥有其生命周期，避免依赖下游 transport 帮我们兜底。
-        async with create_mcp_http_client() as http_client:
+        async with create_mcp_http_client(headers=self.headers) as http_client:
             async with streamable_http_client(self.url, http_client=http_client) as (
                 read_stream,
                 write_stream,

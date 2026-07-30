@@ -14,6 +14,7 @@ from uuid import uuid4
 from opscli.seller_sprite.accounts import SellerSpriteAccount, SellerSpriteAccountProvider
 from opscli.seller_sprite.api.categories import SellerSpriteCategoryResolver
 from opscli.seller_sprite.api.client import BASE_URL, SellerSpriteApiClient
+from opscli.seller_sprite.api.keyword_research import parse_keyword_research_html
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.api.scenarios import get_scenario, list_scenarios
 from opscli.seller_sprite.browser_route import (
@@ -26,7 +27,11 @@ from opscli.seller_sprite.browser_route import (
 )
 from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
 from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
-from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, SellerSpriteScenarioResult
+from opscli.seller_sprite.domain.models import (
+    SellerSpriteExportResult,
+    SellerSpriteScenarioRequest,
+    SellerSpriteScenarioResult,
+)
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
 from opscli.seller_sprite.services.task_status import (
     base_status,
@@ -62,6 +67,8 @@ class SellerSpriteApiManager:
         ]
         | None = None,
         session_owner_id: str = "default",
+        listing_remote_task_id: str | None = None,
+        listing_task_id_listener: Callable[[str], None] | None = None,
     ) -> None:
         """创建卖家精灵场景执行器。
 
@@ -83,6 +90,8 @@ class SellerSpriteApiManager:
             self.settings
         )
         self.session_owner_id = session_owner_id
+        self.listing_remote_task_id = listing_remote_task_id
+        self.listing_task_id_listener = listing_task_id_listener
         self.account_provider = account_provider or SellerSpriteAccountProvider(
             self.settings,
             integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
@@ -173,6 +182,9 @@ class SellerSpriteApiManager:
         root_dir = self._build_root_dir(request, job_id)
         root_dir.mkdir(parents=True, exist_ok=True)
         page_size = request.page_size or self.settings.page_size
+        export_format = _normalize_export_format(request.export_format)
+        if request.scenario == "aba-reverse" and export_format != "xlsx":
+            raise SellerSpriteConfigError("aba-reverse 仅支持 xls 或 xlsx 官方文件导出")
         account = self.account_provider.get_default()
         warnings: list[dict[str, Any]] = []
         mode = _resolve_request_mode(request.mode or self.settings.default_mode)
@@ -210,28 +222,61 @@ class SellerSpriteApiManager:
                 },
             )
             if mode == "browser-route":
-                browser_result = await _run_browser_route_request(
-                    settings=self.settings,
-                    account=account,
-                    request=request,
-                    scenario_method=scenario.method,
-                    endpoint=scenario.endpoint_for(payload),
-                    payload=_main_payload(request.scenario, payload),
-                    referer=scenario.build_referer(payload),
-                    root_dir=root_dir,
-                    high_frequency_endpoint=(
-                        scenario.high_frequency_endpoint_for(payload)
-                        if payload.get("includeHighFrequency")
-                        else None
-                    ),
-                    high_frequency_payload=(
-                        _high_frequency_payload(request.scenario, payload)
-                        if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload)
-                        else None
-                    ),
-                    session_state_listener=self.session_state_listener,
-                    session_owner_id=self.session_owner_id,
-                )
+                if request.scenario == "listing-analysis" and self.listing_remote_task_id:
+                    from opscli.seller_sprite.browser_route import (
+                        fetch_listing_analysis_report_with_browser_route,
+                    )
+
+                    browser_result = await fetch_listing_analysis_report_with_browser_route(
+                        settings=self.settings,
+                        account=account,
+                        task_id=self.listing_remote_task_id,
+                        root_dir=root_dir,
+                        page_prepare=(
+                            self.settings.browser_page_prepare
+                            if request.page_prepare is None
+                            else request.page_prepare
+                        ),
+                        task_interval_seconds=(
+                            self.settings.browser_task_interval_seconds
+                            if request.task_interval_seconds is None
+                            else request.task_interval_seconds
+                        ),
+                        cooldown_seconds=(
+                            self.settings.browser_cooldown_seconds
+                            if request.cooldown_seconds is None
+                            else request.cooldown_seconds
+                        ),
+                        state_listener=self.session_state_listener,
+                        owner_id=self.session_owner_id,
+                    )
+                else:
+                    browser_result = await _run_browser_route_request(
+                        settings=self.settings,
+                        account=account,
+                        request=request,
+                        scenario_method=scenario.method,
+                        endpoint=scenario.endpoint_for(payload),
+                        payload=_main_payload(request.scenario, payload),
+                        referer=scenario.build_referer(payload),
+                        root_dir=root_dir,
+                        high_frequency_endpoint=(
+                            scenario.high_frequency_endpoint_for(payload)
+                            if payload.get("includeHighFrequency")
+                            else None
+                        ),
+                        high_frequency_payload=(
+                            _high_frequency_payload(request.scenario, payload)
+                            if payload.get("includeHighFrequency") and scenario.high_frequency_endpoint_for(payload)
+                            else None
+                        ),
+                        session_state_listener=self.session_state_listener,
+                        session_owner_id=self.session_owner_id,
+                    )
+                    if request.scenario == "listing-analysis":
+                        task_id = _extract_task_id(browser_result.response)
+                        if task_id and self.listing_task_id_listener:
+                            self.listing_task_id_listener(task_id)
                 login = browser_result.login
                 main_response = browser_result.response
                 high_frequency_response = browser_result.high_frequency_response
@@ -305,7 +350,6 @@ class SellerSpriteApiManager:
                                 "error": exc.to_dict(),
                             }
                         )
-
         raw = {
             "job_id": job_id,
             "scenario": request.scenario,
@@ -320,11 +364,16 @@ class SellerSpriteApiManager:
 
         rows = _extract_items(main_response, scenario=request.scenario)
         high_frequency_rows = _extract_high_frequency_rows(high_frequency_response)
-        export_format = _normalize_export_format(request.export_format)
-        if export_format == "xlsx":
+        if request.scenario == "aba-reverse":
+            export = _official_xlsx_export(main_response, root_dir=root_dir)
+        elif export_format == "xlsx":
             export = export_rows_to_xlsx(
                 rows=rows,
-                output_path=_export_output_path(root_dir, job_id, "xlsx"),
+                output_path=(
+                    _aba_research_output_path(root_dir, site=site, payload=payload)
+                    if request.scenario == "aba-research"
+                    else _export_output_path(root_dir, job_id, "xlsx")
+                ),
                 scenario=request.scenario,
                 site=site,
                 period=period,
@@ -412,6 +461,32 @@ async def _run_main_request(
 ) -> dict[str, Any]:
     if method in {"GET", "PAGE_CAPTURE"}:
         return await client.get_json(endpoint, payload, referer=referer)
+    if method == "GET_XLSX":
+        content, filename = await client.get_bytes(endpoint, payload, referer=referer)
+        safe_filename = _safe_official_filename(filename)
+        if len(str(root_dir / safe_filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+            safe_filename = "export.xlsx"
+        response_path = root_dir / safe_filename
+        response_path.write_bytes(content)
+        return {
+            "code": "OK",
+            "data": {
+                "official_xlsx_path": str(response_path),
+                "official_filename": filename,
+                "content_length": len(content),
+            },
+        }
+    if method == "GET_PAGE":
+        response_html = await client.get_html(endpoint, payload, referer=referer)
+        response_html_path = root_dir / "response.html"
+        response_html_path.write_text(response_html, encoding="utf-8")
+        rows = parse_keyword_research_html(response_html)
+        return {
+            "code": "OK",
+            "data": {"items": rows},
+            "response_html_path": str(response_html_path),
+            "response_html_length": len(response_html),
+        }
     if method == "POST_QUERY":
         return await client.request_json(
             "POST",
@@ -684,6 +759,10 @@ def _extract_items(response: dict[str, Any], *, scenario: str | None = None) -> 
         pager = data["pager"]
         if isinstance(pager.get("items"), list):
             return [item for item in pager["items"] if isinstance(item, dict)]
+    if isinstance(data, dict) and isinstance(data.get("pagerDto"), dict):
+        pager = data["pagerDto"]
+        if isinstance(pager.get("items"), list):
+            return [item for item in pager["items"] if isinstance(item, dict)]
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     return []
@@ -753,12 +832,13 @@ def _looks_like_guest_limited_response(response: dict[str, Any], *, page_size: i
     data = response.get("data") if isinstance(response, dict) else None
     if not isinstance(data, dict):
         return False
-    items = data.get("items")
+    pager = data.get("pagerDto") if isinstance(data.get("pagerDto"), dict) else data
+    items = pager.get("items")
     if not isinstance(items, list) or len(items) != 20:
         return False
-    total = _int(data.get("total"), 0)
-    pages = _int(data.get("pages"), 0)
-    size = _int(data.get("size"), 0)
+    total = _int(pager.get("total"), 0)
+    pages = _int(pager.get("pages"), 0)
+    size = _int(pager.get("size"), 0)
     return bool(
         data.get("guestId")
         or data.get("guestVisited") is True
@@ -798,6 +878,10 @@ def _scenario_label(scenario: str) -> str:
         "competitor-lookup": "CompetitorLookup",
         "product-research": "ProductResearch",
         "keyword-miner": "KeywordMiner",
+        "keyword-research": "KeywordResearch",
+        "aba-research": "ABAResearch",
+        "association-traffic": "AssociationTraffic",
+        "aba-reverse": "ABAReverse",
         "keyword-reverse": "ReverseASIN",
         "traffic-source": "TrafficSource",
         "market-research": "MarketResearch",
@@ -815,12 +899,25 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
             return str(value[0])
         return str(value) if value is not None else ""
 
-    if scenario == "keyword-reverse":
-        return _sanitize_filename_part(params.get("asin"))
+    if scenario in {"keyword-reverse", "aba-reverse"}:
+        return _sanitize_filename_part(
+            params.get("asin") or first_value(params.get("asins"))
+        )
     if scenario == "listing-analysis":
         return _sanitize_filename_part(params.get("asin"))
     if scenario == "keyword-miner":
         return _sanitize_filename_part(params.get("keyword"))
+    if scenario in {"keyword-research", "aba-research"}:
+        return _sanitize_filename_part(
+            params.get("q")
+            or params.get("keywords")
+            or params.get("includeKeywords")
+            or params.get("keyword")
+            or params.get("asin")
+            or first_value(params.get("departments"))
+        )
+    if scenario == "association-traffic":
+        return _sanitize_filename_part(first_value(params.get("asins") or params.get("asin")))
     if scenario == "traffic-source":
         return _sanitize_filename_part(
             params.get("keywordOrAsin")
@@ -882,6 +979,76 @@ def _sanitize_filename_part(value: Any) -> str:
     text = re.sub(r"[^A-Za-z0-9\-]+", "-", text)
     text = re.sub(r"-{2,}", "-", text).strip("-")
     return text[:64]
+
+
+def _official_xlsx_export(
+    response: dict[str, Any],
+    *,
+    root_dir: Path,
+) -> SellerSpriteExportResult:
+    data = response.get("data") if isinstance(response, dict) else None
+    source_value = data.get("official_xlsx_path") if isinstance(data, dict) else None
+    if not source_value:
+        raise SellerSpriteApiError(
+            "卖家精灵官方 Excel 下载结果缺少文件路径",
+            api_code="ERR_SELLER_SPRITE_XLSX_PATH_MISSING",
+        )
+    source = Path(str(source_value))
+    signature = b""
+    if source.exists():
+        with source.open("rb") as file:
+            signature = file.read(2)
+    if signature != b"PK":
+        raise SellerSpriteApiError(
+            "卖家精灵官方 Excel 文件无效",
+            api_code="ERR_SELLER_SPRITE_XLSX_INVALID",
+        )
+    official_filename = data.get("official_filename") if isinstance(data, dict) else None
+    filename = _safe_official_filename(official_filename)
+    if len(str(root_dir / filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+        filename = "export.xlsx"
+    target = root_dir / filename
+    if source.resolve() != target.resolve():
+        source.replace(target)
+    resolved = target.resolve()
+    return SellerSpriteExportResult(
+        path=str(resolved),
+        filename=resolved.name,
+        url=resolved.as_uri(),
+    )
+
+
+def _safe_official_filename(value: Any) -> str:
+    filename = Path(str(value or "")).name.strip()
+    filename = re.sub(r'[<>:"/\\|?*]+', "-", filename).rstrip(". ")
+    if not filename:
+        return "official-export.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        filename = f"{filename}.xlsx"
+    return filename
+
+
+def _aba_research_output_path(
+    root_dir: Path,
+    *,
+    site: str,
+    payload: dict[str, Any],
+) -> Path:
+    """生成 ABA 数据选品官方语义文件名。"""
+    table = str(payload.get("table") or "").removeprefix("ara_")
+    reverse_type = str(payload.get("reverseType") or "W").upper()
+    if reverse_type == "M" and re.fullmatch(r"\d{6}", table):
+        period_label = f"{table[:4]}年{int(table[4:])}月"
+    elif re.fullmatch(r"\d{8}", table):
+        week_end = datetime.strptime(table, "%Y%m%d")
+        week_number = int(week_end.strftime("%U")) + 1
+        period_label = f"{week_end.year}第{week_number}周"
+    else:
+        period_label = table or "latest"
+    filename = f"ABAKeywordTrend-{site.upper()}-{period_label}.xlsx"
+    if len(str(root_dir / filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+        filename = "ABAKeywordTrend.xlsx"
+    return root_dir / filename
 
 
 def _export_output_path(root_dir: Path, job_id: str, extension: str) -> Path:

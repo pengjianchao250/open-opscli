@@ -19,9 +19,10 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
+from opscli.seller_sprite.api.keyword_research import parse_keyword_research_html
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.config import DEFAULT_OUTPUT_DIR, SellerSpriteSettings
 from opscli.seller_sprite.domain.exceptions import (
@@ -65,6 +66,7 @@ XVFB_DISPLAY_CANDIDATES = range(99, 110)
 TASK_INTERVAL_RANGE_SECONDS = (1.0, 5.0)
 NETWORK_COOLDOWN_RANGE_SECONDS = (3.0, 5.0)
 RISK_COOLDOWN_RANGE_SECONDS = (15.0, 20.0)
+WINDOWS_COMPAT_EXPORT_PATH_LIMIT = 240
 
 _AUTO_XVFB_PROCESS: subprocess.Popen | None = None
 _AUTO_XVFB_DISPLAY: str | None = None
@@ -514,7 +516,13 @@ class SellerSpriteBrowserRouteWorker:
         )
         stage_started_at = time.monotonic()
         login = await self._open_referer_and_login(page, request, timings=timings)
-        _record_timing(timings, request, "open_referer_and_login", stage_started_at, current_url=getattr(page, "url", ""))
+        _record_timing(
+            timings,
+            request,
+            "open_referer_and_login",
+            stage_started_at,
+            current_url=getattr(page, "url", ""),
+        )
         await self._handle_robot_captcha_if_enabled(
             page,
             request,
@@ -542,6 +550,19 @@ class SellerSpriteBrowserRouteWorker:
                     request=request,
                 )
                 _record_timing(timings, request, "execute_route_fetch.main", stage_started_at, attempt=attempt + 1)
+                if (
+                    request.scenario == "association-traffic"
+                    and _looks_like_guest_limited_association_response(
+                        response,
+                        page_size=request.payload.get("pageSize"),
+                    )
+                ):
+                    # 游客接口也返回 code=OK，但固定截断为 20 条；必须按登录失效处理后重试。
+                    raise SellerSpriteApiError(
+                        "卖家精灵关联流量返回游客限制数据",
+                        api_code="ERR_GLOBAL_SESSION_EXPIRED",
+                        api_message="检测到每页 20 条的游客响应，已尝试恢复登录态。",
+                    )
                 break
             except SellerSpriteApiError as exc:
                 _record_timing(
@@ -593,16 +614,29 @@ class SellerSpriteBrowserRouteWorker:
         if request.high_frequency_endpoint and request.high_frequency_payload:
             try:
                 stage_started_at = time.monotonic()
-                high_frequency_response = await self._execute_route_fetch(
-                    page=page,
-                    method="POST",
-                    endpoint=request.high_frequency_endpoint,
-                    payload=request.high_frequency_payload,
-                    root_dir=request.root_dir,
-                    section="high_frequency",
-                    timings=timings,
-                    request=request,
-                )
+                if request.scenario == "keyword-miner":
+                    # 页面一次查询已完成主词交互；高频词直接复用浏览器登录态，避免重复点击和等待页面响应。
+                    high_frequency_response = await self._execute_context_fetch(
+                        page=page,
+                        method="POST",
+                        endpoint=request.high_frequency_endpoint,
+                        payload=request.high_frequency_payload,
+                        root_dir=request.root_dir,
+                        section="high_frequency",
+                        timings=timings,
+                        request=request,
+                    )
+                else:
+                    high_frequency_response = await self._execute_route_fetch(
+                        page=page,
+                        method="POST",
+                        endpoint=request.high_frequency_endpoint,
+                        payload=request.high_frequency_payload,
+                        root_dir=request.root_dir,
+                        section="high_frequency",
+                        timings=timings,
+                        request=request,
+                    )
                 _record_timing(timings, request, "execute_route_fetch.high_frequency", stage_started_at)
             except SellerSpriteApiError as exc:
                 _record_timing(
@@ -983,6 +1017,16 @@ class SellerSpriteBrowserRouteWorker:
             raise SellerSpriteAuthenticationError(
                 "卖家精灵浏览器登录失败，请检查账号或浏览器 profile 登录状态"
             )
+        return self._login_snapshot(page, request, logged_in=logged_in)
+
+    def _login_snapshot(
+        self,
+        page,
+        request: BrowserRouteRequest,
+        *,
+        logged_in: bool,
+    ) -> dict[str, Any]:
+        """返回当前 browser-route 会话的脱敏登录摘要。"""
         return {
             "mode": "browser-route",
             "profile_dir": str(_profile_dir(self.settings, request.account)),
@@ -1058,6 +1102,51 @@ class SellerSpriteBrowserRouteWorker:
         await _wait_for_login_success(page, callback=callback)
         _record_timing(timings, request, "login.wait_success", stage_started_at, current_url=page.url)
 
+    async def _execute_context_fetch(
+        self,
+        *,
+        page,
+        method: str,
+        endpoint: str,
+        payload: dict[str, Any],
+        root_dir: Path,
+        section: str,
+        timings: list[dict[str, Any]] | None = None,
+        request: BrowserRouteRequest | None = None,
+    ) -> dict[str, Any]:
+        """复用浏览器登录态直接请求接口，并保留分阶段耗时诊断。"""
+        normalized_method = method.upper()
+        stage_started_at = time.monotonic()
+        response = await _request_with_browser_context(
+            page,
+            endpoint=endpoint,
+            method=normalized_method,
+            payload=payload,
+        )
+        _record_timing(
+            timings,
+            request,
+            f"route_fetch.{section}.context_request",
+            stage_started_at,
+            status=getattr(response, "status", None),
+        )
+        stage_started_at = time.monotonic()
+        parsed = await _parse_response(
+            response,
+            method=normalized_method,
+            root_dir=root_dir,
+            section=section,
+        )
+        _record_timing(
+            timings,
+            request,
+            f"route_fetch.{section}.parse_response",
+            stage_started_at,
+            transport="context_request",
+            status=getattr(response, "status", None),
+        )
+        return parsed
+
     async def _execute_route_fetch(
         self,
         *,
@@ -1071,6 +1160,28 @@ class SellerSpriteBrowserRouteWorker:
         request: BrowserRouteRequest | None = None,
     ) -> dict[str, Any]:
         normalized_method = method.upper()
+        if normalized_method == "GET_XLSX":
+            stage_started_at = time.monotonic()
+            response = await _request_with_browser_context(
+                page,
+                endpoint=endpoint,
+                method=normalized_method,
+                payload=payload,
+            )
+            parsed = await _parse_response(
+                response,
+                method=normalized_method,
+                root_dir=root_dir,
+                section=section,
+            )
+            _record_timing(
+                timings,
+                request,
+                f"route_fetch.{section}.context_xlsx",
+                stage_started_at,
+                status=getattr(response, "status", None),
+            )
+            return parsed
         pattern = _route_pattern(endpoint)
 
         async def _handle(route) -> None:
@@ -1084,6 +1195,14 @@ class SellerSpriteBrowserRouteWorker:
                 await route.continue_()
                 return
             if normalized_method == "GET":
+                await route.continue_(
+                    url=_url_with_query(endpoint, payload),
+                    method="GET",
+                    headers=headers,
+                )
+                return
+            if normalized_method == "GET_PAGE":
+                headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
                 await route.continue_(
                     url=_url_with_query(endpoint, payload),
                     method="GET",
@@ -1142,8 +1261,43 @@ class SellerSpriteBrowserRouteWorker:
             return parsed
         finally:
             stage_started_at = time.monotonic()
-            await page.unroute(pattern, _handle)
-            _record_timing(timings, request, f"route_fetch.{section}.unroute", stage_started_at)
+            if page.is_closed():
+                # 页面关闭会自动移除 route；此时不再调用 unroute，避免清理异常覆盖主结果。
+                _record_timing(
+                    timings,
+                    request,
+                    f"route_fetch.{section}.unroute",
+                    stage_started_at,
+                    skipped=True,
+                    reason="target_closed",
+                )
+            else:
+                try:
+                    await page.unroute(pattern, _handle)
+                except Exception as exc:
+                    # is_closed 检查后仍可能发生关闭竞态，仅忽略明确的目标关闭异常。
+                    if not _is_target_closed_error(exc):
+                        raise
+                    _record_timing(
+                        timings,
+                        request,
+                        f"route_fetch.{section}.unroute",
+                        stage_started_at,
+                        skipped=True,
+                        reason="target_closed",
+                    )
+                else:
+                    _record_timing(
+                        timings,
+                        request,
+                        f"route_fetch.{section}.unroute",
+                        stage_started_at,
+                    )
+
+
+def _is_target_closed_error(exc: Exception) -> bool:
+    """判断异常是否为 Playwright/Patchright 明确的目标关闭错误。"""
+    return type(exc).__name__ == "TargetClosedError"
 
 
 def build_default_session_state_listener(
@@ -1692,19 +1846,34 @@ async def fetch_listing_analysis_report_with_browser_route(
     task_id: str,
     root_dir: Path,
     page_prepare: bool | None = None,
+    task_interval_seconds: float | None = None,
+    cooldown_seconds: float | None = None,
+    state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None = None,
+    owner_id: str = "default",
 ) -> BrowserRouteResult:
     """通过 browser-route 打开 Listing Analysis 报告详情页并捕获结果。"""
     worker = get_browser_route_worker(
         settings=settings,
         account=account,
-        state_listener=build_default_session_state_listener(settings),
+        state_listener=(
+            state_listener or build_default_session_state_listener(settings)
+        ),
+        owner_id=owner_id,
     )
     return await worker.fetch_listing_analysis_report(
         task_id=task_id,
         root_dir=root_dir,
         page_prepare=settings.browser_page_prepare if page_prepare is None else page_prepare,
-        task_interval_seconds=settings.browser_task_interval_seconds,
-        cooldown_seconds=settings.browser_cooldown_seconds,
+        task_interval_seconds=(
+            settings.browser_task_interval_seconds
+            if task_interval_seconds is None
+            else task_interval_seconds
+        ),
+        cooldown_seconds=(
+            settings.browser_cooldown_seconds
+            if cooldown_seconds is None
+            else cooldown_seconds
+        ),
     )
 
 
@@ -1741,14 +1910,34 @@ async def _trigger_request(
     stage_started_at = time.monotonic()
     wait_started_at = stage_started_at
     listing_analysis_clicked = False
+    keyword_miner_interaction = bool(
+        request and request.scenario == "keyword-miner"
+    )
+    association_traffic_interaction = bool(
+        request and request.scenario == "association-traffic"
+    )
+    response_timeout = 30000 if association_traffic_interaction else 15000
     try:
-        async with page.expect_response(lambda response: _same_endpoint(response.url, endpoint), timeout=15000) as info:
+        async with page.expect_response(
+            lambda response: _same_endpoint(response.url, endpoint),
+            timeout=response_timeout,
+        ) as info:
             _record_timing(timings, request, f"route_fetch.{section}.expect_response_ready", stage_started_at)
             stage_started_at = time.monotonic()
             if request and request.scenario == "listing-analysis":
                 # Listing Analysis 必须先在页面输入 ASIN 再点击查询，避免只走静默接口提交。
                 listing_analysis_clicked = await _trigger_listing_analysis_query(page, payload)
                 clicked = listing_analysis_clicked
+            elif keyword_miner_interaction:
+                # 关键词挖掘必须先填写关键词；空点查询只会触发页面校验且不会发送接口请求。
+                clicked = await _trigger_keyword_miner_query(page, payload)
+            elif association_traffic_interaction:
+                # 关联流量必须先校验准备接口，再在弹窗中显式选择全部变体。
+                clicked = await _trigger_association_traffic_query(
+                    page,
+                    payload,
+                    root_dir=request.root_dir,
+                )
             else:
                 clicked = await _click_query_button(page)
             _record_timing(timings, request, f"route_fetch.{section}.click_query_button", stage_started_at, clicked=clicked)
@@ -1779,6 +1968,15 @@ async def _trigger_request(
                 api_code="ERR_LISTING_ANALYSIS_RESPONSE_MISSED",
                 api_message="已完成页面点击，不再自动 fallback 重复创建 AI 任务。",
             ) from exc
+        if association_traffic_interaction:
+            if isinstance(exc, SellerSpriteApiError):
+                raise
+            raise SellerSpriteApiError(
+                "卖家精灵关联流量页面交互后未捕获主查询响应",
+                response_excerpt=f"endpoint={endpoint}",
+                api_code="ERR_ASSOCIATION_TRAFFIC_RESPONSE_MISSED",
+                api_message="页面交互已完成，不再自动 fallback 重复查询。",
+            ) from exc
         stage_started_at = time.monotonic()
         response = await _request_with_browser_context(page, endpoint=endpoint, method=method, payload=payload)
         _record_timing(
@@ -1795,7 +1993,7 @@ async def _request_with_browser_context(page, *, endpoint: str, method: str, pay
     """使用浏览器上下文请求接口，复用当前 profile 的 cookie，避免页面内 fetch 被拦截。"""
     headers = _context_request_headers(page.url, method=method)
     try:
-        if method in {"GET", "PAGE_CAPTURE"}:
+        if method in {"GET", "GET_PAGE", "GET_XLSX", "PAGE_CAPTURE"}:
             return await page.context.request.get(
                 _url_with_query(endpoint, payload),
                 headers=headers,
@@ -1841,9 +2039,15 @@ def _context_request_headers(referer: str, *, method: str) -> dict[str, str]:
         "Referer": referer if referer.startswith("http") else DEFAULT_PAGE_URL,
         "X-Requested-With": "XMLHttpRequest",
     }
-    if method == "FORM":
+    if method in {"FORM", "GET_PAGE"}:
         headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
+        if method == "FORM":
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif method == "GET_XLSX":
+        headers["Accept"] = (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+            "application/octet-stream,*/*"
+        )
     elif method != "GET":
         headers["Content-Type"] = "application/json;charset=UTF-8"
     return headers
@@ -1865,6 +2069,66 @@ async def _click_query_button(page) -> bool:
         return False
     await locator.click(timeout=5000)
     return True
+
+
+async def _trigger_keyword_miner_query(page, payload: dict[str, Any]) -> bool:
+    """在关键词挖掘页面填写关键词并点击查询按钮。"""
+    keyword = str(payload.get("keyword") or "").strip()
+    if not keyword:
+        return False
+    query_button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('立即查询')",
+            "[role='button']:visible:has-text('立即查询')",
+            ".el-button:visible:has-text('立即查询')",
+            ".ant-btn:visible:has-text('立即查询')",
+        ],
+    )
+    if query_button is None:
+        return False
+    input_box = await _first_visible_page_locator(
+        page,
+        [
+            "input[placeholder*='输入关键词']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='搜索关键词']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='关键词']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='keyword' i]:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='flashlight' i]:visible:not([readonly]):not([disabled])",
+            "input[aria-label*='输入关键词']:visible:not([readonly]):not([disabled])",
+            "input[aria-label*='关键词']:visible:not([readonly]):not([disabled])",
+            "input[aria-label*='keyword' i]:visible:not([readonly]):not([disabled])",
+            "input[name*='keyword' i]:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if input_box is None:
+        # 页面文案变化时，从查询按钮逐层向上寻找最近的可见文本框，避免误填下方筛选项。
+        input_box = await _keyword_miner_input_near_button(query_button)
+    if input_box is None:
+        return False
+    await input_box.fill(keyword)
+    await query_button.click(timeout=5000)
+    return True
+
+
+async def _keyword_miner_input_near_button(query_button):
+    """从查询按钮最近祖先开始寻找唯一可见文本框。"""
+    input_selector = (
+        "input:visible:not([readonly]):not([disabled])"
+        ":is(:not([type]), [type='text'], [type='search'])"
+    )
+    for depth in range(1, 7):
+        container = query_button.locator(f"xpath=ancestor::*[{depth}]")
+        locator = container.locator(input_selector)
+        try:
+            count = await locator.count()
+            if count == 1:
+                candidate = locator.first
+                if await candidate.is_visible(timeout=800):
+                    return candidate
+        except Exception:
+            continue
+    return None
 
 
 async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool:
@@ -1908,6 +2172,108 @@ async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool
     if button is None:
         return False
     await button.click(timeout=5000)
+    return True
+
+
+async def _trigger_association_traffic_query(
+    page,
+    payload: dict[str, Any],
+    *,
+    root_dir: Path,
+) -> bool:
+    """在关联流量页面录入 ASIN，校验准备响应并选择全部变体查询。"""
+    asin_values = payload.get("asinList")
+    asins: list[str] = []
+    if isinstance(asin_values, list):
+        asins = [
+            str(value).strip().upper()
+            for value in asin_values
+            if str(value).strip()
+        ]
+    if not asins:
+        return False
+    input_box = await _first_visible_page_locator(
+        page,
+        [
+            "input[placeholder*='已录入'][placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if input_box is None:
+        return False
+
+    clear_button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('清除')",
+            "[role='button']:visible:has-text('清除')",
+            ".el-button:visible:has-text('清除')",
+        ],
+    )
+    if clear_button is not None:
+        await clear_button.click(timeout=5000)
+        await page.wait_for_timeout(200)
+
+    for asin in asins:
+        await input_box.fill(asin)
+        await input_box.press("Enter", timeout=5000)
+        await page.wait_for_timeout(100)
+
+    placeholder = await input_box.get_attribute("placeholder")
+    expected_count = f"已录入{len(asins)}/20个ASIN"
+    if placeholder and "已录入" in placeholder and expected_count != placeholder.strip():
+        raise SellerSpriteApiError(
+            "关联流量 ASIN 未完整写入页面输入框",
+            response_excerpt=f"expected={expected_count} actual={placeholder}",
+            api_code="ERR_ASSOCIATION_TRAFFIC_ASIN_INPUT",
+        )
+
+    query_button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('立即查询')",
+            "[role='button']:visible:has-text('立即查询')",
+            ".el-button:visible:has-text('立即查询')",
+        ],
+    )
+    if query_button is None:
+        return False
+    # 官网仅在准备接口成功后展示查询方式弹窗；先解析该响应可保留真实业务错误。
+    async with page.expect_response(
+        lambda response: _same_endpoint(
+            response.url,
+            "/v3/api/relation/traffic/prepare",
+        ),
+        timeout=15000,
+    ) as prepare_info:
+        await query_button.click(timeout=5000)
+    prepare_response = await prepare_info.value
+    await _parse_response(
+        prepare_response,
+        method="POST",
+        root_dir=root_dir,
+        section="association_traffic_prepare",
+    )
+
+    all_variants_button = None
+    for _ in range(30):
+        all_variants_button = await _first_visible_page_locator(
+            page,
+            [
+                "button:visible:has-text('用全部变体查询')",
+                "[role='button']:visible:has-text('用全部变体查询')",
+                ".el-button:visible:has-text('用全部变体查询')",
+            ],
+        )
+        if all_variants_button is not None:
+            break
+        await page.wait_for_timeout(500)
+    if all_variants_button is None:
+        raise SellerSpriteApiError(
+            "关联流量页面未出现“用全部变体查询”按钮",
+            api_code="ERR_ASSOCIATION_TRAFFIC_VARIANT_DIALOG",
+        )
+    await all_variants_button.click(timeout=5000)
     return True
 
 
@@ -2106,7 +2472,55 @@ async def _find_blank_point(page) -> dict[str, float]:
 
 
 async def _parse_response(response, *, method: str, root_dir: Path, section: str) -> dict[str, Any]:
-    if method == "FORM":
+    if method == "GET_XLSX":
+        content = await response.body()
+        headers = getattr(response, "headers", {}) or {}
+        content_type = str(headers.get("content-type") or "").lower()
+        text_excerpt = (
+            content[:1000].decode("utf-8", errors="replace")
+            if "text" in content_type or "html" in content_type or "json" in content_type
+            else ""
+        )
+        if _looks_like_session_expired(response.url, response.status, text_excerpt):
+            raise SellerSpriteApiError(
+                "卖家精灵浏览器登录态失效",
+                status_code=response.status,
+                response_excerpt=text_excerpt,
+                api_code="ERR_GLOBAL_SESSION_EXPIRED",
+            )
+        if response.status >= 400:
+            raise SellerSpriteApiError(
+                "卖家精灵浏览器文件下载失败",
+                status_code=response.status,
+                response_excerpt=text_excerpt or f"content_type={content_type} content_length={len(content)}",
+            )
+        if not content.startswith(b"PK"):
+            raise SellerSpriteApiError(
+                "卖家精灵浏览器文件下载未返回 XLSX",
+                status_code=response.status,
+                response_excerpt=text_excerpt or f"content_type={content_type} content_length={len(content)}",
+                api_code="ERR_SELLER_SPRITE_XLSX_INVALID",
+            )
+        official_filename = _safe_response_filename(
+            _response_filename(headers.get("content-disposition"))
+        )
+        if section == "main":
+            response_filename = official_filename
+            if len(str(root_dir / response_filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+                response_filename = "export.xlsx"
+        else:
+            response_filename = f"{section}.xlsx"
+        response_path = root_dir / response_filename
+        response_path.write_bytes(content)
+        return {
+            "code": "OK",
+            "data": {
+                "official_xlsx_path": str(response_path),
+                "official_filename": official_filename,
+                "content_length": len(content),
+            },
+        }
+    if method in {"FORM", "GET_PAGE"}:
         text = await response.text()
         if _looks_like_session_expired(response.url, response.status, text):
             raise SellerSpriteApiError(
@@ -2116,10 +2530,15 @@ async def _parse_response(response, *, method: str, root_dir: Path, section: str
                 api_code="ERR_GLOBAL_SESSION_EXPIRED",
             )
         if response.status >= 400:
-            raise SellerSpriteApiError("卖家精灵浏览器表单请求失败", status_code=response.status, response_excerpt=text[:1000])
+            request_kind = "页面" if method == "GET_PAGE" else "表单"
+            raise SellerSpriteApiError(
+                f"卖家精灵浏览器{request_kind}请求失败",
+                status_code=response.status,
+                response_excerpt=text[:1000],
+            )
         response_html_path = root_dir / ("response.html" if section == "main" else f"{section}.html")
         response_html_path.write_text(text, encoding="utf-8")
-        rows = parse_market_research_html(text)
+        rows = parse_keyword_research_html(text) if method == "GET_PAGE" else parse_market_research_html(text)
         return {
             "code": "OK",
             "data": {"items": rows},
@@ -2260,6 +2679,40 @@ def _same_endpoint(url: str, endpoint: str) -> bool:
     return urlparse(url).path == urlparse(_absolute_url(endpoint)).path
 
 
+def _looks_like_guest_limited_association_response(
+    response: dict[str, Any],
+    *,
+    page_size: Any,
+) -> bool:
+    """判断关联流量响应是否被游客权限固定截断为 20 条。"""
+    try:
+        requested_size = int(page_size)
+    except (TypeError, ValueError):
+        requested_size = 100
+    if requested_size <= 20:
+        return False
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, dict):
+        return False
+    pager = data.get("pagerDto")
+    if not isinstance(pager, dict):
+        return False
+    items = pager.get("items")
+    try:
+        returned_size = int(pager.get("size"))
+    except (TypeError, ValueError):
+        returned_size = 0
+    return bool(
+        isinstance(items, list)
+        and len(items) == 20
+        and (
+            returned_size == 20
+            or data.get("guestId")
+            or data.get("guestVisited") is True
+        )
+    )
+
+
 def _url_with_query(endpoint: str, payload: dict[str, Any]) -> str:
     parsed = urlparse(_absolute_url(endpoint))
     pairs = parse_qsl(parsed.query, keep_blank_values=True)
@@ -2296,6 +2749,29 @@ def _callback_path(url: str) -> str:
 def _looks_like_session_expired(url: str, status: int, text: str) -> bool:
     normalized = text[:1000].lower()
     return status in {301, 302, 303, 307, 308} or "user/login" in url.lower() or "user/login" in normalized
+
+
+def _safe_response_filename(value: str | None) -> str:
+    filename = Path(str(value or "")).name.strip()
+    filename = re.sub(r'[<>:"/\\|?*]+', "-", filename).rstrip(". ")
+    if not filename:
+        return "official-export.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        filename = f"{filename}.xlsx"
+    return filename
+
+
+def _response_filename(value: str | None) -> str | None:
+    if not value:
+        return None
+    encoded = re.search(r"filename\*=UTF-8''([^;]+)", value, re.I)
+    quoted = re.search(r'filename="([^"]+)"', value, re.I)
+    plain = re.search(r"filename=([^;]+)", value, re.I)
+    match = encoded or quoted or plain
+    if not match:
+        return None
+    filename = unquote(match.group(1).strip().strip('"'))
+    return Path(filename).name or None
 
 
 def _slug(value: str) -> str:

@@ -26,6 +26,47 @@ except Exception:  # noqa: BLE001
 TIMEZONE_NAME = "Asia/Shanghai"
 DEFAULT_DAYS = 30
 
+# 全时段触发词：命中后返回空窗口，上层不注入任何日期筛选。
+# 只收明确指向时间维度的表述——「全部数据」「全部ASIN」这类泛指不在其中，
+# 否则「查傲彼瑞的全部ASIN」会被误判成不限时间。
+_ALL_TIME_RE = re.compile(
+    r"历史以来|有史以来|所有时间|全部时间|全时段|全部历史|历史全量|全量历史|"
+    r"不限时间|不限日期|不卡时间|不卡日期|"
+    r"不[加添]加?(?:任何)?(?:日期|时间)|不需要(?:任何)?(?:日期|时间)筛选"
+)
+
+# 否定语境：用户明确拒绝某个时间口径时，该口径不能被当成显式请求。
+# 典型踩坑：「用户已明确拒绝默认近30天」里的「近30天」曾被识别为显式要求近30天，
+# 导致越强调不要越被锁死。屏蔽范围只到最近的标点，
+# 保证「不要近30天，查上月」的后半句仍能正常识别。
+# 该词表同时被 query_plan 的字段标签匹配复用（见 negated_spans），
+# 统一维护一份，避免时间口径与字段标签两处否定判定漂移。
+# 词条选取有两条实测约束（2038 个真实字段标签统计）：
+# ① 没有任何标签以 不/非/勿/别/无 开头，所以这些否定前缀不会吞掉标签开头；
+# ② 「别」「不含」出现在标签内部（税别 / 币别 / 系统别名 / 周转天数(不含在途)），
+#    因此禁止收裸「别」——它会让「查税别和日期」从「别」起屏蔽、连带吃掉日期。
+_NEGATED_SPAN_RE = re.compile(
+    r"(?:拒绝|排除|不要|不用|不加|不添加|不需要|不按|不含|不带|不分|不显示|不展示"
+    r"|无需|禁止|别用|别加|忽略|去掉|去除|非|勿)"
+    r"[^，。；！？,;!?]{0,12}"
+)
+
+
+def negated_spans(text: str) -> list[tuple[int, int]]:
+    """否定语境的字符区间，供按区间判定的调用方使用。
+
+    为什么给区间而不是只给替换后的文本：真实元数据里存在
+    「周转天数(不含在途)」这类自带否定词的合法字段标签，
+    直接替换会把标签自身从中间撕开，用户点名的字段反而漏掉。
+    改由调用方判断"标签是否整体落在否定区间内"，标签起点早于否定词时不受影响。
+    """
+    return [match.span() for match in _NEGATED_SPAN_RE.finditer(text)]
+
+
+def mask_negated_spans(query: str) -> str:
+    """把否定语境整段替换为空格（只适用于不需要保留原文位置的场景）。"""
+    return _NEGATED_SPAN_RE.sub(" ", query)
+
 # 中文数字（时间表达常用范围）
 _CN_NUM = {
     "一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
@@ -124,8 +165,17 @@ def _explicit_comparison(query: str, today: date) -> dict | None:
     }
 
 
-def _window(query: str, today: date) -> tuple[date, date, str, bool]:
-    """解析主周期窗口，返回 (start, end, 中文标签, 是否默认)。"""
+def _window(query: str, today: date) -> tuple[date | None, date | None, str, bool]:
+    """解析主周期窗口，返回 (start, end, 中文标签, 是否默认)。
+
+    start/end 为 None 表示用户明确要求全时段，上层据此不注入日期筛选。
+    """
+    # 全时段判断必须在否定屏蔽之前：「不加日期筛选」「不限时间」本身就是否定形式，
+    # 先屏蔽会把这类表述连同否定词一起清掉，导致全时段请求反被当成未识别。
+    if _ALL_TIME_RE.search(query):
+        return None, None, "全部时间（用户明确要求不加日期筛选）", False
+    # 再剔除否定语境里的时间口径，避免「拒绝近30天」被当成「要近30天」
+    query = _NEGATED_SPAN_RE.sub(" ", query)
     # 明确绝对日期范围：2026-07-01 至 2026-07-15 / 2026年7月1日~7月15日
     absolute = re.search(
         r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\s*"
@@ -240,8 +290,9 @@ def parse(query: str, *, today: date | None = None) -> dict:
     text = query or ""
     start, end, label, is_default = _window(text, today)
     result: dict = {
-        "start": _fmt(start),
-        "end": _fmt(end),
+        "start": None if start is None else _fmt(start),
+        "end": None if end is None else _fmt(end),
+        "unbounded": start is None or end is None,
         "label_zh": label,
         "timezone": TIMEZONE_NAME,
         "reference_date": _fmt(today),
@@ -254,6 +305,9 @@ def parse(query: str, *, today: date | None = None) -> dict:
         "matched": not is_default,
         "comparison": None,
     }
+    # 全时段：没有起止日期就没有环比/同比基准，直接返回空窗口合同
+    if start is None or end is None:
+        return result
     explicit_comparison = _explicit_comparison(text, today)
     if explicit_comparison:
         result["comparison"] = explicit_comparison

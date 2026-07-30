@@ -7,8 +7,12 @@ from typing import Any, Callable
 
 from opscli.seller_sprite.api.payloads import (
     build_referer,
+    make_aba_research_payload,
+    make_aba_reverse_payload,
+    make_association_traffic_payload,
     make_competitor_payload,
     make_keyword_miner_payload,
+    make_keyword_research_payload,
     make_keyword_reverse_payload,
     make_listing_analysis_payload,
     make_market_research_payload,
@@ -89,6 +93,31 @@ class SellerSpriteScenario:
 
 
 SCENARIOS: dict[str, SellerSpriteScenario] = {
+    "aba-research": SellerSpriteScenario(
+        scenario_id="aba-research",
+        title="ABA数据选品",
+        endpoint="/v3/api/aba-research",
+        required_params=(),
+        required_any_params=("q", "keywordOrAsin", "keyword", "asin"),
+        payload_builder=make_aba_research_payload,
+    ),
+    "aba-reverse": SellerSpriteScenario(
+        scenario_id="aba-reverse",
+        title="出单词反查",
+        endpoint="/v2/aba/reverse/export",
+        method="GET_XLSX",
+        required_params=(),
+        required_any_params=("asin", "asins", "textareaValue", "keywordOrAsin", "q"),
+        payload_builder=make_aba_reverse_payload,
+    ),
+    "association-traffic": SellerSpriteScenario(
+        scenario_id="association-traffic",
+        title="关联流量",
+        endpoint="/v3/api/relation/traffic",
+        required_params=(),
+        required_any_params=("asin", "asins"),
+        payload_builder=make_association_traffic_payload,
+    ),
     "competitor-lookup": SellerSpriteScenario(
         scenario_id="competitor-lookup",
         title="选竞品",
@@ -111,6 +140,14 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         high_frequency_endpoint="/v3/api/keyword-miner/high/frequency-new",
         required_params=("keyword",),
         payload_builder=make_keyword_miner_payload,
+    ),
+    "keyword-research": SellerSpriteScenario(
+        scenario_id="keyword-research",
+        title="关键词选品",
+        endpoint="/v2/keyword-research",
+        method="GET_PAGE",
+        required_params=(),
+        payload_builder=make_keyword_research_payload,
     ),
     "keyword-reverse": SellerSpriteScenario(
         scenario_id="keyword-reverse",

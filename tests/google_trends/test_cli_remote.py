@@ -31,11 +31,11 @@ def test_public_google_trends_run_uses_remote_adapter(monkeypatch):
         google_trends_cli.app,
         [
             "run",
-            "interest-over-time",
+            "trends",
             "--geo",
             "JP",
             "--params",
-            json.dumps({"keyword": "flashlight"}),
+            json.dumps({"q": "flashlight", "data_type": "TIMESERIES"}),
             "--export-format",
             "json",
             "--hl",
@@ -47,9 +47,9 @@ def test_public_google_trends_run_uses_remote_adapter(monkeypatch):
 
     assert result.exit_code == 0
     assert captured["kwargs"] == {
-        "scenario": "interest-over-time",
+        "scenario": "trends",
         "geo": "JP",
-        "params": {"keyword": "flashlight"},
+        "params": {"q": "flashlight", "data_type": "TIMESERIES"},
         "job_id": None,
         "export_format": "json",
         "hl": "ja-JP",
@@ -65,7 +65,7 @@ def test_public_google_trends_queries_use_remote_adapter(monkeypatch):
         """模拟正式 CLI 查询接口。"""
 
         def scenarios(self):
-            return {"success": True, "data": [{"id": "interest-over-time"}]}
+            return {"success": True, "data": [{"id": "trends"}]}
 
         def job_status(self, job_id):
             return {"success": True, "data": {"job_id": job_id, "state": "succeeded"}}
@@ -86,7 +86,7 @@ def test_public_google_trends_queries_use_remote_adapter(monkeypatch):
     export_result = runner.invoke(google_trends_cli.app, ["export", "job-1"])
 
     assert scenarios_result.exit_code == 0
-    assert '"id": "interest-over-time"' in scenarios_result.stdout
+    assert '"id": "trends"' in scenarios_result.stdout
     assert status_result.exit_code == 0
     assert '"job_id": "job-1"' in status_result.stdout
     assert export_result.exit_code == 0

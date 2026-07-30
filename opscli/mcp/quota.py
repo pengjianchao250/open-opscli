@@ -8,6 +8,7 @@ SQLite 作为单机部署下的本地持久化存储，同时负责限额判断�
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import os
 import sqlite3
@@ -20,6 +21,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ENV_QUOTA_ENABLED = "OPSCLI_MCP_QUOTA_ENABLED"
 ENV_SQLITE_PATH = "OPSCLI_MCP_QUOTA_SQLITE_PATH"
+SELLER_SPRITE_ACCESS_TOOLS = frozenset(
+    {
+        "seller_sprite_run",
+        "seller_sprite_listing_analysis_submit",
+    }
+)
 try:
     BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 except ZoneInfoNotFoundError:
@@ -46,14 +53,26 @@ class QuotaPolicy:
 
 @dataclass(frozen=True)
 class QuotaTicket:
-    """一次已占用限额的调用凭证。
+    """一次限额调用凭证。
 
-    调用前占用成功后生成该对象，调用结束时用于成功结算或失败退回。
+    计次用户在调用前占用额度；专属账号用户只携带无限额快照，不写每日记录。
     """
 
     policy: QuotaPolicy
     identity: str
     snapshot: dict[str, Any]
+    metered: bool = True
+
+
+@dataclass(frozen=True)
+class QuotaAccessContext:
+    """一次 MCP 调用经额度切面确认的访问上下文。"""
+
+    mode: str
+    service: str | None = None
+    user_email: str | None = None
+    account_id: str | None = None
+    account_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +85,12 @@ class QuotaDecision:
     allowed: bool
     ticket: QuotaTicket | None = None
     error_response: dict[str, Any] | None = None
+    access_context: QuotaAccessContext | None = None
+
+
+_quota_access_ctx: contextvars.ContextVar[QuotaAccessContext | None] = contextvars.ContextVar(
+    "quota_access", default=None
+)
 
 
 class QuotaUnavailableError(Exception):
@@ -473,15 +498,35 @@ class QuotaLimiter:
         store: QuotaStore,
         identity_resolver: QuotaIdentityResolver | Callable[[], str | None] | None = None,
         quota_enabled: Callable[[], bool] | None = None,
+        access_resolver: Callable[[str, str], QuotaAccessContext | None] | None = None,
     ) -> None:
         self.store = store
         self.identity_resolver = identity_resolver or QuotaIdentityResolver()
         self.quota_enabled = quota_enabled or _quota_enabled
+        self.access_resolver = access_resolver
 
     async def before_call(self, tool_name: str) -> QuotaDecision:
-        """在真实工具执行前动态读取策略并检查限额。"""
+        """在真实工具执行前动态读取账号访问模式和限额策略。"""
+        identity: str | None = None
+        access_context: QuotaAccessContext | None = None
+        if tool_name in SELLER_SPRITE_ACCESS_TOOLS and self.access_resolver is not None:
+            identity = self._resolve_identity()
+            try:
+                access_context = (
+                    self._resolve_access(tool_name, identity) if identity else None
+                )
+            except Exception as exc:
+                return QuotaDecision(
+                    allowed=False,
+                    error_response=_error_response(
+                        "MCP_QUOTA_ACCESS_UNAVAILABLE",
+                        f"卖家精灵专属账号绑定服务不可用：{exc}",
+                        _empty_snapshot_for_tool(tool_name),
+                    ),
+                )
+
         if not self.quota_enabled():
-            return QuotaDecision(allowed=True)
+            return QuotaDecision(allowed=True, access_context=access_context)
 
         try:
             policy = await self.store.get_policy(tool_name)
@@ -496,9 +541,10 @@ class QuotaLimiter:
             )
 
         if not policy:
-            return QuotaDecision(allowed=True)
+            return QuotaDecision(allowed=True, access_context=access_context)
 
-        identity = self._resolve_identity()
+        if identity is None:
+            identity = self._resolve_identity()
         if not identity:
             return QuotaDecision(
                 allowed=False,
@@ -507,6 +553,19 @@ class QuotaLimiter:
                     "无法识别当前 MCP 调用用户，已阻断受限服务调用",
                     _empty_snapshot(policy),
                 ),
+            )
+
+        if access_context and access_context.mode == "unlimited":
+            snapshot = _unlimited_snapshot(policy.service)
+            return QuotaDecision(
+                allowed=True,
+                ticket=QuotaTicket(
+                    policy=policy,
+                    identity=identity,
+                    snapshot=snapshot,
+                    metered=False,
+                ),
+                access_context=access_context,
             )
 
         try:
@@ -534,6 +593,7 @@ class QuotaLimiter:
         return QuotaDecision(
             allowed=True,
             ticket=QuotaTicket(policy=policy, identity=identity, snapshot=snapshot),
+            access_context=access_context,
         )
 
     async def after_call(self, ticket: QuotaTicket | None, response: dict[str, Any]) -> dict[str, Any]:
@@ -542,7 +602,7 @@ class QuotaLimiter:
             return response
 
         snapshot = ticket.snapshot
-        if response.get("success") is False:
+        if ticket.metered and response.get("success") is False:
             try:
                 snapshot = await self.store.refund_failure(ticket.policy, ticket.identity)
             except QuotaUnavailableError:
@@ -553,7 +613,7 @@ class QuotaLimiter:
 
     async def after_exception(self, ticket: QuotaTicket | None) -> None:
         """真实工具抛出异常时退回限额后继续向外抛出原异常。"""
-        if not ticket:
+        if not ticket or not ticket.metered:
             return
         try:
             await self.store.refund_failure(ticket.policy, ticket.identity)
@@ -573,7 +633,20 @@ class QuotaLimiter:
         if not resolved_identity:
             raise ValueError("无法识别当前 MCP 调用用户，无法读取额度")
 
+        access_context = self._resolve_access(tool_name, resolved_identity)
+        if access_context and access_context.mode == "unlimited":
+            return _unlimited_snapshot(policy.service)
         return await self.store.snapshot(policy, resolved_identity)
+
+    def _resolve_access(
+        self,
+        tool_name: str,
+        identity: str,
+    ) -> QuotaAccessContext | None:
+        """调用可选访问解析器，读取当前服务的计费和账号路由。"""
+        if self.access_resolver is None:
+            return None
+        return self.access_resolver(tool_name, identity)
 
     def _resolve_identity(self) -> str | None:
         """兼容对象解析器和函数解析器两种 DI 形式。"""
@@ -614,8 +687,57 @@ def get_quota_limiter() -> QuotaLimiter:
         sqlite_path = os.environ.get(ENV_SQLITE_PATH)
         _default_limiter = QuotaLimiter(
             store=SQLiteQuotaStore(sqlite_path),
+            access_resolver=_resolve_service_access,
         )
     return _default_limiter
+
+
+def set_quota_access_context(
+    access_context: QuotaAccessContext | None,
+) -> contextvars.Token[QuotaAccessContext | None]:
+    """设置当前工具调用的额度访问上下文，并返回可恢复 Token。"""
+    return _quota_access_ctx.set(access_context)
+
+
+def reset_quota_access_context(
+    token: contextvars.Token[QuotaAccessContext | None],
+) -> None:
+    """恢复额度访问上下文，避免同一事件循环后续请求串用。"""
+    _quota_access_ctx.reset(token)
+
+
+def get_quota_access_context() -> QuotaAccessContext | None:
+    """读取额度切面确认的当前访问上下文。"""
+    return _quota_access_ctx.get()
+
+
+def _resolve_service_access(tool_name: str, identity: str) -> QuotaAccessContext | None:
+    """为 SellerSprite 工具解析专属账号路由，其他服务保持原限额行为。"""
+    if tool_name not in {
+        "seller_sprite_run",
+        "seller_sprite_listing_analysis_submit",
+    }:
+        return None
+    identity_type, identity_key, _ = _identity_public_parts(identity)
+    if identity_type != "email":
+        return QuotaAccessContext(mode="metered", service="seller_sprite")
+
+    from opscli.seller_sprite.services.account_bindings import SellerSpriteAccountBindingStore
+
+    reference = SellerSpriteAccountBindingStore().get_binding_reference(identity_key)
+    if reference is None:
+        return QuotaAccessContext(
+            mode="metered",
+            service="seller_sprite",
+            user_email=identity_key.strip().lower(),
+        )
+    return QuotaAccessContext(
+        mode="unlimited",
+        service="seller_sprite",
+        user_email=reference.user_email,
+        account_id=reference.account_id,
+        account_key=reference.account_key,
+    )
 
 
 def _quota_enabled() -> bool:
@@ -728,6 +850,19 @@ def _snapshot(service: str, limit: int, calls: int, failures: int, moment: datet
         "remaining": max(limit - calls, 0),
         "failures": failures,
         "reset_at": _reset_at_iso(moment),
+    }
+
+
+def _unlimited_snapshot(service: str) -> dict[str, Any]:
+    """生成专属账号用户的无限额 quota 元信息。"""
+    return {
+        "service": service,
+        "unlimited": True,
+        "limit": None,
+        "used": 0,
+        "remaining": None,
+        "failures": 0,
+        "reset_at": None,
     }
 
 
