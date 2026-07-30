@@ -47,6 +47,49 @@ def test_value_fragment_is_not_a_platform_request(query: str):
     assert _platform_slots(query) == [], f"复合值后段被误读成平台诉求：{query}"
 
 
+def _all_slots(query: str) -> dict:
+    return schema.extract_query_semantics(query, RULES)["slots"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # 首段命中：以下三个值都是碰撞扫描在真实授权枚举里找到的生产值
+        "查销售小组是亚马逊-运营C组的近7天销售额",   # team_name
+        "查亚马逊-运营C组的近7天销售额",              # 同上，裸值形态
+        "查产品型号是SC-BCH-0002的近7天销量",        # model，sc → 亚马逊SC
+        "查SC-BCH-0002的近7天销量",
+        "查渠道SKU是SD-51709的近7天销量",            # sell_sku，sd → 广告类型
+        "查SD-51709的近7天销量",
+        "查渠道SKU是SP-51709的近7天销量",            # sp → 广告类型
+        # 首段是平台词的渠道值形态（此前明确记为未覆盖）
+        "查渠道是tiktok-美国的所有ASIN",
+    ],
+)
+def test_leading_segment_is_not_a_slot_request(query: str):
+    """复合值的首/中段命中不算槽位诉求。
+
+    后果分两级：platform 被点亮会凭空多出平台范围并做出错误披露；
+    ad_type 被点亮更重——即时综合数据集不覆盖该槽位，选表候选直接归零，
+    整条查询死在选表阶段（实测 dataset 未定、无可行下一步）。
+    """
+    assert _all_slots(query) == {}, f"复合值首/中段被误读成槽位诉求：{query}"
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        # 相邻段本身是槽位词时属平台书写变体，误剔会把真实平台诉求整条丢掉
+        ("查亚马逊-vc的销售额", {"platform": ["amazon"]}),
+        ("查amazon-sc的销售额", {"platform": ["amazon_sc"]}),
+        ("查amazon_sc的销售额", {"platform": ["amazon_sc"]}),
+    ],
+)
+def test_platform_spelling_variants_survive(query: str, expected: dict):
+    """连字符/下划线连接的平台写法变体必须保留。"""
+    assert _all_slots(query) == expected
+
+
 @pytest.mark.parametrize(
     "query, expected",
     [

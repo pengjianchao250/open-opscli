@@ -107,6 +107,47 @@ def _pattern_spans(pattern: str, text: str) -> list[tuple[int, int]]:
     return [(match.start(), match.end()) for match in re.finditer(re.escape(pattern), text)]
 
 
+def all_slot_terms(rules: dict) -> frozenset:
+    """全部槽位词（跨槽位合并）。
+
+    用于判断复合词里相邻段是否本身就是槽位词——「亚马逊-vc」的 vc 是平台写法变体，
+    「亚马逊-运营C组」的「运营C组」不是。词表全部取自现有 slots，不新造。
+    """
+    return frozenset(
+        normalize(term)
+        for slot_values in (rules.get("slots") or {}).values()
+        for record in slot_values.values()
+        for term in record.get("terms") or []
+        if normalize(term)
+    )
+
+
+def _is_value_fragment(
+    normalized_text: str, start: int, end: int, sibling_terms: frozenset
+) -> bool:
+    """命中是否只是用户给出的复合字面值中的一段，而非独立的槽位诉求。
+
+    两侧都要判，因为真实授权值里两种形态都存在（均为实测命中的生产值）：
+    - 后段：渠道值「傲彼瑞-tiktok」里的 tiktok；
+    - 首/中段：销售小组值「亚马逊-运营C组」里的亚马逊、渠道SKU 值「SD-51709」里的 sd、
+      产品型号值「SC-BCH-0002」里的 sc。
+    首段这一类的后果比后段更重：ad_type 槽位一旦被点亮，即时综合数据集不覆盖该槽位，
+    候选直接归零，整条查询死在选表阶段（实测 dataset 未定、无可行下一步）。
+
+    相邻段本身是槽位词时不算片段：「亚马逊-vc」「amazon-sc」是平台的书写变体，
+    误剔会把用户真正的平台诉求整条丢掉。
+    """
+    # 前置分隔符 → 命中是复合值的后段
+    if 0 < start <= len(normalized_text) and normalized_text[start - 1] in "-_":
+        return True
+    # 后置分隔符 → 命中是复合值的首段或中段
+    if end < len(normalized_text) and normalized_text[end] in "-_":
+        tail = normalized_text[end + 1 :]
+        if not any(tail.startswith(term) for term in sibling_terms):
+            return True
+    return False
+
+
 def _matched_values(
     text: str,
     values: dict,
@@ -114,16 +155,15 @@ def _matched_values(
     span_finder: SpanFinder,
     *,
     drop_value_fragments: bool = False,
+    sibling_terms: frozenset = frozenset(),
 ) -> list[str]:
     """返回命中的槽位取值，命中区间被更长的其他取值完全覆盖时让位。
 
     例："亚马逊vc" 同时命中 amazon（亚马逊）与 amazon_vc（亚马逊vc），
     amazon 的匹配区间被 amazon_vc 完全包含且更短，因此只保留 amazon_vc。
 
-    drop_value_fragments=True 时额外剔除紧跟在连字符/下划线之后的命中，
-    这类命中只是用户给出的复合字面值的后段，不是独立的槽位诉求：
-    渠道值「傲彼瑞-tiktok」里的 tiktok 原先命中平台槽位，而平台语义只映射
-    amazon*，导致整条查询被判 block_platform_scope_unsupported 而无法执行。
+    drop_value_fragments=True 时额外剔除复合字面值中的片段命中（见
+    _is_value_fragment）；sibling_terms 传全部槽位词，用于保住平台的书写变体。
     只对查询原文的槽位读取启用；数据集说明的画像匹配不受影响。
     """
     occurrences = [
@@ -137,7 +177,7 @@ def _matched_values(
         occurrences = [
             (start, end, value_name)
             for start, end, value_name in occurrences
-            if not (0 < start <= len(normalized_text) and normalized_text[start - 1] in "-_")
+            if not _is_value_fragment(normalized_text, start, end, sibling_terms)
         ]
     surviving = {
         value_name
@@ -316,11 +356,18 @@ def extract_query_semantics(query: str, rules: dict) -> dict:
         ):
             domains.append(name)
     slots = {}
+    sibling_terms = all_slot_terms(rules)
     for slot_name, values in rules["slots"].items():
-        # 查询原文里的槽位读取要剔除复合字面值后段（「傲彼瑞-tiktok」里的 tiktok），
-        # 否则用户给出的渠道值会被读成平台诉求并把整条查询判为不支持
+        # 查询原文里的槽位读取要剔除复合字面值中的片段命中（「傲彼瑞-tiktok」的 tiktok、
+        # 「SD-51709」的 sd、「亚马逊-运营C组」的亚马逊），否则用户给出的组件值
+        # 会被读成平台/广告类型诉求：轻则凭空多出平台范围，重则选表候选归零
         matched = _matched_values(
-            query, values, "terms", _term_spans, drop_value_fragments=True
+            query,
+            values,
+            "terms",
+            _term_spans,
+            drop_value_fragments=True,
+            sibling_terms=sibling_terms,
         )
         if matched:
             slots[slot_name] = matched
