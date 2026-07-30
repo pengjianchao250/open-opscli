@@ -34,13 +34,23 @@ RULES = {
         "grain": {
             "keyword": {"terms": ["关键词"], "description_patterns": ["关键词"]},
             "search_term": {"terms": ["搜索词"], "description_patterns": ["搜索词"]},
-        }
+        },
+        # ad_type 的取值在真实规则里没有中文词条（terms 只有 sp / sponsored products），
+        # 标签必须退回枚举名并大写，这里照抄真实形态以覆盖该分支
+        "ad_type": {
+            "sp": {"terms": ["sp", "sponsored products"], "description_patterns": ["SP"]},
+            "sd": {"terms": ["sd", "sponsored display"], "description_patterns": ["SD"]},
+        },
     }
 }
 
 
 def _profile(supported: set, mode: str) -> dict:
     return {"slots": {"grain": supported}, "slot_modes": {"grain": mode}}
+
+
+def _ad_type_profile(supported: set, mode: str) -> dict:
+    return {"slots": {"ad_type": supported}, "slot_modes": {"ad_type": mode}}
 
 
 @BOTH_VERSIONS
@@ -69,10 +79,45 @@ def test_unsupported_slot_mode_still_rejected(module):
 
 @BOTH_VERSIONS
 def test_extra_slot_terms_reports_uncovered_surplus(module):
-    """多出的粒度必须能被取出，供合同强制披露。"""
+    """多出的粒度必须能被取出，且只带中文标签供合同强制披露。
+
+    披露句是面向用户的中文，槽位名（grain）与取值（keyword）都是内部标识，
+    不能出现在里面——曾实测输出「所选数据集的ad_type粒度…额外覆盖：sb、sd」。
+    """
     profile = _profile({"keyword", "search_term"}, "fixed")
     extra = module._extra_slot_terms(profile, {"grain": {"search_term"}}, RULES)
-    assert extra == {"grain": ["keyword"]}
+    assert extra == {
+        "grain": {
+            "slot_label_zh": "统计粒度",
+            "requested_zh": ["搜索词"],
+            "surplus_zh": ["关键词"],
+        }
+    }
+
+
+@BOTH_VERSIONS
+def test_extra_slot_terms_labels_ad_type_without_chinese_terms(module):
+    """ad_type 取值在规则里没有中文词条，标签退回大写枚举名而不是原样小写。"""
+    profile = _ad_type_profile({"sp", "sd"}, "fixed")
+    extra = module._extra_slot_terms(profile, {"ad_type": {"sp"}}, RULES)
+    assert extra == {
+        "ad_type": {
+            "slot_label_zh": "广告类型",
+            "requested_zh": ["SP"],
+            "surplus_zh": ["SD"],
+        }
+    }
+
+
+@BOTH_VERSIONS
+def test_extra_slot_terms_skips_filterable_slot(module):
+    """可筛选槽位不产出 surplus——这是下游披露文案分语义的前提不变量。
+
+    query_plan._slot_surplus_disclosure_zh 对 platform / ad_type 断言
+    「筛不掉、结果是合计」，成立的唯一依据就是这里只收 fixed。
+    """
+    profile = _ad_type_profile({"sp", "sd"}, "filterable")
+    assert module._extra_slot_terms(profile, {"ad_type": {"sp"}}, RULES) == {}
 
 
 @BOTH_VERSIONS
@@ -80,3 +125,23 @@ def test_extra_slot_terms_empty_when_exact_match(module):
     """粒度正好相等时没有可披露内容，不应产生空噪声。"""
     profile = _profile({"search_term"}, "fixed")
     assert module._extra_slot_terms(profile, {"grain": {"search_term"}}, RULES) == {}
+
+
+@BOTH_VERSIONS
+def test_slot_labels_cover_every_allowed_slot(module):
+    """槽位中文标签必须覆盖封闭槽位全集，漏一个就会往中文句子里漏英文标识。"""
+    assert set(module.schema.SLOT_LABELS_ZH) == set(module.schema.ALLOWED_SLOTS)
+
+
+@BOTH_VERSIONS
+def test_attach_slot_coverage_fills_every_candidate(module):
+    """显式命中路径的候选必须被补上覆盖信息，否则强制披露整条链路会静默消失。"""
+    profile = _profile({"keyword", "search_term"}, "fixed")
+    profile["card"] = {"dataset_alias": "ds_kw_st"}
+    candidates = [{"dataset_alias": "ds_kw_st"}, {"dataset_alias": "ds_unknown"}]
+
+    module._attach_slot_coverage(candidates, [profile], {"grain": {"search_term"}}, RULES)
+
+    assert candidates[0]["grain_coverage"]["grain"]["surplus_zh"] == ["关键词"]
+    # 画像里找不到的候选保持原样，不臆造覆盖信息
+    assert "grain_coverage" not in candidates[1]

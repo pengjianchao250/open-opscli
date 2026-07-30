@@ -24,6 +24,16 @@ ALLOWED_DOMAINS = frozenset(
     {"sales", "advertising", "inventory", "traffic", "refund", "logistics", "product", "finance"}
 )
 ALLOWED_SLOTS = frozenset({"platform", "ad_type", "grain"})
+# 槽位名 → 用户可见中文标签。槽位取值的中文标签直接复用 intent_rules.json 的
+# terms 词表（见 slot_value_label），但槽位名本身在规则文件里没有对应中文，
+# 只能在此维护；ALLOWED_SLOTS 是封闭集合，两者必须逐键对齐（有测试守护）。
+# 为什么必须有：platform/ad_type/grain 都是内部标识，直接拼进面向用户的中文
+# 披露句会泄露技术口径（实测出现过「所选数据集的ad_type粒度…」这种句子）。
+SLOT_LABELS_ZH = {
+    "platform": "平台",
+    "ad_type": "广告类型",
+    "grain": "统计粒度",
+}
 RECORD_KEYS = frozenset({"terms", "description_patterns"})
 # 卡片上参与文本匹配的三类词表键
 FIELD_TERM_KEYS = ("dimension_terms", "metric_terms", "select_column_terms")
@@ -67,6 +77,27 @@ def _term_spans(term: str, text: str) -> list[tuple[int, int]]:
 def term_matches(term: str, text: str) -> bool:
     """判断词条是否命中文本（带边界规则）。"""
     return bool(_term_spans(term, text))
+
+
+def slot_label(name: str) -> str:
+    """槽位名 → 中文标签；未登记时原样返回（规则校验已保证槽位是封闭集合）。"""
+    return SLOT_LABELS_ZH.get(name, str(name))
+
+
+def slot_value_label(rules: dict, slot_name: str, value: str) -> str:
+    """槽位取值的内部枚举名 → 用户可见标签。
+
+    不新造词表：直接取 intent_rules.json 里该取值的 terms，优先第一个含中文的
+    词条（search_term → 搜索词、amazon_sc → 亚马逊sc）；全英文词条（如 sp、sd）
+    没有中文可用，退回枚举名本身。最后统一 upper()——规则词表经 normalize 后
+    全小写，「亚马逊sc」必须还原成用户习惯的「亚马逊SC」，sp 也要写成 SP。
+    """
+    terms = (
+        ((rules.get("slots") or {}).get(slot_name) or {}).get(str(value), {}).get("terms")
+        or []
+    )
+    chinese = next((str(term) for term in terms if not str(term).isascii()), "")
+    return (chinese or str(value)).upper()
 
 
 def _pattern_spans(pattern: str, text: str) -> list[tuple[int, int]]:

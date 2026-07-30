@@ -401,9 +401,19 @@ def _slot_is_covered(profile: dict, name: str, requested: set[str], rules: dict)
 def _extra_slot_terms(profile: dict, slots: dict, rules: dict) -> dict:
     """列出数据集比用户请求多覆盖的固定槽位取值，供强制披露。
 
-    放开覆盖判定后，选中的数据集粒度可能比用户要的更细（如用户要搜索词级，
-    数据集是关键词×搜索词级），直接汇总会与用户预期的口径不一致。
+    放开覆盖判定后，选中的数据集口径可能比用户要的更宽（如用户要搜索词级，
+    数据集是关键词×搜索词级；用户只要 SP，数据集是 SP+SD+SB 合计），
+    直接汇总会与用户预期的口径不一致。
     风险不靠拒绝候选规避，而是如实告知——这是「放开 + 强制披露」的后半段。
+
+    只收 slot_modes == "fixed" 的槽位：filterable 表示数据集带该槽位的筛选
+    字段（rules["filter_fields"] 只有 platform / ad_type 两项），多余取值能被
+    筛掉，不构成口径风险；grain 在 filter_fields 里没有对应项，永远不会是
+    filterable。这条不变量是下游披露文案分语义的唯一依据，改动 profile_card
+    的 slot_modes 推导时必须同步复核 query_plan._slot_surplus_disclosure_zh。
+
+    返回值按槽位名索引（技术名，仅用于下游分语义，不展示给用户），
+    值里只放中文标签——披露句必须是纯中文，不能回落到内部枚举名。
     """
     extra: dict = {}
     for name, requested in (slots or {}).items():
@@ -414,8 +424,42 @@ def _extra_slot_terms(profile: dict, slots: dict, rules: dict) -> dict:
         supported = _expanded_values(name, profile["slots"][name], rules)
         surplus = sorted(supported.difference(_expanded_values(name, requested, rules)))
         if surplus:
-            extra[name] = surplus
+            extra[name] = {
+                "slot_label_zh": schema.slot_label(name),
+                # 请求侧用用户原本说出的取值（不做平台成员展开），
+                # 披露句里的「不能当作纯 X」才与用户的问法对得上
+                "requested_zh": [
+                    schema.slot_value_label(rules, name, value)
+                    for value in sorted(requested)
+                ],
+                "surplus_zh": [
+                    schema.slot_value_label(rules, name, value) for value in surplus
+                ],
+            }
     return extra
+
+
+def _attach_slot_coverage(
+    candidates: list[dict],
+    profiles: list[dict],
+    slots: dict[str, set[str]],
+    rules: dict,
+) -> list[dict]:
+    """为已构造的候选补齐固定槽位多余覆盖信息（强制披露的唯一数据来源）。
+
+    为什么要后置补齐：显式标识命中与中文说明命中这两条路径在构造候选字典时
+    还没抽取槽位——槽位要先遮蔽数据集身份文本才能算准，只能等算完再回填。
+    漏补的后果是 query_plan 取到空 grain_coverage → model_view 与
+    answer_contract 两处披露一起静默消失，形成「用户报出表名反而丢掉安全披露」
+    的反常行为（说得越具体反而越危险）。
+    """
+    by_alias = {profile["card"]["dataset_alias"]: profile for profile in profiles}
+    for candidate in candidates:
+        profile = by_alias.get(candidate.get("dataset_alias"))
+        if profile is None:
+            continue
+        candidate["grain_coverage"] = _extra_slot_terms(profile, slots, rules)
+    return candidates
 
 
 def _covers(profile: dict, domains: set[str], slots: dict[str, set[str]], rules: dict) -> bool:
@@ -478,6 +522,9 @@ def _default_dataset_candidate(
         "dataset_category": card["dataset_category"],
         "score": EXPLICIT_DESCRIPTION_SCORE,
         "reasons": ["default_instant_comprehensive"],
+        # 默认表同样受放开覆盖判定影响（如即时综合表覆盖多个粒度），
+        # 少了这一键会让默认推荐路径丢掉强制披露
+        "grain_coverage": _extra_slot_terms(profile, slots, rules),
         "_semantic_rank": 0,
     }
 
@@ -703,6 +750,7 @@ def plan_query(
         semantics = extract_query_semantics(semantic_query, validated_rules)
         domains = set(semantics["domains"])
         slots = {name: set(values) for name, values in semantics["slots"].items()}
+        _attach_slot_coverage(explicit, profiles, slots, validated_rules)
         top = explicit[0]
         component_blocked = top["dataset_category"] == "query_component" and not _permission_enum_requested(query)
         if len(explicit) > 1 or component_blocked:
@@ -754,6 +802,7 @@ def plan_query(
         semantics = extract_query_semantics(semantic_query, validated_rules)
         domains = set(semantics["domains"])
         slots = {name: set(values) for name, values in semantics["slots"].items()}
+        _attach_slot_coverage(description_matches, profiles, slots, validated_rules)
         top = description_matches[0]
         if len(description_matches) > 1:
             return _result(

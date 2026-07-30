@@ -5471,3 +5471,71 @@ CSV 取默认维度指标中文名）。
 **回滚方式**：`git revert <本次提交>`；或手动删除这两条画像新增的 `stale_reason`
 字段。
 ---
+
+## 2026-07-30 skills/ops-dataset-query + query/planner - 强制披露补齐 4 条候选路径并按槽位语义分文案
+
+**变更原因**：终审发现 Task 8「放开固定槽位 + 强制披露」的后半段只覆盖 1/4 条
+候选路径，且披露文案在 ad_type/platform 场景语义相反。
+1. C1：`agent_query_planner.py` 有四处构造候选字典的地方，只有 `_score_profile()`
+   带 `grain_coverage`；`_explicit_candidates` / `_description_candidates` /
+   `_default_dataset_candidate` 三条路径都受同一放开影响却不产出该键，
+   `query_plan.py` 取到空 → `model_view["grain_disclosure_zh"]` 与
+   `answer_contract["required_disclosures_zh"]` 两处披露一起消失。实测
+   `'关键词搜索词双维度表 近7天搜索词的转化率' -> planned | 披露 None`，而
+   `'近7天搜索词的转化率'` 反而有披露——用户报出表名反而丢掉安全披露。
+2. C2：放开同时作用于 platform/ad_type/grain 三个槽位，但文案只按 grain 语义写。
+   ad_type 固定且数据集没有「广告类型」筛选字段时交付的是 SP+SD+SB **合计**
+   （实测模板 filters 里只有日期，筛不掉广告类型），文案却说「粒度更细」
+   「不得把明细当汇总」，会引导模型把合计当成纯 SP 汇报——静默错数。
+   同时槽位名（`grain`/`ad_type`）与取值（`keyword`/`sb`/`sd`）都是内部标识，
+   被直接拼进中文披露句。
+**改动的类/方法**：`typed_schema_linking.slot_label()` /
+`typed_schema_linking.slot_value_label()`（新增）、
+`agent_query_planner._extra_slot_terms()`（返回值改带中文标签）、
+`agent_query_planner._attach_slot_coverage()`（新增）、
+`agent_query_planner._default_dataset_candidate()`、
+`agent_query_planner.plan_query()`、
+`query_plan._slot_surplus_disclosure_zh()`（新增）、
+`query_plan.build_model_contract()`。
+**改动点**：Skill 版 `opscli/skills/templates/ops-dataset-query/scripts/` 与内核版
+`opscli/query/services/planner/` 两版逐字同步，各改 3 个文件：
+- `typed_schema_linking.py`：新增 `SLOT_LABELS_ZH`（槽位名中文标签，3 键对齐
+  `ALLOWED_SLOTS`）与 `slot_label()` / `slot_value_label()`。取值标签不新造词表，
+  直接取 `intent_rules.json` 该取值 `terms` 里第一个含中文的词条
+  （`search_term`→搜索词、`amazon_sc`→亚马逊SC），全英文词条（`sp`/`sd`）退回
+  枚举名，最后统一 `upper()`。
+- `agent_query_planner.py`：`_extra_slot_terms()` 返回值从 `{槽位: [取值]}` 改为
+  `{槽位: {slot_label_zh, requested_zh, surplus_zh}}`（键仍是技术槽位名，只用于
+  下游分语义，值全是中文标签）；新增 `_attach_slot_coverage()` 在显式标识命中与
+  中文说明命中两条路径算完槽位后回填覆盖信息（这两条路径构造候选时槽位还没抽取，
+  只能后置补齐）；`_default_dataset_candidate()` 直接补 `grain_coverage` 键。
+- `query_plan.py`：新增 `_slot_surplus_disclosure_zh()` 按槽位语义分两套文案。
+  分支依据是不变量「`_extra_slot_terms` 只收 `slot_modes == "fixed"` 的槽位」：
+  `profile_card()` 只在数据集带该槽位筛选字段时才置 `filterable`，而
+  `rules["filter_fields"]` 只有 platform / ad_type 两项、grain 永远不可筛。
+  故 platform/ad_type 走到这里必然「筛不掉」→ 文案说「无法按X筛选，返回数据已
+  包含 Y，是合计，不得当作纯 Z 汇报」；grain 的多余取值是另一个维度字段、不选
+  即按请求粒度聚合 → 保留「粒度更细，不得把明细当汇总」。
+**验证结果**：
+- 变异检查（实现被还原则测试必须转红）：注释掉两处 `_attach_slot_coverage` 调用
+  → `test_grain_disclosure_survives_explicit_dataset_reference` 两版同时 FAIL；
+  把 C2 的 `if slot_name == "grain"` 改成 `if True` →
+  `test_ad_type_surplus_disclosure_says_cannot_filter*` 两版同时 FAIL。
+- 新增/改写测试：`tests/skills/test_slot_coverage.py`（+5，含两版参数化的标签、
+  filterable 跳过、`SLOT_LABELS_ZH` 覆盖 `ALLOWED_SLOTS`、`_attach_slot_coverage`）、
+  `tests/skills/test_dataset_query_planner.py`（+2 端到端；并把原
+  `assert any("keyword" in item ...)` 改为断言中文标签——该断言把英文泄露写进了
+  断言、锁死了缺陷）、`tests/query/planner/test_query_plan.py`（+2 内核端到端）。
+- 回归：`pytest tests/skills/test_slot_coverage.py tests/skills/test_routing_eval.py
+  tests/skills/test_local_fallback.py tests/skills/test_dataset_query_planner.py
+  tests/query tests/mcp/test_query_planner_tools.py -q` → 276 passed, 8 xfailed。
+- 两版一致性：`diff` 两版相对 HEAD 的变更集（去掉行号 hunk 头）完全相同。
+**影响范围**：`model_view["grain_disclosure_zh"]` 与
+`answer_contract["required_disclosures_zh"]` 的文案措辞改变（下游 Agent 只按
+自然语言消费，无结构依赖）；内部规划器合同里候选的 `grain_coverage` 值形状
+从 list 改为 dict——该键仅由同批修改的 `query_plan.py` 消费，无其他消费方
+（已 grep 确认）。显式命中/中文说明命中/默认表推荐三条路径现在会新增披露，
+这是修复目标而非副作用。
+**回滚方式**：`git revert <本次提交>`；或按文件 `git checkout HEAD~1 --`
+还原两版各 3 个脚本与 4 个测试文件。
+---

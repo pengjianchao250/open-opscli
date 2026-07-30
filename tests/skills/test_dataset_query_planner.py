@@ -1841,10 +1841,109 @@ def test_grain_surplus_triggers_disclosure_in_both_locations(tmp_path: Path):
     assert result["status"] == "planned"
     assert result["execution_ref"]["dataset_alias"] == "ds_kw_st"
     disclosures = result["model_view"]["grain_disclosure_zh"]
-    assert any("keyword" in item for item in disclosures)
+    # 披露句面向用户，只能出现中文标签；曾断言过内部标识 "keyword"，
+    # 把「英文标识泄露到中文句子」这个缺陷写进了断言并锁死
+    assert any("关键词" in item for item in disclosures)
+    assert not any("keyword" in item or "grain" in item for item in disclosures)
     assert all(item in result["answer_contract"]["required_disclosures_zh"] for item in disclosures)
     schema = json.loads((SKILL_ROOT / "data" / "query_plan.schema.json").read_text())
     jsonschema.Draft202012Validator(schema).validate(result)
+
+
+def test_grain_disclosure_survives_explicit_dataset_reference(tmp_path: Path):
+    """用户点名数据集（走显式命中路径）时，强制披露不能消失。
+
+    审查实测：'亚马逊搜索词绩效 近7天搜索词的点击份额' -> planned | 披露 None，
+    而只说 '近7天搜索词的点击份额' 反而有披露。根因是四条候选构造路径里只有
+    _score_profile 带 grain_coverage，显式标识 / 中文说明 / 默认表三条都不带，
+    于是「用户说得越具体反而越危险」被原封不动搬到了披露层。
+    """
+    data_dir = tmp_path / "data"
+    _write_grain_surplus_metadata(data_dir)
+
+    for query in (
+        "关键词搜索词双维度表 近7天搜索词的转化率",  # 显式中文名命中
+        "ds_kw_st 近7天搜索词的转化率",  # 显式技术标识命中
+    ):
+        result = query_plan.build_model_query_plan(
+            query,
+            data_dir=data_dir,
+            rules_path=RULES_PATH,
+            auto_upgrade=False,
+            auto_enum=False,
+        )
+        assert result["status"] == "planned", query
+        disclosures = result["model_view"].get("grain_disclosure_zh") or []
+        assert any("关键词" in item for item in disclosures), f"点名数据集后披露丢失：{query}"
+        assert all(
+            item in result["answer_contract"]["required_disclosures_zh"]
+            for item in disclosures
+        ), query
+
+
+def _write_ad_type_surplus_metadata(data_dir: Path) -> None:
+    """写入一张 ad_type 固定为 SP+SD+SB 且没有「广告类型」筛选字段的数据集。
+
+    模拟线上真实形态：用户只要 SP，数据集是三类广告的合计，且筛不掉——
+    这正是文案语义必须与 grain 分开的场景。
+    """
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v1.4.2", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "20,ds_spsdsb,合并广告表,normal,0,亚马逊SP、SD、SB广告汇总数据集,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "20,ds_spsdsb,合并广告表,date_id,日期,f_ad_date,dimension,,,,,0,0\n"
+        "20,ds_spsdsb,合并广告表,ad_cost,广告花费,f_ad_cost,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n",
+        encoding="utf-8",
+    )
+
+
+def test_ad_type_surplus_disclosure_says_cannot_filter_not_finer_grain(tmp_path: Path):
+    """ad_type 多覆盖时文案必须说「筛不掉、是合计」，不能说「粒度更细」。
+
+    实测输出过「所选数据集的ad_type粒度比请求更细…不得把更细粒度的明细当成
+    请求粒度的汇总」——语义正好相反：交付的是 SP+SD+SB 合计（filters 里筛不掉
+    广告类型），照这句话读会把合计当成纯 SP 汇报，是最危险的静默错数方向。
+    """
+    data_dir = tmp_path / "data"
+    _write_ad_type_surplus_metadata(data_dir)
+
+    result = query_plan.build_model_query_plan(
+        "查询近7天SP广告的广告花费",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "planned"
+    disclosures = result["model_view"]["grain_disclosure_zh"]
+    text = "".join(disclosures)
+    assert "无法按广告类型筛选" in text
+    assert "不得当作纯 SP 的数据汇报" in text
+    # 反向锁：把合计说成「更细粒度的明细」会引导模型把合计当纯 SP 汇报
+    assert "粒度比请求更细" not in text
+    assert "明细当成请求粒度的汇总" not in text
+    # 内部标识不得泄露到中文披露句
+    assert "ad_type" not in text
+    assert all(
+        item in result["answer_contract"]["required_disclosures_zh"] for item in disclosures
+    )
+    # 确认「筛不掉」这一前提为真：模板里没有任何广告类型筛选
+    template = result["execution_ref"]["query_template"]
+    assert all(item["field"] == "date_id" for item in template["filters"])
 
 
 def test_grain_exact_match_produces_no_disclosure_noise(tmp_path: Path):

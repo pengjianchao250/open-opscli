@@ -1190,6 +1190,36 @@ def _default_filters_zh(refs: list[dict]) -> list[str]:
     return lines
 
 
+def _slot_surplus_disclosure_zh(slot_name: str, detail: dict) -> str:
+    """把「数据集覆盖得比请求多」翻成一句语义正确的中文强制披露。
+
+    必须按槽位语义分文案，两类风险的正确应对方式相反：
+
+    - grain（统计粒度）：多出的取值是数据集里另一个维度字段（如请求搜索词级、
+      数据集是关键词×搜索词级）。不选该维度即按请求粒度聚合，风险在于份额、
+      比率这类非可加指标不能直接汇总 → 说「粒度更细」，提醒不要把明细当汇总。
+    - platform / ad_type：能进到这里说明 slot_modes 是 fixed，即数据集**没有**
+      该槽位的筛选字段（filterable 的槽位根本不会产出 surplus，见
+      agent_query_planner._extra_slot_terms）。多出的取值筛不掉，交付的是合计
+      → 必须说「无法按 X 筛选、结果含 Y」。原先照 grain 语义写成「粒度更细、
+      不得把明细当汇总」，会引导模型把 SP+SD+SB 合计当成纯 SP 汇报，
+      正好是最危险的静默错数方向。
+    """
+    label = str(detail.get("slot_label_zh") or slot_name)
+    surplus = "、".join(str(item) for item in detail.get("surplus_zh") or [])
+    requested = "、".join(str(item) for item in detail.get("requested_zh") or [])
+    if slot_name == "grain":
+        return (
+            f"所选数据集的{label}比请求更细，额外覆盖：{surplus}；"
+            "结论中必须说明这一口径差异，不得把更细粒度的明细当成请求粒度的汇总。"
+        )
+    return (
+        f"所选数据集无法按{label}筛选，返回数据已包含 {surplus}，"
+        f"是把这些一起算进来的合计；结论中必须说明这一范围差异，"
+        f"不得当作纯 {requested} 的数据汇报。"
+    )
+
+
 def build_model_contract(
     internal: dict,
     query: str = "",
@@ -1316,8 +1346,9 @@ def build_model_contract(
     platform_disclosures = _platform_scope_disclosures(platform)
     if platform_disclosures:
         model_view["platform_scope_disclosures_zh"] = platform_disclosures
-    # 放开固定槽位后，选中数据集的粒度可能比用户要求更细，必须如实告知，
-    # 否则用户会把「关键词×搜索词」级明细当成「搜索词」级汇总。
+    # 放开固定槽位后，选中数据集覆盖的口径可能比用户要求更宽，必须如实告知，
+    # 否则用户会把「关键词×搜索词」级明细当成「搜索词」级汇总，
+    # 或把 SP+SD+SB 合计当成纯 SP 数据。
     # 按 dataset_alias 匹配当前实际选中的候选（而非默认取 candidates[0]），
     # 避免候选列表顺序与最终选中项不一致时误取到别的候选的粒度披露。
     selected_alias = dataset.get("dataset_alias")
@@ -1328,9 +1359,7 @@ def build_model_contract(
             break
     if grain_extra:
         model_view["grain_disclosure_zh"] = [
-            f"所选数据集的{name}粒度比请求更细，额外覆盖：{'、'.join(terms)}；"
-            "结论中必须说明这一口径差异，不得把更细粒度的明细当成请求粒度的汇总。"
-            for name, terms in grain_extra.items()
+            _slot_surplus_disclosure_zh(name, detail) for name, detail in grain_extra.items()
         ]
     if default_dataset_recommendation:
         model_view["default_dataset_recommendation_zh"] = {

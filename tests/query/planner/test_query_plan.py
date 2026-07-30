@@ -239,3 +239,126 @@ def test_component_enum_success_still_resolves_filter():
     assert contract["status"] == "planned"
     filters = contract["execution_ref"]["query_template"]["filters"]
     assert {"field": "dept_name", "operator": "=", "value": "项目二部"} in filters
+
+
+# ── 固定槽位多覆盖的强制披露（Task 8 内核镜像）────────────────────────────────
+#
+# Skill 版有同名端到端回归（tests/skills/test_dataset_query_planner.py），
+# 内核版是另一条独立的调用链（MetadataAdapter + 注入回调），必须各自守一遍：
+# 只在 Skill 侧加测试，内核侧的候选构造路径漏补覆盖信息时不会有任何红灯。
+
+
+def _grain_surplus_payload():
+    """grain 固定为 keyword+search_term 的数据集：用户只要搜索词级，数据集更细。"""
+    return {
+        "datasets": [
+            {
+                "table_id": 300,
+                "dataset_alias": "ds_kw_st",
+                "dataset_name": "关键词搜索词双维度表",
+                "dataset_category": "normal",
+                "description": "用于分析亚马逊消费者搜索词与关键词维度下的转化情况，支持选品优化。",
+                "remarks": "",
+                "select_columns": [],
+            }
+        ],
+        "fields": [
+            {
+                "table_id": 300,
+                "dataset_alias": "ds_kw_st",
+                "dataset_name": "关键词搜索词双维度表",
+                "field_name": "date_id",
+                "verbose_name": "日期",
+                "global_alias": "f_kw_date",
+                "field_type": "dimension",
+                "has_formula_config": 0,
+            },
+            {
+                "table_id": 300,
+                "dataset_alias": "ds_kw_st",
+                "dataset_name": "关键词搜索词双维度表",
+                "field_name": "conv_rate",
+                "verbose_name": "转化率",
+                "global_alias": "f_conv_rate",
+                "field_type": "metric",
+                "has_formula_config": 0,
+            },
+        ],
+    }
+
+
+def _ad_type_surplus_payload():
+    """ad_type 固定为 SP+SD+SB 且无「广告类型」筛选字段的数据集：多余类型筛不掉。"""
+    return {
+        "datasets": [
+            {
+                "table_id": 310,
+                "dataset_alias": "ds_spsdsb",
+                "dataset_name": "合并广告表",
+                "dataset_category": "normal",
+                "description": "亚马逊SP、SD、SB广告汇总数据集",
+                "remarks": "",
+                "select_columns": [],
+            }
+        ],
+        "fields": [
+            {
+                "table_id": 310,
+                "dataset_alias": "ds_spsdsb",
+                "dataset_name": "合并广告表",
+                "field_name": "date_id",
+                "verbose_name": "日期",
+                "global_alias": "f_ad_date",
+                "field_type": "dimension",
+                "has_formula_config": 0,
+            },
+            {
+                "table_id": 310,
+                "dataset_alias": "ds_spsdsb",
+                "dataset_name": "合并广告表",
+                "field_name": "ad_cost",
+                "verbose_name": "广告花费",
+                "global_alias": "f_ad_cost",
+                "field_type": "metric",
+                "has_formula_config": 0,
+            },
+        ],
+    }
+
+
+def test_grain_disclosure_survives_explicit_dataset_reference():
+    """用户点名数据集（走显式命中路径）时强制披露不能消失。
+
+    审查实测：点名数据集名后披露变 None，只说业务诉求反而有披露——
+    「说得越具体反而越危险」被搬到了披露层。
+    """
+    for query in (
+        "近7天搜索词的转化率",  # 语义打分路径（原本就有披露）
+        "关键词搜索词双维度表 近7天搜索词的转化率",  # 显式中文名命中
+        "ds_kw_st 近7天搜索词的转化率",  # 显式技术标识命中
+    ):
+        contract = query_plan.build_model_query_plan(
+            MetadataAdapter(_grain_surplus_payload()), query, enum_fn=lambda *a, **k: []
+        )
+        disclosures = contract["model_view"].get("grain_disclosure_zh") or []
+        assert any("关键词" in item for item in disclosures), f"披露丢失：{query}"
+        assert all(
+            item in contract["answer_contract"]["required_disclosures_zh"]
+            for item in disclosures
+        ), query
+        # 内部标识不得泄露到面向用户的中文披露句
+        assert not any("keyword" in item or "grain" in item for item in disclosures), query
+
+
+def test_ad_type_surplus_disclosure_says_cannot_filter():
+    """ad_type 多覆盖时必须说「筛不掉、是合计」，不能说「粒度更细」。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_ad_type_surplus_payload()),
+        "查询近7天SP广告的广告花费",
+        enum_fn=lambda *a, **k: [],
+    )
+    text = "".join(contract["model_view"]["grain_disclosure_zh"])
+    assert "无法按广告类型筛选" in text
+    assert "不得当作纯 SP 的数据汇报" in text
+    assert "粒度比请求更细" not in text
+    assert "ad_type" not in text
