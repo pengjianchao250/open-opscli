@@ -561,6 +561,10 @@ def _print_install_line(install: object) -> None:
         f"[dim]{version}[/dim] → [cyan]{tool_label}[/cyan] "
         f"[dim]({target_dir})[/dim]"
     )
+    # 覆盖安装保留了已拉取的元数据时显式告知，避免用户以为数据被重置又去重跑 upgrade
+    preserved = getattr(install, "preserved_data_files", 0)
+    if preserved:
+        _console.print(f"    [dim]已保留本地元数据 {preserved} 个文件，无需重新 upgrade[/dim]")
 
 
 def _inject_rules_for_installs(installs: Sequence[object], *, verbose: bool = False) -> None:

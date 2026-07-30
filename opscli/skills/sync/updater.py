@@ -18,6 +18,20 @@ from opscli.auth.exceptions import AuthError
 from opscli.skills.domain.exceptions import SkillRemoteError
 from opscli.skills.domain.models import SkillRecord, SkillUpgradeResult
 
+# 由 upgrade 从远端写入、归运行时所有的数据文件清单。
+# 这些文件在内置模板里只是占位符（CSV 仅表头、JSON 空集合），真实内容只存在于
+# 已安装目录，因此 install 覆盖模板时必须原样保留它们，否则用户拉取的真实元数据
+# 会被降级成占位符（且 VERSION.json 的 data_state=placeholder 会让规划器全量 blocked）。
+# 新增远端数据文件时只需加进这里，install 侧的保护自动生效。
+UPGRADE_MANAGED_FILES = (
+    "dataset_fields.csv",
+    "datasets.csv",
+    "dataset_select_columns.csv",
+    "dataset_catalog.json",
+    "query_metadata.json",
+    "VERSION.json",
+)
+
 
 class SkillsUpdater:
     """Skill 数据更新器，从远端拉取最新数据并更新本地安装。
@@ -220,14 +234,7 @@ class SkillsUpdater:
 
             # 原子替换：Path.replace() 在同文件系统上是原子操作；
             # 跨盘时回退到复制+删除（Windows TEMP 与目标目录可能在不同盘）
-            for filename in [
-                "dataset_fields.csv",
-                "datasets.csv",
-                "dataset_select_columns.csv",
-                "dataset_catalog.json",
-                "query_metadata.json",
-                "VERSION.json",
-            ]:
+            for filename in UPGRADE_MANAGED_FILES:
                 src = tmp_path / filename
                 dst = data_dir / filename
                 try:

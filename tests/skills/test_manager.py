@@ -57,7 +57,12 @@ def test_install_ops_methods_card_template(tmp_path: Path):
 
 
 def test_install_dataset_fields_template_to_multiple_runtimes(tmp_path: Path):
-    manager = SkillsManager(registry_path=tmp_path / "registry.json")
+    # 必须隔离 central_skills_dir：不传时默认写用户真实 ~/.opscli/skills，
+    # 会把 upgrade 拉取的真实元数据覆盖成模板占位符（铁律8：测试不依赖真实环境）
+    manager = SkillsManager(
+        registry_path=tmp_path / "registry.json",
+        central_skills_dir=tmp_path / "central",
+    )
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".openclaw").mkdir()
 
