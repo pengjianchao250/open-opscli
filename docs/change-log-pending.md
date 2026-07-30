@@ -5285,6 +5285,13 @@
 
 ## 2026-07-29 skills/ops-dataset-query - 字段打分末端接入模糊匹配（Task 2）
 
+> **【已失效】本条描述的改动已于 `eb4b623` 整体回退（回退提交
+> `427fed7 2bebd27 8415e92 6c3eb41 388047c`，即 Task 1/2/9 模糊匹配层全部砍掉）。**
+> `dataset_guidance._field_score()` 现在没有任何 fuzzy 分支，`schema_completion.py`
+> 与 `tests/skills/test_schema_completion.py` 两个文件都不存在。本条仅作历史保留，
+> 照它读会得出「模糊匹配层已上线」的错误结论；下方的「回滚方式：`git revert 2bebd27`」
+> 也已无意义。砍掉原因见本文件同日的《砍掉模糊匹配层》条目。
+
 **变更原因**：《取数规划器通用化优化开发计划》Task 2，接续 Task 1 已完成的字符二元组相似度模块。`dataset_guidance._field_score()` 打分末端此前只有 token 集合交集兜底，业务词与字段中文名只是部分重叠时会直接得 0 分，导致整条查询零候选。
 **改动的类/方法**：`dataset_guidance._field_score()`（函数）；顶部新增 `import schema_completion`。
 **改动点**：`opscli/skills/templates/ops-dataset-query/scripts/dataset_guidance.py`、`tests/skills/test_schema_completion.py`（追加 3 个测试，与 brief 逐字一致）。`_field_score()` 在精确命中与 token 交集都为 0 时，调用 `schema_completion.best_fuzzy_score(normalized_query, 字段展示名列表)`，`return int(fuzzy * 50)`——上限 50，低于 80/90/100 三档精确命中，确保不会挤掉精确匹配。
@@ -5295,6 +5302,71 @@
 4. **Step 5 实测未达成预期**：按 brief 命令查询「看一下搜索词的点击份额和购买份额」，改动前后 `query_plan.py` 输出完全一致（`status=clarify_required, 候选=[], reason=dataset_constraints`）。根因排查：该查询在 `agent_query_planner.py` 的语义抽取阶段就因 `intent_rules.json` 未登记"点击份额/购买份额"为指标词而拿到 `domains=[] metrics=[]`，在到达 `dataset_guidance._field_score()` 之前就已经因 `dataset_constraints` 走向 `clarify_required`——是本任务改动范围之外的另一套匹配逻辑（选表阶段 vs 字段打分阶段）。这与计划文档第 45 行"实测依据"的成因描述不符，已在任务报告与本记录中如实标注，留待人工核实。
 **影响范围**：仅 `dataset_guidance._field_score()` 内部打分末端逻辑；对已有精确匹配/token 交集命中的字段无影响（`best` 非零时提前 return，不会走到新分支）。真正受影响的是此前 token 交集=0 的字段候选场景。已复制到 `~/.claude/skills/ops-dataset-query/scripts/`（与源文件 diff 一致）。
 **回滚方式**：`git revert 2bebd27`；或手动删除 `_field_score()` 末尾新增的 fuzzy 分支与顶部 `import schema_completion`，并移除 `tests/skills/test_schema_completion.py` 追加的 3 个测试。
+---
+
+## 2026-07-29 skills/ops-dataset-query - Task 8：放开固定槽位过约束并强制披露更细粒度
+
+**变更原因**：本分支唯一的行为修复，补录（原提交时缺变更记录）。线上真实故障：
+用户说「搜索词的点击份额」时 60 张授权卡片无一通过（零候选），而说「搜索词和关键词的
+点击份额」反而能命中 3 个正确数据集——描述越具体候选越少。根因是
+`agent_query_planner._slot_is_covered()` 在 `slot_mode == "fixed"` 时要求数据集支持的
+槽位取值与用户请求**完全相等**，覆盖粒度更广的数据集因「不完全相等」被拒。
+**改动的类/方法**：`agent_query_planner._slot_is_covered()`、
+`agent_query_planner._extra_slot_terms()`（新增）、
+`agent_query_planner._score_profile()`、`query_plan.build_model_contract()`。
+**改动点**（提交 `293b0dd` + `7e7c3b6`）：
+1. `opscli/skills/templates/ops-dataset-query/scripts/agent_query_planner.py`：
+   `_slot_is_covered()` 由「完全相等」放开为子集判定（`requested.issubset(supported)`）；
+   新增 `_extra_slot_terms()` 列出数据集比请求多覆盖的固定槽位取值；
+   `_score_profile()` 的候选字典新增 `grain_coverage` 键承载该信息。
+2. `opscli/skills/templates/ops-dataset-query/scripts/query_plan.py`：
+   `build_model_contract()` 按 `dataset_alias` 匹配实际选中的候选取 `grain_coverage`，
+   写入 `model_view["grain_disclosure_zh"]` 并追加到
+   `answer_contract["required_disclosures_zh"]`——放开覆盖判定必须配套强制披露，
+   否则用户会把「关键词×搜索词」级明细当成「搜索词」级汇总。
+3. `opscli/skills/templates/ops-dataset-query/data/query_plan.schema.json`：
+   `model_view` 新增 `grain_disclosure_zh` 属性（string_array）。
+4. `tests/skills/test_slot_coverage.py`（`293b0dd` 新建）：两版参数化的覆盖判定与
+   surplus 提取单测；`tests/skills/test_dataset_query_planner.py`（`7e7c3b6` 追加）：
+   披露两处写入的端到端正例与「粒度正好相等不产生噪声」的反例。
+**验证结果**：`293b0dd` 当时只有单测、`7e7c3b6` 补齐端到端回归；两个提交合起来的
+用例在 2026-07-30 终审后被扩写（见本文件《强制披露补齐 4 条候选路径》条目），
+以当前代码复跑 `pytest tests/skills/test_slot_coverage.py
+tests/skills/test_dataset_query_planner.py tests/query
+tests/mcp/test_query_planner_tools.py -q` → 全绿。内核版镜像见下一条 Task 4。
+**影响范围**：所有固定槽位（platform / ad_type / grain）的选表覆盖判定——召回变宽，
+此前被拒的更宽口径数据集现在可选中，代价是必须靠强制披露把口径差异告知用户。
+**遗留缺陷（已于 2026-07-30 修复）**：披露只覆盖 4 条候选构造路径中的 1 条；
+披露文案在 ad_type/platform 场景语义相反且泄露英文标识。详见后文对应条目。
+**回滚方式**：`git revert 7e7c3b6 293b0dd`（内核镜像 `f2593c0` 与后续披露修复
+`02f094f` 需一并回退）。
+---
+
+## 2026-07-29 skills/ops-dataset-query - 砍掉模糊匹配层（Task 1/2/9 整体回退）
+
+**变更原因**：补录（原提交 `eb4b623` 时缺变更记录）。《取数规划器通用化优化开发计划》
+Task 1/2/9 试图在字段打分末端加一层字符二元组模糊匹配，做到第 3 版设计、第 2 轮修复、
+被审查挡下 4 个缺陷后仍未收敛，因为计划自身的两条 Global Constraint 在这一层互斥：
+「召回优先，多带无关字段代价小得多」与「分段后不得把无关字段拉进候选」。
+中文 BI 场景的通用业务后缀（份额 / 转化率 / 点击率 / 复购率）本身不携带区分信息：
+用户说「点击的转化率」时，字段「退货转化率」「广告转化率」与之共享后缀，任何基于
+子串或字符相似度的规则都会等分命中；要区分必须知道修饰语「点击」必须匹配上，
+而丢掉修饰语恰恰是为了救「字段名比用户词长」（字段「ASIN点击份额」对用户词
+「点击份额」）那一类——两个需求在同一层机制里互斥。长度阈值只能治标：
+挡住 2 字的「份额」，3 字的「转化率」照漏。且用户实际遇到的零候选故障已由
+`293b0dd`（放开固定槽位过约束）从根因修复，与模糊匹配无关。
+**改动的类/方法**：删除 `schema_completion.best_fuzzy_score()` 等全部新增函数；
+还原 `dataset_guidance._field_score()` 到无 fuzzy 分支的形态。
+**改动点**：提交 `eb4b623` 回退了 `427fed7`、`2bebd27`、`8415e92`、`6c3eb41`、
+`388047c` 五个提交，删除两版 `schema_completion.py` 与
+`tests/skills/test_schema_completion.py`，还原两版 `dataset_guidance.py`。
+**保留**：`293b0dd` + `7e7c3b6`（固定槽位放开与其回归测试）不在回退范围内。
+**验证结果**：回退后 312 passed / 5 xfailed；`dataset_guidance` 无残留引用
+（当时已 grep 确认）。
+**影响范围**：字段打分回到「精确命中 + token 集合交集」两档，没有模糊兜底。
+研究依据（EDBT'26 四条规则）仍成立但指向别处：贡献最大的「外键连接列补全」
+对应本项目的权限组件字段补全，已于 `8cad3a5` 落地；模糊匹配是消融中贡献最小的一条。
+**回滚方式**：`git revert eb4b623`（会把三个已判定为设计缺陷的任务全部装回，不建议）。
 ---
 
 ## 2026-07-30 query/planner - Task 4：内核版镜像固定槽位放开与粒度强制披露
@@ -5578,4 +5650,39 @@ CSV 取默认维度指标中文名）。
 那是待用户裁决的事项。
 **回滚方式**：`git revert <本次提交>`；或 `git checkout HEAD~1 --` 还原
 `SKILL.md` 与 `tests/skills/test_local_fallback.py`。
+---
+
+## 2026-07-30 docs - 补齐交付记录并把计划文档改向标注到位（I1 + I2）
+
+**变更原因**：终审发现交付记录不实与计划文档未随改向更新，照文档读会得出错误结论。
+- I1：`docs/change-log-pending.md` 缺 Task 8（`293b0dd` + `7e7c3b6`，本分支唯一的行为
+  修复）与回退（`eb4b623`）两条记录；且保留了描述已删代码的条目（「字段打分末端接入
+  模糊匹配（Task 2）」详细描述 `dataset_guidance.py` 改动并给「回滚方式：
+  `git revert 2bebd27`」，该改动已随 `eb4b623` 整体回退）。
+- I2：`docs/plans/取数规划器通用化优化开发计划.md` 的 Task 1/2/3/9 原样保留完整实现
+  代码且无状态标注；Architecture 仍把「字符二元组模糊匹配 + 公式引用词表扩展」列为
+  头号交付物；File Structure 仍把三个已不存在的文件列为新建；阶段一仍把零候选根因
+  写成 `_field_score` 的 token 交集兜底，而阶段零已推翻该判断。
+**改动的类/方法**：无（纯文档）。
+**改动点**：
+- `docs/change-log-pending.md`：新增《Task 8：放开固定槽位过约束并强制披露更细粒度》
+  与《砍掉模糊匹配层（Task 1/2/9 整体回退）》两条补录（按提交时序插在 Task 4 条目之前）；
+  给失效条目加「【已失效】…已于 `eb4b623` 整体回退」显式标注并说明其回滚指引已无意义
+  （**不删除**，保留历史）。
+- `docs/plans/取数规划器通用化优化开发计划.md`：Task 1/2 加 `REVERTED@eb4b623` banner、
+  Task 3 加 `DROPPED` banner、Task 9 加 `DROPPED` banner 并写明「两条 Global Constraint
+  在该层互斥：中文通用业务后缀无法靠长度阈值区分特指与泛指」（否则下一个人会精确地再撞
+  一次）；修 Architecture 头号交付物立论、File Structure 文件清单（三个文件划掉并标注
+  不存在，补上实际落地的 `test_slot_coverage.py` 与两版规划器文件）、阶段一根因立论
+  （整阶段标作废，保留 EDBT'26 研究依据但指明其贡献最大的一条对应已落地的 `8cad3a5`）。
+**验证结果**：文档改动，逐条核对代码事实——
+`ls` 确认两版 `schema_completion.py` 与 `tests/skills/test_schema_completion.py` 均不存在；
+`grep -n "fuzzy\|schema_completion"` 两版 `dataset_guidance.py` 零命中；
+`git log -1 8cad3a5` 确认该提交存在（组件筛选值解析二期）；
+`tests/skills/test_routing_eval.py` 与 `tests/skills/test_slot_coverage.py` 存在。
+回归未受影响：`pytest tests/skills/test_slot_coverage.py tests/skills/test_routing_eval.py
+tests/skills/test_local_fallback.py tests/skills/test_dataset_query_planner.py tests/query
+tests/mcp/test_query_planner_tools.py -q` → 全绿。
+**影响范围**：仅文档可读性与后续执行者的判断依据；无运行时影响。
+**回滚方式**：`git revert <本次提交>`；或 `git checkout HEAD~1 --` 还原两个文档文件。
 ---
