@@ -913,22 +913,29 @@ class FakeListingPage:
 class _AssociationResponseWaiter:
     """模拟 Playwright 的响应等待上下文。"""
 
-    def __init__(self, endpoint, response=None):
+    def __init__(self, endpoint, response=None, error=None):
         self.value = asyncio.get_running_loop().create_future()
-        self.value.set_result(
-            response
-            or SimpleNamespace(
-                url=f"https://www.sellersprite.com{endpoint}",
-                status=200,
+        if error is not None:
+            self.value.set_exception(error)
+        else:
+            self.value.set_result(
+                response
+                or SimpleNamespace(
+                    url=f"https://www.sellersprite.com{endpoint}",
+                    status=200,
+                )
             )
-        )
 
     async def __aenter__(self):
         """进入响应等待上下文并返回自身。"""
         return self
 
     async def __aexit__(self, exc_type, exc, traceback):
-        """退出响应等待上下文，不吞掉测试异常。"""
+        """按真实 Playwright 语义等待事件，或在代码块异常时取消监听。"""
+        if exc is not None:
+            self.value.cancel()
+            return False
+        await self.value
         return False
 
 
@@ -952,14 +959,73 @@ class _AssociationLocator:
         """记录输入框填充值。"""
         self.page.fills.append(value)
 
+    async def evaluate(self, expression):
+        """返回不含请求体和账号信息的按钮 DOM 事件诊断。"""
+        if self.kind not in {"sell_well", "current"}:
+            return {}
+        return {
+            "connected": True,
+            "visible": True,
+            "enabled": True,
+            "focused": self.kind in getattr(self.page, "focuses", []),
+            "dialogVisible": True,
+            "clickCount": self.page.variant_dom_clicks,
+            "keydownCount": self.page.variant_dom_keydowns,
+            "keyupCount": self.page.variant_dom_keyups,
+            "mousedownCount": self.page.variant_dom_mousedowns,
+            "mouseupCount": self.page.variant_dom_mouseups,
+            "pointerdownCount": self.page.variant_dom_pointerdowns,
+            "pointerupCount": self.page.variant_dom_pointerups,
+            "clickTrusted": self.page.variant_dom_click_trusted,
+            "clickDetail": self.page.variant_dom_click_detail,
+        }
+
+    async def focus(self, **kwargs):
+        """记录流量词对比变体按钮获得焦点。"""
+        if hasattr(self.page, "focuses"):
+            self.page.focuses.append(self.kind)
+        if hasattr(self.page, "events"):
+            self.page.events.append(f"focus_{self.kind}")
+
+    async def scroll_into_view_if_needed(self, **kwargs):
+        """模拟滚动到目标按钮。"""
+
+    async def bounding_box(self, **kwargs):
+        """返回稳定的按钮坐标，供单次真实鼠标事件激活。"""
+        if self.kind not in {"sell_well", "current"}:
+            return None
+        self.page.variant_mouse_target = self.kind
+        return {"x": 100, "y": 50, "width": 160, "height": 40}
+
     async def press(self, key, **kwargs):
-        """记录输入框按键。"""
+        """记录按键，并模拟回车产生 DOM 键盘和 click 事件。"""
         self.page.presses.append(key)
+        if hasattr(self.page, "events"):
+            self.page.events.append(f"press_{self.kind}_{key}")
+        if self.kind in {"sell_well", "current"} and hasattr(
+            self.page, "main_query_calls"
+        ):
+            if self.page.variant_click_error is not None:
+                raise self.page.variant_click_error
+            self.page.variant_dom_keydowns += 1
+            self.page.variant_dom_keyups += 1
+            self.page.variant_dom_clicks += 1
+            self.page.main_query_calls += 1
 
     async def click(self, **kwargs):
         """记录按钮点击及流量词对比主查询触发次数。"""
         self.page.clicks.append(self.kind)
-        if self.kind == "sell_well" and hasattr(self.page, "main_query_calls"):
+        if hasattr(self.page, "events"):
+            self.page.events.append(f"click_{self.kind}")
+        if self.kind == "query" and getattr(
+            self.page, "query_click_error", None
+        ) is not None:
+            raise self.page.query_click_error
+        if self.kind in {"sell_well", "current"} and hasattr(
+            self.page, "main_query_calls"
+        ):
+            if self.page.variant_click_error is not None:
+                raise self.page.variant_click_error
             self.page.main_query_calls += 1
 
     async def get_attribute(self, name):
@@ -1068,18 +1134,72 @@ class _KeywordComparisonPrepareResponse:
         return json.dumps(self.payload, ensure_ascii=False)
 
 
-class _KeywordComparisonPage:
-    """模拟流量词对比页面及畅销变体弹窗。"""
+class _KeywordComparisonMouse:
+    """模拟只发送一次可信鼠标激活事件。"""
 
-    def __init__(self, endpoint, prepare_payload, *, prepare_status=200, prepare_text=None):
+    def __init__(self, page):
+        self.page = page
+
+    async def click(self, x, y, **kwargs):
+        target = self.page.variant_mouse_target
+        self.page.mouse_clicks.append({"target": target, "x": x, "y": y})
+        self.page.events.append(f"mouse_click_{target}")
+        if self.page.variant_click_error is not None:
+            raise self.page.variant_click_error
+        self.page.variant_dom_pointerdowns += 1
+        self.page.variant_dom_mousedowns += 1
+        self.page.variant_dom_pointerups += 1
+        self.page.variant_dom_mouseups += 1
+        self.page.variant_dom_clicks += 1
+        self.page.variant_dom_click_trusted = True
+        self.page.variant_dom_click_detail = 1
+        self.page.main_query_calls += 1
+
+
+class _KeywordComparisonPage:
+    """模拟流量词对比页面及两种变体拓词弹窗。"""
+
+    def __init__(
+        self,
+        endpoint,
+        prepare_payload,
+        *,
+        prepare_status=200,
+        prepare_text=None,
+        query_click_error=None,
+        variant_click_error=None,
+        main_request_error=None,
+        main_request_url=None,
+        main_response_error=None,
+    ):
         self.endpoint = endpoint
         self.prepare_payload = prepare_payload
         self.prepare_status = prepare_status
         self.prepare_text = prepare_text
+        self.query_click_error = query_click_error
+        self.variant_click_error = variant_click_error
+        self.main_request_error = main_request_error
+        self.main_request_url = main_request_url
+        self.main_response_error = main_response_error
         self.fills = []
         self.clicks = []
+        self.focuses = []
+        self.presses = []
+        self.events = []
         self.timeout_calls = []
         self.main_query_calls = 0
+        self.variant_mouse_target = None
+        self.mouse_clicks = []
+        self.mouse = _KeywordComparisonMouse(self)
+        self.variant_dom_clicks = 0
+        self.variant_dom_keydowns = 0
+        self.variant_dom_keyups = 0
+        self.variant_dom_mousedowns = 0
+        self.variant_dom_mouseups = 0
+        self.variant_dom_pointerdowns = 0
+        self.variant_dom_pointerups = 0
+        self.variant_dom_click_trusted = None
+        self.variant_dom_click_detail = None
 
     def expect_response(self, predicate, **kwargs):
         prepare_response = _KeywordComparisonPrepareResponse(
@@ -1088,8 +1208,29 @@ class _KeywordComparisonPage:
             raw_text=self.prepare_text,
         )
         if predicate(prepare_response):
+            self.events.append("listen_prepare")
             return _AssociationResponseWaiter(self.endpoint, response=prepare_response)
-        return _AssociationResponseWaiter(self.endpoint)
+        self.events.append("listen_main")
+        self.main_response_timeout = kwargs.get("timeout")
+        return _AssociationResponseWaiter(
+            self.endpoint,
+            error=self.main_response_error,
+        )
+
+    def expect_request(self, predicate, **kwargs):
+        self.events.append("listen_main_request")
+        self.main_request_timeout = kwargs.get("timeout")
+        request = SimpleNamespace(
+            url=self.main_request_url
+            or f"https://www.sellersprite.com{self.endpoint}",
+            method="POST",
+        )
+        assert predicate(request)
+        return _AssociationResponseWaiter(
+            self.endpoint,
+            response=request,
+            error=self.main_request_error,
+        )
 
     def locator(self, selector):
         if "自己的ASIN" in selector:
@@ -1098,6 +1239,8 @@ class _KeywordComparisonPage:
             return _AssociationLocator(self, "competitor_asins")
         if "用畅销变体拓词" in selector:
             return _AssociationLocator(self, "sell_well")
+        if "用当前变体拓词" in selector:
+            return _AssociationLocator(self, "current")
         if "立即查询" in selector:
             return _AssociationLocator(self, "query")
         return _AssociationLocator(self, "missing")
@@ -1464,6 +1607,29 @@ def test_keyword_comparison_route_payload_only_keeps_page_asin_list():
     assert "diamondList" not in effective
 
 
+def test_keyword_comparison_route_payload_accepts_sell_well_replacement():
+    """畅销变体替换原始 ASIN 后，页面生成的有效列表仍应放行。"""
+    payload = {
+        "asin": "B0949DWJCV",
+        "asinList": ["B014INJCT4"],
+        "station": "US",
+        "page": 1,
+        "size": 100,
+    }
+
+    effective = worker_module._keyword_comparison_route_payload(
+        payload,
+        json.dumps({"asinList": ["B0GS9B1X5X", "B0744DM3Y3"]}),
+    )
+
+    assert effective == {
+        **payload,
+        "asinList": ["B0GS9B1X5X", "B0744DM3Y3"],
+        "page": 1,
+        "size": 100,
+    }
+
+
 def test_keyword_comparison_route_sends_effective_asin_list(monkeypatch, tmp_path):
     """主请求只接受页面生成的畅销变体列表，并同步记录最终顺序。"""
     endpoint = "/v3/api/keyword-comparison/asin"
@@ -1558,6 +1724,86 @@ def test_keyword_comparison_route_sends_effective_asin_list(monkeypatch, tmp_pat
         "size": 100,
     }
     assert route_metadata == {"asinList": ["B0949DWJCV", "B0744DM3Y3"]}
+
+
+def test_keyword_comparison_route_aborts_and_reports_invalid_body(monkeypatch, tmp_path):
+    """页面主请求体无效时即使中止异常，也应立即透传原始校验错误。"""
+    endpoint = "/v3/api/keyword-comparison/asin"
+    route_calls = []
+
+    class RouteProbe:
+        def __init__(self):
+            self.request = SimpleNamespace(
+                url=f"https://www.sellersprite.com{endpoint}",
+                headers={"content-type": "application/json"},
+                post_data="not-json",
+            )
+
+        async def continue_(self, **kwargs):
+            route_calls.append(("continue", kwargs))
+
+        async def abort(self, error_code):
+            route_calls.append(("abort", error_code))
+            raise RuntimeError("route abort failed")
+
+    class PageProbe:
+        def __init__(self):
+            self.handler = None
+
+        async def route(self, pattern, handler):
+            self.handler = handler
+
+        async def unroute(self, pattern, handler):
+            assert handler is self.handler
+
+        def is_closed(self):
+            return False
+
+    page = PageProbe()
+
+    async def fake_trigger(*args, **kwargs):
+        await page.handler(RouteProbe())
+        await asyncio.Future()
+
+    monkeypatch.setattr(worker_module, "_trigger_request", fake_trigger)
+    worker = SellerSpriteBrowserRouteWorker(
+        settings=SellerSpriteSettings(output_dir=tmp_path),
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+    )
+    payload = {
+        "asin": "B0949DWJCV",
+        "asinList": ["B014INJCT4"],
+        "station": "US",
+        "page": 1,
+        "size": 100,
+    }
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-comparison",
+        method="POST",
+        endpoint=endpoint,
+        payload=payload,
+        referer="https://www.sellersprite.com/v3/keyword-comparison",
+        account=worker.account,
+        root_dir=tmp_path,
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker._execute_route_fetch(
+                page=page,
+                method="POST",
+                endpoint=endpoint,
+                payload=payload,
+                root_dir=tmp_path,
+                section="main",
+                request=request,
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_KEYWORD_COMPARISON_REQUEST_BODY"
+    assert route_calls == [("abort", "blockedbyclient")]
 
 
 def test_keyword_comparison_retry_does_not_reuse_failed_asin_list(monkeypatch, tmp_path):
@@ -1681,7 +1927,328 @@ def test_keyword_comparison_route_selects_sell_well_variant(tmp_path):
     assert response.status == 200
     assert transport == "page_response"
     assert page.fills == ["B0949DWJCV", "B014INJCT4 B0BRN58CXR"]
-    assert page.clicks == ["query", "sell_well"]
+    assert page.clicks == ["query"]
+    assert page.focuses == []
+    assert page.presses == []
+    assert len(page.mouse_clicks) == 1
+    assert page.mouse_clicks[0]["target"] == "sell_well"
+    assert page.timeout_calls[-1] == 300
+    assert page.events == [
+        "listen_prepare",
+        "click_query",
+        "listen_main",
+        "listen_main_request",
+        "mouse_click_sell_well",
+    ]
+    assert page.main_response_timeout == worker_module.DEFAULT_TIMEOUT_MS
+
+
+def test_keyword_comparison_route_selects_current_variant(tmp_path):
+    """用户明确要求当前变体时，只点击当前变体拓词按钮。"""
+    endpoint = "/v3/api/keyword-comparison/asin"
+    page = _KeywordComparisonPage(
+        endpoint,
+        {
+            "code": "OK",
+            "success": True,
+            "data": {"diamondList": ["B0949DWJCV", "B0744DM3Y3"]},
+        },
+    )
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-comparison",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asin": "B0949DWJCV",
+            "asinList": ["B0744DM3Y3"],
+            "page": 1,
+            "size": 100,
+        },
+        referer="https://www.sellersprite.com/v3/keyword-comparison",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+        keyword_comparison_variant="current",
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "page_response"
+    assert page.clicks == ["query"]
+    assert page.focuses == []
+    assert page.presses == []
+    assert len(page.mouse_clicks) == 1
+    assert page.mouse_clicks[0]["target"] == "current"
+    assert page.main_query_calls == 1
+
+
+def test_keyword_comparison_query_click_error_is_not_response_missed(tmp_path):
+    """立即查询按钮点击失败时，不得误报主响应丢失。"""
+    endpoint = "/v3/api/keyword-comparison/asin"
+    page = _KeywordComparisonPage(
+        endpoint,
+        {
+            "code": "OK",
+            "success": True,
+            "data": {"diamondList": ["B0949DWJCV", "B0744DM3Y3"]},
+        },
+        query_click_error=TimeoutError("query button is not actionable"),
+    )
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-comparison",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asin": "B0949DWJCV",
+            "asinList": ["B0744DM3Y3"],
+            "page": 1,
+            "size": 100,
+        },
+        referer="https://www.sellersprite.com/v3/keyword-comparison",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker_module._trigger_request(
+                page,
+                endpoint=endpoint,
+                method="POST",
+                payload=request.payload,
+                request=request,
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_KEYWORD_COMPARISON_QUERY_CLICK"
+    assert page.events == ["listen_prepare", "click_query"]
+    assert page.main_query_calls == 0
+
+
+def test_keyword_comparison_variant_click_error_is_not_response_missed(tmp_path):
+    """变体按钮点击失败应保留准确错误，不能误报主响应丢失。"""
+    endpoint = "/v3/api/keyword-comparison/asin"
+    page = _KeywordComparisonPage(
+        endpoint,
+        {
+            "code": "OK",
+            "success": True,
+            "data": {"diamondList": ["B0949DWJCV", "B0744DM3Y3"]},
+        },
+        variant_click_error=TimeoutError("button is not actionable"),
+    )
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-comparison",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asin": "B0949DWJCV",
+            "asinList": ["B0744DM3Y3"],
+            "page": 1,
+            "size": 100,
+        },
+        referer="https://www.sellersprite.com/v3/keyword-comparison",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker_module._trigger_request(
+                page,
+                endpoint=endpoint,
+                method="POST",
+                payload=request.payload,
+                request=request,
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_KEYWORD_COMPARISON_VARIANT_CLICK"
+    assert page.events[-3:] == [
+        "listen_main",
+        "listen_main_request",
+        "mouse_click_sell_well",
+    ]
+    assert page.focuses == []
+    assert page.presses == []
+    assert len(page.mouse_clicks) == 1
+    assert page.main_query_calls == 0
+
+
+def test_keyword_comparison_response_error_after_click_is_response_missed(tmp_path):
+    """只有变体按钮点击成功后主响应失败，才报告响应丢失。"""
+    endpoint = "/v3/api/keyword-comparison/asin"
+    page = _KeywordComparisonPage(
+        endpoint,
+        {
+            "code": "OK",
+            "success": True,
+            "data": {"diamondList": ["B0949DWJCV", "B0744DM3Y3"]},
+        },
+        main_response_error=TimeoutError("main response timeout"),
+    )
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-comparison",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asin": "B0949DWJCV",
+            "asinList": ["B0744DM3Y3"],
+            "page": 1,
+            "size": 100,
+        },
+        referer="https://www.sellersprite.com/v3/keyword-comparison",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker_module._trigger_request(
+                page,
+                endpoint=endpoint,
+                method="POST",
+                payload=request.payload,
+                request=request,
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_KEYWORD_COMPARISON_RESPONSE_MISSED"
+    assert page.events[-3:] == [
+        "listen_main",
+        "listen_main_request",
+        "mouse_click_sell_well",
+    ]
+    assert page.focuses == []
+    assert page.presses == []
+    assert len(page.mouse_clicks) == 1
+    assert page.main_query_calls == 1
+
+
+def test_keyword_comparison_activation_without_post_is_request_missed(
+    tmp_path, caplog
+):
+    """无 POST 时应输出脱敏 DOM 事件诊断，同时禁止补点。"""
+    endpoint = "/v3/api/keyword-comparison/asin"
+    page = _KeywordComparisonPage(
+        endpoint,
+        {
+            "code": "OK",
+            "success": True,
+            "data": {"diamondList": ["B0949DWJCV", "B0744DM3Y3"]},
+        },
+        main_request_error=TimeoutError("no keyword comparison request"),
+    )
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-comparison",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asin": "B0949DWJCV",
+            "asinList": ["B0744DM3Y3"],
+            "page": 1,
+            "size": 100,
+        },
+        referer="https://www.sellersprite.com/v3/keyword-comparison",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+    )
+    caplog.set_level("WARNING", logger=worker_module.__name__)
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker_module._trigger_request(
+                page,
+                endpoint=endpoint,
+                method="POST",
+                payload=request.payload,
+                request=request,
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_KEYWORD_COMPARISON_REQUEST_MISSED"
+    assert page.main_request_timeout == 15000
+    assert page.clicks == ["query"]
+    assert page.focuses == []
+    assert page.presses == []
+    assert len(page.mouse_clicks) == 1
+    assert page.main_query_calls == 1
+    assert "[SELLER_SPRITE_KC_DIAG]" in caplog.text
+    assert '"clickCount": 1' in caplog.text
+    assert '"keydownCount": 0' in caplog.text
+    assert '"mousedownCount": 1' in caplog.text
+    assert '"mouseupCount": 1' in caplog.text
+    assert '"pointerdownCount": 1' in caplog.text
+    assert '"pointerupCount": 1' in caplog.text
+    assert '"clickTrusted": true' in caplog.text
+    assert '"clickDetail": 1' in caplog.text
+    assert '"dialogVisible": true' in caplog.text
+    assert "Cookie" not in caplog.text
+    assert "Authorization" not in caplog.text
+
+
+def test_keyword_comparison_click_reports_changed_post_endpoint(tmp_path):
+    """变体按钮触发了其他对比接口时，应报告脱敏路径而非误报响应丢失。"""
+    endpoint = "/v3/api/keyword-comparison/asin"
+    actual_path = "/v3/api/keyword-comparison/query"
+    page = _KeywordComparisonPage(
+        endpoint,
+        {
+            "code": "OK",
+            "success": True,
+            "data": {"diamondList": ["B0949DWJCV", "B0744DM3Y3"]},
+        },
+        main_request_url=f"https://www.sellersprite.com{actual_path}?ignored=1",
+    )
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-comparison",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asin": "B0949DWJCV",
+            "asinList": ["B0744DM3Y3"],
+            "page": 1,
+            "size": 100,
+        },
+        referer="https://www.sellersprite.com/v3/keyword-comparison",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker_module._trigger_request(
+                page,
+                endpoint=endpoint,
+                method="POST",
+                payload=request.payload,
+                request=request,
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_KEYWORD_COMPARISON_ENDPOINT_CHANGED"
+    assert exc_info.value.response_excerpt == f"method=POST path={actual_path}"
+    assert "ignored" not in exc_info.value.response_excerpt
 
 
 @pytest.mark.parametrize(
@@ -2922,6 +3489,77 @@ def test_listing_analysis_report_relogs_and_retries_expired_session(monkeypatch,
             "https://www.sellersprite.com/v3/ai-history?module=LA",
             "https://www.sellersprite.com/v3/ai-history?module=LA",
         ]
+
+    _run(scenario())
+
+
+@pytest.mark.parametrize(
+    "api_code",
+    [
+        "ERR_KEYWORD_COMPARISON_REQUEST_MISSED",
+        "ERR_KEYWORD_COMPARISON_ENDPOINT_CHANGED",
+        "ERR_KEYWORD_COMPARISON_RESPONSE_MISSED",
+    ],
+)
+def test_run_one_does_not_retry_ambiguous_keyword_comparison_click(
+    monkeypatch, tmp_path, api_code
+):
+    async def scenario():
+        account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+        worker = SellerSpriteBrowserRouteWorker(
+            settings=SellerSpriteSettings(output_dir=tmp_path, browser_captcha_ocr_enabled=True),
+            account=account,
+        )
+        execute_calls = []
+        captcha_calls = []
+        ambiguous_error = SellerSpriteApiError(
+            "流量词对比点击后状态不明确",
+            api_code=api_code,
+        )
+
+        async def fake_ensure_page(current_account):
+            return object()
+
+        async def fake_open(current_page, request, **kwargs):
+            return {"logged_in": True, "current_url": request.referer}
+
+        async def fake_captcha(current_page, request, warnings, timings, *, stage):
+            captcha_calls.append(stage)
+            if stage == "after_main_error":
+                return {"provider": "fake-ocr", "attempts": 1}
+            return None
+
+        async def fake_execute(**kwargs):
+            execute_calls.append(kwargs["section"])
+            raise ambiguous_error
+
+        monkeypatch.setattr(worker, "_ensure_page", fake_ensure_page)
+        monkeypatch.setattr(worker, "_open_referer_and_login", fake_open)
+        monkeypatch.setattr(worker, "_handle_robot_captcha_if_enabled", fake_captcha)
+        monkeypatch.setattr(worker, "_execute_route_fetch", fake_execute)
+
+        with pytest.raises(SellerSpriteApiError) as exc_info:
+            await worker._run_one(
+                worker_module.BrowserRouteRequest(
+                    scenario="keyword-comparison",
+                    method="POST",
+                    endpoint="/v3/api/keyword-comparison/asin",
+                    payload={
+                        "asin": "B0949DWJCV",
+                        "asinList": ["B0744DM3Y3"],
+                        "page": 1,
+                        "size": 100,
+                    },
+                    referer="https://www.sellersprite.com/v3/keyword-comparison",
+                    account=account,
+                    root_dir=tmp_path,
+                    page_prepare=False,
+                )
+            )
+
+        assert exc_info.value is ambiguous_error
+        assert execute_calls == ["main"]
+        assert captcha_calls == ["after_open_referer"]
 
     _run(scenario())
 

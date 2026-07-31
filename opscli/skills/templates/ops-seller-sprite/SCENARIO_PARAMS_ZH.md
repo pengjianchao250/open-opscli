@@ -42,7 +42,7 @@
 - `keyword-research` 的 `period` 表示数据月份，使用 `YYYY-MM`；不要把公共默认 `30d` 当作月份。未指定时使用后端返回的最新可用月份，不硬编码页面月份选项。
 - `keyword-research` 默认使用 `page=1/page_size=100`，只获取第一页后完成任务，不自动续页。
 - `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换。
-- `keyword-comparison` 仅支持 `browser-route` 和默认“流量占比”；固定 `page=1/size=100`，自动选择“用畅销变体拓词”，不自动翻页、不调用官网额度型导出。
+- `keyword-comparison` 仅支持 `browser-route` 和默认“流量占比”；固定 `page=1/size=100`，未指定变体时自动选择“用畅销变体拓词”，明确要求时可选择“用当前变体拓词”，不自动翻页、不调用官网额度型导出。
 - `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；固定只请求第一页 100 条，忽略公共分页覆盖值，并在本地生成 `.xlsx`。
 - `aba-reverse` 未提供 `period`（或收到公共默认 `30d`）时，默认选择每周和最近完整周；显式周期可传具体周结束日或月份。只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
 - `branddb` 固定使用 `browser-route`，`text` 必填，接口等待上限 120 秒；只支持 `xls` / `xlsx`，官方文件原样保存。请求发出后遇到超时、登录失效或结果不明时不会自动重试或换账号，避免重复消耗导出额度。
@@ -82,7 +82,7 @@
 | `aba-research` | 父/子 ASIN 或关键词 | `departments`、`rankGrowthType`、排序、搜索结果范围筛选 | 周/月 ABA 周期；固定第一页 100 条；本地生成 XLSX |
 | `branddb` | `text` | `feature`、`office`、`brandName`、`status`、`applicant`、`niceClass`、`applicationYear`、`expiryYear`、排序、`ids` | browser-route 直接请求；120 秒；官方 XLSX；不可自动重试 |
 | `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；只取第一页；`page_size=100` |
-| `keyword-comparison` | `ownAsin` 1 个；`competitorAsins` 1—10 个 | `site` | 仅 browser-route 和流量占比；固定第一页 100 条；本地生成 XLSX |
+| `keyword-comparison` | `ownAsin` 1 个；`competitorAsins` 1—10 个 | `site`、`variantSelection` | 仅 browser-route 和流量占比；变体默认 `sell_well`，可选 `current`；固定第一页 100 条；本地生成 XLSX |
 | `aba-reverse` | `asin` / `asins` / 产品链接，1—20 个 | `period`、`reverseType`、`orderField`、`orderDesc`、`conversionType`、`loadVariations` | 默认每周和最近完整周；直接保存官方完整 XLSX |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
 | `traffic-source` | 关键词或 ASIN | `keyword`、`asin`、`asins`、`order`、`desc` | `pageNo=1`，`order=10`，`desc=true` |
@@ -295,6 +295,7 @@
 | 自己的 ASIN | `ownAsin`；兼容 `myAsin` / `asin` | 必填且只能 1 个；10 位字母数字 |
 | 竞品 ASIN | `competitorAsins`；兼容 `competitorAsin` / `asins` | 必填 1—10 个；支持数组、空格、中英文逗号、换行和制表符；去重保序且不得包含自己的 ASIN |
 | 站点 | 顶层 `site` | 默认 `US` |
+| 变体拓词 | `variantSelection` | 可选 `sell_well` / `current`，也兼容“用畅销变体拓词”/“用当前变体拓词”；省略时默认 `sell_well` |
 
 - 首期仅支持默认“流量占比”，不支持自然排名、广告排名、转化效果或曝光位置视图。
 - 固定 `page=1`、`size=100`、`exactly=false`、`orderColumn=22`、`desc=true`、`sortAsin=""`；主列表不发送 `type=PERCENT`。
@@ -304,9 +305,9 @@
 
 1. browser-route 填写自己的 ASIN 和竞品 ASIN，点击“立即查询”。
 2. 捕获并校验 `POST /v3/api/keyword-comparison/prepare`；HTTP、JSON、业务状态或 `data.diamondList` 任一异常都立即失败，不继续等待弹窗。
-3. prepare 成功后自动点击“用畅销变体拓词”，无需用户确认。
-4. 捕获 `POST /v3/api/keyword-comparison/asin`；只允许页面最终 `asinList` 覆盖初始竞品列表，分页、站点和排序仍使用后端固定值。
-5. 页面交互后未捕获主响应时直接失败，不使用静默接口 fallback。
+3. prepare 成功后按 `variantSelection` 点击对应按钮；用户未指定时默认点击“用畅销变体拓词”，明确要求当前变体时点击“用当前变体拓词”，无需再次确认。
+4. 点击变体按钮前才开始监听 `POST /v3/api/keyword-comparison/asin`，避免 prepare 和弹窗等待占用主响应超时；只允许页面最终 `asinList` 覆盖初始竞品列表，分页、站点和排序仍使用后端固定值。
+5. 变体控制参数不进入主请求；页面交互后未捕获主响应时直接失败，不使用静默接口 fallback。
 
 ### 数据与导出
 

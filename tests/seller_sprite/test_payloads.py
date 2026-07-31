@@ -213,6 +213,45 @@ def test_keyword_comparison_payload_normalizes_inputs_and_forces_first_page():
 
 
 @pytest.mark.parametrize(
+    ("variant_selection", "expected"),
+    [
+        (None, "sell_well"),
+        ("sell_well", "sell_well"),
+        ("用畅销变体拓词", "sell_well"),
+        ("current", "current"),
+        ("用当前变体拓词", "current"),
+    ],
+)
+def test_keyword_comparison_variant_selection_is_validated_but_not_sent(
+    variant_selection, expected
+):
+    params = {
+        "asin": "B0949DWJCV",
+        "competitorAsins": "B0744DM3Y3",
+    }
+    if variant_selection is not None:
+        params["variantSelection"] = variant_selection
+
+    payload = make_keyword_comparison_payload(params)
+
+    assert (
+        payloads_module.keyword_comparison_variant_selection(params) == expected
+    )
+    assert "variantSelection" not in payload
+
+
+def test_keyword_comparison_rejects_unknown_variant_selection():
+    with pytest.raises(SellerSpriteConfigError, match="variantSelection"):
+        make_keyword_comparison_payload(
+            {
+                "asin": "B0949DWJCV",
+                "competitorAsins": "B0744DM3Y3",
+                "variantSelection": "unknown",
+            }
+        )
+
+
+@pytest.mark.parametrize(
     ("params", "message"),
     [
         ({"asin": "", "competitorAsins": "B0744DM3Y3"}, "自己的 ASIN"),

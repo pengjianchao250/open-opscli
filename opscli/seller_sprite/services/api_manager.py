@@ -16,6 +16,7 @@ from opscli.seller_sprite.api.categories import SellerSpriteCategoryResolver
 from opscli.seller_sprite.api.client import BASE_URL, SellerSpriteApiClient
 from opscli.seller_sprite.api.keyword_research import parse_keyword_research_html
 from opscli.seller_sprite.api.market_research import parse_market_research_html
+from opscli.seller_sprite.api.payloads import keyword_comparison_variant_selection
 from opscli.seller_sprite.api.scenarios import get_scenario, list_scenarios
 from opscli.seller_sprite.browser_route import (
     BrowserRouteRequest,
@@ -289,6 +290,11 @@ class SellerSpriteApiManager:
                         session_state_listener=self.session_state_listener,
                         session_owner_id=self.session_owner_id,
                         replay_safe=scenario.replay_safe,
+                        keyword_comparison_variant=(
+                            keyword_comparison_variant_selection(params)
+                            if request.scenario == "keyword-comparison"
+                            else "sell_well"
+                        ),
                     )
                     if request.scenario == "listing-analysis":
                         task_id = _extract_task_id(browser_result.response)
@@ -588,6 +594,7 @@ async def _run_browser_route_request(
     session_state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None,
     session_owner_id: str,
     replay_safe: bool = True,
+    keyword_comparison_variant: str = "sell_well",
 ) -> BrowserRouteResult:
     """提交 browser-route 请求，遇到并发回收时仅重建并重试一次。"""
     browser_request = BrowserRouteRequest(
@@ -614,6 +621,7 @@ async def _run_browser_route_request(
             else request.cooldown_seconds
         ),
         replay_safe=replay_safe,
+        keyword_comparison_variant=keyword_comparison_variant,
     )
     for attempt in range(2):
         worker = get_browser_route_worker(

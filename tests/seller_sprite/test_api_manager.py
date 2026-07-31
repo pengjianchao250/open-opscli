@@ -900,6 +900,7 @@ def test_manager_exports_first_keyword_comparison_page_with_effective_asins(
                 params={
                     "asin": "B0949DWJCV",
                     "competitorAsins": "B014INJCT4 B0BRN58CXR",
+                    "variantSelection": "用当前变体拓词",
                 },
                 page_size=20,
                 job_id="job-keyword-comparison",
@@ -916,6 +917,8 @@ def test_manager_exports_first_keyword_comparison_page_with_effective_asins(
     assert len(calls) == 1
     assert calls[0]["payload"]["page"] == 1
     assert calls[0]["payload"]["size"] == 100
+    assert "variantSelection" not in calls[0]["payload"]
+    assert calls[0]["keyword_comparison_variant"] == "current"
     assert calls[0]["endpoint"] == "/v3/api/keyword-comparison/asin"
 
 

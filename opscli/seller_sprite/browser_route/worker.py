@@ -47,6 +47,7 @@ ROBOT_CAPTCHA_DIALOG_SELECTORS = [
     ".el-dialog:has-text('机器人检测')",
 ]
 logger = logging.getLogger(__name__)
+KEYWORD_COMPARISON_DIAGNOSTIC_TAG = "[SELLER_SPRITE_KC_DIAG]"
 ROBOT_CAPTCHA_IMAGE_SELECTORS = [
     "img[src^='data:image/gif;base64,']",
     "img[src^='data:image/png;base64,']",
@@ -106,6 +107,8 @@ class BrowserRouteRequest:
     task_interval_seconds: float = 5.0
     cooldown_seconds: float = 10.0
     replay_safe: bool = True
+    # 流量词对比页面弹窗的变体选择，默认使用畅销变体拓词。
+    keyword_comparison_variant: str = "sell_well"
 
 
 @dataclass
@@ -625,6 +628,13 @@ class SellerSpriteBrowserRouteWorker:
                         await _prepare_page(page)
                         _record_timing(timings, request, "session_expired_page_prepare", stage_started_at)
                     continue
+                if exc.api_code in {
+                    "ERR_KEYWORD_COMPARISON_REQUEST_MISSED",
+                    "ERR_KEYWORD_COMPARISON_ENDPOINT_CHANGED",
+                    "ERR_KEYWORD_COMPARISON_RESPONSE_MISSED",
+                }:
+                    # 变体按钮已点击，远端查询结果未知；禁止验证码恢复分支重放完整查询。
+                    raise
                 if attempt == 0:
                     captcha_result = await self._handle_robot_captcha_if_enabled(
                         page,
@@ -1215,6 +1225,7 @@ class SellerSpriteBrowserRouteWorker:
             )
             return parsed
         pattern = _route_pattern(endpoint)
+        route_error = asyncio.get_running_loop().create_future()
 
         async def _handle(route) -> None:
             intercepted_request = route.request
@@ -1266,10 +1277,17 @@ class SellerSpriteBrowserRouteWorker:
             headers["content-type"] = "application/json;charset=UTF-8"
             effective_payload = payload
             if request and request.scenario == "keyword-comparison":
-                effective_payload = _keyword_comparison_route_payload(
-                    payload,
-                    intercepted_request.post_data,
-                )
+                try:
+                    effective_payload = _keyword_comparison_route_payload(
+                        payload,
+                        intercepted_request.post_data,
+                    )
+                except SellerSpriteApiError as exc:
+                    # 先通知主协程再中止请求；即使浏览器中止动作异常，也不能退化成响应超时。
+                    if not route_error.done():
+                        route_error.set_exception(exc)
+                    await route.abort("blockedbyclient")
+                    return
                 if route_metadata is not None:
                     route_metadata["asinList"] = list(effective_payload["asinList"])
             await route.continue_(
@@ -1287,15 +1305,33 @@ class SellerSpriteBrowserRouteWorker:
         await page.route(pattern, _handle)
         _record_timing(timings, request, f"route_fetch.{section}.route_setup", stage_started_at, endpoint=endpoint)
         try:
-            response, transport = await _trigger_request(
-                page,
-                endpoint=endpoint,
-                method=normalized_method,
-                payload=payload,
-                timings=timings,
-                request=request,
-                section=section,
+            trigger_task = asyncio.create_task(
+                _trigger_request(
+                    page,
+                    endpoint=endpoint,
+                    method=normalized_method,
+                    payload=payload,
+                    timings=timings,
+                    request=request,
+                    section=section,
+                )
             )
+            await asyncio.wait(
+                {trigger_task, route_error},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if route_error.done():
+                # 被拦截请求已中止，优先透传校验错误，避免外层等待页面响应超时。
+                if not trigger_task.done():
+                    trigger_task.cancel()
+                try:
+                    await trigger_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+                raise route_error.exception()
+            response, transport = await trigger_task
             stage_started_at = time.monotonic()
             parsed = await _parse_response(response, method=normalized_method, root_dir=root_dir, section=section)
             _record_timing(
@@ -1362,11 +1398,9 @@ def _keyword_comparison_route_payload(
             api_code="ERR_KEYWORD_COMPARISON_ASIN_LIST",
         )
     asin_list = [str(value).strip().upper() for value in asin_values]
-    own_asin = str(payload.get("asin") or "").strip().upper()
     if (
         not 2 <= len(asin_list) <= 11
         or len(set(asin_list)) != len(asin_list)
-        or own_asin not in asin_list
         or any(not re.fullmatch(r"[A-Z0-9]{10}", asin) for asin in asin_list)
     ):
         raise SellerSpriteApiError(
@@ -2001,12 +2035,28 @@ async def _trigger_request(
     keyword_comparison_interaction = bool(
         request and request.scenario == "keyword-comparison"
     )
-    response_timeout = (
-        30000
-        if association_traffic_interaction or keyword_comparison_interaction
-        else 15000
-    )
     try:
+        if keyword_comparison_interaction:
+            # prepare 和弹窗等待不应占用主接口响应预算；只在最终变体按钮点击前监听主响应。
+            response = await _trigger_keyword_comparison_query(
+                page,
+                payload,
+                endpoint=endpoint,
+                variant_selection=request.keyword_comparison_variant,
+                root_dir=request.root_dir,
+            )
+            if response is None:
+                raise _NoQueryButtonError()
+            _record_timing(
+                timings,
+                request,
+                f"route_fetch.{section}.wait_page_response",
+                stage_started_at,
+                status=getattr(response, "status", None),
+            )
+            return response, "page_response"
+
+        response_timeout = 30000 if association_traffic_interaction else 15000
         async with page.expect_response(
             lambda response: _same_endpoint(response.url, endpoint),
             timeout=response_timeout,
@@ -2023,13 +2073,6 @@ async def _trigger_request(
             elif association_traffic_interaction:
                 # 关联流量必须先校验准备接口，再在弹窗中显式选择全部变体。
                 clicked = await _trigger_association_traffic_query(
-                    page,
-                    payload,
-                    root_dir=request.root_dir,
-                )
-            elif keyword_comparison_interaction:
-                # 流量词对比必须先校验 prepare，再自动选择畅销变体拓词。
-                clicked = await _trigger_keyword_comparison_query(
                     page,
                     payload,
                     root_dir=request.root_dir,
@@ -2286,9 +2329,11 @@ async def _trigger_keyword_comparison_query(
     page,
     payload: dict[str, Any],
     *,
+    endpoint: str,
+    variant_selection: str,
     root_dir: Path,
-) -> bool:
-    """填写流量词对比条件，校验 prepare 后自动选择畅销变体。"""
+):
+    """填写流量词对比条件，校验 prepare 后选择变体并捕获主响应。"""
     own_asin = str(payload.get("asin") or "").strip().upper()
     competitor_values = payload.get("asinList")
     competitor_asins = (
@@ -2297,7 +2342,7 @@ async def _trigger_keyword_comparison_query(
         else []
     )
     if not own_asin or not competitor_asins:
-        return False
+        return None
 
     own_input = await _first_visible_page_locator(
         page,
@@ -2314,7 +2359,7 @@ async def _trigger_keyword_comparison_query(
         ],
     )
     if own_input is None or competitor_input is None:
-        return False
+        return None
     await own_input.fill(own_asin)
     await competitor_input.fill(" ".join(competitor_asins))
 
@@ -2327,7 +2372,7 @@ async def _trigger_keyword_comparison_query(
         ],
     )
     if query_button is None:
-        return False
+        return None
 
     # 必须先解析 prepare 业务响应；失败时立即结束，不能继续空等弹窗。
     async with page.expect_response(
@@ -2337,7 +2382,13 @@ async def _trigger_keyword_comparison_query(
         ),
         timeout=15000,
     ) as prepare_info:
-        await query_button.click(timeout=5000)
+        try:
+            await query_button.click(timeout=5000)
+        except Exception as exc:
+            raise SellerSpriteApiError(
+                "卖家精灵流量词对比“立即查询”按钮点击失败",
+                api_code="ERR_KEYWORD_COMPARISON_QUERY_CLICK",
+            ) from exc
     prepare_response = await prepare_info.value
     prepare_payload = await _parse_response(
         prepare_response,
@@ -2396,26 +2447,127 @@ async def _trigger_keyword_comparison_query(
             api_message=str(api_message) if api_message else None,
         )
 
-    sell_well_button = None
+    button_text = (
+        "用当前变体拓词"
+        if variant_selection == "current"
+        else "用畅销变体拓词"
+    )
+    variant_button = None
     for _ in range(30):
-        sell_well_button = await _first_visible_page_locator(
+        variant_button = await _first_visible_page_locator(
             page,
             [
-                "button:visible:has-text('用畅销变体拓词')",
-                "[role='button']:visible:has-text('用畅销变体拓词')",
-                ".el-button:visible:has-text('用畅销变体拓词')",
+                f"button:visible:has-text('{button_text}')",
+                f"[role='button']:visible:has-text('{button_text}')",
+                f".el-button:visible:has-text('{button_text}')",
             ],
         )
-        if sell_well_button is not None:
+        if variant_button is not None:
             break
         await page.wait_for_timeout(500)
-    if sell_well_button is None:
+    if variant_button is None:
         raise SellerSpriteApiError(
-            "卖家精灵流量词对比页面未出现“用畅销变体拓词”按钮",
+            f"卖家精灵流量词对比页面未出现“{button_text}”按钮",
             api_code="ERR_KEYWORD_COMPARISON_VARIANT_DIALOG",
         )
-    await sell_well_button.click(timeout=5000)
-    return True
+
+    # Element UI 弹窗刚出现时仍可能处于过渡阶段；等待稳定并固定单次鼠标激活坐标。
+    await page.wait_for_timeout(300)
+    # 首次读取会安装只计数的 DOM 监听器，后续失败快照可判断鼠标是否产生了 click。
+    await _keyword_comparison_button_diagnostics(variant_button)
+    try:
+        await variant_button.scroll_into_view_if_needed(timeout=5000)
+        button_box = await variant_button.bounding_box(timeout=5000)
+        if not button_box or button_box["width"] <= 0 or button_box["height"] <= 0:
+            raise RuntimeError("variant button has no clickable bounding box")
+        activation_x = button_box["x"] + button_box["width"] / 2
+        activation_y = button_box["y"] + button_box["height"] / 2
+    except Exception as exc:
+        diagnostic = await _log_keyword_comparison_diagnostics(
+            variant_button,
+            phase="activation_target_failed",
+        )
+        raise SellerSpriteApiError(
+            f"卖家精灵流量词对比“{button_text}”按钮激活位置无效",
+            response_excerpt=diagnostic,
+            api_code="ERR_KEYWORD_COMPARISON_VARIANT_CLICK",
+        ) from exc
+
+    # 同时观察请求和响应：请求监听用于区分按钮未提交、官网路径变化和响应丢失。
+    observed_path = urlparse(endpoint).path
+    try:
+        async with page.expect_response(
+            lambda response: _same_endpoint(response.url, endpoint),
+            timeout=DEFAULT_TIMEOUT_MS,
+        ) as main_info:
+            try:
+                async with page.expect_request(
+                    _is_keyword_comparison_post_request,
+                    timeout=15000,
+                ) as request_info:
+                    try:
+                        # 仅发送一次完整鼠标激活；失败后禁止补按 Enter 或重试，避免重复提交。
+                        await page.mouse.click(
+                            activation_x,
+                            activation_y,
+                            delay=100,
+                        )
+                    except Exception as exc:
+                        diagnostic = await _log_keyword_comparison_diagnostics(
+                            variant_button,
+                            phase="activation_failed",
+                        )
+                        raise SellerSpriteApiError(
+                            f"卖家精灵流量词对比“{button_text}”按钮激活失败",
+                            response_excerpt=diagnostic,
+                            api_code="ERR_KEYWORD_COMPARISON_VARIANT_CLICK",
+                        ) from exc
+            except SellerSpriteApiError:
+                raise
+            except Exception as exc:
+                # Playwright 会在退出 expect_request 上下文时等待事件，必须在主响应上下文内分类。
+                diagnostic = await _log_keyword_comparison_diagnostics(
+                    variant_button,
+                    phase="request_missed",
+                )
+                raise SellerSpriteApiError(
+                    "卖家精灵流量词对比变体按钮激活后未触发主查询请求",
+                    response_excerpt=diagnostic,
+                    api_code="ERR_KEYWORD_COMPARISON_REQUEST_MISSED",
+                    api_message="变体按钮已单次激活，不再自动 fallback 重复查询。",
+                ) from exc
+
+            observed_request = await request_info.value
+            observed_path = urlparse(observed_request.url).path
+            if not _same_endpoint(observed_request.url, endpoint):
+                # 路径变化后立即退出并取消旧接口响应监听，不能继续空等 120 秒。
+                raise SellerSpriteApiError(
+                    "卖家精灵流量词对比主查询接口路径已变化",
+                    response_excerpt=(
+                        f"method={observed_request.method} path={observed_path}"
+                    ),
+                    api_code="ERR_KEYWORD_COMPARISON_ENDPOINT_CHANGED",
+                    api_message=(
+                        "仅记录脱敏请求方法和路径，未记录请求体、Cookie 或 Header。"
+                    ),
+                )
+            return await main_info.value
+    except SellerSpriteApiError:
+        raise
+    except Exception as exc:
+        # Playwright 同样会在退出 expect_response 上下文时等待事件并抛出超时。
+        diagnostic = await _log_keyword_comparison_diagnostics(
+            variant_button,
+            phase="response_missed",
+        )
+        raise SellerSpriteApiError(
+            "卖家精灵流量词对比主查询请求已发出但未捕获响应",
+            response_excerpt=(
+                f"method=POST path={observed_path} diagnostics={diagnostic}"
+            )[:1000],
+            api_code="ERR_KEYWORD_COMPARISON_RESPONSE_MISSED",
+            api_message="变体按钮已单次激活，不再自动 fallback 重复查询。",
+        ) from exc
 
 
 async def _trigger_association_traffic_query(
@@ -2926,6 +3078,135 @@ def _route_pattern(endpoint: str) -> str:
 
 def _same_endpoint(url: str, endpoint: str) -> bool:
     return urlparse(url).path == urlparse(_absolute_url(endpoint)).path
+
+
+def _is_keyword_comparison_post_request(request) -> bool:
+    """识别变体按钮点击后产生的流量词对比 POST，仅检查方法和脱敏路径。"""
+    path = urlparse(request.url).path
+    return (
+        str(request.method).upper() == "POST"
+        and path.startswith("/v3/api/keyword-comparison/")
+        and path != "/v3/api/keyword-comparison/prepare"
+    )
+
+
+async def _keyword_comparison_button_diagnostics(button) -> dict[str, Any]:
+    """读取变体按钮的脱敏 DOM 状态和事件计数，不采集页面文本或请求数据。"""
+    try:
+        result = await button.evaluate(
+            """element => {
+                const elementKey = '__opscliKeywordComparisonElementDiagnostics';
+                const pageKey = '__opscliKeywordComparisonPageDiagnostics';
+                if (!element[elementKey]) {
+                    const events = {
+                        clickCount: 0,
+                        keydownCount: 0,
+                        keyupCount: 0,
+                        mousedownCount: 0,
+                        mouseupCount: 0,
+                        pointerdownCount: 0,
+                        pointerupCount: 0,
+                        clickTrusted: null,
+                        clickDetail: null,
+                    };
+                    element.addEventListener('click', event => {
+                        events.clickCount += 1;
+                        events.clickTrusted = event.isTrusted;
+                        events.clickDetail = event.detail;
+                    }, true);
+                    element.addEventListener('keydown', () => events.keydownCount += 1, true);
+                    element.addEventListener('keyup', () => events.keyupCount += 1, true);
+                    element.addEventListener('mousedown', () => events.mousedownCount += 1, true);
+                    element.addEventListener('mouseup', () => events.mouseupCount += 1, true);
+                    element.addEventListener('pointerdown', () => events.pointerdownCount += 1, true);
+                    element.addEventListener('pointerup', () => events.pointerupCount += 1, true);
+                    element[elementKey] = events;
+                }
+                if (!window[pageKey]) {
+                    const pageEvents = {errorCount: 0, rejectionCount: 0};
+                    window.addEventListener('error', () => pageEvents.errorCount += 1, true);
+                    window.addEventListener(
+                        'unhandledrejection',
+                        () => pageEvents.rejectionCount += 1,
+                        true,
+                    );
+                    window[pageKey] = pageEvents;
+                }
+                const isVisible = node => {
+                    if (!node) return false;
+                    const style = window.getComputedStyle(node);
+                    const rect = node.getBoundingClientRect();
+                    return style.display !== 'none'
+                        && style.visibility !== 'hidden'
+                        && style.opacity !== '0'
+                        && rect.width > 0
+                        && rect.height > 0;
+                };
+                const dialog = element.closest('[role="dialog"], .el-dialog');
+                const events = element[elementKey];
+                const pageEvents = window[pageKey];
+                return {
+                    connected: element.isConnected,
+                    visible: isVisible(element),
+                    enabled: !element.disabled
+                        && element.getAttribute('aria-disabled') !== 'true',
+                    focused: document.activeElement === element,
+                    dialogVisible: isVisible(dialog),
+                    clickCount: events.clickCount,
+                    keydownCount: events.keydownCount,
+                    keyupCount: events.keyupCount,
+                    mousedownCount: events.mousedownCount,
+                    mouseupCount: events.mouseupCount,
+                    pointerdownCount: events.pointerdownCount,
+                    pointerupCount: events.pointerupCount,
+                    clickTrusted: events.clickTrusted,
+                    clickDetail: events.clickDetail,
+                    pageErrorCount: pageEvents.errorCount,
+                    rejectionCount: pageEvents.rejectionCount,
+                };
+            }"""
+        )
+    except Exception as exc:
+        return {"snapshotError": type(exc).__name__}
+    if not isinstance(result, dict):
+        return {"snapshotError": "InvalidResult"}
+    return {
+        key: result.get(key)
+        for key in (
+            "connected",
+            "visible",
+            "enabled",
+            "focused",
+            "dialogVisible",
+            "clickCount",
+            "keydownCount",
+            "keyupCount",
+            "mousedownCount",
+            "mouseupCount",
+            "pointerdownCount",
+            "pointerupCount",
+            "clickTrusted",
+            "clickDetail",
+            "pageErrorCount",
+            "rejectionCount",
+        )
+        if key in result
+    }
+
+
+async def _log_keyword_comparison_diagnostics(
+    button,
+    *,
+    phase: str,
+) -> str:
+    """输出统一标记的脱敏交互诊断，并返回可放入错误摘要的 JSON。"""
+    diagnostic = {
+        "phase": phase,
+        "button": await _keyword_comparison_button_diagnostics(button),
+    }
+    serialized = json.dumps(diagnostic, ensure_ascii=False, sort_keys=True)
+    logger.warning("%s %s", KEYWORD_COMPARISON_DIAGNOSTIC_TAG, serialized)
+    return serialized[:900]
 
 
 def _looks_like_guest_limited_association_response(

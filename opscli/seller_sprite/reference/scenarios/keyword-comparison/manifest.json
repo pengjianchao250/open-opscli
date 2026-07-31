@@ -34,7 +34,14 @@
       "fixed_value": "traffic_percentage"
     },
     "variant_selection": {
-      "fixed_value": "sell_well_variations"
+      "param": "variantSelection",
+      "default_value": "sell_well",
+      "allowed_values": ["sell_well", "current"],
+      "aliases": {
+        "用畅销变体拓词": "sell_well",
+        "用当前变体拓词": "current"
+      },
+      "request_body_field": false
     }
   },
   "response": {

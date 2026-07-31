@@ -6,14 +6,15 @@
     "competitorAsins": [
       "B0744DM3Y3",
       "B0BRN58CXR"
-    ]
+    ],
+    "variantSelection": "sell_well"
   },
   "interaction": {
     "prepare": {
       "method": "POST",
       "endpoint": "/v3/api/keyword-comparison/prepare",
       "request_body_omitted": true,
-      "note": "准备请求由官网页面提交；运行时校验响应后自动选择用畅销变体拓词。"
+      "note": "准备请求由官网页面提交；运行时校验响应后按 variantSelection 选择变体按钮，省略时默认用畅销变体拓词。"
     },
     "query": {
       "method": "POST",

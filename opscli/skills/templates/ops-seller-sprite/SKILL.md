@@ -26,7 +26,7 @@ metadata:
    - `export_format=xls`
    - `keyword-research` 例外：`period` 使用数据月份（`YYYY-MM`），不把 `30d` 当作月份；默认 `page=1/page_size=100`，只获取第一页。
    - `association-traffic` 使用公共默认 `page_size=100`，查询固定使用全部变体，不允许改成当前变体。
-   - `keyword-comparison` 固定使用默认“流量占比”和第一页 100 条；自动选择“用畅销变体拓词”，查询 JSON 后在本地生成动态 XLSX，不调用官网额度型导出。
+   - `keyword-comparison` 固定使用默认“流量占比”和第一页 100 条；用户未指定时自动选择“用畅销变体拓词”，明确要求当前变体时传 `variantSelection=current`，查询 JSON 后在本地生成动态 XLSX，不调用官网额度型导出。
    - `aba-research` 未提供周期时默认最近完整周；固定 `page=1/size=100` 且只查一次，捕获查询 JSON 后在本地生成官方 19 列 XLSX，不调用官网导出接口。
    - `aba-reverse` 未提供周期时默认选择每周和最近完整周；显式周期仍支持具体周结束日或月份。只支持 `xls` / `xlsx`，由后端原样保存官方 XLSX。
 4. 用户给了明确条件，就原样带入 `params`；不要发明隐藏枚举值或额外筛选。
@@ -129,7 +129,7 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - `关键词选品`、`关键词研究`、`高需求低竞争词`、`市场周期筛选`通常对应 `keyword-research`；单一种子词扩词仍用 `keyword-miner`。
 - `ABA 数据选品`、`ABA 关键词趋势`对应 `aba-research`；必须提供父/子 ASIN 或关键词，支持周/月周期、类目 code 多选和搜索结果筛选。不要实现或映射六种推荐模式。
 - `关联流量`、`关联产品`、`查关联 ASIN`通常对应 `association-traffic`；必须提供 1—20 个父体或子体 ASIN，固定使用全部变体查询。
-- `流量词对比`、`竞品关键词对比`、`竞品关键词差距`对应 `keyword-comparison`；必须分别提供 1 个自己的 ASIN 和 1—10 个竞品 ASIN，竞品不得包含自己的 ASIN。
+- `流量词对比`、`竞品关键词对比`、`竞品关键词差距`对应 `keyword-comparison`；必须分别提供 1 个自己的 ASIN 和 1—10 个竞品 ASIN，竞品不得包含自己的 ASIN。用户未指定变体时不追问，默认使用畅销变体；用户明确说“当前变体”时传 `variantSelection=current`。
 - `出单词反查`、`ABA 反查`对应 `aba-reverse`；必须提供 1—20 个父体或子体 ASIN 或 Amazon 产品链接。周期可省略，默认使用每周和最近完整周。
 - `查产品` 这类表达可能对应 `competitor-lookup` 或 `product-research`，先让用户确认目的。
 - `看市场/类目` 这类表达可能对应 `market-research` 或 `product-research`，先让用户确认。

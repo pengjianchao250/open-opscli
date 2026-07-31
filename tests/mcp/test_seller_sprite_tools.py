@@ -18,12 +18,15 @@ def _run(coro):
 @pytest.fixture(autouse=True)
 def _route_credential_test_seams(monkeypatch):
     """让既有工具测试替身经统一凭证模块生效，且不读取真实本机凭证。"""
-    original_auth_pair = ops_credentials._get_auth_pair
     monkeypatch.setattr(
         seller_sprite_tools,
         "_get_auth_pair",
-        original_auth_pair,
+        lambda system, session_id, jwt: (session_id or "test-session", jwt or "test-jwt"),
         raising=False,
+    )
+    monkeypatch.setattr(
+        "opscli.mcp.tools.helpers._get_authenticated_user_email",
+        lambda: "mcp-user@example.com",
     )
     monkeypatch.setattr(
         ops_credentials,
@@ -284,7 +287,9 @@ def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
     assert "`keyword-comparison` 流量词对比" in result["data"]["spec"]
     assert "必填 1—10 个" in result["data"]["spec"]
     assert "固定 `page=1`、`size=100`" in result["data"]["spec"]
-    assert "自动点击“用畅销变体拓词”" in result["data"]["spec"]
+    assert "默认点击“用畅销变体拓词”" in result["data"]["spec"]
+    assert "`variantSelection`" in result["data"]["spec"]
+    assert "用当前变体拓词" in result["data"]["spec"]
     assert "动态业务主表和 `ASIN` 辅助表" in result["data"]["spec"]
     assert "不调用官网额度型导出" in result["data"]["spec"]
     assert "`aba-reverse` 出单词反查" in result["data"]["spec"]

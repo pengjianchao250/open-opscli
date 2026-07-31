@@ -21,6 +21,14 @@ BRANDDB_STATUS_ALIASES = {
 }
 BRANDDB_STATUSES = frozenset(BRANDDB_STATUS_ALIASES.values())
 
+# 流量词对比变体选择只控制页面按钮，不属于官网主列表请求字段。
+KEYWORD_COMPARISON_VARIANT_ALIASES = {
+    "sell_well": "sell_well",
+    "用畅销变体拓词": "sell_well",
+    "current": "current",
+    "用当前变体拓词": "current",
+}
+
 
 PRODUCT_RESEARCH_RECOMMENDATION_PRESETS: dict[str, dict[str, Any]] = {
     "低价长尾选品": {
@@ -580,6 +588,33 @@ def make_association_traffic_payload(input_data: dict[str, Any]) -> dict[str, An
     }
 
 
+def keyword_comparison_variant_selection(input_data: dict[str, Any]) -> str:
+    """规范化流量词对比页面的变体选择。
+
+    参数：
+        input_data: 流量词对比场景参数。
+
+    返回：
+        页面交互使用的 ``sell_well`` 或 ``current``。
+
+    异常：
+        SellerSpriteConfigError: 变体选择不是受支持值时抛出。
+    """
+    raw_value = input_data.get("variantSelection")
+    if raw_value is None:
+        return "sell_well"
+    value = str(raw_value).strip()
+    normalized = KEYWORD_COMPARISON_VARIANT_ALIASES.get(value)
+    if normalized is None:
+        normalized = KEYWORD_COMPARISON_VARIANT_ALIASES.get(value.lower())
+    if normalized is None:
+        raise SellerSpriteConfigError(
+            "keyword-comparison variantSelection 仅支持 sell_well、current、"
+            "用畅销变体拓词或用当前变体拓词"
+        )
+    return normalized
+
+
 def make_keyword_comparison_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造流量词对比默认流量占比查询 payload。
 
@@ -633,8 +668,10 @@ def make_keyword_comparison_payload(input_data: dict[str, Any]) -> dict[str, Any
         raise SellerSpriteConfigError(
             "keyword-comparison diamondList 由官网页面生成，不允许手动传入"
         )
+    # 变体选择在 browser-route 页面交互中使用，此处只校验但不写入官网 payload。
+    keyword_comparison_variant_selection(input_data)
 
-    # 官网主列表不接收 type；畅销变体列表由页面 prepare 流程动态替换 asinList。
+    # 官网主列表不接收 type；页面最终变体列表由 prepare 流程动态替换 asinList。
     return {
         "page": 1,
         "size": 100,
