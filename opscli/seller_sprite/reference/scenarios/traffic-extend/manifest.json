@@ -53,6 +53,7 @@
   "capture_evidence": {
     "captured_at": "2026-07-31",
     "captured_workbook_name": "ExpandKeywords-US-B089K9L3VY-batch(5)-202607-922297.xlsx",
+    "captured_workbook_fixture": "tests/fixtures/seller_sprite/official_exports/traffic-extend/ExpandKeywords-US-B089K9L3VY-batch(5)-202607-922297.xlsx",
     "sanitized": true
   }
 }

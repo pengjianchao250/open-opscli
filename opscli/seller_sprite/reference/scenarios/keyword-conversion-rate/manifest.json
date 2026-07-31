@@ -61,6 +61,7 @@
     "page_verified": true,
     "source_chunk": "chunk-43b3a1f2.20260730221543.js",
     "captured_workbook_name": "KeywordConversionRate-US-wireless charger stand(123)-2026 Week 29.xlsx",
+    "captured_workbook_fixture": "tests/fixtures/seller_sprite/official_exports/keyword-conversion-rate/KeywordConversionRate-US-wireless charger stand(123)-2026 Week 29.xlsx",
     "official_export_called": false,
     "sanitized": true
   }

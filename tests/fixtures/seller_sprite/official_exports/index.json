@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-31",
+  "source": "SellerSprite official XLSX exports",
+  "immutable": true,
+  "fixtures": [
+    {
+      "scenario": "ads-insights",
+      "path": "ads-insights/AdsInsights-US-B08FLKHG8J-898608.xlsx",
+      "size": 1332618,
+      "sha256": "385cd73f8ca06ec050983d4efa666d88b8d54ae446ff1308fef0d3fcaff0a302"
+    },
+    {
+      "scenario": "keyword-comparison",
+      "path": "keyword-comparison/CompareKeywords-US-B0949DWJCV-260730-902873.xlsx",
+      "size": 253018,
+      "sha256": "9ea6807da2e0f1408fd56183fcdf0e6ce1adba51bc3cfbb45078949c904ab072"
+    },
+    {
+      "scenario": "keyword-conversion-rate",
+      "path": "keyword-conversion-rate/KeywordConversionRate-US-wireless charger stand(123)-2026 Week 29.xlsx",
+      "size": 110870,
+      "sha256": "25b81ea97467db9c486aa244ffdddeec78080678b0a2a28849a969441c5f3775"
+    },
+    {
+      "scenario": "traffic-extend",
+      "path": "traffic-extend/ExpandKeywords-US-B089K9L3VY-batch(5)-202607-922297.xlsx",
+      "size": 518838,
+      "sha256": "236201a48ca8b2ee547dd219a4e14c723c5afd44b6b00e3d538546273ba7197b"
+    }
+  ]
+}

@@ -64,6 +64,7 @@
     "sample_response": "sample-response.json",
     "headers_file": "official-headers.json",
     "workbook_profile": "workbook-profile.json",
+    "captured_workbook_fixture": "tests/fixtures/seller_sprite/official_exports/keyword-comparison/CompareKeywords-US-B0949DWJCV-260730-902873.xlsx",
     "sanitized": true
   }
 }
