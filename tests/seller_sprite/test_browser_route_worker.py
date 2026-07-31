@@ -1199,6 +1199,7 @@ class _KeywordConversionRateLocator:
 
     async def press(self, key, **kwargs):
         self.page.presses.append(key)
+        self.page.events.append(f"press:{self.page.current_keyword}")
         keyword = self.page.current_keyword.strip()
         if keyword and keyword not in self.page.tags:
             self.page.tags.append(keyword)
@@ -1208,12 +1209,15 @@ class _KeywordConversionRateLocator:
 
     async def click(self, **kwargs):
         self.page.clicks.append(self.kind)
+        self.page.events.append(f"click:{self.kind}")
         if self.kind == "clear":
             self.page.tags.clear()
             self.page.current_keyword = ""
 
     async def get_attribute(self, name):
         if self.kind == "keyword_input" and name == "placeholder":
+            if self.page.placeholder_override != "default":
+                return self.page.placeholder_override
             return f"已录入{len(self.page.tags)}/1000个关键词"
         return None
 
@@ -1221,17 +1225,26 @@ class _KeywordConversionRateLocator:
 class _KeywordConversionRatePage:
     """模拟关键词转化率页面的站点、周期和批量标签交互。"""
 
-    def __init__(self, endpoint, *, press_timeout_after_commit=False):
+    def __init__(
+        self,
+        endpoint,
+        *,
+        press_timeout_after_commit=False,
+        placeholder_override="default",
+    ):
         self.endpoint = endpoint
         self.press_timeout_after_commit = press_timeout_after_commit
+        self.placeholder_override = placeholder_override
         self.tags = ["stale keyword"]
         self.current_keyword = ""
         self.fills = []
         self.presses = []
         self.clicks = []
         self.timeout_calls = []
+        self.events = []
 
     def expect_response(self, predicate, **kwargs):
+        self.events.append("expect_response")
         return _AssociationResponseWaiter(self.endpoint)
 
     def locator(self, selector):
@@ -2673,6 +2686,12 @@ def test_keyword_conversion_rate_route_submits_each_phrase_once_before_query(
         "clear",
         "query",
     ]
+    assert page.events.index("press:phone holder") < page.events.index(
+        "expect_response"
+    )
+    assert page.events.index("expect_response") < page.events.index(
+        "click:query"
+    )
 
 
 def test_keyword_conversion_rate_does_not_repeat_enter_after_committed_timeout(
@@ -2719,6 +2738,53 @@ def test_keyword_conversion_rate_does_not_repeat_enter_after_committed_timeout(
     assert page.presses == ["Enter", "Enter"]
     assert page.tags == ["wireless charger stand", "phone holder"]
     assert page.clicks.count("query") == 1
+
+
+def test_keyword_conversion_rate_requires_exact_tag_count_placeholder(
+    tmp_path,
+):
+    endpoint = "/v3/api/keyword-conv"
+    page = _KeywordConversionRatePage(
+        endpoint,
+        placeholder_override=None,
+    )
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-conversion-rate",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "market": "US",
+            "timeType": "W",
+            "keyword": "wireless charger stand",
+            "pageNum": 1,
+            "pageSize": 100,
+        },
+        referer="https://www.sellersprite.com/v3/keyword-conversion-rate",
+        account=SellerSpriteAccount(
+            name="default",
+            username="user@example.com",
+            password="secret",
+        ),
+        root_dir=tmp_path,
+        replay_safe=False,
+    )
+
+    with pytest.raises(
+        SellerSpriteApiError,
+        match="关键词计数与输入不一致",
+    ):
+        _run(
+            worker_module._trigger_request(
+                page,
+                endpoint=endpoint,
+                method="POST",
+                payload=request.payload,
+                request=request,
+            )
+        )
+
+    assert "query" not in page.clicks
+    assert "expect_response" not in page.events
 
 
 def test_association_traffic_route_propagates_prepare_business_error(tmp_path):

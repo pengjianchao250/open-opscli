@@ -2129,11 +2129,47 @@ async def _trigger_request(
             if response is None:
                 raise _NoQueryButtonError()
             return response, "page_response"
+        if keyword_conversion_rate_interaction:
+            # 1—1000 个标签的录入不占用主响应监听预算；只在单次查询点击前监听。
+            query_button = await _prepare_keyword_conversion_rate_query(
+                page,
+                payload,
+            )
+            if query_button is None:
+                raise _NoQueryButtonError()
+            async with page.expect_response(
+                lambda response: _same_endpoint(response.url, endpoint),
+                timeout=30000,
+            ) as info:
+                _record_timing(
+                    timings,
+                    request,
+                    f"route_fetch.{section}.expect_response_ready",
+                    stage_started_at,
+                )
+                stage_started_at = time.monotonic()
+                await query_button.click(timeout=5000)
+                _record_timing(
+                    timings,
+                    request,
+                    f"route_fetch.{section}.click_query_button",
+                    stage_started_at,
+                    clicked=True,
+                )
+                wait_started_at = time.monotonic()
+            response = await info.value
+            _record_timing(
+                timings,
+                request,
+                f"route_fetch.{section}.wait_page_response",
+                wait_started_at,
+                status=getattr(response, "status", None),
+            )
+            return response, "page_response"
 
         response_timeout = (
             30000
             if association_traffic_interaction
-            or keyword_conversion_rate_interaction
             else 15000
         )
         async with page.expect_response(
@@ -2155,12 +2191,6 @@ async def _trigger_request(
                     page,
                     payload,
                     root_dir=request.root_dir,
-                )
-            elif keyword_conversion_rate_interaction:
-                # 批量关键词必须逐条提交为标签并完成计数校验后，才能单击查询。
-                clicked = await _trigger_keyword_conversion_rate_query(
-                    page,
-                    payload,
                 )
             else:
                 clicked = await _click_query_button(page)
@@ -2775,18 +2805,18 @@ async def _trigger_association_traffic_query(
     return True
 
 
-async def _trigger_keyword_conversion_rate_query(
+async def _prepare_keyword_conversion_rate_query(
     page,
     payload: dict[str, Any],
-) -> bool:
-    """逐条提交关键词标签并在完整计数校验后单次查询。"""
+) -> Any | None:
+    """逐条提交并校验关键词标签，返回尚未点击的查询按钮。"""
     keywords = [
         part.strip()
         for part in str(payload.get("keyword") or "").split(",")
         if part.strip()
     ]
     if not keywords:
-        return False
+        return None
 
     await _select_keyword_conversion_rate_filters(page, payload)
 
@@ -2819,7 +2849,7 @@ async def _trigger_keyword_conversion_rate_query(
         ],
     )
     if input_box is None:
-        return False
+        return None
 
     for expected_count, keyword in enumerate(keywords, start=1):
         await input_box.fill(keyword)
@@ -2849,11 +2879,7 @@ async def _trigger_keyword_conversion_rate_query(
 
     placeholder = await input_box.get_attribute("placeholder")
     expected_placeholder = f"已录入{len(keywords)}/1000个关键词"
-    if (
-        placeholder
-        and "已录入" in placeholder
-        and placeholder.strip() != expected_placeholder
-    ):
+    if str(placeholder or "").strip() != expected_placeholder:
         raise SellerSpriteApiError(
             "关键词转化率页面关键词计数与输入不一致",
             response_excerpt=(
@@ -2871,9 +2897,8 @@ async def _trigger_keyword_conversion_rate_query(
         ],
     )
     if query_button is None:
-        return False
-    await query_button.click(timeout=5000)
-    return True
+        return None
+    return query_button
 
 
 async def _select_keyword_conversion_rate_filters(
