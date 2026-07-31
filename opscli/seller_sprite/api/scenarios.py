@@ -20,6 +20,7 @@ from opscli.seller_sprite.api.payloads import (
     make_listing_analysis_payload,
     make_market_research_payload,
     make_product_research_payload,
+    make_real_time_bidding_payload,
     make_traffic_source_payload,
     make_traffic_extend_payload,
 )
@@ -194,6 +195,14 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         endpoint="/v3/api/relation/reversing",
         required_params=("asin",),
         payload_builder=make_keyword_reverse_payload,
+    ),
+    "real-time-bidding": SellerSpriteScenario(
+        scenario_id="real-time-bidding",
+        title="实时查竞价",
+        endpoint="/v3/api/keywordbidding/taskList",
+        required_params=("asin",),
+        payload_builder=make_real_time_bidding_payload,
+        browser_context_only=True,
     ),
     "traffic-source": SellerSpriteScenario(
         scenario_id="traffic-source",

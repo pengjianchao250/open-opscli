@@ -568,17 +568,24 @@ class SellerSpriteBrowserRouteWorker:
             try:
                 route_metadata: dict[str, Any] = {}
                 stage_started_at = time.monotonic()
-                response = await self._execute_route_fetch(
-                    page=page,
-                    method=request.method,
-                    endpoint=request.endpoint,
-                    payload=request.payload,
-                    root_dir=request.root_dir,
-                    section="main",
-                    timings=timings,
-                    request=request,
-                    route_metadata=route_metadata,
-                )
+                if request.scenario == "real-time-bidding":
+                    response = await self._execute_real_time_bidding_workflow(
+                        page=page,
+                        request=request,
+                        timings=timings,
+                    )
+                else:
+                    response = await self._execute_route_fetch(
+                        page=page,
+                        method=request.method,
+                        endpoint=request.endpoint,
+                        payload=request.payload,
+                        root_dir=request.root_dir,
+                        section="main",
+                        timings=timings,
+                        request=request,
+                        route_metadata=route_metadata,
+                    )
                 captured_asins = route_metadata.get("asinList")
                 if isinstance(captured_asins, list):
                     effective_asin_list = list(captured_asins)
@@ -1190,6 +1197,108 @@ class SellerSpriteBrowserRouteWorker:
         )
         return parsed
 
+    async def _execute_real_time_bidding_workflow(
+        self,
+        *,
+        page,
+        request: BrowserRouteRequest,
+        timings: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """选择最新已完成历史任务，再合并 SP、SB 第一页详情。"""
+        history_payload = dict(request.payload)
+        completed_task: dict[str, Any] | None = None
+        seen_pages: set[tuple[tuple[str, str], ...]] = set()
+        while completed_task is None:
+            history_page = int(history_payload.get("page") or 1)
+            history_size = int(history_payload.get("size") or 20)
+            task_list = await self._execute_context_fetch(
+                page=page,
+                method=request.method,
+                endpoint=request.endpoint,
+                payload=history_payload,
+                root_dir=request.root_dir,
+                section=f"real_time_bidding_history_{history_page}",
+                timings=timings,
+                request=request,
+            )
+            task_items = _real_time_bidding_task_items(task_list)
+            # taskList 按 updatedTime 倒序跨页扫描；首个完成项才是最新可导出历史。
+            completed_task = _select_latest_completed_real_time_bidding_task(
+                task_items,
+                asin=request.payload["asin"],
+            )
+            if completed_task is not None:
+                break
+            page_fingerprint = tuple(
+                (
+                    str(item.get("id") or item.get("taskId") or ""),
+                    str(item.get("taskStatus") or item.get("status") or ""),
+                )
+                for item in task_items
+            )
+            # 异常接口若重复返回同一页，必须终止，不能在 worker 内无限请求。
+            if page_fingerprint in seen_pages:
+                break
+            seen_pages.add(page_fingerprint)
+            if not _real_time_bidding_history_has_next_page(
+                task_list,
+                page=history_page,
+                size=history_size,
+                item_count=len(task_items),
+            ):
+                break
+            history_payload = {**history_payload, "page": history_page + 1}
+        if completed_task is None:
+            raise SellerSpriteApiError(
+                "卖家精灵实时查竞价没有可导出的已完成历史任务",
+                api_code="ERR_REAL_TIME_BIDDING_HISTORY_NOT_FOUND",
+                api_message="请先在官网完成一次实时竞价查询，再重新执行。",
+            )
+
+        task_id = completed_task.get("id") or completed_task.get("taskId")
+        parent_task_id = completed_task.get("parentTaskId") or task_id
+        try:
+            normalized_task_id = int(task_id)
+            normalized_parent_task_id = int(parent_task_id)
+        except (TypeError, ValueError) as exc:
+            raise SellerSpriteApiError(
+                "卖家精灵实时查竞价历史任务缺少有效 ID",
+                api_code="ERR_REAL_TIME_BIDDING_HISTORY_TASK_ID",
+            ) from exc
+        detail_base = {
+            "page": 1,
+            "size": 100,
+            "marketId": request.payload["marketId"],
+            "taskId": normalized_task_id,
+            "parentTaskId": normalized_parent_task_id,
+            "isExampleAsin": False,
+            "asin": request.payload["asin"],
+        }
+        sp_response = await self._execute_context_fetch(
+            page=page,
+            method="POST",
+            endpoint="/v3/api/keywordbidding/getTaskDetail",
+            payload={**detail_base, "adType": "sp"},
+            root_dir=request.root_dir,
+            section="real_time_bidding_detail_sp",
+            timings=timings,
+            request=request,
+        )
+        sb_response = await self._execute_context_fetch(
+            page=page,
+            method="POST",
+            endpoint="/v3/api/keywordbidding/getTaskDetail",
+            payload={**detail_base, "adType": "sb"},
+            root_dir=request.root_dir,
+            section="real_time_bidding_detail_sb",
+            timings=timings,
+            request=request,
+        )
+        return _merge_real_time_bidding_detail_responses(
+            sp_response,
+            sb_response,
+        )
+
     async def _execute_route_fetch(
         self,
         *,
@@ -1422,6 +1531,157 @@ def _keyword_comparison_route_payload(
         )
     # 页面只能覆盖 prepare 生成的 asinList，其他筛选和分页继续以后端校验结果为准。
     return {**payload, "asinList": asin_list, "page": 1, "size": 100}
+
+
+def _real_time_bidding_task_items(
+    response: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """兼容官网 taskList 的直接分页和 data 包装响应。"""
+    data = response.get("data")
+    candidates = data if isinstance(data, dict) else response
+    for key in ("items", "records", "list"):
+        items = candidates.get(key)
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+    pager = candidates.get("pagerDto")
+    if isinstance(pager, dict) and isinstance(pager.get("items"), list):
+        return [item for item in pager["items"] if isinstance(item, dict)]
+    return []
+
+
+def _select_latest_completed_real_time_bidding_task(
+    items: list[dict[str, Any]],
+    *,
+    asin: str,
+) -> dict[str, Any] | None:
+    """从更新时间倒序的列表中选择首个同 ASIN 已完成任务。"""
+    normalized_asin = asin.strip().upper()
+    for item in items:
+        item_asin = str(item.get("asin") or "").strip().upper()
+        try:
+            status = int(item.get("taskStatus") or item.get("status") or 0)
+        except (TypeError, ValueError):
+            continue
+        if item_asin == normalized_asin and status == 3:
+            return item
+    return None
+
+
+def _real_time_bidding_history_has_next_page(
+    response: dict[str, Any],
+    *,
+    page: int,
+    size: int,
+    item_count: int,
+) -> bool:
+    """按官网常见分页字段判断是否需要继续扫描历史任务。"""
+    data = response.get("data")
+    containers = [
+        value
+        for value in (
+            data.get("pagerDto") if isinstance(data, dict) else None,
+            data,
+            response,
+        )
+        if isinstance(value, dict)
+    ]
+    for container in containers:
+        for key in ("total", "totalElements", "totalSize"):
+            try:
+                total = int(container[key])
+            except (KeyError, TypeError, ValueError):
+                continue
+            return page * size < total
+        for key in ("totalPages", "pages", "pageCount"):
+            try:
+                total_pages = int(container[key])
+            except (KeyError, TypeError, ValueError):
+                continue
+            return page < total_pages
+        for key in ("hasNext", "hasNextPage"):
+            if key in container:
+                return bool(container[key])
+    # 没有分页元数据时，满页才可能还有下一页；空页或不足一页即视为耗尽。
+    return item_count >= size
+
+
+def _merge_real_time_bidding_detail_responses(
+    sp_response: dict[str, Any],
+    sb_response: dict[str, Any],
+) -> dict[str, Any]:
+    """按关键词合并详情页拆分返回的 SP、SB/SBV 竞价字段。"""
+    merged = json.loads(json.dumps(sp_response, ensure_ascii=False))
+    merged_data = merged.get("data")
+    sb_data = sb_response.get("data")
+    if not isinstance(merged_data, dict) or not isinstance(sb_data, dict):
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价详情响应结构无效",
+            api_code="ERR_REAL_TIME_BIDDING_DETAIL_SHAPE",
+        )
+    merged_keyword_list = merged_data.get("keywordList")
+    sb_keyword_list = sb_data.get("keywordList")
+    if not isinstance(merged_keyword_list, dict) or not isinstance(
+        sb_keyword_list,
+        dict,
+    ):
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价详情缺少关键词分页",
+            api_code="ERR_REAL_TIME_BIDDING_DETAIL_SHAPE",
+        )
+    merged_items = merged_keyword_list.get("items")
+    sb_items = sb_keyword_list.get("items")
+    if not isinstance(merged_items, list) or not isinstance(sb_items, list):
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价详情关键词列表无效",
+            api_code="ERR_REAL_TIME_BIDDING_DETAIL_SHAPE",
+        )
+    sb_by_keyword = {
+        str(item.get("keyword") or ""): item
+        for item in sb_items
+        if isinstance(item, dict) and item.get("keyword")
+    }
+    sp_keywords = {
+        str(item.get("keyword") or "")
+        for item in merged_items
+        if isinstance(item, dict) and item.get("keyword")
+    }
+    if (
+        len(sp_keywords) != len(merged_items)
+        or len(sb_by_keyword) != len(sb_items)
+        or sp_keywords != set(sb_by_keyword)
+    ):
+        # 两个广告类型是同一任务的两种列投影；集合不一致时继续左连接会伪造完整 46 列。
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价 SP/SB 详情关键词不一致",
+            api_code="ERR_REAL_TIME_BIDDING_DETAIL_MISMATCH",
+            response_excerpt=(
+                f"sp={len(merged_items)},sb={len(sb_items)},"
+                f"sp_only={len(sp_keywords - set(sb_by_keyword))},"
+                f"sb_only={len(set(sb_by_keyword) - sp_keywords)}"
+            ),
+        )
+    merged_task = (
+        merged_data.get("task")
+        if isinstance(merged_data.get("task"), dict)
+        else {}
+    )
+    sb_task = (
+        sb_data.get("task")
+        if isinstance(sb_data.get("task"), dict)
+        else {}
+    )
+    query_time = str(
+        merged_task.get("queryTime") or sb_task.get("queryTime") or ""
+    )
+    for item in merged_items:
+        if not isinstance(item, dict):
+            continue
+        sb_item = sb_by_keyword.get(str(item.get("keyword") or ""), {})
+        for field in ("sponsorBrand", "sponsorBrandVideo"):
+            if field in sb_item:
+                item[field] = sb_item[field]
+        item["queryTime"] = query_time
+    return merged
 
 
 def _traffic_extend_route_payload(
@@ -2166,7 +2426,6 @@ async def _trigger_request(
                 status=getattr(response, "status", None),
             )
             return response, "page_response"
-
         response_timeout = (
             30000
             if association_traffic_interaction

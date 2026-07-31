@@ -2694,6 +2694,256 @@ def test_keyword_conversion_rate_route_submits_each_phrase_once_before_query(
     )
 
 
+def test_real_time_bidding_detail_merge_combines_sp_and_sb_by_keyword():
+    sp_response = {
+        "code": "OK",
+        "data": {
+            "keywordList": {
+                "page": 1,
+                "size": 100,
+                "total": 1,
+                "items": [
+                    {
+                        "keyword": "phone stand",
+                        "autoSponsor": {"EXACT": {"value": 0.53}},
+                        "manualSponsor": {"EXACT": {"value": 0.47}},
+                    }
+                ],
+            },
+            "task": {"queryTime": "2025-06-30 00:00:00"},
+        },
+    }
+    sb_response = {
+        "code": "OK",
+        "data": {
+            "keywordList": {
+                "page": 1,
+                "size": 100,
+                "total": 1,
+                "items": [
+                    {
+                        "keyword": "phone stand",
+                        "sponsorBrand": {"EXACT": {"value": 0.71}},
+                        "sponsorBrandVideo": {"EXACT": {"value": 0.83}},
+                    }
+                ],
+            },
+            "task": {"queryTime": "2025-06-30 00:00:00"},
+        },
+    }
+
+    merged = worker_module._merge_real_time_bidding_detail_responses(
+        sp_response,
+        sb_response,
+    )
+
+    row = merged["data"]["keywordList"]["items"][0]
+    assert row["autoSponsor"]["EXACT"]["value"] == 0.53
+    assert row["sponsorBrand"]["EXACT"]["value"] == 0.71
+    assert row["queryTime"] == "2025-06-30 00:00:00"
+
+
+def test_real_time_bidding_workflow_uses_latest_completed_history_and_both_ad_types(
+    tmp_path,
+):
+    worker = object.__new__(SellerSpriteBrowserRouteWorker)
+    context_calls = []
+
+    async def fake_context_fetch(**kwargs):
+        context_calls.append((kwargs["endpoint"], kwargs["payload"]))
+        if kwargs["endpoint"].endswith("/taskList"):
+            if kwargs["payload"]["page"] == 1:
+                return {
+                    "code": "OK",
+                    "data": {
+                        "page": 1,
+                        "size": 20,
+                        "total": 23,
+                        "items": [
+                            {
+                                "id": 100 + index,
+                                "parentTaskId": 100 + index,
+                                "asin": "B07Z82895W",
+                                "taskStatus": 2,
+                            }
+                            for index in range(20)
+                        ],
+                    },
+                }
+            return {
+                "code": "OK",
+                "data": {
+                    "page": 2,
+                    "size": 20,
+                    "total": 23,
+                    "items": [
+                        {
+                            "id": 12,
+                            "parentTaskId": 12,
+                            "asin": "B07Z82895W",
+                            "taskStatus": 2,
+                        },
+                        {
+                            "id": 11,
+                            "parentTaskId": 11,
+                            "asin": "B07Z82895W",
+                            "taskStatus": 3,
+                        },
+                        {
+                            "id": 10,
+                            "parentTaskId": 10,
+                            "asin": "B07Z82895W",
+                            "taskStatus": 3,
+                        },
+                    ]
+                },
+            }
+        ad_type = kwargs["payload"]["adType"]
+        field = (
+            {"autoSponsor": {"EXACT": {"value": 0.53}}}
+            if ad_type == "sp"
+            else {"sponsorBrand": {"EXACT": {"value": 0.71}}}
+        )
+        return {
+            "code": "OK",
+            "data": {
+                "keywordList": {
+                    "items": [{"keyword": "phone stand", **field}]
+                },
+                "task": {"queryTime": "2026-07-31 16:27:36"},
+            },
+        }
+
+    worker._execute_context_fetch = fake_context_fetch
+    request = worker_module.BrowserRouteRequest(
+        scenario="real-time-bidding",
+        method="POST",
+        endpoint="/v3/api/keywordbidding/taskList",
+        payload={
+            "asin": "B07Z82895W",
+            "isExampleAsin": False,
+            "marketId": 1,
+            "page": 1,
+            "size": 20,
+            "order": {"desc": True, "field": "updatedTime"},
+        },
+        referer="https://www.sellersprite.com/v3/real-time-bidding",
+        account=SellerSpriteAccount(
+            name="default",
+            username="user@example.com",
+            password="secret",
+        ),
+        root_dir=tmp_path,
+        replay_safe=True,
+    )
+
+    result = _run(
+        worker._execute_real_time_bidding_workflow(
+            page=SimpleNamespace(),
+            request=request,
+            timings=[],
+        )
+    )
+
+    detail_calls = [
+        payload
+        for endpoint, payload in context_calls
+        if endpoint.endswith("/getTaskDetail")
+    ]
+    assert [endpoint for endpoint, _ in context_calls] == [
+        "/v3/api/keywordbidding/taskList",
+        "/v3/api/keywordbidding/taskList",
+        "/v3/api/keywordbidding/getTaskDetail",
+        "/v3/api/keywordbidding/getTaskDetail",
+    ]
+    history_pages = [
+        payload["page"]
+        for endpoint, payload in context_calls
+        if endpoint.endswith("/taskList")
+    ]
+    assert history_pages == [1, 2]
+    assert [payload["adType"] for payload in detail_calls] == ["sp", "sb"]
+    assert all(payload["page"] == 1 and payload["size"] == 100 for payload in detail_calls)
+    assert all(payload["taskId"] == 11 for payload in detail_calls)
+    row = result["data"]["keywordList"]["items"][0]
+    assert row["autoSponsor"]["EXACT"]["value"] == 0.53
+    assert row["sponsorBrand"]["EXACT"]["value"] == 0.71
+
+
+def test_real_time_bidding_workflow_requires_completed_history(tmp_path):
+    worker = object.__new__(SellerSpriteBrowserRouteWorker)
+
+    async def fake_context_fetch(**kwargs):
+        return {
+            "code": "OK",
+            "data": {
+                "items": [
+                    {
+                        "id": 12,
+                        "asin": "B07Z82895W",
+                        "taskStatus": 2,
+                    }
+                ]
+            },
+        }
+
+    worker._execute_context_fetch = fake_context_fetch
+    request = worker_module.BrowserRouteRequest(
+        scenario="real-time-bidding",
+        method="POST",
+        endpoint="/v3/api/keywordbidding/taskList",
+        payload={
+            "asin": "B07Z82895W",
+            "isExampleAsin": False,
+            "marketId": 1,
+            "page": 1,
+            "size": 20,
+            "order": {"desc": True, "field": "updatedTime"},
+        },
+        referer="https://www.sellersprite.com/v3/real-time-bidding",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+    )
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        _run(
+            worker._execute_real_time_bidding_workflow(
+                page=SimpleNamespace(),
+                request=request,
+                timings=[],
+            )
+        )
+
+    assert exc_info.value.api_code == "ERR_REAL_TIME_BIDDING_HISTORY_NOT_FOUND"
+
+
+def test_real_time_bidding_detail_merge_rejects_mismatched_keyword_pages():
+    sp_response = {
+        "code": "OK",
+        "data": {
+            "keywordList": {"items": [{"keyword": "phone stand"}]},
+            "task": {},
+        },
+    }
+    sb_response = {
+        "code": "OK",
+        "data": {
+            "keywordList": {"items": [{"keyword": "tablet stand"}]},
+            "task": {},
+        },
+    }
+
+    with pytest.raises(SellerSpriteApiError) as exc_info:
+        worker_module._merge_real_time_bidding_detail_responses(
+            sp_response,
+            sb_response,
+        )
+
+    assert exc_info.value.api_code == "ERR_REAL_TIME_BIDDING_DETAIL_MISMATCH"
+
+
 def test_keyword_conversion_rate_does_not_repeat_enter_after_committed_timeout(
     tmp_path,
 ):

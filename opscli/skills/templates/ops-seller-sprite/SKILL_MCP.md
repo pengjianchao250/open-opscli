@@ -42,7 +42,7 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 ## 普通任务编排
 
 1. SellerSprite Tool 会根据远端 MCP `api_key` 自动确保隔离 OPS 登录态；需要提前诊断认证时可显式调用一次 `auth_mcp_login`，但不要向业务 Tool 传 `session_id/jwt`。
-2. 根据参数手册确认普通场景和必填参数，只调用一次 `seller_sprite_run`。新增的 `keyword-research`、`aba-research`、`association-traffic`、`traffic-extend`、`keyword-comparison`、`keyword-conversion-rate` 和 `aba-reverse` 在执行前必须先确认 `seller_sprite_scenarios` 已返回对应场景；Skill 与服务端版本可能不同，未暴露时不得提交或改投其他场景。不得调用内部 start helper，也不要传 `mode`、`browser-route`、`api-direct` 或 `async_mode`。
+2. 根据参数手册确认普通场景和必填参数，只调用一次 `seller_sprite_run`。新增的 `keyword-research`、`aba-research`、`association-traffic`、`traffic-extend`、`keyword-comparison`、`keyword-conversion-rate`、`real-time-bidding` 和 `aba-reverse` 在执行前必须先确认 `seller_sprite_scenarios` 已返回对应场景；Skill 与服务端版本可能不同，未暴露时不得提交或改投其他场景。不得调用内部 start helper，也不要传 `mode`、`browser-route`、`api-direct` 或 `async_mode`。
 3. `seller_sprite_run` 会立即持久化入队。保存每个返回的 `job_id`，不要等待 `run` 自身给出最终结果。
 4. 只有一个 pending 普通任务时，调用 `seller_sprite_job_status(job_id, wait_seconds=30)`。
 5. 有多个 pending 普通任务时，优先每个窗口调用一次 `seller_sprite_jobs_status(job_ids, wait_seconds=30)`，不要逐个轮询。
@@ -114,6 +114,7 @@ Listing Analysis 必须使用 submit/status/result 专用流程，不属于普�
 - `traffic-extend` 必须提供 1—20 个 ASIN，仅支持 browser-route，固定第一页 100 条；点击“立即查询”并校验 `/prepare` 后，默认点击“用全部变体拓词”，也支持 `variantSelection=sell_well/current`。本地生成 33 列主表、`Unique Words` 和 `Asin`，不生成 `Notes`，不得调用官方全量导出接口。
 - `keyword-comparison` 必须分别提供 1 个自己的 ASIN 和 1—10 个竞品 ASIN；仅支持 browser-route 和默认“流量占比”，固定第一页 100 条。必须先校验 prepare 响应；用户未指定时自动点击“用畅销变体拓词”，明确要求当前变体时在 `params` 传 `variantSelection=current` 并点击“用当前变体拓词”。点击变体按钮前才监听主响应，控制参数不进入主请求；prepare 失败或页面交互后未捕获主响应时直接失败，不得使用静默 fallback 或改投 `keyword-reverse`。查询 JSON 在本地生成动态业务主表和 `ASIN` 辅助表，不调用官网额度型导出、不生成 `Notes`。
 - `keyword-conversion-rate` 必须提供 1—1000 个关键词词组，仅支持 browser-route，周期只支持按周或近 90 天，固定第一页 100 条。页面录入时每个词组只发送一次 Enter；动作超时后只检查标签计数，禁止盲目补按。标签完整后只点击一次“立即查询”，主响应缺失时不得静默 fallback 或换账号重放。本地生成官方 33 列单业务表，不调用官网导出、不生成 `Notes`。
+- `real-time-bidding` 必须且只能提供 1 个 ASIN，仅支持 browser-route。默认查询并选择最新已完成历史任务，不新建任务；分别读取 SP、SB 第一页 100 条并校验关键词集合后合并，本地生成官方 46 列单业务表，不调用官网导出、不生成 `Notes`。列表摘要或详情当前视图不能冒充列表导出。
 - `aba-research` 必须提供父/子 ASIN 或关键词；周/月周期、类目多选、排序和结果筛选按参数手册传递，不支持六种推荐模式。后端固定提交一次 `POST /v3/api/aba-research`，使用 `page=1/size=100`，不请求后续页、不调用官网导出接口；查询 JSON 在本地生成官方 19 列业务主表，不生成官网 `Notes` 页和二维码图片，`row_count` 等于第一页实际行数。
 - `aba-reverse` 必须提供 1—20 个 ASIN 或 Amazon 产品链接；周期省略时默认 `reverseType=W` 和最近完整周。只使用 `xls` / `xlsx` 导出，后端直接下载并原样保存官网 `/v2/aba/reverse/export` 返回的完整 XLSX，不截取、解析或重建工作簿。
 

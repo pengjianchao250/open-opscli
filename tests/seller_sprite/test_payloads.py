@@ -17,10 +17,44 @@ from opscli.seller_sprite.api.payloads import (
     make_keyword_reverse_payload,
     make_listing_analysis_payload,
     make_product_research_payload,
+    make_real_time_bidding_payload,
     make_traffic_extend_payload,
 )
 from opscli.seller_sprite.api.scenarios import get_scenario
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+
+
+def test_real_time_bidding_scenario_builds_single_asin_history_payload():
+    scenario = get_scenario("real-time-bidding")
+
+    payload = scenario.build_payload(
+        params={"asin": "b07z82895w"},
+        site="US",
+        period="30d",
+        page_size=20,
+    )
+
+    assert scenario.endpoint == "/v3/api/keywordbidding/taskList"
+    assert scenario.browser_context_only is True
+    assert scenario.replay_safe is True
+    assert payload == {
+        "asin": "B07Z82895W",
+        "isExampleAsin": False,
+        "marketId": 1,
+        "page": 1,
+        "size": 20,
+        "order": {"desc": True, "field": "updatedTime"},
+    }
+    assert (
+        scenario.build_referer(payload)
+        == "https://www.sellersprite.com/v3/real-time-bidding"
+    )
+
+
+@pytest.mark.parametrize("asin", ["", "B07Z82895W B089K9L3VY", "INVALID"])
+def test_real_time_bidding_rejects_missing_multiple_or_invalid_asin(asin):
+    with pytest.raises(SellerSpriteConfigError, match="单个 ASIN|ASIN 格式无效"):
+        make_real_time_bidding_payload({"asin": asin, "site": "US"})
 
 
 def test_traffic_extend_scenario_builds_first_page_all_variants_payload():

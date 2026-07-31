@@ -20,3 +20,4 @@
 | `keyword-comparison` | 流量词对比动态列和辅助工作表基线 |
 | `traffic-extend` | 拓展流量词主表、词频表、ASIN 与 Notes 基线 |
 | `keyword-conversion-rate` | 关键词转化率 33 列主表和 Notes 基线 |
+| `real-time-bidding` | 实时查竞价列表导出的 46 列主表和 Notes 基线 |

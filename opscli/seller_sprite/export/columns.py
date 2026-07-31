@@ -411,6 +411,61 @@ KEYWORD_CONVERSION_RATE_COLUMNS = [
 ]
 
 
+# 列顺序来自 2026-07-31 官网列表页导出的实时查竞价 46 列主表。
+REAL_TIME_BIDDING_COLUMNS = [
+    ExportColumn("关键词", "keyword"),
+    ExportColumn("关键词翻译", "keywordCn"),
+    ExportColumn(
+        "查询时间",
+        "queryTime",
+        transform="realTimeBiddingQueryTime",
+    ),
+    ExportColumn("周搜索量", "weekSearchNum"),
+    ExportColumn("现排名", "rank"),
+    ExportColumn("展示量", "displayNum"),
+    ExportColumn("点击量", "clickNum"),
+    ExportColumn("提高和降低（精准）—推荐竞价", "autoSponsor.EXACT.value", transform="currency"),
+    ExportColumn("提高和降低（精准）—最低竞价", "autoSponsor.EXACT.min", transform="currency"),
+    ExportColumn("提高和降低（精准）—最高竞价", "autoSponsor.EXACT.max", transform="currency"),
+    ExportColumn("提高和降低（广泛）—推荐竞价", "autoSponsor.BROAD.value", transform="currency"),
+    ExportColumn("提高和降低（广泛）—最低竞价", "autoSponsor.BROAD.min", transform="currency"),
+    ExportColumn("提高和降低（广泛）—最高竞价", "autoSponsor.BROAD.max", transform="currency"),
+    ExportColumn("提高和降低（词组）—推荐竞价", "autoSponsor.PHRASE.value", transform="currency"),
+    ExportColumn("提高和降低（词组）—最低竞价", "autoSponsor.PHRASE.min", transform="currency"),
+    ExportColumn("提高和降低（词组）—最高竞价", "autoSponsor.PHRASE.max", transform="currency"),
+    ExportColumn("仅降低和固定（精准）—推荐竞价", "manualSponsor.EXACT.value", transform="currency"),
+    ExportColumn("仅降低和固定（精准）—最低竞价", "manualSponsor.EXACT.min", transform="currency"),
+    ExportColumn("仅降低和固定（精准）—最高竞价", "manualSponsor.EXACT.max", transform="currency"),
+    ExportColumn("仅降低和固定（广泛）—推荐竞价", "manualSponsor.BROAD.value", transform="currency"),
+    ExportColumn("仅降低和固定（广泛）—最低竞价", "manualSponsor.BROAD.min", transform="currency"),
+    ExportColumn("仅降低和固定（广泛）—最高竞价", "manualSponsor.BROAD.max", transform="currency"),
+    ExportColumn("仅降低和固定（词组）—推荐竞价", "manualSponsor.PHRASE.value", transform="currency"),
+    ExportColumn("仅降低和固定（词组）—最低竞价", "manualSponsor.PHRASE.min", transform="currency"),
+    ExportColumn("仅降低和固定（词组）—最高竞价", "manualSponsor.PHRASE.max", transform="currency"),
+    ExportColumn("SB商品集精准—推荐竞价", "sponsorBrand.EXACT.value", transform="currency"),
+    ExportColumn("SB商品集精准—最低竞价", "sponsorBrand.EXACT.min", transform="currency"),
+    ExportColumn("SB商品集精准—最高竞价", "sponsorBrand.EXACT.max", transform="currency"),
+    ExportColumn("SB商品集广泛—推荐竞价", "sponsorBrand.BROAD.value", transform="currency"),
+    ExportColumn("SB商品集广泛—最低竞价", "sponsorBrand.BROAD.min", transform="currency"),
+    ExportColumn("SB商品集广泛—最高竞价", "sponsorBrand.BROAD.max", transform="currency"),
+    ExportColumn("SB商品集词组—推荐竞价", "sponsorBrand.PHRASE.value", transform="currency"),
+    ExportColumn("SB商品集词组—最低竞价", "sponsorBrand.PHRASE.min", transform="currency"),
+    ExportColumn("SB商品集词组—最高竞价", "sponsorBrand.PHRASE.max", transform="currency"),
+    ExportColumn("SBV视频推广精准—推荐竞价", "sponsorBrandVideo.EXACT.value", transform="currency"),
+    ExportColumn("SBV视频推广精准—最低竞价", "sponsorBrandVideo.EXACT.min", transform="currency"),
+    ExportColumn("SBV视频推广精准—最高竞价", "sponsorBrandVideo.EXACT.max", transform="currency"),
+    ExportColumn("SBV视频推广广泛—推荐竞价", "sponsorBrandVideo.BROAD.value", transform="currency"),
+    ExportColumn("SBV视频推广广泛—最低竞价", "sponsorBrandVideo.BROAD.min", transform="currency"),
+    ExportColumn("SBV视频推广广泛—最高竞价", "sponsorBrandVideo.BROAD.max", transform="currency"),
+    ExportColumn("SBV视频推广词组—推荐竞价", "sponsorBrandVideo.PHRASE.value", transform="currency"),
+    ExportColumn("SBV视频推广词组—最低竞价", "sponsorBrandVideo.PHRASE.min", transform="currency"),
+    ExportColumn("SBV视频推广词组—最高竞价", "sponsorBrandVideo.PHRASE.max", transform="currency"),
+    ExportColumn("点击总占比", "abaConcentrationDegree"),
+    ExportColumn("转化总占比", "cvsShareRate"),
+    ExportColumn("点击前三ASIN", "topClickAsin", transform="asinList"),
+]
+
+
 def columns_for_scenario(
     scenario: str,
     site: str,
@@ -480,6 +535,8 @@ def columns_for_scenario(
                 for column in columns
             ]
         return columns
+    if scenario == "real-time-bidding":
+        return REAL_TIME_BIDDING_COLUMNS
     if scenario == "traffic-source":
         return _columns_with_currency_titles(TRAFFIC_SOURCE_COLUMNS, currency, {"价格"})
     if scenario == "market-research":

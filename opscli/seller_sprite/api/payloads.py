@@ -691,6 +691,43 @@ def make_traffic_extend_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def make_real_time_bidding_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造实时查竞价历史任务查询参数。
+
+    Args:
+        input_data: 包含站点和单个 ASIN 的场景参数。
+
+    Returns:
+        按更新时间倒序查询该 ASIN 历史任务的第一页参数。
+
+    Raises:
+        SellerSpriteConfigError: ASIN 不是单个合法值，或站点不受支持。
+    """
+    raw_asin = str(input_data.get("asin") or "").strip().upper()
+    if not raw_asin or re.search(r"[\s,，;；]", raw_asin):
+        raise SellerSpriteConfigError("real-time-bidding 仅支持输入单个 ASIN")
+    if not re.fullmatch(r"[A-Z0-9]{10}", raw_asin):
+        raise SellerSpriteConfigError(
+            f"real-time-bidding ASIN 格式无效：{raw_asin}"
+        )
+    site = _market(input_data, default="US")
+    market_id = input_data.get("marketId") or ASSOCIATION_TRAFFIC_MARKET_IDS.get(
+        site
+    )
+    if market_id is None:
+        raise SellerSpriteConfigError(
+            f"real-time-bidding 暂不支持站点：{site}"
+        )
+    return {
+        "asin": raw_asin,
+        "isExampleAsin": False,
+        "marketId": _int(market_id, 1),
+        "page": 1,
+        "size": 20,
+        "order": {"desc": True, "field": "updatedTime"},
+    }
+
+
 def make_keyword_conversion_rate_payload(
     input_data: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1220,6 +1257,8 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
     if scenario == "keyword-conversion-rate":
         # 不把关键词写入 URL，避免页面在 worker 建立响应监听前自动执行查询。
         return "https://www.sellersprite.com/v3/keyword-conversion-rate"
+    if scenario == "real-time-bidding":
+        return "https://www.sellersprite.com/v3/real-time-bidding"
     if scenario == "traffic-extend":
         query = {
             "marketId": payload.get("market") or 1,

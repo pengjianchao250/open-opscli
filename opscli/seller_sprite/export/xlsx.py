@@ -35,7 +35,11 @@ def export_rows_to_xlsx(
         raise SellerSpriteConfigError("缺少 openpyxl 依赖，无法导出 XLSX") from exc
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if scenario in {"traffic-extend", "keyword-conversion-rate"}:
+    if scenario in {
+        "traffic-extend",
+        "keyword-conversion-rate",
+        "real-time-bidding",
+    }:
         rows = rows[:100]
     columns = columns_for_scenario(scenario, site, period)
     if not columns:
@@ -50,11 +54,13 @@ def export_rows_to_xlsx(
     association_traffic = scenario == "association-traffic"
     traffic_extend = scenario == "traffic-extend"
     keyword_conversion_rate = scenario == "keyword-conversion-rate"
+    real_time_bidding = scenario == "real-time-bidding"
     official_orange_header = (
         keyword_research
         or aba_research
         or association_traffic
         or keyword_conversion_rate
+        or real_time_bidding
     )
     header_fill = PatternFill(
         "solid",
@@ -65,6 +71,14 @@ def export_rows_to_xlsx(
         ),
     )
     header_font = (
+        Font(
+            name="宋体",
+            size=10,
+            bold=False,
+            color="FFFFFFFF",
+        )
+        if real_time_bidding
+        else
         Font(
             name="Calibri",
             size=10,
@@ -101,6 +115,8 @@ def export_rows_to_xlsx(
                     cell,
                     column_index,
                 )
+            elif real_time_bidding and column_index in {44, 45}:
+                cell.number_format = "0.00%"
             else:
                 _apply_number_format(cell)
         if association_traffic:
@@ -118,6 +134,8 @@ def export_rows_to_xlsx(
             width = TRAFFIC_EXTEND_COLUMN_WIDTHS[column_index - 1]
         elif keyword_conversion_rate:
             width = KEYWORD_CONVERSION_RATE_COLUMN_WIDTHS[column_index - 1]
+        elif real_time_bidding:
+            width = REAL_TIME_BIDDING_COLUMN_WIDTHS[column_index - 1]
         else:
             width = _column_width(column.title)
         sheet.column_dimensions[get_column_letter(column_index)].width = width
@@ -202,6 +220,8 @@ def _apply_transform(value: Any, transform: str | None, row: dict[str, Any], *, 
         return _date_millis(value)
     if transform == "keywordReverseUpdatedTime":
         return _keyword_reverse_updated_time(value, site=site)
+    if transform == "realTimeBiddingQueryTime":
+        return _real_time_bidding_query_time(value)
     if transform == "rankPosition":
         return _rank_position(value)
     if transform == "rankPage":
@@ -500,6 +520,15 @@ def _main_sheet_title(*, scenario: str, site: str, period: str, params: dict[str
     if scenario == "keyword-conversion-rate":
         keyword = _keyword_conversion_rate_first_keyword(params)
         title = f"{site.upper()}-{keyword}({len(rows)})"
+    elif scenario == "real-time-bidding":
+        asin = str(params.get("asin") or "ASIN").strip().upper()
+        query_time = _real_time_bidding_query_time(
+            (rows[0].get("queryTime") if rows else "")
+            or params.get("queryTime")
+            or ""
+        )
+        timestamp = re.sub(r"\D", "", query_time)[:14] or "latest"
+        title = f"{site.upper()}-{asin}-{timestamp}"
     elif scenario == "keyword-miner":
         keyword = params.get("keyword") or params.get("q") or "keyword"
         title = f"{site.upper()}-{keyword}({len(rows)})_"
@@ -612,6 +641,13 @@ KEYWORD_CONVERSION_RATE_COLUMN_WIDTHS = [
     14.6725663716814, 13.8495575221239, 13, 13, 18.6725663716814,
     12.353982300885, 16.6725663716814, 13, 13, 13, 13, 13, 13, 13, 13, 13,
     118.353982300885,
+]
+
+# 官网实时查竞价主表宽度较统一，竞价列保留可完整显示长表头的宽度。
+REAL_TIME_BIDDING_COLUMN_WIDTHS = [
+    26, 16, 21, 13, 13, 13, 13,
+    *([24] * 36),
+    15, 15, 38,
 ]
 
 
@@ -737,6 +773,29 @@ def _date_millis(value: Any) -> str:
     if _is_blank(value):
         return ""
     return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def _real_time_bidding_query_time(value: Any) -> str:
+    """将详情任务时间统一为官方工作簿的秒级显示格式。"""
+    if _is_blank(value):
+        return ""
+    text = str(value).strip()
+    if re.fullmatch(r"\d{12,13}", text):
+        return datetime.fromtimestamp(
+            float(text) / 1000,
+            tz=_timezone_for_site("CN"),
+        ).strftime("%Y/%m/%d %H:%M:%S")
+    normalized = text.replace("T", " ").replace("Z", "")
+    match = re.match(
+        r"(\d{4})[-/](\d{2})[-/](\d{2})[ ]+(\d{2}):(\d{2}):(\d{2})",
+        normalized,
+    )
+    if not match:
+        return text
+    return (
+        f"{match.group(1)}/{match.group(2)}/{match.group(3)} "
+        f"{match.group(4)}:{match.group(5)}:{match.group(6)}"
+    )
 
 
 def _keyword_reverse_updated_time(value: Any, *, site: str) -> str:

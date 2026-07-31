@@ -402,6 +402,7 @@ class SellerSpriteApiManager:
             "keyword-comparison",
             "traffic-extend",
             "keyword-conversion-rate",
+            "real-time-bidding",
         }:
             # 即使上游异常返回超过分页大小，也只导出首期约定的第一页 100 条。
             rows = rows[:100]
@@ -845,6 +846,17 @@ def _without(payload: dict[str, Any], keys: set[str]) -> dict[str, Any]:
 
 def _extract_items(response: dict[str, Any], *, scenario: str | None = None) -> list[dict[str, Any]]:
     data = response.get("data") if isinstance(response, dict) else None
+    if (
+        scenario == "real-time-bidding"
+        and isinstance(data, dict)
+        and isinstance(data.get("keywordList"), dict)
+        and isinstance(data["keywordList"].get("items"), list)
+    ):
+        return [
+            item
+            for item in data["keywordList"]["items"]
+            if isinstance(item, dict)
+        ]
     if scenario == "listing-analysis":
         listing_rows = _extract_listing_analysis_rows(data)
         if listing_rows:
@@ -975,6 +987,7 @@ def _scenario_label(scenario: str) -> str:
         "product-research": "ProductResearch",
         "keyword-comparison": "CompareKeywords",
         "keyword-conversion-rate": "KeywordConversionRate",
+        "real-time-bidding": "cpcSuggestBid",
         "keyword-miner": "KeywordMiner",
         "keyword-research": "KeywordResearch",
         "aba-research": "ABAResearch",
@@ -1002,7 +1015,11 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
         return _sanitize_filename_part(
             params.get("asin") or first_value(params.get("asins"))
         )
-    if scenario in {"listing-analysis", "keyword-comparison"}:
+    if scenario in {
+        "listing-analysis",
+        "keyword-comparison",
+        "real-time-bidding",
+    }:
         return _sanitize_filename_part(
             params.get("ownAsin") or params.get("myAsin") or params.get("asin")
         )

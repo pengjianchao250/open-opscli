@@ -1124,6 +1124,87 @@ def test_manager_runs_keyword_conversion_rate_first_page_in_browser(
     ]
 
 
+def test_manager_runs_real_time_bidding_merged_detail_first_page(
+    monkeypatch,
+    tmp_path: Path,
+):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "keywordList": {
+                        "page": 1,
+                        "size": 100,
+                        "total": 101,
+                        "items": [
+                            {
+                                "keyword": f"keyword {index}",
+                                "queryTime": "2026-07-31 16:27:36",
+                            }
+                            for index in range(101)
+                        ],
+                    },
+                    "task": {"queryTime": "2026-07-31 16:27:36"},
+                },
+            },
+        )
+
+    monkeypatch.setattr(
+        api_manager_module,
+        "SellerSpriteApiClient",
+        DummyApiClient,
+    )
+    monkeypatch.setattr(
+        api_manager_module,
+        "_run_browser_route_request",
+        fake_browser_route_request,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(
+            output_dir=tmp_path,
+            username=None,
+            password=None,
+            default_mode="browser-route",
+        ),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="real-time-bidding",
+                site="US",
+                period="30d",
+                params={"asin": "B07Z82895W"},
+                page_size=20,
+                job_id="job-real-time-bidding",
+                export_format="xlsx",
+            )
+        )
+    )
+
+    assert result.row_count == 100
+    assert calls[0]["endpoint"] == "/v3/api/keywordbidding/taskList"
+    assert calls[0]["payload"] == {
+        "asin": "B07Z82895W",
+        "isExampleAsin": False,
+        "marketId": 1,
+        "page": 1,
+        "size": 20,
+        "order": {"desc": True, "field": "updatedTime"},
+    }
+    assert calls[0]["replay_safe"] is True
+    workbook = load_workbook(result.export.path, read_only=True)
+    assert workbook.sheetnames == ["US-B07Z82895W-20260731162736"]
+    assert workbook.active.max_row == 101
+    assert workbook.active.max_column == 46
+
+
 def test_manager_normalizes_competitor_lookup_singular_asin_before_api_call(monkeypatch, tmp_path: Path):
     DummyApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)

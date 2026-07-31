@@ -16,6 +16,7 @@
 | 拓展流量词 / 多 ASIN 拓词 / expand traffic keywords | `traffic-extend` |
 | 流量词对比 / 竞品关键词对比 / 竞品关键词差距 / keyword comparison | `keyword-comparison` |
 | 关键词转化率 / 批量关键词转化 / keyword conversion rate | `keyword-conversion-rate` |
+| 实时查竞价 / ASIN 实时竞价 / real time bidding | `real-time-bidding` |
 | 出单词反查 / ABA 反查 / ABA reverse | `aba-reverse` |
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
 | 查流量来源 / traffic source | `traffic-source` |
@@ -47,6 +48,7 @@
 - `traffic-extend` 仅支持 `browser-route`，固定 `page=1/size=100`；变体默认 `all`，可选 `sell_well` / `current`，不自动翻页、不调用官网全量导出。
 - `keyword-comparison` 仅支持 `browser-route` 和默认“流量占比”；固定 `page=1/size=100`，未指定变体时自动选择“用畅销变体拓词”，明确要求时可选择“用当前变体拓词”，不自动翻页、不调用官网额度型导出。
 - `keyword-conversion-rate` 仅支持 `browser-route`，周期只支持按周 `W` 或近 90 天 `90D`；公共默认 `30d` 映射为页面默认的 `W`。固定 `pageNum=1/pageSize=100`，不自动翻页、不调用官网导出。
+- `real-time-bidding` 仅支持 `browser-route` 和单个 ASIN；默认读取最新已完成历史任务，不新建任务，分别读取 SP、SB 第一页并严格合并为 100 条完整竞价数据，不调用官网导出。
 - `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；固定只请求第一页 100 条，忽略公共分页覆盖值，并在本地生成 `.xlsx`。
 - `aba-reverse` 未提供 `period`（或收到公共默认 `30d`）时，默认选择每周和最近完整周；显式周期可传具体周结束日或月份。只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
 - `branddb` 固定使用 `browser-route`，`text` 必填，接口等待上限 120 秒；只支持 `xls` / `xlsx`，官方文件原样保存。请求发出后遇到超时、登录失效或结果不明时不会自动重试或换账号，避免重复消耗导出额度。
@@ -67,6 +69,7 @@
 - `traffic-extend` 必须有 1—20 个合法 ASIN；可传数组，也可传空格、逗号、换行、制表符或 TXT/Excel 按列复制文本。
 - `keyword-comparison` 必须分别提供 1 个自己的 ASIN 和 1—10 个竞品 ASIN；竞品不得包含自己的 ASIN，支持列表、空格、中英文逗号、换行或制表符分隔。
 - `keyword-conversion-rate` 必须有关键词，最多 1000 个关键词词组；支持数组，或英文/中文逗号、换行、制表符分隔的 TXT/Excel 按列复制文本。词组内部空格保留并规范化，不按空格拆词。
+- `real-time-bidding` 必须且只能提供 1 个合法 ASIN。
 - `aba-research` 必须有父/子 ASIN 或关键词，可使用 `q`、`keywordOrAsin`、`keyword` 或 `asin`。
 - `aba-reverse` 必须有 1—20 个 ASIN 或 Amazon 产品链接；周期可省略，默认使用每周和最近完整周。
 - `branddb` 必须有品牌名称、所有人或注册号搜索文本，统一传 `params.text`。
@@ -76,6 +79,7 @@
 - `traffic-extend` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能批量调用 `keyword-reverse` 冒充。
 - `keyword-comparison` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能批量调用 `keyword-reverse` 冒充正式对比结果。
 - `keyword-conversion-rate` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用关键词选品或关键词挖掘冒充转化率结果。
+- `real-time-bidding` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能把关键词反查或广告洞察冒充实时竞价。
 - `aba-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-research` 或 `aba-reverse` 冒充。
 - `aba-reverse` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-reverse` 冒充。
 
@@ -93,6 +97,7 @@
 | `traffic-extend` | `asins`，1—20 个 | `site`、`period`、`variantSelection` | 仅 browser-route；变体默认 `all`，可选 `sell_well/current`；第一页 100 条；本地生成主表、`Unique Words` 和 `Asin` |
 | `keyword-comparison` | `ownAsin` 1 个；`competitorAsins` 1—10 个 | `site`、`variantSelection` | 仅 browser-route 和流量占比；变体默认 `sell_well`，可选 `current`；固定第一页 100 条；本地生成 XLSX |
 | `keyword-conversion-rate` | `keywords`，1—1000 个关键词词组 | `site`、`period` | 仅 browser-route；周期 `W/90D`；每个词组只按一次 Enter；固定第一页 100 条；本地生成单业务表 |
+| `real-time-bidding` | `asin`，只能 1 个 | `site` | 仅 browser-route；最新已完成历史任务；SP 与 SB/SBV 严格合并；第一页 100 条；本地生成 46 列单业务表 |
 | `aba-reverse` | `asin` / `asins` / 产品链接，1—20 个 | `period`、`reverseType`、`orderField`、`orderDesc`、`conversionType`、`loadVariations` | 默认每周和最近完整周；直接保存官方完整 XLSX |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
 | `traffic-source` | 关键词或 ASIN | `keyword`、`asin`、`asins`、`order`、`desc` | `pageNo=1`，`order=10`，`desc=true` |
@@ -370,6 +375,25 @@
 - 查询 JSON 在本地生成官方 33 列业务主表，将 PPC、CPA、产品均价、ACOS 和前三 ASIN 共享拆分为独立列。
 - 工作簿仅包含 `{站点}-{首个关键词}({行数})` 主表，不生成 `Notes`。
 - 首期不调用官网 `/v3/api/keyword-conv/excel`，因此不消耗官网导出额度，也不宣称本地文件与官网导出逐字节一致。
+
+## `real-time-bidding` 实时查竞价
+
+### 输入与任务流程
+
+| 中文含义 | 字段 | 规则 |
+| --- | --- | --- |
+| ASIN | `params.asin` | 必填且只能 1 个；10 位字母数字 |
+| 站点 | 顶层 `site` | 默认 `US` |
+
+1. browser-route 按站点和 ASIN 查询历史任务列表，不调用 `newTask`，不消耗一次新查询额度。
+2. 从更新时间倒序列表持续翻页，选择最新已完成任务；确认历史耗尽仍没有已完成记录时明确失败。
+3. 对同一任务分别请求 `adType=sp` 与 `adType=sb` 的第一页 100 条详情；先校验关键词集合一致，再按 `keyword` 合并 SP、SB 和 SBV 竞价字段。
+
+### 数据与导出
+
+- 列表页摘要、详情页当前广告类型视图和列表页官方导出是三个不同口径，不得互相冒充。
+- 本地工作簿按官方列表导出的 46 列顺序生成单业务主表，不调用 `/v3/api/keywordbidding/exportTaskDetail`，不生成 `Notes`。
+- 只保留第一页最多 100 条；数据来自最新已完成历史任务，与官方 fixture 的数值和查询时间可以不同。
 
 ## `aba-reverse` 出单词反查
 

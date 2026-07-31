@@ -23,6 +23,12 @@
       "sha256": "25b81ea97467db9c486aa244ffdddeec78080678b0a2a28849a969441c5f3775"
     },
     {
+      "scenario": "real-time-bidding",
+      "path": "real-time-bidding/cpcSuggestBid-US-B07Z82895W(1)-20260731162033.xlsx",
+      "size": 126792,
+      "sha256": "599e84e048d9da9b5b312663b78cd95b1a00eec3a69f9d4c3acb2e23f2530fd0"
+    },
+    {
       "scenario": "traffic-extend",
       "path": "traffic-extend/ExpandKeywords-US-B089K9L3VY-batch(5)-202607-922297.xlsx",
       "size": 518838,

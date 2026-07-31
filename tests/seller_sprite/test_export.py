@@ -9,6 +9,79 @@ from opscli.seller_sprite.export.keyword_comparison_xlsx import (
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
 
 
+def test_real_time_bidding_export_merges_sp_sb_into_official_columns(
+    tmp_path: Path,
+):
+    output = tmp_path / "real-time-bidding.xlsx"
+    row = {
+        "keyword": "phone stand",
+        "keywordCn": "手机支架",
+        "queryTime": "2025-06-30 00:00:00",
+        "weekSearchNum": 56539,
+        "rank": 2471,
+        "displayNum": 1483771,
+        "clickNum": 17832,
+        "autoSponsor": {
+            "EXACT": {"value": 0.53, "min": 0.42, "max": 0.68},
+            "BROAD": {"value": 0.49, "min": 0.37, "max": 0.62},
+            "PHRASE": {"value": 0.50, "min": 0.39, "max": 0.65},
+        },
+        "manualSponsor": {
+            "EXACT": {"value": 0.47, "min": 0.35, "max": 0.60},
+            "BROAD": {"value": 0.45, "min": 0.34, "max": 0.57},
+            "PHRASE": {"value": 0.46, "min": 0.34, "max": 0.59},
+        },
+        "sponsorBrand": {
+            "EXACT": {"value": 0.71, "min": 0.56, "max": 0.91},
+            "BROAD": {"value": 0.67, "min": 0.51, "max": 0.84},
+            "PHRASE": {"value": 0.69, "min": 0.54, "max": 0.88},
+        },
+        "sponsorBrandVideo": {
+            "EXACT": {"value": 0.83, "min": 0.64, "max": 1.05},
+            "BROAD": {"value": 0.78, "min": 0.60, "max": 0.99},
+            "PHRASE": {"value": 0.80, "min": 0.62, "max": 1.02},
+        },
+        "abaConcentrationDegree": 0.2784,
+        "cvsShareRate": 0.2127,
+        "topClickAsin": [
+            {"asin": "B07F8S18D5"},
+            {"asin": "B092J6LZPF"},
+            {"asin": "B0CMM89Y6Z"},
+        ],
+    }
+
+    export_rows_to_xlsx(
+        rows=[row, *({"keyword": f"keyword {index}"} for index in range(100))],
+        output_path=output,
+        scenario="real-time-bidding",
+        site="US",
+        params={"asin": "B07Z82895W"},
+    )
+
+    workbook = load_workbook(output, data_only=True)
+    assert workbook.sheetnames == ["US-B07Z82895W-20250630000000"]
+    sheet = workbook.active
+    assert sheet.max_row == 101
+    assert sheet.max_column == 46
+    headers_path = (
+        Path(__file__).resolve().parents[2]
+        / "opscli/seller_sprite/reference/scenarios/real-time-bidding/official-headers.json"
+    )
+    assert [cell.value for cell in sheet[1]] == json.loads(
+        headers_path.read_text(encoding="utf-8")
+    )
+    assert sheet["H2"].value == "$0.53"
+    assert sheet["Z2"].value == "$0.71"
+    assert sheet["AI2"].value == "$0.83"
+    assert sheet["AR2"].value == 0.2784
+    assert sheet["AS2"].value == 0.2127
+    assert sheet["AT2"].value == "B07F8S18D5,B092J6LZPF,B0CMM89Y6Z"
+    assert sheet["A1"].fill.fgColor.rgb == "FFE98A00"
+    assert sheet["A1"].font.name == "宋体"
+    assert sheet["A1"].font.color.rgb == "FFFFFFFF"
+    assert "Notes" not in workbook.sheetnames
+
+
 def test_keyword_conversion_rate_export_writes_first_page_business_sheet(
     tmp_path: Path,
 ):
