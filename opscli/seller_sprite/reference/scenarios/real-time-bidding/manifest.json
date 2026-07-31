@@ -22,12 +22,17 @@
   },
   "interaction": {
     "mode": "browser-route",
-    "read_only": true,
-    "create_task": false,
+    "read_only": false,
+    "create_task": true,
+    "new_task_type": "AC",
+    "new_task_mode": "dialog",
+    "query_again_statuses": [3, 4],
+    "poll_only_statuses": [2],
+    "official_example_read_only": true,
     "history_order": {"desc": true, "field": "updatedTime"},
     "history_auto_pagination": true,
-    "select_task_status": 3,
-    "replay_safe": true
+    "completed_task_status": 3,
+    "replay_safe": false
   },
   "response": {
     "result_scope": "first_page",
@@ -38,7 +43,7 @@
     "merge_key": "keyword"
   },
   "result": {
-    "source": "latest_completed_history_merged_detail_json",
+    "source": "refreshed_or_created_task_merged_detail_json",
     "local_xlsx": true,
     "official_export_api": false,
     "official_export_reference_verified": true,

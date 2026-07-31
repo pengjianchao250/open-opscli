@@ -36,7 +36,7 @@ def test_real_time_bidding_scenario_builds_single_asin_history_payload():
 
     assert scenario.endpoint == "/v3/api/keywordbidding/taskList"
     assert scenario.browser_context_only is True
-    assert scenario.replay_safe is True
+    assert scenario.replay_safe is False
     assert payload == {
         "asin": "B07Z82895W",
         "isExampleAsin": False,

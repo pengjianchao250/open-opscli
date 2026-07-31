@@ -29,7 +29,7 @@ metadata:
    - `traffic-extend` 固定第一页 100 条；用户未指定变体时默认“用全部变体拓词”，也支持 `variantSelection=sell_well/current`；查询 JSON 后在本地生成主表、`Unique Words` 和 `Asin`，不生成 `Notes`。
    - `keyword-comparison` 固定使用默认“流量占比”和第一页 100 条；用户未指定时自动选择“用畅销变体拓词”，明确要求当前变体时传 `variantSelection=current`，查询 JSON 后在本地生成动态 XLSX，不调用官网额度型导出。
    - `keyword-conversion-rate` 固定第一页 100 条；周期只支持按周或近 90 天，最多 1000 个关键词词组。页面录入时每个词组只发送一次 Enter，超时后以标签计数判断结果，禁止盲目补按；本地生成官方 33 列业务主表，不生成 `Notes`。
-   - `real-time-bidding` 只接受单个 ASIN；默认读取最新已完成历史任务，不新建任务，再严格合并 SP 与 SB/SBV 第一页 100 条，本地生成官方 46 列业务主表，不生成 `Notes`。
+   - `real-time-bidding` 只接受单个 ASIN；普通历史已完成时自动“再次查询”，无历史时通过弹窗新建“亚马逊推荐关键词”任务，进行中任务只等待，官网示例只读；完成后严格合并 SP 与 SB/SBV 第一页 100 条，本地生成官方 46 列业务主表，不生成 `Notes`。
    - `aba-research` 未提供周期时默认最近完整周；固定 `page=1/size=100` 且只查一次，捕获查询 JSON 后在本地生成官方 19 列 XLSX，不调用官网导出接口。
    - `aba-reverse` 未提供周期时默认选择每周和最近完整周；显式周期仍支持具体周结束日或月份。只支持 `xls` / `xlsx`，由后端原样保存官方 XLSX。
 4. 用户给了明确条件，就原样带入 `params`；不要发明隐藏枚举值或额外筛选。
@@ -172,6 +172,6 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - `keyword-comparison` 仅返回默认“流量占比”第一页最多 100 条；本地 XLSX 包含动态业务主表和 `ASIN` 辅助表，不包含 `Notes`，不得宣称已取得自然排名、广告排名、转化效果或曝光位置视图。
 - `keyword-conversion-rate` 只返回第一页最多 100 条；本地 XLSX 包含官方 33 列单业务主表，不包含 `Notes`，不调用官网导出接口。
 - `traffic-extend` 只返回第一页最多 100 条；本地 XLSX 包含官方 33 列主表、基于当前 100 条计算的 `Unique Words` 和 `Asin`，不包含 `Notes`，不调用官网全量导出。
-- `real-time-bidding` 只返回最新已完成历史任务的第一页最多 100 条；按关键词严格合并 SP 与 SB/SBV 后生成官方 46 列单业务表，不包含 `Notes`，不调用官网任务创建或导出接口。
+- `real-time-bidding` 根据普通查询历史自动刷新或创建：已有完成/失败记录调用一次“再次查询”，无记录通过官网弹窗新建默认“亚马逊推荐关键词”任务，已有进行中任务只轮询，官网示例不创建任务；任务完成后返回第一页最多 100 条，按关键词严格合并 SP 与 SB/SBV 并生成官方 46 列单业务表，不包含 `Notes`，不调用官网导出接口。提交后响应不明时禁止自动重放。
 - 一般场景 `row_count=0` 时，要明确告诉用户没有查到数据；`aba-reverse` 例外，其官方 XLSX 不做本地解析，`row_count=0` 不代表工作簿为空，应以导出文件为准。
 - 用户后来只说 `继续`、`查结果`、`刚才那个好了没` 时，恢复并查询完整 pending 集合；只有用户明确指定子集时才缩小范围。

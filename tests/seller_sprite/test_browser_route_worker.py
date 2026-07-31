@@ -2748,10 +2748,25 @@ def test_real_time_bidding_workflow_uses_latest_completed_history_and_both_ad_ty
 ):
     worker = object.__new__(SellerSpriteBrowserRouteWorker)
     context_calls = []
+    submitted = False
 
     async def fake_context_fetch(**kwargs):
+        nonlocal submitted
         context_calls.append((kwargs["endpoint"], kwargs["payload"]))
+        if kwargs["endpoint"].endswith("/newTask"):
+            submitted = True
+            return {"code": "OK", "data": {"taskId": 13}}
         if kwargs["endpoint"].endswith("/taskList"):
+            if submitted:
+                return {
+                    "code": "OK",
+                    "data": {"items": [{
+                        "id": 13,
+                        "parentTaskId": 11,
+                        "asin": "B07Z82895W",
+                        "taskStatus": 3,
+                    }]},
+                }
             if kwargs["payload"]["page"] == 1:
                 return {
                     "code": "OK",
@@ -2763,7 +2778,7 @@ def test_real_time_bidding_workflow_uses_latest_completed_history_and_both_ad_ty
                             {
                                 "id": 100 + index,
                                 "parentTaskId": 100 + index,
-                                "asin": "B07Z82895W",
+                                "asin": "B000000000",
                                 "taskStatus": 2,
                             }
                             for index in range(20)
@@ -2780,7 +2795,7 @@ def test_real_time_bidding_workflow_uses_latest_completed_history_and_both_ad_ty
                         {
                             "id": 12,
                             "parentTaskId": 12,
-                            "asin": "B07Z82895W",
+                            "asin": "B000000000",
                             "taskStatus": 2,
                         },
                         {
@@ -2835,6 +2850,7 @@ def test_real_time_bidding_workflow_uses_latest_completed_history_and_both_ad_ty
         ),
         root_dir=tmp_path,
         replay_safe=True,
+        task_interval_seconds=0,
     )
 
     result = _run(
@@ -2853,6 +2869,8 @@ def test_real_time_bidding_workflow_uses_latest_completed_history_and_both_ad_ty
     assert [endpoint for endpoint, _ in context_calls] == [
         "/v3/api/keywordbidding/taskList",
         "/v3/api/keywordbidding/taskList",
+        "/v3/api/keywordbidding/newTask",
+        "/v3/api/keywordbidding/taskList",
         "/v3/api/keywordbidding/getTaskDetail",
         "/v3/api/keywordbidding/getTaskDetail",
     ]
@@ -2861,19 +2879,37 @@ def test_real_time_bidding_workflow_uses_latest_completed_history_and_both_ad_ty
         for endpoint, payload in context_calls
         if endpoint.endswith("/taskList")
     ]
-    assert history_pages == [1, 2]
+    assert history_pages == [1, 2, 1]
     assert [payload["adType"] for payload in detail_calls] == ["sp", "sb"]
     assert all(payload["page"] == 1 and payload["size"] == 100 for payload in detail_calls)
-    assert all(payload["taskId"] == 11 for payload in detail_calls)
+    assert all(payload["taskId"] == 13 for payload in detail_calls)
+    rerun_payload = next(
+        payload for endpoint, payload in context_calls if endpoint.endswith("/newTask")
+    )
+    assert rerun_payload["queryAgain"] is True
+    assert rerun_payload["failTaskId"] == 11
+    assert rerun_payload["parentTaskId"] == 11
     row = result["data"]["keywordList"]["items"][0]
     assert row["autoSponsor"]["EXACT"]["value"] == 0.53
     assert row["sponsorBrand"]["EXACT"]["value"] == 0.71
 
 
-def test_real_time_bidding_workflow_requires_completed_history(tmp_path):
+@pytest.mark.parametrize("initial_status", [0, 2])
+def test_real_time_bidding_workflow_waits_without_resubmitting_non_terminal_task(
+    tmp_path,
+    initial_status,
+):
     worker = object.__new__(SellerSpriteBrowserRouteWorker)
+    task_list_calls = 0
 
     async def fake_context_fetch(**kwargs):
+        nonlocal task_list_calls
+        if kwargs["endpoint"].endswith("/getTaskDetail"):
+            return {
+                "code": "OK",
+                "data": {"keywordList": {"items": []}, "task": {}},
+            }
+        task_list_calls += 1
         return {
             "code": "OK",
             "data": {
@@ -2881,7 +2917,7 @@ def test_real_time_bidding_workflow_requires_completed_history(tmp_path):
                     {
                         "id": 12,
                         "asin": "B07Z82895W",
-                        "taskStatus": 2,
+                        "taskStatus": initial_status if task_list_calls == 1 else 3,
                     }
                 ]
             },
@@ -2905,18 +2941,247 @@ def test_real_time_bidding_workflow_requires_completed_history(tmp_path):
             name="default", username="user@example.com", password="secret"
         ),
         root_dir=tmp_path,
+        task_interval_seconds=0,
     )
 
-    with pytest.raises(SellerSpriteApiError) as exc_info:
-        _run(
-            worker._execute_real_time_bidding_workflow(
-                page=SimpleNamespace(),
-                request=request,
-                timings=[],
-            )
+    result = _run(
+        worker._execute_real_time_bidding_workflow(
+            page=SimpleNamespace(),
+            request=request,
+            timings=[],
         )
+    )
 
-    assert exc_info.value.api_code == "ERR_REAL_TIME_BIDDING_HISTORY_NOT_FOUND"
+    assert result["data"]["keywordList"]["items"] == []
+    assert task_list_calls == 2
+
+
+def test_real_time_bidding_workflow_reads_official_example_without_creating_task(
+    tmp_path,
+):
+    worker = object.__new__(SellerSpriteBrowserRouteWorker)
+    calls = []
+
+    async def fake_context_fetch(**kwargs):
+        calls.append((kwargs["endpoint"], kwargs["payload"]))
+        if kwargs["endpoint"].endswith("/taskList"):
+            items = (
+                [{
+                    "id": 2,
+                    "parentTaskId": 2,
+                    "asin": "B0B56CHMSC",
+                    "taskStatus": 3,
+                    "exampleAsinFlag": True,
+                }]
+                if kwargs["payload"]["isExampleAsin"]
+                else []
+            )
+            return {"code": "OK", "data": {"items": items}}
+        return {
+            "code": "OK",
+            "data": {"keywordList": {"items": []}, "task": {}},
+        }
+
+    async def fail_route_fetch(**kwargs):
+        raise AssertionError("官网示例 ASIN 不应新建任务")
+
+    worker._execute_context_fetch = fake_context_fetch
+    worker._execute_route_fetch = fail_route_fetch
+    request = worker_module.BrowserRouteRequest(
+        scenario="real-time-bidding",
+        method="POST",
+        endpoint="/v3/api/keywordbidding/taskList",
+        payload={
+            "asin": "B0B56CHMSC",
+            "isExampleAsin": False,
+            "marketId": 1,
+            "page": 1,
+            "size": 20,
+            "order": {"desc": True, "field": "updatedTime"},
+        },
+        referer="https://www.sellersprite.com/v3/real-time-bidding",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+        replay_safe=False,
+        task_interval_seconds=0,
+    )
+
+    result = _run(
+        worker._execute_real_time_bidding_workflow(
+            page=SimpleNamespace(), request=request, timings=[]
+        )
+    )
+
+    detail_payloads = [
+        payload for endpoint, payload in calls if endpoint.endswith("/getTaskDetail")
+    ]
+    assert result["data"]["keywordList"]["items"] == []
+    assert [payload["isExampleAsin"] for payload in detail_payloads] == [True, True]
+    assert [payload["taskId"] for payload in detail_payloads] == [2, 2]
+
+
+def test_real_time_bidding_workflow_creates_new_task_when_history_is_empty(tmp_path):
+    worker = object.__new__(SellerSpriteBrowserRouteWorker)
+    submitted = False
+    route_calls = []
+
+    async def fake_context_fetch(**kwargs):
+        if kwargs["endpoint"].endswith("/taskList"):
+            items = ([{
+                "id": 20,
+                "parentTaskId": 20,
+                "asin": "B07Z82895W",
+                "taskStatus": 3,
+            }] if submitted and not kwargs["payload"]["isExampleAsin"] else [])
+            return {"code": "OK", "data": {"items": items}}
+        return {"code": "OK", "data": {"keywordList": {"items": []}, "task": {}}}
+
+    async def fake_route_fetch(**kwargs):
+        nonlocal submitted
+        submitted = True
+        route_calls.append(kwargs)
+        return {"code": "OK", "data": {"taskId": 20}}
+
+    worker._execute_context_fetch = fake_context_fetch
+    worker._execute_route_fetch = fake_route_fetch
+    request = worker_module.BrowserRouteRequest(
+        scenario="real-time-bidding",
+        method="POST",
+        endpoint="/v3/api/keywordbidding/taskList",
+        payload={
+            "asin": "B07Z82895W", "isExampleAsin": False, "marketId": 1,
+            "page": 1, "size": 20,
+            "order": {"desc": True, "field": "updatedTime"},
+        },
+        referer="https://www.sellersprite.com/v3/real-time-bidding",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+        replay_safe=False,
+        task_interval_seconds=0,
+    )
+
+    result = _run(worker._execute_real_time_bidding_workflow(
+        page=SimpleNamespace(), request=request, timings=[]
+    ))
+
+    assert result["data"]["keywordList"]["items"] == []
+    assert len(route_calls) == 1
+    assert route_calls[0]["section"] == "real_time_bidding_new_task"
+    assert route_calls[0]["payload"] == {
+        "asin": "B07Z82895W", "taskType": "AC", "marketId": 1, "keywordList": []
+    }
+
+
+def test_real_time_bidding_new_task_waits_for_dialog_and_confirms_once():
+    class Locator:
+        def __init__(self, page, kind):
+            self.page = page
+            self.kind = kind
+            self.first = self
+
+        async def count(self):
+            return 1
+
+        async def is_visible(self, **kwargs):
+            if self.kind == "dialog":
+                self.page.dialog_checks += 1
+                return self.page.dialog_checks >= 3
+            return True
+
+        async def fill(self, value):
+            self.page.events.append(f"fill_{self.kind}:{value}")
+
+        async def click(self, **kwargs):
+            self.page.events.append(f"click_{self.kind}")
+            if self.kind == "confirm":
+                self.page.confirm_clicks += 1
+
+        def locator(self, selector):
+            if "input" in selector:
+                return Locator(self.page, "modal_asin")
+            if "推荐关键词" in selector:
+                return Locator(self.page, "recommended")
+            return Locator(self.page, "confirm")
+
+    class Page:
+        def __init__(self):
+            self.events = []
+            self.dialog_checks = 0
+            self.confirm_clicks = 0
+
+        def locator(self, selector):
+            if "dropdown" in selector:
+                kind = "market_option"
+            elif "el-select" in selector:
+                kind = "market"
+            elif "新建查询任务" in selector:
+                kind = "create"
+            elif "dialog" in selector:
+                kind = "dialog"
+            else:
+                kind = "main_asin"
+            return Locator(self, kind)
+
+        async def wait_for_timeout(self, timeout):
+            self.events.append("wait_dialog")
+
+        def expect_response(self, predicate, timeout):
+            self.events.append("listen_new_task")
+            return _AssociationResponseWaiter("/v3/api/keywordbidding/newTask")
+
+    page = Page()
+    response = _run(worker_module._trigger_real_time_bidding_new_task(
+        page,
+        {"asin": "B07Z82895W", "marketId": 1},
+        endpoint="/v3/api/keywordbidding/newTask",
+    ))
+
+    assert response.status == 200
+    assert page.dialog_checks == 3
+    assert page.confirm_clicks == 1
+    assert page.events.index("listen_new_task") < page.events.index("click_confirm")
+    assert "click_recommended" in page.events
+
+
+def test_real_time_bidding_poll_ignores_stale_failed_task_without_created_id(
+    tmp_path,
+):
+    worker = object.__new__(SellerSpriteBrowserRouteWorker)
+    tasks = iter([
+        {"id": 11, "asin": "B07Z82895W", "taskStatus": 4},
+        {"id": 12, "asin": "B07Z82895W", "taskStatus": 3},
+    ])
+
+    async def fake_find(**kwargs):
+        return next(tasks)
+
+    worker._find_real_time_bidding_task = fake_find
+    request = worker_module.BrowserRouteRequest(
+        scenario="real-time-bidding",
+        method="POST",
+        endpoint="/v3/api/keywordbidding/taskList",
+        payload={"asin": "B07Z82895W", "marketId": 1},
+        referer="https://www.sellersprite.com/v3/real-time-bidding",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+        task_interval_seconds=0,
+    )
+
+    task = _run(worker._poll_real_time_bidding_task(
+        page=SimpleNamespace(),
+        request=request,
+        timings=[],
+        expected_task_id=None,
+        previous_task_id=11,
+    ))
+
+    assert task["id"] == 12
 
 
 def test_real_time_bidding_detail_merge_rejects_mismatched_keyword_pages():

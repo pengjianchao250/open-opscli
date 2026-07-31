@@ -1204,74 +1204,102 @@ class SellerSpriteBrowserRouteWorker:
         request: BrowserRouteRequest,
         timings: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """选择最新已完成历史任务，再合并 SP、SB 第一页详情。"""
-        history_payload = dict(request.payload)
-        completed_task: dict[str, Any] | None = None
-        seen_pages: set[tuple[tuple[str, str], ...]] = set()
-        while completed_task is None:
-            history_page = int(history_payload.get("page") or 1)
-            history_size = int(history_payload.get("size") or 20)
-            task_list = await self._execute_context_fetch(
+        """按历史状态刷新或创建任务，完成后合并 SP、SB 第一页详情。"""
+        task = await self._find_real_time_bidding_task(
+            page=page,
+            request=request,
+            timings=timings,
+            payload={**request.payload, "isExampleAsin": False},
+            section_prefix="real_time_bidding_history",
+        )
+        is_example_asin = False
+        submitted_task_id: int | None = None
+        previous_task_id: int | None = None
+
+        # 官网示例不显示“再次查询”，也不应创建真实任务；US 无普通历史时再精确探测示例列表。
+        if task is None and int(request.payload["marketId"]) == 1:
+            task = await self._find_real_time_bidding_task(
                 page=page,
-                method=request.method,
-                endpoint=request.endpoint,
-                payload=history_payload,
+                request=request,
+                timings=timings,
+                payload={**request.payload, "isExampleAsin": True},
+                section_prefix="real_time_bidding_example_history",
+            )
+            is_example_asin = task is not None
+
+        if task is None:
+            create_payload = {
+                "asin": request.payload["asin"],
+                "taskType": "AC",
+                "marketId": request.payload["marketId"],
+                "keywordList": [],
+            }
+            created = await self._execute_route_fetch(
+                page=page,
+                method="POST",
+                endpoint="/v3/api/keywordbidding/newTask",
+                payload=create_payload,
                 root_dir=request.root_dir,
-                section=f"real_time_bidding_history_{history_page}",
+                section="real_time_bidding_new_task",
                 timings=timings,
                 request=request,
             )
-            task_items = _real_time_bidding_task_items(task_list)
-            # taskList 按 updatedTime 倒序跨页扫描；首个完成项才是最新可导出历史。
-            completed_task = _select_latest_completed_real_time_bidding_task(
-                task_items,
-                asin=request.payload["asin"],
-            )
-            if completed_task is not None:
-                break
-            page_fingerprint = tuple(
-                (
-                    str(item.get("id") or item.get("taskId") or ""),
-                    str(item.get("taskStatus") or item.get("status") or ""),
+            submitted_task_id = _real_time_bidding_created_task_id(created)
+        elif not is_example_asin:
+            status = _real_time_bidding_task_status(task)
+            if status in {3, 4}:
+                task_id = _required_real_time_bidding_task_id(task)
+                previous_task_id = task_id
+                parent_task_id = _required_real_time_bidding_parent_task_id(task)
+                rerun_payload = {
+                    "asin": request.payload["asin"],
+                    "taskType": task.get("taskType") or "AC",
+                    "marketId": request.payload["marketId"],
+                    "keywordList": list(task.get("keywords") or task.get("keywordList") or []),
+                    "parentTaskId": parent_task_id,
+                    "failTaskId": task_id,
+                    "queryAgain": True,
+                }
+                created = await self._execute_context_fetch(
+                    page=page,
+                    method="POST",
+                    endpoint="/v3/api/keywordbidding/newTask",
+                    payload=rerun_payload,
+                    root_dir=request.root_dir,
+                    section="real_time_bidding_query_again",
+                    timings=timings,
+                    request=request,
                 )
-                for item in task_items
-            )
-            # 异常接口若重复返回同一页，必须终止，不能在 worker 内无限请求。
-            if page_fingerprint in seen_pages:
-                break
-            seen_pages.add(page_fingerprint)
-            if not _real_time_bidding_history_has_next_page(
-                task_list,
-                page=history_page,
-                size=history_size,
-                item_count=len(task_items),
-            ):
-                break
-            history_payload = {**history_payload, "page": history_page + 1}
-        if completed_task is None:
-            raise SellerSpriteApiError(
-                "卖家精灵实时查竞价没有可导出的已完成历史任务",
-                api_code="ERR_REAL_TIME_BIDDING_HISTORY_NOT_FOUND",
-                api_message="请先在官网完成一次实时竞价查询，再重新执行。",
+                submitted_task_id = _real_time_bidding_created_task_id(created)
+            # 已在查询中的任务直接等待；不能重复创建。
+
+        if not is_example_asin and (task is None or _real_time_bidding_task_status(task) != 2 or submitted_task_id):
+            task = None
+        if not is_example_asin and (task is None or _real_time_bidding_task_status(task) == 2):
+            task = await self._poll_real_time_bidding_task(
+                page=page,
+                request=request,
+                timings=timings,
+                expected_task_id=submitted_task_id,
+                previous_task_id=previous_task_id,
             )
 
-        task_id = completed_task.get("id") or completed_task.get("taskId")
-        parent_task_id = completed_task.get("parentTaskId") or task_id
-        try:
-            normalized_task_id = int(task_id)
-            normalized_parent_task_id = int(parent_task_id)
-        except (TypeError, ValueError) as exc:
+        if task is None or _real_time_bidding_task_status(task) != 3:
             raise SellerSpriteApiError(
-                "卖家精灵实时查竞价历史任务缺少有效 ID",
-                api_code="ERR_REAL_TIME_BIDDING_HISTORY_TASK_ID",
-            ) from exc
+                "卖家精灵实时查竞价任务未完成",
+                api_code="ERR_REAL_TIME_BIDDING_TASK_NOT_COMPLETED",
+                api_message="任务已提交且不会自动重复提交，请稍后重新查询。",
+            )
+
+        normalized_task_id = _required_real_time_bidding_task_id(task)
+        normalized_parent_task_id = _required_real_time_bidding_parent_task_id(task)
         detail_base = {
             "page": 1,
             "size": 100,
             "marketId": request.payload["marketId"],
             "taskId": normalized_task_id,
             "parentTaskId": normalized_parent_task_id,
-            "isExampleAsin": False,
+            "isExampleAsin": is_example_asin,
             "asin": request.payload["asin"],
         }
         sp_response = await self._execute_context_fetch(
@@ -1294,10 +1322,95 @@ class SellerSpriteBrowserRouteWorker:
             timings=timings,
             request=request,
         )
-        return _merge_real_time_bidding_detail_responses(
-            sp_response,
-            sb_response,
-        )
+        return _merge_real_time_bidding_detail_responses(sp_response, sb_response)
+
+    async def _find_real_time_bidding_task(
+        self, *, page, request, timings, payload: dict[str, Any], section_prefix: str
+    ) -> dict[str, Any] | None:
+        """跨页查找指定 ASIN 的最新历史记录。"""
+        history_payload = dict(payload)
+        seen_pages: set[tuple[tuple[str, str], ...]] = set()
+        while True:
+            history_page = int(history_payload.get("page") or 1)
+            history_size = int(history_payload.get("size") or 20)
+            task_list = await self._execute_context_fetch(
+                page=page,
+                method=request.method,
+                endpoint=request.endpoint,
+                payload=history_payload,
+                root_dir=request.root_dir,
+                section=f"{section_prefix}_{history_page}",
+                timings=timings,
+                request=request,
+            )
+            task_items = _real_time_bidding_task_items(task_list)
+            # taskList 按 updatedTime 倒序跨页扫描；首个完成项才是最新可导出历史。
+            matched = _select_latest_real_time_bidding_task(task_items, asin=request.payload["asin"])
+            if matched is not None:
+                return matched
+            page_fingerprint = tuple(
+                (
+                    str(item.get("id") or item.get("taskId") or ""),
+                    str(item.get("taskStatus") or item.get("status") or ""),
+                )
+                for item in task_items
+            )
+            # 异常接口若重复返回同一页，必须终止，不能在 worker 内无限请求。
+            if page_fingerprint in seen_pages:
+                return None
+            seen_pages.add(page_fingerprint)
+            if not _real_time_bidding_history_has_next_page(
+                task_list,
+                page=history_page,
+                size=history_size,
+                item_count=len(task_items),
+            ):
+                return None
+            history_payload = {**history_payload, "page": history_page + 1}
+
+    async def _poll_real_time_bidding_task(
+        self,
+        *,
+        page,
+        request,
+        timings,
+        expected_task_id: int | None,
+        previous_task_id: int | None,
+    ) -> dict[str, Any] | None:
+        """轮询新建或进行中的任务；超时后由上层返回可恢复提示。"""
+        previous_task_seen_running = False
+        for attempt in range(30):
+            if attempt:
+                await asyncio.sleep(min(max(request.task_interval_seconds, 0.0), 5.0))
+            task = await self._find_real_time_bidding_task(
+                page=page,
+                request=request,
+                timings=timings,
+                payload={**request.payload, "isExampleAsin": False},
+                section_prefix=f"real_time_bidding_poll_{attempt + 1}",
+            )
+            if task is None:
+                continue
+            task_id = _required_real_time_bidding_task_id(task)
+            if expected_task_id is not None and task_id != expected_task_id:
+                continue
+            status = _real_time_bidding_task_status(task)
+            # newTask 未返回 ID 时，旧完成记录可能短暂留在列表首位；必须等到新 ID，
+            # 或明确观察到原 ID 进入运行态后，才接受后续完成状态。
+            if expected_task_id is None and task_id == previous_task_id:
+                if status == 2:
+                    previous_task_seen_running = True
+                elif not previous_task_seen_running:
+                    continue
+            if status == 3:
+                return task
+            if status == 4:
+                raise SellerSpriteApiError(
+                    "卖家精灵实时查竞价任务执行失败",
+                    api_code="ERR_REAL_TIME_BIDDING_TASK_FAILED",
+                    api_message=str(task.get("failReason") or task.get("message") or "官网任务失败"),
+                )
+        return None
 
     async def _execute_route_fetch(
         self,
@@ -1564,6 +1677,66 @@ def _select_latest_completed_real_time_bidding_task(
             continue
         if item_asin == normalized_asin and status == 3:
             return item
+    return None
+
+
+def _select_latest_real_time_bidding_task(
+    items: list[dict[str, Any]], *, asin: str
+) -> dict[str, Any] | None:
+    """返回更新时间倒序列表中的首个同 ASIN 任务，不丢失进行中状态。"""
+    normalized_asin = asin.strip().upper()
+    return next(
+        (
+            item
+            for item in items
+            if str(item.get("asin") or "").strip().upper() == normalized_asin
+        ),
+        None,
+    )
+
+
+def _real_time_bidding_task_status(task: dict[str, Any]) -> int:
+    """规范化官网任务状态。"""
+    try:
+        return int(task.get("taskStatus") or task.get("status") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _required_real_time_bidding_task_id(task: dict[str, Any]) -> int:
+    """读取任务 ID，缺失时返回可诊断错误。"""
+    try:
+        return int(task.get("id") or task.get("taskId"))
+    except (TypeError, ValueError) as exc:
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价历史任务缺少有效 ID",
+            api_code="ERR_REAL_TIME_BIDDING_HISTORY_TASK_ID",
+        ) from exc
+
+
+def _required_real_time_bidding_parent_task_id(task: dict[str, Any]) -> int:
+    """读取父任务 ID；首次任务以自身 ID 作为父任务。"""
+    try:
+        return int(task.get("parentTaskId") or _required_real_time_bidding_task_id(task))
+    except (TypeError, ValueError) as exc:
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价历史任务缺少有效父任务 ID",
+            api_code="ERR_REAL_TIME_BIDDING_HISTORY_TASK_ID",
+        ) from exc
+
+
+def _real_time_bidding_created_task_id(response: dict[str, Any]) -> int | None:
+    """兼容 newTask 不同包装层返回的任务 ID。"""
+    data = response.get("data")
+    candidates = [data, response]
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("taskId", "id"):
+            try:
+                return int(candidate[key])
+            except (KeyError, TypeError, ValueError):
+                continue
     return None
 
 
@@ -2357,7 +2530,22 @@ async def _trigger_request(
     keyword_conversion_rate_interaction = bool(
         request and request.scenario == "keyword-conversion-rate"
     )
+    real_time_bidding_new_task = bool(
+        request
+        and request.scenario == "real-time-bidding"
+        and endpoint.endswith("/keywordbidding/newTask")
+        and section == "real_time_bidding_new_task"
+    )
     try:
+        if real_time_bidding_new_task:
+            response = await _trigger_real_time_bidding_new_task(
+                page,
+                payload,
+                endpoint=endpoint,
+            )
+            if response is None:
+                raise _NoQueryButtonError()
+            return response, "page_response"
         if keyword_comparison_interaction:
             # prepare 和弹窗等待不应占用主接口响应预算；只在最终变体按钮点击前监听主响应。
             response = await _trigger_keyword_comparison_query(
@@ -2489,6 +2677,15 @@ async def _trigger_request(
                 response_excerpt=f"endpoint={endpoint}",
                 api_code="ERR_ASSOCIATION_TRAFFIC_RESPONSE_MISSED",
                 api_message="页面交互已完成，不再自动 fallback 重复查询。",
+            ) from exc
+        if real_time_bidding_new_task:
+            if isinstance(exc, SellerSpriteApiError):
+                raise
+            raise SellerSpriteApiError(
+                "卖家精灵实时查竞价新建任务后未捕获接口响应",
+                response_excerpt=f"endpoint={endpoint}",
+                api_code="ERR_REAL_TIME_BIDDING_NEW_TASK_RESPONSE_MISSED",
+                api_message="确认按钮最多点击一次，不再自动 fallback 重复创建任务。",
             ) from exc
         if traffic_extend_interaction:
             if isinstance(exc, SellerSpriteApiError):
@@ -2715,6 +2912,125 @@ async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool
         return False
     await button.click(timeout=5000)
     return True
+
+
+async def _trigger_real_time_bidding_new_task(
+    page,
+    payload: dict[str, Any],
+    *,
+    endpoint: str,
+):
+    """通过官网弹窗创建推荐关键词任务，并确保确认按钮只点击一次。"""
+    asin = str(payload.get("asin") or "").strip().upper()
+    if not asin:
+        return None
+    market_label = {
+        1: "美国站",
+        3: "英国站",
+        4: "德国站",
+        5: "法国站",
+        6: "日本站",
+        7: "加拿大",
+        35691: "意大利",
+        44551: "西班牙",
+        44571: "印度站",
+        771770: "墨西哥",
+    }.get(int(payload.get("marketId") or 1))
+    if market_label is None:
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价页面不支持当前站点",
+            api_code="ERR_REAL_TIME_BIDDING_MARKET",
+        )
+    market_select = await _first_visible_page_locator(
+        page,
+        [
+            ".search-condition:visible .el-select input[readonly]:visible",
+            ".search-wrap:visible .el-select input[readonly]:visible",
+            ".el-select:visible input[readonly]:visible",
+        ],
+    )
+    if market_select is None:
+        return None
+    await market_select.click(timeout=5000)
+    market_option = await _first_visible_page_locator(
+        page,
+        [
+            f"li.el-select-dropdown__item:visible:has-text('{market_label}')",
+            f".el-select-dropdown__item:visible:has-text('{market_label}')",
+        ],
+    )
+    if market_option is None:
+        raise SellerSpriteApiError(
+            f"卖家精灵实时查竞价页面未找到“{market_label}”站点",
+            api_code="ERR_REAL_TIME_BIDDING_MARKET",
+        )
+    await market_option.click(timeout=5000)
+    main_input = await _first_visible_page_locator(
+        page,
+        [
+            "input[placeholder*='输入单个ASIN']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='查询历史记录']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if main_input is None:
+        return None
+    await main_input.fill(asin)
+    create_button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('新建查询任务')",
+            "[role='button']:visible:has-text('新建查询任务')",
+            ".el-button:visible:has-text('新建查询任务')",
+        ],
+    )
+    if create_button is None:
+        return None
+    await create_button.click(timeout=5000)
+
+    dialog = None
+    for _ in range(30):
+        dialog = await _first_visible_page_locator(
+            page,
+            ["[role='dialog']:visible", ".el-dialog:visible"],
+        )
+        if dialog is not None:
+            break
+        await page.wait_for_timeout(100)
+    if dialog is None:
+        return None
+    asin_input = await _first_visible_locator(
+        dialog,
+        [
+            "input[placeholder*='输入单个ASIN']:not([readonly]):not([disabled])",
+            "input[placeholder*='ASIN']:not([readonly]):not([disabled])",
+        ],
+    )
+    recommended = await _first_visible_locator(
+        dialog,
+        [
+            "button:has-text('亚马逊推荐关键词')",
+            "[role='button']:has-text('亚马逊推荐关键词')",
+            ".el-button:has-text('亚马逊推荐关键词')",
+        ],
+    )
+    confirm = await _first_visible_locator(
+        dialog,
+        [
+            "button:has-text('确定')",
+            "[role='button']:has-text('确定')",
+            ".el-button:has-text('确定')",
+        ],
+    )
+    if asin_input is None or recommended is None or confirm is None:
+        return None
+    await asin_input.fill(asin)
+    await recommended.click(timeout=5000)
+    async with page.expect_response(
+        lambda response: _same_endpoint(response.url, endpoint),
+        timeout=30000,
+    ) as info:
+        await confirm.click(timeout=5000)
+    return await info.value
 
 
 async def _trigger_keyword_comparison_query(

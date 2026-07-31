@@ -1198,7 +1198,7 @@ def test_manager_runs_real_time_bidding_merged_detail_first_page(
         "size": 20,
         "order": {"desc": True, "field": "updatedTime"},
     }
-    assert calls[0]["replay_safe"] is True
+    assert calls[0]["replay_safe"] is False
     workbook = load_workbook(result.export.path, read_only=True)
     assert workbook.sheetnames == ["US-B07Z82895W-20260731162736"]
     assert workbook.active.max_row == 101

@@ -203,6 +203,7 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         required_params=("asin",),
         payload_builder=make_real_time_bidding_payload,
         browser_context_only=True,
+        replay_safe=False,
     ),
     "traffic-source": SellerSpriteScenario(
         scenario_id="traffic-source",
