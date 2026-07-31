@@ -5175,3 +5175,12 @@
 **影响范围**：影响 `ops-dashboard-ai-bridge` 文档组织、Dashboard 规范读取 MCP 及对应定向测试；未发布线上版本。
 **回滚方式**：回退本次 Skill 文档、Dashboard MCP 聚合逻辑、定向测试和本条变更记录。
 ---
+
+## 2026-07-30 Collector MCP - SellerSprite 额度设置迁移 SQL
+
+**变更原因**：SellerSprite 拆分到 Collector MCP 后，新服务器需要复用生产环境的基础额度和邮箱日加额设置，但不应迁移当日已用次数。
+**改动点**：新增 `scripts/export_seller_sprite_quota_settings.sql`；在生产 quota SQLite 上执行即可生成供新服务器直接导入的 SQL，仅包含 SellerSprite policy 和 bonus 设置。补充 Collector MCP 运维步骤。
+**验证结果**：使用临时源库和目标库执行 SQL 导出、导入回归，基础策略和邮箱日加额正确迁移，Keepa 设置及 `mcp_quota_daily` 保持不变；`git diff --check` 通过。
+**影响范围**：仅新增离线运维 SQL 和说明；不改变 MCP 运行时额度逻辑和现有数据库。
+**回滚方式**：删除迁移 SQL 和运维说明，并移除本条变更记录。
+---
