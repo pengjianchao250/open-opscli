@@ -18,6 +18,15 @@
 **回滚方式**：回退拓展流量词场景注册、页面交互、导出映射、测试、参考资料、Skill 文档和本条记录。
 ---
 
+## 2026-07-31 mcp - 区分远程鉴权临时不可用与无效 Key
+
+**变更原因**：远程 API Key 校验发生 ReadTimeout 且进程内无可用成功缓存时，中间件会返回 401 `invalid_api_key`，把鉴权依赖临时不可用误报为 Key 无效，并诱发客户端继续探测 OAuth/OIDC。
+**改动点**：新增远程鉴权临时不可用异常；超时、连接错误或 5xx 且无宽限缓存时返回带 `Retry-After: 5` 的 503，后端明确返回 `valid=false`、401 或 403 时仍返回 401；补充 ReadTimeout 无缓存回归测试并更新宽限过期断言。
+**验证结果**：`tests/mcp/test_auth_middleware.py` 6 passed；排除既有 `test_shopify_tools.py` 导入阻塞后，MCP 扩展回归 347 passed、5 个既有工具注册失败；全量 MCP 收集另被既有 `_shopify_manager` 导入错误阻塞。关键 Ruff 规则（E4/E7/E9/F）、`compileall`、`git diff --check` 通过。
+**影响范围**：仅 MCP HTTP/SSE 远程 API Key 校验临时故障且无可用缓存的响应状态；固定 Key 模式和权威无效 Key 的 401 行为不变。
+**回滚方式**：回退 `auth_middleware.py`、对应测试和本条变更记录。
+---
+
 ## 2026-07-31 seller_sprite - 修复流量词对比变体弹窗
 
 **变更原因**：流量词对比 prepare 成功后，主响应监听可能在弹窗按钮点击前耗尽超时，且点击异常会被误报为主响应丢失；官网畅销变体可能替换原始 ASIN，旧校验会在路由回调内拒绝请求并导致弹窗卡住。

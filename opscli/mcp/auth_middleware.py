@@ -59,6 +59,10 @@ _VERIFY_MAX_KEEPALIVE = 10
 _VERIFY_KEEPALIVE_EXPIRY_SECONDS = 30.0
 
 
+class ApiKeyVerificationUnavailable(RuntimeError):
+    """远程 API Key 校验服务暂时不可用。"""
+
+
 class ApiKeyAuthMiddleware:
     """ASGI 中间件：统一校验 API Key（支持 Header 和 Query Param 两种方式）。
 
@@ -154,7 +158,12 @@ class ApiKeyAuthMiddleware:
         # ── 校验逻辑 ────────────────────────────────────────────────
         if self._auth_verify_url:
             # 远程校验模式
-            user_info = await self._verify_remote(token)
+            try:
+                user_info = await self._verify_remote(token)
+            except ApiKeyVerificationUnavailable:
+                # 临时故障不代表 Key 无效，返回 503 让客户端稍后重试，避免误走 OAuth。
+                await self._send_503(send, reason="auth_service_unavailable")
+                return
             if not user_info:
                 await self._send_401(scope, send, reason="invalid_api_key")
                 return
@@ -264,7 +273,10 @@ class ApiKeyAuthMiddleware:
             api_key: 待校验的明文 API Key
 
         Returns:
-            校验通过时返回 OPS 后端响应的 user 信息 dict；失败时返回 None。
+            校验通过时返回 OPS 后端响应的 user 信息 dict；后端权威判定无效时返回 None。
+
+        Raises:
+            ApiKeyVerificationUnavailable: 远程服务临时故障且无可用成功缓存。
         """
         if not api_key or not self._auth_verify_url:
             return None
@@ -315,6 +327,7 @@ class ApiKeyAuthMiddleware:
                 )
                 return cached[1]
             _logger.warning("远程校验 API Key 失败且无可用缓存宽限: %s", failure_desc)
+            raise ApiKeyVerificationUnavailable(failure_desc)
         return None
 
     async def _send_401(self, _scope: Scope, send: Send, reason: str = "invalid_api_key") -> None:
@@ -325,6 +338,26 @@ class ApiKeyAuthMiddleware:
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"www-authenticate", b'Bearer realm="opscli-mcp"'),
+            ],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body.encode("utf-8"),
+        })
+
+    async def _send_503(self, send: Send, reason: str) -> None:
+        """返回鉴权依赖临时不可用，避免把未完成校验的 Key 误判为无效。"""
+        body = (
+            '{"error":"Service Unavailable",'
+            '"message":"API Key verification service temporarily unavailable",'
+            f'"reason":"{reason}"}}'
+        )
+        await send({
+            "type": "http.response.start",
+            "status": 503,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"retry-after", b"5"),
             ],
         })
         await send({
