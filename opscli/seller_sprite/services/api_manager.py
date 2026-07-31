@@ -16,7 +16,10 @@ from opscli.seller_sprite.api.categories import SellerSpriteCategoryResolver
 from opscli.seller_sprite.api.client import BASE_URL, SellerSpriteApiClient
 from opscli.seller_sprite.api.keyword_research import parse_keyword_research_html
 from opscli.seller_sprite.api.market_research import parse_market_research_html
-from opscli.seller_sprite.api.payloads import keyword_comparison_variant_selection
+from opscli.seller_sprite.api.payloads import (
+    keyword_comparison_variant_selection,
+    traffic_extend_variant_selection,
+)
 from opscli.seller_sprite.api.scenarios import get_scenario, list_scenarios
 from opscli.seller_sprite.browser_route import (
     BrowserRouteRequest,
@@ -295,6 +298,11 @@ class SellerSpriteApiManager:
                             if request.scenario == "keyword-comparison"
                             else "sell_well"
                         ),
+                        traffic_extend_variant=(
+                            traffic_extend_variant_selection(params)
+                            if request.scenario == "traffic-extend"
+                            else "all"
+                        ),
                     )
                     if request.scenario == "listing-analysis":
                         task_id = _extract_task_id(browser_result.response)
@@ -390,7 +398,7 @@ class SellerSpriteApiManager:
 
         self._emit_progress("processing")
         rows = _extract_items(main_response, scenario=request.scenario)
-        if request.scenario == "keyword-comparison":
+        if request.scenario in {"keyword-comparison", "traffic-extend"}:
             # 即使上游异常返回超过分页大小，也只导出首期约定的第一页 100 条。
             rows = rows[:100]
         high_frequency_rows = _extract_high_frequency_rows(high_frequency_response)
@@ -595,6 +603,7 @@ async def _run_browser_route_request(
     session_owner_id: str,
     replay_safe: bool = True,
     keyword_comparison_variant: str = "sell_well",
+    traffic_extend_variant: str = "all",
 ) -> BrowserRouteResult:
     """提交 browser-route 请求，遇到并发回收时仅重建并重试一次。"""
     browser_request = BrowserRouteRequest(
@@ -622,6 +631,7 @@ async def _run_browser_route_request(
         ),
         replay_safe=replay_safe,
         keyword_comparison_variant=keyword_comparison_variant,
+        traffic_extend_variant=traffic_extend_variant,
     )
     for attempt in range(2):
         worker = get_browser_route_worker(
@@ -967,6 +977,7 @@ def _scenario_label(scenario: str) -> str:
         "aba-reverse": "ABAReverse",
         "keyword-reverse": "ReverseASIN",
         "traffic-source": "TrafficSource",
+        "traffic-extend": "ExpandKeywords",
         "market-research": "MarketResearch",
         "listing-analysis": "ListingAnalysis",
     }
@@ -1001,7 +1012,7 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
             or params.get("asin")
             or first_value(params.get("departments"))
         )
-    if scenario == "association-traffic":
+    if scenario in {"association-traffic", "traffic-extend"}:
         return _sanitize_filename_part(first_value(params.get("asins") or params.get("asin")))
     if scenario == "traffic-source":
         return _sanitize_filename_part(

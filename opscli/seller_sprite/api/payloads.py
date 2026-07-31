@@ -319,6 +319,20 @@ ASSOCIATION_TRAFFIC_MARKET_IDS = {
     "MX": 771770,
 }
 
+# 别名来自拓展流量词页面 2026-07-31 的三种变体按钮；内部统一为稳定英文值。
+TRAFFIC_EXTEND_VARIANT_ALIASES = {
+    "all": "all",
+    "全部": "all",
+    "用全部变体拓词": "all",
+    "sell_well": "sell_well",
+    "sell-well": "sell_well",
+    "畅销": "sell_well",
+    "用畅销变体拓词": "sell_well",
+    "current": "current",
+    "当前": "current",
+    "用当前变体拓词": "current",
+}
+
 # ABA 数据选品接口使用站点公开 code，其中美国站使用 COM。
 ABA_RESEARCH_MARKETS = {
     "US": "COM",
@@ -585,6 +599,71 @@ def make_association_traffic_payload(input_data: dict[str, Any]) -> dict[str, An
         "relations": relations,
         "queryVariations": True,
         "asinList": asins,
+    }
+
+
+def traffic_extend_variant_selection(input_data: dict[str, Any]) -> str:
+    """规范化拓展流量词页面的变体选择。
+
+    参数：
+        input_data: 场景参数，可通过 ``variantSelection`` 指定变体模式。
+
+    返回：
+        ``all``、``sell_well`` 或 ``current``；省略时返回 ``all``。
+
+    异常：
+        SellerSpriteConfigError: 变体模式不在页面支持范围内时抛出。
+    """
+    raw_value = input_data.get("variantSelection")
+    if raw_value is None:
+        return "all"
+    value = str(raw_value).strip()
+    normalized = TRAFFIC_EXTEND_VARIANT_ALIASES.get(value)
+    if normalized is None:
+        normalized = TRAFFIC_EXTEND_VARIANT_ALIASES.get(value.lower())
+    if normalized is None:
+        raise SellerSpriteConfigError(
+            "traffic-extend variantSelection 仅支持 all、sell_well、current、"
+            "用全部变体拓词、用畅销变体拓词或用当前变体拓词"
+        )
+    return normalized
+
+
+def make_traffic_extend_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造拓展流量词第一页 100 条主列表 payload。
+
+    参数：
+        input_data: 站点、周期、1 至 20 个 ASIN 和可选变体模式。
+
+    返回：
+        固定 ``page=1``、``size=100`` 的官网主列表请求体。
+
+    异常：
+        SellerSpriteConfigError: ASIN、站点或变体模式不符合页面约束时抛出。
+    """
+    asins = _traffic_extend_asins(input_data.get("asins") or input_data.get("asin"))
+    site = _market(input_data, default="US")
+    market = input_data.get("marketId") or ASSOCIATION_TRAFFIC_MARKET_IDS.get(site)
+    if market is None:
+        raise SellerSpriteConfigError(f"traffic-extend 暂不支持站点：{site}")
+    traffic_extend_variant_selection(input_data)
+    return {
+        "queryVariations": True,
+        "asinList": asins,
+        "originAsinList": asins,
+        "market": _int(market, 1),
+        "page": 1,
+        "month": history_date(
+            input_data.get("historyDate")
+            or input_data.get("month")
+            or input_data.get("period")
+            or "30d"
+        ),
+        "size": 100,
+        "orderColumn": 12,
+        "desc": True,
+        "exactly": False,
+        "ac": False,
     }
 
 
@@ -1064,6 +1143,13 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
         return f"https://www.sellersprite.com/v2/keyword-research?{urlencode(_flatten_query(payload))}"
     if scenario == "keyword-comparison":
         return "https://www.sellersprite.com/v3/keyword-comparison"
+    if scenario == "traffic-extend":
+        query = {
+            "marketId": payload.get("market") or 1,
+            "date": payload.get("month") or "",
+        }
+        # 不把 ASIN 放进结果页 URL：结果页会在导航阶段自动触发 prepare，早于 worker 监听。
+        return f"https://www.sellersprite.com/v3/traffic/extend?{urlencode(query)}"
     if scenario == "aba-research":
         return "https://www.sellersprite.com/v3/aba-research"
     if scenario == "branddb":
@@ -1224,6 +1310,21 @@ def _association_traffic_asins(value: Any) -> list[str]:
     if invalid_asins:
         raise SellerSpriteConfigError(
             f"association-traffic ASIN 格式无效：{', '.join(invalid_asins)}"
+        )
+    return asins
+
+
+def _traffic_extend_asins(value: Any) -> list[str]:
+    """校验拓展流量词页面支持的 1 至 20 个 ASIN。"""
+    asins = split_association_traffic_asins(value)
+    if not asins:
+        raise SellerSpriteConfigError("traffic-extend 至少需要 1 个 ASIN")
+    if len(asins) > 20:
+        raise SellerSpriteConfigError("traffic-extend 最多支持 20 个 ASIN")
+    invalid_asins = [asin for asin in asins if not re.fullmatch(r"[A-Z0-9]{10}", asin)]
+    if invalid_asins:
+        raise SellerSpriteConfigError(
+            f"traffic-extend ASIN 格式无效：{', '.join(invalid_asins)}"
         )
     return asins
 

@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-07-31 seller_sprite - 增加拓展流量词场景
+
+**变更原因**：需要输入最多 20 个父体或子体 ASIN，经过官网 prepare 和变体选择流程获取拓展流量词，并按官方工作簿结构生成第一页 100 条结果。
+**改动点**：新增 `traffic-extend` browser-route 场景、站点/周期/ASIN 参数校验及全部、畅销、当前三种变体模式，省略时默认全部变体；固定捕获 `/v3/api/traffic/extend/asin` 第一页 100 条，不调用官方全量异步导出；本地生成官方 33 列主表、`Unique Words`、`Asin` 和 `Notes`，同步场景参考资料及 Skill 参数手册。
+**验证结果**：payload、导出、browser-route、Manager 和 MCP 参数手册专项回归通过；生成工作簿经结构检查和四工作表视觉渲染确认；`compileall`、`git diff --check` 通过。全量测试仍受既有重复测试模块名和 Shopify `_shopify_manager` 导入错误阻塞。
+**影响范围**：新增独立 `traffic-extend` 场景和 `ops-seller-sprite v0.0.14` 文档；现有 SellerSprite 场景、额度策略及官方导出行为不变。
+**回滚方式**：回退拓展流量词场景注册、页面交互、导出映射、测试、参考资料、Skill 文档和本条记录。
+---
+
 ## 2026-07-31 seller_sprite - 修复流量词对比变体弹窗
 
 **变更原因**：流量词对比 prepare 成功后，主响应监听可能在弹窗按钮点击前耗尽超时，且点击异常会被误报为主响应丢失；官网畅销变体可能替换原始 ASIN，旧校验会在路由回调内拒绝请求并导致弹窗卡住。

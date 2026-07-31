@@ -20,6 +20,7 @@ from opscli.seller_sprite.api.payloads import (
     make_market_research_payload,
     make_product_research_payload,
     make_traffic_source_payload,
+    make_traffic_extend_payload,
 )
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 
@@ -190,6 +191,15 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         method="GET",
         required_params=("keywordOrAsin",),
         payload_builder=make_traffic_source_payload,
+    ),
+    "traffic-extend": SellerSpriteScenario(
+        scenario_id="traffic-extend",
+        title="拓展流量词",
+        endpoint="/v3/api/traffic/extend/asin",
+        required_params=(),
+        required_any_params=("asin", "asins"),
+        payload_builder=make_traffic_extend_payload,
+        browser_context_only=True,
     ),
     "market-research": SellerSpriteScenario(
         scenario_id="market-research",

@@ -273,6 +273,43 @@ KEYWORD_REVERSE_COLUMNS = [
     ExportColumn("前十ASIN", "gkDatas", transform="asinList"),
 ]
 
+# 列顺序来自 2026-07-31 官方拓展流量词工作簿的 33 列主表。
+TRAFFIC_EXTEND_COLUMNS = [
+    ExportColumn("关键词", "keywords"),
+    ExportColumn("关键词翻译", "keywordCn"),
+    ExportColumn("AC推荐词", "ac"),
+    ExportColumn("流量占比", "trafficPercentage"),
+    ExportColumn("流量词类型", "badges", fallback="trafficKeywordTypes", transform="badgeLabels"),
+    ExportColumn("预估周曝光量", "calculatedWeeklySearches"),
+    ExportColumn("相关产品", "relationVariationsItems", transform="listLength"),
+    ExportColumn("相关ASIN", "relationVariationsItems", transform="asinList"),
+    ExportColumn("ABA周排名", "searchesRank"),
+    ExportColumn("月搜索量", "searches"),
+    ExportColumn("月购买量", "purchases"),
+    ExportColumn("购买率", "purchaseRate"),
+    ExportColumn("展示量", "impressions"),
+    ExportColumn("点击量", "clicks"),
+    ExportColumn("SPR", "cprExact"),
+    ExportColumn("标题密度", "titleDensityExact"),
+    ExportColumn("商品数", "products"),
+    ExportColumn("需供比", "supplyDemandRatio"),
+    ExportColumn("广告竞品数", "latest7daysAds"),
+    ExportColumn("点击总占比", "top3ClickingRate", fallback="monopolyClickRate"),
+    ExportColumn("转化总占比", "top3ConversionRate"),
+    ExportColumn("PPC竞价", "bid", transform="currency"),
+    ExportColumn("建议竞价范围", "bidMin", transform="bidRange"),
+    ExportColumn("#1 前三ASIN", "clickTop3s.0.asin"),
+    ExportColumn("#1 点击共享", "clickTop3s.0.clickRate"),
+    ExportColumn("#1 转化共享", "clickTop3s.0.conversionRate", fallback="clickTop3s.0.conversionShareRate"),
+    ExportColumn("#2 前三ASIN", "clickTop3s.1.asin"),
+    ExportColumn("#2 点击共享", "clickTop3s.1.clickRate"),
+    ExportColumn("#2 转化共享", "clickTop3s.1.conversionRate", fallback="clickTop3s.1.conversionShareRate"),
+    ExportColumn("#3 前三ASIN", "clickTop3s.2.asin"),
+    ExportColumn("#3 点击共享", "clickTop3s.2.clickRate"),
+    ExportColumn("#3 转化共享", "clickTop3s.2.conversionRate", fallback="clickTop3s.2.conversionShareRate"),
+    ExportColumn("前十ASIN", "gkDatas", transform="asinList"),
+]
+
 
 TRAFFIC_SOURCE_COLUMNS = [
     ExportColumn("ASIN", "asin"),
@@ -357,6 +394,8 @@ def columns_for_scenario(scenario: str, site: str) -> list[ExportColumn]:
             currency,
             {"PPC价格", "建议竞价范围"},
         )
+    if scenario == "traffic-extend":
+        return TRAFFIC_EXTEND_COLUMNS
     if scenario == "traffic-source":
         return _columns_with_currency_titles(TRAFFIC_SOURCE_COLUMNS, currency, {"价格"})
     if scenario == "market-research":

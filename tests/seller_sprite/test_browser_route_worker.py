@@ -1118,6 +1118,65 @@ class _AssociationPageWithPrepareError(_AssociationPage):
         return _AssociationResponseWaiter(self.endpoint)
 
 
+class _TrafficExtendPrepareResponse:
+    """模拟拓展流量词准备接口成功响应。"""
+
+    url = "https://www.sellersprite.com/v3/api/traffic/extend/prepare"
+    status = 200
+
+    async def text(self):
+        return json.dumps(
+            {
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "variationResults": 2614,
+                    "diamondResults": 2483,
+                    "results": 2163,
+                    "diamondList": ["B089K9L3VY"],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+
+class _TrafficExtendPage:
+    """模拟拓展流量词查询入口页。"""
+
+    def __init__(self, endpoint):
+        self.endpoint = endpoint
+        self.fills = []
+        self.presses = []
+        self.clicks = []
+        self.timeout_calls = []
+
+    def expect_response(self, predicate, **kwargs):
+        prepare_response = _TrafficExtendPrepareResponse()
+        if predicate(prepare_response):
+            return _AssociationResponseWaiter(self.endpoint, response=prepare_response)
+        return _AssociationResponseWaiter(self.endpoint)
+
+    def locator(self, selector):
+        if ".el-select-dropdown__item" in selector and "2026-06" in selector:
+            return _AssociationLocator(self, "period_2026-06")
+        if ".date-select" in selector:
+            return _AssociationLocator(self, "period_select")
+        if ("input" in selector or "textarea" in selector) and "ASIN" in selector:
+            return _AssociationLocator(self, "asin")
+        if "用全部变体拓词" in selector:
+            return _AssociationLocator(self, "all_variants")
+        if "用畅销变体拓词" in selector:
+            return _AssociationLocator(self, "sell_well")
+        if "用当前变体拓词" in selector:
+            return _AssociationLocator(self, "current")
+        if "立即查询" in selector:
+            return _AssociationLocator(self, "query")
+        return _AssociationLocator(self, "missing")
+
+    async def wait_for_timeout(self, timeout):
+        self.timeout_calls.append(timeout)
+
+
 class _KeywordComparisonPrepareResponse:
     """模拟流量词对比准备接口响应。"""
 
@@ -2376,6 +2435,108 @@ def test_association_traffic_route_fills_asins_and_selects_all_variants(tmp_path
     assert page.fills == request.payload["asinList"]
     assert page.presses == ["Enter"] * 5
     assert page.clicks == ["clear", "query", "all_variants"]
+
+
+def test_traffic_extend_route_fills_asins_and_defaults_to_all_variants(tmp_path):
+    endpoint = "/v3/api/traffic/extend/asin"
+    page = _TrafficExtendPage(endpoint)
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="traffic-extend",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asinList": ["B089K9L3VY", "B07F8S18D5"],
+            "originAsinList": ["B089K9L3VY", "B07F8S18D5"],
+            "queryVariations": True,
+            "page": 1,
+            "size": 100,
+        },
+        referer="https://www.sellersprite.com/v3/traffic/extend/asin",
+        account=account,
+        root_dir=tmp_path,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "page_response"
+    assert page.fills == ["B089K9L3VY B07F8S18D5"]
+    assert page.clicks == ["query", "all_variants"]
+
+
+def test_traffic_extend_route_payload_keeps_page_variant_scope_and_first_page():
+    effective = worker_module._traffic_extend_route_payload(
+        {
+            "originAsinList": ["B089K9L3VY"],
+            "asinList": ["B089K9L3VY"],
+            "queryVariations": True,
+            "page": 3,
+            "size": 20,
+            "market": 1,
+        },
+        json.dumps(
+            {
+                "asinList": ["B07F8S18D5"],
+                "originAsinList": ["B089K9L3VY"],
+                "queryVariations": False,
+                "page": 9,
+                "size": 50,
+            }
+        ),
+    )
+
+    assert effective["asinList"] == ["B07F8S18D5"]
+    assert effective["originAsinList"] == ["B089K9L3VY"]
+    assert effective["queryVariations"] is False
+    assert effective["page"] == 1
+    assert effective["size"] == 100
+
+
+def test_traffic_extend_route_selects_historical_period_before_prepare(tmp_path):
+    endpoint = "/v3/api/traffic/extend/asin"
+    page = _TrafficExtendPage(endpoint)
+    account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+    request = worker_module.BrowserRouteRequest(
+        scenario="traffic-extend",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "asinList": ["B089K9L3VY"],
+            "originAsinList": ["B089K9L3VY"],
+            "month": "202606",
+            "page": 1,
+            "size": 100,
+        },
+        referer="https://www.sellersprite.com/v3/traffic/extend?marketId=1",
+        account=account,
+        root_dir=tmp_path,
+    )
+
+    _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert page.clicks == [
+        "period_select",
+        "period_2026-06",
+        "query",
+        "all_variants",
+    ]
 
 
 def test_association_traffic_route_propagates_prepare_business_error(tmp_path):

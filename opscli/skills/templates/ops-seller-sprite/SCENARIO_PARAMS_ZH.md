@@ -13,6 +13,7 @@
 | ABA 数据选品 / ABA 关键词趋势 / ABA research | `aba-research` |
 | 全球商标库 / 商标查询 / brand database | `branddb` |
 | 关联流量 / 关联产品 / 查关联 ASIN / association traffic | `association-traffic` |
+| 拓展流量词 / 多 ASIN 拓词 / expand traffic keywords | `traffic-extend` |
 | 流量词对比 / 竞品关键词对比 / 竞品关键词差距 / keyword comparison | `keyword-comparison` |
 | 出单词反查 / ABA 反查 / ABA reverse | `aba-reverse` |
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
@@ -42,6 +43,7 @@
 - `keyword-research` 的 `period` 表示数据月份，使用 `YYYY-MM`；不要把公共默认 `30d` 当作月份。未指定时使用后端返回的最新可用月份，不硬编码页面月份选项。
 - `keyword-research` 默认使用 `page=1/page_size=100`，只获取第一页后完成任务，不自动续页。
 - `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换。
+- `traffic-extend` 仅支持 `browser-route`，固定 `page=1/size=100`；变体默认 `all`，可选 `sell_well` / `current`，不自动翻页、不调用官网全量导出。
 - `keyword-comparison` 仅支持 `browser-route` 和默认“流量占比”；固定 `page=1/size=100`，未指定变体时自动选择“用畅销变体拓词”，明确要求时可选择“用当前变体拓词”，不自动翻页、不调用官网额度型导出。
 - `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；固定只请求第一页 100 条，忽略公共分页覆盖值，并在本地生成 `.xlsx`。
 - `aba-reverse` 未提供 `period`（或收到公共默认 `30d`）时，默认选择每周和最近完整周；显式周期可传具体周结束日或月份。只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
@@ -60,6 +62,7 @@
 - `keyword-reverse` 必须有 `asin`。
 - `traffic-source` 必须有关键词或 ASIN。
 - `association-traffic` 必须有 1—20 个合法 ASIN；可传数组，也可传逗号、换行、制表符或 TXT/Excel 按列复制文本。
+- `traffic-extend` 必须有 1—20 个合法 ASIN；可传数组，也可传空格、逗号、换行、制表符或 TXT/Excel 按列复制文本。
 - `keyword-comparison` 必须分别提供 1 个自己的 ASIN 和 1—10 个竞品 ASIN；竞品不得包含自己的 ASIN，支持列表、空格、中英文逗号、换行或制表符分隔。
 - `aba-research` 必须有父/子 ASIN 或关键词，可使用 `q`、`keywordOrAsin`、`keyword` 或 `asin`。
 - `aba-reverse` 必须有 1—20 个 ASIN 或 Amazon 产品链接；周期可省略，默认使用每周和最近完整周。
@@ -67,6 +70,7 @@
 - `product-research`、`market-research`、`keyword-research` 虽然没有硬性必填，但用户只说“跑一下”“看下市场”时仍应先确认意图。
 - `keyword-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-miner` 冒充。
 - `association-traffic` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `traffic-source` 冒充。
+- `traffic-extend` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能批量调用 `keyword-reverse` 冒充。
 - `keyword-comparison` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能批量调用 `keyword-reverse` 冒充正式对比结果。
 - `aba-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-research` 或 `aba-reverse` 冒充。
 - `aba-reverse` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-reverse` 冒充。
@@ -82,6 +86,7 @@
 | `aba-research` | 父/子 ASIN 或关键词 | `departments`、`rankGrowthType`、排序、搜索结果范围筛选 | 周/月 ABA 周期；固定第一页 100 条；本地生成 XLSX |
 | `branddb` | `text` | `feature`、`office`、`brandName`、`status`、`applicant`、`niceClass`、`applicationYear`、`expiryYear`、排序、`ids` | browser-route 直接请求；120 秒；官方 XLSX；不可自动重试 |
 | `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；只取第一页；`page_size=100` |
+| `traffic-extend` | `asins`，1—20 个 | `site`、`period`、`variantSelection` | 仅 browser-route；变体默认 `all`，可选 `sell_well/current`；第一页 100 条；本地生成四工作表 |
 | `keyword-comparison` | `ownAsin` 1 个；`competitorAsins` 1—10 个 | `site`、`variantSelection` | 仅 browser-route 和流量占比；变体默认 `sell_well`，可选 `current`；固定第一页 100 条；本地生成 XLSX |
 | `aba-reverse` | `asin` / `asins` / 产品链接，1—20 个 | `period`、`reverseType`、`orderField`、`orderDesc`、`conversionType`、`loadVariations` | 默认每周和最近完整周；直接保存官方完整 XLSX |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
@@ -285,6 +290,25 @@
 - 工作表名复现官网批量导出的 `Related-首个ASIN-batch(输入数)(31` 可见格式。
 - 本地工作簿只生成业务主表，不生成官网导出中的 `Notes` 页。
 - 官方参考文件为 `.xlsx`；若请求仍使用兼容值 `export_format=xls`，以工具返回的真实文件名和格式为准。
+
+## `traffic-extend` 拓展流量词
+
+### 输入与边界
+
+| 中文含义 | 字段 | 规则 |
+| --- | --- | --- |
+| ASIN | `params.asins`，兼容单个 `asin` | 1—20 个父体或子体 ASIN；支持数组、空格、逗号、换行、制表符和 TXT/Excel 按列粘贴 |
+| 站点 | 顶层 `site` | 默认 `US` |
+| 周期 | 顶层 `period` | 默认 `30d`；历史月份可用 `YYYY-MM` |
+| 变体拓词 | `params.variantSelection` | `all` / `sell_well` / `current`；省略时默认 `all` |
+
+### 页面、分页与导出
+
+1. browser-route 填写 ASIN，点击“立即查询”并捕获 `POST /v3/api/traffic/extend/prepare`。
+2. 默认点击“用全部变体拓词”；明确指定时点击“用畅销变体拓词”或“用当前变体拓词”。
+3. 捕获 `POST /v3/api/traffic/extend/asin`，固定 `page=1`、`size=100`，不请求后续页。
+4. 查询 JSON 在本地生成官方 33 列主表、基于当前 100 条关键词统计的 `Unique Words`、原始输入 `Asin` 和静态说明 `Notes`。
+5. 不调用 `/asin/async-export`，因此不会触发官方全量导出；实时计算字段可能与历史官方文件存在时点差异。
 
 ## `keyword-comparison` 流量词对比
 

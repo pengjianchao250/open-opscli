@@ -109,6 +109,8 @@ class BrowserRouteRequest:
     replay_safe: bool = True
     # 流量词对比页面弹窗的变体选择，默认使用畅销变体拓词。
     keyword_comparison_variant: str = "sell_well"
+    # 拓展流量词页面弹窗的变体选择，默认使用全部变体拓词。
+    traffic_extend_variant: str = "all"
 
 
 @dataclass
@@ -1290,6 +1292,17 @@ class SellerSpriteBrowserRouteWorker:
                     return
                 if route_metadata is not None:
                     route_metadata["asinList"] = list(effective_payload["asinList"])
+            elif request and request.scenario == "traffic-extend":
+                try:
+                    effective_payload = _traffic_extend_route_payload(
+                        payload,
+                        intercepted_request.post_data,
+                    )
+                except SellerSpriteApiError as exc:
+                    if not route_error.done():
+                        route_error.set_exception(exc)
+                    await route.abort("blockedbyclient")
+                    return
             await route.continue_(
                 url=_absolute_url(endpoint),
                 method="POST",
@@ -1409,6 +1422,49 @@ def _keyword_comparison_route_payload(
         )
     # 页面只能覆盖 prepare 生成的 asinList，其他筛选和分页继续以后端校验结果为准。
     return {**payload, "asinList": asin_list, "page": 1, "size": 100}
+
+
+def _traffic_extend_route_payload(
+    payload: dict[str, Any],
+    post_data: str | None,
+) -> dict[str, Any]:
+    """保留页面变体按钮生成的范围，同时锁定第一页 100 条。"""
+    try:
+        page_payload = json.loads(post_data or "")
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise SellerSpriteApiError(
+            "卖家精灵拓展流量词主请求体不是合法 JSON",
+            api_code="ERR_TRAFFIC_EXTEND_REQUEST_BODY",
+        ) from exc
+    if not isinstance(page_payload, dict):
+        raise SellerSpriteApiError(
+            "卖家精灵拓展流量词主请求体无效",
+            api_code="ERR_TRAFFIC_EXTEND_REQUEST_BODY",
+        )
+    asin_values = page_payload.get("asinList")
+    asin_list = (
+        [str(value).strip().upper() for value in asin_values]
+        if isinstance(asin_values, list)
+        else []
+    )
+    if (
+        not asin_list
+        or len(asin_list) > 20
+        or len(set(asin_list)) != len(asin_list)
+        or any(not re.fullmatch(r"[A-Z0-9]{10}", asin) for asin in asin_list)
+    ):
+        raise SellerSpriteApiError(
+            "卖家精灵拓展流量词变体 ASIN 列表无效",
+            api_code="ERR_TRAFFIC_EXTEND_ASIN_LIST",
+        )
+    return {
+        **payload,
+        "asinList": asin_list,
+        "originAsinList": list(payload.get("originAsinList") or asin_list),
+        "queryVariations": bool(page_payload.get("queryVariations")),
+        "page": 1,
+        "size": 100,
+    }
 
 
 def _is_target_closed_error(exc: Exception) -> bool:
@@ -2035,6 +2091,9 @@ async def _trigger_request(
     keyword_comparison_interaction = bool(
         request and request.scenario == "keyword-comparison"
     )
+    traffic_extend_interaction = bool(
+        request and request.scenario == "traffic-extend"
+    )
     try:
         if keyword_comparison_interaction:
             # prepare 和弹窗等待不应占用主接口响应预算；只在最终变体按钮点击前监听主响应。
@@ -2054,6 +2113,18 @@ async def _trigger_request(
                 stage_started_at,
                 status=getattr(response, "status", None),
             )
+            return response, "page_response"
+        if traffic_extend_interaction:
+            # prepare 完成后才监听主接口，避免弹窗等待消耗主响应预算。
+            response = await _trigger_traffic_extend_query(
+                page,
+                payload,
+                endpoint=endpoint,
+                variant_selection=request.traffic_extend_variant,
+                root_dir=request.root_dir,
+            )
+            if response is None:
+                raise _NoQueryButtonError()
             return response, "page_response"
 
         response_timeout = 30000 if association_traffic_interaction else 15000
@@ -2114,6 +2185,15 @@ async def _trigger_request(
                 "卖家精灵关联流量页面交互后未捕获主查询响应",
                 response_excerpt=f"endpoint={endpoint}",
                 api_code="ERR_ASSOCIATION_TRAFFIC_RESPONSE_MISSED",
+                api_message="页面交互已完成，不再自动 fallback 重复查询。",
+            ) from exc
+        if traffic_extend_interaction:
+            if isinstance(exc, SellerSpriteApiError):
+                raise
+            raise SellerSpriteApiError(
+                "卖家精灵拓展流量词页面交互后未捕获主查询响应",
+                response_excerpt=f"endpoint={endpoint}",
+                api_code="ERR_TRAFFIC_EXTEND_RESPONSE_MISSED",
                 api_message="页面交互已完成，不再自动 fallback 重复查询。",
             ) from exc
         if keyword_comparison_interaction:
@@ -2670,6 +2750,126 @@ async def _trigger_association_traffic_query(
         )
     await all_variants_button.click(timeout=5000)
     return True
+
+
+async def _trigger_traffic_extend_query(
+    page,
+    payload: dict[str, Any],
+    *,
+    endpoint: str,
+    variant_selection: str,
+    root_dir: Path,
+) -> Any:
+    """填写拓展流量词条件并选择指定变体模式。"""
+    asin_values = payload.get("originAsinList") or payload.get("asinList")
+    asins = (
+        [str(value).strip().upper() for value in asin_values if str(value).strip()]
+        if isinstance(asin_values, list)
+        else []
+    )
+    if not asins:
+        return False
+    await _select_traffic_extend_period(page, payload.get("month"))
+    input_box = await _first_visible_page_locator(
+        page,
+        [
+            "textarea[placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if input_box is None:
+        return False
+    await input_box.fill(" ".join(asins))
+
+    query_button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('立即查询')",
+            "[role='button']:visible:has-text('立即查询')",
+            ".el-button:visible:has-text('立即查询')",
+        ],
+    )
+    if query_button is None:
+        return False
+    # prepare 的业务结果决定弹窗是否可用；必须先完成解析，失败时不得继续点击变体。
+    async with page.expect_response(
+        lambda response: _same_endpoint(
+            response.url,
+            "/v3/api/traffic/extend/prepare",
+        ),
+        timeout=15000,
+    ) as prepare_info:
+        await query_button.click(timeout=5000)
+    prepare_response = await prepare_info.value
+    await _parse_response(
+        prepare_response,
+        method="POST",
+        root_dir=root_dir,
+        section="traffic_extend_prepare",
+    )
+
+    button_text = {
+        "sell_well": "用畅销变体拓词",
+        "current": "用当前变体拓词",
+    }.get(variant_selection, "用全部变体拓词")
+    variant_button = None
+    # Element UI 弹窗有过渡动画，最多等待 15 秒；期间不占用主接口响应预算。
+    for _ in range(30):
+        variant_button = await _first_visible_page_locator(
+            page,
+            [
+                f"button:visible:has-text('{button_text}')",
+                f"[role='button']:visible:has-text('{button_text}')",
+                f".el-button:visible:has-text('{button_text}')",
+            ],
+        )
+        if variant_button is not None:
+            break
+        await page.wait_for_timeout(500)
+    if variant_button is None:
+        raise SellerSpriteApiError(
+            f"拓展流量词页面未出现“{button_text}”按钮",
+            api_code="ERR_TRAFFIC_EXTEND_VARIANT_DIALOG",
+        )
+    # 只在最终按钮点击前监听主接口，并且只点击一次，避免重复查询。
+    async with page.expect_response(
+        lambda response: _same_endpoint(response.url, endpoint),
+        timeout=DEFAULT_TIMEOUT_MS,
+    ) as main_info:
+        await variant_button.click(timeout=5000)
+    return await main_info.value
+
+
+async def _select_traffic_extend_period(page, month: Any) -> None:
+    """在点击 prepare 前同步历史周期，最近 30 天无需操作页面。"""
+    text = str(month or "").strip()
+    if not text:
+        return
+    if re.fullmatch(r"\d{6}", text):
+        text = f"{text[:4]}-{text[4:]}"
+    period_select = await _first_visible_page_locator(
+        page,
+        [".date-select input[placeholder='请选择']:visible"],
+    )
+    if period_select is None:
+        raise SellerSpriteApiError(
+            "拓展流量词页面未找到周期选择器",
+            api_code="ERR_TRAFFIC_EXTEND_PERIOD_SELECT",
+        )
+    await period_select.click(timeout=5000)
+    period_option = await _first_visible_page_locator(
+        page,
+        [
+            f".el-select-dropdown__item:visible:has-text('{text}')",
+        ],
+    )
+    if period_option is None:
+        raise SellerSpriteApiError(
+            f"拓展流量词页面不支持周期：{text}",
+            api_code="ERR_TRAFFIC_EXTEND_PERIOD_OPTION",
+        )
+    # 周期由页面状态写入 prepare；主请求重写不能替代这一步，否则畅销变体范围会错期。
+    await period_option.click(timeout=5000)
 
 
 async def _first_visible_page_locator(page, selectors: list[str]):

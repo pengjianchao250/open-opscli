@@ -35,6 +35,8 @@ def export_rows_to_xlsx(
         raise SellerSpriteConfigError("缺少 openpyxl 依赖，无法导出 XLSX") from exc
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if scenario == "traffic-extend":
+        rows = rows[:100]
     columns = columns_for_scenario(scenario, site)
     if not columns:
         columns = [ExportColumn(dictionary_title, dictionary_title) for dictionary_title in _collect_fields(rows)]
@@ -46,9 +48,21 @@ def export_rows_to_xlsx(
     keyword_research = scenario == "keyword-research"
     aba_research = scenario == "aba-research"
     association_traffic = scenario == "association-traffic"
+    traffic_extend = scenario == "traffic-extend"
     official_orange_header = keyword_research or aba_research or association_traffic
-    header_fill = PatternFill("solid", fgColor="FFE98A00" if official_orange_header else "EAF2F8")
-    header_font = Font(name="Calibri", size=10, bold=False) if official_orange_header else Font(bold=True)
+    header_fill = PatternFill(
+        "solid",
+        fgColor=(
+            "FFC00000"
+            if traffic_extend
+            else ("FFE98A00" if official_orange_header else "EAF2F8")
+        ),
+    )
+    header_font = (
+        Font(name="Calibri", size=10, bold=False)
+        if official_orange_header
+        else Font(bold=True, color="FFFFFFFF" if traffic_extend else None)
+    )
     for column_index, column in enumerate(columns, start=1):
         cell = sheet.cell(row=1, column=column_index, value=column.title)
         cell.font = header_font
@@ -66,6 +80,8 @@ def export_rows_to_xlsx(
                 _apply_aba_research_style(cell, column_index)
             elif association_traffic:
                 _apply_association_traffic_number_format(cell, column_index)
+            elif traffic_extend:
+                _apply_traffic_extend_number_format(cell, column_index)
             else:
                 _apply_number_format(cell)
         if association_traffic:
@@ -79,13 +95,23 @@ def export_rows_to_xlsx(
             width = ABA_RESEARCH_COLUMN_WIDTHS[column_index - 1]
         elif association_traffic:
             width = ASSOCIATION_TRAFFIC_COLUMN_WIDTHS[column_index - 1]
+        elif traffic_extend:
+            width = TRAFFIC_EXTEND_COLUMN_WIDTHS[column_index - 1]
         else:
             width = _column_width(column.title)
         sheet.column_dimensions[get_column_letter(column_index)].width = width
 
     if aba_research:
         _apply_aba_research_sheet_style(sheet)
-    if high_frequency_rows:
+    if traffic_extend:
+        _add_high_frequency_sheet(
+            workbook,
+            _traffic_extend_word_frequency(rows),
+            traffic_extend_style=True,
+        )
+        _add_asin_sheet(workbook, (params or {}).get("asins") or (params or {}).get("asin"))
+        _add_traffic_extend_notes_sheet(workbook)
+    elif high_frequency_rows:
         _add_high_frequency_sheet(workbook, high_frequency_rows)
     workbook.save(output_path)
     resolved_output = output_path.resolve()
@@ -194,6 +220,8 @@ def _apply_transform(value: Any, transform: str | None, row: dict[str, Any], *, 
         return _aba_list_text(value, separator="; ")
     if transform == "asinList":
         return _asin_list(value)
+    if transform == "listLength":
+        return len(value) if isinstance(value, list) else 0
     if transform == "listJoin":
         return _list_join(value)
     if transform == "badgeLabels":
@@ -320,6 +348,19 @@ def _apply_association_traffic_number_format(cell, column_index: int) -> None:
     cell.number_format = formats.get(column_index, "#,##0")
 
 
+def _apply_traffic_extend_number_format(cell, column_index: int) -> None:
+    """按官方拓展流量词工作簿设置百分比和数值格式。"""
+    if not isinstance(cell.value, Real) or isinstance(cell.value, bool):
+        return
+    percentage_columns = {4, 12, 20, 21, 25, 26, 28, 29, 31, 32}
+    if column_index in percentage_columns:
+        cell.number_format = "0.00%"
+    elif column_index == 18:
+        cell.number_format = "0.00"
+    else:
+        cell.number_format = "#,##0"
+
+
 def _apply_association_traffic_hyperlinks(sheet, row_index: int, row: dict[str, Any]) -> None:
     """补齐官方工作簿中 ASIN、主图、父体和大类目的可点击链接。"""
     asin = row.get("asin")
@@ -344,7 +385,12 @@ def _apply_association_traffic_hyperlinks(sheet, row_index: int, row: dict[str, 
         cell.style = "Hyperlink"
 
 
-def _add_high_frequency_sheet(workbook, rows: list[dict[str, Any]]) -> None:
+def _add_high_frequency_sheet(
+    workbook,
+    rows: list[dict[str, Any]],
+    *,
+    traffic_extend_style: bool = False,
+) -> None:
     from openpyxl.styles import Font
 
     sheet = workbook.create_sheet("Unique Words")
@@ -357,10 +403,61 @@ def _add_high_frequency_sheet(workbook, rows: list[dict[str, Any]]) -> None:
         frequency_cell = sheet.cell(row=row_index, column=2, value=row.get("frequency") or row.get("出现频次"))
         percentage_cell = sheet.cell(row=row_index, column=3, value=row.get("percentage") or row.get("百分比"))
         _apply_number_format(frequency_cell)
-        _apply_number_format(percentage_cell)
-    sheet.column_dimensions["A"].width = 24
-    sheet.column_dimensions["B"].width = 14
-    sheet.column_dimensions["C"].width = 14
+        if traffic_extend_style:
+            percentage_cell.number_format = "0.00%"
+        else:
+            _apply_number_format(percentage_cell)
+    sheet.column_dimensions["A"].width = 19 if traffic_extend_style else 24
+    sheet.column_dimensions["B"].width = 18.6725663716814 if traffic_extend_style else 14
+    sheet.column_dimensions["C"].width = 20 if traffic_extend_style else 14
+
+
+def _traffic_extend_word_frequency(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """根据当前导出的 100 条关键词生成词频表。"""
+    counts: dict[str, int] = {}
+    total = 0
+    for row in rows:
+        keywords = str(row.get("keywords") or "").lower()
+        for word in re.findall(r"[a-z0-9]+(?:['-][a-z0-9]+)*", keywords):
+            counts[word] = counts.get(word, 0) + 1
+            total += 1
+    return [
+        {
+            "keyword": word,
+            "frequency": frequency,
+            "percentage": frequency / total if total else 0,
+        }
+        for word, frequency in sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+    ]
+
+
+def _add_asin_sheet(workbook, value: Any) -> None:
+    """写入拓展流量词的原始 ASIN 列表。"""
+    from openpyxl.styles import Font
+
+    sheet = workbook.create_sheet("Asin")
+    sheet.cell(row=1, column=1, value="ASIN").font = Font(bold=True)
+    for row_index, asin in enumerate(split_association_traffic_asins(value), start=2):
+        sheet.cell(row=row_index, column=1, value=asin)
+    sheet.column_dimensions["A"].width = 19
+
+
+def _add_traffic_extend_notes_sheet(workbook) -> None:
+    """写入与官网导出用途一致的静态说明页。"""
+    sheet = workbook.create_sheet("Notes")
+    notes = [
+        "卖家精灵官网：https://www.sellersprite.com",
+        "客服电话：139-8227-0926(谭先生)",
+        "微信客服：",
+        "备注：评分，评论，问答，变体，卖家等数据都是取的“最近更新”当日的数字。",
+        "选 词 选 品 选 市 场，就 上 卖 家 精 灵",
+    ]
+    for row_index, note in enumerate(notes, start=1):
+        sheet.cell(row=row_index, column=1, value=note)
+    sheet.column_dimensions["A"].width = 150
 
 
 def _main_sheet_title(*, scenario: str, site: str, period: str, params: dict[str, Any], rows: list[dict[str, Any]]) -> str:
@@ -379,6 +476,10 @@ def _main_sheet_title(*, scenario: str, site: str, period: str, params: dict[str
         first_asin = asins[0] if asins else "ASIN"
         # 官网批量导出的主表名以 ``(31`` 收尾，本地保持相同可见命名。
         title = f"Related-{first_asin}-batch({len(asins)})(31"
+    elif scenario == "traffic-extend":
+        asins = split_association_traffic_asins(params.get("asins") or params.get("asin"))
+        first_asin = asins[0] if asins else "ASIN"
+        title = f"{site.upper()}-{first_asin}({len(asins)})__"
     elif scenario == "product-research":
         title = f"Product-{site.upper()}-{_period_label(period)}"
     elif scenario == "competitor-lookup":
@@ -453,6 +554,16 @@ ASSOCIATION_TRAFFIC_COLUMN_WIDTHS = [
     15, 11, 13.353982300885, 11, 10, 13, 11, 13, 13, 13, 15, 13, 11, 11.0088495575221,
     9, 11, 13, 18, 13, 38, 12, 15, 13, 13, 10, 13, 13, 13.5132743362832, 13, 13,
     13, 13, 13, 13, 13, 13.5132743362832, 12.7610619469027,
+]
+
+
+# 列宽来自官方 ExpandKeywords-US-B089K9L3VY-batch(5)-202607-922297.xlsx。
+TRAFFIC_EXTEND_COLUMN_WIDTHS = [
+    26.5044247787611, 16.6725663716814, 13, 16.6725663716814, 16.6725663716814,
+    13, 13, 13, 13, 16.1681415929204, 15.6725663716814, 13, 13, 13, 13, 13,
+    14.6725663716814, 13.8495575221239, 13, 13, 18.6725663716814,
+    12.353982300885, 16.6725663716814, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    118.353982300885,
 ]
 
 

@@ -9,6 +9,94 @@ from opscli.seller_sprite.export.keyword_comparison_xlsx import (
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
 
 
+def test_traffic_extend_export_matches_official_four_sheet_contract(tmp_path: Path):
+    output = tmp_path / "traffic-extend.xlsx"
+    rows = [
+        {
+            "keywords": "phone stand",
+            "keywordCn": "手机支架",
+            "ac": 79,
+            "trafficPercentage": 0.2737,
+            "badges": ["NATURAL_SEARCHING", "ADS"],
+            "calculatedWeeklySearches": 341698,
+            "relationVariationsItems": [
+                {"asin": "B089K9L3VY"},
+                {"asin": "B07F8S18D5"},
+            ],
+            "searchesRank": 2488,
+            "searches": 201870,
+            "purchases": 8680,
+            "purchaseRate": 0.043,
+            "impressions": 4726178,
+            "clicks": 77948,
+            "cprExact": 197,
+            "titleDensityExact": 28,
+            "products": 93795,
+            "supplyDemandRatio": 2.15,
+            "latest7daysAds": 429,
+            "top3ClickingRate": 0.2107,
+            "top3ConversionRate": 0.1712,
+            "bid": 1.12,
+            "bidMin": 0.88,
+            "bidMax": 1.31,
+            "clickTop3s": [
+                {"asin": "B000000001", "clickRate": 0.1, "conversionRate": 0.08},
+                {"asin": "B000000002", "clickRate": 0.07, "conversionRate": 0.05},
+                {"asin": "B000000003", "clickRate": 0.04, "conversionShareRate": 0.03},
+            ],
+            "gkDatas": [{"asin": "B000000001"}, {"asin": "B000000004"}],
+        }
+    ] + [{"keywords": f"phone accessory {index}"} for index in range(100)]
+
+    export_rows_to_xlsx(
+        rows=rows,
+        output_path=output,
+        scenario="traffic-extend",
+        site="US",
+        params={"asins": ["B089K9L3VY", "B07F8S18D5"]},
+    )
+
+    workbook = load_workbook(output, data_only=True)
+    assert workbook.sheetnames == [
+        "US-B089K9L3VY(2)__",
+        "Unique Words",
+        "Asin",
+        "Notes",
+    ]
+    sheet = workbook["US-B089K9L3VY(2)__"]
+    assert sheet.max_row == 101
+    headers_path = (
+        Path(__file__).resolve().parents[2]
+        / "opscli/seller_sprite/reference/scenarios/traffic-extend/official-headers.json"
+    )
+    assert [cell.value for cell in sheet[1]] == json.loads(
+        headers_path.read_text(encoding="utf-8")
+    )
+    assert sheet["A2"].value == "phone stand"
+    assert sheet["G2"].value == 2
+    assert sheet["H2"].value == "B089K9L3VY,B07F8S18D5"
+    assert sheet["V2"].value == "$1.12"
+    assert sheet["W2"].value == "$0.88-$1.31"
+    assert sheet["D2"].number_format == "0.00%"
+    assert sheet["L2"].number_format == "0.00%"
+    assert sheet["A1"].font.color.rgb == "FFFFFFFF"
+    assert sheet.column_dimensions["A"].width == 26.5044247787611
+    assert sheet.column_dimensions["AG"].width == 118.353982300885
+    assert sheet["X2"].value == "B000000001"
+    assert sheet["AF2"].value == 0.03
+    assert sheet["AG2"].value == "B000000001,B000000004"
+
+    unique_words = workbook["Unique Words"]
+    assert [cell.value for cell in unique_words[1]][:3] == ["词语", "出现频次", "百分比"]
+    assert unique_words["A2"].value == "phone"
+    assert unique_words["B2"].value == 100
+    assert unique_words["C2"].number_format == "0.00%"
+    assert workbook["Asin"]["A1"].value == "ASIN"
+    assert workbook["Asin"]["A2"].value == "B089K9L3VY"
+    assert workbook["Asin"]["A3"].value == "B07F8S18D5"
+    assert workbook["Notes"]["A1"].value == "卖家精灵官网：https://www.sellersprite.com"
+
+
 def test_xlsx_export_writes_template_headers_without_notes(tmp_path: Path):
     output = tmp_path / "seller-sprite.xlsx"
 

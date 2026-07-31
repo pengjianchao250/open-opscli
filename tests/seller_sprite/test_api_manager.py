@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from openpyxl import load_workbook
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.config import SellerSpriteSettings
@@ -972,6 +973,75 @@ def test_manager_returns_only_first_association_page_in_browser_route_mode(monke
     assert result.row_count == 1
     assert [call["payload"]["pageNum"] for call in calls] == [1]
     assert all(call["payload"]["pageSize"] == 100 for call in calls)
+
+
+def test_manager_runs_traffic_extend_first_page_with_default_all_variants(
+    monkeypatch,
+    tmp_path: Path,
+):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "total": 2614,
+                    "items": [
+                        {"keywords": f"keyword {index}"}
+                        for index in range(101)
+                    ],
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(
+        api_manager_module,
+        "_run_browser_route_request",
+        fake_browser_route_request,
+    )
+    settings = SellerSpriteSettings(
+        output_dir=tmp_path,
+        username=None,
+        password=None,
+        default_mode="browser-route",
+    )
+    manager = SellerSpriteApiManager(
+        settings=settings,
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="traffic-extend",
+                site="US",
+                period="30d",
+                params={"asins": ["B089K9L3VY"]},
+                page_size=20,
+                job_id="job-traffic-extend",
+                export_format="xlsx",
+            )
+        )
+    )
+
+    assert result.row_count == 100
+    assert len(result.data) == 100
+    assert calls[0]["payload"]["page"] == 1
+    assert calls[0]["payload"]["size"] == 100
+    assert calls[0]["payload"]["queryVariations"] is True
+    assert calls[0]["traffic_extend_variant"] == "all"
+    workbook = load_workbook(result.export.path, read_only=True)
+    assert workbook.sheetnames == [
+        "US-B089K9L3VY(1)__",
+        "Unique Words",
+        "Asin",
+        "Notes",
+    ]
 
 
 def test_manager_normalizes_competitor_lookup_singular_asin_before_api_call(monkeypatch, tmp_path: Path):

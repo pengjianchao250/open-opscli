@@ -16,9 +16,67 @@ from opscli.seller_sprite.api.payloads import (
     make_keyword_reverse_payload,
     make_listing_analysis_payload,
     make_product_research_payload,
+    make_traffic_extend_payload,
 )
 from opscli.seller_sprite.api.scenarios import get_scenario
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+
+
+def test_traffic_extend_scenario_builds_first_page_all_variants_payload():
+    scenario = get_scenario("traffic-extend")
+
+    payload = scenario.build_payload(
+        params={"asins": "B089K9L3VY B07F8S18D5"},
+        site="US",
+        period="30d",
+        page_size=100,
+    )
+
+    assert scenario.endpoint == "/v3/api/traffic/extend/asin"
+    assert scenario.browser_context_only is True
+    assert payload == {
+        "queryVariations": True,
+        "asinList": ["B089K9L3VY", "B07F8S18D5"],
+        "originAsinList": ["B089K9L3VY", "B07F8S18D5"],
+        "market": 1,
+        "page": 1,
+        "month": "",
+        "size": 100,
+        "orderColumn": 12,
+        "desc": True,
+        "exactly": False,
+        "ac": False,
+    }
+    referer = scenario.build_referer(payload)
+    assert referer.startswith("https://www.sellersprite.com/v3/traffic/extend?")
+    assert "q=" not in referer
+
+
+@pytest.mark.parametrize(
+    ("variant", "expected"),
+    [
+        (None, "all"),
+        ("all", "all"),
+        ("用全部变体拓词", "all"),
+        ("sell_well", "sell_well"),
+        ("用畅销变体拓词", "sell_well"),
+        ("current", "current"),
+        ("用当前变体拓词", "current"),
+    ],
+)
+def test_traffic_extend_variant_selection_supports_page_options(variant, expected):
+    params = {"asins": ["B089K9L3VY"]}
+    if variant is not None:
+        params["variantSelection"] = variant
+
+    assert payloads_module.traffic_extend_variant_selection(params) == expected
+
+
+def test_traffic_extend_rejects_more_than_twenty_asins():
+    asins = [f"B0000000{index:02d}" for index in range(21)]
+
+    with pytest.raises(SellerSpriteConfigError, match="最多支持 20 个 ASIN"):
+        make_traffic_extend_payload({"asins": asins, "site": "US", "period": "30d"})
 
 
 def test_branddb_scenario_builds_official_export_payload():
