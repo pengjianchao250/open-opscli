@@ -352,6 +352,7 @@ KEYWORD_CONVERSION_RATE_PERIOD_ALIASES = {
     "近90天": "90D",
 }
 
+# 站点集合来自关键词转化率页面 2026-07-31 实际可选项，用于在打开页面前拒绝无效站点。
 KEYWORD_CONVERSION_RATE_MARKETS = frozenset(
     {"US", "JP", "UK", "DE", "FR", "IT", "ES", "CA", "IN"}
 )
@@ -693,7 +694,17 @@ def make_traffic_extend_payload(input_data: dict[str, Any]) -> dict[str, Any]:
 def make_keyword_conversion_rate_payload(
     input_data: dict[str, Any],
 ) -> dict[str, Any]:
-    """构造关键词转化率第一页 100 条批量查询 payload。"""
+    """构造关键词转化率第一页 100 条批量查询 payload。
+
+    Args:
+        input_data: 包含站点、周期和 1—1000 个关键词词组的场景参数。
+
+    Returns:
+        固定第一页 100 条、精确竞价和全部关键词匹配口径的官网请求体。
+
+    Raises:
+        SellerSpriteConfigError: 关键词为空、超过 1000 个，或站点、周期不受支持。
+    """
     keywords = _keyword_conversion_rate_keywords(
         input_data.get("keywords")
         or input_data.get("keywordList")

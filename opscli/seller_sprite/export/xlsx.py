@@ -100,7 +100,6 @@ def export_rows_to_xlsx(
                 _apply_keyword_conversion_rate_number_format(
                     cell,
                     column_index,
-                    site=site,
                 )
             else:
                 _apply_number_format(cell)
@@ -385,8 +384,6 @@ def _apply_traffic_extend_number_format(cell, column_index: int) -> None:
 def _apply_keyword_conversion_rate_number_format(
     cell,
     column_index: int,
-    *,
-    site: str,
 ) -> None:
     """按关键词转化率业务含义设置百分比、货币和整数格式。"""
     if not isinstance(cell.value, Real) or isinstance(cell.value, bool):

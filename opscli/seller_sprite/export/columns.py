@@ -416,7 +416,16 @@ def columns_for_scenario(
     site: str,
     period: str | None = None,
 ) -> list[ExportColumn]:
-    """返回场景对应官方模板列。"""
+    """返回场景对应的官方模板列。
+
+    Args:
+        scenario: SellerSprite 场景标识。
+        site: 用于生成动态币种表头的站点代码。
+        period: 可选数据周期；关键词转化率用它切换周或近 90 天表头。
+
+    Returns:
+        按官方工作簿顺序排列的导出列定义；未知场景返回空列表。
+    """
     currency = currency_label(site)
     if scenario == "keyword-miner":
         return _columns_with_currency_titles(
