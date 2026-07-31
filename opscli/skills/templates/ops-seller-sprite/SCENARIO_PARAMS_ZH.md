@@ -86,7 +86,7 @@
 | `aba-research` | 父/子 ASIN 或关键词 | `departments`、`rankGrowthType`、排序、搜索结果范围筛选 | 周/月 ABA 周期；固定第一页 100 条；本地生成 XLSX |
 | `branddb` | `text` | `feature`、`office`、`brandName`、`status`、`applicant`、`niceClass`、`applicationYear`、`expiryYear`、排序、`ids` | browser-route 直接请求；120 秒；官方 XLSX；不可自动重试 |
 | `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；只取第一页；`page_size=100` |
-| `traffic-extend` | `asins`，1—20 个 | `site`、`period`、`variantSelection` | 仅 browser-route；变体默认 `all`，可选 `sell_well/current`；第一页 100 条；本地生成四工作表 |
+| `traffic-extend` | `asins`，1—20 个 | `site`、`period`、`variantSelection` | 仅 browser-route；变体默认 `all`，可选 `sell_well/current`；第一页 100 条；本地生成主表、`Unique Words` 和 `Asin` |
 | `keyword-comparison` | `ownAsin` 1 个；`competitorAsins` 1—10 个 | `site`、`variantSelection` | 仅 browser-route 和流量占比；变体默认 `sell_well`，可选 `current`；固定第一页 100 条；本地生成 XLSX |
 | `aba-reverse` | `asin` / `asins` / 产品链接，1—20 个 | `period`、`reverseType`、`orderField`、`orderDesc`、`conversionType`、`loadVariations` | 默认每周和最近完整周；直接保存官方完整 XLSX |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
@@ -307,7 +307,7 @@
 1. browser-route 填写 ASIN，点击“立即查询”并捕获 `POST /v3/api/traffic/extend/prepare`。
 2. 默认点击“用全部变体拓词”；明确指定时点击“用畅销变体拓词”或“用当前变体拓词”。
 3. 捕获 `POST /v3/api/traffic/extend/asin`，固定 `page=1`、`size=100`，不请求后续页。
-4. 查询 JSON 在本地生成官方 33 列主表、基于当前 100 条关键词统计的 `Unique Words`、原始输入 `Asin` 和静态说明 `Notes`。
+4. 查询 JSON 在本地生成官方 33 列主表、基于当前 100 条关键词统计的 `Unique Words` 和原始输入 `Asin`；不生成官网 `Notes` 页。
 5. 不调用 `/asin/async-export`，因此不会触发官方全量导出；实时计算字段可能与历史官方文件存在时点差异。
 
 ## `keyword-comparison` 流量词对比

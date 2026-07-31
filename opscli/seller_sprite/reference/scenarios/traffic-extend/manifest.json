@@ -44,7 +44,9 @@
     "sheets": [
       "main",
       "Unique Words",
-      "Asin",
+      "Asin"
+    ],
+    "excluded_sheets": [
       "Notes"
     ]
   },

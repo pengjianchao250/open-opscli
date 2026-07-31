@@ -9,7 +9,7 @@ from opscli.seller_sprite.export.keyword_comparison_xlsx import (
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
 
 
-def test_traffic_extend_export_matches_official_four_sheet_contract(tmp_path: Path):
+def test_traffic_extend_export_matches_three_sheet_business_contract(tmp_path: Path):
     output = tmp_path / "traffic-extend.xlsx"
     rows = [
         {
@@ -61,7 +61,6 @@ def test_traffic_extend_export_matches_official_four_sheet_contract(tmp_path: Pa
         "US-B089K9L3VY(2)__",
         "Unique Words",
         "Asin",
-        "Notes",
     ]
     sheet = workbook["US-B089K9L3VY(2)__"]
     assert sheet.max_row == 101
@@ -94,7 +93,7 @@ def test_traffic_extend_export_matches_official_four_sheet_contract(tmp_path: Pa
     assert workbook["Asin"]["A1"].value == "ASIN"
     assert workbook["Asin"]["A2"].value == "B089K9L3VY"
     assert workbook["Asin"]["A3"].value == "B07F8S18D5"
-    assert workbook["Notes"]["A1"].value == "卖家精灵官网：https://www.sellersprite.com"
+    assert "Notes" not in workbook.sheetnames
 
 
 def test_xlsx_export_writes_template_headers_without_notes(tmp_path: Path):

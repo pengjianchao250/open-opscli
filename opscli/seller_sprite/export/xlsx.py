@@ -110,7 +110,6 @@ def export_rows_to_xlsx(
             traffic_extend_style=True,
         )
         _add_asin_sheet(workbook, (params or {}).get("asins") or (params or {}).get("asin"))
-        _add_traffic_extend_notes_sheet(workbook)
     elif high_frequency_rows:
         _add_high_frequency_sheet(workbook, high_frequency_rows)
     workbook.save(output_path)
@@ -443,21 +442,6 @@ def _add_asin_sheet(workbook, value: Any) -> None:
     for row_index, asin in enumerate(split_association_traffic_asins(value), start=2):
         sheet.cell(row=row_index, column=1, value=asin)
     sheet.column_dimensions["A"].width = 19
-
-
-def _add_traffic_extend_notes_sheet(workbook) -> None:
-    """写入与官网导出用途一致的静态说明页。"""
-    sheet = workbook.create_sheet("Notes")
-    notes = [
-        "卖家精灵官网：https://www.sellersprite.com",
-        "客服电话：139-8227-0926(谭先生)",
-        "微信客服：",
-        "备注：评分，评论，问答，变体，卖家等数据都是取的“最近更新”当日的数字。",
-        "选 词 选 品 选 市 场，就 上 卖 家 精 灵",
-    ]
-    for row_index, note in enumerate(notes, start=1):
-        sheet.cell(row=row_index, column=1, value=note)
-    sheet.column_dimensions["A"].width = 150
 
 
 def _main_sheet_title(*, scenario: str, site: str, period: str, params: dict[str, Any], rows: list[dict[str, Any]]) -> str:

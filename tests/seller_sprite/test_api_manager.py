@@ -1040,7 +1040,6 @@ def test_manager_runs_traffic_extend_first_page_with_default_all_variants(
         "US-B089K9L3VY(1)__",
         "Unique Words",
         "Asin",
-        "Notes",
     ]
 
 

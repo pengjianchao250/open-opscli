@@ -26,7 +26,7 @@ metadata:
    - `export_format=xls`
    - `keyword-research` 例外：`period` 使用数据月份（`YYYY-MM`），不把 `30d` 当作月份；默认 `page=1/page_size=100`，只获取第一页。
    - `association-traffic` 使用公共默认 `page_size=100`，查询固定使用全部变体，不允许改成当前变体。
-   - `traffic-extend` 固定第一页 100 条；用户未指定变体时默认“用全部变体拓词”，也支持 `variantSelection=sell_well/current`；查询 JSON 后在本地生成主表、`Unique Words`、`Asin` 和 `Notes`。
+   - `traffic-extend` 固定第一页 100 条；用户未指定变体时默认“用全部变体拓词”，也支持 `variantSelection=sell_well/current`；查询 JSON 后在本地生成主表、`Unique Words` 和 `Asin`，不生成 `Notes`。
    - `keyword-comparison` 固定使用默认“流量占比”和第一页 100 条；用户未指定时自动选择“用畅销变体拓词”，明确要求当前变体时传 `variantSelection=current`，查询 JSON 后在本地生成动态 XLSX，不调用官网额度型导出。
    - `aba-research` 未提供周期时默认最近完整周；固定 `page=1/size=100` 且只查一次，捕获查询 JSON 后在本地生成官方 19 列 XLSX，不调用官网导出接口。
    - `aba-reverse` 未提供周期时默认选择每周和最近完整周；显式周期仍支持具体周结束日或月份。只支持 `xls` / `xlsx`，由后端原样保存官方 XLSX。
@@ -165,6 +165,6 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - 普通任务等待到期不会取消、标记失败或重新入队；继续保留全部未完成 `job_id`，不得重新提交，也不得调用 `run` 查状态。
 - `aba-research` 固定只取第一页 100 条，`row_count` 是第一页实际返回行数；本地 XLSX 不消耗官网导出次数。
 - `keyword-comparison` 仅返回默认“流量占比”第一页最多 100 条；本地 XLSX 包含动态业务主表和 `ASIN` 辅助表，不包含 `Notes`，不得宣称已取得自然排名、广告排名、转化效果或曝光位置视图。
-- `traffic-extend` 只返回第一页最多 100 条；本地 XLSX 包含官方 33 列主表、基于当前 100 条计算的 `Unique Words`、`Asin` 和 `Notes`，不调用官网全量导出。
+- `traffic-extend` 只返回第一页最多 100 条；本地 XLSX 包含官方 33 列主表、基于当前 100 条计算的 `Unique Words` 和 `Asin`，不包含 `Notes`，不调用官网全量导出。
 - 一般场景 `row_count=0` 时，要明确告诉用户没有查到数据；`aba-reverse` 例外，其官方 XLSX 不做本地解析，`row_count=0` 不代表工作簿为空，应以导出文件为准。
 - 用户后来只说 `继续`、`查结果`、`刚才那个好了没` 时，恢复并查询完整 pending 集合；只有用户明确指定子集时才缩小范围。
