@@ -1177,6 +1177,90 @@ class _TrafficExtendPage:
         self.timeout_calls.append(timeout)
 
 
+class _KeywordConversionRateLocator:
+    """模拟关键词转化率批量标签输入和筛选控件。"""
+
+    def __init__(self, page, kind):
+        self.page = page
+        self.kind = kind
+        self.first = self
+
+    async def count(self):
+        if self.kind == "tags":
+            return len(self.page.tags)
+        return int(self.kind != "missing")
+
+    async def is_visible(self, **kwargs):
+        return self.kind != "missing"
+
+    async def fill(self, value):
+        self.page.current_keyword = value
+        self.page.fills.append(value)
+
+    async def press(self, key, **kwargs):
+        self.page.presses.append(key)
+        keyword = self.page.current_keyword.strip()
+        if keyword and keyword not in self.page.tags:
+            self.page.tags.append(keyword)
+        self.page.current_keyword = ""
+        if self.page.press_timeout_after_commit:
+            raise TimeoutError("input placeholder changed after committed Enter")
+
+    async def click(self, **kwargs):
+        self.page.clicks.append(self.kind)
+        if self.kind == "clear":
+            self.page.tags.clear()
+            self.page.current_keyword = ""
+
+    async def get_attribute(self, name):
+        if self.kind == "keyword_input" and name == "placeholder":
+            return f"已录入{len(self.page.tags)}/1000个关键词"
+        return None
+
+
+class _KeywordConversionRatePage:
+    """模拟关键词转化率页面的站点、周期和批量标签交互。"""
+
+    def __init__(self, endpoint, *, press_timeout_after_commit=False):
+        self.endpoint = endpoint
+        self.press_timeout_after_commit = press_timeout_after_commit
+        self.tags = ["stale keyword"]
+        self.current_keyword = ""
+        self.fills = []
+        self.presses = []
+        self.clicks = []
+        self.timeout_calls = []
+
+    def expect_response(self, predicate, **kwargs):
+        return _AssociationResponseWaiter(self.endpoint)
+
+    def locator(self, selector):
+        if ".kcr--tags-list" in selector:
+            return _KeywordConversionRateLocator(self, "tags")
+        if ".batch-input" in selector:
+            return _KeywordConversionRateLocator(self, "keyword_input")
+        if ":not(.interval-select)" in selector:
+            return _KeywordConversionRateLocator(self, "market_select")
+        if "interval-select" in selector:
+            return _KeywordConversionRateLocator(self, "period_select")
+        if "market-select" in selector:
+            return _KeywordConversionRateLocator(self, "market_select")
+        if "美国站" in selector:
+            return _KeywordConversionRateLocator(self, "market_US")
+        if "近90天" in selector:
+            return _KeywordConversionRateLocator(self, "period_90D")
+        if "按周" in selector:
+            return _KeywordConversionRateLocator(self, "period_W")
+        if "清除" in selector:
+            return _KeywordConversionRateLocator(self, "clear")
+        if "立即查询" in selector:
+            return _KeywordConversionRateLocator(self, "query")
+        return _KeywordConversionRateLocator(self, "missing")
+
+    async def wait_for_timeout(self, timeout):
+        self.timeout_calls.append(timeout)
+
+
 class _KeywordComparisonPrepareResponse:
     """模拟流量词对比准备接口响应。"""
 
@@ -2537,6 +2621,104 @@ def test_traffic_extend_route_selects_historical_period_before_prepare(tmp_path)
         "query",
         "all_variants",
     ]
+
+
+def test_keyword_conversion_rate_route_submits_each_phrase_once_before_query(
+    tmp_path,
+):
+    endpoint = "/v3/api/keyword-conv"
+    page = _KeywordConversionRatePage(endpoint)
+    account = SellerSpriteAccount(
+        name="default",
+        username="user@example.com",
+        password="secret",
+    )
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-conversion-rate",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "market": "US",
+            "timeType": "90D",
+            "keyword": "wireless charger stand,phone holder",
+            "pageNum": 1,
+            "pageSize": 100,
+        },
+        referer="https://www.sellersprite.com/v3/keyword-conversion-rate",
+        account=account,
+        root_dir=tmp_path,
+        replay_safe=False,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "page_response"
+    assert page.fills == ["wireless charger stand", "phone holder"]
+    assert page.presses == ["Enter", "Enter"]
+    assert page.tags == ["wireless charger stand", "phone holder"]
+    assert page.clicks == [
+        "market_select",
+        "market_US",
+        "period_select",
+        "period_90D",
+        "clear",
+        "query",
+    ]
+
+
+def test_keyword_conversion_rate_does_not_repeat_enter_after_committed_timeout(
+    tmp_path,
+):
+    endpoint = "/v3/api/keyword-conv"
+    page = _KeywordConversionRatePage(
+        endpoint,
+        press_timeout_after_commit=True,
+    )
+    request = worker_module.BrowserRouteRequest(
+        scenario="keyword-conversion-rate",
+        method="POST",
+        endpoint=endpoint,
+        payload={
+            "market": "US",
+            "timeType": "W",
+            "keyword": "wireless charger stand,phone holder",
+            "pageNum": 1,
+            "pageSize": 100,
+        },
+        referer="https://www.sellersprite.com/v3/keyword-conversion-rate",
+        account=SellerSpriteAccount(
+            name="default",
+            username="user@example.com",
+            password="secret",
+        ),
+        root_dir=tmp_path,
+        replay_safe=False,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="POST",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "page_response"
+    assert page.presses == ["Enter", "Enter"]
+    assert page.tags == ["wireless charger stand", "phone holder"]
+    assert page.clicks.count("query") == 1
 
 
 def test_association_traffic_route_propagates_prepare_business_error(tmp_path):

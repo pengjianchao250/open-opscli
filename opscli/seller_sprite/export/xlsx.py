@@ -35,9 +35,9 @@ def export_rows_to_xlsx(
         raise SellerSpriteConfigError("缺少 openpyxl 依赖，无法导出 XLSX") from exc
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if scenario == "traffic-extend":
+    if scenario in {"traffic-extend", "keyword-conversion-rate"}:
         rows = rows[:100]
-    columns = columns_for_scenario(scenario, site)
+    columns = columns_for_scenario(scenario, site, period)
     if not columns:
         columns = [ExportColumn(dictionary_title, dictionary_title) for dictionary_title in _collect_fields(rows)]
 
@@ -49,7 +49,13 @@ def export_rows_to_xlsx(
     aba_research = scenario == "aba-research"
     association_traffic = scenario == "association-traffic"
     traffic_extend = scenario == "traffic-extend"
-    official_orange_header = keyword_research or aba_research or association_traffic
+    keyword_conversion_rate = scenario == "keyword-conversion-rate"
+    official_orange_header = (
+        keyword_research
+        or aba_research
+        or association_traffic
+        or keyword_conversion_rate
+    )
     header_fill = PatternFill(
         "solid",
         fgColor=(
@@ -59,9 +65,17 @@ def export_rows_to_xlsx(
         ),
     )
     header_font = (
-        Font(name="Calibri", size=10, bold=False)
+        Font(
+            name="Calibri",
+            size=10,
+            bold=False,
+            color="FFFFFFFF" if keyword_conversion_rate else None,
+        )
         if official_orange_header
-        else Font(bold=True, color="FFFFFFFF" if traffic_extend else None)
+        else Font(
+            bold=True,
+            color="FFFFFFFF" if traffic_extend else None,
+        )
     )
     for column_index, column in enumerate(columns, start=1):
         cell = sheet.cell(row=1, column=column_index, value=column.title)
@@ -82,6 +96,12 @@ def export_rows_to_xlsx(
                 _apply_association_traffic_number_format(cell, column_index)
             elif traffic_extend:
                 _apply_traffic_extend_number_format(cell, column_index)
+            elif keyword_conversion_rate:
+                _apply_keyword_conversion_rate_number_format(
+                    cell,
+                    column_index,
+                    site=site,
+                )
             else:
                 _apply_number_format(cell)
         if association_traffic:
@@ -97,6 +117,8 @@ def export_rows_to_xlsx(
             width = ASSOCIATION_TRAFFIC_COLUMN_WIDTHS[column_index - 1]
         elif traffic_extend:
             width = TRAFFIC_EXTEND_COLUMN_WIDTHS[column_index - 1]
+        elif keyword_conversion_rate:
+            width = KEYWORD_CONVERSION_RATE_COLUMN_WIDTHS[column_index - 1]
         else:
             width = _column_width(column.title)
         sheet.column_dimensions[get_column_letter(column_index)].width = width
@@ -360,6 +382,39 @@ def _apply_traffic_extend_number_format(cell, column_index: int) -> None:
         cell.number_format = "#,##0"
 
 
+def _apply_keyword_conversion_rate_number_format(
+    cell,
+    column_index: int,
+    *,
+    site: str,
+) -> None:
+    """按关键词转化率业务含义设置百分比、货币和整数格式。"""
+    if not isinstance(cell.value, Real) or isinstance(cell.value, bool):
+        return
+    if column_index in {
+        7,
+        8,
+        18,
+        19,
+        20,
+        22,
+        23,
+        25,
+        26,
+        28,
+        29,
+        31,
+        32,
+    }:
+        cell.number_format = "0.00%"
+    elif column_index in {9, 10, 11, 12, 13, 14, 15, 16, 17, 21}:
+        cell.number_format = "#,##0.00_ "
+    elif column_index in {3, 4, 5, 6}:
+        cell.number_format = "#,##0_ "
+    else:
+        cell.number_format = "#,##0"
+
+
 def _apply_association_traffic_hyperlinks(sheet, row_index: int, row: dict[str, Any]) -> None:
     """补齐官方工作簿中 ASIN、主图、父体和大类目的可点击链接。"""
     asin = row.get("asin")
@@ -445,7 +500,10 @@ def _add_asin_sheet(workbook, value: Any) -> None:
 
 
 def _main_sheet_title(*, scenario: str, site: str, period: str, params: dict[str, Any], rows: list[dict[str, Any]]) -> str:
-    if scenario == "keyword-miner":
+    if scenario == "keyword-conversion-rate":
+        keyword = _keyword_conversion_rate_first_keyword(params)
+        title = f"{site.upper()}-{keyword}({len(rows)})"
+    elif scenario == "keyword-miner":
         keyword = params.get("keyword") or params.get("q") or "keyword"
         title = f"{site.upper()}-{keyword}({len(rows)})_"
     elif scenario == "keyword-reverse":
@@ -549,6 +607,30 @@ TRAFFIC_EXTEND_COLUMN_WIDTHS = [
     12.353982300885, 16.6725663716814, 13, 13, 13, 13, 13, 13, 13, 13, 13,
     118.353982300885,
 ]
+
+# 列宽按官方 KeywordConversionRate-US-wireless charger stand(123)-2026 Week 29.xlsx 对齐。
+KEYWORD_CONVERSION_RATE_COLUMN_WIDTHS = [
+    26.5044247787611, 16.6725663716814, 13, 16.6725663716814, 16.6725663716814,
+    13, 13, 13, 16.1681415929204, 15.6725663716814, 13, 13, 13, 13, 13, 13,
+    14.6725663716814, 13.8495575221239, 13, 13, 18.6725663716814,
+    12.353982300885, 16.6725663716814, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    118.353982300885,
+]
+
+
+def _keyword_conversion_rate_first_keyword(params: dict[str, Any]) -> str:
+    """提取官网工作表名使用的首个关键词词组。"""
+    value = (
+        params.get("keywords")
+        or params.get("keywordList")
+        or params.get("keyword")
+        or params.get("q")
+        or "keyword"
+    )
+    if isinstance(value, (list, tuple, set)):
+        value = next(iter(value), "keyword")
+    first = re.split(r"[,，\r\n\t]+", str(value), maxsplit=1)[0]
+    return re.sub(r"\s+", " ", first).strip() or "keyword"
 
 
 def _safe_sheet_title(value: str) -> str:

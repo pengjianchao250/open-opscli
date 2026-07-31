@@ -373,7 +373,49 @@ MARKET_RESEARCH_COLUMNS = [
 ]
 
 
-def columns_for_scenario(scenario: str, site: str) -> list[ExportColumn]:
+# 列顺序来自 2026-07-31 官方关键词转化率工作簿的 33 列主表。
+KEYWORD_CONVERSION_RATE_COLUMNS = [
+    ExportColumn("关键词", "keyword"),
+    ExportColumn("关键词翻译", "keywordCn"),
+    ExportColumn("时间节点", "weekIndex"),
+    ExportColumn("周搜索量", "searches"),
+    ExportColumn("周点击量", "clicks"),
+    ExportColumn("周购买量", "purchases"),
+    ExportColumn("搜索转化率", "searchConvRate"),
+    ExportColumn("点击转化率", "clickConvRate"),
+    ExportColumn("PPC竞价-最低", "exactPpc.min"),
+    ExportColumn("PPC竞价-推荐", "exactPpc.value"),
+    ExportColumn("PPC竞价-最高", "exactPpc.max"),
+    ExportColumn("CPA-最低", "exactCpa.min"),
+    ExportColumn("CPA-推荐", "exactCpa.value"),
+    ExportColumn("CPA-最高", "exactCpa.max"),
+    ExportColumn("产品均价-最低", "avgProductPrice.min"),
+    ExportColumn("产品均价-平均", "avgProductPrice.value"),
+    ExportColumn("产品均价-最高", "avgProductPrice.max"),
+    ExportColumn("ACOS-最低", "exactAcos.min"),
+    ExportColumn("ACOS-推荐", "exactAcos.value"),
+    ExportColumn("ACOS-最高", "exactAcos.max"),
+    ExportColumn("广告预算", "exactBudget.value"),
+    ExportColumn("点击总占比", "clickingRate"),
+    ExportColumn("转化总占比", "conversionRate"),
+    ExportColumn("#1 前三ASIN", "top3Asins.0.asin"),
+    ExportColumn("#1 点击共享", "top3Asins.0.clickRate", fallback="top3Asins.0.clickingRate"),
+    ExportColumn("#1 转化共享", "top3Asins.0.conversionRate", fallback="top3Asins.0.conversionShareRate"),
+    ExportColumn("#2 前三ASIN", "top3Asins.1.asin"),
+    ExportColumn("#2 点击共享", "top3Asins.1.clickRate", fallback="top3Asins.1.clickingRate"),
+    ExportColumn("#2 转化共享", "top3Asins.1.conversionRate", fallback="top3Asins.1.conversionShareRate"),
+    ExportColumn("#3 前三ASIN", "top3Asins.2.asin"),
+    ExportColumn("#3 点击共享", "top3Asins.2.clickRate", fallback="top3Asins.2.clickingRate"),
+    ExportColumn("#3 转化共享", "top3Asins.2.conversionRate", fallback="top3Asins.2.conversionShareRate"),
+    ExportColumn("搜索结果前10ASIN", "gkDatas", transform="asinList"),
+]
+
+
+def columns_for_scenario(
+    scenario: str,
+    site: str,
+    period: str | None = None,
+) -> list[ExportColumn]:
     """返回场景对应官方模板列。"""
     currency = currency_label(site)
     if scenario == "keyword-miner":
@@ -396,6 +438,39 @@ def columns_for_scenario(scenario: str, site: str) -> list[ExportColumn]:
         )
     if scenario == "traffic-extend":
         return TRAFFIC_EXTEND_COLUMNS
+    if scenario == "keyword-conversion-rate":
+        columns = _columns_with_currency_titles(
+            KEYWORD_CONVERSION_RATE_COLUMNS,
+            currency,
+            {
+                "PPC竞价-最低",
+                "PPC竞价-推荐",
+                "PPC竞价-最高",
+                "CPA-最低",
+                "CPA-推荐",
+                "CPA-最高",
+                "产品均价-最低",
+                "产品均价-平均",
+                "产品均价-最高",
+                "广告预算",
+            },
+        )
+        if str(period or "").upper() == "90D":
+            ninety_day_titles = {
+                "周搜索量": "近90天搜索量",
+                "周点击量": "近90天点击量",
+                "周购买量": "近90天购买量",
+            }
+            return [
+                    ExportColumn(
+                        ninety_day_titles.get(column.title, column.title),
+                        column.source,
+                    fallback=column.fallback,
+                    transform=column.transform,
+                )
+                for column in columns
+            ]
+        return columns
     if scenario == "traffic-source":
         return _columns_with_currency_titles(TRAFFIC_SOURCE_COLUMNS, currency, {"价格"})
     if scenario == "market-research":

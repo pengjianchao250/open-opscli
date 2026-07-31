@@ -398,7 +398,11 @@ class SellerSpriteApiManager:
 
         self._emit_progress("processing")
         rows = _extract_items(main_response, scenario=request.scenario)
-        if request.scenario in {"keyword-comparison", "traffic-extend"}:
+        if request.scenario in {
+            "keyword-comparison",
+            "traffic-extend",
+            "keyword-conversion-rate",
+        }:
             # 即使上游异常返回超过分页大小，也只导出首期约定的第一页 100 条。
             rows = rows[:100]
         high_frequency_rows = _extract_high_frequency_rows(high_frequency_response)
@@ -970,6 +974,7 @@ def _scenario_label(scenario: str) -> str:
         "competitor-lookup": "CompetitorLookup",
         "product-research": "ProductResearch",
         "keyword-comparison": "CompareKeywords",
+        "keyword-conversion-rate": "KeywordConversionRate",
         "keyword-miner": "KeywordMiner",
         "keyword-research": "KeywordResearch",
         "aba-research": "ABAResearch",
@@ -1003,6 +1008,15 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
         )
     if scenario == "keyword-miner":
         return _sanitize_filename_part(params.get("keyword"))
+    if scenario == "keyword-conversion-rate":
+        return _sanitize_filename_part(
+            first_value(
+                params.get("keywords")
+                or params.get("keywordList")
+                or params.get("keyword")
+                or params.get("q")
+            )
+        )
     if scenario in {"keyword-research", "aba-research"}:
         return _sanitize_filename_part(
             params.get("q")

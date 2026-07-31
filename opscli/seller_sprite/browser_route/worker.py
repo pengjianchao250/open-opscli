@@ -2094,6 +2094,9 @@ async def _trigger_request(
     traffic_extend_interaction = bool(
         request and request.scenario == "traffic-extend"
     )
+    keyword_conversion_rate_interaction = bool(
+        request and request.scenario == "keyword-conversion-rate"
+    )
     try:
         if keyword_comparison_interaction:
             # prepare 和弹窗等待不应占用主接口响应预算；只在最终变体按钮点击前监听主响应。
@@ -2127,7 +2130,12 @@ async def _trigger_request(
                 raise _NoQueryButtonError()
             return response, "page_response"
 
-        response_timeout = 30000 if association_traffic_interaction else 15000
+        response_timeout = (
+            30000
+            if association_traffic_interaction
+            or keyword_conversion_rate_interaction
+            else 15000
+        )
         async with page.expect_response(
             lambda response: _same_endpoint(response.url, endpoint),
             timeout=response_timeout,
@@ -2147,6 +2155,12 @@ async def _trigger_request(
                     page,
                     payload,
                     root_dir=request.root_dir,
+                )
+            elif keyword_conversion_rate_interaction:
+                # 批量关键词必须逐条提交为标签并完成计数校验后，才能单击查询。
+                clicked = await _trigger_keyword_conversion_rate_query(
+                    page,
+                    payload,
                 )
             else:
                 clicked = await _click_query_button(page)
@@ -2204,6 +2218,15 @@ async def _trigger_request(
                 response_excerpt=f"endpoint={endpoint}",
                 api_code="ERR_KEYWORD_COMPARISON_RESPONSE_MISSED",
                 api_message="页面交互已完成，不再自动 fallback 重复查询。",
+            ) from exc
+        if keyword_conversion_rate_interaction:
+            if isinstance(exc, SellerSpriteApiError):
+                raise
+            raise SellerSpriteApiError(
+                "卖家精灵关键词转化率页面交互后未捕获主查询响应",
+                response_excerpt=f"endpoint={endpoint}",
+                api_code="ERR_KEYWORD_CONVERSION_RATE_RESPONSE_MISSED",
+                api_message="关键词标签已提交或查询按钮已点击，不再自动 fallback 重复查询。",
             ) from exc
         stage_started_at = time.monotonic()
         response = await _request_with_browser_context(page, endpoint=endpoint, method=method, payload=payload)
@@ -2750,6 +2773,191 @@ async def _trigger_association_traffic_query(
         )
     await all_variants_button.click(timeout=5000)
     return True
+
+
+async def _trigger_keyword_conversion_rate_query(
+    page,
+    payload: dict[str, Any],
+) -> bool:
+    """逐条提交关键词标签并在完整计数校验后单次查询。"""
+    keywords = [
+        part.strip()
+        for part in str(payload.get("keyword") or "").split(",")
+        if part.strip()
+    ]
+    if not keywords:
+        return False
+
+    await _select_keyword_conversion_rate_filters(page, payload)
+
+    clear_button = await _first_visible_page_locator(
+        page,
+        [
+            ".multi-miner:visible button:visible:has-text('清除')",
+            "button:visible:has-text('清除')",
+        ],
+    )
+    if clear_button is not None:
+        await clear_button.click(timeout=5000)
+        await page.wait_for_timeout(200)
+
+    tags = page.locator(
+        ".multi-miner:visible .kcr--tags-list .el-tag:visible"
+    )
+    if await tags.count():
+        raise SellerSpriteApiError(
+            "关键词转化率页面未清空既有关键词",
+            api_code="ERR_KEYWORD_CONVERSION_RATE_CLEAR",
+        )
+
+    input_box = await _first_visible_page_locator(
+        page,
+        [
+            ".multi-miner:visible .batch-input "
+            "input[aria-autocomplete='list']:visible:not([readonly]):not([disabled])",
+            ".batch-input input[role='textbox']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if input_box is None:
+        return False
+
+    for expected_count, keyword in enumerate(keywords, start=1):
+        await input_box.fill(keyword)
+        press_error: Exception | None = None
+        try:
+            # 每个词组只发送一次 Enter；异常后只检查标签状态，绝不补按。
+            await input_box.press("Enter", timeout=5000)
+        except Exception as exc:
+            press_error = exc
+
+        actual_count = await tags.count()
+        for _ in range(20):
+            if actual_count == expected_count:
+                break
+            await page.wait_for_timeout(100)
+            actual_count = await tags.count()
+        if actual_count != expected_count:
+            raise SellerSpriteApiError(
+                "关键词转化率关键词未完整提交为页面标签",
+                response_excerpt=(
+                    f"expected={expected_count} actual={actual_count} "
+                    f"press_error={type(press_error).__name__ if press_error else 'none'}"
+                ),
+                api_code="ERR_KEYWORD_CONVERSION_RATE_INPUT",
+                api_message="未重复发送 Enter，避免误提交或重复标签。",
+            ) from press_error
+
+    placeholder = await input_box.get_attribute("placeholder")
+    expected_placeholder = f"已录入{len(keywords)}/1000个关键词"
+    if (
+        placeholder
+        and "已录入" in placeholder
+        and placeholder.strip() != expected_placeholder
+    ):
+        raise SellerSpriteApiError(
+            "关键词转化率页面关键词计数与输入不一致",
+            response_excerpt=(
+                f"expected={expected_placeholder} actual={placeholder}"
+            ),
+            api_code="ERR_KEYWORD_CONVERSION_RATE_INPUT",
+            api_message="未点击查询，避免使用不完整关键词集合。",
+        )
+
+    query_button = await _first_visible_page_locator(
+        page,
+        [
+            ".multi-miner:visible button.el-button--primary:visible:has-text('立即查询')",
+            "button:visible:has-text('立即查询')",
+        ],
+    )
+    if query_button is None:
+        return False
+    await query_button.click(timeout=5000)
+    return True
+
+
+async def _select_keyword_conversion_rate_filters(
+    page,
+    payload: dict[str, Any],
+) -> None:
+    """在录入关键词前选择站点和按周/近90天周期。"""
+    market_label = {
+        "US": "美国站",
+        "JP": "日本站",
+        "UK": "英国站",
+        "DE": "德国站",
+        "FR": "法国站",
+        "IT": "意大利",
+        "ES": "西班牙",
+        "CA": "加拿大",
+        "IN": "印度站",
+    }.get(str(payload.get("market") or "US").upper())
+    if market_label is None:
+        raise SellerSpriteApiError(
+            "关键词转化率页面不支持当前站点",
+            response_excerpt=f"market={payload.get('market')}",
+            api_code="ERR_KEYWORD_CONVERSION_RATE_MARKET",
+        )
+    market_select = await _first_visible_page_locator(
+        page,
+        [
+            ".multi-miner:visible .market-select > "
+            ".el-select:not(.interval-select) "
+            "input[placeholder='请选择']:visible",
+            ".multi-miner:visible .market-select input[readonly]:visible",
+        ],
+    )
+    if market_select is None:
+        raise SellerSpriteApiError(
+            "关键词转化率页面未找到站点选择器",
+            api_code="ERR_KEYWORD_CONVERSION_RATE_MARKET",
+        )
+    await market_select.click(timeout=5000)
+    market_option = await _first_visible_page_locator(
+        page,
+        [
+            f"li.el-select-dropdown__item:visible:has-text('{market_label}')",
+            f".el-select-dropdown__item:visible:has-text('{market_label}')",
+        ],
+    )
+    if market_option is None:
+        raise SellerSpriteApiError(
+            f"关键词转化率页面未找到“{market_label}”站点",
+            api_code="ERR_KEYWORD_CONVERSION_RATE_MARKET",
+        )
+    await market_option.click(timeout=5000)
+    await page.wait_for_timeout(100)
+
+    period_label = "近90天" if payload.get("timeType") == "90D" else "按周"
+    period_select = await _first_visible_page_locator(
+        page,
+        [
+            ".multi-miner:visible .market-select > "
+            ".el-select.interval-select "
+            "input[placeholder='请选择']:visible",
+            ".multi-miner:visible .interval-select input[readonly]:visible",
+        ],
+    )
+    if period_select is None:
+        raise SellerSpriteApiError(
+            "关键词转化率页面未找到周期选择器",
+            api_code="ERR_KEYWORD_CONVERSION_RATE_PERIOD",
+        )
+    await period_select.click(timeout=5000)
+    period_option = await _first_visible_page_locator(
+        page,
+        [
+            f"li.el-select-dropdown__item:visible:has-text('{period_label}')",
+            f".el-select-dropdown__item:visible:has-text('{period_label}')",
+        ],
+    )
+    if period_option is None:
+        raise SellerSpriteApiError(
+            f"关键词转化率页面未找到“{period_label}”周期",
+            api_code="ERR_KEYWORD_CONVERSION_RATE_PERIOD",
+        )
+    await period_option.click(timeout=5000)
+    await page.wait_for_timeout(100)
 
 
 async def _trigger_traffic_extend_query(

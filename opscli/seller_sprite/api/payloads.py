@@ -333,6 +333,29 @@ TRAFFIC_EXTEND_VARIANT_ALIASES = {
     "用当前变体拓词": "current",
 }
 
+# 关键词转化率页面只提供“按周”和“近90天”两种周期。
+KEYWORD_CONVERSION_RATE_PERIOD_ALIASES = {
+    "W": "W",
+    "w": "W",
+    "week": "W",
+    "weekly": "W",
+    "按周": "W",
+    # 公共场景默认 period=30d；该页面没有 30 天选项，按页面默认周期处理。
+    "30d": "W",
+    "nearly": "W",
+    "latest30": "W",
+    "last30": "W",
+    "90D": "90D",
+    "90d": "90D",
+    "recent90": "90D",
+    "last90": "90D",
+    "近90天": "90D",
+}
+
+KEYWORD_CONVERSION_RATE_MARKETS = frozenset(
+    {"US", "JP", "UK", "DE", "FR", "IT", "ES", "CA", "IN"}
+)
+
 # ABA 数据选品接口使用站点公开 code，其中美国站使用 COM。
 ABA_RESEARCH_MARKETS = {
     "US": "COM",
@@ -664,6 +687,46 @@ def make_traffic_extend_payload(input_data: dict[str, Any]) -> dict[str, Any]:
         "desc": True,
         "exactly": False,
         "ac": False,
+    }
+
+
+def make_keyword_conversion_rate_payload(
+    input_data: dict[str, Any],
+) -> dict[str, Any]:
+    """构造关键词转化率第一页 100 条批量查询 payload。"""
+    keywords = _keyword_conversion_rate_keywords(
+        input_data.get("keywords")
+        or input_data.get("keywordList")
+        or input_data.get("keyword")
+        or input_data.get("q")
+    )
+    site = _market(input_data, default="US")
+    if site not in KEYWORD_CONVERSION_RATE_MARKETS:
+        raise SellerSpriteConfigError(
+            f"keyword-conversion-rate 暂不支持站点：{site}"
+        )
+    raw_period = str(
+        input_data.get("timeType")
+        or input_data.get("period")
+        or input_data.get("reverseType")
+        or "W"
+    ).strip()
+    time_type = KEYWORD_CONVERSION_RATE_PERIOD_ALIASES.get(raw_period)
+    if time_type is None:
+        time_type = KEYWORD_CONVERSION_RATE_PERIOD_ALIASES.get(raw_period.lower())
+    if time_type is None:
+        raise SellerSpriteConfigError(
+            "keyword-conversion-rate 周期仅支持 W/按周 或 90D/近90天"
+        )
+    return {
+        "pageNum": 1,
+        "pageSize": 100,
+        "market": site,
+        "timeType": time_type,
+        "bidMatchType": "exact",
+        "keywordMatchType": "all",
+        "matchType": 1,
+        "keyword": ",".join(keywords),
     }
 
 
@@ -1143,6 +1206,9 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
         return f"https://www.sellersprite.com/v2/keyword-research?{urlencode(_flatten_query(payload))}"
     if scenario == "keyword-comparison":
         return "https://www.sellersprite.com/v3/keyword-comparison"
+    if scenario == "keyword-conversion-rate":
+        # 不把关键词写入 URL，避免页面在 worker 建立响应监听前自动执行查询。
+        return "https://www.sellersprite.com/v3/keyword-conversion-rate"
     if scenario == "traffic-extend":
         query = {
             "marketId": payload.get("market") or 1,
@@ -1327,6 +1393,26 @@ def _traffic_extend_asins(value: Any) -> list[str]:
             f"traffic-extend ASIN 格式无效：{', '.join(invalid_asins)}"
         )
     return asins
+
+
+def _keyword_conversion_rate_keywords(value: Any) -> list[str]:
+    """按官网批量输入规则拆分、去重并校验关键词词组。"""
+    raw_values = value if isinstance(value, (list, tuple, set)) else [value]
+    keywords: list[str] = []
+    for raw_value in raw_values:
+        for part in re.split(r"[,，\r\n\t]+", str(raw_value or "")):
+            keyword = re.sub(r"\s+", " ", part).strip()
+            if keyword and keyword not in keywords:
+                keywords.append(keyword)
+    if not keywords:
+        raise SellerSpriteConfigError(
+            "keyword-conversion-rate 至少需要 1 个关键词"
+        )
+    if len(keywords) > 1000:
+        raise SellerSpriteConfigError(
+            "keyword-conversion-rate 最多支持 1000 个关键词"
+        )
+    return keywords
 
 
 def split_association_traffic_asins(value: Any) -> list[str]:

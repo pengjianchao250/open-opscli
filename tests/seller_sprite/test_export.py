@@ -9,6 +9,118 @@ from opscli.seller_sprite.export.keyword_comparison_xlsx import (
 from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
 
 
+def test_keyword_conversion_rate_export_writes_first_page_business_sheet(
+    tmp_path: Path,
+):
+    output = tmp_path / "keyword-conversion-rate.xlsx"
+    rows = [
+        {
+            "keyword": "wireless charger stand",
+            "keywordCn": "无线充电器支架",
+            "weekIndex": 80,
+            "searches": 3449,
+            "clicks": 1172,
+            "purchases": 180,
+            "searchConvRate": 0.0522,
+            "clickConvRate": 0.1536,
+            "exactPpc": {"min": 1.04, "value": 1.33, "max": 1.86},
+            "exactCpa": {"min": 6.77, "value": 8.66, "max": 12.11},
+            "avgProductPrice": {"min": 8.54, "value": 24.99, "max": 159.99},
+            "exactAcos": {"min": 1.0139, "value": 0.3465, "max": 0.0541},
+            "exactBudget": {"value": 13.30},
+            "clickingRate": 0.3069,
+            "conversionRate": 0.2487,
+            "top3Asins": [
+                {
+                    "asin": "B000000001",
+                    "clickRate": 0.1284,
+                    "conversionRate": 0.1295,
+                },
+                {
+                    "asin": "B000000002",
+                    "clickRate": 0.0929,
+                    "conversionRate": 0.0674,
+                },
+                {
+                    "asin": "B000000003",
+                    "clickRate": 0.0856,
+                    "conversionRate": 0.0518,
+                },
+            ],
+            "gkDatas": [
+                {"asin": f"B0000000{index:02d}"}
+                for index in range(10)
+            ],
+        }
+    ] + [
+        {"keyword": f"keyword {index}"}
+        for index in range(100)
+    ]
+
+    export_rows_to_xlsx(
+        rows=rows,
+        output_path=output,
+        scenario="keyword-conversion-rate",
+        site="US",
+        period="W",
+        params={"keywords": ["wireless charger stand"]},
+    )
+
+    workbook = load_workbook(output, data_only=True)
+    assert workbook.sheetnames == ["US-wireless charger stand(100)"]
+    sheet = workbook.active
+    assert sheet.max_row == 101
+    assert [cell.value for cell in sheet[1]] == [
+        "关键词",
+        "关键词翻译",
+        "时间节点",
+        "周搜索量",
+        "周点击量",
+        "周购买量",
+        "搜索转化率",
+        "点击转化率",
+        "PPC竞价-最低($)",
+        "PPC竞价-推荐($)",
+        "PPC竞价-最高($)",
+        "CPA-最低($)",
+        "CPA-推荐($)",
+        "CPA-最高($)",
+        "产品均价-最低($)",
+        "产品均价-平均($)",
+        "产品均价-最高($)",
+        "ACOS-最低",
+        "ACOS-推荐",
+        "ACOS-最高",
+        "广告预算($)",
+        "点击总占比",
+        "转化总占比",
+        "#1 前三ASIN",
+        "#1 点击共享",
+        "#1 转化共享",
+        "#2 前三ASIN",
+        "#2 点击共享",
+        "#2 转化共享",
+        "#3 前三ASIN",
+        "#3 点击共享",
+        "#3 转化共享",
+        "搜索结果前10ASIN",
+    ]
+    assert sheet["A2"].value == "wireless charger stand"
+    assert sheet["C2"].value == 80
+    assert sheet["I2"].value == 1.04
+    assert sheet["R2"].value == 1.0139
+    assert sheet["X2"].value == "B000000001"
+    assert sheet["Y2"].value == 0.1284
+    assert sheet["AG2"].value == ",".join(
+        f"B0000000{index:02d}" for index in range(10)
+    )
+    assert sheet["G2"].number_format == "0.00%"
+    assert sheet["R2"].number_format == "0.00%"
+    assert sheet["I2"].number_format == "#,##0.00_ "
+    assert sheet.freeze_panes == "A2"
+    assert "Notes" not in workbook.sheetnames
+
+
 def test_traffic_extend_export_matches_three_sheet_business_contract(tmp_path: Path):
     output = tmp_path / "traffic-extend.xlsx"
     rows = [

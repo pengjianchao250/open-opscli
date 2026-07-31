@@ -1043,6 +1043,87 @@ def test_manager_runs_traffic_extend_first_page_with_default_all_variants(
     ]
 
 
+def test_manager_runs_keyword_conversion_rate_first_page_in_browser(
+    monkeypatch,
+    tmp_path: Path,
+):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "pager": {
+                        "page": 1,
+                        "pageSize": 100,
+                        "total": 101,
+                        "items": [
+                            {"keyword": f"keyword {index}", "searches": index}
+                            for index in range(101)
+                        ],
+                    },
+                    "week": "2026-07-26",
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(
+        api_manager_module,
+        "_run_browser_route_request",
+        fake_browser_route_request,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(
+            output_dir=tmp_path,
+            username=None,
+            password=None,
+            default_mode="browser-route",
+        ),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-conversion-rate",
+                site="US",
+                period="90D",
+                params={"keywords": "wireless charger stand\nphone holder"},
+                page_size=20,
+                job_id="job-keyword-conversion-rate",
+                export_format="xlsx",
+            )
+        )
+    )
+
+    assert result.row_count == 100
+    assert len(result.data) == 100
+    assert calls[0]["endpoint"] == "/v3/api/keyword-conv"
+    assert calls[0]["payload"] == {
+        "pageNum": 1,
+        "pageSize": 100,
+        "market": "US",
+        "timeType": "90D",
+        "bidMatchType": "exact",
+        "keywordMatchType": "all",
+        "matchType": 1,
+        "keyword": "wireless charger stand,phone holder",
+    }
+    assert calls[0]["replay_safe"] is False
+    workbook = load_workbook(result.export.path, read_only=True)
+    assert workbook.sheetnames == ["US-wireless charger stand(100)"]
+    assert [cell.value for cell in workbook.active[1][3:6]] == [
+        "近90天搜索量",
+        "近90天点击量",
+        "近90天购买量",
+    ]
+
+
 def test_manager_normalizes_competitor_lookup_singular_asin_before_api_call(monkeypatch, tmp_path: Path):
     DummyApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)

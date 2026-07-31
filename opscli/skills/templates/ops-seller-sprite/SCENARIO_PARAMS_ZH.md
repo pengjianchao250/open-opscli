@@ -15,6 +15,7 @@
 | 关联流量 / 关联产品 / 查关联 ASIN / association traffic | `association-traffic` |
 | 拓展流量词 / 多 ASIN 拓词 / expand traffic keywords | `traffic-extend` |
 | 流量词对比 / 竞品关键词对比 / 竞品关键词差距 / keyword comparison | `keyword-comparison` |
+| 关键词转化率 / 批量关键词转化 / keyword conversion rate | `keyword-conversion-rate` |
 | 出单词反查 / ABA 反查 / ABA reverse | `aba-reverse` |
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
 | 查流量来源 / traffic source | `traffic-source` |
@@ -45,6 +46,7 @@
 - `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换。
 - `traffic-extend` 仅支持 `browser-route`，固定 `page=1/size=100`；变体默认 `all`，可选 `sell_well` / `current`，不自动翻页、不调用官网全量导出。
 - `keyword-comparison` 仅支持 `browser-route` 和默认“流量占比”；固定 `page=1/size=100`，未指定变体时自动选择“用畅销变体拓词”，明确要求时可选择“用当前变体拓词”，不自动翻页、不调用官网额度型导出。
+- `keyword-conversion-rate` 仅支持 `browser-route`，周期只支持按周 `W` 或近 90 天 `90D`；公共默认 `30d` 映射为页面默认的 `W`。固定 `pageNum=1/pageSize=100`，不自动翻页、不调用官网导出。
 - `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；固定只请求第一页 100 条，忽略公共分页覆盖值，并在本地生成 `.xlsx`。
 - `aba-reverse` 未提供 `period`（或收到公共默认 `30d`）时，默认选择每周和最近完整周；显式周期可传具体周结束日或月份。只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
 - `branddb` 固定使用 `browser-route`，`text` 必填，接口等待上限 120 秒；只支持 `xls` / `xlsx`，官方文件原样保存。请求发出后遇到超时、登录失效或结果不明时不会自动重试或换账号，避免重复消耗导出额度。
@@ -64,6 +66,7 @@
 - `association-traffic` 必须有 1—20 个合法 ASIN；可传数组，也可传逗号、换行、制表符或 TXT/Excel 按列复制文本。
 - `traffic-extend` 必须有 1—20 个合法 ASIN；可传数组，也可传空格、逗号、换行、制表符或 TXT/Excel 按列复制文本。
 - `keyword-comparison` 必须分别提供 1 个自己的 ASIN 和 1—10 个竞品 ASIN；竞品不得包含自己的 ASIN，支持列表、空格、中英文逗号、换行或制表符分隔。
+- `keyword-conversion-rate` 必须有关键词，最多 1000 个关键词词组；支持数组，或英文/中文逗号、换行、制表符分隔的 TXT/Excel 按列复制文本。词组内部空格保留并规范化，不按空格拆词。
 - `aba-research` 必须有父/子 ASIN 或关键词，可使用 `q`、`keywordOrAsin`、`keyword` 或 `asin`。
 - `aba-reverse` 必须有 1—20 个 ASIN 或 Amazon 产品链接；周期可省略，默认使用每周和最近完整周。
 - `branddb` 必须有品牌名称、所有人或注册号搜索文本，统一传 `params.text`。
@@ -72,6 +75,7 @@
 - `association-traffic` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `traffic-source` 冒充。
 - `traffic-extend` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能批量调用 `keyword-reverse` 冒充。
 - `keyword-comparison` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能批量调用 `keyword-reverse` 冒充正式对比结果。
+- `keyword-conversion-rate` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用关键词选品或关键词挖掘冒充转化率结果。
 - `aba-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-research` 或 `aba-reverse` 冒充。
 - `aba-reverse` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-reverse` 冒充。
 
@@ -88,6 +92,7 @@
 | `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；只取第一页；`page_size=100` |
 | `traffic-extend` | `asins`，1—20 个 | `site`、`period`、`variantSelection` | 仅 browser-route；变体默认 `all`，可选 `sell_well/current`；第一页 100 条；本地生成主表、`Unique Words` 和 `Asin` |
 | `keyword-comparison` | `ownAsin` 1 个；`competitorAsins` 1—10 个 | `site`、`variantSelection` | 仅 browser-route 和流量占比；变体默认 `sell_well`，可选 `current`；固定第一页 100 条；本地生成 XLSX |
+| `keyword-conversion-rate` | `keywords`，1—1000 个关键词词组 | `site`、`period` | 仅 browser-route；周期 `W/90D`；每个词组只按一次 Enter；固定第一页 100 条；本地生成单业务表 |
 | `aba-reverse` | `asin` / `asins` / 产品链接，1—20 个 | `period`、`reverseType`、`orderField`、`orderDesc`、`conversionType`、`loadVariations` | 默认每周和最近完整周；直接保存官方完整 XLSX |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
 | `traffic-source` | 关键词或 ASIN | `keyword`、`asin`、`asins`、`order`、`desc` | `pageNo=1`，`order=10`，`desc=true` |
@@ -339,6 +344,32 @@
 - 每个最终 ASIN 动态生成“流量占比 + 流量词类型”两列，自己的 ASIN 标记 `(我的)`；对比值从 `competitorList` 读取。
 - 查询 JSON 在本地生成 `CompareKeywords-{站点}-{自己的ASIN}-...xlsx`，不调用官网额度型导出。
 - 工作簿包含动态业务主表和 `ASIN` 辅助表，不生成 `Notes`。
+
+## `keyword-conversion-rate` 关键词转化率
+
+### 输入与边界
+
+| 中文含义 | 字段 | 规则 |
+| --- | --- | --- |
+| 关键词词组 | `params.keywords`；兼容 `keywordList` / `keyword` / `q` | 必填 1—1000 个；支持数组，或中英文逗号、换行、制表符分隔文本；去重保序，词组内部空格不会拆词 |
+| 站点 | 顶层 `site` | 默认 `US`；支持 `US/JP/UK/DE/FR/IT/ES/CA/IN` |
+| 周期 | 顶层 `period` | `W` / `按周` 或 `90D` / `近90天`；公共默认 `30d` 映射为 `W` |
+
+- 固定 `pageNum=1`、`pageSize=100`、`bidMatchType=exact`、`keywordMatchType=all`、`matchType=1`。
+- 只保留 `data.pager.items` 第一页最多 100 条，不请求后续页。
+
+### 安全页面交互
+
+1. browser-route 先选择站点和周期，清除页面残留关键词标签。
+2. 每个词组只发送一次 Enter；即使动作返回超时，也先检查标签数是否已从 `N-1` 增加到 `N`，禁止盲目补按。
+3. 标签未增加时直接失败，不点击查询；全部标签完成后校验页面 `已录入N/1000个关键词` 计数。
+4. “立即查询”只点击一次；页面交互后未捕获 `/v3/api/keyword-conv` 主响应时直接失败，不做静默接口 fallback 或账号重放。
+
+### 数据与导出
+
+- 查询 JSON 在本地生成官方 33 列业务主表，将 PPC、CPA、产品均价、ACOS 和前三 ASIN 共享拆分为独立列。
+- 工作簿仅包含 `{站点}-{首个关键词}({行数})` 主表，不生成 `Notes`。
+- 首期不调用官网 `/v3/api/keyword-conv/excel`，因此不消耗官网导出额度，也不宣称本地文件与官网导出逐字节一致。
 
 ## `aba-reverse` 出单词反查
 

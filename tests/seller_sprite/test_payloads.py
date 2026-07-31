@@ -11,6 +11,7 @@ from opscli.seller_sprite.api.payloads import (
     make_branddb_payload,
     make_competitor_payload,
     make_keyword_comparison_payload,
+    make_keyword_conversion_rate_payload,
     make_keyword_miner_payload,
     make_keyword_research_payload,
     make_keyword_reverse_payload,
@@ -50,6 +51,68 @@ def test_traffic_extend_scenario_builds_first_page_all_variants_payload():
     referer = scenario.build_referer(payload)
     assert referer.startswith("https://www.sellersprite.com/v3/traffic/extend?")
     assert "q=" not in referer
+
+
+def test_keyword_conversion_rate_scenario_builds_first_page_batch_payload():
+    scenario = get_scenario("keyword-conversion-rate")
+
+    payload = scenario.build_payload(
+        params={
+            "keywords": "wireless charger stand\nphone holder\twireless charger stand",
+        },
+        site="US",
+        period="W",
+        page_size=20,
+    )
+
+    assert scenario.endpoint == "/v3/api/keyword-conv"
+    assert scenario.browser_context_only is True
+    assert scenario.replay_safe is False
+    assert payload == {
+        "pageNum": 1,
+        "pageSize": 100,
+        "market": "US",
+        "timeType": "W",
+        "bidMatchType": "exact",
+        "keywordMatchType": "all",
+        "matchType": 1,
+        "keyword": "wireless charger stand,phone holder",
+    }
+    assert (
+        scenario.build_referer(payload)
+        == "https://www.sellersprite.com/v3/keyword-conversion-rate"
+    )
+
+
+@pytest.mark.parametrize(
+    ("period", "expected"),
+    [
+        ("W", "W"),
+        ("week", "W"),
+        ("按周", "W"),
+        ("30d", "W"),
+        ("90D", "90D"),
+        ("90d", "90D"),
+        ("近90天", "90D"),
+    ],
+)
+def test_keyword_conversion_rate_normalizes_page_period(period, expected):
+    payload = make_keyword_conversion_rate_payload(
+        {"keywords": ["phone stand"], "site": "US", "period": period}
+    )
+
+    assert payload["timeType"] == expected
+
+
+def test_keyword_conversion_rate_rejects_more_than_one_thousand_keywords():
+    with pytest.raises(SellerSpriteConfigError, match="最多支持 1000 个关键词"):
+        make_keyword_conversion_rate_payload(
+            {
+                "keywords": [f"keyword {index}" for index in range(1001)],
+                "site": "US",
+                "period": "W",
+            }
+        )
 
 
 @pytest.mark.parametrize(
