@@ -15,6 +15,8 @@ from opscli.config import CONFIG_DIR
 from opscli.seller_sprite.config import ENV_QUEUE_DB_PATH, resolve_queue_db_path
 
 _ENV_PREFIX = "OPSCLI_COLLECTOR_MONITOR_"
+# 项目内默认机器人文件随包分发；显式环境配置仍具有最高优先级。
+_BUNDLED_WEBHOOK_FILE = Path(__file__).with_name("wecom-webhook")
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ class MonitorSettings:
     host: str
     port: int
     collector_probe_timeout: float
+    scenario_test_enabled: bool
 
 
 def load_settings(
@@ -50,6 +53,11 @@ def load_settings(
     host = _text(env, "HOST", "127.0.0.1")
     port = _integer(env, "PORT", 8767, minimum=1, maximum=65535)
     default_url = f"http://{host}:{port}"
+    webhook_file = (
+        _optional_path(env, "WEBHOOK_FILE")
+        if _env_name("WEBHOOK_FILE") in env
+        else _BUNDLED_WEBHOOK_FILE if _BUNDLED_WEBHOOK_FILE.is_file() else None
+    )
     settings = MonitorSettings(
         queue_db_path=queue_db_path,
         state_db_path=_path(
@@ -76,7 +84,7 @@ def load_settings(
             minimum=1,
         ),
         alert_cooldown=_number(env, "ALERT_COOLDOWN", 1800.0, minimum=0.0),
-        webhook_file=_optional_path(env, "WEBHOOK_FILE"),
+        webhook_file=webhook_file,
         host=host,
         port=port,
         collector_probe_timeout=_number(
@@ -85,6 +93,7 @@ def load_settings(
             5.0,
             minimum=0.01,
         ),
+        scenario_test_enabled=_boolean(env, "SCENARIO_TEST_ENABLED", False),
     )
     return validate_settings(settings)
 
@@ -93,15 +102,25 @@ def validate_settings(settings: MonitorSettings) -> MonitorSettings:
     """校验环境加载或手工构造的完整监控配置。"""
     validate_database_paths(settings.queue_db_path, settings.state_db_path)
     _validate_url(settings.monitor_url, "URL")
+    if not _url_protects_secret(settings.monitor_url):
+        raise ValueError(
+            "monitor url must use HTTPS or loopback because the UI accepts API keys"
+        )
     if settings.collector_mcp_url is not None:
         _validate_url(settings.collector_mcp_url, "COLLECTOR_MCP_URL")
-    if (
+    if settings.scenario_test_enabled and settings.collector_mcp_url is None:
+        raise ValueError("scenario test requires collector mcp url")
+    transports_api_key = (
         settings.collector_mcp_api_key_file is not None
+        or settings.scenario_test_enabled
+    )
+    if (
+        transports_api_key
         and settings.collector_mcp_url is not None
         and not _url_protects_secret(settings.collector_mcp_url)
     ):
         raise ValueError(
-            "collector mcp url must use HTTPS when an API key file is configured"
+            "collector mcp url must use HTTPS or loopback when an API key may be sent"
         )
     for name, value, minimum in (
         ("POLL_INTERVAL", settings.poll_interval, 0.01),
@@ -305,3 +324,13 @@ def _integer(
             f"{name.lower().replace('_', ' ')} must be >= {minimum}{suffix}"
         )
     return value
+
+
+def _boolean(env: Mapping[str, str], name: str, default: bool) -> bool:
+    """读取显式布尔配置，避免拼写错误静默启用高风险功能。"""
+    raw = str(env.get(_env_name(name), str(default))).strip().casefold()
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    raise ValueError(f"{name.lower().replace('_', ' ')} must be a boolean")

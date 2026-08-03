@@ -67,3 +67,6 @@ exclude = ["opscli.skills.templates*"]
 "opscli.query.services.planner.resources" = [
     "*.json",
 ]
+"opscli.collector_monitor" = [
+    "wecom-webhook",
+]

@@ -1,6 +1,6 @@
 # collect 监控优化 PRD
 
-> 状态：分期方案；当前交付仅覆盖共享路径、Bundle 启动隔离和同步手动探测。服务级事故、feedback、趋势与恢复动作仍为后续范围。
+> 状态：分期方案；当前交付覆盖共享路径、Bundle 启动隔离、同步手动探测，以及默认关闭的固定关键词反查场景测试。服务级事故、feedback、趋势与恢复动作仍为后续范围。
 > 依赖：[collect 监控优化调研](../analysis/collect监控优化调研.md)
 
 ## 1. 背景
@@ -19,7 +19,7 @@ SellerSprite collect 调用在队列数据库无法打开时直接失败，任�
 
 ## 3. 非目标
 
-- 不在首期提供任意任务重新提交、取消或强制重排。
+- 不提供任意 MCP Tool、任意场景、已有任务重新提交、取消或强制重排。
 - 不把 Monitor 变成浏览器/账号控制台。
 - 不读取或展示 `request_json`、用户邮箱、账号、凭据、绝对结果路径。
 - 不以 feedback 代替真实健康探测。
@@ -85,6 +85,18 @@ SellerSprite collect 调用在队列数据库无法打开时直接失败，任�
 - UI 明确展示 running/succeeded/failed/timeout 状态，并允许再次探测。
 - Collector UI 可接受 MCP API Key；默认仅用于下一次请求并在发送后清空，用户也可主动选择以明文保存到当前浏览器 `localStorage`，取消选择立即删除。两种模式均不写服务端配置、日志、缓存或状态库，`401/403` 映射为 `COLLECTOR_AUTH_FAILED`。
 
+### FR-4.1 关键词反查场景测试（P0）
+
+- 新增独立“场景测试”Tab，仅允许 `keyword-reverse`（关键词反查）。
+- 默认关闭；仅在 `OPSCLI_COLLECTOR_MONITOR_SCENARIO_TEST_ENABLED=true` 且 Collector MCP 地址已配置时可用。
+- ASIN 必填；站点、周期和 `page_size` 可修改，服务端固定 `export_format=json`。
+- 提交前必须确认会创建真实任务并消耗额度；同一时间只允许一个提交，完成后冷却 10 秒。
+- 必须提供页面 API Key，并通过 `Authorization: Bearer` 调用；Key 必须具有 `seller_sprite_run` 权限。真实场景不得回退借用 Monitor 的受保护 Key 文件，该文件只用于 Collector 探测。
+- Collector 地址必须使用 HTTPS；仅同机回环地址允许 HTTP。ASIN 使用 10 位 ASCII 字母数字，站点限制为卖家精灵支持列表。
+- Monitor 页面地址同样只允许 HTTPS 或明确回环 HTTP，避免浏览器到 Monitor 之间明文传输 Key。
+- 成功仅返回 `job_id`、`state`、固定场景和提交时间，随后可在任务 Tab 跟踪。
+- 不自动重试。等待超时必须报告 `scenario_outcome_unknown`，提示先查任务列表，禁止引导重复提交。
+
 ### FR-5 队列监督增强（P0/P1）
 
 - 保留现有六种任务健康分类。
@@ -124,6 +136,7 @@ SellerSprite collect 调用在队列数据库无法打开时直接失败，任�
 | 重启 Collector 进程 | P2/外部运维 | 应由 systemd/部署平台控制 |
 | requeue 已存在且租约过期任务 | P2 | 需幂等与代际 CAS |
 | 重试未入队请求 | 不支持 | 原请求未持久化，Monitor 不应持有敏感参数 |
+| 发起固定关键词反查测试任务 | 显式开关后支持 | 用已确认的测试参数验证鉴权、入队和调度链路，不等同于重试原请求 |
 
 ## 7. 成功指标
 
@@ -144,3 +157,4 @@ SellerSprite collect 调用在队列数据库无法打开时直接失败，任�
 6. feedback 快照断开时 Monitor 仍可正常扫描队列。
 7. 根因抑制、连续失败、连续恢复与静默均有状态机回归测试。
 8. 安装校验在当前文档错误路径场景下必须失败并给出修复建议。
+9. 场景测试默认关闭，不能调用任意工具；401、403、冷却和结果未知均返回稳定错误码且不泄露 Key。

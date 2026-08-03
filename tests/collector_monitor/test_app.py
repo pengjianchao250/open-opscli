@@ -8,6 +8,16 @@ import pytest
 from starlette.testclient import TestClient
 
 from opscli.collector_monitor.app import create_app
+from opscli.collector_monitor.service import (
+    CollectorMonitorScenarioAuthError,
+    CollectorMonitorScenarioBusyError,
+    CollectorMonitorScenarioCooldownError,
+    CollectorMonitorScenarioDisabledError,
+    CollectorMonitorScenarioOutcomeUnknownError,
+    CollectorMonitorScenarioPermissionError,
+    CollectorMonitorScenarioRejectedError,
+    CollectorMonitorScenarioUnavailableError,
+)
 
 
 class FakeService:
@@ -16,6 +26,7 @@ class FakeService:
     def __init__(self, *, ready: bool = True) -> None:
         self.is_ready = ready
         self.probe_calls: list[tuple[str, str | None]] = []
+        self.scenario_calls: list[dict] = []
         self.cached_snapshot = {
             "generated_at": "2026-07-29T04:00:00+00:00",
             "source": {
@@ -112,6 +123,28 @@ class FakeService:
             "error_class": None,
         }
 
+    def scenario_test_config(self):
+        return {
+            "enabled": True,
+            "configured": True,
+            "scenario": {"id": "keyword-reverse", "name": "关键词反查"},
+            "defaults": {
+                "site": "US",
+                "period": "30d",
+                "page_size": 100,
+                "export_format": "json",
+            },
+        }
+
+    async def submit_keyword_reverse(self, **arguments):
+        self.scenario_calls.append(arguments)
+        return {
+            "scenario": "keyword-reverse",
+            "job_id": "job-keyword-1",
+            "state": "queued",
+            "submitted_at": "2026-07-29T04:00:00+00:00",
+        }
+
 
 def _client(*, ready: bool = True) -> TestClient:
     """创建不启动后台轮询的隔离 ASGI 客户端。"""
@@ -173,13 +206,37 @@ def test_dashboard_exposes_accessible_tab_views() -> None:
     html = response.text
     assert response.status_code == 200
     assert 'role="tablist"' in html
-    for name in ("tasks", "collector", "runtimes", "incidents"):
+    for name in ("tasks", "collector", "scenario", "runtimes", "incidents"):
         assert f'id="tab-{name}"' in html
         assert f'aria-controls="panel-{name}"' in html
         assert f'id="panel-{name}"' in html
         assert f'aria-labelledby="tab-{name}"' in html
     assert 'id="tab-tasks" type="button" role="tab"' in html
     assert 'id="panel-collector" role="tabpanel"' in html
+
+
+def test_dashboard_exposes_controlled_keyword_reverse_scenario_form() -> None:
+    """场景 Tab 应显示固定关键词反查和可编辑白名单参数。"""
+    with _client() as client:
+        html = client.get("/").text
+
+    for text in (
+        'id="tab-scenario"',
+        'id="panel-scenario"',
+        "关键词反查",
+        "keyword-reverse",
+        'id="scenario-asin"',
+        'id="scenario-site" value="US"',
+        'id="scenario-period" value="30d"',
+        'id="scenario-page-size" type="number" min="1" max="100" value="100"',
+        'id="scenario-confirmed" type="checkbox"',
+        "会创建真实任务并消耗额度",
+        "提交关键词反查任务",
+        "/api/v1/commands/scenario-test",
+        'id="scenario-api-key" type="password" maxlength="512" autocomplete="new-password" autocapitalize="off" spellcheck="false" required',
+        'id="scenario-api-key-save" type="checkbox"',
+    ):
+        assert text in html
 
 
 def test_api_uses_cached_snapshot_filters_tasks_and_redacts_defensively() -> None:
@@ -226,6 +283,190 @@ def test_manual_probe_endpoints_use_only_fixed_targets() -> None:
     assert collector.json()["target"] == "collector"
     assert queue_source.json()["target"] == "queue-source"
     assert arbitrary.status_code == 404
+
+
+def test_scenario_test_contract_and_confirmed_submission() -> None:
+    """场景接口仅公开固定关键词反查，并把确认后的白名单参数交给服务。"""
+    service = FakeService()
+    with TestClient(create_app(service, manage_polling=False)) as client:
+        contract = client.get("/api/v1/commands/scenario-test")
+        submitted = client.post(
+            "/api/v1/commands/scenario-test",
+            json={
+                "api_key": "  temporary-mcp-key  ",
+                "confirmed": True,
+                "asin": " b07yrmt36l ",
+                "site": "us",
+                "period": "30d",
+                "page_size": 100,
+            },
+        )
+
+    assert contract.status_code == 200
+    assert contract.json() == service.scenario_test_config()
+    assert submitted.status_code == 202
+    assert submitted.json()["job_id"] == "job-keyword-1"
+    assert service.scenario_calls == [
+        {
+            "api_key": "temporary-mcp-key",
+            "asin": "B07YRMT36L",
+            "site": "US",
+            "period": "30d",
+            "page_size": 100,
+        }
+    ]
+    assert "temporary-mcp-key" not in submitted.text
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"confirmed": False, "asin": "B07YRMT36L", "site": "US", "period": "30d", "page_size": 100},
+        {"confirmed": True, "asin": "B07YRMT36L", "site": "US", "period": "30d", "page_size": 100},
+        {"confirmed": True, "asin": "bad", "site": "US", "period": "30d", "page_size": 100},
+        {
+            "confirmed": True,
+            "asin": "测试测试测试测试测试",
+            "site": "US",
+            "period": "30d",
+            "page_size": 100,
+        },
+        {"confirmed": True, "asin": "B07YRMT36L", "site": "USA", "period": "30d", "page_size": 100},
+        {
+            "confirmed": True,
+            "asin": "B07YRMT36L",
+            "site": "美国",
+            "period": "30d",
+            "page_size": 100,
+        },
+        {
+            "confirmed": True,
+            "asin": "B07YRMT36L",
+            "site": "ZZ",
+            "period": "30d",
+            "page_size": 100,
+        },
+        {"confirmed": True, "asin": "B07YRMT36L", "site": "US", "period": "forever", "page_size": 100},
+        {"api_key": "key", "confirmed": True, "asin": "B07YRMT36L", "site": "US", "period": "٢٠٢٦-٠٨", "page_size": 100},
+        {"confirmed": True, "asin": "B07YRMT36L", "site": "US", "period": "30d", "page_size": 101},
+        {"confirmed": True, "asin": "B07YRMT36L", "site": "US", "period": "30d", "page_size": True},
+        {"confirmed": True, "asin": "B07YRMT36L", "site": "US", "period": "30d", "page_size": 100, "tool": "arbitrary"},
+    ],
+)
+def test_scenario_test_rejects_unconfirmed_or_invalid_payloads(payload: dict) -> None:
+    """所有场景参数必须在白名单和固定边界内，拒绝后不得调用服务。"""
+    service = FakeService()
+    with TestClient(create_app(service, manage_polling=False)) as client:
+        response = client.post("/api/v1/commands/scenario-test", json=payload)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_scenario_payload"
+    assert service.scenario_calls == []
+
+
+def test_scenario_test_rejects_cross_origin_and_non_json_requests() -> None:
+    """真实任务写接口只接受当前来源的 JSON 请求。"""
+    service = FakeService()
+    with TestClient(create_app(service, manage_polling=False)) as client:
+        cross_origin = client.post(
+            "/api/v1/commands/scenario-test",
+            json={},
+            headers={"Origin": "https://attacker.example"},
+        )
+        non_json = client.post("/api/v1/commands/scenario-test")
+
+    assert cross_origin.status_code == 403
+    assert cross_origin.json()["error"]["code"] == "cross_origin_scenario_denied"
+    assert non_json.status_code == 415
+    assert service.scenario_calls == []
+
+
+def test_scenario_test_rejects_declared_oversized_body_before_buffering() -> None:
+    """写接口应先按 Content-Length 拒绝超限请求。"""
+    service = FakeService()
+    with TestClient(create_app(service, manage_polling=False)) as client:
+        response = client.post(
+            "/api/v1/commands/scenario-test",
+            content=b"{}",
+            headers={"Content-Type": "application/json", "Content-Length": "4096"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_scenario_payload"
+    assert service.scenario_calls == []
+
+
+def test_scenario_cannot_borrow_server_api_key(tmp_path) -> None:
+    """任何场景请求都不得借用 Monitor 的服务端密钥。"""
+    service = FakeService()
+    service.settings = type(
+        "Settings",
+        (),
+        {
+            "collector_mcp_api_key_file": tmp_path / "collector.key",
+            "monitor_url": "http://testserver",
+        },
+    )()
+    payload = {
+        "confirmed": True,
+        "asin": "B07YRMT36L",
+        "site": "US",
+        "period": "30d",
+        "page_size": 100,
+    }
+    app = create_app(service, manage_polling=False)
+    with TestClient(app, client=("127.0.0.1", 50000)) as client:
+        denied = client.post("/api/v1/commands/scenario-test", json=payload)
+
+    assert denied.status_code == 400
+    assert denied.json()["error"]["code"] == "invalid_scenario_payload"
+    assert service.scenario_calls == []
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code", "code"),
+    [
+        (CollectorMonitorScenarioDisabledError(), 403, "scenario_test_disabled"),
+        (CollectorMonitorScenarioBusyError(), 409, "scenario_test_in_progress"),
+        (CollectorMonitorScenarioCooldownError(7.5), 429, "scenario_test_cooldown"),
+        (CollectorMonitorScenarioAuthError(), 401, "collector_auth_failed"),
+        (CollectorMonitorScenarioPermissionError(), 403, "collector_permission_denied"),
+        (CollectorMonitorScenarioRejectedError(), 422, "scenario_test_rejected"),
+        (CollectorMonitorScenarioUnavailableError(), 503, "collector_unavailable"),
+        (
+            CollectorMonitorScenarioOutcomeUnknownError(),
+            504,
+            "scenario_outcome_unknown",
+        ),
+    ],
+)
+def test_scenario_test_maps_safe_operational_errors(
+    error: Exception,
+    status_code: int,
+    code: str,
+) -> None:
+    """场景失败应返回稳定诊断码，不能回显异常或凭据。"""
+
+    class FailingService(FakeService):
+        async def submit_keyword_reverse(self, **arguments):
+            raise error
+
+    with TestClient(create_app(FailingService(), manage_polling=False)) as client:
+        response = client.post(
+            "/api/v1/commands/scenario-test",
+            json={
+                "api_key": "temporary-mcp-key",
+                "confirmed": True,
+                "asin": "B07YRMT36L",
+                "site": "US",
+                "period": "30d",
+                "page_size": 100,
+            },
+        )
+
+    assert response.status_code == status_code
+    assert response.json()["error"]["code"] == code
+    assert "temporary-mcp-key" not in response.text
 
 
 def test_collector_probe_accepts_one_time_api_key_without_echoing_it() -> None:

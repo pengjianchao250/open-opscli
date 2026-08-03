@@ -1,4 +1,4 @@
-"""Collector Monitor Starlette 应用工厂与只读 HTTP API。"""
+"""Collector Monitor Starlette 应用工厂与受控 HTTP API。"""
 
 from __future__ import annotations
 
@@ -11,12 +11,34 @@ from typing import Any, Mapping
 from opscli.collector_monitor.service import (
     CollectorMonitorProbeBusyError,
     CollectorMonitorProbeCooldownError,
+    CollectorMonitorScenarioAuthError,
+    CollectorMonitorScenarioBusyError,
+    CollectorMonitorScenarioCooldownError,
+    CollectorMonitorScenarioDisabledError,
+    CollectorMonitorScenarioOutcomeUnknownError,
+    CollectorMonitorScenarioPermissionError,
+    CollectorMonitorScenarioRejectedError,
+    CollectorMonitorScenarioUnavailableError,
 )
 from opscli.collector_monitor.ui import DASHBOARD_HTML
 
 _MAX_API_LIMIT = 500
 _MAX_PROBE_BODY_BYTES = 2048
 _MAX_PROBE_API_KEY_LENGTH = 512
+# 场景入口只接受 Collector 当前明确支持的周期和 Amazon 站点。
+_ALLOWED_SCENARIO_PERIODS = {"30d", "nearly"}
+_ALLOWED_SCENARIO_SITES = {
+    "US",
+    "UK",
+    "DE",
+    "FR",
+    "JP",
+    "CA",
+    "IT",
+    "ES",
+    "IN",
+    "MX",
+}
 _ALLOWED_HEALTH = {
     "healthy",
     "slow",
@@ -191,20 +213,33 @@ def create_app(service: Any, *, manage_polling: bool = True) -> Any:
             status_code=400,
         )
 
-    async def probe_payload(
+    def invalid_scenario_payload(message: str) -> Any:
+        """返回不包含请求原文的统一场景参数错误。"""
+        return JSONResponse(
+            {"error": {"code": "invalid_scenario_payload", "message": message}},
+            status_code=400,
+        )
+
+    async def json_object_payload(
         request: Request,
         *,
-        allow_api_key: bool,
-    ) -> tuple[str | None, Any | None]:
-        """校验同源 JSON，并提取不会持久化的可选临时 API Key。"""
+        noun: str,
+        cross_origin_code: str,
+        invalid_payload: Any,
+    ) -> tuple[Mapping[str, Any] | None, Any | None]:
+        """统一校验写接口的同源、类型、体积和 JSON 对象合同。"""
         origin = request.headers.get("origin")
-        expected_origin = f"{request.url.scheme}://{request.url.netloc}"
+        expected_origin = str(
+            getattr(getattr(service, "settings", None), "monitor_url", "")
+        ).rstrip("/")
+        if not expected_origin:
+            expected_origin = f"{request.url.scheme}://{request.url.netloc}"
         if origin is not None and origin.rstrip("/") != expected_origin:
             return None, JSONResponse(
                 {
                     "error": {
-                        "code": "cross_origin_probe_denied",
-                        "message": "拒绝跨源探测请求",
+                        "code": cross_origin_code,
+                        "message": f"拒绝跨源{noun}请求",
                     }
                 },
                 status_code=403,
@@ -215,36 +250,75 @@ def create_app(service: Any, *, manage_polling: bool = True) -> Any:
                 {
                     "error": {
                         "code": "invalid_content_type",
-                        "message": "探测请求必须使用 application/json",
+                        "message": f"{noun}请求必须使用 application/json",
                     }
                 },
                 status_code=415,
             )
-        raw_body = await request.body()
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared_length = int(content_length)
+            except ValueError:
+                return None, invalid_payload(f"{noun}请求 Content-Length 无效")
+            if declared_length < 0 or declared_length > _MAX_PROBE_BODY_BYTES:
+                return None, invalid_payload(f"{noun}请求过大")
+        chunks: list[bytes] = []
+        received = 0
+        async for chunk in request.stream():
+            received += len(chunk)
+            if received > _MAX_PROBE_BODY_BYTES:
+                return None, invalid_payload(f"{noun}请求过大")
+            chunks.append(chunk)
+        raw_body = b"".join(chunks)
         if len(raw_body) > _MAX_PROBE_BODY_BYTES:
-            return None, invalid_probe_payload("探测请求过大")
+            return None, invalid_payload(f"{noun}请求过大")
         try:
             payload = json.loads(raw_body)
         except (UnicodeDecodeError, json.JSONDecodeError):
-            return None, invalid_probe_payload("探测请求不是有效 JSON")
+            return None, invalid_payload(f"{noun}请求不是有效 JSON")
         if not isinstance(payload, Mapping):
-            return None, invalid_probe_payload("探测请求必须是 JSON 对象")
-        allowed_fields = {"api_key"} if allow_api_key else set()
-        if set(payload) - allowed_fields:
-            return None, invalid_probe_payload("探测请求包含不支持的字段")
+            return None, invalid_payload(f"{noun}请求必须是 JSON 对象")
+        return payload, None
+
+    def api_key_from_payload(
+        payload: Mapping[str, Any],
+        invalid_payload: Any,
+    ) -> tuple[str | None, Any | None]:
+        """提取有界临时 Key，且不在错误中引用请求原文。"""
         if "api_key" not in payload:
             return None, None
         raw_api_key = payload["api_key"]
         if not isinstance(raw_api_key, str):
-            return None, invalid_probe_payload("API Key 必须是文本")
+            return None, invalid_payload("API Key 必须是文本")
         api_key = raw_api_key.strip()
         if (
             not api_key
             or len(api_key) > _MAX_PROBE_API_KEY_LENGTH
             or any(ord(character) < 32 for character in api_key)
         ):
-            return None, invalid_probe_payload("API Key 格式无效")
+            return None, invalid_payload("API Key 格式无效")
         return api_key, None
+
+    async def probe_payload(
+        request: Request,
+        *,
+        allow_api_key: bool,
+    ) -> tuple[str | None, Any | None]:
+        """校验同源 JSON，并提取不会持久化的可选临时 API Key。"""
+        payload, invalid = await json_object_payload(
+            request,
+            noun="探测",
+            cross_origin_code="cross_origin_probe_denied",
+            invalid_payload=invalid_probe_payload,
+        )
+        if invalid is not None:
+            return None, invalid
+        assert payload is not None
+        allowed_fields = {"api_key"} if allow_api_key else set()
+        if set(payload) - allowed_fields:
+            return None, invalid_probe_payload("探测请求包含不支持的字段")
+        return api_key_from_payload(payload, invalid_probe_payload)
 
     async def probe_collector(request: Request) -> Any:
         """手动探测配置中的固定 Collector MCP。"""
@@ -259,6 +333,124 @@ def create_app(service: Any, *, manage_polling: bool = True) -> Any:
         if invalid is not None:
             return invalid
         return await manual_probe("queue-source")
+
+    async def scenario_test_contract(_request: Request) -> Any:
+        """返回固定关键词反查场景及页面默认参数。"""
+        return JSONResponse(_redact(service.scenario_test_config()))
+
+    async def submit_scenario_test(request: Request) -> Any:
+        """校验受控参数并提交一次真实关键词反查任务。"""
+        payload, invalid = await json_object_payload(
+            request,
+            noun="场景测试",
+            cross_origin_code="cross_origin_scenario_denied",
+            invalid_payload=invalid_scenario_payload,
+        )
+        if invalid is not None:
+            return invalid
+        assert payload is not None
+        allowed_fields = {"api_key", "confirmed", "asin", "site", "period", "page_size"}
+        if set(payload) - allowed_fields:
+            return invalid_scenario_payload("场景测试请求包含不支持的字段")
+        if payload.get("confirmed") is not True:
+            return invalid_scenario_payload("必须确认该操作会创建真实任务并消耗额度")
+        api_key, invalid = api_key_from_payload(payload, invalid_scenario_payload)
+        if invalid is not None:
+            return invalid
+        if api_key is None:
+            return invalid_scenario_payload("场景测试必须提供 API Key")
+        raw_asin = payload.get("asin")
+        asin = raw_asin.strip().upper() if isinstance(raw_asin, str) else ""
+        if len(asin) != 10 or not asin.isascii() or not asin.isalnum():
+            return invalid_scenario_payload("ASIN 必须是 10 位字母或数字")
+        raw_site = payload.get("site")
+        site = raw_site.strip().upper() if isinstance(raw_site, str) else ""
+        if site not in _ALLOWED_SCENARIO_SITES:
+            return invalid_scenario_payload("站点不在支持列表中")
+        raw_period = payload.get("period")
+        period = raw_period.strip().lower() if isinstance(raw_period, str) else ""
+        is_month = (
+            len(period) == 7
+            and period.isascii()
+            and period[4] == "-"
+            and period[:4].isdigit()
+            and period[5:].isdigit()
+            and 1 <= int(period[5:]) <= 12
+        )
+        if period not in _ALLOWED_SCENARIO_PERIODS and not is_month:
+            return invalid_scenario_payload("周期必须是 30d、nearly 或 YYYY-MM")
+        page_size = payload.get("page_size")
+        if (
+            isinstance(page_size, bool)
+            or not isinstance(page_size, int)
+            or not 1 <= page_size <= 100
+        ):
+            return invalid_scenario_payload("page_size 必须是 1 到 100 的整数")
+        try:
+            result = await service.submit_keyword_reverse(
+                api_key=api_key,
+                asin=asin,
+                site=site,
+                period=period,
+                page_size=page_size,
+            )
+        except CollectorMonitorScenarioDisabledError:
+            return JSONResponse(
+                {"error": {"code": "scenario_test_disabled", "message": "场景测试未启用"}},
+                status_code=403,
+            )
+        except CollectorMonitorScenarioBusyError:
+            return JSONResponse(
+                {"error": {"code": "scenario_test_in_progress", "message": "已有场景测试正在提交"}},
+                status_code=409,
+            )
+        except CollectorMonitorScenarioCooldownError as exc:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": "scenario_test_cooldown",
+                        "message": "场景测试仍在冷却期",
+                        "retry_after": exc.retry_after,
+                    }
+                },
+                status_code=429,
+            )
+        except CollectorMonitorScenarioAuthError:
+            return JSONResponse(
+                {"error": {"code": "collector_auth_failed", "message": "Collector API Key 无效"}},
+                status_code=401,
+            )
+        except CollectorMonitorScenarioPermissionError:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": "collector_permission_denied",
+                        "message": "API Key 缺少 seller_sprite_run 权限",
+                    }
+                },
+                status_code=403,
+            )
+        except CollectorMonitorScenarioRejectedError:
+            return JSONResponse(
+                {"error": {"code": "scenario_test_rejected", "message": "Collector 拒绝创建任务"}},
+                status_code=422,
+            )
+        except CollectorMonitorScenarioUnavailableError:
+            return JSONResponse(
+                {"error": {"code": "collector_unavailable", "message": "Collector 暂不可用"}},
+                status_code=503,
+            )
+        except CollectorMonitorScenarioOutcomeUnknownError:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": "scenario_outcome_unknown",
+                        "message": "提交结果未知，请先在任务列表确认，不要重复提交",
+                    }
+                },
+                status_code=504,
+            )
+        return JSONResponse(_redact(result), status_code=202)
 
     async def no_store(request: Any, call_next: Any) -> Any:
         """禁止浏览器和代理缓存监控数据。"""
@@ -284,6 +476,16 @@ def create_app(service: Any, *, manage_polling: bool = True) -> Any:
             Route("/api/v1/incidents", incidents, methods=["GET"]),
             Route("/api/v1/probes/collector", probe_collector, methods=["POST"]),
             Route("/api/v1/probes/queue-source", probe_queue_source, methods=["POST"]),
+            Route(
+                "/api/v1/commands/scenario-test",
+                scenario_test_contract,
+                methods=["GET"],
+            ),
+            Route(
+                "/api/v1/commands/scenario-test",
+                submit_scenario_test,
+                methods=["POST"],
+            ),
         ],
         middleware=[Middleware(BaseHTTPMiddleware, dispatch=no_store)],
         lifespan=lifespan,

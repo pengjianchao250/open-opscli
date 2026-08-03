@@ -1,6 +1,6 @@
 # Collector Monitor 运维说明
 
-> 内部文档，仅供 Collector Monitor 部署、巡检和故障排查使用。Monitor v1 是严格只读的监督服务，不是任务控制台。
+> 内部文档，仅供 Collector Monitor 部署、巡检和故障排查使用。Monitor 的监督、查询和探测默认只读；仅显式启用的固定关键词反查场景测试会创建真实任务，它仍不是通用任务控制台。
 
 ## 1. 文档状态与使用前提示
 
@@ -18,11 +18,13 @@ Collector Monitor v1 只提供：
 - Starlette 只读网页和 JSON API；
 - 本地只读 CLI；
 - Collector 与队列源固定目标的手动只读探测；
+- 默认关闭的固定 `keyword-reverse`（关键词反查）真实场景测试；
 - 企业微信 Webhook 告警、去重、冷却和恢复通知。
 
 Collector Monitor v1 **不提供**：
 
 - 取消、失败、重试、重新入队或调整任务顺序；
+- 任意 MCP Tool、任意场景或调用方自定义工具参数；
 - 启动、停止或重启 Collector/Worker；
 - 浏览器启动、登录、验证码处理或任何浏览器控制；
 - 自动修复业务 SQLite；
@@ -110,17 +112,18 @@ Monitor 应以 SQLite URI `mode=ro` 并启用 `PRAGMA query_only=ON`。业务库
 | `OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH` | `~/.config/opscli/seller_sprite/task_queue.sqlite3` | 两个服务配置同一绝对路径 | SellerSprite 写端与 Monitor 读端共享的主路径合同 |
 | `OPSCLI_COLLECTOR_MONITOR_QUEUE_DB_PATH` | 同 SellerSprite 主路径 | 建议省略 | 兼容变量；同时显式配置且不一致时 Monitor 拒绝启动 |
 | `OPSCLI_COLLECTOR_MONITOR_STATE_DB_PATH` | `~/.config/opscli/collector_monitor/state.sqlite3` | 独立持久卷 | 不得通过路径、符号链接或硬链接指向业务库 |
-| `OPSCLI_COLLECTOR_MONITOR_URL` | `http://<HOST>:<PORT>` | 可选内网 HTTPS 地址 | Monitor 基址；加载时去除尾部 `/`，不得包含凭证 |
-| `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_URL` | 空 | 按需启用 | 配置 API Key 文件时必须使用 HTTPS，仅明确回环地址允许 HTTP |
+| `OPSCLI_COLLECTOR_MONITOR_URL` | `http://127.0.0.1:8767` | HTTPS 或回环 URL | Monitor 基址；加载时去除尾部 `/`，不得包含凭证 |
+| `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_URL` | 空 | 按需启用 | 配置 API Key 文件或启用场景测试时必须使用 HTTPS，仅明确回环地址允许 HTTP |
 | `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_API_KEY_FILE` | 空 | 受保护绝对路径 | 可选 Collector MCP API Key 文件；禁止直接配置 Key 原文；携带 Key 时禁止自动跟随重定向 |
 | `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_PROBE_TIMEOUT` | `5` | `5` 起步 | Collector MCP 探测总超时秒数，覆盖受保护文件读取和远端调用，必须大于 0 |
+| `OPSCLI_COLLECTOR_MONITOR_SCENARIO_TEST_ENABLED` | `false` | 仅按需短期开启 | 允许页面提交固定关键词反查真实任务；启用时必须配置 HTTPS 或回环 Collector MCP URL |
 | `OPSCLI_COLLECTOR_MONITOR_POLL_INTERVAL` | `10` | `10` 起步 | 扫描周期秒数，必须大于 0 |
 | `OPSCLI_COLLECTOR_MONITOR_STALLED_THRESHOLD` | `300` | 依据最长正常进度间隔调整 | 无真实进度停滞阈值；`slow` 从一半即 `150` 秒开始 |
 | `OPSCLI_COLLECTOR_MONITOR_QUEUE_THRESHOLD` | `300` | 依据正常排队时间调整 | 触发 `queue_starved` / `worker_unavailable` 的排队年龄 |
 | `OPSCLI_COLLECTOR_MONITOR_RUNTIME_STALE_THRESHOLD` | `300` | 覆盖正常心跳抖动 | Worker/调度器心跳陈旧阈值 |
 | `OPSCLI_COLLECTOR_MONITOR_ORPHAN_REQUIRED_SCANS` | `2` | `2` 起步 | owner 或租约失效后确认 `orphaned` 的连续扫描次数，必须至少为 1 |
 | `OPSCLI_COLLECTOR_MONITOR_ALERT_COOLDOWN` | `1800` | `1800` 起步 | 同一事件重复提醒冷却秒数 |
-| `OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE` | 空 | 受保护绝对路径 | 企业微信 Webhook 文件；空表示禁用通知 |
+| `OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE` | 项目内置机器人文件 | 受保护绝对路径或空值 | 环境变量可覆盖内置文件，空值禁用通知 |
 
 SellerSprite 已确认的相关变量：
 
@@ -216,6 +219,15 @@ $env:OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE = `
 ```text
 http://127.0.0.1:8767/
 ```
+
+需要验证真实鉴权、入队和调度链路时，可在受控环境显式启用场景测试：
+
+```powershell
+$env:OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_URL = "http://127.0.0.1:8766/mcp"
+$env:OPSCLI_COLLECTOR_MONITOR_SCENARIO_TEST_ENABLED = "true"
+```
+
+页面提交会消耗真实卖家精灵额度。页面必须提供具有 `seller_sprite_run` 权限的 API Key；真实场景不会借用服务端 Key 文件。完成验证后应恢复为 `false`。不要把 Key 原文写入环境变量。
 
 不要用开发临时状态库进行正式告警，否则重启或临时目录清理会破坏去重和恢复闭环。
 
@@ -354,7 +366,7 @@ opscli collector-monitor probe --target queue-source
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/` | 单页嵌入式只读仪表盘；无外部 CDN，以 7 秒间隔刷新缓存状态 |
+| `GET` | `/` | 单页嵌入式监督台；无外部 CDN，以 7 秒间隔只读刷新缓存状态 |
 
 一期没有独立 `/tasks` 或 `/incidents` HTML 路由；任务、Generic/Listing 分类容量、Collector MCP 状态、活动和已恢复事故历史、进度时间线都在首页展示。
 
@@ -370,6 +382,8 @@ opscli collector-monitor probe --target queue-source
 | `GET` | `/api/v1/incidents?status=<值>&rule=<值>&limit=<1..500>` | 事故列表；过滤均可选，默认 100 条 |
 | `POST` | `/api/v1/probes/collector` | 同步手动探测固定 Collector MCP，最多 5 秒；可选一次性 `{"api_key":"..."}` |
 | `POST` | `/api/v1/probes/queue-source` | 同步只读探测固定 SellerSprite 队列源，最多 5 秒 |
+| `GET` | `/api/v1/commands/scenario-test` | 返回固定关键词反查场景、开关和默认参数，不返回 Key |
+| `POST` | `/api/v1/commands/scenario-test` | 显式确认后提交真实关键词反查任务，成功返回 `job_id`，可能消耗额度 |
 
 本机检查：
 
@@ -381,9 +395,13 @@ curl --fail --silent --show-error http://127.0.0.1:8767/api/v1/status
 
 `/health/live` 成功只表示 Monitor 自身可响应；`/health/ready` 失败通常表示业务库不可读、schema 不匹配或尚未完成首次成功扫描。配置或私有状态库初始化失败通常会让进程直接启动失败。业务任务存在 `stalled` 不会让存活或就绪探针失败，但会让 CLI `status` 返回退出码 `2`。
 
-API v1 不提供业务写入。两个 `POST` 探测端点只使用服务端冻结目标，不接受 URL、文件路径、自定义 Header 或命令；Collector 端点仅额外接受可选的 `api_key` 字段，最长 512 字符，临时 Key 优先于文件 Key 且不持久化，并通过标准 `Authorization: Bearer <api_key>` 调用 Collector MCP；队列源端点拒绝任何字段。`401/403` 返回稳定诊断码 `COLLECTOR_AUTH_FAILED`，其他连接错误使用 `COLLECTOR_UNREACHABLE`。同一目标最多一个并发，完成后冷却 10 秒，且不创建任务、MCP run 或业务输出。任务过滤允许 `health` 六种健康值、`status=queued|running|succeeded|failed`、`task_kind=generic|listing_analysis`；事故过滤允许 `status=active|resolved` 与四种 `rule`。两个列表的 `limit` 默认为 100、最大 500，但 API 只过滤轮询缓存：当前快照最多 1000 条任务和最近 500 条事故。
+两个 `POST` 探测端点只使用服务端冻结目标，不接受 URL、文件路径、自定义 Header 或命令；Collector 端点仅额外接受可选的 `api_key` 字段，最长 512 字符，临时 Key 优先于文件 Key 且不持久化，并通过标准 `Authorization: Bearer <api_key>` 调用 Collector MCP；队列源端点拒绝任何字段。`401/403` 返回稳定诊断码 `COLLECTOR_AUTH_FAILED`，其他连接错误使用 `COLLECTOR_UNREACHABLE`。同一目标最多一个并发，完成后冷却 10 秒，且不创建任务、MCP run 或业务输出。
 
-页面 Key 仅用于鉴权诊断，默认发送后立即清空；勾选“保存到此浏览器”后会以明文写入当前同源页面的 `localStorage`，刷新页面自动恢复，取消勾选立即删除。该值可被同源脚本读取，也会随浏览器 Profile 保留，只适合受控运维终端，不应在共享电脑使用。长期运行仍应配置权限受限的 `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_API_KEY_FILE`；Monitor 经反向代理开放时必须启用 HTTPS 和运维认证，禁止在明文远程 HTTP 页面输入或保存 Key。
+唯一业务写入口是默认关闭的场景测试 POST。它不接受工具名或场景名，只能调用 `seller_sprite_run` 的 `keyword-reverse`；请求必须包含 `confirmed=true`、10 位 ASIN、两位站点、`30d`/`nearly`/`YYYY-MM` 周期和 1～100 的 `page_size`，导出固定为 JSON。提交单飞且完成后冷却 10 秒，不自动重试；等待超时返回 `scenario_outcome_unknown`，此时任务可能已入队，应先在任务 Tab 查找，禁止立即重复提交。401 表示 Key 无效，403 表示缺少 `seller_sprite_run` 权限。
+
+任务过滤允许 `health` 六种健康值、`status=queued|running|succeeded|failed`、`task_kind=generic|listing_analysis`；事故过滤允许 `status=active|resolved` 与四种 `rule`。两个列表的 `limit` 默认为 100、最大 500，但 API 只过滤轮询缓存：当前快照最多 1000 条任务和最近 500 条事故。
+
+Collector 与场景测试 Tab 共用同一个浏览器 Key 存储项。Key 默认发送后立即清空；勾选“保存到此浏览器”后会以明文写入当前同源页面的 `localStorage`，刷新页面自动恢复，取消勾选立即删除。该值可被同源脚本读取，也会随浏览器 Profile 保留，只适合受控运维终端，不应在共享电脑使用。长期运行仍应配置权限受限的 `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_API_KEY_FILE`；Monitor 经反向代理开放时必须启用 HTTPS 和运维认证，禁止在明文远程 HTTP 页面输入或保存 Key。
 
 ## 10. 日常巡检
 
@@ -644,6 +662,7 @@ ALERT_COOLDOWN=1800 >> POLL_INTERVAL(10)
 8. 禁止因通知发送失败而绕过去重状态无限重试。
 9. 禁止清空私有状态库来“重发告警”，这会破坏冷却和恢复审计。
 10. 禁止把飞书配置加入一期部署；一期唯一通知渠道是企业微信。
+11. 禁止在未确认任务列表前重复提交 `scenario_outcome_unknown` 的场景测试；该状态不能证明远端未创建任务。
 
 ## 15. 升级、回滚与备份
 
@@ -688,6 +707,7 @@ Monitor 私有状态库需要纳入备份以保留去重、冷却和恢复闭环
 - `opscli-collector-monitor` 与 `opscli.collector_monitor.server:run`；
 - 第 4 节全部 `OPSCLI_COLLECTOR_MONITOR_*` 配置；
 - `/health/live`、`/health/ready`、`/api/v1/status`、`/api/v1/tasks`、`/api/v1/tasks/{job_id}`、`/api/v1/incidents`、两个固定 `/api/v1/probes/*` 端点；
+- 默认关闭的 `/api/v1/commands/scenario-test` GET/POST 合同与固定 `keyword-reverse` 场景；
 - `progress_stage`、`progress_at`、`progress_sequence` 和 `seller_sprite_task_progress_events`；
 - `seller_sprite_runtime_heartbeats` 及第 3.2 节列出的运行时字段；
 - SellerSprite 默认业务库 `~/.config/opscli/seller_sprite/task_queue.sqlite3`。

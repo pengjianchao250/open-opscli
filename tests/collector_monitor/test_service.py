@@ -16,10 +16,17 @@ from opscli.collector_monitor.config import MonitorSettings
 from opscli.collector_monitor.repository import RepositorySourceError, ScanObservations
 from opscli.collector_monitor import service as service_module
 from opscli.collector_monitor.service import (
+    CollectorMonitorScenarioBusyError,
+    CollectorMonitorScenarioCooldownError,
+    CollectorMonitorScenarioAuthError,
     CollectorMonitorProbeBusyError,
     CollectorMonitorProbeCooldownError,
+    CollectorMonitorScenarioDisabledError,
+    CollectorMonitorScenarioOutcomeUnknownError,
+    CollectorMonitorScenarioPermissionError,
     CollectorMonitorService,
     probe_collector,
+    run_collector_scenario,
 )
 from opscli.collector_monitor.state import MonitorStateStore
 
@@ -49,6 +56,7 @@ def _settings(tmp_path: Path, **overrides) -> MonitorSettings:
         "host": "127.0.0.1",
         "port": 8767,
         "collector_probe_timeout": 0.1,
+        "scenario_test_enabled": False,
     }
     values.update(overrides)
     return MonitorSettings(**values)
@@ -676,6 +684,455 @@ def test_manual_probe_uses_one_time_key_without_persisting_it(tmp_path: Path) ->
     assert result["status"] == "ready"
     assert "temporary-mcp-key" not in repr(result)
     assert "temporary-mcp-key" not in repr(service.cached_snapshot)
+
+
+def test_scenario_submission_calls_fixed_keyword_reverse_and_returns_job_id(
+    tmp_path: Path,
+) -> None:
+    """场景测试只能提交固定关键词反查，并返回可跟踪的任务标识。"""
+    captured = {}
+
+    async def run_scenario(settings, arguments, api_key):
+        captured.update(settings=settings, arguments=arguments, api_key=api_key)
+        return {"job_id": "job-keyword-1", "state": "queued"}
+
+    settings = _settings(
+        tmp_path,
+        collector_mcp_url="https://collector.example/mcp",
+        scenario_test_enabled=True,
+    )
+    service = CollectorMonitorService(
+        settings,
+        repository=FakeRepository(),
+        state_store=MonitorStateStore(settings.state_db_path, cooldown_seconds=1800),
+        notifier=RecordingNotifier(),
+        scenario_runner=run_scenario,
+        clock=lambda: NOW,
+    )
+
+    result = asyncio.run(
+        service.submit_keyword_reverse(
+            asin="B07YRMT36L",
+            site="US",
+            period="30d",
+            page_size=100,
+            api_key="temporary-mcp-key",
+        )
+    )
+
+    assert captured == {
+        "settings": settings,
+        "arguments": {
+            "scenario": "keyword-reverse",
+            "params": {"asin": "B07YRMT36L"},
+            "site": "US",
+            "period": "30d",
+            "page_size": 100,
+            "export_format": "json",
+        },
+        "api_key": "temporary-mcp-key",
+    }
+    assert result == {
+        "scenario": "keyword-reverse",
+        "job_id": "job-keyword-1",
+        "state": "queued",
+        "submitted_at": NOW.isoformat(),
+    }
+    assert "temporary-mcp-key" not in repr(result)
+    assert "temporary-mcp-key" not in repr(service.cached_snapshot)
+
+
+def test_scenario_submission_is_rejected_when_feature_is_disabled(
+    tmp_path: Path,
+) -> None:
+    """默认关闭时不得通过服务层绕过场景测试开关。"""
+    calls = 0
+
+    async def run_scenario(settings, arguments, api_key):
+        nonlocal calls
+        calls += 1
+        return {"job_id": "must-not-run", "state": "queued"}
+
+    settings = _settings(
+        tmp_path,
+        collector_mcp_url="https://collector.example/mcp",
+        scenario_test_enabled=False,
+    )
+    service = CollectorMonitorService(
+        settings,
+        repository=FakeRepository(),
+        state_store=MonitorStateStore(settings.state_db_path, cooldown_seconds=1800),
+        notifier=RecordingNotifier(),
+        scenario_runner=run_scenario,
+    )
+
+    with pytest.raises(CollectorMonitorScenarioDisabledError):
+        asyncio.run(
+            service.submit_keyword_reverse(
+                asin="B07YRMT36L",
+                site="US",
+                period="30d",
+                page_size=100,
+            )
+        )
+
+    assert calls == 0
+
+
+def test_scenario_submission_enforces_single_flight_and_cooldown(
+    tmp_path: Path,
+) -> None:
+    """真实额度任务在执行中和完成后十秒内不得重复提交。"""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    monotonic_now = [100.0]
+
+    async def run_scenario(settings, arguments, api_key):
+        started.set()
+        await release.wait()
+        return {"job_id": "job-keyword-1", "state": "queued"}
+
+    async def scenario() -> None:
+        settings = _settings(
+            tmp_path,
+            collector_mcp_url="https://collector.example/mcp",
+            scenario_test_enabled=True,
+        )
+        service = CollectorMonitorService(
+            settings,
+            repository=FakeRepository(),
+            state_store=MonitorStateStore(settings.state_db_path, cooldown_seconds=1800),
+            notifier=RecordingNotifier(),
+            scenario_runner=run_scenario,
+            monotonic_clock=lambda: monotonic_now[0],
+        )
+        first = asyncio.create_task(
+            service.submit_keyword_reverse(
+                asin="B07YRMT36L", site="US", period="30d", page_size=100
+            )
+        )
+        await started.wait()
+        with pytest.raises(CollectorMonitorScenarioBusyError):
+            await service.submit_keyword_reverse(
+                asin="B07YRMT36L", site="US", period="30d", page_size=100
+            )
+        release.set()
+        assert (await first)["job_id"] == "job-keyword-1"
+        with pytest.raises(CollectorMonitorScenarioCooldownError) as exc_info:
+            await service.submit_keyword_reverse(
+                asin="B07YRMT36L", site="US", period="30d", page_size=100
+            )
+        assert exc_info.value.retry_after == 10.0
+        monotonic_now[0] += 10.0
+        assert (
+            await service.submit_keyword_reverse(
+                asin="B07YRMT36L", site="US", period="30d", page_size=100
+            )
+        )["state"] == "queued"
+
+    asyncio.run(scenario())
+
+
+def test_scenario_runner_uses_bearer_key_and_fixed_seller_sprite_tool(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """真实场景调用必须复用 Bearer 鉴权并固定工具名。"""
+    captured = {}
+
+    class FakeRemoteClient:
+        def __init__(self, url, *, headers=None, follow_redirects=True):
+            captured.update(
+                url=url,
+                headers=headers,
+                follow_redirects=follow_redirects,
+            )
+
+        async def call_tool(self, tool_name, arguments):
+            captured.update(tool_name=tool_name, arguments=arguments)
+            return {
+                "success": True,
+                "data": {"job_id": "job-keyword-1", "state": "queued"},
+            }
+
+    monkeypatch.setattr(
+        "opscli.collector_monitor.service.RemoteMcpClient",
+        FakeRemoteClient,
+    )
+    settings = _settings(
+        tmp_path,
+        collector_mcp_url="https://collector.example/mcp",
+        scenario_test_enabled=True,
+    )
+    arguments = {
+        "scenario": "keyword-reverse",
+        "params": {"asin": "B07YRMT36L"},
+        "site": "US",
+        "period": "30d",
+        "page_size": 100,
+        "export_format": "json",
+    }
+
+    result = asyncio.run(
+        run_collector_scenario(settings, arguments, "temporary-mcp-key")
+    )
+
+    assert result == {"job_id": "job-keyword-1", "state": "queued"}
+    assert captured == {
+        "url": "https://collector.example/mcp",
+        "headers": {"Authorization": "Bearer temporary-mcp-key"},
+        "follow_redirects": False,
+        "tool_name": "seller_sprite_run",
+        "arguments": arguments,
+    }
+    assert "temporary-mcp-key" not in repr(result)
+
+
+def test_scenario_timeout_reports_unknown_outcome_without_retrying(
+    tmp_path: Path,
+) -> None:
+    """提交超时后不得自动重试，并在底层结束前继续阻止重复扣额。"""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def run_scenario(settings, arguments, api_key):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return {"job_id": "job-late", "state": "queued"}
+
+    async def scenario() -> None:
+        settings = _settings(
+            tmp_path,
+            collector_mcp_url="https://collector.example/mcp",
+            scenario_test_enabled=True,
+        )
+        service = CollectorMonitorService(
+            settings,
+            repository=FakeRepository(),
+            state_store=MonitorStateStore(settings.state_db_path, cooldown_seconds=1800),
+            notifier=RecordingNotifier(),
+            scenario_runner=run_scenario,
+        )
+        with pytest.raises(CollectorMonitorScenarioOutcomeUnknownError):
+            await service.submit_keyword_reverse(
+                asin="B07YRMT36L", site="US", period="30d", page_size=100
+            )
+        assert calls == 1
+        with pytest.raises(CollectorMonitorScenarioBusyError):
+            await service.submit_keyword_reverse(
+                asin="B07YRMT36L", site="US", period="30d", page_size=100
+            )
+        release.set()
+        for _ in range(20):
+            if not service._scenario_lock.locked():
+                break
+            await asyncio.sleep(0.01)
+        assert service._scenario_lock.locked() is False
+        assert calls == 1
+
+    original_timeout = service_module._SCENARIO_SUBMIT_TIMEOUT_SECONDS
+    service_module._SCENARIO_SUBMIT_TIMEOUT_SECONDS = 0.01
+    try:
+        asyncio.run(scenario())
+    finally:
+        service_module._SCENARIO_SUBMIT_TIMEOUT_SECONDS = original_timeout
+
+
+def test_cancelled_scenario_request_holds_lock_until_runner_finishes(
+    tmp_path: Path,
+) -> None:
+    """客户端断开取消请求时，远端调用结束前仍不得再次提交。"""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def run_scenario(settings, arguments, api_key):
+        started.set()
+        await release.wait()
+        return {"job_id": "job-after-cancel", "state": "queued"}
+
+    async def scenario() -> None:
+        settings = _settings(
+            tmp_path,
+            collector_mcp_url="https://collector.example/mcp",
+            scenario_test_enabled=True,
+        )
+        service = CollectorMonitorService(
+            settings,
+            repository=FakeRepository(),
+            state_store=MonitorStateStore(settings.state_db_path, cooldown_seconds=1800),
+            notifier=RecordingNotifier(),
+            scenario_runner=run_scenario,
+        )
+        request = asyncio.create_task(
+            service.submit_keyword_reverse(
+                asin="B07YRMT36L", site="US", period="30d", page_size=100
+            )
+        )
+        await started.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        with pytest.raises(CollectorMonitorScenarioBusyError):
+            await service.submit_keyword_reverse(
+                asin="B07YRMT36L", site="US", period="30d", page_size=100
+            )
+        release.set()
+        for _ in range(20):
+            if not service._scenario_lock.locked():
+                break
+            await asyncio.sleep(0.01)
+        assert service._scenario_lock.locked() is False
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_manual_probe_holds_lock_until_probe_finishes(
+    tmp_path: Path,
+) -> None:
+    """客户端取消只读探测后，底层结束前仍保持单目标并发锁。"""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def probe(settings):
+        started.set()
+        await release.wait()
+        return {"enabled": True, "status": "ready", "modules": []}
+
+    async def scenario() -> None:
+        settings = _settings(
+            tmp_path,
+            collector_mcp_url="https://collector.example/mcp",
+        )
+        service = CollectorMonitorService(
+            settings,
+            repository=FakeRepository(),
+            state_store=MonitorStateStore(settings.state_db_path, cooldown_seconds=1800),
+            notifier=RecordingNotifier(),
+            collector_probe=probe,
+        )
+        request = asyncio.create_task(service.manual_probe("collector"))
+        await started.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        with pytest.raises(CollectorMonitorProbeBusyError):
+            await service.manual_probe("collector")
+        release.set()
+        for _ in range(20):
+            if not service._probe_locks["collector"].locked():
+                break
+            await asyncio.sleep(0.01)
+        assert service._probe_locks["collector"].locked() is False
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("status_code", "error_type"),
+    [
+        (401, CollectorMonitorScenarioAuthError),
+        (403, CollectorMonitorScenarioPermissionError),
+    ],
+)
+def test_scenario_runner_distinguishes_invalid_key_and_missing_permission(
+    tmp_path: Path,
+    monkeypatch,
+    status_code: int,
+    error_type: type[Exception],
+) -> None:
+    """401 与 403 应给出不同安全诊断，且不得暴露远端错误正文。"""
+    request = httpx.Request("POST", "https://collector.example/mcp")
+    response = httpx.Response(status_code, request=request)
+    remote_error = httpx.HTTPStatusError(
+        "sensitive remote response",
+        request=request,
+        response=response,
+    )
+
+    class FailingRemoteClient:
+        def __init__(self, url, *, headers=None, follow_redirects=True):
+            pass
+
+        async def call_tool(self, tool_name, arguments):
+            raise ExceptionGroup("wrapped transport failure", [remote_error])
+
+    monkeypatch.setattr(
+        "opscli.collector_monitor.service.RemoteMcpClient",
+        FailingRemoteClient,
+    )
+    settings = _settings(
+        tmp_path,
+        collector_mcp_url="https://collector.example/mcp",
+        scenario_test_enabled=True,
+    )
+
+    with pytest.raises(error_type) as exc_info:
+        asyncio.run(
+            run_collector_scenario(
+                settings,
+                {"scenario": "keyword-reverse"},
+                "temporary-mcp-key",
+            )
+        )
+
+    assert "sensitive remote response" not in str(exc_info.value)
+    assert "temporary-mcp-key" not in str(exc_info.value)
+
+
+def test_scenario_runner_requires_explicit_api_key(tmp_path: Path) -> None:
+    """真实场景不得回退借用 Monitor 服务端 Key 文件。"""
+    settings = _settings(
+        tmp_path,
+        collector_mcp_url="https://collector.example/mcp",
+        collector_mcp_api_key_file=tmp_path / "collector.key",
+        scenario_test_enabled=True,
+    )
+
+    with pytest.raises(
+        service_module.CollectorMonitorScenarioAuthError
+    ) as exc_info:
+        asyncio.run(
+            run_collector_scenario(
+                settings,
+                {"scenario": "keyword-reverse"},
+                None,
+            )
+        )
+
+    assert "API Key" in str(exc_info.value)
+
+
+def test_scenario_runner_rejects_non_object_response(tmp_path: Path, monkeypatch) -> None:
+    """Collector 非对象响应应映射为稳定拒绝错误而不是裸 500。"""
+
+    class NonObjectRemoteClient:
+        def __init__(self, url, *, headers=None, follow_redirects=True):
+            pass
+
+        async def call_tool(self, tool_name, arguments):
+            return ["unexpected"]
+
+    monkeypatch.setattr(
+        "opscli.collector_monitor.service.RemoteMcpClient",
+        NonObjectRemoteClient,
+    )
+    settings = _settings(
+        tmp_path,
+        collector_mcp_url="https://collector.example/mcp",
+        scenario_test_enabled=True,
+    )
+
+    with pytest.raises(service_module.CollectorMonitorScenarioRejectedError):
+        asyncio.run(
+            run_collector_scenario(
+                settings,
+                {"scenario": "keyword-reverse"},
+                "temporary-mcp-key",
+            )
+        )
 
 
 @pytest.mark.parametrize("status_code", [401, 403])

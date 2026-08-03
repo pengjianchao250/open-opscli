@@ -23,6 +23,10 @@ _NOTIFICATION_CONCURRENCY = 4
 _MANUAL_PROBE_COOLDOWN_SECONDS = 10.0
 # 手动探测硬上限固定为 5 秒，确保 UI 和 CLI 可以有界返回。
 _MANUAL_PROBE_TIMEOUT_SECONDS = 5.0
+# 真实任务只允许单飞，并在完成后保留短冷却避免双击重复扣额。
+_SCENARIO_SUBMIT_COOLDOWN_SECONDS = 10.0
+# 超时只代表响应未确认；任务可能已入队，因此不能释放锁或提示重试。
+_SCENARIO_SUBMIT_TIMEOUT_SECONDS = 5.0
 _COLLECTOR_CHECK_FIELDS = ("queue", "scheduler")
 _COLLECTOR_RUNTIME_FIELDS = (
     "lifecycle_state",
@@ -71,6 +75,42 @@ class CollectorMonitorProbeCooldownError(CollectorMonitorError):
         super().__init__("探测操作仍在冷却期")
 
 
+class CollectorMonitorScenarioDisabledError(CollectorMonitorError):
+    """场景测试未由生产环境显式启用。"""
+
+
+class CollectorMonitorScenarioBusyError(CollectorMonitorError):
+    """已有场景测试请求正在提交。"""
+
+
+class CollectorMonitorScenarioCooldownError(CollectorMonitorError):
+    """场景测试仍处于防重复提交冷却期。"""
+
+    def __init__(self, retry_after: float) -> None:
+        self.retry_after = max(0.0, retry_after)
+        super().__init__("场景测试仍在冷却期")
+
+
+class CollectorMonitorScenarioOutcomeUnknownError(CollectorMonitorError):
+    """场景提交超时，无法确认远端是否已经创建任务。"""
+
+
+class CollectorMonitorScenarioAuthError(CollectorMonitorError):
+    """Collector 拒绝了 API Key。"""
+
+
+class CollectorMonitorScenarioPermissionError(CollectorMonitorError):
+    """API Key 无权调用固定场景工具。"""
+
+
+class CollectorMonitorScenarioRejectedError(CollectorMonitorError):
+    """Collector 已响应但未接受固定场景任务。"""
+
+
+class CollectorMonitorScenarioUnavailableError(CollectorMonitorError):
+    """Collector 场景提交调用不可用。"""
+
+
 class CollectorMonitorService:
     """读取本地队列、评估事故、通知并缓存只读快照。"""
 
@@ -85,6 +125,13 @@ class CollectorMonitorService:
         collector_api_key_probe: (
             Callable[[MonitorSettings, str], Awaitable[dict[str, Any]]] | None
         ) = None,
+        scenario_runner: (
+            Callable[
+                [MonitorSettings, Mapping[str, Any], str | None],
+                Awaitable[dict[str, Any]],
+            ]
+            | None
+        ) = None,
         clock: Callable[[], datetime] | None = None,
         monotonic_clock: Callable[[], float] | None = None,
     ) -> None:
@@ -96,6 +143,7 @@ class CollectorMonitorService:
         self.collector_api_key_probe = (
             collector_api_key_probe or probe_collector_with_api_key
         )
+        self.scenario_runner = scenario_runner or run_collector_scenario
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.monotonic_clock = monotonic_clock or monotonic
         self._probe_locks = {
@@ -103,8 +151,11 @@ class CollectorMonitorService:
             "queue-source": asyncio.Lock(),
         }
         self._probe_started_at: dict[str, float] = {}
+        self._scenario_lock = asyncio.Lock()
+        self._scenario_finished_at: float | None = None
         # 超时后底层线程或远端调用可能仍未结束；保留任务引用并继续占锁。
         self._background_probe_tasks: set[asyncio.Task[Any]] = set()
+        self._background_scenario_tasks: set[asyncio.Task[Any]] = set()
         self._collector = {
             "enabled": bool(settings.collector_mcp_url),
             "status": "pending" if settings.collector_mcp_url else "not_configured",
@@ -124,6 +175,20 @@ class CollectorMonitorService:
     def is_ready(self) -> bool:
         """仅当首次本地队列扫描成功后报告就绪。"""
         return bool(self._snapshot.get("source", {}).get("ready"))
+
+    def scenario_test_config(self) -> dict[str, Any]:
+        """返回不含凭据的固定场景测试合同。"""
+        return {
+            "enabled": self.settings.scenario_test_enabled,
+            "configured": bool(self.settings.collector_mcp_url),
+            "scenario": {"id": "keyword-reverse", "name": "关键词反查"},
+            "defaults": {
+                "site": "US",
+                "period": "30d",
+                "page_size": 100,
+                "export_format": "json",
+            },
+        }
 
     async def poll_once(self) -> dict[str, Any]:
         """执行一次本地扫描、分类和事故更新，并刷新只读缓存。"""
@@ -377,6 +442,7 @@ class CollectorMonitorService:
                     if api_key is not None
                     else _safe_probe_call(self.collector_probe, self.settings)
                 )
+                release_lock = False
                 result, release_lock = await self._bounded_probe(
                     probe_call,
                     lock,
@@ -398,6 +464,7 @@ class CollectorMonitorService:
                 self._collector = result
                 self._snapshot["collector"] = dict(result)
             else:
+                release_lock = False
                 result, release_lock = await self._bounded_probe(
                     self._probe_queue_source(),
                     lock,
@@ -427,6 +494,92 @@ class CollectorMonitorService:
             if release_lock:
                 lock.release()
 
+    async def submit_keyword_reverse(
+        self,
+        *,
+        asin: str,
+        site: str,
+        period: str,
+        page_size: int,
+        api_key: str | None = None,
+    ) -> dict[str, Any]:
+        """提交固定关键词反查。
+
+        参数为已在 HTTP 边界校验的 ASIN、站点、周期、分页大小和可选临时 Key。
+        返回仅含场景、任务标识、排队状态和提交时间的脱敏字典。功能关闭、
+        请求并发、冷却、鉴权、权限、远端拒绝或结果未知时抛出对应 Monitor 异常。
+        """
+        if not self.settings.scenario_test_enabled:
+            raise CollectorMonitorScenarioDisabledError("场景测试功能未启用")
+        if self._scenario_lock.locked():
+            raise CollectorMonitorScenarioBusyError("已有场景测试正在提交")
+
+        await self._scenario_lock.acquire()
+        release_lock = True
+        attempt_started = False
+        try:
+            started_at = self.monotonic_clock()
+            if self._scenario_finished_at is not None:
+                remaining = _SCENARIO_SUBMIT_COOLDOWN_SECONDS - (
+                    started_at - self._scenario_finished_at
+                )
+                if remaining > 0:
+                    raise CollectorMonitorScenarioCooldownError(round(remaining, 3))
+            attempt_started = True
+            arguments = {
+                "scenario": "keyword-reverse",
+                "params": {"asin": asin},
+                "site": site,
+                "period": period,
+                "page_size": page_size,
+                "export_format": "json",
+            }
+            task = asyncio.create_task(
+                self.scenario_runner(self.settings, arguments, api_key)
+            )
+            def hold_lock_until_done() -> None:
+                """远端结果未知时继续持锁，直到底层调用真正结束。"""
+                nonlocal release_lock
+                release_lock = False
+                self._background_scenario_tasks.add(task)
+
+                def finish_background(completed: asyncio.Task[Any]) -> None:
+                    """消费迟到结果并在远端调用真正结束后释放提交锁。"""
+                    self._background_scenario_tasks.discard(completed)
+                    if not completed.cancelled():
+                        completed.exception()
+                    if self._scenario_lock.locked():
+                        self._scenario_finished_at = self.monotonic_clock()
+                        self._scenario_lock.release()
+
+                task.add_done_callback(finish_background)
+
+            try:
+                done, _pending = await asyncio.wait(
+                    {task},
+                    timeout=_SCENARIO_SUBMIT_TIMEOUT_SECONDS,
+                )
+            except asyncio.CancelledError:
+                hold_lock_until_done()
+                raise
+            if task not in done:
+                hold_lock_until_done()
+                raise CollectorMonitorScenarioOutcomeUnknownError(
+                    "提交等待超时，任务是否已创建未知；请先在任务列表确认"
+                )
+            result = await task
+            return {
+                "scenario": "keyword-reverse",
+                "job_id": result["job_id"],
+                "state": result["state"],
+                "submitted_at": _iso(self.clock()),
+            }
+        finally:
+            if release_lock:
+                if attempt_started:
+                    self._scenario_finished_at = self.monotonic_clock()
+                self._scenario_lock.release()
+
     async def _bounded_probe(
         self,
         probe: Awaitable[dict[str, Any]],
@@ -434,24 +587,37 @@ class CollectorMonitorService:
     ) -> tuple[dict[str, Any] | None, bool]:
         """有界等待探测，并在超时后继续持锁直到底层操作实际结束。"""
         task = asyncio.create_task(probe)
-        done, _pending = await asyncio.wait(
-            {task},
-            timeout=_MANUAL_PROBE_TIMEOUT_SECONDS,
-        )
+        def hold_lock_until_done() -> None:
+            """调用结果未知时保留任务引用，并在真正结束后释放锁。"""
+            self._background_probe_tasks.add(task)
+
+            def finish_background(completed: asyncio.Task[Any]) -> None:
+                """消费后台结果并释放目标锁，避免异常泄露或并发穿透。"""
+                self._background_probe_tasks.discard(completed)
+                if not completed.cancelled():
+                    completed.exception()
+                if lock.locked():
+                    lock.release()
+
+            task.add_done_callback(finish_background)
+
+        try:
+            done, _pending = await asyncio.wait(
+                {task},
+                timeout=_MANUAL_PROBE_TIMEOUT_SECONDS,
+            )
+        except asyncio.CancelledError:
+            hold_lock_until_done()
+            raise
         if task in done:
-            return await task, True
+            try:
+                return await task, True
+            except BaseException:
+                if lock.locked():
+                    lock.release()
+                raise
 
-        self._background_probe_tasks.add(task)
-
-        def finish_background(completed: asyncio.Task[Any]) -> None:
-            """消费后台结果并释放目标锁，避免异常泄露或并发穿透。"""
-            self._background_probe_tasks.discard(completed)
-            if not completed.cancelled():
-                completed.exception()
-            if lock.locked():
-                lock.release()
-
-        task.add_done_callback(finish_background)
+        hold_lock_until_done()
         return None, False
 
     async def _probe_queue_source(self) -> dict[str, Any]:
@@ -543,6 +709,46 @@ async def probe_collector_with_api_key(
 ) -> dict[str, Any]:
     """使用仅驻留于当前调用生命周期的 API Key 探测 Collector。"""
     return await probe_collector(settings, api_key=api_key)
+
+
+async def run_collector_scenario(
+    settings: MonitorSettings,
+    arguments: Mapping[str, Any],
+    api_key: str | None,
+) -> dict[str, Any]:
+    """使用与健康探测一致的凭据向 Collector 提交固定场景。"""
+    if api_key is None:
+        raise CollectorMonitorScenarioAuthError("场景测试必须提供 API Key")
+    try:
+        headers = {"Authorization": f"Bearer {api_key}"}
+        client = RemoteMcpClient(
+            str(settings.collector_mcp_url),
+            headers=headers,
+            follow_redirects=False,
+        )
+        response = await client.call_tool("seller_sprite_run", dict(arguments))
+    except Exception as exc:
+        status_codes = {
+            getattr(getattr(current, "response", None), "status_code", None)
+            for current in _walk_exceptions(exc)
+        }
+        if 401 in status_codes:
+            raise CollectorMonitorScenarioAuthError("Collector API Key 无效") from None
+        if 403 in status_codes:
+            raise CollectorMonitorScenarioPermissionError(
+                "API Key 缺少 seller_sprite_run 权限"
+            ) from None
+        raise CollectorMonitorScenarioUnavailableError("Collector 暂不可用") from None
+    if not isinstance(response, Mapping):
+        raise CollectorMonitorScenarioRejectedError("Collector 返回格式无效")
+    data = response.get("data")
+    if response.get("success") is not True or not isinstance(data, Mapping):
+        raise CollectorMonitorScenarioRejectedError("Collector 拒绝提交场景任务")
+    job_id = str(data.get("job_id") or "").strip()
+    state = str(data.get("state") or "").strip().lower()
+    if not job_id or state != "queued":
+        raise CollectorMonitorScenarioRejectedError("Collector 未返回有效排队状态")
+    return {"job_id": job_id, "state": state}
 
 
 async def _probe_collector_with_credentials(

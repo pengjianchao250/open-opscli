@@ -169,6 +169,7 @@ setup(
             "skills/templates/**/*",
             "skills/templates/**/**/*",
             "mcp/references/**/*.md",
+            "collector_monitor/wecom-webhook",
         ],
     },
     exclude_package_data={

@@ -18,6 +18,7 @@ include opscli/mcp/app_factory.py
 include opscli/mcp/instrumentation.py
 include opscli/mcp/server.py
 include opscli/collector_monitor/server.py
+include opscli/collector_monitor/wecom-webhook
 include opscli/seller_sprite/mcp_bundle.py
 
 # setup.py 构建阶段动态加载 Skill 发版准入工具

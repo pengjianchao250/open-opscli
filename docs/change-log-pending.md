@@ -5247,3 +5247,21 @@
 **影响范围**：仅新增离线运维 SQL 和说明；不改变 MCP 运行时额度逻辑和现有数据库。
 **回滚方式**：删除迁移 SQL 和运维说明，并移除本条变更记录。
 ---
+
+## 2026-08-03 Collector Monitor - 新增关键词反查场景测试
+
+**变更原因**：仅做连通性嗅探无法验证 API Key 是否具备 `seller_sprite_run` 权限，也无法确认真实任务能否进入 Collector 队列。
+**改动点**：新增默认关闭的场景测试开关、`GET/POST /api/v1/commands/scenario-test` 接口和独立“场景测试”Tab；服务端固定调用 `seller_sprite_run` 的 `keyword-reverse`（关键词反查）场景，仅允许修改 ASIN、站点、周期和每页数量，并强制 `export_format=json`。提交前必须显式提供临时 Key，并确认会创建真实任务和消耗额度；受保护 Key 文件只用于 Collector 探测，场景不借用。401/403 分别映射为 Key 无效和缺少场景权限。单次提交加锁且成功后冷却 10 秒，不自动重试；请求超时返回结果未知并在底层调用结束前继续持锁。Collector 探测与场景测试共用同一个可选浏览器本地 Key。
+**验证结果**：`tests/collector_monitor` 完整回归 `138 passed`；`compileall` 与 `git diff --check` 通过；浏览器验证 1440x900 和 390x844 布局无横向溢出、表单裁切或控制台错误，未提交真实任务。代码审查后补充了取消路径持锁、Monitor/Collector 明文 Key 阻断、场景强制显式 Key、ASCII/支持站点校验、流式请求体上限和稳定异常映射测试。
+**影响范围**：仅影响 Collector Monitor；功能默认关闭，不改变 Collector MCP 和既有只读监控行为。
+**回滚方式**：移除场景测试配置、服务接口、页面 Tab、测试及相关文档。
+---
+
+## 2026-08-03 Collector Monitor - 自动发现企业微信 Webhook 文件
+
+**变更原因**：本地与同机部署不应每次启动都重复配置 Webhook 环境变量；经项目所有者确认，该机器人地址可作为项目默认消息接收端。
+**改动点**：新增随包分发的 `opscli/collector_monitor/wecom-webhook`，未配置环境变量时自动使用；显式 `OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE` 优先，设置为空可禁用。同步补充 wheel/sdist package data。
+**验证结果**：新增默认发现、环境覆盖和显式禁用配置测试；Collector Monitor 完整回归结果见本次交付验证。
+**影响范围**：仅影响 Webhook 文件路径解析；通知规则、去重、冷却和消息内容不变。
+**回滚方式**：恢复 `WEBHOOK_FILE` 仅从环境变量读取的逻辑，并删除本条文档。
+---

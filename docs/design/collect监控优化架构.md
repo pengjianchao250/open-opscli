@@ -194,6 +194,17 @@ POST /api/v1/probes/queue-source
 - Collector 结果只更新 Monitor 内存缓存；队列源结果不覆盖任务快照，也不修改业务队列。
 - 首期为同步探测，不持久化探测历史、响应正文或凭据。
 
+### 5.3 受控场景测试 API
+
+```text
+GET  /api/v1/commands/scenario-test
+POST /api/v1/commands/scenario-test
+```
+
+GET 只返回功能开关、固定 `keyword-reverse` 场景和默认参数。POST 只接受 `confirmed`、`asin`、`site`、`period`、`page_size` 和可选临时 `api_key`；服务端固定调用 `seller_sprite_run`，并固定 `export_format=json`。请求执行固定 Monitor Origin、流式体积上限和字段白名单校验；ASIN 只允许 10 位 ASCII 字母数字，站点只允许 SellerSprite 支持列表。
+
+真实任务提交使用独立单飞锁和 10 秒冷却，不自动重试。5 秒内未确认响应或请求协程被取消时，均保持锁直到底层调用结束，防止未知结果下重复扣额。公开响应只保留 `job_id`、`state`、场景和提交时间；401 与 403 分别映射为 Key 无效和缺少 `seller_sprite_run` 权限。Collector 与 Monitor 地址均必须使用 HTTPS，仅回环地址允许 HTTP；场景 POST 必须显式提供临时 Key，不得借用服务端 Key 文件。
+
 ## 6. API 扩展
 
 保留现有 GET 合同，新增：
@@ -207,6 +218,8 @@ GET  /api/v1/incidents
 GET  /api/v1/incidents/{fingerprint}
 GET  /api/v1/feedback-signals
 POST /api/v1/probes/{target}
+GET  /api/v1/commands/scenario-test
+POST /api/v1/commands/scenario-test
 ```
 
 P1 静默接口属于运维写面，应单独鉴权：

@@ -47,6 +47,20 @@ DASHBOARD_HTML = """<!doctype html>
     .credential-save { display:flex; align-items:center; gap:7px; min-height:36px; color:var(--muted); font-size:13px; cursor:pointer; }
     .credential-save input { width:16px; height:16px; margin:0; accent-color:var(--blue); }
     .credential-save input:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+    .scenario-summary { display:grid; grid-template-columns:minmax(180px,.8fr) minmax(0,1.2fr); gap:12px 24px; padding:16px; border-bottom:1px solid var(--line); background:#f8fafb; }
+    .scenario-summary strong { font-size:16px; }
+    .scenario-summary code { color:#31556f; overflow-wrap:anywhere; }
+    .scenario-form { padding:16px; }
+    .form-grid { display:grid; grid-template-columns:minmax(220px,1.4fr) repeat(3,minmax(120px,.6fr)); gap:14px; }
+    .field { display:grid; gap:5px; min-width:0; }
+    .field label { color:var(--muted); font-size:12px; font-weight:650; }
+    .field input { width:100%; height:38px; padding:7px 10px; border:1px solid #aebdca; border-radius:6px; background:var(--paper); color:var(--ink); font:14px/1.2 inherit; }
+    .field input:focus { outline:2px solid var(--blue); outline-offset:1px; border-color:transparent; }
+    .confirm-row { display:flex; align-items:flex-start; gap:8px; margin:16px 0; color:#713f00; }
+    .confirm-row input { flex:0 0 auto; width:16px; height:16px; margin-top:2px; accent-color:var(--amber); }
+    .submit-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+    .submit-row button { min-width:172px; }
+    .scenario-result { min-height:38px; margin-top:14px; padding:9px 11px; border:1px solid var(--line); border-radius:6px; background:#f8fafb; overflow-wrap:anywhere; }
     .panel-body { padding:16px; }
     table { width:100%; border-collapse:collapse; }
     th,td { padding:10px 12px; border-bottom:1px solid #edf1f4; text-align:left; vertical-align:top; }
@@ -68,8 +82,8 @@ DASHBOARD_HTML = """<!doctype html>
     .timeline li { border-left:2px solid #9fbfd7; padding:0 0 16px 14px; margin-left:5px; }
     .timeline time { display:block; color:var(--muted); font-size:12px; }
     .source-error { display:none; margin-bottom:16px; padding:12px 14px; border:1px solid #f2b8b5; background:#fff0ef; color:var(--red); border-radius:7px; }
-    @media (max-width:900px) { .cards { grid-template-columns:repeat(2,1fr); } .view-grid { grid-template-columns:1fr; } .task-table-wrap { min-height:0; max-height:none; } .detail-panel { position:static; } }
-    @media (max-width:540px) { main { padding:14px; } header { padding:18px 14px; align-items:start; flex-direction:column; gap:8px; } .cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .card { padding:14px; } .card strong { font-size:24px; } .tabs { margin-left:-14px; margin-right:-14px; padding-left:14px; padding-right:14px; border-left:0; border-right:0; border-radius:0; } .tab { min-width:96px; } .panel-title { align-items:flex-start; flex-direction:column; } .actions { width:100%; justify-content:flex-start; } .credential-row { align-items:stretch; flex-direction:column; } th:nth-child(2),td:nth-child(2) { display:none; } }
+    @media (max-width:900px) { .cards { grid-template-columns:repeat(2,1fr); } .view-grid { grid-template-columns:1fr; } .task-table-wrap { min-height:0; max-height:none; } .detail-panel { position:static; } .form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width:540px) { main { padding:14px; } header { padding:18px 14px; align-items:start; flex-direction:column; gap:8px; } .cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .card { padding:14px; } .card strong { font-size:24px; } .tabs { margin-left:-14px; margin-right:-14px; padding-left:14px; padding-right:14px; border-left:0; border-right:0; border-radius:0; } .tab { min-width:96px; } .panel-title { align-items:flex-start; flex-direction:column; } .actions { width:100%; justify-content:flex-start; } .credential-row { align-items:stretch; flex-direction:column; } .scenario-summary,.form-grid { grid-template-columns:1fr; } th:nth-child(2),td:nth-child(2) { display:none; } }
   </style>
 </head>
 <body>
@@ -85,6 +99,7 @@ DASHBOARD_HTML = """<!doctype html>
   <nav class="tabs" role="tablist" aria-label="监控视图">
     <button class="tab" id="tab-tasks" type="button" role="tab" aria-controls="panel-tasks" aria-selected="true" tabindex="0" data-tab="tasks">任务</button>
     <button class="tab" id="tab-collector" type="button" role="tab" aria-controls="panel-collector" aria-selected="false" tabindex="-1" data-tab="collector">Collector</button>
+    <button class="tab" id="tab-scenario" type="button" role="tab" aria-controls="panel-scenario" aria-selected="false" tabindex="-1" data-tab="scenario">场景测试</button>
     <button class="tab" id="tab-runtimes" type="button" role="tab" aria-controls="panel-runtimes" aria-selected="false" tabindex="-1" data-tab="runtimes">运行时</button>
     <button class="tab" id="tab-incidents" type="button" role="tab" aria-controls="panel-incidents" aria-selected="false" tabindex="-1" data-tab="incidents">事故</button>
   </nav>
@@ -96,6 +111,24 @@ DASHBOARD_HTML = """<!doctype html>
   </section>
   <section class="tab-panel" id="panel-collector" role="tabpanel" aria-labelledby="tab-collector" hidden>
     <section class="panel"><div class="panel-title"><h2>Collector 状态</h2><div class="actions"><button type="button" data-probe="collector" data-endpoint="/api/v1/probes/collector" title="只执行健康检查，不会提交真实任务">立即探测 Collector</button><button type="button" data-probe="queue-source" data-endpoint="/api/v1/probes/queue-source" title="只读检查队列源，不会提交真实任务">立即探测队列源</button></div></div><div class="credential-row"><div class="credential-field"><label for="collector-api-key">API Key</label><input id="collector-api-key" type="password" maxlength="512" autocomplete="new-password" autocapitalize="off" spellcheck="false" title="未选择保存时，仅用于下一次 Collector 探测"></div><label class="credential-save" for="collector-api-key-save" title="API Key 将以明文保存在当前浏览器的 localStorage 中"><input id="collector-api-key-save" type="checkbox"><span>保存到此浏览器</span></label></div><div id="probe-result" class="panel-body muted" aria-live="polite">尚未执行手动探测。</div><div id="collector" class="panel-body"></div></section>
+  </section>
+  <section class="tab-panel" id="panel-scenario" role="tabpanel" aria-labelledby="tab-scenario" hidden>
+    <section class="panel">
+      <div class="panel-title"><h2>场景测试</h2></div>
+      <div class="scenario-summary"><strong>关键词反查</strong><code>keyword-reverse</code><span class="muted">导出格式</span><span>JSON</span></div>
+      <div class="credential-row"><div class="credential-field"><label for="scenario-api-key">API Key</label><input id="scenario-api-key" type="password" maxlength="512" autocomplete="new-password" autocapitalize="off" spellcheck="false" required title="未选择保存时，仅用于本次关键词反查提交"></div><label class="credential-save" for="scenario-api-key-save" title="API Key 将以明文保存在当前浏览器的 localStorage 中"><input id="scenario-api-key-save" type="checkbox"><span>保存到此浏览器</span></label></div>
+      <form id="scenario-form" class="scenario-form" autocomplete="off">
+        <div class="form-grid">
+          <div class="field"><label for="scenario-asin">ASIN</label><input id="scenario-asin" maxlength="10" required autocapitalize="characters" spellcheck="false"></div>
+          <div class="field"><label for="scenario-site">站点</label><input id="scenario-site" value="US" maxlength="2" required autocapitalize="characters" spellcheck="false"></div>
+          <div class="field"><label for="scenario-period">周期</label><input id="scenario-period" value="30d" maxlength="7" required spellcheck="false"></div>
+          <div class="field"><label for="scenario-page-size">每页数量</label><input id="scenario-page-size" type="number" min="1" max="100" value="100" required></div>
+        </div>
+        <label class="confirm-row" for="scenario-confirmed"><input id="scenario-confirmed" type="checkbox"><span>我确认该操作会创建真实任务并消耗额度</span></label>
+        <div class="submit-row"><button id="scenario-submit" type="submit" disabled>提交关键词反查任务</button><span id="scenario-availability" class="muted">正在读取场景配置...</span></div>
+        <div id="scenario-result" class="scenario-result muted" aria-live="polite">尚未提交场景测试。</div>
+      </form>
+    </section>
   </section>
   <section class="tab-panel" id="panel-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" hidden>
     <section class="panel"><h2>运行时状态</h2><div id="runtimes" class="panel-body"></div></section>
@@ -131,18 +164,30 @@ const collectorKeyStorageKey="opscli.collector_monitor.collector_api_key";
 const collectorKeyInput=document.querySelector("#collector-api-key");
 const collectorKeySave=document.querySelector("#collector-api-key-save");
 const probeOutput=document.querySelector("#probe-result");
+const scenarioKeyInput=document.querySelector("#scenario-api-key");
+const scenarioKeySave=document.querySelector("#scenario-api-key-save");
+const scenarioOutput=document.querySelector("#scenario-result");
 function removeStoredCollectorKey(){try{localStorage.removeItem(collectorKeyStorageKey);}catch{}}
 function readStoredCollectorKey(){try{const value=localStorage.getItem(collectorKeyStorageKey)||"";if(!value||value.length>512||[...value].some(character=>character.charCodeAt(0)<32||character.charCodeAt(0)===127)){removeStoredCollectorKey();return "";}return value;}catch{return "";}}
 function writeStoredCollectorKey(value){try{localStorage.setItem(collectorKeyStorageKey,value);return true;}catch{return false;}}
-function syncStoredCollectorKey(){if(!collectorKeySave.checked){removeStoredCollectorKey();return;}const value=collectorKeyInput.value.trim();if(!value){removeStoredCollectorKey();return;}if(!writeStoredCollectorKey(value)){collectorKeySave.checked=false;probeOutput.textContent="浏览器禁止本地存储，API Key 未保存。";}}
+function clearStoredKeyState(){removeStoredCollectorKey();collectorKeySave.checked=false;scenarioKeySave.checked=false;}
+function syncStoredCollectorKey(){if(!collectorKeySave.checked){clearStoredKeyState();return;}const value=collectorKeyInput.value.trim();if(!value){clearStoredKeyState();return;}if(writeStoredCollectorKey(value)){scenarioKeyInput.value=value;scenarioKeySave.checked=true;}else{clearStoredKeyState();probeOutput.textContent="浏览器禁止本地存储，API Key 未保存。";}}
+function syncStoredScenarioKey(){if(!scenarioKeySave.checked){clearStoredKeyState();return;}const value=scenarioKeyInput.value.trim();if(!value){clearStoredKeyState();return;}if(writeStoredCollectorKey(value)){collectorKeyInput.value=value;collectorKeySave.checked=true;}else{clearStoredKeyState();scenarioOutput.textContent="浏览器禁止本地存储，API Key 未保存。";}}
 async function probe(target,endpoint,button){button.disabled=true;let body="{}";const apiKey=collectorKeyInput.value.trim();if(target==="collector"&&apiKey){body=JSON.stringify({api_key:apiKey});if(collectorKeySave.checked){syncStoredCollectorKey();}else{collectorKeyInput.value="";}}probeOutput.textContent="探测中...";try{const r=await fetch(endpoint,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body});body="{}";const d=await r.json();if(!r.ok){const wait=d.error?.retry_after?`，${d.error.retry_after} 秒后可再次探测`:"";throw new Error((d.error?.message||`HTTP ${r.status}`)+wait);}const diagnostic=d.error_code?`，${d.error_code} (${d.error_class||"unknown"})`:"";probeOutput.textContent=`${target}：${d.state} / ${d.status}${diagnostic}，${age(d.probed_at)}`;await refresh();}catch(e){probeOutput.textContent=`探测失败：${e.message}`;}finally{body="{}";button.disabled=false;}}
 document.querySelectorAll("button[data-probe]").forEach(button=>button.addEventListener("click",()=>probe(button.dataset.probe,button.dataset.endpoint,button)));
 const storedCollectorKey=readStoredCollectorKey();
 collectorKeyInput.value=storedCollectorKey;
 collectorKeySave.checked=Boolean(storedCollectorKey);
+scenarioKeyInput.value=storedCollectorKey;
+scenarioKeySave.checked=Boolean(storedCollectorKey);
 collectorKeySave.addEventListener("change",syncStoredCollectorKey);
 collectorKeyInput.addEventListener("input",()=>{if(collectorKeySave.checked)syncStoredCollectorKey();});
 collectorKeyInput.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();document.querySelector('button[data-probe="collector"]').click();}});
+scenarioKeySave.addEventListener("change",syncStoredScenarioKey);
+scenarioKeyInput.addEventListener("input",()=>{if(scenarioKeySave.checked)syncStoredScenarioKey();});
+async function loadScenarioContract(){const availability=document.querySelector("#scenario-availability"),button=document.querySelector("#scenario-submit");try{const data=await json("/api/v1/commands/scenario-test");const ready=data.enabled&&data.configured;button.disabled=!ready;availability.textContent=ready?"场景测试已启用":"场景测试未启用";if(data.defaults){document.querySelector("#scenario-site").value=data.defaults.site||"US";document.querySelector("#scenario-period").value=data.defaults.period||"30d";document.querySelector("#scenario-page-size").value=data.defaults.page_size||100;}}catch(e){button.disabled=true;availability.textContent="场景配置暂不可用";}}
+async function submitScenario(event){event.preventDefault();const button=document.querySelector("#scenario-submit"),confirmed=document.querySelector("#scenario-confirmed");button.disabled=true;let payload={confirmed:confirmed.checked,asin:document.querySelector("#scenario-asin").value,site:document.querySelector("#scenario-site").value,period:document.querySelector("#scenario-period").value,page_size:Number(document.querySelector("#scenario-page-size").value)};const apiKey=scenarioKeyInput.value.trim();if(apiKey){payload.api_key=apiKey;if(scenarioKeySave.checked){syncStoredScenarioKey();}else{scenarioKeyInput.value="";}}scenarioOutput.textContent="正在提交...";try{const response=await fetch("/api/v1/commands/scenario-test",{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});payload={};const data=await response.json();if(!response.ok){const code=data.error?.code?` [${data.error.code}]`:"";throw new Error((data.error?.message||`HTTP ${response.status}`)+code);}scenarioOutput.textContent=`任务已排队：${data.job_id}（${data.state}）`;confirmed.checked=false;await refresh();}catch(e){scenarioOutput.textContent=`提交失败：${e.message}`;}finally{payload={};button.disabled=false;}}
+document.querySelector("#scenario-form").addEventListener("submit",submitScenario);
 const tabs=[...document.querySelectorAll('[role="tab"]')];
 function selectTab(selected,{focus=true}={}){
   tabs.forEach(tab=>{
@@ -165,7 +210,7 @@ tabs.forEach((tab,index)=>{
   });
 });
 async function refresh(){try{render(await json("/api/v1/status"));}catch(e){const el=document.querySelector("#source-error");el.style.display="block";el.textContent="监控服务暂不可达";}}
-refresh(); setInterval(refresh, 7000);
+loadScenarioContract(); refresh(); setInterval(refresh, 7000);
 </script>
 </body>
 </html>"""
