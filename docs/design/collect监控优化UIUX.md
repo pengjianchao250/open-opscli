@@ -58,23 +58,19 @@
 
 ```text
 顶部栏
-  Collector Monitor | 环境 | 最后更新 | 自动刷新 | 立即探测
+  Collector Monitor | 最后更新时间
 
-全宽服务状态带
-  Monitor | Queue source | Collector | SellerSprite Bundle | Feedback signal
+常驻总览
+  任务总数 | 运行中 | 异常任务 | 活动事故
 
-关键根因区
-  当前最高优先级事故 + 持续时间 + 影响范围 + 恢复建议
-
-主工作区
-  左：队列/运行时/任务表（Tabs）
-  右：事故时间线与探测结果
-
-底部信号区
-  15 分钟趋势 | feedback 聚合 | 通知投递状态
+主工作区 Tabs
+  任务：任务表 + 选中任务进度时间线
+  Collector：Collector/Bundle 状态 + Collector/队列源手动探测
+  运行时：Scheduler 心跳与容量
+  事故：事故历史
 ```
 
-桌面采用 `minmax(0, 2fr) minmax(320px, 1fr)`；移动端单列，表格保留任务、生命周期、健康、最近进度四个核心列，其余进入详情抽屉。
+桌面端任务表使用有界滚动，时间线固定在同一视图右侧；窄屏改为单列，隐藏队列/类型列，并把时间线放到列表下方。Tabs 保持单行并允许横向滚动，避免任务量增大后把 Collector 探测入口推到长页面底部。
 
 ## 4. 第一屏信息层级
 

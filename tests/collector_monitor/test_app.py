@@ -162,6 +162,23 @@ def test_health_endpoints_and_no_store_headers() -> None:
     assert unavailable.json()["source_error"]["code"] == "queue_schema_invalid"
 
 
+def test_dashboard_exposes_accessible_tab_views() -> None:
+    """仪表盘应按任务、Collector、运行时和事故拆分为可访问 Tab。"""
+    with _client() as client:
+        response = client.get("/")
+
+    html = response.text
+    assert response.status_code == 200
+    assert 'role="tablist"' in html
+    for name in ("tasks", "collector", "runtimes", "incidents"):
+        assert f'id="tab-{name}"' in html
+        assert f'aria-controls="panel-{name}"' in html
+        assert f'id="panel-{name}"' in html
+        assert f'aria-labelledby="tab-{name}"' in html
+    assert 'id="tab-tasks" type="button" role="tab"' in html
+    assert 'id="panel-collector" role="tabpanel"' in html
+
+
 def test_api_uses_cached_snapshot_filters_tasks_and_redacts_defensively() -> None:
     """API 应读取缓存、支持健康过滤并剔除敏感字段和值。"""
     with _client() as client:

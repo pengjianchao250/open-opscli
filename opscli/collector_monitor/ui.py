@@ -9,18 +9,26 @@ DASHBOARD_HTML = """<!doctype html>
   <style>
     :root { color-scheme: light; --ink:#17212b; --muted:#66727f; --line:#d9e0e6; --paper:#ffffff; --canvas:#f3f6f8; --blue:#1769aa; --red:#b42318; --amber:#a15c00; --green:#18794e; }
     * { box-sizing:border-box; }
-    body { margin:0; background:var(--canvas); color:var(--ink); font:14px/1.5 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+    body { margin:0; background:var(--canvas); color:var(--ink); font:14px/1.5 "Segoe UI Variable","Microsoft YaHei UI","Segoe UI",sans-serif; }
     header { background:#102a43; color:white; padding:22px max(24px,calc((100vw - 1400px)/2)); display:flex; justify-content:space-between; align-items:end; }
-    h1 { margin:0; font-size:25px; letter-spacing:.02em; }
+    h1 { margin:0; font-size:25px; letter-spacing:0; }
     header p { margin:4px 0 0; color:#c9d8e6; }
     #updated { color:#dce7f0; font-variant-numeric:tabular-nums; }
     main { max-width:1400px; margin:0 auto; padding:24px; }
     .cards { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:18px; }
     .card,.panel { background:var(--paper); border:1px solid var(--line); border-radius:8px; box-shadow:0 2px 8px rgba(16,42,67,.05); }
     .card { padding:17px; }
-    .card span { display:block; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+    .card span { display:block; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:0; }
     .card strong { display:block; margin-top:5px; font-size:28px; font-variant-numeric:tabular-nums; }
-    .grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(320px,1fr); gap:18px; align-items:start; }
+    .tabs { display:flex; gap:4px; margin-bottom:14px; padding:4px; overflow-x:auto; border:1px solid var(--line); border-radius:8px; background:#e8edf1; scrollbar-width:thin; }
+    .tab { flex:0 0 auto; min-width:112px; border-color:transparent; background:transparent; color:#526272; }
+    .tab:hover { background:#f4f7f9; }
+    .tab[aria-selected="true"] { border-color:#b8c9d6; background:var(--paper); color:#123f60; box-shadow:0 1px 3px rgba(16,42,67,.08); }
+    .tab-panel[hidden] { display:none; }
+    .view-grid { display:grid; grid-template-columns:minmax(0,2.2fr) minmax(320px,.8fr); gap:18px; align-items:start; }
+    .task-table-wrap { min-height:420px; max-height:calc(100vh - 330px); overflow:auto; }
+    .task-table-wrap thead { position:sticky; top:0; z-index:1; }
+    .detail-panel { position:sticky; top:24px; }
     .stack { display:grid; gap:18px; }
     .panel { overflow:hidden; }
     .panel h2 { font-size:16px; margin:0; padding:15px 17px; border-bottom:1px solid var(--line); }
@@ -52,8 +60,8 @@ DASHBOARD_HTML = """<!doctype html>
     .timeline li { border-left:2px solid #9fbfd7; padding:0 0 16px 14px; margin-left:5px; }
     .timeline time { display:block; color:var(--muted); font-size:12px; }
     .source-error { display:none; margin-bottom:16px; padding:12px 14px; border:1px solid #f2b8b5; background:#fff0ef; color:var(--red); border-radius:7px; }
-    @media (max-width:900px) { .cards { grid-template-columns:repeat(2,1fr); } .grid { grid-template-columns:1fr; } }
-    @media (max-width:540px) { main { padding:14px; } header { padding:18px 14px; align-items:start; flex-direction:column; gap:8px; } .cards { grid-template-columns:1fr; } th:nth-child(2),td:nth-child(2) { display:none; } }
+    @media (max-width:900px) { .cards { grid-template-columns:repeat(2,1fr); } .view-grid { grid-template-columns:1fr; } .task-table-wrap { min-height:0; max-height:none; } .detail-panel { position:static; } }
+    @media (max-width:540px) { main { padding:14px; } header { padding:18px 14px; align-items:start; flex-direction:column; gap:8px; } .cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .card { padding:14px; } .card strong { font-size:24px; } .tabs { margin-left:-14px; margin-right:-14px; padding-left:14px; padding-right:14px; border-left:0; border-right:0; border-radius:0; } .tab { min-width:96px; } th:nth-child(2),td:nth-child(2) { display:none; } }
   </style>
 </head>
 <body>
@@ -66,17 +74,27 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="card"><span>异常任务</span><strong id="unhealthy">0</strong></div>
     <div class="card"><span>活动事故</span><strong id="incident-count">0</strong></div>
   </section>
-  <div class="grid">
-    <div class="stack">
-      <section class="panel"><h2>任务列表</h2><div class="panel-body" style="padding:0;overflow:auto"><table><thead><tr><th>任务</th><th>队列 / 类型</th><th>生命周期</th><th>健康</th><th>阶段</th><th>最近进度</th></tr></thead><tbody id="tasks"></tbody></table></div></section>
-      <section class="panel"><div class="panel-title"><h2>Collector 状态</h2><div class="actions"><button type="button" data-probe="collector" data-endpoint="/api/v1/probes/collector" title="只执行健康检查，不会提交真实任务">立即探测 Collector</button><button type="button" data-probe="queue-source" data-endpoint="/api/v1/probes/queue-source" title="只读检查队列源，不会提交真实任务">立即探测队列源</button></div></div><div id="probe-result" class="panel-body muted" aria-live="polite">尚未执行手动探测。</div><div id="collector" class="panel-body"></div></section>
-      <section class="panel"><h2>运行时状态</h2><div id="runtimes" class="panel-body"></div></section>
+  <nav class="tabs" role="tablist" aria-label="监控视图">
+    <button class="tab" id="tab-tasks" type="button" role="tab" aria-controls="panel-tasks" aria-selected="true" tabindex="0" data-tab="tasks">任务</button>
+    <button class="tab" id="tab-collector" type="button" role="tab" aria-controls="panel-collector" aria-selected="false" tabindex="-1" data-tab="collector">Collector</button>
+    <button class="tab" id="tab-runtimes" type="button" role="tab" aria-controls="panel-runtimes" aria-selected="false" tabindex="-1" data-tab="runtimes">运行时</button>
+    <button class="tab" id="tab-incidents" type="button" role="tab" aria-controls="panel-incidents" aria-selected="false" tabindex="-1" data-tab="incidents">事故</button>
+  </nav>
+  <section class="tab-panel" id="panel-tasks" role="tabpanel" aria-labelledby="tab-tasks">
+    <div class="view-grid">
+      <section class="panel"><h2>任务列表</h2><div class="task-table-wrap"><table><thead><tr><th>任务</th><th>队列 / 类型</th><th>生命周期</th><th>健康</th><th>阶段</th><th>最近进度</th></tr></thead><tbody id="tasks"></tbody></table></div></section>
+      <section class="panel detail-panel"><h2>进度时间线</h2><div id="detail" class="panel-body"><p class="empty">选择一条任务查看时间线。</p></div></section>
     </div>
-    <div class="stack">
-      <section class="panel"><h2>事故历史</h2><div id="incidents" class="panel-body"></div></section>
-      <section class="panel"><h2>进度时间线</h2><div id="detail" class="panel-body"><p class="empty">选择一条任务查看时间线。</p></div></section>
-    </div>
-  </div>
+  </section>
+  <section class="tab-panel" id="panel-collector" role="tabpanel" aria-labelledby="tab-collector" hidden>
+    <section class="panel"><div class="panel-title"><h2>Collector 状态</h2><div class="actions"><button type="button" data-probe="collector" data-endpoint="/api/v1/probes/collector" title="只执行健康检查，不会提交真实任务">立即探测 Collector</button><button type="button" data-probe="queue-source" data-endpoint="/api/v1/probes/queue-source" title="只读检查队列源，不会提交真实任务">立即探测队列源</button></div></div><div id="probe-result" class="panel-body muted" aria-live="polite">尚未执行手动探测。</div><div id="collector" class="panel-body"></div></section>
+  </section>
+  <section class="tab-panel" id="panel-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" hidden>
+    <section class="panel"><h2>运行时状态</h2><div id="runtimes" class="panel-body"></div></section>
+  </section>
+  <section class="tab-panel" id="panel-incidents" role="tabpanel" aria-labelledby="tab-incidents" hidden>
+    <section class="panel"><h2>事故历史</h2><div id="incidents" class="panel-body"></div></section>
+  </section>
 </main>
 <script>
 const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -103,6 +121,27 @@ function render(data){
 async function showDetail(job){try{const d=await json(`/api/v1/tasks/${encodeURIComponent(job)}`);document.querySelector("#detail").innerHTML=`<strong>${esc(d.job_id)}</strong><p>${badge(d.health)} ${esc(d.progress_stage||"")}</p><ol class="timeline">${(d.timeline||[]).map(e=>`<li><strong>${esc(e.progress_stage)}</strong><time>${age(e.progress_at)} · #${esc(e.progress_sequence)}</time></li>`).join("")||'<li class="empty">没有进度事件。</li>'}</ol>`;}catch(e){document.querySelector("#detail").innerHTML='<p class="empty">详情暂不可用。</p>';}}
 async function probe(target,endpoint,button){button.disabled=true;const output=document.querySelector("#probe-result");output.textContent="探测中...";try{const r=await fetch(endpoint,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:"{}"});const d=await r.json();if(!r.ok){const wait=d.error?.retry_after?`，${d.error.retry_after} 秒后可再次探测`:"";throw new Error((d.error?.message||`HTTP ${r.status}`)+wait);}const diagnostic=d.error_code?`，${d.error_code} (${d.error_class||"unknown"})`:"";output.textContent=`${target}：${d.state} / ${d.status}${diagnostic}，${age(d.probed_at)}`;await refresh();}catch(e){output.textContent=`探测失败：${e.message}`;}finally{button.disabled=false;}}
 document.querySelectorAll("button[data-probe]").forEach(button=>button.addEventListener("click",()=>probe(button.dataset.probe,button.dataset.endpoint,button)));
+const tabs=[...document.querySelectorAll('[role="tab"]')];
+function selectTab(selected,{focus=true}={}){
+  tabs.forEach(tab=>{
+    const active=tab===selected;
+    tab.setAttribute("aria-selected",String(active));
+    tab.tabIndex=active?0:-1;
+    document.querySelector(`#${tab.getAttribute("aria-controls")}`).hidden=!active;
+  });
+  if(focus)selected.focus();
+}
+tabs.forEach((tab,index)=>{
+  tab.addEventListener("click",()=>selectTab(tab,{focus:false}));
+  tab.addEventListener("keydown",event=>{
+    let next=null;
+    if(event.key==="ArrowRight")next=tabs[(index+1)%tabs.length];
+    if(event.key==="ArrowLeft")next=tabs[(index-1+tabs.length)%tabs.length];
+    if(event.key==="Home")next=tabs[0];
+    if(event.key==="End")next=tabs[tabs.length-1];
+    if(next){event.preventDefault();selectTab(next);}
+  });
+});
 async function refresh(){try{render(await json("/api/v1/status"));}catch(e){const el=document.querySelector("#source-error");el.style.display="block";el.textContent="监控服务暂不可达";}}
 refresh(); setInterval(refresh, 7000);
 </script>
