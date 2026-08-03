@@ -101,6 +101,14 @@ class FakeService:
             ],
         }
 
+    async def manual_probe(self, target: str):
+        return {
+            "target": target,
+            "probed_at": "2026-07-29T04:00:00+00:00",
+            "status": "ready",
+            "error_class": None,
+        }
+
 
 def _client(*, ready: bool = True) -> TestClient:
     """创建不启动后台轮询的隔离 ASGI 客户端。"""
@@ -187,6 +195,34 @@ def test_api_uses_cached_snapshot_filters_tasks_and_redacts_defensively() -> Non
         assert "secret" not in serialized
 
 
+def test_manual_probe_endpoints_use_only_fixed_targets() -> None:
+    """探测 API 只暴露两个固定服务端目标，不接受调用方提供地址。"""
+    with _client() as client:
+        collector = client.post("/api/v1/probes/collector", json={})
+        queue_source = client.post("/api/v1/probes/queue-source", json={})
+        arbitrary = client.post("/api/v1/probes/https://example.com", json={})
+
+    assert collector.status_code == queue_source.status_code == 200
+    assert collector.json()["target"] == "collector"
+    assert queue_source.json()["target"] == "queue-source"
+    assert arbitrary.status_code == 404
+
+
+def test_manual_probe_rejects_cross_origin_and_non_json_requests() -> None:
+    with _client() as client:
+        cross_origin = client.post(
+            "/api/v1/probes/collector",
+            json={},
+            headers={"Origin": "https://attacker.example"},
+        )
+        non_json = client.post("/api/v1/probes/collector")
+
+    assert cross_origin.status_code == 403
+    assert cross_origin.json()["error"]["code"] == "cross_origin_probe_denied"
+    assert non_json.status_code == 415
+    assert non_json.json()["error"]["code"] == "invalid_content_type"
+
+
 def test_list_apis_enforce_bounded_allowlist_filters() -> None:
     """任务和事故列表只接受有界 limit 与固定过滤字段和值。"""
     with _client() as client:
@@ -217,6 +253,9 @@ def test_embedded_ui_has_required_sections_and_no_external_assets() -> None:
         "Collector 状态",
         "运行时状态",
         "进度时间线",
+        "立即探测",
+        "/api/v1/probes/collector",
+        "/api/v1/probes/queue-source",
         "data.collector",
         'i.status==="resolved"',
     ):
@@ -228,3 +267,4 @@ def test_embedded_ui_has_required_sections_and_no_external_assets() -> None:
     assert "取消" not in html
     assert "重试" not in html
     assert "重新排队" not in html
+    assert 'fetch("/api/v1/probes/' not in html.split("async function refresh")[1]

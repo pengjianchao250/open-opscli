@@ -17,6 +17,7 @@ Collector Monitor v1 只提供：
 - `queue_starved`、`worker_unavailable` 队列事件；
 - Starlette 只读网页和 JSON API；
 - 本地只读 CLI；
+- Collector 与队列源固定目标的手动只读探测；
 - 企业微信 Webhook 告警、去重、冷却和恢复通知。
 
 Collector Monitor v1 **不提供**：
@@ -44,12 +45,13 @@ opscli collector-monitor status --help
 opscli collector-monitor tasks --help
 opscli collector-monitor show --help
 opscli collector-monitor incidents --help
+opscli collector-monitor probe --help
 opscli-collector-monitor --help
 command -v opscli-collector-monitor   # Linux
 # Windows PowerShell 使用：Get-Command opscli-collector-monitor
 ```
 
-应看到五个子命令：`serve`、`status`、`tasks`、`show`、`incidents`。独立入口使用 `argparse` 支持 `--host`、`--port` 和 `--help`，不提供查询子命令。如果导入时报 `No module named 'opscli.collector_monitor'`，说明安装产物不完整或当前环境不是预期版本，不要仅凭 `pyproject.toml` 已声明入口就继续部署。
+应看到六个子命令：`serve`、`status`、`tasks`、`show`、`incidents`、`probe`。独立入口使用 `argparse` 支持 `--host`、`--port` 和 `--help`，不提供查询子命令。如果导入时报 `No module named 'opscli.collector_monitor'`，说明安装产物不完整或当前环境不是预期版本，不要仅凭 `pyproject.toml` 已声明入口就继续部署。
 
 ### 3.2 业务监督字段
 
@@ -105,7 +107,8 @@ Monitor 应以 SQLite URI `mode=ro` 并启用 `PRAGMA query_only=ON`。业务库
 |---|---:|---:|---|
 | `OPSCLI_COLLECTOR_MONITOR_HOST` | `127.0.0.1` | `127.0.0.1` | HTTP 监听地址 |
 | `OPSCLI_COLLECTOR_MONITOR_PORT` | `8767` | 按端口规划 | HTTP 端口，合法范围 1～65535 |
-| `OPSCLI_COLLECTOR_MONITOR_QUEUE_DB_PATH` | `~/.config/opscli/seller_sprite/task_queue.sqlite3` | 使用绝对路径 | 严格只读业务库；不得与状态库为同一物理文件 |
+| `OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH` | `~/.config/opscli/seller_sprite/task_queue.sqlite3` | 两个服务配置同一绝对路径 | SellerSprite 写端与 Monitor 读端共享的主路径合同 |
+| `OPSCLI_COLLECTOR_MONITOR_QUEUE_DB_PATH` | 同 SellerSprite 主路径 | 建议省略 | 兼容变量；同时显式配置且不一致时 Monitor 拒绝启动 |
 | `OPSCLI_COLLECTOR_MONITOR_STATE_DB_PATH` | `~/.config/opscli/collector_monitor/state.sqlite3` | 独立持久卷 | 不得通过路径、符号链接或硬链接指向业务库 |
 | `OPSCLI_COLLECTOR_MONITOR_URL` | `http://<HOST>:<PORT>` | 可选内网 HTTPS 地址 | Monitor 基址；加载时去除尾部 `/`，不得包含凭证 |
 | `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_URL` | 空 | 按需启用 | 配置 API Key 文件时必须使用 HTTPS，仅明确回环地址允许 HTTP |
@@ -123,6 +126,7 @@ SellerSprite 已确认的相关变量：
 
 | 环境变量 | 当前默认值 | 说明 |
 |---|---:|---|
+| `OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH` | `~/.config/opscli/seller_sprite/task_queue.sqlite3` | Collector 与 Monitor 共用的业务队列路径 |
 | `OPSCLI_SELLER_SPRITE_TASK_TIMEOUT_SECONDS` | `600` | 单任务执行上限 |
 | `OPSCLI_SELLER_SPRITE_TASK_LEASE_SECONDS` | `60` | 执行租约长度 |
 | `OPSCLI_SELLER_SPRITE_TASK_HEARTBEAT_SECONDS` | `20` | 租约续期周期，实际调度器会限制为租约的一半以内 |
@@ -188,7 +192,7 @@ icacls $webhookFile /grant:r "$($env:USERNAME):(R)"
 不启用通知的本地只读验证：
 
 ```powershell
-$env:OPSCLI_COLLECTOR_MONITOR_QUEUE_DB_PATH = `
+$env:OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH = `
   (Join-Path $env:USERPROFILE ".config\opscli\seller_sprite\task_queue.sqlite3")
 $env:OPSCLI_COLLECTOR_MONITOR_STATE_DB_PATH = `
   (Join-Path $env:TEMP "opscli-collector-monitor\state.sqlite3")
@@ -218,7 +222,7 @@ http://127.0.0.1:8767/
 ### 6.2 Linux 前台验证
 
 ```bash
-export OPSCLI_COLLECTOR_MONITOR_QUEUE_DB_PATH=/var/lib/opscli/seller_sprite/task_queue.sqlite3
+export OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH=/var/lib/opscli/.config/opscli/seller_sprite/task_queue.sqlite3
 export OPSCLI_COLLECTOR_MONITOR_STATE_DB_PATH=/var/lib/opscli-collector-monitor/state.sqlite3
 export OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE=/etc/opscli/collector-monitor/wecom-webhook
 export OPSCLI_COLLECTOR_MONITOR_HOST=127.0.0.1
@@ -240,7 +244,7 @@ export OPSCLI_COLLECTOR_MONITOR_PORT=8767
 以下示例假设：
 
 - opscli 安装在 `/opt/opscli/venv`；
-- SellerSprite 业务库在 `/var/lib/opscli/seller_sprite/task_queue.sqlite3`；
+- SellerSprite 业务库在 `/var/lib/opscli/.config/opscli/seller_sprite/task_queue.sqlite3`；
 - Monitor 私有状态在 `/var/lib/opscli-collector-monitor`；
 - Webhook 文件在 `/etc/opscli/collector-monitor/wecom-webhook`；
 - 已创建 `opscli-monitor` 服务账号，并通过文件 ACL/组权限获得业务库只读访问。
@@ -261,7 +265,7 @@ WorkingDirectory=/var/lib/opscli-collector-monitor
 Environment=PYTHONUNBUFFERED=1
 Environment=OPSCLI_COLLECTOR_MONITOR_HOST=127.0.0.1
 Environment=OPSCLI_COLLECTOR_MONITOR_PORT=8767
-Environment=OPSCLI_COLLECTOR_MONITOR_QUEUE_DB_PATH=/var/lib/opscli/seller_sprite/task_queue.sqlite3
+Environment=OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH=/var/lib/opscli/.config/opscli/seller_sprite/task_queue.sqlite3
 Environment=OPSCLI_COLLECTOR_MONITOR_STATE_DB_PATH=/var/lib/opscli-collector-monitor/state.sqlite3
 Environment=OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE=/etc/opscli/collector-monitor/wecom-webhook
 EnvironmentFile=-/etc/opscli/collector-monitor.env
@@ -286,7 +290,7 @@ RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadOnlyPaths=/var/lib/opscli/seller_sprite
+ReadOnlyPaths=/var/lib/opscli/.config/opscli/seller_sprite
 ReadOnlyPaths=/etc/opscli/collector-monitor/wecom-webhook
 ReadWritePaths=/var/lib/opscli-collector-monitor
 
@@ -324,6 +328,8 @@ sudo journalctl -u opscli-collector-monitor.service --since "30 minutes ago"
 | 查看任务 | `opscli collector-monitor tasks [--health HEALTH]` | 仅支持按健康分类过滤 | 否 |
 | 查看单任务 | `opscli collector-monitor show JOB_ID` | 返回脱敏任务和进度时间线 | 否 |
 | 查看全部事故 | `opscli collector-monitor incidents` | 同时返回活动和已恢复事故 | 否 |
+| 手动探测 Collector | `opscli collector-monitor probe --target collector` | 调用固定 Collector 健康工具；不接受任意 URL | 否 |
+| 手动探测队列源 | `opscli collector-monitor probe --target queue-source` | 只读打开并查询固定队列源 | 否 |
 | 使用独立入口启动 | `opscli-collector-monitor [--host HOST] [--port PORT]` | `argparse` 入口；支持 `--help`，无查询子命令 | 否 |
 
 常用查询：
@@ -334,6 +340,8 @@ opscli collector-monitor tasks --health orphaned
 opscli collector-monitor tasks --health worker_unavailable
 opscli collector-monitor show JOB_ID
 opscli collector-monitor incidents
+opscli collector-monitor probe --target collector
+opscli collector-monitor probe --target queue-source
 ```
 
 `tasks --health` 只接受 `healthy`、`slow`、`stalled`、`orphaned`、`queue_starved`、`worker_unavailable`。CLI HTTP 超时固定为 10 秒；不可达时退出码为 `1`，并输出稳定 JSON 错误。CLI 不提供 `cancel`、`retry`、`requeue`、`fail`、`browser` 或 `recover`。
@@ -360,6 +368,8 @@ opscli collector-monitor incidents
 | `GET` | `/api/v1/tasks?health=<值>&status=<值>&task_kind=<值>&limit=<1..500>` | 任务列表；过滤均可选，默认 100 条，拒绝未知参数 |
 | `GET` | `/api/v1/tasks/{job_id}` | 单任务脱敏监督详情和进度时间线；不存在时返回 `404` |
 | `GET` | `/api/v1/incidents?status=<值>&rule=<值>&limit=<1..500>` | 事故列表；过滤均可选，默认 100 条 |
+| `POST` | `/api/v1/probes/collector` | 同步手动探测固定 Collector MCP，最多 5 秒 |
+| `POST` | `/api/v1/probes/queue-source` | 同步只读探测固定 SellerSprite 队列源，最多 5 秒 |
 
 本机检查：
 
@@ -371,7 +381,7 @@ curl --fail --silent --show-error http://127.0.0.1:8767/api/v1/status
 
 `/health/live` 成功只表示 Monitor 自身可响应；`/health/ready` 失败通常表示业务库不可读、schema 不匹配或尚未完成首次成功扫描。配置或私有状态库初始化失败通常会让进程直接启动失败。业务任务存在 `stalled` 不会让存活或就绪探针失败，但会让 CLI `status` 返回退出码 `2`。
 
-API v1 只允许读取。任务过滤允许 `health` 六种健康值、`status=queued|running|succeeded|failed`、`task_kind=generic|listing_analysis`；事故过滤允许 `status=active|resolved` 与四种 `rule`。两个列表的 `limit` 默认为 100、最大 500，但 API 只过滤轮询缓存：当前快照最多 1000 条任务和最近 500 条事故。任何 `POST`、`PUT`、`PATCH`、`DELETE` 业务端点都不属于一期。
+API v1 不提供业务写入。两个 `POST` 探测端点只使用服务端冻结配置，不接受 URL、文件路径、Header 或命令；同一目标最多一个并发，完成后冷却 10 秒，且不创建任务、MCP run 或业务输出。任务过滤允许 `health` 六种健康值、`status=queued|running|succeeded|failed`、`task_kind=generic|listing_analysis`；事故过滤允许 `status=active|resolved` 与四种 `rule`。两个列表的 `limit` 默认为 100、最大 500，但 API 只过滤轮询缓存：当前快照最多 1000 条任务和最近 500 条事故。
 
 ## 10. 日常巡检
 
@@ -515,8 +525,8 @@ No module named 'opscli.collector_monitor'
 检查：
 
 ```bash
-namei -l /var/lib/opscli/seller_sprite/task_queue.sqlite3
-ls -l /var/lib/opscli/seller_sprite/task_queue.sqlite3*
+namei -l /var/lib/opscli/.config/opscli/seller_sprite/task_queue.sqlite3
+ls -l /var/lib/opscli/.config/opscli/seller_sprite/task_queue.sqlite3*
 ```
 
 只记录文件所有者、权限和文件名，不读取内容。WAL 模式下还需确保已有 `-wal`、`-shm` 可由服务账号读取，并且目录可遍历。不要为了排查把业务目录改成全局可写。
@@ -667,15 +677,15 @@ Monitor 私有状态库需要纳入备份以保留去重、冷却和恢复闭环
 6. 事故主键是 `(rule, subject)`，没有单独 `fingerprint` 字段或单事故详情 API；事故列表已支持 `status`、`rule` 和有界 `limit`。
 7. `OPSCLI_COLLECTOR_MONITOR_URL` 仅供 CLI 访问服务；当前企业微信消息不包含 Monitor 页面链接。两个启动入口的 `--host/--port` 都不会同步更新该 URL。
 8. 每轮必须完整读取全部活动任务以免漏判事故；实现已使用 500 条游标批次、显式读事务、1000 条公开上限和批量时间线查询，但极端积压时仍应监控扫描耗时与 SQLite 读取压力。
-9. Collector MCP 探测以不低于 60 秒的独立周期运行；远端响应进入缓存前只保留 module、queue、scheduler 与固定 runtime 白名单。Collector 探测失败和业务 SQLite 扫描失败当前均不创建事故或企业微信告警，只分别体现在 `collector` 或 `source` 摘要中。
+9. Collector MCP 只允许从 UI、CLI 或固定 POST 端点手动探测；页面自动刷新不会触发远端调用。远端响应进入缓存前只保留 module、queue、scheduler、稳定错误码与固定 runtime 白名单。Collector 探测失败和业务 SQLite 扫描失败当前均不创建事故或企业微信告警，只分别体现在 `collector` 或 `source` 摘要中。
 10. 生产 sdist 支持由业务 `.c` 二次注册 Cython 扩展，并保留 Typer/FastMCP 反射所需纯 Python 模块。Windows 构建正式 Cython wheel 仍要求 MSVC；无编译器时 `SKIP_CYTHON=1` 只用于非生产安装验证。
 
 已经确认、不应无理由改名的合同：
 
-- `opscli collector-monitor` 及 `serve`、`status`、`tasks`、`show`、`incidents`；
+- `opscli collector-monitor` 及 `serve`、`status`、`tasks`、`show`、`incidents`、`probe`；
 - `opscli-collector-monitor` 与 `opscli.collector_monitor.server:run`；
 - 第 4 节全部 `OPSCLI_COLLECTOR_MONITOR_*` 配置；
-- `/health/live`、`/health/ready`、`/api/v1/status`、`/api/v1/tasks`、`/api/v1/tasks/{job_id}`、`/api/v1/incidents`；
+- `/health/live`、`/health/ready`、`/api/v1/status`、`/api/v1/tasks`、`/api/v1/tasks/{job_id}`、`/api/v1/incidents`、两个固定 `/api/v1/probes/*` 端点；
 - `progress_stage`、`progress_at`、`progress_sequence` 和 `seller_sprite_task_progress_events`；
 - `seller_sprite_runtime_heartbeats` 及第 3.2 节列出的运行时字段；
 - SellerSprite 默认业务库 `~/.config/opscli/seller_sprite/task_queue.sqlite3`。

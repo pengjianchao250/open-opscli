@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-08-03 collector_monitor - 增强队列故障可见性与手动探测
+
+**变更原因**：SellerSprite 队列数据库路径异常时会在任务入队前失败，原有 Collector 启动链会同时失去健康查询能力，Monitor 也缺少运维修复后的安全验证入口。
+**改动点**：统一 SellerSprite 写端与 Monitor 读端的队列路径配置并拒绝冲突；SellerSprite Bundle 启动失败时保留 Collector 健康面，以稳定脱敏错误码报告数据库不可用，业务工具在未就绪时拒绝入队；新增 Collector/队列源固定目标的同步手动探测 API、CLI 和 UI，实施单目标并发锁、10 秒冷却与 5 秒硬超时，并移除后台自动 Collector 探测；同步生产路径、部署说明和分期设计文档，明确不提供任务重试、服务重启、自动恢复或 feedback 接入。
+**验证结果**：TDD 红绿过程已完成；SellerSprite Bundle/MCP 工具回归 `91 passed`，Monitor 服务/API/CLI 回归 `24 passed`，最终影响面组合回归 `183 passed`；`compileall` 与 `git diff --check` 通过。全仓单次收集受同名测试模块和既有输出流关闭问题阻塞；分模块回归确认多个未改动模块存在既有失败，SellerSprite 首个失败仍为既有导出文件名断言，MCP 首个错误为既有 Shopify helper 导入缺失。双轴代码审查发现的异常体系、常量注释和公开方法 docstring 规范问题已修复，最终复审未发现阻塞项。
+**影响范围**：SellerSprite 队列路径解析、Collector SellerSprite Bundle 生命周期与业务就绪门禁、Collector Monitor 探测 API/CLI/UI 和生产运维配置；不修改业务任务 schema、请求参数或任务恢复语义。
+**回滚方式**：回退共享路径解析、Bundle 启动隔离与就绪门禁、手动探测服务/API/CLI/UI、测试和对应文档；Monitor 可独立停止，业务队列无需迁移或回写。
+---
+
 ## 2026-07-31 seller_sprite - 增加实时查竞价场景
 
 **变更原因**：需要按站点和单个 ASIN 自动刷新或创建实时竞价任务，并将列表页官方导出的完整竞价口径与详情页按广告类型展示的分页口径正确区分。

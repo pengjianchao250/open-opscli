@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from time import monotonic
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
 from opscli.collector_monitor.classifier import (
@@ -18,6 +19,10 @@ from opscli.mcp_client import RemoteMcpClient
 
 _INCIDENT_CACHE_LIMIT = 500
 _NOTIFICATION_CONCURRENCY = 4
+# 手动探测按确认的运维合同限制为每目标 10 秒一次，避免重复施压。
+_MANUAL_PROBE_COOLDOWN_SECONDS = 10.0
+# 手动探测硬上限固定为 5 秒，确保 UI 和 CLI 可以有界返回。
+_MANUAL_PROBE_TIMEOUT_SECONDS = 5.0
 _COLLECTOR_CHECK_FIELDS = ("queue", "scheduler")
 _COLLECTOR_RUNTIME_FIELDS = (
     "lifecycle_state",
@@ -50,6 +55,22 @@ class _Notifier(Protocol):
     def send(self, action: Any) -> dict[str, Any]: ...
 
 
+class CollectorMonitorError(RuntimeError):
+    """Collector Monitor 模块业务异常基类。"""
+
+
+class CollectorMonitorProbeBusyError(CollectorMonitorError):
+    """同一目标已有手动探测正在执行。"""
+
+
+class CollectorMonitorProbeCooldownError(CollectorMonitorError):
+    """同一目标仍处于手动探测冷却期。"""
+
+    def __init__(self, retry_after: float) -> None:
+        self.retry_after = max(0.0, retry_after)
+        super().__init__("探测操作仍在冷却期")
+
+
 class CollectorMonitorService:
     """读取本地队列、评估事故、通知并缓存只读快照。"""
 
@@ -62,6 +83,7 @@ class CollectorMonitorService:
         notifier: _Notifier,
         collector_probe: Callable[[MonitorSettings], Awaitable[dict[str, Any]]] | None = None,
         clock: Callable[[], datetime] | None = None,
+        monotonic_clock: Callable[[], float] | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
@@ -69,6 +91,14 @@ class CollectorMonitorService:
         self.notifier = notifier
         self.collector_probe = collector_probe or probe_collector
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.monotonic_clock = monotonic_clock or monotonic
+        self._probe_locks = {
+            "collector": asyncio.Lock(),
+            "queue-source": asyncio.Lock(),
+        }
+        self._probe_started_at: dict[str, float] = {}
+        # 超时后底层线程或远端调用可能仍未结束；保留任务引用并继续占锁。
+        self._background_probe_tasks: set[asyncio.Task[Any]] = set()
         self._collector = {
             "enabled": bool(settings.collector_mcp_url),
             "status": "pending" if settings.collector_mcp_url else "not_configured",
@@ -295,37 +325,160 @@ class CollectorMonitorService:
         self._snapshot["collector"] = dict(self._collector)
         return dict(self._collector)
 
+    async def manual_probe(self, target: str) -> dict[str, Any]:
+        """按固定目标执行有界、限并发和带冷却的无副作用探测。
+
+        Args:
+            target: 固定目标标识，仅支持 `collector` 或 `queue-source`。
+
+        Returns:
+            仅含目标、探测时间、状态和脱敏诊断字段的同步结果。
+
+        Raises:
+            ValueError: 目标不在固定白名单中。
+            CollectorMonitorProbeBusyError: 同一目标已有探测正在运行。
+            CollectorMonitorProbeCooldownError: 距上次探测开始不足 10 秒。
+        """
+        if target not in self._probe_locks:
+            raise ValueError("不支持的探测目标")
+        lock = self._probe_locks[target]
+        if lock.locked():
+            raise CollectorMonitorProbeBusyError("同一目标已有探测正在执行")
+
+        await lock.acquire()
+        release_lock = True
+        try:
+            started_at = self.monotonic_clock()
+            previous = self._probe_started_at.get(target)
+            if previous is not None:
+                remaining = _MANUAL_PROBE_COOLDOWN_SECONDS - (started_at - previous)
+                if remaining > 0:
+                    raise CollectorMonitorProbeCooldownError(round(remaining, 3))
+            self._probe_started_at[target] = started_at
+            if target == "collector":
+                result, release_lock = await self._bounded_probe(
+                    _safe_probe_call(self.collector_probe, self.settings),
+                    lock,
+                )
+                if result is None:
+                    result = {
+                        "enabled": bool(self.settings.collector_mcp_url),
+                        "status": "timeout",
+                        "modules": [],
+                        "error_code": "COLLECTOR_UNREACHABLE",
+                        "error_class": "TimeoutError",
+                    }
+                elif result.get("status") == "unavailable":
+                    if not result.get("error_code"):
+                        result["error_code"] = "COLLECTOR_UNREACHABLE"
+                    if result.get("error_class") == "TimeoutError":
+                        result["status"] = "timeout"
+                        result["error_code"] = "COLLECTOR_UNREACHABLE"
+                self._collector = result
+                self._snapshot["collector"] = dict(result)
+            else:
+                result, release_lock = await self._bounded_probe(
+                    self._probe_queue_source(),
+                    lock,
+                )
+                if result is None:
+                    result = {
+                        "status": "timeout",
+                        "task_count": 0,
+                        "runtime_count": 0,
+                        "error_code": "QUEUE_DATABASE_UNAVAILABLE",
+                        "error_class": "TimeoutError",
+                    }
+            probe_state = (
+                "timeout"
+                if result.get("status") == "timeout"
+                else "failed"
+                if result.get("status") == "unavailable"
+                else "succeeded"
+            )
+            return {
+                "target": target,
+                "probed_at": _iso(self.clock()),
+                "state": probe_state,
+                **result,
+            }
+        finally:
+            if release_lock:
+                lock.release()
+
+    async def _bounded_probe(
+        self,
+        probe: Awaitable[dict[str, Any]],
+        lock: asyncio.Lock,
+    ) -> tuple[dict[str, Any] | None, bool]:
+        """有界等待探测，并在超时后继续持锁直到底层操作实际结束。"""
+        task = asyncio.create_task(probe)
+        done, _pending = await asyncio.wait(
+            {task},
+            timeout=_MANUAL_PROBE_TIMEOUT_SECONDS,
+        )
+        if task in done:
+            return await task, True
+
+        self._background_probe_tasks.add(task)
+
+        def finish_background(completed: asyncio.Task[Any]) -> None:
+            """消费后台结果并释放目标锁，避免异常泄露或并发穿透。"""
+            self._background_probe_tasks.discard(completed)
+            if not completed.cancelled():
+                completed.exception()
+            if lock.locked():
+                lock.release()
+
+        task.add_done_callback(finish_background)
+        return None, False
+
+    async def _probe_queue_source(self) -> dict[str, Any]:
+        """只读打开并查询固定队列源，不更新监控状态或任务缓存。"""
+        try:
+            observations = await asyncio.to_thread(self.repository.scan_observations)
+            return {
+                "status": "ready",
+                "task_count": int(observations.total),
+                "runtime_count": len(observations.runtimes),
+                "error_code": None,
+                "error_class": None,
+            }
+        except RepositorySourceError as exc:
+            error_code = str(exc.code or "").strip().upper()
+            return {
+                "status": "unavailable",
+                "task_count": 0,
+                "runtime_count": 0,
+                "error_code": error_code or "QUEUE_DATABASE_UNAVAILABLE",
+                "error_class": type(exc).__name__,
+            }
+        except Exception as exc:
+            return {
+                "status": "unavailable",
+                "task_count": 0,
+                "runtime_count": 0,
+                "error_code": "QUEUE_DATABASE_UNAVAILABLE",
+                "error_class": type(exc).__name__,
+            }
+
     async def run(
         self,
         stop_event: asyncio.Event,
         *,
         poll_immediately: bool = True,
     ) -> None:
-        """分别运行本地高频扫描和 Collector 低频探测。"""
-        probe_task = asyncio.create_task(self._run_probe_loop(stop_event))
+        """运行本地队列扫描；远端 Collector 仅允许手动探测。"""
         should_poll = poll_immediately
-        try:
-            while not stop_event.is_set():
-                if should_poll:
-                    await self.poll_once()
-                should_poll = True
-                try:
-                    await asyncio.wait_for(
-                        stop_event.wait(),
-                        timeout=self.settings.poll_interval,
-                    )
-                except asyncio.TimeoutError:
-                    continue
-        finally:
-            stop_event.set()
-            await probe_task
-
-    async def _run_probe_loop(self, stop_event: asyncio.Event) -> None:
-        """以不低于一分钟的独立节拍刷新远端探测缓存。"""
         while not stop_event.is_set():
-            await self.probe_once()
+            if should_poll:
+                await self.poll_once()
+            should_poll = True
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=max(60.0, self.settings.poll_interval))
+                await asyncio.wait_for(
+                    stop_event.wait(),
+                    timeout=self.settings.poll_interval,
+                )
             except asyncio.TimeoutError:
                 continue
 
@@ -353,6 +506,7 @@ async def probe_collector(settings: MonitorSettings) -> dict[str, Any]:
             "enabled": True,
             "status": "unavailable",
             "modules": [],
+            "error_code": "COLLECTOR_UNREACHABLE",
             "error_class": type(exc).__name__,
         }
 
@@ -401,6 +555,7 @@ async def _safe_probe_call(
             "enabled": True,
             "status": "unavailable",
             "modules": [],
+            "error_code": "COLLECTOR_UNREACHABLE",
             "error_class": type(exc).__name__,
         }
 
@@ -409,7 +564,7 @@ def _public_collector_result(data: Mapping[str, Any]) -> dict[str, Any]:
     """将 Collector 响应压缩到固定模块、检查和运行态字段。"""
     modules = data.get("modules")
     source_modules = modules if isinstance(modules, list) else []
-    return {
+    result = {
         "enabled": True,
         "status": _safe_state(data.get("status"), default="unknown"),
         "modules": [
@@ -420,6 +575,9 @@ def _public_collector_result(data: Mapping[str, Any]) -> dict[str, Any]:
         ],
         "error_class": _safe_error_class(data.get("error_class")),
     }
+    if data.get("error_code") is not None:
+        result["error_code"] = _safe_error_code(data.get("error_code"))
+    return result
 
 
 def _public_collector_module(value: Any) -> dict[str, Any] | None:
@@ -433,6 +591,10 @@ def _public_collector_module(value: Any) -> dict[str, Any] | None:
         "bundle_id": bundle_id,
         "status": _safe_state(value.get("status"), default="unknown"),
     }
+    if "error_code" in value:
+        result["error_code"] = _safe_error_code(value.get("error_code"))
+    if "error_class" in value:
+        result["error_class"] = _safe_error_class(value.get("error_class"))
     checks = value.get("checks")
     if isinstance(checks, Mapping):
         result["checks"] = {
@@ -484,6 +646,19 @@ def _safe_error_class(value: Any) -> str | None:
     ):
         return normalized
     return "CollectorProbeError"
+
+
+def _safe_error_code(value: Any) -> str:
+    """只允许大写稳定错误码进入公开探测状态。"""
+    normalized = str(value or "").strip().upper()
+    if (
+        normalized
+        and len(normalized) <= 80
+        and normalized[0].isalpha()
+        and all(character.isalnum() or character == "_" for character in normalized)
+    ):
+        return normalized
+    return "UNKNOWN_PROBE_ERROR"
 
 
 def _safe_timestamp(value: Any) -> str | None:

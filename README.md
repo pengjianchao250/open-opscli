@@ -210,9 +210,13 @@ opscli collector-monitor status
 opscli collector-monitor tasks --health stalled
 opscli collector-monitor show <JOB_ID>
 opscli collector-monitor incidents
+opscli collector-monitor probe --target collector
+opscli collector-monitor probe --target queue-source
 ```
 
-浏览器访问 `http://127.0.0.1:8767/`。默认读取 `~/.config/opscli/seller_sprite/task_queue.sqlite3`，使用 SQLite `mode=ro` 与 `query_only`，不会迁移或修改业务任务；Monitor 自有事故状态写入 `~/.config/opscli/collector_monitor/state.sqlite3`。两者必须是不同物理文件，也不能通过符号链接或硬链接指向同一文件。
+浏览器访问 `http://127.0.0.1:8767/`。SellerSprite 和 Monitor 共用 `OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH`，默认读取 `~/.config/opscli/seller_sprite/task_queue.sqlite3`；Monitor 使用 SQLite `mode=ro` 与 `query_only`，不会迁移或修改业务任务。兼容变量 `OPSCLI_COLLECTOR_MONITOR_QUEUE_DB_PATH` 可保留，但同时配置时必须一致。Monitor 自有事故状态写入 `~/.config/opscli/collector_monitor/state.sqlite3`，不能与业务库指向同一物理文件。
+
+页面和 CLI 提供固定目标的手动探测，单目标只允许一个并发、完成后冷却 10 秒、总超时不超过 5 秒。页面 7 秒自动刷新只读取缓存，不会自动调用 Collector，也不会提交或重试业务任务。
 
 企业微信 Webhook 和可选 Collector MCP API Key 必须放在权限受限的普通文件中，再分别配置 `OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE` 和 `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_API_KEY_FILE`；禁止把密钥原文写入环境变量或命令参数。配置 API Key 文件时，Collector MCP 远端地址必须使用 HTTPS，仅明确回环地址允许 HTTP；携带密钥的探测不跟随重定向，文件读取与远端调用共用探测总超时。容量按任务类型计算，并扣除 SQLite 全局运行任务和本实例活跃尝试中的 Generic、Listing、专属任务及其他调度器共享账号占用。默认服务没有应用层认证，不应直接暴露公网。
 

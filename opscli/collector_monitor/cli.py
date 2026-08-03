@@ -58,6 +58,19 @@ def incidents() -> None:
     _print_json(_get("/api/v1/incidents"))
 
 
+@app.command("probe")
+def probe(
+    target: str = typer.Option(
+        "collector",
+        help="固定探测目标：collector 或 queue-source。",
+    ),
+) -> None:
+    """手动探测 Collector 或 SellerSprite 队列源。"""
+    if target not in {"collector", "queue-source"}:
+        _fail("invalid_probe_target", "探测目标必须是 collector 或 queue-source", code=2)
+    _print_json(_post(f"/api/v1/probes/{target}"))
+
+
 def _get(path: str, *, params: dict[str, str] | None = None) -> dict[str, Any]:
     """访问监控 HTTP API，并统一输出安全错误。"""
     base_url = load_settings().monitor_url
@@ -77,6 +90,36 @@ def _get(path: str, *, params: dict[str, str] | None = None) -> dict[str, Any]:
         _fail(
             "monitor_http_error",
             f"Collector Monitor 请求失败（HTTP {exc.response.status_code}）",
+            code=1,
+        )
+    except Exception as exc:
+        _fail(
+            "monitor_unreachable",
+            f"Collector Monitor 不可达（{type(exc).__name__}）",
+            code=1,
+        )
+    raise AssertionError("unreachable")
+
+
+def _post(path: str) -> dict[str, Any]:
+    """向固定 Monitor 探测端点发起 POST 请求。"""
+    base_url = load_settings().monitor_url
+    try:
+        response = httpx.post(
+            f"{base_url}{path}",
+            json={},
+            timeout=_HTTP_TIMEOUT,
+            headers={"Accept": "application/json"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("响应不是 JSON 对象")
+        return payload
+    except httpx.HTTPStatusError as exc:
+        _fail(
+            "monitor_http_error",
+            f"Collector Monitor 探测失败（HTTP {exc.response.status_code}）",
             code=1,
         )
     except Exception as exc:

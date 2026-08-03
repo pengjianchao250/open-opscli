@@ -6,7 +6,7 @@ import os
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from opscli.config import CONFIG_DIR
 
@@ -16,6 +16,8 @@ ENV_PASSWORD = "OPSCLI_SELLER_SPRITE_PASSWORD"
 ENV_ACCOUNT_NAME = "OPSCLI_SELLER_SPRITE_ACCOUNT_NAME"
 ENV_ACCOUNTS = "OPSCLI_SELLER_SPRITE_ACCOUNTS"
 ENV_OUTPUT_DIR = "OPSCLI_SELLER_SPRITE_OUTPUT_DIR"
+# 队列写端与外部 Monitor 共用该显式路径，避免依赖不同服务账号的 HOME。
+ENV_QUEUE_DB_PATH = "OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH"
 ENV_PAGE_SIZE = "OPSCLI_SELLER_SPRITE_PAGE_SIZE"
 ENV_ACCOUNT_CACHE_TTL_SECONDS = "OPSCLI_SELLER_SPRITE_ACCOUNT_CACHE_TTL_SECONDS"
 ENV_TASK_TIMEOUT_SECONDS = "OPSCLI_SELLER_SPRITE_TASK_TIMEOUT_SECONDS"
@@ -40,6 +42,8 @@ DEFAULT_PAGE_SIZE = 100
 DEFAULT_SITE = "us"
 DEFAULT_PERIOD = "30d"
 DEFAULT_OUTPUT_DIR = CONFIG_DIR / "seller_sprite" / "api_runs"
+# 未显式配置时沿用既有 CONFIG_DIR 布局，保持本地安装向后兼容。
+DEFAULT_QUEUE_DB_PATH = CONFIG_DIR / "seller_sprite" / "task_queue.sqlite3"
 DEFAULT_ACCOUNT_CACHE_TTL_SECONDS = 600
 DEFAULT_TASK_TIMEOUT_SECONDS = 600
 DEFAULT_TASK_LEASE_SECONDS = 60
@@ -66,6 +70,7 @@ class SellerSpriteSettings:
     password: str | None = None
     accounts: tuple[dict[str, str], ...] = ()
     output_dir: Path = DEFAULT_OUTPUT_DIR
+    queue_db_path: Path = DEFAULT_QUEUE_DB_PATH
     page_size: int = DEFAULT_PAGE_SIZE
     default_site: str = DEFAULT_SITE
     default_period: str = DEFAULT_PERIOD
@@ -92,6 +97,7 @@ class SellerSpriteSettings:
         payload = asdict(self)
         payload["output_dir"] = str(self.output_dir)
         payload["browser_profile_dir"] = str(self.browser_profile_dir)
+        payload.pop("queue_db_path", None)
         payload["has_username"] = bool(self.username)
         payload["has_password"] = bool(self.password)
         payload["account_count"] = len(self.accounts) or int(bool(self.username))
@@ -105,6 +111,7 @@ def load_settings() -> SellerSpriteSettings:
     """从 `.env` 和环境变量读取卖家精灵配置。"""
     values = _load_env_values()
     output_dir = Path(values.get(ENV_OUTPUT_DIR) or DEFAULT_OUTPUT_DIR).expanduser()
+    queue_db_path = resolve_queue_db_path(values)
     browser_profile_dir = Path(values.get(ENV_BROWSER_PROFILE_DIR) or DEFAULT_BROWSER_PROFILE_DIR).expanduser()
     page_size = _parse_int(values.get(ENV_PAGE_SIZE), DEFAULT_PAGE_SIZE)
     return SellerSpriteSettings(
@@ -113,6 +120,7 @@ def load_settings() -> SellerSpriteSettings:
         password=values.get(ENV_PASSWORD) or None,
         accounts=_parse_accounts(values.get(ENV_ACCOUNTS)),
         output_dir=output_dir,
+        queue_db_path=queue_db_path,
         page_size=page_size,
         account_cache_ttl_seconds=_parse_int(
             values.get(ENV_ACCOUNT_CACHE_TTL_SECONDS),
@@ -173,6 +181,7 @@ def _load_env_values() -> dict[str, str]:
         ENV_ACCOUNT_NAME,
         ENV_ACCOUNTS,
         ENV_OUTPUT_DIR,
+        ENV_QUEUE_DB_PATH,
         ENV_PAGE_SIZE,
         ENV_ACCOUNT_CACHE_TTL_SECONDS,
         ENV_TASK_TIMEOUT_SECONDS,
@@ -196,6 +205,28 @@ def _load_env_values() -> dict[str, str]:
         if value:
             values[key] = value
     return values
+
+
+def resolve_queue_db_path(
+    values: Mapping[str, str] | None = None,
+    *,
+    config_dir: Path | None = None,
+) -> Path:
+    """解析 SellerSprite 队列数据库路径，供写端与 Monitor 共用。
+
+    Args:
+        values: 可选环境变量映射；省略时读取 SellerSprite 的 `.env` 与进程环境。
+        config_dir: 可选配置根目录，用于测试或调用方覆盖默认 `CONFIG_DIR`。
+
+    Returns:
+        显式配置的队列路径，或配置根目录下的兼容默认路径。
+    """
+    source = _load_env_values() if values is None else values
+    configured = str(source.get(ENV_QUEUE_DB_PATH) or "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    base_dir = Path(CONFIG_DIR if config_dir is None else config_dir)
+    return (base_dir / "seller_sprite" / "task_queue.sqlite3").resolve()
 
 
 def _read_dotenv() -> dict[str, str]:

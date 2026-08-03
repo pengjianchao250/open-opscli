@@ -41,8 +41,10 @@ def _seller_sprite_skill_dir() -> Path:
 
 def _get_task_scheduler():
     """返回卖家精灵任务调度器。"""
+    from opscli.seller_sprite.mcp_bundle import require_ready
     from opscli.seller_sprite.services import get_task_scheduler
 
+    require_ready()
     return get_task_scheduler()
 
 

@@ -24,6 +24,13 @@ DASHBOARD_HTML = """<!doctype html>
     .stack { display:grid; gap:18px; }
     .panel { overflow:hidden; }
     .panel h2 { font-size:16px; margin:0; padding:15px 17px; border-bottom:1px solid var(--line); }
+    .panel-title { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 14px 11px 17px; border-bottom:1px solid var(--line); }
+    .panel-title h2 { padding:0; border:0; }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    button { min-height:34px; padding:6px 11px; border:1px solid #8aa8bf; border-radius:6px; background:#f7fbfe; color:#174f78; font:600 13px/1.2 inherit; cursor:pointer; }
+    button:hover { background:#e8f3fa; }
+    button:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+    button:disabled { cursor:wait; opacity:.6; }
     .panel-body { padding:16px; }
     table { width:100%; border-collapse:collapse; }
     th,td { padding:10px 12px; border-bottom:1px solid #edf1f4; text-align:left; vertical-align:top; }
@@ -62,7 +69,7 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="grid">
     <div class="stack">
       <section class="panel"><h2>任务列表</h2><div class="panel-body" style="padding:0;overflow:auto"><table><thead><tr><th>任务</th><th>队列 / 类型</th><th>生命周期</th><th>健康</th><th>阶段</th><th>最近进度</th></tr></thead><tbody id="tasks"></tbody></table></div></section>
-      <section class="panel"><h2>Collector 状态</h2><div id="collector" class="panel-body"></div></section>
+      <section class="panel"><div class="panel-title"><h2>Collector 状态</h2><div class="actions"><button type="button" data-probe="collector" data-endpoint="/api/v1/probes/collector" title="只执行健康检查，不会提交真实任务">立即探测 Collector</button><button type="button" data-probe="queue-source" data-endpoint="/api/v1/probes/queue-source" title="只读检查队列源，不会提交真实任务">立即探测队列源</button></div></div><div id="probe-result" class="panel-body muted" aria-live="polite">尚未执行手动探测。</div><div id="collector" class="panel-body"></div></section>
       <section class="panel"><h2>运行时状态</h2><div id="runtimes" class="panel-body"></div></section>
     </div>
     <div class="stack">
@@ -90,10 +97,12 @@ function render(data){
   const incidents=data.incidents||[];
   document.querySelector("#incidents").innerHTML=incidents.map(i=>`<article class="incident"><strong><span>${esc(i.rule)}</span>${badge(i.status==="resolved"?"resolved":i.severity)}</strong><div>${esc(i.subject)}</div><div class="muted">${esc(i.message)} · ${i.status==="resolved"?"已恢复":"活动中"}</div></article>`).join("")||'<p class="empty">没有事故记录。</p>';
   const collector=data.collector||{}, modules=collector.modules||[];
-  document.querySelector("#collector").innerHTML=`<div class="runtime"><strong>Collector MCP</strong>${badge(collector.status||"unknown")}<span class="muted">探测</span><span>${collector.enabled?"已配置":"未配置"}</span></div>`+modules.map(m=>`<div class="runtime"><strong>${esc(m.bundle_id)}</strong>${badge(m.status)}<span class="muted">队列 / 调度器</span><span>${esc(m.checks?.queue||"—")} / ${esc(m.checks?.scheduler||"—")}</span></div>`).join("");
+  document.querySelector("#collector").innerHTML=`<div class="runtime"><strong>Collector MCP</strong>${badge(collector.status||"unknown")}<span class="muted">探测</span><span>${collector.enabled?"已配置":"未配置"}</span></div>`+modules.map(m=>`<div class="runtime"><strong>${esc(m.bundle_id)}</strong>${badge(m.status)}<span class="muted">队列 / 调度器</span><span>${esc(m.checks?.queue||"—")} / ${esc(m.checks?.scheduler||"—")}</span>${m.error_code?`<span class="muted">错误码</span><span>${esc(m.error_code)} (${esc(m.error_class||"unknown")})</span>`:""}</div>`).join("");
   document.querySelector("#runtimes").innerHTML=(data.runtimes||[]).map(r=>`<div class="runtime"><strong>${esc(r.execution_owner)}</strong>${badge(r.lifecycle_state)}<span class="muted">心跳</span><span>${age(r.heartbeat_at)}</span><span class="muted">通用 / Listing / 备用容量</span><span>${esc(r.generic_available_capacity)} / ${esc(r.listing_available_capacity)} / ${esc(r.standby_capacity)}</span></div>`).join("")||'<p class="empty">没有运行时心跳。</p>';
 }
 async function showDetail(job){try{const d=await json(`/api/v1/tasks/${encodeURIComponent(job)}`);document.querySelector("#detail").innerHTML=`<strong>${esc(d.job_id)}</strong><p>${badge(d.health)} ${esc(d.progress_stage||"")}</p><ol class="timeline">${(d.timeline||[]).map(e=>`<li><strong>${esc(e.progress_stage)}</strong><time>${age(e.progress_at)} · #${esc(e.progress_sequence)}</time></li>`).join("")||'<li class="empty">没有进度事件。</li>'}</ol>`;}catch(e){document.querySelector("#detail").innerHTML='<p class="empty">详情暂不可用。</p>';}}
+async function probe(target,endpoint,button){button.disabled=true;const output=document.querySelector("#probe-result");output.textContent="探测中...";try{const r=await fetch(endpoint,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:"{}"});const d=await r.json();if(!r.ok){const wait=d.error?.retry_after?`，${d.error.retry_after} 秒后可再次探测`:"";throw new Error((d.error?.message||`HTTP ${r.status}`)+wait);}const diagnostic=d.error_code?`，${d.error_code} (${d.error_class||"unknown"})`:"";output.textContent=`${target}：${d.state} / ${d.status}${diagnostic}，${age(d.probed_at)}`;await refresh();}catch(e){output.textContent=`探测失败：${e.message}`;}finally{button.disabled=false;}}
+document.querySelectorAll("button[data-probe]").forEach(button=>button.addEventListener("click",()=>probe(button.dataset.probe,button.dataset.endpoint,button)));
 async function refresh(){try{render(await json("/api/v1/status"));}catch(e){const el=document.querySelector("#source-error");el.style.display="block";el.textContent="监控服务暂不可达";}}
 refresh(); setInterval(refresh, 7000);
 </script>

@@ -62,6 +62,35 @@ def test_tasks_show_and_incidents_call_read_only_endpoints(monkeypatch) -> None:
     assert all(call[1]["timeout"] == 10.0 for call in calls)
 
 
+def test_probe_posts_to_fixed_target_endpoint(monkeypatch) -> None:
+    """probe 命令只能映射到服务端固定探测目标。"""
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return _response({"target": "queue-source", "status": "ready"})
+
+    monkeypatch.setattr("opscli.collector_monitor.cli.httpx.post", fake_post)
+
+    result = runner.invoke(app, ["probe", "--target", "queue-source"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["status"] == "ready"
+    assert calls[0][0].endswith("/api/v1/probes/queue-source")
+    assert calls[0][1]["timeout"] == 10.0
+
+
+def test_probe_rejects_unknown_target_without_http_call(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "opscli.collector_monitor.cli.httpx.post",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("不得发起请求")),
+    )
+
+    result = runner.invoke(app, ["probe", "--target", "https://example.com"])
+
+    assert result.exit_code != 0
+
+
 def test_unreachable_monitor_has_clear_json_error_and_nonzero_exit(monkeypatch) -> None:
     """监控服务不可达时应返回安全错误类和明确非零退出码。"""
     def unreachable(*args, **kwargs):

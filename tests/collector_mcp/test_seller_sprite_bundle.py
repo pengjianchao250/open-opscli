@@ -1,6 +1,9 @@
 """SellerSprite Collector Bundle 生命周期测试。"""
 
 import asyncio
+import sqlite3
+
+import pytest
 
 from opscli.seller_sprite import mcp_bundle
 
@@ -37,7 +40,9 @@ def test_seller_sprite_bundle_marks_failed_when_scheduler_start_fails(monkeypatc
         closed = False
 
         async def start(self):
-            raise RuntimeError("scheduler unavailable")
+            raise sqlite3.OperationalError(
+                "unable to open database file: /var/lib/opscli/private.sqlite3"
+            )
 
         async def close(self):
             self.closed = True
@@ -50,15 +55,28 @@ def test_seller_sprite_bundle_marks_failed_when_scheduler_start_fails(monkeypatc
 
     async def scenario():
         async with mcp_bundle.lifespan():
-            raise AssertionError("启动失败时不应进入服务阶段")
+            health = await mcp_bundle.health_check()
+            assert health == {
+                "bundle_id": "seller_sprite",
+                "status": "failed",
+                "checks": {"queue": "error", "scheduler": "not_started"},
+                "error_code": "QUEUE_DATABASE_UNAVAILABLE",
+                "error_class": "OperationalError",
+            }
+            assert "/var/lib" not in repr(health)
 
-    try:
-        asyncio.run(scenario())
-    except RuntimeError as exc:
-        assert str(exc) == "scheduler unavailable"
-    else:
-        raise AssertionError("预期调度器启动异常")
-
-    health = asyncio.run(mcp_bundle.health_check())
-    assert health["status"] == "failed"
+    asyncio.run(scenario())
     assert scheduler.closed is True
+
+
+def test_seller_sprite_bundle_rejects_business_access_when_not_ready(monkeypatch):
+    monkeypatch.setitem(mcp_bundle._MODULE_STATE, "status", "failed")
+
+    with pytest.raises(mcp_bundle.SellerSpriteModuleNotReadyError) as exc_info:
+        mcp_bundle.require_ready()
+
+    assert exc_info.value.to_dict() == {
+        "code": "COLLECTOR_MODULE_NOT_READY",
+        "message": "卖家精灵采集模块尚未就绪，请先检查 Collector 模块健康状态",
+        "module": "seller_sprite",
+    }

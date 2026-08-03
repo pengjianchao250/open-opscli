@@ -12,6 +12,7 @@ from typing import Mapping
 from urllib.parse import urlparse
 
 from opscli.config import CONFIG_DIR
+from opscli.seller_sprite.config import ENV_QUEUE_DB_PATH, resolve_queue_db_path
 
 _ENV_PREFIX = "OPSCLI_COLLECTOR_MONITOR_"
 
@@ -45,15 +46,12 @@ def load_settings(
     """从统一前缀环境变量加载并校验监控配置。"""
     env = os.environ if environ is None else environ
     base_dir = Path(CONFIG_DIR if config_dir is None else config_dir)
+    queue_db_path = _queue_db_path(env, base_dir)
     host = _text(env, "HOST", "127.0.0.1")
     port = _integer(env, "PORT", 8767, minimum=1, maximum=65535)
     default_url = f"http://{host}:{port}"
     settings = MonitorSettings(
-        queue_db_path=_path(
-            env,
-            "QUEUE_DB_PATH",
-            base_dir / "seller_sprite" / "task_queue.sqlite3",
-        ),
+        queue_db_path=queue_db_path,
         state_db_path=_path(
             env,
             "STATE_DB_PATH",
@@ -220,6 +218,19 @@ def _path(env: Mapping[str, str], name: str, default: Path) -> Path:
     """读取路径配置但不创建目录。"""
     value = _optional_text(env, name)
     return Path(value).expanduser() if value else default
+
+
+def _queue_db_path(env: Mapping[str, str], base_dir: Path) -> Path:
+    """统一解析业务队列路径，并拒绝 Collector 与 Monitor 配置漂移。"""
+    seller_path = resolve_queue_db_path(env, config_dir=base_dir)
+    monitor_value = _optional_text(env, "QUEUE_DB_PATH")
+    if monitor_value is None:
+        return seller_path
+    monitor_path = Path(monitor_value).expanduser().resolve()
+    seller_explicit = str(env.get(ENV_QUEUE_DB_PATH) or "").strip()
+    if seller_explicit and monitor_path != seller_path:
+        raise ValueError("queue db path conflicts with SellerSprite queue db path")
+    return monitor_path
 
 
 def _optional_path(env: Mapping[str, str], name: str) -> Path | None:

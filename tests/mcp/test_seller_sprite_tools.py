@@ -103,6 +103,31 @@ class FailingScheduler:
         raise RuntimeError("enqueue boom")
 
 
+def test_seller_sprite_run_rejects_non_ready_module_before_enqueue(monkeypatch):
+    """Bundle 未就绪时业务工具必须返回稳定错误且不得获取调度器。"""
+    from opscli.seller_sprite import mcp_bundle
+
+    monkeypatch.setitem(mcp_bundle._MODULE_STATE, "status", "failed")
+    monkeypatch.setattr(
+        "opscli.seller_sprite.services.get_task_scheduler",
+        lambda: (_ for _ in ()).throw(AssertionError("不得获取调度器")),
+    )
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="keyword-reverse",
+            params={"keyword": "charger"},
+        )
+    )
+
+    assert result["success"] is False
+    assert result["error"] == {
+        "code": "COLLECTOR_MODULE_NOT_READY",
+        "message": "卖家精灵采集模块尚未就绪，请先检查 Collector 模块健康状态",
+        "module": "seller_sprite",
+    }
+
+
 class NoNormalizeScheduler:
     last_request = None
     last_mcp_user_email = None

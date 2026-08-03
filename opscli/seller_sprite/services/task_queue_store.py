@@ -9,11 +9,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from opscli.config import CONFIG_DIR
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
+from opscli.seller_sprite.config import DEFAULT_QUEUE_DB_PATH, resolve_queue_db_path
 
 
-DEFAULT_QUEUE_DB_PATH = Path(CONFIG_DIR) / "seller_sprite" / "task_queue.sqlite3"
 DEFAULT_MCP_RUN_MODE = "browser-route"
 TASK_KIND_GENERIC = "generic"
 TASK_KIND_LISTING_ANALYSIS = "listing_analysis"
@@ -80,7 +79,7 @@ class SellerSpriteTaskQueueStore:
     """管理卖家精灵任务队列的本地 SQLite 仓储。"""
 
     def __init__(self, db_path: str | Path | None = None) -> None:
-        self.db_path = Path(db_path) if db_path else DEFAULT_QUEUE_DB_PATH
+        self.db_path = Path(db_path) if db_path else resolve_queue_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 

@@ -8,10 +8,18 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from opscli.collector_monitor.classifier import ClassificationPolicy, IncidentCandidate
 from opscli.collector_monitor.config import MonitorSettings
 from opscli.collector_monitor.repository import RepositorySourceError, ScanObservations
-from opscli.collector_monitor.service import CollectorMonitorService, probe_collector
+from opscli.collector_monitor import service as service_module
+from opscli.collector_monitor.service import (
+    CollectorMonitorProbeBusyError,
+    CollectorMonitorProbeCooldownError,
+    CollectorMonitorService,
+    probe_collector,
+)
 from opscli.collector_monitor.state import MonitorStateStore
 
 NOW = datetime(2026, 7, 29, 4, 0, tzinfo=timezone.utc)
@@ -149,6 +157,119 @@ def test_poll_checks_local_queue_even_when_collector_probe_fails(tmp_path: Path)
     assert snapshot["incidents"][0]["rule"] == "stalled"
     assert [item.kind for item in notifier.actions] == ["opening"]
     assert service.task_detail("job-1")["timeline"][0]["progress_sequence"] == 2
+
+
+def test_manual_queue_source_probe_is_read_only_and_does_not_replace_snapshot(
+    tmp_path: Path,
+) -> None:
+    """队列源探测只验证读取能力，不分类、不写状态库、不覆盖轮询快照。"""
+    settings = _settings(tmp_path)
+    state = MonitorStateStore(settings.state_db_path, cooldown_seconds=1800)
+    service = CollectorMonitorService(
+        settings,
+        repository=FakeRepository(),
+        state_store=state,
+        notifier=RecordingNotifier(),
+        clock=lambda: NOW,
+    )
+    before = service.cached_snapshot
+
+    result = asyncio.run(service.manual_probe("queue-source"))
+
+    assert result == {
+        "target": "queue-source",
+        "probed_at": _iso(0),
+        "state": "succeeded",
+        "status": "ready",
+        "task_count": 1,
+        "runtime_count": 1,
+        "error_code": None,
+        "error_class": None,
+    }
+    assert service.cached_snapshot is before
+    assert state.scan_status()["last_scan_at"] is None
+
+
+def test_manual_probe_enforces_per_target_concurrency_and_cooldown(tmp_path: Path) -> None:
+    """同目标只允许一个探测，完成后十秒内拒绝重复探测。"""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    monotonic_now = [100.0]
+
+    async def blocking_probe(_settings):
+        started.set()
+        await release.wait()
+        return {"enabled": True, "status": "ready", "modules": []}
+
+    async def scenario() -> None:
+        settings = _settings(tmp_path, collector_mcp_url="https://collector.example/mcp")
+        service = CollectorMonitorService(
+            settings,
+            repository=FakeRepository(),
+            state_store=MonitorStateStore(settings.state_db_path, cooldown_seconds=1800),
+            notifier=RecordingNotifier(),
+            collector_probe=blocking_probe,
+            clock=lambda: NOW,
+            monotonic_clock=lambda: monotonic_now[0],
+        )
+        first = asyncio.create_task(service.manual_probe("collector"))
+        await started.wait()
+        with pytest.raises(CollectorMonitorProbeBusyError):
+            await service.manual_probe("collector")
+        release.set()
+        assert (await first)["status"] == "ready"
+        with pytest.raises(CollectorMonitorProbeCooldownError) as exc_info:
+            await service.manual_probe("collector")
+        assert exc_info.value.retry_after == 10.0
+        monotonic_now[0] += 10.0
+        assert (await service.manual_probe("collector"))["status"] == "ready"
+
+    asyncio.run(scenario())
+
+
+def test_queue_probe_timeout_keeps_target_busy_until_scan_thread_finishes(
+    tmp_path: Path,
+) -> None:
+    """超时不能释放仍在运行的只读扫描锁，避免后续探测与残留线程重叠。"""
+    started = threading.Event()
+    release = threading.Event()
+    monotonic_now = [100.0]
+
+    class BlockingRepository(FakeRepository):
+        def scan_observations(self):
+            started.set()
+            release.wait(timeout=1)
+            return super().scan_observations()
+
+    async def scenario() -> None:
+        settings = _settings(tmp_path)
+        service = CollectorMonitorService(
+            settings,
+            repository=BlockingRepository(),
+            state_store=MonitorStateStore(settings.state_db_path, cooldown_seconds=1800),
+            notifier=RecordingNotifier(),
+            clock=lambda: NOW,
+            monotonic_clock=lambda: monotonic_now[0],
+        )
+        result = await service.manual_probe("queue-source")
+        assert result["status"] == "timeout"
+        monotonic_now[0] += 10.0
+        with pytest.raises(CollectorMonitorProbeBusyError):
+            await service.manual_probe("queue-source")
+        release.set()
+        for _ in range(20):
+            if not service._probe_locks["queue-source"].locked():
+                break
+            await asyncio.sleep(0.01)
+        assert service._probe_locks["queue-source"].locked() is False
+
+    original_timeout = service_module._MANUAL_PROBE_TIMEOUT_SECONDS
+    service_module._MANUAL_PROBE_TIMEOUT_SECONDS = 0.01
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+        service_module._MANUAL_PROBE_TIMEOUT_SECONDS = original_timeout
 
 
 def test_poll_exposes_clear_not_ready_source_without_resolving_incidents(tmp_path: Path) -> None:
@@ -413,12 +534,14 @@ def test_probe_uses_remote_mcp_client_key_file_and_bounded_call(
                     "modules": [
                         {
                             "bundle_id": "seller_sprite",
-                            "status": "ready",
+                            "status": "failed",
                             "checks": {
-                                "queue": "ok",
-                                "scheduler": "running",
+                                "queue": "error",
+                                "scheduler": "not_started",
                                 "password": "must-not-leak",
                             },
+                            "error_code": "QUEUE_DATABASE_UNAVAILABLE",
+                            "error_class": "OperationalError",
                             "runtime": {
                                 "lifecycle_state": "running",
                                 "generic_available_capacity": 1,
@@ -443,8 +566,10 @@ def test_probe_uses_remote_mcp_client_key_file_and_bounded_call(
         "modules": [
             {
                 "bundle_id": "seller_sprite",
-                "status": "ready",
-                "checks": {"queue": "ok", "scheduler": "running"},
+                "status": "failed",
+                "checks": {"queue": "error", "scheduler": "not_started"},
+                "error_code": "QUEUE_DATABASE_UNAVAILABLE",
+                "error_class": "OperationalError",
                 "runtime": {
                     "lifecycle_state": "running",
                     "generic_available_capacity": 1,
@@ -506,3 +631,32 @@ def test_probe_key_read_is_offloaded_and_included_in_total_timeout(
     assert result["status"] == "unavailable"
     assert result["error_class"] == "TimeoutError"
     assert elapsed < 0.2
+
+
+def test_manual_collector_probe_timeout_returns_safe_result(tmp_path: Path) -> None:
+    """手动探测必须在五秒硬上限内降级为安全结果。"""
+    async def never_returns(_settings):
+        await asyncio.Event().wait()
+
+    async def scenario() -> dict:
+        settings = _settings(tmp_path, collector_mcp_url="https://collector.example/mcp")
+        service = CollectorMonitorService(
+            settings,
+            repository=FakeRepository(),
+            state_store=MonitorStateStore(settings.state_db_path, cooldown_seconds=1800),
+            notifier=RecordingNotifier(),
+            collector_probe=never_returns,
+            clock=lambda: NOW,
+        )
+        return await service.manual_probe("collector")
+
+    original_timeout = service_module._MANUAL_PROBE_TIMEOUT_SECONDS
+    service_module._MANUAL_PROBE_TIMEOUT_SECONDS = 0.01
+    try:
+        result = asyncio.run(scenario())
+    finally:
+        service_module._MANUAL_PROBE_TIMEOUT_SECONDS = original_timeout
+
+    assert result["status"] == "timeout"
+    assert result["error_code"] == "COLLECTOR_UNREACHABLE"
+    assert result["error_class"] == "TimeoutError"
