@@ -312,9 +312,13 @@ def test_embedded_ui_has_required_sections_and_no_external_assets() -> None:
         "运行时状态",
         "进度时间线",
         "立即探测",
-        "临时 API Key",
+        "保存到此浏览器",
         'type="password"',
         'autocomplete="new-password"',
+        'id="collector-api-key-save" type="checkbox"',
+        "opscli.collector_monitor.collector_api_key",
+        "localStorage.setItem",
+        "localStorage.removeItem",
         "/api/v1/probes/collector",
         "/api/v1/probes/queue-source",
         "data.collector",
@@ -328,6 +332,7 @@ def test_embedded_ui_has_required_sections_and_no_external_assets() -> None:
     assert "取消" not in html
     assert "重试" not in html
     assert "重新排队" not in html
-    assert "JSON.stringify({api_key:keyInput.value.trim()})" in html
-    assert 'keyInput.value=""' in html
+    assert "JSON.stringify({api_key:apiKey})" in html
+    assert 'collectorKeyInput.value=""' in html
+    assert "if(collectorKeySave.checked)" in html
     assert 'fetch("/api/v1/probes/' not in html.split("async function refresh")[1]

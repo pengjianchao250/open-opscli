@@ -44,6 +44,9 @@ DASHBOARD_HTML = """<!doctype html>
     .credential-field label { color:var(--muted); font-size:12px; font-weight:650; }
     .credential-field input { width:100%; height:36px; padding:7px 10px; border:1px solid #aebdca; border-radius:6px; background:var(--paper); color:var(--ink); font:14px/1.2 inherit; }
     .credential-field input:focus { outline:2px solid var(--blue); outline-offset:1px; border-color:transparent; }
+    .credential-save { display:flex; align-items:center; gap:7px; min-height:36px; color:var(--muted); font-size:13px; cursor:pointer; }
+    .credential-save input { width:16px; height:16px; margin:0; accent-color:var(--blue); }
+    .credential-save input:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
     .panel-body { padding:16px; }
     table { width:100%; border-collapse:collapse; }
     th,td { padding:10px 12px; border-bottom:1px solid #edf1f4; text-align:left; vertical-align:top; }
@@ -92,7 +95,7 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
   </section>
   <section class="tab-panel" id="panel-collector" role="tabpanel" aria-labelledby="tab-collector" hidden>
-    <section class="panel"><div class="panel-title"><h2>Collector 状态</h2><div class="actions"><button type="button" data-probe="collector" data-endpoint="/api/v1/probes/collector" title="只执行健康检查，不会提交真实任务">立即探测 Collector</button><button type="button" data-probe="queue-source" data-endpoint="/api/v1/probes/queue-source" title="只读检查队列源，不会提交真实任务">立即探测队列源</button></div></div><div class="credential-row"><div class="credential-field"><label for="collector-api-key">临时 API Key</label><input id="collector-api-key" type="password" maxlength="512" autocomplete="new-password" autocapitalize="off" spellcheck="false" title="仅用于下一次 Collector 探测，不会保存"></div></div><div id="probe-result" class="panel-body muted" aria-live="polite">尚未执行手动探测。</div><div id="collector" class="panel-body"></div></section>
+    <section class="panel"><div class="panel-title"><h2>Collector 状态</h2><div class="actions"><button type="button" data-probe="collector" data-endpoint="/api/v1/probes/collector" title="只执行健康检查，不会提交真实任务">立即探测 Collector</button><button type="button" data-probe="queue-source" data-endpoint="/api/v1/probes/queue-source" title="只读检查队列源，不会提交真实任务">立即探测队列源</button></div></div><div class="credential-row"><div class="credential-field"><label for="collector-api-key">API Key</label><input id="collector-api-key" type="password" maxlength="512" autocomplete="new-password" autocapitalize="off" spellcheck="false" title="未选择保存时，仅用于下一次 Collector 探测"></div><label class="credential-save" for="collector-api-key-save" title="API Key 将以明文保存在当前浏览器的 localStorage 中"><input id="collector-api-key-save" type="checkbox"><span>保存到此浏览器</span></label></div><div id="probe-result" class="panel-body muted" aria-live="polite">尚未执行手动探测。</div><div id="collector" class="panel-body"></div></section>
   </section>
   <section class="tab-panel" id="panel-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" hidden>
     <section class="panel"><h2>运行时状态</h2><div id="runtimes" class="panel-body"></div></section>
@@ -124,10 +127,21 @@ function render(data){
   document.querySelector("#runtimes").innerHTML=(data.runtimes||[]).map(r=>`<div class="runtime"><strong>${esc(r.execution_owner)}</strong>${badge(r.lifecycle_state)}<span class="muted">心跳</span><span>${age(r.heartbeat_at)}</span><span class="muted">通用 / Listing / 备用容量</span><span>${esc(r.generic_available_capacity)} / ${esc(r.listing_available_capacity)} / ${esc(r.standby_capacity)}</span></div>`).join("")||'<p class="empty">没有运行时心跳。</p>';
 }
 async function showDetail(job){try{const d=await json(`/api/v1/tasks/${encodeURIComponent(job)}`);document.querySelector("#detail").innerHTML=`<strong>${esc(d.job_id)}</strong><p>${badge(d.health)} ${esc(d.progress_stage||"")}</p><ol class="timeline">${(d.timeline||[]).map(e=>`<li><strong>${esc(e.progress_stage)}</strong><time>${age(e.progress_at)} · #${esc(e.progress_sequence)}</time></li>`).join("")||'<li class="empty">没有进度事件。</li>'}</ol>`;}catch(e){document.querySelector("#detail").innerHTML='<p class="empty">详情暂不可用。</p>';}}
-async function probe(target,endpoint,button){button.disabled=true;const output=document.querySelector("#probe-result"),keyInput=document.querySelector("#collector-api-key");let body="{}";if(target==="collector"&&keyInput.value.trim()){body=JSON.stringify({api_key:keyInput.value.trim()});keyInput.value="";}output.textContent="探测中...";try{const r=await fetch(endpoint,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body});body="{}";const d=await r.json();if(!r.ok){const wait=d.error?.retry_after?`，${d.error.retry_after} 秒后可再次探测`:"";throw new Error((d.error?.message||`HTTP ${r.status}`)+wait);}const diagnostic=d.error_code?`，${d.error_code} (${d.error_class||"unknown"})`:"";output.textContent=`${target}：${d.state} / ${d.status}${diagnostic}，${age(d.probed_at)}`;await refresh();}catch(e){output.textContent=`探测失败：${e.message}`;}finally{body="{}";button.disabled=false;}}
-document.querySelectorAll("button[data-probe]").forEach(button=>button.addEventListener("click",()=>probe(button.dataset.probe,button.dataset.endpoint,button)));
+const collectorKeyStorageKey="opscli.collector_monitor.collector_api_key";
 const collectorKeyInput=document.querySelector("#collector-api-key");
-collectorKeyInput.value="";
+const collectorKeySave=document.querySelector("#collector-api-key-save");
+const probeOutput=document.querySelector("#probe-result");
+function removeStoredCollectorKey(){try{localStorage.removeItem(collectorKeyStorageKey);}catch{}}
+function readStoredCollectorKey(){try{const value=localStorage.getItem(collectorKeyStorageKey)||"";if(!value||value.length>512||[...value].some(character=>character.charCodeAt(0)<32||character.charCodeAt(0)===127)){removeStoredCollectorKey();return "";}return value;}catch{return "";}}
+function writeStoredCollectorKey(value){try{localStorage.setItem(collectorKeyStorageKey,value);return true;}catch{return false;}}
+function syncStoredCollectorKey(){if(!collectorKeySave.checked){removeStoredCollectorKey();return;}const value=collectorKeyInput.value.trim();if(!value){removeStoredCollectorKey();return;}if(!writeStoredCollectorKey(value)){collectorKeySave.checked=false;probeOutput.textContent="浏览器禁止本地存储，API Key 未保存。";}}
+async function probe(target,endpoint,button){button.disabled=true;let body="{}";const apiKey=collectorKeyInput.value.trim();if(target==="collector"&&apiKey){body=JSON.stringify({api_key:apiKey});if(collectorKeySave.checked){syncStoredCollectorKey();}else{collectorKeyInput.value="";}}probeOutput.textContent="探测中...";try{const r=await fetch(endpoint,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body});body="{}";const d=await r.json();if(!r.ok){const wait=d.error?.retry_after?`，${d.error.retry_after} 秒后可再次探测`:"";throw new Error((d.error?.message||`HTTP ${r.status}`)+wait);}const diagnostic=d.error_code?`，${d.error_code} (${d.error_class||"unknown"})`:"";probeOutput.textContent=`${target}：${d.state} / ${d.status}${diagnostic}，${age(d.probed_at)}`;await refresh();}catch(e){probeOutput.textContent=`探测失败：${e.message}`;}finally{body="{}";button.disabled=false;}}
+document.querySelectorAll("button[data-probe]").forEach(button=>button.addEventListener("click",()=>probe(button.dataset.probe,button.dataset.endpoint,button)));
+const storedCollectorKey=readStoredCollectorKey();
+collectorKeyInput.value=storedCollectorKey;
+collectorKeySave.checked=Boolean(storedCollectorKey);
+collectorKeySave.addEventListener("change",syncStoredCollectorKey);
+collectorKeyInput.addEventListener("input",()=>{if(collectorKeySave.checked)syncStoredCollectorKey();});
 collectorKeyInput.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();document.querySelector('button[data-probe="collector"]').click();}});
 const tabs=[...document.querySelectorAll('[role="tab"]')];
 function selectTab(selected,{focus=true}={}){

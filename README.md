@@ -216,9 +216,9 @@ opscli collector-monitor probe --target queue-source
 
 浏览器访问 `http://127.0.0.1:8767/`。SellerSprite 和 Monitor 共用 `OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH`，默认读取 `~/.config/opscli/seller_sprite/task_queue.sqlite3`；Monitor 使用 SQLite `mode=ro` 与 `query_only`，不会迁移或修改业务任务。兼容变量 `OPSCLI_COLLECTOR_MONITOR_QUEUE_DB_PATH` 可保留，但同时配置时必须一致。Monitor 自有事故状态写入 `~/.config/opscli/collector_monitor/state.sqlite3`，不能与业务库指向同一物理文件。
 
-页面和 CLI 提供固定目标的手动探测，单目标只允许一个并发、完成后冷却 10 秒、总超时不超过 5 秒。Collector Tab 可输入仅用于下一次探测的临时 MCP API Key，发送后立即清空且不写入 Monitor 配置或状态；页面 7 秒自动刷新只读取缓存，不会自动调用 Collector，也不会提交或重试业务任务。
+页面和 CLI 提供固定目标的手动探测，单目标只允许一个并发、完成后冷却 10 秒、总超时不超过 5 秒。Collector Tab 可输入 MCP API Key；默认仅用于下一次探测并在发送后清空，也可主动选择以明文保存到当前浏览器的 `localStorage`，取消选择会立即删除。无论是否保存，Key 都不会写入 Monitor 服务端配置、缓存或状态；页面 7 秒自动刷新只读取缓存，不会自动调用 Collector，也不会提交或重试业务任务。
 
-企业微信 Webhook 和持久 Collector MCP API Key 必须放在权限受限的普通文件中，再分别配置 `OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE` 和 `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_API_KEY_FILE`；禁止把持久密钥原文写入环境变量或命令参数。配置 API Key 文件时，Collector MCP 远端地址必须使用 HTTPS，仅明确回环地址允许 HTTP；携带密钥的探测不跟随重定向，文件读取与远端调用共用探测总超时。容量按任务类型计算，并扣除 SQLite 全局运行任务和本实例活跃尝试中的 Generic、Listing、专属任务及其他调度器共享账号占用。默认服务没有应用层认证，不应直接暴露公网；非回环部署必须使用 HTTPS 与运维认证后才能使用页面临时 Key。
+企业微信 Webhook 和服务端持久 Collector MCP API Key 必须放在权限受限的普通文件中，再分别配置 `OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE` 和 `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_API_KEY_FILE`；禁止把持久密钥原文写入环境变量或命令参数。页面 `localStorage` 选项只适合受控运维终端，会以当前页面同源脚本可读取的明文形式保存在浏览器 Profile 中，不替代生产 Key 文件。配置 API Key 文件时，Collector MCP 远端地址必须使用 HTTPS，仅明确回环地址允许 HTTP；携带密钥的探测不跟随重定向，文件读取与远端调用共用探测总超时。容量按任务类型计算，并扣除 SQLite 全局运行任务和本实例活跃尝试中的 Generic、Listing、专属任务及其他调度器共享账号占用。默认服务没有应用层认证，不应直接暴露公网；非回环部署必须使用 HTTPS 与运维认证后才能输入或保存页面 Key。
 
 完整配置、部署和判定合同见：
 

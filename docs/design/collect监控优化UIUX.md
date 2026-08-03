@@ -111,7 +111,7 @@ SellerSprite 当前无法接收新任务，8 条相关反馈，持续 18 分钟
 
 点击后不弹确认框，因为动作不写业务状态；页面需明确标注“不会提交真实任务”。该说明放在按钮 tooltip/accessible description，不在页面堆放教程文字。
 
-Collector Tab 提供密码类型的“临时 API Key”输入。输入值仅随下一次 Collector 探测发送，提交后立即清空；队列源探测不读取该输入。鉴权失败显示 `COLLECTOR_AUTH_FAILED`，与网络不可达分开。
+Collector Tab 提供密码类型的“API Key”输入及默认关闭的“保存到此浏览器”复选框。未保存时，输入值仅随下一次 Collector 探测发送并立即清空；勾选后以明文写入当前同源页面的 `localStorage`，刷新页面自动恢复，取消勾选立即删除；队列源探测始终不读取该输入。鉴权失败显示 `COLLECTOR_AUTH_FAILED`，与网络不可达分开。
 
 ### 5.2 自动刷新
 
