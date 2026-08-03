@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Mapping
@@ -14,6 +15,8 @@ from opscli.collector_monitor.service import (
 from opscli.collector_monitor.ui import DASHBOARD_HTML
 
 _MAX_API_LIMIT = 500
+_MAX_PROBE_BODY_BYTES = 2048
+_MAX_PROBE_API_KEY_LENGTH = 512
 _ALLOWED_HEALTH = {
     "healthy",
     "slow",
@@ -159,10 +162,10 @@ def create_app(service: Any, *, manage_polling: bool = True) -> Any:
             values = [item for item in values if item.get(field) == expected]
         return JSONResponse({"incidents": _redact(values[:limit])})
 
-    async def manual_probe(target: str) -> Any:
+    async def manual_probe(target: str, *, api_key: str | None = None) -> Any:
         """执行固定目标的手动探测并映射并发与冷却状态。"""
         try:
-            result = await service.manual_probe(target)
+            result = await service.manual_probe(target, api_key=api_key)
         except CollectorMonitorProbeBusyError:
             return JSONResponse(
                 {"error": {"code": "probe_in_progress", "message": "该目标正在探测中"}},
@@ -181,33 +184,78 @@ def create_app(service: Any, *, manage_polling: bool = True) -> Any:
             )
         return JSONResponse(_redact(result))
 
-    async def validate_probe_request(request: Request) -> Any | None:
-        """拒绝跨源或非 JSON 的浏览器探测请求。"""
+    def invalid_probe_payload(message: str) -> Any:
+        """返回不包含请求原文的统一探测参数错误。"""
+        return JSONResponse(
+            {"error": {"code": "invalid_probe_payload", "message": message}},
+            status_code=400,
+        )
+
+    async def probe_payload(
+        request: Request,
+        *,
+        allow_api_key: bool,
+    ) -> tuple[str | None, Any | None]:
+        """校验同源 JSON，并提取不会持久化的可选临时 API Key。"""
         origin = request.headers.get("origin")
         expected_origin = f"{request.url.scheme}://{request.url.netloc}"
         if origin is not None and origin.rstrip("/") != expected_origin:
-            return JSONResponse(
-                {"error": {"code": "cross_origin_probe_denied", "message": "拒绝跨源探测请求"}},
+            return None, JSONResponse(
+                {
+                    "error": {
+                        "code": "cross_origin_probe_denied",
+                        "message": "拒绝跨源探测请求",
+                    }
+                },
                 status_code=403,
             )
         content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         if content_type != "application/json":
-            return JSONResponse(
-                {"error": {"code": "invalid_content_type", "message": "探测请求必须使用 application/json"}},
+            return None, JSONResponse(
+                {
+                    "error": {
+                        "code": "invalid_content_type",
+                        "message": "探测请求必须使用 application/json",
+                    }
+                },
                 status_code=415,
             )
-        return None
+        raw_body = await request.body()
+        if len(raw_body) > _MAX_PROBE_BODY_BYTES:
+            return None, invalid_probe_payload("探测请求过大")
+        try:
+            payload = json.loads(raw_body)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None, invalid_probe_payload("探测请求不是有效 JSON")
+        if not isinstance(payload, Mapping):
+            return None, invalid_probe_payload("探测请求必须是 JSON 对象")
+        allowed_fields = {"api_key"} if allow_api_key else set()
+        if set(payload) - allowed_fields:
+            return None, invalid_probe_payload("探测请求包含不支持的字段")
+        if "api_key" not in payload:
+            return None, None
+        raw_api_key = payload["api_key"]
+        if not isinstance(raw_api_key, str):
+            return None, invalid_probe_payload("API Key 必须是文本")
+        api_key = raw_api_key.strip()
+        if (
+            not api_key
+            or len(api_key) > _MAX_PROBE_API_KEY_LENGTH
+            or any(ord(character) < 32 for character in api_key)
+        ):
+            return None, invalid_probe_payload("API Key 格式无效")
+        return api_key, None
 
     async def probe_collector(request: Request) -> Any:
         """手动探测配置中的固定 Collector MCP。"""
-        invalid = await validate_probe_request(request)
+        api_key, invalid = await probe_payload(request, allow_api_key=True)
         if invalid is not None:
             return invalid
-        return await manual_probe("collector")
+        return await manual_probe("collector", api_key=api_key)
 
     async def probe_queue_source(request: Request) -> Any:
         """手动只读探测配置中的固定 SellerSprite 队列源。"""
-        invalid = await validate_probe_request(request)
+        _api_key, invalid = await probe_payload(request, allow_api_key=False)
         if invalid is not None:
             return invalid
         return await manual_probe("queue-source")

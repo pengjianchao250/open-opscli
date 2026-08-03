@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-08-03 collector_monitor - 增加一次性 API Key 探测
+
+**变更原因**：Collector MCP 开启 API Key 鉴权后，监控端只能报告连接失败，运维人员无法区分服务不可达与 Key 配置错误。
+**改动点**：Collector Tab 新增密码型临时 API Key 输入框，仅随下一次 Collector 手动探测发送并立即清空；临时 Key 不写入环境变量、配置文件、监控状态、缓存、响应或日志，生产持久配置仍使用 Key 文件；探测将 MCP 401/403 稳定归类为 `COLLECTOR_AUTH_FAILED`，并限制请求只接受最长 512 字符的 `api_key`，拒绝队列源携带 Key、未知字段、非 JSON、跨域请求及超过 2048 字节的请求体。
+**验证结果**：Collector Monitor 回归 `91 passed`，`compileall` 与 `git diff --check` 通过；浏览器验证输入框使用 `type=password` 和 `autocomplete=new-password`，无效 Key 返回 `COLLECTOR_AUTH_FAILED`，请求发出后输入值已清空且响应未泄露 Key。
+**影响范围**：仅 Collector 手动探测的可选临时鉴权参数、错误分类及页面输入控件；不改变后台自动监控、队列源探测或生产 Key 持久配置方式。
+**回滚方式**：回退临时 Key 请求解析、Collector 探测透传与鉴权错误映射、UI 输入框、测试、文档和本条记录。
+---
+
 ## 2026-08-03 collector_monitor - 仪表盘按监控领域拆分 Tab
 
 **变更原因**：任务列表较长时，Collector 探测、运行时和事故区域被推到页面下方，不利于运维快速切换和定位。

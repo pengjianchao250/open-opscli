@@ -82,6 +82,9 @@ class CollectorMonitorService:
         state_store: MonitorStateStore,
         notifier: _Notifier,
         collector_probe: Callable[[MonitorSettings], Awaitable[dict[str, Any]]] | None = None,
+        collector_api_key_probe: (
+            Callable[[MonitorSettings, str], Awaitable[dict[str, Any]]] | None
+        ) = None,
         clock: Callable[[], datetime] | None = None,
         monotonic_clock: Callable[[], float] | None = None,
     ) -> None:
@@ -90,6 +93,9 @@ class CollectorMonitorService:
         self.state_store = state_store
         self.notifier = notifier
         self.collector_probe = collector_probe or probe_collector
+        self.collector_api_key_probe = (
+            collector_api_key_probe or probe_collector_with_api_key
+        )
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.monotonic_clock = monotonic_clock or monotonic
         self._probe_locks = {
@@ -325,11 +331,17 @@ class CollectorMonitorService:
         self._snapshot["collector"] = dict(self._collector)
         return dict(self._collector)
 
-    async def manual_probe(self, target: str) -> dict[str, Any]:
+    async def manual_probe(
+        self,
+        target: str,
+        *,
+        api_key: str | None = None,
+    ) -> dict[str, Any]:
         """按固定目标执行有界、限并发和带冷却的无副作用探测。
 
         Args:
             target: 固定目标标识，仅支持 `collector` 或 `queue-source`。
+            api_key: 仅用于本次 Collector 请求的临时 API Key，不持久化。
 
         Returns:
             仅含目标、探测时间、状态和脱敏诊断字段的同步结果。
@@ -341,6 +353,8 @@ class CollectorMonitorService:
         """
         if target not in self._probe_locks:
             raise ValueError("不支持的探测目标")
+        if api_key is not None and target != "collector":
+            raise ValueError("临时 API Key 只允许用于 Collector 探测")
         lock = self._probe_locks[target]
         if lock.locked():
             raise CollectorMonitorProbeBusyError("同一目标已有探测正在执行")
@@ -356,8 +370,15 @@ class CollectorMonitorService:
                     raise CollectorMonitorProbeCooldownError(round(remaining, 3))
             self._probe_started_at[target] = started_at
             if target == "collector":
+                probe_call = (
+                    _safe_probe_result(
+                        self.collector_api_key_probe(self.settings, api_key)
+                    )
+                    if api_key is not None
+                    else _safe_probe_call(self.collector_probe, self.settings)
+                )
                 result, release_lock = await self._bounded_probe(
-                    _safe_probe_call(self.collector_probe, self.settings),
+                    probe_call,
                     lock,
                 )
                 if result is None:
@@ -483,7 +504,11 @@ class CollectorMonitorService:
                 continue
 
 
-async def probe_collector(settings: MonitorSettings) -> dict[str, Any]:
+async def probe_collector(
+    settings: MonitorSettings,
+    *,
+    api_key: str | None = None,
+) -> dict[str, Any]:
     """使用有界总超时探测可选 Collector MCP 健康工具。"""
     if not settings.collector_mcp_url:
         return {
@@ -494,7 +519,7 @@ async def probe_collector(settings: MonitorSettings) -> dict[str, Any]:
         }
     try:
         response = await asyncio.wait_for(
-            _probe_collector_with_credentials(settings),
+            _probe_collector_with_credentials(settings, api_key=api_key),
             timeout=settings.collector_probe_timeout,
         )
         data = response.get("data") if isinstance(response, Mapping) else None
@@ -502,28 +527,41 @@ async def probe_collector(settings: MonitorSettings) -> dict[str, Any]:
             raise ValueError("Collector MCP 健康响应缺少 data")
         return _public_collector_result(data)
     except Exception as exc:
+        error_code, error_class = _collector_probe_error_fields(exc)
         return {
             "enabled": True,
             "status": "unavailable",
             "modules": [],
-            "error_code": "COLLECTOR_UNREACHABLE",
-            "error_class": type(exc).__name__,
+            "error_code": error_code,
+            "error_class": error_class,
         }
+
+
+async def probe_collector_with_api_key(
+    settings: MonitorSettings,
+    api_key: str,
+) -> dict[str, Any]:
+    """使用仅驻留于当前调用生命周期的 API Key 探测 Collector。"""
+    return await probe_collector(settings, api_key=api_key)
 
 
 async def _probe_collector_with_credentials(
     settings: MonitorSettings,
+    *,
+    api_key: str | None = None,
 ) -> dict[str, Any]:
     """在线程中读取密钥，并禁止携带自定义密钥跟随重定向。"""
     headers = None
-    if settings.collector_mcp_api_key_file is not None:
-        api_key = await asyncio.to_thread(
+    effective_api_key = api_key
+    if effective_api_key is None and settings.collector_mcp_api_key_file is not None:
+        effective_api_key = await asyncio.to_thread(
             read_protected_text,
             settings.collector_mcp_api_key_file,
         )
-        if not api_key:
+        if not effective_api_key:
             raise ValueError("Collector MCP API Key 文件为空")
-        headers = {"X-MCP-API-Key": api_key}
+    if effective_api_key is not None:
+        headers = {"X-MCP-API-Key": effective_api_key}
     client = RemoteMcpClient(
         str(settings.collector_mcp_url),
         headers=headers,
@@ -537,8 +575,15 @@ async def _safe_probe_call(
     settings: MonitorSettings,
 ) -> dict[str, Any]:
     """确保自定义探测器异常或任意字段不会破坏本地队列扫描。"""
+    return await _safe_probe_result(probe(settings))
+
+
+async def _safe_probe_result(
+    probe: Awaitable[dict[str, Any]],
+) -> dict[str, Any]:
+    """清洗探测协程结果，并将异常压缩为稳定公开诊断。"""
     try:
-        result = await probe(settings)
+        result = await probe
         if not isinstance(result, Mapping):
             raise ValueError("Collector 探测结果不是对象")
         enabled = bool(result.get("enabled", True))
@@ -551,13 +596,45 @@ async def _safe_probe_call(
             }
         return _public_collector_result(result)
     except Exception as exc:
+        error_code, error_class = _collector_probe_error_fields(exc)
         return {
             "enabled": True,
             "status": "unavailable",
             "modules": [],
-            "error_code": "COLLECTOR_UNREACHABLE",
-            "error_class": type(exc).__name__,
+            "error_code": error_code,
+            "error_class": error_class,
         }
+
+
+def _collector_probe_error_fields(exc: BaseException) -> tuple[str, str]:
+    """识别嵌套传输异常中的鉴权状态，避免将 401 误报为网络不通。"""
+    for current in _walk_exceptions(exc):
+        response = getattr(current, "response", None)
+        if getattr(response, "status_code", None) in {401, 403}:
+            return "COLLECTOR_AUTH_FAILED", type(current).__name__
+    return "COLLECTOR_UNREACHABLE", type(exc).__name__
+
+
+def _walk_exceptions(exc: BaseException) -> list[BaseException]:
+    """有界遍历 cause、context 与 ExceptionGroup 子异常。"""
+    pending = [exc]
+    visited: set[int] = set()
+    result: list[BaseException] = []
+    while pending and len(result) < 32:
+        current = pending.pop()
+        identity = id(current)
+        if identity in visited:
+            continue
+        visited.add(identity)
+        result.append(current)
+        nested = getattr(current, "exceptions", ())
+        if isinstance(nested, tuple):
+            pending.extend(item for item in nested if isinstance(item, BaseException))
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return result
 
 
 def _public_collector_result(data: Mapping[str, Any]) -> dict[str, Any]:

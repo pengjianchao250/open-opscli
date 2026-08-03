@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 import pytest
 
 from opscli.collector_monitor.classifier import ClassificationPolicy, IncidentCandidate
@@ -586,6 +587,81 @@ def test_probe_uses_remote_mcp_client_key_file_and_bounded_call(
         "follow_redirects": False,
         "tool_name": "collector_modules_health",
         "arguments": {},
+    }
+
+
+def test_manual_probe_uses_one_time_key_without_persisting_it(tmp_path: Path) -> None:
+    """临时 Key 只存在于当前 Collector 调用参数，不进入结果或服务快照。"""
+    captured = {}
+
+    async def probe_with_key(settings, api_key):
+        captured.update(settings=settings, api_key=api_key)
+        return {"enabled": True, "status": "ready", "modules": []}
+
+    settings = _settings(
+        tmp_path,
+        collector_mcp_url="https://collector.example/mcp",
+    )
+    service = CollectorMonitorService(
+        settings,
+        repository=FakeRepository(),
+        state_store=MonitorStateStore(settings.state_db_path, cooldown_seconds=1800),
+        notifier=RecordingNotifier(),
+        collector_api_key_probe=probe_with_key,
+        clock=lambda: NOW,
+    )
+
+    result = asyncio.run(
+        service.manual_probe("collector", api_key="temporary-mcp-key")
+    )
+
+    assert captured == {"settings": settings, "api_key": "temporary-mcp-key"}
+    assert result["status"] == "ready"
+    assert "temporary-mcp-key" not in repr(result)
+    assert "temporary-mcp-key" not in repr(service.cached_snapshot)
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_probe_maps_nested_http_auth_errors_to_stable_code(
+    tmp_path: Path,
+    monkeypatch,
+    status_code: int,
+) -> None:
+    """MCP 传输层包装的 401/403 应与网络不可达明确区分。"""
+    settings = _settings(
+        tmp_path,
+        collector_mcp_url="https://collector.example/mcp",
+    )
+    request = httpx.Request("POST", "https://collector.example/mcp")
+    response = httpx.Response(status_code, request=request)
+    auth_error = httpx.HTTPStatusError(
+        "collector authentication failed",
+        request=request,
+        response=response,
+    )
+
+    class UnauthorizedRemoteClient:
+        def __init__(self, url, *, headers=None, follow_redirects=True):
+            assert headers == {"X-MCP-API-Key": "temporary-mcp-key"}
+
+        async def call_tool(self, tool_name, arguments):
+            raise ExceptionGroup("remote unauthorized", [auth_error])
+
+    monkeypatch.setattr(
+        "opscli.collector_monitor.service.RemoteMcpClient",
+        UnauthorizedRemoteClient,
+    )
+
+    result = asyncio.run(
+        probe_collector(settings, api_key="temporary-mcp-key")
+    )
+
+    assert result == {
+        "enabled": True,
+        "status": "unavailable",
+        "modules": [],
+        "error_code": "COLLECTOR_AUTH_FAILED",
+        "error_class": "HTTPStatusError",
     }
 
 

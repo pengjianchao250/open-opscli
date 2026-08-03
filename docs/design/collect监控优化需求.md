@@ -83,6 +83,7 @@ SellerSprite collect 调用在队列数据库无法打开时直接失败，任�
 - 首期同步返回：目标、探测时间、状态、稳定错误码和错误类；不持久化探测历史。
 - 同一目标最短间隔 10 秒，最多 1 个并发探测。
 - UI 明确展示 running/succeeded/failed/timeout 状态，并允许再次探测。
+- Collector UI 可接受仅用于下一次请求的临时 MCP API Key；输入发送后清空，不写配置、日志、缓存或状态库，`401/403` 映射为 `COLLECTOR_AUTH_FAILED`。
 
 ### FR-5 队列监督增强（P0/P1）
 

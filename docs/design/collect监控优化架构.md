@@ -171,7 +171,7 @@ POST /api/v1/probes/collector
 POST /api/v1/probes/queue-source
 ```
 
-请求不接收 URL、路径、Header 或任意命令，目标来自冻结配置，避免 SSRF 与命令注入。
+请求不接收 URL、路径、自定义 Header 或任意命令，目标来自冻结配置，避免 SSRF 与命令注入。Collector 端点可选接收最长 512 字符的 `api_key` JSON 字段，仅用于该次服务端请求的 `X-MCP-API-Key`；队列源端点拒绝此字段。
 
 响应：
 
@@ -189,6 +189,7 @@ POST /api/v1/probes/queue-source
 
 - 默认仅 loopback；经反向代理暴露时必须有运维认证。
 - 同源请求、严格 Content-Type、拒绝跨域。
+- 临时 Key 只驻留于当前请求与探测协程，优先于文件 Key；不进入响应、缓存、状态库或日志字段，前端发起请求后立即清空输入。
 - 每目标单并发，10 秒冷却，5 秒总超时。
 - Collector 结果只更新 Monitor 内存缓存；队列源结果不覆盖任务快照，也不修改业务队列。
 - 首期为同步探测，不持久化探测历史、响应正文或凭据。

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 
+import pytest
 from starlette.testclient import TestClient
 
 from opscli.collector_monitor.app import create_app
@@ -14,6 +15,7 @@ class FakeService:
 
     def __init__(self, *, ready: bool = True) -> None:
         self.is_ready = ready
+        self.probe_calls: list[tuple[str, str | None]] = []
         self.cached_snapshot = {
             "generated_at": "2026-07-29T04:00:00+00:00",
             "source": {
@@ -101,7 +103,8 @@ class FakeService:
             ],
         }
 
-    async def manual_probe(self, target: str):
+    async def manual_probe(self, target: str, *, api_key: str | None = None):
+        self.probe_calls.append((target, api_key))
         return {
             "target": target,
             "probed_at": "2026-07-29T04:00:00+00:00",
@@ -225,6 +228,44 @@ def test_manual_probe_endpoints_use_only_fixed_targets() -> None:
     assert arbitrary.status_code == 404
 
 
+def test_collector_probe_accepts_one_time_api_key_without_echoing_it() -> None:
+    """临时 Key 只传给 Collector 服务调用，不得进入响应或缓存快照。"""
+    service = FakeService()
+    with TestClient(create_app(service, manage_polling=False)) as client:
+        response = client.post(
+            "/api/v1/probes/collector",
+            json={"api_key": "  temporary-mcp-key  "},
+        )
+
+    assert response.status_code == 200
+    assert service.probe_calls == [("collector", "temporary-mcp-key")]
+    assert "temporary-mcp-key" not in response.text
+    assert "temporary-mcp-key" not in repr(service.cached_snapshot)
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("/api/v1/probes/queue-source", {"api_key": "mcp-key"}),
+        ("/api/v1/probes/collector", {"api_key": 123}),
+        ("/api/v1/probes/collector", {"api_key": ""}),
+        ("/api/v1/probes/collector", {"api_key": "x" * 513}),
+        ("/api/v1/probes/collector", {"url": "https://attacker.example"}),
+    ],
+)
+def test_probe_rejects_invalid_or_out_of_scope_credentials(
+    path: str,
+    payload: dict,
+) -> None:
+    """探测参数必须有界，临时 Key 不得用于队列源或任意远端地址。"""
+    with _client() as client:
+        response = client.post(path, json=payload)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_probe_payload"
+    assert "mcp-key" not in response.text
+
+
 def test_manual_probe_rejects_cross_origin_and_non_json_requests() -> None:
     with _client() as client:
         cross_origin = client.post(
@@ -271,6 +312,9 @@ def test_embedded_ui_has_required_sections_and_no_external_assets() -> None:
         "运行时状态",
         "进度时间线",
         "立即探测",
+        "临时 API Key",
+        'type="password"',
+        'autocomplete="new-password"',
         "/api/v1/probes/collector",
         "/api/v1/probes/queue-source",
         "data.collector",
@@ -284,4 +328,6 @@ def test_embedded_ui_has_required_sections_and_no_external_assets() -> None:
     assert "取消" not in html
     assert "重试" not in html
     assert "重新排队" not in html
+    assert "JSON.stringify({api_key:keyInput.value.trim()})" in html
+    assert 'keyInput.value=""' in html
     assert 'fetch("/api/v1/probes/' not in html.split("async function refresh")[1]

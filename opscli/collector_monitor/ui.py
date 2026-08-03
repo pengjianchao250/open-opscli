@@ -39,6 +39,11 @@ DASHBOARD_HTML = """<!doctype html>
     button:hover { background:#e8f3fa; }
     button:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
     button:disabled { cursor:wait; opacity:.6; }
+    .credential-row { display:flex; align-items:end; gap:10px; padding:14px 16px; border-bottom:1px solid var(--line); background:#fbfcfd; }
+    .credential-field { display:grid; gap:5px; width:min(520px,100%); }
+    .credential-field label { color:var(--muted); font-size:12px; font-weight:650; }
+    .credential-field input { width:100%; height:36px; padding:7px 10px; border:1px solid #aebdca; border-radius:6px; background:var(--paper); color:var(--ink); font:14px/1.2 inherit; }
+    .credential-field input:focus { outline:2px solid var(--blue); outline-offset:1px; border-color:transparent; }
     .panel-body { padding:16px; }
     table { width:100%; border-collapse:collapse; }
     th,td { padding:10px 12px; border-bottom:1px solid #edf1f4; text-align:left; vertical-align:top; }
@@ -61,7 +66,7 @@ DASHBOARD_HTML = """<!doctype html>
     .timeline time { display:block; color:var(--muted); font-size:12px; }
     .source-error { display:none; margin-bottom:16px; padding:12px 14px; border:1px solid #f2b8b5; background:#fff0ef; color:var(--red); border-radius:7px; }
     @media (max-width:900px) { .cards { grid-template-columns:repeat(2,1fr); } .view-grid { grid-template-columns:1fr; } .task-table-wrap { min-height:0; max-height:none; } .detail-panel { position:static; } }
-    @media (max-width:540px) { main { padding:14px; } header { padding:18px 14px; align-items:start; flex-direction:column; gap:8px; } .cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .card { padding:14px; } .card strong { font-size:24px; } .tabs { margin-left:-14px; margin-right:-14px; padding-left:14px; padding-right:14px; border-left:0; border-right:0; border-radius:0; } .tab { min-width:96px; } th:nth-child(2),td:nth-child(2) { display:none; } }
+    @media (max-width:540px) { main { padding:14px; } header { padding:18px 14px; align-items:start; flex-direction:column; gap:8px; } .cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .card { padding:14px; } .card strong { font-size:24px; } .tabs { margin-left:-14px; margin-right:-14px; padding-left:14px; padding-right:14px; border-left:0; border-right:0; border-radius:0; } .tab { min-width:96px; } .panel-title { align-items:flex-start; flex-direction:column; } .actions { width:100%; justify-content:flex-start; } .credential-row { align-items:stretch; flex-direction:column; } th:nth-child(2),td:nth-child(2) { display:none; } }
   </style>
 </head>
 <body>
@@ -87,7 +92,7 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
   </section>
   <section class="tab-panel" id="panel-collector" role="tabpanel" aria-labelledby="tab-collector" hidden>
-    <section class="panel"><div class="panel-title"><h2>Collector 状态</h2><div class="actions"><button type="button" data-probe="collector" data-endpoint="/api/v1/probes/collector" title="只执行健康检查，不会提交真实任务">立即探测 Collector</button><button type="button" data-probe="queue-source" data-endpoint="/api/v1/probes/queue-source" title="只读检查队列源，不会提交真实任务">立即探测队列源</button></div></div><div id="probe-result" class="panel-body muted" aria-live="polite">尚未执行手动探测。</div><div id="collector" class="panel-body"></div></section>
+    <section class="panel"><div class="panel-title"><h2>Collector 状态</h2><div class="actions"><button type="button" data-probe="collector" data-endpoint="/api/v1/probes/collector" title="只执行健康检查，不会提交真实任务">立即探测 Collector</button><button type="button" data-probe="queue-source" data-endpoint="/api/v1/probes/queue-source" title="只读检查队列源，不会提交真实任务">立即探测队列源</button></div></div><div class="credential-row"><div class="credential-field"><label for="collector-api-key">临时 API Key</label><input id="collector-api-key" type="password" maxlength="512" autocomplete="new-password" autocapitalize="off" spellcheck="false" title="仅用于下一次 Collector 探测，不会保存"></div></div><div id="probe-result" class="panel-body muted" aria-live="polite">尚未执行手动探测。</div><div id="collector" class="panel-body"></div></section>
   </section>
   <section class="tab-panel" id="panel-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" hidden>
     <section class="panel"><h2>运行时状态</h2><div id="runtimes" class="panel-body"></div></section>
@@ -119,8 +124,11 @@ function render(data){
   document.querySelector("#runtimes").innerHTML=(data.runtimes||[]).map(r=>`<div class="runtime"><strong>${esc(r.execution_owner)}</strong>${badge(r.lifecycle_state)}<span class="muted">心跳</span><span>${age(r.heartbeat_at)}</span><span class="muted">通用 / Listing / 备用容量</span><span>${esc(r.generic_available_capacity)} / ${esc(r.listing_available_capacity)} / ${esc(r.standby_capacity)}</span></div>`).join("")||'<p class="empty">没有运行时心跳。</p>';
 }
 async function showDetail(job){try{const d=await json(`/api/v1/tasks/${encodeURIComponent(job)}`);document.querySelector("#detail").innerHTML=`<strong>${esc(d.job_id)}</strong><p>${badge(d.health)} ${esc(d.progress_stage||"")}</p><ol class="timeline">${(d.timeline||[]).map(e=>`<li><strong>${esc(e.progress_stage)}</strong><time>${age(e.progress_at)} · #${esc(e.progress_sequence)}</time></li>`).join("")||'<li class="empty">没有进度事件。</li>'}</ol>`;}catch(e){document.querySelector("#detail").innerHTML='<p class="empty">详情暂不可用。</p>';}}
-async function probe(target,endpoint,button){button.disabled=true;const output=document.querySelector("#probe-result");output.textContent="探测中...";try{const r=await fetch(endpoint,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body:"{}"});const d=await r.json();if(!r.ok){const wait=d.error?.retry_after?`，${d.error.retry_after} 秒后可再次探测`:"";throw new Error((d.error?.message||`HTTP ${r.status}`)+wait);}const diagnostic=d.error_code?`，${d.error_code} (${d.error_class||"unknown"})`:"";output.textContent=`${target}：${d.state} / ${d.status}${diagnostic}，${age(d.probed_at)}`;await refresh();}catch(e){output.textContent=`探测失败：${e.message}`;}finally{button.disabled=false;}}
+async function probe(target,endpoint,button){button.disabled=true;const output=document.querySelector("#probe-result"),keyInput=document.querySelector("#collector-api-key");let body="{}";if(target==="collector"&&keyInput.value.trim()){body=JSON.stringify({api_key:keyInput.value.trim()});keyInput.value="";}output.textContent="探测中...";try{const r=await fetch(endpoint,{method:"POST",cache:"no-store",headers:{"Content-Type":"application/json"},body});body="{}";const d=await r.json();if(!r.ok){const wait=d.error?.retry_after?`，${d.error.retry_after} 秒后可再次探测`:"";throw new Error((d.error?.message||`HTTP ${r.status}`)+wait);}const diagnostic=d.error_code?`，${d.error_code} (${d.error_class||"unknown"})`:"";output.textContent=`${target}：${d.state} / ${d.status}${diagnostic}，${age(d.probed_at)}`;await refresh();}catch(e){output.textContent=`探测失败：${e.message}`;}finally{body="{}";button.disabled=false;}}
 document.querySelectorAll("button[data-probe]").forEach(button=>button.addEventListener("click",()=>probe(button.dataset.probe,button.dataset.endpoint,button)));
+const collectorKeyInput=document.querySelector("#collector-api-key");
+collectorKeyInput.value="";
+collectorKeyInput.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();document.querySelector('button[data-probe="collector"]').click();}});
 const tabs=[...document.querySelectorAll('[role="tab"]')];
 function selectTab(selected,{focus=true}={}){
   tabs.forEach(tab=>{

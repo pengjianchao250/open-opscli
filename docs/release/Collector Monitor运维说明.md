@@ -368,7 +368,7 @@ opscli collector-monitor probe --target queue-source
 | `GET` | `/api/v1/tasks?health=<值>&status=<值>&task_kind=<值>&limit=<1..500>` | 任务列表；过滤均可选，默认 100 条，拒绝未知参数 |
 | `GET` | `/api/v1/tasks/{job_id}` | 单任务脱敏监督详情和进度时间线；不存在时返回 `404` |
 | `GET` | `/api/v1/incidents?status=<值>&rule=<值>&limit=<1..500>` | 事故列表；过滤均可选，默认 100 条 |
-| `POST` | `/api/v1/probes/collector` | 同步手动探测固定 Collector MCP，最多 5 秒 |
+| `POST` | `/api/v1/probes/collector` | 同步手动探测固定 Collector MCP，最多 5 秒；可选一次性 `{"api_key":"..."}` |
 | `POST` | `/api/v1/probes/queue-source` | 同步只读探测固定 SellerSprite 队列源，最多 5 秒 |
 
 本机检查：
@@ -381,7 +381,9 @@ curl --fail --silent --show-error http://127.0.0.1:8767/api/v1/status
 
 `/health/live` 成功只表示 Monitor 自身可响应；`/health/ready` 失败通常表示业务库不可读、schema 不匹配或尚未完成首次成功扫描。配置或私有状态库初始化失败通常会让进程直接启动失败。业务任务存在 `stalled` 不会让存活或就绪探针失败，但会让 CLI `status` 返回退出码 `2`。
 
-API v1 不提供业务写入。两个 `POST` 探测端点只使用服务端冻结配置，不接受 URL、文件路径、Header 或命令；同一目标最多一个并发，完成后冷却 10 秒，且不创建任务、MCP run 或业务输出。任务过滤允许 `health` 六种健康值、`status=queued|running|succeeded|failed`、`task_kind=generic|listing_analysis`；事故过滤允许 `status=active|resolved` 与四种 `rule`。两个列表的 `limit` 默认为 100、最大 500，但 API 只过滤轮询缓存：当前快照最多 1000 条任务和最近 500 条事故。
+API v1 不提供业务写入。两个 `POST` 探测端点只使用服务端冻结目标，不接受 URL、文件路径、自定义 Header 或命令；Collector 端点仅额外接受可选的 `api_key` 字段，最长 512 字符，临时 Key 优先于文件 Key且不持久化，队列源端点拒绝任何字段。`401/403` 返回稳定诊断码 `COLLECTOR_AUTH_FAILED`，其他连接错误使用 `COLLECTOR_UNREACHABLE`。同一目标最多一个并发，完成后冷却 10 秒，且不创建任务、MCP run 或业务输出。任务过滤允许 `health` 六种健康值、`status=queued|running|succeeded|failed`、`task_kind=generic|listing_analysis`；事故过滤允许 `status=active|resolved` 与四种 `rule`。两个列表的 `limit` 默认为 100、最大 500，但 API 只过滤轮询缓存：当前快照最多 1000 条任务和最近 500 条事故。
+
+页面临时 Key 仅用于鉴权诊断，发送后输入框立即清空。长期运行仍应配置权限受限的 `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_API_KEY_FILE`；Monitor 经反向代理开放时必须启用 HTTPS 和运维认证，禁止在明文远程 HTTP 页面输入 Key。
 
 ## 10. 日常巡检
 
