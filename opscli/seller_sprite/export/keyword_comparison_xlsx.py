@@ -8,6 +8,7 @@ from typing import Any
 
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteExportResult
+from opscli.seller_sprite.export.worksheet import SellerSpriteWorksheet
 
 
 # 官网流量词类型枚举与中文工作簿标签的固定映射。
@@ -28,6 +29,76 @@ COMMON_COLUMNS = [
     ("商品数", "products"),
     ("需供比", "supplyDemandRatio"),
 ]
+
+
+def build_keyword_comparison_worksheets(
+    *,
+    rows: list[dict[str, Any]],
+    site: str,
+    own_asin: str,
+    asin_list: list[str],
+) -> list[SellerSpriteWorksheet]:
+    """构造流量词对比 XLSX 与 JSON 共用的动态工作表。
+
+    参数：
+        rows: 第一页流量词业务行。
+        site: 查询站点。
+        own_asin: 用户自己的 ASIN。
+        asin_list: 页面最终提交的畅销变体 ASIN 顺序。
+
+    返回：
+        动态业务主表和 ASIN 辅助表。
+
+    异常：
+        SellerSpriteConfigError: 自有 ASIN 或最终 ASIN 列表不合法时抛出。
+    """
+    normalized_own_asin = str(own_asin or "").strip().upper()
+    normalized_asins = _normalize_asin_list(asin_list)
+    if normalized_own_asin not in normalized_asins:
+        raise SellerSpriteConfigError("流量词对比导出缺少自己的 ASIN")
+
+    headers = ["关键词", "关键词翻译"]
+    for asin in normalized_asins:
+        headers.extend(
+            [
+                f"{asin}(我的)" if asin == normalized_own_asin else asin,
+                f"{asin}流量词类型",
+            ]
+        )
+    headers.extend(title for title, _ in COMMON_COLUMNS)
+
+    main_rows: list[list[Any]] = []
+    for row in rows:
+        competitors = _competitor_map(row.get("competitorList"))
+        values: list[Any] = [row.get("keyword"), row.get("keywordCn")]
+        for asin in normalized_asins:
+            competitor = competitors.get(asin, {})
+            values.extend(
+                [
+                    _traffic_percentage(competitor.get("trafficPercentage")),
+                    _traffic_keyword_types(competitor.get("trafficKeywordTypes")),
+                ]
+            )
+        values.extend(row.get(field) for _, field in COMMON_COLUMNS)
+        main_rows.append(values)
+
+    return [
+        SellerSpriteWorksheet(
+            name=_main_sheet_title(site, normalized_asins),
+            columns=headers,
+            rows=main_rows,
+            number_formats=[None] * len(headers),
+        ),
+        SellerSpriteWorksheet(
+            name="ASIN",
+            columns=["asin"],
+            rows=[
+                [f"{normalized_own_asin}(我的)"],
+                *[[asin] for asin in normalized_asins],
+            ],
+            number_formats=[None],
+        ),
+    ]
 
 
 def export_keyword_comparison_to_xlsx(
@@ -60,26 +131,20 @@ def export_keyword_comparison_to_xlsx(
     except ModuleNotFoundError as exc:
         raise SellerSpriteConfigError("缺少 openpyxl 依赖，无法导出 XLSX") from exc
 
-    normalized_own_asin = str(own_asin or "").strip().upper()
+    worksheets = build_keyword_comparison_worksheets(
+        rows=rows,
+        site=site,
+        own_asin=own_asin,
+        asin_list=asin_list,
+    )
+    main_worksheet, asin_worksheet = worksheets
     normalized_asins = _normalize_asin_list(asin_list)
-    if normalized_own_asin not in normalized_asins:
-        raise SellerSpriteConfigError("流量词对比导出缺少自己的 ASIN")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook()
     sheet = workbook.active
-    sheet.title = _main_sheet_title(site, normalized_asins)
+    sheet.title = main_worksheet.name
     sheet.sheet_view.showGridLines = False
-
-    headers = ["关键词", "关键词翻译"]
-    for asin in normalized_asins:
-        headers.extend(
-            [
-                f"{asin}(我的)" if asin == normalized_own_asin else asin,
-                f"{asin}流量词类型",
-            ]
-        )
-    headers.extend(title for title, _ in COMMON_COLUMNS)
 
     thin_side = Side(style="thin", color="FFD9D9D9")
     border = Border(
@@ -92,25 +157,14 @@ def export_keyword_comparison_to_xlsx(
     header_font = Font(name="等线", size=10, color="FFFFFFFF")
     data_font = Font(name="等线", size=10)
 
-    for column_index, title in enumerate(headers, start=1):
+    for column_index, title in enumerate(main_worksheet.columns, start=1):
         cell = sheet.cell(row=1, column=column_index, value=title)
         cell.fill = header_fill
         cell.font = header_font
         cell.border = border
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    for row_index, row in enumerate(rows, start=2):
-        competitors = _competitor_map(row.get("competitorList"))
-        values: list[Any] = [row.get("keyword"), row.get("keywordCn")]
-        for asin in normalized_asins:
-            competitor = competitors.get(asin, {})
-            values.extend(
-                [
-                    _traffic_percentage(competitor.get("trafficPercentage")),
-                    _traffic_keyword_types(competitor.get("trafficKeywordTypes")),
-                ]
-            )
-        values.extend(row.get(field) for _, field in COMMON_COLUMNS)
+    for row_index, values in enumerate(main_worksheet.rows, start=2):
         for column_index, value in enumerate(values, start=1):
             cell = sheet.cell(row=row_index, column=column_index, value=value)
             cell.font = data_font
@@ -134,11 +188,10 @@ def export_keyword_comparison_to_xlsx(
     for column_index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(column_index)].width = width
 
-    asin_sheet = workbook.create_sheet("ASIN")
-    asin_sheet["A1"] = "asin"
-    asin_sheet["A2"] = f"{normalized_own_asin}(我的)"
-    for row_index, asin in enumerate(normalized_asins, start=3):
-        asin_sheet.cell(row=row_index, column=1, value=asin)
+    asin_sheet = workbook.create_sheet(asin_worksheet.name)
+    asin_sheet["A1"] = asin_worksheet.columns[0]
+    for row_index, row in enumerate(asin_worksheet.rows, start=2):
+        asin_sheet.cell(row=row_index, column=1, value=row[0])
 
     workbook.save(output_path)
     resolved = output_path.resolve()

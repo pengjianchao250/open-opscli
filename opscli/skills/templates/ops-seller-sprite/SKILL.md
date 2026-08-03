@@ -23,7 +23,7 @@ metadata:
    - `site=US`
    - `period=30d`
    - `page_size=100`
-   - `export_format=xls`
+   - 未明确导出用途时保留兼容默认 `export_format=xls`；需要由 AI 直接读取、分析或生成结果时优先显式传 `export_format=json`，用户需要人工查看或留档表格时使用 `xls` / `xlsx`。
    - `keyword-research` 例外：`period` 使用数据月份（`YYYY-MM`），不把 `30d` 当作月份；默认 `page=1/page_size=100`，只获取第一页。
    - `association-traffic` 使用公共默认 `page_size=100`，查询固定使用全部变体，不允许改成当前变体。
    - `traffic-extend` 固定第一页 100 条；用户未指定变体时默认“用全部变体拓词”，也支持 `variantSelection=sell_well/current`；查询 JSON 后在本地生成主表、`Unique Words` 和 `Asin`，不生成 `Notes`。
@@ -160,6 +160,15 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - `查流量来源需要关键词或 ASIN，请补充。`
 
 ## 回复规则
+
+### JSON 导出读取规则
+
+- SellerSprite 本地 JSON 导出使用 `schema_version="2.0"`，其中文列名、字段 fallback、值转换、列顺序和辅助 Sheet 与本地生成的 XLSX 共用同一份格式化工作表数据。
+- 按 `columns[index]` 解释每个 `rows[*][index]`，不要把行数组当作对象；该结构用于保留 XLSX 中可能重复的表头。
+- `number_formats[index]` 是同列 XLSX 使用的 Excel 数字格式（如 `0.00%`）；值保持可计算的数字类型，`null` 表示使用自动格式。
+- 主表名称读取 `sheet_name`；多 Sheet 场景继续读取 `additional_sheets` 中每项的 `name/columns/rows`，每个辅助表同样按列下标对齐。没有辅助表时 `additional_sheets=[]`。
+- `traffic-extend` 的辅助表为 `Unique Words` 和 `Asin`，`keyword-miner` 可包含 `Unique Words`，`keyword-comparison` 包含 `ASIN`。
+- `aba-reverse` 等官方文件导出场景仍只支持 `xls` / `xlsx`，返回官网原始工作簿，不适用 JSON v2。
 
 - 优先使用工具返回的 `data.summary`，不要改写成原始 JSON。
 - 顶层 `success=true` 只表示工具请求成功；仍需检查业务 `state` / `ready`。`queued`、`running`、`ready=false` 和等待窗口到期都保持 pending，不要报告为成功完成或失败。

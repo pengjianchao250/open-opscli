@@ -443,6 +443,27 @@ def test_seller_sprite_skill_and_formal_docs_require_durable_bounded_tracking():
             assert obsolete not in content, f"{name} 仍含旧契约：{obsolete}"
 
 
+def test_seller_sprite_skill_documents_define_formatted_json_v2_contract():
+    repo_root = Path(__file__).resolve().parents[2]
+    skill_dir = repo_root / "opscli" / "skills" / "templates" / "ops-seller-sprite"
+
+    for filename in ("SKILL.md", "SKILL_MCP.md"):
+        content = (skill_dir / filename).read_text(encoding="utf-8")
+        assert 'schema_version="2.0"' in content
+        assert "`columns[index]`" in content
+        assert "`rows[*][index]`" in content
+        assert "`number_formats[index]`" in content
+        assert "`additional_sheets`" in content
+        assert "重复的表头" in content
+        assert "优先显式传 `export_format=json`" in content or (
+            '优先显式传 `export_format="json"`' in content
+        )
+        assert "官方文件导出场景仍只支持 `xls` / `xlsx`" in content
+
+    version = json.loads((skill_dir / "data" / "VERSION.json").read_text(encoding="utf-8"))
+    assert version["version"] == "v0.0.19"
+
+
 def test_seller_sprite_identity_proxy_uses_shared_authenticated_email_resolver(monkeypatch):
     """SellerSprite 创建、所有权和额度共用的代理必须委托共享 resolver。"""
     from opscli.mcp.tools import helpers
@@ -1342,6 +1363,9 @@ def test_listing_analysis_result_persists_ready_remote_payload(monkeypatch, tmp_
     assert Path(result["data"]["result_path"]).exists()
     assert Path(result["data"]["raw_path"]).exists()
     assert Path(result["data"]["export"]["path"]).exists()
+    exported = json.loads(Path(result["data"]["export"]["path"]).read_text(encoding="utf-8"))
+    assert exported["schema_version"] == "2.0"
+    assert exported["rows"][0][exported["columns"].index("content")] == "Listing 分析正文"
     assert store.finish_task_call["job_id"] == "listing-job-1"
     assert store.finish_task_call["row_count"] == 1
     assert store.finish_mcp_run_success_call["export_payload"]["format"] == "json"

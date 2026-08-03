@@ -10,6 +10,7 @@ from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.config import SellerSpriteSettings
 from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, SellerSpriteScenarioResult
+from opscli.seller_sprite.export.xlsx import build_export_worksheets
 from opscli.seller_sprite.services import api_manager as api_manager_module
 from opscli.seller_sprite.services.api_manager import SellerSpriteApiManager
 
@@ -844,8 +845,9 @@ def test_manager_returns_only_first_association_traffic_page(monkeypatch, tmp_pa
     assert len(raw["response"]["data"]["pagerDto"]["items"]) == 2
 
 
+@pytest.mark.parametrize("export_format", ["xlsx", "json"])
 def test_manager_exports_first_keyword_comparison_page_with_effective_asins(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, export_format: str
 ):
     calls = []
 
@@ -905,7 +907,7 @@ def test_manager_exports_first_keyword_comparison_page_with_effective_asins(
                 },
                 page_size=20,
                 job_id="job-keyword-comparison",
-                export_format="xlsx",
+                export_format=export_format,
             )
         )
     )
@@ -913,8 +915,15 @@ def test_manager_exports_first_keyword_comparison_page_with_effective_asins(
     assert result.row_count == 100
     assert len(result.data) == 100
     assert result.data[-1]["keyword"] == "keyword-99"
-    assert result.export.filename.startswith("CompareKeywords-US-B0949DWJCV-")
-    assert result.export.filename.endswith(".xlsx")
+    if export_format == "xlsx":
+        assert result.export.filename.startswith("CompareKeywords-US-B0949DWJCV-")
+        assert result.export.filename.endswith(".xlsx")
+    else:
+        exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
+        assert exported["sheet_name"].startswith("US-流量占比对比-")
+        assert exported["columns"][2] == "B0949DWJCV(我的)"
+        assert exported["rows"][0][2] == "6.86%"
+        assert [sheet["name"] for sheet in exported["additional_sheets"]] == ["ASIN"]
     assert len(calls) == 1
     assert calls[0]["payload"]["page"] == 1
     assert calls[0]["payload"]["size"] == 100
@@ -1301,8 +1310,79 @@ def test_manager_writes_json_export(monkeypatch, tmp_path: Path):
     exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
     assert exported["job_id"] == "job-json-regression"
     assert exported["scenario"] == "keyword-reverse"
+    assert exported["schema_version"] == "2.0"
     assert exported["row_count"] == 1
-    assert exported["rows"][0]["keywords"] == "flashlight"
+    assert exported["columns"][:3] == ["关键词", "关键词翻译", "流量占比"]
+    assert len(exported["number_formats"]) == len(exported["columns"])
+    assert exported["rows"][0][0] == "flashlight"
+    assert exported["additional_sheets"] == []
+
+
+def test_manager_writes_keyword_miner_json_with_unique_words_sheet(monkeypatch, tmp_path: Path):
+    DummyApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(
+            output_dir=tmp_path,
+            username=None,
+            password=None,
+            default_mode="api-direct",
+        ),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-miner",
+                site="US",
+                period="30d",
+                params={"keyword": "flashlight"},
+                job_id="job-keyword-miner-json",
+                export_format="json",
+            )
+        )
+    )
+
+    exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
+    assert [sheet["name"] for sheet in exported["additional_sheets"]] == ["Unique Words"]
+    unique_words = exported["additional_sheets"][0]
+    assert unique_words["columns"] == ["词语", "出现频次", "百分比"]
+    assert unique_words["rows"] == [["flashlight", 10, None]]
+
+
+def test_json_export_serializes_xlsx_multi_sheet_contract(tmp_path: Path):
+    worksheets = build_export_worksheets(
+        rows=[{"keywords": "phone stand", "bid": 1.12}],
+        scenario="traffic-extend",
+        site="US",
+        params={"asins": ["B089K9L3VY", "B07F8S18D5"]},
+    )
+
+    export = api_manager_module._export_rows_to_json(
+        output_path=tmp_path / "traffic-extend.json",
+        job_id="traffic-extend-json",
+        scenario="traffic-extend",
+        site="US",
+        period="30d",
+        worksheets=worksheets,
+        warnings=[],
+    )
+
+    payload = json.loads(Path(export.path).read_text(encoding="utf-8"))
+    assert payload["sheet_name"] == "US-B089K9L3VY(2)__"
+    assert payload["columns"][0] == "关键词"
+    assert payload["number_formats"][payload["columns"].index("流量占比")] == "0.00%"
+    assert payload["rows"][0][payload["columns"].index("PPC竞价")] == "$1.12"
+    assert [sheet["name"] for sheet in payload["additional_sheets"]] == [
+        "Unique Words",
+        "Asin",
+    ]
+    assert payload["additional_sheets"][1]["rows"] == [
+        ["B089K9L3VY"],
+        ["B07F8S18D5"],
+    ]
+    assert payload["additional_sheets"][0]["number_formats"] == [None, "#,##0", "0.00%"]
 
 
 def test_export_output_path_uses_short_filename_for_windows_compatibility(tmp_path: Path):
@@ -1647,4 +1727,4 @@ def test_manager_records_listing_analysis_submit_state(monkeypatch, tmp_path: Pa
     raw = json.loads((tmp_path / "job-listing-analysis" / "raw.json").read_text(encoding="utf-8"))
     assert raw["response"]["data"]["asin"] == "B0D3845MWD"
     exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
-    assert exported["rows"][0]["asin"] == "B0D3845MWD"
+    assert exported["rows"][0][exported["columns"].index("asin")] == "B0D3845MWD"

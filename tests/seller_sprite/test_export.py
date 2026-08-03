@@ -4,9 +4,10 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from opscli.seller_sprite.export.keyword_comparison_xlsx import (
+    build_keyword_comparison_worksheets,
     export_keyword_comparison_to_xlsx,
 )
-from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
+from opscli.seller_sprite.export.xlsx import build_export_worksheets, export_rows_to_xlsx
 
 
 def test_real_time_bidding_export_merges_sp_sb_into_official_columns(
@@ -240,6 +241,12 @@ def test_traffic_extend_export_matches_three_sheet_business_contract(tmp_path: P
         site="US",
         params={"asins": ["B089K9L3VY", "B07F8S18D5"]},
     )
+    worksheets = build_export_worksheets(
+        rows=rows,
+        scenario="traffic-extend",
+        site="US",
+        params={"asins": ["B089K9L3VY", "B07F8S18D5"]},
+    )
 
     workbook = load_workbook(output, data_only=True)
     assert workbook.sheetnames == [
@@ -279,6 +286,14 @@ def test_traffic_extend_export_matches_three_sheet_business_contract(tmp_path: P
     assert workbook["Asin"]["A2"].value == "B089K9L3VY"
     assert workbook["Asin"]["A3"].value == "B07F8S18D5"
     assert "Notes" not in workbook.sheetnames
+    assert [worksheet.name for worksheet in worksheets] == workbook.sheetnames
+    assert worksheets[0].columns == [cell.value for cell in sheet[1]]
+    assert worksheets[0].rows[0] == [cell.value for cell in sheet[2]]
+    assert worksheets[1].rows[0][:2] == [
+        unique_words["A2"].value,
+        unique_words["B2"].value,
+    ]
+    assert round(worksheets[1].rows[0][2], 15) == round(unique_words["C2"].value, 15)
 
 
 def test_xlsx_export_writes_template_headers_without_notes(tmp_path: Path):
@@ -335,10 +350,8 @@ def test_keyword_export_writes_unique_words_sheet(tmp_path: Path):
 
 def test_keyword_comparison_export_builds_dynamic_business_sheets(tmp_path: Path):
     output = tmp_path / "CompareKeywords-US-B0949DWJCV.xlsx"
-
-    export_keyword_comparison_to_xlsx(
-        rows=[
-            {
+    rows = [
+        {
                 "keyword": "phone stand",
                 "keywordCn": "手机支架",
                 "competitors": 3,
@@ -362,8 +375,11 @@ def test_keyword_comparison_export_builds_dynamic_business_sheets(tmp_path: Path
                         "trafficKeywordTypes": ["PRECISE", "PRECISE_LONG_TAIL"],
                     },
                 ],
-            }
-        ],
+        }
+    ]
+
+    export_keyword_comparison_to_xlsx(
+        rows=rows,
         output_path=output,
         site="US",
         own_asin="B0949DWJCV",
@@ -415,6 +431,20 @@ def test_keyword_comparison_export_builds_dynamic_business_sheets(tmp_path: Path
         "B0949DWJCV(我的)",
         "B0949DWJCV",
         "B0744DM3Y3",
+    ]
+    worksheets = build_keyword_comparison_worksheets(
+        rows=rows,
+        site="US",
+        own_asin="B0949DWJCV",
+        asin_list=["B0949DWJCV", "B0744DM3Y3"],
+    )
+    assert [worksheet.name for worksheet in worksheets] == workbook.sheetnames
+    assert worksheets[0].columns == [cell.value for cell in sheet[1]]
+    assert worksheets[0].rows[0] == [cell.value for cell in sheet[2]]
+    assert worksheets[1].rows == [
+        ["B0949DWJCV(我的)"],
+        ["B0949DWJCV"],
+        ["B0744DM3Y3"],
     ]
 
 

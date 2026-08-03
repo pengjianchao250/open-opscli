@@ -535,7 +535,7 @@ def _persist_listing_analysis_remote_result(
     """将 Listing Analysis 远端完成结果写回本地结果和导出文件。"""
     from opscli.seller_sprite.config import load_settings
     from opscli.seller_sprite.domain.models import SellerSpriteScenarioResult
-    from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
+    from opscli.seller_sprite.export.xlsx import build_export_worksheets, export_rows_to_xlsx
     from opscli.seller_sprite.services.api_manager import (
         _export_output_path,
         _export_rows_to_json,
@@ -577,14 +577,20 @@ def _persist_listing_analysis_remote_result(
             params={},
         )
     else:
+        worksheets = build_export_worksheets(
+            rows=rows,
+            scenario="listing-analysis",
+            site=site,
+            period=period,
+            params={},
+        )
         export = _export_rows_to_json(
             output_path=_export_output_path(root_dir, job_id, "json"),
             job_id=job_id,
             scenario="listing-analysis",
             site=site,
             period=period,
-            rows=rows,
-            high_frequency_rows=[],
+            worksheets=worksheets,
             warnings=warnings,
         )
     _upload_export_if_enabled(

@@ -14,6 +14,72 @@ from opscli.seller_sprite.api.payloads import split_association_traffic_asins
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteExportResult
 from opscli.seller_sprite.export.columns import ExportColumn, columns_for_scenario, currency_label
+from opscli.seller_sprite.export.worksheet import SellerSpriteWorksheet
+
+
+def build_export_worksheets(
+    *,
+    rows: list[dict[str, Any]],
+    scenario: str,
+    site: str = "US",
+    period: str = "30d",
+    params: dict[str, Any] | None = None,
+    high_frequency_rows: list[dict[str, Any]] | None = None,
+) -> list[SellerSpriteWorksheet]:
+    """构造 XLSX 与 JSON 共用的格式化工作表。
+
+    参数：
+        rows: 接口返回的原始业务行。
+        scenario: SellerSprite 场景标识。
+        site: Amazon 站点代码，用于币种和标题格式化。
+        period: 查询周期，用于动态列名和工作表名称。
+        params: 场景参数，用于工作表名称和辅助表。
+        high_frequency_rows: 可选高频词辅助表数据。
+
+    返回：
+        主表在首位、辅助表按 XLSX 顺序排列的格式化工作表列表。
+    """
+    if scenario in {
+        "traffic-extend",
+        "keyword-conversion-rate",
+        "real-time-bidding",
+    }:
+        rows = rows[:100]
+    normalized_params = params or {}
+    columns = columns_for_scenario(scenario, site, period)
+    if not columns:
+        columns = [ExportColumn(field, field) for field in _collect_fields(rows)]
+
+    worksheets = [
+        SellerSpriteWorksheet(
+            name=_main_sheet_title(
+                scenario=scenario,
+                site=site,
+                period=period,
+                params=normalized_params,
+                rows=rows,
+            ),
+            columns=[column.title for column in columns],
+            number_formats=_number_formats_for_scenario(scenario, len(columns)),
+            rows=[
+                [_cell_value(_column_value(row, column, site=site)) for column in columns]
+                for row in rows
+            ],
+        )
+    ]
+    if scenario == "traffic-extend":
+        worksheets.append(
+            _high_frequency_worksheet(
+                _traffic_extend_word_frequency(rows),
+                percentage_format="0.00%",
+            )
+        )
+        worksheets.append(
+            _asin_worksheet(normalized_params.get("asins") or normalized_params.get("asin"))
+        )
+    elif high_frequency_rows:
+        worksheets.append(_high_frequency_worksheet(high_frequency_rows))
+    return worksheets
 
 
 def export_rows_to_xlsx(
@@ -35,19 +101,23 @@ def export_rows_to_xlsx(
         raise SellerSpriteConfigError("缺少 openpyxl 依赖，无法导出 XLSX") from exc
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if scenario in {
-        "traffic-extend",
-        "keyword-conversion-rate",
-        "real-time-bidding",
-    }:
-        rows = rows[:100]
+    worksheets = build_export_worksheets(
+        rows=rows,
+        scenario=scenario,
+        site=site,
+        period=period,
+        params=params,
+        high_frequency_rows=high_frequency_rows,
+    )
+    rows = rows[:100] if scenario in {"traffic-extend", "keyword-conversion-rate", "real-time-bidding"} else rows
     columns = columns_for_scenario(scenario, site, period)
     if not columns:
         columns = [ExportColumn(dictionary_title, dictionary_title) for dictionary_title in _collect_fields(rows)]
 
     workbook = Workbook()
     sheet = workbook.active
-    sheet.title = _main_sheet_title(scenario=scenario, site=site, period=period, params=params or {}, rows=rows)
+    main_worksheet = worksheets[0]
+    sheet.title = main_worksheet.name
 
     keyword_research = scenario == "keyword-research"
     aba_research = scenario == "aba-research"
@@ -91,36 +161,25 @@ def export_rows_to_xlsx(
             color="FFFFFFFF" if traffic_extend else None,
         )
     )
-    for column_index, column in enumerate(columns, start=1):
-        cell = sheet.cell(row=1, column=column_index, value=column.title)
+    for column_index, title in enumerate(main_worksheet.columns, start=1):
+        cell = sheet.cell(row=1, column=column_index, value=title)
         cell.font = header_font
         cell.fill = header_fill
         if official_orange_header:
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    for row_index, row in enumerate(rows, start=2):
-        for column_index, column in enumerate(columns, start=1):
-            value = _cell_value(_column_value(row, column, site=site))
+    for row_index, values in enumerate(main_worksheet.rows, start=2):
+        for column_index, value in enumerate(values, start=1):
             cell = sheet.cell(row=row_index, column=column_index, value=value)
-            if keyword_research:
-                _apply_keyword_research_number_format(cell, column_index)
-            elif aba_research:
+            if aba_research:
                 _apply_aba_research_style(cell, column_index)
-            elif association_traffic:
-                _apply_association_traffic_number_format(cell, column_index)
-            elif traffic_extend:
-                _apply_traffic_extend_number_format(cell, column_index)
-            elif keyword_conversion_rate:
-                _apply_keyword_conversion_rate_number_format(
-                    cell,
-                    column_index,
-                )
-            elif real_time_bidding and column_index in {44, 45}:
-                cell.number_format = "0.00%"
-            else:
+            number_format = main_worksheet.number_formats[column_index - 1]
+            if number_format and isinstance(value, Real) and not isinstance(value, bool):
+                cell.number_format = number_format
+            elif not number_format:
                 _apply_number_format(cell)
         if association_traffic:
-            _apply_association_traffic_hyperlinks(sheet, row_index, row)
+            _apply_association_traffic_hyperlinks(sheet, row_index, rows[row_index - 2])
 
     sheet.freeze_panes = "A2"
     for column_index, column in enumerate(columns, start=1):
@@ -142,15 +201,15 @@ def export_rows_to_xlsx(
 
     if aba_research:
         _apply_aba_research_sheet_style(sheet)
-    if traffic_extend:
-        _add_high_frequency_sheet(
-            workbook,
-            _traffic_extend_word_frequency(rows),
-            traffic_extend_style=True,
-        )
-        _add_asin_sheet(workbook, (params or {}).get("asins") or (params or {}).get("asin"))
-    elif high_frequency_rows:
-        _add_high_frequency_sheet(workbook, high_frequency_rows)
+    for worksheet in worksheets[1:]:
+        if worksheet.name == "Unique Words":
+            _add_high_frequency_sheet(
+                workbook,
+                worksheet,
+                traffic_extend_style=traffic_extend,
+            )
+        elif worksheet.name == "Asin":
+            _add_asin_sheet(workbook, worksheet)
     workbook.save(output_path)
     resolved_output = output_path.resolve()
     return SellerSpriteExportResult(
@@ -292,9 +351,8 @@ def _apply_number_format(cell) -> None:
     cell.number_format = "#,##0" if float(value).is_integer() else "#,##0.00"
 
 
-def _apply_keyword_research_number_format(cell, column_index: int) -> None:
-    if not isinstance(cell.value, Real) or isinstance(cell.value, bool):
-        return
+def _keyword_research_number_format(column_index: int) -> str:
+    """返回关键词选品指定列的官方数字格式。"""
     # 列序号与官方 28 列主表一一对应，保留百分比、小数位和整数的显示口径。
     formats = {
         5: "#,##0.00%",
@@ -312,7 +370,7 @@ def _apply_keyword_research_number_format(cell, column_index: int) -> None:
         24: "#,##0.00%",
         26: "#,##0.00%",
     }
-    cell.number_format = formats.get(column_index, "#,##0")
+    return formats.get(column_index, "#,##0")
 
 
 def _apply_aba_research_style(cell, column_index: int) -> None:
@@ -328,6 +386,10 @@ def _apply_aba_research_style(cell, column_index: int) -> None:
         ),
         vertical="center",
     )
+
+
+def _aba_research_number_format(column_index: int) -> str:
+    """返回 ABA 数据选品指定列的官方数字格式。"""
     formats = {
         3: "#,##0_ ",
         4: "#,##0_ ",
@@ -343,7 +405,7 @@ def _apply_aba_research_style(cell, column_index: int) -> None:
         14: "#,##0.0%",
         15: "#,##0.0%",
     }
-    cell.number_format = formats.get(column_index, "General")
+    return formats.get(column_index, "General")
 
 
 def _apply_aba_research_sheet_style(sheet) -> None:
@@ -358,10 +420,8 @@ def _apply_aba_research_sheet_style(sheet) -> None:
         cell.font = Font(name="Calibri", size=10, bold=False, color="FFFFFFFF")
 
 
-def _apply_association_traffic_number_format(cell, column_index: int) -> None:
-    """按官方关联流量工作簿设置数值显示格式。"""
-    if not isinstance(cell.value, Real) or isinstance(cell.value, bool):
-        return
+def _association_traffic_number_format(column_index: int) -> str:
+    """返回关联流量指定列的官方数字格式。"""
     formats = {
         2: "#,##0_ ",
         13: "#,##0",
@@ -385,29 +445,21 @@ def _apply_association_traffic_number_format(cell, column_index: int) -> None:
         35: "#,##0",
         36: "#,##0",
     }
-    cell.number_format = formats.get(column_index, "#,##0")
+    return formats.get(column_index, "#,##0")
 
 
-def _apply_traffic_extend_number_format(cell, column_index: int) -> None:
-    """按官方拓展流量词工作簿设置百分比和数值格式。"""
-    if not isinstance(cell.value, Real) or isinstance(cell.value, bool):
-        return
+def _traffic_extend_number_format(column_index: int) -> str:
+    """返回拓展流量词指定列的官方数字格式。"""
     percentage_columns = {4, 12, 20, 21, 25, 26, 28, 29, 31, 32}
     if column_index in percentage_columns:
-        cell.number_format = "0.00%"
-    elif column_index == 18:
-        cell.number_format = "0.00"
-    else:
-        cell.number_format = "#,##0"
+        return "0.00%"
+    if column_index == 18:
+        return "0.00"
+    return "#,##0"
 
 
-def _apply_keyword_conversion_rate_number_format(
-    cell,
-    column_index: int,
-) -> None:
-    """按关键词转化率业务含义设置百分比、货币和整数格式。"""
-    if not isinstance(cell.value, Real) or isinstance(cell.value, bool):
-        return
+def _keyword_conversion_rate_number_format(column_index: int) -> str:
+    """返回关键词转化率指定列的官方数字格式。"""
     if column_index in {
         7,
         8,
@@ -423,13 +475,29 @@ def _apply_keyword_conversion_rate_number_format(
         31,
         32,
     }:
-        cell.number_format = "0.00%"
-    elif column_index in {9, 10, 11, 12, 13, 14, 15, 16, 17, 21}:
-        cell.number_format = "#,##0.00_ "
-    elif column_index in {3, 4, 5, 6}:
-        cell.number_format = "#,##0_ "
-    else:
-        cell.number_format = "#,##0"
+        return "0.00%"
+    if column_index in {9, 10, 11, 12, 13, 14, 15, 16, 17, 21}:
+        return "#,##0.00_ "
+    if column_index in {3, 4, 5, 6}:
+        return "#,##0_ "
+    return "#,##0"
+
+
+def _number_formats_for_scenario(scenario: str, column_count: int) -> list[str | None]:
+    """返回与业务列对齐、供 XLSX 和 JSON 共用的数字格式。"""
+    resolvers = {
+        "keyword-research": _keyword_research_number_format,
+        "aba-research": _aba_research_number_format,
+        "association-traffic": _association_traffic_number_format,
+        "traffic-extend": _traffic_extend_number_format,
+        "keyword-conversion-rate": _keyword_conversion_rate_number_format,
+    }
+    resolver = resolvers.get(scenario)
+    if resolver:
+        return [resolver(index) for index in range(1, column_count + 1)]
+    if scenario == "real-time-bidding":
+        return ["0.00%" if index in {44, 45} else None for index in range(1, column_count + 1)]
+    return [None] * column_count
 
 
 def _apply_association_traffic_hyperlinks(sheet, row_index: int, row: dict[str, Any]) -> None:
@@ -458,26 +526,26 @@ def _apply_association_traffic_hyperlinks(sheet, row_index: int, row: dict[str, 
 
 def _add_high_frequency_sheet(
     workbook,
-    rows: list[dict[str, Any]],
+    worksheet: SellerSpriteWorksheet,
     *,
     traffic_extend_style: bool = False,
 ) -> None:
     from openpyxl.styles import Font
 
-    sheet = workbook.create_sheet("Unique Words")
-    headers = ["词语", "出现频次", "百分比"]
-    for column_index, title in enumerate(headers, start=1):
+    sheet = workbook.create_sheet(worksheet.name)
+    for column_index, title in enumerate(worksheet.columns, start=1):
         sheet.cell(row=1, column=column_index, value=title)
         sheet.cell(row=1, column=column_index).font = Font(bold=True)
-    for row_index, row in enumerate(rows, start=2):
-        sheet.cell(row=row_index, column=1, value=row.get("keyword") or row.get("词语") or row.get("word"))
-        frequency_cell = sheet.cell(row=row_index, column=2, value=row.get("frequency") or row.get("出现频次"))
-        percentage_cell = sheet.cell(row=row_index, column=3, value=row.get("percentage") or row.get("百分比"))
-        _apply_number_format(frequency_cell)
-        if traffic_extend_style:
-            percentage_cell.number_format = "0.00%"
-        else:
-            _apply_number_format(percentage_cell)
+    for row_index, row in enumerate(worksheet.rows, start=2):
+        sheet.cell(row=row_index, column=1, value=row[0])
+        frequency_cell = sheet.cell(row=row_index, column=2, value=row[1])
+        percentage_cell = sheet.cell(row=row_index, column=3, value=row[2])
+        for column_index, cell in ((2, frequency_cell), (3, percentage_cell)):
+            number_format = worksheet.number_formats[column_index - 1]
+            if number_format and isinstance(cell.value, Real) and not isinstance(cell.value, bool):
+                cell.number_format = number_format
+            else:
+                _apply_number_format(cell)
     sheet.column_dimensions["A"].width = 19 if traffic_extend_style else 24
     sheet.column_dimensions["B"].width = 18.6725663716814 if traffic_extend_style else 14
     sheet.column_dimensions["C"].width = 20 if traffic_extend_style else 14
@@ -505,15 +573,46 @@ def _traffic_extend_word_frequency(rows: list[dict[str, Any]]) -> list[dict[str,
     ]
 
 
-def _add_asin_sheet(workbook, value: Any) -> None:
+def _add_asin_sheet(workbook, worksheet: SellerSpriteWorksheet) -> None:
     """写入拓展流量词的原始 ASIN 列表。"""
     from openpyxl.styles import Font
 
-    sheet = workbook.create_sheet("Asin")
-    sheet.cell(row=1, column=1, value="ASIN").font = Font(bold=True)
-    for row_index, asin in enumerate(split_association_traffic_asins(value), start=2):
-        sheet.cell(row=row_index, column=1, value=asin)
+    sheet = workbook.create_sheet(worksheet.name)
+    sheet.cell(row=1, column=1, value=worksheet.columns[0]).font = Font(bold=True)
+    for row_index, row in enumerate(worksheet.rows, start=2):
+        sheet.cell(row=row_index, column=1, value=row[0])
     sheet.column_dimensions["A"].width = 19
+
+
+def _high_frequency_worksheet(
+    rows: list[dict[str, Any]],
+    *,
+    percentage_format: str | None = None,
+) -> SellerSpriteWorksheet:
+    """构造高频词辅助工作表，字段取值与 XLSX 保持一致。"""
+    return SellerSpriteWorksheet(
+        name="Unique Words",
+        columns=["词语", "出现频次", "百分比"],
+        number_formats=[None, "#,##0", percentage_format],
+        rows=[
+            [
+                row.get("keyword") or row.get("词语") or row.get("word"),
+                row.get("frequency") or row.get("出现频次"),
+                row.get("percentage") or row.get("百分比"),
+            ]
+            for row in rows
+        ],
+    )
+
+
+def _asin_worksheet(value: Any) -> SellerSpriteWorksheet:
+    """构造拓展流量词的原始 ASIN 辅助工作表。"""
+    return SellerSpriteWorksheet(
+        name="Asin",
+        columns=["ASIN"],
+        number_formats=[None],
+        rows=[[asin] for asin in split_association_traffic_asins(value)],
+    )
 
 
 def _main_sheet_title(*, scenario: str, site: str, period: str, params: dict[str, Any], rows: list[dict[str, Any]]) -> str:

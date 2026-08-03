@@ -5265,3 +5265,12 @@
 **影响范围**：仅影响 Webhook 文件路径解析；通知规则、去重、冷却和消息内容不变。
 **回滚方式**：恢复 `WEBHOOK_FILE` 仅从环境变量读取的逻辑，并删除本条文档。
 ---
+
+## 2026-08-03 SellerSprite - JSON 与 XLSX 共用格式化工作表
+
+**变更原因**：卖家精灵 JSON 导出此前直接保存接口字段，而 XLSX 使用中文列、字段 fallback、值转换和多 Sheet，导致两种格式的字段含义与数据结构割裂。
+**改动点**：新增跨格式工作表模型，将 SellerSprite 通用主表、数字显示格式、词频表、ASIN 辅助表以及流量词对比动态表收口到同一份格式化数据；普通任务与 Listing Analysis 三段式 JSON 均改为 schema v2，以 `columns + rows` 保留列顺序和重复表头，通过 `number_formats` 暴露 XLSX 同列数字格式，并通过 `additional_sheets` 表达 XLSX 辅助表；Skill 增加 JSON v2 读取规则和 AI 分析优先 JSON 的导出建议，版本升至 `v0.0.19`。
+**验证结果**：Skill 校验通过；普通 JSON、数字格式、三 Sheet 拓词、关键词挖掘、动态流量词对比以及普通/三段式 Listing Analysis 已补充 schema v2 断言；聚焦回归 `137 passed`；SellerSprite 与相关 MCP 全量回归 `523 passed, 2 failed`，两项失败均为仓库已注释 `seller-sprite-debug` 注册但既有测试仍要求该命令存在，与本次改动无关。
+**影响范围**：SellerSprite 本地格式化导出；官方原样 XLSX 场景不变。
+**回滚方式**：回退 SellerSprite 工作表模型、导出器、JSON 接入及对应测试。
+---

@@ -50,6 +50,7 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 7. 如果预算结束仍有 pending，保留全部未完成 `job_id`，告诉用户可说“继续”或“查结果”。未来用户只说 `继续` / `查结果` / `刚才那些好了没` 时，恢复完整 pending 集合；除非用户明确选择子集，否则不得只查最近一个 ID。
 8. pending 任务不得重新提交，不得再次调用 `seller_sprite_run` 查状态，也不得重新消耗额度。`run` 消耗额度；状态和导出不消耗额度。
 9. 普通任务终态为 `succeeded` 后，响应已有导出信息时直接展示；只需文件信息时调用 `seller_sprite_export(job_id)`。
+10. 需要由 AI 直接读取和分析导出数据时，优先显式传 `export_format="json"`；用户需要人工查看或留档表格时使用 `xls` / `xlsx`。未显式传参时继续兼容 Tool 的既有默认值。
 
 ### 认证与运行环境
 
@@ -100,6 +101,15 @@ Listing Analysis 必须使用 submit/status/result 专用流程，不属于普�
 - MCP tools 不可用时，直接说明当前宿主没有可用的 SellerSprite MCP。
 
 ## 回复规则
+
+### JSON v2 工作表契约
+
+- SellerSprite 本地 JSON 导出使用 `schema_version="2.0"`，与本地生成的 XLSX 共用格式化工作表，因此中文列名、字段 fallback、值转换、列顺序和辅助 Sheet 含义一致。
+- 按 `columns[index]` 解释每个 `rows[*][index]`，不要将行数组转换前误当作对象；使用数组是为了保留 XLSX 中可能重复的表头。
+- `number_formats[index]` 是同列 XLSX 使用的 Excel 数字格式（如 `0.00%`）；值保持可计算的数字类型，`null` 表示使用自动格式。
+- `sheet_name` 是主表名称；`additional_sheets` 是辅助表列表，每项包含 `name`、`columns`、`number_formats`、`row_count` 和 `rows`，行也按该项的 `columns` 下标对齐。
+- `traffic-extend` 返回 `Unique Words`、`Asin`，`keyword-miner` 可返回 `Unique Words`，`keyword-comparison` 返回 `ASIN`；其他场景通常为 `additional_sheets=[]`。
+- `aba-reverse` 等官方文件导出场景仍只支持 `xls` / `xlsx` 并原样返回官网工作簿，不适用 JSON v2。
 
 - 优先读取 `data.summary`、`data.job_id`、`data.row_count`、`data.export.filename`、`data.export.url`、`data.export.path` 和 `data.export.format`。
 - 批量状态优先展示 `data.ready` 与 `data.summary`；从 `data.jobs` 识别并保留每个 pending ID。

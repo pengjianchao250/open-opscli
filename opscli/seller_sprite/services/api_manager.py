@@ -37,9 +37,11 @@ from opscli.seller_sprite.domain.models import (
     SellerSpriteScenarioResult,
 )
 from opscli.seller_sprite.export.keyword_comparison_xlsx import (
+    build_keyword_comparison_worksheets,
     export_keyword_comparison_to_xlsx,
 )
-from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
+from opscli.seller_sprite.export.worksheet import SellerSpriteWorksheet
+from opscli.seller_sprite.export.xlsx import build_export_worksheets, export_rows_to_xlsx
 from opscli.seller_sprite.services.task_status import (
     base_status,
     error_to_dict,
@@ -407,26 +409,31 @@ class SellerSpriteApiManager:
             # 即使上游异常返回超过分页大小，也只导出首期约定的第一页 100 条。
             rows = rows[:100]
         high_frequency_rows = _extract_high_frequency_rows(high_frequency_response)
+        keyword_comparison_context: dict[str, Any] | None = None
+        if request.scenario == "keyword-comparison":
+            if not effective_asin_list:
+                raise SellerSpriteApiError(
+                    "卖家精灵流量词对比缺少最终畅销变体顺序",
+                    api_code="ERR_KEYWORD_COMPARISON_ASIN_LIST_MISSING",
+                )
+            keyword_comparison_context = {
+                "own_asin": str(payload.get("asin") or ""),
+                "asin_list": effective_asin_list,
+            }
         self._emit_progress("exporting")
         if scenario.method in {"GET_XLSX", "POST_XLSX"}:
             export = _official_xlsx_export(main_response, root_dir=root_dir)
         elif export_format == "xlsx":
-            if request.scenario == "keyword-comparison":
-                if not effective_asin_list:
-                    raise SellerSpriteApiError(
-                        "卖家精灵流量词对比缺少最终畅销变体顺序",
-                        api_code="ERR_KEYWORD_COMPARISON_ASIN_LIST_MISSING",
-                    )
+            if keyword_comparison_context:
                 export = export_keyword_comparison_to_xlsx(
                     rows=rows,
                     output_path=_keyword_comparison_output_path(
                         root_dir,
                         site=site,
-                        own_asin=str(payload.get("asin") or ""),
+                        own_asin=keyword_comparison_context["own_asin"],
                     ),
                     site=site,
-                    own_asin=str(payload.get("asin") or ""),
-                    asin_list=effective_asin_list,
+                    **keyword_comparison_context,
                 )
             else:
                 export = export_rows_to_xlsx(
@@ -443,14 +450,28 @@ class SellerSpriteApiManager:
                     high_frequency_rows=high_frequency_rows,
                 )
         else:
+            if keyword_comparison_context:
+                worksheets = build_keyword_comparison_worksheets(
+                    rows=rows,
+                    site=site,
+                    **keyword_comparison_context,
+                )
+            else:
+                worksheets = build_export_worksheets(
+                    rows=rows,
+                    scenario=request.scenario,
+                    site=site,
+                    period=period,
+                    params=request.params,
+                    high_frequency_rows=high_frequency_rows,
+                )
             export = _export_rows_to_json(
                 output_path=_export_output_path(root_dir, job_id, "json"),
                 job_id=job_id,
                 scenario=request.scenario,
                 site=site,
                 period=period,
-                rows=rows,
-                high_frequency_rows=high_frequency_rows,
+                worksheets=worksheets,
                 warnings=warnings,
             )
         self._emit_progress("uploading")
@@ -1221,20 +1242,26 @@ def _export_rows_to_json(
     scenario: str,
     site: str,
     period: str,
-    rows: list[dict[str, Any]],
-    high_frequency_rows: list[dict[str, Any]],
+    worksheets: list[SellerSpriteWorksheet],
     warnings: list[dict[str, Any]],
 ):
     from opscli.seller_sprite.domain.models import SellerSpriteExportResult
 
+    if not worksheets:
+        raise SellerSpriteConfigError("卖家精灵 JSON 导出缺少格式化工作表")
+    main_worksheet = worksheets[0]
     payload = {
+        "schema_version": "2.0",
         "job_id": job_id,
         "scenario": scenario,
         "site": site,
         "period": period,
-        "row_count": len(rows),
-        "rows": rows,
-        "high_frequency_rows": high_frequency_rows,
+        "sheet_name": main_worksheet.name,
+        "row_count": len(main_worksheet.rows),
+        "columns": main_worksheet.columns,
+        "number_formats": main_worksheet.number_formats,
+        "rows": main_worksheet.rows,
+        "additional_sheets": [worksheet.to_dict() for worksheet in worksheets[1:]],
         "warnings": warnings,
     }
     _write_json(output_path, payload)
