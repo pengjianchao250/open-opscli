@@ -583,11 +583,68 @@ def test_probe_uses_remote_mcp_client_key_file_and_bounded_call(
     assert "must-not-leak" not in repr(result)
     assert captured == {
         "url": "https://collector.example/mcp",
-        "headers": {"X-MCP-API-Key": "mcp-secret"},
+        "headers": {"Authorization": "Bearer mcp-secret"},
         "follow_redirects": False,
         "tool_name": "collector_modules_health",
         "arguments": {},
     }
+
+
+def test_probe_auth_header_is_accepted_by_collector_middleware(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Monitor 生成的凭据 Header 必须能通过真实 Collector 鉴权中间件。"""
+    from opscli.mcp.auth_middleware import ApiKeyAuthMiddleware
+
+    accepted = {}
+
+    async def authorized_app(scope, receive, send):
+        accepted["api_key"] = scope.get("mcp_api_key")
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    middleware = ApiKeyAuthMiddleware(authorized_app, api_key="contract-key")
+
+    class ContractRemoteClient:
+        def __init__(self, url, *, headers=None, follow_redirects=True):
+            self.headers = headers or {}
+
+        async def call_tool(self, tool_name, arguments):
+            sent = []
+
+            async def receive():
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message):
+                sent.append(message)
+
+            scope = {
+                "type": "http",
+                "path": "/mcp",
+                "query_string": b"",
+                "headers": [
+                    (name.lower().encode(), value.encode())
+                    for name, value in self.headers.items()
+                ],
+            }
+            await middleware(scope, receive, send)
+            assert sent[0]["status"] == 200
+            return {"success": True, "data": {"status": "ready", "modules": []}}
+
+    monkeypatch.setattr(
+        "opscli.collector_monitor.service.RemoteMcpClient",
+        ContractRemoteClient,
+    )
+    settings = _settings(
+        tmp_path,
+        collector_mcp_url="https://collector.example/mcp",
+    )
+
+    result = asyncio.run(probe_collector(settings, api_key="contract-key"))
+
+    assert result["status"] == "ready"
+    assert accepted == {"api_key": "contract-key"}
 
 
 def test_manual_probe_uses_one_time_key_without_persisting_it(tmp_path: Path) -> None:
@@ -642,7 +699,7 @@ def test_probe_maps_nested_http_auth_errors_to_stable_code(
 
     class UnauthorizedRemoteClient:
         def __init__(self, url, *, headers=None, follow_redirects=True):
-            assert headers == {"X-MCP-API-Key": "temporary-mcp-key"}
+            assert headers == {"Authorization": "Bearer temporary-mcp-key"}
 
         async def call_tool(self, tool_name, arguments):
             raise ExceptionGroup("remote unauthorized", [auth_error])

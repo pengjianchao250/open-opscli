@@ -171,7 +171,7 @@ POST /api/v1/probes/collector
 POST /api/v1/probes/queue-source
 ```
 
-请求不接收 URL、路径、自定义 Header 或任意命令，目标来自冻结配置，避免 SSRF 与命令注入。Collector 端点可选接收最长 512 字符的 `api_key` JSON 字段，仅用于该次服务端请求的 `X-MCP-API-Key`；队列源端点拒绝此字段。
+请求不接收 URL、路径、自定义 Header 或任意命令，目标来自冻结配置，避免 SSRF 与命令注入。Collector 端点可选接收最长 512 字符的 `api_key` JSON 字段，仅用于该次服务端请求的标准 `Authorization: Bearer <api_key>`；队列源端点拒绝此字段。
 
 响应：
 

@@ -561,7 +561,7 @@ async def _probe_collector_with_credentials(
         if not effective_api_key:
             raise ValueError("Collector MCP API Key 文件为空")
     if effective_api_key is not None:
-        headers = {"X-MCP-API-Key": effective_api_key}
+        headers = {"Authorization": f"Bearer {effective_api_key}"}
     client = RemoteMcpClient(
         str(settings.collector_mcp_url),
         headers=headers,

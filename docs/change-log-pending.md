@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-08-03 collector_monitor - 修复 Collector 探测鉴权 Header
+
+**变更原因**：Monitor 将页面或 Key 文件中的 API Key 作为 `X-MCP-API-Key` 发送，但 Collector 鉴权中间件只接受标准 Bearer、query 参数或 Inspector 代理 Header，导致“立即探测 Collector”在 Key 有效时仍于工具调用前返回 401。
+**改动点**：Monitor 的页面临时 Key 和生产 Key 文件统一改用 `Authorization: Bearer <api_key>`；保留首尾空白清理、禁止携带凭据重定向、响应脱敏和 `COLLECTOR_AUTH_FAILED` 分类；新增跨模块契约测试，将 Monitor 生成的 Header 送入真实 `ApiKeyAuthMiddleware`，防止客户端与服务端鉴权合同再次漂移。
+**验证结果**：修复前定向回归稳定出现 4 项失败，修复后 4 项通过；Collector Monitor 完整回归 `92 passed`，`compileall` 与 `git diff --check` 通过；本地服务 HTTP 200，页面“立即探测 Collector”按钮与固定端点加载验证通过。
+**影响范围**：Collector Monitor 到 Collector MCP 的鉴权 Header；不改变 API Key 内容、OPS 远程校验、页面本地保存或队列源探测。
+**回滚方式**：回退 Bearer Header、跨模块契约测试、文档和本条记录。
+---
+
 ## 2026-08-03 collector_monitor - 支持浏览器选择性保存 API Key
 
 **变更原因**：重复进行 Collector 鉴权诊断时，每次重新输入 API Key 操作繁琐，需要一个由运维人员明确选择的本地保存方式。
