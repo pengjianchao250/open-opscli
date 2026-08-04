@@ -25,6 +25,7 @@ from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.api.keyword_research import parse_keyword_research_html
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.config import DEFAULT_OUTPUT_DIR, SellerSpriteSettings
+from opscli.seller_sprite.domain.constants import ACCOUNT_FAILURE_REASON_AUTHENTICATION
 from opscli.seller_sprite.domain.exceptions import (
     SellerSpriteApiError,
     SellerSpriteAuthenticationError,
@@ -2164,6 +2165,8 @@ async def close_browser_route_worker(
         if key[:2] == owner_prefix and key[3] == account_key
     ]
     if not selected:
+        if reason == ACCOUNT_FAILURE_REASON_AUTHENTICATION:
+            _quarantine_profile_if_unused(settings, account, account_key=account_key)
         return False
     errors: list[Exception] = []
     for key, worker in selected:
@@ -2180,7 +2183,14 @@ async def close_browser_route_worker(
             errors.append(exc)
     if errors:
         raise errors[0]
+    if reason == ACCOUNT_FAILURE_REASON_AUTHENTICATION:
+        _quarantine_profile_if_unused(settings, account, account_key=account_key)
     return True
+
+
+def _has_registered_account_worker(account_key: str) -> bool:
+    """判断当前进程任一事件循环是否仍有 owner 持有该账号 Worker。"""
+    return any(key[3] == account_key for key in _WORKERS)
 
 
 async def reap_browser_route_workers(
@@ -4066,6 +4076,40 @@ def _profile_dir(settings: SellerSpriteSettings, account: SellerSpriteAccount) -
     key = hashlib.md5(f"{account.name}:{account.username}".encode("utf-8")).hexdigest()[:12]
     safe_name = _slug(account.name or "default")
     return settings.browser_profile_dir / f"{safe_name}-{key}"
+
+
+def _quarantine_profile_dir(
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+) -> Path | None:
+    """移动认证失败账号的持久 Profile，保留现场并强制后续创建新会话。"""
+    source = _profile_dir(settings, account)
+    if not source.exists():
+        return None
+    quarantine_root = settings.browser_profile_dir / ".quarantine"
+    quarantine_root.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    target = quarantine_root / f"{source.name}-{timestamp}-{time.time_ns() % 1_000_000:06d}"
+    shutil.move(str(source), str(target))
+    return target
+
+
+def _quarantine_profile_if_unused(
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+    *,
+    account_key: str,
+) -> Path | None:
+    """仅在进程内无 Worker 且 Chromium 未锁定时隔离 Profile。"""
+    # Profile 跨 owner、事件循环甚至进程共享；任一持有迹象都优先保留目录，避免移动活跃会话。
+    if _has_registered_account_worker(account_key):
+        return None
+    source = _profile_dir(settings, account)
+    lock_names = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+    if any(os.path.lexists(source / name) for name in lock_names):
+        logger.warning("卖家精灵认证失败 Profile 仍被 Chromium 锁定，已跳过目录隔离")
+        return None
+    return _quarantine_profile_dir(settings, account)
 
 
 def _listing_analysis_report_url(task_id: str) -> str:

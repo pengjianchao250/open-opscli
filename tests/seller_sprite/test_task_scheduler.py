@@ -1190,7 +1190,7 @@ def test_scheduler_fails_current_generation_when_all_standby_accounts_are_busy(
         )
 
         assert harness.attempted_accounts == ["account-1"]
-        assert failed["error"]["code"] == "SELLER_SPRITE_ACCOUNT_UNAVAILABLE"
+        assert failed["error"]["code"] == "SELLER_SPRITE_ALL_STANDBY_BUSY"
         assert failed["failover_count"] == 0
         assert failed["execution_owner"] is None
         assert failed["heartbeat_at"] is None
@@ -1301,9 +1301,117 @@ def test_scheduler_closes_failed_slot_when_no_standby_account_exists(tmp_path: P
         failed = await _wait_for_state(scheduler, "job-no-standby", "failed")
         await asyncio.sleep(0.05)
 
-        assert failed["error"]["code"] == "SELLER_SPRITE_ACCOUNT_UNAVAILABLE"
+        assert failed["error"]["code"] == "SELLER_SPRITE_ALL_ACCOUNTS_AUTH_FAILED"
         assert scheduler.job_status("job-stays-queued")["state"] == "queued"
         assert scheduler.generic_worker_count == 0
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_keeps_reassigned_task_running_when_quarantine_write_fails(
+    tmp_path: Path,
+):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        class QuarantineFailingStore(SellerSpriteTaskQueueStore):
+            def quarantine_account(self, **kwargs):
+                raise OSError("quarantine store unavailable")
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = QuarantineFailingStore(db_path=tmp_path / "queue.sqlite3")
+        harness = FailoverRunHarness()
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=MultiAccountProvider(2),
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+        )
+
+        await scheduler.enqueue(_request("job-quarantine-write-failed", "B0FAILOVER"))
+        await scheduler.start()
+        succeeded = await _wait_for_state(
+            scheduler,
+            "job-quarantine-write-failed",
+            "succeeded",
+        )
+
+        assert harness.attempted_accounts == ["account-1", "account-2"]
+        assert succeeded["assigned_account"] == "account-2"
+        assert succeeded["failover_count"] == 1
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_reports_account_source_failure_when_failover_refresh_fails(
+    tmp_path: Path,
+):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        class RefreshFailureProvider(MultiAccountProvider):
+            def list_accounts(self, *, refresh=False):
+                if refresh:
+                    raise RuntimeError("remote account source unavailable")
+                return super().list_accounts(refresh=refresh)
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=RefreshFailureProvider(1),
+            manager_factory=FailoverRunHarness(fail_all=True).manager_factory,
+            auto_start=False,
+        )
+
+        await scheduler.enqueue(_request("job-source-failed", "B0SOURCEFAIL"))
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-source-failed", "failed")
+
+        assert failed["error"]["code"] == "SELLER_SPRITE_ACCOUNT_SOURCE_UNAVAILABLE"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_fails_queued_task_when_remote_source_has_no_eligible_account(
+    tmp_path: Path,
+):
+    async def scenario():
+        from opscli.seller_sprite.domain.exceptions import (
+            SellerSpriteNoEligibleAccountError,
+        )
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        class EmptyRemoteProvider:
+            def list_accounts(self, *, refresh=False):
+                raise SellerSpriteNoEligibleAccountError(
+                    "卖家精灵远程账号源没有可用账号"
+                )
+
+            def get_default(self, *, refresh=False):
+                raise SellerSpriteNoEligibleAccountError(
+                    "卖家精灵远程账号源没有可用账号"
+                )
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=EmptyRemoteProvider(),
+            auto_start=False,
+        )
+
+        await scheduler.enqueue(_request("job-no-eligible", "B0NOELIGIBLE"))
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-no-eligible", "failed")
+
+        assert failed["error"]["code"] == "SELLER_SPRITE_NO_ELIGIBLE_ACCOUNT"
         await scheduler.close()
 
     asyncio.run(scenario())

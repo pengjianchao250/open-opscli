@@ -436,7 +436,7 @@ def test_store_migrates_v5_runtime_capacity_columns(tmp_path: Path):
         }
         user_version = conn.execute("PRAGMA user_version").fetchone()[0]
 
-    assert user_version == QUEUE_SCHEMA_VERSION == 6
+    assert user_version == QUEUE_SCHEMA_VERSION == 7
     assert {
         "generic_available_capacity",
         "listing_available_capacity",
@@ -454,6 +454,61 @@ def test_store_migrates_v5_runtime_capacity_columns(tmp_path: Path):
         "last_claim_at": "2026-07-29T10:00:00+08:00",
         "last_progress_at": "2026-07-29T10:00:01+08:00",
     }
+
+
+def test_store_persists_active_account_quarantine_by_credential_version(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    db_path = tmp_path / "queue.sqlite3"
+    first = SellerSpriteTaskQueueStore(db_path=db_path)
+    first.quarantine_account(
+        account_key="account-key",
+        credential_version="credential-v1",
+        reason="authentication_failed",
+        error_code="SELLER_SPRITE_AUTHENTICATION_ERROR",
+        ttl_seconds=86400,
+    )
+
+    restarted = SellerSpriteTaskQueueStore(db_path=db_path)
+
+    assert restarted.is_account_quarantined(
+        account_key="account-key",
+        credential_version="credential-v1",
+    )
+    assert not restarted.is_account_quarantined(
+        account_key="account-key",
+        credential_version="credential-v2",
+    )
+
+
+def test_store_does_not_fail_task_claimed_during_account_source_shutdown(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    request = _request(job_id="claimed-during-source-shutdown")
+    store.enqueue(
+        request=request,
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / request.job_id,
+    )
+    claimed = store.claim_next_generic_for_account(
+        queue_scope="seller_sprite",
+        account_key="account-key",
+        assigned_account="account-1",
+        worker_key="worker-1",
+    )
+    assert claimed is not None
+
+    committed = store.fail_queued_task(
+        job_id=request.job_id,
+        error_payload={
+            "code": "SELLER_SPRITE_ACCOUNT_SOURCE_UNAVAILABLE",
+            "message": "account source unavailable",
+        },
+    )
+
+    assert committed is False
+    assert store.get_status(request.job_id)["state"] == "running"
 
 
 def test_store_does_not_auto_consume_while_legacy_generic_task_is_running(tmp_path: Path):

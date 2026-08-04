@@ -9,8 +9,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from opscli.seller_sprite.config import resolve_queue_db_path
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
-from opscli.seller_sprite.config import DEFAULT_QUEUE_DB_PATH, resolve_queue_db_path
 
 
 DEFAULT_MCP_RUN_MODE = "browser-route"
@@ -18,8 +18,8 @@ TASK_KIND_GENERIC = "generic"
 TASK_KIND_LISTING_ANALYSIS = "listing_analysis"
 ACCOUNT_ROUTE_SHARED_POOL = "shared_pool"
 ACCOUNT_ROUTE_USER_BINDING = "user_binding"
-# 版本 6 增加按任务类型拆分的运行时可用容量。
-QUEUE_SCHEMA_VERSION = 6
+# 版本 7 增加按账号身份与凭据版本持久化的认证失败隔离。
+QUEUE_SCHEMA_VERSION = 7
 TASK_PROGRESS_STAGES = {
     "claimed",
     "resolving",
@@ -846,6 +846,62 @@ class SellerSpriteTaskQueueStore:
                 )
             conn.commit()
 
+    def fail_queued_task(
+        self,
+        *,
+        job_id: str,
+        error_payload: dict[str, Any],
+    ) -> bool:
+        """仅在任务仍排队时标记失败，避免覆盖并发领取结果。
+
+        参数：
+            job_id: 待关闭的任务 ID。
+            error_payload: 已脱敏的结构化错误。
+
+        返回：
+            当前调用成功关闭排队任务时返回 ``True``；任务已被领取时返回 ``False``。
+        """
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """
+                UPDATE seller_sprite_task_queue
+                SET status = 'failed',
+                    finished_at = ?,
+                    error_json = ?,
+                    credential_scope = NULL,
+                    runtime_auth_required = 0,
+                    expected_user_email = NULL,
+                    session_id = NULL,
+                    jwt = NULL,
+                    execution_owner = NULL,
+                    heartbeat_at = NULL,
+                    lease_expires_at = NULL,
+                    progress_stage = 'failed',
+                    progress_at = ?,
+                    progress_sequence = progress_sequence + 1
+                WHERE job_id = ? AND status = 'queued'
+                """,
+                (
+                    now,
+                    json.dumps(error_payload, ensure_ascii=False),
+                    now,
+                    job_id,
+                ),
+            )
+            committed = int(cursor.rowcount or 0) == 1
+            if committed:
+                self._append_current_progress_event(
+                    conn,
+                    job_id=job_id,
+                    stage="failed",
+                    progress_at=now,
+                    metadata={"outcome": "failed"},
+                )
+            conn.commit()
+        return committed
+
     def fail_task_if_current(
         self,
         *,
@@ -1463,6 +1519,24 @@ class SellerSpriteTaskQueueStore:
             ).fetchall()
         return [self._row_to_status(row) for row in rows]
 
+    def list_queued_shared_pool_job_ids(self) -> tuple[str, ...]:
+        """列出全部排队中的公共账号池任务。
+
+        返回：
+            按入队顺序排列的任务 ID；不包含用户专属账号任务。
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT job_id
+                FROM seller_sprite_task_queue
+                WHERE status = 'queued' AND account_route = ?
+                ORDER BY id ASC
+                """,
+                (ACCOUNT_ROUTE_SHARED_POOL,),
+            ).fetchall()
+        return tuple(str(row["job_id"]) for row in rows)
+
     def queue_status(self, *, stale_running_seconds: int = 1800) -> dict[str, Any]:
         """返回队列状态摘要，辅助判断 queued 是否堆积。"""
         stale_cutoff = _seconds_ago_iso(max(0, int(stale_running_seconds)))
@@ -1874,6 +1948,114 @@ class SellerSpriteTaskQueueStore:
             ).fetchall()
         return [_account_event_to_dict(row) for row in rows]
 
+    def quarantine_account(
+        self,
+        *,
+        account_key: str,
+        credential_version: str,
+        reason: str,
+        error_code: str,
+        ttl_seconds: int,
+    ) -> None:
+        """在有限时间内隔离一个已确认认证失败的凭据版本。
+
+        参数：
+            account_key: 脱敏账号身份散列。
+            credential_version: 凭据版本散列。
+            reason: 隔离原因。
+            error_code: 触发隔离的稳定错误码。
+            ttl_seconds: 隔离有效秒数。
+
+        返回：
+            无。
+        """
+        now_at = datetime.now(timezone.utc)
+        now = now_at.isoformat(timespec="seconds")
+        expires_at = (
+            now_at + timedelta(seconds=max(1, int(ttl_seconds)))
+        ).isoformat(timespec="seconds")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO seller_sprite_account_quarantine (
+                    account_key, credential_version, reason, first_failed_at,
+                    last_failed_at, expires_at, failure_count, last_error_code
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                ON CONFLICT(account_key, credential_version) DO UPDATE SET
+                    reason = excluded.reason,
+                    last_failed_at = excluded.last_failed_at,
+                    expires_at = excluded.expires_at,
+                    failure_count = seller_sprite_account_quarantine.failure_count + 1,
+                    last_error_code = excluded.last_error_code
+                """,
+                (
+                    account_key,
+                    credential_version,
+                    reason,
+                    now,
+                    now,
+                    expires_at,
+                    error_code,
+                ),
+            )
+
+    def is_account_quarantined(
+        self,
+        *,
+        account_key: str,
+        credential_version: str,
+    ) -> bool:
+        """判断账号当前凭据版本是否仍处于认证失败隔离期。
+
+        参数：
+            account_key: 脱敏账号身份散列。
+            credential_version: 凭据版本散列。
+
+        返回：
+            仍处于有效隔离期时返回 ``True``。
+        """
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM seller_sprite_account_quarantine WHERE expires_at <= ?",
+                (now,),
+            )
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM seller_sprite_account_quarantine
+                WHERE account_key = ? AND credential_version = ? AND expires_at > ?
+                """,
+                (account_key, credential_version, now),
+            ).fetchone()
+        return row is not None
+
+    def list_active_account_quarantines(self) -> set[tuple[str, str]]:
+        """返回仍有效的账号与凭据版本隔离键集合。
+
+        返回：
+            账号身份散列与凭据版本散列组成的集合。
+        """
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM seller_sprite_account_quarantine WHERE expires_at <= ?",
+                (now,),
+            )
+            rows = conn.execute(
+                """
+                SELECT account_key, credential_version
+                FROM seller_sprite_account_quarantine
+                WHERE expires_at > ?
+                """,
+                (now,),
+            ).fetchall()
+        return {
+            (str(row["account_key"]), str(row["credential_version"]))
+            for row in rows
+        }
+
     def _record_claim_progress(self, conn: sqlite3.Connection, task_id: int) -> None:
         """在领取事务中初始化 claimed 进度并追加首条时间线。"""
         now = _now_iso()
@@ -2186,6 +2368,25 @@ class SellerSpriteTaskQueueStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS seller_sprite_account_quarantine (
+                    account_key TEXT NOT NULL,
+                    credential_version TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    first_failed_at TEXT NOT NULL,
+                    last_failed_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    failure_count INTEGER NOT NULL DEFAULT 1,
+                    last_error_code TEXT NOT NULL,
+                    PRIMARY KEY (account_key, credential_version)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_seller_sprite_account_quarantine_expires_at "
+                "ON seller_sprite_account_quarantine(expires_at)"
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS seller_sprite_task_progress_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     job_id TEXT NOT NULL,
@@ -2382,6 +2583,11 @@ def _stage_for_status(status: str) -> str:
 def _now_iso() -> str:
     """返回带时区的当前时间字符串。"""
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def _utc_now_iso() -> str:
+    """返回适合数据库按字典序比较的 UTC ISO 时间。"""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _seconds_ago_iso(seconds: int) -> str:

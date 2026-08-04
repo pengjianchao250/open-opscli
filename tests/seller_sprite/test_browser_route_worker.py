@@ -61,6 +61,103 @@ def test_close_browser_route_worker_closes_and_removes_account_session():
     _run(scenario())
 
 
+def test_authentication_failure_close_quarantines_persistent_profile(tmp_path):
+    async def scenario():
+        worker_module._WORKERS.clear()
+        settings = SellerSpriteSettings(browser_profile_dir=tmp_path / "profiles")
+        account = SellerSpriteAccount(
+            name="account-1",
+            username="user@example.com",
+            password="secret",
+        )
+        profile_dir = settings.browser_profile_dir / "account-1-a542c5d5f236"
+        profile_dir.mkdir(parents=True)
+        (profile_dir / "Cookies").write_text("diagnostic-state", encoding="utf-8")
+        worker_module.get_browser_route_worker(settings=settings, account=account)
+
+        closed = await worker_module.close_browser_route_worker(
+            settings=settings,
+            account=account,
+            reason="authentication_failed",
+        )
+
+        quarantined = list((settings.browser_profile_dir / ".quarantine").iterdir())
+        assert closed is True
+        assert not profile_dir.exists()
+        assert len(quarantined) == 1
+        assert quarantined[0].name.startswith("account-1-a542c5d5f236-")
+        assert (quarantined[0] / "Cookies").read_text(encoding="utf-8") == "diagnostic-state"
+
+    _run(scenario())
+
+
+def test_profile_quarantine_waits_until_last_account_owner_closes(tmp_path):
+    async def scenario():
+        worker_module._WORKERS.clear()
+        settings = SellerSpriteSettings(browser_profile_dir=tmp_path / "profiles")
+        account = SellerSpriteAccount(
+            name="account-1",
+            username="user@example.com",
+            password="secret",
+        )
+        profile_dir = settings.browser_profile_dir / "account-1-a542c5d5f236"
+        profile_dir.mkdir(parents=True)
+        worker_module.get_browser_route_worker(
+            settings=settings,
+            account=account,
+            owner_id="scheduler-a",
+        )
+        worker_module.get_browser_route_worker(
+            settings=settings,
+            account=account,
+            owner_id="scheduler-b",
+        )
+
+        await worker_module.close_browser_route_worker(
+            settings=settings,
+            account=account,
+            reason="authentication_failed",
+            owner_id="scheduler-a",
+        )
+        assert profile_dir.exists()
+
+        await worker_module.close_browser_route_worker(
+            settings=settings,
+            account=account,
+            reason="authentication_failed",
+            owner_id="scheduler-b",
+        )
+        assert not profile_dir.exists()
+
+    _run(scenario())
+
+
+def test_profile_quarantine_does_not_move_profile_locked_by_other_process(tmp_path):
+    async def scenario():
+        worker_module._WORKERS.clear()
+        settings = SellerSpriteSettings(browser_profile_dir=tmp_path / "profiles")
+        account = SellerSpriteAccount(
+            name="account-1",
+            username="user@example.com",
+            password="secret",
+        )
+        profile_dir = settings.browser_profile_dir / "account-1-a542c5d5f236"
+        profile_dir.mkdir(parents=True)
+        (profile_dir / "SingletonLock").write_text("locked", encoding="utf-8")
+
+        closed = await worker_module.close_browser_route_worker(
+            settings=settings,
+            account=account,
+            reason="authentication_failed",
+        )
+
+        assert closed is False
+        assert profile_dir.exists()
+        assert not (settings.browser_profile_dir / ".quarantine").exists()
+
+    _run(scenario())
+
+
 def test_close_all_browser_route_workers_releases_healthy_sessions(tmp_path):
     """调度器关闭时应统一释放当前事件循环中的健康会话。"""
 

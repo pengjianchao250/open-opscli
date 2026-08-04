@@ -84,6 +84,97 @@ def test_account_pool_keeps_same_failed_credentials_unavailable_until_password_c
     assert pool.working_accounts == (changed,)
 
 
+def test_account_pool_restores_persisted_quarantine_after_process_restart(tmp_path):
+    from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    db_path = tmp_path / "queue.sqlite3"
+    accounts = _accounts(2)
+    first_store = SellerSpriteTaskQueueStore(db_path=db_path)
+    first_pool = SellerSpriteAccountPool(quarantine_store=first_store)
+    first_pool.load(accounts)
+    first_pool.mark_unavailable(accounts[0])
+
+    restarted_store = SellerSpriteTaskQueueStore(db_path=db_path)
+    restarted_pool = SellerSpriteAccountPool(quarantine_store=restarted_store)
+    restarted_pool.load(accounts)
+
+    assert restarted_pool.working_accounts == (accounts[1],)
+    assert restarted_pool.standby_accounts == ()
+
+    changed = SellerSpriteAccount(
+        name=accounts[0].name,
+        username=accounts[0].username,
+        password="rotated-secret",
+    )
+    restarted_pool.load([changed, accounts[1]])
+
+    assert restarted_pool.working_accounts == (changed,)
+    assert restarted_pool.standby_accounts == (accounts[1],)
+
+
+def test_account_pool_releases_expired_persisted_quarantine_on_refresh():
+    from opscli.seller_sprite.services.account_pool import (
+        SellerSpriteAccountPool,
+        seller_sprite_account_attempt_key,
+    )
+
+    accounts = _accounts(2)
+
+    class MutableQuarantineStore:
+        def __init__(self):
+            self.active = {seller_sprite_account_attempt_key(accounts[0])}
+
+        def list_active_account_quarantines(self):
+            return set(self.active)
+
+        def quarantine_account(self, **kwargs):
+            return None
+
+    store = MutableQuarantineStore()
+    pool = SellerSpriteAccountPool(quarantine_store=store)
+    pool.load(accounts)
+    assert accounts[0] not in pool.working_accounts + pool.standby_accounts
+
+    store.active.clear()
+    pool.refresh(accounts)
+
+    assert accounts[0] in pool.standby_accounts
+
+
+def test_account_pool_keeps_failover_available_when_quarantine_write_fails():
+    from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool
+
+    accounts = _accounts(2)
+
+    class FailingQuarantineStore:
+        def list_active_account_quarantines(self):
+            return set()
+
+        def quarantine_account(self, **kwargs):
+            raise OSError("quarantine store unavailable")
+
+    pool = SellerSpriteAccountPool(quarantine_store=FailingQuarantineStore())
+    pool.load(accounts)
+
+    persisted = pool.mark_unavailable(accounts[0])
+
+    assert persisted is False
+    assert accounts[0] not in pool.working_accounts + pool.standby_accounts
+
+
+def test_account_pool_only_reports_all_attempted_after_each_known_account_ran():
+    from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool
+
+    accounts = _accounts(3)
+    pool = SellerSpriteAccountPool()
+    pool.load(accounts)
+
+    assert not pool.all_accounts_attempted({accounts[0]})
+    assert not pool.all_accounts_attempted({accounts[0], accounts[2]})
+    assert pool.all_accounts_attempted(set(accounts))
+
+
 def test_account_pool_prioritizes_changed_password_for_same_identity():
     """同一身份换新密码后，应先于其他冷备用账号参加当前任务接替。"""
     from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool

@@ -3,12 +3,52 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+from typing import Protocol
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
-
+from opscli.seller_sprite.domain.constants import ACCOUNT_FAILURE_REASON_AUTHENTICATION
 
 # 并发上限固定为3，避免账号接口返回过多账号时无界创建浏览器会话。
 DEFAULT_MAX_WORKING_ACCOUNTS = 3
+# 明确认证失败后隔离 24 小时，既阻断重启重试风暴，也允许临时误判自动恢复。
+DEFAULT_ACCOUNT_QUARANTINE_TTL_SECONDS = 86400
+logger = logging.getLogger(__name__)
+
+
+class AccountQuarantineStore(Protocol):
+    """账号池使用的持久隔离存储接口。"""
+
+    def list_active_account_quarantines(self) -> set[tuple[str, str]]:
+        """返回有效隔离键集合。
+
+        返回：
+            账号身份散列与凭据版本散列组成的集合。
+        """
+        ...
+
+    def quarantine_account(
+        self,
+        *,
+        account_key: str,
+        credential_version: str,
+        reason: str,
+        error_code: str,
+        ttl_seconds: int,
+    ) -> None:
+        """保存账号隔离状态。
+
+        参数：
+            account_key: 脱敏账号身份散列。
+            credential_version: 凭据版本散列。
+            reason: 隔离原因。
+            error_code: 触发隔离的稳定错误码。
+            ttl_seconds: 隔离有效秒数。
+
+        返回：
+            无。
+        """
+        ...
 
 
 def seller_sprite_account_key(account: SellerSpriteAccount) -> str:
@@ -39,11 +79,30 @@ def mask_seller_sprite_username(username: str) -> str:
 class SellerSpriteAccountPool:
     """按接口顺序管理最多三个工作账号和冷备用账号。"""
 
-    def __init__(self, *, max_working_accounts: int = DEFAULT_MAX_WORKING_ACCOUNTS) -> None:
+    def __init__(
+        self,
+        *,
+        max_working_accounts: int = DEFAULT_MAX_WORKING_ACCOUNTS,
+        quarantine_store: AccountQuarantineStore | None = None,
+        quarantine_ttl_seconds: int = DEFAULT_ACCOUNT_QUARANTINE_TTL_SECONDS,
+    ) -> None:
+        """创建账号池。
+
+        参数：
+            max_working_accounts: 最大并行工作账号数。
+            quarantine_store: 可选的持久隔离存储。
+            quarantine_ttl_seconds: 明确认证失败后的隔离秒数。
+
+        返回：
+            无。
+        """
         self.max_working_accounts = max(1, int(max_working_accounts))
+        self.quarantine_store = quarantine_store
+        self.quarantine_ttl_seconds = max(1, int(quarantine_ttl_seconds))
         self._working: list[SellerSpriteAccount] = []
         self._standby: list[SellerSpriteAccount] = []
         self._unavailable_versions: set[tuple[str, str]] = set()
+        self._persisted_unavailable_versions: set[tuple[str, str]] = set()
         self._account_order: dict[str, int] = {}
         self._target_working_count = 0
 
@@ -64,29 +123,13 @@ class SellerSpriteAccountPool:
 
     def load(self, accounts: list[SellerSpriteAccount]) -> None:
         """使用首次账号接口结果建立工作池和冷备用池。"""
-        ordered = _deduplicate_accounts(accounts)
-        self._account_order = {
-            seller_sprite_account_key(account): index
-            for index, account in enumerate(ordered)
-        }
-        count = len(ordered)
-        self._target_working_count = (
-            0 if count == 0 else min(self.max_working_accounts, max(1, count - 1))
-        )
+        ordered = self._prepare_accounts(accounts)
         self._working = ordered[: self._target_working_count]
         self._standby = ordered[self._target_working_count :]
 
     def refresh(self, accounts: list[SellerSpriteAccount]) -> None:
         """合并刷新结果，并让密码已变化的失效账号恢复候选资格。"""
-        ordered = _deduplicate_accounts(accounts)
-        self._account_order = {
-            seller_sprite_account_key(account): index
-            for index, account in enumerate(ordered)
-        }
-        count = len(ordered)
-        self._target_working_count = (
-            0 if count == 0 else min(self.max_working_accounts, max(1, count - 1))
-        )
+        ordered = self._prepare_accounts(accounts)
         by_key = {seller_sprite_account_key(account): account for account in ordered}
 
         # 保留仍存在且凭证版本可用的工作账号，避免刷新时无故重建健康会话。
@@ -110,12 +153,49 @@ class SellerSpriteAccountPool:
             and not self._is_unavailable(account)
         ]
 
-    def mark_unavailable(self, account: SellerSpriteAccount) -> None:
-        """将当前凭证版本标记为不可用并移出工作池和备用池。"""
+    def mark_unavailable(self, account: SellerSpriteAccount) -> bool:
+        """将当前凭证版本移出账号池，并尽力持久化隔离。
+
+        参数：
+            account: 已确认认证失败的账号凭据。
+
+        返回：
+            持久化成功或无需持久化时返回 ``True``；降级为进程内隔离时返回 ``False``。
+        """
         key = seller_sprite_account_key(account)
-        self._unavailable_versions.add((key, _credential_version(account)))
-        self._working = [item for item in self._working if seller_sprite_account_key(item) != key]
-        self._standby = [item for item in self._standby if seller_sprite_account_key(item) != key]
+        credential_version = _credential_version(account)
+        attempt_key = (key, credential_version)
+        self._unavailable_versions.add(attempt_key)
+        persisted = self.quarantine_store is None
+        try:
+            if self.quarantine_store is not None:
+                self.quarantine_store.quarantine_account(
+                    account_key=key,
+                    credential_version=credential_version,
+                    reason=ACCOUNT_FAILURE_REASON_AUTHENTICATION,
+                    error_code="SELLER_SPRITE_AUTHENTICATION_ERROR",
+                    ttl_seconds=self.quarantine_ttl_seconds,
+                )
+                self._persisted_unavailable_versions.add(attempt_key)
+                persisted = True
+        except Exception as exc:  # noqa: BLE001
+            # SQLite 隔离是增强保护，写失败不能打断已经完成的任务原子改绑。
+            logger.warning(
+                "卖家精灵账号隔离持久化失败，已降级为进程内隔离：error=%s",
+                type(exc).__name__,
+            )
+        finally:
+            self._working = [
+                item
+                for item in self._working
+                if seller_sprite_account_key(item) != key
+            ]
+            self._standby = [
+                item
+                for item in self._standby
+                if seller_sprite_account_key(item) != key
+            ]
+        return persisted
 
     def take_standby(
         self,
@@ -165,12 +245,66 @@ class SellerSpriteAccountPool:
             activated.append(replacement)
         return tuple(activated)
 
+    def all_accounts_attempted(
+        self,
+        attempted_accounts: set[SellerSpriteAccount],
+    ) -> bool:
+        """判断当前全部已知账号凭据是否真正执行过认证。
+
+        参数：
+            attempted_accounts: 当前任务已经执行过认证的账号集合。
+
+        返回：
+            存在已知账号且每个凭据版本均被尝试过时返回 ``True``。
+        """
+        known_accounts = self._working + self._standby
+        attempted_versions = {
+            seller_sprite_account_attempt_key(account)
+            for account in attempted_accounts
+        }
+        return bool(known_accounts) and all(
+            seller_sprite_account_attempt_key(account) in attempted_versions
+            for account in known_accounts
+        )
+
     def _is_unavailable(self, account: SellerSpriteAccount) -> bool:
         """判断当前账号凭证版本是否已确认不可用。"""
         return (
             seller_sprite_account_key(account),
             _credential_version(account),
         ) in self._unavailable_versions
+
+    def _reload_persisted_quarantines(self) -> None:
+        """合并仍有效的持久隔离，使进程重启不丢失认证失败状态。"""
+        if self.quarantine_store is None:
+            return
+        active = self.quarantine_store.list_active_account_quarantines()
+        self._unavailable_versions.difference_update(
+            self._persisted_unavailable_versions
+        )
+        self._unavailable_versions.update(active)
+        self._persisted_unavailable_versions = active
+
+    def _prepare_accounts(
+        self,
+        accounts: list[SellerSpriteAccount],
+    ) -> list[SellerSpriteAccount]:
+        """统一过滤隔离账号并计算工作槽目标，避免加载与刷新规则漂移。"""
+        self._reload_persisted_quarantines()
+        ordered = [
+            account
+            for account in _deduplicate_accounts(accounts)
+            if not self._is_unavailable(account)
+        ]
+        self._account_order = {
+            seller_sprite_account_key(account): index
+            for index, account in enumerate(ordered)
+        }
+        count = len(ordered)
+        self._target_working_count = (
+            0 if count == 0 else min(self.max_working_accounts, max(1, count - 1))
+        )
+        return ordered
 
 
 def _deduplicate_accounts(accounts: list[SellerSpriteAccount]) -> list[SellerSpriteAccount]:

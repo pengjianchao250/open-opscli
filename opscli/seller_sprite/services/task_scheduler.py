@@ -8,21 +8,29 @@ import json
 import logging
 import threading
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from uuid import uuid4
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
-from opscli.seller_sprite.accounts import SellerSpriteAccount, SellerSpriteAccountProvider
+from opscli.seller_sprite.accounts import (
+    SellerSpriteAccount,
+    SellerSpriteAccountProvider,
+)
 from opscli.seller_sprite.api.scenarios import get_scenario
 from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
+from opscli.seller_sprite.domain.constants import ACCOUNT_FAILURE_REASON_AUTHENTICATION
 from opscli.seller_sprite.domain.exceptions import (
+    SellerSpriteAccountSourceUnavailableError,
     SellerSpriteAccountUnavailableError,
+    SellerSpriteAllAccountsAuthFailedError,
+    SellerSpriteAllStandbyBusyError,
     SellerSpriteApiError,
     SellerSpriteAuthenticationError,
     SellerSpriteConfigError,
     SellerSpriteDedicatedAccountUnavailableError,
+    SellerSpriteNoEligibleAccountError,
     SellerSpriteTaskTimeoutError,
 )
 from opscli.seller_sprite.domain.models import (
@@ -36,7 +44,10 @@ from opscli.seller_sprite.services.account_pool import (
     seller_sprite_account_key,
 )
 from opscli.seller_sprite.services.api_manager import SellerSpriteApiManager, _build_job_id
-from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+from opscli.seller_sprite.services.task_queue_store import (
+    ACCOUNT_ROUTE_SHARED_POOL,
+    SellerSpriteTaskQueueStore,
+)
 from opscli.seller_sprite.services.task_status import error_to_dict
 
 
@@ -46,6 +57,16 @@ DEFAULT_WORKER_KEY = "default"
 DEFAULT_SESSION_REAP_INTERVAL_SECONDS = 60.0
 _SCHEDULERS: dict[tuple[int, str], "SellerSpriteTaskScheduler"] = {}
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _ReplacementSelection:
+    """一次备用账号选择结果，并保留账号源刷新状态。"""
+
+    account: SellerSpriteAccount | None
+    source_unavailable: bool = False
+    no_eligible_account: bool = False
+    all_accounts_attempted: bool = False
 
 
 class SellerSpriteTaskScheduler:
@@ -106,7 +127,7 @@ class SellerSpriteTaskScheduler:
         self._listing_worker_task: asyncio.Task | None = None
         self._listing_worker_account_key: str | None = None
         self._user_binding_tasks: set[asyncio.Task] = set()
-        self._account_pool = SellerSpriteAccountPool()
+        self._account_pool = SellerSpriteAccountPool(quarantine_store=self.store)
         self._pool_lock = asyncio.Lock()
         self._event_recorder = SellerSpriteAccountEventRecorder(store=self.store)
         # 进程级随机标识同时约束 SQLite 执行租约和 browser 会话所有权。
@@ -496,6 +517,17 @@ class SellerSpriteTaskScheduler:
         try:
             provider = self._ensure_account_provider(refresh_auth=True)
             accounts = provider.list_accounts()
+        except (
+            SellerSpriteAccountSourceUnavailableError,
+            SellerSpriteNoEligibleAccountError,
+        ) as exc:
+            # 明确账号源错误必须关闭排队任务，避免生产环境无 Worker 时永久卡在 queued。
+            self._event_recorder.record_account_fetch_failure(
+                error=exc,
+                next_action="fail_queued_shared_pool_tasks",
+            )
+            self._fail_queued_shared_pool_tasks(exc)
+            accounts = []
         except Exception as exc:
             # 首次账号接口失败时保持任务 queued，由 supervisor 后续继续刷新。
             self._event_recorder.record_account_fetch_failure(
@@ -690,6 +722,17 @@ class SellerSpriteTaskScheduler:
         try:
             provider = self._ensure_account_provider(refresh_auth=True)
             accounts = provider.list_accounts(refresh=True)
+        except (
+            SellerSpriteAccountSourceUnavailableError,
+            SellerSpriteNoEligibleAccountError,
+        ) as exc:
+            self._event_recorder.record_account_fetch_failure(
+                error=exc,
+                next_action="fail_queued_shared_pool_tasks",
+            )
+            self._fail_queued_shared_pool_tasks(exc)
+            self._last_account_refresh_at = time.monotonic()
+            return
         except Exception as exc:
             self._event_recorder.record_account_fetch_failure(
                 error=exc,
@@ -856,9 +899,14 @@ class SellerSpriteTaskScheduler:
                     failover_count=failover_count,
                     next_action="refresh_accounts",
                 )
-                replacement = await self._select_replacement_account(
+                excluded_accounts: set[SellerSpriteAccount] = set()
+                selection = await self._select_replacement_account(
                     attempted_accounts=attempted_accounts,
+                    excluded_accounts=excluded_accounts,
                 )
+                replacement = selection.account
+                source_unavailable = selection.source_unavailable
+                saw_replacement_busy = False
                 reassigned = None
                 stale_attempt = False
                 while replacement is not None:
@@ -887,7 +935,7 @@ class SellerSpriteTaskScheduler:
                             await self._mark_account_unavailable(account)
                             await self._close_account_session(
                                 account,
-                                reason="authentication_failed",
+                                reason=ACCOUNT_FAILURE_REASON_AUTHENTICATION,
                             )
                         return None
                     if reassignment.outcome == "reassigned":
@@ -898,16 +946,41 @@ class SellerSpriteTaskScheduler:
                     if reassignment.outcome == "stale_attempt":
                         stale_attempt = True
                         break
-                    attempted_accounts.add(replacement)
-                    replacement = await self._select_replacement_account(
+                    saw_replacement_busy = True
+                    # 账号占用冲突没有执行登录，必须与真实认证尝试分开统计。
+                    excluded_accounts.add(replacement)
+                    selection = await self._select_replacement_account(
                         attempted_accounts=attempted_accounts,
+                        excluded_accounts=excluded_accounts,
+                    )
+                    replacement = selection.account
+                    source_unavailable = (
+                        source_unavailable or selection.source_unavailable
                     )
                 if stale_attempt:
                     return None
                 if replacement is None or reassigned is None:
-                    unavailable = SellerSpriteAccountUnavailableError(
-                        "卖家精灵工作账号失效，且没有可用备用账号"
-                    )
+                    # 失败分类按可行动性排序：先报告资源占用，再报告账号源，最后判断凭据是否真正耗尽。
+                    if saw_replacement_busy:
+                        unavailable = SellerSpriteAllStandbyBusyError(
+                            "卖家精灵工作账号失效，当前可用备用账号均被占用"
+                        )
+                    elif source_unavailable:
+                        unavailable = SellerSpriteAccountSourceUnavailableError(
+                            "卖家精灵工作账号失效，且远程账号源刷新失败"
+                        )
+                    elif selection.no_eligible_account:
+                        unavailable = SellerSpriteNoEligibleAccountError(
+                            "卖家精灵工作账号失效，且远程账号源没有可用账号"
+                        )
+                    elif selection.all_accounts_attempted:
+                        unavailable = SellerSpriteAllAccountsAuthFailedError(
+                            "卖家精灵当前任务已耗尽全部可尝试账号凭据"
+                        )
+                    else:
+                        unavailable = SellerSpriteAccountUnavailableError(
+                            "卖家精灵工作账号失效，且没有可用备用账号"
+                        )
                     committed = await self._fail_generic_job(
                         job_id=job_id,
                         account_key=account_key,
@@ -919,7 +992,7 @@ class SellerSpriteTaskScheduler:
                         await self._mark_account_unavailable(account)
                         await self._close_account_session(
                             account,
-                            reason="authentication_failed",
+                            reason=ACCOUNT_FAILURE_REASON_AUTHENTICATION,
                         )
                     return None
                 if not self._refresh_tracked_attempt(
@@ -929,7 +1002,10 @@ class SellerSpriteTaskScheduler:
                     return None
                 await self._mark_account_unavailable(account)
                 self._generic_worker_accounts[worker_key] = replacement
-                await self._close_account_session(account, reason="authentication_failed")
+                await self._close_account_session(
+                    account,
+                    reason=ACCOUNT_FAILURE_REASON_AUTHENTICATION,
+                )
                 account = replacement
                 status = reassigned
 
@@ -937,13 +1013,24 @@ class SellerSpriteTaskScheduler:
         self,
         *,
         attempted_accounts: set[SellerSpriteAccount],
-    ) -> SellerSpriteAccount | None:
+        excluded_accounts: set[SellerSpriteAccount],
+    ) -> _ReplacementSelection:
         """刷新账号接口后按原顺序选择未被当前任务尝试的冷备用。"""
         async with self._pool_lock:
+            source_unavailable = False
+            no_eligible_account = False
             try:
                 provider = self._ensure_account_provider(refresh_auth=True)
                 refreshed = provider.list_accounts(refresh=True)
+            except SellerSpriteNoEligibleAccountError as exc:
+                no_eligible_account = True
+                self._event_recorder.record_account_fetch_failure(
+                    error=exc,
+                    next_action="try_cached_standby",
+                )
+                refreshed = []
             except Exception as exc:
+                source_unavailable = True
                 self._event_recorder.record_account_fetch_failure(
                     error=exc,
                     next_action="try_cached_standby",
@@ -951,8 +1038,18 @@ class SellerSpriteTaskScheduler:
                 refreshed = []
             if refreshed:
                 self._account_pool.refresh(refreshed)
-            return self._account_pool.take_standby(
-                attempted_accounts=attempted_accounts
+            elif not source_unavailable:
+                no_eligible_account = True
+            selection_exclusions = attempted_accounts | excluded_accounts
+            return _ReplacementSelection(
+                account=self._account_pool.take_standby(
+                    attempted_accounts=selection_exclusions
+                ),
+                source_unavailable=source_unavailable,
+                no_eligible_account=no_eligible_account,
+                all_accounts_attempted=self._account_pool.all_accounts_attempted(
+                    attempted_accounts
+                ),
             )
 
     async def _mark_account_unavailable(
@@ -962,6 +1059,28 @@ class SellerSpriteTaskScheduler:
         """仅在当前代际成功收口后，将认证失败凭证移出账号池。"""
         async with self._pool_lock:
             self._account_pool.mark_unavailable(account)
+
+    def _fail_queued_shared_pool_tasks(self, error: Exception) -> None:
+        """使用明确账号源错误关闭当前排队的公共账号池任务。
+
+        参数：
+            error: 账号源不可用或没有合格账号异常。
+
+        返回：
+            无。
+        """
+        error_payload = error_to_dict(error)
+        for job_id in self.store.list_queued_shared_pool_job_ids():
+            has_mcp_run = self._has_mcp_run(job_id, fail_closed=False)
+            committed = self.store.fail_queued_task(
+                job_id=job_id,
+                error_payload=error_payload,
+            )
+            if not committed:
+                continue
+            if has_mcp_run:
+                self.store.finish_mcp_run_failed(job_id, error_payload)
+            self._runtime_auth.pop(job_id, None)
 
     def _is_working_account(self, account: SellerSpriteAccount) -> bool:
         """判断账号当前是否仍占用工作槽；缩容账号会在任务边界退出。"""
@@ -1080,6 +1199,7 @@ class SellerSpriteTaskScheduler:
             self.account_provider = SellerSpriteAccountProvider(
                 self.settings,
                 integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
+                allow_local_fallback=False,
             )
         return self.account_provider
 
@@ -1249,7 +1369,7 @@ class SellerSpriteTaskScheduler:
             ):
                 await self._close_account_session(
                     account,
-                    reason="authentication_failed",
+                    reason=ACCOUNT_FAILURE_REASON_AUTHENTICATION,
                 )
         finally:
             self._runtime_auth.pop(job_id, None)
