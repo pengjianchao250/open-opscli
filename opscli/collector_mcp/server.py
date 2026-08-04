@@ -7,6 +7,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from opscli.collector_mcp import health
 from opscli.collector_mcp.profile import load_profile
 from opscli.collector_mcp.registry import resolve_bundles, validate_bundle_tools
+from opscli.collector_mcp.storage.runtime import collection_storage_lifespan
 from opscli.mcp.app_factory import create_mcp_app, run_mcp_app
 from opscli.mcp.tool_catalog import ToolCatalog
 from opscli.mcp.tools.auth import auth_is_authenticated, auth_mcp_login
@@ -36,6 +37,7 @@ health.configure_health(profile, bundles)
 async def _collector_lifespan(_server):
     """按稳定顺序启动 Bundle，并在关闭时逆序释放资源。"""
     async with AsyncExitStack() as stack:
+        await stack.enter_async_context(collection_storage_lifespan())
         for bundle in bundles:
             await stack.enter_async_context(bundle.lifespan())
         yield {}

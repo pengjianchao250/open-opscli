@@ -18,8 +18,8 @@ TASK_KIND_GENERIC = "generic"
 TASK_KIND_LISTING_ANALYSIS = "listing_analysis"
 ACCOUNT_ROUTE_SHARED_POOL = "shared_pool"
 ACCOUNT_ROUTE_USER_BINDING = "user_binding"
-# 版本 7 增加按账号身份与凭据版本持久化的认证失败隔离。
-QUEUE_SCHEMA_VERSION = 7
+# 版本 8 增加成功事件单调序号，保证数据沉淀对账不受任务乱序完成影响。
+QUEUE_SCHEMA_VERSION = 8
 TASK_PROGRESS_STAGES = {
     "claimed",
     "resolving",
@@ -624,6 +624,10 @@ class SellerSpriteTaskQueueStore:
         now = _now_iso()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            previous = conn.execute(
+                "SELECT status FROM seller_sprite_task_queue WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
             cursor = conn.execute(
                 """
                 UPDATE seller_sprite_task_queue
@@ -656,6 +660,12 @@ class SellerSpriteTaskQueueStore:
                 ),
             )
             if int(cursor.rowcount or 0) == 1:
+                if previous is not None and str(previous["status"]) != "succeeded":
+                    self._append_collection_success_event(
+                        conn,
+                        job_id=job_id,
+                        succeeded_at=now,
+                    )
                 self._append_current_progress_event(
                     conn,
                     job_id=job_id,
@@ -718,6 +728,11 @@ class SellerSpriteTaskQueueStore:
             if int(cursor.rowcount or 0) != 1:
                 conn.rollback()
                 return False
+            self._append_collection_success_event(
+                conn,
+                job_id=job_id,
+                succeeded_at=now,
+            )
             self._append_current_progress_event(
                 conn,
                 job_id=job_id,
@@ -795,6 +810,11 @@ class SellerSpriteTaskQueueStore:
                 if int(mcp_cursor.rowcount or 0) != 1:
                     conn.rollback()
                     raise ValueError(f"MCP 调用记录不存在：{job_id}")
+            self._append_collection_success_event(
+                conn,
+                job_id=job_id,
+                succeeded_at=now,
+            )
             self._append_current_progress_event(
                 conn,
                 job_id=job_id,
@@ -1519,6 +1539,44 @@ class SellerSpriteTaskQueueStore:
             ).fetchall()
         return [self._row_to_status(row) for row in rows]
 
+    def list_succeeded_for_collection_storage(
+        self,
+        *,
+        cutover_at: str,
+        cursor: int,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """按成功事件序号读取 live cutover 之后的成功任务，供 Collector 对账。"""
+        safe_limit = max(1, min(int(limit), 1000))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT q.id, q.job_id, q.queue_scope, q.task_kind, q.status,
+                       q.request_json, q.root_dir, q.created_at, q.started_at,
+                       q.finished_at, q.assigned_account, q.assigned_account_key,
+                       q.worker_key, q.assignment_generation, q.failover_count,
+                       q.last_error_code, q.last_failed_account_key, q.retry_reason,
+                       q.result_path, q.row_count, q.export_json, q.error_json,
+                       q.execution_owner, q.heartbeat_at, q.lease_expires_at,
+                       q.remote_task_id, q.progress_stage, q.progress_at,
+                       q.progress_sequence, e.id AS collection_cursor
+                FROM seller_sprite_collection_success_events AS e
+                JOIN seller_sprite_task_queue AS q ON q.job_id = e.job_id
+                WHERE q.status = 'succeeded'
+                  AND e.id > ?
+                  AND datetime(e.succeeded_at) >= datetime(?)
+                ORDER BY e.id ASC
+                LIMIT ?
+                """,
+                (max(0, int(cursor)), cutover_at, safe_limit),
+            ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            status = self._row_to_status(row)
+            status["collection_cursor"] = int(row["collection_cursor"])
+            results.append(status)
+        return results
+
     def list_queued_shared_pool_job_ids(self) -> tuple[str, ...]:
         """列出全部排队中的公共账号池任务。
 
@@ -2133,6 +2191,23 @@ class SellerSpriteTaskQueueStore:
             ),
         )
 
+    def _append_collection_success_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        job_id: str,
+        succeeded_at: str,
+    ) -> None:
+        """原子记录任务首次成功顺序，供数据沉淀使用单调游标补偿。"""
+        conn.execute(
+            """
+            INSERT INTO seller_sprite_collection_success_events (job_id, succeeded_at)
+            VALUES (?, ?)
+            ON CONFLICT(job_id) DO NOTHING
+            """,
+            (job_id, succeeded_at),
+        )
+
     def _ensure_schema(self) -> None:
         """在单个立即事务内初始化或升级 SQLite 表结构。"""
         with self._connect() as conn:
@@ -2179,6 +2254,24 @@ class SellerSpriteTaskQueueStore:
                     progress_at TEXT NULL,
                     progress_sequence INTEGER NOT NULL DEFAULT 0
                 )
+                """
+            )
+            # 成功事件只记录升级后的新完成任务，不回填历史 succeeded，保持 live cutover 边界。
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS seller_sprite_collection_success_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL UNIQUE,
+                    succeeded_at TEXT NOT NULL,
+                    FOREIGN KEY (job_id) REFERENCES seller_sprite_task_queue(job_id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS ix_seller_sprite_collection_success_events
+                ON seller_sprite_collection_success_events(succeeded_at, id)
                 """
             )
             columns = {row[1] for row in conn.execute("PRAGMA table_info(seller_sprite_task_queue)")}

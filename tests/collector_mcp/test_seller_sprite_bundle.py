@@ -80,3 +80,61 @@ def test_seller_sprite_bundle_rejects_business_access_when_not_ready(monkeypatch
         "message": "卖家精灵采集模块尚未就绪，请先检查 Collector 模块健康状态",
         "module": "seller_sprite",
     }
+
+
+def test_seller_sprite_bundle_registers_collector_storage_adapter(monkeypatch):
+    calls = []
+
+    class FakeScheduler:
+        collection_submitter = None
+        store = object()
+
+        async def start(self):
+            calls.append("scheduler:start")
+
+        async def close(self):
+            calls.append("scheduler:close")
+
+    class FakeRuntime:
+        settings = type("Settings", (), {"enabled": True, "data_environment": "debug"})()
+
+        def register_parser(self, parser):
+            calls.append(f"parser:register:{parser.source_system}")
+
+        def unregister_parser(self, source_system):
+            calls.append(f"parser:unregister:{source_system}")
+
+        def register_reconciler(self, reconciler):
+            calls.append(f"reconciler:register:{reconciler.source_system}")
+
+        def unregister_reconciler(self, source_system):
+            calls.append(f"reconciler:unregister:{source_system}")
+
+        def submit(self, submission):
+            return True
+
+    scheduler = FakeScheduler()
+    runtime = FakeRuntime()
+    monkeypatch.setattr(
+        "opscli.seller_sprite.services.get_task_scheduler",
+        lambda: scheduler,
+    )
+    monkeypatch.setattr(
+        "opscli.collector_mcp.storage.runtime.get_collection_storage_runtime",
+        lambda: runtime,
+    )
+
+    async def scenario():
+        async with mcp_bundle.lifespan():
+            assert scheduler.collection_submitter is not None
+
+    asyncio.run(scenario())
+
+    assert calls == [
+        "parser:register:seller_sprite",
+        "reconciler:register:seller_sprite",
+        "scheduler:start",
+        "scheduler:close",
+        "reconciler:unregister:seller_sprite",
+        "parser:unregister:seller_sprite",
+    ]

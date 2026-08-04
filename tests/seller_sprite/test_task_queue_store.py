@@ -436,7 +436,7 @@ def test_store_migrates_v5_runtime_capacity_columns(tmp_path: Path):
         }
         user_version = conn.execute("PRAGMA user_version").fetchone()[0]
 
-    assert user_version == QUEUE_SCHEMA_VERSION == 7
+    assert user_version == QUEUE_SCHEMA_VERSION == 8
     assert {
         "generic_available_capacity",
         "listing_available_capacity",

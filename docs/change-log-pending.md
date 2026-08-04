@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-08-04 Collector MCP - SellerSprite 成功数据沉淀到 MySQL
+
+**变更原因**：SellerSprite 成功任务此前只保留本地导出文件，无法在统一数据库中按生产/调试环境持续查询，也缺少 MySQL 故障后的独立重试能力。
+**改动点**：新增 Collector 通用 SQLite Outbox、来源 Parser/Reconciler 注册接口和 MySQL Repository；SellerSprite JSON 主表、附加 Sheet 与 XLSX 工作表统一写入逻辑 Dataset/逐行 JSON，原始及交付文件只登记 URI、大小和 SHA-256；任务成功事务同步追加单调成功事件，避免并发乱序完成造成补偿漏数；生产连接强制配置 TLS CA。Keepa 与历史任务不接入，历史生产 succeeded backfill 仅保留 TODO。
+**验证结果**：Collector、SellerSprite 队列和调度聚焦回归 `115 passed`，SellerSprite MCP 工具 `89 passed`；SellerSprite 全量 `439 passed, 2 failed`，两项均为既有 `seller-sprite-debug` 命令未注册基线问题。新增存储文件 Ruff、格式检查、`compileall`、`uv lock --check` 与 `git diff --check` 通过；双轴代码审查发现的乱序补偿、历史重取边界、Worker 生命周期、流式内存、MySQL TLS、常量注释和变更记录问题均已修复。
+**影响范围**：仅在 Collector 显式启用存储配置后沉淀新 SellerSprite 成功任务；默认关闭，不改变采集成功状态、文件导出、Keepa 或现有历史数据。
+**回滚方式**：关闭 `OPSCLI_COLLECTOR_STORAGE_ENABLED` 并回退通用存储模块、SellerSprite 成功事件/提交适配、MySQL 依赖和配置文档；MySQL 新表及独立 Outbox 可保留，不影响原业务队列。
+---
+
 ## 2026-08-03 feedback - 增加大模型模块洞察与周期提醒
 
 **变更原因**：原反馈日报只能按类型、严重度和标题罗列记录，无法回答“哪个模块在什么周期发生了多少次、趋势如何、建议优先做什么”。

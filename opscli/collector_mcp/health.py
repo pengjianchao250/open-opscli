@@ -50,13 +50,18 @@ async def collector_modules_health() -> dict[str, Any]:
     """返回各数据采集模块及服务级脱敏健康状态。"""
     profile = _require_profile()
     modules = [await bundle.health_check() for bundle in _BUNDLES]
+    from opscli.collector_mcp.storage.runtime import get_collection_storage_runtime
+
+    storage = get_collection_storage_runtime().health()
     critical = set(profile.critical_bundles)
     critical_failed = any(
         item["bundle_id"] in critical
         and item.get("status") not in {"ready", "degraded"}
         for item in modules
     )
-    any_degraded = any(item.get("status") == "degraded" for item in modules)
+    any_degraded = any(item.get("status") == "degraded" for item in modules) or storage.get(
+        "status"
+    ) == "degraded"
     status = "not_ready" if critical_failed else "degraded" if any_degraded else "ready"
     return {
         "success": True,
@@ -64,6 +69,7 @@ async def collector_modules_health() -> dict[str, Any]:
             "service_id": profile.service_id,
             "status": status,
             "modules": modules,
+            "storage": storage,
         },
         "error": None,
     }

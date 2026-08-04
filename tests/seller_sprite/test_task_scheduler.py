@@ -437,11 +437,17 @@ def test_scheduler_runs_tasks_in_fifo_order(tmp_path: Path):
         settings = SellerSpriteSettings(output_dir=tmp_path)
         store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
         manager = ControlledRunManager(settings=settings, account_provider=DummyAccountProvider())
+        submissions = []
+
+        def submit_collection(*, request, result, status):
+            submissions.append((request, result, status))
+
         scheduler = SellerSpriteTaskScheduler(
             store=store,
             settings=settings,
             account_provider=DummyAccountProvider(),
             manager_factory=lambda **kwargs: manager,
+            collection_submitter=submit_collection,
             auto_start=False,
         )
 
@@ -464,6 +470,8 @@ def test_scheduler_runs_tasks_in_fifo_order(tmp_path: Path):
 
         assert second_done["state"] == "succeeded"
         assert manager.started == ["job-1", "job-2"]
+        assert [result.job_id for _, result, _ in submissions] == ["job-1", "job-2"]
+        assert all(status["state"] == "succeeded" for _, _, status in submissions)
         await scheduler.close()
 
     asyncio.run(scenario())

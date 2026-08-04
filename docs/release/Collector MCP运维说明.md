@@ -46,6 +46,75 @@ export OPSCLI_COLLECTOR_MCP_URL="https://collector-mcp.internal.example.com/mcp"
 
 生产建议使用 systemd 管理进程；Collector 保持单实例、单 Worker，不允许多个实例写同一 SellerSprite 状态目录。
 
+## 卖家精灵数据沉淀
+
+数据沉淀只在 `opscli-collector-mcp` 内运行。通用 MCP 和 Keepa 不需要 MySQL 连接，也不得配置 MySQL 账号。
+
+默认关闭。启用前配置：
+
+```bash
+export OPSCLI_COLLECTOR_STORAGE_ENABLED=true
+export OPSCLI_DATA_ENVIRONMENT=production
+export OPSCLI_COLLECTOR_STORAGE_SQLITE_PATH=/var/lib/opscli/.config/opscli/collector/collection_storage.sqlite3
+export OPSCLI_COLLECTOR_MYSQL_HOST=mysql.internal
+export OPSCLI_COLLECTOR_MYSQL_PORT=3306
+export OPSCLI_COLLECTOR_MYSQL_DATABASE=polaris_ops_mcp
+export OPSCLI_COLLECTOR_MYSQL_USER=collector_writer
+export OPSCLI_COLLECTOR_MYSQL_PASSWORD='由 Secret 注入'
+export OPSCLI_COLLECTOR_MYSQL_SSL_CA=/etc/opscli/mysql-ca.pem
+```
+
+生产密码必须由 Secret 或 systemd 凭据注入，不得提交到仓库、写入日志或放入命令行参数。生产环境必须配置受信任 CA，客户端同时验证 MySQL 服务端证书和主机身份；`debug` 环境可按本地数据库能力留空。
+
+### 空库首次建表
+
+表结构由 `opscli.collector_mcp.storage.schema` 版本化。空库首次部署可以临时使用具备 DDL 权限的迁移账号，并设置：
+
+```bash
+export OPSCLI_COLLECTOR_STORAGE_AUTO_CREATE_SCHEMA=true
+```
+
+启动 Collector，确认健康响应中 `storage.checks.mysql=ok` 后立即停止服务，关闭自动建表，切换为只具备以下权限的运行账号：
+
+```text
+SELECT, INSERT, UPDATE, DELETE
+```
+
+运行账号不需要 `CREATE`、`ALTER`、`DROP`、`GRANT` 权限。正常运行必须设置：
+
+```bash
+export OPSCLI_COLLECTOR_STORAGE_AUTO_CREATE_SCHEMA=false
+```
+
+### 状态和重试
+
+成功采集任务先进入 Collector 独立 SQLite Outbox，再由后台 Worker 批量写入 MySQL。MySQL 不可用不会把卖家精灵任务改成失败，也不会重新调用第三方；Outbox 使用指数退避继续重试。
+
+首次启用会在 Outbox 记录 `live_cutover_at`。自动对账只扫描该时刻之后成功的任务，不会自动导入历史生产文件。删除 Outbox 会同时删除 live cutover 和对账游标，生产环境必须纳入备份。
+
+关闭沉淀只需设置：
+
+```bash
+export OPSCLI_COLLECTOR_STORAGE_ENABLED=false
+```
+
+关闭不会删除 MySQL 数据、原始文件或 Outbox。重新启用后会继续处理未完成记录。
+
+健康工具 `collector_modules_health` 返回脱敏的 `storage` 字段：
+
+```json
+{
+  "status": "ready",
+  "checks": {
+    "outbox": "ok",
+    "mysql": "ok",
+    "worker": "running"
+  }
+}
+```
+
+健康响应不会返回 MySQL 主机、库名、账号、密码或本地文件路径。
+
 ## SellerSprite 额度设置迁移
 
 迁移 SQL 只处理以下设置：
@@ -102,5 +171,11 @@ sqlite3 /var/lib/opscli/mcp_quota/quota.sqlite3 \
 | `--port 8766` | Collector MCP 端口 |
 | `OPSCLI_COLLECTOR_MCP_URL` | 仅供通用 MCP 访问 Collector；CLI 不读取；不得附带共享 `api_key` |
 | `OPSCLI_MCP_QUOTA_SQLITE_PATH` | Collector 使用的 quota SQLite 绝对路径；生产环境建议显式配置 |
+| `OPSCLI_COLLECTOR_STORAGE_ENABLED` | 是否启用 Collector 数据沉淀，默认 `false` |
+| `OPSCLI_DATA_ENVIRONMENT` | 数据环境，只允许 `production` 或 `debug` |
+| `OPSCLI_COLLECTOR_STORAGE_SQLITE_PATH` | 通用 Outbox SQLite 路径 |
+| `OPSCLI_COLLECTOR_MYSQL_*` | 仅 Collector 使用的内网 MySQL 连接配置 |
+| `OPSCLI_COLLECTOR_MYSQL_SSL_CA` | 生产必填的 MySQL TLS CA 文件路径 |
+| `OPSCLI_COLLECTOR_STORAGE_AUTO_CREATE_SCHEMA` | 仅首次建表时临时启用，日常运行必须关闭 |
 
 不要在文档、日志或截图中暴露 API Key、Authorization、Cookie、Session、JWT、账号密码或导出的邮箱清单。

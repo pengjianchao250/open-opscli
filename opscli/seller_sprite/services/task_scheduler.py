@@ -80,6 +80,7 @@ class SellerSpriteTaskScheduler:
         account_provider=None,
         account_binding_store=None,
         manager_factory: Callable[..., SellerSpriteApiManager] | None = None,
+        collection_submitter: Callable[..., None] | None = None,
         auto_start: bool = True,
         poll_interval_seconds: float = 0.05,
         session_reap_interval_seconds: float = DEFAULT_SESSION_REAP_INTERVAL_SECONDS,
@@ -92,6 +93,7 @@ class SellerSpriteTaskScheduler:
             account_provider: 公共账号来源；传入旧式单账号 provider 时保留兼容调度模式。
             account_binding_store: 用户专属账号绑定仓储；测试可注入临时目录实例。
             manager_factory: 场景执行器工厂。
+            collection_submitter: Collector 注入的成功任务沉淀提交函数。
             auto_start: 入队时是否自动启动后台消费。
             poll_interval_seconds: 无任务或 supervisor 循环的轮询间隔。
             session_reap_interval_seconds: browser 会话周期回收扫描间隔。
@@ -117,6 +119,7 @@ class SellerSpriteTaskScheduler:
             float(self.settings.shutdown_timeout_seconds),
         )
         self.manager_factory = manager_factory or self._default_manager_factory
+        self.collection_submitter = collection_submitter
         self._runtime_auth: dict[str, tuple[str, str | None]] = {}
         self._account_credential_scope: str | None = None
         self._account_expected_user_email: str | None = None
@@ -856,7 +859,7 @@ class SellerSpriteTaskScheduler:
                     account=account,
                 )
                 export_payload = self._build_mcp_export_payload(request, result)
-                self.store.finish_task_and_mcp_run_if_current(
+                committed = self.store.finish_task_and_mcp_run_if_current(
                     job_id=job_id,
                     account_key=account_key,
                     assignment_generation=generation,
@@ -865,6 +868,8 @@ class SellerSpriteTaskScheduler:
                     export_payload=result.export.to_dict() if result.export else None,
                     mcp_export_payload=export_payload if has_mcp_run else None,
                 )
+                if committed:
+                    self._submit_collection_result(request=request, result=result)
                 return account
             except Exception as exc:
                 # 认证失败通常可切换账号重试；额度型导出可能已成功派发，必须直接失败以免重复扣额。
@@ -1324,7 +1329,7 @@ class SellerSpriteTaskScheduler:
             export_payload = self._build_mcp_export_payload(request, result)
             task_export = result.export.to_dict() if result.export else None
             if execution_account_key is not None and assignment_generation is not None:
-                self.store.finish_task_and_mcp_run_if_current(
+                committed = self.store.finish_task_and_mcp_run_if_current(
                     job_id=job_id,
                     account_key=execution_account_key,
                     assignment_generation=assignment_generation,
@@ -1346,6 +1351,9 @@ class SellerSpriteTaskScheduler:
                         result.row_count,
                         export_payload,
                     )
+                committed = True
+            if committed:
+                self._submit_collection_result(request=request, result=result)
         except Exception as exc:
             error_payload = error_to_dict(exc)
             if execution_account_key is not None and assignment_generation is not None:
@@ -1544,6 +1552,23 @@ class SellerSpriteTaskScheduler:
             "format": request.export_format,
             "filename": Path(result.result_path).name,
         }
+
+    def _submit_collection_result(
+        self,
+        *,
+        request: SellerSpriteScenarioRequest,
+        result: SellerSpriteScenarioResult,
+    ) -> None:
+        """提交已经成功的采集结果；沉淀异常不能回滚采集成功态。"""
+        if self.collection_submitter is None:
+            return
+        try:
+            status = self.store.get_status(result.job_id)
+            if status.get("state") != "succeeded":
+                return
+            self.collection_submitter(request=request, result=result, status=status)
+        except Exception:
+            logger.exception("卖家精灵成功任务提交 Collector 数据沉淀失败：job_id=%s", result.job_id)
 
 
 def get_task_scheduler(
