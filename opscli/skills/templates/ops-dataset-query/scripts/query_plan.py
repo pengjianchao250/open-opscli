@@ -1344,6 +1344,36 @@ def _field_suggestions(
     return suggestions
 
 
+# 全局币种白名单（大写 ISO 4217，与后端 dm_global_currencies 表种子一致）
+SUPPORTED_GLOBAL_CURRENCIES = ["USD", "GBP", "CAD", "EUR", "JPY", "CNY"]
+
+# 币种意图识别规则：仅匹配明确的币种词（避免 "元"、"$/¥" 等歧义符号误判）。
+# CAD 置于 USD 之前，确保 "canadian dollar/加元" 不被 USD 的 "dollar" 抢先命中。
+_CURRENCY_INTENT_PATTERNS = [
+    ("CAD", ("cad", "加元", "加币", "加拿大元", "canadian dollar")),
+    ("USD", ("usd", "美元", "美金", "美刀", "us dollar", "dollar")),
+    ("GBP", ("gbp", "英镑", "pound", "sterling")),
+    ("EUR", ("eur", "欧元", "euro")),
+    ("JPY", ("jpy", "日元", "日币", "日圆", "yen")),
+    ("CNY", ("cny", "rmb", "人民币", "人民幣")),
+]
+
+
+def _detect_global_currency(query: str) -> str | None:
+    """从用户请求文本识别全局币种意图（如"用美元显示""按 USD 汇总"）。
+
+    仅在命中白名单 6 种（USD/GBP/CAD/EUR/JPY/CNY）时返回大写代码，否则返回 None。
+    命中即由 planner 写入 query_template.globalCurrency，纳入 integrity 哈希锁定的模板。
+    """
+    if not query:
+        return None
+    text = str(query).lower()
+    for code, keywords in _CURRENCY_INTENT_PATTERNS:
+        if any(kw in text for kw in keywords):
+            return code
+    return None
+
+
 def _build_query_template(
     table_id: object,
     dimensions: list[dict],
@@ -1351,6 +1381,7 @@ def _build_query_template(
     date_fields: list[dict],
     scope: dict | None,
     platform_values: list[str] | None = None,
+    global_currency: str | None = None,
 ) -> dict | None:
     """生成可直接填充的正式查询 payload 骨架（P1-4）。
 
@@ -1406,6 +1437,9 @@ def _build_query_template(
                 ),
             }
         )
+    # 全局币种：命中币种意图时写入模板（纳入 integrity 哈希）；无意图则不加该键
+    if global_currency:
+        template["globalCurrency"] = global_currency
     return template
 
 
@@ -1796,6 +1830,7 @@ def build_model_contract(
             date_fields,
             scope,
             resolution.get("resolved_filter_values", []),
+            _detect_global_currency(query),
         )
         if template is not None:
             execution_ref["query_template"] = template

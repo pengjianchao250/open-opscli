@@ -527,6 +527,10 @@ def build(
         None, "--data-comparison",
         help="数据对比：field,start_date,end_date（例: date_id,2026-03-01,2026-03-22）",
     ),
+    global_currency: str | None = typer.Option(
+        None, "--global-currency",
+        help="全局币种（仅支持 USD/GBP/CAD/EUR/JPY/CNY），按该币种换算展示金额；不传则由服务端回退用户默认配置",
+    ),
     run: bool = typer.Option(False, "--run", help="构造后立即执行查询"),
     timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
     result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，仅与 --run 同用生效"),
@@ -552,6 +556,7 @@ def build(
             "dry_run": dry_run,
             "output_path": output,
             "data_comparison": data_comparison,
+            "global_currency": global_currency,
             "skills_dir": skills_dir,
         }
         result = manager.build_and_run(**common_kwargs) if run else manager.build(**common_kwargs)
@@ -578,6 +583,10 @@ def simple(
     payload_file: str | None = typer.Option(None, "--payload", help="简化查询 JSON 文件路径（与 --json 二选一）"),
     payload_json: str | None = typer.Option(None, "--json", help="简化查询 JSON 字符串（与 --payload 二选一）"),
     output: str | None = typer.Option(None, "--output", help="将 payload 写入指定文件"),
+    global_currency: str | None = typer.Option(
+        None, "--global-currency",
+        help="全局币种（仅支持 USD/GBP/CAD/EUR/JPY/CNY）；优先级高于 payload 内的 globalCurrency；不传则由服务端回退用户默认配置",
+    ),
     run: bool = typer.Option(False, "--run", help="构造后立即执行查询"),
     timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
     result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，仅与 --run 同用生效"),
@@ -626,10 +635,15 @@ def simple(
             "filters": "filters",
             "dataComparison": "data_comparison",
             "orderBy": "order_by",
+            "globalCurrency": "global_currency",
         }
         for key, kwarg_key in key_map.items():
             if key in simple_params:
                 kwargs[kwarg_key] = simple_params[key]
+
+        # --global-currency 命令行选项优先级高于 payload 内的 globalCurrency
+        if global_currency:
+            kwargs["global_currency"] = global_currency
 
         # payload 中 limit/offset 为 null 时视为"未指定"，跳过不透传：
         # 规划器模板可能带 "limit": null，若原样透传，None 会落入 build_simple 的

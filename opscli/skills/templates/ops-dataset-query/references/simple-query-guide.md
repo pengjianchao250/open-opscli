@@ -11,7 +11,7 @@ description: 仅使用本次授权 guidance/metadata 的简化查询参数规划
 
 > 示例不得直接复制；必须将全部占位符替换为本次 guidance/metadata 返回值。
 
-## 七个业务参数
+## 业务参数
 
 | 概念 | JSON | MCP | 要求 |
 |------|------|-----|------|
@@ -22,8 +22,16 @@ description: 仅使用本次授权 guidance/metadata 的简化查询参数规划
 | 对比 | `dataComparison` | `data_comparison` | 必须与主周期同时传入 |
 | 排序 | `orderBy` | `order_by` | 使用本次结果 alias |
 | 分页 | `limit` / `offset` | `limit` / `offset` | 使用用户确认行数 |
+| 全局币种 | `globalCurrency` | `global_currency` | 仅 USD/GBP/CAD/EUR/JPY/CNY；由规划器识别币种意图后写入模板 |
 
 MCP Tool 使用 snake_case，JSON payload 使用 camelCase，CLI 选项使用 kebab-case。
+
+## 全局币种 globalCurrency
+
+- **作用**：按指定币种换算展示金额类指标。取值**仅支持** `USD / GBP / CAD / EUR / JPY / CNY`（大写 ISO 4217）。
+- **来源**：规划器 `query_plan.py` 会从用户请求文本识别币种意图（如"用美元显示""按 USD 汇总""加元口径"），命中白名单时自动写入 `query_template.globalCurrency`，并纳入 integrity 哈希——**禁止手工增删或改写该键**，直接执行规划器下发的模板即可。
+- **未识别到币种意图**时模板不含该键；此时后端会回退到当前用户在 `dm_user_settings` 的默认币种配置，用户也未配置则不做换算。
+- **非白名单币种**（如 HKD/AUD）不注入，且后端会拒绝，请勿伪造。
 
 ## 授权占位符模板
 

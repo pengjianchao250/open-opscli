@@ -29,6 +29,23 @@ class _FieldSpec:
 
 SELECT_ALIAS_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# 目前支持的全局币种白名单（大写 ISO 4217，与后端 dm_global_currencies 表种子一致）
+SUPPORTED_GLOBAL_CURRENCIES = ["USD", "GBP", "CAD", "EUR", "JPY", "CNY"]
+
+
+def _normalize_global_currency(value: str | None) -> str | None:
+    """归一并校验全局币种：去空格转大写，仅接受白名单 6 种；None/空返回 None，非白名单抛错。"""
+    if value is None:
+        return None
+    code = str(value).strip().upper()
+    if code == "":
+        return None
+    if code not in SUPPORTED_GLOBAL_CURRENCIES:
+        raise InvalidPayloadError(
+            f"不支持的币种: {value}，仅支持 {'/'.join(SUPPORTED_GLOBAL_CURRENCIES)}"
+        )
+    return code
+
 
 class QueryManager:
     """协调本地 metadata 与远端 query 执行。
@@ -221,6 +238,7 @@ class QueryManager:
         cwd: Path | None = None,
         output_path: str | None = None,
         data_comparison: str | None = None,
+        global_currency: str | None = None,
     ) -> dict:
         """基于简化参数构造标准 query payload。"""
         if not dimensions and not metrics:
@@ -304,6 +322,11 @@ class QueryManager:
                 data_comparison, dataset_alias=str(dataset["dataset_alias"]),
             )
 
+        # 全局币种：归一+白名单校验后放入 payload 顶层，透传给后端（后端再放到 query.from 层级）
+        normalized_currency = _normalize_global_currency(global_currency)
+        if normalized_currency:
+            payload["globalCurrency"] = normalized_currency
+
         self._validate_payload(payload)
         if output_path:
             output_file = Path(output_path).expanduser()
@@ -344,6 +367,7 @@ class QueryManager:
         validate_fields: bool = False,
         skills_dir: str | None = None,
         cwd: Path | None = None,
+        global_currency: str | None = None,
     ) -> dict:
         """基于简化参数构造标准 simple query payload。
 
@@ -396,6 +420,11 @@ class QueryManager:
         # （编译版 Cython 的 int 参数拒绝 None；此处对任意调用方兜底，沿用后端默认）
         payload["limit"] = 20 if limit is None else limit
         payload["offset"] = 0 if offset is None else offset
+
+        # 全局币种：归一+白名单校验后放入 payload 顶层，透传给后端 simple 接口
+        normalized_currency = _normalize_global_currency(global_currency)
+        if normalized_currency:
+            payload["globalCurrency"] = normalized_currency
 
         if dry_run:
             payload["dryRun"] = True
