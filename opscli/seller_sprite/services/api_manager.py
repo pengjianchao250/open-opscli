@@ -421,28 +421,33 @@ class SellerSpriteApiManager:
                 "asin_list": effective_asin_list,
             }
         self._emit_progress("exporting")
+        output_path = _scenario_export_output_path(
+            root_dir,
+            job_id=job_id,
+            scenario=request.scenario,
+            site=site,
+            payload=payload,
+            extension=export_format,
+            own_asin=(
+                keyword_comparison_context["own_asin"]
+                if keyword_comparison_context
+                else None
+            ),
+        )
         if scenario.method in {"GET_XLSX", "POST_XLSX"}:
             export = _official_xlsx_export(main_response, root_dir=root_dir)
         elif export_format == "xlsx":
             if keyword_comparison_context:
                 export = export_keyword_comparison_to_xlsx(
                     rows=rows,
-                    output_path=_keyword_comparison_output_path(
-                        root_dir,
-                        site=site,
-                        own_asin=keyword_comparison_context["own_asin"],
-                    ),
+                    output_path=output_path,
                     site=site,
                     **keyword_comparison_context,
                 )
             else:
                 export = export_rows_to_xlsx(
                     rows=rows,
-                    output_path=(
-                        _aba_research_output_path(root_dir, site=site, payload=payload)
-                        if request.scenario == "aba-research"
-                        else _export_output_path(root_dir, job_id, "xlsx")
-                    ),
+                    output_path=output_path,
                     scenario=request.scenario,
                     site=site,
                     period=period,
@@ -466,7 +471,7 @@ class SellerSpriteApiManager:
                     high_frequency_rows=high_frequency_rows,
                 )
             export = _export_rows_to_json(
-                output_path=_export_output_path(root_dir, job_id, "json"),
+                output_path=output_path,
                 job_id=job_id,
                 scenario=request.scenario,
                 site=site,
@@ -1181,16 +1186,46 @@ def _keyword_comparison_output_path(
     *,
     site: str,
     own_asin: str,
+    extension: str,
 ) -> Path:
-    """生成流量词对比官方语义文件名。"""
+    """生成流量词对比跨格式语义文件名。"""
     timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
+    suffix = extension.lstrip(".")
     filename = (
         f"CompareKeywords-{site.upper()}-"
-        f"{_sanitize_filename_part(own_asin)}-{timestamp}.xlsx"
+        f"{_sanitize_filename_part(own_asin)}-{timestamp}.{suffix}"
     )
     if len(str(root_dir / filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
-        filename = "CompareKeywords.xlsx"
+        filename = f"CompareKeywords.{suffix}"
     return root_dir / filename
+
+
+def _scenario_export_output_path(
+    root_dir: Path,
+    *,
+    job_id: str,
+    scenario: str,
+    site: str,
+    payload: dict[str, Any],
+    extension: str,
+    own_asin: str | None,
+) -> Path:
+    """按场景统一选择 JSON 与 XLSX 的导出路径。"""
+    if scenario == "keyword-comparison":
+        return _keyword_comparison_output_path(
+            root_dir,
+            site=site,
+            own_asin=own_asin or "",
+            extension=extension,
+        )
+    if scenario == "aba-research":
+        return _aba_research_output_path(
+            root_dir,
+            site=site,
+            payload=payload,
+            extension=extension,
+        )
+    return _export_output_path(root_dir, job_id, extension)
 
 
 def _aba_research_output_path(
@@ -1198,8 +1233,9 @@ def _aba_research_output_path(
     *,
     site: str,
     payload: dict[str, Any],
+    extension: str,
 ) -> Path:
-    """生成 ABA 数据选品官方语义文件名。"""
+    """生成 ABA 数据选品跨格式语义文件名。"""
     table = str(payload.get("table") or "").removeprefix("ara_")
     reverse_type = str(payload.get("reverseType") or "W").upper()
     if reverse_type == "M" and re.fullmatch(r"\d{6}", table):
@@ -1210,9 +1246,10 @@ def _aba_research_output_path(
         period_label = f"{week_end.year}第{week_number}周"
     else:
         period_label = table or "latest"
-    filename = f"ABAKeywordTrend-{site.upper()}-{period_label}.xlsx"
+    suffix = extension.lstrip(".")
+    filename = f"ABAKeywordTrend-{site.upper()}-{period_label}.{suffix}"
     if len(str(root_dir / filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
-        filename = "ABAKeywordTrend.xlsx"
+        filename = f"ABAKeywordTrend.{suffix}"
     return root_dir / filename
 
 

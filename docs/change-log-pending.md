@@ -5292,3 +5292,12 @@
 **影响范围**：SellerSprite 公共账号池的账号加载、故障切换、SQLite 队列 schema 和认证失败浏览器 Profile；本地显式账号调试仍保持兼容。
 **回滚方式**：回退 SellerSprite 账号 Provider、账号池、调度器、队列 v7 隔离表、Profile 隔离逻辑及对应测试；SQLite 新增表可保留，不影响旧版本读取。
 ---
+
+## 2026-08-04 SellerSprite - 统一 JSON 与 XLSX 场景化导出命名
+
+**变更原因**：流量词对比和 ABA 数据选品的 XLSX 已使用场景化文件名，JSON 却仍使用 job_id，同一场景的两种格式不一致。
+**改动点**：流量词对比和 ABA 数据选品的路径构造函数改为按扩展名生成跨格式主名；JSON 导出复用对应 XLSX 的场景化命名，普通场景和官方 XLSX-only 场景不变。
+**验证结果**：新增 ABA 导出格式参数化覆盖和流量对比 JSON 文件名断言；聚焦回归 `5 passed`，`test_api_manager.py` 完整回归 `39 passed`，SellerSprite 全量回归 `439 passed, 2 failed`；两项失败均为仓库既有 `seller-sprite-debug` 命令注册与旧测试期望不一致，与本次改动无关。`git diff --check` 通过。
+**影响范围**：仅影响 SellerSprite `keyword-comparison` 和 `aba-research` 新任务的 JSON 导出文件名；JSON 内容、XLSX 文件名、旧任务及其他场景不变。
+**回滚方式**：恢复 JSON 分支统一使用 `{job_id}.json`，并恢复两个场景路径函数固定生成 `.xlsx`。
+---

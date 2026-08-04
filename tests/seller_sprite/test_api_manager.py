@@ -513,7 +513,12 @@ def test_manager_runs_keyword_research_as_get_page(monkeypatch, tmp_path: Path):
     )
 
 
-def test_manager_returns_only_first_aba_research_page(monkeypatch, tmp_path: Path):
+@pytest.mark.parametrize("export_format", ["xlsx", "json"])
+def test_manager_returns_only_first_aba_research_page(
+    monkeypatch,
+    tmp_path: Path,
+    export_format: str,
+):
     AbaResearchApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", AbaResearchApiClient)
     manager = SellerSpriteApiManager(
@@ -530,6 +535,7 @@ def test_manager_returns_only_first_aba_research_page(monkeypatch, tmp_path: Pat
                 params={"q": "paper towels", "page": 4, "size": 20},
                 page_size=20,
                 job_id="job-aba-research",
+                export_format=export_format,
             )
         )
     )
@@ -537,7 +543,7 @@ def test_manager_returns_only_first_aba_research_page(monkeypatch, tmp_path: Pat
     assert result.row_count == 2
     assert [row["keyword"] for row in result.data] == ["obsession", "paper towels"]
     assert result.export is not None
-    assert result.export.filename == "ABAKeywordTrend-US-2026第29周.xlsx"
+    assert result.export.filename == f"ABAKeywordTrend-US-2026第29周.{export_format}"
     assert Path(result.export.path).exists()
     assert len(AbaResearchApiClient.calls) == 1
     call = AbaResearchApiClient.calls[0]
@@ -919,6 +925,8 @@ def test_manager_exports_first_keyword_comparison_page_with_effective_asins(
         assert result.export.filename.startswith("CompareKeywords-US-B0949DWJCV-")
         assert result.export.filename.endswith(".xlsx")
     else:
+        assert result.export.filename.startswith("CompareKeywords-US-B0949DWJCV-")
+        assert result.export.filename.endswith(".json")
         exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
         assert exported["sheet_name"].startswith("US-流量占比对比-")
         assert exported["columns"][2] == "B0949DWJCV(我的)"
