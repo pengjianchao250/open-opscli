@@ -5310,3 +5310,12 @@
 **影响范围**：仅影响 SellerSprite `keyword-comparison` 和 `aba-research` 新任务的 JSON 导出文件名；JSON 内容、XLSX 文件名、旧任务及其他场景不变。
 **回滚方式**：恢复 JSON 分支统一使用 `{job_id}.json`，并恢复两个场景路径函数固定生成 `.xlsx`。
 ---
+
+## 2026-08-04 SellerSprite - 调度消费运行时失活检测与自恢复
+
+**变更原因**：生产出现 MCP 主进程仍存活、SellerSprite 队列持续入队但无 Worker 消费的问题；现有健康检查只验证心跳协程，消费监督任务退出后仍会错误报告 ready。
+**改动点**：运行时健康摘要增加消费监督任务存活判定、当前消费错误计数和脱敏 `consumer_alive` / `consumer_error_count` 字段；Generic 与 Listing Worker 在临时领取异常后记录错误并继续消费，持续异常或默认 Listing 账号不可用期间健康状态降级；每个故障周期仅记录首条完整异常，恢复后复发才再次记录，避免高频重试形成日志风暴；消费 Supervisor 隔离单轮账号维护或会话回收异常，并立即重建意外退出的 Generic/Listing 工作槽；独立心跳发现消费监督任务意外结束时，在启动锁保护下自动重建并发布恢复后的运行态，账号池与兼容单账号路径重复启动时均复用现有心跳，避免长期等待缓存刷新、重复创建后台任务或人工重启。
+**验证结果**：新增消费监督任务退出、心跳自动重建、启动与自恢复并发、Generic/Listing 持续领取异常、单轮领取异常、持续异常日志抑制及单轮/持续维护异常回归用例，均已确认关键失败路径修改前失败；监督后端覆盖 `consumer_alive` 和 `consumer_error_count` 的 Collector 脱敏透传；监督后端与任务调度器 `63 passed`，Collector MCP `29 passed`，SellerSprite 全量 `446 passed, 3 failed`，三项失败均为仓库既有导出文件名期望及已注释 `seller-sprite-debug` 注册问题；`compileall` 与 `git diff --check` 通过（测试代码同步补齐新增覆写方法类型标注）。
+**影响范围**：SellerSprite 调度器运行时健康判断和 Collector Bundle 脱敏健康输出。
+**回滚方式**：回退调度器消费存活与错误判定、Generic/Listing 领取重试、Supervisor 单轮异常隔离、工作槽重建、启动锁自恢复，移除 Bundle 公开字段及对应测试。
+---

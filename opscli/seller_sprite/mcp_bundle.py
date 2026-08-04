@@ -27,6 +27,8 @@ _PUBLIC_RUNTIME_FIELDS = (
     "last_claim_at",
     "last_progress_at",
     "heartbeat_fresh",
+    "consumer_alive",
+    "consumer_error_count",
 )
 
 

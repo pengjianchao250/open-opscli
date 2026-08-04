@@ -141,6 +141,8 @@ class SellerSpriteTaskScheduler:
         self._next_worker_slot_number = 1
         self._last_account_refresh_at = 0.0
         self._last_session_reap_at = 0.0
+        self._consumer_errors: set[str] = set()
+        # 启动、关闭和心跳自恢复共用此锁，避免并发创建重复 Supervisor 或心跳任务。
         self._start_lock = asyncio.Lock()
         self._stop_requested = False
         self._legacy_single_account_mode = bool(
@@ -187,10 +189,16 @@ class SellerSpriteTaskScheduler:
         heartbeat_alive = bool(
             self._heartbeat_task is not None and not self._heartbeat_task.done()
         )
+        consumer_alive = bool(
+            self._runner_task is not None and not self._runner_task.done()
+        )
+        consumer_error_count = len(self._consumer_errors)
         running = (
             lifecycle == "running"
             and heartbeat_fresh
             and heartbeat_alive
+            and consumer_alive
+            and consumer_error_count == 0
             and not self._stop_requested
         )
         if running:
@@ -198,9 +206,14 @@ class SellerSpriteTaskScheduler:
             scheduler_check = "running"
         elif lifecycle == "running" and not self._stop_requested:
             status = "degraded"
-            scheduler_check = (
-                "heartbeat_failed" if not heartbeat_alive else "heartbeat_stale"
-            )
+            if not heartbeat_alive:
+                scheduler_check = "heartbeat_failed"
+            elif not consumer_alive:
+                scheduler_check = "consumer_failed"
+            elif consumer_error_count:
+                scheduler_check = "consumer_error"
+            else:
+                scheduler_check = "heartbeat_stale"
         else:
             status = "not_ready"
             scheduler_check = lifecycle
@@ -210,6 +223,8 @@ class SellerSpriteTaskScheduler:
             if key != "execution_owner"
         }
         public_runtime["heartbeat_fresh"] = heartbeat_fresh
+        public_runtime["consumer_alive"] = consumer_alive
+        public_runtime["consumer_error_count"] = consumer_error_count
         return {
             "status": status,
             "checks": {
@@ -282,19 +297,22 @@ class SellerSpriteTaskScheduler:
             if self._legacy_single_account_mode:
                 self._runner_task = self._create_background_task(self._run_loop())
                 self._publish_runtime_heartbeat(lifecycle_state="running")
-                self._heartbeat_task = self._create_background_task(
-                    self._run_execution_heartbeat()
-                )
+                if self._heartbeat_task is None or self._heartbeat_task.done():
+                    self._heartbeat_task = self._create_background_task(
+                        self._run_execution_heartbeat()
+                    )
                 return
             self._fail_queued_tasks_with_invalid_auth()
             await self._initialize_account_pool()
             self._start_generic_workers()
-            self._start_listing_worker()
+            if self._listing_worker_task is None or self._listing_worker_task.done():
+                self._start_listing_worker()
             self._runner_task = self._create_background_task(self._run_pool_supervisor())
             self._publish_runtime_heartbeat(lifecycle_state="running")
-            self._heartbeat_task = self._create_background_task(
-                self._run_execution_heartbeat()
-            )
+            if self._heartbeat_task is None or self._heartbeat_task.done():
+                self._heartbeat_task = self._create_background_task(
+                    self._run_execution_heartbeat()
+                )
 
     async def close(self) -> None:
         """停止领取、取消未完成执行并重新排队，再释放 browser 会话。"""
@@ -321,6 +339,7 @@ class SellerSpriteTaskScheduler:
                 if pending:
                     logger.warning("卖家精灵调度器关闭等待超时，强制释放任务租约")
             self._active_attempts.clear()
+            self._consumer_errors.clear()
             self.store.release_running_tasks(
                 execution_owner=self._session_owner_id,
             )
@@ -355,6 +374,7 @@ class SellerSpriteTaskScheduler:
         """周期发布运行态，仅续期调度器仍主动跟踪的执行尝试。"""
         while not self._stop_requested:
             try:
+                await self._restart_consumer_if_needed()
                 self.store.renew_active_execution_leases(
                     execution_owner=self._session_owner_id,
                     attempts=list(self._active_attempts.values()),
@@ -368,6 +388,31 @@ class SellerSpriteTaskScheduler:
                 # 单轮 SQLite 或运行态发布失败不得终止长期心跳，下一轮继续自愈。
                 logger.exception("卖家精灵调度器心跳发布失败，下一轮继续重试")
             await asyncio.sleep(self.task_heartbeat_seconds)
+
+    async def _restart_consumer_if_needed(self) -> bool:
+        """由独立心跳监督重建意外结束的消费任务。"""
+        async with self._start_lock:
+            task = self._runner_task
+            if self._stop_requested or task is None or not task.done():
+                return False
+            if task.cancelled():
+                error_class = "CancelledError"
+            else:
+                error = task.exception()
+                error_class = (
+                    type(error).__name__ if error is not None else "UnexpectedExit"
+                )
+            logger.error(
+                "卖家精灵消费监督任务意外结束，正在自动恢复：error=%s",
+                error_class,
+            )
+            consumer = (
+                self._run_loop()
+                if self._legacy_single_account_mode
+                else self._run_pool_supervisor()
+            )
+            self._runner_task = self._create_background_task(consumer)
+            return True
 
     def _publish_runtime_heartbeat(self, *, lifecycle_state: str) -> None:
         """发布当前工作槽、容量和最近活动的脱敏运行态。"""
@@ -573,17 +618,30 @@ class SellerSpriteTaskScheduler:
     async def _run_pool_supervisor(self) -> None:
         """维护账号工作槽生命周期，并在无账号时周期重试账号接口。"""
         while not self._stop_requested:
-            self._prune_runtime_auth()
-            self._remove_finished_generic_workers()
-            self._remove_finished_user_binding_tasks()
-            self._start_user_binding_tasks()
-            now = time.monotonic()
-            refresh_interval = max(1.0, float(self.settings.account_cache_ttl_seconds))
-            refresh_due = now - self._last_account_refresh_at >= refresh_interval
-            if refresh_due:
-                await self._refresh_account_pool()
-            if now - self._last_session_reap_at >= self.session_reap_interval_seconds:
-                await self._reap_browser_sessions()
+            try:
+                self._prune_runtime_auth()
+                self._remove_finished_generic_workers()
+                self._start_generic_workers()
+                if self._listing_worker_task is None or self._listing_worker_task.done():
+                    self._start_listing_worker()
+                self._remove_finished_user_binding_tasks()
+                self._start_user_binding_tasks()
+                now = time.monotonic()
+                refresh_interval = max(1.0, float(self.settings.account_cache_ttl_seconds))
+                refresh_due = now - self._last_account_refresh_at >= refresh_interval
+                if refresh_due:
+                    await self._refresh_account_pool()
+                if now - self._last_session_reap_at >= self.session_reap_interval_seconds:
+                    await self._reap_browser_sessions()
+                self._consumer_errors.discard("supervisor")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # 单轮账号维护或会话回收异常不能结束 Supervisor 和全部后续恢复能力。
+                first_failure = "supervisor" not in self._consumer_errors
+                self._consumer_errors.add("supervisor")
+                if first_failure:
+                    logger.exception("卖家精灵消费监督循环异常，短暂等待后继续维护")
             await asyncio.sleep(self.poll_interval_seconds)
 
     def _remove_finished_generic_workers(self) -> None:
@@ -604,6 +662,7 @@ class SellerSpriteTaskScheduler:
                         type(error).__name__,
                     )
             self._generic_worker_accounts.pop(worker_key, None)
+            self._consumer_errors.discard(worker_key)
 
     def _remove_finished_user_binding_tasks(self) -> None:
         """清理已结束的专属账号任务，并记录意外退出。"""
@@ -758,14 +817,29 @@ class SellerSpriteTaskScheduler:
             if not self._is_working_account(account):
                 await self._close_account_session(account, reason="account_removed_or_rebalanced")
                 return
-            claimed = self.store.claim_next_generic_for_account(
-                queue_scope=QUEUE_SCOPE,
-                account_key=seller_sprite_account_key(account),
-                assigned_account=account.name,
-                worker_key=worker_key,
-                execution_owner=self._session_owner_id,
-                lease_seconds=self.task_lease_seconds,
-            )
+            try:
+                claimed = self.store.claim_next_generic_for_account(
+                    queue_scope=QUEUE_SCOPE,
+                    account_key=seller_sprite_account_key(account),
+                    assigned_account=account.name,
+                    worker_key=worker_key,
+                    execution_owner=self._session_owner_id,
+                    lease_seconds=self.task_lease_seconds,
+                )
+                self._consumer_errors.discard(worker_key)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # 瞬时 SQLite 或领取边界异常不能结束长期 Worker，否则队列会等待人工重启。
+                first_failure = worker_key not in self._consumer_errors
+                self._consumer_errors.add(worker_key)
+                if first_failure:
+                    logger.exception(
+                        "卖家精灵账号工作槽领取异常，短暂等待后继续消费：worker_key=%s",
+                        worker_key,
+                    )
+                await asyncio.sleep(self.poll_interval_seconds)
+                continue
             if claimed is None:
                 await asyncio.sleep(self.poll_interval_seconds)
                 continue
@@ -1123,16 +1197,29 @@ class SellerSpriteTaskScheduler:
             except Exception:
                 # 默认账号暂不可用时保持任务 queued，等待账号池下一轮刷新后恢复消费。
                 self._listing_worker_account_key = None
+                self._consumer_errors.add("listing")
                 await asyncio.sleep(self.poll_interval_seconds)
                 continue
-            claimed = self.store.claim_next_listing_analysis(
-                queue_scope=QUEUE_SCOPE,
-                worker_key="seller-sprite-listing-analysis",
-                assigned_account=account.name,
-                account_key=seller_sprite_account_key(account),
-                execution_owner=self._session_owner_id,
-                lease_seconds=self.task_lease_seconds,
-            )
+            try:
+                claimed = self.store.claim_next_listing_analysis(
+                    queue_scope=QUEUE_SCOPE,
+                    worker_key="seller-sprite-listing-analysis",
+                    assigned_account=account.name,
+                    account_key=seller_sprite_account_key(account),
+                    execution_owner=self._session_owner_id,
+                    lease_seconds=self.task_lease_seconds,
+                )
+                self._consumer_errors.discard("listing")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Listing 领取异常同样保持长期 Worker，并让健康检查明确暴露消费降级。
+                first_failure = "listing" not in self._consumer_errors
+                self._consumer_errors.add("listing")
+                if first_failure:
+                    logger.exception("卖家精灵 Listing 工作槽领取异常，短暂等待后继续消费")
+                await asyncio.sleep(self.poll_interval_seconds)
+                continue
             if claimed is None:
                 await asyncio.sleep(self.poll_interval_seconds)
                 continue

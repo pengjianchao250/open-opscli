@@ -3,6 +3,7 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 from opscli.seller_sprite import mcp_bundle
 from opscli.seller_sprite.accounts import SellerSpriteAccount
@@ -83,6 +84,97 @@ class _FlakyHeartbeatStore(SellerSpriteTaskQueueStore):
         return super().renew_active_execution_leases(**kwargs)
 
 
+class _FlakyGenericClaimStore(SellerSpriteTaskQueueStore):
+    """首轮通用任务领取失败、后续恢复的队列仓储。"""
+
+    def __init__(self, db_path: str | Path) -> None:
+        super().__init__(db_path=db_path)
+        self.claim_calls = 0
+
+    def claim_next_generic_for_account(
+        self,
+        *,
+        queue_scope: str,
+        account_key: str,
+        assigned_account: str,
+        worker_key: str,
+        execution_owner: str | None = None,
+        lease_seconds: float = 60.0,
+    ) -> dict[str, Any] | None:
+        """首轮模拟瞬时 SQLite 领取异常。"""
+        self.claim_calls += 1
+        if self.claim_calls == 1:
+            raise RuntimeError("transient generic claim failure")
+        return super().claim_next_generic_for_account(
+            queue_scope=queue_scope,
+            account_key=account_key,
+            assigned_account=assigned_account,
+            worker_key=worker_key,
+            execution_owner=execution_owner,
+            lease_seconds=lease_seconds,
+        )
+
+
+class _FailingGenericClaimStore(SellerSpriteTaskQueueStore):
+    """持续模拟通用任务领取失败的队列仓储。"""
+
+    def __init__(self, db_path: str | Path) -> None:
+        super().__init__(db_path=db_path)
+        self.claim_calls = 0
+
+    def claim_next_generic_for_account(
+        self,
+        *,
+        queue_scope: str,
+        account_key: str,
+        assigned_account: str,
+        worker_key: str,
+        execution_owner: str | None = None,
+        lease_seconds: float = 60.0,
+    ) -> dict[str, Any] | None:
+        """每轮领取均抛出 SQLite 边界异常。"""
+        del (
+            queue_scope,
+            account_key,
+            assigned_account,
+            worker_key,
+            execution_owner,
+            lease_seconds,
+        )
+        self.claim_calls += 1
+        raise RuntimeError("persistent generic claim failure")
+
+
+class _FailingListingClaimStore(SellerSpriteTaskQueueStore):
+    """持续模拟 Listing Analysis 领取失败的队列仓储。"""
+
+    def __init__(self, db_path: str | Path) -> None:
+        super().__init__(db_path=db_path)
+        self.claim_calls = 0
+
+    def claim_next_listing_analysis(
+        self,
+        *,
+        queue_scope: str,
+        worker_key: str,
+        assigned_account: str,
+        account_key: str,
+        execution_owner: str | None = None,
+        lease_seconds: float = 60.0,
+    ) -> dict[str, Any] | None:
+        """每轮 Listing 领取均抛出 SQLite 边界异常。"""
+        del (
+            queue_scope,
+            worker_key,
+            assigned_account,
+            account_key,
+            execution_owner,
+            lease_seconds,
+        )
+        self.claim_calls += 1
+        raise RuntimeError("persistent listing claim failure")
+
+
 def _request(job_id: str) -> SellerSpriteScenarioRequest:
     """构造监督测试任务。"""
     return SellerSpriteScenarioRequest(
@@ -124,6 +216,204 @@ async def _wait_for_state(scheduler, job_id: str, expected: str) -> dict:
             return status
         await asyncio.sleep(0.01)
     raise AssertionError(f"{job_id} 未到达 {expected}")
+
+
+def test_scheduler_recovers_after_transient_generic_claim_failure(tmp_path: Path):
+    """单轮任务领取异常不得让队列等待账号缓存刷新或人工重启。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        store = _FlakyGenericClaimStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=_SingleAccountProvider(),
+            manager_factory=_manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        await scheduler.enqueue(_request("transient-claim-failure"))
+
+        await scheduler.start()
+        succeeded = await _wait_for_state(
+            scheduler,
+            "transient-claim-failure",
+            "succeeded",
+        )
+
+        assert succeeded["state"] == "succeeded"
+        assert store.claim_calls >= 2
+        assert scheduler.runtime_health()["status"] == "ready"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_reports_degraded_during_persistent_generic_claim_failure(
+    tmp_path: Path,
+    caplog,
+):
+    """持续领取异常必须降级健康状态，不能只因 Worker 存活就报告 ready。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        store = _FailingGenericClaimStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=_SingleAccountProvider(),
+            manager_factory=_manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+
+        await scheduler.start()
+        for _ in range(100):
+            if store.claim_calls >= 2:
+                break
+            await asyncio.sleep(0.01)
+
+        health = scheduler.runtime_health()
+        assert store.claim_calls >= 2
+        assert health["status"] == "degraded"
+        assert health["checks"]["scheduler"] == "consumer_error"
+        assert health["runtime"]["consumer_error_count"] == 1
+        claim_errors = [
+            record
+            for record in caplog.records
+            if "卖家精灵账号工作槽领取异常" in record.getMessage()
+        ]
+        assert len(claim_errors) == 1
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_reports_degraded_during_persistent_listing_claim_failure(
+    tmp_path: Path,
+):
+    """Listing 持续领取异常时必须降级，不能因反复重建而报告 ready。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        store = _FailingListingClaimStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=_SingleAccountProvider(),
+            manager_factory=_manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+
+        await scheduler.start()
+        for _ in range(100):
+            if store.claim_calls >= 2:
+                break
+            await asyncio.sleep(0.01)
+
+        health = scheduler.runtime_health()
+        assert store.claim_calls >= 2
+        assert health["status"] == "degraded"
+        assert health["checks"]["scheduler"] == "consumer_error"
+        assert health["runtime"]["consumer_error_count"] == 1
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_supervisor_recovers_after_transient_maintenance_failure(
+    tmp_path: Path,
+):
+    """单轮维护异常不得结束消费监督任务或留下假健康心跳。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        scheduler = SellerSpriteTaskScheduler(
+            store=SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3"),
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=_SingleAccountProvider(),
+            manager_factory=_manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+            session_reap_interval_seconds=0.01,
+        )
+        maintenance_calls = 0
+
+        async def fail_once():
+            nonlocal maintenance_calls
+            maintenance_calls += 1
+            if maintenance_calls == 1:
+                raise RuntimeError("transient maintenance failure")
+
+        scheduler._reap_browser_sessions = fail_once
+        await scheduler.start()
+        for _ in range(100):
+            if maintenance_calls >= 2:
+                break
+            await asyncio.sleep(0.01)
+
+        assert maintenance_calls >= 2
+        assert scheduler.runtime_health()["status"] == "ready"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_reports_degraded_during_persistent_supervisor_failure(
+    tmp_path: Path,
+):
+    """持续维护异常必须降级健康状态，并保持 Supervisor 存活重试。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        scheduler = SellerSpriteTaskScheduler(
+            store=SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3"),
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=_SingleAccountProvider(),
+            manager_factory=_manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+            session_reap_interval_seconds=0.01,
+        )
+        maintenance_calls = 0
+
+        async def fail_always():
+            nonlocal maintenance_calls
+            maintenance_calls += 1
+            raise RuntimeError("persistent maintenance failure")
+
+        scheduler._reap_browser_sessions = fail_always
+        await scheduler.start()
+        for _ in range(100):
+            if maintenance_calls >= 2:
+                break
+            await asyncio.sleep(0.01)
+
+        health = scheduler.runtime_health()
+        assert maintenance_calls >= 2
+        assert health["status"] == "degraded"
+        assert health["checks"]["scheduler"] == "consumer_error"
+        assert health["runtime"]["consumer_error_count"] == 1
+        assert health["runtime"]["consumer_alive"] is True
+        await scheduler.close()
+
+    asyncio.run(scenario())
 
 
 def test_scheduler_contains_post_claim_setup_failure_and_continues(tmp_path: Path):
@@ -573,6 +863,134 @@ def test_scheduler_reports_degraded_when_heartbeat_task_dies(tmp_path: Path):
     asyncio.run(scenario())
 
 
+def test_scheduler_reports_degraded_when_consumer_task_dies(tmp_path: Path):
+    """心跳仍存活但消费监督任务终止时必须报告 consumer_failed。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        scheduler = SellerSpriteTaskScheduler(
+            store=SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3"),
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=_SingleAccountProvider(),
+            manager_factory=_manager_factory,
+            auto_start=False,
+        )
+
+        async def skip_consumer_restart() -> bool:
+            return False
+
+        scheduler._restart_consumer_if_needed = skip_consumer_restart
+        await scheduler.start()
+        consumer_task = scheduler._runner_task
+        assert consumer_task is not None
+        consumer_task.cancel()
+        try:
+            await consumer_task
+        except asyncio.CancelledError:
+            pass
+
+        health = scheduler.runtime_health()
+        assert health["status"] == "degraded"
+        assert health["checks"]["scheduler"] == "consumer_failed"
+        assert health["runtime"]["consumer_alive"] is False
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_serializes_start_and_consumer_recovery(tmp_path: Path):
+    """显式启动与心跳自恢复并发时只能保留一个 Supervisor 和一个心跳。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        scheduler = SellerSpriteTaskScheduler(
+            store=SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3"),
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=_SingleAccountProvider(),
+            manager_factory=_manager_factory,
+            auto_start=False,
+        )
+        await scheduler.start()
+        failed_consumer = scheduler._runner_task
+        assert failed_consumer is not None
+        failed_consumer.cancel()
+        try:
+            await failed_consumer
+        except asyncio.CancelledError:
+            pass
+
+        await asyncio.gather(
+            scheduler._restart_consumer_if_needed(),
+            scheduler.start(),
+        )
+
+        live_tasks = [task for task in asyncio.all_tasks() if not task.done()]
+        supervisor_tasks = [
+            task
+            for task in live_tasks
+            if task.get_coro().__qualname__.endswith("._run_pool_supervisor")
+        ]
+        heartbeat_tasks = [
+            task
+            for task in live_tasks
+            if task.get_coro().__qualname__.endswith("._run_execution_heartbeat")
+        ]
+        assert len(supervisor_tasks) == 1
+        assert len(heartbeat_tasks) == 1
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_heartbeat_restarts_failed_consumer_task(tmp_path: Path):
+    """心跳监督应重建意外结束的消费任务并继续处理既有队列。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        scheduler = SellerSpriteTaskScheduler(
+            store=SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3"),
+            settings=SellerSpriteSettings(
+                output_dir=tmp_path,
+                task_heartbeat_seconds=0.01,
+            ),
+            account_provider=_SingleAccountProvider(),
+            manager_factory=_manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        await scheduler.start()
+        failed_consumer = scheduler._runner_task
+        assert failed_consumer is not None
+        failed_consumer.cancel()
+        try:
+            await failed_consumer
+        except asyncio.CancelledError:
+            pass
+        await scheduler.enqueue(_request("consumer-recovery"))
+
+        succeeded = await _wait_for_state(
+            scheduler,
+            "consumer-recovery",
+            "succeeded",
+        )
+
+        assert succeeded["state"] == "succeeded"
+        assert scheduler.runtime_health()["status"] == "ready"
+        assert scheduler._runner_task is not failed_consumer
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
 def test_mcp_health_uses_live_scheduler_runtime_and_redacts_payloads(monkeypatch):
     """MCP 健康检查应读取实时心跳，并拒绝透传敏感或任意运行态字段。"""
 
@@ -611,6 +1029,8 @@ def test_mcp_health_uses_live_scheduler_runtime_and_redacts_payloads(monkeypatch
                     "last_claim_at": None,
                     "last_progress_at": None,
                     "heartbeat_fresh": True,
+                    "consumer_alive": True,
+                    "consumer_error_count": 0,
                     "execution_owner": "private-owner",
                     "request": {"asin": "B0PRIVATE123"},
                     "path": "C:/private/output",
@@ -643,6 +1063,8 @@ def test_mcp_health_uses_live_scheduler_runtime_and_redacts_payloads(monkeypatch
                     "last_claim_at": None,
                     "last_progress_at": None,
                     "heartbeat_fresh": True,
+                    "consumer_alive": True,
+                    "consumer_error_count": 0,
                 },
             }
             assert "B0PRIVATE123" not in json.dumps(running)
@@ -652,6 +1074,8 @@ def test_mcp_health_uses_live_scheduler_runtime_and_redacts_payloads(monkeypatch
                 "runtime": {
                     "lifecycle_state": "running",
                     "heartbeat_fresh": True,
+                    "consumer_alive": False,
+                    "consumer_error_count": 1,
                     "credential": "credential-value",
                 },
             }
@@ -663,6 +1087,8 @@ def test_mcp_health_uses_live_scheduler_runtime_and_redacts_payloads(monkeypatch
                 "runtime": {
                     "lifecycle_state": "running",
                     "heartbeat_fresh": True,
+                    "consumer_alive": False,
+                    "consumer_error_count": 1,
                 },
             }
             scheduler.runtime_health = lambda: {
