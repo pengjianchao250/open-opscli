@@ -106,6 +106,52 @@ python scripts/daily_feedback_report.py
 python scripts/daily_feedback_report.py --send
 ```
 
+### 使用大模型生成反馈洞察
+
+洞察模式会读取当前周期及上一等长周期的反馈列表和批量详情，调用正式的
+`opscli feedback insight` 命令进行语义分类，再由确定性规则计算模块问题次数、
+环比、影响用户数、P0-P4 优先级和建议工作。旧日报默认不调用模型；必须显式
+传入 `--insight`。
+
+先参考 `data/feedback_insight.example.json` 创建独立模型配置：
+
+```json
+{
+  "endpoint": "https://your-model-gateway.example/v1/chat/completions",
+  "api_key": "替换为模型密钥",
+  "model": "替换为模型名称",
+  "batch_size": 50
+}
+```
+
+默认配置路径为 `~/.config/opscli/feedback_insight.json`。也可以通过
+`--insight-config` 指向受保护文件：
+
+```bash
+python scripts/daily_feedback_report.py \
+  --insight \
+  --insight-config /etc/opscli/feedback-insight.json \
+  --send
+```
+
+模型接口必须兼容 OpenAI Chat Completions JSON 协议，非本机 endpoint 必须使用 HTTPS，
+HTTP 仅允许 localhost/127.0.0.1/::1 调试地址。发送模型前只保留反馈 UUID、
+类型、严重度、来源、系统、Skill/命令/工具、版本、标题、正文和首条失败摘要；邮箱、
+用户 ID、payload、context、附件、调用参数和凭据不会发送。用户仅以本地哈希参与影响
+人数统计，该哈希也不会发送给模型。
+
+模型只负责 `module/problem_key/problem_category/problem_summary/recommended_work/confidence`
+分类；次数、环比、影响人数和优先级由本地规则计算。Critical 固定为 P0；其他问题按
+严重度、当前次数、影响人数和增长趋势计分，依次划分为 P1-P4。模型输出缺项、重复 UUID、
+非法稳定键或置信度越界时整次洞察失败，不生成不完整报告。`batch_size` 控制每次模型
+请求的反馈数，必须在 1 到 100 之间，默认 50。
+
+后续模型批次会携带最多 100 个已建立的问题分类；本地还会按“原始系统/调用入口 + 标准化
+错误模板”对齐跨周期重复问题，避免模型批次间 problem_key 或 module 漂移造成次数失真。
+没有结构化错误信息时不按通用标题强制合并，避免不同根因被错误累计。平均置信度低于 0.7 的问题在
+报告中标为“待复核”，不会触发 P0/P1 洞察提醒。模型或对比周期查询失败时自动降级为
+基础日报，继续发送原有 Critical/High 提醒，不把可选 AI 能力变成日报单点故障。
+
 指定统计时间范围：
 
 ```bash
@@ -126,8 +172,10 @@ python scripts/daily_feedback_report.py \
 | `--timeout` | 否 | 单次反馈查询超时秒数，默认 20 |
 | `--output` | 否 | Markdown 文件路径；只允许写入项目根 `output/feedback-query/` |
 | `--send` | 否 | 显式发送企业微信 Markdown 摘要；未传时绝不调用机器人 |
+| `--insight` | 否 | 调用大模型生成模块问题洞察，并查询上一等长周期进行对比 |
+| `--insight-config` | 否 | 模型配置文件；仅与 `--insight` 一起使用，默认读取 opscli 用户配置目录 |
 
-日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表。群消息使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节，不使用仅旧版 Markdown 支持的字体颜色和成员 `@` 语法。报告与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据；群消息按“严重度 + 标题”聚合重复问题，最多展示 5 类 Critical/High 问题并标注每类反馈数，底部提供固定的“详细文档查看”入口，完整逐条记录保留在本地 Markdown 文件。
+日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表。洞察模式额外包含模块、主要问题、本周期/上一周期次数、变化、优先级和建议工作；群消息优先提醒最多 3 条 P0/P1 洞察。群消息使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节，不使用仅旧版 Markdown 支持的字体颜色和成员 `@` 语法。报告与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据；未启用洞察时，群消息仍按“严重度 + 标题”聚合重复问题，最多展示 5 类 Critical/High 问题并标注每类反馈数，底部提供固定的“详细文档查看”入口，完整逐条记录保留在本地 Markdown 文件。
 
 ## Linux 每日自动推送
 
@@ -137,10 +185,11 @@ Skill 内置 `deploy/` systemd 部署包，可在 Linux 服务器以专用服务
 sudo bash deploy/install_systemd.sh \
   --project-root /opt/open-opscli \
   --venv /opt/open-opscli/.venv \
-  --user ops-feedback
+  --user ops-feedback \
+  --insight-config /etc/opscli/feedback-insight.json
 ```
 
-安装脚本会校验项目、虚拟环境、日报脚本和凭据文件，收紧凭据与输出目录权限，安装 `ops-feedback-report.service/timer` 并立即启用 timer。首次部署后应手动执行 `sudo systemctl start ops-feedback-report.service` 验证真实推送；完整安装、巡检、排障与回滚步骤见 `docs/release/反馈日报定时推送运维指南.md`。
+`--insight-config` 可选；不传时继续生成旧版日报。传入时安装脚本会校验模型配置并将权限收紧为 `0600`，定时任务随后每日生成大模型洞察。安装脚本还会校验项目、虚拟环境、日报脚本和反馈凭据文件，收紧输出目录权限，安装 `ops-feedback-report.service/timer` 并立即启用 timer。首次部署后应手动执行 `sudo systemctl start ops-feedback-report.service` 验证真实推送；完整安装、巡检、排障与回滚步骤见 `docs/release/反馈日报定时推送运维指南.md`。
 
 ## 输出约定
 
@@ -157,7 +206,7 @@ sudo bash deploy/install_systemd.sh \
 3. 用 `batch-detail` 一次读取最多 100 条完整详情。
 4. 根据 `content`、`execution_summary.failed_calls` 和版本信息进行分诊。
 5. 只保留解决问题所需字段，不把邮箱、payload、context、附件或执行参数复制到公开渠道。
-6. 需要日常复盘时运行 `daily_feedback_report.py`；先不传 `--send` 检查 Markdown，确认后再显式推送企业微信。
+6. 需要模块分类、周期趋势和建议工作时增加 `--insight`；先不传 `--send` 检查 Markdown，确认模型分类和优先级后再显式推送企业微信。
 
 ## 安全边界
 
@@ -165,5 +214,6 @@ sudo bash deploy/install_systemd.sh \
 - `data/credentials.json` 是内部明文凭据文件；更换反馈密钥或企业微信 Webhook 时只修改该文件。
 - 不得输出、上传或反馈该密钥与 Webhook，也不要把它们复制到命令行参数。
 - 企业微信发送前必须确认群成员范围；群消息仅包含脱敏摘要，完整报告只落在本地专用输出目录。
+- 模型密钥只能放在 opscli 用户配置目录、受保护 CI File Variable 或 `/etc/opscli/` 受限文件，不得写入 Skill 的已跟踪凭据文件、命令行或日志。
 - 完整详情可能包含个人邮箱、文件路径、工具参数和执行上下文，按最小必要原则查询和使用。
 - 请求失败时只报告业务码、错误消息和安全的参数校验详情，不输出请求 Header。

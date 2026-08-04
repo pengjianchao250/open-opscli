@@ -264,3 +264,268 @@ def test_notify_command_failure_returns_safe_daily_report_error(monkeypatch: pyt
 
     with pytest.raises(module.DailyReportError, match="errcode=93000"):
         module.send_wecom_summary("### 日报")
+
+
+def test_insight_mode_compares_previous_period_and_renders_module_actions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    """洞察模式应读取上一周期，脱敏详情并渲染模块问题、优先级和建议。"""
+    module = _load_script()
+    project_root = tmp_path / "repo"
+    (project_root / ".git").mkdir(parents=True)
+    monkeypatch.chdir(project_root)
+    list_calls: list[dict] = []
+    insight_input: dict = {}
+
+    monkeypatch.setattr(module, "load_api_key", lambda: "feedback-secret")
+
+    def fake_list(self, params):
+        list_calls.append(dict(params))
+        if params["date_from"] == "2026-07-20 00:00:00":
+            rows = [
+                {
+                    "feedback_uuid": "current-1",
+                    "source": "mcp",
+                    "feedback_type": "bug",
+                    "severity": "high",
+                    "title": "字段映射失败 alice@example.com",
+                    "status": "new",
+                    "failed_call_count": 1,
+                    "user_id": 101,
+                    "user_email": "alice@example.com",
+                    "created_at": "2026-07-20T01:00:00Z",
+                }
+            ]
+        else:
+            rows = [
+                {
+                    "feedback_uuid": "previous-1",
+                    "source": "cli",
+                    "feedback_type": "bug",
+                    "severity": "medium",
+                    "title": "查询字段不存在",
+                    "status": "triaged",
+                    "failed_call_count": 1,
+                    "user_id": 101,
+                    "created_at": "2026-07-19T01:00:00Z",
+                }
+            ]
+        return {"code": 200, "msg": "成功", "data": {"list": rows, "total": 1}}
+
+    def fake_batch_detail(self, feedback_uuids, feedback_type=None):
+        return {
+            "code": 200,
+            "msg": "成功",
+            "data": [
+                {
+                    "feedback_uuid": feedback_uuid,
+                    "content": "字段别名无法映射 token=do-not-send Authorization: Bearer bearer-secret",
+                    "payload": {"secret": "raw-payload"},
+                    "context": {"cwd": "C:\\Users\\alice\\project"},
+                    "execution_summary": {
+                        "failed_calls": [
+                            {
+                                "error_message": "REMOTE_BUSINESS_ERROR: field not found",
+                                "reason": "字段解析入口不一致",
+                                "fix_suggestion": "统一字段解析入口",
+                            }
+                        ]
+                    },
+                }
+                for feedback_uuid in feedback_uuids
+            ],
+        }
+
+    def fake_insight(payload, config_path=None):
+        insight_input.update(payload)
+        assert config_path == Path("model-config.json")
+        return {
+            "problems": [
+                {
+                    "module": "query",
+                    "problem_summary": "字段别名映射失败",
+                    "current_count": 1,
+                    "previous_count": 1,
+                    "change_percent": 0.0,
+                    "affected_users": 1,
+                    "priority": "P2",
+                    "recommended_work": "统一字段解析入口并补充回归测试",
+                }
+            ],
+            "modules": [
+                {
+                    "module": "query",
+                    "problem_count": 1,
+                    "feedback_count": 1,
+                    "highest_priority": "P2",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(module.FeedbackQueryClient, "list_feedbacks", fake_list)
+    monkeypatch.setattr(module.FeedbackQueryClient, "batch_detail", fake_batch_detail)
+    monkeypatch.setattr(module, "run_feedback_insight", fake_insight, raising=False)
+
+    exit_code = module.main(
+        [
+            "--date-from",
+            "2026-07-20 00:00:00",
+            "--date-to",
+            "2026-07-20 23:59:59",
+            "--insight",
+            "--insight-config",
+            "model-config.json",
+        ]
+    )
+    output = json.loads(capsys.readouterr().out)
+    markdown = Path(output["output"]).read_text(encoding="utf-8")
+
+    assert exit_code == 0
+    assert [call["date_from"] for call in list_calls] == [
+        "2026-07-20 00:00:00",
+        "2026-07-19 00:00:00",
+    ]
+    assert insight_input["period"]["label"] == "2026-07-20"
+    assert insight_input["comparison_period"]["label"] == "2026-07-19"
+    assert len(insight_input["current_feedbacks"]) == 1
+    serialized_input = json.dumps(insight_input, ensure_ascii=False)
+    assert "alice@example.com" not in serialized_input
+    assert "raw-payload" not in serialized_input
+    assert "C:\\Users\\alice" not in serialized_input
+    assert "do-not-send" not in serialized_input
+    assert "bearer-secret" not in serialized_input
+    assert "REMOTE_BUSINESS_ERROR: field not found" in serialized_input
+    assert "## 四、模块问题洞察" in markdown
+    assert "| query | 字段别名映射失败 | 1 | 1 | 0.0% | P2 | 统一字段解析入口并补充回归测试 |" in markdown
+    assert "| high | bug | 字段映射失败" in markdown
+    assert "`current-1`" in markdown
+    assert output["insight"] is True
+
+
+def test_wecom_insight_summary_prioritizes_module_count_and_recommended_work():
+    """洞察提醒应优先展示高优问题的模块、次数和建议工作。"""
+    module = _load_script()
+    window = module.ReportWindow(
+        "2026-07-20 00:00:00",
+        "2026-07-20 23:59:59",
+        "2026-07-20",
+    )
+    insight = {
+        "problems": [
+            {
+                "module": "query",
+                "problem_summary": "字段别名映射失败",
+                "current_count": 12,
+                "previous_count": 4,
+                "change_percent": 200.0,
+                "priority": "P1",
+                "recommended_work": "统一字段解析入口并补充回归测试",
+            },
+            {
+                "module": "docs",
+                "problem_summary": "示例缺少参数",
+                "current_count": 1,
+                "previous_count": 0,
+                "change_percent": None,
+                "priority": "P3",
+                "recommended_work": "补充文档",
+            },
+            {
+                "module": "auth",
+                "problem_summary": "疑似认证失败",
+                "current_count": 20,
+                "previous_count": 2,
+                "change_percent": 900.0,
+                "priority": "P1",
+                "recommended_work": "人工复核分类",
+                "needs_review": True,
+            },
+        ]
+    }
+
+    summary = module.render_wecom_summary([], window, insight)
+
+    assert "**P0 / P1 模块提醒**" in summary
+    assert "[P1] query：字段别名映射失败（12 次，较上一周期 +200.0%）" in summary
+    assert "建议：统一字段解析入口并补充回归测试" in summary
+    assert "示例缺少参数" not in summary
+    assert "疑似认证失败" not in summary
+
+
+def test_insight_failure_falls_back_to_base_report_and_notification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    """模型不可用时仍应生成并发送基础日报，不能丢失原有提醒。"""
+    module = _load_script()
+    project_root = tmp_path / "repo"
+    (project_root / ".git").mkdir(parents=True)
+    monkeypatch.chdir(project_root)
+    sent: dict[str, str] = {}
+
+    monkeypatch.setattr(module, "load_api_key", lambda: "feedback-secret")
+    monkeypatch.setattr(
+        module.FeedbackQueryClient,
+        "list_feedbacks",
+        lambda self, params: {
+            "code": 200,
+            "msg": "成功",
+            "data": {
+                "list": [
+                    {
+                        "feedback_uuid": f"feedback-{params['date_from'][:10]}",
+                        "feedback_type": "bug",
+                        "severity": "high",
+                        "source": "mcp",
+                        "title": "查询持续失败",
+                        "status": "new",
+                    }
+                ],
+                "total": 1,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        module.FeedbackQueryClient,
+        "batch_detail",
+        lambda self, feedback_uuids, feedback_type=None: {
+            "code": 200,
+            "msg": "成功",
+            "data": {"list": [{"feedback_uuid": value} for value in feedback_uuids]},
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "run_feedback_insight",
+        lambda *args, **kwargs: (_ for _ in ()).throw(module.DailyReportError("模型超时")),
+    )
+    monkeypatch.setattr(
+        module,
+        "send_wecom_summary",
+        lambda content: sent.update(content=content),
+    )
+
+    exit_code = module.main(
+        [
+            "--date-from",
+            "2026-07-20 00:00:00",
+            "--date-to",
+            "2026-07-20 23:59:59",
+            "--insight",
+            "--send",
+        ]
+    )
+    output = json.loads(capsys.readouterr().out)
+    markdown = Path(output["output"]).read_text(encoding="utf-8")
+
+    assert exit_code == 0
+    assert output["insight"] is False
+    assert output["insight_degraded"] is True
+    assert "AI 洞察生成失败，本期已降级为基础日报" in markdown
+    assert "查询持续失败" in markdown
+    assert "AI 洞察生成失败，本期已降级为基础日报" in sent["content"]
+    assert "查询持续失败" in sent["content"]
+    assert "模型超时" not in sent["content"]

@@ -1,6 +1,6 @@
 {
   "name": "ops-feedback-query",
-  "version": "v1.2.0",
-  "updated_at": "2026-07-27",
-  "notes": "新增 Linux systemd 每日 09:00 自动推送部署包。"
+  "version": "v1.3.0",
+  "updated_at": "2026-08-03",
+  "notes": "新增大模型反馈分类、周期对比、模块优先级与建议工作提醒。"
 }

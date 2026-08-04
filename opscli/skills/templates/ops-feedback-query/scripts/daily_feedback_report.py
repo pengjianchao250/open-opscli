@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -40,6 +41,7 @@ from query_feedbacks import (  # noqa: E402
 SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
 # Skill 通过正式 opscli 命令发送通知，避免直接访问反馈接口以外的远端服务。
 NOTIFY_COMMAND_TIMEOUT = 15.0
+INSIGHT_COMMAND_TIMEOUT = 120.0
 # 企业微信 markdown_v2.content 官方上限为 4096 字节。
 WECOM_CONTENT_BYTES = 4096
 FEEDBACK_DETAIL_URL = "https://ops.xenkee.com/dashboard/share/3e2W4spQ"
@@ -50,6 +52,9 @@ MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\([^\)]+\)")
 URL_PATTERN = re.compile(r"https?://[^\s|]+", re.IGNORECASE)
 SECRET_PATTERN = re.compile(
     r"(?i)\b(api[_ -]?key|token|cookie|authorization|webhook)\b\s*[:=]\s*[^\s|]+"
+)
+AUTHORIZATION_PATTERN = re.compile(
+    r"(?i)\bauthorization\b\s*[:=]\s*(?:bearer\s+)?[^\s|]+"
 )
 
 
@@ -115,6 +120,20 @@ def resolve_report_window(
     return ReportWindow(date_from, date_to, label)
 
 
+def resolve_comparison_window(window: ReportWindow) -> ReportWindow:
+    """返回与当前报告等长且紧邻的上一周期。"""
+    start = _parse_datetime(window.date_from, "--date-from")
+    end = _parse_datetime(window.date_to, "--date-to")
+    previous_end = start - timedelta(seconds=1)
+    previous_start = previous_end - (end - start)
+    start_text = previous_start.strftime("%Y-%m-%d %H:%M:%S")
+    end_text = previous_end.strftime("%Y-%m-%d %H:%M:%S")
+    label = previous_start.date().isoformat()
+    if previous_start.date() != previous_end.date():
+        label = f"{previous_start.date().isoformat()} 至 {previous_end.date().isoformat()}"
+    return ReportWindow(start_text, end_text, label)
+
+
 def _per_page(value: str) -> int:
     """解析 1 到 100 的日报分页大小。"""
     parsed = int(value)
@@ -141,6 +160,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=_positive_float, default=DEFAULT_TIMEOUT, help="查询超时秒数")
     parser.add_argument("--output", type=Path, help="Markdown 输出文件，仅允许 output/feedback-query/")
     parser.add_argument("--send", action="store_true", help="生成报告后发送企业微信 Markdown 摘要")
+    parser.add_argument("--insight", action="store_true", help="调用大模型生成模块问题洞察和周期对比")
+    parser.add_argument(
+        "--insight-config",
+        type=Path,
+        help="反馈洞察模型配置文件；默认由 opscli 从用户配置目录读取",
+    )
     return parser
 
 
@@ -185,6 +210,147 @@ def fetch_feedbacks(
     return list(feedbacks.values())
 
 
+def fetch_feedback_details(
+    client: FeedbackQueryClient,
+    feedbacks: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """按 100 条一批读取问题反馈详情，并按 UUID 建立索引。"""
+    uuids = [
+        str(item["feedback_uuid"])
+        for item in feedbacks
+        if item.get("feedback_type") != "query_result"
+    ]
+    details: dict[str, dict[str, Any]] = {}
+    for start in range(0, len(uuids), 100):
+        payload = client.batch_detail(uuids[start : start + 100], "all")
+        data = payload.get("data")
+        rows = data.get("list") if isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            raise DailyReportError("反馈批量详情接口缺少 data 数组")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise DailyReportError("反馈批量详情包含非对象记录")
+            feedback_uuid = str(row.get("feedback_uuid") or "").strip()
+            if not feedback_uuid:
+                raise DailyReportError("反馈批量详情记录缺少 feedback_uuid")
+            details[feedback_uuid] = row
+    return details
+
+
+def _safe_insight_text(value: Any, maximum: int = 1000) -> str:
+    """脱敏发送给本地 insight 命令的自由文本。"""
+    text = " ".join(str(value or "").split())
+    text = EMAIL_PATTERN.sub("[邮箱已脱敏]", text)
+    text = WINDOWS_USER_PATH_PATTERN.sub("[本地路径已脱敏]", text)
+    text = AUTHORIZATION_PATTERN.sub("Authorization=[凭据已脱敏]", text)
+    text = SECRET_PATTERN.sub(lambda match: f"{match.group(1)}=[凭据已脱敏]", text)
+    text = URL_PATTERN.sub("[链接已脱敏]", text)
+    return text[:maximum]
+
+
+def _user_key(item: dict[str, Any]) -> str | None:
+    """将用户标识哈希后仅用于影响人数计算。"""
+    value = item.get("user_id") or item.get("user_email")
+    if value is None:
+        return None
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:16]
+
+
+def build_insight_feedbacks(
+    feedbacks: list[dict[str, Any]],
+    details: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """构造不含 payload、context、附件和原始用户标识的洞察输入。"""
+    result: list[dict[str, Any]] = []
+    for item in feedbacks:
+        if item.get("feedback_type") == "query_result":
+            continue
+        feedback_uuid = str(item["feedback_uuid"])
+        detail = details.get(feedback_uuid, {})
+        row: dict[str, Any] = {"feedback_uuid": feedback_uuid}
+        for key in (
+            "feedback_type",
+            "severity",
+            "source",
+            "system_alias",
+            "skill_name",
+            "command_name",
+            "mcp_tool_name",
+            "app_version",
+        ):
+            value = detail.get(key, item.get(key))
+            if value is not None:
+                row[key] = _safe_insight_text(value, 200)
+        for key in ("title", "content"):
+            value = detail.get(key, item.get(key))
+            if value:
+                row[key] = _safe_insight_text(value)
+        user_key = _user_key(item)
+        if user_key:
+            row["user_key"] = user_key
+
+        execution_summary = detail.get("execution_summary")
+        failed_calls = (
+            execution_summary.get("failed_calls") if isinstance(execution_summary, dict) else None
+        )
+        if isinstance(failed_calls, list) and failed_calls and isinstance(failed_calls[0], dict):
+            first_failure = failed_calls[0]
+            for key in ("error_message", "reason", "fix_suggestion"):
+                if first_failure.get(key):
+                    row[key] = _safe_insight_text(first_failure[key])
+        result.append(row)
+    return result
+
+
+def run_feedback_insight(
+    payload: dict[str, Any],
+    config_path: Path | None = None,
+) -> dict[str, Any]:
+    """通过正式 opscli 命令执行模型分类和聚合。"""
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".json",
+        encoding="utf-8",
+        delete=False,
+    ) as input_file:
+        json.dump(payload, input_file, ensure_ascii=False)
+        input_path = Path(input_file.name)
+    command = ["opscli", "feedback", "insight", "--input-file", str(input_path)]
+    if config_path is not None:
+        command.extend(["--config-file", str(config_path)])
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=INSIGHT_COMMAND_TIMEOUT,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise DailyReportError("未找到 opscli 命令，请先安装当前项目版本") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise DailyReportError("opscli feedback insight 执行超时") from exc
+    finally:
+        try:
+            input_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    try:
+        response = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise DailyReportError("opscli feedback insight 未返回合法 JSON") from exc
+    if result.returncode != 0 or not response.get("success"):
+        error = response.get("error") if isinstance(response, dict) else None
+        message = error.get("message") if isinstance(error, dict) else None
+        raise DailyReportError(str(message or "opscli feedback insight 执行失败"))
+    data = response.get("data")
+    if not isinstance(data, dict):
+        raise DailyReportError("opscli feedback insight 响应缺少 data 对象")
+    return data
+
+
 def _safe_text(value: Any, *, maximum: int = 200) -> str:
     """清理用户文本中的敏感信息、链接和 Markdown 控制符。"""
     text = " ".join(str(value or "-").split())
@@ -225,7 +391,12 @@ def _count_rows(counter: Counter[str], order: tuple[str, ...]) -> list[str]:
     return rows or ["| - | 0 |"]
 
 
-def render_markdown(feedbacks: list[dict[str, Any]], window: ReportWindow) -> str:
+def render_markdown(
+    feedbacks: list[dict[str, Any]],
+    window: ReportWindow,
+    insight: dict[str, Any] | None = None,
+    insight_degraded: bool = False,
+) -> str:
     """将反馈列表渲染为不含个人和执行上下文的 Markdown 日报。"""
     problems = [item for item in feedbacks if item.get("feedback_type") != "query_result"]
     severe = [item for item in problems if item.get("severity") in {"critical", "high"}]
@@ -247,6 +418,11 @@ def render_markdown(feedbacks: list[dict[str, Any]], window: ReportWindow) -> st
         f"- 问题反馈：**{len(problems)}**",
         f"- Critical / High：**{len(severe)}**",
         f"- 失败调用：**{failed_calls}**",
+    ]
+    if insight_degraded:
+        lines.extend(["- AI 洞察生成失败，本期已降级为基础日报。"])
+    lines.extend(
+        [
         "",
         "## 二、反馈类型",
         "",
@@ -274,11 +450,51 @@ def render_markdown(feedbacks: list[dict[str, Any]], window: ReportWindow) -> st
         "|---|---:|",
         *_count_rows(status_counter, ("new", "triaged", "processing", "resolved", "rejected")),
         "",
-        "## 四、Critical / High 问题",
+        ]
+    )
+    if insight is not None:
+        lines.extend(
+            [
+                "",
+                "## 四、模块问题洞察",
+                "",
+                "| 模块 | 主要问题 | 本周期 | 上一周期 | 变化 | 优先级 | 建议工作 |",
+                "|---|---|---:|---:|---:|---|---|",
+            ]
+        )
+        insight_problems = insight.get("problems")
+        if isinstance(insight_problems, list) and insight_problems:
+            for problem in insight_problems:
+                change = problem.get("change_percent")
+                change_text = "新增" if change is None else f"{change}%"
+                priority_text = str(problem.get("priority") or "-")
+                if problem.get("needs_review"):
+                    priority_text = f"{priority_text}（待复核）"
+                lines.append(
+                    "| {module} | {summary} | {current} | {previous} | {change} | {priority} | {work} |".format(
+                        module=_safe_text(problem.get("module"), maximum=80),
+                        summary=_safe_text(problem.get("problem_summary"), maximum=120),
+                        current=int(problem.get("current_count") or 0),
+                        previous=int(problem.get("previous_count") or 0),
+                        change=_safe_text(change_text, maximum=30),
+                        priority=_safe_text(priority_text, maximum=30),
+                        work=_safe_text(problem.get("recommended_work"), maximum=200),
+                    )
+                )
+        else:
+            lines.append("| - | 本周期无问题洞察 | 0 | 0 | - | - | - |")
+
+    critical_section = "五" if insight is not None else "四"
+    all_section = "六" if insight is not None else "五"
+    lines.extend(
+        [
+        "",
+        f"## {critical_section}、Critical / High 问题",
         "",
         "| 严重度 | 标题 | 来源 | 状态 | 失败调用 | 反馈 UUID | 创建时间 |",
         "|---|---|---|---|---:|---|---|",
-    ]
+        ]
+    )
     if severe:
         for item in severe:
             lines.append(
@@ -298,7 +514,7 @@ def render_markdown(feedbacks: list[dict[str, Any]], window: ReportWindow) -> st
     lines.extend(
         [
             "",
-            "## 五、全部问题反馈",
+            f"## {all_section}、全部问题反馈",
             "",
             "| 严重度 | 类型 | 标题 | 来源 | 状态 | 失败调用 | 反馈 UUID | 创建时间 |",
             "|---|---|---|---|---|---:|---|---|",
@@ -323,7 +539,12 @@ def render_markdown(feedbacks: list[dict[str, Any]], window: ReportWindow) -> st
     return "\n".join(lines) + "\n"
 
 
-def render_wecom_summary(feedbacks: list[dict[str, Any]], window: ReportWindow) -> str:
+def render_wecom_summary(
+    feedbacks: list[dict[str, Any]],
+    window: ReportWindow,
+    insight: dict[str, Any] | None = None,
+    insight_degraded: bool = False,
+) -> str:
     """生成适合企业微信群机器人的精简 Markdown V2 摘要。"""
     problems = [item for item in feedbacks if item.get("feedback_type") != "query_result"]
     severe = [item for item in problems if item.get("severity") in {"critical", "high"}]
@@ -335,6 +556,40 @@ def render_wecom_summary(feedbacks: list[dict[str, Any]], window: ReportWindow) 
         f"> Critical / High：**{len(severe)}**",
         f"> 失败调用：**{failed_calls}**",
     ]
+    insight_problems = insight.get("problems") if isinstance(insight, dict) else None
+    urgent_insights = (
+        [
+            item
+            for item in insight_problems
+            if isinstance(item, dict) and item.get("priority") in {"P0", "P1"}
+        ]
+        if isinstance(insight_problems, list)
+        else []
+    )
+    urgent_insights = [item for item in urgent_insights if not item.get("needs_review")]
+    if insight_degraded:
+        lines.extend(["", "AI 洞察生成失败，本期已降级为基础日报。"])
+    if urgent_insights:
+        lines.extend(["", "**P0 / P1 模块提醒**"])
+        for item in urgent_insights[:3]:
+            change = item.get("change_percent")
+            if change is None:
+                change_text = "上一周期未出现"
+            else:
+                prefix = "+" if float(change) > 0 else ""
+                change_text = f"较上一周期 {prefix}{change}%"
+            lines.append(
+                "- [{priority}] {module}：{summary}（{count} 次，{change}）".format(
+                    priority=_safe_text(item.get("priority"), maximum=20),
+                    module=_safe_text(item.get("module"), maximum=40),
+                    summary=_safe_text(item.get("problem_summary"), maximum=80),
+                    count=int(item.get("current_count") or 0),
+                    change=_safe_text(change_text, maximum=40),
+                )
+            )
+            lines.append(
+                f"  建议：{_safe_text(item.get('recommended_work'), maximum=120)}"
+            )
     if severe:
         lines.extend(["", "**重点问题**"])
         grouped = Counter(
@@ -455,13 +710,47 @@ def main(argv: list[str] | None = None) -> int:
         api_key = load_api_key()
         client = FeedbackQueryClient(api_key, args.base_url, args.timeout)
         feedbacks = fetch_feedbacks(client, window, per_page=args.per_page)
-        markdown = render_markdown(feedbacks, window)
+        insight = None
+        insight_degraded = False
+        if args.insight:
+            try:
+                comparison_window = resolve_comparison_window(window)
+                comparison_feedbacks = fetch_feedbacks(
+                    client, comparison_window, per_page=args.per_page
+                )
+                current_details = fetch_feedback_details(client, feedbacks)
+                comparison_details = fetch_feedback_details(client, comparison_feedbacks)
+                insight = run_feedback_insight(
+                    {
+                        "period": {
+                            "label": window.label,
+                            "date_from": window.date_from,
+                            "date_to": window.date_to,
+                        },
+                        "comparison_period": {
+                            "label": comparison_window.label,
+                            "date_from": comparison_window.date_from,
+                            "date_to": comparison_window.date_to,
+                        },
+                        "current_feedbacks": build_insight_feedbacks(feedbacks, current_details),
+                        "comparison_feedbacks": build_insight_feedbacks(
+                            comparison_feedbacks, comparison_details
+                        ),
+                    },
+                    args.insight_config,
+                )
+            except (FeedbackQueryError, DailyReportError, httpx.HTTPError):
+                # AI 洞察是可选增强；失败时保留基础日报和原有高严重度提醒。
+                insight_degraded = True
+        markdown = render_markdown(feedbacks, window, insight, insight_degraded)
         default_name = f"反馈日报-{window.label.replace(' 至 ', '_')}.md"
         output_path = write_markdown(markdown, args.output or Path(default_name))
 
         sent = False
         if args.send:
-            send_wecom_summary(render_wecom_summary(feedbacks, window))
+            send_wecom_summary(
+                render_wecom_summary(feedbacks, window, insight, insight_degraded)
+            )
             sent = True
     except FeedbackQueryError as exc:
         _print_json(exc.payload, stream=sys.stderr)
@@ -478,6 +767,8 @@ def main(argv: list[str] | None = None) -> int:
             "success": True,
             "output": str(output_path),
             "feedback_count": len(feedbacks),
+            "insight": insight is not None,
+            "insight_degraded": insight_degraded,
             "sent": sent,
         }
     )

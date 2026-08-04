@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-08-03 feedback - 增加大模型模块洞察与周期提醒
+
+**变更原因**：原反馈日报只能按类型、严重度和标题罗列记录，无法回答“哪个模块在什么周期发生了多少次、趋势如何、建议优先做什么”。
+**改动点**：新增 `opscli feedback insight`，通过独立受保护配置调用 OpenAI-compatible Chat Completions 接口，对脱敏反馈进行模块、稳定问题键、问题类别、摘要和建议工作分类；次数、上一等长周期环比、影响人数和 P0-P4 优先级由本地规则确定性计算。`ops-feedback-query` v1.3.0 新增 `--insight/--insight-config`，批量读取当前与上一周期详情，生成模块问题洞察表，并在企微摘要优先提醒 P0/P1。systemd 安装器支持可选模型配置，启用前校验字段并收紧为 `0600`；未配置时保持旧日报行为。
+**验证结果**：feedback 洞察 CLI、模型请求脱敏、跨批次错误模板对齐、周期聚合、优先级、低置信度待复核、模型失败降级、日报详情脱敏、模块建议表、企微 P0/P1 提醒及 systemd 可选配置聚焦回归 `42 passed`；生产代码 `compileall`、CLI 帮助入口和 `git diff --check` 通过。全库使用 `--import-mode=importlib` 并忽略既有 Shopify MCP 收集阻塞后为 `2179 passed, 52 failed`，失败均位于本次未修改的 Rufus、calculator、query、seller-sprite、旧 Skill 契约等区域。
+**影响范围**：新增可选反馈洞察路径和 `feedback` CLI 子命令；不修改反馈提交/详情 API，不改变默认日报和公开发行边界。
+**回滚方式**：移除 insight 服务与 CLI、日报 `--insight` 路径、systemd 可选参数、Skill v1.3.0 文档和相关测试；不涉及反馈数据迁移。
+---
+
 ## 2026-08-03 collector_monitor - 修复 Collector 探测鉴权 Header
 
 **变更原因**：Monitor 将页面或 Key 文件中的 API Key 作为 `X-MCP-API-Key` 发送，但 Collector 鉴权中间件只接受标准 Bearer、query 参数或 Inspector 代理 Header，导致“立即探测 Collector”在 Key 有效时仍于工具调用前返回 401。
