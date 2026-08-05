@@ -36,6 +36,40 @@ def test_default_report_window_uses_previous_shanghai_day():
     assert window.label == "2026-07-20"
 
 
+def test_run_feedback_insight_computes_process_timeout_from_batch_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """日报应按反馈数和配置批次计算有上限的子进程超时。"""
+    module = _load_script()
+    captured: dict[str, object] = {}
+    config_path = tmp_path / "model-config.json"
+    config_path.write_text(json.dumps({"batch_size": 50}), encoding="utf-8")
+    monkeypatch.setattr(module, "DEFAULT_INSIGHT_CONFIG", config_path)
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["timeout"] = kwargs["timeout"]
+        return module.subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"success": True, "data": {"problems": []}}),
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    result = module.run_feedback_insight(
+        {
+            "current_feedbacks": [{"feedback_uuid": str(index)} for index in range(101)],
+            "comparison_feedbacks": [],
+        },
+    )
+
+    assert result == {"problems": []}
+    assert captured["timeout"] == 1860.0
+    assert "--config-file" not in captured["command"]
+
+
 def test_report_command_paginates_deduplicates_and_writes_safe_markdown(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -120,7 +120,7 @@ python scripts/daily_feedback_report.py --send
   "endpoint": "https://your-model-gateway.example/v1/chat/completions",
   "api_key": "替换为模型密钥",
   "model": "替换为模型名称",
-  "batch_size": 50
+  "batch_size": 100
 }
 ```
 
@@ -135,18 +135,18 @@ python scripts/daily_feedback_report.py \
 ```
 
 模型接口必须兼容 OpenAI Chat Completions JSON 协议，非本机 endpoint 必须使用 HTTPS，
-HTTP 仅允许 localhost/127.0.0.1/::1 调试地址。发送模型前只保留反馈 UUID、
+HTTP 仅允许 localhost/127.0.0.1/::1 调试地址。发送模型前只保留批内短引用、
 类型、严重度、来源、系统、Skill/命令/工具、版本、标题、正文和首条失败摘要；邮箱、
 用户 ID、payload、context、附件、调用参数和凭据不会发送。用户仅以本地哈希参与影响
 人数统计，该哈希也不会发送给模型。
 
 模型只负责 `module/problem_key/problem_category/problem_summary/recommended_work/confidence`
 分类；次数、环比、影响人数和优先级由本地规则计算。Critical 固定为 P0；其他问题按
-严重度、当前次数、影响人数和增长趋势计分，依次划分为 P1-P4。模型输出缺项、重复 UUID、
+严重度、当前次数、影响人数和增长趋势计分，依次划分为 P1-P4。模型输出缺项、重复批内引用、
 非法稳定键或置信度越界时整次洞察失败，不生成不完整报告。`batch_size` 控制每次模型
-请求的反馈数，必须在 1 到 100 之间，默认 50。
+请求的反馈数，必须在 1 到 100 之间，默认 100。单批网络失败自动重试一次。
 
-后续模型批次会携带最多 100 个已建立的问题分类；本地还会按“原始系统/调用入口 + 标准化
+后续模型批次会携带最多 200 个已建立的问题分类；本地还会按“原始系统/调用入口 + 标准化
 错误模板”对齐跨周期重复问题，避免模型批次间 problem_key 或 module 漂移造成次数失真。
 没有结构化错误信息时不按通用标题强制合并，避免不同根因被错误累计。平均置信度低于 0.7 的问题在
 报告中标为“待复核”，不会触发 P0/P1 洞察提醒。模型或对比周期查询失败时自动降级为

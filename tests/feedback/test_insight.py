@@ -11,7 +11,11 @@ import respx
 from typer.testing import CliRunner
 
 from opscli.feedback.commands.cli import app
-from opscli.feedback.services.insight import FeedbackInsightManager
+from opscli.feedback.services.insight import (
+    FeedbackInsightManager,
+    InsightModelConfig,
+    OpenAICompatibleInsightClient,
+)
 
 
 runner = CliRunner()
@@ -85,7 +89,7 @@ def test_insight_classifies_and_aggregates_current_and_previous_periods(tmp_path
             model_output = {
                 "classifications": [
                     {
-                        "feedback_uuid": item["feedback_uuid"],
+                        "batch_ref": item["batch_ref"],
                         "module": "auth" if item["period"] == "comparison" else "query",
                         "problem_key": (
                             "field_mapping_failure_previous"
@@ -152,6 +156,7 @@ def test_insight_classifies_and_aggregates_current_and_previous_periods(tmp_path
     }
     assert route.call_count == 2
     assert model_requests[0]["existing_problem_taxonomy"] == []
+    assert [item["batch_ref"] for item in model_requests[0]["feedbacks"]] == ["1", "2"]
     assert model_requests[1]["existing_problem_taxonomy"] == [
         {
             "module": "query",
@@ -162,13 +167,141 @@ def test_insight_classifies_and_aggregates_current_and_previous_periods(tmp_path
 
     request = route.calls[0].request
     assert request.headers["Authorization"] == "Bearer model-secret"
+    assert request.extensions["timeout"] == {
+        "connect": 10.0,
+        "read": 300.0,
+        "write": 10.0,
+        "pool": 10.0,
+    }
     request_text = request.content.decode("utf-8")
     assert "alice@example.com" not in request_text
+    assert "current-1" not in request_text
     assert '"user_id"' not in request_text
     assert "model-secret" not in request_text
     assert "content-secret" not in "".join(
         json.dumps(item, ensure_ascii=False) for item in model_requests
     )
+
+
+def test_model_config_defaults_batch_size_to_100(tmp_path: Path):
+    """未显式配置时生产批次应默认使用 100 条。"""
+    config_path = tmp_path / "model.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "endpoint": "https://llm.example.test/v1/chat/completions",
+                "api_key": "model-secret",
+                "model": "feedback-classifier",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert InsightModelConfig.load(config_path).batch_size == 100
+
+
+def test_model_request_retries_once_after_transient_http_error():
+    """单批网络错误应重试一次并保留本地 UUID 映射。"""
+    client = OpenAICompatibleInsightClient(
+        InsightModelConfig(
+            endpoint="https://llm.example.test/v1/chat/completions",
+            api_key="model-secret",
+            model="feedback-classifier",
+        )
+    )
+    attempts = 0
+
+    def model_response(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadTimeout("temporary timeout", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "classifications": [
+                                        {
+                                            "batch_ref": "1",
+                                            "module": "query",
+                                            "problem_key": "request_timeout",
+                                            "problem_category": "可用性",
+                                            "problem_summary": "查询请求超时",
+                                            "recommended_work": "检查服务延迟并补充重试",
+                                            "confidence": 0.9,
+                                        }
+                                    ]
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("https://llm.example.test/v1/chat/completions").mock(
+            side_effect=model_response
+        )
+        result = client.classify(
+            [{"feedback_uuid": "feedback-1", "period": "current", "title": "查询超时"}],
+            [],
+        )
+
+    assert route.call_count == 2
+    assert result[0]["feedback_uuid"] == "feedback-1"
+
+
+def test_model_request_retries_once_after_truncated_json():
+    """大批模型响应截断时应重新请求该批次。"""
+    client = OpenAICompatibleInsightClient(
+        InsightModelConfig(
+            endpoint="https://llm.example.test/v1/chat/completions",
+            api_key="model-secret",
+            model="feedback-classifier",
+        )
+    )
+    attempts = 0
+
+    def model_response(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        content = "{"
+        if attempts == 2:
+            content = json.dumps(
+                {
+                    "classifications": [
+                        {
+                            "batch_ref": "1",
+                            "module": "query",
+                            "problem_key": "invalid_response",
+                            "problem_category": "可用性",
+                            "problem_summary": "模型响应截断",
+                            "recommended_work": "重试当前分类批次",
+                            "confidence": 0.9,
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("https://llm.example.test/v1/chat/completions").mock(
+            side_effect=model_response
+        )
+        result = client.classify(
+            [{"feedback_uuid": "feedback-1", "period": "current", "title": "响应异常"}],
+            [],
+        )
+
+    assert route.call_count == 2
+    assert result[0]["feedback_uuid"] == "feedback-1"
 
 
 def test_insight_rejects_plain_http_for_non_loopback_model_endpoint(tmp_path: Path):

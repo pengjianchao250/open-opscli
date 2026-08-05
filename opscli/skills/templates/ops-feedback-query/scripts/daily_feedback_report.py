@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import subprocess
 import sys
@@ -20,6 +21,8 @@ from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
 import httpx
+
+from opscli.config import CONFIG_DIR
 
 # Skill 脚本不是 Python 包，将同目录加入导入路径以复用已有查询客户端。
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -41,7 +44,13 @@ from query_feedbacks import (  # noqa: E402
 SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
 # Skill 通过正式 opscli 命令发送通知，避免直接访问反馈接口以外的远端服务。
 NOTIFY_COMMAND_TIMEOUT = 15.0
-INSIGHT_COMMAND_TIMEOUT = 120.0
+# 洞察子进程按批次数计算兜底上限，覆盖每批两次 300 秒模型读取和启动收尾余量。
+INSIGHT_BATCH_TIMEOUT_BUDGET = 600.0
+INSIGHT_COMMAND_TIMEOUT_MARGIN = 60.0
+INSIGHT_COMMAND_TIMEOUT_MAX = 3600.0
+DEFAULT_INSIGHT_BATCH_SIZE = 100
+# 与 `opscli feedback insight` 使用同一默认配置路径，确保批次数预算一致。
+DEFAULT_INSIGHT_CONFIG = CONFIG_DIR / "feedback_insight.json"
 # 企业微信 markdown_v2.content 官方上限为 4096 字节。
 WECOM_CONTENT_BYTES = 4096
 FEEDBACK_DETAIL_URL = "https://ops.xenkee.com/dashboard/share/3e2W4spQ"
@@ -307,6 +316,30 @@ def run_feedback_insight(
     config_path: Path | None = None,
 ) -> dict[str, Any]:
     """通过正式 opscli 命令执行模型分类和聚合。"""
+    batch_size = DEFAULT_INSIGHT_BATCH_SIZE
+    effective_config_path = config_path or DEFAULT_INSIGHT_CONFIG
+    if effective_config_path.exists():
+        try:
+            config_payload = json.loads(effective_config_path.read_text(encoding="utf-8"))
+            configured_batch_size = int(config_payload.get("batch_size", batch_size))
+            if 1 <= configured_batch_size <= 100:
+                batch_size = configured_batch_size
+        except (OSError, json.JSONDecodeError, TypeError, ValueError, AttributeError):
+            # 配置错误由正式 opscli 命令返回；这里只使用安全默认值计算兜底超时。
+            pass
+    feedback_count = sum(
+        len(items)
+        for items in (
+            payload.get("current_feedbacks"),
+            payload.get("comparison_feedbacks"),
+        )
+        if isinstance(items, list)
+    )
+    batch_count = max(1, math.ceil(feedback_count / batch_size))
+    command_timeout = min(
+        INSIGHT_COMMAND_TIMEOUT_MAX,
+        batch_count * INSIGHT_BATCH_TIMEOUT_BUDGET + INSIGHT_COMMAND_TIMEOUT_MARGIN,
+    )
     with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".json",
@@ -325,7 +358,7 @@ def run_feedback_insight(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=INSIGHT_COMMAND_TIMEOUT,
+            timeout=command_timeout,
             check=False,
         )
     except FileNotFoundError as exc:
