@@ -177,6 +177,22 @@ python scripts/daily_feedback_report.py \
 
 日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表。洞察模式额外包含模块、主要问题、本周期/上一周期次数、变化、优先级和建议工作；群消息优先提醒最多 3 条 P0/P1 洞察。群消息使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节，不使用仅旧版 Markdown 支持的字体颜色和成员 `@` 语法。报告与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据；未启用洞察时，群消息仍按“严重度 + 标题”聚合重复问题，最多展示 5 类 Critical/High 问题并标注每类反馈数，底部提供固定的“详细文档查看”入口，完整逐条记录保留在本地 Markdown 文件。
 
+### 本地浏览日报
+
+启动只读的本地 HTTP 服务，按更新时间浏览 `output/feedback-query/` 中的 Markdown 日报：
+
+```bash
+python scripts/serve_feedback_reports.py
+```
+
+服务默认监听 `http://127.0.0.1:8780`，不会暴露到局域网。可使用 `--port` 修改端口：
+
+```bash
+python scripts/serve_feedback_reports.py --port 8877
+```
+
+浏览服务只读取报告目录根部、符合 `反馈日报-YYYY-MM-DD[_YYYY-MM-DD][-*].md` 或月度反馈复盘命名的文件，提供报告页面、Markdown 原文、`/api/reports` 列表和 `/health` 健康检查；其他 Markdown、JSON 查询结果、模型配置、凭据、子目录和目录外文件均不可访问。
+
 ## Linux 每日自动推送
 
 Skill 内置 `deploy/` systemd 部署包，可在 Linux 服务器以专用服务账号每天 09:00（Asia/Shanghai）推送完整昨日的反馈日报：
