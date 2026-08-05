@@ -92,10 +92,12 @@ lease_expires_at
 | 资源 | 权限 |
 |---|---|
 | SellerSprite `task_queue.sqlite3` 及现有 `-wal`、`-shm` 文件 | 只读 |
+| SellerSprite `account_bindings.sqlite3` 及现有 `-wal`、`-shm` 文件 | 只读 |
+| MCP `quota.sqlite3` 及现有 `-wal`、`-shm` 文件 | 只读 |
 | SellerSprite 业务库父目录 | 只允许必要的遍历/读取，不允许创建或删除文件 |
 | Monitor 私有状态目录 | 读写 |
 | 企业微信 Webhook 文件 | 只读，仅服务账号可读 |
-| 账号绑定库、密钥、浏览器 Profile | 无权限 |
+| 账号绑定密钥、浏览器 Profile | 无权限；Monitor 不解密账号凭据 |
 
 Monitor 应以 SQLite URI `mode=ro` 并启用 `PRAGMA query_only=ON`。业务库和 Monitor 私有状态库必须是不同物理文件，也不能通过符号链接或硬链接指向同一文件；配置加载和每次状态库写连接都会复核，写连接还会读取 SQLite `main` 实际打开路径后再次比较。业务库不存在时，Monitor 必须报未就绪，不能创建空库。
 

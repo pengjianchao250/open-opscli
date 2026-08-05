@@ -7,7 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from opscli.collector_monitor.account_repository import AccountMonitorRepository
+from opscli.collector_monitor.storage.account_repository import AccountMonitorRepository
 
 
 NOW = datetime(2026, 8, 5, 4, 30, tzinfo=timezone.utc)
@@ -258,6 +258,84 @@ def test_usage_today_uses_shanghai_day_and_counts_refunded_failures(tmp_path: Pa
             }
         ],
     }
+
+
+def test_high_volume_account_does_not_hide_another_accounts_latest_result(
+    tmp_path: Path,
+) -> None:
+    """全局高频历史不得挤掉其他账号的最近成功记录。"""
+    binding_db = tmp_path / "bindings.sqlite3"
+    queue_db = tmp_path / "queue.sqlite3"
+    quota_db = tmp_path / "quota.sqlite3"
+    noisy_key = _account_key("Dedicated A", "seller.account@example.com")
+    quiet_key = _account_key("Dedicated B", "quiet.account@example.com")
+    _create_binding_db(binding_db)
+    _create_queue_db(queue_db, noisy_key)
+    _create_quota_db(quota_db)
+    with sqlite3.connect(binding_db) as conn:
+        conn.execute(
+            "INSERT INTO seller_sprite_dedicated_accounts VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "quiet-account-id",
+                "Dedicated B",
+                "quiet.account@example.com",
+                b"encrypted",
+                "2026-08-01T00:00:00+00:00",
+                "2026-08-01T00:00:00+00:00",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO seller_sprite_user_account_bindings VALUES (?, ?, ?, ?)",
+            (
+                "quiet.user@example.com",
+                "quiet-account-id",
+                "2026-08-01T00:00:00+00:00",
+                "2026-08-01T00:00:00+00:00",
+            ),
+        )
+    with sqlite3.connect(queue_db) as conn:
+        conn.executemany(
+            "INSERT INTO seller_sprite_task_queue VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    f"job-noisy-{index:04d}",
+                    "succeeded",
+                    "Dedicated A",
+                    noisy_key,
+                    "2026-08-05T03:00:00+00:00",
+                    "2026-08-05T04:00:00+00:00",
+                    None,
+                )
+                for index in range(2001)
+            ],
+        )
+        conn.execute(
+            "INSERT INTO seller_sprite_task_queue VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "job-quiet-success",
+                "succeeded",
+                "Dedicated B",
+                quiet_key,
+                "2026-08-04T01:00:00+00:00",
+                "2026-08-04T02:00:00+00:00",
+                None,
+            ),
+        )
+    repository = AccountMonitorRepository(
+        queue_db_path=queue_db,
+        binding_db_path=binding_db,
+        quota_db_path=quota_db,
+        clock=lambda: NOW,
+    )
+
+    accounts = repository.accounts(limit=100)["accounts"]
+    quiet = next(account for account in accounts if account["identity"] == quiet_key[:12])
+
+    assert quiet["last_success"] == {
+        "at": "2026-08-04T02:00:00+00:00",
+        "job_id": "job-quiet-success",
+    }
+    assert quiet["health"] == "healthy"
 
 
 def test_unavailable_sources_return_stable_errors_without_creating_sqlite_files(

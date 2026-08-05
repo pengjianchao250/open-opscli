@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
-from urllib.parse import quote
 
 from opscli.collector_monitor.classifier import ClassificationPolicy, classify_snapshot
+from opscli.collector_monitor.storage.sqlite import (
+    connect_read_only_sqlite,
+    schema_problems,
+)
 
 _TASK_TABLE = "seller_sprite_task_queue"
 _EVENT_TABLE = "seller_sprite_task_progress_events"
@@ -332,15 +335,7 @@ class ReadOnlySellerSpriteRepository:
             )
         conn: sqlite3.Connection | None = None
         try:
-            uri_path = quote(self.db_path.resolve().as_posix(), safe="/:")
-            conn = sqlite3.connect(
-                f"file:{uri_path}?mode=ro",
-                uri=True,
-                timeout=2.0,
-                isolation_level=None,
-            )
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA query_only = ON")
+            conn = connect_read_only_sqlite(self.db_path)
             self._validate_schema(conn)
             return conn
         except RepositorySourceError:
@@ -359,24 +354,7 @@ class ReadOnlySellerSpriteRepository:
             _EVENT_TABLE: set(_EVENT_COLUMNS),
             _RUNTIME_TABLE: set(_RUNTIME_COLUMNS),
         }
-        existing_tables = {
-            str(row["name"])
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ).fetchall()
-        }
-        problems: list[str] = []
-        for table, required in contracts.items():
-            if table not in existing_tables:
-                problems.append(f"缺少表 {table}")
-                continue
-            columns = {
-                str(row["name"])
-                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-            }
-            missing = sorted(required - columns)
-            if missing:
-                problems.append(f"表 {table} 缺少列 {', '.join(missing)}")
+        problems = schema_problems(conn, contracts)
         if problems:
             raise RepositorySourceError(
                 "queue_schema_invalid",

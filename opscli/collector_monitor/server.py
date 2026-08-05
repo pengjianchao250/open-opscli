@@ -6,7 +6,7 @@ import argparse
 from collections.abc import Sequence
 from typing import Any
 
-from opscli.collector_monitor.account_repository import AccountMonitorRepository
+from opscli.collector_monitor.storage.account_repository import AccountMonitorRepository
 from opscli.collector_monitor.classifier import ClassificationPolicy
 from opscli.collector_monitor.config import (
     MonitorSettings,

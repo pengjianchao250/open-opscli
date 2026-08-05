@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-08-05 collector_monitor - 增加账号与当日额度监控
+
+**变更原因**：现有 Monitor 只能观察任务和运行时，值班人员无法同时确认 SellerSprite 执行账号健康、专属绑定、活跃占用和当天实际计费执行情况。
+**改动点**：新增严格只读的账号存储适配、`GET /api/v1/accounts` 与 `GET /api/v1/usage/today`，按账号分区聚合最近成功/失败和活跃占用，按北京时间读取 `mcp_quota_daily`；账号 Tab 上下展示执行账号和今日用户调用，身份全部掩码，并明确排除配额拒绝、认证拒绝与无限额用户；同步需求、架构、UIUX、运维和跨模块依赖许可文档。
+**验证结果**：TDD 覆盖只读 SQLite、账号间高频历史隔离、北京时间日界、额度口径、HTTP 脱敏和 UI 合同；Collector Monitor 全量测试、`compileall` 与 `git diff --check` 通过，Standards/Spec 双轴审查发现的分区查询、部署权限、模块分层、依赖许可、注释和重复只读连接问题均已修复。
+**影响范围**：仅 Collector Monitor 新增两个只读 API 与“账号”Tab；不修改 SellerSprite/MCP 业务库 schema，不迁移、不写入业务 SQLite，不改变额度结算和任务调度。
+**回滚方式**：回退账号只读存储适配、两个 API、账号 Tab、配置路径接线、测试和相关文档；业务数据库无需回滚。
+---
+
 ## 2026-08-04 Collector MCP - SellerSprite 成功数据沉淀到 MySQL
 
 **变更原因**：SellerSprite 成功任务此前只保留本地导出文件，无法在统一数据库中按生产/调试环境持续查询，也缺少 MySQL 故障后的独立重试能力。

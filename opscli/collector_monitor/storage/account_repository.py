@@ -8,13 +8,21 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
-from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from opscli.collector_monitor.storage.sqlite import (
+    connect_read_only_sqlite,
+    schema_problems,
+)
 
+
+# API 和 SQLite 查询共享的最大账号/用户行数，避免页面请求无界扫描。
 _MAX_ROWS = 500
+# 每个账号只展示最近 20 个活跃任务标识；占用总数仍由聚合查询准确统计。
 _MAX_ACTIVE_TASKS_PER_ACCOUNT = 20
+# 单账号绑定用户展示上限，防止异常绑定数据放大响应。
 _MAX_BOUND_USERS_PER_ACCOUNT = 20
+# 下列固定表名来自 SellerSprite 与 MCP 已发布 schema，禁止运行时猜测。
 _ACCOUNT_TABLE = "seller_sprite_dedicated_accounts"
 _BINDING_TABLE = "seller_sprite_user_account_bindings"
 _TASK_TABLE = "seller_sprite_task_queue"
@@ -29,7 +37,14 @@ except ZoneInfoNotFoundError:
 
 
 class AccountMonitorRepository:
-    """从 SellerSprite 与 MCP SQLite 文件读取低敏运维摘要。"""
+    """从 SellerSprite 与 MCP SQLite 文件读取低敏运维摘要。
+
+    Args:
+        queue_db_path: SellerSprite 任务、账号事件和隔离状态数据库。
+        binding_db_path: SellerSprite 专属账号绑定数据库。
+        quota_db_path: MCP 每日额度数据库。
+        clock: 可选时钟，测试用来冻结北京时间日界和隔离状态。
+    """
 
     def __init__(
         self,
@@ -39,17 +54,32 @@ class AccountMonitorRepository:
         quota_db_path: str | Path,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
+        """保存三个只读数据源路径，不打开或创建 SQLite 文件。"""
         self.queue_db_path = Path(queue_db_path)
         self.binding_db_path = Path(binding_db_path)
         self.quota_db_path = Path(quota_db_path)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     def accounts(self, *, limit: int = 100) -> dict[str, Any]:
-        """返回执行账号、绑定用户、占用和最近结果的脱敏摘要。"""
+        """返回执行账号、绑定用户、占用和最近结果的脱敏摘要。
+
+        Args:
+            limit: 最多返回的账号数，范围为 1 到 500。
+
+        Returns:
+            包含 source 状态和 accounts 列表的低敏字典。来源异常时返回
+            固定错误摘要，不抛出 SQLite 原始异常。
+
+        Raises:
+            ValueError: limit 不在允许范围内。
+        """
         safe_limit = _bounded_limit(limit)
         try:
-            bindings = self._read_bindings()
-            execution = self._read_execution_state()
+            bindings = self._read_bindings(limit=safe_limit)
+            execution = self._read_execution_state(
+                preferred_keys=list(bindings),
+                limit=safe_limit,
+            )
         except (OSError, sqlite3.Error, ValueError):
             return {
                 "source": {
@@ -62,9 +92,11 @@ class AccountMonitorRepository:
                 "accounts": [],
             }
 
-        keys = set(bindings) | set(execution)
+        # 绑定账号优先进入有界结果，其余共享执行账号按最近活动补齐。
+        keys = list(bindings)
+        keys.extend(key for key in execution if key not in bindings)
         accounts: list[dict[str, Any]] = []
-        for account_key in keys:
+        for account_key in keys[:safe_limit]:
             binding = bindings.get(account_key, {})
             state = execution.get(account_key, {})
             last_success = state.get("last_success")
@@ -93,11 +125,21 @@ class AccountMonitorRepository:
         accounts.sort(key=lambda item: (str(item["name"]).casefold(), item["identity"]))
         return {
             "source": {"ready": True, "error": None},
-            "accounts": accounts[:safe_limit],
+            "accounts": accounts,
         }
 
     def usage_today(self, *, limit: int = 100) -> dict[str, Any]:
-        """返回北京时间当日已落表的计费成功与已退款失败次数。"""
+        """返回北京时间当日已落表的计费成功与已退款失败次数。
+
+        Args:
+            limit: 最多返回的用户/服务额度行数，范围为 1 到 500。
+
+        Returns:
+            包含北京时间日期、source 状态和 usage 列表的低敏字典。
+
+        Raises:
+            ValueError: limit 不在允许范围内。
+        """
         safe_limit = _bounded_limit(limit)
         day = self.clock().astimezone(_SHANGHAI_TZ).strftime("%Y%m%d")
         try:
@@ -172,7 +214,8 @@ class AccountMonitorRepository:
             "usage": usage,
         }
 
-    def _read_bindings(self) -> dict[str, dict[str, Any]]:
+    def _read_bindings(self, *, limit: int) -> dict[str, dict[str, Any]]:
+        """读取有界账号及每个账号的有界绑定用户，不接触密码密文。"""
         with self._read_connection(self.binding_db_path) as conn:
             self._validate_schema(
                 conn,
@@ -184,7 +227,7 @@ class AccountMonitorRepository:
             account_rows = conn.execute(
                 f"SELECT account_id, account_name, username FROM {_ACCOUNT_TABLE} "
                 "ORDER BY account_name COLLATE NOCASE LIMIT ?",
-                (_MAX_ROWS,),
+                (limit,),
             ).fetchall()
             account_ids = [str(row["account_id"]) for row in account_rows]
             users_by_id: dict[str, list[str]] = {account_id: [] for account_id in account_ids}
@@ -210,7 +253,13 @@ class AccountMonitorRepository:
             }
         return result
 
-    def _read_execution_state(self) -> dict[str, dict[str, Any]]:
+    def _read_execution_state(
+        self,
+        *,
+        preferred_keys: list[str],
+        limit: int,
+    ) -> dict[str, dict[str, Any]]:
+        """按账号分区读取占用、最近结果、最近事件和隔离状态。"""
         with self._read_connection(self.queue_db_path) as conn:
             self._validate_schema(
                 conn,
@@ -220,6 +269,7 @@ class AccountMonitorRepository:
                         "status",
                         "assigned_account",
                         "assigned_account_key",
+                        "started_at",
                         "finished_at",
                         "last_error_code",
                     },
@@ -235,35 +285,110 @@ class AccountMonitorRepository:
                     _QUARANTINE_TABLE: {"account_key", "expires_at"},
                 },
             )
+            # 先确定最多 limit 个账号。绑定账号优先，其余账号按最近持久活动补齐；
+            # 后续每条查询都只在这个集合内按账号分区，避免高频账号遮蔽低频账号。
+            discovered_rows = conn.execute(
+                f"""
+                SELECT account_key, MAX(observed_at) AS latest_at
+                FROM (
+                    SELECT assigned_account_key AS account_key,
+                           COALESCE(finished_at, started_at, '') AS observed_at
+                    FROM {_TASK_TABLE}
+                    WHERE assigned_account_key IS NOT NULL
+                    UNION ALL
+                    SELECT account_key, created_at AS observed_at
+                    FROM {_ACCOUNT_EVENT_TABLE}
+                    WHERE account_key IS NOT NULL
+                    UNION ALL
+                    SELECT account_key, expires_at AS observed_at
+                    FROM {_QUARANTINE_TABLE}
+                    WHERE account_key IS NOT NULL
+                )
+                GROUP BY account_key
+                ORDER BY latest_at DESC, account_key ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            target_keys = list(dict.fromkeys(preferred_keys))
+            target_keys.extend(
+                str(row["account_key"])
+                for row in discovered_rows
+                if str(row["account_key"]) not in target_keys
+            )
+            target_keys = target_keys[:limit]
+            if not target_keys:
+                return {}
+            placeholders = ", ".join("?" for _ in target_keys)
+
+            active_count_rows = conn.execute(
+                f"""
+                SELECT assigned_account_key, COUNT(*) AS active_task_count
+                FROM {_TASK_TABLE}
+                WHERE status = 'running'
+                  AND assigned_account_key IN ({placeholders})
+                GROUP BY assigned_account_key
+                """,
+                target_keys,
+            ).fetchall()
+            # 每个账号只取最近活跃任务样本及最近一次成功/失败；COUNT 单独聚合，
+            # 因而展示上限不会截断真实占用数。
             task_rows = conn.execute(
                 f"""
                 SELECT job_id, status, assigned_account, assigned_account_key,
-                       finished_at, last_error_code
-                FROM {_TASK_TABLE}
-                WHERE assigned_account_key IS NOT NULL
-                ORDER BY COALESCE(finished_at, '9999') DESC
-                LIMIT ?
+                       started_at, finished_at, last_error_code
+                FROM (
+                    SELECT job_id, status, assigned_account, assigned_account_key,
+                           started_at, finished_at, last_error_code,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY assigned_account_key, status
+                               ORDER BY CASE
+                                   WHEN status = 'running' THEN started_at
+                                   ELSE finished_at
+                               END DESC, job_id ASC
+                           ) AS account_rank
+                    FROM {_TASK_TABLE}
+                    WHERE assigned_account_key IN ({placeholders})
+                      AND status IN ('running', 'succeeded', 'failed')
+                )
+                WHERE (status = 'running' AND account_rank <= ?)
+                   OR (status IN ('succeeded', 'failed') AND account_rank = 1)
+                ORDER BY assigned_account_key ASC, status ASC, account_rank ASC
                 """,
-                (_MAX_ROWS * 4,),
+                [*target_keys, _MAX_ACTIVE_TASKS_PER_ACCOUNT],
             ).fetchall()
             event_rows = conn.execute(
                 f"""
                 SELECT created_at, event_type, account_key, account_name,
                        masked_username, job_id, error_code
-                FROM {_ACCOUNT_EVENT_TABLE}
-                WHERE account_key IS NOT NULL
-                ORDER BY created_at DESC
-                LIMIT ?
+                FROM (
+                    SELECT created_at, event_type, account_key, account_name,
+                           masked_username, job_id, error_code,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY account_key,
+                                   CASE WHEN substr(event_type, -7) = '_failed'
+                                       THEN 1 ELSE 0 END
+                               ORDER BY created_at DESC
+                           ) AS account_rank
+                    FROM {_ACCOUNT_EVENT_TABLE}
+                    WHERE account_key IN ({placeholders})
+                )
+                WHERE account_rank = 1
+                ORDER BY account_key ASC, created_at DESC
                 """,
-                (_MAX_ROWS * 2,),
+                target_keys,
             ).fetchall()
             quarantine_rows = conn.execute(
                 f"SELECT account_key, expires_at FROM {_QUARANTINE_TABLE} "
-                "ORDER BY expires_at DESC LIMIT ?",
-                (_MAX_ROWS * 2,),
+                f"WHERE account_key IN ({placeholders}) ORDER BY expires_at DESC",
+                target_keys,
             ).fetchall()
 
-        result: dict[str, dict[str, Any]] = {}
+        result = {key: _empty_execution_state() for key in target_keys}
+        for row in active_count_rows:
+            result[str(row["assigned_account_key"])]["active_task_count"] = int(
+                row["active_task_count"] or 0
+            )
         for row in task_rows:
             key = str(row["assigned_account_key"])
             item = result.setdefault(key, _empty_execution_state())
@@ -271,9 +396,7 @@ class AccountMonitorRepository:
                 item["name"] = str(row["assigned_account"])
             status = str(row["status"])
             if status == "running":
-                item["active_task_count"] += 1
-                if len(item["active_tasks"]) < _MAX_ACTIVE_TASKS_PER_ACCOUNT:
-                    item["active_tasks"].append(str(row["job_id"]))
+                item["active_tasks"].append(str(row["job_id"]))
             elif status == "succeeded" and item["last_success"] is None:
                 item["last_success"] = {
                     "at": str(row["finished_at"]),
@@ -308,17 +431,8 @@ class AccountMonitorRepository:
 
     @contextmanager
     def _read_connection(self, path: Path) -> Iterator[sqlite3.Connection]:
-        if not path.is_file():
-            raise OSError("source unavailable")
-        uri_path = quote(path.resolve().as_posix(), safe="/:")
-        conn = sqlite3.connect(
-            f"file:{uri_path}?mode=ro",
-            uri=True,
-            timeout=2.0,
-            isolation_level=None,
-        )
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA query_only = ON")
+        """在上下文结束时可靠关闭共享只读连接。"""
+        conn = connect_read_only_sqlite(path)
         try:
             yield conn
         finally:
@@ -329,21 +443,9 @@ class AccountMonitorRepository:
         conn: sqlite3.Connection,
         contracts: dict[str, set[str]],
     ) -> None:
-        tables = {
-            str(row["name"])
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ).fetchall()
-        }
-        for table, required in contracts.items():
-            if table not in tables:
-                raise ValueError("source schema unavailable")
-            columns = {
-                str(row["name"])
-                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-            }
-            if required - columns:
-                raise ValueError("source schema unavailable")
+        """将 schema 差异收敛为不泄露 SQLite 原始信息的内部异常。"""
+        if schema_problems(conn, contracts):
+            raise ValueError("source schema unavailable")
 
 
 def _empty_execution_state() -> dict[str, Any]:

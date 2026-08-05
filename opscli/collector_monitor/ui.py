@@ -73,7 +73,8 @@ DASHBOARD_HTML = """<!doctype html>
     .badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#e8eef3; font-size:12px; font-weight:650; }
     .healthy,.succeeded { color:var(--green); background:#e8f5ef; }
     .slow,.queue_starved { color:var(--amber); background:#fff3dd; }
-    .stalled,.orphaned,.worker_unavailable,.failed { color:var(--red); background:#fdecea; }
+    .stalled,.orphaned,.worker_unavailable,.failed,.unhealthy { color:var(--red); background:#fdecea; }
+    .unknown { color:var(--muted); background:#edf1f4; }
     .incident { padding:12px 0; border-bottom:1px solid #edf1f4; }
     .incident:last-child { border-bottom:0; }
     .incident strong { display:flex; justify-content:space-between; gap:12px; }
@@ -86,7 +87,7 @@ DASHBOARD_HTML = """<!doctype html>
     .timeline time { display:block; color:var(--muted); font-size:12px; }
     .source-error { display:none; margin-bottom:16px; padding:12px 14px; border:1px solid #f2b8b5; background:#fff0ef; color:var(--red); border-radius:7px; }
     @media (max-width:900px) { .cards { grid-template-columns:repeat(2,1fr); } .view-grid { grid-template-columns:1fr; } .task-table-wrap { min-height:0; max-height:none; } .detail-panel { position:static; } .form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-    @media (max-width:540px) { main { padding:14px; } header { padding:18px 14px; align-items:start; flex-direction:column; gap:8px; } .cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .card { padding:14px; } .card strong { font-size:24px; } .tabs { margin-left:-14px; margin-right:-14px; padding-left:14px; padding-right:14px; border-left:0; border-right:0; border-radius:0; } .tab { min-width:96px; } .panel-title { align-items:flex-start; flex-direction:column; } .actions { width:100%; justify-content:flex-start; } .credential-row { align-items:stretch; flex-direction:column; } .scenario-summary,.form-grid { grid-template-columns:1fr; } th:nth-child(2),td:nth-child(2) { display:none; } }
+    @media (max-width:540px) { main { padding:14px; } header { padding:18px 14px; align-items:start; flex-direction:column; gap:8px; } .cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .card { padding:14px; } .card strong { font-size:24px; } .tabs { margin-left:-14px; margin-right:-14px; padding-left:14px; padding-right:14px; border-left:0; border-right:0; border-radius:0; } .tab { min-width:96px; } .panel-title { align-items:flex-start; flex-direction:column; } .actions { width:100%; justify-content:flex-start; } .credential-row { align-items:stretch; flex-direction:column; } .scenario-summary,.form-grid { grid-template-columns:1fr; } .task-table-wrap th:nth-child(2),.task-table-wrap td:nth-child(2) { display:none; } }
   </style>
 </head>
 <body>

@@ -401,7 +401,14 @@ class CollectorMonitorService:
         return self._details[normalized]
 
     async def accounts(self, *, limit: int = 100) -> dict[str, Any]:
-        """在线程中执行有界只读账号查询。"""
+        """在线程中执行有界只读账号查询。
+
+        Args:
+            limit: 最多返回的账号数。
+
+        Returns:
+            账号列表或固定的低敏数据源错误摘要。
+        """
         if self.account_repository is None:
             return {
                 "source": {
@@ -416,7 +423,14 @@ class CollectorMonitorService:
         return await asyncio.to_thread(self.account_repository.accounts, limit=limit)
 
     async def usage_today(self, *, limit: int = 100) -> dict[str, Any]:
-        """在线程中执行北京时间当日额度只读查询。"""
+        """在线程中执行北京时间当日额度只读查询。
+
+        Args:
+            limit: 最多返回的用户/服务额度行数。
+
+        Returns:
+            当日额度列表或固定的低敏数据源错误摘要。
+        """
         if self.account_repository is None:
             return {
                 "source": {
