@@ -30,6 +30,7 @@ _ACCOUNT_EVENT_TABLE = "seller_sprite_account_events"
 _QUARANTINE_TABLE = "seller_sprite_account_quarantine"
 _QUOTA_TABLE = "mcp_quota_daily"
 
+# 北京时间日界以 IANA ZoneInfo 为准；精简 Windows 缺少 tzdata 时退回固定 UTC+8。
 try:
     _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 except ZoneInfoNotFoundError:
@@ -379,8 +380,9 @@ class AccountMonitorRepository:
                 target_keys,
             ).fetchall()
             quarantine_rows = conn.execute(
-                f"SELECT account_key, expires_at FROM {_QUARANTINE_TABLE} "
-                f"WHERE account_key IN ({placeholders}) ORDER BY expires_at DESC",
+                f"SELECT account_key, MAX(expires_at) AS expires_at "
+                f"FROM {_QUARANTINE_TABLE} WHERE account_key IN ({placeholders}) "
+                "GROUP BY account_key ORDER BY expires_at DESC",
                 target_keys,
             ).fetchall()
 

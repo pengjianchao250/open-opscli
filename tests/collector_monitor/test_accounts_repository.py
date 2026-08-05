@@ -338,6 +338,59 @@ def test_high_volume_account_does_not_hide_another_accounts_latest_result(
     assert quiet["health"] == "healthy"
 
 
+def test_many_quarantine_versions_collapse_to_one_account_health(tmp_path: Path) -> None:
+    """同账号任意数量凭据版本只能形成一个有界隔离健康结果。"""
+    binding_db = tmp_path / "bindings.sqlite3"
+    queue_db = tmp_path / "queue.sqlite3"
+    quota_db = tmp_path / "quota.sqlite3"
+    key = _account_key("Dedicated A", "seller.account@example.com")
+    _create_binding_db(binding_db)
+    _create_queue_db(queue_db, key)
+    _create_quota_db(quota_db)
+    with sqlite3.connect(queue_db) as conn:
+        conn.execute("DELETE FROM seller_sprite_task_queue WHERE status = 'failed'")
+        conn.executemany(
+            "INSERT INTO seller_sprite_account_quarantine VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    key,
+                    f"credential-{index:04d}",
+                    "authentication_failed",
+                    "2026-07-01T00:00:00+00:00",
+                    "2026-07-01T00:00:00+00:00",
+                    "2026-07-02T00:00:00+00:00",
+                    1,
+                    "AUTH_FAILED",
+                )
+                for index in range(1001)
+            ],
+        )
+        conn.execute(
+            "INSERT INTO seller_sprite_account_quarantine VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                key,
+                "credential-active",
+                "authentication_failed",
+                "2026-08-05T00:00:00+00:00",
+                "2026-08-05T00:00:00+00:00",
+                "2026-08-06T00:00:00+00:00",
+                1,
+                "AUTH_FAILED",
+            ),
+        )
+    repository = AccountMonitorRepository(
+        queue_db_path=queue_db,
+        binding_db_path=binding_db,
+        quota_db_path=quota_db,
+        clock=lambda: NOW,
+    )
+
+    account = repository.accounts(limit=100)["accounts"][0]
+
+    assert account["last_success"] is not None
+    assert account["health"] == "unhealthy"
+
+
 def test_unavailable_sources_return_stable_errors_without_creating_sqlite_files(
     tmp_path: Path,
 ) -> None:
