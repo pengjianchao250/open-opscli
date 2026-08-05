@@ -77,7 +77,7 @@ SCHEMA_STATEMENTS = (
     CREATE TABLE IF NOT EXISTS collection_records (
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
         dataset_id BIGINT UNSIGNED NOT NULL,
-        row_number BIGINT UNSIGNED NOT NULL,
+        source_row_number BIGINT UNSIGNED NOT NULL,
         business_key VARCHAR(255) NULL,
         record_hash CHAR(64) NOT NULL,
         payload JSON NOT NULL,
@@ -85,7 +85,7 @@ SCHEMA_STATEMENTS = (
         CONSTRAINT fk_collection_records_dataset
             FOREIGN KEY (dataset_id) REFERENCES collection_datasets(id)
             ON DELETE CASCADE,
-        UNIQUE KEY uq_collection_record_row (dataset_id, row_number),
+        UNIQUE KEY uq_collection_record_row (dataset_id, source_row_number),
         KEY ix_collection_records_hash (record_hash),
         KEY ix_collection_records_business_key (business_key)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci

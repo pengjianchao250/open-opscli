@@ -7,6 +7,7 @@ from opscli.collector_mcp.storage.models import (
     ParsedCollection,
 )
 from opscli.collector_mcp.storage.mysql_repository import MySqlCollectionRepository
+from opscli.collector_mcp.storage.schema import SCHEMA_STATEMENTS
 
 
 class FakeCursor:
@@ -57,6 +58,17 @@ class FakeConnection:
 
     def close(self):
         self.closed = True
+
+
+def test_collection_records_sql_avoids_mysql_8_row_number_reserved_word():
+    records_schema = next(
+        statement
+        for statement in SCHEMA_STATEMENTS
+        if "CREATE TABLE IF NOT EXISTS collection_records" in statement
+    )
+
+    assert "source_row_number BIGINT UNSIGNED NOT NULL" in records_schema
+    assert "(dataset_id, source_row_number)" in records_schema
 
 
 def test_mysql_repository_replaces_one_run_in_a_single_transaction(tmp_path):
@@ -133,6 +145,12 @@ def test_mysql_repository_replaces_one_run_in_a_single_transaction(tmp_path):
         for sql, values in connection.executemany_calls
         if sql.startswith("INSERT INTO collection_records")
     )
+    record_insert = next(
+        sql
+        for sql, _values in connection.executemany_calls
+        if sql.startswith("INSERT INTO collection_records")
+    )
+    assert "dataset_id, source_row_number, business_key" in record_insert
     assert len(artifact_rows) == 1
     assert len(record_rows) == 2
     assert all(row[0] == 201 for row in record_rows)

@@ -233,7 +233,7 @@ class MySqlCollectionRepository:
                 cursor.executemany(
                     """
                     INSERT INTO collection_records (
-                        dataset_id, row_number, business_key, record_hash, payload
+                        dataset_id, source_row_number, business_key, record_hash, payload
                     ) VALUES (%s, %s, %s, %s, %s)
                     """,
                     batch,
