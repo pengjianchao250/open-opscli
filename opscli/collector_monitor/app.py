@@ -184,6 +184,28 @@ def create_app(service: Any, *, manage_polling: bool = True) -> Any:
             values = [item for item in values if item.get(field) == expected]
         return JSONResponse({"incidents": _redact(values[:limit])})
 
+    async def accounts(request: Request) -> Any:
+        """返回有界的 SellerSprite 执行账号健康摘要。"""
+        try:
+            limit = _only_limit(request.query_params, default=100)
+        except ValueError as exc:
+            return JSONResponse(
+                {"error": {"code": "invalid_query", "message": str(exc)}},
+                status_code=400,
+            )
+        return JSONResponse(_redact(await service.accounts(limit=limit)))
+
+    async def usage_today(request: Request) -> Any:
+        """返回北京时间当日已落表的 MCP 额度执行摘要。"""
+        try:
+            limit = _only_limit(request.query_params, default=100)
+        except ValueError as exc:
+            return JSONResponse(
+                {"error": {"code": "invalid_query", "message": str(exc)}},
+                status_code=400,
+            )
+        return JSONResponse(_redact(await service.usage_today(limit=limit)))
+
     async def manual_probe(target: str, *, api_key: str | None = None) -> Any:
         """执行固定目标的手动探测并映射并发与冷却状态。"""
         try:
@@ -474,6 +496,8 @@ def create_app(service: Any, *, manage_polling: bool = True) -> Any:
             Route("/api/v1/tasks", tasks, methods=["GET"]),
             Route("/api/v1/tasks/{job_id}", task_detail, methods=["GET"]),
             Route("/api/v1/incidents", incidents, methods=["GET"]),
+            Route("/api/v1/accounts", accounts, methods=["GET"]),
+            Route("/api/v1/usage/today", usage_today, methods=["GET"]),
             Route("/api/v1/probes/collector", probe_collector, methods=["POST"]),
             Route("/api/v1/probes/queue-source", probe_queue_source, methods=["POST"]),
             Route(
@@ -501,6 +525,14 @@ def _query_limit(value: str | None, *, default: int) -> int:
     if parsed < 1 or parsed > _MAX_API_LIMIT:
         raise ValueError(f"limit 必须在 1 到 {_MAX_API_LIMIT} 之间")
     return parsed
+
+
+def _only_limit(params: Any, *, default: int) -> int:
+    """仅允许可选 limit 查询参数。"""
+    unknown = set(params) - {"limit"}
+    if unknown:
+        raise ValueError(f"不支持的查询参数：{sorted(unknown)[0]}")
+    return _query_limit(params.get("limit"), default=default)
 
 
 def _allowed_filters(params: Any, allowed: Mapping[str, set[str]]) -> dict[str, str]:

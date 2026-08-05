@@ -3,6 +3,22 @@
 > 状态：方案草案
 > 原则：独立监控、业务 fail-closed、诊断可用、默认脱敏
 
+## 账号监控只读数据流（2026-08-05）
+
+```text
+account_bindings.sqlite3 ─┐
+task_queue.sqlite3 ───────┼─> AccountMonitorRepository ─> GET /api/v1/accounts
+quota.sqlite3 ────────────┴──────────────────────────────> GET /api/v1/usage/today
+```
+
+`AccountMonitorRepository` 使用三个冻结来源：账号绑定表提供账号标签、掩码用户名和绑定用户；任务队列表、账号事件表与隔离表提供活跃占用、最近成功/失败和健康判定；`mcp_quota_daily` 提供北京时间当日的计费执行快照。所有 SQL 固定表名和列名、固定排序、固定行数上限，连接统一使用 `file:...?mode=ro` 与 `PRAGMA query_only=ON`。
+
+账号健康规则保持可解释：有效隔离或最近失败晚于最近成功为 `unhealthy`；存在更新的成功为 `healthy`；没有结果证据为 `unknown`。活跃任务占用与健康分开呈现，避免把“正在工作”误判为账号异常。
+
+路径沿用现有运行合同：队列库来自 `OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH`/既有默认路径；绑定库沿用 `CONFIG_DIR/seller_sprite/account_bindings.sqlite3`；quota 库沿用 `OPSCLI_MCP_QUOTA_SQLITE_PATH`/既有默认路径。Monitor 不提供独立 quota 路径变量，防止读写端配置漂移。
+
+任何来源不可用都转换为固定错误码 `account_source_unavailable` 或 `quota_source_unavailable`。响应不得携带文件路径、SQL、驱动异常、完整邮箱、账号内部 ID 或凭据字段。
+
 ## 1. 目标架构
 
 ```text

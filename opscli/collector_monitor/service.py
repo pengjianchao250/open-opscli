@@ -59,6 +59,14 @@ class _Notifier(Protocol):
     def send(self, action: Any) -> dict[str, Any]: ...
 
 
+class _AccountRepository(Protocol):
+    """账号页面所需的只读查询协议。"""
+
+    def accounts(self, *, limit: int = 100) -> dict[str, Any]: ...
+
+    def usage_today(self, *, limit: int = 100) -> dict[str, Any]: ...
+
+
 class CollectorMonitorError(RuntimeError):
     """Collector Monitor 模块业务异常基类。"""
 
@@ -134,6 +142,7 @@ class CollectorMonitorService:
         ) = None,
         clock: Callable[[], datetime] | None = None,
         monotonic_clock: Callable[[], float] | None = None,
+        account_repository: _AccountRepository | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
@@ -146,6 +155,7 @@ class CollectorMonitorService:
         self.scenario_runner = scenario_runner or run_collector_scenario
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.monotonic_clock = monotonic_clock or monotonic
+        self.account_repository = account_repository
         self._probe_locks = {
             "collector": asyncio.Lock(),
             "queue-source": asyncio.Lock(),
@@ -389,6 +399,36 @@ class CollectorMonitorService:
         if normalized not in self._details:
             raise KeyError(normalized)
         return self._details[normalized]
+
+    async def accounts(self, *, limit: int = 100) -> dict[str, Any]:
+        """在线程中执行有界只读账号查询。"""
+        if self.account_repository is None:
+            return {
+                "source": {
+                    "ready": False,
+                    "error": {
+                        "code": "account_source_unavailable",
+                        "message": "SellerSprite 账号监控数据源不可用",
+                    },
+                },
+                "accounts": [],
+            }
+        return await asyncio.to_thread(self.account_repository.accounts, limit=limit)
+
+    async def usage_today(self, *, limit: int = 100) -> dict[str, Any]:
+        """在线程中执行北京时间当日额度只读查询。"""
+        if self.account_repository is None:
+            return {
+                "source": {
+                    "ready": False,
+                    "error": {
+                        "code": "quota_source_unavailable",
+                        "message": "MCP 当日额度数据源不可用",
+                    },
+                },
+                "usage": [],
+            }
+        return await asyncio.to_thread(self.account_repository.usage_today, limit=limit)
 
     async def probe_once(self) -> dict[str, Any]:
         """独立刷新 Collector 状态，失败不会改变本地队列就绪性。"""

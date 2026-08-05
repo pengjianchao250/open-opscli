@@ -40,6 +40,8 @@ def test_load_settings_uses_safe_defaults(tmp_path: Path) -> None:
         port=8767,
         collector_probe_timeout=5.0,
         scenario_test_enabled=False,
+        account_binding_db_path=tmp_path / "seller_sprite" / "account_bindings.sqlite3",
+        quota_db_path=tmp_path / "mcp_quota" / "quota.sqlite3",
     )
 
 
@@ -82,6 +84,29 @@ def test_load_settings_reads_prefixed_environment(tmp_path: Path) -> None:
     assert settings.port == 9876
     assert settings.collector_probe_timeout == 1.5
     assert settings.scenario_test_enabled is True
+
+
+def test_load_settings_reuses_existing_mcp_quota_path(tmp_path: Path) -> None:
+    """Monitor 应继承 MCP quota 的既有路径配置。"""
+    quota_path = tmp_path / "shared" / "quota.sqlite3"
+
+    settings = load_settings(
+        environ={"OPSCLI_MCP_QUOTA_SQLITE_PATH": str(quota_path)},
+        config_dir=tmp_path,
+    )
+
+    assert settings.quota_db_path == quota_path
+
+
+def test_build_service_wires_read_only_account_sources(tmp_path: Path) -> None:
+    """服务组装应把既有三个业务数据源交给账号只读仓储。"""
+    settings = load_settings(environ={}, config_dir=tmp_path)
+
+    service = build_service(settings)
+
+    assert service.account_repository.queue_db_path == settings.queue_db_path
+    assert service.account_repository.binding_db_path == settings.account_binding_db_path
+    assert service.account_repository.quota_db_path == settings.quota_db_path
 
 
 def test_load_settings_auto_uses_bundled_webhook_file(tmp_path: Path) -> None:

@@ -12,6 +12,8 @@ from typing import Mapping
 from urllib.parse import urlparse
 
 from opscli.config import CONFIG_DIR
+from opscli.mcp.quota import ENV_SQLITE_PATH
+from opscli.seller_sprite.services.account_bindings import DEFAULT_BINDING_DB_PATH
 from opscli.seller_sprite.config import ENV_QUEUE_DB_PATH, resolve_queue_db_path
 
 _ENV_PREFIX = "OPSCLI_COLLECTOR_MONITOR_"
@@ -39,6 +41,8 @@ class MonitorSettings:
     port: int
     collector_probe_timeout: float
     scenario_test_enabled: bool
+    account_binding_db_path: Path | None = None
+    quota_db_path: Path | None = None
 
 
 def load_settings(
@@ -94,6 +98,10 @@ def load_settings(
             minimum=0.01,
         ),
         scenario_test_enabled=_boolean(env, "SCENARIO_TEST_ENABLED", False),
+        account_binding_db_path=base_dir / "seller_sprite" / DEFAULT_BINDING_DB_PATH.name,
+        quota_db_path=Path(
+            str(env.get(ENV_SQLITE_PATH) or base_dir / "mcp_quota" / "quota.sqlite3")
+        ).expanduser(),
     )
     return validate_settings(settings)
 
@@ -101,6 +109,10 @@ def load_settings(
 def validate_settings(settings: MonitorSettings) -> MonitorSettings:
     """校验环境加载或手工构造的完整监控配置。"""
     validate_database_paths(settings.queue_db_path, settings.state_db_path)
+    if settings.account_binding_db_path is not None:
+        validate_database_paths(settings.account_binding_db_path, settings.state_db_path)
+    if settings.quota_db_path is not None:
+        validate_database_paths(settings.quota_db_path, settings.state_db_path)
     _validate_url(settings.monitor_url, "URL")
     if not _url_protects_secret(settings.monitor_url):
         raise ValueError(

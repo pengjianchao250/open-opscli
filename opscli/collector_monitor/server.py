@@ -6,10 +6,12 @@ import argparse
 from collections.abc import Sequence
 from typing import Any
 
+from opscli.collector_monitor.account_repository import AccountMonitorRepository
 from opscli.collector_monitor.classifier import ClassificationPolicy
 from opscli.collector_monitor.config import (
     MonitorSettings,
     load_settings,
+    validate_database_paths,
     validate_settings,
 )
 from opscli.collector_monitor.notifier import WeComIncidentNotifier
@@ -27,6 +29,16 @@ def build_service(settings: MonitorSettings) -> CollectorMonitorService:
         runtime_stale_threshold=settings.runtime_stale_threshold,
         orphan_required_scans=settings.orphan_required_scans,
     )
+    binding_db_path = (
+        settings.account_binding_db_path
+        or settings.queue_db_path.parent / "account_bindings.sqlite3"
+    )
+    quota_db_path = (
+        settings.quota_db_path
+        or settings.queue_db_path.parent.parent / "mcp_quota" / "quota.sqlite3"
+    )
+    validate_database_paths(binding_db_path, settings.state_db_path)
+    validate_database_paths(quota_db_path, settings.state_db_path)
     return CollectorMonitorService(
         settings,
         repository=ReadOnlySellerSpriteRepository(
@@ -39,6 +51,11 @@ def build_service(settings: MonitorSettings) -> CollectorMonitorService:
             protected_db_path=settings.queue_db_path,
         ),
         notifier=WeComIncidentNotifier(settings.webhook_file),
+        account_repository=AccountMonitorRepository(
+            queue_db_path=settings.queue_db_path,
+            binding_db_path=binding_db_path,
+            quota_db_path=quota_db_path,
+        ),
     )
 
 
