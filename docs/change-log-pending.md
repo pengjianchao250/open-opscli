@@ -12,8 +12,8 @@
 ## 2026-08-04 Collector MCP - SellerSprite 成功数据沉淀到 MySQL
 
 **变更原因**：SellerSprite 成功任务此前只保留本地导出文件，无法在统一数据库中按生产/调试环境持续查询，也缺少 MySQL 故障后的独立重试能力。
-**改动点**：新增 Collector 通用 SQLite Outbox、来源 Parser/Reconciler 注册接口和 MySQL Repository；SellerSprite JSON 主表、附加 Sheet 与 XLSX 工作表统一写入逻辑 Dataset/逐行 JSON，原始及交付文件只登记 URI、大小和 SHA-256；任务成功事务同步追加单调成功事件，避免并发乱序完成造成补偿漏数；生产连接强制配置 TLS CA。Keepa 与历史任务不接入，历史生产 succeeded backfill 仅保留 TODO。MySQL 8 逐行序号列使用非保留名 `source_row_number`；Collector 运维说明补齐生产环境文件、systemd、共享库初始化、验收、Outbox 备份恢复、排障和回滚流程。
-**验证结果**：Collector、SellerSprite 队列和调度聚焦回归 `115 passed`，SellerSprite MCP 工具 `89 passed`；SellerSprite 全量 `439 passed, 2 failed`，两项均为既有 `seller-sprite-debug` 命令未注册基线问题。MySQL 保留字修复后的 Collector MCP 回归 `30 passed`，相关文件 Ruff 和格式检查通过。新增存储文件 Ruff、格式检查、`compileall`、`uv lock --check` 与 `git diff --check` 通过；双轴代码审查发现的乱序补偿、历史重取边界、Worker 生命周期、流式内存、MySQL TLS、常量注释和变更记录问题均已修复。
+**改动点**：新增 Collector 通用 SQLite Outbox、来源 Parser/Reconciler 注册接口和 MySQL Repository；SellerSprite JSON 主表、附加 Sheet 与 XLSX 工作表统一写入逻辑 Dataset/逐行 JSON，原始及交付文件只登记 URI、大小和 SHA-256；任务成功事务同步追加单调成功事件，避免并发乱序完成造成补偿漏数；MySQL TLS CA 改为可选，配置后验证服务端证书和主机身份，未配置时仅适用于受控内网。Keepa 与历史任务不接入，历史生产 succeeded backfill 仅保留 TODO。MySQL 8 逐行序号列使用非保留名 `source_row_number`；Collector 运维说明补齐生产环境文件、systemd、共享库初始化、验收、Outbox 备份恢复、排障和回滚流程。
+**验证结果**：Collector、SellerSprite 队列和调度聚焦回归 `115 passed`，SellerSprite MCP 工具 `89 passed`；SellerSprite 全量 `439 passed, 2 failed`，两项均为既有 `seller-sprite-debug` 命令未注册基线问题。MySQL 保留字修复后的 Collector MCP 回归 `30 passed`，相关文件 Ruff 和格式检查通过。新增存储文件 Ruff、格式检查、`compileall`、`uv lock --check` 与 `git diff --check` 通过；双轴代码审查发现的乱序补偿、历史重取边界、Worker 生命周期、流式内存、常量注释和变更记录问题均已修复。生产未配置 MySQL CA 时接受受控内网边界风险，跨不可信网络必须配置 CA。
 **影响范围**：仅在 Collector 显式启用存储配置后沉淀新 SellerSprite 成功任务；默认关闭，不改变采集成功状态、文件导出、Keepa 或现有历史数据。
 **回滚方式**：关闭 `OPSCLI_COLLECTOR_STORAGE_ENABLED` 并回退通用存储模块、SellerSprite 成功事件/提交适配、MySQL 依赖和配置文档；MySQL 新表及独立 Outbox 可保留，不影响原业务队列。
 ---

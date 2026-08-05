@@ -45,7 +45,7 @@ $env:OPSCLI_COLLECTOR_MCP_URL="http://127.0.0.1:8766/mcp"
 - 已创建服务用户 `opscli`；
 - SellerSprite 状态目录和浏览器 Profile 可写；
 - OPS、SellerSprite、MySQL、对象存储和 DNS 可达；
-- 已取得 MySQL CA 和证书匹配的内网域名；
+- 如需验证 MySQL TLS，已取得 CA 和证书匹配的内网域名；
 - 只部署一个 Collector 实例。
 
 创建目录：
@@ -83,19 +83,21 @@ OPSCLI_COLLECTOR_MYSQL_PORT=3306
 OPSCLI_COLLECTOR_MYSQL_DATABASE=polaris_ops_mcp
 OPSCLI_COLLECTOR_MYSQL_USER=collector_writer
 OPSCLI_COLLECTOR_MYSQL_PASSWORD="由部署 Secret 注入"
-OPSCLI_COLLECTOR_MYSQL_SSL_CA=/etc/opscli/mysql-ca.pem
+# OPSCLI_COLLECTOR_MYSQL_SSL_CA=/etc/opscli/mysql-ca.pem
 
 OPSCLI_COLLECTOR_STORAGE_AUTO_CREATE_SCHEMA=false
 ```
 
-主机、账号和密码必须替换。生产强制验证 MySQL CA 和主机身份，应使用证书匹配的域名。
+主机、账号和密码必须替换。`OPSCLI_COLLECTOR_MYSQL_SSL_CA` 可选；配置后会验证 MySQL 服务端证书和主机身份，并应使用证书匹配的域名。未配置时不启用 TLS 验证，仅适用于受控内网数据库。
 
 密码由部署平台或 Secret 管理器注入，不得提交 Git、写入镜像、命令行或日志。
 
 ```bash
-sudo chown root:opscli /etc/opscli/collector.env /etc/opscli/mysql-ca.pem
-sudo chmod 0640 /etc/opscli/collector.env /etc/opscli/mysql-ca.pem
+sudo chown root:opscli /etc/opscli/collector.env
+sudo chmod 0640 /etc/opscli/collector.env
 ```
+
+配置 CA 时，再将证书设为 `root:opscli`、权限设为 `0640`。
 
 Collector 只读取进程环境变量，不会自动加载项目 `.env` 或 `config.ini` 中的 MySQL 配置。
 
@@ -278,7 +280,7 @@ sudo journalctl -u opscli-collector-mcp.service --since "30 minutes ago"
 | `retrying` | Worker 已领取但解析或写库失败；检查 `last_error_code`、文件和 DML 权限 |
 | 任务成功但无 Outbox | 检查成功时间是否晚于 `live_cutover_at`，以及对账游标是否推进 |
 | 版本表为空 | 初始化不完整；列出已有表，修复原因后重新初始化 |
-| 生产提示缺少 CA | 配置正确 CA 和证书域名，不要改成 `debug` 绕过 |
+| 配置 CA 后连接失败 | 检查 CA 路径、读取权限和证书域名；当前内网不使用 CA 时不要配置无效路径 |
 
 数据库客户端连接成功不代表 Collector 使用了相同密码、TLS 和账号。必要时使用 Collector 虚拟环境执行同驱动连接测试。
 

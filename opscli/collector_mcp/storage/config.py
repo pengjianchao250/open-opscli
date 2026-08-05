@@ -36,7 +36,7 @@ ENV_MYSQL_DATABASE = "OPSCLI_COLLECTOR_MYSQL_DATABASE"
 ENV_MYSQL_USER = "OPSCLI_COLLECTOR_MYSQL_USER"
 # 配置由 Secret 注入的 MySQL 密码。
 ENV_MYSQL_PASSWORD = "OPSCLI_COLLECTOR_MYSQL_PASSWORD"
-# 配置生产 MySQL TLS 服务端证书验证 CA 文件。
+# 可选配置 MySQL TLS 服务端证书验证 CA 文件。
 ENV_MYSQL_SSL_CA = "OPSCLI_COLLECTOR_MYSQL_SSL_CA"
 # 控制 MySQL 首次连接超时秒数。
 ENV_MYSQL_CONNECT_TIMEOUT = "OPSCLI_COLLECTOR_MYSQL_CONNECT_TIMEOUT_SECONDS"
@@ -129,10 +129,6 @@ def load_storage_settings(
             )
         if not mysql.configured:
             raise ValueError("启用 Collector 数据沉淀时必须配置完整 MySQL 连接信息")
-        if data_environment == "production" and not mysql.ssl_ca:
-            raise ValueError(
-                "生产数据沉淀必须设置 OPSCLI_COLLECTOR_MYSQL_SSL_CA 验证 MySQL TLS"
-            )
     return CollectorStorageSettings(
         enabled=enabled,
         data_environment=data_environment,

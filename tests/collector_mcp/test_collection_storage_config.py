@@ -46,20 +46,19 @@ def test_enabled_collection_storage_requires_and_loads_mysql_configuration(tmp_p
     assert "password" not in str(settings.to_public_dict()).lower()
 
 
-def test_production_collection_storage_requires_mysql_tls_ca(tmp_path):
-    try:
-        load_storage_settings(
-            {
-                "OPSCLI_COLLECTOR_STORAGE_ENABLED": "true",
-                "OPSCLI_DATA_ENVIRONMENT": "production",
-                "OPSCLI_COLLECTOR_MYSQL_HOST": "mysql.internal",
-                "OPSCLI_COLLECTOR_MYSQL_DATABASE": "polaris_ops_mcp",
-                "OPSCLI_COLLECTOR_MYSQL_USER": "collector_writer",
-                "OPSCLI_COLLECTOR_MYSQL_PASSWORD": "secret",
-            },
-            config_dir=tmp_path,
-        )
-    except ValueError as exc:
-        assert "OPSCLI_COLLECTOR_MYSQL_SSL_CA" in str(exc)
-    else:
-        raise AssertionError("生产环境缺少 MySQL TLS CA 时必须拒绝启动存储")
+def test_production_collection_storage_allows_optional_mysql_tls_ca(tmp_path):
+    settings = load_storage_settings(
+        {
+            "OPSCLI_COLLECTOR_STORAGE_ENABLED": "true",
+            "OPSCLI_DATA_ENVIRONMENT": "production",
+            "OPSCLI_COLLECTOR_MYSQL_HOST": "mysql.internal",
+            "OPSCLI_COLLECTOR_MYSQL_DATABASE": "polaris_ops_mcp",
+            "OPSCLI_COLLECTOR_MYSQL_USER": "collector_writer",
+            "OPSCLI_COLLECTOR_MYSQL_PASSWORD": "secret",
+        },
+        config_dir=tmp_path,
+    )
+
+    assert settings.enabled is True
+    assert settings.data_environment == "production"
+    assert settings.mysql.ssl_ca == ""
