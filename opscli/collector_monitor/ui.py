@@ -27,6 +27,9 @@ DASHBOARD_HTML = """<!doctype html>
     .tab-panel[hidden] { display:none; }
     .view-grid { display:grid; grid-template-columns:minmax(0,2.2fr) minmax(320px,.8fr); gap:18px; align-items:start; }
     .task-table-wrap { min-height:420px; max-height:calc(100vh - 330px); overflow:auto; }
+    .data-table-wrap { overflow:auto; }
+    .account-stack { display:grid; gap:14px; }
+    .scope-note { margin:0; padding:0 16px 14px; color:var(--muted); font-size:13px; }
     .task-table-wrap thead { position:sticky; top:0; z-index:1; }
     .detail-panel { position:sticky; top:24px; }
     .stack { display:grid; gap:18px; }
@@ -70,7 +73,8 @@ DASHBOARD_HTML = """<!doctype html>
     .badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#e8eef3; font-size:12px; font-weight:650; }
     .healthy,.succeeded { color:var(--green); background:#e8f5ef; }
     .slow,.queue_starved { color:var(--amber); background:#fff3dd; }
-    .stalled,.orphaned,.worker_unavailable,.failed { color:var(--red); background:#fdecea; }
+    .stalled,.orphaned,.worker_unavailable,.failed,.unhealthy { color:var(--red); background:#fdecea; }
+    .unknown { color:var(--muted); background:#edf1f4; }
     .incident { padding:12px 0; border-bottom:1px solid #edf1f4; }
     .incident:last-child { border-bottom:0; }
     .incident strong { display:flex; justify-content:space-between; gap:12px; }
@@ -83,7 +87,7 @@ DASHBOARD_HTML = """<!doctype html>
     .timeline time { display:block; color:var(--muted); font-size:12px; }
     .source-error { display:none; margin-bottom:16px; padding:12px 14px; border:1px solid #f2b8b5; background:#fff0ef; color:var(--red); border-radius:7px; }
     @media (max-width:900px) { .cards { grid-template-columns:repeat(2,1fr); } .view-grid { grid-template-columns:1fr; } .task-table-wrap { min-height:0; max-height:none; } .detail-panel { position:static; } .form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-    @media (max-width:540px) { main { padding:14px; } header { padding:18px 14px; align-items:start; flex-direction:column; gap:8px; } .cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .card { padding:14px; } .card strong { font-size:24px; } .tabs { margin-left:-14px; margin-right:-14px; padding-left:14px; padding-right:14px; border-left:0; border-right:0; border-radius:0; } .tab { min-width:96px; } .panel-title { align-items:flex-start; flex-direction:column; } .actions { width:100%; justify-content:flex-start; } .credential-row { align-items:stretch; flex-direction:column; } .scenario-summary,.form-grid { grid-template-columns:1fr; } th:nth-child(2),td:nth-child(2) { display:none; } }
+    @media (max-width:540px) { main { padding:14px; } header { padding:18px 14px; align-items:start; flex-direction:column; gap:8px; } .cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .card { padding:14px; } .card strong { font-size:24px; } .tabs { margin-left:-14px; margin-right:-14px; padding-left:14px; padding-right:14px; border-left:0; border-right:0; border-radius:0; } .tab { min-width:96px; } .panel-title { align-items:flex-start; flex-direction:column; } .actions { width:100%; justify-content:flex-start; } .credential-row { align-items:stretch; flex-direction:column; } .scenario-summary,.form-grid { grid-template-columns:1fr; } .task-table-wrap th:nth-child(2),.task-table-wrap td:nth-child(2) { display:none; } }
   </style>
 </head>
 <body>
@@ -100,6 +104,7 @@ DASHBOARD_HTML = """<!doctype html>
     <button class="tab" id="tab-tasks" type="button" role="tab" aria-controls="panel-tasks" aria-selected="true" tabindex="0" data-tab="tasks">任务</button>
     <button class="tab" id="tab-collector" type="button" role="tab" aria-controls="panel-collector" aria-selected="false" tabindex="-1" data-tab="collector">Collector</button>
     <button class="tab" id="tab-scenario" type="button" role="tab" aria-controls="panel-scenario" aria-selected="false" tabindex="-1" data-tab="scenario">场景测试</button>
+    <button class="tab" id="tab-accounts" type="button" role="tab" aria-controls="panel-accounts" aria-selected="false" tabindex="-1" data-tab="accounts">账号</button>
     <button class="tab" id="tab-runtimes" type="button" role="tab" aria-controls="panel-runtimes" aria-selected="false" tabindex="-1" data-tab="runtimes">运行时</button>
     <button class="tab" id="tab-incidents" type="button" role="tab" aria-controls="panel-incidents" aria-selected="false" tabindex="-1" data-tab="incidents">事故</button>
   </nav>
@@ -133,6 +138,12 @@ DASHBOARD_HTML = """<!doctype html>
   <section class="tab-panel" id="panel-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" hidden>
     <section class="panel"><h2>运行时状态</h2><div id="runtimes" class="panel-body"></div></section>
   </section>
+  <section class="tab-panel" id="panel-accounts" role="tabpanel" aria-labelledby="tab-accounts" hidden>
+    <div class="account-stack">
+      <section class="panel"><h2>SellerSprite 执行账号</h2><div class="data-table-wrap"><table><thead><tr><th>账号</th><th>绑定用户</th><th>健康</th><th>活跃任务占用</th><th>最近成功</th><th>最近失败</th></tr></thead><tbody id="accounts"></tbody></table></div></section>
+      <section class="panel"><h2>今日用户调用情况</h2><p class="scope-note">仅统计已执行并落入额度表的调用；配额拒绝、认证拒绝和无限额用户不在表中。</p><div class="data-table-wrap"><table><thead><tr><th>用户</th><th>服务</th><th>成功调用</th><th>失败并退额</th><th>执行总数</th><th>日限额 / 剩余</th><th>重置时间</th></tr></thead><tbody id="usage-today"></tbody></table></div></section>
+    </div>
+  </section>
   <section class="tab-panel" id="panel-incidents" role="tabpanel" aria-labelledby="tab-incidents" hidden>
     <section class="panel"><h2>事故历史</h2><div id="incidents" class="panel-body"></div></section>
   </section>
@@ -159,6 +170,14 @@ function render(data){
   document.querySelector("#collector").innerHTML=`<div class="runtime"><strong>Collector MCP</strong>${badge(collector.status||"unknown")}<span class="muted">探测</span><span>${collector.enabled?"已配置":"未配置"}</span></div>`+modules.map(m=>`<div class="runtime"><strong>${esc(m.bundle_id)}</strong>${badge(m.status)}<span class="muted">队列 / 调度器</span><span>${esc(m.checks?.queue||"—")} / ${esc(m.checks?.scheduler||"—")}</span>${m.error_code?`<span class="muted">错误码</span><span>${esc(m.error_code)} (${esc(m.error_class||"unknown")})</span>`:""}</div>`).join("");
   document.querySelector("#runtimes").innerHTML=(data.runtimes||[]).map(r=>`<div class="runtime"><strong>${esc(r.execution_owner)}</strong>${badge(r.lifecycle_state)}<span class="muted">心跳</span><span>${age(r.heartbeat_at)}</span><span class="muted">通用 / Listing / 备用容量</span><span>${esc(r.generic_available_capacity)} / ${esc(r.listing_available_capacity)} / ${esc(r.standby_capacity)}</span></div>`).join("")||'<p class="empty">没有运行时心跳。</p>';
 }
+function renderAccounts(accountData,usageData){
+  const accountRows=accountData.accounts||[], usageRows=usageData.usage||[];
+  const accountError=accountData.source?.error?.message;
+  const usageError=usageData.source?.error?.message;
+  document.querySelector("#accounts").innerHTML=accountError?`<tr><td colspan="6" class="empty">${esc(accountError)}</td></tr>`:accountRows.map(a=>`<tr><td><strong>${esc(a.name)}</strong><br><span class="muted">${esc(a.username)} · ${esc(a.identity)}</span></td><td>${(a.bound_users||[]).map(esc).join("<br>")||"—"}</td><td>${badge(a.health)}</td><td>${esc(a.active_task_count)}${a.active_tasks?.length?`<br><span class="muted">${a.active_tasks.map(esc).join("、")}</span>`:""}</td><td>${a.last_success?`${age(a.last_success.at)}<br><span class="muted">${esc(a.last_success.job_id)}</span>`:"—"}</td><td>${a.last_failure?`${age(a.last_failure.at)}<br><span class="muted">${esc(a.last_failure.code)}${a.last_failure.job_id?` · ${esc(a.last_failure.job_id)}`:""}</span>`:"—"}</td></tr>`).join("")||'<tr><td colspan="6" class="empty">当前没有执行账号记录。</td></tr>';
+  document.querySelector("#usage-today").innerHTML=usageError?`<tr><td colspan="7" class="empty">${esc(usageError)}</td></tr>`:usageRows.map(u=>`<tr><td><strong>${esc(u.identity)}</strong><br><span class="muted">${esc(u.identity_type)}</span></td><td>${esc(u.service)}</td><td>${esc(u.calls)}</td><td>${esc(u.failures)}</td><td>${esc(u.total)}</td><td>${esc(u.daily_limit)} / ${esc(u.remaining)}</td><td>${age(u.reset_at)}</td></tr>`).join("")||'<tr><td colspan="7" class="empty">今日暂无计费执行记录。</td></tr>';
+}
+async function refreshAccounts(){try{const [accounts,usage]=await Promise.all([json("/api/v1/accounts"),json("/api/v1/usage/today")]);renderAccounts(accounts,usage);}catch(e){document.querySelector("#accounts").innerHTML='<tr><td colspan="6" class="empty">账号数据暂不可用。</td></tr>';document.querySelector("#usage-today").innerHTML='<tr><td colspan="7" class="empty">额度数据暂不可用。</td></tr>';}}
 async function showDetail(job){try{const d=await json(`/api/v1/tasks/${encodeURIComponent(job)}`);document.querySelector("#detail").innerHTML=`<strong>${esc(d.job_id)}</strong><p>${badge(d.health)} ${esc(d.progress_stage||"")}</p><ol class="timeline">${(d.timeline||[]).map(e=>`<li><strong>${esc(e.progress_stage)}</strong><time>${age(e.progress_at)} · #${esc(e.progress_sequence)}</time></li>`).join("")||'<li class="empty">没有进度事件。</li>'}</ol>`;}catch(e){document.querySelector("#detail").innerHTML='<p class="empty">详情暂不可用。</p>';}}
 const collectorKeyStorageKey="opscli.collector_monitor.collector_api_key";
 const collectorKeyInput=document.querySelector("#collector-api-key");
@@ -209,7 +228,7 @@ tabs.forEach((tab,index)=>{
     if(next){event.preventDefault();selectTab(next);}
   });
 });
-async function refresh(){try{render(await json("/api/v1/status"));}catch(e){const el=document.querySelector("#source-error");el.style.display="block";el.textContent="监控服务暂不可达";}}
+async function refresh(){try{render(await json("/api/v1/status"));await refreshAccounts();}catch(e){const el=document.querySelector("#source-error");el.style.display="block";el.textContent="监控服务暂不可达";}}
 loadScenarioContract(); refresh(); setInterval(refresh, 7000);
 </script>
 </body>

@@ -3,6 +3,16 @@
 > 状态：分期方案；当前交付覆盖共享路径、Bundle 启动隔离、同步手动探测，以及默认关闭的固定关键词反查场景测试。服务级事故、feedback、趋势与恢复动作仍为后续范围。
 > 依赖：[collect 监控优化调研](../analysis/collect监控优化调研.md)
 
+## 账号监控增量（2026-08-05）
+
+Collector Monitor 增加“账号”视图，供值班人员同时确认 SellerSprite 执行账号是否健康、是否被活跃任务占用，以及 MCP 计费用户今天实际执行了多少次。
+
+- `GET /api/v1/accounts` 返回执行账号的脱敏标识、账号标签、掩码用户名、掩码绑定用户、健康状态、活跃任务占用、最近一次成功和失败；不得返回内部账号 ID、完整账号 key、完整邮箱、密码密文、Cookie、Token 或原始凭据。
+- `GET /api/v1/usage/today` 按 `Asia/Shanghai` 自然日查询 `mcp_quota_daily`。`calls` 是成功且最终消耗额度的调用，`failures` 是业务失败后已退还额度的执行，`total = calls + failures`。
+- 当日调用表只覆盖已经进入额度执行切面并落表的计费用户。配额拒绝、认证拒绝和无限额专属账号用户不在表中，不得把该表描述为所有 HTTP/MCP 请求统计。
+- 两个端点仅允许 `limit=1..500`；数据源缺失、schema 不匹配或 SQLite 不可读时返回稳定、低敏的 source error，不返回路径和 SQLite 原始异常。
+- Monitor 只能以 SQLite `mode=ro` 和 `query_only` 读取队列库、账号绑定库和 quota 库，不建表、不迁移、不写入。Monitor 自己用于事故去重的私有状态库不属于业务数据源。
+
 ## 1. 背景
 
 SellerSprite collect 调用在队列数据库无法打开时直接失败，任务没有进入队列。现有 Collector Monitor 已能观察入队后的积压、停滞、孤儿任务和 worker 容量，但生产尚未启用，且无法对入队前数据库故障告警。

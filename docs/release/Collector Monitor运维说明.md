@@ -16,6 +16,8 @@ Collector Monitor v1 只提供：
 - `healthy`、`slow`、`stalled`、`orphaned` 任务分类；
 - `queue_starved`、`worker_unavailable` 队列事件；
 - Starlette 只读网页和 JSON API；
+- SellerSprite 执行账号健康、绑定用户与活跃任务占用的脱敏只读视图；
+- `Asia/Shanghai` 当日已落表计费执行的脱敏只读视图；
 - 本地只读 CLI；
 - Collector 与队列源固定目标的手动只读探测；
 - 默认关闭的固定 `keyword-reverse`（关键词反查）真实场景测试；
@@ -90,10 +92,12 @@ lease_expires_at
 | 资源 | 权限 |
 |---|---|
 | SellerSprite `task_queue.sqlite3` 及现有 `-wal`、`-shm` 文件 | 只读 |
+| SellerSprite `account_bindings.sqlite3` 及现有 `-wal`、`-shm` 文件 | 只读 |
+| MCP `quota.sqlite3` 及现有 `-wal`、`-shm` 文件 | 只读 |
 | SellerSprite 业务库父目录 | 只允许必要的遍历/读取，不允许创建或删除文件 |
 | Monitor 私有状态目录 | 读写 |
 | 企业微信 Webhook 文件 | 只读，仅服务账号可读 |
-| 账号绑定库、密钥、浏览器 Profile | 无权限 |
+| 账号绑定密钥、浏览器 Profile | 无权限；Monitor 不解密账号凭据 |
 
 Monitor 应以 SQLite URI `mode=ro` 并启用 `PRAGMA query_only=ON`。业务库和 Monitor 私有状态库必须是不同物理文件，也不能通过符号链接或硬链接指向同一文件；配置加载和每次状态库写连接都会复核，写连接还会读取 SQLite `main` 实际打开路径后再次比较。业务库不存在时，Monitor 必须报未就绪，不能创建空库。
 
@@ -110,6 +114,8 @@ Monitor 应以 SQLite URI `mode=ro` 并启用 `PRAGMA query_only=ON`。业务库
 | `OPSCLI_COLLECTOR_MONITOR_HOST` | `127.0.0.1` | `127.0.0.1` | HTTP 监听地址 |
 | `OPSCLI_COLLECTOR_MONITOR_PORT` | `8767` | 按端口规划 | HTTP 端口，合法范围 1～65535 |
 | `OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH` | `~/.config/opscli/seller_sprite/task_queue.sqlite3` | 两个服务配置同一绝对路径 | SellerSprite 写端与 Monitor 读端共享的主路径合同 |
+| SellerSprite 账号绑定库 | `~/.config/opscli/seller_sprite/account_bindings.sqlite3` | 与绑定服务共享只读挂载 | 沿用绑定模块默认路径，没有 Monitor 专用覆盖变量 |
+| `OPSCLI_MCP_QUOTA_SQLITE_PATH` | `~/.config/opscli/mcp_quota/quota.sqlite3` | 与 Collector MCP 配置同一绝对路径 | Monitor 继承现有 quota 路径，不另建配置 |
 | `OPSCLI_COLLECTOR_MONITOR_QUEUE_DB_PATH` | 同 SellerSprite 主路径 | 建议省略 | 兼容变量；同时显式配置且不一致时 Monitor 拒绝启动 |
 | `OPSCLI_COLLECTOR_MONITOR_STATE_DB_PATH` | `~/.config/opscli/collector_monitor/state.sqlite3` | 独立持久卷 | 不得通过路径、符号链接或硬链接指向业务库 |
 | `OPSCLI_COLLECTOR_MONITOR_URL` | `http://127.0.0.1:8767` | HTTPS 或回环 URL | Monitor 基址；加载时去除尾部 `/`，不得包含凭证 |
@@ -380,6 +386,8 @@ opscli collector-monitor probe --target queue-source
 | `GET` | `/api/v1/tasks?health=<值>&status=<值>&task_kind=<值>&limit=<1..500>` | 任务列表；过滤均可选，默认 100 条，拒绝未知参数 |
 | `GET` | `/api/v1/tasks/{job_id}` | 单任务脱敏监督详情和进度时间线；不存在时返回 `404` |
 | `GET` | `/api/v1/incidents?status=<值>&rule=<值>&limit=<1..500>` | 事故列表；过滤均可选，默认 100 条 |
+| `GET` | `/api/v1/accounts?limit=<1..500>` | SellerSprite 执行账号健康、掩码绑定用户、活跃占用与最近结果 |
+| `GET` | `/api/v1/usage/today?limit=<1..500>` | 北京时间当日已落入 `mcp_quota_daily` 的计费执行摘要 |
 | `POST` | `/api/v1/probes/collector` | 同步手动探测固定 Collector MCP，最多 5 秒；可选一次性 `{"api_key":"..."}` |
 | `POST` | `/api/v1/probes/queue-source` | 同步只读探测固定 SellerSprite 队列源，最多 5 秒 |
 | `GET` | `/api/v1/commands/scenario-test` | 返回固定关键词反查场景、开关和默认参数，不返回 Key |
@@ -400,6 +408,10 @@ curl --fail --silent --show-error http://127.0.0.1:8767/api/v1/status
 唯一业务写入口是默认关闭的场景测试 POST。它不接受工具名或场景名，只能调用 `seller_sprite_run` 的 `keyword-reverse`；请求必须包含 `confirmed=true`、10 位 ASIN、两位站点、`30d`/`nearly`/`YYYY-MM` 周期和 1～100 的 `page_size`，导出固定为 JSON。提交单飞且完成后冷却 10 秒，不自动重试；等待超时返回 `scenario_outcome_unknown`，此时任务可能已入队，应先在任务 Tab 查找，禁止立即重复提交。401 表示 Key 无效，403 表示缺少 `seller_sprite_run` 权限。
 
 任务过滤允许 `health` 六种健康值、`status=queued|running|succeeded|failed`、`task_kind=generic|listing_analysis`；事故过滤允许 `status=active|resolved` 与四种 `rule`。两个列表的 `limit` 默认为 100、最大 500，但 API 只过滤轮询缓存：当前快照最多 1000 条任务和最近 500 条事故。
+
+账号页的 `calls` 是成功且最终消耗额度的调用，`failures` 是业务失败后已经退回额度的执行，`total` 为两者之和，`remaining = daily_limit - calls`。这不是所有请求统计：配额检查直接拒绝、认证层拒绝、没有进入业务执行的请求，以及走专属账号无限额模式的用户都不会出现在今日表中。排查入口流量时必须结合网关/Collector 日志，不能用今日表反推总请求数。
+
+账号、队列和 quota 三个业务 SQLite 都由 Monitor 以只读 URI 打开并启用 `query_only`；Monitor 不创建、不迁移这些库。缺库或 schema 不匹配时账号 Tab 显示固定低敏错误，不会创建空文件。事故去重使用的 `collector_monitor/state.sqlite3` 是 Monitor 私有状态，不得与任一业务库指向同一物理文件。
 
 Collector 与场景测试 Tab 共用同一个浏览器 Key 存储项。Key 默认发送后立即清空；勾选“保存到此浏览器”后会以明文写入当前同源页面的 `localStorage`，刷新页面自动恢复，取消勾选立即删除。该值可被同源脚本读取，也会随浏览器 Profile 保留，只适合受控运维终端，不应在共享电脑使用。长期运行仍应配置权限受限的 `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_API_KEY_FILE`；Monitor 经反向代理开放时必须启用 HTTPS 和运维认证，禁止在明文远程 HTTP 页面输入或保存 Key。
 

@@ -145,6 +145,48 @@ class FakeService:
             "submitted_at": "2026-07-29T04:00:00+00:00",
         }
 
+    async def accounts(self, *, limit: int):
+        """返回账号页 HTTP 契约夹具。"""
+        return {
+            "source": {"ready": True, "error": None},
+            "accounts": [
+                {
+                    "identity": "abcdef123456",
+                    "name": "Dedicated A",
+                    "username": "s***@example.com",
+                    "bound_users": ["a***@example.com"],
+                    "health": "healthy",
+                    "active_task_count": 1,
+                    "active_tasks": ["job-1"],
+                    "last_success": {"at": "2026-08-05T02:00:00+00:00", "job_id": "job-ok"},
+                    "last_failure": None,
+                    "password": "must-not-leak",
+                }
+            ][:limit],
+        }
+
+    async def usage_today(self, *, limit: int):
+        """返回今日额度页 HTTP 契约夹具。"""
+        return {
+            "day": "20260805",
+            "timezone": "Asia/Shanghai",
+            "source": {"ready": True, "error": None},
+            "usage": [
+                {
+                    "service": "seller_sprite",
+                    "identity": "a***@example.com",
+                    "identity_type": "email",
+                    "calls": 7,
+                    "failures": 2,
+                    "total": 9,
+                    "daily_limit": 100,
+                    "remaining": 93,
+                    "reset_at": "2026-08-06T00:00:00+08:00",
+                    "api_key": "must-not-leak",
+                }
+            ][:limit],
+        }
+
 
 def _client(*, ready: bool = True) -> TestClient:
     """创建不启动后台轮询的隔离 ASGI 客户端。"""
@@ -534,6 +576,39 @@ def test_list_apis_enforce_bounded_allowlist_filters() -> None:
     assert task.status_code == 200 and len(task.json()["tasks"]) == 1
     assert incident.status_code == 200 and len(incident.json()["incidents"]) == 1
     assert bad_limit.status_code == bad_field.status_code == bad_value.status_code == 400
+
+
+def test_accounts_and_today_usage_endpoints_are_bounded_and_redacted() -> None:
+    """账号与今日用量端点应保持有界，并剔除纵深防御敏感字段。"""
+    with _client() as client:
+        accounts = client.get("/api/v1/accounts?limit=1")
+        usage = client.get("/api/v1/usage/today?limit=1")
+        bad_limit = client.get("/api/v1/accounts?limit=501")
+        unknown = client.get("/api/v1/usage/today?service=seller_sprite")
+
+    assert accounts.status_code == 200
+    assert accounts.json()["accounts"][0]["identity"] == "abcdef123456"
+    assert "password" not in accounts.text
+    assert usage.status_code == 200
+    assert usage.json()["usage"][0]["total"] == 9
+    assert "api_key" not in usage.text
+    assert bad_limit.status_code == 400
+    assert bad_limit.json()["error"]["code"] == "invalid_query"
+    assert unknown.status_code == 400
+
+
+def test_dashboard_exposes_accounts_tab_and_usage_scope_disclaimer() -> None:
+    """账号 Tab 应加载两类只读数据并声明额度表的统计边界。"""
+    with _client() as client:
+        html = client.get("/").text
+
+    assert 'data-tab="accounts"' in html
+    assert 'id="panel-accounts"' in html
+    assert "/api/v1/accounts" in html
+    assert "/api/v1/usage/today" in html
+    assert "配额拒绝" in html
+    assert "认证拒绝" in html
+    assert "无限额用户" in html
 
 
 def test_embedded_ui_has_required_sections_and_no_external_assets() -> None:
