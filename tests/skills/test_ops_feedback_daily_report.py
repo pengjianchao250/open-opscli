@@ -161,6 +161,14 @@ def test_report_command_paginates_deduplicates_and_writes_safe_markdown(
     assert output["feedback_count"] == 3
     assert output["sent"] is False
     assert "# 反馈日报（2026-07-20）" in markdown
+    assert markdown.count("```mermaid") == 2
+    assert "title 反馈类型分布" in markdown
+    assert '"bug" : 1' in markdown
+    assert '"data_issue" : 1' in markdown
+    assert '"query_result" : 1' in markdown
+    assert "title 问题严重度分布" in markdown
+    assert '"high" : 1' in markdown
+    assert '"medium" : 1' in markdown
     assert "| high | 1 |" in markdown
     assert "查询字段不存在" in markdown
     assert "secret@example.com" not in markdown

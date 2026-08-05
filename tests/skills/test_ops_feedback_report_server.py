@@ -98,6 +98,55 @@ def test_report_server_preserves_escaped_pipes_in_table_cells(tmp_path: Path):
     assert "<td>A | B</td>" in response.text
 
 
+def test_report_server_renders_mermaid_pie_without_external_script(tmp_path: Path):
+    """日报 Mermaid 饼图应在本地安全渲染，并保留无脚本兼容性。"""
+    module = _load_script()
+    report = tmp_path / "反馈日报-2026-08-04.md"
+    report.write_text(
+        "\n".join(
+            [
+                "```mermaid",
+                "pie showData",
+                "    title 问题严重度分布",
+                '    "high" : 2',
+                '    "medium" : 1',
+                "```",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with TestClient(module.create_app(tmp_path)) as client:
+        response = client.get(f"/reports/{report.name}")
+
+    assert response.status_code == 200
+    assert '<figure class="mermaid-chart" role="img"' in response.text
+    assert 'aria-label="问题严重度分布；high 2，66.7%' in response.text
+    assert "conic-gradient(" in response.text
+    assert "high" in response.text
+    assert "66.7%" in response.text
+    assert "cdn.jsdelivr.net" not in response.text
+    assert "mermaid.min.js" not in response.text
+
+
+def test_report_server_safely_falls_back_for_unsupported_mermaid(tmp_path: Path):
+    """未实现的 Mermaid 类型应显示转义源码，不能执行其中的 HTML。"""
+    module = _load_script()
+    report = tmp_path / "反馈日报-2026-08-04.md"
+    report.write_text(
+        "```mermaid\nflowchart LR\nA[<script>alert(1)</script>] --> B\n```",
+        encoding="utf-8",
+    )
+
+    with TestClient(module.create_app(tmp_path)) as client:
+        response = client.get(f"/reports/{report.name}")
+
+    assert response.status_code == 200
+    assert '<pre><code class="language-mermaid">' in response.text
+    assert "<script>alert(1)</script>" not in response.text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in response.text
+
+
 def test_report_server_accepts_generated_date_range_name(tmp_path: Path):
     """跨日期查询生成的默认日报文件名应正常列出和读取。"""
     module = _load_script()

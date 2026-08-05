@@ -33,6 +33,19 @@ SECURITY_HEADERS = {
 }
 TABLE_SEPARATOR_PATTERN = re.compile(r"^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$")
 INLINE_PATTERN = re.compile(r"(`[^`]+`|\*\*[^*]+\*\*)")
+# 只解析日报生成器输出的受控 Mermaid pie 数据行，避免浏览器执行任意图表语法。
+MERMAID_PIE_ITEM_PATTERN = re.compile(r'^"([^"\r\n]{1,80})"\s*:\s*(\d+)$')
+# 固定高对比度色板使本地图表无需外部主题或脚本即可稳定展示。
+CHART_COLORS = (
+    "#0f766e",
+    "#d97706",
+    "#b91c1c",
+    "#2563eb",
+    "#4d7c0f",
+    "#7c3aed",
+    "#be185d",
+    "#64748b",
+)
 DAILY_REPORT_NAME_PATTERN = re.compile(
     r"^反馈日报-\d{4}-\d{2}-\d{2}(?:_\d{4}-\d{2}-\d{2})?(?:-[^/\\]+)?\.md$",
     re.IGNORECASE,
@@ -176,6 +189,64 @@ def _table_cells(line: str) -> list[str]:
     return [cell.strip() for cell in re.split(r"(?<!\\)\|", content)]
 
 
+def _render_code_block(code: str, language: str = "") -> str:
+    """安全渲染代码块，并保留语言类名供兼容查看。"""
+    language_class = ""
+    if re.fullmatch(r"[a-z0-9_-]{1,30}", language):
+        language_class = f' class="language-{language}"'
+    return f"<pre><code{language_class}>{html.escape(code, quote=False)}</code></pre>"
+
+
+def _render_mermaid_pie(code: str) -> str | None:
+    """把日报使用的 Mermaid pie 子集渲染为无脚本本地图表。"""
+    lines = [line.strip() for line in code.splitlines() if line.strip()]
+    if not lines or lines[0].lower() != "pie showdata":
+        return None
+    title = "数据分布"
+    items: list[tuple[str, int]] = []
+    for line in lines[1:]:
+        if line.lower().startswith("title "):
+            title = line[6:].strip()[:80] or title
+            continue
+        match = MERMAID_PIE_ITEM_PATTERN.fullmatch(line)
+        # 超出色板或不符合受控语法时整图回退源码，避免颜色歧义和部分渲染。
+        if match is None or len(items) >= len(CHART_COLORS):
+            return None
+        items.append((match.group(1), int(match.group(2))))
+    total = sum(value for _, value in items)
+    if not items or total <= 0:
+        return None
+
+    stops: list[str] = []
+    legend: list[str] = []
+    accessible_parts: list[str] = []
+    start = 0.0
+    for index, (label, value) in enumerate(items):
+        percentage = value / total * 100
+        end = start + percentage
+        color = CHART_COLORS[index]
+        stops.append(f"{color} {start:.2f}% {end:.2f}%")
+        escaped_label = html.escape(label)
+        legend.append(
+            '<li><span class="legend-swatch" '
+            f'style="--legend-color: {color}"></span><span>{escaped_label}</span>'
+            f"<strong>{value} · {percentage:.1f}%</strong></li>"
+        )
+        accessible_parts.append(f"{label} {value}，{percentage:.1f}%")
+        start = end
+    escaped_title = html.escape(title)
+    aria_label = html.escape(f"{title}；" + "；".join(accessible_parts), quote=True)
+    gradient = ", ".join(stops)
+    return (
+        f'<figure class="mermaid-chart" role="img" aria-label="{aria_label}">'
+        f"<figcaption>{escaped_title}</figcaption>"
+        '<div class="chart-layout">'
+        f'<div class="pie-visual" style="--pie: conic-gradient({gradient})"></div>'
+        f'<ul class="chart-legend">{"".join(legend)}</ul>'
+        "</div></figure>"
+    )
+
+
 def render_markdown(markdown: str) -> str:
     """把日报使用的 Markdown 子集安全渲染为 HTML。"""
     lines = markdown.splitlines()
@@ -189,15 +260,16 @@ def render_markdown(markdown: str) -> str:
             continue
 
         if stripped.startswith("```"):
+            language = stripped[3:].strip().lower()
             code_lines: list[str] = []
             index += 1
             while index < len(lines) and not lines[index].strip().startswith("```"):
                 code_lines.append(lines[index])
                 index += 1
             index += 1
-            rendered.append(
-                f"<pre><code>{html.escape(chr(10).join(code_lines), quote=False)}</code></pre>"
-            )
+            code = chr(10).join(code_lines)
+            chart = _render_mermaid_pie(code) if language == "mermaid" else None
+            rendered.append(chart or _render_code_block(code, language))
             continue
 
         heading = re.match(r"^(#{1,6})\s+(.+)$", stripped)
@@ -319,6 +391,16 @@ def _page(title: str, body: str, reports: list[dict[str, Any]], selected: str | 
     code {{ padding: 1px 4px; border-radius: 3px; background: #edf0f2; font-family: Consolas, monospace; font-size: 12px; }}
     pre {{ overflow: auto; padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: #f7f8f9; }}
     pre code {{ padding: 0; background: transparent; }}
+    .mermaid-chart {{ margin: 12px 0 22px; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: #fafbfb; }}
+    .mermaid-chart figcaption {{ margin-bottom: 14px; font-size: 15px; font-weight: 700; }}
+    .chart-layout {{ display: grid; grid-template-columns: minmax(150px, 210px) minmax(220px, 1fr); align-items: center; gap: 24px; }}
+    .pie-visual {{ position: relative; width: 100%; aspect-ratio: 1; border-radius: 50%; background: var(--pie); }}
+    .pie-visual::after {{ position: absolute; inset: 28%; border-radius: 50%; background: #fafbfb; content: ""; }}
+    .chart-legend {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 18px; margin: 0; padding: 0; list-style: none; }}
+    .chart-legend li {{ display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; }}
+    .chart-legend span:not(.legend-swatch) {{ overflow-wrap: anywhere; }}
+    .chart-legend strong {{ color: var(--muted); font-size: 12px; white-space: nowrap; }}
+    .legend-swatch {{ width: 10px; height: 10px; border-radius: 2px; background: var(--legend-color); }}
     .table-wrap {{ width: 100%; overflow-x: auto; margin: 10px 0 22px; border: 1px solid var(--line); }}
     table {{ width: 100%; border-collapse: collapse; background: var(--paper); font-size: 13px; }}
     th, td {{ min-width: 90px; padding: 9px 11px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }}
@@ -332,6 +414,9 @@ def _page(title: str, body: str, reports: list[dict[str, Any]], selected: str | 
       .sidebar {{ position: static; height: auto; max-height: 240px; overflow: auto; border-right: 0; border-bottom: 1px solid var(--line); }}
       main {{ padding: 24px 16px 56px; }}
       h1 {{ font-size: 23px; }}
+      .chart-layout {{ grid-template-columns: 1fr; }}
+      .pie-visual {{ max-width: 190px; margin: 0 auto; }}
+      .chart-legend {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>

@@ -1,6 +1,6 @@
 {
   "name": "ops-feedback-query",
-  "version": "v1.4.0",
+  "version": "v1.5.0",
   "updated_at": "2026-08-05",
-  "notes": "新增仅监听本机的反馈日报浏览服务。"
+  "notes": "新增反馈类型与严重度 Mermaid 图表及本地安全渲染。"
 }

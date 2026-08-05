@@ -416,12 +416,42 @@ def _format_created_at(value: Any) -> str:
     return parsed.astimezone(SHANGHAI_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _ordered_counts(
+    counter: Counter[str],
+    order: tuple[str, ...],
+) -> list[tuple[str, int]]:
+    """按固定维度优先、未知维度名称排序返回非零计数。"""
+    items = [(name, counter[name]) for name in order if counter[name] > 0]
+    known = set(order)
+    items.extend(
+        (name, count)
+        for name, count in sorted(counter.items())
+        if name not in known and count > 0
+    )
+    return items
+
+
 def _count_rows(counter: Counter[str], order: tuple[str, ...]) -> list[str]:
     """按固定业务顺序生成 Markdown 统计表行。"""
-    rows = [f"| {name} | {counter[name]} |" for name in order if counter[name]]
-    known = set(order)
-    rows.extend(f"| {_safe_text(name)} | {count} |" for name, count in sorted(counter.items()) if name not in known)
+    rows = [f"| {_safe_text(name)} | {count} |" for name, count in _ordered_counts(counter, order)]
     return rows or ["| - | 0 |"]
+
+
+def _mermaid_pie(
+    title: str,
+    counter: Counter[str],
+    order: tuple[str, ...],
+) -> list[str]:
+    """生成日报使用的安全 Mermaid 饼图。"""
+    items = _ordered_counts(counter, order)
+    if not items:
+        return []
+    rows = ["```mermaid", "pie showData", f"    title {title}"]
+    for name, count in items:
+        label = _safe_text(name, maximum=40).replace("\\", "").replace('"', "'")
+        rows.append(f'    "{label}" : {count}')
+    rows.append("```")
+    return rows
 
 
 def render_markdown(
@@ -459,6 +489,12 @@ def render_markdown(
         "",
         "## 二、反馈类型",
         "",
+        *_mermaid_pie(
+            "反馈类型分布",
+            type_counter,
+            ("bug", "data_issue", "ux", "docs", "feature", "other", "query_result"),
+        ),
+        "",
         "| 类型 | 数量 |",
         "|---|---:|",
         *_count_rows(type_counter, ("bug", "data_issue", "ux", "docs", "feature", "other", "query_result")),
@@ -466,6 +502,12 @@ def render_markdown(
         "## 三、问题分布",
         "",
         "### 严重度",
+        "",
+        *_mermaid_pie(
+            "问题严重度分布",
+            severity_counter,
+            ("critical", "high", "medium", "low"),
+        ),
         "",
         "| 严重度 | 数量 |",
         "|---|---:|",

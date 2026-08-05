@@ -175,7 +175,7 @@ python scripts/daily_feedback_report.py \
 | `--insight` | 否 | 调用大模型生成模块问题洞察，并查询上一等长周期进行对比 |
 | `--insight-config` | 否 | 模型配置文件；仅与 `--insight` 一起使用，默认读取 opscli 用户配置目录 |
 
-日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表。洞察模式额外包含模块、主要问题、本周期/上一周期次数、变化、优先级和建议工作；群消息优先提醒最多 3 条 P0/P1 洞察。群消息使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节，不使用仅旧版 Markdown 支持的字体颜色和成员 `@` 语法。报告与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据；未启用洞察时，群消息仍按“严重度 + 标题”聚合重复问题，最多展示 5 类 Critical/High 问题并标注每类反馈数，底部提供固定的“详细文档查看”入口，完整逐条记录保留在本地 Markdown 文件。
+日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表，并使用 Mermaid `pie` 扩展语法展示反馈类型与严重度分布；原始统计表继续保留，供不支持 Mermaid 的查看器降级使用。洞察模式额外包含模块、主要问题、本周期/上一周期次数、变化、优先级和建议工作；群消息优先提醒最多 3 条 P0/P1 洞察。群消息使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节，不使用仅旧版 Markdown 支持的字体颜色和成员 `@` 语法。报告与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据；未启用洞察时，群消息仍按“严重度 + 标题”聚合重复问题，最多展示 5 类 Critical/High 问题并标注每类反馈数，底部提供固定的“详细文档查看”入口，完整逐条记录保留在本地 Markdown 文件。
 
 ### 本地浏览日报
 
@@ -191,7 +191,7 @@ python scripts/serve_feedback_reports.py
 python scripts/serve_feedback_reports.py --port 8877
 ```
 
-浏览服务只读取报告目录根部、符合 `反馈日报-YYYY-MM-DD[_YYYY-MM-DD][-*].md` 或月度反馈复盘命名的文件，提供报告页面、Markdown 原文、`/api/reports` 列表和 `/health` 健康检查；其他 Markdown、JSON 查询结果、模型配置、凭据、子目录和目录外文件均不可访问。
+浏览服务只读取报告目录根部、符合 `反馈日报-YYYY-MM-DD[_YYYY-MM-DD][-*].md` 或月度反馈复盘命名的文件，提供报告页面、Markdown 原文、`/api/reports` 列表和 `/health` 健康检查；日报使用的 Mermaid `pie showData` 会转换为无外部脚本的本地图表，其他 Mermaid 类型安全回退为转义源码。其他 Markdown、JSON 查询结果、模型配置、凭据、子目录和目录外文件均不可访问。
 
 ## Linux 每日自动推送
 
