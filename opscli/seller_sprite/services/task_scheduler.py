@@ -243,7 +243,7 @@ class SellerSpriteTaskScheduler:
         session_id: str | None = None,
         jwt: str | None = None,
         expected_user_email: str | None = None,
-        account_route: str = "shared_pool",
+        account_route: str = ACCOUNT_ROUTE_SHARED_POOL,
         requested_account_id: str | None = None,
         requested_account_key: str | None = None,
     ) -> dict[str, Any]:
@@ -282,6 +282,13 @@ class SellerSpriteTaskScheduler:
             # 公共账号刷新只保留非敏感凭证引用，实际 session/JWT 每次从 CredentialStore 读取。
             self._account_credential_scope = credential_scope
             self._account_expected_user_email = expected_user_email or mcp_user_email
+        if (
+            account_route == ACCOUNT_ROUTE_SHARED_POOL
+            and not self._account_pool.working_accounts
+            and not self._account_pool.standby_accounts
+        ):
+            # 空闲启动会把刷新计时推进到当前时刻；首个公共任务必须重新标记为立即到期。
+            self._last_account_refresh_at = 0.0
         if self.auto_start:
             await self.start()
         return status
@@ -562,6 +569,10 @@ class SellerSpriteTaskScheduler:
 
     async def _initialize_account_pool(self) -> None:
         """首次读取账号接口并建立工作账号和冷备用账号。"""
+        if not self._public_account_pool_needed():
+            # Collector 空闲启动时没有可归属的用户身份，不应访问 OPS 公共账号源。
+            self._last_account_refresh_at = time.monotonic()
+            return
         try:
             provider = self._ensure_account_provider(refresh_auth=True)
             accounts = provider.list_accounts()
@@ -630,7 +641,11 @@ class SellerSpriteTaskScheduler:
                 refresh_interval = max(1.0, float(self.settings.account_cache_ttl_seconds))
                 refresh_due = now - self._last_account_refresh_at >= refresh_interval
                 if refresh_due:
-                    await self._refresh_account_pool()
+                    if self._public_account_pool_needed():
+                        await self._refresh_account_pool()
+                    else:
+                        # 空闲期只推进计时，不访问远端；新公共任务入队会将其重置为立即到期。
+                        self._last_account_refresh_at = now
                 if now - self._last_session_reap_at >= self.session_reap_interval_seconds:
                     await self._reap_browser_sessions()
                 self._consumer_errors.discard("supervisor")
@@ -643,6 +658,15 @@ class SellerSpriteTaskScheduler:
                 if first_failure:
                     logger.exception("卖家精灵消费监督循环异常，短暂等待后继续维护")
             await asyncio.sleep(self.poll_interval_seconds)
+
+    def _public_account_pool_needed(self) -> bool:
+        """判断已有账号池或排队公共任务是否需要访问远端账号源。"""
+        return bool(
+            self._account_provider_injected
+            or self._account_pool.working_accounts
+            or self._account_pool.standby_accounts
+            or self.store.list_queued_shared_pool_job_ids()
+        )
 
     def _remove_finished_generic_workers(self) -> None:
         """清理已退出工作槽的 Task 引用，允许后续账号刷新重建槽。"""

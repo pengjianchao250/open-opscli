@@ -5328,3 +5328,11 @@
 **影响范围**：SellerSprite 调度器运行时健康判断和 Collector Bundle 脱敏健康输出。
 **回滚方式**：回退调度器消费存活与错误判定、Generic/Listing 领取重试、Supervisor 单轮异常隔离、工作槽重建、启动锁自恢复，移除 Bundle 公开字段及对应测试。
 ---
+## 2026-08-05 SellerSprite - Collector 空闲启动延迟账号池初始化
+
+**变更原因**：Collector MCP 在没有任务和用户凭据作用域时仍周期请求 OPS 集成账号，导致终端重复输出账号接口刷新失败告警。
+**改动点**：为 SellerSprite 调度器补充空闲启动与首个公共任务的回归测试；默认远程 Provider 的首次启动及 TTL 刷新仅在公共账号池存在需求时访问账号源，空账号池收到公共任务后立即触发刷新；显式注入 Provider 继续保留启动预热语义。
+**验证结果**：修复前定向回归为 `2 failed`；修复后空闲启动测试 `2 passed`，调度器 `45 passed`、监督健康 `20 passed`、Collector Bundle 与账号审计 `12 passed`、MCP SellerSprite 工具合同 `89 passed`，相关文件 `compileall` 通过；本地环境未安装 Ruff。
+**影响范围**：SellerSprite 持久调度器启动、公共账号池刷新时机与 Collector MCP 空闲日志。
+**回滚方式**：回退本条测试、调度器刷新条件及对应变更记录。
+---

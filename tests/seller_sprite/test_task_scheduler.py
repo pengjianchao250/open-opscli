@@ -370,6 +370,101 @@ class RecoveringAccountProvider(MultiAccountProvider):
         return [*self.accounts, self.replacement]
 
 
+def test_scheduler_idle_start_does_not_fetch_public_accounts_or_warn(
+    caplog,
+    tmp_path: Path,
+):
+    """空队列启动不应访问公共账号源或产生账号刷新失败告警。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        class FailingAccountProvider:
+            calls = 0
+
+            def list_accounts(self, *, refresh=False):
+                self.calls += 1
+                raise RuntimeError("remote account source unavailable")
+
+            def get_default(self, *, refresh=False):
+                raise AssertionError("空队列不应读取默认账号")
+
+        provider = FailingAccountProvider()
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(
+                output_dir=tmp_path,
+                account_cache_ttl_seconds=1,
+            ),
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        scheduler._ensure_account_provider = lambda **_kwargs: provider
+
+        await scheduler.start()
+        await asyncio.sleep(0.05)
+
+        assert provider.calls == 0
+        assert store.list_account_events() == []
+        assert "卖家精灵账号接口刷新失败" not in caplog.text
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_refreshes_public_accounts_when_task_arrives_after_idle_start(
+    tmp_path: Path,
+):
+    """空闲启动后的首个公共任务应立即初始化账号池，不等待刷新 TTL。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        class RecordingAccountProvider(MultiAccountProvider):
+            def __init__(self):
+                super().__init__(1)
+                self.calls = []
+
+            def list_accounts(self, *, refresh=False):
+                self.calls.append(refresh)
+                return list(self.accounts)
+
+        provider = RecordingAccountProvider()
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(
+                output_dir=tmp_path,
+                account_cache_ttl_seconds=3600,
+            ),
+            manager_factory=lambda **kwargs: ImmediateRunManager(**kwargs),
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        scheduler._ensure_account_provider = lambda **_kwargs: provider
+
+        await scheduler.start()
+        assert provider.calls == []
+
+        await scheduler.enqueue(_request("job-after-idle", "B07YRMT36L"))
+        succeeded = await _wait_for_state(
+            scheduler,
+            "job-after-idle",
+            "succeeded",
+        )
+
+        assert succeeded["state"] == "succeeded"
+        assert provider.calls == [True]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
 class ParallelRunHarness:
     def __init__(self, expected_started: int):
         self.expected_started = expected_started
