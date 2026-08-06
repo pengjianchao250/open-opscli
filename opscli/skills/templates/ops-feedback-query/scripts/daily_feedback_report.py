@@ -65,6 +65,11 @@ SECRET_PATTERN = re.compile(
 AUTHORIZATION_PATTERN = re.compile(
     r"(?i)\bauthorization\b\s*[:=]\s*(?:bearer\s+)?[^\s|]+"
 )
+# HTML 注释标记只供本地浏览器组合双列布局，其他 Markdown 查看器会自然忽略。
+DISTRIBUTION_GRID_START = "<!-- feedback-distribution-grid:start -->"
+DISTRIBUTION_GRID_END = "<!-- feedback-distribution-grid:end -->"
+DISTRIBUTION_PANEL_START = "<!-- feedback-distribution-panel:start -->"
+DISTRIBUTION_PANEL_END = "<!-- feedback-distribution-panel:end -->"
 
 
 class DailyReportError(Exception):
@@ -487,7 +492,13 @@ def render_markdown(
     lines.extend(
         [
         "",
-        "## 二、反馈类型",
+        "## 二、分布概览",
+        "",
+        DISTRIBUTION_GRID_START,
+        "",
+        DISTRIBUTION_PANEL_START,
+        "",
+        "### 反馈类型",
         "",
         *_mermaid_pie(
             "反馈类型分布",
@@ -495,13 +506,20 @@ def render_markdown(
             ("bug", "data_issue", "ux", "docs", "feature", "other", "query_result"),
         ),
         "",
+        "<details>",
+        "<summary>查看反馈类型数据表</summary>",
+        "",
         "| 类型 | 数量 |",
         "|---|---:|",
         *_count_rows(type_counter, ("bug", "data_issue", "ux", "docs", "feature", "other", "query_result")),
         "",
-        "## 三、问题分布",
+        "</details>",
         "",
-        "### 严重度",
+        DISTRIBUTION_PANEL_END,
+        "",
+        DISTRIBUTION_PANEL_START,
+        "",
+        "### 问题严重度",
         "",
         *_mermaid_pie(
             "问题严重度分布",
@@ -509,9 +527,20 @@ def render_markdown(
             ("critical", "high", "medium", "low"),
         ),
         "",
+        "<details>",
+        "<summary>查看问题严重度数据表</summary>",
+        "",
         "| 严重度 | 数量 |",
         "|---|---:|",
         *_count_rows(severity_counter, ("critical", "high", "medium", "low")),
+        "",
+        "</details>",
+        "",
+        DISTRIBUTION_PANEL_END,
+        "",
+        DISTRIBUTION_GRID_END,
+        "",
+        "## 三、问题分布",
         "",
         "### 来源",
         "",

@@ -99,18 +99,44 @@ def test_report_server_preserves_escaped_pipes_in_table_cells(tmp_path: Path):
 
 
 def test_report_server_renders_mermaid_pie_without_external_script(tmp_path: Path):
-    """日报 Mermaid 饼图应在本地安全渲染，并保留无脚本兼容性。"""
+    """两张日报分布图应紧凑并排，原始表格默认折叠。"""
     module = _load_script()
     report = tmp_path / "反馈日报-2026-08-04.md"
     report.write_text(
         "\n".join(
             [
+                "<!-- feedback-distribution-grid:start -->",
+                "<!-- feedback-distribution-panel:start -->",
+                "```mermaid",
+                "pie showData",
+                "    title 反馈类型分布",
+                '    "bug" : 2',
+                '    "ux" : 1',
+                "```",
+                "<details>",
+                "<summary>查看反馈类型数据表</summary>",
+                "| 类型 | 数量 |",
+                "|---|---:|",
+                "| bug | 2 |",
+                "| ux | 1 |",
+                "</details>",
+                "<!-- feedback-distribution-panel:end -->",
+                "<!-- feedback-distribution-panel:start -->",
                 "```mermaid",
                 "pie showData",
                 "    title 问题严重度分布",
                 '    "high" : 2',
                 '    "medium" : 1',
                 "```",
+                "<details>",
+                "<summary>查看问题严重度数据表</summary>",
+                "| 严重度 | 数量 |",
+                "|---|---:|",
+                "| high | 2 |",
+                "| medium | 1 |",
+                "</details>",
+                "<!-- feedback-distribution-panel:end -->",
+                "<!-- feedback-distribution-grid:end -->",
             ]
         ),
         encoding="utf-8",
@@ -120,11 +146,18 @@ def test_report_server_renders_mermaid_pie_without_external_script(tmp_path: Pat
         response = client.get(f"/reports/{report.name}")
 
     assert response.status_code == 200
-    assert '<figure class="mermaid-chart" role="img"' in response.text
+    assert response.text.count('<figure class="mermaid-chart" role="img"') == 2
+    assert '<div class="distribution-grid">' in response.text
+    assert response.text.count('<section class="distribution-panel">') == 2
+    assert '<details class="data-table">' in response.text
+    assert "查看反馈类型数据表" in response.text
     assert 'aria-label="问题严重度分布；high 2，66.7%' in response.text
     assert "conic-gradient(" in response.text
     assert "high" in response.text
     assert "66.7%" in response.text
+    assert ".distribution-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));" in response.text
+    assert "@media (max-width: 1180px)" not in response.text
+    assert ".distribution-grid { grid-template-columns: 1fr; }" in response.text
     assert "cdn.jsdelivr.net" not in response.text
     assert "mermaid.min.js" not in response.text
 

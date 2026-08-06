@@ -46,6 +46,20 @@ CHART_COLORS = (
     "#be185d",
     "#64748b",
 )
+# 仅识别日报生成器写入的布局标记；其他 HTML 仍按普通文本转义。
+DISTRIBUTION_GRID_START = "<!-- feedback-distribution-grid:start -->"
+DISTRIBUTION_GRID_END = "<!-- feedback-distribution-grid:end -->"
+DISTRIBUTION_PANEL_START = "<!-- feedback-distribution-panel:start -->"
+DISTRIBUTION_PANEL_END = "<!-- feedback-distribution-panel:end -->"
+DETAILS_SUMMARY_PATTERN = re.compile(r"^<summary>([^<\r\n]{1,80})</summary>$")
+MARKDOWN_LAYOUT_TAGS = {
+    DISTRIBUTION_GRID_START: '<div class="distribution-grid">',
+    DISTRIBUTION_GRID_END: "</div>",
+    DISTRIBUTION_PANEL_START: '<section class="distribution-panel">',
+    DISTRIBUTION_PANEL_END: "</section>",
+    "<details>": '<details class="data-table">',
+    "</details>": "</details>",
+}
 DAILY_REPORT_NAME_PATTERN = re.compile(
     r"^反馈日报-\d{4}-\d{2}-\d{2}(?:_\d{4}-\d{2}-\d{2})?(?:-[^/\\]+)?\.md$",
     re.IGNORECASE,
@@ -259,6 +273,17 @@ def render_markdown(markdown: str) -> str:
             index += 1
             continue
 
+        if stripped in MARKDOWN_LAYOUT_TAGS:
+            rendered.append(MARKDOWN_LAYOUT_TAGS[stripped])
+            index += 1
+            continue
+
+        details_summary = DETAILS_SUMMARY_PATTERN.fullmatch(stripped)
+        if details_summary:
+            rendered.append(f"<summary>{_render_inline(details_summary.group(1))}</summary>")
+            index += 1
+            continue
+
         if stripped.startswith("```"):
             language = stripped[3:].strip().lower()
             code_lines: list[str] = []
@@ -401,6 +426,17 @@ def _page(title: str, body: str, reports: list[dict[str, Any]], selected: str | 
     .chart-legend span:not(.legend-swatch) {{ overflow-wrap: anywhere; }}
     .chart-legend strong {{ color: var(--muted); font-size: 12px; white-space: nowrap; }}
     .legend-swatch {{ width: 10px; height: 10px; border-radius: 2px; background: var(--legend-color); }}
+    .distribution-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 12px 0 28px; }}
+    .distribution-panel {{ min-width: 0; padding: 0 18px 18px; border: 1px solid var(--line); border-radius: 6px; background: #fafbfb; }}
+    .distribution-panel h3 {{ margin: 16px 0 4px; }}
+    .distribution-panel .mermaid-chart {{ margin: 0; padding: 12px 0 8px; border: 0; background: transparent; }}
+    .distribution-panel .mermaid-chart figcaption {{ display: none; }}
+    .distribution-panel .chart-layout {{ grid-template-columns: 1fr; gap: 14px; }}
+    .distribution-panel .pie-visual {{ max-width: 150px; margin: 0 auto; }}
+    .distribution-panel .chart-legend {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    .data-table {{ margin-top: 10px; border-top: 1px solid var(--line); }}
+    .data-table summary {{ padding: 10px 0 0; color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; }}
+    .data-table .table-wrap {{ margin: 10px 0 0; }}
     .table-wrap {{ width: 100%; overflow-x: auto; margin: 10px 0 22px; border: 1px solid var(--line); }}
     table {{ width: 100%; border-collapse: collapse; background: var(--paper); font-size: 13px; }}
     th, td {{ min-width: 90px; padding: 9px 11px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }}
@@ -414,7 +450,10 @@ def _page(title: str, body: str, reports: list[dict[str, Any]], selected: str | 
       .sidebar {{ position: static; height: auto; max-height: 240px; overflow: auto; border-right: 0; border-bottom: 1px solid var(--line); }}
       main {{ padding: 24px 16px 56px; }}
       h1 {{ font-size: 23px; }}
+      .distribution-grid {{ grid-template-columns: 1fr; }}
       .chart-layout {{ grid-template-columns: 1fr; }}
+      .distribution-panel {{ padding: 0 14px 14px; }}
+      .distribution-panel .chart-layout {{ grid-template-columns: 1fr; }}
       .pie-visual {{ max-width: 190px; margin: 0 auto; }}
       .chart-legend {{ grid-template-columns: 1fr; }}
     }}

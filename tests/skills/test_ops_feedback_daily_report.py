@@ -169,6 +169,11 @@ def test_report_command_paginates_deduplicates_and_writes_safe_markdown(
     assert "title 问题严重度分布" in markdown
     assert '"high" : 1' in markdown
     assert '"medium" : 1' in markdown
+    assert "## 二、分布概览" in markdown
+    assert markdown.count("<!-- feedback-distribution-panel:start -->") == 2
+    assert markdown.count("<details>") == 2
+    assert "<summary>查看反馈类型数据表</summary>" in markdown
+    assert "<summary>查看问题严重度数据表</summary>" in markdown
     assert "| high | 1 |" in markdown
     assert "查询字段不存在" in markdown
     assert "secret@example.com" not in markdown

@@ -1,6 +1,6 @@
 {
   "name": "ops-feedback-query",
-  "version": "v1.5.0",
-  "updated_at": "2026-08-05",
-  "notes": "新增反馈类型与严重度 Mermaid 图表及本地安全渲染。"
+  "version": "v1.6.0",
+  "updated_at": "2026-08-06",
+  "notes": "分布图改为响应式双列概览，原始统计表默认折叠。"
 }
