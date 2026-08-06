@@ -273,6 +273,14 @@ python scripts/serve_feedback_reports.py
 python scripts/serve_feedback_reports.py --port 8877
 ```
 
+需要让同一局域网的设备访问时，显式传入本机私有 IPv4 地址，并在系统防火墙中只对本地子网放行对应端口：
+
+```bash
+python scripts/serve_feedback_reports.py --host 10.6.53.56 --port 8780
+```
+
+`--host` 只接受明确的回环或私有 IPv4 地址；拒绝 `0.0.0.0`、公网地址和主机名。LAN 模式仍使用 Host 白名单，不会接受其他地址的 Host 请求。
+
 浏览服务只读取报告目录根部、符合 `反馈日报-YYYY-MM-DD[_YYYY-MM-DD][-*].md` 或月度反馈复盘命名的文件，提供报告页面、Markdown 原文、`/api/reports` 列表和 `/health` 健康检查；日报使用的 Mermaid `pie showData` 会转换为无外部脚本的本地图表，桌面端使用双列分布概览，窄屏自动切换单列，原始表格可按需展开；其他 Mermaid 类型安全回退为转义源码。其他 Markdown、JSON 查询结果、模型配置、凭据、子目录和目录外文件均不可访问。
 
 ## Linux 每日自动推送

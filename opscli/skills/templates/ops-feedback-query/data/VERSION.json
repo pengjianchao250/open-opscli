@@ -1,6 +1,6 @@
 {
   "name": "ops-feedback-query",
-  "version": "v1.8.0",
+  "version": "v1.8.1",
   "updated_at": "2026-08-06",
-  "notes": "新增 08:30 提前取数、READY 标记和 Codex 分块洞察收尾流水线。"
+  "notes": "反馈日报浏览服务支持显式绑定私有局域网 IPv4 地址，并保持 Host 白名单。"
 }

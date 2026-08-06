@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import os
 from pathlib import Path
@@ -346,3 +347,28 @@ def test_report_server_uses_unoccupied_default_port():
     module = _load_script()
 
     assert module.DEFAULT_PORT == 8780
+
+
+def test_report_server_allows_explicit_private_lan_host(tmp_path: Path):
+    """显式配置的私有 IPv4 Host 应可访问，其他局域网 Host 仍被拒绝。"""
+    module = _load_script()
+    allowed_hosts = module._trusted_hosts(module._host("10.6.53.56"))
+
+    with TestClient(
+        module.create_app(tmp_path, allowed_hosts=allowed_hosts),
+        base_url="http://10.6.53.56",
+    ) as client:
+        allowed = client.get("/health")
+        rejected = client.get("/health", headers={"Host": "10.6.53.57"})
+
+    assert allowed.status_code == 200
+    assert rejected.status_code == 400
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "8.8.8.8", "feedback.local"])
+def test_report_server_rejects_unsafe_bind_hosts(host: str):
+    """服务不得监听所有网卡、公网地址或无法约束的主机名。"""
+    module = _load_script()
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        module._host(host)

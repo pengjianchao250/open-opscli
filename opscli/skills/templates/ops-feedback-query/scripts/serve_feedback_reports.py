@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import ipaddress
 import json
 import re
 from datetime import datetime
@@ -21,6 +22,8 @@ from starlette.routing import Route
 
 LOCAL_HOST = "127.0.0.1"
 DEFAULT_PORT = 8780
+# 默认只信任本机 Host；显式启用局域网监听时由启动参数补入绑定地址。
+DEFAULT_ALLOWED_HOSTS = (LOCAL_HOST, "localhost", "testserver")
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
@@ -498,11 +501,15 @@ def _page(title: str, body: str, reports: list[dict[str, Any]], selected: str | 
 </html>"""
 
 
-def create_app(report_dir: Path | None = None) -> Starlette:
+def create_app(
+    report_dir: Path | None = None,
+    allowed_hosts: list[str] | None = None,
+) -> Starlette:
     """创建只读反馈报告 ASGI 应用。
 
     Args:
         report_dir: 测试或调用方指定的报告目录，默认定位项目输出目录。
+        allowed_hosts: 可访问服务的 HTTP Host；默认只允许本机和测试客户端。
 
     Returns:
         可由 Uvicorn 或测试客户端运行的 Starlette 应用。
@@ -569,7 +576,7 @@ def create_app(report_dir: Path | None = None) -> Starlette:
     )
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=["127.0.0.1", "localhost", "testserver"],
+        allowed_hosts=allowed_hosts or list(DEFAULT_ALLOWED_HOSTS),
     )
     return app
 
@@ -582,9 +589,33 @@ def _port(value: str) -> int:
     return parsed
 
 
+def _host(value: str) -> str:
+    """校验监听地址仅为本机回环或明确的私有 IPv4 地址。"""
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("监听地址必须是 IPv4 地址") from exc
+    if address.version != 4 or address.is_unspecified:
+        raise argparse.ArgumentTypeError("监听地址必须是明确的 IPv4 地址，不能使用 0.0.0.0")
+    if not (address.is_loopback or address.is_private):
+        raise argparse.ArgumentTypeError("监听地址只能使用本机回环或私有局域网 IPv4 地址")
+    return str(address)
+
+
+def _trusted_hosts(bind_host: str) -> list[str]:
+    """构造与监听地址一致的 Host 白名单，避免 LAN 模式放开任意 Host。"""
+    return list(dict.fromkeys((*DEFAULT_ALLOWED_HOSTS, bind_host)))
+
+
 def main(argv: list[str] | None = None) -> int:
-    """启动仅监听本机回环地址的反馈日报服务。"""
-    parser = argparse.ArgumentParser(description="启动反馈日报本地浏览服务")
+    """启动反馈日报浏览服务，默认仅监听本机回环地址。"""
+    parser = argparse.ArgumentParser(description="启动反馈日报浏览服务")
+    parser.add_argument(
+        "--host",
+        type=_host,
+        default=LOCAL_HOST,
+        help="监听 IPv4 地址，默认 127.0.0.1；局域网访问时传本机私有 IP",
+    )
     parser.add_argument("--port", type=_port, default=DEFAULT_PORT, help="监听端口，默认 8780")
     args = parser.parse_args(argv)
     try:
@@ -596,15 +627,15 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "success": True,
-                "url": f"http://{LOCAL_HOST}:{args.port}",
+                "url": f"http://{args.host}:{args.port}",
                 "report_dir": str(report_dir),
             },
             ensure_ascii=True,
         )
     )
     uvicorn.run(
-        create_app(report_dir),
-        host=LOCAL_HOST,
+        create_app(report_dir, allowed_hosts=_trusted_hosts(args.host)),
+        host=args.host,
         port=args.port,
         access_log=False,
     )
