@@ -24,7 +24,13 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from opscli.config import CONFIG_DIR
-from opscli.feedback.services.insight import INSIGHT_PROMPT_HASH, INSIGHT_PROMPT_VERSION
+from opscli.feedback.services.insight import (
+    INSIGHT_PROMPT_HASH,
+    INSIGHT_PROMPT_VERSION,
+    aggregate_feedback_classifications,
+    sanitize_feedback_text,
+    validate_feedback_classifications,
+)
 
 # Skill 脚本不是 Python 包，将同目录加入导入路径以复用已有查询客户端。
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -53,22 +59,22 @@ INSIGHT_COMMAND_TIMEOUT_MAX = 3600.0
 DEFAULT_INSIGHT_BATCH_SIZE = 100
 # 结构化中间产物版本供后续周报、月报选择兼容的运行快照。
 RUN_ARTIFACT_SCHEMA_VERSION = "1.0"
+# 取数与 Codex 交接产物独立演进，不能与最终日报运行产物混用版本号。
+PREPARED_ARTIFACT_SCHEMA_VERSION = "1.0"
+# 与生产反馈洞察批次保持 100 条一致，兼顾上下文成本和单次输出可靠性。
+PREPARED_CHUNK_SIZE = 100
+# Codex 分类契约内容或输出约束变化时递增，供准备产物失效与审计使用。
+CODEX_INSIGHT_PROMPT_VERSION = "codex-v1"
+# 契约放在不打包的内部 Skill 内，由 Codex 自动化和 Python 哈希共同引用。
+CODEX_INSIGHT_CONTRACT_PATH = SCRIPT_DIR.parent / "reference" / "Codex反馈洞察分类契约.md"
 # 与 `opscli feedback insight` 使用同一默认配置路径，确保批次数预算一致。
 DEFAULT_INSIGHT_CONFIG = CONFIG_DIR / "feedback_insight.json"
 # 企业微信 markdown_v2.content 官方上限为 4096 字节。
 WECOM_CONTENT_BYTES = 4096
 FEEDBACK_DETAIL_URL = "https://ops.xenkee.com/dashboard/share/3e2W4spQ"
 # 列表标题可能由用户或 Agent 生成，统一清理常见个人信息和凭据形态。
-EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
-WINDOWS_USER_PATH_PATTERN = re.compile(r"(?i)\b[A-Z]:\\Users\\[^\\\s]+\\[^\s|]*")
 MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\([^\)]+\)")
 URL_PATTERN = re.compile(r"https?://[^\s|]+", re.IGNORECASE)
-SECRET_PATTERN = re.compile(
-    r"(?i)\b(api[_ -]?key|token|cookie|authorization|webhook)\b\s*[:=]\s*[^\s|]+"
-)
-AUTHORIZATION_PATTERN = re.compile(
-    r"(?i)\bauthorization\b\s*[:=]\s*(?:bearer\s+)?[^\s|]+"
-)
 # HTML 注释标记只供本地浏览器组合双列布局，其他 Markdown 查看器会自然忽略。
 DISTRIBUTION_GRID_START = "<!-- feedback-distribution-grid:start -->"
 DISTRIBUTION_GRID_END = "<!-- feedback-distribution-grid:end -->"
@@ -216,6 +222,32 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="反馈洞察模型配置文件；默认由 opscli 从用户配置目录读取",
     )
+    pipeline = parser.add_mutually_exclusive_group()
+    pipeline.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="只准备昨日脱敏数据和 READY 标记，不调用模型或发布日报",
+    )
+    pipeline.add_argument(
+        "--claim-ready",
+        action="store_true",
+        help="领取最新一份 ready 数据并切换为 analyzing，供 Codex 计划任务使用",
+    )
+    pipeline.add_argument(
+        "--validate-chunk",
+        type=Path,
+        help="校验 Codex 写入的单个 chunk 输出并记录检查点",
+    )
+    pipeline.add_argument(
+        "--finalize-prepared",
+        type=Path,
+        help="从已准备目录离线聚合、生成并发布 AI 日报",
+    )
+    parser.add_argument(
+        "--analysis-model",
+        default="codex_app",
+        help="Codex 最终化时记录的模型名称，不参与统计",
+    )
     return parser
 
 
@@ -289,13 +321,7 @@ def fetch_feedback_details(
 
 def _safe_insight_text(value: Any, maximum: int = 1000) -> str:
     """脱敏发送给本地 insight 命令的自由文本。"""
-    text = " ".join(str(value or "").split())
-    text = EMAIL_PATTERN.sub("[邮箱已脱敏]", text)
-    text = WINDOWS_USER_PATH_PATTERN.sub("[本地路径已脱敏]", text)
-    text = AUTHORIZATION_PATTERN.sub("Authorization=[凭据已脱敏]", text)
-    text = SECRET_PATTERN.sub(lambda match: f"{match.group(1)}=[凭据已脱敏]", text)
-    text = URL_PATTERN.sub("[链接已脱敏]", text)
-    return text[:maximum]
+    return sanitize_feedback_text(value, maximum)
 
 
 def _user_key(item: dict[str, Any]) -> str | None:
@@ -427,11 +453,7 @@ def run_feedback_insight(
 
 def _safe_text(value: Any, *, maximum: int = 200) -> str:
     """清理用户文本中的敏感信息、链接和 Markdown 控制符。"""
-    text = " ".join(str(value or "-").split())
-    # 标题虽来自列表接口，仍可能夹带用户主动粘贴的个人信息、路径或凭据。
-    text = EMAIL_PATTERN.sub("[邮箱已脱敏]", text)
-    text = WINDOWS_USER_PATH_PATTERN.sub("[本地路径已脱敏]", text)
-    text = SECRET_PATTERN.sub(lambda match: f"{match.group(1)}=[凭据已脱敏]", text)
+    text = sanitize_feedback_text(value or "-", maximum * 2)
     text = MARKDOWN_LINK_PATTERN.sub(lambda match: match.group(1), text)
     text = URL_PATTERN.sub("[链接已脱敏]", text)
     # 反斜杠和 Markdown 标记统一转义，防止标题改变表格或群消息结构。
@@ -1233,10 +1255,652 @@ def _print_json(payload: dict[str, Any], *, stream: Any = sys.stdout) -> None:
     print(json.dumps(payload, ensure_ascii=True), file=stream)
 
 
+def _read_json_artifact(path: Path, label: str) -> dict[str, Any]:
+    """读取反馈输出目录中的 JSON 对象。"""
+    resolved_path = resolve_output_path(path)
+    try:
+        payload = json.loads(resolved_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DailyReportError(f"{label} 不存在、不可读取或不是合法 JSON") from exc
+    if not isinstance(payload, dict):
+        raise DailyReportError(f"{label} 必须是 JSON 对象")
+    return payload
+
+
+def _prepared_directory(window: ReportWindow) -> Path:
+    """返回单日准备产物目录。"""
+    if " 至 " in window.label:
+        raise DailyReportError("--prepare-only 仅支持单日时间窗口")
+    return resolve_output_path(Path("prepared") / window.label / "placeholder").parent
+
+
+def _safe_report_feedbacks(feedbacks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """保存渲染日报所需的脱敏列表字段，不保留用户身份。"""
+    keys = (
+        "feedback_uuid",
+        "feedback_type",
+        "severity",
+        "source",
+        "status",
+        "failed_call_count",
+        "created_at",
+    )
+    rows: list[dict[str, Any]] = []
+    for item in feedbacks:
+        row = {key: item.get(key) for key in keys if item.get(key) is not None}
+        row["title"] = _safe_text(item.get("title"), maximum=500)
+        rows.append(row)
+    return rows
+
+
+def _prepared_manifest_reusable(prepared_dir: Path) -> dict[str, Any] | None:
+    """检查已有 ready/analyzing/completed 准备产物能否直接复用。"""
+    manifest_path = prepared_dir / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        manifest = _read_json_artifact(manifest_path, "准备清单")
+        if manifest.get("state") not in {"ready", "analyzing", "completed"}:
+            return None
+        period_label = str(manifest.get("period", {}).get("label") or "")
+        ready_path = prepared_dir / str(
+            manifest.get("artifacts", {}).get("ready_marker") or "READY"
+        )
+        if ready_path.read_text(encoding="utf-8") != f"{period_label} 数据已完成\n":
+            return None
+        contract = manifest.get("contract", {})
+        if (
+            contract.get("prompt_version") != CODEX_INSIGHT_PROMPT_VERSION
+            or contract.get("prompt_hash") != _codex_contract_hash()
+        ):
+            return None
+        for key in ("analysis_input", "report_input"):
+            artifact = manifest.get("artifacts", {}).get(key)
+            expected_hash = manifest.get("source_snapshots", {}).get(key)
+            if not isinstance(artifact, str) or not isinstance(expected_hash, str):
+                return None
+            payload = _read_json_artifact(prepared_dir / artifact, key)
+            if _payload_hash(payload) != expected_hash:
+                return None
+        chunks = manifest.get("chunks")
+        if not isinstance(chunks, list):
+            return None
+        repaired_checkpoint = False
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                return None
+            chunk_input = _read_json_artifact(
+                prepared_dir / str(chunk.get("input") or ""), "chunk 输入"
+            )
+            if _payload_hash(chunk_input) != chunk.get("input_sha256"):
+                return None
+            if chunk.get("status") == "validated":
+                try:
+                    _, output_hash = _validated_chunk_classifications(
+                        prepared_dir, manifest, chunk
+                    )
+                except DailyReportError:
+                    output_hash = None
+                if output_hash != chunk.get("output_sha256"):
+                    if manifest.get("state") == "completed":
+                        return None
+                    _write_json_artifact(
+                        {
+                            "schema_version": PREPARED_ARTIFACT_SCHEMA_VERSION,
+                            "status": "invalid",
+                            "error": {"code": "CHUNK_CHECKPOINT_INVALID"},
+                        },
+                        prepared_dir / str(chunk.get("output") or ""),
+                    )
+                    chunk["status"] = "failed"
+                    chunk["error"] = {
+                        "code": "CHUNK_CHECKPOINT_INVALID",
+                        "message": "已校验 chunk 输出缺失、损坏或哈希不匹配",
+                    }
+                    chunk.pop("output_sha256", None)
+                    chunk.pop("classification_count", None)
+                    chunk.pop("validated_at", None)
+                    repaired_checkpoint = True
+        if repaired_checkpoint:
+            _write_json_artifact(manifest, manifest_path)
+        return manifest
+    except (DailyReportError, OSError):
+        return None
+
+
+def _codex_contract_hash() -> str:
+    """返回 Codex 洞察契约哈希，确保调度结果可追溯。"""
+    try:
+        content = CODEX_INSIGHT_CONTRACT_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise DailyReportError("Codex 洞察契约文件不存在或不可读取") from exc
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def prepare_feedback_data(args: argparse.Namespace) -> dict[str, Any]:
+    """查询、脱敏并持久化昨日数据，不调用模型或发送通知。
+
+    Args:
+        args: 日报命令参数，使用日期、分页、服务地址和查询超时字段。
+
+    Returns:
+        包含周期键、准备目录、记录数、分块数及是否复用的安全结果。
+
+    Raises:
+        DailyReportError: 时间窗口、契约或准备产物不合法。
+        FeedbackQueryError: 反馈列表或详情查询失败。
+        httpx.HTTPError: 反馈接口发生网络错误。
+    """
+    window = resolve_report_window(args.date_from, args.date_to)
+    comparison_window = resolve_comparison_window(window)
+    prepared_dir = _prepared_directory(window)
+    reusable = _prepared_manifest_reusable(prepared_dir)
+    if reusable is not None:
+        return {
+            "success": True,
+            "state": reusable["state"],
+            "period_key": reusable["period_key"],
+            "prepared_dir": str(prepared_dir),
+            "reused": True,
+        }
+
+    generated_at = datetime.now(timezone.utc)
+    context = _run_context(window, generated_at, insight_requested=True)
+    manifest_path = prepared_dir / "manifest.json"
+    preparing = {
+        "schema_version": PREPARED_ARTIFACT_SCHEMA_VERSION,
+        "period_key": context.period_key,
+        "state": "preparing",
+        "period": _period_payload(window),
+        "comparison_period": _period_payload(comparison_window),
+        "started_at": generated_at.isoformat().replace("+00:00", "Z"),
+    }
+    _write_json_artifact(preparing, manifest_path)
+    try:
+        client = FeedbackQueryClient(load_api_key(), args.base_url, args.timeout)
+        feedbacks = fetch_feedbacks(client, window, per_page=args.per_page)
+        comparison_feedbacks = fetch_feedbacks(
+            client, comparison_window, per_page=args.per_page
+        )
+        current_details = fetch_feedback_details(client, feedbacks)
+        comparison_details = fetch_feedback_details(client, comparison_feedbacks)
+        analysis_input = {
+            "period": _period_payload(window),
+            "comparison_period": _period_payload(comparison_window),
+            "current_feedbacks": build_insight_feedbacks(feedbacks, current_details),
+            "comparison_feedbacks": build_insight_feedbacks(
+                comparison_feedbacks, comparison_details
+            ),
+        }
+        report_input = {"feedbacks": _safe_report_feedbacks(feedbacks)}
+        _write_json_artifact(analysis_input, prepared_dir / "analysis-input.json")
+        _write_json_artifact(report_input, prepared_dir / "report-input.json")
+
+        model_feedbacks = [
+            {**item, "period": period}
+            for period, items in (
+                ("current", analysis_input["current_feedbacks"]),
+                ("comparison", analysis_input["comparison_feedbacks"]),
+            )
+            for item in items
+        ]
+        chunks: list[dict[str, Any]] = []
+        for start in range(0, len(model_feedbacks), PREPARED_CHUNK_SIZE):
+            index = len(chunks) + 1
+            input_name = f"chunks/chunk-{index:03d}.input.json"
+            output_name = f"chunks/chunk-{index:03d}.output.json"
+            chunk_payload = {
+                "schema_version": PREPARED_ARTIFACT_SCHEMA_VERSION,
+                "period_key": context.period_key,
+                "chunk_index": index,
+                "feedbacks": model_feedbacks[start : start + PREPARED_CHUNK_SIZE],
+            }
+            _write_json_artifact(chunk_payload, prepared_dir / input_name)
+            chunks.append(
+                {
+                    "index": index,
+                    "status": "pending",
+                    "feedback_count": len(chunk_payload["feedbacks"]),
+                    "input": input_name,
+                    "input_sha256": _payload_hash(chunk_payload),
+                    "output": output_name,
+                }
+            )
+
+        manifest = {
+            **preparing,
+            "state": "ready",
+            "prepared_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "feedback_count": len(feedbacks),
+            "comparison_feedback_count": len(comparison_feedbacks),
+            "model_feedback_count": len(model_feedbacks),
+            "source_snapshots": {
+                "current": _source_snapshot_hash(feedbacks),
+                "comparison": _source_snapshot_hash(comparison_feedbacks),
+                "analysis_input": _payload_hash(analysis_input),
+                "report_input": _payload_hash(report_input),
+            },
+            "artifacts": {
+                "analysis_input": "analysis-input.json",
+                "report_input": "report-input.json",
+                "ready_marker": "READY",
+            },
+            "chunks": chunks,
+            "contract": {
+                "prompt_version": CODEX_INSIGHT_PROMPT_VERSION,
+                "prompt_hash": _codex_contract_hash(),
+            },
+        }
+        _write_json_artifact(manifest, manifest_path)
+        # manifest 是原子主状态；READY 最后写，避免失败运行留下虚假完成标记。
+        _write_text_atomically(
+            f"{window.label} 数据已完成\n",
+            resolve_output_path(prepared_dir / "READY"),
+        )
+        return {
+            "success": True,
+            "state": "ready",
+            "period_key": context.period_key,
+            "prepared_dir": str(prepared_dir),
+            "feedback_count": len(feedbacks),
+            "comparison_feedback_count": len(comparison_feedbacks),
+            "chunk_count": len(chunks),
+            "reused": False,
+        }
+    except Exception as exc:
+        failure = {
+            **preparing,
+            "state": "failed",
+            "failed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "failure": _execution_failure(exc),
+        }
+        _write_json_artifact(failure, manifest_path)
+        raise
+
+
+def claim_ready_preparation(window: ReportWindow) -> dict[str, Any]:
+    """领取最新 ready 数据，或恢复上次未完成的 analyzing 数据。
+
+    Args:
+        window: 本次自动化应消费的单日报告窗口，默认由命令解析为上海时区昨日。
+
+    Returns:
+        idle 状态，或包含准备目录、分块和契约元数据的 analyzing 状态。
+
+    Raises:
+        DailyReportError: 反馈输出目录或候选准备清单不可安全读取。
+    """
+    prepared_root = resolve_output_path(Path("prepared") / "placeholder").parent
+    manifest_path = prepared_root / window.label / "manifest.json"
+    manifest = _prepared_manifest_reusable(manifest_path.parent)
+    if manifest is None or manifest.get("state") not in {"ready", "analyzing"}:
+        return {
+            "success": True,
+            "state": "idle",
+            "period": window.label,
+            "reason": "昨日没有可分析的 ready 数据",
+        }
+    manifest["state"] = "analyzing"
+    manifest["claimed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    manifest["claim_count"] = int(manifest.get("claim_count") or 0) + 1
+    _write_json_artifact(manifest, manifest_path)
+    return {
+        "success": True,
+        "state": "analyzing",
+        "period_key": manifest["period_key"],
+        "prepared_dir": str(manifest_path.parent),
+        "analysis_input": str(manifest_path.parent / manifest["artifacts"]["analysis_input"]),
+        "chunks": manifest.get("chunks", []),
+        "contract": manifest.get("contract", {}),
+    }
+
+
+def _chunk_record_for_output(
+    prepared_dir: Path,
+    manifest: dict[str, Any],
+    output_path: Path,
+) -> dict[str, Any]:
+    try:
+        relative_output = output_path.relative_to(prepared_dir).as_posix()
+    except ValueError as exc:
+        raise DailyReportError("chunk 输出必须位于对应 prepared 目录") from exc
+    for chunk in manifest.get("chunks", []):
+        if isinstance(chunk, dict) and chunk.get("output") == relative_output:
+            return chunk
+    raise DailyReportError("chunk 输出未在准备清单中声明")
+
+
+def _validated_chunk_classifications(
+    prepared_dir: Path,
+    manifest: dict[str, Any],
+    chunk: dict[str, Any],
+) -> tuple[list[dict[str, Any]], str]:
+    input_payload = _read_json_artifact(prepared_dir / chunk["input"], "chunk 输入")
+    if _payload_hash(input_payload) != chunk.get("input_sha256"):
+        raise DailyReportError("chunk 输入哈希不匹配")
+    output_payload = _read_json_artifact(prepared_dir / chunk["output"], "chunk 输出")
+    allowed_top_level = {
+        "schema_version",
+        "period_key",
+        "chunk_index",
+        "classifications",
+    }
+    if set(output_payload) != allowed_top_level:
+        raise DailyReportError("chunk 输出包含缺失或契约外顶层字段")
+    if (
+        output_payload.get("schema_version") != PREPARED_ARTIFACT_SCHEMA_VERSION
+        or output_payload.get("period_key") != manifest.get("period_key")
+        or output_payload.get("chunk_index") != chunk.get("index")
+    ):
+        raise DailyReportError("chunk 输出元数据与准备清单不一致")
+    feedbacks = input_payload.get("feedbacks")
+    if not isinstance(feedbacks, list):
+        raise DailyReportError("chunk 输入缺少 feedbacks 数组")
+    expected_uuids = [str(item.get("feedback_uuid") or "") for item in feedbacks]
+    try:
+        normalized = validate_feedback_classifications(
+            output_payload.get("classifications"),
+            expected_uuids,
+        )
+    except Exception as exc:
+        raise DailyReportError(f"chunk 分类校验失败: {_safe_insight_text(str(exc), 500)}") from exc
+    canonical_payload = {
+        "schema_version": PREPARED_ARTIFACT_SCHEMA_VERSION,
+        "period_key": manifest["period_key"],
+        "chunk_index": chunk["index"],
+        "classifications": normalized,
+    }
+    return normalized, _payload_hash(canonical_payload)
+
+
+def validate_prepared_chunk(output: Path) -> dict[str, Any]:
+    """校验单个 Codex 分类输出并原子更新准备清单检查点。
+
+    Args:
+        output: 位于 prepared 目录内、已由 Codex 写入的 chunk 输出路径。
+
+    Returns:
+        周期键、chunk 序号、分类数和 validated 状态。
+
+    Raises:
+        DailyReportError: 路径、元数据、哈希、稳定键、置信度或 UUID 覆盖不合法。
+    """
+    output_path = resolve_output_path(output)
+    prepared_dir = output_path.parent.parent
+    manifest_path = prepared_dir / "manifest.json"
+    manifest = _read_json_artifact(manifest_path, "准备清单")
+    chunk = _chunk_record_for_output(prepared_dir, manifest, output_path)
+    try:
+        classifications, _ = _validated_chunk_classifications(
+            prepared_dir, manifest, chunk
+        )
+    except DailyReportError as exc:
+        chunk["status"] = "failed"
+        chunk["error"] = {"code": "CHUNK_VALIDATION_ERROR", "message": str(exc)}
+        _write_json_artifact(
+            {
+                "schema_version": PREPARED_ARTIFACT_SCHEMA_VERSION,
+                "status": "invalid",
+                "error": {"code": "CHUNK_VALIDATION_ERROR"},
+            },
+            output_path,
+        )
+        _write_json_artifact(manifest, manifest_path)
+        raise
+    canonical_output = {
+        "schema_version": PREPARED_ARTIFACT_SCHEMA_VERSION,
+        "period_key": manifest["period_key"],
+        "chunk_index": chunk["index"],
+        "classifications": classifications,
+    }
+    _write_json_artifact(canonical_output, output_path)
+    output_hash = _payload_hash(canonical_output)
+    chunk.update(
+        {
+            "status": "validated",
+            "classification_count": len(classifications),
+            "output_sha256": output_hash,
+            "validated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+    )
+    chunk.pop("error", None)
+    _write_json_artifact(manifest, manifest_path)
+    return {
+        "success": True,
+        "status": "validated",
+        "period_key": manifest["period_key"],
+        "chunk_index": chunk["index"],
+        "classification_count": len(classifications),
+    }
+
+
+def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
+    """校验 Codex 分类，确定性聚合并发布日报。
+
+    Args:
+        args: 包含 prepared 目录、模型标识、输出位置和通知开关的命令参数。
+
+    Returns:
+        最终运行 ID、报告与结构化产物路径、通知状态和反馈数量。
+
+    Raises:
+        DailyReportError: 准备产物、分类输出、发布或通知不合法或失败。
+    """
+    prepared_dir = resolve_output_path(args.finalize_prepared / "placeholder").parent
+    prepared_manifest_path = prepared_dir / "manifest.json"
+    prepared = _read_json_artifact(prepared_manifest_path, "准备清单")
+    if prepared.get("state") not in {"ready", "analyzing", "failed"}:
+        raise DailyReportError("准备清单不是可最终化状态")
+    analysis_input = _read_json_artifact(
+        prepared_dir / prepared["artifacts"]["analysis_input"], "analysis-input"
+    )
+    report_input = _read_json_artifact(
+        prepared_dir / prepared["artifacts"]["report_input"], "report-input"
+    )
+    snapshots = prepared.get("source_snapshots", {})
+    if (
+        _payload_hash(analysis_input) != snapshots.get("analysis_input")
+        or _payload_hash(report_input) != snapshots.get("report_input")
+    ):
+        raise DailyReportError("准备输入哈希不匹配，拒绝发布")
+
+    classifications: list[dict[str, Any]] = []
+    chunks = prepared.get("chunks")
+    if not isinstance(chunks, list):
+        raise DailyReportError("准备清单缺少 chunks 数组")
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            raise DailyReportError("准备清单包含非法 chunk")
+        if chunk.get("status") != "validated":
+            raise DailyReportError("存在尚未 validated 的 chunk，拒绝最终化")
+        rows, output_hash = _validated_chunk_classifications(prepared_dir, prepared, chunk)
+        if chunk.get("output_sha256") != output_hash:
+            raise DailyReportError("已校验 chunk 输出在检查点后发生变化")
+        classifications.extend(rows)
+
+    contract = prepared.get("contract", {})
+    insight_runtime = {
+        "provider": "codex_app",
+        "model": _safe_insight_text(args.analysis_model, 100),
+        "batch_size": max((int(chunk.get("feedback_count") or 0) for chunk in chunks), default=0),
+        "batch_count": len(chunks),
+        "prompt_version": contract.get("prompt_version") or CODEX_INSIGHT_PROMPT_VERSION,
+        "prompt_hash": contract.get("prompt_hash") or _codex_contract_hash(),
+    }
+    insight = aggregate_feedback_classifications(
+        analysis_input,
+        classifications,
+        model_metadata=insight_runtime,
+    )
+    period = prepared["period"]
+    comparison_period = prepared["comparison_period"]
+    window = ReportWindow(period["date_from"], period["date_to"], period["label"])
+    comparison_window = ReportWindow(
+        comparison_period["date_from"],
+        comparison_period["date_to"],
+        comparison_period["label"],
+    )
+    feedbacks = report_input.get("feedbacks")
+    if not isinstance(feedbacks, list):
+        raise DailyReportError("report-input 缺少 feedbacks 数组")
+
+    generated_at = datetime.now(timezone.utc)
+    context = _run_context(window, generated_at, insight_requested=True)
+    started_at = perf_counter()
+    _start_run_manifest(
+        context,
+        insight_requested=True,
+        insight_runtime=insight_runtime,
+        notification_requested=args.send,
+    )
+    try:
+        base_metrics = _build_base_metrics(feedbacks)
+        markdown = render_markdown(feedbacks, window, insight, False, base_metrics)
+        output_path = resolve_output_path(
+            args.output or Path(f"反馈日报-{window.label.replace(' 至 ', '_')}.md")
+        )
+        archived_report_path = write_markdown(markdown, context.directory / "report.md")
+        notification: dict[str, Any] = {
+            "requested": args.send,
+            "status": "pending" if args.send else "disabled",
+        }
+        notification_error = None
+        if args.send:
+            try:
+                send_wecom_summary(render_wecom_summary(feedbacks, window, insight, False))
+                notification["status"] = "success"
+            except DailyReportError as exc:
+                notification["status"] = "failed"
+                notification["error"] = {
+                    "code": "NOTIFICATION_ERROR",
+                    "message": _safe_insight_text(str(exc), 500),
+                }
+                notification_error = exc
+        outcome = RunOutcome(
+            comparison_window=comparison_window,
+            base_metrics=base_metrics,
+            source_snapshots={
+                "current": snapshots.get("current"),
+                "comparison": snapshots.get("comparison"),
+                "model_input": snapshots.get("analysis_input"),
+            },
+            insight=insight,
+            insight_requested=True,
+            insight_error=None,
+            insight_runtime=insight_runtime,
+            published_report_path=output_path,
+            archived_report_path=archived_report_path,
+            notification=notification,
+            timings_ms={},
+        )
+        manifest_path, clusters_path = _write_run_artifacts(context=context, outcome=outcome)
+        output_path = write_markdown(markdown, output_path)
+        _finalize_run_manifest(
+            manifest_path,
+            notification=notification,
+            elapsed_ms=(perf_counter() - started_at) * 1000,
+        )
+        prepared.update(
+            {
+                "state": "completed",
+                "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "analysis": insight_runtime,
+                "result": {
+                    "run_id": context.run_id,
+                    "manifest": str(manifest_path),
+                    "clusters": str(clusters_path),
+                    "report": str(output_path),
+                },
+            }
+        )
+        _write_json_artifact(prepared, prepared_manifest_path)
+        # completed manifest 是原子主状态；COMPLETED 最后写，避免失败运行留下假标记。
+        _write_text_atomically(
+            f"{window.label} AI 洞察已完成\n",
+            resolve_output_path(prepared_dir / "COMPLETED"),
+        )
+        result = {
+            "success": True,
+            "state": "completed",
+            "run_id": context.run_id,
+            "output": str(output_path),
+            "manifest": str(manifest_path),
+            "clusters": str(clusters_path),
+            "feedback_count": len(feedbacks),
+            "insight": True,
+            "sent": notification["status"] == "success",
+        }
+        if notification_error is not None:
+            result["notification_error"] = {
+                "code": "NOTIFICATION_ERROR",
+                "message": _safe_insight_text(str(notification_error), 500),
+            }
+        return result
+    except Exception as exc:
+        _record_run_failure(
+            context,
+            stage="finalize_prepared",
+            exc=exc,
+            elapsed_ms=(perf_counter() - started_at) * 1000,
+        )
+        prepared["state"] = "failed"
+        prepared["failure"] = _execution_failure(exc)
+        try:
+            resolve_output_path(prepared_dir / "COMPLETED").unlink(missing_ok=True)
+        except OSError:
+            pass
+        _write_json_artifact(prepared, prepared_manifest_path)
+        raise
+
+
 def main(argv: list[str] | None = None) -> int:
     """查询反馈、生成 Markdown 日报并按需推送企业微信。"""
     parser = build_parser()
     args = parser.parse_args(argv)
+    pipeline_action = any(
+        (
+            args.prepare_only,
+            args.claim_ready,
+            args.validate_chunk is not None,
+            args.finalize_prepared is not None,
+        )
+    )
+    if pipeline_action:
+        if args.insight or args.insight_config is not None:
+            _print_json(
+                {
+                    "code": "DAILY_REPORT_ERROR",
+                    "msg": "两阶段流水线不接受 --insight 或 --insight-config",
+                },
+                stream=sys.stderr,
+            )
+            return 1
+        try:
+            if args.prepare_only:
+                result = prepare_feedback_data(args)
+            elif args.claim_ready:
+                result = claim_ready_preparation(
+                    resolve_report_window(args.date_from, args.date_to)
+                )
+            elif args.validate_chunk is not None:
+                result = validate_prepared_chunk(args.validate_chunk)
+            else:
+                result = finalize_prepared_report(args)
+        except FeedbackQueryError as exc:
+            _print_json(exc.payload, stream=sys.stderr)
+            return 1
+        except DailyReportError as exc:
+            _print_json({"code": "DAILY_REPORT_ERROR", "msg": str(exc)}, stream=sys.stderr)
+            return 1
+        except httpx.HTTPError:
+            _print_json(
+                {"code": "NETWORK_ERROR", "msg": "反馈查询接口网络请求失败"},
+                stream=sys.stderr,
+            )
+            return 1
+        _print_json(result)
+        return 0
+
     context = None
     stage = "resolve_window"
     started_at = perf_counter()

@@ -1,6 +1,6 @@
 {
   "name": "ops-feedback-query",
-  "version": "v1.7.0",
+  "version": "v1.8.0",
   "updated_at": "2026-08-06",
-  "notes": "日报新增可审计的 manifest 和问题簇中间产物。"
+  "notes": "新增 08:30 提前取数、READY 标记和 Codex 分块洞察收尾流水线。"
 }

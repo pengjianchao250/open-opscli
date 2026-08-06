@@ -152,6 +152,64 @@ HTTP 仅允许 localhost/127.0.0.1/::1 调试地址。发送模型前只保留�
 报告中标为“待复核”，不会触发 P0/P1 洞察提醒。模型或对比周期查询失败时自动降级为
 基础日报，继续发送原有 Critical/High 提醒，不把可选 AI 能力变成日报单点故障。
 
+### 本地 Codex 两阶段日报
+
+本地生产默认使用“08:30 提前取数，Codex App 稍后分析”的两阶段模式，避免长时间网关请求
+占用 Windows 计划任务。第一阶段只查询昨天及前一天数据、读取详情、脱敏并分块，不调用模型、
+不生成最终日报、不发送企业微信：
+
+```bash
+python scripts/daily_feedback_report.py --prepare-only
+```
+
+准备结果固定写入 `output/feedback-query/prepared/YYYY-MM-DD/`。只有 `analysis-input.json`、
+`report-input.json`、全部 chunk 和契约哈希成功落盘后，manifest 才会从 `preparing` 原子切换为
+`ready`，并写入内容为“YYYY-MM-DD 数据已完成”的 `READY` 标记。重复执行同一天准备任务会复用
+完整的 `ready/analyzing/completed` 产物，不重复取数。
+
+Codex App 自动化必须先完整读取本 Skill 和 `reference/Codex反馈洞察分类契约.md`，然后领取
+上海时区昨日对应的 ready 数据；更早的 backlog 不会被误发为当日日报：
+
+```bash
+python scripts/daily_feedback_report.py --claim-ready
+```
+
+返回 `state=idle` 时直接结束，不生成或发送任何内容。领取命令也会恢复上一次未完成的
+`analyzing` 数据；返回 `state=analyzing` 时，按 manifest 的
+chunk 顺序处理；每个 `chunk-XXX.output.json` 只写契约允许的分类字段，且必须覆盖输入中的全部
+UUID。写完一块立即运行：
+
+```bash
+python scripts/daily_feedback_report.py \
+  --validate-chunk output/feedback-query/prepared/YYYY-MM-DD/chunks/chunk-001.output.json
+```
+
+校验失败只修复该 chunk；不得直接修改 manifest、最终统计、Markdown 或完成标记。全部 chunk
+返回 `status=validated` 后执行离线收尾：
+
+```bash
+python scripts/daily_feedback_report.py \
+  --finalize-prepared output/feedback-query/prepared/YYYY-MM-DD \
+  --analysis-model scheduled-codex \
+  --send
+```
+
+收尾阶段会再次校验所有输入哈希、chunk 元数据、稳定键、置信度和 UUID 全覆盖，再复用
+`opscli.feedback.services.insight` 的确定性规则计算次数、环比、影响人数和 P0-P4，最后生成运行
+产物、发布 Markdown、推送企业微信并写入“YYYY-MM-DD AI 洞察已完成”的 `COMPLETED` 标记。
+分类不完整、文件被修改或通知失败都会留下结构化失败状态；Codex 不得绕过 Python 自行计算统计。
+
+Windows 取数任务可重复执行下面的安装脚本进行创建或修复，默认任务名为
+`OpsCLI Feedback Daily Insight`，每天 08:30 触发，错过时间后在下次可用时补跑：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy/install_windows.ps1 `
+  -ProjectRoot D:\Gitlab\open-opscli
+```
+
+该任务使用当前 Windows 用户的交互登录令牌和受限权限；电脑需开机且用户已登录。Codex App
+09:00 自动化是本机应用配置，不由此脚本创建，需在 Codex App 中启用“反馈日报 Codex 洞察”。
+
 ### 日报运行产物
 
 每次日报运行都会在 `output/feedback-query/runs/<run-id>/` 写入两份结构化产物：
@@ -193,6 +251,11 @@ python scripts/daily_feedback_report.py \
 | `--send` | 否 | 显式发送企业微信 Markdown 摘要；未传时绝不调用机器人 |
 | `--insight` | 否 | 调用大模型生成模块问题洞察，并查询上一等长周期进行对比 |
 | `--insight-config` | 否 | 模型配置文件；仅与 `--insight` 一起使用，默认读取 opscli 用户配置目录 |
+| `--prepare-only` | 否 | 只准备昨日脱敏数据、分块和 READY 标记，不调用模型或推送 |
+| `--claim-ready` | 否 | 领取最新 ready 数据并切换为 analyzing，供 Codex App 自动化使用 |
+| `--validate-chunk` | 否 | 校验一个 Codex chunk 输出并记录 validated/failed 检查点 |
+| `--finalize-prepared` | 否 | 从准备目录离线聚合并发布最终 AI 日报 |
+| `--analysis-model` | 否 | 最终化时记录的 Codex 模型名称，默认 `codex_app`，不参与统计 |
 
 日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表，并使用 Mermaid `pie` 扩展语法展示反馈类型与严重度分布；两张图在本地浏览器中并排展示，数量与占比整合在图例中，原始统计表默认折叠并继续作为不支持 Mermaid 时的降级数据；问题来源与状态统计表同样使用桌面双列、移动单列布局。洞察模式额外包含模块、主要问题、本周期/上一周期次数、变化、优先级和建议工作；群消息优先提醒最多 3 条 P0/P1 洞察。群消息使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节，不使用仅旧版 Markdown 支持的字体颜色和成员 `@` 语法。报告、运行产物与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据；未启用洞察时，群消息仍按“严重度 + 标题”聚合重复问题，最多展示 5 类 Critical/High 问题并标注每类反馈数，底部提供固定的“详细文档查看”入口，完整逐条记录保留在本地 Markdown 文件。
 

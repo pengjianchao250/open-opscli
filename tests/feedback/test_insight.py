@@ -15,6 +15,7 @@ from opscli.feedback.services.insight import (
     FeedbackInsightManager,
     InsightModelConfig,
     OpenAICompatibleInsightClient,
+    aggregate_feedback_classifications,
 )
 
 
@@ -186,6 +187,56 @@ def test_insight_classifies_and_aggregates_current_and_previous_periods(tmp_path
     assert "content-secret" not in "".join(
         json.dumps(item, ensure_ascii=False) for item in model_requests
     )
+
+
+def test_aggregate_feedback_classifications_keeps_counts_and_priority_deterministic():
+    """Codex 只提供语义分类，次数、趋势和优先级仍由本地规则计算。"""
+    payload = {
+        "period": {"label": "2026-08-05"},
+        "comparison_period": {"label": "2026-08-04"},
+        "current_feedbacks": [
+            {
+                "feedback_uuid": "current-1",
+                "severity": "critical",
+                "user_key": "user-a",
+                "error_message": "field 42 not found",
+            }
+        ],
+        "comparison_feedbacks": [
+            {
+                "feedback_uuid": "previous-1",
+                "severity": "high",
+                "user_key": "user-a",
+                "error_message": "field 41 not found",
+            }
+        ],
+    }
+    classifications = [
+        {
+            "feedback_uuid": feedback_uuid,
+            "module": "query",
+            "problem_key": "field_mapping_failed",
+            "problem_category": "字段映射",
+            "problem_summary": "字段映射失败",
+            "recommended_work": "统一字段解析入口并增加回归测试",
+            "confidence": 0.95,
+        }
+        for feedback_uuid in ("current-1", "previous-1")
+    ]
+
+    result = aggregate_feedback_classifications(
+        payload,
+        classifications,
+        model_metadata={"provider": "codex_app", "model": "scheduled-codex"},
+    )
+
+    assert result["problems"][0]["current_count"] == 1
+    assert result["problems"][0]["previous_count"] == 1
+    assert result["problems"][0]["priority"] == "P0"
+    assert result["model"] == {
+        "provider": "codex_app",
+        "model": "scheduled-codex",
+    }
 
 
 def test_model_config_defaults_batch_size_to_100(tmp_path: Path):

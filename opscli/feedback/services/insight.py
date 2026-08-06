@@ -49,7 +49,12 @@ AUTHORIZATION_PATTERN = re.compile(
     r"(?i)\bauthorization\b\s*[:=]\s*(?:bearer\s+)?[^\s|]+"
 )
 SECRET_PATTERN = re.compile(
-    r"(?i)\b(api[_ -]?key|token|cookie|authorization|webhook|password|secret)\b\s*[:=]\s*[^\s|]+"
+    r"(?i)([\"']?\b(?:api[_ -]?key|token|cookie|authorization|webhook|password|secret)"
+    r"\b[\"']?\s*[:=]\s*[\"']?\s*)[^\"',}\s|]+"
+)
+OPENAI_KEY_PATTERN = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b")
+JWT_PATTERN = re.compile(
+    r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b"
 )
 # module/problem_key 只能使用稳定的机器可读键，防止自由文本污染聚合维度。
 STABLE_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -64,6 +69,18 @@ SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 SEVERITY_SCORE = {"low": 10, "medium": 25, "high": 40, "critical": 100}
 # 优先级顺序用于稳定排序模块和问题。
 PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4}
+# 外部模型分类只允许语义字段，统计、优先级和调试数据不得混入持久化输出。
+CLASSIFICATION_OUTPUT_FIELDS = frozenset(
+    {
+        "feedback_uuid",
+        "module",
+        "problem_key",
+        "problem_category",
+        "problem_summary",
+        "recommended_work",
+        "confidence",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -243,15 +260,30 @@ class OpenAICompatibleInsightClient:
         raise InsightModelError("反馈洞察模型请求失败") from last_error
 
 
-def _safe_model_text(value: Any, maximum: int = 1000) -> str:
-    """对发送给模型的自由文本做最小必要脱敏和截断。"""
+def sanitize_feedback_text(value: Any, maximum: int = 1000) -> str:
+    """对反馈自由文本做最小必要脱敏和截断。
+
+    Args:
+        value: 可能包含用户文本、错误消息或模型建议的任意值。
+        maximum: 脱敏后允许保留的最大字符数。
+
+    Returns:
+        移除常见个人信息、本地路径、链接和凭据形态后的单行文本。
+    """
     text = " ".join(str(value or "").split())
     text = EMAIL_PATTERN.sub("[邮箱已脱敏]", text)
     text = WINDOWS_USER_PATH_PATTERN.sub("[本地路径已脱敏]", text)
     text = AUTHORIZATION_PATTERN.sub("Authorization=[凭据已脱敏]", text)
-    text = SECRET_PATTERN.sub(lambda match: f"{match.group(1)}=[凭据已脱敏]", text)
+    text = SECRET_PATTERN.sub(lambda match: f"{match.group(1)}[凭据已脱敏]", text)
+    text = OPENAI_KEY_PATTERN.sub("[凭据已脱敏]", text)
+    text = JWT_PATTERN.sub("[凭据已脱敏]", text)
     text = URL_PATTERN.sub("[链接已脱敏]", text)
     return text[:maximum]
+
+
+def _safe_model_text(value: Any, maximum: int = 1000) -> str:
+    """兼容内部调用的反馈文本脱敏入口。"""
+    return sanitize_feedback_text(value, maximum)
 
 
 def _model_feedback(item: dict[str, Any], period: str) -> dict[str, Any]:
@@ -302,15 +334,18 @@ def _validate_classifications(
     for index, item in enumerate(classifications, start=1):
         if not isinstance(item, dict):
             raise InsightModelError(f"模型 classifications[{index}] 必须是对象")
+        extra_fields = set(item) - CLASSIFICATION_OUTPUT_FIELDS
+        if extra_fields:
+            raise InsightModelError("模型分类包含契约外字段")
         feedback_uuid = str(item.get("feedback_uuid") or "").strip()
         if feedback_uuid not in expected_uuids or feedback_uuid in result:
             raise InsightModelError("模型返回未知或重复的 feedback_uuid")
         module = str(item.get("module") or "").strip().lower()
         problem_key = str(item.get("problem_key") or "").strip().lower()
         if not STABLE_KEY_PATTERN.fullmatch(module):
-            raise InsightModelError(f"模型返回非法 module: {module}")
+            raise InsightModelError("模型返回非法 module")
         if not STABLE_KEY_PATTERN.fullmatch(problem_key):
-            raise InsightModelError(f"模型返回非法 problem_key: {problem_key}")
+            raise InsightModelError("模型返回非法 problem_key")
         try:
             confidence = float(item.get("confidence"))
         except (TypeError, ValueError) as exc:
@@ -336,6 +371,28 @@ def _validate_classifications(
         missing = sorted(expected_uuids - set(result))
         raise InsightModelError(f"模型未返回全部反馈分类，缺少 {len(missing)} 条")
     return result
+
+
+def validate_feedback_classifications(
+    classifications: list[dict[str, Any]],
+    expected_uuids: list[str],
+) -> list[dict[str, Any]]:
+    """严格校验并规范化一批外部反馈分类。
+
+    Args:
+        classifications: Codex 或模型返回的原始分类列表。
+        expected_uuids: 该批输入按原顺序包含的反馈 UUID。
+
+    Returns:
+        按输入 UUID 顺序排列、仅包含允许字段且已脱敏的分类列表。
+
+    Raises:
+        InsightModelError: UUID 重复、覆盖不全、字段越界或语义字段不合法。
+    """
+    if len(expected_uuids) != len(set(expected_uuids)):
+        raise InsightModelError("待校验反馈 UUID 包含重复项")
+    validated = _validate_classifications(classifications, set(expected_uuids))
+    return [validated[feedback_uuid] for feedback_uuid in expected_uuids]
 
 
 def _normalized_problem_signal(item: dict[str, Any]) -> str | None:
@@ -498,16 +555,10 @@ class FeedbackInsightManager:
                     )
         if set(classifications) != all_uuids:
             raise InsightModelError("模型未返回全部反馈分类")
-        classifications = _reconcile_repeated_signatures(all_feedbacks, classifications)
-        problems = self._aggregate(current, previous, classifications)
-        return {
-            "period": payload.get("period") or {},
-            "comparison_period": payload.get("comparison_period") or {},
-            "feedback_count": len(current),
-            "comparison_feedback_count": len(previous),
-            "problems": problems,
-            "modules": self._module_summary(problems),
-            "model": {
+        return aggregate_feedback_classifications(
+            payload,
+            list(classifications.values()),
+            model_metadata={
                 "provider": "openai_compatible",
                 "model": self.client.config.model,
                 "batch_size": self.client.config.batch_size,
@@ -516,7 +567,7 @@ class FeedbackInsightManager:
                 "prompt_version": INSIGHT_PROMPT_VERSION,
                 "prompt_hash": INSIGHT_PROMPT_HASH,
             },
-        }
+        )
 
     def _empty_result(self, payload: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -536,8 +587,8 @@ class FeedbackInsightManager:
             },
         }
 
+    @staticmethod
     def _aggregate(
-        self,
         current: list[dict[str, Any]],
         previous: list[dict[str, Any]],
         classifications: dict[str, dict[str, Any]],
@@ -616,3 +667,54 @@ class FeedbackInsightManager:
             for module, items in grouped.items()
         ]
         return sorted(rows, key=lambda item: (PRIORITY_ORDER[item["highest_priority"]], item["module"]))
+
+
+def aggregate_feedback_classifications(
+    payload: dict[str, Any],
+    classifications: list[dict[str, Any]],
+    *,
+    model_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """校验外部语义分类并使用本地规则生成完整反馈洞察。
+
+    外部 Agent 或模型只能决定语义字段；反馈次数、环比、影响人数、置信度
+    汇总和 P0-P4 优先级全部在此处确定性计算。
+
+    Args:
+        payload: 当前周期、对比周期及脱敏反馈列表。
+        classifications: 外部 Agent 或模型逐条返回的语义分类。
+        model_metadata: 只用于审计的 provider、model、批次和 Prompt 信息。
+
+    Returns:
+        包含问题簇、模块汇总、确定性统计和模型元数据的洞察对象。
+
+    Raises:
+        InvalidPayloadError: 输入周期、反馈列表或模型元数据不合法。
+        InsightModelError: 分类字段、稳定键、置信度或 UUID 覆盖不合法。
+    """
+    if not isinstance(payload, dict):
+        raise InvalidPayloadError("反馈洞察输入必须是 JSON 对象")
+    if not isinstance(classifications, list):
+        raise InsightModelError("反馈 classifications 必须是数组")
+    if not isinstance(model_metadata, dict):
+        raise InvalidPayloadError("model_metadata 必须是 JSON 对象")
+
+    current = _validate_feedback_list(payload.get("current_feedbacks"), "current_feedbacks")
+    previous = _validate_feedback_list(payload.get("comparison_feedbacks", []), "comparison_feedbacks")
+    all_feedbacks = current + previous
+    expected_uuids = {item["feedback_uuid"] for item in all_feedbacks}
+    if len(expected_uuids) != len(all_feedbacks):
+        raise InvalidPayloadError("当前周期与对比周期包含重复 feedback_uuid")
+
+    validated = _validate_classifications(classifications, expected_uuids)
+    reconciled = _reconcile_repeated_signatures(all_feedbacks, validated)
+    problems = FeedbackInsightManager._aggregate(current, previous, reconciled)
+    return {
+        "period": payload.get("period") or {},
+        "comparison_period": payload.get("comparison_period") or {},
+        "feedback_count": len(current),
+        "comparison_feedback_count": len(previous),
+        "problems": problems,
+        "modules": FeedbackInsightManager._module_summary(problems),
+        "model": dict(model_metadata),
+    }
