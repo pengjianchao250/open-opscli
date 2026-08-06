@@ -17,12 +17,14 @@ import tempfile
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
 import httpx
 
 from opscli.config import CONFIG_DIR
+from opscli.feedback.services.insight import INSIGHT_PROMPT_HASH, INSIGHT_PROMPT_VERSION
 
 # Skill 脚本不是 Python 包，将同目录加入导入路径以复用已有查询客户端。
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -49,6 +51,8 @@ INSIGHT_BATCH_TIMEOUT_BUDGET = 600.0
 INSIGHT_COMMAND_TIMEOUT_MARGIN = 60.0
 INSIGHT_COMMAND_TIMEOUT_MAX = 3600.0
 DEFAULT_INSIGHT_BATCH_SIZE = 100
+# 结构化中间产物版本供后续周报、月报选择兼容的运行快照。
+RUN_ARTIFACT_SCHEMA_VERSION = "1.0"
 # 与 `opscli feedback insight` 使用同一默认配置路径，确保批次数预算一致。
 DEFAULT_INSIGHT_CONFIG = CONFIG_DIR / "feedback_insight.json"
 # 企业微信 markdown_v2.content 官方上限为 4096 字节。
@@ -87,6 +91,33 @@ class ReportWindow(NamedTuple):
     date_from: str
     date_to: str
     label: str
+
+
+class RunContext(NamedTuple):
+    """日报单次尝试的稳定身份和产物目录。"""
+
+    run_id: str
+    run_key: str
+    period_key: str
+    generated_at: datetime
+    window: ReportWindow
+    directory: Path
+
+
+class RunOutcome(NamedTuple):
+    """日报分析、归档和通知完成后的结构化结果。"""
+
+    comparison_window: ReportWindow | None
+    base_metrics: dict[str, Any]
+    source_snapshots: dict[str, str | None]
+    insight: dict[str, Any] | None
+    insight_requested: bool
+    insight_error: dict[str, str] | None
+    insight_runtime: dict[str, Any]
+    published_report_path: Path
+    archived_report_path: Path
+    notification: dict[str, Any]
+    timings_ms: dict[str, float]
 
 
 def _parse_datetime(value: str, label: str) -> datetime:
@@ -469,15 +500,16 @@ def render_markdown(
     window: ReportWindow,
     insight: dict[str, Any] | None = None,
     insight_degraded: bool = False,
+    base_metrics: dict[str, Any] | None = None,
 ) -> str:
     """将反馈列表渲染为不含个人和执行上下文的 Markdown 日报。"""
     problems = [item for item in feedbacks if item.get("feedback_type") != "query_result"]
     severe = [item for item in problems if item.get("severity") in {"critical", "high"}]
-    failed_calls = sum(int(item.get("failed_call_count") or 0) for item in feedbacks)
-    type_counter = Counter(str(item.get("feedback_type") or "unknown") for item in feedbacks)
-    severity_counter = Counter(str(item.get("severity") or "unknown") for item in problems)
-    source_counter = Counter(str(item.get("source") or "unknown") for item in problems)
-    status_counter = Counter(str(item.get("status") or "unknown") for item in problems)
+    metrics = base_metrics or _build_base_metrics(feedbacks)
+    type_counter = Counter(metrics["feedback_types"])
+    severity_counter = Counter(metrics["problem_severities"])
+    source_counter = Counter(metrics["problem_sources"])
+    status_counter = Counter(metrics["problem_statuses"])
 
     lines = [
         f"# 反馈日报（{window.label}）",
@@ -487,10 +519,10 @@ def render_markdown(
         "",
         "## 一、执行摘要",
         "",
-        f"- 反馈总数：**{len(feedbacks)}**",
-        f"- 问题反馈：**{len(problems)}**",
+        f"- 反馈总数：**{metrics['feedback_count']}**",
+        f"- 问题反馈：**{metrics['problem_feedback_count']}**",
         f"- Critical / High：**{len(severe)}**",
-        f"- 失败调用：**{failed_calls}**",
+        f"- 失败调用：**{metrics['failed_call_count']}**",
     ]
     if insight_degraded:
         lines.extend(["- AI 洞察生成失败，本期已降级为基础日报。"])
@@ -806,15 +838,394 @@ def send_wecom_summary(content: str) -> None:
         raise DailyReportError(_notify_error_message(result.stdout))
 
 
+def _write_text_atomically(content: str, resolved_path: Path) -> None:
+    """在目标目录写临时文件后原子替换，避免截断上一成功产物。"""
+    temporary_path = None
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=resolved_path.parent,
+            prefix=f".{resolved_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_file.write(content)
+            temporary_path = Path(temporary_file.name)
+        temporary_path.replace(resolved_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def write_markdown(markdown: str, output_path: Path) -> Path:
     """将 Markdown 日报限制写入项目反馈导出目录。"""
     resolved_path = resolve_output_path(output_path)
     try:
-        resolved_path.parent.mkdir(parents=True, exist_ok=True)
-        resolved_path.write_text(markdown, encoding="utf-8")
+        _write_text_atomically(markdown, resolved_path)
     except OSError as exc:
         raise DailyReportError(f"无法写入反馈 Markdown 日报: {resolved_path}") from exc
     return resolved_path
+
+
+def _run_context(
+    window: ReportWindow,
+    generated_at: datetime,
+    *,
+    insight_requested: bool,
+) -> RunContext:
+    """生成同周期稳定逻辑键和单次尝试标识。"""
+    period = window.date_from[:10]
+    profile = "insight" if insight_requested else "base"
+    period_hash = hashlib.sha256(
+        f"{window.date_from}\0{window.date_to}".encode("utf-8")
+    ).hexdigest()[:12]
+    period_key = f"daily-{period}-{period_hash}-schema-{RUN_ARTIFACT_SCHEMA_VERSION}"
+    run_key = f"daily-{period}-{profile}-{period_hash}-schema-{RUN_ARTIFACT_SCHEMA_VERSION}"
+    attempt = generated_at.strftime("%Y%m%dT%H%M%S%fZ")
+    run_id = f"{run_key}-{attempt}"
+    return RunContext(
+        run_id,
+        run_key,
+        period_key,
+        generated_at,
+        window,
+        Path("runs") / run_id,
+    )
+
+
+def _counter_dict(values: list[str]) -> dict[str, int]:
+    """把计数器转换为键稳定排序的普通字典。"""
+    return dict(sorted(Counter(values).items()))
+
+
+def _source_snapshot_hash(feedbacks: list[dict[str, Any]]) -> str:
+    """哈希报告和基础指标实际使用的反馈列表字段。"""
+    keys = (
+        "feedback_uuid",
+        "feedback_type",
+        "severity",
+        "source",
+        "status",
+        "title",
+        "failed_call_count",
+        "created_at",
+    )
+    rows = [
+        {key: item.get(key) for key in keys}
+        for item in sorted(feedbacks, key=lambda item: str(item.get("feedback_uuid") or ""))
+    ]
+    serialized = json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _payload_hash(payload: dict[str, Any]) -> str:
+    """哈希已脱敏的模型输入，不持久化输入正文。"""
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _insight_runtime_metadata(config_path: Path | None) -> dict[str, Any]:
+    """读取不含密钥的模型调用描述，失败运行也可按配置统计。"""
+    model = None
+    batch_size = DEFAULT_INSIGHT_BATCH_SIZE
+    effective_path = config_path or DEFAULT_INSIGHT_CONFIG
+    try:
+        payload = json.loads(effective_path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            model = str(payload.get("model") or "").strip() or None
+            configured_batch_size = int(payload.get("batch_size", batch_size))
+            if 1 <= configured_batch_size <= 100:
+                batch_size = configured_batch_size
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return {
+        "provider": "openai_compatible",
+        "model": model,
+        "batch_size": batch_size,
+        "prompt_version": INSIGHT_PROMPT_VERSION,
+        "prompt_hash": INSIGHT_PROMPT_HASH,
+    }
+
+
+def _build_base_metrics(feedbacks: list[dict[str, Any]]) -> dict[str, Any]:
+    """生成不依赖模型、可供跨周期汇总的基础指标。"""
+    problems = [item for item in feedbacks if item.get("feedback_type") != "query_result"]
+    return {
+        "feedback_count": len(feedbacks),
+        "problem_feedback_count": len(problems),
+        "failed_call_count": sum(int(item.get("failed_call_count") or 0) for item in feedbacks),
+        "feedback_types": _counter_dict(
+            [str(item.get("feedback_type") or "unknown") for item in feedbacks]
+        ),
+        "problem_severities": _counter_dict(
+            [str(item.get("severity") or "unknown") for item in problems]
+        ),
+        "problem_sources": _counter_dict(
+            [str(item.get("source") or "unknown") for item in problems]
+        ),
+        "problem_statuses": _counter_dict(
+            [str(item.get("status") or "unknown") for item in problems]
+        ),
+    }
+
+
+def _insight_failure(exc: Exception) -> dict[str, str]:
+    """将洞察异常转换为可持久化且已脱敏的稳定错误。"""
+    if isinstance(exc, FeedbackQueryError):
+        payload = exc.payload if isinstance(exc.payload, dict) else {}
+        code = str(payload.get("code") or "INSIGHT_QUERY_ERROR")
+        message = str(payload.get("msg") or exc)
+    elif isinstance(exc, DailyReportError):
+        code = "INSIGHT_EXECUTION_ERROR"
+        message = str(exc)
+    elif isinstance(exc, httpx.TimeoutException):
+        code = "INSIGHT_NETWORK_TIMEOUT"
+        message = "反馈洞察网络请求超时"
+    else:
+        code = "INSIGHT_NETWORK_ERROR"
+        message = "反馈洞察网络请求失败"
+    return {"code": code, "message": _safe_insight_text(message, 500)}
+
+
+def _execution_failure(exc: Exception) -> dict[str, str]:
+    """将日报主链路异常转换为安全错误。"""
+    if isinstance(exc, FeedbackQueryError):
+        payload = exc.payload if isinstance(exc.payload, dict) else {}
+        code = str(payload.get("code") or "FEEDBACK_QUERY_ERROR")
+        message = str(payload.get("msg") or exc)
+    elif isinstance(exc, DailyReportError):
+        code = "DAILY_REPORT_ERROR"
+        message = str(exc)
+    else:
+        code = "NETWORK_ERROR"
+        message = "反馈查询接口网络请求失败"
+    return {"code": code, "message": _safe_insight_text(message, 500)}
+
+
+def _write_json_artifact(payload: dict[str, Any], output_path: Path) -> Path:
+    """把结构化运行产物限制写入反馈导出目录。"""
+    resolved_path = resolve_output_path(output_path)
+    try:
+        _write_text_atomically(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            resolved_path,
+        )
+    except OSError as exc:
+        raise DailyReportError(f"无法写入反馈日报运行产物: {resolved_path}") from exc
+    return resolved_path
+
+
+def _period_payload(window: ReportWindow) -> dict[str, str]:
+    """生成运行产物共用的周期字段。"""
+    return {"label": window.label, "date_from": window.date_from, "date_to": window.date_to}
+
+
+def _start_run_manifest(
+    context: RunContext,
+    *,
+    insight_requested: bool,
+    insight_runtime: dict[str, Any],
+    notification_requested: bool,
+) -> Path:
+    """在远端查询前创建运行清单，确保早期失败也可追踪。"""
+    return _write_json_artifact(
+        {
+            "schema_version": RUN_ARTIFACT_SCHEMA_VERSION,
+            "run_id": context.run_id,
+            "run_key": context.run_key,
+            "period_key": context.period_key,
+            "report_type": "daily",
+            "generated_at": context.generated_at.isoformat().replace("+00:00", "Z"),
+            "status": "running",
+            "execution_status": "running",
+            "stage": "initialized",
+            "period": _period_payload(context.window),
+            "insight": {
+                "requested": insight_requested,
+                "status": "pending" if insight_requested else "disabled",
+                "error": None,
+                "runtime": insight_runtime if insight_requested else None,
+            },
+            "notification": {
+                "requested": notification_requested,
+                "status": "pending" if notification_requested else "disabled",
+            },
+        },
+        context.directory / "manifest.json",
+    )
+
+
+def _fail_run_manifest(
+    context: RunContext,
+    *,
+    stage: str,
+    exc: Exception,
+    elapsed_ms: float,
+) -> None:
+    """将已创建的运行清单更新为失败终态。"""
+    manifest_path = resolve_output_path(context.directory / "manifest.json")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        manifest = {
+            "schema_version": RUN_ARTIFACT_SCHEMA_VERSION,
+            "run_id": context.run_id,
+            "run_key": context.run_key,
+            "period_key": context.period_key,
+            "report_type": "daily",
+            "period": _period_payload(context.window),
+        }
+    failure = {"stage": stage, **_execution_failure(exc)}
+    manifest.update(
+        {
+            "status": "failed",
+            "execution_status": "failed",
+            "stage": stage,
+            "finished_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "duration_ms": round(elapsed_ms, 1),
+            "failure": failure,
+        }
+    )
+    if stage == "publish_report":
+        manifest["publication"] = {
+            "status": "failed",
+            "error": {key: value for key, value in failure.items() if key != "stage"},
+        }
+    elif stage == "finalize_manifest":
+        manifest["publication"] = {"status": "success"}
+    _write_json_artifact(manifest, context.directory / "manifest.json")
+
+
+def _record_run_failure(
+    context: RunContext | None,
+    *,
+    stage: str,
+    exc: Exception,
+    elapsed_ms: float,
+) -> None:
+    """尽力记录失败，产物目录本身不可写时仍保留原始命令错误。"""
+    if context is None:
+        return
+    try:
+        _fail_run_manifest(context, stage=stage, exc=exc, elapsed_ms=elapsed_ms)
+    except (FeedbackQueryError, DailyReportError, OSError):
+        pass
+
+
+def _write_run_artifacts(
+    *,
+    context: RunContext,
+    outcome: RunOutcome,
+) -> tuple[Path, Path]:
+    """写入日报 manifest 和问题簇快照，作为周报、月报的事实来源。"""
+    insight_status = (
+        "success"
+        if outcome.insight is not None
+        else "degraded"
+        if outcome.insight_requested
+        else "disabled"
+    )
+    analysis_status = "degraded" if insight_status == "degraded" else "success"
+    clusters_path = _write_json_artifact(
+        {
+            "schema_version": RUN_ARTIFACT_SCHEMA_VERSION,
+            "run_id": context.run_id,
+            "run_key": context.run_key,
+            "period_key": context.period_key,
+            "report_type": "daily",
+            "period": _period_payload(context.window),
+            "comparison_period": (
+                _period_payload(outcome.comparison_window)
+                if outcome.comparison_window
+                else None
+            ),
+            "insight_status": insight_status,
+            "source_snapshots": outcome.source_snapshots,
+            "base_metrics": outcome.base_metrics,
+            "problems": outcome.insight.get("problems", []) if outcome.insight else [],
+            "modules": outcome.insight.get("modules", []) if outcome.insight else [],
+            "model": (
+                outcome.insight.get("model")
+                if outcome.insight
+                else outcome.insight_runtime
+                if outcome.insight_requested
+                else None
+            ),
+        },
+        context.directory / "clusters.json",
+    )
+    export_root = resolve_output_path(Path("artifact-root-placeholder")).parent
+    try:
+        report_hash = hashlib.sha256(outcome.archived_report_path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise DailyReportError("无法读取反馈日报归档文件") from exc
+    manifest_path = _write_json_artifact(
+        {
+            "schema_version": RUN_ARTIFACT_SCHEMA_VERSION,
+            "run_id": context.run_id,
+            "run_key": context.run_key,
+            "period_key": context.period_key,
+            "report_type": "daily",
+            "generated_at": context.generated_at.isoformat().replace("+00:00", "Z"),
+            "status": "publishing",
+            "analysis_status": analysis_status,
+            "execution_status": "running",
+            "stage": "publish_report",
+            "timings_ms": {
+                key: round(value, 1) for key, value in outcome.timings_ms.items()
+            },
+            "period": _period_payload(context.window),
+            "feedback_count": outcome.base_metrics["feedback_count"],
+            "source_snapshots": outcome.source_snapshots,
+            "insight": {
+                "requested": outcome.insight_requested,
+                "status": insight_status,
+                "error": outcome.insight_error,
+                "runtime": outcome.insight_runtime if outcome.insight_requested else None,
+            },
+            "notification": outcome.notification,
+            "publication": {"status": "pending"},
+            "artifacts": {
+                "report": outcome.archived_report_path.relative_to(export_root).as_posix(),
+                "report_sha256": report_hash,
+                "published_report": outcome.published_report_path.relative_to(
+                    export_root
+                ).as_posix(),
+                "clusters": clusters_path.relative_to(export_root).as_posix(),
+            },
+        },
+        context.directory / "manifest.json",
+    )
+    return manifest_path, clusters_path
+
+
+def _finalize_run_manifest(
+    manifest_path: Path,
+    *,
+    notification: dict[str, Any],
+    elapsed_ms: float,
+) -> None:
+    """在根目录日报原子发布成功后完成运行清单。"""
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DailyReportError("无法读取待完成的反馈日报运行清单") from exc
+    manifest.update(
+        {
+            "status": manifest["analysis_status"],
+            "execution_status": (
+                "failed" if notification["status"] == "failed" else "success"
+            ),
+            "stage": "completed",
+            "finished_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "duration_ms": round(elapsed_ms, 1),
+            "publication": {"status": "success"},
+        }
+    )
+    _write_json_artifact(manifest, manifest_path)
 
 
 def _print_json(payload: dict[str, Any], *, stream: Any = sys.stdout) -> None:
@@ -826,67 +1237,213 @@ def main(argv: list[str] | None = None) -> int:
     """查询反馈、生成 Markdown 日报并按需推送企业微信。"""
     parser = build_parser()
     args = parser.parse_args(argv)
+    context = None
+    stage = "resolve_window"
+    started_at = perf_counter()
+    timings_ms: dict[str, float] = {}
     try:
+        generated_at = datetime.now(timezone.utc)
         window = resolve_report_window(args.date_from, args.date_to)
+        insight_runtime = (
+            _insight_runtime_metadata(args.insight_config) if args.insight else {}
+        )
+        context = _run_context(
+            window,
+            generated_at,
+            insight_requested=args.insight,
+        )
+        _start_run_manifest(
+            context,
+            insight_requested=args.insight,
+            insight_runtime=insight_runtime,
+            notification_requested=args.send,
+        )
+        stage = "load_credentials"
         api_key = load_api_key()
         client = FeedbackQueryClient(api_key, args.base_url, args.timeout)
+        stage = "query_current"
+        step_started = perf_counter()
         feedbacks = fetch_feedbacks(client, window, per_page=args.per_page)
+        timings_ms["query_current"] = (perf_counter() - step_started) * 1000
+        base_metrics = _build_base_metrics(feedbacks)
+        source_snapshots: dict[str, str | None] = {
+            "current": _source_snapshot_hash(feedbacks),
+            "comparison": None,
+            "model_input": None,
+        }
         insight = None
-        insight_degraded = False
+        insight_error = None
+        comparison_window = None
         if args.insight:
+            stage = "insight"
+            insight_started = perf_counter()
             try:
                 comparison_window = resolve_comparison_window(window)
-                comparison_feedbacks = fetch_feedbacks(
-                    client, comparison_window, per_page=args.per_page
+                step_started = perf_counter()
+                try:
+                    comparison_feedbacks = fetch_feedbacks(
+                        client, comparison_window, per_page=args.per_page
+                    )
+                finally:
+                    timings_ms["query_comparison"] = (
+                        perf_counter() - step_started
+                    ) * 1000
+                source_snapshots["comparison"] = _source_snapshot_hash(
+                    comparison_feedbacks
                 )
-                current_details = fetch_feedback_details(client, feedbacks)
-                comparison_details = fetch_feedback_details(client, comparison_feedbacks)
-                insight = run_feedback_insight(
-                    {
-                        "period": {
-                            "label": window.label,
-                            "date_from": window.date_from,
-                            "date_to": window.date_to,
-                        },
-                        "comparison_period": {
-                            "label": comparison_window.label,
-                            "date_from": comparison_window.date_from,
-                            "date_to": comparison_window.date_to,
-                        },
-                        "current_feedbacks": build_insight_feedbacks(feedbacks, current_details),
-                        "comparison_feedbacks": build_insight_feedbacks(
-                            comparison_feedbacks, comparison_details
-                        ),
-                    },
-                    args.insight_config,
+                step_started = perf_counter()
+                try:
+                    current_details = fetch_feedback_details(client, feedbacks)
+                finally:
+                    timings_ms["detail_current"] = (perf_counter() - step_started) * 1000
+                step_started = perf_counter()
+                try:
+                    comparison_details = fetch_feedback_details(
+                        client, comparison_feedbacks
+                    )
+                finally:
+                    timings_ms["detail_comparison"] = (
+                        perf_counter() - step_started
+                    ) * 1000
+                insight_payload = {
+                    "period": _period_payload(window),
+                    "comparison_period": _period_payload(comparison_window),
+                    "current_feedbacks": build_insight_feedbacks(
+                        feedbacks, current_details
+                    ),
+                    "comparison_feedbacks": build_insight_feedbacks(
+                        comparison_feedbacks, comparison_details
+                    ),
+                }
+                source_snapshots["model_input"] = _payload_hash(insight_payload)
+                model_feedback_count = len(insight_payload["current_feedbacks"]) + len(
+                    insight_payload["comparison_feedbacks"]
                 )
-            except (FeedbackQueryError, DailyReportError, httpx.HTTPError):
+                insight_runtime["batch_count"] = max(
+                    1,
+                    math.ceil(model_feedback_count / insight_runtime["batch_size"]),
+                )
+                step_started = perf_counter()
+                try:
+                    insight = run_feedback_insight(
+                        insight_payload,
+                        args.insight_config,
+                    )
+                finally:
+                    timings_ms["model"] = (perf_counter() - step_started) * 1000
+                if isinstance(insight.get("model"), dict):
+                    insight_runtime.update(insight["model"])
+            except (FeedbackQueryError, DailyReportError, httpx.HTTPError) as exc:
                 # AI 洞察是可选增强；失败时保留基础日报和原有高严重度提醒。
-                insight_degraded = True
-        markdown = render_markdown(feedbacks, window, insight, insight_degraded)
+                insight_error = _insight_failure(exc)
+            timings_ms["insight_total"] = (perf_counter() - insight_started) * 1000
+        insight_degraded = insight_error is not None
+        stage = "render_report"
+        step_started = perf_counter()
+        markdown = render_markdown(
+            feedbacks,
+            window,
+            insight,
+            insight_degraded,
+            base_metrics,
+        )
+        timings_ms["render_report"] = (perf_counter() - step_started) * 1000
         default_name = f"反馈日报-{window.label.replace(' 至 ', '_')}.md"
-        output_path = write_markdown(markdown, args.output or Path(default_name))
+        output_path = resolve_output_path(args.output or Path(default_name))
+        stage = "archive_report"
+        archived_report_path = write_markdown(markdown, context.directory / "report.md")
 
         sent = False
+        notification: dict[str, Any] = {
+            "requested": args.send,
+            "status": "pending" if args.send else "disabled",
+        }
+        notification_error = None
         if args.send:
-            send_wecom_summary(
-                render_wecom_summary(feedbacks, window, insight, insight_degraded)
+            stage = "notification"
+            step_started = perf_counter()
+            try:
+                send_wecom_summary(
+                    render_wecom_summary(feedbacks, window, insight, insight_degraded)
+                )
+                sent = True
+                notification["status"] = "success"
+            except DailyReportError as exc:
+                notification["status"] = "failed"
+                notification["error"] = {
+                    "code": "NOTIFICATION_ERROR",
+                    "message": _safe_insight_text(str(exc), 500),
+                }
+                notification_error = exc
+            timings_ms["notification"] = (perf_counter() - step_started) * 1000
+        stage = "write_artifacts"
+        outcome = RunOutcome(
+            comparison_window=comparison_window,
+            base_metrics=base_metrics,
+            source_snapshots=source_snapshots,
+            insight=insight,
+            insight_requested=args.insight,
+            insight_error=insight_error,
+            insight_runtime=insight_runtime,
+            published_report_path=output_path,
+            archived_report_path=archived_report_path,
+            notification=notification,
+            timings_ms=timings_ms,
+        )
+        manifest_path, clusters_path = _write_run_artifacts(
+            context=context,
+            outcome=outcome,
+        )
+        stage = "publish_report"
+        output_path = write_markdown(markdown, output_path)
+        stage = "finalize_manifest"
+        _finalize_run_manifest(
+            manifest_path,
+            notification=notification,
+            elapsed_ms=(perf_counter() - started_at) * 1000,
+        )
+        if notification_error is not None:
+            _print_json(
+                {"code": "DAILY_REPORT_ERROR", "msg": str(notification_error)},
+                stream=sys.stderr,
             )
-            sent = True
+            return 1
     except FeedbackQueryError as exc:
+        _record_run_failure(
+            context,
+            stage=stage,
+            exc=exc,
+            elapsed_ms=(perf_counter() - started_at) * 1000,
+        )
         _print_json(exc.payload, stream=sys.stderr)
         return 1
     except DailyReportError as exc:
+        _record_run_failure(
+            context,
+            stage=stage,
+            exc=exc,
+            elapsed_ms=(perf_counter() - started_at) * 1000,
+        )
         _print_json({"code": "DAILY_REPORT_ERROR", "msg": str(exc)}, stream=sys.stderr)
         return 1
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        _record_run_failure(
+            context,
+            stage=stage,
+            exc=exc,
+            elapsed_ms=(perf_counter() - started_at) * 1000,
+        )
         _print_json({"code": "NETWORK_ERROR", "msg": "反馈查询接口网络请求失败"}, stream=sys.stderr)
         return 1
 
     _print_json(
         {
             "success": True,
+            "run_id": context.run_id,
             "output": str(output_path),
+            "archived_report": str(archived_report_path),
+            "manifest": str(manifest_path),
+            "clusters": str(clusters_path),
             "feedback_count": len(feedbacks),
             "insight": insight is not None,
             "insight_degraded": insight_degraded,

@@ -152,7 +152,12 @@ def test_report_command_paginates_deduplicates_and_writes_safe_markdown(
     )
     output = json.loads(capsys.readouterr().out)
     report_path = Path(output["output"])
+    archived_report_path = Path(output["archived_report"])
+    manifest_path = Path(output["manifest"])
+    clusters_path = Path(output["clusters"])
     markdown = report_path.read_text(encoding="utf-8")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    clusters = json.loads(clusters_path.read_text(encoding="utf-8"))
 
     assert exit_code == 0
     assert [call["page"] for call in calls] == [1, 2, 3]
@@ -160,6 +165,38 @@ def test_report_command_paginates_deduplicates_and_writes_safe_markdown(
     assert all(call["date_from"] == "2026-07-20 00:00:00" for call in calls)
     assert output["feedback_count"] == 3
     assert output["sent"] is False
+    assert manifest["run_id"] == output["run_id"]
+    assert manifest["run_key"].startswith("daily-2026-07-20-base-")
+    assert manifest["run_key"].endswith("-schema-1.0")
+    assert manifest["period_key"].startswith("daily-2026-07-20-")
+    assert "-base-" not in manifest["period_key"]
+    assert manifest["status"] == "success"
+    assert manifest["execution_status"] == "success"
+    assert manifest["insight"] == {
+        "requested": False,
+        "status": "disabled",
+        "error": None,
+        "runtime": None,
+    }
+    assert manifest["notification"] == {"requested": False, "status": "disabled"}
+    assert manifest["publication"] == {"status": "success"}
+    assert clusters["run_id"] == output["run_id"]
+    assert clusters["period_key"] == manifest["period_key"]
+    assert clusters["source_snapshots"]["current"] == manifest["source_snapshots"]["current"]
+    assert archived_report_path.read_text(encoding="utf-8") == markdown
+    assert manifest["artifacts"]["report"].endswith("/report.md")
+    assert manifest["artifacts"]["published_report"] == "反馈日报-2026-07-20.md"
+    assert clusters["base_metrics"]["feedback_count"] == 3
+    assert clusters["base_metrics"]["problem_feedback_count"] == 2
+    assert clusters["base_metrics"]["failed_call_count"] == 3
+    assert clusters["base_metrics"]["feedback_types"] == {
+        "bug": 1,
+        "data_issue": 1,
+        "query_result": 1,
+    }
+    assert clusters["problems"] == []
+    assert clusters["modules"] == []
+    assert clusters["model"] is None
     assert "# 反馈日报（2026-07-20）" in markdown
     assert markdown.count("```mermaid") == 2
     assert "title 反馈类型分布" in markdown
@@ -315,6 +352,247 @@ def test_notify_command_failure_returns_safe_daily_report_error(monkeypatch: pyt
         module.send_wecom_summary("### 日报")
 
 
+def test_report_command_persists_notification_failure_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    """通知失败时任务应返回失败，并在运行清单中保留安全错误。"""
+    module = _load_script()
+    project_root = tmp_path / "repo"
+    (project_root / ".git").mkdir(parents=True)
+    monkeypatch.chdir(project_root)
+    monkeypatch.setattr(module, "load_api_key", lambda: "feedback-secret")
+    monkeypatch.setattr(
+        module.FeedbackQueryClient,
+        "list_feedbacks",
+        lambda self, params: {
+            "code": 200,
+            "msg": "成功",
+            "data": {"list": [], "total": 0},
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "send_wecom_summary",
+        lambda content: (_ for _ in ()).throw(module.DailyReportError("errcode=93000")),
+    )
+
+    exit_code = module.main(
+        [
+            "--date-from",
+            "2026-07-20 00:00:00",
+            "--date-to",
+            "2026-07-20 23:59:59",
+            "--send",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err)
+    manifests = list((project_root / "output" / "feedback-query" / "runs").glob("*/manifest.json"))
+    assert len(manifests) == 1
+    manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
+
+    assert exit_code == 1
+    assert error == {"code": "DAILY_REPORT_ERROR", "msg": "errcode=93000"}
+    assert manifest["status"] == "success"
+    assert manifest["execution_status"] == "failed"
+    assert manifest["notification"] == {
+        "requested": True,
+        "status": "failed",
+        "error": {
+            "code": "NOTIFICATION_ERROR",
+            "message": "errcode=93000",
+        },
+    }
+
+
+def test_report_command_persists_current_query_failure_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    """当前周期查询失败时也必须留下运行阶段和安全错误。"""
+    module = _load_script()
+    project_root = tmp_path / "repo"
+    (project_root / ".git").mkdir(parents=True)
+    monkeypatch.chdir(project_root)
+    monkeypatch.setattr(module, "load_api_key", lambda: "feedback-secret")
+    monkeypatch.setattr(
+        module.FeedbackQueryClient,
+        "list_feedbacks",
+        lambda self, params: (_ for _ in ()).throw(
+            module.FeedbackQueryError(
+                "反馈接口超时",
+                {"code": "REMOTE_TIMEOUT", "msg": "反馈接口超时"},
+            )
+        ),
+    )
+
+    exit_code = module.main(
+        [
+            "--date-from",
+            "2026-07-20 00:00:00",
+            "--date-to",
+            "2026-07-20 23:59:59",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err)
+    manifests = list((project_root / "output" / "feedback-query" / "runs").glob("*/manifest.json"))
+    assert len(manifests) == 1
+    manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
+
+    assert exit_code == 1
+    assert error["code"] == "REMOTE_TIMEOUT"
+    assert manifest["status"] == "failed"
+    assert manifest["execution_status"] == "failed"
+    assert manifest["failure"] == {
+        "stage": "query_current",
+        "code": "REMOTE_TIMEOUT",
+        "message": "反馈接口超时",
+    }
+
+
+def test_source_snapshot_hash_changes_when_feedback_fields_change():
+    """同一 UUID 的报表字段变化必须产生不同快照哈希。"""
+    module = _load_script()
+    original = [{"feedback_uuid": "fb-1", "severity": "low", "title": "旧标题"}]
+    updated = [{"feedback_uuid": "fb-1", "severity": "high", "title": "新标题"}]
+
+    assert module._source_snapshot_hash(original) != module._source_snapshot_hash(updated)
+
+
+def test_artifact_failure_does_not_replace_published_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    """运行归档未完成时必须保留上一份成功发布的日报。"""
+    module = _load_script()
+    project_root = tmp_path / "repo"
+    report_path = project_root / "output" / "feedback-query" / "反馈日报-2026-07-20.md"
+    (project_root / ".git").mkdir(parents=True)
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("上一份成功日报", encoding="utf-8")
+    monkeypatch.chdir(project_root)
+    monkeypatch.setattr(module, "load_api_key", lambda: "feedback-secret")
+    monkeypatch.setattr(
+        module.FeedbackQueryClient,
+        "list_feedbacks",
+        lambda self, params: {"code": 200, "msg": "成功", "data": {"list": []}},
+    )
+    monkeypatch.setattr(
+        module,
+        "_write_run_artifacts",
+        lambda **kwargs: (_ for _ in ()).throw(module.DailyReportError("归档失败")),
+    )
+
+    exit_code = module.main(
+        [
+            "--date-from",
+            "2026-07-20 00:00:00",
+            "--date-to",
+            "2026-07-20 23:59:59",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err)
+
+    assert exit_code == 1
+    assert error == {"code": "DAILY_REPORT_ERROR", "msg": "归档失败"}
+    assert report_path.read_text(encoding="utf-8") == "上一份成功日报"
+
+
+def test_publish_failure_marks_publication_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    """归档完成但发布失败时必须记录明确的 publication 终态。"""
+    module = _load_script()
+    project_root = tmp_path / "repo"
+    (project_root / ".git").mkdir(parents=True)
+    monkeypatch.chdir(project_root)
+    monkeypatch.setattr(module, "load_api_key", lambda: "feedback-secret")
+    monkeypatch.setattr(
+        module.FeedbackQueryClient,
+        "list_feedbacks",
+        lambda self, params: {"code": 200, "msg": "成功", "data": {"list": []}},
+    )
+    original_write = module.write_markdown
+
+    def fail_published_report(markdown, output_path):
+        if Path(output_path).name == "反馈日报-2026-07-20.md":
+            raise module.DailyReportError("发布失败")
+        return original_write(markdown, output_path)
+
+    monkeypatch.setattr(module, "write_markdown", fail_published_report)
+
+    exit_code = module.main(
+        [
+            "--date-from",
+            "2026-07-20 00:00:00",
+            "--date-to",
+            "2026-07-20 23:59:59",
+        ]
+    )
+    capsys.readouterr()
+    manifest_path = next(
+        (project_root / "output" / "feedback-query" / "runs").glob("*/manifest.json")
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert exit_code == 1
+    assert manifest["stage"] == "publish_report"
+    assert manifest["publication"] == {
+        "status": "failed",
+        "error": {"code": "DAILY_REPORT_ERROR", "message": "发布失败"},
+    }
+
+
+def test_finalize_failure_keeps_publication_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    """日报已发布但最终清单失败时不能误报 publication pending。"""
+    module = _load_script()
+    project_root = tmp_path / "repo"
+    (project_root / ".git").mkdir(parents=True)
+    monkeypatch.chdir(project_root)
+    monkeypatch.setattr(module, "load_api_key", lambda: "feedback-secret")
+    monkeypatch.setattr(
+        module.FeedbackQueryClient,
+        "list_feedbacks",
+        lambda self, params: {"code": 200, "msg": "成功", "data": {"list": []}},
+    )
+    monkeypatch.setattr(
+        module,
+        "_finalize_run_manifest",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            module.DailyReportError("清单完成失败")
+        ),
+    )
+
+    exit_code = module.main(
+        [
+            "--date-from",
+            "2026-07-20 00:00:00",
+            "--date-to",
+            "2026-07-20 23:59:59",
+        ]
+    )
+    capsys.readouterr()
+    report_path = project_root / "output" / "feedback-query" / "反馈日报-2026-07-20.md"
+    manifest_path = next(
+        (project_root / "output" / "feedback-query" / "runs").glob("*/manifest.json")
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert exit_code == 1
+    assert report_path.exists()
+    assert manifest["stage"] == "finalize_manifest"
+    assert manifest["publication"] == {"status": "success"}
+
+
 def test_insight_mode_compares_previous_period_and_renders_module_actions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -430,6 +708,8 @@ def test_insight_mode_compares_previous_period_and_renders_module_actions(
     )
     output = json.loads(capsys.readouterr().out)
     markdown = Path(output["output"]).read_text(encoding="utf-8")
+    manifest = json.loads(Path(output["manifest"]).read_text(encoding="utf-8"))
+    clusters = json.loads(Path(output["clusters"]).read_text(encoding="utf-8"))
 
     assert exit_code == 0
     assert [call["date_from"] for call in list_calls] == [
@@ -451,6 +731,24 @@ def test_insight_mode_compares_previous_period_and_renders_module_actions(
     assert "| high | bug | 字段映射失败" in markdown
     assert "`current-1`" in markdown
     assert output["insight"] is True
+    assert manifest["insight"] == {
+        "requested": True,
+        "status": "success",
+        "error": None,
+        "runtime": {
+            "provider": "openai_compatible",
+            "model": None,
+            "batch_size": 100,
+            "batch_count": 1,
+            "prompt_version": "v1",
+            "prompt_hash": module.INSIGHT_PROMPT_HASH,
+        },
+    }
+    assert "-insight-" in manifest["run_key"]
+    assert clusters["period"]["label"] == "2026-07-20"
+    assert clusters["comparison_period"]["label"] == "2026-07-19"
+    assert clusters["problems"][0]["problem_summary"] == "字段别名映射失败"
+    assert clusters["modules"][0]["module"] == "query"
 
 
 def test_wecom_insight_summary_prioritizes_module_count_and_recommended_work():
@@ -569,6 +867,8 @@ def test_insight_failure_falls_back_to_base_report_and_notification(
     )
     output = json.loads(capsys.readouterr().out)
     markdown = Path(output["output"]).read_text(encoding="utf-8")
+    manifest = json.loads(Path(output["manifest"]).read_text(encoding="utf-8"))
+    clusters = json.loads(Path(output["clusters"]).read_text(encoding="utf-8"))
 
     assert exit_code == 0
     assert output["insight"] is False
@@ -578,3 +878,15 @@ def test_insight_failure_falls_back_to_base_report_and_notification(
     assert "AI 洞察生成失败，本期已降级为基础日报" in sent["content"]
     assert "查询持续失败" in sent["content"]
     assert "模型超时" not in sent["content"]
+    assert manifest["status"] == "degraded"
+    assert manifest["insight"]["requested"] is True
+    assert manifest["insight"]["status"] == "degraded"
+    assert manifest["insight"]["error"] == {
+        "code": "INSIGHT_EXECUTION_ERROR",
+        "message": "模型超时",
+    }
+    assert manifest["insight"]["runtime"]["batch_size"] == 100
+    assert manifest["insight"]["runtime"]["prompt_hash"] == module.INSIGHT_PROMPT_HASH
+    assert manifest["notification"] == {"requested": True, "status": "success"}
+    assert clusters["insight_status"] == "degraded"
+    assert clusters["problems"] == []

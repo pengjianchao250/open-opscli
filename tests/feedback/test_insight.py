@@ -150,9 +150,14 @@ def test_insight_classifies_and_aggregates_current_and_previous_periods(tmp_path
     assert response["data"]["modules"] == [
         {"module": "query", "problem_count": 1, "feedback_count": 2, "highest_priority": "P1"}
     ]
-    assert response["data"]["model"] == {
+    model = response["data"]["model"]
+    assert len(model.pop("prompt_hash")) == 64
+    assert model == {
         "provider": "openai_compatible",
         "model": "feedback-classifier",
+        "batch_size": 2,
+        "batch_count": 2,
+        "prompt_version": "v1",
     }
     assert route.call_count == 2
     assert model_requests[0]["existing_problem_taxonomy"] == []
