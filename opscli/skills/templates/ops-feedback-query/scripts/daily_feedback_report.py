@@ -68,7 +68,7 @@ PREPARED_ARTIFACT_SCHEMA_VERSION = "1.1"
 # 与生产反馈洞察批次保持 100 条一致，兼顾上下文成本和单次输出可靠性。
 PREPARED_CHUNK_SIZE = 100
 # Codex 分类契约内容或输出约束变化时递增，供准备产物失效与审计使用。
-CODEX_INSIGHT_PROMPT_VERSION = "codex-v1"
+CODEX_INSIGHT_PROMPT_VERSION = "codex-v2"
 # 契约放在不打包的内部 Skill 内，由 Codex 自动化和 Python 哈希共同引用。
 CODEX_INSIGHT_CONTRACT_PATH = SCRIPT_DIR.parent / "reference" / "Codex反馈洞察分类契约.md"
 # 与 `opscli feedback insight` 使用同一默认配置路径，确保批次数预算一致。
@@ -128,6 +128,23 @@ class RunOutcome(NamedTuple):
     archived_report_path: Path
     notification: dict[str, Any]
     timings_ms: dict[str, float]
+
+
+class PreparedAnalysis(NamedTuple):
+    """已校验分类及其确定性聚合结果。"""
+
+    prepared: dict[str, Any]
+    manifest_path: Path
+    analysis_input: dict[str, Any]
+    report_input: dict[str, Any]
+    snapshots: dict[str, Any]
+    classifications: list[dict[str, Any]]
+    insight_runtime: dict[str, Any]
+    insight: dict[str, Any]
+    model_feedbacks: list[dict[str, Any]]
+    window: ReportWindow
+    comparison_window: ReportWindow
+    feedbacks: list[dict[str, Any]]
 
 
 def _parse_datetime(value: str, label: str) -> datetime:
@@ -246,6 +263,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--validate-chunk",
         type=Path,
         help="校验 Codex 写入的单个 chunk 输出并记录检查点",
+    )
+    pipeline.add_argument(
+        "--prepare-narrative",
+        type=Path,
+        help="基于已校验分类生成只读管理叙事事实包",
+    )
+    pipeline.add_argument(
+        "--validate-narrative",
+        type=Path,
+        help="校验 Codex 写入的管理叙事输出并记录检查点",
     )
     pipeline.add_argument(
         "--finalize-prepared",
@@ -535,17 +562,242 @@ def _mermaid_pie(
     return rows
 
 
+def _safe_narrative_markdown(value: Any, maximum: int) -> str:
+    """将已校验叙事转为单段、不可改变报告结构的 Markdown 文本。"""
+    text = " ".join(str(value).split())
+    return _safe_text(text, maximum=maximum).replace("#", "\\#")
+
+
+def _render_management_markdown(
+    feedbacks: list[dict[str, Any]],
+    window: ReportWindow,
+    insight: dict[str, Any],
+    base_metrics: dict[str, Any],
+    management: dict[str, Any],
+) -> str:
+    """按管理结论优先、明细折叠的结构渲染 Codex 日报。"""
+    narrative = management["narrative"]
+    facts = management["facts"]
+    problems = [item for item in feedbacks if item.get("feedback_type") != "query_result"]
+    severe = [item for item in problems if item.get("severity") in {"critical", "high"}]
+    module_insights = {
+        item["module"]: item["insight"] for item in narrative["module_insights"]
+    }
+    problem_by_ref = {
+        item["problem_ref"]: item for item in facts["all_problems"]
+    }
+    comparison = facts["comparison"]
+    lines = [
+        f"# 反馈 AI 洞悉（{window.label}）",
+        "",
+        "> 生成方式：Codex App 基于脱敏分类和 Python 确定性统计生成管理叙事。",
+        "",
+        "## 一、范围与口径",
+        "",
+        f"- 时间范围：{window.date_from} 至 {window.date_to}（Asia/Shanghai）。",
+        f"- 全部反馈：{base_metrics['feedback_count']} 条。",
+        f"- 纳入洞悉的问题反馈：{base_metrics['problem_feedback_count']} 条。",
+        "- 严重度：Critical {critical}、High {high}、Medium {medium}、Low {low}。".format(
+            critical=base_metrics["problem_severities"].get("critical", 0),
+            high=base_metrics["problem_severities"].get("high", 0),
+            medium=base_metrics["problem_severities"].get("medium", 0),
+            low=base_metrics["problem_severities"].get("low", 0),
+        ),
+        f"- 失败调用累计：{base_metrics['failed_call_count']} 次。",
+        "- AI 不计算次数、环比、影响人数或优先级；所有数字来自确定性事实包。",
+        "",
+        "## 二、执行摘要",
+        "",
+    ]
+    for paragraph in narrative["executive_summary"]:
+        lines.extend([_safe_narrative_markdown(paragraph, 1000), ""])
+
+    lines.extend(
+        [
+            "## 三、根因分布",
+            "",
+            "| 根因类别 | 次数 | 占比 | High/Critical | 影响用户 |",
+            "|---|---:|---:|---:|---:|",
+        ]
+    )
+    for row in facts["root_causes"]:
+        lines.append(
+            "| {category} | {count} | {share}% | {severe} | {users} |".format(
+                category=_safe_text(row["category"], maximum=100),
+                count=row["current_count"],
+                share=row["share_percent"],
+                severe=row["severe_count"],
+                users=row["affected_users"],
+            )
+        )
+
+    lines.extend(
+        [
+            "",
+            "## 四、重点模块",
+            "",
+            "| 模块 | 问题反馈 | 占比 | High/Critical | 最高优先级 | 洞悉 |",
+            "|---|---:|---:|---:|---|---|",
+        ]
+    )
+    for row in facts["modules"]:
+        lines.append(
+            "| {module} | {count} | {share}% | {severe} | {priority} | {insight_text} |".format(
+                module=_safe_text(row["module"], maximum=80),
+                count=row["feedback_count"],
+                share=row["share_percent"],
+                severe=row["severe_count"],
+                priority=_safe_text(row["highest_priority"], maximum=10),
+                insight_text=_safe_narrative_markdown(
+                    module_insights.get(row["module"], "-"), 200
+                ),
+            )
+        )
+
+    lines.extend(["", "## 五、重复问题证据", ""])
+    for index, row in enumerate(facts["repeated_problems"], start=1):
+        summary = str(row["problem_summary"]).rstrip("。！？.!?")
+        lines.append(
+            f"{index}. `{_safe_text(row['module'], maximum=80)}` "
+            f"{_safe_text(summary, maximum=180)}："
+            f"{row['current_count']} 条，{row['affected_users']} 个影响用户，"
+            f"优先级 {row['priority']}。"
+        )
+
+    lines.extend(["", "## 六、P0/P1 风险", ""])
+    if narrative["risk_themes"]:
+        for index, theme in enumerate(narrative["risk_themes"], start=1):
+            lines.extend(
+                [
+                    f"### {theme['priority']}-{index} {_safe_text(theme['title'], maximum=120)}",
+                    "",
+                    _safe_narrative_markdown(theme["summary"], 600),
+                    "",
+                ]
+            )
+            for problem_ref in theme["problem_refs"]:
+                row = problem_by_ref[problem_ref]
+                summary = str(row["problem_summary"]).rstrip("。！？.!?")
+                lines.append(
+                    f"- {_safe_text(summary, maximum=180)}：{row['current_count']} 条，"
+                    f"{row['affected_users']} 个影响用户，{row['priority']}。"
+                )
+            lines.extend(
+                ["", f"建议：{_safe_narrative_markdown(theme['recommendation'], 800)}", ""]
+            )
+    else:
+        lines.extend(["本日没有确定性优先级为 P0/P1 的风险主题。", ""])
+
+    lines.extend(["## 七、治理工作建议", ""])
+    for action in narrative["governance_actions"]:
+        lines.extend(
+            [
+                f"### {action['priority']} {_safe_text(action['title'], maximum=120)}",
+                "",
+                _safe_narrative_markdown(action["summary"], 600),
+                "",
+                f"建议：{_safe_narrative_markdown(action['recommendation'], 800)}",
+                "",
+            ]
+        )
+
+    change = comparison["change_percent"]
+    change_text = "新增" if change is None else f"{change}%"
+    lines.extend(
+        [
+            "## 八、日环比",
+            "",
+            "| 周期 | 问题反馈 | High/Critical | 影响用户 |",
+            "|---|---:|---:|---:|",
+            (
+                f"| {comparison['current_label']} | {comparison['current_count']} | "
+                f"{comparison['current_severe_count']} | "
+                f"{comparison['current_affected_users']} |"
+            ),
+            (
+                f"| {comparison['previous_label']} | {comparison['previous_count']} | "
+                f"{comparison['previous_severe_count']} | "
+                f"{comparison['previous_affected_users']} |"
+            ),
+            "",
+            f"问题反馈日环比：{change_text}。绝对量变化仍需结合调用量判断故障率。",
+            "",
+            "## 九、局限与后续",
+            "",
+        ]
+    )
+    for item in narrative["limitations"]:
+        lines.append(f"- {_safe_narrative_markdown(item, 500)}")
+
+    lines.extend(
+        [
+            "",
+            "## 附录：结构化明细",
+            "",
+            "<details>",
+            f"<summary>查看全部问题簇（{len(insight.get('problems', []))} 个）</summary>",
+            "",
+            "| 模块 | 主要问题 | 本日 | 前一日 | 变化 | 优先级 | 建议工作 |",
+            "|---|---|---:|---:|---:|---|---|",
+        ]
+    )
+    for row in insight.get("problems", []):
+        row_change = row.get("change_percent")
+        row_change_text = "新增" if row_change is None else f"{row_change}%"
+        lines.append(
+            "| {module} | {summary} | {current} | {previous} | {change} | {priority} | {work} |".format(
+                module=_safe_text(row.get("module"), maximum=80),
+                summary=_safe_text(row.get("problem_summary"), maximum=160),
+                current=int(row.get("current_count") or 0),
+                previous=int(row.get("previous_count") or 0),
+                change=row_change_text,
+                priority=_safe_text(row.get("priority"), maximum=20),
+                work=_safe_text(row.get("recommended_work"), maximum=220),
+            )
+        )
+    lines.extend(["", "</details>", "", "<details>", f"<summary>查看 Critical / High 反馈（{len(severe)} 条）</summary>", "", "| 严重度 | 标题 | 来源 | 反馈 UUID | 创建时间 |", "|---|---|---|---|---|"])
+    for item in severe:
+        lines.append(
+            "| {severity} | {title} | {source} | `{uuid}` | {created} |".format(
+                severity=_safe_text(item.get("severity")),
+                title=_safe_text(item.get("title")),
+                source=_safe_text(item.get("source")),
+                uuid=_safe_text(item.get("feedback_uuid")),
+                created=_format_created_at(item.get("created_at")),
+            )
+        )
+    lines.extend(["", "</details>", "", "<details>", f"<summary>查看全部问题反馈（{len(problems)} 条）</summary>", "", "| 严重度 | 类型 | 标题 | 来源 | 状态 | 反馈 UUID |", "|---|---|---|---|---|---|"])
+    for item in problems:
+        lines.append(
+            "| {severity} | {kind} | {title} | {source} | {status} | `{uuid}` |".format(
+                severity=_safe_text(item.get("severity")),
+                kind=_safe_text(item.get("feedback_type")),
+                title=_safe_text(item.get("title")),
+                source=_safe_text(item.get("source")),
+                status=_safe_text(item.get("status")),
+                uuid=_safe_text(item.get("feedback_uuid")),
+            )
+        )
+    lines.extend(["", "</details>"])
+    return "\n".join(lines) + "\n"
+
+
 def render_markdown(
     feedbacks: list[dict[str, Any]],
     window: ReportWindow,
     insight: dict[str, Any] | None = None,
     insight_degraded: bool = False,
     base_metrics: dict[str, Any] | None = None,
+    management: dict[str, Any] | None = None,
 ) -> str:
     """将反馈列表渲染为不含个人和执行上下文的 Markdown 日报。"""
     problems = [item for item in feedbacks if item.get("feedback_type") != "query_result"]
     severe = [item for item in problems if item.get("severity") in {"critical", "high"}]
     metrics = base_metrics or _build_base_metrics(feedbacks)
+    if insight is not None and management is not None:
+        return _render_management_markdown(
+            feedbacks, window, insight, metrics, management
+        )
     type_counter = Counter(metrics["feedback_types"])
     severity_counter = Counter(metrics["problem_severities"])
     source_counter = Counter(metrics["problem_sources"])
@@ -1187,6 +1439,12 @@ def _write_run_artifacts(
             "base_metrics": outcome.base_metrics,
             "problems": outcome.insight.get("problems", []) if outcome.insight else [],
             "modules": outcome.insight.get("modules", []) if outcome.insight else [],
+            "management_facts": (
+                outcome.insight.get("management_facts") if outcome.insight else None
+            ),
+            "report_narrative": (
+                outcome.insight.get("report_narrative") if outcome.insight else None
+            ),
             "model": (
                 outcome.insight.get("model")
                 if outcome.insight
@@ -1328,7 +1586,12 @@ def _prepared_manifest_reusable(
             and manifest.get("taxonomy", {}).get("store_id") != taxonomy_store_id
         ):
             return None
-        if manifest.get("state") not in {"ready", "analyzing", "completed"}:
+        if manifest.get("state") not in {
+            "ready",
+            "analyzing",
+            "narrating",
+            "completed",
+        }:
             return None
         period_label = str(manifest.get("period", {}).get("label") or "")
         ready_path = prepared_dir / str(
@@ -1621,24 +1884,40 @@ def claim_ready_preparation(window: ReportWindow) -> dict[str, Any]:
     prepared_root = resolve_output_path(Path("prepared") / "placeholder").parent
     manifest_path = prepared_root / window.label / "manifest.json"
     manifest = _prepared_manifest_reusable(manifest_path.parent)
-    if manifest is None or manifest.get("state") not in {"ready", "analyzing"}:
+    if manifest is None or manifest.get("state") not in {
+        "ready",
+        "analyzing",
+        "narrating",
+    }:
         return {
             "success": True,
             "state": "idle",
             "period": window.label,
             "reason": "昨日没有可分析的 ready 数据",
         }
-    manifest["state"] = "analyzing"
+    if manifest.get("state") != "narrating":
+        manifest["state"] = "analyzing"
     manifest["claimed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     manifest["claim_count"] = int(manifest.get("claim_count") or 0) + 1
     _write_json_artifact(manifest, manifest_path)
     return {
         "success": True,
-        "state": "analyzing",
+        "state": manifest["state"],
         "period_key": manifest["period_key"],
         "prepared_dir": str(manifest_path.parent),
         "analysis_input": str(manifest_path.parent / manifest["artifacts"]["analysis_input"]),
         "chunks": manifest.get("chunks", []),
+        "narrative": manifest.get("narrative"),
+        "narrative_input": (
+            str(manifest_path.parent / manifest["artifacts"]["narrative_input"])
+            if manifest.get("artifacts", {}).get("narrative_input")
+            else None
+        ),
+        "narrative_output": (
+            str(manifest_path.parent / manifest["artifacts"]["narrative_output"])
+            if manifest.get("artifacts", {}).get("narrative_output")
+            else None
+        ),
         "contract": manifest.get("contract", {}),
     }
 
@@ -1762,27 +2041,20 @@ def validate_prepared_chunk(output: Path) -> dict[str, Any]:
     }
 
 
-def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
-    """校验 Codex 分类，确定性聚合并发布日报。
-
-    Args:
-        args: 包含 prepared 目录、模型标识、输出位置和通知开关的命令参数。
-
-    Returns:
-        最终运行 ID、报告与结构化产物路径、通知状态和反馈数量。
-
-    Raises:
-        DailyReportError: 准备产物、分类输出、发布或通知不合法或失败。
-    """
-    prepared_dir = resolve_output_path(args.finalize_prepared / "placeholder").parent
-    prepared_manifest_path = prepared_dir / "manifest.json"
-    prepared = _read_json_artifact(prepared_manifest_path, "准备清单")
-    if prepared.get("state") not in {"ready", "analyzing", "failed"}:
-        raise DailyReportError("准备清单不是可最终化状态")
+def _load_prepared_analysis(
+    prepared_dir: Path,
+    args: argparse.Namespace,
+    allowed_states: set[str],
+) -> PreparedAnalysis:
+    """校验 prepared 输入和分类，并生成确定性聚合结果。"""
+    manifest_path = prepared_dir / "manifest.json"
+    prepared = _read_json_artifact(manifest_path, "准备清单")
+    if prepared.get("state") not in allowed_states:
+        raise DailyReportError("准备清单不是当前阶段可处理状态")
     if prepared.get("taxonomy", {}).get("store_id") != _taxonomy_store_id(
         args.taxonomy_file
     ):
-        raise DailyReportError("最终化使用的 taxonomy 文件与准备阶段不一致")
+        raise DailyReportError("使用的 taxonomy 文件与准备阶段不一致")
     analysis_input = _read_json_artifact(
         prepared_dir / prepared["artifacts"]["analysis_input"], "analysis-input"
     )
@@ -1794,17 +2066,16 @@ def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
         _payload_hash(analysis_input) != snapshots.get("analysis_input")
         or _payload_hash(report_input) != snapshots.get("report_input")
     ):
-        raise DailyReportError("准备输入哈希不匹配，拒绝发布")
+        raise DailyReportError("准备输入哈希不匹配，拒绝继续")
 
     cached_path = prepared.get("artifacts", {}).get("cached_classifications")
     if not isinstance(cached_path, str):
         raise DailyReportError("准备清单缺少 taxonomy 缓存分类产物")
     cached_payload = _read_json_artifact(
-        prepared_dir / cached_path,
-        "cached-classifications",
+        prepared_dir / cached_path, "cached-classifications"
     )
     if _payload_hash(cached_payload) != snapshots.get("cached_classifications"):
-        raise DailyReportError("taxonomy 缓存分类哈希不匹配，拒绝发布")
+        raise DailyReportError("taxonomy 缓存分类哈希不匹配，拒绝继续")
     if set(cached_payload) != {
         "schema_version",
         "period_key",
@@ -1834,8 +2105,10 @@ def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
         if not isinstance(chunk, dict):
             raise DailyReportError("准备清单包含非法 chunk")
         if chunk.get("status") != "validated":
-            raise DailyReportError("存在尚未 validated 的 chunk，拒绝最终化")
-        rows, output_hash = _validated_chunk_classifications(prepared_dir, prepared, chunk)
+            raise DailyReportError("存在尚未 validated 的 chunk，拒绝继续")
+        rows, output_hash = _validated_chunk_classifications(
+            prepared_dir, prepared, chunk
+        )
         if chunk.get("output_sha256") != output_hash:
             raise DailyReportError("已校验 chunk 输出在检查点后发生变化")
         classifications.extend(rows)
@@ -1844,19 +2117,20 @@ def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
     insight_runtime = {
         "provider": "codex_app",
         "model": _safe_insight_text(args.analysis_model, 100),
-        "batch_size": max((int(chunk.get("feedback_count") or 0) for chunk in chunks), default=0),
+        "batch_size": max(
+            (int(chunk.get("feedback_count") or 0) for chunk in chunks), default=0
+        ),
         "batch_count": len(chunks),
         "taxonomy_cache_hit_count": taxonomy_cache_hit_count,
         "model_classification_count": sum(
             int(chunk.get("feedback_count") or 0) for chunk in chunks
         ),
-        "prompt_version": contract.get("prompt_version") or CODEX_INSIGHT_PROMPT_VERSION,
+        "prompt_version": contract.get("prompt_version")
+        or CODEX_INSIGHT_PROMPT_VERSION,
         "prompt_hash": contract.get("prompt_hash") or _codex_contract_hash(),
     }
     insight = aggregate_feedback_classifications(
-        analysis_input,
-        classifications,
-        model_metadata=insight_runtime,
+        analysis_input, classifications, model_metadata=insight_runtime
     )
     model_feedbacks = [
         {**item, "period": period_name}
@@ -1867,20 +2141,6 @@ def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
         for item in items
         if isinstance(item, dict)
     ]
-    classification_map = {
-        classification["feedback_uuid"]: classification
-        for classification in classifications
-    }
-    try:
-        taxonomy_store = _taxonomy_store(args.taxonomy_file)
-        taxonomy_state = taxonomy_store.persist(
-            taxonomy_store.load(),
-            model_feedbacks,
-            classification_map,
-        )
-    except (InsightConfigError, KeyError) as exc:
-        raise DailyReportError(str(exc)) from exc
-    insight_runtime["taxonomy_revision"] = int(taxonomy_state.get("revision") or 0)
     period = prepared["period"]
     comparison_period = prepared["comparison_period"]
     window = ReportWindow(period["date_from"], period["date_to"], period["label"])
@@ -1892,6 +2152,491 @@ def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
     feedbacks = report_input.get("feedbacks")
     if not isinstance(feedbacks, list):
         raise DailyReportError("report-input 缺少 feedbacks 数组")
+    return PreparedAnalysis(
+        prepared=prepared,
+        manifest_path=manifest_path,
+        analysis_input=analysis_input,
+        report_input=report_input,
+        snapshots=snapshots,
+        classifications=classifications,
+        insight_runtime=insight_runtime,
+        insight=insight,
+        model_feedbacks=model_feedbacks,
+        window=window,
+        comparison_window=comparison_window,
+        feedbacks=feedbacks,
+    )
+
+
+def _management_facts(analysis: PreparedAnalysis) -> dict[str, Any]:
+    """从完整分类映射生成只读管理事实，AI 不参与数值计算。"""
+    classification_map = {
+        item["feedback_uuid"]: item for item in analysis.classifications
+    }
+    current = analysis.analysis_input.get("current_feedbacks", [])
+    previous = analysis.analysis_input.get("comparison_feedbacks", [])
+    problem_total = len(current)
+    category_counts: Counter[str] = Counter()
+    category_severe: Counter[str] = Counter()
+    category_users: dict[str, set[str]] = {}
+    for item in current:
+        classification = classification_map[item["feedback_uuid"]]
+        category = classification["problem_category"]
+        category_counts[category] += 1
+        if item.get("severity") in {"critical", "high"}:
+            category_severe[category] += 1
+        user_key = item.get("user_key")
+        if user_key:
+            category_users.setdefault(category, set()).add(str(user_key))
+    root_causes = [
+        {
+            "category": category,
+            "current_count": count,
+            "share_percent": round(count * 100 / problem_total, 1)
+            if problem_total
+            else 0.0,
+            "severe_count": category_severe[category],
+            "affected_users": len(category_users.get(category, set())),
+        }
+        for category, count in category_counts.most_common(12)
+    ]
+    remaining_categories = [
+        category for category, _count in category_counts.most_common()[12:]
+    ]
+    if remaining_categories:
+        remaining_count = sum(category_counts[category] for category in remaining_categories)
+        remaining_users = set().union(
+            *(category_users.get(category, set()) for category in remaining_categories)
+        )
+        root_causes.append(
+            {
+                "category": "其他问题",
+                "current_count": remaining_count,
+                "share_percent": round(remaining_count * 100 / problem_total, 1)
+                if problem_total
+                else 0.0,
+                "severe_count": sum(
+                    category_severe[category] for category in remaining_categories
+                ),
+                "affected_users": len(remaining_users),
+            }
+        )
+    problem_rows = []
+    for problem in analysis.insight.get("problems", []):
+        row = dict(problem)
+        row["problem_ref"] = f"{problem['module']}/{problem['problem_key']}"
+        problem_rows.append(row)
+    severe_by_module: Counter[str] = Counter()
+    for row in problem_rows:
+        if row["severity"] in {"critical", "high"}:
+            severe_by_module[row["module"]] += row["current_count"]
+    modules = []
+    ranked_modules = sorted(
+        analysis.insight.get("modules", []),
+        key=lambda item: (-item["feedback_count"], item["module"]),
+    )
+    for row in ranked_modules[:7]:
+        module = row["module"]
+        modules.append(
+            {
+                **row,
+                "share_percent": round(row["feedback_count"] * 100 / problem_total, 1)
+                if problem_total
+                else 0.0,
+                "severe_count": severe_by_module[module],
+            }
+        )
+
+    def period_metrics(items: list[dict[str, Any]]) -> tuple[int, int, int]:
+        return (
+            len(items),
+            sum(
+                1 for item in items if item.get("severity") in {"critical", "high"}
+            ),
+            len({str(item["user_key"]) for item in items if item.get("user_key")}),
+        )
+
+    current_count, current_severe, current_users = period_metrics(current)
+    previous_count, previous_severe, previous_users = period_metrics(previous)
+    change_percent = (
+        None
+        if previous_count == 0
+        else round((current_count - previous_count) * 100 / previous_count, 1)
+    )
+    return {
+        "period": analysis.prepared["period"],
+        "comparison_period": analysis.prepared["comparison_period"],
+        "base_metrics": _build_base_metrics(analysis.feedbacks),
+        "root_causes": root_causes,
+        "modules": modules,
+        "repeated_problems": sorted(
+            [row for row in problem_rows if row["current_count"] > 1],
+            key=lambda item: (-item["current_count"], item["problem_ref"]),
+        )[:10],
+        "priority_risks": [
+            row for row in problem_rows if row["priority"] in {"P0", "P1"}
+        ],
+        "all_problems": problem_rows,
+        "comparison": {
+            "current_label": analysis.window.label,
+            "previous_label": analysis.comparison_window.label,
+            "current_count": current_count,
+            "previous_count": previous_count,
+            "change_percent": change_percent,
+            "current_severe_count": current_severe,
+            "previous_severe_count": previous_severe,
+            "current_affected_users": current_users,
+            "previous_affected_users": previous_users,
+        },
+    }
+
+
+def prepare_report_narrative(args: argparse.Namespace) -> dict[str, Any]:
+    """在分类完成后生成供 Codex 撰写管理叙事的确定性事实包。
+
+    Args:
+        args: 包含 prepared 目录、taxonomy 路径和分析模型标识的命令参数。
+
+    Returns:
+        叙事输入输出路径、当前状态及是否复用既有事实包。
+
+    Raises:
+        DailyReportError: prepared 分类、输入哈希或 taxonomy 身份不合法。
+    """
+    prepared_dir = resolve_output_path(args.prepare_narrative / "placeholder").parent
+    analysis = _load_prepared_analysis(
+        prepared_dir,
+        args,
+        {"ready", "analyzing", "failed", "completed", "narrating"},
+    )
+    existing_input = analysis.prepared.get("artifacts", {}).get("narrative_input")
+    existing_output = analysis.prepared.get("artifacts", {}).get("narrative_output")
+    existing_hash = analysis.prepared.get("source_snapshots", {}).get(
+        "narrative_input"
+    )
+    if (
+        analysis.prepared.get("state") == "narrating"
+        and isinstance(existing_input, str)
+        and isinstance(existing_output, str)
+        and isinstance(existing_hash, str)
+    ):
+        existing_payload = _read_json_artifact(
+            prepared_dir / existing_input, "narrative-input"
+        )
+        if _payload_hash(existing_payload) == existing_hash:
+            return {
+                "success": True,
+                "state": "narrating",
+                "period_key": analysis.prepared["period_key"],
+                "input": str(prepared_dir / existing_input),
+                "output": str(prepared_dir / existing_output),
+                "narrative_status": analysis.prepared.get("narrative", {}).get(
+                    "status"
+                ),
+                "reused": True,
+            }
+    narrative_input = {
+        "schema_version": PREPARED_ARTIFACT_SCHEMA_VERSION,
+        "period_key": analysis.prepared["period_key"],
+        "facts": _management_facts(analysis),
+    }
+    input_path = prepared_dir / "narrative-input.json"
+    output_path = prepared_dir / "narrative-output.json"
+    _write_json_artifact(narrative_input, input_path)
+    analysis.prepared["state"] = "narrating"
+    analysis.prepared["contract"] = {
+        "prompt_version": CODEX_INSIGHT_PROMPT_VERSION,
+        "prompt_hash": _codex_contract_hash(),
+    }
+    analysis.prepared["artifacts"].update(
+        {
+            "narrative_input": input_path.name,
+            "narrative_output": output_path.name,
+        }
+    )
+    analysis.prepared["source_snapshots"]["narrative_input"] = _payload_hash(
+        narrative_input
+    )
+    analysis.prepared["narrative"] = {"status": "pending"}
+    _write_json_artifact(analysis.prepared, analysis.manifest_path)
+    (prepared_dir / "COMPLETED").unlink(missing_ok=True)
+    return {
+        "success": True,
+        "state": "narrating",
+        "period_key": analysis.prepared["period_key"],
+        "input": str(input_path),
+        "output": str(output_path),
+        "narrative_status": "pending",
+        "reused": False,
+    }
+
+
+def _narrative_text(value: Any, label: str, maximum: int) -> str:
+    text = _safe_insight_text(value, maximum).strip()
+    if not text:
+        raise DailyReportError(f"管理叙事缺少{label}")
+    if re.search(r"\d", text):
+        raise DailyReportError(f"管理叙事{label}不得自行引用数字")
+    numeric_text = text
+    for lexical_word in (
+        "统一",
+        "一致",
+        "单一",
+        "唯一",
+        "同一",
+        "进一步",
+        "一旦",
+        "一律",
+        "一并",
+        "一体",
+    ):
+        numeric_text = numeric_text.replace(lexical_word, "")
+    if re.search(r"[零〇一二两三四五六七八九十百千万亿]", numeric_text) or re.search(
+        r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|"
+        r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|"
+        r"eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|"
+        r"eighty|ninety|hundreds?|thousands?|millions?|billions?|trillions?|"
+        r"first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
+        r"eleventh|twelfth|dozens?|scores?|half|halves|quarters?|couple|pair)\b",
+        numeric_text,
+        re.IGNORECASE,
+    ):
+        raise DailyReportError(f"管理叙事{label}不得自行引用数字")
+    return text
+
+
+def _validate_report_narrative(
+    payload: dict[str, Any],
+    narrative_input: dict[str, Any],
+    *,
+    allow_derived_priority: bool = False,
+) -> dict[str, Any]:
+    """校验管理叙事字段、事实引用和确定性优先级边界。"""
+    allowed = {
+        "schema_version",
+        "period_key",
+        "executive_summary",
+        "module_insights",
+        "risk_themes",
+        "governance_actions",
+        "limitations",
+    }
+    if set(payload) != allowed:
+        raise DailyReportError("管理叙事包含缺失或契约外顶层字段")
+    if (
+        payload.get("schema_version") != PREPARED_ARTIFACT_SCHEMA_VERSION
+        or payload.get("period_key") != narrative_input.get("period_key")
+    ):
+        raise DailyReportError("管理叙事元数据与事实包不一致")
+    facts = narrative_input["facts"]
+    known_modules = {item["module"] for item in facts["modules"]}
+    problem_by_ref = {
+        item["problem_ref"]: item for item in facts["all_problems"]
+    }
+    priority_rank = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4}
+
+    def text_list(key: str, minimum: int, maximum: int) -> list[str]:
+        values = payload.get(key)
+        if not isinstance(values, list) or not minimum <= len(values) <= maximum:
+            raise DailyReportError(f"管理叙事 {key} 数量不合法")
+        return [
+            _narrative_text(value, key, 1000 if key == "executive_summary" else 500)
+            for value in values
+        ]
+
+    module_insights = payload.get("module_insights")
+    if not isinstance(module_insights, list) or len(module_insights) > 7:
+        raise DailyReportError("管理叙事 module_insights 数量不合法")
+    normalized_modules = []
+    seen_modules: set[str] = set()
+    for item in module_insights:
+        if not isinstance(item, dict) or set(item) != {"module", "insight"}:
+            raise DailyReportError("管理叙事模块洞悉字段不合法")
+        module = str(item.get("module") or "")
+        if module not in known_modules or module in seen_modules:
+            raise DailyReportError("管理叙事模块未在事实包中声明或重复")
+        seen_modules.add(module)
+        normalized_modules.append(
+            {"module": module, "insight": _narrative_text(item["insight"], "模块洞悉", 300)}
+        )
+
+    def themed_items(
+        key: str, allowed_evidence_priorities: set[str]
+    ) -> list[dict[str, Any]]:
+        values = payload.get(key)
+        if not isinstance(values, list) or len(values) > 6:
+            raise DailyReportError(f"管理叙事 {key} 数量不合法")
+        normalized = []
+        for item in values:
+            expected_fields = {
+                "title",
+                "summary",
+                "problem_refs",
+                "recommendation",
+            }
+            if allow_derived_priority:
+                expected_fields.add("priority")
+            if not isinstance(item, dict) or set(item) != expected_fields:
+                raise DailyReportError(f"管理叙事 {key} 字段不合法")
+            refs = item.get("problem_refs")
+            if not isinstance(refs, list) or not refs:
+                raise DailyReportError(f"管理叙事 {key} 证据不合法")
+            if len(refs) != len(set(refs)) or any(ref not in problem_by_ref for ref in refs):
+                raise DailyReportError("管理叙事问题引用未在事实包中声明或重复")
+            evidence_priorities = {
+                problem_by_ref[ref]["priority"] for ref in refs
+            }
+            if not evidence_priorities <= allowed_evidence_priorities:
+                raise DailyReportError(f"管理叙事 {key} 引用了不允许的优先级")
+            priority = min(
+                evidence_priorities, key=lambda value: priority_rank[value]
+            )
+            if allow_derived_priority and item.get("priority") != priority:
+                raise DailyReportError("管理叙事派生优先级与确定性事实不一致")
+            normalized.append(
+                {
+                    "priority": priority,
+                    "title": _narrative_text(item["title"], "主题标题", 120),
+                    "summary": _narrative_text(item["summary"], "主题摘要", 600),
+                    "problem_refs": list(refs),
+                    "recommendation": _narrative_text(
+                        item["recommendation"], "治理建议", 800
+                    ),
+                }
+            )
+        return normalized
+
+    risk_themes = themed_items("risk_themes", {"P0", "P1"})
+    expected_risk_refs = {
+        item["problem_ref"] for item in facts["priority_risks"]
+    }
+    covered_risk_refs = {
+        problem_ref
+        for theme in risk_themes
+        for problem_ref in theme["problem_refs"]
+    }
+    if covered_risk_refs != expected_risk_refs:
+        raise DailyReportError("风险主题未完整覆盖确定性 P0/P1 问题")
+    governance_actions = themed_items("governance_actions", {"P1", "P2"})
+    has_governance_candidates = any(
+        item["priority"] in {"P1", "P2"} for item in facts["all_problems"]
+    )
+    if has_governance_candidates and not governance_actions:
+        raise DailyReportError("存在 P1/P2 问题时必须提供治理工作建议")
+    return {
+        "schema_version": PREPARED_ARTIFACT_SCHEMA_VERSION,
+        "period_key": narrative_input["period_key"],
+        "executive_summary": text_list("executive_summary", 1, 3),
+        "module_insights": normalized_modules,
+        "risk_themes": risk_themes,
+        "governance_actions": governance_actions,
+        "limitations": text_list("limitations", 1, 5),
+    }
+
+
+def validate_report_narrative(output: Path) -> dict[str, Any]:
+    """校验 Codex 管理叙事并原子更新 prepared 检查点。
+
+    Args:
+        output: Codex 写入且由 manifest 声明的 narrative-output.json 路径。
+
+    Returns:
+        周期键、规范化输出路径和 validated 状态。
+
+    Raises:
+        DailyReportError: 文件、哈希、字段、问题引用或优先级证据不合法。
+    """
+    output_path = resolve_output_path(output)
+    prepared_dir = output_path.parent
+    manifest_path = prepared_dir / "manifest.json"
+    manifest = _read_json_artifact(manifest_path, "准备清单")
+    declared_output = manifest.get("artifacts", {}).get("narrative_output")
+    if declared_output != output_path.name:
+        raise DailyReportError("管理叙事输出未在准备清单中声明")
+    input_path = prepared_dir / manifest["artifacts"]["narrative_input"]
+    narrative_input = _read_json_artifact(input_path, "narrative-input")
+    if _payload_hash(narrative_input) != manifest.get("source_snapshots", {}).get(
+        "narrative_input"
+    ):
+        raise DailyReportError("管理叙事事实包哈希不匹配")
+    payload = _read_json_artifact(output_path, "narrative-output")
+    canonical = _validate_report_narrative(payload, narrative_input)
+    _write_json_artifact(canonical, output_path)
+    manifest["narrative"] = {
+        "status": "validated",
+        "output_sha256": _payload_hash(canonical),
+        "validated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    _write_json_artifact(manifest, manifest_path)
+    return {
+        "success": True,
+        "status": "validated",
+        "period_key": manifest["period_key"],
+        "output": str(output_path),
+    }
+
+
+def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
+    """校验 Codex 分类，确定性聚合并发布日报。
+
+    Args:
+        args: 包含 prepared 目录、模型标识、输出位置和通知开关的命令参数。
+
+    Returns:
+        最终运行 ID、报告与结构化产物路径、通知状态和反馈数量。
+
+    Raises:
+        DailyReportError: 准备产物、分类输出、发布或通知不合法或失败。
+    """
+    prepared_dir = resolve_output_path(args.finalize_prepared / "placeholder").parent
+    analysis = _load_prepared_analysis(
+        prepared_dir, args, {"narrating", "failed"}
+    )
+    prepared = analysis.prepared
+    prepared_manifest_path = analysis.manifest_path
+    snapshots = analysis.snapshots
+    insight_runtime = analysis.insight_runtime
+    insight = analysis.insight
+    narrative_meta = prepared.get("narrative")
+    if not isinstance(narrative_meta, dict) or narrative_meta.get("status") != "validated":
+        raise DailyReportError("管理叙事尚未 validated，拒绝最终化")
+    narrative_input = _read_json_artifact(
+        prepared_dir / prepared["artifacts"]["narrative_input"], "narrative-input"
+    )
+    narrative_output = _read_json_artifact(
+        prepared_dir / prepared["artifacts"]["narrative_output"], "narrative-output"
+    )
+    if (
+        _payload_hash(narrative_input) != snapshots.get("narrative_input")
+        or _payload_hash(narrative_output) != narrative_meta.get("output_sha256")
+    ):
+        raise DailyReportError("管理叙事在检查点后发生变化")
+    narrative = _validate_report_narrative(
+        narrative_output, narrative_input, allow_derived_priority=True
+    )
+    classification_map = {
+        classification["feedback_uuid"]: classification
+        for classification in analysis.classifications
+    }
+    try:
+        taxonomy_store = _taxonomy_store(args.taxonomy_file)
+        taxonomy_state = taxonomy_store.persist(
+            taxonomy_store.load(),
+            analysis.model_feedbacks,
+            classification_map,
+        )
+    except (InsightConfigError, KeyError) as exc:
+        raise DailyReportError(str(exc)) from exc
+    insight_runtime["taxonomy_revision"] = int(taxonomy_state.get("revision") or 0)
+    window = analysis.window
+    comparison_window = analysis.comparison_window
+    feedbacks = analysis.feedbacks
+    management = {"facts": narrative_input["facts"], "narrative": narrative}
+    insight = {
+        **insight,
+        "management_facts": narrative_input["facts"],
+        "report_narrative": narrative,
+    }
 
     generated_at = datetime.now(timezone.utc)
     context = _run_context(window, generated_at, insight_requested=True)
@@ -1904,7 +2649,14 @@ def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
     )
     try:
         base_metrics = _build_base_metrics(feedbacks)
-        markdown = render_markdown(feedbacks, window, insight, False, base_metrics)
+        markdown = render_markdown(
+            feedbacks,
+            window,
+            insight,
+            False,
+            base_metrics,
+            management=management,
+        )
         output_path = resolve_output_path(
             args.output or Path(f"反馈日报-{window.label.replace(' 至 ', '_')}.md")
         )
@@ -2013,6 +2765,8 @@ def main(argv: list[str] | None = None) -> int:
             args.prepare_only,
             args.claim_ready,
             args.validate_chunk is not None,
+            args.prepare_narrative is not None,
+            args.validate_narrative is not None,
             args.finalize_prepared is not None,
         )
     )
@@ -2035,6 +2789,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
             elif args.validate_chunk is not None:
                 result = validate_prepared_chunk(args.validate_chunk)
+            elif args.prepare_narrative is not None:
+                result = prepare_report_narrative(args)
+            elif args.validate_narrative is not None:
+                result = validate_report_narrative(args.validate_narrative)
             else:
                 result = finalize_prepared_report(args)
         except FeedbackQueryError as exc:

@@ -181,7 +181,8 @@ python scripts/daily_feedback_report.py --claim-ready
 ```
 
 返回 `state=idle` 时直接结束，不生成或发送任何内容。领取命令也会恢复上一次未完成的
-`analyzing` 数据；返回 `state=analyzing` 时，按 manifest 的
+`analyzing/narrating` 数据。返回 `state=narrating` 时直接复用返回的叙事输入与状态：`pending`
+继续写叙事，`validated` 直接最终化，不重复生成事实包。返回 `state=analyzing` 时，按 manifest 的
 chunk 顺序处理；每个 `chunk-XXX.output.json` 只写契约允许的分类字段，且必须覆盖输入中的全部
 UUID。写完一块立即运行：
 
@@ -191,7 +192,23 @@ python scripts/daily_feedback_report.py \
 ```
 
 校验失败只修复该 chunk；不得直接修改 manifest、最终统计、Markdown 或完成标记。全部 chunk
-返回 `status=validated` 后执行离线收尾：
+返回 `status=validated` 后，先由 Python 生成确定性管理事实包：
+
+```bash
+python scripts/daily_feedback_report.py \
+  --prepare-narrative output/feedback-query/prepared/YYYY-MM-DD
+```
+
+Codex 读取返回的 `narrative-input.json`，按分类契约把执行摘要、模块洞悉、P0/P1 风险、治理项目和
+局限写入 `narrative-output.json`。AI 只能引用事实包中的 `problem_ref`，不得自行计算或改写数字。
+写完后执行：
+
+```bash
+python scripts/daily_feedback_report.py \
+  --validate-narrative output/feedback-query/prepared/YYYY-MM-DD/narrative-output.json
+```
+
+叙事校验失败只修复该文件。通过后执行离线收尾：
 
 ```bash
 python scripts/daily_feedback_report.py \
@@ -200,9 +217,12 @@ python scripts/daily_feedback_report.py \
   --send
 ```
 
-收尾阶段会再次校验所有输入哈希、chunk 元数据、稳定键、置信度和 UUID 全覆盖，再复用
+收尾阶段会再次校验所有输入哈希、chunk 元数据、稳定键、置信度、UUID 全覆盖和管理叙事引用，
+再复用
 `opscli.feedback.services.insight` 的确定性规则计算次数、环比、影响人数和 P0-P4，最后生成运行
-产物、发布 Markdown、推送企业微信并写入“YYYY-MM-DD AI 洞察已完成”的 `COMPLETED` 标记。
+产物，并以“范围与口径、执行摘要、根因分布、重点模块、重复问题证据、风险、治理工作、日环比、
+局限”为主报告结构；完整问题簇和反馈明细折叠在附录。之后发布 Markdown、推送企业微信并写入
+“YYYY-MM-DD AI 洞察已完成”的 `COMPLETED` 标记。
 分类不完整、文件被修改或通知失败都会留下结构化失败状态；Codex 不得绕过 Python 自行计算统计。
 准备阶段已命中 taxonomy 的反馈保存在单独的哈希校验产物中，不会出现在待分析 chunk；最终化
 阶段合并缓存分类和 Codex 新分类，并在校验通过后原子更新 taxonomy。
@@ -288,10 +308,12 @@ python scripts/daily_feedback_report.py \
 | `--prepare-only` | 否 | 只准备昨日脱敏数据、分块和 READY 标记，不调用模型或推送 |
 | `--claim-ready` | 否 | 领取最新 ready 数据并切换为 analyzing，供 Codex App 自动化使用 |
 | `--validate-chunk` | 否 | 校验一个 Codex chunk 输出并记录 validated/failed 检查点 |
+| `--prepare-narrative` | 否 | 基于已校验分类生成确定性管理事实包，供 Codex 撰写叙事 |
+| `--validate-narrative` | 否 | 校验管理叙事的问题引用、优先级边界和字段契约 |
 | `--finalize-prepared` | 否 | 从准备目录离线聚合并发布最终 AI 日报 |
 | `--analysis-model` | 否 | 最终化时记录的 Codex 模型名称，默认 `codex_app`，不参与统计 |
 
-日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表，并使用 Mermaid `pie` 扩展语法展示反馈类型与严重度分布；两张图在本地浏览器中并排展示，数量与占比整合在图例中，原始统计表默认折叠并继续作为不支持 Mermaid 时的降级数据；问题来源与状态统计表同样使用桌面双列、移动单列布局。洞察模式额外包含模块、主要问题、本周期/上一周期次数、变化、优先级和建议工作；群消息优先提醒最多 3 条 P0/P1 洞察。群消息使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节，不使用仅旧版 Markdown 支持的字体颜色和成员 `@` 语法。报告、运行产物与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据；未启用洞察时，群消息仍按“严重度 + 标题”聚合重复问题，最多展示 5 类 Critical/High 问题并标注每类反馈数，底部提供固定的“详细文档查看”入口，完整逐条记录保留在本地 Markdown 文件。
+基础日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表，并使用 Mermaid `pie` 扩展语法展示反馈类型与严重度分布。Codex 两阶段洞察日报改用管理结论优先结构，图表型基础分布由根因、重点模块、重复证据、风险和治理项目替代，完整问题簇与反馈明细折叠到附录。模型网关 `--insight` 回退仍保留原模块问题洞察表。群消息优先提醒最多 3 条 P0/P1 洞察，使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节。报告、运行产物与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据。
 
 ### 本地浏览日报
 

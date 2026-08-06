@@ -135,6 +135,60 @@ def _chunk_output(module: ModuleType, claimed: dict, chunk_input: dict) -> dict:
     }
 
 
+def _write_valid_narrative(
+    module: ModuleType,
+    prepared_dir: Path,
+    narrative_prepared: dict,
+) -> Path:
+    narrative_input = json.loads(
+        Path(narrative_prepared["input"]).read_text(encoding="utf-8")
+    )
+    problem_ref = narrative_input["facts"]["all_problems"][0]["problem_ref"]
+    module_name = narrative_input["facts"]["modules"][0]["module"]
+    problem_priority = narrative_input["facts"]["all_problems"][0]["priority"]
+    risk_themes = []
+    if problem_priority in {"P0", "P1"}:
+        risk_themes.append(
+            {
+                "title": "查询字段合同不稳定",
+                "summary": "同类字段映射失败仍在重复出现。",
+                "problem_refs": [problem_ref],
+                "recommendation": "统一字段解析入口并增加契约回归测试。",
+            }
+        )
+    output_path = Path(narrative_prepared["output"])
+    output_path.write_text(
+        json.dumps(
+            {
+                "schema_version": module.PREPARED_ARTIFACT_SCHEMA_VERSION,
+                "period_key": narrative_input["period_key"],
+                "executive_summary": [
+                    "主要问题集中在查询字段合同，应该优先统一解析入口并补齐回归验证。"
+                ],
+                "module_insights": [
+                    {
+                        "module": module_name,
+                        "insight": "该模块是本日最集中的治理入口。",
+                    }
+                ],
+                "risk_themes": risk_themes,
+                "governance_actions": [
+                    {
+                        "title": "收敛字段解析入口",
+                        "summary": "把重复问题合并为统一治理项目。",
+                        "problem_refs": [problem_ref],
+                        "recommendation": "统一解析、错误提示和回归测试。",
+                    }
+                ],
+                "limitations": ["单日报告只使用相邻对比窗口，不能代表长期故障率。"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return output_path
+
+
 def test_prepare_only_writes_ready_marker_and_chunk_without_calling_model(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -230,6 +284,20 @@ def test_two_stage_pipeline_reuses_persistent_taxonomy_without_codex_chunks(
     assert module.main(CLAIM_ARGS) == 0
     claimed = json.loads(capsys.readouterr().out)
     assert claimed["chunks"] == []
+    assert module.main(
+        [
+            "--prepare-narrative",
+            str(prepared_dir),
+            "--taxonomy-file",
+            str(taxonomy_path),
+        ]
+    ) == 0
+    narrative_prepared = json.loads(capsys.readouterr().out)
+    narrative_output = _write_valid_narrative(
+        module, prepared_dir, narrative_prepared
+    )
+    assert module.main(["--validate-narrative", str(narrative_output)]) == 0
+    capsys.readouterr()
     assert module.main(
         [
             "--finalize-prepared",
@@ -483,6 +551,13 @@ def test_finalize_does_not_leave_completed_marker_when_manifest_commit_fails(
     )
     assert module.main(["--validate-chunk", str(output_path)]) == 0
     capsys.readouterr()
+    assert module.main(["--prepare-narrative", str(prepared_dir)]) == 0
+    narrative_prepared = json.loads(capsys.readouterr().out)
+    narrative_output = _write_valid_narrative(
+        module, prepared_dir, narrative_prepared
+    )
+    assert module.main(["--validate-narrative", str(narrative_output)]) == 0
+    capsys.readouterr()
     original_write = module._write_json_artifact
 
     def fail_completed_manifest(payload, target_path):
@@ -563,6 +638,22 @@ def test_claim_and_finalize_prepared_codex_classifications(
     validated = json.loads(capsys.readouterr().out)
     assert validated["status"] == "validated"
     assert "sk-1234567890" not in output_path.read_text(encoding="utf-8")
+    assert module.main(["--prepare-narrative", str(prepared_dir)]) == 0
+    narrative_prepared = json.loads(capsys.readouterr().out)
+    narrative_input = json.loads(
+        Path(narrative_prepared["input"]).read_text(encoding="utf-8")
+    )
+    assert narrative_input["facts"]["root_causes"][0]["category"] == "字段映射"
+    assert narrative_input["facts"]["repeated_problems"] == []
+    assert module.main(["--prepare-narrative", str(prepared_dir)]) == 0
+    narrative_resumed = json.loads(capsys.readouterr().out)
+    assert narrative_resumed["reused"] is True
+    assert narrative_resumed["narrative_status"] == "pending"
+    narrative_output = _write_valid_narrative(
+        module, prepared_dir, narrative_prepared
+    )
+    assert module.main(["--validate-narrative", str(narrative_output)]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "validated"
     assert module.main(
         [
             "--finalize-prepared",
@@ -580,5 +671,114 @@ def test_claim_and_finalize_prepared_codex_classifications(
     assert manifest["analysis"]["provider"] == "codex_app"
     assert manifest["analysis"]["model"] == "scheduled-codex"
     assert (prepared_dir / "COMPLETED").read_text(encoding="utf-8") == "2026-08-05 AI 洞察已完成\n"
-    assert "## 四、模块问题洞察" in report
+    assert "## 一、范围与口径" in report
+    assert "## 二、执行摘要" in report
+    assert "## 三、根因分布" in report
+    assert "## 四、重点模块" in report
+    assert "## 五、重复问题证据" in report
+    assert "## 六、P0/P1 风险" in report
+    assert "## 七、治理工作建议" in report
+    assert "## 八、日环比" in report
+    assert "## 九、局限与后续" in report
+    assert "<summary>查看全部问题簇" in report
     assert "字段映射失败" in report
+
+
+def test_validate_narrative_rejects_unknown_problem_reference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    module = _load_script()
+    project_root = tmp_path / "repo"
+    (project_root / ".git").mkdir(parents=True)
+    monkeypatch.chdir(project_root)
+    _install_feedback_fakes(module, monkeypatch)
+    prepared_dir, claimed, chunk_input = _prepare_and_claim(module, capsys)
+    output_path = prepared_dir / claimed["chunks"][0]["output"]
+    output_path.write_text(
+        json.dumps(_chunk_output(module, claimed, chunk_input), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert module.main(["--validate-chunk", str(output_path)]) == 0
+    capsys.readouterr()
+    assert module.main(["--prepare-narrative", str(prepared_dir)]) == 0
+    narrative_prepared = json.loads(capsys.readouterr().out)
+    narrative_output = _write_valid_narrative(
+        module, prepared_dir, narrative_prepared
+    )
+    payload = json.loads(narrative_output.read_text(encoding="utf-8"))
+    payload["governance_actions"][0]["problem_refs"] = ["unknown/problem"]
+    narrative_output.write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+    assert module.main(["--validate-narrative", str(narrative_output)]) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert "未在事实包中声明" in error["msg"]
+
+    narrative_input = json.loads(
+        Path(narrative_prepared["input"]).read_text(encoding="utf-8")
+    )
+    payload["governance_actions"][0]["problem_refs"] = [
+        narrative_input["facts"]["all_problems"][0]["problem_ref"]
+    ]
+    payload["executive_summary"][0] = "本日发生 10 次字段映射失败。"
+    narrative_output.write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+    assert module.main(["--validate-narrative", str(narrative_output)]) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert "不得自行引用数字" in error["msg"]
+
+    payload["executive_summary"][0] = "本日发生十次字段映射失败。"
+    narrative_output.write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    assert module.main(["--validate-narrative", str(narrative_output)]) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert "不得自行引用数字" in error["msg"]
+
+    payload["executive_summary"][0] = "本日存在三项字段映射问题。"
+    narrative_output.write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    assert module.main(["--validate-narrative", str(narrative_output)]) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert "不得自行引用数字" in error["msg"]
+
+    payload["executive_summary"][0] = "The report contains three failures."
+    narrative_output.write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    assert module.main(["--validate-narrative", str(narrative_output)]) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert "不得自行引用数字" in error["msg"]
+
+    payload["executive_summary"][0] = "The report contains a dozen failures."
+    narrative_output.write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    assert module.main(["--validate-narrative", str(narrative_output)]) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert "不得自行引用数字" in error["msg"]
+
+    payload["executive_summary"][0] = "字段映射失败需要统一治理。"
+    risk_problem = narrative_input["facts"]["all_problems"][0]
+    risk_problem["priority"] = "P1"
+    narrative_input["facts"]["priority_risks"] = [risk_problem]
+    with pytest.raises(module.DailyReportError, match="未完整覆盖"):
+        module._validate_report_narrative(payload, narrative_input)
+
+    payload["risk_themes"] = [
+        {
+            "title": "字段映射风险",
+            "summary": "字段映射问题需要优先处理。",
+            "problem_refs": [risk_problem["problem_ref"]],
+            "recommendation": "统一字段解析入口。",
+        }
+    ]
+    payload["governance_actions"] = []
+    with pytest.raises(module.DailyReportError, match="必须提供治理工作建议"):
+        module._validate_report_narrative(payload, narrative_input)

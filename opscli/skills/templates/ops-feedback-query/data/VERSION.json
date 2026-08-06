@@ -1,6 +1,6 @@
 {
   "name": "ops-feedback-query",
-  "version": "v1.9.0",
+  "version": "v1.10.0",
   "updated_at": "2026-08-06",
-  "notes": "新增持久 taxonomy 复用及基于结构化日报快照的周报、自然月月报和处置指标。"
+  "notes": "新增受约束的 Codex 管理叙事阶段，日报改为管理洞察优先并折叠结构化明细。"
 }
