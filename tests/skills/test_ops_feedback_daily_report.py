@@ -174,6 +174,8 @@ def test_report_command_paginates_deduplicates_and_writes_safe_markdown(
     assert markdown.count("<details>") == 2
     assert "<summary>查看反馈类型数据表</summary>" in markdown
     assert "<summary>查看问题严重度数据表</summary>" in markdown
+    assert "<!-- feedback-problem-distribution-grid:start -->" in markdown
+    assert markdown.count("<!-- feedback-problem-distribution-panel:start -->") == 2
     assert "| high | 1 |" in markdown
     assert "查询字段不存在" in markdown
     assert "secret@example.com" not in markdown

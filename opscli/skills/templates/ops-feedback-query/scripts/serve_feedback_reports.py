@@ -51,12 +51,21 @@ DISTRIBUTION_GRID_START = "<!-- feedback-distribution-grid:start -->"
 DISTRIBUTION_GRID_END = "<!-- feedback-distribution-grid:end -->"
 DISTRIBUTION_PANEL_START = "<!-- feedback-distribution-panel:start -->"
 DISTRIBUTION_PANEL_END = "<!-- feedback-distribution-panel:end -->"
+# 以下成对标记只描述问题分布双列表格，避免与上方图表布局协议混用。
+PROBLEM_DISTRIBUTION_GRID_START = "<!-- feedback-problem-distribution-grid:start -->"
+PROBLEM_DISTRIBUTION_GRID_END = "<!-- feedback-problem-distribution-grid:end -->"
+PROBLEM_DISTRIBUTION_PANEL_START = "<!-- feedback-problem-distribution-panel:start -->"
+PROBLEM_DISTRIBUTION_PANEL_END = "<!-- feedback-problem-distribution-panel:end -->"
 DETAILS_SUMMARY_PATTERN = re.compile(r"^<summary>([^<\r\n]{1,80})</summary>$")
 MARKDOWN_LAYOUT_TAGS = {
     DISTRIBUTION_GRID_START: '<div class="distribution-grid">',
     DISTRIBUTION_GRID_END: "</div>",
     DISTRIBUTION_PANEL_START: '<section class="distribution-panel">',
     DISTRIBUTION_PANEL_END: "</section>",
+    PROBLEM_DISTRIBUTION_GRID_START: '<div class="summary-table-grid">',
+    PROBLEM_DISTRIBUTION_GRID_END: "</div>",
+    PROBLEM_DISTRIBUTION_PANEL_START: '<section class="summary-table-panel">',
+    PROBLEM_DISTRIBUTION_PANEL_END: "</section>",
     "<details>": '<details class="data-table">',
     "</details>": "</details>",
 }
@@ -437,6 +446,10 @@ def _page(title: str, body: str, reports: list[dict[str, Any]], selected: str | 
     .data-table {{ margin-top: 10px; border-top: 1px solid var(--line); }}
     .data-table summary {{ padding: 10px 0 0; color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; }}
     .data-table .table-wrap {{ margin: 10px 0 0; }}
+    .summary-table-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 12px 0 28px; }}
+    .summary-table-panel {{ min-width: 0; }}
+    .summary-table-panel h3 {{ margin: 0 0 8px; }}
+    .summary-table-panel .table-wrap {{ margin: 0; }}
     .table-wrap {{ width: 100%; overflow-x: auto; margin: 10px 0 22px; border: 1px solid var(--line); }}
     table {{ width: 100%; border-collapse: collapse; background: var(--paper); font-size: 13px; }}
     th, td {{ min-width: 90px; padding: 9px 11px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }}
@@ -451,6 +464,7 @@ def _page(title: str, body: str, reports: list[dict[str, Any]], selected: str | 
       main {{ padding: 24px 16px 56px; }}
       h1 {{ font-size: 23px; }}
       .distribution-grid {{ grid-template-columns: 1fr; }}
+      .summary-table-grid {{ grid-template-columns: 1fr; }}
       .chart-layout {{ grid-template-columns: 1fr; }}
       .distribution-panel {{ padding: 0 14px 14px; }}
       .distribution-panel .chart-layout {{ grid-template-columns: 1fr; }}

@@ -1,6 +1,6 @@
 {
   "name": "ops-feedback-query",
-  "version": "v1.6.0",
+  "version": "v1.6.1",
   "updated_at": "2026-08-06",
-  "notes": "分布图改为响应式双列概览，原始统计表默认折叠。"
+  "notes": "问题来源与状态统计表改为响应式双列布局。"
 }

@@ -70,6 +70,11 @@ DISTRIBUTION_GRID_START = "<!-- feedback-distribution-grid:start -->"
 DISTRIBUTION_GRID_END = "<!-- feedback-distribution-grid:end -->"
 DISTRIBUTION_PANEL_START = "<!-- feedback-distribution-panel:start -->"
 DISTRIBUTION_PANEL_END = "<!-- feedback-distribution-panel:end -->"
+# 以下成对标记界定问题分布双列表格，供本地渲染器安全组合布局。
+PROBLEM_DISTRIBUTION_GRID_START = "<!-- feedback-problem-distribution-grid:start -->"
+PROBLEM_DISTRIBUTION_GRID_END = "<!-- feedback-problem-distribution-grid:end -->"
+PROBLEM_DISTRIBUTION_PANEL_START = "<!-- feedback-problem-distribution-panel:start -->"
+PROBLEM_DISTRIBUTION_PANEL_END = "<!-- feedback-problem-distribution-panel:end -->"
 
 
 class DailyReportError(Exception):
@@ -542,17 +547,29 @@ def render_markdown(
         "",
         "## 三、问题分布",
         "",
+        PROBLEM_DISTRIBUTION_GRID_START,
+        "",
+        PROBLEM_DISTRIBUTION_PANEL_START,
+        "",
         "### 来源",
         "",
         "| 来源 | 数量 |",
         "|---|---:|",
         *_count_rows(source_counter, ("cli", "mcp", "skill", "api")),
         "",
+        PROBLEM_DISTRIBUTION_PANEL_END,
+        "",
+        PROBLEM_DISTRIBUTION_PANEL_START,
+        "",
         "### 状态",
         "",
         "| 状态 | 数量 |",
         "|---|---:|",
         *_count_rows(status_counter, ("new", "triaged", "processing", "resolved", "rejected")),
+        "",
+        PROBLEM_DISTRIBUTION_PANEL_END,
+        "",
+        PROBLEM_DISTRIBUTION_GRID_END,
         "",
         ]
     )

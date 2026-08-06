@@ -180,6 +180,42 @@ def test_report_server_safely_falls_back_for_unsupported_mermaid(tmp_path: Path)
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in response.text
 
 
+def test_report_server_renders_problem_distribution_tables_side_by_side(tmp_path: Path):
+    """问题来源和状态表应组成桌面双列，并在移动端回落单列。"""
+    module = _load_script()
+    report = tmp_path / "反馈日报-2026-08-04.md"
+    report.write_text(
+        "\n".join(
+            [
+                "<!-- feedback-problem-distribution-grid:start -->",
+                "<!-- feedback-problem-distribution-panel:start -->",
+                "### 来源",
+                "| 来源 | 数量 |",
+                "|---|---:|",
+                "| cli | 8 |",
+                "<!-- feedback-problem-distribution-panel:end -->",
+                "<!-- feedback-problem-distribution-panel:start -->",
+                "### 状态",
+                "| 状态 | 数量 |",
+                "|---|---:|",
+                "| new | 6 |",
+                "<!-- feedback-problem-distribution-panel:end -->",
+                "<!-- feedback-problem-distribution-grid:end -->",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with TestClient(module.create_app(tmp_path)) as client:
+        response = client.get(f"/reports/{report.name}")
+
+    assert response.status_code == 200
+    assert '<div class="summary-table-grid">' in response.text
+    assert response.text.count('<section class="summary-table-panel">') == 2
+    assert ".summary-table-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));" in response.text
+    assert ".summary-table-grid { grid-template-columns: 1fr; }" in response.text
+
+
 def test_report_server_accepts_generated_date_range_name(tmp_path: Path):
     """跨日期查询生成的默认日报文件名应正常列出和读取。"""
     module = _load_script()
