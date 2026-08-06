@@ -5411,3 +5411,11 @@
 **影响范围**：SellerSprite 持久调度器启动、公共账号池刷新时机与 Collector MCP 空闲日志。
 **回滚方式**：回退本条测试、调度器刷新条件及对应变更记录。
 ---
+## 2026-08-06 feedback - 标准化 Observation Schema V2
+
+**变更原因**：反馈提交依赖自由结构 context，缺少统一事件标识、链路标识、耗时、重试次数和运行时信息，不利于跨来源聚合与后续周月统计。
+**改动点**：新增 Observation V2 规范化模块；FeedbackManager 的字段模式和文件模式统一写入 `context.observation`，自动补齐事件、UTC 时间、来源、操作、结果、客户端与运行时字段，并校验调用方提供的链路和数值字段；新增脱敏 taxonomy 持久化，保留有意义的状态/错误码，只归一化明确动态 ID，错误信号仅保存 SHA-256，高置信度分类跨运行命中时跳过模型；taxonomy 写入增加跨进程锁和存储身份校验；feedback insight 与 Codex 两阶段日报支持 `--taxonomy-file`；新增基于已完成日报 `manifest.json + clusters.json` 的周报/月报生成器，输出 coverage、处置快照、问题生命周期、复发和优先级理由等指标；本地浏览服务支持周报命名。
+**验证结果**：反馈域、日报、周期报告、浏览服务、部署和 Skill 契约聚焦回归 `137 passed`；`compileall` 与 `git diff --check` 通过。项目全量测试受仓库既有同名测试模块收集冲突、Shopify `_shopify_manager` 导入缺失及全局 capture 关闭异常阻断；当前环境未安装 Ruff。
+**影响范围**：feedback CLI、MCP `feedback_submit`、直接使用 FeedbackManager 的提交 payload，以及内部 `ops-feedback` / `ops-feedback-query` Skill；沿用 context JSON，不要求现有后端新增字段。本轮不包含 canonical Problem 与 GitLab Issue 映射。
+**回滚方式**：回退 Observation 规范化、taxonomy 存储与两阶段接入、周期报告生成器、浏览服务周报识别、Skill 文档/版本及对应测试。
+---

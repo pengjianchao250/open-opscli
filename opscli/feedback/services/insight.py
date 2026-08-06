@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from time import monotonic, sleep
+from typing import Any, Iterator
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import httpx
 
@@ -27,6 +32,9 @@ MODEL_REQUEST_ATTEMPTS = 2
 REVIEW_CONFIDENCE_THRESHOLD = 0.7
 # 后续批次只携带有限的问题分类表，避免大窗口请求随批次数无限增长。
 MAX_TAXONOMY_ITEMS = 200
+# taxonomy 文件独立版本化，避免与日报运行产物 schema 混用。
+TAXONOMY_SCHEMA_VERSION = "1.0"
+DEFAULT_TAXONOMY_PATH = CONFIG_DIR / "feedback_taxonomy.json"
 # 模型输出契约变更时递增，供运行产物审计和缓存失效使用。
 INSIGHT_PROMPT_VERSION = "v1"
 INSIGHT_SYSTEM_PROMPT = (
@@ -58,12 +66,16 @@ JWT_PATTERN = re.compile(
 )
 # module/problem_key 只能使用稳定的机器可读键，防止自由文本污染聚合维度。
 STABLE_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-# 动态标识和数字从重复错误模板中移除，使跨周期同类错误可确定性对齐。
+# 动态标识从重复错误模板中移除，使跨周期同类错误可确定性对齐。
 UUID_PATTERN = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
     re.IGNORECASE,
 )
-NUMBER_PATTERN = re.compile(r"\b\d+\b")
+# 只归一化明确由字段名标识的动态数字，保留 HTTP 状态和业务错误码。
+VOLATILE_NUMBER_PATTERN = re.compile(
+    r"(?i)(\b(?:id|field|alias|row|line|offset|attempt|request_id|task_id|job_id|trace_id)"
+    r"\s*[:=#-]?\s*)\d+\b"
+)
 # 严重度顺序和分值用于本地计算优先级，模型不能覆盖。
 SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 SEVERITY_SCORE = {"low": 10, "medium": 25, "high": 40, "critical": 100}
@@ -147,6 +159,286 @@ class InsightModelConfig:
             model=model,
             batch_size=batch_size,
         )
+
+
+@contextmanager
+def _taxonomy_file_lock(lock_path: Path) -> Iterator[None]:
+    """跨平台独占 taxonomy 写锁，避免并发读改写丢失更新。"""
+    deadline = monotonic() + 5.0
+    with lock_path.open("a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        acquired = False
+        while not acquired:
+            try:
+                lock_file.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except OSError as exc:
+                if monotonic() >= deadline:
+                    raise InsightConfigError("反馈 taxonomy 写锁等待超时") from exc
+                sleep(0.05)
+        try:
+            yield
+        finally:
+            lock_file.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+class FeedbackTaxonomyStore:
+    """持久化脱敏问题分类和确定性错误信号映射。"""
+
+    def __init__(self, path: Path = DEFAULT_TAXONOMY_PATH) -> None:
+        self.path = path.expanduser()
+
+    @staticmethod
+    def _empty() -> dict[str, Any]:
+        """返回新的 taxonomy 空状态。"""
+        return {
+            "schema_version": TAXONOMY_SCHEMA_VERSION,
+            "revision": 0,
+            "items": [],
+            "signal_fingerprints": {},
+        }
+
+    def load(self) -> dict[str, Any]:
+        """读取并校验持久 taxonomy。
+
+        Returns:
+            已校验的 taxonomy 状态；文件不存在时返回空状态。
+
+        Raises:
+            InsightConfigError: 文件不可读、JSON 非法或 schema 不兼容。
+        """
+        if not self.path.exists():
+            return self._empty()
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise InsightConfigError(f"反馈 taxonomy 文件不可读取或不是合法 JSON: {self.path}") from exc
+        if not isinstance(payload, dict) or payload.get("schema_version") != TAXONOMY_SCHEMA_VERSION:
+            raise InsightConfigError("反馈 taxonomy schema_version 不受支持")
+        if not isinstance(payload.get("items"), list) or not isinstance(
+            payload.get("signal_fingerprints"), dict
+        ):
+            raise InsightConfigError("反馈 taxonomy 缺少 items 或 signal_fingerprints")
+        return payload
+
+    @staticmethod
+    def taxonomy_items(state: dict[str, Any]) -> list[dict[str, str]]:
+        """返回可安全发送给模型的有限 taxonomy 摘要。
+
+        Args:
+            state: 已加载的 taxonomy 状态。
+
+        Returns:
+            最多 200 条不含原始错误或指纹的问题分类摘要。
+        """
+        result: list[dict[str, str]] = []
+        for item in state.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            module = str(item.get("module") or "")
+            problem_key = str(item.get("problem_key") or "")
+            problem_summary = str(item.get("problem_summary") or "")
+            if module and problem_key and problem_summary:
+                result.append(
+                    {
+                        "module": module,
+                        "problem_key": problem_key,
+                        "problem_summary": problem_summary,
+                    }
+                )
+            if len(result) >= MAX_TAXONOMY_ITEMS:
+                break
+        return result
+
+    @staticmethod
+    def _signal_fingerprint(item: dict[str, Any]) -> str | None:
+        """把规范化错误信号转换为不可逆哈希，避免持久化原始错误。"""
+        signal = _normalized_problem_signal(item)
+        if signal is None:
+            return None
+        return hashlib.sha256(signal.encode("utf-8")).hexdigest()
+
+    def match(self, state: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
+        """按确定性错误信号查找既有分类。
+
+        Args:
+            state: 已加载的 taxonomy 状态。
+            item: 包含反馈 UUID、入口和结构化错误的脱敏反馈。
+
+        Returns:
+            命中时返回绑定当前反馈 UUID 的分类，否则返回 None。
+        """
+        fingerprint = self._signal_fingerprint(item)
+        if fingerprint is None:
+            return None
+        stored = state.get("signal_fingerprints", {}).get(fingerprint)
+        if not isinstance(stored, dict):
+            return None
+        classification = dict(stored)
+        classification["feedback_uuid"] = item["feedback_uuid"]
+        try:
+            return _validate_classifications([classification], {item["feedback_uuid"]})[
+                item["feedback_uuid"]
+            ]
+        except InsightModelError:
+            return None
+
+    def persist(
+        self,
+        state: dict[str, Any],
+        feedbacks: list[dict[str, Any]],
+        classifications: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """加锁合并高置信度分类并以原子替换写入 taxonomy。
+
+        Args:
+            state: 调用方已读取的 taxonomy 状态，用于兼容同一分析批次。
+            feedbacks: 本轮完成分类的脱敏反馈。
+            classifications: 以反馈 UUID 为键的已校验分类。
+
+        Returns:
+            合并并持久化后的最新 taxonomy 状态。
+
+        Raises:
+            InsightConfigError: taxonomy 无法读取、加锁或写入。
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.path.with_name(f".{self.path.name}.lock")
+        with _taxonomy_file_lock(lock_path):
+            latest = self.load()
+            updated = dict(latest)
+            items_by_key = {
+                (str(item.get("module")), str(item.get("problem_key"))): dict(item)
+                for source in (state, latest)
+                for item in source.get("items", [])
+                if isinstance(item, dict) and item.get("module") and item.get("problem_key")
+            }
+            signals = {
+                **dict(state.get("signal_fingerprints", {})),
+                **dict(latest.get("signal_fingerprints", {})),
+            }
+            without_signal: list[tuple[dict[str, Any], dict[str, Any], None]] = []
+            best_by_fingerprint: dict[
+                str, tuple[dict[str, Any], dict[str, Any], str]
+            ] = {}
+            for feedback in feedbacks:
+                classification = classifications[feedback["feedback_uuid"]]
+                if float(classification["confidence"]) < REVIEW_CONFIDENCE_THRESHOLD:
+                    continue
+                fingerprint = self._signal_fingerprint(feedback)
+                if fingerprint is None:
+                    without_signal.append((feedback, classification, None))
+                    continue
+                selected = best_by_fingerprint.get(fingerprint)
+                if (
+                    selected is None
+                    or classification["confidence"] > selected[1]["confidence"]
+                ):
+                    best_by_fingerprint[fingerprint] = (
+                        feedback,
+                        classification,
+                        fingerprint,
+                    )
+
+            changed = False
+            selected_classifications = [
+                *without_signal,
+                *(best_by_fingerprint[key] for key in sorted(best_by_fingerprint)),
+            ]
+            for _, classification, fingerprint in selected_classifications:
+                existing = signals.get(fingerprint) if fingerprint is not None else None
+                persisted_fields = {
+                    "module",
+                    "problem_key",
+                    "problem_category",
+                    "problem_summary",
+                    "recommended_work",
+                    "confidence",
+                }
+                if isinstance(existing, dict) and persisted_fields.issubset(existing):
+                    try:
+                        existing_confidence = float(existing.get("confidence"))
+                    except (TypeError, ValueError):
+                        existing_confidence = -1.0
+                    if existing_confidence >= float(classification["confidence"]):
+                        classification = existing
+                taxonomy_item = {
+                    "module": classification["module"],
+                    "problem_key": classification["problem_key"],
+                    "problem_summary": classification["problem_summary"],
+                }
+                taxonomy_key = (taxonomy_item["module"], taxonomy_item["problem_key"])
+                if items_by_key.get(taxonomy_key) != taxonomy_item:
+                    items_by_key[taxonomy_key] = taxonomy_item
+                    changed = True
+                if fingerprint is None:
+                    continue
+                stored = {
+                    key: classification[key]
+                    for key in (
+                        "module",
+                        "problem_key",
+                        "problem_category",
+                        "problem_summary",
+                        "recommended_work",
+                        "confidence",
+                    )
+                }
+                if signals.get(fingerprint) != stored:
+                    signals[fingerprint] = stored
+                    changed = True
+            if not changed:
+                return latest
+
+            updated.update(
+                {
+                    "schema_version": TAXONOMY_SCHEMA_VERSION,
+                    "revision": int(latest.get("revision") or 0) + 1,
+                    "updated_at": datetime.now(timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                    "items": [items_by_key[key] for key in sorted(items_by_key)],
+                    "signal_fingerprints": {key: signals[key] for key in sorted(signals)},
+                }
+            )
+            temporary = self.path.with_name(f".{self.path.name}.{uuid4().hex}.tmp")
+            try:
+                temporary.write_text(
+                    json.dumps(updated, ensure_ascii=False, indent=2, sort_keys=True),
+                    encoding="utf-8",
+                )
+                temporary.replace(self.path)
+                try:
+                    self.path.chmod(0o600)
+                except OSError:
+                    pass
+            except OSError as exc:
+                raise InsightConfigError(f"反馈 taxonomy 文件无法写入: {self.path}") from exc
+            finally:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            return updated
 
 
 class OpenAICompatibleInsightClient:
@@ -403,7 +695,7 @@ def _normalized_problem_signal(item: dict[str, Any]) -> str | None:
         return None
     signal = error_message.lower()
     signal = UUID_PATTERN.sub("<uuid>", signal)
-    signal = NUMBER_PATTERN.sub("<number>", signal)
+    signal = VOLATILE_NUMBER_PATTERN.sub(r"\1<number>", signal)
     signal = " ".join(signal.split())
     operation = str(
         item.get("skill_name")
@@ -412,7 +704,8 @@ def _normalized_problem_signal(item: dict[str, Any]) -> str | None:
         or "unknown_operation"
     ).strip().lower()
     system_alias = str(item.get("system_alias") or "unknown_system").strip().lower()
-    return f"{system_alias}:{operation}:{signal}"
+    error_code = str(item.get("error_code") or "unknown_code").strip().lower()
+    return f"{system_alias}:{operation}:{error_code}:{signal}"
 
 
 def _reconcile_repeated_signatures(
@@ -421,13 +714,19 @@ def _reconcile_repeated_signatures(
 ) -> dict[str, dict[str, Any]]:
     """用确定性错误模板对齐跨模型批次的重复问题分类。"""
     canonical: dict[str, dict[str, Any]] = {}
+    for item in feedbacks:
+        signature = _normalized_problem_signal(item)
+        if signature is None:
+            continue
+        classification = classifications[item["feedback_uuid"]]
+        current = canonical.get(signature)
+        if current is None or classification["confidence"] > current["confidence"]:
+            canonical[signature] = classification
     reconciled: dict[str, dict[str, Any]] = {}
     for item in feedbacks:
         feedback_uuid = item["feedback_uuid"]
         classification = classifications[feedback_uuid]
         signature = _normalized_problem_signal(item)
-        if signature is not None and signature not in canonical:
-            canonical[signature] = classification
         selected = dict(canonical[signature] if signature is not None else classification)
         selected["feedback_uuid"] = feedback_uuid
         # 每条记录保留自身置信度，低置信度不会因复用分类键被抬高。
@@ -488,11 +787,20 @@ class FeedbackInsightManager:
         client: OpenAI-compatible 反馈分类客户端。
     """
 
-    def __init__(self, client: OpenAICompatibleInsightClient) -> None:
+    def __init__(
+        self,
+        client: OpenAICompatibleInsightClient,
+        taxonomy_store: FeedbackTaxonomyStore | None = None,
+    ) -> None:
         self.client = client
+        self.taxonomy_store = taxonomy_store
 
     @classmethod
-    def from_config(cls, path: Path | None = None) -> "FeedbackInsightManager":
+    def from_config(
+        cls,
+        path: Path | None = None,
+        taxonomy_path: Path | None = None,
+    ) -> "FeedbackInsightManager":
         """从配置文件创建反馈洞察管理器。
 
         Args:
@@ -504,7 +812,10 @@ class FeedbackInsightManager:
         Raises:
             InsightConfigError: 模型配置缺失或不合法。
         """
-        return cls(OpenAICompatibleInsightClient(InsightModelConfig.load(path)))
+        return cls(
+            OpenAICompatibleInsightClient(InsightModelConfig.load(path)),
+            taxonomy_store=FeedbackTaxonomyStore(taxonomy_path or DEFAULT_TAXONOMY_PATH),
+        )
 
     def analyze(self, payload: dict[str, Any]) -> dict[str, Any]:
         """分类并聚合当前周期及上一周期反馈。
@@ -530,11 +841,30 @@ class FeedbackInsightManager:
         if not current:
             return self._empty_result(payload)
 
-        model_input = [*(_model_feedback(item, "current") for item in current)]
-        model_input.extend(_model_feedback(item, "comparison") for item in previous)
+        taxonomy_state = self.taxonomy_store.load() if self.taxonomy_store else None
+        model_input: list[dict[str, Any]] = []
         classifications: dict[str, dict[str, Any]] = {}
-        taxonomy: list[dict[str, str]] = []
-        taxonomy_keys: set[tuple[str, str]] = set()
+        reused_count = 0
+        for item in current:
+            cached = self.taxonomy_store.match(taxonomy_state, item) if self.taxonomy_store else None
+            if cached is not None:
+                classifications[item["feedback_uuid"]] = cached
+                reused_count += 1
+            else:
+                model_input.append(_model_feedback(item, "current"))
+        for item in previous:
+            cached = self.taxonomy_store.match(taxonomy_state, item) if self.taxonomy_store else None
+            if cached is not None:
+                classifications[item["feedback_uuid"]] = cached
+                reused_count += 1
+            else:
+                model_input.append(_model_feedback(item, "comparison"))
+        taxonomy = (
+            self.taxonomy_store.taxonomy_items(taxonomy_state)
+            if self.taxonomy_store and taxonomy_state is not None
+            else []
+        )
+        taxonomy_keys = {(item["module"], item["problem_key"]) for item in taxonomy}
         for start in range(0, len(model_input), self.client.config.batch_size):
             batch = model_input[start : start + self.client.config.batch_size]
             batch_uuids = {item["feedback_uuid"] for item in batch}
@@ -555,18 +885,36 @@ class FeedbackInsightManager:
                     )
         if set(classifications) != all_uuids:
             raise InsightModelError("模型未返回全部反馈分类")
+        reconciled = _reconcile_repeated_signatures(all_feedbacks, classifications)
+        taxonomy_revision = None
+        if self.taxonomy_store and taxonomy_state is not None:
+            taxonomy_state = self.taxonomy_store.persist(
+                taxonomy_state,
+                all_feedbacks,
+                reconciled,
+            )
+            taxonomy_revision = int(taxonomy_state.get("revision") or 0)
+        model_metadata = {
+            "provider": "openai_compatible",
+            "model": self.client.config.model,
+            "batch_size": self.client.config.batch_size,
+            "batch_count": (len(model_input) + self.client.config.batch_size - 1)
+            // self.client.config.batch_size,
+            "prompt_version": INSIGHT_PROMPT_VERSION,
+            "prompt_hash": INSIGHT_PROMPT_HASH,
+        }
+        if self.taxonomy_store:
+            model_metadata.update(
+                {
+                    "classified_count": len(model_input),
+                    "reused_count": reused_count,
+                    "taxonomy_revision": taxonomy_revision,
+                }
+            )
         return aggregate_feedback_classifications(
             payload,
-            list(classifications.values()),
-            model_metadata={
-                "provider": "openai_compatible",
-                "model": self.client.config.model,
-                "batch_size": self.client.config.batch_size,
-                "batch_count": (len(model_input) + self.client.config.batch_size - 1)
-                // self.client.config.batch_size,
-                "prompt_version": INSIGHT_PROMPT_VERSION,
-                "prompt_hash": INSIGHT_PROMPT_HASH,
-            },
+            list(reconciled.values()),
+            model_metadata=model_metadata,
         )
 
     def _empty_result(self, payload: dict[str, Any]) -> dict[str, Any]:

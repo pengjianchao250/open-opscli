@@ -232,6 +232,21 @@ def test_report_server_accepts_generated_date_range_name(tmp_path: Path):
     assert "<h1>区间日报</h1>" in rendered.text
 
 
+def test_report_server_accepts_generated_weekly_report_name(tmp_path: Path):
+    """周期报告生成器发布的周报应正常列出和读取。"""
+    module = _load_script()
+    report = tmp_path / "反馈周报-2026-07-27_2026-08-02.md"
+    report.write_text("# 反馈周报", encoding="utf-8")
+
+    with TestClient(module.create_app(tmp_path)) as client:
+        listing = client.get("/api/reports")
+        rendered = client.get(f"/reports/{report.name}")
+
+    assert [item["name"] for item in listing.json()["reports"]] == [report.name]
+    assert rendered.status_code == 200
+    assert "<h1>反馈周报</h1>" in rendered.text
+
+
 def test_report_server_home_redirect_has_security_headers(tmp_path: Path):
     """首页重定向也必须携带与内容响应一致的安全头。"""
     module = _load_script()

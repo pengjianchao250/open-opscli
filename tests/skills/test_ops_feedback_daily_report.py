@@ -44,6 +44,7 @@ def test_run_feedback_insight_computes_process_timeout_from_batch_count(
     module = _load_script()
     captured: dict[str, object] = {}
     config_path = tmp_path / "model-config.json"
+    taxonomy_path = tmp_path / "feedback-taxonomy.json"
     config_path.write_text(json.dumps({"batch_size": 50}), encoding="utf-8")
     monkeypatch.setattr(module, "DEFAULT_INSIGHT_CONFIG", config_path)
 
@@ -63,11 +64,13 @@ def test_run_feedback_insight_computes_process_timeout_from_batch_count(
             "current_feedbacks": [{"feedback_uuid": str(index)} for index in range(101)],
             "comparison_feedbacks": [],
         },
+        taxonomy_path=taxonomy_path,
     )
 
     assert result == {"problems": []}
     assert captured["timeout"] == 1860.0
     assert "--config-file" not in captured["command"]
+    assert captured["command"][-2:] == ["--taxonomy-file", str(taxonomy_path)]
 
 
 def test_report_command_paginates_deduplicates_and_writes_safe_markdown(
@@ -665,9 +668,10 @@ def test_insight_mode_compares_previous_period_and_renders_module_actions(
             ],
         }
 
-    def fake_insight(payload, config_path=None):
+    def fake_insight(payload, config_path=None, taxonomy_path=None):
         insight_input.update(payload)
         assert config_path == Path("model-config.json")
+        assert taxonomy_path is None
         return {
             "problems": [
                 {

@@ -166,6 +166,11 @@ def insight(
         "--config-file",
         help="模型配置 JSON 文件，默认 ~/.config/opscli/feedback_insight.json",
     ),
+    taxonomy_file: str | None = typer.Option(
+        None,
+        "--taxonomy-file",
+        help="持久 taxonomy JSON 文件，默认 ~/.config/opscli/feedback_taxonomy.json",
+    ),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ) -> None:
     """使用大模型分类反馈并输出确定性聚合洞察。
@@ -182,7 +187,10 @@ def insight(
         payload = load_json_file(input_file, label="input-file")
         if not isinstance(payload, dict):
             raise InvalidPayloadError("--input-file 内容必须是 JSON 对象")
-        manager = FeedbackInsightManager.from_config(Path(config_file) if config_file else None)
+        manager = FeedbackInsightManager.from_config(
+            Path(config_file) if config_file else None,
+            Path(taxonomy_file) if taxonomy_file else None,
+        )
         data = manager.analyze(payload)
         response = {
             "success": True,

@@ -80,6 +80,10 @@ MONTHLY_REPORT_NAME_PATTERN = re.compile(
     r"^\d{4}年\d{1,2}月反馈复盘分析报告\.md$",
     re.IGNORECASE,
 )
+WEEKLY_REPORT_NAME_PATTERN = re.compile(
+    r"^反馈周报-\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}\.md$",
+    re.IGNORECASE,
+)
 
 
 class ReportServerError(Exception):
@@ -156,9 +160,10 @@ def _format_size(size: int) -> str:
 
 
 def _is_report_name(name: str) -> bool:
-    """判断文件名是否属于反馈日报或月度复盘报告。"""
+    """判断文件名是否属于反馈日报、周报或月度复盘报告。"""
     return bool(
         DAILY_REPORT_NAME_PATTERN.fullmatch(name)
+        or WEEKLY_REPORT_NAME_PATTERN.fullmatch(name)
         or MONTHLY_REPORT_NAME_PATTERN.fullmatch(name)
     )
 

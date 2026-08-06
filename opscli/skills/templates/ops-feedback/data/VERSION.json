@@ -1,5 +1,5 @@
 {
-  "version": "v1.0.17",
-  "updated_at": "2026-07-10",
-  "notes": "规范修复：feedback_guard.py 全部改为中文注释与 docstring（铁律17），删除无调用方的 fingerprint()/fingerprint_source() 死代码并修复 is_feedback_tool 重复 marker；新增 tests/skills/test_feedback_guard.py 覆盖分级/去重/预算/脱敏/兜底路径；文档移除对不存在的 evaluate_agent_traces.py / evaluate_wizard_traces.py 的引用，改标注为待建设项；SKILL.md/FEEDBACK_RULE.md/cli.md/mcp.md 明示去重为滑动窗口语义。决策行为与 v1.0.16 完全一致。"
+  "version": "v1.0.18",
+  "updated_at": "2026-08-06",
+  "notes": "反馈提交自动生成 Observation Schema V2，并规范链路、耗时、重试、环境和指纹字段。"
 }

@@ -152,6 +152,12 @@ HTTP 仅允许 localhost/127.0.0.1/::1 调试地址。发送模型前只保留�
 报告中标为“待复核”，不会触发 P0/P1 洞察提醒。模型或对比周期查询失败时自动降级为
 基础日报，继续发送原有 Critical/High 提醒，不把可选 AI 能力变成日报单点故障。
 
+已确认的确定性错误分类会持久化到 `~/.config/opscli/feedback_taxonomy.json`。文件只保存
+标准问题分类和“系统/调用入口 + 标准化错误模板”的 SHA-256，不保存原始错误文本。后续运行
+命中指纹时直接复用分类，不再把该反馈交给模型或 Codex；未命中项才进入分类批次。可通过
+`--taxonomy-file` 指定其他受保护路径。普通洞察和本地 Codex 两阶段日报共用该机制；两阶段
+自定义路径时，`--prepare-only` 与 `--finalize-prepared` 必须传同一路径。
+
 ### 本地 Codex 两阶段日报
 
 本地生产默认使用“08:30 提前取数，Codex App 稍后分析”的两阶段模式，避免长时间网关请求
@@ -198,6 +204,8 @@ python scripts/daily_feedback_report.py \
 `opscli.feedback.services.insight` 的确定性规则计算次数、环比、影响人数和 P0-P4，最后生成运行
 产物、发布 Markdown、推送企业微信并写入“YYYY-MM-DD AI 洞察已完成”的 `COMPLETED` 标记。
 分类不完整、文件被修改或通知失败都会留下结构化失败状态；Codex 不得绕过 Python 自行计算统计。
+准备阶段已命中 taxonomy 的反馈保存在单独的哈希校验产物中，不会出现在待分析 chunk；最终化
+阶段合并缓存分类和 Codex 新分类，并在校验通过后原子更新 taxonomy。
 
 Windows 取数任务可重复执行下面的安装脚本进行创建或修复，默认任务名为
 `OpsCLI Feedback Daily Insight`，每天 08:30 触发，错过时间后在下次可用时补跑：
@@ -229,6 +237,31 @@ Markdown。产物只保存聚合指标、问题簇和样本反馈 UUID，不保�
 脱敏模型输入哈希，以及查询、详情读取、模型和通知阶段耗时；即使 AI 降级，仍保留不含密钥的
 model、batch size、Prompt 版本和 Prompt 哈希，供连续运行后统计稳定性。
 
+### 生成周报和月报
+
+周期报告只读取已完成日报的 `runs/*/manifest.json` 与 `clusters.json`，不解析 Markdown，
+也不重复访问远端反馈接口。周报使用截至指定日期的完整七天，并对比上一完整七天：
+
+```bash
+python scripts/periodic_feedback_report.py \
+  --report-type weekly \
+  --period-end 2026-08-02
+```
+
+月报使用自然月，并对比上一个自然月：
+
+```bash
+python scripts/periodic_feedback_report.py \
+  --report-type monthly \
+  --month 2026-07
+```
+
+每次运行会发布根目录 Markdown，并在 `output/feedback-query/periodic/<period-key>/` 保存
+`report.md`、`metrics.json` 和 `manifest.json`。指标包含数据覆盖天数、反馈与失败调用数、
+分诊率、解决率、新增/持续/本期未再出现/多日复发问题、活跃天数、影响用户日及优先级理由。
+处置率是每日状态快照汇总口径；“本期未再出现”不等于已解决。当前没有状态事件时间线，因此
+不得把这些数值表述为 SLA、MTTA 或 MTTR。
+
 指定统计时间范围：
 
 ```bash
@@ -251,6 +284,7 @@ python scripts/daily_feedback_report.py \
 | `--send` | 否 | 显式发送企业微信 Markdown 摘要；未传时绝不调用机器人 |
 | `--insight` | 否 | 调用大模型生成模块问题洞察，并查询上一等长周期进行对比 |
 | `--insight-config` | 否 | 模型配置文件；仅与 `--insight` 一起使用，默认读取 opscli 用户配置目录 |
+| `--taxonomy-file` | 否 | 持久 taxonomy 文件，默认读取 opscli 用户配置目录；两阶段准备和最终化必须一致 |
 | `--prepare-only` | 否 | 只准备昨日脱敏数据、分块和 READY 标记，不调用模型或推送 |
 | `--claim-ready` | 否 | 领取最新 ready 数据并切换为 analyzing，供 Codex App 自动化使用 |
 | `--validate-chunk` | 否 | 校验一个 Codex chunk 输出并记录 validated/failed 检查点 |
@@ -281,7 +315,7 @@ python scripts/serve_feedback_reports.py --host 10.6.53.56 --port 8780
 
 `--host` 只接受明确的回环或私有 IPv4 地址；拒绝 `0.0.0.0`、公网地址和主机名。LAN 模式仍使用 Host 白名单，不会接受其他地址的 Host 请求。
 
-浏览服务只读取报告目录根部、符合 `反馈日报-YYYY-MM-DD[_YYYY-MM-DD][-*].md` 或月度反馈复盘命名的文件，提供报告页面、Markdown 原文、`/api/reports` 列表和 `/health` 健康检查；日报使用的 Mermaid `pie showData` 会转换为无外部脚本的本地图表，桌面端使用双列分布概览，窄屏自动切换单列，原始表格可按需展开；其他 Mermaid 类型安全回退为转义源码。其他 Markdown、JSON 查询结果、模型配置、凭据、子目录和目录外文件均不可访问。
+浏览服务只读取报告目录根部、符合 `反馈日报-YYYY-MM-DD[_YYYY-MM-DD][-*].md`、`反馈周报-YYYY-MM-DD_YYYY-MM-DD.md` 或月度反馈复盘命名的文件，提供报告页面、Markdown 原文、`/api/reports` 列表和 `/health` 健康检查；日报使用的 Mermaid `pie showData` 会转换为无外部脚本的本地图表，桌面端使用双列分布概览，窄屏自动切换单列，原始表格可按需展开；其他 Mermaid 类型安全回退为转义源码。其他 Markdown、JSON 查询结果、模型配置、凭据、子目录和目录外文件均不可访问。
 
 ## Linux 每日自动推送
 

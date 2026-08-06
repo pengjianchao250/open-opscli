@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -25,8 +26,11 @@ import httpx
 
 from opscli.config import CONFIG_DIR
 from opscli.feedback.services.insight import (
+    DEFAULT_TAXONOMY_PATH,
+    FeedbackTaxonomyStore,
     INSIGHT_PROMPT_HASH,
     INSIGHT_PROMPT_VERSION,
+    InsightConfigError,
     aggregate_feedback_classifications,
     sanitize_feedback_text,
     validate_feedback_classifications,
@@ -59,8 +63,8 @@ INSIGHT_COMMAND_TIMEOUT_MAX = 3600.0
 DEFAULT_INSIGHT_BATCH_SIZE = 100
 # 结构化中间产物版本供后续周报、月报选择兼容的运行快照。
 RUN_ARTIFACT_SCHEMA_VERSION = "1.0"
-# 取数与 Codex 交接产物独立演进，不能与最终日报运行产物混用版本号。
-PREPARED_ARTIFACT_SCHEMA_VERSION = "1.0"
+# 取数与 Codex 交接产物独立演进，1.1 增加 taxonomy 缓存分类产物。
+PREPARED_ARTIFACT_SCHEMA_VERSION = "1.1"
 # 与生产反馈洞察批次保持 100 条一致，兼顾上下文成本和单次输出可靠性。
 PREPARED_CHUNK_SIZE = 100
 # Codex 分类契约内容或输出约束变化时递增，供准备产物失效与审计使用。
@@ -222,6 +226,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="反馈洞察模型配置文件；默认由 opscli 从用户配置目录读取",
     )
+    parser.add_argument(
+        "--taxonomy-file",
+        type=Path,
+        help="持久 taxonomy 文件；默认 ~/.config/opscli/feedback_taxonomy.json",
+    )
     pipeline = parser.add_mutually_exclusive_group()
     pipeline.add_argument(
         "--prepare-only",
@@ -374,6 +383,12 @@ def build_insight_feedbacks(
             for key in ("error_message", "reason", "fix_suggestion"):
                 if first_failure.get(key):
                     row[key] = _safe_insight_text(first_failure[key])
+        detail_context = detail.get("context")
+        observation = (
+            detail_context.get("observation") if isinstance(detail_context, dict) else None
+        )
+        if isinstance(observation, dict) and observation.get("error_code"):
+            row["error_code"] = _safe_insight_text(observation["error_code"], 200)
         result.append(row)
     return result
 
@@ -381,6 +396,7 @@ def build_insight_feedbacks(
 def run_feedback_insight(
     payload: dict[str, Any],
     config_path: Path | None = None,
+    taxonomy_path: Path | None = None,
 ) -> dict[str, Any]:
     """通过正式 opscli 命令执行模型分类和聚合。"""
     batch_size = DEFAULT_INSIGHT_BATCH_SIZE
@@ -418,6 +434,8 @@ def run_feedback_insight(
     command = ["opscli", "feedback", "insight", "--input-file", str(input_path)]
     if config_path is not None:
         command.extend(["--config-file", str(config_path)])
+    if taxonomy_path is not None:
+        command.extend(["--taxonomy-file", str(taxonomy_path)])
     try:
         result = subprocess.run(
             command,
@@ -1293,13 +1311,23 @@ def _safe_report_feedbacks(feedbacks: list[dict[str, Any]]) -> list[dict[str, An
     return rows
 
 
-def _prepared_manifest_reusable(prepared_dir: Path) -> dict[str, Any] | None:
+def _prepared_manifest_reusable(
+    prepared_dir: Path,
+    taxonomy_store_id: str | None = None,
+) -> dict[str, Any] | None:
     """检查已有 ready/analyzing/completed 准备产物能否直接复用。"""
     manifest_path = prepared_dir / "manifest.json"
     if not manifest_path.exists():
         return None
     try:
         manifest = _read_json_artifact(manifest_path, "准备清单")
+        if manifest.get("schema_version") != PREPARED_ARTIFACT_SCHEMA_VERSION:
+            return None
+        if (
+            taxonomy_store_id is not None
+            and manifest.get("taxonomy", {}).get("store_id") != taxonomy_store_id
+        ):
+            return None
         if manifest.get("state") not in {"ready", "analyzing", "completed"}:
             return None
         period_label = str(manifest.get("period", {}).get("label") or "")
@@ -1314,7 +1342,7 @@ def _prepared_manifest_reusable(prepared_dir: Path) -> dict[str, Any] | None:
             or contract.get("prompt_hash") != _codex_contract_hash()
         ):
             return None
-        for key in ("analysis_input", "report_input"):
+        for key in ("analysis_input", "report_input", "cached_classifications"):
             artifact = manifest.get("artifacts", {}).get(key)
             expected_hash = manifest.get("source_snapshots", {}).get(key)
             if not isinstance(artifact, str) or not isinstance(expected_hash, str):
@@ -1377,6 +1405,38 @@ def _codex_contract_hash() -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _taxonomy_store(path: Path | None) -> FeedbackTaxonomyStore:
+    """创建日报使用的 taxonomy 存储，并统一默认路径。"""
+    return FeedbackTaxonomyStore(path or DEFAULT_TAXONOMY_PATH)
+
+
+def _taxonomy_store_id(path: Path | None) -> str:
+    """返回不暴露本地路径的稳定 taxonomy 存储身份。"""
+    normalized = os.path.normcase(str((path or DEFAULT_TAXONOMY_PATH).expanduser().resolve()))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _partition_taxonomy_matches(
+    feedbacks: list[dict[str, Any]],
+    taxonomy_path: Path | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """按持久 taxonomy 将反馈拆分为缓存分类和待 Codex 分类。"""
+    store = _taxonomy_store(taxonomy_path)
+    try:
+        state = store.load()
+    except InsightConfigError as exc:
+        raise DailyReportError(str(exc)) from exc
+    cached: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    for feedback in feedbacks:
+        classification = store.match(state, feedback)
+        if classification is None:
+            pending.append(feedback)
+        else:
+            cached.append(classification)
+    return state, cached, pending
+
+
 def prepare_feedback_data(args: argparse.Namespace) -> dict[str, Any]:
     """查询、脱敏并持久化昨日数据，不调用模型或发送通知。
 
@@ -1394,7 +1454,8 @@ def prepare_feedback_data(args: argparse.Namespace) -> dict[str, Any]:
     window = resolve_report_window(args.date_from, args.date_to)
     comparison_window = resolve_comparison_window(window)
     prepared_dir = _prepared_directory(window)
-    reusable = _prepared_manifest_reusable(prepared_dir)
+    taxonomy_store_id = _taxonomy_store_id(args.taxonomy_file)
+    reusable = _prepared_manifest_reusable(prepared_dir, taxonomy_store_id)
     if reusable is not None:
         return {
             "success": True,
@@ -1444,8 +1505,24 @@ def prepare_feedback_data(args: argparse.Namespace) -> dict[str, Any]:
             )
             for item in items
         ]
+        taxonomy_state, cached_classifications, pending_feedbacks = (
+            _partition_taxonomy_matches(model_feedbacks, args.taxonomy_file)
+        )
+        cached_payload = {
+            "schema_version": PREPARED_ARTIFACT_SCHEMA_VERSION,
+            "period_key": context.period_key,
+            "feedback_uuids": [
+                classification["feedback_uuid"]
+                for classification in cached_classifications
+            ],
+            "classifications": cached_classifications,
+        }
+        _write_json_artifact(
+            cached_payload,
+            prepared_dir / "cached-classifications.json",
+        )
         chunks: list[dict[str, Any]] = []
-        for start in range(0, len(model_feedbacks), PREPARED_CHUNK_SIZE):
+        for start in range(0, len(pending_feedbacks), PREPARED_CHUNK_SIZE):
             index = len(chunks) + 1
             input_name = f"chunks/chunk-{index:03d}.input.json"
             output_name = f"chunks/chunk-{index:03d}.output.json"
@@ -1453,7 +1530,7 @@ def prepare_feedback_data(args: argparse.Namespace) -> dict[str, Any]:
                 "schema_version": PREPARED_ARTIFACT_SCHEMA_VERSION,
                 "period_key": context.period_key,
                 "chunk_index": index,
-                "feedbacks": model_feedbacks[start : start + PREPARED_CHUNK_SIZE],
+                "feedbacks": pending_feedbacks[start : start + PREPARED_CHUNK_SIZE],
             }
             _write_json_artifact(chunk_payload, prepared_dir / input_name)
             chunks.append(
@@ -1479,11 +1556,20 @@ def prepare_feedback_data(args: argparse.Namespace) -> dict[str, Any]:
                 "comparison": _source_snapshot_hash(comparison_feedbacks),
                 "analysis_input": _payload_hash(analysis_input),
                 "report_input": _payload_hash(report_input),
+                "cached_classifications": _payload_hash(cached_payload),
             },
             "artifacts": {
                 "analysis_input": "analysis-input.json",
                 "report_input": "report-input.json",
+                "cached_classifications": "cached-classifications.json",
                 "ready_marker": "READY",
+            },
+            "taxonomy": {
+                "schema_version": taxonomy_state.get("schema_version"),
+                "store_id": taxonomy_store_id,
+                "revision": int(taxonomy_state.get("revision") or 0),
+                "cache_hit_count": len(cached_classifications),
+                "model_classification_count": len(pending_feedbacks),
             },
             "chunks": chunks,
             "contract": {
@@ -1505,6 +1591,8 @@ def prepare_feedback_data(args: argparse.Namespace) -> dict[str, Any]:
             "feedback_count": len(feedbacks),
             "comparison_feedback_count": len(comparison_feedbacks),
             "chunk_count": len(chunks),
+            "taxonomy_cache_hit_count": len(cached_classifications),
+            "model_classification_count": len(pending_feedbacks),
             "reused": False,
         }
     except Exception as exc:
@@ -1691,6 +1779,10 @@ def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
     prepared = _read_json_artifact(prepared_manifest_path, "准备清单")
     if prepared.get("state") not in {"ready", "analyzing", "failed"}:
         raise DailyReportError("准备清单不是可最终化状态")
+    if prepared.get("taxonomy", {}).get("store_id") != _taxonomy_store_id(
+        args.taxonomy_file
+    ):
+        raise DailyReportError("最终化使用的 taxonomy 文件与准备阶段不一致")
     analysis_input = _read_json_artifact(
         prepared_dir / prepared["artifacts"]["analysis_input"], "analysis-input"
     )
@@ -1704,7 +1796,37 @@ def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
     ):
         raise DailyReportError("准备输入哈希不匹配，拒绝发布")
 
-    classifications: list[dict[str, Any]] = []
+    cached_path = prepared.get("artifacts", {}).get("cached_classifications")
+    if not isinstance(cached_path, str):
+        raise DailyReportError("准备清单缺少 taxonomy 缓存分类产物")
+    cached_payload = _read_json_artifact(
+        prepared_dir / cached_path,
+        "cached-classifications",
+    )
+    if _payload_hash(cached_payload) != snapshots.get("cached_classifications"):
+        raise DailyReportError("taxonomy 缓存分类哈希不匹配，拒绝发布")
+    if set(cached_payload) != {
+        "schema_version",
+        "period_key",
+        "feedback_uuids",
+        "classifications",
+    } or (
+        cached_payload.get("schema_version") != PREPARED_ARTIFACT_SCHEMA_VERSION
+        or cached_payload.get("period_key") != prepared.get("period_key")
+        or not isinstance(cached_payload.get("feedback_uuids"), list)
+    ):
+        raise DailyReportError("taxonomy 缓存分类元数据不合法")
+    try:
+        classifications = validate_feedback_classifications(
+            cached_payload.get("classifications"),
+            [str(value) for value in cached_payload["feedback_uuids"]],
+        )
+    except Exception as exc:
+        raise DailyReportError(
+            f"taxonomy 缓存分类校验失败: {_safe_insight_text(str(exc), 500)}"
+        ) from exc
+    taxonomy_cache_hit_count = len(classifications)
+
     chunks = prepared.get("chunks")
     if not isinstance(chunks, list):
         raise DailyReportError("准备清单缺少 chunks 数组")
@@ -1724,6 +1846,10 @@ def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
         "model": _safe_insight_text(args.analysis_model, 100),
         "batch_size": max((int(chunk.get("feedback_count") or 0) for chunk in chunks), default=0),
         "batch_count": len(chunks),
+        "taxonomy_cache_hit_count": taxonomy_cache_hit_count,
+        "model_classification_count": sum(
+            int(chunk.get("feedback_count") or 0) for chunk in chunks
+        ),
         "prompt_version": contract.get("prompt_version") or CODEX_INSIGHT_PROMPT_VERSION,
         "prompt_hash": contract.get("prompt_hash") or _codex_contract_hash(),
     }
@@ -1732,6 +1858,29 @@ def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
         classifications,
         model_metadata=insight_runtime,
     )
+    model_feedbacks = [
+        {**item, "period": period_name}
+        for period_name, items in (
+            ("current", analysis_input.get("current_feedbacks", [])),
+            ("comparison", analysis_input.get("comparison_feedbacks", [])),
+        )
+        for item in items
+        if isinstance(item, dict)
+    ]
+    classification_map = {
+        classification["feedback_uuid"]: classification
+        for classification in classifications
+    }
+    try:
+        taxonomy_store = _taxonomy_store(args.taxonomy_file)
+        taxonomy_state = taxonomy_store.persist(
+            taxonomy_store.load(),
+            model_feedbacks,
+            classification_map,
+        )
+    except (InsightConfigError, KeyError) as exc:
+        raise DailyReportError(str(exc)) from exc
+    insight_runtime["taxonomy_revision"] = int(taxonomy_state.get("revision") or 0)
     period = prepared["period"]
     comparison_period = prepared["comparison_period"]
     window = ReportWindow(period["date_from"], period["date_to"], period["label"])
@@ -1828,6 +1977,8 @@ def finalize_prepared_report(args: argparse.Namespace) -> dict[str, Any]:
             "clusters": str(clusters_path),
             "feedback_count": len(feedbacks),
             "insight": True,
+            "taxonomy_cache_hit_count": insight_runtime["taxonomy_cache_hit_count"],
+            "model_classification_count": insight_runtime["model_classification_count"],
             "sent": notification["status"] == "success",
         }
         if notification_error is not None:
@@ -1992,6 +2143,7 @@ def main(argv: list[str] | None = None) -> int:
                     insight = run_feedback_insight(
                         insight_payload,
                         args.insight_config,
+                        args.taxonomy_file,
                     )
                 finally:
                     timings_ms["model"] = (perf_counter() - step_started) * 1000

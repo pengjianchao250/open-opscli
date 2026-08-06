@@ -9,6 +9,7 @@ from typing import Any
 from opscli.auth import AuthClient
 from opscli.feedback.domain.exceptions import InvalidPayloadError
 from opscli.feedback.domain.models import FEEDBACK_SCHEMA, FEEDBACK_TYPES, SEVERITIES, SOURCES
+from opscli.feedback.domain.observation import normalize_observation
 from opscli.feedback.transport.client import FeedbackClient
 from opscli.version import get_version
 
@@ -118,6 +119,17 @@ class FeedbackManager:
             ctx.setdefault("skill_version", skill_version)
         if mcp_tool_name:
             ctx.setdefault("mcp_tool_name", mcp_tool_name)
+        ctx["observation"] = normalize_observation(
+            context=ctx,
+            source=source,
+            system_alias=system_alias,
+            client_name=client_name,
+            client_version=version,
+            skill_name=skill_name,
+            command_name=command_name,
+            mcp_tool_name=mcp_tool_name,
+            execution_summary=execution_summary,
+        )
 
         request_payload = {
             "source": source,
@@ -162,6 +174,21 @@ class FeedbackManager:
             context = dict(context)
 
         context["app_version"] = version
+        context["observation"] = normalize_observation(
+            context=context,
+            source=str(request_payload.get("source") or "cli"),
+            system_alias=str(request_payload.get("system_alias") or "ops"),
+            client_name=str(request_payload.get("client_name") or "opscli"),
+            client_version=version,
+            skill_name=request_payload.get("skill_name"),
+            command_name=request_payload.get("command_name"),
+            mcp_tool_name=request_payload.get("mcp_tool_name"),
+            execution_summary=(
+                request_payload.get("execution_summary")
+                if isinstance(request_payload.get("execution_summary"), dict)
+                else None
+            ),
+        )
         request_payload["context"] = context
         request_payload["app_version"] = version
         request_payload["client_version"] = version

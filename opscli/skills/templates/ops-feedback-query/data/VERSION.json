@@ -1,6 +1,6 @@
 {
   "name": "ops-feedback-query",
-  "version": "v1.8.1",
+  "version": "v1.9.0",
   "updated_at": "2026-08-06",
-  "notes": "反馈日报浏览服务支持显式绑定私有局域网 IPv4 地址，并保持 Host 白名单。"
+  "notes": "新增持久 taxonomy 复用及基于结构化日报快照的周报、自然月月报和处置指标。"
 }

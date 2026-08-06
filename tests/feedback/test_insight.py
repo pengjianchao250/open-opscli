@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from opscli.feedback.commands.cli import app
 from opscli.feedback.services.insight import (
     FeedbackInsightManager,
+    FeedbackTaxonomyStore,
     InsightModelConfig,
     OpenAICompatibleInsightClient,
     aggregate_feedback_classifications,
@@ -125,6 +126,8 @@ def test_insight_classifies_and_aggregates_current_and_previous_periods(tmp_path
                 str(input_path),
                 "--config-file",
                 str(config_path),
+                "--taxonomy-file",
+                str(tmp_path / "taxonomy.json"),
             ],
         )
 
@@ -159,6 +162,9 @@ def test_insight_classifies_and_aggregates_current_and_previous_periods(tmp_path
         "batch_size": 2,
         "batch_count": 2,
         "prompt_version": "v1",
+        "classified_count": 3,
+        "reused_count": 0,
+        "taxonomy_revision": 1,
     }
     assert route.call_count == 2
     assert model_requests[0]["existing_problem_taxonomy"] == []
@@ -187,6 +193,278 @@ def test_insight_classifies_and_aggregates_current_and_previous_periods(tmp_path
     assert "content-secret" not in "".join(
         json.dumps(item, ensure_ascii=False) for item in model_requests
     )
+
+
+def test_taxonomy_store_reuses_known_signal_without_model_call(tmp_path: Path):
+    """跨运行命中同一错误信号时应复用持久分类，避免重复调用模型。"""
+    taxonomy_path = tmp_path / "feedback-taxonomy.json"
+    store = FeedbackTaxonomyStore(taxonomy_path)
+    calls: list[list[dict]] = []
+
+    class RecordingClient:
+        config = SimpleNamespace(batch_size=100, model="feedback-classifier")
+
+        def classify(self, feedbacks, existing_problem_taxonomy):
+            calls.append(feedbacks)
+            return [
+                {
+                    "feedback_uuid": item["feedback_uuid"],
+                    "module": "query",
+                    "problem_key": "field_not_found",
+                    "problem_category": "字段映射",
+                    "problem_summary": "查询字段不存在",
+                    "recommended_work": "修正字段映射并增加回归测试",
+                    "confidence": 0.96,
+                }
+                for item in feedbacks
+            ]
+
+    first = FeedbackInsightManager(RecordingClient(), taxonomy_store=store).analyze(
+        {
+            "current_feedbacks": [
+                {
+                    "feedback_uuid": "first-1",
+                    "system_alias": "ops",
+                    "mcp_tool_name": "query_simple",
+                    "error_message": "REMOTE_ERROR: field 42 not found",
+                    "severity": "high",
+                }
+            ],
+            "comparison_feedbacks": [],
+        }
+    )
+
+    class NoCallClient:
+        config = SimpleNamespace(batch_size=100, model="feedback-classifier")
+
+        def classify(self, feedbacks, existing_problem_taxonomy):
+            raise AssertionError("持久 taxonomy 命中后不应调用模型")
+
+    second = FeedbackInsightManager(NoCallClient(), taxonomy_store=store).analyze(
+        {
+            "current_feedbacks": [
+                {
+                    "feedback_uuid": "second-1",
+                    "system_alias": "ops",
+                    "mcp_tool_name": "query_simple",
+                    "error_message": "REMOTE_ERROR: field 99 not found",
+                    "severity": "medium",
+                }
+            ],
+            "comparison_feedbacks": [],
+        }
+    )
+
+    persisted = json.loads(taxonomy_path.read_text(encoding="utf-8"))
+    assert len(calls) == 1
+    assert first["model"]["classified_count"] == 1
+    assert first["model"]["reused_count"] == 0
+    assert second["model"]["classified_count"] == 0
+    assert second["model"]["reused_count"] == 1
+    assert second["problems"][0]["problem_key"] == "field_not_found"
+    assert persisted["schema_version"] == "1.0"
+    assert persisted["revision"] == 1
+    assert len(persisted["signal_fingerprints"]) == 1
+    assert "REMOTE_ERROR" not in taxonomy_path.read_text(encoding="utf-8")
+
+
+def test_taxonomy_store_preserves_meaningful_status_and_error_codes(tmp_path: Path):
+    """HTTP 状态和结构化错误码不同的信号不得归并。"""
+    store = FeedbackTaxonomyStore(tmp_path / "feedback-taxonomy.json")
+    feedback = {
+        "feedback_uuid": "first",
+        "system_alias": "ops",
+        "mcp_tool_name": "query_simple",
+        "error_code": "REMOTE_HTTP_ERROR",
+        "error_message": "HTTP 401 for field 42",
+    }
+    classification = {
+        "feedback_uuid": "first",
+        "module": "auth",
+        "problem_key": "unauthorized",
+        "problem_category": "认证",
+        "problem_summary": "请求未授权",
+        "recommended_work": "刷新认证后重试",
+        "confidence": 0.95,
+    }
+    state = store.persist(store.load(), [feedback], {"first": classification})
+
+    assert store.match(
+        state,
+        {**feedback, "feedback_uuid": "same", "error_message": "HTTP 401 for field 99"},
+    ) is not None
+    assert store.match(
+        state,
+        {**feedback, "feedback_uuid": "different", "error_message": "HTTP 500 for field 99"},
+    ) is None
+    assert store.match(
+        state,
+        {**feedback, "feedback_uuid": "different-code", "error_code": "BUSINESS_2002"},
+    ) is None
+
+
+def test_taxonomy_store_does_not_persist_low_confidence_classification(tmp_path: Path):
+    """待复核分类不得固化为后续运行自动命中的 taxonomy。"""
+    store = FeedbackTaxonomyStore(tmp_path / "feedback-taxonomy.json")
+    feedback = {"feedback_uuid": "low", "error_message": "field 42 not found"}
+    classification = {
+        "feedback_uuid": "low",
+        "module": "query",
+        "problem_key": "uncertain_field_error",
+        "problem_category": "待复核",
+        "problem_summary": "字段问题待复核",
+        "recommended_work": "人工确认根因",
+        "confidence": 0.6,
+    }
+
+    state = store.persist(store.load(), [feedback], {"low": classification})
+
+    assert state["revision"] == 0
+    assert state["items"] == []
+    assert state["signal_fingerprints"] == {}
+    assert not store.path.exists()
+
+
+def test_taxonomy_store_reloads_latest_state_before_atomic_merge(tmp_path: Path):
+    """使用陈旧 state 写入时也必须保留其他运行已落盘的分类。"""
+    store = FeedbackTaxonomyStore(tmp_path / "feedback-taxonomy.json")
+    stale_state = store.load()
+
+    def persist_one(feedback_uuid: str, error_message: str, problem_key: str, state: dict):
+        feedback = {"feedback_uuid": feedback_uuid, "error_message": error_message}
+        classification = {
+            "feedback_uuid": feedback_uuid,
+            "module": "query",
+            "problem_key": problem_key,
+            "problem_category": "查询",
+            "problem_summary": problem_key,
+            "recommended_work": "修复并回归",
+            "confidence": 0.95,
+        }
+        return store.persist(state, [feedback], {feedback_uuid: classification})
+
+    persist_one("first", "field 42 not found", "field_not_found", store.load())
+    persist_one("second", "request timeout after attempt 2", "request_timeout", stale_state)
+    persisted = store.load()
+
+    assert persisted["revision"] == 2
+    assert {item["problem_key"] for item in persisted["items"]} == {
+        "field_not_found",
+        "request_timeout",
+    }
+    assert len(persisted["signal_fingerprints"]) == 2
+
+
+def test_repeated_signal_persists_highest_confidence_semantics(tmp_path: Path):
+    """重复信号不得借后续高置信度固化首条低置信度语义。"""
+    store = FeedbackTaxonomyStore(tmp_path / "feedback-taxonomy.json")
+
+    class MixedConfidenceClient:
+        config = SimpleNamespace(batch_size=100, model="feedback-classifier")
+
+        def classify(self, feedbacks, existing_problem_taxonomy):
+            return [
+                {
+                    "feedback_uuid": feedbacks[0]["feedback_uuid"],
+                    "module": "unknown",
+                    "problem_key": "uncertain_error",
+                    "problem_category": "待复核",
+                    "problem_summary": "不确定错误",
+                    "recommended_work": "人工确认",
+                    "confidence": 0.6,
+                },
+                {
+                    "feedback_uuid": feedbacks[1]["feedback_uuid"],
+                    "module": "query",
+                    "problem_key": "field_not_found",
+                    "problem_category": "字段映射",
+                    "problem_summary": "查询字段不存在",
+                    "recommended_work": "修正字段映射",
+                    "confidence": 0.95,
+                },
+            ]
+
+    FeedbackInsightManager(MixedConfidenceClient(), taxonomy_store=store).analyze(
+        {
+            "current_feedbacks": [
+                {"feedback_uuid": "low", "error_message": "field 42 not found"},
+                {"feedback_uuid": "high", "error_message": "field 99 not found"},
+            ],
+            "comparison_feedbacks": [],
+        }
+    )
+    persisted = store.load()
+
+    assert {item["problem_key"] for item in persisted["items"]} == {"field_not_found"}
+
+
+def test_taxonomy_store_selects_highest_confidence_for_duplicate_fingerprint(tmp_path: Path):
+    """存储层必须统一协调来自 Codex 等调用方的重复指纹分类。"""
+    store = FeedbackTaxonomyStore(tmp_path / "feedback-taxonomy.json")
+    feedbacks = [
+        {"feedback_uuid": "first", "error_message": "field 42 not found"},
+        {"feedback_uuid": "second", "error_message": "field 99 not found"},
+    ]
+    classifications = {
+        "first": {
+            "feedback_uuid": "first",
+            "module": "unknown",
+            "problem_key": "wrong_guess",
+            "problem_category": "待复核",
+            "problem_summary": "错误猜测",
+            "recommended_work": "人工确认",
+            "confidence": 0.8,
+        },
+        "second": {
+            "feedback_uuid": "second",
+            "module": "query",
+            "problem_key": "field_not_found",
+            "problem_category": "字段映射",
+            "problem_summary": "查询字段不存在",
+            "recommended_work": "修正字段映射",
+            "confidence": 0.95,
+        },
+    }
+
+    state = store.persist(store.load(), feedbacks, classifications)
+    matched = store.match(state, {**feedbacks[0], "feedback_uuid": "later"})
+
+    assert matched is not None
+    assert matched["problem_key"] == "field_not_found"
+    assert matched["confidence"] == 0.95
+
+
+def test_taxonomy_store_does_not_downgrade_existing_fingerprint(tmp_path: Path):
+    """较晚完成的低置信度运行不得覆盖磁盘中的高置信度分类。"""
+    store = FeedbackTaxonomyStore(tmp_path / "feedback-taxonomy.json")
+    feedback = {"feedback_uuid": "same", "error_message": "field 42 not found"}
+
+    def classification(problem_key: str, confidence: float) -> dict:
+        return {
+            "feedback_uuid": "same",
+            "module": "query",
+            "problem_key": problem_key,
+            "problem_category": "字段映射",
+            "problem_summary": problem_key,
+            "recommended_work": "修正字段映射",
+            "confidence": confidence,
+        }
+
+    store.persist(
+        store.load(),
+        [feedback],
+        {"same": classification("field_not_found", 0.99)},
+    )
+    store.persist(
+        store.load(),
+        [feedback],
+        {"same": classification("wrong_guess", 0.8)},
+    )
+    matched = store.match(store.load(), feedback)
+
+    assert matched is not None
+    assert matched["problem_key"] == "field_not_found"
+    assert matched["confidence"] == 0.99
 
 
 def test_aggregate_feedback_classifications_keeps_counts_and_priority_deterministic():

@@ -30,6 +30,11 @@ def _load_script() -> ModuleType:
 
 def _install_feedback_fakes(module: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(module, "load_api_key", lambda: "feedback-secret")
+    monkeypatch.setattr(
+        module,
+        "DEFAULT_TAXONOMY_PATH",
+        Path.cwd() / ".test-feedback-taxonomy.json",
+    )
 
     def fake_list(self, params):
         period = params["date_from"][:10]
@@ -173,6 +178,98 @@ def test_prepare_only_writes_ready_marker_and_chunk_without_calling_model(
     assert "sk-1234567890" not in serialized_input
     assert "eyJabcde.abcdef.uvwxyz" not in serialized_input
     assert "json-secret-value" not in serialized_input
+
+
+def test_two_stage_pipeline_reuses_persistent_taxonomy_without_codex_chunks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    """确定性错误命中 taxonomy 时不得再次交给 Codex 分类。"""
+    module = _load_script()
+    project_root = tmp_path / "repo"
+    (project_root / ".git").mkdir(parents=True)
+    monkeypatch.chdir(project_root)
+    _install_feedback_fakes(module, monkeypatch)
+    taxonomy_path = tmp_path / "feedback-taxonomy.json"
+    store = module.FeedbackTaxonomyStore(taxonomy_path)
+    seed_feedback = {
+        "feedback_uuid": "seed",
+        "error_message": "FIELD_NOT_FOUND: alias 7",
+    }
+    seed_classification = {
+        "feedback_uuid": "seed",
+        "module": "query",
+        "problem_key": "field_mapping_failed",
+        "problem_category": "字段映射",
+        "problem_summary": "字段映射失败",
+        "recommended_work": "统一字段解析入口并增加回归测试",
+        "confidence": 0.95,
+    }
+    store.persist(store.load(), [seed_feedback], {"seed": seed_classification})
+
+    assert module.main(
+        [
+            "--prepare-only",
+            "--date-from",
+            "2026-08-05 00:00:00",
+            "--date-to",
+            "2026-08-05 23:59:59",
+            "--taxonomy-file",
+            str(taxonomy_path),
+        ]
+    ) == 0
+    prepared_result = json.loads(capsys.readouterr().out)
+    prepared_dir = Path(prepared_result["prepared_dir"])
+    manifest = json.loads((prepared_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["taxonomy"]["cache_hit_count"] == 2
+    assert manifest["taxonomy"]["model_classification_count"] == 0
+    assert manifest["chunks"] == []
+
+    assert module.main(CLAIM_ARGS) == 0
+    claimed = json.loads(capsys.readouterr().out)
+    assert claimed["chunks"] == []
+    assert module.main(
+        [
+            "--finalize-prepared",
+            str(prepared_dir),
+            "--taxonomy-file",
+            str(taxonomy_path),
+        ]
+    ) == 0
+    finalized = json.loads(capsys.readouterr().out)
+
+    assert finalized["insight"] is True
+    assert finalized["taxonomy_cache_hit_count"] == 2
+
+
+def test_prepare_does_not_reuse_artifacts_from_another_taxonomy_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    """准备产物必须绑定 taxonomy 文件身份，避免跨存储污染。"""
+    module = _load_script()
+    project_root = tmp_path / "repo"
+    (project_root / ".git").mkdir(parents=True)
+    monkeypatch.chdir(project_root)
+    _install_feedback_fakes(module, monkeypatch)
+    base_args = [
+        "--prepare-only",
+        "--date-from",
+        "2026-08-05 00:00:00",
+        "--date-to",
+        "2026-08-05 23:59:59",
+    ]
+
+    assert module.main([*base_args, "--taxonomy-file", str(tmp_path / "first.json")]) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert first["reused"] is False
+    assert module.main([*base_args, "--taxonomy-file", str(tmp_path / "second.json")]) == 0
+    second = json.loads(capsys.readouterr().out)
+
+    assert second["reused"] is False
 
 
 def test_prepare_does_not_leave_ready_marker_when_ready_manifest_write_fails(
