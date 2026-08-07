@@ -161,6 +161,12 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 
 ## 回复规则
 
+### 导出格式选择
+
+- 用户只执行一个任务，且主要目的是人工查看、下载或留档结果时，推荐显式使用 `export_format="xls"`；工具实际可能返回 `.xlsx`，最终以返回的文件名和格式为准。
+- 一次运行多个任务、需要由 Skill/Agent 继续汇总计算，或要生成分析报告时，推荐显式使用 `export_format="json"`，减少重复解析工作簿并保留结构化数据。
+- 用户明确指定格式时遵从用户选择；场景只支持官方工作簿时（如 `aba-reverse`），仍使用 `xls` / `xlsx`，不要强制改为 JSON。
+
 ### JSON 导出读取规则
 
 - SellerSprite 本地 JSON 导出使用 `schema_version="2.0"`，其中文列名、字段 fallback、值转换、列顺序和辅助 Sheet 与本地生成的 XLSX 共用同一份格式化工作表数据。

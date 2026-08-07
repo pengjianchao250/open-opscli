@@ -5449,3 +5449,11 @@
 **影响范围**：feedback CLI、MCP `feedback_submit`、直接使用 FeedbackManager 的提交 payload，以及内部 `ops-feedback` / `ops-feedback-query` Skill；沿用 context JSON，不要求现有后端新增字段。本轮不包含 canonical Problem 与 GitLab Issue 映射。
 **回滚方式**：回退 Observation 规范化、taxonomy 存储与两阶段接入、周期报告生成器、浏览服务周报识别、Skill 文档/版本及对应测试。
 ---
+## 2026-08-07 Keepa - 支持与 XLSX 同源的 JSON 导出
+
+**变更原因**：Keepa 原先只允许 XLSX 用户导出，多任务编排和分析报告需要重复解析工作簿，缺少与可读表格一致的结构化交付格式。
+**改动点**：CLI 与 MCP 的 `export_format` 增加 `json`；提取 XLSX/JSON 共用的格式化工作表模型和唯一 Sheet 命名规则，JSON 以 `sheets.Sheet1`、`Sheet2` 顺序页保存表名、列、行数和行数据；Keepa 采集沉淀 Parser 支持该 JSON 合同并升级为 v3；同步更新 Keepa/卖家精灵 Skill 的单任务 XLS、多任务 JSON 选择指引。
+**验证结果**：Keepa JSON 导出、Manager、MCP 和采集沉淀聚焦回归 `36 passed`，新增 Sheet 名碰撞一致性测试；Keepa Skill 校验、`compileall` 和 `git diff --check` 通过。项目全量测试受仓库既有同名测试模块收集冲突及 Shopify `_shopify_manager` 导入缺失阻断；wheel 构建受本机缺少 Microsoft Visual C++ 14+ 阻断；当前环境未安装 Ruff。
+**影响范围**：Keepa CLI/MCP 导出格式、用户导出文件、采集沉淀 Parser 合同及相关 Skill；默认 XLSX 行为和内部原始 `raw.json` 不变。
+**回滚方式**：回退 Keepa JSON 导出器、共享工作表模型、格式校验、Parser v3、Skill 文档和对应测试。
+---

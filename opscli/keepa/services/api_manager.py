@@ -20,7 +20,7 @@ from opscli.keepa.config import KeepaSettings, load_settings
 from opscli.keepa.deal_formatter import FormattedDealExport, format_deal_export
 from opscli.keepa.domain.exceptions import KeepaApiError, KeepaConfigError
 from opscli.keepa.domain.models import KeepaExportResult, KeepaScenarioRequest, KeepaScenarioResult
-from opscli.keepa.export.xlsx import export_rows_to_xlsx
+from opscli.keepa.export import export_rows_to_json, export_rows_to_xlsx
 from opscli.keepa.product_formatter import FormattedProductExport, format_product_export
 from opscli.keepa.search_insights_formatter import FormattedSearchInsightsExport, format_search_insights_export
 from opscli.keepa.time import add_keepa_time_conversions
@@ -69,7 +69,7 @@ class KeepaApiManager:
 
     async def run(self, request: KeepaScenarioRequest) -> KeepaScenarioResult:
         """执行一个 Keepa API 场景。"""
-        _normalize_export_format(request.export_format)
+        export_format = _normalize_export_format(request.export_format)
         scenario = get_scenario(request.scenario)
         site = (request.site or "US").upper()
         job_id = request.job_id or _build_job_id(request, site)
@@ -182,13 +182,20 @@ class KeepaApiManager:
             best_sellers_export=best_sellers_export,
             deal_export=deal_export,
         )
-        export = export_rows_to_xlsx(
+        extra_sheets = _merge_extra_sheets(
+            product_export,
+            search_insights_export,
+            best_sellers_export,
+            deal_export,
+        )
+        exporter = export_rows_to_json if export_format == "json" else export_rows_to_xlsx
+        export = exporter(
             rows=export_rows,
-            output_path=root_dir / f"{job_id}.xlsx",
+            output_path=root_dir / f"{job_id}.{export_format}",
             scenario=request.scenario,
             site=site,
             params=request.params,
-            extra_sheets=_merge_extra_sheets(product_export, search_insights_export, best_sellers_export, deal_export),
+            extra_sheets=extra_sheets,
         )
         _upload_export_if_enabled(
             export=export,
@@ -656,7 +663,9 @@ def _normalize_export_format(value: str) -> str:
     text = (value or "").strip().lower()
     if text in {"", "xls", "xlsx"}:
         return "xlsx"
-    raise KeepaConfigError(f"不支持的导出格式：{value}。Keepa 当前仅支持 xls/xlsx 表格导出。")
+    if text == "json":
+        return "json"
+    raise KeepaConfigError(f"不支持的导出格式：{value}。Keepa 当前支持 xls/xlsx/json 导出。")
 
 
 def _upload_export_if_enabled(

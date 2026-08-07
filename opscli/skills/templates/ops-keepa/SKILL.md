@@ -15,13 +15,20 @@ description: Use when the user asks to query or export Keepa data through the pu
 
 1. 正式命令面默认只讲 `opscli keepa ...`，不要向用户暴露内部调试命令、本地落盘目录或调试入口。
 2. 先识别场景，再构造 `scenario + site + params`；不确定时先看 `opscli keepa scenarios`。
-3. 默认 `site=US`，默认导出 `xls`；公开 CLI 下 `xls/xlsx` 最终都会生成用户可读的 `.xlsx`。
+3. 默认 `site=US`，默认导出 `xls`；公开 CLI 支持 `xls/xlsx/json`，其中 `xls/xlsx` 最终都会生成用户可读的 `.xlsx`。
 4. `params` 必须是 JSON 对象字符串；不要把数组、裸字符串或半结构化文本直接塞给 `--params`。
 5. `product` 至少提供 `asin/asins` 或 `code/codes` 之一，不能同时传两类标识。
 6. `product-search`、`category-search` 缺少关键词时先补关键词；`seller` 缺少 seller id、`category-lookup` 缺少 category id、`bestsellers` 缺少 `category` 或 `productGroup` 时先澄清。
 7. 不向用户暴露 Keepa token 余额、账号来源、`params.json`、`raw.json`、本地导出路径等内部信息；MCP 每日调用额度按本 Skill 的回复规则展示。
 8. 如果当前宿主是远端 MCP 直连而不是 CLI 代理，继续看 [SKILL_MCP.md](SKILL_MCP.md)。
 9. 若远端 MCP 直连时提示 `无 session_id：请完成授权登录，或传入有效的 session_id` 等授权类错误，先执行 `auth_mcp_login`；不要先把问题归因为 Keepa 场景、参数或导出格式。
+
+## 导出格式选择
+
+- 用户只执行一个 Keepa 任务，且主要目的是人工查看、下载或留档结果时，推荐显式使用 `--export-format xls`；`xls/xlsx` 最终都会生成用户可读的 `.xlsx`。
+- 一次运行多个任务、需要由 Skill/Agent 汇总计算，或要继续生成分析报告时，推荐显式使用 `--export-format json`。JSON 与格式化后的 XLSX 共用表头、字段转换、列顺序和附加 Sheet 数据。
+- JSON 使用 `sheets.Sheet1`、`sheets.Sheet2` 等顺序页模拟 XLSX 工作表；每页包含 `name`、`columns`、`row_count` 和 `rows`。按 `columns[index]` 解释 `rows[*][index]`。
+- 用户明确指定格式时遵从用户选择；不要把内部 `raw.json`、`result.json` 或服务端路径作为用户导出文件返回。
 
 ## 链路区分
 
@@ -67,7 +74,7 @@ opscli keepa run <scenario> --site US --params '{"asin":"B0088PUEPK"}'
 - `--site`：站点，默认 `US`
 - `--params`：JSON 对象字符串
 - `--job-id`：自定义任务 ID
-- `--export-format`：`xls` / `xlsx`
+- `--export-format`：`xls` / `xlsx` / `json`
 - `--reserve-tokens`：预留 token 阈值
 - `--force`：忽略 token 预检查提醒继续执行
 - `--wait`：token 不足时等待一次 refill 后再执行

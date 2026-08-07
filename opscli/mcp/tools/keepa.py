@@ -123,7 +123,7 @@ async def keepa_run(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """执行 Keepa 场景并保存请求参数、原始响应、规范化结果和导出 XLSX。
+    """执行 Keepa 场景并保存请求参数、原始响应、规范化结果和 XLSX/JSON 导出。
 
     如果未提供 session_id / jwt，会自动尝试从当前 MCP 会话隔离凭证中加载。
     若无 OPS 登录态但设置了 OPSCLI_KEEPA_API_KEY，也可直接执行。
@@ -258,11 +258,13 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_mcp_export_format(value: str) -> str:
-    """校验 MCP 对外导出格式；当前只允许生成用户可读表格。"""
+    """校验 MCP 对外导出格式。"""
     text = (value or "").strip().lower()
     if text in {"", "xls", "xlsx"}:
         return "xls"
-    raise ValueError(f"不支持的导出格式：{value}。Keepa MCP 当前仅支持 xls/xlsx 表格导出。")
+    if text == "json":
+        return "json"
+    raise ValueError(f"不支持的导出格式：{value}。Keepa MCP 当前支持 xls/xlsx/json 导出。")
 
 
 def _sanitize_public_export(public: dict[str, Any]) -> None:
