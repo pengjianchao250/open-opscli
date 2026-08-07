@@ -13,6 +13,7 @@ from .helpers import _err, _ok
 
 _DASHBOARD_BRIDGE_REFERENCE_FILES = (
     "dashboard-operation-standards.md",
+    "dashboard-dataset-guide.md",
     "dashboard-tool-contract.md",
 )
 """Bridge 入口按固定顺序合并的参考规范文件。"""
@@ -99,7 +100,7 @@ async def dashboard_data_analysis_spec_must_read() -> dict:
 async def dashboard_ai_bridge_spec_must_read() -> dict:
     """读取仪表盘编辑与 Bridge 协议规范。
 
-    返回 `ops-dashboard-ai-bridge` 的主流程和两份 reference 合并正文。本工具
+    返回 `ops-dashboard-ai-bridge` 的主流程和三份 reference 合并正文。本工具
     不会提供或执行 `dashboard_*` 页面工具；实际页面操作仍要求
     operation-frontend 为当前会话注入合法 Dashboard 页面上下文。
     """
