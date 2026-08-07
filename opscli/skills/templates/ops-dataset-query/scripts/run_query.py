@@ -358,6 +358,25 @@ def _extract_rows(response: dict) -> tuple[list[dict], Any]:
     return [row for row in rows if isinstance(row, dict)], total
 
 
+def _extract_currency(response: dict) -> str | None:
+    """从返回 JSON 提取本次实际生效的币种代码（兼容多层形状）。
+
+    服务端在 `meta.currency` 声明本次查询金额使用的币种（ISO 4217，如 CNY/USD）。
+    实测存在 `data.result.meta`、`data.meta` 和顶层 `meta` 三种形状，逐层兜底取第一个
+    非空字符串。该值必须进 stdout 的 disclosures：Agent 的金额结论要据此声明币种，
+    只落在全量结果文件里会导致模型为了拿币种额外读一次文件，实际上往往被跳过。
+    """
+    for path in (("data", "result", "meta"), ("data", "meta"), ("meta",)):
+        node: Any = response
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, dict):
+            currency = node.get("currency")
+            if isinstance(currency, str) and currency.strip():
+                return currency.strip().upper()
+    return None
+
+
 def _sort_value(value: Any) -> tuple[int, float | str]:
     """排序键归一：数值优先按数值比较，None 沉底。"""
     if value is None:
@@ -593,6 +612,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             # 模型据此把首页写成全量结论
             "truncated": total is not None and len(rows) < (total or 0),
         }
+        # 币种披露：meta.currency 是服务端本次生效币种的唯一权威来源。有值必须让模型
+        # 原样声明；没有值时明确要求「只能说未声明」，堵住按 _cny 后缀或经验猜币种的路径
+        currency = _extract_currency(response)
+        disclosures["currency"] = currency
+        disclosures["currency_disclosure_zh"] = (
+            f"本次金额币种为 {currency}：结论首句、结果表头和导出口径页必须写明该币种；"
+            "禁止参考外部汇率折算或跨币种相加，需要其他币种时重新发起带币种意图的查询"
+            if currency
+            else "本次返回未声明币种：只能如实说明未声明，禁止按字段名后缀、数据集习惯或历史会话推断具体货币"
+        )
         if auto_complete_note:
             disclosures["server_paging"] = auto_complete_note
             disclosures["server_paging_disclosure_zh"] = (

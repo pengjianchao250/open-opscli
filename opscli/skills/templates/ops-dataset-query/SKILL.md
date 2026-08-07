@@ -9,7 +9,7 @@ description: >
   等待重跑即可，禁止自行升级）；只有规划器客观不可用（澄清/阻断、脚本报错重跑仍失败、
   命令窗口连续超时、运行环境缺 python3）时才转 SKILL.md 的降级路径；
   任何路径都禁止凭记忆手拼查询参数或使用未经元数据核对的字段。
-version: 1.3.18
+version: 1.3.19
 ---
 
 # ops-dataset-query
@@ -127,6 +127,11 @@ CLI-only 常规结果分析不要读取 `references/result-analysis.md`：`run_q
 - 0 行只能说明没有返回记录，不能判断业务为 0；全零不等于无数据；空值不等于 0。
 - 周期比较只使用已返回的本期、`last_*`、`diff_*`、`pct_*` 列，缺列时说明无法比较。不同原币不得混加，也不得与 CNY 列混加。
 - 全局币种换算：用户请求含币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时，规划器自动把 `globalCurrency` 写入 `query_template` 并纳入 integrity 哈希——禁止手工增删改写该键，直接执行模板即可；结论中须披露金额已按该币种换算。未识别到币种意图时不注入，由后端回退用户默认配置。
+- **返回币种以 `disclosures.currency` 为准**：服务端在返回的 `meta.currency` 声明本次实际生效的币种代码（ISO 4217，如 `CNY`/`USD`），执行器已把它提取到 stdout 的 `disclosures.currency` 与 `disclosures.currency_disclosure_zh`——**直接用这两个字段，不需要为了拿币种去读 `full_result_file`**。
+  - 有值：结论首句、结果表表头和 Excel 口径页必须显式写明币种，例如 `currency=CNY` 即声明"本次金额均为人民币（CNY）计价"，不得只写"金额/销售额"了事。
+  - 为 `null`：只能说明"本次返回未声明币种"，禁止据字段名、数据集习惯或历史会话推断具体货币（与 `evidence_contract` 的 `currency_not_declared` 披露一致）。
+  - 与请求的 `globalCurrency` 不一致时**以 `disclosures.currency` 为准**，并把差异如实披露。
+- **禁止主动参考外部汇率**：不得用模型记忆、外部行情或任何不在本次返回中的汇率，把结果金额换算成其他币种，也不得跨币种相加或按汇率折算后比较。用户需要其他币种口径时，只能把币种意图写回请求重新查询，由服务端按 `globalCurrency` 换算后重新取 `meta.currency`。
 - Top N 或截断必须披露排序、展示数和总行数；未查询范围不得外推。
 - 披露权限、样本、公式和数据新鲜度。没有刷新完成度或外部证据时，不把末日异常当成业务事实，也不得声称因果。
 

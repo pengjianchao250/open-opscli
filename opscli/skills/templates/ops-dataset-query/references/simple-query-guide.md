@@ -33,6 +33,33 @@ MCP Tool 使用 snake_case，JSON payload 使用 camelCase，CLI 选项使用 ke
 - **未识别到币种意图**时模板不含该键；此时后端会回退到当前用户在 `dm_user_settings` 的默认币种配置，用户也未配置则不做换算。
 - **非白名单币种**（如 HKD/AUD）不注入，且后端会拒绝，请勿伪造。
 
+## 返回币种 meta.currency（结果侧）
+
+`globalCurrency` 是**请求侧**参数，`meta.currency` 是**返回侧**事实，两者必须分开看待。
+
+- **位置**：服务端写在返回的 `meta.currency`（视返回形状位于顶层 `meta.currency`、`data.meta.currency` 或 `data.result.meta.currency`）。执行器已统一提取到 stdout 的 `disclosures.currency` 与 `disclosures.currency_disclosure_zh`，**CLI 路径直接读这两个字段即可**，无需再打开 `full_result_file`；MCP 等旁路拿到裸结果时才自行从 `meta.currency` 取。
+
+```json
+{
+  "success": true,
+  "data": [],
+  "meta": {
+    "dataSource": "doris_analytics",
+    "rowCount": 0,
+    "totalCount": 0,
+    "queryId": "54e0bc13-4bab-45c4-a291-ba194fa54aac",
+    "currency": "CNY"
+  },
+  "error": null
+}
+```
+
+- **含义**：该值是服务端本次实际生效的币种代码（ISO 4217）。上例 `"currency": "CNY"` 表示本次查询金额均按**人民币**计价，结论中必须原文声明。
+- **必须声明**：结果含金额类指标且 `meta.currency` 有值时，结论首句、结果表表头和 Excel 口径页都要写明币种；未声明币种的金额结论视为不合规。
+- **缺失时不推断**：该键缺失或为 `null` 时只能说明"本次返回未声明币种"，禁止按字段名后缀、数据集习惯或历史会话断定货币。
+- **冲突以返回为准**：请求传了 `globalCurrency=USD` 但 `meta.currency` 返回 `CNY` 时，以 `CNY` 陈述并披露该差异，不得按请求值描述。
+- **禁止外部汇率**：不得引用模型记忆或外部行情汇率做换算、跨币种相加或折算比较；需要其他币种时重新发起带币种意图的查询，由服务端换算。
+
 ## 授权占位符模板
 
 ```json

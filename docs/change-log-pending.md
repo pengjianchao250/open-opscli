@@ -6256,3 +6256,28 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：新增佰易只读命令命名空间，通过当前环境的 OPS 服务和认证访问接口；现有 auth、query、MCP 和 Skill 行为不变。
 **回滚方式**：删除 `opscli/baiyi/` 与 `tests/baiyi/`，并撤销 `opscli/cli.py` 中 Baiyi app 的 import 和注册。
 ---
+
+## 2026-08-07 skills(ops-dataset-query) - 两版 Skill 补充返回币种 meta.currency 声明规则
+
+**变更原因**：取数接口返回的 `meta.currency`（如 `"currency": "CNY"`）声明了本次查询服务端实际生效的币种，但两个版本的 Skill 文档只覆盖请求侧的 `globalCurrency` 换算参数和原币/`_cny` 字段消歧，**没有任何一处**要求 Agent 依据返回值声明币种，也没有禁止参考外部汇率，导致金额结论可能不带币种或被模型用记忆汇率私自折算。
+**改动点**：仅改文档，未动任何脚本。
+- 仓库模板版 `opscli/skills/templates/ops-dataset-query/`：`SKILL.md` 结果分析章节新增「返回币种以 meta.currency 为准」与「禁止主动参考外部汇率」两条（含取值位置、缺失不推断、与 globalCurrency 冲突时以返回为准）；`QUERY_SPEC.md` 范围与口径新增一条；`references/result-analysis.md` 范围与口径新增两条；`references/simple-query-guide.md` 新增「返回币种 meta.currency（结果侧）」小节（含返回样例）。
+- 已安装版 `/Users/mask/log/ops-dataset-query/`：`SKILL.md` 新增「铁律十五：返回币种 meta.currency 必须如实声明，禁止参考外部汇率」；`QUERY_SPEC.md` 同上新增一条；`references/simple-query-guide.md` 新增结果侧小节；`references/cli-simple-guide.md` 在 `--global-currency` 说明后补返回侧提示；`references/rules.md` 第四章币种歧义规则补「结果侧覆盖（优先级最高）」、15.4 币种口径补两条。
+**验证结果**：`grep -c "meta.currency"` 确认 9 个目标文件全部命中新增段落；`grep -rn "ops-dataset-query" tests/` 确认无测试断言该 Skill 的 SKILL.md 内容或 frontmatter 版本，纯文档改动不触发测试回归。
+**影响范围**：仅 Agent 行为契约文档。执行器 `run_query.py` 的 stdout `disclosures` 未新增 currency 字段（用户明确选择"只改文档不动脚本"），模板版 Agent 需从 `disclosures.full_result_file` 读取 `meta.currency`，文档中已注明该读取属允许操作。CLI/MCP 执行路径、规划器、执行器校验均未变动。两版 `data/VERSION.json` 版本号未 bump。
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/` 回滚仓库模板版；`/Users/mask/log/ops-dataset-query/` 不在本仓库，需手工撤销上述 5 个文件的新增段落。
+---
+
+## 2026-08-07 skills(ops-dataset-query) - 执行器披露返回币种 + 两版升版
+
+**变更原因**：上一条只改了文档，模板版 Agent 仍需额外读一次 `disclosures.full_result_file` 才能拿到 `meta.currency`，与 SKILL.md「正常路径最多 3 次工具调用」冲突，实战中大概率被跳过，金额结论仍会漏币种或被模型用记忆汇率私自折算。按用户要求把币种提到执行器 stdout。
+**改动点**：
+- `scripts/run_query.py`：新增 `_extract_currency(response)`，按 `data.result.meta` → `data.meta` → 顶层 `meta` 三种形状兜底提取 `currency`，做去空白与大写归一，取不到返回 None；在 `disclosures` 中固定输出 `currency` 与 `currency_disclosure_zh` 两键（有值要求原样声明并禁止外部汇率折算，无值要求只说"未声明"且禁止推断）。`query_flow.py` 直接调 `run_query.main()`，stdout 自动透传，无需改动。
+- `SKILL.md` / `references/simple-query-guide.md`：币种取值来源由「读 full_result_file」改为「直接用 `disclosures.currency`」，MCP 等旁路仍从裸结果的 `meta.currency` 取。
+- 版本号：模板版 `SKILL.md` frontmatter 与 `data/VERSION.json` 均 1.3.18 → 1.3.19；已安装版 `/Users/mask/log/ops-dataset-query/` frontmatter 1.0.2 → 1.0.3、`data/VERSION.json` 1.1.0 → 1.1.1（该版本两处编号本就不同源，按各自序列 +1，未擅自统一）。
+- 已安装版 `SKILL.md` 的新增铁律十五原先误插在铁律十二与十三之间，已移到铁律十四之后，编号顺序恢复为一至十五连续。
+- 新增 `tests/skills/test_run_query_currency.py`：8 个参数化用例覆盖三种返回形状、大小写归一和四种"未声明"形态；2 个端到端用例通过 `main()` 断言 `disclosures.currency` 与 `currency_disclosure_zh` 真的进了 stdout。
+**验证结果**：`pytest tests/skills/test_run_query_currency.py test_run_query_server_paging.py test_run_query_default_filters.py test_dataset_query_flow.py test_updater.py test_install_preserves_metadata.py -q` → 46 passed。`grep -rn "1.3.18"` 确认除历史变更记录外无残留引用；`manifest.json` 不含版本字段，无需同步。`pytest tests/skills -q` 目录级仍是既存的 `ValueError: I/O operation on closed file` capture 崩溃（"no tests ran"），已用 `--ignore` 排除本次新增测试复现，确认与本次改动无关。
+**影响范围**：`disclosures` 新增两个键，属向后兼容的追加；行数、截断、排序、默认条件等既有披露逻辑与 payload 构造、执行器校验均未改动。远端升级会因模板版升版到 1.3.19 而重新下发文档。
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/ && rm tests/skills/test_run_query_currency.py`；`/Users/mask/log/ops-dataset-query/` 不在本仓库，需手工撤销 SKILL.md 铁律十五、两处版本号及 references 下的新增段落。
+---
