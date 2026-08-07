@@ -3,8 +3,8 @@
 ## 2026-08-07 MCP 共享数据沉淀 - Keepa 成功数据写入 MySQL
 
 **变更原因**：Keepa 成功任务此前只保留本地 JSON/XLSX 和上传文件，未进入统一采集数据库；当前需要先使用仅内网可达的测试库验证，后续再切换为内外网可达的统一数据库。
-**改动点**：将 Outbox、Parser Registry、Worker、MySQL Repository 和成功合同工具提取到 `opscli/shared/collection_storage/`。Keepa 保持在通用 MCP 本地执行并写入 `mcp.sqlite3` Outbox；SellerSprite 保持在 Collector MCP 并写入 `collector.sqlite3` Outbox；两个宿主复用同一个 MySQL 五表合同。来源 Parser、Submitter 和 Reconciler 分别归属 Keepa/SellerSprite 模块，MySQL 故障只重试沉淀，不重新采集。
-**验证结果**：共享 Runtime、宿主 Outbox 隔离和来源 Adapter 聚焦测试 `28 passed`；MCP Keepa/Quota、Collector Profile/Server/Bundle 测试 `51 passed`；SellerSprite 调度、队列、健康和沉淀回归 `113 passed`。Keepa 全组 `50 passed, 1 failed`，失败为既有 `keepa-debug` 根命令未注册基线；仓库全量测试仍在收集阶段出现既有 27 项错误及 pytest 捕获流关闭问题。
+**改动点**：将 Outbox、Parser Registry、Worker、MySQL Repository 和成功合同工具提取到 `opscli/shared/collection_storage/`。Keepa 保持在通用 MCP 服务器本地执行并写入该服务器的 `mcp.sqlite3` Outbox；SellerSprite 保持在另一台 Collector MCP 服务器并写入该服务器的 `collector.sqlite3` Outbox；两个宿主只复用代码和 MySQL 五表合同，不共享 Runtime、SQLite 或本地目录。来源 Parser、Submitter 和 Reconciler 分别归属 Keepa/SellerSprite 模块，MySQL 故障只重试沉淀，不重新采集。
+**验证结果**：共享存储实现、各宿主独立 Runtime/Outbox 和来源 Adapter 聚焦测试 `28 passed`；MCP Keepa/Quota、Collector Profile/Server/Bundle 测试 `51 passed`；SellerSprite 调度、队列、健康和沉淀回归 `113 passed`。Keepa 全组 `50 passed, 1 failed`，失败为既有 `keepa-debug` 根命令未注册基线；仓库全量测试仍在收集阶段出现既有 27 项错误及 pytest 捕获流关闭问题。
 **影响范围**：启用 `OPSCLI_COLLECTION_STORAGE_ENABLED` 时，通用 MCP 的 Keepa 与 Collector MCP 的 SellerSprite 成功任务进入统一 MySQL；默认关闭时无数据库副作用。不回填历史目录，不新增来源专属表。Keepa Tool 仍属于通用 MCP，但远程 `keepa_run` 不再公开服务端 `output_dir`，确保所有成功结果都进入可补偿扫描的受控目录；本地 Keepa Manager 能力不变。
 **回滚方式**：关闭共享存储配置并回退两个宿主的存储生命周期组合；既有 MySQL 记录和两个 Outbox 可保留。
 

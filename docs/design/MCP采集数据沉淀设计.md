@@ -6,7 +6,7 @@
 
 ## 2. 模块接口
 
-共享模块位于 `opscli/shared/collection_storage/`，不依赖任何 MCP 宿主或采集来源。它对通用 MCP 和 Collector MCP 提供以下接口：
+共享模块位于 `opscli/shared/collection_storage/`，不依赖任何 MCP 宿主或采集来源。这里的“共享”是指两个部署包复用同一套代码和 MySQL 表合同，不是跨服务器共享 Python Runtime、SQLite 文件或本地目录。它对通用 MCP 和 Collector MCP 提供以下接口：
 
 ```text
 CollectionSubmission  成功采集任务引用
@@ -35,8 +35,9 @@ KeepaApiManager 完成 result.json 和 XLSX
   -> 通用 MCP SQLite Outbox
   -> 共享 Parser Registry / Worker
 
-两个独立 Outbox
-  -> 同一个 MySQL Repository 和五表合同
+两个服务器上的独立 Outbox / Worker
+  -> 各自的 MySQL Repository 实例
+  -> 同一个 MySQL schema 和五表合同
 ```
 
 采集状态和沉淀状态相互独立。MySQL 故障只重试沉淀，不允许重新调用 SellerSprite 或 Keepa。Keepa 原始响应仍只登记文件 URI、大小和 SHA-256，格式化 XLSX 每个工作表作为独立 Dataset 入库。
@@ -82,8 +83,8 @@ production
 debug
 ```
 
-不得从文件名、目录或主机名推断。每个宿主 Outbox 首次启用时独立固定 `live_cutover_at`。SellerSprite 在任务成功事务内追加独立自增成功事件，对账游标按成功事件顺序推进。Keepa 在完整写入结果文件后直接提交通用 MCP Outbox；Reconciler 扫描默认 Keepa 输出目录中 cutover 后且尚未存在于 Outbox 的 `result.json`。两个宿主不得共用 SQLite 文件，默认分别使用 `collector.sqlite3` 和 `mcp.sqlite3`。
+不得从文件名、目录或主机名推断。每个宿主 Outbox 首次启用时独立固定 `live_cutover_at`。SellerSprite 在任务成功事务内追加独立自增成功事件，对账游标按成功事件顺序推进。Keepa 在完整写入结果文件后直接提交通用 MCP Outbox；Reconciler 扫描默认 Keepa 输出目录中 cutover 后且尚未存在于 Outbox 的 `result.json`。通用 MCP 与 Collector MCP 部署在不同服务器：`mcp.sqlite3` 只存在于通用 MCP 服务器，`collector.sqlite3` 只存在于 Collector 服务器，禁止通过 NFS、文件同步或复制运行中数据库的方式共享 Outbox。
 
-生产 MySQL 连接必须配置受信任 CA，并验证服务端证书和主机身份；当前内网测试数据库可以按受控网络能力关闭 TLS。后续切换内外网可达的统一数据库时，只更换连接、Secret 和 CA 配置，不改变来源 Parser 或数据库表合同。
+两台服务器必须分别配置并验证到 MySQL 的网络、DNS、账号和 TLS 连通性。生产 MySQL 连接必须配置受信任 CA，并验证服务端证书和主机身份；当前内网测试数据库只能在两台服务器都具备内网路由时用于联调。后续切换内外网可达的统一数据库时，分别更换两台服务器的连接、Secret 和 CA 配置，不改变来源 Parser 或数据库表合同。
 
 TODO：未来单独实现历史 backfill，只扫描生产环境状态为 `succeeded` 的任务，先 dry-run，再以 `ingestion_mode=backfill` 幂等导入。
