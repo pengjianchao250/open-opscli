@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "opscli" / "skills" / "templates"
 SKILL_VERSIONS = {
     "ops-dashboard-data-analysis": "1.0.6",
-    "ops-dashboard-ai-bridge": "1.0.26",
+    "ops-dashboard-ai-bridge": "1.0.31",
 }
 SKILL_LIST_DESCRIPTIONS = {
     "ops-dashboard-data-analysis": "只读分析当前仪表盘的趋势、对比、异常、排名、贡献和业务原因。",
@@ -59,14 +59,18 @@ def test_dashboard_skill_metadata_is_consistent(skill_name: str, version: str):
 
 
 def test_dashboard_skills_keep_compact_progressive_content():
-    """编辑规范合并后不得膨胀，分析 Skill 必须保持短小。"""
+    """核心编辑规范与数据集指南分别受体积门禁约束。"""
     bridge_files = _skill_markdown("ops-dashboard-ai-bridge")
     bridge_dir = TEMPLATES_DIR / "ops-dashboard-ai-bridge"
     assert {path.name for path in (bridge_dir / "references").glob("*.md")} == {
+        "dashboard-dataset-guide.md",
         "dashboard-operation-standards.md",
         "dashboard-tool-contract.md",
     }
-    assert sum(len(path.read_bytes()) for path in bridge_files) <= 14_000
+    dataset_guide = bridge_dir / "references" / "dashboard-dataset-guide.md"
+    core_files = [path for path in bridge_files if path != dataset_guide]
+    assert sum(len(path.read_bytes()) for path in core_files) <= 14_500
+    assert len(dataset_guide.read_bytes()) <= 13_500
 
     analysis = (
         TEMPLATES_DIR / "ops-dashboard-data-analysis" / "SKILL.md"
@@ -84,6 +88,9 @@ def test_dashboard_bridge_routes_intents_without_forcing_one_creation_tool():
     contract = (bridge_dir / "references" / "dashboard-tool-contract.md").read_text(
         encoding="utf-8"
     )
+    dataset_guide = (bridge_dir / "references" / "dashboard-dataset-guide.md").read_text(
+        encoding="utf-8"
+    )
 
     assert skill.count("## 意图路由") == 1
     routing = skill.split("## 意图路由", 1)[1].split("## 新建图表", 1)[0]
@@ -92,17 +99,27 @@ def test_dashboard_bridge_routes_intents_without_forcing_one_creation_tool():
         "明确新建图表",
         "修改已有图表",
         "分析主题、总览、趋势、对比或复盘目标",
-        "创建、添加、批量创建",
+        "明确创建、添加或批量创建",
         "移动、改名、换数据集、增删替换或重排字段",
     ):
         assert intent in skill
     assert "禁止新建图表代替修改" in routing
 
     creation = skill.split("## 新建图表", 1)[1].split("## 修改已有图表", 1)[0]
-    assert "未要求数据集或字段" in creation
-    assert "未配置图表" in creation
-    assert "指定数据集时" in creation
-    assert "指定字段、填充方式" in creation
+    assert "未要求数据集或字段" not in creation
+    assert "按计划创建未配置图表" not in creation
+    assert "识别用户意图" in creation
+    assert "拆成 5 个不重复的问题" in creation
+    assert "每项明确标题、`viewType` 和字段需求" in creation
+    assert "写入前锁定恰好 5 张的有序计划" in creation
+    assert "指定数量不是 5 张时先询问" in creation
+    assert "不得用重复问题或无依据图表凑数" in creation
+    assert "普通建图均读取 `dashboard-dataset-guide.md` 自动判断候选" in creation
+    assert "未指定时筛出 1 到 3 个语义候选" in creation
+    assert "已指定时作为优先候选" in creation
+    assert "唯一或明显最佳时自动选定" in creation
+    assert "锁定唯一数据集后读取完整字段目录" in creation
+    assert "普通数据图表不得创建未配置图表" in creation
     assert "dashboard_editor_batch_create_charts" in creation
     assert "dashboard_editor_batch_configure_charts" in creation
     assert "不得编造 `templateUuid`" in creation
@@ -131,87 +148,129 @@ def test_dashboard_bridge_routes_intents_without_forcing_one_creation_tool():
     assert "模型不计算坐标或宽度" in standards
     assert "位置和宽度由页面按计划队列处理" in standards
     assert "字段计划必须来自所选数据集在本轮返回的完整字段目录" in standards
-    assert "仅为规划建议，不构成页面固定模板" in standards
-    assert "用户指定类型和数量时服从用户" in standards
-    assert "最终数量由目标和字段决定" in standards
+    assert "没有业务场景固定组合或兜底" in standards
+    assert "用户指定的类型或标题必须纳入计划" in standards
+    assert "恰好 5 张是创建硬门禁" in standards
+    assert "未确认不写入" in creation
+    assert "字段无法支撑 5 张有意义的图表时询问或停止" in standards
+    assert "不得重复问题、无依据凑数、少建或多建" in standards
+    assert "普通新建都先用 `dashboard-dataset-guide.md` 按意图自动判断语义候选" in standards
+    assert "4 到 6" not in skill + standards + dataset_guide + contract
+    assert "不存在默认图表组合、默认数量或业务分类兜底" not in standards
+    assert "场景组合模板" not in skill + standards + dataset_guide + contract
+    assert "分析场景通常选 4 到 5 张" not in standards
+    assert "指标卡只配置 1 个度量" not in standards
+    assert "环形图只配置 1 个类别维度和 1 个度量" not in standards
+
+    assert "dashboard-dataset-guide.md" in skill
+    assert "指南不代表授权或可用性" in standards
+    assert "推荐图表只作候选，不构成默认组合" in standards
 
     chart_selection = standards.split("## 图表选择", 1)[1].split("## 修改安全", 1)[0]
-    priorities = (
-        "增长与机会",
-        "营销与转化",
-        "供应链执行",
-        "问题与售后",
-        "绩效与健康监控",
-        "部门工作台兜底",
-    )
-    assert [chart_selection.index(priority) for priority in priorities] == sorted(
-        chart_selection.index(priority) for priority in priorities
-    )
-    for category in (
-        "销售",
-        "市场",
-        "广告",
-        "流量",
-        "活动",
-        "库存",
-        "物流",
-        "退款",
-        "客服",
-        "监控提醒",
-        "平台报告",
-        "运营监控",
-        "部门数据",
-    ):
-        assert category in chart_selection
-
     expected_view_types = {
-        "metric_trend",
+        "bar_basic",
+        "bar_stacked",
+        "bar_stacked_percent",
         "hbar_basic",
+        "hbar_stacked",
         "hbar_stacked_percent",
+        "line_basic",
+        "area_basic",
+        "area_stacked",
+        "pie_basic",
+        "pie_circle",
+        "combo_bar_line",
+        "combo_bar_line_stacked",
+        "combo_bar_line_group",
+        "metric_trend",
+        "detail_table",
+        "pivot_table",
         "crosstab_table",
         "indicator",
-        "combo_bar_line",
-        "bar_stacked_percent",
-        "pivot_table",
-        "detail_table",
-        "bar_stacked",
-        "line_basic",
-        "bar_basic",
         "progress_chart",
         "funnel_basic",
-        "pie_circle",
-        "hbar_stacked",
     }
     assert set(re.findall(r"`([a-z][a-z0-9_]*)`", chart_selection)) == expected_view_types
     for unavailable_view_type in (
+        "line_stacked",
         "scatter_basic",
         "radar_basic",
+        "combo_bar_line_stacked_percent",
         "indicator_trend",
         "matrix_table",
     ):
         assert f"`{unavailable_view_type}`" not in chart_selection
-    for field_guard in (
-        "时间趋势",
-        "离散对象比较",
-        "部分—整体且类别不超过 5–8 个",
-        "多系列共同分类轴",
-        "严格阶段",
-        "目标、预算、阈值或 SLA",
-        "记录级字段",
-        "分析场景通常选 4 到 5 张",
-        "不为凑数伪造关系",
+    for chart_trait in (
+        "每张图只回答一个明确问题",
+        "分类比较或排名",
+        "长标签、类别较多或排名用横向条形",
+        "绝对构成",
+        "占比结构",
+        "横轴必须有序",
+        "部分与整体",
+        "规模与比率",
+        "记录明细与精确值",
+        "行列交叉比较",
+        "真实目标、预算、阈值或 SLA",
+        "同一流程和群体",
+        "用户指定类型不兼容时不得静默替换",
     ):
-        assert field_guard in chart_selection
+        assert chart_trait in chart_selection
+
+
+def test_dashboard_bridge_dataset_guide_keeps_runtime_metadata_as_gate():
+    """数据集导航只提供语义候选，执行仍以页面实时元数据为准。"""
+    guide = (
+        TEMPLATES_DIR
+        / "ops-dashboard-ai-bridge"
+        / "references"
+        / "dashboard-dataset-guide.md"
+    ).read_text(encoding="utf-8")
+
+    for boundary in (
+        "本指南只生成语义候选",
+        "未返回的候选不可使用",
+        "不可据此手写字段 key、ID 或类型",
+        "不照搬数据集推荐组成固定套图",
+        "待本表补充",
+    ):
+        assert boundary in guide
+
+    for dataset_name in (
+        "即时综合数据集",
+        "SP+SD+SB广告数据集",
+        "客诉分析数据集",
+        "ASIN运营事件数据集",
+        "海运在途SKU明细",
+        "SKU仓租库龄明细",
+        "亚马逊SC设备流量转化率数据集",
+        "活动数据集",
+        "Shopify退货退款",
+    ):
+        assert dataset_name in guide
+
+    for view_type in (
+        "crosstab_table",
+        "metric_trend",
+        "bar_stacked_percent",
+        "detail_table",
+        "funnel_basic",
+        "progress_chart",
+    ):
+        assert f"`{view_type}`" in guide
+
+    for excluded_rule in ("聚合口径", "快照口径", "币种口径", "时间范围", "Top N"):
+        assert excluded_rule not in guide
 
 
 def test_dashboard_bridge_keeps_real_dataset_and_field_guards():
-    """业务规范必须拦截猜测字段和创建后试错。"""
+    """业务规范必须拦截猜测数据集、字段、筛选和创建后试错。"""
     content = "\n".join(
         path.read_text(encoding="utf-8")
         for path in _skill_markdown("ops-dashboard-ai-bridge")
     )
 
-    assert "数据集和字段必须来自本轮页面工具结果" in content
+    assert "数据集和字段仅取本轮页面工具结果" in content
     assert "完整字段目录" in content
     assert "真实角色" in content
     assert "字段写入前必须完成整批校验" in content
@@ -220,6 +279,15 @@ def test_dashboard_bridge_keeps_real_dataset_and_field_guards():
     assert "修正一次" in content
     assert "ask_user_question" in content
     assert "2 到 4 个真实候选" in content
+    assert "中文名称、说明、业务粒度和字段覆盖" in content
+    assert "完整技术标识只作精确匹配" in content
+    assert "`query_component` 仅用于筛选或关联，不作图表数据源" in content
+    assert "多义时询问" in content
+    assert "组织角色（部门、小组、大组、销售、开发）" in content
+    assert "平台、渠道、店铺、国家均独立" in content
+    assert "唯一完整等值时使用原值" in content
+    assert "禁止子串扩张" in content
+    assert "不加默认值" in content
 
 
 def test_dashboard_select_tool_and_skill_boundaries_do_not_conflict():
@@ -296,6 +364,7 @@ def test_dashboard_skills_are_discoverable_and_installable(tmp_path: Path):
         )
 
     bridge_path = tmp_path / "skills" / "ops-dashboard-ai-bridge"
+    assert (bridge_path / "references" / "dashboard-dataset-guide.md").exists()
     assert (bridge_path / "references" / "dashboard-tool-contract.md").exists()
     assert not (bridge_path / "data" / "dashboard-runtime-contract.json").exists()
 
