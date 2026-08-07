@@ -69,7 +69,7 @@ wheels = [
 
 [[package]]
 name = "aukeys-opscli"
-version = "0.0.150"
+version = "0.0.153"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
