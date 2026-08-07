@@ -128,6 +128,37 @@ async def keepa_run(
     如果未提供 session_id / jwt，会自动尝试从当前 MCP 会话隔离凭证中加载。
     若无 OPS 登录态但设置了 OPSCLI_KEEPA_API_KEY，也可直接执行。
     """
+    return await _keepa_run_impl(
+        scenario=scenario,
+        params=params,
+        site=site,
+        export_format=export_format,
+        output_dir=output_dir,
+        job_id=job_id,
+        reserve_tokens=reserve_tokens,
+        force=force,
+        wait=wait,
+        session_id=session_id,
+        jwt=jwt,
+        collection_submitter=None,
+    )
+
+
+async def _keepa_run_impl(
+    scenario: str,
+    params: dict[str, Any] | str | None = None,
+    site: str = "US",
+    export_format: str = "xls",
+    output_dir: str | None = None,
+    job_id: str | None = None,
+    reserve_tokens: int | None = None,
+    force: bool = False,
+    wait: bool = False,
+    session_id: str | None = None,
+    jwt: str | None = None,
+    collection_submitter=None,
+) -> dict:
+    """执行 Keepa，并允许 Collector Bundle 注入内部沉淀提交器。"""
     call_params = {
         "scenario": scenario,
         "site": site,
@@ -167,7 +198,10 @@ async def keepa_run(
             force=force,
             wait=wait,
         )
-        result = await KeepaApiManager(jwt=jw, session_id=sid).run(request)
+        manager_kwargs: dict[str, Any] = {"jwt": jw, "session_id": sid}
+        if collection_submitter is not None:
+            manager_kwargs["collection_submitter"] = collection_submitter
+        result = await KeepaApiManager(**manager_kwargs).run(request)
         return _ok(_public_result(result.to_dict()))
     except ValueError as exc:
         return _err(exc, tool="MCP → keepa_run(...)", call_params=call_params, auto_feedback=False)

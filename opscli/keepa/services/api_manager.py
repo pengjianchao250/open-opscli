@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,9 @@ from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 from opscli.shared.integration_accounts import IntegrationAccountClient
 
 
+logger = logging.getLogger(__name__)
+
+
 class KeepaApiManager:
     """执行 Keepa API 场景并保存请求和响应数据。"""
 
@@ -36,10 +41,12 @@ class KeepaApiManager:
         api_key_provider: KeepaApiKeyProvider | None = None,
         jwt: str | None = None,
         session_id: str | None = None,
+        collection_submitter: Callable[..., bool] | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         self.jwt = jwt
         self.session_id = session_id
+        self.collection_submitter = collection_submitter
         self.api_key_provider = api_key_provider or KeepaApiKeyProvider(
             self.settings,
             integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
@@ -213,6 +220,7 @@ class KeepaApiManager:
             warnings=warnings,
         )
         _write_json(result_path, result.to_dict())
+        self._submit_collection_result(request=request, result=result)
         return result
 
     def job_status(self, job_id: str) -> dict[str, Any]:
@@ -228,6 +236,31 @@ class KeepaApiManager:
         if not base_dir.is_absolute():
             base_dir = Path.cwd() / base_dir
         return base_dir.resolve() / job_id
+
+    def _submit_collection_result(
+        self,
+        *,
+        request: KeepaScenarioRequest,
+        result: KeepaScenarioResult,
+    ) -> None:
+        """提交成功任务；沉淀异常不能回滚已经完成的 Keepa 采集。"""
+        if self.collection_submitter is None:
+            return
+        try:
+            self.collection_submitter(request=request, result=result)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Keepa 成功任务提交 Collector 数据沉淀失败：job_id=%s",
+                result.job_id,
+            )
+            result.warnings.append(
+                {
+                    "stage": "collection_storage",
+                    "message": "Keepa 数据沉淀排队失败，采集结果已保留",
+                    "error": {"code": type(exc).__name__},
+                }
+            )
+            _write_json(Path(result.result_path), result.to_dict())
 
 
 def extract_quota(payload: dict[str, Any] | None) -> dict[str, Any]:

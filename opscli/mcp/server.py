@@ -33,7 +33,7 @@ from opscli.mcp.tools import dashboard as _dashboard_tools
 from opscli.mcp.tools import feedback as _feedback_tools
 from opscli.mcp.tools import google_trends as _google_trends_tools
 from opscli.mcp.tools import health as _health_tools
-from opscli.mcp.tools import keepa as _keepa_tools
+from opscli.mcp.tools import keepa_proxy as _keepa_tools
 from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import scrape_do as _scrape_do_tools
 from opscli.mcp.tools import seller_sprite_proxy as _seller_sprite_proxy_tools

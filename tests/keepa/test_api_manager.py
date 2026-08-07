@@ -124,6 +124,39 @@ def test_manager_writes_params_raw_result_and_xlsx_export(monkeypatch, tmp_path:
     assert sheet.cell(row=2, column=3).value == 7588958
 
 
+def test_manager_submits_complete_success_result_to_collection_storage(
+    monkeypatch, tmp_path: Path
+):
+    DummyKeepaClient.requests = []
+    submissions = []
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", DummyKeepaClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
+
+    def submitter(*, request, result):
+        assert Path(result.result_path).is_file()
+        assert result.export is not None
+        assert Path(result.export.path).is_file()
+        submissions.append((request, result))
+        return True
+
+    manager = KeepaApiManager(
+        settings=settings,
+        api_key_provider=DummyApiKeyProvider(),
+        collection_submitter=submitter,
+    )
+    request = KeepaScenarioRequest(
+        scenario="product",
+        site="US",
+        params={"asin": "B0088PUEPK", "history": False},
+        job_id="keepa-collection-submit",
+    )
+
+    result = _run(manager.run(request))
+
+    assert submissions == [(request, result)]
+
+
 def test_manager_uploads_export_to_keepa_export_folder(monkeypatch, tmp_path: Path):
     DummyKeepaClient.requests = []
     DummyUploadClient.instances = []

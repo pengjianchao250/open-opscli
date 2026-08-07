@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-08-07 Collector MCP - Keepa 成功数据沉淀到 MySQL
+
+**变更原因**：Keepa 成功任务此前只保留本地 JSON/XLSX 和上传文件，未进入统一采集数据库；当前需要先使用仅内网可达的测试库验证，后续再切换为内外网可达的统一数据库。
+**改动点**：Keepa 作为 Collector Bundle 执行，通用 MCP 保持原 `keepa_*` Tool 并静默代理到 Collector；成功结果在 `result.json` 和 XLSX 完成后提交通用 SQLite Outbox，由 Keepa Parser 写入既有 MySQL 五表。Keepa Reconciler 周期补交 cutover 后已经落盘但尚未进入 Outbox 的成功结果，恢复进程崩溃窗口。Collector 公开 `keepa_run` 不再接收服务端 `output_dir`，所有远程任务统一进入受控目录并纳入补偿扫描。SellerSprite 与 Keepa 共用新抽取的成功合同、Parser 工具和 Collector 代理基础设施，统一任务目录边界、Artifact SHA-256、XLSX Dataset、列规范化、Record Hash、身份透传和错误脱敏。数据库连接继续完全由环境变量、Secret 和可选 CA 配置，内网测试库与后续统一库不需要不同业务代码。
+**验证结果**：Keepa Parser/Submitter、Manager 提交时序、Collector Bundle/Profile、Keepa 代理和 SellerSprite 回归聚焦测试通过；当前仓库全量测试仍受既有 Shopify `_shopify_manager` 收集错误、`keepa-debug` CLI 注册缺失及部分 MCP 全局工具注册基线影响。
+**影响范围**：启用 `OPSCLI_COLLECTOR_STORAGE_ENABLED` 时，新 Keepa 成功任务进入现有统一采集 MySQL；默认关闭时无数据库副作用。不回填历史 Keepa 目录，不新增 Keepa 专属表；远程 `keepa_run` 移除不适用于服务端的 `output_dir` 参数，本地 Keepa Manager 能力不变。
+**回滚方式**：从 Collector Profile 移除 Keepa Bundle，恢复通用 MCP 直接注册 Keepa Tool，并回退 Keepa Submitter/Parser；关闭存储配置即可停止新任务入库，既有 MySQL 记录和 Outbox 可保留。
+
+---
+
 ## 2026-08-06 feedback - 日报改为管理洞察优先
 
 **变更原因**：Codex 分类后的日报直接铺开全部问题簇和反馈明细，更像结构化数据导出，缺少旧版 Codex 洞悉报告中的管理结论、重复证据、风险主题和治理项目。

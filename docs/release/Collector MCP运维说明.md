@@ -1,19 +1,19 @@
 # Collector MCP 运维说明
 
-本文是 Collector MCP 的生产部署和日常运维入口。当前只接入 SellerSprite；Keepa 不使用本文的 MySQL 配置。
+本文是 Collector MCP 的生产部署和日常运维入口。SellerSprite 与 Keepa 共用本文的 Outbox 和 MySQL 配置。
 
 ## 1. 服务边界与本地启动
 
 客户端只访问 OPS 通用 MCP。通用 MCP 通过内网 `OPSCLI_COLLECTOR_MCP_URL` 调用 Collector。
 
 ```text
-MCP Host / opscli seller-sprite
+MCP Host / opscli seller-sprite / opscli keepa
   -> OPS 通用 MCP :8765
   -> Collector MCP :8766
-  -> SellerSprite -> Outbox -> MySQL
+  -> SellerSprite / Keepa -> Outbox -> MySQL
 ```
 
-Collector 必须保持单实例、单 Worker。不要让多个实例写同一 SellerSprite 状态目录或 Outbox。
+Collector 必须保持单实例、单 Worker。不要让多个实例写同一 SellerSprite 状态目录、Keepa 输出目录或 Outbox。
 
 Windows 本地启动 Collector：
 
@@ -35,7 +35,7 @@ $env:OPSCLI_COLLECTOR_MCP_URL="http://127.0.0.1:8766/mcp"
   --port 8765
 ```
 
-本地与生产可以共用 MySQL，通过 `debug` 和 `production` 区分数据，但必须使用独立 Outbox。
+当前内网测试库只用于 `debug` 联调。测试与生产通过 `debug` 和 `production` 区分数据并使用独立 Outbox；未来统一数据库上线时只替换 MySQL 连接、Secret 和 CA 配置。
 
 ## 2. 生产准备
 
@@ -43,8 +43,8 @@ $env:OPSCLI_COLLECTOR_MCP_URL="http://127.0.0.1:8766/mcp"
 
 - `/opt/opscli/venv` 已安装目标版本；
 - 已创建服务用户 `opscli`；
-- SellerSprite 状态目录和浏览器 Profile 可写；
-- OPS、SellerSprite、MySQL、对象存储和 DNS 可达；
+- SellerSprite 状态目录、浏览器 Profile 和 Keepa 输出目录可写；
+- OPS、SellerSprite、Keepa、MySQL、对象存储和 DNS 可达；
 - 如需验证 MySQL TLS，已取得 CA 和证书匹配的内网域名；
 - 只部署一个 Collector 实例。
 
@@ -69,6 +69,24 @@ Outbox 保存待入库状态、重试租约和对账游标。不要删除，也�
 MySQL 推荐使用两个账号：迁移账号负责建表，运行账号只授予 `SELECT, INSERT, UPDATE, DELETE`。
 
 ## 3. 生产环境配置
+
+当前内网测试库联调必须使用 `debug`，并使用独立测试库名、账号和 Outbox：
+
+```ini
+OPSCLI_COLLECTOR_STORAGE_ENABLED=true
+OPSCLI_DATA_ENVIRONMENT=debug
+OPSCLI_COLLECTOR_STORAGE_SQLITE_PATH=C:\opscli-test\collection_storage.sqlite3
+OPSCLI_COLLECTOR_MYSQL_HOST=<内网测试库主机>
+OPSCLI_COLLECTOR_MYSQL_PORT=3306
+OPSCLI_COLLECTOR_MYSQL_DATABASE=<测试库名>
+OPSCLI_COLLECTOR_MYSQL_USER=<测试运行账号>
+OPSCLI_COLLECTOR_MYSQL_PASSWORD=<由 Secret 注入>
+OPSCLI_COLLECTOR_STORAGE_AUTO_CREATE_SCHEMA=false
+```
+
+测试库未配置 CA 仅适用于受控内网。后续统一数据库可被内外网访问时，必须使用证书域名并配置 `OPSCLI_COLLECTOR_MYSQL_SSL_CA`，同时把环境切换为 `production`。
+
+### 3.1 正式统一数据库
 
 创建 `/etc/opscli/collector.env`：
 

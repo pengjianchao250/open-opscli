@@ -43,8 +43,8 @@ _PROFILES = {
         profile_id="production",
         service_id="collector",
         display_name="数据采集服务",
-        bundles=("seller_sprite",),
-        critical_bundles=("seller_sprite",),
+        bundles=("seller_sprite", "keepa"),
+        critical_bundles=("seller_sprite", "keepa"),
     ),
 }
 

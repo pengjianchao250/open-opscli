@@ -13,7 +13,7 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_collector_only_exposes_public_and_seller_sprite_tools(monkeypatch):
+def test_collector_only_exposes_public_and_collection_bundle_tools(monkeypatch):
     async def allow_all():
         return None
 
@@ -43,8 +43,21 @@ def test_collector_only_exposes_public_and_seller_sprite_tools(monkeypatch):
     names = _run(scenario())
 
     assert PUBLIC_TOOLS <= names
-    assert len(names) == 14
-    assert all(name in PUBLIC_TOOLS or name.startswith("seller_sprite_") for name in names)
+    assert len(names) == 20
+    assert {name for name in names if name.startswith("keepa_")} == {
+        "keepa_export",
+        "keepa_job_status",
+        "keepa_quota_status",
+        "keepa_run",
+        "keepa_scenarios",
+        "keepa_spec_must_read",
+    }
+    assert all(
+        name in PUBLIC_TOOLS
+        or name.startswith("seller_sprite_")
+        or name.startswith("keepa_")
+        for name in names
+    )
     assert "query_simple" not in names
     assert "auth_system_sync" not in names
 
@@ -54,7 +67,7 @@ def test_collector_health_is_redacted_and_reports_not_ready_before_lifespan():
     health = _run(collector_modules_health())
 
     assert info["data"]["display_name"] == "数据采集服务"
-    assert info["data"]["bundles"] == ["seller_sprite"]
+    assert info["data"]["bundles"] == ["seller_sprite", "keepa"]
     assert info["data"]["single_worker_required"] is True
     assert health["data"]["status"] == "not_ready"
     serialized = str({"info": info, "health": health}).lower()

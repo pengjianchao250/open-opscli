@@ -204,6 +204,25 @@ class CollectionOutbox:
             raise ValueError(f"Collection Outbox 记录不存在：{record_id}")
         return _row_to_record(row)
 
+    def contains(
+        self,
+        *,
+        source_system: str,
+        source_job_id: str,
+        data_environment: str,
+    ) -> bool:
+        """判断来源任务是否已经进入 Outbox，不区分当前处理状态。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM collection_outbox
+                WHERE source_system = ? AND source_job_id = ? AND data_environment = ?
+                LIMIT 1
+                """,
+                (source_system, source_job_id, data_environment),
+            ).fetchone()
+        return row is not None
+
     def get_meta(self, key: str) -> str | None:
         """读取 Collector Outbox 生命周期元数据。"""
         with self._connect() as conn:
