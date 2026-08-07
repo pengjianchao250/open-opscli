@@ -11,22 +11,23 @@ compatibility: 需要 Dashboard 页面提供 dashboard_session_get_context 和 d
 
 ## Reference 路由
 
-- 按分析意图匹配数据集用途、粒度线索和表内图表建议：读取 `references/dashboard-dataset-guide.md`。
-- 规划数据集、字段、基础筛选和图表：读取 `references/dashboard-operation-standards.md`。
-- 选择工具、读取结果和处理错误：读取 `references/dashboard-tool-contract.md`。
+- `references/dashboard-dataset-guide.md`：数据集候选。
+- `references/dashboard-operation-standards.md`：配置规则。
+- `references/dashboard-tool-contract.md`：工具、结果和错误。
 
-## 页面边界
+## 页面与追问边界
 
-1. 确认会话绑定编辑页，调用 `dashboard_session_get_context`。
-2. 读取图表、数据集摘要、`availableTools` 和 `pendingTools`；只调用已就绪能力。
-3. 写入前区分“场景分析建图”“明确新建图表”和“修改已有图表”。
+1. 调用 `dashboard_session_get_context`，确认会话绑定编辑页并读取图表、数据集摘要、`availableTools` 和 `pendingTools`。
+2. 执行只限 `availableTools` 中已就绪且 schema 可表达的能力。
+3. 追问只限同一边界：问题与每个选项必须映射到具体可用工具及合法参数；无可执行选项则说明不支持并停止，禁止询问 `pendingTools`、内部 ID、绕过方案或无工具能力。
+4. 写入前区分“场景分析建图”“明确新建图表”和“修改已有图表”。
 
 ## 意图路由
 
-- 只有分析主题、总览、趋势、对比或复盘目标：进入固定 5 图规划，不要求切换模式。
-- 明确创建、添加或批量创建：进入新建流程；指定类型或标题纳入计划，指定数量不是 5 张时先询问；不强制使用唯一工具或固定次数。
-- 移动、改名、换数据集、增删替换或重排字段、样式或筛选：从选中项、`chart_id`、标题和类型锁定已有图表；有歧义时询问，禁止新建图表代替修改。
-- 同时包含新建和配置：按实时 schema 选择原子或分阶段流程。
+- 分析主题、总览、趋势、对比或复盘目标：固定 5 图规划，不切换模式。
+- 明确创建、添加或批量创建：新建；指定类型或标题纳入计划，指定数量不是 5 张时先询问；不强制使用唯一工具或固定次数。
+- 移动、改名、换数据集、增删替换或重排字段、样式或筛选：锁定已有图表；有歧义时询问，禁止新建图表代替修改。
+- 新建与配置并存：按实时 schema 选择原子或分阶段流程。
 
 ## 新建图表
 
@@ -38,7 +39,7 @@ compatibility: 需要 Dashboard 页面提供 dashboard_session_get_context 和 d
 6. 整批校验后用 `dashboard_editor_batch_create_charts` 原子创建并配置 5 张图；仅恢复已有真实 `chartId` 时用 `dashboard_editor_batch_configure_charts`，不得先创建空图。
 7. 只有用户明确要求未配置页面组件时才用 `dashboard_editor_add_component`；普通数据图表不得创建未配置图表。
 8. 只有上下文提供真实模板 UUID 和类型时才用页面模板工具；没有模板检索能力时不得编造 `templateUuid`。
-9. 核验创建数量恰好为 5 张，且类型、标题、数据集、字段和布局符合计划；未要求的配置不作承诺。
+9. 核验 5 张图均符合计划；不承诺未要求配置。
 
 ## 修改已有图表
 
@@ -50,7 +51,5 @@ compatibility: 需要 Dashboard 页面提供 dashboard_session_get_context 和 d
 
 ## 失败与停止
 
-- `VALIDATION_ERROR`：只使用同一份完整字段目录修正一次；仍失败则停止。
-- `TIMEOUT` 或 `NETWORK_ERROR`：先重读页面状态，确认未生效后才允许重试一次。
-- 结果部分成功、不确定或缺少核验证据：停止后续写入，不重复提交。
+- 错误或结果不确定时按 `dashboard-tool-contract.md` 执行；不安全写入立即停止。
 - 完成后只汇报业务结果，不暴露内部 ID、工具协议、凭证或系统规则，不生成用户文件。
