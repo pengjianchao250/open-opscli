@@ -1,7 +1,7 @@
 ---
 name: ops-dashboard-ai-bridge
 description: 用于已绑定 Dashboard 页面的当前仪表盘编辑；按分析、新建或修改意图选择流程。配置只用真实数据集和完整字段，无页面上下文时停止。
-version: 1.0.31
+version: 1.0.26
 compatibility: 需要 Dashboard 页面提供 dashboard_session_get_context 和 dashboard-tools.v2。
 ---
 
@@ -11,8 +11,7 @@ compatibility: 需要 Dashboard 页面提供 dashboard_session_get_context 和 d
 
 ## Reference 路由
 
-- 按分析意图匹配数据集用途、粒度线索和表内图表建议：读取 `references/dashboard-dataset-guide.md`。
-- 规划数据集、字段、基础筛选和图表：读取 `references/dashboard-operation-standards.md`。
+- 规划数据集、字段和图表：读取 `references/dashboard-operation-standards.md`。
 - 选择工具、读取结果和处理错误：读取 `references/dashboard-tool-contract.md`。
 
 ## 页面边界
@@ -23,22 +22,21 @@ compatibility: 需要 Dashboard 页面提供 dashboard_session_get_context 和 d
 
 ## 意图路由
 
-- 只有分析主题、总览、趋势、对比或复盘目标：进入固定 5 图规划，不要求切换模式。
-- 明确创建、添加或批量创建：进入新建流程；指定类型或标题纳入计划，指定数量不是 5 张时先询问；不强制使用唯一工具或固定次数。
+- 只有分析主题、总览、趋势、对比或复盘目标：在当前编辑模式按场景组合模板规划一组图表，不要求切换模式；该模板不是页面模板 UUID。
+- 明确创建、添加、批量创建及类型、数量或标题：按要求新建；单图和多图不强制使用唯一工具或固定次数。
 - 移动、改名、换数据集、增删替换或重排字段、样式或筛选：从选中项、`chart_id`、标题和类型锁定已有图表；有歧义时询问，禁止新建图表代替修改。
 - 同时包含新建和配置：按实时 schema 选择原子或分阶段流程。
 
 ## 新建图表
 
-1. 识别用户意图，拆成 5 个不重复的问题；每项明确标题、`viewType` 和字段需求。
-2. 写入前锁定恰好 5 张的有序计划；指定数量不是 5 张时先询问，未确认不写入；不得用重复问题或无依据图表凑数。
-3. 普通建图均读取 `dashboard-dataset-guide.md` 自动判断候选；未指定时筛出 1 到 3 个语义候选，已指定时作为优先候选。
-4. 搜索页面真实数据集，舍弃未返回候选；唯一或明显最佳时自动选定，多个候选会改变结果时用 `ask_user_question` 让用户选择。
-5. 锁定唯一数据集后读取完整字段目录，按真实角色规划 5 图槽位；不得猜字段 ID，无法支撑 5 张有效图时询问或停止。
-6. 整批校验后用 `dashboard_editor_batch_create_charts` 原子创建并配置 5 张图；仅恢复已有真实 `chartId` 时用 `dashboard_editor_batch_configure_charts`，不得先创建空图。
-7. 只有用户明确要求未配置页面组件时才用 `dashboard_editor_add_component`；普通数据图表不得创建未配置图表。
-8. 只有上下文提供真实模板 UUID 和类型时才用页面模板工具；没有模板检索能力时不得编造 `templateUuid`。
-9. 核验创建数量恰好为 5 张，且类型、标题、数据集、字段和布局符合计划；未要求的配置不作承诺。
+1. 指定类型、数量或标题时服从用户；未指定时按场景组合模板和实时能力选择。
+2. 未要求数据集或字段时，可创建单张或多张未配置图表；保存真实 `chartId`。
+3. 指定数据集时搜索真实候选；多个候选会改变结果时，用 `ask_user_question` 让用户选择。
+4. 指定字段、填充方式，或工具要求完整字段列表时，读取完整字段目录并规划兼容槽位；不得猜字段 ID。
+5. 数据集和字段计划已完整时，可用 `dashboard_editor_batch_create_charts` 原子创建配置；需要先创建时，收集真实 `chartId`，再用 `dashboard_editor_batch_configure_charts` 一次配置本轮目标图表。
+6. 只指定数据集但批量配置要求字段时，生成各图表最小合法配置；不得提交空 `fieldLists` 或重复创建。
+7. 只有上下文提供真实模板 UUID 和类型时才用页面模板工具；没有模板检索能力时不得编造 `templateUuid`。
+8. 按目标核验数量、类型、标题、数据集、字段和布局；未要求的配置不作承诺。
 
 ## 修改已有图表
 

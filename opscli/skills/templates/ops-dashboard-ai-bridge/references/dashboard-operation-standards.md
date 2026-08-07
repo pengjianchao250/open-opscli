@@ -1,67 +1,45 @@
 # Dashboard Operation Standards
 
-本文件定义数据集、字段、基础筛选和图表规则。流程见 `../SKILL.md`，参数见 `dashboard-tool-contract.md`。
+本文件定义数据集、字段和图表规则。流程见 `../SKILL.md`，参数见 `dashboard-tool-contract.md`。
 
 ## 能力边界
 
 - 只编辑当前页面，不用字段元数据推断真实业务数据。
 - 用户明确指向已有图表或使用移动、改名、换字段等修改动词时进入修改流程；要求分析主题、总览或新增视图时进入新建流程。
 - 页面固定 12 列，但模型不计算坐标或宽度；创建顺序、默认宽度和位置由页面处理。
-- 页面图表模板只指上下文提供真实 `templateUuid` 的能力。
+- 场景组合模板用于分析意图的图表规划，不等同于需要 `templateUuid` 的页面图表模板。
 
 ## 数据集
 
-- 数据集和字段仅取本轮页面工具结果，不猜测或手写 ID。
-- 普通新建都先用 `dashboard-dataset-guide.md` 按意图自动判断语义候选；用户指定的数据集优先，再以本轮真实名称、说明、粒度和字段覆盖核对；指南不代表授权或可用性。
-- 按中文名称、说明、业务粒度和字段覆盖选择，中文全名优先。
-- 用户明确给出的完整技术标识只作精确匹配，不从中文推导；`query_component` 仅用于筛选或关联，不作图表数据源。
-- 多个候选会改变结果时，用 `ask_user_question` 展示 2 到 4 个真实候选。
+- 数据集和字段必须来自本轮页面工具结果，禁止猜测或手写 ID。
+- 一个明确候选可直接使用；多个候选会改变结果时，用 `ask_user_question` 展示 2 到 4 个真实候选，不替用户选择。
 - 一批新图表共享一个 `datasetId`，不跨数据集拼接。
-- 字段计划必须来自所选数据集在本轮返回的完整字段目录；换数据集时重新读取。
+- 需要写入字段时，字段计划必须来自所选数据集在本轮返回的完整字段目录。
+- 修改已有图表的数据集时重新读取字段目录，不沿用历史轮次字段。
 
 ## 字段
 
 - 外层 `dimensions` 和 `metrics` 是字段真实角色。维度、度量只进入兼容槽位，双角色槽位才允许两类字段。
-- 按元数据 `title/key` 与说明匹配；多义时询问，不猜技术 key。
-- 组织角色（部门、小组、大组、销售、开发）与平台、渠道、店铺、国家均独立，不互相推导。
-- 按 schema 用 `actionFieldId/fieldId` 定位，仅提交真实 ID 和 `fieldSourceType`。
-- 图表字段的槽位、角色和数量服从本轮实时 schema，不固化旧界面限制。
+- 展示匹配用 `title/key`；定位优先用 `actionFieldId`，数字型操作按 schema 用 `fieldId`。
+- 字段定位器只提交真实 ID 和对应 `fieldSourceType`，不拼装完整字段对象。
+- 指标卡只配置 1 个度量；环形图只配置 1 个类别维度和 1 个度量。
+- 比率类指标必须明确分子、分母、统计粒度和筛选范围；口径不清时询问。
 - 字段写入前必须完成整批校验；任一字段不合法时不得提交字段配置，也不得声明配置完成。
-
-## 基础筛选
-
-- 仅配置用户明确要求且经本轮只读 capability 或授权枚举确认的筛选，不加默认值。
-- 枚举规范化后唯一完整等值时使用原值，禁止子串扩张；否则询问或阻断，不扩大范围。
 
 ## 图表选择
 
-新建前必须识别用户意图，拆成 5 个不重复的问题；每张图只回答一个明确问题，并确定标题、`viewType` 和字段需求。用户指定的类型或标题必须纳入计划；指定数量不是 5 张时先询问调整。
+用户指定类型和数量时服从用户，不受下表数量约束。只有分析意图未指定图表时才按下表选择；优先级表示内置组合的维护顺序，已知分类直接命中对应组合族，只有第 6 级是兜底。表内组合和顺序仅为规划建议，不构成页面固定模板：
 
-恰好 5 张是创建硬门禁。没有业务场景固定组合或兜底；字段无法支撑 5 张有意义的图表时询问或停止，不得重复问题、无依据凑数、少建或多建。
+| 优先级 | 组合族与分类 | 建议 `viewType` | 条件替换 |
+| --- | --- | --- | --- |
+| 1 | 增长与机会：销售、市场 | 销售：`metric_trend`、`hbar_basic`、`hbar_stacked_percent`、`crosstab_table`；市场：`indicator`、`combo_bar_line`、`hbar_basic`、`bar_stacked_percent`、`pivot_table` | 需要记录级处理时用 `detail_table` 替换汇总表 |
+| 2 | 营销与转化：广告、流量、活动 | 广告/流量：`indicator`、`combo_bar_line`、`hbar_basic`、`bar_stacked_percent`、`detail_table`；活动默认去掉结构图 | 同群体严格阶段成立时以 `funnel_basic` 替换结构图；活动按字段至多补一张结构图或漏斗图 |
+| 3 | 供应链执行：库存、物流 | `metric_trend`、`hbar_basic`、`bar_stacked`、`detail_table` | 有周转、库存、时效、预算或节点目标时增加 `progress_chart`，仍不超过 5 张 |
+| 4 | 问题与售后：退款、客服 | `metric_trend`、`hbar_basic`、`hbar_stacked_percent`、`detail_table` | 同时比较规模与比率时以 `combo_bar_line` 替换 `metric_trend` |
+| 5 | 绩效与健康监控：监控提醒、平台报告、运营监控 | 提醒：`indicator`、`line_basic`、`hbar_basic`、`hbar_stacked_percent`、`detail_table`；平台：`metric_trend`、`progress_chart`、`hbar_basic`、`detail_table`；运营：`metric_trend`、`bar_basic`、`hbar_stacked_percent`、`detail_table` | 提醒仅单指标时用 `metric_trend` 替换指标卡和折线；平台无目标时用结构图替换进度图；运营有健康目标时增加 `progress_chart` |
+| 6 | 部门工作台兜底：部门数据 | `metric_trend`、`hbar_basic`、`hbar_stacked_percent`、`detail_table` | 无法归入前 5 族时使用，生成前尽量细分业务主题 |
 
-数据集指南中的推荐图表只作候选，不构成默认组合；仍须按用户问题、图表特点、完整字段目录和实时 schema 逐图筛选。
-
-| `viewType` | 适合回答 | 选择条件 |
-| --- | --- | --- |
-| `indicator` | 当前关键值 | 只需概览状态，不表达趋势或分类关系 |
-| `metric_trend` | 关键值及其变化 | 有序维度与度量同时成立 |
-| `bar_basic` / `hbar_basic` | 分类比较或排名 | 类别少且标签短用柱图；长标签、类别较多或排名用横向条形 |
-| `bar_stacked` / `hbar_stacked` | 各类总量及绝对构成 | 需要可相加、同单位的构成维度 |
-| `bar_stacked_percent` / `hbar_stacked_percent` | 各类占比结构 | 关注比例而非绝对规模 |
-| `line_basic` | 连续或有序变化 | 横轴必须有序，离散类别比较不用折线 |
-| `area_basic` | 变化趋势及量级 | 需要强调规模，系列不宜过多 |
-| `area_stacked` | 总量变化及各系列贡献 | 系列可相加且单位一致 |
-| `pie_basic` / `pie_circle` | 少量类别的部分与整体 | 环形图仅在中心总值有用时选；类别多或数值接近时改用条形图 |
-| `combo_bar_line` | 规模与比率、趋势的联合比较 | 至少两组语义不同的度量，明确柱线职责 |
-| `combo_bar_line_stacked` | 构成规模与线指标 | 同时具备构成维度和线指标 |
-| `combo_bar_line_group` | 子类比较与线指标 | 同时具备子类维度和线指标 |
-| `detail_table` | 记录明细与精确值 | 需要查看实体、标识或逐行数据 |
-| `pivot_table` | 按行维度汇总并展开 | 需要层级查看，可加入列维度 |
-| `crosstab_table` | 行列交叉比较 | 同时具备行、列维度和度量 |
-| `progress_chart` | 实际值与明确目标的差距 | 必须有真实目标、预算、阈值或 SLA，不推断目标 |
-| `funnel_basic` | 有序阶段规模或转化 | 阶段属于同一流程和群体，顺序有业务意义 |
-
-只用实时 schema 允许的类型。选型后校验必填槽位、字段角色和数量；条件不足时换用满足问题的简单图表或询问，用户指定类型不兼容时不得静默替换。位置和宽度由页面按计划队列处理。
+只用实时 schema 允许的 `viewType`。分析场景通常选 4 到 5 张，但最终数量由目标和字段决定；字段不足时裁剪、替换、询问或停止，不为凑数伪造关系。时间趋势用 `line_basic`、`metric_trend` 或 `combo_bar_line`；离散对象比较用 `bar_basic` 或 `hbar_basic`；部分—整体且类别不超过 5–8 个用 `pie_circle`，更多类别用百分比堆叠；多系列共同分类轴用 `bar_stacked` 或 `hbar_stacked`；严格阶段用 `funnel_basic`；明确目标、预算、阈值或 SLA 用 `progress_chart`；记录级字段用 `detail_table`，聚合字段用 `pivot_table` 或 `crosstab_table`。位置和宽度由页面按计划队列处理。
 
 ## 修改安全
 
