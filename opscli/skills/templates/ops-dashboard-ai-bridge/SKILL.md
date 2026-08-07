@@ -1,7 +1,7 @@
 ---
 name: ops-dashboard-ai-bridge
 description: 用于已绑定 Dashboard 页面的当前仪表盘编辑；按分析、新建或修改意图选择流程。配置只用真实数据集和完整字段，无页面上下文时停止。
-version: 1.0.31
+version: 1.0.27
 compatibility: 需要 Dashboard 页面提供 dashboard_session_get_context 和 dashboard-tools.v2。
 ---
 
