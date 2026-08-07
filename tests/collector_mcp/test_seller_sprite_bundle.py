@@ -8,6 +8,10 @@ import pytest
 from opscli.seller_sprite import mcp_bundle
 
 
+class _DisabledStorageRuntime:
+    settings = type("Settings", (), {"enabled": False})()
+
+
 def test_seller_sprite_bundle_starts_and_closes_scheduler(monkeypatch):
     calls = []
 
@@ -24,7 +28,7 @@ def test_seller_sprite_bundle_starts_and_closes_scheduler(monkeypatch):
     )
 
     async def scenario():
-        async with mcp_bundle.lifespan():
+        async with mcp_bundle.lifespan(_DisabledStorageRuntime()):
             health = await mcp_bundle.health_check()
             assert health["status"] == "ready"
             assert health["checks"] == {"queue": "ok", "scheduler": "running"}
@@ -54,7 +58,7 @@ def test_seller_sprite_bundle_marks_failed_when_scheduler_start_fails(monkeypatc
     )
 
     async def scenario():
-        async with mcp_bundle.lifespan():
+        async with mcp_bundle.lifespan(_DisabledStorageRuntime()):
             health = await mcp_bundle.health_check()
             assert health == {
                 "bundle_id": "seller_sprite",
@@ -98,17 +102,13 @@ def test_seller_sprite_bundle_registers_collector_storage_adapter(monkeypatch):
     class FakeRuntime:
         settings = type("Settings", (), {"enabled": True, "data_environment": "debug"})()
 
-        def register_parser(self, parser):
+        def register_source(self, parser, reconciler):
             calls.append(f"parser:register:{parser.source_system}")
-
-        def unregister_parser(self, source_system):
-            calls.append(f"parser:unregister:{source_system}")
-
-        def register_reconciler(self, reconciler):
             calls.append(f"reconciler:register:{reconciler.source_system}")
 
-        def unregister_reconciler(self, source_system):
+        def unregister_source(self, source_system):
             calls.append(f"reconciler:unregister:{source_system}")
+            calls.append(f"parser:unregister:{source_system}")
 
         def submit(self, submission):
             return True
@@ -119,13 +119,8 @@ def test_seller_sprite_bundle_registers_collector_storage_adapter(monkeypatch):
         "opscli.seller_sprite.services.get_task_scheduler",
         lambda: scheduler,
     )
-    monkeypatch.setattr(
-        "opscli.collector_mcp.storage.runtime.get_collection_storage_runtime",
-        lambda: runtime,
-    )
-
     async def scenario():
-        async with mcp_bundle.lifespan():
+        async with mcp_bundle.lifespan(runtime):
             assert scheduler.collection_submitter is not None
 
     asyncio.run(scenario())
@@ -138,3 +133,4 @@ def test_seller_sprite_bundle_registers_collector_storage_adapter(monkeypatch):
         "reconciler:unregister:seller_sprite",
         "parser:unregister:seller_sprite",
     ]
+    assert scheduler.collection_submitter is None

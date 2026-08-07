@@ -7,13 +7,13 @@ from types import SimpleNamespace
 
 from openpyxl import Workbook
 
-from opscli.collector_mcp.storage.keepa_integration import (
+from opscli.keepa.collection_storage_integration import (
     KeepaCollectionReconciler,
     KeepaCollectionSubmitter,
 )
-from opscli.collector_mcp.storage.keepa_parser import KeepaCollectionParser
-from opscli.collector_mcp.storage.models import CollectionSubmission
-from opscli.collector_mcp.storage.outbox import CollectionOutbox
+from opscli.keepa.collection_storage_parser import KeepaCollectionParser
+from opscli.shared.collection_storage.models import CollectionSubmission
+from opscli.shared.collection_storage.outbox import CollectionOutbox
 from opscli.keepa.domain.models import (
     KeepaScenarioRequest,
     KeepaScenarioResult,
@@ -134,7 +134,7 @@ def test_keepa_submitter_adds_common_collection_environment(tmp_path):
     [submission] = runtime.submissions
     assert submission.source_system == "keepa"
     assert submission.source_job_id == "keepa-job-1"
-    assert submission.producer_service == "collector_mcp"
+    assert submission.producer_service == "mcp"
     assert submission.data_environment == "debug"
     assert submission.ingestion_mode == "live"
     assert submission.result_path == Path(result.result_path).resolve()

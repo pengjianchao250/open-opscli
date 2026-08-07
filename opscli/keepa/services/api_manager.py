@@ -250,7 +250,7 @@ class KeepaApiManager:
             self.collection_submitter(request=request, result=result)
         except Exception as exc:  # noqa: BLE001
             logger.exception(
-                "Keepa 成功任务提交 Collector 数据沉淀失败：job_id=%s",
+                "Keepa 成功任务提交采集数据沉淀失败：job_id=%s",
                 result.job_id,
             )
             result.warnings.append(

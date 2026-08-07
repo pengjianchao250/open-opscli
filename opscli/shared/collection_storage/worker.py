@@ -1,4 +1,4 @@
-"""Collector 采集结果持久化 Worker。"""
+"""共享采集结果持久化 Worker。"""
 
 from __future__ import annotations
 
@@ -6,12 +6,12 @@ import asyncio
 from typing import Protocol
 from uuid import uuid4
 
-from opscli.collector_mcp.storage.models import (
+from opscli.shared.collection_storage.models import (
     ParsedCollection,
     PermanentCollectionError,
 )
-from opscli.collector_mcp.storage.outbox import CollectionOutbox
-from opscli.collector_mcp.storage.registry import CollectionParserRegistry
+from opscli.shared.collection_storage.outbox import CollectionOutbox
+from opscli.shared.collection_storage.registry import CollectionParserRegistry
 
 
 class CollectionRepository(Protocol):

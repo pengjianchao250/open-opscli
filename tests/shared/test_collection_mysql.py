@@ -1,13 +1,13 @@
-from opscli.collector_mcp.storage.config import MySqlSettings
-from opscli.collector_mcp.storage.models import (
+from opscli.shared.collection_storage.config import MySqlSettings
+from opscli.shared.collection_storage.models import (
     CollectionArtifact,
     CollectionDataset,
     CollectionRecord,
     CollectionSubmission,
     ParsedCollection,
 )
-from opscli.collector_mcp.storage.mysql_repository import MySqlCollectionRepository
-from opscli.collector_mcp.storage.schema import SCHEMA_STATEMENTS
+from opscli.shared.collection_storage.mysql_repository import MySqlCollectionRepository
+from opscli.shared.collection_storage.schema import SCHEMA_STATEMENTS
 
 
 class FakeCursor:

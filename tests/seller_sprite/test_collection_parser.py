@@ -3,8 +3,8 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
-from opscli.collector_mcp.storage.models import CollectionSubmission
-from opscli.collector_mcp.storage.seller_sprite_parser import (
+from opscli.shared.collection_storage.models import CollectionSubmission
+from opscli.seller_sprite.collection_storage_parser import (
     SellerSpriteCollectionParser,
 )
 

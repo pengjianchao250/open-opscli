@@ -158,7 +158,7 @@ async def _keepa_run_impl(
     jwt: str | None = None,
     collection_submitter=None,
 ) -> dict:
-    """执行 Keepa，并允许 Collector Bundle 注入内部沉淀提交器。"""
+    """执行 Keepa，并允许 MCP Runtime 注入内部沉淀提交器。"""
     call_params = {
         "scenario": scenario,
         "site": site,

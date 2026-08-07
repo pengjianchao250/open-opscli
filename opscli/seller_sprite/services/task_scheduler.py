@@ -1679,7 +1679,10 @@ class SellerSpriteTaskScheduler:
                 return
             self.collection_submitter(request=request, result=result, status=status)
         except Exception:
-            logger.exception("卖家精灵成功任务提交 Collector 数据沉淀失败：job_id=%s", result.job_id)
+            logger.exception(
+                "卖家精灵成功任务提交采集数据沉淀失败：job_id=%s",
+                result.job_id,
+            )
 
 
 def get_task_scheduler(

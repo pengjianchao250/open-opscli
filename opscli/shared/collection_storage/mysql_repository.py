@@ -1,4 +1,4 @@
-"""Collector 采集结果 MySQL Adapter。"""
+"""共享采集结果 MySQL Adapter。"""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from typing import Any
 
-from opscli.collector_mcp.storage.config import MySqlSettings
-from opscli.collector_mcp.storage.models import ParsedCollection
-from opscli.collector_mcp.storage.schema import SCHEMA_STATEMENTS, SCHEMA_VERSION
+from opscli.shared.collection_storage.config import MySqlSettings
+from opscli.shared.collection_storage.models import ParsedCollection
+from opscli.shared.collection_storage.schema import SCHEMA_STATEMENTS, SCHEMA_VERSION
 
 
 class CollectionSchemaError(RuntimeError):
@@ -55,7 +55,7 @@ class MySqlCollectionRepository:
                 version = _schema_version(cursor.fetchone())
                 if version != SCHEMA_VERSION:
                     raise CollectionSchemaError(
-                        f"Collector MySQL Schema 版本不匹配：需要 {SCHEMA_VERSION}，实际 {version}"
+                        f"采集数据 MySQL Schema 版本不匹配：需要 {SCHEMA_VERSION}，实际 {version}"
                     )
             connection.commit()
         except Exception:
@@ -80,13 +80,13 @@ class MySqlCollectionRepository:
             version = _schema_version(row)
             if version != SCHEMA_VERSION:
                 raise CollectionSchemaError(
-                    f"Collector MySQL Schema 版本不匹配：需要 {SCHEMA_VERSION}，实际 {version}"
+                    f"采集数据 MySQL Schema 版本不匹配：需要 {SCHEMA_VERSION}，实际 {version}"
                 )
         except CollectionSchemaError:
             raise
         except Exception as exc:
             raise CollectionSchemaError(
-                "Collector MySQL Schema 尚未初始化或不可读"
+                "采集数据 MySQL Schema 尚未初始化或不可读"
             ) from exc
         finally:
             connection.close()
@@ -250,7 +250,7 @@ class MySqlCollectionRepository:
         try:
             import pymysql
         except ModuleNotFoundError as exc:
-            raise RuntimeError("缺少 PyMySQL 依赖，无法连接 Collector MySQL") from exc
+            raise RuntimeError("缺少 PyMySQL 依赖，无法连接采集数据 MySQL") from exc
         return pymysql.connect(
             host=self.settings.host,
             port=self.settings.port,

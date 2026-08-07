@@ -2,7 +2,7 @@ import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
-from opscli.collector_mcp.storage.seller_sprite_integration import (
+from opscli.seller_sprite.collection_storage_integration import (
     SellerSpriteCollectionReconciler,
     SellerSpriteCollectionSubmitter,
 )

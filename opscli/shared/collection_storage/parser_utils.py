@@ -1,4 +1,4 @@
-"""Collector 来源 Parser 共用的文件和 Dataset 解析工具。"""
+"""来源 Parser 共用的文件和 Dataset 解析工具。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from opscli.collector_mcp.storage.models import (
+from opscli.shared.collection_storage.models import (
     CollectionArtifact,
     CollectionDataset,
     CollectionRecord,

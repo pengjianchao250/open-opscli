@@ -6,12 +6,12 @@ from opscli.collector_mcp.profile import load_profile
 from opscli.collector_mcp.registry import resolve_bundles, validate_bundle_tools
 
 
-def test_default_profile_enables_seller_sprite_and_keepa():
+def test_default_profile_only_enables_seller_sprite():
     profile = load_profile({})
 
     assert profile.display_name == "数据采集服务"
-    assert profile.bundles == ("seller_sprite", "keepa")
-    assert profile.critical_bundles == ("seller_sprite", "keepa")
+    assert profile.bundles == ("seller_sprite",)
+    assert profile.critical_bundles == ("seller_sprite",)
     assert profile.single_worker_required is True
 
 
@@ -38,9 +38,8 @@ def test_profile_rejects_missing_critical_bundle():
 def test_registry_resolves_static_collection_bundles():
     bundles = resolve_bundles(load_profile({}))
 
-    assert [bundle.bundle_id for bundle in bundles] == ["seller_sprite", "keepa"]
+    assert [bundle.bundle_id for bundle in bundles] == ["seller_sprite"]
     assert bundles[0].tool_prefix == "seller_sprite_"
-    assert bundles[1].tool_prefix == "keepa_"
     assert bundles[0].single_worker_required is True
 
 

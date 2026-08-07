@@ -5,11 +5,14 @@ from __future__ import annotations
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, AsyncContextManager
+from typing import TYPE_CHECKING, Any, AsyncContextManager
+
+if TYPE_CHECKING:
+    from opscli.shared.collection_storage import CollectionStorageRuntime
 
 
 BundleRegister = Callable[[Any], None]
-BundleLifespan = Callable[[], AsyncContextManager[None]]
+BundleLifespan = Callable[["CollectionStorageRuntime"], AsyncContextManager[None]]
 BundleHealthCheck = Callable[[], Awaitable[dict[str, Any]]]
 
 
@@ -43,8 +46,8 @@ _PROFILES = {
         profile_id="production",
         service_id="collector",
         display_name="数据采集服务",
-        bundles=("seller_sprite", "keepa"),
-        critical_bundles=("seller_sprite", "keepa"),
+        bundles=("seller_sprite",),
+        critical_bundles=("seller_sprite",),
     ),
 }
 

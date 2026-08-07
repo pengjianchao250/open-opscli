@@ -15,16 +15,8 @@ def _build_seller_sprite_bundle() -> CollectorToolBundle:
     return build_bundle()
 
 
-def _build_keepa_bundle() -> CollectorToolBundle:
-    """延迟构造 Keepa Bundle，导入阶段不启动业务资源。"""
-    from opscli.keepa.mcp_bundle import build_bundle
-
-    return build_bundle()
-
-
 _BUNDLE_FACTORIES = {
     "seller_sprite": _build_seller_sprite_bundle,
-    "keepa": _build_keepa_bundle,
 }
 
 

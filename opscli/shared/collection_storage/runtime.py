@@ -1,28 +1,29 @@
-"""Collector 通用采集结果沉淀生命周期。"""
+"""MCP 宿主共享的采集结果沉淀生命周期。"""
 
 from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from opscli.collector_mcp.storage.config import (
-    CollectorStorageSettings,
+from opscli.shared.collection_storage.config import (
+    CollectionStorageSettings,
     load_storage_settings,
 )
-from opscli.collector_mcp.storage.models import (
+from opscli.shared.collection_storage.models import (
     CollectionSubmission,
     ReconciliationBatch,
 )
-from opscli.collector_mcp.storage.mysql_repository import MySqlCollectionRepository
-from opscli.collector_mcp.storage.outbox import CollectionOutbox
-from opscli.collector_mcp.storage.registry import (
+from opscli.shared.collection_storage.mysql_repository import MySqlCollectionRepository
+from opscli.shared.collection_storage.outbox import CollectionOutbox
+from opscli.shared.collection_storage.registry import (
     CollectionParser,
     CollectionParserRegistry,
 )
-from opscli.collector_mcp.storage.worker import (
+from opscli.shared.collection_storage.worker import (
     CollectionPersistenceWorker,
     CollectionRepository,
 )
@@ -45,7 +46,7 @@ class CollectionStorageRuntime:
 
     def __init__(
         self,
-        settings: CollectorStorageSettings,
+        settings: CollectionStorageSettings,
         *,
         registry: CollectionParserRegistry | None = None,
         repository: CollectionRepository | None = None,
@@ -91,7 +92,8 @@ class CollectionStorageRuntime:
         self._stop_requested = False
         await self._ensure_schema()
         self._worker_task = asyncio.create_task(
-            self._run_loop(), name="collector-collection-storage"
+            self._run_loop(),
+            name=f"{self.settings.runtime_id}-collection-storage",
         )
 
     async def close(self) -> None:
@@ -108,12 +110,12 @@ class CollectionStorageRuntime:
         self._worker_task = None
 
     def register_parser(self, parser: CollectionParser) -> None:
-        """由启用的 Bundle 注册自己的来源 Parser。"""
+        """注册启用来源的 Parser。"""
         self.registry.register(parser)
         self._wake_event.set()
 
     def unregister_parser(self, source_system: str) -> None:
-        """移除已经停止的 Bundle Parser。"""
+        """移除已经停止的来源 Parser。"""
         self.registry.unregister(source_system)
 
     def register_reconciler(self, reconciler: CollectionReconciler) -> None:
@@ -127,17 +129,39 @@ class CollectionStorageRuntime:
         self._wake_event.set()
 
     def unregister_reconciler(self, source_system: str) -> None:
-        """移除已经停止的 Bundle 成功任务对账器。"""
+        """移除已经停止的来源成功任务对账器。"""
         self._reconcilers.pop(source_system, None)
+
+    def register_source(
+        self,
+        parser: CollectionParser,
+        reconciler: CollectionReconciler | None = None,
+    ) -> None:
+        """原子注册一个来源的 Parser 和可选 Reconciler Adapter。"""
+        source_system = str(parser.source_system or "").strip()
+        if reconciler is not None and reconciler.source_system != source_system:
+            raise ValueError("Collection 来源 Parser 与 Reconciler 标识不一致")
+        self.register_parser(parser)
+        try:
+            if reconciler is not None:
+                self.register_reconciler(reconciler)
+        except Exception:
+            self.unregister_parser(source_system)
+            raise
+
+    def unregister_source(self, source_system: str) -> None:
+        """逆序解除一个来源的 Reconciler 和 Parser Adapter。"""
+        self.unregister_reconciler(source_system)
+        self.unregister_parser(source_system)
 
     def submit(self, submission: CollectionSubmission) -> bool:
         """幂等提交成功采集任务，并唤醒后台 Worker。"""
         if not self.settings.enabled:
             return False
         if submission.data_environment != self.settings.data_environment:
-            raise ValueError("Collection Submission 环境与 Collector 配置不一致")
+            raise ValueError("Collection Submission 环境与 Runtime 配置不一致")
         if self.outbox is None:
-            raise RuntimeError("Collector 数据沉淀 Runtime 尚未启动")
+            raise RuntimeError("数据沉淀 Runtime 尚未启动")
         self.outbox.submit(submission)
         self._wake_event.set()
         return True
@@ -233,7 +257,7 @@ class CollectionStorageRuntime:
                 else self.repository.check_schema
             )
             await asyncio.to_thread(action)
-        # 存储是旁路能力，数据库驱动或网络异常只能使存储降级，不能终止 Collector。
+        # 数据库驱动或网络异常只使存储降级，不能杀死宿主的业务 Tool。
         except Exception as exc:  # noqa: BLE001
             self._mysql_ready = False
             self._mysql_error_code = type(exc).__name__
@@ -256,33 +280,27 @@ class CollectionStorageRuntime:
                 )
                 for submission in batch.submissions:
                     if submission.data_environment != self.settings.data_environment:
-                        raise ValueError("对账任务环境与 Collector 配置不一致")
+                        raise ValueError("对账任务环境与 Runtime 配置不一致")
                     await asyncio.to_thread(self.outbox.submit, submission)
                 if batch.next_cursor != cursor:
                     self.outbox.set_meta(cursor_key, str(batch.next_cursor))
             self._reconcile_error_code = None
             self._wake_event.set()
-        # Reconciler 来自独立 Bundle，任何来源异常都应隔离到下一轮重试。
+        # Reconciler 来自独立来源 Adapter，异常隔离到下一轮重试。
         except Exception as exc:  # noqa: BLE001
             self._reconcile_error_code = type(exc).__name__
 
 
-# Collector 进程只共享一个存储 Runtime，保证 Outbox Worker 和注册表唯一。
-_RUNTIME: CollectionStorageRuntime | None = None
-
-
-def get_collection_storage_runtime() -> CollectionStorageRuntime:
-    """返回当前进程唯一的 Collector 数据沉淀 Runtime。"""
-    global _RUNTIME
-    if _RUNTIME is None:
-        _RUNTIME = CollectionStorageRuntime(load_storage_settings())
-    return _RUNTIME
+def build_collection_storage_runtime(runtime_id: str) -> CollectionStorageRuntime:
+    """为一个 MCP App 构造由其生命周期独占的沉淀 Runtime。"""
+    return CollectionStorageRuntime(load_storage_settings(runtime_id))
 
 
 @asynccontextmanager
-async def collection_storage_lifespan():
-    """供 Collector Server 组合的共享存储生命周期。"""
-    runtime = get_collection_storage_runtime()
+async def collection_storage_lifespan(
+    runtime: CollectionStorageRuntime,
+) -> AsyncIterator[CollectionStorageRuntime]:
+    """供任意 MCP 宿主组合的共享存储生命周期。"""
     await runtime.start()
     try:
         yield runtime

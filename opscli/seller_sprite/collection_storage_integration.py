@@ -1,10 +1,10 @@
-"""卖家精灵 Bundle 到 Collector 通用沉淀接口的适配。"""
+"""卖家精灵到共享数据沉淀接口的适配。"""
 
 from __future__ import annotations
 
 from typing import Any, Protocol, cast
 
-from opscli.collector_mcp.storage.models import (
+from opscli.shared.collection_storage.models import (
     CollectionSubmission,
     DataEnvironment,
     ReconciliationBatch,
@@ -34,7 +34,7 @@ class SellerSpriteCollectionSubmitter:
         result: SellerSpriteScenarioResult,
         status: dict[str, Any],
     ) -> bool:
-        """把已提交成功态的 Scheduler 结果幂等写入 Collector Outbox。"""
+        """把已提交成功态的 Scheduler 结果幂等写入宿主 Outbox。"""
         if status.get("state") != "succeeded":
             return False
         environment = str(self.runtime.settings.data_environment or "").strip()

@@ -1,22 +1,54 @@
 import asyncio
 
-from opscli.collector_mcp.storage.config import (
-    CollectorStorageSettings,
+import pytest
+
+from opscli.shared.collection_storage.config import (
+    CollectionStorageSettings,
     MySqlSettings,
 )
-from opscli.collector_mcp.storage.models import (
+from opscli.shared.collection_storage.models import (
     CollectionSubmission,
     ParsedCollection,
     ReconciliationBatch,
 )
-from opscli.collector_mcp.storage.registry import CollectionParserRegistry
-from opscli.collector_mcp.storage.runtime import CollectionStorageRuntime
+from opscli.shared.collection_storage.registry import CollectionParserRegistry
+from opscli.shared.collection_storage.runtime import CollectionStorageRuntime
+
+
+def test_runtime_registers_and_unregisters_source_as_one_interface(tmp_path):
+    class FakeParser:
+        source_system = "future_source"
+
+        def parse(self, submission):
+            raise AssertionError("本测试不执行解析")
+
+    class FakeReconciler:
+        source_system = "future_source"
+
+        def reconcile(self, *, cutover_at, cursor, limit):
+            return ReconciliationBatch((), cursor)
+
+    runtime = CollectionStorageRuntime(
+        CollectionStorageSettings(
+            enabled=False,
+            data_environment=None,
+            outbox_db_path=tmp_path / "collection.sqlite3",
+            mysql=MySqlSettings(),
+        )
+    )
+
+    runtime.register_source(FakeParser(), FakeReconciler())
+    assert runtime.registry.resolve("future_source").source_system == "future_source"
+    runtime.unregister_source("future_source")
+
+    with pytest.raises(ValueError, match="未注册"):
+        runtime.registry.resolve("future_source")
 
 
 def test_disabled_collection_runtime_creates_no_state_file(tmp_path):
     async def scenario():
         runtime = CollectionStorageRuntime(
-            CollectorStorageSettings(
+            CollectionStorageSettings(
                 enabled=False,
                 data_environment=None,
                 outbox_db_path=tmp_path / "collection.sqlite3",
@@ -71,7 +103,7 @@ def test_enabled_collection_runtime_processes_registered_source(tmp_path):
         registry.register(FakeParser())
         repository = FakeRepository()
         runtime = CollectionStorageRuntime(
-            CollectorStorageSettings(
+            CollectionStorageSettings(
                 enabled=True,
                 data_environment="debug",
                 outbox_db_path=tmp_path / "collection.sqlite3",
@@ -148,7 +180,7 @@ def test_runtime_reconciles_live_successes_and_advances_source_cursor(tmp_path):
         repository = FakeRepository()
         reconciler = FakeReconciler()
         runtime = CollectionStorageRuntime(
-            CollectorStorageSettings(
+            CollectionStorageSettings(
                 enabled=True,
                 data_environment="debug",
                 outbox_db_path=tmp_path / "collection.sqlite3",
@@ -201,7 +233,7 @@ def test_runtime_loop_survives_transient_iteration_failure(tmp_path):
                 return False
 
         runtime = CollectionStorageRuntime(
-            CollectorStorageSettings(
+            CollectionStorageSettings(
                 enabled=True,
                 data_environment="debug",
                 outbox_db_path=tmp_path / "collection.sqlite3",

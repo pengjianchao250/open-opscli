@@ -1,19 +1,20 @@
 # Collector MCP 运维说明
 
-本文是 Collector MCP 的生产部署和日常运维入口。SellerSprite 与 Keepa 共用本文的 Outbox 和 MySQL 配置。
+本文是 Collector MCP 的生产部署和采集数据沉淀运维入口。SellerSprite 与 Keepa 共用 MySQL 配置和存储实现，但分别由 Collector MCP 与通用 MCP 执行。
 
 ## 1. 服务边界与本地启动
 
-客户端只访问 OPS 通用 MCP。通用 MCP 通过内网 `OPSCLI_COLLECTOR_MCP_URL` 调用 Collector。
+客户端只访问 OPS 通用 MCP。SellerSprite 由通用 MCP 通过 `OPSCLI_COLLECTOR_MCP_URL` 转发到 Collector；Keepa 仍在通用 MCP 本地执行。
 
 ```text
 MCP Host / opscli seller-sprite / opscli keepa
   -> OPS 通用 MCP :8765
-  -> Collector MCP :8766
-  -> SellerSprite / Keepa -> Outbox -> MySQL
+       -> Keepa -> mcp.sqlite3 Outbox
+  -> Collector MCP :8766 -> SellerSprite -> collector.sqlite3 Outbox
+  -> 共享 MySQL 五表
 ```
 
-Collector 必须保持单实例、单 Worker。不要让多个实例写同一 SellerSprite 状态目录、Keepa 输出目录或 Outbox。
+两个 MCP 宿主各自维护一个 Worker 和 Outbox。不要让多个实例写同一 SellerSprite 状态目录、Keepa 输出目录或同一个 Outbox；`mcp.sqlite3` 与 `collector.sqlite3` 也不得互换或合并。
 
 Windows 本地启动 Collector：
 
@@ -35,7 +36,7 @@ $env:OPSCLI_COLLECTOR_MCP_URL="http://127.0.0.1:8766/mcp"
   --port 8765
 ```
 
-当前内网测试库只用于 `debug` 联调。测试与生产通过 `debug` 和 `production` 区分数据并使用独立 Outbox；未来统一数据库上线时只替换 MySQL 连接、Secret 和 CA 配置。
+当前内网测试库只用于 `debug` 联调。两个宿主读取相同 MySQL 配置，但通过 `runtime_id` 自动使用不同 Outbox；未来统一数据库上线时只替换 MySQL 连接、Secret 和 CA 配置。
 
 ## 2. 生产准备
 
@@ -52,7 +53,7 @@ $env:OPSCLI_COLLECTOR_MCP_URL="http://127.0.0.1:8766/mcp"
 
 ```bash
 sudo install -d -m 0700 -o opscli -g opscli \
-  /var/lib/opscli/.config/opscli/collector
+  /var/lib/opscli/.config/opscli/collection_storage
 sudo install -d -m 0700 -o opscli -g opscli \
   /var/lib/opscli/mcp_quota
 sudo install -d -m 0750 -o root -g opscli /etc/opscli
@@ -61,7 +62,8 @@ sudo install -d -m 0750 -o root -g opscli /etc/opscli
 生产 Outbox 路径：
 
 ```text
-/var/lib/opscli/.config/opscli/collector/collection_storage.sqlite3
+/var/lib/opscli/.config/opscli/collection_storage/mcp.sqlite3
+/var/lib/opscli/.config/opscli/collection_storage/collector.sqlite3
 ```
 
 Outbox 保存待入库状态、重试租约和对账游标。不要删除，也不要与 SellerSprite `task_queue.sqlite3` 共用文件。
@@ -73,40 +75,40 @@ MySQL 推荐使用两个账号：迁移账号负责建表，运行账号只授�
 当前内网测试库联调必须使用 `debug`，并使用独立测试库名、账号和 Outbox：
 
 ```ini
-OPSCLI_COLLECTOR_STORAGE_ENABLED=true
+OPSCLI_COLLECTION_STORAGE_ENABLED=true
 OPSCLI_DATA_ENVIRONMENT=debug
-OPSCLI_COLLECTOR_STORAGE_SQLITE_PATH=C:\opscli-test\collection_storage.sqlite3
-OPSCLI_COLLECTOR_MYSQL_HOST=<内网测试库主机>
-OPSCLI_COLLECTOR_MYSQL_PORT=3306
-OPSCLI_COLLECTOR_MYSQL_DATABASE=<测试库名>
-OPSCLI_COLLECTOR_MYSQL_USER=<测试运行账号>
-OPSCLI_COLLECTOR_MYSQL_PASSWORD=<由 Secret 注入>
-OPSCLI_COLLECTOR_STORAGE_AUTO_CREATE_SCHEMA=false
+OPSCLI_COLLECTION_STORAGE_SQLITE_DIR=C:\opscli-test\collection_storage
+OPSCLI_COLLECTION_MYSQL_HOST=<内网测试库主机>
+OPSCLI_COLLECTION_MYSQL_PORT=3306
+OPSCLI_COLLECTION_MYSQL_DATABASE=<测试库名>
+OPSCLI_COLLECTION_MYSQL_USER=<测试运行账号>
+OPSCLI_COLLECTION_MYSQL_PASSWORD=<由 Secret 注入>
+OPSCLI_COLLECTION_STORAGE_AUTO_CREATE_SCHEMA=false
 ```
 
-测试库未配置 CA 仅适用于受控内网。后续统一数据库可被内外网访问时，必须使用证书域名并配置 `OPSCLI_COLLECTOR_MYSQL_SSL_CA`，同时把环境切换为 `production`。
+测试库未配置 CA 仅适用于受控内网。后续统一数据库可被内外网访问时，必须使用证书域名并配置 `OPSCLI_COLLECTION_MYSQL_SSL_CA`，同时把环境切换为 `production`。
 
 ### 3.1 正式统一数据库
 
 创建 `/etc/opscli/collector.env`：
 
 ```ini
-OPSCLI_COLLECTOR_STORAGE_ENABLED=true
+OPSCLI_COLLECTION_STORAGE_ENABLED=true
 OPSCLI_DATA_ENVIRONMENT=production
 OPSCLI_MCP_QUOTA_SQLITE_PATH=/var/lib/opscli/mcp_quota/quota.sqlite3
-OPSCLI_COLLECTOR_STORAGE_SQLITE_PATH=/var/lib/opscli/.config/opscli/collector/collection_storage.sqlite3
+OPSCLI_COLLECTION_STORAGE_SQLITE_DIR=/var/lib/opscli/.config/opscli/collection_storage
 
-OPSCLI_COLLECTOR_MYSQL_HOST=mysql.internal.example.com
-OPSCLI_COLLECTOR_MYSQL_PORT=3306
-OPSCLI_COLLECTOR_MYSQL_DATABASE=polaris_ops_mcp
-OPSCLI_COLLECTOR_MYSQL_USER=collector_writer
-OPSCLI_COLLECTOR_MYSQL_PASSWORD="由部署 Secret 注入"
-# OPSCLI_COLLECTOR_MYSQL_SSL_CA=/etc/opscli/mysql-ca.pem
+OPSCLI_COLLECTION_MYSQL_HOST=mysql.internal.example.com
+OPSCLI_COLLECTION_MYSQL_PORT=3306
+OPSCLI_COLLECTION_MYSQL_DATABASE=polaris_ops_mcp
+OPSCLI_COLLECTION_MYSQL_USER=collection_writer
+OPSCLI_COLLECTION_MYSQL_PASSWORD="由部署 Secret 注入"
+# OPSCLI_COLLECTION_MYSQL_SSL_CA=/etc/opscli/mysql-ca.pem
 
-OPSCLI_COLLECTOR_STORAGE_AUTO_CREATE_SCHEMA=false
+OPSCLI_COLLECTION_STORAGE_AUTO_CREATE_SCHEMA=false
 ```
 
-主机、账号和密码必须替换。`OPSCLI_COLLECTOR_MYSQL_SSL_CA` 可选；配置后会验证 MySQL 服务端证书和主机身份，并应使用证书匹配的域名。未配置时不启用 TLS 验证，仅适用于受控内网数据库。
+主机、账号和密码必须替换。`OPSCLI_COLLECTION_MYSQL_SSL_CA` 可选；配置后会验证 MySQL 服务端证书和主机身份，并应使用证书匹配的域名。未配置时不启用 TLS 验证，仅适用于受控内网数据库。
 
 密码由部署平台或 Secret 管理器注入，不得提交 Git、写入镜像、命令行或日志。
 
@@ -117,7 +119,7 @@ sudo chmod 0640 /etc/opscli/collector.env
 
 配置 CA 时，再将证书设为 `root:opscli`、权限设为 `0640`。
 
-Collector 只读取进程环境变量，不会自动加载项目 `.env` 或 `config.ini` 中的 MySQL 配置。
+Collector MCP 与通用 MCP 都只读取进程环境变量，不会自动加载项目 `.env` 或 `config.ini` 中的 MySQL 配置。两个 systemd 服务必须加载同一份数据库配置。
 
 ## 4. systemd 部署
 
@@ -181,7 +183,7 @@ collection_records
 本地和生产共用同一个 MySQL 时，只初始化一次。生产保持：
 
 ```ini
-OPSCLI_COLLECTOR_STORAGE_AUTO_CREATE_SCHEMA=false
+OPSCLI_COLLECTION_STORAGE_AUTO_CREATE_SCHEMA=false
 ```
 
 ```sql
@@ -197,7 +199,7 @@ WHERE module_name = 'collector_storage';
 仅全新空库使用迁移账号，并临时设置：
 
 ```ini
-OPSCLI_COLLECTOR_STORAGE_AUTO_CREATE_SCHEMA=true
+OPSCLI_COLLECTION_STORAGE_AUTO_CREATE_SCHEMA=true
 ```
 
 启动 Collector，确认五张表和版本行存在。随后停止服务，切换运行账号，并将配置恢复为 `false`。
@@ -252,7 +254,7 @@ LIMIT 20;
 
 ```bash
 sudo -u opscli sqlite3 \
-  /var/lib/opscli/.config/opscli/collector/collection_storage.sqlite3 \
+  /var/lib/opscli/.config/opscli/collection_storage/collector.sqlite3 \
   "SELECT status,COUNT(*) FROM collection_outbox GROUP BY status;"
 ```
 
@@ -270,13 +272,15 @@ Outbox 包含未完成任务和对账边界，必须纳入备份。最稳妥的�
 sudo systemctl stop opscli-collector-mcp.service
 sudo install -d -m 0700 -o opscli -g opscli /var/backups/opscli-collector
 sudo -u opscli sqlite3 \
-  /var/lib/opscli/.config/opscli/collector/collection_storage.sqlite3 \
-  ".backup '/var/backups/opscli-collector/collection_storage.sqlite3.bak'"
+  /var/lib/opscli/.config/opscli/collection_storage/collector.sqlite3 \
+  ".backup '/var/backups/opscli-collector/collector.sqlite3.bak'"
 sudo -u opscli sqlite3 \
-  /var/backups/opscli-collector/collection_storage.sqlite3.bak \
+  /var/backups/opscli-collector/collector.sqlite3.bak \
   "PRAGMA integrity_check;"
 sudo systemctl start opscli-collector-mcp.service
 ```
+
+通用 MCP 的 `mcp.sqlite3` 必须在停止通用 MCP 后以相同方式单独备份，不能用任一文件覆盖另一个宿主的 Outbox。
 
 完整性结果必须为 `ok`。恢复时停止服务、替换数据库文件、修正 `opscli:opscli` 属主和 `0600` 权限，再执行完整性检查。
 
@@ -307,7 +311,7 @@ sudo journalctl -u opscli-collector-mcp.service --since "30 minutes ago"
 只关闭数据沉淀：
 
 ```ini
-OPSCLI_COLLECTOR_STORAGE_ENABLED=false
+OPSCLI_COLLECTION_STORAGE_ENABLED=false
 ```
 
 关闭不会删除 MySQL、文件或 Outbox。代码回滚时先停止服务并备份 Outbox，恢复上一版本后保留现有表，不要直接删除 MySQL schema。
@@ -339,9 +343,9 @@ sqlite3 -batch -bail /var/lib/opscli/mcp_quota/quota.sqlite3 \
 
 | 参数 | 默认值 |
 |---|---:|
-| `OPSCLI_COLLECTOR_STORAGE_BATCH_SIZE` | `500` |
-| `OPSCLI_COLLECTOR_STORAGE_POLL_INTERVAL_SECONDS` | `2` 秒 |
-| `OPSCLI_COLLECTOR_STORAGE_RECONCILE_INTERVAL_SECONDS` | `60` 秒 |
-| `OPSCLI_COLLECTOR_STORAGE_LEASE_SECONDS` | `300` 秒 |
+| `OPSCLI_COLLECTION_STORAGE_BATCH_SIZE` | `500` |
+| `OPSCLI_COLLECTION_STORAGE_POLL_INTERVAL_SECONDS` | `2` 秒 |
+| `OPSCLI_COLLECTION_STORAGE_RECONCILE_INTERVAL_SECONDS` | `60` 秒 |
+| `OPSCLI_COLLECTION_STORAGE_LEASE_SECONDS` | `300` 秒 |
 
 禁止在文档、Git、日志、截图和工单中暴露 API Key、Cookie、Session、JWT、数据库密码或导出的邮箱清单。

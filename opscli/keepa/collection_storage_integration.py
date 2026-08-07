@@ -1,4 +1,4 @@
-"""Keepa Bundle 到 Collector 通用沉淀接口的适配。"""
+"""Keepa 到共享数据沉淀接口的适配。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from opscli.collector_mcp.storage.models import (
+from opscli.shared.collection_storage.models import (
     CollectionSubmission,
     DataEnvironment,
     ReconciliationBatch,
@@ -43,12 +43,12 @@ class KeepaCollectionSubmitter:
         request: KeepaScenarioRequest,
         result: KeepaScenarioResult,
     ) -> bool:
-        """把完整 Keepa 成功结果幂等提交到 Collector Outbox。"""
+        """把完整 Keepa 成功结果幂等提交到当前 MCP 宿主 Outbox。"""
         environment = str(self.runtime.settings.data_environment or "").strip()
         submission = CollectionSubmission(
             source_system="keepa",
             source_job_id=result.job_id,
-            producer_service="collector_mcp",
+            producer_service="mcp",
             scenario=request.scenario,
             site=result.site,
             data_environment=cast(DataEnvironment, environment),
@@ -117,7 +117,7 @@ class KeepaCollectionReconciler:
                 CollectionSubmission(
                     source_system=self.source_system,
                     source_job_id=job_id,
-                    producer_service="collector_mcp",
+                    producer_service="mcp",
                     scenario=scenario,
                     site=site,
                     data_environment=cast(

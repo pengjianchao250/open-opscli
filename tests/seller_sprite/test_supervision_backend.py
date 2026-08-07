@@ -1044,8 +1044,11 @@ def test_mcp_health_uses_live_scheduler_runtime_and_redacts_payloads(monkeypatch
         lambda: scheduler,
     )
 
+    class DisabledStorageRuntime:
+        settings = type("Settings", (), {"enabled": False})()
+
     async def scenario():
-        async with mcp_bundle.lifespan():
+        async with mcp_bundle.lifespan(DisabledStorageRuntime()):
             running = await mcp_bundle.health_check()
             assert running == {
                 "bundle_id": "seller_sprite",

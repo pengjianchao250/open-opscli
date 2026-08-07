@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from opscli.collector_mcp.storage.models import CollectionSubmission
-from opscli.collector_mcp.storage.outbox import CollectionOutbox
+from opscli.shared.collection_storage.models import CollectionSubmission
+from opscli.shared.collection_storage.outbox import CollectionOutbox
 
 
 def _submission(tmp_path, job_id: str = "seller-job-1") -> CollectionSubmission:

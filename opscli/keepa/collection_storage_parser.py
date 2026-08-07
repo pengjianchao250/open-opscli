@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from opscli.collector_mcp.storage.models import CollectionSubmission, ParsedCollection
-from opscli.collector_mcp.storage.parser_utils import (
+from opscli.shared.collection_storage.models import (
+    CollectionSubmission,
+    ParsedCollection,
+)
+from opscli.shared.collection_storage.parser_utils import (
     CollectionParseError,
     load_result_files,
     standard_artifacts,

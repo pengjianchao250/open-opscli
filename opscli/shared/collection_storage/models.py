@@ -1,4 +1,4 @@
-"""Collector 采集结果沉淀领域模型。"""
+"""共享采集结果沉淀领域模型。"""
 
 from __future__ import annotations
 

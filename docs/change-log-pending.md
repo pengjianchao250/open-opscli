@@ -1,12 +1,12 @@
 # 待归档变更记录
 
-## 2026-08-07 Collector MCP - Keepa 成功数据沉淀到 MySQL
+## 2026-08-07 MCP 共享数据沉淀 - Keepa 成功数据写入 MySQL
 
 **变更原因**：Keepa 成功任务此前只保留本地 JSON/XLSX 和上传文件，未进入统一采集数据库；当前需要先使用仅内网可达的测试库验证，后续再切换为内外网可达的统一数据库。
-**改动点**：Keepa 作为 Collector Bundle 执行，通用 MCP 保持原 `keepa_*` Tool 并静默代理到 Collector；成功结果在 `result.json` 和 XLSX 完成后提交通用 SQLite Outbox，由 Keepa Parser 写入既有 MySQL 五表。Keepa Reconciler 周期补交 cutover 后已经落盘但尚未进入 Outbox 的成功结果，恢复进程崩溃窗口。Collector 公开 `keepa_run` 不再接收服务端 `output_dir`，所有远程任务统一进入受控目录并纳入补偿扫描。SellerSprite 与 Keepa 共用新抽取的成功合同、Parser 工具和 Collector 代理基础设施，统一任务目录边界、Artifact SHA-256、XLSX Dataset、列规范化、Record Hash、身份透传和错误脱敏。数据库连接继续完全由环境变量、Secret 和可选 CA 配置，内网测试库与后续统一库不需要不同业务代码。
-**验证结果**：Keepa Parser/Submitter、Manager 提交时序、Collector Bundle/Profile、Keepa 代理和 SellerSprite 回归聚焦测试通过；当前仓库全量测试仍受既有 Shopify `_shopify_manager` 收集错误、`keepa-debug` CLI 注册缺失及部分 MCP 全局工具注册基线影响。
-**影响范围**：启用 `OPSCLI_COLLECTOR_STORAGE_ENABLED` 时，新 Keepa 成功任务进入现有统一采集 MySQL；默认关闭时无数据库副作用。不回填历史 Keepa 目录，不新增 Keepa 专属表；远程 `keepa_run` 移除不适用于服务端的 `output_dir` 参数，本地 Keepa Manager 能力不变。
-**回滚方式**：从 Collector Profile 移除 Keepa Bundle，恢复通用 MCP 直接注册 Keepa Tool，并回退 Keepa Submitter/Parser；关闭存储配置即可停止新任务入库，既有 MySQL 记录和 Outbox 可保留。
+**改动点**：将 Outbox、Parser Registry、Worker、MySQL Repository 和成功合同工具提取到 `opscli/shared/collection_storage/`。Keepa 保持在通用 MCP 本地执行并写入 `mcp.sqlite3` Outbox；SellerSprite 保持在 Collector MCP 并写入 `collector.sqlite3` Outbox；两个宿主复用同一个 MySQL 五表合同。来源 Parser、Submitter 和 Reconciler 分别归属 Keepa/SellerSprite 模块，MySQL 故障只重试沉淀，不重新采集。
+**验证结果**：共享 Runtime、宿主 Outbox 隔离和来源 Adapter 聚焦测试 `28 passed`；MCP Keepa/Quota、Collector Profile/Server/Bundle 测试 `51 passed`；SellerSprite 调度、队列、健康和沉淀回归 `113 passed`。Keepa 全组 `50 passed, 1 failed`，失败为既有 `keepa-debug` 根命令未注册基线；仓库全量测试仍在收集阶段出现既有 27 项错误及 pytest 捕获流关闭问题。
+**影响范围**：启用 `OPSCLI_COLLECTION_STORAGE_ENABLED` 时，通用 MCP 的 Keepa 与 Collector MCP 的 SellerSprite 成功任务进入统一 MySQL；默认关闭时无数据库副作用。不回填历史目录，不新增来源专属表。Keepa Tool 仍属于通用 MCP，但远程 `keepa_run` 不再公开服务端 `output_dir`，确保所有成功结果都进入可补偿扫描的受控目录；本地 Keepa Manager 能力不变。
+**回滚方式**：关闭共享存储配置并回退两个宿主的存储生命周期组合；既有 MySQL 记录和两个 Outbox 可保留。
 
 ---
 
@@ -110,7 +110,7 @@
 **改动点**：新增 Collector 通用 SQLite Outbox、来源 Parser/Reconciler 注册接口和 MySQL Repository；SellerSprite JSON 主表、附加 Sheet 与 XLSX 工作表统一写入逻辑 Dataset/逐行 JSON，原始及交付文件只登记 URI、大小和 SHA-256；任务成功事务同步追加单调成功事件，避免并发乱序完成造成补偿漏数；MySQL TLS CA 改为可选，配置后验证服务端证书和主机身份，未配置时仅适用于受控内网。Keepa 与历史任务不接入，历史生产 succeeded backfill 仅保留 TODO。MySQL 8 逐行序号列使用非保留名 `source_row_number`；Collector 运维说明补齐生产环境文件、systemd、共享库初始化、验收、Outbox 备份恢复、排障和回滚流程。
 **验证结果**：Collector、SellerSprite 队列和调度聚焦回归 `115 passed`，SellerSprite MCP 工具 `89 passed`；SellerSprite 全量 `439 passed, 2 failed`，两项均为既有 `seller-sprite-debug` 命令未注册基线问题。MySQL 保留字修复后的 Collector MCP 回归 `30 passed`，相关文件 Ruff 和格式检查通过。新增存储文件 Ruff、格式检查、`compileall`、`uv lock --check` 与 `git diff --check` 通过；双轴代码审查发现的乱序补偿、历史重取边界、Worker 生命周期、流式内存、常量注释和变更记录问题均已修复。生产未配置 MySQL CA 时接受受控内网边界风险，跨不可信网络必须配置 CA。
 **影响范围**：仅在 Collector 显式启用存储配置后沉淀新 SellerSprite 成功任务；默认关闭，不改变采集成功状态、文件导出、Keepa 或现有历史数据。
-**回滚方式**：关闭 `OPSCLI_COLLECTOR_STORAGE_ENABLED` 并回退通用存储模块、SellerSprite 成功事件/提交适配、MySQL 依赖和配置文档；MySQL 新表及独立 Outbox 可保留，不影响原业务队列。
+**回滚方式**：关闭 `OPSCLI_COLLECTION_STORAGE_ENABLED` 并回退通用存储模块、SellerSprite 成功事件/提交适配、MySQL 依赖和配置文档；MySQL 新表及独立 Outbox 可保留，不影响原业务队列。
 ---
 
 ## 2026-08-03 feedback - 增加大模型模块洞察与周期提醒

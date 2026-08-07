@@ -4,7 +4,9 @@ import asyncio
 
 from fastmcp import Client
 
-from opscli.collector_mcp.health import collector_modules_health, collector_service_info
+from opscli.collector_mcp.health import CollectorHealthTools
+from opscli.collector_mcp.profile import load_profile
+from opscli.collector_mcp.registry import resolve_bundles
 from opscli.collector_mcp.server import PUBLIC_TOOLS, catalog, mcp
 from opscli.mcp.tool_catalog import get_catalog
 
@@ -43,19 +45,11 @@ def test_collector_only_exposes_public_and_collection_bundle_tools(monkeypatch):
     names = _run(scenario())
 
     assert PUBLIC_TOOLS <= names
-    assert len(names) == 20
-    assert {name for name in names if name.startswith("keepa_")} == {
-        "keepa_export",
-        "keepa_job_status",
-        "keepa_quota_status",
-        "keepa_run",
-        "keepa_scenarios",
-        "keepa_spec_must_read",
-    }
+    assert len(names) == 14
+    assert not any(name.startswith("keepa_") for name in names)
     assert all(
         name in PUBLIC_TOOLS
         or name.startswith("seller_sprite_")
-        or name.startswith("keepa_")
         for name in names
     )
     assert "query_simple" not in names
@@ -63,11 +57,28 @@ def test_collector_only_exposes_public_and_collection_bundle_tools(monkeypatch):
 
 
 def test_collector_health_is_redacted_and_reports_not_ready_before_lifespan():
-    info = _run(collector_service_info())
-    health = _run(collector_modules_health())
+    class FakeStorageRuntime:
+        def health(self):
+            return {
+                "status": "disabled",
+                "checks": {
+                    "outbox": "disabled",
+                    "mysql": "disabled",
+                    "worker": "disabled",
+                },
+            }
+
+    profile = load_profile({})
+    health_tools = CollectorHealthTools(
+        profile,
+        resolve_bundles(profile),
+        FakeStorageRuntime(),
+    )
+    info = _run(health_tools.collector_service_info())
+    health = _run(health_tools.collector_modules_health())
 
     assert info["data"]["display_name"] == "数据采集服务"
-    assert info["data"]["bundles"] == ["seller_sprite", "keepa"]
+    assert info["data"]["bundles"] == ["seller_sprite"]
     assert info["data"]["single_worker_required"] is True
     assert health["data"]["status"] == "not_ready"
     serialized = str({"info": info, "health": health}).lower()

@@ -1,4 +1,4 @@
-"""Collector 采集结果 SQLite Outbox。"""
+"""共享采集结果 SQLite Outbox。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from opscli.collector_mcp.storage.models import CollectionSubmission, OutboxRecord
+from opscli.shared.collection_storage.models import CollectionSubmission, OutboxRecord
 
 
 class CollectionOutbox:
@@ -224,7 +224,7 @@ class CollectionOutbox:
         return row is not None
 
     def get_meta(self, key: str) -> str | None:
-        """读取 Collector Outbox 生命周期元数据。"""
+        """读取 Outbox 生命周期元数据。"""
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT value FROM collection_outbox_meta WHERE key = ?", (key,)

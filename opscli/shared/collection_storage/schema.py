@@ -1,6 +1,6 @@
-"""Collector 采集结果 MySQL v1 表结构。"""
+"""共享采集结果 MySQL v1 表结构。"""
 
-# v1 定义 Collector 通用任务、文件、Dataset 和逐行记录表。
+# v1 定义通用任务、文件、Dataset 和逐行记录表。
 SCHEMA_VERSION = 1
 
 # 建表语句按外键依赖顺序执行，并固定匹配 MySQL 8 的 utf8mb4 排序规则。

@@ -1,10 +1,10 @@
-"""Collector 数据来源 Parser 注册表。"""
+"""共享采集数据来源 Parser 注册表。"""
 
 from __future__ import annotations
 
 from typing import Protocol
 
-from opscli.collector_mcp.storage.models import CollectionSubmission, ParsedCollection
+from opscli.shared.collection_storage.models import CollectionSubmission, ParsedCollection
 
 
 class CollectionParser(Protocol):
@@ -38,5 +38,5 @@ class CollectionParserRegistry:
             raise ValueError(f"未注册 Collection Parser：{source_system}") from exc
 
     def unregister(self, source_system: str) -> None:
-        """在 Bundle 生命周期结束时移除来源 Parser。"""
+        """在来源生命周期结束时移除 Parser。"""
         self._parsers.pop(source_system, None)

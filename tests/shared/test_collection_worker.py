@@ -1,13 +1,13 @@
 import asyncio
 
-from opscli.collector_mcp.storage.models import (
+from opscli.shared.collection_storage.models import (
     CollectionSubmission,
     ParsedCollection,
 )
-from opscli.collector_mcp.storage.outbox import CollectionOutbox
-from opscli.collector_mcp.storage.registry import CollectionParserRegistry
-from opscli.collector_mcp.storage.seller_sprite_parser import CollectionParseError
-from opscli.collector_mcp.storage.worker import CollectionPersistenceWorker
+from opscli.shared.collection_storage.outbox import CollectionOutbox
+from opscli.shared.collection_storage.parser_utils import CollectionParseError
+from opscli.shared.collection_storage.registry import CollectionParserRegistry
+from opscli.shared.collection_storage.worker import CollectionPersistenceWorker
 
 
 def _run(coro):

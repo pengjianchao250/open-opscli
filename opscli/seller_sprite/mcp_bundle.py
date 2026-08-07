@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 from opscli.seller_sprite.domain.exceptions import SellerSpriteError
+from opscli.shared.collection_storage import CollectionStorageRuntime
 
 _MODULE_STATE: dict[str, Any] = {
     "status": "not_ready",
@@ -97,38 +99,34 @@ def require_ready() -> None:
 
 
 @asynccontextmanager
-async def lifespan():
+async def lifespan(
+    storage_runtime: CollectionStorageRuntime,
+) -> AsyncIterator[None]:
     """启动队列调度器，并在服务关闭时释放浏览器和后台任务。"""
     scheduler = None
-    storage_runtime = None
     storage_registered = False
-    reconciler_registered = False
     _set_module_state("not_ready", queue="not_checked", scheduler="not_started")
     try:
-        from opscli.collector_mcp.storage.runtime import (
-            get_collection_storage_runtime,
-        )
-        from opscli.collector_mcp.storage.seller_sprite_integration import (
+        from opscli.seller_sprite.collection_storage_integration import (
             SellerSpriteCollectionReconciler,
             SellerSpriteCollectionSubmitter,
         )
-        from opscli.collector_mcp.storage.seller_sprite_parser import (
+        from opscli.seller_sprite.collection_storage_parser import (
             SellerSpriteCollectionParser,
         )
         from opscli.seller_sprite.services import get_task_scheduler
 
-        storage_runtime = get_collection_storage_runtime()
         scheduler = get_task_scheduler()
+        scheduler.collection_submitter = None
         if storage_runtime.settings.enabled:
-            storage_runtime.register_parser(SellerSpriteCollectionParser())
-            storage_registered = True
-            storage_runtime.register_reconciler(
+            storage_runtime.register_source(
+                SellerSpriteCollectionParser(),
                 SellerSpriteCollectionReconciler(
                     store=scheduler.store,
                     data_environment=storage_runtime.settings.data_environment,
                 )
             )
-            reconciler_registered = True
+            storage_registered = True
             scheduler.collection_submitter = SellerSpriteCollectionSubmitter(
                 storage_runtime
             )
@@ -149,12 +147,11 @@ async def lifespan():
                 await scheduler.close()
             except Exception:
                 pass
-        if reconciler_registered and storage_runtime is not None:
-            storage_runtime.unregister_reconciler("seller_sprite")
-            reconciler_registered = False
-        if storage_registered and storage_runtime is not None:
-            storage_runtime.unregister_parser("seller_sprite")
+        if storage_registered:
+            storage_runtime.unregister_source("seller_sprite")
             storage_registered = False
+        if scheduler is not None:
+            scheduler.collection_submitter = None
         # Collector 必须继续提供健康面，业务入口由 require_ready() 拒绝。
         yield
         return
@@ -164,10 +161,9 @@ async def lifespan():
     finally:
         _set_module_state("not_ready", queue="ok", scheduler="stopping")
         await scheduler.close()
-        if reconciler_registered and storage_runtime is not None:
-            storage_runtime.unregister_reconciler("seller_sprite")
-        if storage_registered and storage_runtime is not None:
-            storage_runtime.unregister_parser("seller_sprite")
+        if storage_registered:
+            storage_runtime.unregister_source("seller_sprite")
+        scheduler.collection_submitter = None
         _set_module_state("not_ready", queue="ok", scheduler="stopped")
 
 
