@@ -47,7 +47,23 @@ def test_skill_defaults_to_bounded_single_flow_entry():
     assert 'python3 scripts/query_flow.py "$USER_REQUEST"' in text
     assert "禁止为了“确认环境/字段/语法”调用 `opscli query catalog`" in text
     assert "禁止手工修改 plan" in text
-    assert "`query_plan.py` + `run_query.py` 仅保留给维护者复现与审计" in text
+    assert "`query_plan.py` + `run_query.py` 不是 Agent 的规划器正常路径" in text
+
+
+def test_skill_allows_fallback_only_on_objective_failure():
+    """规划器由硬性规定改为优先路径后，降级入口必须仍受客观失败条件约束。
+
+    守住两条不变量：① 降级触发条件被显式列举，Agent 不能凭主观判断绕过规划器；
+    ② 主观理由被明确排除，避免"优先使用"被读成"可选使用"。
+    """
+    text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "**CLI 主线的优先入口是 `query_flow.py`。**" in text
+    assert "### 降级触发条件（满足其一即可降级）" in text
+    assert "**不构成降级理由**" in text
+    assert "主观觉得规划器不合适" in text
+    # 降级态的字段来源护栏不得随触发条件一起放宽
+    assert "仍禁止凭记忆手拼" in text
 
 
 def test_query_flow_plans_and_executes_once(monkeypatch, tmp_path: Path):

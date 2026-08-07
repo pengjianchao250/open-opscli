@@ -1,108 +1,289 @@
 ---
 name: ops-dataset-query
 description: >
-  运营数据查询取数 Skill。用于按当前账号可见的数据集查询销售、库存、广告、物流、
-  流量等数据，支持趋势、环比同比、ACOS/ROAS、图表 UUID 查询和导出。
-  加载本 Skill 后必须先读取本目录 SKILL.md 并遵循其流程：CLI 取数的唯一入口是
-  一体化流程 python3 scripts/query_flow.py "<用户请求>"（内部只规划一次并直接执行；
-  规划器按 30 秒命令窗口设计，返回 refresh_in_progress 时按其 recovery_command
-  等待重跑即可，禁止自行升级）；禁止绕过规划器直接扫描 data/ 目录、
-  读脚本源码或凭记忆手拼查询参数。
-version: 1.3.15
+  运营数据查询取数 Skill（CLI / MCP 自动适配）。
+  触发场景：查数据、取数、看报表、看趋势、查销售/库存/广告/物流/流量数据、
+  环比同比对比、ACOS/ROAS 分析、图表导出、Excel 导出。
+  触发句式："查XX数据""近N天XX""XX趋势""XX对比""按XX维度看XX"。
+  当用户意图涉及从运营系统取数、按维度聚合指标、对比时间段时，
+  必须使用本 Skill，禁止直接调用 opscli query 命令。
+version: 1.0.2
 ---
 
 # ops-dataset-query
 
-仅通过正式 CLI 或 MCP 查询当前授权范围内的运营数据；不直接访问后端 HTTP 接口。
+用于检索本地缓存的数据集、字段和查询元数据，并通过正式查询入口执行数据查询。
 
-## 适用范围与模式
+---
 
-用于查数据、取数、报表、趋势、对比、聚合或导出。一次请求固定一种模式：
+## 何时使用本 Skill
 
-- **CLI-only**：本地 shell 和 `opscli` 可用；先运行下方规划器，构造正式命令时再按需读取 `references/cli.md`。
-- **MCP-only**：仅有 Connector/MCP；使用当前已认证账号的 `query_metadata`，按需读取 `references/mcp.md`。
+- 需要搜索可用数据集、维度、指标和字段别名
+- 需要执行普通聚合查询、数据对比（环比/同比）、MOY 趋势分析
+- 需要通过图表 ID 或 chart UUID 直接获取查询结构
+- 需要刷新本地缓存的数据集索引和查询元数据
 
-用户明确指定模式时遵从指定；不要在同一请求中混用或自动切换模式。
+---
 
-## 查询规划主线
+## 运行模式判断
 
-**CLI 主线只有一个入口：`query_flow.py`。** 它内部只运行一次规划器；`dataset_query + planned` 直接按规划器原始 `query_template` 执行，其他状态或 `chart_uuid` 返回规划合同供 Agent 处置。仅当合同命中具体歧义时才读取 `references/rules.md`，并按 `references/ask-user-question-guide.md` 澄清；无歧义不拆分步骤。
+进入本 Skill 后，不要为模式判断额外运行检测脚本，直接按下面规则判断。
 
-### CLI-only：一次规划并执行
+> **默认原则：CLI 优先。** 当 CLI 和 MCP 都可用时，优先使用 CLI，因为 CLI 是 `opscli` 模块的正式入口，功能最完整、错误信息最直接。
 
-读完本文件后直接运行一体化入口；除合同明确要求澄清、恢复或图表 UUID 分流外，不再单独调用 `query_plan.py` 或 `run_query.py`。不要预读 `data/VERSION.json`，不要列目录，不要检查脚本源码，不要扫描 `data/`、`scripts/` 或 `references/`；流程已完成版本、选表、字段、公式、时间口径、权限合同、完整性绑定和正式查询。
+优先级如下：
 
-```bash
-python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"
+1. 用户明确指定 CLI 或 MCP 时 → 直接遵循用户指定
+2. CLI 和 MCP 都可用 → **使用 CLI**，读取 `references/cli.md`
+3. 仅 MCP 可用（ChatGPT Connector、无本地 shell）→ 使用 MCP，读取 `references/mcp.md`
+4. CLI 首次正式调用失败 → 切到 MCP，读取 `references/mcp.md`
+5. MCP 首次正式调用失败且 CLI 可用 → 切到 CLI，读取 `references/cli.md`
+6. CLI 和 MCP 都不可用 → 帮助用户安装 `aukeys-opscli`
+
+简化原则：
+
+- **CLI 默认优先**，它是 `opscli` 模块的正式入口，功能最全、调试最方便
+- 只有在无法执行本地命令的宿主环境（如 ChatGPT Connector）才默认走 MCP
+- 不单独检查发行包、命令路径、子命令 help；用"首次正式调用是否可执行"作为唯一验证
+- 一轮任务选定一种模式后保持一致，不要来回切换
+- CLI 首次正式调用失败后，直接切到 MCP，不额外询问
+- 只有在 MCP 版本也不可用时，才回退为帮助用户安装 `aukeys-opscli`
+
+---
+
+## 阅读入口
+
+根据选定的运行模式，阅读对应文件：
+
+- **CLI 模式**：继续阅读 `references/cli.md`
+- **MCP 模式**：继续阅读 `references/mcp.md`
+
+> 两个模式文件都遵循统一的文档引用规则：
+> 1. **必须优先阅读** `references/rules.md`（**查询前必须**，意图澄清规则）
+> 2. **必须优先阅读** `references/ask-user-question-guide.md`（结构化澄清与确认规范）
+> 3. **必须优先阅读** `references/simple-query-guide.md`
+
+> **⚠️ 参数命名约定（MCP 模式必读）**
+>
+> MCP Tool 参数使用 **snake_case**（如 `table_id`、`data_comparison`、`order_by`），JSON payload 字段使用 **camelCase**（如 `tableId`、`dataComparison`、`orderBy`）。
+>
+> 在 MCP 调用时传 camelCase 参数会导致 `Unexpected keyword argument` 错误。详见 `references/simple-query-guide.md` 和各模式指南的参数表。
+
+---
+
+## 取数有误时移交 ops-query-wizard
+
+查询执行完成后，若检测到以下任一情况，**必须主动提示并切换到 ops-query-wizard 纠错模式**，不得继续在当前 Skill 内反复重试：
+
+### 用户主动反馈错误（关键词检测）
+
+以下关键词出现时，立即停止当前操作，切换到 ops-query-wizard：
+
+| 错误类型 | 触发关键词示例 |
+|---------|-------------|
+| 结果不对 | 取错数据了、数据不对、这不是我要的、结果不对、数据有误、数值不对 |
+| 字段不对 | 字段不对、字段选错了、维度不对、分组不对、指标不对、算法不对、聚合不对 |
+| 条件不对 | 条件不对、筛选错了、日期不对、时间范围不对、范围不对、过滤条件有问题 |
+| 排序/条数不对 | 排序不对、顺序不对、条数不对、太少了、太多了 |
+
+### AI 自检触发（无需用户主动说）
+
+- `query_simple` 返回 **0 行**（且 filters 非空）→ 使用 `AskUserQuestion` 提供"进入引导纠错 / 放宽筛选重试 / 修改字段口径 / 其他"选项
+- 返回数据**全为空值或全为 0**（主要指标列）→ 使用 `AskUserQuestion` 提供纠错入口，禁止在当前 Skill 内反复猜测重试
+- 用户连续两次追问同一查询结果的准确性 → 自动建议切换到引导模式
+
+### 切换话术（固定格式）
+
+```
+"检测到查询结果可能有误，我来帮您用引导方式逐步修正。
+ 正在切换到 ops-query-wizard 纠错模式..."
+
+[然后调用 ops-query-wizard，入口为纠错模式，传入当前查询参数作为上下文]
 ```
 
-**正常路径工具调用预算**：数据集、字段、筛选和时间均可确定时，Agent 从加载本 Skill 到拿到查询结果最多 3 次工具调用，且正式查询只调用一次 `query_flow.py`。包含一次澄清、一次恢复或图表结果证据补全的非正常路径最多 7 次。禁止为了“确认环境/字段/语法”调用 `opscli query catalog`、`opscli query metadata`、`--help`、`rg`、`ls`、`find` 或读取脚本源码；禁止重复加载同一 Skill；禁止生成临时 Python 查询脚本；禁止手工修改 plan、复制 `query_template` 后另拼 payload，或在一体化入口成功后再次查询相同范围。
+---
 
-**命令窗口与等待（30 秒窗口设计）**：平台单条命令的有效等待上限约 30 秒（自行设置更大超时无效）。规划器内部已按此窗口设计——任意单次调用确定性返回：数据就绪时（常态）1~3 秒；需要刷新元数据时前台最多等 8 秒，未完成则**转后台续跑**并返回 `status=blocked, recovery_state=refresh_in_progress`，此时**直接执行其 `recovery_command`**；连续 3 次仍未就绪才提交反馈并停止。禁止自行执行任何升级动作、禁止因等待改走旁路探查。若命令仍偶发窗口超时：原样重跑一次即可（流程幂等）。
+## 【通用铁律】
 
-用户请求含引号等特殊字符时改用 `--query-file <文件>`。用户明确指定字段时追加重复的 `--field "$FIELD"`。一体化入口返回查询结果时直接分析；返回规划合同时只处理默认 `model_view`、`answer_contract` 和 `execution_ref`，不得读取内部合同补充回答：
+### 铁律一：简化接口优先
 
-1. `data_state` 不是 `ready`：规划器已内置一次自动升级兜底；若仍返回 `status=blocked`，按规划结果中 `model_view.recovery_command`（即 `opscli skills upgrade ops-dataset-query`）执行后从头开始，刷新仍失败则向用户说明元数据异常并停止，不反复重试。登录或账号变更、元数据所有权不明或数据状态不匹配时也必须刷新或升级；客户端不推断账号身份。
-2. `status=clarify_required`：按 `clarification_messages_zh` 提问；规划结果给出 `dataset_candidates_zh`（候选卡片）、`field_suggestions_zh`（近似字段建议）或 `pending_confirmations_zh` 时，必须把它们作为选项/口径呈现；确认后把明确口径写回用户请求并重新规划。`blocked` 则按 `recovery_command`/阻断原因处置。
-   - 未明确指定数据集时，规划器优先检查当前账号已授权的“即时综合数据集”。如果已明确的业务和查询字段全部覆盖，`default_dataset_recommendation_zh.auto_selected=true`，直接按该数据集继续，不调用提问工具；如果请求没有命中任何具体查询字段、仍无法确定要查什么，则 `confirmation_required=true`，才询问是否采用推荐数据集及推荐字段。用户拒绝时让用户从 `dataset_candidates_zh` 选择其他数据集，不得循环推荐。
-3. `model_view` 只含用户可见中文结论；最终回答必须覆盖 `answer_contract.required_disclosures_zh`，并遵守 `forbidden_outputs_zh`。
-4. **时间口径以规划结果为准**：`model_view.time_scope_zh`、`model_view.time_resolution_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源。`本月/上月/近7天/近30天/近30tian` 等未显式年份的相对描述，由规划器直接调用 Python `datetime`，按 Asia/Shanghai 当前日期和当前年份确定绝对日期（`本月` 为整自然月：1 日至月末，月末未到只作数据更新进度披露）；跨年边界以 Python 日历结果为准。禁止自行心算、猜测年份、使用模型知识截止时间或改写规划结果。相对时间一旦被规划器唯一解析，展示绝对日期后直接执行，不再要求用户确认；只有 `is_default=true`（原文未给任何时间）才必须询问是否采用默认近 30 天。复杂任务拆成子步骤时，每次调用规划器都必须带上原请求或已锁定的绝对起止日期，禁止只传丢失时间范围的步骤摘要。
-5. `platform_semantic_members` 表示请求语义：用户只说“亚马逊”且未指定 SC/VC 时默认包含亚马逊SC + 亚马逊VC；明确亚马逊SC/SC 时只含 SC，明确亚马逊VC/VC 时只含 VC。`platform_filter_state=requires_permission_enum` 时规划器默认已自动枚举并回灌（规划结果带 `platform_enum_source=auto_enum_service` 即已收敛）；仅当自动枚举未完成时，直接执行规划结果内嵌的 `execution_ref.platform_enum_command`，再把返回值作为重复的 `--authorized-platform-value` 传回规划器、取得终版规划结果。裸“亚马逊”只枚举到部分成员时，直接按 `platform_effective_members` 和 `resolved_platform_values` 查询可用部分，但必须原样披露 `platform_scope_disclosures_zh`，不得把部分结果表述为完整亚马逊范围。
-6. `execution_ref` 仅用于正式查询构造，禁止作为业务判断理由或向用户展示。`dimensions`/`metrics` 中 `selection_source=recommended` 的字段是系统推荐（用户未点名），确认前规划器不会下发 `query_template`。`status=planned` 时一体化入口直接执行完整性摘要绑定的原始模板；Agent 不得提取、编辑或重新拼装该模板。
-7. `query_mode=chart_uuid` 时无需本地数据集元数据，规划器会输出 `chart_uuid`、`chart_action` 和可直接执行的 `query_command`。必须读取 `references/chart-excel-guide.md`，直接执行该命令；不得再用普通数据集选表或 `run_query.py` 改写。多个 UUID 时规划器返回 `clarify_required`，确认后把单个 UUID 写回原请求重跑规划器。
+普通聚合、数据对比、MOY 趋势、子查询等场景，**必须优先使用简化接口**（`opscli query simple` / `query_simple`）。仅当简化接口不满足需求时，使用 `opscli query chart` / `query_chart`。
 
-`query_component` 只用于权限枚举，不是业务结果数据集。自然语言选表只依据当前账号元数据中的中文名称和中文说明；英文 key 仅在用户明确给出精确完整技术标识时精确匹配，不能从中文请求推断或模糊匹配。
+### 铁律二：禁止绕过正式入口
 
-### MCP-only：当前请求元数据
+所有远端查询动作必须统一走选定模式下的正式查询入口，**禁止直接调用后端 HTTP 接口**。
 
-用本次 `query_metadata` 返回的当前账号数据集按相同规则归一为 `candidate_ready` 或 `clarify_required`。选定后只使用 `query_metadata(dataset=...)` 的字段和 `select_columns`；认证或元数据失败时阻断选择，不从本地缓存、历史输出或其他账号补齐。
+### 铁律三：本地意图路由 → 确定数据集
 
-## 构造与执行
+当用户只给出自然语言需求、没有指定 dataset 时，按以下顺序确定数据集：
 
-1. CLI 查询参数由规划器生成并由一体化入口原样执行；Agent 不再参与拼参。MCP 字段只采用当前数据集 metadata。
-2. 不发明默认筛选。未指定筛选时只说明 `current_authenticated_account` 可见范围；明确筛选必须先经组件枚举——平台走规划结果的自动枚举/`platform_enum_command`，部门/国家等其他筛选用 `execution_ref.filter_components` 中对应组件的 `component_table_id` 查枚举，并严格遵守 `execution_ref.filter_value_match_policy`：先做规范化完整等值比较，部门名称额外允许阿拉伯数字与中文数字等价；唯一等值命中时只使用该枚举原值并直接执行，禁止再次询问用户是否采用，也禁止把仅包含请求文本的其他成员一并加入（`9部` 只匹配 `九部`，不匹配 `项目九部`；`范泰克` 只匹配 `范泰克`，不匹配 `范泰克体系外`）。无唯一等值命中时停止并让用户重选，不得用子串模糊扩展；组件不可用时只阻断该筛选，不扩大范围。
-3. 环比、同比和上期对比必须同时传主周期日期 `filters` 与 `dataComparison`（模板已按 `time_scope` 预填，执行器也会硬校验）。
-4. **执行确认分级**：数据集、字段、时间、筛选、排序、行数全部无歧义时，用一段中文陈述式披露口径后**直接执行，不等待用户回复**；只有 `clarify_required`、默认时间口径未确认、或含 `recommended` 字段未说明时才通过提问等待确认。
-5. `query_mode=dataset_query` 的 CLI 正常路径只用一体化流程（内含规划、完整性校验、执行前校验、排序生效校验与兜底、截断披露和证据合同）：
-
-```bash
-python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"
+```
+1. 本地 intent_taxonomy.yml 意图匹配：
+   CLI 模式：python scripts/route_intent.py "<用户问题>"
+     → 命中 direct_intent     → 正常路由到 table_id / dataset_alias
+     → 命中 embedded_intent   → 使用 execution_alias 执行，向用户说明口径映射
+     → requires_clarification=true → 先用 AskUserQuestion 澄清，禁止直接执行查询
+   ↓ 未命中（fallback_needed=true）
+2. 本地关键词搜索：python scripts/search.py "<关键词>" -n 20
+   → 匹配到 1 个 → AskUserQuestion 确认后执行
+   → 匹配到 ≥2 个 → AskUserQuestion 列出候选让用户选择
+   → 匹配到 0 个 → 提示用户无匹配，询问是否查看全量数据集列表（opscli query metadata）
 ```
 
-   - 默认条件（filter_configs）：规划结果存在 `default_filters` 时，流程自动传给执行器；最终回答必须披露 `default_filters_zh`。默认条件由服务端权威应用，用户为同字段提供条件时覆盖默认值，客户端不重复注入。
+**embedded_intent 执行说明**：若 `routing_status=embedded_intent`，使用 `execution_alias` 和 `table_id` 构造查询，并向用户说明实际使用的数据集及其口径差异（如"即时销售意图实际使用即时综合数据集中的 order_sale_trend_set 销售口径，以订单下单时间统计"）。
 
-   `query_plan.py` + `run_query.py` 仅保留给维护者复现与审计，不是 Agent 正常路径。执行器会校验规划摘要、状态、tableId、授权字段、模板及时间范围。正式查询偶尔较慢（排序兜底还可能放大窗口重查一次），命令窗口超时不是失败：**原样重跑一次**即可。流程返回 `precheck_failed` 时按 `next_action_zh` 重新运行规划器，禁止编辑 plan 或绕过执行器直连；`disclosures.order_fallback` 存在时必须披露本地兜底。MCP-only 用正式 `query_simple`。
-6. `query_mode=chart_uuid` 时原样执行 `execution_ref.query_command`。`chart_action=run` 必须遍历所有 `queries`，保留服务端小计/总计并按 `_query_index` 区分来源；大结果按 `references/chart-excel-guide.md` 使用 `--save-result` 或 `--result-file` 落盘，随后补一次 `evidence_contract.py`。
-7. 保留用户要求的明细和全量范围。限制展示时声明排序、截断数量和总行数（执行器 `disclosures` 已给出），不把局部结果说成全量。
+MCP 模式下无法运行本地脚本时，使用 `query_metadata()` 获取数据集列表后按关键词筛选，匹配规则与上述工作流一致。
 
-## 结果分析
+### 铁律四：字段存在性校验
 
-CLI-only 常规结果分析不要读取 `references/result-analysis.md`：`run_query.py` 输出已内嵌 `evidence_contract`，直接使用；仅在旁路直连（MCP 或图表入口）拿到裸结果时，才用 `python3 scripts/evidence_contract.py --input result.json`（或 stdin）补一次，每轮最多运行一次。只用其 `required_evidence`、`required_disclosures_zh` 和 `forbidden_inferences_zh` 组织结论：
+构造任何 query 参数前，**必须先确认目标数据集和字段真实存在**；搜索结果为空时，先判断本地数据是否已初始化，再决定是否升级。
 
-- 先说明数据集中文名、时间、维度、指标、筛选、币种、聚合、排序和行数；每个数值结论附字段名、结果列或回放证据。字段称呼使用元数据 `verbose_name` 原文，不意译。
-- 遵守 `numeric_evidence_policy_zh`，结论或证据中的关键数值保持返回精度，不自行四舍五入。
-- 0 行只能说明没有返回记录，不能判断业务为 0；全零不等于无数据；空值不等于 0。
-- 周期比较只使用已返回的本期、`last_*`、`diff_*`、`pct_*` 列，缺列时说明无法比较。不同原币不得混加，也不得与 CNY 列混加。
-- Top N 或截断必须披露排序、展示数和总行数；未查询范围不得外推。
-- 披露权限、样本、公式和数据新鲜度。没有刷新完成度或外部证据时，不把末日异常当成业务事实，也不得声称因果。
+### 铁律五：认证按需触发
 
-MCP-only（无本地 shell）、复杂审计或用户明确要求完整披露证据合同时，才读取 `references/result-analysis.md` 并按其五节结构输出。
+本地只读检索不要求登录；涉及远端 metadata、远端执行、图表运行和 Skill 升级前必须确认认证状态。
 
-## 纠错与反馈
+### 铁律六：dataComparison 必须同时传主周期
 
-用户说结果、字段、条件、口径、排序或条数不对时，带当前参数移交 `ops-query-wizard`，不猜测性反复重试。0 行、澄清、认证未就绪和用户取消不是意外故障。
+涉及环比、同比、上期对比等汇总对比时，**必须同时传主周期日期 `filters` + 对比周期 `dataComparison`**，不能只传 `dataComparison`。
 
-查询返回「未登录，请运行: opscli auth login」时：沙箱/托管环境的 opscli 凭证由平台自动注入，**禁止执行交互式 `opscli auth login`**（无人环境的 Device Flow 永远无法完成，只会空耗时间）。正确处置：等待约 1 分钟后原样重试同一查询一次；仍未登录则停止取数，向用户如实说明环境凭证异常，并按 `references/feedback-guide.md` 提交一次反馈。
+### 铁律七：default_filters 必须验证
 
-仅发生意外 opscli/MCP 失败时读取 `references/feedback-guide.md` 并立即提交一次去重的结构化反馈；成功查询不自动提交反馈。
+数据集预设的 `default_filters` 可能与实际数据不匹配。首次使用某数据集的 `default_filters` 时，必须先轻量探查验证；若加上后返回 0 行，则去掉该 `default_filters` 继续查询，并告知用户已跳过不可用的默认过滤条件。
 
-## 按需参考
+### 铁律八：公式字段禁止套用普通聚合
 
-- `references/rules.md`：歧义和口径检查。
-- `references/ask-user-question-guide.md`：结构化澄清与执行确认。
-- `references/cli.md`、`references/mcp.md`：正式模式入口。
-- `references/simple-query-guide.md`：查询参数、公式和对比（构造阶段仅在模板不足时读取）。
-- `references/chart-excel-guide.md`：图表查询、小计/总计与 Excel 导出。
-- `references/result-analysis.md`：复杂分析的完整证据合同。
-- `references/feedback-guide.md`：意外失败反馈。
-- `QUERY_SPEC.md`：仅 MCP 部署契约存档，CLI-only 会话不要读取。
+字段 metadata 中标记了 `formula_config` / `summary_expression` / `detail_expression` 的公式字段，**禁止使用 SUM/COUNT/AVG 等普通聚合函数**。公式字段的聚合逻辑已内置在表达式中，再套聚合会导致二次聚合的语义错误（例如把每行的 ACOS 百分比加在一起，而非计算整体 ACOS）。
+
+- 聚合/分组查询：使用 `summary_expression`，不额外传 `aggregation`
+- 明细查询：使用 `detail_expression`
+- 简化接口中遇到公式字段：**不加 `aggregation` 参数**，让服务端直接使用公式表达式
+
+### 铁律九：本地数据初始化检查
+
+`data/VERSION.json` 的 `data_state` 为 `placeholder` 时，表示本地数据为空模板（如 `datasets.csv` 只有表头无数据行）。此时任何字段搜索都会返回空结果，无法完成铁律三（本地意图路由）和铁律四（字段存在性校验）。
+
+**处理规则**：在执行任何需要本地数据索引的操作前，必须先检查 `data/VERSION.json` 的 `data_state` 字段：
+
+- `data_state` 为 `placeholder` 或 `empty` → 先执行 `opscli skills upgrade ops-dataset-query`（CLI）或 `skills_upgrade(name="ops-dataset-query")`（MCP）拉取远端数据，然后再执行搜索/查询
+- `data_state` 为 `ready` → 正常使用本地索引
+
+**两种数据刷新路径**：
+
+| 路径 | 方式 | 适用场景 |
+|------|------|---------|
+| 批量全量刷新 | `opscli skills upgrade ops-dataset-query` / `skills_upgrade` | 本地数据为空、大批字段缺失、版本过期 |
+| 按需远端查询 | `opscli query metadata --dataset <alias>` / `query_metadata(dataset=...)` | 仅需确认单个数据集的最新字段、不想等待全量升级 |
+
+> `query metadata` 始终远端优先：无参数时返回远端数据集列表（不含字段），指定 `--dataset` 或 `--table-id` 时返回远端最新字段信息。远端失败自动回退本地缓存。远端查询需要认证。
+
+### 铁律十：查询前必须执行意图澄清检查
+
+构造任何查询参数前，**必须先阅读 `references/rules.md`**，按"第九章 查询前自检清单"逐项检查用户输入是否存在语义歧义。规则文件中列出的所有歧义场景（人员身份、SKU 类型、币种、时间范围等），若触发则 **必须先通过 AskUserQuestion 向用户澄清**，禁止猜测后直接查询。
+
+> **结构化确认要求**：凡规则中写到"确认 / 让用户选择 / 澄清 / 确认后执行"的场景，必须按 `references/ask-user-question-guide.md` 使用 `AskUserQuestion`。纯文本说明不等于用户确认；用户确认前不得构造或执行 `query_simple`。
+
+### 铁律十一：查询闭环强制反馈
+
+每次执行任何查询工具（`opscli query simple` / `query_simple` / `query_build_and_run` / `query_chart` 等）后，**无论成功或失败**，都必须在后续 3 次工具调用内通过 **ops-feedback Skill** 提交一次执行反馈。
+
+- 反馈类型按结果区分：查询成功（含降级）→ `query_result`；工具报错/执行异常 → `bug`
+- 禁止以"查询失败"为由跳过反馈——失败场景尤其需要提交，便于追踪错误根因
+- 详细调用方式见下方「查询闭环：调用 ops-feedback 提交反馈」章节
+
+### 铁律十三：查询组件字段必须先校验权限再构造 filter
+
+构造 `filters` 参数前，**必须先获取当前数据集的查询组件列表**，执行两项检查：① 字段合法性扩展，② 枚举权限校验。详细规则见 `references/rules.md` 第十二章。
+
+**两种模式下的查询组件数据来源（必须区分）**：
+
+| 模式 | 获取方式 |
+|------|---------|
+| **CLI 模式** | 读取 `data/dataset_select_columns.csv`，按 `current_dataset_alias` 过滤 |
+| **MCP 模式** | 调用 `query_metadata(dataset="<alias>")`，读取响应中每个 dataset 的 `select_columns` 数组 |
+
+> MCP 模式下 `query_metadata()` 无参数时不含 `select_columns`，**必须加 `dataset` 参数**才能获取到 `select_columns` 列表。
+
+**规则一：查询组件字段是合法筛选条件（扩展字段集）**
+
+查询组件列表中出现的 `column_name`，即使**不在** `dataset_fields.csv`（CLI）或 `query_metadata` 字段列表（MCP）中，也是该数据集的合法 `filters` 条件，可以直接传入查询。
+
+- 不得因字段不在普通字段列表中就拒绝该筛选条件
+- 如用户要用部门筛选广告数据，即使广告数据集没有 `dept_name` 字段，只要查询组件列表有对应记录，就允许传入 `filters`
+
+**规则二：枚举值权限校验（必须在构造 filter 前执行）**
+
+查询组件字段的合法枚举值来自 `component_dataset_alias` 数据集，代表该用户的权限范围。**用户指定该类字段的筛选值前，必须先查询组件数据集验证权限**：
+
+```
+1. 获取查询组件列表 → 找到 column_name 对应的 component_dataset_alias
+   - CLI：dataset_select_columns.csv
+   - MCP：query_metadata(dataset="<alias>") 的 select_columns 数组
+
+2. 查询组件数据集获取合法枚举值
+   - CLI：opscli query simple --table-id <component_dataset_alias> --dimensions <column_name>
+   - MCP：query_simple(table_id="<component_dataset_alias>", dimensions=["<column_name>"])
+
+3. 用户指定的值在列表中 → 有权限，继续构造原始查询
+
+4. 用户指定的值不在列表中 → 无权限：
+   → 告知用户当前账号不包含该值的数据权限
+   → 通过 AskUserQuestion 展示合法值列表，引导用户重新选择
+   → 禁止继续构造或执行原始查询
+```
+
+**禁止行为**：
+- ❌ 忽略查询组件列表，直接凭经验猜测枚举值（如写 `"Amazon"` 或 `"US"`）
+- ❌ 对有 `component_dataset_alias` 的字段使用用户原始输入而不做权限校验
+- ❌ 因字段不在普通字段列表中就拒绝来自查询组件列表的合法筛选条件
+- ❌ 跳过组件数据集查询，直接用用户说的值构造 filter
+- ❌ MCP 模式下用无参数的 `query_metadata()` 来获取 `select_columns`（需要加 `dataset` 参数）
+
+### 铁律十四：禁止静默截断数据，全量展示优先
+
+- 取数服务本身无硬性行数上限，**AI 不得额外设置低于用户预期的 `limit`**（如默认 limit=20 截断而不声明）
+- 用户问"各小组""全部 ASIN""所有渠道""明细"时，默认展示**全部数据**，禁止自动只展示 Top N
+- 数据量超出展示上限时，报告中写明总行数，询问是否需要导出 Excel 附件（调用 excel_export）
+- 分页查询（`offset`）可用于获取完整数据
+- 任何截断都必须在回答中写明：排序字段、截断数量、总行数
+
+---
+
+## 各模式详细文档
+
+| 模式 | 文件路径 | 说明 |
+|------|---------|------|
+| **意图澄清规则** | `references/rules.md` | **查询前必须阅读** — 人员/时间/SKU 等语义歧义澄清规则 |
+| **结构化提问规范** | `references/ask-user-question-guide.md` | **查询前必须阅读** — AskUserQuestion 使用策略、模板与禁止行为 |
+| CLI 模式索引 | `references/cli.md` | 前置要求、使用原则、字段检查、错误处理、工作流索引 |
+| CLI 查询详解 | `references/cli-simple-guide.md` | `opscli query simple`、`opscli query chart`、辅助脚本 |
+| MCP 模式索引 | `references/mcp.md` | 前置要求、使用原则、字段检查、辅助脚本、错误处理 |
+| MCP 查询详解 | `references/mcp-simple-guide.md` | `query_simple`、`query_build_and_run`、`query_chart`、辅助脚本 |
+| 简化接口参数规范 | `references/simple-query-guide.md` | **优先阅读** — 通用简化参数结构 |
+| 查询闭环反馈 | `references/feedback-guide.md` | ops-feedback 调用模板与示例 |
+
+---
+
+## 查询闭环：调用 ops-feedback 提交反馈
+
+> **铁律十一的执行入口**：每次查询完成后，必须通过 `ops-feedback` 提交结果反馈，形成闭环。
+
+### 标准工作流（含闭环）
+
+```
+1. 意图澄清（读 references/rules.md）
+2. 认证检查
+3. 未指定 dataset/table_id 时执行本地意图路由（route_intent.py → search.py）
+4. query_metadata / 本地索引校验数据集和字段
+5. 执行查询（query_simple / opscli query simple 等）
+6. 输出结果给用户
+7. 【铁律十一】调用 ops-feedback 提交反馈   ← 不可跳过
+```
+
+### 反馈规则速查
+
+- 查询成功（含 0 行）→ `feedback_type="query_result"`
+- 工具报错/异常 → `feedback_type="bug"`
+- `dry_run` 模式可跳过
+- 失败场景尤其重要，禁止跳过
+
+> 完整调用示例（MCP / CLI 模板、成功/降级/报错三种场景）见 `references/feedback-guide.md`。

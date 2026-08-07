@@ -1221,3 +1221,55 @@ def test_manager_timeout_passes_to_client():
     """构造时传入 timeout 应透传给 QueryClient；缺省时使用默认值 120 秒。"""
     assert QueryManager(timeout=90).client.timeout == 90
     assert QueryManager().client.timeout == 120
+
+
+def test_build_simple_auto_fills_missing_alias():
+    """缺 alias 的 dimension/metric 应自动以 field 末段补齐，规避后端 alias 必填 422。"""
+    manager = QueryManager()
+
+    result = manager.build_simple(
+        table_id=1,
+        dimensions=[{"field": "dept_name"}],
+        metrics=[{"field": "order_qty", "aggregation": "SUM"}],
+        limit=50,
+    )
+
+    payload = result["payload"]
+    # 维度补齐 alias=dept_name
+    assert payload["dimensions"][0] == {"field": "dept_name", "alias": "dept_name"}
+    # 指标补齐 alias=order_qty，且原有 aggregation 保留
+    assert payload["metrics"][0] == {
+        "field": "order_qty",
+        "aggregation": "SUM",
+        "alias": "order_qty",
+    }
+
+
+def test_build_simple_alias_uses_field_tail():
+    """field 带表前缀时，alias 取末段并保留原大小写。"""
+    manager = QueryManager()
+
+    result = manager.build_simple(
+        table_id=1,
+        dimensions=[{"field": "ds_xxx.DeptName"}],
+        metrics=[{"field": "ds_xxx.order_qty", "aggregation": "SUM"}],
+    )
+
+    payload = result["payload"]
+    assert payload["dimensions"][0]["alias"] == "DeptName"
+    assert payload["metrics"][0]["alias"] == "order_qty"
+
+
+def test_build_simple_preserves_explicit_alias():
+    """已显式提供的 alias 原样保留，不被末段兜底覆盖。"""
+    manager = QueryManager()
+
+    result = manager.build_simple(
+        table_id=1,
+        dimensions=[{"field": "dept_name", "alias": "f_custom"}],
+        metrics=[{"field": "order_qty", "aggregation": "SUM", "alias": "f_qty"}],
+    )
+
+    payload = result["payload"]
+    assert payload["dimensions"][0]["alias"] == "f_custom"
+    assert payload["metrics"][0]["alias"] == "f_qty"

@@ -12,6 +12,7 @@ import shutil
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import dataclasses
 
@@ -28,7 +29,7 @@ from opscli.skills.domain.models import (
 )
 from opscli.skills.link.linker import SkillsLinker
 from opscli.skills.packaging import get_builtin_templates_dir, get_central_skills_dir
-from opscli.skills.sync.updater import SkillsUpdater
+from opscli.skills.sync.updater import UPGRADE_MANAGED_FILES, SkillsUpdater
 
 _logger = logging.getLogger("opscli.skills")
 
@@ -194,17 +195,25 @@ class SkillsManager:
         target_dir = target_root / skill_name
 
         replaced = False
-        if target_dir.exists():
-            if not force:
-                raise ValueError(f"Skill 已存在: {target_dir}")
-            shutil.rmtree(target_dir)
-            replaced = True
+        stashed: list[str] = []
+        # 覆盖前先把运行时元数据暂存到临时目录，copytree 之后写回，
+        # 否则模板的占位 data/ 会把用户 upgrade 拉取的真实元数据抹掉
+        with TemporaryDirectory() as stash_dir:
+            stash_path = Path(stash_dir)
+            if target_dir.exists():
+                if not force:
+                    raise ValueError(f"Skill 已存在: {target_dir}")
+                stashed = self._stash_runtime_metadata(target_dir, template_dir, stash_path)
+                shutil.rmtree(target_dir)
+                replaced = True
 
-        shutil.copytree(
-            template_dir,
-            target_dir,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
-        )
+            shutil.copytree(
+                template_dir,
+                target_dir,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+            )
+            self._restore_runtime_metadata(target_dir, stash_path, stashed)
+
         self._record_install(skill_name, target_dir, runtime)
         return SkillBatchInstallResult(
             name=skill_name,
@@ -217,6 +226,7 @@ class SkillsManager:
                     replaced=replaced,
                     central_dir=None,
                     link_method=None,
+                    preserved_data_files=len(stashed),
                 )
             ],
         )
@@ -238,16 +248,26 @@ class SkillsManager:
         # force 时无条件覆盖；否则比较内置模板与已有中央副本的版本，
         # 只要版本号不一致就以模板为准覆盖（允许降级），保证 install 始终与当前发行包模板对齐；
         # 版本号完全相同时复用旧副本，避免多余的删除重拷。
-        if central_skill_dir.exists():
-            if force or self._template_version_differs(template_dir, central_skill_dir):
-                shutil.rmtree(central_skill_dir)
-        if not central_skill_dir.exists():
-            self._central_skills_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(
-                template_dir,
-                central_skill_dir,
-                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
-            )
+        # 覆盖中央副本时同样要保留运行时元数据：模板 data/ 只是占位符，
+        # 真实元数据（近 600KB / 数千字段）只存在于中央副本，由 upgrade 从远端写入。
+        # 注意此处不只 force 会触发覆盖——模板版本与 upgrade 写入的数据版本属于
+        # 两套版本空间、永远不相等，_template_version_differs 每次都为真，
+        # 因此普通 install 也会走到 rmtree，必须一并保护。
+        stashed: list[str] = []
+        with TemporaryDirectory() as stash_dir:
+            stash_path = Path(stash_dir)
+            if central_skill_dir.exists():
+                if force or self._template_version_differs(template_dir, central_skill_dir):
+                    stashed = self._stash_runtime_metadata(central_skill_dir, template_dir, stash_path)
+                    shutil.rmtree(central_skill_dir)
+            if not central_skill_dir.exists():
+                self._central_skills_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(
+                    template_dir,
+                    central_skill_dir,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+                )
+                self._restore_runtime_metadata(central_skill_dir, stash_path, stashed)
 
         version = self._read_version(central_skill_dir)
 
@@ -290,6 +310,7 @@ class SkillsManager:
                     replaced=link_result.replaced,
                     central_dir=central_skill_dir,
                     link_method=link_result.method,
+                    preserved_data_files=len(stashed),
                 )
             )
 
@@ -304,6 +325,7 @@ class SkillsManager:
                     replaced=False,
                     central_dir=central_skill_dir,
                     link_method=None,
+                    preserved_data_files=len(stashed),
                 )
             )
 
@@ -501,6 +523,62 @@ class SkillsManager:
             return False
         # compare_versions 返回 0 表示两版本相等；非 0 即不一致，需要以模板覆盖
         return self.updater.compare_versions(template_version, central_version) != 0
+
+    @staticmethod
+    def _template_data_is_placeholder(template_dir: Path) -> bool:
+        """内置模板的 data/ 是否为占位符（由模板自己在 VERSION.json 里声明）。
+
+        为什么用声明而不是猜内容：模板作者最清楚自己发的是占位符还是真数据。
+        ops-dataset-query 声明 data_state=placeholder（真实元数据靠 upgrade 拉），
+        而 ops-asin-data-bi 等声明 data_state=ready（数据随模板发布，必须覆盖）。
+        读取失败时返回 False，保守走原有整体覆盖逻辑。
+        """
+        try:
+            payload = json.loads((template_dir / "data" / "VERSION.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        return isinstance(payload, dict) and payload.get("data_state") == "placeholder"
+
+    @staticmethod
+    def _has_real_metadata(data_dir: Path) -> bool:
+        """已安装目录是否持有 upgrade 拉取的真实元数据。
+
+        判据取 datasets.csv 是否含表头之外的数据行：模板占位符只有表头，
+        upgrade 写入后才会有数据行。只读两行，不加载整个 CSV（真实文件近 600KB）。
+        """
+        try:
+            with (data_dir / "datasets.csv").open(encoding="utf-8") as handle:
+                next(handle, None)          # 跳过表头
+                return next(handle, None) is not None
+        except OSError:
+            return False
+
+    def _stash_runtime_metadata(self, target_dir: Path, template_dir: Path, stash_dir: Path) -> list[str]:
+        """覆盖安装前把运行时元数据暂存到 stash_dir，返回暂存的文件名列表。
+
+        只在「模板 data/ 是占位符」且「已安装目录持有真实元数据」时暂存，
+        避免把模板随包发布的真数据挡在外面，也避免占位符之间的无意义搬运。
+        """
+        data_dir = target_dir / "data"
+        if not self._template_data_is_placeholder(template_dir) or not self._has_real_metadata(data_dir):
+            return []
+
+        stashed: list[str] = []
+        for filename in UPGRADE_MANAGED_FILES:
+            source = data_dir / filename
+            if not source.is_file():
+                continue
+            shutil.copy2(source, stash_dir / filename)
+            stashed.append(filename)
+        return stashed
+
+    @staticmethod
+    def _restore_runtime_metadata(target_dir: Path, stash_dir: Path, stashed: list[str]) -> None:
+        """把暂存的运行时元数据写回新安装目录，覆盖模板带来的占位符。"""
+        data_dir = target_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        for filename in stashed:
+            shutil.copy2(stash_dir / filename, data_dir / filename)
 
     @property
     def _registry_path(self) -> Path:

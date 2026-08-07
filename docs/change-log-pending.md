@@ -267,6 +267,40 @@
 **回滚方式**：停止并移除 Collector Monitor 服务，回退监控模块、SellerSprite 监督字段、依赖、测试、文档及本条记录；增量 SQLite 监督字段可保留且不影响旧版本读取。
 ---
 
+## 2026-07-30 ops-dataset-query/local_fallback - 新增画像覆盖率巡检命令
+
+**变更原因**：`local_fallback.py` 的人工画像（`data/dataset_profiles.json`）靠人工维护，覆盖率和腐烂情况此前无人可见——后端 60 个数据集只有 15 份画像，其中 2 份 alias 已查不到对应数据集；意图表 `intents[].primary_dataset` 按中文名指向数据集，同样没有 alias 保护，改名后会静默断链。没有巡检就只能等出错才发现，需要一条随时可跑的只读命令把维护缺口变可见。
+
+**改动点**：`opscli/skills/templates/ops-dataset-query/scripts/local_fallback.py` 新增 `audit_profiles()`，统计 `total_datasets/profiled/certified/missing_profiles/stale_profiles`，并追加 `broken_intent_links`（核查 `intents[].primary_dataset` 是否能在画像 `datasets[].standard_name` 中找到对应条目）；`main()` 新增 `--audit` 命令行开关，命中时直接输出巡检结果并返回，不构建降级合同、不做任何查询。另补两处 blocked 分支（数据目录缺失 / `data_state` 为 `placeholder`\|`empty`）字段形状对齐 `build_fallback()` 同类分支，均带 `data_state` 与 `recovery_command`。测试新增 4 条：`test_audit_reports_coverage_gap`（brief 给定用例）、`test_audit_blocks_when_data_dir_missing`、`test_audit_blocks_when_data_is_placeholder`（占位态阻断，实测时发现原始实现缺失该分支后补）、`test_audit_reports_broken_intent_links`（追加范围）。
+
+**验证结果**：TDD RED→GREEN。`pytest tests/skills/test_local_fallback.py -q` → `32 passed, 5 xfailed`（原有 33 条 + 新增 4 条 = 37 条收集，其中 5 条为既有已知路由缺口 xfail，与本次改动无关）。
+
+真实数据巡检——如实记录实际跑过的两种数据状态，不合并叙述：
+1. `ready` 态（`~/.claude/skills/ops-dataset-query` 尚未被覆盖前）：不带 `--data-dir` 从该目录下的 `scripts/` 直接执行 `python3 local_fallback.py --audit x`，输出 `total_datasets=60, profiled=12, certified=0, stale_profiles=["ds_X2aBDzKIMf66","ds_xSQ0DFxpLPLC"], broken_intent_links=[]`；数量级与已知情况（60 个数据集、15 条画像）吻合，stale 从 brief 提到的 3 条降为 2 条（Task 6 已修复 1 条）。同一批不带 `--data-dir` 从仓库模板目录 `opscli/skills/templates/ops-dataset-query/scripts/` 执行也得到相同数字——**但这不是"模板自带数据也是 60"**：`core.discover_data_dir()` 的搜索顺序里用户主目录 `~/.claude/skills` 排在脚本自身相对路径回退之前，只要该目录下 `dataset_fields.csv` 存在（不判断是否为占位内容）就会被优先选中，因此两次调用实际读的是同一份 `~/.claude/skills` 安装数据，并非独立验证了模板本地占位数据。
+2. `placeholder` 态：显式加 `--data-dir ../data` 强制读模板自带的占位数据（`VERSION.json` 的 `data_state` 为 `placeholder`，`datasets.csv` 只有表头）→ 正确返回 `{"status": "blocked", "data_state": "placeholder", ...}`，验证了占位守卫分支。之后 `~/.claude/skills`、`~/.opscli/skills`、`~/.codex/skills`、`~/.openclaw/skills` 四个安装目录均被 `opscli skills install --force`（用 `copy2` 整体覆盖安装目录为仓库模板，模板自带占位数据）重置为 `placeholder`，复测不带 `--data-dir` 的 `--audit` 在四处均一致返回 `blocked/placeholder`，未再出现误报的 0 值覆盖率。
+
+`tests/skills/` 整目录跑（排除已知会导致 pytest capture 崩溃的 `test_packaging.py`）为 `380 passed, 6 failed, 8 xfailed`，6 个失败分布在 `test_cli.py`/`test_manager.py`/`test_ops_feedback_template.py`/`test_ops_methods_card_xlsx_preview.py`，均与本次改动的文件无关，判定为既有基线问题。
+
+**影响范围**：仅新增只读巡检能力，不修改 `build_fallback()` 现有行为、不修改任何画像或元数据文件。`~/.opscli`/`~/.codex`/`~/.claude`/`~/.openclaw` 四个安装目录均已安装 `ops-dataset-query`，已按铁律要求逐文件（非整目录）同步 `local_fallback.py` 到四处的 `scripts/`；四处当前均处于 `opscli skills install --force` 覆盖后的 `placeholder` 态，等待用户执行 `opscli skills upgrade ops-dataset-query` 恢复真实数据。
+
+**回滚方式**：`git revert` 本次提交；已同步到四个安装目录 `ops-dataset-query/scripts/local_fallback.py` 的文件需手动改回上一版本，或重新执行 `opscli skills upgrade ops-dataset-query`。
+
+---
+
+## 2026-07-28 dashboard/skill - 按用户意图选择建图与修改流程
+
+**变更原因**：Dashboard 编辑 Skill 将分析建图、显式单图、多图创建和已有图表修改统一收敛为一次原子批量创建，无法表达创建空图、创建后批量配置或只修改目标图表的请求。
+
+**改动点**：`ops-dashboard-ai-bridge` 升级到 `1.0.26`；新增场景分析建图、明确新建和已有图表修改三类意图路由；允许按实时 schema 选择原子创建配置或先创建后批量配置；明确只有真实模板 UUID 才能使用页面图表模板；移动、改名和字段修改必须保持图表集合不变。同步更新工具合同、业务规范、Agent 默认提示和静态契约测试。
+
+**验证结果**：`uv run pytest tests/skills/test_dashboard_skills.py tests/mcp/test_dashboard_tools.py tests/test_version_consistency.py -q` 通过（16 passed）；通用 `quick_validate.py` 只因不认识仓库发布协议必需的 `version`、`compatibility` 扩展键而拒绝，仓库定向元数据与安装测试均通过。真实 E2E 结果记录在运营前端仓库本轮报告。
+
+**影响范围**：仅 Dashboard 编辑 Skill 的规划与工具选择，不修改页面工具 schema、前端 interface 或 ops-agent Python 逻辑；发布前线上仍使用上一版本。
+
+**回滚方式**：还原 `ops-dashboard-ai-bridge` 的 Skill、两份 reference、Agent 元数据、VERSION、静态测试和本条记录。
+
+---
+
 ## 2026-07-28 seller_sprite - 透传关联流量准备接口错误
 
 **变更原因**：部分 ASIN 调用关联流量准备接口时返回 `ERR_GLOBAL_500`，官网不展示全部变体选择弹窗，browser-route 因未监听准备接口而误报弹窗缺失。
@@ -5456,4 +5490,1049 @@
 **验证结果**：Keepa JSON 导出、Manager、MCP 和采集沉淀聚焦回归 `36 passed`，新增 Sheet 名碰撞一致性测试；Keepa Skill 校验、`compileall` 和 `git diff --check` 通过。项目全量测试受仓库既有同名测试模块收集冲突及 Shopify `_shopify_manager` 导入缺失阻断；wheel 构建受本机缺少 Microsoft Visual C++ 14+ 阻断；当前环境未安装 Ruff。
 **影响范围**：Keepa CLI/MCP 导出格式、用户导出文件、采集沉淀 Parser 合同及相关 Skill；默认 XLSX 行为和内部原始 `raw.json` 不变。
 **回滚方式**：回退 Keepa JSON 导出器、共享工作表模型、格式校验、Parser v3、Skill 文档和对应测试。
+## 2026-07-28 ci - 发布流程排障：twine 增加 --verbose 并新增临时 debug workflow
+
+**变更原因**：v0.0.119 / v0.0.120 / v0.0.121 连续三次发布被 PyPI 以 400 拒绝，但 CI 日志只有 `400 Bad Request / Bad Request` 这一句，看不到根因。经本地实测确认：twine 6.2.0 在非 verbose 模式下只打印 HTTP 状态短语，服务端返回的真实拒绝原因仅出现在 `--verbose` 的响应体中（用错误 token 复现时，非 verbose 结尾行同样只有 `403 Forbidden / Forbidden`）。
+**改动点**：
+- `.github/workflows/build-and-publish.yml`：`twine upload` 增加 `--verbose`，并注释说明不可删除的原因。
+- `.github/workflows/debug-publish-verbose.yml`（新增，临时排障用）：`workflow_dispatch` 触发，通过 `actions/download-artifact@v4` 的 `run-id` 跨 run 复用已有构建产物，不重新编译，直接以 verbose 模式重跑上传以捕获原始报错；排障结束后应删除。
+**验证结果**：本地已验证产物本身无问题——`twine check --strict` 对 v0.0.121 全部 8 个 macOS wheel 全部 PASSED；v0.0.121 与已成功发布的 v0.0.119 的 METADATA 逐行比对仅差版本号与 README 新增章节；847 字节探针 wheel（0.0.121.dev999）上传返回 200 OK，证明 token 与项目写权限正常。workflow 改动待 debug workflow 实跑验证。
+**影响范围**：仅影响 GitHub Actions 发布流程的日志输出，不改变构建产物、上传参数语义和发布结果；`--verbose` 不会打印 token（twine 输出 `password: <hidden>`）。
+**回滚方式**：移除 `build-and-publish.yml` 中的 `--verbose`，删除 `.github/workflows/debug-publish-verbose.yml`。
+---
+
+## 2026-07-28 ci - Linux wheel 剥离调试符号 + 上传前单文件体积门禁
+
+**变更原因**：v0.0.119~v0.0.122 连续四次发布失败，经 CI verbose 日志确认根因为 `400 File too large. Limit for project 'aukeys-opscli' is 100 MB`。逐条目比对 v0.0.119 的 Linux 与 macOS wheel（内容完全相同、均为 232 个 .so）：macOS 解压后 30.1 MB、压缩后 11.1 MB，Linux 解压后 238.5 MB、压缩后 66.7 MB，相差 8 倍，系 setuptools 在 Linux 下默认带 `-g` 编译且 auditwheel 默认不 strip，调试符号被打进 wheel，导致 manylinux wheel 涨到 103~109 MB 超过 PyPI 单文件上限。
+**改动点**：
+- `.github/workflows/build-and-publish.yml`：新增 `CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel} --strip"`，仅对 Linux 生效，剥离调试符号，不影响运行。
+- 同文件 publish job 新增 `Check file size limit before upload` 步骤：上传前逐个校验产物不超过 100 MB，超限则中止且不向 PyPI 发送任何文件。必要性是 twine 顺序上传、中途失败会留下已上传文件，而 PyPI 文件名用过即永久不可复用（删除后重传报 `previously used by a file that has since been deleted`），会直接废掉一个版本号。
+**验证结果**：改动前 v0.0.122 实测 4 个 manylinux wheel 分别为 103M/107M/109M/107M，全部超限；macOS 38M、Windows 36~37M、sdist 25M 均正常。strip 后的实际体积以本次 v0.0.123 构建日志的 `List dist contents` 为准。
+**影响范围**：仅影响 Linux wheel 的构建产物（不含调试符号，无法用于 gdb 符号级调试）和发布流程的前置校验；macOS/Windows 产物与包内容不变。
+**回滚方式**：删除 `CIBW_REPAIR_WHEEL_COMMAND_LINUX` 与 `Check file size limit before upload` 两处改动。
+---
+
+## 2026-07-29 skills/ops-dataset-query - 修复 Windows GBK 环境下的编码崩溃
+
+**变更原因**：Windows 中文用户（codepage 936）在 Codex 上运行 ops-dataset-query 报 `UnicodeDecodeError: 'gbk' codec can't decode byte 0xa6`。根因是 skill 脚本用 `subprocess.run(..., text=True)` 调用 opscli 却未指定 encoding，`text=True` 在 Windows 上按 locale（GBK）解码子进程 stdout，而 opscli 的 stdout 已被强制重配为 UTF-8（`opscli/cli.py:112-118`），UTF-8 中文字节被 GBK 解码必然失败；同时脚本自身 stdout 在 Windows 管道下也走 GBK，中文 JSON 回传给 Agent 会乱码，遇 GBK 外字符还会抛 UnicodeEncodeError。
+**改动点**：
+1. `scripts/core.py`：新增 `force_utf8_stdio()`（Windows 上把本进程 stdout/stderr reconfigure 为 UTF-8，非 Windows 无操作，与 opscli/cli.py 策略一致）与 `utf8_subprocess_kwargs()`（返回 `encoding="utf-8"` + `errors="replace"` + 子进程 `PYTHONIOENCODING=utf-8`，取代 `text=True`）；`try_upgrade()` 改用新参数。
+2. 5 个 opscli 子进程调用点改用 `utf8_subprocess_kwargs()`：`run_query.py:301 _run_opscli`、`query_plan.py:1826 _auto_enum_platform_values`、`query_plan.py:1891 _auto_enum_component_values`、`core.py:173 try_upgrade`、`chart_data_loader.py:69 load_chart_data_from_uuid`。
+3. 3 个入口 `main()` 开头调用 `force_utf8_stdio()`：`query_flow.py`、`run_query.py`、`query_plan.py`；对应文件新增 `import core`。
+**验证结果**：专项脚本 5 项断言全通过（子进程 stdout encoding=utf-8；UTF-8 中文 `{"渠道":"傲彼瑞"}` 正确解码；注入 0xa6 坏字节降级为替换符不再抛异常；非 Windows 上 stdio 不被改动；4 个入口模块可正常导入）。`pytest tests/skills/test_run_query_default_filters.py tests/skills/test_dataset_query_planner.py tests/skills/test_dataset_guidance_default_filters.py tests/skills/test_scoped_reader_duplicate_fields.py tests/mcp/test_query_planner_tools.py` 84 passed。`pytest tests/query` 150 passed / 2 failed（test_cli 的 catalog/intent，已 git stash 验证为既存基线失败，与本次无关）。`python query_flow.py "查一下数据" --no-auto-enum --no-auto-upgrade` 正常返回合同 JSON。
+**影响范围**：仅 ops-dataset-query skill 脚本；非 Windows 平台行为不变（`force_utf8_stdio` 直接 return，`encoding="utf-8"` 与原 locale 解码结果一致）。scripts/ 不在远端升级替换范围内（`sync/updater.py` 只替换 data/ 的 CSV/JSON），Windows 用户需升级 opscli 包后重装该 skill 才能拿到修复。
+**回滚方式**：`git checkout HEAD -- opscli/skills/templates/ops-dataset-query/scripts/{core.py,run_query.py,query_plan.py,chart_data_loader.py,query_flow.py}`。
+---
+
+## 2026-07-29 query/planner + skills/ops-dataset-query - 支持全时段查询，移除仅维度查询的默认30天限制
+
+**变更原因**：两版规划器（Skill 版 scripts/、内核版 opscli/query/services/planner/）都以 DEFAULT_DAYS=30 兜底，且存在两个缺陷：(1) 没有「全部时间」这一档，「历史以来/所有时间/不限时间」等表述全部落到默认近30天；(2) 否定语境被反向识别——用户原文「已明确拒绝默认近30天」中的「近30天」被正则命中，返回 is_default=False，规划器当成用户显式要求近30天，连确认门都不触发直接按30天执行（线上 Windows 用户与本地 e2e 均复现）。另据用户要求，只查维度不查指标的请求（如「某渠道下全部 ASIN」）本质是取去重维度全集，卡30天只会漏掉更早出现过的值，不应加日期筛选。
+**改动点**：
+1. 两版 `time_scope.py`：新增 `_ALL_TIME_RE`（全时段触发词，只收明确指向时间维度的表述，「全部ASIN」这类泛指不收）与 `_NEGATED_SPAN_RE`（否定语境屏蔽，范围只到最近标点，保证「不要近30天，查上月」后半句仍生效）；`_window()` 返回类型放宽为 `date | None`，全时段返回空窗口；顺序上全时段判断必须先于否定屏蔽（否则「不加日期筛选」这类本身是否定形式的表述会被连带清掉，测试已捕获）；`parse()` 输出新增 `unbounded` 字段，空窗口时早返回，不生成环比/同比。
+2. 两版 `query_plan.py`：新增「仅维度无指标 + 原文未给时间」→ 改写 scope 为空窗口且不触发时间确认门；`scope_zh` 增加空窗口分支（避免输出 None ~ None）；`execution_ref.time_scope` 新增 `unbounded`。日期筛选注入点 `_build_query_template` 原有 `if date_field and scope.get("start")` 守卫无需改动，空窗口天然不注入。
+3. 两版 `query_plan.schema.json`：`time_scope.start/end` 放宽为 `["string","null"]`，新增 `unbounded` 属性。
+4. 新增 `tests/skills/test_time_scope_unbounded.py`：28 项回归，对 Skill/内核两版参数化，覆盖全时段识别、否定语境、泛指不误判、显式窗口不受影响、空窗口无对比期，以及规划器层的「仅维度不限时间」「带指标仍确认默认窗口」。
+**验证结果**：新增测试 28 passed；两版行为对照脚本 11 项全一致；`pytest tests/query tests/mcp/test_query_planner_tools.py tests/skills/test_dataset_query_planner.py tests/skills/test_run_query_default_filters.py tests/skills/test_dataset_guidance_default_filters.py tests/skills/test_scoped_reader_duplicate_fields.py tests/skills/test_time_scope_unbounded.py` → 262 passed / 2 failed（test_cli 的 catalog/intent，既存基线失败，已 git stash 验证与本次无关）。隔离目录规划器 e2e 四场景符合预期：原 Windows 用户请求→planned 无日期筛选；仅维度无时间→planned 无日期筛选；维度+指标无时间→clarify_required 保留确认门；维度+指标近7天→正常注入 date_id 区间。
+**影响范围**：两版规划器的时间口径解析与日期筛选注入。带指标且未给时间的请求行为不变（仍是默认近30天 + 用户确认）。注意：服务端是数据集默认条件注入的唯一权威方（见 run_query.py 架构说明），若数据集本身配置了服务端默认日期条件，客户端不注入日期筛选不等于一定返回全历史，需按数据集单独核对。
+**回滚方式**：`git checkout HEAD -- opscli/query/services/planner/{time_scope.py,query_plan.py,resources/query_plan.schema.json} opscli/skills/templates/ops-dataset-query/scripts/{time_scope.py,query_plan.py} opscli/skills/templates/ops-dataset-query/data/query_plan.schema.json && rm tests/skills/test_time_scope_unbounded.py`。
+---
+
+## 2026-07-29 query/planner + skills/ops-dataset-query - 止血：收回「仅维度自动不限时间」
+
+**变更原因**：7a85d69 放开「仅维度无指标 + 未给时间」自动转全时段并跳过时间确认门后，线上 Codex 实测出现静默错数：查询「渠道是傲彼瑞的所有ASIN」返回了傲创-美国、莱福特-美国等其他渠道的数据。根因是规划器的 `_build_query_template()` 签名里根本没有筛选值入参（只能产出日期筛选），组件字段（渠道/ASIN/渠道SKU）的筛选值从不写入 query_template，`filter_value_match_policy` 只是给模型看的文字策略、代码层无强制；而 query_flow 在 status=planned 时原样执行该模板。此缺陷为既有问题（实测「查渠道傲彼瑞近7天的销量」在改动前后输出逐字相同，都是 planned + 仅日期筛选），但时间确认门此前意外挡住了仅维度这条路径，放开后变成静默执行。
+**改动点**：两版 `query_plan.py` 移除「仅维度转全时段」分支，恢复时间确认门（保留显式全时段关键词识别与否定语境防误判，这两项不涉及筛选值风险）；`tests/skills/test_time_scope_unbounded.py` 同步调整第 3 条断言与文档说明，删除因此空置的 `_date_filters` 辅助函数。
+**验证结果**：原失败查询现返回 `clarify_required` 且不下发 query_template（query_flow 无法执行）；`pytest tests/skills/test_time_scope_unbounded.py tests/query/planner tests/skills/test_dataset_query_planner.py tests/mcp/test_query_planner_tools.py` 全通过；改动已同步到 ~/.opscli、~/.codex、~/.claude、~/.openclaw 四个安装目录。
+**影响范围**：仅维度且未给时间的查询恢复为需用户确认；显式全时段（历史以来/不限时间）仍可用。带筛选值 + 显式时间的既有漏筛缺陷不在本次范围，由后续组件筛选值解析修复。
+**回滚方式**：`git revert` 本次提交即可恢复自动不限时间行为（但会重新引入静默错数风险）。
+---
+
+## 2026-07-29 query/planner + skills/ops-dataset-query - 组件筛选值解析一期（渠道 + ASIN + fail-closed 闸门）
+
+**变更原因**：规划器的 `_build_query_template()` 没有筛选值入参，组件字段（渠道/ASIN/渠道SKU）的筛选值从不写入 query_template，`filter_value_match_policy` 只是给模型看的文字策略；而 query_flow / run_flow 在 status=planned 时原样执行该「骨架」，导致「查渠道是傲彼瑞的所有ASIN」静默返回全部渠道的数据。仓库里已有 `_resolve_department_filter` 实现了正确机制（抽值→枚举→规范化等值→唯一命中写入/否则阻断），但只服务部门一个字段。
+**改动点**：
+1. 两版 `query_plan.py`：把 `_resolve_department_filter` 泛化为 `_resolve_component_filters`，按 `_ENUM_COMPONENT_SPECS` 配置驱动（dept_name 仅标签形态；channel_name 标签形态 + 枚举反查）；新增 `_lookup_component`（filter_components 缺失时回落全量组件表——该列表按查询相关性截断，用户不提「渠道」二字时会被裁掉，而这正是最需要校验的裸值场景）、`_reverse_lookup_component_values`（用授权原值反查原文，兜住不含字段名的裸值）、`_shared_prefix`、`_dataset_has_field`、`_block_component_filter`（统一撤模板 + 中文恢复指引）、`_write_component_filter`、`_resolve_asin_filter`（ASIN 形态固定 B0+8 位，字面锁定不走枚举）。渠道标签正则用非贪婪 + 边界前瞻，避免把「傲彼瑞的所有ASIN」整段吞成筛选值。内核版保留原有 `enum_errors` 语义（枚举调用失败 → enum_failed / report_component_enum_defect，不建议无效重试）。
+2. 两版 `query_plan.py`：恢复 7a85d69 的「仅维度无指标 + 未给时间 → 不加日期筛选」规则（b8aa59b 曾因静默错数风险收回），现由组件筛选值解析的锁定/澄清/阻断三态兜底。
+3. `tests/query/planner/test_query_plan.py`：三处 `_resolve_department_filter` 调用改名。
+4. 新增 `tests/skills/test_component_filter_resolution.py`：14 项，对两版参数化，覆盖精确值写入、模糊值澄清、裸值反查拦截、唯一裸值锁定、无筛选值放行、枚举失败 fail-closed、标签抽取边界。
+5. `tests/skills/test_time_scope_unbounded.py`：仅维度用例改回断言 unbounded。
+**验证结果**：新增 14 项 + 时间口径 28 项全通过；`tests/skills/test_dataset_query_planner.py`(61) + `tests/query/planner`(49) + `tests/mcp/test_query_planner_tools.py` 全通过；`tests/query tests/mcp` 7 failed / 495 passed，已 git stash 比对确认与改动前逐条一致（既存基线）。真实后端实测四场景：模糊渠道值→clarify 且不下发模板；精确值→planned 且写入 `channel_name = 傲彼瑞-美国`；裸值「查傲彼瑞的所有ASIN」→clarify；无筛选值→正常放行。改动已同步到 ~/.opscli、~/.codex、~/.claude、~/.openclaw。
+**影响范围**：带组件筛选值的查询不再静默漏筛；代价是渠道字段每次规划多一次枚举查询（复用既有 `_auto_enum_component_values`，7s 超时）。渠道SKU（sell_sku）等其余组件字段仍未覆盖，属二期。
+**回滚方式**：`git revert` 本次提交；回滚后「仅维度不限时间」也会随之撤回到 b8aa59b 的保守状态。
+---
+
+## 2026-07-29 skills/ops-dataset-query + query/planner - 规划器降级方案（移植旧版本地索引能力）
+
+**变更原因**：规划器返回非 planned 时，Agent 既无合法的本地退路（新版删除了旧版的 route_intent.py / search.py 与五个 YAML 索引），又被 SKILL.md 明令禁止本地探索，实测结果是现场编造数据集与字段（转投其他 Skill 或改用 MCP 重来）。同时发现 ASIN 形态识别写死为 B0+8 位是错的：实测该列还存 TEMU 的 10/11 位与 14 位纯数字商品 ID，写死会漏值并退化成静默全量。
+**改动点**：
+1. 两版 `query_plan.py`：ASIN 识别改为宽松切词 + 逐个判形（`B+9位` / 纯数字 9~20 位 / 10 位字母数字混合），新增 `_is_asin_like`、`_extract_asin_values`；新增 `_attach_fallback_guidance`，非 planned 合同补 `execution_ref.fallback_catalog`、`model_view.fallback_level`、`model_view.no_guess_policy_zh`；`_block_component_filter` 撤模板时一并撤 `query_template_fill_rules_zh`（模板已撤还留填充说明会诱导 Agent 去找不存在的模板）。
+2. 两版 `query_plan.schema.json`：登记上述三个新字段。
+3. 新增 `data/dataset_profiles.json`：从旧版 `dataset_profiles.yml` + `intent_taxonomy.yml` 迁出 16 个意图与 15 个数据集画像（table_id/alias/hard_constraints/avoid_when/clarify_when/默认维度指标），转 JSON 以免引入 pyyaml 依赖；`dataset_relationships.yml` 与 `field_semantic_index.yml` 不迁（已被规划器选表逻辑与 field_semantics.py 覆盖，迁了是双份维护）。
+4. 新增 `scripts/local_fallback.py`：纯标准库，合并旧版 route_intent + search 能力（意图路由 + 字段搜索 + 组件清单），逐条沿用旧版评分（触发词 +1.0、user_intent 词 +0.3、按 score/(触发词数*0.5) 归一化排序）；候选不唯一即转澄清；`data_state=placeholder` 或目录缺失即 blocked；`--emit-plan` 产出可被 `run_query.py --plan-file` 消费的最小 plan，从而保留 `_assert_fields` 字段校验闸。
+5. `SKILL.md` 新增「规划器不可用时的降级路径」章节：L1 合同目录 / L2 本地索引 / L3 元数据刷新 / L4 停止并反馈；降级态放宽本地探索限制（允许读 data/*.csv 与跑 local_fallback.py），额外预算 3 次工具调用。
+6. 测试：新增 `tests/skills/test_local_fallback.py`（25 passed + 5 xfail）与 `tests/skills/data/routing_eval_cases.json`（旧版 21 条路由用例迁移）；`test_component_filter_resolution.py` 补 ASIN 形态用例；删除 `tests/query/test_cli.py` 中测已删除 catalog/intent 命令的 2 个化石测试。
+**验证结果**：`pytest tests/skills/{test_local_fallback,test_component_filter_resolution,test_time_scope_unbounded,test_dataset_query_planner}.py tests/query tests/mcp/test_query_planner_tools.py` → 296 passed / 5 xfailed。路由质量已逐条与旧实现对照：21 条用例中新版通过 16 条，5 条未过的旧版同样未过（零回归，故标记 strict xfail 并记录成因）。降级 plan 真实执行验证：合法字段 payload 正常返回 125 行；编造字段被执行器拒绝（`payload.dimensions 含规划器未授权字段 ['made_up_field']`）。ASIN 形态实测：B0FWR9Y2NV / 61594716002 / 48657686364417 均识别，年份 2026 与 limit 1000 不误吃。已同步到 ~/.opscli、~/.codex、~/.claude、~/.openclaw。
+**影响范围**：规划器主路径行为不变（仅非 planned 时多补信息字段）；新增降级路径为可选，不改变既有调用方。
+**回滚方式**：`git revert` 本次提交；`local_fallback.py`、`dataset_profiles.json`、`routing_eval_cases.json` 为纯新增文件，删除即可。
+---
+
+## 2026-07-29 skills/ops-dataset-query - 修复服务端默认分页导致的静默丢数
+
+**变更原因**：codex 矩阵 e2e 发现「查渠道傲彼瑞-美国的所有ASIN」被 Agent 报成「共 20 个，未截断」，而实际是 38 个。实测确认根因：服务端在 payload 不带 limit 时只返回默认页（20 行），`meta.totalCount` 却是全量行数（38）；规划器模板恒填 `limit=null`，因此**任何结果超过 20 行的查询都会静默只回首页**。更糟的是 `truncated` 的判定要求 `payload.limit` 非空，导致这种截断被报成 `truncated=false`，模型据此把首页写成全量结论。附带问题：`--result-dir` 指向不存在的子目录时 `write_text` 抛 OSError 被吞成 `full_result_file=null`，Agent 既拿不到全量文件也不知道原因，只能改写请求反复重查（实测一次查询膨胀到 19 次工具调用）。
+**改动点**：
+1. `scripts/run_query.py`：新增 `_complete_server_paged_rows()`——用户未指定 limit 且 `len(rows) < total_count` 时自动重查一次（`limit=min(total, AUTO_COMPLETE_LIMIT_CAP=5000)`）并补齐，结果写入 `disclosures.server_paging` + `server_paging_disclosure_zh`；补齐失败或重查未拿到更多行时显式标记 `auto_complete_applied=false`，绝不把首页当全量。用户明确传 limit 时按其口径执行，不擅自放大。
+2. `scripts/run_query.py`：`truncated` 判定改为只比较 `len(rows) < total_count`，去掉「payload 必须带 limit」的前提。
+3. `scripts/run_query.py`：落盘前 `mkdir(parents=True, exist_ok=True)`；OSError 时除 `full_result_file=null` 外补 `full_result_file_error` 透出原因；落盘内容附带补齐后的 `rows_after_auto_complete`。
+4. `SKILL.md`：第 8 条改为按 `row_count_returned` / `total_count` / `truncated` / `server_paging` 四个字段判断口径，禁止用预览行数下结论；禁止为凑全量改写请求重查或绕过执行器手拼 payload。
+5. 新增 `tests/skills/test_run_query_server_paging.py`：6 项，覆盖自动补齐、显式 limit 不放大、已满不重查、补齐失败标记、重查无增量标记、截断判定只比行数。
+**验证结果**：`pytest tests/skills/{test_run_query_server_paging,test_run_query_default_filters,test_local_fallback,test_component_filter_resolution,test_dataset_query_planner}.py tests/query` → 273 passed / 5 xfailed。真实后端验证：同一查询 `row_count_returned` 由 20 变 38，`server_paging.auto_complete_applied=true`；`--result-dir` 指向不存在的多级目录可自动创建。codex 复跑同一提示词：工具调用由 19 次降到 4 次，结论改为「服务端初次仅返回默认页，系统已自动补查至全部 38 条」。
+**影响范围**：所有未显式指定 limit 且结果超过服务端默认页的查询，此前静默丢数，现在自动补齐并披露；补齐上限 5000 行。已同步到 ~/.opscli、~/.codex、~/.claude、~/.openclaw。
+**回滚方式**：`git revert` 本次提交；回滚后静默丢数问题会复现。
+---
+
+## 2026-07-29 query/planner + skills/ops-dataset-query - 组件筛选值解析二期（覆盖全部 17 个值类字段）
+
+**变更原因**：一期只覆盖部门/渠道/ASIN，其余组件字段（渠道SKU、公司SKU、品牌、国家、销售、开发、小组、大组、品类、平台类目、产品型号、物控编码、SPU、产品名称）带筛选值时仍会静默漏筛。
+**改动点**：
+1. 两版 `query_plan.py`：`_ENUM_COMPONENT_SPECS` 扩展到 16 条（含部门），新增通用 `_extract_labeled_value`（按 label_terms 生成标签正则，长度降序避免「渠道」抢掉「渠道SKU」）、`_extract_patterned_value`（编码型字段裸值形态）、`_spec_extract`（自定义抽取器 > 标签 > 形态）取代原渠道专用正则。
+2. 策略按实测基数分层：低基数字段（渠道 9 / 国家 2 / 品牌 3 / 销售 12 / 开发 / 小组 / 大组）开枚举反查兜住裸值；高基数字段（公司SKU 466 / 产品名称 376 / 渠道SKU 152 / 产品型号 164 / 物控编码 158 / SPU 52）改用形态正则抽裸值，抽到后仍走枚举完整等值校验。
+3. Skill 版新增 `_auto_enum_component_field_group`：17 个值类字段只落在 6 张组件表上，按表合并成一次 subprocess 查询；内核版走进程内调用，改用 `(表,字段)` 级缓存。
+4. 两趟解析 + 值消费登记：第一趟只落实显式点名字段并登记已消费值，第二趟才做形态抽取与枚举反查；已消费值及其子串不再被其他字段重复抽取。修复三个实测缺陷——SPU 从渠道SKU「ON-OB-JL-007-68157」抠出「JL-007」二次澄清并撤模板；品牌「OHWILL」被渠道反查连带匹配 ohwill-shopify-美国；渠道锁定「傲彼瑞-加拿大」后其中的「加拿大」被国家反查再抓一次。
+5. 反查改为整值命中优先：原文写了完整枚举值就锁定它，不因主段同时命中多个成员退化成澄清。
+6. **区分「枚举失败」与「枚举成功但无授权值」**：`_auto_enum_component_values` 新增 errors 出参。开发字段在本账号下枚举就是 0 条，早期实现按失败阻断，导致每一条查询都返回 blocked（实测全量阻断）。现在仅在「抽到了值」或「枚举确实报错」时阻断。
+**验证结果**：`pytest` 相关套件 341 passed / 5 xfailed（组件筛选 60 项）。真实后端八场景全部正确：渠道SKU/品牌/销售裸值/国家/物控编码正确写入筛选；渠道全名裸值锁定单值；模糊渠道值列出三个近似成员转澄清；无筛选值正常放行。已同步到 ~/.opscli、~/.codex、~/.claude、~/.openclaw。
+**影响范围**：所有带组件筛选值的查询。低基数字段每次规划最多按 6 张组件表各枚举一次（Skill 版合并 subprocess，内核版进程内）；高基数字段仅在原文命中形态时才枚举。
+**回滚方式**：`git revert` 本次提交，回退到一期只覆盖部门/渠道/ASIN 的状态。
+---
+
+## 2026-07-29 skills/ops-dataset-query - 字段打分末端接入模糊匹配（Task 2）
+
+> **【已失效】本条描述的改动已于 `eb4b623` 整体回退（回退提交
+> `427fed7 2bebd27 8415e92 6c3eb41 388047c`，即 Task 1/2/9 模糊匹配层全部砍掉）。**
+> `dataset_guidance._field_score()` 现在没有任何 fuzzy 分支，`schema_completion.py`
+> 与 `tests/skills/test_schema_completion.py` 两个文件都不存在。本条仅作历史保留，
+> 照它读会得出「模糊匹配层已上线」的错误结论；下方的「回滚方式：`git revert 2bebd27`」
+> 也已无意义。砍掉原因见本文件同日的《砍掉模糊匹配层》条目。
+
+**变更原因**：《取数规划器通用化优化开发计划》Task 2，接续 Task 1 已完成的字符二元组相似度模块。`dataset_guidance._field_score()` 打分末端此前只有 token 集合交集兜底，业务词与字段中文名只是部分重叠时会直接得 0 分，导致整条查询零候选。
+**改动的类/方法**：`dataset_guidance._field_score()`（函数）；顶部新增 `import schema_completion`。
+**改动点**：`opscli/skills/templates/ops-dataset-query/scripts/dataset_guidance.py`、`tests/skills/test_schema_completion.py`（追加 3 个测试，与 brief 逐字一致）。`_field_score()` 在精确命中与 token 交集都为 0 时，调用 `schema_completion.best_fuzzy_score(normalized_query, 字段展示名列表)`，`return int(fuzzy * 50)`——上限 50，低于 80/90/100 三档精确命中，确保不会挤掉精确匹配。
+**验证结果**：
+1. `pytest tests/skills/test_schema_completion.py -v` → 7 passed。
+2. `pytest tests/skills/test_dataset_query_planner.py tests/skills/test_dataset_guidance_default_filters.py -q` → 64 passed，无回归。
+3. **重要发现**：brief Step 1 给出的三个测试用例在改动前就已经 PASS（因为测试里手动传入的 `query_tokens` 恰好与字段 verbose_name 的中文二元组有交集，走的是原有 token 交集分支，未触达新增模糊分支），不构成严格 RED→GREEN 证据。已用独立脚本在真实字段数据（988 条 verbose_name）上验证模糊分支确实能在 token 交集为 0 时被触发（如「销量(自发货)」vs「运费(自发货)」，靠共享括号渠道后缀命中，fuzzy=0.5，score=25）。
+4. **Step 5 实测未达成预期**：按 brief 命令查询「看一下搜索词的点击份额和购买份额」，改动前后 `query_plan.py` 输出完全一致（`status=clarify_required, 候选=[], reason=dataset_constraints`）。根因排查：该查询在 `agent_query_planner.py` 的语义抽取阶段就因 `intent_rules.json` 未登记"点击份额/购买份额"为指标词而拿到 `domains=[] metrics=[]`，在到达 `dataset_guidance._field_score()` 之前就已经因 `dataset_constraints` 走向 `clarify_required`——是本任务改动范围之外的另一套匹配逻辑（选表阶段 vs 字段打分阶段）。这与计划文档第 45 行"实测依据"的成因描述不符，已在任务报告与本记录中如实标注，留待人工核实。
+**影响范围**：仅 `dataset_guidance._field_score()` 内部打分末端逻辑；对已有精确匹配/token 交集命中的字段无影响（`best` 非零时提前 return，不会走到新分支）。真正受影响的是此前 token 交集=0 的字段候选场景。已复制到 `~/.claude/skills/ops-dataset-query/scripts/`（与源文件 diff 一致）。
+**回滚方式**：`git revert 2bebd27`；或手动删除 `_field_score()` 末尾新增的 fuzzy 分支与顶部 `import schema_completion`，并移除 `tests/skills/test_schema_completion.py` 追加的 3 个测试。
+---
+
+## 2026-07-29 skills/ops-dataset-query - Task 8：放开固定槽位过约束并强制披露更细粒度
+
+**变更原因**：本分支唯一的行为修复，补录（原提交时缺变更记录）。线上真实故障：
+用户说「搜索词的点击份额」时 60 张授权卡片无一通过（零候选），而说「搜索词和关键词的
+点击份额」反而能命中 3 个正确数据集——描述越具体候选越少。根因是
+`agent_query_planner._slot_is_covered()` 在 `slot_mode == "fixed"` 时要求数据集支持的
+槽位取值与用户请求**完全相等**，覆盖粒度更广的数据集因「不完全相等」被拒。
+**改动的类/方法**：`agent_query_planner._slot_is_covered()`、
+`agent_query_planner._extra_slot_terms()`（新增）、
+`agent_query_planner._score_profile()`、`query_plan.build_model_contract()`。
+**改动点**（提交 `293b0dd` + `7e7c3b6`）：
+1. `opscli/skills/templates/ops-dataset-query/scripts/agent_query_planner.py`：
+   `_slot_is_covered()` 由「完全相等」放开为子集判定（`requested.issubset(supported)`）；
+   新增 `_extra_slot_terms()` 列出数据集比请求多覆盖的固定槽位取值；
+   `_score_profile()` 的候选字典新增 `grain_coverage` 键承载该信息。
+2. `opscli/skills/templates/ops-dataset-query/scripts/query_plan.py`：
+   `build_model_contract()` 按 `dataset_alias` 匹配实际选中的候选取 `grain_coverage`，
+   写入 `model_view["grain_disclosure_zh"]` 并追加到
+   `answer_contract["required_disclosures_zh"]`——放开覆盖判定必须配套强制披露，
+   否则用户会把「关键词×搜索词」级明细当成「搜索词」级汇总。
+3. `opscli/skills/templates/ops-dataset-query/data/query_plan.schema.json`：
+   `model_view` 新增 `grain_disclosure_zh` 属性（string_array）。
+4. `tests/skills/test_slot_coverage.py`（`293b0dd` 新建）：两版参数化的覆盖判定与
+   surplus 提取单测；`tests/skills/test_dataset_query_planner.py`（`7e7c3b6` 追加）：
+   披露两处写入的端到端正例与「粒度正好相等不产生噪声」的反例。
+**验证结果**：`293b0dd` 当时只有单测、`7e7c3b6` 补齐端到端回归；两个提交合起来的
+用例在 2026-07-30 终审后被扩写（见本文件《强制披露补齐 4 条候选路径》条目），
+以当前代码复跑 `pytest tests/skills/test_slot_coverage.py
+tests/skills/test_dataset_query_planner.py tests/query
+tests/mcp/test_query_planner_tools.py -q` → 全绿。内核版镜像见下一条 Task 4。
+**影响范围**：所有固定槽位（platform / ad_type / grain）的选表覆盖判定——召回变宽，
+此前被拒的更宽口径数据集现在可选中，代价是必须靠强制披露把口径差异告知用户。
+**遗留缺陷（已于 2026-07-30 修复）**：披露只覆盖 4 条候选构造路径中的 1 条；
+披露文案在 ad_type/platform 场景语义相反且泄露英文标识。详见后文对应条目。
+**回滚方式**：`git revert 7e7c3b6 293b0dd`（内核镜像 `f2593c0` 与后续披露修复
+`02f094f` 需一并回退）。
+---
+
+## 2026-07-29 skills/ops-dataset-query - 砍掉模糊匹配层（Task 1/2/9 整体回退）
+
+**变更原因**：补录（原提交 `eb4b623` 时缺变更记录）。《取数规划器通用化优化开发计划》
+Task 1/2/9 试图在字段打分末端加一层字符二元组模糊匹配，做到第 3 版设计、第 2 轮修复、
+被审查挡下 4 个缺陷后仍未收敛，因为计划自身的两条 Global Constraint 在这一层互斥：
+「召回优先，多带无关字段代价小得多」与「分段后不得把无关字段拉进候选」。
+中文 BI 场景的通用业务后缀（份额 / 转化率 / 点击率 / 复购率）本身不携带区分信息：
+用户说「点击的转化率」时，字段「退货转化率」「广告转化率」与之共享后缀，任何基于
+子串或字符相似度的规则都会等分命中；要区分必须知道修饰语「点击」必须匹配上，
+而丢掉修饰语恰恰是为了救「字段名比用户词长」（字段「ASIN点击份额」对用户词
+「点击份额」）那一类——两个需求在同一层机制里互斥。长度阈值只能治标：
+挡住 2 字的「份额」，3 字的「转化率」照漏。且用户实际遇到的零候选故障已由
+`293b0dd`（放开固定槽位过约束）从根因修复，与模糊匹配无关。
+**改动的类/方法**：删除 `schema_completion.best_fuzzy_score()` 等全部新增函数；
+还原 `dataset_guidance._field_score()` 到无 fuzzy 分支的形态。
+**改动点**：提交 `eb4b623` 回退了 `427fed7`、`2bebd27`、`8415e92`、`6c3eb41`、
+`388047c` 五个提交，删除两版 `schema_completion.py` 与
+`tests/skills/test_schema_completion.py`，还原两版 `dataset_guidance.py`。
+**保留**：`293b0dd` + `7e7c3b6`（固定槽位放开与其回归测试）不在回退范围内。
+**验证结果**：回退后 312 passed / 5 xfailed；`dataset_guidance` 无残留引用
+（当时已 grep 确认）。
+**影响范围**：字段打分回到「精确命中 + token 集合交集」两档，没有模糊兜底。
+研究依据（EDBT'26 四条规则）仍成立但指向别处：贡献最大的「外键连接列补全」
+对应本项目的权限组件字段补全，已于 `8cad3a5` 落地；模糊匹配是消融中贡献最小的一条。
+**回滚方式**：`git revert eb4b623`（会把三个已判定为设计缺陷的任务全部装回，不建议）。
+---
+
+## 2026-07-30 query/planner - Task 4：内核版镜像固定槽位放开与粒度强制披露
+
+**变更原因**：《取数规划器通用化优化开发计划》Task 4（改写版）。Skill 版此前已修复
+`_slot_is_covered()` 的固定槽位过约束故障（要求数据集支持取值与请求完全相等，导致
+覆盖粒度更广的数据集反被拒——「亚马逊搜索词绩效」支持 grain={keyword, search_term}，
+用户只说「搜索词」时零候选），但内核版（MCP 路径）一直未同步，导致同一句话在 CLI
+路径能出结果、在 MCP 路径仍是零候选，两版行为不一致。
+**改动的类/方法**：`_slot_is_covered()`（放开为 requested ⊆ supported 语义）、
+新增 `_extra_slot_terms()`（列出多出的固定槽位取值供披露）、`_score_profile()`
+（返回字典新增 `grain_coverage` 键）。
+**改动点**：
+1. `opscli/query/services/planner/agent_query_planner.py`：镜像上述三处，与 Skill 版
+   函数体逐字一致（已用 diff 核对）。
+2. `opscli/query/services/planner/query_plan.py`：在 `model_view` 构建阶段镜像
+   `grain_disclosure_zh` 写入逻辑（按 `dataset_alias` 匹配 `selection["dataset_candidates"]`
+   中已选中候选，取其 `grain_coverage`），并在 `answer_contract["required_disclosures_zh"]`
+   追加同一披露文案；插入点变量名（`dataset`/`selection`）与 Skill 版完全相同，按字面镜像。
+3. `opscli/query/services/planner/resources/query_plan.schema.json`：追加
+   `model_view.properties.grain_disclosure_zh` 定义，与 Skill 版逐字相同。
+4. `tests/skills/test_slot_coverage.py`：按 brief 改为 `[skill]`/`[kernel]` 两版参数化，
+   5 个测试用例共 10 条。
+**验证结果**：
+1. RED：`pytest tests/skills/test_slot_coverage.py -v` → 3 个 `[kernel]` 用例 FAIL
+   （`_extra_slot_terms` 不存在；覆盖判定仍是完全相等语义），7 passed。
+2. GREEN：镜像实现后同一命令 → 10 passed。
+3. 两版对齐回归：`pytest tests/skills/test_slot_coverage.py tests/query/planner
+   tests/skills/test_dataset_query_planner.py tests/mcp/test_query_planner_tools.py -q`
+   → 123 passed。
+4. 全量回归：`pytest tests/skills/test_slot_coverage.py tests/skills/test_dataset_query_planner.py
+   tests/skills/test_local_fallback.py tests/skills/test_component_filter_resolution.py
+   tests/skills/test_run_query_server_paging.py tests/query tests/mcp/test_query_planner_tools.py -q`
+   → 325 passed, 5 xfailed（与既有基线一致）。
+5. 额外发现：`pytest tests/ -q`（全量目录）出现 25 个 pytest capture 崩溃错误
+   （`ValueError: I/O operation on closed file`）；用 `git stash` 还原改动前重跑同样
+   25 个错误，证明是既有基线问题（见 `opscli-test-baseline.md`：skills 目录 capture
+   崩溃），与本次改动无关，未做处理。
+**影响范围**：仅内核版规划器（`opscli/query/services/planner/`），供 MCP 工具进程内
+调用路径使用；CLI/Skill 路径（`opscli/skills/templates/ops-dataset-query/scripts/`）
+未改动。行为变化：MCP 路径现在与 CLI 路径一致，覆盖粒度更广的数据集不再被误拒，
+多出的粒度会在 `model_view.grain_disclosure_zh` 与 `answer_contract.required_disclosures_zh`
+中强制披露。
+**回滚方式**：`git revert f2593c0`。
+---
+
+## 2026-07-30 skills/tests - Task 5：评测用例补充字段期望（路由质量三层度量）
+
+**变更原因**：《取数规划器通用化优化开发计划》Task 5。现有 21 条路由回归用例只测
+「选中了哪个数据集」，缺「所有必需字段是否都被召回」这一层（EDBT'26/AutoLink 的严格
+schema-linking 召回定义：漏一个必需字段就必然失败），导致字段召回质量无法量化、任何
+改动都无法归因。本任务补齐这一层度量，并建立基线（非让测试全绿）。
+**改动的文件**：
+1. `tests/skills/data/routing_eval_cases.json`：21 条用例统一补 `expected_fields: []`；
+   手工核对并填充 4 条（case_001/004/014/020），第 5 条（case_018）实测发现所属数据集
+   物控版库存周转（画像 table_id=29）在当前生产 `dataset_fields.csv` 中查无任何字段
+   （画像与后端已不同步，疑似后端已改名或下线），按规范留空并在 `note` 写明原因，
+   未凭猜填相近字段名。
+2. `tests/skills/test_routing_eval.py`（新建）：`test_strict_field_recall` 对
+   `FIELD_CASES`（`expected_fields` 非空的用例）做严格召回断言——期望字段必须全部
+   出现在 `query_plan.build_model_query_plan()` 的 `model_view.dimensions ∪ metrics`
+   里，漏一个即失败。
+**关键设计决策（偏离 brief 给出的字面 Step 2 代码，原因如下）**：
+   brief 给的示例代码直接调用 `build_model_query_plan(case["user_query"], auto_upgrade=False,
+   auto_enum=False)`，不传 `data_dir`。实测发现该函数默认 `DATA_DIR` 指向仓库内的占位
+   元数据（`opscli/skills/templates/ops-dataset-query/data/`，`VERSION.json` 的
+   `data_state` 恒为 `"placeholder"`），若不覆盖 `data_dir`，5 条用例会 100% 因「元数据
+   未就绪」统一阻断失败，无法反映规划器真实的字段召回能力，测试沦为无意义的 xfail 堆砌。
+   因此改为每条用例在 `tmp_path` 下构造一个只含其 `expected_dataset` 对应单一数据集的
+   `ready` 元数据目录（`_write_isolated_dataset`），使数据集选择正确性与字段召回解耦
+   （前者已由 `test_local_fallback.py` 的 21 条历史用例单独回归）。字段中文名
+   （`verbose_name`）与数据集 `description`/`remarks` 均取自当前生产环境真实元数据，
+   已通过 `~/.claude/skills/ops-dataset-query/data/dataset_fields.csv` 按 `table_id`
+   逐条核对存在性；`field_name`/`global_alias`/`dataset_alias`/`table_id` 为测试合成
+   标识，不代表真实后端标识。断言本身（漏一个即失败）未做任何放宽。
+**验证结果**：
+1. 首次运行（Step 3 建基线）：`pytest tests/skills/test_routing_eval.py -v` →
+   1 passed（case_014），3 failed（case_001/case_004/case_020）。
+2. 逐条核实 3 个失败均为规划器真实行为（非基础设施问题）后标记 `strict xfail`：
+   - case_001：用户原文未用与字段中文名完全一致的写法，逐字子串匹配漏选
+     销售额/广告费/总库存；且「销售」误命中同数据集下的销售负责人维度字段。
+   - case_004：「ACOS」不在 `intent_rules.json` 全局 `metric_terms` 词表中，且
+     「各平台」未命中具体平台槽位值，触发 `agent_query_planner.plan_query` 的
+     `has_metric=False` 且 `domains<=1` 早停规则，规划器直接返回 `business_scope`
+     澄清、不产出任何候选数据集，0 个字段被选中。
+   - case_020：用户原文只写「活动」未出现「类型」，逐字子串匹配未命中「活动类型」；
+     数据集本身选对，「售出量」正确命中，只漏一个字段。
+3. 最终确认：`pytest tests/skills/test_routing_eval.py -q` → `1 passed, 3 xfailed`，
+   无 failed。
+4. 回归：`pytest tests/skills/test_routing_eval.py tests/skills/test_local_fallback.py
+   tests/skills/test_dataset_query_planner.py -q` → `89 passed, 8 xfailed`。
+5. 已知问题（与本次改动无关）：`pytest tests/skills/ -q`（整目录）触发既有的
+   pytest capture 崩溃（`ValueError: I/O operation on closed file`），`git stash`
+   还原后同样复现，属于既有基线问题（见 `opscli-test-baseline.md`），未做处理。
+**影响范围**：仅新增测试与用例数据文件，未改动规划器实现（`agent_query_planner.py`/
+`query_plan.py`/`dataset_guidance.py` 等均未修改）。
+**回滚方式**：`git revert <本次提交>`；或删除 `tests/skills/test_routing_eval.py`
+并将 `tests/skills/data/routing_eval_cases.json` 的 `expected_fields` 字段全部还原为
+不存在（`git checkout -- tests/skills/data/routing_eval_cases.json`）。
+---
+
+## 2026-07-30 skills/ops-dataset-query - Task 6：画像改为按 alias 索引并删除可派生字段
+
+**变更原因**：《取数规划器通用化优化开发计划》Task 6。降级路径画像文件此前按中文名
+（`standard_name`）索引，数据集改名即静默腐烂；实测后端 60 个数据集，画像覆盖 15 个，
+其中 5 个的 `standard_name` 与当前元数据 CSV 的 `description` 已对不上（好在旧文件里
+已手工写死了 `dataset_alias`，实际路由未受影响，但字段本身已失去自描述可信度）。同时
+`default_dimensions`/`default_metrics` 属于可从 `dataset_fields.csv` 实时派生的字段，
+留在人工文件里只会与后端漂移。
+**改动的类/方法**：`local_fallback._dataset_candidates()`（新增 `profile_by_alias` 索引
++ `certified` 审核态分流）、新增 `local_fallback._default_field_labels()`（实时读
+CSV 取默认维度指标中文名）。
+**改动点**：
+1. `opscli/skills/templates/ops-dataset-query/data/dataset_profiles.json`：一次性迁移
+   脚本（未入库，跑完即删）按已安装目录 `~/.claude/skills/ops-dataset-query/data/datasets.csv`
+   的真实 alias 重新绑定 15 份画像的 `dataset_alias`；删除全部 `default_dimensions`/
+   `default_metrics`/`table_id`；新增 `certified`（全部置 `false`，未经人工复核）、
+   `reviewed_at`（空）；`schema_version` 升到 2。“即时销售数据集”（embedded_intent，
+   无独立物理表）查不到 alias，保留条目并标 `stale_reason`，同时手动补回被迁移脚本
+   连带删除的 `routing_status`/`execution_dataset` 字段，否则 `_resolve_profile_target()`
+   的 embedded_intent 链式解析会失效。
+2. `opscli/skills/templates/ops-dataset-query/scripts/local_fallback.py`：
+   `_dataset_candidates()` 新增按 `dataset_alias` 索引的 `profile_by_alias`（`profile_by_name`
+   保留，用于意图 `primary_dataset` 到画像条目的内部关联，这层关联是同文件内部维护，
+   不受后端改名影响）；候选字典的 `hard_constraints`/`avoid_when`/`clarify_when` 改为
+   经 `profile_by_alias` 查到的 `profile_entry` 提供；`certified=false` 时约束降级为新增的
+   `uncertified_hints_zh` 字段，不再混进 `hard_constraints`；`default_dimensions`/
+   `default_metrics` 改由新增的 `_default_field_labels()` 实时读 `dataset_fields.csv` 生成。
+3. `tests/skills/test_local_fallback.py`：新增 3 条画像结构测试（alias 索引、审核态、
+   不含可派生字段）；`test_profiles_are_indexed_by_alias` 放宽为“有 alias 或标了
+   `stale_reason`”（对齐 brief 的“查不到 alias 的条目保留不删除”约定，而不是强制 100%
+   都有 alias）；`test_hard_constraints_ride_along_with_candidates` 改为断言
+   `hard_constraints == []` 且约束出现在 `uncertified_hints_zh`（migrate 后全部
+   `certified=false`，这是本次改造的直接预期行为，不是回归）。
+**验证结果**：`pytest tests/skills/test_local_fallback.py -v` 28 passed + 5 xfailed（含
+既有 5 条 strict xfail 路由缺口用例，无回归）；TDD 证据：Step1 新增 3 测试先跑
+`-k profiles` 确认 3 FAIL（RED），迁移+适配后再跑确认 3 PASS（GREEN）。`tests/skills/`
+下另有 `test_cli.py`/`test_manager.py`/`test_ops_feedback_template.py`/
+`test_ops_methods_card_xlsx_preview.py`/`test_packaging.py` 的预存失败与 capture 崩溃，
+与本次改动的文件无关（同名断言/子进程失败与本次未改动的模块相关），且与
+`memory/opscli-test-baseline.md` 记录的既有基线一致。
+**影响范围**：仅 `local_fallback.py` 的降级路径画像消费逻辑与画像数据文件本身；
+不影响规划器主链路（`agent_query_planner.py`/`query_plan.py` 等未改动）。降级路径
+输出新增 `uncertified_hints_zh` 字段，`hard_constraints` 语义收紧为“仅已审核画像才
+出现”，消费该字段的 Agent 侧提示文案若依赖 `hard_constraints` 非空需注意此行为变化
+（`default_dimensions`/`default_metrics` 输出内容不变，仅来源从画像文件改为实时读 CSV）。
+**回滚方式**：`git revert <本次提交>`；或分别 `git checkout` 还原
+`data/dataset_profiles.json`、`scripts/local_fallback.py`、
+`tests/skills/test_local_fallback.py` 三个文件到上一版本。
+---
+
+## 2026-07-30 skills/ops-dataset-query - Task 6 补充：确认 2 条画像失效并补 stale_reason
+
+**变更原因**：Task 6 完成时曾在报告里如实标注"SP+SD+SB广告数据集"
+（`ds_xSQ0DFxpLPLC`）、"物控版库存周转"（`ds_X2aBDzKIMf66`）这两条画像的
+`dataset_alias` 因安装目录被并发进程覆盖为 placeholder 而无法核实是否仍有效。
+用户恢复元数据（60 个数据集，与事故前一致）后，协调者用恢复后的真实数据复核，
+确认这两条 alias 与 standard_name 均在当前元数据中查不到对应数据集，属实失效。
+进一步溯源发现：这两个 alias 值是 Task 6 迁移脚本从**迁移前的旧画像文件**里原样
+带过来的（不是当时从 `datasets.csv` 现查出来的），说明在本次迁移之前这两条画像
+就已经腐烂，不是快照作用域不一致导致的假阳性。
+**改动的类/方法**：无代码改动，仅数据文件。
+**改动点**：`opscli/skills/templates/ops-dataset-query/data/dataset_profiles.json`
+——给"SP+SD+SB广告数据集"和"物控版库存周转"两条画像各补一个 `stale_reason`
+字段（"dataset_alias 与 standard_name 均在当前元数据中查不到对应数据集，需人工
+改绑或确认该数据集已下线"），`dataset_alias` 字段本身保留原值不清空（便于人工
+巡检直接定位是哪个 alias 失效），其余字段不变。
+**验证结果**：`pytest tests/skills/test_local_fallback.py -q` → 28 passed,
+5 xfailed，无回归（`stale_reason` 是纯数据字段，不参与任何断言路径）。
+**影响范围**：仅这两条画像的数据质量标注；不改变任何运行时逻辑（`stale_reason`
+当前未被 `local_fallback.py` 读取，纯供人工/后续巡检脚本使用）。遗留问题：
+巡检机制目前只在"迁移那一次"检查过 alias 有效性，建议后续补一个独立于迁移的
+定期核对脚本/测试，持续比对画像 `dataset_alias` 与已安装 `datasets.csv` 的存在性。
+**回滚方式**：`git revert <本次提交>`；或手动删除这两条画像新增的 `stale_reason`
+字段。
+---
+
+## 2026-07-30 skills/ops-dataset-query + query/planner - 强制披露补齐 4 条候选路径并按槽位语义分文案
+
+**变更原因**：终审发现 Task 8「放开固定槽位 + 强制披露」的后半段只覆盖 1/4 条
+候选路径，且披露文案在 ad_type/platform 场景语义相反。
+1. C1：`agent_query_planner.py` 有四处构造候选字典的地方，只有 `_score_profile()`
+   带 `grain_coverage`；`_explicit_candidates` / `_description_candidates` /
+   `_default_dataset_candidate` 三条路径都受同一放开影响却不产出该键，
+   `query_plan.py` 取到空 → `model_view["grain_disclosure_zh"]` 与
+   `answer_contract["required_disclosures_zh"]` 两处披露一起消失。实测
+   `'关键词搜索词双维度表 近7天搜索词的转化率' -> planned | 披露 None`，而
+   `'近7天搜索词的转化率'` 反而有披露——用户报出表名反而丢掉安全披露。
+2. C2：放开同时作用于 platform/ad_type/grain 三个槽位，但文案只按 grain 语义写。
+   ad_type 固定且数据集没有「广告类型」筛选字段时交付的是 SP+SD+SB **合计**
+   （实测模板 filters 里只有日期，筛不掉广告类型），文案却说「粒度更细」
+   「不得把明细当汇总」，会引导模型把合计当成纯 SP 汇报——静默错数。
+   同时槽位名（`grain`/`ad_type`）与取值（`keyword`/`sb`/`sd`）都是内部标识，
+   被直接拼进中文披露句。
+**改动的类/方法**：`typed_schema_linking.slot_label()` /
+`typed_schema_linking.slot_value_label()`（新增）、
+`agent_query_planner._extra_slot_terms()`（返回值改带中文标签）、
+`agent_query_planner._attach_slot_coverage()`（新增）、
+`agent_query_planner._default_dataset_candidate()`、
+`agent_query_planner.plan_query()`、
+`query_plan._slot_surplus_disclosure_zh()`（新增）、
+`query_plan.build_model_contract()`。
+**改动点**：Skill 版 `opscli/skills/templates/ops-dataset-query/scripts/` 与内核版
+`opscli/query/services/planner/` 两版逐字同步，各改 3 个文件：
+- `typed_schema_linking.py`：新增 `SLOT_LABELS_ZH`（槽位名中文标签，3 键对齐
+  `ALLOWED_SLOTS`）与 `slot_label()` / `slot_value_label()`。取值标签不新造词表，
+  直接取 `intent_rules.json` 该取值 `terms` 里第一个含中文的词条
+  （`search_term`→搜索词、`amazon_sc`→亚马逊SC），全英文词条（`sp`/`sd`）退回
+  枚举名，最后统一 `upper()`。
+- `agent_query_planner.py`：`_extra_slot_terms()` 返回值从 `{槽位: [取值]}` 改为
+  `{槽位: {slot_label_zh, requested_zh, surplus_zh}}`（键仍是技术槽位名，只用于
+  下游分语义，值全是中文标签）；新增 `_attach_slot_coverage()` 在显式标识命中与
+  中文说明命中两条路径算完槽位后回填覆盖信息（这两条路径构造候选时槽位还没抽取，
+  只能后置补齐）；`_default_dataset_candidate()` 直接补 `grain_coverage` 键。
+- `query_plan.py`：新增 `_slot_surplus_disclosure_zh()` 按槽位语义分两套文案。
+  分支依据是不变量「`_extra_slot_terms` 只收 `slot_modes == "fixed"` 的槽位」：
+  `profile_card()` 只在数据集带该槽位筛选字段时才置 `filterable`，而
+  `rules["filter_fields"]` 只有 platform / ad_type 两项、grain 永远不可筛。
+  故 platform/ad_type 走到这里必然「筛不掉」→ 文案说「无法按X筛选，返回数据已
+  包含 Y，是合计，不得当作纯 Z 汇报」；grain 的多余取值是另一个维度字段、不选
+  即按请求粒度聚合 → 保留「粒度更细，不得把明细当汇总」。
+**验证结果**：
+- 变异检查（实现被还原则测试必须转红）：注释掉两处 `_attach_slot_coverage` 调用
+  → `test_grain_disclosure_survives_explicit_dataset_reference` 两版同时 FAIL；
+  把 C2 的 `if slot_name == "grain"` 改成 `if True` →
+  `test_ad_type_surplus_disclosure_says_cannot_filter*` 两版同时 FAIL。
+- 新增/改写测试：`tests/skills/test_slot_coverage.py`（+5，含两版参数化的标签、
+  filterable 跳过、`SLOT_LABELS_ZH` 覆盖 `ALLOWED_SLOTS`、`_attach_slot_coverage`）、
+  `tests/skills/test_dataset_query_planner.py`（+2 端到端；并把原
+  `assert any("keyword" in item ...)` 改为断言中文标签——该断言把英文泄露写进了
+  断言、锁死了缺陷）、`tests/query/planner/test_query_plan.py`（+2 内核端到端）。
+- 回归：`pytest tests/skills/test_slot_coverage.py tests/skills/test_routing_eval.py
+  tests/skills/test_local_fallback.py tests/skills/test_dataset_query_planner.py
+  tests/query tests/mcp/test_query_planner_tools.py -q` → 276 passed, 8 xfailed。
+- 两版一致性：`diff` 两版相对 HEAD 的变更集（去掉行号 hunk 头）完全相同。
+**影响范围**：`model_view["grain_disclosure_zh"]` 与
+`answer_contract["required_disclosures_zh"]` 的文案措辞改变（下游 Agent 只按
+自然语言消费，无结构依赖）；内部规划器合同里候选的 `grain_coverage` 值形状
+从 list 改为 dict——该键仅由同批修改的 `query_plan.py` 消费，无其他消费方
+（已 grep 确认）。显式命中/中文说明命中/默认表推荐三条路径现在会新增披露，
+这是修复目标而非副作用。
+**回滚方式**：`git revert <本次提交>`；或按文件 `git checkout HEAD~1 --`
+还原两版各 3 个脚本与 4 个测试文件。
+---
+
+## 2026-07-30 skills/ops-dataset-query - 登记 uncertified_hints_zh 并把巡检测试从纯形状断言改为具体集合
+
+**变更原因**：终审发现两处缺陷。
+1. C3：`local_fallback.py:173-174` 把未审核画像的业务约束从 `hard_constraints`
+   降级到新键 `uncertified_hints_zh`，而迁移后 15 份画像 `certified` 全为 false，
+   于是 `hard_constraints` 恒为空；`SKILL.md` 只教 Agent 遵守 `hard_constraints`，
+   `uncertified_hints_zh` 在 SKILL.md、其它脚本、任何文档里零引用——被吞掉的
+   正是防静默错数的护栏（「总库存、海外仓库存…属于库存快照字段，只能用于明细表
+   或无聚合过滤条件」，以及 Task 8 新放开的「亚马逊搜索词绩效」唯一硬约束
+   「必须选择报告周期」）。
+2. I3：`test_audit_reports_coverage_gap` 只断 `total_datasets >= 1`、键存在、
+   `isinstance(certified, int)`。把 `missing_profiles`/`stale_profiles` 的集合差
+   算反、或 `profiled` 用 `len(profiled)` 而非 `len(profiled & aliases)`，全部照过。
+**改动的类/方法**：无运行时代码改动（`local_fallback.py` 未改）；仅
+`SKILL.md` 文档与 `tests/skills/test_local_fallback.py` 测试。
+**改动点**：
+- `opscli/skills/templates/ops-dataset-query/SKILL.md`：降级路径处置清单新增第 4 条，
+  与 `hard_constraints` 同段登记 `uncertified_hints_zh`——说明它是**未经人工审核的
+  业务约束提示**，Agent 必须先向用户复述确认再套用，不得当作已确认口径静默应用，
+  也不得因为它不是 `hard_constraints` 就忽略；原第 4 条顺延为第 5 条。
+- `tests/skills/test_local_fallback.py`：新增
+  `test_business_constraints_reach_agent_under_at_least_one_key`（只锁「约束不能一个键
+  都不到」这条不变量，不锁落在哪个键，因此后续把 `certified` 改成 true 也不会误伤；
+  用例同时覆盖即时综合数据集与 Task 8 新可达的亚马逊搜索词绩效）与
+  `test_skill_md_registers_uncertified_hints_key`（键名 + 「未经人工审核」措辞都要在
+  SKILL.md 里）；`test_audit_reports_coverage_gap` 改为断具体集合内容，期望值从真实
+  画像文件派生（画像增删时自动跟随）。
+**验证结果**：
+- 变异检查：把 `uncertified_hints_zh` 改成恒空 → 新用例与
+  `test_hard_constraints_ride_along_with_candidates` 同时 FAIL；把
+  `profiled` 改成 `len(profiled)` 且 missing/stale 集合差互换 →
+  `test_audit_reports_coverage_gap` FAIL。
+- `pytest tests/skills/test_local_fallback.py -q` → 34 passed, 5 xfailed。
+**影响范围**：Agent 侧行为——降级路径下会多复述一次未审核约束并向用户确认
+（这是修复目标）。不改变任何脚本输出结构。**未**自行把画像 `certified` 改成 true，
+那是待用户裁决的事项。
+**回滚方式**：`git revert <本次提交>`；或 `git checkout HEAD~1 --` 还原
+`SKILL.md` 与 `tests/skills/test_local_fallback.py`。
+---
+
+## 2026-07-30 docs - 补齐交付记录并把计划文档改向标注到位（I1 + I2）
+
+**变更原因**：终审发现交付记录不实与计划文档未随改向更新，照文档读会得出错误结论。
+- I1：`docs/change-log-pending.md` 缺 Task 8（`293b0dd` + `7e7c3b6`，本分支唯一的行为
+  修复）与回退（`eb4b623`）两条记录；且保留了描述已删代码的条目（「字段打分末端接入
+  模糊匹配（Task 2）」详细描述 `dataset_guidance.py` 改动并给「回滚方式：
+  `git revert 2bebd27`」，该改动已随 `eb4b623` 整体回退）。
+- I2：`docs/plans/取数规划器通用化优化开发计划.md` 的 Task 1/2/3/9 原样保留完整实现
+  代码且无状态标注；Architecture 仍把「字符二元组模糊匹配 + 公式引用词表扩展」列为
+  头号交付物；File Structure 仍把三个已不存在的文件列为新建；阶段一仍把零候选根因
+  写成 `_field_score` 的 token 交集兜底，而阶段零已推翻该判断。
+**改动的类/方法**：无（纯文档）。
+**改动点**：
+- `docs/change-log-pending.md`：新增《Task 8：放开固定槽位过约束并强制披露更细粒度》
+  与《砍掉模糊匹配层（Task 1/2/9 整体回退）》两条补录（按提交时序插在 Task 4 条目之前）；
+  给失效条目加「【已失效】…已于 `eb4b623` 整体回退」显式标注并说明其回滚指引已无意义
+  （**不删除**，保留历史）。
+- `docs/plans/取数规划器通用化优化开发计划.md`：Task 1/2 加 `REVERTED@eb4b623` banner、
+  Task 3 加 `DROPPED` banner、Task 9 加 `DROPPED` banner 并写明「两条 Global Constraint
+  在该层互斥：中文通用业务后缀无法靠长度阈值区分特指与泛指」（否则下一个人会精确地再撞
+  一次）；修 Architecture 头号交付物立论、File Structure 文件清单（三个文件划掉并标注
+  不存在，补上实际落地的 `test_slot_coverage.py` 与两版规划器文件）、阶段一根因立论
+  （整阶段标作废，保留 EDBT'26 研究依据但指明其贡献最大的一条对应已落地的 `8cad3a5`）。
+**验证结果**：文档改动，逐条核对代码事实——
+`ls` 确认两版 `schema_completion.py` 与 `tests/skills/test_schema_completion.py` 均不存在；
+`grep -n "fuzzy\|schema_completion"` 两版 `dataset_guidance.py` 零命中；
+`git log -1 8cad3a5` 确认该提交存在（组件筛选值解析二期）；
+`tests/skills/test_routing_eval.py` 与 `tests/skills/test_slot_coverage.py` 存在。
+回归未受影响：`pytest tests/skills/test_slot_coverage.py tests/skills/test_routing_eval.py
+tests/skills/test_local_fallback.py tests/skills/test_dataset_query_planner.py tests/query
+tests/mcp/test_query_planner_tools.py -q` → 全绿。
+**影响范围**：仅文档可读性与后续执行者的判断依据；无运行时影响。
+**回滚方式**：`git revert <本次提交>`；或 `git checkout HEAD~1 --` 还原两个文档文件。
+---
+
+## 2026-07-30 skills/ops-dataset-query + query/planner - 补默认表推荐路径的披露回归与 schema 描述
+
+**变更原因**：Self-review 发现四条候选路径里第三条（`_default_dataset_candidate`）
+虽已补上 `grain_coverage` 键，但没有任何测试守护——实测把该键去掉，
+默认表推荐路径的披露立刻变 `None` 且没有一条测试转红。另外
+`query_plan.schema.json` 里 `grain_disclosure_zh` 的描述仍写「粒度比请求更细」，
+放开同时作用于 platform / ad_type 后该描述已不完整。
+**改动的类/方法**：无运行时代码改动（仅测试 + schema 描述字符串）。
+**改动点**：
+- `tests/skills/test_dataset_query_planner.py` 与 `tests/query/planner/test_query_plan.py`
+  各新增 `test_grain_disclosure_survives_default_dataset_recommendation`
+  （两版各守一条：Skill 版走 data_dir + CSV，内核版走 MetadataAdapter）。
+- 两版 `query_plan.schema.json`（`.../data/` 与 `.../resources/`）逐字同步，
+  `grain_disclosure_zh` 描述改为「所选数据集覆盖的口径比请求更宽时的强制披露
+  （粒度更细，或多余的平台/广告类型筛不掉）」。
+**验证结果**：变异检查——删掉 `_default_dataset_candidate` 的 `grain_coverage` 键，
+两版新用例分别 FAIL；还原后
+`pytest tests/skills/test_slot_coverage.py tests/skills/test_routing_eval.py
+tests/skills/test_local_fallback.py tests/skills/test_dataset_query_planner.py
+tests/query tests/mcp/test_query_planner_tools.py -q` → 280 passed, 8 xfailed。
+另做 GBK 自检：三个槽位的披露文案均可 `.encode('gbk')` 通过（【铁律23】）。
+两版 schema 文件 `diff` 完全相同。
+**影响范围**：仅测试覆盖与 schema 描述文案；无行为变化。
+**回滚方式**：`git revert <本次提交>`。
+---
+
+## 2026-07-30 skills/ops-dataset-query + query/planner - 披露侧补「未遮蔽」槽位读法，闭合审查者实测原案
+
+**变更原因**：C1 修完后在**真实元数据**（`~/.claude/skills/ops-dataset-query/data`，
+60 个数据集）上复验，发现审查者报告里的那句原案仍然没有披露：
+`'亚马逊搜索词绩效 近7天搜索词的点击份额' -> planned | 披露 None`。
+根因是 `_semantic_query_without_candidate_identity()` 的遮蔽是**全局 replace**：
+该数据集的中文说明是「亚马逊搜索词绩效」、字段里也有「搜索词」标签，于是用户
+原话里第二个（真正表达粒度诉求的）「搜索词」被当成字段标签一起抹掉，
+遮蔽后 `slots` 为空 → 没有请求可比 → surplus 为空 → 披露又消失。
+即 C1 的四条路径已经全部接上，但其中两条喂进去的槽位读法本身丢了信息。
+**改动的类/方法**：`agent_query_planner._raw_slot_reading()`（新增）、
+`agent_query_planner._attach_slot_coverage()`（形参改为多份槽位读法）、
+`agent_query_planner.plan_query()`（两处调用点）。
+**改动点**（两版逐字同步）：
+- 新增 `_raw_slot_reading()`：不遮蔽身份文本的槽位读法，**只允许披露侧使用**——
+  拿它做覆盖判定会把数据集名里的「VC」「Walmart」当成用户额外提出的筛选条件，
+  那正是遮蔽函数存在的理由。
+- `_attach_slot_coverage()` 收一个「槽位读法列表」，逐槽位取**披露更多的一方**
+  （surplus 更长者胜），`requested_zh` 与 `surplus_zh` 同取自被选中的那份读法，
+  保证句子内部自洽。为什么取更多的一方：两种读法各自自洽且各有盲区——遮蔽后的
+  读法能看出「亚马逊销售表 只看VC的销售额」这种用户把口径收窄的情形，未遮蔽的
+  读法能救回被字段标签吃掉的粒度词；静默错数比响亮失败危险得多，宁可多披露一条。
+  另外身份文本推出的槽位取值必然 ⊆ 数据集支持值，因此加入未遮蔽读法只会缩小
+  surplus、不会凭空造出一条假披露。
+**验证结果**：
+- 真实元数据复验（`~/.claude/skills/ops-dataset-query`，只读跑规划器）：
+  `'近7天搜索词的点击份额'`、`'亚马逊搜索词绩效 近7天搜索词的点击份额'`、
+  `'亚马逊搜索词绩效 的点击份额'` 三句全部 `planned` 且都带
+  「统计粒度比请求更细，额外覆盖：关键词」披露，且都进了
+  `answer_contract.required_disclosures_zh`。
+- 变异检查：把调用点改回只传遮蔽后的读法 →
+  `test_grain_disclosure_survives_when_masking_eats_the_grain_word` FAIL。
+- 新增测试：`tests/skills/test_dataset_query_planner.py` 复刻真实形态的端到端用例；
+  `tests/skills/test_slot_coverage.py` 两版参数化的「取披露更多的一方且与读法顺序无关」。
+- 回归：`pytest tests/skills/test_slot_coverage.py tests/skills/test_routing_eval.py
+  tests/skills/test_local_fallback.py tests/skills/test_dataset_query_planner.py
+  tests/query tests/mcp/test_query_planner_tools.py -q` → 283 passed, 8 xfailed。
+- 安装目录同步：只逐文件 `cp` 了 `scripts/agent_query_planner.py`、
+  `scripts/query_plan.py`、`scripts/typed_schema_linking.py`、`SKILL.md`、
+  `data/query_plan.schema.json` 到 4 个安装目录（`~/.opscli`、`~/.codex`、
+  `~/.claude`、`~/.openclaw`），**未做任何整目录同步**；同步前后各目录
+  `data/datasets.csv` 均为 76 行真实元数据，未被覆盖。
+**影响范围**：仅显式标识命中与中文说明命中两条路径的**披露计算**；覆盖判定与选表
+结果完全不变（`_raw_slot_reading` 不参与任何 `_covers` / `_slot_is_covered` 调用）。
+这两条路径现在会新增披露，是修复目标。
+**回滚方式**：`git revert <本次提交>`。
+---
+
+## 2026-07-30 query/skills - 修复枚举反查的主段误判（Task 10）
+
+**变更原因**：二期为兜住裸值筛选加的枚举反查规则「授权枚举原值本身或其主段（连字符前）
+出现在原文即算候选」，对同源多地区渠道（傲彼瑞-美国/傲彼瑞-加拿大）是必要的，但当主段
+是通用业务词时会误判——销售小组授权值形如「亚马逊-运营C组」，主段是「亚马逊」，导致
+任何提到亚马逊的查询都被当成指定了销售小组。真实元数据下已观察到 `team_name` 被静默
+注入 filters，属于会缩小数据范围的误判路径。
+**改动的类/方法**：两版 `query_plan.py` 新增 `_generic_slot_terms()`；
+`_reverse_lookup_component_values()` 主段匹配分支增加排除判断。
+**改动点**（两版逐字同步，仅规则加载方式因内核资源化而不同）：
+- `opscli/skills/templates/ops-dataset-query/scripts/query_plan.py`：新增
+  `_generic_slot_terms()`，经 `_load_json_object(RULES_PATH, ...)` 读取
+  `data/intent_rules.json`，汇总 `slots.*.*.terms` + `filter_fields.*` +
+  `domains.*.terms` 三类现有词表（不新造词表），规则不可读时返回空集退回旧行为。
+- `opscli/query/services/planner/query_plan.py`：同一函数改用内核已有的
+  `_load_rules_resource()`（importlib.resources 读包内 `resources/intent_rules.json`），
+  词表汇总逻辑与过滤条件逐字一致。
+- `_reverse_lookup_component_values()` 主段分支由 `base in normalized_query` 改为
+  `base not in generic and base in normalized_query`，整值命中优先级不变。
+- `tests/skills/test_component_filter_resolution.py` 新增 3 条参数化（skill+kernel）
+  测试：主段是平台名不命中、主段是业务专名仍命中、`_generic_slot_terms()` 区分两者。
+**验证结果**：
+- RED：`pytest tests/skills/test_component_filter_resolution.py -k "generic_platform_base or generic_slot_terms" -v`
+  → 4 failed（销售小组两个候选误判命中；`_generic_slot_terms` 属性不存在）。
+- GREEN：`pytest tests/skills/test_component_filter_resolution.py -v` → 66 passed。
+- 全量回归：`pytest tests/skills/test_component_filter_resolution.py
+  tests/skills/test_slot_coverage.py tests/skills/test_routing_eval.py
+  tests/skills/test_local_fallback.py tests/skills/test_dataset_query_planner.py
+  tests/query tests/mcp/test_query_planner_tools.py -q` → 349 passed, 8 xfailed。
+- 词表实测：`_generic_slot_terms()` 命中 120 个词，含「亚马逊」不含「傲彼瑞」，
+  与控制者原型验证结果一致。
+- 真实元数据验证（`~/.claude/skills/ops-dataset-query/scripts`，逐文件 `cp` 覆盖
+  `query_plan.py`，未做整目录同步）：
+  `"查亚马逊近7天的销售额"` → `status=planned 非日期筛选=[]`（不再命中 team_name）；
+  `"查傲彼瑞的所有ASIN"` → `status=clarify_required 非日期筛选=[]`（渠道反查能力不损）。
+- 两版一致性：`diff` 新增函数块，除规则加载调用与预先存在的引号风格差异
+  （`_reverse_lookup_component_values` 原有 docstring 中 `"傲彼瑞"` vs `「傲彼瑞」`，
+  非本次改动引入）外逐字一致。
+**影响范围**：仅枚举反查的主段匹配分支；整值命中路径、二期已有的渠道反查（裸值/全名/
+唯一命中三种形态）、高基数字段的形态抽取路径均未改动。
+**回滚方式**：`git revert 1e65139`。
+---
+
+## 2026-07-30 skills - 修复 install 抹掉运行时元数据
+
+**变更原因**：`opscli skills install ops-dataset-query` 会把用户通过 `skills upgrade`
+从远端拉取的真实元数据（近 600KB / 60 数据集 / 2517 字段）换成内置模板的占位符
+（CSV 仅表头、JSON 空集合）。触发面比 `--force` 更宽：模板版本（1.3.15）与 upgrade
+写入的数据版本（v1.1.23）属于两套版本空间、永远不相等，`_template_version_differs()`
+每次都为真，因此普通 install 同样会走到 `rmtree`。次生后果是模板 `VERSION.json` 的
+`data_state=placeholder` 覆盖过去后，规划器 `_data_state_ready()` 判定未就绪，
+整个 Skill 直接 blocked 不可用。本次会话真实丢失过两次。
+
+**改动点**：
+- `opscli/skills/sync/updater.py`：将原子替换的 6 个文件名提为模块常量
+  `UPGRADE_MANAGED_FILES`（运行时产出文件的单一事实来源），原写入循环改为引用它
+- `opscli/skills/services/manager.py`：新增 `_template_data_is_placeholder()`
+  （读模板 `VERSION.json` 的 `data_state` 声明）、`_has_real_metadata()`
+  （datasets.csv 是否含表头外数据行，只读两行）、`_stash_runtime_metadata()`
+  与 `_restore_runtime_metadata()`；`_install_copy` 与 `_install_central` 两条
+  安装路径在 rmtree 前暂存、copytree 后写回
+- `opscli/skills/domain/models.py`：`SkillInstallResult` 增 `preserved_data_files`
+  字段，`to_dict()` 的 `installed_paths` 一并暴露（AI Agent 走 JSON 通道需要）
+- `opscli/skills/commands/cli.py`：`_print_install_line()` 在保留发生时补一行提示
+- `tests/skills/test_manager.py`：`test_install_dataset_fields_template_to_multiple_runtimes`
+  补 `central_skills_dir=tmp_path/"central"` 隔离——它此前不传该参数，默认写用户
+  真实 `~/.opscli/skills`，是本次元数据丢失的实际扳机（违反铁律8）
+- `tests/skills/test_install_preserves_metadata.py`：新增 5 条回归测试
+
+**验证结果**：
+- 新增 5 条测试全绿；回退生产代码后 2 条要害测试失败，失败原因为真实数据行
+  `1,ds_real,真实数据集` 消失，与生产缺陷同形（另 2 条因新字段报 AttributeError，
+  属副产品不算缺陷信号）
+- 用真实元数据做破坏性复验：跑 `test_install_dataset_fields_template_to_multiple_runtimes`
+  时，带修复则 60 数据集 / 2517 字段 / v1.1.23 完好无损；回退修复后同一条测试
+  把数据集抹成 0、VERSION 变 `data_state=placeholder`
+- 端到端 `opscli skills install --skills-dir /tmp/opscli-e2e --force`：运行时元数据
+  存活（60/2517/v1.1.23），同时模板权威内容正常更新（`dataset_profiles.json`
+  已带本次的 `certified` 字段）
+- JSON 通道输出含 `preserved_data_files: 3`
+- 隔离性静态扫描：高危项（未隔离 central + 走中央安装）由 1 条降为 0 条
+- `test_manager.py` 3 条既存失败（断言 `version == "v0.0.1"`，模板版本已演进）
+  修复前后完全一致，非本次引入
+
+**影响范围**：仅 install 覆盖既有安装的路径。模板声明 `data_state=ready` 的 Skill
+（ops-asin-data-bi / ops-seller-sprite / ops-asin-data-collector）行为不变，数据仍随
+模板覆盖；首次安装、无真实元数据的安装、upgrade 与 link 逻辑均未改动。
+
+**回滚方式**：`git revert <本次提交>`；回滚后 install 恢复整体覆盖语义，需重跑
+`opscli skills upgrade ops-dataset-query` 找回元数据。
+---
+
+## 2026-07-30 planner - 否定语境不再把字段标签当成点名维度
+
+**变更原因**：codex 实测「找到渠道是傲彼瑞-美国的所有ASIN；全部时间，不加日期筛选」
+返回 9625 行并被服务端截断在 5000 行。根因是字段标签匹配对原文做子串包含
+（`query_plan.py` 的 `label in normalized_query`），「不加日期筛选」里的「日期」
+命中日期维度标签而被加成分组维度——用户越明确要求不加日期，规划器越确定按日期分组。
+实测「不加/不要按/无需/忽略」四种说法全部踩中；不提日期时同一查询只有 38 行。
+merge-base 复现相同行为，属既存缺陷。
+
+**改动点**：
+- `time_scope.py`（skill 版 + 内核版）：`_NEGATED_SPAN_RE` 补「忽略/去掉/去除」，
+  新增 `mask_negated_spans()` 对外暴露，供字段标签匹配复用同一份词表
+- `query_plan.py`（skill 版 + 内核版）：新增 `_label_match_text()`，
+  `_requested_fields()` 与 `_field_selection()` 的授权标签兜底路径改用它
+
+**验证结果**：
+- 新增 `tests/skills/test_negated_field_labels.py` 18 条全绿：四种否定说法均不再
+  误加日期；正面提及（「按日期看…」）照常识别；屏蔽范围只到标点，
+  「不要按日期拆分，按渠道汇总」仍能识别渠道；显式 `--field` 不受屏蔽影响
+- 真实元数据实测：「不加日期筛选」等四种说法 dims 由 `[渠道,ASIN,日期]` 回到 `[渠道,ASIN]`
+- 两版逐条一致性核验通过（kernel 与 skill 对四个用例输出相同）
+- `tests/skills/test_time_scope_unbounded.py` + `tests/query` 共 181 passed，
+  扩充否定词表未破坏原有时间口径识别
+
+**影响范围**：仅字段标签的子串匹配路径。有意保留的区分：「不加日期筛选/不限日期」
+是不要时间筛选（全时段），「忽略日期/不要按日期拆分」是不要分组维度、时间窗口未表态
+仍走默认近30天，两者不混同。
+
+**回滚方式**：`git revert <本次提交>`。
+---
+
+## 2026-07-30 planner - 显式多值组件筛选走 IN，不再误判为歧义
+
+**变更原因**：codex 实测「查询渠道为“傲彼瑞-美国”、“傲彼瑞-tiktok”、“傲彼瑞-加拿大”
+三个准确渠道名称中任意一个」被判为"没有唯一完整等值的授权成员"并转澄清，回显还退化成
+共同前缀「傲彼瑞」，反过来要求用户"请指定准确渠道名称"——而用户给的本来就是准确全名。
+codex 只能退化成逐个查询再本地取并集。根因是 `_reverse_lookup_component_values`
+内部已分开算 exact_hits（原文写了完整原值）与 base_hits（只出现主段），
+但返回时拍平成一个列表，调用方只能统一要求 `len(matched) == 1`，
+无法区分「三个准确值」与「一个模糊主段」。merge-base 复现相同行为，属既存缺陷
+（源 6e3e375 组件筛选值解析一期的 fail-closed 门）。
+
+**改动点**（skill 版 + 内核版同步）：
+- `query_plan.py`：新增 `_reverse_lookup_component_matches()` 返回 (候选, 命中类型)；
+  `_reverse_lookup_component_values()` 保留原签名委托给它，既有调用方与测试不受影响
+- `_resolve_enum_component_filter()`：整值多命中（`match_kind == "exact"`）放行，
+  绕过唯一命中门；主段命中保持 fail-closed 澄清；多值时每个已锁定值都登记进 consumed
+- `_write_component_filter()`：`resolved` 接受 `str | list`，多值按服务端支持的
+  `{"operator": "in", "value": [...]}` 下发（开发说明文档 141/259 行），单值仍用 `=`
+
+**验证结果**：
+- 新增 `tests/skills/test_multi_value_component_filter.py` 9 条全绿
+- 既有 `tests/skills/test_component_filter_resolution.py` 66 passed，未破坏
+- 真实元数据实测三种形态：单值 `=`、双值 `in`（披露列出两个值并标注"任一命中"）、
+  只提基段仍 clarify_required
+- 两版逐条一致性核验通过（命中类型、候选数、写入 operator 均相同）
+- 执行器 `_apply_default_filters` 按字段名匹配用户条件、不看操作符，
+  `in` 不影响数据集默认条件的覆盖语义
+
+**影响范围**：仅裸值反查路径的多命中判定。标签抽取路径（用户写「字段渠道等于X」）
+仍是单值完整等值，未改动；主段歧义的 fail-closed 语义保持不变。
+
+**回滚方式**：`git revert <本次提交>`。
+---
+
+## 2026-07-30 planner - 复合字面值后段不再被读成槽位诉求
+
+**变更原因**：codex 实测「字段“渠道”精确等于“傲彼瑞-tiktok”」被判 blocked。
+渠道值里的 tiktok 命中 `slots.platform` 词表（terms = tiktok / tik tok / tk），
+而 `platform_scope.members` 只映射 amazon*，非 amazon 平台展开为空，
+于是整条查询被判 `block_platform_scope_unsupported`——用户给的是渠道值，
+从未提出平台诉求。与 Task 10 反查主段误判同类：值里的词被读成槽位诉求。
+merge-base 复现相同行为，属既存缺陷。
+
+**改动点**（skill 版 + 内核版同步）：
+- `typed_schema_linking.py`：`_matched_values()` 新增 `drop_value_fragments` 开关，
+  剔除紧跟在连字符/下划线之后的命中（复合字面值后段）；
+  `extract_query_semantics()` 的槽位读取启用该开关。
+  `profile_card()` 的数据集说明画像匹配不启用，画像语义不变。
+
+**验证结果**：
+- 新增 `tests/skills/test_value_fragment_slots.py` 10 条全绿
+- 真实元数据实测：「傲彼瑞-tiktok」由 blocked 变 planned 并正确写出渠道筛选；
+  用户原句三值（含 tiktok）走 IN 全部锁定；「查tiktok平台」仍按设计阻断；
+  「查亚马逊平台近7天销售额」仍 platform_filter_state=resolved
+- 改动范围全量回归 428 passed / 8 xfailed
+- 两版槽位读取逐条一致
+
+**影响范围**：仅查询原文的槽位读取。判据是「命中紧跟连字符/下划线」，
+因此平台词自身含分隔符的情形不受影响（amazon-vc 仍识别为 amazon_vc，
+其匹配区间从 amazon 起算、前面无连字符）。已知未覆盖：平台词位于复合值首段时
+（如渠道值 tiktok-美国）仍会被读成平台诉求，本次未处理。
+
+**回滚方式**：`git revert <本次提交>`。
+---
+
+## 2026-07-30 planner - 否定判定改用区间包含，词表补全
+
+**变更原因**：合并后 codex e2e 用例 C 仍返回 9625 行并截断在 5000 行。规划器对
+**用户原句**判定是正确的（dims=[渠道,ASIN]），但 codex 自己把查询改写成
+「…不按日期拆分，不需要日期维度」——词表有「不要」却没有「不按」，
+一处漏屏蔽就足以让「日期」经子串包含被捞回成分组维度。
+
+顺带发现更严重的隐患：不能简单往词表加词。对 2038 个真实字段标签统计后：
+- 以 不/非/勿/别/无 开头的标签 0 个；
+- 但「别」「不含」出现在标签内部——`税别`、`TEMU物流费用币别`、`目标系统别名`、
+  `周转天数(不含在途)`。若把「不含」加进词表且继续用文本替换，
+  `周转天数(不含在途)` 会被从中间撕开而漏掉；若收裸「别」，
+  「查税别和日期」会从「别」起屏蔽并连带吃掉「日期」。
+
+**改动点**（skill 版 + 内核版同步）：
+- `time_scope.py`：新增 `negated_spans()` 返回否定语境区间；词表补
+  「不按/不含/不带/不分/不显示/不展示/非/勿」，并在注释里写明两条实测约束
+  （禁止收裸「别」的原因）；`mask_negated_spans()` 保留但降级为
+  「不需要保留原文位置的场景」专用
+- `query_plan.py`：`_label_match_text()` 删除，改为 `_label_is_negated()`
+  按**区间包含**判定——标签只有在每次出现都整体落入否定区间时才算否定；
+  `_requested_fields()` 与授权标签兜底路径同步改用它
+
+**验证结果**：
+- `tests/skills/test_negated_field_labels.py` 扩到 30 条全绿，新增覆盖
+  codex 实际改写形态（不按/非/不含/不带/不分/不显示）以及两个决定性反例
+  （`周转天数(不含在途)` 必须存活、`查税别和日期` 里的日期不得被裸「别」吃掉）
+- 改动范围全量回归 435 passed / 8 xfailed
+- 两版逐条一致（含反例用例）
+- codex 改写后的原句直接验规划器：dims 回到 `[渠道, ASIN]`
+
+**影响范围**：字段标签匹配的否定判定方式由「替换文本」改为「区间包含」，
+自带否定词的合法标签因此不再被误屏蔽。时间口径识别沿用同一词表，
+`_ALL_TIME_RE` 的全时段判断仍在否定屏蔽之前，未改动。
+
+**回滚方式**：`git revert <本次提交>`。
+---
+
+## 2026-07-30 planner - 标签形态支持显式列举多个筛选值
+
+**变更原因**：codex 实测（退出码 2）
+`筛选渠道为傲彼瑞-美国、傲彼瑞-tiktok、傲彼瑞-加拿大三个当前账号授权渠道中的任意一个`
+执行前校验失败，报「规划器把渠道名称中的国家词误解析成了未授权的国家筛选字段」。
+根因是标签抽取 `_extract_labeled_value()` 只取第一个值：
+① 静默把三渠道缩成一个渠道（channel_name = 傲彼瑞-美国）；
+② 其余两个值没被登记为已消费，「傲彼瑞-加拿大」里的「加拿大」被国家字段反查抓走，
+最终下发 `channel=傲彼瑞-美国 AND country=加拿大` —— 用户从未表达的条件。
+merge-base 复现完全相同的 filters，属既存缺陷。
+
+**改动点**（skill 版 + 内核版同步）：
+- `query_plan.py`：新增 `_labeled_value_match()` 返回 (首个值, 是否为显式列举)；
+  `_extract_labeled_value()` 保留原签名委托给它；边界前瞻补「/」「或」
+- `_resolve_enum_component_filter()`：检测到显式列举时不走单值等值匹配，
+  改走枚举反查分支（由授权枚举做完整等值匹配，命中类型为 exact 时全部锁定走 IN）
+
+**为什么不在标签抽取里把值列表抽全**：末位值后面往往接自由描述，
+靠边界前瞻猜结尾必然过度捕获——实测会抽成「傲彼瑞-加拿大三个当前账号授权渠道」。
+授权枚举反查做完整等值匹配不存在这个问题，且该路径已在生产使用。
+
+**验证结果**：
+- 新增 `tests/skills/test_labeled_value_enumeration.py` 11 条全绿，覆盖
+  、/,/，/// 或 五种分隔符、单值不误判、「和」不作分隔符、标签不匹配不谎报
+- 改动范围全量回归 446 passed / 8 xfailed
+- 两版逐条一致
+- 用户原始命令端到端执行成功（退出码 0）：
+  filters = `channel_name in [傲彼瑞-美国, 傲彼瑞-tiktok, 傲彼瑞-加拿大]`，
+  47 行 / total 47 / truncated=false，渠道分布 38+6+3，去重 ASIN 40，
+  且不再出现 country_name 筛选
+
+**影响范围**：仅标签形态抽到值且其后紧跟列举分隔符的路径。单值、主段歧义
+（fail-closed 澄清）、「和」连接非同类值三种既有语义均不变。
+
+**回滚方式**：`git revert <本次提交>`。
+---
+
+## 2026-07-30 planner - 时间解析已消费的日期不再被组件形态抽取
+
+**变更原因**：codex 实测「沿用 2026-07-01 至 2026-07-30 的口径，按渠道+ASIN
+汇总销量、销售额和毛利」转澄清，提示「渠道SKU“2026-07-01”没有唯一完整等值的
+授权成员」。根因是渠道SKU 的编码形态 `[A-Za-z0-9]{2,}(-[A-Za-z0-9]{2,}){2,}`
+正好命中 ISO 日期的三段连字符结构，日期被当成渠道SKU 筛选值。
+渠道三值本身已正确锁定（IN），但整条查询因这个误判撤下模板，
+用户的日期口径落不了地。
+
+**改动点**（skill 版 + 内核版同步）：
+- `query_plan.py`：新增 `_time_literals_consumed()`，从
+  `execution_ref.time_scope` 取 start / end / comparison_start / comparison_end
+  登记进 consumed；`_resolve_component_filters()` 以它初始化 consumed
+  （原先初始化为空集合）
+
+**为什么不新造"日期形态"判断**：consumed 的语义本来就是"这段文本已被别的解释
+占用"，日期已被时间解析消费，登记进去即可，无需再加一套形态规则。
+
+**验证结果**：
+- 新增 `tests/skills/test_date_literal_not_component_value.py` 8 条全绿，
+  含一条前提固定测试（渠道SKU 形态确实命中 ISO 日期，形态若收紧会失败提示重评）
+  与一条直接回归点（同一 query 在有/无 guard 下分别抽到 `2026-07-01` 与 `""`）
+- 改动范围全量回归 454 passed / 8 xfailed
+- 两版逐条一致
+- 两版端到端均验证：用户原句 planned，filters 含
+  `date_id >= 2026-07-01`、`date_id <= 2026-07-30`、
+  `channel_name in [三个渠道]`，无 sell_sku 误判；
+  真实渠道SKU「ON-OB-JL-007-68157」仍正常识别
+
+**影响范围**：仅组件形态抽取的候选过滤。标签形态、枚举反查、真实编码类字段
+（渠道SKU/公司SKU/产品型号/物控编码/SPU）的识别均不变；
+全时段查询无日期字面量，不登记任何值。
+
+**回滚方式**：`git revert <本次提交>`。
+---
+
+## 2026-07-30 planner - 复合值首/中段的槽位词命中不再算槽位诉求
+
+**变更原因**：形态/词表碰撞扫描（拿账号真实授权枚举 1436 个值 + 2038 个字段标签
+与各字段形态/词表做交叉命中）找出三个生产值会被误读，均已实测确认：
+
+| 真实授权值 | 字段 | 命中词 | 实测后果 |
+|---|---|---|---|
+| `亚马逊-运营C组` | 销售小组 | `亚马逊`(platform) | 凭空多出平台范围 `['亚马逊SC','亚马逊VC']` |
+| `SC-BCH-0002` | 产品型号 | `sc`(amazon_sc) | 凭空多出平台范围 `['亚马逊SC']` |
+| `SD-51709` | 渠道SKU | `sd`(ad_type) | 选表候选归零，dataset 未定，查询彻底不可用 |
+
+前两者是静默缩范围（组件值本身正确锁定，但多出用户从未提的平台口径，
+披露还会声称"本次默认按亚马逊SC + 亚马逊VC处理"）；第三者更重——
+即时综合数据集不覆盖 ad_type 槽位，槽位一旦点亮候选直接归零。
+上一轮只覆盖了"连字符后段"（傲彼瑞-tiktok），首/中段当时明确记为未覆盖。
+
+**改动点**（skill 版 + 内核版同步）：
+- `typed_schema_linking.py`：新增 `all_slot_terms()`（跨槽位合并全部槽位词，
+  取自现有 slots，不新造词表）与 `_is_value_fragment()`（两侧判定）；
+  `_matched_values()` 增 `sibling_terms` 参数并改调该判据；
+  `extract_query_semantics()` 传入 sibling_terms
+
+**判据设计**：命中处于复合词段中即视为字面值片段——前置分隔符（后段）或
+后置分隔符（首/中段）。但**相邻段本身是槽位词时不算片段**，
+因为「亚马逊-vc」「amazon-sc」是平台的书写变体，误剔会把真实平台诉求整条丢掉
+（实测「查亚马逊-vc的销售额」原本就只识别到 amazon，若无此例外会变成零槽位）。
+
+**验证结果**：
+- `tests/skills/test_value_fragment_slots.py` 扩到 21 条全绿，新增覆盖三个生产值的
+  标签与裸值两种形态、此前未覆盖的 `tiktok-美国`，以及三条平台书写变体保留断言
+- 改动范围全量回归 465 passed / 8 xfailed
+- 两版逐条一致
+- 真实规划器实测：三例均由「多出平台范围/选表失败」变为正常锁定
+  team_name / model / sell_sku，且「查亚马逊平台近7天的销售额」仍 resolved
+- 碰撞扫描 C 维度高危 3 → 0（扫描分级已改为直接调用 `_is_value_fragment`，
+  避免脚本与实现漂移）
+
+**影响范围**：仅查询原文的槽位读取。数据集说明的画像匹配不启用该剔除，画像语义不变。
+
+**回滚方式**：`git revert <本次提交>`。
+---
+
+## 2026-07-30 planner - 同值跨字段的裸值不再静默绑定
+
+**变更原因**：碰撞扫描在本账号真实枚举里找到 10 个同值跨字段的情形——
+产品型号∩SPU 8 个（bkc-102/bkc-107/cot-102/cot-114/cot-165/mks-111/tv-101/tv-140）、
+渠道SKU∩公司SKU 2 个（usan1088833/usan1077714）。裸值原先按
+`_ENUM_COMPONENT_SPECS` 顺序静默绑到靠前的字段（实测「查BKC-107的近7天销量」
+绑到 model）。危险点在于值在错字段里同样是合法枚举值，完整等值校验不会报错，
+因此没有任何 fail-closed 兜底，用户拿到另一字段口径的数据且无从察觉。
+
+**改动点**（skill 版 + 内核版同步）：
+- `query_plan.py`：新增 `_cross_field_candidates()`，检查该值是否同时存在于
+  其他带编码形态字段的授权枚举；`_resolve_enum_component_filter()` 在写入前
+  对裸值路径做该判定，多字段命中即 clarify 并列出候选字段与示例话术
+
+**只对裸值生效**：标签形态已由字段名确定，「产品型号是BKC-107」与「SPU是BKC-107」
+实测各自正确落到 model / spu，不应打扰。
+
+**检查范围不按形态缩小**：第一版按"形态也命中该值"缩范围，漏掉了
+渠道SKU∩公司SKU 这一对——渠道SKU 形态要求三段连字符、匹配不上 USAN1088833。
+改为检查全部带编码形态的字段（当前 5 个，有上限且走枚举缓存）。
+该教训已写成测试 `test_check_scope_is_not_narrowed_by_pattern` 锁住。
+
+**验证结果**：
+- 新增 `tests/skills/test_cross_field_value_ambiguity.py` 10 条全绿
+  （枚举与组件查找走本地桩，不依赖真实网络，符合铁律8）
+- 改动范围全量回归 475 passed / 8 xfailed；内核版 tests/query/planner 45 passed
+- 两版端到端实测：裸值 BKC-107 / USAN1088833 / USAN1077714 均转澄清并列出候选字段；
+  「产品型号是BKC-107」「SPU是BKC-107」「公司SKU是USAN1088833」「渠道SKU是USAN1088833」
+  四种标签写法各自正确；只属单一字段的值不受影响
+- 碰撞扫描高危项 10 → 0
+
+**影响范围**：仅裸值 + 编码形态字段路径。标签形态、枚举反查、多值 IN、
+主段歧义 fail-closed 语义均不变。
+
+**回滚方式**：`git revert <本次提交>`。
+---
+
+## 2026-07-30 tools - 新增规划器形态/词表碰撞扫描工具
+
+**变更原因**：2026-07 期间规划器修掉的多个缺陷同族——都是「用编码形态或词表猜
+某段文本属于哪个字段」，靠实际报错逐个暴露（平台词吃渠道值、否定词吃字段标签、
+日期吃渠道SKU、同值跨字段静默绑错等）。需要把这类碰撞前置发现，替代等报错再修。
+
+**改动点**：
+- `scripts/regression/planner_enum_snapshot.py`：拉取账号真实授权枚举落盘
+  （与扫描拆开，避免纯计算的扫描重复付网络开销）
+- `scripts/regression/planner_collision_scan.py`：7 个维度交叉扫描，
+  存在「高」级碰撞时以退出码 1 结束，可挂回归门禁
+
+**两条方法论约束（都是踩过坑才定的，务必保持）**：
+1. 判定必须调用生产匹配器。`_term_spans` 对 ASCII 词条有词边界约束，
+   `sb` 不会命中 `BSB-201`；第一版用朴素 `in` 判定报出 118 条假警报，
+   真实只有 13 条。
+2. 分级必须调用生产判据（`_is_value_fragment` / `_cross_field_candidates`），
+   不在脚本里复刻判断逻辑，否则实现修好后脚本仍报未覆盖。
+
+**验证结果**：
+- 真实数据（1436 枚举值 / 2038 字段标签）：高=0 中=5 低=5 设计内=6 已修=26，退出码 0
+- 门禁反向验证：人为注入一个涉及无形态字段的同值碰撞，退出码 1 并正确报高危。
+  该反向验证还暴露了扫描自身的分级漏洞——原先把 A' 一律标"已修"，
+  但 `_cross_field_candidates` 只遍历带编码形态的字段，涉及渠道/国家等
+  无形态字段（走枚举反查）的碰撞并不在防护内。已修正为按字段是否带形态判定覆盖。
+
+**影响范围**：仅新增分析工具，不改动生产代码。
+
+**回滚方式**：删除这两个脚本。
+---
+
+## 2026-07-30 skills(ops-dataset-query) - 规划器由硬性规定改为优先路径
+
+**变更原因**：SKILL.md 把 `query_flow.py` 写成"唯一入口 / 禁止绕过规划器"，
+但降级通道（L1~L4 + `local_fallback.py --emit-plan`）只在规划器返回
+`clarify_required` / `blocked` 时才允许进入。规划器自身报错（`flow_error` / exit 2）、
+命令窗口连续超时、运行环境缺 `python3` 这几类客观失败下，Agent 无任何出口，
+只能提交反馈并停止取数。同时 MCP 侧 `QUERY_SPEC.md` 早已是"规划器优先、手工构造次选"，
+CLI 侧与之口径打架。
+
+**改动点**：
+- `SKILL.md`：frontmatter 描述"唯一入口"→"默认且优先的入口"；主线、工具预算、
+  本地探索限制、命令窗口等段落把无条件禁令限定为"规划器路径下"；
+  降级章节新增「降级触发条件」表（澄清/阻断、`flow_error`/exit 2 重跑仍失败、
+  不可重试的 exit 2、累计 3 次窗口超时、运行环境不可用），并显式排除主观理由；
+  降级执行通道改为 `run_query.py --plan-file` 与直连 `opscli query simple` 并列
+  （后者须声明未经执行器字段校验）；版本 1.3.16 → 1.3.17
+- `references/cli.md`："## 唯一路由"→"## 首选路由"并指向降级章节；
+  exit 2 段补 `retryable=false` 无可执行动作时的降级出口
+- `data/VERSION.json`：版本同步到 1.3.17（与 SKILL.md frontmatter 保持一致，测试有断言）
+- `tests/skills/test_dataset_query_flow.py`：更新失效的措辞断言，
+  新增 `test_skill_allows_fallback_only_on_objective_failure` 守住
+  "触发条件必须显式列举 + 主观理由被排除 + 字段来源护栏不放宽"
+
+**未改动（有意保留）**：`run_query.py` 的 plan 绑定门禁不变，降级 plan 仍走
+`local_fallback.py --emit-plan` 产出的 contract v2（不带 `plan_integrity`，
+因此允许手工 payload，同时保留授权字段白名单校验）。
+
+**验证结果**：
+- `pytest tests/skills/test_dataset_query_flow.py tests/skills/test_local_fallback.py`
+  → 39 passed, 5 xfailed
+- `test_dataset_query_planner.py` 67 passed、`test_detector.py` 9 passed、
+  `test_updater.py` 12 passed、`test_install_preserves_metadata.py` 5 passed、
+  `test_routing_eval.py` / `test_slot_coverage.py` 全通过
+- 预存失败（与本次改动无关，stash 后对照复现）：`tests/skills` 整目录 collection
+  capture 崩溃；`test_manager.py` 3 failed（断言硬编码 `v0.0.1`）；
+  `test_packaging.py` no tests ran
+
+**影响范围**：仅 ops-dataset-query 的 Agent 行为契约文档与版本号，不改任何运行时代码。
+CLI/MCP 执行路径、执行器校验、规划器逻辑均未变动。
+
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/SKILL.md
+opscli/skills/templates/ops-dataset-query/references/cli.md
+opscli/skills/templates/ops-dataset-query/data/VERSION.json
+tests/skills/test_dataset_query_flow.py`
 ---

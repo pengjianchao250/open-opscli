@@ -1750,3 +1750,317 @@ def test_explicit_fields_survive_label_dedup_and_containment():
         "ad_sales",
         "sales_copy",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Task 8: 放开固定槽位过约束并强制披露更细粒度
+# ---------------------------------------------------------------------------
+
+
+def _write_grain_surplus_metadata(data_dir: Path) -> None:
+    """写入一张固定 grain 槽位同时支持 search_term + keyword 的数据集。
+
+    说明文案同时命中「搜索词」「关键词」两个 grain 取值模式，
+    模拟线上「亚马逊搜索词绩效」实际形态：用户只要 search_term 级，
+    数据集却是 keyword×search_term 级——粒度比请求更细。
+    """
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v1.4.0", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "10,ds_kw_st,关键词搜索词双维度表,normal,0,"
+        "用于分析亚马逊消费者搜索词与关键词维度下的转化情况，支持选品优化。,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "10,ds_kw_st,关键词搜索词双维度表,date_id,日期,f_kw_date,dimension,,,,,0,0\n"
+        "10,ds_kw_st,关键词搜索词双维度表,conv_rate,转化率,f_conv_rate,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n",
+        encoding="utf-8",
+    )
+
+
+def _write_grain_exact_match_metadata(data_dir: Path) -> None:
+    """写入一张固定 grain 槽位只支持 search_term 的数据集（与请求恰好相等）。
+
+    说明文案只命中「搜索词」一个 grain 取值，用户也只要 search_term 级，
+    数据集覆盖范围与请求完全一致——不该产生任何多余粒度披露。
+    """
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v1.4.1", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "11,ds_st_only,搜索词专表,normal,0,"
+        "用于分析亚马逊消费者搜索词维度下的转化情况，支持选品优化。,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "11,ds_st_only,搜索词专表,date_id,日期,f_st_date,dimension,,,,,0,0\n"
+        "11,ds_st_only,搜索词专表,conv_rate,转化率,f_st_conv_rate,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n",
+        encoding="utf-8",
+    )
+
+
+def test_grain_surplus_triggers_disclosure_in_both_locations(tmp_path: Path):
+    """数据集粒度比请求更细时，两处强制披露都必须写入（正例）。
+
+    审查发现：披露只受 Step 8 一次性手工命令行验证保护，未入库不可重跑。
+    照 platform_scope_disclosures_zh / default_filters_zh 的既有先例补端到端测试，
+    覆盖 model_view["grain_disclosure_zh"] 与
+    answer_contract["required_disclosures_zh"] 两处写入，防止今后重构
+    build_model_contract 的变量赋值顺序或候选截断逻辑时悄悄打断这条链路。
+    """
+    data_dir = tmp_path / "data"
+    _write_grain_surplus_metadata(data_dir)
+
+    result = query_plan.build_model_query_plan(
+        "查询近7天搜索词的转化率",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "planned"
+    assert result["execution_ref"]["dataset_alias"] == "ds_kw_st"
+    disclosures = result["model_view"]["grain_disclosure_zh"]
+    # 披露句面向用户，只能出现中文标签；曾断言过内部标识 "keyword"，
+    # 把「英文标识泄露到中文句子」这个缺陷写进了断言并锁死
+    assert any("关键词" in item for item in disclosures)
+    assert not any("keyword" in item or "grain" in item for item in disclosures)
+    assert all(item in result["answer_contract"]["required_disclosures_zh"] for item in disclosures)
+    schema = json.loads((SKILL_ROOT / "data" / "query_plan.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(result)
+
+
+def test_grain_disclosure_survives_explicit_dataset_reference(tmp_path: Path):
+    """用户点名数据集（走显式命中路径）时，强制披露不能消失。
+
+    审查实测：'亚马逊搜索词绩效 近7天搜索词的点击份额' -> planned | 披露 None，
+    而只说 '近7天搜索词的点击份额' 反而有披露。根因是四条候选构造路径里只有
+    _score_profile 带 grain_coverage，显式标识 / 中文说明 / 默认表三条都不带，
+    于是「用户说得越具体反而越危险」被原封不动搬到了披露层。
+    """
+    data_dir = tmp_path / "data"
+    _write_grain_surplus_metadata(data_dir)
+
+    for query in (
+        "关键词搜索词双维度表 近7天搜索词的转化率",  # 显式中文名命中
+        "ds_kw_st 近7天搜索词的转化率",  # 显式技术标识命中
+    ):
+        result = query_plan.build_model_query_plan(
+            query,
+            data_dir=data_dir,
+            rules_path=RULES_PATH,
+            auto_upgrade=False,
+            auto_enum=False,
+        )
+        assert result["status"] == "planned", query
+        disclosures = result["model_view"].get("grain_disclosure_zh") or []
+        assert any("关键词" in item for item in disclosures), f"点名数据集后披露丢失：{query}"
+        assert all(
+            item in result["answer_contract"]["required_disclosures_zh"]
+            for item in disclosures
+        ), query
+
+
+def test_grain_disclosure_survives_when_masking_eats_the_grain_word(tmp_path: Path):
+    """身份遮蔽把用户说出口的粒度词一起抹掉时，披露仍然必须存在。
+
+    真实元数据形态（审查者实测的原案）：数据集中文说明是「亚马逊搜索词绩效」，
+    字段里也有「搜索词」，于是 `_semantic_query_without_candidate_identity` 的全局
+    replace 把 '亚马逊搜索词绩效 近7天搜索词的点击份额' 里第二个（用户真正说出口的）
+    「搜索词」也一起抹掉 → 遮蔽后槽位为空 → 无请求可比 → 披露又消失。
+    披露侧必须同时看未遮蔽的读法。
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v1.4.4", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    # description 即用户会报出的中文名，且自身含「搜索词」；remarks 提供 keyword 覆盖
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "50,ds_sqp,custom_search_query_set,normal,0,亚马逊搜索词绩效,含关键词与搜索词双维度明细\n",
+        encoding="utf-8",
+    )
+    # 字段里也有「搜索词」标签，遮蔽会连用户原话里的粒度词一起抹掉
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "50,ds_sqp,custom_search_query_set,date_id,日期,f_sqp_date,dimension,,,,,0,0\n"
+        "50,ds_sqp,custom_search_query_set,search_term,搜索词,f_sqp_st,dimension,,,,,0,0\n"
+        "50,ds_sqp,custom_search_query_set,click_share,点击份额,f_sqp_cs,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n",
+        encoding="utf-8",
+    )
+
+    result = query_plan.build_model_query_plan(
+        "亚马逊搜索词绩效 近7天搜索词的点击份额",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["execution_ref"]["dataset_alias"] == "ds_sqp"
+    disclosures = result["model_view"].get("grain_disclosure_zh") or []
+    assert any("关键词" in item for item in disclosures), "身份遮蔽吃掉粒度词后披露丢失"
+    assert all(
+        item in result["answer_contract"]["required_disclosures_zh"] for item in disclosures
+    )
+
+
+def test_grain_disclosure_survives_default_dataset_recommendation(tmp_path: Path):
+    """默认「即时综合数据集」推荐路径同样必须带强制披露。
+
+    这是四条候选构造路径里的第三条（`_default_dataset_candidate`）：
+    实测把它的 `grain_coverage` 键去掉，披露立刻变 None。
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v1.4.3", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    # dataset_name 命中默认表身份，description 提供 keyword+search_term 两个 grain 取值
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "40,ds_inst,即时综合数据集,normal,0,"
+        "亚马逊消费者搜索词与关键词维度的即时综合明细，含转化情况。,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "40,ds_inst,即时综合数据集,date_id,日期,f_inst_date,dimension,,,,,0,0\n"
+        "40,ds_inst,即时综合数据集,conv_rate,转化率,f_inst_conv,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n",
+        encoding="utf-8",
+    )
+
+    result = query_plan.build_model_query_plan(
+        "近7天搜索词的转化率",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["model_view"]["default_dataset_recommendation_zh"]
+    disclosures = result["model_view"].get("grain_disclosure_zh") or []
+    assert any("关键词" in item for item in disclosures), "默认表推荐路径丢失强制披露"
+    assert all(
+        item in result["answer_contract"]["required_disclosures_zh"] for item in disclosures
+    )
+
+
+def _write_ad_type_surplus_metadata(data_dir: Path) -> None:
+    """写入一张 ad_type 固定为 SP+SD+SB 且没有「广告类型」筛选字段的数据集。
+
+    模拟线上真实形态：用户只要 SP，数据集是三类广告的合计，且筛不掉——
+    这正是文案语义必须与 grain 分开的场景。
+    """
+    data_dir.mkdir(parents=True)
+    (data_dir / "VERSION.json").write_text(
+        json.dumps({"name": "ops-dataset-query", "version": "v1.4.2", "data_state": "ready"}),
+        encoding="utf-8",
+    )
+    (data_dir / "datasets.csv").write_text(
+        "table_id,dataset_alias,dataset_name,dataset_category,inner_where_enabled,description,remarks\n"
+        "20,ds_spsdsb,合并广告表,normal,0,亚马逊SP、SD、SB广告汇总数据集,\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_fields.csv").write_text(
+        "table_id,dataset_alias,dataset_name,field_name,verbose_name,global_alias,field_type,"
+        "summary_expression,detail_expression,description,remarks,snapshot_metric,has_formula_config\n"
+        "20,ds_spsdsb,合并广告表,date_id,日期,f_ad_date,dimension,,,,,0,0\n"
+        "20,ds_spsdsb,合并广告表,ad_cost,广告花费,f_ad_cost,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dataset_select_columns.csv").write_text(
+        "current_dataset_alias,column_name,verbose_name,component_dataset_alias\n",
+        encoding="utf-8",
+    )
+
+
+def test_ad_type_surplus_disclosure_says_cannot_filter_not_finer_grain(tmp_path: Path):
+    """ad_type 多覆盖时文案必须说「筛不掉、是合计」，不能说「粒度更细」。
+
+    实测输出过「所选数据集的ad_type粒度比请求更细…不得把更细粒度的明细当成
+    请求粒度的汇总」——语义正好相反：交付的是 SP+SD+SB 合计（filters 里筛不掉
+    广告类型），照这句话读会把合计当成纯 SP 汇报，是最危险的静默错数方向。
+    """
+    data_dir = tmp_path / "data"
+    _write_ad_type_surplus_metadata(data_dir)
+
+    result = query_plan.build_model_query_plan(
+        "查询近7天SP广告的广告花费",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "planned"
+    disclosures = result["model_view"]["grain_disclosure_zh"]
+    text = "".join(disclosures)
+    assert "无法按广告类型筛选" in text
+    assert "不得当作纯 SP 的数据汇报" in text
+    # 反向锁：把合计说成「更细粒度的明细」会引导模型把合计当纯 SP 汇报
+    assert "粒度比请求更细" not in text
+    assert "明细当成请求粒度的汇总" not in text
+    # 内部标识不得泄露到中文披露句
+    assert "ad_type" not in text
+    assert all(
+        item in result["answer_contract"]["required_disclosures_zh"] for item in disclosures
+    )
+    # 确认「筛不掉」这一前提为真：模板里没有任何广告类型筛选
+    template = result["execution_ref"]["query_template"]
+    assert all(item["field"] == "date_id" for item in template["filters"])
+
+
+def test_grain_exact_match_produces_no_disclosure_noise(tmp_path: Path):
+    """粒度正好相等（无多余覆盖）时，不产生披露，也不污染强制披露列表（反例）。"""
+    data_dir = tmp_path / "data"
+    _write_grain_exact_match_metadata(data_dir)
+
+    result = query_plan.build_model_query_plan(
+        "查询近7天搜索词的转化率",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "planned"
+    assert result["execution_ref"]["dataset_alias"] == "ds_st_only"
+    assert "grain_disclosure_zh" not in result["model_view"]
+    assert not any(
+        "粒度比请求更细" in text
+        for text in result["answer_contract"]["required_disclosures_zh"]
+    )

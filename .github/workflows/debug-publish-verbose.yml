@@ -1,0 +1,118 @@
+name: Debug Publish (verbose)
+
+# 临时排障用 workflow：复用已有构建产物重跑一次 PyPI 上传，并强制开启 --verbose
+# 背景：twine 6.x 在非 verbose 模式下只打印 HTTP 状态短语（如 "400 Bad Request"），
+#       服务端返回的真实拒绝原因只出现在 --verbose 的响应体里，导致 v0.0.119~v0.0.121
+#       连续三次发布失败都看不到根因。本 workflow 不重新构建，直接下载指定 run 的
+#       产物再上传，2 分钟内即可拿到原始报错文本。
+# 排障结束后应删除本文件。
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "artifacts=重传已有构建产物；probe=只传一个几百字节的探针 wheel"
+        required: true
+        type: choice
+        options:
+          - artifacts
+          - probe
+        default: artifacts
+      run_id:
+        description: "artifacts 模式下提供构建产物的 workflow run id"
+        required: false
+        default: "30341841851"
+      probe_version:
+        description: "probe 模式下使用的版本号（必须是从未用过的预发布号）"
+        required: false
+        default: "0.0.121.dev1000"
+
+jobs:
+  debug_publish:
+    name: Re-upload with verbose
+    runs-on: ubuntu-latest
+    permissions:
+      # 跨 run 下载产物需要 actions:read 权限
+      actions: read
+
+    steps:
+      - name: Download wheel artifacts from previous run
+        if: inputs.mode == 'artifacts'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "wheels-*"
+          merge-multiple: true
+          path: dist/
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download sdist artifact from previous run (optional)
+        # sdist 可能不存在，失败不阻塞排障
+        if: inputs.mode == 'artifacts'
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist/
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build tiny probe wheel
+        # probe 模式：构造一个几百字节的合法 wheel，用从未使用过的预发布版本号上传，
+        # 用来验证"上传是否会被接受、接受后文件是否真的落在 PyPI 上"，
+        # 与产物体积、编译内容完全无关
+        if: inputs.mode == 'probe'
+        env:
+          PROBE_VERSION: ${{ inputs.probe_version }}
+        run: |
+          python - <<'PY'
+          import base64, hashlib, os, zipfile
+
+          version = os.environ["PROBE_VERSION"]
+          distinfo = f"aukeys_opscli-{version}.dist-info"
+          os.makedirs("dist", exist_ok=True)
+          whl = f"dist/aukeys_opscli-{version}-py3-none-any.whl"
+
+          files = {
+              f"{distinfo}/METADATA": (
+                  "Metadata-Version: 2.1\n"
+                  "Name: aukeys-opscli\n"
+                  f"Version: {version}\n"
+                  "Summary: upload probe\n"
+              ),
+              f"{distinfo}/WHEEL": (
+                  "Wheel-Version: 1.0\n"
+                  "Generator: probe 1.0\n"
+                  "Root-Is-Purelib: true\n"
+                  "Tag: py3-none-any\n"
+              ),
+          }
+          # RECORD 需要列出前面每个文件的 sha256 与长度，否则部分工具会判定 wheel 非法
+          record = []
+          for name, text in files.items():
+              raw = text.encode()
+              digest = base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).rstrip(b"=").decode()
+              record.append(f"{name},sha256={digest},{len(raw)}")
+          record.append(f"{distinfo}/RECORD,,")
+          files[f"{distinfo}/RECORD"] = "\n".join(record) + "\n"
+
+          with zipfile.ZipFile(whl, "w", zipfile.ZIP_DEFLATED) as zf:
+              for name, text in files.items():
+                  zf.writestr(name, text)
+          print(f"built {whl} ({os.path.getsize(whl)} bytes)")
+          PY
+
+      - name: List dist contents
+        run: ls -lh dist/
+
+      - name: Upload to PyPI (verbose)
+        run: |
+          pip install --quiet twine
+          twine upload dist/* --username __token__ --password "$PYPI_TOKEN" --skip-existing --verbose
+        env:
+          PYPI_TOKEN: ${{ secrets.PIPY_OPEN_OPSCLI }}

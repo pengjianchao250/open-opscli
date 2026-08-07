@@ -29,24 +29,41 @@ def test_dashboard_data_analysis_spec_reads_skill():
 
 
 def test_dashboard_ai_bridge_spec_returns_skill_rules():
-    """Bridge 规范工具应按固定顺序合并主流程和两份 reference。"""
+    """Bridge 规范工具应按固定顺序合并主流程和三份 reference。"""
     result = _run(dashboard_tools.dashboard_ai_bridge_spec_must_read())
 
     assert result["success"] is True
     assert result["error"] is None
     assert "# 仪表盘智能编辑" in result["data"]["spec"]
     assert "# Dashboard Operation Standards" in result["data"]["spec"]
+    assert "# Dashboard Dataset Guide" in result["data"]["spec"]
     assert "# Dashboard Tool Contract" in result["data"]["spec"]
-    assert "数据集和字段必须真实存在" in result["data"]["spec"]
-    assert "固定 12 列" in result["data"]["spec"]
-    assert "原子、幂等并可回滚" in result["data"]["spec"]
-    assert "`chart_id` 定向修改不能误改其他图表" in result["data"]["spec"]
+    assert "数据集和字段仅取本轮页面工具结果" in result["data"]["spec"]
+    assert "唯一完整等值时使用原值" in result["data"]["spec"]
+    assert "模型不计算坐标或宽度" in result["data"]["spec"]
+    assert "任一字段不合法时不得提交字段配置" in result["data"]["spec"]
+    assert "恰好 5 张是创建硬门禁" in result["data"]["spec"]
+    assert "用户指定的类型或标题必须纳入计划" in result["data"]["spec"]
+    assert "不得重复问题、无依据凑数、少建或多建" in result["data"]["spec"]
+    assert "普通新建都先用 `dashboard-dataset-guide.md` 按意图自动判断语义候选" in result["data"]["spec"]
+    assert "普通数据图表不得创建未配置图表" in result["data"]["spec"]
+    assert "本指南只生成语义候选" in result["data"]["spec"]
+    assert "即时综合数据集" in result["data"]["spec"]
+    assert "SKU仓租库龄明细" in result["data"]["spec"]
+    assert "`area_stacked`" in result["data"]["spec"]
+    assert "`combo_bar_line_group`" in result["data"]["spec"]
+    assert "场景组合模板" not in result["data"]["spec"]
+    assert "`chart_id` 定向修改不得误改其他图表" in result["data"]["spec"]
+    assert "dashboard_editor_batch_create_charts" in result["data"]["spec"]
+    assert "dashboard_editor_select_chart" in result["data"]["spec"]
+    assert "dashboard_drag_select_chart" not in result["data"]["spec"]
     assert "contract" not in result["data"]
     assert "contractSource" not in result["data"]
     assert Path(result["data"]["source"]).name == "SKILL.md"
     assert [Path(path).name for path in result["data"]["sources"]] == [
         "SKILL.md",
         "dashboard-operation-standards.md",
+        "dashboard-dataset-guide.md",
         "dashboard-tool-contract.md",
     ]
 

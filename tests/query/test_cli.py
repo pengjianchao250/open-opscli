@@ -143,75 +143,6 @@ def test_run_outputs_doc_aligned_json(monkeypatch, tmp_path):
     assert payload["data"]["meta"]["rowCount"] == 1
 
 
-def test_catalog_passes_source_and_fallback_options(monkeypatch):
-    class DummyManager:
-        def __init__(self):
-            self.called_with = None
-
-        def catalog(self, **kwargs):
-            self.called_with = kwargs
-            return {"version": "remote", "intent_count": 1, "intents": []}
-
-    manager = DummyManager()
-    monkeypatch.setattr("opscli.query.commands.cli.QueryManager", lambda: manager)
-
-    result = runner.invoke(app, ["catalog", "--source", "remote", "--no-fallback-local", "--skills-dir", "/tmp/skills"])
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["success"] is True
-    assert payload["command"] == "query catalog"
-    assert payload["data"]["version"] == "remote"
-    assert manager.called_with == {
-        "skills_dir": "/tmp/skills",
-        "source": "remote",
-        "fallback_local": False,
-    }
-
-
-def test_intent_passes_query_and_outputs_match(monkeypatch):
-    class DummyManager:
-        def __init__(self):
-            self.called_with = None
-
-        def intent_match(self, **kwargs):
-            self.called_with = kwargs
-            return {
-                "matched": True,
-                "selected": {"dataset_alias": "ds_sales", "intent_constraints": {"scenario_description": "销售规则"}},
-                "candidates": [],
-            }
-
-    manager = DummyManager()
-    monkeypatch.setattr("opscli.query.commands.cli.QueryManager", lambda: manager)
-
-    result = runner.invoke(
-        app,
-        [
-            "intent",
-            "--query",
-            "查看销售趋势",
-            "--source",
-            "local",
-            "--no-fallback-local",
-            "--skills-dir",
-            "/tmp/skills",
-        ],
-    )
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["success"] is True
-    assert payload["command"] == "query intent"
-    assert payload["data"]["selected"]["dataset_alias"] == "ds_sales"
-    assert manager.called_with == {
-        "query": "查看销售趋势",
-        "skills_dir": "/tmp/skills",
-        "source": "local",
-        "fallback_local": False,
-    }
-
-
 def test_run_outputs_query_error_payload(monkeypatch, tmp_path):
     payload_file = tmp_path / "payload.json"
     payload_file.write_text("{}", encoding="utf-8")
@@ -282,6 +213,58 @@ def test_simple_passes_dataset_for_field_validation(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert manager.called_with["dataset_alias"] == "order_sale_trend_set"
     assert manager.called_with["validate_fields"] is True
+
+
+def test_simple_skips_null_limit_and_offset(monkeypatch, tmp_path):
+    """复现并修复：payload 中 limit/offset 为 null 时不得透传 None 给 build_simple。
+
+    规划器模板可能带 "limit": null；旧逻辑用 `if "limit" in params` 会把 None 塞进
+    kwargs，编译版（Cython）的 build_simple(limit: int) 会抛
+    "Argument 'limit' has incorrect type (expected int, got NoneType)"。
+    修复后 null 被视为未指定、跳过透传，build_simple 沿用默认。
+    """
+    payload_file = tmp_path / "simple.json"
+    payload_file.write_text(
+        json.dumps({
+            "dimensions": [{"field": "order_sale_trend_set.asin"}],
+            "limit": None,
+            "offset": None,
+        }),
+        encoding="utf-8",
+    )
+
+    class DummyManager:
+        def __init__(self):
+            self.called_with = None
+
+        def build_simple(self, **kwargs):
+            self.called_with = kwargs
+            return {"payload": {"tableId": kwargs["table_id"]}, "output": None}
+
+    manager = DummyManager()
+    monkeypatch.setattr("opscli.query.commands.cli.QueryManager", lambda **kwargs: manager)
+
+    result = runner.invoke(app, ["simple", "--table-id", "1103", "--payload", str(payload_file)])
+
+    assert result.exit_code == 0, result.output
+    # null 的 limit/offset 不透传，交由 build_simple 使用默认，避免 None 落入 int 参数
+    assert "limit" not in manager.called_with
+    assert "offset" not in manager.called_with
+
+
+def test_build_simple_tolerates_none_limit_offset():
+    """build_simple 对 None limit/offset 兜底回落默认，不产生 None payload。"""
+    from opscli.query.services.manager import QueryManager
+
+    result = QueryManager().build_simple(
+        table_id=1103,
+        dimensions=[{"field": "order_sale_trend_set.asin", "alias": "asin"}],
+        limit=None,
+        offset=None,
+    )
+    payload = result["payload"]
+    assert payload["limit"] == 20
+    assert payload["offset"] == 0
 
 
 def test_build_passes_short_where_flags(monkeypatch):

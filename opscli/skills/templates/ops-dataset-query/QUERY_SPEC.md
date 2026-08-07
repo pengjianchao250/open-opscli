@@ -112,7 +112,7 @@ auth_me()                 # 可选：核验究竟以谁的账号取数，返回 
 |------|------|------|
 | `request` | string | **必填**，用户查询原文（自然语言，保留原始表述，不要自行改写成关键词） |
 | `requested_fields` | list[str] | 可选，用户点名的字段 |
-| `limit` | int | 仅 `query_flow`；不传沿用后端默认 **20** |
+| `limit` | int | 仅 `query_flow`；不传时先接受后端默认页，若 `totalCount` 更大则自动按总数补查一次（最多 5000 行） |
 | `order_by` | list[dict] | 仅 `query_flow`；形态 `[{"field": "<结果字段>", "desc": true}]` |
 | `offset` | int | 仅 `query_flow`；不传沿用后端默认 0 |
 | `top_n` | int | 仅 `query_plan`，选表候选上限 |
@@ -127,7 +127,9 @@ query_flow(request="查近30天各部门的销售额和订单量", limit=100,
 
 ### 4.2 返回合同与处置
 
-`query_flow` 返回 = 规划合同 + `result`（planned 时）+ `execution_notes`（按需）。按 `status` 分流：
+`query_flow` 返回 = 规划合同 + `result`（planned 时）+
+`result_disclosures`（返回行数、总数、截断与自动补齐状态）+
+`execution_notes`（按需）。按 `status` 分流：
 
 | status | 含义 | 处置 |
 |--------|------|------|
@@ -149,7 +151,17 @@ query_flow(request="查近30天各部门的销售额和订单量", limit=100,
 
 ### 4.3 结果被截断时
 
-结果元数据显示 `rowCount < totalCount` 说明只回了部分行。**传更大的 `limit` 重新调用 `query_flow` 即可取全**（后端 `limit` 无上限）。在拿到全量前，任何结论都必须声明"当前为前 N 行"。
+未显式传 `limit` 且服务端默认页少于 `totalCount` 时，`query_flow` 会按总数自动补查
+一次，最多 5000 行。以 `result_disclosures` 为准：
+
+- `row_count_returned`：最终实际返回行数；
+- `total_count`：服务端报告总数；
+- `truncated`：两者不等时为 `true`；
+- `auto_complete_applied`：本次是否执行过默认页补查。
+
+只有 `truncated=false` 才可把结果称为全量。总数超过 5000、显式分页或自动补查失败时，
+应通过正式分页能力继续取全；在拿到全量前必须声明“当前为前 N 行”，不得生成宣称全量的
+Excel。
 
 `execution_notes` 是按需披露的已知延后项，仅在本次真正用到相关能力时出现：
 
@@ -171,6 +183,22 @@ query_flow(request="查近30天各部门的销售额和订单量", limit=100,
 `model_view.time_scope_zh`、`time_resolution_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源。规划器按 Asia/Shanghai 当前日期用 Python `datetime` 计算，禁止自行心算、猜测年份或使用模型知识截止时间改写。
 
 相对时间被规划器唯一解析后，展示绝对日期即可直接执行，不再要求用户确认；只有 `is_default=true`（原文完全未给时间）才必须询问是否采用默认近 30 天。
+
+### 4.6 多数据集计算与 Excel
+
+两个及以上 `table_id`、跨表关联、派生计算或 Excel 交付必须拆成逐表正式查询，不能让
+一次单表 `query_flow` 代表整项任务：
+
+1. 每张快照表独立确定最新有效快照日；销售“当天”使用 Asia/Shanghai 执行当天。
+2. “超6月”是 181 天以上业务阈值，不是日历月份。
+3. `Amazon` 减去显式排除的 `Amazon VC` 后不得重新扩入 VC；人员等筛选只下推到
+   用户指定的数据表。
+4. 每表均须确认 `result_disclosures.truncated=false` 后再关联。
+5. 以库存/库龄商品全集为保留侧向销售做 LEFT JOIN；无销售记录补
+   `order_qty=0`，再把 `order_qty<=0` 标记为未售出。禁止改成
+   `order_qty>0` 的服务端筛选。
+6. 全量关联后才计算金额和库龄分段合计；缺失未税单价不得填 0，连接键、快照日、
+   九个 181 天以上分段及缺失情况必须写入 Excel 口径说明。
 
 ---
 
@@ -514,7 +542,7 @@ query_build_and_run(
 | "字段不存在" | 用 `global_alias` 当字段标识，或字段名靠猜/拼错 | 改用 `field_name`；**回到 `query_metadata` 重新核对，禁止换一个自己想的名字直接重试**；不确定字段归属时用 `include_all_fields=True` 定位。连续两次找不到即停止并如实说明 |
 | 指标数值异常放大 | 公式字段被套 `SUM` 二次聚合 | 改传 `expr`，不传 `aggregation` |
 | 库存数值膨胀数倍 | 快照指标跨日累加 | 取最新快照日，不做时间聚合 |
-| 结果只有 20 行 | 未传 `limit`，沿用后端默认 | `query_flow` / `query_simple` 传更大 `limit` 重查 |
+| 结果只有 20 行 | 未传 `limit` 且服务端先返回默认页 | `query_flow` 会自动补查；检查 `result_disclosures`，若仍 `truncated=true` 则继续正式分页取全 |
 | 结果恒 0 行 | 客户端重复注入了服务端默认条件 | 移除手工写入的 `filter_configs` 同名条件 |
 | 环比列缺失或差值恒 0 | 对比期与主周期重合，或数据集不支持 | 核对两个窗口是否真的不同；仍缺列时说明无法比较，必要时降级两次查询 |
 | 「无 session_id：请完成授权登录，或传入有效的 session_id」 | 只传了 `jwt` 没传 `session_id`，且本地也无凭证 | 补传 `session_id`（该类工具有硬校验） |
@@ -543,11 +571,12 @@ query_build_and_run(
 □ 时间：绝对起止日期是否已确定并将披露？近 N 天是否用 N-1 起算？"最近一个月/一周"是否已澄清
 □ 对比：用 data_comparison 时是否同时传了主周期 filters？对比期是否与主周期不同
 □ 快照：库存类指标是否取最新快照日，未做跨日累加
+□ 多表：是否逐表独立锁定快照/当天口径，并在每表 `truncated=false` 后才 LEFT JOIN
 □ 行数与排序：limit 是否足够？order_by 是否用了 desc 布尔值
 □ 歧义：字段/人员/组织/币种/库存口径是否存在 ≥2 个合理候选未澄清
 □ 参数命名：是否全部 snake_case
 □ 输出：列名是否使用 verbose_name 原文，未意译
-□ 截断：rowCount < totalCount 时是否已加大 limit 重查或明确披露
+□ 截断：是否核对 `result_disclosures`；`truncated=true` 时已正式分页取全或明确披露
 ```
 
 ---
