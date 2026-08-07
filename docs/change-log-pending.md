@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-08-07 MCP 共享数据沉淀 - 修复流式 XLSX 尾部空列解析
+
+**变更原因**：真实 Keepa 商品任务已经进入通用 MCP Outbox，但流式 XLSX 的数据行省略尾部空单元格，OpenPyXL 返回的行长度短于表头，导致正常任务被 `CollectionParseError` 永久标记失败且没有写入 MySQL。
+**改动点**：共享 XLSX Parser 对短于表头的数据行仅补齐尾部 `None`，仍拒绝超过表头的额外列；Keepa 与 SellerSprite Parser 合同版本分别升级到 `keepa-v2`、`seller-sprite-v2`。新增流式 Workbook 回归，覆盖尾部空列补齐和真实额外列拒绝。
+**验证结果**：真实 Keepa 任务重放成功解析主表及 5 个附加工作表，共 `8,381` 行；Parser/来源 Adapter 聚焦回归 `8 passed`，采集存储专项 `18 passed`，Keepa MCP/额度 `39 passed`。扩大组合回归 `128 passed, 1 failed`，失败为既有 Windows `file_lock` 目录基线；全量测试仍在收集阶段出现既有 27 项错误及 pytest 捕获流关闭问题。
+**影响范围**：通用 MCP 的 Keepa 与 Collector MCP 的 SellerSprite XLSX 数据沉淀；不改变采集、导出、MySQL schema、任务幂等键或 JSON Parser。已经处于 `failed` 的 Outbox 任务需在部署修复后显式重新入队。
+**回滚方式**：恢复共享 XLSX Parser 的严格等长判断并回退两个来源 Parser 版本；已经成功写入 MySQL 的记录可保留。
+
+---
+
 ## 2026-08-07 MCP 共享数据沉淀 - Keepa 成功数据写入 MySQL
 
 **变更原因**：Keepa 成功任务此前只保留本地 JSON/XLSX 和上传文件，未进入统一采集数据库；当前需要先使用仅内网可达的测试库验证，后续再切换为内外网可达的统一数据库。

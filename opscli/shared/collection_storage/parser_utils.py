@@ -306,8 +306,11 @@ def _iter_xlsx_records(
                 continue
             row_number += 1
             values = [_json_safe_value(value) for value in raw_row]
-            if len(values) != len(columns):
+            if len(values) > len(columns):
                 raise CollectionParseError(f"{source_name}格式化工作表的行列数量不一致")
+            # 流式 XLSX 不保存行尾空单元格，OpenPyXL 会返回短于表头的 tuple。
+            # 只补齐尾部空值；超出表头的真实额外列仍由上方拒绝。
+            values.extend([None] * (len(columns) - len(values)))
             yield _build_record(row_number, values, columns, business_key_fields)
     finally:
         workbook.close()

@@ -78,7 +78,7 @@ def test_seller_sprite_json_export_becomes_main_and_additional_datasets(tmp_path
 
     document = SellerSpriteCollectionParser().parse(submission)
 
-    assert document.parser_version == "seller-sprite-v1"
+    assert document.parser_version == "seller-sprite-v2"
     assert document.request_params == {
         "request": {"scenario": "keyword-comparison", "site": "US"},
         "resolved_params": {"asin": "B012345678"},

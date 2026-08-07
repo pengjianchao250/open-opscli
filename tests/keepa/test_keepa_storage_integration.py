@@ -80,7 +80,7 @@ def test_keepa_xlsx_result_becomes_common_collection_document(tmp_path):
 
     document = KeepaCollectionParser().parse(submission)
 
-    assert document.parser_version == "keepa-v1"
+    assert document.parser_version == "keepa-v2"
     assert document.request_params["normalized_params"] == {"asin": "B0088PUEPK"}
     assert [artifact.artifact_type for artifact in document.artifacts] == [
         "params",

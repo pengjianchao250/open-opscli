@@ -13,8 +13,8 @@ from opscli.shared.collection_storage.parser_utils import (
     xlsx_datasets,
 )
 
-# Parser 版本参与 Collection 幂等键；解析合同变化时必须递增。
-PARSER_VERSION = "keepa-v1"
+# Parser 版本写入 collection_runs，解析合同变化时递增以便追踪口径。
+PARSER_VERSION = "keepa-v2"
 # 按 Keepa 常用实体标识依次选择首个非空值作为跨批次业务键。
 _BUSINESS_KEY_FIELDS = ("asin", "sellerId", "categoryId")
 

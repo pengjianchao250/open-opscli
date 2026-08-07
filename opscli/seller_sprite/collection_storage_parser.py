@@ -16,7 +16,7 @@ from opscli.shared.collection_storage.parser_utils import (
 )
 
 # Parser 版本写入 collection_runs，便于未来格式升级后追踪解析口径。
-PARSER_VERSION = "seller-sprite-v1"
+PARSER_VERSION = "seller-sprite-v2"
 
 
 class SellerSpriteCollectionParser:
