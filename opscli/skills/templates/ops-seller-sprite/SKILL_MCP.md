@@ -50,7 +50,8 @@ description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sp
 7. 如果预算结束仍有 pending，保留全部未完成 `job_id`，告诉用户可说“继续”或“查结果”。未来用户只说 `继续` / `查结果` / `刚才那些好了没` 时，恢复完整 pending 集合；除非用户明确选择子集，否则不得只查最近一个 ID。
 8. pending 任务不得重新提交，不得再次调用 `seller_sprite_run` 查状态，也不得重新消耗额度。`run` 消耗额度；状态和导出不消耗额度。
 9. 普通任务终态为 `succeeded` 后，响应已有导出信息时直接展示；只需文件信息时调用 `seller_sprite_export(job_id)`。
-10. 用户单任务执行、主要用于人工查看或留档结果时，推荐显式传 `export_format="xls"`；一次运行多个任务、需要继续汇总计算或生成分析报告时，推荐显式传 `export_format="json"`。用户明确指定格式时遵从用户选择；未显式传参时继续兼容 Tool 的既有默认值。
+10. 用户单任务执行、主要用于人工查看或留档结果时，推荐显式传 `export_format="xls"`；一次运行多个任务、需要继续汇总计算或生成分析报告时，每个任务都显式传 `export_format="json"`，终态后保留 `job_id` 和工作表来源再统一分析。用户明确指定格式时遵从用户选择；未显式传参时继续兼容 Tool 的既有默认值。
+11. 需要由 Agent 直接读取、汇总或生成分析报告时，优先显式传 `export_format="json"`。
 
 ### 认证与运行环境
 
@@ -108,6 +109,7 @@ Listing Analysis 必须使用 submit/status/result 专用流程，不属于普�
 - 按 `columns[index]` 解释每个 `rows[*][index]`，不要将行数组转换前误当作对象；使用数组是为了保留 XLSX 中可能重复的表头。
 - `number_formats[index]` 是同列 XLSX 使用的 Excel 数字格式（如 `0.00%`）；值保持可计算的数字类型，`null` 表示使用自动格式。
 - `sheet_name` 是主表名称；`additional_sheets` 是辅助表列表，每项包含 `name`、`columns`、`number_formats`、`row_count` 和 `rows`，行也按该项的 `columns` 下标对齐。
+- `sheet_name/additional_sheets` 表示 XLSX 工作表，不是接口分页；多任务合并时保留 `job_id + 工作表名` 来源，按列名对齐后再聚合，并遍历全部辅助表。
 - `traffic-extend` 返回 `Unique Words`、`Asin`，`keyword-miner` 可返回 `Unique Words`，`keyword-comparison` 返回 `ASIN`；其他场景通常为 `additional_sheets=[]`。
 - `aba-reverse` 等官方文件导出场景仍只支持 `xls` / `xlsx` 并原样返回官网工作簿，不适用 JSON v2。
 

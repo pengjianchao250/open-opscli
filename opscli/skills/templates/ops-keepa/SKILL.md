@@ -25,10 +25,29 @@ description: Use when the user asks to query or export Keepa data through the pu
 
 ## 导出格式选择
 
-- 用户只执行一个 Keepa 任务，且主要目的是人工查看、下载或留档结果时，推荐显式使用 `--export-format xls`；`xls/xlsx` 最终都会生成用户可读的 `.xlsx`。
-- 一次运行多个任务、需要由 Skill/Agent 汇总计算，或要继续生成分析报告时，推荐显式使用 `--export-format json`。JSON 与格式化后的 XLSX 共用表头、字段转换、列顺序和附加 Sheet 数据。
-- JSON 使用 `sheets.Sheet1`、`sheets.Sheet2` 等顺序页模拟 XLSX 工作表；每页包含 `name`、`columns`、`row_count` 和 `rows`。按 `columns[index]` 解释 `rows[*][index]`。
-- 用户明确指定格式时遵从用户选择；不要把内部 `raw.json`、`result.json` 或服务端路径作为用户导出文件返回。
+| 任务目的 | 推荐格式 | 执行规则 |
+| --- | --- | --- |
+| 单个任务，用户要打开、下载或留档 | `xls` | 显式传 `--export-format xls`；最终文件为 `.xlsx` |
+| 多个任务，Skill/Agent 要汇总、计算或生成报告 | `json` | 每个任务显式传 `--export-format json`，完成后再合并分析 |
+| 用户明确指定格式 | 用户指定格式 | 不用默认推荐覆盖用户选择 |
+
+JSON 与格式化后的 XLSX 共用表头、字段转换、列顺序和附加 Sheet 数据。读取时：
+
+1. 校验 `schema_version="1.0"`，再按 `sheets` 中 `Sheet1`、`Sheet2` 的顺序读取。
+2. 把每个 `SheetN` 当作一个 XLSX 工作表，不要把它误解为 Keepa API 的分页；真实表名读取 `name`。
+3. 按 `columns[index]` 解释 `rows[*][index]`，不要先把行数组猜成对象；`row_count` 用于校验实际行数。
+4. 多任务分析时保留 `job_id + SheetN + name` 的来源关系，合并前按列名对齐；不要只读取 `Sheet1` 而遗漏价格历史、Offer、变体或 search insights 等附加表。
+5. 不要把内部 `raw.json`、`result.json` 或服务端路径作为用户导出文件返回；原始字段核对仍以内部 `raw.json` 为准。
+
+示例：
+
+```powershell
+# 单任务给用户查看
+opscli keepa run product --site US --params '{"asin":"B0088PUEPK"}' --export-format xls
+
+# 多任务或后续分析报告
+opscli keepa run product-search --site US --params '{"keyword":"flashlight"}' --export-format json
+```
 
 ## 链路区分
 
@@ -154,5 +173,5 @@ opscli keepa run bestsellers --site US --params '{"category":"172282"}'
 - `keepa_scenarios`、`keepa_quota_status`、`keepa_job_status`、`keepa_export` 不消耗额度；只有 `keepa_run` 消耗次数。
 - `job_status` 和 `export` 默认不重复提示额度，避免轮询阶段重复刷屏。
 - 如果 `row_count=0`，明确告诉用户无匹配结果，并提醒核对站点、ASIN、关键词或筛选条件
-- 用户问“字段准不准”时，只说明 XLSX 是在 Keepa 原始响应基础上做中文表头和可读化处理；口径以 Keepa 原始响应和官方文档为准
+- 用户问“字段准不准”时，说明 XLSX/JSON 都是在 Keepa 原始响应基础上做同源中文表头和可读化处理；口径以 Keepa 原始响应和官方文档为准
 - 不要主动打印 Keepa token 消耗、token 余额、服务器本地路径或内部原始 JSON

@@ -27,10 +27,20 @@ visibility: internal
 
 ## 导出格式选择
 
-- 用户单任务执行、主要用于人工查看或留档结果时，推荐 `export_format="xls"`；实际交付文件为 `.xlsx`。
-- 一次运行多个任务、需要继续汇总计算或生成分析报告时，推荐 `export_format="json"`。JSON 与格式化后的 XLSX 共用表头、字段转换、列顺序和附加 Sheet 数据。
-- JSON 使用 `sheets.Sheet1`、`sheets.Sheet2` 等顺序页模拟 XLSX 工作表；每页包含 `name`、`columns`、`row_count` 和 `rows`。按 `columns[index]` 解释 `rows[*][index]`。
-- 用户明确指定格式时遵从用户选择；不得把内部 `raw.json`、`result.json` 或服务端路径当作用户导出文件返回。
+| 任务目的 | `export_format` | 处理方式 |
+| --- | --- | --- |
+| 单任务人工查看/留档 | `xls` | 实际交付 `.xlsx` |
+| 多任务编排/汇总/分析报告 | `json` | 每个任务都显式传 JSON，终态后统一读取 |
+| 用户明确指定格式 | 用户指定值 | 不覆盖用户选择 |
+
+### JSON v1 工作表契约
+
+- 校验 `schema_version="1.0"`；按 `sheets.Sheet1`、`Sheet2` 的顺序读取，每个 `SheetN` 对应一个 XLSX 工作表，不表示 Keepa API 页码。
+- 每页读取 `name`、`columns`、`row_count`、`rows`；真实工作表名称以 `name` 为准。
+- 按 `columns[index]` 解释 `rows[*][index]`，不要把行数组直接当对象；用 `row_count` 校验行数。
+- 多任务合并时保留 `job_id/SheetN/name` 来源，先按列名对齐再聚合；必须遍历全部 Sheet，不能只消费主表。
+- JSON 与 XLSX 共用格式化工作表数据，但 JSON 不等于 Keepa 原始响应；后端核对仍使用内部 `raw.json`。
+- 不得把内部 `raw.json`、`result.json` 或服务端路径当作用户导出文件返回。
 
 ## 工具列表
 
@@ -91,7 +101,7 @@ XLSX 中文表头不是 Keepa 官方提供的，是本地导出层按场景映�
 - Best Sellers 默认主表输出带 `bestSellerRank` 的 ASIN 明细，并追加 `best_sellers_list` 汇总 sheet。
 - Deals 默认派生图片、Keepa 时间、Warehouse 成色、Lightning 标记、常用 current 指标，并追加 `deal_metrics` 指标展开 sheet。
 
-`raw.json` 保留 Keepa 原始字段，后端对比以 `raw.json` 为准；XLSX 用于用户查看。
+`raw.json` 保留 Keepa 原始字段，后端对比以 `raw.json` 为准；XLSX 用于用户查看，格式化 JSON 用于多任务编排和分析报告。
 
 ## 字段口径与时间处理
 

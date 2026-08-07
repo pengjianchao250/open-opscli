@@ -163,9 +163,14 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 
 ### 导出格式选择
 
-- 用户只执行一个任务，且主要目的是人工查看、下载或留档结果时，推荐显式使用 `export_format="xls"`；工具实际可能返回 `.xlsx`，最终以返回的文件名和格式为准。
-- 一次运行多个任务、需要由 Skill/Agent 继续汇总计算，或要生成分析报告时，推荐显式使用 `export_format="json"`，减少重复解析工作簿并保留结构化数据。
-- 用户明确指定格式时遵从用户选择；场景只支持官方工作簿时（如 `aba-reverse`），仍使用 `xls` / `xlsx`，不要强制改为 JSON。
+| 任务目的 | 推荐格式 | 执行规则 |
+| --- | --- | --- |
+| 单个任务，用户要打开、下载或留档 | `xls` | 显式传 `export_format="xls"`，最终以工具返回的真实扩展名为准 |
+| 多个任务，Skill/Agent 要汇总、计算或生成报告 | `json` | 每个任务显式传 `export_format="json"`，终态后再统一分析 |
+| 用户明确指定格式 | 用户指定格式 | 不用默认推荐覆盖用户选择 |
+
+多任务处理时保留 `job_id + sheet_name/additional_sheets.name` 的来源关系，先按列名对齐再聚合，不要只读取主表。场景只支持官方工作簿时（如 `aba-reverse`），仍使用 `xls` / `xlsx`，不要强制改为 JSON。
+需要由 Skill/Agent 直接读取、汇总或生成分析报告时，优先显式传 `export_format="json"`。
 
 ### JSON 导出读取规则
 
@@ -173,6 +178,7 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - 按 `columns[index]` 解释每个 `rows[*][index]`，不要把行数组当作对象；该结构用于保留 XLSX 中可能重复的表头。
 - `number_formats[index]` 是同列 XLSX 使用的 Excel 数字格式（如 `0.00%`）；值保持可计算的数字类型，`null` 表示使用自动格式。
 - 主表名称读取 `sheet_name`；多 Sheet 场景继续读取 `additional_sheets` 中每项的 `name/columns/rows`，每个辅助表同样按列下标对齐。没有辅助表时 `additional_sheets=[]`。
+- `sheet_name/additional_sheets` 表示工作表，不是接口分页；不要把“第一页 100 条”的场景限制与 JSON 多 Sheet 结构混为一谈。
 - `traffic-extend` 的辅助表为 `Unique Words` 和 `Asin`，`keyword-miner` 可包含 `Unique Words`，`keyword-comparison` 包含 `ASIN`。
 - `aba-reverse` 等官方文件导出场景仍只支持 `xls` / `xlsx`，返回官网原始工作簿，不适用 JSON v2。
 
