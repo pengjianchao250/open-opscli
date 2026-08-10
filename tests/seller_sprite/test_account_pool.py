@@ -14,7 +14,7 @@ def _accounts(count: int, *, password_suffix: str = "") -> list[SellerSpriteAcco
     ]
 
 
-def test_account_pool_reserves_one_account_and_caps_workers_at_three():
+def test_account_pool_reserves_one_account_and_caps_workers_at_five():
     from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool
 
     expected = {
@@ -23,8 +23,9 @@ def test_account_pool_reserves_one_account_and_caps_workers_at_three():
         2: (1, 1),
         3: (2, 1),
         4: (3, 1),
-        5: (3, 2),
-        6: (3, 3),
+        5: (4, 1),
+        6: (5, 1),
+        7: (5, 2),
     }
 
     for count, (working_count, standby_count) in expected.items():
@@ -42,19 +43,21 @@ def test_account_pool_promotes_cold_standby_after_working_account_fails():
     from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool
 
     pool = SellerSpriteAccountPool()
-    accounts = _accounts(5)
+    accounts = _accounts(7)
     pool.load(accounts)
 
     pool.mark_unavailable(accounts[0])
     replacement = pool.take_standby(attempted_accounts=set())
 
-    assert replacement == accounts[3]
+    assert replacement == accounts[5]
     assert [account.name for account in pool.working_accounts] == [
         "account-2",
         "account-3",
         "account-4",
+        "account-5",
+        "account-6",
     ]
-    assert pool.standby_accounts == (accounts[4],)
+    assert pool.standby_accounts == (accounts[6],)
 
 
 def test_account_pool_keeps_same_failed_credentials_unavailable_until_password_changes():
@@ -201,7 +204,7 @@ def test_account_pool_defers_busy_healthy_account_without_duplication():
     from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool
 
     pool = SellerSpriteAccountPool()
-    accounts = _accounts(6)
+    accounts = _accounts(8)
     pool.load(accounts)
     pool.mark_unavailable(accounts[0])
     replacement = pool.take_standby(attempted_accounts=set())
@@ -213,4 +216,4 @@ def test_account_pool_defers_busy_healthy_account_without_duplication():
     assert replacement not in working
     assert pool.standby_accounts.count(replacement) == 1
     assert not working.intersection(pool.standby_accounts)
-    assert pool.standby_accounts == (accounts[3], accounts[4], accounts[5])
+    assert pool.standby_accounts == (accounts[5], accounts[6], accounts[7])

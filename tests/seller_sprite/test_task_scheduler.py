@@ -838,14 +838,14 @@ def test_scheduler_binds_listing_analysis_to_default_account(tmp_path: Path):
     asyncio.run(scenario())
 
 
-def test_scheduler_runs_three_accounts_in_parallel_and_keeps_remaining_as_standby(tmp_path: Path):
+def test_scheduler_runs_five_accounts_in_parallel_and_keeps_remaining_as_standby(tmp_path: Path):
     async def scenario():
         from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
 
         settings = SellerSpriteSettings(output_dir=tmp_path)
         store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
-        provider = MultiAccountProvider(5)
-        harness = ParallelRunHarness(expected_started=3)
+        provider = MultiAccountProvider(7)
+        harness = ParallelRunHarness(expected_started=5)
         scheduler = SellerSpriteTaskScheduler(
             store=store,
             settings=settings,
@@ -853,25 +853,27 @@ def test_scheduler_runs_three_accounts_in_parallel_and_keeps_remaining_as_standb
             manager_factory=harness.manager_factory,
             auto_start=False,
         )
-        for index in range(1, 5):
+        for index in range(1, 7):
             await scheduler.enqueue(_request(f"parallel-{index}", f"B0PARALLEL{index}"))
 
         await scheduler.start()
         await asyncio.wait_for(harness.all_started.wait(), timeout=1)
 
-        running_statuses = [scheduler.job_status(f"parallel-{index}") for index in range(1, 4)]
+        running_statuses = [scheduler.job_status(f"parallel-{index}") for index in range(1, 6)]
         assert {status["state"] for status in running_statuses} == {"running"}
         assert {status["assigned_account"] for status in running_statuses} == {
             "account-1",
             "account-2",
             "account-3",
+            "account-4",
+            "account-5",
         }
-        assert scheduler.job_status("parallel-4")["state"] == "queued"
-        assert scheduler.generic_worker_count == 3
+        assert scheduler.job_status("parallel-6")["state"] == "queued"
+        assert scheduler.generic_worker_count == 5
         assert scheduler.standby_account_count == 2
 
         harness.allow_finish.set()
-        for index in range(1, 5):
+        for index in range(1, 7):
             await _wait_for_state(scheduler, f"parallel-{index}", "succeeded")
         await scheduler.close()
 
@@ -1371,7 +1373,7 @@ def test_scheduler_retires_excess_idle_workers_after_account_refresh(tmp_path: P
         )
 
         await scheduler.start()
-        assert scheduler.generic_worker_count == 3
+        assert scheduler.generic_worker_count == 4
         provider.accounts = provider.accounts[:3]
         await asyncio.sleep(1.15)
 

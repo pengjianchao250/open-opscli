@@ -9,8 +9,8 @@ from typing import Protocol
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.domain.constants import ACCOUNT_FAILURE_REASON_AUTHENTICATION
 
-# 并发上限固定为3，避免账号接口返回过多账号时无界创建浏览器会话。
-DEFAULT_MAX_WORKING_ACCOUNTS = 3
+# 按 Collect MCP 当前容量规划最多启用5个账号工作槽，避免账号过多时无界创建浏览器会话。
+DEFAULT_MAX_WORKING_ACCOUNTS = 5
 # 明确认证失败后隔离 24 小时，既阻断重启重试风暴，也允许临时误判自动恢复。
 DEFAULT_ACCOUNT_QUARANTINE_TTL_SECONDS = 86400
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ def mask_seller_sprite_username(username: str) -> str:
 
 
 class SellerSpriteAccountPool:
-    """按接口顺序管理最多三个工作账号和冷备用账号。"""
+    """按接口顺序管理最多五个工作账号和冷备用账号。"""
 
     def __init__(
         self,

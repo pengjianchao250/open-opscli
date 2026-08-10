@@ -10,6 +10,25 @@
 
 ---
 
+## 2026-08-10 seller-sprite - Collect MCP 默认并发上限提升至5
+
+**变更原因**：Collect MCP 的卖家精灵采集需要把默认最大并发从3提升到5，同时继续限制浏览器会话数量并保留冷备用账号。
+
+**改动点**：
+- `account_pool.py`：默认最大工作账号数由3调整为5，并同步容量规划注释和类说明。
+- `test_account_pool.py`：更新账号池容量、故障接替和备用账号归还的边界测试。
+- `test_task_scheduler.py`：验证5条任务可并行执行、第6条任务保持排队，并更新账号刷新后的工作槽预期。
+
+**验证结果**：
+- `python -m pytest -q tests/seller_sprite/test_account_pool.py tests/seller_sprite/test_task_scheduler.py`：54 passed。
+- 卖家精灵、Collector MCP 和 Collector Monitor 相关套件执行到617项时为613 passed、4 failed；其中1项旧并发断言已修正并单独通过，另外3项为既有导出文件名和 debug CLI 失败。
+- 全量测试使用 `--import-mode=importlib` 收集到1055项后，被既有的 `_shopify_manager` 导入错误阻断，未进入完整执行。
+
+**影响范围**：Collect MCP 单 Worker 内卖家精灵共享账号池和专属账号绑定任务的默认最大工作槽均提升至5；单账号串行、账号互斥和冷备用规则不变。
+
+**回滚方式**：回退本条记录对应的默认并发常量及账号池、调度器测试改动。
+---
+
 ## 2026-08-07 MCP 共享数据沉淀 - 修复流式 XLSX 尾部空列解析
 
 **变更原因**：真实 Keepa 商品任务已经进入通用 MCP Outbox，但流式 XLSX 的数据行省略尾部空单元格，OpenPyXL 返回的行长度短于表头，导致正常任务被 `CollectionParseError` 永久标记失败且没有写入 MySQL。
