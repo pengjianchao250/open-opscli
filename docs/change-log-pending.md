@@ -6551,3 +6551,19 @@ tests/skills/test_dataset_query_flow.py`
 
 **回滚方式**：`git revert f3fdddba`（若提交已重写，以最终提交 SHA 为准）。
 ---
+
+## 2026-08-10 ops-feedback-query - 固化周期报告生成契约
+
+**变更原因**：新版周报结构已由 Python 实现，但 Skill 尚未明确 Agent 与脚本的职责边界，后续执行可能再次出现手工累计、改写指标或正文长表退化。
+
+**改动点**：
+- `ops-feedback-query/SKILL.md`：明确周期报告必须由 Python 生成，固定管理结论优先的章节、折叠附录、风险排序和不完整对比期处理规则。
+- 明确未来若引入 Codex 叙事，必须采用“Python 事实包 → Codex 叙事 → Python 校验发布”的两阶段边界。
+- `test_ops_feedback_periodic_report.py`：增加 Skill 契约断言，锁定指标归属、正文结构和 AI 禁止自行计算等关键规则。
+
+**验证结果**：`pytest tests/skills/test_ops_feedback_periodic_report.py tests/skills/test_ops_feedback_report_server.py -q` → 24 passed；以 UTF-8 模式运行 `skill-creator/scripts/quick_validate.py` → `Skill is valid!`。
+
+**影响范围**：仅补强 ops-feedback-query 的 Agent 执行契约和文档测试，不改变现有指标或报告产物。
+
+**回滚方式**：回退本条记录对应的 SKILL.md 和测试改动。
+---

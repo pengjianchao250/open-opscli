@@ -11,6 +11,7 @@ from types import ModuleType
 SCRIPT_PATH = Path(
     "opscli/skills/templates/ops-feedback-query/scripts/periodic_feedback_report.py"
 )
+SKILL_PATH = Path("opscli/skills/templates/ops-feedback-query/SKILL.md")
 
 
 def _load_script() -> ModuleType:
@@ -276,3 +277,15 @@ def test_unknown_status_is_not_counted_as_triaged():
     assert result["disposition"]["triage_rate"] == 0.0
     assert result["disposition"]["unknown"] == 1
     assert result["disposition"]["status_coverage_rate"] == 50.0
+
+
+def test_skill_keeps_periodic_metrics_and_report_structure_deterministic():
+    """Skill 应把周期指标、管理结构和发布职责固定在 Python 脚本。"""
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+
+    assert "不得由 Agent 手工累计日报、改写指标" in skill
+    assert "脚本是时间窗口、快照选择、指标计算、风险排序、报告结构和发布路径的" in skill
+    assert "范围与口径、管理摘要、重点模块、根因分布、重复问题" in skill
+    assert "对比期覆盖" in skill
+    assert "不完整时必须明确提示并停止计算环比" in skill
+    assert "AI 不得自行" in skill
