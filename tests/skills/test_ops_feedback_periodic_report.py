@@ -184,6 +184,18 @@ def test_weekly_report_aggregates_snapshots_and_disposition_metrics(
     ]
     assert "# 反馈周报（2026-07-14 至 2026-07-20）" in markdown
     assert "日报快照口径" in markdown
+    assert "## 二、管理摘要" in markdown
+    assert "## 三、重点模块" in markdown
+    assert "## 四、根因分布" in markdown
+    assert "## 五、重复问题证据" in markdown
+    assert "## 六、重点风险" in markdown
+    assert "## 七、治理工作建议" in markdown
+    assert "## 八、周期对比" in markdown
+    assert "## 附录：结构化明细" in markdown
+    assert "<details>" in markdown
+    assert "对比期数据覆盖仅 2/7 天" in markdown
+    assert "query-field_not_found：3 次，活跃 2 天" in markdown
+    assert "按确定性优先级和发生次数排序" in markdown
     assert Path(output["manifest"]).exists()
 
 

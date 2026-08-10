@@ -430,84 +430,163 @@ def render_markdown(metrics: dict[str, Any]) -> str:
     report_type = metrics["report_type"]
     title = "反馈周报" if report_type == "weekly" else "反馈月报"
     base = metrics["base_metrics"]
+    previous = metrics["comparison_base_metrics"]
     disposition = metrics["disposition"]
     lifecycle = metrics["problem_lifecycle"]
+    problems = metrics["problems"]
+    modules = metrics["modules"]
+    current_problem_count = int(base.get("problem_feedback_count") or 0)
+    previous_problem_count = int(previous.get("problem_feedback_count") or 0)
+    comparison = metrics["comparison_coverage"]
+    comparison_complete = comparison["actual_days"] == comparison["expected_days"]
+    if previous_problem_count and comparison_complete:
+        change = (current_problem_count - previous_problem_count) / previous_problem_count * 100
+        comparison_text = f"问题反馈较上一周期变化 {change:+.1f}%。"
+    elif comparison_complete:
+        comparison_text = "上一周期没有问题反馈，暂不计算变化率。"
+    else:
+        comparison_text = (
+            f"对比期数据覆盖仅 {comparison['actual_days']}/{comparison['expected_days']} 天，"
+            "不计算环比，避免用不完整基线误导判断。"
+        )
+
+    top_modules = modules[:7]
+    all_risk_problems = [item for item in problems if item["priority"] in {"P0", "P1"}]
+    risk_problems = all_risk_problems[:5]
+    governance_problems = problems[:4]
+    top_module_names = "、".join(item["module"] for item in top_modules[:3]) or "无"
+    category_counts: dict[str, int] = defaultdict(int)
+    for problem in problems:
+        category_counts[problem["problem_category"]] += problem["occurrence_count"]
+    top_categories = sorted(category_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
+    recurring_problems = sorted(
+        (item for item in problems if item["active_days"] > 1),
+        key=lambda item: (-item["active_days"], -item["occurrence_count"], item["module"]),
+    )[:5]
     lines = [
         f"# {title}（{period['date_from']} 至 {period['date_to']}）",
         "",
         f"> 数据覆盖：{metrics['coverage']['actual_days']}/{metrics['coverage']['expected_days']} 天；所有处置指标均为日报快照口径。",
         "",
-        "## 一、执行摘要",
+        "## 一、范围与口径",
         "",
-        "| 指标 | 本期 |",
-        "|---|---:|",
-        f"| 反馈数 | {int(base.get('feedback_count') or 0)} |",
-        f"| 问题反馈数 | {int(base.get('problem_feedback_count') or 0)} |",
-        f"| 失败调用数 | {int(base.get('failed_call_count') or 0)} |",
-        f"| 问题簇数 | {len(metrics['problems'])} |",
+        f"- 全部反馈：{int(base.get('feedback_count') or 0)} 条。",
+        f"- 纳入分析的问题反馈：{current_problem_count} 条。",
+        f"- 失败调用累计：{int(base.get('failed_call_count') or 0)} 次。",
+        f"- 识别问题簇：{len(problems)} 个，其中多日复发 {lifecycle['recurring']} 个。",
+        f"- 当前周期数据覆盖：{metrics['coverage']['actual_days']}/{metrics['coverage']['expected_days']} 天；对比周期：{comparison['actual_days']}/{comparison['expected_days']} 天。",
         "",
-        "## 二、处置快照",
+        "## 二、管理摘要",
         "",
-        "| new | triaged | processing | resolved | rejected | unknown | 状态覆盖率 | 分诊率 | 解决率 |",
-        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
-        "| {new} | {triaged} | {processing} | {resolved} | {rejected} | {unknown} | {status_coverage_rate}% | {triage_rate}% | {resolution_rate}% |".format(
-            **disposition
-        ),
+        f"本期问题主要集中在 {top_module_names}。正文优先呈现高频模块、主要根因和跨多日重复问题，便于把零散反馈归并为可执行的治理工作。",
         "",
-        "## 三、问题变化",
+        f"当前共有 {len(all_risk_problems)} 个 P0/P1 问题，正文列出影响最高的 {len(risk_problems)} 个；处置状态仍以 new 为主（{disposition['new']} 条），分诊率 {disposition['triage_rate']}%、解决率 {disposition['resolution_rate']}%。这些比例是日报快照汇总，不代表 SLA。",
         "",
-        "| 新增 | 持续 | 本期未再出现 | 多日复发 |",
-        "|---:|---:|---:|---:|",
-        f"| {lifecycle['new']} | {lifecycle['persistent']} | {lifecycle['not_seen_again']} | {lifecycle['recurring']} |",
+        "## 三、重点模块",
         "",
-        "## 四、高频问题",
-        "",
-        "| 优先级 | 模块 | 问题 | 次数 | 活跃天数 | 影响用户日 | 首次 | 最后 | 建议 |",
-        "|---|---|---|---:|---:|---:|---|---|---|",
+        "| 模块 | 问题次数 | 代表问题 | 管理关注点 |",
+        "|---|---:|---|---|",
     ]
-    if metrics["problems"]:
-        for problem in metrics["problems"][:20]:
+    if top_modules:
+        for module in top_modules:
+            representative = next(item for item in problems if item["module"] == module["module"])
             lines.append(
-                "| {priority} | {module} | {summary} | {count} | {days} | {users} | {first} | {last} | {work} |".format(
-                    priority=problem["priority"],
-                    module=problem["module"],
-                    summary=problem["problem_summary"],
-                    count=problem["occurrence_count"],
-                    days=problem["active_days"],
-                    users=problem["affected_user_days"],
-                    first=problem["first_seen"],
-                    last=problem["last_seen"],
-                    work=problem["recommended_work"],
+                "| {module} | {count} | {summary} | {work} |".format(
+                    module=module["module"], count=module["occurrence_count"],
+                    summary=representative["problem_summary"], work=representative["recommended_work"],
                 )
             )
     else:
-        lines.append("| - | - | 本期没有可聚合的问题簇 | 0 | 0 | 0 | - | - | - |")
+        lines.append("| - | 0 | 本期没有可聚合的问题簇 | - |")
     lines.extend(
         [
             "",
-            "## 五、模块分布",
+            "## 四、根因分布",
             "",
-            "| 模块 | 问题发生次数 |",
-            "|---|---:|",
+            "| 根因类别 | 次数 | 占问题发生次数 |",
+            "|---|---:|---:|",
         ]
     )
-    lines.extend(
-        f"| {item['module']} | {item['occurrence_count']} |" for item in metrics["modules"]
-    )
-    if not metrics["modules"]:
-        lines.append("| - | 0 |")
+    total_occurrences = sum(item["occurrence_count"] for item in problems)
+    for category, count in top_categories:
+        share = round(count * 100 / total_occurrences, 1) if total_occurrences else 0.0
+        lines.append(f"| {category} | {count} | {share}% |")
+    if not top_categories:
+        lines.append("| - | 0 | 0.0% |")
+    lines.extend(["", "## 五、重复问题证据", ""])
+    for index, problem in enumerate(recurring_problems, start=1):
+        lines.append(
+            f"{index}. `{problem['module']}` {problem['problem_summary']}：{problem['occurrence_count']} 次，活跃 {problem['active_days']} 天，影响 {problem['affected_user_days']} 用户日，优先级 {problem['priority']}。"
+        )
+    if not recurring_problems:
+        lines.append("本期没有跨多个日报重复出现的问题簇。")
     lines.extend(
         [
             "",
-            "## 六、口径说明",
+            "## 六、重点风险",
             "",
-            "- 周报使用完整七天，月报使用自然月；对比期为紧邻的上一等价周期。",
+            f"> 正文列出前 {len(risk_problems)} 个风险，按确定性优先级和发生次数排序。",
+            "",
+            "| 优先级 | 模块 | 风险 | 次数 | 活跃天数 | 影响用户日 |",
+            "|---|---|---|---:|---:|---:|",
+        ]
+    )
+    for problem in risk_problems:
+        lines.append(
+            f"| {problem['priority']} | {problem['module']} | {problem['problem_summary']} | {problem['occurrence_count']} | {problem['active_days']} | {problem['affected_user_days']} |"
+        )
+    if not risk_problems:
+        lines.append("| - | - | 本期没有 P0/P1 风险主题 | 0 | 0 | 0 |")
+    lines.extend(["", "## 七、治理工作建议", ""])
+    for index, problem in enumerate(governance_problems, start=1):
+        lines.extend(
+            [
+                f"### {index}. {problem['module']}：{problem['problem_category']}",
+                "",
+                f"{problem['problem_summary']} 本期出现 {problem['occurrence_count']} 次，活跃 {problem['active_days']} 天，累计影响 {problem['affected_user_days']} 用户日。",
+                "",
+                f"建议：{problem['recommended_work']}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## 八、周期对比",
+            "",
+            "| 周期 | 问题反馈 | 失败调用 | 数据覆盖 |",
+            "|---|---:|---:|---:|",
+            f"| {period['date_from']} 至 {period['date_to']} | {current_problem_count} | {int(base.get('failed_call_count') or 0)} | {metrics['coverage']['actual_days']}/{metrics['coverage']['expected_days']} 天 |",
+            f"| {metrics['comparison_period']['date_from']} 至 {metrics['comparison_period']['date_to']} | {previous_problem_count} | {int(previous.get('failed_call_count') or 0)} | {comparison['actual_days']}/{comparison['expected_days']} 天 |",
+            "",
+            comparison_text,
+            "",
+            "## 九、局限与后续",
+            "",
             "- 处置率来自日报生成时的反馈状态快照；没有状态事件时不计算 SLA、MTTA 或 MTTR。",
             "- 影响用户日是各日报受影响用户数之和，不等同于跨周期去重用户数。",
             "- “本期未再出现”不等同于已解决，只表示对比期出现的问题簇在本期快照中未出现。",
             "",
+            "## 附录：结构化明细",
+            "",
+            "<details>",
+            f"<summary>查看全部问题簇（{len(problems)} 个）</summary>",
+            "",
+            "| 优先级 | 模块 | 问题 | 次数 | 活跃天数 | 影响用户日 | 建议 |",
+            "|---|---|---|---:|---:|---:|---|",
         ]
     )
+    for problem in problems:
+        lines.append(
+            f"| {problem['priority']} | {problem['module']} | {problem['problem_summary']} | {problem['occurrence_count']} | {problem['active_days']} | {problem['affected_user_days']} | {problem['recommended_work']} |"
+        )
+    if not problems:
+        lines.append("| - | - | 本期没有可聚合的问题簇 | 0 | 0 | 0 | - |")
+    lines.extend(["", "</details>", "", "<details>", "<summary>查看处置快照与全部模块分布</summary>", "", "| new | triaged | processing | resolved | rejected | unknown | 状态覆盖率 | 分诊率 | 解决率 |", "|---:|---:|---:|---:|---:|---:|---:|---:|---:|", "| {new} | {triaged} | {processing} | {resolved} | {rejected} | {unknown} | {status_coverage_rate}% | {triage_rate}% | {resolution_rate}% |".format(**disposition), "", "| 模块 | 问题发生次数 |", "|---|---:|"])
+    lines.extend(f"| {item['module']} | {item['occurrence_count']} |" for item in modules)
+    if not modules:
+        lines.append("| - | 0 |")
+    lines.extend(["", "</details>", ""])
     return "\n".join(lines)
 
 

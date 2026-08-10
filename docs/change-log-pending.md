@@ -6536,3 +6536,18 @@ opscli/skills/templates/ops-dataset-query/references/cli.md
 opscli/skills/templates/ops-dataset-query/data/VERSION.json
 tests/skills/test_dataset_query_flow.py`
 ---
+## 2026-08-10 ops-feedback-query - 周期报告改为管理洞察结构
+
+**变更原因**：原周报以长表格堆叠指标和问题簇，缺少日报已有的管理摘要、根因、重复证据、风险与治理建议，不利于快速决策。
+
+**改动点**：
+- `periodic_feedback_report.py`：周期报告正文改为范围口径、管理摘要、重点模块、根因分布、重复问题证据、重点风险、治理建议、周期对比和局限；完整问题簇、处置快照与模块分布移入折叠附录。
+- 对比期覆盖不完整时不计算环比；重点风险明确按确定性优先级和发生次数排序，避免误称按影响用户日排序。
+- `test_ops_feedback_periodic_report.py`：增加管理章节、重复证据、风险排序口径、折叠附录和不完整对比期提示的契约断言。
+
+**验证结果**：`pytest tests/skills/test_ops_feedback_periodic_report.py tests/skills/test_ops_feedback_report_server.py -q` → 23 passed；重新生成 2026-08-03 至 2026-08-09 周报并通过 HTTP 服务验证所有管理章节可见。全量 `pytest -q` 在当前 Python 3.14 环境因 pytest capture 流关闭异常中止（37 个收集错误），未进入用例执行。
+
+**影响范围**：仅反馈周报/月报的 Markdown 展示结构和相应契约测试；日报快照读取、确定性指标计算、报告文件名和 HTTP 地址不变。
+
+**回滚方式**：`git revert f3fdddba`（若提交已重写，以最终提交 SHA 为准）。
+---
