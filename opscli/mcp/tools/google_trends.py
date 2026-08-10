@@ -65,6 +65,35 @@ async def google_trends_run(
     jwt: str | None = None,
 ) -> dict:
     """执行 Google Trends 场景并保存请求参数、原始响应、规范化结果和导出 XLSX。"""
+    return await _google_trends_run_impl(
+        scenario=scenario,
+        params=params,
+        geo=geo,
+        export_format=export_format,
+        output_dir=output_dir,
+        job_id=job_id,
+        hl=hl,
+        tz=tz,
+        session_id=session_id,
+        jwt=jwt,
+        collection_submitter=None,
+    )
+
+
+async def _google_trends_run_impl(
+    scenario: str,
+    params: dict[str, Any] | str | None = None,
+    geo: str = "US",
+    export_format: str = "xls",
+    output_dir: str | None = None,
+    job_id: str | None = None,
+    hl: str | None = None,
+    tz: int | None = None,
+    session_id: str | None = None,
+    jwt: str | None = None,
+    collection_submitter=None,
+) -> dict:
+    """执行 Google Trends，并允许 MCP Runtime 注入内部沉淀提交器。"""
     sid, jw = _get_auth_pair("ops", session_id, jwt)
     call_params = {
         "scenario": scenario,
@@ -89,7 +118,10 @@ async def google_trends_run(
             hl=hl,
             tz=tz,
         )
-        result = await GoogleTrendsApiManager(jwt=jw, session_id=sid).run(request)
+        manager_kwargs: dict[str, Any] = {"jwt": jw, "session_id": sid}
+        if collection_submitter is not None:
+            manager_kwargs["collection_submitter"] = collection_submitter
+        result = await GoogleTrendsApiManager(**manager_kwargs).run(request)
         return _ok(_public_result(result.to_dict()))
     except Exception as exc:
         return _err(exc, tool="MCP → google_trends_run(...)", call_params=call_params)

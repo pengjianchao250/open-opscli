@@ -32,12 +32,12 @@ from opscli.mcp.tools import beta as _beta_tools
 from opscli.mcp.tools import chatgpt as _chatgpt_tools
 from opscli.mcp.tools import dashboard as _dashboard_tools
 from opscli.mcp.tools import feedback as _feedback_tools
-from opscli.mcp.tools import google_trends as _google_trends_tools
 from opscli.mcp.tools import health as _health_tools
 from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import scrape_do as _scrape_do_tools
 from opscli.mcp.tools import seller_sprite_proxy as _seller_sprite_proxy_tools
 from opscli.mcp.tools import skills as _skills_tools
+from opscli.google_trends.mcp_runtime import GoogleTrendsMcpRuntime
 from opscli.keepa.mcp_runtime import KeepaMcpRuntime
 from opscli.shared.collection_storage import (
     build_collection_storage_runtime,
@@ -77,7 +77,6 @@ _REGISTRARS_BEFORE_KEEPA = (
     _chatgpt_tools.register,
     _dashboard_tools.register,
     _feedback_tools.register,
-    _google_trends_tools.register,
     _health_tools.register,
 )
 _REGISTRARS_AFTER_KEEPA = (
@@ -94,11 +93,13 @@ _REGISTRARS_AFTER_KEEPA = (
 
 
 def _build_server():
-    """构造通用 MCP，并让 App 闭包独占 Keepa 与沉淀 Runtime。"""
+    """构造通用 MCP，并让 App 闭包独占来源模块与沉淀 Runtime。"""
+    google_trends_runtime = GoogleTrendsMcpRuntime()
     keepa_runtime = KeepaMcpRuntime()
     storage_runtime = build_collection_storage_runtime("mcp")
     registrars = (
         *_REGISTRARS_BEFORE_KEEPA,
+        google_trends_runtime.register,
         keepa_runtime.register,
         *_REGISTRARS_AFTER_KEEPA,
     )
@@ -106,8 +107,9 @@ def _build_server():
     @asynccontextmanager
     async def lifespan(_server):
         async with collection_storage_lifespan(storage_runtime):
-            async with keepa_runtime.lifespan(storage_runtime):
-                yield {}
+            async with google_trends_runtime.lifespan(storage_runtime):
+                async with keepa_runtime.lifespan(storage_runtime):
+                    yield {}
 
     server = create_mcp_app(
         name="opscli",

@@ -6596,3 +6596,16 @@ tests/skills/test_dataset_query_flow.py`
 
 **回滚方式**：回退本条记录对应的 SKILL.md 和测试改动。
 ---
+
+## 2026-08-10 Google Trends - MCP 采集结果接入数据库沉淀
+
+**变更原因**：Google Trends MCP 当前只保存 API 请求、原始响应、规范化结果和导出文件，成功采集数据尚未进入共享 MySQL 数据沉淀链路。
+
+**改动点**：为 Google Trends 补充共享 Outbox 提交、规范化结果 Parser、遗漏任务对账和 MCP 生命周期接入；数据库统一读取 `result.json.data`，避免 JSON/XLSX 展示导出造成字段、类型或列数差异，导出文件仅作为 artifact 登记。持久化关闭时保持原行为，排队失败时保留采集结果并返回 warning。生产 MCP 由服务端统一生成任务 ID 并固定输出目录，确保幂等键不复用且所有任务都位于对账范围内；Runtime 支持 SSE/HTTP 双传输嵌套生命周期，避免重复注册来源后变为未就绪。
+
+**验证结果**：`uv run --frozen pytest tests/google_trends tests/mcp/test_google_trends_tools.py tests/mcp/test_server_google_trends_registration.py tests/mcp/test_keepa_registration.py tests/shared/test_collection_worker.py tests/shared/test_collection_storage_config.py tests/shared/test_collection_runtime.py tests/shared/test_collection_parser_utils.py tests/shared/test_collection_outbox.py tests/shared/test_collection_mysql.py -q` → 112 passed；`compileall` 与 `git diff --check` 通过。全量 `pytest -q` 在当前 Python 3.14 环境因 pytest capture 关闭异常中止；关闭 capture 后确认有 37 个既存 Skill 测试因 `query_plan`、`run_query` 等模板脚本不可导入而在收集阶段失败，未进入用例执行。
+
+**影响范围**：Google Trends MCP 成功任务及通用 MCP 的共享数据沉淀生命周期；Google Trends Debug CLI 与未启用沉淀的环境不受影响。
+
+**回滚方式**：回退本条记录对应的 Google Trends 数据沉淀、MCP 运行时、测试与变更记录改动。
+---
