@@ -541,13 +541,21 @@ def test_scheduler_contains_manager_factory_failure_and_continues(tmp_path: Path
     asyncio.run(scenario())
 
 
-def test_scheduler_publishes_runtime_heartbeat_and_marks_stopped(tmp_path: Path):
+def test_scheduler_publishes_runtime_heartbeat_and_marks_stopped(
+    tmp_path: Path,
+    monkeypatch,
+):
     """调度器启动和关闭应发布可查询的真实生命周期与容量。"""
 
     async def scenario():
-        from opscli.seller_sprite.services.task_scheduler import (
-            SellerSpriteTaskScheduler,
+        from opscli.seller_sprite.services import task_scheduler as scheduler_module
+
+        monkeypatch.setattr(
+            scheduler_module,
+            "_process_resource_snapshot",
+            lambda: {"process_fd_count": 229, "process_fd_limit": 1024},
         )
+        SellerSpriteTaskScheduler = scheduler_module.SellerSpriteTaskScheduler
 
         store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
         scheduler = SellerSpriteTaskScheduler(
@@ -574,6 +582,8 @@ def test_scheduler_publishes_runtime_heartbeat_and_marks_stopped(tmp_path: Path)
         assert running["runtime"]["generic_available_capacity"] == 1
         assert running["runtime"]["listing_available_capacity"] == 1
         assert running["runtime"]["available_capacity"] == 2
+        assert running["runtime"]["process_fd_count"] == 229
+        assert running["runtime"]["process_fd_limit"] == 1024
         assert "execution_owner" not in running["runtime"]
 
         await scheduler.close()
@@ -582,6 +592,7 @@ def test_scheduler_publishes_runtime_heartbeat_and_marks_stopped(tmp_path: Path)
         assert stopped["checks"]["scheduler"] == "stopped"
         assert stopped["runtime"]["lifecycle_state"] == "stopped"
         assert stopped["runtime"]["generic_workers_alive"] == 0
+        assert stopped["runtime"]["process_fd_count"] == 229
 
     asyncio.run(scenario())
 
@@ -1031,6 +1042,8 @@ def test_mcp_health_uses_live_scheduler_runtime_and_redacts_payloads(monkeypatch
                     "heartbeat_fresh": True,
                     "consumer_alive": True,
                     "consumer_error_count": 0,
+                    "process_fd_count": 229,
+                    "process_fd_limit": 1024,
                     "execution_owner": "private-owner",
                     "request": {"asin": "B0PRIVATE123"},
                     "path": "C:/private/output",
@@ -1068,6 +1081,8 @@ def test_mcp_health_uses_live_scheduler_runtime_and_redacts_payloads(monkeypatch
                     "heartbeat_fresh": True,
                     "consumer_alive": True,
                     "consumer_error_count": 0,
+                    "process_fd_count": 229,
+                    "process_fd_limit": 1024,
                 },
             }
             assert "B0PRIVATE123" not in json.dumps(running)

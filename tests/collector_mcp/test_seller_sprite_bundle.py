@@ -74,7 +74,14 @@ def test_seller_sprite_bundle_marks_failed_when_scheduler_start_fails(monkeypatc
 
 
 def test_seller_sprite_bundle_rejects_business_access_when_not_ready(monkeypatch):
-    monkeypatch.setitem(mcp_bundle._MODULE_STATE, "status", "failed")
+    monkeypatch.setattr(
+        mcp_bundle,
+        "_MODULE_STATE",
+        {
+            "status": "failed",
+            "checks": {"queue": "error", "scheduler": "not_started"},
+        },
+    )
 
     with pytest.raises(mcp_bundle.SellerSpriteModuleNotReadyError) as exc_info:
         mcp_bundle.require_ready()
@@ -82,6 +89,42 @@ def test_seller_sprite_bundle_rejects_business_access_when_not_ready(monkeypatch
     assert exc_info.value.to_dict() == {
         "code": "COLLECTOR_MODULE_NOT_READY",
         "message": "卖家精灵采集模块尚未就绪，请先检查 Collector 模块健康状态",
+        "module": "seller_sprite",
+    }
+
+
+def test_seller_sprite_bundle_rejects_business_access_when_queue_fails(monkeypatch):
+    """启动后队列失效时必须关闭业务入口并返回稳定错误码。"""
+
+    class FakeScheduler:
+        def runtime_health(self):
+            return {
+                "status": "degraded",
+                "checks": {"queue": "error", "scheduler": "unknown"},
+                "runtime": {"lifecycle_state": "unknown"},
+                "error_code": "QUEUE_DATABASE_UNAVAILABLE",
+                "error_class": "OperationalError",
+            }
+
+    monkeypatch.setattr(
+        "opscli.seller_sprite.services.get_task_scheduler",
+        lambda: FakeScheduler(),
+    )
+    monkeypatch.setattr(
+        mcp_bundle,
+        "_MODULE_STATE",
+        {
+            "status": "ready",
+            "checks": {"queue": "ok", "scheduler": "running"},
+        },
+    )
+
+    with pytest.raises(mcp_bundle.SellerSpriteQueueUnavailableError) as exc_info:
+        mcp_bundle.require_ready()
+
+    assert exc_info.value.to_dict() == {
+        "code": "QUEUE_DATABASE_UNAVAILABLE",
+        "message": "卖家精灵队列数据库暂不可用，请稍后重试并检查 Collector 模块健康状态",
         "module": "seller_sprite",
     }
 

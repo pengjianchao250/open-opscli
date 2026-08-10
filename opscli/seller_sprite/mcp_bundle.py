@@ -31,6 +31,8 @@ _PUBLIC_RUNTIME_FIELDS = (
     "heartbeat_fresh",
     "consumer_alive",
     "consumer_error_count",
+    "process_fd_count",
+    "process_fd_limit",
 )
 
 
@@ -44,6 +46,25 @@ class SellerSpriteModuleNotReadyError(SellerSpriteError):
 
     def to_dict(self) -> dict[str, str]:
         """返回不包含底层异常和文件路径的公开错误。"""
+        return {
+            "code": self.code,
+            "message": str(self),
+            "module": "seller_sprite",
+        }
+
+
+class SellerSpriteQueueUnavailableError(SellerSpriteError):
+    """Collector 运行期无法访问 SellerSprite 队列数据库。"""
+
+    code = "QUEUE_DATABASE_UNAVAILABLE"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "卖家精灵队列数据库暂不可用，请稍后重试并检查 Collector 模块健康状态"
+        )
+
+    def to_dict(self) -> dict[str, str]:
+        """返回不包含数据库路径和底层异常的公开错误。"""
         return {
             "code": self.code,
             "message": str(self),
@@ -93,9 +114,17 @@ def require_ready() -> None:
 
     Raises:
         SellerSpriteModuleNotReadyError: Bundle 未完成启动或启动失败。
+        SellerSpriteQueueUnavailableError: Bundle 运行期无法访问队列数据库。
     """
+    if _MODULE_STATE.get("error_code") == "QUEUE_DATABASE_UNAVAILABLE":
+        raise SellerSpriteQueueUnavailableError()
     if _MODULE_STATE.get("status") != "ready":
         raise SellerSpriteModuleNotReadyError()
+    from opscli.seller_sprite.services import get_task_scheduler
+
+    health = get_task_scheduler().runtime_health()
+    if (health.get("checks") or {}).get("queue") != "ok":
+        raise SellerSpriteQueueUnavailableError()
 
 
 @asynccontextmanager
@@ -210,7 +239,7 @@ async def health_check() -> dict[str, Any]:
         if isinstance(runtime, dict)
         else {}
     )
-    return {
+    result = {
         "bundle_id": "seller_sprite",
         "status": str(health.get("status") or "not_ready"),
         "checks": {
@@ -221,6 +250,10 @@ async def health_check() -> dict[str, Any]:
         },
         "runtime": public_runtime,
     }
+    for field in ("error_code", "error_class"):
+        if field in health:
+            result[field] = health[field]
+    return result
 
 
 def build_bundle():

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2211,6 +2213,8 @@ class SellerSpriteTaskQueueStore:
     def _ensure_schema(self) -> None:
         """在单个立即事务内初始化或升级 SQLite 表结构。"""
         with self._connect() as conn:
+            # WAL 模式会持久化到数据库文件，只需在初始化阶段设置一次。
+            conn.execute("PRAGMA journal_mode = WAL")
             # DDL、历史数据回填和索引发布必须同成同败，避免并发启动看到半迁移结构。
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -2565,13 +2569,18 @@ class SellerSpriteTaskQueueStore:
                 (task_kind, row["id"]),
             )
 
-    def _connect(self) -> sqlite3.Connection:
-        """创建 SQLite 连接。"""
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """创建并显式关闭 SQLite 连接，统一事务生命周期。"""
         conn = sqlite3.connect(str(self.db_path), timeout=5, isolation_level=None)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("PRAGMA journal_mode = WAL")
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout = 5000")
+            with conn:
+                yield conn
+        finally:
+            # sqlite3.Connection.__exit__ 只处理事务，不负责关闭文件描述符。
+            conn.close()
 
     def _row_to_status(self, row: sqlite3.Row) -> dict[str, Any]:
         """将数据库记录转换为外部可读状态。"""

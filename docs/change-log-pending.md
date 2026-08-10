@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-08-10 SellerSprite - 加固队列连接与运行期健康门禁
+
+**变更原因**：生产 Collector 运行期间出现 SQLite 队列短暂不可打开，旧后台消费者异常退出后 HTTP 进程仍存活，导致任务长期停留 queued；同时缺少 FD 使用量和运行期队列门禁，无法及时阻止新任务或保留资源证据。
+**改动点**：SellerSprite 队列仓储集中管理 SQLite 事务和显式关闭连接，WAL 模式改为 schema 初始化时只设置一次；调度健康摘要增加 Linux 主进程 FD 数和软上限，队列心跳读取失败时返回稳定 `QUEUE_DATABASE_UNAVAILABLE`；Collector Bundle 在启动后队列失效时关闭业务入口，并透传脱敏错误分类与 FD 指标；新增连接关闭、WAL 单次初始化、运行期门禁和健康字段回归测试。
+**验证结果**：新增测试已确认修改前分别因连接未关闭、缺少运行期队列门禁和 FD 字段过滤而失败，修改后目标回归 `7 passed`；队列仓储、监督后端、Collector Bundle 与 SellerSprite MCP 工具组合回归 `158 passed`；SellerSprite、Collector MCP 和工具扩大回归 `556 passed, 3 failed`，3 项均为仓库已记录的旧导出文件名断言及 `seller-sprite-debug` 未注册基线；SellerSprite 生产模块 `compileall` 与 `git diff --check` 通过。
+**影响范围**：SellerSprite SQLite 队列连接、Collector SellerSprite Bundle 业务就绪判断和健康摘要；不修改任务 schema、队列路径、业务参数、浏览器执行或运维服务配置。
+**回滚方式**：恢复队列仓储原连接方法和逐连接 WAL 设置，移除运行期门禁、FD 健康字段及对应测试；现有 SQLite 数据无需迁移。
+
+---
+
 ## 2026-08-07 MCP 共享数据沉淀 - 修复流式 XLSX 尾部空列解析
 
 **变更原因**：真实 Keepa 商品任务已经进入通用 MCP Outbox，但流式 XLSX 的数据行省略尾部空单元格，OpenPyXL 返回的行长度短于表头，导致正常任务被 `CollectionParseError` 永久标记失败且没有写入 MySQL。

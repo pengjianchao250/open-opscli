@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, replace
@@ -57,6 +58,24 @@ DEFAULT_WORKER_KEY = "default"
 DEFAULT_SESSION_REAP_INTERVAL_SECONDS = 60.0
 _SCHEDULERS: dict[tuple[int, str], "SellerSpriteTaskScheduler"] = {}
 logger = logging.getLogger(__name__)
+
+
+def _process_resource_snapshot() -> dict[str, int]:
+    """读取 Linux 主进程 FD 使用量；其他平台保持空摘要。"""
+    snapshot: dict[str, int] = {}
+    try:
+        snapshot["process_fd_count"] = len(os.listdir("/proc/self/fd"))
+    except OSError:
+        return snapshot
+    try:
+        import resource
+
+        soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft_limit != resource.RLIM_INFINITY:
+            snapshot["process_fd_limit"] = int(soft_limit)
+    except (ImportError, OSError, ValueError):
+        pass
+    return snapshot
 
 
 @dataclass(frozen=True)
@@ -161,6 +180,7 @@ class SellerSpriteTaskScheduler:
 
     def runtime_health(self) -> dict[str, Any]:
         """基于持久运行态和当前后台任务返回脱敏健康摘要。"""
+        resource_snapshot = _process_resource_snapshot()
         try:
             runtime = self.store.get_runtime_heartbeat(self._session_owner_id)
         except ValueError as exc:
@@ -168,18 +188,23 @@ class SellerSpriteTaskScheduler:
                 return {
                     "status": "not_ready",
                     "checks": {"queue": "ok", "scheduler": "not_started"},
-                    "runtime": {"lifecycle_state": "not_started"},
+                    "runtime": {
+                        "lifecycle_state": "not_started",
+                        **resource_snapshot,
+                    },
                 }
             return {
                 "status": "degraded",
                 "checks": {"queue": "error", "scheduler": "unknown"},
-                "runtime": {"lifecycle_state": "unknown"},
+                "runtime": {"lifecycle_state": "unknown", **resource_snapshot},
             }
-        except Exception:
+        except Exception as exc:
             return {
                 "status": "degraded",
                 "checks": {"queue": "error", "scheduler": "unknown"},
-                "runtime": {"lifecycle_state": "unknown"},
+                "runtime": {"lifecycle_state": "unknown", **resource_snapshot},
+                "error_code": "QUEUE_DATABASE_UNAVAILABLE",
+                "error_class": type(exc).__name__,
             }
         lifecycle = str(runtime["lifecycle_state"])
         heartbeat_fresh = _heartbeat_is_fresh(
@@ -225,6 +250,7 @@ class SellerSpriteTaskScheduler:
         public_runtime["heartbeat_fresh"] = heartbeat_fresh
         public_runtime["consumer_alive"] = consumer_alive
         public_runtime["consumer_error_count"] = consumer_error_count
+        public_runtime.update(resource_snapshot)
         return {
             "status": status,
             "checks": {

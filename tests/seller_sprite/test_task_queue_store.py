@@ -41,6 +41,48 @@ def _listing_request(*, job_id: str) -> SellerSpriteScenarioRequest:
     )
 
 
+def test_store_closes_connections_and_configures_wal_once(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """长期进程必须显式关闭连接，并避免每次读取重复切换 WAL。"""
+    from opscli.seller_sprite.services import task_queue_store as store_module
+
+    real_connect = sqlite3.connect
+    connections = []
+
+    class TrackingConnection(sqlite3.Connection):
+        closed = False
+        wal_configurations = 0
+
+        def execute(self, sql, parameters=()):
+            if "PRAGMA journal_mode = WAL" in sql:
+                self.wal_configurations += 1
+            return super().execute(sql, parameters)
+
+        def close(self):
+            self.closed = True
+            return super().close()
+
+    def tracking_connect(*args, **kwargs):
+        kwargs["factory"] = TrackingConnection
+        connection = real_connect(*args, **kwargs)
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(store_module.sqlite3, "connect", tracking_connect)
+
+    store = store_module.SellerSpriteTaskQueueStore(
+        db_path=tmp_path / "queue.sqlite3"
+    )
+    store.queue_status()
+    store.queue_status()
+
+    assert connections
+    assert all(connection.closed for connection in connections)
+    assert sum(connection.wal_configurations for connection in connections) == 1
+
+
 def test_store_enqueue_returns_queue_position(tmp_path: Path):
     from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
 
