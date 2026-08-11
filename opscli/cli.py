@@ -8,6 +8,7 @@ import time
 import typer
 from opscli.amazon.cli import app as amazon_app
 from opscli.amazon_rufus.cli import app as amazon_rufus_app
+from opscli.api_credentials.cli import app as api_credentials_app
 from opscli.asin_data.cli import app as asin_data_app
 from opscli.auth.cli import app as auth_app
 from opscli.calculator.cli import app as calculator_app
@@ -52,6 +53,7 @@ app = typer.Typer(help="Aukeys 运营 CLI 工具集")
 
 # 模块注册：每新增一个子模块只需在此追加一行（铁律1）
 app.add_typer(auth_app, name="auth")
+app.add_typer(api_credentials_app, name="api-credentials")
 app.add_typer(amazon_app, name="amazon")
 app.add_typer(amazon_rufus_app, name="amazon-rufus")
 app.add_typer(asin_data_app, name="asin-data")

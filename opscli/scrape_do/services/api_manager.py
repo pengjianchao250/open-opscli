@@ -30,6 +30,14 @@ class ScrapeDoApiManager:
         jwt: str | None = None,
         session_id: str | None = None,
     ) -> None:
+        """创建 Scrape.do 场景管理器。
+
+        Args:
+            settings: 输出路径和超时等非敏感运行配置。
+            api_key_provider: 统一凭据池适配器。
+            jwt: 文件上传使用的 OPS JWT。
+            session_id: 文件上传使用的 OPS 会话 ID。
+        """
         self.settings = settings or load_settings()
         self.jwt = jwt
         self.session_id = session_id
@@ -37,11 +45,26 @@ class ScrapeDoApiManager:
         self._job_roots: dict[str, Path] = {}
 
     def scenarios(self) -> list[dict[str, Any]]:
-        """列出支持的接口场景。"""
+        """列出支持的接口场景。
+
+        Returns:
+            可供 CLI 和 MCP 展示的场景摘要列表。
+        """
         return list_scenarios()
 
     async def run(self, request: ScrapeDoScenarioRequest) -> ScrapeDoScenarioResult:
-        """执行一个 Scrape.do 场景。"""
+        """执行一个 Scrape.do 场景，并在鉴权失败时切换账号。
+
+        Args:
+            request: 已校验前置结构的场景请求。
+
+        Returns:
+            包含脱敏结果、导出文件和计费摘要的场景结果。
+
+        Raises:
+            ScrapeDoConfigError: 场景、导出格式或账号配置非法。
+            ScrapeDoApiError: 所有候选账号失败或 Provider 请求失败。
+        """
         export_format = _normalize_export_format(request.export_format)
         scenario = get_scenario(request.scenario)
         site = _normalize_site(request.site)
@@ -53,10 +76,47 @@ class ScrapeDoApiManager:
         raw_path = root_dir / "raw.json"
         result_path = root_dir / "result.json"
 
-        credential = self.api_key_provider.get_default()
-        normalized_params = scenario.build_params(params=request.params, site=site, token=credential.token)
-        safe_params = _sanitize_persisted(normalized_params)
         warnings: list[dict[str, Any]] = []
+
+        attempted_account_ids: set[int] = set()
+        last_credential_error: Exception | None = None
+        # 同一账号在单次请求内最多尝试一次；只有凭据类 401/403 才切换账号。
+        while True:
+            try:
+                credential = self.api_key_provider.get_default(
+                    exclude_account_ids=attempted_account_ids,
+                )
+            except ScrapeDoConfigError:
+                if last_credential_error is not None:
+                    raise last_credential_error
+                raise
+            normalized_params = scenario.build_params(
+                params=request.params,
+                site=site,
+                token=credential.token,
+            )
+            timeout = request.timeout_seconds or self.settings.timeout_seconds
+            try:
+                async with ScrapeDoApiClient(timeout_seconds=timeout) as client:
+                    response = await client.get_json(scenario.endpoint, normalized_params)
+            except Exception as exc:
+                reporter = getattr(self.api_key_provider, "report_failure", None)
+                if reporter:
+                    reporter(credential, exc)
+                if (
+                    credential.account_id is not None
+                    and getattr(exc, "status_code", None) in {401, 403}
+                ):
+                    attempted_account_ids.add(credential.account_id)
+                    last_credential_error = exc
+                    continue
+                raise
+            reporter = getattr(self.api_key_provider, "report_success", None)
+            if reporter:
+                reporter(credential, response.billing)
+            break
+
+        safe_params = _sanitize_persisted(normalized_params)
 
         _write_json(
             params_path,
@@ -71,10 +131,6 @@ class ScrapeDoApiManager:
                 "export_format": export_format,
             },
         )
-
-        timeout = request.timeout_seconds or self.settings.timeout_seconds
-        async with ScrapeDoApiClient(timeout_seconds=timeout) as client:
-            response = await client.get_json(scenario.endpoint, normalized_params)
 
         raw_payload = {
             "job_id": job_id,
@@ -129,7 +185,17 @@ class ScrapeDoApiManager:
         return result
 
     def job_status(self, job_id: str) -> dict[str, Any]:
-        """读取已落盘任务状态。"""
+        """读取已落盘任务状态。
+
+        Args:
+            job_id: 待查询的本地任务 ID。
+
+        Returns:
+            已脱敏的任务结果字典。
+
+        Raises:
+            ScrapeDoConfigError: 任务结果不存在。
+        """
         root_dir = self._resolve_job_root(job_id)
         result_path = root_dir / "result.json"
         if not result_path.exists():

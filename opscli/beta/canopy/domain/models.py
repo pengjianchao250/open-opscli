@@ -34,6 +34,9 @@ class CanopyScenarioRequest:
     title: str = ""
     api_key: str = ""
     api_key_placeholder_used: bool = False
+    credential_account_id: int | None = None
+    credential_account_name: str | None = None
+    credential_secret_version: int | None = None
     timeout_seconds: int = 10
     job_id: str | None = None
     output_dir: str | None = None
