@@ -6,14 +6,13 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from opscli.api_credentials.config import ApiCredentialSettings, load_settings
-from opscli.api_credentials.crypto import ApiKeyCipher
 from opscli.api_credentials.exceptions import ApiCredentialUnavailableError
 from opscli.api_credentials.models import ApiCredentialAccount, ApiCredentialLease
 from opscli.api_credentials.repository import MySqlApiCredentialRepository
 
 
 class ApiCredentialPool:
-    """隐藏 MySQL、加密和账号选择细节的业务接口。"""
+    """隐藏 MySQL 和账号选择细节的业务接口。"""
 
     def __init__(
         self,
@@ -29,17 +28,13 @@ class ApiCredentialPool:
 
         Raises:
             ApiCredentialConfigError: 默认配置不完整。
-            ValueError: 主密钥格式非法。
         """
         if repository is not None:
             self.repository = repository
             return
         resolved = settings or load_settings()
         resolved.validate()
-        self.repository = MySqlApiCredentialRepository(
-            settings=resolved.mysql,
-            cipher=ApiKeyCipher(resolved.master_key),
-        )
+        self.repository = MySqlApiCredentialRepository(settings=resolved.mysql)
 
     def acquire(
         self,

@@ -9,13 +9,16 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from opscli.api_credentials.config import ApiCredentialMySqlSettings
-from opscli.api_credentials.crypto import ApiKeyCipher
 from opscli.api_credentials.models import (
     ACCOUNT_STATUSES,
     SUPPORTED_PROVIDERS,
     ApiCredentialAccount,
 )
-from opscli.api_credentials.schema import SCHEMA_STATEMENTS, SCHEMA_VERSION
+from opscli.api_credentials.schema import (
+    MIGRATE_V1_TO_V2_STATEMENT,
+    SCHEMA_STATEMENTS,
+    SCHEMA_VERSION,
+)
 
 
 class ApiCredentialRepositoryError(RuntimeError):
@@ -33,22 +36,19 @@ class MySqlApiCredentialRepository:
         self,
         *,
         settings: ApiCredentialMySqlSettings,
-        cipher: ApiKeyCipher | None = None,
         connect_factory: Callable[[], Any] | None = None,
     ) -> None:
         """创建 MySQL 凭据仓储。
 
         Args:
             settings: 独立的凭据数据库连接配置。
-            cipher: API Key 信封加密器；仅建表时可以不提供。
             connect_factory: 测试可注入的连接工厂。
         """
         self.settings = settings
-        self.cipher = cipher
         self._connect_factory = connect_factory or self._connect
 
     def create_schema(self) -> None:
-        """创建并核对 v1 表结构。
+        """创建并核对 v2 表结构，或迁移尚无凭据的 v1 表。
 
         Returns:
             无。
@@ -60,16 +60,36 @@ class MySqlApiCredentialRepository:
         connection = self._connect_factory()
         try:
             with connection.cursor() as cursor:
-                for statement in SCHEMA_STATEMENTS:
-                    cursor.execute(statement)
+                cursor.execute(SCHEMA_STATEMENTS[0])
                 cursor.execute(
                     """
-                    INSERT INTO api_credential_schema_versions (module_name, schema_version)
-                    VALUES (%s, %s)
-                    ON DUPLICATE KEY UPDATE schema_version = schema_version
+                    SELECT schema_version FROM api_credential_schema_versions
+                    WHERE module_name = %s
                     """,
-                    ("api_credentials", SCHEMA_VERSION),
+                    ("api_credentials",),
                 )
+                current_version = _first_value(cursor.fetchone(), "schema_version")
+                if current_version is None:
+                    for statement in SCHEMA_STATEMENTS[1:]:
+                        cursor.execute(statement)
+                    cursor.execute(
+                        """
+                        INSERT INTO api_credential_schema_versions
+                            (module_name, schema_version)
+                        VALUES (%s, %s)
+                        """,
+                        ("api_credentials", SCHEMA_VERSION),
+                    )
+                elif int(current_version) == 1:
+                    self._migrate_v1_to_v2(cursor)
+                elif int(current_version) != SCHEMA_VERSION:
+                    raise ApiCredentialSchemaError(
+                        f"API 凭据表结构版本不兼容：期望 {SCHEMA_VERSION}，实际 {current_version}"
+                    )
+                else:
+                    # 对已是 v2 的库补齐可能缺失的表，CREATE IF NOT EXISTS 不修改现有数据。
+                    for statement in SCHEMA_STATEMENTS[1:]:
+                        cursor.execute(statement)
                 cursor.execute(
                     """
                     SELECT schema_version FROM api_credential_schema_versions
@@ -88,6 +108,25 @@ class MySqlApiCredentialRepository:
             raise
         finally:
             connection.close()
+
+    @staticmethod
+    def _migrate_v1_to_v2(cursor: Any) -> None:
+        """仅在旧凭据表为空时，把 v1 加密列替换为明文列。"""
+        cursor.execute("SELECT COUNT(*) AS credential_count FROM api_account_credentials")
+        credential_count = int(_first_value(cursor.fetchone(), "credential_count") or 0)
+        if credential_count:
+            raise ApiCredentialSchemaError(
+                "API 凭据表 v1 中已有加密数据，不能自动迁移为明文；"
+                "请先备份并人工迁移后再初始化"
+            )
+        cursor.execute(MIGRATE_V1_TO_V2_STATEMENT)
+        cursor.execute(
+            """
+            UPDATE api_credential_schema_versions SET schema_version = %s
+            WHERE module_name = %s
+            """,
+            (SCHEMA_VERSION, "api_credentials"),
+        )
 
     def upsert_account(
         self,
@@ -114,7 +153,7 @@ class MySqlApiCredentialRepository:
 
         Raises:
             ValueError: Provider、名称、Key 或优先级非法。
-            Exception: 加密或数据库事务失败。
+            Exception: 数据库事务失败。
         """
         normalized_provider = _provider(provider)
         normalized_name = _required_text(name, "name")
@@ -206,7 +245,7 @@ class MySqlApiCredentialRepository:
 
         Raises:
             ValueError: 账号不存在或 API Key 为空。
-            Exception: 加密或数据库事务失败。
+            Exception: 数据库事务失败。
         """
         secret = _required_text(api_key, "api_key")
         connection = self._connect_factory()
@@ -504,12 +543,7 @@ class MySqlApiCredentialRepository:
         if current_fingerprint == fingerprint:
             return False
         version = current_version + 1
-        encrypted = self._required_cipher().encrypt(
-            api_key,
-            account_id=account_id,
-            version=version,
-        )
-        # 先加密再撤销；任一步失败都由外层事务回滚，保证始终只有一个活动版本。
+        # 新版本插入和旧版本撤销在同一事务内，保证始终只有一个活动版本。
         if current_id is not None:
             cursor.execute(
                 """
@@ -522,19 +556,16 @@ class MySqlApiCredentialRepository:
         cursor.execute(
             """
             INSERT INTO api_account_credentials (
-                account_id, credential_type, secret_ciphertext, secret_nonce,
-                encrypted_dek, dek_nonce, secret_masked, secret_fingerprint,
+                account_id, credential_type, secret_value,
+                secret_masked, secret_fingerprint,
                 secret_version, status, rotated_from_id
-            ) VALUES (%s, 'api_key', %s, %s, %s, %s, %s, %s, %s, 'active', %s)
+            ) VALUES (%s, 'api_key', %s, %s, %s, %s, 'active', %s)
             """,
             (
                 account_id,
-                encrypted.ciphertext,
-                encrypted.nonce,
-                encrypted.encrypted_dek,
-                encrypted.dek_nonce,
-                encrypted.masked,
-                encrypted.fingerprint,
+                api_key,
+                _mask_secret(api_key),
+                fingerprint,
                 version,
                 current_id,
             ),
@@ -544,19 +575,11 @@ class MySqlApiCredentialRepository:
     def _row_to_account(self, row: Any) -> ApiCredentialAccount:
         account_id = int(_value(row, "account_id"))
         version = int(_value(row, "secret_version"))
-        api_key = self._required_cipher().decrypt(
-            bytes(_value(row, "secret_ciphertext")),
-            bytes(_value(row, "secret_nonce")),
-            bytes(_value(row, "encrypted_dek")),
-            bytes(_value(row, "dek_nonce")),
-            account_id=account_id,
-            version=version,
-        )
         return ApiCredentialAccount(
             account_id=account_id,
             provider=str(_value(row, "provider")),
             name=str(_value(row, "account_name")),
-            api_key=api_key,
+            api_key=str(_value(row, "secret_value")),
             api_key_masked=str(_value(row, "secret_masked")),
             secret_version=version,
             status=str(_value(row, "status")),
@@ -574,14 +597,6 @@ class MySqlApiCredentialRepository:
             last_error_message=_optional_text(_value(row, "last_error_message")),
             provider_metadata=_json_object(_value(row, "provider_metadata")),
         )
-
-    def _required_cipher(self) -> ApiKeyCipher:
-        """返回运行期加密器，阻止无主密钥仓储处理任何 API Key。"""
-        if self.cipher is None:
-            raise ApiCredentialRepositoryError(
-                "API 凭据仓储未配置主密钥，不能读写 API Key"
-            )
-        return self.cipher
 
     def _execute_account_update(
         self,
@@ -666,7 +681,7 @@ _ACCOUNT_SELECT = """
 SELECT
     a.id AS account_id, a.provider, a.account_name, a.status, a.priority,
     a.remark,
-    c.secret_ciphertext, c.secret_nonce, c.encrypted_dek, c.dek_nonce,
+    c.secret_value,
     c.secret_masked, c.secret_version,
     r.remaining_quota, r.current_usage, r.quota_reset_at,
     r.last_selected_at, r.last_used_at, r.last_verified_at,
@@ -691,6 +706,12 @@ def _required_text(value: Any, field: str) -> str:
     if not normalized:
         raise ValueError(f"{field} 不能为空")
     return normalized
+
+
+def _mask_secret(value: str) -> str:
+    if len(value) <= 8:
+        return "*" * len(value)
+    return f"{value[:4]}****{value[-4:]}"
 
 
 def _optional_text(value: Any) -> str | None:

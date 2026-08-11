@@ -1,4 +1,4 @@
-"""第三方 API 凭据池 MySQL 与加密配置。"""
+"""第三方 API 凭据池 MySQL 配置。"""
 
 from __future__ import annotations
 
@@ -18,10 +18,6 @@ ENV_MYSQL_USER = "OPSCLI_API_CREDENTIAL_MYSQL_USER"
 ENV_MYSQL_PASSWORD = "OPSCLI_API_CREDENTIAL_MYSQL_PASSWORD"
 ENV_MYSQL_SSL_CA = "OPSCLI_API_CREDENTIAL_MYSQL_SSL_CA"
 ENV_MYSQL_CONNECT_TIMEOUT = "OPSCLI_API_CREDENTIAL_MYSQL_CONNECT_TIMEOUT_SECONDS"
-# 主密钥只用于包裹每条凭据的随机数据密钥，不直接加密所有 API Key。
-ENV_MASTER_KEY = "OPSCLI_API_CREDENTIAL_MASTER_KEY"
-
-
 @dataclass(frozen=True)
 class ApiCredentialMySqlSettings:
     """凭据池 MySQL 连接参数。"""
@@ -49,10 +45,9 @@ class ApiCredentialSettings:
     """凭据池完整运行配置。"""
 
     mysql: ApiCredentialMySqlSettings
-    master_key: str
 
     def validate_mysql(self) -> None:
-        """仅校验 MySQL 连接配置，供表结构初始化使用。
+        """校验 MySQL 连接配置。
 
         Returns:
             无。
@@ -64,28 +59,23 @@ class ApiCredentialSettings:
             raise ApiCredentialConfigError("API 凭据池未配置完整 MySQL 连接信息")
 
     def validate(self) -> None:
-        """校验后端启动所需的数据库与加密配置。
+        """校验后端启动所需的数据库配置。
 
         Returns:
             无。
 
         Raises:
-            ApiCredentialConfigError: MySQL 字段或主密钥缺失。
+            ApiCredentialConfigError: MySQL 字段缺失。
         """
         self.validate_mysql()
-        if not self.master_key:
-            raise ApiCredentialConfigError(f"API 凭据池缺少 {ENV_MASTER_KEY}")
 
     def to_public_dict(self) -> dict[str, Any]:
-        """返回不含地址、密码和主密钥的配置摘要。
+        """返回不含地址和密码的配置摘要。
 
         Returns:
-            仅包含数据库和加密是否就绪的字典。
+            仅包含数据库是否就绪的字典。
         """
-        return {
-            "mysql_configured": self.mysql.configured,
-            "encryption_configured": bool(self.master_key),
-        }
+        return {"mysql_configured": self.mysql.configured}
 
 
 def load_settings(environ: Mapping[str, str] | None = None) -> ApiCredentialSettings:
@@ -108,7 +98,6 @@ def load_settings(environ: Mapping[str, str] | None = None) -> ApiCredentialSett
             ssl_ca=str(values.get(ENV_MYSQL_SSL_CA) or "").strip(),
             connect_timeout_seconds=_parse_int(values.get(ENV_MYSQL_CONNECT_TIMEOUT), 10),
         ),
-        master_key=str(values.get(ENV_MASTER_KEY) or "").strip(),
     )
 
 

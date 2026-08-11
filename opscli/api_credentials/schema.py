@@ -1,7 +1,7 @@
-"""第三方 API 凭据池 MySQL v1 表结构。"""
+"""第三方 API 凭据池 MySQL v2 表结构。"""
 
 # Schema 由显式管理命令创建，运行期连接不自动执行 DDL。
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # 建表顺序固定为版本、账号、密钥、运行状态、审计，以满足外键依赖。
 SCHEMA_STATEMENTS = (
@@ -34,10 +34,7 @@ SCHEMA_STATEMENTS = (
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
         account_id BIGINT UNSIGNED NOT NULL,
         credential_type VARCHAR(32) NOT NULL DEFAULT 'api_key',
-        secret_ciphertext LONGBLOB NOT NULL,
-        secret_nonce BINARY(12) NOT NULL,
-        encrypted_dek VARBINARY(64) NOT NULL,
-        dek_nonce BINARY(12) NOT NULL,
+        secret_value TEXT NOT NULL,
         secret_masked VARCHAR(64) NOT NULL,
         secret_fingerprint CHAR(64) NOT NULL,
         secret_version INT UNSIGNED NOT NULL,
@@ -90,3 +87,13 @@ SCHEMA_STATEMENTS = (
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
     """,
 )
+
+# v1 使用四列保存信封加密数据。仅空表允许原地迁移，避免无法恢复的密文被丢弃。
+MIGRATE_V1_TO_V2_STATEMENT = """
+ALTER TABLE api_account_credentials
+    ADD COLUMN secret_value TEXT NOT NULL AFTER credential_type,
+    DROP COLUMN secret_ciphertext,
+    DROP COLUMN secret_nonce,
+    DROP COLUMN encrypted_dek,
+    DROP COLUMN dek_nonce
+"""

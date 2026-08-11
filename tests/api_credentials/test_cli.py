@@ -52,8 +52,8 @@ def test_add_uses_confirmed_hidden_input_and_never_echoes_key(monkeypatch):
     assert '"api_key_masked": "secr****-key"' in result.stdout
 
 
-def test_init_schema_requires_mysql_but_not_api_master_key(monkeypatch):
-    """首次建表不处理 API Key，因此不能强制要求加密主密钥。"""
+def test_init_schema_requires_only_mysql(monkeypatch):
+    """首次建表只需要 MySQL 配置。"""
     configured = ApiCredentialSettings(
         mysql=ApiCredentialMySqlSettings(
             host="mysql.internal",
@@ -61,14 +61,12 @@ def test_init_schema_requires_mysql_but_not_api_master_key(monkeypatch):
             user="migration",
             password="database-password",
         ),
-        master_key="",
     )
     created = []
 
     class FakeRepository:
-        def __init__(self, *, settings, cipher=None):
+        def __init__(self, *, settings):
             assert settings == configured.mysql
-            assert cipher is None
 
         def create_schema(self):
             created.append(True)

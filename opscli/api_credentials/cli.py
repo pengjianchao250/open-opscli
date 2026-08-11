@@ -8,7 +8,6 @@ from pathlib import Path
 import typer
 
 from opscli.api_credentials.config import load_settings
-from opscli.api_credentials.crypto import ApiKeyCipher
 from opscli.api_credentials.repository import MySqlApiCredentialRepository
 
 
@@ -259,14 +258,11 @@ def migrate_serpapi_sqlite(
 def _repository() -> MySqlApiCredentialRepository:
     settings = load_settings()
     settings.validate()
-    return MySqlApiCredentialRepository(
-        settings=settings.mysql,
-        cipher=ApiKeyCipher(settings.master_key),
-    )
+    return MySqlApiCredentialRepository(settings=settings.mysql)
 
 
 def _schema_repository() -> MySqlApiCredentialRepository:
-    """创建不依赖 API 主密钥的表结构迁移仓储。"""
+    """创建表结构迁移仓储。"""
     settings = load_settings()
     settings.validate_mysql()
     return MySqlApiCredentialRepository(settings=settings.mysql)

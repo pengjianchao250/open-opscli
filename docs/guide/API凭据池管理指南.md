@@ -11,7 +11,7 @@
 - Credential：账号的 API Key 版本；轮换后旧版本保留为已撤销记录。
 - Runtime：剩余额度、重置时间、最近使用和最后错误。
 
-API Key 使用每条凭据独立的数据密钥进行 AES-256-GCM 加密，数据密钥再由部署主密钥包裹。管理列表和命令输出只返回掩码。
+API Key 按产品要求以明文存入 MySQL 的 `api_account_credentials.secret_value` 字段。交互输入仍然隐藏，管理列表和命令输出只返回掩码，不显示明文。
 
 ## 部署配置
 
@@ -24,10 +24,7 @@ OPSCLI_API_CREDENTIAL_MYSQL_DATABASE
 OPSCLI_API_CREDENTIAL_MYSQL_USER
 OPSCLI_API_CREDENTIAL_MYSQL_PASSWORD
 OPSCLI_API_CREDENTIAL_MYSQL_SSL_CA
-OPSCLI_API_CREDENTIAL_MASTER_KEY
 ```
-
-`OPSCLI_API_CREDENTIAL_MASTER_KEY` 必须是 32 字节随机值的 Base64。生产环境应由 Secret Manager 注入，不能写入代码、镜像或 MySQL。
 
 初始化表结构时使用具有 DDL 权限的迁移账号：
 
@@ -41,9 +38,9 @@ opscli api-credentials init-schema
 D:\Gitlab\start-mcp.ps1 -InitializeSchema
 ```
 
-该参数只要求输入数据库密码，会先创建 API 凭据池表，再启动 MCP 并创建共享采集表。初始化表结构不处理任何 API Key，因此不需要主密钥。
+该参数只要求输入数据库密码，会先创建 API 凭据池表，再启动 MCP 并创建共享采集表。不需要生成或配置 API 凭据主密钥。
 
-第一次执行 `add` 或 `migrate-serpapi-sqlite` 前，再生成并配置 `OPSCLI_API_CREDENTIAL_MASTER_KEY`。一旦写入首个 API Key，主密钥必须长期保持一致，否则已加密凭据将无法解密。
+旧 v1 凭据表使用加密列。重新初始化时，空的 v1 表会自动升级为明文 v2 表；如果 v1 表中已有凭据，命令会拒绝自动迁移，避免丢失已有密文，需要先备份并人工迁移。
 
 运行期账号只需要凭据表的必要读写权限，不应具备建表或修改表结构权限。
 
@@ -81,7 +78,7 @@ opscli api-credentials delete --account-id 12 --actor "admin@example.com"
 
 同一 Provider 下可配置多个账号。运行时先选择最低优先级数值的可用账号，同优先级选择最久未使用的账号；冷却、禁用、失效、耗尽和已删除账号不参与正常领取。
 
-`add`、`rotate`、`enable`、`disable` 和 `delete` 都直接读写 MySQL，只需要日常 DML 权限。`delete` 是逻辑删除：账号状态变为 `deleted` 并立即退出账号池，但密钥版本和审计记录仍然保留。不要直接手工向凭据表插入明文 Key，因为 CLI 还负责信封加密、版本切换和审计。
+`add`、`rotate`、`enable`、`disable` 和 `delete` 都直接读写 MySQL，只需要日常 DML 权限。`delete` 是逻辑删除：账号状态变为 `deleted` 并立即退出账号池，但密钥版本和审计记录仍然保留。建议使用 CLI 管理账号，因为 CLI 会同时维护掩码、指纹、版本、运行状态和审计记录；直接修改单个数据库字段可能造成数据不一致。
 
 ## SerpAPI SQLite 迁移
 
@@ -102,7 +99,7 @@ opscli api-credentials migrate-serpapi-sqlite --sqlite-path /path/to/serpapi.sql
 ## 安全要求
 
 - 普通业务调用方不能通过接口读取明文 API Key。
-- MySQL、主密钥和 API Key 不得进入日志、异常、遥测或导出文件。
+- API Key 以明文存储，因此必须严格限制 MySQL 账号、网络和备份文件的访问权限。
+- MySQL 密码和 API Key 不得进入日志、异常、遥测或导出文件。
 - 修改和轮换账号时应传入 `--actor`，保留审计记录。
 - MySQL 生产连接建议启用 TLS，并使用最小权限账号。
-- 主密钥轮换需要独立的数据密钥重包裹流程，不能直接替换环境变量后重启。
