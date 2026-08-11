@@ -1,0 +1,68 @@
+{
+  "scenario_id": "keyword-conversion-rate",
+  "title": "关键词转化率",
+  "web_route": "/v3/keyword-conversion-rate",
+  "api": {
+    "method": "POST",
+    "endpoint": "/v3/api/keyword-conv",
+    "response_type": "json",
+    "row_path": "data.pager.items"
+  },
+  "required_params": [
+    "keywords"
+  ],
+  "query_conditions": {
+    "site": {
+      "default_value": "US",
+      "allowed_values": ["US", "JP", "UK", "DE", "FR", "IT", "ES", "CA", "IN"]
+    },
+    "period": {
+      "default_value": "W",
+      "allowed_values": ["W", "90D"],
+      "aliases": {
+        "按周": "W",
+        "近90天": "90D",
+        "30d": "W"
+      }
+    },
+    "keywords": {
+      "aliases": ["keywords", "keywordList", "keyword", "q"],
+      "minimum": 1,
+      "maximum": 1000,
+      "deduplicate": true
+    }
+  },
+  "interaction": {
+    "mode": "browser-route",
+    "tag_input": true,
+    "enter_per_phrase": 1,
+    "verify_tag_count_before_query": true,
+    "retry_enter_after_timeout": false,
+    "query_click_count": 1,
+    "replay_safe": false
+  },
+  "response": {
+    "result_scope": "first_page",
+    "fixed_page": 1,
+    "fixed_size": 100,
+    "auto_pagination": false
+  },
+  "result": {
+    "source": "query_json",
+    "local_xlsx": true,
+    "official_export_api": false,
+    "official_export_reference_verified": true,
+    "headers_file": "official-headers.json",
+    "sheets": ["business_main_sheet"],
+    "excluded_sheets": ["Notes"]
+  },
+  "capture_evidence": {
+    "captured_at": "2026-07-31",
+    "page_verified": true,
+    "source_chunk": "chunk-43b3a1f2.20260730221543.js",
+    "captured_workbook_name": "KeywordConversionRate-US-wireless charger stand(123)-2026 Week 29.xlsx",
+    "captured_workbook_fixture": "tests/fixtures/seller_sprite/official_exports/keyword-conversion-rate/KeywordConversionRate-US-wireless charger stand(123)-2026 Week 29.xlsx",
+    "official_export_called": false,
+    "sanitized": true
+  }
+}

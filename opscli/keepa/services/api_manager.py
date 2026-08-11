@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,12 +20,15 @@ from opscli.keepa.config import KeepaSettings, load_settings
 from opscli.keepa.deal_formatter import FormattedDealExport, format_deal_export
 from opscli.keepa.domain.exceptions import KeepaApiError, KeepaConfigError
 from opscli.keepa.domain.models import KeepaExportResult, KeepaScenarioRequest, KeepaScenarioResult
-from opscli.keepa.export.xlsx import export_rows_to_xlsx
+from opscli.keepa.export import export_rows_to_json, export_rows_to_xlsx
 from opscli.keepa.product_formatter import FormattedProductExport, format_product_export
 from opscli.keepa.search_insights_formatter import FormattedSearchInsightsExport, format_search_insights_export
 from opscli.keepa.time import add_keepa_time_conversions
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 from opscli.shared.integration_accounts import IntegrationAccountClient
+
+
+logger = logging.getLogger(__name__)
 
 
 class KeepaApiManager:
@@ -36,10 +41,12 @@ class KeepaApiManager:
         api_key_provider: KeepaApiKeyProvider | None = None,
         jwt: str | None = None,
         session_id: str | None = None,
+        collection_submitter: Callable[..., bool] | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         self.jwt = jwt
         self.session_id = session_id
+        self.collection_submitter = collection_submitter
         self.api_key_provider = api_key_provider or KeepaApiKeyProvider(
             self.settings,
             integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
@@ -62,7 +69,7 @@ class KeepaApiManager:
 
     async def run(self, request: KeepaScenarioRequest) -> KeepaScenarioResult:
         """执行一个 Keepa API 场景。"""
-        _normalize_export_format(request.export_format)
+        export_format = _normalize_export_format(request.export_format)
         scenario = get_scenario(request.scenario)
         site = (request.site or "US").upper()
         job_id = request.job_id or _build_job_id(request, site)
@@ -175,13 +182,20 @@ class KeepaApiManager:
             best_sellers_export=best_sellers_export,
             deal_export=deal_export,
         )
-        export = export_rows_to_xlsx(
+        extra_sheets = _merge_extra_sheets(
+            product_export,
+            search_insights_export,
+            best_sellers_export,
+            deal_export,
+        )
+        exporter = export_rows_to_json if export_format == "json" else export_rows_to_xlsx
+        export = exporter(
             rows=export_rows,
-            output_path=root_dir / f"{job_id}.xlsx",
+            output_path=root_dir / f"{job_id}.{export_format}",
             scenario=request.scenario,
             site=site,
             params=request.params,
-            extra_sheets=_merge_extra_sheets(product_export, search_insights_export, best_sellers_export, deal_export),
+            extra_sheets=extra_sheets,
         )
         _upload_export_if_enabled(
             export=export,
@@ -213,6 +227,7 @@ class KeepaApiManager:
             warnings=warnings,
         )
         _write_json(result_path, result.to_dict())
+        self._submit_collection_result(request=request, result=result)
         return result
 
     def job_status(self, job_id: str) -> dict[str, Any]:
@@ -228,6 +243,31 @@ class KeepaApiManager:
         if not base_dir.is_absolute():
             base_dir = Path.cwd() / base_dir
         return base_dir.resolve() / job_id
+
+    def _submit_collection_result(
+        self,
+        *,
+        request: KeepaScenarioRequest,
+        result: KeepaScenarioResult,
+    ) -> None:
+        """提交成功任务；沉淀异常不能回滚已经完成的 Keepa 采集。"""
+        if self.collection_submitter is None:
+            return
+        try:
+            self.collection_submitter(request=request, result=result)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Keepa 成功任务提交采集数据沉淀失败：job_id=%s",
+                result.job_id,
+            )
+            result.warnings.append(
+                {
+                    "stage": "collection_storage",
+                    "message": "Keepa 数据沉淀排队失败，采集结果已保留",
+                    "error": {"code": type(exc).__name__},
+                }
+            )
+            _write_json(Path(result.result_path), result.to_dict())
 
 
 def extract_quota(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -623,7 +663,9 @@ def _normalize_export_format(value: str) -> str:
     text = (value or "").strip().lower()
     if text in {"", "xls", "xlsx"}:
         return "xlsx"
-    raise KeepaConfigError(f"不支持的导出格式：{value}。Keepa 当前仅支持 xls/xlsx 表格导出。")
+    if text == "json":
+        return "json"
+    raise KeepaConfigError(f"不支持的导出格式：{value}。Keepa 当前支持 xls/xlsx/json 导出。")
 
 
 def _upload_export_if_enabled(

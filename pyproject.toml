@@ -15,6 +15,9 @@ dependencies = [
     "keyring>=25",
     "fastmcp>=2.0",
     "openpyxl>=3.1",
+    "starlette>=0.37",
+    "uvicorn>=0.30",
+    "PyMySQL>=1.1",
 ]
 
 [project.optional-dependencies]
@@ -35,6 +38,8 @@ dev = [
 [project.scripts]
 opscli = "opscli.cli:run"
 opscli-mcp = "opscli.mcp.server:run"
+opscli-collector-mcp = "opscli.collector_mcp.server:run"
+opscli-collector-monitor = "opscli.collector_monitor.server:run"
 
 [build-system]
 # 切换为 setuptools + Cython，支持编译二进制 wheel
@@ -62,4 +67,7 @@ exclude = ["opscli.skills.templates*"]
 # 非编译对象，必须随 wheel 原样打包
 "opscli.query.services.planner.resources" = [
     "*.json",
+]
+"opscli.collector_monitor" = [
+    "wecom-webhook",
 ]

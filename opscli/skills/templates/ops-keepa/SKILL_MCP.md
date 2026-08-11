@@ -20,17 +20,34 @@ visibility: internal
 3. 必填参数齐全时直接执行 `keepa_run`；不要把内部参数确认流程暴露给用户。
 4. 如果返回 `无 session_id：请完成授权登录，或传入有效的 session_id` 等授权类提示，先执行 `auth_mcp_login`，再重试 `keepa_run`；不要先误判为场景参数错误。
 5. 只缺必填项时最多追问 1 个短问题；一次追问尽量覆盖同一场景的所有必填项。
-6. 默认导出用户可读 XLSX；MCP 当前不支持 JSON 用户导出，后端比对使用任务内部 `raw.json`。
+6. 默认导出用户可读 XLSX；多任务编排、汇总计算或生成分析报告时推荐显式使用 JSON。
 7. 最终回复给出业务结果和 `keepa_run` 顶层返回的 MCP 每日调用额度：查询对象、站点、返回行数、导出文件或链接、今日已用和剩余次数。
 8. 不主动展示 API Key、账号来源、Keepa token 消耗或 token 余额、内部参数、`params.json`、`raw.json`。
 9. 用户不需要额外说“格式化”；默认 XLSX 导出会自动写入本地可读派生字段和明细 sheet。
+
+## 导出格式选择
+
+| 任务目的 | `export_format` | 处理方式 |
+| --- | --- | --- |
+| 单任务人工查看/留档 | `xls` | 实际交付 `.xlsx` |
+| 多任务编排/汇总/分析报告 | `json` | 每个任务都显式传 JSON，终态后统一读取 |
+| 用户明确指定格式 | 用户指定值 | 不覆盖用户选择 |
+
+### JSON v1 工作表契约
+
+- 校验 `schema_version="1.0"`；按 `sheets.Sheet1`、`Sheet2` 的顺序读取，每个 `SheetN` 对应一个 XLSX 工作表，不表示 Keepa API 页码。
+- 每页读取 `name`、`columns`、`row_count`、`rows`；真实工作表名称以 `name` 为准。
+- 按 `columns[index]` 解释 `rows[*][index]`，不要把行数组直接当对象；用 `row_count` 校验行数。
+- 多任务合并时保留 `job_id/SheetN/name` 来源，先按列名对齐再聚合；必须遍历全部 Sheet，不能只消费主表。
+- JSON 与 XLSX 共用格式化工作表数据，但 JSON 不等于 Keepa 原始响应；后端核对仍使用内部 `raw.json`。
+- 不得把内部 `raw.json`、`result.json` 或服务端路径当作用户导出文件返回。
 
 ## 工具列表
 
 - `keepa_spec_must_read`: read this guide before first use. 官方接口细节见 `opscli/skills/templates/ops-keepa/references/OFFICIAL.md`。
 - `keepa_scenarios`: list supported Keepa scenarios.
 - `keepa_quota_status`: read the current user's MCP daily call quota without consuming a call.
-- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX with automatic readable formatting. `export_format` accepts `xls`/`xlsx`; `xls` and `xlsx` both generate `.xlsx`。
+- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX with automatic readable formatting. `export_format` accepts `xls`/`xlsx`/`json`; `xls` and `xlsx` both generate `.xlsx`。
 - `keepa_job_status`: read a saved task result by `job_id`。
 - `keepa_export`: read export path or cloud URL, filename, format, and MIME type。
 
@@ -65,7 +82,7 @@ Every run writes files under the task directory:
 - `raw.json`: endpoint, normalized request params, before/after token status, raw Keepa response.
 - `result.json`: normalized task result and export metadata.
 - `<job_id>.xlsx`: default user-facing export with Chinese headers.
-- 用户导出文件仅支持 `<job_id>.xlsx`。
+- `<job_id>.json`: formatted multi-Sheet JSON export for agent workflows and reports.
 
 - `export.url` 存在时只回复云端链接；否则回复 `export.path`。
 - 上传失败但本地导出存在时，不判定任务失败，回复本地文件路径。
@@ -84,7 +101,7 @@ XLSX 中文表头不是 Keepa 官方提供的，是本地导出层按场景映�
 - Best Sellers 默认主表输出带 `bestSellerRank` 的 ASIN 明细，并追加 `best_sellers_list` 汇总 sheet。
 - Deals 默认派生图片、Keepa 时间、Warehouse 成色、Lightning 标记、常用 current 指标，并追加 `deal_metrics` 指标展开 sheet。
 
-`raw.json` 保留 Keepa 原始字段，后端对比以 `raw.json` 为准；XLSX 用于用户查看。
+`raw.json` 保留 Keepa 原始字段，后端对比以 `raw.json` 为准；XLSX 用于用户查看，格式化 JSON 用于多任务编排和分析报告。
 
 ## 字段口径与时间处理
 
@@ -159,7 +176,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 - 用户只说“查商品详情”：建议 `stats=30`；`product` 场景默认会带 `history=true`。
 - 用户说“不需要历史/不要价格历史”：额外传 `history=false`。
 - 用户说“只要 ASIN”：使用 `asins_only=true`。
-- 用户要求后端比对、原始数据、JSON：仍使用默认 XLSX 导出；说明 MCP 暂不支持 JSON 用户导出，后端比对以任务内部 `raw.json` 为准。
+- 用户要求结构化 JSON、批量编排或分析报告：使用 `export_format="json"`；若要求 Keepa 原始响应或后端比对，仍以任务内部 `raw.json` 为准，不把它作为普通用户导出文件。
 - 用户未指定页码：`product-search` 可以不传 `page`，需要显式第一页时传 `page=0`。
 - `seller` 默认使用 `storefront=true`；用户明确不要店铺商品/店铺 ASIN，或一次传多个 seller ID 时，传 `storefront=false`。
 

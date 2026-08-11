@@ -1,0 +1,45 @@
+{
+  "scenario_id": "branddb",
+  "title": "全球商标库",
+  "web_route": "/v3/branddb",
+  "export_api": {
+    "method": "POST",
+    "endpoint": "/v3/api/branddb/export-syn",
+    "transport": "POST_XLSX",
+    "response_type": "xlsx",
+    "timeout_ms": 120000
+  },
+  "required_params": [
+    "text"
+  ],
+  "filter_fields": [
+    "feature",
+    "office",
+    "brandName",
+    "status",
+    "applicant",
+    "niceClass",
+    "applicationYear",
+    "expiryYear",
+    "desc",
+    "orderField",
+    "pageNum",
+    "pageSize",
+    "ids"
+  ],
+  "result": {
+    "source": "official_xlsx",
+    "transform": false,
+    "auto_pagination": false,
+    "browser_context_only": true,
+    "replay_safe": false
+  },
+  "capture_evidence": {
+    "captured_at": "2026-07-30",
+    "sample_request": "sample-request.json",
+    "sample_response": "sample-response.json",
+    "official_headers": "official-headers.json",
+    "workbook_profile": "workbook-profile.json",
+    "sanitized": true
+  }
+}

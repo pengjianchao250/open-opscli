@@ -1,6 +1,6 @@
 {
   "name": "ops-feedback-query",
-  "version": "v1.2.0",
-  "updated_at": "2026-07-27",
-  "notes": "新增 Linux systemd 每日 09:00 自动推送部署包。"
+  "version": "v1.10.0",
+  "updated_at": "2026-08-06",
+  "notes": "新增受约束的 Codex 管理叙事阶段，日报改为管理洞察优先并折叠结构化明细。"
 }

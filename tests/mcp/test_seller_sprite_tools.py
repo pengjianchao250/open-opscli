@@ -18,12 +18,15 @@ def _run(coro):
 @pytest.fixture(autouse=True)
 def _route_credential_test_seams(monkeypatch):
     """让既有工具测试替身经统一凭证模块生效，且不读取真实本机凭证。"""
-    original_auth_pair = ops_credentials._get_auth_pair
     monkeypatch.setattr(
         seller_sprite_tools,
         "_get_auth_pair",
-        original_auth_pair,
+        lambda system, session_id, jwt: (session_id or "test-session", jwt or "test-jwt"),
         raising=False,
+    )
+    monkeypatch.setattr(
+        "opscli.mcp.tools.helpers._get_authenticated_user_email",
+        lambda: "mcp-user@example.com",
     )
     monkeypatch.setattr(
         ops_credentials,
@@ -43,7 +46,10 @@ def _route_credential_test_seams(monkeypatch):
 
 class DummyManager:
     def scenarios(self):
-        return [{"scenario_id": "keyword-reverse", "title": "关键词反查"}]
+        return [
+            {"scenario_id": "keyword-reverse", "title": "关键词反查"},
+            {"scenario_id": "keyword-comparison", "title": "流量词对比"},
+        ]
 
 
 class DummyScheduler:
@@ -95,6 +101,31 @@ class EnqueueOnlyScheduler:
 class FailingScheduler:
     async def enqueue(self, request, **kwargs):
         raise RuntimeError("enqueue boom")
+
+
+def test_seller_sprite_run_rejects_non_ready_module_before_enqueue(monkeypatch):
+    """Bundle 未就绪时业务工具必须返回稳定错误且不得获取调度器。"""
+    from opscli.seller_sprite import mcp_bundle
+
+    monkeypatch.setitem(mcp_bundle._MODULE_STATE, "status", "failed")
+    monkeypatch.setattr(
+        "opscli.seller_sprite.services.get_task_scheduler",
+        lambda: (_ for _ in ()).throw(AssertionError("不得获取调度器")),
+    )
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="keyword-reverse",
+            params={"keyword": "charger"},
+        )
+    )
+
+    assert result["success"] is False
+    assert result["error"] == {
+        "code": "COLLECTOR_MODULE_NOT_READY",
+        "message": "卖家精灵采集模块尚未就绪，请先检查 Collector 模块健康状态",
+        "module": "seller_sprite",
+    }
 
 
 class NoNormalizeScheduler:
@@ -260,6 +291,10 @@ def test_seller_sprite_scenarios_uses_manager(monkeypatch):
 
     assert result["success"] is True
     assert result["data"][0]["scenario_id"] == "keyword-reverse"
+    assert {item["scenario_id"] for item in result["data"]} >= {
+        "keyword-reverse",
+        "keyword-comparison",
+    }
 
 
 def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
@@ -274,6 +309,22 @@ def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
     assert "不生成官网 `Notes` 页及二维码图片" in result["data"]["spec"]
     assert "`association-traffic` 关联流量" in result["data"]["spec"]
     assert "本地工作簿只生成业务主表，不生成官网导出中的 `Notes` 页" in result["data"]["spec"]
+    assert "`traffic-extend` 拓展流量词" in result["data"]["spec"]
+    assert "默认点击“用全部变体拓词”" in result["data"]["spec"]
+    assert "官方 33 列主表" in result["data"]["spec"]
+    assert "`keyword-comparison` 流量词对比" in result["data"]["spec"]
+    assert "必填 1—10 个" in result["data"]["spec"]
+    assert "固定 `page=1`、`size=100`" in result["data"]["spec"]
+    assert "默认点击“用畅销变体拓词”" in result["data"]["spec"]
+    assert "`keyword-conversion-rate` 关键词转化率" in result["data"]["spec"]
+    assert "`real-time-bidding` 实时查竞价" in result["data"]["spec"]
+    assert "最多 1000 个关键词词组" in result["data"]["spec"]
+    assert "每个词组只发送一次 Enter" in result["data"]["spec"]
+    assert "不生成 `Notes`" in result["data"]["spec"]
+    assert "`variantSelection`" in result["data"]["spec"]
+    assert "用当前变体拓词" in result["data"]["spec"]
+    assert "动态业务主表和 `ASIN` 辅助表" in result["data"]["spec"]
+    assert "不调用官网额度型导出" in result["data"]["spec"]
     assert "`aba-reverse` 出单词反查" in result["data"]["spec"]
     assert "官方 XLSX 原样保存" in result["data"]["spec"]
 
@@ -390,6 +441,27 @@ def test_seller_sprite_skill_and_formal_docs_require_durable_bounded_tracking():
     for name, content in documents.items():
         for obsolete in obsolete_contracts:
             assert obsolete not in content, f"{name} 仍含旧契约：{obsolete}"
+
+
+def test_seller_sprite_skill_documents_define_formatted_json_v2_contract():
+    repo_root = Path(__file__).resolve().parents[2]
+    skill_dir = repo_root / "opscli" / "skills" / "templates" / "ops-seller-sprite"
+
+    for filename in ("SKILL.md", "SKILL_MCP.md"):
+        content = (skill_dir / filename).read_text(encoding="utf-8")
+        assert 'schema_version="2.0"' in content
+        assert "`columns[index]`" in content
+        assert "`rows[*][index]`" in content
+        assert "`number_formats[index]`" in content
+        assert "`additional_sheets`" in content
+        assert "重复的表头" in content
+        assert "优先显式传 `export_format=json`" in content or (
+            '优先显式传 `export_format="json"`' in content
+        )
+        assert "官方文件导出场景仍只支持 `xls` / `xlsx`" in content
+
+    version = json.loads((skill_dir / "data" / "VERSION.json").read_text(encoding="utf-8"))
+    assert version["version"] == "v0.0.19"
 
 
 def test_seller_sprite_identity_proxy_uses_shared_authenticated_email_resolver(monkeypatch):
@@ -1291,6 +1363,9 @@ def test_listing_analysis_result_persists_ready_remote_payload(monkeypatch, tmp_
     assert Path(result["data"]["result_path"]).exists()
     assert Path(result["data"]["raw_path"]).exists()
     assert Path(result["data"]["export"]["path"]).exists()
+    exported = json.loads(Path(result["data"]["export"]["path"]).read_text(encoding="utf-8"))
+    assert exported["schema_version"] == "2.0"
+    assert exported["rows"][0][exported["columns"].index("content")] == "Listing 分析正文"
     assert store.finish_task_call["job_id"] == "listing-job-1"
     assert store.finish_task_call["row_count"] == 1
     assert store.finish_mcp_run_success_call["export_payload"]["format"] == "json"

@@ -38,13 +38,15 @@ class SerpApiKeyRecord:
     last_used_at: str | None = None
     exhausted_at: str | None = None
     last_error: str | None = None
+    provider_metadata: dict[str, Any] | None = None
+    api_key_masked: str | None = None
 
     def to_public_dict(self) -> dict[str, Any]:
         """返回不包含明文 API Key 的运维摘要。"""
         return {
             "key_id": self.key_id,
             "name": self.name,
-            "api_key_masked": _mask_api_key(self.api_key),
+            "api_key_masked": self.api_key_masked or _mask_api_key(self.api_key),
             "status": self.status,
             "remark": _redact_secret(self.remark, self.api_key),
             "total_searches_left": self.total_searches_left,

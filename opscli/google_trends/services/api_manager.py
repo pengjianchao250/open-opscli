@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from opscli.google_trends.api.scenarios import get_scenario, list_scenarios
@@ -23,6 +24,9 @@ from opscli.google_trends.export.xlsx import export_rows_to_xlsx
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 
 
+logger = logging.getLogger(__name__)
+
+
 class GoogleTrendsApiManager:
     """执行 Google Trends 场景并保存请求和响应数据。"""
 
@@ -32,10 +36,12 @@ class GoogleTrendsApiManager:
         settings: GoogleTrendsSettings | None = None,
         jwt: str | None = None,
         session_id: str | None = None,
+        collection_submitter: Callable[..., bool] | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         self.jwt = jwt
         self.session_id = session_id
+        self.collection_submitter = collection_submitter
 
     def scenarios(self) -> list[dict[str, Any]]:
         """列出支持的接口场景。"""
@@ -133,6 +139,7 @@ class GoogleTrendsApiManager:
             warnings=warnings,
         )
         _write_json(result_path, result.to_dict())
+        self._submit_collection_result(request=request, result=result)
         return result
 
     def job_status(self, job_id: str) -> dict[str, Any]:
@@ -148,6 +155,31 @@ class GoogleTrendsApiManager:
         if not base_dir.is_absolute():
             base_dir = Path.cwd() / base_dir
         return base_dir.resolve() / job_id
+
+    def _submit_collection_result(
+        self,
+        *,
+        request: GoogleTrendsScenarioRequest,
+        result: GoogleTrendsScenarioResult,
+    ) -> None:
+        """提交成功任务；沉淀异常不能回滚已经完成的趋势采集。"""
+        if self.collection_submitter is None:
+            return
+        try:
+            self.collection_submitter(request=request, result=result)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Google Trends 成功任务提交采集数据沉淀失败：job_id=%s",
+                result.job_id,
+            )
+            result.warnings.append(
+                {
+                    "stage": "collection_storage",
+                    "message": "Google Trends 数据沉淀排队失败，采集结果已保留",
+                    "error": {"code": type(exc).__name__},
+                }
+            )
+            _write_json(Path(result.result_path), result.to_dict())
 
 
 def extract_rows(scenario: str, payload: dict[str, Any]) -> list[dict[str, Any]]:

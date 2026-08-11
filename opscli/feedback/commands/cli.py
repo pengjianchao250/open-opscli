@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import typer
 
 from opscli.feedback.domain.exceptions import FeedbackError, InvalidPayloadError
 from opscli.feedback.services.manager import FeedbackManager, load_json_arg, load_json_file
+from opscli.feedback.services.insight import FeedbackInsightManager
 
 app = typer.Typer(help="用户反馈提交与查询")
 
@@ -154,3 +156,49 @@ def detail(
         raise typer.Exit(1)
 
     _emit(payload, pretty)
+
+
+@app.command("insight")
+def insight(
+    input_file: str = typer.Option(..., "--input-file", help="反馈洞察输入 JSON 文件"),
+    config_file: str | None = typer.Option(
+        None,
+        "--config-file",
+        help="模型配置 JSON 文件，默认 ~/.config/opscli/feedback_insight.json",
+    ),
+    taxonomy_file: str | None = typer.Option(
+        None,
+        "--taxonomy-file",
+        help="持久 taxonomy JSON 文件，默认 ~/.config/opscli/feedback_taxonomy.json",
+    ),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+) -> None:
+    """使用大模型分类反馈并输出确定性聚合洞察。
+
+    Args:
+        input_file: 当前与上一周期反馈的 JSON 文件。
+        config_file: 可选模型配置文件；为空时读取 opscli 默认配置目录。
+        pretty: 是否格式化终端 JSON。
+
+    Raises:
+        typer.Exit: 输入、模型配置或模型响应不合法时返回退出码 1。
+    """
+    try:
+        payload = load_json_file(input_file, label="input-file")
+        if not isinstance(payload, dict):
+            raise InvalidPayloadError("--input-file 内容必须是 JSON 对象")
+        manager = FeedbackInsightManager.from_config(
+            Path(config_file) if config_file else None,
+            Path(taxonomy_file) if taxonomy_file else None,
+        )
+        data = manager.analyze(payload)
+        response = {
+            "success": True,
+            "command": "feedback insight",
+            "data": data,
+            "error": None,
+        }
+    except Exception as exc:
+        _emit(_error_payload("feedback insight", exc), pretty)
+        raise typer.Exit(1)
+    _emit(response, pretty)

@@ -11,6 +11,8 @@ from uuid import uuid4
 
 import httpx
 
+from opscli.api_credentials.models import ApiCredentialLease
+from opscli.api_credentials.pool import ApiCredentialPool
 from opscli.beta.canopy.config import CANOPY_BASE_URL, CanopySettings, load_settings
 from opscli.beta.canopy.domain.exceptions import CanopyApiError, CanopyConfigError
 from opscli.beta.canopy.domain.models import CanopyScenarioRequest, CanopyScenarioResult
@@ -27,13 +29,34 @@ class CanopyApiManager:
         settings: CanopySettings | None = None,
         jwt: str | None = None,
         session_id: str | None = None,
+        credential_pool: ApiCredentialPool | None = None,
     ) -> None:
+        """创建 Canopy 场景管理器。
+
+        Args:
+            settings: 输出目录等非敏感运行配置。
+            jwt: 文件上传使用的 OPS JWT。
+            session_id: 文件上传使用的 OPS 会话 ID。
+            credential_pool: 本次账号租约所属的统一凭据池。
+        """
         self.settings = settings or load_settings()
         self.jwt = jwt
         self.session_id = session_id
+        self.credential_pool = credential_pool
 
     async def run(self, request: CanopyScenarioRequest) -> CanopyScenarioResult:
-        """执行一个 Canopy API 场景。"""
+        """执行一个 Canopy API 场景并回写凭据状态。
+
+        Args:
+            request: 包含场景参数和内部账号租约引用的请求。
+
+        Returns:
+            脱敏后的场景结果和导出文件信息。
+
+        Raises:
+            CanopyConfigError: 请求参数或导出格式非法。
+            CanopyApiError: Provider 请求失败。
+        """
         export_format = _normalize_export_format(request.export_format)
         if request.timeout_seconds <= 0:
             raise CanopyConfigError("timeout_seconds 必须大于 0")
@@ -58,12 +81,26 @@ class CanopyApiManager:
             ),
         )
 
-        raw_response = await request_canopy_api(
-            path=request.path,
-            params=normalized_params,
-            api_key=request.api_key,
-            timeout_seconds=request.timeout_seconds,
-        )
+        lease = _credential_lease(request)
+        # 账号 ID 与密钥版本形成 fencing；轮换后的旧请求不会污染新密钥状态。
+        try:
+            raw_response = await request_canopy_api(
+                path=request.path,
+                params=normalized_params,
+                api_key=request.api_key,
+                timeout_seconds=request.timeout_seconds,
+            )
+        except Exception as exc:
+            if lease:
+                self._credential_pool().report_failure(
+                    lease,
+                    error_code=type(exc).__name__,
+                    message=str(exc),
+                    disable=getattr(exc, "status_code", None) in {401, 403},
+                )
+            raise
+        if lease:
+            self._credential_pool().report_success(lease)
         safe_response = _redact_secret(raw_response, request.api_key)
 
         raw_payload = {
@@ -122,7 +159,17 @@ class CanopyApiManager:
         return result
 
     def job_status(self, job_id: str) -> dict[str, Any]:
-        """读取已落盘任务状态。"""
+        """读取已落盘任务状态。
+
+        Args:
+            job_id: 待查询的本地任务 ID。
+
+        Returns:
+            已脱敏的任务结果字典。
+
+        Raises:
+            CanopyConfigError: 任务结果不存在。
+        """
         root_dir = self.settings.output_dir / job_id
         result_path = root_dir / "result.json"
         if not result_path.exists():
@@ -135,6 +182,12 @@ class CanopyApiManager:
             base_dir = Path.cwd() / base_dir
         return base_dir.resolve() / job_id
 
+    def _credential_pool(self) -> ApiCredentialPool:
+        """按需创建统一凭据池，避免无租约的兼容调用要求 MySQL 配置。"""
+        if self.credential_pool is None:
+            self.credential_pool = ApiCredentialPool()
+        return self.credential_pool
+
 
 async def request_canopy_api(
     *,
@@ -143,7 +196,21 @@ async def request_canopy_api(
     api_key: str,
     timeout_seconds: int,
 ) -> dict[str, Any]:
-    """执行 Canopy REST 请求，并要求响应为 JSON 对象。"""
+    """执行 Canopy REST 请求，并要求响应为 JSON 对象。
+
+    Args:
+        path: Canopy API 路径。
+        params: 已规范化的查询参数。
+        api_key: 当前账号的 API Key。
+        timeout_seconds: 单次请求超时秒数。
+
+    Returns:
+        Canopy 返回的 JSON 对象。
+
+    Raises:
+        CanopyApiError: HTTP 请求失败或响应不是合法 JSON。
+        ValueError: 响应 JSON 顶层不是对象。
+    """
     headers = {
         "API-KEY": api_key,
         "Content-Type": "application/json",
@@ -154,7 +221,7 @@ async def request_canopy_api(
             response.raise_for_status()
             data = response.json()
     except httpx.HTTPStatusError as exc:
-        raise _api_error_from_response(exc.response) from exc
+        raise _api_error_from_response(exc.response, api_key=api_key) from exc
     except httpx.HTTPError as exc:
         raise CanopyApiError(f"Canopy API 请求失败：{exc}") from exc
     except ValueError as exc:
@@ -171,6 +238,19 @@ def _normalize_export_format(value: str) -> str:
     if text in {"", "xls"}:
         return "xls"
     raise CanopyConfigError(f"不支持的导出格式：{value}。beta Canopy 当前仅支持 xls 表格导出。")
+
+
+def _credential_lease(request: CanopyScenarioRequest) -> ApiCredentialLease | None:
+    """从内部请求字段还原租约，用密钥版本隔离轮换前后的运行回写。"""
+    if request.credential_account_id is None or request.credential_secret_version is None:
+        return None
+    return ApiCredentialLease(
+        account_id=request.credential_account_id,
+        provider="canopy",
+        account_name=request.credential_account_name or "",
+        secret=request.api_key,
+        secret_version=request.credential_secret_version,
+    )
 
 
 def _params_payload(
@@ -195,19 +275,20 @@ def _params_payload(
     }
 
 
-def _api_error_from_response(response: httpx.Response) -> CanopyApiError:
+def _api_error_from_response(response: httpx.Response, *, api_key: str = "") -> CanopyApiError:
+    """将 Canopy HTTP 错误转换为不包含当前 API Key 的领域异常。"""
     status_code = response.status_code
     response_payload: dict[str, Any] | None = None
     response_excerpt: str | None = None
     try:
         parsed = response.json()
         if isinstance(parsed, dict):
-            response_payload = parsed
-            response_excerpt = json.dumps(parsed, ensure_ascii=False)[:2000]
+            response_payload = _redact_secret(parsed, api_key)
+            response_excerpt = json.dumps(response_payload, ensure_ascii=False)[:2000]
         else:
-            response_excerpt = json.dumps(parsed, ensure_ascii=False)[:2000]
+            response_excerpt = json.dumps(_redact_secret(parsed, api_key), ensure_ascii=False)[:2000]
     except ValueError:
-        response_excerpt = response.text[:2000]
+        response_excerpt = str(_redact_secret(response.text, api_key))[:2000]
     return CanopyApiError(
         f"Canopy API 返回 HTTP {status_code}",
         status_code=status_code,

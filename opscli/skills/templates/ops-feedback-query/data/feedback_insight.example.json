@@ -1,0 +1,6 @@
+{
+  "endpoint": "https://your-model-gateway.example/v1/chat/completions",
+  "api_key": "REPLACE_WITH_MODEL_API_KEY",
+  "model": "REPLACE_WITH_MODEL_NAME",
+  "batch_size": 100
+}

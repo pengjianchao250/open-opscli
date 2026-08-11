@@ -39,7 +39,7 @@ opscli keepa run product --site US --params '{"asin":"B0088PUEPK","stats":30}'
 ```
 
 Default export is XLSX with Chinese headers. `--export-format` currently accepts
-only `xls` and `xlsx`; backend comparison should use the task `raw.json`.
+`xls`, `xlsx`, and formatted `json`; backend comparison should use the task `raw.json`.
 
 Run with low-quota override:
 

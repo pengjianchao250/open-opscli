@@ -10,7 +10,7 @@ Group=@SERVICE_GROUP@
 WorkingDirectory=@PROJECT_ROOT@
 Environment="PATH=@VENV_BIN@:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
 Environment="PYTHONDONTWRITEBYTECODE=1"
-ExecStart=@PYTHON_BIN@ @REPORT_SCRIPT@ --send
+ExecStart=@PYTHON_BIN@ @REPORT_SCRIPT@ --send @INSIGHT_ARGS@
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

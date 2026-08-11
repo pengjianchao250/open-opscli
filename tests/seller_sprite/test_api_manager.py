@@ -1,19 +1,32 @@
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from openpyxl import load_workbook
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.config import SellerSpriteSettings
 from opscli.seller_sprite.domain.exceptions import SellerSpriteApiError, SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest, SellerSpriteScenarioResult
+from opscli.seller_sprite.export.xlsx import build_export_worksheets
 from opscli.seller_sprite.services import api_manager as api_manager_module
 from opscli.seller_sprite.services.api_manager import SellerSpriteApiManager
 
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+@pytest.fixture(autouse=True)
+def disable_export_upload(monkeypatch):
+    """Manager 测试不得读取真实认证或访问文件上传服务。"""
+    monkeypatch.setattr(
+        api_manager_module,
+        "_upload_export_if_enabled",
+        lambda **kwargs: None,
+    )
 
 
 class DummyAccountProvider:
@@ -180,6 +193,30 @@ class SessionExpiredOnceApiClient(DummyApiClient):
         return {"code": "OK", "data": {"items": [{"asin": "B00TEST"}]}}
 
 
+class ProgressPollingApiClient(DummyApiClient):
+    """模拟远端任务轮询，并保留足够次数验证进度节流。"""
+
+    calls = []
+
+    async def post_json(self, url, payload, *, referer=None):
+        """返回待轮询远端任务。"""
+        return {
+            "code": "OK",
+            "data": {"taskId": "remote-task-progress", "taskStatus": "SUBMITTED"},
+        }
+
+    async def get_json(self, url, params, *, referer=None):
+        """前十次保持运行，第十一次完成。"""
+        self.calls.append({"url": url, "params": params, "referer": referer})
+        attempt = len(self.calls)
+        if attempt < 11:
+            return {"code": "OK", "data": {"taskStatus": "RUNNING"}}
+        return {
+            "code": "OK",
+            "data": {"taskStatus": "COMPLETED", "content": "done"},
+        }
+
+
 class ListingAnalysisApiClient(DummyApiClient):
     calls = []
     instance = None
@@ -267,6 +304,150 @@ class FailingAsyncManager(SellerSpriteApiManager):
         raise ValueError("boom from async seller sprite")
 
 
+def test_manager_reports_coarse_progress_without_payloads(monkeypatch, tmp_path: Path):
+    """Manager 应按公开监听器报告粗粒度阶段，不携带请求与文件内容。"""
+    DummyApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    stages = []
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="api-direct"),
+        account_provider=DummyAccountProvider(),
+        progress_listener=lambda stage, metadata=None: stages.append((stage, metadata or {})),
+    )
+
+    _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-reverse",
+                site="US",
+                period="30d",
+                params={"asin": "B0PRIVATE123"},
+                job_id="job-progress-listener",
+                export_format="json",
+            )
+        )
+    )
+
+    assert [stage for stage, _ in stages] == [
+        "resolving",
+        "requesting",
+        "processing",
+        "exporting",
+        "uploading",
+        "finalizing",
+    ]
+    assert all(metadata == {} for _, metadata in stages)
+    assert "B0PRIVATE123" not in json.dumps(stages)
+    assert str(tmp_path) not in json.dumps(stages)
+
+
+def test_manager_reports_browser_wait_without_payloads(monkeypatch, tmp_path: Path):
+    """browser-route 请求等待应仅报告阶段，不暴露请求参数。"""
+    calls = []
+    stages = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={"code": "OK", "data": {"items": [{"asin": "B0RESULT001"}]}},
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(
+        api_manager_module,
+        "_run_browser_route_request",
+        fake_browser_route_request,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+        progress_listener=lambda stage, metadata=None: stages.append((stage, metadata or {})),
+    )
+
+    _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-reverse",
+                site="US",
+                period="30d",
+                params={"asin": "B0PRIVATE123"},
+                job_id="job-browser-progress",
+                export_format="json",
+            )
+        )
+    )
+
+    assert [stage for stage, _ in stages] == [
+        "resolving",
+        "browser_wait",
+        "processing",
+        "exporting",
+        "uploading",
+        "finalizing",
+    ]
+    assert all(metadata == {} for _, metadata in stages)
+    assert len(calls) == 1
+    assert "B0PRIVATE123" not in json.dumps(stages)
+    assert str(tmp_path) not in json.dumps(stages)
+
+
+def test_manager_throttles_remote_poll_progress(monkeypatch, tmp_path: Path):
+    """远端轮询仅在首次、状态变化和每十次检查时报告脱敏进度。"""
+    from opscli.seller_sprite.api import scenarios as scenarios_module
+
+    ProgressPollingApiClient.calls = []
+    stages = []
+    base_scenario = scenarios_module.SCENARIOS["keyword-reverse"]
+    polling_scenario = replace(
+        base_scenario,
+        task_result_endpoint="/v3/api/ai-result/{task_id}",
+    )
+    monkeypatch.setitem(
+        scenarios_module.SCENARIOS,
+        "keyword-reverse",
+        polling_scenario,
+    )
+    monkeypatch.setattr(
+        api_manager_module,
+        "SellerSpriteApiClient",
+        ProgressPollingApiClient,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="api-direct"),
+        account_provider=DummyAccountProvider(),
+        progress_listener=lambda stage, metadata=None: stages.append((stage, metadata or {})),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-reverse",
+                site="US",
+                period="30d",
+                params={
+                    "asin": "B0PRIVATE123",
+                    "pollAttempts": 11,
+                    "pollInterval": 0,
+                },
+                job_id="job-poll-progress",
+                export_format="json",
+            )
+        )
+    )
+
+    poll_events = [metadata for stage, metadata in stages if stage == "remote_poll"]
+    assert poll_events == [
+        {"poll_attempt": 1, "poll_total": 11, "poll_status": "RUNNING"},
+        {"poll_attempt": 10, "poll_total": 11, "poll_status": "RUNNING"},
+        {"poll_attempt": 11, "poll_total": 11, "poll_status": "COMPLETED"},
+    ]
+    assert result.row_count == 0
+    assert "remote-task-progress" not in json.dumps(poll_events)
+    assert "B0PRIVATE123" not in json.dumps(poll_events)
+    assert str(tmp_path) not in json.dumps(poll_events)
+
+
 def test_manager_writes_job_files_and_xlsx(monkeypatch, tmp_path: Path):
     DummyApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
@@ -332,7 +513,12 @@ def test_manager_runs_keyword_research_as_get_page(monkeypatch, tmp_path: Path):
     )
 
 
-def test_manager_returns_only_first_aba_research_page(monkeypatch, tmp_path: Path):
+@pytest.mark.parametrize("export_format", ["xlsx", "json"])
+def test_manager_returns_only_first_aba_research_page(
+    monkeypatch,
+    tmp_path: Path,
+    export_format: str,
+):
     AbaResearchApiClient.calls = []
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", AbaResearchApiClient)
     manager = SellerSpriteApiManager(
@@ -349,6 +535,7 @@ def test_manager_returns_only_first_aba_research_page(monkeypatch, tmp_path: Pat
                 params={"q": "paper towels", "page": 4, "size": 20},
                 page_size=20,
                 job_id="job-aba-research",
+                export_format=export_format,
             )
         )
     )
@@ -356,7 +543,7 @@ def test_manager_returns_only_first_aba_research_page(monkeypatch, tmp_path: Pat
     assert result.row_count == 2
     assert [row["keyword"] for row in result.data] == ["obsession", "paper towels"]
     assert result.export is not None
-    assert result.export.filename == "ABAKeywordTrend-US-2026第29周.xlsx"
+    assert result.export.filename == f"ABAKeywordTrend-US-2026第29周.{export_format}"
     assert Path(result.export.path).exists()
     assert len(AbaResearchApiClient.calls) == 1
     call = AbaResearchApiClient.calls[0]
@@ -513,6 +700,98 @@ def test_manager_keeps_browser_route_aba_reverse_xlsx_unchanged(monkeypatch, tmp
     assert calls[0]["endpoint"] == "/v2/aba/reverse/export"
 
 
+def test_manager_keeps_browser_route_branddb_xlsx_unchanged(monkeypatch, tmp_path: Path):
+    content = b"PK\x03\x04" + b"branddb-official-xlsx" * 20
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        output_path = kwargs["root_dir"] / "official-branddb.xlsx"
+        output_path.write_bytes(content)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "official_xlsx_path": str(output_path),
+                    "official_filename": "Branddb-ANKER(2000)-20260730.xlsx",
+                    "content_length": len(content),
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(api_manager_module, "_run_browser_route_request", fake_browser_route_request)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="branddb",
+                site="US",
+                period="30d",
+                params={"text": "ANKER", "status": ["已注册"]},
+                job_id="job-branddb",
+            )
+        )
+    )
+
+    assert result.row_count == 0
+    assert result.data == []
+    assert result.export is not None
+    assert result.export.filename == "Branddb-ANKER(2000)-20260730.xlsx"
+    assert Path(result.export.path).read_bytes() == content
+    assert len(calls) == 1
+    assert calls[0]["scenario_method"] == "POST_XLSX"
+    assert calls[0]["endpoint"] == "/v3/api/branddb/export-syn"
+    assert calls[0]["payload"]["status"] == ["Registered"]
+    assert calls[0]["replay_safe"] is False
+
+
+def test_manager_rejects_non_xlsx_export_for_branddb(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    with pytest.raises(SellerSpriteConfigError, match="仅支持 xls 或 xlsx"):
+        _run(
+            manager.run(
+                SellerSpriteScenarioRequest(
+                    scenario="branddb",
+                    site="US",
+                    period="30d",
+                    params={"text": "ANKER"},
+                    export_format="json",
+                )
+            )
+        )
+
+
+def test_manager_rejects_api_direct_for_branddb(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="api-direct"),
+        account_provider=DummyAccountProvider(),
+    )
+
+    with pytest.raises(SellerSpriteConfigError, match="仅支持 browser-route"):
+        _run(
+            manager.run(
+                SellerSpriteScenarioRequest(
+                    scenario="branddb",
+                    site="US",
+                    period="30d",
+                    params={"text": "ANKER"},
+                )
+            )
+        )
+
+
 def test_manager_rejects_json_export_for_aba_reverse(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", AbaReverseApiClient)
     manager = SellerSpriteApiManager(
@@ -572,6 +851,95 @@ def test_manager_returns_only_first_association_traffic_page(monkeypatch, tmp_pa
     assert len(raw["response"]["data"]["pagerDto"]["items"]) == 2
 
 
+@pytest.mark.parametrize("export_format", ["xlsx", "json"])
+def test_manager_exports_first_keyword_comparison_page_with_effective_asins(
+    monkeypatch, tmp_path: Path, export_format: str
+):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "total": 2057,
+                    "items": [
+                        {
+                            "keyword": "phone stand",
+                            "keywordCn": "手机支架",
+                            "competitorList": [
+                                {
+                                    "asin": "B0949DWJCV",
+                                    "trafficPercentage": 0.0686,
+                                    "trafficKeywordTypes": ["PRIMARY"],
+                                }
+                            ],
+                        },
+                        *[
+                            {"keyword": f"keyword-{index}", "competitorList": []}
+                            for index in range(1, 101)
+                        ],
+                    ],
+                },
+            },
+            effective_asin_list=["B0949DWJCV", "B0744DM3Y3"],
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(
+        api_manager_module, "_run_browser_route_request", fake_browser_route_request
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(
+            output_dir=tmp_path,
+            default_mode="browser-route",
+        ),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-comparison",
+                site="US",
+                period="30d",
+                params={
+                    "asin": "B0949DWJCV",
+                    "competitorAsins": "B014INJCT4 B0BRN58CXR",
+                    "variantSelection": "用当前变体拓词",
+                },
+                page_size=20,
+                job_id="job-keyword-comparison",
+                export_format=export_format,
+            )
+        )
+    )
+
+    assert result.row_count == 100
+    assert len(result.data) == 100
+    assert result.data[-1]["keyword"] == "keyword-99"
+    if export_format == "xlsx":
+        assert result.export.filename.startswith("CompareKeywords-US-B0949DWJCV-")
+        assert result.export.filename.endswith(".xlsx")
+    else:
+        assert result.export.filename.startswith("CompareKeywords-US-B0949DWJCV-")
+        assert result.export.filename.endswith(".json")
+        exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
+        assert exported["sheet_name"].startswith("US-流量占比对比-")
+        assert exported["columns"][2] == "B0949DWJCV(我的)"
+        assert exported["rows"][0][2] == "6.86%"
+        assert [sheet["name"] for sheet in exported["additional_sheets"]] == ["ASIN"]
+    assert len(calls) == 1
+    assert calls[0]["payload"]["page"] == 1
+    assert calls[0]["payload"]["size"] == 100
+    assert "variantSelection" not in calls[0]["payload"]
+    assert calls[0]["keyword_comparison_variant"] == "current"
+    assert calls[0]["endpoint"] == "/v3/api/keyword-comparison/asin"
+
+
 def test_manager_returns_only_first_association_page_in_browser_route_mode(monkeypatch, tmp_path: Path):
     calls = []
 
@@ -622,6 +990,236 @@ def test_manager_returns_only_first_association_page_in_browser_route_mode(monke
     assert result.row_count == 1
     assert [call["payload"]["pageNum"] for call in calls] == [1]
     assert all(call["payload"]["pageSize"] == 100 for call in calls)
+
+
+def test_manager_runs_traffic_extend_first_page_with_default_all_variants(
+    monkeypatch,
+    tmp_path: Path,
+):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "total": 2614,
+                    "items": [
+                        {"keywords": f"keyword {index}"}
+                        for index in range(101)
+                    ],
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(
+        api_manager_module,
+        "_run_browser_route_request",
+        fake_browser_route_request,
+    )
+    settings = SellerSpriteSettings(
+        output_dir=tmp_path,
+        username=None,
+        password=None,
+        default_mode="browser-route",
+    )
+    manager = SellerSpriteApiManager(
+        settings=settings,
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="traffic-extend",
+                site="US",
+                period="30d",
+                params={"asins": ["B089K9L3VY"]},
+                page_size=20,
+                job_id="job-traffic-extend",
+                export_format="xlsx",
+            )
+        )
+    )
+
+    assert result.row_count == 100
+    assert len(result.data) == 100
+    assert calls[0]["payload"]["page"] == 1
+    assert calls[0]["payload"]["size"] == 100
+    assert calls[0]["payload"]["queryVariations"] is True
+    assert calls[0]["traffic_extend_variant"] == "all"
+    workbook = load_workbook(result.export.path, read_only=True)
+    assert workbook.sheetnames == [
+        "US-B089K9L3VY(1)__",
+        "Unique Words",
+        "Asin",
+    ]
+
+
+def test_manager_runs_keyword_conversion_rate_first_page_in_browser(
+    monkeypatch,
+    tmp_path: Path,
+):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "success": True,
+                "data": {
+                    "pager": {
+                        "page": 1,
+                        "pageSize": 100,
+                        "total": 101,
+                        "items": [
+                            {"keyword": f"keyword {index}", "searches": index}
+                            for index in range(101)
+                        ],
+                    },
+                    "week": "2026-07-26",
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(
+        api_manager_module,
+        "_run_browser_route_request",
+        fake_browser_route_request,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(
+            output_dir=tmp_path,
+            username=None,
+            password=None,
+            default_mode="browser-route",
+        ),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-conversion-rate",
+                site="US",
+                period="90D",
+                params={"keywords": "wireless charger stand\nphone holder"},
+                page_size=20,
+                job_id="job-keyword-conversion-rate",
+                export_format="xlsx",
+            )
+        )
+    )
+
+    assert result.row_count == 100
+    assert len(result.data) == 100
+    assert calls[0]["endpoint"] == "/v3/api/keyword-conv"
+    assert calls[0]["payload"] == {
+        "pageNum": 1,
+        "pageSize": 100,
+        "market": "US",
+        "timeType": "90D",
+        "bidMatchType": "exact",
+        "keywordMatchType": "all",
+        "matchType": 1,
+        "keyword": "wireless charger stand,phone holder",
+    }
+    assert calls[0]["replay_safe"] is False
+    workbook = load_workbook(result.export.path, read_only=True)
+    assert workbook.sheetnames == ["US-wireless charger stand(100)"]
+    assert [cell.value for cell in workbook.active[1][3:6]] == [
+        "近90天搜索量",
+        "近90天点击量",
+        "近90天购买量",
+    ]
+
+
+def test_manager_runs_real_time_bidding_merged_detail_first_page(
+    monkeypatch,
+    tmp_path: Path,
+):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "keywordList": {
+                        "page": 1,
+                        "size": 100,
+                        "total": 101,
+                        "items": [
+                            {
+                                "keyword": f"keyword {index}",
+                                "queryTime": "2026-07-31 16:27:36",
+                            }
+                            for index in range(101)
+                        ],
+                    },
+                    "task": {"queryTime": "2026-07-31 16:27:36"},
+                },
+            },
+        )
+
+    monkeypatch.setattr(
+        api_manager_module,
+        "SellerSpriteApiClient",
+        DummyApiClient,
+    )
+    monkeypatch.setattr(
+        api_manager_module,
+        "_run_browser_route_request",
+        fake_browser_route_request,
+    )
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(
+            output_dir=tmp_path,
+            username=None,
+            password=None,
+            default_mode="browser-route",
+        ),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="real-time-bidding",
+                site="US",
+                period="30d",
+                params={"asin": "B07Z82895W"},
+                page_size=20,
+                job_id="job-real-time-bidding",
+                export_format="xlsx",
+            )
+        )
+    )
+
+    assert result.row_count == 100
+    assert calls[0]["endpoint"] == "/v3/api/keywordbidding/taskList"
+    assert calls[0]["payload"] == {
+        "asin": "B07Z82895W",
+        "isExampleAsin": False,
+        "marketId": 1,
+        "page": 1,
+        "size": 20,
+        "order": {"desc": True, "field": "updatedTime"},
+    }
+    assert calls[0]["replay_safe"] is False
+    workbook = load_workbook(result.export.path, read_only=True)
+    assert workbook.sheetnames == ["US-B07Z82895W-20260731162736"]
+    assert workbook.active.max_row == 101
+    assert workbook.active.max_column == 46
 
 
 def test_manager_normalizes_competitor_lookup_singular_asin_before_api_call(monkeypatch, tmp_path: Path):
@@ -720,8 +1318,79 @@ def test_manager_writes_json_export(monkeypatch, tmp_path: Path):
     exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
     assert exported["job_id"] == "job-json-regression"
     assert exported["scenario"] == "keyword-reverse"
+    assert exported["schema_version"] == "2.0"
     assert exported["row_count"] == 1
-    assert exported["rows"][0]["keywords"] == "flashlight"
+    assert exported["columns"][:3] == ["关键词", "关键词翻译", "流量占比"]
+    assert len(exported["number_formats"]) == len(exported["columns"])
+    assert exported["rows"][0][0] == "flashlight"
+    assert exported["additional_sheets"] == []
+
+
+def test_manager_writes_keyword_miner_json_with_unique_words_sheet(monkeypatch, tmp_path: Path):
+    DummyApiClient.calls = []
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(
+            output_dir=tmp_path,
+            username=None,
+            password=None,
+            default_mode="api-direct",
+        ),
+        account_provider=DummyAccountProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-miner",
+                site="US",
+                period="30d",
+                params={"keyword": "flashlight"},
+                job_id="job-keyword-miner-json",
+                export_format="json",
+            )
+        )
+    )
+
+    exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
+    assert [sheet["name"] for sheet in exported["additional_sheets"]] == ["Unique Words"]
+    unique_words = exported["additional_sheets"][0]
+    assert unique_words["columns"] == ["词语", "出现频次", "百分比"]
+    assert unique_words["rows"] == [["flashlight", 10, None]]
+
+
+def test_json_export_serializes_xlsx_multi_sheet_contract(tmp_path: Path):
+    worksheets = build_export_worksheets(
+        rows=[{"keywords": "phone stand", "bid": 1.12}],
+        scenario="traffic-extend",
+        site="US",
+        params={"asins": ["B089K9L3VY", "B07F8S18D5"]},
+    )
+
+    export = api_manager_module._export_rows_to_json(
+        output_path=tmp_path / "traffic-extend.json",
+        job_id="traffic-extend-json",
+        scenario="traffic-extend",
+        site="US",
+        period="30d",
+        worksheets=worksheets,
+        warnings=[],
+    )
+
+    payload = json.loads(Path(export.path).read_text(encoding="utf-8"))
+    assert payload["sheet_name"] == "US-B089K9L3VY(2)__"
+    assert payload["columns"][0] == "关键词"
+    assert payload["number_formats"][payload["columns"].index("流量占比")] == "0.00%"
+    assert payload["rows"][0][payload["columns"].index("PPC竞价")] == "$1.12"
+    assert [sheet["name"] for sheet in payload["additional_sheets"]] == [
+        "Unique Words",
+        "Asin",
+    ]
+    assert payload["additional_sheets"][1]["rows"] == [
+        ["B089K9L3VY"],
+        ["B07F8S18D5"],
+    ]
+    assert payload["additional_sheets"][0]["number_formats"] == [None, "#,##0", "0.00%"]
 
 
 def test_export_output_path_uses_short_filename_for_windows_compatibility(tmp_path: Path):
@@ -1066,4 +1735,4 @@ def test_manager_records_listing_analysis_submit_state(monkeypatch, tmp_path: Pa
     raw = json.loads((tmp_path / "job-listing-analysis" / "raw.json").read_text(encoding="utf-8"))
     assert raw["response"]["data"]["asin"] == "B0D3845MWD"
     exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
-    assert exported["rows"][0]["asin"] == "B0D3845MWD"
+    assert exported["rows"][0][exported["columns"].index("asin")] == "B0D3845MWD"

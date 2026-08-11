@@ -25,6 +25,7 @@ from opscli.seller_sprite.accounts import SellerSpriteAccount
 from opscli.seller_sprite.api.keyword_research import parse_keyword_research_html
 from opscli.seller_sprite.api.market_research import parse_market_research_html
 from opscli.seller_sprite.config import DEFAULT_OUTPUT_DIR, SellerSpriteSettings
+from opscli.seller_sprite.domain.constants import ACCOUNT_FAILURE_REASON_AUTHENTICATION
 from opscli.seller_sprite.domain.exceptions import (
     SellerSpriteApiError,
     SellerSpriteAuthenticationError,
@@ -47,6 +48,7 @@ ROBOT_CAPTCHA_DIALOG_SELECTORS = [
     ".el-dialog:has-text('机器人检测')",
 ]
 logger = logging.getLogger(__name__)
+KEYWORD_COMPARISON_DIAGNOSTIC_TAG = "[SELLER_SPRITE_KC_DIAG]"
 ROBOT_CAPTCHA_IMAGE_SELECTORS = [
     "img[src^='data:image/gif;base64,']",
     "img[src^='data:image/png;base64,']",
@@ -67,6 +69,22 @@ TASK_INTERVAL_RANGE_SECONDS = (1.0, 5.0)
 NETWORK_COOLDOWN_RANGE_SECONDS = (3.0, 5.0)
 RISK_COOLDOWN_RANGE_SECONDS = (15.0, 20.0)
 WINDOWS_COMPAT_EXPORT_PATH_LIMIT = 240
+# XLSX 是 ZIP 容器；128 字节下限用于拦截短错误页，同时兼容最小测试工作簿。
+MIN_XLSX_CONTENT_LENGTH = 128
+# 官网导出实测会返回标准 XLSX、旧 Excel 或二进制流 MIME，统一按白名单接收。
+XLSX_CONTENT_TYPES = frozenset(
+    {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/msexcel",
+        "application/vnd.ms-excel",
+        "application/octet-stream",
+    }
+)
+# Windows 保留设备名即使带扩展名也不能作为文件名。
+WINDOWS_RESERVED_FILENAME_PATTERN = re.compile(
+    r"CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]",
+    re.I,
+)
 
 _AUTO_XVFB_PROCESS: subprocess.Popen | None = None
 _AUTO_XVFB_DISPLAY: str | None = None
@@ -89,6 +107,11 @@ class BrowserRouteRequest:
     page_prepare: bool = True
     task_interval_seconds: float = 5.0
     cooldown_seconds: float = 10.0
+    replay_safe: bool = True
+    # 流量词对比页面弹窗的变体选择，默认使用畅销变体拓词。
+    keyword_comparison_variant: str = "sell_well"
+    # 拓展流量词页面弹窗的变体选择，默认使用全部变体拓词。
+    traffic_extend_variant: str = "all"
 
 
 @dataclass
@@ -99,6 +122,7 @@ class BrowserRouteResult:
     response: dict[str, Any]
     high_frequency_response: dict[str, Any] | None = None
     warnings: list[dict[str, Any]] = field(default_factory=list)
+    effective_asin_list: list[str] | None = None
 
 
 @dataclass
@@ -536,19 +560,36 @@ class SellerSpriteBrowserRouteWorker:
             _record_timing(timings, request, "page_prepare", stage_started_at)
         else:
             _record_timing(timings, request, "page_prepare", time.monotonic(), skipped=True)
-        for attempt in range(2):
+        # 每次重试都从页面真实主请求重新取得畅销变体顺序，禁止复用上次交互状态。
+        effective_asin_list: list[str] | None = None
+        # 额度型导出没有幂等键；请求发出后结果不明时禁止在当前 worker 内重放。
+        for attempt in range(2 if request.replay_safe else 1):
+            # 失败尝试即使已经捕获主请求，也不能把其 ASIN 顺序带到下一次结果。
+            effective_asin_list = None
             try:
+                route_metadata: dict[str, Any] = {}
                 stage_started_at = time.monotonic()
-                response = await self._execute_route_fetch(
-                    page=page,
-                    method=request.method,
-                    endpoint=request.endpoint,
-                    payload=request.payload,
-                    root_dir=request.root_dir,
-                    section="main",
-                    timings=timings,
-                    request=request,
-                )
+                if request.scenario == "real-time-bidding":
+                    response = await self._execute_real_time_bidding_workflow(
+                        page=page,
+                        request=request,
+                        timings=timings,
+                    )
+                else:
+                    response = await self._execute_route_fetch(
+                        page=page,
+                        method=request.method,
+                        endpoint=request.endpoint,
+                        payload=request.payload,
+                        root_dir=request.root_dir,
+                        section="main",
+                        timings=timings,
+                        request=request,
+                        route_metadata=route_metadata,
+                    )
+                captured_asins = route_metadata.get("asinList")
+                if isinstance(captured_asins, list):
+                    effective_asin_list = list(captured_asins)
                 _record_timing(timings, request, "execute_route_fetch.main", stage_started_at, attempt=attempt + 1)
                 if (
                     request.scenario == "association-traffic"
@@ -574,6 +615,8 @@ class SellerSpriteBrowserRouteWorker:
                     api_code=exc.api_code,
                     status_code=exc.status_code,
                 )
+                if not request.replay_safe:
+                    raise
                 if exc.is_session_expired():
                     if attempt > 0:
                         raise
@@ -595,6 +638,13 @@ class SellerSpriteBrowserRouteWorker:
                         await _prepare_page(page)
                         _record_timing(timings, request, "session_expired_page_prepare", stage_started_at)
                     continue
+                if exc.api_code in {
+                    "ERR_KEYWORD_COMPARISON_REQUEST_MISSED",
+                    "ERR_KEYWORD_COMPARISON_ENDPOINT_CHANGED",
+                    "ERR_KEYWORD_COMPARISON_RESPONSE_MISSED",
+                }:
+                    # 变体按钮已点击，远端查询结果未知；禁止验证码恢复分支重放完整查询。
+                    raise
                 if attempt == 0:
                     captcha_result = await self._handle_robot_captcha_if_enabled(
                         page,
@@ -667,6 +717,7 @@ class SellerSpriteBrowserRouteWorker:
             response=response,
             high_frequency_response=high_frequency_response,
             warnings=warnings,
+            effective_asin_list=effective_asin_list,
         )
 
     async def fetch_listing_analysis_report(
@@ -1147,6 +1198,221 @@ class SellerSpriteBrowserRouteWorker:
         )
         return parsed
 
+    async def _execute_real_time_bidding_workflow(
+        self,
+        *,
+        page,
+        request: BrowserRouteRequest,
+        timings: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """按历史状态刷新或创建任务，完成后合并 SP、SB 第一页详情。"""
+        task = await self._find_real_time_bidding_task(
+            page=page,
+            request=request,
+            timings=timings,
+            payload={**request.payload, "isExampleAsin": False},
+            section_prefix="real_time_bidding_history",
+        )
+        is_example_asin = False
+        submitted_task_id: int | None = None
+        previous_task_id: int | None = None
+
+        # 官网示例不显示“再次查询”，也不应创建真实任务；US 无普通历史时再精确探测示例列表。
+        if task is None and int(request.payload["marketId"]) == 1:
+            task = await self._find_real_time_bidding_task(
+                page=page,
+                request=request,
+                timings=timings,
+                payload={**request.payload, "isExampleAsin": True},
+                section_prefix="real_time_bidding_example_history",
+            )
+            is_example_asin = task is not None
+
+        if task is None:
+            create_payload = {
+                "asin": request.payload["asin"],
+                "taskType": "AC",
+                "marketId": request.payload["marketId"],
+                "keywordList": [],
+            }
+            created = await self._execute_route_fetch(
+                page=page,
+                method="POST",
+                endpoint="/v3/api/keywordbidding/newTask",
+                payload=create_payload,
+                root_dir=request.root_dir,
+                section="real_time_bidding_new_task",
+                timings=timings,
+                request=request,
+            )
+            submitted_task_id = _real_time_bidding_created_task_id(created)
+        elif not is_example_asin:
+            status = _real_time_bidding_task_status(task)
+            if status in {3, 4}:
+                task_id = _required_real_time_bidding_task_id(task)
+                previous_task_id = task_id
+                parent_task_id = _required_real_time_bidding_parent_task_id(task)
+                rerun_payload = {
+                    "asin": request.payload["asin"],
+                    "taskType": task.get("taskType") or "AC",
+                    "marketId": request.payload["marketId"],
+                    "keywordList": list(task.get("keywords") or task.get("keywordList") or []),
+                    "parentTaskId": parent_task_id,
+                    "failTaskId": task_id,
+                    "queryAgain": True,
+                }
+                created = await self._execute_context_fetch(
+                    page=page,
+                    method="POST",
+                    endpoint="/v3/api/keywordbidding/newTask",
+                    payload=rerun_payload,
+                    root_dir=request.root_dir,
+                    section="real_time_bidding_query_again",
+                    timings=timings,
+                    request=request,
+                )
+                submitted_task_id = _real_time_bidding_created_task_id(created)
+            # 已在查询中的任务直接等待；不能重复创建。
+
+        if not is_example_asin and (task is None or _real_time_bidding_task_status(task) != 2 or submitted_task_id):
+            task = None
+        if not is_example_asin and (task is None or _real_time_bidding_task_status(task) == 2):
+            task = await self._poll_real_time_bidding_task(
+                page=page,
+                request=request,
+                timings=timings,
+                expected_task_id=submitted_task_id,
+                previous_task_id=previous_task_id,
+            )
+
+        if task is None or _real_time_bidding_task_status(task) != 3:
+            raise SellerSpriteApiError(
+                "卖家精灵实时查竞价任务未完成",
+                api_code="ERR_REAL_TIME_BIDDING_TASK_NOT_COMPLETED",
+                api_message="任务已提交且不会自动重复提交，请稍后重新查询。",
+            )
+
+        normalized_task_id = _required_real_time_bidding_task_id(task)
+        normalized_parent_task_id = _required_real_time_bidding_parent_task_id(task)
+        detail_base = {
+            "page": 1,
+            "size": 100,
+            "marketId": request.payload["marketId"],
+            "taskId": normalized_task_id,
+            "parentTaskId": normalized_parent_task_id,
+            "isExampleAsin": is_example_asin,
+            "asin": request.payload["asin"],
+        }
+        sp_response = await self._execute_context_fetch(
+            page=page,
+            method="POST",
+            endpoint="/v3/api/keywordbidding/getTaskDetail",
+            payload={**detail_base, "adType": "sp"},
+            root_dir=request.root_dir,
+            section="real_time_bidding_detail_sp",
+            timings=timings,
+            request=request,
+        )
+        sb_response = await self._execute_context_fetch(
+            page=page,
+            method="POST",
+            endpoint="/v3/api/keywordbidding/getTaskDetail",
+            payload={**detail_base, "adType": "sb"},
+            root_dir=request.root_dir,
+            section="real_time_bidding_detail_sb",
+            timings=timings,
+            request=request,
+        )
+        return _merge_real_time_bidding_detail_responses(sp_response, sb_response)
+
+    async def _find_real_time_bidding_task(
+        self, *, page, request, timings, payload: dict[str, Any], section_prefix: str
+    ) -> dict[str, Any] | None:
+        """跨页查找指定 ASIN 的最新历史记录。"""
+        history_payload = dict(payload)
+        seen_pages: set[tuple[tuple[str, str], ...]] = set()
+        while True:
+            history_page = int(history_payload.get("page") or 1)
+            history_size = int(history_payload.get("size") or 20)
+            task_list = await self._execute_context_fetch(
+                page=page,
+                method=request.method,
+                endpoint=request.endpoint,
+                payload=history_payload,
+                root_dir=request.root_dir,
+                section=f"{section_prefix}_{history_page}",
+                timings=timings,
+                request=request,
+            )
+            task_items = _real_time_bidding_task_items(task_list)
+            # taskList 按 updatedTime 倒序跨页扫描；首个完成项才是最新可导出历史。
+            matched = _select_latest_real_time_bidding_task(task_items, asin=request.payload["asin"])
+            if matched is not None:
+                return matched
+            page_fingerprint = tuple(
+                (
+                    str(item.get("id") or item.get("taskId") or ""),
+                    str(item.get("taskStatus") or item.get("status") or ""),
+                )
+                for item in task_items
+            )
+            # 异常接口若重复返回同一页，必须终止，不能在 worker 内无限请求。
+            if page_fingerprint in seen_pages:
+                return None
+            seen_pages.add(page_fingerprint)
+            if not _real_time_bidding_history_has_next_page(
+                task_list,
+                page=history_page,
+                size=history_size,
+                item_count=len(task_items),
+            ):
+                return None
+            history_payload = {**history_payload, "page": history_page + 1}
+
+    async def _poll_real_time_bidding_task(
+        self,
+        *,
+        page,
+        request,
+        timings,
+        expected_task_id: int | None,
+        previous_task_id: int | None,
+    ) -> dict[str, Any] | None:
+        """轮询新建或进行中的任务；超时后由上层返回可恢复提示。"""
+        previous_task_seen_running = False
+        for attempt in range(30):
+            if attempt:
+                await asyncio.sleep(min(max(request.task_interval_seconds, 0.0), 5.0))
+            task = await self._find_real_time_bidding_task(
+                page=page,
+                request=request,
+                timings=timings,
+                payload={**request.payload, "isExampleAsin": False},
+                section_prefix=f"real_time_bidding_poll_{attempt + 1}",
+            )
+            if task is None:
+                continue
+            task_id = _required_real_time_bidding_task_id(task)
+            if expected_task_id is not None and task_id != expected_task_id:
+                continue
+            status = _real_time_bidding_task_status(task)
+            # newTask 未返回 ID 时，旧完成记录可能短暂留在列表首位；必须等到新 ID，
+            # 或明确观察到原 ID 进入运行态后，才接受后续完成状态。
+            if expected_task_id is None and task_id == previous_task_id:
+                if status == 2:
+                    previous_task_seen_running = True
+                elif not previous_task_seen_running:
+                    continue
+            if status == 3:
+                return task
+            if status == 4:
+                raise SellerSpriteApiError(
+                    "卖家精灵实时查竞价任务执行失败",
+                    api_code="ERR_REAL_TIME_BIDDING_TASK_FAILED",
+                    api_message=str(task.get("failReason") or task.get("message") or "官网任务失败"),
+                )
+        return None
+
     async def _execute_route_fetch(
         self,
         *,
@@ -1158,9 +1424,10 @@ class SellerSpriteBrowserRouteWorker:
         section: str,
         timings: list[dict[str, Any]] | None = None,
         request: BrowserRouteRequest | None = None,
+        route_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized_method = method.upper()
-        if normalized_method == "GET_XLSX":
+        if normalized_method in {"GET_XLSX", "POST_XLSX"}:
             stage_started_at = time.monotonic()
             response = await _request_with_browser_context(
                 page,
@@ -1183,13 +1450,18 @@ class SellerSpriteBrowserRouteWorker:
             )
             return parsed
         pattern = _route_pattern(endpoint)
+        route_error = asyncio.get_running_loop().create_future()
 
         async def _handle(route) -> None:
-            request = route.request
-            if not _same_endpoint(request.url, endpoint):
+            intercepted_request = route.request
+            if not _same_endpoint(intercepted_request.url, endpoint):
                 await route.continue_()
                 return
-            headers = {key: value for key, value in request.headers.items() if key.lower() != "content-length"}
+            headers = {
+                key: value
+                for key, value in intercepted_request.headers.items()
+                if key.lower() != "content-length"
+            }
             headers["accept"] = "application/json, text/plain, */*"
             if normalized_method == "PAGE_CAPTURE":
                 await route.continue_()
@@ -1228,26 +1500,74 @@ class SellerSpriteBrowserRouteWorker:
                 )
                 return
             headers["content-type"] = "application/json;charset=UTF-8"
+            effective_payload = payload
+            if request and request.scenario == "keyword-comparison":
+                try:
+                    effective_payload = _keyword_comparison_route_payload(
+                        payload,
+                        intercepted_request.post_data,
+                    )
+                except SellerSpriteApiError as exc:
+                    # 先通知主协程再中止请求；即使浏览器中止动作异常，也不能退化成响应超时。
+                    if not route_error.done():
+                        route_error.set_exception(exc)
+                    await route.abort("blockedbyclient")
+                    return
+                if route_metadata is not None:
+                    route_metadata["asinList"] = list(effective_payload["asinList"])
+            elif request and request.scenario == "traffic-extend":
+                try:
+                    effective_payload = _traffic_extend_route_payload(
+                        payload,
+                        intercepted_request.post_data,
+                    )
+                except SellerSpriteApiError as exc:
+                    if not route_error.done():
+                        route_error.set_exception(exc)
+                    await route.abort("blockedbyclient")
+                    return
             await route.continue_(
                 url=_absolute_url(endpoint),
                 method="POST",
                 headers=headers,
-                post_data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                post_data=json.dumps(
+                    effective_payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
             )
 
         stage_started_at = time.monotonic()
         await page.route(pattern, _handle)
         _record_timing(timings, request, f"route_fetch.{section}.route_setup", stage_started_at, endpoint=endpoint)
         try:
-            response, transport = await _trigger_request(
-                page,
-                endpoint=endpoint,
-                method=normalized_method,
-                payload=payload,
-                timings=timings,
-                request=request,
-                section=section,
+            trigger_task = asyncio.create_task(
+                _trigger_request(
+                    page,
+                    endpoint=endpoint,
+                    method=normalized_method,
+                    payload=payload,
+                    timings=timings,
+                    request=request,
+                    section=section,
+                )
             )
+            await asyncio.wait(
+                {trigger_task, route_error},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if route_error.done():
+                # 被拦截请求已中止，优先透传校验错误，避免外层等待页面响应超时。
+                if not trigger_task.done():
+                    trigger_task.cancel()
+                try:
+                    await trigger_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+                raise route_error.exception()
+            response, transport = await trigger_task
             stage_started_at = time.monotonic()
             parsed = await _parse_response(response, method=normalized_method, root_dir=root_dir, section=section)
             _record_timing(
@@ -1293,6 +1613,292 @@ class SellerSpriteBrowserRouteWorker:
                         f"route_fetch.{section}.unroute",
                         stage_started_at,
                     )
+
+
+def _keyword_comparison_route_payload(
+    payload: dict[str, Any],
+    post_data: str | None,
+) -> dict[str, Any]:
+    """仅保留流量词对比页面生成的最终畅销变体列表。"""
+    try:
+        page_payload = json.loads(post_data or "")
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise SellerSpriteApiError(
+            "卖家精灵流量词对比主请求体不是合法 JSON",
+            api_code="ERR_KEYWORD_COMPARISON_REQUEST_BODY",
+        ) from exc
+    asin_values = page_payload.get("asinList") if isinstance(page_payload, dict) else None
+    if not isinstance(asin_values, list):
+        raise SellerSpriteApiError(
+            "卖家精灵流量词对比主请求缺少畅销变体列表",
+            api_code="ERR_KEYWORD_COMPARISON_ASIN_LIST",
+        )
+    asin_list = [str(value).strip().upper() for value in asin_values]
+    if (
+        not 2 <= len(asin_list) <= 11
+        or len(set(asin_list)) != len(asin_list)
+        or any(not re.fullmatch(r"[A-Z0-9]{10}", asin) for asin in asin_list)
+    ):
+        raise SellerSpriteApiError(
+            "卖家精灵流量词对比畅销变体列表无效",
+            api_code="ERR_KEYWORD_COMPARISON_ASIN_LIST",
+        )
+    # 页面只能覆盖 prepare 生成的 asinList，其他筛选和分页继续以后端校验结果为准。
+    return {**payload, "asinList": asin_list, "page": 1, "size": 100}
+
+
+def _real_time_bidding_task_items(
+    response: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """兼容官网 taskList 的直接分页和 data 包装响应。"""
+    data = response.get("data")
+    candidates = data if isinstance(data, dict) else response
+    for key in ("items", "records", "list"):
+        items = candidates.get(key)
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+    pager = candidates.get("pagerDto")
+    if isinstance(pager, dict) and isinstance(pager.get("items"), list):
+        return [item for item in pager["items"] if isinstance(item, dict)]
+    return []
+
+
+def _select_latest_completed_real_time_bidding_task(
+    items: list[dict[str, Any]],
+    *,
+    asin: str,
+) -> dict[str, Any] | None:
+    """从更新时间倒序的列表中选择首个同 ASIN 已完成任务。"""
+    normalized_asin = asin.strip().upper()
+    for item in items:
+        item_asin = str(item.get("asin") or "").strip().upper()
+        try:
+            status = int(item.get("taskStatus") or item.get("status") or 0)
+        except (TypeError, ValueError):
+            continue
+        if item_asin == normalized_asin and status == 3:
+            return item
+    return None
+
+
+def _select_latest_real_time_bidding_task(
+    items: list[dict[str, Any]], *, asin: str
+) -> dict[str, Any] | None:
+    """返回更新时间倒序列表中的首个同 ASIN 任务，不丢失进行中状态。"""
+    normalized_asin = asin.strip().upper()
+    return next(
+        (
+            item
+            for item in items
+            if str(item.get("asin") or "").strip().upper() == normalized_asin
+        ),
+        None,
+    )
+
+
+def _real_time_bidding_task_status(task: dict[str, Any]) -> int:
+    """规范化官网任务状态。"""
+    try:
+        return int(task.get("taskStatus") or task.get("status") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _required_real_time_bidding_task_id(task: dict[str, Any]) -> int:
+    """读取任务 ID，缺失时返回可诊断错误。"""
+    try:
+        return int(task.get("id") or task.get("taskId"))
+    except (TypeError, ValueError) as exc:
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价历史任务缺少有效 ID",
+            api_code="ERR_REAL_TIME_BIDDING_HISTORY_TASK_ID",
+        ) from exc
+
+
+def _required_real_time_bidding_parent_task_id(task: dict[str, Any]) -> int:
+    """读取父任务 ID；首次任务以自身 ID 作为父任务。"""
+    try:
+        return int(task.get("parentTaskId") or _required_real_time_bidding_task_id(task))
+    except (TypeError, ValueError) as exc:
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价历史任务缺少有效父任务 ID",
+            api_code="ERR_REAL_TIME_BIDDING_HISTORY_TASK_ID",
+        ) from exc
+
+
+def _real_time_bidding_created_task_id(response: dict[str, Any]) -> int | None:
+    """兼容 newTask 不同包装层返回的任务 ID。"""
+    data = response.get("data")
+    candidates = [data, response]
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("taskId", "id"):
+            try:
+                return int(candidate[key])
+            except (KeyError, TypeError, ValueError):
+                continue
+    return None
+
+
+def _real_time_bidding_history_has_next_page(
+    response: dict[str, Any],
+    *,
+    page: int,
+    size: int,
+    item_count: int,
+) -> bool:
+    """按官网常见分页字段判断是否需要继续扫描历史任务。"""
+    data = response.get("data")
+    containers = [
+        value
+        for value in (
+            data.get("pagerDto") if isinstance(data, dict) else None,
+            data,
+            response,
+        )
+        if isinstance(value, dict)
+    ]
+    for container in containers:
+        for key in ("total", "totalElements", "totalSize"):
+            try:
+                total = int(container[key])
+            except (KeyError, TypeError, ValueError):
+                continue
+            return page * size < total
+        for key in ("totalPages", "pages", "pageCount"):
+            try:
+                total_pages = int(container[key])
+            except (KeyError, TypeError, ValueError):
+                continue
+            return page < total_pages
+        for key in ("hasNext", "hasNextPage"):
+            if key in container:
+                return bool(container[key])
+    # 没有分页元数据时，满页才可能还有下一页；空页或不足一页即视为耗尽。
+    return item_count >= size
+
+
+def _merge_real_time_bidding_detail_responses(
+    sp_response: dict[str, Any],
+    sb_response: dict[str, Any],
+) -> dict[str, Any]:
+    """按关键词合并详情页拆分返回的 SP、SB/SBV 竞价字段。"""
+    merged = json.loads(json.dumps(sp_response, ensure_ascii=False))
+    merged_data = merged.get("data")
+    sb_data = sb_response.get("data")
+    if not isinstance(merged_data, dict) or not isinstance(sb_data, dict):
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价详情响应结构无效",
+            api_code="ERR_REAL_TIME_BIDDING_DETAIL_SHAPE",
+        )
+    merged_keyword_list = merged_data.get("keywordList")
+    sb_keyword_list = sb_data.get("keywordList")
+    if not isinstance(merged_keyword_list, dict) or not isinstance(
+        sb_keyword_list,
+        dict,
+    ):
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价详情缺少关键词分页",
+            api_code="ERR_REAL_TIME_BIDDING_DETAIL_SHAPE",
+        )
+    merged_items = merged_keyword_list.get("items")
+    sb_items = sb_keyword_list.get("items")
+    if not isinstance(merged_items, list) or not isinstance(sb_items, list):
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价详情关键词列表无效",
+            api_code="ERR_REAL_TIME_BIDDING_DETAIL_SHAPE",
+        )
+    sb_by_keyword = {
+        str(item.get("keyword") or ""): item
+        for item in sb_items
+        if isinstance(item, dict) and item.get("keyword")
+    }
+    sp_keywords = {
+        str(item.get("keyword") or "")
+        for item in merged_items
+        if isinstance(item, dict) and item.get("keyword")
+    }
+    if (
+        len(sp_keywords) != len(merged_items)
+        or len(sb_by_keyword) != len(sb_items)
+        or sp_keywords != set(sb_by_keyword)
+    ):
+        # 两个广告类型是同一任务的两种列投影；集合不一致时继续左连接会伪造完整 46 列。
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价 SP/SB 详情关键词不一致",
+            api_code="ERR_REAL_TIME_BIDDING_DETAIL_MISMATCH",
+            response_excerpt=(
+                f"sp={len(merged_items)},sb={len(sb_items)},"
+                f"sp_only={len(sp_keywords - set(sb_by_keyword))},"
+                f"sb_only={len(set(sb_by_keyword) - sp_keywords)}"
+            ),
+        )
+    merged_task = (
+        merged_data.get("task")
+        if isinstance(merged_data.get("task"), dict)
+        else {}
+    )
+    sb_task = (
+        sb_data.get("task")
+        if isinstance(sb_data.get("task"), dict)
+        else {}
+    )
+    query_time = str(
+        merged_task.get("queryTime") or sb_task.get("queryTime") or ""
+    )
+    for item in merged_items:
+        if not isinstance(item, dict):
+            continue
+        sb_item = sb_by_keyword.get(str(item.get("keyword") or ""), {})
+        for field in ("sponsorBrand", "sponsorBrandVideo"):
+            if field in sb_item:
+                item[field] = sb_item[field]
+        item["queryTime"] = query_time
+    return merged
+
+
+def _traffic_extend_route_payload(
+    payload: dict[str, Any],
+    post_data: str | None,
+) -> dict[str, Any]:
+    """保留页面变体按钮生成的范围，同时锁定第一页 100 条。"""
+    try:
+        page_payload = json.loads(post_data or "")
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise SellerSpriteApiError(
+            "卖家精灵拓展流量词主请求体不是合法 JSON",
+            api_code="ERR_TRAFFIC_EXTEND_REQUEST_BODY",
+        ) from exc
+    if not isinstance(page_payload, dict):
+        raise SellerSpriteApiError(
+            "卖家精灵拓展流量词主请求体无效",
+            api_code="ERR_TRAFFIC_EXTEND_REQUEST_BODY",
+        )
+    asin_values = page_payload.get("asinList")
+    asin_list = (
+        [str(value).strip().upper() for value in asin_values]
+        if isinstance(asin_values, list)
+        else []
+    )
+    if (
+        not asin_list
+        or len(asin_list) > 20
+        or len(set(asin_list)) != len(asin_list)
+        or any(not re.fullmatch(r"[A-Z0-9]{10}", asin) for asin in asin_list)
+    ):
+        raise SellerSpriteApiError(
+            "卖家精灵拓展流量词变体 ASIN 列表无效",
+            api_code="ERR_TRAFFIC_EXTEND_ASIN_LIST",
+        )
+    return {
+        **payload,
+        "asinList": asin_list,
+        "originAsinList": list(payload.get("originAsinList") or asin_list),
+        "queryVariations": bool(page_payload.get("queryVariations")),
+        "page": 1,
+        "size": 100,
+    }
 
 
 def _is_target_closed_error(exc: Exception) -> bool:
@@ -1559,6 +2165,8 @@ async def close_browser_route_worker(
         if key[:2] == owner_prefix and key[3] == account_key
     ]
     if not selected:
+        if reason == ACCOUNT_FAILURE_REASON_AUTHENTICATION:
+            _quarantine_profile_if_unused(settings, account, account_key=account_key)
         return False
     errors: list[Exception] = []
     for key, worker in selected:
@@ -1575,7 +2183,14 @@ async def close_browser_route_worker(
             errors.append(exc)
     if errors:
         raise errors[0]
+    if reason == ACCOUNT_FAILURE_REASON_AUTHENTICATION:
+        _quarantine_profile_if_unused(settings, account, account_key=account_key)
     return True
+
+
+def _has_registered_account_worker(account_key: str) -> bool:
+    """判断当前进程任一事件循环是否仍有 owner 持有该账号 Worker。"""
+    return any(key[3] == account_key for key in _WORKERS)
 
 
 async def reap_browser_route_workers(
@@ -1916,8 +2531,104 @@ async def _trigger_request(
     association_traffic_interaction = bool(
         request and request.scenario == "association-traffic"
     )
-    response_timeout = 30000 if association_traffic_interaction else 15000
+    keyword_comparison_interaction = bool(
+        request and request.scenario == "keyword-comparison"
+    )
+    traffic_extend_interaction = bool(
+        request and request.scenario == "traffic-extend"
+    )
+    keyword_conversion_rate_interaction = bool(
+        request and request.scenario == "keyword-conversion-rate"
+    )
+    real_time_bidding_new_task = bool(
+        request
+        and request.scenario == "real-time-bidding"
+        and endpoint.endswith("/keywordbidding/newTask")
+        and section == "real_time_bidding_new_task"
+    )
     try:
+        if real_time_bidding_new_task:
+            response = await _trigger_real_time_bidding_new_task(
+                page,
+                payload,
+                endpoint=endpoint,
+            )
+            if response is None:
+                raise _NoQueryButtonError()
+            return response, "page_response"
+        if keyword_comparison_interaction:
+            # prepare 和弹窗等待不应占用主接口响应预算；只在最终变体按钮点击前监听主响应。
+            response = await _trigger_keyword_comparison_query(
+                page,
+                payload,
+                endpoint=endpoint,
+                variant_selection=request.keyword_comparison_variant,
+                root_dir=request.root_dir,
+            )
+            if response is None:
+                raise _NoQueryButtonError()
+            _record_timing(
+                timings,
+                request,
+                f"route_fetch.{section}.wait_page_response",
+                stage_started_at,
+                status=getattr(response, "status", None),
+            )
+            return response, "page_response"
+        if traffic_extend_interaction:
+            # prepare 完成后才监听主接口，避免弹窗等待消耗主响应预算。
+            response = await _trigger_traffic_extend_query(
+                page,
+                payload,
+                endpoint=endpoint,
+                variant_selection=request.traffic_extend_variant,
+                root_dir=request.root_dir,
+            )
+            if response is None:
+                raise _NoQueryButtonError()
+            return response, "page_response"
+        if keyword_conversion_rate_interaction:
+            # 1—1000 个标签的录入不占用主响应监听预算；只在单次查询点击前监听。
+            query_button = await _prepare_keyword_conversion_rate_query(
+                page,
+                payload,
+            )
+            if query_button is None:
+                raise _NoQueryButtonError()
+            async with page.expect_response(
+                lambda response: _same_endpoint(response.url, endpoint),
+                timeout=30000,
+            ) as info:
+                _record_timing(
+                    timings,
+                    request,
+                    f"route_fetch.{section}.expect_response_ready",
+                    stage_started_at,
+                )
+                stage_started_at = time.monotonic()
+                await query_button.click(timeout=5000)
+                _record_timing(
+                    timings,
+                    request,
+                    f"route_fetch.{section}.click_query_button",
+                    stage_started_at,
+                    clicked=True,
+                )
+                wait_started_at = time.monotonic()
+            response = await info.value
+            _record_timing(
+                timings,
+                request,
+                f"route_fetch.{section}.wait_page_response",
+                wait_started_at,
+                status=getattr(response, "status", None),
+            )
+            return response, "page_response"
+        response_timeout = (
+            30000
+            if association_traffic_interaction
+            else 15000
+        )
         async with page.expect_response(
             lambda response: _same_endpoint(response.url, endpoint),
             timeout=response_timeout,
@@ -1976,6 +2687,42 @@ async def _trigger_request(
                 response_excerpt=f"endpoint={endpoint}",
                 api_code="ERR_ASSOCIATION_TRAFFIC_RESPONSE_MISSED",
                 api_message="页面交互已完成，不再自动 fallback 重复查询。",
+            ) from exc
+        if real_time_bidding_new_task:
+            if isinstance(exc, SellerSpriteApiError):
+                raise
+            raise SellerSpriteApiError(
+                "卖家精灵实时查竞价新建任务后未捕获接口响应",
+                response_excerpt=f"endpoint={endpoint}",
+                api_code="ERR_REAL_TIME_BIDDING_NEW_TASK_RESPONSE_MISSED",
+                api_message="确认按钮最多点击一次，不再自动 fallback 重复创建任务。",
+            ) from exc
+        if traffic_extend_interaction:
+            if isinstance(exc, SellerSpriteApiError):
+                raise
+            raise SellerSpriteApiError(
+                "卖家精灵拓展流量词页面交互后未捕获主查询响应",
+                response_excerpt=f"endpoint={endpoint}",
+                api_code="ERR_TRAFFIC_EXTEND_RESPONSE_MISSED",
+                api_message="页面交互已完成，不再自动 fallback 重复查询。",
+            ) from exc
+        if keyword_comparison_interaction:
+            if isinstance(exc, SellerSpriteApiError):
+                raise
+            raise SellerSpriteApiError(
+                "卖家精灵流量词对比页面交互后未捕获主查询响应",
+                response_excerpt=f"endpoint={endpoint}",
+                api_code="ERR_KEYWORD_COMPARISON_RESPONSE_MISSED",
+                api_message="页面交互已完成，不再自动 fallback 重复查询。",
+            ) from exc
+        if keyword_conversion_rate_interaction:
+            if isinstance(exc, SellerSpriteApiError):
+                raise
+            raise SellerSpriteApiError(
+                "卖家精灵关键词转化率页面交互后未捕获主查询响应",
+                response_excerpt=f"endpoint={endpoint}",
+                api_code="ERR_KEYWORD_CONVERSION_RATE_RESPONSE_MISSED",
+                api_message="关键词标签已提交或查询按钮已点击，不再自动 fallback 重复查询。",
             ) from exc
         stage_started_at = time.monotonic()
         response = await _request_with_browser_context(page, endpoint=endpoint, method=method, payload=payload)
@@ -2043,11 +2790,13 @@ def _context_request_headers(referer: str, *, method: str) -> dict[str, str]:
         headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         if method == "FORM":
             headers["Content-Type"] = "application/x-www-form-urlencoded"
-    elif method == "GET_XLSX":
+    elif method in {"GET_XLSX", "POST_XLSX"}:
         headers["Accept"] = (
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
-            "application/octet-stream,*/*"
+            "application/msexcel,application/octet-stream,*/*"
         )
+        if method == "POST_XLSX":
+            headers["Content-Type"] = "application/json;charset=UTF-8"
     elif method != "GET":
         headers["Content-Type"] = "application/json;charset=UTF-8"
     return headers
@@ -2175,6 +2924,370 @@ async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool
     return True
 
 
+async def _trigger_real_time_bidding_new_task(
+    page,
+    payload: dict[str, Any],
+    *,
+    endpoint: str,
+):
+    """通过官网弹窗创建推荐关键词任务，并确保确认按钮只点击一次。"""
+    asin = str(payload.get("asin") or "").strip().upper()
+    if not asin:
+        return None
+    market_label = {
+        1: "美国站",
+        3: "英国站",
+        4: "德国站",
+        5: "法国站",
+        6: "日本站",
+        7: "加拿大",
+        35691: "意大利",
+        44551: "西班牙",
+        44571: "印度站",
+        771770: "墨西哥",
+    }.get(int(payload.get("marketId") or 1))
+    if market_label is None:
+        raise SellerSpriteApiError(
+            "卖家精灵实时查竞价页面不支持当前站点",
+            api_code="ERR_REAL_TIME_BIDDING_MARKET",
+        )
+    market_select = await _first_visible_page_locator(
+        page,
+        [
+            ".search-condition:visible .el-select input[readonly]:visible",
+            ".search-wrap:visible .el-select input[readonly]:visible",
+            ".el-select:visible input[readonly]:visible",
+        ],
+    )
+    if market_select is None:
+        return None
+    await market_select.click(timeout=5000)
+    market_option = await _first_visible_page_locator(
+        page,
+        [
+            f"li.el-select-dropdown__item:visible:has-text('{market_label}')",
+            f".el-select-dropdown__item:visible:has-text('{market_label}')",
+        ],
+    )
+    if market_option is None:
+        raise SellerSpriteApiError(
+            f"卖家精灵实时查竞价页面未找到“{market_label}”站点",
+            api_code="ERR_REAL_TIME_BIDDING_MARKET",
+        )
+    await market_option.click(timeout=5000)
+    main_input = await _first_visible_page_locator(
+        page,
+        [
+            "input[placeholder*='输入单个ASIN']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='查询历史记录']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if main_input is None:
+        return None
+    await main_input.fill(asin)
+    create_button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('新建查询任务')",
+            "[role='button']:visible:has-text('新建查询任务')",
+            ".el-button:visible:has-text('新建查询任务')",
+        ],
+    )
+    if create_button is None:
+        return None
+    await create_button.click(timeout=5000)
+
+    dialog = None
+    for _ in range(30):
+        dialog = await _first_visible_page_locator(
+            page,
+            ["[role='dialog']:visible", ".el-dialog:visible"],
+        )
+        if dialog is not None:
+            break
+        await page.wait_for_timeout(100)
+    if dialog is None:
+        return None
+    asin_input = await _first_visible_locator(
+        dialog,
+        [
+            "input[placeholder*='输入单个ASIN']:not([readonly]):not([disabled])",
+            "input[placeholder*='ASIN']:not([readonly]):not([disabled])",
+        ],
+    )
+    recommended = await _first_visible_locator(
+        dialog,
+        [
+            "button:has-text('亚马逊推荐关键词')",
+            "[role='button']:has-text('亚马逊推荐关键词')",
+            ".el-button:has-text('亚马逊推荐关键词')",
+        ],
+    )
+    confirm = await _first_visible_locator(
+        dialog,
+        [
+            "button:has-text('确定')",
+            "[role='button']:has-text('确定')",
+            ".el-button:has-text('确定')",
+        ],
+    )
+    if asin_input is None or recommended is None or confirm is None:
+        return None
+    await asin_input.fill(asin)
+    await recommended.click(timeout=5000)
+    async with page.expect_response(
+        lambda response: _same_endpoint(response.url, endpoint),
+        timeout=30000,
+    ) as info:
+        await confirm.click(timeout=5000)
+    return await info.value
+
+
+async def _trigger_keyword_comparison_query(
+    page,
+    payload: dict[str, Any],
+    *,
+    endpoint: str,
+    variant_selection: str,
+    root_dir: Path,
+):
+    """填写流量词对比条件，校验 prepare 后选择变体并捕获主响应。"""
+    own_asin = str(payload.get("asin") or "").strip().upper()
+    competitor_values = payload.get("asinList")
+    competitor_asins = (
+        [str(value).strip().upper() for value in competitor_values]
+        if isinstance(competitor_values, list)
+        else []
+    )
+    if not own_asin or not competitor_asins:
+        return None
+
+    own_input = await _first_visible_page_locator(
+        page,
+        [
+            "input[placeholder*='自己的ASIN']:visible:not([readonly]):not([disabled])",
+            "textarea[placeholder*='自己的ASIN']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    competitor_input = await _first_visible_page_locator(
+        page,
+        [
+            "input[placeholder*='竞品ASIN']:visible:not([readonly]):not([disabled])",
+            "textarea[placeholder*='竞品ASIN']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if own_input is None or competitor_input is None:
+        return None
+    await own_input.fill(own_asin)
+    await competitor_input.fill(" ".join(competitor_asins))
+
+    query_button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('立即查询')",
+            "[role='button']:visible:has-text('立即查询')",
+            ".el-button:visible:has-text('立即查询')",
+        ],
+    )
+    if query_button is None:
+        return None
+
+    # 必须先解析 prepare 业务响应；失败时立即结束，不能继续空等弹窗。
+    async with page.expect_response(
+        lambda response: _same_endpoint(
+            response.url,
+            "/v3/api/keyword-comparison/prepare",
+        ),
+        timeout=15000,
+    ) as prepare_info:
+        try:
+            await query_button.click(timeout=5000)
+        except Exception as exc:
+            raise SellerSpriteApiError(
+                "卖家精灵流量词对比“立即查询”按钮点击失败",
+                api_code="ERR_KEYWORD_COMPARISON_QUERY_CLICK",
+            ) from exc
+    prepare_response = await prepare_info.value
+    prepare_payload = await _parse_response(
+        prepare_response,
+        method="POST",
+        root_dir=root_dir,
+        section="keyword_comparison_prepare",
+    )
+    prepare_data = (
+        prepare_payload.get("data")
+        if isinstance(prepare_payload, dict)
+        else None
+    )
+    api_message = (
+        prepare_payload.get("message") or prepare_payload.get("msg")
+        if isinstance(prepare_payload, dict)
+        else None
+    )
+    # prepare 必须同时明确返回 code=OK 和 success=true；缺失或类型异常也视为失败。
+    prepare_code = (
+        prepare_payload.get("code")
+        if isinstance(prepare_payload, dict)
+        else None
+    )
+    prepare_success = (
+        prepare_payload.get("success")
+        if isinstance(prepare_payload, dict)
+        else None
+    )
+    if prepare_code != "OK" or prepare_success is not True:
+        raise SellerSpriteApiError(
+            "卖家精灵流量词对比准备接口返回错误",
+            status_code=getattr(prepare_response, "status", None),
+            response_excerpt=json.dumps(prepare_payload, ensure_ascii=False)[:1000],
+            api_code=(
+                str(prepare_code)
+                if prepare_code not in {None, "", "OK"}
+                else "ERR_KEYWORD_COMPARISON_PREPARE"
+            ),
+            api_message=str(api_message) if api_message else None,
+        )
+    diamond_list = (
+        prepare_data.get("diamondList")
+        if isinstance(prepare_data, dict)
+        else None
+    )
+    if (
+        not isinstance(diamond_list, list)
+        or not diamond_list
+        or any(not isinstance(value, str) or not value.strip() for value in diamond_list)
+    ):
+        raise SellerSpriteApiError(
+            "卖家精灵流量词对比准备接口未返回有效畅销变体列表",
+            status_code=getattr(prepare_response, "status", None),
+            response_excerpt=json.dumps(prepare_payload, ensure_ascii=False)[:1000],
+            api_code="ERR_KEYWORD_COMPARISON_PREPARE_DATA",
+            api_message=str(api_message) if api_message else None,
+        )
+
+    button_text = (
+        "用当前变体拓词"
+        if variant_selection == "current"
+        else "用畅销变体拓词"
+    )
+    variant_button = None
+    for _ in range(30):
+        variant_button = await _first_visible_page_locator(
+            page,
+            [
+                f"button:visible:has-text('{button_text}')",
+                f"[role='button']:visible:has-text('{button_text}')",
+                f".el-button:visible:has-text('{button_text}')",
+            ],
+        )
+        if variant_button is not None:
+            break
+        await page.wait_for_timeout(500)
+    if variant_button is None:
+        raise SellerSpriteApiError(
+            f"卖家精灵流量词对比页面未出现“{button_text}”按钮",
+            api_code="ERR_KEYWORD_COMPARISON_VARIANT_DIALOG",
+        )
+
+    # Element UI 弹窗刚出现时仍可能处于过渡阶段；等待稳定并固定单次鼠标激活坐标。
+    await page.wait_for_timeout(300)
+    # 首次读取会安装只计数的 DOM 监听器，后续失败快照可判断鼠标是否产生了 click。
+    await _keyword_comparison_button_diagnostics(variant_button)
+    try:
+        await variant_button.scroll_into_view_if_needed(timeout=5000)
+        button_box = await variant_button.bounding_box(timeout=5000)
+        if not button_box or button_box["width"] <= 0 or button_box["height"] <= 0:
+            raise RuntimeError("variant button has no clickable bounding box")
+        activation_x = button_box["x"] + button_box["width"] / 2
+        activation_y = button_box["y"] + button_box["height"] / 2
+    except Exception as exc:
+        diagnostic = await _log_keyword_comparison_diagnostics(
+            variant_button,
+            phase="activation_target_failed",
+        )
+        raise SellerSpriteApiError(
+            f"卖家精灵流量词对比“{button_text}”按钮激活位置无效",
+            response_excerpt=diagnostic,
+            api_code="ERR_KEYWORD_COMPARISON_VARIANT_CLICK",
+        ) from exc
+
+    # 同时观察请求和响应：请求监听用于区分按钮未提交、官网路径变化和响应丢失。
+    observed_path = urlparse(endpoint).path
+    try:
+        async with page.expect_response(
+            lambda response: _same_endpoint(response.url, endpoint),
+            timeout=DEFAULT_TIMEOUT_MS,
+        ) as main_info:
+            try:
+                async with page.expect_request(
+                    _is_keyword_comparison_post_request,
+                    timeout=15000,
+                ) as request_info:
+                    try:
+                        # 仅发送一次完整鼠标激活；失败后禁止补按 Enter 或重试，避免重复提交。
+                        await page.mouse.click(
+                            activation_x,
+                            activation_y,
+                            delay=100,
+                        )
+                    except Exception as exc:
+                        diagnostic = await _log_keyword_comparison_diagnostics(
+                            variant_button,
+                            phase="activation_failed",
+                        )
+                        raise SellerSpriteApiError(
+                            f"卖家精灵流量词对比“{button_text}”按钮激活失败",
+                            response_excerpt=diagnostic,
+                            api_code="ERR_KEYWORD_COMPARISON_VARIANT_CLICK",
+                        ) from exc
+            except SellerSpriteApiError:
+                raise
+            except Exception as exc:
+                # Playwright 会在退出 expect_request 上下文时等待事件，必须在主响应上下文内分类。
+                diagnostic = await _log_keyword_comparison_diagnostics(
+                    variant_button,
+                    phase="request_missed",
+                )
+                raise SellerSpriteApiError(
+                    "卖家精灵流量词对比变体按钮激活后未触发主查询请求",
+                    response_excerpt=diagnostic,
+                    api_code="ERR_KEYWORD_COMPARISON_REQUEST_MISSED",
+                    api_message="变体按钮已单次激活，不再自动 fallback 重复查询。",
+                ) from exc
+
+            observed_request = await request_info.value
+            observed_path = urlparse(observed_request.url).path
+            if not _same_endpoint(observed_request.url, endpoint):
+                # 路径变化后立即退出并取消旧接口响应监听，不能继续空等 120 秒。
+                raise SellerSpriteApiError(
+                    "卖家精灵流量词对比主查询接口路径已变化",
+                    response_excerpt=(
+                        f"method={observed_request.method} path={observed_path}"
+                    ),
+                    api_code="ERR_KEYWORD_COMPARISON_ENDPOINT_CHANGED",
+                    api_message=(
+                        "仅记录脱敏请求方法和路径，未记录请求体、Cookie 或 Header。"
+                    ),
+                )
+            return await main_info.value
+    except SellerSpriteApiError:
+        raise
+    except Exception as exc:
+        # Playwright 同样会在退出 expect_response 上下文时等待事件并抛出超时。
+        diagnostic = await _log_keyword_comparison_diagnostics(
+            variant_button,
+            phase="response_missed",
+        )
+        raise SellerSpriteApiError(
+            "卖家精灵流量词对比主查询请求已发出但未捕获响应",
+            response_excerpt=(
+                f"method=POST path={observed_path} diagnostics={diagnostic}"
+            )[:1000],
+            api_code="ERR_KEYWORD_COMPARISON_RESPONSE_MISSED",
+            api_message="变体按钮已单次激活，不再自动 fallback 重复查询。",
+        ) from exc
+
+
 async def _trigger_association_traffic_query(
     page,
     payload: dict[str, Any],
@@ -2275,6 +3388,306 @@ async def _trigger_association_traffic_query(
         )
     await all_variants_button.click(timeout=5000)
     return True
+
+
+async def _prepare_keyword_conversion_rate_query(
+    page,
+    payload: dict[str, Any],
+) -> Any | None:
+    """逐条提交并校验关键词标签，返回尚未点击的查询按钮。"""
+    keywords = [
+        part.strip()
+        for part in str(payload.get("keyword") or "").split(",")
+        if part.strip()
+    ]
+    if not keywords:
+        return None
+
+    await _select_keyword_conversion_rate_filters(page, payload)
+
+    clear_button = await _first_visible_page_locator(
+        page,
+        [
+            ".multi-miner:visible button:visible:has-text('清除')",
+            "button:visible:has-text('清除')",
+        ],
+    )
+    if clear_button is not None:
+        await clear_button.click(timeout=5000)
+        await page.wait_for_timeout(200)
+
+    tags = page.locator(
+        ".multi-miner:visible .kcr--tags-list .el-tag:visible"
+    )
+    if await tags.count():
+        raise SellerSpriteApiError(
+            "关键词转化率页面未清空既有关键词",
+            api_code="ERR_KEYWORD_CONVERSION_RATE_CLEAR",
+        )
+
+    input_box = await _first_visible_page_locator(
+        page,
+        [
+            ".multi-miner:visible .batch-input "
+            "input[aria-autocomplete='list']:visible:not([readonly]):not([disabled])",
+            ".batch-input input[role='textbox']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if input_box is None:
+        return None
+
+    for expected_count, keyword in enumerate(keywords, start=1):
+        await input_box.fill(keyword)
+        press_error: Exception | None = None
+        try:
+            # 每个词组只发送一次 Enter；异常后只检查标签状态，绝不补按。
+            await input_box.press("Enter", timeout=5000)
+        except Exception as exc:
+            press_error = exc
+
+        actual_count = await tags.count()
+        for _ in range(20):
+            if actual_count == expected_count:
+                break
+            await page.wait_for_timeout(100)
+            actual_count = await tags.count()
+        if actual_count != expected_count:
+            raise SellerSpriteApiError(
+                "关键词转化率关键词未完整提交为页面标签",
+                response_excerpt=(
+                    f"expected={expected_count} actual={actual_count} "
+                    f"press_error={type(press_error).__name__ if press_error else 'none'}"
+                ),
+                api_code="ERR_KEYWORD_CONVERSION_RATE_INPUT",
+                api_message="未重复发送 Enter，避免误提交或重复标签。",
+            ) from press_error
+
+    placeholder = await input_box.get_attribute("placeholder")
+    expected_placeholder = f"已录入{len(keywords)}/1000个关键词"
+    if str(placeholder or "").strip() != expected_placeholder:
+        raise SellerSpriteApiError(
+            "关键词转化率页面关键词计数与输入不一致",
+            response_excerpt=(
+                f"expected={expected_placeholder} actual={placeholder}"
+            ),
+            api_code="ERR_KEYWORD_CONVERSION_RATE_INPUT",
+            api_message="未点击查询，避免使用不完整关键词集合。",
+        )
+
+    query_button = await _first_visible_page_locator(
+        page,
+        [
+            ".multi-miner:visible button.el-button--primary:visible:has-text('立即查询')",
+            "button:visible:has-text('立即查询')",
+        ],
+    )
+    if query_button is None:
+        return None
+    return query_button
+
+
+async def _select_keyword_conversion_rate_filters(
+    page,
+    payload: dict[str, Any],
+) -> None:
+    """在录入关键词前选择站点和按周/近90天周期。"""
+    market_label = {
+        "US": "美国站",
+        "JP": "日本站",
+        "UK": "英国站",
+        "DE": "德国站",
+        "FR": "法国站",
+        "IT": "意大利",
+        "ES": "西班牙",
+        "CA": "加拿大",
+        "IN": "印度站",
+    }.get(str(payload.get("market") or "US").upper())
+    if market_label is None:
+        raise SellerSpriteApiError(
+            "关键词转化率页面不支持当前站点",
+            response_excerpt=f"market={payload.get('market')}",
+            api_code="ERR_KEYWORD_CONVERSION_RATE_MARKET",
+        )
+    market_select = await _first_visible_page_locator(
+        page,
+        [
+            ".multi-miner:visible .market-select > "
+            ".el-select:not(.interval-select) "
+            "input[placeholder='请选择']:visible",
+            ".multi-miner:visible .market-select input[readonly]:visible",
+        ],
+    )
+    if market_select is None:
+        raise SellerSpriteApiError(
+            "关键词转化率页面未找到站点选择器",
+            api_code="ERR_KEYWORD_CONVERSION_RATE_MARKET",
+        )
+    await market_select.click(timeout=5000)
+    market_option = await _first_visible_page_locator(
+        page,
+        [
+            f"li.el-select-dropdown__item:visible:has-text('{market_label}')",
+            f".el-select-dropdown__item:visible:has-text('{market_label}')",
+        ],
+    )
+    if market_option is None:
+        raise SellerSpriteApiError(
+            f"关键词转化率页面未找到“{market_label}”站点",
+            api_code="ERR_KEYWORD_CONVERSION_RATE_MARKET",
+        )
+    await market_option.click(timeout=5000)
+    await page.wait_for_timeout(100)
+
+    period_label = "近90天" if payload.get("timeType") == "90D" else "按周"
+    period_select = await _first_visible_page_locator(
+        page,
+        [
+            ".multi-miner:visible .market-select > "
+            ".el-select.interval-select "
+            "input[placeholder='请选择']:visible",
+            ".multi-miner:visible .interval-select input[readonly]:visible",
+        ],
+    )
+    if period_select is None:
+        raise SellerSpriteApiError(
+            "关键词转化率页面未找到周期选择器",
+            api_code="ERR_KEYWORD_CONVERSION_RATE_PERIOD",
+        )
+    await period_select.click(timeout=5000)
+    period_option = await _first_visible_page_locator(
+        page,
+        [
+            f"li.el-select-dropdown__item:visible:has-text('{period_label}')",
+            f".el-select-dropdown__item:visible:has-text('{period_label}')",
+        ],
+    )
+    if period_option is None:
+        raise SellerSpriteApiError(
+            f"关键词转化率页面未找到“{period_label}”周期",
+            api_code="ERR_KEYWORD_CONVERSION_RATE_PERIOD",
+        )
+    await period_option.click(timeout=5000)
+    await page.wait_for_timeout(100)
+
+
+async def _trigger_traffic_extend_query(
+    page,
+    payload: dict[str, Any],
+    *,
+    endpoint: str,
+    variant_selection: str,
+    root_dir: Path,
+) -> Any:
+    """填写拓展流量词条件并选择指定变体模式。"""
+    asin_values = payload.get("originAsinList") or payload.get("asinList")
+    asins = (
+        [str(value).strip().upper() for value in asin_values if str(value).strip()]
+        if isinstance(asin_values, list)
+        else []
+    )
+    if not asins:
+        return False
+    await _select_traffic_extend_period(page, payload.get("month"))
+    input_box = await _first_visible_page_locator(
+        page,
+        [
+            "textarea[placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
+            "input[placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
+        ],
+    )
+    if input_box is None:
+        return False
+    await input_box.fill(" ".join(asins))
+
+    query_button = await _first_visible_page_locator(
+        page,
+        [
+            "button:visible:has-text('立即查询')",
+            "[role='button']:visible:has-text('立即查询')",
+            ".el-button:visible:has-text('立即查询')",
+        ],
+    )
+    if query_button is None:
+        return False
+    # prepare 的业务结果决定弹窗是否可用；必须先完成解析，失败时不得继续点击变体。
+    async with page.expect_response(
+        lambda response: _same_endpoint(
+            response.url,
+            "/v3/api/traffic/extend/prepare",
+        ),
+        timeout=15000,
+    ) as prepare_info:
+        await query_button.click(timeout=5000)
+    prepare_response = await prepare_info.value
+    await _parse_response(
+        prepare_response,
+        method="POST",
+        root_dir=root_dir,
+        section="traffic_extend_prepare",
+    )
+
+    button_text = {
+        "sell_well": "用畅销变体拓词",
+        "current": "用当前变体拓词",
+    }.get(variant_selection, "用全部变体拓词")
+    variant_button = None
+    # Element UI 弹窗有过渡动画，最多等待 15 秒；期间不占用主接口响应预算。
+    for _ in range(30):
+        variant_button = await _first_visible_page_locator(
+            page,
+            [
+                f"button:visible:has-text('{button_text}')",
+                f"[role='button']:visible:has-text('{button_text}')",
+                f".el-button:visible:has-text('{button_text}')",
+            ],
+        )
+        if variant_button is not None:
+            break
+        await page.wait_for_timeout(500)
+    if variant_button is None:
+        raise SellerSpriteApiError(
+            f"拓展流量词页面未出现“{button_text}”按钮",
+            api_code="ERR_TRAFFIC_EXTEND_VARIANT_DIALOG",
+        )
+    # 只在最终按钮点击前监听主接口，并且只点击一次，避免重复查询。
+    async with page.expect_response(
+        lambda response: _same_endpoint(response.url, endpoint),
+        timeout=DEFAULT_TIMEOUT_MS,
+    ) as main_info:
+        await variant_button.click(timeout=5000)
+    return await main_info.value
+
+
+async def _select_traffic_extend_period(page, month: Any) -> None:
+    """在点击 prepare 前同步历史周期，最近 30 天无需操作页面。"""
+    text = str(month or "").strip()
+    if not text:
+        return
+    if re.fullmatch(r"\d{6}", text):
+        text = f"{text[:4]}-{text[4:]}"
+    period_select = await _first_visible_page_locator(
+        page,
+        [".date-select input[placeholder='请选择']:visible"],
+    )
+    if period_select is None:
+        raise SellerSpriteApiError(
+            "拓展流量词页面未找到周期选择器",
+            api_code="ERR_TRAFFIC_EXTEND_PERIOD_SELECT",
+        )
+    await period_select.click(timeout=5000)
+    period_option = await _first_visible_page_locator(
+        page,
+        [
+            f".el-select-dropdown__item:visible:has-text('{text}')",
+        ],
+    )
+    if period_option is None:
+        raise SellerSpriteApiError(
+            f"拓展流量词页面不支持周期：{text}",
+            api_code="ERR_TRAFFIC_EXTEND_PERIOD_OPTION",
+        )
+    # 周期由页面状态写入 prepare；主请求重写不能替代这一步，否则畅销变体范围会错期。
+    await period_option.click(timeout=5000)
 
 
 async def _first_visible_page_locator(page, selectors: list[str]):
@@ -2472,7 +3885,7 @@ async def _find_blank_point(page) -> dict[str, float]:
 
 
 async def _parse_response(response, *, method: str, root_dir: Path, section: str) -> dict[str, Any]:
-    if method == "GET_XLSX":
+    if method in {"GET_XLSX", "POST_XLSX"}:
         content = await response.body()
         headers = getattr(response, "headers", {}) or {}
         content_type = str(headers.get("content-type") or "").lower()
@@ -2494,7 +3907,13 @@ async def _parse_response(response, *, method: str, root_dir: Path, section: str
                 status_code=response.status,
                 response_excerpt=text_excerpt or f"content_type={content_type} content_length={len(content)}",
             )
-        if not content.startswith(b"PK"):
+        normalized_content_type = content_type.partition(";")[0].strip()
+        # 同时校验 MIME、最小长度和 ZIP 签名，避免把登录页或 JSON 错误体保存成 XLSX。
+        if (
+            normalized_content_type not in XLSX_CONTENT_TYPES
+            or len(content) < MIN_XLSX_CONTENT_LENGTH
+            or not content.startswith(b"PK")
+        ):
             raise SellerSpriteApiError(
                 "卖家精灵浏览器文件下载未返回 XLSX",
                 status_code=response.status,
@@ -2659,6 +4078,40 @@ def _profile_dir(settings: SellerSpriteSettings, account: SellerSpriteAccount) -
     return settings.browser_profile_dir / f"{safe_name}-{key}"
 
 
+def _quarantine_profile_dir(
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+) -> Path | None:
+    """移动认证失败账号的持久 Profile，保留现场并强制后续创建新会话。"""
+    source = _profile_dir(settings, account)
+    if not source.exists():
+        return None
+    quarantine_root = settings.browser_profile_dir / ".quarantine"
+    quarantine_root.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    target = quarantine_root / f"{source.name}-{timestamp}-{time.time_ns() % 1_000_000:06d}"
+    shutil.move(str(source), str(target))
+    return target
+
+
+def _quarantine_profile_if_unused(
+    settings: SellerSpriteSettings,
+    account: SellerSpriteAccount,
+    *,
+    account_key: str,
+) -> Path | None:
+    """仅在进程内无 Worker 且 Chromium 未锁定时隔离 Profile。"""
+    # Profile 跨 owner、事件循环甚至进程共享；任一持有迹象都优先保留目录，避免移动活跃会话。
+    if _has_registered_account_worker(account_key):
+        return None
+    source = _profile_dir(settings, account)
+    lock_names = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+    if any(os.path.lexists(source / name) for name in lock_names):
+        logger.warning("卖家精灵认证失败 Profile 仍被 Chromium 锁定，已跳过目录隔离")
+        return None
+    return _quarantine_profile_dir(settings, account)
+
+
 def _listing_analysis_report_url(task_id: str) -> str:
     """构造 Listing Analysis 历史报告详情页地址。"""
     return f"{BASE_URL}/v3/ai-report?id={quote(str(task_id).strip())}&from=history"
@@ -2677,6 +4130,135 @@ def _route_pattern(endpoint: str) -> str:
 
 def _same_endpoint(url: str, endpoint: str) -> bool:
     return urlparse(url).path == urlparse(_absolute_url(endpoint)).path
+
+
+def _is_keyword_comparison_post_request(request) -> bool:
+    """识别变体按钮点击后产生的流量词对比 POST，仅检查方法和脱敏路径。"""
+    path = urlparse(request.url).path
+    return (
+        str(request.method).upper() == "POST"
+        and path.startswith("/v3/api/keyword-comparison/")
+        and path != "/v3/api/keyword-comparison/prepare"
+    )
+
+
+async def _keyword_comparison_button_diagnostics(button) -> dict[str, Any]:
+    """读取变体按钮的脱敏 DOM 状态和事件计数，不采集页面文本或请求数据。"""
+    try:
+        result = await button.evaluate(
+            """element => {
+                const elementKey = '__opscliKeywordComparisonElementDiagnostics';
+                const pageKey = '__opscliKeywordComparisonPageDiagnostics';
+                if (!element[elementKey]) {
+                    const events = {
+                        clickCount: 0,
+                        keydownCount: 0,
+                        keyupCount: 0,
+                        mousedownCount: 0,
+                        mouseupCount: 0,
+                        pointerdownCount: 0,
+                        pointerupCount: 0,
+                        clickTrusted: null,
+                        clickDetail: null,
+                    };
+                    element.addEventListener('click', event => {
+                        events.clickCount += 1;
+                        events.clickTrusted = event.isTrusted;
+                        events.clickDetail = event.detail;
+                    }, true);
+                    element.addEventListener('keydown', () => events.keydownCount += 1, true);
+                    element.addEventListener('keyup', () => events.keyupCount += 1, true);
+                    element.addEventListener('mousedown', () => events.mousedownCount += 1, true);
+                    element.addEventListener('mouseup', () => events.mouseupCount += 1, true);
+                    element.addEventListener('pointerdown', () => events.pointerdownCount += 1, true);
+                    element.addEventListener('pointerup', () => events.pointerupCount += 1, true);
+                    element[elementKey] = events;
+                }
+                if (!window[pageKey]) {
+                    const pageEvents = {errorCount: 0, rejectionCount: 0};
+                    window.addEventListener('error', () => pageEvents.errorCount += 1, true);
+                    window.addEventListener(
+                        'unhandledrejection',
+                        () => pageEvents.rejectionCount += 1,
+                        true,
+                    );
+                    window[pageKey] = pageEvents;
+                }
+                const isVisible = node => {
+                    if (!node) return false;
+                    const style = window.getComputedStyle(node);
+                    const rect = node.getBoundingClientRect();
+                    return style.display !== 'none'
+                        && style.visibility !== 'hidden'
+                        && style.opacity !== '0'
+                        && rect.width > 0
+                        && rect.height > 0;
+                };
+                const dialog = element.closest('[role="dialog"], .el-dialog');
+                const events = element[elementKey];
+                const pageEvents = window[pageKey];
+                return {
+                    connected: element.isConnected,
+                    visible: isVisible(element),
+                    enabled: !element.disabled
+                        && element.getAttribute('aria-disabled') !== 'true',
+                    focused: document.activeElement === element,
+                    dialogVisible: isVisible(dialog),
+                    clickCount: events.clickCount,
+                    keydownCount: events.keydownCount,
+                    keyupCount: events.keyupCount,
+                    mousedownCount: events.mousedownCount,
+                    mouseupCount: events.mouseupCount,
+                    pointerdownCount: events.pointerdownCount,
+                    pointerupCount: events.pointerupCount,
+                    clickTrusted: events.clickTrusted,
+                    clickDetail: events.clickDetail,
+                    pageErrorCount: pageEvents.errorCount,
+                    rejectionCount: pageEvents.rejectionCount,
+                };
+            }"""
+        )
+    except Exception as exc:
+        return {"snapshotError": type(exc).__name__}
+    if not isinstance(result, dict):
+        return {"snapshotError": "InvalidResult"}
+    return {
+        key: result.get(key)
+        for key in (
+            "connected",
+            "visible",
+            "enabled",
+            "focused",
+            "dialogVisible",
+            "clickCount",
+            "keydownCount",
+            "keyupCount",
+            "mousedownCount",
+            "mouseupCount",
+            "pointerdownCount",
+            "pointerupCount",
+            "clickTrusted",
+            "clickDetail",
+            "pageErrorCount",
+            "rejectionCount",
+        )
+        if key in result
+    }
+
+
+async def _log_keyword_comparison_diagnostics(
+    button,
+    *,
+    phase: str,
+) -> str:
+    """输出统一标记的脱敏交互诊断，并返回可放入错误摘要的 JSON。"""
+    diagnostic = {
+        "phase": phase,
+        "button": await _keyword_comparison_button_diagnostics(button),
+    }
+    serialized = json.dumps(diagnostic, ensure_ascii=False, sort_keys=True)
+    logger.warning("%s %s", KEYWORD_COMPARISON_DIAGNOSTIC_TAG, serialized)
+    return serialized[:900]
 
 
 def _looks_like_guest_limited_association_response(
@@ -2752,12 +4334,17 @@ def _looks_like_session_expired(url: str, status: int, text: str) -> bool:
 
 
 def _safe_response_filename(value: str | None) -> str:
-    filename = Path(str(value or "")).name.strip()
-    filename = re.sub(r'[<>:"/\\|?*]+', "-", filename).rstrip(". ")
-    if not filename:
+    filename = re.split(r"[/\\]", str(value or ""))[-1].strip()
+    filename = re.sub(r"[\x00-\x1f\x7f]", "", filename)
+    filename = re.sub(r'[<>:"|?*]+', "-", filename).rstrip(". ")
+    if not filename or filename in {".", ".."}:
         return "official-export.xlsx"
     if not filename.lower().endswith(".xlsx"):
         filename = f"{filename}.xlsx"
+    stem = filename[:-5].rstrip(". ")
+    reserved_name = stem.split(".", 1)[0]
+    if WINDOWS_RESERVED_FILENAME_PATTERN.fullmatch(reserved_name):
+        filename = f"official-{filename}"
     return filename
 
 

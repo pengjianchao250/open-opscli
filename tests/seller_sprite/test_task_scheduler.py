@@ -30,6 +30,18 @@ def _request(job_id: str, asin: str) -> SellerSpriteScenarioRequest:
     )
 
 
+def _branddb_request(job_id: str) -> SellerSpriteScenarioRequest:
+    """构造全球商标库不可重放队列请求。"""
+    return SellerSpriteScenarioRequest(
+        scenario="branddb",
+        site="US",
+        period="30d",
+        params={"text": "ANKER"},
+        job_id=job_id,
+        export_format="xlsx",
+    )
+
+
 def _listing_request(job_id: str, asin: str) -> SellerSpriteScenarioRequest:
     """构造 Listing Analysis 队列请求。"""
     return SellerSpriteScenarioRequest(
@@ -358,6 +370,101 @@ class RecoveringAccountProvider(MultiAccountProvider):
         return [*self.accounts, self.replacement]
 
 
+def test_scheduler_idle_start_does_not_fetch_public_accounts_or_warn(
+    caplog,
+    tmp_path: Path,
+):
+    """空队列启动不应访问公共账号源或产生账号刷新失败告警。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        class FailingAccountProvider:
+            calls = 0
+
+            def list_accounts(self, *, refresh=False):
+                self.calls += 1
+                raise RuntimeError("remote account source unavailable")
+
+            def get_default(self, *, refresh=False):
+                raise AssertionError("空队列不应读取默认账号")
+
+        provider = FailingAccountProvider()
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(
+                output_dir=tmp_path,
+                account_cache_ttl_seconds=1,
+            ),
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        scheduler._ensure_account_provider = lambda **_kwargs: provider
+
+        await scheduler.start()
+        await asyncio.sleep(0.05)
+
+        assert provider.calls == 0
+        assert store.list_account_events() == []
+        assert "卖家精灵账号接口刷新失败" not in caplog.text
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_refreshes_public_accounts_when_task_arrives_after_idle_start(
+    tmp_path: Path,
+):
+    """空闲启动后的首个公共任务应立即初始化账号池，不等待刷新 TTL。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import (
+            SellerSpriteTaskScheduler,
+        )
+
+        class RecordingAccountProvider(MultiAccountProvider):
+            def __init__(self):
+                super().__init__(1)
+                self.calls = []
+
+            def list_accounts(self, *, refresh=False):
+                self.calls.append(refresh)
+                return list(self.accounts)
+
+        provider = RecordingAccountProvider()
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(
+                output_dir=tmp_path,
+                account_cache_ttl_seconds=3600,
+            ),
+            manager_factory=lambda **kwargs: ImmediateRunManager(**kwargs),
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        scheduler._ensure_account_provider = lambda **_kwargs: provider
+
+        await scheduler.start()
+        assert provider.calls == []
+
+        await scheduler.enqueue(_request("job-after-idle", "B07YRMT36L"))
+        succeeded = await _wait_for_state(
+            scheduler,
+            "job-after-idle",
+            "succeeded",
+        )
+
+        assert succeeded["state"] == "succeeded"
+        assert provider.calls == [True]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
 class ParallelRunHarness:
     def __init__(self, expected_started: int):
         self.expected_started = expected_started
@@ -425,11 +532,17 @@ def test_scheduler_runs_tasks_in_fifo_order(tmp_path: Path):
         settings = SellerSpriteSettings(output_dir=tmp_path)
         store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
         manager = ControlledRunManager(settings=settings, account_provider=DummyAccountProvider())
+        submissions = []
+
+        def submit_collection(*, request, result, status):
+            submissions.append((request, result, status))
+
         scheduler = SellerSpriteTaskScheduler(
             store=store,
             settings=settings,
             account_provider=DummyAccountProvider(),
             manager_factory=lambda **kwargs: manager,
+            collection_submitter=submit_collection,
             auto_start=False,
         )
 
@@ -452,6 +565,8 @@ def test_scheduler_runs_tasks_in_fifo_order(tmp_path: Path):
 
         assert second_done["state"] == "succeeded"
         assert manager.started == ["job-1", "job-2"]
+        assert [result.job_id for _, result, _ in submissions] == ["job-1", "job-2"]
+        assert all(status["state"] == "succeeded" for _, _, status in submissions)
         await scheduler.close()
 
     asyncio.run(scenario())
@@ -723,14 +838,14 @@ def test_scheduler_binds_listing_analysis_to_default_account(tmp_path: Path):
     asyncio.run(scenario())
 
 
-def test_scheduler_runs_three_accounts_in_parallel_and_keeps_remaining_as_standby(tmp_path: Path):
+def test_scheduler_runs_five_accounts_in_parallel_and_keeps_remaining_as_standby(tmp_path: Path):
     async def scenario():
         from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
 
         settings = SellerSpriteSettings(output_dir=tmp_path)
         store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
-        provider = MultiAccountProvider(5)
-        harness = ParallelRunHarness(expected_started=3)
+        provider = MultiAccountProvider(7)
+        harness = ParallelRunHarness(expected_started=5)
         scheduler = SellerSpriteTaskScheduler(
             store=store,
             settings=settings,
@@ -738,25 +853,27 @@ def test_scheduler_runs_three_accounts_in_parallel_and_keeps_remaining_as_standb
             manager_factory=harness.manager_factory,
             auto_start=False,
         )
-        for index in range(1, 5):
+        for index in range(1, 7):
             await scheduler.enqueue(_request(f"parallel-{index}", f"B0PARALLEL{index}"))
 
         await scheduler.start()
         await asyncio.wait_for(harness.all_started.wait(), timeout=1)
 
-        running_statuses = [scheduler.job_status(f"parallel-{index}") for index in range(1, 4)]
+        running_statuses = [scheduler.job_status(f"parallel-{index}") for index in range(1, 6)]
         assert {status["state"] for status in running_statuses} == {"running"}
         assert {status["assigned_account"] for status in running_statuses} == {
             "account-1",
             "account-2",
             "account-3",
+            "account-4",
+            "account-5",
         }
-        assert scheduler.job_status("parallel-4")["state"] == "queued"
-        assert scheduler.generic_worker_count == 3
+        assert scheduler.job_status("parallel-6")["state"] == "queued"
+        assert scheduler.generic_worker_count == 5
         assert scheduler.standby_account_count == 2
 
         harness.allow_finish.set()
-        for index in range(1, 5):
+        for index in range(1, 7):
             await _wait_for_state(scheduler, f"parallel-{index}", "succeeded")
         await scheduler.close()
 
@@ -918,6 +1035,281 @@ def test_scheduler_replaces_failed_working_account_with_cold_standby(tmp_path: P
     asyncio.run(scenario())
 
 
+def test_scheduler_does_not_failover_non_replayable_branddb_request(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(2)
+        harness = FailoverRunHarness()
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+        )
+
+        await scheduler.enqueue(_branddb_request("job-branddb-no-replay"))
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-branddb-no-replay", "failed")
+
+        assert harness.attempted_accounts == ["account-1"]
+        assert failed["failover_count"] == 0
+        assert failed["assigned_account"] == "account-1"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_skips_busy_standby_without_leaving_running_task(tmp_path: Path):
+    """备用账号被其他调度器占用时，应继续接替且不得遗留无人续租任务。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.account_pool import seller_sprite_account_key
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        class ConflictThenFreeProvider:
+            def __init__(self):
+                self.accounts = [
+                    SellerSpriteAccount(
+                        name=f"account-{index}",
+                        username=f"user-{index}@example.com",
+                        password=f"secret-{index}",
+                    )
+                    for index in range(1, 4)
+                ]
+
+            def list_accounts(self, *, refresh=False):
+                return list(self.accounts if refresh else self.accounts[:2])
+
+            def get_default(self, *, refresh=False):
+                return self.accounts[0]
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = ConflictThenFreeProvider()
+        store.enqueue(
+            request=_request("occupied-standby", "B0OCCUPIED"),
+            queue_scope="seller_sprite",
+            root_dir=tmp_path / "occupied-standby",
+        )
+        occupied = store.claim_next_generic_for_account(
+            queue_scope="seller_sprite",
+            account_key=seller_sprite_account_key(provider.accounts[1]),
+            assigned_account=provider.accounts[1].name,
+            worker_key="external-worker",
+            execution_owner="external-scheduler",
+        )
+        assert occupied is not None
+
+        harness = FailoverRunHarness()
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        await scheduler.enqueue(_request("job-failover-conflict", "B0FAILOVER"))
+        await scheduler.start()
+        succeeded = await _wait_for_state(
+            scheduler,
+            "job-failover-conflict",
+            "succeeded",
+            attempts=100,
+        )
+
+        assert harness.attempted_accounts == ["account-1", "account-3"]
+        assert succeeded["assigned_account"] == "account-3"
+        assert succeeded["failover_count"] == 1
+        assert store.get_status("occupied-standby")["state"] == "running"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_stale_failover_keeps_new_generation_tracked(tmp_path: Path):
+    """旧代际认证失败不得耗尽账号池、关新会话或删除新代际续租。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.account_pool import seller_sprite_account_key
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(4)
+        scheduler = None
+        new_attempt_id = None
+
+        def manager_factory(**_kwargs):
+            class Manager:
+                async def run(self, _request):
+                    nonlocal new_attempt_id
+                    assert scheduler is not None
+                    assert store.reset_running_tasks() == 1
+                    claimed_new = store.claim_next_generic_for_account(
+                        queue_scope="seller_sprite",
+                        account_key=seller_sprite_account_key(provider.accounts[1]),
+                        assigned_account=provider.accounts[1].name,
+                        worker_key="new-worker",
+                        execution_owner=scheduler._session_owner_id,
+                    )
+                    assert claimed_new is not None
+                    new_attempt_id = scheduler._track_attempt(claimed_new)
+                    raise SellerSpriteAuthenticationError("旧代际登录失败")
+
+            return Manager()
+
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=manager_factory,
+            auto_start=False,
+        )
+        scheduler._account_pool.load(provider.accounts)
+        store.enqueue(
+            request=_request("job-stale-failover", "B0STALE"),
+            queue_scope="seller_sprite",
+            root_dir=tmp_path / "job-stale-failover",
+        )
+        claimed_old = store.claim_next_generic_for_account(
+            queue_scope="seller_sprite",
+            account_key=seller_sprite_account_key(provider.accounts[0]),
+            assigned_account=provider.accounts[0].name,
+            worker_key="old-worker",
+            execution_owner=scheduler._session_owner_id,
+        )
+        assert claimed_old is not None
+        old_attempt_id = scheduler._track_attempt(claimed_old)
+        closed_accounts = []
+
+        async def record_close(account, *, reason):
+            closed_accounts.append((account.name, reason))
+
+        scheduler._close_account_session = record_close
+        replacement = await scheduler._run_generic_job(
+            claimed=claimed_old,
+            account=provider.accounts[0],
+            worker_key="old-worker",
+            attempt_id=old_attempt_id,
+        )
+
+        assert replacement is None
+        assert new_attempt_id is not None
+        assert provider.refresh_calls == 1
+        assert closed_accounts == []
+        assert [account.name for account in scheduler._account_pool.working_accounts] == [
+            "account-1",
+            "account-2",
+            "account-3",
+        ]
+        assert [account.name for account in scheduler._account_pool.standby_accounts] == [
+            "account-4"
+        ]
+        assert scheduler._untrack_attempt(
+            "job-stale-failover",
+            attempt_id=old_attempt_id,
+        ) is False
+        tracked = scheduler._active_attempts["job-stale-failover"]
+        assert tracked["attempt_id"] == new_attempt_id
+        assert tracked["assignment_generation"] == 3
+        assert store.renew_active_execution_leases(
+            execution_owner=scheduler._session_owner_id,
+            attempts=list(scheduler._active_attempts.values()),
+            lease_seconds=60,
+        ) == 1
+        status = store.get_status("job-stale-failover")
+        assert status["state"] == "running"
+        assert status["assignment_generation"] == 3
+        assert status["assigned_account"] == "account-2"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_fails_current_generation_when_all_standby_accounts_are_busy(
+    tmp_path: Path,
+):
+    """所有备用账号均被占用时，应原子失败当前代际并清理租约。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.account_pool import seller_sprite_account_key
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        class BusyStandbyProvider:
+            def __init__(self):
+                self.accounts = [
+                    SellerSpriteAccount(
+                        name=f"account-{index}",
+                        username=f"user-{index}@example.com",
+                        password=f"secret-{index}",
+                    )
+                    for index in range(1, 4)
+                ]
+
+            def list_accounts(self, *, refresh=False):
+                return list(self.accounts if refresh else self.accounts[:2])
+
+            def get_default(self, *, refresh=False):
+                return self.accounts[0]
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = BusyStandbyProvider()
+        for index, account in enumerate(provider.accounts[1:], start=2):
+            job_id = f"occupied-standby-{index}"
+            store.enqueue(
+                request=_request(job_id, f"B0OCCUPIED{index}"),
+                queue_scope="seller_sprite",
+                root_dir=tmp_path / job_id,
+            )
+            occupied = store.claim_next_generic_for_account(
+                queue_scope="seller_sprite",
+                account_key=seller_sprite_account_key(account),
+                assigned_account=account.name,
+                worker_key=f"external-worker-{index}",
+                execution_owner="external-scheduler",
+            )
+            assert occupied is not None
+
+        harness = FailoverRunHarness()
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        await scheduler.enqueue(_request("job-failover-exhausted", "B0FAILOVER"))
+        await scheduler.start()
+        failed = await _wait_for_state(
+            scheduler,
+            "job-failover-exhausted",
+            "failed",
+            attempts=100,
+        )
+
+        assert harness.attempted_accounts == ["account-1"]
+        assert failed["error"]["code"] == "SELLER_SPRITE_ALL_STANDBY_BUSY"
+        assert failed["failover_count"] == 0
+        assert failed["execution_owner"] is None
+        assert failed["heartbeat_at"] is None
+        assert failed["lease_expires_at"] is None
+        assert "job-failover-exhausted" not in scheduler._active_attempts
+        assert [
+            store.get_status(f"occupied-standby-{index}")["state"]
+            for index in range(2, 4)
+        ] == ["running", "running"]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
 def test_scheduler_does_not_failover_for_non_authentication_config_error(tmp_path: Path):
     """请求参数或导出配置错误不能误伤健康账号，也不能触发备用接替。"""
 
@@ -981,7 +1373,7 @@ def test_scheduler_retires_excess_idle_workers_after_account_refresh(tmp_path: P
         )
 
         await scheduler.start()
-        assert scheduler.generic_worker_count == 3
+        assert scheduler.generic_worker_count == 4
         provider.accounts = provider.accounts[:3]
         await asyncio.sleep(1.15)
 
@@ -1014,9 +1406,117 @@ def test_scheduler_closes_failed_slot_when_no_standby_account_exists(tmp_path: P
         failed = await _wait_for_state(scheduler, "job-no-standby", "failed")
         await asyncio.sleep(0.05)
 
-        assert failed["error"]["code"] == "SELLER_SPRITE_ACCOUNT_UNAVAILABLE"
+        assert failed["error"]["code"] == "SELLER_SPRITE_ALL_ACCOUNTS_AUTH_FAILED"
         assert scheduler.job_status("job-stays-queued")["state"] == "queued"
         assert scheduler.generic_worker_count == 0
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_keeps_reassigned_task_running_when_quarantine_write_fails(
+    tmp_path: Path,
+):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        class QuarantineFailingStore(SellerSpriteTaskQueueStore):
+            def quarantine_account(self, **kwargs):
+                raise OSError("quarantine store unavailable")
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = QuarantineFailingStore(db_path=tmp_path / "queue.sqlite3")
+        harness = FailoverRunHarness()
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=MultiAccountProvider(2),
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+        )
+
+        await scheduler.enqueue(_request("job-quarantine-write-failed", "B0FAILOVER"))
+        await scheduler.start()
+        succeeded = await _wait_for_state(
+            scheduler,
+            "job-quarantine-write-failed",
+            "succeeded",
+        )
+
+        assert harness.attempted_accounts == ["account-1", "account-2"]
+        assert succeeded["assigned_account"] == "account-2"
+        assert succeeded["failover_count"] == 1
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_reports_account_source_failure_when_failover_refresh_fails(
+    tmp_path: Path,
+):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        class RefreshFailureProvider(MultiAccountProvider):
+            def list_accounts(self, *, refresh=False):
+                if refresh:
+                    raise RuntimeError("remote account source unavailable")
+                return super().list_accounts(refresh=refresh)
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=RefreshFailureProvider(1),
+            manager_factory=FailoverRunHarness(fail_all=True).manager_factory,
+            auto_start=False,
+        )
+
+        await scheduler.enqueue(_request("job-source-failed", "B0SOURCEFAIL"))
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-source-failed", "failed")
+
+        assert failed["error"]["code"] == "SELLER_SPRITE_ACCOUNT_SOURCE_UNAVAILABLE"
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_fails_queued_task_when_remote_source_has_no_eligible_account(
+    tmp_path: Path,
+):
+    async def scenario():
+        from opscli.seller_sprite.domain.exceptions import (
+            SellerSpriteNoEligibleAccountError,
+        )
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        class EmptyRemoteProvider:
+            def list_accounts(self, *, refresh=False):
+                raise SellerSpriteNoEligibleAccountError(
+                    "卖家精灵远程账号源没有可用账号"
+                )
+
+            def get_default(self, *, refresh=False):
+                raise SellerSpriteNoEligibleAccountError(
+                    "卖家精灵远程账号源没有可用账号"
+                )
+
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=EmptyRemoteProvider(),
+            auto_start=False,
+        )
+
+        await scheduler.enqueue(_request("job-no-eligible", "B0NOELIGIBLE"))
+        await scheduler.start()
+        failed = await _wait_for_state(scheduler, "job-no-eligible", "failed")
+
+        assert failed["error"]["code"] == "SELLER_SPRITE_NO_ELIGIBLE_ACCOUNT"
         await scheduler.close()
 
     asyncio.run(scenario())
@@ -1989,9 +2489,11 @@ def test_scheduler_dedicated_stale_generation_does_not_overwrite_requeued_task(
             return None
 
         scheduler._reap_browser_sessions = skip_reap
+        attempt_id = scheduler._track_attempt(claimed, capacity_kind=None)
         await scheduler._run_user_binding_task(
             claimed=claimed,
             account=binding.account.to_account(),
+            attempt_id=attempt_id,
         )
 
         status = store.get_status("dedicated-stale")

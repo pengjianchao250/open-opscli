@@ -240,7 +240,7 @@ def test_keepa_run_skips_auto_login_when_env_api_key_present(monkeypatch):
     assert DummyManager.init_kwargs == {"jwt": None, "session_id": None}
 
 
-def test_keepa_run_rejects_json_export_format(monkeypatch):
+def test_keepa_run_accepts_json_export_format(monkeypatch):
     DummyManager.last_request = None
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
 
@@ -253,9 +253,8 @@ def test_keepa_run_rejects_json_export_format(monkeypatch):
         )
     )
 
-    assert result["success"] is False
-    assert "不支持的导出格式" in result["error"]["message"]
-    assert DummyManager.last_request is None
+    assert result["success"] is True
+    assert DummyManager.last_request.export_format == "json"
 
 
 def test_keepa_job_status_hides_quota(monkeypatch):

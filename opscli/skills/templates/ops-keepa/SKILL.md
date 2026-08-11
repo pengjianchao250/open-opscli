@@ -15,13 +15,39 @@ description: Use when the user asks to query or export Keepa data through the pu
 
 1. 正式命令面默认只讲 `opscli keepa ...`，不要向用户暴露内部调试命令、本地落盘目录或调试入口。
 2. 先识别场景，再构造 `scenario + site + params`；不确定时先看 `opscli keepa scenarios`。
-3. 默认 `site=US`，默认导出 `xls`；公开 CLI 下 `xls/xlsx` 最终都会生成用户可读的 `.xlsx`。
+3. 默认 `site=US`，默认导出 `xls`；公开 CLI 支持 `xls/xlsx/json`，其中 `xls/xlsx` 最终都会生成用户可读的 `.xlsx`。
 4. `params` 必须是 JSON 对象字符串；不要把数组、裸字符串或半结构化文本直接塞给 `--params`。
 5. `product` 至少提供 `asin/asins` 或 `code/codes` 之一，不能同时传两类标识。
 6. `product-search`、`category-search` 缺少关键词时先补关键词；`seller` 缺少 seller id、`category-lookup` 缺少 category id、`bestsellers` 缺少 `category` 或 `productGroup` 时先澄清。
 7. 不向用户暴露 Keepa token 余额、账号来源、`params.json`、`raw.json`、本地导出路径等内部信息；MCP 每日调用额度按本 Skill 的回复规则展示。
 8. 如果当前宿主是远端 MCP 直连而不是 CLI 代理，继续看 [SKILL_MCP.md](SKILL_MCP.md)。
 9. 若远端 MCP 直连时提示 `无 session_id：请完成授权登录，或传入有效的 session_id` 等授权类错误，先执行 `auth_mcp_login`；不要先把问题归因为 Keepa 场景、参数或导出格式。
+
+## 导出格式选择
+
+| 任务目的 | 推荐格式 | 执行规则 |
+| --- | --- | --- |
+| 单个任务，用户要打开、下载或留档 | `xls` | 显式传 `--export-format xls`；最终文件为 `.xlsx` |
+| 多个任务，Skill/Agent 要汇总、计算或生成报告 | `json` | 每个任务显式传 `--export-format json`，完成后再合并分析 |
+| 用户明确指定格式 | 用户指定格式 | 不用默认推荐覆盖用户选择 |
+
+JSON 与格式化后的 XLSX 共用表头、字段转换、列顺序和附加 Sheet 数据。读取时：
+
+1. 校验 `schema_version="1.0"`，再按 `sheets` 中 `Sheet1`、`Sheet2` 的顺序读取。
+2. 把每个 `SheetN` 当作一个 XLSX 工作表，不要把它误解为 Keepa API 的分页；真实表名读取 `name`。
+3. 按 `columns[index]` 解释 `rows[*][index]`，不要先把行数组猜成对象；`row_count` 用于校验实际行数。
+4. 多任务分析时保留 `job_id + SheetN + name` 的来源关系，合并前按列名对齐；不要只读取 `Sheet1` 而遗漏价格历史、Offer、变体或 search insights 等附加表。
+5. 不要把内部 `raw.json`、`result.json` 或服务端路径作为用户导出文件返回；原始字段核对仍以内部 `raw.json` 为准。
+
+示例：
+
+```powershell
+# 单任务给用户查看
+opscli keepa run product --site US --params '{"asin":"B0088PUEPK"}' --export-format xls
+
+# 多任务或后续分析报告
+opscli keepa run product-search --site US --params '{"keyword":"flashlight"}' --export-format json
+```
 
 ## 链路区分
 
@@ -67,7 +93,7 @@ opscli keepa run <scenario> --site US --params '{"asin":"B0088PUEPK"}'
 - `--site`：站点，默认 `US`
 - `--params`：JSON 对象字符串
 - `--job-id`：自定义任务 ID
-- `--export-format`：`xls` / `xlsx`
+- `--export-format`：`xls` / `xlsx` / `json`
 - `--reserve-tokens`：预留 token 阈值
 - `--force`：忽略 token 预检查提醒继续执行
 - `--wait`：token 不足时等待一次 refill 后再执行
@@ -147,5 +173,5 @@ opscli keepa run bestsellers --site US --params '{"category":"172282"}'
 - `keepa_scenarios`、`keepa_quota_status`、`keepa_job_status`、`keepa_export` 不消耗额度；只有 `keepa_run` 消耗次数。
 - `job_status` 和 `export` 默认不重复提示额度，避免轮询阶段重复刷屏。
 - 如果 `row_count=0`，明确告诉用户无匹配结果，并提醒核对站点、ASIN、关键词或筛选条件
-- 用户问“字段准不准”时，只说明 XLSX 是在 Keepa 原始响应基础上做中文表头和可读化处理；口径以 Keepa 原始响应和官方文档为准
+- 用户问“字段准不准”时，说明 XLSX/JSON 都是在 Keepa 原始响应基础上做同源中文表头和可读化处理；口径以 Keepa 原始响应和官方文档为准
 - 不要主动打印 Keepa token 消耗、token 余额、服务器本地路径或内部原始 JSON

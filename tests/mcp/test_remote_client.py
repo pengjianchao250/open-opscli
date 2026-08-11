@@ -153,6 +153,32 @@ def test_call_tool_passes_http_headers(monkeypatch):
     assert calls["headers"] == {"Authorization": "Bearer mcp-user-key"}
 
 
+def test_call_tool_can_disable_http_redirects(monkeypatch):
+    """带自定义密钥的调用方应能禁止自动跟随重定向。"""
+    calls = {}
+    result = DummyResult([DummyTextContent(json.dumps({"success": True}))])
+    install_remote_client_mocks(monkeypatch, calls, result)
+
+    def transport(url, *, http_client):
+        calls["follow_redirects"] = http_client.follow_redirects
+        return DummyHttpTransport(calls)
+
+    monkeypatch.setattr(
+        "opscli.mcp_client.remote_client.streamable_http_client",
+        transport,
+    )
+    client = RemoteMcpClient(
+        url="https://collector.example.com/mcp",
+        headers={"X-MCP-API-Key": "mcp-user-key"},
+        follow_redirects=False,
+    )
+
+    assert asyncio.run(client.call_tool("collector_modules_health", {})) == {
+        "success": True
+    }
+    assert calls["follow_redirects"] is False
+
+
 def test_call_tool_raises_remote_tool_error_with_remote_text(monkeypatch):
     calls = {}
     result = DummyResult([DummyTextContent("remote tool failed")], is_error=True)

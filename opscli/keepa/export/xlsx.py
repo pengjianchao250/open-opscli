@@ -1,8 +1,9 @@
-"""Keepa XLSX export."""
+"""Keepa 格式化工作表模型与 XLSX 导出。"""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,8 +14,29 @@ from opscli.keepa.domain.models import KeepaExportResult
 
 @dataclass(frozen=True)
 class ExportColumn:
+    """描述格式化工作表的一列及其来源字段。"""
+
     title: str
     source: str
+
+
+@dataclass(frozen=True)
+class FormattedWorksheet:
+    """保存 XLSX 与 JSON 共用的工作表名称、列定义和原始行引用。"""
+
+    name: str
+    columns: list[ExportColumn]
+    rows: list[Any]
+    scenario: str
+
+    def iter_values(self) -> Iterator[list[Any]]:
+        """生成格式化行值；无需额外参数，返回按列顺序排列的行迭代器。"""
+        for row in self.rows:
+            normalized_row = _normalize_row(row, scenario=self.scenario)
+            yield [
+                _cell_value(normalized_row.get(column.source))
+                for column in self.columns
+            ]
 
 
 EMPTY_COLUMNS = [ExportColumn("原始数据", "value")]
@@ -122,7 +144,7 @@ def export_rows_to_xlsx(
     params: dict[str, Any] | None = None,
     extra_sheets: dict[str, list[Any]] | None = None,
 ) -> KeepaExportResult:
-    """Export Keepa rows to a user-friendly XLSX workbook."""
+    """把主表、场景信息和附加表导出为 XLSX，返回文件路径、格式和 MIME 元数据。"""
     try:
         from openpyxl import Workbook
         from openpyxl.cell import WriteOnlyCell
@@ -133,28 +155,20 @@ def export_rows_to_xlsx(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook(write_only=True)
-    sheet = workbook.create_sheet(title=_safe_sheet_title(_sheet_title(scenario=scenario, site=site, params=params or {}, rows=rows)))
     header_fill = PatternFill("solid", fgColor="EAF2F8")
     header_font = Font(bold=True)
 
-    _write_rows_sheet(
-        sheet=sheet,
+    for formatted_sheet in build_formatted_worksheets(
         rows=rows,
         scenario=scenario,
-        header_fill=header_fill,
-        header_font=header_font,
-        write_only_cell=WriteOnlyCell,
-        get_column_letter=get_column_letter,
-    )
-
-    for sheet_name, sheet_rows in (extra_sheets or {}).items():
-        if not sheet_rows:
-            continue
-        detail_sheet = workbook.create_sheet(title=_safe_sheet_title(sheet_name))
+        site=site,
+        params=params,
+        extra_sheets=extra_sheets,
+    ):
+        sheet = workbook.create_sheet(title=formatted_sheet.name)
         _write_rows_sheet(
-            sheet=detail_sheet,
-            rows=sheet_rows,
-            scenario=scenario,
+            sheet=sheet,
+            formatted_sheet=formatted_sheet,
             header_fill=header_fill,
             header_font=header_font,
             write_only_cell=WriteOnlyCell,
@@ -169,14 +183,13 @@ def export_rows_to_xlsx(
 def _write_rows_sheet(
     *,
     sheet: Any,
-    rows: list[Any],
-    scenario: str,
+    formatted_sheet: FormattedWorksheet,
     header_fill: Any,
     header_font: Any,
     write_only_cell: Any,
     get_column_letter: Any,
 ) -> None:
-    columns = _columns_from_row_values(rows, scenario=scenario)
+    columns = formatted_sheet.columns
     sheet.freeze_panes = "A2"
 
     header_cells = []
@@ -187,9 +200,8 @@ def _write_rows_sheet(
         header_cells.append(cell)
     sheet.append(header_cells)
 
-    for row in rows:
-        normalized_row = _normalize_row(row, scenario=scenario)
-        sheet.append([_cell_value(normalized_row.get(column.source)) for column in columns])
+    for values in formatted_sheet.iter_values():
+        sheet.append(values)
 
     for column_index, column in enumerate(columns, start=1):
         sheet.column_dimensions[get_column_letter(column_index)].width = _column_width(column.title)
@@ -207,6 +219,47 @@ def _columns_from_row_values(rows: list[Any], *, scenario: str) -> list[ExportCo
                 seen.add(key)
                 fields.append(key)
     return [ExportColumn(_title_for_field(field), field) for field in fields] or EMPTY_COLUMNS
+
+
+def build_formatted_worksheets(
+    *,
+    rows: list[Any],
+    scenario: str,
+    site: str = "US",
+    params: dict[str, Any] | None = None,
+    extra_sheets: dict[str, list[Any]] | None = None,
+) -> list[FormattedWorksheet]:
+    """根据结果行、场景、站点、参数和附加表构造唯一命名的有序工作表列表。"""
+    inputs: list[tuple[str, list[Any]]] = [
+        (
+            _sheet_title(
+                scenario=scenario,
+                site=site,
+                params=params or {},
+                rows=rows,
+            ),
+            rows,
+        )
+    ]
+    inputs.extend(
+        (name, sheet_rows)
+        for name, sheet_rows in (extra_sheets or {}).items()
+        if sheet_rows
+    )
+    used_names: set[str] = set()
+    worksheets: list[FormattedWorksheet] = []
+    for requested_name, sheet_rows in inputs:
+        name = _unique_sheet_title(requested_name, used_names)
+        used_names.add(name.casefold())
+        worksheets.append(
+            FormattedWorksheet(
+                name=name,
+                columns=_columns_from_row_values(sheet_rows, scenario=scenario),
+                rows=sheet_rows,
+                scenario=scenario,
+            )
+        )
+    return worksheets
 
 
 def _normalize_row(row: Any, *, scenario: str) -> dict[str, Any]:
@@ -236,6 +289,18 @@ def _sheet_title(*, scenario: str, site: str, params: dict[str, Any], rows: list
 def _safe_sheet_title(value: str) -> str:
     title = "".join(char for char in value if char not in r"[]:*?/\\")
     return (title or "Keepa")[:31]
+
+
+def _unique_sheet_title(value: str, used_names: set[str]) -> str:
+    """按 Excel 的大小写不敏感规则生成不超过 31 字符的唯一表名。"""
+    base = _safe_sheet_title(value)
+    candidate = base
+    suffix = 1
+    while candidate.casefold() in used_names:
+        suffix_text = str(suffix)
+        candidate = f"{base[: 31 - len(suffix_text)]}{suffix_text}"
+        suffix += 1
+    return candidate
 
 
 def _column_width(title: str) -> int:

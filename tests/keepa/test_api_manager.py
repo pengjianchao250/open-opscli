@@ -124,6 +124,39 @@ def test_manager_writes_params_raw_result_and_xlsx_export(monkeypatch, tmp_path:
     assert sheet.cell(row=2, column=3).value == 7588958
 
 
+def test_manager_submits_complete_success_result_to_collection_storage(
+    monkeypatch, tmp_path: Path
+):
+    DummyKeepaClient.requests = []
+    submissions = []
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", DummyKeepaClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
+
+    def submitter(*, request, result):
+        assert Path(result.result_path).is_file()
+        assert result.export is not None
+        assert Path(result.export.path).is_file()
+        submissions.append((request, result))
+        return True
+
+    manager = KeepaApiManager(
+        settings=settings,
+        api_key_provider=DummyApiKeyProvider(),
+        collection_submitter=submitter,
+    )
+    request = KeepaScenarioRequest(
+        scenario="product",
+        site="US",
+        params={"asin": "B0088PUEPK", "history": False},
+        job_id="keepa-collection-submit",
+    )
+
+    result = _run(manager.run(request))
+
+    assert submissions == [(request, result)]
+
+
 def test_manager_uploads_export_to_keepa_export_folder(monkeypatch, tmp_path: Path):
     DummyKeepaClient.requests = []
     DummyUploadClient.instances = []
@@ -153,32 +186,42 @@ def test_manager_uploads_export_to_keepa_export_folder(monkeypatch, tmp_path: Pa
     assert result.warnings == []
 
 
-def test_manager_rejects_json_export_when_requested(monkeypatch, tmp_path: Path):
+def test_manager_writes_formatted_json_export_when_requested(monkeypatch, tmp_path: Path):
     DummyKeepaClient.requests = []
     monkeypatch.setattr(api_manager_module, "KeepaApiClient", DummyKeepaClient)
     monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
     settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
     manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
 
-    try:
-        _run(
-            manager.run(
-                KeepaScenarioRequest(
-                    scenario="product",
-                    site="US",
-                    params={"asin": "B0088PUEPK", "stats": 30, "history": False},
-                    job_id="keepa-json-regression",
-                    export_format="json",
-                )
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="product",
+                site="US",
+                params={"asin": "B0088PUEPK", "stats": 30, "history": False},
+                job_id="keepa-json-regression",
+                export_format="json",
             )
         )
-    except Exception as exc:
-        assert "不支持的导出格式" in str(exc)
-    else:
-        raise AssertionError("expected json export format rejection")
+    )
 
-    assert DummyKeepaClient.requests == []
-    assert not (tmp_path / "keepa-json-regression" / "keepa-json-regression.json").exists()
+    export_path = tmp_path / "keepa-json-regression" / "keepa-json-regression.json"
+    payload = json.loads(export_path.read_text(encoding="utf-8"))
+
+    assert DummyKeepaClient.requests
+    assert result.export is not None
+    assert result.export.path == str(export_path.resolve())
+    assert result.export.format == "json"
+    assert payload["sheets"]["Sheet1"]["columns"][:3] == [
+        "ASIN",
+        "标题",
+        "最近更新(Keepa分钟)",
+    ]
+    assert payload["sheets"]["Sheet1"]["rows"][0][:3] == [
+        "B0088PUEPK",
+        "Test Product",
+        7588958,
+    ]
 
 
 def test_product_finder_formats_search_insights_sheets(monkeypatch, tmp_path: Path):

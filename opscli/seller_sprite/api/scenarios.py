@@ -10,14 +10,19 @@ from opscli.seller_sprite.api.payloads import (
     make_aba_research_payload,
     make_aba_reverse_payload,
     make_association_traffic_payload,
+    make_branddb_payload,
     make_competitor_payload,
+    make_keyword_comparison_payload,
+    make_keyword_conversion_rate_payload,
     make_keyword_miner_payload,
     make_keyword_research_payload,
     make_keyword_reverse_payload,
     make_listing_analysis_payload,
     make_market_research_payload,
     make_product_research_payload,
+    make_real_time_bidding_payload,
     make_traffic_source_payload,
+    make_traffic_extend_payload,
 )
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 
@@ -38,6 +43,8 @@ class SellerSpriteScenario:
     method: str = "POST"
     high_frequency_endpoint: str | None = None
     task_result_endpoint: str | None = None
+    browser_context_only: bool = False
+    replay_safe: bool = True
 
     def to_public_dict(self) -> dict[str, Any]:
         """返回 MCP 可公开的场景说明。"""
@@ -54,7 +61,11 @@ class SellerSpriteScenario:
             "period": period,
             "month": params.get("month") or period,
             "size": params.get("size") or page_size,
-            "pageSize": params.get("pageSize") or page_size,
+            "pageSize": (
+                params.get("pageSize")
+                if "pageSize" in params
+                else (20 if self.scenario_id == "branddb" else page_size)
+            ),
             "keywordOrAsin": (
                 params.get("keywordOrAsin")
                 or params.get("keyword")
@@ -110,6 +121,16 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         required_any_params=("asin", "asins", "textareaValue", "keywordOrAsin", "q"),
         payload_builder=make_aba_reverse_payload,
     ),
+    "branddb": SellerSpriteScenario(
+        scenario_id="branddb",
+        title="全球商标库",
+        endpoint="/v3/api/branddb/export-syn",
+        method="POST_XLSX",
+        required_params=("text",),
+        payload_builder=make_branddb_payload,
+        browser_context_only=True,
+        replay_safe=False,
+    ),
     "association-traffic": SellerSpriteScenario(
         scenario_id="association-traffic",
         title="关联流量",
@@ -132,6 +153,25 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         endpoint="/v3/api/product-research",
         required_params=(),
         payload_builder=make_product_research_payload,
+    ),
+    "keyword-comparison": SellerSpriteScenario(
+        scenario_id="keyword-comparison",
+        title="流量词对比",
+        endpoint="/v3/api/keyword-comparison/asin",
+        required_params=(),
+        required_any_params=("asin", "ownAsin", "myAsin"),
+        payload_builder=make_keyword_comparison_payload,
+        browser_context_only=True,
+    ),
+    "keyword-conversion-rate": SellerSpriteScenario(
+        scenario_id="keyword-conversion-rate",
+        title="关键词转化率",
+        endpoint="/v3/api/keyword-conv",
+        required_params=(),
+        required_any_params=("keywords", "keywordList", "keyword", "q"),
+        payload_builder=make_keyword_conversion_rate_payload,
+        browser_context_only=True,
+        replay_safe=False,
     ),
     "keyword-miner": SellerSpriteScenario(
         scenario_id="keyword-miner",
@@ -156,6 +196,15 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         required_params=("asin",),
         payload_builder=make_keyword_reverse_payload,
     ),
+    "real-time-bidding": SellerSpriteScenario(
+        scenario_id="real-time-bidding",
+        title="实时查竞价",
+        endpoint="/v3/api/keywordbidding/taskList",
+        required_params=("asin",),
+        payload_builder=make_real_time_bidding_payload,
+        browser_context_only=True,
+        replay_safe=False,
+    ),
     "traffic-source": SellerSpriteScenario(
         scenario_id="traffic-source",
         title="查流量来源",
@@ -163,6 +212,15 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         method="GET",
         required_params=("keywordOrAsin",),
         payload_builder=make_traffic_source_payload,
+    ),
+    "traffic-extend": SellerSpriteScenario(
+        scenario_id="traffic-extend",
+        title="拓展流量词",
+        endpoint="/v3/api/traffic/extend/asin",
+        required_params=(),
+        required_any_params=("asin", "asins"),
+        payload_builder=make_traffic_extend_payload,
+        browser_context_only=True,
     ),
     "market-research": SellerSpriteScenario(
         scenario_id="market-research",

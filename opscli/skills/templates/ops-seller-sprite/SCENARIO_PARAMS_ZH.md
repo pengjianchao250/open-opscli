@@ -11,7 +11,12 @@
 | 关键词挖掘 / keyword mining | `keyword-miner` |
 | 关键词选品 / 关键词研究 / keyword research | `keyword-research` |
 | ABA 数据选品 / ABA 关键词趋势 / ABA research | `aba-research` |
+| 全球商标库 / 商标查询 / brand database | `branddb` |
 | 关联流量 / 关联产品 / 查关联 ASIN / association traffic | `association-traffic` |
+| 拓展流量词 / 多 ASIN 拓词 / expand traffic keywords | `traffic-extend` |
+| 流量词对比 / 竞品关键词对比 / 竞品关键词差距 / keyword comparison | `keyword-comparison` |
+| 关键词转化率 / 批量关键词转化 / keyword conversion rate | `keyword-conversion-rate` |
+| 实时查竞价 / ASIN 实时竞价 / real time bidding | `real-time-bidding` |
 | 出单词反查 / ABA 反查 / ABA reverse | `aba-reverse` |
 | 关键词反查 / reverse ASIN | `keyword-reverse` |
 | 查流量来源 / traffic source | `traffic-source` |
@@ -40,8 +45,13 @@
 - `keyword-research` 的 `period` 表示数据月份，使用 `YYYY-MM`；不要把公共默认 `30d` 当作月份。未指定时使用后端返回的最新可用月份，不硬编码页面月份选项。
 - `keyword-research` 默认使用 `page=1/page_size=100`，只获取第一页后完成任务，不自动续页。
 - `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换。
+- `traffic-extend` 仅支持 `browser-route`，固定 `page=1/size=100`；变体默认 `all`，可选 `sell_well` / `current`，不自动翻页、不调用官网全量导出。
+- `keyword-comparison` 仅支持 `browser-route` 和默认“流量占比”；固定 `page=1/size=100`，未指定变体时自动选择“用畅销变体拓词”，明确要求时可选择“用当前变体拓词”，不自动翻页、不调用官网额度型导出。
+- `keyword-conversion-rate` 仅支持 `browser-route`，周期只支持按周 `W` 或近 90 天 `90D`；公共默认 `30d` 映射为页面默认的 `W`。固定 `pageNum=1/pageSize=100`，不自动翻页、不调用官网导出。
+- `real-time-bidding` 仅支持 `browser-route` 和单个 ASIN；普通历史已完成/失败时自动“再次查询”，无历史时弹窗新建默认推荐关键词任务，进行中任务只等待，官网示例只读；完成后分别读取 SP、SB 第一页并严格合并为 100 条完整竞价数据，不调用官网导出。
 - `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；固定只请求第一页 100 条，忽略公共分页覆盖值，并在本地生成 `.xlsx`。
 - `aba-reverse` 未提供 `period`（或收到公共默认 `30d`）时，默认选择每周和最近完整周；显式周期可传具体周结束日或月份。只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
+- `branddb` 固定使用 `browser-route`，`text` 必填，接口等待上限 120 秒；只支持 `xls` / `xlsx`，官方文件原样保存。请求发出后遇到超时、登录失效或结果不明时不会自动重试或换账号，避免重复消耗导出额度。
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
 - `competitor-lookup` 收到 Amazon 商品链接时，应先提取 ASIN，再传 `params.asins`。
 - `competitor-lookup` 如果用户只给了单个 `asin`，也应先归一化成 `params.asins` 再执行。
@@ -56,11 +66,20 @@
 - `keyword-reverse` 必须有 `asin`。
 - `traffic-source` 必须有关键词或 ASIN。
 - `association-traffic` 必须有 1—20 个合法 ASIN；可传数组，也可传逗号、换行、制表符或 TXT/Excel 按列复制文本。
+- `traffic-extend` 必须有 1—20 个合法 ASIN；可传数组，也可传空格、逗号、换行、制表符或 TXT/Excel 按列复制文本。
+- `keyword-comparison` 必须分别提供 1 个自己的 ASIN 和 1—10 个竞品 ASIN；竞品不得包含自己的 ASIN，支持列表、空格、中英文逗号、换行或制表符分隔。
+- `keyword-conversion-rate` 必须有关键词，最多 1000 个关键词词组；支持数组，或英文/中文逗号、换行、制表符分隔的 TXT/Excel 按列复制文本。词组内部空格保留并规范化，不按空格拆词。
+- `real-time-bidding` 必须且只能提供 1 个合法 ASIN。
 - `aba-research` 必须有父/子 ASIN 或关键词，可使用 `q`、`keywordOrAsin`、`keyword` 或 `asin`。
 - `aba-reverse` 必须有 1—20 个 ASIN 或 Amazon 产品链接；周期可省略，默认使用每周和最近完整周。
+- `branddb` 必须有品牌名称、所有人或注册号搜索文本，统一传 `params.text`。
 - `product-research`、`market-research`、`keyword-research` 虽然没有硬性必填，但用户只说“跑一下”“看下市场”时仍应先确认意图。
 - `keyword-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-miner` 冒充。
 - `association-traffic` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `traffic-source` 冒充。
+- `traffic-extend` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能批量调用 `keyword-reverse` 冒充。
+- `keyword-comparison` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能批量调用 `keyword-reverse` 冒充正式对比结果。
+- `keyword-conversion-rate` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用关键词选品或关键词挖掘冒充转化率结果。
+- `real-time-bidding` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能把关键词反查或广告洞察冒充实时竞价。
 - `aba-research` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-research` 或 `aba-reverse` 冒充。
 - `aba-reverse` 执行前先确认当前 `seller_sprite_scenarios` 已暴露该场景；未暴露时不能改用 `keyword-reverse` 冒充。
 
@@ -73,7 +92,12 @@
 | `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
 | `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认只取第一页 100 条 |
 | `aba-research` | 父/子 ASIN 或关键词 | `departments`、`rankGrowthType`、排序、搜索结果范围筛选 | 周/月 ABA 周期；固定第一页 100 条；本地生成 XLSX |
+| `branddb` | `text` | `feature`、`office`、`brandName`、`status`、`applicant`、`niceClass`、`applicationYear`、`expiryYear`、排序、`ids` | browser-route 直接请求；120 秒；官方 XLSX；不可自动重试 |
 | `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；只取第一页；`page_size=100` |
+| `traffic-extend` | `asins`，1—20 个 | `site`、`period`、`variantSelection` | 仅 browser-route；变体默认 `all`，可选 `sell_well/current`；第一页 100 条；本地生成主表、`Unique Words` 和 `Asin` |
+| `keyword-comparison` | `ownAsin` 1 个；`competitorAsins` 1—10 个 | `site`、`variantSelection` | 仅 browser-route 和流量占比；变体默认 `sell_well`，可选 `current`；固定第一页 100 条；本地生成 XLSX |
+| `keyword-conversion-rate` | `keywords`，1—1000 个关键词词组 | `site`、`period` | 仅 browser-route；周期 `W/90D`；每个词组只按一次 Enter；固定第一页 100 条；本地生成单业务表 |
+| `real-time-bidding` | `asin`，只能 1 个 | `site` | 仅 browser-route；按历史自动再次查询或弹窗新建；进行中只等待；示例只读；SP 与 SB/SBV 严格合并；第一页 100 条；本地生成 46 列单业务表 |
 | `aba-reverse` | `asin` / `asins` / 产品链接，1—20 个 | `period`、`reverseType`、`orderField`、`orderDesc`、`conversionType`、`loadVariations` | 默认每周和最近完整周；直接保存官方完整 XLSX |
 | `keyword-reverse` | `asin` | `badges` | `page=1`，`order=12`，`desc=true` |
 | `traffic-source` | 关键词或 ASIN | `keyword`、`asin`、`asins`、`order`、`desc` | `pageNo=1`，`order=10`，`desc=true` |
@@ -277,6 +301,100 @@
 - 本地工作簿只生成业务主表，不生成官网导出中的 `Notes` 页。
 - 官方参考文件为 `.xlsx`；若请求仍使用兼容值 `export_format=xls`，以工具返回的真实文件名和格式为准。
 
+## `traffic-extend` 拓展流量词
+
+### 输入与边界
+
+| 中文含义 | 字段 | 规则 |
+| --- | --- | --- |
+| ASIN | `params.asins`，兼容单个 `asin` | 1—20 个父体或子体 ASIN；支持数组、空格、逗号、换行、制表符和 TXT/Excel 按列粘贴 |
+| 站点 | 顶层 `site` | 默认 `US` |
+| 周期 | 顶层 `period` | 默认 `30d`；历史月份可用 `YYYY-MM` |
+| 变体拓词 | `params.variantSelection` | `all` / `sell_well` / `current`；省略时默认 `all` |
+
+### 页面、分页与导出
+
+1. browser-route 填写 ASIN，点击“立即查询”并捕获 `POST /v3/api/traffic/extend/prepare`。
+2. 默认点击“用全部变体拓词”；明确指定时点击“用畅销变体拓词”或“用当前变体拓词”。
+3. 捕获 `POST /v3/api/traffic/extend/asin`，固定 `page=1`、`size=100`，不请求后续页。
+4. 查询 JSON 在本地生成官方 33 列主表、基于当前 100 条关键词统计的 `Unique Words` 和原始输入 `Asin`；不生成官网 `Notes` 页。
+5. 不调用 `/asin/async-export`，因此不会触发官方全量导出；实时计算字段可能与历史官方文件存在时点差异。
+
+## `keyword-comparison` 流量词对比
+
+### 输入与边界
+
+| 中文含义 | `params` 字段 | 规则 |
+| --- | --- | --- |
+| 自己的 ASIN | `ownAsin`；兼容 `myAsin` / `asin` | 必填且只能 1 个；10 位字母数字 |
+| 竞品 ASIN | `competitorAsins`；兼容 `competitorAsin` / `asins` | 必填 1—10 个；支持数组、空格、中英文逗号、换行和制表符；去重保序且不得包含自己的 ASIN |
+| 站点 | 顶层 `site` | 默认 `US` |
+| 变体拓词 | `variantSelection` | 可选 `sell_well` / `current`，也兼容“用畅销变体拓词”/“用当前变体拓词”；省略时默认 `sell_well` |
+
+- 首期仅支持默认“流量占比”，不支持自然排名、广告排名、转化效果或曝光位置视图。
+- 固定 `page=1`、`size=100`、`exactly=false`、`orderColumn=22`、`desc=true`、`sortAsin=""`；主列表不发送 `type=PERCENT`。
+- 调用方不得传入 `diamondList`，该字段只能由官网准备流程产生。
+
+### 页面流程与错误处理
+
+1. browser-route 填写自己的 ASIN 和竞品 ASIN，点击“立即查询”。
+2. 捕获并校验 `POST /v3/api/keyword-comparison/prepare`；HTTP、JSON、业务状态或 `data.diamondList` 任一异常都立即失败，不继续等待弹窗。
+3. prepare 成功后按 `variantSelection` 点击对应按钮；用户未指定时默认点击“用畅销变体拓词”，明确要求当前变体时点击“用当前变体拓词”，无需再次确认。
+4. 点击变体按钮前才开始监听 `POST /v3/api/keyword-comparison/asin`，避免 prepare 和弹窗等待占用主响应超时；只允许页面最终 `asinList` 覆盖初始竞品列表，分页、站点和排序仍使用后端固定值。
+5. 变体控制参数不进入主请求；页面交互后未捕获主响应时直接失败，不使用静默接口 fallback。
+
+### 数据与导出
+
+- 只保留第一页最多 100 条，不请求后续页；`row_count` 等于第一页 `data.items` 实际数量。
+- 每个最终 ASIN 动态生成“流量占比 + 流量词类型”两列，自己的 ASIN 标记 `(我的)`；对比值从 `competitorList` 读取。
+- 查询 JSON 在本地生成 `CompareKeywords-{站点}-{自己的ASIN}-...xlsx`，不调用官网额度型导出。
+- 工作簿包含动态业务主表和 `ASIN` 辅助表，不生成 `Notes`。
+
+## `keyword-conversion-rate` 关键词转化率
+
+### 输入与边界
+
+| 中文含义 | 字段 | 规则 |
+| --- | --- | --- |
+| 关键词词组 | `params.keywords`；兼容 `keywordList` / `keyword` / `q` | 必填 1—1000 个；支持数组，或中英文逗号、换行、制表符分隔文本；去重保序，词组内部空格不会拆词 |
+| 站点 | 顶层 `site` | 默认 `US`；支持 `US/JP/UK/DE/FR/IT/ES/CA/IN` |
+| 周期 | 顶层 `period` | `W` / `按周` 或 `90D` / `近90天`；公共默认 `30d` 映射为 `W` |
+
+- 固定 `pageNum=1`、`pageSize=100`、`bidMatchType=exact`、`keywordMatchType=all`、`matchType=1`。
+- 只保留 `data.pager.items` 第一页最多 100 条，不请求后续页。
+
+### 安全页面交互
+
+1. browser-route 先选择站点和周期，清除页面残留关键词标签。
+2. 每个词组只发送一次 Enter；即使动作返回超时，也先检查标签数是否已从 `N-1` 增加到 `N`，禁止盲目补按。
+3. 标签未增加时直接失败，不点击查询；全部标签完成后校验页面 `已录入N/1000个关键词` 计数。
+4. “立即查询”只点击一次；页面交互后未捕获 `/v3/api/keyword-conv` 主响应时直接失败，不做静默接口 fallback 或账号重放。
+
+### 数据与导出
+
+- 查询 JSON 在本地生成官方 33 列业务主表，将 PPC、CPA、产品均价、ACOS 和前三 ASIN 共享拆分为独立列。
+- 工作簿仅包含 `{站点}-{首个关键词}({行数})` 主表，不生成 `Notes`。
+- 首期不调用官网 `/v3/api/keyword-conv/excel`，因此不消耗官网导出额度，也不宣称本地文件与官网导出逐字节一致。
+
+## `real-time-bidding` 实时查竞价
+
+### 输入与任务流程
+
+| 中文含义 | 字段 | 规则 |
+| --- | --- | --- |
+| ASIN | `params.asin` | 必填且只能 1 个；10 位字母数字 |
+| 站点 | 顶层 `site` | 默认 `US` |
+
+1. browser-route 按站点和 ASIN 查询历史任务列表，不调用 `newTask`，不消耗一次新查询额度。
+2. 从更新时间倒序列表持续翻页，选择最新已完成任务；确认历史耗尽仍没有已完成记录时明确失败。
+3. 对同一任务分别请求 `adType=sp` 与 `adType=sb` 的第一页 100 条详情；先校验关键词集合一致，再按 `keyword` 合并 SP、SB 和 SBV 竞价字段。
+
+### 数据与导出
+
+- 列表页摘要、详情页当前广告类型视图和列表页官方导出是三个不同口径，不得互相冒充。
+- 本地工作簿按官方列表导出的 46 列顺序生成单业务主表，不调用 `/v3/api/keywordbidding/exportTaskDetail`，不生成 `Notes`。
+- 只保留第一页最多 100 条；数据来自最新已完成历史任务，与官方 fixture 的数值和查询时间可以不同。
+
 ## `aba-reverse` 出单词反查
 
 ### 场景边界
@@ -318,6 +436,33 @@ seller_sprite_run(
 - 后端直接调用官网导出接口，官方 XLSX 原样保存；接口返回多少条就保留多少条，不分页、不截取、不解析、不重建。
 - 官方列名、顺序、样式、工作表和 `Notes` 页全部保留。
 - 因工作簿不做本地解析，任务结果的 `row_count=0` 和 `data=[]` 不表示没有数据；应以 `export.filename`、`export.url` 或 `export.path` 指向的文件为准。
+
+## `branddb` 全球商标库
+
+### 输入与筛选
+
+| 中文含义 | `params` 字段 | 规则 |
+| --- | --- | --- |
+| 搜索文本 | `text` | 必填；品牌名称、所有人或注册号 |
+| 商标特征 | `feature` | 可省略，默认空字符串 |
+| 注册局 | `office` | 单值、数组或逗号分隔，多值去空去重 |
+| 品牌名称 | `brandName` | 单值、数组或逗号分隔 |
+| 状态 | `status` | `Registered`、`Expired`、`Ended`、`Pending`、`Unknown`；也支持已注册、已过期、已结束、待审核、未知 |
+| 申请人 | `applicant` | 单值、数组或逗号分隔 |
+| 尼斯分类 | `niceClass` | 1—45 的整数列表 |
+| 申请年份 | `applicationYear` | 四位年份列表 |
+| 到期年份 | `expiryYear` | 四位年份列表 |
+| 倒序 | `desc` | 默认 `true`；显式 `false` 会保留 |
+| 排序字段 | `orderField` | 默认空字符串 |
+| 页码 / 页面数量 | `pageNum` / `pageSize` | 默认 `1` / `20`，与官网导出请求一致 |
+| 指定记录 | `ids` | 正整数 ID 列表；默认空数组表示按当前筛选导出 |
+
+### 导出规则
+
+- 仅支持 `browser-route` 和 `export_format=xls/xlsx`；先打开 `/v3/branddb` 建立登录态，再通过同一浏览器上下文直接 `POST /v3/api/branddb/export-syn`，不点击页面导出按钮。
+- 单次接口等待上限为 120 秒。请求一旦发出，登录失效、验证码、401/403、超时或结果不明均直接失败，不自动重新发送，也不换账号故障转移。
+- 官方 XLSX 的文件名和字节原样保留，不分页、不解析、不重建；`row_count=0`、`data=[]` 时应以导出文件为准。
+- 进程崩溃恢复仍沿用通用持久队列的 at-least-once 模型；第三方接口无幂等键，因此不承诺严格 exactly-once。
 
 ## `product-research` 重点参数
 

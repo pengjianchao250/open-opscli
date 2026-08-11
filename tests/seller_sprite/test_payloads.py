@@ -8,15 +8,272 @@ from opscli.seller_sprite.api.payloads import (
     make_aba_research_payload,
     make_aba_reverse_payload,
     make_association_traffic_payload,
+    make_branddb_payload,
     make_competitor_payload,
+    make_keyword_comparison_payload,
+    make_keyword_conversion_rate_payload,
     make_keyword_miner_payload,
     make_keyword_research_payload,
     make_keyword_reverse_payload,
     make_listing_analysis_payload,
     make_product_research_payload,
+    make_real_time_bidding_payload,
+    make_traffic_extend_payload,
 )
 from opscli.seller_sprite.api.scenarios import get_scenario
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+
+
+def test_real_time_bidding_scenario_builds_single_asin_history_payload():
+    scenario = get_scenario("real-time-bidding")
+
+    payload = scenario.build_payload(
+        params={"asin": "b07z82895w"},
+        site="US",
+        period="30d",
+        page_size=20,
+    )
+
+    assert scenario.endpoint == "/v3/api/keywordbidding/taskList"
+    assert scenario.browser_context_only is True
+    assert scenario.replay_safe is False
+    assert payload == {
+        "asin": "B07Z82895W",
+        "isExampleAsin": False,
+        "marketId": 1,
+        "page": 1,
+        "size": 20,
+        "order": {"desc": True, "field": "updatedTime"},
+    }
+    assert (
+        scenario.build_referer(payload)
+        == "https://www.sellersprite.com/v3/real-time-bidding"
+    )
+
+
+@pytest.mark.parametrize("asin", ["", "B07Z82895W B089K9L3VY", "INVALID"])
+def test_real_time_bidding_rejects_missing_multiple_or_invalid_asin(asin):
+    with pytest.raises(SellerSpriteConfigError, match="单个 ASIN|ASIN 格式无效"):
+        make_real_time_bidding_payload({"asin": asin, "site": "US"})
+
+
+def test_traffic_extend_scenario_builds_first_page_all_variants_payload():
+    scenario = get_scenario("traffic-extend")
+
+    payload = scenario.build_payload(
+        params={"asins": "B089K9L3VY B07F8S18D5"},
+        site="US",
+        period="30d",
+        page_size=100,
+    )
+
+    assert scenario.endpoint == "/v3/api/traffic/extend/asin"
+    assert scenario.browser_context_only is True
+    assert payload == {
+        "queryVariations": True,
+        "asinList": ["B089K9L3VY", "B07F8S18D5"],
+        "originAsinList": ["B089K9L3VY", "B07F8S18D5"],
+        "market": 1,
+        "page": 1,
+        "month": "",
+        "size": 100,
+        "orderColumn": 12,
+        "desc": True,
+        "exactly": False,
+        "ac": False,
+    }
+    referer = scenario.build_referer(payload)
+    assert referer.startswith("https://www.sellersprite.com/v3/traffic/extend?")
+    assert "q=" not in referer
+
+
+def test_keyword_conversion_rate_scenario_builds_first_page_batch_payload():
+    scenario = get_scenario("keyword-conversion-rate")
+
+    payload = scenario.build_payload(
+        params={
+            "keywords": "wireless charger stand\nphone holder\twireless charger stand",
+        },
+        site="US",
+        period="W",
+        page_size=20,
+    )
+
+    assert scenario.endpoint == "/v3/api/keyword-conv"
+    assert scenario.browser_context_only is True
+    assert scenario.replay_safe is False
+    assert payload == {
+        "pageNum": 1,
+        "pageSize": 100,
+        "market": "US",
+        "timeType": "W",
+        "bidMatchType": "exact",
+        "keywordMatchType": "all",
+        "matchType": 1,
+        "keyword": "wireless charger stand,phone holder",
+    }
+    assert (
+        scenario.build_referer(payload)
+        == "https://www.sellersprite.com/v3/keyword-conversion-rate"
+    )
+
+
+@pytest.mark.parametrize(
+    ("period", "expected"),
+    [
+        ("W", "W"),
+        ("week", "W"),
+        ("按周", "W"),
+        ("30d", "W"),
+        ("90D", "90D"),
+        ("90d", "90D"),
+        ("近90天", "90D"),
+    ],
+)
+def test_keyword_conversion_rate_normalizes_page_period(period, expected):
+    payload = make_keyword_conversion_rate_payload(
+        {"keywords": ["phone stand"], "site": "US", "period": period}
+    )
+
+    assert payload["timeType"] == expected
+
+
+def test_keyword_conversion_rate_rejects_more_than_one_thousand_keywords():
+    with pytest.raises(SellerSpriteConfigError, match="最多支持 1000 个关键词"):
+        make_keyword_conversion_rate_payload(
+            {
+                "keywords": [f"keyword {index}" for index in range(1001)],
+                "site": "US",
+                "period": "W",
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("variant", "expected"),
+    [
+        (None, "all"),
+        ("all", "all"),
+        ("用全部变体拓词", "all"),
+        ("sell_well", "sell_well"),
+        ("用畅销变体拓词", "sell_well"),
+        ("current", "current"),
+        ("用当前变体拓词", "current"),
+    ],
+)
+def test_traffic_extend_variant_selection_supports_page_options(variant, expected):
+    params = {"asins": ["B089K9L3VY"]}
+    if variant is not None:
+        params["variantSelection"] = variant
+
+    assert payloads_module.traffic_extend_variant_selection(params) == expected
+
+
+def test_traffic_extend_rejects_more_than_twenty_asins():
+    asins = [f"B0000000{index:02d}" for index in range(21)]
+
+    with pytest.raises(SellerSpriteConfigError, match="最多支持 20 个 ASIN"):
+        make_traffic_extend_payload({"asins": asins, "site": "US", "period": "30d"})
+
+
+def test_branddb_scenario_builds_official_export_payload():
+    scenario = get_scenario("branddb")
+
+    payload = scenario.build_payload(
+        params={"text": "ANKER"},
+        site="US",
+        period="30d",
+        page_size=100,
+    )
+
+    assert scenario.endpoint == "/v3/api/branddb/export-syn"
+    assert scenario.method == "POST_XLSX"
+    assert scenario.browser_context_only is True
+    assert scenario.replay_safe is False
+    assert payload == {
+        "text": "ANKER",
+        "feature": "",
+        "office": [],
+        "brandName": [],
+        "status": [],
+        "applicant": [],
+        "niceClass": [],
+        "applicationYear": [],
+        "expiryYear": [],
+        "desc": True,
+        "orderField": "",
+        "pageNum": 1,
+        "pageSize": 20,
+        "ids": [],
+    }
+    assert scenario.build_referer(payload) == "https://www.sellersprite.com/v3/branddb"
+
+
+def test_branddb_payload_normalizes_all_filters_and_keeps_false_desc():
+    payload = make_branddb_payload(
+        {
+            "text": "Anker",
+            "feature": "word",
+            "office": ["US", "US", " CN "],
+            "brandName": "ANKER, Soundcore",
+            "status": ["已注册", "Expired", "已结束", "待审核", "未知"],
+            "applicant": ["Anker Innovations Limited", ""],
+            "niceClass": ["9", 35, 9],
+            "applicationYear": [2022, "2022", "2023"],
+            "expiryYear": "2032,2033",
+            "desc": False,
+            "orderField": "applicationDate",
+            "pageNum": 2,
+            "pageSize": 50,
+            "ids": [123, "123", "456"],
+        }
+    )
+
+    assert payload == {
+        "text": "Anker",
+        "feature": "word",
+        "office": ["US", "CN"],
+        "brandName": ["ANKER", "Soundcore"],
+        "status": ["Registered", "Expired", "Ended", "Pending", "Unknown"],
+        "applicant": ["Anker Innovations Limited"],
+        "niceClass": [9, 35],
+        "applicationYear": ["2022", "2023"],
+        "expiryYear": ["2032", "2033"],
+        "desc": False,
+        "orderField": "applicationDate",
+        "pageNum": 2,
+        "pageSize": 50,
+        "ids": [123, 456],
+    }
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"text": "ANKER", "status": ["无效状态"]}, "status"),
+        ({"text": "ANKER", "niceClass": [0]}, "niceClass"),
+        ({"text": "ANKER", "applicationYear": ["20x2"]}, "applicationYear"),
+        ({"text": "ANKER", "pageNum": 0}, "pageNum"),
+        ({"text": "ANKER", "office": {"code": "US"}}, "office"),
+        ({"text": "ANKER", "brandName": [["ANKER"]]}, "brandName"),
+        ({"text": {"brand": "ANKER"}}, "text"),
+        ({"text": "ANKER", "feature": ["word"]}, "feature"),
+        ({"text": "ANKER", "orderField": {"name": "applicationDate"}}, "orderField"),
+        ({"text": "ANKER", "desc": [False]}, "desc"),
+    ],
+)
+def test_branddb_payload_rejects_invalid_filters(params, message):
+    with pytest.raises(SellerSpriteConfigError, match=message):
+        make_branddb_payload(params)
+
+
+@pytest.mark.parametrize("text", [None, "", "   "])
+def test_branddb_scenario_requires_non_blank_text(text):
+    scenario = get_scenario("branddb")
+    params = {} if text is None else {"text": text}
+
+    with pytest.raises(SellerSpriteConfigError, match="text"):
+        scenario.build_payload(params=params, site="US", period="30d", page_size=100)
 
 
 def test_competitor_payload_requires_primary_filter_before_request():
@@ -74,6 +331,114 @@ def test_competitor_payload_accepts_singular_node_id_path():
     )
 
     assert payload["nodeIdPaths"] == ["3375251:3386071:375519011:375540011"]
+
+
+def test_keyword_comparison_payload_normalizes_inputs_and_forces_first_page():
+    scenario = get_scenario("keyword-comparison")
+
+    payload = scenario.build_payload(
+        params={
+            "asin": "b0949dwjcv",
+            "competitorAsins": "b0744dm3y3， B0BRN58CXR\nB0744DM3Y3",
+            "page": 8,
+            "size": 20,
+        },
+        site="US",
+        period="30d",
+        page_size=20,
+    )
+
+    assert scenario.endpoint == "/v3/api/keyword-comparison/asin"
+    assert scenario.method == "POST"
+    assert scenario.browser_context_only is True
+    assert payload == {
+        "page": 1,
+        "size": 100,
+        "exactly": False,
+        "orderColumn": 22,
+        "desc": True,
+        "asin": "B0949DWJCV",
+        "asinList": ["B0744DM3Y3", "B0BRN58CXR"],
+        "station": "US",
+        "sortAsin": "",
+    }
+    assert scenario.build_referer(payload) == (
+        "https://www.sellersprite.com/v3/keyword-comparison"
+    )
+
+
+@pytest.mark.parametrize(
+    ("variant_selection", "expected"),
+    [
+        (None, "sell_well"),
+        ("sell_well", "sell_well"),
+        ("用畅销变体拓词", "sell_well"),
+        ("current", "current"),
+        ("用当前变体拓词", "current"),
+    ],
+)
+def test_keyword_comparison_variant_selection_is_validated_but_not_sent(
+    variant_selection, expected
+):
+    params = {
+        "asin": "B0949DWJCV",
+        "competitorAsins": "B0744DM3Y3",
+    }
+    if variant_selection is not None:
+        params["variantSelection"] = variant_selection
+
+    payload = make_keyword_comparison_payload(params)
+
+    assert (
+        payloads_module.keyword_comparison_variant_selection(params) == expected
+    )
+    assert "variantSelection" not in payload
+
+
+def test_keyword_comparison_rejects_unknown_variant_selection():
+    with pytest.raises(SellerSpriteConfigError, match="variantSelection"):
+        make_keyword_comparison_payload(
+            {
+                "asin": "B0949DWJCV",
+                "competitorAsins": "B0744DM3Y3",
+                "variantSelection": "unknown",
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"asin": "", "competitorAsins": "B0744DM3Y3"}, "自己的 ASIN"),
+        (
+            {"asin": "B0949DWJCV B0744DM3Y3", "competitorAsins": "B0BRN58CXR"},
+            "自己的 ASIN 只能输入 1 个",
+        ),
+        ({"asin": "B0949DWJCV", "competitorAsins": ""}, "至少需要 1 个竞品 ASIN"),
+        (
+            {
+                "asin": "B0949DWJCV",
+                "competitorAsins": [f"B0000000{i:02d}" for i in range(11)],
+            },
+            "最多支持 10 个竞品 ASIN",
+        ),
+        (
+            {"asin": "B0949DWJCV", "competitorAsins": "B0949DWJCV"},
+            "不得包含自己的 ASIN",
+        ),
+        (
+            {"asin": "INVALID", "competitorAsins": "B0744DM3Y3"},
+            "自己的 ASIN 格式无效",
+        ),
+        (
+            {"asin": "B0949DWJCV", "competitorAsins": "INVALID"},
+            "竞品 ASIN 格式无效",
+        ),
+    ],
+)
+def test_keyword_comparison_payload_rejects_invalid_asins(params, message):
+    with pytest.raises(SellerSpriteConfigError, match=message):
+        make_keyword_comparison_payload({"site": "US", **params})
 
 
 def test_keyword_miner_payload_maps_root_word_and_amazon_choice():

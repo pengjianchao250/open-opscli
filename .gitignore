@@ -36,6 +36,7 @@ Thumbs.db
 # 本地配置（包含测试环境地址，不提交）
 # config.ini 位于 ~/.config/opscli/ 不会在项目目录内
 .env
+opscli/skills/templates/ops-feedback-query/data/feedback_insight.local.json
 
 # 本地采集与验证产物
 seller_sprite_runs/

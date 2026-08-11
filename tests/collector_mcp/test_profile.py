@@ -35,7 +35,7 @@ def test_profile_rejects_missing_critical_bundle():
         )
 
 
-def test_registry_resolves_static_seller_sprite_bundle():
+def test_registry_resolves_static_collection_bundles():
     bundles = resolve_bundles(load_profile({}))
 
     assert [bundle.bundle_id for bundle in bundles] == ["seller_sprite"]
