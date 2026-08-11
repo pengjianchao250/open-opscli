@@ -146,6 +146,42 @@ def disable_account(
     _echo_public(account)
 
 
+@app.command("delete")
+def delete_account(
+    account_id: int = typer.Option(..., "--account-id", min=1),
+    actor: str | None = typer.Option(None, "--actor"),
+    yes: bool = typer.Option(False, "--yes", help="跳过逻辑删除确认"),
+) -> None:
+    """逻辑删除指定账号，保留密钥历史和审计记录。
+
+    Args:
+        account_id: 待删除账号 ID。
+        actor: 审计操作人。
+        yes: 是否跳过交互确认。
+
+    Returns:
+        无；终端输出状态为 ``deleted`` 的脱敏账号摘要。
+
+    Raises:
+        typer.BadParameter: 账号不存在。
+        typer.Abort: 操作人取消删除。
+    """
+    repository = _repository()
+    account = repository.get_account(account_id)
+    if account is None:
+        raise typer.BadParameter(f"API 账号不存在：{account_id}")
+    if not yes and not typer.confirm(
+        f"确认逻辑删除 {account.provider}/{account.name}（ID: {account_id}）？"
+    ):
+        raise typer.Abort()
+    # 逻辑删除可立即阻止账号被领取，同时保留密钥版本和审计历史供追溯。
+    repository.set_status(account_id, "deleted", actor=actor)
+    deleted = repository.get_account(account_id)
+    if deleted is None:
+        raise typer.BadParameter(f"API 账号不存在：{account_id}")
+    _echo_public(deleted)
+
+
 @app.command("migrate-serpapi-sqlite")
 def migrate_serpapi_sqlite(
     sqlite_path: Path | None = typer.Option(

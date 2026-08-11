@@ -69,15 +69,18 @@ opscli api-credentials list
 opscli api-credentials list --provider serpapi
 ```
 
-轮换、停用和启用：
+轮换、停用、启用和逻辑删除：
 
 ```bash
 opscli api-credentials rotate --account-id 12
 opscli api-credentials disable --account-id 12
 opscli api-credentials enable --account-id 12
+opscli api-credentials delete --account-id 12 --actor "admin@example.com"
 ```
 
-同一 Provider 下可配置多个账号。运行时先选择最低优先级数值的可用账号，同优先级选择最久未使用的账号；冷却、禁用、失效和耗尽账号不参与正常领取。
+同一 Provider 下可配置多个账号。运行时先选择最低优先级数值的可用账号，同优先级选择最久未使用的账号；冷却、禁用、失效、耗尽和已删除账号不参与正常领取。
+
+`add`、`rotate`、`enable`、`disable` 和 `delete` 都直接读写 MySQL，只需要日常 DML 权限。`delete` 是逻辑删除：账号状态变为 `deleted` 并立即退出账号池，但密钥版本和审计记录仍然保留。不要直接手工向凭据表插入明文 Key，因为 CLI 还负责信封加密、版本切换和审计。
 
 ## SerpAPI SQLite 迁移
 

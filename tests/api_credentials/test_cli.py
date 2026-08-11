@@ -11,16 +11,17 @@ from opscli.google_trends.api.key_store import SerpApiKeyStore
 runner = CliRunner()
 
 
-def _account(account_id=1, name="primary"):
+def _account(account_id=1, name="primary", status="active"):
     return SimpleNamespace(
         account_id=account_id,
+        provider="serpapi",
         name=name,
         to_public_dict=lambda: {
             "account_id": account_id,
             "provider": "serpapi",
             "name": name,
             "api_key_masked": "secr****-key",
-            "status": "active",
+            "status": status,
         },
     )
 
@@ -45,6 +46,30 @@ def test_add_uses_confirmed_hidden_input_and_never_echoes_key(monkeypatch):
     assert calls["api_key"] == "secret-api-key"
     assert "secret-api-key" not in result.stdout
     assert '"api_key_masked": "secr****-key"' in result.stdout
+
+
+def test_delete_logically_removes_account_and_keeps_audit_actor(monkeypatch):
+    """删除命令应写 deleted 状态，而不是物理删除账号和审计。"""
+    calls = []
+
+    class FakeRepository:
+        def get_account(self, account_id):
+            status = "deleted" if calls else "active"
+            return _account(account_id=account_id, status=status)
+
+        def set_status(self, account_id, status, *, actor=None):
+            calls.append((account_id, status, actor))
+
+    monkeypatch.setattr(credential_cli, "_repository", lambda: FakeRepository())
+
+    result = runner.invoke(
+        credential_cli.app,
+        ["delete", "--account-id", "9", "--actor", "admin@example.com", "--yes"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [(9, "deleted", "admin@example.com")]
+    assert '"status": "deleted"' in result.stdout
 
 
 def test_migrate_serpapi_sqlite_preserves_account_state(monkeypatch, tmp_path):

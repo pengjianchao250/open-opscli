@@ -5,6 +5,7 @@ from datetime import datetime
 
 from opscli.api_credentials.config import ApiCredentialMySqlSettings
 from opscli.api_credentials.crypto import ApiKeyCipher
+from opscli.api_credentials.models import ACCOUNT_STATUSES
 from opscli.api_credentials.repository import MySqlApiCredentialRepository
 from opscli.api_credentials.schema import SCHEMA_STATEMENTS
 
@@ -151,3 +152,19 @@ def test_acquire_uses_locked_priority_lru_selection_and_marks_selected():
         for sql, _params in select_connection.executions
     )
     assert select_connection.committed is True
+
+
+def test_repository_accepts_logical_deleted_status_and_audits_change():
+    """逻辑删除只更新账号状态并写审计，不执行物理 DELETE。"""
+    cipher = _cipher()
+    connection = FakeConnection()
+    repository = _repository(cipher, lambda: connection)
+
+    repository.set_status(8, "deleted", actor="admin@example.com")
+
+    assert "deleted" in ACCOUNT_STATUSES
+    assert connection.executions[0][0].startswith("UPDATE api_provider_accounts SET status")
+    assert connection.executions[0][1] == ("deleted", 8)
+    assert connection.executions[1][0].startswith("INSERT INTO api_credential_audit_logs")
+    assert connection.executions[1][1][1] == "account_deleted"
+    assert connection.committed is True

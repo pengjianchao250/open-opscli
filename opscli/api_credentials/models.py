@@ -9,7 +9,7 @@ from typing import Any
 # 首期只允许三类已接入的 API Provider，防止数据库出现代码无法消费的平台值。
 SUPPORTED_PROVIDERS = frozenset({"serpapi", "canopy", "scrape_do"})
 # 账号状态与领取条件一一对应，cooldown 由运行状态时间字段表达。
-ACCOUNT_STATUSES = frozenset({"active", "disabled", "exhausted", "invalid"})
+ACCOUNT_STATUSES = frozenset({"active", "disabled", "exhausted", "invalid", "deleted"})
 
 
 @dataclass(frozen=True)
