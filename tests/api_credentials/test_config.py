@@ -16,7 +16,21 @@ def test_load_settings_requires_mysql_and_master_key():
         "encryption_configured": False,
     }
     with pytest.raises(ApiCredentialConfigError, match="MySQL"):
+        settings.validate_mysql()
+    with pytest.raises(ApiCredentialConfigError, match="MySQL"):
         settings.validate()
+
+    mysql_only = load_settings(
+        {
+            "OPSCLI_API_CREDENTIAL_MYSQL_HOST": "mysql.internal",
+            "OPSCLI_API_CREDENTIAL_MYSQL_DATABASE": "ops",
+            "OPSCLI_API_CREDENTIAL_MYSQL_USER": "migration",
+            "OPSCLI_API_CREDENTIAL_MYSQL_PASSWORD": "database-password",
+        }
+    )
+    mysql_only.validate_mysql()
+    with pytest.raises(ApiCredentialConfigError, match="MASTER_KEY"):
+        mysql_only.validate()
 
 
 def test_load_settings_does_not_expose_connection_or_key():

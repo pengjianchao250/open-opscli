@@ -26,7 +26,7 @@ def init_schema() -> None:
         ApiCredentialConfigError: 部署配置不完整。
         Exception: MySQL DDL 或版本检查失败。
     """
-    _repository().create_schema()
+    _schema_repository().create_schema()
     typer.echo("API 凭据池 MySQL 表结构初始化完成")
 
 
@@ -263,6 +263,13 @@ def _repository() -> MySqlApiCredentialRepository:
         settings=settings.mysql,
         cipher=ApiKeyCipher(settings.master_key),
     )
+
+
+def _schema_repository() -> MySqlApiCredentialRepository:
+    """创建不依赖 API 主密钥的表结构迁移仓储。"""
+    settings = load_settings()
+    settings.validate_mysql()
+    return MySqlApiCredentialRepository(settings=settings.mysql)
 
 
 def _echo_public(account) -> None:

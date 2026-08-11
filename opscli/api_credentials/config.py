@@ -51,6 +51,18 @@ class ApiCredentialSettings:
     mysql: ApiCredentialMySqlSettings
     master_key: str
 
+    def validate_mysql(self) -> None:
+        """仅校验 MySQL 连接配置，供表结构初始化使用。
+
+        Returns:
+            无。
+
+        Raises:
+            ApiCredentialConfigError: MySQL 连接字段不完整。
+        """
+        if not self.mysql.configured:
+            raise ApiCredentialConfigError("API 凭据池未配置完整 MySQL 连接信息")
+
     def validate(self) -> None:
         """校验后端启动所需的数据库与加密配置。
 
@@ -60,8 +72,7 @@ class ApiCredentialSettings:
         Raises:
             ApiCredentialConfigError: MySQL 字段或主密钥缺失。
         """
-        if not self.mysql.configured:
-            raise ApiCredentialConfigError("API 凭据池未配置完整 MySQL 连接信息")
+        self.validate_mysql()
         if not self.master_key:
             raise ApiCredentialConfigError(f"API 凭据池缺少 {ENV_MASTER_KEY}")
 

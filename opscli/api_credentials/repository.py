@@ -33,14 +33,14 @@ class MySqlApiCredentialRepository:
         self,
         *,
         settings: ApiCredentialMySqlSettings,
-        cipher: ApiKeyCipher,
+        cipher: ApiKeyCipher | None = None,
         connect_factory: Callable[[], Any] | None = None,
     ) -> None:
         """创建 MySQL 凭据仓储。
 
         Args:
             settings: 独立的凭据数据库连接配置。
-            cipher: API Key 信封加密器。
+            cipher: API Key 信封加密器；仅建表时可以不提供。
             connect_factory: 测试可注入的连接工厂。
         """
         self.settings = settings
@@ -504,7 +504,11 @@ class MySqlApiCredentialRepository:
         if current_fingerprint == fingerprint:
             return False
         version = current_version + 1
-        encrypted = self.cipher.encrypt(api_key, account_id=account_id, version=version)
+        encrypted = self._required_cipher().encrypt(
+            api_key,
+            account_id=account_id,
+            version=version,
+        )
         # 先加密再撤销；任一步失败都由外层事务回滚，保证始终只有一个活动版本。
         if current_id is not None:
             cursor.execute(
@@ -540,7 +544,7 @@ class MySqlApiCredentialRepository:
     def _row_to_account(self, row: Any) -> ApiCredentialAccount:
         account_id = int(_value(row, "account_id"))
         version = int(_value(row, "secret_version"))
-        api_key = self.cipher.decrypt(
+        api_key = self._required_cipher().decrypt(
             bytes(_value(row, "secret_ciphertext")),
             bytes(_value(row, "secret_nonce")),
             bytes(_value(row, "encrypted_dek")),
@@ -570,6 +574,14 @@ class MySqlApiCredentialRepository:
             last_error_message=_optional_text(_value(row, "last_error_message")),
             provider_metadata=_json_object(_value(row, "provider_metadata")),
         )
+
+    def _required_cipher(self) -> ApiKeyCipher:
+        """返回运行期加密器，阻止无主密钥仓储处理任何 API Key。"""
+        if self.cipher is None:
+            raise ApiCredentialRepositoryError(
+                "API 凭据仓储未配置主密钥，不能读写 API Key"
+            )
+        return self.cipher
 
     def _execute_account_update(
         self,

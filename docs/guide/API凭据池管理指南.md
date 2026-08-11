@@ -38,11 +38,12 @@ opscli api-credentials init-schema
 本地通用 MCP 通过 `D:\Gitlab\start-mcp.ps1` 启动时，可继续使用原有初始化参数：
 
 ```powershell
-$env:OPSCLI_API_CREDENTIAL_MASTER_KEY = "<32字节随机值的Base64>"
 D:\Gitlab\start-mcp.ps1 -InitializeSchema
 ```
 
-该参数会先创建 API 凭据池表，再启动 MCP 并创建共享采集表。主密钥未通过进程或用户环境变量提供时，脚本会使用隐藏输入提示；主密钥必须长期保持一致，否则已加密的 API Key 将无法解密。
+该参数只要求输入数据库密码，会先创建 API 凭据池表，再启动 MCP 并创建共享采集表。初始化表结构不处理任何 API Key，因此不需要主密钥。
+
+第一次执行 `add` 或 `migrate-serpapi-sqlite` 前，再生成并配置 `OPSCLI_API_CREDENTIAL_MASTER_KEY`。一旦写入首个 API Key，主密钥必须长期保持一致，否则已加密凭据将无法解密。
 
 运行期账号只需要凭据表的必要读写权限，不应具备建表或修改表结构权限。
 

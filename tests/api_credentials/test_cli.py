@@ -5,6 +5,10 @@ from types import SimpleNamespace
 from typer.testing import CliRunner
 
 from opscli.api_credentials import cli as credential_cli
+from opscli.api_credentials.config import (
+    ApiCredentialMySqlSettings,
+    ApiCredentialSettings,
+)
 from opscli.google_trends.api.key_store import SerpApiKeyStore
 
 
@@ -46,6 +50,41 @@ def test_add_uses_confirmed_hidden_input_and_never_echoes_key(monkeypatch):
     assert calls["api_key"] == "secret-api-key"
     assert "secret-api-key" not in result.stdout
     assert '"api_key_masked": "secr****-key"' in result.stdout
+
+
+def test_init_schema_requires_mysql_but_not_api_master_key(monkeypatch):
+    """首次建表不处理 API Key，因此不能强制要求加密主密钥。"""
+    configured = ApiCredentialSettings(
+        mysql=ApiCredentialMySqlSettings(
+            host="mysql.internal",
+            database="ops",
+            user="migration",
+            password="database-password",
+        ),
+        master_key="",
+    )
+    created = []
+
+    class FakeRepository:
+        def __init__(self, *, settings, cipher=None):
+            assert settings == configured.mysql
+            assert cipher is None
+
+        def create_schema(self):
+            created.append(True)
+
+    monkeypatch.setattr(credential_cli, "load_settings", lambda: configured)
+    monkeypatch.setattr(
+        credential_cli,
+        "MySqlApiCredentialRepository",
+        FakeRepository,
+    )
+
+    result = runner.invoke(credential_cli.app, ["init-schema"])
+
+    assert result.exit_code == 0
+    assert created == [True]
+    assert "表结构初始化完成" in result.stdout
 
 
 def test_delete_logically_removes_account_and_keeps_audit_actor(monkeypatch):
