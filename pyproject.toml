@@ -1,6 +1,6 @@
 [project]
 name = "aukeys-opscli"
-version = "0.0.153"
+version = "0.0.154"
 description = "Aukeys 运营 CLI 工具集"
 readme = "README.md"
 requires-python = ">=3.10"
