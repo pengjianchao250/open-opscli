@@ -6281,3 +6281,41 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：`disclosures` 新增两个键，属向后兼容的追加；行数、截断、排序、默认条件等既有披露逻辑与 payload 构造、执行器校验均未改动。远端升级会因模板版升版到 1.3.19 而重新下发文档。
 **回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/ && rm tests/skills/test_run_query_currency.py`；`/Users/mask/log/ops-dataset-query/` 不在本仓库，需手工撤销 SKILL.md 铁律十五、两处版本号及 references 下的新增段落。
 ---
+
+## 2026-08-11 skills(ops-dataset-query) - 多币种改为逐币种服务端取数
+
+**变更原因**：规划器原先只返回一个 `globalCurrency`，且按固定币种规则顺序命中；
+同一请求包含人民币和加拿大元时会只保留 CAD，一体化流程也只执行一个模板，导致 Agent
+可能引用 Bank of Canada Valet `FXCNYCAD` 等外部汇率本地转换。多币种报告必须由取数
+服务分别返回各币种金额。
+
+**改动点**：
+- `opscli/skills/templates/ops-dataset-query/scripts/query_plan.py`：按原文顺序识别并去重
+  全部支持币种；“同时用加拿大元对比显示”明确扩展为 CNY + CAD；多币种生成除
+  `globalCurrency` 外完全一致的 `query_templates`，并纳入 plan integrity。
+- `scripts/query_flow.py`：单币种路径保持一次执行；多币种在一次规划后逐模板调用现有
+  `run_query`，每个子计划重新绑定完整性摘要，分币种保存全量结果并汇总服务端
+  `disclosures.currency`，不包含任何汇率转换。
+- `scripts/run_query.py`：直接收到含多个模板的 plan 时失败关闭并要求改走 `query_flow.py`，
+  防止绕过一体化入口后静默只执行首个币种。
+- `data/query_plan.schema.json`：增加多币种模板、请求币种与执行合同字段；`SKILL.md`、
+  `QUERY_SPEC.md`、`references/simple-query-guide.md`、`references/mcp.md` 增加 CLI/MCP
+  多币种硬规则、结果关联校验和 Bank of Canada Valet 禁令；版本升至 1.3.20。
+- `tests/skills/test_dataset_query_flow.py`、`test_dataset_query_planner.py`：覆盖币种顺序、
+  `Canadian dollar` 关键词重叠、隐含 CNY+CAD、严格 Schema、完整性摘要及两次正式执行。
+
+**验证结果**：`.venv/bin/pytest tests/skills/test_dataset_query_flow.py
+tests/skills/test_dataset_query_planner.py tests/skills/test_run_query_currency.py
+tests/skills/test_run_query_server_paging.py tests/skills/test_run_query_default_filters.py -q`
+通过（103 passed）；安装/升级/发现回归 26 passed；`uv run --frozen ruff check`
+定向文件通过；`git diff --check` 通过。
+`skill-creator/scripts/quick_validate.py` 因通用校验器不允许仓库既有的顶层 `version`
+frontmatter 而失败，HEAD 版本 1.3.19 已存在同一字段，未为通过通用校验而破坏本仓库版本约定。
+
+**影响范围**：仅 ops-dataset-query 的币种意图、规划合同、一体化执行和相关说明；
+单币种查询仍执行一次。多币种查询会按币种增加真实取数服务调用，金额对比只使用各次
+服务端返回结果。未修改 `/Users/mask/.claude/CLAUDE.md`，也未改认证地址和项目版本文件。
+
+**回滚方式**：撤销本记录列出的 ops-dataset-query 文件及两份回归测试文件，并把
+`SKILL.md`、`data/VERSION.json` 版本恢复为 1.3.19。
+---

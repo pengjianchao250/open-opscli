@@ -2100,3 +2100,74 @@ def test_grain_exact_match_produces_no_disclosure_noise(tmp_path: Path):
         "粒度比请求更细" in text
         for text in result["answer_contract"]["required_disclosures_zh"]
     )
+
+
+def test_currency_detection_preserves_order_and_avoids_keyword_overlap():
+    """多币种按原文顺序去重，Canadian dollar 不得被通用 dollar 扩成 USD。"""
+    assert query_plan._detect_global_currencies("分别使用加拿大元和人民币查询") == [
+        "CAD",
+        "CNY",
+    ]
+    assert query_plan._detect_global_currencies("人民币、CAD、人民币双币种") == [
+        "CNY",
+        "CAD",
+    ]
+    assert query_plan._detect_global_currencies("show in Canadian dollar") == ["CAD"]
+
+
+def test_implicit_cny_cad_comparison_emits_two_integrity_bound_templates(
+    tmp_path: Path,
+):
+    """“同时用加拿大元对比显示”必须生成 CNY/CAD 两个同口径服务端模板。"""
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    result = query_plan.build_model_query_plan(
+        "即时综合数据集，查询2026年6月按ASIN、产品名称的订单量、销售额，"
+        "报告中把涉及金钱的同时用加拿大元对比显示一下",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "planned"
+    execution = result["execution_ref"]
+    assert execution["requested_global_currencies"] == ["CNY", "CAD"]
+    templates = execution["query_templates"]
+    assert [item["globalCurrency"] for item in templates] == ["CNY", "CAD"]
+    assert execution["query_template"] == templates[0]
+    cny_scope = {key: value for key, value in templates[0].items() if key != "globalCurrency"}
+    cad_scope = {key: value for key, value in templates[1].items() if key != "globalCurrency"}
+    assert cny_scope == cad_scope
+    assert query_plan.plan_integrity.verify(result) is True
+
+    tampered = json.loads(json.dumps(result, ensure_ascii=False))
+    tampered["execution_ref"]["query_templates"][1]["globalCurrency"] = "USD"
+    assert query_plan.plan_integrity.verify(tampered) is False
+
+    schema = json.loads((SKILL_ROOT / "data" / "query_plan.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(result)
+
+
+def test_run_query_rejects_direct_multi_currency_plan(capsys):
+    """绕过 query_flow 直跑多币种 plan 时必须拒绝，避免静默只执行首个币种。"""
+    plan = {
+        "contract": "query_plan_model_contract_v2",
+        "status": "planned",
+        "execution_ref": {
+            "table_id": "1",
+            "query_template": {"tableId": "1", "globalCurrency": "CNY"},
+            "query_templates": [
+                {"tableId": "1", "globalCurrency": "CNY"},
+                {"tableId": "1", "globalCurrency": "CAD"},
+            ],
+        },
+    }
+    query_plan.plan_integrity.attach(plan)
+
+    exit_code = run_query.main(["--plan-json", json.dumps(plan, ensure_ascii=False)])
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 2
+    assert output["status"] == "precheck_failed"
+    assert "query_flow.py" in output["next_action_zh"]

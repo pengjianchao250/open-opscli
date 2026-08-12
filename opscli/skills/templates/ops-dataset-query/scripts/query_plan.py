@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -1359,19 +1360,54 @@ _CURRENCY_INTENT_PATTERNS = [
 ]
 
 
-def _detect_global_currency(query: str) -> str | None:
-    """从用户请求文本识别全局币种意图（如"用美元显示""按 USD 汇总"）。
+def _detect_global_currencies(query: str) -> list[str]:
+    """按原文出现顺序识别全部币种意图，并去除关键词重叠与重复币种。
 
-    仅在命中白名单 6 种（USD/GBP/CAD/EUR/JPY/CNY）时返回大写代码，否则返回 None。
-    命中即由 planner 写入 query_template.globalCurrency，纳入 integrity 哈希锁定的模板。
+    ``canadian dollar`` 同时包含通用词 ``dollar``，必须优先保留更长的 CAD
+    关键词，否则一次明确的加元请求会被误扩成 CAD + USD。用户要求“同时用加拿大元
+    对比显示”时，业务语义是人民币主口径与加拿大元对照，即使原文省略“人民币”，
+    也必须产出 CNY + CAD 两次服务端查询，不能拿单次结果做本地汇率换算。
     """
     if not query:
-        return None
+        return []
     text = str(query).lower()
-    for code, keywords in _CURRENCY_INTENT_PATTERNS:
-        if any(kw in text for kw in keywords):
-            return code
-    return None
+    matches: list[tuple[int, int, int, str]] = []
+    for code_order, (code, keywords) in enumerate(_CURRENCY_INTENT_PATTERNS):
+        for keyword in keywords:
+            start = text.find(keyword)
+            while start >= 0:
+                matches.append((start, start + len(keyword), code_order, code))
+                start = text.find(keyword, start + 1)
+
+    # 同起点先取更长关键词；随后排除与已选关键词区间重叠的短词。
+    matches.sort(key=lambda item: (item[0], -(item[1] - item[0]), item[2]))
+    occupied: list[tuple[int, int]] = []
+    currencies: list[str] = []
+    for start, end, _code_order, code in matches:
+        if any(start < used_end and end > used_start for used_start, used_end in occupied):
+            continue
+        occupied.append((start, end))
+        if code not in currencies:
+            currencies.append(code)
+
+    # 该中文表达中的“同时/对比显示”明确要求保留人民币主口径，再附加拿大元口径。
+    cad_comparison = any(
+        re.search(pattern, text, flags=re.IGNORECASE)
+        for pattern in (
+            r"(?:同时|一并|并列).{0,12}(?:加拿大元|加元|加币|cad)",
+            r"(?:加拿大元|加元|加币|cad).{0,12}(?:对比显示|对照显示|并列显示|双币种)",
+            r"双币种.{0,12}(?:加拿大元|加元|加币|cad)",
+        )
+    )
+    if currencies == ["CAD"] and cad_comparison:
+        return ["CNY", "CAD"]
+    return currencies
+
+
+def _detect_global_currency(query: str) -> str | None:
+    """兼容单模板调用方，返回识别到的第一个服务端查询币种。"""
+    currencies = _detect_global_currencies(query)
+    return currencies[0] if currencies else None
 
 
 def _build_query_template(
@@ -1441,6 +1477,40 @@ def _build_query_template(
     if global_currency:
         template["globalCurrency"] = global_currency
     return template
+
+
+def _attach_multi_currency_templates(contract: dict, query: str) -> dict:
+    """为多币种意图复制同口径模板，每个币种都绑定一次独立服务端查询。
+
+    此函数在字段和筛选解析完成后运行，因此各模板除 ``globalCurrency`` 外完全一致。
+    ``query_template`` 保留首个模板以兼容单模板执行器；``query_templates`` 由
+    ``query_flow.py`` 逐项执行，整个列表随后一起进入 plan integrity 摘要。
+    """
+    if contract.get("status") != "planned" or contract.get("query_mode") != "dataset_query":
+        return contract
+    currencies = _detect_global_currencies(query)
+    if len(currencies) < 2:
+        return contract
+    execution = contract.get("execution_ref")
+    if not isinstance(execution, dict):
+        return contract
+    template = execution.get("query_template")
+    if not isinstance(template, dict):
+        return contract
+
+    templates: list[dict] = []
+    for currency in currencies:
+        currency_template = deepcopy(template)
+        currency_template["globalCurrency"] = currency
+        templates.append(currency_template)
+    execution["requested_global_currencies"] = currencies
+    execution["query_templates"] = templates
+    execution["query_template"] = deepcopy(templates[0])
+    execution["currency_execution_contract_zh"] = (
+        "每个 query_templates 项必须分别调用取数服务；禁止用任一结果配合外部汇率或本地换算"
+        "生成其他币种。各次查询除 globalCurrency 外的表、字段、时间和筛选必须完全一致。"
+    )
+    return contract
 
 
 def _platform_enum_command(component_table_id: object) -> str | None:
@@ -1991,6 +2061,7 @@ def build_model_query_plan(
     contract = _resolve_component_filters(
         contract, query, auto_enum=auto_enum, data_dir=data_dir
     )
+    contract = _attach_multi_currency_templates(contract, query)
     contract = _attach_fallback_guidance(contract)
     # planned 合同生成后立即封存，执行器据此拒绝规划与执行之间的手工改写。
     if contract.get("status") == "planned" and contract.get("query_mode") == "dataset_query":

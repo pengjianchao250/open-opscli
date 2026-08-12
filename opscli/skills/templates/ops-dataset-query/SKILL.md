@@ -4,12 +4,13 @@ description: >
   运营数据查询取数 Skill。用于按当前账号可见的数据集查询销售、库存、广告、物流、
   流量等数据，支持趋势、环比同比、ACOS/ROAS、图表 UUID 查询和导出。
   加载本 Skill 后必须先读取本目录 SKILL.md 并遵循其流程：CLI 取数默认且优先的入口是
-  一体化流程 python3 scripts/query_flow.py "<用户请求>"（内部只规划一次并直接执行；
+  一体化流程 python3 scripts/query_flow.py "<用户请求>"（内部只规划一次；单币种执行一次，
+  多币种按币种分别调用取数服务；
   规划器按 30 秒命令窗口设计，返回 refresh_in_progress 时按其 recovery_command
   等待重跑即可，禁止自行升级）；只有规划器客观不可用（澄清/阻断、脚本报错重跑仍失败、
   命令窗口连续超时、运行环境缺 python3）时才转 SKILL.md 的降级路径；
   任何路径都禁止凭记忆手拼查询参数或使用未经元数据核对的字段。
-version: 1.3.19
+version: 1.3.20
 ---
 
 # ops-dataset-query
@@ -27,7 +28,7 @@ version: 1.3.19
 
 ## 查询规划主线
 
-**CLI 主线的优先入口是 `query_flow.py`。** 它内部只运行一次规划器；`dataset_query + planned` 直接按规划器原始 `query_template` 执行，其他状态或 `chart_uuid` 返回规划合同供 Agent 处置。仅当合同命中具体歧义时才读取 `references/rules.md`，并按 `references/ask-user-question-guide.md` 澄清；无歧义不拆分步骤。规划器命中「规划器不可用时的降级路径」中列举的客观失败条件时才改走降级，其余情况一律走本入口。
+**CLI 主线的优先入口是 `query_flow.py`。** 它内部只运行一次规划器；`dataset_query + planned` 的单币种请求直接执行原始 `query_template`，多币种请求逐项执行完整性绑定的 `query_templates`，其他状态或 `chart_uuid` 返回规划合同供 Agent 处置。仅当合同命中具体歧义时才读取 `references/rules.md`，并按 `references/ask-user-question-guide.md` 澄清；无歧义不拆分步骤。规划器命中「规划器不可用时的降级路径」中列举的客观失败条件时才改走降级，其余情况一律走本入口。
 
 ### CLI-only：一次规划并执行
 
@@ -37,7 +38,7 @@ version: 1.3.19
 python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"
 ```
 
-**正常路径工具调用预算**：数据集、字段、筛选和时间均可确定时，Agent 从加载本 Skill 到拿到查询结果最多 3 次工具调用，且正式查询只调用一次 `query_flow.py`。包含一次澄清、一次恢复或图表结果证据补全的非正常路径最多 7 次。规划器路径下禁止为了“确认环境/字段/语法”调用 `opscli query catalog`、`opscli query metadata`、`--help`、`rg`、`ls`、`find` 或读取脚本源码；禁止重复加载同一 Skill；禁止生成临时 Python 查询脚本；禁止手工修改 plan、复制 `query_template` 后另拼 payload，或在一体化入口成功后再次查询相同范围。
+**正常路径工具调用预算**：数据集、字段、筛选和时间均可确定时，Agent 从加载本 Skill 到拿到查询结果最多 3 次工具调用，且正式入口只调用一次 `query_flow.py`；多币种时由该入口在内部按币种分别调用取数服务，不额外消耗 Agent 工具调用。包含一次澄清、一次恢复或图表结果证据补全的非正常路径最多 7 次。规划器路径下禁止为了“确认环境/字段/语法”调用 `opscli query catalog`、`opscli query metadata`、`--help`、`rg`、`ls`、`find` 或读取脚本源码；禁止重复加载同一 Skill；禁止生成临时 Python 查询脚本；禁止手工修改 plan、复制 `query_template` 后另拼 payload，或在一体化入口成功后再次查询相同范围。
 
 **命令窗口与等待（30 秒窗口设计）**：平台单条命令的有效等待上限约 30 秒（自行设置更大超时无效）。规划器内部已按此窗口设计——任意单次调用确定性返回：数据就绪时（常态）1~3 秒；需要刷新元数据时前台最多等 8 秒，未完成则**转后台续跑**并返回 `status=blocked, recovery_state=refresh_in_progress`，此时**直接执行其 `recovery_command`**；连续 3 次仍未就绪即转「规划器不可用时的降级路径」，降级也走不通才提交反馈并停止。禁止自行执行任何升级动作、禁止在规划器仍可用时因等待改走旁路探查。若命令仍偶发窗口超时：原样重跑一次即可（流程幂等）；同一请求累计 3 次窗口超时按客观失败转降级。
 
@@ -126,12 +127,14 @@ CLI-only 常规结果分析不要读取 `references/result-analysis.md`：`run_q
 - 遵守 `numeric_evidence_policy_zh`，结论或证据中的关键数值保持返回精度，不自行四舍五入。
 - 0 行只能说明没有返回记录，不能判断业务为 0；全零不等于无数据；空值不等于 0。
 - 周期比较只使用已返回的本期、`last_*`、`diff_*`、`pct_*` 列，缺列时说明无法比较。不同原币不得混加，也不得与 CNY 列混加。
-- 全局币种换算：用户请求含币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时，规划器自动把 `globalCurrency` 写入 `query_template` 并纳入 integrity 哈希——禁止手工增删改写该键，直接执行模板即可；结论中须披露金额已按该币种换算。未识别到币种意图时不注入，由后端回退用户默认配置。
+- 全局币种换算：用户请求含币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时，规划器自动把 `globalCurrency` 写入完整性绑定模板。单币种写入 `query_template`；明确要求多个币种时生成 `query_templates`，一体化入口必须逐币种调用取数服务。未识别到币种意图时不注入，由后端回退用户默认配置。
+- **多币种查询是多次取数，不是汇率换算**："分别使用人民币和加拿大元"、"CNY/CAD 双币种"、"同时用加拿大元对比显示"均要求人民币（CNY）和加拿大元（CAD）各执行一次相同范围的服务端查询。MCP-only 也必须为每个币种分别调用 `query_simple` 并传对应 `global_currency`。禁止只查一个币种后引用 Bank of Canada Valet `FXCNYCAD`、任何公开/内部汇率、模型记忆或本地计算生成另一个币种结果。
+- 多币种结果只能按各次查询共同返回且值一致的维度键关联。生成对比表或 HTML 前，先核对维度键集合与非金额指标；任一查询被截断、返回币种与请求不符、维度键不一致或非金额指标不一致时，停止金额对比并披露差异，不得用汇率换算补齐。
 - **返回币种以 `disclosures.currency` 为准**：服务端在返回的 `meta.currency` 声明本次实际生效的币种代码（ISO 4217，如 `CNY`/`USD`），执行器已把它提取到 stdout 的 `disclosures.currency` 与 `disclosures.currency_disclosure_zh`——**直接用这两个字段，不需要为了拿币种去读 `full_result_file`**。
   - 有值：结论首句、结果表表头和 Excel 口径页必须显式写明币种，例如 `currency=CNY` 即声明"本次金额均为人民币（CNY）计价"，不得只写"金额/销售额"了事。
   - 为 `null`：只能说明"本次返回未声明币种"，禁止据字段名、数据集习惯或历史会话推断具体货币（与 `evidence_contract` 的 `currency_not_declared` 披露一致）。
   - 与请求的 `globalCurrency` 不一致时**以 `disclosures.currency` 为准**，并把差异如实披露。
-- **禁止主动参考外部汇率**：不得用模型记忆、外部行情或任何不在本次返回中的汇率，把结果金额换算成其他币种，也不得跨币种相加或按汇率折算后比较。用户需要其他币种口径时，只能把币种意图写回请求重新查询，由服务端按 `globalCurrency` 换算后重新取 `meta.currency`。
+- **禁止主动参考外部汇率**：不得使用 Bank of Canada Valet `FXCNYCAD`、模型记忆、外部行情或任何本次取数服务之外的汇率，把结果金额换算成其他币种，也不得跨币种相加或按汇率折算后比较。用户需要其他币种口径时，只能把币种意图写回请求重新查询，由服务端按 `globalCurrency` 换算后重新取 `meta.currency`。
 - Top N 或截断必须披露排序、展示数和总行数；未查询范围不得外推。
 - 披露权限、样本、公式和数据新鲜度。没有刷新完成度或外部证据时，不把末日异常当成业务事实，也不得声称因果。
 

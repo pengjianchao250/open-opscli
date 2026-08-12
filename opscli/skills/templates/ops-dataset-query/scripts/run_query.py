@@ -533,6 +533,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             plan_raw = args.plan_json
         plan = _parse_payload(plan_raw) if plan_raw.strip() else None
+        execution = plan.get("execution_ref") if isinstance(plan, dict) else None
+        query_templates = (
+            execution.get("query_templates") if isinstance(execution, dict) else None
+        )
+        if isinstance(query_templates, list) and len(query_templates) > 1:
+            raise PrecheckError(
+                "收到多币种规划：run_query 只能执行一个完整性绑定模板，请改用 "
+                "query_flow.py 逐币种调用取数服务。"
+            )
 
         if args.json_file:
             raw = sys.stdin.read() if args.json_file == "-" else Path(args.json_file).read_text(encoding="utf-8")

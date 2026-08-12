@@ -85,6 +85,16 @@ def test_skill_defines_multi_dataset_excel_orchestration_contract():
     assert "每张快照表独立" in text
 
 
+def test_skill_requires_service_queries_for_each_currency():
+    """人民币/加拿大元对照必须逐币种取数，不能引用外部汇率转换。"""
+    text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "多币种查询是多次取数，不是汇率换算" in text
+    assert "同时用加拿大元对比显示" in text
+    assert "Bank of Canada Valet `FXCNYCAD`" in text
+    assert "MCP-only 也必须为每个币种分别调用 `query_simple`" in text
+
+
 def test_query_flow_plans_and_executes_once(monkeypatch, tmp_path: Path):
     """无歧义路径应各调用一次规划器与执行器，且不传手工 payload。"""
     calls = {"plan": 0, "run": 0}
@@ -124,6 +134,74 @@ def test_query_flow_plans_and_executes_once(monkeypatch, tmp_path: Path):
 
     assert exit_code == 0
     assert calls == {"plan": 1, "run": 1}
+
+
+def test_query_flow_executes_every_currency_template(
+    monkeypatch, capsys, tmp_path: Path
+):
+    """多币种规划仍只规划一次，但必须逐币种调用执行器并汇总服务端结果。"""
+    base = {"tableId": "1", "dimensions": [], "metrics": [], "filters": []}
+    cny = {**base, "globalCurrency": "CNY"}
+    cad = {**base, "globalCurrency": "CAD"}
+    plan = {
+        "contract": "query_plan_model_contract_v2",
+        "query_mode": "dataset_query",
+        "data_state": "ready",
+        "metadata_version": "1.3.20",
+        "status": "planned",
+        "model_view": {},
+        "answer_contract": {},
+        "execution_ref": {
+            "user_visible": False,
+            "table_id": "1",
+            "query_template": cny,
+            "query_templates": [cny, cad],
+            "requested_global_currencies": ["CNY", "CAD"],
+        },
+    }
+    query_flow.plan_integrity.attach(plan)
+    calls: list[dict] = []
+
+    monkeypatch.setattr(
+        query_flow.query_plan,
+        "build_model_query_plan",
+        lambda *_args, **_kwargs: plan,
+    )
+
+    def fake_opscli(_table_id: str, payload: dict) -> dict:
+        calls.append(payload)
+        return {
+            "success": True,
+            "data": [],
+            "meta": {
+                "totalCount": 0,
+                "currency": payload["globalCurrency"],
+            },
+        }
+
+    monkeypatch.setattr(query_flow.run_query, "_run_opscli", fake_opscli)
+
+    exit_code = query_flow.execute_flow(
+        "报告中把涉及金钱的同时用加拿大元对比显示一下",
+        result_dir=tmp_path,
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert [item["globalCurrency"] for item in calls] == ["CNY", "CAD"]
+    assert all(item.get("tableId") == "1" for item in calls)
+    assert all(item.get("dimensions") == [] for item in calls)
+    assert all(item.get("metrics") == [] for item in calls)
+    assert output["multi_currency"] is True
+    assert output["requested_global_currencies"] == ["CNY", "CAD"]
+    assert output["comparison_contract"]["service_queries_complete"] is True
+    assert output["comparison_contract"]["currency_validation_passed"] is True
+    assert output["comparison_contract"]["comparison_ready"] is False
+    assert output["comparison_contract"]["alignment_validation_required"] is True
+    assert [item["returned_currency"] for item in output["currency_results"]] == [
+        "CNY",
+        "CAD",
+    ]
 
 
 def test_query_flow_returns_clarification_without_execution(

@@ -572,6 +572,7 @@ query_build_and_run(
 □ 对比：用 data_comparison 时是否同时传了主周期 filters？对比期是否与主周期不同
 □ 快照：库存类指标是否取最新快照日，未做跨日累加
 □ 多表：是否逐表独立锁定快照/当天口径，并在每表 `truncated=false` 后才 LEFT JOIN
+□ 多币种：是否逐币种分别调用 query_simple，并核对 meta.currency、共同维度键和非金额指标；是否完全未使用外部汇率或本地换算
 □ 行数与排序：limit 是否足够？order_by 是否用了 desc 布尔值
 □ 歧义：字段/人员/组织/币种/库存口径是否存在 ≥2 个合理候选未澄清
 □ 参数命名：是否全部 snake_case
@@ -592,6 +593,7 @@ MCP-only 场景没有本地 shell，按以下内联证据合同组织结论，**
 - 披露本次生效的服务端默认条件（`default_filters_zh`）。
 - 原币金额按币种分开汇总；不同原币不得混加，也不得与 CNY 列混加。
 - **本次生效币种取自返回的 `meta.currency`**（ISO 4217，如 `"currency": "CNY"` 即人民币计价）：有值时必须在本节和涉及金额的结论中写明；缺失或为 `null` 时只能声明"返回未声明币种"，不得推断具体货币；与请求 `globalCurrency` 不一致时以 `meta.currency` 为准并披露差异。**禁止参考外部汇率**做换算或跨币种比较。
+- **多币种必须多次查询**：“分别使用人民币和加拿大元”“CNY/CAD 双币种”“同时用加拿大元对比显示”均为 CNY 与 CAD 两次独立 `query_simple`，每次除 `globalCurrency` 外查询范围完全一致。禁止使用 Bank of Canada Valet `FXCNYCAD` 或任何外部/本地汇率生成另一币种；仅在两次结果取全、返回币种匹配、共同维度键和非金额指标一致后按共同维度关联。
 
 **主要结论**
 
