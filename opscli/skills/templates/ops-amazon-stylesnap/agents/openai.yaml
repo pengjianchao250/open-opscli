@@ -1,0 +1,4 @@
+interface:
+  display_name: "Amazon StyleSnap reverse image search"
+  short_description: "Serially search Amazon product images and save JSON"
+  default_prompt: "Use $ops-amazon-stylesnap to process one or more Amazon ASINs serially, search each primary image on StyleSnap, and save structured JSON."

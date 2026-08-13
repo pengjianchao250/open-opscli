@@ -39,6 +39,14 @@
       "tier": "experimental",
       "reason": "Amazon 商品结构化数据通用 Skill，隐藏底层第三方服务商信息，作为多数据源商品采集入口"
     },
+    "ops-amazon-stylesnap": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "试行中的 Amazon StyleSnap 浏览器自动化 Skill，仅限本地内部使用，不进入任何发行产物"
+    },
     "ops-asin-health-diagnoser": {
       "source": false,
       "wheel": false,

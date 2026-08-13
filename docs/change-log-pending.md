@@ -6619,3 +6619,35 @@ tests/skills/test_dataset_query_flow.py`
 
 **回滚方式**：回退本条记录对应的 Google Trends 数据沉淀、MCP 运行时、测试与变更记录改动。
 ---
+## 2026-08-12 Skill 模板 - 新增 Amazon StyleSnap 反向图片搜索
+
+**变更原因**：为运营人员提供低频、单 ASIN 的 Amazon 商品图到 StyleSnap 以图搜图试行流程，复用本机 Chrome 登录态并保留人工风控接管。
+**改动点**：新增 `ops-amazon-stylesnap/SKILL.md`；在 `opscli/skills/templates/manifest.json` 中登记为 `internal`，所有发行形态均关闭。
+**验证结果**：`skill-creator/scripts/quick_validate.py` 通过；`manifest.json` JSON 解析通过且四种发行开关均为 `false`；未访问 Amazon 或 StyleSnap 真实页面，未执行上传操作。使用记录上报因本地 JWT 401 未完成，反馈提交又因 CLI 参数冲突失败，按 fail-open 处理。
+**影响范围**：仅新增本地 Skill 模板和发行清单，不影响现有 CLI 或公开发行产物。
+**回滚方式**：删除 `ops-amazon-stylesnap` 目录并移除 `manifest.json` 中对应条目。
+---
+## 2026-08-12 Skill 模板 - 补充 StyleSnap 卡片字段提取
+
+**变更原因**：验证 StyleSnap 页面后发现结果卡片除 ASIN、图片和展示名外，还提供颜色/款式数量、评分、评论数和当前价格，需要纳入结构化结果。
+**改动点**：更新 `ops-amazon-stylesnap/SKILL.md`，明确以 DOM/HTML 为主、截图仅视觉核验，并补充卡片字段和上传按钮交互要求。
+**验证结果**：在 Chrome StyleSnap 当前结果页读取到 27 个去重卡片及上述字段；未使用网络接口监听或截图 OCR。
+**影响范围**：仅影响内部试行 Skill 的结果字段和解析步骤，不改变发行权限。
+**回滚方式**：回退本条 Skill 文档改动即可恢复原字段规范。
+---
+## 2026-08-12 Skill 模板 - 支持批量串行 ASIN 和单次上传授权
+
+**变更原因**：用户明确要求无需每个 ASIN 单独确认，并可能一次输入多个 ASIN，需要在保持 Amazon 低频风控边界的前提下支持批量试行。
+**改动点**：`ops-amazon-stylesnap/SKILL.md` 改为支持用户显式提供的 ASIN 列表；一次运行统一授权后自动上传每个成功获取首图的 ASIN；批量严格串行，遇到验证码、频率限制或异常页面停止整个批次，并输出批次摘要约定。
+**验证结果**：`quick_validate.py` 通过；批量约定已通过 Skill 文档和 UI 提示一致性检查；本次未执行新的 Amazon 批量任务。
+**影响范围**：仅影响内部 Skill 的输入、确认和批处理流程，不改变 manifest 的内部权限控制。
+**回滚方式**：回退本条 Skill 文档改动即可恢复单 ASIN、逐次确认的流程。
+---
+## 2026-08-13 Skill 模板 - 规范 StyleSnap 本地导出目录
+
+**变更原因**：StyleSnap 单 ASIN 与批量试运行此前使用不同目录结构，且结果中可能残留浏览器临时文件绝对路径，不利于迁移和审计。
+**改动点**：统一使用 `output/ops-amazon-stylesnap/runs/<YYYYMMDD-HHmmss>/`，每次运行固定生成 `summary.json` 和 `items/<ASIN>/results.json`；JSON 文件路径改为相对本次运行目录；迁移两份现有试运行数据并将运行目录加入 `.gitignore`；同步更新批量串行的 Skill UI 提示。
+**验证结果**：两次迁移运行的 JSON 均可解析，结果数分别为 27 和 17，摘要引用的结果与图片路径均可在运行目录内解析且无绝对路径；`quick_validate.py` 通过；`tests/skills/test_packaging.py` 共 8 项通过；`python-release` 的 wheel/sdist 及 `binary-minimal`、`binary-full` 检查均通过且未包含该 Skill；manifest 四种发行开关保持 `false`。
+**影响范围**：仅影响内部 `ops-amazon-stylesnap` Skill 的本地运行产物位置和提示文本；运行数据不进入 Git 或发行产物。
+**回滚方式**：回退本条对应的 Skill、`.gitignore`、manifest 和变更记录；如需恢复旧试运行目录，可将本地数据移回 `output/stylesnap/`。
+---
