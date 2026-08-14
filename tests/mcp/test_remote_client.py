@@ -3,7 +3,11 @@ import json
 
 import pytest
 
-from opscli.mcp_client.remote_client import RemoteMcpClient, RemoteMcpToolError
+from opscli.mcp_client.remote_client import (
+    RemoteMcpClient,
+    RemoteMcpSessionTimeoutError,
+    RemoteMcpToolError,
+)
 
 
 class DummyTextContent:
@@ -179,6 +183,93 @@ def test_call_tool_can_disable_http_redirects(monkeypatch):
     assert calls["follow_redirects"] is False
 
 
+def test_call_tool_does_not_close_shared_http_client(monkeypatch):
+    calls = {}
+    result = DummyResult([DummyTextContent(json.dumps({"success": True}))])
+    shared_client = DummyManagedHttpClient(calls)
+    monkeypatch.setattr(
+        "opscli.mcp_client.remote_client.streamable_http_client",
+        lambda url, *, http_client: DummyHttpTransport(calls),
+    )
+    monkeypatch.setattr(
+        "opscli.mcp_client.remote_client.ClientSession",
+        lambda read_stream, write_stream: DummySession(
+            read_stream,
+            write_stream,
+            result,
+            calls,
+        ),
+    )
+    client = RemoteMcpClient(
+        url="https://collector.example.com/mcp",
+        http_client=shared_client,
+        follow_redirects=False,
+    )
+
+    assert asyncio.run(client.call_tool("collector_modules_health", {})) == {
+        "success": True
+    }
+    assert "http_client_exited" not in calls
+
+
+def test_call_tool_bounds_session_initialization(monkeypatch):
+    calls = {}
+    result = DummyResult([DummyTextContent(json.dumps({"success": True}))])
+    install_remote_client_mocks(monkeypatch, calls, result)
+
+    class HangingInitializeSession(DummySession):
+        async def initialize(self):
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        "opscli.mcp_client.remote_client.ClientSession",
+        lambda read_stream, write_stream: HangingInitializeSession(
+            read_stream, write_stream, result, calls
+        ),
+    )
+    client = RemoteMcpClient(
+        url="https://collector.example.com/mcp",
+        initialize_timeout_seconds=0.01,
+    )
+
+    with pytest.raises(RemoteMcpSessionTimeoutError):
+        asyncio.run(client.call_tool("collector_modules_health", {}))
+
+    assert calls["session_exited"] is True
+    assert calls["transport_exited"] is True
+
+
+def test_call_tool_bounds_hanging_session_cleanup(monkeypatch):
+    calls = {}
+    result = DummyResult([DummyTextContent(json.dumps({"success": True}))])
+    install_remote_client_mocks(monkeypatch, calls, result)
+
+    class HangingCleanupSession(DummySession):
+        async def __aexit__(self, exc_type, exc, tb):
+            calls["cleanup_started"] = True
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        "opscli.mcp_client.remote_client.ClientSession",
+        lambda read_stream, write_stream: HangingCleanupSession(
+            read_stream, write_stream, result, calls
+        ),
+    )
+    client = RemoteMcpClient(
+        url="https://collector.example.com/mcp",
+        cleanup_timeout_seconds=0.01,
+    )
+
+    async def run():
+        return await asyncio.wait_for(
+            client.call_tool("collector_modules_health", {}),
+            timeout=0.1,
+        )
+
+    assert asyncio.run(run()) == {"success": True}
+    assert calls["cleanup_started"] is True
+
+
 def test_call_tool_raises_remote_tool_error_with_remote_text(monkeypatch):
     calls = {}
     result = DummyResult([DummyTextContent("remote tool failed")], is_error=True)
@@ -263,6 +354,19 @@ def test_call_tool_rejects_invalid_json_text(monkeypatch):
     client = RemoteMcpClient(url="https://ops.mcp.xenkee.com/mcp?api_key=mcp_demo")
 
     with pytest.raises(ValueError, match="JSON"):
+        asyncio.run(client.call_tool("seller_sprite_scenarios", {}))
+
+
+def test_call_tool_rejects_success_text_over_configured_size(monkeypatch):
+    calls = {}
+    result = DummyResult([DummyTextContent(json.dumps({"success": True, "data": "large"}))])
+    install_remote_client_mocks(monkeypatch, calls, result)
+    client = RemoteMcpClient(
+        url="https://ops.mcp.xenkee.com/mcp?api_key=mcp_demo",
+        max_response_bytes=8,
+    )
+
+    with pytest.raises(ValueError, match="size limit"):
         asyncio.run(client.call_tool("seller_sprite_scenarios", {}))
 
 

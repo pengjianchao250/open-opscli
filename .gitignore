@@ -39,6 +39,8 @@ Thumbs.db
 opscli/skills/templates/ops-feedback-query/data/feedback_insight.local.json
 
 # 本地采集与验证产物
+test-data/
+temp_mcp_*.json
 seller_sprite_runs/
 debug-seller-sprite/
 tmp-validation/
@@ -48,3 +50,4 @@ output/scrape-do-real-api/
 output/feedback-query/
 output/test-artifacts/
 output/google-trends/
+output/ops-amazon-stylesnap/

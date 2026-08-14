@@ -158,6 +158,7 @@ class SellerSpriteTaskScheduler:
         self._last_claim_at: str | None = None
         self._last_progress_at: str | None = None
         self._next_worker_slot_number = 1
+        self._account_retry_after: dict[str, float] = {}
         self._last_account_refresh_at = 0.0
         self._last_session_reap_at = 0.0
         self._consumer_errors: set[str] = set()
@@ -665,6 +666,11 @@ class SellerSpriteTaskScheduler:
                 self._start_user_binding_tasks()
                 now = time.monotonic()
                 refresh_interval = max(1.0, float(self.settings.account_cache_ttl_seconds))
+                if self._account_pool.has_temporary_unavailable_accounts:
+                    refresh_interval = min(
+                        refresh_interval,
+                        max(1.0, float(self.settings.browser_cooldown_seconds)),
+                    )
                 refresh_due = now - self._last_account_refresh_at >= refresh_interval
                 if refresh_due:
                     if self._public_account_pool_needed():
@@ -909,6 +915,13 @@ class SellerSpriteTaskScheduler:
             if replacement is None:
                 return
             account = replacement
+            retry_after = self._account_retry_after.pop(
+                seller_sprite_account_key(account),
+                0.0,
+            )
+            retry_delay = retry_after - time.monotonic()
+            if retry_delay > 0:
+                await asyncio.sleep(retry_delay)
             self._generic_worker_accounts[worker_key] = account
 
     async def _run_generic_job(
@@ -1061,10 +1074,9 @@ class SellerSpriteTaskScheduler:
                         async with self._pool_lock:
                             self._account_pool.defer_working_account(replacement)
                         if committed:
-                            await self._mark_account_unavailable(account)
-                            await self._close_account_session(
+                            return await self._finish_terminal_account_auth_failure(
                                 account,
-                                reason=ACCOUNT_FAILURE_REASON_AUTHENTICATION,
+                                error=exc,
                             )
                         return None
                     if reassignment.outcome == "reassigned":
@@ -1118,10 +1130,9 @@ class SellerSpriteTaskScheduler:
                         has_mcp_run=has_mcp_run,
                     )
                     if committed:
-                        await self._mark_account_unavailable(account)
-                        await self._close_account_session(
+                        return await self._finish_terminal_account_auth_failure(
                             account,
-                            reason=ACCOUNT_FAILURE_REASON_AUTHENTICATION,
+                            error=exc,
                         )
                     return None
                 if not self._refresh_tracked_attempt(
@@ -1129,7 +1140,7 @@ class SellerSpriteTaskScheduler:
                     attempt_id=attempt_id,
                 ):
                     return None
-                await self._mark_account_unavailable(account)
+                await self._mark_account_unavailable(account, error=exc)
                 self._generic_worker_accounts[worker_key] = replacement
                 await self._close_account_session(
                     account,
@@ -1184,10 +1195,65 @@ class SellerSpriteTaskScheduler:
     async def _mark_account_unavailable(
         self,
         account: SellerSpriteAccount,
+        *,
+        error: Exception,
     ) -> None:
-        """仅在当前代际成功收口后，将认证失败凭证移出账号池。"""
+        """移出当前失败凭据，仅对明确凭证拒绝持久化隔离。"""
         async with self._pool_lock:
-            self._account_pool.mark_unavailable(account)
+            persist_quarantine = _is_confirmed_credential_rejection(error)
+            cooldown_seconds = max(
+                self.poll_interval_seconds,
+                float(self.settings.browser_cooldown_seconds),
+            )
+            self._account_pool.mark_unavailable(
+                account,
+                persist_quarantine=persist_quarantine,
+                temporary_cooldown_seconds=(
+                    None if persist_quarantine else cooldown_seconds
+                ),
+            )
+            if not persist_quarantine:
+                self._last_account_refresh_at = time.monotonic()
+            logger.warning(
+                "卖家精灵账号已移出当前工作池：account_key=%s "
+                "persist_quarantine=%s error_code=%s working=%d standby=%d",
+                seller_sprite_account_key(account)[:12],
+                persist_quarantine,
+                str(getattr(error, "code", type(error).__name__)),
+                len(self._account_pool.working_accounts),
+                len(self._account_pool.standby_accounts),
+            )
+
+    async def _finish_terminal_account_auth_failure(
+        self,
+        account: SellerSpriteAccount,
+        *,
+        error: Exception,
+    ) -> SellerSpriteAccount | None:
+        """关闭失败会话；未确认的登录误判冷却后保留最后工作槽。"""
+        confirmed_rejection = _is_confirmed_credential_rejection(error)
+        if confirmed_rejection:
+            await self._mark_account_unavailable(account, error=error)
+        await self._close_account_session(
+            account,
+            reason=ACCOUNT_FAILURE_REASON_AUTHENTICATION,
+        )
+        if confirmed_rejection:
+            return None
+        cooldown_seconds = max(
+            self.poll_interval_seconds,
+            float(self.settings.browser_cooldown_seconds),
+        )
+        logger.warning(
+            "卖家精灵账号登录失败尚未被远端明确拒绝，保留最后工作槽并冷却："
+            "account_key=%s cooldown_seconds=%.2f",
+            seller_sprite_account_key(account)[:12],
+            cooldown_seconds,
+        )
+        self._account_retry_after[seller_sprite_account_key(account)] = (
+            time.monotonic() + cooldown_seconds
+        )
+        return account
 
     def _fail_queued_shared_pool_tasks(self, error: Exception) -> None:
         """使用明确账号源错误关闭当前排队的公共账号池任务。
@@ -1777,6 +1843,11 @@ def _is_account_authentication_failure(exc: Exception) -> bool:
     if not isinstance(exc, SellerSpriteApiError):
         return False
     return exc.is_session_expired() or exc.status_code in {401, 403}
+
+
+def _is_confirmed_credential_rejection(exc: Exception) -> bool:
+    """仅把远端明确返回的 401/403 视为可跨进程隔离的凭证拒绝。"""
+    return isinstance(exc, SellerSpriteApiError) and exc.status_code in {401, 403}
 
 
 def _login_stage(exc: Exception, failover_count: int) -> str:

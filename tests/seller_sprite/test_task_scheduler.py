@@ -488,8 +488,9 @@ class ParallelRunHarness:
 
 
 class FailoverRunHarness:
-    def __init__(self, *, fail_all=False):
+    def __init__(self, *, fail_all=False, status_code=None):
         self.fail_all = fail_all
+        self.status_code = status_code
         self.attempted_accounts = []
 
     def manager_factory(self, **kwargs):
@@ -500,7 +501,10 @@ class FailoverRunHarness:
                 account = kwargs["account_provider"].get_default()
                 harness.attempted_accounts.append(account.name)
                 if harness.fail_all or account.name == "account-1":
-                    raise SellerSpriteAuthenticationError("卖家精灵账号登录失败")
+                    raise SellerSpriteAuthenticationError(
+                        "卖家精灵账号登录失败",
+                        status_code=harness.status_code,
+                    )
                 return _empty_result(kwargs["settings"], request)
 
         return Manager()
@@ -1012,7 +1016,7 @@ def test_scheduler_replaces_failed_working_account_with_cold_standby(tmp_path: P
         settings = SellerSpriteSettings(output_dir=tmp_path)
         store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
         provider = MultiAccountProvider(2)
-        harness = FailoverRunHarness()
+        harness = FailoverRunHarness(status_code=401)
         scheduler = SellerSpriteTaskScheduler(
             store=store,
             settings=settings,
@@ -1391,7 +1395,7 @@ def test_scheduler_closes_failed_slot_when_no_standby_account_exists(tmp_path: P
         settings = SellerSpriteSettings(output_dir=tmp_path)
         store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
         provider = MultiAccountProvider(1)
-        harness = FailoverRunHarness(fail_all=True)
+        harness = FailoverRunHarness(fail_all=True, status_code=401)
         scheduler = SellerSpriteTaskScheduler(
             store=store,
             settings=settings,
@@ -1408,6 +1412,92 @@ def test_scheduler_closes_failed_slot_when_no_standby_account_exists(tmp_path: P
 
         assert failed["error"]["code"] == "SELLER_SPRITE_ALL_ACCOUNTS_AUTH_FAILED"
         assert scheduler.job_status("job-stays-queued")["state"] == "queued"
+        assert scheduler.generic_worker_count == 0
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_does_not_persist_unconfirmed_login_failures_for_entire_pool(
+    tmp_path: Path,
+):
+    """页面登录探测失败没有明确拒绝证据时，不应造成重启后零工作槽。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        db_path = tmp_path / "queue.sqlite3"
+        settings = SellerSpriteSettings(
+            output_dir=tmp_path,
+            account_cache_ttl_seconds=3600,
+        )
+        provider = MultiAccountProvider(2)
+        store = SellerSpriteTaskQueueStore(db_path=db_path)
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=FailoverRunHarness(fail_all=True).manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+
+        await scheduler.enqueue(_request("job-unconfirmed-login", "B0UNCONFIRMED"))
+        await scheduler.enqueue(_request("job-waits-for-cooldown", "B0WAITCOOLDOWN"))
+        await scheduler.start()
+        await _wait_for_state(scheduler, "job-unconfirmed-login", "failed")
+        await asyncio.sleep(0.05)
+
+        assert store.list_active_account_quarantines() == set()
+        assert scheduler.generic_worker_count == 1
+        assert scheduler.job_status("job-waits-for-cooldown")["state"] == "queued"
+        await scheduler.close()
+
+        restarted = SellerSpriteTaskScheduler(
+            store=SellerSpriteTaskQueueStore(db_path=db_path),
+            settings=settings,
+            account_provider=provider,
+            manager_factory=lambda **kwargs: ImmediateRunManager(**kwargs),
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        await restarted.start()
+
+        assert restarted.generic_worker_count == 1
+        await restarted.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_persists_explicit_credential_rejection(tmp_path: Path):
+    """远端明确返回 401 时仍应隔离当前凭据，避免无效凭据重试风暴。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        class RejectedCredentialManager:
+            async def run(self, _request):
+                raise SellerSpriteAuthenticationError(
+                    "卖家精灵明确拒绝账号凭据",
+                    status_code=401,
+                )
+
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account_provider=MultiAccountProvider(1),
+            manager_factory=lambda **_kwargs: RejectedCredentialManager(),
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+
+        await scheduler.enqueue(_request("job-rejected-credential", "B0REJECTED"))
+        await scheduler.start()
+        await _wait_for_state(scheduler, "job-rejected-credential", "failed")
+        await asyncio.sleep(0.05)
+
+        assert len(store.list_active_account_quarantines()) == 1
         assert scheduler.generic_worker_count == 0
         await scheduler.close()
 
@@ -1529,7 +1619,7 @@ def test_scheduler_rebuilds_closed_slot_when_account_refresh_returns_new_account
         settings = SellerSpriteSettings(output_dir=tmp_path, account_cache_ttl_seconds=1)
         store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
         provider = RecoveringAccountProvider()
-        harness = FailoverRunHarness()
+        harness = FailoverRunHarness(status_code=401)
         scheduler = SellerSpriteTaskScheduler(
             store=store,
             settings=settings,

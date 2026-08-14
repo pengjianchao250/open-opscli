@@ -145,6 +145,46 @@ def test_account_pool_releases_expired_persisted_quarantine_on_refresh():
     assert accounts[0] in pool.standby_accounts
 
 
+def test_account_pool_releases_transient_failure_after_cooldown(monkeypatch):
+    """未确认的登录失败只在当前进程短暂冷却，且不写持久隔离。"""
+    from opscli.seller_sprite.services import account_pool as account_pool_module
+    from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool
+
+    now = [100.0]
+    monkeypatch.setattr(account_pool_module, "monotonic", lambda: now[0])
+    accounts = _accounts(2)
+
+    class RecordingQuarantineStore:
+        def __init__(self):
+            self.writes = []
+
+        def list_active_account_quarantines(self):
+            return set()
+
+        def quarantine_account(self, **kwargs):
+            self.writes.append(kwargs)
+
+    store = RecordingQuarantineStore()
+    pool = SellerSpriteAccountPool(quarantine_store=store)
+    pool.load(accounts)
+    pool.mark_unavailable(
+        accounts[0],
+        persist_quarantine=False,
+        temporary_cooldown_seconds=10,
+    )
+
+    pool.refresh(accounts)
+    assert accounts[0] not in pool.working_accounts + pool.standby_accounts
+    assert pool.has_temporary_unavailable_accounts is True
+    assert store.writes == []
+
+    now[0] += 11
+    pool.refresh(accounts)
+
+    assert accounts[0] in pool.standby_accounts
+    assert pool.has_temporary_unavailable_accounts is False
+
+
 def test_account_pool_keeps_failover_available_when_quarantine_write_fails():
     from opscli.seller_sprite.services.account_pool import SellerSpriteAccountPool
 

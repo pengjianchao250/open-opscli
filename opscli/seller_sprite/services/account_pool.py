@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from time import monotonic
 from typing import Protocol
 
 from opscli.seller_sprite.accounts import SellerSpriteAccount
@@ -103,6 +104,7 @@ class SellerSpriteAccountPool:
         self._standby: list[SellerSpriteAccount] = []
         self._unavailable_versions: set[tuple[str, str]] = set()
         self._persisted_unavailable_versions: set[tuple[str, str]] = set()
+        self._temporary_unavailable_until: dict[tuple[str, str], float] = {}
         self._account_order: dict[str, int] = {}
         self._target_working_count = 0
 
@@ -120,6 +122,12 @@ class SellerSpriteAccountPool:
     def target_working_count(self) -> int:
         """返回当前账号总量对应的目标工作槽数量。"""
         return self._target_working_count
+
+    @property
+    def has_temporary_unavailable_accounts(self) -> bool:
+        """返回是否仍有处于瞬时失败冷却期的账号。"""
+        self._release_expired_temporary_unavailable()
+        return bool(self._temporary_unavailable_until)
 
     def load(self, accounts: list[SellerSpriteAccount]) -> None:
         """使用首次账号接口结果建立工作池和冷备用池。"""
@@ -153,11 +161,19 @@ class SellerSpriteAccountPool:
             and not self._is_unavailable(account)
         ]
 
-    def mark_unavailable(self, account: SellerSpriteAccount) -> bool:
-        """将当前凭证版本移出账号池，并尽力持久化隔离。
+    def mark_unavailable(
+        self,
+        account: SellerSpriteAccount,
+        *,
+        persist_quarantine: bool = True,
+        temporary_cooldown_seconds: float | None = None,
+    ) -> bool:
+        """将当前凭证版本移出账号池，并按失败可信度持久化隔离。
 
         参数：
             account: 已确认认证失败的账号凭据。
+            persist_quarantine: 是否跨进程持久化隔离当前凭据版本。
+            temporary_cooldown_seconds: 不持久化时的进程内冷却秒数。
 
         返回：
             持久化成功或无需持久化时返回 ``True``；降级为进程内隔离时返回 ``False``。
@@ -166,9 +182,16 @@ class SellerSpriteAccountPool:
         credential_version = _credential_version(account)
         attempt_key = (key, credential_version)
         self._unavailable_versions.add(attempt_key)
-        persisted = self.quarantine_store is None
+        if persist_quarantine:
+            self._temporary_unavailable_until.pop(attempt_key, None)
+        elif temporary_cooldown_seconds is not None:
+            self._temporary_unavailable_until[attempt_key] = monotonic() + max(
+                0.0,
+                float(temporary_cooldown_seconds),
+            )
+        persisted = self.quarantine_store is None or not persist_quarantine
         try:
-            if self.quarantine_store is not None:
+            if self.quarantine_store is not None and persist_quarantine:
                 self.quarantine_store.quarantine_account(
                     account_key=key,
                     credential_version=credential_version,
@@ -269,10 +292,27 @@ class SellerSpriteAccountPool:
 
     def _is_unavailable(self, account: SellerSpriteAccount) -> bool:
         """判断当前账号凭证版本是否已确认不可用。"""
-        return (
+        attempt_key = (
             seller_sprite_account_key(account),
             _credential_version(account),
-        ) in self._unavailable_versions
+        )
+        retry_after = self._temporary_unavailable_until.get(attempt_key)
+        if retry_after is not None and retry_after <= monotonic():
+            self._temporary_unavailable_until.pop(attempt_key, None)
+            self._unavailable_versions.discard(attempt_key)
+        return attempt_key in self._unavailable_versions
+
+    def _release_expired_temporary_unavailable(self) -> None:
+        """释放已结束冷却的瞬时失败账号。"""
+        now = monotonic()
+        expired = [
+            attempt_key
+            for attempt_key, retry_after in self._temporary_unavailable_until.items()
+            if retry_after <= now
+        ]
+        for attempt_key in expired:
+            self._temporary_unavailable_until.pop(attempt_key, None)
+            self._unavailable_versions.discard(attempt_key)
 
     def _reload_persisted_quarantines(self) -> None:
         """合并仍有效的持久隔离，使进程重启不丢失认证失败状态。"""
