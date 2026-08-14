@@ -87,3 +87,92 @@ def test_missing_payload_file_reports_path(tmp_path: Path):
     """文件不存在时如实报路径，不要退化成 JSON 语法错误。"""
     result = _invoke(["simple", "--table-id", "2", "--payload", str(tmp_path / "nope.json")])
     assert "payload 文件不存在" in json.loads(result.stdout)["error"]["message"]
+
+
+# ── 取数服务内层失败必须冒泡到顶层（验证阶段发现）────────────────────────
+#
+# 服务端有两层错误信封：外层 Laravel（error_details，已由 shared.http 透传）
+# 与取数引擎自己的结果信封。引擎校验失败时是包在**成功的**外层信封里返回的：
+# HTTP 200 + code=200，但 data.result.success=false，字段级原因埋在
+# data.result.error.details.errors[]。此前 CLI 对这种情况照样输出 success=true，
+# 调用方看到「命令成功」却拿不到数据。实测：limit 超上限返回
+# {"field":"body.query.limit","message":"Input should be less than or equal to 500000"}
+
+from opscli.query.commands.cli import _field_level_reasons, _inner_result_error  # noqa: E402
+
+_ENGINE_FAILURE = {
+    "payload": {"tableId": 2},
+    "result": {
+        "success": False,
+        "data": [],
+        "meta": {"rowCount": 0},
+        "error": {
+            "code": "VALIDATION_ERROR",
+            "message": "请求参数验证失败",
+            "details": {"errors": [
+                {"field": "body.query.limit",
+                 "message": "Input should be less than or equal to 500000"},
+            ]},
+        },
+    },
+}
+
+
+def test_inner_failure_is_detected_and_carries_field_reason():
+    """内层失败要被识别，且把字段级原因拼进消息。"""
+    error = _inner_result_error(_ENGINE_FAILURE)
+    assert error is not None
+    assert error["code"] == "VALIDATION_ERROR"
+    assert "body.query.limit" in error["message"]
+    assert "500000" in error["message"]
+
+
+def test_successful_result_is_not_flagged():
+    """内层成功时不得误报。"""
+    assert _inner_result_error({"result": {"success": True, "data": [{"a": 1}]}}) is None
+
+
+def test_build_only_result_without_inner_result_is_ignored():
+    """未 --run 的纯构造结果没有 result 键，不得误判。"""
+    assert _inner_result_error({"payload": {"tableId": 2}, "output": None}) is None
+
+
+def test_inner_failure_without_error_object_still_reported():
+    """内层只说 success=false、不给 error 对象时也要报出来，不能静默放行。"""
+    error = _inner_result_error({"result": {"success": False, "data": []}})
+    assert error is not None
+    assert error["code"] == "QUERY_SERVICE_ERROR"
+
+
+@pytest.mark.parametrize(
+    "details,expected",
+    [
+        ({"errors": [{"field": "a", "message": "bad"}]}, "a: bad"),
+        ({"errors": [{"message": "no field"}]}, "no field"),
+        ({"errors": []}, ""),
+        (None, ""),
+        ("not a dict", ""),
+    ],
+)
+def test_field_level_reason_shapes(details, expected):
+    assert _field_level_reasons(details) == expected
+
+
+def test_engine_failure_exits_non_zero_via_cli():
+    """端到端：CLI 对内层失败要输出 success=false 并以非零码退出。"""
+    import json as _json
+    from unittest.mock import patch
+
+    with patch(
+        "opscli.query.services.manager.QueryManager.build_simple_and_run",
+        return_value=_ENGINE_FAILURE,
+    ):
+        result = runner.invoke(
+            app, ["simple", "--table-id", "2", "--payload", "-", "--run"],
+            input=_json.dumps(PAYLOAD),
+        )
+    assert result.exit_code == 1, "内层失败必须以非零码退出"
+    body = _json.loads(result.stdout)
+    assert body["success"] is False
+    assert "body.query.limit" in body["error"]["message"]
+    assert result.stdout.strip().count("\n") == 0, "不得重复输出（typer.Exit 被 except 接住的老问题）"

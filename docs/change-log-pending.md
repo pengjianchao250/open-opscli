@@ -6686,3 +6686,27 @@ opscli `pytest tests/shared tests/query tests/auth -q` 386 passed；skills 相�
 opscli `git checkout -- opscli/query/services/manager.py`；
 服务端 `cd vendor/aukey/data-metrics && git checkout -- src/Services/DatasetSkillService.php && rm tests/DatasetSkillComponentTableAccessTest.php`
 ---
+
+## 2026-08-14 query - 验证阶段发现：取数服务内层失败被吞成 success=true
+
+**变更原因**：验证 P1-2 时用真实请求触发服务端校验错误，发现服务端有**两层**错误信封：
+外层 Laravel（`error_details`，已由 shared.http 透传）与取数引擎自己的结果信封。
+引擎校验失败时是包在**成功的**外层信封里返回的——HTTP 200 + code=200，
+但 `data.result.success=false`，字段级原因埋在 `data.result.error.details.errors[]`。
+此前 CLI 对这种情况照样输出 `success: true` 且退出码 0，调用方看到「命令成功」却拿不到数据。
+实测：`limit=999999` 返回
+`{"field":"body.query.limit","message":"Input should be less than or equal to 500000"}`，
+而 CLI 报 success=true。这很可能是 C17（347 条）里比外层信封更大的一块。
+**改动点**：`opscli/query/commands/cli.py`
+- 新增 `_inner_result_error()` 与 `_field_level_reasons()`：识别内层失败并把
+  `details.errors[]` 压成一行可读原因拼进消息。
+- `simple` 命令在 `--run` 时据此输出 `success: false` 并以退出码 1 结束。
+- 注意实现细节：不能在 try 内 emit 后 `raise typer.Exit`——`typer.Exit` 继承自
+  `RuntimeError`，会被下面的 `except Exception` 接住而**重复输出一遍**
+  （初版就踩了这个坑，已改为在 try 外统一退出）。
+- 测试新增 6 例，含「不得重复输出」的断言。
+**验证结果**：`pytest tests/shared tests/query tests/auth -q` 396 passed。
+端到端（PYTHONPATH 钉住工作树）：limit 超上限 → `success:false` + 字段级原因 + 退出码 1；
+正常查询 → `success:true` + 退出码 0，行为不变。
+**回滚方式**：`git checkout -- opscli/query/commands/cli.py`
+---
