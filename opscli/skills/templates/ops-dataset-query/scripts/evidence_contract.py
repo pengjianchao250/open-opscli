@@ -113,7 +113,12 @@ def _value_for_path(flattened: Sequence[dict[str, Any]], suffix: str) -> Any:
 
 
 def _dataset_name(source: dict) -> str:
-    """收集返回中所有 dataset* 字符串字段作为数据集中文名（顿号连接）。"""
+    """收集返回中所有 dataset* 字符串字段作为数据集中文名（顿号连接）。
+
+    注意：opscli 的查询返回体里并没有 dataset* 键（只有 data.payload.tableId），
+    所以走正式执行通道时这里恒为空串，必须由调用方用规划合同的
+    model_view.dataset_name_zh 覆盖。本函数只作旁路直连（MCP/图表入口）的兜底。
+    """
     names = []
     for key, value in source.items():
         if not str(key).startswith("dataset") or not isinstance(value, str):
@@ -123,11 +128,21 @@ def _dataset_name(source: dict) -> str:
     return "、".join(names)
 
 
-def build_evidence_contract(source: dict, max_evidence: int = MAX_EVIDENCE) -> dict:
+def build_evidence_contract(
+    source: dict,
+    max_evidence: int = MAX_EVIDENCE,
+    *,
+    dataset_name_zh: str = "",
+) -> dict:
     """从一次查询返回构建证据与披露规划器。
 
     披露与禁止推断按信号自动叠加：缺失值、零行、新鲜度不完整、
     币种未声明、跨数据集口径待确认等，每类信号对应固定话术。
+
+    Args:
+        dataset_name_zh: 规划合同给出的数据集中文名。查询返回体本身不带该信息，
+            不传时 dataset_name_zh 恒为空串，而结果分析的第一条要求就是
+            「先说明数据集中文名」——Agent 只能靠自己记忆回填，无法从结果侧独立核验。
     """
     if not isinstance(source, dict):
         raise TypeError("evidence_source_must_be_object")
@@ -170,7 +185,7 @@ def build_evidence_contract(source: dict, max_evidence: int = MAX_EVIDENCE) -> d
 
     result = {
         "contract": CONTRACT,
-        "dataset_name_zh": _dataset_name(source),
+        "dataset_name_zh": str(dataset_name_zh).strip() or _dataset_name(source),
         "numeric_evidence_policy_zh": (
             "required_evidence 中用于结论的数值必须原样引用，不得四舍五入或改写精度。"
         ),

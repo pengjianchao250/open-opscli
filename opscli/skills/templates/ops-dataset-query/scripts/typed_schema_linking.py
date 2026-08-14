@@ -285,11 +285,15 @@ def validate_rules(rules: object) -> dict:
         raise ValueError("invalid_rules:bad_platform_scope")
     members = platform_scope["members"]
     filter_values = platform_scope["filter_values"]
+    # members 必须与 slots.platform 精确相等，不能只是子集：
+    # 槽位识别得到、members 里却展开为空的平台，会让 _resolve_platform_enum 返回
+    # not_applicable，进而被判成「平台范围不支持」而直接阻断——实测该账号唯一授权的
+    # Temu 就因此 44/44 全部无法筛选。这类漂移必须在规则校验期暴露，而不是在用户面前。
     if (
         not isinstance(members, dict)
         or not isinstance(filter_values, dict)
         or not members
-        or not set(members).issubset(validated_slots["platform"])
+        or set(members) != set(validated_slots["platform"])
     ):
         raise ValueError("invalid_rules:bad_platform_scope_values")
     validated_members = {

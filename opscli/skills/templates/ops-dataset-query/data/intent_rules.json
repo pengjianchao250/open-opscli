@@ -163,11 +163,25 @@
     "members": {
       "amazon": ["amazon_sc", "amazon_vc"],
       "amazon_sc": ["amazon_sc"],
-      "amazon_vc": ["amazon_vc"]
+      "amazon_vc": ["amazon_vc"],
+      "tiktok": ["tiktok"],
+      "walmart": ["walmart"],
+      "wayfair": ["wayfair"],
+      "temu": ["temu"],
+      "shopify": ["shopify"],
+      "shein": ["shein"],
+      "sams": ["sams"]
     },
     "filter_values": {
       "amazon_sc": ["亚马逊", "亚马逊SC", "亚马逊 SC", "Amazon", "Amazon SC", "AmazonSC", "SC"],
-      "amazon_vc": ["亚马逊VC", "亚马逊 VC", "Amazon VC", "AmazonVC", "VC"]
+      "amazon_vc": ["亚马逊VC", "亚马逊 VC", "Amazon VC", "AmazonVC", "VC"],
+      "tiktok": ["TikTok", "Tik Tok", "TK", "抖音国际版"],
+      "walmart": ["Walmart", "沃尔玛"],
+      "wayfair": ["Wayfair"],
+      "temu": ["Temu"],
+      "shopify": ["Shopify"],
+      "shein": ["Shein", "希音"],
+      "sams": ["Sams", "Sam's", "Sam's Club", "山姆", "山姆会员店"]
     }
   },
   "compatibility": {

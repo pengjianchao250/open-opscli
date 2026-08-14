@@ -404,18 +404,23 @@ def _apply_order_fallback(
     payload: dict,
     rows: list[dict],
     order_by: list[dict],
+    total: object = None,
 ) -> tuple[list[dict], dict | None]:
     """orderBy 未生效时的本地兜底（已知服务端缺陷的过渡方案）。
 
-    - 无 limit：直接本地重排；
-    - 有 limit：切片可能已取错行，放大 limit 重查后本地排序取前 N；
+    - 无 limit：手上就是全量，单调即可证明服务端排序生效，否则本地重排；
+    - 有 limit：单调**不能**作为判据（见下方注释），一律按总行数取全量后本地排序取前 N。
     返回 (修正后的行, 兜底披露信息或 None)。
     """
     primary = order_by[0]
     field, direction = primary["field"], primary["direction"]
-    if _is_monotonic(rows, field, direction):
-        return rows, None
     limit = payload.get("limit")
+    # 带 limit 时切片单调只说明「这一片有序」，并不说明「这一片就是 Top N」——
+    # 服务端整段忽略 orderBy 时返回的是自然序切片，而常量序列（如整片都是 0.0000）
+    # 天然单调，判据会静默放过。实测：请求销售额 DESC 前 10，拿回 10 行全 0，
+    # 而全量 193 行里存在 3176.76 的记录。因此只有无 limit 时才能用单调性下结论。
+    if not limit and _is_monotonic(rows, field, direction):
+        return rows, None
     note = {
         "order_fallback_applied": True,
         "order_field": field,
@@ -425,16 +430,32 @@ def _apply_order_fallback(
         rows = sorted(rows, key=lambda row: _sort_value(row.get(field)), reverse=direction == "DESC")
         note["strategy"] = "local_resort"
         return rows, note
-    # 有 limit：加大窗口重查再本地排序切片
+    # 有 limit：放大固定倍数仍是在错误的行里挑，必须按服务端报告的总行数取全量。
+    # total 不可用时退回倍数放大，并在 strategy 里如实标注为尽力而为。
+    try:
+        span = int(str(total))
+    except (TypeError, ValueError):
+        span = 0
+    exact = span > 0
+    if not exact:
+        span = int(limit) * ORDER_REQUERY_MULTIPLIER
     requery = dict(payload)
-    requery["limit"] = min(int(limit) * ORDER_REQUERY_MULTIPLIER, ORDER_REQUERY_LIMIT_CAP)
+    requery["limit"] = min(span, ORDER_REQUERY_LIMIT_CAP)
     response = _run_opscli(table_id, requery)
     wide_rows, _total = _extract_rows(response)
     wide_rows = sorted(
         wide_rows, key=lambda row: _sort_value(row.get(field)), reverse=direction == "DESC"
     )
+    corrected = wide_rows[: int(limit)]
+    # 核对之后才能下结论：重查是为了「验证」而不是「假定」服务端排序失效。
+    # 首查结果与本地算出的 Top N 一致时说明服务端排序本就生效，
+    # 此时报 order_fallback_applied 会让 Agent 向用户披露一个并不存在的兜底。
+    if corrected == rows:
+        return rows, None
     note["strategy"] = f"requery_limit_{requery['limit']}_then_local_sort"
-    return wide_rows[: int(limit)], note
+    # 取样口径必须可审计：未按全量重查时结论不能自称精确 Top N
+    note["covers_full_result"] = bool(exact and span <= ORDER_REQUERY_LIMIT_CAP)
+    return corrected, note
 
 
 def _complete_server_paged_rows(
@@ -640,14 +661,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         order_note = None
         if order_by and not args.no_order_fallback and rows:
-            rows, order_note = _apply_order_fallback(table_id, payload, rows, order_by)
+            rows, order_note = _apply_order_fallback(
+                table_id, payload, rows, order_by, total
+            )
             if order_note:
                 disclosures["order_fallback"] = order_note
+                # 重查窗口未覆盖全量时结论不能自称精确 Top N，必须把口径差异一并交代
+                partial = "requery" in order_note["strategy"] and not order_note.get(
+                    "covers_full_result"
+                )
                 disclosures["order_disclosure_zh"] = (
                     "服务端排序未生效（已知缺陷），本执行器已"
-                    + ("放大窗口重查并本地排序取前N" if "requery" in order_note["strategy"] else "本地重排")
+                    + (
+                        "按总行数取全量后本地排序取前N"
+                        if "requery" in order_note["strategy"]
+                        else "本地重排"
+                    )
                     + "，结论中必须披露该兜底行为"
+                    + (
+                        "；本次重查窗口未覆盖全部结果，前N可能不精确，必须如实声明"
+                        if partial
+                        else ""
+                    )
                 )
+                # 本地重排后行数已按 limit 切片，披露口径必须同步刷新
+                disclosures["row_count_returned"] = len(rows)
         if order_by and not order_note:
             disclosures["order_disclosure_zh"] = (
                 f"排序已生效：按 {order_by[0]['field']} {order_by[0]['direction']}"
@@ -687,7 +725,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         if not args.no_evidence:
             try:
-                output["evidence_contract"] = evidence_contract.build_evidence_contract(response)
+                # 数据集中文名只有规划合同知道（查询返回体里没有任何 dataset* 键），
+                # 不回填的话证据合同的 dataset_name_zh 恒为空，
+                # 而结果分析的第一条要求正是「先说明数据集中文名」
+                output["evidence_contract"] = evidence_contract.build_evidence_contract(
+                    response,
+                    dataset_name_zh=str(
+                        ((plan or {}).get("model_view") or {}).get("dataset_name_zh", "")
+                    ),
+                )
             except Exception as error:  # noqa: BLE001 —— 证据合同失败不阻断查询结果
                 output["evidence_contract_error"] = str(error)[:120]
 

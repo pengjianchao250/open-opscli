@@ -6,6 +6,8 @@
 - 平台/组件枚举走注入的 enum_fn（替代 subprocess opscli query simple）。
 """
 
+import pytest
+
 from opscli.query.services.planner.metadata_adapter import MetadataAdapter
 from opscli.query.services.planner import agent_query_planner, query_plan
 
@@ -171,6 +173,7 @@ def test_every_clarification_code_has_dedicated_message():
         "time_scope_confirmation",
         "recommended_fields_confirmation",
         "default_dataset_confirmation",
+        "time_comparison_unsupported",
     }
     produced = _planner_missing_information_codes() | contract_level
     missing = sorted(produced - set(query_plan.CLARIFICATION_MESSAGES))
@@ -402,3 +405,328 @@ def test_grain_disclosure_survives_default_dataset_recommendation():
     assert all(
         item in contract["answer_contract"]["required_disclosures_zh"] for item in disclosures
     )
+
+
+# ── 无日期字段数据集的时间口径一致性（F3）──────────────────────────────────
+#
+# _build_query_template 只在 date_fields 非空时才落日期过滤，但 time_scope 是按
+# 用户原文独立解析的。两者不一致时合同会声明一个根本没生效的时间窗，Agent 按
+# SKILL.md 把它当权威口径讲给用户，数字却是全表历史累计——无异常、无阻断、无披露。
+# 这是唯一会产出「看起来完全正常的错误答案」的路径，必须由合同层收敛。
+
+
+def _no_date_field_payload():
+    """一个没有任何日期字段的数据集（如实时库存快照）。"""
+    return {
+        "datasets": [
+            {
+                "table_id": 200,
+                "dataset_alias": "ds_stock",
+                "dataset_name": "custom_realtime_inventory_set",
+                "dataset_category": "normal",
+                "description": "实时库存明细",
+                "remarks": "库存 缺货 履约",
+                "select_columns": [],
+            }
+        ],
+        "fields": [
+            {
+                "table_id": 200,
+                "dataset_alias": "ds_stock",
+                "dataset_name": "custom_realtime_inventory_set",
+                "field_name": "ed_sku",
+                "verbose_name": "公司SKU",
+                "global_alias": "f_sku",
+                "field_type": "dimension",
+                "has_formula_config": 0,
+            },
+            {
+                "table_id": 200,
+                "dataset_alias": "ds_stock",
+                "dataset_name": "custom_realtime_inventory_set",
+                "field_name": "total_qty",
+                "verbose_name": "总库存",
+                "global_alias": "f_tq",
+                "field_type": "metric",
+                "has_formula_config": 0,
+            },
+        ],
+    }
+
+
+def test_no_date_field_never_declares_an_effective_time_window():
+    """无日期字段时不得声明具体日期窗：模板落不下过滤，声明即误导。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_no_date_field_payload()),
+        "实时库存明细近7天的总库存",
+        enum_fn=lambda *a, **k: [],
+    )
+    scope = contract["execution_ref"]["time_scope"]
+    assert scope["unbounded"] is True
+    assert scope["start"] is None and scope["end"] is None
+    scope_zh = contract["model_view"]["time_scope_zh"]
+    assert "2026" not in scope_zh and "~" not in scope_zh, f"仍在声明日期窗：{scope_zh}"
+    assert "没有日期字段" in scope_zh
+    template = contract["execution_ref"].get("query_template") or {}
+    assert not template.get("filters"), "无日期字段却落了过滤条件"
+
+
+def test_no_date_field_forces_disclosure_of_dropped_time_scope():
+    """时间窗被收敛为全时段时必须强制披露，否则 Agent 不会向用户交代差异。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_no_date_field_payload()),
+        "实时库存明细近7天的总库存",
+        enum_fn=lambda *a, **k: [],
+    )
+    disclosures = contract["answer_contract"]["required_disclosures_zh"]
+    assert any("无法作为查询条件生效" in item for item in disclosures), disclosures
+
+
+def test_no_date_field_rejects_period_comparison():
+    """没有日期字段就无从做环比/同比，必须澄清而不是静默丢掉对比期。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_no_date_field_payload()),
+        "实时库存明细近7天的总库存，和上一个周期做环比",
+        enum_fn=lambda *a, **k: [],
+    )
+    assert contract["status"] == "clarify_required"
+    assert "time_comparison_unsupported" in contract["model_view"]["clarification_reason_codes"]
+    scope = contract["execution_ref"]["time_scope"]
+    assert scope["comparison_type"] is None
+    assert "对比期" not in contract["model_view"]["time_scope_zh"]
+
+
+def test_dataset_with_date_field_keeps_its_time_window():
+    """有日期字段的数据集不受该闸影响：时间窗与日期过滤都要照常下发。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_sales_payload()),
+        "查询即时综合数据集近7天的销售额",
+        enum_fn=lambda *a, **k: [],
+    )
+    scope = contract["execution_ref"]["time_scope"]
+    assert scope["unbounded"] is False
+    assert scope["start"] and scope["end"]
+    fields = {f["field"] for f in contract["execution_ref"]["query_template"]["filters"]}
+    assert "stat_date" in fields
+
+
+# ── 平台词表完备性（F4）────────────────────────────────────────────────────
+#
+# slots.platform 识别 10 个平台，platform_scope.members 却只定义了 3 个。
+# 槽位抽取成功但展开为空成员时，_resolve_platform_enum 返回 not_applicable，
+# _next_action 判成 block_platform_scope_unsupported——对只授权 Temu 的账号而言，
+# 任何带平台筛选的自然语言取数都被直接阻断（矩阵实测 D9 维度 0/44 可规划）。
+# 这类漂移必须在规则校验期暴露，而不是在用户面前。
+
+
+def test_every_recognized_platform_can_be_expanded():
+    """slots.platform 里的每个平台都必须能展开成语义成员，不允许识别得到却用不了。"""
+    rules = query_plan._load_rules_resource()
+    recognized = set(rules["slots"]["platform"])
+    expandable = set(rules["platform_scope"]["members"])
+    assert recognized == expandable, (
+        f"识别得到却无法展开的平台：{sorted(recognized - expandable)}；"
+        f"定义了成员却不被识别的平台：{sorted(expandable - recognized)}"
+    )
+
+
+def test_every_semantic_member_has_filter_values():
+    """每个语义成员都必须配枚举别名，否则永远无法与服务端授权值对上。"""
+    rules = query_plan._load_rules_resource()
+    members = {m for values in rules["platform_scope"]["members"].values() for m in values}
+    assert set(rules["platform_scope"]["filter_values"]) == members
+
+
+def test_validate_rules_rejects_unexpandable_platform():
+    """校验器必须拒绝「识别得到但 members 缺条目」的规则文件（防止漂移复发）。"""
+    import copy
+
+    from opscli.query.services.planner import typed_schema_linking
+
+    broken = copy.deepcopy(query_plan._load_rules_resource())
+    broken["platform_scope"]["members"].pop("temu")
+    broken["platform_scope"]["filter_values"].pop("temu")
+    with pytest.raises(ValueError, match="bad_platform_scope_values"):
+        typed_schema_linking.validate_rules(broken)
+
+
+def test_authorized_non_amazon_platform_resolves_to_filter_value():
+    """非亚马逊平台（如账号唯一授权的 Temu）必须能解析成可用的筛选值。"""
+    rules = query_plan._load_rules_resource()
+    scope = query_plan._platform_scope(
+        {"slots": {"platform": ["temu"]}}, rules, ["Temu"], query="近30天Temu平台的销售额"
+    )
+    assert scope["semantic_members"] == ["temu"]
+    assert scope["enum_resolution"]["status"] == "resolved"
+    assert scope["enum_resolution"]["resolved_filter_values"] == ["Temu"]
+
+
+# ── 阻断态必须自带可执行材料（F5）──────────────────────────────────────────
+#
+# answer_contract 会强制要求「说明当前查询被阻断的原因」，但合同里从来没有原因文本、
+# 没有 recovery_command、也不说当前账号实际授权了什么。要求解释却不提供解释材料，
+# Agent 只能泛泛而谈或违反 no-guess 政策去猜。更糟的是阻断时还留着
+# 「本次默认按亚马逊SC + 亚马逊VC处理」这句完成态披露——本次根本没有处理。
+
+
+def test_every_block_action_has_a_reason_message():
+    """_next_action 产出的每个 block_* 都必须配中文原因，不得只留空要求。"""
+    import ast
+    from pathlib import Path
+
+    source = Path(query_plan.__file__).read_text("utf-8")
+    produced = {
+        node.value.value
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+        and node.value.value.startswith("block_")
+    }
+    missing = sorted(produced - set(query_plan.BLOCK_REASON_MESSAGES))
+    assert not missing, f"以下阻断动作缺中文原因，Agent 无法向用户交代：{missing}"
+
+
+def test_blocked_contract_carries_reason_in_disclosures():
+    """任一阻断分支都要把中文原因同时放进 model_view 与强制披露。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_sales_payload()),
+        "查询即时综合数据集近30天亚马逊平台的销售额",
+        enum_fn=lambda *a, **k: ["Temu"],
+    )
+    if contract["status"] != "blocked":
+        pytest.skip("该 fixture 未进入平台阻断分支")
+    reason = contract["model_view"].get("block_reason_zh")
+    assert reason, "阻断合同没有中文原因，Agent 无法向用户交代"
+    assert reason in contract["answer_contract"]["required_disclosures_zh"]
+
+
+def test_authorized_enum_values_are_kept_for_alternatives():
+    """枚举到的授权原值必须留在 scope 上，阻断时才能回填成可选项。"""
+    scope = query_plan._platform_scope(
+        {"slots": {"platform": ["amazon"]}},
+        query_plan._load_rules_resource(),
+        ["Temu"],
+        query="近30天亚马逊平台的销售额",
+    )
+    # 请求亚马逊、账号只授权 Temu → 无交集，这正是要给出可选项的场景
+    assert scope["enum_resolution"]["status"] == "no_authorized_overlap"
+    assert scope["authorized_enum_values"] == ["Temu"]
+
+
+def test_blocked_platform_does_not_claim_default_handling():
+    """阻断时不得保留「本次默认按亚马逊SC + 亚马逊VC处理」这类完成态披露。"""
+    scope = {
+        "requested_slots": ["amazon"],
+        "excluded_semantic_members": [],
+        "enum_resolution": {"status": "no_authorized_overlap"},
+    }
+    blocked = _joined(query_plan._platform_scope_disclosures(scope, blocked=True))
+    assert "默认按亚马逊SC + 亚马逊VC处理" not in blocked
+    assert "被阻断" in blocked
+    # 非阻断路径的原有披露必须保留
+    normal = _joined(query_plan._platform_scope_disclosures(scope))
+    assert "默认按亚马逊SC + 亚马逊VC处理" in normal
+
+
+def _joined(items) -> str:
+    return "".join(items or [])
+
+
+# ── 澄清话术与同名候选区分（F7 / F8）──────────────────────────────────────
+#
+# business_dataset 同时承接「命中权限枚举组件」与「命中多个同名数据集」两种成因，
+# 共用一句笼统文案时 Agent 无从追问：7 张组件表在 14 个维度上全部卡死，
+# 两张同名的「用户仪表盘分享明细」也因候选卡片 name_zh 完全相同而无法被选中。
+
+
+def test_component_hit_says_it_is_not_a_business_dataset():
+    """命中权限枚举组件时必须点破「组件表不能当业务结果集」。"""
+    message = query_plan._clarification_message(
+        "business_dataset",
+        {"dataset_candidates": [{"dataset_alias": "ds_c", "dataset_category": "query_component"}]},
+        {"ds_c": "查询组件产品数据集"},
+    )
+    assert "权限枚举组件" in message
+    assert message != "需要补充查询条件。"
+
+
+def test_same_name_hit_says_it_is_a_name_conflict():
+    """命中多个同名数据集时必须点破是同名冲突，并指引按序号选择。"""
+    message = query_plan._clarification_message(
+        "business_dataset",
+        {
+            "dataset_candidates": [
+                {"dataset_alias": "ds_a", "dataset_category": "normal"},
+                {"dataset_alias": "ds_b", "dataset_category": "normal"},
+            ]
+        },
+        {"ds_a": "用户仪表盘分享明细", "ds_b": "用户仪表盘分享明细"},
+    )
+    assert "同名" in message
+    assert message != "需要补充查询条件。"
+
+
+def test_same_name_candidate_cards_are_distinguishable():
+    """同名候选卡片必须带序号，否则 Agent 无法构造有效选项。"""
+    cards = query_plan._candidate_cards_zh(
+        {
+            "dataset_candidates": [
+                {"dataset_alias": "ds_a", "reasons": ["explicit_name"]},
+                {"dataset_alias": "ds_b", "reasons": ["explicit_name"]},
+            ]
+        },
+        {"ds_a": "用户仪表盘分享明细", "ds_b": "用户仪表盘分享明细"},
+        {"ds_a": "9 个维度、1 个指标", "ds_b": "1 个维度、1 个指标"},
+    )
+    names = [card["name_zh"] for card in cards]
+    assert len(names) == len(set(names)), f"同名候选无法区分：{names}"
+    assert all("同名第" in name for name in names)
+
+
+def test_unique_candidate_card_keeps_plain_name():
+    """非同名候选不加序号后缀，避免给唯一候选制造多余噪声。"""
+    cards = query_plan._candidate_cards_zh(
+        {"dataset_candidates": [{"dataset_alias": "ds_a", "reasons": ["explicit_name"]}]},
+        {"ds_a": "发货数据集"},
+        {},
+    )
+    assert cards[0]["name_zh"] == "发货数据集"
+
+
+# ── 嵌套字段标签的吞并边界（F6）────────────────────────────────────────────
+#
+# 「最长标签吞并」对「同一段文本同时命中两个标签」是对的（查"广告销售额"不该额外
+# 产出"销售额"），但它无法区分「用户在两个不同位置分别说了两个字段」。
+# 实测「本月的花费(原币)和花费」只绑定到 cost，cost_cny 被静默丢弃，
+# 且 model_view.metrics 也只报一个，用户无从察觉少了一半（10/35 个多指标请求中招）。
+
+
+def _metric(field_name: str, label: str) -> dict:
+    return {"field_name": field_name, "verbose_name": label, "selection_source": "query"}
+
+
+def test_separately_named_nested_labels_are_both_kept():
+    """用户在不同位置分别点名两个嵌套标签时，两个都要保留。"""
+    kept = query_plan._longest_unique_labels(
+        [_metric("cost", "花费(原币)"), _metric("cost_cny", "花费")],
+        query_plan._normalize("SP广告数据集本月的花费(原币)和花费"),
+    )
+    assert [item["field_name"] for item in kept] == ["cost", "cost_cny"]
+
+
+def test_single_mention_still_swallows_shorter_label():
+    """同一段文本命中两个标签时仍然只保留最长的，不产出重复结论。"""
+    kept = query_plan._longest_unique_labels(
+        [_metric("ads_sales", "广告销售额"), _metric("sales", "销售额")],
+        query_plan._normalize("查询近7天的广告销售额"),
+    )
+    assert [item["field_name"] for item in kept] == ["ads_sales"]
+
+
+def test_swallow_judgement_uses_spans_not_substring():
+    """判据是命中区间：短标签只要在长标签区间之外出现过就不算被吞并。"""
+    covered = query_plan._normalize("查询广告销售额")
+    assert query_plan._is_swallowed("销售额", "广告销售额", covered) is True
+    separate = query_plan._normalize("查询广告销售额和销售额")
+    assert query_plan._is_swallowed("销售额", "广告销售额", separate) is False

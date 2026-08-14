@@ -6397,3 +6397,219 @@ frontmatter 而失败，HEAD 版本 1.3.19 已存在同一字段，未为通过�
 **回滚方式**：撤销本记录列出的 ops-dataset-query 文件及两份回归测试文件，并把
 `SKILL.md`、`data/VERSION.json` 版本恢复为 1.3.19。
 ---
+
+## 2026-08-14 query/planner - F3 无日期字段数据集的时间口径一致性闸
+
+**变更原因**：矩阵实测发现 `_build_query_template` 只在 `date_fields` 非空时才落日期过滤，
+而 `time_scope` 已按用户原文算出具体窗口。两者不一致时合同会声明一个根本没生效的时间窗，
+Agent 按 SKILL.md 第 4 条把它当权威口径讲给用户，数字却是全表历史累计。
+616 例矩阵中 41 例命中，涉及 5 张表（T7/T35/T37/T69/T61），是唯一会产出
+「看起来完全正常的错误答案」的路径。
+**改动点**：
+- `opscli/skills/templates/ops-dataset-query/scripts/query_plan.py`
+  与 `opscli/query/services/planner/query_plan.py` 的 `build_model_contract`：
+  新增 `date_scope_unavailable` 闸，无日期字段时把 scope 收敛为 unbounded 并改写 label_zh；
+  请求含环比/同比时改 `clarify_required` 并追加 `time_comparison_unsupported` 原因码。
+- 两份 `CLARIFICATION_MESSAGES` 新增 `time_comparison_unsupported` 专属文案。
+- 两处 `answer_contract` 追加强制披露「时间范围无法作为查询条件生效」。
+- `tests/query/planner/test_query_plan.py`：新增 4 个回归用例 + 把新 code 纳入文案完备性断言。
+**验证结果**：`pytest tests/query -q` 156 passed → 新增后 `test_query_plan.py` 18 passed。
+实测 `实时库存明细近7天的总库存` 不再声明日期窗、带强制披露；
+`发货数据集近7天的销售额` 时间窗与日期过滤照常下发（无回归）。
+**影响范围**：仅影响无日期字段的数据集；有日期字段的表行为完全不变。
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/scripts/query_plan.py opscli/query/services/planner/query_plan.py tests/query/planner/test_query_plan.py`
+---
+
+## 2026-08-14 query/planner - F1 否定正则被合成词从中间切中
+
+**变更原因**：`_NEGATED_SPAN_RE` 收录了裸的 `别用|别加` 与 `非`，会被合成词切中：
+「分**别用**人民币和美元查询亚马逊…」中的「别用」触发否定，随后 12 字窗口把平台名一并
+吞进否定区间，规划器产出「已按用户要求排除亚马逊SC、亚马逊VC」——用户从未要求排除，语义反转。
+矩阵实测 D6 维度 4/44 因此 blocked。修复过程中另发现同类问题：裸「非」会被
+「**非常**规渠道」「除**非**」切中，同样凭空造出排除意图。
+**改动点**：
+- `opscli/query/services/planner/time_scope.py` 与
+  `opscli/skills/templates/ops-dataset-query/scripts/time_scope.py` 的 `_NEGATED_SPAN_RE`：
+  `别用|别加` → `(?<![分区辨识差性特派级个类])别[用加]`；
+  `非` → `(?<![除并莫若是无绝])非(?!常)`。
+- `tests/skills/test_negated_field_labels.py`：新增合成词误判用例 + 真否定不回归用例 + 端到端平台范围用例。
+**验证结果**：`pytest tests/skills/test_negated_field_labels.py -q` 39 passed。
+实测「分别用人民币和美元查询亚马逊搜索词绩效近7天的流量销售额(原币)」由 blocked 变为
+planned 且产出 CNY/USD 两份 query_templates；真否定（不要/排除/拒绝/非亚马逊VC）全部保留。
+`pytest tests/auth tests/query -q` 共 233 passed，无回归。
+**影响范围**：只影响含「分别用/分别加/非常/除非/并非…」等合成词的请求；真否定行为不变。
+**已知前置问题（非本次引入）**：`tests/skills/test_packaging.py` 会破坏 pytest 全局 capture，
+导致整个 `tests/skills` 目录收集失败（`ValueError: I/O operation on closed file`），
+本次新增用例只能单文件运行。`tests/mcp/test_shopify_tools.py` 收集报错同为前置问题。
+**回滚方式**：`git checkout -- opscli/query/services/planner/time_scope.py opscli/skills/templates/ops-dataset-query/scripts/time_scope.py tests/skills/test_negated_field_labels.py`
+---
+
+## 2026-08-14 query/planner - F2 排序与行数（Top N）意图入模板
+
+**变更原因**：`_build_query_template` 把 `orderBy`/`limit` 硬编码为 None，全文件无「前N名/降序」
+解析路径；而 SKILL.md 禁止 Agent 改写模板、`plan_integrity` 又把模板哈希绑死——三条规则叠加
+导致 Top N 在自然语言主线上结构性不可能实现。矩阵实测 384 个 planned 用例中 orderBy/limit
+非空各 0 个；端到端「取前10名」返回全量 193 行按 SKU 自然序、truncated=false、零披露。
+**改动点**：
+- 两份 `query_plan.py` 新增 `_ROW_UNIT/_LIMIT_RE/_DESC_RE/_ASC_RE/_ORDER_FIELD_RE`
+  与 `_parse_count/_match_ordered_field/_resolve_order_and_limit`；在 `build_model_contract`
+  的模板生成处写入 `orderBy`/`limit`（因而纳入 plan_integrity 摘要与多币种模板复制）。
+  排序字段解析优先级：显式「按X排序」→ 唯一指标 → 都不成立则不下发并强制披露。
+  注意两副本 orderBy 形态不同：Skill 用 `{field,direction}`，内核用 `{field,desc}` 布尔。
+- 两处 `query_template_fill_rules_zh` 改写：不再要求 Agent 自行填 orderBy/limit（原文与
+  SKILL.md「不得改写模板」直接冲突）。
+- `run_query.py` `_apply_order_fallback`：带 limit 时不再用「返回切片单调」判定服务端排序已生效
+  （常量切片天然单调，实测请求销售额 DESC 前10 拿回 10 行全 0.0000 而全量存在 3176.76 的记录），
+  改为按服务端 `total` 取全量后本地排序切片；新增 `covers_full_result` 供审计，
+  重查窗口未覆盖全量时披露文案追加「前N可能不精确」；本地重排后同步刷新 `row_count_returned`。
+- 新增 `tests/skills/test_order_and_limit.py`：22 个用例（两副本各 11），覆盖解析成功、
+  歧义拒绝、时间表述不得误读成行数、「按X统计」不构成排序诉求、合同层落模板与披露。
+**验证结果**：`pytest tests/skills/test_order_and_limit.py -q` 22 passed；
+`pytest tests/query tests/auth -q` 233 passed。
+端到端 `按渠道SKU统计发货数据集近7天的销售额，取前10名` 由「193 行自然序」变为
+「10 行按销售额降序 16530.83→6183.76」，`order_fallback.covers_full_result=true`。
+**影响范围**：只影响原文含排序/行数表述的请求；无此类表述时 orderBy/limit 仍为 None，行为不变。
+带 limit 的查询会多一次全量重查（受 ORDER_REQUERY_LIMIT_CAP=5000 约束）。
+**回滚方式**：`git checkout -- opscli/query/services/planner/query_plan.py opscli/skills/templates/ops-dataset-query/scripts/query_plan.py opscli/skills/templates/ops-dataset-query/scripts/run_query.py && rm tests/skills/test_order_and_limit.py`
+---
+
+## 2026-08-14 query/planner - F4 补齐非亚马逊平台词表
+
+**变更原因**：`slots.platform` 识别 10 个平台，`platform_scope.members` 只定义 3 个。
+槽位抽取成功但展开为空成员时 `_resolve_platform_enum` 返回 not_applicable，
+`_next_action` 判成 `block_platform_scope_unsupported`。对当前账号（唯一授权平台是 Temu）
+而言，任何带平台筛选的自然语言取数都被直接阻断——矩阵 D9 维度实测 0/44 可规划、0.1 秒
+即阻断（根本没走枚举）。
+**改动点**：
+- 两份 `intent_rules.json`（`opscli/query/services/planner/resources/` 与
+  `opscli/skills/templates/ops-dataset-query/data/`）的 `platform_scope`：
+  为 tiktok/walmart/wayfair/temu/shopify/shein/sams 补 `members`（各映射到同名单成员）
+  与 `filter_values`（中英文枚举别名）。注意 `_validated_list` 会 casefold 去重，
+  同一别名的大小写变体（如 Shein/SHEIN）会被判为重复而拒绝整个规则文件。
+- 两份 `typed_schema_linking.py` 的 `validate_rules`：
+  `set(members).issubset(slots.platform)` 改为 `set(members) == set(slots.platform)`，
+  让这类漂移在规则校验期硬失败，而不是在用户面前变成一次阻断。
+- `tests/query/planner/test_query_plan.py`：新增 4 个用例（平台可展开性、
+  filter_values 键完备性、校验器拒绝漂移、Temu 端到端解析），并补 `import pytest`。
+**验证结果**：`pytest tests/query tests/auth -q` 237 passed。
+实测 `查询发货数据集近30天Temu平台的销售额` 由 blocked 变为 planned，
+模板落入 `platform_name = "Temu"`；`亚马逊平台` 仍正确 blocked（账号确无亚马逊授权），
+但原因码由 `unsupported` 变为更准确的 `not_authorized`。
+**影响范围**：只放开原本被判「平台不支持」的 7 个平台；亚马逊路径与权限边界行为不变。
+**回滚方式**：`git checkout -- opscli/query/services/planner/resources/intent_rules.json opscli/skills/templates/ops-dataset-query/data/intent_rules.json opscli/query/services/planner/typed_schema_linking.py opscli/skills/templates/ops-dataset-query/scripts/typed_schema_linking.py`
+---
+
+## 2026-08-14 query/planner - F5 阻断态补可执行的中文原因与可选项
+
+**变更原因**：`answer_contract` 强制要求「说明当前查询被阻断的原因」，但合同里没有原因文本、
+`recovery_command=None`、也不说当前账号实际授权了什么，Agent 只能泛泛而谈或违反 no-guess 政策
+去猜。更糟的是阻断时仍保留「用户未指定亚马逊SC或亚马逊VC，本次默认按亚马逊SC + 亚马逊VC处理」
+这句完成态披露——本次根本没有处理，会让用户以为查询已按该范围执行。
+**改动点**（两份 `query_plan.py` 同步）：
+- 新增 `BLOCK_REASON_MESSAGES`，覆盖 `_next_action` 产出的全部 4 个 `block_*` 动作。
+- `_platform_scope` 返回值新增 `authorized_enum_values`，保留本次枚举到的授权原值。
+- `_platform_scope_disclosures` 新增 `blocked` 参数：阻断态改用阻断口径文案，
+  不再声称「已按默认范围处理」。
+- `build_model_contract`：阻断时写入 `model_view.block_reason_zh` 与
+  `authorized_alternatives_zh`，并把两者一并推入 `answer_contract.required_disclosures_zh`。
+- `tests/query/planner/test_query_plan.py`：新增 3 个用例（AST 断言每个 block_* 都有文案、
+  阻断原因进披露、授权枚举值保留）。
+**验证结果**：`pytest tests/query tests/auth -q` 241 passed。
+实测 `查询发货数据集近30天亚马逊平台的销售额` 的披露由「需要说明原因」一句空要求，
+变为「当前账号的平台权限枚举中没有请求的平台」+「当前账号已授权的平台为：Temu。可改用其中之一重新提问。」
+**影响范围**：只影响 blocked 合同的文案与新增字段；planned/clarify 路径不变。
+**回滚方式**：`git checkout -- opscli/query/services/planner/query_plan.py opscli/skills/templates/ops-dataset-query/scripts/query_plan.py tests/query/planner/test_query_plan.py`
+---
+
+## 2026-08-14 query/planner - F7/F8 澄清话术细分与同名候选区分
+
+**变更原因**：`business_dataset` 同时承接「命中权限枚举组件」与「命中多个同名数据集」两种成因，
+模板副本更是连该 code 的文案都没有、直接退化成兜底的「需要补充查询条件。」。
+实测 7 张组件表（T8/T9/T10/T11/T25/T26/T44）在 14 个维度上 planned=0，codex 一致判为「澄清过度」；
+两张同名的「用户仪表盘分享明细」（table_id 52/61）候选卡片 name_zh 完全相同，
+Agent 无法构造有效选项，同样 14/14 卡死。选表层早已算出 `name_conflict` 标记但从未被消费。
+**改动点**（两份 `query_plan.py` 同步）：
+- 模板副本补 `CLARIFICATION_MESSAGES["business_dataset"]`（内核已有）。
+- 新增 `BUSINESS_DATASET_MESSAGES`，按成因给两句具体话术。
+- 新增 `_clarification_message()`，按候选卡片的 `dataset_category` 与同名情况分派话术，
+  `model_view.clarification_messages_zh` 改为经它生成。
+- `_candidate_cards_zh()`：同名候选的 `name_zh` 追加「（同名第 N/M 个）」序号；
+  非同名候选保持原样，不制造噪声。
+- `tests/query/planner/test_query_plan.py`：新增 4 个用例。
+**验证结果**：`pytest tests/query -q` 172 passed，`tests/auth` 73 passed。
+实测组件表澄清由「需要补充查询条件。」变为「命中的是权限枚举组件数据集…请改为指定一个业务数据集。」；
+同名表候选卡片变为「用户仪表盘分享明细（同名第 1/2 个）」「（同名第 2/2 个）」。
+**影响范围**：只影响 clarify_required 的文案与候选卡片展示名，不改变选表判定本身。
+**回滚方式**：`git checkout -- opscli/query/services/planner/query_plan.py opscli/skills/templates/ops-dataset-query/scripts/query_plan.py tests/query/planner/test_query_plan.py`
+---
+
+## 2026-08-14 query/planner - F6 嵌套字段标签按命中区间判断吞并
+
+**变更原因**：`_longest_unique_labels` 的「最长标签吞并」只看字符串包含，无法区分
+「同一段文本同时命中两个标签」（查"广告销售额"不该额外产出"销售额"，正确）与
+「用户在两个不同位置分别点名两个字段」。实测「本月的花费(原币)和花费」只绑定到 cost，
+cost_cny 被静默丢弃，`model_view.metrics` 也只报一个，用户无从察觉少了一半。
+D3 维度中点名两个不同指标的 35 个 planned 用例有 10 例中招。
+**改动点**（两份 `query_plan.py` 同步）：
+- 新增 `_label_spans()` 与 `_is_swallowed()`：按标签在原文中的命中区间判断，
+  短标签只要有任何一次出现落在长标签区间之外，就说明是独立点名，必须保留。
+- `_longest_unique_labels()` 新增 `normalized_query` 参数（缺省时退回旧判据，保持兼容），
+  `_selected_fields` 调用处传入原文。
+- `tests/query/planner/test_query_plan.py`：新增 3 个用例。
+**验证结果**：`pytest tests/query -q` 175 passed。
+实测「SP广告数据集本月的花费(原币)和花费」由 `['花费(原币)']` / `['cost']`
+变为 `['花费(原币)', '花费']` / `['cost', 'cost_cny']`；
+「查询即时综合数据集近7天的广告销售额」仍正确只产出 `广告销售额`（真吞并未被破坏）。
+**影响范围**：只影响一个字段标签是另一个前缀且用户分别点名的场景。
+**回滚方式**：`git checkout -- opscli/query/services/planner/query_plan.py opscli/skills/templates/ops-dataset-query/scripts/query_plan.py tests/query/planner/test_query_plan.py`
+---
+
+## 2026-08-14 query/skills - F9 证据合同回填数据集中文名
+
+**变更原因**：`evidence_contract._dataset_name` 到查询返回体里找以 `dataset` 开头的字符串键，
+而 opscli 的返回结构里根本没有这类键（只有 `data.payload.tableId`），
+导致 `dataset_name_zh` 在所有正式查询里恒为空串。而结果分析的第一条要求正是
+「先说明数据集中文名」，Agent 无法从结果侧独立核验本次查了哪张表——
+codex 端到端 84 例中有 33 条反馈重复提到这一点。
+**改动点**：
+- `evidence_contract.py`：`build_evidence_contract` 新增关键字参数 `dataset_name_zh`，
+  优先使用调用方传入值，`_dataset_name` 降级为旁路直连（MCP/图表入口）的兜底，
+  并在 docstring 里写明该键在正式通道恒为空的原因。
+- `run_query.py`：从 `plan.model_view.dataset_name_zh` 取值传入。
+- `tests/skills/test_order_and_limit.py`：新增 2 个用例。
+**验证结果**：`pytest tests/skills/test_order_and_limit.py -q` 24 passed。
+实测 `查询发货数据集近7天的销售额` 的 `evidence_contract.dataset_name_zh`
+由 `''` 变为 `'发货数据集'`。
+**影响范围**：只新增一个可选参数与一次回填；旁路直连路径行为不变。
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/scripts/evidence_contract.py opscli/skills/templates/ops-dataset-query/scripts/run_query.py`
+---
+
+## 2026-08-14 query/planner - 批次一至三回归验证与两处收尾修正
+
+**变更原因**：616 例矩阵在修复态重跑后，暴露两处需收尾的问题；同时既有测试中有 3 条
+编码的是被有意改掉的旧行为，需要同步更新为新的正确预期。
+**改动点**：
+- `run_query.py` `_apply_order_fallback`：全量重查后若本地算出的 Top N 与首查结果一致，
+  说明服务端排序本就生效，返回 `note=None`。此前带 limit 时恒报 `order_fallback_applied`，
+  会让 Agent 向用户披露一个并不存在的兜底。
+- `tests/skills/test_dataset_query_planner.py`：
+  - `test_unsupported_platform_scope_is_blocked_explicitly` 改名为
+    `test_non_amazon_platform_is_blocked_with_actionable_reason`，断言改为
+    `block_platform_filter_missing_component` + 必须带 `block_reason_zh`
+    （F4 后沃尔玛已受支持，不再是「平台范围不支持」）。
+  - `test_run_query_order_fallback_requeries_and_resorts` 的重查窗口断言由
+    `limit*3 == 6` 改为按总行数取全量 `== 4`。
+**验证结果**（616 例矩阵，修复前 → 修复后）：
+- 选表错误 0 → 0；声明时间窗但无日期过滤 41 → **0**；
+- TopN 用例 orderBy 非空率 0% → **93%**（其余 7% 为多指标歧义，已强制披露，非静默丢弃）；
+- D9 授权平台(Temu) planned 0 → **23/23**（44 张表中仅 23 张含 platform_name 列，其余阻断正确）；
+- D6 多币种 blocked 4 → **0**；planned 384 → 407，blocked 74 → 44。
+- D5/D10 由 35 planned 降为 31，多出的 4 例转 clarify——正是 F3 拦下的无日期字段表做环比。
+- 3 例超 30 秒为测试台 5 路并发争用枚举接口所致，串行复测为 2.8s / 3.6s / 13.8s，非代码回归。
+`pytest tests/query tests/auth -q` 248 passed；`tests/skills` 逐文件全绿，
+余下 8 个失败与基线逐字一致（test_cli / test_dashboard_skills / test_manager /
+test_ops_feedback_template / test_ops_methods_card_xlsx_preview），均与规划期无关。
+**已知前置问题**：`tests/skills/test_packaging.py` 破坏 pytest 全局 capture，
+导致 `tests/skills` 目录级收集失败，本批新增用例只能单文件运行。
+**回滚方式**：见各条目独立回滚命令。
+---

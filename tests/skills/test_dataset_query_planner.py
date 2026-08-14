@@ -288,8 +288,15 @@ def test_snapshot_metric_gets_snapshot_aggregation_policy(tmp_path: Path):
     assert stock["aggregation_policy"] == "latest_snapshot_no_period_aggregation"
 
 
-def test_unsupported_platform_scope_is_blocked_explicitly(tmp_path: Path):
-    """请求了不支持的平台（如沃尔玛）时应明确阻断为平台范围不支持，而非枚举歧义。"""
+def test_non_amazon_platform_is_blocked_with_actionable_reason(tmp_path: Path):
+    """非亚马逊平台（如沃尔玛）不再被判为「平台范围不支持」。
+
+    2026-08-14 前 platform_scope.members 只定义了亚马逊三项，槽位识别得到的
+    tiktok/walmart/temu 等 7 个平台一律展开为空成员并阻断为 scope_unsupported——
+    对只授权 Temu 的账号而言，任何带平台筛选的取数都做不了。
+    词表补齐后这些平台进入正常的组件枚举路径；本 fixture 没有平台枚举组件，
+    因此阻断原因变为 missing_component，且必须自带可执行的中文原因。
+    """
     data_dir = tmp_path / "data"
     _write_ready_metadata(data_dir)
 
@@ -300,7 +307,9 @@ def test_unsupported_platform_scope_is_blocked_explicitly(tmp_path: Path):
     )
 
     assert result["status"] == "blocked"
-    assert result["model_view"]["next_action"] == "block_platform_scope_unsupported"
+    assert result["model_view"]["next_action"] == "block_platform_filter_missing_component"
+    # 阻断必须给出原因，不能只留一句「需要说明被阻断的原因」
+    assert result["model_view"].get("block_reason_zh")
 
 
 def test_published_bundle_version_shape_is_ready(tmp_path: Path):
@@ -1624,8 +1633,11 @@ def test_run_query_order_fallback_requeries_and_resorts(tmp_path: Path, monkeypa
     out = json.loads(capsys.readouterr().out.strip())
 
     assert exit_code == 0
-    assert len(calls) == 2, "排序未生效时必须放大窗口重查一次"
-    assert calls[1]["limit"] == 6  # limit*3
+    assert len(calls) == 2, "排序未生效时必须重查一次"
+    # 重查窗口按服务端报告的总行数取全量（total=4），不再用 limit*3 的固定倍数：
+    # 服务端整段忽略 orderBy 时返回的是自然序切片，放大倍数仍是在错误的行里挑，
+    # 只有拿到全量再本地排序才能保证 Top N 正确。
+    assert calls[1]["limit"] == 4
     # desc 布尔旧形态被归一为 direction 形态
     assert calls[0]["orderBy"] == [{"field": "price", "direction": "DESC"}]
     assert out["disclosures"]["order_fallback"]["order_fallback_applied"] is True
