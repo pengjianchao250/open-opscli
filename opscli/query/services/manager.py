@@ -169,6 +169,18 @@ class QueryManager:
                     "\n  当前使用的是本地缓存数据，可能未同步。"
                     "\n  请执行 opscli skills upgrade ops-dataset-query 更新缓存后重试"
                 )
+            owners = self._component_owner_datasets(datasets, needle)
+            if owners:
+                # 该 alias 是某个已授权数据集下发的查询组件。这类失败此前只回一句
+                # 「未找到目标数据集」，调用方会误以为是自己写错了 alias，
+                # 于是反复改名重试——线上取数反馈里 607 条（单项最大）都是这一形态。
+                # 真实成因是该组件表未随引用它的数据集一起授权，属服务端权限配置。
+                hint = (
+                    f"\n  该标识是「{owners[0]}」等 {len(owners)} 个已授权数据集下发的查询组件，"
+                    "不是业务数据集，说明它未随引用它的数据集一并授权。"
+                    "\n  这不是 alias 写错，重试与改名都无效："
+                    "请升级到已修复该问题的服务端版本，或按 references/feedback-guide.md 提交一次反馈。"
+                )
             raise DatasetNotFoundError(f"未找到目标数据集: {needle}{hint}")
 
         # 筛选该数据集对应的字段
@@ -400,6 +412,15 @@ class QueryManager:
         # 此处对缺失/空 alias 的项统一以 field 末段兜底补齐，覆盖 CLI 与 MCP 两条 simple 手工路线。
         dimensions = self._fill_simple_alias(dimensions)
         metrics = self._fill_simple_alias(metrics)
+        # 过滤操作符符号形态归一（= → eq、>= → gte …）。
+        # 此前归一只作用于 --where 简写（走 _parse_where_condition），
+        # 而 query simple 的 filters 直接来自 --json/--payload，从不经过归一，
+        # 于是手写 payload 用 "=" 会被服务端硬拒：「无效的过滤操作符: =」。
+        # 线上 3987 条取数反馈里有 189 条卡在这里，全部来自绕过执行器直连的场景。
+        # 复用既有的 _validate_simple_filter_operators：它就地归一且支持嵌套
+        # conditions 与 AND/OR 逻辑节点，此前只在 validate_fields=True 时才可达。
+        if filters:
+            self._validate_simple_filter_operators(filters)
 
         payload: dict[str, object] = {
             "tableId": table_id,
@@ -495,22 +516,30 @@ class QueryManager:
         注意：select_columns（查询组件）中的字段即使不在普通 fields 列表中，
         也是合法的过滤条件，过滤校验时会跳过这些字段的 metadata 强制匹配。
         """
-        if not fields and select_columns:
-            self._validate_simple_filter_operators(filters)
-            return
-
-        if not fields:
-            raise InvalidPayloadError("当前数据集 metadata 未返回字段，无法执行字段歧义门禁")
-
-        # 构建查询组件字段名集合（用于 filter 白名单跳过）
+        # 构建查询组件字段名集合。提到最前面：dimensions 的校验也要用它区分
+        # 「这个字段根本不存在」与「这个字段只能筛选、不能分组」两种情况。
         select_column_names: set[str] = set()
         for sc in (select_columns or []):
             col = str(sc.get("column_name") or "").strip().lower()
             if col:
                 select_column_names.add(col)
 
+        if not fields and select_columns:
+            # 没有普通字段、只有查询组件时，任何分组维度都不可能成立，
+            # 必须在这里就说清楚，不能放行到服务端换一句笼统的「字段不存在」
+            for item in dimensions:
+                field_ref = self._extract_simple_field_ref(item, context="dimension")
+                self._reject_filter_only_dimension(field_ref, select_column_names, fields)
+            self._validate_simple_filter_operators(filters)
+            return
+
+        if not fields:
+            raise InvalidPayloadError("当前数据集 metadata 未返回字段，无法执行字段歧义门禁")
+
         for item in dimensions:
             field_ref = self._extract_simple_field_ref(item, context="dimension")
+            if not self._has_dimension_candidate(fields, field_ref):
+                self._reject_filter_only_dimension(field_ref, select_column_names, fields)
             self._resolve_simple_field(fields, field_ref, field_type="dimension", context="dimension")
 
         for item in metrics:
@@ -546,6 +575,109 @@ class QueryManager:
             if not field_ref:
                 raise InvalidPayloadError("dataComparison 缺少 field")
             self._resolve_simple_field(fields, str(field_ref), field_type=None, context="dataComparison")
+
+    @staticmethod
+    def _component_owner_datasets(datasets: list[dict], needle: str) -> list[str]:
+        """找出把 needle 作为查询组件下发出去的已授权数据集中文名。
+
+        用于把「未找到目标数据集」这句话，从「你写错了 alias」纠正为
+        「这是组件表且未随引用它的数据集一并授权」——两者的处置方式完全不同。
+        """
+        target = str(needle or "").strip()
+        if not target:
+            return []
+        owners: list[str] = []
+        for dataset in datasets:
+            for column in dataset.get("select_columns") or []:
+                if str(column.get("component_dataset_alias") or "").strip() == target:
+                    name = str(
+                        dataset.get("description")
+                        or dataset.get("dataset_name")
+                        or dataset.get("dataset_alias")
+                        or ""
+                    ).strip()
+                    if name and name not in owners:
+                        owners.append(name)
+                    break
+        return owners
+
+    @staticmethod
+    def _is_groupable(field: dict) -> bool:
+        """字段是否可作为分组维度。
+
+        groupable 由服务端按 dm_table_columns.groupby 下发；老版本 metadata 没有
+        这个键，此时一律按可分组处理，保证升级前后行为不回退。
+        """
+        flag = field.get("groupable")
+        if flag is None:
+            return True
+        return str(flag).strip() not in ("0", "false", "False", "")
+
+    def _has_dimension_candidate(self, fields: list[dict], identifier: str) -> bool:
+        """该标识在当前数据集里是否存在可作为分组维度的字段。
+
+        只做存在性判断、不抛异常：用于在报「字段不存在」之前，先分辨出
+        「其实存在，但只能筛选不能分组」这一类，给出针对性的错误信息。
+        """
+        normalized = self._normalize_simple_field_identifier(identifier)
+        if not normalized:
+            return False
+        for item in fields:
+            if str(item.get("field_type") or "").strip().lower() != "dimension":
+                continue
+            if not self._is_groupable(item):
+                continue
+            for key in ("global_alias", "field_name", "verbose_name"):
+                if str(item.get(key) or "").strip().lower() == normalized:
+                    return True
+        return False
+
+    def _matches_filter_only_field(self, fields: list[dict], identifier: str) -> bool:
+        """该标识是否命中了一个「存在但不可分组」的字段。
+
+        与 select_columns 互补：有些字段就在 fields 里，只是服务端把 groupby 关了
+        （线上反馈原文：「table_id=13 的 platform_name 仍仅可筛选不可分组」）。
+        """
+        normalized = self._normalize_simple_field_identifier(identifier)
+        if not normalized:
+            return False
+        for item in fields:
+            if self._is_groupable(item):
+                continue
+            for key in ("global_alias", "field_name", "verbose_name"):
+                if str(item.get(key) or "").strip().lower() == normalized:
+                    return True
+        return False
+
+    def _reject_filter_only_dimension(
+        self,
+        identifier: str,
+        select_column_names: set[str],
+        fields: list[dict] | None = None,
+    ) -> None:
+        """字段只存在于查询组件（select_columns）时，明确告知它不能当分组维度。
+
+        为什么要单独区分：select_columns 里的字段（platform_name / asin / team_name …）
+        在 metadata 里可见，也确实是合法的**筛选**字段，但不在 fields 里，
+        因此不能进 dimensions。此前这种情况要么被放行到服务端换回一句
+        「dimension 字段不存在于当前数据集 metadata 中: platform_name」，
+        要么被客户端报成同样笼统的「字段不存在」——两种措辞都在暗示「换个字段名」，
+        而真正的解法是「把它从 dimensions 挪到 filters」。
+        线上 3987 条取数反馈里 497 条属字段类失败，其中 275 条正是这一形态。
+        """
+        normalized = self._normalize_simple_field_identifier(identifier)
+        if not normalized:
+            return
+        is_component = normalized in select_column_names
+        if not is_component and not self._matches_filter_only_field(fields or [], identifier):
+            return
+        source = "该数据集的查询组件字段" if is_component else "该数据集中不可分组的字段"
+        raise InvalidPayloadError(
+            f"dimension 字段 {identifier} 是{source}，只能用于 filters 筛选，"
+            f"不能作为分组维度\n"
+            f"  处理方式: 把它从 dimensions 移到 filters；"
+            f"若确实需要按它分组，请改用本身含该字段可分组的数据集"
+        )
 
     @staticmethod
     def _extract_simple_field_ref(item: dict | str, *, context: str) -> str:
@@ -1717,7 +1849,10 @@ class QueryManager:
             if not file_path.exists():
                 raise InvalidPayloadError(f"where 文件不存在: {file_path}")
             try:
-                payload = json.loads(file_path.read_text(encoding="utf-8"))
+                # utf-8-sig：PowerShell 的 Out-File / > 默认写 UTF-8 with BOM，
+                # 用 utf-8 读会在首字符残留 ﻿ 导致 json.loads 直接失败
+                # （线上反馈原文：「query build --where-file 无法读取 PowerShell UTF8 输出的 JSON」）
+                payload = json.loads(file_path.read_text(encoding="utf-8-sig"))
             except Exception as exc:
                 raise InvalidPayloadError(f"where 文件不是合法 JSON: {file_path}") from exc
         else:

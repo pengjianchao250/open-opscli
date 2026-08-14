@@ -6613,3 +6613,76 @@ test_ops_feedback_template / test_ops_methods_card_xlsx_preview），均与规�
 导致 `tests/skills` 目录级收集失败，本批新增用例只能单文件运行。
 **回滚方式**：见各条目独立回滚命令。
 ---
+
+## 2026-08-14 query - P0/P1 线上反馈修复（第一批：P1-2 / P0-3 / P0-1）
+
+**变更原因**：3987 条线上取数反馈按根因归类后，前四类占 43.6%。本批修掉三类可在
+opscli 侧闭环的根因，合计覆盖约 983 条（24.7%）。
+**改动点**：
+- **P1-2（347 条）** `opscli/shared/http.py`：新增 `extract_error_details()` 与 `_with_details()`，
+  把服务端 `error_details`（Laravel validator 的字段级原因）拼进异常消息。
+  此前 `parse_remote_response` 只取 `msg`，服务端已经发来的字段级原因被整段丢弃，
+  Agent 只看到「参数验证失败」，只能改写请求盲试。支持 dict/list/str 三种形态，
+  超过 6 个字段截断并标注省略。
+- **P0-3（189 条）** `opscli/query/services/manager.py`：`build_simple` 无条件调用既有的
+  `_validate_simple_filter_operators`。该方法本就支持嵌套 conditions 与 AND/OR，
+  但此前仅在 `validate_fields=True` 时可达，导致 `--json` / `--payload` / MCP 三条
+  路径传入的 `filters` 从不归一，手写 `"="` 被服务端硬拒。
+  （初版另写了一份 `_normalize_filter_operators`，发现与既有方法重复且更弱，已撤销改为复用。）
+- **P0-1（447 条）** `opscli/query/commands/cli.py`：
+  `--payload` 支持 `-` 从 stdin 读；新增 `_inline_json_hint()`，内联 JSON 解析失败时
+  **一律**给出文件与管道两种替代命令（此前只在「单引号开头」或「双反斜杠且 win32」
+  两种窄条件下才提示）；`--query-file` 改用 `utf-8-sig`。
+  `opscli/query/services/manager.py` 的 `--where-file` 同样改用 `utf-8-sig`
+  （对应反馈原文「query build --where-file 无法读取 PowerShell UTF8 输出的 JSON」）。
+  `references/simple-query-guide.md`：把文件/管道传参定为推荐形态并说明原因。
+- 新增测试：`tests/shared/test_error_details.py`(10)、
+  `tests/query/test_filter_operator_normalization.py`(12)、
+  `tests/query/test_json_input_paths.py`(8)。
+**验证结果**：`pytest tests/shared tests/query tests/auth -q` 全绿。
+实测：BOM 文件、stdin 管道、符号操作符归一（含嵌套 AND/OR）、坏 JSON 提示均按预期。
+**影响范围**：仅扩大入参容错与错误信息，不改变查询语义；成功路径行为不变。
+**回滚方式**：`git checkout -- opscli/shared/http.py opscli/query/services/manager.py opscli/query/commands/cli.py opscli/skills/templates/ops-dataset-query/references/simple-query-guide.md`
+---
+
+## 2026-08-14 query - P0/P1 线上反馈修复（第二批：P0-2 / P1-1，含服务端）
+
+**变更原因**：P0-2（497 条）与 P1-1（607 条，单项量最大）需前后端配合。
+勘察后发现两处根因都比预期简单——服务端其实已经具备所需数据，只是没导出/没并入。
+**改动点（服务端 auto-scheduler / vendor/aukey/data-metrics）**：
+- `Services/DatasetSkillService.php` `buildQueryMetadataForUser`：
+  `$fieldKeepKeys` 增加 `groupable`、`filterable`。这两个能力位 `buildFields` 早已按
+  `dm_table_columns.groupby / filterable` 算好，只是从未导出，客户端因此无法区分
+  「字段不存在」与「字段只能筛选不能分组」。
+- 同文件 `loadAuthorizedMetadata`：新增 `appendReferencedComponentTables()` 与
+  `loadComponentTablesByAlias()`，把「已授权数据集通过 select_columns 引用到的
+  query_component 表」并入可查范围。此前接口一边下发 `component_dataset_alias`，
+  一边在按该 alias 查询时返回空集。权限边界未扩大：只放行用户已授权数据集主动引用的
+  组件表，且硬性限定 `dataset_category='query_component'`，
+  `is_cli_enabled / deleted_at` 等既有闸门保持不变。
+- 新增 `tests/DatasetSkillComponentTableAccessTest.php`：6 用例 13 断言，
+  子类桩掉两个 DB 方法，覆盖补入、去重、已授权不重复、组件查不到时安全跳过、空输入短路。
+**改动点（opscli）**：
+- `query/services/manager.py`：`_validate_simple_fields` 的 dimensions 分支新增
+  `_has_dimension_candidate` / `_matches_filter_only_field` / `_reject_filter_only_dimension` /
+  `_is_groupable`，把「组件字段或不可分组字段被当成维度」与「字段真不存在」拆成两种报错；
+  `groupable` 键缺失时按可分组处理，保证服务端未升级时不回退。
+  新增 `_component_owner_datasets()`：`未找到目标数据集` 时若该 alias 是某已授权数据集
+  下发的查询组件，改报「未随引用它的数据集一并授权，重试与改名都无效」。
+- 新增测试 `tests/query/test_filter_only_dimension.py`(9)、
+  `tests/query/test_component_dataset_not_found.py`(7)。
+**验证结果**：
+opscli `pytest tests/shared tests/query tests/auth -q` 386 passed；skills 相关四个文件全绿。
+服务端 `php vendor/bin/phpunit vendor/aukey/data-metrics/tests/` 54 tests / 3 errors，
+该 3 个错误在未改动的基线上同样存在（Feature 用例对真实 QA 库跑 RefreshDatabase 迁移冲突），
+与本次无关。
+**影响范围**：
+服务端会在 query-metadata 的 datasets 列表里多出被引用的组件数据集（`dataset_category`
+可区分，规划器本就对其重罚并阻断选表），fields 多出两个键。opscli 侧只改错误信息与
+校验分支，不改变查询语义。
+**注意**：规划器在组件枚举失败时仍然阻断而非放宽筛选——这是刻意保留的。
+静默不应用用户要求的筛选会产出「看起来正常的错数」，比阻断危险得多。
+**回滚方式**：
+opscli `git checkout -- opscli/query/services/manager.py`；
+服务端 `cd vendor/aukey/data-metrics && git checkout -- src/Services/DatasetSkillService.php && rm tests/DatasetSkillComponentTableAccessTest.php`
+---

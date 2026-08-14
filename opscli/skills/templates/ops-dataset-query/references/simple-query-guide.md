@@ -149,12 +149,36 @@ MCP Tool 使用 snake_case，JSON payload 使用 camelCase，CLI 选项使用 ke
 
 ## CLI-only
 
-将占位符替换后，只用正式简化查询入口：
+将占位符替换后，只用正式简化查询入口。**payload 一律用文件或管道传入，不要内联 `--json`**：
 
 ```bash
+# 推荐：文件传参（跨平台一致，UTF-8 BOM 已自动兼容）
 opscli query simple --table-id "$TABLE_ID" \
-  --json "$QUERY_JSON" --run --pretty
+  --payload payload.json --run --pretty
+
+# 推荐：管道传参
+cat payload.json | opscli query simple --table-id "$TABLE_ID" --payload - --run --pretty
 ```
+
+**为什么不用 `--json` 内联**：PowerShell 与 cmd 会按自己的引号和转义规则重写命令行参数，
+JSON 里的双引号常被吞掉或翻倍，服务端收到的已不是合法 JSON，报
+`INVALID_PAYLOAD: JSON 字符串解析失败 / Expecting property name enclosed in double quotes`。
+这是线上取数失败反馈里占比最高的一类。文件与管道两条路径都不经过 Shell 的参数重写，
+在 bash / zsh / PowerShell 下行为一致。
+
+Windows 下用 PowerShell 写 payload 文件时：
+
+```powershell
+$payload | Out-File -FilePath payload.json -Encoding utf8
+opscli query simple --table-id "$TABLE_ID" --payload payload.json --run --pretty
+```
+
+`Out-File -Encoding utf8` 会写 BOM 头，CLI 已自动兼容，无需额外处理。
+
+**过滤操作符**：`filters[].operator` 可以写 `=`、`>=`、`<=`、`!=` 等符号形态，
+CLI 会自动归一为服务端要求的 `eq` / `gte` / `lte` / `neq`；
+写了服务端不支持且无法归一的符号时，CLI 会在本地直接报错并列出完整支持清单，
+不会浪费一次网络往返。
 
 ## MCP-only
 

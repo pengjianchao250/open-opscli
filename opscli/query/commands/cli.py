@@ -170,7 +170,9 @@ def _current_email() -> str:
 def _resolve_request(request: str, query_file: str | None) -> str:
     """解析查询原文：优先读 --query-file（含特殊字符时用），否则用位置参数。"""
     if query_file:
-        text = Path(query_file).expanduser().read_text(encoding="utf-8").strip()
+        # utf-8-sig：PowerShell 的 Out-File / > 默认写 UTF-8 with BOM，
+        # 用 utf-8 读会把 BOM 当成正文首字符，请求原文因此带上不可见前缀
+        text = Path(query_file).expanduser().read_text(encoding="utf-8-sig").strip()
     else:
         text = (request or "").strip()
     if not text:
@@ -576,11 +578,39 @@ def build(
     _emit(payload, pretty)
 
 
+def _inline_json_hint(raw: str) -> str:
+    """内联 JSON 解析失败时给出可直接照做的替代命令。
+
+    为什么每次失败都要给替代方案：线上 3987 条取数反馈里有 447 条（11.2%、涉及 98 人、
+    近 30 天日均从 5.3 涨到 9.0）是内联 --json 在 PowerShell 下被引号与转义规则改写，
+    服务端收到的已不是合法 JSON。此前的提示只在「单引号开头」或「含双反斜杠且 win32」
+    两种窄条件下才出现，绝大多数用户看到的只有一句 JSON 语法错误位置，
+    完全不知道换一种传参方式就能绕开——于是同一个人反复踩、反复提反馈。
+    """
+    hints = []
+    if raw.lstrip().startswith("{'"):
+        hints.append("检测到单引号包裹的 JSON，JSON 规范只接受双引号")
+    if "\\\\" in raw:
+        hints.append("检测到双反斜杠，通常是 Shell 二次转义的痕迹")
+    prefix = ("\n  可能原因: " + "；".join(hints)) if hints else ""
+    return (
+        f"{prefix}"
+        "\n  建议改用文件或管道传参，可完全绕开 Shell 的引号与转义重写："
+        "\n    opscli query simple --table-id <ID> --payload payload.json --run"
+        "\n    Get-Content payload.json -Raw | opscli query simple --table-id <ID> --payload - --run"
+        "\n  payload.json 请存为 UTF-8（BOM 头已自动兼容）"
+    )
+
+
 @app.command("simple")
 def simple(
     table_id: int = typer.Option(..., "--table-id", help="数据集 ID"),
     dataset: str | None = typer.Option(None, "--dataset", help="dataset_alias 或 dataset_name，用于字段校验"),
-    payload_file: str | None = typer.Option(None, "--payload", help="简化查询 JSON 文件路径（与 --json 二选一）"),
+    payload_file: str | None = typer.Option(
+        None, "--payload",
+        help="简化查询 JSON 文件路径，传 - 表示从 stdin 读取（与 --json 二选一）；"
+             "Windows PowerShell 下请优先用本参数，内联 --json 会被引号转义破坏",
+    ),
     payload_json: str | None = typer.Option(None, "--json", help="简化查询 JSON 字符串（与 --payload 二选一）"),
     output: str | None = typer.Option(None, "--output", help="将 payload 写入指定文件"),
     global_currency: str | None = typer.Option(
@@ -601,30 +631,35 @@ def simple(
 
         simple_params: dict = {}
         if payload_file:
-            pf = Path(payload_file).expanduser()
-            if not pf.exists():
-                raise InvalidPayloadError(f"payload 文件不存在: {pf}")
-            try:
-                simple_params = json.loads(pf.read_text(encoding="utf-8-sig"))
-            except json.JSONDecodeError as exc:
-                raise InvalidPayloadError(
-                    f"payload 文件 JSON 解析失败: {pf}\n"
-                    f"  错误: {exc}\n"
-                    f"  提示: 检查文件是否为有效 UTF-8 JSON，BOM 头已自动兼容"
-                ) from exc
+            # "-" 走 stdin：PowerShell 下 `$payload | opscli query simple --payload -`
+            # 比内联 --json 稳，管道不经历引号与转义重写
+            if payload_file.strip() == "-":
+                raw = sys.stdin.read()
+                try:
+                    simple_params = json.loads(raw.lstrip("﻿"))
+                except json.JSONDecodeError as exc:
+                    raise InvalidPayloadError(
+                        f"stdin 读入的 JSON 解析失败: {exc}\n"
+                        f"  提示: 确认管道内容是完整的 UTF-8 JSON 对象"
+                    ) from exc
+            else:
+                pf = Path(payload_file).expanduser()
+                if not pf.exists():
+                    raise InvalidPayloadError(f"payload 文件不存在: {pf}")
+                try:
+                    simple_params = json.loads(pf.read_text(encoding="utf-8-sig"))
+                except json.JSONDecodeError as exc:
+                    raise InvalidPayloadError(
+                        f"payload 文件 JSON 解析失败: {pf}\n"
+                        f"  错误: {exc}\n"
+                        f"  提示: 检查文件是否为有效 UTF-8 JSON，BOM 头已自动兼容"
+                    ) from exc
         elif payload_json:
             try:
                 simple_params = json.loads(payload_json)
             except json.JSONDecodeError as exc:
-                hint = ""
-                if payload_json.startswith("{'"):
-                    hint = "\n  提示: 检测到单引号包裹的 JSON，请改用双引号"
-                elif "\\\\" in payload_json and sys.platform == "win32":
-                    hint = (
-                        "\n  提示: Windows PowerShell 中 --json 内联传参容易因引号转义导致 JSON 被破坏"
-                        "\n  建议改用 --payload <文件路径> 传参，并使用 UTF-8 无 BOM 编码保存")
                 raise InvalidPayloadError(
-                    f"JSON 字符串解析失败: {exc}{hint}"
+                    f"JSON 字符串解析失败: {exc}{_inline_json_hint(payload_json)}"
                 ) from exc
 
         kwargs: dict[str, object] = {"table_id": table_id, "dataset_alias": dataset}
