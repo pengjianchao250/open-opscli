@@ -173,7 +173,7 @@ MCP-only（无本地 shell）、复杂审计或用户明确要求完整披露证
 | L3 | `data_state` 为 `placeholder`/`empty`，或目录不存在 | 执行返回的 `recovery_command` 刷新元数据后重跑；**此前不得构造任何查询** |
 | L4 | 上述都失败 | 停止取数，如实告知用户，按 `references/feedback-guide.md` 提交一次反馈 |
 
-降级态下前述「禁止本地探索」的限制放宽为：**允许**读 `data/*.csv`、`data/dataset_profiles.json` 与运行 `scripts/local_fallback.py`；仍然**禁止** `rg`/`ls`/`find`、读脚本源码、生成临时查询脚本。降级路径额外预算 3 次工具调用。
+降级态下前述「禁止本地探索」的限制放宽为：**允许**读 `data/*.csv`、`data/dataset_catalog.json` 与运行 `scripts/local_fallback.py`；仍然**禁止** `rg`/`ls`/`find`、读脚本源码、生成临时查询脚本。降级路径额外预算 3 次工具调用。
 
 `local_fallback.py` 常用形态：
 
@@ -190,7 +190,7 @@ python3 scripts/local_fallback.py "<用户原文>" --dataset <alias> --emit-plan
    - 带 `--emit-plan` 产出 plan，再走 `python3 scripts/run_query.py --plan-file <plan> --json '<payload>'`：保留执行器字段校验闸，payload 里出现目录之外的字段会被直接拒绝；
    - 直连 `opscli query simple`：不经执行器校验，适用于 `run_query.py` 也跑不起来的环境。此时字段仍只能取自候选目录，且必须在回答中说明本次查询未经执行器字段校验
 3. 候选里的 `hard_constraints` / `avoid_when` 必须遵守（如库存快照字段只能用于明细表），`clarify_when` 命中时先问用户
-4. 候选里的 `uncertified_hints_zh` 是**未经人工审核的业务约束提示**（当前多数画像 `certified=false`，其业务约束都落在这个键里而不是 `hard_constraints`）。处置方式与 `hard_constraints` 不同：**必须先向用户复述该条提示并确认，再决定是否套用**，不得当作已确认口径静默应用，也不得因为它不是 `hard_constraints` 就忽略——被降级的往往正是防错数的护栏（如「总库存、海外仓库存属于库存快照字段，只能用于明细表或无聚合过滤条件」「必须选择报告周期」）
+4. 候选里的 `uncertified_hints_zh` 是**未经人工审核的业务约束提示**（意图目录的业务约束尚未经人工复核，一律落在这个键里而不是 `hard_constraints`）。处置方式与 `hard_constraints` 不同：**必须先向用户复述该条提示并确认，再决定是否套用**，不得当作已确认口径静默应用，也不得因为它不是 `hard_constraints` 就忽略——被降级的往往正是防错数的护栏（如「总库存、海外仓库存属于库存快照字段，只能用于明细表或无聚合过滤条件」「必须选择报告周期」）
 5. `filter_components` 中字段的筛选值，必须先查 `component_dataset_alias` 组件表枚举当前账号授权原值，完整等值命中后才写入 `filters`；枚举不到就停止，**不得放大为全范围查询**
 
 ## 按需参考

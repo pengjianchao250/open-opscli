@@ -37,16 +37,23 @@ def _normalize(value: object) -> str:
     return unicodedata.normalize("NFKC", str(value or "")).strip().casefold()
 
 
-def _load_profiles(data_dir: Path) -> dict:
-    """加载本地画像（意图触发词 + 数据集业务约束）；缺失时返回空结构。"""
-    path = data_dir / "dataset_profiles.json"
+def _load_catalog(data_dir: Path) -> dict:
+    """加载服务端意图目录（意图触发词 + 数据集业务约束）；缺失时返回空结构。
+
+    为什么用 dataset_catalog.json 而不是过去的人工画像 dataset_profiles.json：
+    画像靠人工维护且从不随 upgrade 刷新，实测 15 份画像的 dataset_alias 只剩 2 份
+    还能在 datasets.csv 里查到——路由中文名看着还对，产出的候选却解析不出 table_id，
+    Agent 拿到手也执行不了。catalog 由服务端生成、随 upgrade 原子刷新，
+    41 条意图覆盖 36 个数据集，alias 全部有效。
+    """
+    path = data_dir / "dataset_catalog.json"
     if not path.is_file():
-        return {"intents": [], "datasets": []}
+        return {"intents": []}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"intents": [], "datasets": []}
-    return payload if isinstance(payload, dict) else {"intents": [], "datasets": []}
+        return {"intents": []}
+    return payload if isinstance(payload, dict) else {"intents": []}
 
 
 def _data_state(data_dir: Path) -> str:
@@ -75,19 +82,23 @@ def _score_intent(query: str, intent: dict) -> tuple[float, list[str], float]:
     """给意图打分，返回 (得分, 命中词, 归一化置信度)。
 
     逐条沿用旧版 route_intent.py 的策略，两处细节都不能省：
-    - 触发词每命中一个 +1.0；user_intent 描述里的词命中再 +0.3。少了后者，
+    - 触发词每命中一个 +1.0；意图名里的词命中再 +0.3。少了后者，
       「今天销售怎么样」这类不含任何触发词的问法会一个候选都产不出来。
     - 排序按 score/(触发词总数*0.5) 归一化后的置信度，而不是原始分。少了归一化，
       触发词多的宽口径数据集会靠数量压过更精准的窄口径数据集（实测「亚马逊目录
       绩效点击率」会被广告费数据集顶掉）。
+
+    只吃 keywords 与 intent_name 两个信号：catalog 另有 use_cases /
+    scenario_description 两组自然语言长句，实测把它们也纳入打分对 21 条历史用例
+    零增益，反而把「沃尔玛平台广告活动明细」的首选从活动数据集带偏到即时综合数据集。
     """
     normalized = _normalize(query)
-    triggers = intent.get("trigger_keywords") or []
+    triggers = intent.get("keywords") or []
     matched = [
         str(term) for term in triggers if _normalize(term) and _normalize(term) in normalized
     ]
     score = float(len(matched))
-    for word in str(intent.get("user_intent", "")).replace("、", " ").split():
+    for word in str(intent.get("intent_name", "")).replace("、", " ").split():
         if len(word) >= 2 and _normalize(word) in normalized:
             score += 0.3
     confidence = round(min(score / (max(len(triggers), 1) * 0.5), 1.0), 2)
@@ -99,22 +110,23 @@ def _dataset_rows(data_dir: Path) -> list[dict]:
     return core.load_csv_rows(data_dir / "datasets.csv")
 
 
-def _resolve_profile_target(profile: dict, profiles: dict) -> dict:
-    """解析画像的实际执行数据集：embedded_intent 要落到承接它的父数据集。"""
-    if profile.get("routing_status") != "embedded_intent":
-        return profile
-    target_name = profile.get("execution_dataset") or ""
-    for item in profiles.get("datasets") or []:
-        if item.get("standard_name") == target_name:
-            return item
-    return profile
+def _resolve_execution_row(intent: dict, own_row: dict, by_table_id: dict) -> dict:
+    """解析意图的实际执行数据集：embedded_intent 要落到承接它的父数据集。
+
+    按 execution_dataset_id（table_id）解析而不是按中文名：中文名这条链没有 ID
+    保护，数据集一改名就静默断裂，正是旧画像腐烂的根因。父表查不到时退回自身表，
+    宁可少一层跳转也不能产出一个解析不出 table_id 的候选。
+    """
+    if intent.get("routing_status") != "embedded_intent":
+        return own_row
+    return by_table_id.get(str(intent.get("execution_dataset_id") or ""), own_row)
 
 
 def _default_field_labels(data_dir: Path, dataset_alias: str, field_type: str, limit: int = 8) -> list:
     """实时从 CSV 取该数据集的代表性字段中文名。
 
-    为什么不再写进画像：默认维度指标完全可由元数据派生，
-    写进人工文件只会与后端漂移——实测 15 份画像已有 5 份对不上。
+    为什么不从静态文件读：默认维度指标完全可由元数据派生，
+    写进静态文件只会与后端漂移——旧画像时期实测 15 份已有 5 份对不上。
     """
     if not dataset_alias:
         return []
@@ -128,54 +140,44 @@ def _default_field_labels(data_dir: Path, dataset_alias: str, field_type: str, l
     return list(dict.fromkeys(labels))[:limit]
 
 
-def _dataset_candidates(query: str, data_dir: Path, profiles: dict) -> list[dict]:
+def _dataset_candidates(query: str, data_dir: Path, catalog: dict) -> list[dict]:
     """本地确定数据集候选：先意图路由，未命中再退关键词匹配数据集描述。"""
     rows = _dataset_rows(data_dir)
     by_alias = {str(row.get("dataset_alias", "")): row for row in rows}
-    # profile_by_name：intent.primary_dataset -> 画像条目，两者同属本文件人工维护，
-    # 不受后端改名影响，因此仍按 standard_name 索引即可
-    profile_by_name = {
-        str(item.get("standard_name", "")): item for item in profiles.get("datasets") or []
-    }
-    # 按 alias 索引：按中文名索引会在数据集改名时静默腐烂，
-    # 实测现有 15 份画像里有 5 份的 standard_name 已对不上后端
-    profile_by_alias = {
-        str(item.get("dataset_alias", "")): item
-        for item in profiles.get("datasets") or []
-        if item.get("dataset_alias")
-    }
+    by_table_id = {str(row.get("table_id", "")): row for row in rows}
 
     scored: list[dict] = []
-    for intent in profiles.get("intents") or []:
+    for intent in catalog.get("intents") or []:
         score, matched, confidence = _score_intent(query, intent)
         if score <= 0:
             continue
-        profile = profile_by_name.get(str(intent.get("primary_dataset", "")), {})
-        target = _resolve_profile_target(profile, profiles)
+        # 中文名与 table_id 一律取自 datasets.csv：catalog 自带 table_id/dataset_name，
+        # 但 CSV 才是本次授权范围的权威快照，用 CSV 回查能在 catalog 落后于元数据时
+        # 直接暴露成候选缺 table_id，而不是把一个查不到的表交给 Agent
+        own_row = by_alias.get(str(intent.get("dataset_alias") or ""), {})
+        target = _resolve_execution_row(intent, own_row, by_table_id)
         alias = str(target.get("dataset_alias") or "")
-        row = by_alias.get(alias, {})
-        profile_entry = profile_by_alias.get(alias, {})
-        certified = bool(profile_entry.get("certified"))
+        constraints = intent.get("hard_constraints") or []
         scored.append(
             {
                 "source": "intent_route",
-                "intent_id": intent.get("intent_id"),
+                "intent_id": intent.get("intent_code"),
                 "matched_terms": matched,
                 "score": score,
                 "confidence": confidence,
-                "name_zh": intent.get("primary_dataset"),
-                "execution_dataset": target.get("standard_name"),
+                "name_zh": own_row.get("description") or intent.get("intent_name"),
+                "execution_dataset": target.get("description"),
                 "dataset_alias": alias or None,
-                "table_id": row.get("table_id"),
-                "routing_status": profile.get("routing_status", "direct_intent"),
-                # 已审核的业务约束才作硬约束；未审核的降级为提示，
-                # 避免没人复核过的旧口径被当成权威规则执行
-                "hard_constraints": profile_entry.get("hard_constraints") or [] if certified else [],
-                "uncertified_hints_zh": [] if certified else (profile_entry.get("hard_constraints") or []),
-                "avoid_when": profile_entry.get("avoid_when") or [],
-                "clarify_when": (intent.get("clarify_when") or [])
-                + (profile_entry.get("clarify_when") or []),
-                # 默认维度指标改为实时取，不再从画像读
+                "table_id": target.get("table_id"),
+                "routing_status": intent.get("routing_status") or "direct_intent",
+                # catalog 的业务约束同样未经人工复核（39/41 条 notes 明写
+                # "require manual review"），因此维持与画像时期一致的两桶口径：
+                # 一律走 uncertified_hints_zh 提示，不冒充 hard_constraints 权威规则
+                "hard_constraints": [],
+                "uncertified_hints_zh": constraints,
+                "avoid_when": intent.get("avoid_when") or [],
+                "clarify_when": intent.get("clarify_when") or [],
+                # 默认维度指标实时取，不从静态文件读
                 "default_dimensions": _default_field_labels(data_dir, alias, "dimension"),
                 "default_metrics": _default_field_labels(data_dir, alias, "metric"),
             }
@@ -282,12 +284,13 @@ def _filter_components(data_dir: Path, dataset_alias: str | None) -> list[dict]:
 
 
 def audit_profiles(*, data_dir: Path | None = None) -> dict:
-    """巡检人工语义覆盖率：哪些数据集没有画像、哪些画像已对不上元数据。
+    """巡检意图目录覆盖率：哪些数据集没有意图、哪些意图已对不上元数据。
 
-    为什么需要：画像靠人工维护，没有巡检就只能等出错才发现。
-    实测本仓库 60 个数据集只有 15 份画像、其中 2 份的 alias 已查不到对应数据集。
+    为什么需要：catalog 由服务端生成，与本地 datasets.csv 是两次独立下发，
+    两者之间仍可能漂移（意图指向的表已下线、新表还没配意图），
+    没有巡检就只能等降级路径产不出候选时才发现。
 
-    这是只读巡检，不做任何查询、不修改任何画像或元数据文件。
+    这是只读巡检，不做任何查询、不修改任何目录或元数据文件。
     """
     resolved = Path(data_dir) if data_dir else core.discover_data_dir()
     if resolved is None or not resolved.is_dir():
@@ -302,7 +305,7 @@ def audit_profiles(*, data_dir: Path | None = None) -> dict:
     state = _data_state(resolved)
     if state in ("placeholder", "empty"):
         # 占位态下 datasets.csv 是空模板，统计出来的覆盖率数字全是假的（分子分母同时
-        # 归零），必须先挡住并给出恢复指引，否则巡检结果会被误读成"画像已全部失效"
+        # 归零），必须先挡住并给出恢复指引，否则巡检结果会被误读成"意图已全部失效"
         return {
             "status": "blocked",
             "data_state": state,
@@ -311,32 +314,31 @@ def audit_profiles(*, data_dir: Path | None = None) -> dict:
         }
     datasets = core.load_csv_rows(resolved / "datasets.csv")
     aliases = {str(row.get("dataset_alias", "")) for row in datasets if row.get("dataset_alias")}
-    profile_payload = _load_profiles(resolved)
-    profiles = profile_payload.get("datasets") or []
-    profiled = {str(item.get("dataset_alias", "")) for item in profiles if item.get("dataset_alias")}
-    # 追加范围：intents[].primary_dataset 按中文名指向数据集，这条链接没有 alias
-    # 保护，数据集改名后会静默断裂——巡检必须把这类断链也报出来，不能只查数据集覆盖率
-    standard_names = {
-        str(item.get("standard_name", "")) for item in profiles if item.get("standard_name")
-    }
+    table_ids = {str(row.get("table_id", "")) for row in datasets if row.get("table_id")}
+    intents = _load_catalog(resolved).get("intents") or []
+    profiled = {str(item.get("dataset_alias", "")) for item in intents if item.get("dataset_alias")}
+    # 追加范围：embedded_intent 按 execution_dataset_id 回指父表，父表下线后
+    # 这条跳转会静默失效——巡检必须把这类断链也报出来，不能只查数据集覆盖率
     broken_intent_links = [
-        {"intent_id": intent.get("intent_id"), "primary_dataset": intent.get("primary_dataset")}
-        for intent in profile_payload.get("intents") or []
-        if str(intent.get("primary_dataset", "")) not in standard_names
+        {
+            "intent_id": intent.get("intent_code"),
+            "execution_dataset_id": intent.get("execution_dataset_id"),
+        }
+        for intent in intents
+        if intent.get("routing_status") == "embedded_intent"
+        and str(intent.get("execution_dataset_id") or "") not in table_ids
     ]
     return {
         "status": "ok",
         "total_datasets": len(aliases),
         "profiled": len(profiled & aliases),
-        "certified": sum(1 for item in profiles if item.get("certified")),
         "missing_profiles": sorted(aliases - profiled),
         "stale_profiles": sorted(profiled - aliases),
         "broken_intent_links": broken_intent_links,
         "next_action_zh": (
-            "missing_profiles 中的数据集尚无人工语义，按需补充并置 certified=true；"
-            "stale_profiles 已对不上元数据，应删除或改绑 alias；"
-            "broken_intent_links 中的意图 primary_dataset 对不上任何画像 standard_name，"
-            "需要修复画像或同步改名。"
+            "missing_profiles 中的数据集尚无意图入口，降级路径路由不到，需要服务端补配；"
+            "stale_profiles 已对不上元数据，说明 catalog 落后于 datasets.csv，先重跑 upgrade；"
+            "broken_intent_links 中的意图 execution_dataset_id 找不到对应表，需要服务端修复。"
         ),
     }
 
@@ -377,7 +379,7 @@ def build_fallback(
             "recovery_command": "opscli skills upgrade ops-dataset-query",
         }
 
-    profiles = _load_profiles(resolved_dir)
+    catalog = _load_catalog(resolved_dir)
     if dataset_alias:
         # 用户已点名数据集：直接按 CSV 权威记录确认，不再走意图路由
         row = next(
@@ -406,7 +408,7 @@ def build_fallback(
             else []
         )
     else:
-        datasets = _dataset_candidates(query, resolved_dir, profiles)
+        datasets = _dataset_candidates(query, resolved_dir, catalog)
     chosen_alias = dataset_alias or (
         datasets[0].get("dataset_alias") if len(datasets) == 1 else None
     )
@@ -527,10 +529,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dataset", default=None, help="已确认的 dataset_alias")
     parser.add_argument("--data-dir", default=None, help="指定本地数据目录")
     parser.add_argument("--emit-plan", default=None, help="把结果写成 plan 文件路径")
-    parser.add_argument("--audit", action="store_true", help="巡检画像覆盖率，不做查询")
+    parser.add_argument("--audit", action="store_true", help="巡检意图目录覆盖率，不做查询")
     args = parser.parse_args(argv)
 
-    # 巡检模式：只读检查画像覆盖率与断链意图，不构造降级合同、不做任何查询
+    # 巡检模式：只读检查意图目录覆盖率与断链意图，不构造降级合同、不做任何查询
     if args.audit:
         print(
             json.dumps(

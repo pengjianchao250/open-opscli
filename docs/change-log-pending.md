@@ -1,5 +1,83 @@
 # 待归档变更记录
 
+## 2026-08-14 ops-dataset-query - 降级路由数据源由人工画像切换为服务端意图目录
+
+**变更原因**：`local_fallback.py` 的降级路由一直读人工维护的 `data/dataset_profiles.json`，
+该文件从不随 `opscli skills upgrade` 刷新，已严重腐烂：15 份画像里只有 2 份的
+`dataset_alias` 还能在当前 `datasets.csv` 里查到。后果被测试口径掩盖了——
+路由用例只断中文名，而中文名腐烂得比 alias 慢（12/15 仍有效），于是 21 条历史用例
+名字命中 16 条照常绿灯，实际能解析出 `table_id` 的候选只有 4 条，
+Agent 在真实降级场景里拿到的多数候选根本执行不了。
+
+同目录下的 `data/dataset_catalog.json` 由服务端生成、已在 `UPGRADE_MANAGED_FILES`
+中随 upgrade 原子刷新，且字段结构与画像一一对应（`intent_code`/`keywords`/
+`hard_constraints`/`avoid_when`/`clarify_when`/`routing_status` 等），
+内容上是画像的严格超集（画像 16 个 intent_id 全部命中 catalog 的 41 个 intent_code），
+但此前**运行时零消费**——唯一读它的 `updater_mcp.py` 只取文件大小做完整性检查。
+
+**切换前的对照验证**（21 条 `routing_eval_cases.json` 用例，同一套打分算法只换数据源）：
+
+| 指标 | 画像 | 意图目录 |
+| --- | --- | --- |
+| top-1 路由命中 | 16/21 | 16/21（打平，无回退） |
+| 候选可执行（能解析出 table_id） | **4/21** | **21/21** |
+| alias 有效率 | 2/15 | 36/36 |
+| 覆盖当前 44 个数据集 | 2 个（5%） | 36 个（82%） |
+| 意图条数 | 16 | 41 |
+
+另测了「catalog + use_cases/scenario_description/priority 全信号」变体：对 21 条用例
+零增益，还把 case_013 的首选从活动数据集带偏到即时综合数据集，故**只换数据、不改算法**。
+
+**改动点**：
+- `scripts/local_fallback.py`：`_load_profiles` → `_load_catalog` 改读
+  `dataset_catalog.json`；`_score_intent` 的触发词源由 `trigger_keywords` 换成
+  `keywords`、语义文本由 `user_intent` 换成 `intent_name`；
+  `_resolve_profile_target` → `_resolve_execution_row`，embedded_intent 改按
+  `execution_dataset_id`（table_id）解析而非按中文名，消除改名断链；
+  `_dataset_candidates` 去掉 profile_by_name/profile_by_alias 双索引，
+  中文名与 table_id 一律从 `datasets.csv` 回查；
+  `audit_profiles` 改巡检 catalog 与 datasets.csv 的漂移，去掉 catalog 不存在的
+  `certified` 计数，断链判定改为 `execution_dataset_id` 找不到对应表。
+- **保留** `hard_constraints` / `uncertified_hints_zh` 两桶口径：catalog 的业务约束
+  同样未经人工复核（39/41 条 `notes` 明写 require manual review），
+  一律走提示键，不冒充权威规则。
+- 删除 `data/dataset_profiles.json`。
+- `SKILL.md`：降级放宽清单里的 `data/dataset_profiles.json` 改为
+  `data/dataset_catalog.json`；`uncertified_hints_zh` 说明去掉已不存在的
+  `certified=false` 表述。
+- 测试：新增夹具 `tests/skills/data/dataset_catalog_fixture.json` 与
+  `datasets_fixture.csv`（模板 data/ 是占位符，仓库内不存在可断言的真数据）；
+  新增 `test_intent_routing_candidates_are_executable`（21 条用例逐条断言候选带
+  `dataset_alias` + `table_id`，堵住这次暴露的绿灯盲区）；
+  `routing_eval_cases.json` 修正 3 条已改名的期望值（账单销售数据集→发货数据集、
+  广告类型费数据集→广告类型花费数据集、物控版库存周转→物控库存周转）
+  与 case_007（SP关键词数据集已上线，不再退而求其次指向 SP广告数据集）；
+  case_007 从 `xfail` 转正；画像结构三条用例合并为
+  `test_catalog_intents_resolve_to_a_dataset`；
+  `test_embedded_intent_maps_to_execution_dataset` 查询词由「即时销售今天怎么样」
+  改为「大促期间销售异常吗」（前者的触发词现被两条意图共享，用例会变成考排序）；
+  `test_install_preserves_metadata.py` 移除画像相关断言。
+
+**验证结果**：
+- `pytest tests/skills/test_local_fallback.py` → 54 passed, 4 xfailed
+  （路由命中由 16/21 升至 17/21，可执行性 21/21）
+- `pytest tests/skills/test_local_fallback.py test_install_preserves_metadata.py
+  test_dataset_query_planner.py test_routing_eval.py` → 132 passed, 7 xfailed
+- `tests/skills/` 其余 8 个失败（test_cli 1 / test_dashboard_skills 2 /
+  test_manager 3 / test_ops_feedback_template 1 /
+  test_ops_methods_card_xlsx_preview 1）与 `git stash` 后的基线逐一相同，零新增回归；
+  `tests/skills/` 整目录 capture 崩溃同为既有基线问题。
+
+**影响范围**：仅规划器降级路径（L2）。正常取数主链路
+（`query_flow.py` → `query_plan.py`）不读这两个文件，完全不受影响。
+已安装用户在下次 `opscli skills install/upgrade` 后生效；
+安装目录里残留的 `dataset_profiles.json` 不再被读取，为惰性文件。
+
+**回滚方式**：`git revert` 本次提交即可恢复画像文件与旧读取逻辑；
+新增的两个夹具文件为纯新增，删除即可。
+
+---
+
 ## 2026-07-30 ops-dataset-query - 多表库存报表异常回归用例
 
 **变更原因**：真实提示词暴露三类静默错数风险：“超6月”被解析成自然月、

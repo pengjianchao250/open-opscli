@@ -25,7 +25,7 @@ _PLACEHOLDER_DATASETS_CSV = "table_id,dataset_alias,dataset_name\n"
 
 
 def _make_template(root: Path, *, data_state: str = "placeholder") -> Path:
-    """构造一个内置模板：data/ 为占位符，scripts/ 与画像文件为模板权威内容。"""
+    """构造一个内置模板：data/ 为占位符，scripts/ 与 SKILL.md 为模板权威内容。"""
     template = root / "templates" / "ops-dataset-query"
     (template / "data").mkdir(parents=True)
     (template / "scripts").mkdir(parents=True)
@@ -39,7 +39,6 @@ def _make_template(root: Path, *, data_state: str = "placeholder") -> Path:
         encoding="utf-8",
     )
     # 模板权威内容：新版本必须覆盖到安装目录
-    (data / "dataset_profiles.json").write_text('{"profiles": "新版画像"}', encoding="utf-8")
     (template / "scripts" / "query_plan.py").write_text("# 新版规划器\n", encoding="utf-8")
     (template / "SKILL.md").write_text("# ops-dataset-query\n", encoding="utf-8")
     return template
@@ -58,7 +57,6 @@ def _make_upgraded_install(target: Path) -> None:
     (data / "VERSION.json").write_text(
         json.dumps({"name": "ops-dataset-query", "version": "v1.1.23"}), encoding="utf-8"
     )
-    (data / "dataset_profiles.json").write_text('{"profiles": "旧版画像"}', encoding="utf-8")
     (target / "scripts" / "query_plan.py").write_text("# 旧版规划器\n", encoding="utf-8")
 
 
@@ -103,7 +101,7 @@ def test_install_preserves_real_metadata(manager: SkillsManager, tmp_path: Path)
 
 
 def test_install_still_updates_template_owned_files(manager: SkillsManager, tmp_path: Path):
-    """保留元数据不能顺带把模板权威内容也冻住：脚本与画像必须更新到新版。"""
+    """保留元数据不能顺带把模板权威内容也冻住：脚本必须更新到新版。"""
     target_root = tmp_path / "skills"
     target = target_root / "ops-dataset-query"
     _make_upgraded_install(target)
@@ -111,7 +109,6 @@ def test_install_still_updates_template_owned_files(manager: SkillsManager, tmp_
     manager.install("ops-dataset-query", skills_dir=str(target_root), force=True)
 
     assert "新版规划器" in (target / "scripts" / "query_plan.py").read_text(encoding="utf-8")
-    assert "新版画像" in (target / "data" / "dataset_profiles.json").read_text(encoding="utf-8")
 
 
 def test_placeholder_install_is_not_preserved(manager: SkillsManager, tmp_path: Path):
