@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 import stat
 import sys
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import anyio
 from fastmcp import FastMCP
+from fastmcp.tools import FunctionTool, Tool
 
 from opscli.mcp.instrumentation import quota_wrap, telemetry_wrap
 from opscli.mcp.tool_catalog import ToolCatalog, extract_description
@@ -43,17 +45,50 @@ class InstrumentedMcpProxy:
                 fn.__module__.rsplit(".", 1)[-1],
             )
             description = extract_description(fn, kwargs)
-            if self._catalog is None:
-                from opscli.mcp.tool_catalog import record_tool
-
-                record_tool(name=name, module=module, description=description)
-            else:
-                self._catalog.record(name=name, module=module, description=description)
+            self._record_tool(name=name, module=module, description=description)
             # 代理 Tool 的业务额度由目标 MCP 统一处理，避免跨服务重复扣减。
             instrumented = fn if getattr(fn, "__opscli_skip_quota__", False) else quota_wrap(fn)
             return real_decorator(telemetry_wrap(instrumented))
 
         return wrap
+
+    def add_tool(self, tool: FunctionTool) -> Tool:
+        """注册带冻结 Schema 的动态 Tool，并保持现有治理切面。
+
+        参数:
+            tool: 已完成名称、描述和输入 Schema 审批的动态函数工具。
+
+        返回:
+            FastMCP 实际注册后的工具对象。
+
+        异常:
+            TypeError: 传入对象不是 ``FunctionTool`` 时抛出。
+        """
+        if not isinstance(tool, FunctionTool):
+            raise TypeError("InstrumentedMcpProxy.add_tool 仅接受 FunctionTool")
+        fn = tool.fn
+        module = getattr(
+            fn,
+            "__opscli_catalog_module__",
+            fn.__module__.rsplit(".", 1)[-1],
+        )
+        self._record_tool(
+            name=tool.name,
+            module=module,
+            description=tool.description,
+        )
+        instrumented = fn if getattr(fn, "__opscli_skip_quota__", False) else quota_wrap(fn)
+        wrapped_tool = tool.model_copy(update={"fn": telemetry_wrap(instrumented)})
+        return self._real.add_tool(wrapped_tool)
+
+    def _record_tool(self, *, name: str, module: str, description: str | None) -> None:
+        """把静态和动态 Tool 写入同一份服务清单。"""
+        if self._catalog is None:
+            from opscli.mcp.tool_catalog import record_tool
+
+            record_tool(name=name, module=module, description=description)
+        else:
+            self._catalog.record(name=name, module=module, description=description)
 
     def __getattr__(self, name: str):
         """其余属性直接转发到真实 FastMCP 实例。"""

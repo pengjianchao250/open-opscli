@@ -16,6 +16,7 @@ from opscli.mcp.app_factory import (
 )
 from opscli.mcp.instrumentation import quota_wrap, telemetry_wrap
 from opscli.mcp.tool_catalog import get_catalog
+from opscli.mcp.upstream import UpstreamMcpRuntime
 
 _logger = logging.getLogger("opscli.mcp")
 
@@ -96,12 +97,14 @@ def _build_server():
     """构造通用 MCP，并让 App 闭包独占来源模块与沉淀 Runtime。"""
     google_trends_runtime = GoogleTrendsMcpRuntime()
     keepa_runtime = KeepaMcpRuntime()
+    upstream_runtime = UpstreamMcpRuntime()
     storage_runtime = build_collection_storage_runtime("mcp")
     registrars = (
         *_REGISTRARS_BEFORE_KEEPA,
         google_trends_runtime.register,
         keepa_runtime.register,
         *_REGISTRARS_AFTER_KEEPA,
+        upstream_runtime.register,
     )
 
     @asynccontextmanager
@@ -109,7 +112,8 @@ def _build_server():
         async with collection_storage_lifespan(storage_runtime):
             async with google_trends_runtime.lifespan(storage_runtime):
                 async with keepa_runtime.lifespan(storage_runtime):
-                    yield {}
+                    async with upstream_runtime.lifespan():
+                        yield {}
 
     server = create_mcp_app(
         name="opscli",

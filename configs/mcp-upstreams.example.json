@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "id": "vendor",
+      "enabled": true,
+      "url_env": "OPSCLI_UPSTREAM_VENDOR_URL",
+      "allowed_hosts": [
+        "mcp.vendor.example"
+      ],
+      "allowed_ports": [
+        443
+      ],
+      "allow_private_networks": false,
+      "auth": {
+        "type": "bearer",
+        "secret_file_env": "OPSCLI_UPSTREAM_VENDOR_TOKEN_FILE"
+      },
+      "limits": {
+        "max_concurrent": 8,
+        "max_concurrent_per_user": 2,
+        "queue_timeout_seconds": 2,
+        "failure_threshold": 5,
+        "circuit_open_seconds": 60,
+        "max_request_bytes": 262144,
+        "max_response_bytes": 2097152
+      },
+      "tools": [
+        {
+          "remote_name": "search",
+          "exposed_name": "ext_vendor_search",
+          "description": "查询 Vendor 已审批数据。",
+          "timeout_seconds": 30,
+          "idempotent": true,
+          "read_only": true,
+          "destructive": false,
+          "max_attempts": 2,
+          "retry_delay_seconds": 0.1,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "keyword": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "keyword"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ]
+}

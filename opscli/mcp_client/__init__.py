@@ -12,15 +12,20 @@ from opscli.mcp_client.config_client import (
     RemoteConfigHttpError,
     RemoteMcpServerConfig,
 )
-from opscli.mcp_client.remote_client import RemoteMcpClient, RemoteMcpToolError
+from opscli.mcp_client.remote_client import (
+    RemoteMcpClient,
+    RemoteMcpSessionTimeoutError,
+    RemoteMcpToolError,
+)
 
 __all__ = [
-    "McpConfigError",
-    "RemoteConfigHttpError",
-    "RemoteConfigBusinessError",
     "BadRemoteConfigError",
     "McpConfigClient",
-    "RemoteMcpServerConfig",
+    "McpConfigError",
+    "RemoteConfigBusinessError",
+    "RemoteConfigHttpError",
     "RemoteMcpClient",
+    "RemoteMcpServerConfig",
+    "RemoteMcpSessionTimeoutError",
     "RemoteMcpToolError",
 ]
