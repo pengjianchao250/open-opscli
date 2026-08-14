@@ -57,6 +57,27 @@ def utf8_subprocess_kwargs() -> dict:
     }
 
 
+def read_text_auto(path: Path) -> str:
+    """按 BOM 自动识别编码读取文本文件（UTF-8 / UTF-8-BOM / UTF-16 LE/BE）。
+
+    为什么需要：Windows PowerShell 的 ``>`` 重定向与 ``Tee-Object`` 默认把文件
+    写成 UTF-16 LE with BOM，而执行器此前固定按 UTF-8 读取 plan/payload 文件，
+    直接抛 ``UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff``。
+    线上取数反馈实测形态：``query_plan.py ... > plan.json`` 落盘后
+    ``run_query.py --plan-file plan.json`` 读取即崩。
+
+    只做 BOM 探测、不做启发式猜测：无 BOM 时一律按 UTF-8（含 utf-8-sig 兼容），
+    保证既有 UTF-8 文件的行为完全不变。
+    """
+    data = path.read_bytes()
+    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+        # "utf-16" 编解码器按 BOM 自动定字节序并把 BOM 本身消费掉，
+        # 不能用 "utf-16-le/be"——那样 BOM 会被解码成正文开头的
+        return data.decode("utf-16")
+    # utf-8-sig 同时吃掉 UTF-8 BOM；无 BOM 的普通 UTF-8 行为不变
+    return data.decode("utf-8-sig")
+
+
 # ---------------------------------------------------------------------------
 # CSV 加载
 # ---------------------------------------------------------------------------

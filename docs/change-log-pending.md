@@ -6710,3 +6710,25 @@ opscli `git checkout -- opscli/query/services/manager.py`；
 正常查询 → `success:true` + 退出码 0，行为不变。
 **回滚方式**：`git checkout -- opscli/query/commands/cli.py`
 ---
+
+## 2026-08-15 skills - C99 拆分产出：执行器读文件支持 Windows BOM 编码
+
+**变更原因**：C99 未归类 504 条拆分后，最大子类是编码问题（D1 GBK 70 条 + D2 提交乱码 45 条）。
+逐条核对版本发现 subprocess 解码的 GBK 修复（utf8_subprocess_kwargs）已在 0.0.154 与
+用户安装的 skill 中生效，0.0.154 上仍报的多为 .codex/skills 等独立 skill 副本未升级；
+但另一个真实存在的根因是：PowerShell 的 `>` 重定向与 `Tee-Object` 默认把文件写成
+UTF-16 LE with BOM，而执行器固定按 UTF-8 读 plan/payload/query 文件，直接
+UnicodeDecodeError（0.0.147 上 3 条独立反馈，形态一致）。
+**改动点**（skill 模板）：
+- `core.py` 新增 `read_text_auto()`：仅 BOM 探测（UTF-16 LE/BE 用 "utf-16" 编解码器
+  自动定字节序并消费 BOM，不能用 utf-16-le/be——BOM 会解码成正文开头的 U+FEFF；
+  无 BOM 一律 utf-8-sig），不做启发式猜测，既有 UTF-8 文件行为不变。
+- `run_query.py`（--plan-file / --json-file）、`query_plan.py`（--query-file）、
+  `query_flow.py`（--query-file）改用 `read_text_auto`。
+- 新增 `tests/skills/test_bom_tolerant_reads.py`（6 用例，含坏字节仍须报错的反向断言）。
+**验证结果**：`pytest tests/shared tests/query tests/auth` 396 passed；
+端到端复现：把规划器输出写成 UTF-16 LE BOM 再喂给 run_query --plan-file，
+修复前 UnicodeDecodeError，修复后正常解析并进入业务校验。
+**影响范围**：仅扩大文件读取容错；无 BOM 的 UTF-8 文件字节级行为不变，坏字节仍报错。
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/scripts/{core,run_query,query_plan,query_flow}.py && rm tests/skills/test_bom_tolerant_reads.py`
+---

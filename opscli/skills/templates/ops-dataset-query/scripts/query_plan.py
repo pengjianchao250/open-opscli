@@ -3491,7 +3491,7 @@ def _resolve_query_text(args: argparse.Namespace) -> str:
     if args.query_file:
         if args.query_file == "-":
             return sys.stdin.read().strip()
-        return Path(args.query_file).read_text(encoding="utf-8").strip()
+        return core.read_text_auto(Path(args.query_file)).strip()
     return args.query
 
 

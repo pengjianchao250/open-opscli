@@ -550,7 +550,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
         if args.plan_file:
-            plan_raw = Path(args.plan_file).read_text(encoding="utf-8")
+            plan_raw = core.read_text_auto(Path(args.plan_file))
         else:
             plan_raw = args.plan_json
         plan = _parse_payload(plan_raw) if plan_raw.strip() else None
@@ -565,7 +565,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
         if args.json_file:
-            raw = sys.stdin.read() if args.json_file == "-" else Path(args.json_file).read_text(encoding="utf-8")
+            raw = sys.stdin.read() if args.json_file == "-" else core.read_text_auto(Path(args.json_file))
         else:
             raw = args.json
         if raw.strip():

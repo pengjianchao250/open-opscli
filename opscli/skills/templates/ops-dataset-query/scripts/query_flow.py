@@ -184,7 +184,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
         query = (
-            Path(args.query_file).read_text(encoding="utf-8")
+            core.read_text_auto(Path(args.query_file))
             if args.query_file
             else args.query
         ).strip()
