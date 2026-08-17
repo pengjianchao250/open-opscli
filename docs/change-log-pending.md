@@ -6649,6 +6649,15 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：仅影响内部试行 Skill 的结果字段和解析步骤，不改变发行权限。
 **回滚方式**：回退本条 Skill 文档改动即可恢复原字段规范。
 ---
+
+## 2026-08-17 MCP - 修复远端 MCP Transport 提前关闭
+
+**变更原因**：`RemoteMcpClient` 在初始化超时作用域内进入 MCP transport 和 session，却在该作用域外清理，破坏 AnyIO cancel scope 的 LIFO 生命周期；OPS 通用 MCP 转发 Collector 时因此稳定出现 `Transport closed`。
+**改动点**：让清理期限的父级 `CancelScope` 包住完整 MCP 上下文，只对 `session.initialize()` 设置独立超时；清理前保存业务异常，避免有界清理覆盖原始错误；新增持有真实 AnyIO TaskGroup 的 transport 回归测试。
+**验证结果**：修改前新增回归稳定触发 `Attempted to exit a cancel scope that isn't the current tasks's current cancel scope`；修复后真实 FastMCP HTTP 连续 5 次调用全部成功，服务端无 `ClosedResourceError` 或 cancel-scope 错误；RemoteMcpClient、SellerSprite Proxy、上游网关及共享适配层相关测试共 84 项通过；其余 MCP 测试 380 项通过，3 项因既有可选 Tool 未注册失败，完整 MCP 收集另被既有 `_shopify_manager` 缺失阻断；`compileall` 与 `git diff --check` 通过，本地未安装 Ruff。
+**影响范围**：所有通过 `RemoteMcpClient` 发起的 Streamable HTTP 调用，包括 OPS 通用 MCP 到 Collector MCP 的 SellerSprite 代理和第三方上游网关；不修改服务地址、认证或业务参数。
+**回滚方式**：回退 `opscli/mcp_client/remote_client.py`、对应测试和本条变更记录；回滚后远端 MCP 调用会再次发生 cancel scope 生命周期错误。
+---
 ## 2026-08-12 Skill 模板 - 支持批量串行 ASIN 和单次上传授权
 
 **变更原因**：用户明确要求无需每个 ASIN 单独确认，并可能一次输入多个 ASIN，需要在保持 Amazon 低频风控边界的前提下支持批量试行。

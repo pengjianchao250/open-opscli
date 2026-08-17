@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import json
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 from typing import Any
 
 import anyio
@@ -62,29 +62,44 @@ class RemoteMcpClient:
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """初始化 MCP 会话后调用工具，并解析首个文本结果。"""
-        stack = AsyncExitStack()
-        try:
-            # 建连、会话上下文和 initialize 共用独立短截止，不能由远端心跳延长。
-            try:
-                with anyio.fail_after(self.initialize_timeout_seconds):
-                    http_client = await stack.enter_async_context(self._http_client())
-                    http_client.follow_redirects = self.follow_redirects
-                    read_stream, write_stream, _ = await stack.enter_async_context(
-                        streamable_http_client(self.url, http_client=http_client)
-                    )
-                    session = await stack.enter_async_context(
-                        ClientSession(read_stream, write_stream)
-                    )
-                    await session.initialize()
-            except TimeoutError as exc:
-                raise RemoteMcpSessionTimeoutError(
-                    "remote MCP session initialization timed out"
-                ) from exc
-            result = await session.call_tool(tool_name, arguments)
-        finally:
-            # Session DELETE 或流关闭卡住时最多等待一秒；shield 确保外层取消仍会尝试清理。
-            with anyio.move_on_after(self.cleanup_timeout_seconds, shield=True):
-                await stack.aclose()
+        result: Any = None
+        operation_error: BaseException | None = None
+        cleanup_scope = anyio.CancelScope()
+        with cleanup_scope:
+            async with self._http_client() as http_client:
+                http_client.follow_redirects = self.follow_redirects
+                async with streamable_http_client(
+                    self.url,
+                    http_client=http_client,
+                ) as (read_stream, write_stream, _):
+                    async with ClientSession(read_stream, write_stream) as session:
+                        try:
+                            # 只限制 initialize 本身，不能让 transport 的 TaskGroup
+                            # 跨越 fail_after 边界，否则退出时会破坏 AnyIO cancel scope 栈。
+                            try:
+                                with anyio.fail_after(self.initialize_timeout_seconds):
+                                    await session.initialize()
+                            except TimeoutError as exc:
+                                raise RemoteMcpSessionTimeoutError(
+                                    "remote MCP session initialization timed out"
+                                ) from exc
+                            result = await session.call_tool(tool_name, arguments)
+                        except BaseException as exc:  # noqa: BLE001
+                            # 先保存业务异常，让后续有界清理不会覆盖原始失败语义。
+                            operation_error = exc
+                        finally:
+                            # 此 scope 在所有 MCP 上下文之前进入、之后退出，既能约束
+                            # 清理时间，又保持 AnyIO cancel scope 的严格 LIFO 顺序。
+                            cleanup_scope.shield = True
+                            cleanup_scope.deadline = (
+                                anyio.current_time() + self.cleanup_timeout_seconds
+                            )
+
+        if operation_error is not None:
+            raise operation_error
+
+        if result is None:
+            raise RuntimeError("remote MCP call completed without a result")
 
         if getattr(result, "isError", False):
             # 错误分支必须优先保留远端工具失败语义。
