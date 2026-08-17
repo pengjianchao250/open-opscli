@@ -119,6 +119,11 @@ def _intent_constraints(intent: dict[str, Any]) -> dict[str, Any]:
         "recommended_dimensions": _value_or_default(intent.get("recommended_dimensions"), []),
         "recommended_metrics": _value_or_default(intent.get("recommended_metrics"), []),
         "select_columns": _value_or_default(intent.get("select_columns"), []),
+        # 业务约束护栏：catalog 里未经人工复核的约束也必须原样透传给 Agent，
+        # 丢在匹配层等于把防错数护栏静默吞掉（local_fallback 路径一直是带的，两侧必须一致）
+        "hard_constraints": _value_or_default(intent.get("hard_constraints"), []),
+        "avoid_when": _value_or_default(intent.get("avoid_when"), []),
+        "clarify_when": _value_or_default(intent.get("clarify_when"), []),
     }
 
     extra_rules = {}

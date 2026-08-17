@@ -1,5 +1,32 @@
 # 待归档变更记录
 
+## 2026-08-17 query - 意图匹配候选透传业务约束护栏
+
+**变更原因**：catalog 里 36/41 条意图带 hard_constraints（如"库存快照字段只能用于明细表"），
+此前 _intent_constraints 未透传这三个键，Agent 经 query intent 拿到的候选会丢失全部防错数护栏
+——同一份数据走 local_fallback.py 却是带的，两条路径不一致。
+
+**改动点**：
+- `opscli/query/services/intent_matcher.py`：`_intent_constraints()` 新增三个键，
+  使用 `_value_or_default()` 以 `[]` 为默认值透传 catalog 的业务约束：
+  - `hard_constraints`：强制约束，如"只能用于明细表"
+  - `avoid_when`：避免场景，如"不要用于此类深挖"
+  - `clarify_when`：需澄清场景，如"用户意图不清时需转专项数据集"
+- `tests/query/test_intent_matcher_guardrails.py`：新增两个测试用例
+  - `test_intent_constraints_carry_guardrails`：验证约束原样出现
+  - `test_intent_constraints_default_guardrails_to_empty_lists`：验证缺失键时默认为空列表
+
+**验证结果**：
+- `pytest tests/query/test_intent_matcher_guardrails.py -v` → 2 passed
+- `pytest tests/query/test_intent_matcher_guardrails.py tests/query/test_manager.py -v` → 47 passed（包括 45 条回归）
+
+**影响范围**：意图匹配层的候选输出。Task B3 后续恢复的 CLI/MCP 输出与 Skill 文档将消费这些新键；
+正常取数主链路无影响。
+
+**回滚方式**：`git revert` 本次提交即可恢复。
+
+---
+
 ## 2026-08-14 ops-dataset-query - 降级路由数据源由人工画像切换为服务端意图目录
 
 **变更原因**：`local_fallback.py` 的降级路由一直读人工维护的 `data/dataset_profiles.json`，
@@ -6731,4 +6758,13 @@ UnicodeDecodeError（0.0.147 上 3 条独立反馈，形态一致）。
 修复前 UnicodeDecodeError，修复后正常解析并进入业务校验。
 **影响范围**：仅扩大文件读取容错；无 BOM 的 UTF-8 文件字节级行为不变，坏字节仍报错。
 **回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/scripts/{core,run_query,query_plan,query_flow}.py && rm tests/skills/test_bom_tolerant_reads.py`
+---
+
+## 2026-08-17 publish.sh - 发布时自动提交版本文件并打 git tag
+
+**变更原因**：原脚本发布到 PyPI 后版本号变更既不提交也不打 tag，无法从 git 历史追溯每个已发布版本对应的代码；用户要求每次发布同时打 tag
+**改动点**：仅改 `publish.sh`：(1) 计算新版本后新增 git 前置检查（git 可用、在仓库内、tag v<新版本> 不存在，冲突则在构建前报错退出）；(2) 确认摘要中展示待创建的 tag 名；(3) 新增 Step 7：上传成功后用 pathspec 只提交 pyproject.toml + opscli/version.py 两个版本文件，再创建附注 tag v<新版本>（消息含 test/prod 目标），并交互询问是否推送 tag 到远端（默认不推）；(4) 步骤编号 /7 改为 /8
+**验证结果**：`bash -n publish.sh` 语法检查通过；grep 确认步骤编号 1/8~8/8 连续、TAG_NAME 引用一致（未实际执行发布流程）
+**影响范围**：仅发布流程；发布成功后会产生一个 release 提交和一个本地 tag，上传失败时 set -e 终止不会打 tag
+**回滚方式**：git checkout 恢复 publish.sh；误打的 tag 用 `git tag -d v<版本>` 删除
 ---
