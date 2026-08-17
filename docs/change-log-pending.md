@@ -1,5 +1,44 @@
 # 待归档变更记录
 
+## 2026-08-17 query - 恢复 catalog/intent CLI 命令与 MCP 工具注册
+
+**变更原因**：Task B1/B2 完成了意图匹配器的编写与护栏测试，catalog/intent 接口已可对外暴露。
+此前为规避接口未完全就绪的风险，暂时屏蔽了两个命令的 `@app.command` 装饰器与 MCP 工具注册。
+现在需要恢复对外暴露，防止代码静默消失，并为后续 Task B7（Skill 文档）提供稳定的命令入口。
+
+**改动点**：
+- `opscli/query/commands/cli.py`：
+  - 第 350-351 行：删除 `# 【临时屏蔽】catalog 命令暂停对外暴露...` 注释行，
+    `# @app.command("catalog")` 取消注释为 `@app.command("catalog")`
+  - 第 378-379 行：删除 `# 【临时屏蔽】intent 命令暂停对外暴露...` 注释行，
+    `# @app.command("intent")` 取消注释为 `@app.command("intent")`
+- `opscli/mcp/tools/query.py`：
+  - 第 24 行：`内部暂时屏蔽（不对外注册）：query_catalog、query_intent_match。`
+    改为 `catalog / intent 路线：query_catalog — 读取数据集业务语义索引；query_intent_match — 自然语言匹配 catalog intents。`
+  - 第 831-833 行：删除 `# 【临时屏蔽】catalog / intent 能力暂停对外暴露...` 注释行，
+    `# query_catalog,` 和 `# query_intent_match,` 取消注释
+- `tests/query/test_cli_intent_commands.py`（新建）：
+  - 回归测试三条用例：命令是否注册、intent 命令输出格式、MCP 工具是否注册
+
+**验证结果**：
+- `pytest tests/query/test_cli_intent_commands.py -v` → 3 passed（目标用例全部通过）
+- `pytest tests/query/test_cli_intent_commands.py tests/mcp/test_query_tools.py -v` → 4 passed
+  （新增用例 + 既有 MCP 工具注册测试 PASS）
+- `opscli query intent --help` → 正常输出命令帮助，所有终端字符 GBK 安全
+- `pytest tests/query/ -v` → 227 passed（含新增 3 条，无既有用例受影响）
+
+**影响范围**：
+- `opscli query catalog` 命令现已对外暴露（前端调用入口）
+- `opscli query intent` 命令现已对外暴露（自然语言匹配入口）
+- MCP 工具 `query_catalog` 和 `query_intent_match` 现已注册到 MCP 实例（Agent 消费入口）
+- Task B7（Skill 文档生成）可依赖这两个接口正式编写使用文档
+
+**回滚方式**：
+- 若需临时屏蔽，恢复三处注释即可（重新注释 @app.command 装饰器、_ALL_TOOLS 中的两行、模块 docstring）
+- 不影响已有用户数据和存储
+
+---
+
 ## 2026-08-17 query - 意图匹配解析 embedded_intent 到执行父表
 
 **变更原因**：catalog 中 embedded_intent 类型的意图（如"实时销售监控"）自身不可执行，

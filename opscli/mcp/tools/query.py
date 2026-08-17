@@ -21,7 +21,7 @@
 - query_chart           — 通过 chart_uuid 获取/执行图表查询
 - query_chart_doc       — 通过 chart_uuid 生成图表 API 调用 Markdown 文档
 
-内部暂时屏蔽（不对外注册）：query_catalog、query_intent_match。
+catalog / intent 路线：query_catalog — 读取数据集业务语义索引；query_intent_match — 自然语言匹配 catalog intents。
 
 所有工具函数定义在模块级，可直接导入调用（测试友好）。
 调用 register(mcp) 将以上工具批量注册到指定 MCP 实例。
@@ -828,9 +828,8 @@ async def query_preferences(
 _ALL_TOOLS = [
     query_spec_must_read,
     query_metadata,
-    # 【临时屏蔽】catalog / intent 能力暂停对外暴露，恢复时取消下两行注释即可
-    # query_catalog,
-    # query_intent_match,
+    query_catalog,
+    query_intent_match,
     query_simple,
     query_build,
     query_run,
