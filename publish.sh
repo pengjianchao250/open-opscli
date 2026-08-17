@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键升级版本号并发布到 PyPI
+# 一键升级版本号并发布到 PyPI（发布成功后自动提交版本文件并打 git tag）
 # 用法：
 #   ./publish.sh patch          # 0.3.0 → 0.3.1，发布到 TestPyPI（默认）
 #   ./publish.sh minor          # 0.3.0 → 0.4.0，发布到 TestPyPI（默认）
@@ -7,6 +7,9 @@
 #   ./publish.sh patch test     # 显式指定 TestPyPI
 #   ./publish.sh patch prod     # 发布到正式 PyPI（需二次确认）
 #   ./publish.sh                # 默认 patch + TestPyPI
+# 说明：
+#   每次发布成功后会提交 pyproject.toml + opscli/version.py 并创建 tag v<新版本>，
+#   tag 默认只在本地创建，是否推送到远端由交互确认决定。
 
 set -euo pipefail
 
@@ -43,12 +46,22 @@ case "$BUMP_TYPE" in
 esac
 
 NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+TAG_NAME="v${NEW_VERSION}"
+
+# ── git 前置检查 ──────────────────────────────────────────
+# 提前校验 git 环境和 tag 冲突，避免构建上传完成后才发现无法打 tag
+command -v git &>/dev/null || error "未找到 git，无法在发布后打 tag"
+git rev-parse --is-inside-work-tree &>/dev/null || error "当前目录不是 git 仓库，无法在发布后打 tag"
+if git rev-parse -q --verify "refs/tags/${TAG_NAME}" &>/dev/null; then
+    error "tag ${TAG_NAME} 已存在，请先处理冲突（git tag -d ${TAG_NAME}）后重试"
+fi
 
 echo -e "\n${BOLD}======================================${RESET}"
 echo -e "${BOLD} aukeys-opscli 发布脚本${RESET}"
 echo -e "${BOLD}======================================${RESET}"
 echo -e "  当前版本：${YELLOW}${CURRENT_VERSION}${RESET}"
 echo -e "  新版本  ：${GREEN}${NEW_VERSION}${RESET}  (${BUMP_TYPE})"
+echo -e "  发布 tag：${GREEN}${TAG_NAME}${RESET}"
 if [[ "$TARGET" == "prod" ]]; then
     echo -e "  发布目标：${RED}正式 PyPI${RESET}"
 else
@@ -68,7 +81,7 @@ if [[ "$TARGET" == "prod" ]]; then
 fi
 
 # ── Step 1: 检查工具 ──────────────────────────────────────
-info "Step 1/7  检查依赖工具..."
+info "Step 1/8  检查依赖工具..."
 command -v python3 &>/dev/null || error "未找到 python3"
 python3 -c "import build"   2>/dev/null || { warn "正在安装 build..."; pip install build -q; }
 python3 -c "import twine"   2>/dev/null || { warn "正在安装 twine..."; pip install twine -q; }
@@ -76,7 +89,7 @@ success "工具检查通过"
 
 # ── Step 2: 更新版本号 ────────────────────────────────────
 VERSION_PY="opscli/version.py"
-info "Step 2/7  更新版本号 → ${NEW_VERSION}..."
+info "Step 2/8  更新版本号 → ${NEW_VERSION}..."
 # 更新 pyproject.toml
 sed -i.bak "s/^version = \"${CURRENT_VERSION}\"/version = \"${NEW_VERSION}\"/" "$PYPROJECT"
 rm -f "${PYPROJECT}.bak"
@@ -86,7 +99,7 @@ rm -f "${VERSION_PY}.bak"
 success "pyproject.toml + version.py 版本号已更新"
 
 # ── Step 3: 清理旧产物 ────────────────────────────────────
-info "Step 3/7  清理旧构建产物..."
+info "Step 3/8  清理旧构建产物..."
 rm -rf dist/ build/ *.egg-info/
 if [[ "$TARGET" == "test" ]]; then
     # 清理 Cython 编译产物，避免 .c 文件干扰纯 Python 构建
@@ -97,12 +110,12 @@ success "清理完成"
 
 # ── Step 4: 构建 ──────────────────────────────────────────
 if [[ "$TARGET" == "test" ]]; then
-    info "Step 4/7  构建纯 Python 包（跳过 Cython 编译）..."
+    info "Step 4/8  构建纯 Python 包（跳过 Cython 编译）..."
     # --sdist --wheel：分别独立从源码构建，避免默认的 "wheel from sdist" 模式
     # 默认模式会先打 sdist 再从 sdist 构建 wheel，导致 Cython 产物干扰文件发现
     SKIP_CYTHON=1 python3 -m build --sdist --wheel
 else
-    info "Step 4/7  构建包（含 Cython 编译）..."
+    info "Step 4/8  构建包（含 Cython 编译）..."
     python3 -m build
 fi
 success "构建完成"
@@ -110,26 +123,45 @@ echo "  生成文件："
 ls dist/ | sed 's/^/    /'
 
 # ── Step 5: 校验 ──────────────────────────────────────────
-info "Step 5/7  校验包（twine check）..."
+info "Step 5/8  校验包（twine check）..."
 twine check dist/*
 success "校验通过"
 
 # ── Step 6: 上传到 PyPI ───────────────────────────────────
 if [[ "$TARGET" == "prod" ]]; then
-    info "Step 6/7  上传到正式 PyPI..."
+    info "Step 6/8  上传到正式 PyPI..."
     twine upload dist/*
     success "上传完成！"
     echo -e "  查看地址：${BLUE}https://pypi.org/project/aukeys-opscli/${NEW_VERSION}/${RESET}"
 else
-    info "Step 6/7  上传到 TestPyPI..."
+    info "Step 6/8  上传到 TestPyPI..."
     twine upload --repository testpypi dist/*
     success "上传完成！"
     echo -e "  查看地址：${BLUE}https://test.pypi.org/project/aukeys-opscli/${NEW_VERSION}/${RESET}"
 fi
 
-# ── Step 7: 完成提示 ──────────────────────────────────────
+# ── Step 7: 提交版本文件并打 tag ──────────────────────────
+# 放在上传成功之后执行：只有真正发布出去的版本才会留下 tag，
+# 上传失败时 set -e 会提前终止，不会产生错误的发布标记
+info "Step 7/8  提交版本文件并创建 tag ${TAG_NAME}..."
+# 只提交本次脚本改动的两个版本文件，不影响工作区其他未提交内容
+git commit -m "🔖 chore(release): ${TAG_NAME} (${TARGET})" -- "$PYPROJECT" "$VERSION_PY"
+# 附注 tag，消息中记录发布目标，便于区分 TestPyPI 和正式 PyPI 版本
+git tag -a "$TAG_NAME" -m "Release ${TAG_NAME} (${TARGET})"
+success "已创建 tag ${TAG_NAME}（指向版本提交）"
+
+# tag 默认只留在本地，推送到远端需要用户显式确认
+read -rp "是否推送 tag ${TAG_NAME} 到远端？[y/N] " PUSH_TAG
+if [[ "$PUSH_TAG" =~ ^[Yy]$ ]]; then
+    git push origin "$TAG_NAME"
+    success "tag ${TAG_NAME} 已推送到远端"
+else
+    warn "tag 未推送，稍后可手动执行：git push origin ${TAG_NAME}"
+fi
+
+# ── Step 8: 完成提示 ──────────────────────────────────────
 echo ""
-info "Step 7/7  安装验证命令（可选，手动执行）："
+info "Step 8/8  安装验证命令（可选，手动执行）："
 if [[ "$TARGET" == "prod" ]]; then
     echo "    pip install aukeys-opscli==${NEW_VERSION}"
 else
