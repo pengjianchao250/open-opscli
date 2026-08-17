@@ -219,6 +219,11 @@ async def query_intent_match(
     comparison_strategy、recommended_dimensions、recommended_metrics 等业务约束；
     后续构造查询时必须优先遵循这些约束，再进行字段存在性校验。
 
+    返回体额外含 match_record_id（本次匹配的服务端归因记录 ID，上报失败时为
+    None）；命中候选并执行查询时，应将其与候选的 intent_code 一并透传给
+    query_run / query_build_and_run 的 match_record_id / intent_code 参数，
+    用于闭环归因统计。
+
     Args:
         query: 自然语言查询需求
         skills_dir: 可选，自定义 Skills 目录（用于读取本地缓存 catalog）

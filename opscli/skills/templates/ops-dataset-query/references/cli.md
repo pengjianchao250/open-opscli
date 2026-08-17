@@ -68,6 +68,7 @@ python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON" --plan-
 - 公式字段不传额外 `aggregation`；快照类指标默认取最新快照，不跨期累加。
 - 环比、同比或上期对比同时传主周期日期 `filters` 和 `dataComparison`。
 - 不发明默认筛选，不将局部或截断结果表述为全量。
+- `opscli query run` 与 `opscli query simple --run` 均支持三个可选意图归因参数，用于向服务端透传本次选表来源：`--intent-code <编码>`（取自 `query intent` 候选的 `intent_code`）、`--selection-source <来源>`（`planner`/`intent_route`/`local_fallback`/`user_specified` 四选一）、`--match-record-id <ID>`（取自 `query intent` 返回值的 `match_record_id`）。三者均可选，不传不影响查询执行；走 `query intent` 命中候选后应一并透传，便于闭环统计。
 
 ## 4. 结果与失败
 
@@ -78,3 +79,52 @@ python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON" --plan-
 「未登录」错误的处置边界：沙箱/托管环境凭证由平台注入，禁止交互式 `opscli auth login`（Device Flow 在无人环境无法完成）。等待约 1 分钟原样重试一次；仍未登录即停止取数、向用户说明凭证异常并提交一次反馈。
 
 规划器异常退出（exit 2）时输出为 stdout 上的错误 JSON：`{"error","retryable","next_action_zh"}`。`retryable=true` 直接原样重跑一次；否则严格按 `next_action_zh` 执行。`retryable=false` 且 `next_action_zh` 无可执行动作，或重跑后仍报同一错误时，转 `SKILL.md`「规划器不可用时的降级路径」；无论哪条路径都禁止盲目重试或翻脚本源码。
+
+## 5. 数据集意图目录（`opscli query catalog` / `opscli query intent`）
+
+这两个命令是 `SKILL.md`「规划器不可用时的降级路径」L2a 层的正式入口：目录为空或选表失败时，优先用远端实时意图目录路由选表，不依赖本地快照；仅当 `query intent` 不可用、报错或返回 `fallback_required=true` 时才降到 L2b 的 `local_fallback.py`。规划器（首选路由）仍可用时不调用这两个命令。
+
+### `opscli query catalog`
+
+读取数据集业务语义索引（dataset catalog），返回完整 catalog JSON（`version`、`intent_count`、`intents` 数组、`query_strategy`）。
+
+```bash
+opscli query catalog [--source remote|local] [--fallback-local/--no-fallback-local] [--skills-dir <目录>] [--pretty]
+```
+
+- `--source`：数据来源，`remote`（默认，远端优先）或 `local`（仅本地缓存）。
+- `--fallback-local` / `--no-fallback-local`：`--source remote` 时远端失败是否回退本地缓存，默认 `--fallback-local`（回退）。
+- `--skills-dir`：自定义 Skills 目录，用于读取本地缓存 catalog。
+- `--pretty`：格式化输出 JSON。
+
+### `opscli query intent`
+
+将自然语言需求匹配到 `catalog` 中的 intents，返回选表候选与业务约束，并向服务端上报一次匹配事件（fire-and-forget，上报失败不影响匹配结果）。
+
+```bash
+opscli query intent -q "<用户原文>" [--source remote|local] [--fallback-local/--no-fallback-local] [--skills-dir <目录>] [--pretty]
+```
+
+- `--query` / `-q`（必填）：自然语言查询需求原文。
+- `--source`、`--fallback-local/--no-fallback-local`、`--skills-dir`、`--pretty`：含义与 `query catalog` 一致。
+
+输出关键键：
+
+- `matched`：是否命中任一 intent；`false` 时无 `selected`，必须转 L2b。
+- `candidates[]`：候选数据集列表，每项含 `intent_code`、`table_id`、`dataset_alias`、`score`、`intent_constraints`（内含 `hard_constraints`/`avoid_when`/`clarify_when`/`recommended_dimensions`/`recommended_metrics`/`default_filters`/`comparison_strategy` 等业务约束）、`routing_status`（`direct_intent` 或 `embedded_intent`）、`embedded_from_table_id`（`embedded_intent` 时指向原始意图行，实际查询仍落在 `table_id` 指向的父表）。
+- `ask_user_question_required`：`true` 时候选不唯一（多个候选分数接近），必须用 `AskUserQuestion` 让用户从 `candidates` 里选，不得默认取第一个。
+- `fallback_required` / `fallback_reason`：`true` 表示 catalog 为空或无匹配意图，此时转 L2b 走 `local_fallback.py`。
+- `selected`：`matched=true` 且 `ask_user_question_required=false` 时的唯一候选，可直接采用。
+- `match_record_id`：本次匹配的服务端归因记录 ID（上报失败时为 `null`）；命中候选并执行查询时须透传，见上方「3. 正式查询」的归因参数说明。
+
+### 典型工作流：intent → 构造查询 → run 带归因参数
+
+```bash
+opscli query intent -q "上周亚马逊美国站销售额" --pretty
+# matched=true 且 ask_user_question_required=false 时，取 selected.table_id / selected.dataset_alias 构造查询
+opscli query build --table-id <selected.table_id> --dimension ... --metric ... --output payload.json
+opscli query run --payload payload.json \
+  --intent-code <selected.intent_code> \
+  --selection-source intent_route \
+  --match-record-id <match_record_id>
+```

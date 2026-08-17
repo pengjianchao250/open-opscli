@@ -10,7 +10,7 @@ description: >
   等待重跑即可，禁止自行升级）；只有规划器客观不可用（澄清/阻断、脚本报错重跑仍失败、
   命令窗口连续超时、运行环境缺 python3）时才转 SKILL.md 的降级路径；
   任何路径都禁止凭记忆手拼查询参数或使用未经元数据核对的字段。
-version: 1.3.20
+version: 1.3.21
 ---
 
 # ops-dataset-query
@@ -169,7 +169,8 @@ MCP-only（无本地 shell）、复杂审计或用户明确要求完整披露证
 | 层级 | 判断依据 | 动作 |
 | --- | --- | --- |
 | L1 | `execution_ref.fallback_catalog` 有 dimensions/metrics | 只用该目录里的 `table_id`、`dataset_alias`、`field_name` 构造查询；澄清点按 `clarification_messages_zh` 向用户提问 |
-| L2 | 目录为空或选表失败 | 跑 `python3 scripts/local_fallback.py "<用户原文>"` 拿本地候选，按其 `next_action_zh` 处置 |
+| L2a | 目录为空或选表失败 | 跑 `opscli query intent -q "<用户原文>"`（远端实时意图目录，不依赖本地快照）；`matched=true` 按 `selected` 构造查询并在执行时带 `--intent-code <intent_code> --selection-source intent_route --match-record-id <match_record_id>`；`ask_user_question_required=true` 用 `AskUserQuestion` 让用户在 candidates 里选 |
+| L2b | `query intent` 不可用、报错或 `fallback_required=true` | 跑 `python3 scripts/local_fallback.py "<用户原文>"` 拿本地候选，按其 `next_action_zh` 处置 |
 | L3 | `data_state` 为 `placeholder`/`empty`，或目录不存在 | 执行返回的 `recovery_command` 刷新元数据后重跑；**此前不得构造任何查询** |
 | L4 | 上述都失败 | 停止取数，如实告知用户，按 `references/feedback-guide.md` 提交一次反馈 |
 
@@ -192,6 +193,7 @@ python3 scripts/local_fallback.py "<用户原文>" --dataset <alias> --emit-plan
 3. 候选里的 `hard_constraints` / `avoid_when` 必须遵守（如库存快照字段只能用于明细表），`clarify_when` 命中时先问用户
 4. 候选里的 `uncertified_hints_zh` 是**未经人工审核的业务约束提示**（意图目录的业务约束尚未经人工复核，一律落在这个键里而不是 `hard_constraints`）。处置方式与 `hard_constraints` 不同：**必须先向用户复述该条提示并确认，再决定是否套用**，不得当作已确认口径静默应用，也不得因为它不是 `hard_constraints` 就忽略——被降级的往往正是防错数的护栏（如「总库存、海外仓库存属于库存快照字段，只能用于明细表或无聚合过滤条件」「必须选择报告周期」）
 5. `filter_components` 中字段的筛选值，必须先查 `component_dataset_alias` 组件表枚举当前账号授权原值，完整等值命中后才写入 `filters`；枚举不到就停止，**不得放大为全范围查询**
+6. `query intent` 候选里的 `intent_constraints.hard_constraints` / `avoid_when` / `clarify_when` 处置口径与 `local_fallback` 的 `uncertified_hints_zh` 相同：先向用户复述确认再套用
 
 ## 按需参考
 

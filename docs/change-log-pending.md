@@ -1,5 +1,62 @@
 # 待归档变更记录
 
+## 2026-08-17 skills - Skill 文档与版本收口（Task B7）
+
+**变更原因**：Task B1~B6 已恢复 `opscli query catalog`/`opscli query intent` 命令、在
+`intent_match` 返回值中加入 `match_record_id`，并让 `query run`/`query simple`、MCP
+`query_run`/`query_build_and_run` 支持三个意图归因参数，但 `SKILL.md` 的降级层级表、
+`references/cli.md`、`references/mcp.md` 均未同步描述这些新能力——Agent 走到降级路径仍只知道
+`local_fallback.py` 一条路，读 cli.md/mcp.md 也查不到这两个命令/工具的参数与返回键说明。
+另外 B4 审查记录过一条 deferred minor：MCP 工具 `query_intent_match` 的 docstring 未提及返回值
+新增的 `match_record_id` 字段，一并在本任务补上。
+
+**改动点**：
+- `opscli/skills/templates/ops-dataset-query/SKILL.md`：
+  - 「降级层级」表格原 `L2` 行拆成两段式 `L2a`/`L2b`：`L2a` 先跑
+    `opscli query intent -q "<用户原文>"`（远端实时意图目录，不依赖本地快照），`matched=true`
+    时按 `selected` 构造查询并在执行时带 `--intent-code`/`--selection-source intent_route`/
+    `--match-record-id`，`ask_user_question_required=true` 时用 `AskUserQuestion` 让用户在
+    `candidates` 里选；`L2b`（`query intent` 不可用/报错/`fallback_required=true`）才降级到原有的
+    `local_fallback.py` 路径
+  - 「拿到候选后」处置清单追加第 6 条：`query intent` 候选的
+    `intent_constraints.hard_constraints`/`avoid_when`/`clarify_when` 与 `local_fallback` 的
+    `uncertified_hints_zh` 处置口径相同——先向用户复述确认再套用
+  - frontmatter `version` 由 `1.3.20` 改为 `1.3.21`
+- `opscli/skills/templates/ops-dataset-query/references/cli.md`：
+  - 「3. 正式查询」列表追加一条：`opscli query run`/`opscli query simple --run` 的三个可选归因
+    参数（`--intent-code`/`--selection-source`/`--match-record-id`）说明
+  - 新增「5. 数据集意图目录（`opscli query catalog` / `opscli query intent`）」小节：两个命令的
+    完整参数列表（`--source`/`--fallback-local/--no-fallback-local`/`--skills-dir`/`--pretty`/
+    `--query,-q`）、输出关键键说明（`candidates[].intent_constraints`/`ask_user_question_required`/
+    `fallback_required`/`match_record_id` 等）与 intent → build → run 的典型工作流示例
+- `opscli/skills/templates/ops-dataset-query/references/mcp.md`：
+  - 新增「意图目录工具（`query_catalog` / `query_intent_match`）」小节：说明其定位为选表候选
+    参考，最终字段仍以 `query_metadata(dataset=...)` 响应为唯一运行时来源（与「权威边界」条款
+    保持一致，不冲突），并列出两个工具的参数与 `query_intent_match` 返回体关键键
+  - 新增「查询执行工具的意图归因参数」小节：说明 `query_run`/`query_build_and_run` 的
+    `intent_code`/`selection_source`/`match_record_id` 三个可选参数
+- `opscli/skills/templates/ops-dataset-query/data/VERSION.json`：`version` 同步改为 `1.3.21`
+- `opscli/mcp/tools/query.py`：`query_intent_match` docstring 补一段，说明返回体额外含
+  `match_record_id`（服务端归因记录 ID，上报失败为 `None`），命中候选后应与 `intent_code` 一并
+  透传给 `query_run`/`query_build_and_run`（B4 审查记录的 deferred minor，本任务收口）
+
+**验证结果**：`python3 -m pytest tests/skills/test_dataset_query_flow.py
+tests/skills/test_local_fallback.py -v` → 63 passed, 4 xfailed（4 个 xfail 与改动前一致，均为既有
+`test_intent_routing_hits_expected_dataset` 已知用例，非本次引入）；纯文档改动，未涉及可执行
+逻辑变更，无需额外功能测试
+
+**影响范围**：仅 `ops-dataset-query` Skill 的文档文件（`SKILL.md`/`references/cli.md`/
+`references/mcp.md`/`data/VERSION.json`）与 `opscli/mcp/tools/query.py` 的 docstring；不改动任何
+可执行代码路径，`opscli query catalog`/`opscli query intent`/CLI 归因参数/MCP 归因参数均为
+B3~B6 已落地并测试过的既有实现，本任务只是把文档补齐到与实现一致
+
+**回滚方式**：`git revert` 本次提交；或手动将 `SKILL.md` 的 `L2a`/`L2b` 行与第 6 条候选处置说明
+还原为原 `L2` 单行、版本号改回 `1.3.20`，删除 `cli.md`「5. 数据集意图目录」小节与「3. 正式查询」
+新增的归因参数条目，删除 `mcp.md` 两个新增小节，并回退 `data/VERSION.json` 与
+`opscli/mcp/tools/query.py` 中 `query_intent_match` docstring 的改动
+
+---
+
 ## 2026-08-17 skills - 降级路径经 plan 透传意图归因（Task B6）
 
 **变更原因**：意图管理闭环需要统计「一条意图被降级路径（local_fallback）命中后，
