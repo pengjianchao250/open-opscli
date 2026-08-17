@@ -105,6 +105,26 @@ class QueryClient:
         data = payload.get("data")
         return data if isinstance(data, dict) else {}
 
+    def report_intent_match(self, payload: dict) -> dict:
+        """上报一次意图匹配事件（含未命中）。
+
+        超时固定 5 秒：这是纯遥测请求，宁可丢一条记录也不能拖慢交互路径。
+        """
+        headers, cookies = self._get_auth("ops")
+        response = httpx.post(
+            f"{self.ops_url}/v1/data-metrics/datasets/skill/intent-match-report",
+            json=payload,
+            headers=headers,
+            cookies=cookies,
+            timeout=5,
+        )
+        return parse_remote_response(
+            response,
+            http_error_cls=RemoteHttpError,
+            business_error_cls=RemoteBusinessError,
+            bad_json_error_cls=BadRemoteJsonError,
+        )
+
     def fetch_user_preferences(self) -> list[dict]:
         """从远端获取当前用户的图表字段偏好列表。"""
         headers, cookies = self._get_auth("ops")

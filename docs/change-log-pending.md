@@ -1,5 +1,43 @@
 # 待归档变更记录
 
+## 2026-08-17 query - 意图匹配事件上报（含未命中，失败静默）
+
+**变更原因**：意图管理闭环需要在客户端侧上报每一次 `intent_match` 调用（含命中/未命中），
+供服务端聚合分析 catalog 覆盖率与 Skill 使用效果（Task A3 服务端契约已就绪）。
+上报是纯遥测动作，绝不能因网络异常、超时或后端故障影响 Agent 的正常取数交互路径，
+因此设计为 fire-and-forget：捕获所有异常静默吞掉，失败时 `match_record_id` 置 `None`。
+
+**改动点**：
+- `opscli/query/transport/client.py`：`fetch_dataset_catalog` 后新增 `report_intent_match(payload)` 方法，
+  POST `{ops_url}/v1/data-metrics/datasets/skill/intent-match-report`，固定 5 秒超时（复用 `parse_remote_response`
+  统一解析响应，异常类型与 `fetch_dataset_catalog` 保持一致）
+- `opscli/query/services/manager.py`：
+  - `QueryManager.intent_match()` 新增关键字参数 `report_source: str = "cli_intent"`（保持默认值兼容既有调用方，
+    包括 `tests/query/test_cli_intent_commands.py` 中对 `intent_match` 的整体 monkeypatch）；
+    在返回结果前调用 `_report_intent_match()` 并把结果写入新增键 `match_record_id`
+  - 新增私有方法 `_report_intent_match(result, query, report_source)`：从匹配结果构造上报 payload
+    （matched/intent_code/score/ask_required/fallback_reason/match_source/query_text/query_keywords/catalog_version），
+    调用 `client.report_intent_match()`；`try/except Exception` 包裹，任何异常返回 `None`，不打印堆栈、不阻塞主流程
+- `tests/query/test_intent_match_report.py`（新建，按 brief 逐字实现）：respx mock 覆盖命中上报、未命中仍上报、
+  上报失败时匹配结果不受影响三个场景
+
+**验证结果**：
+- `python3 -m pytest tests/query/test_intent_match_report.py -v` → 3 passed（新增用例全部通过）
+- `python3 -m pytest tests/query/ -v` → 231 passed（含新增 4 条：3 条本任务 + 已恢复的 catalog/intent 用例，
+  无既有用例受影响；其中 `test_cli_intent_commands.py` 对 `intent_match` 整体 monkeypatch，签名新增
+  `report_source` 默认参数未破坏该测试）
+- 全量 `pytest tests/` 因既有环境问题（`tests/` 下多个子目录同名 test 文件缺少 `__init__.py` 导致模块导入冲突，
+  例如 `test_client.py` 在 `query/calculator/sif` 等多目录重名）在 collection 阶段报 25 个 error，
+  经 `git stash` 验证该问题在本次改动之前已存在，与本任务无关，不在本任务修复范围内
+
+**影响范围**：`QueryManager.intent_match()` 调用方（CLI `opscli query intent` 命令、MCP `query_intent_match` 工具）
+返回结果新增 `match_record_id` 键；上报请求失败对现有行为无影响（静默吞掉）
+
+**回滚方式**：`git revert` 本次提交；或手动删除 `client.py` 的 `report_intent_match` 方法、还原
+`manager.py` 的 `intent_match`/`_report_intent_match`，并删除新建测试文件
+
+---
+
 ## 2026-08-17 query - 恢复 catalog/intent CLI 命令与 MCP 工具注册
 
 **变更原因**：Task B1/B2 完成了意图匹配器的编写与护栏测试，catalog/intent 接口已可对外暴露。

@@ -1733,10 +1733,12 @@ class QueryManager:
         cwd: Path | None = None,
         source: str = "remote",
         fallback_local: bool = True,
+        report_source: str = "cli_intent",
     ) -> dict:
-        """按自然语言需求匹配 dataset catalog intents。
+        """按自然语言需求匹配 dataset catalog intents，并上报匹配事件。
 
-        返回匹配候选、是否需要用户确认，以及命中 intent 中携带的业务约束。
+        上报是 fire-and-forget：闭环遥测的价值在服务端聚合，客户端绝不因
+        上报失败影响匹配结果（match_record_id 置 None 即可）。
         """
         catalog = self.catalog(
             skills_dir=skills_dir,
@@ -1744,7 +1746,31 @@ class QueryManager:
             source=source,
             fallback_local=fallback_local,
         )
-        return match_catalog_intents(catalog, query)
+        result = match_catalog_intents(catalog, query)
+        result["match_record_id"] = self._report_intent_match(result, query, report_source)
+        return result
+
+    def _report_intent_match(self, result: dict, query: str, report_source: str) -> int | None:
+        """构造并发送匹配事件；任何异常静默吞掉返回 None（不阻塞主流程，不打印堆栈）。"""
+        selected = result.get("selected") or (result.get("candidates") or [{}])[0]
+        payload = {
+            "matched": bool(result.get("matched")),
+            "intent_code": selected.get("intent_code") or None,
+            "score": int(selected.get("score") or 0),
+            "ask_required": bool(result.get("ask_user_question_required")),
+            "fallback_reason": result.get("fallback_reason") or "",
+            "match_source": report_source,
+            "query_text": query[:500],
+            "query_keywords": result.get("fallback_query_keywords")
+                or [term for term in selected.get("matched_terms") or []],
+            "catalog_version": str(result.get("catalog_version") or ""),
+        }
+        try:
+            response = self.client.report_intent_match(payload)
+            record_id = (response.get("data") or {}).get("match_record_id")
+            return int(record_id) if record_id else None
+        except Exception:
+            return None
 
     def _load_dataset_catalog(self, *, skills_dir: str | None, cwd: Path | None) -> dict:
         """从已安装 Skill 或内置模板中读取 dataset_catalog.json。"""
