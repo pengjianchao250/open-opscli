@@ -1,5 +1,71 @@
 # 待归档变更记录
 
+## 2026-08-17 skills - 降级路径经 plan 透传意图归因（Task B6）
+
+**变更原因**：意图管理闭环需要统计「一条意图被降级路径（local_fallback）命中后，
+是否真的被执行了」。此前 `local_fallback._emit_plan()` 产出的 plan 里 `execution_ref`
+不带意图信息，`run_query.py` 执行查询时也就没有任何东西可以透传给 Task B5 已在
+`opscli query simple` 上开放的 `--intent-code`/`--selection-source` 参数，导致降级路径
+命中的意图执行次数在服务端完全不可见。
+
+**改动点**：
+- `opscli/skills/templates/ops-dataset-query/scripts/local_fallback.py`：`_emit_plan()`
+  的 `execution_ref` 字典在 `dataset_alias` 之后新增两键：`intent_code`（取自
+  `dataset_candidates[0].intent_id`，取不到时为空串）与 `selection_source`（固定
+  `"local_fallback"`）
+- `opscli/skills/templates/ops-dataset-query/scripts/run_query.py`：
+  - `_run_opscli(table_id, payload, *, intent_code="", selection_source="")`：新增两个
+    仅关键字可选参数，`intent_code` 非空时在 `opscli query simple ... --run` 命令后追加
+    `--intent-code <值> --selection-source <值或默认 local_fallback>`；留空时命令与改动前
+    完全一致
+  - `_apply_order_fallback()` / `_complete_server_paged_rows()` 同步新增仅关键字可选参数
+    `intent_code`/`selection_source`，内部调用 `_run_opscli` 时原样透传（这两个函数内部各自
+    发起一次针对同一逻辑查询的补充重查，需与主查询保持同一归因）
+  - `main()`：在 `payload.setdefault("tableId", table_id)` 之后，从已有的 `execution`
+    （`plan.execution_ref`）读出 `intent_code`/`selection_source`，沿现有 plan 传参路径
+    （不新增独立 CLI 参数）依次透传给主查询 `_run_opscli` 调用及上述两个补充重查函数
+- `tests/skills/test_local_fallback.py`：追加 `test_emit_plan_carries_intent_attribution`。
+  按 brief 原用查询词「大促期间销售异常吗」会同时命中 `ops_comprehensive_monitoring`
+  （因其意图名分词含「销售」二字，被打 0.3 分而产出第二候选），导致 `status` 落在
+  `clarify_required` 而非 brief 断言的 `ready`——与既有 `test_embedded_intent_maps_to_
+  execution_dataset` 特意不断言 `status` 的原因一致。改用语义等价的「大促期间数据异常吗」
+  （只保留 `realtime_sales_monitoring` 独占触发词「大促」），实测验证为唯一候选、
+  `status == "ready"`，其余断言与 brief 一致
+- `tests/skills/test_run_query_intent_attribution.py`（新建，按 brief 逐字实现）：验证
+  `_run_opscli` 带归因参数时命令含 `--intent-code`/`--selection-source`，不带时命令保持干净
+- 因 `_run_opscli` 新增关键字参数，以下既有测试里直接 `monkeypatch.setattr(run_query,
+  "_run_opscli", ...)` 的窄签名桩函数不再兼容，补充 `**_kwargs` 使其接受新参数（行为不变）：
+  `tests/skills/test_dataset_query_flow.py::test_query_flow_executes_every_currency_template`、
+  `tests/skills/test_dataset_query_planner.py::test_run_query_executes_query_template_directly_from_plan`
+  `/test_run_query_order_fallback_requeries_and_resorts/test_run_query_ok_path_discloses_effective_order`、
+  `tests/skills/test_run_query_server_paging.py::test_server_default_page_is_completed
+  /test_failed_completion_is_flagged_not_silently_partial`
+
+**验证结果**：
+- `python3 -m pytest tests/skills/test_local_fallback.py -k attribution
+  tests/skills/test_run_query_intent_attribution.py -v` → 3 passed
+- `python3 -m pytest tests/skills/ -p no:cacheprovider --tb=short
+  --ignore=tests/skills/test_packaging.py` → 8 failed（与 Global Constraints 记录的既有基线
+  test_cli 1 / test_dashboard_skills 2 / test_manager 3 / test_ops_feedback_template 1 /
+  test_ops_methods_card_xlsx_preview 1 完全一致）、577 passed、7 xfailed；`test_packaging.py`
+  单跑仍是已知的 pytest capture 崩溃（"I/O operation on closed file"），与本次改动无关
+  （改动前在同一分支上单独验证过同样崩溃）
+- 改动前在本提交基线上跑 `tests/skills/test_dataset_query_flow.py
+  tests/skills/test_dataset_query_planner.py tests/skills/test_run_query_server_paging.py`
+  为 89 passed，确认新增的 6 个失败（现已修复）系本次签名扩展引入，非既有缺陷
+
+**影响范围**：`_run_opscli`/`_apply_order_fallback`/`_complete_server_paged_rows` 新增的
+均为默认空值的仅关键字参数，不传时行为与改动前完全一致；`_emit_plan()` 产出的 plan 新增两个
+只读字段，不影响 `run_query.py` 已有的 `_validate_plan_binding`/`_assert_fields` 字段校验逻辑
+（校验只读 `execution_ref.query_template`/`dimensions`/`metrics` 等既有键）
+
+**回滚方式**：`git revert` 本次提交；或手动移除 `local_fallback.py` 新增的两个 `execution_ref`
+键、`run_query.py` 中三处函数签名与调用点的 `intent_code`/`selection_source` 透传，并删除
+`tests/skills/test_run_query_intent_attribution.py`，同时把上述五个既有测试的桩函数签名
+改回不带 `**_kwargs`
+
+---
+
 ## 2026-08-17 query - 查询执行携带意图归因请求头（CLI + MCP）
 
 **变更原因**：意图管理闭环需要在真正执行查询（而非仅匹配意图）时，把「本次执行来自哪个

@@ -438,6 +438,28 @@ def test_audit_blocks_when_data_is_placeholder(tmp_path: Path):
     assert report["recovery_command"] == "opscli skills upgrade ops-dataset-query"
 
 
+def test_emit_plan_carries_intent_attribution(tmp_path: Path):
+    """降级 plan 必须带意图归因，执行段才能把 intent_code 透传给服务端落库。"""
+    data_dir = tmp_path / "data"
+    _write_ready_data_dir(data_dir)
+
+    # 任务简报原用「大促期间销售异常吗」，但该句同时含「销售」二字，会被
+    # ops_comprehensive_monitoring 的意图名分词命中（+0.3 分），产出第二候选，
+    # 导致 status 落在 clarify_required 而非 ready（与 test_embedded_intent_
+    # maps_to_execution_dataset 特意不断言 status 的原因一致）。这里把「销售」
+    # 换成语义等价的「数据」，只保留 realtime_sales_monitoring 独占的「大促」
+    # 触发词，使其成为唯一候选，从而验证 status=ready 路径下 execution_ref 的
+    # 意图归因透传。
+    result = local_fallback.build_fallback("大促期间数据异常吗", data_dir=data_dir)
+    assert result["status"] == "ready"
+    plan_path = tmp_path / "plan.json"
+    local_fallback._emit_plan(result, plan_path)
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+
+    assert plan["execution_ref"]["intent_code"] == "realtime_sales_monitoring"
+    assert plan["execution_ref"]["selection_source"] == "local_fallback"
+
+
 def test_audit_reports_broken_intent_links(tmp_path: Path):
     """巡检必须报出 execution_dataset_id 找不到对应表的 embedded_intent。
 

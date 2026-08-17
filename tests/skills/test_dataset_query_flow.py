@@ -168,7 +168,7 @@ def test_query_flow_executes_every_currency_template(
         lambda *_args, **_kwargs: plan,
     )
 
-    def fake_opscli(_table_id: str, payload: dict) -> dict:
+    def fake_opscli(_table_id: str, payload: dict, **_kwargs) -> dict:
         calls.append(payload)
         return {
             "success": True,

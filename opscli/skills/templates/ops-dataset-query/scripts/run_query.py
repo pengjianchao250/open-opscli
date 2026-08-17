@@ -300,16 +300,29 @@ def _validate_plan_binding(plan: dict, table_id: str, payload: dict) -> None:
         raise PrecheckError("dataComparison.field 不在规划器授权日期字段中。")
 
 
-def _run_opscli(table_id: str, payload: dict) -> dict:
-    """执行正式查询并解析返回 JSON（剥离升级提示等前缀噪声）。"""
+def _run_opscli(
+    table_id: str, payload: dict, *, intent_code: str = "", selection_source: str = ""
+) -> dict:
+    """执行正式查询并解析返回 JSON（剥离升级提示等前缀噪声）。
+
+    intent_code/selection_source 为可选的意图归因透传：当规划器（或降级路径）
+    已经确定本次查询由哪条意图路由而来，就把它经 `--intent-code`/
+    `--selection-source` 带给 `opscli query simple`，服务端据此落库统计
+    "这条意图被真实执行了多少次"。留空时命令保持原样，不影响未接入意图路由的调用方。
+    """
     try:
+        command = [
+            "opscli", "query", "simple",
+            "--table-id", str(table_id),
+            "--json", json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            "--run",
+        ]
+        if intent_code:
+            command.extend(
+                ["--intent-code", intent_code, "--selection-source", selection_source or "local_fallback"]
+            )
         result = subprocess.run(
-            [
-                "opscli", "query", "simple",
-                "--table-id", str(table_id),
-                "--json", json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                "--run",
-            ],
+            command,
             capture_output=True,
             check=False,
             timeout=EXEC_TIMEOUT_SECONDS,
@@ -405,6 +418,9 @@ def _apply_order_fallback(
     rows: list[dict],
     order_by: list[dict],
     total: object = None,
+    *,
+    intent_code: str = "",
+    selection_source: str = "",
 ) -> tuple[list[dict], dict | None]:
     """orderBy 未生效时的本地兜底（已知服务端缺陷的过渡方案）。
 
@@ -441,7 +457,9 @@ def _apply_order_fallback(
         span = int(limit) * ORDER_REQUERY_MULTIPLIER
     requery = dict(payload)
     requery["limit"] = min(span, ORDER_REQUERY_LIMIT_CAP)
-    response = _run_opscli(table_id, requery)
+    response = _run_opscli(
+        table_id, requery, intent_code=intent_code, selection_source=selection_source
+    )
     wide_rows, _total = _extract_rows(response)
     wide_rows = sorted(
         wide_rows, key=lambda row: _sort_value(row.get(field)), reverse=direction == "DESC"
@@ -459,7 +477,13 @@ def _apply_order_fallback(
 
 
 def _complete_server_paged_rows(
-    table_id: str, payload: dict, rows: list[dict], total: object
+    table_id: str,
+    payload: dict,
+    rows: list[dict],
+    total: object,
+    *,
+    intent_code: str = "",
+    selection_source: str = "",
 ) -> tuple[list[dict], dict | None]:
     """用户未指定行数时，补齐服务端默认分页之外的剩余行。
 
@@ -477,7 +501,9 @@ def _complete_server_paged_rows(
     requery = dict(payload)
     requery["limit"] = min(int(total), AUTO_COMPLETE_LIMIT_CAP)
     try:
-        response = _run_opscli(table_id, requery)
+        response = _run_opscli(
+            table_id, requery, intent_code=intent_code, selection_source=selection_source
+        )
     except RuntimeError as error:
         # 补齐失败不能把首页当全量，如实标记让上层披露
         return rows, {
@@ -600,6 +626,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if payload.get("tableId") not in (None, "") and str(payload["tableId"]) != table_id:
             raise PrecheckError("payload.tableId 与 --table-id 不一致。")
         payload.setdefault("tableId", table_id)
+        # 意图归因：从 plan.execution_ref 读取（降级路径由 local_fallback._emit_plan 写入），
+        # 沿现有 plan 传参路径透传给下面所有 _run_opscli 调用，不新增独立传参通道
+        intent_code = str(execution.get("intent_code") or "") if isinstance(execution, dict) else ""
+        selection_source = (
+            str(execution.get("selection_source") or "") if isinstance(execution, dict) else ""
+        )
         # 生成规划器下发的数据集默认条件披露说明（服务端权威注入，本函数只读不写 payload）
         # 注意：默认条件实际注入由服务端完成，客户端不预注入，避免日期预设字面量冲突
         if args.default_filters.strip():
@@ -612,7 +644,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         _precheck(payload)
         order_by = payload.get("orderBy") or []
 
-        response = _run_opscli(table_id, payload)
+        response = _run_opscli(
+            table_id, payload, intent_code=intent_code, selection_source=selection_source
+        )
         if response.get("success") is False:
             error = response.get("error") or {}
             print(
@@ -632,7 +666,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         rows, total = _extract_rows(response)
         # 服务端默认分页补齐必须在披露之前完成，否则 row_count_returned 是首页行数
-        rows, auto_complete_note = _complete_server_paged_rows(table_id, payload, rows, total)
+        rows, auto_complete_note = _complete_server_paged_rows(
+            table_id, payload, rows, total, intent_code=intent_code, selection_source=selection_source
+        )
         disclosures: dict[str, Any] = {
             "row_count_returned": len(rows),
             "total_count": total,
@@ -662,7 +698,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         order_note = None
         if order_by and not args.no_order_fallback and rows:
             rows, order_note = _apply_order_fallback(
-                table_id, payload, rows, order_by, total
+                table_id, payload, rows, order_by, total,
+                intent_code=intent_code, selection_source=selection_source,
             )
             if order_note:
                 disclosures["order_fallback"] = order_note

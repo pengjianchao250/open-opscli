@@ -502,6 +502,10 @@ def _emit_plan(result: dict, path: Path) -> None:
             },
             "table_id": (result.get("dataset_candidates") or [{}])[0].get("table_id"),
             "dataset_alias": result.get("selected_dataset_alias"),
+            # 意图归因：执行段（run_query.py）读取后经 --intent-code 透传给服务端落库，
+            # 闭环统计"这条意图被降级路径命中并真实执行了多少次"
+            "intent_code": (result.get("dataset_candidates") or [{}])[0].get("intent_id") or "",
+            "selection_source": "local_fallback",
             "dimensions": [
                 {"field_name": item["field_name"], "label_zh": item["verbose_name"]}
                 for item in result.get("field_candidates") or []

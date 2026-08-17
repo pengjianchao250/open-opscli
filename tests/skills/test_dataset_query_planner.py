@@ -1399,7 +1399,7 @@ def test_run_query_executes_query_template_directly_from_plan(
     )
     captured: dict = {}
 
-    def fake_run(table_id: str, payload: dict) -> dict:
+    def fake_run(table_id: str, payload: dict, **_kwargs) -> dict:
         captured["table_id"] = table_id
         captured["payload"] = payload
         return {
@@ -1600,7 +1600,7 @@ def test_run_query_order_fallback_requeries_and_resorts(tmp_path: Path, monkeypa
     """服务端排序未生效 + limit 场景：必须放大窗口重查、本地排序取前N并披露（D1）。"""
     calls = []
 
-    def fake_run(table_id, payload):
+    def fake_run(table_id, payload, **_kwargs):
         calls.append(dict(payload))
         if len(calls) == 1:
             # 首查：声明 DESC 但返回乱序（模拟服务端吞排序）
@@ -1649,7 +1649,7 @@ def test_run_query_ok_path_discloses_effective_order(tmp_path: Path, monkeypatch
     monkeypatch.setattr(
         run_query,
         "_run_opscli",
-        lambda table_id, payload: _fake_response(
+        lambda table_id, payload, **_kwargs: _fake_response(
             [{"country": "B", "price": 9}, {"country": "C", "price": 7}], total=2
         ),
     )
