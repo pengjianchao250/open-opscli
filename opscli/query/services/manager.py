@@ -33,6 +33,25 @@ SELECT_ALIAS_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SUPPORTED_GLOBAL_CURRENCIES = ["USD", "GBP", "CAD", "EUR", "JPY", "CNY"]
 
 
+def _attribution_headers(
+    intent_code: str | None, selection_source: str | None, match_record_id: int | None,
+) -> dict | None:
+    """把归因三元组转成请求头字典；全空返回 None 表示不附加。
+
+    为什么走 Header 而非 payload 字段：cli-query / cli-query/simple 的 body 会原样
+    透传给 Python 取数服务，塞入归因字段有被下游拒绝的风险；服务端契约（QA 已上线）
+    约定归因信息通过 X-Intent-Code / X-Selection-Source / X-Match-Record-Id 三个请求头传递。
+    """
+    headers = {}
+    if intent_code:
+        headers["X-Intent-Code"] = intent_code
+    if selection_source:
+        headers["X-Selection-Source"] = selection_source
+    if match_record_id:
+        headers["X-Match-Record-Id"] = str(match_record_id)
+    return headers or None
+
+
 def _normalize_global_currency(value: str | None) -> str | None:
     """归一并校验全局币种：去空格转大写，仅接受白名单 6 种；None/空返回 None，非白名单抛错。"""
     if value is None:
@@ -217,8 +236,19 @@ class QueryManager:
         """获取当前用户的图表字段偏好列表（远端实时获取）。"""
         return self.client.fetch_user_preferences()
 
-    def run(self, *, payload_path: str) -> dict:
-        """读取本地 payload 文件并转发执行查询。"""
+    def run(
+        self,
+        *,
+        payload_path: str,
+        intent_code: str | None = None,
+        selection_source: str | None = None,
+        match_record_id: int | None = None,
+    ) -> dict:
+        """读取本地 payload 文件并转发执行查询。
+
+        intent_code/selection_source/match_record_id 为可选的执行归因三元组，
+        标注本次查询来自哪次意图匹配/选表来源，以请求头形式透传，不写入 payload。
+        """
         payload_file = Path(payload_path).expanduser()
         if not payload_file.exists():
             raise InvalidPayloadError(f"payload 文件不存在: {payload_file}")
@@ -229,7 +259,8 @@ class QueryManager:
             raise InvalidPayloadError(f"payload 不是合法 JSON: {payload_file}") from exc
 
         self._validate_payload(payload)
-        return self.client.cli_query(payload)
+        extra_headers = _attribution_headers(intent_code, selection_source, match_record_id)
+        return self.client.cli_query(payload, extra_headers=extra_headers)
 
     def build(
         self,
@@ -351,10 +382,22 @@ class QueryManager:
             "output": str(Path(output_path).expanduser()) if output_path else None,
         }
 
-    def build_and_run(self, **kwargs) -> dict:
-        """先构造 payload，再立即执行查询。"""
+    def build_and_run(
+        self,
+        *,
+        intent_code: str | None = None,
+        selection_source: str | None = None,
+        match_record_id: int | None = None,
+        **kwargs,
+    ) -> dict:
+        """先构造 payload，再立即执行查询。
+
+        intent_code/selection_source/match_record_id 说明见 run()，此处同样以
+        请求头形式透传给 cli_query，不进入构造出的 payload。
+        """
         build_result = self.build(**kwargs)
-        query_result = self.client.cli_query(build_result["payload"])
+        extra_headers = _attribution_headers(intent_code, selection_source, match_record_id)
+        query_result = self.client.cli_query(build_result["payload"], extra_headers=extra_headers)
         return {
             **build_result,
             "result": query_result,
@@ -460,10 +503,22 @@ class QueryManager:
             "output": str(Path(output_path).expanduser()) if output_path else None,
         }
 
-    def build_simple_and_run(self, **kwargs) -> dict:
-        """先构造简化 payload，再立即执行查询。"""
+    def build_simple_and_run(
+        self,
+        *,
+        intent_code: str | None = None,
+        selection_source: str | None = None,
+        match_record_id: int | None = None,
+        **kwargs,
+    ) -> dict:
+        """先构造简化 payload，再立即执行查询。
+
+        intent_code/selection_source/match_record_id 说明见 run()，此处同样以
+        请求头形式透传给 cli_simple_query，不进入构造出的 payload。
+        """
         build_result = self.build_simple(**kwargs)
-        query_result = self.client.cli_simple_query(build_result["payload"])
+        extra_headers = _attribution_headers(intent_code, selection_source, match_record_id)
+        query_result = self.client.cli_simple_query(build_result["payload"], extra_headers=extra_headers)
         return {
             **build_result,
             "result": query_result,

@@ -453,6 +453,9 @@ async def query_run(
     payload_path: str,
     session_id: str | None = None,
     jwt: str | None = None,
+    intent_code: str | None = None,
+    selection_source: str | None = None,
+    match_record_id: int | None = None,
 ) -> dict:
     """读取本地 payload JSON 文件并转发至服务端执行查询。
 
@@ -470,6 +473,9 @@ async def query_run(
         payload_path: 本地 payload JSON 文件路径
         session_id:   可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:          可选，已有 JWT 可直接使用（为空则自动加载本地缓存的）
+        intent_code:       可选，意图归因编码，以请求头形式透传（意图路由选表时填写）
+        selection_source:  可选，选表来源：planner/intent_route/local_fallback/user_specified
+        match_record_id:   可选，意图匹配记录ID，取自 query_intent_match 返回值的 match_record_id 字段
 
     【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
     在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、
@@ -482,7 +488,10 @@ async def query_run(
         return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"))
     try:
         result = _query_manager(jwt=jw, session_id=sid).run(
-            payload_path=payload_path
+            payload_path=payload_path,
+            intent_code=intent_code,
+            selection_source=selection_source,
+            match_record_id=match_record_id,
         )
         return _ok(result)
     except Exception as exc:
@@ -505,6 +514,9 @@ async def query_build_and_run(
     skills_dir: str | None = None,
     session_id: str | None = None,
     jwt: str | None = None,
+    intent_code: str | None = None,
+    selection_source: str | None = None,
+    match_record_id: int | None = None,
 ) -> dict:
     """构造 query payload 并立即执行，一步返回数据结果（CLI 风格字符串参数）。
 
@@ -537,6 +549,9 @@ async def query_build_and_run(
         skills_dir:        可选，自定义 Skills 目录
         session_id:        可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:               可选，已有 JWT（为空则自动加载本地缓存的）
+        intent_code:       可选，意图归因编码，以请求头形式透传（意图路由选表时填写）
+        selection_source:  可选，选表来源：planner/intent_route/local_fallback/user_specified
+        match_record_id:   可选，意图匹配记录ID，取自 query_intent_match 返回值的 match_record_id 字段
 
     【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
     在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、
@@ -573,6 +588,9 @@ async def query_build_and_run(
             dry_run=dry_run,
             data_comparison=data_comparison,
             skills_dir=skills_dir,
+            intent_code=intent_code,
+            selection_source=selection_source,
+            match_record_id=match_record_id,
         )
         return _ok(result)
     except Exception as exc:

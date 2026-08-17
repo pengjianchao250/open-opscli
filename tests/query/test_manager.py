@@ -312,7 +312,7 @@ def test_run_forwards_payload_to_client(tmp_path, monkeypatch):
     payload_file.write_text(json.dumps(payload), encoding="utf-8")
     called = {}
 
-    def fake_cli_query(request_payload):
+    def fake_cli_query(request_payload, extra_headers=None):
         called["payload"] = request_payload
         return {"rows": [], "meta": {"rowCount": 0}}
 
@@ -867,7 +867,7 @@ def test_build_and_run_uses_built_payload(tmp_path, monkeypatch):
                         lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
     called = {}
 
-    def fake_cli_query(request_payload):
+    def fake_cli_query(request_payload, extra_headers=None):
         called["payload"] = request_payload
         return {"success": True, "data": [{"date_id": "2022-01-01"}], "meta": {"rowCount": 1}}
 

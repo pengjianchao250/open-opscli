@@ -411,12 +411,20 @@ def run(
     timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
     result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，stdout 仅输出预览"),
     save_result: bool = typer.Option(False, "--save-result", help="将查询结果保存到默认临时路径，stdout 仅输出预览"),
+    intent_code: str | None = typer.Option(None, "--intent-code", help="意图归因编码（意图路由选表时透传）"),
+    selection_source: str | None = typer.Option(None, "--selection-source", help="选表来源：planner/intent_route/local_fallback/user_specified"),
+    match_record_id: int | None = typer.Option(None, "--match-record-id", help="意图匹配记录ID（query intent 返回的 match_record_id）"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """执行查询并转发到服务端 cli-query。"""
     manager = QueryManager(timeout=timeout)
     try:
-        result = manager.run(payload_path=payload_path)
+        result = manager.run(
+            payload_path=payload_path,
+            intent_code=intent_code,
+            selection_source=selection_source,
+            match_record_id=match_record_id,
+        )
         payload = {
             "success": True,
             "command": "query run",
@@ -669,6 +677,9 @@ def simple(
     timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
     result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，仅与 --run 同用生效"),
     save_result: bool = typer.Option(False, "--save-result", help="将查询结果保存到默认临时路径，仅与 --run 同用生效"),
+    intent_code: str | None = typer.Option(None, "--intent-code", help="意图归因编码（意图路由选表时透传）"),
+    selection_source: str | None = typer.Option(None, "--selection-source", help="选表来源：planner/intent_route/local_fallback/user_specified"),
+    match_record_id: int | None = typer.Option(None, "--match-record-id", help="意图匹配记录ID（query intent 返回的 match_record_id）"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """基于简化参数构造 simple query payload 并可选执行。"""
@@ -741,7 +752,16 @@ def simple(
             kwargs["output_path"] = output
         kwargs["validate_fields"] = True
 
-        result = manager.build_simple_and_run(**kwargs) if run else manager.build_simple(**kwargs)
+        result = (
+            manager.build_simple_and_run(
+                intent_code=intent_code,
+                selection_source=selection_source,
+                match_record_id=match_record_id,
+                **kwargs,
+            )
+            if run
+            else manager.build_simple(**kwargs)
+        )
         command_name = "query simple-run" if run else "query simple"
         # 取数服务会在 HTTP 200 + 外层 code=200 的信封里返回失败，真正的字段级原因埋在
         # data.result.error.details.errors[]。此前 CLI 对这种情况照样报 success=true，

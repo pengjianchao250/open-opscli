@@ -394,9 +394,15 @@ class QueryClient:
             if not ref.get(key) and matched.get(key):
                 ref[key] = matched.get(key)
 
-    def cli_query(self, payload: dict) -> dict:
-        """转发查询请求到 auto-scheduler 的 cli-query 接口。"""
+    def cli_query(self, payload: dict, extra_headers: dict | None = None) -> dict:
+        """转发查询请求到 auto-scheduler 的 cli-query 接口。
+
+        extra_headers 用于意图归因（X-Intent-Code 等）：走 Header 而不进 payload，
+        因为 cli-query 的 body 会透传给 Python 取数服务，塞额外字段有被拒风险。
+        """
         headers, cookies = self._get_auth("ops")
+        if extra_headers:
+            headers = {**headers, **extra_headers}
         response = httpx.post(
             f"{self.ops_url}/v1/data-metrics/cli-query",
             json=payload,
@@ -411,9 +417,15 @@ class QueryClient:
             bad_json_error_cls=BadRemoteJsonError,
         )
 
-    def cli_simple_query(self, payload: dict) -> dict:
-        """转发简化查询请求到 auto-scheduler 的 cli-query/simple 接口。"""
+    def cli_simple_query(self, payload: dict, extra_headers: dict | None = None) -> dict:
+        """转发简化查询请求到 auto-scheduler 的 cli-query/simple 接口。
+
+        extra_headers 用于意图归因（X-Intent-Code 等）：走 Header 而不进 payload，
+        原因同 cli_query。
+        """
         headers, cookies = self._get_auth("ops")
+        if extra_headers:
+            headers = {**headers, **extra_headers}
         response = httpx.post(
             f"{self.ops_url}/v1/data-metrics/cli-query/simple",
             json=payload,

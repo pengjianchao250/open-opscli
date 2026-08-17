@@ -1,5 +1,55 @@
 # 待归档变更记录
 
+## 2026-08-17 query - 查询执行携带意图归因请求头（CLI + MCP）
+
+**变更原因**：意图管理闭环需要在真正执行查询（而非仅匹配意图）时，把「本次执行来自哪个
+意图匹配/选表来源」回传服务端，用于归因统计。服务端契约（QA 已上线）约定用
+`X-Intent-Code` / `X-Selection-Source` / `X-Match-Record-Id` 三个请求头传递，而不是放进
+payload——因为 `cli-query`/`cli-query/simple` 的 body 会原样透传给 Python 取数服务，塞入
+额外字段有被下游拒绝的风险。
+
+**改动点**：
+- `opscli/query/transport/client.py`：`cli_query` / `cli_simple_query` 新增可选参数
+  `extra_headers: dict | None = None`，非空时与 `_get_auth` 返回的认证头合并后一起发送；
+  不影响两方法原有的返回值与异常处理路径
+- `opscli/query/services/manager.py`：
+  - 新增模块级帮助函数 `_attribution_headers(intent_code, selection_source, match_record_id)`，
+    把归因三元组转成请求头字典，全空返回 `None`（`match_record_id` 转为字符串写入 Header）
+  - `QueryManager.run()` / `build_and_run()` / `build_simple_and_run()` 均新增关键字参数
+    `intent_code` / `selection_source` / `match_record_id`（默认 `None`，向后兼容），调用
+    `cli_query`/`cli_simple_query` 时透传 `extra_headers`
+  - 未触碰同文件内 Task B4 新增的 `intent_match()` / `_report_intent_match()`（不同函数，无重叠）
+- `opscli/query/commands/cli.py`：`query run` 与 `query simple` 两个命令各新增
+  `--intent-code` / `--selection-source` / `--match-record-id` 三个 Option，透传给 manager；
+  `simple` 命令仅在 `--run` 时（调用 `build_simple_and_run`）传入这三个参数，纯构造 payload
+  （`build_simple`）不接受这三个参数
+- `opscli/mcp/tools/query.py`：`query_run` / `query_build_and_run` 各新增同名三个可选参数
+  （默认 `None`），docstring 注明 `match_record_id` 取自 `query_intent_match` 返回值的
+  `match_record_id` 字段，透传给对应 manager 方法
+- `tests/query/test_intent_attribution_headers.py`（新建，按 brief 逐字实现）：respx mock 验证
+  携带归因参数时三个请求头正确到达、payload 不被污染；不传归因参数时请求头不出现
+- `tests/query/test_manager.py`：两处既有 `fake_cli_query(request_payload)` 桩函数因
+  `cli_query` 新增 `extra_headers` 关键字参数导致签名不匹配而失败，补充
+  `extra_headers=None` 形参使其兼容新签名（`test_run_forwards_payload_to_client`、
+  `test_build_and_run_uses_built_payload`），行为本身未变
+
+**验证结果**：
+- `python3 -m pytest tests/query/test_intent_attribution_headers.py -v` → 2 passed（新增用例全部通过）
+- `python3 -m pytest tests/query/ tests/mcp/test_query_tools.py -v` → 234 passed，无既有用例受影响
+- 全量 `python3 -m pytest tests/` 仍是既有环境问题导致的 25 个 collection error（`tests/mcp/test_shopify_tools.py`
+  的 `_shopify_manager` 导入失败等，与本任务改动的文件无关，未修改 `opscli/mcp/tools/helpers.py`）
+
+**影响范围**：`QueryManager.run()` / `build_and_run()` / `build_simple_and_run()` 新增三个可选
+关键字参数，默认值均为 `None`，不影响任何已有调用方；`QueryClient.cli_query()` /
+`cli_simple_query()` 新增可选参数 `extra_headers`，默认 `None` 时行为与改动前完全一致；
+CLI `query run`/`query simple` 与 MCP `query_run`/`query_build_and_run` 新增可选参数，不传时
+无感知
+
+**回滚方式**：`git revert` 本次提交；或手动移除四个文件中新增的 `intent_code`/`selection_source`/
+`match_record_id`/`extra_headers` 相关代码，并删除新建测试文件
+
+---
+
 ## 2026-08-17 query - 意图匹配事件上报（含未命中，失败静默）
 
 **变更原因**：意图管理闭环需要在客户端侧上报每一次 `intent_match` 调用（含命中/未命中），
