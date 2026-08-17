@@ -1,5 +1,42 @@
 # 待归档变更记录
 
+## 2026-08-17 query - 意图匹配解析 embedded_intent 到执行父表
+
+**变更原因**：catalog 中 embedded_intent 类型的意图（如"实时销售监控"）自身不可执行，
+真正的查询表是 `execution_dataset_id` 指向的父表（如"即时综合"）。此前 `_candidate()`
+直接取意图自身的 `table_id`/`dataset_alias`/`dataset_name`，Agent 据此构造的查询会打到
+一张不该用的子表，与降级路径 `local_fallback.py::_resolve_execution_row` 的路由契约不一致
+（该函数已经按 `execution_dataset_id` 解析父表）。
+
+**改动点**：
+- `opscli/query/services/intent_matcher.py`：
+  - `match_catalog_intents()` 遍历打分前构建 `intents_by_table_id`（`table_id -> 意图行`）
+    索引，用于按 `execution_dataset_id` 反查父表；调用 `_candidate()` 时传入该索引。
+  - `_candidate()` 新增 `intents_by_table_id` 参数：当 `routing_status == "embedded_intent"`
+    时，用 `execution_dataset_id` 查父表，查到则把输出的 `table_id`/`dataset_alias`/
+    `dataset_name` 换成父表的值，`embedded_from_table_id` 记录意图自身原表；查不到则退回
+    自身表（宁可少一层跳转也不能产出解析不出 `table_id` 的候选）。`intent_code`/
+    `intent_name`/`priority`/约束仍取原意图，保留用户认知里的意图名作为披露口径。
+  - 输出新增两个键：`routing_status`（`direct_intent`/`embedded_intent`）、
+    `embedded_from_table_id`（embedded_intent 时为原表 id，否则为 `None`）。
+- `tests/query/test_intent_matcher_guardrails.py`：新增两个测试用例
+  - `test_embedded_intent_resolves_to_execution_dataset`：验证父表可查到时正确落地
+  - `test_embedded_intent_missing_parent_keeps_own_table`：验证父表断链时退回自身表
+
+**验证结果**：
+- `pytest tests/query/test_intent_matcher_guardrails.py -v -k embedded` → 先失败
+  `KeyError: 'routing_status'`，实现后 2 passed
+- `pytest tests/query/test_intent_matcher_guardrails.py -v` → 4 passed（含 B1 两条护栏用例）
+- `pytest tests/query/ -v` → 225 passed（全量回归，无既有用例受影响）
+
+**影响范围**：意图匹配层的候选输出新增两个键，manager.py 中 `match_catalog_intents()`
+调用是直接透传返回值，无解构消费，不受影响。Task B3 后续消费方（CLI/MCP/Skill 文档）
+需按新契约读取 `routing_status`/`embedded_from_table_id`；正常取数主链路无影响。
+
+**回滚方式**：`git revert` 本次提交即可恢复。
+
+---
+
 ## 2026-08-17 query - 意图匹配候选透传业务约束护栏
 
 **变更原因**：catalog 里 36/41 条意图带 hard_constraints（如"库存快照字段只能用于明细表"），

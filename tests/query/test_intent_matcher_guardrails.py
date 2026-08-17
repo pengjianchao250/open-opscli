@@ -47,3 +47,52 @@ def test_intent_constraints_default_guardrails_to_empty_lists():
     assert constraints["hard_constraints"] == []
     assert constraints["avoid_when"] == []
     assert constraints["clarify_when"] == []
+
+
+def test_embedded_intent_resolves_to_execution_dataset():
+    """embedded_intent 必须把 table_id/alias 落到 execution_dataset_id 指向的父表。
+
+    为什么：catalog 的「即时销售」意图 routing_status=embedded_intent、
+    execution_dataset_id 指向即时综合（父表）；不解析的话 Agent 会被指去
+    意图自身的表，与路由契约（local_fallback._resolve_execution_row）不一致。
+    """
+    catalog = {
+        "version": "v1.0.0",
+        "intent_count": 2,
+        "intents": [
+            {
+                "intent_code": "parent_intent", "intent_name": "即时综合分析",
+                "table_id": 1, "dataset_alias": "ds_parent", "dataset_name": "即时综合数据集",
+                "keywords": ["即时综合"], "priority": 100,
+            },
+            {
+                "intent_code": "realtime_sales_monitoring", "intent_name": "实时销售监控",
+                "table_id": 3, "dataset_alias": "ds_child", "dataset_name": "即时销售数据集",
+                "keywords": ["大促"], "priority": 100,
+                "routing_status": "embedded_intent", "execution_dataset_id": 1,
+            },
+        ],
+    }
+    result = match_catalog_intents(catalog, "大促表现")
+    top = result["candidates"][0]
+    assert top["intent_code"] == "realtime_sales_monitoring"
+    assert top["routing_status"] == "embedded_intent"
+    assert top["table_id"] == 1                      # 已落到父表
+    assert top["dataset_alias"] == "ds_parent"
+    assert top["embedded_from_table_id"] == 3        # 保留原表供披露
+
+
+def test_embedded_intent_missing_parent_keeps_own_table():
+    """execution_dataset_id 在 catalog 里找不到父表时退回自身表，不得产出空 table_id。"""
+    catalog = {
+        "version": "v1.0.0", "intent_count": 1,
+        "intents": [{
+            "intent_code": "orphan", "intent_name": "断链意图",
+            "table_id": 3, "dataset_alias": "ds_child", "dataset_name": "子表",
+            "keywords": ["断链"], "priority": 100,
+            "routing_status": "embedded_intent", "execution_dataset_id": 999,
+        }],
+    }
+    top = match_catalog_intents(catalog, "断链查询")["candidates"][0]
+    assert top["table_id"] == 3
+    assert top["dataset_alias"] == "ds_child"

@@ -38,6 +38,14 @@ def match_catalog_intents(
     if not isinstance(intents, list) or not intents:
         return _fallback_result(query=query, reason="empty_catalog", catalog=catalog)
 
+    # embedded_intent 解析用：table_id -> 意图行。父表信息只能从 catalog 自身反查，
+    # 匹配器没有 datasets.csv 可用；查不到父表时退回自身表，宁可少一层跳转
+    # 也不能产出解析不出 table_id 的候选（旧画像腐烂的教训）
+    intents_by_table_id = {
+        _safe_int(item.get("table_id")): item
+        for item in intents if isinstance(item, dict) and item.get("table_id")
+    }
+
     scored = []
     for intent in intents:
         if not isinstance(intent, dict):
@@ -50,6 +58,7 @@ def match_catalog_intents(
                     score=score,
                     matched_terms=matched_terms,
                     reason="；".join(reason_parts),
+                    intents_by_table_id=intents_by_table_id,
                 )
             )
 
@@ -94,18 +103,40 @@ def _fallback_result(*, query: str, reason: str, catalog: dict[str, Any]) -> dic
     }
 
 
-def _candidate(*, intent: dict[str, Any], score: int, matched_terms: list[str], reason: str) -> dict[str, Any]:
+def _candidate(
+    *,
+    intent: dict[str, Any],
+    score: int,
+    matched_terms: list[str],
+    reason: str,
+    intents_by_table_id: dict[int, dict[str, Any]],
+) -> dict[str, Any]:
+    # embedded_intent 意图自身不可执行，实际查询必须落到 execution_dataset_id
+    # 指向的父表——这与 local_fallback._resolve_execution_row 的路由契约一致。
+    # intent_code/intent_name/priority/约束仍取原 intent：披露口径要保留
+    # 用户认知里的意图名，只有执行落点（table_id/alias/dataset_name）切到父表。
+    routing_status = str(intent.get("routing_status") or "direct_intent")
+    execution = intent
+    embedded_from = None
+    if routing_status == "embedded_intent":
+        parent = intents_by_table_id.get(_safe_int(intent.get("execution_dataset_id")))
+        if parent is not None:
+            execution = parent
+            embedded_from = _safe_int(intent.get("table_id"))
+
     return {
         "intent_code": str(intent.get("intent_code") or ""),
         "intent_name": str(intent.get("intent_name") or ""),
-        "dataset_alias": intent.get("dataset_alias"),
-        "table_id": intent.get("table_id"),
-        "dataset_name": intent.get("dataset_name"),
+        "dataset_alias": execution.get("dataset_alias"),
+        "table_id": execution.get("table_id"),
+        "dataset_name": execution.get("dataset_name"),
         "priority": _safe_int(intent.get("priority")),
         "score": score,
         "matched_terms": matched_terms,
         "reason": reason,
         "intent_constraints": _intent_constraints(intent),
+        "routing_status": routing_status,
+        "embedded_from_table_id": embedded_from,
     }
 
 
