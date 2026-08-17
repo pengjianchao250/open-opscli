@@ -241,6 +241,10 @@ async def query_intent_match(
             skills_dir=skills_dir,
             source=source,
             fallback_local=fallback_local,
+            # MCP 路径需显式声明上报来源为 mcp_intent，
+            # 否则会沿用 QueryManager.intent_match 的默认值 "cli_intent"，
+            # 导致服务端归因统计里 MCP 调用被误记为 CLI 调用。
+            report_source="mcp_intent",
         )
         return _ok(result)
     except Exception as exc:

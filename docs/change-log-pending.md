@@ -1,5 +1,33 @@
 # 待归档变更记录
 
+## 2026-08-17 mcp - query_intent_match 上报来源标记为 mcp_intent
+
+**变更原因**：意图管理闭环最终审查发现 MCP 工具 `query_intent_match`
+（`opscli/mcp/tools/query.py:239` 附近）调用 `QueryManager.intent_match()` 时未显式传
+`report_source`，导致沿用方法默认值 `"cli_intent"`，MCP 路径的调用在服务端归因统计里被误记为
+CLI 调用；契约中定义的枚举值 `"mcp_intent"` 永远不会真正落库，破坏了 CLI/MCP 双入口的来源可辨识性。
+
+**改动点**：
+- `opscli/mcp/tools/query.py`：`query_intent_match` 内部调用 `intent_match()` 时补
+  `report_source="mcp_intent"` 显式参数，并加中文注释说明为何必须显式声明（否则会静默沿用
+  `QueryManager.intent_match` 的默认值）
+- `tests/mcp/test_query_tools.py`：新增
+  `test_query_intent_match_reports_mcp_intent_source`，沿用文件既有
+  `test_query_catalog_passes_remote_options_to_manager` 的 DummyManager 桩模式，monkeypatch
+  `_query_manager` 返回捕获 kwargs 的假 Manager，断言 `query_intent_match(...)` 调用
+  `intent_match()` 时携带 `report_source == "mcp_intent"`
+
+**验证结果**：`.venv/bin/python3 -m pytest tests/mcp/test_query_tools.py tests/query/ -v`
+→ 235 passed
+
+**影响范围**：仅影响 MCP 侧 `query_intent_match` 工具上报到服务端的 `match_source` 字段值；不影响
+匹配逻辑本身、CLI 路径（CLI 仍走 `intent_match()` 的默认值 `cli_intent`）、也不改变返回给调用方的
+`match_record_id`/`candidates` 等结果结构
+
+**回滚方式**：`git revert` 本次提交，或手动删除 `query.py` 中新增的
+`report_source="mcp_intent"` 入参及测试文件中新增的测试函数
+---
+
 ## 2026-08-17 skills - Skill 文档与版本收口（Task B7）
 
 **变更原因**：Task B1~B6 已恢复 `opscli query catalog`/`opscli query intent` 命令、在
