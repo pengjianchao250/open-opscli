@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+import anyio
 import pytest
 
 from opscli.mcp_client.remote_client import (
@@ -57,6 +58,20 @@ class DummyHttpTransport:
     async def __aexit__(self, exc_type, exc, tb):
         self.calls["transport_exited"] = True
         return False
+
+
+class TaskGroupHttpTransport(DummyHttpTransport):
+    """模拟真实 MCP transport 在上下文内持有 AnyIO TaskGroup。"""
+
+    async def __aenter__(self):
+        self.calls["transport_entered"] = True
+        self.task_group = anyio.create_task_group()
+        await self.task_group.__aenter__()
+        return ("read-stream", "write-stream", lambda: "session-id")
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.calls["transport_exited"] = True
+        return await self.task_group.__aexit__(exc_type, exc, tb)
 
 
 class DummyManagedHttpClient:
@@ -210,6 +225,23 @@ def test_call_tool_does_not_close_shared_http_client(monkeypatch):
         "success": True
     }
     assert "http_client_exited" not in calls
+
+
+def test_call_tool_preserves_real_transport_cancel_scope_order(monkeypatch):
+    """Transport 的 TaskGroup 必须在创建它的父级 cancel scope 内退出。"""
+    calls = {}
+    result = DummyResult([DummyTextContent(json.dumps({"success": True}))])
+    install_remote_client_mocks(monkeypatch, calls, result)
+    monkeypatch.setattr(
+        "opscli.mcp_client.remote_client.streamable_http_client",
+        lambda url, *, http_client: TaskGroupHttpTransport(calls),
+    )
+    client = RemoteMcpClient(url="https://collector.example.com/mcp")
+
+    assert asyncio.run(client.call_tool("collector_modules_health", {})) == {
+        "success": True
+    }
+    assert calls["transport_exited"] is True
 
 
 def test_call_tool_bounds_session_initialization(monkeypatch):
