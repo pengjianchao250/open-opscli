@@ -23,6 +23,10 @@ from opscli.mcp.ops_credentials import (
     ensure_ops_credentials,
 )
 from opscli.mcp.quota import get_quota_limiter
+from opscli.seller_sprite.services.api_manager import (
+    AI_TASK_DONE_STATUSES,
+    AI_TASK_FAILED_STATUSES,
+)
 
 from .helpers import _err, _ok, _parse_json_arg
 
@@ -235,7 +239,11 @@ def _extract_listing_analysis_asin(status: dict[str, Any], owner_record: dict[st
 def _select_listing_analysis_history_item(response: dict[str, Any], *, asin: str) -> dict[str, Any] | None:
     """从历史任务列表中选择匹配 ASIN 的 Listing Analysis 任务。"""
     data = response.get("data") if isinstance(response, dict) else None
-    items = data.get("items") if isinstance(data, dict) else None
+    items = None
+    if isinstance(data, dict):
+        items = data.get("data")
+        if not isinstance(items, list):
+            items = data.get("items")
     if not isinstance(items, list):
         return None
     asin_text = str(asin or "").strip().upper()
@@ -244,11 +252,77 @@ def _select_listing_analysis_history_item(response: dict[str, Any], *, asin: str
             continue
         if str(item.get("module") or "").strip().upper() != "LA":
             continue
-        title = str(item.get("tabTitle") or item.get("aliasTitle") or "").upper()
+        title = str(
+            item.get("tabTitle") or item.get("aliasTitle") or item.get("title") or ""
+        ).upper()
         if asin_text and asin_text not in title:
+            continue
+        analysis_type = str(
+            item.get("analysisType") or item.get("analysis_type") or ""
+        ).strip().lower()
+        if analysis_type and analysis_type != "all":
+            continue
+        if not analysis_type and "全景分析" not in title:
             continue
         return item
     return None
+
+
+def _listing_analysis_summary_status(
+    response: dict[str, Any], *, task_id: str
+) -> dict[str, Any]:
+    """将 original summary 的任务数组聚合为单个远端状态。"""
+    data = response.get("data") if isinstance(response, dict) else None
+    rows = [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+    statuses = [
+        str(row.get("taskStatus") or row.get("status") or "").strip().upper()
+        for row in rows
+    ]
+    failed_rows = [
+        row
+        for row, status in zip(rows, statuses)
+        if status in AI_TASK_FAILED_STATUSES
+    ]
+    # summary 包含主任务和子任务；任一子任务失败时，整体报告即不可用。
+    failed = bool(failed_rows)
+    # 只有所有返回任务均进入成功终态，报告才可继续读取。
+    ready = bool(statuses) and not failed and all(
+        status in AI_TASK_DONE_STATUSES for status in statuses
+    )
+    if failed:
+        remote_status = next(
+            status for status in statuses if status in AI_TASK_FAILED_STATUSES
+        )
+    elif ready:
+        remote_status = "COMPLETED"
+    else:
+        remote_status = next(
+            (status for status in statuses if status not in AI_TASK_DONE_STATUSES),
+            "",
+        )
+    main_item = next(
+        (
+            row
+            for row in rows
+            if str(row.get("taskId") or "") == task_id
+            and not bool(row.get("isSub"))
+        ),
+        next(
+            (row for row in rows if not bool(row.get("isSub"))),
+            rows[0] if rows else None,
+        ),
+    )
+    # 失败时优先返回实际失败行以保留 taskErrMsg；否则返回主任务，缺失标记时回退首行。
+    item = failed_rows[0] if failed_rows else main_item
+    return {
+        "task_id": task_id,
+        "ready": ready,
+        "failed": failed,
+        "remote_status": remote_status,
+        "summary_item": item,
+        "summary_items": rows,
+        "remote": response,
+    }
 
 
 def _listing_analysis_analyzing(response: dict[str, Any]) -> bool:
@@ -399,10 +473,20 @@ def _listing_analysis_failure_payload(status: dict[str, Any], remote: dict[str, 
     response = remote.get("remote") if isinstance(remote.get("remote"), dict) else {}
     data = response.get("data") if isinstance(response, dict) else None
     message = "Listing Analysis 远端 AI 任务失败"
-    remote_status = ""
+    remote_status = str(remote.get("remote_status") or "")
+    summary_item = remote.get("summary_item")
+    if isinstance(summary_item, dict):
+        remote_status = str(summary_item.get("taskStatus") or remote_status)
+        message = str(summary_item.get("taskErrMsg") or message)
     if isinstance(data, dict):
         remote_status = str(data.get("taskStatus") or data.get("status") or "")
-        message = str(data.get("message") or data.get("msg") or data.get("error") or message)
+        message = str(
+            data.get("taskErrMsg")
+            or data.get("message")
+            or data.get("msg")
+            or data.get("error")
+            or message
+        )
     error_payload = {
         "code": "SELLER_SPRITE_LISTING_ANALYSIS_FAILED",
         "message": message,
@@ -454,23 +538,65 @@ async def _fetch_listing_analysis_history_status(
             client=client,
             warnings=[],
             stage="listing_analysis_history",
-            action=lambda: client.get_json(
-                "/v3/api/ai-analysis/task/history",
-                {"page": 1, "pageSize": 20, "keywords": "", "modules": ""},
-                referer="https://www.sellersprite.com/v3/ai-history?module=LA",
+            action=lambda: client.post_json(
+                "/v3/api/ai-analysis/usage-log",
+                {
+                    "page": 1,
+                    "size": 20,
+                    "keywords": asin,
+                    "modules": ["LA"],
+                    "markets": [],
+                },
+                referer="https://www.sellersprite.com/v3/ai-history?historyType=all&backModule=LA",
             ),
         )
     item = _select_listing_analysis_history_item(response, asin=asin)
     task_status = str((item or {}).get("taskStatus") or "").strip().upper()
-    task_id = str((item or {}).get("taskId") or "").strip() or None
+    task_id = str(
+        (item or {}).get("originalTaskId") or (item or {}).get("taskId") or ""
+    ).strip() or None
     return {
         "task_id": task_id,
-        "ready": task_status in {"COMPLETED", "COMPLETE", "SUCCESS", "SUCCEEDED", "FINISHED", "DONE"},
-        "failed": task_status in {"FAILED", "FAIL", "ERROR", "CANCELED", "CANCELLED", "EXPIRED"},
+        "ready": task_status in AI_TASK_DONE_STATUSES,
+        "failed": task_status in AI_TASK_FAILED_STATUSES,
         "remote_status": task_status,
         "history_item": item,
         "remote": response,
     }
+
+
+async def _fetch_listing_analysis_summary_status(
+    *,
+    task_id: str,
+    session_id: str | None,
+    jwt: str | None,
+    account_binding: dict[str, str | None] | None = None,
+) -> dict[str, Any]:
+    """通过 original summary 接口读取 Listing Analysis 原始任务状态。"""
+    from opscli.seller_sprite.api.client import SellerSpriteApiClient
+    from opscli.seller_sprite.services import SellerSpriteApiManager
+    from opscli.seller_sprite.services.api_manager import _request_with_session_retry
+
+    manager = SellerSpriteApiManager(jwt=jwt, session_id=session_id)
+    account = _resolve_listing_analysis_account(manager, account_binding)
+    report_url = (
+        "https://www.sellersprite.com/v3/ai-history?module=LA&taskId="
+        f"{task_id}"
+    )
+    async with SellerSpriteApiClient(account=account) as client:
+        if not client.has_login_cookies():
+            await client.login()
+        response = await _request_with_session_retry(
+            client=client,
+            warnings=[],
+            stage="listing_analysis_summary",
+            action=lambda: client.get_json(
+                f"/v3/api/ai-analysis/task/original/summary/{task_id}",
+                {},
+                referer=report_url,
+            ),
+        )
+    return _listing_analysis_summary_status(response, task_id=task_id)
 
 
 async def _fetch_listing_analysis_report_result(
@@ -1026,16 +1152,16 @@ async def seller_sprite_listing_analysis_status(
             return _ok(_sanitize_status(status))
         task_id = _extract_listing_analysis_task_id(status)
         asin = _extract_listing_analysis_asin(status, owner_record)
-        if asin:
-            remote = await _fetch_listing_analysis_history_status(
-                asin=asin,
+        if task_id:
+            remote = await _fetch_listing_analysis_summary_status(
+                task_id=task_id,
                 session_id=sid,
                 jwt=jw,
                 account_binding=account_binding,
             )
-        elif task_id:
-            remote = await _fetch_listing_analysis_remote_status(
-                task_id=task_id,
+        elif asin:
+            remote = await _fetch_listing_analysis_history_status(
+                asin=asin,
                 session_id=sid,
                 jwt=jw,
                 account_binding=account_binding,
@@ -1079,35 +1205,42 @@ async def seller_sprite_listing_analysis_result(
             return _ok(_sanitize_status(status))
         task_id = _extract_listing_analysis_task_id(status)
         asin = _extract_listing_analysis_asin(status, owner_record)
-        if asin:
-            history = await _fetch_listing_analysis_history_status(
+        if task_id:
+            task_status = await _fetch_listing_analysis_summary_status(
+                task_id=task_id,
+                session_id=sid,
+                jwt=jw,
+                account_binding=account_binding,
+            )
+        elif asin:
+            task_status = await _fetch_listing_analysis_history_status(
                 asin=asin,
                 session_id=sid,
                 jwt=jw,
                 account_binding=account_binding,
             )
-            if history.get("failed"):
-                return _ok(
-                    _sanitize_status(
-                        _mark_listing_analysis_remote_failed(job_id, status, history)
-                    )
-                )
-            if not history.get("task_id"):
-                return _ok(
-                    _sanitize_status(
-                        {**status, **history, "ready": False, "export_format": export_format}
-                    )
-                )
-            task_id = str(history["task_id"])
-            if not history.get("ready"):
-                return _ok(
-                    _sanitize_status(
-                        {**status, **history, "ready": False, "export_format": export_format}
-                    )
-                )
-        if not task_id:
+        else:
             status["ready"] = False
             return _ok(_sanitize_status(status))
+        if task_status.get("failed"):
+            return _ok(
+                _sanitize_status(
+                    _mark_listing_analysis_remote_failed(job_id, status, task_status)
+                )
+            )
+        if not task_status.get("task_id"):
+            return _ok(
+                _sanitize_status(
+                    {**status, **task_status, "ready": False, "export_format": export_format}
+                )
+            )
+        task_id = str(task_status["task_id"])
+        if not task_status.get("ready"):
+            return _ok(
+                _sanitize_status(
+                    {**status, **task_status, "ready": False, "export_format": export_format}
+                )
+            )
         remote = await _fetch_listing_analysis_report_result(
             task_id=task_id,
             session_id=sid,

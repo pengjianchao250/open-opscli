@@ -55,7 +55,7 @@
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
 - `competitor-lookup` 收到 Amazon 商品链接时，应先提取 ASIN，再传 `params.asins`。
 - `competitor-lookup` 如果用户只给了单个 `asin`，也应先归一化成 `params.asins` 再执行。
-- `listing-analysis` 结果通常 3 分钟以上才生成，推荐使用 `listing-analysis-submit/status/result` 三段式；提交走 `ai-history?module=LA` 页面输入，续查用 `task/history` 按 ASIN 获取真实报告 `taskId`，取结果再进入 `ai-report?id=<taskId>&from=history` 捕获 `competing-lookup`；不要让 `seller_sprite_run` 同步阻塞等待完整结果。
+- `listing-analysis` 结果通常 3 分钟以上才生成，推荐使用 `listing-analysis-submit/status/result` 三段式；提交在 `ai-history?module=LA` 页面显式选择“全景分析”（单次消耗卖家精灵 10 次额度）并保存真实 `taskId`，续查优先用 `task/original/summary/<taskId>`，缺失 ID 时才用 `usage-log` 恢复，取结果再进入 `ai-history?module=LA&taskId=<taskId>` 捕获 `competing-lookup`；不要让 `seller_sprite_run` 同步阻塞等待完整结果。
 
 ## 缺参澄清规则
 

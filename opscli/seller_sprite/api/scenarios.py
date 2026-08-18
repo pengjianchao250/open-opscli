@@ -233,10 +233,11 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
     "listing-analysis": SellerSpriteScenario(
         scenario_id="listing-analysis",
         title="Listing Analysis",
-        endpoint="/v3/api/ai-analysis/get-submitted",
+        endpoint="/v3/api/ai-workflow/listing-analysis",
         method="PAGE_CAPTURE",
         required_params=("asin",),
         payload_builder=make_listing_analysis_payload,
+        browser_context_only=True,
     ),
 }
 

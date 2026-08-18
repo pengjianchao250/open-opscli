@@ -980,10 +980,10 @@ class FakeListingLocator:
         self.first = self
 
     async def count(self):
-        return 1
+        return int(self.kind != "missing")
 
     async def is_visible(self, **kwargs):
-        return True
+        return self.kind != "missing"
 
     async def fill(self, value):
         self.page.fills.append({"kind": self.kind, "value": value})
@@ -1000,11 +1000,34 @@ class FakeListingPage:
         self.fills = []
         self.presses = []
         self.clicks = []
+        self.main_response_timeout = None
+
+    def expect_response(self, predicate, **kwargs):
+        response = SimpleNamespace(
+            url="https://www.sellersprite.com/v3/api/ai-workflow/listing-analysis",
+            status=200,
+        )
+        assert predicate(response)
+        self.main_response_timeout = kwargs.get("timeout")
+        return _AssociationResponseWaiter(
+            "/v3/api/ai-workflow/listing-analysis",
+            response=response,
+        )
 
     def locator(self, selector):
-        if "input" in selector:
+        if "placeholder='请选择'" in selector:
+            return FakeListingLocator(self, "station_select")
+        if "美国站" in selector:
+            return FakeListingLocator(self, "station_us")
+        if "日本站" in selector:
+            return FakeListingLocator(self, "station_japan")
+        if selector.startswith("textarea") and "ASIN" in selector:
             return FakeListingLocator(self, "asin")
-        return FakeListingLocator(self, "submit")
+        if "全景分析" in selector:
+            return FakeListingLocator(self, "all")
+        if "立即生成解读报告" in selector:
+            return FakeListingLocator(self, "submit")
+        return FakeListingLocator(self, "missing")
 
 
 class _AssociationResponseWaiter:
@@ -3507,7 +3530,7 @@ def test_post_query_context_request_uses_query_and_empty_json_body():
     response = _run(
         worker_module._request_with_browser_context(
             page,
-            endpoint="/v3/api/ai-workflow/listing-analysis",
+            endpoint="/v3/api/test-post-query",
             method="POST_QUERY",
             payload={"asin": "B0TEST", "station": "GLOBAL"},
         )
@@ -3515,7 +3538,7 @@ def test_post_query_context_request_uses_query_and_empty_json_body():
 
     assert response.status == 200
     call = page.context.request.post_calls[0]
-    assert call["url"] == "https://www.sellersprite.com/v3/api/ai-workflow/listing-analysis?asin=B0TEST&station=GLOBAL"
+    assert call["url"] == "https://www.sellersprite.com/v3/api/test-post-query?asin=B0TEST&station=GLOBAL"
     assert call["kwargs"]["data"] == "{}"
     assert call["kwargs"]["headers"]["Content-Type"] == "application/json;charset=UTF-8"
 
@@ -3744,7 +3767,7 @@ def test_xlsx_response_filename_is_safe_on_windows(value, expected):
     assert worker_module._safe_response_filename(value) == expected
 
 
-def test_listing_analysis_trigger_fills_asin_and_submits_with_enter_first():
+def test_listing_analysis_trigger_selects_panorama_and_clicks_latest_submit_button():
     page = FakeListingPage()
 
     clicked = _run(
@@ -3756,8 +3779,58 @@ def test_listing_analysis_trigger_fills_asin_and_submits_with_enter_first():
 
     assert clicked is True
     assert page.fills == [{"kind": "asin", "value": "B0TEST123"}]
-    assert page.presses == [{"kind": "asin", "key": "Enter"}]
-    assert page.clicks == []
+    assert page.presses == []
+    assert page.clicks == ["station_select", "station_us", "all", "submit"]
+
+
+def test_listing_analysis_trigger_selects_requested_station_before_submit():
+    page = FakeListingPage()
+
+    clicked = _run(
+        worker_module._trigger_listing_analysis_query(
+            page,
+            {"asin": "B0TEST123", "station": "JAPAN"},
+        )
+    )
+
+    assert clicked is True
+    assert page.clicks == ["station_select", "station_japan", "all", "submit"]
+
+
+def test_listing_analysis_trigger_waits_for_panorama_creation_response(tmp_path):
+    endpoint = "/v3/api/ai-workflow/listing-analysis"
+    page = FakeListingPage()
+    request = worker_module.BrowserRouteRequest(
+        scenario="listing-analysis",
+        method="PAGE_CAPTURE",
+        endpoint=endpoint,
+        payload={"asin": "B0TEST123", "station": "GLOBAL"},
+        referer="https://www.sellersprite.com/v3/ai-history?module=LA",
+        account=SellerSpriteAccount(
+            name="default", username="user@example.com", password="secret"
+        ),
+        root_dir=tmp_path,
+    )
+
+    response, transport = _run(
+        worker_module._trigger_request(
+            page,
+            endpoint=endpoint,
+            method="PAGE_CAPTURE",
+            payload=request.payload,
+            request=request,
+        )
+    )
+
+    assert response.status == 200
+    assert transport == "page_response"
+    assert page.main_response_timeout == worker_module.DEFAULT_TIMEOUT_MS
+
+
+def test_listing_analysis_report_url_uses_latest_history_task_route():
+    assert worker_module._listing_analysis_report_url("task id/1") == (
+        "https://www.sellersprite.com/v3/ai-history?module=LA&taskId=task%20id/1"
+    )
 
 
 def test_open_referer_navigates_directly_without_homepage(monkeypatch, tmp_path):

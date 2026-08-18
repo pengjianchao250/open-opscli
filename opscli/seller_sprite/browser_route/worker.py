@@ -85,6 +85,28 @@ WINDOWS_RESERVED_FILENAME_PATTERN = re.compile(
     r"CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]",
     re.I,
 )
+STATION_LABEL_BY_CODE = {
+    "GLOBAL": "美国站",
+    "US": "美国站",
+    "JAPAN": "日本站",
+    "JP": "日本站",
+    "UNITED_KINGDOM": "英国站",
+    "UK": "英国站",
+    "GERMANY": "德国站",
+    "DE": "德国站",
+    "FRANCE": "法国站",
+    "FR": "法国站",
+    "CANADA": "加拿大",
+    "CA": "加拿大",
+    "ITALY": "意大利",
+    "IT": "意大利",
+    "SPAIN": "西班牙",
+    "ES": "西班牙",
+    "INDIA": "印度站",
+    "IN": "印度站",
+    "MEXICO": "墨西哥",
+    "MX": "墨西哥",
+}
 
 _AUTO_XVFB_PROCESS: subprocess.Popen | None = None
 _AUTO_XVFB_DISPLAY: str | None = None
@@ -2625,7 +2647,9 @@ async def _trigger_request(
             )
             return response, "page_response"
         response_timeout = (
-            30000
+            DEFAULT_TIMEOUT_MS
+            if request and request.scenario == "listing-analysis"
+            else 30000
             if association_traffic_interaction
             else 15000
         )
@@ -2885,9 +2909,55 @@ async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool
     asin = str(payload.get("asin") or "").strip().upper()
     if not asin:
         return False
+    station = str(payload.get("station") or "GLOBAL").strip().upper()
+    station_label = STATION_LABEL_BY_CODE.get(station)
+    if station_label is None:
+        raise SellerSpriteApiError(
+            f"卖家精灵 Listing Analysis 页面不支持当前站点：{station}",
+            api_code="ERR_LISTING_ANALYSIS_STATION",
+        )
+    station_select = await _first_visible_page_locator(
+        page,
+        [
+            ".el-select:visible input[placeholder='请选择']:visible",
+            "input[placeholder='请选择']:visible",
+        ],
+    )
+    if station_select is None:
+        return False
+    # worker 会复用页面，所有站点都显式重选，避免继承上一个任务的市场。
+    await station_select.click(timeout=5000)
+    station_option = await _first_visible_page_locator(
+        page,
+        [
+            f"li.el-select-dropdown__item:visible:has-text('{station_label}')",
+            f".el-select-dropdown__item:visible:has-text('{station_label}')",
+        ],
+    )
+    if station_option is None:
+        raise SellerSpriteApiError(
+            f"卖家精灵 Listing Analysis 页面未找到站点：{station_label}",
+            api_code="ERR_LISTING_ANALYSIS_STATION",
+        )
+    await station_option.click(timeout=5000)
+    analysis_option = await _first_visible_page_locator(
+        page,
+        [
+            "label.el-radio:visible:has-text('全景分析')",
+            "[role='radio']:visible:has-text('全景分析')",
+            ".el-radio:visible:has-text('全景分析')",
+        ],
+    )
+    if analysis_option is None:
+        return False
+    # 新版默认选中文案质量分析；必须显式切换全景分析，才能保持原功能语义。
+    await analysis_option.click(timeout=5000)
     input_box = await _first_visible_page_locator(
         page,
         [
+            "textarea[placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
+            "textarea[placeholder*='asin']:visible:not([readonly]):not([disabled])",
+            "textarea.el-textarea__inner:visible:not([readonly]):not([disabled])",
             "input[placeholder*='ASIN']:visible:not([readonly]):not([disabled])",
             "input[placeholder*='asin']:visible:not([readonly]):not([disabled])",
             "input[type='text']:visible:not([readonly]):not([disabled])",
@@ -2896,14 +2966,12 @@ async def _trigger_listing_analysis_query(page, payload: dict[str, Any]) -> bool
     if input_box is None:
         return False
     await input_box.fill(asin)
-    try:
-        await input_box.press("Enter", timeout=5000)
-        return True
-    except Exception:
-        pass
     button = await _first_visible_page_locator(
         page,
         [
+            "button:visible:has-text('立即生成解读报告')",
+            "[role='button']:visible:has-text('立即生成解读报告')",
+            ".el-button:visible:has-text('立即生成解读报告')",
             "button:visible:has-text('立即分析')",
             "[role='button']:visible:has-text('立即分析')",
             "button:visible:has-text('立即查询')",
@@ -3491,17 +3559,9 @@ async def _select_keyword_conversion_rate_filters(
     payload: dict[str, Any],
 ) -> None:
     """在录入关键词前选择站点和按周/近90天周期。"""
-    market_label = {
-        "US": "美国站",
-        "JP": "日本站",
-        "UK": "英国站",
-        "DE": "德国站",
-        "FR": "法国站",
-        "IT": "意大利",
-        "ES": "西班牙",
-        "CA": "加拿大",
-        "IN": "印度站",
-    }.get(str(payload.get("market") or "US").upper())
+    market_label = STATION_LABEL_BY_CODE.get(
+        str(payload.get("market") or "US").upper()
+    )
     if market_label is None:
         raise SellerSpriteApiError(
             "关键词转化率页面不支持当前站点",
@@ -4114,7 +4174,10 @@ def _quarantine_profile_if_unused(
 
 def _listing_analysis_report_url(task_id: str) -> str:
     """构造 Listing Analysis 历史报告详情页地址。"""
-    return f"{BASE_URL}/v3/ai-report?id={quote(str(task_id).strip())}&from=history"
+    return (
+        f"{BASE_URL}/v3/ai-history?module=LA&taskId="
+        f"{quote(str(task_id).strip())}"
+    )
 
 
 def _absolute_url(url: str) -> str:

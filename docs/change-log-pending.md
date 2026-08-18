@@ -6682,3 +6682,12 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：新增第三方 MCP 上游接入能力；现有本地 Tool 和 Collector 代理保持原行为。
 **回滚方式**：回退本条记录对应的上游网关、MCP 注册和测试改动。
 ---
+
+## 2026-08-18 seller_sprite - 适配新版 Listing 诊断页面与任务接口
+
+**变更原因**：卖家精灵 Listing 诊断改为 textarea 输入和多分析类型，默认“文案质量分析”，创建、历史、状态及详情路由均已更新；旧实现会找不到输入框、误提交默认类型，或继续调用已下线的任务接口。
+**改动点**：browser-route 每次显式选择目标站点和“全景分析”，填写新版 textarea 并点击“立即生成解读报告”，创建响应等待延长至 120 秒；场景改为只在 browser-route 捕获 `/v3/api/ai-workflow/listing-analysis` 的真实页面请求，避免覆盖页面生成的 `base64Data/productType`；状态优先读取 `/task/original/summary/<taskId>` 数组并透传失败子任务的 `taskErrMsg`，缺少任务 ID 时通过 `POST /usage-log` 按 ASIN、全景类型和新版 `title` 字段恢复；报告详情改为 `ai-history?module=LA&taskId=<taskId>`；同步更新 SellerSprite Skill 文档和回归测试。
+**验证结果**：按 red-green 新增并验证 textarea、全景选择、美国站强制重选、新按钮、120 秒创建等待、新场景接口、summary 数组、usage-log 新版 `title`、taskId 优先、失败子任务原因和新版详情路由测试；本次修改文件的专属回归为 `353 passed, 1 deselected`，被排除项是既有 Windows 长临时路径文件名测试；扩展 SellerSprite、MCP 注册和额度回归为 `592 passed, 3 failed`，3 项单独运行仍复现，分别是同一 Windows 文件名问题和 2 项既有 `seller-sprite-debug` 未注册问题；完整测试集使用 `--import-mode=importlib` 运行后另被既有 `tests/skills/test_packaging.py` 关闭 pytest 捕获流的问题阻断，结果为 `13 errors` 和 `ValueError: I/O operation on closed file`；相关 Python 文件 `py_compile` 和 `git diff --check` 通过。本地开发环境未安装 Ruff。
+**影响范围**：影响 SellerSprite Listing Analysis 的专用 submit/status/result、browser-route 页面交互、远端任务恢复和相关 Skill 使用说明；普通 SellerSprite 场景不变。
+**回滚方式**：回退本条涉及的 SellerSprite 场景、browser-route、MCP 状态逻辑、Skill 文档、测试和本条变更记录；回滚后新版页面将无法可靠提交或续查全景报告。
+---
