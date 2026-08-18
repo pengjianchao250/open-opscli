@@ -76,3 +76,50 @@ def test_mcp_upstream_validate_outputs_only_approved_metadata(tmp_path):
         ],
     }
     assert "secret" not in result.stdout.lower()
+
+
+def test_mcp_upstream_validate_never_echoes_inline_authorization(tmp_path):
+    config_path = tmp_path / "mcp-upstreams.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "servers": [
+                    {
+                        "id": "pnd",
+                        "url": "http://10.1.6.13:8008/mcp",
+                        "allow_private_networks": True,
+                        "auth": {
+                            "type": "header",
+                            "header_name": "Authorization",
+                            "value": "Basic must-not-leak",
+                        },
+                        "caller_identity": {
+                            "source": "email",
+                            "location": "header",
+                            "header_name": "X-Opscli-User-Email",
+                            "required": True,
+                        },
+                        "tools": [
+                            {
+                                "remote_name": "list_available_datasets",
+                                "exposed_name": "ext_pnd_list_available_datasets",
+                                "description": "查询鹰眼数据集目录。",
+                                "input_schema": {"type": "object", "properties": {}},
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["upstream", "validate", "--config", str(config_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "must-not-leak" not in result.stdout
+    assert "Authorization" not in result.stdout

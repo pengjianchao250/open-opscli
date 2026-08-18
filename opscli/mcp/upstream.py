@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import ipaddress
 import json
 import logging
@@ -14,7 +15,7 @@ import socket
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -138,6 +139,12 @@ class UpstreamMcpCallError(UpstreamMcpError):
     code = "UPSTREAM_MCP_CALL_FAILED"
 
 
+class UpstreamMcpIdentityRequiredError(UpstreamMcpError):
+    """上游要求调用者身份但当前请求没有可信邮箱。"""
+
+    code = "UPSTREAM_MCP_IDENTITY_REQUIRED"
+
+
 @dataclass(frozen=True)
 class UpstreamMcpAuth:
     """单个上游服务的出站鉴权配置。"""
@@ -145,6 +152,17 @@ class UpstreamMcpAuth:
     type: str
     secret_file_env: str | None = None
     header_name: str | None = None
+    value: str | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class UpstreamMcpCallerIdentity:
+    """按请求透传到上游的可信调用者身份配置。"""
+
+    source: str
+    location: str
+    header_name: str
+    required: bool
 
 
 @dataclass(frozen=True)
@@ -169,11 +187,14 @@ class UpstreamMcpServer:
     """单个第三方 MCP 的连接和隔离配置。"""
 
     id: str
-    url_env: str
+    url: str | None
+    url_env: str | None
     allowed_hosts: tuple[str, ...]
     allowed_ports: tuple[int, ...]
     allow_private_networks: bool
+    allow_insecure_http: bool
     auth: UpstreamMcpAuth
+    caller_identity: UpstreamMcpCallerIdentity | None
     max_concurrent: int
     max_concurrent_per_user: int
     queue_timeout_seconds: float
@@ -254,10 +275,29 @@ def _parse_server(
     server_id = _required_text(raw, "id", f"servers[{index}]")
     if not _SERVER_ID_PATTERN.fullmatch(server_id):
         raise UpstreamMcpConfigError(f"上游 MCP 服务 id 非法：{server_id}")
-    url_env = _required_env_name(raw, "url_env", f"服务 {server_id}")
-    allowed_hosts = _parse_hosts(raw.get("allowed_hosts"), server_id)
-    allowed_ports = _parse_ports(raw.get("allowed_ports", [443]), server_id)
+    transport = str(raw.get("transport", "streamable_http")).strip().lower()
+    if transport != "streamable_http":
+        raise UpstreamMcpConfigError(f"服务 {server_id} 的 transport 必须为 streamable_http")
+    allow_private_networks = raw.get("allow_private_networks", False)
+    if not isinstance(allow_private_networks, bool):
+        raise UpstreamMcpConfigError(
+            f"服务 {server_id} 的 allow_private_networks 必须为布尔值"
+        )
+    url, url_env, allowed_hosts, allowed_ports, allow_insecure_http = _parse_connection(
+        raw,
+        server_id=server_id,
+        allow_private_networks=allow_private_networks,
+    )
     auth = _parse_auth(raw.get("auth", {"type": "none"}), server_id)
+    caller_identity = _parse_caller_identity(raw.get("caller_identity"), server_id)
+    if (
+        caller_identity is not None
+        and auth.header_name is not None
+        and caller_identity.header_name.casefold() == auth.header_name.casefold()
+    ):
+        raise UpstreamMcpConfigError(
+            f"服务 {server_id} 的调用者身份 Header 不能与鉴权 Header 重名"
+        )
     limits = raw.get("limits", {})
     if not isinstance(limits, dict):
         raise UpstreamMcpConfigError(f"服务 {server_id} 的 limits 必须为对象")
@@ -294,18 +334,16 @@ def _parse_server(
         _parse_tool(item, server_id=server_id, index=tool_index, exposed_names=exposed_names)
         for tool_index, item in enumerate(raw_tools)
     )
-    allow_private_networks = raw.get("allow_private_networks", False)
-    if not isinstance(allow_private_networks, bool):
-        raise UpstreamMcpConfigError(
-            f"服务 {server_id} 的 allow_private_networks 必须为布尔值"
-        )
     return UpstreamMcpServer(
         id=server_id,
+        url=url,
         url_env=url_env,
         allowed_hosts=allowed_hosts,
         allowed_ports=allowed_ports,
         allow_private_networks=allow_private_networks,
+        allow_insecure_http=allow_insecure_http,
         auth=auth,
+        caller_identity=caller_identity,
         max_concurrent=max_concurrent,
         max_concurrent_per_user=max_per_user,
         queue_timeout_seconds=queue_timeout,
@@ -395,7 +433,25 @@ def _parse_auth(raw: Any, server_id: str) -> UpstreamMcpAuth:
         return UpstreamMcpAuth(type="none")
     if auth_type not in {"bearer", "header"}:
         raise UpstreamMcpConfigError(f"服务 {server_id} 的 auth.type 不受支持")
-    secret_env = _required_env_name(raw, "secret_file_env", f"服务 {server_id} auth")
+    raw_value = raw.get("value")
+    has_value = isinstance(raw_value, str) and bool(raw_value.strip())
+    has_secret_env = isinstance(raw.get("secret_file_env"), str) and bool(
+        str(raw.get("secret_file_env")).strip()
+    )
+    if has_value == has_secret_env:
+        raise UpstreamMcpConfigError(
+            f"服务 {server_id} auth 必须且只能配置 value 或 secret_file_env"
+        )
+    value = str(raw_value).strip() if has_value else None
+    if value is not None and (
+        len(value.encode("utf-8")) > 8192 or "\r" in value or "\n" in value
+    ):
+        raise UpstreamMcpConfigError(f"服务 {server_id} auth.value 内容无效")
+    secret_env = (
+        _required_env_name(raw, "secret_file_env", f"服务 {server_id} auth")
+        if has_secret_env
+        else None
+    )
     header_name = "Authorization" if auth_type == "bearer" else _required_text(
         raw, "header_name", f"服务 {server_id} auth"
     )
@@ -407,7 +463,97 @@ def _parse_auth(raw: Any, server_id: str) -> UpstreamMcpAuth:
         type=auth_type,
         secret_file_env=secret_env,
         header_name=header_name,
+        value=value,
     )
+
+
+def _parse_caller_identity(raw: Any, server_id: str) -> UpstreamMcpCallerIdentity | None:
+    """校验按请求注入的邮箱 Header 声明。"""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise UpstreamMcpConfigError(f"服务 {server_id} 的 caller_identity 必须为对象")
+    source = str(raw.get("source", "")).strip().lower()
+    location = str(raw.get("location", "")).strip().lower()
+    header_name = _required_text(raw, "header_name", f"服务 {server_id} caller_identity")
+    required = raw.get("required", True)
+    if source != "email" or location != "header":
+        raise UpstreamMcpConfigError(
+            f"服务 {server_id} 的 caller_identity 仅支持 email Header"
+        )
+    if not isinstance(required, bool):
+        raise UpstreamMcpConfigError(
+            f"服务 {server_id} 的 caller_identity.required 必须为布尔值"
+        )
+    if (
+        not _HEADER_NAME_PATTERN.fullmatch(header_name)
+        or header_name.casefold() in _FORBIDDEN_AUTH_HEADERS
+        or header_name.casefold() == "authorization"
+    ):
+        raise UpstreamMcpConfigError(f"服务 {server_id} 的调用者身份 Header 名称非法")
+    return UpstreamMcpCallerIdentity(
+        source=source,
+        location=location,
+        header_name=header_name,
+        required=required,
+    )
+
+
+def _parse_connection(
+    raw: Mapping[str, Any],
+    *,
+    server_id: str,
+    allow_private_networks: bool,
+) -> tuple[str | None, str | None, tuple[str, ...], tuple[int, ...], bool]:
+    """解析直接 URL 或旧版环境变量连接配置。"""
+    direct_url = raw.get("url")
+    has_url = isinstance(direct_url, str) and bool(direct_url.strip())
+    has_url_env = isinstance(raw.get("url_env"), str) and bool(str(raw.get("url_env")).strip())
+    if has_url == has_url_env:
+        raise UpstreamMcpConfigError(f"服务 {server_id} 必须且只能配置 url 或 url_env")
+    if has_url_env:
+        url_env = _required_env_name(raw, "url_env", f"服务 {server_id}")
+        return (
+            None,
+            url_env,
+            _parse_hosts(raw.get("allowed_hosts"), server_id),
+            _parse_ports(raw.get("allowed_ports", [443]), server_id),
+            False,
+        )
+
+    url = str(direct_url).strip()
+    parsed = urlsplit(url)
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise UpstreamMcpConfigError(f"服务 {server_id} 的 url 端口非法") from exc
+    hostname = str(parsed.hostname or "").rstrip(".").casefold()
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise UpstreamMcpConfigError(f"服务 {server_id} 的 url 无效")
+
+    allow_insecure_http = parsed.scheme == "http"
+    if allow_insecure_http:
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError as exc:
+            raise UpstreamMcpConfigError(
+                f"服务 {server_id} 的 HTTP url 仅允许精确私网 IP"
+            ) from exc
+        if (
+            not address.is_private
+            or not _address_is_allowed(address, allow_private=allow_private_networks)
+        ):
+            raise UpstreamMcpConfigError(
+                f"服务 {server_id} 的 HTTP url 必须显式允许普通私网地址"
+            )
+    return url, None, (hostname,), (port,), allow_insecure_http
 
 
 def _parse_hosts(raw: Any, server_id: str) -> tuple[str, ...]:
@@ -494,6 +640,8 @@ class UpstreamMcpTransport(Protocol):
         server: UpstreamMcpServer,
         tool: UpstreamMcpTool,
         arguments: dict[str, Any],
+        *,
+        email: str | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -557,9 +705,12 @@ class _PinnedDnsTransport(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         """校验目标并将本次请求固定到同一次解析得到的安全 IP。"""
         host = str(request.url.host).rstrip(".").casefold()
-        port = request.url.port or 443
+        port = request.url.port or (443 if request.url.scheme == "https" else 80)
+        allowed_scheme = request.url.scheme == "https" or (
+            request.url.scheme == "http" and self._server.allow_insecure_http
+        )
         if (
-            request.url.scheme != "https"
+            not allowed_scheme
             or host not in self._server.allowed_hosts
             or port not in self._server.allowed_ports
         ):
@@ -584,10 +735,11 @@ class _PinnedDnsTransport(httpx.AsyncBaseTransport):
         if not addresses or len(allowed) != len(addresses):
             raise UpstreamMcpSecurityError(f"服务 {self._server.id} 的域名解析到受保护网络")
 
-        # Host 请求头在改写 URL 前已经生成，继续携带审批域名；SNI 扩展让 TLS
-        # 证书也按原域名校验，而底层连接只会访问这里固定的已校验 IP。
+        # Host 请求头在改写 URL 前已经生成；HTTPS 额外保留审批域名作为 SNI，
+        # 而底层连接只会访问这里固定的已校验 IP。
         request.url = request.url.copy_with(host=allowed[0])
-        request.extensions["sni_hostname"] = host
+        if request.url.scheme == "https":
+            request.extensions["sni_hostname"] = host
         response = await self._transport.handle_async_request(request)
         content_length = response.headers.get("content-length")
         if content_length and content_length.isdecimal() and int(content_length) > self._server.max_response_bytes:
@@ -616,6 +768,7 @@ class StreamableHttpUpstreamTransport:
         self.resolver = resolver
         self._clients: dict[str, httpx.AsyncClient] = {}
         self._urls: dict[str, str] = {}
+        self._caller_emails: dict[str, contextvars.ContextVar[str | None]] = {}
         self._startup_errors: dict[str, UpstreamMcpError] = {}
         self._opened = False
 
@@ -638,8 +791,29 @@ class StreamableHttpUpstreamTransport:
                     resolver=self.resolver,
                     limits=limits,
                 )
+                event_hooks = None
+                if server.caller_identity is not None:
+                    email_context = contextvars.ContextVar(
+                        f"upstream_email_{server.id}",
+                        default=None,
+                    )
+                    self._caller_emails[server.id] = email_context
+
+                    async def inject_caller_email(
+                        request: httpx.Request,
+                        *,
+                        context: contextvars.ContextVar[str | None] = email_context,
+                        header_name: str = server.caller_identity.header_name,
+                    ) -> None:
+                        # ContextVar 随异步任务传播，只修改本次 Request，避免共享连接池串用户。
+                        caller_email = context.get()
+                        if caller_email:
+                            request.headers[header_name] = caller_email
+
+                    event_hooks = {"request": [inject_caller_email]}
                 client = httpx.AsyncClient(
                     headers=headers,
+                    event_hooks=event_hooks,
                     follow_redirects=False,
                     timeout=10,
                     transport=transport,
@@ -657,6 +831,7 @@ class StreamableHttpUpstreamTransport:
         clients = list(self._clients.values())
         self._clients.clear()
         self._urls.clear()
+        self._caller_emails.clear()
         self._startup_errors.clear()
         self._opened = False
         if clients:
@@ -667,8 +842,26 @@ class StreamableHttpUpstreamTransport:
         server: UpstreamMcpServer,
         tool: UpstreamMcpTool,
         arguments: dict[str, Any],
+        *,
+        email: str | None = None,
     ) -> dict[str, Any]:
-        """在调用前复查 DNS，避免配置域名解析到受保护网络。"""
+        """调用审批后的远端 Tool，并为本次 MCP 会话绑定调用者邮箱。
+
+        Args:
+            server: 已校验的上游服务配置。
+            tool: 已审批且冻结 Schema 的 Tool 配置。
+            arguments: 发送给远端 Tool 的参数。
+            email: 当前已验证用户的标准化邮箱；不配置身份透传时可为空。
+
+        Returns:
+            远端 MCP Tool 返回的结构化结果。
+
+        Raises:
+            UpstreamMcpUnavailableError: 服务启动校验失败。
+            UpstreamMcpNotReadyError: 连接池尚未启动。
+            UpstreamMcpIdentityRequiredError: 上游要求邮箱但当前请求未提供。
+            UpstreamMcpSecurityError: 调用前目标地址安全校验失败。
+        """
         client = self._clients.get(server.id)
         url = self._urls.get(server.id)
         if server.id in self._startup_errors:
@@ -681,21 +874,42 @@ class StreamableHttpUpstreamTransport:
             http_client=client,
             max_response_bytes=server.max_response_bytes,
         )
-        return await remote.call_tool(tool.remote_name, arguments)
+        email_context = self._caller_emails.get(server.id)
+        if email_context is None:
+            return await remote.call_tool(tool.remote_name, arguments)
+
+        normalized_email = str(email or "").strip().lower()
+        if not normalized_email:
+            if server.caller_identity and server.caller_identity.required:
+                raise UpstreamMcpIdentityRequiredError(
+                    f"第三方 MCP 服务 {server.id} 要求已验证的调用者邮箱"
+                )
+            return await remote.call_tool(tool.remote_name, arguments)
+
+        # 一个 Tool 调用内的 initialize、tools/call 与 session 清理请求共享同一邮箱，
+        # finally 重置后不会影响同连接池中的其他并发任务。
+        context_token = email_context.set(normalized_email)
+        try:
+            return await remote.call_tool(tool.remote_name, arguments)
+        finally:
+            email_context.reset(context_token)
 
     def _validated_url(self, server: UpstreamMcpServer) -> str:
-        """只允许无内嵌凭证、无查询参数的精确 HTTPS 地址。"""
-        value = str(self.environ.get(server.url_env, "")).strip()
+        """读取并复查直接 URL 或旧版环境变量 URL 的精确目标。"""
+        value = server.url or str(self.environ.get(str(server.url_env), "")).strip()
         if not value:
             raise UpstreamMcpConfigError(f"服务 {server.id} 缺少 URL 环境变量 {server.url_env}")
         parsed = urlsplit(value)
         try:
-            port = parsed.port or 443
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
         except ValueError as exc:
             raise UpstreamMcpSecurityError(f"服务 {server.id} 的 URL 端口非法") from exc
         hostname = str(parsed.hostname or "").rstrip(".").casefold()
+        allowed_scheme = parsed.scheme == "https" or (
+            parsed.scheme == "http" and server.allow_insecure_http
+        )
         if (
-            parsed.scheme != "https"
+            not allowed_scheme
             or not hostname
             or parsed.username
             or parsed.password
@@ -704,23 +918,25 @@ class StreamableHttpUpstreamTransport:
             or hostname not in server.allowed_hosts
             or port not in server.allowed_ports
         ):
-            raise UpstreamMcpSecurityError(f"服务 {server.id} 的 URL 未通过 HTTPS 白名单校验")
+            raise UpstreamMcpSecurityError(f"服务 {server.id} 的 URL 未通过目标白名单校验")
         return value
 
     def _auth_headers(self, server: UpstreamMcpServer) -> dict[str, str] | None:
-        """从受保护文件读取凭证，配置和异常均不包含秘密原文。"""
+        """读取内联或受保护文件凭证，异常不得包含秘密原文。"""
         auth = server.auth
         if auth.type == "none":
             return None
-        path_value = str(self.environ.get(str(auth.secret_file_env), "")).strip()
-        if not path_value:
-            raise UpstreamMcpConfigError(f"服务 {server.id} 缺少凭证文件环境变量")
-        try:
-            secret = Path(path_value).expanduser().read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            raise UpstreamMcpConfigError(f"服务 {server.id} 的凭证文件不可读") from exc
+        secret = auth.value
+        if secret is None:
+            path_value = str(self.environ.get(str(auth.secret_file_env), "")).strip()
+            if not path_value:
+                raise UpstreamMcpConfigError(f"服务 {server.id} 缺少凭证文件环境变量")
+            try:
+                secret = Path(path_value).expanduser().read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise UpstreamMcpConfigError(f"服务 {server.id} 的凭证文件不可读") from exc
         if not secret or len(secret.encode("utf-8")) > 8192:
-            raise UpstreamMcpConfigError(f"服务 {server.id} 的凭证文件内容无效")
+            raise UpstreamMcpConfigError(f"服务 {server.id} 的凭证内容无效")
         value = f"Bearer {secret}" if auth.type == "bearer" else secret
         return {str(auth.header_name): value}
 
@@ -825,20 +1041,45 @@ class UpstreamMcpGateway:
         arguments: dict[str, Any],
         *,
         identity: str,
+        email: str | None = None,
     ) -> dict[str, Any]:
-        """通过审批工具名调用上游，并应用统一的资源和故障策略。"""
+        """通过审批工具名调用上游，并应用统一的资源和故障策略。
+
+        Args:
+            exposed_tool_name: opscli 对外暴露的审批 Tool 名称。
+            arguments: 已解析的 Tool 调用参数。
+            identity: 用于并发隔离的可信用户标识。
+            email: 当前请求中已经验证的用户邮箱。
+
+        Returns:
+            经过响应大小检查的远端结构化结果。
+
+        Raises:
+            UpstreamMcpNotReadyError: Gateway 生命周期尚未启动。
+            UpstreamMcpIdentityRequiredError: 目标服务要求邮箱但当前请求缺失。
+            UpstreamMcpCallError: 参数或远端调用结果不符合审批约束。
+            UpstreamMcpTimeoutError: 排队或远端调用超过截止时间。
+            UpstreamMcpCircuitOpenError: 目标服务熔断器处于开启状态。
+            UpstreamMcpUnavailableError: 目标服务当前不可用。
+        """
         if not self._ready:
             raise UpstreamMcpNotReadyError("第三方 MCP 网关尚未启动")
         tool = self.config.tool(exposed_tool_name)
         server = self.config.server(tool.server_id)
         state = self._states[server.id]
+        normalized_email = self._normalize_email(email, server)
         self._check_request_size(arguments, server)
         self._validate_arguments(tool, arguments)
         self._check_circuit(state)
         try:
             with anyio.fail_after(tool.timeout_seconds):
                 async with state.gate.slot(identity or "anonymous"):
-                    result = await self._call_with_retry(server, tool, arguments)
+                    result = await self._call_with_retry(
+                        server,
+                        tool,
+                        arguments,
+                        email=normalized_email,
+                    )
         except TimeoutError as exc:
             self._record_failure(server, state)
             raise UpstreamMcpTimeoutError(
@@ -867,12 +1108,19 @@ class UpstreamMcpGateway:
         server: UpstreamMcpServer,
         tool: UpstreamMcpTool,
         arguments: dict[str, Any],
+        *,
+        email: str | None,
     ) -> dict[str, Any]:
         """只重试明确幂等且属于建连类失败的调用。"""
         state = self._states[server.id]
         for attempt in range(tool.max_attempts):
             try:
-                return await self.transport.call_tool(server, tool, arguments)
+                return await self.transport.call_tool(
+                    server,
+                    tool,
+                    arguments,
+                    email=email,
+                )
             except Exception as exc:
                 if self._is_ambiguous_timeout(exc):
                     self._record_failure(server, state)
@@ -907,6 +1155,30 @@ class UpstreamMcpGateway:
                 if delay:
                     await asyncio.sleep(delay + random.uniform(0, delay * 0.2))
         raise AssertionError("上游 MCP 重试循环必须返回或抛出异常")
+
+    def _normalize_email(
+        self,
+        email: str | None,
+        server: UpstreamMcpServer,
+    ) -> str | None:
+        """标准化可信邮箱，并在上游要求身份时拒绝缺失或非法值。"""
+        if server.caller_identity is None:
+            return None
+        normalized = str(email or "").strip().lower()
+        valid = (
+            bool(normalized)
+            and "@" in normalized
+            and len(normalized) <= 254
+            and "\r" not in normalized
+            and "\n" not in normalized
+        )
+        if not valid:
+            if server.caller_identity.required:
+                raise UpstreamMcpIdentityRequiredError(
+                    f"第三方 MCP 服务 {server.id} 要求已验证的调用者邮箱"
+                )
+            return None
+        return normalized
 
     def _check_request_size(
         self, arguments: dict[str, Any], server: UpstreamMcpServer
@@ -1063,12 +1335,14 @@ class UpstreamMcpRuntime:
         async def invoke(**arguments: Any) -> dict[str, Any]:
             from opscli.mcp.context import get_current_user_email, get_current_user_id
 
-            identity = get_current_user_id() or get_current_user_email() or "stdio"
+            email = get_current_user_email()
+            identity = get_current_user_id() or email or "stdio"
             try:
                 return await self.gateway.call(
                     spec.exposed_name,
                     arguments,
                     identity=identity,
+                    email=email,
                 )
             except UpstreamMcpError as exc:
                 return {"success": False, "data": None, "error": exc.to_dict()}

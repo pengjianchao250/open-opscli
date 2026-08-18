@@ -6691,3 +6691,12 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：影响 SellerSprite Listing Analysis 的专用 submit/status/result、browser-route 页面交互、远端任务恢复和相关 Skill 使用说明；普通 SellerSprite 场景不变。
 **回滚方式**：回退本条涉及的 SellerSprite 场景、browser-route、MCP 状态逻辑、Skill 文档、测试和本条变更记录；回滚后新版页面将无法可靠提交或续查全景报告。
 ---
+
+## 2026-08-18 MCP - 简化第三方上游固定配置并透传调用者邮箱
+
+**变更原因**：固定内部 MCP 的 URL 与公共鉴权值无需通过多个环境变量间接配置，同时共享凭证场景需要按调用动态携带已验证邮箱以区分实际用户。
+**改动点**：新增单文件直连配置、生产 Transport 使用、已验证邮箱传递、缺失身份拒绝、配置来源互斥、身份与鉴权 Header 冲突、公网 HTTP 拒绝、私网 HTTP 地址固定、凭证脱敏及并发 Header 隔离测试；配置模型与生产 Transport 现支持直接 URL、固定 Authorization 与调用者邮箱 Header 声明，并与旧版 `url_env`、`secret_file_env` 格式互斥兼容；加载阶段拒绝身份 Header 覆盖鉴权 Header；Runtime 将标准化后的可信邮箱显式传入 Gateway/Transport，Transport 通过实例级 ContextVar 和请求钩子只修改当次 HTTP Request；直接 HTTP 额外检查 `is_private`，仅允许显式启用的普通私网固定 IP；固定凭证从配置对象 `repr` 中脱敏，Gateway 与测试 Transport 统一采用可选邮箱参数协议，接入指南提供可直接校验的最小只读 Tool。
+**验证结果**：上游网关与配置 CLI 定向测试 `35 passed`；远端客户端、动态 Tool Catalog、服务生命周期和 SellerSprite 代理兼容回归 `73 passed`；排除既有 `_shopify_manager` 缺失的 MCP 集合为 `394 passed, 3 failed`，3 项失败均为既有可选 Tool 未注册（Amazon Rufus 2 项、Scrape.do 1 项）；示例配置校验为 1 个服务、4 个 Tool，`compileall` 与 `git diff --check` 通过。本地未安装 Ruff；完整测试集仍受 `tests/skills/test_packaging.py` 关闭 pytest 捕获流、重复测试模块名、Skill 脚本导入缺失及 `_shopify_manager` 缺失阻断。
+**影响范围**：第三方 MCP 上游配置加载与出站身份透传；旧版环境变量配置必须保持兼容。
+**回滚方式**：回退第三方上游配置、邮箱透传测试及本条变更记录。
+---
