@@ -238,7 +238,7 @@ def flow(
     limit: int | None = typer.Option(None, "--limit", help="返回行数上限（不传则自动补齐默认页，最多 5000 行）"),
     order_by: list[str] | None = typer.Option(None, "--order-by", help="排序：<结果字段>[:asc|desc]，可重复"),
     offset: int | None = typer.Option(None, "--offset", help="分页偏移（不传则后端默认 0）"),
-    result_dir: str | None = typer.Option(None, "--result-dir", help="结果落盘目录（能力延后，当前忽略）"),
+    result_dir: str | None = typer.Option(None, "--result-dir", help="结果落盘目录，传入后全量结果写入该目录（query_result_<时间戳>.json），返回结果仅含预览行"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """一体化：规划 + planned 时执行一次取数（输出合同 + 结果）。"""

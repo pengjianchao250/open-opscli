@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import json
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -23,15 +25,14 @@ from opscli.query.services.planner import enum_cache, plan_integrity, query_plan
 from opscli.query.services.planner.metadata_adapter import MetadataAdapter
 
 
-# run_flow 已知延后项披露：limit/order_by/offset 本身已可控（见 run_flow 参数）。
-# order_by 的服务端排序缺陷本地兜底/加量重查已随 K1 内核化（见 _apply_order_fallback），
-# 以下仅剩 result_dir 一条尚未内核化的独立后续项，且**仅在本次调用真正传了
-# result_dir 时**才披露，避免对无关查询产生误导。
-_NOTE_RESULT_DIR = "完整结果落盘 result_dir 暂未内核化，本次仅返回服务端查询结果"
 _AUTO_COMPLETE_LIMIT_CAP = 5000
 # 排序兜底重查时 limit 的放大倍数与硬上限（与 skill run_query.py:36-37 数值一致，原样迁入）
 _ORDER_REQUERY_MULTIPLIER = 3
 _ORDER_REQUERY_LIMIT_CAP = 5000
+# 全量结果落盘 + 预览限幅（K2 内核化）：与 skill run_query.py 常量一致——
+# 默认预览行数（源 --preview-rows 默认值，:557）、单字段字符串截断长度（:537，超长加"…"）
+_RESULT_PREVIEW_ROWS = 20
+_PREVIEW_STRING_TRUNC_LEN = 80
 
 
 def _extract_enum_values(result: Any, field_name: str) -> list[str]:
@@ -128,12 +129,13 @@ def _is_monotonic(rows: list[dict], field: str, desc: bool) -> bool:
 
 
 def _write_result_rows(run_result: dict, rows: list[dict]) -> None:
-    """把本地重排/加量重查修正后的行写回 run_result 的原始行位置。
+    """把本地重排/加量重查修正后的行、或落盘后的预览行写回 run_result 的原始行位置。
 
     kernel 的 run_flow 只有 result 一个通道把服务端结果带给调用方（不像 skill
-    另有 preview_rows/全量落盘两条通道），因此排序兜底修正的行必须写回 result
-    嵌套结构，否则 result_disclosures 声明的行数/顺序会与 result 实际内容不一致。
-    复用 _extract_result_page 相同的三条兜底路径定位行列表所在容器。
+    另有 preview_rows/全量落盘两条通道），因此排序兜底修正的行、以及 result_dir
+    落盘后要回传的预览行，都必须写回 result 嵌套结构，否则 result_disclosures
+    声明的行数/顺序会与 result 实际内容不一致。复用 _extract_result_page 相同的
+    三条兜底路径定位行列表所在容器。
     """
     if not isinstance(run_result, dict):
         return
@@ -147,6 +149,27 @@ def _write_result_rows(run_result: dict, rows: list[dict]) -> None:
         if isinstance(node, dict) and isinstance(node.get(path[-1]), list):
             node[path[-1]] = rows
             return
+
+
+def _compact_preview(rows: list[dict], preview_rows: int) -> list[dict]:
+    """预览行截断：只取前 N 行，超长字符串截断防撑爆调用方上下文。
+
+    与 skill run_query.py:_compact_preview（:531-541）等价迁入，字段截断长度
+    （_PREVIEW_STRING_TRUNC_LEN=80）与源实现一致，原样照抄不做改动。
+    """
+    preview = []
+    for row in rows[:preview_rows]:
+        preview.append(
+            {
+                key: (
+                    value[:_PREVIEW_STRING_TRUNC_LEN] + "…"
+                    if isinstance(value, str) and len(value) > _PREVIEW_STRING_TRUNC_LEN
+                    else value
+                )
+                for key, value in row.items()
+            }
+        )
+    return preview
 
 
 def _apply_order_fallback(
@@ -334,7 +357,10 @@ def run_flow(
         limit: 返回行数上限；不传时自动补齐服务端默认页（最多 5000 行）。
         order_by: 排序，形态 [{"field": "<结果字段>", "desc": bool}]（与 query_simple 一致）。
         offset: 分页偏移；不传则后端默认 0。
-        result_dir: 预留的结果落盘目录（当前未使用，落盘能力延后）。
+        result_dir: 传入时把全量结果落盘到该目录（文件名 query_result_<秒级时间戳>.json），
+            返回的 result 只保留前 _RESULT_PREVIEW_ROWS 行预览，result_disclosures 附带
+            full_result_file 指向落盘文件（落盘失败则为 None + full_result_file_error）；
+            不传该参数时行为与之前完全一致（result 为完整服务端结果，不落盘）。
     """
     qm = query_manager or QueryManager()
     contract = run_plan(
@@ -432,15 +458,31 @@ def run_flow(
             f"排序已生效：按 {effective_order_by[0]['field']} "
             f"{'DESC' if effective_order_by[0].get('desc') else 'ASC'}"
         )
-    # 按需披露：仅在本次真正用到相关能力时提示对应的延后项，避免对无关查询误导
-    execution_notes: list[str] = []
     if result_dir is not None:
-        execution_notes.append(_NOTE_RESULT_DIR)
+        # 全量结果落盘 + 预览限幅（K2 内核化，与 skill run_query.py:734-747/531-541 等价迁入）：
+        # 此时 run_result 的嵌套行容器已与排序兜底修正后的 rows 一致（见上方
+        # _write_result_rows 调用，未触发兜底时两者本就同步），落盘内容用这份最终 rows；
+        # 返回给调用方的 result 只保留预览行，避免大结果集撑爆上下文。写盘失败（OSError，
+        # 如目录不可写）不阻断查询，只在披露中如实说明，不静默吞掉也不中断整次查询。
+        result_path = result_dir / f"query_result_{int(time.time())}.json"
+        try:
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(
+                json.dumps(
+                    {**run_result, "rows_after_auto_complete": rows},
+                    ensure_ascii=False,
+                    indent=1,
+                ),
+                encoding="utf-8",
+            )
+            result_disclosures["full_result_file"] = str(result_path)
+        except OSError as error:
+            result_disclosures["full_result_file"] = None
+            result_disclosures["full_result_file_error"] = str(error)[:160]
+        _write_result_rows(run_result, _compact_preview(rows, _RESULT_PREVIEW_ROWS))
     out = {
         **contract,
         "result": run_result,
         "result_disclosures": result_disclosures,
     }
-    if execution_notes:
-        out["execution_notes"] = execution_notes
     return out

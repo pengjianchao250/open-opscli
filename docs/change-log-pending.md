@@ -7399,3 +7399,95 @@ limit→本地重排、零额外查询"分支，却发起与 auto-complete 相�
 兜底场景（Task K1 已覆盖的两条主用例）行为不变。
 
 **回滚方式**：`git revert <本次提交 hash>`
+
+## 2026-08-19 query - result_dir 全量落盘 + 预览限幅迁入内核（Task K2）
+
+**变更原因**：内核 `run_flow` 的 `result_dir` 参数此前只是预留位——`_NOTE_RESULT_DIR`
+常量在传入该参数时向调用方披露"落盘能力暂未内核化"，实际不落盘、也不限幅，
+`result` 里永远是完整服务端结果。这与 skill `run_query.py` 现行为（全量结果落盘
+到磁盘，stdout/合同只回预览 + `full_result_file` 披露，防止大结果集撑爆模型
+上下文）不等价，属于收官计划里"内核对齐 skill 现行为"的最后一块缺口。总纲
+K1-K3 是纯移植任务（行为等价优先，不改进算法），K2 把这块能力按源实现原样迁入。
+
+**改动点**：
+- `opscli/query/services/planner/entry.py`：
+  - 删除 `_NOTE_RESULT_DIR` 常量及其挂载点（`execution_notes` 机制此前只服务
+    这一个常量，随之整体移除，`out` 不再有 `execution_notes` 键）
+  - 新增常量 `_RESULT_PREVIEW_ROWS = 20`（源 `run_query.py:557` `--preview-rows`
+    默认值）、`_PREVIEW_STRING_TRUNC_LEN = 80`（源 `:537` 单字段字符串截断长度）
+  - 新增 `_compact_preview(rows, preview_rows)`：与源 `_compact_preview`
+    （`:531-541`）等价迁入，前 N 行 + 单字段超长字符串截断加"…"
+  - `run_flow` 尾部新增 `result_dir is not None` 分支（放在排序兜底之后、
+    `out` 组装之前，与源实现"落盘在排序兜底修正之后"的顺序一致）：文件名
+    `query_result_{int(time.time())}.json`（与源 `:735` 一致），落盘内容
+    `{**run_result, "rows_after_auto_complete": rows}`（键名与源 `:741` 一致，
+    JSON `indent=1`），写盘前 `mkdir(parents=True, exist_ok=True)`；成功写
+    `result_disclosures["full_result_file"] = str(result_path)`，`OSError`
+    时写 `full_result_file=None` + `full_result_file_error`（截断 160 字符，
+    与源 `:744-747` 一致）；随后用 `_write_result_rows` 把 `run_result` 嵌套
+    行容器替换成 `_compact_preview(rows, _RESULT_PREVIEW_ROWS)`，即返回给
+    调用方的 `result` 只含预览行；未传 `result_dir` 时完全跳过该分支，
+    `result` 仍是完整服务端结果（行为不变）
+  - `_write_result_rows` docstring 同步更新（现在服务两个场景：排序兜底
+    回写 + 落盘后回写预览行）
+- `opscli/query/commands/cli.py`：`flow` 命令 `--result-dir` 帮助文案从
+  "结果落盘目录（能力延后，当前忽略）"改为描述实际行为（落盘 + 预览）
+- `tests/query/planner/test_entry.py`：移除失效的
+  `test_run_flow_result_dir_note_only_when_passed`（断言 `_NOTE_RESULT_DIR`，
+  常量已删除），新增 3 个测试：
+  1. `test_run_flow_result_dir_writes_full_result_and_limits_preview`
+     （`tmp_path` 隔离，30 行数据）：断言合同 `result` 只保留前 20 行、
+     `result_disclosures.row_count_returned` 仍是 30（不受预览限幅影响）、
+     `full_result_file` 指向 `tmp_path` 下 `query_result_*.json`，磁盘文件
+     内容含全量 30 行且带 `rows_after_auto_complete` 键
+  2. `test_run_flow_result_dir_write_failure_disclosed`：构造同名文件占位
+     触发 `mkdir` 抛 `OSError`，断言 `full_result_file=None` +
+     `full_result_file_error` 存在、且预览限幅依旧生效（不阻断查询）
+  3. `test_run_flow_no_result_dir_keeps_full_rows_unchanged`：不传
+     `result_dir` 时 30 行全部透传、`result_disclosures` 无
+     `full_result_file` 键（未传参行为完全不变的回归锁定）
+
+**行为差异说明（与源实现 `run_query.py` 的必要差异，行为等价铁律要求逐条列出）**：
+1. **未复刻 `MAX_STDOUT_BYTES=8000` 的 stdout 字节数折半重试循环**：源实现是
+   subprocess 脚本，`sys.stdout.write(text)` 前要对"整个 stdout JSON 文本"
+   做字节数护栏，超限时反复对半砍 `preview_rows` 直到达标。kernel 的
+   `run_flow` 是进程内函数调用，返回的是 Python dict，不存在"stdout 文本"
+   这个通道，且返回体里还混着源实现 stdout 里本就没有的 `model_view`/
+   `execution_ref` 等规划合同字段——对整个 `out` 做字节预算与源实现的预算
+   基线不可比，生搬会变成另一套不等价的机制。已落地的两道防线（固定 20 行
+   预览上限 + 单字段 80 字符截断）覆盖了常见场景的体积膨胀风险；调用方层
+   （CLI/MCP）如需对最终序列化文本做字节护栏，仍是这两层自己的职责，不在
+   本次收口范围内。
+2. **`result_disclosures` 未新增"预览已限幅"专属披露键**：源实现里
+   `preview_rows` 与 `disclosures` 是两个独立顶层字段，预览截断本身不需要
+   额外披露键说明；kernel 单通道下同理——`full_result_file` 存在即隐含
+   "全量数据在磁盘、`result` 只是预览"，未额外造词，保持披露面精简
+   （铁律20 极简优先）。
+
+**验证结果**：
+- `pytest tests/query/planner/test_entry.py -v` → 15 passed（12 既有 + 3 新增）
+- `pytest tests/query/planner/ -q` → 77 passed（75 基线 + 2 净增，0 回归）
+- `pytest tests/query/ -q` → 239 passed, 4 failed；`git stash` 验证 HEAD
+  （改动前）同样是 4 failed（`test_intent_attribution_headers.py` ×2、
+  `test_intent_match_report.py` ×2），确认与本次改动无关的既存基线失败
+- `pytest tests/mcp/ -q --ignore=tests/mcp/test_shopify_tools.py` → 351 passed
+- `pytest tests/ -q --ignore=tests/skills`（全仓）：25 个 collection error，
+  `git stash` 验证 HEAD 同样是 25 个（跨目录同名 test 文件 `__pycache__`
+  import 冲突，`tests/feedback|google_trends|keepa|scrape_do|sif|notify|
+  mcp/test_shopify_tools.py|query/test_cli.py|test_client.py|test_manager.py`
+  均在列），确认是既有环境基线问题、非本次改动引入；单独按目录跑
+  （如 `pytest tests/query/test_cli.py`）均能正常收集通过
+
+**影响范围**：仅 `opscli.query.services.planner.entry.run_flow` 的
+`result_dir` 参数路径受影响——传参时行为从"忽略 + 披露延后"变为"真实落盘 +
+预览限幅"；不传该参数（CLI `query flow` 默认、MCP `query_flow` 当前未暴露
+该参数）时输出与改动前逐字节一致。下游消费方 `opscli/mcp/tools/query.py` 的
+`query_flow` docstring 里仍留有"execution_notes 是按需披露的已知延后项……
+传了 order_by 才提示……"的描述——这段描述在 K1 删除 `_NOTE_ORDER_BY` 时就已
+经过时（`execution_notes` 早已不会因 order_by 出现），本次又整体删除了
+`execution_notes` 机制本身，使其进一步过时；因任务边界严格限定在
+`entry.py` + `cli.py` 的 `--result-dir` 帮助文案（铁律：不擅自扩大改动
+范围），未一并修正，已在任务报告的 Concerns 中提出，交由后续任务或用户
+决定是否顺手清理。
+
+**回滚方式**：`git revert <本次提交 hash>`

@@ -4,6 +4,7 @@
 经 QueryManager.run_query_template 执行一次），以及枚举值提取与模板 null 清理。
 """
 
+import json
 from pathlib import Path
 
 import httpx
@@ -158,17 +159,73 @@ def test_run_flow_fills_limit_order_offset(monkeypatch):
     assert "order_fallback" not in out["result_disclosures"]
 
 
-def test_run_flow_result_dir_note_only_when_passed(monkeypatch):
-    """传 result_dir（未传 order_by）→ 仅出落盘一条披露。"""
+def test_run_flow_result_dir_writes_full_result_and_limits_preview(monkeypatch, tmp_path: Path):
+    """传 result_dir：全量结果落盘（含 rows_after_auto_complete）+ 合同 result 只保留
+    预览行（默认 20 行）+ result_disclosures 出 full_result_file；与 skill
+    run_query.py 的落盘/预览限幅（:734-747/531-541）等价迁入（K2）。行数 30 超过
+    预览上限，验证限幅确实生效而不是巧合地全量恰好 <=20。
+    """
     monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
 
     class _QM:
         def run_query_template(self, execution_ref):
-            return {"data": []}
+            rows = [{"x": i} for i in range(30)]
+            return {"data": {"result": {"data": rows}}}
 
-    from pathlib import Path
-    out = entry.run_flow("查询", user_email="u@x.com", result_dir=Path("/tmp/x"), query_manager=_QM())
-    assert out["execution_notes"] == [entry._NOTE_RESULT_DIR]
+    out = entry.run_flow(
+        "查询", user_email="u@x.com", result_dir=tmp_path, query_manager=_QM(),
+    )
+
+    # 合同 result 只保留预览行（默认 20 行），全量 30 行不直接回传，避免撑爆上下文
+    preview_rows = out["result"]["data"]["result"]["data"]
+    assert len(preview_rows) == 20
+    assert [row["x"] for row in preview_rows] == list(range(20))
+    # 披露：完整行数口径不受预览限幅影响（与 skill 版 disclosures 语义一致）
+    assert out["result_disclosures"]["row_count_returned"] == 30
+    full_result_file = out["result_disclosures"]["full_result_file"]
+    assert full_result_file is not None
+    result_path = Path(full_result_file)
+    assert result_path.parent == tmp_path
+    assert result_path.name.startswith("query_result_") and result_path.name.endswith(".json")
+    # 落盘文件内容为全量 30 行（未受预览限幅影响），携带源实现同名字段 rows_after_auto_complete
+    saved = json.loads(result_path.read_text(encoding="utf-8"))
+    assert len(saved["rows_after_auto_complete"]) == 30
+    assert [row["x"] for row in saved["rows_after_auto_complete"]] == list(range(30))
+    assert len(saved["data"]["result"]["data"]) == 30
+
+
+def test_run_flow_result_dir_write_failure_disclosed(monkeypatch, tmp_path: Path):
+    """result_dir 落盘失败（目标路径被同名文件占用，mkdir 抛 OSError）时不阻断查询，
+    只在披露中如实说明；预览限幅依旧生效（与源实现 try/except 后仍继续构造输出的口径一致）。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+    blocker = tmp_path / "blocker"
+    blocker.write_text("occupied", encoding="utf-8")
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            return {"data": {"result": {"data": [{"x": 1}]}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com", result_dir=blocker, query_manager=_QM(),
+    )
+    assert out["result_disclosures"]["full_result_file"] is None
+    assert "full_result_file_error" in out["result_disclosures"]
+    assert out["result"]["data"]["result"]["data"] == [{"x": 1}]
+
+
+def test_run_flow_no_result_dir_keeps_full_rows_unchanged(monkeypatch):
+    """不传 result_dir：行为与之前完全一致——result 是完整服务端结果，无落盘披露。"""
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            rows = [{"x": i} for i in range(30)]
+            return {"data": {"result": {"data": rows}}}
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+    assert len(out["result"]["data"]["result"]["data"]) == 30
+    assert "full_result_file" not in out["result_disclosures"]
 
 
 def test_run_flow_no_params_keeps_defaults(monkeypatch):
