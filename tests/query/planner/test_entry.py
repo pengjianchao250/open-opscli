@@ -143,12 +143,21 @@ def test_run_flow_fills_limit_order_offset(monkeypatch):
     assert t["limit"] == 200
     assert t["offset"] == 5
     assert t["orderBy"] == [{"field": "x", "desc": True}]
-    # 改写模板后重挂完整性：剥离 run_flow 追加的运行时结果/披露后，规划合同仍自洽
+    # 改写模板后重挂完整性：剥离 run_flow 追加的运行时结果/披露/证据合同后，规划合同仍自洽
+    # （evidence_contract/evidence_contract_error 是 K3 新增的运行时附加键，与
+    # result/result_disclosures/execution_notes 同属"非规划合同本体"，需一并剔除）
     assert "plan_integrity" in out["execution_ref"]
     sealed = {
         k: v
         for k, v in out.items()
-        if k not in ("result", "result_disclosures", "execution_notes")
+        if k
+        not in (
+            "result",
+            "result_disclosures",
+            "execution_notes",
+            "evidence_contract",
+            "evidence_contract_error",
+        )
     }
     assert plan_integrity.verify(sealed) is True
     # order_by 已内核化：本例服务端返回空行（rows=[]），排序校验按源实现语义直接跳过
@@ -389,6 +398,75 @@ def test_flow_order_by_no_extra_requery_when_auto_complete_widens_limit(monkeypa
     assert "covers_full_result" not in fallback
     assert [row["x"] for row in out["result"]["data"]["result"]["data"]] == list(range(9, -1, -1))
     assert out["result_disclosures"]["auto_complete_applied"] is True
+
+
+def test_run_flow_attaches_evidence_contract(monkeypatch):
+    """run_flow：执行成功后合同内嵌 evidence_contract 键，dataset_name_zh 取自
+    model_view，接入位置与 skill run_query.py 内嵌证据合同一致（K3）。
+    """
+    planned = _planned_with_template()
+    planned["model_view"] = {"dataset_name_zh": "即时综合数据集"}
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: planned)
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            return {
+                "data": {
+                    "result": {
+                        "data": [{"x": 1}],
+                        "meta": {"freshness_status": "monthly_data_available_through_2026-07"},
+                    }
+                }
+            }
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+    evidence = out["evidence_contract"]
+    assert evidence["contract"] == "evidence_contract_v1"
+    assert evidence["dataset_name_zh"] == "即时综合数据集"
+    assert evidence["freshness_status"] == "monthly_data_available_through_2026-07"
+    assert "evidence_contract_error" not in out
+
+
+def test_run_flow_evidence_contract_failure_does_not_block_result(monkeypatch):
+    """证据合同构建失败时不阻断查询结果，只记录 evidence_contract_error
+    （与 skill run_query.py 的 try/except 语义一致：证据合同失败不阻断查询结果）。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            return {"data": {"result": {"data": [{"x": 1}]}}}
+
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(entry.evidence_contract, "build_evidence_contract", _boom)
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+    assert "evidence_contract" not in out
+    assert out["evidence_contract_error"] == "boom"
+
+
+def test_run_flow_evidence_contract_built_before_preview_truncation(monkeypatch, tmp_path: Path):
+    """result_dir 触发预览限幅（K2）时，证据合同基于完整（未截断）行构建：
+    与 skill run_query.py 用未受落盘/预览影响的 response 构建证据的口径一致
+    ——kernel 单通道架构下用"排序兜底之后、预览截断之前"的 run_result 落地，
+    详细理由见任务 K3 报告的差异对照表。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            # 25 行，只有最后一行（index 24）current_value 缺失；预览限幅只保留前 20 行，
+            # 若证据合同建在截断之后，这条缺失路径不会出现
+            rows = [{"current_value": i} for i in range(24)] + [{"current_value": None}]
+            return {"data": {"result": {"data": rows}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com", result_dir=tmp_path, query_manager=_QM(),
+    )
+    assert "data.result.data[24].current_value" in out["evidence_contract"]["missing_paths"]
+    # 返回给调用方的 result 仍受预览限幅约束（K2 既有行为不受本次改动影响）
+    assert len(out["result"]["data"]["result"]["data"]) == 20
 
 
 def test_run_query_template_drops_null_keys():

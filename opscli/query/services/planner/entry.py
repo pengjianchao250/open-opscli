@@ -21,7 +21,7 @@ from typing import Any
 
 from opscli.query.services.manager import QueryManager
 from opscli.query.services.metadata_cache import invalidate_metadata_cache
-from opscli.query.services.planner import enum_cache, plan_integrity, query_plan
+from opscli.query.services.planner import enum_cache, evidence_contract, plan_integrity, query_plan
 from opscli.query.services.planner.metadata_adapter import MetadataAdapter
 
 
@@ -458,6 +458,25 @@ def run_flow(
             f"排序已生效：按 {effective_order_by[0]['field']} "
             f"{'DESC' if effective_order_by[0].get('desc') else 'ASC'}"
         )
+    # 证据合同（K3 内核化）：与 skill run_query.py 内嵌证据合同的接入位置一致——
+    # 排在排序兜底修正之后、落盘/预览限幅之前，此时 run_result 已是"最终"行状态
+    # （auto-complete 补齐 + 排序兜底回写均已生效）。与源实现的差异：源实现用
+    # 首查得到的原始 response（从不随 auto-complete/排序兜底重查而更新，见任务
+    # K3 报告差异对照表）；kernel 沿用 K1/K2 已确立的"单通道、读最终态"架构，
+    # 直接喂最终 run_result，证据更完整而非源实现的陈旧快照。构建失败不阻断
+    # 查询结果，仅记录 evidence_contract_error（与源实现 try/except 语义一致）。
+    model_view = contract.get("model_view")
+    dataset_name_zh = (
+        str(model_view.get("dataset_name_zh", "")) if isinstance(model_view, dict) else ""
+    )
+    contract_evidence: dict[str, Any] | None = None
+    evidence_contract_error: str | None = None
+    try:
+        contract_evidence = evidence_contract.build_evidence_contract(
+            run_result, dataset_name_zh=dataset_name_zh
+        )
+    except Exception as error:  # noqa: BLE001 —— 证据合同失败不阻断查询结果
+        evidence_contract_error = str(error)[:120]
     if result_dir is not None:
         # 全量结果落盘 + 预览限幅（K2 内核化，与 skill run_query.py:734-747/531-541 等价迁入）：
         # 此时 run_result 的嵌套行容器已与排序兜底修正后的 rows 一致（见上方
@@ -485,4 +504,8 @@ def run_flow(
         "result": run_result,
         "result_disclosures": result_disclosures,
     }
+    if contract_evidence is not None:
+        out["evidence_contract"] = contract_evidence
+    else:
+        out["evidence_contract_error"] = evidence_contract_error
     return out

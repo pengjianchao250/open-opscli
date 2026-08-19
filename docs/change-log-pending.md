@@ -1,5 +1,81 @@
 # 待归档变更记录
 
+## 2026-08-19 query - evidence_contract 迁入内核（Task K3）
+
+**变更原因**：Agent 消费文档（`ops-dataset-query` SKILL.md/`references/
+result-analysis.md`）依赖 `run_query.py` 内嵌的证据与披露规划器
+（`evidence_contract_v1`）组织查询结果分析结论，防止对返回数据的过度推断
+（缺失值当零、零行当业务零、末日异常当真实下降等）。规划器内核化收官计划
+（`docs/plans/规划器优化推进-内核化收官实施计划.md`）要求把这一能力从 Skill
+subprocess 脚本搬进内核 `entry.py:run_flow`，使 CLI（`opscli query flow`）
+与 MCP（`query_flow`）两条正式执行通道也能直接拿到证据合同，不必再旁路调用
+`scripts/evidence_contract.py`。行为等价铁律：只搬家，不改算法，纯函数逐字节
+移植；接入位置与 dataset_name_zh 回填口径与源实现的语义保持一致，差异仅限于
+证据源取值（见下方"行为差异说明"）。
+
+**改动点**：
+- 新建 `opscli/query/services/planner/evidence_contract.py`：从 skill
+  `opscli/skills/templates/ops-dataset-query/scripts/evidence_contract.py`
+  原样迁入（去 CLI 壳——不含 `argparse`/`main`/stdin 读取，只保留
+  `build_evidence_contract` 及其全部辅助函数/常量），逐字节比对确认与源实现
+  输出完全一致（见任务报告 Step 1 移植清单的交叉验证）
+- `opscli/query/services/planner/entry.py`：`run_flow` 尾部（排序兜底修正
+  之后、落盘/预览限幅之前）新增证据合同构建：`dataset_name_zh` 取
+  `contract.get("model_view", {}).get("dataset_name_zh", "")`（与源实现读
+  `plan.model_view.dataset_name_zh` 语义一致），成功时把结果写入
+  `out["evidence_contract"]`，构建异常（`Exception`）时降级写入
+  `out["evidence_contract_error"]`（截断至 120 字符）且不阻断查询结果，与
+  源实现 `try/except` 语义一致
+- `tests/query/planner/test_evidence_contract.py`（新建，8 个测试）：纯函数
+  行为锁定，断言样例期望值直接从 skill 版 `build_evidence_contract` 对同一
+  输入的真实运行结果取值（信号组合/dataset_name_zh 回退/截断/异常路径全覆盖）
+- `tests/query/planner/test_entry.py`：新增 3 个集成测试
+  （`test_run_flow_attaches_evidence_contract`、
+  `test_run_flow_evidence_contract_failure_does_not_block_result`、
+  `test_run_flow_evidence_contract_built_before_preview_truncation`），并修正
+  既有 `test_run_flow_fills_limit_order_offset` 的 `sealed` 完整性校验剔除
+  清单（补充 `evidence_contract`/`evidence_contract_error` 两个 K3 新增的
+  运行时附加键，否则 `plan_integrity.verify` 会因合同多出未预期字段而失败）
+
+**行为差异说明（与源实现 `run_query.py` 的必要差异，行为等价铁律要求逐条列出）**：
+1. **证据合同的输入源不同**：源实现用首查得到的原始 `response` 构建证据
+   （`_complete_server_paged_rows`/`_apply_order_fallback` 内部重查均不会
+   更新这个外层变量，即便触发了服务端默认分页补齐或排序本地兜底，证据合同
+   看到的仍是最初的、可能不完整的首页快照）；kernel 版沿用 K1/K2 已确立的
+   "单通道、读最终态" 架构，直接用排序兜底修正、auto-complete 补齐之后的
+   `run_result` 构建证据——这是本次收口计划刻意选择的架构对齐（`entry.py`
+   `run_result` 本就在 K1/K2 里被设计为"随流程推进原地更新到最终态"的唯一
+   通道），使证据比源实现更完整而非更陈旧，未引入新的推断算法，只是喂入
+   的数据更新鲜。
+2. **证据合同建在 `result_dir` 预览截断之前**：若调用方传入 `result_dir`
+   触发 K2 的预览限幅（`result` 只保留前 20 行），证据合同仍基于截断前的
+   完整行构建，因此 `required_evidence`/`missing_paths` 可能引用到预览里
+   看不到的行——这是刻意设计（证据应基于查询拿到的完整数据判断，不应因
+   返回体积优化而信息缩水），已有专项回归测试锁定该顺序。
+
+**验证结果**：
+- `pytest tests/query/planner/test_evidence_contract.py -v` → 8 passed（新增）
+- `pytest tests/query/planner/test_entry.py -v` → 18 passed（15 既有 + 3 新增）
+- `pytest tests/query/planner/ -q` → 88 passed（77 基线 + 11 净增，0 回归）
+- `pytest tests/query/ -q` → 250 passed, 4 failed；`git stash` 验证 HEAD
+  （改动前）同样是 4 failed（`test_intent_attribution_headers.py` ×2、
+  `test_intent_match_report.py` ×2），确认与本次改动无关的既存基线失败
+- `pytest tests/mcp/ -q --ignore=tests/mcp/test_shopify_tools.py` → 351 passed
+- `pytest tests/ -q --ignore=tests/skills`（全仓）：25 个 collection error，
+  与 K2 记录的既有环境基线问题（跨目录同名 test 文件 import 冲突）一致，
+  非本次改动引入
+- `ruff check opscli/query/services/planner/entry.py
+  opscli/query/services/planner/evidence_contract.py` → All checks passed
+
+**影响范围**：`opscli.query.services.planner.entry.run_flow` 的返回体新增
+`evidence_contract`（或失败时 `evidence_contract_error`）顶层键，不影响
+`result`/`result_disclosures` 等既有字段的取值；下游 CLI `opscli query
+flow`、MCP `query_flow` 透传该新增字段，Agent 消费文档
+（SKILL.md/result-analysis.md）零改动即可直接使用（键结构与 skill 主线
+完全一致）。
+
+**回滚方式**：`git revert <本次提交 hash>`
+
 ## 2026-08-19 query - 组件枚举缓存 + 超时降级（双份同步，Task C3）
 
 **变更原因**：规划器的组件权限枚举（平台范围、渠道/国家/部门等筛选字段、批量反查
