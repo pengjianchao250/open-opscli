@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-08-19 skills - 删除 ops-dataset-query 三个死脚本
+
+**变更原因**：scripts/query.py、updater.py、updater_mcp.py 早经全量引用分析判定为死代码（SKILL.md/QUERY_SPEC/references 零引用、tests 零覆盖、无脚本 import）：query.py 是 opscli 命令的冗余转发层且其 intent 子命令曾长期指向被注释的命令；updater.py 功能等同 `opscli skills upgrade` 且反向依赖 opscli 包；updater_mcp.py 是 2026 年 MCP 文档清理的残留（"纯 MCP 用户无此目录"）。用户确认清理后删除，共 477 行。
+**改动点**：仅删除 `opscli/skills/templates/ops-dataset-query/scripts/{query.py,updater.py,updater_mcp.py}` 三个文件，未触碰其他脚本（备选通道/降级路径/图表支线均保留）。
+**验证结果**：删除前复核三文件在模板文档与脚本中零引用；`pytest tests/skills/test_detector.py test_updater.py test_install_preserves_metadata.py tests/query/planner/ -q` → 127 passed。
+**影响范围**：仅模板分发内容瘦身；已安装用户下次 install --force 后目录同步移除；无任何运行路径变化。
+**回滚方式**：`git revert` 本提交。
+---
+
 ## 2026-08-19 query/skills - 终审三修：降级决策树消歧、TopN 条款纠偏、auto-complete 尊重模板 limit
 
 **变更原因**：规划器优化推进终审发现三处问题——① `ops-dataset-query` SKILL.md
