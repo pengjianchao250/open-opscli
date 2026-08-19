@@ -55,11 +55,15 @@ fail-closed 阻断所有依赖枚举的查询（`_block_component_filter`/回落
   内核侧 `entry._make_callbacks`/`enum_fn` 降级、无缓存重新抛出、成功写缓存、
   `run_plan` 追加披露
 - `tests/skills/conftest.py`（新建）：autouse fixture 把 Skill 版 `enum_cache.
-  _cache_dir` 重定向到 `tmp_path`，对 `tests/skills/` 目录下所有测试透明生效——
-  排查发现多个既有测试会 mock `subprocess.run` 让枚举"成功"，若不隔离，这些测试会
-  在不知情的情况下把 mock 数据真的写进开发者本机 `~/.config/opscli/enum_cache/`
-  （已手动清理本机被污染的缓存文件）；内核侧既有测试均已显式传 `base_dir=tmp_path`
-  （沿用 `metadata_cache` 约定），未发现同类问题
+  _cache_dir` 重定向到 `tmp_path`，对 `tests/skills/` 目录下所有测试透明生效。
+  新增的 `test_enum_cache.py` 自身已通过显式 `skill_cache`/`kernel_cache` fixture
+  做了隔离，不依赖这层 autouse；这里额外加一层目录级防御性兜底，防止其他既有或
+  未来测试在未注意到 `enum_cache.put()` 会落盘的情况下意外写真实
+  `~/.config/opscli/enum_cache/`——复核确认触发条件是"测试未 mock
+  `subprocess.run` 且本机 `opscli` 已登录"（`test_order_and_limit.py` 在开发者本机
+  就复现过一次，写入的是真实登录账号下的枚举结果，已手动清理），而非"既有测试
+  mock 了 subprocess 成功返回"；干净 HOME（无登录态）下不会触发。内核侧既有测试
+  均已显式传 `base_dir=tmp_path`（沿用 `metadata_cache` 约定），未发现同类问题
 
 **验证结果**：
 - `python3 -m pytest tests/skills/test_enum_cache.py -v` → 26 passed
@@ -73,8 +77,11 @@ fail-closed 阻断所有依赖枚举的查询（`_block_component_filter`/回落
   respx mock 断言问题，与本次改动无关，与基线一致）
 - `python3 -m pytest tests/mcp/ -q --continue-on-collection-errors` → 351 passed,
   1 error（既有 `test_shopify_tools.py` 导入错误，与基线一致，本次未触碰 mcp 模块）
-- 改动前后均检查 `~/.config/opscli/enum_cache/`：加入 `tests/skills/conftest.py`
-  隔离后目录保持空/不存在，未再污染真实用户配置目录
+- 复核确认真实污染的触发条件：`rm -rf ~/.config/opscli/enum_cache` 后逐文件跑
+  `tests/skills/*.py`（真实已登录 HOME），仅 `test_order_and_limit.py` 会重新生成
+  该目录；改用干净/未登录的 `HOME` 跑同样的用例则不会生成。加入
+  `tests/skills/conftest.py` 后，真实已登录 HOME 下逐文件重跑全部 `tests/skills/`
+  目录保持空/不存在
 - 实测环节：任务要求的 `cd /Users/mask/.opscli/skills/ops-dataset-query &&
   python3 scripts/query_flow.py "..."` 未执行——核实该已安装副本的
   `query_plan.py` 仍是 C3 之前的版本（只有旧版内存态 `enum_cache: dict` 参数，
