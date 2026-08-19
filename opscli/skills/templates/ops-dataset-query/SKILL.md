@@ -4,13 +4,13 @@ description: >
   运营数据查询取数 Skill。用于按当前账号可见的数据集查询销售、库存、广告、物流、
   流量等数据，支持趋势、环比同比、ACOS/ROAS、图表 UUID 查询和导出。
   加载本 Skill 后必须先读取本目录 SKILL.md 并遵循其流程：CLI 取数默认且优先的入口是
-  一体化流程 python3 scripts/query_flow.py "<用户请求>"（内部只规划一次；单币种执行一次，
+  一体化流程 opscli query flow "<用户请求>"（内部只规划一次；单币种执行一次，
   多币种按币种分别调用取数服务；
   规划器按 30 秒命令窗口设计，返回 refresh_in_progress 时按其 recovery_command
-  等待重跑即可，禁止自行升级）；只有规划器客观不可用（澄清/阻断、脚本报错重跑仍失败、
-  命令窗口连续超时、运行环境缺 python3）时才转 SKILL.md 的降级路径；
+  等待重跑即可，禁止自行升级）；只有规划器客观不可用（澄清/阻断、命令报错重跑仍失败、
+  命令窗口连续超时、opscli 命令不可用）时才转 SKILL.md 的降级路径；
   任何路径都禁止凭记忆手拼查询参数或使用未经元数据核对的字段。
-version: 1.3.21
+version: 1.3.22
 ---
 
 # ops-dataset-query
@@ -28,17 +28,27 @@ version: 1.3.21
 
 ## 查询规划主线
 
-**CLI 主线的优先入口是 `query_flow.py`。** 它内部只运行一次规划器；`dataset_query + planned` 的单币种请求直接执行原始 `query_template`，多币种请求逐项执行完整性绑定的 `query_templates`，其他状态或 `chart_uuid` 返回规划合同供 Agent 处置。仅当合同命中具体歧义时才读取 `references/rules.md`，并按 `references/ask-user-question-guide.md` 澄清；无歧义不拆分步骤。规划器命中「规划器不可用时的降级路径」中列举的客观失败条件时才改走降级，其余情况一律走本入口。
+**CLI 主线的优先入口是 `opscli query flow`。** 它内部只运行一次规划器；`dataset_query + planned` 的单币种请求直接执行原始 `query_template`，多币种请求逐项执行完整性绑定的 `query_templates`，其他状态或 `chart_uuid` 返回规划合同供 Agent 处置。仅当合同命中具体歧义时才读取 `references/rules.md`，并按 `references/ask-user-question-guide.md` 澄清；无歧义不拆分步骤。规划器命中「规划器不可用时的降级路径」中列举的客观失败条件时才改走降级，其余情况一律走本入口。
 
 ### CLI-only：一次规划并执行
 
-读完本文件后直接运行一体化入口；除合同明确要求澄清、恢复或图表 UUID 分流外，不再单独调用 `query_plan.py` 或 `run_query.py`。**规划器路径下**不要预读 `data/VERSION.json`，不要列目录，不要检查脚本源码，不要扫描 `data/`、`scripts/` 或 `references/`；流程已完成版本、选表、字段、公式、时间口径、权限合同、完整性绑定和正式查询。（这些本地探索限制只在规划器可用时生效，降级态的放宽见文末降级章节。）
+读完本文件后直接运行一体化入口；除合同明确要求澄清、恢复或图表 UUID 分流外，不再单独调用 `opscli query plan`、`opscli query run`，也不单独调用 Skill 自带的 `query_plan.py` 或 `run_query.py`。**规划器路径下**不要预读 `data/VERSION.json`，不要列目录，不要检查脚本源码，不要扫描 `data/`、`scripts/` 或 `references/`；流程已完成版本、选表、字段、公式、时间口径、权限合同、完整性绑定和正式查询。（这些本地探索限制只在规划器可用时生效，降级态的放宽见文末降级章节。）
+
+```bash
+opscli query flow "$USER_REQUEST" --result-dir "$RESULT_DIR"
+```
+
+`--result-dir` 必须显式传入：内核入口只有传了该参数才会把全量结果落盘并把返回体中的结果收窄为预览行，不传则不做截断，大结果集会原样进入返回体、撑爆上下文。
+
+**备选执行通道（`opscli` 命令级环境异常时，保留一个版本周期后另行下线）**：若 `opscli` 命令本身不可用（未安装、不在 PATH、执行报错等命令级环境异常，区别于下方「规划器不可用时的降级路径」的业务性降级），改用 Skill 自带脚本执行同一次规划与查询：
 
 ```bash
 python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"
 ```
 
-**正常路径工具调用预算**：数据集、字段、筛选和时间均可确定时，Agent 从加载本 Skill 到拿到查询结果最多 3 次工具调用，且正式入口只调用一次 `query_flow.py`；多币种时由该入口在内部按币种分别调用取数服务，不额外消耗 Agent 工具调用。包含一次澄清、一次恢复或图表结果证据补全的非正常路径最多 7 次。规划器路径下禁止为了“确认环境/字段/语法”调用 `opscli query catalog`、`opscli query metadata`、`--help`、`rg`、`ls`、`find` 或读取脚本源码；禁止重复加载同一 Skill；禁止生成临时 Python 查询脚本；禁止手工修改 plan、复制 `query_template` 后另拼 payload，或在一体化入口成功后再次查询相同范围。
+两条通道语义等价（已通过金样对照验证），但返回结构不同，读取时按各自结构取值：内核入口把结果放在 `result`、披露放在 `result_disclosures`、证据放在 `evidence_contract`/`evidence_contract_error`（与合同其余字段同级）；脚本入口顶层直接是 `status`/`disclosures`/`preview_rows`/`evidence_contract`。
+
+**正常路径工具调用预算**：数据集、字段、筛选和时间均可确定时，Agent 从加载本 Skill 到拿到查询结果最多 3 次工具调用，且正式入口只调用一次 `opscli query flow`；多币种时由该入口在内部按币种分别调用取数服务，不额外消耗 Agent 工具调用。包含一次澄清、一次恢复或图表结果证据补全的非正常路径最多 7 次。规划器路径下禁止为了“确认环境/字段/语法”调用 `opscli query catalog`、`opscli query metadata`、`--help`、`rg`、`ls`、`find` 或读取脚本源码；禁止重复加载同一 Skill；禁止生成临时 Python 查询脚本；禁止手工修改 plan、复制 `query_template` 后另拼 payload，或在一体化入口成功后再次查询相同范围。
 
 **命令窗口与等待（30 秒窗口设计）**：平台单条命令的有效等待上限约 30 秒（自行设置更大超时无效）。规划器内部已按此窗口设计——任意单次调用确定性返回：数据就绪时（常态）1~3 秒；需要刷新元数据时前台最多等 8 秒，未完成则**转后台续跑**并返回 `status=blocked, recovery_state=refresh_in_progress`，此时**直接执行其 `recovery_command`**；连续 3 次仍未就绪即转「规划器不可用时的降级路径」，降级也走不通才提交反馈并停止。禁止自行执行任何升级动作、禁止在规划器仍可用时因等待改走旁路探查。若命令仍偶发窗口超时：原样重跑一次即可（流程幂等）；同一请求累计 3 次窗口超时按客观失败转降级。
 
@@ -77,8 +87,8 @@ python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"
 3. 筛选只作用于用户指定的表；例如“未税单价必须过滤 `team_username=何子影`”
    只下推到单价表，除非用户也明确要求其他表同样过滤。各筛选字段和值仍须通过该表
    元数据与当前账号组件枚举验证。
-4. 每个子查询都必须取到全量后才能关联或生成 Excel。检查 CLI 的
-   `disclosures` 或 MCP 的 `result_disclosures` 中 `row_count_returned`、
+4. 每个子查询都必须取到全量后才能关联或生成 Excel。检查 CLI 与 MCP 共用的
+   `result_disclosures`（备选执行通道为 `disclosures`）中 `row_count_returned`、
    `total_count` 与 `truncated`；
    只有 `truncated=false` 才可进入计算。自动补齐仍被 5000 行硬上限截断或补齐失败时，
    继续按正式分页能力取全；无法取全则停止交付，不得拿默认 20 行或局部样本生成“全量”报表。
@@ -104,24 +114,24 @@ Excel 的格式、明细、口径页与校验按 `references/chart-excel-guide.m
 5. `query_mode=dataset_query` 的 CLI 正常路径只用一体化流程（内含规划、完整性校验、执行前校验、排序生效校验与兜底、截断披露和证据合同）：
 
 ```bash
-python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"
+opscli query flow "$USER_REQUEST" --result-dir "$RESULT_DIR"
 ```
 
    - 默认条件（filter_configs）：规划结果存在 `default_filters` 时，流程自动传给执行器；最终回答必须披露 `default_filters_zh`。默认条件由服务端权威应用，用户为同字段提供条件时覆盖默认值，客户端不重复注入。
 
-   `query_plan.py` + `run_query.py` 不是 Agent 的规划器正常路径（仅用于维护者复现审计，以及降级态的执行通道）。执行器会校验规划摘要、状态、tableId、授权字段、模板及时间范围。正式查询偶尔较慢（排序兜底还可能放大窗口重查一次），命令窗口超时不是失败：**原样重跑一次**即可。流程返回 `precheck_failed` 时按 `next_action_zh` 重新运行规划器，禁止编辑 plan 或绕过执行器直连；一体化入口返回 `status=flow_error` 或退出码 2 时原样重跑一次，仍失败即转「规划器不可用时的降级路径」；`disclosures.order_fallback` 存在时必须披露本地兜底。MCP-only 用正式 `query_simple`。
+   `opscli query plan`/`opscli query run`（以及 Skill 自带的 `query_plan.py`/`run_query.py`）都不是 Agent 的规划器正常路径（仅用于维护者复现审计，以及备选/降级态的执行通道）。一体化入口内部会校验规划摘要、状态、tableId、授权字段、模板及时间范围。正式查询偶尔较慢（排序兜底还可能放大窗口重查一次），命令窗口超时不是失败：**原样重跑一次**即可。主线 `opscli query flow` 返回 `success=false`（`error.code`/`error.message`）或非零退出码时原样重跑一次，仍失败即转「规划器不可用时的降级路径」；备选通道 `query_flow.py` 报 `precheck_failed`/`status=flow_error`/退出码 2 时同样原样重跑一次再判定。`result_disclosures.order_fallback`（备选通道为 `disclosures.order_fallback`）存在时必须披露本地兜底。MCP-only 用正式 `query_simple`。
 6. `query_mode=chart_uuid` 时原样执行 `execution_ref.query_command`。`chart_action=run` 必须遍历所有 `queries`，保留服务端小计/总计并按 `_query_index` 区分来源；大结果按 `references/chart-excel-guide.md` 使用 `--save-result` 或 `--result-file` 落盘，随后补一次 `evidence_contract.py`。
-7. 保留用户要求的明细和全量范围。限制展示时声明排序、截断数量和总行数（执行器 `disclosures` 已给出），不把局部结果说成全量。
-8. **预览只是抽样，行数口径以 `disclosures` 为准**：`preview_rows` 只展示前若干行，完整结果写在 `disclosures.full_result_file`。判断口径按下面三个字段，**不要**用预览行数下结论：
+7. 保留用户要求的明细和全量范围。限制展示时声明排序、截断数量和总行数（`result_disclosures`，备选通道为 `disclosures`，已给出），不把局部结果说成全量。
+8. **预览只是抽样，行数口径以 `result_disclosures`（备选通道为 `disclosures`）为准**：传了 `--result-dir` 后返回体中的结果只保留前若干行预览，完整结果写在 `result_disclosures.full_result_file`。判断口径按下面三个字段，**不要**用预览行数下结论：
    - `row_count_returned` = 本次实际拿到的行数，`total_count` = 服务端报的总行数；结论里的"共 N 条"必须用 `row_count_returned`，并在两者不等时说明。
    - `truncated=true` 表示拿到的是**部分结果**，必须如实声明，禁止说成全量。
-   - 出现 `server_paging` 时按 `server_paging_disclosure_zh` 披露：服务端不带 `limit` 时只回默认页，执行器已自动重查补齐；补齐失败（`auto_complete_applied=false`）时结论必须声明这是部分结果。
+   - `auto_complete_applied` 表示是否发生过服务端默认分页补齐：`true`=服务端未按 limit 返回全量、已自动重查补齐；补齐后仍 `truncated=true`（如超 5000 行硬上限）时结论必须声明这是部分结果。备选通道额外提供嵌套的 `server_paging`/`server_paging_disclosure_zh`，语义等价。
 
    需要逐行数据时直接读 `full_result_file`（该文件含补齐后的 `rows_after_auto_complete`）；`full_result_file` 为 null 时看 `full_result_file_error`。**禁止**为了凑齐剩余行而改写请求重查、分批排除已见值、或绕过执行器手拼 payload 直连 `opscli query simple`——那样既浪费调用预算，又丢掉执行器的授权字段校验。
 
 ## 结果分析
 
-CLI-only 常规结果分析不要读取 `references/result-analysis.md`：`run_query.py` 输出已内嵌 `evidence_contract`，直接使用；仅在旁路直连（MCP 或图表入口）拿到裸结果时，才用 `python3 scripts/evidence_contract.py --input result.json`（或 stdin）补一次，每轮最多运行一次。只用其 `required_evidence`、`required_disclosures_zh` 和 `forbidden_inferences_zh` 组织结论：
+CLI-only 常规结果分析不要读取 `references/result-analysis.md`：`opscli query flow` 的输出已内嵌 `evidence_contract`（构建失败时改为 `evidence_contract_error`，与合同其余字段同级；备选通道 `run_query.py` 同样内嵌），直接使用；仅在旁路直连（MCP 或图表入口）拿到裸结果时，才用 `python3 scripts/evidence_contract.py --input result.json`（或 stdin）补一次，每轮最多运行一次。只用其 `required_evidence`、`required_disclosures_zh` 和 `forbidden_inferences_zh` 组织结论：
 
 - 先说明数据集中文名、时间、维度、指标、筛选、币种、聚合、排序和行数；每个数值结论附字段名、结果列或回放证据。字段称呼使用元数据 `verbose_name` 原文，不意译。
 - 遵守 `numeric_evidence_policy_zh`，结论或证据中的关键数值保持返回精度，不自行四舍五入。
@@ -130,10 +140,10 @@ CLI-only 常规结果分析不要读取 `references/result-analysis.md`：`run_q
 - 全局币种换算：用户请求含币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时，规划器自动把 `globalCurrency` 写入完整性绑定模板。单币种写入 `query_template`；明确要求多个币种时生成 `query_templates`，一体化入口必须逐币种调用取数服务。未识别到币种意图时不注入，由后端回退用户默认配置。
 - **多币种查询是多次取数，不是汇率换算**："分别使用人民币和加拿大元"、"CNY/CAD 双币种"、"同时用加拿大元对比显示"均要求人民币（CNY）和加拿大元（CAD）各执行一次相同范围的服务端查询。MCP-only 也必须为每个币种分别调用 `query_simple` 并传对应 `global_currency`。禁止只查一个币种后引用 Bank of Canada Valet `FXCNYCAD`、任何公开/内部汇率、模型记忆或本地计算生成另一个币种结果。
 - 多币种结果只能按各次查询共同返回且值一致的维度键关联。生成对比表或 HTML 前，先核对维度键集合与非金额指标；任一查询被截断、返回币种与请求不符、维度键不一致或非金额指标不一致时，停止金额对比并披露差异，不得用汇率换算补齐。
-- **返回币种以 `disclosures.currency` 为准**：服务端在返回的 `meta.currency` 声明本次实际生效的币种代码（ISO 4217，如 `CNY`/`USD`），执行器已把它提取到 stdout 的 `disclosures.currency` 与 `disclosures.currency_disclosure_zh`——**直接用这两个字段，不需要为了拿币种去读 `full_result_file`**。
+- **返回币种以 `result_disclosures.currency`（备选通道为 `disclosures.currency`）为准**：服务端在返回的 `meta.currency` 声明本次实际生效的币种代码（ISO 4217，如 `CNY`/`USD`），执行器已把它提取到 `result_disclosures.currency` 与 `result_disclosures.currency_disclosure_zh`——**直接用这两个字段，不需要为了拿币种去读 `full_result_file`**。
   - 有值：结论首句、结果表表头和 Excel 口径页必须显式写明币种，例如 `currency=CNY` 即声明"本次金额均为人民币（CNY）计价"，不得只写"金额/销售额"了事。
   - 为 `null`：只能说明"本次返回未声明币种"，禁止据字段名、数据集习惯或历史会话推断具体货币（与 `evidence_contract` 的 `currency_not_declared` 披露一致）。
-  - 与请求的 `globalCurrency` 不一致时**以 `disclosures.currency` 为准**，并把差异如实披露。
+  - 与请求的 `globalCurrency` 不一致时**以 `result_disclosures.currency` 为准**，并把差异如实披露。
 - **禁止主动参考外部汇率**：不得使用 Bank of Canada Valet `FXCNYCAD`、模型记忆、外部行情或任何本次取数服务之外的汇率，把结果金额换算成其他币种，也不得跨币种相加或按汇率折算后比较。用户需要其他币种口径时，只能把币种意图写回请求重新查询，由服务端按 `globalCurrency` 换算后重新取 `meta.currency`。
 - Top N 或截断必须披露排序、展示数和总行数；未查询范围不得外推。
 - 披露权限、样本、公式和数据新鲜度。没有刷新完成度或外部证据时，不把末日异常当成业务事实，也不得声称因果。
@@ -157,10 +167,10 @@ MCP-only（无本地 shell）、复杂审计或用户明确要求完整披露证
 | 触发条件 | 判断依据 |
 | --- | --- |
 | 规划器要求澄清或阻断 | 返回 `status=clarify_required` / `blocked`：先按合同澄清或执行 `recovery_command`，仍无法进入 `planned` 才降级 |
-| 一体化入口自身报错 | `query_flow.py` 返回 `status=flow_error` 或退出码 2，原样重跑一次仍失败 |
-| 规划器不可重试地异常退出 | `query_plan.py` exit 2 且错误 JSON `retryable=false`，且 `next_action_zh` 无可执行动作 |
+| 一体化入口自身报错 | 主线 `opscli query flow` 返回 `success=false`（`error.code`/`error.message`）或非零退出码，原样重跑一次仍报同一错误；备选通道 `query_flow.py` 报错口径为 `status=flow_error` 或退出码 2 |
+| 规划器不可重试地异常退出 | 备选通道 `query_plan.py` exit 2 且错误 JSON `retryable=false`、`next_action_zh` 无可执行动作；主线 `opscli query plan` 无独立 `retryable` 标记，按上一行「一体化入口自身报错」同一判据处置 |
 | 命令窗口连续超时 | 同一请求原样重跑后仍在 30 秒窗口内无返回，累计 3 次 |
-| 运行环境不可用 | 无 `python3`、Skill 脚本缺失或依赖导入失败，规划器根本跑不起来 |
+| 命令不可用 | 主线：`opscli` 命令缺失、无法执行或依赖导入失败；备选通道：无 `python3`、Skill 脚本缺失或依赖导入失败；规划器根本跑不起来 |
 
 **不构成降级理由**：0 行结果、用户取消、预期内的未登录（按「纠错与反馈」处置）、主观觉得规划器不合适、想省一次工具调用。降级路径的最终回答必须说明本次取数走的是降级路径以及原因。
 

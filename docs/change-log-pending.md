@@ -7704,3 +7704,83 @@ K1-K3 是纯移植任务（行为等价优先，不改进算法），K2 把这�
 决定是否顺手清理。
 
 **回滚方式**：`git revert <本次提交 hash>`
+
+## 2026-08-19 skills/query - 主线切换与文档收口（Task K5，内核化收官计划最后一棒）
+
+**变更原因**：K1-K4b 已完成内核 `opscli query flow` 的排序兜底/落盘/证据合同/币种与
+limit 披露全能力迁移，并通过 97 个金样对照用例验证与 skill 脚本行为等价。此前
+SKILL.md/cli.md/QUERY_SPEC.md/mcp docstring 仍以 skill 自带脚本
+`python3 scripts/query_flow.py` 为文档中的"主线入口"，与已验证完成的内核能力不匹配；
+QUERY_SPEC.md 与 mcp `query_flow` docstring 还残留已整体移除的 `execution_notes`
+机制描述（K2/K3 审查递延项）。本任务把 Agent 实际执行的主线入口切到内核
+`opscli query flow`，旧 skill 脚本退居"命令级环境异常时的备选执行通道"，并把两条
+通道结构性差异（`result_disclosures` vs `disclosures`、`evidence_contract` 内嵌位置、
+`opscli query flow` 无 `--result-dir` 时不做预览截断等）显式写入文档，避免 Agent
+按旧文档描述读取新入口的返回体时读错键名。
+
+**改动点**：
+- `[CHANGE_SCOPE]` `opscli/skills/templates/ops-dataset-query/SKILL.md`、
+  `references/cli.md`、`data/VERSION.json`（1.3.21→1.3.22）、
+  `opscli/skills/templates/ops-dataset-query/QUERY_SPEC.md`、
+  `opscli/mcp/tools/query.py`（`query_flow` docstring）、
+  `tests/skills/test_dataset_query_flow.py`（文案锁定断言同步）
+- `[CHANGE_ACTION]`
+  - SKILL.md：frontmatter 与正文全部命令示例从 `python3 scripts/query_flow.py` 切到
+    `opscli query flow`；新增"备选执行通道"段落说明命令级环境异常（区别于业务性
+    降级）时的退路及两条通道返回结构差异；"降级触发条件"表格判据从"脚本报错"
+    扩展为"命令报错"，并分列主线/备选通道各自的报错口径（主线 `success=false`/
+    非零退出码，无 `retryable` 字段；备选通道 `status=flow_error`/退出码 2/
+    `retryable` JSON）；"构造与执行""结果分析"两节所有 `disclosures.*` 引用改为
+    `result_disclosures.*`（备选通道保留 `disclosures.*` 注记），补充
+    `auto_complete_applied` 替代备选通道专有的嵌套 `server_paging` 对象的说明；
+    版本号 1.3.21→1.3.22
+  - `references/cli.md`：新增"主线：一体化入口 `opscli query flow`"章节，逐项列出
+    `request`/`--query-file`/`--field`/`--limit`/`--order-by`/`--offset`/
+    `--result-dir`/`--pretty` 全部参数及返回体结构，含 TopN（`--limit`+
+    `--order-by`）与落盘（`--result-dir`）示例（示例字段名 `order_qty` 已用 E2E
+    真实请求验证存在）；原"首选路由"（`query_plan.py -> 组件枚举 -> opscli query
+    simple`）重命名为"手动构造路线（维护 / 精确控制，非常规路径）"并更新措辞，
+    避免与新主线矛盾
+  - `QUERY_SPEC.md`：4.2 节 `query_flow` 返回契约描述从含 `execution_notes`
+    改为 `evidence_contract`/`evidence_contract_error`；4.3 节末尾原
+    "`execution_notes` 是按需披露的已知延后项……orderBy 缺陷本地兜底暂未内核化"
+    整体改写为 `result_disclosures.order_fallback`/`order_disclosure_zh`/
+    `currency`/`currency_disclosure_zh` 的现状描述（均已内核化，非延后能力）
+  - `opscli/mcp/tools/query.py`：`query_flow` 工具 docstring 删除
+    `execution_notes` 描述，补充 `result_disclosures` 完整键集
+    （`limit`/`currency`/`currency_disclosure_zh`/`order_fallback`/
+    `order_disclosure_zh`）与 `evidence_contract`/`evidence_contract_error`
+    内嵌说明
+  - `tests/skills/test_dataset_query_flow.py`：3 处断言按新主线口径同步更新
+    （`'opscli query flow "$USER_REQUEST"'` 替代旧脚本命令字面量、
+    `"**CLI 主线的优先入口是 `opscli query flow`。**"` 替代旧脚本命名、
+    `query_plan.py`/`run_query.py` "不是正常路径"断言改为子串匹配容忍措辞调整）；
+    新增两条断言锁定"备选执行通道"措辞与旧脚本命令仍在文档中出现（确保退居
+    备选而非被删除）
+
+**验证结果**：
+- `python3 -m pytest tests/skills/test_dataset_query_flow.py tests/skills/test_local_fallback.py tests/query/planner/ -v`
+  → 160 passed, 4 xfailed（4 xfailed 为既有已知路由缺口，非本次引入）
+- `python3 -m pytest tests/query/ -q` → 259 passed, 4 failed（4 个失败均在
+  `test_intent_attribution_headers.py`/`test_intent_match_report.py`，经核对与
+  K4b 报告记录的既有基线问题一致，非本次改动引入）
+- `pytest tests/skills/`（全目录）：pytest 自身在 capture 清理阶段崩溃
+  （`ValueError: I/O operation on closed file`），与项目记忆
+  `opscli-test-baseline.md` 记录的"skills 目录 capture 崩溃"基线问题一致，
+  非本次改动引入；已按项目记忆改跑指定文件通过
+- **E2E 冒烟**（QA 环境，`OPSCLI_OPS_URL=http://ops.cm/api`，已登录账号
+  `gongwei@aukeys.com`）：`opscli query flow "近7天各渠道订单量前3"
+  --result-dir <tmp>` 真实返回即时综合数据集 6 行（渠道×订单量，币种 CNY，
+  `truncated=false`）；同请求跑已安装 skill 副本
+  `/Users/mask/.opscli/skills/ops-dataset-query`（版本 v1.1.4，只读运行未修改）
+  的 `python3 scripts/query_flow.py`，返回同一 6 行（渠道名+订单量完全一致，
+  仅行序不同——未传 `--order-by` 时行序本非确定性保证）。两条通道均未把"前3"
+  自然语言解析为 `--limit 3`/`--order-by`（regulator 现状如此，两侧一致，非
+  本次改动引入的差异，已记入任务报告 Concerns）
+
+**影响范围**：仅文档（SKILL.md/cli.md/QUERY_SPEC.md）与 MCP 工具 docstring；
+未改动任何 `opscli/query/**` 执行逻辑代码，`opscli query flow`/`opscli query plan`
+行为不变。影响面是 Agent 后续读取本 Skill 时的执行路径选择（从 skill 脚本切到
+内核 CLI）与对返回体键名的解读（`disclosures` → `result_disclosures`）。
+
+**回滚方式**：`git revert <本次提交 hash>`

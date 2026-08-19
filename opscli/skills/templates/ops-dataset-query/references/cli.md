@@ -5,15 +5,48 @@ description: 当前账号元数据的 CLI-only 规划、权限枚举与查询路
 
 # CLI-only 运行契约
 
-## 首选路由
+## 主线：一体化入口 `opscli query flow`
+
+`opscli query flow` 是内核化后的 CLI 主线入口，一次调用内完成规划与执行（`status=planned` 的数据集查询）。SKILL.md 的「查询规划主线」是权威流程说明，本节只补全参数与示例，供需要精确控制调用参数时查阅。
+
+```bash
+opscli query flow <request> [--query-file <文件>] [--field <字段> ...] \
+  [--limit <行数>] [--order-by <字段>[:asc|desc] ...] [--offset <偏移>] \
+  [--result-dir <目录>] [--pretty]
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `request`（位置参数） | 自然语言查询原文，保留原始表述，不要自行改写成关键词 |
+| `--query-file <文件>` | 从 UTF-8 文件读取查询原文，用户请求含引号等特殊字符时改用本参数 |
+| `--field <字段>` | 补充点名字段，可重复传入 |
+| `--limit <行数>` | 返回行数上限；不传则自动补齐服务端默认页（最多 5000 行） |
+| `--order-by <字段>[:asc\|desc]` | 排序，形态为「结果字段名[:asc\|desc]」，可重复传入实现多级排序；只认 `asc`/`desc`，省略方向默认升序 |
+| `--offset <偏移>` | 分页偏移；不传则后端默认 0 |
+| `--result-dir <目录>` | **建议每次都传**：传入后全量结果落盘到该目录（文件名 `query_result_<秒级时间戳>.json`），返回体中的结果收窄为预览行；不传则不做截断，大结果集会原样进入返回体、撑爆上下文 |
+| `--pretty` | 格式化输出 JSON，便于人工阅读；Agent 消费时通常不需要 |
+
+返回体固定为 `{"success", "command", "data", "error"}`；`data` 内含规划合同全部字段（`status`/`model_view`/`answer_contract`/`execution_ref` 等）+ `result`（`status=planned` 时的查询结果）+ `result_disclosures`（行数/总数/截断/自动补齐/limit/币种披露，`--result-dir` 时另有 `full_result_file`）+ `evidence_contract` 或 `evidence_contract_error`（构建证据合同失败时）。`success=false` 时看 `error.code`/`error.message`，原样重跑一次仍失败即转 SKILL.md「规划器不可用时的降级路径」。
+
+示例（Top3 排序 + 落盘）：
+
+```bash
+opscli query flow "近7天各渠道订单量前3" \
+  --limit 3 --order-by order_qty:desc \
+  --result-dir /tmp/opscli-query-results --pretty
+```
+
+若 `opscli` 命令本身不可用（命令级环境异常，非规划器业务性降级），改用 Skill 自带的备选执行通道 `python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"`（详见 SKILL.md），返回结构不同（顶层直接是 `status`/`disclosures`/`preview_rows`/`evidence_contract`，不经 `data` 包裹）。
+
+## 手动构造路线（维护 / 精确控制，非常规路径）
 
 ```text
 query_plan.py -> 当前账号组件枚举 -> opscli query simple
 ```
 
-该路由是默认且优先路径。只有命中 `SKILL.md`「规划器不可用时的降级路径」列出的客观失败条件（规划器澄清/阻断、脚本报错重跑仍失败、命令窗口连续超时、运行环境缺 python3）时才转降级章节，其余情况一律走本路由。
+该路由**不是**常规取数路径（SKILL.md 已明确一体化入口才是主线），仅用于维护者复现审计、需要精确控制查询 payload，或规划器已返回 `clarify_required`/`blocked` 且已按合同处置后需要手工继续的场景。除上述例外，一律走 `opscli query flow`。
 
-若当前请求尚未运行规划器，直接在 Skill 目录执行（规划器按平台 30 秒命令窗口设计：
+若确需手动构造，直接在 Skill 目录执行（规划器按平台 30 秒命令窗口设计：
 常态 1~3 秒返回；需要刷新元数据时前台最多等 8 秒、未完成即转后台续跑并返回
 `recovery_state=refresh_in_progress`，此时直接执行其 `recovery_command`（sleep+重跑
 合并的一条命令）即可，禁止自行升级；偶发窗口超时原样重跑一次，规划器幂等）：
@@ -82,7 +115,7 @@ python3 scripts/run_query.py --table-id "$TABLE_ID" --json "$QUERY_JSON" --plan-
 
 ## 5. 数据集意图目录（`opscli query catalog` / `opscli query intent`）
 
-这两个命令是 `SKILL.md`「规划器不可用时的降级路径」L2a 层的正式入口：目录为空或选表失败时，优先用远端实时意图目录路由选表，不依赖本地快照；仅当 `query intent` 不可用、报错或返回 `fallback_required=true` 时才降到 L2b 的 `local_fallback.py`。规划器（首选路由）仍可用时不调用这两个命令。
+这两个命令是 `SKILL.md`「规划器不可用时的降级路径」L2a 层的正式入口：目录为空或选表失败时，优先用远端实时意图目录路由选表，不依赖本地快照；仅当 `query intent` 不可用、报错或返回 `fallback_required=true` 时才降到 L2b 的 `local_fallback.py`。规划器（主线一体化入口）仍可用时不调用这两个命令。
 
 ### `opscli query catalog`
 

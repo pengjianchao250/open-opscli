@@ -44,10 +44,11 @@ def test_skill_defaults_to_bounded_single_flow_entry():
     assert "正常路径工具调用预算" in text
     assert "最多 3 次工具调用" in text
     assert "非正常路径最多 7 次" in text
-    assert 'python3 scripts/query_flow.py "$USER_REQUEST"' in text
+    assert 'opscli query flow "$USER_REQUEST"' in text
     assert "禁止为了“确认环境/字段/语法”调用 `opscli query catalog`" in text
     assert "禁止手工修改 plan" in text
-    assert "`query_plan.py` + `run_query.py` 不是 Agent 的规划器正常路径" in text
+    assert "都不是 Agent 的规划器正常路径" in text
+    assert "`query_plan.py`/`run_query.py`" in text
 
 
 def test_skill_allows_fallback_only_on_objective_failure():
@@ -58,12 +59,15 @@ def test_skill_allows_fallback_only_on_objective_failure():
     """
     text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
-    assert "**CLI 主线的优先入口是 `query_flow.py`。**" in text
+    assert "**CLI 主线的优先入口是 `opscli query flow`。**" in text
     assert "### 降级触发条件（满足其一即可降级）" in text
     assert "**不构成降级理由**" in text
     assert "主观觉得规划器不合适" in text
     # 降级态的字段来源护栏不得随触发条件一起放宽
     assert "仍禁止凭记忆手拼" in text
+    # 旧脚本入口退居备选执行通道（命令级环境异常时），不得与主线入口混淆
+    assert "备选执行通道" in text
+    assert 'python3 scripts/query_flow.py "$USER_REQUEST"' in text
 
 
 def test_skill_defines_multi_dataset_excel_orchestration_contract():

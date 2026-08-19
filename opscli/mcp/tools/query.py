@@ -756,9 +756,15 @@ async def query_flow(
     非 planned（需澄清/被阻断/图表 UUID 等）合同原样返回，交调用方按 model_view 处置。
     planned 时把 limit/order_by/offset 填入 query_template 再执行；不传 limit 且
     服务端默认页少于 totalCount 时会自动补齐一次（最多 5000 行）。返回体的
-    result_disclosures 明确给出实际行数、总数和截断状态；execution_notes 是**按需披露**的已知延后项，
-    仅在本次真正用到相关能力时出现（传了 order_by 才提示服务端 orderBy 缺陷的本地兜底/加量重查
-    未内核化）；未出现该键属正常，不是异常。
+    result_disclosures 除实际行数/总数/截断状态（row_count_returned/total_count/truncated/
+    auto_complete_applied）外，还带 limit（原始请求的分页上限，不受自动补齐影响）与
+    currency/currency_disclosure_zh（本次实际生效币种，取自服务端 meta.currency；为
+    null 时只能声明未声明，禁止推断）；传了 order_by 且检测到服务端排序未生效（已知缺陷）
+    时会额外出现 order_fallback/order_disclosure_zh，说明已本地重排或加量重查后本地排序，
+    结论中必须披露该兜底行为，排序正常生效或未传 order_by 时不会出现 order_fallback。
+    返回体还内嵌 evidence_contract（构建失败时为 evidence_contract_error，与合同其余字段
+    同级），组织结论时优先使用其 required_evidence/required_disclosures_zh/
+    forbidden_inferences_zh。
 
     【前置条件】同 query_plan：身份只来自传输层已验证账号，不读显式传入的 session_id / jwt。
 

@@ -128,8 +128,8 @@ query_flow(request="查近30天各部门的销售额和订单量", limit=100,
 ### 4.2 返回合同与处置
 
 `query_flow` 返回 = 规划合同 + `result`（planned 时）+
-`result_disclosures`（返回行数、总数、截断与自动补齐状态）+
-`execution_notes`（按需）。按 `status` 分流：
+`result_disclosures`（返回行数、总数、截断、自动补齐、原始 `limit`、币种披露、排序兜底披露等，见 4.3）+
+`evidence_contract`（构建失败时为 `evidence_contract_error`，与合同其余字段同级）。按 `status` 分流：
 
 | status | 含义 | 处置 |
 |--------|------|------|
@@ -163,10 +163,12 @@ query_flow(request="查近30天各部门的销售额和订单量", limit=100,
 应通过正式分页能力继续取全；在拿到全量前必须声明“当前为前 N 行”，不得生成宣称全量的
 Excel。
 
-`execution_notes` 是按需披露的已知延后项，仅在本次真正用到相关能力时出现：
+`result_disclosures` 还按场景包含以下键（均已内核化，不再是延后能力）：
 
-- 传了 `order_by` → 提示服务端 orderBy 缺陷的本地兜底/加量重查暂未内核化（orderBy 本身已正常下发）
-- 无相关参数时**不会出现该键**，不要把它的缺失当成异常
+- `currency` / `currency_disclosure_zh`：本次实际生效币种，取自 `meta.currency`；有值必须在结论首句、结果表头写明，为 `null` 时只能声明"未声明"，禁止推断；与请求 `globalCurrency` 不一致时以此为准并披露差异（详见第十五章币种口径）。
+- `order_fallback` / `order_disclosure_zh`：仅当传了 `order_by` 且检测到服务端排序未生效（已知缺陷）时出现 `order_fallback`，说明本次已本地重排、或按服务端总行数加量重查后本地排序取前 N，结论中必须披露该兜底行为；排序已正常生效时只会出现确认性的 `order_disclosure_zh`，不会出现 `order_fallback`。
+
+`evidence_contract`（构建失败时为 `evidence_contract_error`）随 `query_flow` 返回体一并给出，优先使用其 `required_evidence`、`required_disclosures_zh`、`forbidden_inferences_zh` 组织结论，不必再按第十五章手工拼装。
 
 ### 4.4 元数据未就绪（blocked）
 
