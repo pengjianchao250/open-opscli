@@ -23,17 +23,15 @@ from opscli.query.services.planner import enum_cache, plan_integrity, query_plan
 from opscli.query.services.planner.metadata_adapter import MetadataAdapter
 
 
-# run_flow 已知延后项披露：limit/order_by/offset 本身已可控（见 run_flow 参数），
-# 以下两条是尚未内核化的独立后续项，且**仅在本次调用真正用到相关能力时**才披露，
-# 避免对无关查询产生误导：
-# - 传了 order_by 时：服务端 orderBy 缺陷的本地兜底/加量重查（TopN 结果校正）未做；
-# - 传了 result_dir 时：完整结果落盘未做。
-_NOTE_ORDER_BY = (
-    "orderBy 已下发给服务端；但服务端 orderBy 缺陷的本地兜底/加量重查（TopN 结果校正）"
-    "暂未内核化——若服务端未真正生效排序，本次不做客户端纠正"
-)
+# run_flow 已知延后项披露：limit/order_by/offset 本身已可控（见 run_flow 参数）。
+# order_by 的服务端排序缺陷本地兜底/加量重查已随 K1 内核化（见 _apply_order_fallback），
+# 以下仅剩 result_dir 一条尚未内核化的独立后续项，且**仅在本次调用真正传了
+# result_dir 时**才披露，避免对无关查询产生误导。
 _NOTE_RESULT_DIR = "完整结果落盘 result_dir 暂未内核化，本次仅返回服务端查询结果"
 _AUTO_COMPLETE_LIMIT_CAP = 5000
+# 排序兜底重查时 limit 的放大倍数与硬上限（与 skill run_query.py:36-37 数值一致，原样迁入）
+_ORDER_REQUERY_MULTIPLIER = 3
+_ORDER_REQUERY_LIMIT_CAP = 5000
 
 
 def _extract_enum_values(result: Any, field_name: str) -> list[str]:
@@ -97,6 +95,119 @@ def _extract_result_page(result: Any) -> tuple[list[dict], int | None]:
             except (TypeError, ValueError):
                 continue
     return rows, None
+
+
+def _sort_value(value: Any) -> tuple[int, float | str]:
+    """排序键归一：数值优先按数值比较，None 沉底。
+
+    与 skill run_query.py:_sort_value（:393-403）等价迁入，原样照抄不做改动。
+    """
+    if value is None:
+        return (2, "")
+    if isinstance(value, (int, float)):
+        return (0, float(value))
+    text = str(value).replace(",", "")
+    try:
+        return (0, float(text))
+    except ValueError:
+        return (1, str(value))
+
+
+def _is_monotonic(rows: list[dict], field: str, desc: bool) -> bool:
+    """校验结果行是否按声明字段单调（服务端排序是否真的生效）。
+
+    与 skill run_query.py:_is_monotonic（:406-412）等价迁入。direction 入参改为
+    内核既有的 desc 布尔——内核 orderBy 形态是 {field,desc}，与 skill 的
+    {field,direction} 不同（见 query_plan.py:1274 注记，两处不可直接复制粘贴），
+    比较逻辑本身（reverse 排序后逐值比对）保持等价。
+    """
+    values = [_sort_value(row.get(field)) for row in rows if field in row]
+    if len(values) < 2:
+        return True
+    return values == sorted(values, reverse=desc)
+
+
+def _write_result_rows(run_result: dict, rows: list[dict]) -> None:
+    """把本地重排/加量重查修正后的行写回 run_result 的原始行位置。
+
+    kernel 的 run_flow 只有 result 一个通道把服务端结果带给调用方（不像 skill
+    另有 preview_rows/全量落盘两条通道），因此排序兜底修正的行必须写回 result
+    嵌套结构，否则 result_disclosures 声明的行数/顺序会与 result 实际内容不一致。
+    复用 _extract_result_page 相同的三条兜底路径定位行列表所在容器。
+    """
+    if not isinstance(run_result, dict):
+        return
+    for path in (("data", "result", "data"), ("result", "data"), ("data",)):
+        node: Any = run_result
+        for key in path[:-1]:
+            if not isinstance(node, dict):
+                node = None
+                break
+            node = node.get(key)
+        if isinstance(node, dict) and isinstance(node.get(path[-1]), list):
+            node[path[-1]] = rows
+            return
+
+
+def _apply_order_fallback(
+    qm: QueryManager,
+    template: dict,
+    rows: list[dict],
+    order_by: list[dict],
+    total: int | None,
+) -> tuple[list[dict], dict | None]:
+    """orderBy 未生效时的本地兜底（已知服务端缺陷的过渡方案）。
+
+    与 skill run_query.py:_apply_order_fallback（:415-476）等价迁入：
+    - 无 limit：手上就是全量，单调即可证明服务端排序生效，否则本地重排；
+    - 有 limit：单调**不能**作为判据——服务端整段忽略 orderBy 时返回的是自然序
+      切片，而常量序列（如整片都是同一个值）天然单调，判据会静默放过；因此有
+      limit 时一律按总行数取全量后本地排序取前 N。
+    重查用内核既有的 qm.run_query_template（对应 skill 版对 _run_opscli 的二次
+    调用），不涉及 skill 版 intent_code/selection_source 透传（kernel 执行通道
+    本就不支持该归因参数，非本次迁移范围）。
+    返回 (修正后的行, 兜底披露信息或 None)。
+    """
+    primary = order_by[0]
+    field = primary.get("field")
+    desc = bool(primary.get("desc"))
+    direction = "DESC" if desc else "ASC"  # 仅用于披露文案，口径与 skill 版一致
+    limit = template.get("limit")
+    if not limit and _is_monotonic(rows, field, desc):
+        return rows, None
+    note: dict[str, Any] = {
+        "order_fallback_applied": True,
+        "order_field": field,
+        "direction": direction,
+    }
+    if not limit:
+        rows = sorted(rows, key=lambda row: _sort_value(row.get(field)), reverse=desc)
+        note["strategy"] = "local_resort"
+        return rows, note
+    # 有 limit：放大固定倍数仍是在错误的行里挑，必须按服务端报告的总行数取全量。
+    # total 不可用时退回倍数放大，并在 strategy 里如实标注为尽力而为。
+    try:
+        span = int(total) if total is not None else 0
+    except (TypeError, ValueError):
+        span = 0
+    exact = span > 0
+    if not exact:
+        span = int(limit) * _ORDER_REQUERY_MULTIPLIER
+    requery_limit = min(span, _ORDER_REQUERY_LIMIT_CAP)
+    requery_template = {**template, "limit": requery_limit}
+    requery_result = qm.run_query_template({"query_template": requery_template})
+    wide_rows, _wide_total = _extract_result_page(requery_result)
+    wide_rows = sorted(wide_rows, key=lambda row: _sort_value(row.get(field)), reverse=desc)
+    corrected = wide_rows[: int(limit)]
+    # 核对之后才能下结论：重查是为了「验证」而不是「假定」服务端排序失效。
+    # 首查结果与本地算出的 Top N 一致时说明服务端排序本就生效，
+    # 此时报 order_fallback_applied 会让 Agent 向用户披露一个并不存在的兜底。
+    if corrected == rows:
+        return rows, None
+    note["strategy"] = f"requery_limit_{requery_limit}_then_local_sort"
+    # 取样口径必须可审计：未按全量重查时结论不能自称精确 Top N
+    note["covers_full_result"] = bool(exact and span <= _ORDER_REQUERY_LIMIT_CAP)
+    return corrected, note
 
 
 def _make_callbacks(qm: QueryManager, user_email: str, base_dir: Path | None):
@@ -259,16 +370,49 @@ def run_flow(
         run_result = qm.run_query_template(execution_ref)
         rows, total = _extract_result_page(run_result)
         auto_complete_applied = True
-    result_disclosures = {
+    result_disclosures: dict[str, Any] = {
         "row_count_returned": len(rows),
         "total_count": total,
         "truncated": total is not None and len(rows) < total,
         "auto_complete_applied": auto_complete_applied,
     }
+    # orderBy 本地兜底：effective_order_by 取模板最终生效值（而非 run_flow 的
+    # order_by 形参），与 skill run_query.py 读 payload.get("orderBy") 的口径一致，
+    # 覆盖「排序来自规划器 NL 解析、未经 run_flow 显式传参」的场景。
+    effective_order_by = template.get("orderBy") if isinstance(template, dict) else None
+    order_note: dict[str, Any] | None = None
+    if effective_order_by and rows:
+        rows, order_note = _apply_order_fallback(qm, template, rows, effective_order_by, total)
+        if order_note:
+            _write_result_rows(run_result, rows)
+            result_disclosures["order_fallback"] = order_note
+            # 重查窗口未覆盖全量时结论不能自称精确 Top N，必须把口径差异一并交代
+            partial = "requery" in order_note["strategy"] and not order_note.get(
+                "covers_full_result"
+            )
+            result_disclosures["order_disclosure_zh"] = (
+                "服务端排序未生效（已知缺陷），本次已"
+                + (
+                    "按总行数取全量后本地排序取前N"
+                    if "requery" in order_note["strategy"]
+                    else "本地重排"
+                )
+                + "，结论中必须披露该兜底行为"
+                + (
+                    "；本次重查窗口未覆盖全部结果，前N可能不精确，必须如实声明"
+                    if partial
+                    else ""
+                )
+            )
+            # 本地重排后行数已按 limit 切片，披露口径必须同步刷新
+            result_disclosures["row_count_returned"] = len(rows)
+    if effective_order_by and not order_note:
+        result_disclosures["order_disclosure_zh"] = (
+            f"排序已生效：按 {effective_order_by[0]['field']} "
+            f"{'DESC' if effective_order_by[0].get('desc') else 'ASC'}"
+        )
     # 按需披露：仅在本次真正用到相关能力时提示对应的延后项，避免对无关查询误导
     execution_notes: list[str] = []
-    if order_by:
-        execution_notes.append(_NOTE_ORDER_BY)
     if result_dir is not None:
         execution_notes.append(_NOTE_RESULT_DIR)
     out = {

@@ -150,8 +150,12 @@ def test_run_flow_fills_limit_order_offset(monkeypatch):
         if k not in ("result", "result_disclosures", "execution_notes")
     }
     assert plan_integrity.verify(sealed) is True
-    # 传了 order_by → 仅出 orderBy 一条披露（未传 result_dir 不出落盘那条）
-    assert out["execution_notes"] == [entry._NOTE_ORDER_BY]
+    # order_by 已内核化：本例服务端返回空行（rows=[]），排序校验按源实现语义直接跳过
+    # 兜底重查（源 run_query.py 的 guard 是 `... and rows`），仅出「排序已生效」披露，
+    # 不再落回 _NOTE_ORDER_BY 延后项（该常量已随 K1 完成标志删除）
+    assert "execution_notes" not in out
+    assert out["result_disclosures"]["order_disclosure_zh"] == "排序已生效：按 x DESC"
+    assert "order_fallback" not in out["result_disclosures"]
 
 
 def test_run_flow_result_dir_note_only_when_passed(monkeypatch):
@@ -213,6 +217,78 @@ def test_run_flow_auto_completes_server_default_page(monkeypatch):
         "truncated": False,
         "auto_complete_applied": True,
     }
+
+
+def test_flow_order_by_local_resort_when_server_ignores(monkeypatch):
+    """服务端返回乱序时本地重排（QA 实测服务端 orderBy 有时不生效）。
+
+    与 skill run_query.py 的 _apply_order_fallback 等价迁入：无 limit 时手上就是
+    全量，单调性校验失败即本地重排，不发起加量重查。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+    calls: list[int | None] = []
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            calls.append(execution_ref["query_template"].get("limit"))
+            return {"data": {"result": {"data": [{"x": 1}, {"x": 5}, {"x": 3}]}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com",
+        order_by=[{"field": "x", "desc": True}],
+        query_manager=_QM(),
+    )
+
+    # 只执行一次（无 limit 分支不重查），返回行按 x 降序本地重排
+    assert calls == [None]
+    assert [row["x"] for row in out["result"]["data"]["result"]["data"]] == [5, 3, 1]
+    fallback = out["result_disclosures"]["order_fallback"]
+    assert fallback == {
+        "order_fallback_applied": True,
+        "order_field": "x",
+        "direction": "DESC",
+        "strategy": "local_resort",
+    }
+    assert out["result_disclosures"]["row_count_returned"] == 3
+    assert "服务端排序未生效" in out["result_disclosures"]["order_disclosure_zh"]
+
+
+def test_flow_order_by_amplified_requery_on_full_page(monkeypatch):
+    """结果行数=limit 且乱序：加量重查一次再截断（TopN 拿错行的防线）。
+
+    与 skill run_query.py 的 _apply_order_fallback 等价迁入：带 limit 时单调性
+    不能作为判据（常量序列天然单调会掩盖服务端整段忽略 orderBy），一律按总行数
+    取全量重查后本地排序取前 N。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+    calls: list[int | None] = []
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            current_limit = execution_ref["query_template"].get("limit")
+            calls.append(current_limit)
+            if current_limit == 3:
+                # 首查：limit=3 满页返回，但乱序（1,9,2 非单调）
+                rows = [{"x": 1}, {"x": 9}, {"x": 2}]
+            else:
+                # 加量重查：按 total=10 全量返回
+                rows = [{"x": v} for v in (9, 7, 1, 2, 3, 4, 5, 6, 8, 0)]
+            return {"data": {"result": {"data": rows, "meta": {"totalCount": 10}}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com",
+        limit=3, order_by=[{"field": "x", "desc": True}],
+        query_manager=_QM(),
+    )
+
+    # 只重查一次，且放大到服务端总行数 10（非倍数放大的尽力而为口径）
+    assert calls == [3, 10]
+    assert [row["x"] for row in out["result"]["data"]["result"]["data"]] == [9, 8, 7]
+    fallback = out["result_disclosures"]["order_fallback"]
+    assert fallback["order_fallback_applied"] is True
+    assert fallback["strategy"] == "requery_limit_10_then_local_sort"
+    assert fallback["covers_full_result"] is True
+    assert out["result_disclosures"]["row_count_returned"] == 3
 
 
 def test_run_query_template_drops_null_keys():

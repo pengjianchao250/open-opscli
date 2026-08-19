@@ -7275,4 +7275,79 @@ UnicodeDecodeError（0.0.147 上 3 条独立反馈，形态一致）。
 **回滚方式**：`git checkout -- opscli/query/services/planner/dataset_guidance.py
 opscli/skills/templates/ops-dataset-query/scripts/dataset_guidance.py
 tests/query/planner/test_guidance.py && rm tests/skills/test_dataset_guidance_dup_selfheal.py`
+
+---
+
+## 2026-08-19 query - orderBy 本地兜底迁入内核（Task K1）
+
+**变更原因**：内核 `entry.run_flow` 此前对 orderBy 只做"下发给服务端"一件事，
+服务端 orderBy 在部分形态下会被静默吞掉、返回自然序切片——TopN 场景下会"拿错行
+还披露自洽"（skill 侧 `run_query.py` 已通过单调性校验 + 本地重排/加量重查兜底
+在生产验证过；内核侧此前只挂了 `_NOTE_ORDER_BY` 一条"暂未内核化"的延后披露）。
+本任务是内核化收官计划 K1：把该兜底逻辑原样迁入内核，删除延后披露常量，
+是"只搬家不改进"的行为等价迁移，不引入新算法。
+
+**改动点**：
+- `opscli/query/services/planner/entry.py`：
+  - 新增 `_sort_value`/`_is_monotonic`——与 skill `run_query.py:393-412` 逐字段
+    等价迁入（`_is_monotonic` 的 direction 入参改用内核既有的 desc 布尔，因内核
+    orderBy 形态本就是 `{field,desc}`，与 skill 的 `{field,direction}` 不同，见
+    `query_plan.py:1274` 既有注记，非本次引入的差异）
+  - 新增 `_apply_order_fallback`——与 skill `_apply_order_fallback`（:415-476）
+    等价迁入：无 limit 时单调即放行、否则本地重排；有 limit 时单调不作为判据，
+    按总行数（`total` 不可用时退回 `limit*3` 倍数放大、`min(.., 5000)` 硬上限，
+    常量值与 skill `ORDER_REQUERY_MULTIPLIER=3`/`ORDER_REQUERY_LIMIT_CAP=5000`
+    完全一致）取全量重查一次、本地排序取前 N，且首查结果与本地算出的 TopN
+    一致时不误报兜底。重查改用内核既有的 `qm.run_query_template` 进程内调用
+    （替代 skill 版对 `opscli query simple --run` 的 subprocess 调用），不透传
+    intent_code/selection_source（该参数是 skill 执行链路特有，内核
+    `run_query_template` 签名本就不支持，非本次迁移范围）
+  - 新增 `_write_result_rows`——kernel 适配：skill 版另有 preview_rows/落盘文件
+    两条通道单独承载修正后的行，内核 `run_flow` 只有 `result` 一个通道回传给
+    调用方，因此新增该函数把兜底修正后的行写回 `run_result` 嵌套结构，保证
+    `result` 与 `result_disclosures` 声明的行数/顺序自洽
+  - `run_flow`：删除 `_NOTE_ORDER_BY` 延后披露常量及其挂载点（完成标志）；
+    改为按 `template.get("orderBy")`（模板最终生效值，与 skill 读
+    `payload.get("orderBy")` 口径一致，覆盖排序来自规划器 NL 解析、非
+    `run_flow` 显式传参的场景）触发 `_apply_order_fallback`，兜底信息写入
+    `result_disclosures["order_fallback"]`（内嵌 order_fallback_applied/
+    order_field/direction/strategy/covers_full_result）与
+    `result_disclosures["order_disclosure_zh"]`——键名沿用 skill 版 disclosures
+    的对应键名，保持 Agent 侧文档兼容；新增
+    `_ORDER_REQUERY_MULTIPLIER=3`/`_ORDER_REQUERY_LIMIT_CAP=5000` 两个常量
+  - `_NOTE_RESULT_DIR` 及其披露逻辑不变（result_dir 落盘能力不在本任务范围）
+- `tests/query/planner/test_entry.py`：新增
+  `test_flow_order_by_local_resort_when_server_ignores`（服务端返回乱序 → 本地
+  重排 + strategy=local_resort 披露）、
+  `test_flow_order_by_amplified_requery_on_full_page`（满页乱序 → 按 total 加量
+  重查一次 + strategy=requery_limit_10_then_local_sort + covers_full_result=True，
+  只重查一次）；因删除 `_NOTE_ORDER_BY` 常量，改写了两处依赖旧常量的既有断言
+  （`test_run_flow_fills_limit_order_offset` 改为断言
+  `result_disclosures["order_disclosure_zh"]`；`test_run_flow_result_dir_note_
+  only_when_passed` 未引用旧常量，无需改动）
+
+**验证结果**：
+- `pytest tests/query/planner/test_entry.py -v` → 12 passed（含 2 条新增 TDD 用例）
+- `pytest tests/query/planner/ -q` → 74 passed（含 C3 枚举缓存用例全部通过，
+  0 回归）
+- `pytest tests/query/ -q --ignore=tests/query/test_cli.py --ignore=tests/query/
+  test_client.py --ignore=tests/query/test_manager.py`（后三个文件因仓库既有的
+  跨目录同名模块 `__pycache__` collision 无法单独收集，与本次改动无关）
+  → 155 passed, 4 failed（`test_intent_attribution_headers.py` ×2、
+  `test_intent_match_report.py` ×2），经 `git stash` 验证改动前同样失败，
+  非本次改动引入，与 MEMORY.md 记录的"query 2 预存失败"基线口径吻合
+- `pytest tests/mcp/ -q --ignore=tests/mcp/test_shopify_tools.py` → 351 passed
+  （`test_shopify_tools.py` 为仓库既有 collection 崩溃基线问题，与本次改动无关）
+- `grep -rn _NOTE_ORDER_BY`（排除 .git）确认仅剩测试文件里的中文注释提及，
+  无任何代码路径继续引用该已删除常量
+
+**影响范围**：仅 `run_flow` 在 planned 且模板最终 orderBy 非空时新增本地校验/
+兜底重查一次的行为；未传 order_by 且模板 orderBy 为 None 的查询路径不受影响
+（`effective_order_by` 为假值时整段逻辑跳过，`result_disclosures` 不新增
+order_fallback/order_disclosure_zh 键，与改动前完全一致）。CLI（`opscli query
+flow`）与 MCP（`query_flow`）复用同一 `run_flow` 入口，均受益。
+
+**回滚方式**：`git revert <本次提交 hash>` 或
+`git checkout -- opscli/query/services/planner/entry.py
+tests/query/planner/test_entry.py`
 ---
