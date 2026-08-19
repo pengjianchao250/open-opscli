@@ -1,5 +1,67 @@
 # 待归档变更记录
 
+## 2026-08-19 query - 内核 flow 与 skill 主线金样对照回归（Task K4）
+
+**变更原因**：规划器优化推进-内核化收官实施计划的 K1-K3 分别把选表排序兜底/
+落盘预览/证据合同逐条从 skill `run_query.py`/`query_plan.py` 迁进内核
+`opscli.query.services.planner`，每条迁移点各自都有单元测试锁定，但从未有
+一份端到端测试用同一份元数据、同一句用户原文同时喂给两条主线核对最终合同——
+K4 补上这道"金样对照"回归，防止"单元测试各自绿、组合起来有落差"的搬家事故，
+并借这次对照发现两处未被 K1-K3 覆盖的执行段披露缺口。
+
+**改动点**：
+- 新建 `tests/query/planner/test_flow_parity.py`（8 个测试）：
+  - `_write_and_build` 用同一份 Python 字面量规格同时物化 skill 侧 `data_dir`
+    CSV 三件套（`datasets.csv`/`dataset_fields.csv`/`dataset_select_columns.csv`
+    + `VERSION.json`）与 kernel 侧 `MetadataAdapter` 需要的 payload dict，保证
+    两侧输入等价而非分别手写两份数据
+  - 5 个场景对照测试（单维度单指标/带时间口径环比/带排序 TopN/带组件筛选/
+    同名数据集澄清），核对 `status`、`query_template` 的
+    `dimensions`/`metrics`/`filters` 集合、`orderBy`/`limit`、澄清消息键集，
+    经调试确认全部落在预期状态（4 个 `planned` + 1 个 `clarify_required`），
+    非因两侧同时失败而巧合通过
+  - `test_intent_rules_resource_matches_skill_source`：核对 kernel
+    `_load_rules_resource()` 与 skill `data/intent_rules.json` 逐字节一致，
+    证明上面 5 个场景省略 `rules=` 时两侧确实同源
+  - `test_evidence_contract_identical_across_versions`：同一查询返回体喂两侧
+    `build_evidence_contract`，断言输出逐字段相同
+  - `test_result_disclosure_key_set_known_gap_whitelist`：核对内核
+    `run_flow.result_disclosures` 与 skill `run_query.py` 的 `disclosures`
+    键集差异恰好等于白名单（白名单外任何差异判定回归）
+
+**发现的白名单差异（均附裁决依据，见测试文件内联注释）**：
+- `metadata_source` 取值：skill 从本地 CSV/`data_state` 判定来源
+  （`skill_local`/`published_bundle`/`fallback_dir`），kernel 元数据恒来自
+  后端接口，硬编码 `"backend_query_metadata"`——架构差异，只比对键存在不比对值
+- `orderBy` 形态：kernel `{field,desc}` 布尔 vs skill `{field,direction}`
+  字符串——K1 已裁决的等价形态差异，归一后比对语义
+- 执行段披露键集差异（**新发现，未在 K1-K3 报告出现，非本任务范围内修复**）：
+  - skill 独有 `currency`/`currency_disclosure_zh`：无条件从
+    `meta.currency` 提取币种并强制披露（`run_query.py:683-690`）；kernel
+    `run_flow` 完全没有币种提取与披露逻辑
+  - skill 独有 `limit`：披露"用户原始 limit 口径"（`_complete_server_
+    paged_rows` 用 `dict(payload)` 拷贝重查、不回写原 payload）；kernel
+    `template["limit"]` 在 auto-complete 时就地改写，直接补同名键语义会不
+    一致，需新增独立"原始 limit"跟踪字段才能对齐
+  - kernel 独有 `auto_complete_applied`：K2 已裁决的执行通道架构差异
+    （源实现 stdout/落盘/`disclosures` 三通道分离，kernel 只有
+    `result_disclosures` 一个通道，改为恒定布尔标记）
+
+**验证结果**：`python3 -m pytest tests/query/planner/ -q` → 96 passed
+（88 基线 + 8 新增）；`python3 -m pytest -q`（全量）在与本次改动无关的既有
+基线问题上于会话收尾阶段崩溃（`ValueError: I/O operation on closed file`，
+pytest 全局 capture 在 teardown 阶段异常），经 `git stash` 复现确认改动前
+即存在，与项目记忆 `opscli-test-baseline.md` 记录的"skills 目录 capture
+崩溃"基线问题一致，非本次改动引入
+
+**影响范围**：仅新增测试文件与本变更记录，未修改任何生产代码
+（`opscli/query/services/planner/*`、`opscli/skills/templates/*` 均未改动）
+
+**回滚方式**：`git rm tests/query/planner/test_flow_parity.py` 并撤销本条
+变更记录
+
+---
+
 ## 2026-08-19 query - evidence_contract 迁入内核（Task K3）
 
 **变更原因**：Agent 消费文档（`ops-dataset-query` SKILL.md/`references/
