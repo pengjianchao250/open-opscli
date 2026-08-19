@@ -267,6 +267,53 @@ def test_run_flow_no_result_dir_keeps_full_rows_unchanged(monkeypatch):
     assert "full_result_file" not in out["result_disclosures"]
 
 
+def test_run_flow_large_result_without_result_dir_warns(monkeypatch):
+    """未传 result_dir 且行数超过预览阈值（20 行）：必须出现 large_result_warning_zh，
+    把"忘传 --result-dir 导致大结果静默塞进返回体"变成 Agent 可感知的信号
+    （K5 修复轮：控制器采纳审查方案 b）。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            rows = [{"x": i} for i in range(21)]
+            return {"data": {"result": {"data": rows}}}
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+    assert out["result_disclosures"]["large_result_warning_zh"] == (
+        "本次返回 21 行且未传 --result-dir，全量行已进入返回体；"
+        "行数较大时建议携带 --result-dir 落盘并只读预览。"
+    )
+
+
+def test_run_flow_small_result_without_result_dir_no_warning(monkeypatch):
+    """未传 result_dir 但行数不超过预览阈值（20 行）：不应出现警告键。"""
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            rows = [{"x": i} for i in range(20)]
+            return {"data": {"result": {"data": rows}}}
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+    assert "large_result_warning_zh" not in out["result_disclosures"]
+
+
+def test_run_flow_large_result_with_result_dir_no_warning(monkeypatch, tmp_path: Path):
+    """传了 result_dir：即便行数超过预览阈值，也已落盘+预览限幅，不需要再警告。"""
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            rows = [{"x": i} for i in range(30)]
+            return {"data": {"result": {"data": rows}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com", result_dir=tmp_path, query_manager=_QM(),
+    )
+    assert "large_result_warning_zh" not in out["result_disclosures"]
+
+
 def test_run_flow_no_params_keeps_defaults(monkeypatch):
     """run_flow 不传 limit/order_by/offset → 模板 limit/orderBy 保持 None、不加 offset（沿用后端默认）。"""
     monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
@@ -320,6 +367,12 @@ def test_run_flow_auto_completes_server_default_page(monkeypatch):
         "currency_disclosure_zh": (
             "本次返回未声明币种：只能如实说明未声明，禁止按字段名后缀、数据集习惯或"
             "历史会话推断具体货币"
+        ),
+        # 145 行 > 预览阈值 20 行且未传 result_dir：必须出现可感知警告，
+        # 否则忘传 --result-dir 时大结果会静默塞进返回体（K5 修复轮）
+        "large_result_warning_zh": (
+            "本次返回 145 行且未传 --result-dir，全量行已进入返回体；"
+            "行数较大时建议携带 --result-dir 落盘并只读预览。"
         ),
     }
 

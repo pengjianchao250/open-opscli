@@ -38,7 +38,7 @@ version: 1.3.22
 opscli query flow "$USER_REQUEST" --result-dir "$RESULT_DIR"
 ```
 
-`--result-dir` 必须显式传入：内核入口只有传了该参数才会把全量结果落盘并把返回体中的结果收窄为预览行，不传则不做截断，大结果集会原样进入返回体、撑爆上下文。
+`--result-dir` 必须显式传入：内核入口只有传了该参数才会把全量结果落盘并把返回体中的结果收窄为预览行，不传则不做截断，大结果集会原样进入返回体、撑爆上下文。万一漏传且行数超过 20 行，`result_disclosures` 会出现 `large_result_warning_zh` 兜底提示，看到该键必须原样重跑并补上 `--result-dir`，不能忽略。
 
 **备选执行通道（`opscli` 命令级环境异常时，保留一个版本周期后另行下线）**：若 `opscli` 命令本身不可用（未安装、不在 PATH、执行报错等命令级环境异常，区别于下方「规划器不可用时的降级路径」的业务性降级），改用 Skill 自带脚本执行同一次规划与查询：
 
@@ -107,7 +107,7 @@ Excel 的格式、明细、口径页与校验按 `references/chart-excel-guide.m
 
 ## 构造与执行
 
-1. CLI 查询参数由规划器生成并由一体化入口原样执行；Agent 不再参与拼参。降级态下参数只能取自 `execution_ref.fallback_catalog` 或 `local_fallback.py` 候选目录，仍禁止凭记忆手拼。MCP 字段只采用当前数据集 metadata。
+1. CLI 查询参数由规划器生成并由一体化入口原样执行；Agent 不再参与拼参。降级态下参数只能取自 `execution_ref.fallback_catalog` 或 `local_fallback.py` 候选目录，仍禁止凭记忆手拼。MCP 字段只采用当前数据集 metadata。**TopN/排序语义显式例外**：规划器当前不会把"前N名"/"按 X 排序"等 TopN、排序、限定行数类语义解析进 `query_template`（`orderBy`/`limit` 会是 `null`），本条"不再参与拼参"针对的是 `query_template` 内部字段（`dimensions`/`metrics`/`filters`/时间范围等），**不包含** `opscli query flow` 命令行自身的执行参数——Agent 识别到用户请求含 TopN/排序/限定行数意图时，必须显式在命令上追加 `--limit <N>` 和/或 `--order-by <结果字段>[:asc|desc]`（参数形态与示例见 `references/cli.md`），这不属于拼参违规；未识别到该类明确意图时不得凭空追加这两个参数。
 2. 不发明默认筛选。未指定筛选时只说明 `current_authenticated_account` 可见范围；明确筛选必须先经组件枚举——平台走规划结果的自动枚举/`platform_enum_command`，部门/国家等其他筛选用 `execution_ref.filter_components` 中对应组件的 `component_table_id` 查枚举，并严格遵守 `execution_ref.filter_value_match_policy`：先做规范化完整等值比较，部门名称额外允许阿拉伯数字与中文数字等价；唯一等值命中时只使用该枚举原值并直接执行，禁止再次询问用户是否采用，也禁止把仅包含请求文本的其他成员一并加入（`9部` 只匹配 `九部`，不匹配 `项目九部`；`范泰克` 只匹配 `范泰克`，不匹配 `范泰克体系外`）。无唯一等值命中时停止并让用户重选，不得用子串模糊扩展；组件不可用时只阻断该筛选，不扩大范围。
 3. 环比、同比和上期对比必须同时传主周期日期 `filters` 与 `dataComparison`（模板已按 `time_scope` 预填，执行器也会硬校验）。
 4. **执行确认分级**：数据集、字段、时间、筛选、排序、行数全部无歧义时，用一段中文陈述式披露口径后**直接执行，不等待用户回复**；只有 `clarify_required`、默认时间口径未确认、或含 `recommended` 字段未说明时才通过提问等待确认。

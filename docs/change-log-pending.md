@@ -7784,3 +7784,64 @@ QUERY_SPEC.md 与 mcp `query_flow` docstring 还残留已整体移除的 `execut
 内核 CLI）与对返回体键名的解读（`disclosures` → `result_disclosures`）。
 
 **回滚方式**：`git revert <本次提交 hash>`
+
+## 2026-08-19 skills/query - TopN 显式传参例外规则与大结果无落盘警告披露（K5 修复轮）
+
+**变更原因**：K5 审查发现 1 个 Important + 控制器采纳 1 项遗留建议：①
+cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL.md
+「构造与执行」规则 1"Agent 不再参与拼参"字面矛盾，且规则 1 附近没有任何文字
+告诉 Agent 何时该手动追加这两个参数——按规则 1 走标准命令的 Agent 会静默拿到
+全量结果、误把"前3"当成已生效处理；② `opscli query flow` 在 `result_dir=None`
+时对大结果没有任何提示，忘传 `--result-dir` 只能靠文档自觉，无法被 Agent
+运行时感知。两项均已在 K5 主提交（`12d032cf`）之后作为修复轮并入。
+
+**改动点**：
+- `[CHANGE_METHOD]` `opscli/query/services/planner/entry.py` 的 `run_flow`
+  - `[CHANGE_SCOPE]` `opscli/skills/templates/ops-dataset-query/SKILL.md`、
+    `references/cli.md`、`opscli/skills/templates/ops-dataset-query/QUERY_SPEC.md`、
+    `opscli/mcp/tools/query.py`、`opscli/query/services/planner/entry.py`、
+    `tests/query/planner/test_entry.py`
+  - `[CHANGE_ACTION]`
+    1. SKILL.md「构造与执行」规则 1 追加"TopN/排序语义显式例外"：明确规划器当前
+       不解析"前N名"/"按 X 排序"等语义进 `query_template`（`orderBy`/`limit`
+       为 `null`），规则 1 的拼参禁令只针对 `query_template` 内部字段，不含
+       `opscli query flow` 命令行自身的 `--limit`/`--order-by` 执行参数——
+       Agent 识别到该类意图时必须显式追加，未识别到时不得凭空追加。
+       `--result-dir` 段落同步补一句：漏传且行数超过 20 行时看
+       `large_result_warning_zh` 兜底提示并原样重跑补参。
+    2. cli.md 的 TopN 示例后补一句回引 SKILL.md 规则 1 的例外条款；返回体
+       描述段补充 `large_result_warning_zh` 出现条件与含义。
+    3. `entry.py` 的 `run_flow`：`result_dir is None` 且最终行数超过预览阈值
+       （`_RESULT_PREVIEW_ROWS=20`）时，在 `result_disclosures` 新增
+       `large_result_warning_zh` 键，文案含实际行数 N 与"建议携带
+       --result-dir 落盘并只读预览"的处置指引；传了 `result_dir` 或行数
+       ≤20 时不出现该键（新增 `elif` 分支，不影响既有 `if result_dir is
+       not None` 分支逻辑）。
+    4. QUERY_SPEC.md 4.3 节、mcp `query_flow` docstring 补充
+       `large_result_warning_zh` 说明——MCP 工具本就不暴露 `result_dir`
+       参数，该键对 MCP 消费方尤其重要（大结果永远无法落盘，只能靠这条
+       披露感知）。
+    5. `tests/query/planner/test_entry.py`：新增 3 条测试
+       （>20 行无 result_dir→出现该键；=20 行无 result_dir→不出现；>20 行
+       有 result_dir→不出现）；更新既有
+       `test_run_flow_auto_completes_server_default_page`（145 行、无
+       result_dir）的整包 dict 相等断言，补入新键的精确文案。
+
+**验证结果**：
+- TDD 红态验证：`git stash` 单独撤回 `entry.py` 改动后复测新增的
+  `test_run_flow_large_result_without_result_dir_warns`，报
+  `KeyError: 'large_result_warning_zh'`（预期失败）；`git stash pop`
+  恢复后复测全绿，确认测试确实锁定了本次要补的行为
+- `python3 -m pytest tests/skills/test_dataset_query_flow.py tests/skills/test_local_fallback.py tests/query/planner/ -q`
+  → **163 passed, 4 xfailed**（4 xfailed 为既有已知路由缺口，非本次引入；
+  较修复前的 160 passed 增加 3 条本次新增测试）
+- `python3 -c "import opscli.mcp.tools.query"` → 正常导入，docstring 改动
+  无语法问题
+
+**影响范围**：`opscli/query/services/planner/entry.py` 的 `run_flow` 新增一个
+只读披露键，不改变既有返回字段的值与查询执行逻辑；`result_dir` 不为
+`None`（即 CLI `--result-dir` 已传、或未来任何显式传参场景）时行为与改动前
+完全一致。MCP `query_flow`（永远不传 `result_dir`）行数超过 20 行时的返回体
+会多一个键，纯增量、不影响既有字段解析方式。
+
+**回滚方式**：`git revert <本次提交 hash>`

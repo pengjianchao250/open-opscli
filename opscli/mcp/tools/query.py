@@ -764,7 +764,9 @@ async def query_flow(
     结论中必须披露该兜底行为，排序正常生效或未传 order_by 时不会出现 order_fallback。
     返回体还内嵌 evidence_contract（构建失败时为 evidence_contract_error，与合同其余字段
     同级），组织结论时优先使用其 required_evidence/required_disclosures_zh/
-    forbidden_inferences_zh。
+    forbidden_inferences_zh。本工具不支持 result_dir/落盘，行数超过 20 行时
+    result_disclosures 会出现 large_result_warning_zh，提示全量行已原样进入返回体，
+    结果集较大时应改用更小的 limit 或按维度拆分多次查询。
 
     【前置条件】同 query_plan：身份只来自传输层已验证账号，不读显式传入的 session_id / jwt。
 

@@ -26,7 +26,7 @@ opscli query flow <request> [--query-file <文件>] [--field <字段> ...] \
 | `--result-dir <目录>` | **建议每次都传**：传入后全量结果落盘到该目录（文件名 `query_result_<秒级时间戳>.json`），返回体中的结果收窄为预览行；不传则不做截断，大结果集会原样进入返回体、撑爆上下文 |
 | `--pretty` | 格式化输出 JSON，便于人工阅读；Agent 消费时通常不需要 |
 
-返回体固定为 `{"success", "command", "data", "error"}`；`data` 内含规划合同全部字段（`status`/`model_view`/`answer_contract`/`execution_ref` 等）+ `result`（`status=planned` 时的查询结果）+ `result_disclosures`（行数/总数/截断/自动补齐/limit/币种披露，`--result-dir` 时另有 `full_result_file`）+ `evidence_contract` 或 `evidence_contract_error`（构建证据合同失败时）。`success=false` 时看 `error.code`/`error.message`，原样重跑一次仍失败即转 SKILL.md「规划器不可用时的降级路径」。
+返回体固定为 `{"success", "command", "data", "error"}`；`data` 内含规划合同全部字段（`status`/`model_view`/`answer_contract`/`execution_ref` 等）+ `result`（`status=planned` 时的查询结果）+ `result_disclosures`（行数/总数/截断/自动补齐/limit/币种披露，`--result-dir` 时另有 `full_result_file`；**未传 `--result-dir` 且行数超过 20 行时会出现 `large_result_warning_zh`**，提示全量行已原样进入返回体，建议补传 `--result-dir`）+ `evidence_contract` 或 `evidence_contract_error`（构建证据合同失败时）。`success=false` 时看 `error.code`/`error.message`，原样重跑一次仍失败即转 SKILL.md「规划器不可用时的降级路径」。
 
 示例（Top3 排序 + 落盘）：
 
@@ -35,6 +35,8 @@ opscli query flow "近7天各渠道订单量前3" \
   --limit 3 --order-by order_qty:desc \
   --result-dir /tmp/opscli-query-results --pretty
 ```
+
+规划器当前不解析"前N名"/"按 X 排序"类语义进 `query_template`（`orderBy`/`limit` 会是 `null`）；这两个 CLI 参数是 SKILL.md「构造与执行」规则 1 显式列出的例外，识别到 TopN/排序/限定行数意图时必须像上面这样手动追加，不属于"拼参"违规（详见该规则）。
 
 若 `opscli` 命令本身不可用（命令级环境异常，非规划器业务性降级），改用 Skill 自带的备选执行通道 `python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"`（详见 SKILL.md），返回结构不同（顶层直接是 `status`/`disclosures`/`preview_rows`/`evidence_contract`，不经 `data` 包裹）。
 

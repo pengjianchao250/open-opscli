@@ -542,6 +542,16 @@ def run_flow(
             result_disclosures["full_result_file"] = None
             result_disclosures["full_result_file_error"] = str(error)[:160]
         _write_result_rows(run_result, _compact_preview(rows, _RESULT_PREVIEW_ROWS))
+    elif len(rows) > _RESULT_PREVIEW_ROWS:
+        # 未传 result_dir 时不做任何截断：调用方若忘记传 --result-dir，行数较大的
+        # 结果会原样（最多 5000 行）塞进返回体却没有任何提示。这里加一条醒目披露，
+        # 把"忘传参数导致静默过量"变成 Agent 可感知的信号（K5 修复轮：审查发现
+        # SKILL.md/cli.md 只能在文档层面要求"必须传 --result-dir"，无法从代码层面
+        # 兜底，遂在此补一条运行时警告）。
+        result_disclosures["large_result_warning_zh"] = (
+            f"本次返回 {len(rows)} 行且未传 --result-dir，全量行已进入返回体；"
+            "行数较大时建议携带 --result-dir 落盘并只读预览。"
+        )
     out = {
         **contract,
         "result": run_result,

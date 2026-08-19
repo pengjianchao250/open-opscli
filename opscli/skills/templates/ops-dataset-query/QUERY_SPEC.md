@@ -167,6 +167,7 @@ Excel。
 
 - `currency` / `currency_disclosure_zh`：本次实际生效币种，取自 `meta.currency`；有值必须在结论首句、结果表头写明，为 `null` 时只能声明"未声明"，禁止推断；与请求 `globalCurrency` 不一致时以此为准并披露差异（详见第十五章币种口径）。
 - `order_fallback` / `order_disclosure_zh`：仅当传了 `order_by` 且检测到服务端排序未生效（已知缺陷）时出现 `order_fallback`，说明本次已本地重排、或按服务端总行数加量重查后本地排序取前 N，结论中必须披露该兜底行为；排序已正常生效时只会出现确认性的 `order_disclosure_zh`，不会出现 `order_fallback`。
+- `large_result_warning_zh`：`query_flow`（MCP 工具）不支持落盘，行数超过 20 行时会出现该键，提示全量行已原样进入返回体；结果集较大时应改传更小的 `limit`，或按维度/时间拆分为多次查询，不要把大结果当成异常忽略。
 
 `evidence_contract`（构建失败时为 `evidence_contract_error`）随 `query_flow` 返回体一并给出，优先使用其 `required_evidence`、`required_disclosures_zh`、`forbidden_inferences_zh` 组织结论，不必再按第十五章手工拼装。
 
