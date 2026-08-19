@@ -37,7 +37,7 @@ opscli 通过统一上游 Gateway 接入第三方 MCP。生产服务只注册配
         {
           "remote_name": "list_available_datasets",
           "exposed_name": "ext_pnd_list_available_datasets",
-          "description": "查询当前用户可访问的 PND 数据集目录。",
+          "description": "仅当用户明确提到“鹰眼”或明确要求使用鹰眼数据时调用；查询当前用户可访问的鹰眼数据集目录。",
           "timeout_seconds": 30,
           "idempotent": true,
           "read_only": true,
@@ -55,6 +55,8 @@ opscli 通过统一上游 Gateway 接入第三方 MCP。生产服务只注册配
   ]
 }
 ```
+
+示例中的 `pnd` 是服务端技术标识，对用户展示的中文名称统一为“鹰眼”。鹰眼 Tool 的描述必须保留显式触发边界：只有用户明确提到“鹰眼”或明确要求使用鹰眼数据时才建议调用，普通数据分析问题不得自动路由到鹰眼。这个约束应写在每个 Tool 的 `description` 中，因为 MCP 客户端会用 Tool 描述参与工具选择。
 
 `auth.value` 是可直接访问上游的明文凭证，因此该文件属于部署密钥文件：只能放在部署用户配置目录，不得提交到 Git、打包进发行物或写入日志。`opscli mcp upstream validate` 不会输出 URL、Header 名或凭证值。
 

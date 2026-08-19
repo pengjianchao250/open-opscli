@@ -31,7 +31,7 @@
         {
           "remote_name": "list_available_datasets",
           "exposed_name": "ext_pnd_list_available_datasets",
-          "description": "查询当前用户可访问的 PND 数据集目录。",
+          "description": "仅当用户明确提到“鹰眼”或明确要求使用鹰眼数据时调用；查询当前用户可访问的鹰眼数据集目录。",
           "timeout_seconds": 30,
           "idempotent": true,
           "read_only": true,
@@ -47,7 +47,7 @@
         {
           "remote_name": "execute_readonly_sql",
           "exposed_name": "ext_pnd_execute_readonly_sql",
-          "description": "执行经过服务端校验的 PND 只读 SQL。",
+          "description": "仅当用户明确提到“鹰眼”或明确要求使用鹰眼数据时调用；执行经过服务端校验的鹰眼只读 SQL。",
           "timeout_seconds": 30,
           "idempotent": true,
           "read_only": true,
@@ -71,7 +71,7 @@
         {
           "remote_name": "search_similar_terms",
           "exposed_name": "ext_pnd_search_similar_terms",
-          "description": "按站点和搜索词查询相似搜索词。",
+          "description": "仅当用户明确提到“鹰眼”或明确要求使用鹰眼数据时调用；按站点和搜索词查询鹰眼相似搜索词。",
           "timeout_seconds": 30,
           "idempotent": true,
           "read_only": true,
@@ -103,7 +103,7 @@
         {
           "remote_name": "get_report_task_status",
           "exposed_name": "ext_pnd_get_report_task_status",
-          "description": "查询 PND 报告任务状态。",
+          "description": "仅当用户明确提到“鹰眼”或明确要求使用鹰眼数据时调用；查询鹰眼报告任务状态。",
           "timeout_seconds": 30,
           "idempotent": true,
           "read_only": true,

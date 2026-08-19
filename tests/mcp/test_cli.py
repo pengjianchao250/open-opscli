@@ -1,10 +1,24 @@
 import json
+from pathlib import Path
 
 from typer.testing import CliRunner
 
 from opscli.mcp.cli import app
 
 runner = CliRunner()
+
+
+def test_yingyan_example_requires_explicit_user_trigger():
+    example_path = Path(__file__).parents[2] / "configs" / "mcp-upstreams.example.json"
+    payload = json.loads(example_path.read_text(encoding="utf-8"))
+
+    server = payload["servers"][0]
+    descriptions = [tool["description"] for tool in server["tools"]]
+
+    assert server["id"] == "pnd"
+    assert descriptions
+    assert all("仅当用户明确提到“鹰眼”" in description for description in descriptions)
+    assert all("PND" not in description for description in descriptions)
 
 
 def test_mcp_user_add_list_rotate_remove(tmp_path):
