@@ -166,6 +166,36 @@ def test_run_flow_fills_limit_order_offset(monkeypatch):
     assert "execution_notes" not in out
     assert out["result_disclosures"]["order_disclosure_zh"] == "排序已生效：按 x DESC"
     assert "order_fallback" not in out["result_disclosures"]
+    # 用户显式传 limit=200：未触发 auto-complete，披露必须原样透传该值
+    assert out["result_disclosures"]["limit"] == 200
+
+
+def test_run_flow_discloses_currency_from_meta(monkeypatch):
+    """meta.currency 有值时必须原样声明，文案与 skill run_query.py:685-690 逐字一致。
+
+    与 skill _extract_currency（:374-390）等价迁入：三层形状兜底取
+    `data.result.meta.currency`，转大写后写入 result_disclosures。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            return {
+                "data": {
+                    "result": {
+                        "data": [{"x": 1}],
+                        "meta": {"totalCount": 1, "currency": "cny"},
+                    }
+                }
+            }
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+
+    assert out["result_disclosures"]["currency"] == "CNY"
+    assert out["result_disclosures"]["currency_disclosure_zh"] == (
+        "本次金额币种为 CNY：结论首句、结果表头和导出口径页必须写明该币种；"
+        "禁止参考外部汇率折算或跨币种相加，需要其他币种时重新发起带币种意图的查询"
+    )
 
 
 def test_run_flow_result_dir_writes_full_result_and_limits_preview(monkeypatch, tmp_path: Path):
@@ -282,6 +312,15 @@ def test_run_flow_auto_completes_server_default_page(monkeypatch):
         "total_count": 145,
         "truncated": False,
         "auto_complete_applied": True,
+        # 用户原始 limit 为 None（触发 auto-complete 的前提），披露必须仍是 None
+        # 而不是 auto-complete 就地改写后的内部放大值（145），否则模型会把补齐
+        # 动作误当成用户主动要的分页口径
+        "limit": None,
+        "currency": None,
+        "currency_disclosure_zh": (
+            "本次返回未声明币种：只能如实说明未声明，禁止按字段名后缀、数据集习惯或"
+            "历史会话推断具体货币"
+        ),
     }
 
 

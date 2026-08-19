@@ -310,6 +310,12 @@ def _assert_planning_parity(kernel_contract: dict, skill_contract: dict, *, scen
     dimensions·metrics·filters 集合 / 澄清消息键集。
     """
     assert kernel_contract["query_mode"] == skill_contract["query_mode"], scenario
+    # metadata_source 键存在性对照（白名单条目，见 change-log-pending.md K4 条目）：
+    # 只比对键存在，不比对取值——kernel 元数据恒来自后端接口硬编码
+    # "backend_query_metadata"，skill 从本地 CSV/data_state 判定来源
+    # （skill_local/published_bundle/fallback_dir），取值本就是架构性差异
+    assert "metadata_source" in kernel_contract, scenario
+    assert "metadata_source" in skill_contract, scenario
     assert kernel_contract["status"] == skill_contract["status"], scenario
     status = kernel_contract["status"]
     if status == "planned":
@@ -330,6 +336,15 @@ def _assert_planning_parity(kernel_contract: dict, skill_contract: dict, *, scen
         assert len(k_view.get("clarification_messages_zh", [])) == len(
             s_view.get("clarification_messages_zh", [])
         ), scenario
+    else:
+        # 第三态防护：两侧同时落入 blocked（或其他未覆盖状态）时，status 相等的
+        # 断言会静默通过——但这不是本文件五个场景想验证的路径，说明用例的元数据/
+        # 查询原文构造有问题（例如字段解析失败），必须让测试显式失败而不是让
+        # "两侧都失败于同一状态"被误判为"对照通过"
+        raise AssertionError(
+            f"{scenario}: 两侧落入未覆盖的 status={status!r}，不构成有效对照，"
+            "请检查用例的元数据/查询原文构造是否命中了预期的 planned/clarify_required 路径"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +361,7 @@ def test_single_dimension_single_metric_parity(tmp_path: Path):
     skill_contract = _run_skill(data_dir, query)
 
     _assert_planning_parity(kernel_contract, skill_contract, scenario="单维度单指标")
+    assert kernel_contract["status"] == "planned", "本场景必须落在 planned，否则用例未覆盖预期路径"
 
 
 # ---------------------------------------------------------------------------
@@ -362,11 +378,11 @@ def test_time_scope_with_comparison_parity(tmp_path: Path):
     skill_contract = _run_skill(data_dir, query)
 
     _assert_planning_parity(kernel_contract, skill_contract, scenario="带时间口径")
-    if kernel_contract["status"] == "planned":
-        k_scope = kernel_contract["execution_ref"]["time_scope"]
-        s_scope = skill_contract["execution_ref"]["time_scope"]
-        assert k_scope["comparison_type"] == s_scope["comparison_type"] == "period_over_period"
-        assert (k_scope["start"], k_scope["end"]) == (s_scope["start"], s_scope["end"])
+    assert kernel_contract["status"] == "planned", "本场景必须落在 planned，否则用例未覆盖预期路径"
+    k_scope = kernel_contract["execution_ref"]["time_scope"]
+    s_scope = skill_contract["execution_ref"]["time_scope"]
+    assert k_scope["comparison_type"] == s_scope["comparison_type"] == "period_over_period"
+    assert (k_scope["start"], k_scope["end"]) == (s_scope["start"], s_scope["end"])
 
 
 # ---------------------------------------------------------------------------
@@ -504,22 +520,14 @@ def _kernel_planned_template() -> dict:
     }
 
 
-def test_result_disclosure_key_set_known_gap_whitelist(tmp_path, monkeypatch, capsys):
+def test_result_disclosure_key_set_parity(tmp_path, monkeypatch, capsys):
     """执行段披露键集对照：内核 `run_flow` 的 `result_disclosures` 与 skill
     `run_query.py` 的 `disclosures` 键集差异必须恰好等于下方白名单，白名单外任何
     差异（新增或消失的键）都判定为回归。
 
-    白名单固定为两侧：
-    - skill 独有 {currency, currency_disclosure_zh, limit}：K1-K3 未覆盖的功能缺口
-      （非本任务范围内修复，已在 task-K4-report.md 的 Concerns 列明供控制器裁决）。
-      * currency/currency_disclosure_zh：skill 无条件从 meta.currency 提取币种并强制
-        披露（run_query.py:683-690）；kernel run_flow 完全没有币种提取与披露逻辑。
-      * limit：skill 披露『用户原始 limit 口径』（`payload.get("limit")`；
-        `_complete_server_paged_rows` 用 `dict(payload)` 拷贝重查，不回写原 payload，
-        因此该值恒为用户输入而非 auto-complete 放大后的值，见 run_query.py:501/675）；
-        kernel 的 `template["limit"]` 在 auto-complete 时就地改写（entry.py:403），
-        直接补一个同名键语义会不一致，需要新增"原始 limit"跟踪字段才能对齐，
-        非本任务范围内实现。
+    K4b 收口：K4 报告发现的 {currency, currency_disclosure_zh, limit} 缺口已在
+    entry.py 补齐（`_extract_currency` 逐字迁入 + `original_limit` 在 auto-complete
+    就地改写模板前捕获），键集差异只剩下架构性差异：
     - kernel 独有 {auto_complete_applied}：K2 已裁决的执行通道架构差异——源实现
       `preview_rows`/落盘文件/`disclosures` 三通道分离，触发时才在 `disclosures`
       内追加 `server_paging` 子对象；kernel `run_flow` 只有 `result_disclosures`
@@ -530,7 +538,14 @@ def test_result_disclosure_key_set_known_gap_whitelist(tmp_path, monkeypatch, ca
 
     class _KernelQM:
         def run_query_template(self, execution_ref):
-            return {"data": {"result": {"data": [{"x": 1}], "meta": {"totalCount": 1}}}}
+            return {
+                "data": {
+                    "result": {
+                        "data": [{"x": 1}],
+                        "meta": {"totalCount": 1, "currency": "cny"},
+                    }
+                }
+            }
 
     kernel_out = kernel_entry.run_flow(
         "查询", user_email="u@x.com",
@@ -539,11 +554,18 @@ def test_result_disclosure_key_set_known_gap_whitelist(tmp_path, monkeypatch, ca
     )
     kernel_keys = set(kernel_out["result_disclosures"].keys())
 
-    # skill 侧：同形返回体，走真实 main() 入口（monkeypatch 掉 subprocess 调用）
+    # skill 侧：同形返回体（含 meta.currency），走真实 main() 入口（monkeypatch 掉 subprocess 调用）
     monkeypatch.setattr(
         skill_run_query,
         "_run_opscli",
-        lambda *_a, **_k: {"data": {"result": {"data": [{"x": 1}], "meta": {"totalCount": 1}}}},
+        lambda *_a, **_k: {
+            "data": {
+                "result": {
+                    "data": [{"x": 1}],
+                    "meta": {"totalCount": 1, "currency": "cny"},
+                }
+            }
+        },
     )
     exit_code = skill_run_query.main(
         [
@@ -558,7 +580,7 @@ def test_result_disclosure_key_set_known_gap_whitelist(tmp_path, monkeypatch, ca
     skill_out = json.loads(capsys.readouterr().out)
     skill_keys = set(skill_out["disclosures"].keys())
 
-    assert skill_keys - kernel_keys == {"currency", "currency_disclosure_zh", "limit"}
+    assert skill_keys - kernel_keys == set()
     assert kernel_keys - skill_keys == {"auto_complete_applied"}
     # 公共键的语义（而非仅键名）必须一致
     assert (
@@ -571,3 +593,11 @@ def test_result_disclosure_key_set_known_gap_whitelist(tmp_path, monkeypatch, ca
     assert kernel_out["result_disclosures"]["truncated"] == skill_out["disclosures"]["truncated"]
     assert kernel_out["result_disclosures"]["full_result_file"] is not None
     assert skill_out["disclosures"]["full_result_file"] is not None
+    # 币种披露值与文案必须逐字一致（两侧对同一份含 meta.currency 的返回体）
+    assert kernel_out["result_disclosures"]["currency"] == skill_out["disclosures"]["currency"] == "CNY"
+    assert (
+        kernel_out["result_disclosures"]["currency_disclosure_zh"]
+        == skill_out["disclosures"]["currency_disclosure_zh"]
+    )
+    # 原始 limit 披露：两侧规划模板均未指定 limit，均应为 None（未被 auto-complete 污染）
+    assert kernel_out["result_disclosures"]["limit"] == skill_out["disclosures"]["limit"] is None

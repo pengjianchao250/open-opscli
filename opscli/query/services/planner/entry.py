@@ -62,6 +62,27 @@ def _extract_enum_values(result: Any, field_name: str) -> list[str]:
     return values
 
 
+def _extract_currency(response: dict) -> str | None:
+    """从返回 JSON 提取本次实际生效的币种代码（兼容多层形状）。
+
+    与 skill run_query.py:_extract_currency（:374-390）等价迁入，逐字照抄取值逻辑：
+    服务端在 `meta.currency` 声明本次查询金额使用的币种（ISO 4217，如 CNY/USD），
+    实测存在 `data.result.meta`、`data.meta` 和顶层 `meta` 三种形状，逐层兜底取
+    第一个非空字符串。该值必须进 run_flow 的 result_disclosures：Agent 的金额结论
+    要据此声明币种，只落在全量结果文件里会导致模型为了拿币种额外读一次文件，
+    实际上往往被跳过。
+    """
+    for path in (("data", "result", "meta"), ("data", "meta"), ("meta",)):
+        node: Any = response
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, dict):
+            currency = node.get("currency")
+            if isinstance(currency, str) and currency.strip():
+                return currency.strip().upper()
+    return None
+
+
 def _extract_result_page(result: Any) -> tuple[list[dict], int | None]:
     """从 simple 查询结果中提取当前页行与服务端总行数。"""
     root = result if isinstance(result, dict) else {}
@@ -390,6 +411,13 @@ def run_flow(
         # 仅当模板被改写时重挂完整性摘要，保持「规划=执行」自洽（attach 覆盖整个 contract）
         if changed:
             plan_integrity.attach(contract)
+    # 原始 limit 披露：必须在服务端默认分页补齐（auto-complete）就地改写
+    # template["limit"] 之前捕获，否则披露值会变成 auto-complete 算出的内部放大值
+    # （详见下方 auto_complete_applied 分支），而非用户/规划器的真实分页口径——
+    # 与 skill run_query.py 的 disclosures["limit"] = payload.get("limit")
+    # （run_query.py:675）语义等价：skill 侧 _complete_server_paged_rows 用
+    # dict(payload) 拷贝重查、不回写原 payload，本就恒为用户输入值。
+    original_limit = template.get("limit") if isinstance(template, dict) else None
     run_result = qm.run_query_template(execution_ref)
     rows, total = _extract_result_page(run_result)
     auto_complete_applied = False
@@ -410,7 +438,22 @@ def run_flow(
         "total_count": total,
         "truncated": total is not None and len(rows) < total,
         "auto_complete_applied": auto_complete_applied,
+        "limit": original_limit,
     }
+    # 币种披露：meta.currency 是服务端本次生效币种的唯一权威来源。有值必须让模型
+    # 原样声明；没有值时明确要求「只能说未声明」，堵住按字段名后缀或经验猜币种的
+    # 路径——与 skill run_query.py:681-690 逐字照抄迁入（文案不改一字）。取值用
+    # 最终 run_result（已含 auto-complete 补齐，若触发过），与 K3 证据合同
+    # 「单通道、读最终态」的既定架构决策一致（源实现用首查陈旧快照，币种字段
+    # 不随分页变化，两者取值结果等价，仅快照新旧不同，非行为回归）。
+    currency = _extract_currency(run_result)
+    result_disclosures["currency"] = currency
+    result_disclosures["currency_disclosure_zh"] = (
+        f"本次金额币种为 {currency}：结论首句、结果表头和导出口径页必须写明该币种；"
+        "禁止参考外部汇率折算或跨币种相加，需要其他币种时重新发起带币种意图的查询"
+        if currency
+        else "本次返回未声明币种：只能如实说明未声明，禁止按字段名后缀、数据集习惯或历史会话推断具体货币"
+    )
     # orderBy 本地兜底：effective_order_by 取模板最终生效值（而非 run_flow 的
     # order_by 形参），与 skill run_query.py 读 payload.get("orderBy") 的口径一致，
     # 覆盖「排序来自规划器 NL 解析、未经 run_flow 显式传参」的场景。

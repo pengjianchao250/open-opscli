@@ -1,5 +1,80 @@
 # 待归档变更记录
 
+## 2026-08-19 query - 内核 flow 补齐币种与原始 limit 披露（Task K4b）
+
+**变更原因**：K4 金样对照发现内核 `run_flow` 相比 skill `run_query.py` 主线缺两个
+执行段披露——币种（SKILL.md 硬纪律，无值会导致模型按字段名后缀/经验猜币种）与
+用户原始 limit（区别于 auto-complete 就地放大后的内部值）。切主线（K5）前必须补齐，
+否则 Agent 消费内核 flow 的查询结论会漏报币种、或把 auto-complete 补齐动作误当成
+用户主动要的分页口径。
+
+**改动点**：
+- `[CHANGE_CLASS]` 无（模块级函数，非类方法）
+- `[CHANGE_METHOD]` `opscli/query/services/planner/entry.py`
+  - 新增 `_extract_currency(response: dict) -> str | None`：与 skill
+    `run_query.py:_extract_currency`（:374-390）逐字迁入，三层形状兜底
+    （`data.result.meta`/`data.meta`/`meta`）取 `meta.currency`
+  - `run_flow`：在填充 limit/order_by/offset 进模板之后、执行查询之前捕获
+    `original_limit = template.get("limit")`（在 auto-complete 就地改写
+    `template["limit"]` **之前**），语义等价 skill 的
+    `disclosures["limit"] = payload.get("limit")`（skill 侧 `_complete_
+    server_paged_rows` 用 `dict(payload)` 拷贝重查不回写原 payload，恒为
+    用户输入值）
+  - `result_disclosures` 新增 `limit`（= `original_limit`）、`currency`、
+    `currency_disclosure_zh`（文案与 `run_query.py:685-690` 逐字一致）；
+    currency 取值用最终 `run_result`（已含 auto-complete 补齐），与 K3
+    证据合同"单通道、读最终态"的既定架构决策一致（meta.currency 不随
+    分页变化，与源实现首查快照取值结果等价，仅快照新旧不同）
+- `tests/query/planner/test_entry.py`：
+  - `test_run_flow_auto_completes_server_default_page` 补全 `limit: None`/
+    `currency: None`/`currency_disclosure_zh` 三个新键的精确断言（原精确
+    dict 比对会因新增键失败）
+  - `test_run_flow_fills_limit_order_offset` 追加断言：显式传 `limit=200`
+    时披露原样透传（非 auto-complete 路径）
+  - 新增 `test_run_flow_discloses_currency_from_meta`：`meta.currency` 有值
+    时提取+大写+披露文案与 skill 逐字一致
+- `tests/query/planner/test_flow_parity.py`：
+  - `test_result_disclosure_key_set_known_gap_whitelist` 更名为
+    `test_result_disclosure_key_set_parity`，两侧返回体统一加
+    `meta.currency`，断言 `skill_keys - kernel_keys == set()`（缺口已收口，
+    原白名单删除）、`kernel_keys - skill_keys == {"auto_complete_applied"}`
+    （K2 已裁决架构差异，保留）、并新增 currency/limit 的值与文案逐字对照
+  - K4 审查加固（与 currency/limit 主任务一并提交，不单独 commit）：
+    - `_assert_planning_parity` 新增 `else` 分支：status 落在 `planned`/
+      `clarify_required` 之外（如 `blocked`）时显式 `raise AssertionError`，
+      避免两侧同时跌入未覆盖状态时因"status 相等"而被误判为对照通过
+    - 场景 1（单维度单指标）、场景 2（带时间口径）补显式
+      `assert kernel_contract["status"] == "planned"`（场景 3/4 已有条件性
+      校验、场景 5 已有显式 `clarify_required` 断言，此次补齐场景 1/2 的空缺）
+    - `_assert_planning_parity` 新增 `metadata_source` 键存在性断言（两侧
+      均须存在该键，不比对取值）：此前 change-log 描述"metadata_source 取值
+      差异已裁决入白名单"但测试代码中并无对应断言，属叙述与实现不一致；
+      本次改为给出真实断言（成本低于重写叙述且更利于回归防护）
+
+**验证结果**：
+- TDD 红验证：`git stash` 撤回 entry.py + 两个测试文件的改动后单独跑测试，
+  4 个新增/改动断言点全部失败（`skill_keys - kernel_keys` 多出
+  `{currency, currency_disclosure_zh, limit}`），确认改动前处于预期红态；
+  `git stash pop` 恢复后重跑全绿
+- `python -m pytest tests/query/planner/ -q` → **97 passed**（96 基线 + 1
+  新增 `test_run_flow_discloses_currency_from_meta`）
+- `python -m pytest tests/query/ -q` → 259 passed, 4 failed；4 个失败均在
+  `test_intent_attribution_headers.py`/`test_intent_match_report.py`（与
+  本次改动的 `entry.py`/`test_entry.py`/`test_flow_parity.py` 无关），经
+  `git stash` 单独复测确认改动前即失败，属既有基线问题（与项目记忆
+  `opscli-test-baseline.md` 记录的"mcp 1 收集错误+3 预存失败"基线一致）
+
+**影响范围**：仅 `opscli/query/services/planner/entry.py`
+（`run_flow`/`run_plan` 的调用方——CLI `opscli query flow` 与 MCP
+`query_flow`）新增两个披露键，不改变既有键的语义与取值；`result` 主体、
+`evidence_contract`、`plan_integrity` 均未改动
+
+**回滚方式**：`git revert` 本次提交，或手工撤销 `entry.py` 的
+`_extract_currency` 新增与 `original_limit`/`currency`/
+`currency_disclosure_zh` 三处披露赋值，并同步撤销两个测试文件的对应断言
+
+---
+
 ## 2026-08-19 query - 内核 flow 与 skill 主线金样对照回归（Task K4）
 
 **变更原因**：规划器优化推进-内核化收官实施计划的 K1-K3 分别把选表排序兜底/
