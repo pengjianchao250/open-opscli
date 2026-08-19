@@ -291,6 +291,49 @@ def test_flow_order_by_amplified_requery_on_full_page(monkeypatch):
     assert out["result_disclosures"]["row_count_returned"] == 3
 
 
+def test_flow_order_by_no_extra_requery_when_auto_complete_widens_limit(monkeypatch):
+    """auto-complete 补齐分页 + orderBy 兜底复合场景：不得把 auto-complete 就地
+    写入 template 的放大 limit 误判成用户真实分页约束，否则会对已经取到的全量
+    结果再多发一次未声明的加量重查、且 strategy/covers_full_result 披露失真。
+
+    复现场景（审查员实证）：limit/offset 均未传（只有排序方向没有条数，
+    query_plan._resolve_order_and_limit 的 has_direction=True、row_limit=None
+    是合法路径）、模板 orderBy 已下发、首查服务端默认分页 3 行且乱序、
+    totalCount=10 触发 auto-complete。修复前：calls=[None,10,10]、
+    strategy=requery_limit_10_then_local_sort（多发一次重查、披露失真）。
+    修复后：calls=[None,10]，auto-complete 补齐后的全量视为「无 limit」，
+    单调性校验失败直接本地重排，不再发起第三次网络查询。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+    calls: list[int | None] = []
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            current_limit = execution_ref["query_template"].get("limit")
+            calls.append(current_limit)
+            if current_limit is None:
+                # 首查：服务端默认分页仅 3 行，乱序
+                rows = [{"x": 1}, {"x": 9}, {"x": 2}]
+            else:
+                # auto-complete 补齐：按 totalCount=10 取全量，同样乱序
+                rows = [{"x": v} for v in (1, 9, 2, 8, 3, 7, 4, 6, 5, 0)]
+            return {"data": {"result": {"data": rows, "meta": {"totalCount": 10}}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com",
+        order_by=[{"field": "x", "desc": True}],
+        query_manager=_QM(),
+    )
+
+    # 只有两次调用：首查 + auto-complete 补齐；不应因误判 limit 再发一次加量重查
+    assert calls == [None, 10]
+    fallback = out["result_disclosures"]["order_fallback"]
+    assert fallback["strategy"] == "local_resort"
+    assert "covers_full_result" not in fallback
+    assert [row["x"] for row in out["result"]["data"]["result"]["data"]] == list(range(9, -1, -1))
+    assert out["result_disclosures"]["auto_complete_applied"] is True
+
+
 def test_run_query_template_drops_null_keys():
     """QueryManager.run_query_template 删除 None 占位键（orderBy/limit）后转发。"""
     captured: dict = {}

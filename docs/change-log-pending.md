@@ -7351,3 +7351,51 @@ flow`）与 MCP（`query_flow`）复用同一 `run_flow` 入口，均受益。
 `git checkout -- opscli/query/services/planner/entry.py
 tests/query/planner/test_entry.py`
 ---
+
+## 2026-08-19 query - orderBy 兜底 limit 判定不受 auto-complete 污染（Task K1 审查修复）
+
+**变更原因**：审查员用最小复现脚本实证发现 Task K1 引入的 `_apply_order_
+fallback` 有一处判定失真：`run_flow` 的服务端默认分页补齐（auto-complete）
+会就地改写共享的 `template["limit"] = min(total, _AUTO_COMPLETE_LIMIT_CAP)`，
+而 `_apply_order_fallback` 内部直接读 `template.get("limit")` 判断"是否存在
+真实分页约束"，把这个内部放大值误判成用户/规划器的真实 TopN 约束——即使用户
+只给了排序方向没给条数（`query_plan._resolve_order_and_limit` 的
+`has_direction=True` 且 `row_limit=None` 是合法路径）。后果：本该走"无
+limit→本地重排、零额外查询"分支，却发起与 auto-complete 相同 limit 的第三次
+未声明网络查询，且 `strategy` 错标为 `requery_...`、错误附加
+`covers_full_result` 键，与源实现 `run_query.py:_complete_server_paged_rows`
+用 `requery = dict(payload)` 拷贝、不污染原 payload 的行为不等价。同批修复
+一处文案差异：`order_disclosure_zh` 的"本次已..."对齐源实现 `run_query.py:711`
+的"本执行器已..."逐字表述。
+
+**改动点**：
+- `opscli/query/services/planner/entry.py`：`_apply_order_fallback` 签名新增
+  显式 `limit: object` 形参，删除函数体内 `limit = template.get("limit")`；
+  判断权交还调用方——`run_flow` 计算 `effective_limit = None if auto_complete_
+  applied else template.get("limit")` 后显式传入，`auto_complete_applied=True`
+  时强制按"无 limit"语义处理（此时 rows 已是 auto-complete 补齐后的近似全量，
+  单调性校验失败直接本地排序，不再发起额外网络请求）；`order_disclosure_zh`
+  文案由"本次已..."改为"本执行器已..."，与源实现逐字对齐
+- `tests/query/planner/test_entry.py`：新增
+  `test_flow_order_by_no_extra_requery_when_auto_complete_widens_limit`，固化
+  审查员复现场景（limit/offset 均未传、orderBy 已下发、首查默认分页 3 行乱序、
+  totalCount=10 触发 auto-complete）：断言只发起两次网络调用
+  （`calls==[None,10]`）、`strategy=="local_resort"`、不含 `covers_full_
+  result` 键、最终行按 desc 完整排序
+
+**验证结果**：
+- `pytest tests/query/planner/test_entry.py -v` → 13 passed（12 既有 + 1 新增
+  审查回归用例）
+- `pytest tests/query/planner/ -q` → 75 passed（74 + 1 新增，0 回归）
+- `pytest tests/query/ -q`（排除 3 个既有 `__pycache__` collision 基线问题文件）
+  → 156 passed, 4 failed（与本任务无关的既存预存失败：
+  `test_intent_attribution_headers.py` ×2、`test_intent_match_report.py` ×2，
+  经前一版报告 `git stash` 验证非本次改动引入）
+- `pytest tests/mcp/ -q --ignore=tests/mcp/test_shopify_tools.py` → 351 passed
+
+**影响范围**：仅当"未传 limit/offset + orderBy 已生效 + 触发 auto-complete
++ auto-complete 补齐后仍非单调"复合场景受影响——此前会多发一次网络重查且披露
+失真，修复后正确降级为本地重排、零额外查询。未触发 auto-complete 的 orderBy
+兜底场景（Task K1 已覆盖的两条主用例）行为不变。
+
+**回滚方式**：`git revert <本次提交 hash>`

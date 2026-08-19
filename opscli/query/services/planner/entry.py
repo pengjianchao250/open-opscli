@@ -155,6 +155,7 @@ def _apply_order_fallback(
     rows: list[dict],
     order_by: list[dict],
     total: int | None,
+    limit: object,
 ) -> tuple[list[dict], dict | None]:
     """orderBy 未生效时的本地兜底（已知服务端缺陷的过渡方案）。
 
@@ -166,13 +167,21 @@ def _apply_order_fallback(
     重查用内核既有的 qm.run_query_template（对应 skill 版对 _run_opscli 的二次
     调用），不涉及 skill 版 intent_code/selection_source 透传（kernel 执行通道
     本就不支持该归因参数，非本次迁移范围）。
+
+    Args:
+        limit: 判断"是否存在真实分页约束"的显式依据，调用方必须传入——不可让本
+            函数自行读 template.get("limit")：run_flow 的服务端默认分页补齐
+            （auto-complete）会就地把 template["limit"] 改写成"取全量"的内部
+            放大值，那不是用户/规划器的真实 TopN 约束；调用方在
+            auto_complete_applied 时必须传 None，让本函数按"无 limit"语义走
+            本地重排，避免误判成 TopN 场景、多发一次未声明的加量重查（复现场景
+            见 tests/query/planner/test_entry.py 的审查回归用例）。
     返回 (修正后的行, 兜底披露信息或 None)。
     """
     primary = order_by[0]
     field = primary.get("field")
     desc = bool(primary.get("desc"))
     direction = "DESC" if desc else "ASC"  # 仅用于披露文案，口径与 skill 版一致
-    limit = template.get("limit")
     if not limit and _is_monotonic(rows, field, desc):
         return rows, None
     note: dict[str, Any] = {
@@ -382,7 +391,19 @@ def run_flow(
     effective_order_by = template.get("orderBy") if isinstance(template, dict) else None
     order_note: dict[str, Any] | None = None
     if effective_order_by and rows:
-        rows, order_note = _apply_order_fallback(qm, template, rows, effective_order_by, total)
+        # auto-complete 已把 template["limit"] 就地改写成取全量的内部放大值
+        # （见上方 auto_complete_applied 分支），此时不代表真实分页约束，必须
+        # 按「无 limit」语义传给 _apply_order_fallback，否则会被误判成 TopN
+        # 场景、对已经取到的全量结果再多发一次未声明的加量重查（审查员实证复现：
+        # limit/offset 未传 + orderBy 已下发 + 触发 auto-complete 时，
+        # template.get("limit") 会被污染成 auto-complete 算出的放大值）。
+        effective_limit = (
+            None if auto_complete_applied
+            else (template.get("limit") if isinstance(template, dict) else None)
+        )
+        rows, order_note = _apply_order_fallback(
+            qm, template, rows, effective_order_by, total, effective_limit
+        )
         if order_note:
             _write_result_rows(run_result, rows)
             result_disclosures["order_fallback"] = order_note
@@ -391,7 +412,7 @@ def run_flow(
                 "covers_full_result"
             )
             result_disclosures["order_disclosure_zh"] = (
-                "服务端排序未生效（已知缺陷），本次已"
+                "服务端排序未生效（已知缺陷），本执行器已"
                 + (
                     "按总行数取全量后本地排序取前N"
                     if "requery" in order_note["strategy"]
