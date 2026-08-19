@@ -1,5 +1,49 @@
 # 待归档变更记录
 
+## 2026-08-19 query - 组件值注入 filters 前做权限枚举交集校验（双份同步）
+
+**变更原因**：QA 8 月实测形态：用户查询含国家/品牌词（如"德国站""某品牌"）时，规划器把
+语义命中的组件值当成用户点名的筛选集合处理；`_resolve_enum_component_filter` 反查分支
+（`opscli/skills/templates/ops-dataset-query/scripts/query_plan.py` 原 3169 行、
+`opscli/query/services/planner/query_plan.py` 原 2766 行）在用户用"字段+系词"显式点名一组值
+（如"国家为德国、法国"，`_labeled_value_match` 判定 `enumerated=True`）但反查在授权枚举
+`values` 里零命中时，直接 `return contract`——与"原文根本没提该字段"的静默放行走同一条路径，
+不区分二者：既不阻断也不披露，`query_template` 原样保留（filters 为空），
+`query_flow`/`run_flow` 会按 status=planned 原样执行，等同于把"只查德国"悄悄放行成
+"查全部国家"；线上另观测到执行器 precheck 硬拒（`precheck_failed: country_name unauthorized
+filter`）的形态，根因同属"客户端未在注入前与权限枚举严格求交集并披露"。经代码走查确认：
+单值标签命中（"国家是德国"）与裸值反查命中授权值主段（"傲彼瑞"）两条路径本就有
+`_block_component_filter` 兜底，唯独"显式点名一组值但零交集"这一分支缺失。
+
+**改动点**：
+- `opscli/skills/templates/ops-dataset-query/scripts/query_plan.py`
+  `_resolve_enum_component_filter` 反查分支 `if not matched:`：新增 `requested` 非空判断，
+  非空时改为 `_block_component_filter(state="clarify_required", ...)`，披露文案
+  `识别到{label_zh}"{requested}"等表述，但均不在当前账号授权范围内，已阻止扩大为全范围查询；
+  请改用当前账号可见的{label_zh}取值，或确认是否需要该筛选。`；`requested` 为空（原文确实
+  没提该字段）继续保留原有静默 `return contract`
+- `opscli/query/services/planner/query_plan.py`：同名函数同一位置做等价改动（`_block_component_filter`
+  多一个 `status="clarify_required"` 显式参数，内核签名要求）
+- `tests/skills/test_unauthorized_filter_injection.py`（新建）：8 条用例（4 场景 ×
+  skill/kernel 双版本），覆盖零交集显式点名（阻断+披露"德国"）、单值未授权（回归锚点）、
+  部分交集（仅注入交集值，不误伤已授权命中）、原文未提及（保持静默放行不新增噪音）
+
+**验证结果**：
+- `.venv/bin/python3 -m pytest tests/skills/test_unauthorized_filter_injection.py -v` → 8 passed
+- `.venv/bin/python3 -m pytest tests/skills/test_component_filter_resolution.py tests/skills/test_value_fragment_slots.py tests/query/planner/ -v` → 159 passed（含既有 66 条组件筛选用例，无误伤）
+- `.venv/bin/python3 -m pytest tests/skills --ignore=tests/skills/test_packaging.py` → 8 failed（与既有基线一致，均为 xlsx_preview/dashboard/manager/ops-feedback 等无关用例）, 589 passed, 7 xfailed
+- `.venv/bin/python3 -m pytest tests/query` → 4 failed（意图归因相关既有基线，与本次改动无关）, 234 passed
+- 全量 `.venv/bin/python3 -m pytest --collect-only -q` → 1934 collected, 25 errors（与既有基线一致，非本次引入）
+
+**影响范围**：仅影响 `country_name`/`brand_name`/`channel_name` 等走 `_ENUM_COMPONENT_SPECS`
+反查路径、且用户以"字段+系词+列举"形态显式点名一组值的查询；单值标签命中、裸值反查、原文
+未提及三类既有路径行为不变
+
+**回滚方式**：`git revert` 本次提交，或分别删除两份 `query_plan.py` 中
+`_resolve_enum_component_filter` 反查分支内新增的 `if requested:` 阻断分支，并删除新建的
+`tests/skills/test_unauthorized_filter_injection.py`
+---
+
 ## 2026-08-17 mcp - query_intent_match 上报来源标记为 mcp_intent
 
 **变更原因**：意图管理闭环最终审查发现 MCP 工具 `query_intent_match`

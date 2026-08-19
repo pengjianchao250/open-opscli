@@ -3167,6 +3167,27 @@ def _resolve_enum_component_filter(
             if not _value_already_consumed(normalize(value), consumed)
         ]
         if not matched:
+            # requested 非空说明用户用「字段+系词」显式点名了一组值（如
+            # 「国家为德国、法国」，labeled_enumeration 命中），只是反查在授权
+            # 枚举里零命中——不同于原文根本没提该字段的静默放行场景，不能沿用
+            # 同一条 `return contract`：那会把「用户点名的国家全部未授权」悄悄
+            # 处理成「用户没有筛选意图」，下发不含筛选条件的可执行模板，
+            # query_flow 会原样执行，等同于把「只查德国」放行成「查全部国家」
+            # （QA 实测另一形态：值本身在授权枚举里，被执行器 precheck 拒绝；
+            # 无论哪种，客户端都必须先与权限枚举求交集，零交集时不注入且披露）。
+            # requested 为空则是原文确实没提这个字段，继续保持原有静默放行。
+            if requested:
+                return _block_component_filter(
+                    contract,
+                    execution,
+                    state="clarify_required",
+                    next_action="ask_user_for_component_filter",
+                    message_zh=(
+                        f"识别到{label_zh}“{requested}”等表述，但均不在当前账号"
+                        f"授权范围内，已阻止扩大为全范围查询；请改用当前账号可见的"
+                        f"{label_zh}取值，或确认是否需要该筛选。"
+                    ),
+                )
             return contract
         exact_multi = len(matched) > 1 and match_kind == "exact"
         if exact_multi:
