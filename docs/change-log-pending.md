@@ -1,5 +1,97 @@
 # 待归档变更记录
 
+## 2026-08-19 query - 组件枚举缓存 + 超时降级（双份同步，Task C3）
+
+**变更原因**：规划器的组件权限枚举（平台范围、渠道/国家/部门等筛选字段、批量反查
+字段组）依赖一次同步网络调用——Skill 侧 subprocess 单次超时阈值仅 7 秒，内核侧经
+注入的 `enum_fn` 走 httpx。网络抖动或服务端短暂不可用时，此前无任何兜底，会直接
+fail-closed 阻断所有依赖枚举的查询（`_block_component_filter`/回落手动枚举命令），
+即便账号权限本身没有任何变化。总纲已定枚举缓存 TTL 24h 作为默认止血方案：引入本地
+磁盘缓存后，实时枚举失败时优先用近 24 小时内的历史枚举值兜底，只有缓存也未命中时
+才维持现行 fail-closed 行为——不改变"无兜底"场景下的安全性，只是新增一条恢复路径；
+命中缓存降级时必须在披露里如实标注"来自 N 小时前缓存"，不能让 Agent 把降级值当
+实时数据转述给用户。
+
+**改动点**：
+- 新建 `opscli/skills/templates/ops-dataset-query/scripts/enum_cache.py` 与
+  `opscli/query/services/planner/enum_cache.py`（同构小模块）：`get(table_id,
+  field_name) -> list[str] | None`（TTL 24h 内命中）、`put(table_id, field_name,
+  values)`、`get_age_hours(...)`；缓存文件 `CONFIG_DIR/enum_cache/{table_id}_
+  {field_name}.json`（含 fetched_at，file_name 对 table_id/field_name 做安全化替换
+  避免路径穿越）；tempfile+os.replace 原子写；任何文件 IO/JSON 异常均静默返回
+  None/放弃写入，缓存故障绝不阻断主查询流程。Skill 版不能 import opscli 包，直接
+  `os.path.expanduser("~/.config/opscli/enum_cache")` 拼路径；内核版
+  `from opscli.config import CONFIG_DIR` 并支持 `base_dir` 覆盖（测试隔离，照搬
+  `metadata_cache.py` 约定），两版落地同一目录
+- `opscli/skills/templates/ops-dataset-query/scripts/query_plan.py`：
+  `_auto_enum_platform_values`/`_auto_enum_component_values`/
+  `_auto_enum_component_field_group` 三处枚举调用的全部失败出口（subprocess 异常/
+  非零退出码/返回体无法解析/业务失败）新增 `cache_meta` 出参并统一走
+  `_enum_cache_fallback`/`_component_field_group_cache_fallback`：命中本地缓存则
+  返回陈旧值（`_auto_enum_component_values` 命中时视为已恢复、不写入 `errors`），
+  未命中维持原空列表/空字典返回；三处枚举成功时都会 `enum_cache.put(...)` 写入本地
+  缓存。披露链路：平台枚举命中缓存时把 `platform_enum_source` 标为
+  `auto_enum_service_cache` 并追加 `platform_scope_disclosures_zh`；组件字段枚举
+  命中缓存的年龄经 `_cached_enum_values`/`_batch_enum_reverse_lookup_fields` 写入
+  内存态 `enum_cache` 会话字典的 `("stale", table_id, field)` 伴随键，
+  `_resolve_enum_component_filter` 读出后传给 `_write_component_filter` 追加
+  `component_filter_disclosures_zh`："{label_zh}的授权枚举值来自约 N 小时前缓存
+  （实时枚举超时/失败后的降级兜底）。"
+- `opscli/query/services/planner/entry.py`：`_make_callbacks` 的 `enum_fn` 包一层
+  try/except——`qm.build_simple_and_run` 抛异常时先 `enum_cache.get(table_id,
+  field_name, base_dir=base_dir)`，命中则返回缓存值并把年龄记入闭包内的
+  `stale_hits` 列表，未命中则原样重新抛出（维持现行 fail-closed）；成功时
+  `enum_cache.put(...)` 写入。`_make_callbacks` 返回值由二元组扩为三元组
+  `(refresh_fn, enum_fn, stale_hits)`；`run_plan` 在 `build_model_query_plan` 后，
+  若 `stale_hits` 非空则向 `contract["model_view"]["component_filter_disclosures_zh"]`
+  追加一条粗粒度披露（取最旧年龄，最保守）。内核侧 `query_plan.py` 本身未改动
+  ——所有枚举网络调用均经由注入的 `enum_fn` 单一出口，在 `entry.py` 一处收拢缓存
+  逻辑即可覆盖内核的两处枚举调用（平台、组件字段），无需像 Skill 版逐个 subprocess
+  调用点分别接线
+- `tests/skills/test_enum_cache.py`（新建，26 用例）：enum_cache 模块自身
+  put→get 命中/过期不命中/损坏文件安全返回 None/空值不写入/文件名安全化（Skill 版 +
+  内核版各一套）；Skill 侧三处枚举调用超时/失败降级读缓存 + 无缓存维持失败路径 +
+  成功写缓存；端到端验证 `component_filter_disclosures_zh` 出现"小时前缓存"字样；
+  内核侧 `entry._make_callbacks`/`enum_fn` 降级、无缓存重新抛出、成功写缓存、
+  `run_plan` 追加披露
+- `tests/skills/conftest.py`（新建）：autouse fixture 把 Skill 版 `enum_cache.
+  _cache_dir` 重定向到 `tmp_path`，对 `tests/skills/` 目录下所有测试透明生效——
+  排查发现多个既有测试会 mock `subprocess.run` 让枚举"成功"，若不隔离，这些测试会
+  在不知情的情况下把 mock 数据真的写进开发者本机 `~/.config/opscli/enum_cache/`
+  （已手动清理本机被污染的缓存文件）；内核侧既有测试均已显式传 `base_dir=tmp_path`
+  （沿用 `metadata_cache` 约定），未发现同类问题
+
+**验证结果**：
+- `python3 -m pytest tests/skills/test_enum_cache.py -v` → 26 passed
+- `python3 -m pytest tests/skills/test_component_filter_resolution.py
+  tests/skills/test_unauthorized_filter_injection.py tests/query/planner/ -v` →
+  148 passed（含 C2 刚建的 10 条未授权注入用例）
+- 按文件逐一跑 `tests/skills/*.py`（目录级聚合会命中已知的 pytest 内部 capture
+  teardown 崩溃——经 `git stash` 验证在改动前的 release HEAD 上同样复现，与本次
+  改动无关）：合计 8 failed（与既有基线完全一致，无新增失败）
+- `python3 -m pytest tests/query/ -q` → 4 failed, 234 passed（4 个失败均为既有
+  respx mock 断言问题，与本次改动无关，与基线一致）
+- `python3 -m pytest tests/mcp/ -q --continue-on-collection-errors` → 351 passed,
+  1 error（既有 `test_shopify_tools.py` 导入错误，与基线一致，本次未触碰 mcp 模块）
+- 改动前后均检查 `~/.config/opscli/enum_cache/`：加入 `tests/skills/conftest.py`
+  隔离后目录保持空/不存在，未再污染真实用户配置目录
+- 实测环节：任务要求的 `cd /Users/mask/.opscli/skills/ops-dataset-query &&
+  python3 scripts/query_flow.py "..."` 未执行——核实该已安装副本的
+  `query_plan.py` 仍是 C3 之前的版本（只有旧版内存态 `enum_cache: dict` 参数，
+  无 `enum_cache.py` 模块、无 `import enum_cache`），按任务口径"若安装副本未含本次
+  改动则跳过实测并说明"处理，未修改该已安装副本
+
+**影响范围**：仅 `opscli/query/services/planner/`、
+`opscli/skills/templates/ops-dataset-query/scripts/` 下枚举相关代码与新增
+`enum_cache.py`/`entry.py`；新增 `tests/skills/conftest.py` 影响 `tests/skills/`
+目录下所有测试的 fixture 解析（仅重定向缓存路径，不改变其他测试行为）。不改变
+现有查询语义：实时枚举成功路径与调用方接口签名兼容（新增均为可选关键字参数/新增
+出参，默认值不影响未显式使用的调用方）；仅在此前会直接失败的场景新增一条恢复路径。
+
+**回滚方式**：`git revert` 本次提交；如需临时禁用缓存写入而不回滚代码，可手动
+清空对应 `CONFIG_DIR/enum_cache/` 目录（缓存未命中时行为等价于回滚前）。
+---
+
 ## 2026-08-19 query - 组件值注入 filters 前做权限枚举交集校验（双份同步）
 
 **变更原因**：QA 8 月实测形态：用户查询含国家/品牌词（如"德国站""某品牌"）时，规划器把

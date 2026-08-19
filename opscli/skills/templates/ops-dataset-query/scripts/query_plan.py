@@ -25,6 +25,7 @@ from typing import Any, Iterable, Sequence
 import agent_query_planner as planner
 import core
 import dataset_guidance
+import enum_cache
 import plan_integrity
 import scoped_dataset_reader
 import time_scope
@@ -2348,8 +2349,10 @@ def build_model_query_plan(
         and not authorized_platform_values
         and internal.get("next_action") == "query_platform_permission_enum"
     ):
+        cache_meta: dict = {}
         values = _auto_enum_platform_values(
-            contract["execution_ref"].get("platform_component_table_id")
+            contract["execution_ref"].get("platform_component_table_id"),
+            cache_meta=cache_meta,
         )
         if values:
             internal = build_query_plan(
@@ -2365,8 +2368,16 @@ def build_model_query_plan(
                 dataset_names_zh=dataset_names_zh,
                 dataset_summaries_zh=dataset_summaries_zh,
             )
-            # 枚举来源标注：审计可区分自动枚举与人工回传
-            contract["execution_ref"]["platform_enum_source"] = "auto_enum_service"
+            # 枚举来源标注：审计可区分自动枚举与人工回传；命中本地缓存时单独标注
+            # 来源与"来自 N 小时前缓存"的中文披露，避免 Agent 把降级值当实时数据
+            stale_hours = cache_meta.get("stale_hours")
+            if stale_hours is None:
+                contract["execution_ref"]["platform_enum_source"] = "auto_enum_service"
+            else:
+                contract["execution_ref"]["platform_enum_source"] = "auto_enum_service_cache"
+                contract["model_view"].setdefault("platform_scope_disclosures_zh", []).append(
+                    f"平台枚举值来自约 {stale_hours:.1f} 小时前缓存（实时枚举超时/失败后的降级兜底）。"
+                )
     contract = _resolve_component_filters(
         contract, query, auto_enum=auto_enum, data_dir=data_dir
     )
@@ -2381,11 +2392,42 @@ def build_model_query_plan(
     return contract
 
 
-def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: float = 7.0) -> list[str]:
+def _enum_cache_fallback(
+    component_table_id: object, field_name: str, *, cache_meta: dict | None = None
+) -> list[str]:
+    """实时枚举超时/失败后的统一降级入口：命中本地缓存则返回陈旧值，未命中返回空列表。
+
+    为什么集中成一个函数：三处枚举调用各自有 4 条独立的失败出口（subprocess 异常、
+    非零退出码、返回体无法解析、业务失败），若每条出口都各写一遍缓存读取逻辑，
+    极易漏改。缓存命中时把年龄（小时）写入 cache_meta 供调用方拼披露文案；
+    未命中时 cache_meta 不变，调用方按现行失败路径处理（行为不回归）。
+    """
+    cached = enum_cache.get(component_table_id, field_name)
+    if cached is None:
+        return []
+    if cache_meta is not None:
+        age_hours = enum_cache.get_age_hours(component_table_id, field_name)
+        cache_meta["stale_hours"] = age_hours if age_hours is not None else 0.0
+    print(
+        f"[query_plan] 实时枚举失败，改用本地缓存（{field_name}，"
+        f"{cache_meta.get('stale_hours') if cache_meta else '?'} 小时前）",
+        file=sys.stderr,
+    )
+    return cached
+
+
+def _auto_enum_platform_values(
+    component_table_id: object,
+    *,
+    timeout_seconds: float = 7.0,
+    cache_meta: dict | None = None,
+) -> list[str]:
     """自动执行平台权限枚举查询，返回服务端实际平台值列表（P0-3）。
 
-    任何失败（opscli 不可用/未登录/超时/形状不符）都返回空列表，
-    回落到规划器内嵌的手动枚举命令路径；诊断只走 stderr。
+    实时枚举失败时先尝试本地缓存降级（TTL 24h，见 enum_cache 模块），命中则把
+    缓存年龄写入 cache_meta 供调用方标注"来自缓存"；缓存也未命中时才返回空列表，
+    回落到规划器内嵌的手动枚举命令路径——不改变原有 fail-closed 行为，只是新增
+    一条恢复路径。诊断信息只走 stderr。
     """
     command = _platform_enum_command(component_table_id)
     if not command:
@@ -2415,18 +2457,18 @@ def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: f
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"[query_plan] 自动枚举未完成：{error}", file=sys.stderr)
-        return []
+        return _enum_cache_fallback(component_table_id, "platform_name", cache_meta=cache_meta)
     if result.returncode != 0:
         print(f"[query_plan] 自动枚举失败：{(result.stderr or result.stdout or '')[:200]}", file=sys.stderr)
-        return []
+        return _enum_cache_fallback(component_table_id, "platform_name", cache_meta=cache_meta)
     try:
         payload = json.loads(result.stdout[result.stdout.index("{"):])
     except (ValueError, json.JSONDecodeError):
         print("[query_plan] 自动枚举返回无法解析，回落手动枚举", file=sys.stderr)
-        return []
+        return _enum_cache_fallback(component_table_id, "platform_name", cache_meta=cache_meta)
     if payload.get("success") is False:
         print(f"[query_plan] 自动枚举业务失败：{str(payload.get('error'))[:200]}", file=sys.stderr)
-        return []
+        return _enum_cache_fallback(component_table_id, "platform_name", cache_meta=cache_meta)
     # 结果行兜底遍历：不同版本返回形状可能是 data.result.data / result.data / data
     rows: list = []
     for path in (("data", "result", "data"), ("result", "data"), ("data", "data")):
@@ -2443,6 +2485,8 @@ def _auto_enum_platform_values(component_table_id: object, *, timeout_seconds: f
     )
     if values:
         print(f"[query_plan] 自动枚举取得平台值：{values}", file=sys.stderr)
+        # 实时枚举成功：写入本地缓存供下次超时/失败时降级兜底（TTL 24h）
+        enum_cache.put(component_table_id, "platform_name", values)
     return values
 
 
@@ -2452,12 +2496,18 @@ def _auto_enum_component_values(
     *,
     timeout_seconds: float = 7.0,
     errors: list | None = None,
+    cache_meta: dict | None = None,
 ) -> list[str]:
     """枚举普通筛选组件字段；远端异常返回空列表并把原因写入 errors。
 
     调用方必须区分两种空：调用失败（errors 非空，无法校验，须阻断）与
     调用成功但当前账号无授权值（errors 为空，该字段不可能成为筛选条件，跳过即可）。
     混为一谈会让「开发」这类本账号无授权值的字段把所有查询都阻断。
+
+    实时枚举失败时先尝试本地缓存降级（TTL 24h）：命中则视为恢复成功，
+    不写入 errors（避免把已恢复的调用错判为需要阻断），并把缓存年龄写入
+    cache_meta 供调用方标注"来自缓存"；缓存也未命中才写 errors 并返回空列表，
+    维持现行 fail-closed 行为。
     """
     if component_table_id in (None, "") or not field_name:
         return []
@@ -2490,12 +2540,18 @@ def _auto_enum_component_values(
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"[query_plan] 普通筛选组件枚举未完成：{error}", file=sys.stderr)
+        cached = _enum_cache_fallback(component_table_id, field_name, cache_meta=cache_meta)
+        if cached:
+            return cached
         if errors is not None:
             errors.append(f"{type(error).__name__}: {error}"[:200])
         return []
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "")[:200]
         print(f"[query_plan] 普通筛选组件枚举失败：{detail}", file=sys.stderr)
+        cached = _enum_cache_fallback(component_table_id, field_name, cache_meta=cache_meta)
+        if cached:
+            return cached
         if errors is not None:
             errors.append(detail)
         return []
@@ -2503,12 +2559,18 @@ def _auto_enum_component_values(
         payload = json.loads(result.stdout[result.stdout.index("{") :])
     except (ValueError, json.JSONDecodeError):
         print("[query_plan] 普通筛选组件枚举返回无法解析", file=sys.stderr)
+        cached = _enum_cache_fallback(component_table_id, field_name, cache_meta=cache_meta)
+        if cached:
+            return cached
         return []
     if payload.get("success") is False:
         print(
             f"[query_plan] 普通筛选组件枚举业务失败：{str(payload.get('error'))[:200]}",
             file=sys.stderr,
         )
+        cached = _enum_cache_fallback(component_table_id, field_name, cache_meta=cache_meta)
+        if cached:
+            return cached
         return []
     rows: list = []
     for path in (("data", "result", "data"), ("result", "data"), ("data", "data")):
@@ -2518,11 +2580,15 @@ def _auto_enum_component_values(
         if isinstance(node, list):
             rows = node
             break
-    return _deduplicate(
+    values = _deduplicate(
         str(row.get(field_name, "")).strip()
         for row in rows
         if isinstance(row, dict) and row.get(field_name) not in (None, "")
     )
+    if values:
+        # 实时枚举成功：写入本地缓存供下次超时/失败时降级兜底（TTL 24h）
+        enum_cache.put(component_table_id, field_name, values)
+    return values
 
 
 # ── 组件筛选值解析（部门/渠道走授权枚举，ASIN 走字面格式）──────────────────
@@ -2751,14 +2817,40 @@ def _shared_prefix(values: list) -> str:
 
 
 
+def _component_field_group_cache_fallback(
+    component_table_id: object, field_names: list, *, cache_meta: dict | None = None
+) -> dict:
+    """批量枚举失败后逐字段尝试本地缓存降级；未命中的字段不出现在返回字典里。
+
+    批量调用是一次网络请求取多个字段，但持久缓存按 (表, 字段) 单独落盘，
+    因此失败降级只能逐字段查——允许部分字段命中、部分未命中（部分降级）。
+    """
+    fallback: dict = {}
+    for name in field_names:
+        cached = enum_cache.get(component_table_id, name)
+        if cached is None:
+            continue
+        fallback[name] = cached
+        if cache_meta is not None:
+            age_hours = enum_cache.get_age_hours(component_table_id, name)
+            cache_meta[name] = age_hours if age_hours is not None else 0.0
+    return fallback
+
+
 def _auto_enum_component_field_group(
-    component_table_id: object, field_names: list, *, timeout_seconds: float = 7.0
+    component_table_id: object,
+    field_names: list,
+    *,
+    timeout_seconds: float = 7.0,
+    cache_meta: dict | None = None,
 ) -> dict:
     """一次查询取组件表多个字段的授权枚举值，按列返回去重结果。
 
     组件表返回的是各字段的组合行，行数受 limit 限制；低基数字段（渠道 9、
     国家 2、销售 12 之类）在 500 行内可完整覆盖，这也是只给低基数字段开
-    反查的原因。任何异常都返回空字典，由上层按 fail-closed 阻断。
+    反查的原因。实时枚举失败时先逐字段尝试本地缓存降级（TTL 24h，允许部分
+    命中），命中的字段年龄写入 cache_meta；缓存也未命中的字段返回空字典，
+    由上层按现行 fail-closed 阻断（行为不回归）。
     """
     if component_table_id in (None, "") or not field_names:
         return {}
@@ -2783,13 +2875,19 @@ def _auto_enum_component_field_group(
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"[query_plan] 组件批量枚举未完成：{error}", file=sys.stderr)
-        return {}
+        return _component_field_group_cache_fallback(
+            component_table_id, field_names, cache_meta=cache_meta
+        )
     if result.returncode != 0:
-        return {}
+        return _component_field_group_cache_fallback(
+            component_table_id, field_names, cache_meta=cache_meta
+        )
     try:
         payload = json.loads(result.stdout[result.stdout.index("{"):])
     except (ValueError, json.JSONDecodeError):
-        return {}
+        return _component_field_group_cache_fallback(
+            component_table_id, field_names, cache_meta=cache_meta
+        )
     rows: list = []
     for path in (("data", "result", "data"), ("result", "data"), ("data", "data")):
         node = payload
@@ -2798,7 +2896,7 @@ def _auto_enum_component_field_group(
         if isinstance(node, list) and node:
             rows = node
             break
-    return {
+    grouped = {
         name: _deduplicate(
             str(row.get(name, "")).strip()
             for row in rows
@@ -2806,6 +2904,11 @@ def _auto_enum_component_field_group(
         )
         for name in field_names
     }
+    # 实时枚举成功：逐字段写入本地缓存供下次超时/失败时降级兜底（TTL 24h）
+    for name, values in grouped.items():
+        if values:
+            enum_cache.put(component_table_id, name, values)
+    return grouped
 
 
 # 组件筛选字段总表（值类字段，date_id 归时间口径、platform_name 归平台范围逻辑）。
@@ -3022,12 +3125,16 @@ def _write_component_filter(
     label_zh: str,
     requested: str,
     resolved: str | list,
+    stale_hours: float | None = None,
 ) -> None:
     """把已锁定的授权原值写入查询模板，并登记披露信息。
 
     resolved 传列表表示用户点名了多个准确值，按 IN 语义下发
     （服务端支持 {"operator": "in", "value": [...]}），单值仍用 `=`，
     避免为单值场景改变既有 payload 形状。
+
+    stale_hours 非 None 表示本次授权枚举来自本地缓存降级（实时枚举超时/失败），
+    须在披露里如实标注，不能让 Agent 把降级值当成实时数据转述给用户。
     """
     template = execution.get("query_template")
     if not isinstance(template, dict):
@@ -3054,6 +3161,11 @@ def _write_component_filter(
         f"{label_zh}按当前账号授权枚举完整等值匹配为{shown}"
         + ("（任一命中）。" if multi else "。")
     )
+    if stale_hours is not None:
+        contract["model_view"]["component_filter_disclosures_zh"].append(
+            f"{label_zh}的授权枚举值来自约 {stale_hours:.1f} 小时前缓存"
+            "（实时枚举超时/失败后的降级兜底）。"
+        )
 
 
 def _resolve_enum_component_filter(
@@ -3234,6 +3346,9 @@ def _resolve_enum_component_filter(
                 ),
             )
 
+    # 本字段的授权枚举是否来自本地缓存降级（实时枚举超时/失败后的兜底），
+    # 由 _cached_enum_values / _batch_enum_reverse_lookup_fields 写入的伴随键判定
+    stale_hours = enum_cache.get(("stale", str(component.get("component_table_id")), field_name))
     _write_component_filter(
         contract,
         execution,
@@ -3241,6 +3356,7 @@ def _resolve_enum_component_filter(
         label_zh=label_zh,
         requested=requested,
         resolved=matched if exact_multi else matched[0],
+        stale_hours=stale_hours,
     )
     consumed.add(_normalize_component_value(requested))
     # 多值时每个已锁定的值都要登记，避免其中某个值的子串被后续字段反查抓走
@@ -3292,13 +3408,20 @@ def _cached_enum_values(
 ) -> list:
     """带缓存的组件枚举：同一次规划里同一 (表, 字段) 只查一次。
 
-    缓存同时记住「本次枚举是否报错」，供调用方区分调用失败与无授权值。
+    缓存同时记住「本次枚举是否报错」以及「本次结果是否来自本地磁盘缓存降级」
+    （("stale", *key) → 缓存年龄小时数，未降级则不写这个键），
+    供调用方区分调用失败/无授权值/降级取值三种情况。
     """
     key = (str(table_id), field_name)
     if key not in cache:
         local_errors: list = []
-        cache[key] = _auto_enum_component_values(table_id, field_name, errors=local_errors)
+        local_cache_meta: dict = {}
+        cache[key] = _auto_enum_component_values(
+            table_id, field_name, errors=local_errors, cache_meta=local_cache_meta
+        )
         cache[("error", *key)] = local_errors
+        if "stale_hours" in local_cache_meta:
+            cache[("stale", *key)] = local_cache_meta["stale_hours"]
     if errors is not None:
         errors.extend(cache.get(("error", *key)) or [])
     return cache[key]
@@ -3329,9 +3452,14 @@ def _batch_enum_reverse_lookup_fields(
     for table_id, fields in by_table.items():
         if all((table_id, field) in enum_cache for field in fields):
             continue
-        grouped = _auto_enum_component_field_group(table_id, fields)
+        group_cache_meta: dict = {}
+        grouped = _auto_enum_component_field_group(
+            table_id, fields, cache_meta=group_cache_meta
+        )
         for field in fields:
             enum_cache.setdefault((table_id, field), grouped.get(field, []))
+            if field in group_cache_meta:
+                enum_cache[("stale", table_id, field)] = group_cache_meta[field]
 
 
 def _resolve_asin_filter(contract: dict, query: str, data_dir) -> dict:

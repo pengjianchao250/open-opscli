@@ -19,7 +19,7 @@ from typing import Any
 
 from opscli.query.services.manager import QueryManager
 from opscli.query.services.metadata_cache import invalidate_metadata_cache
-from opscli.query.services.planner import plan_integrity, query_plan
+from opscli.query.services.planner import enum_cache, plan_integrity, query_plan
 from opscli.query.services.planner.metadata_adapter import MetadataAdapter
 
 
@@ -104,7 +104,16 @@ def _make_callbacks(qm: QueryManager, user_email: str, base_dir: Path | None):
 
     - refresh_fn：失效用户级元数据缓存并重取全量 payload（替代 subprocess skills upgrade）。
     - enum_fn：对组件表执行一次 simple 查询并抽取字段枚举值（替代 subprocess query simple）。
+      实时枚举异常（网络/超时/服务端错误）时先尝试本地磁盘缓存降级（TTL 24h，
+      与 Skill 版同址），命中则返回陈旧值并把年龄（小时）记入 stale_hits 供
+      run_plan 统一披露；缓存也未命中则把异常继续抛给 query_plan，维持
+      现行 fail-closed 行为（行为不回归）。
+
+    Returns:
+        (refresh_fn, enum_fn, stale_hits)：stale_hits 是本次调用过程中命中缓存
+        降级的年龄列表（小时），run_plan 据此拼装"来自缓存"的中文披露。
     """
+    stale_hits: list[float] = []
 
     def refresh_fn() -> dict:
         # 元数据未就绪：失效缓存后重取一次全量元数据
@@ -113,14 +122,26 @@ def _make_callbacks(qm: QueryManager, user_email: str, base_dir: Path | None):
 
     def enum_fn(table_id: Any, field_name: str, *, limit: int) -> list[str]:
         # 权限枚举：复用内核 simple 查询取组件表某字段的可选值
-        run = qm.build_simple_and_run(
-            table_id=int(table_id),
-            dimensions=[{"field": field_name, "alias": field_name}],
-            limit=limit,
-        )
-        return _extract_enum_values(run.get("result"), field_name)
+        try:
+            run = qm.build_simple_and_run(
+                table_id=int(table_id),
+                dimensions=[{"field": field_name, "alias": field_name}],
+                limit=limit,
+            )
+            values = _extract_enum_values(run.get("result"), field_name)
+        except Exception:  # noqa: BLE001 实时枚举失败先尝试缓存降级，缓存也无则原样抛出
+            cached = enum_cache.get(table_id, field_name, base_dir=base_dir)
+            if cached is None:
+                raise
+            age_hours = enum_cache.get_age_hours(table_id, field_name, base_dir=base_dir)
+            stale_hits.append(age_hours if age_hours is not None else 0.0)
+            return cached
+        if values:
+            # 实时枚举成功：写入本地缓存供下次超时/失败时降级兜底（TTL 24h）
+            enum_cache.put(table_id, field_name, values, base_dir=base_dir)
+        return values
 
-    return refresh_fn, enum_fn
+    return refresh_fn, enum_fn, stale_hits
 
 
 def run_plan(
@@ -143,14 +164,14 @@ def run_plan(
         query_manager: 可注入的 QueryManager（MCP 显式凭证模式/测试用）；缺省新建。
     """
     qm = query_manager or QueryManager()
-    refresh_fn, enum_fn = _make_callbacks(qm, user_email, base_dir)
+    refresh_fn, enum_fn, stale_hits = _make_callbacks(qm, user_email, base_dir)
     adapter = MetadataAdapter(
         qm.metadata_all(user_email=user_email, base_dir=base_dir).payload
     )
     kwargs: dict[str, Any] = {}
     if top_n is not None:
         kwargs["top_n"] = top_n
-    return query_plan.build_model_query_plan(
+    contract = query_plan.build_model_query_plan(
         adapter,
         request,
         requested_fields=requested_fields,
@@ -158,6 +179,16 @@ def run_plan(
         enum_fn=enum_fn,
         **kwargs,
     )
+    if stale_hits:
+        # 本次调用中至少有一次权限枚举走了本地缓存降级：如实披露，
+        # 避免 Agent 把降级值当实时数据转述给用户（取最旧的一次年龄，最保守）
+        model_view = contract.get("model_view")
+        if isinstance(model_view, dict):
+            model_view.setdefault("component_filter_disclosures_zh", []).append(
+                f"部分权限枚举值来自约 {max(stale_hits):.1f} 小时前本地缓存"
+                "（实时枚举失败后的降级兜底），非实时数据。"
+            )
+    return contract
 
 
 def run_flow(
