@@ -267,18 +267,38 @@ def _select_fields(
     ]
 
 
-def _validated_dataset_fields(fields: list[dict], dataset: dict) -> list[dict]:
-    """校验目标数据集的字段集合：非空、字段名唯一、dataset_name 一致。"""
+def _validated_dataset_fields(
+    fields: list[dict], dataset: dict, advisory: dict | None = None
+) -> list[dict]:
+    """校验目标数据集的字段集合：非空、字段名唯一、dataset_name 一致。
+
+    2026-08-11/12 元数据事故：服务端偶发下发整行完全重复的字段行，两天内在本函数的
+    硬失败上打出 69 条 blocked。整行完全重复（含 filter_config 等全部列都相同）的
+    字段定义没有歧义，静默去重即可安全放行；同名但定义不同（如 summary_expression
+    口径不同）去重会静默选中其中一个口径，属于数据错误，仍必须继续阻断。
+    去重发生时通过 advisory 出参把去重条数带给调用方，供上层向用户披露。
+    """
     dataset_alias = dataset["dataset_alias"]
     selected = [row for row in fields if row["dataset_alias"] == dataset_alias]
-    names = [row["field_name"] for row in selected]
     if not selected:
         raise ValueError("dataset_has_no_fields")
+    # 去重键用 JSON 序列化而非 tuple(sorted(row.items()))：字段行普遍带
+    # filter_config 这类 dict/None 混合列，dict 值不可哈希，直接塞进
+    # 字典键会抛 TypeError；json.dumps(sort_keys=True) 对任意可序列化值都稳定。
+    deduped_by_key: dict[str, dict] = {}
+    for row in selected:
+        key = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
+        deduped_by_key.setdefault(key, row)
+    deduped = list(deduped_by_key.values())
+    duplicate_rows_removed = len(selected) - len(deduped)
+    if duplicate_rows_removed and advisory is not None:
+        advisory["duplicate_fields_deduped_count"] = duplicate_rows_removed
+    names = [row["field_name"] for row in deduped]
     if len(names) != len(set(names)):
         raise ValueError("duplicate_dataset_field")
-    if any(row["dataset_name"] != dataset["dataset_name"] for row in selected):
+    if any(row["dataset_name"] != dataset["dataset_name"] for row in deduped):
         raise ValueError("field_dataset_name_mismatch")
-    return selected
+    return deduped
 
 
 def _derived_component_fields(dataset: dict, select_columns: list[dict]) -> list[dict]:
@@ -625,7 +645,10 @@ def build_guidance(
             Path(data_dir), snapshot=snapshot
         )
         fields = _derived_component_fields(dataset, all_select_columns)
-    dataset_fields = _validated_dataset_fields(fields, dataset)
+    # dedup_advisory 接住 _validated_dataset_fields 静默去重的条数，写入
+    # field_guidance 供上层（如 query_plan 的 model_view）向用户披露元数据降级
+    dedup_advisory: dict = {}
+    dataset_fields = _validated_dataset_fields(fields, dataset, dedup_advisory)
     explicit_names, unknown_fields = _resolve_requested_fields(
         dataset_fields, requested_fields
     )
@@ -674,6 +697,10 @@ def build_guidance(
             "formula_rule": FORMULA_RULE,
             "snapshot_rule": SNAPSHOT_RULE,
             "unknown_requested_fields": unknown_fields,
+            # 完全重复字段行被静默去重的条数，0 表示本次未触发自愈
+            "duplicate_fields_deduped_count": dedup_advisory.get(
+                "duplicate_fields_deduped_count", 0
+            ),
             # 日期类维度无条件输出（上限 5 个）：时间过滤/dataComparison 的构造依据，
             # 不受点名/打分筛选影响
             "date_fields": [

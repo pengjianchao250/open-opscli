@@ -7083,3 +7083,53 @@ UnicodeDecodeError（0.0.147 上 3 条独立反馈，形态一致）。
 **影响范围**：仅发布流程；发布成功后会产生一个 release 提交和一个本地 tag，上传失败时 set -e 终止不会打 tag
 **回滚方式**：git checkout 恢复 publish.sh；误打的 tag 用 `git tag -d v<版本>` 删除
 ---
+
+## 2026-08-19 query/skills - C1：客户端 dup_field 自愈（双份同步）
+
+**变更原因**：2026-08-11/12 元数据事故，服务端偶发下发整行完全重复的字段行，两天内在
+`_validated_dataset_fields` 的硬失败上打出 69 条 blocked。总纲已定策略：整行完全重复
+（所有列都相同）字段定义没有歧义，应静默去重放行；同名但定义不同（如 summary_expression
+口径不同）去重会静默选中其中一个口径，属于数据错误，仍须继续阻断。本任务落地该自愈逻辑，
+双份同步文件各改一处。
+**改动点**：
+- `opscli/query/services/planner/dataset_guidance.py` 与
+  `opscli/skills/templates/ops-dataset-query/scripts/dataset_guidance.py`
+  （两份逐行同构）：`_validated_dataset_fields` 新增可选 `advisory: dict | None` 出参；
+  先按 alias 过滤，再用 `json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)`
+  做整行去重键（而非 `tuple(sorted(row.items()))`——字段行普遍带 `filter_config` 这类
+  dict/None 混合列，dict 值不可哈希，直接塞进字典键会抛 TypeError），完全重复的行去重后
+  再做同名唯一性校验；去重发生时把去重条数写入 `advisory["duplicate_fields_deduped_count"]`。
+- 两份 `build_guidance()`：新建 `dedup_advisory: dict` 传入 `_validated_dataset_fields`，
+  并把 `dedup_advisory.get("duplicate_fields_deduped_count", 0)` 写入返回结果
+  `field_guidance.duplicate_fields_deduped_count`（默认 0，不产生虚假披露）。
+- **范围决策说明**：brief 的 Interfaces 段提到最终应在 `query_plan.py` 的
+  `model_view` 增加 `metadata_degraded_zh` 文本披露，但 brief 的 Files/Test 清单只列了
+  两份 `dataset_guidance.py` + 两份 guidance 测试文件，且 `query_plan.py` 侧的
+  `model_view` 走严格 JSON Schema（`additionalProperties: false`），新增字段还需同步改
+  schema 与可能的 golden 快照，风险和改动面明显超出本任务声明范围。本次只做到把去重条数
+  带到 `build_guidance()` 的返回值（`field_guidance.duplicate_fields_deduped_count`）为止，
+  `query_plan.py` 的 `model_view.metadata_degraded_zh` 接线留给后续任务确认后再做。
+- 新增测试 `tests/skills/test_dataset_guidance_dup_selfheal.py`（4 用例：整行重复自愈、
+  同名异义仍阻断、advisory 出参携带去重条数、filter_config 等 dict 列不破坏去重）；
+  `tests/query/planner/test_guidance.py` 追加等价 4 用例 + 1 例验证
+  `build_guidance` 经 `MetadataAdapter` 全链路时 `duplicate_fields_deduped_count`
+  默认为 0（该链路因 `MetadataAdapter._merge_duplicate_field_rows` 已提前合并完全重复行，
+  无法经此路径反向构造出 count>0 的用例，count>0 的行为已在直接单元测试中覆盖）。
+**验证结果**：
+- `pytest tests/skills/test_dataset_guidance_dup_selfheal.py
+  tests/skills/test_scoped_reader_duplicate_fields.py tests/query/planner/ -v`
+  → 84 passed（含既有 8 个双注册消歧用例不受影响）。
+- `pytest tests/skills/` 按单文件逐个跑（整目录跑会因 `test_packaging.py` 触发
+  pytest capture 崩溃、级联出 25 个 teardown error，为已知基线问题，与本次改动无关）：
+  8 failed（`test_cli.py` 1、`test_dashboard_skills.py` 2、`test_manager.py` 3、
+  `test_ops_feedback_template.py` 1、`test_ops_methods_card_xlsx_preview.py` 1），
+  与 MEMORY.md 记录的基线「8 失败 + 25 collection error」完全吻合，本次改动 0 新增失败。
+- `pytest tests/query/ -q` → 4 failed（`test_intent_attribution_headers.py` ×2、
+  `test_intent_match_report.py` ×2），经 `git stash` 验证改动前同样失败，非本次改动引入。
+**影响范围**：仅 `_validated_dataset_fields` 的字段级重复处理与 `build_guidance` 返回值
+新增一个恒定存在的 int 字段，不改变现有返回结构其他字段；不影响 `query_plan.py`/
+`model_view`/schema。
+**回滚方式**：`git checkout -- opscli/query/services/planner/dataset_guidance.py
+opscli/skills/templates/ops-dataset-query/scripts/dataset_guidance.py
+tests/query/planner/test_guidance.py && rm tests/skills/test_dataset_guidance_dup_selfheal.py`
+---
