@@ -159,3 +159,28 @@ def test_query_without_country_mention_passes_through(module, monkeypatch):
 
     assert contract["status"] == "planned"
     assert _country_filters(contract) == []
+
+
+@BOTH_VERSIONS
+def test_bare_value_mention_of_unauthorized_country_passes_silently_known_limitation(
+    module, monkeypatch
+):
+    """已知架构限制的现状锚点，不是期望行为背书。
+
+    原文提到"德国站"但不含"国家"/"站点"等标签词（无"字段+系词"形态），且"德国"
+    本身不在当前账号授权枚举里——反查机制（_reverse_lookup_component_matches）
+    只拿"授权枚举原值"反过来在原文里找，天生无法识别"原文提到了一个不在授权
+    枚举里的国家"，因为客户端没有一份全量国家/品牌名词典可比对。这与本任务已
+    修复的"显式列举一组值但零交集"场景不同（那种场景 requested 非空、labeled_
+    enumeration 命中，走的是标签分支）：这里 requested 为空，天然落入"原文未
+    提及"分支，无法触发阻断/披露。
+
+    本用例只是钉住当前代码的现状（不注入、不阻断、不披露），供服务端 precheck
+    兜底；如果未来给该反查路径新增了候选值识别能力（如接入全量国家/品牌词典），
+    这条测试的断言就应该随之改成"阻断+披露"，而不是继续维持现状。
+    """
+    contract = _resolve(module, "查德国站近7天销量", COUNTRY_VALUES, monkeypatch)
+
+    assert contract["status"] == "planned"
+    assert _country_filters(contract) == []
+    assert contract["model_view"]["clarification_messages_zh"] == []
