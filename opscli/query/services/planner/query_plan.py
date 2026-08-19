@@ -188,6 +188,54 @@ _CHINESE_DIGITS = {
     "九": "9",
 }
 
+# 宽后缀兜底正则：任意 1-6 个汉字/字母/数字紧跟「部」即视为部门名候选。
+# 上限 6 取自内部真实部门名长度分布（最长如「经营管理团队」为 6 字，
+# 带「部」后缀的更短）；放宽会把整句吞进候选。候选仍要走授权枚举完整
+# 等值校验，零命中转澄清，因此宽进严出是安全的。
+_DEPARTMENT_WIDE_SUFFIX_RE = re.compile(r"[一-鿿A-Za-z0-9]{1,6}部")
+
+# 宽后缀候选头部的噪声前缀：正则按「最左 + 贪婪」匹配，会把紧邻的时间词、
+# 祈使动词、连接助词一并吞进候选（「近7天魔法部」「查询销售部」），这里循环剥掉。
+# 时间量词必须整段剥除（近7天/上月），不能单剥数字——「3C事业部」这类
+# 以数字开头的真实部门名会被误伤。
+_DEPARTMENT_NOISE_PREFIX_RE = re.compile(
+    r"^(?:"
+    # 数字时间跨度：近7天 / 30日 / 过去3个月
+    r"(?:近|最近|过去)?\d+(?:天|日|周|个月|月|季度|年)"
+    # 中文数字时间跨度：近七天 / 两周
+    r"|(?:近|最近|过去)?[一二三四五六七八九十两]+(?:天|日|周|个月|月|季度|年)"
+    # 相对时间词：本月 / 上周 / 去年
+    r"|[本上下今昨明去前](?:天|日|周|月|季度|年|半年)"
+    # 祈使/请求前缀
+    r"|请|麻烦|帮我|帮忙|我想|我要|需要"
+    # 常见取数动词（长词在前，避免「查询」只剥掉「查」）
+    r"|查询|查一下|查下|查看|查|看看|看下|看|获取|拉取|统计|分析|对比|比较|汇总|导出|展示|给出|计算|一下"
+    # 连接助词
+    r"|的|地|和|与|及|或|在|按|把|给"
+    r")"
+)
+
+# 宽后缀候选的停用词表：以「部」结尾但几乎不可能是部门名的常见词。
+# 取值依据：范围词（全部/内部/外部/局部/大部/各部/多部）、方位词（东西南北中
+# 与上下前后顶底头尾）、机构与职务惯用词（俱乐部/干部/总部）、商品描述里
+# 高频出现的身体部位词（腰部按摩、颈部支撑等）。按「候选以停用词结尾」判定，
+# 这样「按摩腰部」「近7天全部」这类带前缀噪声的候选也能被拦住。
+# 停用词只抑制「未知候选转澄清」这一步；真实部门若恰好同名，仍会被授权枚举
+# 反查原文（reverse_lookup）兜住，因此宁可多收，也不因误收而丢失真实筛选。
+_DEPARTMENT_SUFFIX_STOPWORDS = (
+    # 范围词
+    "全部", "内部", "外部", "局部", "大部", "各部", "多部",
+    # 方位词
+    "东部", "西部", "南部", "北部", "中部",
+    "上部", "下部", "前部", "后部", "顶部", "底部", "头部", "尾部", "根部",
+    # 机构与职务惯用词
+    "俱乐部", "干部", "总部",
+    # 商品描述高频身体部位词
+    "颈部", "肩部", "背部", "腰部", "腹部", "胸部", "臀部",
+    "腿部", "膝部", "脚部", "足部", "手部", "腕部",
+    "面部", "脸部", "眼部", "鼻部", "唇部", "耳部",
+)
+
 # 图表 UUID 既可能是标准 UUID，也可能是平台生成的短标识。只有请求中明确出现
 # “图表/chart”语义时才启用该路由，避免把工单、任务等其他 UUID 误判为图表。
 CHART_REFERENCE_PATTERN = re.compile(
@@ -244,6 +292,31 @@ def _normalize_department_value(value: str) -> str:
     return f"{prefix or ''}{number}部"
 
 
+def _extract_wide_suffix_department_value(query: str) -> str:
+    """宽后缀兜底：从「X部」形态中提取部门名候选。
+
+    只在前三条窄规则（编号部门/显式标签/分析句式）都未命中时调用。
+    候选返回后走既有「精确等值 → 零命中转澄清」链路：真实部门被枚举锁定，
+    虚构部门（「魔法部」）转澄清，取代原先的静默放大为全量查询。
+    """
+    for match in _DEPARTMENT_WIDE_SUFFIX_RE.finditer(query):
+        candidate = match.group(0)
+        # 循环剥离候选头部的时间词/动词/助词噪声（「近7天魔法部」→「魔法部」）
+        while True:
+            noise = _DEPARTMENT_NOISE_PREFIX_RE.match(candidate)
+            if not noise:
+                break
+            candidate = candidate[noise.end():]
+        # 剥完只剩「部」或空，说明整个候选都是噪声
+        if len(candidate) < 2:
+            continue
+        # 以停用词结尾的候选（「全部」「按摩腰部」）不是部门名
+        if candidate.endswith(_DEPARTMENT_SUFFIX_STOPWORDS):
+            continue
+        return candidate
+    return ""
+
+
 def _extract_requested_department_value(query: str) -> str:
     """从明确部门表达或“分析某组织的数据”中提取单个部门筛选值。"""
     number_match = _DEPARTMENT_NUMBER_RE.search(query)
@@ -253,12 +326,14 @@ def _extract_requested_department_value(query: str) -> str:
     if label_match:
         return label_match.group(1)
     analysis_match = _DEPARTMENT_ANALYSIS_RE.search(query)
-    if not analysis_match:
-        return ""
-    candidate = analysis_match.group(1)
-    if re.fullmatch(r"(?:本|上|下)?(?:月|周|季度|年)|近\d+(?:天|日)", candidate):
-        return ""
-    return candidate
+    if analysis_match:
+        candidate = analysis_match.group(1)
+        if not re.fullmatch(r"(?:本|上|下)?(?:月|周|季度|年)|近\d+(?:天|日)", candidate):
+            return candidate
+    # 第四条兜底：宽后缀「X部」候选。编号部门已被第一条正则截获，
+    # 走到这里的候选要么是特殊名部门（孵化部），要么是虚构部门（魔法部），
+    # 交给授权枚举等值校验分流：命中放行、零命中转澄清。
+    return _extract_wide_suffix_department_value(query)
 
 
 def _extract_chart_uuids(query: str) -> list[str]:
@@ -2351,7 +2426,9 @@ def _shared_prefix(values: list) -> str:
 # - label_terms：标签形态抽取用的说法集合，命中标签才发起枚举，零额外网络成本。
 # - reverse_lookup：拿授权枚举原值反查原文，用于兜住不带字段名的裸值
 #   （「查傲彼瑞的ASIN」「查史子涵的销量」）。只给低基数字段开——实测渠道 9、
-#   国家 2、品牌 3、销售 12，枚举一次就能覆盖全集；SKU/产品名这类几百上千的
+#   国家 2、品牌 3、销售 12，枚举一次就能覆盖全集；部门枚举是当前账号的
+#   权限子集、同属低基数，开反查兜住「宁波」「泛泰克」「孵化部」这类
+#   无后缀或特殊名部门的裸值提及；SKU/产品名这类几百上千的
 #   字段开反查既慢又不可能枚举完整，改用形态抽取。
 # - value_pattern：编码型字段的裸值形态，抽到候选后仍要枚举校验权限。
 _ENUM_COMPONENT_SPECS = (
@@ -2360,7 +2437,7 @@ _ENUM_COMPONENT_SPECS = (
         "label_zh": "部门",
         "extract": _extract_requested_department_value,
         "normalize": _normalize_department_value,
-        "reverse_lookup": False,
+        "reverse_lookup": True,
     },
     {
         "field_name": "channel_name",

@@ -7923,3 +7923,63 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 会多一个键，纯增量、不影响既有字段解析方式。
 
 **回滚方式**：`git revert <本次提交 hash>`
+
+---
+
+## 2026-08-19 query/skills - 部门筛选枚举驱动识别（反查兜裸值 + 宽后缀候选转澄清，修 E2E T5-3）
+
+**变更原因**：dept_name 组件筛选原先只靠三条窄正则识别（编号部门/显式标签/
+分析句式），真实部门名形态任意（宁波/泛泰克/孵化部/经营管理团队），裸值提及
+抽不到值时被当成"没有筛选意图"直接放行，静默放大为全量查询；虚构部门
+"魔法部"同样静默全量（E2E T5-3 已复现）。方案已由用户拍板：A 路线用当前
+账号权限枚举判断存在性，不新增服务端接口。
+
+**改动点**：
+1. `opscli/query/services/planner/query_plan.py` 与
+   `opscli/skills/templates/ops-dataset-query/scripts/query_plan.py`
+   （两份同源，改动 hunks 逐行等价，已用 `git diff -U0` 比对确认）：
+   - dept_name spec 的 `reverse_lookup: False → True`，用授权枚举原值反查
+     原文兜住无后缀/特殊名部门的裸值提及；同步更新 spec 总表注释
+     （部门枚举为权限子集、低基数，符合"只给低基数字段开反查"的既有取舍）
+   - 新增第四条兜底提取规则 `_extract_wide_suffix_department_value`：
+     宽后缀正则 `[一-鿿A-Za-z0-9]{1,6}部` 抽候选，配
+     `_DEPARTMENT_NOISE_PREFIX_RE`（循环剥离时间词/动词/助词噪声前缀，
+     时间量词整段剥除避免误伤"3C事业部"类数字开头部门名）与
+     `_DEPARTMENT_SUFFIX_STOPWORDS` 停用词表（范围词/方位词/机构职务词/
+     商品描述高频身体部位词，按"候选以停用词结尾"判定）；候选走既有
+     "精确等值→零命中转澄清"链路，`_resolve_enum_component_filter` 未改动
+2. `tests/query/planner/test_query_plan.py`：新增 5 条内核测试（宁波裸值
+   反查命中、泛泰克品牌型名命中、近7天孵化部时间词剥离后命中、魔法部转
+   澄清 T5-3 回归锚点、"全部渠道"停用词不误伤）
+3. `tests/skills/test_component_filter_resolution.py`：新增 4 条
+   BOTH_VERSIONS（skill+kernel 双版本）同场景测试
+4. `tests/skills/test_dataset_query_planner.py`：新增 `_patch_component_enum`
+   辅助函数并替换 4 处枚举 mock——dept 开启反查后进入
+   `_batch_enum_reverse_lookup_fields` 批量枚举入口
+   `_auto_enum_component_field_group`，原测试只 mock 逐字段入口会走真实
+   subprocess + 本地缓存降级，结果随本机缓存漂移（违反铁律8）
+5. `opscli/skills/templates/ops-dataset-query/data/VERSION.json` 与
+   SKILL.md frontmatter：1.3.22 → 1.3.23（两处同步为既有惯例）
+
+**验证结果**：
+- TDD 红态验证：先写测试后实现，实现前 4 条新测试按预期失败
+  （魔法部为 planned 而非 clarify_required 等）
+- `python3 -m pytest tests/query/planner/test_query_plan.py -v` → 38 passed
+- `python3 -m pytest tests/query/planner/ -q` → 106 passed（全绿基线保持）
+- `python3 -m pytest tests/skills/test_dataset_query_flow.py -q` → 8 passed
+- `python3 -m pytest tests/skills/test_component_filter_resolution.py tests/skills/test_dataset_query_planner.py -q` → 全绿（后者 72 passed 且不再发起真实枚举 subprocess）
+- tests/skills 全量（junitxml 统计）：648 tests / 8 failures，与既有基线
+  8 个预存失败完全一致（install 模板版本断言、dashboard 元数据、feedback
+  frontmatter、xlsx 预览，均与本次无关）
+- tests/query 全量：4 个 intent 上报失败已用 `git stash` 对比确认为预存
+  （撤回本次改动后同样 4 failed）；tests/mcp（排除 shopify 收集错误）351 passed
+
+**影响范围**：数据集查询规划器的部门筛选识别路径。真实部门裸值提及从
+"静默全量"变为"枚举命中即锁定"；虚构带"部"后缀部门从"静默全量"变为
+澄清；每次含 dept 组件的规划多一次部门枚举（批量枚举按组件表合并 + 会话内
+缓存，成本与渠道/国家等既有反查字段同级）。已知残留：虚构的"组/团队/
+无后缀"部门名仍不可检测（用户已接受）；宽后缀候选的噪声前缀剥离不完备时
+会以略怪的候选回显转澄清，属 fail-closed，比静默全量安全。
+
+**回滚方式**：还原上述 5 组文件改动（`git checkout -- <files>` 或 revert
+对应提交）；版本号回退 1.3.23 → 1.3.22。

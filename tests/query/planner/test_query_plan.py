@@ -262,6 +262,70 @@ def test_component_enum_success_still_resolves_filter():
     assert {"field": "dept_name", "operator": "=", "value": "项目二部"} in filters
 
 
+# ── 部门筛选的枚举驱动识别（反查兜裸值 + 宽后缀候选转澄清）────────────────────
+#
+# 真实部门名形态任意（宁波/泛泰克/孵化部/经营管理团队），原有三条窄正则
+# 抽不到值时会被当成「没有筛选意图」直接放行——静默放大为全量查询。
+# 修法：dept_name 开启 reverse_lookup 用授权枚举原值反查原文兜住真实部门；
+# 再加一条宽后缀「X部」候选正则，候选枚举零命中时走既有 clarify 分支，
+# 拦住虚构部门（E2E T5-3「魔法部」静默全量的回归锚点）。
+
+# 当前账号授权的部门枚举：混合编号部门、无后缀地名部门、品牌型名与带后缀特殊名
+DEPT_ENUM_VALUES = ["项目二部", "项目九部", "宁波", "泛泰克", "孵化部"]
+
+
+def _resolve_dept(query: str) -> dict:
+    """用固定部门枚举跑一遍组件筛选解析。"""
+    return query_plan._resolve_component_filters(
+        _dept_contract(), query, lambda *_a, **_k: DEPT_ENUM_VALUES, auto_enum=True
+    )
+
+
+def test_bare_department_value_resolved_by_reverse_lookup():
+    """无后缀部门裸值（「宁波」）必须由授权枚举反查兜住，不得静默全量。"""
+    contract = _resolve_dept("近7天宁波的订单量")
+    assert contract["status"] == "planned"
+    filters = contract["execution_ref"]["query_template"]["filters"]
+    assert {"field": "dept_name", "operator": "=", "value": "宁波"} in filters
+
+
+def test_brandlike_department_value_resolved_by_reverse_lookup():
+    """品牌型无后缀部门名（「泛泰克」）同样由反查唯一锁定。"""
+    contract = _resolve_dept("近7天泛泰克的订单量")
+    assert contract["status"] == "planned"
+    filters = contract["execution_ref"]["query_template"]["filters"]
+    assert {"field": "dept_name", "operator": "=", "value": "泛泰克"} in filters
+
+
+def test_suffixed_department_after_time_words_resolves():
+    """宽后缀候选必须剥掉紧邻的时间词（「近7天孵化部」→「孵化部」）再等值匹配。"""
+    contract = _resolve_dept("近7天孵化部的订单量")
+    assert contract["status"] == "planned"
+    filters = contract["execution_ref"]["query_template"]["filters"]
+    assert {"field": "dept_name", "operator": "=", "value": "孵化部"} in filters
+
+
+def test_unknown_suffixed_department_requires_clarification():
+    """虚构部门「魔法部」不在授权枚举中：必须转澄清，不得静默放大为全量查询。
+
+    E2E T5-3 回归锚点：原先宽后缀形态抽不到候选，「魔法部」被当成没有
+    筛选意图直接放行，查询悄悄变成全部门口径。
+    """
+    contract = _resolve_dept("近7天魔法部的订单量")
+    assert contract["status"] == "clarify_required"
+    assert "query_template" not in contract["execution_ref"]
+    message = " ".join(contract["model_view"]["clarification_messages_zh"])
+    assert "魔法部" in message
+
+
+def test_generic_suffix_words_do_not_trigger_department_clarify():
+    """「全部」这类以「部」结尾的通用词在停用词表内，不得误判成部门候选。"""
+    contract = _resolve_dept("近7天全部渠道的订单量")
+    assert contract["status"] == "planned"
+    filters = contract["execution_ref"]["query_template"]["filters"]
+    assert not [item for item in filters if item.get("field") == "dept_name"]
+
+
 # ── 固定槽位多覆盖的强制披露（Task 8 内核镜像）────────────────────────────────
 #
 # Skill 版有同名端到端回归（tests/skills/test_dataset_query_planner.py），

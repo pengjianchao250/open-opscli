@@ -1189,6 +1189,26 @@ def test_time_scope_explicit_month_and_comparison_month_are_deterministic():
         assert scope["is_default"] is False
 
 
+def _patch_component_enum(monkeypatch, values: list) -> None:
+    """把逐字段枚举与批量枚举两个入口一起打桩，返回同一份枚举值。
+
+    为什么必须两个都打：dept_name 开启 reverse_lookup 后会进入
+    _batch_enum_reverse_lookup_fields 的批量枚举（_auto_enum_component_field_group），
+    只打逐字段入口时批量入口会发起真实 subprocess 并走本地缓存降级，
+    测试结果随本机缓存内容漂移（铁律8：测试不依赖真实网络）。
+    """
+    monkeypatch.setattr(
+        query_plan, "_auto_enum_component_values", lambda *_args, **_kwargs: values
+    )
+    monkeypatch.setattr(
+        query_plan,
+        "_auto_enum_component_field_group",
+        lambda _table_id, field_names, **_kwargs: {
+            name: values for name in field_names
+        },
+    )
+
+
 def test_sales_trend_prompt_selects_months_and_semantic_metric_aliases(
     tmp_path: Path, monkeypatch
 ):
@@ -1203,11 +1223,7 @@ def test_sales_trend_prompt_selects_months_and_semantic_metric_aliases(
         "parse",
         lambda query: original_parse(query, today=date(2026, 7, 23)),
     )
-    monkeypatch.setattr(
-        query_plan,
-        "_auto_enum_component_values",
-        lambda *_args, **_kwargs: ["项目二部", "九部", "项目九部"],
-    )
+    _patch_component_enum(monkeypatch, ["项目二部", "九部", "项目九部"])
 
     result = query_plan.build_model_query_plan(
         "即时综合数据集，项目二部，2026年6月按ASIN和产品名称分析销量、销售额、"
@@ -1256,11 +1272,7 @@ def test_sales_trend_prompt_auto_selects_compatible_instant_dataset(
         "parse",
         lambda query: original_parse(query, today=date(2026, 7, 23)),
     )
-    monkeypatch.setattr(
-        query_plan,
-        "_auto_enum_component_values",
-        lambda *_args, **_kwargs: ["项目二部", "九部", "项目九部"],
-    )
+    _patch_component_enum(monkeypatch, ["项目二部", "九部", "项目九部"])
 
     result = query_plan.build_model_query_plan(
         "项目二部，6月份BI即时销售趋势按ASIN/产品名称分析销量变化，"
@@ -1290,11 +1302,7 @@ def test_department_filter_auto_enum_uses_only_unique_exact_member(
     """9部/范泰克只能命中完整等值成员，禁止加入名称包含项。"""
     data_dir = tmp_path / "data"
     _write_sales_trend_metadata(data_dir)
-    monkeypatch.setattr(
-        query_plan,
-        "_auto_enum_component_values",
-        lambda *_args, **_kwargs: ["九部", "项目九部", "范泰克", "范泰克体系外"],
-    )
+    _patch_component_enum(monkeypatch, ["九部", "项目九部", "范泰克", "范泰克体系外"])
 
     cases = {
         "即时综合数据集，分析9部的数据，2026年6月销量": "九部",
@@ -1326,11 +1334,7 @@ def test_executor_rejects_removing_resolved_department_filter(
     """完整性合同必须把已解析部门筛选绑定到执行 payload，不能手工删掉。"""
     data_dir = tmp_path / "data"
     _write_sales_trend_metadata(data_dir)
-    monkeypatch.setattr(
-        query_plan,
-        "_auto_enum_component_values",
-        lambda *_args, **_kwargs: ["项目二部", "项目九部"],
-    )
+    _patch_component_enum(monkeypatch, ["项目二部", "项目九部"])
     plan = query_plan.build_model_query_plan(
         "即时综合数据集，项目二部，2026年6月销量",
         data_dir=data_dir,
