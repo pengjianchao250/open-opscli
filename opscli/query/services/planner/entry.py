@@ -427,6 +427,13 @@ def run_flow(
         and total is not None
         and total > len(rows)
         and isinstance(template, dict)
+        # 规划器把 NL 解析出的 TopN/排序行数限制（如"前3名"）直接写入了
+        # template["limit"]；此时 run_flow 形参 limit 虽为 None（Agent 未显式传
+        # --limit），但模板已有的 limit 是用户意图的一部分，必须与显式 limit
+        # 同等尊重——否则 auto-complete 会把它当成"服务端默认分页"就地放大，
+        # 返回全量而不是用户要的前 N 条。只有模板本身也未下发 limit 时才允许
+        # auto-complete 介入补齐服务端默认分页。
+        and template.get("limit") is None
     ):
         template["limit"] = min(total, _AUTO_COMPLETE_LIMIT_CAP)
         plan_integrity.attach(contract)

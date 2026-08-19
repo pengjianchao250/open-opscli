@@ -104,7 +104,12 @@ def test_run_flow_executes_template_when_planned(monkeypatch):
     assert "execution_notes" not in out
 
 
-def _planned_with_template():
+def _planned_with_template(limit: int | None = None):
+    """构造 status=planned 的规划合同桩数据。
+
+    limit 参数用于模拟规划器 NL 解析（如"前3名"）已经把行数限制写入
+    query_template 的场景；默认 None 保持原有「模板未下发 limit」用例不变。
+    """
     return {
         "contract": "query_plan_model_contract_v2",
         "query_mode": "dataset_query",
@@ -116,7 +121,7 @@ def _planned_with_template():
                 "metrics": [],
                 "filters": [],
                 "orderBy": None,
-                "limit": None,
+                "limit": limit,
             }
         },
     }
@@ -375,6 +380,47 @@ def test_run_flow_auto_completes_server_default_page(monkeypatch):
             "行数较大时建议携带 --result-dir 落盘并只读预览。"
         ),
     }
+
+
+def test_run_flow_auto_complete_does_not_override_template_limit(monkeypatch):
+    """规划器 NL 解析进模板的 limit（如"前3名"）不得被 auto-complete 放大覆盖。
+
+    复现链（终审实证）：规划器把"订单量前3名的渠道"解析进 template limit=3，
+    Agent 未显式传 --limit（run_flow 形参 limit=None）。修复前 auto-complete
+    条件只查形参 limit is None，未查 template 是否已有 limit，会把 3 就地放大
+    为 min(total, CAP)，返回全量而非用户要的前 3 名。修复后需新增
+    template.get("limit") is None 前置：模板已有 limit 时视为「用户意图已锁定
+    分页」，与显式 --limit 同等尊重，不触发 auto-complete。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template(limit=3))
+    calls: list[int | None] = []
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            calls.append(execution_ref["query_template"].get("limit"))
+            # 首查即返回按模板 limit=3 截断后的结果，总行数 10（服务端还有更多）
+            return {
+                "data": {
+                    "result": {
+                        "data": [{"asin": f"A{i}"} for i in range(3)],
+                        "meta": {"totalCount": 10},
+                    }
+                }
+            }
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+
+    # 只执行一次，模板 limit 全程保持 3，不被 auto-complete 放大重查
+    assert calls == [3]
+    assert len(out["result"]["data"]["result"]["data"]) == 3
+    assert out["result_disclosures"]["auto_complete_applied"] is False
+    assert out["result_disclosures"]["row_count_returned"] == 3
+    assert out["result_disclosures"]["total_count"] == 10
+    # truncated=True 属实（服务端总行数确实大于本次返回），但不能是
+    # auto-complete 造成的假全量、也不应出现服务端分页兜底类披露
+    assert out["result_disclosures"]["truncated"] is True
+    assert "server_paging" not in out["result_disclosures"]
+    assert "order_fallback" not in out["result_disclosures"]
 
 
 def test_flow_order_by_local_resort_when_server_ignores(monkeypatch):

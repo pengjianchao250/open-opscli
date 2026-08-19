@@ -1,5 +1,74 @@
 # 待归档变更记录
 
+## 2026-08-19 query/skills - 终审三修：降级决策树消歧、TopN 条款纠偏、auto-complete 尊重模板 limit
+
+**变更原因**：规划器优化推进终审发现三处问题——① `ops-dataset-query` SKILL.md
+frontmatter（:11）、备选执行通道段（:43）、降级触发表「命令不可用」行（:165-173）
+三处对「opscli 不可用」的处置口径互相矛盾（有的说直接降级、有的说先转备选脚本
+通道），且未区分"命令无法启动"（应换通道）与"命令返回业务错误"（应按降级表
+既有行处置）；② SKILL.md:110 与 references/cli.md:39 断言"规划器不会把
+'前N名'/'按X排序'解析进 query_template"，但终审实跑证伪：`_resolve_order_and_limit`
+（`opscli/query/services/planner/query_plan.py:1330`）在"按ACOS降序排列，只要
+前5行"→limit=5、"订单量前3名的渠道"→limit=3 时确实解析成功，只是部分表述（如
+"订单量前3"，无"名/行/条"等单位词）不解析，文档的"不会解析"是绝对化的错误断言；
+③ `entry.py:424` 的 auto-complete 触发条件只查 `run_flow` 形参 `limit is None`，
+未查 `template.get("limit")`，导致规划器把"前3名"解析进 template limit=3 后，
+只要 Agent 未显式传 `--limit`，auto-complete 就会把 3 就地放大为
+`min(total, _AUTO_COMPLETE_LIMIT_CAP)`，返回全量而非用户要的前 3 条——NL 解析出
+的模板 limit 与用户显式 limit 理应同等尊重，不该被"服务端默认分页补齐"逻辑覆盖。
+
+**改动点**：
+- `[CHANGE_CLASS]` 无（模块级函数/纯文档）
+- `[CHANGE_METHOD]` `opscli/query/services/planner/entry.py::run_flow`
+  - auto-complete 触发条件新增 `template.get("limit") is None` 前置判断，
+    并加中文注释说明"规划器 NL 解析出的 TopN/排序行数限制必须与显式 limit
+    同等尊重，否则会被就地放大成全量"
+- `opscli/skills/templates/ops-dataset-query/SKILL.md`
+  - frontmatter description（:10-16）、「构造与执行」规则 1（:110）、
+    「备选执行通道」段（:47）、「命令不可用」降级触发表前的说明段（:169）、
+    降级触发表「命令不可用」行（改名为「两条执行通道均无法启动」，:175）：
+    统一为同一条决策链——opscli 命令无法启动（command not found/未安装/
+    不在 PATH/依赖导入失败等命令级环境异常）时先转备选执行通道
+    `python3 scripts/query_flow.py`；命令能启动但返回业务错误（如一体化
+    入口 `success=false`/`status=flow_error`）不切换通道，按降级触发表
+    「一体化入口自身报错」行处置；两条执行通道都无法启动才转规划器降级路径。
+    三处核心决策链文案逐字一致（已用脚本比对确认三次出现完全相同字符序列）
+  - 「构造与执行」规则 1（:110）TopN/排序例外条款：由"规划器当前不会解析"
+    改为"NL 解析不可依赖（部分表述能解析、部分不能）"，并补充"显式参数会
+    覆盖模板同名值"
+- `opscli/skills/templates/ops-dataset-query/references/cli.md`（:39）：
+  同步改为准确表述，并纠正原示例误导——"近7天各渠道订单量前3"因缺
+  "名/行/条"等单位词、实测不解析，改为用会解析的例句（"按ACOS降序排列，
+  只要前5行"、"订单量前3名的渠道"）作对照说明
+- `tests/query/planner/test_entry.py`：
+  - `_planned_with_template` 增加可选 `limit` 参数（默认 `None`，不影响既有
+    用例），用于构造"规划器已解析出 limit"的桩数据
+  - 新增 `test_run_flow_auto_complete_does_not_override_template_limit`：
+    template limit=3、run_flow 形参 limit=None、首查 3 行 total=10，断言
+    只查询一次（不触发 auto-complete）、返回恰 3 行、
+    `auto_complete_applied=False`、无 `server_paging`/`order_fallback`
+    类披露
+
+**验证结果**：
+```
+python3 -m pytest tests/skills/test_dataset_query_flow.py tests/query/planner/ -q
+```
+109 passed（8 + 101，含新增回归用例），无失败。另单独验证
+`_resolve_order_and_limit("按ACOS降序排列，只要前5行", ...)` →
+`limit=5`，`_resolve_order_and_limit("订单量前3名的渠道", ...)` → `limit=3`，
+`_resolve_order_and_limit("近7天各渠道订单量前3", ...)` → `(None, None, '')`，
+文档新表述与实测行为一致。
+
+**影响范围**：`opscli query flow` / `python3 scripts/query_flow.py` 主线在
+NL 解析出 TopN/排序意图且 Agent 未显式传 `--limit` 时的返回行数（修复前会被
+auto-complete 静默放大成全量）；SKILL.md/cli.md 为纯文档消歧，不影响运行时
+行为，仅影响 Agent 对降级路径的判断准确性。
+
+**回滚方式**：`git revert` 本次提交；`entry.py` 单独回滚只需删除
+`and template.get("limit") is None` 一行前置条件。
+
+---
+
 ## 2026-08-19 query - 内核 flow 补齐币种与原始 limit 披露（Task K4b）
 
 **变更原因**：K4 金样对照发现内核 `run_flow` 相比 skill `run_query.py` 主线缺两个

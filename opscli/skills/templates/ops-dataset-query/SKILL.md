@@ -7,8 +7,12 @@ description: >
   一体化流程 opscli query flow "<用户请求>"（内部只规划一次；单币种执行一次，
   多币种按币种分别调用取数服务；
   规划器按 30 秒命令窗口设计，返回 refresh_in_progress 时按其 recovery_command
-  等待重跑即可，禁止自行升级）；只有规划器客观不可用（澄清/阻断、命令报错重跑仍失败、
-  命令窗口连续超时、opscli 命令不可用）时才转 SKILL.md 的降级路径；
+  等待重跑即可，禁止自行升级）；opscli 命令无法启动（command not found、未安装、
+  不在 PATH、依赖导入失败等命令级环境异常）时先转备选执行通道
+  python3 scripts/query_flow.py；命令能启动但返回业务错误（如一体化入口
+  success=false/status=flow_error 等）不切换通道，按降级触发表「一体化入口自身
+  报错」处置；两条执行通道都无法启动才转规划器降级路径（规划器澄清/阻断、命令报错
+  重跑仍失败、命令窗口连续超时同样转 SKILL.md 的降级路径）；
   任何路径都禁止凭记忆手拼查询参数或使用未经元数据核对的字段。
 version: 1.3.22
 ---
@@ -40,7 +44,7 @@ opscli query flow "$USER_REQUEST" --result-dir "$RESULT_DIR"
 
 `--result-dir` 必须显式传入：内核入口只有传了该参数才会把全量结果落盘并把返回体中的结果收窄为预览行，不传则不做截断，大结果集会原样进入返回体、撑爆上下文。万一漏传且行数超过 20 行，`result_disclosures` 会出现 `large_result_warning_zh` 兜底提示，看到该键必须原样重跑并补上 `--result-dir`，不能忽略。
 
-**备选执行通道（`opscli` 命令级环境异常时，保留一个版本周期后另行下线）**：若 `opscli` 命令本身不可用（未安装、不在 PATH、执行报错等命令级环境异常，区别于下方「规划器不可用时的降级路径」的业务性降级），改用 Skill 自带脚本执行同一次规划与查询：
+**备选执行通道（保留一个版本周期后另行下线）**：opscli 命令无法启动（command not found、未安装、不在 PATH、依赖导入失败等命令级环境异常）时先转备选执行通道 python3 scripts/query_flow.py；命令能启动但返回业务错误（如一体化入口 success=false/status=flow_error 等）不切换通道，按降级触发表「一体化入口自身报错」处置；两条执行通道都无法启动才转规划器降级路径。具体执行如下，改用 Skill 自带脚本执行同一次规划与查询：
 
 ```bash
 python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"
@@ -107,7 +111,7 @@ Excel 的格式、明细、口径页与校验按 `references/chart-excel-guide.m
 
 ## 构造与执行
 
-1. CLI 查询参数由规划器生成并由一体化入口原样执行；Agent 不再参与拼参。降级态下参数只能取自 `execution_ref.fallback_catalog` 或 `local_fallback.py` 候选目录，仍禁止凭记忆手拼。MCP 字段只采用当前数据集 metadata。**TopN/排序语义显式例外**：规划器当前不会把"前N名"/"按 X 排序"等 TopN、排序、限定行数类语义解析进 `query_template`（`orderBy`/`limit` 会是 `null`），本条"不再参与拼参"针对的是 `query_template` 内部字段（`dimensions`/`metrics`/`filters`/时间范围等），**不包含** `opscli query flow` 命令行自身的执行参数——Agent 识别到用户请求含 TopN/排序/限定行数意图时，必须显式在命令上追加 `--limit <N>` 和/或 `--order-by <结果字段>[:asc|desc]`（参数形态与示例见 `references/cli.md`），这不属于拼参违规；未识别到该类明确意图时不得凭空追加这两个参数。
+1. CLI 查询参数由规划器生成并由一体化入口原样执行；Agent 不再参与拼参。降级态下参数只能取自 `execution_ref.fallback_catalog` 或 `local_fallback.py` 候选目录，仍禁止凭记忆手拼。MCP 字段只采用当前数据集 metadata。**TopN/排序语义显式例外**：规划器对 TopN/排序语义的 NL 解析**不可依赖**（部分表述能解析、部分不能——如"按ACOS降序排列，只要前5行"能解析出 `orderBy`/`limit`，但并非所有表述都能唯一确定排序字段/行数，未解析时 `orderBy`/`limit` 会是 `null`），本条"不再参与拼参"针对的是 `query_template` 内部字段（`dimensions`/`metrics`/`filters`/时间范围等），**不包含** `opscli query flow` 命令行自身的执行参数——Agent 识别到用户请求含 TopN/排序/限定行数意图时，必须显式在命令上追加 `--limit <N>` 和/或 `--order-by <结果字段>[:asc|desc]`（参数形态与示例见 `references/cli.md`），这不属于拼参违规；显式参数会覆盖模板同名值。未识别到该类明确意图时不得凭空追加这两个参数。
 2. 不发明默认筛选。未指定筛选时只说明 `current_authenticated_account` 可见范围；明确筛选必须先经组件枚举——平台走规划结果的自动枚举/`platform_enum_command`，部门/国家等其他筛选用 `execution_ref.filter_components` 中对应组件的 `component_table_id` 查枚举，并严格遵守 `execution_ref.filter_value_match_policy`：先做规范化完整等值比较，部门名称额外允许阿拉伯数字与中文数字等价；唯一等值命中时只使用该枚举原值并直接执行，禁止再次询问用户是否采用，也禁止把仅包含请求文本的其他成员一并加入（`9部` 只匹配 `九部`，不匹配 `项目九部`；`范泰克` 只匹配 `范泰克`，不匹配 `范泰克体系外`）。无唯一等值命中时停止并让用户重选，不得用子串模糊扩展；组件不可用时只阻断该筛选，不扩大范围。
 3. 环比、同比和上期对比必须同时传主周期日期 `filters` 与 `dataComparison`（模板已按 `time_scope` 预填，执行器也会硬校验）。
 4. **执行确认分级**：数据集、字段、时间、筛选、排序、行数全部无歧义时，用一段中文陈述式披露口径后**直接执行，不等待用户回复**；只有 `clarify_required`、默认时间口径未确认、或含 `recommended` 字段未说明时才通过提问等待确认。
@@ -162,6 +166,8 @@ MCP-only（无本地 shell）、复杂审计或用户明确要求完整披露证
 
 规划器是**优先路径而非唯一路径**：命中下表任一**客观失败**条件才进入降级，其余情况一律走一体化入口。降级态同样**不要自行编造数据集或字段**。合同里的 `model_view.fallback_level`、`model_view.no_guess_policy_zh` 与 `execution_ref.fallback_catalog` 会指明当前处在哪一层。
 
+「命令不可用」必须区分两种性质不同的失败，处置路径不同：opscli 命令无法启动（command not found、未安装、不在 PATH、依赖导入失败等命令级环境异常）时先转备选执行通道 python3 scripts/query_flow.py；命令能启动但返回业务错误（如一体化入口 success=false/status=flow_error 等）不切换通道，按降级触发表「一体化入口自身报错」处置；两条执行通道都无法启动才转规划器降级路径，即计入下表「两条执行通道均无法启动」行。
+
 ### 降级触发条件（满足其一即可降级）
 
 | 触发条件 | 判断依据 |
@@ -170,7 +176,7 @@ MCP-only（无本地 shell）、复杂审计或用户明确要求完整披露证
 | 一体化入口自身报错 | 主线 `opscli query flow` 返回 `success=false`（`error.code`/`error.message`）或非零退出码，原样重跑一次仍报同一错误；备选通道 `query_flow.py` 报错口径为 `status=flow_error` 或退出码 2 |
 | 规划器不可重试地异常退出 | 备选通道 `query_plan.py` exit 2 且错误 JSON `retryable=false`、`next_action_zh` 无可执行动作；主线 `opscli query plan` 无独立 `retryable` 标记，按上一行「一体化入口自身报错」同一判据处置 |
 | 命令窗口连续超时 | 同一请求原样重跑后仍在 30 秒窗口内无返回，累计 3 次 |
-| 命令不可用 | 主线：`opscli` 命令缺失、无法执行或依赖导入失败；备选通道：无 `python3`、Skill 脚本缺失或依赖导入失败；规划器根本跑不起来 |
+| 两条执行通道均无法启动 | 主线 `opscli` 命令缺失、无法执行或依赖导入失败，**且**备选通道无 `python3`、Skill 脚本缺失或依赖导入失败——两条通道都无法启动才降级；仅主线无法启动时先转备选通道 `python3 scripts/query_flow.py`，不直接降级 |
 
 **不构成降级理由**：0 行结果、用户取消、预期内的未登录（按「纠错与反馈」处置）、主观觉得规划器不合适、想省一次工具调用。降级路径的最终回答必须说明本次取数走的是降级路径以及原因。
 

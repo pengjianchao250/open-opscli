@@ -36,7 +36,7 @@ opscli query flow "近7天各渠道订单量前3" \
   --result-dir /tmp/opscli-query-results --pretty
 ```
 
-规划器当前不解析"前N名"/"按 X 排序"类语义进 `query_template`（`orderBy`/`limit` 会是 `null`）；这两个 CLI 参数是 SKILL.md「构造与执行」规则 1 显式列出的例外，识别到 TopN/排序/限定行数意图时必须像上面这样手动追加，不属于"拼参"违规（详见该规则）。
+规划器对 TopN/排序语义的 NL 解析**不可依赖**（部分表述能解析、部分不能——如"按ACOS降序排列，只要前5行"能解析出 `orderBy`/`limit=5`，"订单量前3名的渠道"能解析出 `limit=3`，但上面示例这类不带"名/行/条"等单位的"前3"就不能唯一解析，未解析时 `orderBy`/`limit` 会是 `null`）；这两个 CLI 参数是 SKILL.md「构造与执行」规则 1 显式列出的例外，识别到 TopN/排序/限定行数意图时必须像上面这样手动追加，不属于"拼参"违规（详见该规则）；显式参数会覆盖模板同名值。
 
 若 `opscli` 命令本身不可用（命令级环境异常，非规划器业务性降级），改用 Skill 自带的备选执行通道 `python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"`（详见 SKILL.md），返回结构不同（顶层直接是 `status`/`disclosures`/`preview_rows`/`evidence_contract`，不经 `data` 包裹）。
 
