@@ -186,9 +186,27 @@ def test_manager_uploads_export_to_keepa_export_folder(monkeypatch, tmp_path: Pa
     assert result.warnings == []
 
 
-def test_manager_writes_formatted_json_export_when_requested(monkeypatch, tmp_path: Path):
+def test_manager_writes_original_response_json_export_when_requested(monkeypatch, tmp_path: Path):
+    class NestedProductClient(DummyKeepaClient):
+        async def get_json(self, endpoint, params):
+            self.__class__.requests.append({"endpoint": endpoint, "params": params})
+            return {
+                "timestamp": 2000,
+                "tokensLeft": 49,
+                "tokensConsumed": 1,
+                "products": [
+                    {
+                        "asin": "B0088PUEPK",
+                        "title": "Test Product",
+                        "stats": {"current": [1299]},
+                        "offers": [{"offerId": "offer-1", "offerCSV": [1, 1299]}],
+                    }
+                ],
+            }
+
     DummyKeepaClient.requests = []
-    monkeypatch.setattr(api_manager_module, "KeepaApiClient", DummyKeepaClient)
+    NestedProductClient.requests = []
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", NestedProductClient)
     monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
     settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
     manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
@@ -208,20 +226,19 @@ def test_manager_writes_formatted_json_export_when_requested(monkeypatch, tmp_pa
     export_path = tmp_path / "keepa-json-regression" / "keepa-json-regression.json"
     payload = json.loads(export_path.read_text(encoding="utf-8"))
 
-    assert DummyKeepaClient.requests
+    assert NestedProductClient.requests
     assert result.export is not None
     assert result.export.path == str(export_path.resolve())
     assert result.export.format == "json"
-    assert payload["sheets"]["Sheet1"]["columns"][:3] == [
-        "ASIN",
-        "标题",
-        "最近更新(Keepa分钟)",
+    assert payload["schema_version"] == "2.0"
+    assert payload["scenario"] == "product"
+    assert payload["site"] == "US"
+    assert payload["response"]["products"][0]["stats"] == {"current": [1299]}
+    assert payload["response"]["products"][0]["offers"] == [
+        {"offerId": "offer-1", "offerCSV": [1, 1299]}
     ]
-    assert payload["sheets"]["Sheet1"]["rows"][0][:3] == [
-        "B0088PUEPK",
-        "Test Product",
-        7588958,
-    ]
+    assert "tokensLeft" not in payload["response"]
+    assert "tokensConsumed" not in payload["response"]
 
 
 def test_product_finder_formats_search_insights_sheets(monkeypatch, tmp_path: Path):

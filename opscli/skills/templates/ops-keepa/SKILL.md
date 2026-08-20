@@ -31,13 +31,14 @@ description: Use when the user asks to query or export Keepa data through the pu
 | 多个任务，Skill/Agent 要汇总、计算或生成报告 | `json` | 每个任务显式传 `--export-format json`，完成后再合并分析 |
 | 用户明确指定格式 | 用户指定格式 | 不用默认推荐覆盖用户选择 |
 
-JSON 与格式化后的 XLSX 共用表头、字段转换、列顺序和附加 Sheet 数据。读取时：
+JSON 与 XLSX 使用不同的详情合同。读取 JSON 时：
 
-1. 校验 `schema_version="1.0"`，再按 `sheets` 中 `Sheet1`、`Sheet2` 的顺序读取。
-2. 把每个 `SheetN` 当作一个 XLSX 工作表，不要把它误解为 Keepa API 的分页；真实表名读取 `name`。
-3. 按 `columns[index]` 解释 `rows[*][index]`，不要先把行数组猜成对象；`row_count` 用于校验实际行数。
-4. 多任务分析时保留 `job_id + SheetN + name` 的来源关系，合并前按列名对齐；不要只读取 `Sheet1` 而遗漏价格历史、Offer、变体或 search insights 等附加表。
-5. 不要把内部 `raw.json`、`result.json` 或服务端路径作为用户导出文件返回；原始字段核对仍以内部 `raw.json` 为准。
+1. 校验 `schema_version="2.0"`，并读取顶层 `scenario`、`site` 和 `response`。
+2. `response` 保留 Keepa 原始业务字段、数组和嵌套对象；直接按对象字段遍历，不按 `columns + rows` 重建。
+3. 公开 JSON 会移除 `tokensLeft`、`tokensConsumed`、`refillIn`、`refillRate`、`tokenFlowReduction` 等账号额度字段。
+4. 多任务分析时保留 `job_id + scenario + site` 来源，再按各场景的响应主字段合并。
+5. MCP `data_preview` 只用于快速确认结果，最多含少量白名单字段；完整详情必须读取 `export.url` 对应的 JSON/XLSX 文件。
+6. 不要把内部 `raw.json`、`result.json` 或服务端路径作为用户导出文件返回；需要核对请求、状态和完整内部响应包装时仍以 `raw.json` 为准。
 
 示例：
 
@@ -174,5 +175,5 @@ opscli keepa run bestsellers --site US --params '{"category":"172282"}'
 - `keepa_scenarios`、`keepa_quota_status`、`keepa_job_status`、`keepa_export` 不消耗额度；只有 `keepa_run` 消耗次数。
 - `job_status` 和 `export` 默认不重复提示额度，避免轮询阶段重复刷屏。
 - 如果 `row_count=0`，明确告诉用户无匹配结果，并提醒核对站点、ASIN、关键词或筛选条件
-- 用户问“字段准不准”时，说明 XLSX/JSON 都是在 Keepa 原始响应基础上做同源中文表头和可读化处理；口径以 Keepa 原始响应和官方文档为准
+- 用户问“字段准不准”时，说明 JSON 保留 Keepa 原始业务结构，XLSX 在相同响应基础上生成中文字段、可读派生值和多 Tab 明细；口径以 Keepa 原始响应和官方文档为准
 - 不要主动打印 Keepa token 消耗、token 余额、服务器本地路径或内部原始 JSON

@@ -32,7 +32,7 @@ from opscli.keepa.domain.models import (
     KeepaScenarioRequest,
     KeepaScenarioResult,
 )
-from opscli.keepa.export import export_rows_to_json, export_rows_to_xlsx
+from opscli.keepa.export import export_response_to_json, export_rows_to_xlsx
 from opscli.keepa.lightning_deal_formatter import (
     FormattedLightningDealExport,
     format_lightning_deal_export,
@@ -266,15 +266,22 @@ class KeepaApiManager:
         data = primary_rows if primary_rows is not None else add_keepa_time_conversions(raw_rows)
         export_rows = primary_rows if primary_rows is not None else raw_response_to_export_rows(raw_response)
         extra_sheets = formatted.extra_sheets()
-        exporter = export_rows_to_json if export_format == "json" else export_rows_to_xlsx
-        export = exporter(
-            rows=export_rows,
-            output_path=root_dir / f"{job_id}.{export_format}",
-            scenario=request.scenario,
-            site=site,
-            params=request.params,
-            extra_sheets=extra_sheets,
-        )
+        if export_format == "json":
+            export = export_response_to_json(
+                response=raw_response,
+                output_path=root_dir / f"{job_id}.json",
+                scenario=request.scenario,
+                site=site,
+            )
+        else:
+            export = export_rows_to_xlsx(
+                rows=export_rows,
+                output_path=root_dir / f"{job_id}.xlsx",
+                scenario=request.scenario,
+                site=site,
+                params=request.params,
+                extra_sheets=extra_sheets,
+            )
         _upload_export_if_enabled(
             export=export,
             job_id=job_id,

@@ -1,4 +1,4 @@
-"""把 Keepa 格式化工作表导出为支持 SheetN 分页的 JSON。"""
+"""把 Keepa 原始业务响应导出为保留嵌套结构的 JSON。"""
 
 from __future__ import annotations
 
@@ -7,42 +7,33 @@ from pathlib import Path
 from typing import Any
 
 from opscli.keepa.domain.models import KeepaExportResult
-from opscli.keepa.export.xlsx import build_formatted_worksheets
+
+_QUOTA_FIELDS = {
+    "tokensleft",
+    "tokensconsumed",
+    "refillin",
+    "refillrate",
+    "tokenflowreduction",
+}
 
 
-def export_rows_to_json(
+def export_response_to_json(
     *,
-    rows: list[Any],
+    response: dict[str, Any],
     output_path: Path,
     scenario: str,
     site: str = "US",
-    params: dict[str, Any] | None = None,
-    extra_sheets: dict[str, list[Any]] | None = None,
 ) -> KeepaExportResult:
-    """按场景把主表与附加表导出为 SheetN JSON，返回文件路径、格式和 MIME 元数据。"""
-    sheets: dict[str, dict[str, Any]] = {}
-    worksheets = build_formatted_worksheets(
-        rows=rows,
-        scenario=scenario,
-        site=site,
-        params=params,
-        extra_sheets=extra_sheets,
-    )
-    for index, worksheet in enumerate(worksheets, start=1):
-        sheets[f"Sheet{index}"] = {
-            "name": worksheet.name,
-            "columns": [column.title for column in worksheet.columns],
-            "row_count": len(worksheet.rows),
-            "rows": list(worksheet.iter_values()),
-        }
-
+    """导出 Keepa 原始业务响应，同时移除仅供内部额度管理使用的字段。"""
+    payload = {
+        "schema_version": "2.0",
+        "scenario": scenario,
+        "site": site,
+        "response": _without_quota_fields(response),
+    }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        json.dumps(
-            {"schema_version": "1.0", "sheets": sheets},
-            ensure_ascii=False,
-            indent=2,
-        ),
+        json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     resolved = output_path.resolve()
@@ -53,3 +44,16 @@ def export_rows_to_json(
         format="json",
         mime_type="application/json",
     )
+
+
+def _without_quota_fields(value: Any) -> Any:
+    """递归复制响应，避免公开导出携带 Keepa 账号额度信息。"""
+    if isinstance(value, list):
+        return [_without_quota_fields(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: _without_quota_fields(item)
+        for key, item in value.items()
+        if str(key).casefold() not in _QUOTA_FIELDS
+    }

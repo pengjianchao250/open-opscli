@@ -68,6 +68,14 @@
 - 该 ASIN 的 7 条 Offer `couponHistory` 均为无优惠值 `0`；真实验证覆盖时间序列结构，无优惠分支通过，正数金额/负数百分比语义继续由脱敏固定测试覆盖。
 - 原始响应和验证 XLSX 仅保存于仓库外 `D:\Gitlab\.keepa-validation`，未写入 Git。
 
+### 0.5 MCP 摘要与详情导出边界（2026-08-20）
+
+- MCP `data` 不再随结果行数变化而返回完整对象；即使只有单个 Product，也只返回最多 5 行的标识字段摘要，避免 Offer、Statistics 和历史数组进入 Agent 上下文。
+- 完整详情统一通过 `export.url` 读取。XLSX 继续把数组和多行结构拆成独立 Tab，适合人工查看；JSON 升级为 v2，直接在 `response` 中保留 Keepa 原始业务字段、数组和嵌套对象。
+- JSON v2 公开导出移除 `tokensLeft`、`tokensConsumed`、`refillIn`、`refillRate` 和 `tokenFlowReduction` 等账号额度字段；请求参数、前后状态和完整内部包装仍只保存在 `raw.json`。
+- 采集沉淀 Parser 升级为 `keepa-v4`，继续兼容历史 JSON v1 `sheets`，并可把 JSON v2 `response` 的主对象作为保留嵌套值的 Dataset 解析。
+- Graph Image 和 Tracking 仍不提供 MCP 访问，本轮只完善现有 JSON Endpoint 的返回与导出边界。
+
 以下第 1-6 节保留实施前调研问题及决策依据；当前状态以本节和 `opscli/keepa/reference/FORMATTERS_STATUS.md` 为准。
 
 ## 1. 实施前结论摘要
@@ -93,7 +101,7 @@ Keepa 新版官方文档目前列出 **13 个 Endpoint**、**12 类 Response obj
 | 原始响应保留 | Keepa 返回的 JSON 可完整追溯 | `KeepaApiManager.run()` 把原始响应写入 `raw.json`；未知对象不会先被模型裁剪 |
 | Response object 友好格式化 | 对象字段按业务语义展开，包含金额、时间、嵌套子表、列名或派生字段 | 独立 formatter + `KeepaApiManager` 显式接入 + 测试 |
 
-“Endpoint 已支持”不等于其所有官方参数都已暴露；“原始响应保留”也不等于 XLSX/格式化 JSON 已可直接分析。
+“Endpoint 已支持”不等于其所有官方参数都已暴露；“原始响应保留”也不等于 XLSX 已按业务语义完成格式化。
 
 ## 3. Endpoint 支持矩阵
 
@@ -165,7 +173,7 @@ Keepa 新版官方文档目前列出 **13 个 Endpoint**、**12 类 Response obj
 - 每个对象有独立 formatter 或明确声明复用哪个 formatter。
 - 嵌套数组/字典进入独立 sheet，不被截断在单个 Excel 单元格中。
 - Keepa Time、Unix 时间、金额最小单位、百分比、枚举和值为 `-1` 的缺失语义统一处理。
-- formatter 同时驱动 XLSX 和格式化 JSON，避免两套字段合同漂移。
+- formatter 只驱动 XLSX 主表和明细 Tab；JSON 独立保留原始业务响应，避免数组和嵌套对象因表格化而丢失结构。
 - 每个对象至少有官方示例/固定 fixture 的字段保留、列顺序、嵌套表和空值测试。
 - `raw.json` 继续作为不可变追溯源；友好格式化只新增派生字段，不覆盖官方原字段。
 

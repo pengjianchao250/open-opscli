@@ -1,6 +1,6 @@
 # Keepa 格式化实现状态
 
-本目录中的 `*_FORMATTING.md` 记录 Keepa Response Object 的格式化合同。`raw.json` 始终保留完整原始响应；XLSX 和格式化 JSON 共用同一组主表/明细表。
+本目录中的 `*_FORMATTING.md` 记录 Keepa Response Object 的 XLSX 格式化合同。`raw.json` 始终保留完整内部响应；JSON v2 保留原始业务字段和嵌套结构，只有 XLSX 把数组和历史序列拆成主表/明细 Tab。
 
 | 对象 | 状态 | 实现位置 | 默认导出行为 |
 | --- | --- | --- | --- |
@@ -38,7 +38,7 @@
 | `product_nested_values` | 尚无专用规则的新版嵌套字段，按 JSON path 展开标量叶子 |
 | `stats_stock_by_condition` | Statistics 的 FBA/FBM condition 库存长表 |
 
-未知字段继续保留在 `raw.json`。格式化层不会用截断后的 Excel 单元格替代原始数据。
+未知字段继续保留在 `raw.json` 和 JSON v2 的 `response` 中。公开 JSON 只移除账号额度字段；XLSX 格式化层不会用截断后的 Excel 单元格替代原始数据。
 
 ## 真实响应验证
 
