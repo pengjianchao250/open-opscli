@@ -537,6 +537,21 @@
           "description": "可直接填充的正式查询 payload 骨架（实测形态）",
           "type": "object"
         },
+        "query_templates": {
+          "description": "多币种请求的独立查询模板；每项只允许 globalCurrency 不同",
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object"
+          }
+        },
+        "requested_global_currencies": {
+          "description": "按用户表达顺序解析并去重的服务端查询币种",
+          "$ref": "#/$defs/string_array"
+        },
+        "currency_execution_contract_zh": {
+          "type": "string"
+        },
         "plan_integrity": {
           "description": "规划器生成的完整合同摘要；执行器据此拒绝被手工改写的计划",
           "type": "object",

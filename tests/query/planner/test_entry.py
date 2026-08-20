@@ -104,6 +104,72 @@ def test_run_flow_executes_template_when_planned(monkeypatch):
     assert "execution_notes" not in out
 
 
+def test_run_flow_executes_every_currency_template(monkeypatch, tmp_path):
+    """内核 flow 只规划一次，但必须逐币种执行并校验服务端实际返回币种。"""
+    from opscli.query.services.planner import plan_integrity
+
+    base = {
+        "tableId": 1,
+        "dimensions": [],
+        "metrics": [{"field": "sales_amount", "alias": "sales_amount"}],
+        "filters": [],
+        "orderBy": None,
+        "limit": None,
+    }
+    cny = {**base, "globalCurrency": "CNY"}
+    cad = {**base, "globalCurrency": "CAD"}
+    planned = {
+        "contract": "query_plan_model_contract_v2",
+        "query_mode": "dataset_query",
+        "status": "planned",
+        "model_view": {"dataset_name_zh": "即时综合数据集"},
+        "execution_ref": {
+            "query_template": cny,
+            "query_templates": [cny, cad],
+            "requested_global_currencies": ["CNY", "CAD"],
+        },
+    }
+    plan_integrity.attach(planned)
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: planned)
+    calls = []
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            template = execution_ref["query_template"]
+            calls.append(dict(template))
+            currency = template["globalCurrency"]
+            return {
+                "data": {
+                    "result": {
+                        "data": [{"sales_amount": currency}],
+                        "meta": {"totalCount": 1, "currency": currency},
+                    }
+                }
+            }
+
+    out = entry.run_flow(
+        "分别使用人民币和加拿大元查询近7天销售额",
+        user_email="u@x.com",
+        result_dir=tmp_path,
+        query_manager=_QM(),
+    )
+
+    assert [item["globalCurrency"] for item in calls] == ["CNY", "CAD"]
+    assert out["multi_currency"] is True
+    assert out["requested_global_currencies"] == ["CNY", "CAD"]
+    assert out["comparison_contract"]["service_queries_complete"] is True
+    assert out["comparison_contract"]["currency_validation_passed"] is True
+    assert [item["returned_currency"] for item in out["currency_results"]] == [
+        "CNY",
+        "CAD",
+    ]
+    assert all(item["currency_matches_request"] for item in out["currency_results"])
+    assert all(
+        item["result"]["result_disclosures"]["full_result_file"]
+        for item in out["currency_results"]
+    )
+
+
 def _planned_with_template(limit: int | None = None):
     """构造 status=planned 的规划合同桩数据。
 

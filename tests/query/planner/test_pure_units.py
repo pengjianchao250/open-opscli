@@ -7,6 +7,11 @@
 
 import json
 from importlib.resources import files
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SKILL_DATA = REPO_ROOT / "opscli/skills/templates/ops-dataset-query/data"
 
 
 def test_intent_rules_resource_loads():
@@ -27,6 +32,15 @@ def test_query_plan_schema_resource_loads():
     data = json.loads(raw)
     # JSON Schema 顶层应含类型或属性声明，确认非空且结构完整
     assert isinstance(data, dict) and data
+
+
+def test_skill_and_kernel_static_planning_resources_are_identical():
+    """双主线共享的意图规则和合同 Schema 必须逐字段一致，防止再次单边演进。"""
+    kernel_resources = files("opscli.query.services.planner.resources")
+    for name in ("intent_rules.json", "query_plan.schema.json"):
+        skill_data = json.loads((SKILL_DATA / name).read_text("utf-8"))
+        kernel_data = json.loads((kernel_resources / name).read_text("utf-8"))
+        assert kernel_data == skill_data, f"双主线静态资源漂移：{name}"
 
 
 def test_time_scope_relative_parse():

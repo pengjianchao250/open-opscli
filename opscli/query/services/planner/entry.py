@@ -3,7 +3,7 @@
 
 对外暴露两个统一入口，供 CLI（opscli query plan/flow）与 MCP（query_plan/query_flow）复用：
 - run_plan：自然语言请求 → query_plan_model_contract_v2（只规划不执行）。
-- run_flow：一体化——规划 + planned 时按 query_template 执行一次取数。
+- run_flow：一体化——只规划一次；单币种执行一次，多币种按 query_templates 逐项取数。
 
 数据源为后端 query-metadata（经用户级元数据缓存）。元数据未就绪时的刷新（refresh_fn）
 与平台/组件权限枚举（enum_fn）作为回调注入规划器，替代旧 Skill 的 subprocess 调用。
@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Sequence
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -367,12 +368,11 @@ def run_flow(
     result_dir: Path | None = None,
     query_manager: QueryManager | None = None,
 ) -> dict:
-    """一体化：规划 + planned 数据集查询时按 query_template 执行一次取数。
+    """一体化规划并执行；多币种请求只规划一次、逐币种独立取数。
 
     非 planned（clarify/blocked/chart_uuid 等）合同原样返回交调用方处置。
-    planned 时把 limit/order_by/offset 填入 query_template 再执行。未传 limit 且
-    服务端默认页少于 totalCount 时自动按总数补查一次（最多 5000 行），防止首页被
-    误当全量；用户显式传 limit/offset 时严格按用户分页口径执行。
+    单币种按 query_template 执行；多币种按 query_templates 顺序逐项执行，禁止
+    使用本地或外部汇率生成其他币种结果。
 
     Args:
         limit: 返回行数上限；不传时自动补齐服务端默认页（最多 5000 行）。
@@ -393,6 +393,94 @@ def run_flow(
     )
     if contract.get("query_mode") != "dataset_query" or contract.get("status") != "planned":
         return contract
+    execution_ref = contract.get("execution_ref") or {}
+    templates = execution_ref.get("query_templates")
+    if not isinstance(templates, list) or len(templates) < 2:
+        return _execute_planned_contract(
+            contract,
+            query_manager=qm,
+            limit=limit,
+            order_by=order_by,
+            offset=offset,
+            result_dir=result_dir,
+        )
+
+    # 多币种列表已经纳入规划摘要；拆分执行前先校验，防止任一币种或范围被改写。
+    if not plan_integrity.verify(contract):
+        raise ValueError("多币种规划完整性校验失败，请重新运行规划器")
+    currency_results: list[dict[str, Any]] = []
+    for template in templates:
+        if not isinstance(template, dict):
+            raise ValueError("多币种规划包含无效查询模板")
+        requested_currency = str(template.get("globalCurrency") or "").upper()
+        if not requested_currency:
+            raise ValueError("多币种规划模板缺少 globalCurrency")
+
+        # 子合同只保留当前币种模板并重新封存摘要，使单币种执行链的字段、分页、
+        # 排序、落盘与证据合同能力可以原样复用，不产生第二次规划。
+        child_contract = deepcopy(contract)
+        child_execution = child_contract["execution_ref"]
+        child_execution["query_template"] = deepcopy(template)
+        child_execution.pop("query_templates", None)
+        plan_integrity.attach(child_contract)
+        child_result_dir = (
+            result_dir / f"currency_{requested_currency.lower()}"
+            if result_dir is not None
+            else None
+        )
+        child_result = _execute_planned_contract(
+            child_contract,
+            query_manager=qm,
+            limit=limit,
+            order_by=order_by,
+            offset=offset,
+            result_dir=child_result_dir,
+        )
+        returned_currency = (child_result.get("result_disclosures") or {}).get("currency")
+        currency_results.append(
+            {
+                "requested_currency": requested_currency,
+                "returned_currency": returned_currency,
+                "currency_matches_request": returned_currency == requested_currency,
+                "result": child_result,
+            }
+        )
+
+    currency_validation_passed = all(
+        item["currency_matches_request"] for item in currency_results
+    )
+    return {
+        **contract,
+        "multi_currency": True,
+        "requested_global_currencies": [
+            str(item.get("globalCurrency") or "").upper() for item in templates
+        ],
+        "currency_results": currency_results,
+        "comparison_contract": {
+            "service_queries_complete": len(currency_results) == len(templates),
+            "currency_validation_passed": currency_validation_passed,
+            "comparison_ready": False,
+            "alignment_validation_required": currency_validation_passed,
+            "rules_zh": [
+                "实际币种只认各结果 result_disclosures.currency；与请求不一致时停止金额对比并披露差异。",
+                "读取各 full_result_file 后，先确认共同维度键和非金额指标一致，再按共同维度关联。",
+                "金额只使用对应币种的服务端查询结果；禁止外部汇率、模型汇率或本地换算。",
+            ],
+        },
+    }
+
+
+def _execute_planned_contract(
+    contract: dict,
+    *,
+    query_manager: QueryManager,
+    limit: int | None = None,
+    order_by: list[dict] | None = None,
+    offset: int | None = None,
+    result_dir: Path | None = None,
+) -> dict:
+    """执行一个已规划的单币种合同，并附加分页、排序、证据与落盘披露。"""
+    qm = query_manager
     execution_ref = contract.get("execution_ref") or {}
     template = execution_ref.get("query_template")
     if isinstance(template, dict):

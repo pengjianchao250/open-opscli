@@ -241,7 +241,7 @@ def flow(
     result_dir: str | None = typer.Option(None, "--result-dir", help="结果落盘目录，传入后全量结果写入该目录（query_result_<时间戳>.json），返回结果仅含预览行"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
-    """一体化：规划 + planned 时执行一次取数（输出合同 + 结果）。"""
+    """一体化：只规划一次；单币种执行一次，多币种逐项取数。"""
     try:
         text = _resolve_request(request, query_file)
         email = _current_email()

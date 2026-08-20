@@ -1,5 +1,34 @@
 # 待归档变更记录
 
+## 2026-08-20 query - 内核规划器币种合同迁移与双主线全量审计
+
+**变更原因**：`opscli query flow` 已切换到内核规划器，但 2026-08-04/12
+新增的单币种与多币种能力只落在 Skill 脚本路径，导致“使用欧元查询”在规划阶段
+静默丢失 `globalCurrency`，服务端收到无币种模板并返回未声明币种。
+**改动点**：先新增请求侧单币种、多币种、内核逐币种执行以及双主线 parity 的
+失败回归（parity 多币种用例显式锁定 SP 广告数据集以避免候选澄清干扰）；红态确认后已把币种识别、单模板 `globalCurrency` 注入、多币种模板生成
+迁入内核规划器，并给内核 Schema 补齐三项多币种合同字段；`entry.run_flow`
+现按完整性绑定的 `query_templates` 逐币种复用单模板执行链，分别保留分页、排序、
+证据、落盘与返回币种校验；同步修正 CLI、MCP、内核入口与 QUERY_SPEC 对
+`query_flow` “仅执行一次”的过期说明。完整审计报告继续按这些合同落地。
+新增静态资源对拍守卫，要求 Skill 与内核的 `intent_rules.json`、
+`query_plan.schema.json` 逐字段一致，阻止合同或规则再次单边演进。
+新增 `docs/analysis/ops-dataset-query双主线功能迁移审计与币种修复报告.md`，
+记录根因、已执行方案、逐模块迁移矩阵、保留差异及后续治理准则。
+提交前清理审计报告行尾空白，确保暂存差异检查通过。
+**验证结果**：定向 TDD 红态确认旧内核缺少币种合同，修复后定向 5/5 通过；
+规划器与相关 Skill 主线回归 344/344 通过；Ruff 与 `git diff --check` 通过。
+`tests/query` 扩大回归 274 通过、4 失败，失败均为现存 HTTP mock 固定域名未匹配
+当前 QA 配置，与规划器调用链无关。真实 EUR E2E 成功，规划模板携带
+`globalCurrency=EUR`，服务端返回 `meta.currency=EUR`，销售额合计
+`435706.63666151 EUR`，结果落盘至
+`/tmp/ops-query-sales-eur-fix-20260820/query_result_1787190336.json`。
+另已修正币种对拍用例插入位置，恢复“环比时间范围”原有断言归属。
+**影响范围**：影响 `opscli query plan/flow` 的币种意图规划与多币种执行；
+无币种请求保持原行为。
+**回滚方式**：回退本条对应的测试、内核规划/执行、Schema 与审计文档改动。
+---
+
 ## 2026-08-19 skills - 删除 ops-dataset-query 三个死脚本
 
 **变更原因**：scripts/query.py、updater.py、updater_mcp.py 早经全量引用分析判定为死代码（SKILL.md/QUERY_SPEC/references 零引用、tests 零覆盖、无脚本 import）：query.py 是 opscli 命令的冗余转发层且其 intent 子命令曾长期指向被注释的命令；updater.py 功能等同 `opscli skills upgrade` 且反向依赖 opscli 包；updater_mcp.py 是 2026 年 MCP 文档清理的残留（"纯 MCP 用户无此目录"）。用户确认清理后删除，共 477 行。

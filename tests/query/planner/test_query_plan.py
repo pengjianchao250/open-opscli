@@ -9,7 +9,7 @@
 import pytest
 
 from opscli.query.services.planner.metadata_adapter import MetadataAdapter
-from opscli.query.services.planner import agent_query_planner, query_plan
+from opscli.query.services.planner import agent_query_planner, plan_integrity, query_plan
 
 
 def _sales_payload():
@@ -64,6 +64,50 @@ def test_build_model_query_plan_contract_shape():
     assert "model_view" in contract
     assert "execution_ref" in contract
     assert "status" in contract
+
+
+def test_single_currency_intent_is_bound_into_query_template():
+    """单币种意图必须写入完整性绑定模板，不能在调用服务端前静默丢失。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_sales_payload()),
+        "使用欧元查询2026-07-22至2026-08-20的销售额合计",
+        enum_fn=lambda *a, **k: [],
+    )
+
+    assert contract["status"] == "planned"
+    assert contract["execution_ref"]["query_template"]["globalCurrency"] == "EUR"
+    assert "query_templates" not in contract["execution_ref"]
+    assert plan_integrity.verify(contract) is True
+
+
+def test_multi_currency_intent_emits_integrity_bound_templates():
+    """多币种请求必须生成除币种外同口径的独立模板并一起纳入摘要。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_sales_payload()),
+        "分别使用人民币和加拿大元查询近7天销售额",
+        enum_fn=lambda *a, **k: [],
+    )
+
+    assert contract["status"] == "planned"
+    execution = contract["execution_ref"]
+    assert execution["requested_global_currencies"] == ["CNY", "CAD"]
+    assert [item["globalCurrency"] for item in execution["query_templates"]] == [
+        "CNY",
+        "CAD",
+    ]
+    assert execution["query_template"] == execution["query_templates"][0]
+    cny_scope = {
+        key: value
+        for key, value in execution["query_templates"][0].items()
+        if key != "globalCurrency"
+    }
+    cad_scope = {
+        key: value
+        for key, value in execution["query_templates"][1].items()
+        if key != "globalCurrency"
+    }
+    assert cny_scope == cad_scope
+    assert plan_integrity.verify(contract) is True
 
 
 def test_refresh_fn_invoked_when_metadata_empty():

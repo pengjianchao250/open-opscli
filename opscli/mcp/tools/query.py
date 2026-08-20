@@ -7,7 +7,7 @@
 
 规划器路线（自然语言取数首选，需传输层已验证账号）：
 - query_plan            — 自然语言请求 → 规划合同（只规划不执行）
-- query_flow            — 一体化：规划 + planned 时按 query_template 执行一次并回传结果
+- query_flow            — 一体化：只规划一次；单币种执行一次，多币种逐项取数
 
 手工构造路线（先取元数据再查）：
 - query_metadata        — 查询数据集 metadata（维度/指标字段、select_columns、filter_configs）
@@ -751,7 +751,7 @@ async def query_flow(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """一体化取数：规划 + planned 数据集查询时按 query_template 执行一次并回传结果。
+    """一体化取数：只规划一次；单币种执行一次，多币种按模板逐项执行并回传结果。
 
     非 planned（需澄清/被阻断/图表 UUID 等）合同原样返回，交调用方按 model_view 处置。
     planned 时把 limit/order_by/offset 填入 query_template 再执行；不传 limit 且

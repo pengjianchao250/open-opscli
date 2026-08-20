@@ -106,7 +106,7 @@ auth_me()                 # 可选：核验究竟以谁的账号取数，返回 
 | 工具 | 作用 |
 |------|------|
 | `query_plan` | 只规划不执行，输出规划合同（`query_plan_model_contract_v2`） |
-| `query_flow` | 一体化：规划 + `status=planned` 的数据集查询时按 `query_template` 执行一次并回传结果 |
+| `query_flow` | 一体化：只规划一次；`status=planned` 时单币种执行一次，多币种按 `query_templates` 逐项执行并回传结果 |
 
 | 参数 | 类型 | 说明 |
 |------|------|------|

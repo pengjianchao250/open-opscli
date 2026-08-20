@@ -327,6 +327,13 @@ def _assert_planning_parity(kernel_contract: dict, skill_contract: dict, *, scen
         assert _filter_set(kt["filters"]) == _filter_set(st["filters"]), scenario
         _assert_order_by_parity(kt.get("orderBy"), st.get("orderBy"), scenario)
         assert kt.get("limit") == st.get("limit"), scenario
+        assert kt.get("globalCurrency") == st.get("globalCurrency"), scenario
+        assert kernel_contract["execution_ref"].get("requested_global_currencies") == (
+            skill_contract["execution_ref"].get("requested_global_currencies")
+        ), scenario
+        assert len(kernel_contract["execution_ref"].get("query_templates", [])) == len(
+            skill_contract["execution_ref"].get("query_templates", [])
+        ), scenario
     elif status == "clarify_required":
         k_view = kernel_contract["model_view"]
         s_view = skill_contract["model_view"]
@@ -383,6 +390,32 @@ def test_time_scope_with_comparison_parity(tmp_path: Path):
     s_scope = skill_contract["execution_ref"]["time_scope"]
     assert k_scope["comparison_type"] == s_scope["comparison_type"] == "period_over_period"
     assert (k_scope["start"], k_scope["end"]) == (s_scope["start"], s_scope["end"])
+
+
+def test_single_currency_planning_parity(tmp_path: Path):
+    """单币种意图必须在两条主线产生相同的 globalCurrency。"""
+    data_dir = tmp_path / "skill_data"
+    payload = _write_and_build(data_dir, _BASE_DATASETS, _BASE_FIELDS)
+    query = "使用欧元查询2026-07-22至2026-08-20的销售额合计"
+    kernel_contract = _run_kernel(payload, query)
+    skill_contract = _run_skill(data_dir, query)
+
+    _assert_planning_parity(kernel_contract, skill_contract, scenario="单币种")
+
+
+def test_multi_currency_planning_parity(tmp_path: Path):
+    """多币种模板数量、顺序与每项币种必须在两条主线保持一致。"""
+    data_dir = tmp_path / "skill_data"
+    payload = _write_and_build(data_dir, _BASE_DATASETS, _BASE_FIELDS)
+    query = "SP 广告数据集分别使用人民币和加拿大元查询近7天销售额"
+    kernel_contract = _run_kernel(payload, query)
+    skill_contract = _run_skill(data_dir, query)
+
+    _assert_planning_parity(kernel_contract, skill_contract, scenario="多币种")
+    kernel_templates = kernel_contract["execution_ref"]["query_templates"]
+    skill_templates = skill_contract["execution_ref"]["query_templates"]
+    assert [item["globalCurrency"] for item in kernel_templates] == ["CNY", "CAD"]
+    assert [item["globalCurrency"] for item in skill_templates] == ["CNY", "CAD"]
 
 
 # ---------------------------------------------------------------------------
