@@ -169,6 +169,7 @@ class FormattedProductExport:
     products: list[dict[str, Any]]
     csv_history: list[dict[str, Any]]
     images: list[dict[str, Any]]
+    videos: list[dict[str, Any]]
     category_tree: list[dict[str, Any]]
     sales_ranks: list[dict[str, Any]]
     offers: list[dict[str, Any]]
@@ -183,6 +184,7 @@ class FormattedProductExport:
     stats_extremes: list[dict[str, Any]]
     stats_buy_box_sellers: list[dict[str, Any]]
     stats_offer_snapshot: list[dict[str, Any]]
+    stats_stock_by_condition: list[dict[str, Any]]
 
     def extra_sheets(self) -> dict[str, list[dict[str, Any]]]:
         sheets: dict[str, list[dict[str, Any]]] = {}
@@ -190,6 +192,8 @@ class FormattedProductExport:
             sheets["csv_history"] = self.csv_history
         if self.images:
             sheets["images"] = self.images
+        if self.videos:
+            sheets["product_videos"] = self.videos
         if self.category_tree:
             sheets["category_tree"] = self.category_tree
         if self.sales_ranks:
@@ -218,6 +222,8 @@ class FormattedProductExport:
             sheets["stats_buy_box_sellers"] = self.stats_buy_box_sellers
         if self.stats_offer_snapshot:
             sheets["stats_offer_snapshot"] = self.stats_offer_snapshot
+        if self.stats_stock_by_condition:
+            sheets["stats_stock_by_condition"] = self.stats_stock_by_condition
         return sheets
 
     def to_dict(self) -> dict[str, Any]:
@@ -225,6 +231,7 @@ class FormattedProductExport:
             "products": self.products,
             "csv_history": self.csv_history,
             "images": self.images,
+            "videos": self.videos,
             "category_tree": self.category_tree,
             "sales_ranks": self.sales_ranks,
             "offers": self.offers,
@@ -239,6 +246,7 @@ class FormattedProductExport:
             "stats_extremes": self.stats_extremes,
             "stats_buy_box_sellers": self.stats_buy_box_sellers,
             "stats_offer_snapshot": self.stats_offer_snapshot,
+            "stats_stock_by_condition": self.stats_stock_by_condition,
         }
 
 
@@ -247,6 +255,7 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
     products: list[dict[str, Any]] = []
     csv_history: list[dict[str, Any]] = []
     images: list[dict[str, Any]] = []
+    videos: list[dict[str, Any]] = []
     category_tree: list[dict[str, Any]] = []
     sales_ranks: list[dict[str, Any]] = []
     offers: list[dict[str, Any]] = []
@@ -261,6 +270,7 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
     stats_extremes: list[dict[str, Any]] = []
     stats_buy_box_sellers: list[dict[str, Any]] = []
     stats_offer_snapshot: list[dict[str, Any]] = []
+    stats_stock_by_condition: list[dict[str, Any]] = []
     currency = _currency_for(site=site, domain_id=domain_id)
 
     for row in rows:
@@ -273,6 +283,7 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
         asin = _string_or_empty(row.get("asin"))
         csv_history.extend(format_csv_history_rows(row, asin=asin, currency=currency))
         images.extend(format_image_rows(row, asin=asin))
+        videos.extend(format_video_rows(row, asin=asin))
         category_tree.extend(format_category_tree_rows(row, asin=asin))
         sales_ranks.extend(format_sales_rank_rows(row, asin=asin))
         offers.extend(format_offer_rows(row, asin=asin, currency=currency))
@@ -290,11 +301,13 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
             stats_extremes.extend(stats_export.extreme_rows)
             stats_buy_box_sellers.extend(stats_export.buy_box_seller_rows)
             stats_offer_snapshot.extend(stats_export.offer_snapshot_rows)
+            stats_stock_by_condition.extend(stats_export.stock_by_condition_rows)
 
     return FormattedProductExport(
         products=products,
         csv_history=csv_history,
         images=images,
+        videos=videos,
         category_tree=category_tree,
         sales_ranks=sales_ranks,
         offers=offers,
@@ -309,6 +322,7 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
         stats_extremes=stats_extremes,
         stats_buy_box_sellers=stats_buy_box_sellers,
         stats_offer_snapshot=stats_offer_snapshot,
+        stats_stock_by_condition=stats_stock_by_condition,
     )
 
 
@@ -509,6 +523,30 @@ def format_image_rows(product: dict[str, Any], *, asin: str) -> list[dict[str, A
                 "imageUrl": _image_url(filename),
             }
         )
+    return rows
+
+
+def format_video_rows(product: dict[str, Any], *, asin: str) -> list[dict[str, Any]]:
+    """把 Product 视频对象拆成视频明细，避免通用 path 表难以直接分析。"""
+    values = product.get("videos")
+    if not isinstance(values, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for index, value in enumerate(values):
+        row: dict[str, Any] = {"asin": asin, "videoIndex": index}
+        if isinstance(value, dict):
+            row.update(
+                {
+                    key: item
+                    for key, item in value.items()
+                    if not isinstance(item, (dict, list))
+                }
+            )
+            if value.get("image"):
+                row["imageUrl"] = _image_url(str(value["image"]))
+        else:
+            row["value"] = value
+        rows.append(row)
     return rows
 
 
@@ -735,6 +773,7 @@ def format_unhandled_nested_rows(product: dict[str, Any], *, asin: str) -> list[
         "unitCount",
         "coupon",
         "couponHistory",
+        "videos",
     } | LIST_DETAIL_FIELDS | PRODUCT_HISTORY_FIELDS
     rows: list[dict[str, Any]] = []
     for field, value in product.items():

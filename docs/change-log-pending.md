@@ -4,9 +4,9 @@
 
 **变更原因**：现有 11 个 JSON 场景已经具备 formatter，但 Marketplace Offer 优惠券历史、Keepa `-2` 缺失值、Category 父级和 Seller 评分展示仍存在语义不完整；Search Insights 排名依赖 API map 插入顺序，不保证业务排名稳定。
 
-**改动点**：补充 Product Offer 的 condition、价格/运费和币种派生字段；按 Keepa 规则拆分 Offer `couponHistory` 的金额/百分比；统一 Product、Deal、Statistics、Search Insights 的 `-1/-2` 缺失处理；补全 Category 父级金额/评分/计数、Seller 百分比展示和 Lightning Deal 折扣率/活动时长；Search Insights 品牌/卖家明细按计数降序稳定排序。
+**改动点**：补充 Product Offer 的 condition、价格/运费和币种派生字段；按 Keepa 规则拆分 Offer `couponHistory` 的金额/百分比；统一 Product、Deal、Statistics、Search Insights 的 `-1/-2` 缺失处理；补全 Category 父级金额/评分/计数、Seller 百分比展示和 Lightning Deal 折扣率/活动时长；Search Insights 品牌/卖家明细按计数降序稳定排序。真实 Product 响应进一步新增 `product_videos`、Statistics 最低价状态和 `stats_stock_by_condition` 明细，并清除 Offer 快照中的原始列表单元格。
 
-**验证结果**：formatter 定向测试 `11 passed`；Keepa 测试集 `77 passed, 1 failed`，唯一失败仍是仓库既有的 `keepa-debug` 根命令注册测试；本轮涉及文件 Ruff、compileall 与 `git diff --check` 通过。未调用 Graph Image 或 Tracking，也未改变其“不提供 MCP 访问”的边界。
+**验证结果**：使用真实 ASIN `B003IEUAZK` 调用 Product Request，返回 94 个 Product 字段和 64 个 Offer，实际消耗 6 token；新增识别 7 条视频、72 条最低价状态和 24 条 condition 库存。重新生成的 16 个 XLSX 工作表嵌套单元格均为 0。Product/Statistics/Manager 定向测试 `15 passed`；Keepa 回归排除仓库既有 `keepa-debug` 注册用例后 `77 passed, 1 deselected`；本轮涉及文件 Ruff、compileall 与 `git diff --check` 通过。未调用 Graph Image 或 Tracking，也未改变其“不提供 MCP 访问”的边界。
 
 **影响范围**：仅影响现有 JSON 场景的 XLSX/格式化 JSON 派生字段；`raw.json` 原始响应不变。
 

@@ -59,6 +59,15 @@
 - Search Insights 的品牌和卖家明细按计数降序、名称稳定排序，导出排名不再依赖 API map 的原始插入顺序。
 - Lightning Deal 主表新增按秒杀价/当前价计算的折扣率、活动时长，以及 `percentOff/percentClaimed` 的展示字段。
 
+### 0.4 真实 Product 验证（ASIN `B003IEUAZK`）
+
+- 真实 Product Request 请求完整历史、365 天 Statistics、20 个 Offer、Buy Box、库存、评分、视频、A+ 和历史变体；预计 18 token，Keepa 实际返回消耗 6 token。
+- 返回 1 个 Product Object、94 个顶层字段和 64 个 Marketplace Offer；格式化后包含 24,132 条 CSV 历史、16,574 条销售排名、4,900 条 Offer 历史、3,168 条 Product 历史。
+- 真实响应暴露 `videos` 7 条、Statistics `isLowest/isLowest90` 共 72 个值，以及 FBA/FBM condition 库存共 24 个值；已新增 `product_videos`、最低价状态行和 `stats_stock_by_condition` 工作表。
+- 修正 `stats_offer_snapshot` 同时保留列表与 Joined 文本的问题。重新生成的 16 个工作表中，主表和所有附加表的 `dict/list` 单元格均为 0。
+- 该 ASIN 的 7 条 Offer `couponHistory` 均为无优惠值 `0`；真实验证覆盖时间序列结构，无优惠分支通过，正数金额/负数百分比语义继续由脱敏固定测试覆盖。
+- 原始响应和验证 XLSX 仅保存于仓库外 `D:\Gitlab\.keepa-validation`，未写入 Git。
+
 以下第 1-6 节保留实施前调研问题及决策依据；当前状态以本节和 `opscli/keepa/reference/FORMATTERS_STATUS.md` 为准。
 
 ## 1. 实施前结论摘要

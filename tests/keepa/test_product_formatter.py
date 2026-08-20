@@ -98,7 +98,14 @@ def test_product_formatter_splits_large_nested_fields_into_detail_sheets():
                 "eanList": ["1234567890123"],
                 "coupon": [100, -5],
                 "couponHistory": [7588958, 100, -5],
-                "videos": [{"title": "Demo", "url": "https://example.test/video"}],
+                "videos": [
+                    {
+                        "title": "Demo",
+                        "url": "https://example.test/video",
+                        "image": "video.jpg",
+                        "duration": 60,
+                    }
+                ],
                 "promotions": [{"type": "SNS", "discountPercent": 5}],
                 "historicalVariations": [
                     {"asin": "B000000003", "attributes": [{"dimension": "Color", "value": "Blue"}]}
@@ -139,6 +146,8 @@ def test_product_formatter_splits_large_nested_fields_into_detail_sheets():
     assert not any(isinstance(value, (dict, list)) for value in product.values())
     assert formatted.images[0]["variant"] == "MAIN"
     assert formatted.images[0]["imageUrl"].endswith("/main.jpg")
+    assert formatted.videos[0]["title"] == "Demo"
+    assert formatted.videos[0]["imageUrl"].endswith("/video.jpg")
     assert formatted.category_tree[0]["catId"] == "1"
     assert formatted.sales_ranks[1]["salesRank"] == 100
     assert formatted.offers[0]["offerId"] == 7
@@ -163,6 +172,6 @@ def test_product_formatter_splits_large_nested_fields_into_detail_sheets():
     assert coupon_rows[0]["snsCouponPercent"] == 5
     nested_paths = {row["path"] for row in formatted.nested_values}
     assert "promotions[0].discountPercent" in nested_paths
-    assert "videos[0].url" in nested_paths
+    assert not any(path.startswith("videos") for path in nested_paths)
     assert "historicalVariations[0].attributes[0].value" in nested_paths
     assert "reviews.images[0]" in nested_paths

@@ -25,6 +25,7 @@
 | --- | --- |
 | `csv_history` | 36 类价格、排名、评分与计数历史 |
 | `images` | 图片 variant、尺寸、文件名和 URL |
+| `product_videos` | 视频标题、作者、时长、播放 URL 和封面图 URL |
 | `category_tree` | 有序类目路径 |
 | `sales_ranks` | 各类目的销售排名历史 |
 | `offers` | Offer 标量字段和当前排序 |
@@ -35,6 +36,7 @@
 | `product_list_values` | features、materials、categories 等多值字段 |
 | `product_history` | monthlySold、parentAsin、salesRankReference 等顶层历史 |
 | `product_nested_values` | 尚无专用规则的新版嵌套字段，按 JSON path 展开标量叶子 |
+| `stats_stock_by_condition` | Statistics 的 FBA/FBM condition 库存长表 |
 
 未知字段继续保留在 `raw.json`。格式化层不会用截断后的 Excel 单元格替代原始数据。
 
@@ -54,3 +56,4 @@ Graph Image 的二进制结果和 Tracking 域的状态变更对象不属于当�
 - Product、Deal、Statistics、Search Insights 的 `-1/-2` 缺失哨兵统一输出为空；Category 父级对象复用金额、评分和计数派生字段。
 - Seller 主表、评分窗口和评分历史增加百分比显示列；Search Insights 的品牌/卖家排行按计数降序、名称稳定排序。
 - Lightning Deal 主表新增按秒杀价/当前价计算的折扣率、活动时长和 `percentOff/percentClaimed` 展示字段。
+- 使用真实 ASIN `B003IEUAZK` 验证 Product/Statistics：94 个 Product 字段、64 个 Offer、7 条视频、72 条最低价状态和 24 条 condition 库存均已展开；生成的 16 个工作表嵌套单元格总数为 0。
