@@ -1,5 +1,17 @@
 # 待归档变更记录
 
+## 2026-08-20 Keepa - 完善现有场景 Response Object 格式化
+
+**变更原因**：现有 11 个 JSON 场景已经具备 formatter，但 Marketplace Offer 优惠券历史、Keepa `-2` 缺失值、Category 父级和 Seller 评分展示仍存在语义不完整；Search Insights 排名依赖 API map 插入顺序，不保证业务排名稳定。
+
+**改动点**：补充 Product Offer 的 condition、价格/运费和币种派生字段；按 Keepa 规则拆分 Offer `couponHistory` 的金额/百分比；统一 Product、Deal、Statistics、Search Insights 的 `-1/-2` 缺失处理；补全 Category 父级金额/评分/计数、Seller 百分比展示和 Lightning Deal 折扣率/活动时长；Search Insights 品牌/卖家明细按计数降序稳定排序。
+
+**验证结果**：formatter 定向测试 `11 passed`；Keepa 测试集 `77 passed, 1 failed`，唯一失败仍是仓库既有的 `keepa-debug` 根命令注册测试；本轮涉及文件 Ruff、compileall 与 `git diff --check` 通过。未调用 Graph Image 或 Tracking，也未改变其“不提供 MCP 访问”的边界。
+
+**影响范围**：仅影响现有 JSON 场景的 XLSX/格式化 JSON 派生字段；`raw.json` 原始响应不变。
+
+**回滚方式**：回退本条涉及的 formatter、测试和文档改动即可恢复此前格式化合同。
+
 ## 2026-08-20 Keepa - 加固现有场景参数归一化
 
 **变更原因**：现有 Keepa 场景已覆盖主要 JSON Endpoint，但别名冲突会静默取值，布尔/整数参数可能以未经校验的字符串发送，复杂 selection 也不支持常见的 JSON 字符串输入，容易造成请求语义和 token 预估不一致。

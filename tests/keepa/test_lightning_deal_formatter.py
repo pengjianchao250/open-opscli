@@ -30,6 +30,10 @@ def test_lightning_deal_formatter_derives_values_and_splits_variations():
     deal = formatted.deals[0]
     assert deal["dealPriceAmount"] == 12.99
     assert deal["currentPriceAmount"] == 19.99
+    assert deal["calculatedDiscountPercent"] == 35.02
+    assert deal["durationMinutes"] == 60
+    assert deal["durationHours"] == 1.0
+    assert deal["percentOffDisplay"] == "35%"
     assert deal["ratingStars"] == 4.5
     assert deal["imageUrl"] == "https://m.media-amazon.com/images/I/abc.jpg"
     assert deal["variationCount"] == 2

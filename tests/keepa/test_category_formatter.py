@@ -69,6 +69,8 @@ def test_category_formatter_outputs_lookup_parent_objects_separately():
                 "domainId": 1,
                 "catId": 502394,
                 "name": "Camera & Photo",
+                "avgBuyBox": 1999,
+                "avgRating": 41,
                 "children": [281052],
                 "topSellers": ["ATVPDKIKX0DER"],
                 "relatedSellerNames": ["Amazon.com"],
@@ -77,6 +79,9 @@ def test_category_formatter_outputs_lookup_parent_objects_separately():
     )
 
     assert formatted.parents[0]["catId"] == "502394"
+    assert formatted.parents[0]["avgBuyBoxAmount"] == 19.99
+    assert formatted.parents[0]["avgRatingStars"] == 4.1
+    assert formatted.parents[0]["currencyCode"] == "USD"
     assert formatted.extra_sheets()["category_parents"][0]["name"] == "Camera & Photo"
     assert formatted.parent_children[0]["childCategoryId"] == "281052"
     assert formatted.top_sellers[0]["categoryRole"] == "parent"

@@ -220,8 +220,10 @@ def _add_out_of_stock_main_fields(fields: dict[str, Any], stats: dict[str, Any])
         values = stats.get(field)
         if isinstance(values, list) and price_type_index < len(values):
             raw_value = values[price_type_index]
-            fields[output_name] = None if raw_value == -1 else raw_value
-            fields[f"{output_name}Display"] = None if raw_value == -1 else _format_percent(raw_value)
+            fields[output_name] = None if raw_value in {-1, -2} else raw_value
+            fields[f"{output_name}Display"] = (
+                None if raw_value in {-1, -2} else _format_percent(raw_value)
+            )
 
 
 def _add_buy_box_fields(fields: dict[str, Any], stats: dict[str, Any], currency: CurrencyConfig) -> None:
@@ -284,8 +286,10 @@ def _price_type_rows(stats: dict[str, Any], *, asin: str, currency: CurrencyConf
                     "priceTypeName": config.name,
                     "valueType": "percentage",
                     "rawValue": raw_value,
-                    "formattedValue": None if raw_value == -1 else raw_value,
-                    "displayValue": None if raw_value == -1 else _format_percent(raw_value),
+                    "formattedValue": None if raw_value in {-1, -2} else raw_value,
+                    "displayValue": (
+                        None if raw_value in {-1, -2} else _format_percent(raw_value)
+                    ),
                 }
             )
     return rows

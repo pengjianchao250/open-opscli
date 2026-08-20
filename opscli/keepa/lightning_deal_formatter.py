@@ -50,6 +50,11 @@ def format_lightning_deal_export(
         for field in ("dealPrice", "currentPrice"):
             if field in value:
                 row[f"{field}Amount"] = money_amount(value.get(field), decimals=decimals)
+        _add_discount_fields(row, value)
+        _add_duration_fields(row, value)
+        for field in ("percentClaimed", "percentOff"):
+            if field in value:
+                row[f"{field}Display"] = _percent_display(value.get(field))
         row["currencyCode"] = currency_code
         row["imageUrl"] = image_url(value.get("image"))
         if isinstance(value.get("rating"), (int, float)) and value["rating"] >= 0:
@@ -71,3 +76,39 @@ def format_lightning_deal_export(
             variations.append(detail)
 
     return FormattedLightningDealExport(deals, variations)
+
+
+def _add_discount_fields(row: dict[str, Any], deal: dict[str, Any]) -> None:
+    """根据当前价和秒杀价补充折扣百分比，保留 API 原始字段。"""
+    current = _number(deal.get("currentPrice"))
+    price = _number(deal.get("dealPrice"))
+    if current is None or price is None or current <= 0 or price < 0:
+        return
+    discount = round((current - price) / current * 100, 2)
+    row["calculatedDiscountPercent"] = discount
+    row["calculatedDiscountPercentDisplay"] = f"{discount:g}%"
+
+
+def _add_duration_fields(row: dict[str, Any], deal: dict[str, Any]) -> None:
+    start = _number(deal.get("startTime"))
+    end = _number(deal.get("endTime"))
+    if start is None or end is None or start <= 0 or end < start:
+        return
+    row["durationMinutes"] = end - start
+    row["durationHours"] = round((end - start) / 60, 2)
+
+
+def _percent_display(value: Any) -> str | None:
+    number = _number(value)
+    if number is None or number in {-1, -2} or number < 0:
+        return None
+    return f"{number:g}%"
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

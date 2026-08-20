@@ -47,3 +47,10 @@
 11 个已接入 JSON 场景在 `opscli/keepa/api/scenarios.py` 统一完成请求参数归一化和边界校验：布尔值、整数、CSV ID、别名冲突和 Best Sellers 历史月份均在调用 Keepa 前处理。Product Finder、Seller Finder、Deals 的 `selection` 保持开放字段，只要求 JSON 对象；未知响应字段仍保留在 `raw.json`，不因 formatter 未声明而丢失。
 
 Graph Image 的二进制结果和 Tracking 域的状态变更对象不属于当前 formatter 范围；它们仍需独立的文件结果模型、权限、确认和审计设计。
+
+## 2026-08-20 格式化补充
+
+- Product Marketplace Offer 明细新增 condition 文本、价格/运费金额列；Offer `couponHistory` 按正数金额、负数百分比拆分，避免把折扣误当负金额。
+- Product、Deal、Statistics、Search Insights 的 `-1/-2` 缺失哨兵统一输出为空；Category 父级对象复用金额、评分和计数派生字段。
+- Seller 主表、评分窗口和评分历史增加百分比显示列；Search Insights 的品牌/卖家排行按计数降序、名称稳定排序。
+- Lightning Deal 主表新增按秒杀价/当前价计算的折扣率、活动时长和 `percentOff/percentClaimed` 展示字段。

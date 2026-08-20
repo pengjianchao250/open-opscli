@@ -197,10 +197,22 @@ def _format_parent(value: Any, *, site: str, domain_id: Any) -> dict[str, Any]:
     row["catId"] = string_id(value.get("catId"))
     if "parent" in value:
         row["parent"] = string_id(value.get("parent"))
-    row["categoryUrl"] = category_url(
-        row["catId"], site=site, domain_id=value.get("domainId", domain_id)
+    row["categoryUrl"] = (
+        None
+        if row["catId"] == BLANK_CATEGORY_ID
+        else category_url(row["catId"], site=site, domain_id=value.get("domainId", domain_id))
     )
+    currency_code, decimals = currency_info(site=site, domain_id=value.get("domainId", domain_id))
+    row["currencyCode"] = currency_code
+    row["isBlankCategory"] = row["catId"] == BLANK_CATEGORY_ID
+    for field in MONEY_FIELDS:
+        if field in value:
+            row[f"{field}Amount"] = money_amount(value.get(field), decimals=decimals)
+    if isinstance(value.get("avgRating"), (int, float)) and value["avgRating"] >= 0:
+        row["avgRatingStars"] = value["avgRating"] / 10
     row["childrenCount"] = len(value.get("children") or [])
+    row["relatedCategoryCount"] = len(value.get("relatedCategories") or [])
+    row["topBrandCount"] = len(value.get("topBrands") or [])
     row["topSellerCount"] = _paired_count(
         value.get("topSellers"), value.get("relatedSellerNames")
     )

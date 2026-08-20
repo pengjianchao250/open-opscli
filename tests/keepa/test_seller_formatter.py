@@ -34,6 +34,7 @@ def test_seller_formatter_splits_ratings_histories_and_storefront_details():
     assert seller["addressText"] == "123 Main Street | New York | US"
     assert seller["totalStorefrontAsinCount"] == 1200
     assert seller["rating30DaysCount"] == 3
+    assert seller["positiveRating30DaysDisplay"] == "96%"
     assert seller["trackedSinceUtc"] == "2025-06-06T02:38:00Z"
     assert "recentFeedback" not in seller
     assert "asinList" not in seller
@@ -41,7 +42,9 @@ def test_seller_formatter_splits_ratings_histories_and_storefront_details():
     assert "customerServicesAddress" not in seller
     assert not any(isinstance(value, (dict, list)) for value in seller.values())
     assert formatted.ratings[3]["window"] == "lifetime"
+    assert formatted.ratings[0]["negativeRatingDisplay"] == "3%"
     assert formatted.rating_history[0]["ratingPercent"] == 95
+    assert formatted.rating_history[0]["ratingPercentDisplay"] == "95%"
     assert formatted.feedback[0]["ratingStars"] == 5.0
     assert formatted.storefront[1]["asin"] == "B000000002"
     assert formatted.categories[0]["catId"] == "281052"

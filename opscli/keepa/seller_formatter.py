@@ -136,6 +136,7 @@ def _add_rating_summary(row: dict[str, Any], seller: dict[str, Any]) -> None:
             values = _list(seller.get(field))
             if index < len(values):
                 row[f"{field}{suffix}"] = values[index]
+                row[f"{field}{suffix}Display"] = _percent_display(values[index])
 
 
 def _add_storefront_summary(row: dict[str, Any], seller: dict[str, Any]) -> None:
@@ -154,6 +155,8 @@ def _rating_rows(seller: dict[str, Any], *, seller_id: Any) -> list[dict[str, An
         for field in ("ratingCount", "positiveRating", "neutralRating", "negativeRating"):
             values = _list(seller.get(field))
             row[field] = values[index] if index < len(values) else None
+            if field != "ratingCount":
+                row[f"{field}Display"] = _percent_display(row[field])
         if any(value is not None for key, value in row.items() if key not in {"sellerId", "window"}):
             rows.append(row)
     return rows
@@ -175,6 +178,8 @@ def _rating_history_rows(seller: dict[str, Any], *, seller_id: Any) -> list[dict
                 "keepaTime": series[index],
                 value_field: series[index + 1],
             }
+            if value_field == "ratingPercent":
+                row["ratingPercentDisplay"] = _percent_display(series[index + 1])
             add_time_fields(row, "keepaTime")
             rows.append(row)
     return rows
@@ -250,3 +255,16 @@ def _join_address(value: Any) -> str | None:
 
 def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _percent_display(value: Any) -> str | None:
+    """把 Seller 百分比字段转换为可读文本，保留原始数值。"""
+    if isinstance(value, bool) or value in (None, -1, -2):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0:
+        return None
+    return f"{number:g}%"

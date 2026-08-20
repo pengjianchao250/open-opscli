@@ -69,8 +69,12 @@ def test_product_formatter_splits_large_nested_fields_into_detail_sheets():
                         "offerId": 7,
                         "sellerId": "SELLER1",
                         "condition": 1,
+                        "price": 1299,
+                        "shipping": 200,
+                        "coupon": -5,
                         "offerCSV": [7588958, 1299, 0],
                         "stockCSV": [7588958, 5],
+                        "couponHistory": [7588958, -5],
                         "offerDuplicates": [{"price": 1299, "shipping": 0}],
                     }
                 ],
@@ -138,9 +142,15 @@ def test_product_formatter_splits_large_nested_fields_into_detail_sheets():
     assert formatted.category_tree[0]["catId"] == "1"
     assert formatted.sales_ranks[1]["salesRank"] == 100
     assert formatted.offers[0]["offerId"] == 7
+    assert formatted.offers[0]["conditionText"] == "new"
+    assert formatted.offers[0]["priceAmount"] == 12.99
+    assert formatted.offers[0]["shippingAmount"] == 2.0
+    assert formatted.offers[0]["couponPercent"] == 5
     assert "offer" not in formatted.offers[0]
     assert formatted.offer_history[0]["priceAmount"] == 12.99
     assert formatted.offer_history[1]["stock"] == 5
+    offer_coupon = next(row for row in formatted.offer_history if row["historyType"] == "coupon")
+    assert offer_coupon["couponPercent"] == 5
     assert formatted.offer_duplicates[0]["priceAmount"] == 12.99
     assert formatted.variation_attributes[0]["dimension"] == "Color"
     assert "variation" not in formatted.variations[0]

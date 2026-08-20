@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from opscli.keepa.object_formatting import (
@@ -24,7 +24,17 @@ from opscli.keepa.time import (
 )
 
 # Keepa 数值字段通用的缺失哨兵值。
-MISSING_NUMERIC_VALUES = {-1}
+MISSING_NUMERIC_VALUES = {-1, -2}
+
+# Marketplace Offer 的 condition 数字映射；未知值保留原始数字并标记 unknown。
+OFFER_CONDITION_TEXT = {
+    1: "new",
+    2: "used_like_new",
+    3: "used_very_good",
+    4: "used_good",
+    5: "used_acceptable",
+    6: "refurbished",
+}
 
 # Product 顶层使用 Keepa Time minutes 的字段白名单。
 KEEPA_TIME_FIELDS = {
@@ -265,7 +275,7 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
         images.extend(format_image_rows(row, asin=asin))
         category_tree.extend(format_category_tree_rows(row, asin=asin))
         sales_ranks.extend(format_sales_rank_rows(row, asin=asin))
-        offers.extend(format_offer_rows(row, asin=asin))
+        offers.extend(format_offer_rows(row, asin=asin, currency=currency))
         offer_history.extend(format_offer_history_rows(row, asin=asin, currency=currency))
         offer_duplicates.extend(format_offer_duplicate_rows(row, asin=asin, currency=currency))
         variations.extend(format_variation_rows(row, asin=asin))
@@ -396,10 +406,13 @@ def format_csv_history_rows(
     return rows
 
 
-def format_offer_rows(product: dict[str, Any], *, asin: str) -> list[dict[str, Any]]:
+def format_offer_rows(
+    product: dict[str, Any], *, asin: str, currency: CurrencyConfig | None = None
+) -> list[dict[str, Any]]:
     offers = product.get("offers")
     if not isinstance(offers, list):
         return []
+    currency = currency or _currency_for(site="US", domain_id=product.get("domainId"))
     live_order = product.get("liveOffersOrder")
     live_rank_by_index = {
         offer_index: rank for rank, offer_index in enumerate(live_order, start=1)
@@ -422,6 +435,17 @@ def format_offer_rows(product: dict[str, Any], *, asin: str) -> list[dict[str, A
                 if not isinstance(value, (dict, list))
             }
         )
+        if "condition" in offer:
+            condition = _parse_number(offer.get("condition"))
+            row["conditionText"] = OFFER_CONDITION_TEXT.get(condition, "unknown")
+        for field in ("price", "shipping", "primeExcl"):
+            if field in offer:
+                row[f"{field}Amount"] = _format_money(offer.get(field), currency)
+                row[f"{field}Currency"] = currency.code
+        if "coupon" in offer:
+            _apply_coupon_history_value(
+                row, label="coupon", value=offer.get("coupon"), currency=currency
+            )
         for field in ("lastSeen", "lastStockUpdate"):
             _add_keepa_time_fields(row, field)
         rows.append(row)
@@ -559,7 +583,12 @@ def format_offer_history_rows(
                 }
                 _add_keepa_time_fields(row, "keepaTime")
                 if len(values) > 1:
-                    if history_type in {"offer_price", "prime_exclusive_price", "coupon"}:
+                    if history_type == "coupon":
+                        row["coupon"] = values[1]
+                        _apply_coupon_history_value(
+                            row, label="coupon", value=values[1], currency=currency
+                        )
+                    elif history_type in {"offer_price", "prime_exclusive_price"}:
                         row["price"] = values[1]
                         row["priceAmount"] = _format_money(values[1], currency)
                     else:
@@ -681,7 +710,7 @@ def _apply_coupon_history_value(
     """按 Keepa 正数金额、负数百分比规则展开 Coupon 历史值。"""
     number = _parse_number(value)
     row[label] = value
-    if number is None or number == 0:
+    if number is None or number in MISSING_NUMERIC_VALUES or number == 0:
         return
     if number > 0:
         row[f"{label}Amount"] = _format_money(number, currency)
@@ -852,7 +881,7 @@ def _image_names_from_csv(value: Any) -> list[str]:
 
 
 def _image_url(image_name: str) -> str:
-    if image_name.startswith("http://") or image_name.startswith("https://"):
+    if image_name.startswith(("http://", "https://")):
         return image_name
     return f"{IMAGE_BASE_URL}/{image_name.lstrip('/')}"
 
@@ -945,7 +974,7 @@ def _add_stats_current_fields(row: dict[str, Any], product: dict[str, Any], curr
             rating = _parse_number(value)
             row[field] = None if rating is None or rating < 0 else rating / 10
         else:
-            row[field] = None if value == -1 else value
+            row[field] = None if value in MISSING_NUMERIC_VALUES else value
 
 
 def _iter_series_values(series: list[Any], tuple_size: int) -> list[list[Any]]:
@@ -987,9 +1016,9 @@ def _apply_csv_value(row: dict[str, Any], *, value: Any, config: CsvSeriesConfig
         number = _parse_number(value)
         row["rating"] = None if number is None or number < 0 else number / 10
     elif config.kind == "rank":
-        row["rank"] = None if value == -1 else value
+        row["rank"] = None if value in MISSING_NUMERIC_VALUES else value
     elif config.kind == "count":
-        row["count"] = None if value == -1 else value
+        row["count"] = None if value in MISSING_NUMERIC_VALUES else value
     elif config.kind == "event":
         number = _parse_number(value)
         if number is None:
@@ -1020,7 +1049,7 @@ def _format_date_int(value: Any) -> str | None:
         return f"{text[:4]}-{text[4:]}"
     if len(text) == 8:
         try:
-            return datetime.strptime(text, "%Y%m%d").date().isoformat()
+            return datetime.strptime(text, "%Y%m%d").replace(tzinfo=timezone.utc).date().isoformat()
         except ValueError:
             return None
     return None

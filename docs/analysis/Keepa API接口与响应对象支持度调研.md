@@ -51,6 +51,14 @@
 
 该层只负责请求参数的类型、边界和别名一致性，不改变 `raw.json` 的原始响应保留策略，也不对 selection 做推测性完整 schema 限制。
 
+### 0.3 现有对象格式化补充（2026-08-20）
+
+- Product Marketplace Offer 明细新增 condition 文本、价格/运费金额和币种；Offer `couponHistory` 依据 Keepa 规则拆为优惠金额或折扣百分比。
+- Product、Deal、Statistics、Search Insights 对 `-1/-2` 缺失哨兵统一按空值处理，避免生成负金额或负折扣。
+- Category Lookup 的父级 Category Object 现在与结果类目共享金额、评分、计数和空类目派生字段；Seller 评分窗口/历史新增百分比展示列。
+- Search Insights 的品牌和卖家明细按计数降序、名称稳定排序，导出排名不再依赖 API map 的原始插入顺序。
+- Lightning Deal 主表新增按秒杀价/当前价计算的折扣率、活动时长，以及 `percentOff/percentClaimed` 的展示字段。
+
 以下第 1-6 节保留实施前调研问题及决策依据；当前状态以本节和 `opscli/keepa/reference/FORMATTERS_STATUS.md` 为准。
 
 ## 1. 实施前结论摘要
