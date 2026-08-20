@@ -39,6 +39,18 @@
 - 一次样本格式化产生约 7,867 条 `csv_history`、8,223 条 `sales_ranks`、833 条 `product_history`；格式化主表剩余嵌套字段数为 0。
 - 线上原始响应和 XLSX 仅保存在工作区外的本地验证目录，不纳入 Git；仓库测试继续使用脱敏固定 fixture，避免测试访问真实网络或用户文件。
 
+### 0.2 现有场景参数加固（2026-08-20）
+
+在上述接口和 formatter 覆盖基础上，现有 11 个 JSON 场景已统一在请求构建层做参数归一化：
+
+- 布尔参数接受 `true/false`、`1/0`、`yes/no`、`on/off`，输出统一为 Python `bool`；非法字符串直接返回配置错误。
+- `stats`、`offers`、`update`、`days`、`code-limit`、Best Sellers 的 `range/month/year` 统一转换为整数并校验下限/范围，不再把非法数字静默透传给 Keepa。
+- `asin/asins`、`code/codes`、`category/categories`、`seller/sellers`、`term/keyword` 和 `productGroup/product_group` 的别名同时出现时，只有语义一致才接受；冲突值明确拒绝。
+- Product Finder、Seller Finder、Deals 的 `selection` 同时支持 JSON 对象和 JSON 字符串；对象内部字段保持开放透传，避免因 Keepa 新增筛选字段而被本地白名单阻断。
+- Lightning Deals 的 `state` 只做非空校验，不预设未从官方页面确认的枚举；`asin` 统一清理为 CSV 字符串。
+
+该层只负责请求参数的类型、边界和别名一致性，不改变 `raw.json` 的原始响应保留策略，也不对 selection 做推测性完整 schema 限制。
+
 以下第 1-6 节保留实施前调研问题及决策依据；当前状态以本节和 `opscli/keepa/reference/FORMATTERS_STATUS.md` 为准。
 
 ## 1. 实施前结论摘要

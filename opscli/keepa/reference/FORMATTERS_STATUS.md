@@ -41,3 +41,9 @@
 ## 真实响应验证
 
 2026-08-20 使用本地 Key 调用真实接口验证：Category Lookup 返回 1 个对象，Seller Information 返回 1 个对象，完整 Lightning Deals 返回 23,788 个对象及 45,374 条 variation。三个 formatter 的主表和附加表均不再包含 `dict/list` 单元格；完整原始响应仍只保存在工作区外的本地验证目录。
+
+## 场景参数与格式化边界
+
+11 个已接入 JSON 场景在 `opscli/keepa/api/scenarios.py` 统一完成请求参数归一化和边界校验：布尔值、整数、CSV ID、别名冲突和 Best Sellers 历史月份均在调用 Keepa 前处理。Product Finder、Seller Finder、Deals 的 `selection` 保持开放字段，只要求 JSON 对象；未知响应字段仍保留在 `raw.json`，不因 formatter 未声明而丢失。
+
+Graph Image 的二进制结果和 Tracking 域的状态变更对象不属于当前 formatter 范围；它们仍需独立的文件结果模型、权限、确认和审计设计。

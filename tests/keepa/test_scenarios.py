@@ -56,6 +56,28 @@ def test_product_params_supports_new_documented_options():
     assert params["historical-variations"] is True
 
 
+def test_product_params_normalizes_string_flags_and_numbers():
+    scenario = get_scenario("product")
+    params = scenario.build_params(
+        params={
+            "asin": " B000000001 ",
+            "history": "false",
+            "offers": "20",
+            "update": "0",
+            "only_live_offers": "1",
+            "code_limit": "5",
+        },
+        site="US",
+    )
+
+    assert params["asin"] == "B000000001"
+    assert params["history"] is False
+    assert params["offers"] == 20
+    assert params["update"] == 0
+    assert params["only-live-offers"] is True
+    assert params["code-limit"] == 5
+
+
 def test_product_params_rejects_more_than_one_hundred_items():
     scenario = get_scenario("product")
 
@@ -63,6 +85,17 @@ def test_product_params_rejects_more_than_one_hundred_items():
         scenario.build_params(
             params={"asins": [f"B{i:09d}" for i in range(101)], "offers": 20},
             site="US",
+        )
+
+
+def test_aliases_must_not_disagree():
+    with pytest.raises(KeepaConfigError, match="asin/asins"):
+        get_scenario("product").build_params(
+            params={"asin": "A", "asins": "B"}, site="US"
+        )
+    with pytest.raises(KeepaConfigError, match="term/keyword"):
+        get_scenario("product-search").build_params(
+            params={"term": "flashlight", "keyword": "camera"}, site="US"
         )
 
 
@@ -85,6 +118,20 @@ def test_product_finder_selection_is_json_encoded():
     assert params["selection"] == '{"current_SALES_gte":1,"perPage":50}'
     assert scenario.estimate_tokens({"selection": {"perPage": 250}}) == 13
     assert scenario.estimate_tokens({"selection": {"current_SALES_gte": 1}}) == 11
+
+
+def test_selection_accepts_json_string_and_rejects_invalid_json():
+    scenario = get_scenario("product-finder")
+    params = scenario.build_params(
+        params={"selection": '{"perPage":"250"}', "stats": "1"}, site="US"
+    )
+
+    assert json.loads(params["selection"]) == {"perPage": "250"}
+    assert params["stats"] is True
+    assert scenario.estimate_tokens({"selection": '{"perPage":250}'}) == 13
+
+    with pytest.raises(KeepaConfigError, match="selection.*JSON"):
+        scenario.build_params(params={"selection": "[]"}, site="US")
 
 
 def test_product_search_supports_rating_but_not_obsolete_page():
@@ -110,6 +157,21 @@ def test_search_and_lookup_accept_documented_aliases():
     assert seller["seller"] == "A2L77EE7U53NWQ"
     assert seller["storefront"] is False
     assert bestsellers["category"] == "Home"
+
+
+def test_numeric_and_boolean_boundaries_are_validated():
+    with pytest.raises(KeepaConfigError, match="offers.*整数"):
+        get_scenario("product").build_params(
+            params={"asin": "A", "offers": "many"}, site="US"
+        )
+    with pytest.raises(KeepaConfigError, match="parents.*布尔"):
+        get_scenario("category-lookup").build_params(
+            params={"category": "123", "parents": "sometimes"}, site="US"
+        )
+    with pytest.raises(KeepaConfigError, match="state 不能为空"):
+        get_scenario("lightning-deals").build_params(
+            params={"state": "  "}, site="US"
+        )
 
 
 def test_category_scenarios_use_parents_only_for_lookup():
@@ -171,6 +233,12 @@ def test_bestsellers_supports_optional_filters_and_validates_date_pair():
         site="US",
     )
     assert current["range"] == 90
+
+    normalized = scenario.build_params(
+        params={"category": "172282", "range": "30", "variations": "0"}, site="US"
+    )
+    assert normalized["range"] == 30
+    assert normalized["variations"] is False
 
     with pytest.raises(KeepaConfigError, match="month.*year"):
         scenario.build_params(params={"category": "172282", "month": 7}, site="US")

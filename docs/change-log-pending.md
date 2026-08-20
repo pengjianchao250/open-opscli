@@ -1,5 +1,17 @@
 # 待归档变更记录
 
+## 2026-08-20 Keepa - 加固现有场景参数归一化
+
+**变更原因**：现有 Keepa 场景已覆盖主要 JSON Endpoint，但别名冲突会静默取值，布尔/整数参数可能以未经校验的字符串发送，复杂 selection 也不支持常见的 JSON 字符串输入，容易造成请求语义和 token 预估不一致。
+
+**改动点**：统一 Product、Product Search、Product Finder、Category、Seller、Best Sellers、Deals、Lightning Deals 的布尔/整数/CSV 参数归一化；补充别名一致性检测、数字边界校验、Best Sellers 类型转换和 Lightning Deals 空状态校验；selection 支持 JSON 对象或 JSON 字符串并保持开放字段；token estimator 复用同一套 alias/selection 解析规则。新增场景参数回归测试。
+
+**验证结果**：场景参数测试 `19 passed`；Keepa 测试集 `76 passed, 1 failed`，唯一失败是仓库既有的 `keepa-debug` 根命令注册测试；Ruff、compileall 与 `git diff --check` 通过。
+
+**影响范围**：仅影响 Keepa JSON 请求构建和额度预检查，不改变 API 客户端、`raw.json`、导出 formatter 或 Graph Image/Tracking 的支持边界。
+
+**回滚方式**：回退 `opscli/keepa/api/scenarios.py`、`tests/keepa/test_scenarios.py` 及本条文档记录即可恢复此前的参数透传行为。
+
 ## 2026-08-20 Keepa - 同步新版 Endpoint 并扩展 Response Object 格式化
 
 **变更原因**：Keepa 2026-08 文档新增 Seller Finder，并更新 Product 图片、参数与 token 规则；现有场景仍发送部分已移除参数，额度估算明显偏低，Category、Seller、Lightning Deal 及 Product 高基数字段缺少可直接分析的格式化输出。
