@@ -8,6 +8,7 @@ from typing import Any
 
 from opscli.keepa.domain.models import KeepaExportResult
 
+# 这些字段只描述 Keepa 账号额度，不属于对外业务响应。
 _QUOTA_FIELDS = {
     "tokensleft",
     "tokensconsumed",
@@ -24,7 +25,17 @@ def export_response_to_json(
     scenario: str,
     site: str = "US",
 ) -> KeepaExportResult:
-    """导出 Keepa 原始业务响应，同时移除仅供内部额度管理使用的字段。"""
+    """导出 Keepa 原始业务响应。
+
+    Args:
+        response: Keepa Endpoint 返回的原始 JSON 对象。
+        output_path: JSON 导出文件路径。
+        scenario: 当前 Keepa 场景 ID。
+        site: Amazon 站点代码。
+
+    Returns:
+        已生成文件的路径、格式和 MIME 元数据。
+    """
     payload = {
         "schema_version": "2.0",
         "scenario": scenario,

@@ -219,7 +219,7 @@ Keepa 新版官方文档目前列出 **13 个 Endpoint**、**12 类 Response obj
 
 - 将 Tracking 视为独立子域，而不是普通查询场景。
 - 先实现只读 get/list/listNames；notification 明确 `readOnly` 默认策略，避免查询即改变已读状态。
-- add/remove/removeAll/webhook 作为显式写命令和 MCP Tool，加入参数模型、权限、确认、审计和测试。
+- add/remove/removeAll/webhook 仅考虑显式 CLI/Service 写入口，加入参数模型、权限、确认、审计和测试；Tracking 域不提供 MCP Tool。
 - Notification 以 `notificationId` 为业务键；保留旧通知无 ID 时的兼容键。
 
 ## 7. 代码证据索引

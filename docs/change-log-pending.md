@@ -6747,8 +6747,8 @@ tests/skills/test_dataset_query_flow.py`
 ## 2026-08-20 Keepa - 分离 MCP 摘要与 JSON/XLSX 详情导出
 
 **变更原因**：Keepa Product 等响应包含大量数组和历史数据；完整数据直接进入 MCP `data` 会占用模型上下文，而 JSON 导出复用 XLSX 工作表模型又会破坏原始嵌套结构。
-**改动点**：补充 JSON v2 原始响应、MCP 单行宽对象摘要和 Keepa JSON v1/v2 采集解析兼容测试；新增 JSON v2 原始业务响应导出器，递归移除 Keepa 额度字段，Manager 按格式分流且 XLSX 继续使用格式化工作表；MCP 对任意行数的 `data` 都只返回最多 5 行白名单摘要，完整详情统一指向导出文件；采集 Parser 升级为 v4，历史 v1 SheetN 与新 v2 response 均可解析，新合同的嵌套字段保持原生 JSON 值，并兼容 Category 原始 `catId` 业务键；同步更新 Keepa Skill、formatter 状态和接口调研文档，Skill 版本升至 v0.0.3。
-**验证结果**：JSON 导出、Manager、MCP Tool 和采集沉淀核心接缝 41 项通过；Keepa 完整回归 `78 passed, 1 deselected`，MCP Tool `14 passed`；Skill UTF-8 校验和 `compileall` 通过；用已保存的真实 `B003IEUAZK` 响应离线生成 JSON v2，确认 94 个 Product 字段、64 个 Offer、7 个视频和 Statistics 对象保持原生结构，公开响应不含 5 类额度字段，未再次调用 Keepa API。
+**改动点**：补充 JSON v2 原始响应、MCP 单行宽对象摘要和 Keepa JSON v1/v2 采集解析兼容测试；新增 JSON v2 原始业务响应导出器，递归移除 Keepa 额度字段，Manager 按格式分流，JSON 分支直接生成小摘要并跳过全部 XLSX formatter，XLSX 继续使用多工作表格式化；MCP 对任意行数的 `data` 都只返回最多 5 行共享白名单摘要，完整详情统一指向导出文件；采集 Parser 升级为 v4，历史 v1 SheetN 与新 v2 response 均可解析，新合同的嵌套字段保持原生 JSON 值，并兼容 Category 原始 `catId` 业务键；同步更新 Keepa Skill、formatter 状态和接口调研文档，移除 Tracking MCP 建议，Skill 版本升至 v0.0.3。
+**验证结果**：JSON 分支跳过 XLSX formatter 的测试先失败后通过；Keepa 完整回归 `78 passed, 1 deselected`，MCP Tool/注册回归 `15 passed`；Skill UTF-8 校验、Ruff（排除修改文件既有规则告警）、`compileall` 和 `git diff --check` 通过；用已保存的真实 `B003IEUAZK` 响应离线生成 JSON v2，确认 94 个 Product 字段、64 个 Offer、7 个视频和 Statistics 对象保持原生结构，公开响应不含 5 类额度字段，未再次调用 Keepa API。双轴审查发现的常量说明、公开 docstring、命名、JSON 无效格式化和 Tracking MCP 文档矛盾均已修复；真实大样本因隐私和体积边界继续保存在仓库外，仓库内由小型脱敏嵌套 fixture 回归。
 **影响范围**：Keepa JSON 导出合同、MCP 公开结果、采集沉淀 Parser 和 Keepa Skill 使用说明；XLSX 多工作表格式不变。
 **回滚方式**：回退本条对应的 Keepa 导出、MCP 摘要、Parser、测试和文档改动。
 ---

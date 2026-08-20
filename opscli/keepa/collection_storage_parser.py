@@ -68,11 +68,11 @@ def _json_datasets(path: Path):
     payload = read_json_object(path, source_name="Keepa")
     sheets = payload.get("sheets")
     if isinstance(sheets, dict) and sheets:
-        compatible = _v1_sheets_payload(sheets)
+        worksheet_payload = _v1_sheets_payload(sheets)
     else:
-        compatible = _v2_response_payload(payload)
+        worksheet_payload = _v2_response_payload(payload)
     return json_datasets(
-        compatible,
+        worksheet_payload,
         source_name="Keepa",
         business_key_fields=_BUSINESS_KEY_FIELDS,
     )

@@ -206,8 +206,13 @@ def test_manager_writes_original_response_json_export_when_requested(monkeypatch
 
     DummyKeepaClient.requests = []
     NestedProductClient.requests = []
+
+    def reject_xlsx_formatter(*args, **kwargs):
+        raise AssertionError("JSON 导出不应执行 XLSX formatter")
+
     monkeypatch.setattr(api_manager_module, "KeepaApiClient", NestedProductClient)
     monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    monkeypatch.setattr(api_manager_module, "format_product_export", reject_xlsx_formatter)
     settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
     manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
 
@@ -230,6 +235,7 @@ def test_manager_writes_original_response_json_export_when_requested(monkeypatch
     assert result.export is not None
     assert result.export.path == str(export_path.resolve())
     assert result.export.format == "json"
+    assert result.data == [{"asin": "B0088PUEPK", "title": "Test Product"}]
     assert payload["schema_version"] == "2.0"
     assert payload["scenario"] == "product"
     assert payload["site"] == "US"

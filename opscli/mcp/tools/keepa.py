@@ -15,26 +15,11 @@ import inspect
 from pathlib import Path
 from typing import Any
 
+from opscli.keepa.summary import KEEPA_SUMMARY_ROW_LIMIT, summarize_rows
 from opscli.mcp.quota import get_quota_limiter
 from opscli.skills.packaging import get_builtin_templates_dir
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
-
-MAX_PUBLIC_DATA_PREVIEW_ROWS = 5
-PUBLIC_DATA_PREVIEW_FIELDS = (
-    "asin",
-    "title",
-    "brand",
-    "sellerId",
-    "sellerName",
-    "categoryId",
-    "catId",
-    "name",
-    "dealId",
-    "dealState",
-    "totalResults",
-    "bestSellerRank",
-)
 
 
 def _keepa_skill_dir() -> Path:
@@ -321,9 +306,11 @@ def _compact_public_data(public: dict[str, Any]) -> None:
     data = public.get("data")
     if not isinstance(data, list):
         return
-    preview_rows = data[:MAX_PUBLIC_DATA_PREVIEW_ROWS]
-    public["data_preview"] = [_public_data_preview(row) for row in preview_rows]
-    public["data_omitted"] = max(0, len(data) - len(preview_rows))
+    preview_rows = summarize_rows(data, limit=KEEPA_SUMMARY_ROW_LIMIT)
+    public["data_preview"] = preview_rows
+    row_count = public.get("row_count")
+    total_rows = row_count if isinstance(row_count, int) else len(data)
+    public["data_omitted"] = max(0, total_rows - len(preview_rows))
     public.pop("data", None)
     warnings = public.get("warnings")
     if not isinstance(warnings, list):
@@ -335,19 +322,6 @@ def _compact_public_data(public: dict[str, Any]) -> None:
         }
     )
     public["warnings"] = warnings
-
-
-def _public_data_preview(row: Any) -> Any:
-    """只保留 Agent 判断结果所需的稳定标识字段，避免嵌套明细进入上下文。"""
-    if not isinstance(row, dict):
-        return row
-    return {
-        field: row[field]
-        for field in PUBLIC_DATA_PREVIEW_FIELDS
-        if field in row and not isinstance(row[field], (dict, list))
-    }
-
-
 def _strip_sensitive(value: Any) -> Any:
     if isinstance(value, list):
         return [_strip_sensitive(item) for item in value]
