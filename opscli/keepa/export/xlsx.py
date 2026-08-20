@@ -112,6 +112,7 @@ FIELD_TITLES = {
     "isEligibleForTradeIn": "可Trade-In",
     "isEligibleForSuperSaverShipping": "可Super Saver配送",
     "trackingSince": "跟踪开始时间(Keepa分钟)",
+    "trackedSince": "跟踪开始时间(Keepa分钟)",
     "totalResults": "总结果数",
     "timestamp": "响应时间戳",
     "tokensLeft": "剩余Token",

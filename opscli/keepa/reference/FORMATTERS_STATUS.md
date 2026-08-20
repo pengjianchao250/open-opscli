@@ -7,7 +7,7 @@
 | Product Object | 已接入 | `product_formatter.py` | `product`、返回 Product Object 的 `product-search` 共用格式化；大数组和历史序列拆成图片、类目、排名、Offer、变体、列表值与历史 Sheet。 |
 | Statistics Object | 已接入 | `stats_formatter.py` | 派生当前指标，拆出价格类型、极值、Buy Box 卖家和 Offer 快照。 |
 | Marketplace Offer Object | 已接入 | `product_formatter.py` | `offers` 为标量主表；价格/库存/Prime 专享价/优惠券历史及重复报价分别拆表。 |
-| Category Object | 已接入 | `category_formatter.py` | Category 主表派生金额、评分与 URL；children、relatedCategories、topBrands 及 Lookup 父级对象/父子关系分别拆表。 |
+| Category Object | 已接入 | `category_formatter.py` | Category 主表派生金额、评分与 URL；children、relatedCategories、topBrands、两组 Top Seller ID/名称及 Lookup 父级对象/父子关系分别拆表。 |
 | Deal Object | 已接入 | `deal_formatter.py` | 派生图片、时间、成色、价格等指标，并追加 `deal_metrics`。 |
 | Best Sellers Object | 已接入 | `best_sellers_formatter.py` | 主表输出带排名的 ASIN，另有榜单元数据汇总。 |
 | Seller Object | 已接入 | `seller_formatter.py` | 评分窗口、评分历史、反馈、storefront、类目、品牌、竞对分别拆表。 |
@@ -37,3 +37,7 @@
 | `product_nested_values` | 尚无专用规则的新版嵌套字段，按 JSON path 展开标量叶子 |
 
 未知字段继续保留在 `raw.json`。格式化层不会用截断后的 Excel 单元格替代原始数据。
+
+## 真实响应验证
+
+2026-08-20 使用本地 Key 调用真实接口验证：Category Lookup 返回 1 个对象，Seller Information 返回 1 个对象，完整 Lightning Deals 返回 23,788 个对象及 45,374 条 variation。三个 formatter 的主表和附加表均不再包含 `dict/list` 单元格；完整原始响应仍只保存在工作区外的本地验证目录。

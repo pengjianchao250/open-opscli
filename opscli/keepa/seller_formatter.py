@@ -86,7 +86,7 @@ def format_seller_export(
             continue
         seller_id = value.get("sellerId")
         row = {key: item for key, item in value.items() if key not in DETAIL_FIELDS}
-        for field in ("trackingSince", "lastUpdate", "lastRatingUpdate"):
+        for field in ("trackedSince", "trackingSince", "lastUpdate", "lastRatingUpdate"):
             add_time_fields(row, field)
         row["addressText"] = _join_address(value.get("address"))
         row["customerServicesAddressText"] = _join_address(value.get("customerServicesAddress"))

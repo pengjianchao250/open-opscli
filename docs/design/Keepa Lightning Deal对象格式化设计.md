@@ -8,3 +8,4 @@
 - `dealState`、`percentClaimed`、`percentOff` 保留官方原值。
 - `variation` 从主表移除，每个 dimension/value 输出到 `lightning_variations`。
 - 完整原始对象仍保存在 `raw.json`。
+- 2026-08-20 完整 US 列表真实验证：返回 23,788 个 Deal Object 和 45,374 条 variation，主表与变体表均无嵌套单元格。

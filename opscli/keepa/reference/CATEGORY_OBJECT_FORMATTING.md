@@ -1,6 +1,6 @@
 # Keepa Category Object 字段格式化方案
 
-> 实现状态：已接入 `category-lookup` 与 `category-search`。实现文件：`opscli/keepa/category_formatter.py`；多值字段分别导出到 `category_children`、`category_related`、`category_brands`；`parents=true` 的 `categoryParents` 输出到 `category_parents` 与 `category_parent_children`。
+> 实现状态：已接入 `category-lookup` 与 `category-search`。实现文件：`opscli/keepa/category_formatter.py`；多值字段分别导出到 `category_children`、`category_related`、`category_brands`、`category_top_sellers`、`category_top_sellers_any`；`parents=true` 的 `categoryParents` 输出到 `category_parents` 与 `category_parent_children`。
 
 > 参考：Keepa Category Object 官方讨论文档 `https://keepa.com/#!discuss/t/category-object/115`。本文用于指导 `opscli keepa` 后续对 Category Object 的展示、导出与结构化解析；原始响应仍应完整保留。
 
@@ -59,8 +59,12 @@ Category Object 与 Product Object 的 `categories`、`rootCategory` 存在 ID �
 | `avgDeltaPercent90BuyBox` | `Float` | 最近 90 天 Buy Box 价格平均百分比变化，按商品等权计算 | 同上。 |
 | `avgDeltaPercent30Amazon` | `Float` | 最近 30 天 Amazon 自营价格平均百分比变化，按商品等权计算 | 同上。 |
 | `avgDeltaPercent90Amazon` | `Float` | 最近 90 天 Amazon 自营价格平均百分比变化，按商品等权计算 | 同上。 |
-| `relatedCategories` | `Long[]` | 常与该类目商品共同出现的相关类目 ID 列表，通常按共现频次排序 | 保留 JSON；导出明细时拆成 related category 表。 |
-| `topBrands` | `String[]` | 最常见品牌列表，最多 3 个，按出现频次降序 | 保留数组；主表可追加逗号拼接展示，明细表按 rank 展开。 |
+| `relatedCategories` | `Long[]` | 常与该类目商品共同出现的相关类目 ID 列表，通常按共现频次排序 | 完整数组保留在 `raw.json`；友好导出拆成 related category 表。 |
+| `topBrands` | `String[]` | 最常见品牌列表，真实响应可返回 5 个，按出现频次降序 | 从主表移除，明细表按 rank 展开。 |
+| `topSellers` | `String[]` | 当前有活跃 Offer 的 Top Seller ID | 与 `relatedSellerNames` 按索引配对，拆到 `category_top_sellers`。 |
+| `relatedSellerNames` | `String[]` | `topSellers` 对应的卖家展示名 | 与 Seller ID 按索引配对；长度不一致时保留较长一侧并将缺项留空。 |
+| `topSellersAny` | `String[]` | 不限定当前活跃 Offer 的 Top Seller ID | 与 `relatedSellerNamesAny` 按索引配对，拆到 `category_top_sellers_any`。 |
+| `relatedSellerNamesAny` | `String[]` | `topSellersAny` 对应的卖家展示名 | 与 Seller ID 按索引配对；长度不一致时不丢行。 |
 
 ## 4. 通用值格式化
 
@@ -74,7 +78,7 @@ Category Object 与 Product Object 的 `categories`、`rootCategory` 存在 ID �
 | 计数 | `productCount`、`avgReviewCount`、`sellerCount`、`brandCount`、`avgOfferCount*` | 整数或浮点 | 保留数值；平均 offer 数允许小数。 |
 | 排名 | `highestRank`、`lowestRank` | 整数 | 保持整数；Sales Rank 数值越小通常排名越好。 |
 | 布尔 | `isBrowseNode` | `true` / `false` / 缺失 | 保留布尔值；缺失和 `false` 区分处理。 |
-| 列表 | `children`、`relatedCategories`、`topBrands` | array / `null` | 主表保留 JSON；明细表按顺序展开。 |
+| 列表 | `children`、`relatedCategories`、`topBrands`、Top Seller ID/名称数组 | array / `null` | 主表保留计数，明细表按顺序展开；完整数组只在 `raw.json` 保留。 |
 | 缺失值 | `null`、字段缺失、空数组 | 依字段而定 | 不强制填 0；保留缺失语义，避免和真实 0 混淆。 |
 
 ## 5. `domainId` 映射
@@ -133,7 +137,7 @@ Category Object 与 Product Object 的 `categories`、`rootCategory` 存在 ID �
 
 ## 8. 建议输出结构
 
-Category Object 建议支持一个“类目主表”和多个“关系明细表”。如果 XLSX 只允许单 sheet，优先输出类目主表，并把 list 字段保留为 JSON 字符串。
+Category Object 输出一个“类目主表”和多个“关系明细表”。主表只保留标量和列表计数，完整数组保存在 `raw.json`，明细 Sheet 保留每个数组元素。
 
 ### 8.1 类目主表
 
@@ -151,8 +155,7 @@ Category Object 建议支持一个“类目主表”和多个“关系明细表�
 | `isRootCategory` | 派生 | `parent == 0`。 |
 | `isBlankCategory` | 派生 | `catId == 9223372036854775807`。 |
 | `isBrowseNode` | `isBrowseNode` | 是否标准 browse node。 |
-| `childCount` | `children` | 子类目数量。 |
-| `children` | `children` | 子类目 ID 数组 JSON。 |
+| `childrenCount` | `children` | 子类目数量。 |
 | `highestRank` | `highestRank` | 最差 Sales Rank。 |
 | `lowestRank` | `lowestRank` | 最佳 Sales Rank。 |
 | `productCount` | `productCount` | Keepa 估算商品数量。 |
@@ -179,10 +182,9 @@ Category Object 建议支持一个“类目主表”和多个“关系明细表�
 | `avgDeltaPercent30Amazon` | 原字段 | 30 天 Amazon 自营价格变化百分比值。 |
 | `avgDeltaPercent90Amazon` | 原字段 | 90 天 Amazon 自营价格变化百分比值。 |
 | `relatedCategoryCount` | `relatedCategories` | 相关类目数量。 |
-| `relatedCategories` | `relatedCategories` | 相关类目 ID 数组 JSON。 |
-| `topBrands` | `topBrands` | Top 品牌数组 JSON。 |
-| `topBrandsText` | 派生 | Top 品牌逗号拼接文本。 |
-| `categoryRaw` | 原始对象 | 完整 Category Object JSON，便于追溯。 |
+| `topBrandCount` | `topBrands` | Top 品牌数量。 |
+| `topSellerCount` | `topSellers` / `relatedSellerNames` | 当前活跃 Offer Top Seller 配对行数。 |
+| `topSellerAnyCount` | `topSellersAny` / `relatedSellerNamesAny` | 不限活跃 Offer Top Seller 配对行数。 |
 
 ### 8.2 子类目明细表
 
@@ -217,6 +219,18 @@ Category Object 建议支持一个“类目主表”和多个“关系明细表�
 | `brand` | `topBrands[index]` | 品牌名称。 |
 | `rowSource` | 派生 | 建议固定为 `categoryTopBrands`。 |
 
+### 8.5 Top Seller 明细表
+
+`category_top_sellers` 配对 `topSellers` 与 `relatedSellerNames`；`category_top_sellers_any` 配对 `topSellersAny` 与 `relatedSellerNamesAny`。
+
+| 字段 | 来源 | 说明 |
+| --- | --- | --- |
+| `catId` | 父对象 | 类目 ID，按文本导出。 |
+| `categoryRole` | 派生 | `result` 表示主查询对象，`parent` 表示 Lookup 父级对象。 |
+| `sellerRank` | 数组下标 + 1 | Keepa 返回顺序。 |
+| `sellerId` | `topSellers*` | Seller ID，按文本导出。 |
+| `sellerName` | `relatedSellerNames*` | 同索引的卖家展示名。 |
+
 ## 9. 与 Product / Best Sellers / Search Insights Object 的差异
 
 - Category Object 是类目节点数据；Product Object 是单个 ASIN 商品详情。
@@ -228,19 +242,18 @@ Category Object 建议支持一个“类目主表”和多个“关系明细表�
 
 ## 10. 与当前 `opscli` 实现的对应关系
 
-- Category Search / Category Lookup 场景后续应识别 Category Object，并避免按 Product Object 的 `csv` 或 Deal Object 的数组索引规则解析。
-- `raw_response_to_export_rows` 如遇 Category Object，应保留完整原始对象并设置 `rowSource = category` 或更具体的来源值。
-- 当前 XLSX 导出对 dict/list 做 JSON 字符串化；Category Object 友好导出应在 formatter 层先展开站点、类目链接、金额、评分、百分比和列表明细。
+- Category Search / Category Lookup 已识别 Category Object，不按 Product Object 的 `csv` 或 Deal Object 的数组索引规则解析。
+- `raw.json` 保留完整原始对象；友好导出在 formatter 层展开站点、类目链接、金额、评分和列表明细。
 - 类目 ID 应按文本导出，尤其是 `9223372036854775807`，避免 Excel 精度损失。
-- `children`、`relatedCategories`、`topBrands` 不应直接丢弃；主表保留 JSON，必要时输出独立明细表。
+- 所有已知多值字段从主表移除并输出独立明细表；未知字段继续由 `raw.json` 完整保留。
 
-## 11. 后续实现建议
+## 11. 实现约束
 
-1. 新增 `category_formatter.py`，输入 Category Object 和请求上下文，输出 `main_row`、`child_rows`、`related_category_rows`、`brand_rows`。
+1. `category_formatter.py` 输入 Category Object 和请求上下文，输出主表以及 children、related category、brand、Top Seller 明细。
 2. 复用 Keepa domain 到币种、金额缩放、Amazon host 的工具函数，避免金额字段各自处理。
 3. 对 `avgRating` 派生 `avgRatingStars`，保留 `avgRatingRaw` 便于追溯。
 4. 百分比字段保留原浮点值，另派生展示字符串；不要对 `avgDeltaPercent*` 或占比字段做 `* 100`。
 5. `catId`、`parent`、`children`、`relatedCategories` 全部按文本导出，避免 Excel 自动转科学计数或丢精度。
 6. 空白类目单独派生 `isBlankCategory`，不要生成 Amazon 类目链接，也不要参与正常类目树导航。
 7. 构建树结构时不要假设一次响应包含所有父子节点；缺失节点应允许后续补查。
-8. 文档与实现都必须保留未知字段，避免 Keepa 新增字段造成解析失败。
+8. 文档与实现都必须通过 `raw.json` 保留未知字段，避免 Keepa 新增字段造成解析失败。

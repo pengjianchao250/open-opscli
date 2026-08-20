@@ -4,9 +4,9 @@
 
 **变更原因**：Keepa 2026-08 文档新增 Seller Finder，并更新 Product 图片、参数与 token 规则；现有场景仍发送部分已移除参数，额度估算明显偏低，Category、Seller、Lightning Deal 及 Product 高基数字段缺少可直接分析的格式化输出。
 
-**改动点**：新增 `seller-finder` 场景；同步 Product、Product Search、Product Finder、Best Sellers、Category、Seller、Deals、Top Seller、Lightning Deals 参数与 token 合同；新增 Category、Seller、Lightning Deal formatter，并让 Product Search 复用 Product formatter。Product 图片、类目树、销售排名、Offer 历史/重复项、变体属性、列表字段和顶层历史拆到独立 XLSX/JSON Sheet，主表不再保留高基数嵌套单元格，完整响应仍只读保存在 `raw.json`。同步更新格式化状态、对象合同、Keepa Skill 与接口调研报告；Graph Image 和 Tracking 因二进制/状态变更语义保留为独立后续范围。
+**改动点**：新增 `seller-finder` 场景；同步 Product、Product Search、Product Finder、Best Sellers、Category、Seller、Deals、Top Seller、Lightning Deals 参数与 token 合同；新增 Category、Seller、Lightning Deal formatter，并让 Product Search 复用 Product formatter。Product 图片、类目树、销售排名、Offer 历史/重复项、变体属性、列表字段和顶层历史拆到独立 XLSX/JSON Sheet；真实 Category 的两组 Top Seller ID/名称数组新增独立 Sheet；Seller 兼容真实 `trackedSince` 字段。OPS 认证异常时允许显式 `OPSCLI_KEEPA_API_KEY` 继续兜底，主表不再保留高基数嵌套单元格，完整响应仍只读保存在 `raw.json`。同步更新格式化状态、对象合同、Keepa Skill 与接口调研报告；Graph Image 和 Tracking 因二进制/状态变更语义保留为独立后续范围。
 
-**验证结果**：聚焦场景、对象 formatter、Manager、导出和 Keepa Skill 合同 57 项全部通过；Keepa 全组 71 项通过，唯一失败是仓库既有 `keepa-debug` 根命令未注册。使用本机 5 份历史真实 Product 响应只读验证：单样本约产生 7,867 条 CSV 历史、8,223 条销售排名、833 条顶层历史，拆表后主表嵌套字段数为 0。当前无可用 Keepa Key，OPS Token 刷新返回 401，因此未发起新的线上请求；Category/Seller/Lightning fixture 依据 2026-08-20 官方对象页示例脱敏构造。仓库全量测试仍在收集阶段被既有 pytest 捕获流关闭问题中止并报告 43 errors。
+**验证结果**：本轮聚焦测试 27 项通过；Keepa 全组 `72 passed, 1 failed`，唯一失败仍是仓库既有 `keepa-debug` 根命令未注册。使用本机 5 份历史真实 Product 响应只读验证：单样本约产生 7,867 条 CSV 历史、8,223 条销售排名、833 条顶层历史，拆表后主表嵌套字段数为 0。另使用用户提供的本地 Key 调用真实 Category、Seller 与 Lightning Deals：分别返回 1、1、23,788 个对象，Lightning variation 45,374 行，所有主表/明细表嵌套字段数为 0；XLSX 已逐 Sheet 渲染核验。本地 Key 兜底回归覆盖 OPS 401 场景。Ruff、compileall 与 `git diff --check` 通过；仓库全量测试仍受既有 pytest 捕获流关闭问题阻断。
 
 **影响范围**：影响 Keepa 查询场景参数、额度预检、XLSX/格式化 JSON Sheet 合同和 `ops-keepa` Skill v0.0.2；不改变 `raw.json`，不接入 Graph Image 或 Tracking，不执行任何 Tracking 写操作。
 

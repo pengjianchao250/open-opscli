@@ -13,7 +13,15 @@ from opscli.keepa.object_formatting import (
 )
 
 # Category 主表需要拆出的官方多值字段。
-ARRAY_FIELDS = {"children", "relatedCategories", "topBrands"}
+ARRAY_FIELDS = {
+    "children",
+    "relatedCategories",
+    "topBrands",
+    "relatedSellerNames",
+    "relatedSellerNamesAny",
+    "topSellers",
+    "topSellersAny",
+}
 # Category Object 中以站点最小货币单位返回的聚合金额字段。
 MONEY_FIELDS = {"avgBuyBox", "avgBuyBox90", "avgBuyBox365", "avgBuyBoxDeviation"}
 # Keepa 官方约定的“无类目”特殊节点 ID。
@@ -28,6 +36,8 @@ class FormattedCategoryExport:
     children: list[dict[str, Any]]
     related: list[dict[str, Any]]
     brands: list[dict[str, Any]]
+    top_sellers: list[dict[str, Any]]
+    top_sellers_any: list[dict[str, Any]]
     parents: list[dict[str, Any]]
     parent_children: list[dict[str, Any]]
 
@@ -39,6 +49,8 @@ class FormattedCategoryExport:
                 "category_children": self.children,
                 "category_related": self.related,
                 "category_brands": self.brands,
+                "category_top_sellers": self.top_sellers,
+                "category_top_sellers_any": self.top_sellers_any,
                 "category_parents": self.parents,
                 "category_parent_children": self.parent_children,
             }.items()
@@ -63,6 +75,8 @@ def format_category_export(
     children: list[dict[str, Any]] = []
     related: list[dict[str, Any]] = []
     brands: list[dict[str, Any]] = []
+    top_sellers: list[dict[str, Any]] = []
+    top_sellers_any: list[dict[str, Any]] = []
     currency_code, decimals = currency_info(site=site, domain_id=domain_id)
 
     for value in rows:
@@ -87,6 +101,12 @@ def format_category_export(
         row["childrenCount"] = len(value.get("children") or [])
         row["relatedCategoryCount"] = len(value.get("relatedCategories") or [])
         row["topBrandCount"] = len(value.get("topBrands") or [])
+        row["topSellerCount"] = _paired_count(
+            value.get("topSellers"), value.get("relatedSellerNames")
+        )
+        row["topSellerAnyCount"] = _paired_count(
+            value.get("topSellersAny"), value.get("relatedSellerNamesAny")
+        )
         categories.append(row)
 
         children.extend(
@@ -109,6 +129,22 @@ def format_category_export(
             {"catId": category_id, "brandRank": index + 1, "brand": brand}
             for index, brand in enumerate(value.get("topBrands") or [])
         )
+        top_sellers.extend(
+            _seller_rows(
+                category_id,
+                value.get("topSellers"),
+                value.get("relatedSellerNames"),
+                category_role="result",
+            )
+        )
+        top_sellers_any.extend(
+            _seller_rows(
+                category_id,
+                value.get("topSellersAny"),
+                value.get("relatedSellerNamesAny"),
+                category_role="result",
+            )
+        )
 
     parents: list[dict[str, Any]] = []
     parent_children: list[dict[str, Any]] = []
@@ -125,8 +161,31 @@ def format_category_export(
             }
             for index, child in enumerate(value.get("children") or [])
         )
+        top_sellers.extend(
+            _seller_rows(
+                parent_id,
+                value.get("topSellers"),
+                value.get("relatedSellerNames"),
+                category_role="parent",
+            )
+        )
+        top_sellers_any.extend(
+            _seller_rows(
+                parent_id,
+                value.get("topSellersAny"),
+                value.get("relatedSellerNamesAny"),
+                category_role="parent",
+            )
+        )
     return FormattedCategoryExport(
-        categories, children, related, brands, parents, parent_children
+        categories,
+        children,
+        related,
+        brands,
+        top_sellers,
+        top_sellers_any,
+        parents,
+        parent_children,
     )
 
 
@@ -141,4 +200,40 @@ def _format_parent(value: Any, *, site: str, domain_id: Any) -> dict[str, Any]:
     row["categoryUrl"] = category_url(
         row["catId"], site=site, domain_id=value.get("domainId", domain_id)
     )
+    row["childrenCount"] = len(value.get("children") or [])
+    row["topSellerCount"] = _paired_count(
+        value.get("topSellers"), value.get("relatedSellerNames")
+    )
+    row["topSellerAnyCount"] = _paired_count(
+        value.get("topSellersAny"), value.get("relatedSellerNamesAny")
+    )
     return row
+
+
+def _seller_rows(
+    category_id: Any,
+    seller_ids: Any,
+    seller_names: Any,
+    *,
+    category_role: str,
+) -> list[dict[str, Any]]:
+    """按官方并行数组顺序配对类目的 Top Seller ID 与展示名。"""
+    ids = seller_ids if isinstance(seller_ids, list) else []
+    names = seller_names if isinstance(seller_names, list) else []
+    return [
+        {
+            "catId": string_id(category_id),
+            "categoryRole": category_role,
+            "sellerRank": index + 1,
+            "sellerId": string_id(ids[index]) if index < len(ids) else None,
+            "sellerName": names[index] if index < len(names) else None,
+        }
+        for index in range(max(len(ids), len(names)))
+    ]
+
+
+def _paired_count(left: Any, right: Any) -> int:
+    """返回两个并行数组需要保留的最大行数。"""
+    left_count = len(left) if isinstance(left, list) else 0
+    right_count = len(right) if isinstance(right, list) else 0
+    return max(left_count, right_count)

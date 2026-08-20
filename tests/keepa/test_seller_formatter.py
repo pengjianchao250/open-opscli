@@ -8,7 +8,7 @@ def test_seller_formatter_splits_ratings_histories_and_storefront_details():
                 "domainId": 1,
                 "sellerId": "A2L77EE7U53NWQ",
                 "sellerName": "Example Store",
-                "trackingSince": 7588958,
+                "trackedSince": 7588958,
                 "lastUpdate": 7589018,
                 "lastRatingUpdate": 7589078,
                 "address": ["123 Main Street", "New York", "US"],
@@ -34,6 +34,7 @@ def test_seller_formatter_splits_ratings_histories_and_storefront_details():
     assert seller["addressText"] == "123 Main Street | New York | US"
     assert seller["totalStorefrontAsinCount"] == 1200
     assert seller["rating30DaysCount"] == 3
+    assert seller["trackedSinceUtc"] == "2025-06-06T02:38:00Z"
     assert "recentFeedback" not in seller
     assert "asinList" not in seller
     assert "address" not in seller

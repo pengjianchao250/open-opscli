@@ -6,10 +6,14 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from opscli.auth.domain.exceptions import AuthError
 from opscli.keepa.config import KeepaSettings, load_settings
 from opscli.keepa.domain.exceptions import KeepaConfigError
-from opscli.shared.integration_accounts import IntegrationAccountBundle, IntegrationAccountClient, IntegrationAccountError
-
+from opscli.shared.integration_accounts import (
+    IntegrationAccountBundle,
+    IntegrationAccountClient,
+    IntegrationAccountError,
+)
 
 _REMOTE_BUNDLE_CACHE: dict[str, tuple[float, IntegrationAccountBundle]] = {}
 
@@ -42,7 +46,7 @@ class KeepaApiKeyProvider:
         self.settings = settings or load_settings()
         self.integration_client = integration_client or IntegrationAccountClient()
         self._remote_bundle: IntegrationAccountBundle | None = None
-        self._remote_error: IntegrationAccountError | None = None
+        self._remote_error: IntegrationAccountError | AuthError | None = None
 
     def get_default(self, *, refresh: bool = False) -> KeepaApiKey:
         """读取默认 Keepa API Key。"""
@@ -94,7 +98,8 @@ class KeepaApiKeyProvider:
             self._remote_bundle = self.integration_client.get_accounts("keepa")
             self._remote_error = None
             _REMOTE_BUNDLE_CACHE["keepa"] = (time.time(), self._remote_bundle)
-        except IntegrationAccountError as exc:
+        except (IntegrationAccountError, AuthError) as exc:
+            # 本地显式 Key 是 OPS 不可用时的兜底，认证过期不能阻断后续环境变量读取。
             self._remote_error = exc
             self._remote_bundle = None
         return self._remote_bundle

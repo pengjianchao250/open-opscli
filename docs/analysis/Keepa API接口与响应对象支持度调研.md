@@ -29,11 +29,15 @@
 
 ### 0.1 真实响应验证
 
-- 当前环境没有 `OPSCLI_KEEPA_API_KEY`，OPS Token 刷新返回 401，因此未能消耗额度发起新的线上请求。
+- 使用用户提供的本地 Keepa Key 于 2026-08-20 完成线上验证；Key 仅从工作区外文件读取，未写入仓库、请求记录或文档。调用 Category Lookup、Seller Information、指定 ASIN Lightning Deals 和完整 Lightning Deals，分别消耗 1、1、1、500 token。
+- Category Lookup `1055398` 返回 1 个真实 Category Object。除既有 `children`、`topBrands` 外，确认新版对象还返回 `relatedSellerNames`、`relatedSellerNamesAny`、`topSellers`、`topSellersAny` 四个并行数组；现已拆到 `category_top_sellers` 与 `category_top_sellers_any`，主表不再保留复杂单元格。
+- Seller Information `ATVPDKIKX0DER` 返回 1 个真实 Seller Object，确认时间字段为 `trackedSince`，并取得 10 条类目统计、10 条品牌统计和 10 条竞对记录；主表剩余嵌套字段数为 0。
+- 指定 ASIN 的 Lightning Deals 返回空结果；完整列表返回 23,788 个 Lightning Deal Object 和 45,374 条 variation 明细，真实字段与 formatter 合同一致，主表和明细表剩余嵌套字段数均为 0。
+- 真实验证同时发现 `OPSCLI_KEEPA_API_KEY` 会被 OPS 登录态 401 提前阻断；已让账号提供器捕获认证异常后继续使用显式本地 Key，并增加回归测试。
 - 使用本机 5 份历史真实 Product 响应验证，均为 ASIN `B0B56CHMSC`；测试代码不读取这些用户文件，仓库 fixture 使用脱敏固定值。
 - 单个真实 Product 约有 97 个顶层字段、8 张图片、41 个变体、82 条变体属性、36 个 CSV 槽位和 4 组销售排名。
 - 一次样本格式化产生约 7,867 条 `csv_history`、8,223 条 `sales_ranks`、833 条 `product_history`；格式化主表剩余嵌套字段数为 0。
-- Category、Seller、Lightning Deal 因无可用 Key，响应格式依据 2026-08-20 官方对象页示例构造脱敏 fixture，并由单元测试锁定。
+- 线上原始响应和 XLSX 仅保存在工作区外的本地验证目录，不纳入 Git；仓库测试继续使用脱敏固定 fixture，避免测试访问真实网络或用户文件。
 
 以下第 1-6 节保留实施前调研问题及决策依据；当前状态以本节和 `opscli/keepa/reference/FORMATTERS_STATUS.md` 为准。
 
