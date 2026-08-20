@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from opscli.shared.collection_storage.config import MySqlSettings
-from opscli.seller_sprite.history_migration import (
+from seller_sprite_history_migration.migration import (
     HistoryArtifact,
     HistoryMigrationRepository,
     PreparedHistoryTask,

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from opscli.seller_sprite.history_migration import (
+from seller_sprite_history_migration.migration import (
     PURGE_CONFIRMATION,
     HistoryMigrationError,
     SellerSpriteHistoryScanner,

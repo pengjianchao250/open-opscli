@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from opscli.seller_sprite.history_migration_cli import main
+from seller_sprite_history_migration.cli import main
 
 
 def _write_json(path: Path, payload: object) -> None:

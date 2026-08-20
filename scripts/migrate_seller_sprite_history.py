@@ -1,6 +1,6 @@
-"""卖家精灵历史数据回流 MySQL 的受控脚本入口。"""
+"""卖家精灵历史迁移旧入口，实际实现位于独立迁移目录。"""
 
-from opscli.seller_sprite.history_migration_cli import main
+from seller_sprite_history_migration.cli import main
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Sequence
 
 from opscli.shared.collection_storage.config import load_storage_settings
-from opscli.seller_sprite.history_migration import (
+from .migration import (
     PURGE_CONFIRMATION,
     HistoryMigrationError,
     HistoryMigrationRepository,
