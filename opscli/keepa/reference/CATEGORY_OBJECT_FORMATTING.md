@@ -1,5 +1,7 @@
 # Keepa Category Object 字段格式化方案
 
+> 实现状态：已接入 `category-lookup` 与 `category-search`。实现文件：`opscli/keepa/category_formatter.py`；多值字段分别导出到 `category_children`、`category_related`、`category_brands`；`parents=true` 的 `categoryParents` 输出到 `category_parents` 与 `category_parent_children`。
+
 > 参考：Keepa Category Object 官方讨论文档 `https://keepa.com/#!discuss/t/category-object/115`。本文用于指导 `opscli keepa` 后续对 Category Object 的展示、导出与结构化解析；原始响应仍应完整保留。
 
 ## 1. 总体原则

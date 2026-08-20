@@ -122,16 +122,17 @@ opscli keepa export <job_id>
 
 | 用户意图 | scenario | 必填参数 | 常用可选参数 |
 | --- | --- | --- | --- |
-| 查商品详情、查 ASIN、查价格历史 | `product` | `asin/asins` 或 `code/codes` | `stats`, `history`, `offers`, `buybox`, `rating`, `days`, `update` |
-| 关键词搜商品 | `product-search` | `keyword` 或 `term` | `page`, `stats`, `history`, `update`, `asins_only` |
+| 查商品详情、查 ASIN、查价格历史 | `product` | `asin/asins` 或 `code/codes` | `stats`, `history`, `offers`, `buybox`, `rating`, `days`, `update`, `code_limit`, `historical_variations` |
+| 关键词搜商品 | `product-search` | `keyword` 或 `term` | `stats`, `history`, `update`, `rating`, `asins_only` |
 | 按条件筛商品 | `product-finder` | `selection` 或至少 1 个筛选字段 | `stats` |
-| 查类目关键词 | `category-search` | `keyword` 或 `term` | `parents` |
+| 查类目关键词 | `category-search` | `keyword` 或 `term` | 无 |
 | 查类目详情 | `category-lookup` | `category/categories` | `parents` |
-| 查卖家/店铺 | `seller` | `seller/sellers` | `storefront`, `update` |
+| 查卖家/店铺 | `seller` | `seller/sellers` | `storefront` |
+| 按条件筛卖家 | `seller-finder` | `selection` 或至少 1 个筛选字段 | `selection.perPage`, `selection.sort` |
 | 查头部卖家 | `top-seller` | 无 | 无 |
-| 查热销榜 | `bestsellers` | `category` 或 `productGroup` | 无 |
+| 查热销榜 | `bestsellers` | `category` 或 `productGroup` | `range`, `month`+`year`, `variations`, `sublist` |
 | 查折扣商品 | `deals` | 无固定必填，建议给 `selection` | `selection` |
-| 查秒杀 | `lightning-deals` | 无 | `asin` |
+| 查秒杀 | `lightning-deals` | 无 | `asin`, `state` |
 
 ## 常用示例
 
@@ -144,7 +145,7 @@ opscli keepa run product --site US --params '{"asin":"B0088PUEPK","stats":30,"hi
 关键词搜索：
 
 ```powershell
-opscli keepa run product-search --site US --params '{"keyword":"flashlight","page":0}'
+opscli keepa run product-search --site US --params '{"keyword":"flashlight","rating":true}'
 ```
 
 只导出 ASIN 列表：

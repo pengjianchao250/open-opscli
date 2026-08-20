@@ -266,7 +266,7 @@ def _normalize_row(row: Any, *, scenario: str) -> dict[str, Any]:
     if isinstance(row, dict):
         return row
     if isinstance(row, str):
-        if scenario in {"seller", "top-seller"}:
+        if scenario in {"seller", "seller-finder", "top-seller"}:
             return {"sellerId": row}
         return {"asin": row}
     return {"value": row}

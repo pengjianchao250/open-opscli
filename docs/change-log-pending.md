@@ -1,5 +1,19 @@
 # 待归档变更记录
 
+## 2026-08-20 Keepa - 同步新版 Endpoint 并扩展 Response Object 格式化
+
+**变更原因**：Keepa 2026-08 文档新增 Seller Finder，并更新 Product 图片、参数与 token 规则；现有场景仍发送部分已移除参数，额度估算明显偏低，Category、Seller、Lightning Deal 及 Product 高基数字段缺少可直接分析的格式化输出。
+
+**改动点**：新增 `seller-finder` 场景；同步 Product、Product Search、Product Finder、Best Sellers、Category、Seller、Deals、Top Seller、Lightning Deals 参数与 token 合同；新增 Category、Seller、Lightning Deal formatter，并让 Product Search 复用 Product formatter。Product 图片、类目树、销售排名、Offer 历史/重复项、变体属性、列表字段和顶层历史拆到独立 XLSX/JSON Sheet，主表不再保留高基数嵌套单元格，完整响应仍只读保存在 `raw.json`。同步更新格式化状态、对象合同、Keepa Skill 与接口调研报告；Graph Image 和 Tracking 因二进制/状态变更语义保留为独立后续范围。
+
+**验证结果**：聚焦场景、对象 formatter、Manager、导出和 Keepa Skill 合同 57 项全部通过；Keepa 全组 71 项通过，唯一失败是仓库既有 `keepa-debug` 根命令未注册。使用本机 5 份历史真实 Product 响应只读验证：单样本约产生 7,867 条 CSV 历史、8,223 条销售排名、833 条顶层历史，拆表后主表嵌套字段数为 0。当前无可用 Keepa Key，OPS Token 刷新返回 401，因此未发起新的线上请求；Category/Seller/Lightning fixture 依据 2026-08-20 官方对象页示例脱敏构造。仓库全量测试仍在收集阶段被既有 pytest 捕获流关闭问题中止并报告 43 errors。
+
+**影响范围**：影响 Keepa 查询场景参数、额度预检、XLSX/格式化 JSON Sheet 合同和 `ops-keepa` Skill v0.0.2；不改变 `raw.json`，不接入 Graph Image 或 Tracking，不执行任何 Tracking 写操作。
+
+**回滚方式**：回退 Keepa 场景、formatter、Manager、测试、参考文档、Skill 版本和本条记录；历史 `raw.json` 无需迁移。
+
+---
+
 ## 2026-08-19 SellerSprite - 新增历史导出无路径回流脚本
 
 **变更原因**：生产 SellerSprite 历史导出约 21 GB，既有共享沉淀只登记本地 `file://` URI，无法在删除原文件后保留 raw 数据，也缺少历史批次、核验和清理门禁。

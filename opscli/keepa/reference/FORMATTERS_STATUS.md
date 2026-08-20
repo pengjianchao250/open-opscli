@@ -1,18 +1,39 @@
 # Keepa 格式化实现状态
 
-本目录中的 `*_FORMATTING.md` 是 Keepa 对象格式化方案文档。实现状态如下：
+本目录中的 `*_FORMATTING.md` 记录 Keepa Response Object 的格式化合同。`raw.json` 始终保留完整原始响应；XLSX 和格式化 JSON 共用同一组主表/明细表。
 
-| 文档 | 对象 | 状态 | 实现位置 | 默认导出行为 |
-| --- | --- | --- | --- | --- |
-| `PRODUCT_OBJECT_FORMATTING.md` | Product Object | 已接入 | `opscli/keepa/product_formatter.py` | `product` 场景 XLSX 默认派生金额、时间、图片、类目、变体摘要、stats 当前值，并按需追加 `csv_history`、`offers`、`variations` sheet。 |
-| `SEARCH_INSIGHTS_OBJECT_FORMATTING.md` | Search Insights Object | 已接入 | `opscli/keepa/search_insights_formatter.py` | `product-finder` 携带 `stats=1` 且返回 `searchInsights` 时，XLSX 默认追加 `search_insights`、`search_insight_brands`、`search_insight_sellers`、`search_insight_categories` sheet。 |
-| `STATISTICS_OBJECT_FORMATTING.md` | Statistics Object | 已接入 | `opscli/keepa/stats_formatter.py` | `product` 场景返回 `stats` 时，XLSX 默认派生 stats 主表字段，并按需追加 `stats_price_types`、`stats_extremes`、`stats_buy_box_sellers`、`stats_offer_snapshot` sheet。 |
-| `BEST_SELLERS_OBJECT_FORMATTING.md` | Best Sellers Object | 已接入 | `opscli/keepa/best_sellers_formatter.py` | `bestsellers` 场景 XLSX 主表默认输出带 `bestSellerRank` 的 ASIN 明细，并追加 `best_sellers_list` 汇总 sheet。 |
-| `DEAL_OBJECT_FORMATTING.md` | Deal Object | 已接入 | `opscli/keepa/deal_formatter.py` | `deals` 场景 XLSX 默认派生图片、时间、Warehouse 成色、Lightning 标记、常用 current 指标，并追加 `deal_metrics` 指标展开 sheet。 |
-| `CATEGORY_OBJECT_FORMATTING.md` | Category Object | 待接入 | - | 暂未实现独立 formatter。 |
+| 对象 | 状态 | 实现位置 | 默认导出行为 |
+| --- | --- | --- | --- |
+| Product Object | 已接入 | `product_formatter.py` | `product`、返回 Product Object 的 `product-search` 共用格式化；大数组和历史序列拆成图片、类目、排名、Offer、变体、列表值与历史 Sheet。 |
+| Statistics Object | 已接入 | `stats_formatter.py` | 派生当前指标，拆出价格类型、极值、Buy Box 卖家和 Offer 快照。 |
+| Marketplace Offer Object | 已接入 | `product_formatter.py` | `offers` 为标量主表；价格/库存/Prime 专享价/优惠券历史及重复报价分别拆表。 |
+| Category Object | 已接入 | `category_formatter.py` | Category 主表派生金额、评分与 URL；children、relatedCategories、topBrands 及 Lookup 父级对象/父子关系分别拆表。 |
+| Deal Object | 已接入 | `deal_formatter.py` | 派生图片、时间、成色、价格等指标，并追加 `deal_metrics`。 |
+| Best Sellers Object | 已接入 | `best_sellers_formatter.py` | 主表输出带排名的 ASIN，另有榜单元数据汇总。 |
+| Seller Object | 已接入 | `seller_formatter.py` | 评分窗口、评分历史、反馈、storefront、类目、品牌、竞对分别拆表。 |
+| Lightning Deal Object | 已接入 | `lightning_deal_formatter.py` | 主表派生金额、时间、评分、图片；variation 维度拆表。 |
+| Search Insights Object | 已接入 | `search_insights_formatter.py` | `product-finder stats=1` 时拆出主指标、品牌、卖家和类目。 |
+| Tracking Object | 未接入 | - | Tracking Endpoint 尚未提供正式只读 API。 |
+| Tracking Creation Object | 未接入 | - | 属于状态变更请求对象，需单独的输入校验、权限和审计设计。 |
+| Notification Object | 未接入 | - | 依赖 Tracking notification/webhook 接口及已读副作用设计。 |
 
-约定：
+当前为 9/12 类官方 Response Object 提供友好格式化；剩余 3 类全部属于尚未接入的 Tracking 域。Graph Image 返回二进制图片，不属于 Response Object formatter。
 
-- `raw.json` 始终保留 Keepa 原始返回，不覆盖原字段。
-- 默认 XLSX 是用户可读导出，已接入 formatter 的对象会自动生成派生字段和明细 sheet。
-- 用户明确要求原始 JSON、后端比对或结果过大时，才跳过默认 XLSX 友好导出。
+## Product 明细 Sheet
+
+| Sheet | 内容 |
+| --- | --- |
+| `csv_history` | 36 类价格、排名、评分与计数历史 |
+| `images` | 图片 variant、尺寸、文件名和 URL |
+| `category_tree` | 有序类目路径 |
+| `sales_ranks` | 各类目的销售排名历史 |
+| `offers` | Offer 标量字段和当前排序 |
+| `offer_history` | Offer 价格、库存、Prime 专享价和优惠券历史 |
+| `offer_duplicates` | 重复报价明细 |
+| `variations` | 变体标量摘要 |
+| `variation_attributes` | 变体 dimension/value |
+| `product_list_values` | features、materials、categories 等多值字段 |
+| `product_history` | monthlySold、parentAsin、salesRankReference 等顶层历史 |
+| `product_nested_values` | 尚无专用规则的新版嵌套字段，按 JSON path 展开标量叶子 |
+
+未知字段继续保留在 `raw.json`。格式化层不会用截断后的 Excel 单元格替代原始数据。

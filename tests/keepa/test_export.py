@@ -17,6 +17,7 @@ SCENARIO_ROWS = {
     "category-search": [{"catId": 172282, "name": "Electronics", "unknownCategoryField": "raw"}],
     "category-lookup": [{"categoryId": 172282, "name": "Electronics", "children": [1, 2]}],
     "seller": [{"sellerId": "A2L77EE7U53NWQ", "sellerName": "Test Seller", "ratingCount": 5}],
+    "seller-finder": ["A2L77EE7U53NWQ"],
     "top-seller": ["A2L77EE7U53NWQ"],
     "bestsellers": ["B0088PUEPK"],
     "deals": [{"asin": "B0088PUEPK", "dealId": "deal-1", "rawDealField": {"price": 1299}}],

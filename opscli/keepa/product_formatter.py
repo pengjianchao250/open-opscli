@@ -11,17 +11,22 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from opscli.keepa.object_formatting import (
+    DOMAIN_CURRENCY_INFO,
+    IMAGE_BASE_URL,
+    SITE_DOMAIN,
+)
+from opscli.keepa.stats_formatter import FormattedStatsExport, format_stats_for_product
 from opscli.keepa.time import (
     keepa_minutes_to_unix_milliseconds,
     keepa_minutes_to_unix_seconds,
     keepa_minutes_to_utc_iso,
 )
-from opscli.keepa.stats_formatter import FormattedStatsExport, format_stats_for_product
 
-
+# Keepa 数值字段通用的缺失哨兵值。
 MISSING_NUMERIC_VALUES = {-1}
-IMAGE_BASE_URL = "https://m.media-amazon.com/images/I"
 
+# Product 顶层使用 Keepa Time minutes 的字段白名单。
 KEEPA_TIME_FIELDS = {
     "trackingSince",
     "listedSince",
@@ -31,12 +36,14 @@ KEEPA_TIME_FIELDS = {
     "lastSoldUpdate",
 }
 
+# Product 顶层使用站点最小货币单位的字段白名单。
 MONEY_FIELDS = {
     "competitivePriceThreshold",
     "suggestedLowerPrice",
     "variableClosingFee",
 }
 
+# Amazon 紧凑日期整数及尺寸/重量字段白名单。
 DATE_INT_FIELDS = {"publicationDate", "releaseDate"}
 DIMENSION_MM_FIELDS = {
     "packageHeight",
@@ -47,7 +54,30 @@ DIMENSION_MM_FIELDS = {
     "itemWidth",
 }
 WEIGHT_GRAM_FIELDS = {"packageWeight", "itemWeight"}
+# 常用短列表先派生 joined 摘要，再从主表拆到明细表。
 JOINED_ARRAY_FIELDS = {"eanList", "upcList", "gtinList", "frequentlyBoughtTogether"}
+# Product 主表需要拆到通用列表明细的官方数组字段。
+LIST_DETAIL_FIELDS = {
+    "buyBoxEligibleOfferCounts",
+    "categories",
+    "eanList",
+    "features",
+    "frequentlyBoughtTogether",
+    "gtinList",
+    "hazardousMaterials",
+    "materials",
+    "specialFeatures",
+    "upcList",
+}
+# Product 顶层按 Keepa Time/value 二元组返回的历史字段。
+PRODUCT_HISTORY_FIELDS = {
+    "monthlySoldHistory",
+    "parentAsinHistory",
+    "salesRankReferenceHistory",
+    "rootCategoryHistory",
+    "buyBoxSellerIdHistory",
+    "buyBoxUsedHistory",
+}
 
 
 @dataclass(frozen=True)
@@ -56,33 +86,10 @@ class CurrencyConfig:
     decimals: int
 
 
+# Product formatter 使用不可变币种配置对象，数据来源统一由共用映射维护。
 DOMAIN_CURRENCY: dict[int, CurrencyConfig] = {
-    1: CurrencyConfig("USD", 2),
-    2: CurrencyConfig("GBP", 2),
-    3: CurrencyConfig("EUR", 2),
-    4: CurrencyConfig("EUR", 2),
-    5: CurrencyConfig("JPY", 0),
-    6: CurrencyConfig("CAD", 2),
-    8: CurrencyConfig("EUR", 2),
-    9: CurrencyConfig("EUR", 2),
-    10: CurrencyConfig("INR", 2),
-    11: CurrencyConfig("MXN", 2),
-    12: CurrencyConfig("BRL", 2),
-}
-
-SITE_DOMAIN: dict[str, int] = {
-    "US": 1,
-    "GB": 2,
-    "UK": 2,
-    "DE": 3,
-    "FR": 4,
-    "JP": 5,
-    "CA": 6,
-    "IT": 8,
-    "ES": 9,
-    "IN": 10,
-    "MX": 11,
-    "BR": 12,
+    domain: CurrencyConfig(*currency)
+    for domain, currency in DOMAIN_CURRENCY_INFO.items()
 }
 
 
@@ -151,8 +158,17 @@ CURRENT_FIELD_BY_INDEX = {
 class FormattedProductExport:
     products: list[dict[str, Any]]
     csv_history: list[dict[str, Any]]
+    images: list[dict[str, Any]]
+    category_tree: list[dict[str, Any]]
+    sales_ranks: list[dict[str, Any]]
     offers: list[dict[str, Any]]
+    offer_history: list[dict[str, Any]]
+    offer_duplicates: list[dict[str, Any]]
     variations: list[dict[str, Any]]
+    variation_attributes: list[dict[str, Any]]
+    list_values: list[dict[str, Any]]
+    product_history: list[dict[str, Any]]
+    nested_values: list[dict[str, Any]]
     stats_price_types: list[dict[str, Any]]
     stats_extremes: list[dict[str, Any]]
     stats_buy_box_sellers: list[dict[str, Any]]
@@ -162,10 +178,28 @@ class FormattedProductExport:
         sheets: dict[str, list[dict[str, Any]]] = {}
         if self.csv_history:
             sheets["csv_history"] = self.csv_history
+        if self.images:
+            sheets["images"] = self.images
+        if self.category_tree:
+            sheets["category_tree"] = self.category_tree
+        if self.sales_ranks:
+            sheets["sales_ranks"] = self.sales_ranks
         if self.offers:
             sheets["offers"] = self.offers
+        if self.offer_history:
+            sheets["offer_history"] = self.offer_history
+        if self.offer_duplicates:
+            sheets["offer_duplicates"] = self.offer_duplicates
         if self.variations:
             sheets["variations"] = self.variations
+        if self.variation_attributes:
+            sheets["variation_attributes"] = self.variation_attributes
+        if self.list_values:
+            sheets["product_list_values"] = self.list_values
+        if self.product_history:
+            sheets["product_history"] = self.product_history
+        if self.nested_values:
+            sheets["product_nested_values"] = self.nested_values
         if self.stats_price_types:
             sheets["stats_price_types"] = self.stats_price_types
         if self.stats_extremes:
@@ -180,8 +214,17 @@ class FormattedProductExport:
         return {
             "products": self.products,
             "csv_history": self.csv_history,
+            "images": self.images,
+            "category_tree": self.category_tree,
+            "sales_ranks": self.sales_ranks,
             "offers": self.offers,
+            "offer_history": self.offer_history,
+            "offer_duplicates": self.offer_duplicates,
             "variations": self.variations,
+            "variation_attributes": self.variation_attributes,
+            "list_values": self.list_values,
+            "product_history": self.product_history,
+            "nested_values": self.nested_values,
             "stats_price_types": self.stats_price_types,
             "stats_extremes": self.stats_extremes,
             "stats_buy_box_sellers": self.stats_buy_box_sellers,
@@ -193,8 +236,17 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
     """Format Keepa product rows into a main table plus optional detail tables."""
     products: list[dict[str, Any]] = []
     csv_history: list[dict[str, Any]] = []
+    images: list[dict[str, Any]] = []
+    category_tree: list[dict[str, Any]] = []
+    sales_ranks: list[dict[str, Any]] = []
     offers: list[dict[str, Any]] = []
+    offer_history: list[dict[str, Any]] = []
+    offer_duplicates: list[dict[str, Any]] = []
     variations: list[dict[str, Any]] = []
+    variation_attributes: list[dict[str, Any]] = []
+    list_values: list[dict[str, Any]] = []
+    product_history: list[dict[str, Any]] = []
+    nested_values: list[dict[str, Any]] = []
     stats_price_types: list[dict[str, Any]] = []
     stats_extremes: list[dict[str, Any]] = []
     stats_buy_box_sellers: list[dict[str, Any]] = []
@@ -210,8 +262,19 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
         products.append(formatted)
         asin = _string_or_empty(row.get("asin"))
         csv_history.extend(format_csv_history_rows(row, asin=asin, currency=currency))
+        images.extend(format_image_rows(row, asin=asin))
+        category_tree.extend(format_category_tree_rows(row, asin=asin))
+        sales_ranks.extend(format_sales_rank_rows(row, asin=asin))
         offers.extend(format_offer_rows(row, asin=asin))
+        offer_history.extend(format_offer_history_rows(row, asin=asin, currency=currency))
+        offer_duplicates.extend(format_offer_duplicate_rows(row, asin=asin, currency=currency))
         variations.extend(format_variation_rows(row, asin=asin))
+        variation_attributes.extend(format_variation_attribute_rows(row, asin=asin))
+        list_values.extend(format_list_value_rows(row, asin=asin))
+        product_history.extend(
+            format_product_history_rows(row, asin=asin, currency=currency)
+        )
+        nested_values.extend(format_unhandled_nested_rows(row, asin=asin))
         if stats_export:
             stats_price_types.extend(stats_export.price_type_rows)
             stats_extremes.extend(stats_export.extreme_rows)
@@ -221,8 +284,17 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
     return FormattedProductExport(
         products=products,
         csv_history=csv_history,
+        images=images,
+        category_tree=category_tree,
+        sales_ranks=sales_ranks,
         offers=offers,
+        offer_history=offer_history,
+        offer_duplicates=offer_duplicates,
         variations=variations,
+        variation_attributes=variation_attributes,
+        list_values=list_values,
+        product_history=product_history,
+        nested_values=nested_values,
         stats_price_types=stats_price_types,
         stats_extremes=stats_extremes,
         stats_buy_box_sellers=stats_buy_box_sellers,
@@ -255,6 +327,7 @@ def format_product_object(
         _add_joined_array_field(row, field)
 
     _add_fba_fee_fields(row, currency)
+    _add_unit_count_fields(row)
     _add_images_fields(row)
     _add_category_fields(row)
     _add_variation_summary(row)
@@ -266,6 +339,31 @@ def format_product_object(
 
     row["currencyCode"] = currency.code
     row["currencyDecimals"] = currency.decimals
+    for field in {
+        "images",
+        "imagesCSV",
+        "csv",
+        "offers",
+        "liveOffersOrder",
+        "variations",
+        "stats",
+        "categoryTree",
+        "salesRanks",
+        "monthlySoldHistory",
+        "buyBoxSellerIdHistory",
+        "buyBoxUsedHistory",
+        "rootCategoryHistory",
+        "fbaFees",
+        "unitCount",
+        "coupon",
+    } | LIST_DETAIL_FIELDS | PRODUCT_HISTORY_FIELDS:
+        row.pop(field, None)
+    row.pop("imageUrls", None)
+    row.pop("variationAsins", None)
+    # Keepa 会持续新增对象字段；未识别的嵌套值已进入 product_nested_values，主表只保留标量。
+    for field, value in list(row.items()):
+        if isinstance(value, (dict, list)):
+            row.pop(field)
     return row
 
 
@@ -312,19 +410,20 @@ def format_offer_rows(product: dict[str, Any], *, asin: str) -> list[dict[str, A
         if not isinstance(offer, dict):
             rows.append({"asin": asin, "offerIndex": index, "rawOffer": offer})
             continue
-        row = {
+        row: dict[str, Any] = {
             "asin": asin,
             "offerIndex": index,
             "liveOfferRank": live_rank_by_index.get(index),
-            "sellerId": offer.get("sellerId"),
-            "condition": offer.get("condition"),
-            "isFBA": offer.get("isFBA"),
-            "isPrime": offer.get("isPrime"),
-            "isAmazon": offer.get("isAmazon"),
-            "isMAP": offer.get("isMAP"),
-            "shipsFromChina": offer.get("shipsFromChina"),
-            "offer": offer,
         }
+        row.update(
+            {
+                key: value
+                for key, value in offer.items()
+                if not isinstance(value, (dict, list))
+            }
+        )
+        for field in ("lastSeen", "lastStockUpdate"):
+            _add_keepa_time_fields(row, field)
         rows.append(row)
     return rows
 
@@ -340,17 +439,308 @@ def format_variation_rows(product: dict[str, Any], *, asin: str) -> list[dict[st
             rows.append({"parentAsin": asin, "variationIndex": index, "variation": variation})
             continue
         attributes = variation.get("attributes")
-        row = {
+        row: dict[str, Any] = {
             "parentAsin": asin,
             "variationIndex": index,
-            "asin": variation.get("asin"),
-            "image": variation.get("image"),
             "attributesText": _attributes_text(attributes),
-            "attributes": attributes,
-            "variation": variation,
         }
+        row.update(
+            {
+                key: value
+                for key, value in variation.items()
+                if key != "attributes" and not isinstance(value, (dict, list))
+            }
+        )
         rows.append(row)
     return rows
+
+
+def format_image_rows(product: dict[str, Any], *, asin: str) -> list[dict[str, Any]]:
+    """把 Product 图片对象或旧版 imagesCSV 拆成图片明细。"""
+    rows: list[dict[str, Any]] = []
+    images = product.get("images")
+    if isinstance(images, list):
+        for index, image in enumerate(images):
+            row: dict[str, Any] = {"asin": asin, "imageIndex": index}
+            if isinstance(image, dict):
+                row.update({key: value for key, value in image.items() if not isinstance(value, (dict, list))})
+                filename = image.get("l") or image.get("m") or image.get("s")
+                row["imageFilename"] = filename
+                row["imageUrl"] = _image_url(filename) if filename else None
+                row["width"] = image.get("w") or image.get("width")
+                row["height"] = image.get("h") or image.get("height")
+            else:
+                row["imageFilename"] = image
+                row["imageUrl"] = _image_url(str(image)) if image else None
+            rows.append(row)
+        return rows
+
+    for index, filename in enumerate(_image_names_from_csv(product.get("imagesCSV"))):
+        rows.append(
+            {
+                "asin": asin,
+                "imageIndex": index,
+                "variant": "MAIN" if index == 0 else f"PT{index:02d}",
+                "imageFilename": filename,
+                "imageUrl": _image_url(filename),
+            }
+        )
+    return rows
+
+
+def format_category_tree_rows(product: dict[str, Any], *, asin: str) -> list[dict[str, Any]]:
+    """把 Product categoryTree 拆成有序路径明细。"""
+    tree = product.get("categoryTree")
+    if not isinstance(tree, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for index, value in enumerate(tree):
+        row = {"asin": asin, "categoryLevel": index}
+        if isinstance(value, dict):
+            row.update({key: item for key, item in value.items() if not isinstance(item, (dict, list))})
+            if "catId" in row:
+                row["catId"] = _string_or_empty(row["catId"])
+        else:
+            row["value"] = value
+        rows.append(row)
+    return rows
+
+
+def format_sales_rank_rows(product: dict[str, Any], *, asin: str) -> list[dict[str, Any]]:
+    """把 salesRanks 中的类目历史序列拆成长表。"""
+    values = product.get("salesRanks")
+    if not isinstance(values, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for category_id, series in values.items():
+        if not isinstance(series, list):
+            continue
+        for pair in _iter_series_values(series, 2):
+            row = {
+                "asin": asin,
+                "categoryId": str(category_id),
+                "keepaTime": pair[0],
+                "salesRank": pair[1] if len(pair) > 1 else None,
+            }
+            _add_keepa_time_fields(row, "keepaTime")
+            rows.append(row)
+    return rows
+
+
+def format_offer_history_rows(
+    product: dict[str, Any], *, asin: str, currency: CurrencyConfig
+) -> list[dict[str, Any]]:
+    """把 Offer 的价格、库存、Prime 专享价与优惠券历史拆成长表。"""
+    rows: list[dict[str, Any]] = []
+    offers = product.get("offers")
+    if not isinstance(offers, list):
+        return rows
+    configs = (
+        ("offerCSV", "offer_price", 3),
+        ("stockCSV", "stock", 2),
+        ("primeExclCSV", "prime_exclusive_price", 2),
+        ("couponHistory", "coupon", 2),
+    )
+    for offer_index, offer in enumerate(offers):
+        if not isinstance(offer, dict):
+            continue
+        for field, history_type, tuple_size in configs:
+            series = offer.get(field)
+            if not isinstance(series, list):
+                continue
+            for values in _iter_series_values(series, tuple_size):
+                row = {
+                    "asin": asin,
+                    "offerIndex": offer_index,
+                    "offerId": offer.get("offerId"),
+                    "sellerId": offer.get("sellerId"),
+                    "historyType": history_type,
+                    "keepaTime": values[0],
+                }
+                _add_keepa_time_fields(row, "keepaTime")
+                if len(values) > 1:
+                    if history_type in {"offer_price", "prime_exclusive_price", "coupon"}:
+                        row["price"] = values[1]
+                        row["priceAmount"] = _format_money(values[1], currency)
+                    else:
+                        row["stock"] = values[1]
+                if history_type == "offer_price" and len(values) > 2:
+                    row["shipping"] = values[2]
+                    row["shippingAmount"] = _format_money(values[2], currency)
+                rows.append(row)
+    return rows
+
+
+def format_offer_duplicate_rows(
+    product: dict[str, Any], *, asin: str, currency: CurrencyConfig
+) -> list[dict[str, Any]]:
+    """把每个 Offer 的重复报价对象拆成独立明细。"""
+    rows: list[dict[str, Any]] = []
+    offers = product.get("offers")
+    if not isinstance(offers, list):
+        return rows
+    for offer_index, offer in enumerate(offers):
+        if not isinstance(offer, dict) or not isinstance(offer.get("offerDuplicates"), list):
+            continue
+        for index, value in enumerate(offer["offerDuplicates"]):
+            row = {"asin": asin, "offerIndex": offer_index, "duplicateIndex": index}
+            if isinstance(value, dict):
+                row.update({key: item for key, item in value.items() if not isinstance(item, (dict, list))})
+                for field in ("price", "shipping"):
+                    if field in value:
+                        row[f"{field}Amount"] = _format_money(value[field], currency)
+            else:
+                row["value"] = value
+            rows.append(row)
+    return rows
+
+
+def format_variation_attribute_rows(product: dict[str, Any], *, asin: str) -> list[dict[str, Any]]:
+    """把每个变体的 dimension/value 属性拆成长表。"""
+    rows: list[dict[str, Any]] = []
+    variations = product.get("variations")
+    if not isinstance(variations, list):
+        return rows
+    for variation_index, variation in enumerate(variations):
+        if not isinstance(variation, dict) or not isinstance(variation.get("attributes"), list):
+            continue
+        for attribute_index, value in enumerate(variation["attributes"]):
+            row = {
+                "parentAsin": asin,
+                "asin": variation.get("asin"),
+                "variationIndex": variation_index,
+                "attributeIndex": attribute_index,
+            }
+            if isinstance(value, dict):
+                row.update(value)
+            else:
+                row["value"] = value
+            rows.append(row)
+    return rows
+
+
+def format_list_value_rows(product: dict[str, Any], *, asin: str) -> list[dict[str, Any]]:
+    """把 Product 简单数组拆成长表，避免主表出现超长多行单元格。"""
+    rows: list[dict[str, Any]] = []
+    for field in sorted(LIST_DETAIL_FIELDS):
+        values = product.get(field)
+        if not isinstance(values, list):
+            continue
+        for index, value in enumerate(values):
+            row = {"asin": asin, "field": field, "index": index}
+            if isinstance(value, dict):
+                row.update({key: item for key, item in value.items() if not isinstance(item, (dict, list))})
+            else:
+                row["value"] = value
+            rows.append(row)
+    return rows
+
+
+def format_product_history_rows(
+    product: dict[str, Any], *, asin: str, currency: CurrencyConfig
+) -> list[dict[str, Any]]:
+    """把 Product 顶层 Keepa Time/value 历史数组拆成长表。"""
+    rows: list[dict[str, Any]] = []
+    for field in sorted(PRODUCT_HISTORY_FIELDS):
+        series = product.get(field)
+        if not isinstance(series, list):
+            continue
+        for values in _iter_series_values(series, 2):
+            row = {
+                "asin": asin,
+                "field": field,
+                "keepaTime": values[0],
+                "value": values[1] if len(values) > 1 else None,
+            }
+            _add_keepa_time_fields(row, "keepaTime")
+            rows.append(row)
+    coupon_history = product.get("couponHistory")
+    if isinstance(coupon_history, list):
+        for values in _iter_series_values(coupon_history, 3):
+            row = {
+                "asin": asin,
+                "field": "couponHistory",
+                "keepaTime": values[0],
+            }
+            _add_keepa_time_fields(row, "keepaTime")
+            if len(values) > 1:
+                _apply_coupon_history_value(
+                    row, label="oneTimeCoupon", value=values[1], currency=currency
+                )
+            if len(values) > 2:
+                _apply_coupon_history_value(
+                    row, label="snsCoupon", value=values[2], currency=currency
+                )
+            rows.append(row)
+    return rows
+
+
+def _apply_coupon_history_value(
+    row: dict[str, Any], *, label: str, value: Any, currency: CurrencyConfig
+) -> None:
+    """按 Keepa 正数金额、负数百分比规则展开 Coupon 历史值。"""
+    number = _parse_number(value)
+    row[label] = value
+    if number is None or number == 0:
+        return
+    if number > 0:
+        row[f"{label}Amount"] = _format_money(number, currency)
+        row[f"{label}Currency"] = currency.code
+    else:
+        row[f"{label}Percent"] = abs(number)
+
+
+def format_unhandled_nested_rows(product: dict[str, Any], *, asin: str) -> list[dict[str, Any]]:
+    """递归拆分尚无专用 Sheet 的嵌套字段，确保新版字段不落入主表大单元格。"""
+    handled = {
+        "images",
+        "imagesCSV",
+        "categoryTree",
+        "salesRanks",
+        "offers",
+        "liveOffersOrder",
+        "variations",
+        "csv",
+        "stats",
+        "fbaFees",
+        "unitCount",
+        "coupon",
+        "couponHistory",
+    } | LIST_DETAIL_FIELDS | PRODUCT_HISTORY_FIELDS
+    rows: list[dict[str, Any]] = []
+    for field, value in product.items():
+        if field in handled or not isinstance(value, (dict, list)):
+            continue
+        _append_nested_leaves(rows, asin=asin, field=field, path=field, value=value)
+    return rows
+
+
+def _append_nested_leaves(
+    rows: list[dict[str, Any]],
+    *,
+    asin: str,
+    field: str,
+    path: str,
+    value: Any,
+) -> None:
+    """深度优先输出嵌套对象的标量叶子，并以 path 保留原始位置。"""
+    if isinstance(value, dict):
+        if not value:
+            rows.append({"asin": asin, "field": field, "path": path, "value": None, "containerType": "object"})
+        for key, child in value.items():
+            _append_nested_leaves(
+                rows, asin=asin, field=field, path=f"{path}.{key}", value=child
+            )
+        return
+    if isinstance(value, list):
+        if not value:
+            rows.append({"asin": asin, "field": field, "path": path, "value": None, "containerType": "array"})
+        for index, child in enumerate(value):
+            _append_nested_leaves(
+                rows, asin=asin, field=field, path=f"{path}[{index}]", value=child
+            )
+        return
+    rows.append({"asin": asin, "field": field, "path": path, "value": value})
 
 
 def _currency_for(*, site: str, domain_id: Any = None) -> CurrencyConfig:
@@ -414,6 +804,16 @@ def _add_fba_fee_fields(row: dict[str, Any], currency: CurrencyConfig) -> None:
         row["fbaFeesLastUpdateUtc"] = keepa_minutes_to_utc_iso(last_update)
 
 
+def _add_unit_count_fields(row: dict[str, Any]) -> None:
+    """把 unitCount 小对象展开到 Product 主表。"""
+    unit_count = row.get("unitCount")
+    if not isinstance(unit_count, dict):
+        return
+    for key, value in unit_count.items():
+        suffix = key[:1].upper() + key[1:]
+        row[f"unitCount{suffix}"] = value
+
+
 def _add_images_fields(row: dict[str, Any]) -> None:
     urls = _image_urls(row)
     if not urls:
@@ -442,6 +842,13 @@ def _image_urls(row: dict[str, Any]) -> list[str]:
             if image_name.strip():
                 urls.append(_image_url(image_name.strip()))
     return _unique(urls)
+
+
+def _image_names_from_csv(value: Any) -> list[str]:
+    """解析旧版 imagesCSV 中的图片文件名。"""
+    if not isinstance(value, str):
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def _image_url(image_name: str) -> str:
