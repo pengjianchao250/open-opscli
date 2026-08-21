@@ -1,6 +1,6 @@
 # Keepa Product Object 字段格式化方案
 
-> 实现状态：已接入默认格式化导出。实现文件：`opscli/keepa/product_formatter.py`；接入场景：`product`；默认 XLSX 会派生金额、Keepa 时间、图片 URL、类目路径、变体摘要、stats 当前值，并按需追加 `csv_history`、`offers`、`variations` sheet。
+> 实现状态：已接入默认格式化导出。实现文件：`opscli/keepa/product_formatter.py`；接入场景：`product` 与返回 Product Object 的 `product-search`。默认导出会派生金额、Keepa 时间、图片 URL、类目路径、变体摘要和 stats 当前值，并把高基数数组与历史序列拆到独立 Sheet。
 
 > 参考：Keepa Product Object 官方文档 `https://keepa.com/#!discuss/t/product-object/116`。本文用于指导 `opscli keepa` 后续对 Product Object 的展示、导出与结构化解析；原始响应仍应完整保留。
 
@@ -34,7 +34,7 @@
 | 重量 | `packageWeight`, `itemWeight` | 克整数 | 派生 `kg`；`0` / `-1` 输出为空。 |
 | 布尔 | `isAdultProduct`, `isSNS`, `offersSuccessful` | `true` / `false` / 缺失 | 导出为布尔或中文“是/否”，缺失和 `null` 区分保留。 |
 | 文本 | `title`, `features`, `description`, `shortDescription` | 字符串，少量字段可能含 HTML | 原文保留；展示层可追加去 HTML 的 `*Text` 字段。 |
-| ASIN/编码数组 | `eanList`, `upcList`, `gtinList`, `frequentlyBoughtTogether` | 字符串数组 | 列表字段保留 JSON；常用导出可追加 `join` 字段。 |
+| ASIN/编码数组 | `eanList`, `upcList`, `gtinList`, `frequentlyBoughtTogether` | 字符串数组 | 主表追加 `join` 摘要；高基数字段写入 `product_list_values`，完整数组留在 `raw.json`。 |
 
 ## 4. 基础对象与数组字段
 
@@ -42,20 +42,19 @@
 
 - 原始字段包含 `l/m` 文件名与对应高宽，如 `l`, `lH`, `lW`, `m`, `mH`, `mW`。
 - 派生完整图片 URL：`https://m.media-amazon.com/images/I/<image name>`。
-- XLSX 建议输出：`imagesCount`、`mainImageUrl`、`imageUrls`；原始 `images` 保留 JSON。
+- 主表输出 `imagesCount`、`mainImageUrl`；`images` Sheet 一图一行，包含新版 `variant`、尺寸、文件名和 URL。完整原始数组保留在 `raw.json`。
 
 ### 4.2 类目 `categoryTree` / `categories`
 
 - `categoryTree` 为有序对象数组，元素为 `{catId, name}`。
 - `categories` 为类目 ID 数组，`rootCategory` 是根类目 ID。
-- XLSX 建议输出：`categoryPathName`、`categoryPathId`、`rootCategory`。
+- 主表输出 `categoryPathName`、`categoryPathId`、`rootCategory`；路径节点写入 `category_tree`。
 
 ### 4.3 变体 `variations`
 
 - 仅 `productType = 5` 或存在变体时重点解析。
 - 每个变体包含 `asin`、可选 `image`、`attributes`。
-- `attributes` 建议展平为 `dimension=value`；XLSX 输出一行主商品时保留 `variations` JSON，并追加 `variationCount`、`variationAsins`。
-- 如需要变体明细表，应单独生成 `product_variations` 子表，每个变体一行。
+- 主表保留 `variationCount`、`variationAsinsJoined` 摘要；`variations` 每个变体一行，`variation_attributes` 每个 dimension/value 一行。
 
 ### 4.4 A+ / 视频 / 危险品 / Deals
 
@@ -142,7 +141,7 @@
 
 Product 主行不直接展开完整 `csv`，避免 XLSX 爆列/爆行。建议同时支持：
 
-- 主商品表：保留 `csv` JSON，追加常用当前值/最新值，如 `currentAmazonPrice`、`currentNewPrice`、`currentBuyBoxPrice`、`currentRating`、`currentReviewCount`。
+- 主商品表：不写入完整 `csv` JSON，只追加常用当前值/最新值，如 `currentAmazonPrice`、`currentNewPrice`、`currentBuyBoxPrice`、`currentRating`、`currentReviewCount`；原始 `csv` 仍在 `raw.json`。
 - 历史明细表：`asin`、`csvIndex`、`csvName`、`keepaTime`、`utc`、`value`、`price`、`shipping`、`currencyUnit`。
 - 宽表快照：只取每个 `csvName` 最新值、最低值、最高值、近 30/90 天均值等派生指标。
 
@@ -163,7 +162,7 @@ Product 主行不直接展开完整 `csv`，避免 XLSX 爆列/爆行。建议�
 
 | 字段 | 策略 |
 | --- | --- |
-| `offers` | 原始 JSON 保留；如导出明细，单独生成 `product_offers` 子表。 |
+| `offers` | 标量字段输出到 `offers`；价格/库存/Prime 专享价/优惠券历史输出到 `offer_history`；重复报价输出到 `offer_duplicates`。 |
 | `liveOffersOrder` | 当前 Amazon offer 页排序索引，用它从 `offers` 中选当前有效 offers。 |
 | `offersSuccessful` | 标记 fresh offer 是否成功获取；失败时不要把缺失 offer 当作无竞争。 |
 | `buyBoxEligibleOfferCounts` | 8 位数组固定映射：New FBA、New FBM、Used FBA、Used FBM、Collectible FBA、Collectible FBM、Refurbished FBA、Refurbished FBM。 |
@@ -199,22 +198,13 @@ Product 主行不直接展开完整 `csv`，避免 XLSX 爆列/爆行。建议�
 | `0` | 对时间/尺寸字段可能表示不可用，对计数字段可能是有效 0 | 必须按字段语义处理。 |
 | 空字符串 | 文档中部分 sellerId 可用空字符串表示无资格者 | 保留空字符串，不自动转 `null`。 |
 
-## 11. 与当前 `opscli` 实现的对应关系
+## 11. 当前实现对应关系
 
-- `opscli/keepa/services/api_manager.py` 当前会保存 `raw.json`，并对 normalized `rows` 调用 `add_keepa_time_conversions`。
-- `opscli/keepa/time.py` 已能给二元 `[time, value, ...]` 序列追加 `csvUnixSeconds` 等派生字段。
-- 当前逻辑不应直接覆盖 Product Object 原字段；新增 Product formatter 时建议作为独立模块挂在导出/展示层。
-- 当前 `_looks_like_pair_series` 不适合覆盖 `*_SHIPPING` 三元组、`couponHistory`、`buyBoxUsedHistory` 等非二元历史字段；后续实现应按字段名/`csv` 索引白名单解析。
-- `opscli/keepa/export/xlsx.py` 当前对 dict/list 做 JSON 字符串化；若要更友好导出，建议先实现“主商品表 + 历史/offer/variation 子表”的拆分策略。
-
-## 12. 后续实现建议
-
-1. 新增 `product_formatter.py`，输入单个 Product Object，输出 `main_row` 与可选子表：`csv_history_rows`、`offer_rows`、`variation_rows`。
-2. 新增 `csv` 索引映射常量，明确每个索引的数据类型：`price`、`rank`、`count`、`rating`、`shipping_price`、`event`。
-3. 新增站点货币配置，至少覆盖 `domainId` 到币种、小数位、Amazon 域名的映射。
-4. 将 Keepa Time 派生逻辑扩展为字段白名单解析，避免把非时间整数误转。
-5. XLSX 导出支持多 sheet：`products`、`csv_history`、`offers`、`variations`；大数据量继续回退 JSON。
-6. 文档与实现都必须保留未知字段，避免 Keepa 新增字段造成解析失败。
+- `api_manager.py` 在格式化前保存不可变 `raw.json`，再由 Product formatter 同时驱动 XLSX 与格式化 JSON。
+- Product 主表不保留 `dict/list` 类型的高基数字段；图片、类目树、销售排名、Offer、变体、简单列表和顶层历史均拆 Sheet。尚无专用规则的新版嵌套字段按 JSON path 递归进入 `product_nested_values`。
+- `csv` 依据索引白名单处理二元/三元序列；未知索引以 `CSV_<index>` 保留。
+- 真实历史 Product 样本验证中，单商品约产生 7,867 条 `csv_history`、8,223 条 `sales_ranks`、833 条 `product_history`、41 条变体和 82 条变体属性；拆表后主表无嵌套单元格。
+- Keepa 新增未知字段仍完整存在于 `raw.json`；是否进入友好导出需更新字段清单和 fixture。
 
 ## Keepa Time Minutes
 

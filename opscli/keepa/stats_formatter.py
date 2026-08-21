@@ -88,6 +88,11 @@ OUT_OF_STOCK_FIELDS = (
     "outOfStockPercentage180",
     "outOfStockPercentage365",
 )
+LOWEST_STATUS_FIELDS = ("isLowest", "isLowest90")
+STOCK_BY_CONDITION_FIELDS = (
+    ("stockPerCondition3rdFBA", "FBA"),
+    ("stockPerConditionFBM", "FBM"),
+)
 
 COMMON_ARRAY_COLUMNS: dict[tuple[str, int], str] = {
     ("current", 0): "statsCurrentAmazonPrice",
@@ -126,6 +131,7 @@ class FormattedStatsExport:
     extreme_rows: list[dict[str, Any]]
     buy_box_seller_rows: list[dict[str, Any]]
     offer_snapshot_rows: list[dict[str, Any]]
+    stock_by_condition_rows: list[dict[str, Any]]
 
     def extra_sheets(self) -> dict[str, list[dict[str, Any]]]:
         sheets: dict[str, list[dict[str, Any]]] = {}
@@ -137,6 +143,8 @@ class FormattedStatsExport:
             sheets["stats_buy_box_sellers"] = self.buy_box_seller_rows
         if self.offer_snapshot_rows:
             sheets["stats_offer_snapshot"] = self.offer_snapshot_rows
+        if self.stock_by_condition_rows:
+            sheets["stats_stock_by_condition"] = self.stock_by_condition_rows
         return sheets
 
     def to_dict(self) -> dict[str, Any]:
@@ -145,6 +153,7 @@ class FormattedStatsExport:
             "stats_extremes": self.extreme_rows,
             "stats_buy_box_sellers": self.buy_box_seller_rows,
             "stats_offer_snapshot": self.offer_snapshot_rows,
+            "stats_stock_by_condition": self.stock_by_condition_rows,
         }
 
 
@@ -162,6 +171,7 @@ def format_stats_for_product(product: dict[str, Any], *, site: str = "US", domai
         extreme_rows=_extreme_rows(stats, asin=asin, currency=currency),
         buy_box_seller_rows=_buy_box_seller_rows(stats, asin=asin, currency=currency),
         offer_snapshot_rows=_offer_snapshot_rows(stats, asin=asin),
+        stock_by_condition_rows=_stock_by_condition_rows(stats, asin=asin),
     )
 
 
@@ -220,8 +230,10 @@ def _add_out_of_stock_main_fields(fields: dict[str, Any], stats: dict[str, Any])
         values = stats.get(field)
         if isinstance(values, list) and price_type_index < len(values):
             raw_value = values[price_type_index]
-            fields[output_name] = None if raw_value == -1 else raw_value
-            fields[f"{output_name}Display"] = None if raw_value == -1 else _format_percent(raw_value)
+            fields[output_name] = None if raw_value in {-1, -2} else raw_value
+            fields[f"{output_name}Display"] = (
+                None if raw_value in {-1, -2} else _format_percent(raw_value)
+            )
 
 
 def _add_buy_box_fields(fields: dict[str, Any], stats: dict[str, Any], currency: CurrencyConfig) -> None:
@@ -284,8 +296,27 @@ def _price_type_rows(stats: dict[str, Any], *, asin: str, currency: CurrencyConf
                     "priceTypeName": config.name,
                     "valueType": "percentage",
                     "rawValue": raw_value,
-                    "formattedValue": None if raw_value == -1 else raw_value,
-                    "displayValue": None if raw_value == -1 else _format_percent(raw_value),
+                    "formattedValue": None if raw_value in {-1, -2} else raw_value,
+                    "displayValue": (
+                        None if raw_value in {-1, -2} else _format_percent(raw_value)
+                    ),
+                }
+            )
+    for field in LOWEST_STATUS_FIELDS:
+        values = stats.get(field)
+        if not isinstance(values, list):
+            continue
+        for index, raw_value in enumerate(values):
+            config = _price_type(index)
+            rows.append(
+                {
+                    "asin": asin,
+                    "statField": field,
+                    "priceTypeIndex": index,
+                    "priceTypeName": config.name,
+                    "valueType": "boolean",
+                    "rawValue": raw_value,
+                    "formattedValue": _available_boolean(raw_value),
                 }
             )
     return rows
@@ -390,10 +421,33 @@ def _offer_snapshot_rows(stats: dict[str, Any], *, asin: str) -> list[dict[str, 
         if field not in stats:
             continue
         value = stats.get(field)
-        row[field] = value
         if isinstance(value, list):
             row[f"{field}Joined"] = ", ".join(str(item) for item in value)
+            row[f"{field}Count"] = len(value)
+        else:
+            row[field] = value
     return [row]
+
+
+def _stock_by_condition_rows(stats: dict[str, Any], *, asin: str) -> list[dict[str, Any]]:
+    """把 FBA/FBM condition 库存数组拆成长表；condition 索引保留官方原顺序。"""
+    rows: list[dict[str, Any]] = []
+    for field, fulfillment_type in STOCK_BY_CONDITION_FIELDS:
+        values = stats.get(field)
+        if not isinstance(values, list):
+            continue
+        for condition_index, raw_value in enumerate(values):
+            rows.append(
+                {
+                    "asin": asin,
+                    "statField": field,
+                    "fulfillmentType": fulfillment_type,
+                    "conditionIndex": condition_index,
+                    "stockRaw": raw_value,
+                    "stock": _available_numeric(raw_value),
+                }
+            )
+    return rows
 
 
 def _add_keepa_time_fields(row: dict[str, Any], prefix: str, value: Any) -> None:
@@ -443,6 +497,16 @@ def _landed_price(price: Any, shipping: Any, currency: CurrencyConfig) -> float 
 
 def _available_numeric(value: Any) -> Any:
     return None if value in {-1, -2} else value
+
+
+def _available_boolean(value: Any) -> bool | None:
+    if value in {-1, -2, None}:
+        return None
+    if isinstance(value, bool):
+        return value
+    if value in {0, 1}:
+        return bool(value)
+    return None
 
 
 def _format_percent(value: Any) -> str | None:

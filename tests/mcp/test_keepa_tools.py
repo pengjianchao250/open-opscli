@@ -2,8 +2,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from opscli.keepa.domain.models import KeepaExportResult
-from opscli.keepa.domain.models import KeepaScenarioResult
+from opscli.keepa.domain.models import KeepaExportResult, KeepaScenarioResult
 from opscli.mcp.tools import keepa as keepa_tools
 
 
@@ -43,6 +42,16 @@ class DummyManager:
                 "tokens_left": 1,
                 "estimated_tokens": 10,
                 "reserve_tokens": 200,
+            }
+        ]
+        result.data = [
+            {
+                "asin": "B0088PUEPK",
+                "title": "Test Product",
+                "brand": "Test Brand",
+                "stats": {"current": [1299] * 100},
+                "offers": [{"offerId": f"offer-{index}"} for index in range(100)],
+                "unknownField": "do not return",
             }
         ]
         return result
@@ -145,6 +154,19 @@ def test_keepa_run_accepts_params_json_string(monkeypatch):
     assert result["data"]["export"]["url"] == "https://example.com/job-1.xlsx"
     assert "path" not in result["data"]["export"]
     assert "tokens_left" not in str(result["data"])
+    assert "data" not in result["data"]
+    assert result["data"]["data_preview"] == [
+        {
+            "asin": "B0088PUEPK",
+            "title": "Test Product",
+            "brand": "Test Brand",
+        }
+    ]
+    assert result["data"]["data_omitted"] == 0
+    assert any(
+        warning["stage"] == "mcp_response_compact"
+        for warning in result["data"]["warnings"]
+    )
     assert result["data"]["warnings"][0]["message"] == "Keepa 当前可用额度不足，请稍后重试；如果持续卡住，请联系运营人员处理。"
 
 

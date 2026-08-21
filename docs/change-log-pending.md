@@ -15,6 +15,42 @@
 **验证结果**：MCP 遥测、MySQL 写入、Keepa 注册和相关工具回归 `26 passed`；扩展 schema、工具注册、动态上游和共享 MySQL 回归 `70 passed`；相关文件 `py_compile` 通过。
 **影响范围**：通过 `InstrumentedMcpProxy` 注册的 MCP Tool 公共调用统计；CLI 遥测和 quota 内部失败结算不变。
 **回滚方式**：回滚 `opscli/mcp/instrumentation.py`、`tests/mcp/test_instrumentation.py`、统计设计文档及本条记录。
+## 2026-08-20 Keepa - 完善现有场景 Response Object 格式化
+
+**变更原因**：现有 11 个 JSON 场景已经具备 formatter，但 Marketplace Offer 优惠券历史、Keepa `-2` 缺失值、Category 父级和 Seller 评分展示仍存在语义不完整；Search Insights 排名依赖 API map 插入顺序，不保证业务排名稳定。
+
+**改动点**：补充 Product Offer 的 condition、价格/运费和币种派生字段；按 Keepa 规则拆分 Offer `couponHistory` 的金额/百分比；统一 Product、Deal、Statistics、Search Insights 的 `-1/-2` 缺失处理；补全 Category 父级金额/评分/计数、Seller 百分比展示和 Lightning Deal 折扣率/活动时长；Search Insights 品牌/卖家明细按计数降序稳定排序。真实 Product 响应进一步新增 `product_videos`、Statistics 最低价状态和 `stats_stock_by_condition` 明细，并清除 Offer 快照中的原始列表单元格。
+
+**验证结果**：使用真实 ASIN `B003IEUAZK` 调用 Product Request，返回 94 个 Product 字段和 64 个 Offer，实际消耗 6 token；新增识别 7 条视频、72 条最低价状态和 24 条 condition 库存。重新生成的 16 个 XLSX 工作表嵌套单元格均为 0。Product/Statistics/Manager 定向测试 `15 passed`；Keepa 回归排除仓库既有 `keepa-debug` 注册用例后 `77 passed, 1 deselected`；本轮涉及文件 Ruff、compileall 与 `git diff --check` 通过。未调用 Graph Image 或 Tracking，也未改变其“不提供 MCP 访问”的边界。
+
+**影响范围**：仅影响现有 JSON 场景的 XLSX/格式化 JSON 派生字段；`raw.json` 原始响应不变。
+
+**回滚方式**：回退本条涉及的 formatter、测试和文档改动即可恢复此前格式化合同。
+
+## 2026-08-20 Keepa - 加固现有场景参数归一化
+
+**变更原因**：现有 Keepa 场景已覆盖主要 JSON Endpoint，但别名冲突会静默取值，布尔/整数参数可能以未经校验的字符串发送，复杂 selection 也不支持常见的 JSON 字符串输入，容易造成请求语义和 token 预估不一致。
+
+**改动点**：统一 Product、Product Search、Product Finder、Category、Seller、Best Sellers、Deals、Lightning Deals 的布尔/整数/CSV 参数归一化；补充别名一致性检测、数字边界校验、Best Sellers 类型转换和 Lightning Deals 空状态校验；selection 支持 JSON 对象或 JSON 字符串并保持开放字段；token estimator 复用同一套 alias/selection 解析规则。新增场景参数回归测试。
+
+**验证结果**：场景参数测试 `19 passed`；Keepa 测试集 `76 passed, 1 failed`，唯一失败是仓库既有的 `keepa-debug` 根命令注册测试；Ruff、compileall 与 `git diff --check` 通过。
+
+**影响范围**：仅影响 Keepa JSON 请求构建和额度预检查，不改变 API 客户端、`raw.json`、导出 formatter 或 Graph Image/Tracking 的支持边界。
+
+**回滚方式**：回退 `opscli/keepa/api/scenarios.py`、`tests/keepa/test_scenarios.py` 及本条文档记录即可恢复此前的参数透传行为。
+
+## 2026-08-20 Keepa - 同步新版 Endpoint 并扩展 Response Object 格式化
+
+**变更原因**：Keepa 2026-08 文档新增 Seller Finder，并更新 Product 图片、参数与 token 规则；现有场景仍发送部分已移除参数，额度估算明显偏低，Category、Seller、Lightning Deal 及 Product 高基数字段缺少可直接分析的格式化输出。
+
+**改动点**：新增 `seller-finder` 场景；同步 Product、Product Search、Product Finder、Best Sellers、Category、Seller、Deals、Top Seller、Lightning Deals 参数与 token 合同；新增 Category、Seller、Lightning Deal formatter，并让 Product Search 复用 Product formatter。Product 图片、类目树、销售排名、Offer 历史/重复项、变体属性、列表字段和顶层历史拆到独立 XLSX/JSON Sheet；真实 Category 的两组 Top Seller ID/名称数组新增独立 Sheet；Seller 兼容真实 `trackedSince` 字段。OPS 认证异常时允许显式 `OPSCLI_KEEPA_API_KEY` 继续兜底，主表不再保留高基数嵌套单元格，完整响应仍只读保存在 `raw.json`。同步更新格式化状态、对象合同、Keepa Skill 与接口调研报告；Graph Image 和 Tracking 因二进制/状态变更语义保留为独立后续范围。
+
+**验证结果**：本轮聚焦测试 27 项通过；Keepa 全组 `72 passed, 1 failed`，唯一失败仍是仓库既有 `keepa-debug` 根命令未注册。使用本机 5 份历史真实 Product 响应只读验证：单样本约产生 7,867 条 CSV 历史、8,223 条销售排名、833 条顶层历史，拆表后主表嵌套字段数为 0。另使用用户提供的本地 Key 调用真实 Category、Seller 与 Lightning Deals：分别返回 1、1、23,788 个对象，Lightning variation 45,374 行，所有主表/明细表嵌套字段数为 0；XLSX 已逐 Sheet 渲染核验。本地 Key 兜底回归覆盖 OPS 401 场景。Ruff、compileall 与 `git diff --check` 通过；仓库全量测试仍受既有 pytest 捕获流关闭问题阻断。
+
+**影响范围**：影响 Keepa 查询场景参数、额度预检、XLSX/格式化 JSON Sheet 合同和 `ops-keepa` Skill v0.0.2；不改变 `raw.json`，不接入 Graph Image 或 Tracking，不执行任何 Tracking 写操作。
+
+**回滚方式**：回退 Keepa 场景、formatter、Manager、测试、参考文档、Skill 版本和本条记录；历史 `raw.json` 无需迁移。
+
 ---
 
 ## 2026-08-19 SellerSprite - 新增历史导出无路径回流脚本
@@ -6723,6 +6759,15 @@ tests/skills/test_dataset_query_flow.py`
 **回滚方式**：回退本条涉及的 SellerSprite 场景、browser-route、MCP 状态逻辑、Skill 文档、测试和本条变更记录；回滚后新版页面将无法可靠提交或续查全景报告。
 ---
 
+## 2026-08-20 Keepa - 分离 MCP 摘要与 JSON/XLSX 详情导出
+
+**变更原因**：Keepa Product 等响应包含大量数组和历史数据；完整数据直接进入 MCP `data` 会占用模型上下文，而 JSON 导出复用 XLSX 工作表模型又会破坏原始嵌套结构。
+**改动点**：补充 JSON v2 原始响应、MCP 单行宽对象摘要和 Keepa JSON v1/v2 采集解析兼容测试；新增 JSON v2 原始业务响应导出器，递归移除 Keepa 额度字段，Manager 按格式分流，JSON 分支直接生成小摘要并跳过全部 XLSX formatter，XLSX 继续使用多工作表格式化；MCP 对任意行数的 `data` 都只返回最多 5 行共享白名单摘要，完整详情统一指向导出文件；采集 Parser 升级为 v4，历史 v1 SheetN 与新 v2 response 均可解析，新合同的嵌套字段保持原生 JSON 值，并兼容 Category 原始 `catId` 业务键；同步更新 Keepa Skill、formatter 状态和接口调研文档，移除 Tracking MCP 建议，Skill 版本升至 v0.0.3。
+**验证结果**：JSON 分支跳过 XLSX formatter 的测试先失败后通过；Keepa 完整回归 `78 passed, 1 deselected`，MCP Tool/注册回归 `15 passed`；Skill UTF-8 校验、Ruff（排除修改文件既有规则告警）、`compileall` 和 `git diff --check` 通过；用已保存的真实 `B003IEUAZK` 响应离线生成 JSON v2，确认 94 个 Product 字段、64 个 Offer、7 个视频和 Statistics 对象保持原生结构，公开响应不含 5 类额度字段，未再次调用 Keepa API。双轴审查发现的常量说明、公开 docstring、命名、JSON 无效格式化和 Tracking MCP 文档矛盾均已修复；真实大样本因隐私和体积边界继续保存在仓库外，仓库内由小型脱敏嵌套 fixture 回归。
+**影响范围**：Keepa JSON 导出合同、MCP 公开结果、采集沉淀 Parser 和 Keepa Skill 使用说明；XLSX 多工作表格式不变。
+**回滚方式**：回退本条对应的 Keepa 导出、MCP 摘要、Parser、测试和文档改动。
+---
+
 ## 2026-08-18 MCP - 简化第三方上游固定配置并透传调用者邮箱
 
 **变更原因**：固定内部 MCP 的 URL 与公共鉴权值无需通过多个环境变量间接配置，同时共享凭证场景需要按调用动态携带已验证邮箱以区分实际用户。
@@ -6747,4 +6792,30 @@ tests/skills/test_dataset_query_flow.py`
 **验证结果**：最终定向回归 `69 passed`；新增 Keepa 邮箱、场景及相关遥测回归 `23 passed`。排除既有 Shopify 导入错误后的 MCP 回归 `399 passed, 3 failed`，3 项是既有 Amazon Rufus 与 ScrapeDo 未注册断言。完整 MCP 收集被既有 `shopify.py` 引用不存在的 `_shopify_manager` 阻断。相关文件 `py_compile` 与 `git diff --check` 通过；当前环境未安装 Ruff。
 **影响范围**：所有通过 `InstrumentedMcpProxy` 注册的 MCP Tool 遥测；不改变 Tool 公开参数和业务响应。
 **回滚方式**：回滚 `opscli/telemetry/collector.py`、`opscli/mcp/instrumentation.py`、`opscli/mcp/app_factory.py`、`opscli/mcp/tools/collector_proxy.py`、场景统计设计文档、相关测试及本条记录。
+
+## 2026-08-21 Keepa - 新增内部 Tracking API
+
+**变更原因**：Keepa Tracking 具备独立的读写操作、持续额度占用和通知已读副作用，不适合直接混入现有只读场景或立即暴露为 MCP Tool，但 Python SDK 和内部服务需要可复用的正式接口。
+**改动点**：按 TDD 增加 Tracking HTTP 合同、全部官方操作参数映射、创建对象及畸形 JSON 校验、只读通知默认值、Add/Remove/Remove All/Webhook/通知消费显式确认、Webhook host allowlist、不安全 URL 拒绝和 MCP 未注册边界的公开行为测试；新增 Tracking 创建/阈值/库存规则模型、官方 Endpoint Client 和带状态变更保护的 Service；通用 Keepa HTTP Client 补充 POST JSON 与错误密钥递归脱敏；从 `opscli.keepa` 和 `opscli.keepa.tracking` 导出内部 SDK；同步更新 Tracking 调研和 formatter/Endpoint 支持矩阵。
+**验证结果**：测试先因模块不存在按预期失败，补齐实现后 Tracking 专项 `18 passed`；畸形 `notificationType=null` 测试先复现 TypeError，再统一映射为 KeepaConfigError；Keepa 完整回归 `96 passed, 1 deselected`，MCP Keepa Tool/注册回归 `15 passed`；修改文件 Ruff、Keepa compileall 和 `git diff --check` 通过。测试全程使用 HTTP/Fake Client 边界替身，未读取本地 Key、未调用真实 Tracking API、未改变 Keepa 账户状态。
+**影响范围**：新增 Keepa 内部 Python Tracking API，并为通用 Keepa Client 增加 POST 和错误脱敏；不接入 MCP、公开 CLI、现有场景格式化或真实账户写操作。
+**回滚方式**：删除 Tracking 测试与后续内部实现，并回退本条变更记录。
+---
+
+## 2026-08-21 Keepa - 对齐 Tracking HTTP 超时规范
+
+**变更原因**：标准审查发现新增 Tracking Client 的默认超时为 60 秒，与仓库统一 HTTP 客户端规范要求的 10 秒不一致。
+**改动点**：将 `KeepaTrackingClient` 默认超时调整为 10 秒；调用方仍可显式传入更长超时。
+**验证结果**：Tracking 专项、Keepa 回归和 MCP Keepa 回归已在该调整前通过；调整后重新执行 Ruff、compileall、专项测试和 diff 检查。
+**影响范围**：仅影响新增 Tracking Client 的默认等待时长，不改变现有 Keepa Client 默认值和 API 参数合同。
+**回滚方式**：恢复 `opscli/keepa/tracking/client.py` 的默认 `timeout` 值并回退本条变更记录。
+---
+
+## 2026-08-21 Keepa - 收紧 Tracking 写操作和 Webhook 边界
+
+**变更原因**：Spec 审查发现 Add/Remove 可绕过确认，Webhook 仅校验 HTTPS 仍可指向未受控主机；这与 Tracking 有状态操作必须显式受控的约定不一致。
+**改动点**：Service 的 Add/Remove 统一要求 `confirm=True`；Webhook Service 构造时必须提供精确 host allowlist，拒绝未登记主机和 IP 地址；底层 Client 明确标注为无策略传输层；补充对应回归测试、公开参数 docstring 和文档说明。
+**验证结果**：Tracking 专项 `19 passed`；Ruff、compileall 和 `git diff --check` 通过。
+**影响范围**：内部 Tracking Service 的调用契约变为显式确认；只读操作不变，MCP/CLI 仍未注册。
+**回滚方式**：回退 Tracking Service 的确认/allowlist 校验、测试、文档及本条变更记录。
 ---

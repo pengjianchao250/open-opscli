@@ -112,6 +112,7 @@ FIELD_TITLES = {
     "isEligibleForTradeIn": "可Trade-In",
     "isEligibleForSuperSaverShipping": "可Super Saver配送",
     "trackingSince": "跟踪开始时间(Keepa分钟)",
+    "trackedSince": "跟踪开始时间(Keepa分钟)",
     "totalResults": "总结果数",
     "timestamp": "响应时间戳",
     "tokensLeft": "剩余Token",
@@ -266,7 +267,7 @@ def _normalize_row(row: Any, *, scenario: str) -> dict[str, Any]:
     if isinstance(row, dict):
         return row
     if isinstance(row, str):
-        if scenario in {"seller", "top-seller"}:
+        if scenario in {"seller", "seller-finder", "top-seller"}:
             return {"sellerId": row}
         return {"asin": row}
     return {"value": row}

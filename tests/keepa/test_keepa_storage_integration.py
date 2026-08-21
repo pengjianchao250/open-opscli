@@ -12,12 +12,12 @@ from opscli.keepa.collection_storage_integration import (
     KeepaCollectionSubmitter,
 )
 from opscli.keepa.collection_storage_parser import KeepaCollectionParser
-from opscli.shared.collection_storage.models import CollectionSubmission
-from opscli.shared.collection_storage.outbox import CollectionOutbox
 from opscli.keepa.domain.models import (
     KeepaScenarioRequest,
     KeepaScenarioResult,
 )
+from opscli.shared.collection_storage.models import CollectionSubmission
+from opscli.shared.collection_storage.outbox import CollectionOutbox
 
 
 def _write_json(path: Path, payload) -> None:
@@ -80,7 +80,7 @@ def test_keepa_xlsx_result_becomes_common_collection_document(tmp_path):
 
     document = KeepaCollectionParser().parse(submission)
 
-    assert document.parser_version == "keepa-v3"
+    assert document.parser_version == "keepa-v4"
     assert document.request_params["normalized_params"] == {"asin": "B0088PUEPK"}
     assert [artifact.artifact_type for artifact in document.artifacts] == [
         "params",
@@ -154,10 +154,73 @@ def test_keepa_json_sheets_become_common_collection_document(tmp_path):
 
     document = KeepaCollectionParser().parse(submission)
 
-    assert document.parser_version == "keepa-v3"
+    assert document.parser_version == "keepa-v4"
     assert [dataset.dataset_code for dataset in document.datasets] == ["main", "additional_1"]
     assert tuple(document.datasets[0].records)[0].payload["ASIN"] == "B0088PUEPK"
     assert tuple(document.datasets[1].records)[0].payload["price"] == 12.99
+
+
+def test_keepa_json_v2_response_becomes_common_collection_document(tmp_path):
+    root = tmp_path / "keepa-json-v2-job"
+    root.mkdir()
+    params_path = root / "params.json"
+    raw_path = root / "raw.json"
+    result_path = root / "result.json"
+    export_path = root / "keepa-json-v2-job.json"
+    _write_json(params_path, {"normalized_params": {"asin": "B0088PUEPK"}})
+    _write_json(raw_path, {"response": {"products": [{"asin": "B0088PUEPK"}]}})
+    _write_json(
+        export_path,
+        {
+            "schema_version": "2.0",
+            "scenario": "product",
+            "site": "US",
+            "response": {
+                "timestamp": 7588958,
+                "products": [
+                    {
+                        "asin": "B0088PUEPK",
+                        "title": "Test Product",
+                        "stats": {"current": [1299]},
+                        "offers": [{"offerId": "offer-1"}],
+                    }
+                ],
+            },
+        },
+    )
+    _write_json(
+        result_path,
+        {
+            "job_id": "keepa-json-v2-job",
+            "params_path": str(params_path),
+            "raw_path": str(raw_path),
+            "export": {
+                "path": str(export_path),
+                "filename": export_path.name,
+                "format": "json",
+                "mime_type": "application/json",
+            },
+        },
+    )
+    submission = CollectionSubmission(
+        source_system="keepa",
+        source_job_id="keepa-json-v2-job",
+        producer_service="collector_mcp",
+        scenario="product",
+        site="US",
+        data_environment="debug",
+        ingestion_mode="live",
+        result_path=result_path,
+    )
+
+    document = KeepaCollectionParser().parse(submission)
+
+    assert document.parser_version == "keepa-v4"
+    assert [dataset.dataset_code for dataset in document.datasets] == ["main"]
+    [record] = tuple(document.datasets[0].records)
+    assert record.business_key == "B0088PUEPK"
+    assert record.payload["stats"] == {"current": [1299]}
+    assert record.payload["offers"] == [{"offerId": "offer-1"}]
 
 
 def test_keepa_submitter_adds_common_collection_environment(tmp_path):

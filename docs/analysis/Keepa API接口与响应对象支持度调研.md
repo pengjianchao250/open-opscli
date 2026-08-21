@@ -1,17 +1,89 @@
 # Keepa API 接口与响应对象支持度调研
 
 > 调研日期：2026-08-20
->
 > 调研范围：Keepa 官方 API 文档中的 **Endpoints**、**Response objects** 与 API Changelog；对照 `opscli/keepa` 当前实现。
->
-> 本文仅梳理现状和后续范围，不包含代码改动。
+> 本文先记录调研基线，并在 2026-08-20 同步独立 worktree 的补充实现结果。
 
-## 1. 结论摘要
+## 0. 补充实现结果
+
+本次实现后，正式场景从 10 个增至 **11 个**，覆盖 13 个官方 Endpoint 中的 **84.6%**；12 类官方 Response Object 中 **9 类**已有友好格式化。未接入部分收敛为两个需要独立抽象的 Endpoint，以及 Tracking 域的 3 类对象。
+
+| 范围 | 本次结果 |
+| --- | --- |
+| Seller Finder | 新增 `seller-finder`，调用 `/sellerquery`，selection 使用 JSON，返回 `sellerIdList`。 |
+| Product Request | 支持 `code-limit`、`historical-variations`；ASIN/code 与 offers 组合仍允许最多 100 个商品；按 Offer 页及 buybox/stock/rating/update 等估算 token。 |
+| Product Search | 移除已废弃 `page` 透传，新增 `rating`；基础成本按 10 token；返回 Product Object 时复用 Product formatter。 |
+| Product Finder | 按 `10 + ceil(perPage/100)` 估算，`stats=1` 另计 30 token 基础成本。 |
+| Best Sellers | 支持 `range`、成对 `month/year`、`variations`、`sublist`，并校验合法值、互斥关系和过去 36 个完整自然月；按 50 token 估算。 |
+| Category | Lookup 显式发送 `parents=false`，Search 不再发送无效 `parents`；新增 Category formatter。 |
+| Seller | 默认 `storefront=false`，批量 seller 禁止 storefront，移除 `update`；新增 Seller formatter。 |
+| Deals / Top Seller | token 分别按 5 / 50 估算。 |
+| Lightning Deals | 新增 `state`；指定 ASIN 按 1 token，完整列表按 500 token；新增 Lightning Deal formatter。 |
+| Product 大字段 | 图片、类目树、销售排名、Offer 历史、Offer 重复项、变体属性、简单列表和顶层历史全部拆到独立 Sheet；主表不再保留嵌套 `dict/list` 单元格。 |
+
+未纳入现有 `keepa_run` 场景：
+
+- Graph Image `/graphimage`：返回二进制图片，需要下载、MIME 和文件结果模型，不能复用 JSON 场景。
+- Tracking `/tracking`：已新增独立内部 Python Client/Service，覆盖全部官方操作、POST 请求体、通知只读默认值和显式确认；不计入 `keepa_run` 场景覆盖率，也不暴露 MCP/公开 CLI。
+- Tracking Object、Notification Object 保留原始 JSON；Tracking Creation Object 已有输入模型和官方边界校验，但 3 类对象均未接入 XLSX formatter。
+
+### 0.1 真实响应验证
+
+- 使用用户提供的本地 Keepa Key 于 2026-08-20 完成线上验证；Key 仅从工作区外文件读取，未写入仓库、请求记录或文档。调用 Category Lookup、Seller Information、指定 ASIN Lightning Deals 和完整 Lightning Deals，分别消耗 1、1、1、500 token。
+- Category Lookup `1055398` 返回 1 个真实 Category Object。除既有 `children`、`topBrands` 外，确认新版对象还返回 `relatedSellerNames`、`relatedSellerNamesAny`、`topSellers`、`topSellersAny` 四个并行数组；现已拆到 `category_top_sellers` 与 `category_top_sellers_any`，主表不再保留复杂单元格。
+- Seller Information `ATVPDKIKX0DER` 返回 1 个真实 Seller Object，确认时间字段为 `trackedSince`，并取得 10 条类目统计、10 条品牌统计和 10 条竞对记录；主表剩余嵌套字段数为 0。
+- 指定 ASIN 的 Lightning Deals 返回空结果；完整列表返回 23,788 个 Lightning Deal Object 和 45,374 条 variation 明细，真实字段与 formatter 合同一致，主表和明细表剩余嵌套字段数均为 0。
+- 真实验证同时发现 `OPSCLI_KEEPA_API_KEY` 会被 OPS 登录态 401 提前阻断；已让账号提供器捕获认证异常后继续使用显式本地 Key，并增加回归测试。
+- 使用本机 5 份历史真实 Product 响应验证，均为 ASIN `B0B56CHMSC`；测试代码不读取这些用户文件，仓库 fixture 使用脱敏固定值。
+- 单个真实 Product 约有 97 个顶层字段、8 张图片、41 个变体、82 条变体属性、36 个 CSV 槽位和 4 组销售排名。
+- 一次样本格式化产生约 7,867 条 `csv_history`、8,223 条 `sales_ranks`、833 条 `product_history`；格式化主表剩余嵌套字段数为 0。
+- 线上原始响应和 XLSX 仅保存在工作区外的本地验证目录，不纳入 Git；仓库测试继续使用脱敏固定 fixture，避免测试访问真实网络或用户文件。
+
+### 0.2 现有场景参数加固（2026-08-20）
+
+在上述接口和 formatter 覆盖基础上，现有 11 个 JSON 场景已统一在请求构建层做参数归一化：
+
+- 布尔参数接受 `true/false`、`1/0`、`yes/no`、`on/off`，输出统一为 Python `bool`；非法字符串直接返回配置错误。
+- `stats`、`offers`、`update`、`days`、`code-limit`、Best Sellers 的 `range/month/year` 统一转换为整数并校验下限/范围，不再把非法数字静默透传给 Keepa。
+- `asin/asins`、`code/codes`、`category/categories`、`seller/sellers`、`term/keyword` 和 `productGroup/product_group` 的别名同时出现时，只有语义一致才接受；冲突值明确拒绝。
+- Product Finder、Seller Finder、Deals 的 `selection` 同时支持 JSON 对象和 JSON 字符串；对象内部字段保持开放透传，避免因 Keepa 新增筛选字段而被本地白名单阻断。
+- Lightning Deals 的 `state` 只做非空校验，不预设未从官方页面确认的枚举；`asin` 统一清理为 CSV 字符串。
+
+该层只负责请求参数的类型、边界和别名一致性，不改变 `raw.json` 的原始响应保留策略，也不对 selection 做推测性完整 schema 限制。
+
+### 0.3 现有对象格式化补充（2026-08-20）
+
+- Product Marketplace Offer 明细新增 condition 文本、价格/运费金额和币种；Offer `couponHistory` 依据 Keepa 规则拆为优惠金额或折扣百分比。
+- Product、Deal、Statistics、Search Insights 对 `-1/-2` 缺失哨兵统一按空值处理，避免生成负金额或负折扣。
+- Category Lookup 的父级 Category Object 现在与结果类目共享金额、评分、计数和空类目派生字段；Seller 评分窗口/历史新增百分比展示列。
+- Search Insights 的品牌和卖家明细按计数降序、名称稳定排序，导出排名不再依赖 API map 的原始插入顺序。
+- Lightning Deal 主表新增按秒杀价/当前价计算的折扣率、活动时长，以及 `percentOff/percentClaimed` 的展示字段。
+
+### 0.4 真实 Product 验证（ASIN `B003IEUAZK`）
+
+- 真实 Product Request 请求完整历史、365 天 Statistics、20 个 Offer、Buy Box、库存、评分、视频、A+ 和历史变体；预计 18 token，Keepa 实际返回消耗 6 token。
+- 返回 1 个 Product Object、94 个顶层字段和 64 个 Marketplace Offer；格式化后包含 24,132 条 CSV 历史、16,574 条销售排名、4,900 条 Offer 历史、3,168 条 Product 历史。
+- 真实响应暴露 `videos` 7 条、Statistics `isLowest/isLowest90` 共 72 个值，以及 FBA/FBM condition 库存共 24 个值；已新增 `product_videos`、最低价状态行和 `stats_stock_by_condition` 工作表。
+- 修正 `stats_offer_snapshot` 同时保留列表与 Joined 文本的问题。重新生成的 16 个工作表中，主表和所有附加表的 `dict/list` 单元格均为 0。
+- 该 ASIN 的 7 条 Offer `couponHistory` 均为无优惠值 `0`；真实验证覆盖时间序列结构，无优惠分支通过，正数金额/负数百分比语义继续由脱敏固定测试覆盖。
+- 原始响应和验证 XLSX 仅保存于仓库外 `D:\Gitlab\.keepa-validation`，未写入 Git。
+
+### 0.5 MCP 摘要与详情导出边界（2026-08-20）
+
+- MCP `data` 不再随结果行数变化而返回完整对象；即使只有单个 Product，也只返回最多 5 行的标识字段摘要，避免 Offer、Statistics 和历史数组进入 Agent 上下文。
+- 完整详情统一通过 `export.url` 读取。XLSX 继续把数组和多行结构拆成独立 Tab，适合人工查看；JSON 升级为 v2，直接在 `response` 中保留 Keepa 原始业务字段、数组和嵌套对象。
+- JSON v2 公开导出移除 `tokensLeft`、`tokensConsumed`、`refillIn`、`refillRate` 和 `tokenFlowReduction` 等账号额度字段；请求参数、前后状态和完整内部包装仍只保存在 `raw.json`。
+- 采集沉淀 Parser 升级为 `keepa-v4`，继续兼容历史 JSON v1 `sheets`，并可把 JSON v2 `response` 的主对象作为保留嵌套值的 Dataset 解析。
+- Graph Image 和 Tracking 仍不提供 MCP 访问，本轮只完善现有 JSON Endpoint 的返回与导出边界。
+
+以下第 1-6 节保留实施前调研问题及决策依据；当前状态以本节和 `opscli/keepa/reference/FORMATTERS_STATUS.md` 为准。
+
+## 1. 实施前结论摘要
 
 Keepa 新版官方文档目前列出 **13 个 Endpoint**、**12 类 Response object**。逐项复核后，本文列出的数量与名称均与 2026-08-20 官方导航一致。
 
-- `opscli keepa` 当前公开 **10 个场景**，对应 10/13 个 Endpoint，按“有正式场景可调用”计算覆盖率为 **76.9%**。
-- 尚未提供正式场景的 Endpoint 是：**Seller Finder**（`/sellerquery`，2026-08-09 新增）、**Graph Image API**（`/graphimage`）、**Tracking API**（`/tracking`）。
+- 实施前 `opscli keepa` 公开 **10 个场景**，对应 10/13 个 Endpoint，按“有正式场景可调用”计算覆盖率为 **76.9%**。
+- 实施前尚未提供正式场景的 Endpoint 是：**Seller Finder**（`/sellerquery`，2026-08-09 新增）、**Graph Image API**（`/graphimage`）、**Tracking API**（`/tracking`）。
 - 现有 10 个场景并非全部参数都与最新版文档同步。已确认 Product Request 缺 `code-limit`、`historical-variations`，且在 `offers` 场景额外限制为最多 20 个商品，而当前官方页仍说明 Product Request 可批量最多 100 个商品；Product Search 仍透传当前官方参数表已经移除的 `page`，并缺 `rating`；Best Sellers、Category、Seller、Lightning Deals 也存在具体参数或组合校验缺口。
 - 当前 token 估算不能可靠保护额度：Product Search、Product Finder、Browsing Deals、Best Sellers、Most Rated Sellers 均按 1 token 估算，实际基础成本分别为 10、10、5、50、50；Lightning Deals 不传 ASIN 时实际为 500 token，当前仍估算为 1。Seller 默认请求 storefront 时也没有计入额外 9 token。
 - 所有现有 JSON Endpoint 的原始对象都能保存在任务 `raw.json` 中；通用导出也能把多数未知字段以 JSON 单元格或普通列保留下来。因此“原始数据不丢”覆盖面大于“对象已结构化支持”。
@@ -29,7 +101,7 @@ Keepa 新版官方文档目前列出 **13 个 Endpoint**、**12 类 Response obj
 | 原始响应保留 | Keepa 返回的 JSON 可完整追溯 | `KeepaApiManager.run()` 把原始响应写入 `raw.json`；未知对象不会先被模型裁剪 |
 | Response object 友好格式化 | 对象字段按业务语义展开，包含金额、时间、嵌套子表、列名或派生字段 | 独立 formatter + `KeepaApiManager` 显式接入 + 测试 |
 
-“Endpoint 已支持”不等于其所有官方参数都已暴露；“原始响应保留”也不等于 XLSX/格式化 JSON 已可直接分析。
+“Endpoint 已支持”不等于其所有官方参数都已暴露；“原始响应保留”也不等于 XLSX 已按业务语义完成格式化。
 
 ## 3. Endpoint 支持矩阵
 
@@ -49,7 +121,7 @@ Keepa 新版官方文档目前列出 **13 个 Endpoint**、**12 类 Response obj
 | Most Rated Sellers | `/topseller` | `top-seller` | 已支持接口 | 仅 domain；返回卖家 ID 列表可通用导出，但没有榜单或 Seller Object 友好格式化。当前估算 1，实际固定 50 token。 |
 | Lightning Deals | `/lightningdeal` | `lightning-deals` | 部分支持 | 当前只传 domain 和可选 asin，缺官方示例使用的 `state` 过滤。响应可提取 `lightningDeals`，但无 Lightning Deal formatter。指定 asin 时 1 token；不指定 asin 获取完整列表时为 500 token，当前两者都估算为 1。 |
 | Graph Image API | `/graphimage` | 无 | **不支持** | 返回图片而非 JSON。现有 `KeepaApiClient.get_json()` 强制 JSON，不能直接复用；需要二进制下载、MIME/文件导出模型。2026-07-28 新增 `types`、`legend`、`lw` 和三类图表支持。 |
-| Tracking API | `/tracking` | 无 | **不支持** | 包含 add/remove/removeAll/get/list/notification/listNames/webhook 等多种操作，且含写操作。官方说明所有操作都可用 GET，Add Tracking 另支持 POST；现有 GET JSON 客户端可复用部分传输能力，但仍需独立服务接口、写操作权限/确认、批量 POST JSON、分页及 webhook 安全设计。 |
+| Tracking API | `/tracking` | 不属于场景 | **内部 API 已支持** | 独立 Client/Service 覆盖 add/remove/removeAll/get/list/notification/listNames/webhook；Add 使用 POST JSON，Service 校验分页和批量边界，通知预览默认只读，批量删除、webhook 和通知消费要求显式确认；不注册 MCP 或公开 CLI。 |
 
 ### 3.1 Token 估算复核
 
@@ -89,9 +161,9 @@ Keepa 新版官方文档目前列出 **13 个 Endpoint**、**12 类 Response obj
 | Seller Object | Seller Information | 是 | **未接入** | 当前只做通用行与 Keepa Time 转换；无 rating history、storefront、Buy Box、业务信息等子表。官方已移除 `feedback`、`isScammer`。 |
 | Lightning Deal Object | Lightning Deals | 是 | **未接入** | 当前通用导出，缺状态、开始/结束时间、价格、库存/进度等语义化字段。 |
 | Search Insights Object | Product Finder `stats=1` | 是 | **已接入附加表** | 已有 brands/sellers/categories 子表；应按新版官方字段做全量差异测试。 |
-| Tracking Object | Tracking API | Endpoint 未支持 | **未接入** | 需先实现 Tracking 读接口；再设计阈值、通知方式、列表名等嵌套结构。 |
-| Tracking Creation Object | Tracking API add 请求体 | Endpoint 未支持 | **未接入** | 它是请求对象而非普通响应对象；需要输入模型、验证、批量上限和敏感写操作边界。 |
-| Notification Object | Tracking API notification / webhook | Endpoint 未支持 | **未接入** | 2026-08-06 新增 `notificationId`；需兼容拉取与 webhook 两种来源，并处理“读取后标记已读”的副作用。 |
+| Tracking Object | Tracking API | 内部 API 原始返回 | **未格式化** | `get/list/add` 保留 Keepa 原始对象；尚无 JSON/XLSX 文件结果模型。 |
+| Tracking Creation Object | Tracking API add 请求体 | 输入模型可序列化 | **已接入输入校验** | 已校验 ASIN、站点、1-24 小时更新周期、阈值、库存规则、7 位通知通道和 3,000 条批量上限。 |
+| Notification Object | Tracking API notification / webhook | 内部 API 原始返回 | **未格式化** | preview 固定 `readOnly=1`，显式确认后才允许标记已读；可靠 webhook 接收、`notificationId` 持久化去重和导出仍待建设。 |
 
 ### 4.1 对“全部 Response objects 支持”的建议定义
 
@@ -101,7 +173,7 @@ Keepa 新版官方文档目前列出 **13 个 Endpoint**、**12 类 Response obj
 - 每个对象有独立 formatter 或明确声明复用哪个 formatter。
 - 嵌套数组/字典进入独立 sheet，不被截断在单个 Excel 单元格中。
 - Keepa Time、Unix 时间、金额最小单位、百分比、枚举和值为 `-1` 的缺失语义统一处理。
-- formatter 同时驱动 XLSX 和格式化 JSON，避免两套字段合同漂移。
+- formatter 只驱动 XLSX 主表和明细 Tab；JSON 独立保留原始业务响应，避免数组和嵌套对象因表格化而丢失结构。
 - 每个对象至少有官方示例/固定 fixture 的字段保留、列顺序、嵌套表和空值测试。
 - `raw.json` 继续作为不可变追溯源；友好格式化只新增派生字段，不覆盖官方原字段。
 
@@ -146,15 +218,16 @@ Keepa 新版官方文档目前列出 **13 个 Endpoint**、**12 类 Response obj
 ### 阶段 D：Tracking 域
 
 - 将 Tracking 视为独立子域，而不是普通查询场景。
-- 先实现只读 get/list/listNames；notification 明确 `readOnly` 默认策略，避免查询即改变已读状态。
-- add/remove/removeAll/webhook 作为显式写命令和 MCP Tool，加入参数模型、权限、确认、审计和测试。
+- 已实现内部 get/list/listNames 和默认 `readOnly=1` 的 notification preview。
+- 已实现 add/remove/removeAll/webhook 的内部 Service、创建参数模型、显式确认和测试；Tracking 域不提供 MCP Tool，也尚未提供公开 CLI、权限或持久化审计。
 - Notification 以 `notificationId` 为业务键；保留旧通知无 ID 时的兼容键。
 
 ## 7. 代码证据索引
 
 - 场景注册与参数 builder：`opscli/keepa/api/scenarios.py:89-329`
 - 当前 10 个场景：`opscli/keepa/api/scenarios.py:238-329`
-- JSON-only GET 客户端：`opscli/keepa/api/client.py:44-52`、`:69-104`
+- GET/POST JSON 客户端：`opscli/keepa/api/client.py`
+- Tracking 内部 API：`opscli/keepa/tracking/client.py`、`models.py`、`service.py`
 - 原始响应落盘：`opscli/keepa/services/api_manager.py:131-145`
 - 通用结果提取（已预留 sellerIdList、trackings、notifications）：`opscli/keepa/services/api_manager.py:281-320`
 - 通用导出行提取：`opscli/keepa/services/api_manager.py:323-390`
