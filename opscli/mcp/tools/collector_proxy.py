@@ -68,6 +68,8 @@ def collector_proxy_tool(
     def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
         fn.__opscli_skip_quota__ = True
         fn.__opscli_catalog_module__ = module_name
+        # 网关和 Collector 都会上报遥测；显式角色让统计只计实际执行入口。
+        fn.__opscli_telemetry_role__ = "gateway_proxy"
         return fn
 
     return decorate

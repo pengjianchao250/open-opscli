@@ -6723,3 +6723,11 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：仅影响鹰眼模板的 Tool 展示描述和 Agent 工具选择提示，不修改 `pnd` 技术 ID、远端 Tool 名、参数 Schema、鉴权或请求链路。
 **回滚方式**：回退示例配置、接入指南、模板契约测试及本条变更记录。
 ---
+## 2026-08-21 mcp/telemetry - 增加统一场景调用维度
+
+**变更原因**：现有 MCP 遥测只记录 Tool 名和完整参数，无法稳定按卖家精灵、Keepa、SIF、西柚等服务场景聚合，并存在代理与执行端重复计数及敏感参数进入遥测的风险。
+**改动点**：扩展遥测事件的版本化低敏维度；MCP 注册层传入准确模块和运行角色；统一从 `scenario/feature/function/target` 与规范化结果提取场景；业务失败按错误状态上报；Collector 代理标记为 `gateway_proxy`；MCP 遥测不再发送完整调用参数；新增对应单元测试、Keepa 邮箱与场景专项断言，以及按用户和场景统计的 SQL 口径文档。
+**验证结果**：最终定向回归 `69 passed`；新增 Keepa 邮箱、场景及相关遥测回归 `23 passed`。排除既有 Shopify 导入错误后的 MCP 回归 `399 passed, 3 failed`，3 项是既有 Amazon Rufus 与 ScrapeDo 未注册断言。完整 MCP 收集被既有 `shopify.py` 引用不存在的 `_shopify_manager` 阻断。相关文件 `py_compile` 与 `git diff --check` 通过；当前环境未安装 Ruff。
+**影响范围**：所有通过 `InstrumentedMcpProxy` 注册的 MCP Tool 遥测；不改变 Tool 公开参数和业务响应。
+**回滚方式**：回滚 `opscli/telemetry/collector.py`、`opscli/mcp/instrumentation.py`、`opscli/mcp/app_factory.py`、`opscli/mcp/tools/collector_proxy.py`、场景统计设计文档、相关测试及本条记录。
+---
