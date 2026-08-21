@@ -6774,8 +6774,26 @@ tests/skills/test_dataset_query_flow.py`
 ## 2026-08-21 Keepa - 新增内部 Tracking API
 
 **变更原因**：Keepa Tracking 具备独立的读写操作、持续额度占用和通知已读副作用，不适合直接混入现有只读场景或立即暴露为 MCP Tool，但 Python SDK 和内部服务需要可复用的正式接口。
-**改动点**：按 TDD 增加 Tracking HTTP 合同、全部官方操作参数映射、创建对象及畸形 JSON 校验、只读通知默认值、破坏性操作确认、不安全 webhook 拒绝和 MCP 未注册边界的公开行为测试；新增 Tracking 创建/阈值/库存规则模型、官方 Endpoint Client 和带状态变更保护的 Service；通用 Keepa HTTP Client 补充 POST JSON 与错误密钥递归脱敏；从 `opscli.keepa` 和 `opscli.keepa.tracking` 导出内部 SDK；同步更新 Tracking 调研和 formatter/Endpoint 支持矩阵。
+**改动点**：按 TDD 增加 Tracking HTTP 合同、全部官方操作参数映射、创建对象及畸形 JSON 校验、只读通知默认值、Add/Remove/Remove All/Webhook/通知消费显式确认、Webhook host allowlist、不安全 URL 拒绝和 MCP 未注册边界的公开行为测试；新增 Tracking 创建/阈值/库存规则模型、官方 Endpoint Client 和带状态变更保护的 Service；通用 Keepa HTTP Client 补充 POST JSON 与错误密钥递归脱敏；从 `opscli.keepa` 和 `opscli.keepa.tracking` 导出内部 SDK；同步更新 Tracking 调研和 formatter/Endpoint 支持矩阵。
 **验证结果**：测试先因模块不存在按预期失败，补齐实现后 Tracking 专项 `18 passed`；畸形 `notificationType=null` 测试先复现 TypeError，再统一映射为 KeepaConfigError；Keepa 完整回归 `96 passed, 1 deselected`，MCP Keepa Tool/注册回归 `15 passed`；修改文件 Ruff、Keepa compileall 和 `git diff --check` 通过。测试全程使用 HTTP/Fake Client 边界替身，未读取本地 Key、未调用真实 Tracking API、未改变 Keepa 账户状态。
 **影响范围**：新增 Keepa 内部 Python Tracking API，并为通用 Keepa Client 增加 POST 和错误脱敏；不接入 MCP、公开 CLI、现有场景格式化或真实账户写操作。
 **回滚方式**：删除 Tracking 测试与后续内部实现，并回退本条变更记录。
+---
+
+## 2026-08-21 Keepa - 对齐 Tracking HTTP 超时规范
+
+**变更原因**：标准审查发现新增 Tracking Client 的默认超时为 60 秒，与仓库统一 HTTP 客户端规范要求的 10 秒不一致。
+**改动点**：将 `KeepaTrackingClient` 默认超时调整为 10 秒；调用方仍可显式传入更长超时。
+**验证结果**：Tracking 专项、Keepa 回归和 MCP Keepa 回归已在该调整前通过；调整后重新执行 Ruff、compileall、专项测试和 diff 检查。
+**影响范围**：仅影响新增 Tracking Client 的默认等待时长，不改变现有 Keepa Client 默认值和 API 参数合同。
+**回滚方式**：恢复 `opscli/keepa/tracking/client.py` 的默认 `timeout` 值并回退本条变更记录。
+---
+
+## 2026-08-21 Keepa - 收紧 Tracking 写操作和 Webhook 边界
+
+**变更原因**：Spec 审查发现 Add/Remove 可绕过确认，Webhook 仅校验 HTTPS 仍可指向未受控主机；这与 Tracking 有状态操作必须显式受控的约定不一致。
+**改动点**：Service 的 Add/Remove 统一要求 `confirm=True`；Webhook Service 构造时必须提供精确 host allowlist，拒绝未登记主机和 IP 地址；底层 Client 明确标注为无策略传输层；补充对应回归测试和文档说明。
+**验证结果**：Tracking 专项 `19 passed`；Ruff、compileall 和 `git diff --check` 通过。
+**影响范围**：内部 Tracking Service 的调用契约变为显式确认；只读操作不变，MCP/CLI 仍未注册。
+**回滚方式**：回退 Tracking Service 的确认/allowlist 校验、测试、文档及本条变更记录。
 ---

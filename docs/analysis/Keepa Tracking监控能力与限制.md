@@ -208,11 +208,11 @@ Keepa webhook
 
 ## 8. 对 opscli 的能力建议
 
-当前仓库已提供内部 Python Tracking API，代码位于 `opscli/keepa/tracking/`；支持全部官方操作的原始 JSON 调用、Tracking Creation Object 校验、默认只读通知预览和破坏性操作显式确认。该能力不注册 MCP、不挂公开 CLI，也不纳入现有场景导出。后续产品化仍建议分三期：
+当前仓库已提供内部 Python Tracking API，代码位于 `opscli/keepa/tracking/`；支持全部官方操作的原始 JSON 调用、Tracking Creation Object 校验、默认只读通知预览和破坏性操作显式确认。业务代码应使用 `KeepaTrackingService`：Add/Remove/Remove All/Webhook/通知消费都要求 `confirm=True`，Webhook 还必须匹配调用方提供的精确 host allowlist；底层 Client 仅是无策略传输层。该能力不注册 MCP、不挂公开 CLI，也不纳入现有场景导出。后续产品化仍建议分三期：
 
 1. **只读盘点**：内部 Service 已提供 `get/list/listNames` 和默认 `readOnly=1` 的 notification preview；后续受控 CLI/Admin 应只返回摘要，详情导出 JSON/XLSX。
 2. **可靠通知消费**：Webhook 接收、Notification 原始持久化、`notificationId` 去重、24 小时补偿轮询和内部告警。
-3. **受控写操作**：内部 API 已提供 Add/更新、Remove、Remove All、Set Webhook，其中 Remove All、Set Webhook 和通知消费要求显式确认；对外管理面仍需补预算预估、权限分级、审计、幂等和回滚配置。
+3. **受控写操作**：内部 Service 已提供 Add/更新、Remove、Remove All、Set Webhook，其中所有写操作和通知消费要求显式确认，Webhook 需 allowlist；对外管理面仍需补预算预估、权限分级、审计、幂等和回滚配置。
 
 Tracking 不提供 MCP Tool；Agent 如需使用监控结果，应读取已经沉淀的通知摘要或导出文件，而不是直接管理 Keepa Tracking 状态。
 

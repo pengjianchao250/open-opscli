@@ -9,14 +9,19 @@ from opscli.keepa.api.client import DEFAULT_BASE_URL, DEFAULT_USER_AGENT, KeepaA
 
 
 class KeepaTrackingClient:
-    """按官方参数映射调用 Keepa `/tracking` Endpoint。"""
+    """按官方参数映射调用 Keepa `/tracking` Endpoint。
+
+    这是无权限策略的 HTTP 传输层；会直接执行 Add/Remove/Webhook 等写操作。
+    业务代码应优先使用 `KeepaTrackingService`，由 Service 提供确认和 webhook
+    allowlist 保护。
+    """
 
     def __init__(
         self,
         *,
         api_key: str,
         base_url: str = DEFAULT_BASE_URL,
-        timeout: float = 60.0,
+        timeout: float = 10.0,
         user_agent: str = DEFAULT_USER_AGENT,
     ) -> None:
         self._api = KeepaApiClient(

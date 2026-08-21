@@ -13,9 +13,9 @@
 | Seller Object | 已接入 | `seller_formatter.py` | 评分窗口、评分历史、反馈、storefront、类目、品牌、竞对分别拆表。 |
 | Lightning Deal Object | 已接入 | `lightning_deal_formatter.py` | 主表派生金额、时间、评分、图片；variation 维度拆表。 |
 | Search Insights Object | 已接入 | `search_insights_formatter.py` | `product-finder stats=1` 时拆出主指标、品牌、卖家和类目。 |
-| Tracking Object | 内部 API 已接入，未格式化 | `tracking/client.py`、`tracking/service.py` | 内部 Python API 支持 `get/list` 原始 JSON；不接入场景、MCP、CLI 或 XLSX formatter。 |
+| Tracking Object | 内部 API 已接入，未格式化 | `tracking/client.py`、`tracking/service.py` | 内部 Python API 支持 `get/list` 原始 JSON；业务调用应经 Service，不接入场景、MCP、CLI 或 XLSX formatter。 |
 | Tracking Creation Object | 输入模型已接入 | `tracking/models.py` | 校验 ASIN、站点、更新周期、阈值、库存规则和 7 位通知通道；Add 固定使用批量 POST JSON。 |
-| Notification Object | 内部 API 已接入，未格式化 | `tracking/client.py`、`tracking/service.py` | notification preview 强制 `readOnly=1`；显式确认后才允许消费并标记已读；保留原始 JSON。 |
+| Notification Object | 内部 API 已接入，未格式化 | `tracking/client.py`、`tracking/service.py` | notification preview 强制 `readOnly=1`；显式确认后才允许消费并标记已读；保留原始 JSON。底层 Client 不提供安全策略。 |
 
 当前仍为 9/12 类官方 Response Object 提供友好格式化；Tracking 域 3 类对象已有内部传输或输入模型，但未纳入 XLSX formatter。Graph Image 返回二进制图片，不属于 Response Object formatter。
 

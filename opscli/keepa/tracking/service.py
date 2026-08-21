@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import ipaddress
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -50,14 +51,30 @@ class _TrackingClient(Protocol):
 class KeepaTrackingService:
     """在调用 Tracking Client 前执行官方限制和副作用保护。"""
 
-    def __init__(self, client: _TrackingClient) -> None:
+    def __init__(
+        self,
+        client: _TrackingClient,
+        *,
+        allowed_webhook_hosts: Collection[str] = (),
+    ) -> None:
+        """创建带状态变更保护的 Tracking Service。
+
+        Args:
+            client: Keepa Tracking HTTP 传输客户端。
+            allowed_webhook_hosts: 受控管理面预登记的精确 webhook 主机名。
+                为空时拒绝全部 webhook 配置，避免任意 URL 变成 SSRF 入口。
+        """
         self.client = client
+        self.allowed_webhook_hosts = frozenset(
+            _normalize_webhook_host(item) for item in allowed_webhook_hosts
+        )
 
     async def add(
         self,
         trackings: Sequence[TrackingCreation | Mapping[str, Any]],
         *,
         list_name: str | None = None,
+        confirm: bool = False,
     ) -> dict[str, Any]:
         """新增或整体覆盖一批 Tracking。
 
@@ -69,8 +86,9 @@ class KeepaTrackingService:
             Keepa 原始 JSON 响应。
 
         Raises:
-            KeepaConfigError: 批量、列表名或创建对象不符合官方限制。
+            KeepaConfigError: 批量、列表名、创建对象或确认条件不符合限制。
         """
+        _require_confirmation(confirm, operation="add")
         _validate_list_name(list_name)
         if not trackings:
             raise KeepaConfigError("Tracking Add 至少需要一个创建对象")
@@ -199,16 +217,27 @@ class KeepaTrackingService:
             list_name=list_name,
         )
 
-    async def remove(self, asin: str, *, list_name: str | None = None) -> dict[str, Any]:
+    async def remove(
+        self,
+        asin: str,
+        *,
+        list_name: str | None = None,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
         """删除单个 Tracking。
 
         Args:
             asin: 待删除的 ASIN。
             list_name: 可选的命名 Tracking 列表。
+            confirm: 必须显式为 True，确认删除。
 
         Returns:
             Keepa 原始 JSON 响应。
+
+        Raises:
+            KeepaConfigError: ASIN、列表名或确认条件不合法。
         """
+        _require_confirmation(confirm, operation="remove")
         _validate_list_name(list_name)
         return await self.client.remove(normalize_tracking_asin(asin), list_name=list_name)
 
@@ -255,6 +284,15 @@ class KeepaTrackingService:
             raise KeepaConfigError("webhook URL 必须是包含主机名的 HTTPS 地址")
         if parsed.username or parsed.password:
             raise KeepaConfigError("webhook URL 不得包含用户名或密码")
+        host = _normalize_webhook_host(parsed.hostname or "")
+        if host not in self.allowed_webhook_hosts:
+            raise KeepaConfigError("webhook 主机未在受控 allowlist 中登记")
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        else:
+            raise KeepaConfigError("webhook URL 不允许使用 IP 地址")
         return await self.client.set_webhook(url.strip())
 
     async def _notifications(
@@ -316,3 +354,10 @@ def _validate_non_negative_int(value: Any, field_name: str) -> None:
 def _validate_positive_int(value: Any, field_name: str) -> None:
     if type(value) is not int or value <= 0:
         raise KeepaConfigError(f"{field_name} 必须是正整数")
+
+
+def _normalize_webhook_host(value: str) -> str:
+    host = str(value).strip().lower().rstrip(".")
+    if not host or any(char.isspace() for char in host):
+        raise KeepaConfigError("webhook allowlist 主机名不能为空或包含空白字符")
+    return host

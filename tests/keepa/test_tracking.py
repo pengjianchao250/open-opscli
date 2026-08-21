@@ -238,7 +238,9 @@ def test_tracking_service_serializes_valid_creation_and_normalizes_asin():
     client = _RecordingTrackingClient()
     service = KeepaTrackingService(client)
 
-    result = _run(service.add([_creation("b003ieuazk")], list_name="price-watch"))
+    result = _run(
+        service.add([_creation("b003ieuazk")], list_name="price-watch", confirm=True)
+    )
 
     assert result["trackings"][0]["asin"] == "B003IEUAZK"
     assert client.calls == [
@@ -257,7 +259,7 @@ def test_tracking_service_accepts_official_creation_object_mapping():
     service = KeepaTrackingService(client)
     creation = _creation().to_api_dict()
 
-    _run(service.add([creation]))
+    _run(service.add([creation], confirm=True))
 
     assert client.calls == [("add", {"trackings": [creation], "list_name": None})]
 
@@ -274,7 +276,8 @@ def test_tracking_service_maps_null_notification_type_to_config_error():
                         "mainDomainId": 1,
                         "notificationType": None,
                     }
-                ]
+                ],
+                confirm=True,
             )
         )
 
@@ -314,14 +317,14 @@ def test_tracking_service_rejects_invalid_creation_objects(creation, message):
     service = KeepaTrackingService(_RecordingTrackingClient())
 
     with pytest.raises(KeepaConfigError, match=message):
-        _run(service.add([creation]))
+        _run(service.add([creation], confirm=True))
 
 
 def test_tracking_service_rejects_more_than_three_thousand_additions():
     service = KeepaTrackingService(_RecordingTrackingClient())
 
     with pytest.raises(KeepaConfigError, match="3,000"):
-        _run(service.add([_creation()] * 3001))
+        _run(service.add([_creation()] * 3001, confirm=True))
 
 
 def test_tracking_service_preview_notifications_is_read_only_by_default():
@@ -365,7 +368,7 @@ def test_tracking_service_requires_confirmation_for_notification_consumption():
 
 def test_tracking_service_requires_confirmation_for_remove_all_and_webhook():
     client = _RecordingTrackingClient()
-    service = KeepaTrackingService(client)
+    service = KeepaTrackingService(client, allowed_webhook_hosts={"example.com"})
 
     with pytest.raises(KeepaConfigError, match="confirm=True"):
         _run(service.remove_all(list_name="price-watch"))
@@ -381,13 +384,30 @@ def test_tracking_service_requires_confirmation_for_remove_all_and_webhook():
     ]
 
 
+def test_tracking_service_requires_confirmation_for_add_and_remove():
+    client = _RecordingTrackingClient()
+    service = KeepaTrackingService(client)
+
+    with pytest.raises(KeepaConfigError, match="confirm=True"):
+        _run(service.add([_creation()]))
+    with pytest.raises(KeepaConfigError, match="confirm=True"):
+        _run(service.remove("B003IEUAZK"))
+
+    _run(service.remove("B003IEUAZK", confirm=True))
+    assert client.calls == [("remove", {"asin": "B003IEUAZK", "list_name": None})]
+
+
 def test_tracking_service_rejects_unsafe_webhook_url_after_confirmation():
-    service = KeepaTrackingService(_RecordingTrackingClient())
+    service = KeepaTrackingService(
+        _RecordingTrackingClient(), allowed_webhook_hosts={"example.com"}
+    )
 
     with pytest.raises(KeepaConfigError, match="HTTPS"):
         _run(service.set_webhook("http://127.0.0.1/keepa", confirm=True))
     with pytest.raises(KeepaConfigError, match="用户名或密码"):
         _run(service.set_webhook("https://user:pass@example.com/keepa", confirm=True))
+    with pytest.raises(KeepaConfigError, match="allowlist"):
+        _run(service.set_webhook("https://internal.example/keepa", confirm=True))
 
 
 def test_tracking_service_validates_list_query_boundaries():
