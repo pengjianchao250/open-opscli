@@ -13,11 +13,11 @@
 | Seller Object | 已接入 | `seller_formatter.py` | 评分窗口、评分历史、反馈、storefront、类目、品牌、竞对分别拆表。 |
 | Lightning Deal Object | 已接入 | `lightning_deal_formatter.py` | 主表派生金额、时间、评分、图片；variation 维度拆表。 |
 | Search Insights Object | 已接入 | `search_insights_formatter.py` | `product-finder stats=1` 时拆出主指标、品牌、卖家和类目。 |
-| Tracking Object | 未接入 | - | Tracking Endpoint 尚未提供正式只读 API。 |
-| Tracking Creation Object | 未接入 | - | 属于状态变更请求对象，需单独的输入校验、权限和审计设计。 |
-| Notification Object | 未接入 | - | 依赖 Tracking notification/webhook 接口及已读副作用设计。 |
+| Tracking Object | 内部 API 已接入，未格式化 | `tracking/client.py`、`tracking/service.py` | 内部 Python API 支持 `get/list` 原始 JSON；不接入场景、MCP、CLI 或 XLSX formatter。 |
+| Tracking Creation Object | 输入模型已接入 | `tracking/models.py` | 校验 ASIN、站点、更新周期、阈值、库存规则和 7 位通知通道；Add 固定使用批量 POST JSON。 |
+| Notification Object | 内部 API 已接入，未格式化 | `tracking/client.py`、`tracking/service.py` | notification preview 强制 `readOnly=1`；显式确认后才允许消费并标记已读；保留原始 JSON。 |
 
-当前为 9/12 类官方 Response Object 提供友好格式化；剩余 3 类全部属于尚未接入的 Tracking 域。Graph Image 返回二进制图片，不属于 Response Object formatter。
+当前仍为 9/12 类官方 Response Object 提供友好格式化；Tracking 域 3 类对象已有内部传输或输入模型，但未纳入 XLSX formatter。Graph Image 返回二进制图片，不属于 Response Object formatter。
 
 ## Product 明细 Sheet
 
@@ -48,7 +48,7 @@
 
 11 个已接入 JSON 场景在 `opscli/keepa/api/scenarios.py` 统一完成请求参数归一化和边界校验：布尔值、整数、CSV ID、别名冲突和 Best Sellers 历史月份均在调用 Keepa 前处理。Product Finder、Seller Finder、Deals 的 `selection` 保持开放字段，只要求 JSON 对象；未知响应字段仍保留在 `raw.json`，不因 formatter 未声明而丢失。
 
-Graph Image 的二进制结果和 Tracking 域的状态变更对象不属于当前 formatter 范围；它们仍需独立的文件结果模型、权限、确认和审计设计。
+Graph Image 的二进制结果和 Tracking 域对象不属于当前 formatter 范围。Tracking 内部 Service 已提供参数校验、通知只读默认值和显式确认边界；后续若增加 CLI/Admin，还需补权限、持久化审计和文件结果模型。
 
 ## 2026-08-20 格式化补充
 

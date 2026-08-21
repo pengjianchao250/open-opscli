@@ -6770,3 +6770,12 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：仅影响鹰眼模板的 Tool 展示描述和 Agent 工具选择提示，不修改 `pnd` 技术 ID、远端 Tool 名、参数 Schema、鉴权或请求链路。
 **回滚方式**：回退示例配置、接入指南、模板契约测试及本条变更记录。
 ---
+
+## 2026-08-21 Keepa - 新增内部 Tracking API
+
+**变更原因**：Keepa Tracking 具备独立的读写操作、持续额度占用和通知已读副作用，不适合直接混入现有只读场景或立即暴露为 MCP Tool，但 Python SDK 和内部服务需要可复用的正式接口。
+**改动点**：按 TDD 增加 Tracking HTTP 合同、全部官方操作参数映射、创建对象及畸形 JSON 校验、只读通知默认值、破坏性操作确认、不安全 webhook 拒绝和 MCP 未注册边界的公开行为测试；新增 Tracking 创建/阈值/库存规则模型、官方 Endpoint Client 和带状态变更保护的 Service；通用 Keepa HTTP Client 补充 POST JSON 与错误密钥递归脱敏；从 `opscli.keepa` 和 `opscli.keepa.tracking` 导出内部 SDK；同步更新 Tracking 调研和 formatter/Endpoint 支持矩阵。
+**验证结果**：测试先因模块不存在按预期失败，补齐实现后 Tracking 专项 `18 passed`；畸形 `notificationType=null` 测试先复现 TypeError，再统一映射为 KeepaConfigError；Keepa 完整回归 `96 passed, 1 deselected`，MCP Keepa Tool/注册回归 `15 passed`；修改文件 Ruff、Keepa compileall 和 `git diff --check` 通过。测试全程使用 HTTP/Fake Client 边界替身，未读取本地 Key、未调用真实 Tracking API、未改变 Keepa 账户状态。
+**影响范围**：新增 Keepa 内部 Python Tracking API，并为通用 Keepa Client 增加 POST 和错误脱敏；不接入 MCP、公开 CLI、现有场景格式化或真实账户写操作。
+**回滚方式**：删除 Tracking 测试与后续内部实现，并回退本条变更记录。
+---

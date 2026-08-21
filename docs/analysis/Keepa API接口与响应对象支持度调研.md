@@ -21,11 +21,11 @@
 | Lightning Deals | 新增 `state`；指定 ASIN 按 1 token，完整列表按 500 token；新增 Lightning Deal formatter。 |
 | Product 大字段 | 图片、类目树、销售排名、Offer 历史、Offer 重复项、变体属性、简单列表和顶层历史全部拆到独立 Sheet；主表不再保留嵌套 `dict/list` 单元格。 |
 
-仍未接入：
+未纳入现有 `keepa_run` 场景：
 
 - Graph Image `/graphimage`：返回二进制图片，需要下载、MIME 和文件结果模型，不能复用 JSON 场景。
-- Tracking `/tracking`：包含读写操作、POST 请求体、通知已读副作用和 webhook，需要独立权限、确认与审计设计。
-- Tracking Object、Tracking Creation Object、Notification Object：随 Tracking 域一起实施。
+- Tracking `/tracking`：已新增独立内部 Python Client/Service，覆盖全部官方操作、POST 请求体、通知只读默认值和显式确认；不计入 `keepa_run` 场景覆盖率，也不暴露 MCP/公开 CLI。
+- Tracking Object、Notification Object 保留原始 JSON；Tracking Creation Object 已有输入模型和官方边界校验，但 3 类对象均未接入 XLSX formatter。
 
 ### 0.1 真实响应验证
 
@@ -121,7 +121,7 @@ Keepa 新版官方文档目前列出 **13 个 Endpoint**、**12 类 Response obj
 | Most Rated Sellers | `/topseller` | `top-seller` | 已支持接口 | 仅 domain；返回卖家 ID 列表可通用导出，但没有榜单或 Seller Object 友好格式化。当前估算 1，实际固定 50 token。 |
 | Lightning Deals | `/lightningdeal` | `lightning-deals` | 部分支持 | 当前只传 domain 和可选 asin，缺官方示例使用的 `state` 过滤。响应可提取 `lightningDeals`，但无 Lightning Deal formatter。指定 asin 时 1 token；不指定 asin 获取完整列表时为 500 token，当前两者都估算为 1。 |
 | Graph Image API | `/graphimage` | 无 | **不支持** | 返回图片而非 JSON。现有 `KeepaApiClient.get_json()` 强制 JSON，不能直接复用；需要二进制下载、MIME/文件导出模型。2026-07-28 新增 `types`、`legend`、`lw` 和三类图表支持。 |
-| Tracking API | `/tracking` | 无 | **不支持** | 包含 add/remove/removeAll/get/list/notification/listNames/webhook 等多种操作，且含写操作。官方说明所有操作都可用 GET，Add Tracking 另支持 POST；现有 GET JSON 客户端可复用部分传输能力，但仍需独立服务接口、写操作权限/确认、批量 POST JSON、分页及 webhook 安全设计。 |
+| Tracking API | `/tracking` | 不属于场景 | **内部 API 已支持** | 独立 Client/Service 覆盖 add/remove/removeAll/get/list/notification/listNames/webhook；Add 使用 POST JSON，Service 校验分页和批量边界，通知预览默认只读，批量删除、webhook 和通知消费要求显式确认；不注册 MCP 或公开 CLI。 |
 
 ### 3.1 Token 估算复核
 
@@ -161,9 +161,9 @@ Keepa 新版官方文档目前列出 **13 个 Endpoint**、**12 类 Response obj
 | Seller Object | Seller Information | 是 | **未接入** | 当前只做通用行与 Keepa Time 转换；无 rating history、storefront、Buy Box、业务信息等子表。官方已移除 `feedback`、`isScammer`。 |
 | Lightning Deal Object | Lightning Deals | 是 | **未接入** | 当前通用导出，缺状态、开始/结束时间、价格、库存/进度等语义化字段。 |
 | Search Insights Object | Product Finder `stats=1` | 是 | **已接入附加表** | 已有 brands/sellers/categories 子表；应按新版官方字段做全量差异测试。 |
-| Tracking Object | Tracking API | Endpoint 未支持 | **未接入** | 需先实现 Tracking 读接口；再设计阈值、通知方式、列表名等嵌套结构。 |
-| Tracking Creation Object | Tracking API add 请求体 | Endpoint 未支持 | **未接入** | 它是请求对象而非普通响应对象；需要输入模型、验证、批量上限和敏感写操作边界。 |
-| Notification Object | Tracking API notification / webhook | Endpoint 未支持 | **未接入** | 2026-08-06 新增 `notificationId`；需兼容拉取与 webhook 两种来源，并处理“读取后标记已读”的副作用。 |
+| Tracking Object | Tracking API | 内部 API 原始返回 | **未格式化** | `get/list/add` 保留 Keepa 原始对象；尚无 JSON/XLSX 文件结果模型。 |
+| Tracking Creation Object | Tracking API add 请求体 | 输入模型可序列化 | **已接入输入校验** | 已校验 ASIN、站点、1-24 小时更新周期、阈值、库存规则、7 位通知通道和 3,000 条批量上限。 |
+| Notification Object | Tracking API notification / webhook | 内部 API 原始返回 | **未格式化** | preview 固定 `readOnly=1`，显式确认后才允许标记已读；可靠 webhook 接收、`notificationId` 持久化去重和导出仍待建设。 |
 
 ### 4.1 对“全部 Response objects 支持”的建议定义
 
@@ -218,15 +218,16 @@ Keepa 新版官方文档目前列出 **13 个 Endpoint**、**12 类 Response obj
 ### 阶段 D：Tracking 域
 
 - 将 Tracking 视为独立子域，而不是普通查询场景。
-- 先实现只读 get/list/listNames；notification 明确 `readOnly` 默认策略，避免查询即改变已读状态。
-- add/remove/removeAll/webhook 仅考虑显式 CLI/Service 写入口，加入参数模型、权限、确认、审计和测试；Tracking 域不提供 MCP Tool。
+- 已实现内部 get/list/listNames 和默认 `readOnly=1` 的 notification preview。
+- 已实现 add/remove/removeAll/webhook 的内部 Service、创建参数模型、显式确认和测试；Tracking 域不提供 MCP Tool，也尚未提供公开 CLI、权限或持久化审计。
 - Notification 以 `notificationId` 为业务键；保留旧通知无 ID 时的兼容键。
 
 ## 7. 代码证据索引
 
 - 场景注册与参数 builder：`opscli/keepa/api/scenarios.py:89-329`
 - 当前 10 个场景：`opscli/keepa/api/scenarios.py:238-329`
-- JSON-only GET 客户端：`opscli/keepa/api/client.py:44-52`、`:69-104`
+- GET/POST JSON 客户端：`opscli/keepa/api/client.py`
+- Tracking 内部 API：`opscli/keepa/tracking/client.py`、`models.py`、`service.py`
 - 原始响应落盘：`opscli/keepa/services/api_manager.py:131-145`
 - 通用结果提取（已预留 sellerIdList、trackings、notifications）：`opscli/keepa/services/api_manager.py:281-320`
 - 通用导出行提取：`opscli/keepa/services/api_manager.py:323-390`

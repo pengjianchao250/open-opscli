@@ -8,8 +8,10 @@ import httpx
 
 from opscli.keepa.domain.exceptions import KeepaApiError
 
-
+# Keepa REST API 的默认服务地址。
 DEFAULT_BASE_URL = "https://api.keepa.com"
+
+# Keepa HTTP 请求使用的默认 User-Agent。
 DEFAULT_USER_AGENT = "opscli-keepa/1.0"
 
 
@@ -31,7 +33,7 @@ class KeepaApiClient:
             headers={"User-Agent": user_agent, "Accept": "application/json"},
         )
 
-    async def __aenter__(self) -> "KeepaApiClient":
+    async def __aenter__(self) -> KeepaApiClient:  # noqa: PYI034
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
@@ -48,8 +50,48 @@ class KeepaApiClient:
     async def get_json(self, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
         """GET JSON 并返回 Keepa 原始响应。"""
         clean_params = _clean_params({"key": self.api_key, **params})
-        response = await self._client.get(f"{self.base_url}/{endpoint.lstrip('/')}", params=clean_params)
-        return _parse_json_response(response)
+        response = await self._request("GET", endpoint, params=clean_params)
+        return _parse_json_response(response, secrets=(self.api_key,))
+
+    async def post_json(
+        self,
+        endpoint: str,
+        params: dict[str, Any],
+        payload: Any,
+    ) -> dict[str, Any]:
+        """POST JSON 并返回 Keepa 原始响应。
+
+        Args:
+            endpoint: Keepa Endpoint 路径。
+            params: 除 API Key 外的 query 参数。
+            payload: 可由 httpx JSON 序列化的请求体。
+
+        Returns:
+            Keepa 原始 JSON 对象。
+
+        Raises:
+            KeepaApiError: 网络失败、非 JSON、HTTP 错误或业务错误。
+        """
+        clean_params = _clean_params({"key": self.api_key, **params})
+        response = await self._request(
+            "POST",
+            endpoint,
+            params=clean_params,
+            json=payload,
+        )
+        return _parse_json_response(response, secrets=(self.api_key,))
+
+    async def _request(self, method: str, endpoint: str, **kwargs: Any) -> httpx.Response:
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        try:
+            return await self._client.request(method, url, **kwargs)
+        except httpx.HTTPError as exc:
+            # httpx 异常可能包含带 key 的完整 URL，必须先脱敏再映射为业务异常。
+            detail = _redact_text(str(exc), (self.api_key,))
+            raise KeepaApiError(
+                "Keepa API 网络请求失败",
+                response_excerpt=detail[:1000],
+            ) from None
 
 
 def _clean_params(params: dict[str, Any]) -> dict[str, str]:
@@ -66,8 +108,12 @@ def _clean_params(params: dict[str, Any]) -> dict[str, str]:
     return clean
 
 
-def _parse_json_response(response: httpx.Response) -> dict[str, Any]:
-    text = response.text
+def _parse_json_response(
+    response: httpx.Response,
+    *,
+    secrets: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    text = _redact_text(response.text, secrets)
     try:
         payload = response.json()
     except Exception as exc:
@@ -85,20 +131,22 @@ def _parse_json_response(response: httpx.Response) -> dict[str, Any]:
         )
 
     if response.status_code >= 400:
-        message = _extract_error_message(payload) or f"Keepa API 请求失败，HTTP {response.status_code}"
+        safe_payload = _redact_payload(payload, secrets)
+        message = _extract_error_message(safe_payload) or f"Keepa API 请求失败，HTTP {response.status_code}"
         raise KeepaApiError(
             message,
             status_code=response.status_code,
             response_excerpt=text[:1000],
-            response_payload=payload,
+            response_payload=safe_payload,
         )
 
     if payload.get("error"):
+        safe_payload = _redact_payload(payload, secrets)
         raise KeepaApiError(
-            str(payload.get("error")),
+            str(safe_payload.get("error")),
             status_code=response.status_code,
             response_excerpt=text[:1000],
-            response_payload=payload,
+            response_payload=safe_payload,
         )
 
     return payload
@@ -118,3 +166,21 @@ def _extract_error_message(payload: dict[str, Any]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
+    result = value
+    for secret in secrets:
+        if secret:
+            result = result.replace(secret, "***")
+    return result
+
+
+def _redact_payload(value: Any, secrets: tuple[str, ...]) -> Any:
+    if isinstance(value, dict):
+        return {key: _redact_payload(item, secrets) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_payload(item, secrets) for item in value]
+    if isinstance(value, str):
+        return _redact_text(value, secrets)
+    return value
