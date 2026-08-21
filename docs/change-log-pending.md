@@ -6792,7 +6792,7 @@ tests/skills/test_dataset_query_flow.py`
 ## 2026-08-21 Keepa - 收紧 Tracking 写操作和 Webhook 边界
 
 **变更原因**：Spec 审查发现 Add/Remove 可绕过确认，Webhook 仅校验 HTTPS 仍可指向未受控主机；这与 Tracking 有状态操作必须显式受控的约定不一致。
-**改动点**：Service 的 Add/Remove 统一要求 `confirm=True`；Webhook Service 构造时必须提供精确 host allowlist，拒绝未登记主机和 IP 地址；底层 Client 明确标注为无策略传输层；补充对应回归测试和文档说明。
+**改动点**：Service 的 Add/Remove 统一要求 `confirm=True`；Webhook Service 构造时必须提供精确 host allowlist，拒绝未登记主机和 IP 地址；底层 Client 明确标注为无策略传输层；补充对应回归测试、公开参数 docstring 和文档说明。
 **验证结果**：Tracking 专项 `19 passed`；Ruff、compileall 和 `git diff --check` 通过。
 **影响范围**：内部 Tracking Service 的调用契约变为显式确认；只读操作不变，MCP/CLI 仍未注册。
 **回滚方式**：回退 Tracking Service 的确认/allowlist 校验、测试、文档及本条变更记录。

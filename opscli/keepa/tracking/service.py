@@ -81,6 +81,7 @@ class KeepaTrackingService:
         Args:
             trackings: 一个至 3,000 个创建模型或官方字段映射。
             list_name: 可选的命名 Tracking 列表。
+            confirm: 必须显式为 True，确认新增或整体覆盖现有 Tracking。
 
         Returns:
             Keepa 原始 JSON 响应。
