@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from opscli.mcp.quota import get_quota_limiter
+from opscli.keepa.api.scenarios import telemetry_dimensions as _keepa_telemetry_dimensions
 from opscli.skills.packaging import get_builtin_templates_dir
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
@@ -142,6 +143,9 @@ async def keepa_run(
         jwt=jwt,
         collection_submitter=None,
     )
+
+
+setattr(keepa_run, "__opscli_telemetry_dimension_resolver__", _keepa_telemetry_dimensions)
 
 
 async def _keepa_run_impl(

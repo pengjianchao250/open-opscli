@@ -75,6 +75,18 @@ def get_scenario(scenario_id: str) -> KeepaScenario:
     return scenario
 
 
+def telemetry_dimensions(arguments: dict[str, Any]) -> dict[str, str]:
+    """从 Keepa 场景参数解析低敏上游 endpoint。"""
+    scenario_id = arguments.get("scenario")
+    if scenario_id is None or isinstance(scenario_id, (dict, list, tuple, set)):
+        return {}
+    try:
+        return {"endpoint": get_scenario(str(scenario_id).strip()).endpoint}
+    except KeepaConfigError:
+        # 未知场景的业务错误仍由 Keepa 业务层记录，公共遥测只保留调用事实。
+        return {}
+
+
 def normalize_domain(site: str) -> str:
     """将站点代码转换为 Keepa domain 数字字符串。"""
     text = str(site or "US").strip().upper()

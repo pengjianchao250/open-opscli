@@ -1,4 +1,4 @@
-from opscli.keepa.api.scenarios import get_scenario, normalize_domain
+from opscli.keepa.api.scenarios import get_scenario, normalize_domain, telemetry_dimensions
 from opscli.keepa.domain.exceptions import KeepaConfigError
 
 
@@ -58,3 +58,9 @@ def test_search_and_lookup_accept_documented_aliases():
     assert category_lookup["category"] == "123,456"
     assert seller["seller"] == "A2L77EE7U53NWQ"
     assert bestsellers["category"] == "Home"
+
+
+def test_telemetry_dimensions_resolve_keepa_endpoint_from_scenario():
+    assert telemetry_dimensions({"scenario": "product-search"}) == {"endpoint": "search"}
+    assert telemetry_dimensions({"scenario": "deals"}) == {"endpoint": "deal"}
+    assert telemetry_dimensions({"scenario": "unknown"}) == {}

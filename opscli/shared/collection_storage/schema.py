@@ -42,6 +42,41 @@ SCHEMA_STATEMENTS = (
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS mcp_call_events (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        trace_id CHAR(36) NOT NULL,
+        event_type VARCHAR(32) NOT NULL DEFAULT 'mcp_tool',
+        user_email VARCHAR(254) NULL,
+        service VARCHAR(64) NOT NULL,
+        operation VARCHAR(128) NOT NULL,
+        endpoint VARCHAR(128) NULL,
+        scenario VARCHAR(128) NULL,
+        runtime_role VARCHAR(32) NOT NULL DEFAULT 'executor',
+        site VARCHAR(64) NULL,
+        period VARCHAR(64) NULL,
+        provider VARCHAR(128) NULL,
+        -- 兼容字段：公共调用统计不使用业务成功/失败状态。
+        status VARCHAR(16) NOT NULL DEFAULT 'called',
+        error_code VARCHAR(128) NULL,
+        duration_ms INT UNSIGNED NULL,
+        skill_name VARCHAR(128) NULL,
+        dimensions_json JSON NULL,
+        occurred_at DATETIME(6) NOT NULL,
+        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        UNIQUE KEY uq_mcp_call_events_trace_id (trace_id),
+        KEY ix_mcp_call_events_user_time (user_email, occurred_at),
+        KEY ix_mcp_call_events_service_scenario_time (
+            service, scenario, occurred_at
+        ),
+        KEY ix_mcp_call_events_service_endpoint_time (
+            service, endpoint, occurred_at
+        ),
+        KEY ix_mcp_call_events_operation_time (operation, occurred_at),
+        KEY ix_mcp_call_events_role_time (runtime_role, occurred_at),
+        KEY ix_mcp_call_events_occurred_at (occurred_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS collection_artifacts (
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
         run_id BIGINT UNSIGNED NOT NULL,

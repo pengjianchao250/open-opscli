@@ -1,5 +1,22 @@
 # 待归档变更记录
 
+## 2026-08-21 mcp/telemetry - 记录通用上游 endpoint 维度
+
+**变更原因**：Keepa 场景注册表已经知道真实上游 API endpoint，但公共调用统计此前只能按业务场景聚合，无法回答实际调用了哪个接口。
+**改动点**：公共遥测增加可选低敏维度解析器和 `endpoint` 维度；Keepa 按场景解析并记录 `product/search/query/deal` 等 endpoint；统一 MySQL `mcp_call_events` 增加 endpoint 列和查询索引；不读取业务返回值，不记录完整 URL、凭证或业务参数。
+**验证结果**：新增 endpoint 解析、遥测写入和 schema 断言，并执行 MCP 遥测、Keepa 场景及 MySQL 写入专项测试。
+**影响范围**：通过 `InstrumentedMcpProxy` 注册的 MCP Tool；未提供解析器的服务保持原有维度，后续可复用同一注册机制。
+**回滚方式**：回退公共遥测 endpoint 解析、Keepa 注册、MySQL schema/writer、对应测试和本条记录；已写入事件可保留。
+
+## 2026-08-21 mcp/telemetry - 公共调用统计不判断业务结果
+
+**变更原因**：公共调用统计只需要回答“谁调用了哪个服务的哪个场景几次”，不应把业务成功、失败、无数据等服务语义混入公共统计。
+**改动点**：MCP 遥测包装器统一将调用状态记为 `called`，不再读取返回结果或提取业务错误；场景和通用维度只从 Tool 声明参数提取；保留业务模块自行记录业务状态的职责；更新专项测试和统计设计文档。
+**验证结果**：MCP 遥测、MySQL 写入、Keepa 注册和相关工具回归 `26 passed`；扩展 schema、工具注册、动态上游和共享 MySQL 回归 `70 passed`；相关文件 `py_compile` 通过。
+**影响范围**：通过 `InstrumentedMcpProxy` 注册的 MCP Tool 公共调用统计；CLI 遥测和 quota 内部失败结算不变。
+**回滚方式**：回滚 `opscli/mcp/instrumentation.py`、`tests/mcp/test_instrumentation.py`、统计设计文档及本条记录。
+---
+
 ## 2026-08-19 SellerSprite - 新增历史导出无路径回流脚本
 
 **变更原因**：生产 SellerSprite 历史导出约 21 GB，既有共享沉淀只登记本地 `file://` URI，无法在删除原文件后保留 raw 数据，也缺少历史批次、核验和清理门禁。

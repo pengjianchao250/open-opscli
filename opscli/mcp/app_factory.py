@@ -49,11 +49,17 @@ class InstrumentedMcpProxy:
             # 代理 Tool 的业务额度由目标 MCP 统一处理，避免跨服务重复扣减。
             instrumented = fn if getattr(fn, "__opscli_skip_quota__", False) else quota_wrap(fn)
             runtime_role = getattr(fn, "__opscli_telemetry_role__", "executor")
+            dimension_resolver = getattr(
+                fn,
+                "__opscli_telemetry_dimension_resolver__",
+                None,
+            )
             return real_decorator(
                 telemetry_wrap(
                     instrumented,
                     module=module,
                     runtime_role=runtime_role,
+                    dimension_resolver=dimension_resolver,
                 )
             )
 
@@ -86,12 +92,18 @@ class InstrumentedMcpProxy:
         )
         instrumented = fn if getattr(fn, "__opscli_skip_quota__", False) else quota_wrap(fn)
         runtime_role = getattr(fn, "__opscli_telemetry_role__", "executor")
+        dimension_resolver = getattr(
+            fn,
+            "__opscli_telemetry_dimension_resolver__",
+            None,
+        )
         wrapped_tool = tool.model_copy(
             update={
                 "fn": telemetry_wrap(
                     instrumented,
                     module=module,
                     runtime_role=runtime_role,
+                    dimension_resolver=dimension_resolver,
                 )
             }
         )
