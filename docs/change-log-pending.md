@@ -1,5 +1,66 @@
 # 待归档变更记录
 
+## 2026-08-22 skills - 广场远程安装尊重 --skills-dir（隔离安装）
+
+**变更原因**：`install_remote_skill()` 声明了 `skills_dir` 形参却从未使用，
+Step 5 固定以 `link_targets=None` + `cwd=Path.home()` 调用 `_install_central()`，
+于是 `opscli skills install <id> --skills-dir DIR` 实际把技能链接进本机探测到的
+**全部**运行时目录（`~/.claude`、`~/.codex`、`~/.openclaw`、`~/.config/opencode`、
+`~/.workbuddy`、`~/.trae-cn`、`~/.agents`），而 `DIR` 里什么都没有。
+下游「自带独立 `CODEX_HOME` 的本地 Agent 托盘工具」需要把技能只装进自己的目录，
+被迫改用「装完自己从 `central_dir` 再 symlink 一份」的绕法，且用户自己的
+`~/.codex/skills` 仍然被改写——改变了用户本机 codex 可见的技能集合与版本。
+
+**改动点**：
+- `opscli/skills/marketplace/remote_installer.py`：显式传入 `skills_dir` 时
+  构造 `link_targets=[("custom", <expanduser 后的目录>)]` 传给 `_install_central()`。
+  `link_targets` 一旦给出，`_install_central()` 就跳过 runtime 解析与运行时探测，
+  因此不再写入任何其他目录；返回 payload 的 `data` 增加 `skills_dir` 字段，
+  便于调用方确认本次安装确实被限制在自己的目录里。同步补齐函数 docstring。
+- `opscli/skills/commands/cli.py`：`--skills-dir` / `--runtime` 的 help 文本改写为
+  明确的优先级语义；`install` 命令 docstring 增加「安装目标优先级」段落；
+  两者同传时向 **stderr** 打印一行「--runtime 被忽略」提示（stdout 必须保持纯 JSON）；
+  已传 `--skills-dir` 时不再打印会误导的 AuWork 跳过提示。
+- `opscli/mcp/tools/skills.py`：`skills_install` 的参数 docstring 同步新语义
+  （行为随 `install_remote_skill` 自动修复，无需改调用）。
+- 文档：`README.md`、`CLAUDE.md` 命令速查、`docs/guide/MCP工具使用手册.md`、
+  内置模板 `opscli/skills/templates/ops-skills/SKILL.md` 与
+  `references/commands.md` 全部补上三级优先级说明。
+- 新增 `tests/skills/test_remote_install_skills_dir.py`（5 个用例）。
+
+**验证结果**：
+- 红绿验证：临时把 `link_targets` 改回 `None` 后，
+  `test_skills_dir_installs_only_into_that_directory` 与
+  `test_skills_dir_takes_precedence_over_runtime` 双双失败；恢复修复后 5 passed。
+- `python -m pytest tests/skills -s -q`：改动前基线 648 tests / 8 failures，
+  改动后 653 tests / 8 failures，失败集合完全一致（8 个均为与本次无关的预存失败：
+  install 模板版本断言 ×3、dashboard 元数据 ×2、rufus 交互安装、feedback
+  frontmatter、xlsx 预览）。
+- `python -m pytest tests/mcp -s -q --ignore=tests/mcp/test_shopify_tools.py`：
+  351 passed（test_shopify_tools 为预存收集错误，与本次无关）。
+- 真机验证：`opscli skills install zhangpeiliang@ops-weather-query
+  --skills-dir /tmp/isolated/skills --yes` →
+  `/tmp/isolated/skills/ops-weather-query` 生成指向中央存储的 symlink；
+  `ls -la` 对比 `~/.codex/skills`、`~/.claude/skills`、`~/.agents/skills`
+  改动前后逐字节无差异（含 symlink 时间戳未变）。
+
+**影响范围**：只影响「显式传 `--skills-dir` 的广场远程安装」这一条路径
+（CLI、MCP `skills_install`、`--sync-market` 三个入口同时受益）。
+不传 `--skills-dir` 时的多运行时探测 + 全装默认行为完全未动；
+只传 `--runtime` 的行为本来就已经只装到指定运行时，本次未改，仅补了回归测试。
+
+**已知残留**：技能实体仍落在全机共享的中央存储 `~/.opscli/skills/<name>`，
+目标目录只放软链。若某个运行时目录已有指向同一中央副本的旧链接，
+一次隔离安装刷新中央内容后，那个运行时看到的**版本内容**仍会跟着变
+（本次只保证「不新增/不改动运行时目录条目本身」）。彻底解耦需要按目标目录
+落物理副本或给中央存储分命名空间，属更大改动，已在 README 与本记录中标注。
+
+**回滚方式**：`git revert <commit>`；或单独还原
+`opscli/skills/marketplace/remote_installer.py` 中 `link_targets` 的构造，
+改回 `link_targets=None` 即恢复旧行为。
+
+---
+
 ## 2026-08-20 query - 内核规划器币种合同迁移与双主线全量审计
 
 **变更原因**：`opscli query flow` 已切换到内核规划器，但 2026-08-04/12

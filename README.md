@@ -934,6 +934,9 @@ opscli skills install pengjianchao@ops-auth
 opscli skills install pengjianchao@ops-auth --force
 opscli skills install pengjianchao@ops-auth --runtime claude
 
+# 隔离安装：只装到指定目录，不碰 ~/.claude、~/.codex 等任何运行时目录
+opscli skills install pengjianchao@ops-auth --skills-dir /path/to/private/skills
+
 # 市场同步：补装缺失 + 升级旧版（换机/多设备场景）
 opscli skills install --sync-market --pretty
 
@@ -941,11 +944,23 @@ opscli skills install --sync-market --pretty
 opscli skills install --sync-market --dry-run --pretty
 ```
 
+**安装目标的优先级**（三选一，从高到低，对内置模板与广场远程安装同样适用）：
+
+| 参数 | 语义 |
+|---|---|
+| `--skills-dir DIR` | **只**装到 `DIR` 这一个目录；跳过运行时探测，不写入 `~/.claude`、`~/.codex` 等其他任何目录。适用于自带独立 `CODEX_HOME` 的隔离场景。同时传 `--runtime` 时 `--runtime` 被忽略，并在 stderr 打印一行提示。 |
+| `--runtime NAME` | 只装到指定运行时的全局 skills 目录（`claude` / `openclaw` / `codex` / `opencode` / `workbuddy` / `trae-cn` / `agents` / `auwork`，可逗号分隔；`all` 表示全部运行时）。 |
+| 都不传 | 探测本机已安装的 AI 工具，安装到**全部**检测到的运行时目录（默认行为）。 |
+
 远程安装流程：
 1. 从广场获取元数据与下载地址
 2. 下载 zip 包，解压到 `~/.opscli/skills/<skill_name>/`
-3. 自动软链接到 `~/.claude/skills/`、`~/.openclaw/skills/` 等全局 AI 工具目录
+3. 按上表确定安装目标，软链接过去（不传 `--skills-dir` / `--runtime` 时即 `~/.claude/skills/`、`~/.openclaw/skills/` 等全部全局 AI 工具目录）
 4. 回调广场记录安装次数
+
+> 注意：技能实体始终落在中央存储 `~/.opscli/skills/<name>`，各目标目录只放指向它的链接。
+> 因此 `--skills-dir` 隔离的是「哪些目录能看到这个技能」，中央存储本身仍是全机共享的——
+> 若某个运行时目录已有指向同一中央副本的旧链接，一次隔离安装仍会让它跟着看到新版本内容。
 
 市场同步流程（`--sync-market`）：
 1. 从服务端拉取当前用户的市场安装队列（自动排除同步黑名单中的技能）

@@ -89,12 +89,20 @@ opscli skills status --skills-dir ~/.claude/skills/
   [name|identifier]   Skill 名称或 username@skill_name；不填进入 TUI 模式
 
 选项：
-  --runtime TEXT      目标运行时：claude / openclaw / codex / opencode / all；支持逗号分隔
+  --runtime TEXT      只装到指定运行时：claude / openclaw / codex / opencode / all；支持逗号分隔
   --version TEXT      指定安装版本（仅远程安装有效）
-  --skills-dir TEXT   指定安装目录（跳过自动检测）
+  --skills-dir TEXT   只装到该目录：跳过运行时探测，不写入其他任何目录（优先级高于 --runtime）
   --force             覆盖已存在的安装
   --pretty            格式化 JSON 输出
 ```
+
+**安装目标优先级**（三选一，从高到低）：
+
+| 参数 | 语义 |
+|---|---|
+| `--skills-dir DIR` | **只**装到 `DIR`；不做运行时探测，不写入 `~/.claude`、`~/.codex` 等其他任何目录。同传 `--runtime` 时 `--runtime` 被忽略（stderr 会打印一行提示） |
+| `--runtime NAME` | 只装到指定运行时的全局 skills 目录；`all` 表示全部运行时 |
+| 都不传 | 探测本机已安装的 AI 工具，安装到全部检测到的运行时目录 |
 
 ```bash
 # 内置模板安装
@@ -108,6 +116,9 @@ opscli skills install ops-dataset-query --force
 opscli skills install pengjianchao@ops-auth
 opscli skills install pengjianchao@ops-auth --force
 opscli skills install pengjianchao@ops-auth --runtime claude
+
+# 隔离安装：只装到指定目录，不碰用户自己的运行时目录
+opscli skills install pengjianchao@ops-auth --skills-dir /path/to/private/skills
 
 # TUI 批量安装
 opscli skills install
@@ -491,8 +502,12 @@ opscli skills marketplace rate pengjianchao@ops-auth 5 --json
 
 | 模式 | 触发条件 | 行为 |
 |------|---------|------|
-| 模式 B（默认） | 不传 `--skills-dir` | 复制到中央存储，再软链到各工具目录 |
-| 模式 A（兼容） | 传 `--skills-dir` | 直接复制到指定目录，不经过中央存储 |
+| 模式 B（默认） | 不传 `--skills-dir` | 复制到中央存储，再软链到探测到的各工具目录 |
+| 模式 A（兼容） | 内置模板 + 传 `--skills-dir` | 直接复制到该目录，不经过中央存储 |
+| 隔离安装 | 广场远程 + 传 `--skills-dir` | 实体落中央存储，**只**软链到该目录，不写任何运行时目录 |
+
+> 三种模式下 `--skills-dir` 的共同保证：一旦显式传入，安装目标就只有它一个，
+> 绝不会附带写入 `~/.claude`、`~/.codex` 等用户自己的运行时目录。
 
 **中央存储目录结构（模式 B）：**
 

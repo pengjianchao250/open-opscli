@@ -1138,8 +1138,8 @@ skills_status(skills_dir="/Users/mask/.config/opencode/skills")
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `name` | string | 是 | Skill 名称（如 `ops-auth`）或广场标识符（如 `pengjianchao@ops-auth`） |
-| `skills_dir` | string | 否 | 安装到指定目录 |
-| `runtime` | string | 否 | 目标运行时：`claude` / `openclaw` / `codex` / `opencode` |
+| `skills_dir` | string | 否 | **只**安装到该目录：跳过运行时探测，不写入 `~/.claude`、`~/.codex` 等其他任何目录（隔离安装场景）。优先级高于 `runtime`，两者同传时 `runtime` 被忽略 |
+| `runtime` | string | 否 | 只安装到指定运行时：`claude` / `openclaw` / `codex` / `opencode`；不传且不传 `skills_dir` 时探测本机 AI 工具并全部安装 |
 | `force` | bool | 否 | 是否覆盖已有安装，默认 `False` |
 
 **示例**
