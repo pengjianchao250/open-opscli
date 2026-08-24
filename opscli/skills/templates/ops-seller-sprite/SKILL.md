@@ -122,8 +122,9 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 ```
 
 - `submit` 返回 `job_id` 后不要重复提交同一 ASIN。
-- `status` 会从 `task/history` 的 `data.items` 中按 `module=LA` 和 ASIN 匹配报告项。
-- `result` 必须使用 `task/history` 返回的真实 `taskId` 打开 `ai-report?id=<taskId>&from=history`；页面仍显示“正在分析中”时返回 `ready=false`。
+- `submit` 会在新版页面显式选择“全景分析”，单次消耗卖家精灵 10 次额度，并从创建响应保存真实 `taskId`。
+- `status` 优先读取 `task/original/summary/<taskId>` 的任务数组；本地缺少 `taskId` 时才用 `usage-log` 按 ASIN 和全景分析类型恢复。
+- `result` 使用真实 `taskId` 打开 `ai-history?module=LA&taskId=<taskId>`；页面仍显示“正在分析中”时返回 `ready=false`。
 - `result` 返回 `ready=true` 时，再展示 `row_count` 和导出文件。
 
 ## 缺参澄清原则

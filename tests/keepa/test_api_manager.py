@@ -186,10 +186,33 @@ def test_manager_uploads_export_to_keepa_export_folder(monkeypatch, tmp_path: Pa
     assert result.warnings == []
 
 
-def test_manager_writes_formatted_json_export_when_requested(monkeypatch, tmp_path: Path):
+def test_manager_writes_original_response_json_export_when_requested(monkeypatch, tmp_path: Path):
+    class NestedProductClient(DummyKeepaClient):
+        async def get_json(self, endpoint, params):
+            self.__class__.requests.append({"endpoint": endpoint, "params": params})
+            return {
+                "timestamp": 2000,
+                "tokensLeft": 49,
+                "tokensConsumed": 1,
+                "products": [
+                    {
+                        "asin": "B0088PUEPK",
+                        "title": "Test Product",
+                        "stats": {"current": [1299]},
+                        "offers": [{"offerId": "offer-1", "offerCSV": [1, 1299]}],
+                    }
+                ],
+            }
+
     DummyKeepaClient.requests = []
-    monkeypatch.setattr(api_manager_module, "KeepaApiClient", DummyKeepaClient)
+    NestedProductClient.requests = []
+
+    def reject_xlsx_formatter(*args, **kwargs):
+        raise AssertionError("JSON 导出不应执行 XLSX formatter")
+
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", NestedProductClient)
     monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    monkeypatch.setattr(api_manager_module, "format_product_export", reject_xlsx_formatter)
     settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
     manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
 
@@ -208,20 +231,20 @@ def test_manager_writes_formatted_json_export_when_requested(monkeypatch, tmp_pa
     export_path = tmp_path / "keepa-json-regression" / "keepa-json-regression.json"
     payload = json.loads(export_path.read_text(encoding="utf-8"))
 
-    assert DummyKeepaClient.requests
+    assert NestedProductClient.requests
     assert result.export is not None
     assert result.export.path == str(export_path.resolve())
     assert result.export.format == "json"
-    assert payload["sheets"]["Sheet1"]["columns"][:3] == [
-        "ASIN",
-        "标题",
-        "最近更新(Keepa分钟)",
+    assert result.data == [{"asin": "B0088PUEPK", "title": "Test Product"}]
+    assert payload["schema_version"] == "2.0"
+    assert payload["scenario"] == "product"
+    assert payload["site"] == "US"
+    assert payload["response"]["products"][0]["stats"] == {"current": [1299]}
+    assert payload["response"]["products"][0]["offers"] == [
+        {"offerId": "offer-1", "offerCSV": [1, 1299]}
     ]
-    assert payload["sheets"]["Sheet1"]["rows"][0][:3] == [
-        "B0088PUEPK",
-        "Test Product",
-        7588958,
-    ]
+    assert "tokensLeft" not in payload["response"]
+    assert "tokensConsumed" not in payload["response"]
 
 
 def test_product_finder_formats_search_insights_sheets(monkeypatch, tmp_path: Path):
@@ -258,9 +281,10 @@ def test_product_finder_formats_search_insights_sheets(monkeypatch, tmp_path: Pa
                     "stats": 1,
                     "queryName": "portable charger",
                     "current_SALES_gte": 1,
-                },
-                job_id="keepa-search-insights-regression",
-            )
+                    },
+                    job_id="keepa-search-insights-regression",
+                    force=True,
+                )
         )
     )
 
@@ -380,6 +404,7 @@ def test_bestsellers_formats_ranked_asin_rows(monkeypatch, tmp_path: Path):
                 site="US",
                 params={"category": "172282"},
                 job_id="keepa-bestsellers-regression",
+                force=True,
             )
         )
     )
@@ -448,6 +473,152 @@ def test_deals_formats_metric_sheet(monkeypatch, tmp_path: Path):
     assert "imageUrl" in headers
     assert "currentAmazonPrice" in headers
     assert workbook.active.cell(row=2, column=headers.index("currentAmazonPrice") + 1).value == 12.99
+
+
+def test_product_search_reuses_product_object_formatter(monkeypatch, tmp_path: Path):
+    class ProductSearchClient(DummyKeepaClient):
+        async def get_json(self, endpoint, params):
+            return {
+                "products": [
+                    {
+                        "asin": "B000000001",
+                        "images": [{"variant": "MAIN", "l": "main.jpg"}],
+                        "categoryTree": [{"catId": 1, "name": "Root"}],
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", ProductSearchClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    manager = KeepaApiManager(
+        settings=KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10),
+        api_key_provider=DummyApiKeyProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="product-search",
+                site="US",
+                params={"term": "camera"},
+                job_id="keepa-product-search-formatting",
+                force=True,
+            )
+        )
+    )
+
+    assert result.data[0]["categoryPathName"] == "Root"
+    assert "images" not in result.data[0]
+    workbook = load_workbook(result.export.path)
+    assert "images" in workbook.sheetnames
+    assert "category_tree" in workbook.sheetnames
+
+
+def test_product_search_asins_only_keeps_asin_rows(monkeypatch, tmp_path: Path):
+    class AsinsOnlyClient(DummyKeepaClient):
+        async def get_json(self, endpoint, params):
+            return {"asinList": ["B000000001", "B000000002"]}
+
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", AsinsOnlyClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    manager = KeepaApiManager(
+        settings=KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10),
+        api_key_provider=DummyApiKeyProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="product-search",
+                site="US",
+                params={"term": "camera", "asins_only": True},
+                job_id="keepa-product-search-asins",
+                force=True,
+            )
+        )
+    )
+
+    assert result.data == ["B000000001", "B000000002"]
+    workbook = load_workbook(result.export.path)
+    assert workbook.active.cell(row=1, column=1).value == "ASIN"
+    assert workbook.active.cell(row=2, column=1).value == "B000000001"
+
+
+def test_category_seller_and_lightning_formatters_are_integrated(monkeypatch, tmp_path: Path):
+    responses = {
+        "category": {
+            "categories": {
+                "281052": {
+                    "domainId": 1,
+                    "catId": 281052,
+                    "name": "Digital Cameras",
+                    "children": [3017941],
+                    "relatedCategories": [502394],
+                    "topBrands": ["Sony"],
+                }
+            },
+            "categoryParents": {
+                "502394": {
+                    "domainId": 1,
+                    "catId": 502394,
+                    "name": "Camera & Photo",
+                    "children": [281052],
+                }
+            },
+        },
+        "seller": {
+            "sellers": {
+                "SELLER1": {
+                    "sellerId": "SELLER1",
+                    "ratingCount": [1, 2, 3, 4],
+                    "positiveRating": [90, 91, 92, 93],
+                    "asinList": ["B000000001"],
+                    "asinListLastSeen": [7588958],
+                }
+            }
+        },
+        "lightningdeal": {
+            "lightningDeals": [
+                {
+                    "asin": "B000000001",
+                    "dealId": "deal-1",
+                    "dealPrice": 1299,
+                    "variation": [{"dimension": "Color", "value": "Black"}],
+                }
+            ]
+        },
+    }
+
+    class ResponseObjectClient(DummyKeepaClient):
+        async def get_json(self, endpoint, params):
+            return responses[endpoint]
+
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", ResponseObjectClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    manager = KeepaApiManager(
+        settings=KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10),
+        api_key_provider=DummyApiKeyProvider(),
+    )
+    requests = (
+        ("category-lookup", {"category": "281052", "parents": True}, {"category_children", "category_related", "category_brands", "category_parents", "category_parent_children"}),
+        ("seller", {"seller": "SELLER1", "storefront": True}, {"seller_ratings", "seller_storefront"}),
+        ("lightning-deals", {"asin": "B000000001"}, {"lightning_variations"}),
+    )
+
+    for index, (scenario, params, expected_sheets) in enumerate(requests):
+        result = _run(
+            manager.run(
+                KeepaScenarioRequest(
+                    scenario=scenario,
+                    site="US",
+                    params=params,
+                    job_id=f"keepa-response-object-{index}",
+                    force=True,
+                )
+            )
+        )
+        workbook = load_workbook(result.export.path)
+        assert expected_sheets <= set(workbook.sheetnames)
 
 
 def test_manager_blocks_low_quota_without_force(monkeypatch, tmp_path: Path):

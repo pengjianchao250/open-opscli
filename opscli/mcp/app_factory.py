@@ -48,7 +48,20 @@ class InstrumentedMcpProxy:
             self._record_tool(name=name, module=module, description=description)
             # 代理 Tool 的业务额度由目标 MCP 统一处理，避免跨服务重复扣减。
             instrumented = fn if getattr(fn, "__opscli_skip_quota__", False) else quota_wrap(fn)
-            return real_decorator(telemetry_wrap(instrumented))
+            runtime_role = getattr(fn, "__opscli_telemetry_role__", "executor")
+            dimension_resolver = getattr(
+                fn,
+                "__opscli_telemetry_dimension_resolver__",
+                None,
+            )
+            return real_decorator(
+                telemetry_wrap(
+                    instrumented,
+                    module=module,
+                    runtime_role=runtime_role,
+                    dimension_resolver=dimension_resolver,
+                )
+            )
 
         return wrap
 
@@ -78,7 +91,22 @@ class InstrumentedMcpProxy:
             description=tool.description,
         )
         instrumented = fn if getattr(fn, "__opscli_skip_quota__", False) else quota_wrap(fn)
-        wrapped_tool = tool.model_copy(update={"fn": telemetry_wrap(instrumented)})
+        runtime_role = getattr(fn, "__opscli_telemetry_role__", "executor")
+        dimension_resolver = getattr(
+            fn,
+            "__opscli_telemetry_dimension_resolver__",
+            None,
+        )
+        wrapped_tool = tool.model_copy(
+            update={
+                "fn": telemetry_wrap(
+                    instrumented,
+                    module=module,
+                    runtime_role=runtime_role,
+                    dimension_resolver=dimension_resolver,
+                )
+            }
+        )
         return self._real.add_tool(wrapped_tool)
 
     def _record_tool(self, *, name: str, module: str, description: str | None) -> None:

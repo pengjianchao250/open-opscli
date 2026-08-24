@@ -213,6 +213,7 @@ def test_registration_does_not_apply_common_mcp_quota(monkeypatch):
     from opscli.mcp.tool_catalog import ToolCatalog
 
     registered = []
+    telemetry_options = []
 
     class FakeMcp:
         def tool(self, *args, **kwargs):
@@ -223,7 +224,11 @@ def test_registration_does_not_apply_common_mcp_quota(monkeypatch):
         "quota_wrap",
         lambda fn: (_ for _ in ()).throw(AssertionError("代理 Tool 不应重复额度包装")),
     )
-    monkeypatch.setattr(app_factory, "telemetry_wrap", lambda fn: fn)
+    monkeypatch.setattr(
+        app_factory,
+        "telemetry_wrap",
+        lambda fn, **options: telemetry_options.append(options) or fn,
+    )
     catalog = ToolCatalog()
     proxy = app_factory.InstrumentedMcpProxy(FakeMcp(), catalog=catalog)
 
@@ -231,3 +236,6 @@ def test_registration_does_not_apply_common_mcp_quota(monkeypatch):
 
     assert registered == [seller_sprite_proxy.seller_sprite_run]
     assert catalog.get_catalog()[0]["module"] == "seller_sprite"
+    assert telemetry_options == [
+        {"module": "seller_sprite", "runtime_role": "gateway_proxy"}
+    ]

@@ -19,7 +19,7 @@ def test_deal_formatter_derives_main_fields_and_metric_rows():
                 "currentSince": [7588958, 7588959],
                 "deltaLast": [-100, -200, -1, 500],
                 "delta": [[-100, -200, -1, 500]],
-                "deltaPercent": [[-8, -10, -1, 5]],
+                "deltaPercent": [[-8, -10, -2, 5]],
                 "avg": [[1499, 1599, -1, 13000]],
             }
         ],
@@ -46,26 +46,32 @@ def test_deal_formatter_derives_main_fields_and_metric_rows():
     assert deal["currentBuyBoxPrice"] == 14.99
     assert deal["dealRaw"]["asin"] == "B0088PUEPK"
 
-    current_since = [
+    current_since = next(
         row
         for row in formatted.metric_rows
         if row["metric"] == "currentSince" and row["priceTypeIndex"] == 0
-    ][0]
+    )
     assert current_since["formattedValue"] == "2025-06-06T02:38:00Z"
     assert current_since["valueKind"] == "time"
 
-    delta = [
+    delta = next(
         row
         for row in formatted.metric_rows
         if row["metric"] == "delta" and row["dateRangeName"] == "day" and row["priceTypeIndex"] == 0
-    ][0]
+    )
     assert delta["formattedValue"] == -1
     assert delta["currency"] == "USD"
 
-    percent = [
+    percent = next(
         row
         for row in formatted.metric_rows
         if row["metric"] == "deltaPercent" and row["priceTypeIndex"] == 3
-    ][0]
+    )
     assert percent["formattedValue"] == 5
     assert percent["valueKind"] == "percent"
+    missing_percent = next(
+        row
+        for row in formatted.metric_rows
+        if row["metric"] == "deltaPercent" and row["priceTypeIndex"] == 2
+    )
+    assert missing_percent["formattedValue"] is None

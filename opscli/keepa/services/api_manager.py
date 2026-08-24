@@ -7,6 +7,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -15,20 +16,80 @@ from uuid import uuid4
 from opscli.keepa.accounts import KeepaApiKeyProvider
 from opscli.keepa.api.client import KeepaApiClient
 from opscli.keepa.api.scenarios import get_scenario, list_scenarios
-from opscli.keepa.best_sellers_formatter import FormattedBestSellersExport, format_best_sellers_export
+from opscli.keepa.best_sellers_formatter import (
+    FormattedBestSellersExport,
+    format_best_sellers_export,
+)
+from opscli.keepa.category_formatter import (
+    FormattedCategoryExport,
+    format_category_export,
+)
 from opscli.keepa.config import KeepaSettings, load_settings
 from opscli.keepa.deal_formatter import FormattedDealExport, format_deal_export
 from opscli.keepa.domain.exceptions import KeepaApiError, KeepaConfigError
-from opscli.keepa.domain.models import KeepaExportResult, KeepaScenarioRequest, KeepaScenarioResult
-from opscli.keepa.export import export_rows_to_json, export_rows_to_xlsx
+from opscli.keepa.domain.models import (
+    KeepaExportResult,
+    KeepaScenarioRequest,
+    KeepaScenarioResult,
+)
+from opscli.keepa.export import export_response_to_json, export_rows_to_xlsx
+from opscli.keepa.lightning_deal_formatter import (
+    FormattedLightningDealExport,
+    format_lightning_deal_export,
+)
 from opscli.keepa.product_formatter import FormattedProductExport, format_product_export
-from opscli.keepa.search_insights_formatter import FormattedSearchInsightsExport, format_search_insights_export
+from opscli.keepa.search_insights_formatter import (
+    FormattedSearchInsightsExport,
+    format_search_insights_export,
+)
+from opscli.keepa.seller_formatter import FormattedSellerExport, format_seller_export
+from opscli.keepa.summary import summarize_rows
 from opscli.keepa.time import add_keepa_time_conversions
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 from opscli.shared.integration_accounts import IntegrationAccountClient
 
-
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _FormattedResponseExports:
+    """汇总一次 Keepa 响应的专用 formatter 结果并统一选择主表/附加表。"""
+
+    product: FormattedProductExport | None = None
+    category: FormattedCategoryExport | None = None
+    seller: FormattedSellerExport | None = None
+    lightning: FormattedLightningDealExport | None = None
+    search_insights: FormattedSearchInsightsExport | None = None
+    best_sellers: FormattedBestSellersExport | None = None
+    deal: FormattedDealExport | None = None
+
+    def primary_rows(self) -> list[Any] | None:
+        """按场景互斥关系返回专用 formatter 的主表行，未格式化时返回空。"""
+        candidates = (
+            self.product.products if self.product else None,
+            self.category.categories if self.category else None,
+            self.seller.sellers if self.seller else None,
+            self.lightning.deals if self.lightning else None,
+            self.best_sellers.asin_rows if self.best_sellers else None,
+            self.deal.deals if self.deal else None,
+        )
+        return next((rows for rows in candidates if rows is not None), None)
+
+    def extra_sheets(self) -> dict[str, list[dict[str, Any]]] | None:
+        """合并所有专用 formatter 的非空附加表。"""
+        sheets: dict[str, list[dict[str, Any]]] = {}
+        for export in (
+            self.product,
+            self.category,
+            self.seller,
+            self.lightning,
+            self.search_insights,
+            self.best_sellers,
+            self.deal,
+        ):
+            if export:
+                sheets.update(export.extra_sheets())
+        return sheets or None
 
 
 class KeepaApiManager:
@@ -145,58 +206,100 @@ class KeepaApiManager:
         _write_json(raw_path, raw_payload)
 
         raw_rows = extract_rows(raw_response)
-        product_export = _format_product_rows_if_needed(
-            scenario=request.scenario,
-            rows=raw_rows,
-            site=site,
-            normalized_params=normalized_params,
-        )
-        search_insights_export = _format_search_insights_if_needed(
-            scenario=request.scenario,
-            raw_response=raw_response,
-            site=site,
-            normalized_params=normalized_params,
-            request_params=request.params,
-        )
-        best_sellers_export = _format_best_sellers_if_needed(
-            scenario=request.scenario,
-            raw_response=raw_response,
-            site=site,
-            normalized_params=normalized_params,
-        )
-        deal_export = _format_deals_if_needed(
-            scenario=request.scenario,
-            rows=raw_rows,
-            site=site,
-            normalized_params=normalized_params,
-        )
-        data = _formatted_data_or_default(
-            raw_rows=raw_rows,
-            product_export=product_export,
-            best_sellers_export=best_sellers_export,
-            deal_export=deal_export,
-        )
-        export_rows = _export_rows_for_xlsx(
-            raw_response=raw_response,
-            product_export=product_export,
-            best_sellers_export=best_sellers_export,
-            deal_export=deal_export,
-        )
-        extra_sheets = _merge_extra_sheets(
-            product_export,
-            search_insights_export,
-            best_sellers_export,
-            deal_export,
-        )
-        exporter = export_rows_to_json if export_format == "json" else export_rows_to_xlsx
-        export = exporter(
-            rows=export_rows,
-            output_path=root_dir / f"{job_id}.{export_format}",
-            scenario=request.scenario,
-            site=site,
-            params=request.params,
-            extra_sheets=extra_sheets,
-        )
+        if export_format == "json":
+            data = summarize_rows(raw_rows)
+            export = export_response_to_json(
+                response=raw_response,
+                output_path=root_dir / f"{job_id}.json",
+                scenario=request.scenario,
+                site=site,
+            )
+        else:
+            domain_id = normalized_params.get("domain")
+            category_parents = raw_response.get("categoryParents")
+            parent_rows = (
+                list(category_parents.values())
+                if isinstance(category_parents, dict)
+                else []
+            )
+            product_rows_are_objects = any(isinstance(row, dict) for row in raw_rows)
+            formatted = _FormattedResponseExports(
+                product=(
+                    format_product_export(raw_rows, site=site, domain_id=domain_id)
+                    if request.scenario == "product"
+                    or (
+                        request.scenario == "product-search"
+                        and product_rows_are_objects
+                    )
+                    else None
+                ),
+                category=(
+                    format_category_export(
+                        raw_rows,
+                        site=site,
+                        domain_id=domain_id,
+                        parent_rows=parent_rows,
+                    )
+                    if request.scenario in {"category-lookup", "category-search"}
+                    else None
+                ),
+                seller=(
+                    format_seller_export(raw_rows, site=site, domain_id=domain_id)
+                    if request.scenario == "seller"
+                    else None
+                ),
+                lightning=(
+                    format_lightning_deal_export(
+                        raw_rows, site=site, domain_id=domain_id
+                    )
+                    if request.scenario == "lightning-deals"
+                    else None
+                ),
+                search_insights=(
+                    format_search_insights_export(
+                        raw_response.get("searchInsights"),
+                        site=site,
+                        domain_id=domain_id,
+                        query_name=_search_insights_query_name(request.params),
+                    )
+                    if request.scenario == "product-finder"
+                    else None
+                ),
+                best_sellers=(
+                    format_best_sellers_export(
+                        raw_response.get("bestSellersList"),
+                        site=site,
+                        domain_id=domain_id,
+                        category_id=normalized_params.get("category"),
+                    )
+                    if request.scenario == "bestsellers"
+                    else None
+                ),
+                deal=(
+                    format_deal_export(raw_rows, site=site, domain_id=domain_id)
+                    if request.scenario == "deals"
+                    else None
+                ),
+            )
+            primary_rows = formatted.primary_rows()
+            data = (
+                primary_rows
+                if primary_rows is not None
+                else add_keepa_time_conversions(raw_rows)
+            )
+            export_rows = (
+                primary_rows
+                if primary_rows is not None
+                else raw_response_to_export_rows(raw_response)
+            )
+            export = export_rows_to_xlsx(
+                rows=export_rows,
+                output_path=root_dir / f"{job_id}.xlsx",
+                scenario=request.scenario,
+                site=site,
+                params=request.params,
+                extra_sheets=formatted.extra_sheets(),
+            )
         _upload_export_if_enabled(
             export=export,
             job_id=job_id,
@@ -216,7 +319,7 @@ class KeepaApiManager:
             job_id=job_id,
             scenario=request.scenario,
             site=site,
-            row_count=len(data),
+            row_count=len(raw_rows),
             root_dir=str(root_dir),
             params_path=str(params_path),
             raw_path=str(raw_path),
@@ -388,115 +491,6 @@ def _scalar_item_field(row_source_key: str | None) -> str:
     if row_source_key in {"asinList", "bestSellersList"}:
         return "asin"
     return "value"
-
-
-def _format_product_rows_if_needed(
-    *,
-    scenario: str,
-    rows: list[Any],
-    site: str,
-    normalized_params: dict[str, Any],
-) -> FormattedProductExport | None:
-    if scenario != "product":
-        return None
-    return format_product_export(rows, site=site, domain_id=normalized_params.get("domain"))
-
-
-def _format_search_insights_if_needed(
-    *,
-    scenario: str,
-    raw_response: dict[str, Any],
-    site: str,
-    normalized_params: dict[str, Any],
-    request_params: dict[str, Any],
-) -> FormattedSearchInsightsExport | None:
-    if scenario != "product-finder":
-        return None
-    return format_search_insights_export(
-        raw_response.get("searchInsights"),
-        site=site,
-        domain_id=normalized_params.get("domain"),
-        query_name=_search_insights_query_name(request_params),
-    )
-
-
-def _format_best_sellers_if_needed(
-    *,
-    scenario: str,
-    raw_response: dict[str, Any],
-    site: str,
-    normalized_params: dict[str, Any],
-) -> FormattedBestSellersExport | None:
-    if scenario != "bestsellers":
-        return None
-    return format_best_sellers_export(
-        raw_response.get("bestSellersList"),
-        site=site,
-        domain_id=normalized_params.get("domain"),
-        category_id=normalized_params.get("category"),
-    )
-
-
-def _format_deals_if_needed(
-    *,
-    scenario: str,
-    rows: list[Any],
-    site: str,
-    normalized_params: dict[str, Any],
-) -> FormattedDealExport | None:
-    if scenario != "deals":
-        return None
-    return format_deal_export(rows, site=site, domain_id=normalized_params.get("domain"))
-
-
-def _formatted_data_or_default(
-    *,
-    raw_rows: list[Any],
-    product_export: FormattedProductExport | None,
-    best_sellers_export: FormattedBestSellersExport | None,
-    deal_export: FormattedDealExport | None,
-) -> list[Any]:
-    if product_export:
-        return product_export.products
-    if best_sellers_export:
-        return best_sellers_export.asin_rows
-    if deal_export:
-        return deal_export.deals
-    return add_keepa_time_conversions(raw_rows)
-
-
-def _export_rows_for_xlsx(
-    *,
-    raw_response: dict[str, Any],
-    product_export: FormattedProductExport | None,
-    best_sellers_export: FormattedBestSellersExport | None,
-    deal_export: FormattedDealExport | None,
-) -> list[dict[str, Any]]:
-    if product_export:
-        return product_export.products
-    if best_sellers_export:
-        return best_sellers_export.asin_rows
-    if deal_export:
-        return deal_export.deals
-    return raw_response_to_export_rows(raw_response)
-
-
-def _merge_extra_sheets(
-    product_export: FormattedProductExport | None,
-    search_insights_export: FormattedSearchInsightsExport | None,
-    best_sellers_export: FormattedBestSellersExport | None,
-    deal_export: FormattedDealExport | None,
-) -> dict[str, list[dict[str, Any]]] | None:
-    sheets: dict[str, list[dict[str, Any]]] = {}
-    if product_export:
-        sheets.update(product_export.extra_sheets())
-    if search_insights_export:
-        sheets.update(search_insights_export.extra_sheets())
-    if best_sellers_export:
-        sheets.update(best_sellers_export.extra_sheets())
-    if deal_export:
-        sheets.update(deal_export.extra_sheets())
-    return sheets or None
 
 
 def _search_insights_query_name(params: dict[str, Any]) -> str:

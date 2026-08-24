@@ -1,14 +1,13 @@
 import json
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 from types import SimpleNamespace
 
 from openpyxl import load_workbook
 
 from opscli.keepa.api.scenarios import SCENARIOS
+from opscli.keepa.export.json import export_response_to_json
 from opscli.keepa.export.xlsx import export_rows_to_xlsx
-from opscli.keepa.export.json import export_rows_to_json
-
 
 SCENARIO_ROWS = {
     "product": [{"asin": "B0088PUEPK", "title": "Test Product", "unknownField": "raw"}],
@@ -17,6 +16,7 @@ SCENARIO_ROWS = {
     "category-search": [{"catId": 172282, "name": "Electronics", "unknownCategoryField": "raw"}],
     "category-lookup": [{"categoryId": 172282, "name": "Electronics", "children": [1, 2]}],
     "seller": [{"sellerId": "A2L77EE7U53NWQ", "sellerName": "Test Seller", "ratingCount": 5}],
+    "seller-finder": ["A2L77EE7U53NWQ"],
     "top-seller": ["A2L77EE7U53NWQ"],
     "bestsellers": ["B0088PUEPK"],
     "deals": [{"asin": "B0088PUEPK", "dealId": "deal-1", "rawDealField": {"price": 1299}}],
@@ -110,42 +110,43 @@ def test_xlsx_export_writes_extra_sheets(tmp_path: Path):
     assert sheet.cell(row=2, column=3).value == 12.99
 
 
-def test_json_export_matches_formatted_xlsx_sheets(tmp_path: Path):
-    rows = [{"asin": "B0088PUEPK", "title": "Test Product", "stats": {"current": [1299]}}]
-    extra_sheets = {
-        "csv_history": [{"asin": "B0088PUEPK", "csvName": "AMAZON", "priceAmount": 12.99}]
+def test_json_export_preserves_original_nested_response_without_quota_fields(tmp_path: Path):
+    response = {
+        "timestamp": 7588958,
+        "tokensLeft": 49,
+        "tokensConsumed": 1,
+        "refillIn": 300000,
+        "products": [
+            {
+                "asin": "B0088PUEPK",
+                "stats": {"current": [1299, -1]},
+                "offers": [{"offerId": "offer-1", "offerCSV": [1, 1299]}],
+            }
+        ],
     }
 
-    xlsx_export = export_rows_to_xlsx(
-        rows=rows,
-        output_path=tmp_path / "product.xlsx",
-        scenario="product",
-        site="US",
-        extra_sheets=extra_sheets,
-    )
-    json_export = export_rows_to_json(
-        rows=rows,
+    json_export = export_response_to_json(
+        response=response,
         output_path=tmp_path / "product.json",
         scenario="product",
         site="US",
-        extra_sheets=extra_sheets,
     )
-
-    workbook = load_workbook(xlsx_export.path, read_only=True, data_only=True)
     payload = json.loads(Path(json_export.path).read_text(encoding="utf-8"))
 
-    assert payload["schema_version"] == "1.0"
-    assert list(payload["sheets"]) == ["Sheet1", "Sheet2"]
-    assert payload["sheets"]["Sheet1"]["name"] == workbook.worksheets[0].title
-    assert payload["sheets"]["Sheet1"]["columns"] == list(next(workbook.worksheets[0].values))
-    assert payload["sheets"]["Sheet1"]["rows"] == [list(row) for row in workbook.worksheets[0].values][1:]
-    assert payload["sheets"]["Sheet2"]["name"] == "csv_history"
-    assert payload["sheets"]["Sheet2"]["rows"] == [["B0088PUEPK", "AMAZON", 12.99]]
+    assert payload == {
+        "schema_version": "2.0",
+        "scenario": "product",
+        "site": "US",
+        "response": {
+            "timestamp": 7588958,
+            "products": response["products"],
+        },
+    }
     assert json_export.format == "json"
     assert json_export.mime_type == "application/json"
 
 
-def test_json_and_xlsx_use_the_same_unique_names_after_sheet_title_sanitizing(tmp_path: Path):
+def test_xlsx_uses_unique_names_after_sheet_title_sanitizing(tmp_path: Path):
     extra_sheets = {
         "a/b": [{"asin": "B0088PUEPK"}],
         "ab": [{"asin": "B0088PUEPK"}],
@@ -156,17 +157,8 @@ def test_json_and_xlsx_use_the_same_unique_names_after_sheet_title_sanitizing(tm
         scenario="product",
         extra_sheets=extra_sheets,
     )
-    json_export = export_rows_to_json(
-        rows=[{"asin": "B0088PUEPK"}],
-        output_path=tmp_path / "collision.json",
-        scenario="product",
-        extra_sheets=extra_sheets,
-    )
-
     workbook = load_workbook(xlsx_export.path, read_only=True)
-    payload = json.loads(Path(json_export.path).read_text(encoding="utf-8"))
 
-    assert workbook.sheetnames == [sheet["name"] for sheet in payload["sheets"].values()]
     assert workbook.sheetnames[-2:] == ["ab", "ab1"]
 
 

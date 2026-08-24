@@ -15,13 +15,12 @@ import inspect
 from pathlib import Path
 from typing import Any
 
+from opscli.keepa.summary import KEEPA_SUMMARY_ROW_LIMIT, summarize_rows
 from opscli.mcp.quota import get_quota_limiter
+from opscli.keepa.api.scenarios import telemetry_dimensions as _keepa_telemetry_dimensions
 from opscli.skills.packaging import get_builtin_templates_dir
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
-
-
-MAX_PUBLIC_DATA_PREVIEW_ROWS = 20
 
 
 def _keepa_skill_dir() -> Path:
@@ -142,6 +141,9 @@ async def keepa_run(
         jwt=jwt,
         collection_submitter=None,
     )
+
+
+setattr(keepa_run, "__opscli_telemetry_dimension_resolver__", _keepa_telemetry_dimensions)
 
 
 async def _keepa_run_impl(
@@ -306,10 +308,13 @@ def _public_export_payload(export: Any) -> dict[str, Any]:
 
 def _compact_public_data(public: dict[str, Any]) -> None:
     data = public.get("data")
-    if not isinstance(data, list) or len(data) <= MAX_PUBLIC_DATA_PREVIEW_ROWS:
+    if not isinstance(data, list):
         return
-    public["data_preview"] = data[:MAX_PUBLIC_DATA_PREVIEW_ROWS]
-    public["data_omitted"] = len(data) - MAX_PUBLIC_DATA_PREVIEW_ROWS
+    preview_rows = summarize_rows(data, limit=KEEPA_SUMMARY_ROW_LIMIT)
+    public["data_preview"] = preview_rows
+    row_count = public.get("row_count")
+    total_rows = row_count if isinstance(row_count, int) else len(data)
+    public["data_omitted"] = max(0, total_rows - len(preview_rows))
     public.pop("data", None)
     warnings = public.get("warnings")
     if not isinstance(warnings, list):
@@ -317,12 +322,10 @@ def _compact_public_data(public: dict[str, Any]) -> None:
     warnings.append(
         {
             "stage": "mcp_response_compact",
-            "message": "返回数据量较大，MCP 响应仅保留摘要和导出文件，请通过导出文件查看完整数据。",
+            "message": "MCP 响应仅保留少量字段摘要，请通过 export.url 对应的 JSON/XLSX 导出文件查看完整数据。",
         }
     )
     public["warnings"] = warnings
-
-
 def _strip_sensitive(value: Any) -> Any:
     if isinstance(value, list):
         return [_strip_sensitive(item) for item in value]

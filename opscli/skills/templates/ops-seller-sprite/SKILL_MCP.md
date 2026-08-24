@@ -87,8 +87,8 @@ seller_sprite_run(...) × N
 
 Listing Analysis 必须使用 submit/status/result 专用流程，不属于普通任务批量跟踪；`seller_sprite_run` 生产入口会明确拒绝 `listing-analysis`，调用方必须改用 `seller_sprite_listing_analysis_submit`：
 
-1. 提交：`seller_sprite_listing_analysis_submit(asin, station="GLOBAL", site="US", export_format="json")`，保存返回的 `job_id`，不要重复提交同一 ASIN。
-2. 续查：约 3 分钟后调用 `seller_sprite_listing_analysis_status(job_id)`；后端通过 `task/history` 按 `module=LA` 和 ASIN 匹配真实报告 `taskId`。
+1. 提交：`seller_sprite_listing_analysis_submit(asin, station="GLOBAL", site="US", export_format="json")`，后端在新版页面显式选择“全景分析”并保存真实 `taskId`；全景分析会消耗卖家精灵 10 次额度，不要重复提交同一 ASIN。
+2. 续查：约 3 分钟后调用 `seller_sprite_listing_analysis_status(job_id)`；后端优先通过 `task/original/summary/<taskId>` 聚合主任务和子任务状态，只有本地缺少 `taskId` 时才通过 `usage-log` 按 ASIN 恢复全景报告。
 3. 取结果：调用 `seller_sprite_listing_analysis_result(job_id, export_format="json")`；`ready=false` 时继续保留该 Listing Analysis `job_id`，生成后展示 `row_count` 和 `export`。
 4. Listing Analysis 的 `job_id` 不得传入 `seller_sprite_jobs_status`；Agent 必须继续使用专用 status/result，不为该工作流推荐通用单任务状态工具。
 5. 用户只说“继续/查结果”时，按任务类型恢复：普通任务恢复完整 pending 集合；Listing Analysis 继续调用专用 status/result。

@@ -71,6 +71,23 @@ def test_collection_records_sql_avoids_mysql_8_row_number_reserved_word():
     assert "(dataset_id, source_row_number)" in records_schema
 
 
+def test_schema_includes_unified_mcp_call_events_table():
+    telemetry_schema = next(
+        statement
+        for statement in SCHEMA_STATEMENTS
+        if "CREATE TABLE IF NOT EXISTS mcp_call_events" in statement
+    )
+
+    assert "user_email VARCHAR(254) NULL" in telemetry_schema
+    assert "service VARCHAR(64) NOT NULL" in telemetry_schema
+    assert "endpoint VARCHAR(128) NULL" in telemetry_schema
+    assert "scenario VARCHAR(128) NULL" in telemetry_schema
+    assert "runtime_role VARCHAR(32) NOT NULL" in telemetry_schema
+    assert "status VARCHAR(16) NOT NULL DEFAULT 'called'" in telemetry_schema
+    assert "ix_mcp_call_events_service_scenario_time" in telemetry_schema
+    assert "ix_mcp_call_events_service_endpoint_time" in telemetry_schema
+
+
 def test_mysql_repository_replaces_one_run_in_a_single_transaction(tmp_path):
     result_path = tmp_path / "result.json"
     result_path.write_text("{}", encoding="utf-8")

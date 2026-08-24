@@ -12,7 +12,7 @@
 - 必填请求参数：`domain`、`type=product`、`term`；`term` 是要搜索的关键词，官方要求 URL encoded。
 - Token Cost：10，单个搜索词最多返回 20 条结果；结果顺序与 Amazon 搜索一致，但排除 sponsored content。
 - 默认响应字段为 `products`，包含有序 product objects；传 `asins-only=1` 时响应字段为 `asinList`，只返回有序 ASIN 字符串数组。
-- 官方可选参数包括 `asins-only`、`stats`、`update`、`history`、`rating`；本地 MCP 支持 `stats`、`update`、`history`、`asins_only`/`asinsOnly`、`page`，其中 `asins_only`/`asinsOnly` 会映射为 Keepa 原始参数 `asins-only`。
+- 官方可选参数包括 `asins-only`、`stats`、`update`、`history`、`rating`；本地 MCP 同步支持这些参数，`asins_only`/`asinsOnly` 映射为 `asins-only`。当前官方参数表已无 `page`，本地不会透传。
 
 ## Best Sellers (`/bestsellers`)
 
@@ -22,6 +22,8 @@
 - 本地 MCP 允许用户传 `category`、`productGroup` 或 `product_group`，最终都会映射到 Keepa 原始参数 `category`。
 - `category` 可传 Amazon/Keepa category node id；如用户传 `productGroup`，仅作为本地兼容别名处理。
 - 原始响应主字段为 `bestSellersList`；其中 `asinList` 是热销 ASIN 列表，导出层会将每个 ASIN 展开为一行。
+- 支持 `range=0/30/90/180`，或成对的 `month`/`year` 历史月份；历史月份必须是过去 36 个完整自然月且不能与 `range`/`sublist` 同时使用。`variations` 控制变体展开，`sublist` 使用子类目排名。
+- Token Cost 固定为 50。
 - 该接口返回指定类目/产品组的 Best Sellers ASIN 列表，不返回完整商品详情；如需标题、价格、评分等详情，应再用 `product` 场景按 ASIN 查询。
 
 ## Product Finder (`/query`)
@@ -48,5 +50,12 @@
 - `storefront=1` 额外 Token Cost 为 9；若 storefront 数据可用且至少包含 2 个 ASIN，总成本为 seller object 1 token + storefront data 9 tokens = 10 tokens；无数据时不额外消耗。
 - storefront 表示该卖家当前在 Amazon 上架、以及过去 7 天内曾上架的商品；Keepa 通过数据库扫描每日采集，ASIN 列表可能不完整或过期。
 - storefront ASIN 列表最多 100,000 个 ASIN，按 Keepa 最近验证到该 seller 活跃 offer 的时间倒序排列；每个 ASIN 带 last-seen timestamp。
-- 官方重要限制：请求 `storefront=1` 时不允许批量 seller ID，否则会报错。本地 MCP 默认 `storefront=true`，所以批量查询多个 seller 信息时必须显式传 `storefront=false`；如要店铺 ASIN 列表，应按单个 seller 分开调用。
+- 官方重要限制：请求 `storefront=1` 时不允许批量 seller ID，否则会报错。本地 MCP 默认 `storefront=false`；如要店铺 ASIN 列表，必须单个 seller 显式开启。
 - 响应字段为 `sellers` map：key 是 `sellerId`，value 是 seller object；无结果时 map 为空，seller ID 无效时错误会在 error field 中体现。
+
+## Seller Finder (`/sellerquery`)
+
+- 必填参数：`domain`、`selection`；selection 为 Seller Finder JSON。
+- 响应字段为 `sellerIdList`。
+- Token Cost 为 10 + 每 100 个返回 seller ID 1 token（向上取整）。
+- 本地场景名为 `seller-finder`，推荐把 `perPage`、`sort` 和筛选条件放入 `params.selection`。

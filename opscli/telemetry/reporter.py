@@ -75,6 +75,14 @@ def _do_send(payload: dict) -> None:
         # 网络不可达、超时、服务器错误等，全部静默丢弃
         pass
     finally:
+        # 可选的统一 MySQL 旁路写入。它仍运行在当前遥测后台线程中，
+        # 数据库不可用时绝不影响 MCP Tool 主流程或 HTTP 遥测。
+        try:
+            from opscli.telemetry.mysql_writer import write_event
+
+            write_event(payload)
+        except Exception:
+            pass
         # 发送结束（无论成败）从在途集合移除，避免退出时对已完成线程多余 join
         with _inflight_lock:
             _inflight_threads.discard(threading.current_thread())

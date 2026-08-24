@@ -1,18 +1,59 @@
 # Keepa 格式化实现状态
 
-本目录中的 `*_FORMATTING.md` 是 Keepa 对象格式化方案文档。实现状态如下：
+本目录中的 `*_FORMATTING.md` 记录 Keepa Response Object 的 XLSX 格式化合同。`raw.json` 始终保留完整内部响应；JSON v2 保留原始业务字段和嵌套结构，只有 XLSX 把数组和历史序列拆成主表/明细 Tab。
 
-| 文档 | 对象 | 状态 | 实现位置 | 默认导出行为 |
-| --- | --- | --- | --- | --- |
-| `PRODUCT_OBJECT_FORMATTING.md` | Product Object | 已接入 | `opscli/keepa/product_formatter.py` | `product` 场景 XLSX 默认派生金额、时间、图片、类目、变体摘要、stats 当前值，并按需追加 `csv_history`、`offers`、`variations` sheet。 |
-| `SEARCH_INSIGHTS_OBJECT_FORMATTING.md` | Search Insights Object | 已接入 | `opscli/keepa/search_insights_formatter.py` | `product-finder` 携带 `stats=1` 且返回 `searchInsights` 时，XLSX 默认追加 `search_insights`、`search_insight_brands`、`search_insight_sellers`、`search_insight_categories` sheet。 |
-| `STATISTICS_OBJECT_FORMATTING.md` | Statistics Object | 已接入 | `opscli/keepa/stats_formatter.py` | `product` 场景返回 `stats` 时，XLSX 默认派生 stats 主表字段，并按需追加 `stats_price_types`、`stats_extremes`、`stats_buy_box_sellers`、`stats_offer_snapshot` sheet。 |
-| `BEST_SELLERS_OBJECT_FORMATTING.md` | Best Sellers Object | 已接入 | `opscli/keepa/best_sellers_formatter.py` | `bestsellers` 场景 XLSX 主表默认输出带 `bestSellerRank` 的 ASIN 明细，并追加 `best_sellers_list` 汇总 sheet。 |
-| `DEAL_OBJECT_FORMATTING.md` | Deal Object | 已接入 | `opscli/keepa/deal_formatter.py` | `deals` 场景 XLSX 默认派生图片、时间、Warehouse 成色、Lightning 标记、常用 current 指标，并追加 `deal_metrics` 指标展开 sheet。 |
-| `CATEGORY_OBJECT_FORMATTING.md` | Category Object | 待接入 | - | 暂未实现独立 formatter。 |
+| 对象 | 状态 | 实现位置 | 默认导出行为 |
+| --- | --- | --- | --- |
+| Product Object | 已接入 | `product_formatter.py` | `product`、返回 Product Object 的 `product-search` 共用格式化；大数组和历史序列拆成图片、类目、排名、Offer、变体、列表值与历史 Sheet。 |
+| Statistics Object | 已接入 | `stats_formatter.py` | 派生当前指标，拆出价格类型、极值、Buy Box 卖家和 Offer 快照。 |
+| Marketplace Offer Object | 已接入 | `product_formatter.py` | `offers` 为标量主表；价格/库存/Prime 专享价/优惠券历史及重复报价分别拆表。 |
+| Category Object | 已接入 | `category_formatter.py` | Category 主表派生金额、评分与 URL；children、relatedCategories、topBrands、两组 Top Seller ID/名称及 Lookup 父级对象/父子关系分别拆表。 |
+| Deal Object | 已接入 | `deal_formatter.py` | 派生图片、时间、成色、价格等指标，并追加 `deal_metrics`。 |
+| Best Sellers Object | 已接入 | `best_sellers_formatter.py` | 主表输出带排名的 ASIN，另有榜单元数据汇总。 |
+| Seller Object | 已接入 | `seller_formatter.py` | 评分窗口、评分历史、反馈、storefront、类目、品牌、竞对分别拆表。 |
+| Lightning Deal Object | 已接入 | `lightning_deal_formatter.py` | 主表派生金额、时间、评分、图片；variation 维度拆表。 |
+| Search Insights Object | 已接入 | `search_insights_formatter.py` | `product-finder stats=1` 时拆出主指标、品牌、卖家和类目。 |
+| Tracking Object | 内部 API 已接入，未格式化 | `tracking/client.py`、`tracking/service.py` | 内部 Python API 支持 `get/list` 原始 JSON；业务调用应经 Service，不接入场景、MCP、CLI 或 XLSX formatter。 |
+| Tracking Creation Object | 输入模型已接入 | `tracking/models.py` | 校验 ASIN、站点、更新周期、阈值、库存规则和 7 位通知通道；Add 固定使用批量 POST JSON。 |
+| Notification Object | 内部 API 已接入，未格式化 | `tracking/client.py`、`tracking/service.py` | notification preview 强制 `readOnly=1`；显式确认后才允许消费并标记已读；保留原始 JSON。底层 Client 不提供安全策略。 |
 
-约定：
+当前仍为 9/12 类官方 Response Object 提供友好格式化；Tracking 域 3 类对象已有内部传输或输入模型，但未纳入 XLSX formatter。Graph Image 返回二进制图片，不属于 Response Object formatter。
 
-- `raw.json` 始终保留 Keepa 原始返回，不覆盖原字段。
-- 默认 XLSX 是用户可读导出，已接入 formatter 的对象会自动生成派生字段和明细 sheet。
-- 用户明确要求原始 JSON、后端比对或结果过大时，才跳过默认 XLSX 友好导出。
+## Product 明细 Sheet
+
+| Sheet | 内容 |
+| --- | --- |
+| `csv_history` | 36 类价格、排名、评分与计数历史 |
+| `images` | 图片 variant、尺寸、文件名和 URL |
+| `product_videos` | 视频标题、作者、时长、播放 URL 和封面图 URL |
+| `category_tree` | 有序类目路径 |
+| `sales_ranks` | 各类目的销售排名历史 |
+| `offers` | Offer 标量字段和当前排序 |
+| `offer_history` | Offer 价格、库存、Prime 专享价和优惠券历史 |
+| `offer_duplicates` | 重复报价明细 |
+| `variations` | 变体标量摘要 |
+| `variation_attributes` | 变体 dimension/value |
+| `product_list_values` | features、materials、categories 等多值字段 |
+| `product_history` | monthlySold、parentAsin、salesRankReference 等顶层历史 |
+| `product_nested_values` | 尚无专用规则的新版嵌套字段，按 JSON path 展开标量叶子 |
+| `stats_stock_by_condition` | Statistics 的 FBA/FBM condition 库存长表 |
+
+未知字段继续保留在 `raw.json` 和 JSON v2 的 `response` 中。公开 JSON 只移除账号额度字段；XLSX 格式化层不会用截断后的 Excel 单元格替代原始数据。
+
+## 真实响应验证
+
+2026-08-20 使用本地 Key 调用真实接口验证：Category Lookup 返回 1 个对象，Seller Information 返回 1 个对象，完整 Lightning Deals 返回 23,788 个对象及 45,374 条 variation。三个 formatter 的主表和附加表均不再包含 `dict/list` 单元格；完整原始响应仍只保存在工作区外的本地验证目录。
+
+## 场景参数与格式化边界
+
+11 个已接入 JSON 场景在 `opscli/keepa/api/scenarios.py` 统一完成请求参数归一化和边界校验：布尔值、整数、CSV ID、别名冲突和 Best Sellers 历史月份均在调用 Keepa 前处理。Product Finder、Seller Finder、Deals 的 `selection` 保持开放字段，只要求 JSON 对象；未知响应字段仍保留在 `raw.json`，不因 formatter 未声明而丢失。
+
+Graph Image 的二进制结果和 Tracking 域对象不属于当前 formatter 范围。Tracking 内部 Service 已提供参数校验、通知只读默认值和显式确认边界；后续若增加 CLI/Admin，还需补权限、持久化审计和文件结果模型。
+
+## 2026-08-20 格式化补充
+
+- Product Marketplace Offer 明细新增 condition 文本、价格/运费金额列；Offer `couponHistory` 按正数金额、负数百分比拆分，避免把折扣误当负金额。
+- Product、Deal、Statistics、Search Insights 的 `-1/-2` 缺失哨兵统一输出为空；Category 父级对象复用金额、评分和计数派生字段。
+- Seller 主表、评分窗口和评分历史增加百分比显示列；Search Insights 的品牌/卖家排行按计数降序、名称稳定排序。
+- Lightning Deal 主表新增按秒杀价/当前价计算的折扣率、活动时长和 `percentOff/percentClaimed` 展示字段。
+- 使用真实 ASIN `B003IEUAZK` 验证 Product/Statistics：94 个 Product 字段、64 个 Offer、7 条视频、72 条最低价状态和 24 条 condition 库存均已展开；生成的 16 个工作表嵌套单元格总数为 0。

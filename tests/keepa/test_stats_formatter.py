@@ -44,6 +44,10 @@ def test_stats_formatter_derives_main_fields_and_detail_rows():
                 "totalOfferCount": 12,
                 "sellerIdsLowestFBA": ["A2L77EE7U53NWQ"],
                 "offerCountFBA": -2,
+                "isLowest": [1, 0, -1],
+                "isLowest90": [0, 1, -2],
+                "stockPerCondition3rdFBA": [5, -1, 2],
+                "stockPerConditionFBM": [10, 4, -2],
             },
         },
         site="US",
@@ -84,3 +88,10 @@ def test_stats_formatter_derives_main_fields_and_detail_rows():
     assert formatted.buy_box_seller_rows[0]["percentageWonDisplay"] == "80%"
 
     assert formatted.offer_snapshot_rows[0]["sellerIdsLowestFBAJoined"] == "A2L77EE7U53NWQ"
+    assert "sellerIdsLowestFBA" not in formatted.offer_snapshot_rows[0]
+    assert formatted.offer_snapshot_rows[0]["sellerIdsLowestFBACount"] == 1
+    lowest_rows = [row for row in formatted.price_type_rows if row["statField"] == "isLowest"]
+    assert [row["formattedValue"] for row in lowest_rows] == [True, False, None]
+    assert formatted.stock_by_condition_rows[0]["fulfillmentType"] == "FBA"
+    assert formatted.stock_by_condition_rows[0]["stock"] == 5
+    assert formatted.stock_by_condition_rows[1]["stock"] is None

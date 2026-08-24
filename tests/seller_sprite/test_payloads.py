@@ -789,8 +789,9 @@ def test_listing_analysis_payload_defaults_to_global_station():
     )
 
     assert payload == {"asin": "B0D3845MWD", "station": "GLOBAL"}
-    assert scenario.endpoint == "/v3/api/ai-analysis/get-submitted"
+    assert scenario.endpoint == "/v3/api/ai-workflow/listing-analysis"
     assert scenario.method == "PAGE_CAPTURE"
+    assert scenario.browser_context_only is True
     assert scenario.task_result_endpoint is None
     assert build_referer(payload, "listing-analysis") == "https://www.sellersprite.com/v3/ai-history?module=LA"
     assert make_listing_analysis_payload({"asin": "b0d3845mwd", "station": "us"}) == {

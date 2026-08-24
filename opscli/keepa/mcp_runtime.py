@@ -15,6 +15,9 @@ if TYPE_CHECKING:
 def _keepa_catalog_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
     """让绑定方法在通用 MCP Catalog 中继续归属 keepa 模块。"""
     setattr(fn, "__opscli_catalog_module__", "keepa")
+    from opscli.keepa.api.scenarios import telemetry_dimensions
+
+    setattr(fn, "__opscli_telemetry_dimension_resolver__", telemetry_dimensions)
     return fn
 
 

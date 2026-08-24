@@ -217,55 +217,6 @@ class ProgressPollingApiClient(DummyApiClient):
         }
 
 
-class ListingAnalysisApiClient(DummyApiClient):
-    calls = []
-    instance = None
-
-    def __init__(self, *, account):
-        super().__init__(account=account)
-        self.poll_calls = 0
-        ListingAnalysisApiClient.instance = self
-
-    def _browser_headers(self, *, referer=None):
-        return {"Referer": referer} if referer else {}
-
-    async def request_json(self, method, url, **kwargs):
-        self.calls.append(
-            {
-                "method": method,
-                "url": url,
-                "params": kwargs.get("params"),
-                "json": kwargs.get("json"),
-                "headers": kwargs.get("headers"),
-            }
-        )
-        if url == "/v3/api/ai-workflow/listing-analysis":
-            return {
-                "code": "OK",
-                "success": True,
-                "data": {
-                    "taskId": "task-listing-1",
-                    "taskStatus": "SUBMITTED",
-                    "content": None,
-                },
-            }
-        raise AssertionError(f"unexpected url: {url}")
-
-    async def get_json(self, url, params, *, referer=None):
-        self.calls.append({"method": "GET", "url": url, "params": params, "referer": referer})
-        if url == "/v3/api/ai-analysis/get-submitted":
-            return {
-                "code": "OK",
-                "success": True,
-                "data": {
-                    "asin": params["asin"],
-                    "station": params["station"],
-                    "taskStatus": "RUNNING",
-                },
-            }
-        raise AssertionError(f"unexpected url: {url}")
-
-
 async def _wait_for_state(manager, job_id: str, expected_state: str, *, attempts: int = 20):
     for _ in range(attempts):
         status = manager.job_status(job_id)
@@ -1696,43 +1647,20 @@ def test_browser_listing_analysis_resumes_remote_task_without_resubmit(
     assert result.data[0]["content"] == "completed report"
 
 
-def test_manager_records_listing_analysis_submit_state(monkeypatch, tmp_path: Path):
-    ListingAnalysisApiClient.calls = []
-    ListingAnalysisApiClient.instance = None
-    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", ListingAnalysisApiClient)
+def test_manager_rejects_listing_analysis_api_direct(tmp_path: Path):
     settings = SellerSpriteSettings(output_dir=tmp_path, username=None, password=None, default_mode="api-direct")
     manager = SellerSpriteApiManager(settings=settings, account_provider=DummyAccountProvider())
 
-    result = _run(
-        manager.run(
-            SellerSpriteScenarioRequest(
-                scenario="listing-analysis",
-                site="US",
-                period="30d",
-                params={"asin": "B0D3845MWD", "pollInterval": 0},
-                job_id="job-listing-analysis",
-                export_format="json",
+    with pytest.raises(SellerSpriteConfigError, match="仅支持 browser-route"):
+        _run(
+            manager.run(
+                SellerSpriteScenarioRequest(
+                    scenario="listing-analysis",
+                    site="US",
+                    period="30d",
+                    params={"asin": "B0D3845MWD"},
+                    job_id="job-listing-analysis",
+                    export_format="json",
+                )
             )
         )
-    )
-
-    assert result.row_count == 1
-    assert result.data[0] == {
-        "asin": "B0D3845MWD",
-        "station": "GLOBAL",
-        "taskStatus": "RUNNING",
-        "contentReady": False,
-    }
-    assert ListingAnalysisApiClient.instance is not None
-    assert ListingAnalysisApiClient.instance.poll_calls == 0
-    assert ListingAnalysisApiClient.calls[0]["method"] == "GET"
-    assert ListingAnalysisApiClient.calls[0]["url"] == "/v3/api/ai-analysis/get-submitted"
-    assert ListingAnalysisApiClient.calls[0]["params"] == {
-        "asin": "B0D3845MWD",
-        "station": "GLOBAL",
-    }
-
-    raw = json.loads((tmp_path / "job-listing-analysis" / "raw.json").read_text(encoding="utf-8"))
-    assert raw["response"]["data"]["asin"] == "B0D3845MWD"
-    exported = json.loads(Path(result.export.path).read_text(encoding="utf-8"))
-    assert exported["rows"][0][exported["columns"].index("asin")] == "B0D3845MWD"
