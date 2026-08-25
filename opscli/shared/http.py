@@ -27,6 +27,61 @@ def extract_error_message(payload: dict) -> str | None:
     return None
 
 
+# 一条错误里最多展开多少个字段级原因：够定位即可，避免把整个校验器输出灌进终端
+MAX_ERROR_DETAIL_FIELDS = 6
+
+
+def extract_error_details(payload: dict) -> str | None:
+    """把服务端的字段级错误详情压成一行可读中文。
+
+    为什么必须提取：服务端（Laravel）在 ``error_details`` 里返回的是
+    ``{"filters.0.operator": ["..."], "tableId": ["..."]}`` 这种字段级原因，
+    而 ``msg`` 只有笼统的一句「参数验证失败」。此前解析只取 ``msg``，
+    详情被整段丢弃，调用方拿不到「是哪个字段哪条规则不合法」，
+    只能改写请求盲试——线上 347 条反馈都卡在这一步。
+    """
+    details = payload.get("error_details")
+    if isinstance(details, str):
+        return details.strip() or None
+    parts: list[str] = []
+    if isinstance(details, dict):
+        for field, reasons in list(details.items())[:MAX_ERROR_DETAIL_FIELDS]:
+            if isinstance(reasons, (list, tuple)):
+                text = "；".join(str(item).strip() for item in reasons if str(item).strip())
+            else:
+                text = str(reasons).strip()
+            if text:
+                parts.append(f"{field}: {text}")
+    elif isinstance(details, (list, tuple)):
+        parts = [str(item).strip() for item in details[:MAX_ERROR_DETAIL_FIELDS] if str(item).strip()]
+    if not parts:
+        return None
+    suffix = " …" if _detail_count(details) > MAX_ERROR_DETAIL_FIELDS else ""
+    return "；".join(parts) + suffix
+
+
+def _detail_count(details: object) -> int:
+    """错误详情的条目数，用于判断是否需要标注省略。"""
+    if isinstance(details, dict):
+        return len(details)
+    if isinstance(details, (list, tuple)):
+        return len(details)
+    return 0
+
+
+def _with_details(message: str, payload: dict) -> str:
+    """把字段级原因拼到主消息后面。
+
+    直接改写 message 而不是给异常加参数：各模块的业务异常构造签名都是
+    ``(code, message)`` 两参，加参数要动十几处调用点；而所有消费方（终端输出、
+    反馈提交、Agent 读取）看的都是 message，拼进去即可全链路生效。
+    """
+    details = extract_error_details(payload)
+    if not details or details in message:
+        return message
+    return f"{message}（{details}）"
+
+
 def parse_remote_response(
     response: httpx.Response,
     *,
@@ -65,13 +120,15 @@ def parse_remote_response(
     if response.status_code >= 400:
         message = (extract_error_message(payload) if isinstance(payload, dict) else None)
         message = message or f"远端请求失败，HTTP {response.status_code}"
+        if isinstance(payload, dict):
+            message = _with_details(message, payload)
         raise http_error_cls(response.status_code, message)
 
     if isinstance(payload, dict):
         business_code = payload.get("code")
         if business_code not in (None, 0, 200):
             message = extract_error_message(payload) or "远端业务执行失败"
-            raise business_error_cls(business_code, message)
+            raise business_error_cls(business_code, _with_details(message, payload))
 
     if not isinstance(payload, dict):
         raise bad_json_error_cls("远端返回结构不是 JSON 对象")

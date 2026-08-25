@@ -288,8 +288,15 @@ def test_snapshot_metric_gets_snapshot_aggregation_policy(tmp_path: Path):
     assert stock["aggregation_policy"] == "latest_snapshot_no_period_aggregation"
 
 
-def test_unsupported_platform_scope_is_blocked_explicitly(tmp_path: Path):
-    """请求了不支持的平台（如沃尔玛）时应明确阻断为平台范围不支持，而非枚举歧义。"""
+def test_non_amazon_platform_is_blocked_with_actionable_reason(tmp_path: Path):
+    """非亚马逊平台（如沃尔玛）不再被判为「平台范围不支持」。
+
+    2026-08-14 前 platform_scope.members 只定义了亚马逊三项，槽位识别得到的
+    tiktok/walmart/temu 等 7 个平台一律展开为空成员并阻断为 scope_unsupported——
+    对只授权 Temu 的账号而言，任何带平台筛选的取数都做不了。
+    词表补齐后这些平台进入正常的组件枚举路径；本 fixture 没有平台枚举组件，
+    因此阻断原因变为 missing_component，且必须自带可执行的中文原因。
+    """
     data_dir = tmp_path / "data"
     _write_ready_metadata(data_dir)
 
@@ -300,7 +307,9 @@ def test_unsupported_platform_scope_is_blocked_explicitly(tmp_path: Path):
     )
 
     assert result["status"] == "blocked"
-    assert result["model_view"]["next_action"] == "block_platform_scope_unsupported"
+    assert result["model_view"]["next_action"] == "block_platform_filter_missing_component"
+    # 阻断必须给出原因，不能只留一句「需要说明被阻断的原因」
+    assert result["model_view"].get("block_reason_zh")
 
 
 def test_published_bundle_version_shape_is_ready(tmp_path: Path):
@@ -859,6 +868,29 @@ def test_generic_amazon_full_scope_and_explicit_sc_vc_remain_distinct(tmp_path: 
     assert "platform_scope_disclosures_zh" not in vc["model_view"]
 
 
+def test_generic_amazon_can_explicitly_exclude_vc(tmp_path: Path):
+    """裸 Amazon 后显式排除 Amazon VC 时只能保留 SC，不能再次扩成 SC+VC。"""
+    data_dir = tmp_path / "data"
+    _write_instant_comprehensive_metadata(data_dir)
+    result = query_plan.build_model_query_plan(
+        "使用即时综合数据集查询当天销售额，仅取platform_name=Amazon，排除 Amazon VC",
+        authorized_platform_values=["Amazon", "Amazon VC"],
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "planned"
+    assert result["model_view"]["platform_semantic_members"] == ["亚马逊SC"]
+    assert result["execution_ref"]["resolved_platform_values"] == ["Amazon"]
+    assert {
+        "field": "platform_name",
+        "operator": "=",
+        "value": "Amazon",
+    } in result["execution_ref"]["query_template"]["filters"]
+
+
 def test_clarify_contract_carries_candidate_cards(tmp_path: Path):
     """同名冲突显式点名时，澄清合同必须携带候选卡片供带选项提问（P0-2）。"""
     data_dir = tmp_path / "data"
@@ -1157,6 +1189,26 @@ def test_time_scope_explicit_month_and_comparison_month_are_deterministic():
         assert scope["is_default"] is False
 
 
+def _patch_component_enum(monkeypatch, values: list) -> None:
+    """把逐字段枚举与批量枚举两个入口一起打桩，返回同一份枚举值。
+
+    为什么必须两个都打：dept_name 开启 reverse_lookup 后会进入
+    _batch_enum_reverse_lookup_fields 的批量枚举（_auto_enum_component_field_group），
+    只打逐字段入口时批量入口会发起真实 subprocess 并走本地缓存降级，
+    测试结果随本机缓存内容漂移（铁律8：测试不依赖真实网络）。
+    """
+    monkeypatch.setattr(
+        query_plan, "_auto_enum_component_values", lambda *_args, **_kwargs: values
+    )
+    monkeypatch.setattr(
+        query_plan,
+        "_auto_enum_component_field_group",
+        lambda _table_id, field_names, **_kwargs: {
+            name: values for name in field_names
+        },
+    )
+
+
 def test_sales_trend_prompt_selects_months_and_semantic_metric_aliases(
     tmp_path: Path, monkeypatch
 ):
@@ -1171,11 +1223,7 @@ def test_sales_trend_prompt_selects_months_and_semantic_metric_aliases(
         "parse",
         lambda query: original_parse(query, today=date(2026, 7, 23)),
     )
-    monkeypatch.setattr(
-        query_plan,
-        "_auto_enum_component_values",
-        lambda *_args, **_kwargs: ["项目二部", "九部", "项目九部"],
-    )
+    _patch_component_enum(monkeypatch, ["项目二部", "九部", "项目九部"])
 
     result = query_plan.build_model_query_plan(
         "即时综合数据集，项目二部，2026年6月按ASIN和产品名称分析销量、销售额、"
@@ -1224,11 +1272,7 @@ def test_sales_trend_prompt_auto_selects_compatible_instant_dataset(
         "parse",
         lambda query: original_parse(query, today=date(2026, 7, 23)),
     )
-    monkeypatch.setattr(
-        query_plan,
-        "_auto_enum_component_values",
-        lambda *_args, **_kwargs: ["项目二部", "九部", "项目九部"],
-    )
+    _patch_component_enum(monkeypatch, ["项目二部", "九部", "项目九部"])
 
     result = query_plan.build_model_query_plan(
         "项目二部，6月份BI即时销售趋势按ASIN/产品名称分析销量变化，"
@@ -1258,11 +1302,7 @@ def test_department_filter_auto_enum_uses_only_unique_exact_member(
     """9部/范泰克只能命中完整等值成员，禁止加入名称包含项。"""
     data_dir = tmp_path / "data"
     _write_sales_trend_metadata(data_dir)
-    monkeypatch.setattr(
-        query_plan,
-        "_auto_enum_component_values",
-        lambda *_args, **_kwargs: ["九部", "项目九部", "范泰克", "范泰克体系外"],
-    )
+    _patch_component_enum(monkeypatch, ["九部", "项目九部", "范泰克", "范泰克体系外"])
 
     cases = {
         "即时综合数据集，分析9部的数据，2026年6月销量": "九部",
@@ -1294,11 +1334,7 @@ def test_executor_rejects_removing_resolved_department_filter(
     """完整性合同必须把已解析部门筛选绑定到执行 payload，不能手工删掉。"""
     data_dir = tmp_path / "data"
     _write_sales_trend_metadata(data_dir)
-    monkeypatch.setattr(
-        query_plan,
-        "_auto_enum_component_values",
-        lambda *_args, **_kwargs: ["项目二部", "项目九部"],
-    )
+    _patch_component_enum(monkeypatch, ["项目二部", "项目九部"])
     plan = query_plan.build_model_query_plan(
         "即时综合数据集，项目二部，2026年6月销量",
         data_dir=data_dir,
@@ -1367,7 +1403,7 @@ def test_run_query_executes_query_template_directly_from_plan(
     )
     captured: dict = {}
 
-    def fake_run(table_id: str, payload: dict) -> dict:
+    def fake_run(table_id: str, payload: dict, **_kwargs) -> dict:
         captured["table_id"] = table_id
         captured["payload"] = payload
         return {
@@ -1448,6 +1484,19 @@ def test_time_scope_default_is_disclosed():
     scope = time_scope.parse("看看销售情况", today=date(2026, 7, 13))
     assert scope["is_default"] is True
     assert (scope["start"], scope["end"]) == ("2026-06-14", "2026-07-13")
+
+
+def test_time_scope_age_threshold_is_not_calendar_month():
+    """“超6月”是库龄阈值；句中另有“当天”时主周期必须仍解析为当天。"""
+    from datetime import date
+
+    scope = time_scope.parse(
+        "超6月数量=181天以上九个库龄分段之和，当天查询销售",
+        today=date(2026, 7, 30),
+    )
+
+    assert (scope["start"], scope["end"]) == ("2026-07-30", "2026-07-30")
+    assert scope["label_zh"] == "今天"
 
 
 def test_time_scope_absolute_range_quarter_and_year():
@@ -1555,7 +1604,7 @@ def test_run_query_order_fallback_requeries_and_resorts(tmp_path: Path, monkeypa
     """服务端排序未生效 + limit 场景：必须放大窗口重查、本地排序取前N并披露（D1）。"""
     calls = []
 
-    def fake_run(table_id, payload):
+    def fake_run(table_id, payload, **_kwargs):
         calls.append(dict(payload))
         if len(calls) == 1:
             # 首查：声明 DESC 但返回乱序（模拟服务端吞排序）
@@ -1588,8 +1637,11 @@ def test_run_query_order_fallback_requeries_and_resorts(tmp_path: Path, monkeypa
     out = json.loads(capsys.readouterr().out.strip())
 
     assert exit_code == 0
-    assert len(calls) == 2, "排序未生效时必须放大窗口重查一次"
-    assert calls[1]["limit"] == 6  # limit*3
+    assert len(calls) == 2, "排序未生效时必须重查一次"
+    # 重查窗口按服务端报告的总行数取全量（total=4），不再用 limit*3 的固定倍数：
+    # 服务端整段忽略 orderBy 时返回的是自然序切片，放大倍数仍是在错误的行里挑，
+    # 只有拿到全量再本地排序才能保证 Top N 正确。
+    assert calls[1]["limit"] == 4
     # desc 布尔旧形态被归一为 direction 形态
     assert calls[0]["orderBy"] == [{"field": "price", "direction": "DESC"}]
     assert out["disclosures"]["order_fallback"]["order_fallback_applied"] is True
@@ -1601,7 +1653,7 @@ def test_run_query_ok_path_discloses_effective_order(tmp_path: Path, monkeypatch
     monkeypatch.setattr(
         run_query,
         "_run_opscli",
-        lambda table_id, payload: _fake_response(
+        lambda table_id, payload, **_kwargs: _fake_response(
             [{"country": "B", "price": 9}, {"country": "C", "price": 7}], total=2
         ),
     )
@@ -2064,3 +2116,74 @@ def test_grain_exact_match_produces_no_disclosure_noise(tmp_path: Path):
         "粒度比请求更细" in text
         for text in result["answer_contract"]["required_disclosures_zh"]
     )
+
+
+def test_currency_detection_preserves_order_and_avoids_keyword_overlap():
+    """多币种按原文顺序去重，Canadian dollar 不得被通用 dollar 扩成 USD。"""
+    assert query_plan._detect_global_currencies("分别使用加拿大元和人民币查询") == [
+        "CAD",
+        "CNY",
+    ]
+    assert query_plan._detect_global_currencies("人民币、CAD、人民币双币种") == [
+        "CNY",
+        "CAD",
+    ]
+    assert query_plan._detect_global_currencies("show in Canadian dollar") == ["CAD"]
+
+
+def test_implicit_cny_cad_comparison_emits_two_integrity_bound_templates(
+    tmp_path: Path,
+):
+    """“同时用加拿大元对比显示”必须生成 CNY/CAD 两个同口径服务端模板。"""
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    result = query_plan.build_model_query_plan(
+        "即时综合数据集，查询2026年6月按ASIN、产品名称的订单量、销售额，"
+        "报告中把涉及金钱的同时用加拿大元对比显示一下",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=False,
+    )
+
+    assert result["status"] == "planned"
+    execution = result["execution_ref"]
+    assert execution["requested_global_currencies"] == ["CNY", "CAD"]
+    templates = execution["query_templates"]
+    assert [item["globalCurrency"] for item in templates] == ["CNY", "CAD"]
+    assert execution["query_template"] == templates[0]
+    cny_scope = {key: value for key, value in templates[0].items() if key != "globalCurrency"}
+    cad_scope = {key: value for key, value in templates[1].items() if key != "globalCurrency"}
+    assert cny_scope == cad_scope
+    assert query_plan.plan_integrity.verify(result) is True
+
+    tampered = json.loads(json.dumps(result, ensure_ascii=False))
+    tampered["execution_ref"]["query_templates"][1]["globalCurrency"] = "USD"
+    assert query_plan.plan_integrity.verify(tampered) is False
+
+    schema = json.loads((SKILL_ROOT / "data" / "query_plan.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(result)
+
+
+def test_run_query_rejects_direct_multi_currency_plan(capsys):
+    """绕过 query_flow 直跑多币种 plan 时必须拒绝，避免静默只执行首个币种。"""
+    plan = {
+        "contract": "query_plan_model_contract_v2",
+        "status": "planned",
+        "execution_ref": {
+            "table_id": "1",
+            "query_template": {"tableId": "1", "globalCurrency": "CNY"},
+            "query_templates": [
+                {"tableId": "1", "globalCurrency": "CNY"},
+                {"tableId": "1", "globalCurrency": "CAD"},
+            ],
+        },
+    }
+    query_plan.plan_integrity.attach(plan)
+
+    exit_code = run_query.main(["--plan-json", json.dumps(plan, ensure_ascii=False)])
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 2
+    assert output["status"] == "precheck_failed"
+    assert "query_flow.py" in output["next_action_zh"]

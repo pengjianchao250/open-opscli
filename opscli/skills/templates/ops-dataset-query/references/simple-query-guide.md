@@ -1,378 +1,233 @@
 ---
-name: ops-dataset-query
-description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
+name: ops-dataset-query-simple-query
+description: 仅使用本次授权 guidance/metadata 的简化查询参数规划器
 ---
 
-# 简化查询接口指南
+# 简化查询参数规划器
 
-本指南面向 AI Agent / Skill 开发者，介绍如何通过**极简业务语义参数**完成数据查询，无需理解 `translate`、`cacl_type` 等技术实现细节。
+## 来源边界
 
-服务端 `SimpleQueryBuilder` 会自动将这些简化参数转换为完整 Query Payload 并执行。
+数据集必须已经用户确认。CLI-only 的表标识、维度、指标、公式、聚合和组件仅来自当前账号 selected-dataset guidance；MCP-only 仅来自当前已认证账号的 `query_metadata(dataset=...)` 响应。不猜测、不从其他来源补齐，不把文档占位符当作真实标识。
 
----
+> 示例不得直接复制；必须将全部占位符替换为本次 guidance/metadata 返回值。
 
-## 字段选择优先级（必读）
+## 业务参数
 
-执行查询前，选取维度/指标字段时，**必须按以下优先级顺序**判断：
+| 概念 | JSON | MCP | 要求 |
+|------|------|-----|------|
+| 数据集 | `tableId` | `table_id` | 必须来自已选数据集 |
+| 维度 | `dimensions` | `dimensions` | 只使用授权维度 |
+| 指标 | `metrics` | `metrics` | 只使用授权指标与聚合 |
+| 筛选 | `filters` | `filters` | 只使用用户确认条件 |
+| 对比 | `dataComparison` | `data_comparison` | 必须与主周期同时传入 |
+| 排序 | `orderBy` | `order_by` | 使用本次结果 alias |
+| 分页 | `limit` / `offset` | `limit` / `offset` | 使用用户确认行数 |
+| 全局币种 | `globalCurrency` | `global_currency` | 仅 USD/GBP/CAD/EUR/JPY/CNY；由规划器识别币种意图后写入模板 |
 
-| 优先级 | 来源 | CLI | MCP |
-|--------|------|-----|-----|
-| **1（最高）** | 用户偏好设置 | `opscli query preferences` | `query_preferences()` |
-| **2** | 远端 metadata | `opscli query metadata --dataset xxx` | `query_metadata(dataset=xxx)` |
-| **3（最低）** | 本地缓存 | `opscli query metadata`（无参） | `query_metadata()`（无参） |
+MCP Tool 使用 snake_case，JSON payload 使用 camelCase，CLI 选项使用 kebab-case。
 
-**规则**：
-- 偏好数据存在且包含目标数据集 → **直接使用偏好中的 `dimensions`/`metrics` 字段，禁止跳过**
-- 偏好数据为空或不含目标数据集 → 再走远端 metadata
-- 远端失败 → 回退本地缓存
+## 全局币种 globalCurrency
 
----
+- **作用**：按指定币种换算展示金额类指标。取值**仅支持** `USD / GBP / CAD / EUR / JPY / CNY`（大写 ISO 4217）。
+- **来源**：规划器 `query_plan.py` 会从用户请求文本识别全部币种意图（如"用美元显示""分别使用加拿大元和人民币""同时用加拿大元对比显示"）。单币种写入 `query_template.globalCurrency`；多币种按原文顺序生成 `query_templates`，每项使用独立 `globalCurrency` 并一起纳入 integrity 哈希——**禁止手工增删或改写该键**。
+- **执行**：多币种不是一次查询后的展示转换。CLI 由 `query_flow.py` 逐项执行 `query_templates`；MCP 为每个币种分别调用一次 `query_simple`，每次只传一个对应的 `global_currency`，其余表、字段、时间、筛选、排序和行数必须一致。
+- **人民币 + 加拿大元对照**："分别使用人民币和加拿大元"、"CNY/CAD 双币种"、"同时用加拿大元对比显示"都固定执行 CNY 与 CAD 两次服务端查询。最后一种表达即使省略“人民币”，也表示保留人民币主口径并增加 CAD 对照。
+- **未识别到币种意图**时模板不含该键；此时后端会回退到当前用户在 `dm_user_settings` 的默认币种配置，用户也未配置则不做换算。
+- **非白名单币种**（如 HKD/AUD）不注入，且后端会拒绝，请勿伪造。
 
-## 何时使用简化接口
+## 返回币种 meta.currency（结果侧）
 
-- ✅ 普通聚合查询（按维度分组 + 指标聚合）
-- ✅ 数据对比（环比/同比，dataComparison）
-- ✅ 趋势分析（MOY 月环比/年同比）
-- ✅ 需要 translate 自动转换的维度过滤
+`globalCurrency` 是**请求侧**参数，`meta.currency` 是**返回侧**事实，两者必须分开看待。
 
-**扩展能力**：图表查询（`query_chart`）支持多 query 自动合并、小计/总计等复杂场景。
-
----
-
-## 7 个核心概念
-
-> **⚠️ 参数命名约定（重要）**
->
-> 本文档中的示例涉及两种不同的参数命名风格，**务必严格区分**：
->
-> | 场景 | 命名风格 | 示例 |
-> |------|---------|------|
-> | JSON payload（发给后端 API 的数据） | **camelCase** | `tableId`、`dataComparison`、`orderBy` |
-> | MCP Tool 函数调用参数 | **snake_case** | `table_id`、`data_comparison`、`order_by` |
-> | CLI 命令行参数 | **kebab-case** | `--table-id`、`--data-comparison`、`--order-by` |
->
-> **常见错误**：在 MCP 调用 `query_simple(tableId=15, ...)` → 报错 `Unexpected keyword argument`。**正确写法**：`query_simple(table_id=15, ...)`。
-
-| 概念 | JSON payload 字段名 | MCP 参数名 | 说明 | 必填 |
-|------|---------------------|-----------|------|------|
-| 数据集 ID | `tableId` | `table_id` | 数据集 ID | 是 |
-| 维度字段列表 | `dimensions` | `dimensions` | 分组依据 | 否 |
-| 指标字段列表 | `metrics` | `metrics` | 聚合计算 | 否 |
-| 过滤条件 | `filters` | `filters` | 统一列表 | 否 |
-| 数据对比 | `dataComparison` | `data_comparison` | 环比/同比 | 否 |
-| 排序规则 | `orderBy` | `order_by` | 排序 | 否 |
-| 分页 | `limit` / `offset` | `limit` / `offset` | 分页 | 否（默认 limit=20） |
-
-> 不需要理解的概念（服务端自动处理）：`translate`、`from`、`field_name` vs `bc.` 前缀、`cacl_type`、`params.dim/date`
-
-### 时间范围与 dataComparison 规则
-
-- 普通时间范围查询：只传 `filters`，用日期字段限定主查询周期。
-- 环比、同比、上期对比等汇总对比：必须同时传 `filters` 与 `dataComparison`。
-- `filters` 表示当前主查询周期；`dataComparison` 只表示对比周期。
-- 不要只传 `dataComparison`。缺少主周期日期 `filters` 时，服务端可能生成非法 SQL，并返回类似 `QS-EXE-005 missing ')' at '{'` 的解析错误。
-
-推荐模板：
+- **位置**：服务端写在返回的 `meta.currency`（视返回形状位于顶层 `meta.currency`、`data.meta.currency` 或 `data.result.meta.currency`）。执行器已统一提取到 stdout 的 `disclosures.currency` 与 `disclosures.currency_disclosure_zh`，**CLI 路径直接读这两个字段即可**，无需再打开 `full_result_file`；MCP 等旁路拿到裸结果时才自行从 `meta.currency` 取。
 
 ```json
 {
-  "filters": [
-    {"field": "ds_xxx.date_id", "operator": ">=", "value": "主周期开始日期"},
-    {"field": "ds_xxx.date_id", "operator": "<=", "value": "主周期结束日期"}
+  "success": true,
+  "data": [],
+  "meta": {
+    "dataSource": "doris_analytics",
+    "rowCount": 0,
+    "totalCount": 0,
+    "queryId": "54e0bc13-4bab-45c4-a291-ba194fa54aac",
+    "currency": "CNY"
+  },
+  "error": null
+}
+```
+
+- **含义**：该值是服务端本次实际生效的币种代码（ISO 4217）。上例 `"currency": "CNY"` 表示本次查询金额均按**人民币**计价，结论中必须原文声明。
+- **必须声明**：结果含金额类指标且 `meta.currency` 有值时，结论首句、结果表表头和 Excel 口径页都要写明币种；未声明币种的金额结论视为不合规。
+- **缺失时不推断**：该键缺失或为 `null` 时只能说明"本次返回未声明币种"，禁止按字段名后缀、数据集习惯或历史会话断定货币。
+- **冲突以返回为准**：请求传了 `globalCurrency=USD` 但 `meta.currency` 返回 `CNY` 时，以 `CNY` 陈述并披露该差异，不得按请求值描述。
+- **禁止外部汇率**：不得引用 Bank of Canada Valet `FXCNYCAD`、模型记忆、公开/内部行情或本地计算做换算、跨币种相加或折算比较；需要其他币种时重新发起带币种意图的查询，由服务端换算。
+- **对比前校验**：分别读取每次返回的 `meta.currency` 和全量结果。只有返回币种与请求一致、各查询均未截断、共同维度键集合一致且非金额指标一致时，才按共同维度关联金额列；否则停止对比并披露差异。
+
+## 授权占位符模板
+
+```json
+{
+  "tableId": "$TABLE_ID",
+  "dimensions": [
+    {
+      "field": "$AUTHORIZED_DIMENSION",
+      "alias": "$DIMENSION_RESULT_ALIAS"
+    }
   ],
+  "metrics": [
+    {
+      "field": "$AUTHORIZED_METRIC",
+      "aggregation": "$AUTHORIZED_AGGREGATION",
+      "alias": "$METRIC_RESULT_ALIAS"
+    }
+  ],
+  "filters": [
+    {
+      "field": "$AUTHORIZED_FILTER",
+      "operator": "$CONFIRMED_OPERATOR",
+      "value": "$CONFIRMED_FILTER_VALUE"
+    }
+  ],
+  "orderBy": [
+    {
+      "field": "$METRIC_RESULT_ALIAS",
+      "direction": "$CONFIRMED_DIRECTION"
+    }
+  ],
+  "limit": "$CONFIRMED_LIMIT",
+  "offset": "$CONFIRMED_OFFSET"
+}
+```
+
+## 排序形态与生效校验（重要）
+
+- `orderBy` 的**已验证可生效形态**是 `{"field": "<结果alias>", "direction": "DESC"}`（或 `ASC`，大写）；
+  旧文档的 `{"field","desc"}` 布尔形态存在被服务端静默忽略的已知缺陷，禁止使用。
+- 日期过滤的实测形态是同字段两行：`{"field":"<日期字段>","operator":">=","value":"YYYY-MM-DD"}`
+  与 `<=` 一行；等值筛选用 `operator: "="`。
+- 带 `orderBy` 的查询必须经 `scripts/run_query.py` 执行：执行器会校验返回行是否按声明字段单调，
+  服务端排序未生效时自动本地重排（有 limit 时放大窗口重查再取前 N），并要求在结论中披露兜底行为。
+  TopN 结论不得基于未经生效校验的排序输出。
+
+需要环比、同比或上期对比时，在主周期 `filters` 之外增加：
+
+```json
+{
   "dataComparison": {
-    "field": "ds_xxx.date_id",
-    "startDate": "对比周期开始日期",
-    "endDate": "对比周期结束日期"
+    "field": "$AUTHORIZED_FILTER",
+    "startDate": "$COMPARISON_START_DATE",
+    "endDate": "$COMPARISON_END_DATE"
   }
 }
 ```
 
----
+对比字段必须是本次 guidance/metadata 返回的授权日期字段。`filters` 同时传入用户确认的主周期；不得只传 `dataComparison`。
 
-## 参数详解
+## 公式指标
 
-### dimensions — 维度
-
-```json
-[
-  {"field": "dept_name", "alias": "f_dept"},
-  {"field": "date_id", "alias": "f_month", "format": "%Y-%m"}
-]
-```
-
-- `field`：字段的 origin_name（不含数据集前缀，服务端自动拼接）
-- `alias`：返回结果中的列名（建议使用 global_alias）
-- `format`（可选）：日期格式化，如 `%Y-%m` 按月分组
-
-### metrics — 指标
-
-```json
-[
-  {"field": "price", "aggregation": "SUM", "alias": "f_price_sum"},
-  {"field": "price", "aggregation": "SUM", "alias": "f_price_moy", "comparison": "MOY", "moyType": "MOM_MONTH"}
-]
-```
-
-- `aggregation`：聚合方式（`SUM`、`COUNT`、`AVG`、`MAX`、`MIN`）。**注意：公式字段不要传此参数，见下方警告**
-- `comparison`（可选）：`MOY`（月环比/年同比趋势）、`ACC`（累计）、`PPT`（百分点）
-- `moyType`（可选）：`MOM_MONTH`（月环比）、`YOY_YEAR`（年同比）
-
-> ⚠️ **公式字段警告**：如果字段的 metadata 中包含 `formula_config` 或 `summary_expression`（如 ACOS、ROAS、平均单价等比率/占比指标），**不要传 `aggregation`**。公式字段的聚合逻辑已内置在表达式中，再传 `aggregation`（如 SUM）会导致二次聚合，产生错误的语义结果（例如把每行的 ACOS 百分比加在一起，而非计算整体 ACOS）。
->
-> **公式字段的正确处理方式**：
-> - 聚合/分组查询：使用 `summary_expression` 作为 `field`，不传 `aggregation`
-> - 明细查询：使用 `detail_expression` 作为 `field`，不传 `aggregation`
-> - 简化接口中：直接用字段名传 `field`，不传 `aggregation`，服务端会自动识别公式字段并使用正确的表达式
-
-### filters — 过滤条件
-
-```json
-[
-  {"field": "platform_name", "operator": "in", "value": ["Amazon"]},
-  {"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}
-]
-```
-
-- `operator`：语义写法（`eq`、`neq`、`gt`、`gte`、`lt`、`lte`、`in`、`not_in`、`between`、`like`、`not_like`、`is_null`、`is_not_null`）；符号写法（`=`、`!=`、`<>`、`>`、`>=`、`<`、`<=`、`==`）会自动转换为对应的语义操作符
-
-### dataComparison — 数据对比
+指标含 `formula_config`、`summary_expression` 或 `detail_expression` 时，不再传普通 `aggregation`。聚合/分组使用本次返回的汇总表达式，明细查询使用本次返回的明细表达式：
 
 ```json
 {
-  "field": "date_id",
-  "startDate": "2026-03-01",
-  "endDate": "2026-03-22"
+  "field": "$AUTHORIZED_METRIC",
+  "expr": "$AUTHORIZED_FORMULA_EXPRESSION",
+  "alias": "$METRIC_RESULT_ALIAS"
 }
 ```
 
-- 必须同时传 `filters` 中的主周期日期，否则报 `QS-EXE-005`
-- 返回字段：`last_{alias}`（上期值）、`diff_{alias}`（差值）、`pct_{alias}`（环比百分比）
+## 快照指标
 
-### orderBy — 排序
+指标标记为快照类（guidance 中 `is_snapshot=true`，如库存量）时，默认只取最新快照日的值，禁止跨日/跨期累加聚合；需要趋势时按日期维度展示快照序列，不求和。
 
-```json
-[
-  {"field": "f_price_sum", "desc": true}
-]
-```
+## 筛选与组件
 
-- `field`：使用 metric/dimension 的 `alias`
-- `desc`：`true` 降序，`false` 升序
+- 不发明默认筛选，不用文档中的业务值代替用户确认。
+- 可用操作符以当前正式查询规划器为准；操作符和值必须与字段类型匹配。
+- 明确筛选命中查询组件时，先按模式指南取得本次授权的组件关系和枚举，并遵守规划结果的 `execution_ref.filter_value_match_policy`。
+- 对请求值与枚举原值做规范化完整等值比较；部门名额外允许阿拉伯数字与中文数字等价。唯一等值命中时仅使用对应枚举原值，禁止追加仅包含该文本的其他成员。
+- 没有唯一等值命中时停止并请用户从枚举候选中重选，不得用 contains/substring 模糊匹配自动扩大范围。
 
----
+## CLI-only
 
-## 完整示例
-
-### 示例 1：普通聚合查询
-
-```json
-{
-  "tableId": 1,
-  "dimensions": [
-    {"field": "dept_name", "alias": "f_dept"}
-  ],
-  "metrics": [
-    {"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"}
-  ],
-  "filters": [
-    {"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}
-  ],
-  "orderBy": [
-    {"field": "f_fee_sum", "desc": true}
-  ],
-  "limit": 10
-}
-```
-
-### 示例 2：数据对比（环比）
-
-```json
-{
-  "tableId": 1,
-  "dimensions": [
-    {"field": "dept_name", "alias": "f_dept"}
-  ],
-  "metrics": [
-    {"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"}
-  ],
-  "filters": [
-    {"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}
-  ],
-  "dataComparison": {
-    "field": "date_id",
-    "startDate": "2026-03-01",
-    "endDate": "2026-03-22"
-  },
-  "limit": 10
-}
-```
-
-**返回**：
-```json
-{
-  "f_dept": "项目二部",
-  "f_fee_sum": "68247.1073",
-  "last_f_fee_sum": "73316.2101",
-  "diff_f_fee_sum": "-5069.1028",
-  "pct_f_fee_sum": "-0.0691"
-}
-```
-
-### 示例 3：MOY 月环比趋势
-
-```json
-{
-  "tableId": 1,
-  "dimensions": [
-    {"field": "dept_name", "alias": "f_dept"},
-    {"field": "date_id", "alias": "f_month", "format": "%Y-%m"}
-  ],
-  "metrics": [
-    {"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_sum"},
-    {"field": "fi_first_leg_trailer_fee", "aggregation": "SUM", "alias": "f_fee_moy", "comparison": "MOY", "moyType": "MOM_MONTH"}
-  ],
-  "filters": [
-    {"field": "date_id", "operator": "between", "value": ["2026-03-01", "2026-04-22"]}
-  ],
-  "orderBy": [
-    {"field": "f_month", "desc": true}
-  ],
-  "limit": 20
-}
-```
-
-**返回**：`f_fee_moy_prev`、`f_fee_moy_diff`、`f_fee_moy_pct`
-
-### 示例 4：子查询类型数据集
-
-```json
-{
-  "tableId": 15,
-  "dimensions": [
-    {"field": "platform_name", "alias": "f_plat"}
-  ],
-  "metrics": [
-    {"field": "ads_sales", "aggregation": "SUM", "alias": "f_sales_sum"}
-  ],
-  "filters": [
-    {"field": "platform_name", "operator": "in", "value": ["Amazon"]},
-    {"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}
-  ],
-  "limit": 5
-}
-```
-
----
-
-## 注意事项
-
-### default_filters 需验证
-
-数据集预设的 `default_filters`（如 `amazon_cat=Amazon`）可能与实际数据不匹配。首次使用时应先不带 `default_filters` 探查数据是否存在，确认后再决定是否加上。若加上后返回 0 行，则去掉继续查询。
-
----
-
-## CLI 调用方式
+将占位符替换后，只用正式简化查询入口。**payload 一律用文件或管道传入，不要内联 `--json`**：
 
 ```bash
-# 构造简化 payload（不执行）
-opscli query simple --table-id 1 \
-  --payload /tmp/simple.json \
-  --output /tmp/payload.json
+# 推荐：文件传参（跨平台一致，UTF-8 BOM 已自动兼容）
+opscli query simple --table-id "$TABLE_ID" \
+  --payload payload.json --run --pretty
 
-# 构造并立即执行
-opscli query simple --table-id 1 \
-  --payload /tmp/simple.json \
-  --run --pretty
-
-# 使用内联 JSON
-opscli query simple --table-id 1 \
-  --json '{"dimensions":[...],"metrics":[...]}' \
-  --run --pretty
+# 推荐：管道传参
+cat payload.json | opscli query simple --table-id "$TABLE_ID" --payload - --run --pretty
 ```
 
-## MCP 调用方式
+**为什么不用 `--json` 内联**：PowerShell 与 cmd 会按自己的引号和转义规则重写命令行参数，
+JSON 里的双引号常被吞掉或翻倍，服务端收到的已不是合法 JSON，报
+`INVALID_PAYLOAD: JSON 字符串解析失败 / Expecting property name enclosed in double quotes`。
+这是线上取数失败反馈里占比最高的一类。文件与管道两条路径都不经过 Shell 的参数重写，
+在 bash / zsh / PowerShell 下行为一致。
 
-> **注意**：MCP Tool 参数使用 **snake_case** 命名（如 `table_id`、`data_comparison`、`order_by`），不是 JSON payload 的 camelCase（如 `tableId`、`dataComparison`、`orderBy`）。
+Windows 下用 PowerShell 写 payload 文件时：
+
+```powershell
+$payload | Out-File -FilePath payload.json -Encoding utf8
+opscli query simple --table-id "$TABLE_ID" --payload payload.json --run --pretty
+```
+
+`Out-File -Encoding utf8` 会写 BOM 头，CLI 已自动兼容，无需额外处理。
+
+**过滤操作符**：`filters[].operator` 可以写 `=`、`>=`、`<=`、`!=` 等符号形态，
+CLI 会自动归一为服务端要求的 `eq` / `gte` / `lte` / `neq`；
+写了服务端不支持且无法归一的符号时，CLI 会在本地直接报错并列出完整支持清单，
+不会浪费一次网络往返。
+
+## MCP-only
+
+将占位符替换后，使用 snake_case 调用正式 Tool：
 
 ```python
-# 注意：MCP 参数用 snake_case，不是 camelCase！
-# table_id（不是 tableId），data_comparison（不是 dataComparison）
 query_simple(
-    table_id=1,
-    dimensions=[{"field": "dept_name", "alias": "f_dept"}],
-    metrics=[{"field": "price", "aggregation": "SUM", "alias": "f_price"}],
-    filters=[{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-22"]}],
-    data_comparison={"field": "date_id", "startDate": "2026-03-01", "endDate": "2026-03-22"},
-    limit=10,
-    session_id="xxx"
+    table_id="$TABLE_ID",
+    dimensions=[
+        {"field": "$AUTHORIZED_DIMENSION", "alias": "$DIMENSION_RESULT_ALIAS"}
+    ],
+    metrics=[
+        {
+            "field": "$AUTHORIZED_METRIC",
+            "aggregation": "$AUTHORIZED_AGGREGATION",
+            "alias": "$METRIC_RESULT_ALIAS",
+        }
+    ],
+    filters=[
+        {
+            "field": "$AUTHORIZED_FILTER",
+            "operator": "$CONFIRMED_OPERATOR",
+            "value": "$CONFIRMED_FILTER_VALUE",
+        }
+    ],
+    limit="$CONFIRMED_LIMIT",
 )
 ```
 
----
+## 执行前检查
 
-## 服务端内部参数映射
+1. 数据集、维度、指标、筛选和公式是否全部来自本次授权响应。
+2. 是否已用中文摘要让用户确认时间、币种、筛选值、排序和行数。
+3. 公式指标是否避免二次聚合。
+4. 对比查询是否同时包含主周期和对比周期。
+5. 所有占位符是否已替换；任一占位符未替换都必须阻断执行。
 
-| 简化参数 | 完整 Query 对应 |
-|----------|----------------|
-| `dimensions` | `query.select`（无 aggregation 的字段）+ `query.groupBy` |
-| `metrics` | `query.select`（带 aggregation 的字段） |
-| `metrics.comparison=MOY` | 展开为 3 个 `select` 项（`cacl_type`: ORIGINAL/COMPARE/PERCENT） |
-| `filters` | `query.where` |
-| `filters`（含 translate 字段） | 自动添加 `translate` 字段 |
-| `dataComparison` | 顶层 `dataComparison`（`switch: true`） |
-| `orderBy` | `query.orderBy` |
-| `limit` / `offset` | `query.limit` / `query.offset` |
+字段不存在、公式被额外聚合、组件值未授权或对比缺少主周期时，修正参数后再请用户确认。正式工具出现意外失败时才进入反馈流程。
 
----
+## 默认条件（filter_configs）的自动应用与覆盖
 
-## 扩展能力
+数据集可由管理员配置字段级默认条件，服务端在查询执行时强制应用：
 
-- 图表查询（`opscli query chart`、`query_chart`）支持通过图表 UUID 获取查询结构并执行，适用于多 query、小计/总计等复杂场景
-- 简化接口不满足需求时，可使用 `query_build_and_run`（MCP）或 `opscli query chart`（CLI）
+| 配置 type | 未提供该字段条件 | 提供了该字段条件 |
+|-----------|-----------------|-----------------|
+| required（强制） | 服务端自动应用 | 以你的条件为准，覆盖默认值 |
+| optional（可选） | 服务端自动注入 | 以你的条件为准 |
 
----
-
-## 错误处理
-
-| 场景 | 错误码 | 解决方式 |
-|------|--------|----------|
-| 字段不存在 | 400 | 检查 `field` 是否为正确的 origin_name |
-| 无数据集权限 | 403 | 确认用户有该数据集访问权限 |
-| 缺少必填 alias | 400 | dimension / metric 必须提供 `alias` |
-| 不支持 comparison 类型 | 400 | 仅支持 `MOY`、`ACC`、`PPT` |
-| `dataComparison` SQL 解析错误 | `QS-EXE-005` 等 | 先检查是否缺少主周期日期 `filters`；缺少时补上当前周期日期过滤后重试，仍失败再降级为纯 `filters` 查询 |
-| `dataComparison` 未返回对比字段 | 无错误码 | 若未返回对比字段，降级为分别查询两个周期后本地合并计算 |
-| `default_filters` 返回 0 行 | 无错误码 | `default_filters` 可能与实际数据不匹配，去掉后重试 |
-
----
-
-## 字段命名约定速查
-
-| 类型 | 格式 | 示例 |
-|------|------|------|
-| origin_name | `数据集别名.field_name`（服务端自动拼接） | `ds_d35ac6f3910c.dept_name` |
-| global_alias | `f_` 前缀随机字符串 | `f_520fb9a831ccd52a` |
-| verbose_name | 中文业务名 | `部门名称` |
-
-> 构造简化参数时，`field` 使用 **origin_name**，`alias` 使用 **global_alias**。
-
-## 字段歧义硬门禁
-
-`opscli query simple` / `query_simple` 在执行前会对以下字段引用做 metadata 校验：
-
-- `dimensions[].field`
-- `metrics[].field`
-- `filters[].field`，包括嵌套 `conditions`
-- `dataComparison.field`
-
-门禁规则：
-
-- 字段必须在当前 `table_id` 对应 metadata 中存在
-- 字段标识命中多个候选时会阻断查询，并返回候选字段；必须改用唯一 `global_alias` 或完整 `field_name`
-- 模糊字段术语命中多个候选时会阻断查询，例如“销售额”“库存”“ACOS”等高频相似词
-- 公式字段含 `summary_expression` / `detail_expression` / `formula_config` 时，禁止再传 `aggregation`
-- 若 `metrics` 显式提供 `expr` 且没有 `field`，视为调用方已使用 metadata 中的公式表达式，跳过字段名解析
-
-建议：当用户使用中文口语化字段名且有歧义时，先通过 `query_metadata(dataset=...)` 或 `opscli query metadata --dataset ...` 展示候选，再让用户确认口径。
+- 客户端行为：执行器 `run_query.py` 不重复注入默认条件，只按
+  `--default-filters` 披露服务端应用或用户条件覆盖结果；
+- 多枚举值默认条件按 in 语义生效；日期预设（如 thisQuarter）由服务端在执行时刻解析；
+- 回答中必须披露已生效的默认条件（规划器 default_filters_zh 原文）。

@@ -25,7 +25,7 @@
     {
       "id": "case_003",
       "user_query": "做一下上季度销售复盘",
-      "expected_dataset": "账单销售数据集",
+      "expected_dataset": "发货数据集",
       "expected_execution_dataset": "账单销售数据集",
       "note": "账单销售按包裹发货时间，实际使用 sale_trend_set",
       "expected_fields": []
@@ -45,7 +45,7 @@
     {
       "id": "case_005",
       "user_query": "亚马逊平台SP、SD、SB、SBV各广告类型投入占比是否合理",
-      "expected_dataset": "广告类型费数据集",
+      "expected_dataset": "广告类型花费数据集",
       "expected_execution_dataset": "广告类型费数据集",
       "note": "",
       "expected_fields": []
@@ -61,7 +61,7 @@
     {
       "id": "case_007",
       "user_query": "SP关键词表现怎么样",
-      "expected_dataset": "SP广告数据集",
+      "expected_dataset": "SP关键词数据集",
       "expected_execution_dataset": "SP广告数据集",
       "note": "SP广告数据集不包含搜索词、关键词、投放词",
       "expected_fields": []
@@ -85,7 +85,7 @@
     {
       "id": "case_010",
       "user_query": "SBV视频广告明细",
-      "expected_dataset": "广告类型费数据集",
+      "expected_dataset": "广告类型花费数据集",
       "expected_execution_dataset": "广告类型费数据集",
       "note": "SB广告数据集不包含SBV明细，只能做汇总分析",
       "expected_fields": []
@@ -153,7 +153,7 @@
     {
       "id": "case_018",
       "user_query": "物控库龄超180天库存金额",
-      "expected_dataset": "物控版库存周转",
+      "expected_dataset": "物控库存周转",
       "expected_execution_dataset": "物控版库存周转",
       "note": "物控版库存周转（画像 table_id=29）在当前生产 dataset_fields.csv 中查无任何字段，画像与后端元数据已不同步（后端数据集疑似已改名或下线），expected_fields 无法核对真实存在性，按规范留空，不凭猜填写相近字段名",
       "expected_fields": []
@@ -161,7 +161,7 @@
     {
       "id": "case_019",
       "user_query": "近30天每天物控库存周转趋势",
-      "expected_dataset": "物控版库存周转",
+      "expected_dataset": "物控库存周转",
       "expected_execution_dataset": "物控版库存周转",
       "note": "日期区间查询必须包含日期天字段",
       "expected_fields": []

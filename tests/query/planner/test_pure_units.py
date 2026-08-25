@@ -7,6 +7,11 @@
 
 import json
 from importlib.resources import files
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SKILL_DATA = REPO_ROOT / "opscli/skills/templates/ops-dataset-query/data"
 
 
 def test_intent_rules_resource_loads():
@@ -27,6 +32,15 @@ def test_query_plan_schema_resource_loads():
     data = json.loads(raw)
     # JSON Schema 顶层应含类型或属性声明，确认非空且结构完整
     assert isinstance(data, dict) and data
+
+
+def test_skill_and_kernel_static_planning_resources_are_identical():
+    """双主线共享的意图规则和合同 Schema 必须逐字段一致，防止再次单边演进。"""
+    kernel_resources = files("opscli.query.services.planner.resources")
+    for name in ("intent_rules.json", "query_plan.schema.json"):
+        skill_data = json.loads((SKILL_DATA / name).read_text("utf-8"))
+        kernel_data = json.loads((kernel_resources / name).read_text("utf-8"))
+        assert kernel_data == skill_data, f"双主线静态资源漂移：{name}"
 
 
 def test_time_scope_relative_parse():
@@ -53,6 +67,20 @@ def test_time_scope_default_window_when_unmatched():
     scope = time_scope.parse("查销售额")
     assert scope["is_default"] is True
     assert scope["matched"] is False
+
+
+def test_time_scope_age_threshold_does_not_shadow_today():
+    """库龄“超6月”不是自然月；后文“当天”才是本次查询时间口径。"""
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    scope = time_scope.parse(
+        "超6月采购金额按181天以上库龄计算，当天查询销售",
+        today=date(2026, 7, 30),
+    )
+    assert (scope["start"], scope["end"]) == ("2026-07-30", "2026-07-30")
+    assert scope["label_zh"] == "今天"
 
 
 # ── 显式对比周期不得与主周期重合（生产环比失真）────────────────────────────

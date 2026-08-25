@@ -385,3 +385,108 @@ def test_generic_slot_terms_covers_platform_not_business_name(module):
     generic = module._generic_slot_terms()
     assert module._normalize_component_value("亚马逊") in generic
     assert module._normalize_component_value("傲彼瑞") not in generic
+
+
+# ---------------------------------------------------------------------------
+# 部门筛选的枚举驱动识别（反查兜裸值 + 宽后缀候选转澄清，E2E T5-3 回归）
+# ---------------------------------------------------------------------------
+
+# 当前账号授权的部门枚举：混合编号部门、无后缀地名部门、品牌型名与带后缀特殊名
+DEPT_ENUM_VALUES = ["项目二部", "项目九部", "宁波", "泛泰克", "孵化部"]
+
+
+def _dept_contract() -> dict:
+    """构造一个待解析部门筛选的 planned 合同骨架。"""
+    return {
+        "status": "planned",
+        "query_mode": "dataset_query",
+        "model_view": {"clarification_messages_zh": [], "next_action": "construct_query"},
+        "execution_ref": {
+            "dataset_alias": "ds_instant",
+            "filter_components": [
+                {
+                    "field_name": "dept_name",
+                    "label_zh": "部门",
+                    "component_dataset_alias": "ds_dept",
+                    "component_table_id": 48,
+                }
+            ],
+            "query_template": {
+                "tableId": 1,
+                "dimensions": [],
+                "metrics": [],
+                "filters": [],
+            },
+        },
+    }
+
+
+def _resolve_dept(module, query: str, monkeypatch) -> dict:
+    """按两版各自的内部签名解析部门筛选，枚举固定返回 DEPT_ENUM_VALUES。"""
+    contract = _dept_contract()
+    if module is kernel_query_plan:
+        return module._resolve_component_filters(
+            contract, query, lambda *_a, **_k: DEPT_ENUM_VALUES, auto_enum=True
+        )
+
+    def fake_enum(*_args, **_kwargs):
+        return DEPT_ENUM_VALUES
+
+    def fake_group(_table_id, field_names, **_kwargs):
+        return {
+            name: (DEPT_ENUM_VALUES if name == "dept_name" else [])
+            for name in field_names
+        }
+
+    monkeypatch.setattr(skill_query_plan, "_auto_enum_component_values", fake_enum)
+    monkeypatch.setattr(skill_query_plan, "_auto_enum_component_field_group", fake_group)
+    return module._resolve_component_filters(contract, query, auto_enum=True)
+
+
+def _dept_filters(contract: dict) -> list:
+    template = (contract.get("execution_ref") or {}).get("query_template") or {}
+    return [
+        item for item in template.get("filters") or [] if item.get("field") == "dept_name"
+    ]
+
+
+@BOTH_VERSIONS
+def test_bare_department_value_resolved_by_reverse_lookup(module, monkeypatch):
+    """无后缀部门裸值（「宁波」）必须由授权枚举反查兜住，不得静默全量。"""
+    contract = _resolve_dept(module, "近7天宁波的订单量", monkeypatch)
+    assert contract["status"] == "planned"
+    assert _dept_filters(contract) == [
+        {"field": "dept_name", "operator": "=", "value": "宁波"}
+    ]
+
+
+@BOTH_VERSIONS
+def test_brandlike_department_value_resolved_by_reverse_lookup(module, monkeypatch):
+    """品牌型无后缀部门名（「泛泰克」）同样由反查唯一锁定。"""
+    contract = _resolve_dept(module, "近7天泛泰克的订单量", monkeypatch)
+    assert contract["status"] == "planned"
+    assert _dept_filters(contract) == [
+        {"field": "dept_name", "operator": "=", "value": "泛泰克"}
+    ]
+
+
+@BOTH_VERSIONS
+def test_unknown_suffixed_department_requires_clarification(module, monkeypatch):
+    """虚构部门「魔法部」不在授权枚举中：必须转澄清，不得静默放大为全量。
+
+    E2E T5-3 回归锚点：原先宽后缀形态抽不到候选，「魔法部」被当成没有
+    筛选意图直接放行，查询悄悄变成全部门口径。
+    """
+    contract = _resolve_dept(module, "近7天魔法部的订单量", monkeypatch)
+    assert contract["status"] == "clarify_required"
+    assert "query_template" not in contract["execution_ref"]
+    message = " ".join(contract["model_view"]["clarification_messages_zh"])
+    assert "魔法部" in message
+
+
+@BOTH_VERSIONS
+def test_generic_suffix_words_do_not_trigger_department_clarify(module, monkeypatch):
+    """「全部」这类以「部」结尾的通用词在停用词表内，不得误判成部门候选。"""
+    contract = _resolve_dept(module, "近7天全部渠道的订单量", monkeypatch)
+    assert contract["status"] == "planned"
+    assert _dept_filters(contract) == []

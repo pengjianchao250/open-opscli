@@ -39,7 +39,7 @@ def test_server_default_page_is_completed(monkeypatch):
     """不带 limit 且只回首页时，执行器必须重查补齐到 total_count。"""
     calls: list[dict] = []
 
-    def fake_run(_table_id, payload):
+    def fake_run(_table_id, payload, **_kwargs):
         calls.append(payload)
         return _response(_rows(38), 38)
 
@@ -77,7 +77,7 @@ def test_no_completion_when_rows_already_full(monkeypatch):
 def test_failed_completion_is_flagged_not_silently_partial(monkeypatch):
     """补齐失败必须显式标记，绝不能把首页当全量交出去。"""
 
-    def boom(_table_id, _payload):
+    def boom(_table_id, _payload, **_kwargs):
         raise RuntimeError("opscli_exec_failed:boom")
 
     monkeypatch.setattr(run_query, "_run_opscli", boom)

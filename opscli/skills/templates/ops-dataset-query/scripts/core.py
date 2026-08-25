@@ -1,22 +1,85 @@
 """ops-dataset-query Skill 的核心工具函数。
 
-提供 CSV 加载、过滤、搜索打分、数据目录发现、本地索引加载、
+提供 CSV 加载、数据目录发现、本地索引加载、
 字段解析、自动升级兜底和数值转换格式化等基础能力，
-供 search.py、chart_map.py、chart_analyze.py、excel_export.py 等复用。
+供 chart_map.py、chart_analyze.py、excel_export.py 等复用。
 """
 
 from __future__ import annotations
 
 import csv
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
-# CSV 加载与搜索
+# 跨平台编码兜底（Windows GBK 环境）
+# ---------------------------------------------------------------------------
+
+
+def force_utf8_stdio() -> None:
+    """Windows 上把本进程 stdout/stderr 切成 UTF-8，避免中文输出被 GBK 编码。
+
+    为什么需要：Windows 管道场景下 Python 默认用 locale 编码（cp936/GBK）写 stdout，
+    调用方（Codex / Claude Code 等 Agent）按 UTF-8 读会得到乱码；
+    输出中一旦出现 GBK 字符集外的字符还会直接抛 UnicodeEncodeError 中断脚本。
+    与 opscli/cli.py 的 Windows 兜底策略保持一致；非 Windows 平台不做任何处理。
+    """
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001 —— 兜底本身不能反过来打断主流程
+                pass
+
+
+def utf8_subprocess_kwargs() -> dict:
+    """返回调用 opscli 子进程时的文本参数，强制父子两端都走 UTF-8。
+
+    为什么需要：subprocess 的 text=True 在 Windows 上按 locale 编码（GBK）解码
+    子进程 stdout，而 opscli 输出的是 UTF-8，中文会触发
+    UnicodeDecodeError: 'gbk' codec can't decode byte 0xa6。
+
+    - encoding/errors：本进程按 UTF-8 解码，个别坏字节降级为替换符而不是崩溃
+    - PYTHONIOENCODING：强制子进程按 UTF-8 输出，兼容尚未做 stdout 兜底的旧版 opscli
+
+    Returns:
+        可直接展开到 subprocess.run(**kwargs) 的参数字典（取代 text=True）
+    """
+    return {
+        "encoding": "utf-8",
+        "errors": "replace",
+        "env": {**os.environ, "PYTHONIOENCODING": "utf-8"},
+    }
+
+
+def read_text_auto(path: Path) -> str:
+    """按 BOM 自动识别编码读取文本文件（UTF-8 / UTF-8-BOM / UTF-16 LE/BE）。
+
+    为什么需要：Windows PowerShell 的 ``>`` 重定向与 ``Tee-Object`` 默认把文件
+    写成 UTF-16 LE with BOM，而执行器此前固定按 UTF-8 读取 plan/payload 文件，
+    直接抛 ``UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff``。
+    线上取数反馈实测形态：``query_plan.py ... > plan.json`` 落盘后
+    ``run_query.py --plan-file plan.json`` 读取即崩。
+
+    只做 BOM 探测、不做启发式猜测：无 BOM 时一律按 UTF-8（含 utf-8-sig 兼容），
+    保证既有 UTF-8 文件的行为完全不变。
+    """
+    data = path.read_bytes()
+    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+        # "utf-16" 编解码器按 BOM 自动定字节序并把 BOM 本身消费掉，
+        # 不能用 "utf-16-le/be"——那样 BOM 会被解码成正文开头的
+        return data.decode("utf-16")
+    # utf-8-sig 同时吃掉 UTF-8 BOM；无 BOM 的普通 UTF-8 行为不变
+    return data.decode("utf-8-sig")
+
+
+# ---------------------------------------------------------------------------
+# CSV 加载
 # ---------------------------------------------------------------------------
 
 
@@ -36,119 +99,6 @@ def load_csv_rows(path: Path) -> list[dict]:
         return []
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
-
-
-def filter_rows_by_dataset(rows: list[dict], dataset: str | None) -> list[dict]:
-    """按数据集别名过滤行。
-
-    Args:
-        rows: 原始字段行
-        dataset: 数据集别名；为空时不过滤
-
-    Returns:
-        过滤后的字段行
-    """
-    if not dataset:
-        return rows
-
-    normalized = dataset.strip().lower()
-    if not normalized:
-        return rows
-
-    return [
-        row for row in rows
-        if str(row.get("dataset_alias", "")).strip().lower() == normalized
-    ]
-
-
-def search_rows(rows: list[dict], keyword: str, limit: int = 10) -> list[dict]:
-    """按关键词搜索字段行，并返回按相关性排序后的结果。
-
-    排序策略使用简单加权打分，优先匹配：
-    - `field_name`
-    - `verbose_name`
-    - `description`
-    - 其他整行内容
-    """
-    normalized = keyword.strip().lower()
-    if not normalized:
-        return []
-
-    tokens = _tokenize(normalized)
-    if not tokens:
-        return []
-
-    scored: list[tuple[int, dict]] = []
-    for row in rows:
-        score = _score_row(row, normalized, tokens)
-        if score <= 0:
-            continue
-        scored.append((score, row))
-
-    scored.sort(
-        key=lambda item: (
-            -item[0],
-            str(item[1].get("dataset_alias", "")),
-            str(item[1].get("field_name", "")),
-        )
-    )
-
-    return [row for _, row in scored[: max(limit, 0)]]
-
-
-def _tokenize(value: str) -> list[str]:
-    """将搜索词切分为 token。"""
-    return [token for token in re.split(r"[\s_\-./]+", value.lower()) if token]
-
-
-def _score_row(row: dict, keyword: str, tokens: list[str]) -> int:
-    """为单行结果打分。"""
-    field_name = str(row.get("field_name", "")).lower()
-    verbose_name = str(row.get("verbose_name", "")).lower()
-    global_alias = str(row.get("global_alias", "")).lower()
-    description = str(row.get("description", "")).lower()
-    dataset_alias = str(row.get("dataset_alias", "")).lower()
-    dataset_name = str(row.get("dataset_name", "")).lower()
-    fulltext = " ".join(str(value).lower() for value in row.values())
-
-    score = 0
-
-    # 精确/短字段优先
-    if keyword == field_name:
-        score += 120
-    if keyword == global_alias:
-        score += 115
-    if keyword == verbose_name:
-        score += 100
-    if keyword == dataset_alias:
-        score += 40
-
-    # 连续子串匹配
-    if keyword in field_name:
-        score += 60
-    if keyword in global_alias:
-        score += 55
-    if keyword in verbose_name:
-        score += 45
-    if keyword in dataset_name:
-        score += 20
-    if keyword in description:
-        score += 10
-
-    # token 逐项匹配
-    score += _token_match_score(field_name, tokens, 16)
-    score += _token_match_score(global_alias, tokens, 14)
-    score += _token_match_score(verbose_name, tokens, 12)
-    score += _token_match_score(dataset_name, tokens, 6)
-    score += _token_match_score(description, tokens, 4)
-    score += _token_match_score(fulltext, tokens, 2)
-
-    return score
-
-
-def _token_match_score(text: str, tokens: list[str], weight: int) -> int:
-    """计算 token 命中的加权分数。"""
-    return sum(weight for token in tokens if token in text)
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +135,9 @@ def discover_data_dir(skills_dir: str | None = None) -> Path | None:
     current = Path.cwd()
     candidates.extend([
         current / ".claude" / "skills",
+        # e2b 沙箱 SDK 的技能挂载点是 cwd/.agents/<技能名>，显式纳入候选
+        current / ".agents",
+        home / ".agents",
         home / ".claude" / "skills",
         home / ".openclaw" / "skills",
         home / ".codex" / "skills",
@@ -283,7 +236,8 @@ def try_upgrade(data_dir: Path | None = None, *, caller: str = "core") -> bool:
     print(f"[{caller}] 本地字段映射未命中，尝试 opscli skills upgrade 更新数据...", file=sys.stderr)
     result = subprocess.run(
         ["opscli", "skills", "upgrade", "ops-dataset-query", "--force"],
-        capture_output=True, text=True, check=False,
+        capture_output=True, check=False,
+        **utf8_subprocess_kwargs(),
     )
     if result.returncode != 0:
         print(f"[{caller}] upgrade 失败: {result.stderr}", file=sys.stderr)

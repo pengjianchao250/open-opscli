@@ -170,7 +170,9 @@ def _current_email() -> str:
 def _resolve_request(request: str, query_file: str | None) -> str:
     """解析查询原文：优先读 --query-file（含特殊字符时用），否则用位置参数。"""
     if query_file:
-        text = Path(query_file).expanduser().read_text(encoding="utf-8").strip()
+        # utf-8-sig：PowerShell 的 Out-File / > 默认写 UTF-8 with BOM，
+        # 用 utf-8 读会把 BOM 当成正文首字符，请求原文因此带上不可见前缀
+        text = Path(query_file).expanduser().read_text(encoding="utf-8-sig").strip()
     else:
         text = (request or "").strip()
     if not text:
@@ -233,13 +235,13 @@ def flow(
     request: str = typer.Argument("", help="自然语言查询原文"),
     query_file: str | None = typer.Option(None, "--query-file", help="从 UTF-8 文件读取查询原文（含特殊字符时用）"),
     field: list[str] | None = typer.Option(None, "--field", help="补充点名字段，可重复"),
-    limit: int | None = typer.Option(None, "--limit", help="返回行数上限（不传则用后端默认 20）"),
+    limit: int | None = typer.Option(None, "--limit", help="返回行数上限（不传则自动补齐默认页，最多 5000 行）"),
     order_by: list[str] | None = typer.Option(None, "--order-by", help="排序：<结果字段>[:asc|desc]，可重复"),
     offset: int | None = typer.Option(None, "--offset", help="分页偏移（不传则后端默认 0）"),
-    result_dir: str | None = typer.Option(None, "--result-dir", help="结果落盘目录（能力延后，当前忽略）"),
+    result_dir: str | None = typer.Option(None, "--result-dir", help="结果落盘目录，传入后全量结果写入该目录（query_result_<时间戳>.json），返回结果仅含预览行"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
-    """一体化：规划 + planned 时执行一次取数（输出合同 + 结果）。"""
+    """一体化：只规划一次；单币种执行一次，多币种逐项取数。"""
     try:
         text = _resolve_request(request, query_file)
         email = _current_email()
@@ -345,8 +347,7 @@ def metadata(
     _emit(payload, pretty)
 
 
-# 【临时屏蔽】catalog 命令暂停对外暴露，恢复时取消下一行注释即可
-# @app.command("catalog")
+@app.command("catalog")
 def catalog(
     source: str = typer.Option("remote", "--source", help="数据来源: remote 或 local"),
     fallback_local: bool = typer.Option(True, "--fallback-local/--no-fallback-local", help="远端失败时回退本地缓存"),
@@ -374,8 +375,7 @@ def catalog(
     _emit(payload, pretty)
 
 
-# 【临时屏蔽】intent 命令暂停对外暴露，恢复时取消下一行注释即可
-# @app.command("intent")
+@app.command("intent")
 def intent(
     query: str = typer.Option(..., "--query", "-q", help="自然语言查询需求"),
     source: str = typer.Option("remote", "--source", help="数据来源: remote 或 local"),
@@ -411,12 +411,20 @@ def run(
     timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
     result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，stdout 仅输出预览"),
     save_result: bool = typer.Option(False, "--save-result", help="将查询结果保存到默认临时路径，stdout 仅输出预览"),
+    intent_code: str | None = typer.Option(None, "--intent-code", help="意图归因编码（意图路由选表时透传）"),
+    selection_source: str | None = typer.Option(None, "--selection-source", help="选表来源：planner/intent_route/local_fallback/user_specified"),
+    match_record_id: int | None = typer.Option(None, "--match-record-id", help="意图匹配记录ID（query intent 返回的 match_record_id）"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """执行查询并转发到服务端 cli-query。"""
     manager = QueryManager(timeout=timeout)
     try:
-        result = manager.run(payload_path=payload_path)
+        result = manager.run(
+            payload_path=payload_path,
+            intent_code=intent_code,
+            selection_source=selection_source,
+            match_record_id=match_record_id,
+        )
         payload = {
             "success": True,
             "command": "query run",
@@ -527,6 +535,10 @@ def build(
         None, "--data-comparison",
         help="数据对比：field,start_date,end_date（例: date_id,2026-03-01,2026-03-22）",
     ),
+    global_currency: str | None = typer.Option(
+        None, "--global-currency",
+        help="全局币种（仅支持 USD/GBP/CAD/EUR/JPY/CNY），按该币种换算展示金额；不传则由服务端回退用户默认配置",
+    ),
     run: bool = typer.Option(False, "--run", help="构造后立即执行查询"),
     timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
     result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，仅与 --run 同用生效"),
@@ -552,6 +564,7 @@ def build(
             "dry_run": dry_run,
             "output_path": output,
             "data_comparison": data_comparison,
+            "global_currency": global_currency,
             "skills_dir": skills_dir,
         }
         result = manager.build_and_run(**common_kwargs) if run else manager.build(**common_kwargs)
@@ -571,17 +584,102 @@ def build(
     _emit(payload, pretty)
 
 
+def _inner_result_error(result: object) -> dict | None:
+    """提取取数服务内层的失败信息（HTTP 200 + 外层 code=200 但内层 success=false）。
+
+    为什么必须单独处理：服务端有两层错误信封。外层 Laravel 信封的字段级原因在
+    error_details 里（已由 shared.http 透传），但取数引擎自己的校验失败是包在
+    成功的外层信封里返回的——`data.result.success=false`，真正的字段级原因埋在
+    `data.result.error.details.errors[]`。此前 CLI 对这种情况照样输出 success=true，
+    调用方看到「命令成功」却拿不到数据，只能自己去翻嵌套结构。
+    实测形态：limit 超上限时返回
+    `{"code":"VALIDATION_ERROR","message":"请求参数验证失败",
+      "details":{"errors":[{"field":"body.query.limit",
+                            "message":"Input should be less than or equal to 500000"}]}}`
+    """
+    if not isinstance(result, dict):
+        return None
+    inner = result.get("result")
+    if not isinstance(inner, dict) or inner.get("success") is not False:
+        return None
+    error = inner.get("error")
+    if not isinstance(error, dict):
+        error = {}
+    message = str(error.get("message") or "取数服务返回失败但未说明原因").strip()
+    reasons = _field_level_reasons(error.get("details"))
+    return {
+        "code": str(error.get("code") or "QUERY_SERVICE_ERROR"),
+        "message": f"{message}（{reasons}）" if reasons else message,
+        "details": error.get("details"),
+    }
+
+
+def _field_level_reasons(details: object) -> str:
+    """把取数引擎的 details.errors[] 压成一行可读原因。"""
+    if not isinstance(details, dict):
+        return ""
+    errors = details.get("errors")
+    if not isinstance(errors, (list, tuple)):
+        return ""
+    parts = []
+    for item in errors[:6]:
+        if not isinstance(item, dict):
+            continue
+        field = str(item.get("field") or "").strip()
+        text = str(item.get("message") or "").strip()
+        if field and text:
+            parts.append(f"{field}: {text}")
+        elif text:
+            parts.append(text)
+    return "；".join(parts)
+
+
+def _inline_json_hint(raw: str) -> str:
+    """内联 JSON 解析失败时给出可直接照做的替代命令。
+
+    为什么每次失败都要给替代方案：线上 3987 条取数反馈里有 447 条（11.2%、涉及 98 人、
+    近 30 天日均从 5.3 涨到 9.0）是内联 --json 在 PowerShell 下被引号与转义规则改写，
+    服务端收到的已不是合法 JSON。此前的提示只在「单引号开头」或「含双反斜杠且 win32」
+    两种窄条件下才出现，绝大多数用户看到的只有一句 JSON 语法错误位置，
+    完全不知道换一种传参方式就能绕开——于是同一个人反复踩、反复提反馈。
+    """
+    hints = []
+    if raw.lstrip().startswith("{'"):
+        hints.append("检测到单引号包裹的 JSON，JSON 规范只接受双引号")
+    if "\\\\" in raw:
+        hints.append("检测到双反斜杠，通常是 Shell 二次转义的痕迹")
+    prefix = ("\n  可能原因: " + "；".join(hints)) if hints else ""
+    return (
+        f"{prefix}"
+        "\n  建议改用文件或管道传参，可完全绕开 Shell 的引号与转义重写："
+        "\n    opscli query simple --table-id <ID> --payload payload.json --run"
+        "\n    Get-Content payload.json -Raw | opscli query simple --table-id <ID> --payload - --run"
+        "\n  payload.json 请存为 UTF-8（BOM 头已自动兼容）"
+    )
+
+
 @app.command("simple")
 def simple(
     table_id: int = typer.Option(..., "--table-id", help="数据集 ID"),
     dataset: str | None = typer.Option(None, "--dataset", help="dataset_alias 或 dataset_name，用于字段校验"),
-    payload_file: str | None = typer.Option(None, "--payload", help="简化查询 JSON 文件路径（与 --json 二选一）"),
+    payload_file: str | None = typer.Option(
+        None, "--payload",
+        help="简化查询 JSON 文件路径，传 - 表示从 stdin 读取（与 --json 二选一）；"
+             "Windows PowerShell 下请优先用本参数，内联 --json 会被引号转义破坏",
+    ),
     payload_json: str | None = typer.Option(None, "--json", help="简化查询 JSON 字符串（与 --payload 二选一）"),
     output: str | None = typer.Option(None, "--output", help="将 payload 写入指定文件"),
+    global_currency: str | None = typer.Option(
+        None, "--global-currency",
+        help="全局币种（仅支持 USD/GBP/CAD/EUR/JPY/CNY）；优先级高于 payload 内的 globalCurrency；不传则由服务端回退用户默认配置",
+    ),
     run: bool = typer.Option(False, "--run", help="构造后立即执行查询"),
     timeout: int | None = typer.Option(None, "--timeout", help="查询 HTTP 超时秒数，默认 120"),
     result_file: str | None = typer.Option(None, "--result-file", help="将查询结果保存到指定 JSON 文件，仅与 --run 同用生效"),
     save_result: bool = typer.Option(False, "--save-result", help="将查询结果保存到默认临时路径，仅与 --run 同用生效"),
+    intent_code: str | None = typer.Option(None, "--intent-code", help="意图归因编码（意图路由选表时透传）"),
+    selection_source: str | None = typer.Option(None, "--selection-source", help="选表来源：planner/intent_route/local_fallback/user_specified"),
+    match_record_id: int | None = typer.Option(None, "--match-record-id", help="意图匹配记录ID（query intent 返回的 match_record_id）"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """基于简化参数构造 simple query payload 并可选执行。"""
@@ -592,30 +690,35 @@ def simple(
 
         simple_params: dict = {}
         if payload_file:
-            pf = Path(payload_file).expanduser()
-            if not pf.exists():
-                raise InvalidPayloadError(f"payload 文件不存在: {pf}")
-            try:
-                simple_params = json.loads(pf.read_text(encoding="utf-8-sig"))
-            except json.JSONDecodeError as exc:
-                raise InvalidPayloadError(
-                    f"payload 文件 JSON 解析失败: {pf}\n"
-                    f"  错误: {exc}\n"
-                    f"  提示: 检查文件是否为有效 UTF-8 JSON，BOM 头已自动兼容"
-                ) from exc
+            # "-" 走 stdin：PowerShell 下 `$payload | opscli query simple --payload -`
+            # 比内联 --json 稳，管道不经历引号与转义重写
+            if payload_file.strip() == "-":
+                raw = sys.stdin.read()
+                try:
+                    simple_params = json.loads(raw.lstrip("﻿"))
+                except json.JSONDecodeError as exc:
+                    raise InvalidPayloadError(
+                        f"stdin 读入的 JSON 解析失败: {exc}\n"
+                        f"  提示: 确认管道内容是完整的 UTF-8 JSON 对象"
+                    ) from exc
+            else:
+                pf = Path(payload_file).expanduser()
+                if not pf.exists():
+                    raise InvalidPayloadError(f"payload 文件不存在: {pf}")
+                try:
+                    simple_params = json.loads(pf.read_text(encoding="utf-8-sig"))
+                except json.JSONDecodeError as exc:
+                    raise InvalidPayloadError(
+                        f"payload 文件 JSON 解析失败: {pf}\n"
+                        f"  错误: {exc}\n"
+                        f"  提示: 检查文件是否为有效 UTF-8 JSON，BOM 头已自动兼容"
+                    ) from exc
         elif payload_json:
             try:
                 simple_params = json.loads(payload_json)
             except json.JSONDecodeError as exc:
-                hint = ""
-                if payload_json.startswith("{'"):
-                    hint = "\n  提示: 检测到单引号包裹的 JSON，请改用双引号"
-                elif "\\\\" in payload_json and sys.platform == "win32":
-                    hint = (
-                        "\n  提示: Windows PowerShell 中 --json 内联传参容易因引号转义导致 JSON 被破坏"
-                        "\n  建议改用 --payload <文件路径> 传参，并使用 UTF-8 无 BOM 编码保存")
                 raise InvalidPayloadError(
-                    f"JSON 字符串解析失败: {exc}{hint}"
+                    f"JSON 字符串解析失败: {exc}{_inline_json_hint(payload_json)}"
                 ) from exc
 
         kwargs: dict[str, object] = {"table_id": table_id, "dataset_alias": dataset}
@@ -626,10 +729,15 @@ def simple(
             "filters": "filters",
             "dataComparison": "data_comparison",
             "orderBy": "order_by",
+            "globalCurrency": "global_currency",
         }
         for key, kwarg_key in key_map.items():
             if key in simple_params:
                 kwargs[kwarg_key] = simple_params[key]
+
+        # --global-currency 命令行选项优先级高于 payload 内的 globalCurrency
+        if global_currency:
+            kwargs["global_currency"] = global_currency
 
         # payload 中 limit/offset 为 null 时视为"未指定"，跳过不透传：
         # 规划器模板可能带 "limit": null，若原样透传，None 会落入 build_simple 的
@@ -644,12 +752,28 @@ def simple(
             kwargs["output_path"] = output
         kwargs["validate_fields"] = True
 
-        result = manager.build_simple_and_run(**kwargs) if run else manager.build_simple(**kwargs)
+        result = (
+            manager.build_simple_and_run(
+                intent_code=intent_code,
+                selection_source=selection_source,
+                match_record_id=match_record_id,
+                **kwargs,
+            )
+            if run
+            else manager.build_simple(**kwargs)
+        )
+        command_name = "query simple-run" if run else "query simple"
+        # 取数服务会在 HTTP 200 + 外层 code=200 的信封里返回失败，真正的字段级原因埋在
+        # data.result.error.details.errors[]。此前 CLI 对这种情况照样报 success=true，
+        # 调用方看到「命令成功」却拿不到数据。此处提取为顶层 error 并以非零码退出。
+        # 注意：不能在 try 内 emit 后 raise typer.Exit——typer.Exit 继承自 RuntimeError，
+        # 会被下面的 except Exception 接住而重复输出一遍。
+        inner_error = _inner_result_error(result) if run else None
         payload = {
-            "success": True,
-            "command": "query simple-run" if run else "query simple",
+            "success": not inner_error,
+            "command": command_name,
             "data": result,
-            "error": None,
+            "error": inner_error,
         }
         # 仅执行查询时才有结果可落盘，纯构造 payload 时忽略保存参数
         if run:
@@ -659,3 +783,5 @@ def simple(
         raise typer.Exit(1)
 
     _emit(payload, pretty)
+    if payload.get("error"):
+        raise typer.Exit(1)
