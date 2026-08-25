@@ -7,7 +7,7 @@ Python/完整二进制产物，也没有可由 MCP 发现的规范入口。实�
 宿主页面桥接和浏览器扩展上下文，无法由 opscli 服务端直接执行。
 
 **改动点**：
-- 新增只读 MCP 工具 `amazon_reviews_spec_must_read`，返回包内
+- 新增与 Skill 同名的只读 MCP 工具 `ops_amazon_reviews`，返回包内
   `SKILL_MCP.md`，不提供、调用或代理 `amazon_reviews_get`。
 - 通用 MCP Server 注册该工具，并加入未登录也可读取的静态规范白名单。
 - `ops-amazon-reviews` 补充 MCP/Page Tool 调用顺序和能力边界，版本升至

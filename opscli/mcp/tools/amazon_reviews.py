@@ -18,7 +18,7 @@ def _amazon_reviews_skill_dir() -> Path:
     return get_builtin_templates_dir() / "ops-amazon-reviews"
 
 
-async def amazon_reviews_spec_must_read() -> dict:
+async def ops_amazon_reviews() -> dict:
     """读取 Amazon 评论页面工具使用规范。
 
     本工具只返回静态规范，不会提供、调用或代理页面工具
@@ -30,7 +30,7 @@ async def amazon_reviews_spec_must_read() -> dict:
             FileNotFoundError(
                 "Amazon 评论 MCP 规范文档不存在，请检查 opscli 安装是否完整。"
             ),
-            tool="MCP → amazon_reviews_spec_must_read()",
+            tool="MCP → ops_amazon_reviews()",
         )
 
     try:
@@ -42,10 +42,10 @@ async def amazon_reviews_spec_must_read() -> dict:
             }
         )
     except Exception as exc:
-        return _err(exc, tool="MCP → amazon_reviews_spec_must_read()")
+        return _err(exc, tool="MCP → ops_amazon_reviews()")
 
 
-_ALL_TOOLS = [amazon_reviews_spec_must_read]
+_ALL_TOOLS = [ops_amazon_reviews]
 
 
 def register(mcp) -> None:

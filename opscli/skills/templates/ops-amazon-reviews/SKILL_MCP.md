@@ -1,6 +1,6 @@
 # Amazon 评论页面工具 MCP 规范
 
-`amazon_reviews_spec_must_read` 只返回本静态规范，不提供、执行或代理页面工具
+`ops_amazon_reviews` 只返回本静态规范，不提供、执行或代理页面工具
 `amazon_reviews_get`。真实评论读取必须由当前宿主注入该页面工具。
 
 ## 调用条件
@@ -16,7 +16,7 @@ Rufus、商品页基础数据或其他评论数据源。
 
 ## 调用顺序
 
-1. 每次会话首次执行前读取一次 `amazon_reviews_spec_must_read`。
+1. 每次会话首次执行前读取一次 `ops_amazon_reviews`。
 2. 规范化并校验单个 ASIN。
 3. 只调用一次 `amazon_reviews_get({"asin":"<NORMALIZED_ASIN>"})`。
 4. 仅使用本次页面工具响应，不自行轮询、重试或访问底层接口。

@@ -1,6 +1,6 @@
 ---
 name: ops-amazon-reviews
-description: 获取指定 Amazon ASIN 的评论信息。仅当用户明确提出获取、查看或分析该 ASIN 评论，且当前宿主已发现可用的页面工具 `amazon_reviews_get` 时使用；MCP 环境首次执行前读取 `amazon_reviews_spec_must_read`，不强制调用，不因普通商品咨询、商品上下文或泛评论话题自动触发。
+description: 获取指定 Amazon ASIN 的评论信息。仅当用户明确提出获取、查看或分析该 ASIN 评论，且当前宿主已发现可用的页面工具 `amazon_reviews_get` 时使用；MCP 环境首次执行前读取 `ops_amazon_reviews`，不强制调用，不因普通商品咨询、商品上下文或泛评论话题自动触发。
 ---
 
 # ops-amazon-reviews
@@ -9,7 +9,7 @@ description: 获取指定 Amazon ASIN 的评论信息。仅当用户明确提出
 
 ## MCP 规范入口
 
-MCP 环境提供 `amazon_reviews_spec_must_read` 静态规范工具。每次会话首次执行评论读取前，若该工具可见，调用一次以读取当前包内 `SKILL_MCP.md`。该工具不提供、调用或代理 `amazon_reviews_get`，不能替代页面上下文。
+MCP 环境提供与 Skill 同名的 `ops_amazon_reviews` 静态规范工具。每次会话首次执行评论读取前，若该工具可见，调用一次以读取当前包内 `SKILL_MCP.md`。该工具不提供、调用或代理 `amazon_reviews_get`，不能替代页面上下文。
 
 真实评论数据仍只能来自当前宿主注入的页面工具 `amazon_reviews_get`。规范工具可见但页面工具不可见时，仍须停止并说明“浏览器插件评论能力不可用”，不得声称已具备纯 MCP 评论采集能力。
 
@@ -27,7 +27,7 @@ MCP 环境提供 `amazon_reviews_spec_must_read` 静态规范工具。每次会�
 - 没有 ASIN 的商品名、URL、SKU、UPC/EAN 或其他条码。
 - 用户只提到“看看这个商品”，但没有要求评论信息。
 
-用户明确提出评论需求但 `amazon_reviews_get` 不可见时，直接说明“浏览器插件评论能力不可用”，不得切换 Canopy、Rufus、商品页基础数据或其他评论数据源。`amazon_reviews_spec_must_read` 可见不代表页面工具可见。
+用户明确提出评论需求但 `amazon_reviews_get` 不可见时，直接说明“浏览器插件评论能力不可用”，不得切换 Canopy、Rufus、商品页基础数据或其他评论数据源。`ops_amazon_reviews` 可见不代表页面工具可见。
 
 ## 前置条件
 
@@ -50,7 +50,7 @@ MCP 环境提供 `amazon_reviews_spec_must_read` 静态规范工具。每次会�
 ## 执行流程
 
 1. 判断触发范围的两个条件；任一条件不满足时停止，不调用工具。
-2. MCP 环境首次执行前，若 `amazon_reviews_spec_must_read` 可见，调用一次读取静态规范；该步骤不产生评论数据。
+2. MCP 环境首次执行前，若 `ops_amazon_reviews` 可见，调用一次读取静态规范；该步骤不产生评论数据。
 3. 规范化并校验单个 ASIN。
 4. 在当前上下文中再次确认 `amazon_reviews_get` 可见后，只调用一次：
 

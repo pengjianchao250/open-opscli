@@ -17,7 +17,7 @@ def _run(coro):
 
 def test_amazon_reviews_spec_returns_packaged_rules():
     """规范工具应返回稳定逻辑来源和页面工具边界。"""
-    result = _run(amazon_reviews_tools.amazon_reviews_spec_must_read())
+    result = _run(amazon_reviews_tools.ops_amazon_reviews())
 
     assert result["success"] is True
     assert result["error"] is None
@@ -36,12 +36,12 @@ def test_amazon_reviews_spec_reports_missing_package_file(monkeypatch, tmp_path:
         lambda: tmp_path / "missing",
     )
 
-    result = _run(amazon_reviews_tools.amazon_reviews_spec_must_read())
+    result = _run(amazon_reviews_tools.ops_amazon_reviews())
 
     assert result["success"] is False
     assert result["error"]["code"] == "FileNotFoundError"
     assert str(tmp_path) not in result["error"]["message"]
-    assert "amazon_reviews_spec_must_read" in str(result["feedback"])
+    assert "ops_amazon_reviews" in str(result["feedback"])
 
 
 def test_amazon_reviews_spec_exposes_empty_input_schema_only():
@@ -54,7 +54,7 @@ def test_amazon_reviews_spec_exposes_empty_input_schema_only():
 
     tools = _run(scenario())
 
-    assert [tool.name for tool in tools] == ["amazon_reviews_spec_must_read"]
+    assert [tool.name for tool in tools] == ["ops_amazon_reviews"]
     assert tools[0].inputSchema == {
         "additionalProperties": False,
         "properties": {},

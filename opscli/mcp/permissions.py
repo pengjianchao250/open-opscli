@@ -61,7 +61,7 @@ BASE_DASHBOARD_SPEC_TOOLS: frozenset[str] = frozenset({
 
 # Amazon 评论规范只读取包内静态文档，不依赖登录态或用户业务数据。
 BASE_AMAZON_REVIEW_SPEC_TOOLS: frozenset[str] = frozenset({
-    "amazon_reviews_spec_must_read",
+    "ops_amazon_reviews",
 })
 
 BASE_ALWAYS_ALLOWED_TOOLS = (

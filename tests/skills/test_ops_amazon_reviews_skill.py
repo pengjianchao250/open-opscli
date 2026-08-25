@@ -81,7 +81,7 @@ def test_description_has_explicit_two_condition_gate_and_no_forced_trigger():
     assert "获取指定 Amazon ASIN 的评论信息" in description
     assert "用户明确提出获取、查看或分析该 ASIN 评论" in description
     assert "当前宿主已发现可用的页面工具 `amazon_reviews_get`" in description
-    assert "MCP 环境首次执行前读取 `amazon_reviews_spec_must_read`" in description
+    assert "MCP 环境首次执行前读取 `ops_amazon_reviews`" in description
     assert "普通商品咨询、商品上下文或泛评论话题自动触发" in description
 
 
@@ -110,7 +110,7 @@ def test_documented_asin_normalization_contract(value: str, valid: bool):
 def test_public_tool_contract_and_runtime_boundary():
     """公开工具仅有 asin，底层扩展和其他数据源不得由 Skill 调用。"""
     text = _skill_text()
-    assert "`amazon_reviews_spec_must_read` 静态规范工具" in text
+    assert "`ops_amazon_reviews` 静态规范工具" in text
     assert "该工具不提供、调用或代理 `amazon_reviews_get`" in text
     assert "不得声称已具备纯 MCP 评论采集能力" in text
     assert "amazon_reviews_get" in text
@@ -139,7 +139,7 @@ def test_mcp_spec_matches_page_tool_contract():
     """MCP 精简规范必须保留触发、参数和不可信数据边界。"""
     text = MCP_SPEC_PATH.read_text(encoding="utf-8")
 
-    assert "`amazon_reviews_spec_must_read` 只返回本静态规范" in text
+    assert "`ops_amazon_reviews` 只返回本静态规范" in text
     assert "当前宿主工具列表中存在 `amazon_reviews_get`" in text
     assert "^[A-Z0-9]{10}$" in text
     assert 'amazon_reviews_get({"asin":"<NORMALIZED_ASIN>"})' in text
