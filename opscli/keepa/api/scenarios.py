@@ -26,6 +26,13 @@ DOMAIN_CODES: dict[str, int] = {
     "BR": 12,
 }
 
+DEAL_PRICE_TYPES = frozenset(
+    {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+        11, 12, 13, 14, 16, 17, 18, 32, 33, 34, 35,
+    }
+)
+
 ScenarioBuilder = Callable[[dict[str, Any], str], dict[str, Any]]
 Estimator = Callable[[dict[str, Any]], int | None]
 
@@ -117,7 +124,7 @@ def _product_params(params: dict[str, Any], site: str) -> dict[str, Any]:
         "history": True,
     }
     _copy_int(payload, params, "stats", minimum=0)
-    _copy_int(payload, params, "offers", minimum=0)
+    _copy_int(payload, params, "offers", minimum=20, maximum=100)
     _copy_int(payload, params, "update", minimum=0)
     _copy_int(payload, params, "days", minimum=1)
     _copy_bool(payload, params, "history")
@@ -245,6 +252,21 @@ def _deals_params(params: dict[str, Any], site: str) -> dict[str, Any]:
     if "domainId" in selection:
         selection["domainId"] = _required_int(selection["domainId"], "selection.domainId", minimum=1)
     selection.setdefault("domainId", int(normalize_domain(site)))
+    price_types = selection.get("priceTypes")
+    if not isinstance(price_types, list):
+        raise KeepaConfigError(
+            "deals 场景 selection.priceTypes 必须且只能包含 1 个价格类型"
+        )
+    if len(price_types) != 1:
+        raise KeepaConfigError("deals 场景 selection.priceTypes 只能包含 1 个价格类型")
+    price_type = _required_int(
+        price_types[0], "selection.priceTypes[0]", minimum=0
+    )
+    if price_type not in DEAL_PRICE_TYPES:
+        raise KeepaConfigError(
+            f"deals 场景 selection.priceTypes 不支持索引 {price_type}"
+        )
+    selection["priceTypes"] = [price_type]
     return {
         "domain": normalize_domain(site),
         "selection": json.dumps(selection, ensure_ascii=False, separators=(",", ":")),

@@ -123,7 +123,7 @@ opscli keepa export <job_id>
 
 | 用户意图 | scenario | 必填参数 | 常用可选参数 |
 | --- | --- | --- | --- |
-| 查商品详情、查 ASIN、查价格历史 | `product` | `asin/asins` 或 `code/codes` | `stats`, `history`, `offers`, `buybox`, `rating`, `days`, `update`, `code_limit`, `historical_variations` |
+| 查商品详情、查 ASIN、查价格历史 | `product` | `asin/asins` 或 `code/codes` | `stats`, `history`, `offers`（20-100）, `buybox`, `rating`, `days`, `update`, `code_limit`, `historical_variations` |
 | 关键词搜商品 | `product-search` | `keyword` 或 `term` | `stats`, `history`, `update`, `rating`, `asins_only` |
 | 按条件筛商品 | `product-finder` | `selection` 或至少 1 个筛选字段 | `stats` |
 | 查类目关键词 | `category-search` | `keyword` 或 `term` | 无 |
@@ -132,7 +132,7 @@ opscli keepa export <job_id>
 | 按条件筛卖家 | `seller-finder` | `selection` 或至少 1 个筛选字段 | `selection.perPage`, `selection.sort` |
 | 查头部卖家 | `top-seller` | 无 | 无 |
 | 查热销榜 | `bestsellers` | `category` 或 `productGroup` | `range`, `month`+`year`, `variations`, `sublist` |
-| 查折扣商品 | `deals` | 无固定必填，建议给 `selection` | `selection` |
+| 查近期价格/排名变化商品 | `deals` | `selection.priceTypes`，且只能有 1 个索引 | `selection` 的筛选、排序和分页字段 |
 | 查秒杀 | `lightning-deals` | 无 | `asin`, `state` |
 
 ## 常用示例
@@ -165,6 +165,12 @@ opscli keepa run seller --site US --params '{"seller":"A2L77EE7U53NWQ","storefro
 
 ```powershell
 opscli keepa run bestsellers --site US --params '{"category":"172282"}'
+```
+
+查询 Buy Box 价格变化商品：
+
+```powershell
+opscli keepa run deals --site US --params '{"selection":{"priceTypes":[18],"page":0}}'
 ```
 
 ## 回复规则

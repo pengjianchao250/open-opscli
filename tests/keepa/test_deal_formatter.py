@@ -15,7 +15,13 @@ def test_deal_formatter_derives_main_fields_and_metric_rows():
                 "creationDate": 7588958,
                 "lightningEnd": 7588960,
                 "warehouseCondition": 3,
-                "current": [1299, 1399, -1, 12345] + [-1] * 12 + [45, 456, 1499],
+                "current": [1299, 1399, -1, 12345]
+                + [-1] * 4
+                + [1099]
+                + [-1] * 7
+                + [45, 456, 1499]
+                + [-1] * 14
+                + [1199],
                 "currentSince": [7588958, 7588959],
                 "deltaLast": [-100, -200, -1, 500],
                 "delta": [[-100, -200, -1, 500]],
@@ -44,6 +50,8 @@ def test_deal_formatter_derives_main_fields_and_metric_rows():
     assert deal["currentRating"] == 4.5
     assert deal["currentReviewCount"] == 456
     assert deal["currentBuyBoxPrice"] == 14.99
+    assert deal["currentLightningDealPrice"] == 10.99
+    assert deal["currentPrimeExclusivePrice"] == 11.99
     assert deal["dealRaw"]["asin"] == "B0088PUEPK"
 
     current_since = next(

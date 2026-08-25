@@ -43,7 +43,6 @@ from opscli.keepa.search_insights_formatter import (
     format_search_insights_export,
 )
 from opscli.keepa.seller_formatter import FormattedSellerExport, format_seller_export
-from opscli.keepa.summary import summarize_rows
 from opscli.keepa.time import add_keepa_time_conversions
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 from opscli.shared.integration_accounts import IntegrationAccountClient
@@ -206,8 +205,84 @@ class KeepaApiManager:
         _write_json(raw_path, raw_payload)
 
         raw_rows = extract_rows(raw_response)
+        domain_id = normalized_params.get("domain")
+        category_parents = raw_response.get("categoryParents")
+        parent_rows = (
+            list(category_parents.values())
+            if isinstance(category_parents, dict)
+            else []
+        )
+        product_rows_are_objects = any(isinstance(row, dict) for row in raw_rows)
+        formatted = _FormattedResponseExports(
+            product=(
+                format_product_export(
+                    raw_rows,
+                    site=site,
+                    domain_id=domain_id,
+                    offers_requested="offers" in normalized_params,
+                )
+                if request.scenario == "product"
+                or (
+                    request.scenario == "product-search"
+                    and product_rows_are_objects
+                )
+                else None
+            ),
+            category=(
+                format_category_export(
+                    raw_rows,
+                    site=site,
+                    domain_id=domain_id,
+                    parent_rows=parent_rows,
+                )
+                if request.scenario in {"category-lookup", "category-search"}
+                else None
+            ),
+            seller=(
+                format_seller_export(raw_rows, site=site, domain_id=domain_id)
+                if request.scenario == "seller"
+                else None
+            ),
+            lightning=(
+                format_lightning_deal_export(
+                    raw_rows, site=site, domain_id=domain_id
+                )
+                if request.scenario == "lightning-deals"
+                else None
+            ),
+            search_insights=(
+                format_search_insights_export(
+                    raw_response.get("searchInsights"),
+                    site=site,
+                    domain_id=domain_id,
+                    query_name=_search_insights_query_name(request.params),
+                )
+                if request.scenario == "product-finder"
+                else None
+            ),
+            best_sellers=(
+                format_best_sellers_export(
+                    raw_response.get("bestSellersList"),
+                    site=site,
+                    domain_id=domain_id,
+                    category_id=normalized_params.get("category"),
+                )
+                if request.scenario == "bestsellers"
+                else None
+            ),
+            deal=(
+                format_deal_export(raw_rows, site=site, domain_id=domain_id)
+                if request.scenario == "deals"
+                else None
+            ),
+        )
+        primary_rows = formatted.primary_rows()
+        data = (
+            primary_rows
+            if primary_rows is not None
+            else add_keepa_time_conversions(raw_rows)
+        )
         if export_format == "json":
-            data = summarize_rows(raw_rows)
             export = export_response_to_json(
                 response=raw_response,
                 output_path=root_dir / f"{job_id}.json",
@@ -215,78 +290,6 @@ class KeepaApiManager:
                 site=site,
             )
         else:
-            domain_id = normalized_params.get("domain")
-            category_parents = raw_response.get("categoryParents")
-            parent_rows = (
-                list(category_parents.values())
-                if isinstance(category_parents, dict)
-                else []
-            )
-            product_rows_are_objects = any(isinstance(row, dict) for row in raw_rows)
-            formatted = _FormattedResponseExports(
-                product=(
-                    format_product_export(raw_rows, site=site, domain_id=domain_id)
-                    if request.scenario == "product"
-                    or (
-                        request.scenario == "product-search"
-                        and product_rows_are_objects
-                    )
-                    else None
-                ),
-                category=(
-                    format_category_export(
-                        raw_rows,
-                        site=site,
-                        domain_id=domain_id,
-                        parent_rows=parent_rows,
-                    )
-                    if request.scenario in {"category-lookup", "category-search"}
-                    else None
-                ),
-                seller=(
-                    format_seller_export(raw_rows, site=site, domain_id=domain_id)
-                    if request.scenario == "seller"
-                    else None
-                ),
-                lightning=(
-                    format_lightning_deal_export(
-                        raw_rows, site=site, domain_id=domain_id
-                    )
-                    if request.scenario == "lightning-deals"
-                    else None
-                ),
-                search_insights=(
-                    format_search_insights_export(
-                        raw_response.get("searchInsights"),
-                        site=site,
-                        domain_id=domain_id,
-                        query_name=_search_insights_query_name(request.params),
-                    )
-                    if request.scenario == "product-finder"
-                    else None
-                ),
-                best_sellers=(
-                    format_best_sellers_export(
-                        raw_response.get("bestSellersList"),
-                        site=site,
-                        domain_id=domain_id,
-                        category_id=normalized_params.get("category"),
-                    )
-                    if request.scenario == "bestsellers"
-                    else None
-                ),
-                deal=(
-                    format_deal_export(raw_rows, site=site, domain_id=domain_id)
-                    if request.scenario == "deals"
-                    else None
-                ),
-            )
-            primary_rows = formatted.primary_rows()
-            data = (
-                primary_rows
-                if primary_rows is not None
-                else add_keepa_time_conversions(raw_rows)
-            )
             export_rows = (
                 primary_rows
                 if primary_rows is not None

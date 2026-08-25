@@ -75,6 +75,7 @@ PRICE_TYPES: dict[int, PriceTypeConfig] = {
     17: PriceTypeConfig("COUNT_REVIEWS", "count", "ReviewCount"),
     18: PriceTypeConfig("BUY_BOX_SHIPPING", "price", "BuyBox"),
     32: PriceTypeConfig("BUY_BOX_USED_SHIPPING", "price", "BuyBoxUsed"),
+    33: PriceTypeConfig("PRIME_EXCL", "price", "PrimeExclusive"),
     34: PriceTypeConfig("COUNT_NEW_FBA", "count", "NewFbaOfferCount"),
     35: PriceTypeConfig("COUNT_NEW_FBM", "count", "NewFbmOfferCount"),
 }
@@ -99,11 +100,13 @@ COMMON_ARRAY_COLUMNS: dict[tuple[str, int], str] = {
     ("current", 1): "statsCurrentNewPrice",
     ("current", 2): "statsCurrentUsedPrice",
     ("current", 3): "statsCurrentSalesRank",
+    ("current", 8): "statsCurrentLightningDealPrice",
     ("current", 10): "statsCurrentNewFbaPrice",
     ("current", 11): "statsCurrentNewOfferCount",
     ("current", 16): "statsCurrentRating",
     ("current", 17): "statsCurrentReviewCount",
     ("current", 18): "statsCurrentBuyBoxPrice",
+    ("current", 33): "statsCurrentPrimeExclusivePrice",
     ("current", 34): "statsCurrentNewFbaOfferCount",
     ("current", 35): "statsCurrentNewFbmOfferCount",
     ("avg30", 1): "statsAvg30NewPrice",
@@ -184,7 +187,19 @@ def _main_fields(stats: dict[str, Any], *, asin: str, currency: CurrencyConfig) 
             _add_money_fields(fields, f"stats{_pascal(field)}", stats.get(field), currency)
     for field in PERCENT_FIELDS:
         if field in stats:
-            fields[f"stats{_pascal(field)}Display"] = _format_percent(stats.get(field))
+            value = _available_numeric(stats.get(field))
+            fields[f"stats{_pascal(field)}"] = value
+            fields[f"stats{_pascal(field)}Display"] = _format_percent(value)
+    for field in (
+        "buyBoxSavingBasisType",
+        "buyBoxIsPrimeExclusive",
+        "buyBoxIsPrimeEligible",
+    ):
+        if field in stats:
+            value = stats.get(field)
+            if field.startswith("buyBoxIs"):
+                value = _available_boolean(value)
+            fields[f"stats{_pascal(field)}"] = value
     for field in ("salesRankDrops30", "salesRankDrops90", "salesRankDrops180", "salesRankDrops365"):
         if field in stats:
             fields[f"stats{_pascal(field)}"] = stats.get(field)
@@ -217,6 +232,8 @@ def _add_array_main_fields(fields: dict[str, Any], stats: dict[str, Any], curren
         fields[output_name] = _format_by_kind(raw_value, config.kind, currency)
         if config.kind == "price":
             fields[f"{output_name}Currency"] = currency.code
+        if fields[output_name] is not None and price_type_index in {8, 33}:
+            fields[f"{output_name}Source"] = f"STATS_CURRENT_{price_type_index}"
 
 
 def _add_out_of_stock_main_fields(fields: dict[str, Any], stats: dict[str, Any]) -> None:
@@ -255,9 +272,13 @@ def _add_buy_box_fields(fields: dict[str, Any], stats: dict[str, Any], currency:
 
 
 def _add_lightning_deal_fields(fields: dict[str, Any], stats: dict[str, Any]) -> None:
+    if "lightningDealInfo" not in stats:
+        fields["statsLightningDealStatus"] = "not_returned"
+        fields["statsHasLightningDealHistory"] = None
+        return
     value = stats.get("lightningDealInfo")
     if value is None:
-        fields["statsLightningDealStatus"] = "none"
+        fields["statsLightningDealStatus"] = "never"
         fields["statsHasLightningDealHistory"] = False
         return
     if not isinstance(value, list) or len(value) < 2:

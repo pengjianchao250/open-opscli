@@ -14,6 +14,25 @@
 - 默认响应字段为 `products`，包含有序 product objects；传 `asins-only=1` 时响应字段为 `asinList`，只返回有序 ASIN 字符串数组。
 - 官方可选参数包括 `asins-only`、`stats`、`update`、`history`、`rating`；本地 MCP 同步支持这些参数，`asins_only`/`asinsOnly` 映射为 `asins-only`。当前官方参数表已无 `page`，本地不会透传。
 
+## Product Deal 与价格字段 (`/product`)
+
+官方参考：`https://keepa.com/api-docs/product-object.html`。
+
+- `offers` 可选参数的有效范围为 20-100；提供 `offers` 时 `buybox` 已隐含启用。
+- Product `deals` 只包含当前 Buy Box 活动的 `accessType`、`dealType`、`badge`，没有独立价格。该字段仅在使用 `offers` 时更新。
+- Limited Time Deal 应组合展示活动徽标与 `stats.buyBoxPrice`、`stats.buyBoxShipping`、`stats.buyBoxSavingBasis`、`stats.buyBoxSavingBasisType`、`stats.buyBoxSavingPercentage`，组合价格必须标记为派生关联值。
+- Lightning Deal 与 Prime Exclusive 的原生 price type 分别为 `stats.current[8]` 和 `stats.current[33]`。
+- `csv[8]` 最后一组可能是未来结束时间和 `-1`；当前 Lightning 价格优先使用 `stats.current[8]`，历史回退必须处理该哨兵。
+
+## Browsing Deals (`/deal`)
+
+官方参考：`https://keepa.com/api-docs/deal-object.html`。
+
+- `selection.domainId` 必填；本地根据 `site` 自动填充并允许 selection 显式覆盖。
+- `selection.priceTypes` 必填且只能包含一个 price type 索引，例如 Amazon `0`、New `1`、Lightning Deal `8`、Buy Box `18`、Prime Exclusive `33`。
+- Deal Object 表示最近约 12 小时发生价格或排名变化的商品摘要，不是全部当前活动目录。
+- `current`、`avg`、`delta`、`deltaPercent` 按 price type 索引解释；`deltaPercent` 不是 Amazon 页面活动折扣率。
+
 ## Best Sellers (`/bestsellers`)
 
 官方参考：`https://keepa.com/#!discuss/t/best-sellers/1298`；Keepa API 页面说明 Best Sellers lists 可包含 up to 500k ASINs。

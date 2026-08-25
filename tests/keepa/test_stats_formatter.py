@@ -95,3 +95,62 @@ def test_stats_formatter_derives_main_fields_and_detail_rows():
     assert formatted.stock_by_condition_rows[0]["fulfillmentType"] == "FBA"
     assert formatted.stock_by_condition_rows[0]["stock"] == 5
     assert formatted.stock_by_condition_rows[1]["stock"] is None
+
+
+def test_stats_formatter_exposes_native_deal_price_types_and_buy_box_basis_type():
+    current = [-1] * 36
+    current[8] = 9999
+    current[33] = 10999
+
+    formatted = format_stats_for_product(
+        {
+            "asin": "B000000001",
+            "domainId": 1,
+            "stats": {
+                "current": current,
+                "buyBoxSavingBasisType": "LIST_PRICE",
+                "buyBoxSavingPercentage": 25,
+                "buyBoxIsPrimeExclusive": True,
+                "buyBoxIsPrimeEligible": True,
+            },
+        },
+        site="US",
+        domain_id=1,
+    )
+
+    assert formatted is not None
+    assert formatted.main_fields["statsCurrentLightningDealPrice"] == 99.99
+    assert (
+        formatted.main_fields["statsCurrentLightningDealPriceSource"]
+        == "STATS_CURRENT_8"
+    )
+    assert formatted.main_fields["statsCurrentPrimeExclusivePrice"] == 109.99
+    assert (
+        formatted.main_fields["statsCurrentPrimeExclusivePriceSource"]
+        == "STATS_CURRENT_33"
+    )
+    assert formatted.main_fields["statsBuyBoxSavingBasisType"] == "LIST_PRICE"
+    assert formatted.main_fields["statsBuyBoxSavingPercentage"] == 25
+    assert formatted.main_fields["statsBuyBoxIsPrimeExclusive"] is True
+    assert formatted.main_fields["statsBuyBoxIsPrimeEligible"] is True
+    prime_row = next(
+        row
+        for row in formatted.price_type_rows
+        if row["statField"] == "current" and row["priceTypeIndex"] == 33
+    )
+    assert prime_row["priceTypeName"] == "PRIME_EXCL"
+    assert prime_row["formattedValue"] == 109.99
+
+
+def test_stats_formatter_distinguishes_missing_and_never_lightning_info():
+    missing = format_stats_for_product({"asin": "MISSING", "stats": {}}, site="US")
+    never = format_stats_for_product(
+        {"asin": "NEVER", "stats": {"lightningDealInfo": None}}, site="US"
+    )
+
+    assert missing is not None
+    assert never is not None
+    assert missing.main_fields["statsLightningDealStatus"] == "not_returned"
+    assert missing.main_fields["statsHasLightningDealHistory"] is None
+    assert never.main_fields["statsLightningDealStatus"] == "never"
+    assert never.main_fields["statsHasLightningDealHistory"] is False
