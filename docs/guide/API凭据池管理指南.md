@@ -15,7 +15,7 @@ API Key 按产品要求以明文存入 MySQL 的 `api_account_credentials.secret
 
 ## 部署配置
 
-后端 MCP 运行环境需要配置：
+后端 MCP 运行环境可以直接复用共享采集 MySQL 配置。凭据池优先读取以下专用变量；某个专用变量未设置时，会回退到对应的 `OPSCLI_COLLECTION_MYSQL_*` 变量，因此同一 MySQL 实例不需要维护两套连接配置：
 
 ```text
 OPSCLI_API_CREDENTIAL_MYSQL_HOST
@@ -25,6 +25,19 @@ OPSCLI_API_CREDENTIAL_MYSQL_USER
 OPSCLI_API_CREDENTIAL_MYSQL_PASSWORD
 OPSCLI_API_CREDENTIAL_MYSQL_SSL_CA
 ```
+
+例如生产服务已经配置了以下共享变量时，无需再重复配置 API 凭据池的 Host、Port、Database、User 和 Password：
+
+```text
+OPSCLI_COLLECTION_MYSQL_HOST
+OPSCLI_COLLECTION_MYSQL_PORT
+OPSCLI_COLLECTION_MYSQL_DATABASE
+OPSCLI_COLLECTION_MYSQL_USER
+OPSCLI_COLLECTION_MYSQL_PASSWORD
+OPSCLI_COLLECTION_MYSQL_SSL_CA
+```
+
+若凭据池需要连接不同的数据库，只需为对应字段单独设置 `OPSCLI_API_CREDENTIAL_MYSQL_*`，该字段会覆盖共享配置。
 
 初始化表结构时使用具有 DDL 权限的迁移账号：
 
