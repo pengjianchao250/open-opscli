@@ -1,32 +1,40 @@
 # Amazon 评论页面工具 MCP 规范
 
 `ops_amazon_reviews` 只返回本静态规范，不提供、执行或代理页面工具
-`amazon_reviews_get`。真实评论读取必须由当前宿主注入该页面工具。
+`amazon_reviews_get`。直接搜索使用当前宿主已有的公开搜索能力；插件搜索必须由当前宿主注入该页面工具。
 
 ## 调用条件
 
 同时满足以下条件才执行评论读取：
 
-1. 用户明确要求获取、查看、采集或分析某个 Amazon ASIN 的评论。
-2. 当前宿主工具列表中存在 `amazon_reviews_get`。
-3. 单个 ASIN 去除首尾空白并转为大写后匹配 `^[A-Z0-9]{10}$`。
+1. 当前任务目标涉及获取、查看、采集或分析某个 Amazon ASIN 的评论。
+2. 单个 ASIN 去除首尾空白并转为大写后匹配 `^[A-Z0-9]{10}$`。
 
-页面工具不可见时，直接说明“浏览器插件评论能力不可用”。不得改用 Canopy、
-Rufus、商品页基础数据或其他评论数据源。
+## 搜索方式确认
+
+任何搜索或数据工具调用前，必须先询问并等待用户明确选择：
+
+1. 直接搜索：使用公开搜索结果，无需登录 Amazon，通常只能获得较少的评论和字段。
+2. 插件搜索：需要浏览器已登录 Amazon；账号和页面未触发风控时，通常可以获得更多评论数据。
+
+不得默认选择或同时执行。插件搜索的“更多评论”不构成数量或成功率保证；登录挑战、
+验证码、限流等风控可能减少结果或导致失败。所选方式不可用时，必须先询问用户是否切换。
 
 ## 调用顺序
 
 1. 每次会话首次执行前读取一次 `ops_amazon_reviews`。
 2. 规范化并校验单个 ASIN。
-3. 只调用一次 `amazon_reviews_get({"asin":"<NORMALIZED_ASIN>"})`。
-4. 仅使用本次页面工具响应，不自行轮询、重试或访问底层接口。
+3. 询问并等待用户选择搜索方式。
+4. 选择直接搜索时，只使用当前宿主的公开搜索能力，不调用 `amazon_reviews_get`，并说明结果覆盖有限。
+5. 选择插件搜索时，确认 Amazon 已登录且页面工具可见，只调用一次 `amazon_reviews_get({"asin":"<NORMALIZED_ASIN>"})`。
+6. 仅使用所选方式的本次结果，不合并两种方式，不自行轮询、重试或访问底层接口。
 
 不得向页面工具添加 `country`、`maxPages`、`concurrency`、`showDialog` 或其他
 内部参数。
 
 ## 结果与安全
 
-成功结果读取 `data.评论信息` 中的 `asin`、`source`、`latestCollectedAt`、
+直接搜索结果必须标明来自公开搜索，不推断完整评论数量。插件搜索成功结果读取 `data.评论信息` 中的 `asin`、`source`、`latestCollectedAt`、
 `page.items`、`page.total`、`page.page` 和 `page.pageSize`。`page.total` 为 0
 属于成功空结果，不得伪装为工具失败。
 
@@ -37,6 +45,7 @@ Rufus、商品页基础数据或其他评论数据源。
 ## 边界
 
 - MCP 只暴露静态规范入口，不承诺纯 MCP 评论采集能力。
+- 不得要求用户在对话中提供 Amazon 密码、Cookie 或 Token。
 - 页面工具内部的 START、STATUS、CANCEL、Cookie、Token、headers、payload 和
   `jobId` 不得暴露或操作。
 - 批量 ASIN、导出、历史趋势、跨站点对比、星级或日期筛选不属于当前公开合同。

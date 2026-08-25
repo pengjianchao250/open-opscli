@@ -10,15 +10,18 @@ Python/完整二进制产物，也没有可由 MCP 发现的规范入口。实�
 - 新增与 Skill 同名的只读 MCP 工具 `ops_amazon_reviews`，返回包内
   `SKILL_MCP.md`，不提供、调用或代理 `amazon_reviews_get`。
 - 通用 MCP Server 注册该工具，并加入未登录也可读取的静态规范白名单。
-- `ops-amazon-reviews` 补充 MCP/Page Tool 调用顺序和能力边界，版本升至
-  `v0.0.2`；真实评论读取仍只接受单个规范化 ASIN，并由宿主页面工具执行。
+- `ops-amazon-reviews` 支持按评论任务语义自动匹配，无需用户主动点名或调用；
+  同时补充调用前搜索方式确认硬门禁。此前递增版本均未发布，本轮继续沿用
+  上次提交中的 `v0.0.2`：
+  直接搜索使用宿主公开搜索能力；插件搜索要求 Amazon 登录，未触发风控时通常
+  可获得更多评论，但不保证数量或成功率；所选方式失败后不得自动换路。
 - 发布清单允许该 Skill 进入 sdist、wheel 和完整二进制，继续排除最小二进制。
 - 新增/更新 MCP 注册、空参数 Schema、权限、打包矩阵和 Skill 合同测试。
 
 **验证结果**：
 - `SKIP_CYTHON=1 uv run pytest tests/mcp/test_amazon_reviews_tools.py
   tests/mcp/test_tool_permissions.py tests/mcp/test_tools.py
-  tests/skills/test_ops_amazon_reviews_skill.py -q`：40 passed。
+  tests/skills/test_ops_amazon_reviews_skill.py -q`：42 passed。
 - `PYTHONUTF8=1 uv run python .../skill-creator/scripts/quick_validate.py
   opscli/skills/templates/ops-amazon-reviews`：Skill is valid。
 - `uv run python -m compileall -q ...`：通过。
@@ -27,7 +30,8 @@ Python/完整二进制产物，也没有可由 MCP 发现的规范入口。实�
 - 当前环境未安装 `ruff`，未执行 ruff 检查。
 
 **影响范围**：MCP 新增一个无参数、只读、无需登录的静态规范工具。没有新增
-服务端评论采集、网络请求或 CLI fallback；缺少宿主页面工具时仍明确停止。
+服务端评论采集或 CLI fallback；执行评论查询前新增一次用户方式确认，直接搜索
+与插件搜索互不混用。
 
 **回滚方式**：移除 `amazon_reviews.py`、`SKILL_MCP.md` 及对应注册/权限/测试，
 恢复 Skill `v0.0.1` 和原发布清单配置。
