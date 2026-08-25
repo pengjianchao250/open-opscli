@@ -1,0 +1,62 @@
+server {
+    listen 80;
+    server_name _;
+    server_tokens off;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location = /health {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location = /api {
+        proxy_pass http://backend:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location ^~ /api/ {
+        proxy_pass http://backend:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /ops-app/${OPS_PROJECT_ID}/${OPS_APP_NAME} {
+        return 308 /ops-app/${OPS_PROJECT_ID}/${OPS_APP_NAME}/;
+    }
+
+    # Vite base 生成带部署前缀的 URL；dist 内容位于 root，查找文件前必须剥离前缀。
+    location ^~ /ops-app/${OPS_PROJECT_ID}/${OPS_APP_NAME}/ {
+        rewrite ^/ops-app/${OPS_PROJECT_ID}/${OPS_APP_NAME}/(.*)$ /$1 last;
+    }
+
+    # SPA 入口每次返回最新内容，并禁止外层 Nginx 代理缓存。
+    location = /index.html {
+        internal;
+        try_files /index.html =404;
+        etag off;
+        if_modified_since off;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
+        add_header X-Accel-Expires "0" always;
+    }
+
+    # 其他静态文件允许本地保存，但每次通过 ETag 或 Last-Modified 协商验证。
+    location / {
+        internal;
+        try_files $uri $uri/ /index.html;
+        etag on;
+        if_modified_since exact;
+        add_header Cache-Control "public, no-cache" always;
+    }
+}

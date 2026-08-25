@@ -223,6 +223,14 @@
       "tier": "internal",
       "reason": "新增 Skill，Skill 创建治理工具，依赖内部访谈流程和团队规范，暂不进入公开发版产物"
     },
+    "ops-app-build-spec": {
+      "source": true,
+      "wheel": true,
+      "binary": false,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "内部 Web 应用规范、受支持技术栈迁移和 Compose 部署初始化流程"
+    },
     "ops-skills-sync": {
       "source": true,
       "wheel": true,
