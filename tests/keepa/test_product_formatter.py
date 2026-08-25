@@ -52,6 +52,113 @@ def test_product_formatter_derives_money_time_stats_and_csv_history():
     assert rating_rows[0]["rating"] == 4.5
 
 
+def test_product_formatter_preserves_limited_time_deal_and_associated_buy_box_price():
+    current = [-1] * 36
+    current[4] = 16999
+    current[8] = -1
+    current[18] = 12599
+
+    formatted = format_product_export(
+        [
+            {
+                "asin": "B0DP4L8HBB",
+                "domainId": 1,
+                "offersSuccessful": True,
+                "deals": [
+                    {
+                        "accessType": "ALL",
+                        "badge": "Limited time deal",
+                        "dealType": "LIMITED_TIME_DEAL",
+                    }
+                ],
+                "stats": {
+                    "current": current,
+                    "buyBoxPrice": 12599,
+                    "buyBoxShipping": 0,
+                    "buyBoxSavingBasis": 13999,
+                    "buyBoxSavingBasisType": "WAS_PRICE",
+                    "buyBoxSavingPercentage": 10,
+                },
+            }
+        ],
+        site="US",
+        domain_id=1,
+        offers_requested=True,
+    )
+
+    product = formatted.products[0]
+    assert product["dealMetadataStatus"] == "available"
+    assert product["hasActiveDealMetadata"] is True
+    assert product["dealTypesJoined"] == "LIMITED_TIME_DEAL"
+    assert product["dealBadgesJoined"] == "Limited time deal"
+    assert product["dealAccessTypesJoined"] == "ALL"
+    assert product["hasLimitedTimeDealBadge"] is True
+    assert product["statsBuyBoxPrice"] == 125.99
+    assert product["statsBuyBoxLandedPrice"] == 125.99
+    assert product["statsBuyBoxSavingBasis"] == 139.99
+    assert product["statsBuyBoxSavingBasisType"] == "WAS_PRICE"
+    assert product["statsBuyBoxSavingPercentage"] == 10
+    assert product["dealAssociatedBuyBoxLandedPrice"] == 125.99
+    assert product["dealAssociatedPriceStatus"] == "complete"
+    assert product["dealAssociatedPriceCurrency"] == "USD"
+    assert product["dealAssociatedPriceSource"] == "STATS_BUY_BOX_LANDED"
+    assert product["dealAssociatedPriceIsDerived"] is True
+    assert product["dealAssociatedPriceIsNativeDealPrice"] is False
+    assert "dealPrice" not in product
+    assert product["offersRequested"] is True
+    assert product["priceFreshnessStatus"] == "fresh"
+    assert formatted.product_deals == [
+        {
+            "asin": "B0DP4L8HBB",
+            "dealIndex": 0,
+            "accessType": "ALL",
+            "badge": "Limited time deal",
+            "dealType": "LIMITED_TIME_DEAL",
+        }
+    ]
+
+
+def test_product_formatter_distinguishes_missing_empty_and_badge_only_deals():
+    rows = [
+        {"asin": "MISSING"},
+        {"asin": "EMPTY", "deals": []},
+        {
+            "asin": "BADGE_ONLY",
+            "deals": [{"dealType": "LIMITED_TIME_DEAL", "badge": "Limited time deal"}],
+        },
+    ]
+
+    products = format_product_export(rows, site="US").products
+
+    assert products[0]["dealMetadataStatus"] == "not_returned"
+    assert products[0]["hasActiveDealMetadata"] is None
+    assert products[1]["dealMetadataStatus"] == "empty"
+    assert products[1]["hasActiveDealMetadata"] is False
+    assert products[2]["dealMetadataStatus"] == "available"
+    assert products[2]["hasActiveDealMetadata"] is True
+    assert products[2]["dealAssociatedPriceStatus"] == "badge_only"
+    assert "dealAssociatedBuyBoxLandedPrice" not in products[2]
+
+
+def test_product_formatter_handles_lightning_future_end_sentinel():
+    active_csv = [[] for _ in range(36)]
+    active_csv[8] = [1, 9999, 99_999_999, -1]
+    upcoming_csv = [[] for _ in range(36)]
+    upcoming_csv[8] = [99_999_998, 8999, 99_999_999, -1]
+
+    products = format_product_export(
+        [
+            {"asin": "ACTIVE", "csv": active_csv},
+            {"asin": "UPCOMING", "csv": upcoming_csv},
+        ],
+        site="US",
+    ).products
+
+    assert products[0]["currentLightningDealPrice"] == 99.99
+    assert products[0]["currentLightningDealPriceSource"] == "CSV_8_SPECIAL"
+    assert "currentLightningDealPrice" not in products[1]
+
+
 def test_product_formatter_splits_large_nested_fields_into_detail_sheets():
     formatted = format_product_export(
         [

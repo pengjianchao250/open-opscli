@@ -49,6 +49,11 @@ class DummyManager:
                 "asin": "B0088PUEPK",
                 "title": "Test Product",
                 "brand": "Test Brand",
+                "dealMetadataStatus": "available",
+                "dealTypesJoined": "LIMITED_TIME_DEAL",
+                "statsBuyBoxLandedPrice": 125.99,
+                "statsBuyBoxSavingBasis": 139.99,
+                "statsBuyBoxSavingPercentage": 10,
                 "stats": {"current": [1299] * 100},
                 "offers": [{"offerId": f"offer-{index}"} for index in range(100)],
                 "unknownField": "do not return",
@@ -131,6 +136,15 @@ def test_keepa_skill_templates_require_daily_quota_prompt():
         assert "job_status` 和 `export` 默认不重复提示额度" in content
 
 
+def test_keepa_skill_templates_document_deal_request_boundaries():
+    skill_dir = keepa_tools._keepa_skill_dir()
+
+    for filename in ("SKILL.md", "SKILL_MCP.md"):
+        content = (skill_dir / filename).read_text(encoding="utf-8")
+        assert "selection.priceTypes" in content
+        assert "20-100" in content
+
+
 def test_keepa_run_accepts_params_json_string(monkeypatch):
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
 
@@ -160,6 +174,11 @@ def test_keepa_run_accepts_params_json_string(monkeypatch):
             "asin": "B0088PUEPK",
             "title": "Test Product",
             "brand": "Test Brand",
+            "dealMetadataStatus": "available",
+            "dealTypesJoined": "LIMITED_TIME_DEAL",
+            "statsBuyBoxLandedPrice": 125.99,
+            "statsBuyBoxSavingBasis": 139.99,
+            "statsBuyBoxSavingPercentage": 10,
         }
     ]
     assert result["data"]["data_omitted"] == 0
