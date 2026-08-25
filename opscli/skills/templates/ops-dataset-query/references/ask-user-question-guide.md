@@ -116,8 +116,9 @@ AskUserQuestion:
 - 同一金额指标存在原币与 CNY，且用户要求精准口径。
 
 要求：
-- 普通查询默认 CNY，可不单独提问，但必须在查询前参数摘要和输出中明示。
-- 触发以上条件时，用 `AskUserQuestion` 确认 CNY / 原币 / 自定义。
+- 用户表达了明确币种意图（仅支持 USD/GBP/CAD/EUR/JPY/CNY）时，直接传 `--global-currency`，不必再问；未指定币种时不传，由服务端回退用户默认币种，输出时按返回的 `meta.currency` 声明币种，禁止本地默认选 CNY 字段替代。
+- 用户要求多个币种（"分别用人民币和加拿大元"）时，按币种各查一次，不做汇率换算，无需为此提问。
+- 触发以上条件（原币/站点币种、对账等精准口径）时，用 `AskUserQuestion` 确认字段口径：CNY 字段 / 原币字段 / 指定全局币种。
 
 ### 3.5 查询前参数摘要
 
@@ -129,7 +130,7 @@ AskUserQuestion:
 - 维度：verbose_name / field_name
 - 指标：verbose_name、聚合方式、公式字段说明
 - 筛选：字段、操作符、值
-- 币种：CNY / 原币
+- 币种：globalCurrency（未传则写"服务端默认"）/ 字段口径 CNY 或原币
 - 排序与条数
 - dataComparison：主周期与对比周期
 

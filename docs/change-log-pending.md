@@ -8745,3 +8745,18 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **回滚方式**：还原上述 5 组文件改动（`git checkout -- <files>` 或 revert
 对应提交）；版本号回退 1.3.23 → 1.3.22。
+
+## 2026-08-25 skills/ops-dataset-query - 从 release 同步币种与意图查询文档口径
+
+**变更原因**：master 工作区的 ops-dataset-query 为"Agent 构参 + opscli query simple"简化版，缺少 release 分支已沉淀的全局币种（`globalCurrency` / `meta.currency`）口径与远端意图目录（`opscli query intent` / `query catalog`、归因参数）说明；master 代码层已支持这些参数，只差 Skill 文档。按用户要求只同步币种与意图查询内容，不同步规划器（query flow / agent_query_planner / 降级路径等）。
+**改动点**：
+- `references/simple-query-guide.md`：参数表加 `globalCurrency` 行；新增「全局币种 globalCurrency（请求侧）」「返回币种 meta.currency（结果侧）」两节；CLI 示例补 `--global-currency` 与归因参数；MCP 段补币种（`query_simple` 无 `global_currency`，走 `query_run` payload 顶层 `globalCurrency`）与 `query_intent_match` / `query_catalog` 说明。
+- `SKILL.md`：铁律三改为"远端 `opscli query intent` 优先，本地 `route_intent.py` 兜底"，补归因参数透传与 `intent_constraints` 复述确认；新增铁律十五（币种由服务端换算、多币种即多次取数、以 `meta.currency` 为准、禁止外部汇率）；标准工作流步骤 3/5 同步。
+- `references/rules.md`：第四章币种规则由"未指定默认 `_cny`"改为"有币种意图传 `--global-currency`，未指定不传由服务端回退"；第五章处理流程与 8.1 优先级纳入远端意图目录；自检清单币种项改写。
+- `QUERY_SPEC.md`：4.3 补 `meta.currency` 披露；自检清单加多币种项；第十五章范围与口径补 `meta.currency` 与多币种多次查询条款。
+- `references/ask-user-question-guide.md`：3.4 币种与参数摘要币种项按新口径改写。
+- `references/cli.md`：新增 `opscli query intent` / `catalog` 章节（参数、返回字段、归因参数、约束提示处置）；`route_intent.py` 降为兜底；命令索引、使用原则、字段检查示例、典型工作流、场景表同步。
+**验证结果**：补丁脚本每个锚点断言唯一命中，6 个文件全部 patched；`.venv/bin/opscli query intent/catalog/simple --help` 确认文档引用的 `--query/--source/--fallback-local/--skills-dir/--global-currency/--intent-code/--selection-source/--match-record-id` 均存在。未触及代码与测试。
+**影响范围**：仅 ops-dataset-query Skill 模板文档；影响 AI Agent 选表顺序（先远端意图目录）与币种处理方式（不再本地默认选 CNY 字段）。
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/{SKILL.md,QUERY_SPEC.md,references/simple-query-guide.md,references/rules.md,references/ask-user-question-guide.md,references/cli.md}`（回到本次修改前的暂存版本可用 `git checkout -- ` 恢复索引内容）。
+---
