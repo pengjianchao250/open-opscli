@@ -59,7 +59,14 @@ BASE_DASHBOARD_SPEC_TOOLS: frozenset[str] = frozenset({
     "dashboard_data_analysis_spec_must_read",
 })
 
-BASE_ALWAYS_ALLOWED_TOOLS = BASE_AUTH_TOOLS | BASE_DASHBOARD_SPEC_TOOLS
+# Amazon 评论规范只读取包内静态文档，不依赖登录态或用户业务数据。
+BASE_AMAZON_REVIEW_SPEC_TOOLS: frozenset[str] = frozenset({
+    "amazon_reviews_spec_must_read",
+})
+
+BASE_ALWAYS_ALLOWED_TOOLS = (
+    BASE_AUTH_TOOLS | BASE_DASHBOARD_SPEC_TOOLS | BASE_AMAZON_REVIEW_SPEC_TOOLS
+)
 """未登录或权限接口不可用时仍可调用的基础安全工具。"""
 
 # stdio 模式权限结果缓存时间（秒）：与后端 60s 缓存叠加，权限变更最长约 6 分钟生效

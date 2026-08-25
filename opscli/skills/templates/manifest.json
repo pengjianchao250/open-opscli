@@ -32,12 +32,12 @@
       "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
     },
     "ops-amazon-reviews": {
-      "source": false,
-      "wheel": false,
+      "source": true,
+      "wheel": true,
       "binary": false,
-      "binary_full": false,
+      "binary_full": true,
       "tier": "internal",
-      "reason": "依赖 AI Chat 浏览器插件的 ASIN 评论能力，暂不随公开产物发版"
+      "reason": "依赖宿主页面工具执行评论读取，MCP 仅提供静态规范入口"
     },
     "ops-amazon-product-data": {
       "source": true,

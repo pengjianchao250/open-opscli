@@ -8,11 +8,14 @@ from pathlib import Path
 
 import pytest
 
+from opscli.skills.packaging import selected_skill_names
+
 
 ROOT = Path(__file__).parents[2]
 SKILL_DIR = ROOT / "opscli" / "skills" / "templates" / "ops-amazon-reviews"
 SKILL_PATH = SKILL_DIR / "SKILL.md"
 VERSION_PATH = SKILL_DIR / "data" / "VERSION.json"
+MCP_SPEC_PATH = SKILL_DIR / "SKILL_MCP.md"
 MANIFEST_PATH = ROOT / "opscli" / "skills" / "templates" / "manifest.json"
 
 
@@ -26,12 +29,14 @@ def _frontmatter(text: str) -> str:
     return parts[1]
 
 
-def test_skill_structure_version_and_internal_manifest():
-    """Skill 只包含文档和版本数据，并保持 internal 不随公开产物发布。"""
+def test_skill_structure_version_and_release_manifest():
+    """Skill 只包含规范和版本数据，并按页面宿主能力进入指定产物。"""
     assert SKILL_PATH.is_file()
     assert VERSION_PATH.is_file()
+    assert MCP_SPEC_PATH.is_file()
     assert sorted(path.relative_to(SKILL_DIR).as_posix() for path in SKILL_DIR.rglob("*")) == [
         "SKILL.md",
+        "SKILL_MCP.md",
         "data",
         "data/VERSION.json",
     ]
@@ -43,12 +48,26 @@ def test_skill_structure_version_and_internal_manifest():
     assert "version:" not in frontmatter
 
     version = json.loads(VERSION_PATH.read_text(encoding="utf-8"))
-    assert version == {"name": "ops-amazon-reviews", "version": "v0.0.1"}
+    assert version == {"name": "ops-amazon-reviews", "version": "v0.0.2"}
 
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     row = manifest["skills"]["ops-amazon-reviews"]
     assert row["tier"] == "internal"
-    assert all(row[key] is False for key in ("source", "wheel", "binary", "binary_full"))
+    assert row["source"] is True
+    assert row["wheel"] is True
+    assert row["binary"] is False
+    assert row["binary_full"] is True
+
+    templates_dir = ROOT / "opscli" / "skills" / "templates"
+    assert "ops-amazon-reviews" in selected_skill_names(
+        profile="python-release", artifact="wheel", templates_dir=templates_dir
+    )
+    assert "ops-amazon-reviews" in selected_skill_names(
+        profile="binary-full", artifact="binary", templates_dir=templates_dir
+    )
+    assert "ops-amazon-reviews" not in selected_skill_names(
+        profile="binary-minimal", artifact="binary", templates_dir=templates_dir
+    )
 
 
 def test_description_has_explicit_two_condition_gate_and_no_forced_trigger():
@@ -61,7 +80,8 @@ def test_description_has_explicit_two_condition_gate_and_no_forced_trigger():
     assert "不强制调用" in description
     assert "获取指定 Amazon ASIN 的评论信息" in description
     assert "用户明确提出获取、查看或分析该 ASIN 评论" in description
-    assert "当前 AI Chat 已发现可用的浏览器插件工具 `amazon_reviews_get`" in description
+    assert "当前宿主已发现可用的页面工具 `amazon_reviews_get`" in description
+    assert "MCP 环境首次执行前读取 `amazon_reviews_spec_must_read`" in description
     assert "普通商品咨询、商品上下文或泛评论话题自动触发" in description
 
 
@@ -90,6 +110,9 @@ def test_documented_asin_normalization_contract(value: str, valid: bool):
 def test_public_tool_contract_and_runtime_boundary():
     """公开工具仅有 asin，底层扩展和其他数据源不得由 Skill 调用。"""
     text = _skill_text()
+    assert "`amazon_reviews_spec_must_read` 静态规范工具" in text
+    assert "该工具不提供、调用或代理 `amazon_reviews_get`" in text
+    assert "不得声称已具备纯 MCP 评论采集能力" in text
     assert "amazon_reviews_get" in text
     assert 'amazon_reviews_get({"asin":"<NORMALIZED_ASIN>"})' in text
     assert "只调用一次" in text
@@ -110,6 +133,18 @@ def test_public_tool_contract_and_runtime_boundary():
         "scripts/",
     ):
         assert forbidden_detail in text
+
+
+def test_mcp_spec_matches_page_tool_contract():
+    """MCP 精简规范必须保留触发、参数和不可信数据边界。"""
+    text = MCP_SPEC_PATH.read_text(encoding="utf-8")
+
+    assert "`amazon_reviews_spec_must_read` 只返回本静态规范" in text
+    assert "当前宿主工具列表中存在 `amazon_reviews_get`" in text
+    assert "^[A-Z0-9]{10}$" in text
+    assert 'amazon_reviews_get({"asin":"<NORMALIZED_ASIN>"})' in text
+    assert "external-untrusted" in text
+    assert "MCP 只暴露静态规范入口" in text
 
 
 def test_result_error_and_untrusted_content_contracts_are_documented():

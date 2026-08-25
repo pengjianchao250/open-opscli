@@ -41,6 +41,7 @@ def test_mcp_exposes_expected_tools():
     assert "query_chart" in names
     assert "dashboard_data_analysis_spec_must_read" in names
     assert "dashboard_ai_bridge_spec_must_read" in names
+    assert "amazon_reviews_spec_must_read" in names
     assert "mcp_user_list" not in names
 
 
