@@ -15,9 +15,11 @@ import inspect
 from pathlib import Path
 from typing import Any
 
+from opscli.keepa.api.scenarios import (
+    telemetry_dimensions as _keepa_telemetry_dimensions,
+)
 from opscli.keepa.summary import KEEPA_SUMMARY_ROW_LIMIT, summarize_rows
 from opscli.mcp.quota import get_quota_limiter
-from opscli.keepa.api.scenarios import telemetry_dimensions as _keepa_telemetry_dimensions
 from opscli.skills.packaging import get_builtin_templates_dir
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
@@ -310,7 +312,12 @@ def _compact_public_data(public: dict[str, Any]) -> None:
     data = public.get("data")
     if not isinstance(data, list):
         return
-    preview_rows = summarize_rows(data, limit=KEEPA_SUMMARY_ROW_LIMIT)
+    scenario = public.get("scenario")
+    preview_rows = summarize_rows(
+        data,
+        limit=KEEPA_SUMMARY_ROW_LIMIT,
+        scenario=scenario if isinstance(scenario, str) else None,
+    )
     public["data_preview"] = preview_rows
     row_count = public.get("row_count")
     total_rows = row_count if isinstance(row_count, int) else len(data)

@@ -7,6 +7,7 @@
 | Product Object | 已接入 | `product_formatter.py` | `product`、返回 Product Object 的 `product-search` 共用格式化；大数组和历史序列拆成图片、类目、排名、Offer、变体、列表值与历史 Sheet。 |
 | Statistics Object | 已接入 | `stats_formatter.py` | 派生当前指标，拆出价格类型、极值、Buy Box 卖家和 Offer 快照。 |
 | Marketplace Offer Object | 已接入 | `product_formatter.py` | `offers` 为标量主表；价格/库存/Prime 专享价/优惠券历史及重复报价分别拆表。 |
+| Product Deal metadata | 已接入 | `product_formatter.py` | `deals` 拆为 `product_deals`；主表保留三态活动摘要，并以显式来源字段关联 Buy Box landed price。 |
 | Category Object | 已接入 | `category_formatter.py` | Category 主表派生金额、评分与 URL；children、relatedCategories、topBrands、两组 Top Seller ID/名称及 Lookup 父级对象/父子关系分别拆表。 |
 | Deal Object | 已接入 | `deal_formatter.py` | 派生图片、时间、成色、价格等指标，并追加 `deal_metrics`。 |
 | Best Sellers Object | 已接入 | `best_sellers_formatter.py` | 主表输出带排名的 ASIN，另有榜单元数据汇总。 |

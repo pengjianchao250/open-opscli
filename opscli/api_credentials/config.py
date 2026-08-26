@@ -18,6 +18,20 @@ ENV_MYSQL_USER = "OPSCLI_API_CREDENTIAL_MYSQL_USER"
 ENV_MYSQL_PASSWORD = "OPSCLI_API_CREDENTIAL_MYSQL_PASSWORD"
 ENV_MYSQL_SSL_CA = "OPSCLI_API_CREDENTIAL_MYSQL_SSL_CA"
 ENV_MYSQL_CONNECT_TIMEOUT = "OPSCLI_API_CREDENTIAL_MYSQL_CONNECT_TIMEOUT_SECONDS"
+
+# API 凭据池与采集沉淀默认使用同一 MySQL 实例。专用变量保留覆盖能力，
+# 未设置时回退到共享采集配置，避免生产环境维护两套相同连接信息。
+_SHARED_MYSQL_ENV = {
+    ENV_MYSQL_HOST: "OPSCLI_COLLECTION_MYSQL_HOST",
+    ENV_MYSQL_PORT: "OPSCLI_COLLECTION_MYSQL_PORT",
+    ENV_MYSQL_DATABASE: "OPSCLI_COLLECTION_MYSQL_DATABASE",
+    ENV_MYSQL_USER: "OPSCLI_COLLECTION_MYSQL_USER",
+    ENV_MYSQL_PASSWORD: "OPSCLI_COLLECTION_MYSQL_PASSWORD",
+    ENV_MYSQL_SSL_CA: "OPSCLI_COLLECTION_MYSQL_SSL_CA",
+    ENV_MYSQL_CONNECT_TIMEOUT: "OPSCLI_COLLECTION_MYSQL_CONNECT_TIMEOUT_SECONDS",
+}
+
+
 @dataclass(frozen=True)
 class ApiCredentialMySqlSettings:
     """凭据池 MySQL 连接参数。"""
@@ -90,15 +104,24 @@ def load_settings(environ: Mapping[str, str] | None = None) -> ApiCredentialSett
     values = os.environ if environ is None else environ
     return ApiCredentialSettings(
         mysql=ApiCredentialMySqlSettings(
-            host=str(values.get(ENV_MYSQL_HOST) or "").strip(),
-            port=_parse_int(values.get(ENV_MYSQL_PORT), 3306),
-            database=str(values.get(ENV_MYSQL_DATABASE) or "").strip(),
-            user=str(values.get(ENV_MYSQL_USER) or "").strip(),
-            password=str(values.get(ENV_MYSQL_PASSWORD) or ""),
-            ssl_ca=str(values.get(ENV_MYSQL_SSL_CA) or "").strip(),
-            connect_timeout_seconds=_parse_int(values.get(ENV_MYSQL_CONNECT_TIMEOUT), 10),
+            host=str(_setting(values, ENV_MYSQL_HOST) or "").strip(),
+            port=_parse_int(_setting(values, ENV_MYSQL_PORT), 3306),
+            database=str(_setting(values, ENV_MYSQL_DATABASE) or "").strip(),
+            user=str(_setting(values, ENV_MYSQL_USER) or "").strip(),
+            password=str(_setting(values, ENV_MYSQL_PASSWORD) or ""),
+            ssl_ca=str(_setting(values, ENV_MYSQL_SSL_CA) or "").strip(),
+            connect_timeout_seconds=_parse_int(_setting(values, ENV_MYSQL_CONNECT_TIMEOUT), 10),
         ),
     )
+
+
+def _setting(values: Mapping[str, str], name: str) -> str | None:
+    """读取专用 API 凭据配置，缺失或为空时回退到共享采集配置。"""
+    value = values.get(name)
+    if value is not None and str(value).strip():
+        return value
+    shared_name = _SHARED_MYSQL_ENV.get(name)
+    return values.get(shared_name) if shared_name else None
 
 
 def _parse_int(value: str | None, default: int) -> int:

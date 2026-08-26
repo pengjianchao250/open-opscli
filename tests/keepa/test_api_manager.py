@@ -124,6 +124,91 @@ def test_manager_writes_params_raw_result_and_xlsx_export(monkeypatch, tmp_path:
     assert sheet.cell(row=2, column=3).value == 7588958
 
 
+def test_manager_uses_same_product_deal_preview_source_for_json_and_xlsx(
+    monkeypatch, tmp_path: Path
+):
+    class ProductDealClient(DummyKeepaClient):
+        async def get_json(self, endpoint, params):
+            current = [-1] * 36
+            current[4] = 16999
+            current[18] = 12599
+            return {
+                "timestamp": 2000,
+                "tokensLeft": 49,
+                "tokensConsumed": 1,
+                "products": [
+                    {
+                        "asin": "B0DP4L8HBB",
+                        "domainId": 1,
+                        "title": "Deal Product",
+                        "offersSuccessful": True,
+                        "deals": [
+                            {
+                                "accessType": "ALL",
+                                "badge": "Limited time deal",
+                                "dealType": "LIMITED_TIME_DEAL",
+                            }
+                        ],
+                        "stats": {
+                            "current": current,
+                            "buyBoxPrice": 12599,
+                            "buyBoxShipping": 0,
+                            "buyBoxSavingBasis": 13999,
+                            "buyBoxSavingBasisType": "WAS_PRICE",
+                            "buyBoxSavingPercentage": 10,
+                        },
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", ProductDealClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
+
+    previews = []
+    for export_format in ("json", "xls"):
+        manager = KeepaApiManager(
+            settings=settings, api_key_provider=DummyApiKeyProvider()
+        )
+        result = _run(
+            manager.run(
+                KeepaScenarioRequest(
+                    scenario="product",
+                    site="US",
+                    params={"asin": "B0DP4L8HBB", "offers": 20, "stats": 30},
+                    export_format=export_format,
+                    job_id=f"keepa-deal-preview-{export_format}",
+                )
+            )
+        )
+        preview = {
+            key: result.data[0].get(key)
+            for key in (
+                "dealTypesJoined",
+                "statsBuyBoxLandedPrice",
+                "statsBuyBoxSavingBasis",
+                "statsBuyBoxSavingBasisType",
+                "statsBuyBoxSavingPercentage",
+                "dealAssociatedPriceSource",
+                "offersRequested",
+            )
+        }
+        previews.append(preview)
+        if export_format == "xls":
+            workbook = load_workbook(result.export.path)
+            assert "product_deals" in workbook.sheetnames
+
+    assert previews[0] == previews[1] == {
+        "dealTypesJoined": "LIMITED_TIME_DEAL",
+        "statsBuyBoxLandedPrice": 125.99,
+        "statsBuyBoxSavingBasis": 139.99,
+        "statsBuyBoxSavingBasisType": "WAS_PRICE",
+        "statsBuyBoxSavingPercentage": 10,
+        "dealAssociatedPriceSource": "STATS_BUY_BOX_LANDED",
+        "offersRequested": True,
+    }
+
+
 def test_manager_submits_complete_success_result_to_collection_storage(
     monkeypatch, tmp_path: Path
 ):
@@ -207,12 +292,8 @@ def test_manager_writes_original_response_json_export_when_requested(monkeypatch
     DummyKeepaClient.requests = []
     NestedProductClient.requests = []
 
-    def reject_xlsx_formatter(*args, **kwargs):
-        raise AssertionError("JSON 导出不应执行 XLSX formatter")
-
     monkeypatch.setattr(api_manager_module, "KeepaApiClient", NestedProductClient)
     monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
-    monkeypatch.setattr(api_manager_module, "format_product_export", reject_xlsx_formatter)
     settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
     manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
 
@@ -235,7 +316,12 @@ def test_manager_writes_original_response_json_export_when_requested(monkeypatch
     assert result.export is not None
     assert result.export.path == str(export_path.resolve())
     assert result.export.format == "json"
-    assert result.data == [{"asin": "B0088PUEPK", "title": "Test Product"}]
+    assert result.data[0]["asin"] == "B0088PUEPK"
+    assert result.data[0]["title"] == "Test Product"
+    assert result.data[0]["currentAmazonPrice"] == 12.99
+    assert result.data[0]["dealMetadataStatus"] == "not_returned"
+    assert "stats" not in result.data[0]
+    assert "offers" not in result.data[0]
     assert payload["schema_version"] == "2.0"
     assert payload["scenario"] == "product"
     assert payload["site"] == "US"
@@ -456,7 +542,7 @@ def test_deals_formats_metric_sheet(monkeypatch, tmp_path: Path):
             KeepaScenarioRequest(
                 scenario="deals",
                 site="US",
-                params={"selection": {"page": 0}},
+                params={"selection": {"page": 0, "priceTypes": [18]}},
                 job_id="keepa-deals-regression",
             )
         )

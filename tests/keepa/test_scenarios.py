@@ -2,7 +2,11 @@ import json
 
 import pytest
 
-from opscli.keepa.api.scenarios import get_scenario, normalize_domain, telemetry_dimensions
+from opscli.keepa.api.scenarios import (
+    get_scenario,
+    normalize_domain,
+    telemetry_dimensions,
+)
 from opscli.keepa.domain.exceptions import KeepaConfigError
 
 
@@ -76,6 +80,34 @@ def test_product_params_normalizes_string_flags_and_numbers():
     assert params["update"] == 0
     assert params["only-live-offers"] is True
     assert params["code-limit"] == 5
+
+
+@pytest.mark.parametrize("offers", [1, 19, 101])
+def test_product_params_rejects_offers_outside_official_range(offers):
+    with pytest.raises(KeepaConfigError, match="offers.*20.*100"):
+        get_scenario("product").build_params(
+            params={"asin": "B000000001", "offers": offers}, site="US"
+        )
+
+
+def test_deals_requires_exactly_one_supported_price_type():
+    scenario = get_scenario("deals")
+
+    with pytest.raises(KeepaConfigError, match="priceTypes"):
+        scenario.build_params(params={"selection": {"page": 0}}, site="US")
+    with pytest.raises(KeepaConfigError, match="只能包含 1 个"):
+        scenario.build_params(
+            params={"selection": {"priceTypes": [0, 18]}}, site="US"
+        )
+    with pytest.raises(KeepaConfigError, match="不支持"):
+        scenario.build_params(
+            params={"selection": {"priceTypes": [99]}}, site="US"
+        )
+
+    params = scenario.build_params(
+        params={"selection": {"priceTypes": [18], "page": 0}}, site="US"
+    )
+    assert json.loads(params["selection"])["priceTypes"] == [18]
 
 
 def test_product_params_rejects_more_than_one_hundred_items():

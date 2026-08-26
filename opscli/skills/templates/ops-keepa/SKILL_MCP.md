@@ -131,7 +131,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 
 | 用户说法 | scenario | 必填参数 | 常用可选参数 | 说明 |
 | --- | --- | --- | --- | --- |
-| 查商品详情、查 ASIN、查价格历史 | `product` | `asin`/`asins` 或 `code`/`codes` | `stats`, `history`, `offers`, `buybox`, `rating`, `days`, `update`, `code_limit`, `historical_variations` | ASIN 或 UPC/EAN/ISBN-13 查询，最多 100 个；`offers` 表示每个商品的 Offer 数，不降低商品批量上限。 |
+| 查商品详情、查 ASIN、查价格历史 | `product` | `asin`/`asins` 或 `code`/`codes` | `stats`, `history`, `offers`, `buybox`, `rating`, `days`, `update`, `code_limit`, `historical_variations` | ASIN 或 UPC/EAN/ISBN-13 查询，最多 100 个；`offers` 表示每个商品的 Offer 数，官方有效范围为 20-100。活动徽标、Coupon 和新鲜 Offer 数据依赖 `offers` 更新。 |
 | 关键词搜商品、搜索 flashlight | `product-search` | `keyword` 或 `term` | `stats`, `history`, `update`, `rating`, `asins_only` | 调用 Keepa `/search` 且 `type=product`；默认返回 `products`，传 `asins_only=true` 时返回 `asinList`；当前接口不支持 `page`。 |
 | 按条件筛商品、Product Finder | `product-finder` | `selection` 或至少 1 个筛选字段 | `stats`, `selection.page`, `selection.perPage`, `selection.sort`, 各类筛选字段 | 调用 Keepa `/query`；按 Product Finder selection 筛选商品库，返回 `asinList`；带 `stats=1` 时会自动导出 `searchInsights` 明细 sheet。 |
 | 搜类目、查类目关键词 | `category-search` | `keyword` 或 `term` | 无 | 按类目名称关键词搜索。 |
@@ -140,7 +140,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 | 按条件筛卖家、Seller Finder | `seller-finder` | `selection` 或至少 1 个筛选字段 | `selection.perPage`, `selection.sort`、各筛选字段 | 调用 `/sellerquery`，返回 `sellerIdList`。 |
 | 查 Top Sellers、头部卖家 | `top-seller` | 无 | 无 | 查询指定站点评分最多的 marketplace sellers。 |
 | 查热销、Best Sellers | `bestsellers` | `category` 或 `productGroup` | `range`, `month`+`year`, `variations`, `sublist` | `month/year` 必须成对且限过去 36 个完整自然月；不能与 `range`/`sublist` 混用。 |
-| 查折扣、Deals | `deals` | 无固定必填；建议传 `selection` | `selection` | 查询最近变动和折扣商品，单次最多约 150 条。 |
+| 查近期价格/排名变化、Browsing Deals | `deals` | `selection.priceTypes`，且只能有 1 个索引 | `selection` 的筛选、排序和分页字段 | 查询最近约 12 小时发生变化的商品，单次最多约 150 条；不是全部正在进行的 Amazon 活动。 |
 | 查秒杀、Lightning Deals | `lightning-deals` | 无 | `asin`, `state` | 当前和即将开始的秒杀；不传 ASIN 的完整列表成本很高。 |
 
 参数不足时的追问口径：
@@ -170,7 +170,8 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 | `导出 flashlight 搜索结果，只要 ASIN` | `scenario="product-search"`, `params={"keyword":"flashlight","asins_only":true}` |
 | `查某店铺的 ASIN 列表` | `scenario="seller"`, `params={"seller":"...","storefront":true}` |
 | `查美国当前秒杀` | `scenario="lightning-deals"`, `site="US"`, `params={}` |
-| `查折扣商品，按 selection 筛选` | `scenario="deals"`, `params={"selection":{...}}` |
+| `查 Buy Box 价格变化商品` | `scenario="deals"`, `params={"selection":{"priceTypes":[18],"page":0}}` |
+| `查 ASIN 的 Limited Time Deal 和活动关联价` | `scenario="product"`, `params={"asin":"...","offers":20,"stats":30}` |
 | `要原始 JSON 数据` | 保持原场景和参数，传 `export_format="json"`；需要请求和状态包装时再使用内部 `raw.json` |
 
 - 用户未指定站点：`site="US"`。

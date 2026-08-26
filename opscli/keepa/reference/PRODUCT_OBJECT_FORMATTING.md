@@ -58,9 +58,9 @@
 
 ### 4.4 A+ / 视频 / 危险品 / Deals
 
-- `aPlus`、`videos`、`hazardousMaterials`、`deals` 均保留 JSON。
+- `aPlus`、`videos`、`hazardousMaterials` 等嵌套字段在原始 JSON 中保留；`deals` 另拆为 `product_deals` 明细表，并在 Product 主表生成活动类型、徽标和访问范围摘要。
 - 常用派生字段：`hasAPlus`、`aPlusImageCount`、`videoCount`、`hazardousMaterialCount`、`dealBadges`。
-- `aPlus` 需要 `aplus` 参数；`videos`、`deals` 等通常依赖 `offers` 或额外参数更新。
+- `aPlus` 需要 `aplus` 参数；`deals` 仅在 `offers=20..100` 时更新。字段缺失、空数组、非空数组分别输出 `not_returned`、`empty`、`available`。
 
 ## 5. 历史序列字段
 

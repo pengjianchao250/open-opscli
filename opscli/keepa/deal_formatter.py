@@ -255,10 +255,12 @@ def _add_current_summary_fields(row: dict[str, Any], current: Any, currency: Cur
         0: "currentAmazonPrice",
         1: "currentNewPrice",
         3: "currentSalesRank",
+        8: "currentLightningDealPrice",
         10: "currentNewFbaPrice",
         16: "currentRating",
         17: "currentReviewCount",
         18: "currentBuyBoxPrice",
+        33: "currentPrimeExclusivePrice",
     }
     for index, field in mappings.items():
         if index >= len(current):

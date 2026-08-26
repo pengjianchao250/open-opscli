@@ -18,6 +18,7 @@ from opscli.keepa.object_formatting import (
 )
 from opscli.keepa.stats_formatter import FormattedStatsExport, format_stats_for_product
 from opscli.keepa.time import (
+    KEEPA_TIME_OFFSET_MINUTES,
     keepa_minutes_to_unix_milliseconds,
     keepa_minutes_to_unix_seconds,
     keepa_minutes_to_utc_iso,
@@ -25,6 +26,7 @@ from opscli.keepa.time import (
 
 # Keepa 数值字段通用的缺失哨兵值。
 MISSING_NUMERIC_VALUES = {-1, -2}
+PRICE_ASSOCIATED_DEAL_TYPES = {"LIMITED_TIME_DEAL"}
 
 # Marketplace Offer 的 condition 数字映射；未知值保留原始数字并标记 unknown。
 OFFER_CONDITION_TEXT = {
@@ -155,10 +157,12 @@ CURRENT_FIELD_BY_INDEX = {
     2: "currentUsedPrice",
     3: "currentSalesRank",
     4: "currentListPrice",
+    8: "currentLightningDealPrice",
     10: "currentNewFbaPrice",
     16: "currentRating",
     17: "currentReviewCount",
     18: "currentBuyBoxPrice",
+    33: "currentPrimeExclusivePrice",
     34: "currentNewFbaOfferCount",
     35: "currentNewFbmOfferCount",
 }
@@ -180,6 +184,7 @@ class FormattedProductExport:
     list_values: list[dict[str, Any]]
     product_history: list[dict[str, Any]]
     nested_values: list[dict[str, Any]]
+    product_deals: list[dict[str, Any]]
     stats_price_types: list[dict[str, Any]]
     stats_extremes: list[dict[str, Any]]
     stats_buy_box_sellers: list[dict[str, Any]]
@@ -214,6 +219,8 @@ class FormattedProductExport:
             sheets["product_history"] = self.product_history
         if self.nested_values:
             sheets["product_nested_values"] = self.nested_values
+        if self.product_deals:
+            sheets["product_deals"] = self.product_deals
         if self.stats_price_types:
             sheets["stats_price_types"] = self.stats_price_types
         if self.stats_extremes:
@@ -242,6 +249,7 @@ class FormattedProductExport:
             "list_values": self.list_values,
             "product_history": self.product_history,
             "nested_values": self.nested_values,
+            "product_deals": self.product_deals,
             "stats_price_types": self.stats_price_types,
             "stats_extremes": self.stats_extremes,
             "stats_buy_box_sellers": self.stats_buy_box_sellers,
@@ -250,7 +258,13 @@ class FormattedProductExport:
         }
 
 
-def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any = None) -> FormattedProductExport:
+def format_product_export(
+    rows: list[Any],
+    *,
+    site: str = "US",
+    domain_id: Any = None,
+    offers_requested: bool | None = None,
+) -> FormattedProductExport:
     """Format Keepa product rows into a main table plus optional detail tables."""
     products: list[dict[str, Any]] = []
     csv_history: list[dict[str, Any]] = []
@@ -266,6 +280,7 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
     list_values: list[dict[str, Any]] = []
     product_history: list[dict[str, Any]] = []
     nested_values: list[dict[str, Any]] = []
+    product_deals: list[dict[str, Any]] = []
     stats_price_types: list[dict[str, Any]] = []
     stats_extremes: list[dict[str, Any]] = []
     stats_buy_box_sellers: list[dict[str, Any]] = []
@@ -278,7 +293,13 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
             products.append({"value": row})
             continue
         stats_export = format_stats_for_product(row, site=site, domain_id=domain_id)
-        formatted = format_product_object(row, site=site, domain_id=domain_id, stats_export=stats_export)
+        formatted = format_product_object(
+            row,
+            site=site,
+            domain_id=domain_id,
+            stats_export=stats_export,
+            offers_requested=offers_requested,
+        )
         products.append(formatted)
         asin = _string_or_empty(row.get("asin"))
         csv_history.extend(format_csv_history_rows(row, asin=asin, currency=currency))
@@ -296,6 +317,7 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
             format_product_history_rows(row, asin=asin, currency=currency)
         )
         nested_values.extend(format_unhandled_nested_rows(row, asin=asin))
+        product_deals.extend(format_product_deal_rows(row, asin=asin))
         if stats_export:
             stats_price_types.extend(stats_export.price_type_rows)
             stats_extremes.extend(stats_export.extreme_rows)
@@ -318,6 +340,7 @@ def format_product_export(rows: list[Any], *, site: str = "US", domain_id: Any =
         list_values=list_values,
         product_history=product_history,
         nested_values=nested_values,
+        product_deals=product_deals,
         stats_price_types=stats_price_types,
         stats_extremes=stats_extremes,
         stats_buy_box_sellers=stats_buy_box_sellers,
@@ -332,6 +355,7 @@ def format_product_object(
     site: str = "US",
     domain_id: Any = None,
     stats_export: FormattedStatsExport | None = None,
+    offers_requested: bool | None = None,
 ) -> dict[str, Any]:
     """Return a Product Object copy with compact derived fields appended."""
     currency = _currency_for(site=site, domain_id=domain_id or product.get("domainId"))
@@ -356,10 +380,13 @@ def format_product_object(
     _add_category_fields(row)
     _add_variation_summary(row)
     _add_content_summary(row)
+    _add_deal_summary(row)
     _add_coupon_fields(row, currency)
     _add_stats_current_fields(row, product, currency)
     if stats_export:
         row.update(stats_export.main_fields)
+    _add_offer_freshness_fields(row, offers_requested=offers_requested)
+    _add_deal_associated_price_fields(row)
 
     row["currencyCode"] = currency.code
     row["currencyDecimals"] = currency.decimals
@@ -380,6 +407,7 @@ def format_product_object(
         "fbaFees",
         "unitCount",
         "coupon",
+        "deals",
     } | LIST_DETAIL_FIELDS | PRODUCT_HISTORY_FIELDS:
         row.pop(field, None)
     row.pop("imageUrls", None)
@@ -389,6 +417,30 @@ def format_product_object(
         if isinstance(value, (dict, list)):
             row.pop(field)
     return row
+
+
+def format_product_deal_rows(
+    product: dict[str, Any], *, asin: str
+) -> list[dict[str, Any]]:
+    """Preserve active Buy Box Deal badge metadata as a dedicated detail table."""
+    deals = product.get("deals")
+    if not isinstance(deals, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for index, deal in enumerate(deals):
+        row: dict[str, Any] = {"asin": asin, "dealIndex": index}
+        if isinstance(deal, dict):
+            row.update(
+                {
+                    key: value
+                    for key, value in deal.items()
+                    if not isinstance(value, (dict, list))
+                }
+            )
+        else:
+            row["value"] = deal
+        rows.append(row)
+    return rows
 
 
 def format_csv_history_rows(
@@ -774,6 +826,7 @@ def format_unhandled_nested_rows(product: dict[str, Any], *, asin: str) -> list[
         "coupon",
         "couponHistory",
         "videos",
+        "deals",
     } | LIST_DETAIL_FIELDS | PRODUCT_HISTORY_FIELDS
     rows: list[dict[str, Any]] = []
     for field, value in product.items():
@@ -971,9 +1024,81 @@ def _add_content_summary(row: dict[str, Any]) -> None:
     hazardous_materials = row.get("hazardousMaterials")
     if isinstance(hazardous_materials, list):
         row["hazardousMaterialCount"] = len(hazardous_materials)
+
+
+def _add_deal_summary(row: dict[str, Any]) -> None:
+    if "deals" not in row:
+        row["dealMetadataStatus"] = "not_returned"
+        row["hasActiveDealMetadata"] = None
+        row["dealCount"] = None
+        row["hasLimitedTimeDealBadge"] = None
+        row["hasPriceDealBadge"] = None
+        return
     deals = row.get("deals")
-    if isinstance(deals, list):
-        row["dealCount"] = len(deals)
+    if not isinstance(deals, list):
+        row["dealMetadataStatus"] = "invalid"
+        row["hasActiveDealMetadata"] = None
+        row["dealCount"] = None
+        row["hasLimitedTimeDealBadge"] = None
+        row["hasPriceDealBadge"] = None
+        return
+
+    row["dealCount"] = len(deals)
+    row["dealMetadataStatus"] = "available" if deals else "empty"
+    row["hasActiveDealMetadata"] = bool(deals)
+    deal_types = _deal_values(deals, "dealType")
+    badges = _deal_values(deals, "badge")
+    access_types = _deal_values(deals, "accessType")
+    row["dealTypesJoined"] = ", ".join(deal_types)
+    row["dealBadgesJoined"] = ", ".join(badges)
+    row["dealAccessTypesJoined"] = ", ".join(access_types)
+    row["hasLimitedTimeDealBadge"] = "LIMITED_TIME_DEAL" in deal_types
+    row["hasPriceDealBadge"] = any(
+        deal_type in PRICE_ASSOCIATED_DEAL_TYPES for deal_type in deal_types
+    )
+
+
+def _deal_values(deals: list[Any], field: str) -> list[str]:
+    values = [
+        str(deal[field]).strip()
+        for deal in deals
+        if isinstance(deal, dict)
+        and deal.get(field) is not None
+        and str(deal[field]).strip()
+    ]
+    return _unique(values)
+
+
+def _add_offer_freshness_fields(
+    row: dict[str, Any], *, offers_requested: bool | None
+) -> None:
+    if offers_requested is not None:
+        row["offersRequested"] = offers_requested
+    successful = row.get("offersSuccessful")
+    if offers_requested is False:
+        row["priceFreshnessStatus"] = "not_requested"
+    elif successful is False:
+        row["priceFreshnessStatus"] = "request_failed"
+    elif successful is True:
+        row["priceFreshnessStatus"] = "fresh"
+    elif any(key in row for key in ("statsBuyBoxPrice", "statsBuyBoxLandedPrice")):
+        row["priceFreshnessStatus"] = "available_but_age_unknown"
+
+
+def _add_deal_associated_price_fields(row: dict[str, Any]) -> None:
+    if row.get("hasPriceDealBadge") is not True:
+        return
+    landed_price = row.get("statsBuyBoxLandedPrice")
+    if landed_price is None:
+        row["dealAssociatedPriceStatus"] = "badge_only"
+        return
+    row["dealAssociatedPriceStatus"] = "complete"
+    row["dealAssociatedBuyBoxLandedPrice"] = landed_price
+    row["dealAssociatedPriceCurrency"] = row.get("statsBuyBoxLandedPriceCurrency")
+    row["dealAssociatedPriceSource"] = "STATS_BUY_BOX_LANDED"
+    row["dealAssociatedPriceIsDerived"] = True
+    row["dealAssociatedPriceIsNativeDealPrice"] = False
+    row["dealAssociatedPriceReason"] = "LIMITED_TIME_DEAL_BADGE_WITH_ACTIVE_BUY_BOX"
 
 
 def _add_coupon_fields(row: dict[str, Any], currency: CurrencyConfig) -> None:
@@ -1001,14 +1126,22 @@ def _add_stats_current_fields(row: dict[str, Any], product: dict[str, Any], curr
         current = stats.get("current")
     for csv_index, field in CURRENT_FIELD_BY_INDEX.items():
         value = _stats_value(current, csv_index)
+        source = f"STATS_CURRENT_{csv_index}" if value is not None else None
         if value is None:
-            value = _latest_csv_value(product.get("csv"), csv_index)
+            if csv_index == 8:
+                value = _latest_lightning_csv_value(product.get("csv"))
+                source = "CSV_8_SPECIAL" if value is not None else None
+            else:
+                value = _latest_csv_value(product.get("csv"), csv_index)
+                source = f"CSV_{csv_index}" if value is not None else None
         if value is None:
             continue
         config = CSV_SERIES.get(csv_index, CsvSeriesConfig(f"CSV_{csv_index}", "value"))
         if config.kind in {"price", "shipping_price"}:
             row[field] = _format_money(value, currency)
             row[f"{field}Currency"] = currency.code
+            if row[field] is not None and csv_index in {8, 33}:
+                row[f"{field}Source"] = source
         elif config.kind == "rating":
             rating = _parse_number(value)
             row[field] = None if rating is None or rating < 0 else rating / 10
@@ -1105,6 +1238,27 @@ def _latest_csv_value(csv: Any, csv_index: int) -> Any:
     if len(series) < tuple_size:
         return None
     return series[-tuple_size + 1]
+
+
+def _latest_lightning_csv_value(csv: Any) -> Any:
+    """Resolve csv[8] without treating a future end sentinel as the current price."""
+    if not isinstance(csv, list) or len(csv) <= 8 or not isinstance(csv[8], list):
+        return None
+    now_keepa_minutes = (
+        datetime.now(timezone.utc).timestamp() / 60 - KEEPA_TIME_OFFSET_MINUTES
+    )
+    latest_time: float | None = None
+    latest_value: Any = None
+    for pair in _iter_series_values(csv[8], 2):
+        if len(pair) < 2:
+            continue
+        keepa_time = _parse_number(pair[0])
+        if keepa_time is None or keepa_time > now_keepa_minutes:
+            continue
+        if latest_time is None or keepa_time >= latest_time:
+            latest_time = keepa_time
+            latest_value = pair[1]
+    return None if latest_value in MISSING_NUMERIC_VALUES else latest_value
 
 
 def _stats_value(current: Any, csv_index: int) -> Any:
