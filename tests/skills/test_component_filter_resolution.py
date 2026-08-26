@@ -490,3 +490,34 @@ def test_generic_suffix_words_do_not_trigger_department_clarify(module, monkeypa
     contract = _resolve_dept(module, "近7天全部渠道的订单量", monkeypatch)
     assert contract["status"] == "planned"
     assert _dept_filters(contract) == []
+
+
+@BOTH_VERSIONS
+@pytest.mark.parametrize(
+    "query",
+    [
+        "查询8月各部门的销售情况",
+        "所有部门的销售情况，按部门分组，不筛选具体部门",
+        "按部门汇总销售额和销量",
+        "不限部门，按部门统计销量",
+        "不按部门筛选，按部门汇总销售额",
+        "部门筛选为空，按部门统计销量",
+    ],
+)
+def test_department_grouping_and_no_filter_phrases_do_not_create_filter(
+    module, query, monkeypatch
+):
+    """内核与 Skill 镜像都必须把部门分组和否定筛选留在维度语义。"""
+    contract = _resolve_dept(module, query, monkeypatch)
+    assert contract["status"] == "planned"
+    assert _dept_filters(contract) == []
+
+
+@BOTH_VERSIONS
+def test_explicit_department_label_stops_before_business_description(module, monkeypatch):
+    """显式标签筛选保留，但值必须在“的销量”前收住。"""
+    contract = _resolve_dept(module, "部门是宁波的销量", monkeypatch)
+    assert contract["status"] == "planned"
+    assert _dept_filters(contract) == [
+        {"field": "dept_name", "operator": "=", "value": "宁波"}
+    ]

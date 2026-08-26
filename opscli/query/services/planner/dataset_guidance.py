@@ -33,9 +33,40 @@ MAX_FIELD_TEXT_CHARS = 256
 ASCII_IDENTIFIER_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 DEPARTMENT_VALUE_RE = re.compile(
     r"(?:项目)?[零〇一二三四五六七八九十百\d]+部"
-    r"|部门\s*(?:为|是|=|：|:)?\s*[\u4e00-\u9fffA-Za-z0-9_-]{2,30}"
+    r"|部门\s*(?:为|是|=|＝|：|:|等于)\s*[\u4e00-\u9fffA-Za-z0-9_-]{1,30}?"
+    r"(?=的|地|，|,|。|；|;|、|/|\s|和|与|或|下|里|中|所有|全部|$)"
     r"|(?:分析|查询|获取|查看)\s*[\u4e00-\u9fffA-Za-z0-9_-]{2,30}?的(?:数据|情况)"
 )
+DEPARTMENT_GROUPING_RE = re.compile(
+    r"(?:按|依|以)\s*部门(?:\s*(?:分组|汇总|统计|分析))?"
+    r"|(?:各|所有|全部)\s*部门"
+    r"|全\s*部门"
+    r"|部门\s*(?:分组|汇总|统计|维度)"
+)
+DEPARTMENT_FILTER_NEGATION_RE = re.compile(
+    r"不\s*(?:按\s*)?部门\s*(?:筛选|过滤)"
+    r"|不\s*(?:筛选|过滤)\s*(?:具体\s*)?部门"
+    r"|部门\s*(?:筛选|过滤)(?:条件)?\s*(?:为|是|=|＝|：|:)?\s*(?:空|无|不设|不限)"
+    r"|不限\s*部门"
+    r"|部门\s*不限"
+)
+
+
+def _has_department_filter_value(query: str) -> bool:
+    """只把具体部门值表达识别为筛选意图，排除分组与否定筛选语义。"""
+    if re.search(r"(?:项目)?[零〇一二三四五六七八九十百\d]+部", query):
+        return True
+    label_match = re.search(
+        r"部门\s*(?:为|是|=|＝|：|:|等于)\s*"
+        r"[\u4e00-\u9fffA-Za-z0-9_-]{1,30}?"
+        r"(?=的|地|，|,|。|；|;|、|/|\s|和|与|或|下|里|中|所有|全部|$)",
+        query,
+    )
+    if label_match:
+        return True
+    if DEPARTMENT_GROUPING_RE.search(query) or DEPARTMENT_FILTER_NEGATION_RE.search(query):
+        return False
+    return bool(DEPARTMENT_VALUE_RE.search(query))
 
 
 def _normalize(value: object) -> str:
@@ -116,6 +147,14 @@ def _field_score(
     逐一打分取最大值，保证用户用任一历史叫法都能命中。
     """
     field_name = _normalize(field.get("field_name"))
+    labels = {_normalize(label) for label in _field_labels(field)}
+    if (
+        field.get("field_type") == "dimension"
+        and (field_name == "team_username" or labels.intersection({"销售", "销售人员"}))
+        and field_semantics.has_broad_sales_metric_intent(normalized_query)
+        and not field_semantics.sales_person_dimension_requested(normalized_query)
+    ):
+        return 0
     if field_name and _contains_identifier(normalized_query, field_name):
         return 100
     best = 0
@@ -492,7 +531,7 @@ def _permission_scope(
                     row["column_name"] in explicit_names
                     or (
                         row["column_name"] == "dept_name"
-                        and DEPARTMENT_VALUE_RE.search(query)
+                        and _has_department_filter_value(query)
                     )
                 )
                 else _field_score(

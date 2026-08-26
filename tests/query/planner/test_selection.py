@@ -7,6 +7,8 @@
 import json
 from importlib.resources import files
 
+import pytest
+
 from opscli.query.services.planner.metadata_adapter import MetadataAdapter
 from opscli.query.services.planner import scoped_metadata_index, agent_query_planner
 
@@ -76,6 +78,91 @@ def test_plan_query_selects_sales_dataset():
     # 返回 planner_contract_v2，选表结果在 planner_status
     assert sel.get("contract") == "planner_contract_v2"
     assert sel.get("planner_status") in ("candidate_ready", "clarify_required")
+
+
+def _specialized_dataset_payload() -> dict:
+    """包含默认销售表和几个专用表，用于验证业务短语提示优先级。"""
+    datasets = [
+        {
+            "table_id": 1,
+            "dataset_alias": "ds_instant",
+            "dataset_name": "order_sale_trend_adv_traffic_inv_set",
+            "dataset_category": "normal",
+            "description": "即时综合数据集",
+            "remarks": "",
+            "select_columns": [],
+        },
+        {
+            "table_id": 2,
+            "dataset_alias": "ds_shipping",
+            "dataset_name": "sale_trend_set",
+            "dataset_category": "normal",
+            "description": "发货数据集",
+            "remarks": "",
+            "select_columns": [],
+        },
+        {
+            "table_id": 33,
+            "dataset_alias": "ds_listing_snapshot",
+            "dataset_name": "custom_crawler_listing_snapshot",
+            "dataset_category": "normal",
+            "description": "ASIN最新详情快照表",
+            "remarks": "",
+            "select_columns": [],
+        },
+        {
+            "table_id": 53,
+            "dataset_alias": "ds_sp_keyword",
+            "dataset_name": "custom_sp_keyword_set",
+            "dataset_category": "normal",
+            "description": "SP关键词数据集",
+            "remarks": "",
+            "select_columns": [],
+        },
+    ]
+    fields = []
+    for dataset in datasets:
+        alias = dataset["dataset_alias"]
+        fields.extend(
+            {
+                "table_id": dataset["table_id"],
+                "dataset_alias": alias,
+                "dataset_name": dataset["dataset_name"],
+                "field_name": name,
+                "verbose_name": label,
+                "global_alias": f"f_{name}",
+                "field_type": kind,
+                "has_formula_config": 0,
+            }
+            for name, label, kind in (
+                ("date_id", "日期", "dimension"),
+                ("price", "销售额", "metric"),
+                ("order_qty", "销量", "metric"),
+            )
+        )
+    return {"datasets": datasets, "fields": fields}
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_alias"),
+    [
+        ("我想看账单销售趋势", "ds_shipping"),
+        ("查Listing最新快照", "ds_listing_snapshot"),
+        ("看看Amazon SP关键词和直接间接转化", "ds_sp_keyword"),
+    ],
+)
+def test_specialized_business_hint_beats_instant_dataset(query, expected_alias):
+    """专用业务短语应优先命中语义数据集，而不是即时综合默认表。"""
+    adapter = MetadataAdapter(_specialized_dataset_payload())
+    cards = agent_query_planner.load_authorized_cards(adapter)
+    selection = agent_query_planner.plan_query(query, cards, _rules())
+
+    assert selection["planner_status"] == "candidate_ready"
+    assert selection["dataset_candidates"][0]["dataset_alias"] == expected_alias
+    assert any(
+        reason.startswith("business_hint:")
+        for reason in selection["dataset_candidates"][0]["reasons"]
+    )
 
 
 # ── 领域覆盖判定的字段证据回退（生产 dataset_constraints 误判）────────────────

@@ -53,6 +53,106 @@ def _sales_payload():
     }
 
 
+def _department_sales_payload():
+    """同时含部门、销售人员与标准销售指标，用于字段歧义端到端回归。"""
+    dataset = {
+        "table_id": 101,
+        "dataset_alias": "ds_department_sales",
+        "dataset_name": "即时综合数据集",
+        "dataset_category": "normal",
+        "description": "即时综合数据集",
+        "remarks": "销售订单综合",
+        "select_columns": [],
+    }
+    fields = [
+        ("date_id", "日期", "dimension"),
+        ("dept_name", "部门", "dimension"),
+        ("team_username", "销售", "dimension"),
+        ("price", "销售额", "metric"),
+        ("order_qty", "销量", "metric"),
+        ("orders", "订单数", "metric"),
+    ]
+    return {
+        "datasets": [dataset],
+        "fields": [
+            {
+                "table_id": 101,
+                "dataset_alias": "ds_department_sales",
+                "dataset_name": "即时综合数据集",
+                "field_name": field_name,
+                "verbose_name": verbose_name,
+                "global_alias": f"f_{field_name}",
+                "field_type": field_type,
+                "has_formula_config": 0,
+            }
+            for field_name, verbose_name, field_type in fields
+        ],
+    }
+
+
+def test_sales_situation_selects_metrics_not_sales_person_dimension():
+    """线上原句应按部门返回销售指标，不能退化成部门与销售人员名单。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_department_sales_payload()),
+        "查询下2026年8月各部门的销售情况",
+        enum_fn=lambda *a, **k: [],
+    )
+
+    assert contract["status"] == "planned"
+    assert contract["model_view"]["dimensions"] == ["部门"]
+    assert contract["model_view"]["metrics"] == ["销售额", "销量", "订单数"]
+    execution = contract["execution_ref"]
+    assert {item["field_name"] for item in execution["metrics"]} == {
+        "price",
+        "order_qty",
+        "orders",
+    }
+    assert all(item["field_name"] != "team_username" for item in execution["dimensions"])
+
+
+def test_conversational_sales_question_selects_metrics_not_sales_person_dimension():
+    """“这个月销售怎么样”不能把销售经营问法误当作销售人员维度。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_department_sales_payload()),
+        "这个月销售怎么样",
+        enum_fn=lambda *a, **k: [],
+    )
+
+    assert contract["status"] == "planned"
+    assert contract["model_view"]["dimensions"] == []
+    assert contract["model_view"]["metrics"] == ["销售额", "销量", "订单数"]
+    assert all(
+        item["field_name"] != "team_username"
+        for item in contract["execution_ref"]["dimensions"]
+    )
+
+
+def test_explicit_sales_person_grouping_is_preserved_with_sales_metrics():
+    """“按销售人员”明确点名人员维度时，人员维度与销售指标应同时保留。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_department_sales_payload()),
+        "即时综合数据集，查询2026年8月按销售人员汇总销售情况",
+        enum_fn=lambda *a, **k: [],
+    )
+
+    assert contract["status"] == "planned"
+    assert contract["model_view"]["dimensions"] == ["销售"]
+    assert contract["model_view"]["metrics"] == ["销售额", "销量", "订单数"]
+
+
+def test_explicit_sales_person_grouping_with_conversational_question_keeps_metrics():
+    """明确按销售人员分组时，口语化“怎么样”仍应带齐销售指标。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_department_sales_payload()),
+        "按销售人员看这个月销售怎么样",
+        enum_fn=lambda *a, **k: [],
+    )
+
+    assert contract["status"] == "planned"
+    assert contract["model_view"]["dimensions"] == ["销售"]
+    assert contract["model_view"]["metrics"] == ["销售额", "销量", "订单数"]
+
+
 def test_build_model_query_plan_contract_shape():
     """就绪 adapter + 请求 → 模型合同 v2，顶层键齐全。"""
     adapter = MetadataAdapter(_sales_payload())
@@ -368,6 +468,33 @@ def test_generic_suffix_words_do_not_trigger_department_clarify():
     assert contract["status"] == "planned"
     filters = contract["execution_ref"]["query_template"]["filters"]
     assert not [item for item in filters if item.get("field") == "dept_name"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "查询8月各部门的销售情况",
+        "所有部门的销售情况，按部门分组，不筛选具体部门",
+        "按部门汇总销售额和销量",
+        "不限部门，按部门统计销量",
+        "不按部门筛选，按部门汇总销售额",
+        "部门筛选为空，按部门统计销量",
+    ],
+)
+def test_department_grouping_and_no_filter_phrases_do_not_create_filter(query):
+    """部门分组或否定筛选只选择维度，不得进入具体部门枚举澄清。"""
+    contract = _resolve_dept(query)
+    assert contract["status"] == "planned"
+    filters = contract["execution_ref"]["query_template"]["filters"]
+    assert not [item for item in filters if item.get("field") == "dept_name"]
+
+
+def test_explicit_department_label_stops_before_business_description():
+    """“部门是宁波的销量”只提取宁波，不能把后续指标描述吞进部门值。"""
+    contract = _resolve_dept("部门是宁波的销量")
+    assert contract["status"] == "planned"
+    filters = contract["execution_ref"]["query_template"]["filters"]
+    assert {"field": "dept_name", "operator": "=", "value": "宁波"} in filters
 
 
 # ── 固定槽位多覆盖的强制披露（Task 8 内核镜像）────────────────────────────────

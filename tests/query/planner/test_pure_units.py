@@ -182,3 +182,39 @@ def test_field_semantics_requested_canonical_fields():
     # 毛利率派生自 gross_profit 与 price 两个基础字段
     assert "gross_profit" in matched
     assert "price" in matched
+
+
+def test_field_semantics_broad_sales_business_terms_select_standard_metrics():
+    """“销售情况”是经营指标意图，必须映射标准销售指标而非销售人员。"""
+    from opscli.query.services.planner import field_semantics
+
+    for query in ("查询销售情况", "查看销售表现", "分析销售业绩"):
+        matched = field_semantics.requested_canonical_fields(query)
+        assert {"price", "order_qty", "orders"}.issubset(matched)
+
+
+def test_field_semantics_broad_sales_conversational_terms_select_standard_metrics():
+    """短口语经营问法也应映射销售指标，而不是销售人员维度。"""
+    from opscli.query.services.planner import field_semantics
+
+    for query in ("这个月销售怎么样", "销售如何", "销售好不好"):
+        assert field_semantics.has_broad_sales_metric_intent(query)
+        matched = field_semantics.requested_canonical_fields(query)
+        assert {"price", "order_qty", "orders"}.issubset(matched)
+        assert not field_semantics.sales_person_dimension_requested(query)
+
+
+def test_field_semantics_sales_dataset_name_is_not_broad_metric_intent():
+    """数据集名称中的“销售数据集”只用于选表，不得凭子串追加销售指标组。"""
+    from opscli.query.services.planner import field_semantics
+
+    assert not field_semantics.has_broad_sales_metric_intent("使用即时销售数据集")
+
+
+def test_field_semantics_distinguishes_sales_person_dimension_context():
+    """只有明确人员/分组/筛选表达时，“销售”才表示销售人员维度。"""
+    from opscli.query.services.planner import field_semantics
+
+    assert not field_semantics.sales_person_dimension_requested("各部门的销售情况")
+    assert field_semantics.sales_person_dimension_requested("按销售人员汇总销售情况")
+    assert field_semantics.sales_person_dimension_requested("销售是张三，查询销售情况")

@@ -1,29 +1,36 @@
 # 待归档变更记录
 
 ## 2026-09-05 MCP query - 币种语义与三入口 schema 审查跟进
+## 2026-08-26 query - 修复宽泛销售问法误识别为销售人员维度
 
-**变更原因**：`bf32a66c` 补齐 MCP 币种参数后，生产分支的字段语义索引仍把
-美元/USD 解释为选择原币字段，并默认 CNY，与查询规范冲突；schema 回归仅覆盖
-`query_simple`。复核后端 `CliQueryService::resolveGlobalCurrency` 确认用户默认币种
-回退已停用，前次审查建议将测试说明改为“回退用户默认币种”不准确。
+**变更原因**：规划器将“这个月销售怎么样”等短口语问法识别为销售人员维度，
+且在“按销售人员汇总销售怎么样”场景下因未识别经营指标而丢失销售指标。
 
-**改动点**：语义索引拆分原币字段口径与目标币种换算关键词，去掉默认 CNY 指令，
-明确目标币种走 `global_currency`、未指定时不传、结果按 `meta.currency` 披露；
-默认参数测试说明仅描述透传 `None` 的可验证行为，并断言调用成功；FastMCP schema
-测试参数化覆盖 `query_simple`、`query_build`、`query_build_and_run`，检查参数存在、
-可选且默认值为 `None`。
+**改动点**：扩展内核与 `ops-dataset-query` Skill 镜像的共享销售语义规则，将
+“怎么样/如何/好不好/好吗”识别为宽泛销售经营指标意图；同步扩大销售人员词边界
+排除项，避免这些经营问法触发人员维度；已安装 `.codex` 镜像同步该规则，且其字段指导层
+同样屏蔽宽泛销售问法对 `team_username` 的误命中。
 
-**验证结果**：使用项目虚拟环境运行
-`python -m pytest tests/mcp/test_query_tools.py tests/mcp/test_tools.py tests/query/test_manager.py -q`，
-64 条通过。PyYAML 解析及结构校验通过：目标关键词覆盖六种受支持币种代码、原币关键词
-与目标关键词互斥、默认币种为空；`git diff --check` 通过。
+**验证结果**：新增核心规划器与 Skill 镜像回归，确认宽泛问法补齐销售额、销量、
+订单数（Skill 夹具中的 `order_qty` 展示名为“订单量”），明确“按销售人员”仍保留
+销售人员分组；定向 145 passed，完整规划器回归 305 passed。
 
-**影响范围**：内置 ops-dataset-query 字段语义索引和 MCP 测试；不改变后端默认币种
-策略、接口参数或版本号。
+**影响范围**：仅影响销售字段语义识别，不改变明确销售人员筛选/分组及其他数据集选表。
 
-**回滚方式**：回退本节记录及上述语义索引、两个测试文件的本次差异，无数据库或配置迁移。
+## 2026-08-26 query - 为专用业务场景增加可解释选表提示
 
----
+**变更原因**：短口语场景缺少数据集名称之外的业务证据，账单销售、Listing、SP
+关键词、物控期初期末等专用数据集容易被即时综合数据集抢选。
+
+**改动点**：在内核与 Skill 镜像的选表排序中增加不绑定 table_id 的业务短语提示，使用数据集语义
+名称片段匹配；命中专用场景时提升对应候选并记录 `business_hint` 理由，未命中时
+保持原有领域、粒度和字段排序；专用场景即使未点明具体指标也不再被宽泛业务澄清
+拦截，且专用候选已选出时不再被默认即时综合推荐覆盖。覆盖账单销售、即时销售、广告类型、退款产地、
+Listing、运营建议、物控、SP关键词、ASIN明细和 VC Manufacturing 等场景。
+
+**验证结果**：新增账单销售、Listing 快照和 SP 关键词专用场景夹具（并补齐测试依赖）；
+新增 6 条口语化销售/专用场景回归，专用场景定向 9 passed，完整规划器回归 305
+passed，所有相关 Python 文件编译通过。
 
 ## 2026-09-05 MCP query - 生产分支补齐全局币种参数
 
@@ -9245,5 +9252,129 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：MCP、CLI、Skill 脚本三条手工取数路线的币种传参与文档口径统一；规划器路线不变。未改动版本号。
 
 **回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/`（本次改动均为工作区未提交变更）。
+---
+
+## 2026-08-25 query/skills - 区分部门分组与具体部门筛选
+
+**变更原因**：第一版自然语言覆盖测试发现“查询8月各部门的销售情况”等分组表达
+会在第二次规划时被误识别为具体部门筛选。根因是“部门”标签后的关系词可选，且
+分析句式与宽后缀兜底未排除分组、否定筛选语义，导致后续业务描述被当成部门值。
+
+**改动点**：
+1. 内核与 Skill 模板的 `query_plan.py` 同步收紧部门标签规则，要求明确的
+   “为/是/等于/冒号”等关系词，并在值边界处停止；新增部门分组与否定筛选语义，
+   在分析句式和宽后缀兜底前返回无具体筛选值。
+2. 内核与 Skill 模板的 `dataset_guidance.py` 同步使用具体部门值判定，避免把
+   “各部门/按部门/所有部门/不限部门”提升为具体筛选组件意图。
+3. 补充内核、Skill 双版本和完整规划回归测试，覆盖四类异常表达；同时验证
+   `dept_name` 仍作为分组维度保留，项目二部/宁波/泛泰克仍正确筛选，魔法部仍
+   `clarify_required`，不放宽授权边界。
+4. `ops-dataset-query` 模板版本由 1.3.23 升至 1.3.24。
+
+**验证结果**：
+- `pytest -q tests/query/planner/test_query_plan.py tests/query/planner/test_guidance.py tests/skills/test_component_filter_resolution.py tests/skills/test_dataset_query_planner.py -k 'department or component_enum'`
+  → 43 passed
+- `pytest -q tests/query/planner/test_query_plan.py tests/query/planner/test_guidance.py tests/skills/test_component_filter_resolution.py tests/skills/test_dataset_query_planner.py`
+  → 219 passed
+- `pytest -q tests/query/planner/ tests/skills/test_component_filter_resolution.py tests/skills/test_dataset_query_planner.py tests/skills/test_dataset_query_flow.py`
+  → 299 passed
+- `git diff --check` → 通过
+
+**影响范围**：仅影响数据集查询规划器中的部门筛选意图识别与 guidance 权限组件
+排序。部门分组查询不再产生 `dept_name` 筛选；真实具体部门仍执行当前账号授权枚举
+的规范化完整等值匹配，未知部门继续失败闭合。
+
+**回滚方式**：通过 `git revert <本次提交 hash>` 回退本次变更，并将 Skill 版本
+恢复为 1.3.23。
+
+---
+
+## 2026-08-25 query/skills - 修复“销售情况”误识别为销售人员维度
+
+**变更原因**：部门语义修复后的真实查询暴露了独立字段歧义：“查询8月各部门的
+销售情况”把“销售”按中文子串命中 `team_username`，结果只返回部门和销售人员，
+销售额、销量、订单数指标全部缺失。原有业务语义映射只覆盖“销售额/销量”等精确
+说法，未覆盖“销售情况/销售表现/销售业绩”等宽泛经营表达。
+
+**改动点**：
+1. 内核与 Skill 模板的 `field_semantics.py` 新增宽泛销售经营语义，将“销售情况、
+   销售表现、销售业绩、销售概况、销售趋势、销售走势、销售数据”映射为当前授权
+   数据集实际存在时的标准指标组：销售额 `price`、销量 `order_qty`、订单数
+   `orders`；“销售数据集”明确排除，避免只选表时自动追加指标。
+2. 新增销售人员上下文判定：仅“销售人员/销售员/销售负责人、按销售、销售是某人、
+   销售筛选/分组”等明确表达保留人员维度；宽泛销售经营语义下，字段指导与授权标签
+   兜底均抑制 `team_username` 的子串误命中。
+3. 调整跨类型长短标签去重：明确人员语义下，“销售”维度不再因是“销售额”的子串
+   被吞并，支持“按销售人员汇总销售情况”同时返回人员维度和标准销售指标。
+4. 补充纯语义、内核端到端、Skill 端到端回归测试；模板版本由 1.3.24 升至 1.3.25。
+
+**验证结果**：
+- TDD 红态：新增目标用例实现前 5 项失败，复现“部门、销售”维度且指标为空。
+- `pytest -q tests/query/planner/test_pure_units.py tests/query/planner/test_guidance.py tests/query/planner/test_query_plan.py tests/skills/test_scoped_reader_duplicate_fields.py tests/skills/test_component_filter_resolution.py tests/skills/test_dataset_query_planner.py`
+  → 254 passed
+- `pytest -q tests/query/planner/ tests/skills/test_component_filter_resolution.py tests/skills/test_dataset_query_planner.py tests/skills/test_dataset_query_flow.py tests/skills/test_routing_eval.py tests/skills/test_negated_field_labels.py`
+  → 346 passed, 3 xfailed（既有严格标记缺口）
+- `opscli query plan "查询下8月各部门的销售情况"`（当前账号真实元数据）
+  → `planned`；维度仅“部门”；指标为“订单数、销量、销售额”；筛选仅
+  2026-08-01 至 2026-08-31 日期范围
+- `git diff --check` → 通过
+
+**影响范围**：数据集查询规划器的宽泛销售业务字段选择。“销售情况”等表达将按
+授权字段选择销售额、销量和订单数，不再把销售人员当成默认维度；明确销售人员分组、
+筛选或显式字段选择保持原行为。未包含标准指标物理字段的数据集不会创造字段。
+
+**回滚方式**：通过 `git revert <本次提交 hash>` 回退本次变更，并将 Skill 版本
+恢复为 1.3.24。
+
+---
+
+## 2026-08-25 scripts - 新增业务小白自然语言取数矩阵审计
+
+**变更原因**：第一版字段覆盖脚本在提示词中显式写入数据集名称、`table_id` 和技术
+字段提示，不能代表业务小白使用自然语言咨询数据时的真实规划、澄清和降级体验。
+
+**报告收尾补充**：矩阵脚本增加 `--report-only`，复用已有 `case-results.jsonl`
+重生成报告时不再调用 `opscli`；总报告补充第一版技术提示词基线对比、错误澄清聚类、
+错表路径及 P0/P1/P2 建议，每数据集报告补充具体失败证据。
+
+**改动点**：
+1. 新增 `scripts/qa_ops_dataset_query_novice_matrix.py`，基于当前账号意图目录生成
+   不含内部表名和 ID 的业务问句；脚本只使用当前界面展示名，不主动注入物理
+   `field_name`，并通过正式 `opscli query flow` 入口执行。
+2. 同时覆盖口语化核心场景与每数据集中文展示字段批次，独立统计数据集/字段请求
+   覆盖、字段规划成功、自动完成、合理澄清、不合理失败、重试和真实降级证据。
+3. 每条用例传独立 `--result-dir`；CLI 失败后立即经过 `feedback_guard.py` 去重提交
+   结构化反馈，再原样重试一次，反馈通道失败按 fail-open 处理；仅当自然语言明确
+   要求前 N 条时才传 `--limit`，不替业务用户补行数口径。
+4. 生成每数据集一份 Markdown、JSON/JSONL 原始证据、Markdown 总结和单页 HTML
+   总报告；0 行、合理澄清、缺失必要澄清、合同可用降级目录和实际执行降级均分栏
+   统计，不把 `fallback_level` 的存在误报为已经执行降级。
+5. `query flow` 顶层成功但嵌套 `result.success=false` 时同样按 CLI 失败即时反馈并
+   原样重试；错误摘要保留外层码、子错误码和字段位置，断点恢复会重跑旧版执行器
+   曾漏判的嵌套失败结果。
+6. 主动中断产生的退出码 130 不提交反馈，断点恢复时也不复用该结果，避免把测试
+   执行器维护动作污染为 opscli 产品失败或实际降级。
+
+**验证结果**：
+- 真实矩阵共 198 条用例、37 个业务数据集，数据集覆盖 37/37（100%），字段请求
+  覆盖 1376/1700（80.94%），且每个数据集字段请求覆盖均不低于 80%。
+- 字段正确规划 626/1376（45.49%）；自动成功 53 条（26.77%），合理澄清 10 条，
+  可接受处理 63 条（31.82%），不合理失败 135 条（68.18%）。
+- 实际降级 2 条（1.01%），其中 1 条原样重试、1 条服务端排序未生效后的本地排序
+  兜底；成功但 0 行 16 条。嵌套执行失败已提交反馈
+  `e7cbe660-866e-49eb-92c3-21dc8b9478e7`。
+- `uv run python scripts/qa_ops_dataset_query_novice_matrix.py --report-only ...` 成功复用
+  198 条轨迹生成 37 份数据集 Markdown、`summary.md`、`summary.json` 和单页 HTML，
+  未再次调用 `opscli`。
+- JSON 一致性断言通过：数据集和总字段覆盖达标、37 个数据集逐表字段覆盖均达标、
+  198 条结果与报告一致、37 个 HTML 报告链接全部存在。
+- Playwright 复用本机 Chrome 验证桌面和 390px 手机宽度：无横向溢出、无控制台错误；
+  “失败”筛选显示 135 条，“正常/合理澄清”筛选显示 63 条。
+- `uv run ruff check scripts/qa_ops_dataset_query_novice_matrix.py`、Python 编译检查及
+  `git diff --check` 均通过。
+
+**影响范围**：仅新增离线 QA/审计脚本和报告产物，不改变生产查询行为。
+
+**回滚方式**：删除新增脚本及对应输出目录，并移除本条变更记录。
 
 ---
