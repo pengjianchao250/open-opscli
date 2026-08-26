@@ -7,11 +7,15 @@ from opscli.keepa.domain.models import (
 )
 from opscli.keepa.services import KeepaApiManager
 from opscli.keepa.tracking import (
+    FormattedNotificationExport,
+    FormattedTrackingExport,
     KeepaTrackingClient,
     KeepaTrackingService,
     TrackingCreation,
     TrackingNotifyIf,
     TrackingThresholdValue,
+    format_notification_export,
+    format_tracking_export,
 )
 
 __all__ = [
@@ -19,9 +23,13 @@ __all__ = [
     "KeepaExportResult",
     "KeepaScenarioRequest",
     "KeepaScenarioResult",
+    "FormattedNotificationExport",
+    "FormattedTrackingExport",
     "KeepaTrackingClient",
     "KeepaTrackingService",
     "TrackingCreation",
     "TrackingNotifyIf",
     "TrackingThresholdValue",
+    "format_notification_export",
+    "format_tracking_export",
 ]
