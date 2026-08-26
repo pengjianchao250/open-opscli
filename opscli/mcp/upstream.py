@@ -811,11 +811,14 @@ class StreamableHttpUpstreamTransport:
                             request.headers[header_name] = caller_email
 
                     event_hooks = {"request": [inject_caller_email]}
+                # 每个 Tool 的总截止时间仍由 Gateway 控制；共享连接池只需避免
+                # 固定 HTTP 超时早于该服务中最长的已审批 Tool 截止时间。
+                http_timeout = max(tool.timeout_seconds for tool in server.tools)
                 client = httpx.AsyncClient(
                     headers=headers,
                     event_hooks=event_hooks,
                     follow_redirects=False,
-                    timeout=10,
+                    timeout=http_timeout,
                     transport=transport,
                     trust_env=False,
                 )
