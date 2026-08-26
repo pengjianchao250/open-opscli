@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 
 const APP_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const IMAGE_SERVICE_PATTERN = /^(frontend|backend)$/;
+const IMAGE_TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
 /** 读取并校验唯一的 OPS 应用配置。 */
 export function loadOpsAppConfig(configPath, options = {}) {
@@ -33,4 +35,20 @@ export function getOpsAppDeployBase(config) {
     throw new Error("生产构建前必须取得 projectId");
   }
   return `/ops-app/${config.projectId}/${config.appName}/`;
+}
+
+/** 派生前后端镜像名；仓库部分统一转为小写。 */
+export function getOpsAppImageName(config, service, tag = "latest") {
+  if (!config.projectId) {
+    throw new Error("生成镜像名之前必须取得 projectId");
+  }
+  if (!IMAGE_SERVICE_PATTERN.test(service)) {
+    throw new Error("镜像服务只能是 frontend 或 backend");
+  }
+  if (!IMAGE_TAG_PATTERN.test(tag)) {
+    throw new Error("镜像 tag 不是合法格式");
+  }
+
+  const repository = `${config.projectId}-${config.appName}-${service}`.toLowerCase();
+  return `${repository}:${tag}`;
 }

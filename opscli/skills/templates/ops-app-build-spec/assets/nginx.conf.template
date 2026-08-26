@@ -1,7 +1,10 @@
 server {
-    listen 80;
+    # 非 root Nginx 使用高位端口，宿主映射由 Compose 负责。
+    listen 8080;
     server_name _;
     server_tokens off;
+    access_log /dev/stdout;
+    error_log /dev/stderr warn;
 
     root /usr/share/nginx/html;
     index index.html;

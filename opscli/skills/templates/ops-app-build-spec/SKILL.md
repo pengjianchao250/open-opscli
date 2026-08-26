@@ -1,7 +1,6 @@
 ---
 name: ops-app-build-spec
 description: 用于盘点未知 Web 项目、生成项目规范，并将受支持项目规范化为 Vite + React/Vue、FastAPI + SQLite 和 Docker Compose 部署结构；遇到不支持的技术栈时停止并提示联系 IT。
-version: 0.0.1
 ---
 
 # OPS 应用规范与部署初始化
@@ -84,6 +83,8 @@ ops-app.config
 
 保留现有包管理器及唯一锁文件。依赖安装、服务启动和数据迁移仍遵守当前宿主的授权要求。
 
+根目录 `.dockerignore` 必须复制 Skill 的 `assets/.dockerignore`，再按实际构建输入补充；不得删掉密钥、本地数据库和依赖缓存排除项。
+
 ### 5. 项目配置
 
 根目录 `ops-app.config` 是项目 ID、应用名称和部署前缀的唯一配置源，使用 JSON 内容。初始化时复制 Skill 的 `assets/ops-app.config`，只修改实际字段值：
@@ -123,8 +124,13 @@ Vite 本地开发使用 `/`；`vite build` 调用 `loadOpsAppConfig(..., { requi
 发布前必须确认：
 
 - `deployment/Dockerfile`、`deployment/compose.yaml`、`deployment/nginx.conf.template`、`deployment/ops-app-config.mjs`、`deployment/ops-app-config.d.mts`、`deployment/render-nginx-config.mjs` 存在；Dockerfile 同时提供前端、后端构建 target，并通过共享配置模块和渲染脚本生成项目内 Nginx 配置。
+- 根目录 `.dockerignore` 存在，且没有排除构建必需的源码、锁文件、`ops-app.config` 或 deployment 资产。
 - Vite 配置已导入 `deployment/ops-app-config.mjs`，Compose、Dockerfile 和环境变量中没有重复的项目 ID、应用名称或部署路径。
 - Compose 同时声明前端、后端服务；SQLite 使用持久卷。
+- Dockerfile 使用精确 `COPY` 分层和 BuildKit 缓存；禁止无边界 `COPY . .`，但必须复制依赖清单、锁文件、源码和部署模板。
+- 后端依赖统一使用 `uv`、`pyproject.toml`、`uv.lock`；Nginx 以非 root 用户监听 `8080`；Dockerfile 不声明 `VOLUME`，持久卷只由 Compose 管理。
+- 根目录 `.dockerignore` 排除依赖目录、构建缓存、本地数据库、环境文件和密钥，同时保留锁文件、配置和部署资产。
+- Compose 使用最新 Compose Specification；前后端镜像名由 `ops-app.config` 派生为 `<projectId>-<appName>-frontend|backend`，同时发布 `:sha-<git-sha>` 和 `:latest`，线上始终拉取 `:latest`。
 - 前后端构建、测试、健康检查及 `docker compose config` 通过。
 - 构建产物引用部署前缀，本地开发仍使用根路径。
 - SPA 嵌套路由刷新、API 访问和容器重启后的数据持久化通过。

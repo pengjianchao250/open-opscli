@@ -24,7 +24,6 @@ def test_ops_app_build_spec_has_consistent_metadata():
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert "version: 0.0.1" in skill.split("---", 2)[1]
     assert version == {"name": "ops-app-build-spec", "version": "v0.0.1"}
 
 
@@ -77,6 +76,11 @@ def test_ops_app_build_spec_keeps_project_id_and_deployment_gates():
         "deployment/render-nginx-config.mjs",
         "frontend-runtime",
         "backend-runtime",
+        "精确 `COPY` 分层",
+        "BuildKit 缓存",
+        "Dockerfile 不声明 `VOLUME`",
+        "Nginx 以非 root 用户监听 `8080`",
+        "根目录 `.dockerignore`",
         "docker compose -f deployment/compose.yaml config",
         "SQLite 使用持久卷",
     ):
@@ -98,6 +102,9 @@ def test_ops_app_build_spec_provides_required_nginx_template():
     for required in (
         "${OPS_PROJECT_ID}",
         "${OPS_APP_NAME}",
+        "listen 8080",
+        "access_log /dev/stdout",
+        "error_log /dev/stderr warn",
         "proxy_pass http://backend:8000",
         "location ^~ /ops-app/${OPS_PROJECT_ID}/${OPS_APP_NAME}/",
         "rewrite ^/ops-app/${OPS_PROJECT_ID}/${OPS_APP_NAME}/(.*)$ /$1 last",
@@ -125,6 +132,7 @@ def test_ops_app_build_spec_uses_one_config_source_for_vite_and_nginx():
     """Vite 与 Nginx 必须复用同一配置读取和路径派生模块。"""
     config = json.loads(_read("assets/ops-app.config"))
     loader = _read("assets/ops-app-config.mjs")
+    declarations = _read("assets/ops-app-config.d.mts")
     renderer = _read("assets/render-nginx-config.mjs")
     frontend = _read("references/frontend-standard.md")
     deployment = _read("references/deployment-standard.md")
@@ -138,8 +146,10 @@ def test_ops_app_build_spec_uses_one_config_source_for_vite_and_nginx():
         "schemaVersion",
         "PROJECT_ID_PATTERN",
         "APP_NAME_PATTERN",
+        "getOpsAppImageName",
     ):
         assert required in loader
+    assert "getOpsAppImageName" in declarations
 
     assert 'from "./ops-app-config.mjs"' in renderer
     assert '.replaceAll("${OPS_PROJECT_ID}", config.projectId)' in renderer
@@ -148,6 +158,39 @@ def test_ops_app_build_spec_uses_one_config_source_for_vite_and_nginx():
     assert "node deployment/render-nginx-config.mjs" in deployment
     assert "不得声明 `OPS_PROJECT_ID`、`OPS_APP_NAME`" in deployment
     assert "envsubst" not in content
+
+
+def test_ops_app_build_spec_defines_compose_and_layering_contracts():
+    """部署参考必须覆盖 Compose 生产约束和精确复制顺序。"""
+    deployment = _read("references/deployment-standard.md")
+
+    for required in (
+        "最新 Compose Specification",
+        "build.context",
+        "frontend-deps -> frontend-build -> frontend-runtime",
+        "backend-deps  -> backend-build  -> backend-runtime",
+        "package.json",
+        "uv.lock",
+        "service_healthy",
+        "read_only: true",
+        "tmpfs",
+        "restart: unless-stopped",
+        "init: true",
+        "container_name",
+        "privileged",
+        "network_mode: host",
+        "Compose secrets",
+        "禁止无边界的 `COPY . .`",
+        "Dockerfile 不声明 `VOLUME`",
+        "127.0.0.1:${OPS_APP_PORT:-8080}:8080",
+        "<projectId>-<appName>-frontend",
+        "<projectId>-<appName>-backend",
+        ":sha-<git-sha>",
+        "pull_policy: always",
+        "镜像 digest",
+        "image` 字段由 Skill 调用共享配置模块",
+    ):
+        assert required in deployment
 
 
 def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path):
@@ -167,6 +210,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path):
     assert (installed / "references" / "migration-standard.md").exists()
     assert (installed / "references" / "deployment-standard.md").exists()
     assert (installed / "assets" / "nginx.conf.template").exists()
+    assert (installed / "assets" / ".dockerignore").exists()
     assert (installed / "assets" / "ops-app.config").exists()
     assert (installed / "assets" / "ops-app-config.mjs").exists()
     assert (installed / "assets" / "ops-app-config.d.mts").exists()

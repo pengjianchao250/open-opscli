@@ -15,7 +15,8 @@ backend/
 │   ├── services/
 │   └── main.py
 ├── tests/
-├── pyproject.toml | requirements.txt
+├── pyproject.toml
+├── uv.lock
 └── .env.example
 ```
 
@@ -48,7 +49,9 @@ backend/
 ## 容器运行
 
 - 基于官方 Python 镜像构建，锁定明确的 Python 主次版本。
-- 先复制依赖清单并安装，再复制应用代码，保留构建缓存。
+- 依赖管理统一使用 `uv`、`pyproject.toml` 和 `uv.lock`；已有 `requirements.txt` 的受支持项目迁移时转换为该结构。
+- 先精确复制 `pyproject.toml`、`uv.lock` 等依赖清单，再安装依赖；随后精确复制 `backend/` 源码。禁止用无边界的 `COPY . .` 让无关文件破坏依赖缓存。
+- 使用 BuildKit cache mount 缓存 `/root/.cache/uv`，并使用 `uv sync --locked`。
 - 使用 exec 形式启动命令，绑定 `0.0.0.0`，容器内端口保持固定。
 - 以非 root 用户运行；镜像中不包含开发缓存、测试产物、数据库文件或 `.env`。
 - 容器健康检查调用 `/health`，只有依赖就绪后才返回成功。
