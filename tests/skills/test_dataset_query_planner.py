@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import jsonschema
+import pytest
 
 
 SKILL_ROOT = (
@@ -1326,6 +1327,139 @@ def test_department_filter_auto_enum_uses_only_unique_exact_member(
         assert department_filters == [
             {"field": "dept_name", "operator": "=", "value": expected}
         ]
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "即时综合数据集，2026年8月各部门的销售额",
+        "即时综合数据集，2026年8月按部门汇总销售额和销量",
+        "即时综合数据集，2026年8月不限部门，按部门统计销量",
+    ],
+)
+def test_department_grouping_keeps_dimension_without_filter(
+    tmp_path: Path, monkeypatch, prompt: str
+):
+    """完整规划中部门应作为分组维度保留，但不得生成具体部门筛选。"""
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    _patch_component_enum(monkeypatch, ["项目二部", "项目九部", "宁波", "泛泰克"])
+
+    result = query_plan.build_model_query_plan(
+        prompt,
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=True,
+    )
+
+    assert result["status"] == "planned"
+    dimensions = {
+        item["field_name"] for item in result["execution_ref"]["dimensions"]
+    }
+    assert "dept_name" in dimensions
+    filters = result["execution_ref"]["query_template"]["filters"]
+    assert not [item for item in filters if item.get("field") == "dept_name"]
+
+
+def test_sales_situation_selects_standard_metrics_not_sales_person(
+    tmp_path: Path, monkeypatch
+):
+    """Skill 规划器镜像必须修复“销售情况”误选销售人员维度的线上原句。"""
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    fields_path = data_dir / "dataset_fields.csv"
+    fields_path.write_text(
+        fields_path.read_text(encoding="utf-8")
+        + "1,ds_instant,sales_primary_set,team_username,销售,f_team_username,dimension,,,,,0,0\n"
+        + "1,ds_instant,sales_primary_set,orders,订单数,f_orders,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    _patch_component_enum(monkeypatch, ["项目二部", "项目九部", "宁波", "泛泰克"])
+
+    result = query_plan.build_model_query_plan(
+        "即时综合数据集，查询2026年8月各部门的销售情况",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=True,
+    )
+
+    assert result["status"] == "planned"
+    assert {item["field_name"] for item in result["execution_ref"]["dimensions"]} == {
+        "dept_name"
+    }
+    assert {item["field_name"] for item in result["execution_ref"]["metrics"]} == {
+        "price",
+        "order_qty",
+        "orders",
+    }
+
+
+def test_conversational_sales_question_selects_standard_metrics_not_sales_person(
+    tmp_path: Path, monkeypatch
+):
+    """Skill 镜像也不能把“这个月销售怎么样”规划成销售人员维度。"""
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    fields_path = data_dir / "dataset_fields.csv"
+    fields_path.write_text(
+        fields_path.read_text(encoding="utf-8")
+        + "1,ds_instant,sales_primary_set,team_username,销售,f_team_username,dimension,,,,,0,0\n"
+        + "1,ds_instant,sales_primary_set,orders,订单数,f_orders,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    _patch_component_enum(monkeypatch, ["项目二部", "项目九部", "宁波", "泛泰克"])
+
+    result = query_plan.build_model_query_plan(
+        "这个月销售怎么样",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=True,
+    )
+
+    assert result["status"] == "planned"
+    assert result["model_view"]["dimensions"] == []
+    assert set(result["model_view"]["metrics"]) == {"订单量", "销售额", "订单数"}
+    assert all(
+        item["field_name"] != "team_username"
+        for item in result["execution_ref"]["dimensions"]
+    )
+
+
+def test_sales_person_grouping_remains_available_with_broad_sales_metrics(
+    tmp_path: Path, monkeypatch
+):
+    """Skill 镜像中明确“按销售人员”时不能被“销售额”长标签吞并。"""
+    data_dir = tmp_path / "data"
+    _write_sales_trend_metadata(data_dir)
+    fields_path = data_dir / "dataset_fields.csv"
+    fields_path.write_text(
+        fields_path.read_text(encoding="utf-8")
+        + "1,ds_instant,sales_primary_set,team_username,销售,f_team_username,dimension,,,,,0,0\n"
+        + "1,ds_instant,sales_primary_set,orders,订单数,f_orders,metric,,,,,0,0\n",
+        encoding="utf-8",
+    )
+    _patch_component_enum(monkeypatch, ["项目二部", "项目九部", "宁波", "泛泰克"])
+
+    result = query_plan.build_model_query_plan(
+        "即时综合数据集，查询2026年8月按销售人员汇总销售情况",
+        data_dir=data_dir,
+        rules_path=RULES_PATH,
+        auto_upgrade=False,
+        auto_enum=True,
+    )
+
+    assert result["status"] == "planned"
+    assert {item["field_name"] for item in result["execution_ref"]["dimensions"]} == {
+        "team_username"
+    }
+    assert {item["field_name"] for item in result["execution_ref"]["metrics"]} == {
+        "price",
+        "order_qty",
+        "orders",
+    }
 
 
 def test_executor_rejects_removing_resolved_department_filter(

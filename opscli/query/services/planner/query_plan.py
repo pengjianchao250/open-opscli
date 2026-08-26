@@ -227,10 +227,25 @@ FILTER_VALUE_MATCH_POLICY = {
 
 _DEPARTMENT_NUMBER_RE = re.compile(r"(?:项目)?[零〇一二三四五六七八九十百\d]+部")
 _DEPARTMENT_LABEL_RE = re.compile(
-    r"部门\s*(?:为|是|=|：|:)?\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,30})"
+    r"部门\s*(?:为|是|=|＝|：|:|等于)\s*"
+    r"([\u4e00-\u9fffA-Za-z0-9_-]{1,30}?)"
+    r"(?=的|地|，|,|。|；|;|、|/|\s|和|与|或|下|里|中|所有|全部|$)"
 )
 _DEPARTMENT_ANALYSIS_RE = re.compile(
     r"(?:分析|查询|获取|查看)\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,30}?)的(?:数据|情况)"
+)
+_DEPARTMENT_GROUPING_RE = re.compile(
+    r"(?:按|依|以)\s*部门(?:\s*(?:分组|汇总|统计|分析))?"
+    r"|(?:各|所有|全部)\s*部门"
+    r"|全\s*部门"
+    r"|部门\s*(?:分组|汇总|统计|维度)"
+)
+_DEPARTMENT_FILTER_NEGATION_RE = re.compile(
+    r"不\s*(?:按\s*)?部门\s*(?:筛选|过滤)"
+    r"|不\s*(?:筛选|过滤)\s*(?:具体\s*)?部门"
+    r"|部门\s*(?:筛选|过滤)(?:条件)?\s*(?:为|是|=|＝|：|:)?\s*(?:空|无|不设|不限)"
+    r"|不限\s*部门"
+    r"|部门\s*不限"
 )
 _CHINESE_DIGITS = {
     "零": "0",
@@ -383,6 +398,10 @@ def _extract_requested_department_value(query: str) -> str:
     label_match = _DEPARTMENT_LABEL_RE.search(query)
     if label_match:
         return label_match.group(1)
+    # “各部门/按部门”表达的是分组维度，“不限部门/不筛选部门”明确否定筛选。
+    # 二者都不能继续落入分析句式或宽后缀兜底，否则会把后续业务描述当成部门值。
+    if _DEPARTMENT_GROUPING_RE.search(query) or _DEPARTMENT_FILTER_NEGATION_RE.search(query):
+        return ""
     analysis_match = _DEPARTMENT_ANALYSIS_RE.search(query)
     if analysis_match:
         candidate = analysis_match.group(1)
@@ -933,6 +952,23 @@ def _label_is_negated(normalized_query: str, label: str, negated: list) -> bool:
     )
 
 
+def _is_sales_person_dimension(item: dict) -> bool:
+    """判断字段是否为销售人员维度，兼容规范技术名与中文展示名。"""
+    return bool(
+        item.get("field_name") == "team_username"
+        or _normalize(item.get("verbose_name")) in {"销售", "销售人员"}
+    )
+
+
+def _is_broad_sales_dimension_false_positive(item: dict, query: str) -> bool:
+    """宽泛销售指标语义下，识别被中文子串误命中的销售人员维度。"""
+    return bool(
+        _is_sales_person_dimension(item)
+        and dataset_guidance.field_semantics.has_broad_sales_metric_intent(query)
+        and not dataset_guidance.field_semantics.sales_person_dimension_requested(query)
+    )
+
+
 def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]:
     """从字段指导结果中筛出用户真正点名的字段。
 
@@ -950,6 +986,10 @@ def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]
             continue
         source = item.get("selection_source")
         label = _normalize(item.get("verbose_name"))
+        if field_type == "dimensions" and _is_broad_sales_dimension_false_positive(
+            item, normalized_query
+        ):
+            continue
         if source in {"explicit", "semantic_alias"} or (
             label
             and label in normalized_query
@@ -1070,8 +1110,12 @@ def _selected_fields(
     # 「不按日期拆分」仍会从这条兜底路径把「日期」捞回来
     negated = time_scope.negated_spans(normalized_query)
 
-    def _hit(item: dict) -> bool:
+    def _hit(item: dict, field_type: str) -> bool:
         label = _normalize(item.get("verbose_name"))
+        if field_type == "dimensions" and _is_broad_sales_dimension_false_positive(
+            item, normalized_query
+        ):
+            return False
         return bool(
             label
             and label in normalized_query
@@ -1082,13 +1126,13 @@ def _selected_fields(
         dimensions = [
             dict(item, selection_source="authorized_query_label")
             for item in authorized_field_labels.get("dimensions", [])
-            if _hit(item)
+            if _hit(item, "dimensions")
         ]
     if not metrics:
         metrics = [
             dict(item, selection_source="authorized_query_label")
             for item in authorized_field_labels.get("metrics", [])
-            if _hit(item)
+            if _hit(item, "metrics")
         ]
     # 无点名字段时的推荐兜底（P0-1c）：把指导层已按打分选出的 top 字段
     # 以 recommended 来源标注供模型向用户提议，替代「全空无从下手→扫盘」
@@ -1122,6 +1166,12 @@ def _selected_fields(
         item
         for item in dimensions
         if item.get("selection_source") == "explicit"
+        or (
+            _is_sales_person_dimension(item)
+            and dataset_guidance.field_semantics.sales_person_dimension_requested(
+                normalized_query
+            )
+        )
         or not any(
             _normalize(item.get("verbose_name")) in metric_label
             for metric_label in metric_labels
