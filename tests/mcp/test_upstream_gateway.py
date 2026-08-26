@@ -220,6 +220,32 @@ def test_transport_opens_inline_url_with_fixed_authorization(tmp_path):
     asyncio.run(run())
 
 
+def test_transport_uses_largest_approved_tool_deadline_as_http_timeout(tmp_path):
+    payload = _inline_config_payload()
+    first_tool = payload["servers"][0]["tools"][0]
+    first_tool["timeout_seconds"] = 17
+    second_tool = json.loads(json.dumps(first_tool))
+    second_tool["remote_name"] = "slow_search"
+    second_tool["exposed_name"] = "ext_vendor_slow_search"
+    second_tool["timeout_seconds"] = 37
+    payload["servers"][0]["tools"].append(second_tool)
+    config = load_upstream_config(_write_config(tmp_path, payload))
+    transport = StreamableHttpUpstreamTransport(config)
+
+    async def run():
+        await transport.open()
+        try:
+            client_timeout = transport._clients["vendor"].timeout
+            assert client_timeout.connect == 37
+            assert client_timeout.read == 37
+            assert client_timeout.write == 37
+            assert client_timeout.pool == 37
+        finally:
+            await transport.close()
+
+    asyncio.run(run())
+
+
 def test_transport_isolates_email_header_between_concurrent_calls(tmp_path, monkeypatch):
     config = load_upstream_config(_write_config(tmp_path, _inline_config_payload()))
     captured_headers = []

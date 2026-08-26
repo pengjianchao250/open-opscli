@@ -6819,3 +6819,12 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：内部 Tracking Service 的调用契约变为显式确认；只读操作不变，MCP/CLI 仍未注册。
 **回滚方式**：回退 Tracking Service 的确认/allowlist 校验、测试、文档及本条变更记录。
 ---
+
+## 2026-08-26 MCP - 修复鹰眼上游数组响应与超时失配
+
+**变更原因**：鹰眼 MCP 的数据集目录返回顶层 JSON 数组，现有远端客户端只接受对象并误报调用失败；相似词查询可超过 10 秒，但共享 HTTP 客户端的固定 10 秒超时会早于工具配置的 30 秒截止时间中断请求。
+**改动点**：远端客户端保留对象响应原样，并将顶层 JSON 数组包装为统一的 `success/data` 对象；共享 HTTP 连接池改用服务内最长的已审批 Tool 截止时间，较短 Tool 仍由 Gateway 的总截止时间约束；补充对应回归测试。
+**验证结果**：数组包装和 HTTP 超时测试先在旧实现上稳定失败，分别命中 `ValueError` 与固定 `Timeout(timeout=10)`；修复后远端客户端和 upstream 网关定向回归 `54 passed`。真实鹰眼 Gateway 调用中，数据集目录、有效只读 SQL 和相似词查询均成功，相似词耗时 `14.816s`，确认不再被旧 10 秒限制提前中断；重启本地 MCP 后，通过 Codex 的 `local-opscli` 地址成功取得 9 个鹰眼数据集。完整 MCP 集被既有 Shopify `_shopify_manager` 缺失阻断收集；排除该文件后为 `407 passed, 1 failed`，唯一失败是既有 SellerSprite 遥测断言未包含 `dimension_resolver=None`。修改文件 compileall 和 `git diff --check` 通过；当前虚拟环境未安装 Ruff。
+**影响范围**：第三方 Streamable HTTP MCP 的成功结果解析和出站 HTTP 超时；对象响应及每个工具的总截止时间策略保持不变。
+**回滚方式**：回退远端客户端、上游 Transport、对应 MCP 测试及本条变更记录。
+---
