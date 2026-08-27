@@ -6,12 +6,27 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
+
+_logger = logging.getLogger("opscli.api")
+
+
+def _trace_keepa_api(message: str) -> None:
+    """复用鉴权层的低依赖 Keepa 诊断输出。"""
+    try:
+        from opscli.mcp.auth_middleware import _trace_keepa
+
+        _trace_keepa(message)
+    except Exception:
+        # 诊断日志不能影响 API 请求。
+        pass
 
 
 class QueryFlowOrderBy(BaseModel):
@@ -86,22 +101,6 @@ def _run_query_flow(
         _get_credential_dir,
         _query_manager,
     )
-
-
-async def _run_keepa_scenario(payload: KeepaRunRequest) -> dict[str, Any]:
-    """调用 Keepa MCP 同源实现，并保留其额度与遥测治理。"""
-    from opscli.keepa.api.scenarios import telemetry_dimensions
-    from opscli.mcp.instrumentation import quota_wrap, telemetry_wrap
-    from opscli.mcp.tools.keepa import keepa_run
-
-    # REST 不直接调用 Manager：MCP 的 quota_wrap 负责日额度占用/失败退回，
-    # telemetry_wrap 负责同一套低敏场景维度统计。
-    governed_run = telemetry_wrap(
-        quota_wrap(keepa_run),
-        module="keepa",
-        dimension_resolver=telemetry_dimensions,
-    )
-    return await governed_run(**payload.model_dump(exclude_none=True))
     from opscli.query.services.planner import run_flow
 
     session_id, jwt = _get_auth_pair("ops", None, None)
@@ -116,6 +115,80 @@ async def _run_keepa_scenario(payload: KeepaRunRequest) -> dict[str, Any]:
         offset=payload.offset,
         query_manager=_query_manager(jwt=jwt, session_id=session_id),
     )
+
+
+async def _run_keepa_scenario(payload: KeepaRunRequest) -> dict[str, Any]:
+    """调用 Keepa MCP 同源实现，并保留其额度与遥测治理。"""
+    _trace_keepa_api("import_start module=opscli.keepa.api.scenarios")
+    from opscli.keepa.api.scenarios import telemetry_dimensions
+    _trace_keepa_api("import_done module=opscli.keepa.api.scenarios")
+    _trace_keepa_api("import_start module=opscli.mcp.instrumentation")
+    from opscli.mcp.instrumentation import quota_wrap, telemetry_wrap
+    _trace_keepa_api("import_done module=opscli.mcp.instrumentation")
+    _trace_keepa_api("import_start module=opscli.mcp.tools.keepa")
+    from opscli.mcp.tools.keepa import _KEEPA_API_MODE, keepa_run
+    _trace_keepa_api("import_done module=opscli.mcp.tools.keepa")
+
+    # REST 不直接调用 Manager：MCP 的 quota_wrap 负责日额度占用/失败退回，
+    # telemetry_wrap 负责同一套低敏场景维度统计。
+    started_at = time.monotonic()
+    _logger.info(
+        "[KEEPA-TRACE] api_start scenario=%s site=%s export_format=%s wait=%s",
+        payload.scenario,
+        payload.site,
+        payload.export_format,
+        payload.wait,
+    )
+    _trace_keepa_api(
+        "api_start scenario=%s site=%s export_format=%s wait=%s"
+        % (payload.scenario, payload.site, payload.export_format, payload.wait)
+    )
+    governed_run = telemetry_wrap(
+        quota_wrap(keepa_run),
+        module="keepa",
+        dimension_resolver=telemetry_dimensions,
+    )
+    _trace_keepa_api("governance_ready scenario=%s" % payload.scenario)
+    api_mode_token = _KEEPA_API_MODE.set(True)
+    try:
+        result = await governed_run(**payload.model_dump(exclude_none=True))
+    except Exception as exc:
+        _logger.warning(
+            "[KEEPA-TRACE] api_error scenario=%s site=%s error_type=%s elapsed_ms=%s",
+            payload.scenario,
+            payload.site,
+            type(exc).__name__,
+            int((time.monotonic() - started_at) * 1000),
+        )
+        _trace_keepa_api(
+            "api_error scenario=%s site=%s error_type=%s elapsed_ms=%s"
+            % (
+                payload.scenario,
+                payload.site,
+                type(exc).__name__,
+                int((time.monotonic() - started_at) * 1000),
+            )
+        )
+        raise
+    finally:
+        _KEEPA_API_MODE.reset(api_mode_token)
+    _logger.info(
+        "[KEEPA-TRACE] api_done scenario=%s site=%s success=%s elapsed_ms=%s",
+        payload.scenario,
+        payload.site,
+        result.get("success") if isinstance(result, dict) else None,
+        int((time.monotonic() - started_at) * 1000),
+    )
+    _trace_keepa_api(
+        "api_done scenario=%s site=%s success=%s elapsed_ms=%s"
+        % (
+            payload.scenario,
+            payload.site,
+            result.get("success") if isinstance(result, dict) else None,
+            int((time.monotonic() - started_at) * 1000),
+        )
+    )
+    return result
 
 
 def create_api_app(*, lifespan: Any = None) -> FastAPI:
@@ -190,10 +263,18 @@ def create_api_app(*, lifespan: Any = None) -> FastAPI:
 
     @app.post("/api/v1/keepa/run", tags=["keepa"])
     async def keepa_run(payload: KeepaRunRequest) -> JSONResponse:
-        """执行 Keepa 场景并返回任务摘要、导出地址和额度信息。"""
+        """执行 Keepa 场景并返回完整格式化数据和额度信息。"""
+        _trace_keepa_api(
+            "route_enter path=/api/v1/keepa/run scenario=%s site=%s"
+            % (payload.scenario, payload.site)
+        )
         from opscli.mcp.tools.helpers import _get_authenticated_user_email
 
-        if not _get_authenticated_user_email():
+        user_email = _get_authenticated_user_email()
+        _trace_keepa_api(
+            "route_identity_resolved has_user_email=%s" % bool(user_email)
+        )
+        if not user_email:
             return _error_response(
                 code="authentication_required",
                 message="请先完成 opscli 账号授权",

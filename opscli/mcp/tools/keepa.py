@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import inspect
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,8 @@ from opscli.mcp.quota import get_quota_limiter
 from opscli.skills.packaging import get_builtin_templates_dir
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
+
+_KEEPA_API_MODE: ContextVar[bool] = ContextVar("keepa_api_mode", default=False)
 
 
 def _keepa_skill_dir() -> Path:
@@ -163,6 +166,7 @@ async def _keepa_run_impl(
     collection_submitter=None,
 ) -> dict:
     """执行 Keepa，并允许 MCP Runtime 注入内部沉淀提交器。"""
+    api_mode = _KEEPA_API_MODE.get()
     call_params = {
         "scenario": scenario,
         "site": site,
@@ -201,12 +205,14 @@ async def _keepa_run_impl(
             reserve_tokens=reserve_tokens,
             force=force,
             wait=wait,
+            upload_export=not api_mode,
         )
         manager_kwargs: dict[str, Any] = {"jwt": jw, "session_id": sid}
         if collection_submitter is not None:
             manager_kwargs["collection_submitter"] = collection_submitter
         result = await KeepaApiManager(**manager_kwargs).run(request)
-        return _ok(_public_result(result.to_dict()))
+        public_result = _public_api_result(result.to_dict()) if api_mode else _public_result(result.to_dict())
+        return _ok(public_result)
     except ValueError as exc:
         return _err(exc, tool="MCP → keepa_run(...)", call_params=call_params, auto_feedback=False)
     except Exception as exc:
@@ -253,11 +259,31 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(public, dict):
         public.pop("quota", None)
         public.pop("account", None)
+        public.pop("root_dir", None)
         public.pop("params_path", None)
         public.pop("raw_path", None)
+        public.pop("result_path", None)
         _sanitize_public_export(public)
         _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
+    return public
+
+
+def _public_api_result(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return REST-safe formatted rows without MCP preview compaction or upload metadata."""
+    public = _strip_sensitive(payload)
+    if not isinstance(public, dict):
+        return {}
+    public.pop("quota", None)
+    public.pop("account", None)
+    public.pop("root_dir", None)
+    public.pop("params_path", None)
+    public.pop("raw_path", None)
+    public.pop("result_path", None)
+    public.pop("export", None)
+    public["request_source"] = "api"
+    public["response_mode"] = "formatted_data"
+    public["warnings"] = _public_warnings(public.get("warnings"))
     return public
 
 

@@ -26,15 +26,32 @@ _MAX_DIMENSION_LENGTH = 128
 DimensionResolver = Callable[[dict[str, Any]], dict[str, Any] | None]
 
 
+def _trace_keepa_instrumentation(message: str) -> None:
+    """复用 Keepa 诊断通道记录 quota/telemetry 边界。"""
+    try:
+        from opscli.mcp.auth_middleware import _trace_keepa
+
+        _trace_keepa(message)
+    except Exception:
+        pass
+
+
 def quota_wrap(fn, *, limiter=None):
     """为 MCP Tool 增加调用前后限额处理。"""
 
     @functools.wraps(fn)
     async def _wrapper(*args, **kwargs):
+        trace_keepa = fn.__name__ == "keepa_run"
+        if trace_keepa:
+            _trace_keepa_instrumentation("quota_before_start tool=keepa_run")
         from opscli.mcp.quota import get_quota_limiter
 
         quota_limiter = limiter or get_quota_limiter()
         decision = await quota_limiter.before_call(fn.__name__)
+        if trace_keepa:
+            _trace_keepa_instrumentation(
+                "quota_before_done tool=keepa_run allowed=%s" % decision.allowed
+            )
         if not decision.allowed:
             return decision.error_response
 
@@ -43,6 +60,8 @@ def quota_wrap(fn, *, limiter=None):
         token = set_quota_access_context(getattr(decision, "access_context", None))
         ticket = getattr(decision, "ticket", None)
         try:
+            if trace_keepa:
+                _trace_keepa_instrumentation("quota_business_start tool=keepa_run")
             result = await fn(*args, **kwargs)
         except Exception:
             await quota_limiter.after_exception(ticket)
@@ -51,6 +70,8 @@ def quota_wrap(fn, *, limiter=None):
             reset_quota_access_context(token)
 
         if isinstance(result, dict):
+            if trace_keepa:
+                _trace_keepa_instrumentation("quota_after_start tool=keepa_run")
             return await quota_limiter.after_call(ticket, result)
         return result
 
@@ -76,10 +97,15 @@ def telemetry_wrap(
     async def _wrapper(*args, **kwargs):
         started_at = time.monotonic()
         tool_name = fn.__name__
+        trace_keepa = tool_name == "keepa_run"
+        if trace_keepa:
+            _trace_keepa_instrumentation("telemetry_dispatch_start tool=keepa_run")
         resolved_module = module or _fallback_module(fn, tool_name)
         call_arguments = _bind_call_arguments(fn, args, kwargs)
         try:
             result = await fn(*args, **kwargs)
+            if trace_keepa:
+                _trace_keepa_instrumentation("telemetry_dispatch_done tool=keepa_run")
             _fire_mcp_event(
                 tool_name,
                 module=resolved_module,

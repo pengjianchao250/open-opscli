@@ -15,6 +15,9 @@
 - REST 请求只接受场景合同字段，不接受 `session_id`、`jwt` 等内部认证参数。
 - 查询执行通过线程池调用同步 `run_flow`，避免阻塞 FastAPI 事件循环。
 - Keepa REST 执行复用 `keepa_run` 的 quota/telemetry 包装，不直接绕过 MCP 治理。
+- Keepa REST 响应保留完整格式化 `data`，带有 `request_source=api` 和
+  `response_mode=formatted_data`；该路径跳过导出文件上传，不要求调用方依赖 `export.url`。
+- Keepa MCP/CLI 继续使用导出上传和 `data_preview` 摘要，避免完整历史数据进入 Agent 上下文。
 
 ## 推荐架构
 

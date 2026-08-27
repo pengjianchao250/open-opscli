@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
 
 import httpx
@@ -13,6 +15,8 @@ DEFAULT_BASE_URL = "https://api.keepa.com"
 
 # Keepa HTTP 请求使用的默认 User-Agent。
 DEFAULT_USER_AGENT = "opscli-keepa/1.0"
+
+_logger = logging.getLogger("opscli.keepa.api")
 
 
 class KeepaApiClient:
@@ -83,15 +87,32 @@ class KeepaApiClient:
 
     async def _request(self, method: str, endpoint: str, **kwargs: Any) -> httpx.Response:
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        started_at = time.monotonic()
+        _logger.info("[KEEPA-TRACE] keepa_http_start method=%s endpoint=%s", method, endpoint)
         try:
-            return await self._client.request(method, url, **kwargs)
+            response = await self._client.request(method, url, **kwargs)
         except httpx.HTTPError as exc:
             # httpx 异常可能包含带 key 的完整 URL，必须先脱敏再映射为业务异常。
             detail = _redact_text(str(exc), (self.api_key,))
+            _logger.warning(
+                "[KEEPA-TRACE] keepa_http_error method=%s endpoint=%s error_type=%s elapsed_ms=%s",
+                method,
+                endpoint,
+                type(exc).__name__,
+                int((time.monotonic() - started_at) * 1000),
+            )
             raise KeepaApiError(
                 "Keepa API 网络请求失败",
                 response_excerpt=detail[:1000],
             ) from None
+        _logger.info(
+            "[KEEPA-TRACE] keepa_http_done method=%s endpoint=%s status=%s elapsed_ms=%s",
+            method,
+            endpoint,
+            response.status_code,
+            int((time.monotonic() - started_at) * 1000),
+        )
+        return response
 
 
 def _clean_params(params: dict[str, Any]) -> dict[str, str]:

@@ -1,5 +1,6 @@
 """产品化 HTTP API 的合同与 MCP 组合测试。"""
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from starlette.applications import Starlette
@@ -160,6 +161,42 @@ def test_keepa_run_reuses_governed_mcp_contract(monkeypatch):
     assert captured["payload"].params == {"keyword": "flashlight"}
     assert captured["payload"].export_format == "json"
     assert captured["payload"].wait is True
+
+
+def test_keepa_api_mode_is_scoped_to_shared_tool_call(monkeypatch):
+    """API mode must be visible only during the delegated Keepa tool call."""
+    from opscli.api import app as api_module
+    from opscli.mcp.tools import keepa as keepa_module
+
+    observed = {}
+
+    async def fake_keepa_run(**kwargs):
+        observed["during"] = keepa_module._KEEPA_API_MODE.get()
+        observed["kwargs"] = kwargs
+        return {"success": True, "data": {"request_source": "api"}, "error": None}
+
+    monkeypatch.setattr(keepa_module, "keepa_run", fake_keepa_run)
+    monkeypatch.setattr(api_module, "_trace_keepa_api", lambda message: None)
+    monkeypatch.setattr(
+        "opscli.mcp.instrumentation.quota_wrap",
+        lambda fn, **kwargs: fn,
+    )
+    monkeypatch.setattr(
+        "opscli.mcp.instrumentation.telemetry_wrap",
+        lambda fn, **kwargs: fn,
+    )
+
+    payload = api_module.KeepaRunRequest(
+        scenario="product-search",
+        site="US",
+        params={"keyword": "flashlight"},
+    )
+    result = asyncio.run(api_module._run_keepa_scenario(payload))
+
+    assert result["data"]["request_source"] == "api"
+    assert observed["during"] is True
+    assert observed["kwargs"]["scenario"] == "product-search"
+    assert keepa_module._KEEPA_API_MODE.get() is False
 
 
 def test_keepa_run_rejects_path_traversal_job_id():

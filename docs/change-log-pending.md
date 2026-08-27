@@ -6846,3 +6846,25 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：受 API Key 保护的 HTTP 服务新增 Keepa 场景发现和执行入口；现有 Keepa MCP Tool、CLI 和业务 Service 合同不变。
 **回滚方式**：回退 `opscli/api/app.py`、`tests/api/test_app.py`、场景 API 规划文档及本条变更记录。
 ---
+
+## 2026-08-27 Keepa/API - 增加真实请求阶段耗时日志
+
+**变更原因**：Keepa REST 场景请求长时间无响应，需要区分鉴权、OPS 集成账号、Keepa token 状态、主场景请求和导出上传阶段的等待位置。
+**改动点**：在 API 入口、Keepa API Client、OPS 集成账号 Client、文件上传 Client、KeepaApiManager 和 Keepa API Key 中间件增加 `[KEEPA-TRACE]` 阶段日志与耗时信息；Keepa 请求入口同时以 flush 输出并写入 `.tmp/keepa-trace.log`，额外记录请求体分片大小、`more_body` 和 FastAPI 分发边界，仅记录场景、站点、endpoint、请求路径、请求头名称、文件名/大小、HTTP 状态和异常类型，不记录 API Key、Keepa Token、JWT 或业务参数。
+**补充诊断**：Keepa REST 路由入口和已解析用户身份增加 flush/file trace，用于区分 FastAPI 请求体解析、路由进入和场景执行边界。
+**补充诊断**：Keepa 场景执行函数增加共享模块导入和 quota/telemetry 包装边界日志，用于定位首次导入锁或初始化等待。
+**补充诊断**：API 场景开始、完成和异常标记同步写入 `.tmp/keepa-trace.log`，与终端 logger 保持一致。
+**补充诊断**：quota/telemetry 包装层增加 Keepa 调用前、业务调用和结算边界日志，用于定位限额 SQLite 锁等待。
+**验证结果**：`tests/api` 10 passed；Keepa/MCP 相关回归 24 passed；`compileall` 与 `git diff --check` 通过。真实请求需重启服务后观察日志。
+**影响范围**：仅增加 Keepa REST/MCP 执行链路的可观测性，不改变请求参数、认证、额度和 Keepa API 行为。
+**回滚方式**：回退 `opscli/api/app.py`、`opscli/keepa/api/client.py`、`opscli/shared/integration_accounts.py`、`opscli/keepa/services/api_manager.py` 及本条记录。
+---
+
+## 2026-08-27 Keepa/API - REST 返回完整格式化数据并跳过导出上传
+
+**变更原因**：网站通过 REST 调用 Keepa 时需要直接消费结构化结果，不应依赖 MCP 的摘要或导出文件下载链路。
+**改动点**：Keepa REST 请求在共享 `keepa_run` 执行链路中标记为 API 模式；Manager 继续生成服务端本地结果文件用于审计和沉淀，但跳过文件上传；API 响应保留完整格式化 `data`，移除本地路径、额度、账户和导出元数据，并增加 `request_source=api`、`response_mode=formatted_data` 标识。MCP/CLI 默认仍上传导出文件并返回 `data_preview` 摘要。
+**验证结果**：新增 API/MCP 双模式结果合同测试，以及禁用导出上传测试；Keepa API、MCP Tool、Manager 相关回归通过，`compileall` 与 `git diff --check` 通过。
+**影响范围**：仅影响 `/api/v1/keepa/run` 的公开响应和导出上传行为；Keepa MCP/CLI 默认合同保持不变。
+**回滚方式**：回退 Keepa API 模式标记、`upload_export` 请求字段、公开响应转换、相关测试及本条记录。
+---
