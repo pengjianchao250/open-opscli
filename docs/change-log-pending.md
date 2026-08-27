@@ -6828,3 +6828,21 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：第三方 Streamable HTTP MCP 的成功结果解析和出站 HTTP 超时；对象响应及每个工具的总截止时间策略保持不变。
 **回滚方式**：回退远端客户端、上游 Transport、对应 MCP 测试及本条变更记录。
 ---
+
+## 2026-08-26 API - 增加场景 API 与 MCP 共存入口
+
+**变更原因**：opscli 需要长期产品化，网站和自动化系统需要稳定的 HTTP 场景接口；同时 MCP 仍是 Agent 原生调用入口，不能因增加 REST 而分叉认证、凭证隔离和查询业务实现。
+**改动点**：新增 FastAPI 外壳与 `POST /api/v1/query/flow`、`GET /health/live`；通过 `wrap_mcp_app` 将 REST 路由与 FastMCP 的 `/mcp`、`/sse`、`/messages` 共置并复用生命周期；REST 复用 `_get_auth_pair`、凭证目录、`QueryManager` 和 `run_flow`，拒绝未知字段及浏览器传入内部会话参数；新增场景 API 产品化规划文档和组合入口测试。
+**验证结果**：`uv run --no-project pytest tests/api -q` → 6 passed；`uv run --no-project pytest tests/mcp/test_server_seller_sprite_lifespan.py tests/mcp/test_auth_middleware.py tests/mcp/test_query_tools.py -q` → 9 passed；`compileall` 与 `git diff --check` 通过。
+**影响范围**：HTTP 启动模式现在额外暴露受同一 API Key 保护的 REST 路由；既有 MCP 协议路径、认证模式和 Tool 合同保持不变。
+**回滚方式**：回退 `opscli/api/`、`tests/api/`、`opscli/mcp/server.py`、`pyproject.toml`、`uv.lock`、场景 API 规划文档及本条变更记录。
+---
+
+## 2026-08-26 API - 增加 Keepa 场景入口
+
+**变更原因**：第一阶段 REST 外壳已具备通用查询能力，需要验证网站调用 Keepa 场景的产品化链路；Keepa 既有 MCP Tool 的额度、遥测和认证治理必须保持一致。
+**改动点**：新增 `GET /api/v1/keepa/scenarios` 与 `POST /api/v1/keepa/run`；增加严格的 Keepa 请求模型和 `job_id` 路径安全校验；REST 执行复用 `keepa_run` 并重新套用现有 quota/telemetry 包装，不暴露 `session_id`、`jwt`、`output_dir`；补充认证、统一响应、治理复用和路径穿越测试，并更新场景 API 规划。
+**验证结果**：`uv run --no-project pytest tests/api -q` → 10 passed；`uv run --no-project pytest tests/mcp/test_keepa_tools.py tests/mcp/test_server_seller_sprite_lifespan.py tests/mcp/test_auth_middleware.py tests/mcp/test_query_tools.py -q` → 24 passed；`compileall` 与 `git diff --check` 通过。
+**影响范围**：受 API Key 保护的 HTTP 服务新增 Keepa 场景发现和执行入口；现有 Keepa MCP Tool、CLI 和业务 Service 合同不变。
+**回滚方式**：回退 `opscli/api/app.py`、`tests/api/test_app.py`、场景 API 规划文档及本条变更记录。
+---
