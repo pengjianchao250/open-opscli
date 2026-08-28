@@ -35,6 +35,7 @@ class KeepaScenarioRequest:
     reserve_tokens: int | None = None
     force: bool = False
     wait: bool = False
+    upload_export: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         """转换为可序列化字典。"""

@@ -3868,6 +3868,7 @@ def test_open_referer_navigates_directly_without_homepage(monkeypatch, tmp_path)
     assert [call["url"] for call in page.goto_calls] == [
         worker_module.DEFAULT_PAGE_URL,
     ]
+    assert page.goto_calls[0]["kwargs"]["timeout"] == worker_module.NAVIGATION_TIMEOUT_MS
     assert login_calls == []
     assert result["mode"] == "browser-route"
     assert result["browser_headless"] is False
@@ -3970,6 +3971,7 @@ def test_login_returns_when_login_url_redirects_to_logged_in_page(monkeypatch, t
     _run(worker._login_with_account(page, account, callback=worker_module.DEFAULT_PAGE_URL))
 
     assert page.goto_calls[0]["url"].startswith(worker_module.LOGIN_URL)
+    assert page.goto_calls[0]["kwargs"]["timeout"] == worker_module.NAVIGATION_TIMEOUT_MS
     assert page.url == worker_module.DEFAULT_PAGE_URL
 
 

@@ -157,6 +157,25 @@ def test_call_tool_returns_first_text_json(monkeypatch):
     assert calls["session_exited"] is True
 
 
+def test_call_tool_wraps_json_array_as_success_data(monkeypatch):
+    calls = {}
+    result = DummyResult(
+        [
+            DummyTextContent(
+                json.dumps([{"name": "market_size"}, {"name": "category_index"}])
+            )
+        ]
+    )
+    install_remote_client_mocks(monkeypatch, calls, result)
+
+    client = RemoteMcpClient(url="https://collector.example.com/mcp")
+
+    assert asyncio.run(client.call_tool("list_available_datasets", {})) == {
+        "success": True,
+        "data": [{"name": "market_size"}, {"name": "category_index"}],
+    }
+
+
 def test_call_tool_passes_http_headers(monkeypatch):
     calls = {}
     result = DummyResult([DummyTextContent(json.dumps({"success": True}))])
@@ -402,10 +421,9 @@ def test_call_tool_rejects_success_text_over_configured_size(monkeypatch):
         asyncio.run(client.call_tool("seller_sprite_scenarios", {}))
 
 
-@pytest.mark.parametrize("text", ['"bad"', "[1, 2, 3]"])
-def test_call_tool_rejects_non_object_json_on_success(monkeypatch, text):
+def test_call_tool_rejects_scalar_json_on_success(monkeypatch):
     calls = {}
-    result = DummyResult([DummyTextContent(text)])
+    result = DummyResult([DummyTextContent('"bad"')])
     install_remote_client_mocks(monkeypatch, calls, result)
 
     client = RemoteMcpClient(url="https://ops.mcp.xenkee.com/mcp?api_key=mcp_demo")

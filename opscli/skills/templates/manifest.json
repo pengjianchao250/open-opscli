@@ -199,6 +199,14 @@
       "tier": "experimental",
       "reason": "Google Trends 已切换到服务端 SerpApi Key 池并通过正式 CLI 代理远端 MCP，可作为实验 Skill 安装使用"
     },
+    "ops-yingyan": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "鹰眼只读 MCP 查询 Skill，随打包版代理发行，仅在用户明确提到鹰眼或 PND 时使用"
+    },
     "ops-query-wizard": {
       "source": true,
       "wheel": true,

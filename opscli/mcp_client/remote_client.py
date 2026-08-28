@@ -120,16 +120,19 @@ class RemoteMcpClient:
             yield client
 
     def _parse_first_text_json(self, result: Any) -> dict[str, Any]:
-        """仅接受首个文本片段中的 JSON 对象。"""
+        """解析首个文本片段中的 JSON 对象，并为数组补齐稳定响应外壳。"""
         text = self._extract_first_text(result)
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
             raise ValueError("remote MCP result text must decode to JSON object") from exc
 
-        if not isinstance(payload, dict):
-            raise ValueError("remote MCP result text must decode to JSON object")
-        return payload
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, list):
+            # FastMCP 允许 Tool 直接返回列表，本地公开接口仍统一保持对象响应。
+            return {"success": True, "data": payload}
+        raise ValueError("remote MCP result text must decode to JSON object")
 
     def _extract_first_text(self, result: Any) -> str:
         """提取首个文本片段，统一成功/失败结果的基础校验。"""

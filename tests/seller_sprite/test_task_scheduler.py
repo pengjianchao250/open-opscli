@@ -1418,6 +1418,124 @@ def test_scheduler_closes_failed_slot_when_no_standby_account_exists(tmp_path: P
     asyncio.run(scenario())
 
 
+def test_scheduler_fails_unknown_scenario_without_killing_worker(tmp_path: Path):
+    """异常处理阶段的未知场景不能让账号 worker 退出并遗留 running 租约。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        class UnknownScenarioHarness:
+            def __init__(self):
+                self.started = []
+
+            def manager_factory(self, **kwargs):
+                harness = self
+
+                class Manager:
+                    async def run(self, request):
+                        harness.started.append(str(request.job_id))
+                        if str(request.job_id) == "job-unknown-scenario":
+                            raise SellerSpriteConfigError(
+                                f"未知卖家精灵场景：{request.scenario}"
+                            )
+                        return _empty_result(kwargs["settings"], request)
+
+                return Manager()
+
+        settings = SellerSpriteSettings(
+            output_dir=tmp_path,
+            task_lease_seconds=0.2,
+            task_heartbeat_seconds=0.05,
+        )
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        provider = MultiAccountProvider(1)
+        harness = UnknownScenarioHarness()
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=provider,
+            manager_factory=harness.manager_factory,
+            auto_start=False,
+            poll_interval_seconds=0.01,
+        )
+        bad_request = SellerSpriteScenarioRequest(
+            scenario="review-download",
+            site="US",
+            period="30d",
+            params={"asin": "B0UNKNOWN"},
+            job_id="job-unknown-scenario",
+            export_format="json",
+        )
+        # 通过底层存储注入历史坏任务，模拟入队校验上线前已经存在的队列数据。
+        store.enqueue(
+            request=bad_request,
+            queue_scope="seller_sprite",
+            root_dir=tmp_path / "job-unknown-scenario",
+        )
+        await scheduler.enqueue(_request("job-after-unknown", "B0NEXT"))
+        await scheduler.start()
+
+        failed = await _wait_for_state(
+            scheduler,
+            "job-unknown-scenario",
+            "failed",
+            attempts=100,
+        )
+        succeeded = await _wait_for_state(
+            scheduler,
+            "job-after-unknown",
+            "succeeded",
+            attempts=100,
+        )
+
+        assert failed["error"]["code"] == "SELLER_SPRITE_CONFIG_ERROR"
+        assert succeeded["state"] == "succeeded"
+        assert harness.started == ["job-unknown-scenario", "job-after-unknown"]
+        assert scheduler.generic_worker_count == 1
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_rejects_unknown_scenario_before_persisting(tmp_path: Path):
+    """未知场景必须在写入队列前拒绝。"""
+
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            auto_start=False,
+        )
+        request = SellerSpriteScenarioRequest(
+            scenario="review-download",
+            site="US",
+            period="30d",
+            params={"asin": "B0UNKNOWN"},
+            job_id="job-rejected-unknown-scenario",
+            export_format="json",
+        )
+
+        try:
+            await scheduler.enqueue(request)
+        except SellerSpriteConfigError as exc:
+            assert exc.code == "SELLER_SPRITE_CONFIG_ERROR"
+            assert "未知卖家精灵场景" in str(exc)
+        else:
+            raise AssertionError("未知场景未被拒绝")
+
+        try:
+            store.get_status(request.job_id)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("未知场景不应写入队列")
+
+    asyncio.run(scenario())
+
+
 def test_scheduler_does_not_persist_unconfirmed_login_failures_for_entire_pool(
     tmp_path: Path,
 ):
