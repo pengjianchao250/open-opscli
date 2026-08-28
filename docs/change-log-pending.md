@@ -8889,3 +8889,12 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅构建依赖版本，无业务代码变化。
 **回滚方式**：`git checkout -- pyproject.toml .github/workflows/build-and-publish.yml`；待 Cython 修复该回归后可放开上限。
 ---
+
+## 2026-08-28 打包构建 - CIBW_BEFORE_BUILD 改双引号修复 Windows 构建
+
+**变更原因**：v0.0.128 sdist / macOS / Linux 通过，但 Windows wheel 失败：`CIBW_BEFORE_BUILD` 里的单引号在 cmd 中不是引号，`<3.3'` 被当作输入重定向，报 `The system cannot find the file specified`。
+**改动点**：`.github/workflows/build-and-publish.yml` `CIBW_BEFORE_BUILD` 改为 `pip install "cython>=3,<3.3" "setuptools>=68" wheel`（YAML 普通标量内双引号，bash 与 cmd 均可识别）。
+**验证结果**：yaml 解析后值为 `pip install "cython>=3,<3.3" "setuptools>=68" wheel`；需 v0.0.129 CI 验证。
+**影响范围**：仅 CI 构建脚本。
+**回滚方式**：`git checkout -- .github/workflows/build-and-publish.yml`
+---

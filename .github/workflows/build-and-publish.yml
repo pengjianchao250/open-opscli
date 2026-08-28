@@ -52,7 +52,7 @@ jobs:
           CIBW_ARCHS_WINDOWS: "AMD64"
 
           # 构建前安装 Cython 和 setuptools（编译依赖）；cython 上限 <3.3 原因见 pyproject.toml [build-system]
-          CIBW_BEFORE_BUILD: "pip install 'cython>=3,<3.3' 'setuptools>=68' wheel"
+          CIBW_BEFORE_BUILD: pip install "cython>=3,<3.3" "setuptools>=68" wheel
 
           # Linux：修复 wheel 时剥离调试符号
           # 原因：setuptools 在 Linux 下默认带 -g 编译，auditwheel 默认又不 strip，
