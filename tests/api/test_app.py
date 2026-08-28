@@ -245,6 +245,25 @@ def test_wrap_mcp_app_keeps_mcp_routes_and_lifespan():
     assert state["stopped"] is True
 
 
+def test_mcp_server_allows_local_prototype_cors_preflight():
+    """本地 HTML 原型的跨端口 API 预检请求不应被 API Key 鉴权拦截。"""
+    from opscli.mcp.server import _build_dual_endpoint_app
+
+    app = _build_dual_endpoint_app(api_key="test-api-key")
+    response = TestClient(app).options(
+        "/api/v1/keepa/run",
+        headers={
+            "Origin": "http://127.0.0.1:4173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:4173"
+    assert "POST" in response.headers["access-control-allow-methods"]
+
+
 def test_mcp_server_exposes_api_route_behind_api_key():
     """真实 MCP 入口应同时提供 API，并沿用现有 API Key 鉴权。"""
     from opscli.mcp.server import _build_dual_endpoint_app

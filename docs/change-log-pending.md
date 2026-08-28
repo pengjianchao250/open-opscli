@@ -1,5 +1,21 @@
 # 待归档变更记录
 
+## 2026-08-28 SellerSprite - 防止无效场景导致 Worker 退出并循环租约
+
+**变更原因**：任务执行异常处理阶段再次解析未知场景时会抛出第二个 `SellerSpriteConfigError`，原任务无法落为 `failed`，账号 Worker 退出；租约到期后任务被反复放回队列，表现为 `queued -> claimed -> resolving -> queued`。同时，入队边界此前未校验场景，旧 Review 场景可以持续写入新队列。
+**改动点**：入队前拒绝未注册场景；保护异常处理阶段的场景解析；记录 Worker 退出的脱敏错误码和消息；会话回收失败改为旁路记录，不再终止消费 Worker；新增未知场景入队拒绝及历史坏任务不影响后续任务的回归测试。
+**验证结果**：SellerSprite 调度器与队列存储专项测试 `92 passed`；目标回归 `2 passed`；`compileall` 与 `git diff --check` 通过。`uv run pytest` 仍受仓库现有 Cython editable-build 问题阻断，未涉及本次文件。
+**影响范围**：SellerSprite 后台调度异常收口、Worker 诊断日志和会话回收旁路；不改变任务状态枚举、租约默认值或生产队列数据。
+**回滚方式**：回退 `task_scheduler.py`、对应回归测试及本条记录即可恢复此前异常处理行为。
+
+## 2026-08-28 MCP/Skills - 打包版暴露鹰眼 PND 代理
+
+**变更原因**：鹰眼 Tool 仅由部署侧 `mcp-upstreams.json` 动态注册，普通 wheel 或 binary 启动的本地 `opscli-mcp` 没有该密钥配置，因此 `tools/list` 无法发现 `ext_pnd_*`。
+**改动点**：本地无 PND 直连配置时注册 4 个只读鹰眼代理 Tool，通过 OPS 配置中心转发到“BI运营系统”；部署端存在 PND 配置时保持直连并跳过代理；将 `ops-yingyan` 纳入所有正式发行产物。
+**验证结果**：鹰眼代理、上游 Gateway、MCP CLI 与 Skill 专项测试 `49 passed`；Skill 打包测试 `8 passed`；sdist、wheel、精简 binary、完整 binary 四种发行清单检查通过；Skill UTF-8 校验、`compileall` 与 `git diff --check` 通过。全量 MCP 测试在排除既有 Shopify 导入错误后为 `414 passed, 1 failed`，剩余失败来自未改动的 `app_factory.py` 与 SellerSprite 既有测试期望不一致；本地环境未安装 `ruff`。
+**影响范围**：打包版通用 MCP 的鹰眼 Tool 发现与调用路径，以及 `ops-yingyan` 的 sdist、wheel、精简 binary 和完整 binary 准入范围；不分发 PND 地址或鉴权密钥。
+**回滚方式**：回退 `yingyan_proxy.py`、`server.py` 的条件注册、发行清单、对应测试及本条记录即可恢复部署侧配置专用模式。
+
 ## 2026-08-21 mcp/telemetry - 记录通用上游 endpoint 维度
 
 **变更原因**：Keepa 场景注册表已经知道真实上游 API endpoint，但公共调用统计此前只能按业务场景聚合，无法回答实际调用了哪个接口。
@@ -6845,6 +6861,38 @@ tests/skills/test_dataset_query_flow.py`
 **验证结果**：`uv run --no-project pytest tests/api -q` → 10 passed；`uv run --no-project pytest tests/mcp/test_keepa_tools.py tests/mcp/test_server_seller_sprite_lifespan.py tests/mcp/test_auth_middleware.py tests/mcp/test_query_tools.py -q` → 24 passed；`compileall` 与 `git diff --check` 通过。
 **影响范围**：受 API Key 保护的 HTTP 服务新增 Keepa 场景发现和执行入口；现有 Keepa MCP Tool、CLI 和业务 Service 合同不变。
 **回滚方式**：回退 `opscli/api/app.py`、`tests/api/test_app.py`、场景 API 规划文档及本条变更记录。
+---
+
+## 2026-08-28 JSON Lens - 修复 Top Sellers 字符串列表空表格
+
+**变更原因**：Top Sellers 实际返回 100,000 个 Seller ID 的字符串数组，原表格只识别对象字段，导致只显示行号且一次性渲染全部行。
+**改动点**：支持为字符串数组指定业务列名，Top Sellers 映射为 `sellerId`、Best Sellers 映射为 `asin`；表格每页显示 100 行并提供翻页，筛选、排序和 CSV 下载仍覆盖全部匹配结果；结果结构标识为“值列表”。
+**视觉修复**：长结果表格暴露桌面端固定布局切换器遮挡数据行，统一改为文档流布局，避免覆盖任何结果内容。
+**验证结果**：`npm test` 通过 10 个单元测试和 7 个 Playwright 测试；Top Sellers 按真实 100,000 条规模完成首屏 100 行、翻页、筛选、CSV 列名和视觉回归；桌面快照人工检查无内容遮挡；Node 语法、尾随空格扫描与 `git diff --check` 通过。
+**影响范围**：字符串数组结果的表格展示、分页、筛选、排序和下载；对象数组行为保持不变。
+**回滚方式**：回退 `sites/json-lens-prototype` 中本次字符串列表映射、分页、测试及本条记录。
+---
+
+## 2026-08-28 JSON Lens - 表格长文本缩略与 CSV 下载
+
+**变更原因**：查询结果中的长文本会撑大表格，运营人员也需要把当前查看的数据下载后继续处理。
+**改动点**：标量单元格限制为单行省略显示并通过 title 保留完整内容；结果工具栏新增 CSV 下载，导出当前筛选和排序后的行，复杂字段序列化为 JSON，并增加 UTF-8 BOM 和公式注入防护；新增工具单元测试和浏览器下载测试。
+**验证结果**：Node 单元测试 8 项通过；Playwright 请求、场景、长文本、CSV 下载和视觉测试 6 项通过；桌面/移动端视觉基线人工检查通过；Node 语法与 `git diff --check` 通过。
+**影响范围**：JSON Lens 表格展示和客户端 CSV 下载，不改变 API 请求与响应合同。
+**回滚方式**：回退 `sites/json-lens-prototype` 中本次表格工具、样式、交互、测试及本条记录。
+---
+
+## 2026-08-27 JSON Lens/API - 接通本地 REST API 默认地址
+
+**变更原因**：JSON Lens 原型需要直接调用本机 `8765` 上的 Keepa REST 服务；跨端口请求还需要通过浏览器 CORS 预检。
+**改动点**：将原型默认 endpoint 改为 `http://127.0.0.1:8765/api/v1/keepa/run` 并更新 README；前端兼容鉴权中间件的顶层错误消息；API 应用允许 `4173` 本地原型来源，API Key 鉴权层放行 `OPTIONS` 预检；新增 CORS 预检回归测试。
+**补充测试**：抽离前端请求头构造函数并增加 Node 单元测试，覆盖纯 API Key、完整 Bearer 值和空 Key 三种输入；测试仅使用假 Key。
+**补充修复**：API Key 输入兼容纯 Key、`Bearer Key` 和完整 `Authorization: Bearer Key`，统一只发送一个 Bearer 前缀；商品详情和关键词搜索的 `stats` 改为后端合同要求的非负整数，商品详情默认使用 `history=false`、`stats=30`。
+**补充浏览器测试**：增加 Playwright 请求集成、场景切换 E2E 和桌面/移动端视觉回归测试；增加 npm 测试脚本、依赖声明和测试产物忽略规则。
+**视觉修复**：视觉基线检查发现移动端固定布局切换器覆盖查询操作区，改为移动端文档流布局，并增加操作按钮与切换器边界不相交断言。
+**验证结果**：真实 Key 的脱敏 REST 请求返回 HTTP 200；CORS 预检返回 HTTP 200 和正确 Allow-Origin；`npm test` 通过 4 个单元测试及 4 个 Playwright 测试；桌面/移动端视觉基线人工检查通过；API 测试 `12 passed`。
+**影响范围**：影响本地原型对 Keepa REST API 的默认连接、API Key 归一化、Product stats/history 默认参数、移动端原型切换器和跨端口预检；业务鉴权、实际 POST 权限和 MCP 路由保持不变。
+**回滚方式**：回退 `sites/json-lens-prototype` 原型及测试文件、`opscli/api/app.py`、`opscli/mcp/auth_middleware.py`、`tests/api/test_app.py` 及本条记录。
 ---
 
 ## 2026-08-27 Keepa/API - 增加真实请求阶段耗时日志

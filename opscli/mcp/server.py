@@ -39,6 +39,7 @@ from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import scrape_do as _scrape_do_tools
 from opscli.mcp.tools import seller_sprite_proxy as _seller_sprite_proxy_tools
 from opscli.mcp.tools import skills as _skills_tools
+from opscli.mcp.tools import yingyan_proxy as _yingyan_proxy_tools
 from opscli.google_trends.mcp_runtime import GoogleTrendsMcpRuntime
 from opscli.keepa.mcp_runtime import KeepaMcpRuntime
 from opscli.shared.collection_storage import (
@@ -105,6 +106,11 @@ def _build_server():
         google_trends_runtime.register,
         keepa_runtime.register,
         *_REGISTRARS_AFTER_KEEPA,
+        *(
+            ()
+            if any(server.id == "pnd" for server in upstream_runtime.config.servers)
+            else (_yingyan_proxy_tools.register,)
+        ),
         upstream_runtime.register,
     )
 

@@ -162,6 +162,11 @@ class ApiKeyAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # CORS 预检不携带 API Key，由内层 CORS 中间件返回允许的请求头和方法。
+        if scope.get("method") == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+
         # SSE 消息投递路径（/messages/）跳过 API Key 鉴权：
         # session_id 由 GET /sse 连接建立时服务端生成并返回，只有已通过鉴权的客户端才持有，
         # 因此 session_id 本身就是认证凭证，不需要额外 API Key。
