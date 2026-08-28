@@ -6868,3 +6868,12 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：仅影响 `/api/v1/keepa/run` 的公开响应和导出上传行为；Keepa MCP/CLI 默认合同保持不变。
 **回滚方式**：回退 Keepa API 模式标记、`upload_export` 请求字段、公开响应转换、相关测试及本条记录。
 ---
+
+## 2026-08-28 Skill - 新增鹰眼只读查询 Skill
+
+**变更原因**：鹰眼 MCP 已开放数据目录、只读 SQL、相似词和报告任务状态四个 Tool，需要一个显式触发、避免宽查询和超时重放的 Agent 使用合同。
+**改动点**：新增 `ops-yingyan` 模板及版本文件，限定只有用户明确提到鹰眼或 PND 时触发；要求动态读取数据目录、索引优先、窄条件、明确列和合理 LIMIT，并规定 30 秒超时后不得重放相同参数；新增 manifest 内部模板条目和行为契约测试。
+**验证结果**：Skill Creator `quick_validate.py` 通过；发版 manifest 完整性校验返回空问题列表；`ops-yingyan` 触发边界、Tool 覆盖、窄查询、超时停止、模板安装及 packaging 定向测试共 15 项通过；`git diff --check` 通过。扩展 `test_manager.py` 有 4 个既有版本断言失败，例如仍期望 `ops-dataset-query v0.0.1` 而当前模板为 `1.1.0`，与本次改动无关。
+**影响范围**：仅新增内部 Skill 模板和测试，不修改鹰眼 MCP Tool、上游配置、鉴权、SQL 校验或现有发行范围。
+**回滚方式**：删除 `ops-yingyan` 模板与对应测试，移除 manifest 条目，并回退本条记录。
+---
