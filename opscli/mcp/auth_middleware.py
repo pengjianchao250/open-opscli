@@ -19,8 +19,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import urllib.parse
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from opscli.config import __version__
@@ -29,6 +32,24 @@ from opscli.config import __version__
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 _logger = logging.getLogger("opscli.mcp")
+_KEEPA_TRACE_FILE = Path.cwd() / ".tmp" / "keepa-trace.log"
+
+
+def _trace_keepa(message: str) -> None:
+    """写入不依赖 logging 配置的 Keepa 请求诊断信息。"""
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    line = f"{timestamp} pid={os.getpid()} [KEEPA-TRACE] {message}"
+    try:
+        print(line, flush=True)
+    except Exception:
+        pass
+    try:
+        _KEEPA_TRACE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _KEEPA_TRACE_FILE.open("a", encoding="utf-8") as trace_file:
+            trace_file.write(line + "\n")
+    except Exception:
+        # 诊断日志不能影响鉴权或业务请求。
+        pass
 
 # 客户端断连异常类型集合：SSE 场景下客户端断连属于正常行为，需统一捕获避免日志噪音
 try:
@@ -154,6 +175,32 @@ class ApiKeyAuthMiddleware:
             return
 
         token = self._extract_token(scope)
+        trace_keepa = path.startswith("/api/v1/keepa")
+        auth_started_at = time.monotonic() if trace_keepa else 0.0
+        if trace_keepa:
+            header_names = ",".join(
+                name.decode("latin-1", errors="replace")
+                for name, _ in scope.get("headers", [])
+            )
+            query_keys = ",".join(
+                sorted(urllib.parse.parse_qs(
+                    scope.get("query_string", b"").decode("utf-8", errors="replace")
+                ).keys())
+            )
+            _trace_keepa(
+                "request_start method=%s path=%s query_keys=%s headers=%s"
+                % (scope.get("method", ""), path, query_keys, header_names)
+            )
+            _logger.info(
+                "[KEEPA-TRACE] auth_verify_start path=%s has_api_key=%s mode=%s",
+                path,
+                bool(token),
+                "remote" if self._auth_verify_url else "fixed",
+            )
+            _trace_keepa(
+                "auth_verify_start path=%s has_api_key=%s mode=%s"
+                % (path, bool(token), "remote" if self._auth_verify_url else "fixed")
+            )
 
         # ── 校验逻辑 ────────────────────────────────────────────────
         if self._auth_verify_url:
@@ -161,12 +208,57 @@ class ApiKeyAuthMiddleware:
             try:
                 user_info = await self._verify_remote(token)
             except ApiKeyVerificationUnavailable:
+                if trace_keepa:
+                    _logger.warning(
+                        "[KEEPA-TRACE] auth_verify_error path=%s error_type=%s elapsed_ms=%s",
+                        path,
+                        "ApiKeyVerificationUnavailable",
+                        int((time.monotonic() - auth_started_at) * 1000),
+                    )
+                    _trace_keepa(
+                        "auth_verify_error path=%s error_type=%s elapsed_ms=%s"
+                        % (
+                            path,
+                            "ApiKeyVerificationUnavailable",
+                            int((time.monotonic() - auth_started_at) * 1000),
+                        )
+                    )
                 # 临时故障不代表 Key 无效，返回 503 让客户端稍后重试，避免误走 OAuth。
                 await self._send_503(send, reason="auth_service_unavailable")
                 return
             if not user_info:
+                if trace_keepa:
+                    _logger.info(
+                        "[KEEPA-TRACE] auth_verify_done path=%s valid=%s elapsed_ms=%s",
+                        path,
+                        False,
+                        int((time.monotonic() - auth_started_at) * 1000),
+                    )
+                    _trace_keepa(
+                        "auth_verify_done path=%s valid=%s elapsed_ms=%s"
+                        % (
+                            path,
+                            False,
+                            int((time.monotonic() - auth_started_at) * 1000),
+                        )
+                    )
                 await self._send_401(scope, send, reason="invalid_api_key")
                 return
+            if trace_keepa:
+                _logger.info(
+                    "[KEEPA-TRACE] auth_verify_done path=%s valid=%s elapsed_ms=%s",
+                    path,
+                    True,
+                    int((time.monotonic() - auth_started_at) * 1000),
+                )
+                _trace_keepa(
+                    "auth_verify_done path=%s valid=%s elapsed_ms=%s"
+                    % (
+                        path,
+                        True,
+                        int((time.monotonic() - auth_started_at) * 1000),
+                    )
+                )
             # 将用户信息和已验证认证模式注入 scope，供后续 Tool 函数读取。
             scope["mcp_api_key"] = token
             scope["mcp_auth_mode"] = "remote"
@@ -213,8 +305,20 @@ class ApiKeyAuthMiddleware:
                     response_complete = True
             await send(message)
 
+        async def tracing_receive() -> Any:
+            message = await receive()
+            if trace_keepa and message.get("type") == "http.request":
+                body = message.get("body", b"")
+                _trace_keepa(
+                    "request_body_chunk bytes=%s more_body=%s"
+                    % (len(body), bool(message.get("more_body", False)))
+                )
+            return message
+
         try:
-            await self.app(scope, receive, tracking_send)
+            if trace_keepa:
+                _trace_keepa("app_dispatch_start path=%s" % path)
+            await self.app(scope, tracing_receive, tracking_send)
         except _CLIENT_DISCONNECT_ERRORS:
             # SSE 长连接场景下客户端断连是正常行为，静默处理
             _logger.debug("客户端断开连接: %s", path)
@@ -222,6 +326,11 @@ class ApiKeyAuthMiddleware:
             if "Expected ASGI message" not in str(exc):
                 raise
         finally:
+            if trace_keepa:
+                _trace_keepa(
+                    "app_dispatch_done path=%s response_started=%s response_complete=%s"
+                    % (path, response_started, response_complete)
+                )
             # 重置 contextvar，避免污染其他请求
             mcp_request_ctx.reset(ctx_token)
 

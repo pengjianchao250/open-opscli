@@ -14,6 +14,7 @@ from opscli.mcp.app_factory import (
     create_mcp_app,
     run_mcp_app,
 )
+from opscli.api import wrap_mcp_app
 from opscli.mcp.instrumentation import quota_wrap, telemetry_wrap
 from opscli.mcp.tool_catalog import get_catalog
 from opscli.mcp.upstream import UpstreamMcpRuntime
@@ -146,6 +147,7 @@ def _build_dual_endpoint_app(
         mcp,
         api_key=api_key,
         auth_verify_url=auth_verify_url,
+        app_wrapper=wrap_mcp_app,
     )
 
 
@@ -155,6 +157,7 @@ def run() -> None:
         mcp,
         service_name="opscli-mcp",
         catalog=get_catalog(),
+        app_wrapper=wrap_mcp_app,
     )
 
 

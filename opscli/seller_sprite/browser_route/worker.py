@@ -38,6 +38,8 @@ BASE_URL = "https://www.sellersprite.com"
 HOME_URL = "https://www.sellersprite.com/"
 LOGIN_URL = "https://www.sellersprite.com/cn/w/user/login"
 DEFAULT_PAGE_URL = "https://www.sellersprite.com/v3/keyword-miner/"
+# 页面导航应尽快失败；接口响应仍使用更长的 DEFAULT_TIMEOUT_MS。
+NAVIGATION_TIMEOUT_MS = 30000
 DEFAULT_TIMEOUT_MS = 120000
 LOGIN_SUCCESS_TIMEOUT_MS = 15000
 LOGIN_SETTLE_TIMEOUT_MS = 500
@@ -1055,7 +1057,7 @@ class SellerSpriteBrowserRouteWorker:
         if _same_page_url(page.url, referer):
             if not just_logged_in:
                 stage_started_at = time.monotonic()
-                await page.reload(wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+                await page.reload(wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
                 _record_timing(timings, request, "referer_reload", stage_started_at, current_url=page.url)
                 stage_started_at = time.monotonic()
                 await page.wait_for_timeout(1500)
@@ -1064,7 +1066,7 @@ class SellerSpriteBrowserRouteWorker:
                 _record_timing(timings, request, "referer_reload", time.monotonic(), skipped=True, reason="just_logged_in")
         else:
             stage_started_at = time.monotonic()
-            await page.goto(referer, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+            await page.goto(referer, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
             _record_timing(timings, request, "referer_goto", stage_started_at, current_url=page.url)
             stage_started_at = time.monotonic()
             await page.wait_for_timeout(1500)
@@ -1078,7 +1080,7 @@ class SellerSpriteBrowserRouteWorker:
             _record_timing(timings, request, "login_after_referer", stage_started_at, current_url=page.url)
             if not _same_page_url(page.url, referer):
                 stage_started_at = time.monotonic()
-                await page.goto(referer, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+                await page.goto(referer, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
                 _record_timing(timings, request, "referer_goto_after_login", stage_started_at, current_url=page.url)
                 stage_started_at = time.monotonic()
                 await page.wait_for_timeout(1500)
@@ -1126,7 +1128,7 @@ class SellerSpriteBrowserRouteWorker:
         await page.goto(
             f"{LOGIN_URL}?callback={quote(callback_url)}",
             wait_until="domcontentloaded",
-            timeout=DEFAULT_TIMEOUT_MS,
+            timeout=NAVIGATION_TIMEOUT_MS,
         )
         _record_timing(timings, request, "login.goto", stage_started_at, current_url=page.url)
         stage_started_at = time.monotonic()
@@ -2526,7 +2528,7 @@ async def _open_listing_analysis_report_and_capture(
         lambda response: _same_endpoint(response.url, "/v3/api/competing-lookup"),
         timeout=DEFAULT_TIMEOUT_MS,
     ) as info:
-        await page.goto(report_url, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
+        await page.goto(report_url, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
     response = await info.value
     payload = await _parse_response(response, method="PAGE_CAPTURE", root_dir=root_dir, section="listing_analysis_report")
     if isinstance(payload.get("data"), dict):

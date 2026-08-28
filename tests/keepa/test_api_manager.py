@@ -271,6 +271,32 @@ def test_manager_uploads_export_to_keepa_export_folder(monkeypatch, tmp_path: Pa
     assert result.warnings == []
 
 
+def test_manager_skips_export_upload_when_disabled(monkeypatch, tmp_path: Path):
+    """API mode keeps local processing but must not call the upload client."""
+    DummyKeepaClient.requests = []
+    DummyUploadClient.instances = []
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", DummyKeepaClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DummyUploadClient)
+    settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
+    manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
+
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="product",
+                site="US",
+                params={"asin": "B0088PUEPK", "stats": 30, "history": False},
+                job_id="keepa-api-no-upload",
+                upload_export=False,
+            )
+        )
+    )
+
+    assert result.export is not None
+    assert result.export.path.endswith("keepa-api-no-upload.xlsx")
+    assert DummyUploadClient.instances == []
+
+
 def test_manager_writes_original_response_json_export_when_requested(monkeypatch, tmp_path: Path):
     class NestedProductClient(DummyKeepaClient):
         async def get_json(self, endpoint, params):

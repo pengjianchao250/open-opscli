@@ -165,6 +165,8 @@ def test_keepa_run_accepts_params_json_string(monkeypatch):
     assert "quota" not in result["data"]
     assert "params_path" not in result["data"]
     assert "raw_path" not in result["data"]
+    assert "root_dir" not in result["data"]
+    assert "result_path" not in result["data"]
     assert result["data"]["export"]["url"] == "https://example.com/job-1.xlsx"
     assert "path" not in result["data"]["export"]
     assert "tokens_left" not in str(result["data"])
@@ -296,6 +298,38 @@ def test_keepa_run_accepts_json_export_format(monkeypatch):
 
     assert result["success"] is True
     assert DummyManager.last_request.export_format == "json"
+
+
+def test_keepa_run_api_mode_returns_formatted_data_without_export(monkeypatch):
+    """REST mode returns complete formatted rows and disables file upload."""
+    DummyManager.last_request = None
+    monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
+    monkeypatch.setattr(keepa_tools, "_get_auth_pair", lambda system, session_id, jwt: (None, None))
+    monkeypatch.setattr(
+        keepa_tools,
+        "_load_keepa_settings",
+        lambda: SimpleNamespace(api_key="env-key"),
+    )
+
+    token = keepa_tools._KEEPA_API_MODE.set(True)
+    try:
+        result = _run(
+            keepa_tools.keepa_run(
+                scenario="product",
+                site="US",
+                params='{"asin":"B0088PUEPK"}',
+            )
+        )
+    finally:
+        keepa_tools._KEEPA_API_MODE.reset(token)
+
+    assert result["success"] is True
+    assert result["data"]["request_source"] == "api"
+    assert result["data"]["response_mode"] == "formatted_data"
+    assert result["data"]["data"][0]["asin"] == "B0088PUEPK"
+    assert "data_preview" not in result["data"]
+    assert "export" not in result["data"]
+    assert DummyManager.last_request.upload_export is False
 
 
 def test_keepa_job_status_hides_quota(monkeypatch):
