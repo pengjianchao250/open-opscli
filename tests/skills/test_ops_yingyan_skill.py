@@ -56,14 +56,14 @@ def test_ops_yingyan_guards_against_broad_or_replayed_sql():
     assert "0 行不自动放宽" in text
 
 
-def test_ops_yingyan_is_declared_as_internal_template():
-    """新增模板必须进入发版清单，但默认不扩大现有发行范围。"""
+def test_ops_yingyan_is_released_with_packaged_cli():
+    """打包版 MCP 已代理鹰眼后，Skill 必须进入所有正式发行产物。"""
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     config = manifest["skills"]["ops-yingyan"]
 
     assert config["tier"] == "internal"
     assert all(
-        config[key] is False
+        config[key] is True
         for key in ("source", "wheel", "binary", "binary_full")
     )
     assert "明确提到鹰眼或 PND" in config["reason"]

@@ -1,5 +1,13 @@
 # 待归档变更记录
 
+## 2026-08-28 MCP/Skills - 打包版暴露鹰眼 PND 代理
+
+**变更原因**：鹰眼 Tool 仅由部署侧 `mcp-upstreams.json` 动态注册，普通 wheel 或 binary 启动的本地 `opscli-mcp` 没有该密钥配置，因此 `tools/list` 无法发现 `ext_pnd_*`。
+**改动点**：本地无 PND 直连配置时注册 4 个只读鹰眼代理 Tool，通过 OPS 配置中心转发到“BI运营系统”；部署端存在 PND 配置时保持直连并跳过代理；将 `ops-yingyan` 纳入所有正式发行产物。
+**验证结果**：鹰眼代理、上游 Gateway、MCP CLI 与 Skill 专项测试 `49 passed`；Skill 打包测试 `8 passed`；sdist、wheel、精简 binary、完整 binary 四种发行清单检查通过；Skill UTF-8 校验、`compileall` 与 `git diff --check` 通过。全量 MCP 测试在排除既有 Shopify 导入错误后为 `414 passed, 1 failed`，剩余失败来自未改动的 `app_factory.py` 与 SellerSprite 既有测试期望不一致；本地环境未安装 `ruff`。
+**影响范围**：打包版通用 MCP 的鹰眼 Tool 发现与调用路径，以及 `ops-yingyan` 的 sdist、wheel、精简 binary 和完整 binary 准入范围；不分发 PND 地址或鉴权密钥。
+**回滚方式**：回退 `yingyan_proxy.py`、`server.py` 的条件注册、发行清单、对应测试及本条记录即可恢复部署侧配置专用模式。
+
 ## 2026-08-21 mcp/telemetry - 记录通用上游 endpoint 维度
 
 **变更原因**：Keepa 场景注册表已经知道真实上游 API endpoint，但公共调用统计此前只能按业务场景聚合，无法回答实际调用了哪个接口。
