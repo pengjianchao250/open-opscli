@@ -8866,3 +8866,15 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅新增内部 Skill 模板和测试，不修改鹰眼 MCP Tool、上游配置、鉴权、SQL 校验或现有发行范围。
 **回滚方式**：删除 `ops-yingyan` 模板与对应测试，移除 manifest 条目，并回退本条记录。
 ---
+
+## 2026-08-28 打包构建 - 修复 v0.0.126 GitHub Actions Cython 编译失败
+
+**变更原因**：v0.0.126 发布时 GitHub Actions 全部 4 个构建 Job 在 Cython 编译阶段失败，导致无 artifact 产出、Publish to PyPI 报 `Artifact not found for name: sdist`。本地开发使用 `SKIP_CYTHON=1` 纯 Python 安装，因此三处 Cython 不兼容写法未被提前发现。
+**改动点**：
+- `opscli/asin_data/services/daily_pipeline.py:649`：`_derive_keywords_from_stage_reverse` 中 `keywords: list[str] = []` 与上方 `keywords = ...` 重复声明（Cython 报 `'keywords' redeclared`），改为 `keywords = []`
+- `opscli/scrape_do/accounts.py:43`：`get_default` 中删除 `del refresh`（`refresh: bool` 被 Cython 推断为 C 级 bint，报 `Deletion of non-Python, non-C++ object`）
+- `opscli/seller_sprite/services/task_scheduler.py`：补充 `import re`（第 718 行 `re.sub` 使用了未导入的模块，Cython 报 `undeclared name not builtin: re`；纯 Python 下 worker 异常路径也会 NameError，属真实运行时 bug）
+**验证结果**：本地复用 `setup.py` 的 `get_extensions()` 以 `nthreads=0` 全量 cythonize 319 个模块，exit=0 通过；`pytest tests/seller_sprite tests/scrape_do tests/asin_data` 611 通过、3 失败（`test_api_manager.py::test_manager_generates_camel_case_job_id`、`test_cli_split.py` 两例），经 `git stash` 对比确认为 master 预存失败，与本次改动无关。
+**影响范围**：仅构建流程与 seller_sprite worker 异常脱敏逻辑；无业务行为变化。
+**回滚方式**：`git checkout -- opscli/asin_data/services/daily_pipeline.py opscli/scrape_do/accounts.py opscli/seller_sprite/services/task_scheduler.py`
+---

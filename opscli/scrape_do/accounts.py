@@ -40,7 +40,6 @@ class ScrapeDoCredentialProvider:
         Raises:
             ScrapeDoConfigError: 凭据池无可用账号或配置不可用。
         """
-        del refresh
         try:
             lease = self._pool().acquire(
                 "scrape_do",
