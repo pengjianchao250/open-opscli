@@ -51,8 +51,8 @@ jobs:
           # 原因：团队无 32 位 Windows 用户，无需为其产出 wheel，减少构建矩阵与维护成本
           CIBW_ARCHS_WINDOWS: "AMD64"
 
-          # 构建前安装 Cython 和 setuptools（编译依赖）
-          CIBW_BEFORE_BUILD: "pip install cython>=3 setuptools>=68 wheel"
+          # 构建前安装 Cython 和 setuptools（编译依赖）；cython 上限 <3.3 原因见 pyproject.toml [build-system]
+          CIBW_BEFORE_BUILD: "pip install 'cython>=3,<3.3' 'setuptools>=68' wheel"
 
           # Linux：修复 wheel 时剥离调试符号
           # 原因：setuptools 在 Linux 下默认带 -g 编译，auditwheel 默认又不 strip，
@@ -100,7 +100,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install build tools
-        run: pip install build cython>=3 setuptools>=68
+        run: pip install build "cython>=3,<3.3" "setuptools>=68"
 
       - name: Build sdist
         run: OPSCLI_SKILL_PROFILE=python-release python -m build --sdist

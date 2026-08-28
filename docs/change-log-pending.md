@@ -8878,3 +8878,14 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅构建流程与 seller_sprite worker 异常脱敏逻辑；无业务行为变化。
 **回滚方式**：`git checkout -- opscli/asin_data/services/daily_pipeline.py opscli/scrape_do/accounts.py opscli/seller_sprite/services/task_scheduler.py`
 ---
+
+## 2026-08-28 打包构建 - 固定 Cython 上限 <3.3 修复 v0.0.127 构建失败
+
+**变更原因**：v0.0.127 CI 再次失败，错误与 v0.0.126 不同：Cython 3.3.0（2026-08 新发布）优化器在处理 `sorted(x or set())` 时内部崩溃（`AttributeError: 'NoneType' object has no attribute 'is_pylist_type'`），涉及 `opscli/google_trends/api/key_store.py`、`serpapi_client.py`。本地 Cython 3.2.4 与 3.2.9 均可通过，3.3.0 本地稳定复现，属 Cython 回归。
+**改动点**：
+- `pyproject.toml` `[build-system]`：`cython>=3` → `cython>=3,<3.3`，注释说明原因（铁律15 允许有明确 breaking 证据时加上限）
+- `.github/workflows/build-and-publish.yml`：`CIBW_BEFORE_BUILD` 与 sdist 的 `Install build tools` 同步加上限；同时为 pip 版本约束加引号（原 `pip install cython>=3` 未加引号，`>` 被 shell 当作重定向，实际未生效）
+**验证结果**：Cython 3.2.9 全量 cythonize exit=0；本地 `OPSCLI_SKILL_PROFILE=python-release python -m build --sdist` 成功产出 `aukeys_opscli-0.0.127.tar.gz`；yaml 语法校验通过。
+**影响范围**：仅构建依赖版本，无业务代码变化。
+**回滚方式**：`git checkout -- pyproject.toml .github/workflows/build-and-publish.yml`；待 Cython 修复该回归后可放开上限。
+---

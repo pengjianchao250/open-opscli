@@ -44,7 +44,8 @@ opscli-collector-monitor = "opscli.collector_monitor.server:run"
 
 [build-system]
 # 切换为 setuptools + Cython，支持编译二进制 wheel
-requires = ["setuptools>=68", "wheel", "cython>=3"]
+# cython 上限 <3.3：3.3.0 优化器对 sorted(x or set()) 崩溃（AttributeError is_pylist_type），2026-08-28 v0.0.127 构建失败
+requires = ["setuptools>=68", "wheel", "cython>=3,<3.3"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
