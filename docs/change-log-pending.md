@@ -1,5 +1,13 @@
 # 待归档变更记录
 
+## 2026-08-28 SellerSprite - 防止无效场景导致 Worker 退出并循环租约
+
+**变更原因**：任务执行异常处理阶段再次解析未知场景时会抛出第二个 `SellerSpriteConfigError`，原任务无法落为 `failed`，账号 Worker 退出；租约到期后任务被反复放回队列，表现为 `queued -> claimed -> resolving -> queued`。同时，入队边界此前未校验场景，旧 Review 场景可以持续写入新队列。
+**改动点**：入队前拒绝未注册场景；保护异常处理阶段的场景解析；记录 Worker 退出的脱敏错误码和消息；会话回收失败改为旁路记录，不再终止消费 Worker；新增未知场景入队拒绝及历史坏任务不影响后续任务的回归测试。
+**验证结果**：SellerSprite 调度器与队列存储专项测试 `92 passed`；目标回归 `2 passed`；`compileall` 与 `git diff --check` 通过。`uv run pytest` 仍受仓库现有 Cython editable-build 问题阻断，未涉及本次文件。
+**影响范围**：SellerSprite 后台调度异常收口、Worker 诊断日志和会话回收旁路；不改变任务状态枚举、租约默认值或生产队列数据。
+**回滚方式**：回退 `task_scheduler.py`、对应回归测试及本条记录即可恢复此前异常处理行为。
+
 ## 2026-08-28 MCP/Skills - 打包版暴露鹰眼 PND 代理
 
 **变更原因**：鹰眼 Tool 仅由部署侧 `mcp-upstreams.json` 动态注册，普通 wheel 或 binary 启动的本地 `opscli-mcp` 没有该密钥配置，因此 `tools/list` 无法发现 `ext_pnd_*`。

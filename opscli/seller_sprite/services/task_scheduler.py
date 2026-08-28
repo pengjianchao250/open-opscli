@@ -276,6 +276,8 @@ class SellerSpriteTaskScheduler:
     ) -> dict[str, Any]:
         """携带非敏感凭证作用域入队，并可原子记录 MCP 所有权。"""
         normalized = self._normalize_request(request)
+        # 入队前拒绝未注册场景，避免未知请求先进入 SQLite 后在 Worker 中循环租约。
+        get_scenario(normalized.scenario)
         root_dir = self._build_root_dir(normalized)
         if mcp_user_email:
             # 公共 MCP 提交必须让队列行和所有权行同成同败，避免碰撞后错误授权。
@@ -712,10 +714,19 @@ class SellerSpriteTaskScheduler:
             if task is not None and not task.cancelled():
                 error = task.exception()
                 if error is not None:
+                    error_payload = error_to_dict(error)
+                    error_message = re.sub(
+                        r"(?i)\b(password|passwd|pwd|token|access_token|refresh_token|session_token|cookie|authorization)\s*[:=]\s*[^\s,;}}\]]+",
+                        r"\1=***",
+                        str(error_payload.get("message") or ""),
+                    )[:500]
                     logger.error(
-                        "卖家精灵账号工作槽异常退出：worker_key=%s error=%s",
+                        "卖家精灵账号工作槽异常退出：worker_key=%s error_type=%s "
+                        "error_code=%s error_message=%s",
                         worker_key,
                         type(error).__name__,
+                        str(error_payload.get("code") or type(error).__name__),
+                        error_message,
                     )
             self._generic_worker_accounts.pop(worker_key, None)
             self._consumer_errors.discard(worker_key)
@@ -831,7 +842,7 @@ class SellerSpriteTaskScheduler:
                 execution_account_key=seller_sprite_account_key(account),
                 assignment_generation=int(claimed["assignment_generation"]),
             )
-            await self._reap_browser_sessions()
+            await self._safe_reap_browser_sessions(source="user_binding", job_id=job_id)
         finally:
             self._untrack_attempt(job_id, attempt_id=attempt_id)
 
@@ -909,7 +920,7 @@ class SellerSpriteTaskScheduler:
                     attempt_id=attempt_id,
                 )
                 # 每条任务结束后形成安全边界，使满 6 小时的会话无需等待下一分钟扫描。
-                await self._reap_browser_sessions()
+                await self._safe_reap_browser_sessions(source="generic", job_id=job_id)
             finally:
                 self._untrack_attempt(job_id, attempt_id=attempt_id)
             if replacement is None:
@@ -1010,9 +1021,22 @@ class SellerSpriteTaskScheduler:
                 return account
             except Exception as exc:
                 # 认证失败通常可切换账号重试；额度型导出可能已成功派发，必须直接失败以免重复扣额。
-                replay_safe = bool(
-                    request is None or get_scenario(request.scenario).replay_safe
-                )
+                try:
+                    replay_safe = bool(
+                        request is None or get_scenario(request.scenario).replay_safe
+                    )
+                except Exception as scenario_error:
+                    # 错误处理不能因请求场景本身无效而再次抛错，
+                    # 否则 worker 会退出，当前任务只能等租约过期后循环重试。
+                    replay_safe = False
+                    logger.error(
+                        "卖家精灵任务场景解析失败：job_id=%s scenario=%s "
+                        "error_type=%s error_message=%s",
+                        job_id,
+                        str(getattr(request, "scenario", ""))[:120],
+                        type(scenario_error).__name__,
+                        str(scenario_error)[:500],
+                    )
                 if not _is_account_authentication_failure(exc) or not replay_safe:
                     committed = await self._fail_generic_job(
                         job_id=job_id,
@@ -1348,7 +1372,7 @@ class SellerSpriteTaskScheduler:
                     execution_account_key=str(claimed["assigned_account_key"]),
                     assignment_generation=int(claimed["assignment_generation"]),
                 )
-                await self._reap_browser_sessions()
+                await self._safe_reap_browser_sessions(source="listing", job_id=job_id)
             finally:
                 self._untrack_attempt(job_id, attempt_id=attempt_id)
 
@@ -1362,6 +1386,27 @@ class SellerSpriteTaskScheduler:
             owner_id=self._session_owner_id,
         )
         self._last_session_reap_at = time.monotonic()
+
+    async def _safe_reap_browser_sessions(
+        self,
+        *,
+        source: str,
+        job_id: str | None,
+    ) -> None:
+        """会话回收是清理旁路，失败不能终止任务消费 worker。"""
+        try:
+            await self._reap_browser_sessions()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "卖家精灵会话回收异常，继续消费：source=%s job_id=%s "
+                "error_type=%s error_message=%s",
+                source,
+                job_id,
+                type(exc).__name__,
+                str(exc)[:500],
+            )
 
     async def _close_account_session(
         self,
