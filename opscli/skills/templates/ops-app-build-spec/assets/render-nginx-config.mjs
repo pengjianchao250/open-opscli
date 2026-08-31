@@ -10,11 +10,11 @@ if (!configPath || !templatePath || !outputPath) {
   );
 }
 
-// 生产 Nginx 配置不接受空项目 ID。
-const config = loadOpsAppConfig(configPath, { requireProjectId: true });
+// 生产 Nginx 配置不接受空应用 ID。
+const config = loadOpsAppConfig(configPath, { requireAppId: true });
 const template = readFileSync(resolve(templatePath), "utf8");
 const rendered = template
-  .replaceAll("${OPS_PROJECT_ID}", config.projectId)
+  .replaceAll("${OPS_APP_ID}", config.appId)
   .replaceAll("${OPS_APP_NAME}", config.appName);
 
 if (/\$\{OPS_[A-Z_]+\}/.test(rendered)) {

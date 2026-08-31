@@ -12,6 +12,7 @@ description: 用于盘点未知 Web 项目、生成项目规范，并将受支�
 | 场景 | 必须读取 |
 | --- | --- |
 | 判断或改造前端 | `references/frontend-standard.md` |
+| 空项目初始化 | `references/initialization-standard.md` |
 | 新建或改造后端 | `references/backend-standard.md` |
 | 现有项目不是目标结构 | `references/migration-standard.md` |
 | 初始化部署或首次发布 | `references/deployment-standard.md` |
@@ -23,10 +24,10 @@ description: 用于盘点未知 Web 项目、生成项目规范，并将受支�
 - 项目根目录。
 - 操作意图：`检查`、`初始化/迁移` 或 `发布检查`。用户未明确时，根据动词判断；仍有歧义才询问。
 - 应用名称。优先读取现有包名或仓库名；无法得到唯一 URL 安全名称时询问。
-- 项目 ID 仅在第一次发布时必需，初始化阶段允许为空。
+- 应用 ID 仅在第一次发布时必需，初始化阶段允许为空。
 
 应用名称只允许小写字母、数字和连字符，且必须以字母或数字开头、结尾。
-项目 ID 必须是非空 URL 安全单路径段，只允许字母、数字、连字符和下划线；禁止 `/`、`\\`、`.`、`..`、空白和 URL 编码路径分隔符。
+应用 ID 必须是非空 URL 安全单路径段，只允许字母、数字、连字符和下划线；禁止 `/`、`\\`、`.`、`..`、空白和 URL 编码路径分隔符。
 
 ## 执行流程
 
@@ -49,7 +50,7 @@ description: 用于盘点未知 Web 项目、生成项目规范，并将受支�
 | Vite + Vue 3 | 保留 Vue 3，按前端规范补齐 |
 | Next.js + React | 按迁移规范转换为 Vite + React |
 | 普通 HTML/CSS/JS | 转换为 Vite + Vue 3 + Element Plus |
-| 无后端 | 初始化 FastAPI + SQLite |
+| 无后端 | 只初始化前端，等待后端人员交付 |
 | FastAPI + SQLite | 按后端规范补齐 |
 
 Vue 2、其他前端框架、非 FastAPI 后端和任何非 SQLite 数据库，均停止自动改造。列出识别证据、保留现状并告诉用户：`当前技术栈不在自动迁移范围，请联系 IT 人员处理。`
@@ -66,11 +67,11 @@ Next.js 仅自动迁移能保持客户端行为的项目。发现 SSR、RSC、IS
 
 ```text
 frontend/
-backend/
-deployment/
 docs/ops-app/
 ops-app.config
 ```
+
+空项目或后端尚未交付时只创建前端、文档和共享配置；不创建 `backend/`、生产 Dockerfile 或 Compose 占位服务。后端交付并提供启动、健康检查和构建契约后，才按部署规范生成后端与生产部署文件。
 
 初始化部署时必须将 Skill 的 `assets/nginx.conf.template` 复制为项目的 `deployment/nginx.conf.template`。项目内 Nginx 必须使用该模板，不得另写会削弱部署路径、SPA 回退或缓存规则的配置。
 
@@ -78,7 +79,7 @@ ops-app.config
 
 - `docs/ops-app/project-spec.md`：当前技术栈、目录、命令、路由、接口、数据和约束。
 - `docs/ops-app/development.md`：本地开发、环境变量和联调方式。
-- `docs/ops-app/deployment.md`：构建、路径、持久化、发布检查和回滚说明。
+- 后端交付后生成 `docs/ops-app/deployment.md`：构建、路径、持久化、发布检查和回滚说明。
 - 根目录 `AGENTS.md`：只写简短受管区块，引用上述规范；已有文件时保留其他内容。
 
 保留现有包管理器及唯一锁文件。依赖安装、服务启动和数据迁移仍遵守当前宿主的授权要求。
@@ -87,19 +88,19 @@ ops-app.config
 
 ### 5. 项目配置
 
-根目录 `ops-app.config` 是项目 ID、应用名称和部署前缀的唯一配置源，使用 JSON 内容。初始化时复制 Skill 的 `assets/ops-app.config`，只修改实际字段值：
+根目录 `ops-app.config` 是应用 ID、应用名称和部署前缀的唯一配置源，使用 JSON 内容。初始化时复制 Skill 的 `assets/ops-app.config`，只修改实际字段值：
 
 ```json
 {
   "schemaVersion": 1,
-  "projectId": null,
+  "appId": null,
   "appName": "example-app"
 }
 ```
 
-初始化时不得伪造项目 ID。第一次发布时调用当前宿主提供的项目注册工具，验证返回值为 URL 安全单路径段后原子写回 `projectId`。后续发布复用已有 ID；工具未提供、返回空值、格式非法或本地与远端归属冲突时停止。
+初始化时不得伪造应用 ID。第一次发布时调用当前宿主提供的应用注册工具，验证返回值为 URL 安全单路径段后原子写回 `appId`。后续发布复用已有 ID；工具未提供、返回空值、格式非法或本地与远端归属冲突时停止。
 
-项目 ID 工具确定后，应在本 Skill 中补充真实工具名称、完整参数和示例。当前不得猜测命令或直接请求未定义接口。
+应用 ID 工具确定后，应在本 Skill 中补充真实工具名称、完整参数和示例。当前不得猜测命令或直接请求未定义接口。
 
 同时复制以下共享资产到项目 `deployment/`：
 
@@ -107,30 +108,32 @@ ops-app.config
 - `assets/ops-app-config.d.mts` → `deployment/ops-app-config.d.mts`
 - `assets/render-nginx-config.mjs` → `deployment/render-nginx-config.mjs`
 
-Vite 和 Nginx 渲染脚本必须调用同一个 `ops-app-config.mjs` 完成校验和部署前缀派生。禁止在 `.env`、Compose、Dockerfile、Vite 或 Nginx 中重复维护项目 ID、应用名称或完整部署路径。
+Vite 和 Nginx 渲染脚本必须调用同一个 `ops-app-config.mjs` 完成校验和部署前缀派生。禁止在 `.env`、Compose、Dockerfile、Vite 或 Nginx 中重复维护应用 ID、应用名称或完整部署路径。
 
 ### 6. 构建路径
 
 部署前缀固定为：
 
 ```text
-/ops-app/{projectId}/{appName}/
+/ops-app/{appId}/{appName}/
 ```
 
-Vite 本地开发使用 `/`；`vite build` 调用 `loadOpsAppConfig(..., { requireProjectId: true })` 和 `getOpsAppDeployBase()` 设置 `base`。缺少项目 ID 时构建必须失败并给出可操作错误。前端镜像将 `dist` 内容复制到 Nginx 静态根目录，并在 Node 构建阶段调用 `render-nginx-config.mjs` 读取同一配置文件生成最终 Nginx 配置；不得使用另一组环境变量或 build args。默认模板剥离请求中的部署前缀后查找文件，不得再把 `dist` 放入同名 `/ops-app/...` 子目录。路由基路径、动态静态资源和 Nginx SPA 回退按前端、部署规范同步修改；API 地址不得拼入静态资源前缀。
+Vite 本地开发使用 `/`；`vite build` 调用 `loadOpsAppConfig(..., { requireAppId: true })` 和 `getOpsAppDeployBase()` 设置 `base`。缺少应用 ID 时构建必须失败并给出可操作错误。前端镜像将 `dist` 内容复制到 Nginx 静态根目录，并在 Node 构建阶段调用 `render-nginx-config.mjs` 读取同一配置文件生成最终 Nginx 配置；不得使用另一组环境变量或 build args。默认模板剥离请求中的部署前缀后查找文件，不得再把 `dist` 放入同名 `/ops-app/...` 子目录。路由基路径、动态静态资源和 Nginx SPA 回退按前端、部署规范同步修改；API 地址不得拼入静态资源前缀。
 
 ### 7. 部署与验收
 
 发布前必须确认：
 
 - `deployment/Dockerfile`、`deployment/compose.yaml`、`deployment/nginx.conf.template`、`deployment/ops-app-config.mjs`、`deployment/ops-app-config.d.mts`、`deployment/render-nginx-config.mjs` 存在；Dockerfile 同时提供前端、后端构建 target，并通过共享配置模块和渲染脚本生成项目内 Nginx 配置。
+- 部署构建基线为 Linux 服务器：Compose 必须显式使用 `context: ..` 与 `dockerfile: deployment/Dockerfile`；本地宿主机兼容性问题只记录，不改变项目产物规范。
 - 根目录 `.dockerignore` 存在，且没有排除构建必需的源码、锁文件、`ops-app.config` 或 deployment 资产。
-- Vite 配置已导入 `deployment/ops-app-config.mjs`，Compose、Dockerfile 和环境变量中没有重复的项目 ID、应用名称或部署路径。
+- Vite 配置已导入 `deployment/ops-app-config.mjs`，Compose、Dockerfile 和环境变量中没有重复的应用 ID、应用名称或部署路径。
 - Compose 同时声明前端、后端服务；SQLite 使用持久卷。
 - Dockerfile 使用精确 `COPY` 分层和 BuildKit 缓存；禁止无边界 `COPY . .`，但必须复制依赖清单、锁文件、源码和部署模板。
 - 后端依赖统一使用 `uv`、`pyproject.toml`、`uv.lock`；Nginx 以非 root 用户监听 `8080`；Dockerfile 不声明 `VOLUME`，持久卷只由 Compose 管理。
 - 根目录 `.dockerignore` 排除依赖目录、构建缓存、本地数据库、环境文件和密钥，同时保留锁文件、配置和部署资产。
-- Compose 使用最新 Compose Specification；前后端镜像名由 `ops-app.config` 派生为 `<projectId>-<appName>-frontend|backend`，同时发布 `:sha-<git-sha>` 和 `:latest`，线上始终拉取 `:latest`。
+- Compose 使用最新 Compose Specification；前后端镜像名由 `ops-app.config` 派生为 `<appId>-<appName>-frontend|backend`，同时发布 `:sha-<git-sha>` 和 `:latest`，线上始终拉取 `:latest`。
+- 空项目初始化只要求 Node.js 主版本大于 22；补丁版本 engine 警告允许记录到评估文档，不作为初始化、构建或测试的阻断条件。
 - 前后端构建、测试、健康检查及 `docker compose config` 通过。
 - 构建产物引用部署前缀，本地开发仍使用根路径。
 - SPA 嵌套路由刷新、API 访问和容器重启后的数据持久化通过。

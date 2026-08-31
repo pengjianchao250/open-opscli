@@ -8,6 +8,8 @@ server {
 
     root /usr/share/nginx/html;
     index index.html;
+    resolver 127.0.0.11 valid=30s ipv6=off;
+    set $backend_upstream http://backend:8000;
 
     location = /health {
         access_log off;
@@ -16,7 +18,7 @@ server {
     }
 
     location = /api {
-        proxy_pass http://backend:8000;
+        proxy_pass $backend_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -25,7 +27,7 @@ server {
     }
 
     location ^~ /api/ {
-        proxy_pass http://backend:8000;
+        proxy_pass $backend_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -33,13 +35,13 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    location = /ops-app/${OPS_PROJECT_ID}/${OPS_APP_NAME} {
-        return 308 /ops-app/${OPS_PROJECT_ID}/${OPS_APP_NAME}/;
+    location = /ops-app/${OPS_APP_ID}/${OPS_APP_NAME} {
+        return 308 /ops-app/${OPS_APP_ID}/${OPS_APP_NAME}/;
     }
 
     # Vite base 生成带部署前缀的 URL；dist 内容位于 root，查找文件前必须剥离前缀。
-    location ^~ /ops-app/${OPS_PROJECT_ID}/${OPS_APP_NAME}/ {
-        rewrite ^/ops-app/${OPS_PROJECT_ID}/${OPS_APP_NAME}/(.*)$ /$1 last;
+    location ^~ /ops-app/${OPS_APP_ID}/${OPS_APP_NAME}/ {
+        rewrite ^/ops-app/${OPS_APP_ID}/${OPS_APP_NAME}/(.*)$ /$1 last;
     }
 
     # SPA 入口每次返回最新内容，并禁止外层 Nginx 代理缓存。

@@ -1,11 +1,11 @@
 export interface OpsAppConfig {
   readonly schemaVersion: 1;
-  readonly projectId: string | null;
+  readonly appId: string | null;
   readonly appName: string;
 }
 
 export interface LoadOpsAppConfigOptions {
-  readonly requireProjectId?: boolean;
+  readonly requireAppId?: boolean;
 }
 
 /** 读取并校验唯一的 OPS 应用配置。 */

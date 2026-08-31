@@ -38,7 +38,7 @@
 
 ## 普通 HTML/CSS/JS 到 Vite + Vue
 
-固定目标为 Vite + Vue 3 + TypeScript + Element Plus：
+固定目标为 Vite + Vue 3 + Element Plus；默认保留 JavaScript，不强制加入 TypeScript、测试或代码质量工具：
 
 1. 识别页面、共享区域、表单、表格、弹窗和导航。
 2. 每个路由页面转换为 Vue 页面组件，共享区域转换为组件。
@@ -51,7 +51,7 @@
 
 ## 后端初始化
 
-- 没有后端时始终初始化最小 FastAPI + SQLite 服务，提供 `/health`，并把需要持久化或共享的数据迁移到后端；没有业务数据时不创建占位业务表。
+- 没有后端时只初始化前端，记录后端交接要求并等待其他人员实现；不得创建 FastAPI 占位服务、假健康检查或占位业务表。
 - 已有 FastAPI + SQLite 时按规范补齐，不重建数据库。
 - 其他后端或任何非 SQLite 数据库均停止；只生成评估和交接清单。
 

@@ -6,9 +6,10 @@
 
 | 场景 | 标准 |
 | --- | --- |
-| 现有 React 或 Next.js | Vite + React + TypeScript |
-| 现有 Vue 3 | Vite + Vue 3 + TypeScript |
-| 普通 HTML/CSS/JS | Vite + Vue 3 + TypeScript + Element Plus |
+| 空项目 | Vite + Vue 3 + Element Plus + Axios + Vue Router + Pinia |
+| 现有 React 或 Next.js | Vite + React，保留原语言和已验证工具链 |
+| 现有 Vue 3 | Vite + Vue 3，保留原语言和已验证工具链 |
+| 普通 HTML/CSS/JS | Vite + Vue 3 + Element Plus，默认保留 JavaScript |
 
 已有 Vite 项目保留当前 React/Vue 方向和已使用的组件库；不得为了统一外观而重写无关页面。普通 HTML 迁移使用 Element Plus 实现表单、表格、对话框、反馈和导航等通用组件，业务布局与展示样式可保留原 CSS。
 
@@ -27,7 +28,7 @@ frontend/
 │   ├── router/
 │   ├── styles/
 │   ├── App.tsx | App.vue
-│   └── main.tsx | main.ts
+│   └── main.tsx | main.ts | main.js
 ├── index.html
 ├── package.json
 ├── tsconfig.json
@@ -41,9 +42,9 @@ frontend/
 项目必须把 Skill 的 `assets/ops-app-config.mjs` 和 `assets/ops-app-config.d.mts` 复制到 `deployment/`。`vite.config.ts` 必须导入该共享模块读取根目录 `ops-app.config`，并按命令区分路径：
 
 - 开发服务器：`/`
-- 构建：`/ops-app/{projectId}/{appName}/`
+- 构建：`/ops-app/{appId}/{appName}/`
 
-构建时 `projectId` 为空、`appName` 非法或配置无法解析，立即失败。不要提供无 ID 的部署兜底路径。
+构建时 `appId` 为空、`appName` 非法或配置无法解析，立即失败。不要提供无 ID 的部署兜底路径。
 
 ```ts
 import { resolve } from 'node:path'
@@ -61,13 +62,13 @@ export default defineConfig(({ command }) => ({
   base:
     command === 'build'
       ? getOpsAppDeployBase(
-          loadOpsAppConfig(configPath, { requireProjectId: true }),
+          loadOpsAppConfig(configPath, { requireAppId: true }),
         )
       : '/',
 }))
 ```
 
-已有 Vite 插件和其他配置必须保留并合并到返回对象，不能用示例覆盖。禁止从 `.env`、Compose 或 Docker build args 再读取项目 ID和应用名称。
+已有 Vite 插件和其他配置必须保留并合并到返回对象，不能用示例覆盖。禁止从 `.env`、Compose 或 Docker build args 再读取应用 ID和应用名称。
 
 React Router 的 `basename`、Vue Router 的 history base 使用 `import.meta.env.BASE_URL`。代码动态拼接静态资源时同样使用 `import.meta.env.BASE_URL`；普通 import、CSS `url()` 和 HTML 资源交给 Vite 改写。
 
@@ -82,7 +83,7 @@ React Router 的 `basename`、Vue Router 的 history base 使用 `import.meta.en
 
 ## Vue 与 Element Plus 约束
 
-- 使用 Vue 3 Composition API 和 `<script setup lang="ts">`。
+- 使用 Vue 3 Composition API 和 `<script setup>`；已有 TypeScript 项目保留 `<script setup lang="ts">`。
 - 普通 HTML 迁移默认使用 Vue Router；只有单页且没有导航状态时可不引入路由。
 - Element Plus 优先使用直接组件导入；只有组件数量足以产生明确收益时才增加自动导入插件。
 - 使用 `@element-plus/icons-vue` 中的图标，不用 emoji 代替功能图标。
