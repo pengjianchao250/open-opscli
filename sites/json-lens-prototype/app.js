@@ -647,17 +647,18 @@ class JsonLensApp extends HTMLElement {
   renderField(field, required = false) {
     const value = this.state.params[field.key] ?? "";
     const requiredMark = required ? '<span class="required-mark">必填</span>' : '';
+    const requiredAttr = required ? "required" : "";
     if (field.type === "checkbox") {
-      return `<label class="check-field"><input class="checkbox checkbox-primary checkbox-sm" type="checkbox" data-param="${escapeHtml(field.key)}" ${value ? "checked" : ""}><span>${escapeHtml(field.label)}${requiredMark}</span></label>`;
+      return `<label class="check-field"><input class="checkbox checkbox-primary checkbox-sm" type="checkbox" data-param="${escapeHtml(field.key)}" ${value ? "checked" : ""} ${requiredAttr}><span>${escapeHtml(field.label)}${requiredMark}</span></label>`;
     }
     if (field.type === "select") {
-      return `<label>${escapeHtml(field.label)}${requiredMark}<select class="select select-bordered select-sm w-full" data-param="${escapeHtml(field.key)}">${field.options.map(([option, label]) => `<option value="${escapeHtml(option)}" ${String(value) === String(option) ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>`;
+      return `<label>${escapeHtml(field.label)}${requiredMark}<select class="select select-bordered select-sm w-full" data-param="${escapeHtml(field.key)}" ${requiredAttr}>${field.options.map(([option, label]) => `<option value="${escapeHtml(option)}" ${String(value) === String(option) ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>`;
     }
     if (field.type === "json") {
-      return `<label class="field-wide">${escapeHtml(field.label)}${requiredMark}<textarea class="textarea textarea-bordered textarea-sm w-full" data-param="${escapeHtml(field.key)}" spellcheck="false" placeholder="${escapeHtml(field.placeholder || "")}">${escapeHtml(value)}</textarea></label>`;
+      return `<label class="field-wide">${escapeHtml(field.label)}${requiredMark}<textarea class="textarea textarea-bordered textarea-sm w-full" data-param="${escapeHtml(field.key)}" spellcheck="false" placeholder="${escapeHtml(field.placeholder || "")}" ${requiredAttr}>${escapeHtml(value)}</textarea></label>`;
     }
     const attrs = [field.placeholder && `placeholder="${escapeHtml(field.placeholder)}"`, field.min !== undefined && `min="${field.min}"`, field.max !== undefined && `max="${field.max}"`].filter(Boolean).join(" ");
-    return `<label>${escapeHtml(field.label)}${requiredMark}<input class="input input-bordered input-sm w-full" type="${field.type === "csv" ? "text" : field.type || "text"}" data-param="${escapeHtml(field.key)}" value="${escapeHtml(value)}" ${attrs}></label>`;
+    return `<label>${escapeHtml(field.label)}${requiredMark}<input class="input input-bordered input-sm w-full" type="${field.type === "csv" ? "text" : field.type || "text"}" data-param="${escapeHtml(field.key)}" value="${escapeHtml(value)}" ${attrs} ${requiredAttr}></label>`;
   }
 
   renderScenarioForm() {
