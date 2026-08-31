@@ -1,7 +1,7 @@
 """SerpApi Google Trends HTTP 客户端。
 
 客户端在每次搜索前通过免费 Account API 核对额度，并在确认 Key 耗尽时
-写入 SQLite 状态后自动轮换。所有异常和返回结构都会移除 API Key。
+写入统一 MySQL 账号状态后自动轮换。所有异常和返回结构都会移除 API Key。
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, quote_plus, urlsplit, urlunsplit
 import httpx
 
 from opscli.google_trends.api.key_store import SerpApiKeyRecord, SerpApiKeyStore
+from opscli.google_trends.api.mysql_key_store import MySqlSerpApiKeyStore
 from opscli.google_trends.domain.exceptions import (
     GoogleTrendsApiError,
     GoogleTrendsApiKeysExhaustedError,
@@ -35,12 +36,12 @@ _KEY_LOCKS_GUARD = threading.Lock()
 
 
 class SerpApiGoogleTrendsClient:
-    """使用 SQLite 多 Key 池调用 SerpApi Google Trends 接口。"""
+    """使用统一 MySQL 多账号池调用 SerpApi Google Trends 接口。"""
 
     def __init__(
         self,
         *,
-        key_store: SerpApiKeyStore | None = None,
+        key_store: SerpApiKeyStore | MySqlSerpApiKeyStore | None = None,
         http_client: httpx.Client | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
@@ -51,7 +52,7 @@ class SerpApiGoogleTrendsClient:
             http_client: 可注入的同步 HTTP 客户端，主要用于测试。
             timeout_seconds: 默认 HTTP 超时秒数。
         """
-        self.key_store = key_store or SerpApiKeyStore()
+        self.key_store = key_store or MySqlSerpApiKeyStore()
         self._client = http_client or httpx.Client(timeout=timeout_seconds)
         self._owns_client = http_client is None
 
@@ -97,7 +98,7 @@ class SerpApiGoogleTrendsClient:
             key = renewal_key or self.key_store.next_active_key(exclude_key_ids=attempted)
             if key is None:
                 raise GoogleTrendsApiKeysExhaustedError(
-                    "没有可用的 SerpApi API Key；请检查 SQLite Key 状态和剩余额度"
+                    "没有可用的 SerpApi API 账号；请检查 MySQL 账号状态和剩余额度"
                 )
             attempted.add(key.key_id)
             with _lock_for_key(key.key_id):

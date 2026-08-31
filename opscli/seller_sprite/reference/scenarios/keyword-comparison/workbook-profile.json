@@ -1,0 +1,38 @@
+{
+  "source": "local_xlsx",
+  "official_export_api_used": false,
+  "first_page_only": true,
+  "maximum_data_rows": 100,
+  "sheets": [
+    {
+      "role": "main",
+      "name_pattern": "{SITE}-流量占比对比-{FINAL_ASINS}",
+      "name_max_length": 31,
+      "columns": "2 + 2 * final_asin_count + 9",
+      "freeze_panes": null,
+      "auto_filter": null,
+      "show_grid_lines": false,
+      "merged_cells": 0,
+      "formulas": 0,
+      "row_height": 20,
+      "header_fill": "E98A00",
+      "font_name": "等线",
+      "font_size": 10,
+      "column_widths": {
+        "keyword": 25,
+        "translation": 22.6719,
+        "dynamic_asin_columns": 15.671875,
+        "common_metrics": [12, 12, 12, 12, 12, 12, 12, 9, 13]
+      }
+    },
+    {
+      "role": "asin_index",
+      "name": "ASIN",
+      "columns": 1,
+      "first_cell": "asin",
+      "own_asin_marker": "(我的)",
+      "includes_own_asin_in_final_order": true
+    }
+  ],
+  "excluded_sheets": ["Notes"]
+}

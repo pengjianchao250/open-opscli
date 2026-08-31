@@ -1,7 +1,14 @@
 from opscli.seller_sprite import accounts as accounts_module
+import pytest
+
 from opscli.seller_sprite.accounts import SellerSpriteAccountProvider
 from opscli.seller_sprite.config import SellerSpriteSettings
+from opscli.seller_sprite.domain.exceptions import (
+    SellerSpriteAccountSourceUnavailableError,
+    SellerSpriteNoEligibleAccountError,
+)
 from opscli.shared.integration_accounts import IntegrationAccountBundle, IntegrationAccountRecord
+from opscli.shared.integration_accounts import IntegrationAccountError
 
 
 class FakeIntegrationClient:
@@ -128,6 +135,55 @@ def test_account_provider_lists_local_pool_when_remote_is_empty():
     accounts = provider.list_accounts()
 
     assert [account.name for account in accounts] == ["local-1", "local-2"]
+
+
+def test_account_provider_fails_closed_when_required_remote_source_is_unavailable():
+    accounts_module._REMOTE_BUNDLE_CACHE.clear()
+
+    class FailingAccountClient:
+        def get_accounts(self, platform: str) -> IntegrationAccountBundle:
+            raise IntegrationAccountError("remote unavailable")
+
+    provider = SellerSpriteAccountProvider(
+        settings=SellerSpriteSettings(
+            username="obsolete@example.com",
+            password="obsolete-secret",
+        ),
+        integration_client=FailingAccountClient(),
+        allow_local_fallback=False,
+    )
+
+    with pytest.raises(SellerSpriteAccountSourceUnavailableError):
+        provider.list_accounts()
+
+
+def test_account_provider_fails_closed_when_required_remote_source_is_empty():
+    accounts_module._REMOTE_BUNDLE_CACHE.clear()
+
+    class EmptyAccountClient:
+        def get_accounts(self, platform: str) -> IntegrationAccountBundle:
+            return IntegrationAccountBundle(
+                platform=platform,
+                default_account=None,
+                accounts=(),
+            )
+
+    provider = SellerSpriteAccountProvider(
+        settings=SellerSpriteSettings(
+            accounts=(
+                {
+                    "name": "obsolete",
+                    "username": "obsolete@example.com",
+                    "password": "obsolete-secret",
+                },
+            ),
+        ),
+        integration_client=EmptyAccountClient(),
+        allow_local_fallback=False,
+    )
+
+    with pytest.raises(SellerSpriteNoEligibleAccountError):
+        provider.list_accounts()
 
 
 def test_account_provider_reuses_platform_cache_across_authenticated_users():

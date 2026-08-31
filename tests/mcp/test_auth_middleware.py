@@ -3,9 +3,13 @@
 import asyncio
 
 import httpx
+import pytest
 import respx
 
-from opscli.mcp.auth_middleware import ApiKeyAuthMiddleware
+from opscli.mcp.auth_middleware import (
+    ApiKeyAuthMiddleware,
+    ApiKeyVerificationUnavailable,
+)
 
 
 def _run(coro):
@@ -139,9 +143,10 @@ def test_remote_verify_stale_cache_on_transient_failure(monkeypatch):
     stale = _run(middleware._verify_remote("mcp_key_1"))
     assert stale == first
 
-    # 越过宽限期后，临时故障不再降级 → 返回 None
+    # 越过宽限期后，临时故障不再降级 → 上报鉴权依赖不可用
     clock.now += 300
-    assert _run(middleware._verify_remote("mcp_key_1")) is None
+    with pytest.raises(ApiKeyVerificationUnavailable, match="HTTP 503"):
+        _run(middleware._verify_remote("mcp_key_1"))
 
 
 @respx.mock
@@ -172,4 +177,37 @@ def test_remote_verify_revoked_key_not_served_from_stale(monkeypatch):
 
     # 缓存已清：即便随后遇到临时故障也不应降级放行
     route.mock(return_value=httpx.Response(503))
-    assert _run(middleware._verify_remote("mcp_key_1")) is None
+    with pytest.raises(ApiKeyVerificationUnavailable, match="HTTP 503"):
+        _run(middleware._verify_remote("mcp_key_1"))
+
+
+@respx.mock
+def test_remote_verify_read_timeout_without_cache_returns_503():
+    """远程校验临时超时且无历史缓存时，应返回 503 而非把有效 Key 误判为 401。"""
+    sent = []
+
+    async def app(scope, receive, send):
+        raise AssertionError("远程校验不可用时不应进入 MCP 业务应用")
+
+    async def capture_send(message):
+        sent.append(message)
+
+    middleware = ApiKeyAuthMiddleware(
+        app,
+        auth_verify_url="https://ops.example.com/v1/mcp/verify-key",
+    )
+    respx.get("https://ops.example.com/v1/mcp/verify-key").mock(
+        side_effect=httpx.ReadTimeout("")
+    )
+    scope = {
+        "type": "http",
+        "path": "/mcp",
+        "query_string": b"api_key=mcp_key_1",
+        "headers": [],
+    }
+
+    _run(middleware(scope, None, capture_send))
+
+    assert sent[0]["status"] == 503
+    assert (b"retry-after", b"5") in sent[0]["headers"]
+    assert b'"reason":"auth_service_unavailable"' in sent[1]["body"]

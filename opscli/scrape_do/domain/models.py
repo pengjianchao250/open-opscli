@@ -14,9 +14,22 @@ class ScrapeDoCredential:
     name: str
     token: str
     source: str
+    account_id: int | None = None
+    secret_version: int | None = None
 
     def to_public_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "source": self.source, "has_token": bool(self.token)}
+        """返回不包含 Token 的账号摘要。
+
+        Returns:
+            可安全持久化的账号来源和密钥版本信息。
+        """
+        return {
+            "name": self.name,
+            "source": self.source,
+            "account_id": self.account_id,
+            "secret_version": self.secret_version,
+            "has_token": bool(self.token),
+        }
 
 
 @dataclass

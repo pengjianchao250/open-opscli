@@ -1,0 +1,14 @@
+{
+  "name": "json-lens-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "node --test tests/*.test.js",
+    "test:e2e": "playwright test",
+    "test:update-snapshots": "playwright test --update-snapshots"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}

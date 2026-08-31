@@ -6,10 +6,17 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from opscli.seller_sprite.config import DEFAULT_ACCOUNT_CACHE_TTL_SECONDS, SellerSpriteSettings, load_settings
-from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
-from opscli.shared.integration_accounts import IntegrationAccountBundle, IntegrationAccountClient, IntegrationAccountError
-
+from opscli.seller_sprite.config import SellerSpriteSettings, load_settings
+from opscli.seller_sprite.domain.exceptions import (
+    SellerSpriteAccountSourceUnavailableError,
+    SellerSpriteConfigError,
+    SellerSpriteNoEligibleAccountError,
+)
+from opscli.shared.integration_accounts import (
+    IntegrationAccountBundle,
+    IntegrationAccountClient,
+    IntegrationAccountError,
+)
 
 # 卖家精灵账号是平台公共数据，仅按平台在当前进程内缓存。
 INTEGRATION_PLATFORM = "seller_sprite"
@@ -40,9 +47,22 @@ class SellerSpriteAccountProvider:
         self,
         settings: SellerSpriteSettings | None = None,
         integration_client: IntegrationAccountClient | None = None,
+        *,
+        allow_local_fallback: bool = True,
     ) -> None:
+        """创建卖家精灵账号 Provider。
+
+        参数：
+            settings: 本地账号与缓存配置。
+            integration_client: 远程集成账号客户端。
+            allow_local_fallback: 远程异常或空结果时是否允许使用本地账号。
+
+        返回：
+            无。
+        """
         self.settings = settings or load_settings()
         self.integration_client = integration_client or IntegrationAccountClient()
+        self.allow_local_fallback = allow_local_fallback
         self._remote_bundle: IntegrationAccountBundle | None = None
         self._remote_error: IntegrationAccountError | None = None
 
@@ -51,6 +71,8 @@ class SellerSpriteAccountProvider:
         account = self._get_remote_default(refresh=refresh)
         if account:
             return account
+
+        self._raise_when_remote_required()
 
         account = self._get_from_pool(self.settings.account_name)
         if account:
@@ -84,6 +106,8 @@ class SellerSpriteAccountProvider:
         if remote_accounts:
             return remote_accounts
 
+        self._raise_when_remote_required()
+
         if self.settings.accounts:
             return [
                 SellerSpriteAccount(
@@ -103,6 +127,16 @@ class SellerSpriteAccountProvider:
                 password=self.settings.password,
             )
         ]
+
+    def _raise_when_remote_required(self) -> None:
+        """生产调度禁止把远程异常或空结果解释为本地账号候选。"""
+        if self.allow_local_fallback:
+            return
+        if self._remote_error:
+            raise SellerSpriteAccountSourceUnavailableError(
+                "卖家精灵远程账号源不可用，已禁止回退本地账号"
+            ) from self._remote_error
+        raise SellerSpriteNoEligibleAccountError("卖家精灵远程账号源没有可用账号")
 
     def _get_from_pool(self, name: str) -> SellerSpriteAccount | None:
         """从账号池按名称读取账号。"""

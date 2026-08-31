@@ -2,7 +2,7 @@
 
 Aukeys 运营 CLI 工具集
 
-> 当前模块：auth（认证授权）、query（数据查询）、skills（Skill 生命周期管理）、amazon（Amazon 数据采集）、seller-sprite（卖家精灵关键词与 Listing 分析材料采集）；后续可扩展更多模块（deploy、notify 等）
+> 当前模块：auth（认证授权）、query（数据查询）、skills（Skill 生命周期管理）、amazon（Amazon 数据采集）、seller-sprite（卖家精灵关键词与 Listing 分析材料采集）、collector-monitor（采集任务监控、提醒与受控链路测试）；后续可扩展更多模块（deploy、notify 等）
 >
 > 说明：本文档中涉及 `aukeys-opscli[amazon]`、`opscli-core`、独立模块包、动态插件化等内容，部分属于预留设计或未来演进方向。**截至当前仓库版本，请以单包 `aukeys-opscli` + 仓库内静态注册模块为准，不要将这些内容视为已落地的发布承诺。**
 
@@ -53,6 +53,14 @@ Aukeys 运营 CLI 工具集
 - **默认 50 条**：关键词挖掘默认采集 50 条，支持通过 `--limit` 控制
 - **验证码预留**：一期检测并留痕验证码，后续可接入超级鹰图形验证码 provider
 - **浏览器运行时**：`browser-route` 默认使用 Patchright，安装 `aukeys-opscli[seller-sprite]` 后执行 `python -m patchright install chromium`；现有 Playwright 页面、定位、路由和 request API 无需替换，可通过 `OPSCLI_SELLER_SPRITE_BROWSER_RUNTIME=playwright` 回退
+
+### collector-monitor 模块
+
+- **独立监督服务**：与 Collector MCP 分进程运行，严格只读 SellerSprite 任务库，监控私有状态写入独立 SQLite
+- **任务与队列健康**：综合业务进度、执行租约、runtime 心跳、Generic/Listing 精确容量和领取活动，识别 `stalled`、`orphaned`、`queue_starved`、`worker_unavailable`
+- **网页、API 与 CLI**：提供本机监督台、Collector 状态、活动/已恢复事故历史、健康探针、JSON API 和 `opscli collector-monitor` 查询命令
+- **企业微信提醒**：支持事故首次告警、升级、冷却提醒和恢复通知；Webhook 只从受保护文件读取
+- **安全边界**：一期不修改已有任务状态，不提供取消、重试、重新入队或浏览器控制；仅显式开关允许固定关键词反查链路测试
 
 ---
 
@@ -186,6 +194,38 @@ opscli seller-sprite login-status --output-dir ./seller_sprite_runs --pretty
 # 14. 退出登录
 opscli auth logout
 ```
+
+### Collector Monitor 快速开始
+
+Collector Monitor 是独立长运行服务，默认监听 `127.0.0.1:8767`：
+
+```bash
+# 启动服务
+opscli collector-monitor serve
+# 或使用独立入口
+opscli-collector-monitor
+
+# 查询缓存状态
+opscli collector-monitor status
+opscli collector-monitor tasks --health stalled
+opscli collector-monitor show <JOB_ID>
+opscli collector-monitor incidents
+opscli collector-monitor probe --target collector
+opscli collector-monitor probe --target queue-source
+```
+
+浏览器访问 `http://127.0.0.1:8767/`。SellerSprite 和 Monitor 共用 `OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH`，默认读取 `~/.config/opscli/seller_sprite/task_queue.sqlite3`；Monitor 使用 SQLite `mode=ro` 与 `query_only`，不会迁移或修改业务任务。兼容变量 `OPSCLI_COLLECTOR_MONITOR_QUEUE_DB_PATH` 可保留，但同时配置时必须一致。Monitor 自有事故状态写入 `~/.config/opscli/collector_monitor/state.sqlite3`，不能与业务库指向同一物理文件。页面会接收 API Key，因此 Monitor URL 仅允许 HTTPS 或明确回环 HTTP。
+
+页面和 CLI 提供固定目标的手动探测，单目标只允许一个并发、完成后冷却 10 秒、总超时不超过 5 秒。Collector Tab 可输入 MCP API Key；默认仅用于下一次探测并在发送后清空，也可主动选择以明文保存到当前浏览器的 `localStorage`，取消选择会立即删除。无论是否保存，Key 都不会写入 Monitor 服务端配置、缓存或状态；页面 7 秒自动刷新只读取缓存，不会自动调用 Collector，也不会提交或重试业务任务。
+
+页面另有“场景测试”Tab，可在显式设置 `OPSCLI_COLLECTOR_MONITOR_SCENARIO_TEST_ENABLED=true` 后提交固定 `keyword-reverse`（关键词反查）真实任务，用于验证 API Key、入队与调度链路。该操作会消耗额度，必须填写页面 API Key 并勾选确认；服务端不接受任意工具或场景，不自动重试，也不会借用服务端 Key 文件，成功返回 `job_id` 供任务 Tab 跟踪。启用时必须同时配置 `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_URL`，该地址必须使用 HTTPS 或明确回环 HTTP。
+
+Collector Monitor 默认读取项目内随包分发的企业微信机器人文件；`OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE` 可覆盖该路径，显式空值可禁用。服务端持久 Collector MCP API Key 仍必须放在权限受限文件中，并通过 `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_API_KEY_FILE` 配置。页面 `localStorage` 选项只适合受控运维终端，会以当前页面同源脚本可读取的明文形式保存在浏览器 Profile 中，不替代生产 Key 文件。配置 API Key 文件或启用场景测试时，Collector MCP 地址必须使用 HTTPS，仅明确回环地址允许 HTTP；携带密钥的调用不跟随重定向。容量按任务类型计算，并扣除 SQLite 全局运行任务和本实例活跃尝试中的 Generic、Listing、专属任务及其他调度器共享账号占用。默认服务没有应用层认证，不应直接暴露公网；非回环部署必须使用 HTTPS 与运维认证后才能输入或保存页面 Key。
+
+完整配置、部署和判定合同见：
+
+- [采集任务监控服务设计](docs/design/采集任务监控服务设计.md)
+- [Collector Monitor 运维说明](docs/release/Collector%20Monitor运维说明.md)
 
 ---
 

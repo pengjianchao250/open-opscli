@@ -73,3 +73,15 @@ def test_installer_has_valid_bash_syntax():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_installer_supports_optional_protected_insight_config():
+    """模型洞察必须显式启用，配置文件需校验并限制读取权限。"""
+    installer = INSTALL_PATH.read_text(encoding="utf-8")
+    service = SERVICE_PATH.read_text(encoding="utf-8")
+
+    assert "--insight-config" in installer
+    assert 'chmod 0600 "${insight_config}"' in installer
+    assert '"endpoint", "api_key", "model"' in installer
+    assert "@INSIGHT_ARGS@" in service
+    assert "api_key" not in service

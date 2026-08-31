@@ -16,6 +16,10 @@ from opscli.seller_sprite.api.categories import SellerSpriteCategoryResolver
 from opscli.seller_sprite.api.client import BASE_URL, SellerSpriteApiClient
 from opscli.seller_sprite.api.keyword_research import parse_keyword_research_html
 from opscli.seller_sprite.api.market_research import parse_market_research_html
+from opscli.seller_sprite.api.payloads import (
+    keyword_comparison_variant_selection,
+    traffic_extend_variant_selection,
+)
 from opscli.seller_sprite.api.scenarios import get_scenario, list_scenarios
 from opscli.seller_sprite.browser_route import (
     BrowserRouteRequest,
@@ -32,7 +36,12 @@ from opscli.seller_sprite.domain.models import (
     SellerSpriteScenarioRequest,
     SellerSpriteScenarioResult,
 )
-from opscli.seller_sprite.export.xlsx import export_rows_to_xlsx
+from opscli.seller_sprite.export.keyword_comparison_xlsx import (
+    build_keyword_comparison_worksheets,
+    export_keyword_comparison_to_xlsx,
+)
+from opscli.seller_sprite.export.worksheet import SellerSpriteWorksheet
+from opscli.seller_sprite.export.xlsx import build_export_worksheets, export_rows_to_xlsx
 from opscli.seller_sprite.services.task_status import (
     base_status,
     error_to_dict,
@@ -69,6 +78,7 @@ class SellerSpriteApiManager:
         session_owner_id: str = "default",
         listing_remote_task_id: str | None = None,
         listing_task_id_listener: Callable[[str], None] | None = None,
+        progress_listener: Callable[[str, dict[str, Any] | None], None] | None = None,
     ) -> None:
         """创建卖家精灵场景执行器。
 
@@ -79,6 +89,9 @@ class SellerSpriteApiManager:
             session_id: 当前调用会话标识。
             session_state_listener: browser 会话状态监听器。
             session_owner_id: browser worker 所有权标识。
+            listing_remote_task_id: Listing Analysis 已持久化远端任务标识。
+            listing_task_id_listener: 远端任务标识持久化监听器。
+            progress_listener: 仅接收阶段与脱敏白名单元数据的进度监听器。
 
         返回：
             无。
@@ -92,6 +105,7 @@ class SellerSpriteApiManager:
         self.session_owner_id = session_owner_id
         self.listing_remote_task_id = listing_remote_task_id
         self.listing_task_id_listener = listing_task_id_listener
+        self.progress_listener = progress_listener
         self.account_provider = account_provider or SellerSpriteAccountProvider(
             self.settings,
             integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
@@ -175,6 +189,7 @@ class SellerSpriteApiManager:
 
     async def run(self, request: SellerSpriteScenarioRequest) -> SellerSpriteScenarioResult:
         """执行一个接口场景。"""
+        self._emit_progress("resolving")
         scenario = get_scenario(request.scenario)
         site = (request.site or self.settings.default_site).upper()
         period = request.period or self.settings.default_period
@@ -183,11 +198,16 @@ class SellerSpriteApiManager:
         root_dir.mkdir(parents=True, exist_ok=True)
         page_size = request.page_size or self.settings.page_size
         export_format = _normalize_export_format(request.export_format)
-        if request.scenario == "aba-reverse" and export_format != "xlsx":
-            raise SellerSpriteConfigError("aba-reverse 仅支持 xls 或 xlsx 官方文件导出")
+        if scenario.method in {"GET_XLSX", "POST_XLSX"} and export_format != "xlsx":
+            raise SellerSpriteConfigError(
+                f"{request.scenario} 仅支持 xls 或 xlsx 官方文件导出"
+            )
         account = self.account_provider.get_default()
         warnings: list[dict[str, Any]] = []
+        effective_asin_list: list[str] | None = None
         mode = _resolve_request_mode(request.mode or self.settings.default_mode)
+        if scenario.browser_context_only and mode != "browser-route":
+            raise SellerSpriteConfigError(f"{request.scenario} 仅支持 browser-route 模式")
         async with SellerSpriteApiClient(account=account) as client:
             login = {"mode": "cached", "cookie_names": client.cookie_names()}
             if mode == "api-direct" and not client.has_login_cookies():
@@ -223,6 +243,7 @@ class SellerSpriteApiManager:
             )
             if mode == "browser-route":
                 if request.scenario == "listing-analysis" and self.listing_remote_task_id:
+                    self._emit_progress("remote_poll")
                     from opscli.seller_sprite.browser_route import (
                         fetch_listing_analysis_report_with_browser_route,
                     )
@@ -251,6 +272,7 @@ class SellerSpriteApiManager:
                         owner_id=self.session_owner_id,
                     )
                 else:
+                    self._emit_progress("browser_wait")
                     browser_result = await _run_browser_route_request(
                         settings=self.settings,
                         account=account,
@@ -272,6 +294,17 @@ class SellerSpriteApiManager:
                         ),
                         session_state_listener=self.session_state_listener,
                         session_owner_id=self.session_owner_id,
+                        replay_safe=scenario.replay_safe,
+                        keyword_comparison_variant=(
+                            keyword_comparison_variant_selection(params)
+                            if request.scenario == "keyword-comparison"
+                            else "sell_well"
+                        ),
+                        traffic_extend_variant=(
+                            traffic_extend_variant_selection(params)
+                            if request.scenario == "traffic-extend"
+                            else "all"
+                        ),
                     )
                     if request.scenario == "listing-analysis":
                         task_id = _extract_task_id(browser_result.response)
@@ -280,8 +313,10 @@ class SellerSpriteApiManager:
                 login = browser_result.login
                 main_response = browser_result.response
                 high_frequency_response = browser_result.high_frequency_response
+                effective_asin_list = browser_result.effective_asin_list
                 warnings.extend(browser_result.warnings)
             else:
+                self._emit_progress("requesting")
                 main_response = await _request_with_session_retry(
                     client=client,
                     warnings=warnings,
@@ -306,6 +341,7 @@ class SellerSpriteApiManager:
                             result_endpoint_template=scenario.task_result_endpoint or "",
                             referer=scenario.build_referer(payload),
                             params=request.params,
+                            progress_listener=self.progress_listener,
                         ),
                     )
                 if _looks_like_guest_limited_response(main_response, page_size=page_size):
@@ -362,35 +398,88 @@ class SellerSpriteApiManager:
         }
         _write_json(raw_path, raw)
 
+        self._emit_progress("processing")
         rows = _extract_items(main_response, scenario=request.scenario)
+        if request.scenario in {
+            "keyword-comparison",
+            "traffic-extend",
+            "keyword-conversion-rate",
+            "real-time-bidding",
+        }:
+            # 即使上游异常返回超过分页大小，也只导出首期约定的第一页 100 条。
+            rows = rows[:100]
         high_frequency_rows = _extract_high_frequency_rows(high_frequency_response)
-        if request.scenario == "aba-reverse":
+        keyword_comparison_context: dict[str, Any] | None = None
+        if request.scenario == "keyword-comparison":
+            if not effective_asin_list:
+                raise SellerSpriteApiError(
+                    "卖家精灵流量词对比缺少最终畅销变体顺序",
+                    api_code="ERR_KEYWORD_COMPARISON_ASIN_LIST_MISSING",
+                )
+            keyword_comparison_context = {
+                "own_asin": str(payload.get("asin") or ""),
+                "asin_list": effective_asin_list,
+            }
+        self._emit_progress("exporting")
+        output_path = _scenario_export_output_path(
+            root_dir,
+            job_id=job_id,
+            scenario=request.scenario,
+            site=site,
+            payload=payload,
+            extension=export_format,
+            own_asin=(
+                keyword_comparison_context["own_asin"]
+                if keyword_comparison_context
+                else None
+            ),
+        )
+        if scenario.method in {"GET_XLSX", "POST_XLSX"}:
             export = _official_xlsx_export(main_response, root_dir=root_dir)
         elif export_format == "xlsx":
-            export = export_rows_to_xlsx(
-                rows=rows,
-                output_path=(
-                    _aba_research_output_path(root_dir, site=site, payload=payload)
-                    if request.scenario == "aba-research"
-                    else _export_output_path(root_dir, job_id, "xlsx")
-                ),
-                scenario=request.scenario,
-                site=site,
-                period=period,
-                params=request.params,
-                high_frequency_rows=high_frequency_rows,
-            )
+            if keyword_comparison_context:
+                export = export_keyword_comparison_to_xlsx(
+                    rows=rows,
+                    output_path=output_path,
+                    site=site,
+                    **keyword_comparison_context,
+                )
+            else:
+                export = export_rows_to_xlsx(
+                    rows=rows,
+                    output_path=output_path,
+                    scenario=request.scenario,
+                    site=site,
+                    period=period,
+                    params=request.params,
+                    high_frequency_rows=high_frequency_rows,
+                )
         else:
+            if keyword_comparison_context:
+                worksheets = build_keyword_comparison_worksheets(
+                    rows=rows,
+                    site=site,
+                    **keyword_comparison_context,
+                )
+            else:
+                worksheets = build_export_worksheets(
+                    rows=rows,
+                    scenario=request.scenario,
+                    site=site,
+                    period=period,
+                    params=request.params,
+                    high_frequency_rows=high_frequency_rows,
+                )
             export = _export_rows_to_json(
-                output_path=_export_output_path(root_dir, job_id, "json"),
+                output_path=output_path,
                 job_id=job_id,
                 scenario=request.scenario,
                 site=site,
                 period=period,
-                rows=rows,
-                high_frequency_rows=high_frequency_rows,
+                worksheets=worksheets,
                 warnings=warnings,
             )
+        self._emit_progress("uploading")
         _upload_export_if_enabled(
             export=export,
             job_id=job_id,
@@ -401,6 +490,7 @@ class SellerSpriteApiManager:
             jwt=self.jwt,
             session_id=self.session_id,
         )
+        self._emit_progress("finalizing")
         result = SellerSpriteScenarioResult(
             job_id=job_id,
             scenario=request.scenario,
@@ -437,6 +527,15 @@ class SellerSpriteApiManager:
         merged.setdefault("state", status.get("state") or "succeeded")
         merged.setdefault("stage", status.get("stage") or "finished")
         return merged
+
+    def _emit_progress(
+        self,
+        stage: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """向可选监听器报告粗粒度阶段及脱敏白名单元数据。"""
+        if self.progress_listener is not None:
+            self.progress_listener(stage, metadata)
 
     def _build_root_dir(self, request: SellerSpriteScenarioRequest, job_id: str) -> Path:
         if request.attempt_output_dir:
@@ -533,6 +632,9 @@ async def _run_browser_route_request(
     high_frequency_payload: dict[str, Any] | None,
     session_state_listener: Callable[[SellerSpriteAccount, dict[str, Any]], None] | None,
     session_owner_id: str,
+    replay_safe: bool = True,
+    keyword_comparison_variant: str = "sell_well",
+    traffic_extend_variant: str = "all",
 ) -> BrowserRouteResult:
     """提交 browser-route 请求，遇到并发回收时仅重建并重试一次。"""
     browser_request = BrowserRouteRequest(
@@ -558,6 +660,9 @@ async def _run_browser_route_request(
             if request.cooldown_seconds is None
             else request.cooldown_seconds
         ),
+        replay_safe=replay_safe,
+        keyword_comparison_variant=keyword_comparison_variant,
+        traffic_extend_variant=traffic_extend_variant,
     )
     for attempt in range(2):
         worker = get_browser_route_worker(
@@ -589,6 +694,7 @@ async def _poll_ai_task_result(
     result_endpoint_template: str,
     referer: str,
     params: dict[str, Any],
+    progress_listener: Callable[[str, dict[str, Any] | None], None] | None = None,
 ) -> dict[str, Any]:
     task_id = _extract_task_id(submit_response)
     if not task_id:
@@ -606,9 +712,26 @@ async def _poll_ai_task_result(
     )
     endpoint = result_endpoint_template.format(task_id=task_id)
     last_response: dict[str, Any] | None = None
+    last_reported_status = ""
     for attempt in range(attempts):
         task_response = await client.get_json(endpoint, {}, referer=referer)
         last_response = task_response
+        poll_status = _ai_task_status(task_response) or "PENDING"
+        report_due = (
+            attempt == 0
+            or poll_status != last_reported_status
+            or (attempt + 1) % 10 == 0
+        )
+        if progress_listener is not None and report_due:
+            progress_listener(
+                "remote_poll",
+                {
+                    "poll_attempt": attempt + 1,
+                    "poll_total": attempts,
+                    "poll_status": poll_status,
+                },
+            )
+            last_reported_status = poll_status
         if _ai_task_has_content(task_response) or _ai_task_is_done(task_response):
             return _merge_ai_task_response(
                 submit_response=submit_response,
@@ -749,6 +872,17 @@ def _without(payload: dict[str, Any], keys: set[str]) -> dict[str, Any]:
 
 def _extract_items(response: dict[str, Any], *, scenario: str | None = None) -> list[dict[str, Any]]:
     data = response.get("data") if isinstance(response, dict) else None
+    if (
+        scenario == "real-time-bidding"
+        and isinstance(data, dict)
+        and isinstance(data.get("keywordList"), dict)
+        and isinstance(data["keywordList"].get("items"), list)
+    ):
+        return [
+            item
+            for item in data["keywordList"]["items"]
+            if isinstance(item, dict)
+        ]
     if scenario == "listing-analysis":
         listing_rows = _extract_listing_analysis_rows(data)
         if listing_rows:
@@ -877,6 +1011,9 @@ def _scenario_label(scenario: str) -> str:
     labels = {
         "competitor-lookup": "CompetitorLookup",
         "product-research": "ProductResearch",
+        "keyword-comparison": "CompareKeywords",
+        "keyword-conversion-rate": "KeywordConversionRate",
+        "real-time-bidding": "cpcSuggestBid",
         "keyword-miner": "KeywordMiner",
         "keyword-research": "KeywordResearch",
         "aba-research": "ABAResearch",
@@ -884,6 +1021,7 @@ def _scenario_label(scenario: str) -> str:
         "aba-reverse": "ABAReverse",
         "keyword-reverse": "ReverseASIN",
         "traffic-source": "TrafficSource",
+        "traffic-extend": "ExpandKeywords",
         "market-research": "MarketResearch",
         "listing-analysis": "ListingAnalysis",
     }
@@ -903,10 +1041,25 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
         return _sanitize_filename_part(
             params.get("asin") or first_value(params.get("asins"))
         )
-    if scenario == "listing-analysis":
-        return _sanitize_filename_part(params.get("asin"))
+    if scenario in {
+        "listing-analysis",
+        "keyword-comparison",
+        "real-time-bidding",
+    }:
+        return _sanitize_filename_part(
+            params.get("ownAsin") or params.get("myAsin") or params.get("asin")
+        )
     if scenario == "keyword-miner":
         return _sanitize_filename_part(params.get("keyword"))
+    if scenario == "keyword-conversion-rate":
+        return _sanitize_filename_part(
+            first_value(
+                params.get("keywords")
+                or params.get("keywordList")
+                or params.get("keyword")
+                or params.get("q")
+            )
+        )
     if scenario in {"keyword-research", "aba-research"}:
         return _sanitize_filename_part(
             params.get("q")
@@ -916,7 +1069,7 @@ def _build_target_label(scenario: str, params: dict[str, Any] | None) -> str:
             or params.get("asin")
             or first_value(params.get("departments"))
         )
-    if scenario == "association-traffic":
+    if scenario in {"association-traffic", "traffic-extend"}:
         return _sanitize_filename_part(first_value(params.get("asins") or params.get("asin")))
     if scenario == "traffic-source":
         return _sanitize_filename_part(
@@ -1028,13 +1181,61 @@ def _safe_official_filename(value: Any) -> str:
     return filename
 
 
+def _keyword_comparison_output_path(
+    root_dir: Path,
+    *,
+    site: str,
+    own_asin: str,
+    extension: str,
+) -> Path:
+    """生成流量词对比跨格式语义文件名。"""
+    timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
+    suffix = extension.lstrip(".")
+    filename = (
+        f"CompareKeywords-{site.upper()}-"
+        f"{_sanitize_filename_part(own_asin)}-{timestamp}.{suffix}"
+    )
+    if len(str(root_dir / filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
+        filename = f"CompareKeywords.{suffix}"
+    return root_dir / filename
+
+
+def _scenario_export_output_path(
+    root_dir: Path,
+    *,
+    job_id: str,
+    scenario: str,
+    site: str,
+    payload: dict[str, Any],
+    extension: str,
+    own_asin: str | None,
+) -> Path:
+    """按场景统一选择 JSON 与 XLSX 的导出路径。"""
+    if scenario == "keyword-comparison":
+        return _keyword_comparison_output_path(
+            root_dir,
+            site=site,
+            own_asin=own_asin or "",
+            extension=extension,
+        )
+    if scenario == "aba-research":
+        return _aba_research_output_path(
+            root_dir,
+            site=site,
+            payload=payload,
+            extension=extension,
+        )
+    return _export_output_path(root_dir, job_id, extension)
+
+
 def _aba_research_output_path(
     root_dir: Path,
     *,
     site: str,
     payload: dict[str, Any],
+    extension: str,
 ) -> Path:
-    """生成 ABA 数据选品官方语义文件名。"""
+    """生成 ABA 数据选品跨格式语义文件名。"""
     table = str(payload.get("table") or "").removeprefix("ara_")
     reverse_type = str(payload.get("reverseType") or "W").upper()
     if reverse_type == "M" and re.fullmatch(r"\d{6}", table):
@@ -1045,9 +1246,10 @@ def _aba_research_output_path(
         period_label = f"{week_end.year}第{week_number}周"
     else:
         period_label = table or "latest"
-    filename = f"ABAKeywordTrend-{site.upper()}-{period_label}.xlsx"
+    suffix = extension.lstrip(".")
+    filename = f"ABAKeywordTrend-{site.upper()}-{period_label}.{suffix}"
     if len(str(root_dir / filename)) >= WINDOWS_COMPAT_EXPORT_PATH_LIMIT:
-        filename = "ABAKeywordTrend.xlsx"
+        filename = f"ABAKeywordTrend.{suffix}"
     return root_dir / filename
 
 
@@ -1077,20 +1279,26 @@ def _export_rows_to_json(
     scenario: str,
     site: str,
     period: str,
-    rows: list[dict[str, Any]],
-    high_frequency_rows: list[dict[str, Any]],
+    worksheets: list[SellerSpriteWorksheet],
     warnings: list[dict[str, Any]],
 ):
     from opscli.seller_sprite.domain.models import SellerSpriteExportResult
 
+    if not worksheets:
+        raise SellerSpriteConfigError("卖家精灵 JSON 导出缺少格式化工作表")
+    main_worksheet = worksheets[0]
     payload = {
+        "schema_version": "2.0",
         "job_id": job_id,
         "scenario": scenario,
         "site": site,
         "period": period,
-        "row_count": len(rows),
-        "rows": rows,
-        "high_frequency_rows": high_frequency_rows,
+        "sheet_name": main_worksheet.name,
+        "row_count": len(main_worksheet.rows),
+        "columns": main_worksheet.columns,
+        "number_formats": main_worksheet.number_formats,
+        "rows": main_worksheet.rows,
+        "additional_sheets": [worksheet.to_dict() for worksheet in worksheets[1:]],
         "warnings": warnings,
     }
     _write_json(output_path, payload)

@@ -4,7 +4,9 @@ import asyncio
 
 from fastmcp import Client
 
-from opscli.collector_mcp.health import collector_modules_health, collector_service_info
+from opscli.collector_mcp.health import CollectorHealthTools
+from opscli.collector_mcp.profile import load_profile
+from opscli.collector_mcp.registry import resolve_bundles
 from opscli.collector_mcp.server import PUBLIC_TOOLS, catalog, mcp
 from opscli.mcp.tool_catalog import get_catalog
 
@@ -13,7 +15,7 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_collector_only_exposes_public_and_seller_sprite_tools(monkeypatch):
+def test_collector_only_exposes_public_and_collection_bundle_tools(monkeypatch):
     async def allow_all():
         return None
 
@@ -44,14 +46,36 @@ def test_collector_only_exposes_public_and_seller_sprite_tools(monkeypatch):
 
     assert PUBLIC_TOOLS <= names
     assert len(names) == 14
-    assert all(name in PUBLIC_TOOLS or name.startswith("seller_sprite_") for name in names)
+    assert not any(name.startswith("keepa_") for name in names)
+    assert all(
+        name in PUBLIC_TOOLS
+        or name.startswith("seller_sprite_")
+        for name in names
+    )
     assert "query_simple" not in names
     assert "auth_system_sync" not in names
 
 
 def test_collector_health_is_redacted_and_reports_not_ready_before_lifespan():
-    info = _run(collector_service_info())
-    health = _run(collector_modules_health())
+    class FakeStorageRuntime:
+        def health(self):
+            return {
+                "status": "disabled",
+                "checks": {
+                    "outbox": "disabled",
+                    "mysql": "disabled",
+                    "worker": "disabled",
+                },
+            }
+
+    profile = load_profile({})
+    health_tools = CollectorHealthTools(
+        profile,
+        resolve_bundles(profile),
+        FakeStorageRuntime(),
+    )
+    info = _run(health_tools.collector_service_info())
+    health = _run(health_tools.collector_modules_health())
 
     assert info["data"]["display_name"] == "数据采集服务"
     assert info["data"]["bundles"] == ["seller_sprite"]

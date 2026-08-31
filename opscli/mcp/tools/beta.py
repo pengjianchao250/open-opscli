@@ -12,12 +12,8 @@ from typing import Any
 
 from mcp.types import ToolAnnotations
 
-from opscli.beta.canopy import config as canopy_config
-from opscli.beta.canopy.config import (
-    CANOPY_API_KEY_PLACEHOLDER,
-    CANOPY_BASE_URL,
-)
-from opscli.beta.canopy.domain.exceptions import CanopyConfigError
+from opscli.beta.canopy.config import CANOPY_BASE_URL
+from opscli.beta.canopy.domain.exceptions import CanopyApiError, CanopyConfigError
 from opscli.beta.canopy.domain.models import CanopyScenarioRequest
 from opscli.beta.canopy.services import CanopyApiManager
 from opscli.beta.canopy.services.api_manager import request_canopy_api
@@ -219,7 +215,6 @@ async def beta_canopy_run(
     scenario: str,
     params: dict[str, Any] | str | None = None,
     domain: str = "US",
-    api_key: str | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     export_format: str = "xls",
     output_dir: str | None = None,
@@ -233,7 +228,6 @@ async def beta_canopy_run(
         scenario: Canopy 场景 ID，例如 product、search、product-reviews。
         params: Canopy query 参数，支持 dict 或 JSON 字符串。
         domain: Amazon 站点代码，默认 US；请求时作为 Canopy 的 domain 参数发送。
-        api_key: 内部调试参数；不传时读取项目内本地 key 文件，仍为空则使用占位符。
         timeout_seconds: HTTP 请求超时时间，默认 30 秒。
         export_format: 用户可见导出格式；当前仅允许 xls，内部生成 Excel 兼容 .xlsx。
         output_dir: 可选任务输出根目录；默认写入 beta Canopy 模块目录。
@@ -267,23 +261,48 @@ async def beta_canopy_run(
         _validate_required_params(normalized_scenario, meta, query_params)
         sid, jw = _get_auth_pair("ops", session_id, jwt)
 
-        resolved_api_key = _resolve_api_key(api_key)
-        request = CanopyScenarioRequest(
-            scenario=normalized_scenario,
-            domain=normalized_domain,
-            params=query_params,
-            path=meta["path"],
-            method=meta["method"],
-            title=meta["title"],
-            api_key=resolved_api_key,
-            api_key_placeholder_used=resolved_api_key == CANOPY_API_KEY_PLACEHOLDER,
-            timeout_seconds=timeout_seconds,
-            output_dir=output_dir,
-            job_id=job_id,
-            export_format=public_export_format,
-        )
-        result = await CanopyApiManager(jwt=jw, session_id=sid).run(request)
-        return _ok(_public_result(result.to_dict()))
+        attempted_account_ids: set[int] = set()
+        last_credential_error: CanopyApiError | None = None
+        # 只有 401/403 能通过更换账号解决；其他参数、网络和服务端错误保持原错误返回。
+        while True:
+            try:
+                resolved_api_key, credential_lease, credential_pool = _resolve_api_key(
+                    exclude_account_ids=attempted_account_ids,
+                )
+            except Exception:
+                if last_credential_error is not None:
+                    raise last_credential_error
+                raise
+            request = CanopyScenarioRequest(
+                scenario=normalized_scenario,
+                domain=normalized_domain,
+                params=query_params,
+                path=meta["path"],
+                method=meta["method"],
+                title=meta["title"],
+                api_key=resolved_api_key,
+                api_key_placeholder_used=False,
+                credential_account_id=credential_lease.account_id,
+                credential_account_name=credential_lease.account_name,
+                credential_secret_version=credential_lease.secret_version,
+                timeout_seconds=timeout_seconds,
+                output_dir=output_dir,
+                job_id=job_id,
+                export_format=public_export_format,
+            )
+            try:
+                result = await CanopyApiManager(
+                    jwt=jw,
+                    session_id=sid,
+                    credential_pool=credential_pool,
+                ).run(request)
+            except CanopyApiError as exc:
+                if exc.status_code in {401, 403}:
+                    attempted_account_ids.add(credential_lease.account_id)
+                    last_credential_error = exc
+                    continue
+                raise
+            return _ok(_public_result(result.to_dict()))
     except CanopyConfigError as exc:
         return _err(exc, tool="MCP → beta_canopy_run(...)", call_params=call_params, auto_feedback=False)
     except ValueError as exc:
@@ -440,15 +459,16 @@ def _is_blank(value: Any) -> bool:
     return False
 
 
-def _resolve_api_key(api_key: str | None) -> str:
-    """解析 Canopy API key，测试阶段默认读取项目内本地文件。"""
-    for candidate in (
-        api_key,
-        canopy_config.load_local_api_key(),
-    ):
-        if candidate and candidate.strip():
-            return candidate.strip()
-    return CANOPY_API_KEY_PLACEHOLDER
+def _resolve_api_key(
+    *,
+    exclude_account_ids: set[int] | None = None,
+) -> tuple[str, Any, Any]:
+    """解析 Canopy API Key；生产默认从统一 MySQL 凭据池领取。"""
+    from opscli.api_credentials.pool import ApiCredentialPool
+
+    pool = ApiCredentialPool()
+    lease = pool.acquire("canopy", exclude_account_ids=exclude_account_ids)
+    return lease.secret, lease, pool
 
 
 def _normalize_mcp_export_format(value: str) -> str:
@@ -480,6 +500,9 @@ def _strip_public_debug_fields(request: Any) -> None:
     if not isinstance(request, dict):
         return
     request.pop("api_key_placeholder_used", None)
+    request.pop("credential_account_id", None)
+    request.pop("credential_account_name", None)
+    request.pop("credential_secret_version", None)
 
 
 def _sanitize_public_export(public: dict[str, Any]) -> None:

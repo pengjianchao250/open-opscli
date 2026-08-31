@@ -12,7 +12,6 @@ from opscli.keepa.time import (
     keepa_minutes_to_utc_iso,
 )
 
-
 IMAGE_BASE_URL = "https://images-na.ssl-images-amazon.com/images/I"
 
 
@@ -256,10 +255,12 @@ def _add_current_summary_fields(row: dict[str, Any], current: Any, currency: Cur
         0: "currentAmazonPrice",
         1: "currentNewPrice",
         3: "currentSalesRank",
+        8: "currentLightningDealPrice",
         10: "currentNewFbaPrice",
         16: "currentRating",
         17: "currentReviewCount",
         18: "currentBuyBoxPrice",
+        33: "currentPrimeExclusivePrice",
     }
     for index, field in mappings.items():
         if index >= len(current):
@@ -289,13 +290,13 @@ def _format_metric_value(value: Any, value_kind: str, currency: CurrencyConfig) 
     if value_kind == "time":
         return keepa_minutes_to_utc_iso(value) if _is_valid_keepa_time(value) else None
     if value_kind == "percent":
-        return None if value == -1 else value
-    return None if value == -1 else value
+        return None if value in {-1, -2} else value
+    return None if value in {-1, -2} else value
 
 
 def _format_money(value: Any, currency: CurrencyConfig) -> float | int | None:
     number = _parse_number(value)
-    if number is None or number == -1:
+    if number is None or number in {-1, -2}:
         return None
     amount = number / (10**currency.decimals)
     if currency.decimals == 0:

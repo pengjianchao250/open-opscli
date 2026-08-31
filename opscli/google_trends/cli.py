@@ -7,13 +7,14 @@ from typing import Any
 
 import typer
 
-from opscli.google_trends.api.key_store import SerpApiKeyRecord, SerpApiKeyStore
+from opscli.google_trends.api.key_store import SerpApiKeyRecord
+from opscli.google_trends.api.mysql_key_store import MySqlSerpApiKeyStore as SerpApiKeyStore
 from opscli.google_trends.api.serpapi_client import SerpApiGoogleTrendsClient
 from opscli.google_trends.remote_adapter import GoogleTrendsRemoteAdapter
 
 
 app = typer.Typer(help="Google Trends 正式场景与本地运维命令。")
-api_key_app = typer.Typer(help="Google Trends 本地 SerpApi Key 运维命令。")
+api_key_app = typer.Typer(help="Google Trends SerpApi MySQL 账号运维兼容命令。")
 app.add_typer(api_key_app, name="api-key")
 
 
@@ -34,7 +35,7 @@ def api_key_add(
 
 @api_key_app.command("list")
 def api_key_list() -> None:
-    """列出本地 SerpApi 账号，不输出明文 Key。"""
+    """列出 MySQL SerpApi 账号，不输出明文 Key。"""
     records = SerpApiKeyStore().list_keys()
     typer.echo(
         json.dumps(

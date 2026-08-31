@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-
 MONEY_FIELDS = {
     "avgBuyBox",
     "avgBuyBox90",
@@ -181,7 +180,7 @@ def _map_count_rows(
 ) -> list[dict[str, Any]]:
     if not isinstance(value, dict):
         return []
-    items = list(value.items())
+    items = sorted(value.items(), key=lambda item: (-_sortable_count(item[1]), str(item[0])))
     rows: list[dict[str, Any]] = []
     for rank, (key, count) in enumerate(items, start=1):
         row = {"rank": rank, key_field: str(key), count_field: count}
@@ -212,7 +211,7 @@ def _currency_for(*, site: str, domain_id: Any = None) -> CurrencyConfig:
 
 def _format_money(value: Any, currency: CurrencyConfig) -> float | int | None:
     number = _parse_number(value)
-    if number is None or number == -1:
+    if number is None or number in {-1, -2}:
         return None
     amount = number / (10**currency.decimals)
     if currency.decimals == 0:
@@ -222,7 +221,7 @@ def _format_money(value: Any, currency: CurrencyConfig) -> float | int | None:
 
 def _format_percent(value: Any) -> str | None:
     number = _parse_number(value)
-    if number is None:
+    if number is None or number in {-1, -2}:
         return None
     return f"{number:g}%"
 
@@ -235,7 +234,14 @@ def _format_rating(value: Any) -> float | None:
 
 
 def _join_map_counts(value: dict[Any, Any]) -> str:
-    return ", ".join(f"{key}:{count}" for key, count in value.items())
+    items = sorted(value.items(), key=lambda item: (-_sortable_count(item[1]), str(item[0])))
+    return ", ".join(f"{key}:{count}" for key, count in items)
+
+
+def _sortable_count(value: Any) -> float:
+    """把排行计数转换为稳定排序值，异常值排到末尾。"""
+    number = _parse_number(value)
+    return number if number is not None else float("-inf")
 
 
 def _parse_number(value: Any) -> float | None:

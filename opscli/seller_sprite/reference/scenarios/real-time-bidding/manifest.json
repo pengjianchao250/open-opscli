@@ -1,0 +1,66 @@
+{
+  "scenario_id": "real-time-bidding",
+  "title": "实时查竞价",
+  "web_route": "/v3/real-time-bidding",
+  "api": {
+    "create_task": "/v3/api/keywordbidding/newTask",
+    "task_list": "/v3/api/keywordbidding/taskList",
+    "detail": "/v3/api/keywordbidding/getTaskDetail",
+    "official_export": "/v3/api/keywordbidding/exportTaskDetail"
+  },
+  "required_params": ["asin"],
+  "query_conditions": {
+    "site": {
+      "default_value": "US",
+      "allowed_values": ["US", "UK", "DE", "FR", "JP", "CA", "IT", "ES", "IN", "MX"]
+    },
+    "asin": {
+      "minimum": 1,
+      "maximum": 1,
+      "pattern": "^[A-Z0-9]{10}$"
+    }
+  },
+  "interaction": {
+    "mode": "browser-route",
+    "read_only": false,
+    "create_task": true,
+    "new_task_type": "AC",
+    "new_task_mode": "dialog",
+    "query_again_statuses": [3, 4],
+    "poll_only_statuses": [2],
+    "official_example_read_only": true,
+    "history_order": {"desc": true, "field": "updatedTime"},
+    "history_auto_pagination": true,
+    "completed_task_status": 3,
+    "replay_safe": false
+  },
+  "response": {
+    "result_scope": "first_page",
+    "fixed_page": 1,
+    "fixed_size": 100,
+    "auto_pagination": false,
+    "detail_requests": ["sp", "sb"],
+    "merge_key": "keyword"
+  },
+  "result": {
+    "source": "refreshed_or_created_task_merged_detail_json",
+    "local_xlsx": true,
+    "official_export_api": false,
+    "official_export_reference_verified": true,
+    "headers_file": "official-headers.json",
+    "sheets": ["business_main_sheet"],
+    "excluded_sheets": ["Notes"]
+  },
+  "capture_evidence": {
+    "captured_at": "2026-07-31",
+    "page_verified": true,
+    "source_chunks": [
+      "chunk-a8a1e59e.20260730221543.js",
+      "chunk-22f8315b.20260730221543.js"
+    ],
+    "captured_workbook_name": "cpcSuggestBid-US-B07Z82895W(1)-20260731162033.xlsx",
+    "captured_workbook_fixture": "tests/fixtures/seller_sprite/official_exports/real-time-bidding/cpcSuggestBid-US-B07Z82895W(1)-20260731162033.xlsx",
+    "official_export_called_during_verification": false,
+    "sanitized": true
+  }
+}
