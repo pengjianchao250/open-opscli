@@ -19,6 +19,7 @@ dependencies = [
     "starlette>=0.37",
     "uvicorn>=0.30",
     "PyMySQL>=1.1",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]

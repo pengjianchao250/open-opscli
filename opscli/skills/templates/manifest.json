@@ -95,6 +95,14 @@
       "tier": "core",
       "reason": "认证基础能力，所有发行形态都需要"
     },
+    "ops-business-data-orchestrator": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "Codex 业务层复合取数编排，依赖 ops-dataset-query 与 ops-query-wizard，无需 Dashboard 页面上下文"
+    },
     "ops-dataset-query": {
       "source": true,
       "wheel": true,
