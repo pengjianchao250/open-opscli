@@ -45,6 +45,7 @@ class KeepaMcpRuntime:
         """注册 Keepa Tool，并让执行入口绑定当前 Runtime 实例。"""
         from opscli.mcp.tools.keepa import (
             keepa_export,
+            keepa_history,
             keepa_job_status,
             keepa_quota_status,
             keepa_scenarios,
@@ -58,6 +59,7 @@ class KeepaMcpRuntime:
             self.keepa_run,
             keepa_job_status,
             keepa_export,
+            keepa_history,
         ):
             mcp.tool()(fn)
 

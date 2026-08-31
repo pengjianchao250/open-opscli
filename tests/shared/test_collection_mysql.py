@@ -176,3 +176,167 @@ def test_mysql_repository_replaces_one_run_in_a_single_transaction(tmp_path):
         and params == (2, 101)
         for sql, params in connection.executions
     )
+
+
+def test_mysql_repository_queries_history_by_normalized_params():
+    class HistoryCursor:
+        def __init__(self):
+            self.calls = []
+            self.phase = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            self.calls.append((" ".join(sql.split()), params))
+            self.phase += 1
+
+        def fetchall(self):
+            if self.phase == 2:
+                return [{
+                    "id": 7,
+                    "source_job_id": "job-7",
+                    "scenario": "product",
+                    "site": "US",
+                    "data_environment": "production",
+                    "ingestion_mode": "live",
+                    "collection_status": "succeeded",
+                    "request_params": '{"normalized_params":{"asin":"B0TEST"}}',
+                    "source_row_count": 1,
+                    "started_at": None,
+                    "completed_at": None,
+                    "created_at": None,
+                }]
+            if self.phase == 3:
+                return [{
+                    "id": 8,
+                    "dataset_code": "main",
+                    "dataset_name": "Main",
+                    "source_sheet": "Main",
+                    "columns_json": "[]",
+                    "row_count": 1,
+                }]
+            return [{
+                "source_row_number": 1,
+                "business_key": "B0TEST",
+                "payload": '{"asin":"B0TEST"}',
+            }]
+
+        def fetchone(self):
+            return {"total": 3}
+
+    class HistoryConnection:
+        def __init__(self):
+            self.cursor_instance = HistoryCursor()
+            self.closed = False
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def close(self):
+            self.closed = True
+
+    connection = HistoryConnection()
+    repository = MySqlCollectionRepository(
+        settings=MySqlSettings(), connect_factory=lambda: connection
+    )
+
+    result = repository.query_history(
+        source_system="keepa",
+        scenario="product",
+        request_params={"asin": "B0TEST"},
+        record_limit=1,
+    )
+
+    assert result[0]["job_id"] == "job-7"
+    assert result[0]["datasets"][0]["records"][0]["payload"]["asin"] == "B0TEST"
+    count_sql, count_params = connection.cursor_instance.calls[0]
+    history_sql, history_params = connection.cursor_instance.calls[1]
+    assert "SELECT COUNT(*) AS total" in count_sql
+    assert "JSON_CONTAINS(request_params, %s, '$.normalized_params')" in history_sql
+    assert "JSON_CONTAINS(request_params, %s, '$.request.params')" in history_sql
+    assert count_params[0] == "keepa"
+    assert history_params[0] == "keepa"
+    assert '"asin":"B0TEST"' in history_params[-3]
+
+
+def test_mysql_repository_history_page_returns_pagination_without_records():
+    class Cursor:
+        def __init__(self):
+            self.phase = 0
+            self.calls = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            self.phase += 1
+            self.calls.append((" ".join(sql.split()), params))
+
+        def fetchone(self):
+            return {"total": 2}
+
+        def fetchall(self):
+            if self.phase == 2:
+                return [{
+                    "id": 1,
+                    "source_job_id": "job-1",
+                    "source_row_count": 5,
+                    "request_params": "{}",
+                }]
+            return [{
+                "id": 2,
+                "dataset_code": "main",
+                "dataset_name": "Main",
+                "source_sheet": "Main",
+                "columns_json": "[]",
+                "row_count": 5,
+            }]
+
+    class Connection:
+        def __init__(self):
+            self.cursor_instance = Cursor()
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def close(self):
+            pass
+
+    connection = Connection()
+    repository = MySqlCollectionRepository(
+        settings=MySqlSettings(), connect_factory=lambda: connection
+    )
+
+    page = repository.query_history_page(
+        source_system="keepa",
+        site="UK",
+        site_aliases=("GB", "2"),
+        limit=1,
+        offset=0,
+        dataset_code="main",
+        record_offset=2,
+        include_records=False,
+    )
+
+    assert page["total"] == 2
+    assert page["has_more"] is True
+    assert page["runs"][0]["datasets"][0]["records"] == []
+    assert page["runs"][0]["datasets"][0]["records_omitted"] == 5
+    assert page["runs"][0]["datasets"][0]["records_offset"] == 2
+    dataset_sql, dataset_params = connection.cursor_instance.calls[2]
+    count_sql, count_params = connection.cursor_instance.calls[0]
+    assert "site IN (%s, %s, %s)" in count_sql
+    assert count_params == ("keepa", "UK", "GB", "2")
+    assert "dataset_code = %s" in dataset_sql
+    assert dataset_params == (1, "main")
+    assert not any(
+        "FROM collection_records" in sql
+        for sql, _params in connection.cursor_instance.calls
+    )

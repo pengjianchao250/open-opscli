@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-08-31 Keepa - 支持从共享 MySQL 查询历史任务和明细
+
+**变更原因**：Keepa 成功结果已经沉淀到共享 MySQL，但公共 MCP 只能从服务端本地任务目录按 `job_id` 读取，无法复用数据库中的历史任务，也无法按原查询条件检索。
+**改动点**：新增只读 `keepa_history` MCP Tool，支持按任务 ID、场景、站点、请求参数和完成时间组合查询；复用 Keepa 场景参数归一化并兼容 GB/UK/数字 domain；返回任务分页元数据，支持轻量任务列表及按 Dataset 的记录分页；共享 MySQL Repository 增加历史总数、任务、Dataset 和记录读取合同；同步 Keepa Skill 说明与回归测试。
+**验证结果**：Keepa MCP 与共享 MySQL 专项测试 `26 passed`；Keepa 和存储相关回归排除仓库既有 `keepa-debug` 根命令注册失败后 `139 passed, 1 deselected`；`compileall` 与 `git diff --check` 通过。通过本地 MCP 和真实 MySQL 验证 3 个历史任务均成功命中，条件反查命中 6 个同 ASIN 任务，Dataset `record_offset=2, record_limit=2` 正确返回第 3、4 行。
+**影响范围**：仅新增 Keepa 历史数据的只读 MCP 查询和共享采集 Repository 读路径；不改变 `keepa_run`、现有任务写入、数据库表结构或 Keepa 调用额度。
+**回滚方式**：回退 Keepa MCP Tool、Runtime 注册、共享 MySQL 历史读方法、对应 Skill 文档、测试和本条记录即可；已沉淀历史数据无需处理。
+
+---
+
 ## 2026-08-28 SellerSprite - 防止无效场景导致 Worker 退出并循环租约
 
 **变更原因**：任务执行异常处理阶段再次解析未知场景时会抛出第二个 `SellerSpriteConfigError`，原任务无法落为 `failed`，账号 Worker 退出；租约到期后任务被反复放回队列，表现为 `queued -> claimed -> resolving -> queued`。同时，入队边界此前未校验场景，旧 Review 场景可以持续写入新队列。

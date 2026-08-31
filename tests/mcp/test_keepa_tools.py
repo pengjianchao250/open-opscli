@@ -397,6 +397,121 @@ def test_keepa_export_fails_when_download_url_missing(monkeypatch):
     assert "没有可下载地址" in result["error"]["message"]
 
 
+def test_keepa_history_reads_persisted_rows_by_job_id(monkeypatch):
+    class HistoryRepository:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def query_history_page(self, **kwargs):
+            assert kwargs["source_system"] == "keepa"
+            assert kwargs["source_job_id"] == "job-1"
+            return {
+                "total": 1,
+                "limit": 20,
+                "offset": 0,
+                "has_more": False,
+                "runs": [{
+                    "job_id": "job-1",
+                    "scenario": "product",
+                    "site": "US",
+                    "request_params": {
+                        "normalized_params": {"asin": "B0088PUEPK"},
+                        "account": {"api_key": "secret"},
+                    },
+                    "datasets": [
+                        {
+                            "dataset_code": "main",
+                            "row_count": 1,
+                            "records": [
+                                {"row_number": 1, "payload": {"asin": "B0088PUEPK"}}
+                            ],
+                            "records_omitted": 0,
+                        }
+                    ],
+                }],
+            }
+
+    monkeypatch.setattr(
+        "opscli.shared.collection_storage.config.load_storage_settings",
+        lambda runtime_id: SimpleNamespace(enabled=True, mysql=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        "opscli.shared.collection_storage.mysql_repository.MySqlCollectionRepository",
+        HistoryRepository,
+    )
+
+    result = _run(keepa_tools.keepa_history(job_id="job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["run_count"] == 1
+    assert result["data"]["total"] == 1
+    assert result["data"]["found"] is True
+    assert result["data"]["has_more"] is False
+    assert result["data"]["runs"][0]["request_params"] == {
+        "asin": "B0088PUEPK"
+    }
+    assert "secret" not in str(result)
+
+
+def test_keepa_history_requires_a_history_selector():
+    result = _run(keepa_tools.keepa_history())
+
+    assert result["success"] is False
+    assert "至少提供" in result["error"]["message"]
+
+
+def test_keepa_history_normalizes_site_and_scenario_param_aliases(monkeypatch):
+    captured = {}
+
+    class HistoryRepository:
+        def __init__(self, **kwargs):
+            pass
+
+        def query_history_page(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "total": 0,
+                "limit": 10,
+                "offset": 20,
+                "has_more": False,
+                "runs": [],
+            }
+
+    monkeypatch.setattr(
+        "opscli.shared.collection_storage.config.load_storage_settings",
+        lambda runtime_id: SimpleNamespace(enabled=True, mysql=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        "opscli.shared.collection_storage.mysql_repository.MySqlCollectionRepository",
+        HistoryRepository,
+    )
+
+    result = _run(
+        keepa_tools.keepa_history(
+            scenario=" PRODUCT-SEARCH ",
+            site=" us ",
+            params={"keyword": "flashlight"},
+            limit=10,
+            offset=20,
+            include_records=False,
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["found"] is False
+    assert captured["scenario"] == "product-search"
+    assert captured["site"] == "US"
+    assert captured["site_aliases"] == ("1",)
+    assert captured["request_params"]["term"] == "flashlight"
+    assert captured["original_request_params"] == {"keyword": "flashlight"}
+    assert captured["include_records"] is False
+
+
+def test_keepa_history_site_aliases_treat_gb_and_uk_as_one_domain():
+    assert set(keepa_tools._history_site_aliases("UK")) == {"GB", "2"}
+    assert set(keepa_tools._history_site_aliases("GB")) == {"UK", "2"}
+
+
 def _record_and_return(storage, value):
     storage.append(value)
     return value
